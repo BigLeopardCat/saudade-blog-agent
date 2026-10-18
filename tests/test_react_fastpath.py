@@ -116,16 +116,24 @@ _CASES = [
 # "文案有没有被创作出来"这件事在断言里是**看得见的字面量**。
 _DISPLAY_TEXT = "晚安，早点休息喵～"
 
-# 给模型的那份**哨兵计划**：一个五条快道都不产出的技能（`content_query`）。
+# 给模型的那份**哨兵计划**：`chat`（五条快道一条都不产出它）。
 # 快道真命中 ⇒ 这一轮模型根本没被问，计划是快道那一张；快道没命中 ⇒ 计划变成这一份，
 # 每一条"计划是快道那张"的断言当场红。
 #
-# **为什么用"带工具调用的计划"而不是零工具的闲聊**：零工具那条出口在 `planner_node`
-# 里 `return {}`——state 里**根本不出现** planner 那一格，"计划是模型那张"就成了一句
-# 读不到的话（关档那一节会拿 `None.get` 炸）。带工具调用才让"谁做的决定"在帧上有形状。
+# **为什么是"带工具调用"的一条**：零工具调用的那条出口在 `planner_node` 里 `return {}`
+# ——state 里**根本不出现** planner 那一格，"计划是模型那张"就成了一句读不到的话
+# （关档那一节会拿 `None.get` 炸）。写成一个 tool_call 才让"谁做的决定"在帧上有形状。
+#
+# ⚠️ **哨兵还得挑一份"成账"的**（20261019 补，资产对齐 E）：此前用的是
+# `content_query({"query": …})`，而那个技能不认 `query` ⇒ 实例化出来是
+# `tools=[] / dropped=[] / param_problem=None / status=""`，正是
+# `_finalize_unaccounted` 第三格（"记账字段全空"）的形态——接上那一格之后哨兵会被
+# 确定性换成收尾计划，**根本到不了断言那一步**（实测：五条全红在 `chat []` 上）。
+# 反过来也不能挑"有工具"的技能：那一条真会被执行，关档那一节之后模型再被问一次时
+# 它又会跑一遍，把"工具表真的被调了 N 次"那几条断言顶红。`chat` 两头都不占：它有
+# 计划对象（`chat=True`、`status=answer_only`，第三格不命中），且零工具、不会多跑。
 _SENTINEL = AIMessage(content="（模型被问了）", tool_calls=[
-    {"name": "content_query", "args": {"query": "哨兵"}, "id": "call_sentinel",
-     "type": "tool_call"}])
+    {"name": "chat", "args": {}, "id": "call_sentinel", "type": "tool_call"}])
 
 
 def _scripted(replies: list, sink: list | None = None) -> GenericFakeChatModel:
@@ -268,7 +276,7 @@ def test_on_arm() -> None:
         check(f"{kind}：trace 落 `planner.fastpath`（kind={kind}，与生产同名）",
               _kinds == [kind], str(_kinds))
         check(f"  {kind}：**计划不是模型那张**（哨兵计划没被消费）",
-              plan.get("workflow") != "content_query" and plan.get("workflow"),
+              plan.get("workflow") != "chat" and plan.get("workflow"),
               str(plan.get("workflow")))
         check(f"  {kind}：**写下这份计划时模型被问过 0 次**（零 LLM，判的是那一刻）",
               asked == 0, str(asked))
@@ -335,7 +343,7 @@ def test_off_arm() -> None:
         check(f"{kind}：关档后**没有**快道事件",
               [a[:2] for a, _ in events if a[:2] == ("planner", "fastpath")] == [])
         check(f"  {kind}：计划是**模型那张**（不是快道那张 {'+'.join(case['tools'])}）",
-              plan.get("workflow") == "content_query"
+              plan.get("workflow") == "chat"
               and not any(t in " ".join(specs) for t in case["tools"]),
               f'{plan.get("workflow")} {specs}')
         check(f"  {kind}：**写下第一份计划时模型已经被问过**（与开档那一节的 `asked == 0` "

@@ -48,8 +48,8 @@ from agent.deterministic_plan import (_article_fast_path, _display_fast_path,
                                       _nav_fast_path, _referent_nav_fast_path,
                                       _wrap_up_plan)
 from agent.graph import (_DecideCtx, _confirm_grant_plan, _create_display_text,
-                         _decide_write_guard, _evidence_on, _fastpath_on,
-                         _finalize_dedupe)
+                         _decide_write_guard, _drop_correction, _evidence_on,
+                         _fastpath_on, _finalize_dedupe, _finalize_unaccounted)
 from agent.prompt_context import (_doc_anchors, _has_frames,
                                   _last_assistant_utterance, _recent_tail,
                                   _short_reply_hint, blocked_rows)
@@ -326,6 +326,46 @@ def finalize_dedupe(state, *, ctx, plan_obj: dict, rounds: int, has_frames: bool
     out, update = _finalize_dedupe(plan_obj, {**state, "messages": list(turn_messages)},
                                    ctx.get("user_msg") or "", rounds, has_frames)
     return out, update is not None
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# §E 剔空纠偏：点名的工具一个都没执行 ⇒ 纠偏一次，第二次确定性如实收尾
+# ══════════════════════════════════════════════════════════════════════════════
+def drop_correction(dropped: list, role: str | None) -> str:
+    """剔空纠偏文本——直调生产 `graph._drop_correction`（零 LLM）。
+
+    现场（20260921 22:34，见那个函数的 docstring）：管理员问某篇草稿的标签，planner
+    点名 `list_admin_notes` **意图对路**，但那工具属于 `admin_notes` 技能、不在
+    content_query 的白名单里 ⇒ 清单被剔空 ⇒ 旧行为当收尾轮处理 ⇒ narrator 零帧编话
+    ⇒ gate 打回 ⇒ 主人看到一句降级回复且**这一轮直接结束**（原话："居然就直接结束
+    而不是重新规划执行"）。
+
+    本臂此前**一格都没接**：`instantiate_plan` 早就把 `dropped` 记在计划对象上了
+    （`_plan_of` 拿得到），而没有人读它——形状是"点名全被剔除 ⇒ 零工具 ⇒ 交给
+    narrator"，与上面那个现场逐字同形。
+
+    `role` 只透传（工具归属与可见性判据都在生产那一侧，唯一读口 `visible_workflows`）。
+    """
+    return _drop_correction(list(dropped or []), role)
+
+
+def unaccounted(plan_obj: dict, rounds: int, has_frames: bool) -> dict | None:
+    """`graph._finalize_unaccounted`（三格确定性终局）→ 定稿后的 `plan_obj`；
+    **三格都不命中 ⇒ None**。
+
+    三格 = 剔空后仍零工具 / 参数不齐后仍零工具 / 记账字段全空的零工具轮。它们的共同
+    点是"这一轮一个工具都不会执行，而系统判得出来该有一条如实的收尾注记"——**绝不把
+    "零工具零帧"直接交给 narrator**（那正是 22:34 那一轮的形态：它只能编）。
+
+    本臂此前也没有这一格：`_plan_of` 判出零工具之后直接去 `model`，于是上面三种形态
+    全靠 narrator 自己不说错话。而这三条注记里写的是**禁止句**（"不许出现「看过/
+    读过/查过/调用过工具」"），生产那侧反复吃过"机制描述会变成 narrator 的词汇"的亏。
+
+    返回 `plan_obj` 而不是生产那个 `_plan_update` 产物：同 `write_guard`（判据相同、
+    产物形状不同）。
+    """
+    upd = _finalize_unaccounted(plan_obj, rounds, has_frames)
+    return None if upd is None else upd.get("plan_obj")
 
 
 def denied(state) -> set[str]:
