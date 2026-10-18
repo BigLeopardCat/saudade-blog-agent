@@ -9,10 +9,9 @@ import hashlib
 import hmac
 import json
 import logging
-import os
 import re
 import time
-from typing import Annotated, Literal
+from typing import Annotated
 
 import httpx
 from langchain_core.runnables.config import RunnableConfig
@@ -362,204 +361,46 @@ def _own_get(path: str, config: RunnableConfig) -> dict | list | ToolResult:
         deny_msg="当前身份无权读取该数据")
 
 
-@tool
-def get_server_status() -> str:
-    """查看服务器运行状态：CPU 核数与使用率、1/5/15 分钟负载、内存与 Swap 用量、
-    各磁盘用量与可用空间、开机时长。数据由 agent 直接读本机 /proc 得到，不经后台接口。"""
-    # 延迟导入：tools.base 在 `agent` 包的导入链**上游**（agent/__init__ → agent.agent
-    # → agent.graph → tools），模块级 `from agent import …` 会构成循环导入。
-    # 同先例见 rag/search.py 的 `from tools.base import _get`。
-    from agent import hostinfo as H
-    from agent import reports as R
-    try:
-        cpu = H.cpu_percent_over()
-        mem = H.mem_summary(H.parse_meminfo(H.read_meminfo()))
-        if cpu is None and not mem:
-            # 两样都读不到 = 这根本不是一台正常机器，如实说"读不到"而不是给一张空报表
-            return unavailable("读取服务器状态失败：本机 /proc 不可读")
-        return ok(R.render_server_status(
-            cpu_pct=cpu,
-            cores=os.cpu_count() or 0,
-            load=H.parse_loadavg(H.read_loadavg()),
-            mem=mem,
-            disks=H.disk_rows(),
-            uptime_s=H.read_uptime(),
-        ))
-    except Exception as exc:
-        logger.exception("get_server_status failed")
-        return unavailable(f"读取服务器状态失败: {exc}")
+# ---------------------------------------------------------------------------
+# 管理助手报表工具（只读七件）—— 20261018 搬进 `tools/admin_read.py`
+# ---------------------------------------------------------------------------
+# 服务器状态 / 服务健康 / 审核状况 / 后台留言名册 / 用户报表 / 文章流量报表 / 分期报表，
+# 连续的 197 行、7 个 `@tool` 函数，scope 全是 `admin.console`（`agent/authz.py`）——
+# 选刀依据、两条通道、三道闸、以及"为什么这几个工具返回渲染好的中文报表"都写在
+# `tools/admin_read.py` 的头注里。**改这一族去那里，不是这里。**
+#
+# ⚠️ 本节的**共享帮手留在原处**（`ADMIN_BASE` / `_sign_local_jwt` / `_principal_get` /
+# `_admin_get` / `_admin_read_post` / `_own_get`，上面第 ~231–362 行）：它们是「后台读」
+# 与「用户自己那一份数据」两条通道共用的底座，而 `_admin_get`（6 处）与
+# `_sign_local_jwt`（2 处）还被套件**直接打桩** ⇒ 搬走它们等于把桩打空。下游各族一律经
+# `_base.<名>(...)` 属性查找调用它们（理由见 `tools/admin_read.py` 头注）。
+#
+# re-export 就停在**本行下面（原位置）**：这一族一个名字都不按名从 `tools.base` 取
+# （连 `BOARD_STATUS_FILTERS` 也走 `_base.BOARD_STATUS_FILTERS` 属性查找）⇒ 没有"半初始化
+# 模块"的时序问题，不必挪到文件末尾。
+# ⚠️ 这条不是风格偏好：新模块里写一句模块级 `from tools.base import …`，mypy 就会在这个
+# 环上**判不出这七个名字的类型** ⇒ `_TOOL_REGISTRY` 当场多出 7 条 `Cannot determine type`
+# （20261018 实测 `tools/base.py` 13→16 条）。同族的 `tools/notes.py` 有那句 from-import
+# 却不触发，是 mypy 在这个环上的行为差异——**照规矩走 `_base.` 就都不会撞上**。
 
-
-@tool
-def get_service_health() -> str:
-    """查看服务健康：本机 systemd 服务（Rust 后端、Python agent，装了物联网平台时
-    还有 device-service）的状态、重启次数与启动时刻，心跳探针近 24 小时的 WARN/FAIL，今日对话的轮数、
-    异常收尾与质检拦截，以及存活日志的体积。读的是本机的 systemctl 与 logs/ 目录。"""
-    from agent import hostinfo as H
-    from agent import reports as R
-    try:
-        services = [(unit, H.service_show(unit)) for unit in H.SERVICES]
-        health = H.parse_health_log(H.read_text_tail(H.HEALTH_LOG),
-                                    H.health_window(24))
-        return ok(R.render_service_health(
-            services=services,
-            health=health,
-            traces=H.trace_stats(),
-            sizes=H.log_sizes(),
-        ))
-    except Exception as exc:
-        logger.exception("get_service_health failed")
-        return unavailable(f"读取服务健康失败: {exc}")
-
-
-@tool
-def get_moderation_status(
-    config: RunnableConfig,
-    status: Annotated[Literal["ai_passed", "ai_rejected", "pending"] | None,
-                      "只列某一类明细：ai_passed=AI 直接通过的 / ai_rejected=AI 驳回的 / "
-                      "pending=需要人工复批的；不填则三类各列最近几条（其余只计数）"] = None,
-) -> str:
-    """查看河灯留言的审核状况：总数与待审/已通过/已驳回的分布、AI 侧判定分布
-    （AI 通过 / AI 驳回 / AI 存疑转人工 / 未走 AI），以及三份可读名单——
-    ① AI 直接通过的 ② AI 驳回的（并说明人工是维持驳回、改判放行还是仍在等）
-    ③ 需要人工复批的（并说明是 AI 存疑还是 AI 通过后才等人看）。
-    追问"把被驳回的/等人复批的都列出来"时用 status 参数聚焦某一类（列得更多）。
-    明细里的「账号（…）」是**真实发表账号**（放灯必须登录，匿名留言一样有账号），
-    「留名」只是留言人自己填的自由文本——要认人看账号。
-    ⚠ 这是**审核状况报表**（按状态切三份名单，默认每份只印 5 条）；要"逐条看每条
-    是谁发的/最近都说了什么"，用后台名册 `list_admin_board`（不分切、行数更多）。
-    需要管理员身份（读的是后台留言管理视图）。"""
-    from agent import reports as R
-    data = _admin_get("/api/protect/board", config)
-    if isinstance(data, ToolResult):
-        return data
-    if not data:
-        return empty("河灯留言板目前还没有任何留言，没有可审核的内容")
-    try:
-        return ok(R.render_moderation_status(data, status=status))
-    except Exception as exc:
-        logger.exception("render_moderation_status failed")
-        return unavailable(f"整理审核状况失败: {exc}")
-
-
-@tool
-def list_admin_board(
-    config: RunnableConfig,
-    status: Annotated[Literal["pending", "passed", "rejected"] | None,
-                      "只看某一类：pending=待审 / passed=已通过 / rejected=未通过（已驳回）；"
-                      "不填就是全部（注意与审核状况报表 get_moderation_status 的 "
-                      "ai_passed|ai_rejected|pending 不是同一套取值，别混用）"] = None,
-    keyword: Annotated[str | None,
-                       "按关键词过滤（在正文、留名、账号昵称/用户名里做子串匹配）；"
-                       "只在留言很多、要定位某一条时填"] = None,
-) -> str:
-    """查看河灯留言的**后台名册**：逐条给出 talkId、审核状态、时间、**发表账号**
-    （userId/昵称/用户名）、留言时自己填的留名、正文节选。**待审与未通过的留言也在
-    这里**（公开留言板列表只含已通过的）。
-
-    ⚠ **要回答「这条留言是谁发的」必须用它**：公开留言板视图里那个"作者"是留言人
-    自己在留名框里填的**自由文本**（可以填任何字、也可以留空——留空就是匿名），
-    它**不是账号**，拿正文或留名去认人会认错。放灯必须登录，所以后台名册里每条
-    留言都有真实账号，**匿名留言一样溯得到是谁发的**。
-    可选 status 只看某一类审核状态，可选 keyword 按关键词收窄。需要管理员身份。"""
-    from agent import reports as R
-    data = _admin_get("/api/protect/board", config)
-    if isinstance(data, ToolResult):
-        return data
-    rows = data if isinstance(data, list) else []
-    if not rows:
-        return empty("河灯留言板目前还没有任何留言（后台名册也是空的）")
-    # 认不出的筛选值由**函数签名的闭集**挡在门外（`Literal[...]` → langchain 在调进
-    # 本函数之前就 ArgValidationError，execute 把它包成 `__ERROR__` 帧，原因码
-    # `args_parse`）。这正是批 5 给 `get_moderation_status.status` 补的那一课：以前
-    # 是散文里的取值，臆造值落回**混合视图**而叙述照样说成"这些是被驳回的"——答错且
-    # 无声（见 docs/toolcall-stability-roadmap.md 批 5）。所以此处**不写**手写兜底：
-    # 再写一层只是死代码，真判据是那句注解（`test_reports` ⑬ 钉着它不许放宽成 str）。
-    #   另注：隔壁那张报表的取值是 ai_passed|ai_rejected|pending，与本工具
-    # pending|passed|rejected **不是同一套**——注解与菜单行都写明了两套不能混用。
-    approved = BOARD_STATUS_FILTERS.get(str(status)) if status is not None else None
-    try:
-        return ok(R.render_board_roster(rows, approved=approved, keyword=keyword),
-                  meta={"count": len(rows)})
-    except Exception as exc:
-        logger.exception("render_board_roster failed")
-        return unavailable(f"整理后台留言名册失败: {exc}")
-
-
-@tool
-def get_user_stats(config: RunnableConfig) -> str:
-    """查看全站用户数据报表：用户总数与角色分布、会话/消息/执行回执的总量、
-    近 7 天与近 30 天的活跃人数、以及按消息数倒序的用户明细（最多 50 行）。
-    需要管理员身份。口径是"活动"不是"注册"（系统没存注册时间）。"""
-    from agent import reports as R
-    data = _admin_get("/api/protected/stats/users", config)
-    if isinstance(data, ToolResult):
-        return data
-    if not data:
-        return empty("后台没有返回用户统计数据")
-    try:
-        return ok(R.render_user_stats(data))
-    except Exception as exc:
-        logger.exception("render_user_stats failed")
-        return unavailable(f"整理用户报表失败: {exc}")
-
-
-@tool
-def get_note_stats(config: RunnableConfig) -> str:
-    """查看文章**流量**报表（全站口径）：阅读量/点赞量/收藏量的合计、三张排行榜
-    （阅读榜、点赞榜、收藏榜，各取前 10，**报表里逐条印着「第 N 名」**）、
-    以及最近 30 天的日趋势。
-
-    用来回答"哪几篇最火 / 阅读量最高的是哪篇、排第几 / 这篇排第几 / 最近有人看吗"。
-    只算**当前可见**的文章（草稿与私密不计入，连带它们的历史阅读量）。
-    这是**全站排行**：问**某一篇**有多少阅读/点赞/收藏，用 get_article_detail
-    （它逐篇带这三个数），别用本工具去猜单篇。
-    需要管理员身份。"""
-    from agent import reports as R
-    data = _admin_get("/api/protected/stats/notes", config)
-    if isinstance(data, ToolResult):
-        return data
-    if not data:
-        return empty("后台没有返回文章流量数据")
-    try:
-        return ok(R.render_note_stats(data))
-    except Exception as exc:
-        logger.exception("render_note_stats failed")
-        return unavailable(f"整理文章流量报表失败: {exc}")
-
-
-@tool
-def get_note_periods(
-    kind: Annotated[Literal["week", "month", "year"],
-                    "报表粒度：week=按周 / month=按月 / year=按年。"
-                    "**必填**——主人问「上周/这个月/今年」就按他说的那个粒度给，"
-                    "别用一个近似的档糊过去"],
-    config: RunnableConfig,
-) -> str:
-    """查看文章的**分期**报表（周报 / 月报 / 年报）：逐期给出阅读/点赞/收藏的合计，
-    以及**这一期阅读量最高的几篇**（每篇带三个数）。
-
-    与 `get_note_stats` 是两张纸，别拿一张当另一张：
-    · `get_note_stats` = **当下快照**（全站合计、三张总榜、近 30 天日趋势）；
-    · 本工具 = **按期切开**（"上周怎么样""这个月和上个月比""去年哪几篇最热"）。
-    口径与它一致：只算**当前可见**的文章。
-    期数由后端定（一周一期给一年、一月一期给一年、一年一期给五年），**不要**自己
-    指定期数；报表会写明某一期是不是**不完整**（统计功能上线那一期只统计了部分天数），
-    照它说不完整，别把"部分"读成"掉了"；报表说一行记录都还没有时，那是"还没开始
-    统计"，不是"这些期没人看"。
-    需要管理员身份。"""
-    from agent import reports as R
-    data = _admin_get(f"/api/protected/stats/notes/periods?kind={kind}", config)
-    if isinstance(data, ToolResult):
-        return data
-    if not data:
-        return empty("后台没有返回分期报表数据")
-    try:
-        return ok(R.render_note_periods(data))
-    except Exception as exc:
-        logger.exception("render_note_periods failed")
-        return unavailable(f"整理分期报表失败: {exc}")
-
+# ── 管理助手报表（只读七件）的 re-export（20261018 搬进 `tools/admin_read.py`）──
+# 按**原名**再导出 ⇒ 全仓 `from tools.base import …` 与 `base.<名>` 一处不改。外面伸手的
+# 实测有两类：① **按名登记**（`agent/authz.py` 的 scope 表、`agent/action_text.py` 的动作词、
+# `agent/entities.py` 的摘要、`agent/tool_specs.py`、`agent/workflow_defs/reports.py` 的技能
+# 模板、`_TOOL_REGISTRY` 本体）；② **按属性调用**（`tests/test_reports.py` 的
+# `base.list_admin_board.invoke(...)`、`eval/admin_report_probe.py`）。两类的取值方式都是
+# "从 `tools.base` 拿"，所以这一刀不用动任何一处。
+# ⚠️ 这七件**没有被任何套件打桩**（实测全仓零处 `base.<这七个> = …`）⇒ 按原名 re-export
+# 是安全的；与 `_admin_get` 那类被打桩的名字不同，不需要 `_base.` 属性查找。
+from tools.admin_read import (  # noqa: E402,F401
+    get_moderation_status,
+    get_note_periods,
+    get_note_stats,
+    get_server_status,
+    get_service_health,
+    get_user_stats,
+    list_admin_board,
+)
 
 # ---------------------------------------------------------------------------
 # 管理助手写工具（20260921 第二轮：标签创建 / 文章状态 / 打标签）
@@ -3862,6 +3703,7 @@ def reset_user_quota(
 # ⚠️ 放在**文件末尾**是有原因的，别挪回原来那一节的位置：本模块的 `tools/notes.py` 要
 # `from tools.base import API_BASE, _own_get`，而 `_own_get` 定义在上面第 ~1139 行——
 # 在文件中间 import 它就是循环 import 的半初始化模块（那个名字还不存在）。
+# ---------------------------------------------------------------------------
 from tools.notes import (  # noqa: E402,F401
     _NOTE_COUNT_KEYS,
     DOC_TYPE_CN,
@@ -3887,7 +3729,6 @@ from tools.notes import (  # noqa: E402,F401
     search_notes,
 )
 
-# ---------------------------------------------------------------------------
 # Registry
 # ---------------------------------------------------------------------------
 
