@@ -29,6 +29,17 @@ name: Eval Gate
 on:
   push:
     branches: [main]
+  # PR 上也跑（20261019）。为什么非加不可：此前只在 push 到 main 时才跑 ⇒ 一个 PR 从推上去
+  # 到合并之间**没有任何自动检查**，红是"合进 main 那一刻"才发现的（20261017 实测：PR #8
+  # 合流当场带出两条红，支上从没人跑过闸；PR #19/#20 那两条红同理，见 ROADMAP.md 待办）。
+  # 同仓分支的 PR 拿得到 secret ⇒ 走完整门禁，与 push 到 main 那一趟判据逐条相同。
+  #
+  # ⚠️ **fork 的 PR 拿不到 `secrets.PARENT_REPO_TOKEN`**（GitHub 不向 fork 传 secret）⇒
+  # 跨语言守卫在那种 PR 上跑不了。本仓对"静默跳过"的容忍度是零，所以那一步走的是**显式
+  # 降级**：日志 `::warning::` + job summary 写明"哪些判据本次没跑、合并后会补跑"，其余
+  # 判据照常跑。三条路的取舍（跳过并记下 / 拆独立 job / 干脆不跑）见 ROADMAP.md 待办第一条。
+  pull_request:
+    branches: [main]
   # 手动重跑秒级套件（无入参）；全量 golden 请按上面注释在本机跑
   workflow_dispatch:
 
@@ -51,14 +62,39 @@ jobs:
       # checkout agent 仓，而父仓私有 ⇒ 最需要它的地方从不运行，本机绿、CI 也绿，两侧谁都没
       # 真比过（20260928 审计实测）。现在父仓以**只读凭据**拉进来真判。取舍与轮换步骤见
       # docs/adr/adr-0004-cross-language-guard-in-ci.md。
-      - name: 跨语言守卫的凭据自检（缺了就直接红，不让六处守卫各自红一遍）
+      - name: 跨语言守卫的凭据自检（缺了就直接红；fork PR 走显式降级）
+        id: parent
+        env:
+          EVENT_NAME: ${{ github.event_name }}
         run: |
-          if [ -z "${PARENT_REPO_TOKEN:-}" ]; then
-            echo "::error::缺 secrets.PARENT_REPO_TOKEN。跨语言守卫（断言 Rust 侧真有那个臂/那个键）在 CI 里**必须真跑**——凭据缺失是配置问题，配置问题的正确表现是红，不是静默跳过。配置步骤见 docs/adr/adr-0004-cross-language-guard-in-ci.md"
-            exit 1
+          if [ -n "${PARENT_REPO_TOKEN:-}" ]; then
+            echo "available=1" >> "$GITHUB_OUTPUT"
+            exit 0
           fi
+          # fork 的 PR 上拿不到凭据是**预期**，不是配置错 —— 但降级必须被**记下来**：
+          # "条件不满足就当没这回事"正是这套守卫最怕的那种失效（本仓最贵的一类）。
+          # 判据是事件类型而不是"谁 fork 的"：同仓分支的 PR 有 secret，走上面那一支。
+          if [ "${EVENT_NAME}" = "pull_request" ]; then
+            echo "available=0" >> "$GITHUB_OUTPUT"
+            echo "::warning::本 PR 拿不到父仓只读凭据（fork 的 PR 不传 secret）⇒ 跨语言守卫本次**未运行**，合并到 main 后会补跑。详见 job summary。"
+            {
+              echo "### ⚠️ 跨语言守卫本次**未运行**（这不是通过）"
+              echo ""
+              echo "本 workflow 的跨语言守卫需要一枚只读凭据去读**私有**父仓，而 **GitHub 不向 fork 的 PR 传 secret**。"
+              echo ""
+              echo "**本次没有运行**：所有读父仓源码的跨语言守卫（六处）。"
+              echo ""
+              echo "**照常运行**：其余全部离线套件、未定义名扫描、类型棘轮、静态检查棘轮、提交信息闸门。"
+              echo ""
+              echo "合并到 \`main\` 后那次 \`push\` 会带凭据重跑，届时这些守卫才真判。"
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          echo "::error::缺 secrets.PARENT_REPO_TOKEN。跨语言守卫（断言 Rust 侧真有那个臂/那个键）在 CI 里**必须真跑**——凭据缺失是配置问题，配置问题的正确表现是红，不是静默跳过。配置步骤见 docs/adr/adr-0004-cross-language-guard-in-ci.md"
+          exit 1
 
       - name: 取父仓源码（只读、浅、稀疏）
+        if: steps.parent.outputs.available == '1'
         uses: actions/checkout@v4
         with:
           repository: BigLeopardCat/Saudade-Blog
@@ -86,6 +122,7 @@ jobs:
           persist-credentials: false
 
       - name: 父仓落位自检（锚 + 每一条锥模式都真拉到）
+        if: steps.parent.outputs.available == '1'
         # 凭据权限不对时上一步就失败了；这一条兜的是"拉下来了但稀疏锥配错"——空目录/错目录会
         # 让守卫**假绿**（`tests/_parent_repo.py` 头注里那两条边界之一）。**锥里每一条模式都要
         # 探一次**：`_parent_repo.read` 遇到"文件不在"是按三态走的（本机单跑会打 ⏭ 继续），
@@ -130,10 +167,12 @@ jobs:
       # 需要人加一行豁免的红，而不是一个"首行长度不由人控制"的慢性假红。
       - name: 提交信息闸门（与本地同一份 .githooks/commit-msg）
         env:
-          # PR 上没有 `github.event.before`（那不是 push 事件）。本 workflow 目前只
-          # `push: branches: [main]`，所以这里只取 before；将来加了 `pull_request`，
-          # 照父仓那份补 `|| github.event.pull_request.base.sha`。
-          BEFORE: ${{ github.event.before }}
+          # PR 上没有 `github.event.before`（那不是 push 事件）⇒ 退回 `base.sha`（PR 的
+          # 目标分支顶端）。`github.sha` 在 PR 上是那个 merge commit，所以 `base..merge`
+          # 正好是本 PR 带来的那几条提交，与 push 那一趟的区间语义相同。
+          # ⚠️ 取不到基线时**整段跳过并响亮地说出来**（下面那个 `exit 0` 分支）——
+          # "跳过"不是"通过"。
+          BEFORE: ${{ github.event.before || github.event.pull_request.base.sha }}
           SHA: ${{ github.sha }}
         run: |
           set -euo pipefail
@@ -178,9 +217,19 @@ jobs:
       # 注意它比较的是父仓**默认分支**的 HEAD：Rust 那边的改动还没并进默认分支时，这里会红
       # 而本机（工作区里带着那份改动）是绿的——这是**可见的**红，不是静默的绿（取舍见 ADR-0004）。
       - name: 全部离线套件（按磁盘枚举，秒级、无网络、无 LLM）
+        if: steps.parent.outputs.available == '1'
         env:
           SAUDADE_PARENT_REPO: ${{ github.workspace }}/_parent
           SAUDADE_REQUIRE_PARENT: "1"
+        run: uv run python tests/run_all.py
+
+      # fork PR 的降级跑法：**同一份清单、同一套判据**，只是父仓不在场。
+      # 不设 `SAUDADE_PARENT_REPO`：父仓根本没 checkout（上面那一步被 `if` 掉了），
+      # 指一个不存在的目录只会多一句误导人的输出。不设 `SAUDADE_REQUIRE_PARENT` ⇒
+      # 读父仓的那六处守卫落进"找不到 + 没设要求"那一档：**打一行响亮的说明再返回 None**，
+      # 不是静默（那一档的语义写在 tests/_parent_repo.py 头注）。哪些没跑已在 job summary 里记下。
+      - name: 全部离线套件（降级：本 PR 拿不到父仓凭据 ⇒ 跨语言守卫本次不运行）
+        if: steps.parent.outputs.available != '1'
         run: uv run python tests/run_all.py
 
       # 未定义名静态扫描（20260924 补）。Python 没有编译期拦截：一个只在**另一个作用域**
