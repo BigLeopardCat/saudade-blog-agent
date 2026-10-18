@@ -12,7 +12,7 @@
     "server.py"
   ],
   "total": 190,
-  "files_checked": 90,
+  "files_checked": 91,
   "by_file": {
     "agent/action_text.py": 1,
     "agent/adminops_confirm.py": 6,
@@ -34,7 +34,8 @@
     "rag/vector_index.py": 3,
     "server.py": 8,
     "tools/admin_read.py": 4,
-    "tools/base.py": 9,
+    "tools/announcements.py": 1,
+    "tools/base.py": 8,
     "tools/notes.py": 1,
     "tools/own_data.py": 14,
     "utils/trace.py": 2

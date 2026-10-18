@@ -396,6 +396,33 @@
   随搬家变成死代码的 `import os` 与 `typing.Literal`）。模块台账按文本外科改数
   （4014/91 → 3855/84）。判据侧取值点跟着搬一处（`tests/test_param_schema.py` 的
   `Literal[...]` 扫描加第四个文件，判据字面一字未动，反控实测能红）。
+- **`tools/base.py` 拆出第五块：站内公告那一族（批 3）——对外行为零变更**：
+  3855 行 / 84 个模块级定义 → **3638 行 / 78**；**连续的 233 行、8 个模块级名字**
+  （`MAX_ANNOUNCE_TITLE` / `MAX_ANNOUNCE_BODY` / `_announcement_index` /
+  `_find_named_announcement` / `_announce_change` + 三个 `@tool`）搬进
+  `tools/announcements.py`（285 行）。共同点是 scope 全是 `write.console`、目标全是
+  **公告标题**。**67 个工具的名单与顺序、8 个名字的 AST 逐字相同**（逐个对过 AST），
+  **6 个 docstring 的值一个都没变**（这一刀没有上一刀那种折行改值的情况）。
+  ⚠️ 这一族里有**两个被套件直接打桩的名字**：`_announcement_index`（6 处）与
+  `_admin_request`（3 处）——`tests/test_tag_admin.py` 的 `patch()` 就是
+  `setattr(tools.base, 名, 桩)` ⇒ 新模块里一律走 `_base.<名>(...)`。**正控实测**：
+  给这两个名字打桩后，搬到新模块的 `create_announcement` 确实走到桩上；
+  **反控实测**：把 base 的 re-export 删掉，调用**响亮地炸** `AttributeError`
+  ——不是悄悄用本模块那一份（"看着在跑、其实没跑"正是要防的那件事）。
+  三个共享帮手（`_admin_request` / `_admin_get` / `_near_miss_names`）留在 base，
+  它们是标签/分类/留言各族共用的底座。**下划线名也照旧 re-export**
+  （`agent/graph.py` 按名取 `_announcement_index` 与 `_find_named_announcement`），
+  而 `MAX_ANNOUNCE_*` / `_announce_change` **不 re-export**——导出来就是两个没人取的幽灵入口。
+- **从这一刀起，新模块交付时带 `__all__`（"按社区惯例收紧"的第一件落地）**：
+  `tools/announcements.py` 的 `__all__` 只列**三个工具**。四个帮手与两个上限常量是
+  实现细节；`_announcement_index` / `_find_named_announcement` 确实被外面按名取，但它们是
+  **下划线名**——按社区惯例不进 `__all__`，由 `tools/base.py` 显式 re-export 供给
+  （显式 import 不受 `__all__` 约束）。⇒ 后面每一刀照此办，不再回头补前面那几个模块。
+  三本账的差额全部来自"搬走而不是新增"：穷举量 `1122 → 1122`（`tools/base.py` 84→76、
+  `tools/announcements.py` 8）；类型棘轮 `190 → 190`（`tools/base.py` 9→8、
+  `tools/announcements.py` 1——⚠️ 这一处 `type_gate` 判红的是"总数没涨但某个文件涨了"，
+  按设计必须显式跑 `--update` 重切，配对关系写在提交正文里）；ruff `798 → 796`
+  （`tools/base.py` 23→21、新文件 0）。模块台账按文本外科改数（3855/84 → 3638/78）。
 
 ## 20261017
 

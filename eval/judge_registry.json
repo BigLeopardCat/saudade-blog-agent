@@ -272,7 +272,11 @@
         0
       ],
       "tools/base.py": [
-        84,
+        76,
+        0
+      ],
+      "tools/announcements.py": [
+        8,
         0
       ],
       "tools/admin_read.py": [
