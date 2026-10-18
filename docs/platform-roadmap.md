@@ -18,6 +18,9 @@
 
 ## 1. 现状：核心链路已经硬，缺的是平台面
 
+**下表是 20261018 建账时的实测读数，不是实时状态**——每批落地后那一行就地标上「已补」
+（保留原文，好让下一个人看得见它当时到底缺成什么样）。分批进度看 §2 的批标题。
+
 这个仓的核心链路有受限规划、回执驱动、gate 声称检查、技能注册表、跨轮执行记忆、
 权限 scope 表、同意闸、写幂等账、trace 与 L0–L3 评测分层，外加一整套机械闸
 （4 条预算棘轮 + 十来个接线/一致性闸，都带正控/反控）。**缺的不是业务能力。**
@@ -26,15 +29,15 @@
 |---|---|---|
 | 断点恢复 | **无**。生产不挂 saver；`agent/checkpoint.py` 的 `build_checkpointer()` 是响亮桩、零生产调用方；`thread_id` 每请求随机 | `agent/checkpoint.py`、`server.py` |
 | 幂等账 | **已建成但惰性**：`agent/idem.py` 的 `active()` 要求 checkpointer 在场 ⇒ 恒 False | `agent/idem.py` |
-| 版本可见性 | **无** `/version`、无 build-info；`/health` 只回声 dials | `server.py` |
+| 版本可见性 | **无** `/version`、无 build-info；`/health` 只回声 dials （**已补**：批 3，`agent/probe.version_payload`） | `server.py`、`agent/probe.py` |
 | 错误码 | BLOCK 原因码**已有闭集**（`agent/block_reasons.py` + `tests/test_block_reasons.py`）；**发射侧**没有对应闭集 | 同上 |
 | 重试 | **已有**但**散在**：重试码集、重试异常集、`_llm_retriable()`、planner 里的一次性重试各住一处 | `agent/graph.py` |
 | 用量计量 | 主链路计；**侧任务（moderator / summarizer）不计** | `agent/llm_usage.py` 头注自认 |
 | 权限 | scope 表与同意闸齐备，但 `AUTHZ_ENFORCE` 默认 **0（影子）** | `agent/authz.py`、`.env.example` |
-| 静态检查闸 | **文档自称「待建」**：ruff 基线还只是快照，没有执行者 | [lint-baseline.md](lint-baseline.md) |
-| 提交闸 | **本仓没有** commit-msg hook，规则只写在 [CONTRIBUTING.md](../CONTRIBUTING.md) §3 | 实测 `.githooks/` 不存在 |
-| 文档计数 | [docs/README.md](README.md) 里手抄的 ADR 份数漂了（写 7、实际 12），且这条计数没有闸 | 实测 `docs/adr/` |
-| 台账幽灵键 | 已删模块的键还留在类型棘轮台账里 | `eval/mypy_baseline.json` |
+| 静态检查闸 | **文档自称「待建」**：ruff 基线还只是快照，没有执行者 （**已补**：批 2，`eval/lint_gate.py` + CI 一步） | [lint-baseline.md](lint-baseline.md) |
+| 提交闸 | **本仓没有** commit-msg hook，规则只写在 [CONTRIBUTING.md](../CONTRIBUTING.md) §3 （**已补**：批 2，`.githooks/commit-msg` + CI 一步） | 实测 `.githooks/` 不存在 |
+| 文档计数 | [docs/README.md](README.md) 里手抄的 ADR 份数漂了（写 7、实际 12），且这条计数没有闸 （**已补**：批 1，进 `tests/test_docs_facts.py` 同源判） | 实测 `docs/adr/` |
+| 台账幽灵键 | 已删模块的键还留在类型棘轮台账里（**已补**：批 1/2，两处棘轮各加一条幽灵键守卫） | `eval/mypy_baseline.json`、`eval/lint_gate.py` |
 
 ---
 
@@ -42,14 +45,14 @@
 
 每批 = 一个可独立提交、可独立回退的单元。每项 = **能用 + 一条判据**，不追求生产级加厚。
 
-### 批 0 — 预案落仓（只动文档）
+### 批 0 — 预案落仓（只动文档）✅ 已落地
 
 - 本文档；
 - [docs/README.md](README.md) 索引加一行（索引与磁盘**双向判**，漏列就红）＋ 顺手修 ADR 份数；
 - [ROADMAP.md](../ROADMAP.md) 加一条指针（它仍是「现在该做什么」的唯一事实源，**不在这里复述分批表**）；
 - `CHANGELOG.md` 一行。
 
-### 批 1 — 收口与自净（前置）
+### 批 1 — 收口与自净（前置）✅ 已落地
 
 1. **收口在途的 skill → workflow 重构**，逐文件点名提交。
 2. **台账收紧**（文本改那一个数，**不跑 `--update`**——那是放宽通道，且会重排整份）：
@@ -62,28 +65,37 @@
    指向**不在本仓**的路径逐条标注。
 5. 清掉已删模块残留的字节码缓存（运维动作，不进提交）。
 
-### 批 2 — 补闸
+### 批 2 — 补闸 ✅ 已落地
 
 - **静态检查棘轮**（待建）：`eval/lint_gate.py` —— ruff E/F/I/W 按文件记账、`--update` 唯一放宽通道、
   自检带正控反控。建完把 [lint-baseline.md](lint-baseline.md) 的「待建」改掉，**同一个提交**
   （否则那句成了谎，文档判据 ④ 会红）。
 - **本仓提交闸**（待建）：把 [CONTRIBUTING.md](../CONTRIBUTING.md) §3 已经写死的规则
   （八个 type / 首行 ≤60 字符 / 无署名尾注）做成 `.githooks/commit-msg`，规则文本**单一事实源**。
-- 判据（待建）：`tests/test_lint_gate.py`、`tests/test_commit_msg_hook.py`。
+- 判据：提交闸在 `tests/test_commit_msg_hook.py`（hook 存在/可执行、坏消息要拒、好消息要收、
+  八个 type 与 §3 那份文本同源）；**静态检查棘轮没有单独的套件**——它的正控/反控住在
+  `eval/lint_gate.py::_self_check()` 里（跑闸就跑它），CI 的 `eval.yml` 有一步真执行它，
+  接线由 `tests/test_packaging.py` ⑦ 盯着。此前这里写过的那个棘轮套件（**未建**、
+  也**不需要**建）别照着找——判据就在闸自己身上。
 - ⚠️ 接线陷阱：CI 要调 `.githooks/commit-msg`，**不要**直接调那个套件文件——
   `tests/test_ci_suite_list.py` 判的是「套件清单只有 `tests/run_all.py` 一处」。
 
-### 批 3 — 运行时可观测
+### 批 3 — 运行时可观测 ✅ 已落地（关停排空除外，见下）
 
-- **`/version`**：**只放静态构建身份**（git sha / 启动时刻 / python 版本），
+- **`/version`** ✅：**只放静态构建身份**（git sha / 启动时刻 / python 版本），
   **不复述 dials**——那是活体状态、已经住在 `/health`，复述就是第二个真源。
-  sha 取值顺序 = 环境变量 → git → `"unknown"`，不许手抄。
-- **`/ready`**：就绪 ≠ 存活。判据要能证明这个区别：硬依赖缺失 ⇒ `/ready` 503，
+  sha 取值顺序 = 环境变量 → git → `"unknown"`，不许手抄；**来源一起回**（`sha_source`），
+  否则 `"unknown"` 与一个真 sha 长得一样权威。判据 `tests/test_version.py`。
+- **`/ready`** ✅：就绪 ≠ 存活。判据要能证明这个区别：硬依赖缺失 ⇒ `/ready` 503，
   **而同一条件下 `/health` 仍 200**。两者同时红同时绿，说明 `/ready` 是装饰。
-- **关停排空**：SIGTERM 打到流中间，在途 SSE 要么收完、要么留下记录在案的结束原因。
-- **启动配置自检**：`/health` 现在把配错的提供方吞掉 ⇒ 加一行启动告警 + `/ready` 503，
-  把「静默用错模型」变成可见状态。
-- 判据（待建）：`tests/test_version.py`、`tests/test_ready.py`。
+  判据 `tests/test_ready.py`（三种缺失各一遍，每遍配一条 `/health` 仍 200）。
+- **启动配置自检** ✅：`/health` 现在把配错的提供方吞掉 ⇒ 加一行启动告警 + `/ready` 503，
+  把「静默用错模型」变成可见状态。**刻意不拒绝启动**（拒了就是让探针把"配置缺"报成
+  "agent 挂了"，又是指错方向）。
+- **关停排空** ❌ **搁置**（20261018 决定，理由见 §3 那张表）：不自己装 SIGTERM handler。
+- 落点：判定逻辑住在 `agent/probe.py`（纯函数），`server.py` 只留两个薄路由——
+  `server.py` 已超文件预算 3 倍，加 118 行会被 `tests/test_module_budget.py` 判「长文件又长了」，
+  而这两件事**不需要**住在 app 模块里。台账那一格随之 +40 行（2589/52），是这次唯一的放宽。
 
 ### 批 4 — 错误与用量：可归因
 
@@ -144,6 +156,7 @@
 | agent 边界再加一层鉴权 | 只回环，鉴权是父仓的活，加了就是两份要同步的真源 | 永不 |
 | 通用重试库 | 现有重试是**有预算意识**的（超时不重试），库会把这件事藏起来 | 永不 |
 | 第三张错误码表 | 已有 BLOCK 原因码闭集，再叠一张只多一份要同步的东西 | 永不 |
+| 自己装 SIGTERM handler 做「关停排空」 | uvicorn **已经**有优雅停机（SIGTERM 后在途请求自然收尾），自己再装一个就是**顶掉它**、把这件事重实现一遍；而真正的缝在**跨仓**：父仓 unit 的 `TimeoutStopSec=120` **小于**本仓 `STREAM_TOTAL_TIMEOUT=300` ⇒ 走到第 120 秒还在跑的流会被 SIGKILL，那时进程已经没了、`end_reason` **写不出来**（这一条不是本仓能补的） | 出现一次「部署重启后用户看到半截回复，而 `logs/agent/agent.log` 里没有对应的 `[stream] end reason=` 行」⇒ 那时把父仓 unit 的 `TimeoutStopSec` 抬到 >300，**不要**在本仓加 handler |
 | OTel / 任务队列 / 缓存层 / 向量库 / 管理 UI | 超出本仓形状 | 永不 |
 
 ---

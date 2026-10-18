@@ -36,6 +36,7 @@ from langchain_core.messages import AIMessage, AIMessageChunk, HumanMessage, Sys
 # 不属于动作措辞）。
 from agent.action_text import tool_action_text
 from agent import confirm  # 待办令牌：签发在 graph 弹窗侧，验签在这里（见 /chat/stream）
+from agent import probe  # /version 与 /ready 的判定逻辑（纯函数，见该模块头注）
 from agent.factblock import (action_facts,  # 动作事实块（D3）
                              compose, render_fact_block, strip_fact_lines)
 from agent import create_agent
@@ -349,7 +350,18 @@ async def lifespan(app: FastAPI):
     # **顺序在这里是有意的**：先校验 provider 再建臂——否则一条臂会先被建起来、再被
     # 这个错误丢掉，日志里留下一段"看着像建好了"的痕迹。
     from config.settings import settings
-    logger.info("LLM provider ready (provider=%s)", settings.check_provider())
+    _provider = settings.check_provider()
+    logger.info("LLM provider ready (provider=%s)", _provider)
+    if not settings.is_api_key_configured:
+        # **不拒绝启动**（20261018 批 3）：拒了就是把"配置缺"报成"服务起不来"，而心跳
+        # 探针读的是 `/health` ⇒ 它会把这件事报成"agent 挂了"——又是指错方向。
+        # 正确的形状是：进程活着（`/health` 200）、**明确不可接活**（`/ready` 503）、
+        # 并且在启动日志里就喊一声，而不是等第一条请求 401 才发现。现场依据是 20260927
+        # 那次：`.env` 里换了 key 之后四个端点一律 401，而 `/health` 全程
+        # `agent_ready: true`（故障与探针之间没有交集）。
+        logger.warning(
+            "LLM 凭据缺失：provider=%s 的 api_key 为空 —— 进程会照常启动，"
+            "但每一条对话都会失败（/ready 现在报 missing_credentials）。", _provider)
     _agent, _arm = _build_arm()
     logger.info("Agent ready (arm=%s)", _arm)
     # 后台预热图谱查询的 embedding 客户端（首次 TLS 建连 ~3s，不预热的话
@@ -2540,6 +2552,34 @@ async def health():
             "vector_missing": int(_rag["missing"]),
         },
     }
+
+
+@app.get("/version")
+async def version():
+    """**构建身份**：这是哪一版、什么时候起的、跑在哪个解释器上（20261018 批 3）。
+
+    本仓与父仓的部署纪律是「**push ≠ 部署、生效须 restart**」，而"线上跑的是哪一版"
+    在 agent 侧此前**没有任何出口**——父仓写 `frontend/dist/build-info.json`
+    （`curl /build-info.json` 即知线上跑的是哪个提交），agent 侧只能靠读 `.env` 与提交
+    历史去推。**只放静态构建身份、不回显活体档位**（理由与取值三档见
+    `agent/probe.version_payload`）。判据：`tests/test_version.py`。
+    """
+    return probe.version_payload(_app_version())
+
+
+@app.get("/ready")
+async def ready():
+    """就绪探针：**能不能真的接一轮对话**——与 `/health` 的"进程活没活"是两件事。
+
+    三条硬依赖与词表见 `agent/probe.ready_payload`；这里只做接线（取 `_agent` 与
+    `settings`）。⚠️ **它现在是建议性的**：没有任何探针在读它（父仓
+    `scripts/healthcheck.sh` 读的是 `/health`），把它接进探针是父仓那侧的活。
+    判据：`tests/test_ready.py`——三种缺失各判一遍，每一遍都配一条"同一条件下
+    `/health` 仍然 200"（两者同时红同时绿就说明这个端点是装饰）。
+    """
+    from config.settings import settings
+    code, body = probe.ready_payload(_agent, settings)
+    return JSONResponse(body, status_code=code)
 
 
 if __name__ == "__main__":
