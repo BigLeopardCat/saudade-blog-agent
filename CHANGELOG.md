@@ -242,6 +242,21 @@
   另：`tests/test_ready.py` ① 的前提改为**判据自己摆**——离线套件跑在
   `SAUDADE_IGNORE_ENV_FILE=1` 下（`.env` 不读），它原先断言"凭据在位 ⇒ 200"是继承了
   运维取值 ⇒ **单跑绿、进套件红**（实测撞上一次）。
+- **`tools/base.py` 拆出第一块：用户自己那一份数据（批 3）——对外行为零变更**：
+  5351 行 / 141 个模块级定义 → **4776 行 / 121**；收藏 / 未读汇总 / 站内通知 / 站内信这
+  **相邻的两节**（scope 同属 `read.own` / `write.own`）搬进 `tools/own_data.py`（670 / 24）。
+  合成一个模块而不是切两刀：它们共用同一批原语（`_as_ids` / `_as_bool` / `_as_article_id` /
+  `_own_get` / `_own_write_guard` / `_pre_read_fail`），切开只会让这批原语在两边各留一份。
+  **67 个工具的名单与顺序、每个函数的 AST 逐字相同**（含三处 `Annotated` 形参注解的折行——
+  相邻字面量拼出来的字符串求值后一字不差，逐函数对过 AST）；三本账的差额全部来自
+  "搬走而不是新增"：穷举量 `1139→1122`、mypy `190→190`（`tools/base.py` 28→14、
+  `tools/own_data.py` 14）、ruff `822→815`（`tools/base.py` 45→38、新文件 0）。
+  老写法（`from tools.base import …`）全部照旧可用——**这一刀按原名 re-export**，理由与
+  `tools/device.py` 那一刀同源：本仓有套件**直接给 `tools.base` 的模块属性打桩**
+  （实测 `_client` 159 处 / `_get` 10 处 / `_admin_get` 4 处 / `_find_named_user` 3 处），
+  "补丁打在哪个模块对象上"决定它生不生效。⚠️ 新模块里**不许**按名 import 那三个被打桩的
+  名字（会拿到打桩前的旧函数对象、桩静默失效、测试真去发网络请求）；要调就走
+  `tools.base` 的属性——`tools/own_data.py` 今天一个都没用，这条写在它的头注里。
 
 ## 20261017
 
