@@ -4177,7 +4177,7 @@ def _user_directory(config: RunnableConfig) -> dict[int, dict] | ToolResult:
     `_principal_get` 里取业务码的那一行（`body.get("code")`）在**裸 list** 上会抛
     `AttributeError`——异常冒到 execute 的兜底，表现成过程行「执行出错」，看起来像
     服务挂了。也**不要反过来**去改后端把它包成信封：前端 `Users/index.tsx` 按
-    `Array.isArray(res?.data)` 读、`scripts/probe_token_revoke.py` 直接迭代裸数组，
+    `Array.isArray(res?.data)` 读、父仓 `scripts/probe_token_revoke.py` 直接迭代裸数组，
     包信封会同时打断这两处。所以这里自带一次请求，其余形状照抄 `_principal_get`
     （同一把 60 秒代签 JWT、同一条 `/api/protected` 前缀、同一套 fail-closed），
     **唯一**的差别就是最后认的是"顶层是不是 list"。

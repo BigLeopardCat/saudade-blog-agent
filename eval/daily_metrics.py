@@ -4,7 +4,7 @@
 
 **为什么存在**：20261012 起夜间回归整体挂起（主人「钱包扛不住」），而
 `scripts/nightly_regression.sh` 把 L1/L2/L3 + `trace_alert` + `golden_draft` 装在
-**同一个脚本**里 ⇒ 一停全停，生产健康只剩 `scripts/healthcheck.sh` 每分钟那八项。
+**同一个脚本**里 ⇒ 一停全停，生产健康只剩父仓 `scripts/healthcheck.sh` 每分钟那八项。
 `eval/token_cost_report.py`（成本 / 前缀缓存）与 `eval/trace_metrics.py`（真实流量效率）
 这两件**零 LLM 成本**的读数装置从此没有任何自动通道——只有人想起来才跑。代价有现场：
 20261016 planner 的前缀缓存命中率从 84.6% 掉到 51.8%，这件事此前**没有任何东西会报**，

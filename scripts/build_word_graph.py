@@ -17,7 +17,7 @@
                                   展品该不该在本站画出来）
   3. data/word_graph/{index.json,vectors.f32,...} agent 查询用（裸 float32，不进 git）
 
-`<web>` 缺省是 `frontend/public/graph`（提交进仓、随下个部署进 dist）；**`--out-web`
+`<web>` 缺省是父仓 `frontend/public/graph`（提交进仓、随下个部署进 dist）；**`--out-web`
 给了就写成服务端自己的目录**（`data/word_graph/web/`，由 Rust 的产物接口直接供出去，
 见 docs/word-graph.md 的《重建》一节）——服务端重建不能依赖"再跑一次 vite build"。
 

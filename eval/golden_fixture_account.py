@@ -18,13 +18,13 @@
 
 ⚠️ 这里**不是**第二条写通道：本模块只有 GET，源码扫描把 `.post(` / `/status` / `frozen`
 这些写形状全列为禁止项。改这个文件之前先读 `docs/security-boundary.md` 与
-`scripts/migration/golden_fixture_account_20260926.sql` 的头注：生产写的授权串是
+父仓 `scripts/migration/golden_fixture_account_20260926.sql` 的头注：生产写的授权串是
 「用户点名库名+迁移文件」，不因为"评测脚本也需要"而多出第二张许可。
 
 ## 族约定：账号夹具**建出来就是冻结态**
 
 `agent_admin_fixture` 族（前缀沿用 `golden_fixture.FIXTURE_PREFIX`）里的账号，一律由
-`scripts/migration/golden_fixture_account_20260926.sql` 插成 `status=1`（冻结）。
+父仓 `scripts/migration/golden_fixture_account_20260926.sql` 插成 `status=1`（冻结）。
 这不是本模块的猜测，是**文件与用例之间的契约**：唯一消费它的用例
 （`account_unfreeze_exec`）做的就是"把它解冻"，所以"它现在是冻结的"正是这条用例能证明
 任何东西的前提。

@@ -81,7 +81,7 @@ EXPECT_DONE = False
 # ——它是台账真值。于是"夹具的排期过时了"与"模型没按台账念"会红成同一个样子，而前者是
 # 前置条件问题、后者才是回归。判在这里 ⇒ 排期对不上时用例**响亮跳过**（理由里直接说
 # 「排期不是约定的那个日子，重跑那份 SQL 的复位段」），而不是红成模型退化。
-# 改这个值要三处同步：本文件、`scripts/migration/golden_fixture_todo_20261003.sql`、
+# 改这个值要三处同步：本文件、父仓 `scripts/migration/golden_fixture_todo_20261003.sql`、
 # 用例的 `text_any_regex`。`tests/test_golden_fixture.py` 有锁盯着后两处。
 EXPECT_DATE = "2026-11-30"
 

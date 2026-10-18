@@ -5,7 +5,7 @@
 
 贴纸的渲染契约在前端是**两个冒号**：`/:([^:\\s]{1,12}):/g`（看板娘 fallback
 `frontend/public/live2d-widgets/chat-render.js` 与站内 markdown 插件
-`frontend/src/utils/stickers.ts` 各一份，逐字同形）。缺收尾冒号的记号**结构上匹配不上**，
+父仓 `frontend/src/utils/stickers.ts` 各一份，逐字同形）。缺收尾冒号的记号**结构上匹配不上**，
 而两个渲染器都按"未命中名字原样保留成文本"处理 ⇒ 主人读到的是一段裸露的 `:头疼`。
 
 模型偶尔就写残（实测：`logs/agent/traces/20261002/` 的 `20261002T211008_5_r97d4db1.json`

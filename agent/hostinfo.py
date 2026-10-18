@@ -368,7 +368,7 @@ def parse_health_log(text: str, cutoff: datetime,
                      recent: int = 3) -> dict:
     """心跳探针日志 → 窗口内的 WARN/FAIL 计数 + 时间跨度 + 最近若干条。
 
-    行格式（`scripts/healthcheck.sh` 的 `fail()`）：`YYYY-MM-DD HH:MM:SS LEVEL 正文`。
+    行格式（父仓 `scripts/healthcheck.sh` 的 `fail()`）：`YYYY-MM-DD HH:MM:SS LEVEL 正文`。
     认不出时间戳的行**跳过**（尾部读取可能带进来半截行，计数不该把它算成异常）。
 
     时间跨度是有意带的：`312 条` 与 `312 条（00:45~01:56）` 是两件完全不同的事

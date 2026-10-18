@@ -261,7 +261,7 @@ def test_wired_into_server_lifespan():
 
 
 def test_wire_illegal_anchor_is_stable():
-    """`scripts/healthcheck.sh` 第 7 项按 `wire_illegal` 这个 ASCII token 扫增量日志
+    """父仓 `scripts/healthcheck.sh` 第 7 项按 `wire_illegal` 这个 ASCII token 扫增量日志
     ——它是绊线唯一的**自动出口**。句子可以改，**锚点不许改名**（改了就是静默半死：
     探针照跑、永远扫不到）。"""
     src = (ROOT / "agent" / "graph.py").read_text(encoding="utf-8")
