@@ -297,8 +297,12 @@
 **级联清理**：`agent/checkpoint.py::delete_thread`（返回值是**"删完读回来确认"**，不是
 "没抛异常"——`DELETE ... WHERE` 删不存在的线程同样不抛，只看"没抛"的话恒不生效的删除与
 真删除**长得一模一样**）+ `DELETE /checkpoint/{conversation_id}` 钩子。
-⚠️ **父仓那一半截至 20261018 还没接上**（`src/routes/conversation.rs::purge_conversation_data`
-的两个臂都没调钩子）⇒ 本仓的钩子今天**没有任何调用方**，这是**已知缺口**。
+**父仓那一半 20261019 已接上**（批 D）：父仓 `conversation.rs::drop_checkpoint_threads` 在
+两个调用点各调一次（`delete_conversation` 在 `commit()` **之后**、`delete_temp_user` 紧随
+那份清单），会话 id 由 `purge_conversation_data` **返回**（清单仍只有一处）。
+⚠️ 接线时判据 ③ 的锚点跟着挪了位：从"清单的两个 match 臂"改成"两个调用点的函数体"——
+因为钩子必须落在**事务之外**（HTTP 不能进 `txn`）。老锚点在新形状下恒判「两臂都没接」，
+**一条恒绿的判据比没有更坏**。
 
 **判据**（四份，全绿）：
 - `tests/test_checkpoint_adoption.py`：四处形态**一致即绿**。批 6 时是 0/4（全未接），
@@ -314,9 +318,11 @@
 - `tests/test_checkpoint_cascade.py`（**新建**）：① 机制（含"删了没生效必须返回 False"
   的反控）② 端点三支 + "不许把没删掉报成删掉了"的反控 ③ **跨仓守卫**。
   ⚠️ ③ **判的不是"父仓接了吗"**（那会一直红、而红的套件进不了 CI，同批 6 那次）：
-  判的是**父仓自己两臂的一致**——`purge_conversation_data` 的 `ConversationId` / `UserId`
-  两臂要么都调钩子、要么都不调，**半接就红**。这不是编出来的判据：父仓自己在那份头注里
-  写着它上一版正是"清单两处各写一遍、写的不是同一份"，漏掉的三张表因此变成孤儿。
+  判的是**父仓那两条删会话数据的路的一致**——会话臂 `delete_conversation` 与账号臂
+  `delete_temp_user` 要么都调钩子、要么都不调，**半接就红**（外加一条"id 清单仍只有一处"：
+  钩子挪到调用点之后，两个调用点各自再查一遍 id 是最容易滑回去的写法）。这不是编出来的
+  判据：父仓自己在那份头注里写着它上一版正是"清单两处各写一遍、写的不是同一份"，
+  漏掉的三张表因此变成孤儿。
 - `tests/test_checkpoint_setup_concurrent.py`（**20261018 停服之后补的第四份**）：真连一个库、
   4 个进程同时建表。**它才是抓得住那次停服的那一层**——前三份全在 `127.0.0.1:1` 这种必然
   失败的 DSN 上判。缺 `SAUDADE_CKPT_TEST_DSN` 时它报「未评估」并退 0（`SAUDADE_REQUIRE_CKPT_TEST=1`
@@ -440,11 +446,11 @@ saver 挂上之后历史注入被闸门关掉，而**没有任何"播种"路径*
    已经过期**——它是按 20261018 那次的状态写的；
 4. 跑父仓的迁移校验脚本 `verify_parity.py`，期望 0 处对不上。
 
-**父仓那一半（同样是主人那边的事，本仓改不了）**：在
-`src/routes/conversation.rs::purge_conversation_data` 的**两个臂**里各加一次对本仓钩子的调用
-（`DELETE http://127.0.0.1:8010/checkpoint/{id}`，`UserId` 那一臂要按该 uid 的会话逐个删）。
-**只加一个臂 ⇒ `tests/test_checkpoint_cascade.py` ③ 当场红**——那正是父仓自己踩过的形状。
-没接上之前：删了会话、checkpoint 还留在库里（**已知缺口**，判据 ③ 会打一行字说明）。
+**父仓那一半：20261019 批 D 已落地**（`conversation.rs::drop_checkpoint_threads`，两个调用点；
+基址复用 `graph.rs::agent_base_url`，提为 `pub(crate)`）。**只接一个调用点 ⇒
+`tests/test_checkpoint_cascade.py` ③ 当场红**——那正是父仓自己踩过的形状。
+钩子失败只 warn、不挡业务删除（残留由批 C 的保留期兜底）。
+⚠️ **父仓那三行要 push + 重启 Rust 才生效**（本机只 `cargo check`，见本仓 CLAUDE.md §部署）。
 
 ### 批 8 — 权限从影子到强制（触发条件驱动，不硬排）
 
