@@ -442,13 +442,15 @@ def test_enum_closure_derives_from_literal():
     # ⇒ 取值点跟着搬。判据字面一个字没动，只换了"扫哪几份源码"——同 `test_hardening.py`
     # 对 `tools/device.py` 的做法。**只列这一族的文件、不列整个包**：整个包会把别处同名
     # 字面量也数进来，那是把锁放松。
-    base = "".join((ROOT / "tools" / f).read_text(encoding="utf-8")
-                   for f in ("base.py", "notes.py"))
+    # 20261018 第二笔：站点与页面那一族（含 `toggle_effect` 的 `Literal["sakura", "rain",
+    # "snow"]` 与 `toggle_dark_mode` 的 `Literal["on", "off"]`）搬进 `tools/site.py`，同上。
+    _FILES = ("base.py", "notes.py", "site.py")
+    base = "".join((ROOT / "tools" / f).read_text(encoding="utf-8") for f in _FILES)
     for ann in ('Literal["note", "talk", "board", "announcement"]',
                 'Literal["ai_passed", "ai_rejected", "pending"]',
                 'Literal["sakura", "rain", "snow"]',
                 'Literal["on", "off"]'):
-        check(f"tools/base.py + tools/notes.py 里有 {ann}", ann in base)
+        check(f"tools/{' + tools/'.join(_FILES)} 里有 {ann}", ann in base)
     check("参数规格用 arg_enum 派生（不手写枚举表）",
           "choices=arg_enum(" in (ROOT / "agent" / "workflow_params.py").read_text(
               encoding="utf-8"))

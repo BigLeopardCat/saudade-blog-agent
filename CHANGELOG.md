@@ -333,6 +333,32 @@
   那 7 条静默（"改完还是绿的"与"没改"同形）。补两条：账比现场松 ⇒ 红（"台账该收紧"）、
   账上有而扫描里没有的文件键 ⇒ 红（"台账该销账"）。与 `test_module_budget` 的双向棘轮、
   `type_gate` / `lint_gate` 的幽灵键守卫同一族。行为零变更（闸更严，不是代码更严）。
+- **`tools/base.py` 拆出第三块：站点与页面那一族（批 3）——对外行为零变更**：
+  4282 行 / 101 个模块级定义 → **4015 行 / 91**；从「导航 / 引导工具」到「站内"停在**某一条**
+  内容上"」这**连续的 310 行、17 个模块级名字**（功能结构图 / 会话历史 / 知识库 / 当前时间与
+  天气 / 导航白名单与路径校验 / 地址形态表 / `navigate_to`·`toggle_effect`·`toggle_dark_mode`
+  三条页面命令）搬进 `tools/site.py`（361 行 / 10 个函数 + 7 个常量）。
+  ⚠️ 这一族**跨三个 scope**（`read.public` / `read.own` / `write.page`，见 `agent/authz.py`），
+  所以粘合剂不是权限，而是"说的都是这个站点长什么样、怎么把访客带过去"——选刀依据写在
+  `tools/site.py` 的头注里。**67 个工具的名单与顺序、10 个函数的 AST 逐字相同**
+  （17 个名字逐个对过 AST，其中 6 个只差折行）。三本账的差额全部来自"搬走而不是新增"：
+  穷举量 `1122 → 1122`（`tools/base.py` 103→88、`tools/site.py` 15，正则中文字符 2→0 / 0→2）；
+  类型棘轮 `190 → 190`；ruff `805 → 799`（`tools/base.py` 30→24、新文件 0——少的那 6 条是
+  这一族里超 100 列的长行，按 `docs/lint-baseline.md` 纪律 1 折了行）。模块台账按文本外科
+  改数（4282/101 → 4015/91）。
+  ⚠️ **re-export 的位置又换了一种**：这一族只按名取 `API_BASE` / `SITE_BASE`（都定义在
+  base 的第 73 / 86 行，早于切口）⇒ 本来可以停在**原位置**，但那里紧挨着 `from tools.device
+  import …`、中间只隔注释，ruff 把两者当成同一段 import 要求按模块名排序（`tools.device` <
+  `tools.site`）⇒ 实际落在 `tools/device.py` 那一块之后。判据侧的取值点跟着搬了一处
+  （`tests/test_param_schema.py` 的四个 `Literal[...]` 扫描加了第三个文件，判据字面一字未动，
+  反控实测能红）。被套件打桩的 11 个名字里这一族只碰到 `_client`（2 个调用点，
+  `search_knowledge_base` 与 `get_weather`）⇒ 直接写 `_base._client.get(…)`，不加转发壳；
+  已实测给 `tools.base._client` 打桩后搬到 `tools/site.py` 的两个函数**确实走到桩上**。
+- **顺带把"中文词表闸"的一条口径写进账里**：这一族带中文的常量只有 `_WEATHER_LOC_RE`
+  一个在登记表里（`_NAV_EXACT_PATHS` / `_ITEM_POSITION_FORMS` 等三张中文表至今未登记），
+  ⇒ 登记表条目按**文本**改 `id`/`file` 到新文件、`metric.by_file` 两侧同时改数
+  （旧文件减、新文件加）。**不许跑 `--update`**：它按新 id 查不到旧条目，重出的条目会丢掉
+  `category` / `q` / `why`，下一轮判"未分类"还是红。
 
 ## 20261017
 

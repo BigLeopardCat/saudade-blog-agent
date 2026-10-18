@@ -272,8 +272,8 @@
         0
       ],
       "tools/base.py": [
-        103,
-        2
+        88,
+        0
       ],
       "tools/device.py": [
         2,
@@ -290,6 +290,10 @@
       "tools/result.py": [
         1,
         0
+      ],
+      "tools/site.py": [
+        15,
+        2
       ],
       "server.py": [
         22,
@@ -2052,8 +2056,8 @@
       "why": "帧退出原因的显示字。**19→20（20261016）**：新码 `action_conflict`（反极性改选，docs/问题记录.md §1.57）——这张表**不是判据词表**，是给主人看的显示字，且与 `agent/block_reasons.py::REASONS` 有一道**跨侧同值锁**（tests/test_block_reasons.py：键集相等 + 逐值相等）。⇒ 新增一个原因码**必然**在这里 +1，没有第二条路可走；这不是「往判据里加词」。**20→21（20261016）**：新码 `write_outcome_unknown`（写操作幂等账，ADR-0012 / docs/问题记录.md §1.66）——同上。这一次同时说明另一侧的读数：`agent/block_reasons.py` 的**穷举量** 20→21 是**同一件事的第二个读数**，不是又长了一张新表——那一侧至今没有登记条目，因为 `REASONS` 的中文住在**元组值**里（`(\"写操作结果未知\", False)`），而窄口径的 `_direct_cjk` 只认集合字面量的**直接**元素、不下钻嵌套 ⇒ ① 看不见它，只有 ② 的补网抓得到。⇒ 两处 +1 都不是「往判据里加词」，是这条跨侧同值锁的另一端。"
     },
     {
-      "id": "tools/base.py::_WEATHER_LOC_RE",
-      "file": "tools/base.py",
+      "id": "tools/site.py::_WEATHER_LOC_RE",
+      "file": "tools/site.py",
       "kind": "regex",
       "name": "_WEATHER_LOC_RE",
       "size": 2,

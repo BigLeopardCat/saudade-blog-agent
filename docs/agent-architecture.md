@@ -109,8 +109,16 @@ flowchart TB
 │   │                          #   住这里是为了让下面两层的消费者导入它时不必拉起 langgraph
 │   └── search.py              # RagIndex + search()；recall_eval 直接测本实现（评测即线上行为）
 ├── tools/
-│   ├── base.py                # 67 个 @tool 工具（含 rag_search / get_article_detail 泛化 doc_type）+ _TOOL_REGISTRY + IoT JWT 代签 + 显示幂等去重 + trace_id 透传 device-service
+│   ├── base.py                # 工具注册表 `_TOOL_REGISTRY`——全仓 67 个 @tool 工具的唯一入口（工具本体已按域拆进下面几个模块，按原名 re-export）+ 共享 HTTP 帮手（`_get`/`_client`…）+ 后台管理与写工具
+│   ├── result.py              # 工具结果的形状：`ToolResult`、信封构造器、列表帧塑形件（20261017 拆出）
+│   ├── device.py              # IoT 设备族：OLED 屏显读/写（20261017 拆出）
+│   ├── own_data.py            # 用户自己那一份数据：收藏 / 未读 / 站内通知 / 站内信（20261018 拆出）
+│   ├── notes.py               # 公开读族：文章 / 分类标签 / 公告 / 留言板 / 说说 / 站点信息（20261018 拆出）
+│   ├── site.py                # 站点与页面族：功能地图 / 导航表与路径校验 / 三条页面命令（20261018 拆出）
 │   └── __init__.py
+│      ⚠️ 拆出的模块按**原名**在 `base.py` re-export ⇒ 全仓 `from tools.base import …` 一处不改；
+│         但**被套件打桩的模块全局**（`_client` 等 11 个）在新模块里一律写成 `_base.<名>(…)`
+│         属性查找——函数对象取的是**自己所在模块**的 `__dict__`，按名 import 会让桩静默失效。
 ├── models/
 │   ├── llm.py                 # get_llm 工厂：provider 三选一（qwen/deepseek/openai）；enable_thinking 走 extra_body
 │   └── __init__.py
@@ -629,7 +637,7 @@ narrator 提示词随会话线性膨胀（当时那一行是 `with_tool_call_pai
 | 留言板 | `list_guestbook` | 读 `/api/public/board`（河灯留言；写侧见 §5.5） |
 | 说说 | `list_talks` | 读 `/api/public/talk` |
 | 站点信息 | `get_blog_info`、`get_social_links`、`get_site_map` | 作者信息/社交链/功能地图（静态） |
-| 知识库 | `search_knowledge_base` | **不可达**（只住在注册表里：不在菜单/点名白名单/技能模板）——端点恒返回空，见 `tools/base.py` 的定性块 |
+| 知识库 | `search_knowledge_base` | **不可达**（只住在注册表里：不在菜单/点名白名单/技能模板）——端点恒返回空，见 `tools/site.py` 的定性块 |
 | 时间/天气 | `get_current_time`、`get_weather` | 本地时间；wttr.in |
 | 聊天历史 | `get_chat_history` | **不可达**（只住在注册表里）占位实现：提示"历史已自动注入上下文"（防模型以为要自己查）；留在注册表是为 gate 的具名工具声称核对保住这个名字 |
 | 导航 | `navigate_to(path, confirm)` | 返回 `NAVIGATE:https://…`（confirm=true）或 `AUTO_NAVIGATE:https://…`（confirm=false） |
