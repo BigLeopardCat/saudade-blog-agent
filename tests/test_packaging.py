@@ -330,6 +330,14 @@ with contextlib.redirect_stdout(_sink):
     _fake_ok = _tg_mod._baseline_guards(_fake, _tg_mod._pinned_mypy(), _tg_mod._pinned_python())
 check("  反控：喂一个盘上不存在的键 ⇒ 必须拦（守卫不是装饰）",
       _fake_ok is False, f"返回 {_fake_ok}")
+# 上面那条判的是"守卫**函数**会拦"。它拦得住的前提是 `main()` 真的**调用**了它——
+# 少了这一条，把那个调用整行删掉也全绿（本文件上面刚记过同形状的教训：搜函数名会被
+# `def _baseline_guards(...)` 自己满足）。
+_tg_guard_calls = [n for n in ast.walk(_tgt)
+                   if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)
+                   and n.func.id == "_baseline_guards"]
+check("  反控：main() 真的**调用**了 `_baseline_guards`（否则守卫是死代码）",
+      bool(_tg_guard_calls), "" if _tg_guard_calls else "源码里没有调用点")
 
 _eval_code2 = "\n".join(ln for ln in EVAL_YML.read_text(encoding="utf-8").splitlines()
                         if not ln.lstrip().startswith("#"))
@@ -511,6 +519,27 @@ if _lint_base.is_file():
     check("  逐文件计数之和 == total（账自己得自洽）",
           sum(_lb["by_file"].values()) == _lb["total"],
           f"和={sum(_lb['by_file'].values())} total={_lb['total']}")
+    # 幽灵键（20261018 补，与 ④ 的 type_gate 同一族）：账里**有**、盘上却没有的键。
+    # 它不进 `lint_gate.judge()` 的任何一条判据、也不影响 `total`（total 是 ruff 汇总行的
+    # 数），只会让账变脏，还被"已经清零，可以销账"那句报成好消息。判据同样两层：
+    # ① 盘上这份账现在没有幽灵键；② 那条守卫真的会拦 + `main()` 真的调用了它。
+    _lg_spec = importlib.util.spec_from_file_location("_lint_gate_under_test", _lint_gate)
+    _lg_mod = importlib.util.module_from_spec(_lg_spec)
+    _lg_spec.loader.exec_module(_lg_mod)        # 只跑模块体（常量 + 定义），无副作用
+    _lg_ghosts = _lg_mod.ghost_keys(_lb.get("by_file") or {})
+    check("⭐ 基线里的每个文件键在盘上都存在（删除的残留会被读成「已清零」）",
+          not _lg_ghosts, f"盘上没有：{_lg_ghosts}")
+    _lg_bad = _lg_mod.ghost_keys({"eval/this_file_was_deleted.py": 3})
+    check("  反控：喂一个盘上不存在的键 ⇒ 必须被抓到", bool(_lg_bad), "" if _lg_bad else "返回了空")
+    _lg_ok = _lg_mod.ghost_keys({"eval/lint_gate.py": 1})
+    check("  反控：盘上**有**的键不许被抓（否则是「见谁都红」）", not _lg_ok,
+          "" if not _lg_ok else "把真文件判成幽灵了")
+    _lg_tree = ast.parse(_lint_gate.read_text(encoding="utf-8"))
+    _lg_calls = [n for n in ast.walk(_lg_tree)
+                 if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)
+                 and n.func.id == "ghost_keys"]
+    check("  反控：main() 真的**调用**了 `ghost_keys`（否则守卫是死代码）",
+          bool(_lg_calls), "" if _lg_calls else "源码里没有调用点")
 
 check("CI 有一步**会执行**的 eval/lint_gate.py（不是只在注释里提一句）",
       "eval/lint_gate.py" in _eval_code2)
