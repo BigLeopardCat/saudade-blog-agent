@@ -749,10 +749,9 @@ check("  且各走各的**最小通道**——不是三条都落进 add 那一�
       and _DONE[0].startswith("complete_dashboard_todo(")
       and _RESCHED[0].startswith("reschedule_dashboard_todo("),
       f"add={_ADD} done={_DONE} resched={_RESCHED}")
-# 20261018：待办那一族搬进 `tools/dashboard_todos.py` ⇒ 取值点改成"两份文件拼一份视图"，
-# 判据字面一个字没动（同 `tests/test_capability_truth.py` 的做法）。**两份都要读**：
-# 三条最小通道的**调用点**跟着族搬走了，而共享帮手 `_admin_todo_post` 的**定义**留在
-# `tools/base.py`——下面那条"一处实现"判的正是后者，只读新文件会把它判成 0 处。
+# 20261018：待办族搬进 `tools/dashboard_todos.py` ⇒ 取值点改成"两份文件拼一份视图"，
+# 判据字面一字未动。**两份都要读**：三条通道的**调用点**跟着族搬走，而 `_admin_todo_post`
+# 的**定义**留在 base——下面那条"一处实现"判的正是它（只读新文件会判成 0 处）。
 _TSRC = "".join((ROOT / "tools" / f).read_text(encoding="utf-8")
                 for f in ("base.py", "dashboard_todos.py"))
 check("工具侧**没有** PUT 整份覆盖这条路（agent 手里没有那份列表：先读再写会把主人"
@@ -763,18 +762,17 @@ check("工具侧**没有** PUT 整份覆盖这条路（agent 手里没有那份�
 # 批 G 起写通道有三条（追加一条 / 翻完成标记 / 改排期日），三条都是"只动一行"的最小
 # 通道——这一条锁的是**第三条真的存在且与第二条同源**：两条按正文定位的通道共用一处
 # 实现（`_admin_todo_post`），「改一处必须同步另一处」在这里被结构上消掉了。
-_bsrc = _TSRC
 check("三条最小通道各自点名自己的端点（追加那条在自己的臂里、另两条共用 `_admin_todo_post`）",
-      '_admin_request("POST", "/api/protected/todos/item"' in _bsrc
-      and '_admin_todo_post("/api/protected/todos/done"' in _bsrc
-      and '_admin_todo_post("/api/protected/todos/date"' in _bsrc,
+      '_admin_request("POST", "/api/protected/todos/item"' in _TSRC
+      and '_admin_todo_post("/api/protected/todos/done"' in _TSRC
+      and '_admin_todo_post("/api/protected/todos/date"' in _TSRC,
       str(sorted({p for p in ("/api/protected/todos/item", "/api/protected/todos/done",
-                              "/api/protected/todos/date") if p in _bsrc})))
+                              "/api/protected/todos/date") if p in _TSRC})))
 check("  按正文定位的两条**共用同一个函数**（`_admin_todo_post` 一处实现：uid/鉴权/HTTP/"
       "非 JSON/业务码五项失败映射不许各写一遍——那是这一族最容易分叉的地方）",
-      _bsrc.count("def _admin_todo_post(") == 1
-      and _bsrc.count('_admin_todo_post("/api/protected/todos/') == 2,
-      str(_bsrc.count('_admin_todo_post("/api/protected/todos/')))
+      _TSRC.count("def _admin_todo_post(") == 1
+      and _TSRC.count('_admin_todo_post("/api/protected/todos/') == 2,
+      str(_TSRC.count('_admin_todo_post("/api/protected/todos/')))
 
 # ══════════════════════════════════════════════════════════════════
 print("\n⑨ complete_dashboard_todo：按正文定位（0 条 / 多条零写，1 条才动手）")

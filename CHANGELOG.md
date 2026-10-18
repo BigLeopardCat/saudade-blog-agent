@@ -516,6 +516,57 @@
   而 `_admin_todo_post` 的**定义**留在 base ⇒ 只读新文件会把"一处实现"判成 0 处）。
   反控实测：取值点退回只读 `base.py` ⇒ 当场三条红。
 
+- **`tools/base.py` 拆出第八块：账号管理那一族（批 3）——对外行为零变更**：
+  3061 行 / 62 个模块级定义 → **2416 行 / 45**；**连续的 693 行、21 个模块级名字**
+  （后台名录 + 按名字解析 + 三条最小写通道 + 七件工具：冻结 / 解冻 / 禁言 / 解禁 /
+  变更身份 / 发通知 / 读名录）搬进 `tools/account_admin.py`（754 行 / 17 个顶层函数）。
+  scope 全是 `write.console`。选刀依据是**这一族自己就是一个完整的名字通道闭环**
+  （读名录 → 按账号名解析唯一目标 → 走最小写通道 → 读回复核），且它独占的两条通道
+  （名录那个**不回信封的裸数组接口**、`_policy_post` 那条**政策拒绝**通道）别族都没有。
+  **67 个工具的名单与顺序、21 个名字的 AST 逐字相同**（逐函数对过 AST），
+  **只有一处 docstring 被动过**（见下）。
+  ⚠️⚠️ **这一刀撞上一条此前记漏的打桩形状：套件不是只有 `setattr(base, "名", 桩)` 那种
+  字面写法，还有 `patch(**kw)` + `setattr(base, k, v)` 的变量写法**——先前 AST 扫
+  `X.<名> = …` 得出的"11 个被打桩的名字"**漏掉了整族**。实测全量：`_admin_get` 50 /
+  `_admin_request` 49 / `_tag_index` 47 / `_client` 29 / `_admin_post` 28 /
+  **`_user_directory` 24** / `_board_index` 17 / `_category_index` 15 /
+  `_announcement_index` 13 / `_read_note` 12 / `_own_get` 8 / `_admin_read_post` 7 /
+  `_quota_pending_index` 2 / `_note_index` 1（`_find_named_user` 走的是另一处
+  `base._find_named_user = lambda …`）。⇒ **选刀前的 grep 要同时扫两种写法**。
+  这一族里有 `_user_directory`（族内 **11 个调用点**）与 `_find_named_user`（4 个）是
+  **族内互调**的被打桩名 ⇒ 那 15 处一律写 `_base.<名>(...)`。**这个洞的形态很贵**：
+  搬完 `freeze_account` 仍然"跑得动"，只是它读的是新模块自己那一份真函数、桩静默失效、
+  代码真的去发网络请求——症状只是三个套件换了个理由红（`AttributeError: 'NoneType'
+  object has no attribute 'status_code'`），而"看着在跑、其实没跑"正是本仓最贵的那一类。
+  ⚠️ **`_find_user_by_id` 必须 re-export，而它的消费方就在 base 自己里**：下面额度族
+  （`_review_quota_request`）按 uid 走的就是它。这一条**是 mypy 抓出来的**
+  （`Name "_find_user_by_id" is not defined`，总数 190→191）——"少导一个"在本仓有机器判据，
+  但只有**同一包内还有调用点**时才报得出来。
+  ⚠️ 一处 docstring 折行（**值变了，按"改了就要说"记在这里**）：私有帮手
+  `_find_user_by_id` 的首行 103 列是存量 E501 豁免，搬进新文件按 `docs/lint-baseline.md`
+  纪律 1 必须折 ⇒ 换行位置变了一位。它是下划线名、**不进发给模型的工具描述**，
+  但值确实变了。同批还折了 `_user_directory` 里被 `_base.` 前缀顶过 100 列的那一行
+  （普通语句，求值不变）与两处 `Annotated` 描述（相邻字面量拼接，求值一字不差）。
+  ⚠️ **`logger` 走 `_base.logger` 而不是自己 `getLogger(__name__)`**：这一族的告警行名
+  必须与搬家前逐字相同（换名字 = 日志面上一次没人要求的变更）。**正控**=三个套件用
+  `patch(_user_directory=…)` 喂桩、搬到新模块的工具确实走到桩上；**反控**=把 base 的
+  re-export 删掉，调用响亮地抛 `AttributeError`。
+  re-export 停在**原位置**；新模块带 `__all__`（七个 `@tool`）。
+  三本账的差额全部来自"搬走而不是新增"：穷举量 `1122 → 1122`（`tools/base.py` 62→49、
+  `tools/account_admin.py` 13）；类型棘轮 `190 → 190`（`tools/base.py` 6→5、
+  `tools/account_admin.py` 0→1、`files_checked` 93→94）；ruff `793 → 790`
+  （`tools/base.py` 18→16、新文件 0）。模块台账按文本外科改数（3061/62 → 2416/45）。
+  判据侧取值点跟着搬**两处**、判据字面一字未动、两处都做了反控实测能红：
+  ① `tests/test_write_facts.py` 的源码闭包遍历——它按 `getattr(base, 名)` 找委托的同模块
+  私有函数，而 `freeze_account` 的 `_set_account_frozen` **刻意没有外部消费方、不 re-export**
+  ⇒ 闭包在这里断掉、`fact(` 判据当场红 6 件。正解是**从函数自己的模块取**
+  （`sys.modules[fn.__module__]`），与这条判据原来的语义（"只跟同模块的私有函数"）逐字一致，
+  只是不再假设"同模块 == `tools.base`"。② `tests/test_todo_schedule.py` 的三条源码锁
+  改成"两份文件拼一份视图"（那一刀遗留的口径，本次同批对齐）。⚠️ 这一处让
+  `tests/test_todo_schedule.py` **2073 → 2075 行**（台账 +2，文本外科改数）——多出来的两行
+  就是那句"两份都要读、`_admin_todo_post` 的定义留在 base"的说明；不写它，下一个人会把
+  取值点"顺手统一"回单文件。
+
 ## 20261017
 
 - **计划只有一个读法了：对象那一态是唯一事实源，渲染文本退成只给人看**——此前计划的
