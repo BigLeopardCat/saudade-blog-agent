@@ -7,20 +7,23 @@
   | 词表 | agent 侧产出 | Rust 侧认得 |
   |---|---|---|
   | 标签层级 | `normalize_level`、`level_of` → `one`/`two` | `tags.rs::parse_level` |
-  | 文章状态 | `normalize_status` → `public`/`private`/`draft` | `notes.rs` 的两个写函数 |
+  | 文章状态 | `normalize_status` → `public`/`private`/`draft` | `notes.rs::normalize_status_word` |
 
-层级两侧都**拒**认不出的词（`parse_level` 是唯一的解析点）；状态**只有 agent 侧在拒**
-——后端照单全收（那几处比较在 `create_note` / `update_note` 里）。
+层级两侧都**拒**认不出的词（`parse_level` 是唯一的解析点）；状态**20261018 起两侧也都拒**
+——后端把状态词收进唯一解析点 `notes.rs::normalize_status_word`，未知词一律 400
+（本笔之前是"原样写库"）。
 
 **为什么值得上锁**（两条通道的失效形状不一样，这一点是本站的全部理由）：
   · **层级**：`parse_level` 认不出就返回 `None` ⇒ 后端把这次移动**拒掉**。危害有限
     （看得见的失败），但代价是"主人点了确定、什么也没发生"。
-  · **状态**：后端**不拒未知状态**——`update_note` 是
+  · **状态**：**本笔之前**后端不拒未知状态——`update_note` 是
     `active_model.status = Set(Some(v.clone()))` **原样写库**，只有它认得的那四个词
     才会**顺带**设 `is_public`。所以 agent 若发出一个后端不认的词（比如哪天归一化表里
-    多了一档"hidden"），库里就留下一行 `status=hidden` 而 `is_public` 还是 `true` 的
+    多了一档「hidden」），库里就留下一行 `status=hidden` 而 `is_public` 还是 `true` 的
     **矛盾行**——不报错、不告警，前台按 `is_public` 展示、后台按 `status` 分类，
-    两边各说各话。**这条通道唯一的闸门就是 agent 侧那张白名单**，所以它值得上锁。
+    两边各说各话。现在后端改成了白名单 + 400，**两侧都拒**，失效形状从"静默矛盾行"
+    变成"看得见的失败"；但"两侧不同源"这件事本身仍然要锁——一档只在 agent 侧存在的词
+    会让主人的每一次操作都 400，而这条锁是唯一会先红的判据。
 
 判据一律**从源码现取值**（Python 走 AST、Rust 走 `tests/_rust_src.py` 的函数体取值），
 **绝不抄常量**——抄一份就是把"手抄表"搬进测试里。
@@ -98,9 +101,9 @@ _RUST_TAGS = _parent_repo.read(
         "`parse_level` 判；这个词表两侧不同源时，后端的表现是**直接拒掉这次移动**") or ""
 _RUST_NOTES = _parent_repo.read(
     "src/routes/notes.rs",
-    why="文章状态词表的**另一侧**：`update_note` 把未知状态**原样写库**、只有认得的那四个"
-        "词才顺带设 `is_public` ⇒ 两侧不同源会留下一行 status 与 is_public 互相矛盾的记录，"
-        "而且不报错") or ""
+    why="文章状态词表的**另一侧**：后端认得的词决定 agent 发出的词会不会被 400 拒收"
+        "（本笔之前更糟——未知词原样写库，只顺带设 `is_public`，会留下 status 与 is_public"
+        "互相矛盾的记录且不报错）") or ""
 
 # ══ ① 层级词表：Rust 的"认"与"产出"两侧 ═══════════════════════════════════
 print("① 层级词表：Rust `parse_level` 认的 == `from_code`/`to_code` 产出的")
@@ -153,15 +156,40 @@ check("  与 `normalize_level` 同源（同一组字面量，不是各写一份�
 # ══ ③ 状态词表：只有**单向**要求（后端认的比本侧会写的多）═════════════════
 print("\n③ 文章状态：本侧产出的每一个词后端都认（后端认得多的那一族走台账）")
 
-_recog: set[str] = set()
-for _fn in ("create_note", "update_note"):
-    _body = _rust_src.fn_body(_RUST_NOTES, _fn)
-    _lits = set(re.findall(r'==\s*"([a-z]+)"', _body))
-    _lits |= set(re.findall(r'unwrap_or\("([a-z]+)"', _body))     # 缺省值也是它认的词
-    check(f"  从 `{_fn}` 取到了状态字面量", bool(_lits), f"{sorted(_lits)}")
-    _recog |= _lits
-check("⭐ 后端**认得**的状态词取全了（写库路径是 `Set(Some(v))`，只有认得的词才会顺带设 "
-      "`is_public`）", _recog >= {"public", "private", "draft"}, f"{sorted(_recog)}")
+
+def _status_words_from_rust(src: str) -> tuple[set[str], str]:
+    """后端**认得**的状态词 + 它是从哪取到的（来源串只为把红信息写清楚）。
+
+    ⚠️ **两种形状都要认**（20261018）。父仓把状态词从两个写函数里**收进唯一解析点**
+    `notes.rs::normalize_status_word`（未知词由「原样写库」改成 400 拒收），字面量的位置
+    因此变了。而 agent 仓的 CI 稀疏 checkout 的是父仓的**默认分支** —— 本笔合并早于父仓
+    那一笔、或晚于它，两种都会发生。只认一种形状 = 拿两仓的合并顺序赌一次绿。
+    """
+    # 新形状：`normalize_status_word` 的 match 臂**左值**（`"public" | "published" => …`）。
+    # 只切 `=>` 左边 —— 右边是**归一后的产出**（`published` 归一到 `public`），不是"认得集"，
+    # 把它一起收进来会让 `published` 这条台账凭空销账。
+    _arms: set[str] = set()
+    for _line in _rust_src.fn_body(src, "normalize_status_word").splitlines():
+        if "=>" in _line:
+            _arms |= set(re.findall(r'"([a-z]+)"', _line.split("=>", 1)[0]))
+    if _arms:
+        return _arms, "`normalize_status_word` 的 match 臂"
+
+    # 旧形状（本笔之前的父仓）：词散在两个写函数里 —— `== "x"` 是比较，`unwrap_or("x")`
+    # 是缺省值，两者都是"后端认得的词"。取不到新形状就退回这里。
+    _legacy: set[str] = set()
+    for _fn in ("create_note", "update_note"):
+        _body = _rust_src.fn_body(src, _fn)
+        _legacy |= set(re.findall(r'==\s*"([a-z]+)"', _body))
+        _legacy |= set(re.findall(r'unwrap_or\("([a-z]+)"', _body))
+    return _legacy, "`create_note`/`update_note` 里的比较与缺省值"
+
+
+_recog, _recog_where = _status_words_from_rust(_RUST_NOTES)
+check(f"  从后端源码取到了状态词（来源：{_recog_where}）", bool(_recog), f"{sorted(_recog)}")
+check("⭐ 后端**认得**的状态词取全了（无论词住在新解析点的 match 臂还是旧的两个写函数里，"
+      "认得的都是这四个）", _recog >= {"public", "published", "private", "draft"},
+      f"{sorted(_recog)}")
 
 _p_out = set(_STATUS_ALIASES.values())
 check("`normalize_status` 的值域取自源码那张表（不是手抄一份）", bool(_p_out), f"{sorted(_p_out)}")
