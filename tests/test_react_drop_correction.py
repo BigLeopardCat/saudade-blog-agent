@@ -241,7 +241,15 @@ def test_order() -> None:
     def _at(name: str) -> list[int]:
         return _calls_in(fn, name)
 
-    corr, term, dedupe = _at("drop_correction"), _at("unaccounted"), _at("finalize_dedupe")
+    # 纠偏那一格 20261019 起住在 `_drop_correct_stage` 里（`_planner_decide` 的分支数
+    # 压在复杂度闸上）⇒ 主体里认的是**那次调用**，而判据本体仍要落在那个函数上
+    # （只认调用点会让"函数里换成空实现"照样绿）。
+    corr, term, dedupe = _at("_drop_correct_stage"), _at("unaccounted"), _at("finalize_dedupe")
+    _dc = next((n for n in tree.body if isinstance(n, ast.FunctionDef)
+                and n.name == "_drop_correct_stage"), None)
+    check("纠偏正文由 `_drop_correct_stage` 里那一处产出（调用点后面站着真函数）",
+          _dc is not None and bool(_calls_in(_dc, "drop_correction")),
+          "" if _dc is None else str(_calls_in(_dc, "drop_correction")))
     check("三处都调了", bool(corr) and bool(term) and bool(dedupe),
           f"corr={corr} term={term} dedupe={dedupe}")
     check("**纠偏在终局之前**（先给它一次改的机会，改不动才收尾）",

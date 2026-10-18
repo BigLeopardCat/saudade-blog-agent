@@ -248,11 +248,11 @@ def test_auto() -> None:
     frames, ev, sysctx = _run([_call("task_intents",
                              intents=[{"goal": "把「下雨」特效关掉", "workflow": "effect"}])] * 3,
                       msg="先帮我把下雨关掉，再看看留言板")
-    # 数**≥1** 而不是 ==1：这条事件每次**决策**落一条（生产那边是
-    # `_auto_task_frames` 自己记的），而一轮里有几次决策是**循环结构**决定的、不是这一格
-    # 决定的。判"接上了没有"读的是它有没有落 + 帧有没有出去。
+    # 数 ==1：这一轮零工具 ⇒ 决策一次、然后直去 narrator（出口路由那一格，
+    # `tests/test_react_zero_tool_route.py` 钉着）。数成 ≥1 会让"模型被问三遍、
+    # 同一个 goal 发三帧"看起来也通过。
     check("trace 落 `planner.task_auto`（生产同款事件名，由 `_auto_task_frames` 自己记）",
-          bool(_events(ev, "planner", "task_auto")),
+          len(_events(ev, "planner", "task_auto")) == 1,
           str([a[:2] for a in ev if a[0] == "planner"]))
     got = _frames_of(frames)
     check("自动登记那几帧**经壳并进了 `task_frames`**（写进 sink 而不并 ⇒ 一帧都不发）",
