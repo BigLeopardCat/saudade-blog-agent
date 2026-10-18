@@ -6,9 +6,17 @@
 布局一变就是四处一起改、漏一处就变成"这个脚本少看了一半数据"——与
 `tests/run_all.py` 按磁盘枚举套件同一条理由：**让改动只有一个落点**。
 
-**为什么不开在 `utils/` 下**：`utils/__init__.py` 连带 import `logging`/`tts`
-（进而拉 pydantic-settings 与 `.env`），而读取端（含离线测试、夜间巡检、对账哨兵）
-刻意只吃路径参数、不依赖应用配置。这个模块**只 import os/glob/re**，谁都能引。
+**为什么住在 `utils/` 下**（20261019 从 `eval/` 搬来）：两个方向都要引它——**生产代码**
+（`agent/hostinfo.py::trace_stats`，运维报表数当日 trace）与 `eval/` 下四个离线读取端；
+而生产代码只许 import 本仓的 wheel 包（`tests/test_packaging.py` ① 就是这条闸，它此前
+正因为 `agent/` → `eval/` 这个反向 import 而红）。顺带一个理由：写入端
+`utils/trace.py` 也在这里，布局契约的两头同住一个包。
+
+⚠️ **但"零依赖"才是它的立身之本**，所以 `utils/__init__.py` 同日**收成空门面**
+（不再 `from .logging import setup_logging`）：包门面只要 import 一次 `utils.logging`，
+`import utils.trace_files` 就会连带拉 `config.settings` 与 `.env`，离线读取端（离线
+测试 / 夜间巡检 / 对账哨兵）就再也不是"只吃路径参数"了。**这个模块只 import
+os/glob/re**，谁都能引；要用包门面那个函数就写 `from utils.logging import setup_logging`。
 
 布局契约（写侧 = `utils/trace.py::_TraceRecorder.dump`，两边必须一致；
 `tests/test_trace_retention.py` 用一次真实的落盘往返把它锁住）：

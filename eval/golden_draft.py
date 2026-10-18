@@ -45,13 +45,17 @@ import json
 import os
 import re
 import sys
-from datetime import datetime, timedelta
 from collections import defaultdict
+from datetime import datetime, timedelta
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import trace_alert as ta  # noqa: E402  （判定规则本体的唯一来源）
-from trace_files import iter_trace_files, parse_trace_name  # noqa: E402  （文件枚举的唯一实现）
-from trace_io import load_trace  # noqa: E402  （读取的唯一实现，含 gz）
+
+from utils.trace_files import (  # noqa: E402  （文件枚举的唯一实现）
+    iter_trace_files,
+    parse_trace_name,
+)
+from utils.trace_io import load_trace  # noqa: E402  （读取的唯一实现，含 gz）
 
 GOLDEN = os.path.join(os.path.dirname(os.path.abspath(__file__)), "golden", "basic.jsonl")
 OUT_DIR = "eval/report"

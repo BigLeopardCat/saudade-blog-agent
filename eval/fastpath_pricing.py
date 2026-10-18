@@ -37,9 +37,9 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 
 from golden_trace import trace_root  # noqa: E402  （golden trace 根目录的唯一实现）
-from trace_io import load_trace  # noqa: E402  （与 trace_alert 同一个读取实现）
 
 import agent.deterministic_plan as D  # noqa: E402
+from utils.trace_io import load_trace  # noqa: E402  （与 trace_alert 同一个读取实现）
 
 GOLDEN = os.path.join(ROOT, "eval", "golden", "basic.jsonl")
 

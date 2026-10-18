@@ -76,8 +76,8 @@ from datetime import datetime, timedelta
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from trace_files import iter_trace_files, parse_trace_name  # noqa: E402
-from trace_io import load_trace  # noqa: E402
+from utils.trace_files import iter_trace_files, parse_trace_name  # noqa: E402
+from utils.trace_io import load_trace  # noqa: E402
 
 TRACE_DIR = "/home/ubuntu/Saudade-Blog/logs/agent/traces"
 

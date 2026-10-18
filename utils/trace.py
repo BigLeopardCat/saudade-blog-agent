@@ -232,7 +232,7 @@ class _TraceRecorder:
                 fname = f"{self.name}.json"
             else:
                 fname = f"{stamp}_{self.user_id}_{self.trace_id[:8]}.json"
-            # 按天分目录（20260925）：读侧枚举在 `eval/trace_files.py::iter_trace_files`
+            # 按天分目录（20260925）：读侧枚举在 `utils/trace_files.py::iter_trace_files`
             # ——那个模块是"哪些文件算 trace"的唯一实现，改布局必须两处一起改
             # （`tests/test_trace_retention.py` 有一次真实落盘的往返断言盯着）。
             out_dir = os.path.join(self.trace_dir, stamp[:8]) if self.by_day else self.trace_dir

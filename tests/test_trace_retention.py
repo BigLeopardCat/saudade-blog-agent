@@ -29,10 +29,10 @@ ROOT = Path(__file__).resolve().parent.parent  # 仓根
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "eval"))
 
-import trace_files as tf  # noqa: E402
 import trace_retention as tr  # noqa: E402
 
 from utils import trace as trace_mod  # noqa: E402
+from utils import trace_files as tf  # noqa: E402
 
 FAILS: list[str] = []
 DAY = 86400.0
@@ -57,6 +57,11 @@ def write(path: str, *, age_days: float = 0.0, body: dict | None = None) -> str:
 
 def src(rel: str) -> str:
     return (ROOT / rel).read_text(encoding="utf-8")
+
+
+def stdlib_imports(rel: str) -> list[str]:
+    """`rel` 里 `import x` 那一族取到的模块名（⑧ 用：证明枚举器只吃 stdlib）。"""
+    return sorted(ln.split()[1] for ln in src(rel).splitlines() if ln.startswith("import "))
 
 
 def main() -> int:
@@ -212,9 +217,8 @@ def main() -> int:
         check("⑧ utils/trace.py 写侧按天分目录（默认 by_day=True）",
               "by_day: bool = True" in src("utils/trace.py")
               and 'os.path.join(self.trace_dir, stamp[:8]) if self.by_day' in src("utils/trace.py"))
-        check("⑧ eval/trace_files.py 只依赖 stdlib（不拉应用配置）",
-              not any(m in src("eval/trace_files.py")
-                      for m in ("config.settings", "import json", "utils.")))
+        check("⑧ utils/trace_files.py 只 import stdlib 的 os/glob/re（不拉应用配置）",
+              stdlib_imports("utils/trace_files.py") == ["glob", "os", "re"])
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 
