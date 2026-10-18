@@ -12,7 +12,7 @@
     "server.py"
   ],
   "total": 190,
-  "files_checked": 95,
+  "files_checked": 96,
   "by_file": {
     "agent/action_text.py": 1,
     "agent/adminops_confirm.py": 6,
@@ -36,11 +36,12 @@
     "tools/account_admin.py": 1,
     "tools/admin_read.py": 4,
     "tools/announcements.py": 1,
-    "tools/base.py": 2,
+    "tools/base.py": 1,
     "tools/board_moderation.py": 2,
     "tools/notes.py": 1,
     "tools/own_data.py": 14,
     "tools/quota_admin.py": 3,
+    "tools/tag_admin.py": 1,
     "utils/trace.py": 2
   }
 }
