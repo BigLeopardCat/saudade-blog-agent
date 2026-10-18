@@ -17,6 +17,11 @@
 事实，但**没有**接进任何自动通道；把它接进探针是父仓那侧的活。别把这一套读成
 "生产已经在按 /ready 摘流量了"。
 
+**前提由判据自己摆**：离线套件跑在 `SAUDADE_IGNORE_ENV_FILE=1` 下（`tests/run_all.py::_PINNED`），
+`.env` 根本不读 ⇒ `*_api_key` 全是空的。"凭据在位"这一格必须由本文件自己设——继承运维取值的话，
+它会**单跑绿、进套件红**（实测撞上过一次）。同 `test_checkpoint_factory.py` ① 钉
+`CHECKPOINT_DSN=""` 的理由：判据量的是被测代码，不是这台机器的 `.env`。
+
 秒级、无网络、不跑 LLM；由 `tests/run_all.py` 按磁盘枚举自动收。
 
 用法：.venv/bin/python tests/test_ready.py
@@ -59,8 +64,18 @@ READY_KEYS = {"ready", "reasons", "provider"}
 
 print("① 正常态：就绪，且与 /health 一致（都在说'活着且能干活'）")
 _agent_saved = server._agent
-_agent_saved_ok = True
+# ⚠️ **凭据由本判据自己摆，不许继承运维取值**：离线套件跑在
+# `SAUDADE_IGNORE_ENV_FILE=1` 下（见 `tests/run_all.py::_PINNED`），`.env` **根本不读**
+# ⇒ `*_api_key` 全是空的。直接断言"凭据在位 ⇒ 200"会**单跑绿、进套件红**（实测撞上过
+# 一次，症状是 ① 报 `reasons=['missing_credentials']`）。同 `test_checkpoint_factory.py` ①
+# 钉 `CHECKPOINT_DSN=""` 的理由：判据的前提要自己摆出来，否则它量的是这台机器的 `.env`。
+# 三个 key 一起给：哪一个是当前 provider 的由 settings 决定，判据不必跟着走。
+_KEY_FIELDS = ("qwen_api_key", "deepseek_api_key", "openai_api_key")
+_FAKE_KEY = "sk-judge-owned-premise-0123456789"
+_keys_saved = {k: getattr(settings, k) for k in _KEY_FIELDS}
 try:
+    for _k in _KEY_FIELDS:
+        setattr(settings, _k, _FAKE_KEY)
     server._agent = object()                    # 假装图已经建好
     _code, _body = call()
     check("顶层键恰好 ready / reasons / provider", set(_body) == READY_KEYS, sorted(_body))
@@ -72,6 +87,8 @@ try:
           _body["provider"] == settings.check_provider(), _body["provider"])
 finally:
     server._agent = _agent_saved
+    for _k, _v in _keys_saved.items():
+        setattr(settings, _k, _v)
 
 print("\n② 图没建好 ⇒ 503，而 /health 仍然 200（这一条是'/ready 不是装饰'的第一面）")
 try:
