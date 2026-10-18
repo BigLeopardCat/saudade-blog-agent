@@ -17,8 +17,12 @@
     fail-open。三者不是彼此的子集：`/health` 绿而 `/ready` 红正是本模块要买的那个组合。
   · `/health` 的 `dials.checkpoint_backend`（`checkpoint_backend`）：这一格**只**回答
     "这个进程挂没挂 saver"，它与前两个都不同族——`/ready` 的三条硬依赖里没有它
-    （没挂 saver 的进程完全能接活，今天生产就是），所以它不是"就绪"的一部分，
-    是**采纳进度**的可读出口。
+    （没挂 saver 的进程完全能接活），所以它不是"就绪"的一部分，是**采纳进度**的可读出口。
+  · `/health` 的 `dials.checkpoint_db`（`checkpoint_db`，20261019）：**这一块里唯一
+    一格读配置的**——它回的是 `CHECKPOINT_DSN` 指到哪个库（只回库名）。它与上面那格
+    合起来才读得通："配了 DSN 指到 A 库、而图没挂上 saver"正是
+    `checkpoint_db=A` + `checkpoint_backend=none`。存在的理由只有一个：
+    把"指错库"变成一眼可见（理由见 `agent/checkpoint.py` 头注《DSN 指向哪个库》）。
 """
 
 from __future__ import annotations
@@ -139,8 +143,8 @@ def holds_context(agent) -> bool:
     """**图自不自持上下文**——采纳（批 7）那三处（历史注入 / `thread_id` / 持久化档）
     的**唯一判据**，也是 `checkpoint_backend` 的布尔投影。
 
-    `none` 与 `unknown` **都算"不自持"**：前者是"没挂 saver"（今天生产），后者是
-    "读不出来"（对象还没建好、或换了一个认不出的壳）。把"读不出来"当成"挂了"会让
+    `none` 与 `unknown` **都算"不自持"**：前者是"没挂 saver"，后者是"读不出来"
+    （对象还没建好、或换了一个认不出的壳）。把"读不出来"当成"挂了"会让
     历史注入**静默消失**——那正是本仓最贵的一类失效（看着在跑、其实没跑），
     而反过来（把"读不出来"当"没挂"）最坏只是退回 20260903 以来的行为。
 
@@ -161,7 +165,7 @@ def checkpoint_backend(agent) -> str:
     这个对象本身，所以它回的是**事实**。
 
     取值五档（前四档是"读得出来"，第五档是"读不出来"）：
-      · `"none"`      —— 对象在、但它没挂 saver（**今天生产恒这一档**）；
+      · `"none"`      —— 对象在、但它没挂 saver（`CHECKPOINT_DSN` 空时的形态）；
       · `"postgres"` / `"sqlite"` / `"memory"` —— 挂了，回后端短名。`memory` 这一档
         在 4 个 uvicorn worker 下**每 worker 各记各的且不报错**，所以它出现在这里不是
         噪声：它是"这个进程挂了 saver 但挂了错的那种"唯一的出口；
@@ -182,6 +186,35 @@ def checkpoint_backend(agent) -> str:
         if mod == prefix or mod.startswith(prefix + "."):
             return name
     return mod
+
+
+def checkpoint_db(dsn: str) -> str:
+    """`/health` 的 `checkpoint_db` 那一格：**这一格的 DSN 指到哪个库**。
+
+    取值三档（与 `checkpoint_backend` 同一条纪律——"读不出来"与"没有"分开）：
+      · `""`        —— 没配 DSN ⇒ 图是裸的，"指到哪个库"这件事不存在；
+      · 库名        —— 配了，这是它指的库；
+      · `"unknown"` —— 配了但解析不出库名（形如 `postgresql://host`，路径段是空的）。
+        刻意**不**退回 `""`：把"写了个解析不出来的 DSN"报成"没配 DSN"就是
+        `checkpoint_backend` 那条注里骂过的同形错误（把"取不到"报成"没有"）。
+
+    ⚠️ **它是这一块里唯一一格读配置的**，而 `checkpoint_backend` 读的是**活体对象**
+    ——两格不是一回事，合起来才读得通：`checkpoint_db=<某库>` + `checkpoint_backend=none`
+    正是"配了 DSN 而图没挂上 saver"。**别只看这一格**就以为接上了。
+
+    它存在的理由只有一个：把**"指错库"变成一眼可见**（业务库不该有 checkpoint 表，
+    因为 saver 建表没有编号迁移 —— 见 `agent/checkpoint.py` 头注《DSN 指向哪个库》）。
+    取值实现只有一处（`agent.checkpoint.db_name`），与 `CHECKPOINT_FORBID_DB`
+    那条硬闸共用。
+
+    **只回库名**：不回主机、不回用户名、不回口令 —— 与整块 dials 同一条纪律。
+    """
+    if not (dsn or "").strip():
+        return ""
+    # 懒 import：本模块被 `server` 与 `agent/checkpoint` **两边**引（后者的 `live_saver`
+    # 反过来调本模块的 `saver_of`），模块级引回来会绕成一个环。
+    from agent import checkpoint
+    return checkpoint.db_name(dsn) or "unknown"
 
 
 def ready_payload(agent, settings) -> tuple[int, dict]:

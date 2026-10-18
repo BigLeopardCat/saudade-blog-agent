@@ -69,6 +69,30 @@ idle 的 autocommit 会话 `xmin` 已清零，不挡 CIC；挡住的是三条**�
 `DELETE /checkpoint/{conversation_id}`，**删除动作在父仓** `src/routes/conversation.rs`
 （跨仓契约，`tests/test_checkpoint_cascade.py` 有一条父仓守卫盯着）。
 
+## DSN 指向哪个库：**必须是业务库之外的独立库**
+
+`build_checkpointer()` 会在 DSN 指的那个库里建 **4 张本 agent 自持的表**
+（`checkpoints` / `checkpoint_writes` / `checkpoint_blobs` + 幂等账 `agent_write_idem`），
+而建表走的是 `PostgresSaver.setup()` ——**它没有编号迁移**。
+
+⇒ **不许指进博客业务库。** 业务库的结构只许由父仓的**编号迁移**改（父仓
+`scripts/migration/pg/` 下那套；父仓 `scripts/migration/pg/verify_parity.py` ⓪ 段判的
+就是"业务库里不该有 checkpoint 表"）。把 `setup()` 指进去，等于在业务库上开一条
+**没人编号、没人 review、也不在 CI 里**的 DDL 通道——它建的表与业务表不重名，
+所以**不会报错**，这正是它难发现的地方。20261018 采纳的第一版指的正是业务库，
+父仓随即补了那条点名判据。
+
+⚠️ **生产库名不写进本仓**（本仓是**公开仓**，运维坐标历来不落仓）。要把它变成硬闸
+就配 `CHECKPOINT_FORBID_DB`（缺省空 = 不拦）：填上库名之后，DSN 指到那个库 ⇒
+`build_checkpointer()` **当场响亮抛、进程起不来**（同"连不上就响亮抛"——坏 saver 的
+失效时刻本该是启动，不是第一轮对话的第一次写 checkpoint）。可读出口是 `/health` 的
+`dials.checkpoint_db`（只回库名，不回口令/主机）。
+
+**旧数据不迁**：checkpoint 是**派生上下文**，换库最坏退化成"老会话第一轮看不见历史"
+（`docs/platform-roadmap.md` 批 7 里记着的那条已知缺口），而迁的代价是两套库坐标
+从此要一起维护。**"指向哪个库"这件事本模块是唯一取值实现**（`db_name`），
+`/health` 那一格与那条硬闸都走它。
+
 ## 可验证面（别过度承诺）
 
 判据分四层：
@@ -143,6 +167,24 @@ def redact(dsn: str) -> str:
     head, tail = dsn.split("@", 1)
     scheme = head.split("://", 1)[0] if "://" in head else ""
     return f"{scheme}://***@{tail}" if scheme else f"***@{tail}"
+
+
+def db_name(dsn: str) -> str:
+    """DSN 里的**库名**；解析不出来 ⇒ 空串。**本仓"指向哪个库"的唯一取值实现**。
+
+    两个消费方（都是"看一眼就知道有没有指错"）：`/health` 的 `dials.checkpoint_db`
+    （`agent/runtime_probe.checkpoint_db` 转调本函数）与 `CHECKPOINT_FORBID_DB` 那条硬闸。
+    各写一份解析的话，两处迟早给出不同的库名，而"指错库"没有第三个地方能发现。
+
+    ⚠️ **只认 URL 形**（`scheme://…/dbname`）：`backend_for()` 已经把非 URL 的 DSN
+    响亮拒掉了（它要求 scheme 在取值域里），所以这里再认一遍 `host=… dbname=…` 那种
+    conninfo 形就是**第二个取值实现**。带 `?params` 的照切——`urlparse` 的 `.path`
+    不含 query。
+
+    **不许拿它拼 SQL、也不许拿它做任何连接决策**：它是给人看的那一格。
+    """
+    from urllib.parse import urlparse
+    return urlparse(dsn).path.strip("/")
 
 
 # ── 会话坐标 ─────────────────────────────────────────────────────────
@@ -285,7 +327,7 @@ def drop_invalid_indexes(conn) -> list[str]:
     删掉它，下一次 `setup()` 就会老老实实重建。
 
     **限定 `current_schema()` + 表名前缀 `checkpoint`**：那是本 agent 自持的表集
-    （DSN 那一节写着"别指错库"），碰不到博客业务表。
+    （见头注《DSN 指向哪个库》——那一节写着"别指错库"），碰不到博客业务表。
     """
     from psycopg import sql
     names = [r["name"] for r in conn.execute(_INVALID_IDX_SQL).fetchall()]
@@ -335,8 +377,20 @@ def build_checkpointer(dsn: str | None = None) -> object | None:
     """
     if dsn is None:
         dsn = settings.checkpoint_dsn
-    if not dsn.strip():
+    dsn = dsn.strip()
+    if not dsn:
         return None
+
+    # 指错库的硬闸（**缺省空 = 不拦**）：库名是运维坐标，不写进本仓（公开仓）。
+    # 这里抛 = **启动失败**，不是"第一轮对话的第一次写 checkpoint 才炸"。
+    _forbid = (settings.checkpoint_forbid_db or "").strip()
+    if _forbid and db_name(dsn) == _forbid:
+        raise RuntimeError(
+            f"CHECKPOINT_DSN 指到了 CHECKPOINT_FORBID_DB 点名的库（{_forbid}）："
+            f"{redact(dsn)}。业务库的结构只许由**编号迁移**改，而 saver 建表走的是 "
+            "PostgresSaver.setup()、没有编号迁移 ⇒ 指进去就是在业务库上开一条没人编号、"
+            "不在 CI 里的 DDL 通道（表不重名，所以不报错）。把它指到一个独立库"
+            "（见本模块头注《DSN 指向哪个库》），或者把这个开关清空。")
 
     mod_path, pkg = backend_for(dsn)
     if mod_path != _PG_MOD:
