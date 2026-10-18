@@ -127,7 +127,11 @@ def not_found(text: str, meta: dict | None = None) -> ToolResult:
 #     没发请求/发了但读回没变（那种走 unavailable）才 False。
 #   ③ `before`/`after` 只放**状态词**，不放句子、不复述工具返回正文里的话——它们是给
 #     结构与台账读的。拿不到精确值就如实写"存在/不存在""已删除"，**不许编**。
-TGT_KINDS = ("note", "tag", "category", "announcement", "board_comment", "todo",
+TGT_KINDS = ("note", "tag", "category", "announcement", "board_comment",
+             # 文章评论（20261019）：与 `board_comment`（河灯留言）**并列而不是合并**
+             # ——两者是不同的表、不同的后台页，读端要按 kind 分派时，"这是评论还是
+             # 留言"正是它唯一要说的事（合并成一个 kind 就再也分不开了）。
+             "comment", "todo",
              "user", "quota_request", "notice", "message", "device", "page")
 
 
