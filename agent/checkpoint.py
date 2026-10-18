@@ -28,13 +28,38 @@
 `StateGraph.compile` 签名里没有它）——20261017 的头注在这一点上写错了，已改。
 真正的不变式是"**凡有 saver 在场的那次调用必须显式给同步档**"。
 
-## 建表（`setup()`）为什么加了一把咨询锁
+## 建表（`setup()`）：要一把锁，而且**必须是 `pg_try_advisory_lock`**
 
 `saver.setup()` 是幂等的，但**不是并发安全的**：它读一次版本号再逐条跑迁移，而每条迁移
 末尾都 `INSERT INTO checkpoint_migrations (v)`（**没有 `ON CONFLICT`**）。产线是
 `--workers 4`，四个进程同时启动 ⇒ 两个都读到 `version=-1` ⇒ 后到的那个**主键冲突、
-启动崩**。所以建表包在 `pg_advisory_lock` 里（同一把钥匙，先到者建完、后到者看到版本号
-已经是 9，直接跳过）。**这是"多 worker 同时启动"这一件事的补丁，不是通用迁移方案。**
+启动崩**。所以建表要串行化。**这是"多 worker 同时启动"这一件事的补丁，不是通用迁移方案。**
+
+⚠️ **20261018 上线当天，第一版用的是阻塞式 `pg_advisory_lock`，它造成了一次真停服。**
+`pg_advisory_lock` 会一直挂着等，而**一条挂着的语句就是一条没结束的事务**；`setup()` 的
+迁移里有 `CREATE INDEX CONCURRENTLY`，它的语义要求**等所有并发事务收尾**才能结束。于是：
+
+  · 拿到锁的那个 worker 在跑 CIC，等"那三个等锁的 worker 的事务"结束；
+  · 那三个事务在等它放锁；而它要等 CIC 结束才放锁 ⇒ **环**。
+
+四个 worker 无限期卡死、**一条日志都没有**（`Agent ready` 那行永远打不出来，8010 因此
+根本不监听），`systemctl restart` 也卡在"等旧 worker 退出"上（旧 worker 在 PG 上无限期
+等待，要等满 `TimeoutStopSec=120` 才被 SIGKILL）。实测现场（`pg_stat_activity`）：
+
+```
+1 条 idle 持有 advisory 锁  +  3 条 active 卡在 Lock/advisory
+                          +  1 条 active 卡在 Lock/virtualxid 跑 CREATE INDEX CONCURRENTLY
+```
+
+**换成 `pg_try_advisory_lock` 轮询就断了这个环**：它立刻返回，每次尝试都是一条**已提交、
+已结束**的语句，等锁的进程在两次尝试之间**不持有任何事务**——它拿到的快照比 CIC 的新，
+CIC 的 `WaitForOlderSnapshots` 不认它（这也是为什么现场那条 `idle` 的持锁会话没有参与环：
+idle 的 autocommit 会话 `xmin` 已清零，不挡 CIC；挡住的是三条**卡在语句里**的会话）。
+再加一个总预算 ⇒ 最坏情况是一条点名的启动错误，而不是一次无声的无限期挂起。
+
+⚠️ **这条不变量依赖池是 `autocommit` 的**（`_make_pool` 的 kwargs 里那一格）：关掉它，
+每次 `pg_try_advisory_lock` 都会把事务开着，环就回来了。所以 `_setup_under_lock` 里有一条
+**显式断言**，判据在 `tests/test_checkpoint_factory.py` ⑨。
 
 ## 级联清理（`delete_thread`）
 
@@ -46,16 +71,24 @@
 
 ## 可验证面（别过度承诺）
 
-**没有真 PG 可连**，所以判据分三层：**纯函数**（`conversation_thread` 的负例、
-`redact` 不泄口令、`backend_for` 认不出的响亮）在 `tests/test_checkpoint_factory.py`；
-**接线形状**（三处共用同一个判据）在 `tests/test_checkpoint_adoption.py`；
-**级联**（no-op 删除要红）在 `tests/test_checkpoint_cascade.py`。
-**真连上库之后才成立的那几条不在这三份里**——它们要的是产线上跑一轮对话再读
-`/health` 的 `checkpoint_backend`，见本批交接的运维步骤。
+判据分四层：
+  · **纯函数**（`conversation_thread` 的负例、`redact` 不泄口令、`backend_for` 认不出的
+    响亮、抢锁轮询与无效索引清理的形状）在 `tests/test_checkpoint_factory.py`；
+  · **接线形状**（三处共用同一个判据）在 `tests/test_checkpoint_adoption.py`；
+  · **级联**（no-op 删除要红）在 `tests/test_checkpoint_cascade.py`；
+  · **真连一个库、4 个进程同时建表**在 `tests/test_checkpoint_setup_concurrent.py`。
+
+⚠️ **第四层是 20261018 那次停服之后补的，而它才是抓得住这个 bug 的那一层。** 前三层
+（包括那两条"连不上要响亮抛"）全都在 `127.0.0.1:1` 这种**必然失败**的 DSN 上判，于是
+"真连上一个库、真跑一次迁移、4 个进程真的同时来"这条路径**从来没有被跑过**——死锁因此
+在四层判据里最该红的那一层恒绿的情况下发生了。**"前提不可用"与"前提不可用所以没量"是
+两件事**：这一层缺库时报「未评估」并退 0，`tests/run_all.py` 的汇总里另有一行**每次运行
+都报**这一层量没量。
 """
 
 import importlib
 import logging
+import time
 import uuid
 
 from config import settings
@@ -79,6 +112,10 @@ _PG_MOD = "langgraph.checkpoint.postgres"
 _POOL_MAX = 4
 _POOL_WAIT = 10
 _SETUP_LOCK = 0x5A0DA6E          # 咨询锁的钥匙（任意常量，只要全仓唯一）
+# 抢锁轮询：`_SETUP_POLL` 是两次尝试之间隔多久（**这两次之间不持有任何事务**，见头注），
+# `_SETUP_WAIT` 是总预算——**必须有上限**：阻塞版连"卡住了"这件事都读不出来。
+_SETUP_POLL = 0.5
+_SETUP_WAIT = 60.0
 
 _pool = None
 _pool_dsn = None
@@ -188,18 +225,100 @@ def _pool_for(dsn: str):
     return _pool
 
 
-def _setup_under_lock(saver) -> None:
-    """在咨询锁里建表。**为什么不是直接 `saver.setup()`**：见模块头注《建表》一节
-    ——四个 worker 同时启动时，后到的那条 `INSERT INTO checkpoint_migrations` 会主键
-    冲突、进程启动崩。`autocommit=True` 下 `pg_advisory_lock` 是**会话级**的，必须显式
-    解锁（池会复用连接，不解锁等于把这把锁带进下一个请求）。
+def _try_setup_lock(conn) -> bool:
+    """试着拿建表锁；拿到 `True`、没拿到 `False`。**一条语句、立即返回**。
+
+    ⚠️ **不许换成阻塞版 `pg_advisory_lock`**：它让"等锁"变成一条没结束的事务，而
+    `setup()` 的 `CREATE INDEX CONCURRENTLY` 要等所有并发事务收尾 ⇒ 环 ⇒ 四个 worker
+    无限期卡死。现场与完整推理见模块头注《建表》那一节（20261018 真停服）。
     """
-    pool = _pool_for(settings.checkpoint_dsn)
+    row = conn.execute("SELECT pg_try_advisory_lock(%s) AS got", (_SETUP_LOCK,)).fetchone()
+    return bool(row["got"])
+
+
+def wait_for_setup_lock(conn, *, now=time.monotonic, sleep=time.sleep,
+                        budget: float | None = None) -> int:
+    """轮询抢锁，拿到就返回**试了几次**；超预算**响亮抛**。
+
+    `now` / `sleep` 可注入是为了判据能离线跑（不真等 60 秒）——同 `_POOL_WAIT` 那条。
+    """
+    budget = _SETUP_WAIT if budget is None else budget
+    deadline = now() + budget
+    tries = 0
+    while True:
+        tries += 1
+        if _try_setup_lock(conn):
+            return tries
+        if now() >= deadline:
+            raise RuntimeError(
+                f"建表咨询锁 {budget:.0f}s 没抢到（试了 {tries} 次，每 {_SETUP_POLL}s 一次）"
+                "——另一个进程正在建表，或者有一把没人放的旧锁。**不静默降级**：带着一个"
+                "没建好表的 saver 起来，故障会推迟到第一轮对话的第一次写 checkpoint，"
+                "那时报的错与配置没有任何可读的联系。")
+        sleep(_SETUP_POLL)
+
+
+# 无效索引：`indisvalid=false` 的索引在 `current_schema()` 里、挂在 `checkpoint*` 表上。
+_INVALID_IDX_SQL = """
+SELECT c.relname AS name
+  FROM pg_index i
+  JOIN pg_class c ON c.oid = i.indexrelid
+  JOIN pg_class t ON t.oid = i.indrelid
+  JOIN pg_namespace n ON n.oid = t.relnamespace
+ WHERE NOT i.indisvalid
+   AND n.nspname = current_schema()
+   AND t.relname LIKE 'checkpoint%'
+"""
+
+
+def drop_invalid_indexes(conn) -> list[str]:
+    """删掉 checkpoint 表上**无效**的索引，返回删掉的名字（可能为空列表）。
+
+    ## 为什么必须有这一步
+
+    `CREATE INDEX CONCURRENTLY` 被打断（进程被 SIGKILL、语句超时）会留下一个
+    **存在但无效**的索引，而迁移里写的是 `CREATE INDEX CONCURRENTLY IF NOT EXISTS …`
+    ⇒ **名字已经存在** ⇒ 以后每次都跳过它。于是"下一次启动"看着一切正常，那张表
+    **永远少一个索引**，而没有任何东西会红。20261018 那次死锁被打断之后
+    `checkpoints_thread_id_idx` 正是这副样子（迁移停在 `max(v)=5`、索引无效）。
+
+    删掉它，下一次 `setup()` 就会老老实实重建。
+
+    **限定 `current_schema()` + 表名前缀 `checkpoint`**：那是本 agent 自持的表集
+    （DSN 那一节写着"别指错库"），碰不到博客业务表。
+    """
+    from psycopg import sql
+    names = [r["name"] for r in conn.execute(_INVALID_IDX_SQL).fetchall()]
+    for name in names:
+        conn.execute(sql.SQL("DROP INDEX IF EXISTS {}").format(sql.Identifier(name)))
+        logger.warning("[checkpoint] 删掉一个无效索引（上一次建表被打断留下的）：%s", name)
+    return names
+
+
+def _setup_under_lock(saver, pool=None) -> None:
+    """在咨询锁里建表（**轮询式、有预算**，理由见模块头注《建表》）。
+
+    `pool` **由调用方给**（`build_checkpointer` 把 saver 用的那个原样传进来）。
+    缺省回落到 `settings.checkpoint_dsn` 只为判据能单独调它——**生产路径不许走缺省**：
+    自己去取会让"调用方给的 DSN"与"设置里那一格"不一致时关掉 saver 手里那个池。
+    """
+    pool = _pool_for(settings.checkpoint_dsn) if pool is None else pool
     with pool.connection() as conn:
-        conn.execute("SELECT pg_advisory_lock(%s)", (_SETUP_LOCK,))
+        if not conn.autocommit:
+            # 这条断言是**死锁不回来的前提**：非 autocommit 下每次 `pg_try_advisory_lock`
+            # 都会把事务开着，"等锁"于是又变回"一条没结束的事务"，而 setup() 里的
+            # `CREATE INDEX CONCURRENTLY` 要等所有并发事务收尾 ⇒ 环。
+            raise RuntimeError(
+                "建表锁要求连接是 autocommit 的（`_make_pool` 的 kwargs 里那一格）。"
+                "关掉它会让抢锁轮询退化成一条长事务，与 `CREATE INDEX CONCURRENTLY` "
+                "互相等 —— 就是 20261018 那次停服的形状。")
+        wait_for_setup_lock(conn)
         try:
+            drop_invalid_indexes(conn)
             saver.setup()
         finally:
+            # `autocommit=True` 下 `pg_try_advisory_lock` 是**会话级**的，必须显式解锁
+            # （池会复用连接，不解锁等于把这把锁带进下一个请求）。
             conn.execute("SELECT pg_advisory_unlock(%s)", (_SETUP_LOCK,))
 
 
@@ -235,8 +354,13 @@ def build_checkpointer(dsn: str | None = None) -> object | None:
             "**不会静默回落成内存档**——那会让 4 个 worker 各记各的上下文而不报错。"
         ) from e
 
-    saver = mod.PostgresSaver(_pool_for(dsn))
-    _setup_under_lock(saver)
+    # **池只在这里取一次、并原样传给建表那一步**（20261018 修）：`_setup_under_lock`
+    # 早先是自己去 `_pool_for(settings.checkpoint_dsn)` 取的，于是"调用方给的 DSN"与
+    # "设置里那一格"不一致时，`_pool_for` 会因为 DSN 变了而**把上一个池关掉再建一个**
+    # ——关掉的正是 saver 手里那个。显式传参把这两件事钉成一件。
+    pool = _pool_for(dsn)
+    saver = mod.PostgresSaver(pool)
+    _setup_under_lock(saver, pool=pool)
     logger.info("[checkpoint] saver 就绪：backend=postgres dsn=%s", redact(dsn))
     return saver
 

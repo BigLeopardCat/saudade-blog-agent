@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""checkpointer 接线点的判据（20261017；20261018 批 7 随采纳改过 ④ 与 ⑧）。
+"""checkpointer 接线点的判据（20261017；20261018 批 7 随采纳改过 ④ 与 ⑧、新增 ⑨）。
 
 **这一件为什么存在**：`agent/checkpoint.py` 此前是个**返回错对象**的存根
 （`get_checkpointer()` → `MemorySaver()`：进程内、每 worker 一份），而它的英文 docstring
@@ -7,7 +7,7 @@
 §4.6 明说的"它从未积累过任何状态"正相反。重写之后必须证明两件事：**不配就一次都不碰**
 （惰性），以及**任何"半成品接法"都炸得响**（不静默降级）。
 
-八条探针，每条都配了会红的那一半：
+九条探针，每条都配了会红的那一半：
   · ① **惰性**：不给 DSN ⇒ 返回 `None`，且**一次 import 都不发**——不是"import 完才发现
     没配再返回 None"，那已经晚了一步；
   · ② **反控**：给了合法 DSN ⇒ **绝不返回 None**。没有这一条，①可能只是恒真
@@ -36,7 +36,14 @@
   · ⑧ **会话坐标与脱敏**（批 7 新增）：`conversation_thread` 在缺席的六种形态上必须
     回 `None`——拼成 `conv_None` 会让所有"没有会话身份"的请求共用一条线程，也就是
     **跨用户串台**（安全判据，不是洁癖）；`thread_id_for` 三支各判一次；`redact` 不许
-    把口令带进异常文本、也不许把整条 DSN 吃掉。
+    把口令带进异常文本、也不许把整条 DSN 吃掉；
+  · ⑨ **抢锁是轮询式、有预算、且池必须 autocommit**（20261018 停服之后新增）：
+    阻塞式 `pg_advisory_lock` 会让"等锁"变成一条没结束的事务，与 `setup()` 里那句
+    `CREATE INDEX CONCURRENTLY` 互相等 ⇒ 四个 worker 无限期卡死。这一节判四件事：
+    抢到就往下走、**一直抢不到要响亮抛（不是无限等）**、`autocommit` 关了要响亮拒、
+    以及**全仓只有那两条 `advisory_lock` 的 SQL 字面**（源码锁，反控证明它抓得住阻塞版）。
+    ⚠️ 这一节全是**离线**的（假连接）——真连一个库、4 个进程同时来的那一条在
+    `tests/test_checkpoint_setup_concurrent.py`，**那才是抓得住这个 bug 的那一层**。
 
 用法：.venv/bin/python tests/test_checkpoint_factory.py
 """
@@ -360,6 +367,220 @@ check("DSN 里的口令不进异常文本（异常会进 agent.log）",
 check("没带口令的原样返回（不是把整条 DSN 都吃掉）",
       C.redact("postgresql://h:5432/db") == "postgresql://h:5432/db",
       C.redact("postgresql://h:5432/db"))
+
+print("\n⑨ 建表抢锁：轮询、有预算、池必须 autocommit（20261018 停服之后新增）")
+# 这一节**不连库**：假连接按脚本回答。真连一个库、4 个进程同时来的那一条在
+# `tests/test_checkpoint_setup_concurrent.py`——那是抓得住死锁的那一层。
+
+
+class _Res:
+    """`conn.execute(...)` 的返回：`.fetchone()` / `.fetchall()`。行是 dict
+    （真池是 `row_factory=dict_row`，判据照那个形状喂，不喂元组——形状不对时
+    判据该红，而不是被 `row[0]` 蒙过去）。"""
+
+    def __init__(self, rows):
+        self._rows = list(rows)
+
+    def fetchone(self):
+        return self._rows[0] if self._rows else None
+
+    def fetchall(self):
+        return list(self._rows)
+
+
+def _sql_text(obj) -> str:
+    """把 `execute` 的第一个参数渲染成文本。真驱动收 `str` 与 `sql.Composed` 两种，
+    假连接两种都得认——`Composed` **没有 `__str__`**（`str()` 出来是 repr，
+    于是"这条 SQL 是什么"根本读不出来）。`as_string(None)` 才给出真正会发出去的那句，
+    标识符该加的引号也在里面。"""
+    as_string = getattr(obj, "as_string", None)
+    return as_string(None) if as_string else str(obj)
+
+
+class _FakeConn:
+    """假连接。`got_seq` 用尽之后**一直重复最后一个值**（好写"永远抢不到"那一支）。"""
+
+    def __init__(self, got_seq, invalid=(), autocommit=True):
+        self._got = list(got_seq)
+        self._invalid = list(invalid)
+        self.autocommit = autocommit
+        self.lock_tries = 0
+        self.unlocks = 0
+        self.drops: list[str] = []
+
+    def execute(self, sql, params=None):
+        s = " ".join(_sql_text(sql).split())
+        if "pg_try_advisory_lock" in s:
+            self.lock_tries += 1
+            val = self._got[0] if len(self._got) == 1 else self._got.pop(0)
+            return _Res([{"got": val}])
+        if "pg_advisory_unlock" in s:
+            self.unlocks += 1
+            return _Res([])
+        if "pg_index" in s:
+            return _Res([{"name": n} for n in self._invalid])
+        if s.upper().startswith("DROP INDEX"):
+            self.drops.append(s)
+            return _Res([])
+        raise AssertionError(f"假连接收到了没预期的 SQL：{s}")
+
+
+class _FakePool:
+    def __init__(self, conn):
+        self._conn = conn
+
+    def connection(self):
+        conn = self._conn
+
+        class _Ctx:
+            def __enter__(self):
+                return conn
+
+            def __exit__(self, *exc):
+                return False
+
+        return _Ctx()
+
+
+class _Saver:
+    def __init__(self):
+        self.calls = 0
+
+    def setup(self):
+        self.calls += 1
+
+
+class _Clock:
+    """假时钟：`now`/`sleep` 可注入就是为了这个——判据不真等 60 秒。"""
+
+    def __init__(self):
+        self.t = 0.0
+
+    def now(self):
+        return self.t
+
+    def sleep(self, d):
+        self.t += d
+
+
+# ⑨a 抢到了就往下走：试几次就是几次，setup 恰好一次、解锁恰好一次
+_c, _s = _FakeConn([False, False, True]), _Saver()
+_tries = C.wait_for_setup_lock(_c, now=lambda: 0.0, sleep=lambda d: None)
+check("抢到锁 ⇒ 返回试了几次（3 次），且 setup 还没被调（那一层不归它管）",
+      _tries == 3 and _s.calls == 0 and _c.unlocks == 0, f"tries={_tries}")
+C._setup_under_lock(_s, pool=_FakePool(_c))
+check("`_setup_under_lock` 走完 ⇒ setup 恰好一次、解锁恰好一次",
+      _s.calls == 1 and _c.unlocks == 1, f"setup={_s.calls} unlock={_c.unlocks}")
+
+# ⑨b **一直抢不到 ⇒ 响亮抛，不是无限等**（这是本次停服最直接的那一条）
+_clock = _Clock()
+_c2, _s2 = _FakeConn([False]), _Saver()
+try:
+    C.wait_for_setup_lock(_c2, now=_clock.now, sleep=_clock.sleep, budget=2.0)
+    _msg = ""
+except RuntimeError as e:
+    _msg = str(e)
+check("一直抢不到 ⇒ RuntimeError（**不是无限等**）", bool(_msg), _msg[:60])
+check("  消息里写清楚等了多久、试了几次（读日志的人要能一眼看出卡在哪）",
+      "没抢到" in _msg and "2s" in _msg and "次" in _msg, _msg[:80])
+check("  它是**轮询**过的（tries ≥ 2）而不是一次就放弃 ⇒ 上面那条不是空过",
+      _c2.lock_tries >= 2, f"tries={_c2.lock_tries}")
+check("（反控）预算给够 ⇒ 同一条路径**不抛**（上一条不是恒抛）",
+      C.wait_for_setup_lock(_FakeConn([False, False, True]), now=_Clock().now,
+                            sleep=lambda d: None, budget=5.0) == 3)
+
+# ⑨c 预算到期之后**不许**再调 setup、也不许解锁（锁根本没拿到）
+_c3, _s3 = _FakeConn([False]), _Saver()
+try:
+    C._setup_under_lock(_s3, pool=_FakePool(_c3))
+except RuntimeError:
+    pass
+check("没抢到锁 ⇒ 一次 setup 都不调、一次 unlock 都不发",
+      _s3.calls == 0 and _c3.unlocks == 0, f"setup={_s3.calls} unlock={_c3.unlocks}")
+
+# ⑨d `autocommit` 断言：**这是死锁不回来的前提**（关掉它，抢锁轮询会退化成一条长事务）
+_c4, _s4 = _FakeConn([True], autocommit=False), _Saver()
+try:
+    C._setup_under_lock(_s4, pool=_FakePool(_c4))
+    _amsg = ""
+except RuntimeError as e:
+    _amsg = str(e)
+check("池不是 autocommit ⇒ 响亮拒（消息里点名 autocommit 与那条环）",
+      "autocommit" in _amsg and "CREATE INDEX CONCURRENTLY" in _amsg, _amsg[:60])
+check("  且**一条语句都没发**（拒在抢锁之前，不留半截状态）",
+      _c4.lock_tries == 0 and _s4.calls == 0, f"tries={_c4.lock_tries}")
+
+# ⑨e 无效索引：被打断的 `CREATE INDEX CONCURRENTLY` 留下的东西必须被清掉，
+#     否则迁移里那句 `IF NOT EXISTS` **永远跳过它** ⇒ 那张表永远少一个索引、无人红。
+_c5 = _FakeConn([True], invalid=["checkpoints_thread_id_idx"])
+_s5 = _Saver()
+C._setup_under_lock(_s5, pool=_FakePool(_c5))
+check("建表前先删无效索引（一次 DROP，名字带引号）",
+      len(_c5.drops) == 1 and '"checkpoints_thread_id_idx"' in _c5.drops[0],
+      _c5.drops[:1])
+check("  **删无效索引在 `setup()` 之前**（顺序反了就等于没删）",
+      _s5.calls == 1 and len(_c5.drops) == 1)
+_c6 = _FakeConn([True], invalid=[])
+check("（反控）没有无效索引 ⇒ 一条 DROP 都不发（上一条不是恒发）",
+      C.drop_invalid_indexes(_c6) == [] and _c6.drops == [])
+# 名字里的引号必须被转义（走 `sql.Identifier`），否则这是个注入面
+_c7 = _FakeConn([True], invalid=['we"ird'])
+C.drop_invalid_indexes(_c7)
+check("（反控）索引名带引号 ⇒ 被**转义**（`sql.Identifier`，不是 f-string 拼）",
+      'we""ird' in _c7.drops[0], _c7.drops[0])
+
+# ⑨f 源码锁：全仓**只有那两条** `advisory_lock` 的 SQL 字面，且抢锁那条是 `try` 版。
+#     不加这条锁的话，下一个人"顺手"把 try 改回阻塞版，⑨a–⑨e 全都照绿不误
+#     （它们喂的是假连接，看不出真 SQL 是哪个）。
+_DOCSTRINGS = set()
+
+
+def _collect_docstrings(tree):
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.Module, ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            body = getattr(node, "body", [])
+            if (body and isinstance(body[0], ast.Expr)
+                    and isinstance(body[0].value, ast.Constant)
+                    and isinstance(body[0].value.value, str)):
+                _DOCSTRINGS.add(id(body[0].value))
+
+
+def _advisory_literals(src: str) -> list[str]:
+    """源码里所有含 `advisory_` 的**字符串字面**（**docstring 不算**——头注里正写着
+    这件事，算进去的话这条锁会被自己的说明文字骗绿）。
+
+    ⚠️ 找的是 `advisory_` 不是 `advisory_lock`：**解锁那条叫 `pg_advisory_unlock`**，
+    它里面没有 `advisory_lock` 这个子串（第一版就是照后者找的，于是只捞到一条、
+    判据红在自己的过滤词上）。"""
+    _DOCSTRINGS.clear()
+    tree = ast.parse(src)
+    _collect_docstrings(tree)
+    out = []
+    for node in ast.walk(tree):
+        if (isinstance(node, ast.Constant) and isinstance(node.value, str)
+                and id(node) not in _DOCSTRINGS and "advisory_" in node.value):
+            out.append(" ".join(node.value.split()))
+    return sorted(out)
+
+
+_ckpt_src = (ROOT / "agent" / "checkpoint.py").read_text(encoding="utf-8")
+_lits = _advisory_literals(_ckpt_src)
+check("全仓只有两条 `advisory_*` 的 SQL 字面（抢锁 + 解锁）", len(_lits) == 2, str(_lits))
+check("抢锁那条是 **`pg_try_advisory_lock`**（阻塞版就是 20261018 那次停服）",
+      any("pg_try_advisory_lock" in s for s in _lits), str(_lits))
+check("解锁那条仍是 `pg_advisory_unlock`（`try` 版拿到的锁同样是会话级的）",
+      any("pg_advisory_unlock" in s for s in _lits), str(_lits))
+# 反控：把 try 换回阻塞版 ⇒ 这条锁必须红
+_bad = _ckpt_src.replace("SELECT pg_try_advisory_lock(%s) AS got",
+                         "SELECT pg_advisory_lock(%s) AS got")
+_bad_lits = _advisory_literals(_bad)
+check("（反控）把 `try` 换回阻塞版 ⇒ 字面集合变了（锁抓得住它）",
+      _bad != _ckpt_src and not any("pg_try_advisory_lock" in s for s in _bad_lits),
+      str(_bad_lits))
+check("（反控）源码文本里**确实**出现过阻塞版的名字（在头注里）而字面集合里没有 ⇒ "
+      "上面那条不是被说明文字骗绿的",
+      "pg_advisory_lock" in _ckpt_src and len(_lits) == 2,
+      f"源码文本 {_ckpt_src.count('pg_advisory_lock')} 次，字面只有 {len(_lits)} 条")
 
 print()
 if FAILS:
