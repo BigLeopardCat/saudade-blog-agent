@@ -16,6 +16,31 @@
 
 ## 20261019
 
+- **`agent/graph.py` 的"写参数落位与拒答"那一族整块搬出**（⚠️ **对外行为零变更**）。四件：
+  ① **搬走的是「出边为零」的一整块闭包**：planner 定下写哪一件之后、真正落到工具参数之前
+  那道关（值落位与校正、引文核对接线、拒答话术与 `write_*_unresolved` 事件），58 个顶层名 /
+  2232 行 ⇒ 新模块 `agent/write_grounding.py`。它**不反向 import 图** ⇒ 不成环；
+  `graph.py` 13206 → 11012 行、235 → 195 个顶层定义。搬完实测新模块**不能再拆**：那 59 个
+  顶层名是一个连通分量，最大的零出边子闭包只有 15/59，两半都仍然超 800 行预算 ⇒ 超预算
+  按台账记着，不硬拆。
+  ② **`graph.py` 按原名 re-export 整族** ⇒ "搬家不换门牌"：十几个套件写的
+  `from agent.graph import _bare_target_name`、以及写成 `import agent.graph as g` 再
+  `g._lexicon(...)` 的，**一处都不用改**。这条承诺本刀实测翻过一次车（`_lexicon` 被漏掉：
+  一次性扫描器只认字面 `agent.graph.X`、看不见 `g._lexicon(...)`），所以它现在有常设判据。
+  ③ **新增判据 `tests/test_graph_reexports.py`**：全仓扫出**六种**取名字的写法
+  （`from agent.graph import X [as Y]` / `import agent.graph [as g]` / `from agent import
+  graph [as g]` / `getattr`、`setattr` 字面），逐个断言在 `agent.graph` 上取得到，且一次
+  报出**全部**引用点（比运行时"第一个 AttributeError"有用得多）。另判**搬过家的族不许在
+  `graph.py` 里再定义一份**——两份会各自漂、而调用点走哪一份取决于它 import 谁 ⇒ 静默分岔；
+  唯一例外是 `logger`（每族各写一行 `getLogger("agent.graph")`，**故意**让日志来源仍是图文件）。
+  ④ **源码文本锁的取值点跟着代码搬、判据字面一个字没动**：`tests/_ctx_src.py` 加两个入口
+  （`write_guard_src()` / `write_guard_deprefixed()`，拼接顺序是**被搬走那一族在前、
+  `graph.py` 在后**——这一族里有跨文件的顺序锁），九个套件换取值点。另有三处"给模块全局
+  打桩"改打在**那一族现在住的模块**上：继续打 `g.record` 会**静默失效**（桩装上、事件一条
+  不落，判据只读到空列表）。
+  **五本台账只搬键名、数值一格未动**（mypy 总数 190 不变；ruff 772，比基线少 3，其中 2 条是
+  `eval/golden_draft.py` 与 `eval/toolcall_probe.py` 的存量高水位被顺手收紧）。
+
 - **模块地图补全 + 10 处模块改名**（⚠️ **对外行为零变更**）。四件：
   ① **`docs/agent-architecture.md` §2 那张目录树此前已经烂了，而没有任何东西会红**：实测点名了
   3 个已不存在的文件（`adminops.py` / `helpers.py` / `native_plan.py`），磁盘上 38/81 个模块它

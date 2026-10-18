@@ -50,6 +50,8 @@ import sys
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
+import _ctx_src  # noqa: E402  （`_` 开头 ⇒ 不被 run_all 当套件收）
+
 from agent import adminops_account as _account  # noqa: E402
 from agent import graph as G  # noqa: E402  （④ 比的是**在跑的**那张预检表，不是源码文本）
 from agent.principal import (  # noqa: E402
@@ -222,9 +224,11 @@ check("  管理员那格 ⊂ 超管那格（超管只多一条同级规则，不
 # 放行给后端（`_freeze_policy_refusal` 的 `target_role in KNOWN_ROLES` 那半句）。
 check("  预检确实只对**已知角色**的目标生效（未知角色放行给后端，别自己编政策）",
       "target_role in KNOWN_ROLES" in
-      ast.get_source_segment((ROOT / "agent/graph.py").read_text(encoding="utf-8"),
+      # 取值点跟着代码搬（20261019）：`_freeze_policy_refusal` 住进了
+      # `agent/write_grounding.py` ⇒ 判据字面没动，只把读的文件换成这一族的全部文件。
+      ast.get_source_segment(_ctx_src.write_guard_src(),
                              next(n for n in ast.walk(ast.parse(
-                                 (ROOT / "agent/graph.py").read_text(encoding="utf-8")))
+                                 _ctx_src.write_guard_src()))
                                  if isinstance(n, ast.FunctionDef)
                                  and n.name == "_freeze_policy_refusal")) or "")
 

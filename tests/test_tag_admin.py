@@ -856,7 +856,10 @@ check("  没有 `create_tag` 的计划一次都不读字典（惰性：不是每
 # docstring）⇒ 20261009 刀 2 起锚点取**整文件**的去前缀视图（`c.` 前缀还原成裸名，
 # 于是这两句的判据文本与拆分之前逐字相同）；`_planner_decide` 自己的源码片段在拆完
 # 之后已经不含这两行了。
-_pnode_src = _ctx_src.graph_deprefixed()
+# 取值点跟着代码搬（20261019）：写参数落位与拒答那一族住进了
+# `agent/write_grounding.py` ⇒ 判据字面一个字没动，只把"读 graph.py 全文"
+# 换成"读这一族的全部文件"（`tests/_ctx_src.py::write_guard_src`）。
+_pnode_src = _ctx_src.write_guard_deprefixed()
 check("planner 收尾前真调了它（且排在 `_name_arg_fix` 之后——那一步会重建计划）",
       "_drop_satisfied_tag_creates(plan_obj, config)" in _pnode_src
       and _pnode_src.index("value_refuse = _name_arg_fix")

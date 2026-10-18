@@ -119,6 +119,7 @@ flowchart TB
 │   ├── provenance.py          # 写参数的**出处**：逐字引文核对 + 站内实体解析（20261014 换表征）
 │   ├── block_reasons.py       # 受阻原因码的**类型表**：把 checker 手里那个字符串变成可判读的类型
 │   ├── name_grounding.py      # 名字通道的目标名词表：主人引号里那一段才是目标名（20261017 第四刀）
+│   ├── write_grounding.py     # ★ **写参数落位与拒答**那一族（20261019 从 graph.py 整块切出，出边为零）：`_decide_write_guard` 本体 —— 值落位/校正、引文核对接线、拒答话术与 `write_*_unresolved` 事件；那边不反向 import 图，graph.py 按原名 re-export
 │   ├── factblock.py           # 动作族轮次的"系统事实块" ＋ 历史事实行剥离（系统代印 20261005 起停用）
 │   ├── textnorm.py            # 文本归一（20261014 从 graph.py 搬出，逐字同源）
 │   ├── stickers.py            # 贴纸残记号的确定性修补：把只写了开头冒号的 `:头疼` 补回 `:名字:`
