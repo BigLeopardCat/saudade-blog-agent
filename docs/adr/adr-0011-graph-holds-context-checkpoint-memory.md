@@ -362,12 +362,14 @@ saver、同会话并发两轮；外加 `pyproject.toml` / `uv.lock` 的依赖。
 《20261018 追记（二）》。上面那句"包在 `pg_advisory_lock` 里"**保留原文**，因为它是当时
 的决策原文。
 
-**级联清理是本 ADR 与父仓的跨仓契约**：删除动作在父仓
-`src/routes/conversation.rs::purge_conversation_data`（**两个臂**：`ConversationId` /
-`UserId`），本仓出 `DELETE /checkpoint/{conversation_id}` 钩子。
-⚠️ **父仓那一半截至 20261018 还没接上**——本仓的钩子今天没有任何调用方，这是**已知缺口**
-（判据 `tests/test_checkpoint_cascade.py` ③ 判的是"父仓自己两臂一致"，因为"断言父仓已接"
-会一直红、而红的套件进不了 CI）。
+**级联清理是本 ADR 与父仓的跨仓契约**：删除动作在父仓，本仓出
+`DELETE /checkpoint/{conversation_id}` 钩子。
+⚠️ **父仓那一半截至 20261018 还没接上**——当时本仓的钩子没有任何调用方，是已知缺口。
+**20261019 批 D 接上了**：父仓 `conversation.rs::drop_checkpoint_threads` 在
+`delete_conversation`（`commit()` **之后**——HTTP 不能进事务）与 `delete_temp_user`
+两个调用点各调一次，会话 id 由 `purge_conversation_data` **返回**（清单仍只有一处）。
+判据 `tests/test_checkpoint_cascade.py` ③ 随之把锚点从"清单的两个 match 臂"挪到"两个调用点
+的函数体"：老锚点在新形状下恒判「两臂都没接」，而**一条恒绿的判据比没有更坏**。
 
 **还没做（不在本批）**：真机读数三条（长会话 K=10 正向收缩、崩溃重放对产线等效 saver、
 同会话并发两轮）。本批只保证"接得上、接得对、半接会红"。

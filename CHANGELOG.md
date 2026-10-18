@@ -95,6 +95,21 @@
   业务库当场拒跑）。**没有配 DSN 时它印一行"这一层没量"并退 0**——那是「前提不可用」，不是
   「跑过了、没有可删的」。
 
+- **删会话/删账号时 checkpoint 跟着一起清（跨仓契约接上了）**（⚠️ **对外行为有变更**：删除
+  动作多了一次对 agent 的 best-effort 调用，用户的可见行为不变）。父仓那一半此前是**已知
+  缺口**：`DELETE /checkpoint/{conversation_id}` 钩子零调用方 ⇒ 会话删了、那份正文还躺在
+  checkpoint 库里，**没有任何读取路径、也没有任何东西会红**。四件：① 父仓新增
+  `drop_checkpoint_threads`（best-effort：超时 3s/条 + **总预算 10s**，失败只 `tracing::warn`，
+  绝不挡业务删除——残留由上面那条保留期兜底；「点了没反应」在本仓是禁止的，所以必须有痕）。
+  ② **HTTP 不进 DB 事务**：`delete_conversation` 在 `commit()` **之后**调、`delete_temp_user`
+  紧随那份清单；会话 id 由 `purge_conversation_data` **返回**给调用方（**清单仍只有一处**——
+  两个调用点各自再查一遍就是 20261018 那个 bug 的形状）。③ 基址复用父仓
+  `graph.rs::agent_base_url()`（提为 `pub(crate)`），不再抄第二份坐标。④
+  `tests/test_checkpoint_cascade.py` ③ **换了锚点**：从"清单的两个 match 臂"改成"两个调用点
+  的函数体"（钩子必须落在事务之外，老锚点在新形状下**恒判「两臂都没接」**——一条恒绿的判据
+  比没有更坏），并加一条"id 清单仍只有一处"；绿条件**没有收紧**（仍是"不许半接"）。
+  **实测现在报「两臂都接」**。⚠️ 父仓那三行要 push + 重启 Rust 才生效。
+
 - **模块地图补全 + 10 处模块改名**（⚠️ **对外行为零变更**）。四件：
   ① **`docs/agent-architecture.md` §2 那张目录树此前已经烂了，而没有任何东西会红**：实测点名了
   3 个已不存在的文件（`adminops.py` / `helpers.py` / `native_plan.py`），磁盘上 38/81 个模块它
