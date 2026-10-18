@@ -26,6 +26,12 @@
 **本闸不是"禁止长文件"，是"长文件不许再长"**。真需要它变大，就在同一个提交里
 `--update` 并说明为什么 ⇒ 把隐式增长变成一次需要辩护的动作。
 
+**棘轮是双向的（20261018 补）**：只判"长大了"的话，一次大缩小之后台账会留下**永久免费
+额度**——下一批增长只要没回到旧水位，就一格都不报。实测抓到过：`agent/graph.py` 台账记着
+`13263 / 237`，盘上早就是 `13190 / 235`，那 73 行是**静默**的（`judge()` 当时只在
+`实测 > 台账` 时红）。所以 `judge()` 现在两个方向都判：**比台账小也要红**（"台账该收紧"），
+逼你在同一个提交里把那一格改小——`--update` 出来的账**恰好等于**当时的实测，两边本来就该相等。
+
 用法（cd 仓根，用仓的 venv）：
   .venv/bin/python tests/test_module_budget.py                  # 检查（run_all.py 这样调）
   .venv/bin/python tests/test_module_budget.py --update         # 重写台账
@@ -91,10 +97,18 @@ def judge(current: dict, ledger: dict, lines_max: int, defs_max: int) -> list[st
         if m["lines"] <= lines_max and m["top_defs"] <= defs_max:
             bad.append(f"台账该销账  {key}  {m['lines']} 行 / {m['top_defs']} 定义"
                        f" 都已回到预算内 —— 删掉这一条（`--update` 会删）")
+            continue    # 已在预算内，"收紧/长大"这两个方向都不再适用（只会重复报同一件事）
         if m["lines"] > base["lines"]:
             bad.append(f"行数长大    {key}  {m['lines']} 行（台账 {base['lines']}，只许缩小）")
         if m["top_defs"] > base["top_defs"]:
             bad.append(f"定义变多    {key}  {m['top_defs']} 个（台账 {base['top_defs']}，只许缩小）")
+        # 反方向（见模块头注《棘轮是双向的》）：缩小了却没在同一个提交里收紧台账 ⇒ 也是红。
+        # 不判这一条的话，一次大缩小会留下永久免费额度——`--update` 出来的账恰好等于当时的
+        # 实测，所以"台账 == 实测"本来就是不变式，不等就是有人漏改了那一格。
+        if m["lines"] < base["lines"] or m["top_defs"] < base["top_defs"]:
+            bad.append(f"台账该收紧  {key}  实测 {m['lines']} 行 / {m['top_defs']} 定义，"
+                       f"台账还记着 {base['lines']} / {base['top_defs']} —— 台账比实测松，"
+                       f"把这一条改小（棘轮只许缩小）")
     for key in sorted(ledger):
         if key not in current:
             bad.append(f"台账过期    {key}  源码里没有这个文件了 —— 删掉这一条")
@@ -156,6 +170,17 @@ def _self_check() -> None:
     # ③ 回到预算内 ⇒ 该销账（红）；④ 源码里没有这个文件 ⇒ 过期（红）
     assert judge({"x.py": small}, {"x.py": over}, 800, 60), "回到预算内没提示销账"
     assert judge({}, {"x.py": over}, 800, 60), "台账过期没红"
+
+    # ⑤ **反方向**：还在预算外、但比台账小了 ⇒ 也要红（否则缩小会留下永久免费额度）。
+    #    两个读数各自独立触发，且"相等"不许红（那是 `--update` 之后的正常态）。
+    _shrunk = judge({"x.py": {"lines": 850, "top_defs": 70}}, {"x.py": over}, 800, 60)
+    assert _shrunk and any("收紧" in b for b in _shrunk), \
+        f"台账比实测松却没红 —— 缩小之后会留下永久免费额度：{_shrunk}"
+    assert judge({"x.py": {"lines": 900, "top_defs": 60}}, {"x.py": over}, 800, 60), \
+        "定义变少却没提示收紧"
+    assert not judge({"x.py": {"lines": 900, "top_defs": 70}},
+                     {"x.py": {"lines": 900, "top_defs": 70}}, 800, 60), \
+        "台账与实测相等却红了 —— 那是 `--update` 之后的正常态"
 
 
 def main() -> int:

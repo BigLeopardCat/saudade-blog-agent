@@ -37,6 +37,9 @@
 from __future__ import annotations
 
 import ast
+import contextlib
+import importlib.util
+import io
 import json
 import pathlib
 import re
@@ -298,6 +301,35 @@ check("  `_launcher_guard` 的**调用**排在 `if args.update:` 之前（否则
       and min(c.lineno for c in _guard_calls) < min(u.lineno for u in _upd_ifs),
       f"调用 {[c.lineno for c in _guard_calls]} vs `if args.update:` "
       f"{[u.lineno for u in _upd_ifs]}")
+
+# ⚠️ **第四类静默失效：账上留着一个盘上不存在的文件**（20261018 补）。
+# `by_file` 的键只被用来做 `get(f, 0)` ⇒ 改名/删除之后旧键永远留在账上：它不出现在
+# `grew` 里、也不影响 `total`（总数取自 mypy 的汇总行），只会落进那句「这些文件已经清零，
+# 可以销账」里被**当成好消息报出来**。真正的后果是同一个文件改名之后计数从 0 重新开始
+# ——一次改名买回一份免费额度（现场：`agent/adminops.py` 拆成 8 个模块）。
+# 判据分两层，两层都要：① 盘上那份账**现在**没有幽灵键；② 那条守卫**真的会拦**。
+# 少了 ②，把守卫整段删掉也全绿——本文件上面刚记过同形状的教训（搜函数名会被定义本身满足）。
+_b = json.loads(_base.read_text(encoding="utf-8")) if _base.is_file() else {}
+_ghosts = sorted(k for k in (_b.get("by_file") or {}) if not (ROOT / k).is_file())
+check("⭐ 基线里的每个文件键在盘上都存在（改名/删除的残留会被读成「已清零」）",
+      not _ghosts, f"盘上没有：{_ghosts}")
+
+_spec = importlib.util.spec_from_file_location("_type_gate_under_test", _gate)
+_tg_mod = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(_tg_mod)          # 只跑模块体（常量 + 定义），无副作用
+_sink = io.StringIO()
+with contextlib.redirect_stdout(_sink):
+    _real_ok = _tg_mod._baseline_guards(_b, _tg_mod._pinned_mypy(), _tg_mod._pinned_python())
+check("  正控：真账喂进去必须放行（否则下面那条是「见谁都红」）",
+      _real_ok is True, f"返回 {_real_ok}；{_sink.getvalue().strip()[:120]}")
+_fake = dict(_b)
+_fake["by_file"] = dict(_b.get("by_file") or {})
+_fake["by_file"]["agent/this_file_was_deleted.py"] = 3
+_sink = io.StringIO()
+with contextlib.redirect_stdout(_sink):
+    _fake_ok = _tg_mod._baseline_guards(_fake, _tg_mod._pinned_mypy(), _tg_mod._pinned_python())
+check("  反控：喂一个盘上不存在的键 ⇒ 必须拦（守卫不是装饰）",
+      _fake_ok is False, f"返回 {_fake_ok}")
 
 _eval_code2 = "\n".join(ln for ln in EVAL_YML.read_text(encoding="utf-8").splitlines()
                         if not ln.lstrip().startswith("#"))
