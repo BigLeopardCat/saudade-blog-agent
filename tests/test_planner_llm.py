@@ -38,10 +38,10 @@ from langchain_core.messages import AIMessage  # noqa: E402
 
 from agent import context as C  # noqa: E402
 from agent import planner_llm as N  # noqa: E402
+from agent import tasks as T  # noqa: E402
 from agent.workflow_defs import WORKFLOW_MAP, visible_workflows  # noqa: E402
 from agent.workflow_params import workflow_param_specs  # noqa: E402
 from agent.workflow_tools import callable_query_tools, explicit_tools  # noqa: E402
-from agent import tasks as T  # noqa: E402
 from tools.base import get_all_tools  # noqa: E402
 
 FAILS: list[str] = []
@@ -559,7 +559,8 @@ def test_task_hold_declaration():
         {"name": "navigate", "args": {"target": "物联网平台"}, "id": "n", "type": "tool_call"},
         _hold_call(goal)])
     got = N.tool_calls_to_plan(both, None)
-    check("做一步 + 登记 → workflow=navigate", got is not None and got.workflow == "navigate", str(got))
+    check("做一步 + 登记 → workflow=navigate",
+          got is not None and got.workflow == "navigate", str(got))
     check("params 是技能的参数（登记不抢参数位）",
           got is not None and got.params == {"target": "物联网平台"}, str(got and got.params))
     check("declare 并行带上", got is not None and (got.declare or {}).get("goal") == goal)

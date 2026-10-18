@@ -681,7 +681,8 @@ _EXPECT_TOOL = {
     "review_inbox": ["audit_board_comment", "approve_quota_request"],
 }
 check("写技能名单与这张对照表同步（漏一个就少锁一条通道）",
-      set(_EXPECT_TOOL) == set(WRITE_WORKFLOW_NAMES) and set(_MIN_PARAMS) == set(WRITE_WORKFLOW_NAMES),
+      set(_EXPECT_TOOL) == set(WRITE_WORKFLOW_NAMES)
+      and set(_MIN_PARAMS) == set(WRITE_WORKFLOW_NAMES),
       f"{sorted(WRITE_WORKFLOW_NAMES)}")
 for workflow_name, params in _MIN_PARAMS.items():
     out = instantiate_plan(workflow_name, params)

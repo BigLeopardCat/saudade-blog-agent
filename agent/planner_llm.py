@@ -59,11 +59,6 @@ from agent.provenance import (
     parse_evidence,
     write_scope_tools,
 )
-from agent.workflow_defs import WORKFLOW_MAP, visible_workflows
-from agent.workflow_menu import render_tool_marks
-from agent.workflow_model import ParamSpec
-from agent.workflow_params import tool_arg_schemas, workflow_param_specs
-from agent.workflow_tools import callable_query_tools, explicit_tools
 from agent.tasks import (
     INTENTS_ARG,
     INTENTS_FIELD_DESC,
@@ -76,6 +71,11 @@ from agent.tasks import (
     normalize_intents,
     pseudo_tool_schemas,
 )
+from agent.workflow_defs import WORKFLOW_MAP, visible_workflows
+from agent.workflow_menu import render_tool_marks
+from agent.workflow_model import ParamSpec
+from agent.workflow_params import tool_arg_schemas, workflow_param_specs
+from agent.workflow_tools import callable_query_tools, explicit_tools
 
 # 技能参数的短类型名（`ParamSpec.type`，见 `workflow_params.py::arg_type_short`）→ JSON Schema。
 # `any` / `?` 是"推不出映射"，不在表里——由 `_param_schema` 兜（见那里的注）。

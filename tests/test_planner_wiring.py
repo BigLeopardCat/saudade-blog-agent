@@ -46,8 +46,8 @@ import agent.graph as G  # noqa: E402
 from agent import authz  # noqa: E402
 from agent.block_reasons import denied_workflows  # noqa: E402
 from agent.principal import Principal  # noqa: E402
-from agent.workflow_defs import visible_workflows  # noqa: E402
 from agent.tasks import TASK_DROP, TASK_HOLD, TASK_INTENTS  # noqa: E402
+from agent.workflow_defs import visible_workflows  # noqa: E402
 from config import settings  # noqa: E402
 from utils import trace as trace_mod  # noqa: E402
 

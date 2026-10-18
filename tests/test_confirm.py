@@ -890,10 +890,11 @@ print("⑩ 零写轮的事实与出口（20260926）：narrator 拿得到「本�
 # 三层锁：① 判据落在"写"上（不是"零工具"）：确认兑现轮有写、绝不能拿到这句；
 # ② 弹卡轮（pending_confirm）拿不到；③ `data_repeat` 已经拼过的不重复追加；
 # ④ 菜单那一段真被拼进了 planner 上下文（能力有测试 ≠ 接线有测试）。
-_NARRATOR_CHAT_PLAN = {"workflow": "chat", "params": {}, "tools": [], "note": "", "reply": "直接回答"}
+_NARRATOR_CHAT_PLAN = {"workflow": "chat", "params": {}, "tools": [], "note": "",
+                       "reply": "直接回答"}
 _NARRATOR_WRITE_PLAN = {"workflow": "account_freeze", "params": {},
                         "tools": ['freeze_account({"name": "x"})'], "note": "", "reply": "直接回答"}
-# 两态一起给（20261017 批 1）：消费侧读的是对象那一态，只给文本的夹具会静默退化（本段三条断言是 `== 计划文本`）。
+# 两态一起给（批 1）：消费侧读对象那一态，只给文本的夹具会静默退化（本段三条断言是 `== 计划文本`）。
 _st_chat = g.plan_state(dict(_NARRATOR_CHAT_PLAN))
 _st_write = g.plan_state(dict(_NARRATOR_WRITE_PLAN))
 _out_chat = g._narrator_plan(_st_chat)
@@ -910,7 +911,8 @@ check("写轮（本轮真排了写操作）：一个字都不加——说了就�
 check("弹卡轮（pending_confirm 在场）：不加（那种轮次结构上也轮不到 narrator 说话）",
       g._narrator_plan(dict(_st_chat, pending_confirm={"workflow": "x"}))
       == _st_chat["plan"])
-# 这一条测的是**文本里已经拼过**的情形（调用方自己拼的，如 data_repeat 那一支）：覆写渲染文本、对象照给。
+# 这一条测的是**文本里已经拼过**的情形（调用方自己拼的，如 data_repeat 那一支）：
+# 覆写渲染文本、对象照给。
 _PRE = _st_chat["plan"] + "\n" + g._no_popup_fact(_st_chat)
 check("data_repeat 那一支已拼过：不重复追加（同一段话在提示里出现两次）",
       g._narrator_plan(dict(_st_chat, plan=_PRE)) == _PRE)

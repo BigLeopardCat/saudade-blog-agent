@@ -31,7 +31,7 @@ from langchain_core.messages import AIMessage, HumanMessage, ToolMessage  # noqa
 import agent.graph as G  # noqa: E402
 from agent.graph import (  # noqa: E402
     _FALLBACK_DEED_NO_RECEIPT, _fallback_deed_no_receipt, _pending_intents, _prev_user_msg,
-    _unsupported_deed_claims, gate_node, parse_plan, plan_encode, plan_state,
+    _unsupported_deed_claims, gate_node, parse_plan, plan_state,
     planner_node,
     route_after_execute,
 )
