@@ -49,7 +49,8 @@ from agent.deterministic_plan import (_article_fast_path, _display_fast_path,
                                       _wrap_up_plan)
 from agent.graph import (_DecideCtx, _confirm_grant_plan, _create_display_text,
                          _decide_write_guard, _drop_correction, _evidence_on,
-                         _fastpath_on, _finalize_dedupe, _finalize_unaccounted)
+                         _fastpath_on, _finalize_dedupe, _finalize_unaccounted,
+                         _narrator_system_pair, _narrator_wire)
 from agent.prompt_context import (_doc_anchors, _has_frames,
                                   _last_assistant_utterance, _recent_tail,
                                   _short_reply_hint, blocked_rows)
@@ -366,6 +367,40 @@ def unaccounted(plan_obj: dict, rounds: int, has_frames: bool) -> dict | None:
     """
     upd = _finalize_unaccounted(plan_obj, rounds, has_frames)
     return None if upd is None else upd.get("plan_obj")
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# §H narrator 的出站装配：**前缀缓存的两处切分**（稳定头 / 变化段 / 上下文块挪尾）
+# ══════════════════════════════════════════════════════════════════════════════
+def narrator_system_pair(state, config, role, receipts: list, block: str, drop: set,
+                         has_action: bool) -> tuple:
+    """narrator 的**两条**系统消息（稳定头 / 变化段）——直调生产 `_narrator_system_pair`。
+
+    **为什么这一格必须接**（20261016 生产实测，486 次 narrator 调用）：前缀缓存命中的
+    是**最长公共前缀**。此前那条系统提示词是一整条、里面从 `{plan}` 起每轮都不同 ⇒
+    **它后面的一切（包括整整 20 条对话历史）一条都进不了缓存**：实测稳定头 8304 字
+    ≈ 5033 tok，而每次命中的中位数**恒为 5248 tok**——命中的恰好只有那个头。
+
+    本臂此前是单条 `_EXECUTOR_PROMPT`，形状与生产改之前一模一样 ⇒ 这次对照的**成本
+    读数**（`eval/token_cost_report.py` 的前缀缓存命中率）两臂不可比。而成本是这次
+    对照的一半论据（见计划），所以它不是锦上添花。
+
+    逐格取值与生产 `model_node` 同源：`plan` 走 `_narrator_plan(state, config)`、
+    `tool_frames` 走 `article_pointer=True`（生产只有 narrator 这一处这么用）、
+    `fact_block` 的占位分岔按**回执**判（不是"印了几行"）。
+    """
+    return _narrator_system_pair(state, config, role, receipts, block, drop, has_action)
+
+
+def narrator_wire(messages: list) -> list:
+    """narrator 的出站序列：补形状 + 把**首条 `[System: …]` 上下文块挪到最后**。
+
+    那条上下文块由 `server._build_messages` 生成，里面的 `current_time` 精确到分钟、
+    `page`/`title` 随访客翻页就变 ⇒ 它站在第一位时，它后面的每一条消息都不可能是公共
+    前缀的一部分。挪到最后，公共前缀就从"稳定头"延伸成"稳定头 + 整段历史"。
+    **只动发给模型的这份副本**：`state["messages"]` 一个字不改。
+    """
+    return _narrator_wire(list(messages or []))
 
 
 def denied(state) -> set[str]:

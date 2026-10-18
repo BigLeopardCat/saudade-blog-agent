@@ -1033,11 +1033,21 @@ _nup = (_last_node(_nf, "model").get("messages") or [])
 check("model update 的末条同样是 narrator 写的那段（`final_reply` 落库同源）",
       bool(_nup) and str(_nup[-1].content) == _NARR_TEXT,
       repr([str(m.content) for m in _nup]))
-_nsys = str(_seen[0][0].content) if _seen else ""
+# 20261019（资产对齐 H）：提示词**从一条拆成两条**（稳定头 / 变化段，前缀缓存），
+# 纪律 1 住在头里、`[本轮工具执行记录]` 住在尾里 ⇒ 判据要**把两条一起看**。仍然要求
+# 那两处都在，也就是"接的是 `_EXECUTOR_PROMPT` 本身、不是另拼一份"——只是它现在由
+# 生产 `_narrator_system_pair` 分成两半交出来。
+_nsys = "\n".join(str(m.content) for m in (_seen[0] if _seen else [])
+                  if isinstance(m, SystemMessage))
 check("narrator 收到的是**生产 narrator 那一份资产**（纪律 1 原文 + `[本轮工具执行记录]`"
       "两处都在 ⇒ 接的是 `_EXECUTOR_PROMPT` 本身，不是另拼一份）",
       "你没有任何可以直接调用的工具" in _nsys and "[本轮工具执行记录]" in _nsys,
       f"{len(_nsys)} 字")
+check("**两条系统消息**：稳定头在最前、变化段在最后（前缀缓存的装配顺序，生产同款）",
+      bool(_seen) and len(_seen[0]) >= 2
+      and isinstance(_seen[0][0], SystemMessage) and isinstance(_seen[0][-1], SystemMessage)
+      and _seen[0][0] is not _seen[0][-1],
+      str([type(m).__name__ for m in (_seen[0] if _seen else [])])[:90])
 check("**立场改写（`_DISCIPLINE_STANCE`）不在 narrator 提示词里**——那是决策循环的东西；"
       "narrator 本就是零工具节点，纪律 1 对它成立",
       "立场改写" not in _nsys)
@@ -1102,8 +1112,17 @@ _norm_owners = sorted({fn.name for fn in ast.walk(ast.parse(_arm_src))
 check("闸门与 narrator 共用**同一份 state 塑形器**（`_norm_state` 是唯一一份，"
       "调用点恰好两处）",
       _norm_owners == ["_narrator_prompt", "gate_node"], str(_norm_owners))
+# 20261019（资产对齐 H）：排版本身搬回了生产（`graph._narrator_system_pair`），臂这侧
+# 只剩"哪几个格填什么"。判据跟着换落点——**两处切分各只有一个产地**：臂调
+# `narrator_system_pair` / `narrator_wire` 各一次，而它们各自转发生产那一个函数一次。
+# 反向对照：谁再手拼一条系统提示词（`_EXECUTOR_PROMPT.format` 回到臂里）当场红。
+_par_src = (ROOT / "agent" / "react_parity.py").read_text(encoding="utf-8")
 check("narrator 的提示词走**唯一入口** `_narrator_prompt` 一处（第二份排版＝漂移源）",
-      _arm_src.count("_EXECUTOR_PROMPT.format") == 1)
+      _arm_src.count("_EXECUTOR_PROMPT.format") == 0
+      and _arm_src.count("narrator_system_pair(") == 1
+      and _par_src.count("_narrator_system_pair(") == 1
+      and _par_src.count("_narrator_wire(") == 1,
+      f"arm={_arm_src.count('narrator_system_pair(')} par={_par_src.count('_narrator_system_pair(')}")
 
 # ── ⑪ 并发：一个臂对象同时服务两轮（20261012 批 4）───────────────────────────
 # `AGENT_ARM=react` 时 `server._agent` 上挂的是**一个**臂对象，而 uvicorn 起 4 个 worker、
