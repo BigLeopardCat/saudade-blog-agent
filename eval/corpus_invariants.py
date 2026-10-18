@@ -102,8 +102,8 @@ from datetime import datetime
 
 # 枚举与读取各只有一份实现（20260925 布局改按天、20260926 补 gz）——别在这里内联 glob/json
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from trace_files import iter_trace_files, parse_trace_name  # noqa: E402
-from trace_io import load_trace  # noqa: E402
+from utils.trace_files import iter_trace_files, parse_trace_name  # noqa: E402
+from utils.trace_io import load_trace  # noqa: E402
 # 连线命令的**唯一** Python 侧实现（命令 → `AUTO_NAVIGATE:<url>` 等连线形）。
 # 这里刻意不复写一份：批 2 之后 trace 里的命令是结构化 `cmd`，与 golden/server 那边
 # 重建出来的是同一件东西，各写一份就是漂移（同 `_cmd_wire` 的文档字符串）。

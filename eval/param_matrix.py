@@ -69,7 +69,7 @@ import golden_arm  # noqa: E402  （臂名/目录的**单一事实源**，别在
 # 枚举的唯一入口；`token_cost_report.totals` 是用量聚合的唯一入口——命中率的分母口径
 # 就在那儿，见该函数 docstring）。
 import token_cost_report  # noqa: E402
-import trace_files  # noqa: E402
+from utils import trace_files  # noqa: E402
 
 ROOT = Path(__file__).resolve().parent.parent
 # 留档目录与"能不能当基线"**同源**取（`golden_arm`）：本模块是 `matrix` 臂 ⇒ 目录是

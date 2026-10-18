@@ -114,7 +114,7 @@ with tempfile.TemporaryDirectory() as td:
     check("  反控：把按天目录整个挪走 ⇒ 0 轮（证明上一条不是恒 2）",
           _stats(os.path.join(td, "nothing"))["rounds"] == 0)
 
-print("\n③ 读不到 ≠ 零条（三态：目录不在 / 枚举器取不到 / 读得到但没数据）")
+print("\n③ 读不到 ≠ 零条（两态：目录不在 / 目录在但没数据）")
 with tempfile.TemporaryDirectory() as td:
     check("目录不存在 → readable=False（如实说读不到，不报 0 轮）",
           _stats(os.path.join(td, "nowhere"))["readable"] is False)
@@ -123,33 +123,36 @@ with tempfile.TemporaryDirectory() as td:
     t = _stats(empty)
     check("目录在、里面没东西 → readable=True 且 rounds=0（**这是事实，不是读不到**）",
           t["readable"] is True and t["rounds"] == 0, str(t))
-    # 反控：枚举器取不到（`eval/` 那两个模块不在）⇒ 也必须报"读不到"，
-    # **不许退回平铺自己扫**（那正是这次的病灶：扫出一个全绿）。
-    _saved = H._trace_readers
-    H._trace_readers = lambda: (None, None)
-    try:
-        t = _stats(empty)
-    finally:
-        H._trace_readers = _saved
-    check("  ⭐ 枚举器取不到 → readable=False（不退回自己扫，也不报 0 轮）",
-          t["readable"] is False, str(t))
 
-print("\n④ 接线：枚举与读取都走 `eval/` 那两份单一实现")
+# **第三态（枚举器取不到）20261019 已随代码一起删掉，不是被放弃的判据**：那一态当年是
+# `H._trace_readers()` 的 try/except 造出来的（`eval/` 那两个模块引不到 ⇒ 报"读不到"、
+# **不许退回平铺自己扫**）。20261019 枚举与读取搬进 `utils/`（生产代码只许 import 本仓的
+# wheel 包）⇒ 它们与 hostinfo 同住一只 wheel，**"取不到"在结构上不存在了**：真丢了就是
+# `import agent.hostinfo` 当场炸（响亮），不会静默退化成一份全绿。留一个 monkeypatch 去
+# 测一条不存在的分支，只是把判据挂在空气上。
+# ⚠️ **本套件不管**（写下来免得起假安心）：目录**存在但读不动**（权限）时 `iter_trace_files`
+# 吞掉 OSError 返回空表 ⇒ `readable=True / rounds=0`，长得跟"今天真的没人聊"一样。
+# 那是 `utils/trace_files.py` 的既有取向（"没数据不是异常"），这一套件没有覆盖它。
+
+print("\n④ 接线：枚举与读取都走 `utils/` 那两份单一实现")
 # **读程序上 AST，不拿源码文本做子串匹配。** 这一节第一版用 `inspect.getsource` + 子串，
 # 结果**被自己的注释骗红**了：上面解释病灶的那段话里写着 `os.listdir(TRACES_DIR)`，
 # 于是"不许出现 listdir"当场命中注释。判据自己犯这个错很讽刺，但正说明那条纪律
 # （见 `docs/`：读程序上 AST，读文件才用正则）不是洁癖 —— 文本里有注释、有字符串、有文档。
+# 射程 = **模块顶层的 import + `trace_stats` 函数体**：20261019 起那两件 import 住在模块
+# 顶部（原来在 `_trace_readers()` 里），只扫函数体会把它们漏掉 ⇒ 下面两条判据**空过**。
 _tree = ast.parse((ROOT / "agent" / "hostinfo.py").read_text(encoding="utf-8"))
 _used: set = set()
-for _fn in _tree.body:
-    if isinstance(_fn, ast.FunctionDef) and _fn.name in ("trace_stats", "_trace_readers"):
-        for _n in ast.walk(_fn):
+for _node in _tree.body:
+    if isinstance(_node, (ast.Import, ast.ImportFrom)):
+        _used.update(a.asname or a.name.split(".")[-1] for a in _node.names)
+for _node in ast.walk(_tree):
+    if isinstance(_node, ast.FunctionDef) and _node.name == "trace_stats":
+        for _n in ast.walk(_node):
             if isinstance(_n, ast.Name):
                 _used.add(_n.id)
             elif isinstance(_n, ast.Attribute):
                 _used.add(_n.attr)          # `os.listdir` / `json.load` 这种
-            elif isinstance(_n, ast.alias):
-                _used.add(_n.name)          # `from eval.trace_files import iter_trace_files`
 check("枚举走 `iter_trace_files`（不是自己 listdir/glob）",
       "iter_trace_files" in _used and not ({"listdir", "glob"} & _used),
       str(sorted(_used & {"iter_trace_files", "listdir", "glob"})))

@@ -178,7 +178,7 @@ def thread_id_for(user_id: int, conversation_id: object, holds_context: bool) ->
 
     `holds_context` 由调用方传（`runtime_probe.holds_context(server._agent)`）：本模块**不读**
     `server._agent`，否则 `agent → server` 就是一个反向 import，而那个方向的环在本仓
-    有前科（`eval/trace_files.py` 那条注）。判据的**取值**仍只有一处实现。
+    有前科（`utils/trace_files.py` 那条注）。判据的**取值**仍只有一处实现。
     """
     if holds_context:
         tid = conversation_thread(conversation_id)

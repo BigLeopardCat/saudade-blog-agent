@@ -122,9 +122,11 @@
   ⇒ 管理助手报表上天天是"今日 0 轮 / 异常 0 / 质检拦截 0 / shadow 权限拒绝 0"，而
   `readable` 还是 `True`（实测：真值 4 轮，它报 0）。**"缺键绝不编 0" 那一族里最坏的一种
   —— 它编的是一份全绿，而且长得跟"今天真的没人聊"一模一样。**
-  修法 = 枚举与读取都走 `eval/trace_files.py` / `eval/trace_io.py` 那两份**单一实现**
-  （⚠️ 这个 import 方向是反的、agent → eval，故意的，理由写在 `_trace_readers` 的
-  docstring 里）；取不到枚举器 ⇒ 报 `readable: False`，**不许退回自己扫**（那正是病灶）。
+  修法 = 枚举与读取都走 `utils/trace_files.py` / `utils/trace_io.py` 那两份**单一实现**
+  （20261019 之前它们在 `eval/` 下，而生产代码只许 import 本仓的 wheel 包
+  ——`tests/test_packaging.py` ① 就是这条闸；搬进 `utils/` 后与写入端 `utils/trace.py`
+  同住一个包，包门面同时收成空的，好让离线读取端不必连带拉起 `config.settings`）；
+  trace 目录不存在 ⇒ 报 `readable: False`，**不许退回自己扫**（那正是病灶）。
   判据搬到 `tests/test_hostinfo_trace_stats.py`（新文件，见下条），含"**只有按天目录**"
   这条正控——那才是生产的形状。**原先那条判据没抓住它，因为夹具只铺平铺布局**：
   判据在一个**已经不存在的形状**上保持绿（同族：`test_ready.py` 那条"判据的前提要自己

@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""`eval/trace_io.py`（trace 读取的唯一实现）的离线自测。
+"""`utils/trace_io.py`（trace 读取的唯一实现）的离线自测。
 
 **为什么需要这条锁**：`.gz` 那一支漏掉任何一个读取端，那个脚本就**静默少看一半语料**——
 不是报错，是数字变小。20260926 实测过一次：一次即席扫描用裸 `json.load` 读"全量 948 份
@@ -26,10 +26,9 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "eval"))
 
-import trace_files as tf  # noqa: E402
-import trace_io  # noqa: E402
-
 from utils import trace as trace_mod  # noqa: E402  （⑦ 那条：真落一份盘看顶层字段）
+from utils import trace_files as tf  # noqa: E402
+from utils import trace_io  # noqa: E402
 
 FAILS = []
 
@@ -167,14 +166,17 @@ def main() -> int:
 
         # ── ④ 全仓只有一个 load_trace 定义，四个读取端都从它取 ─────────────
         defines = []
-        for p in sorted((ROOT / "eval").glob("*.py")):
+        for p in sorted(ROOT.rglob("*.py")):
+            if ".venv" in p.parts:
+                continue
             if re.search(r"^def load_trace\b", p.read_text(encoding="utf-8"), re.M):
-                defines.append(p.name)
-        check("④ 全仓只有 trace_io.py 定义 load_trace（不许再抄第二份）",
-              defines == ["trace_io.py"], f"定义处={defines}")
+                defines.append(str(p.relative_to(ROOT)))
+        check("④ 全仓只有 utils/trace_io.py 定义 load_trace（不许再抄第二份）",
+              defines == ["utils/trace_io.py"], f"定义处={defines}")
         for rel in ("eval/trace_alert.py", "eval/trace_metrics.py",
                     "eval/trace_reconcile.py", "eval/golden_draft.py"):
-            check(f"④ {rel} 从 trace_io 取读取器", "from trace_io import load_trace" in src(rel))
+            check(f"④ {rel} 从 utils.trace_io 取读取器",
+                  "from utils.trace_io import load_trace" in src(rel))
         # 三个曾经"整份读进来"的读取端不得再碰 gzip——留着 `import gzip` 就是留着抄第二份
         # 的口子。trace_reconcile 例外：它的 `_iter_lines` 是**逐行流式**解压（对账要按行扫
         # 大文件），用的不是 load_trace 那条路，这个 import 是它自己的。
@@ -188,7 +190,7 @@ def main() -> int:
         check("⑤ parse_stamp 与 parse_trace_name 同源", tf.parse_stamp(packed) == "20260925T143012")
 
         # ── ⑥ trace_files 仍然只依赖 stdlib（枚举器不该有 IO 语义）─────────
-        tfsrc = src("eval/trace_files.py")
+        tfsrc = src("utils/trace_files.py")
         check("⑥ trace_files.py 不 import json/gzip（IO 归 trace_io）",
               "import json" not in tfsrc and "import gzip" not in tfsrc)
 

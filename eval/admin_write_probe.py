@@ -1638,12 +1638,12 @@ def _trace_events(msg: str, name: str, within_s: int = 300) -> list[dict]:
     为什么非读 trace 不可：批 H 之后"台账真的进了提示词"这件事**只落在 trace 里**
     ——planner 的输入消息不落盘（只有首轮 `context` 且各字段截断），帧本身看不见。
 
-    ⚠️ 枚举**必须走 `eval/trace_files.py::iter_trace_files`**（本仓的 trace 自 20260925
+    ⚠️ 枚举**必须走 `utils/trace_files.py::iter_trace_files`**（本仓的 trace 自 20260925
     起按天分目录）。20260930 之前的这一版用的是 `os.listdir(trace_dir)` ⇒ 恒返回空列表
     ⇒ 两条腿的 trace 断言**全部变成空的绿**：判据还在跑，只是永远看不到证据。
     """
     from config.settings import settings
-    from trace_files import iter_trace_files     # eval/ 在 sys.path[0]（脚本直跑）
+    from utils.trace_files import iter_trace_files     # 枚举的唯一实现（仓根在 sys.path 上）
     best: tuple[str, dict] | None = None
     for p in iter_trace_files(settings.trace_dir):
         try:

@@ -70,8 +70,8 @@ from datetime import datetime, timedelta
 # 四个读取端共用一处，免得"改了布局漏改一个脚本"= 那天它少看一半数据）。
 # 与 `trace_files.py` 同目录，直接按脚本目录导入（本模块本来就被 tests 以同样方式加载）。
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from trace_files import iter_trace_files  # noqa: E402
-from trace_io import load_trace  # noqa: E402  （读取的唯一实现，含 gz）
+from utils.trace_files import iter_trace_files  # noqa: E402
+from utils.trace_io import load_trace  # noqa: E402  （读取的唯一实现，含 gz）
 
 # ── CLI 默认路径（读者函数一律把路径当参数收，模块常量只给 CLI 与自测用）──────
 TRACE_DIR = "/home/ubuntu/Saudade-Blog/logs/agent/traces"
