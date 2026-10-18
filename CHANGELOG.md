@@ -456,6 +456,41 @@
   `f"talkId:` / `f"userId:` 插值）改指新文件；`tests/test_capability_truth.py` 的 `_src`
   改成拼两份文件（那句"留言板只能改不能删"的注明就在 `delete_board_comment` 的 docstring 里）。
 
+- **`tools/base.py` 拆出第七块：后台首页待办 / 日程那一族（批 3）——对外行为零变更**：
+  3404 行 / 70 个模块级定义 → **3061 行 / 62**；**连续的 376 行、10 个模块级名字**
+  （`_TODO_TEXT_LIMIT` / `_TODO_MAX_ROWS` 两张上限常量 + `_todo_rows` / `_todo_row_key` /
+  `_todo_pending` / `_todo_text_hits` 四个帮手 + 读整份 / 追加一条 / 翻完成标记 / 改排期日
+  四个 `@tool`）搬进 `tools/dashboard_todos.py`（422 行 / 8 个顶层函数）。scope 是
+  `admin.console` / `write.console`。选这一刀的依据不是"它多少行"，而是**它自己就是一整条
+  闭环**：读整份 → 按正文定位 → 发一条最小写通道 → **再读整份复核**；端点、判据、复核
+  三件事只服务这一张列表，与标签/分类/账号那些"名字通道"族没有共用语义。
+  **67 个工具的名单与顺序、10 个名字的 AST 逐字相同**（逐函数对过 AST：6 个逐字节相同，
+  4 个只差 `_base.` 前缀那几行），**6 个 docstring 的值一个都没变**。
+  ⚠️ **两处源码文本在搬家时被动过，都写在这里**：① `create_dashboard_todo` 的 `date`
+  形参注解原行 101 列是存量 E501 豁免，搬进新文件按 `docs/lint-baseline.md` 纪律 1 必须折
+  ⇒ 折点挪了一格（`Annotated` 的**相邻字面量拼接**，求值后一字不差）；② `complete_dashboard_todo`
+  里两行 `f"…"` 没有占位符（ruff F541）⇒ 去掉多余的 `f`（求值后一字不差，且新文件按纪律 1
+  必须零 error）。
+  ⚠️ **五个共享帮手全部留在 base，新模块里一律走 `_base.<名>(...)`**（`_admin_get` 7 处、
+  `_pre_read_fail` 3 处、`_admin_todo_post` 2 处、`_own_get` 1 处、`_admin_request` 1 处）：
+  `_admin_get` 是套件**直接打桩**的模块全局，其余四个虽然没人打桩，但本模块**一个名字都不
+  按名从 `tools.base` 取**（模块级 from-import 会让 mypy 在这个环上判不出被 re-export 的名字
+  的类型）。**正控实测**给 `tools.base._admin_get` 打桩后 `list_dashboard_todos` 确实走到桩上；
+  **反控实测**把 base 的 re-export 删掉，调用**响亮地抛** `AttributeError`。
+  ⚠️ `_admin_todo_post`（定义在 base 的共享 HTTP 帮手那一节）**刻意没跟着搬**——它同时服务
+  别的后台最小通道，`tests/test_todo_schedule.py` 还按源码文本钉着"一处实现"。
+  re-export 停在**原位置**；新模块带 `__all__`（四个 `@tool`）。`_todo_row_key` / `_todo_pending`
+  没有任何外部消费方 ⇒ **不 re-export**（导出来就是幽灵入口）。
+  三本账的差额全部来自"搬走而不是新增"：穷举量 `1122 → 1122`（`tools/base.py` 67→62、
+  `tools/dashboard_todos.py` 5——那 5 处是四个工具的 `Annotated` 描述，本来就是"参数说明"
+  不是词表，跟着族走）；类型棘轮 `190 → 190`（**逐文件一格没动**：`tools/base.py` 6、
+  新文件 0 ⇒ 只有 `files_checked` 92→93）；ruff `795 → 793`（`tools/base.py` 20→18、
+  新文件 0，少的 2 条就是上面那两条 F541）。模块台账按文本外科改数（3404/70 → 3061/62）。
+  判据侧取值点跟着搬**一处**、判据字面一字未动、反控实测能红：`tests/test_todo_schedule.py`
+  的三条源码锁改成"两份文件拼一份视图"（**两份都要读**：三条最小通道的**调用点**跟着族搬走了，
+  而 `_admin_todo_post` 的**定义**留在 base ⇒ 只读新文件会把"一处实现"判成 0 处）。
+  反控实测：取值点退回只读 `base.py` ⇒ 当场三条红。
+
 ## 20261017
 
 - **计划只有一个读法了：对象那一态是唯一事实源，渲染文本退成只给人看**——此前计划的

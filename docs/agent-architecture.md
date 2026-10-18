@@ -118,6 +118,7 @@ flowchart TB
 │   ├── admin_read.py          # 管理助手报表族：服务器/健康/审核状况/后台留言名册/用户与文章报表（20261018 拆出）
 │   ├── announcements.py       # 站内公告族：建/改/删公告（20261018 拆出）
 │   ├── board_moderation.py    # 河灯留言人工复核族：驳回/通过、删除留言（20261018 拆出）
+│   ├── dashboard_todos.py     # 后台首页待办/日程族：读整份 / 追加 / 翻完成 / 改排期日（20261018 拆出）
 │   └── __init__.py
 │      ⚠️ 拆出的模块按**原名**在 `base.py` re-export ⇒ 全仓 `from tools.base import …` 一处不改；
 │         但**被套件打桩的模块全局**（`_client` 等 11 个）在新模块里一律写成 `_base.<名>(…)`
