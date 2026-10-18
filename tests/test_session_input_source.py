@@ -29,13 +29,17 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
+import _ctx_src  # noqa: E402  （`_` 开头 ⇒ 不被 run_all 当套件收）
 from langchain_core.messages import AIMessage, HumanMessage  # noqa: E402
 
 import agent.graph as G  # noqa: E402
 from agent.workflow_plan import instantiate_plan  # noqa: E402
 
 FAILED: list[str] = []
-SRC = (ROOT / "agent" / "graph.py").read_text(encoding="utf-8")
+# 取值点跟着代码搬（20261019）：写参数落位与拒答那一族住进了
+# `agent/write_grounding.py` ⇒ 判据字面一个字没动，只把"读 graph.py 全文"
+# 换成"读这一族的全部文件"（`tests/_ctx_src.py::write_guard_src`）。
+SRC = _ctx_src.write_guard_src()
 
 
 def check(name: str, ok: bool, extra: str = "") -> None:
