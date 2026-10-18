@@ -26,7 +26,7 @@ sys.path.insert(0, str(ROOT))
 
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage  # noqa: E402
 
-from agent.context import with_tool_call_pairs  # noqa: E402
+from agent.prompt_context import with_tool_call_pairs  # noqa: E402
 
 FAILED: list[str] = []
 
@@ -190,7 +190,7 @@ print("\n⑥ 出站合规绊线：发出去之前自己先量一遍（20261006�
 # 这一节治的是"合法性只由服务商来告诉我们"：`tool_call_id` 的重复让 deepseek 整轮 400，
 # 而 qwen 容忍 ⇒ 生产一直绿、洞躺了 8 天。`strict_wire_issues` 把服务商的拒收理由变成
 # 我们这边一条**零成本、离线可测**的读数；它**只报不修**（修在 `_frame_id`）。
-from agent.context import strict_wire_issues  # noqa: E402
+from agent.prompt_context import strict_wire_issues  # noqa: E402
 
 check("★ 正控（修前口径）：两轮的帧并进一条 assistant ⇒ 绊线必须亮",
       any(s.startswith("a:") for s in strict_wire_issues(with_tool_call_pairs(_PREV + _R1_OLD + _R2_OLD))),

@@ -14,8 +14,115 @@
 
 **覆盖范围**：20260928 建立，回溯到 20260925（建立前一周）。更早的变更去 `git log`。
 
+## 20261019
+
+- **模块地图补全 + 10 处模块改名**（⚠️ **对外行为零变更**）。四件：
+  ① **`docs/agent-architecture.md` §2 那张目录树此前已经烂了，而没有任何东西会红**：实测点名了
+  3 个已不存在的文件（`adminops.py` / `helpers.py` / `native_plan.py`），磁盘上 38/81 个模块它
+  一个字都没提。根因是 `tests/test_docs_links.py` ④ 的正则要求路径**在反引号里且带 `/`**，而树里
+  写的是 `│   ├── foo.py`（裸名 + 缩进表目录）⇒ **整棵树在它射程之外**。现在 §2 逐条列全 81 个
+  （按族分组、一行一个职责），README 的缩略树改成"挑几个常找的 + 指向 §2"。
+  ② **新判据 `tests/test_module_index.py`**：按缩进推目录栈解析两处树，四条判据——幽灵路径、
+  漏列模块（磁盘 ⊆ 树）、文件行没写职责、同一路径两行；外加**覆盖率自检**（解析器一坏就会
+  "一条都没看见 ⇒ 全对"，所以另有一条独立正则计数与解析器对账）与 8 条正控。
+  ③ **10 处改名**：`agent/context.py` → `prompt_context.py`、`decisions` → `deterministic_plan`、
+  `entities` → `entity_digest`、`refs` → `arg_refs`、`frames` → `frame_contract`、
+  `probe` → `runtime_probe`、`absence` → `absence_claims`、`workflow_defs/{nav,navigation,reports}`
+  → `{nav_map,nav_skills,report_skills}`——都是"看名字猜不出装什么"。**协议值一个都没动**
+  （trace 事件名、`GOLDEN_ARM` 取值、`.env` 键、父仓帧契约）。**唯一的静默失效点是
+  `tests/test_turn_window.py` 的 `logging.getLogger("agent.context")`**：模块改名后它取到 0 条
+  记录也不报错——已同批改掉，并实测反控（把日志名改回旧名必红）。
+  ④ **合并 0 处**：六条候选逐条查过全有硬阻塞（臂名在冻结清单上、合并后 851 行超预算、
+  `__init__.py` 只做 re-export 是反惯例、两条侧任务失败取向相反、`textnorm.py` 有零词表锁、
+  `idem_pg` 是依赖面锁），**写进 §2 旁的注记**，免得下一个人再问一遍。
+  记录型文档（问题记录 / ADR / roadmap / 实验记录）**逐字保留当时的名字**，按既有惯例在文件头
+  加「已改名」对照表。**五本台账只搬键名、数值一格未动**（ruff 774/150，比基线少 1）。
+
 ## 20261018
 
+- **断点恢复落地（批 7）：图开始自持上下文，但默认仍不生效**。三处一起动，共用同一个
+  判据 `server._graph_holds_context()`——**读活体对象上有没有 saver，不读 `CHECKPOINT_DSN`**
+  （配了 DSN 而图没挂 saver 时报"挂了"是本仓最贵的一类失效）。三处 = ① `_build_messages` 的
+  历史注入**套上闸门**（不是删掉：删掉会让没挂 saver 的那条路失去全部跨轮上下文）；②
+  `thread_id` 改会话坐标 `conv_<conversation_id>`（两条路共用 `_thread_id_for`；**会话 id
+  缺席时退回每请求随机**，绝不拼 `conv_None`——那是跨用户串台）；③
+  `create_agent(checkpointer=checkpoint.build_checkpointer())`。持久化档
+  `durability="sync"` **有 saver 才给**（缺省 `async` 下硬杀会让恢复的 task_id 变、幂等账被
+  静默绕过；没 saver 时给了会招 UserWarning，而 `ReactGoldenArm` 没有这个形参 ⇒ `TypeError`
+  炸在生产者里）。**DSN 空 ⇒ `build_checkpointer()` 返回 `None` ⇒ 与 20260903 以来逐字节相同**，
+  所以本次上线**不改任何对外行为**；真开要加 `CHECKPOINT_DSN` 再重启，回执看 `/health` 的
+  `checkpoint_backend` 是不是 `postgres`。
+- **新增 `DELETE /checkpoint/{conversation_id}`（批 7，级联清理的钩子）**：删会话时清掉那个
+  会话的 checkpoint。返回 `{"deleted": bool, "why": str}`——**`false` 不是错误**，`why` 点名
+  是"没挂 saver / 会话 id 非法 / 删完仍读得到"哪一条。**刻意不回 `{"ok": true}`**：一个恒不
+  生效的删除与真删除长得一模一样（`DELETE ... WHERE` 删不存在的线程同样不抛），所以判据是
+  "删完读回来确认"。⚠️ **调用方在父仓**（`purge_conversation_data` 的两个臂），
+  **截至本日父仓那一半还没接上** ⇒ 这个端点今天没有任何调用方，这是已知缺口
+  （判据 `tests/test_checkpoint_cascade.py` ③ 判的是"父仓自己两臂一致"，半接就红）。
+- **`agent/checkpoint.py` 真造 saver 了（批 7）**：PG 连接池 + `PostgresSaver` + 建表。
+  建表包在 `pg_advisory_lock` 里——`saver.setup()` 幂等但**不并发安全**（迁移末尾
+  `INSERT INTO checkpoint_migrations` 没有 `ON CONFLICT`），产线 4 个 worker 同时启动会让
+  后到的主键冲突、**启动崩**。连不上/依赖没装/scheme 不认识 ⇒ **响亮抛、进程起不来**
+  （坏 saver 的失效时刻本该是启动，不是第一轮对话的第一次 checkpoint）。sqlite 那一支
+  **刻意不落地**（4 worker 共用一个文件库没验过）。异常文本里的 DSN 口令已脱敏。
+- **⚠️ 同日追记：上一条里的 `pg_advisory_lock` 造成了一次真停服，已改成 `pg_try_advisory_lock`
+  轮询**。症状：4 个 worker 无限期卡死、**一条日志都没有**（8010 因此根本不监听），
+  `systemctl restart` 也卡在等旧 worker 上。机制：**一条挂着的锁等待就是一条没结束的事务**，
+  而 `setup()` 的迁移里有 `CREATE INDEX CONCURRENTLY`——它要**等所有并发事务收尾**才结束 ⇒
+  持锁者等那三个等锁的事务、那三个等它放锁、它要等 CIC 结束才放锁 = **环**。修法：
+  `pg_try_advisory_lock` 轮询（每次尝试是一条已提交的语句，两次之间不持有任何事务）+
+  60s 预算（超了**响亮抛**，不是无限等）+ 池必须是 `autocommit` 的（否则轮询又退化成一条
+  长事务，环就回来了 ⇒ 加了一条显式断言）。**顺带修掉第二个洞**：
+  `CREATE INDEX CONCURRENTLY IF NOT EXISTS` 会**永远跳过**被打断留下的**无效索引**（那张表
+  从此永远少一个索引而没人红），现在建表前先删掉它。**对外行为零变更**（DSN 空时与从前
+  逐字节相同），但**DSN 一旦填上，建表这一步的行为与第一版不同**——升级前先看这条。
+- **新增 `tests/test_checkpoint_setup_concurrent.py`：真连一个库、4 个进程同时建表**。
+  这是上面那次停服**唯一抓得住**的那一层判据：此前四层全绿，是因为它们**全在
+  `127.0.0.1:1` 这种必然失败的 DSN 上判**，"真连上库、真跑迁移、4 个进程真的同时来"这条
+  路径**从来没被跑过**。它的红基线是把建表换回**阻塞版**（必须卡住、且迁移跑不完），
+  绿是 4/4 成功 + 迁移跑到底 + 不留无效索引。**它只认一个专门的测试库**（会 `DROP TABLE`；
+  指向产线库当场拒跑），缺 DSN 时报「未评估」而不是绿，`tests/run_all.py` 的汇总里
+  每次运行都另起一行说清这次量没量。
+- **`/health` 多一格 `checkpoint_backend`（批 6 前置，对外行为零变更）**：回"**这个进程到底
+  挂没挂 saver**"——`none` / `postgres` / `sqlite` / `memory` / `unknown`（读不出来）/认不出的
+  模块路径原文。**它是从 `_agent` 这个活体对象读的，不是读 `CHECKPOINT_DSN`**：批 7 之前
+  那一格**填了也不生效**（`build_checkpointer()` 全仓没有调用方），读配置的实现会把"配了
+  DSN"报成"挂上了 saver"。判定逻辑住 `agent/probe.checkpoint_backend`，判据
+  `tests/test_health_dials.py` ⑤（含一条反控：拨了 `CHECKPOINT_DSN` 而图没挂 saver ⇒ 这一格
+  **必须不变**）。父仓 `scripts/healthcheck.sh` 按 `"agent_ready":true` 子串判活，多这一格
+  不影响它。
+- **checkpoint 采纳加了一条共现锁（批 6 前置）**：`tests/test_checkpoint_adoption.py` 判的不是
+  "接了没有"，是**"有没有半接"**——四处（saver 交给图 / `thread_id` 是会话坐标 / 历史注入
+  已删 / 持久化档是 sync）要么全「未接」、要么全「已接」，混合就红。今天四处全「未接」
+  （0/4，与生产行为逐字节相同），采纳批（批 7）把四处一起拨过去。**只接 saver 会静默产生
+  双份上下文**（图自持的 state 与 `_build_messages` 注入的 `req.history[-20:]` 两份都在），
+  而此前没有任何判据会红。四条反控各拨一处实测全部翻红；判据读 AST 不读文本
+  （往真源码追加那两个字面的注释，结论逐个不变）。
+- **golden 的线程从常量换成坐标（批 6，评测侧，对外行为零变更）**：`eval/run_golden.py`
+  此前给每一轮传的是常量 `"golden_thread"` ⇒ **所有用例共用同一条线程**。今天没后果
+  （两边都不挂 saver，`thread_id` 是死参数），但接上 saver 之后用例 N+1 会**恢复**用例 N 的
+  state，而症状是"模型退化了"。现在线程 = **(用例, 重复, 臂)** 的坐标
+  （`eval/golden_thread.py`），同一坐标也落进 trace 的 `thread_id` 那一格。驱动的
+  `GOLDEN_REP` 补上"重复"那一段；**驱动的逐遍复位仍然必需**（臂 B 的线程是
+  `conv_<conversation_id>`，跨遍跨臂都相同，坐标管不到它）。判据
+  `tests/test_golden_thread.py`——含一条**拿真语料量撞名**的（192 条用例的线程名两两不同；
+  归一化会把 `a.b` 与 `a-b` 折成同一个 slug，那是真实存在的失效面，不靠直觉）。
+- **管理助手报表里的"今日对话轮数/异常收尾/质检拦截/权限拒绝"此前**天天是 0**（修）**：
+  `hostinfo.trace_stats` 自己按平铺布局扫 trace，而真实布局 20260925 起是**按天一层**
+  ⇒ 一份都扫不到，却报 `readable: True`（实测真值 4 轮、它报 0）。**编出来的是一份全绿**，
+  而且长得跟"今天真的没人聊"一样。现在枚举与读取都走 `eval/` 那两份单一实现（`.gz` 归档
+  也算了），枚举器取不到时如实报"读不到"而不是退回自己扫。判据搬到
+  `tests/test_hostinfo_trace_stats.py`，夹具**同时铺两种布局**并单列"只有按天目录"的正控
+  ——原先那条判据的夹具只铺平铺布局，在一个**已经不存在的形状**上保持绿。
+- **权限影子读数建成（批 5，只测量不切换）**：`eval/authz_shadow_divergence.py` 读 trace 里的
+  `authz_shadow` 事件，把"判 denied 而那一件**真的执行成功**"数成**分歧**（= 今天开
+  `AUTHZ_ENFORCE` 会拦掉的真实执行），判据 `tests/test_authz_shadow.py`（合成 trace、
+  六处变异实测全部翻红）。**首次读数（近 30 天 1145 份 trace）**：影子拒绝 22 条、分歧 10 条，
+  **`denied`（角色已认而 scope 没授予）0 条**；22 条全部落在两个历史现场（20260920 权限模型
+  上线当天的联调流量 10 条，20260929 那条分号事故的解析碎片 12 条）。两处口径被切开并写进
+  [docs/platform-roadmap.md](docs/platform-roadmap.md) 批 5：① `no_manifest` 里"名字在注册表里"
+  （真·漏声明，今天 0 条）与"名字根本不在注册表里"（解析碎片/幻觉工具名）是两件事；
+  ② `unknown_role` 数的是"身份没传进来"，不是"越权"。**`AUTHZ_ENFORCE` 一字未动**。
 - **技能注册表按域拆开、参数 schema 与展开层独立成层（批 2）——对外行为零变更**：
   `agent/workflows.py` 从 4764 行降到 **376 行**，47 条技能定义按域住进 `agent/workflow_defs/`，
   参数规格与事前校验住进 `agent/workflow_params.py`，计划状态闭集住进 `agent/plan_status.py`，
@@ -257,12 +364,438 @@
   "补丁打在哪个模块对象上"决定它生不生效。⚠️ 新模块里**不许**按名 import 那三个被打桩的
   名字（会拿到打桩前的旧函数对象、桩静默失效、测试真去发网络请求）；要调就走
   `tools.base` 的属性——`tools/own_data.py` 今天一个都没用，这条写在它的头注里。
+- **`tools/base.py` 拆出第二块：公开读那一族（批 3）——对外行为零变更**：
+  4776 行 / 121 个模块级定义 → **4282 行 / 101**；从「笔记 / 文章 工具」到「站点信息 工具」
+  这**连续的六节**（文章列表/关键词检索/全文详情/分类标签/公告/留言板/说说/站点信息）搬进
+  `tools/notes.py`（659 行 / 22 个模块级名字：20 个函数 + `_NOTE_COUNT_KEYS` / `DOC_TYPE_CN`）。
+  共同点不是"都是读"这么粗，而是**出口全是公开池**（`read.public`，见 `agent/authz.py` 的
+  scope 登记）——读的是"谁都能看的那一份"，与上一刀搬走的 `tools/own_data.py`（`read.own`）
+  在语义上是两套视图。**67 个工具的名单与顺序、20 个函数的 AST 除下面三行外逐字相同**。
+  ⚠️ **re-export 的位置与另外两刀不同：在文件末尾（注册表之前）**。本模块要
+  `from tools.base import API_BASE, _own_get`，而 `_own_get` 定义在 base 的第 ~1139 行——
+  在原来那一节的位置 import 就是循环 import 的半初始化模块（那个名字还不存在）。判据侧的
+  取值点跟着搬了四处（`tests/test_param_schema.py` 的四个 `Literal[...]`、`tests/test_sections.py`
+  的 `section` 注解与"只对 note 生效"、`tests/test_hardening.py` 的 `verify=False` 扫描、
+  `tests/test_blog_api_base.py` 的站点字面量扫描），都改成"两份文件拼一份视图"、判据字面
+  一字未动，四处都做了反控实测能红。
+- **上面那一刀顺带更正一条写在头注里的实测口径：被套件打桩的 `tools.base` 属性是 11 个，不是 4 个**
+  （此前只数了 `base.<名> = …` 这一种写法，漏掉了 `_B.<名> = …` 那种别名）。全仓 AST 口径：
+  `_client` 159 / `_board_index` 11 / `_get` 10 / `_tag_index` 10 / `_admin_get` 6 /
+  `_quota_pending_index` 5 / **`_public_tag_index` 4** / `_find_named_user` 3 /
+  `_device_get_user_id` 2 / `_sign_local_jwt` 2 / `_user_directory` 2。公开读这一族碰到其中
+  **三个**（`_get` 15 个调用点、`_client.post` 1 个、`_public_tag_index` 2 个）——前两个各加
+  一个**转发壳**（`_get` / `_client_post`），换来"搬过来的正文逐字节未动"这个可验证的性质；
+  第三个只有 2 个短调用点，直接写 `_base.` 前缀。**函数对象取 globals 取的是它自己所在模块的
+  `__dict__`**：按名 import 会把打桩前的旧对象钉死在新模块里，桩静默失效、代码真去发网络请求，
+  而症状只是"断言换了个理由红"（本仓最贵的失效：看着在跑、其实没跑）。
+  ⚠️ **转发壳必须带返回类型注解，且与 `tools.base` 那份逐字一致**：不注解 ⇒ mypy 把返回读成
+  `Any` ⇒ 调用方的类型错误**整片消失**，棘轮会以"变小"的样子掩盖一次搬迁（实测
+  `get_article_detail` 的 `return rows` 那条 `return-value` 就是这样被抹掉、总数 `190→189`）。
+  注解在场时总数回到 **190**——那正是"搬走、不是修好"的机器可读凭据。
+- **三本账的差额全部来自"搬走而不是新增"**：穷举量 `1122 → 1122`（`tools/base.py` 116→103、
+  `tools/notes.py` 13）；类型棘轮 `190 → 190`（`tools/base.py` 14→13、`tools/notes.py` 1）；
+  ruff `815 → 805`（`tools/base.py` 38→30、新文件 0，另 2 条是上一位提交在
+  `tests/test_reports.py` 留下的高水位，同一本账一并收口）。模块台账按文本外科改数
+  （4776/121 → 4282/101）。
+- **顺带清掉一条随搬家变成死代码的 import**：`from rag import sections as _text_sections`
+  在 `tools/base.py` 里已经没有调用点（它唯一的用户就是搬走的那一族）⇒ 连同"为什么必须住在
+  模块顶部"那段理由一起搬进 `tools/notes.py`。同批把 `tools.result` re-export 块里
+  `_LIST_FIELD_MAX` / `_LIST_ROWS_MAX` / `_board_text_keys` / `_cap_rows` / `_clip_fields` /
+  `_rows_with_note` / `_shape` 七个补上 `# noqa: F401 —— 外面取：<谁>`：它们的名字从
+  "本文件在用"变成了"只有外面在用"（原先唯一的调用点就在搬走的那一族里），
+  而那句"外面取：<谁>"才是判据——**别在注释里写死"几个"**，条数当场就变了。
 - **中文词表闸的穷举量那一层补上反方向（判据，批 2 的补网）**：此前**只判"变大"**，
   于是缩小了却不重切账就留下一笔**永久免费额度**——实测 `tools/base.py` 账上 132、盘上 125，
   那 7 条静默（"改完还是绿的"与"没改"同形）。补两条：账比现场松 ⇒ 红（"台账该收紧"）、
   账上有而扫描里没有的文件键 ⇒ 红（"台账该销账"）。与 `test_module_budget` 的双向棘轮、
   `type_gate` / `lint_gate` 的幽灵键守卫同一族。行为零变更（闸更严，不是代码更严）。
+- **`tools/base.py` 拆出第三块：站点与页面那一族（批 3）——对外行为零变更**：
+  4282 行 / 101 个模块级定义 → **4015 行 / 91**；从「导航 / 引导工具」到「站内"停在**某一条**
+  内容上"」这**连续的 310 行、17 个模块级名字**（功能结构图 / 会话历史 / 知识库 / 当前时间与
+  天气 / 导航白名单与路径校验 / 地址形态表 / `navigate_to`·`toggle_effect`·`toggle_dark_mode`
+  三条页面命令）搬进 `tools/site.py`（361 行 / 10 个函数 + 7 个常量）。
+  ⚠️ 这一族**跨三个 scope**（`read.public` / `read.own` / `write.page`，见 `agent/authz.py`），
+  所以粘合剂不是权限，而是"说的都是这个站点长什么样、怎么把访客带过去"——选刀依据写在
+  `tools/site.py` 的头注里。**67 个工具的名单与顺序、10 个函数的 AST 逐字相同**
+  （17 个名字逐个对过 AST，其中 6 个只差折行）。三本账的差额全部来自"搬走而不是新增"：
+  穷举量 `1122 → 1122`（`tools/base.py` 103→88、`tools/site.py` 15，正则中文字符 2→0 / 0→2）；
+  类型棘轮 `190 → 190`；ruff `805 → 799`（`tools/base.py` 30→24、新文件 0——少的那 6 条是
+  这一族里超 100 列的长行，按 `docs/lint-baseline.md` 纪律 1 折了行）。模块台账按文本外科
+  改数（4282/101 → 4015/91）。
+  ⚠️ **re-export 的位置又换了一种**：这一族只按名取 `API_BASE` / `SITE_BASE`（都定义在
+  base 的第 73 / 86 行，早于切口）⇒ 本来可以停在**原位置**，但那里紧挨着 `from tools.device
+  import …`、中间只隔注释，ruff 把两者当成同一段 import 要求按模块名排序（`tools.device` <
+  `tools.site`）⇒ 实际落在 `tools/device.py` 那一块之后。判据侧的取值点跟着搬了一处
+  （`tests/test_param_schema.py` 的四个 `Literal[...]` 扫描加了第三个文件，判据字面一字未动，
+  反控实测能红）。被套件打桩的 11 个名字里这一族只碰到 `_client`（2 个调用点，
+  `search_knowledge_base` 与 `get_weather`）⇒ 直接写 `_base._client.get(…)`，不加转发壳；
+  已实测给 `tools.base._client` 打桩后搬到 `tools/site.py` 的两个函数**确实走到桩上**。
+- **顺带把"中文词表闸"的一条口径写进账里**：这一族带中文的常量只有 `_WEATHER_LOC_RE`
+  一个在登记表里（`_NAV_EXACT_PATHS` / `_ITEM_POSITION_FORMS` 等三张中文表至今未登记），
+  ⇒ 登记表条目按**文本**改 `id`/`file` 到新文件、`metric.by_file` 两侧同时改数
+  （旧文件减、新文件加）。**不许跑 `--update`**：它按新 id 查不到旧条目，重出的条目会丢掉
+  `category` / `q` / `why`，下一轮判"未分类"还是红。
+- **`tools/base.py` 拆出第四块：管理助手报表那一族（批 3）——对外行为零变更**：
+  4014 行 / 91 个模块级定义 → **3855 行 / 84**；**连续的 197 行、7 个 `@tool` 函数**
+  （服务器状态 / 服务健康 / 审核状况 / 后台留言名册 / 用户报表 / 文章流量报表 / 分期报表）
+  搬进 `tools/admin_read.py`（256 行 / 7 个函数）。共同点是 **scope 全是 `admin.console`**
+  （`agent/authz.py`）——"只有管理员用得动的那几张纸"；族内两条通道（本机读数 vs 以发起人
+  身份代调）出口相同，都是渲染好的中文报表。**67 个工具的名单与顺序、7 个函数的 AST
+  逐字相同**（逐个对过 AST）。
+  ⚠️ **一处例外，明写在这里**：`get_service_health` 的 docstring 折了行——原行 101 列是
+  存量 E501 豁免，搬进新文件按 `docs/lint-baseline.md` 纪律 1 必须折 ⇒ **换行位置变了**。
+  词序、标点、字数一字不差（空白归一后逐字相等，实测），但工具描述是**发给模型的文本**，
+  所以按"改了就要说"记在这里，不当作没发生。
+  ⚠️ **本节的共享帮手留在 base**（`ADMIN_BASE` / `_sign_local_jwt` / `_principal_get` /
+  `_admin_get` / `_admin_read_post` / `_own_get`）：它们是「后台读」与「用户自己那一份数据」
+  两条通道共用的底座，而 `_admin_get`（6 处）与 `_sign_local_jwt`（2 处）**被套件直接打桩**
+  ⇒ 搬走等于把桩打空。新模块里 `_admin_get` 一律写 `_base._admin_get(...)`（5 个调用点）。
+  ⚠️ **新模块里一个名字都不按名从 `tools.base` 取**，连 `BOARD_STATUS_FILTERS` 也走
+  `_base.BOARD_STATUS_FILTERS`。两个理由：① 时序——新模块在 base 的**原位置**被 import，
+  那时 base 只定义到第 ~365 行，`from tools.base import BOARD_STATUS_FILTERS`（定义在
+  ~1905 行）当场 ImportError；② **mypy**——模块级写那句 from-import 会让 mypy 在这个环上
+  判不出这七个名字的类型，base 的 `_TOOL_REGISTRY` 当场多出 **7 条 `Cannot determine type`**
+  （实测 `tools/base.py` 13→16，`eval/type_gate.py` 直接红）。⇒ re-export 因此可以停在
+  **原位置**，不必像前两刀那样挪到文件末尾。
+  三本账的差额全部来自"搬走而不是新增"：穷举量 `1122 → 1122`（`tools/base.py` 88→84、
+  `tools/admin_read.py` 4）；类型棘轮 `190 → 190`（`tools/base.py` 13→9、
+  `tools/admin_read.py` 4）；ruff `799 → 798`（`tools/base.py` 24→23、新文件 0，另清掉
+  随搬家变成死代码的 `import os` 与 `typing.Literal`）。模块台账按文本外科改数
+  （4014/91 → 3855/84）。判据侧取值点跟着搬一处（`tests/test_param_schema.py` 的
+  `Literal[...]` 扫描加第四个文件，判据字面一字未动，反控实测能红）。
+- **`tools/base.py` 拆出第五块：站内公告那一族（批 3）——对外行为零变更**：
+  3855 行 / 84 个模块级定义 → **3638 行 / 78**；**连续的 233 行、8 个模块级名字**
+  （`MAX_ANNOUNCE_TITLE` / `MAX_ANNOUNCE_BODY` / `_announcement_index` /
+  `_find_named_announcement` / `_announce_change` + 三个 `@tool`）搬进
+  `tools/announcements.py`（285 行）。共同点是 scope 全是 `write.console`、目标全是
+  **公告标题**。**67 个工具的名单与顺序、8 个名字的 AST 逐字相同**（逐个对过 AST），
+  **6 个 docstring 的值一个都没变**（这一刀没有上一刀那种折行改值的情况）。
+  ⚠️ 这一族里有**两个被套件直接打桩的名字**：`_announcement_index`（6 处）与
+  `_admin_request`（3 处）——`tests/test_tag_admin.py` 的 `patch()` 就是
+  `setattr(tools.base, 名, 桩)` ⇒ 新模块里一律走 `_base.<名>(...)`。**正控实测**：
+  给这两个名字打桩后，搬到新模块的 `create_announcement` 确实走到桩上；
+  **反控实测**：把 base 的 re-export 删掉，调用**响亮地炸** `AttributeError`
+  ——不是悄悄用本模块那一份（"看着在跑、其实没跑"正是要防的那件事）。
+  三个共享帮手（`_admin_request` / `_admin_get` / `_near_miss_names`）留在 base，
+  它们是标签/分类/留言各族共用的底座。**下划线名也照旧 re-export**
+  （`agent/graph.py` 按名取 `_announcement_index` 与 `_find_named_announcement`），
+  而 `MAX_ANNOUNCE_*` / `_announce_change` **不 re-export**——导出来就是两个没人取的幽灵入口。
+- **从这一刀起，新模块交付时带 `__all__`（"按社区惯例收紧"的第一件落地）**：
+  `tools/announcements.py` 的 `__all__` 只列**三个工具**。四个帮手与两个上限常量是
+  实现细节；`_announcement_index` / `_find_named_announcement` 确实被外面按名取，但它们是
+  **下划线名**——按社区惯例不进 `__all__`，由 `tools/base.py` 显式 re-export 供给
+  （显式 import 不受 `__all__` 约束）。⇒ 后面每一刀照此办，不再回头补前面那几个模块。
+  三本账的差额全部来自"搬走而不是新增"：穷举量 `1122 → 1122`（`tools/base.py` 84→76、
+  `tools/announcements.py` 8）；类型棘轮 `190 → 190`（`tools/base.py` 9→8、
+  `tools/announcements.py` 1——⚠️ 这一处 `type_gate` 判红的是"总数没涨但某个文件涨了"，
+  按设计必须显式跑 `--update` 重切，配对关系写在提交正文里）；ruff `798 → 796`
+  （`tools/base.py` 23→21、新文件 0）。模块台账按文本外科改数（3855/84 → 3638/78）。
 
+- **`tools/base.py` 拆出第六块：河灯留言的人工复核那一族（批 3）——对外行为零变更**：
+  3638 行 / 78 个模块级定义 → **3404 行 / 70**；**连续的 263 行、10 个模块级名字**
+  （`BOARD_APPROVED_CN` / `BOARD_STATUS_FILTERS` 两张表 + `_board_index` / `_board_label` /
+  `_board_excerpt` / `_find_board_comment` / `_find_board_comment_by_id` / `_board_state_cn`
+  六个帮手 + `audit_board_comment` / `delete_board_comment` 两个 `@tool`）搬进
+  `tools/board_moderation.py`（313 行 / 8 个顶层函数）。共同点是 scope 全是 `write.console`、
+  目标全是**留言的复核结论**——这一族同时是留言板唯一一条"改别人写的东西"的通道。
+  **67 个工具的名单与顺序、10 个名字的 AST 逐字相同**（10/10 等价：6 个逐字节相同，4 个只差
+  折行与缩进前缀），**6 个 docstring 的值一个都没变**。
+  ⚠️ 这一族里有**两个被套件直接打桩的名字**：`_board_index`（族内 4 个调用点、全仓打桩
+  **11 处**）与 `_admin_get`（1 个调用点、打桩 6 处）——`tests/test_board_admin.py` 的
+  `patch()` 就是 `setattr(tools.base, 名, 桩)` ⇒ 新模块里一律走 `_base.<名>(...)`。
+  **正控实测**：给这两个名字打桩后，搬到新模块的 `audit_board_comment` 确实走到桩上；
+  **反控实测**：把 base 的 re-export 删掉，调用**响亮地炸** `AttributeError`
+  ——不是悄悄用本模块那一份（"看着在跑、其实没跑"正是要防的那件事）。
+  `BOARD_STATUS_FILTERS` 还被 `tools/admin_read.py` 经 `_base.` 读 ⇒ 那一行也不能少。
+  re-export 停在**原位置**（新模块没有从 base 的模块级 from-import ⇒ 无半初始化时序问题，
+  也不触发那条 mypy 环上的 `Cannot determine type`）。新模块带 `__all__`（两张表 + 两个工具）。
+  ⚠️ **`__all__` 的口径在这一刀当天就修正了**：上一刀写的是"只列公开工具"，那是一条**逐模块
+  的裁量**（"什么算公开"每次都要重新争一次）⇒ 改成社区惯例的机械规则「本模块所有不以 `_`
+  开头的模块级名字」，`tools/announcements.py` 的两条头注与 `__all__` 同批改过来
+  （`MAX_ANNOUNCE_*` 两个常量因此进去了）。
+  三本账的差额全部来自"搬走而不是新增"：穷举量 `1122 → 1122`（`tools/base.py` 76→67、
+  `tools/board_moderation.py` 9）；类型棘轮 `190 → 190`（`tools/base.py` 8→6、
+  `tools/board_moderation.py` 2——⚠️ `type_gate` 判红的是"总数没涨但某个文件涨了"，
+  按设计必须显式跑 `--update` 重切，配对关系写在提交正文里）；ruff `796 → 795`
+  （`tools/base.py` 21→20、新文件 0）。模块台账按文本外科改数（3638/78 → 3404/70）。
+  判据侧的取值点跟着搬**两处**，判据字面一字未动、两处都做了反控实测能红：
+  `tests/test_id_namespaces.py` 的 `_SRC` 与两条 `_WIRING` 元组（`_board_label` 的
+  `f"talkId:` / `f"userId:` 插值）改指新文件；`tests/test_capability_truth.py` 的 `_src`
+  改成拼两份文件（那句"留言板只能改不能删"的注明就在 `delete_board_comment` 的 docstring 里）。
+
+- **`tools/base.py` 拆出第七块：后台首页待办 / 日程那一族（批 3）——对外行为零变更**：
+  3404 行 / 70 个模块级定义 → **3061 行 / 62**；**连续的 376 行、10 个模块级名字**
+  （`_TODO_TEXT_LIMIT` / `_TODO_MAX_ROWS` 两张上限常量 + `_todo_rows` / `_todo_row_key` /
+  `_todo_pending` / `_todo_text_hits` 四个帮手 + 读整份 / 追加一条 / 翻完成标记 / 改排期日
+  四个 `@tool`）搬进 `tools/dashboard_todos.py`（422 行 / 8 个顶层函数）。scope 是
+  `admin.console` / `write.console`。选这一刀的依据不是"它多少行"，而是**它自己就是一整条
+  闭环**：读整份 → 按正文定位 → 发一条最小写通道 → **再读整份复核**；端点、判据、复核
+  三件事只服务这一张列表，与标签/分类/账号那些"名字通道"族没有共用语义。
+  **67 个工具的名单与顺序、10 个名字的 AST 逐字相同**（逐函数对过 AST：6 个逐字节相同，
+  4 个只差 `_base.` 前缀那几行），**6 个 docstring 的值一个都没变**。
+  ⚠️ **两处源码文本在搬家时被动过，都写在这里**：① `create_dashboard_todo` 的 `date`
+  形参注解原行 101 列是存量 E501 豁免，搬进新文件按 `docs/lint-baseline.md` 纪律 1 必须折
+  ⇒ 折点挪了一格（`Annotated` 的**相邻字面量拼接**，求值后一字不差）；② `complete_dashboard_todo`
+  里两行 `f"…"` 没有占位符（ruff F541）⇒ 去掉多余的 `f`（求值后一字不差，且新文件按纪律 1
+  必须零 error）。
+  ⚠️ **五个共享帮手全部留在 base，新模块里一律走 `_base.<名>(...)`**（`_admin_get` 7 处、
+  `_pre_read_fail` 3 处、`_admin_todo_post` 2 处、`_own_get` 1 处、`_admin_request` 1 处）：
+  `_admin_get` 是套件**直接打桩**的模块全局，其余四个虽然没人打桩，但本模块**一个名字都不
+  按名从 `tools.base` 取**（模块级 from-import 会让 mypy 在这个环上判不出被 re-export 的名字
+  的类型）。**正控实测**给 `tools.base._admin_get` 打桩后 `list_dashboard_todos` 确实走到桩上；
+  **反控实测**把 base 的 re-export 删掉，调用**响亮地抛** `AttributeError`。
+  ⚠️ `_admin_todo_post`（定义在 base 的共享 HTTP 帮手那一节）**刻意没跟着搬**——它同时服务
+  别的后台最小通道，`tests/test_todo_schedule.py` 还按源码文本钉着"一处实现"。
+  re-export 停在**原位置**；新模块带 `__all__`（四个 `@tool`）。`_todo_row_key` / `_todo_pending`
+  没有任何外部消费方 ⇒ **不 re-export**（导出来就是幽灵入口）。
+  三本账的差额全部来自"搬走而不是新增"：穷举量 `1122 → 1122`（`tools/base.py` 67→62、
+  `tools/dashboard_todos.py` 5——那 5 处是四个工具的 `Annotated` 描述，本来就是"参数说明"
+  不是词表，跟着族走）；类型棘轮 `190 → 190`（**逐文件一格没动**：`tools/base.py` 6、
+  新文件 0 ⇒ 只有 `files_checked` 92→93）；ruff `795 → 793`（`tools/base.py` 20→18、
+  新文件 0，少的 2 条就是上面那两条 F541）。模块台账按文本外科改数（3404/70 → 3061/62）。
+  判据侧取值点跟着搬**一处**、判据字面一字未动、反控实测能红：`tests/test_todo_schedule.py`
+  的三条源码锁改成"两份文件拼一份视图"（**两份都要读**：三条最小通道的**调用点**跟着族搬走了，
+  而 `_admin_todo_post` 的**定义**留在 base ⇒ 只读新文件会把"一处实现"判成 0 处）。
+  反控实测：取值点退回只读 `base.py` ⇒ 当场三条红。
+
+- **`tools/base.py` 拆出第八块：账号管理那一族（批 3）——对外行为零变更**：
+  3061 行 / 62 个模块级定义 → **2416 行 / 45**；**连续的 693 行、21 个模块级名字**
+  （后台名录 + 按名字解析 + 三条最小写通道 + 七件工具：冻结 / 解冻 / 禁言 / 解禁 /
+  变更身份 / 发通知 / 读名录）搬进 `tools/account_admin.py`（754 行 / 17 个顶层函数）。
+  scope 全是 `write.console`。选刀依据是**这一族自己就是一个完整的名字通道闭环**
+  （读名录 → 按账号名解析唯一目标 → 走最小写通道 → 读回复核），且它独占的两条通道
+  （名录那个**不回信封的裸数组接口**、`_policy_post` 那条**政策拒绝**通道）别族都没有。
+  **67 个工具的名单与顺序、21 个名字的 AST 逐字相同**（逐函数对过 AST），
+  **只有一处 docstring 被动过**（见下）。
+  ⚠️⚠️ **这一刀撞上一条此前记漏的打桩形状：套件不是只有 `setattr(base, "名", 桩)` 那种
+  字面写法，还有 `patch(**kw)` + `setattr(base, k, v)` 的变量写法**——先前 AST 扫
+  `X.<名> = …` 得出的"11 个被打桩的名字"**漏掉了整族**。实测全量：`_admin_get` 50 /
+  `_admin_request` 49 / `_tag_index` 47 / `_client` 29 / `_admin_post` 28 /
+  **`_user_directory` 24** / `_board_index` 17 / `_category_index` 15 /
+  `_announcement_index` 13 / `_read_note` 12 / `_own_get` 8 / `_admin_read_post` 7 /
+  `_quota_pending_index` 2 / `_note_index` 1（`_find_named_user` 走的是另一处
+  `base._find_named_user = lambda …`）。⇒ **选刀前的 grep 要同时扫两种写法**。
+  这一族里有 `_user_directory`（族内 **11 个调用点**）与 `_find_named_user`（4 个）是
+  **族内互调**的被打桩名 ⇒ 那 15 处一律写 `_base.<名>(...)`。**这个洞的形态很贵**：
+  搬完 `freeze_account` 仍然"跑得动"，只是它读的是新模块自己那一份真函数、桩静默失效、
+  代码真的去发网络请求——症状只是三个套件换了个理由红（`AttributeError: 'NoneType'
+  object has no attribute 'status_code'`），而"看着在跑、其实没跑"正是本仓最贵的那一类。
+  ⚠️ **`_find_user_by_id` 必须 re-export，而它的消费方就在 base 自己里**：下面额度族
+  （`_review_quota_request`）按 uid 走的就是它。这一条**是 mypy 抓出来的**
+  （`Name "_find_user_by_id" is not defined`，总数 190→191）——"少导一个"在本仓有机器判据，
+  但只有**同一包内还有调用点**时才报得出来。
+  ⚠️ 一处 docstring 折行（**值变了，按"改了就要说"记在这里**）：私有帮手
+  `_find_user_by_id` 的首行 103 列是存量 E501 豁免，搬进新文件按 `docs/lint-baseline.md`
+  纪律 1 必须折 ⇒ 换行位置变了一位。它是下划线名、**不进发给模型的工具描述**，
+  但值确实变了。同批还折了 `_user_directory` 里被 `_base.` 前缀顶过 100 列的那一行
+  （普通语句，求值不变）与两处 `Annotated` 描述（相邻字面量拼接，求值一字不差）。
+  ⚠️ **`logger` 走 `_base.logger` 而不是自己 `getLogger(__name__)`**：这一族的告警行名
+  必须与搬家前逐字相同（换名字 = 日志面上一次没人要求的变更）。**正控**=三个套件用
+  `patch(_user_directory=…)` 喂桩、搬到新模块的工具确实走到桩上；**反控**=把 base 的
+  re-export 删掉，调用响亮地抛 `AttributeError`。
+  re-export 停在**原位置**；新模块带 `__all__`（七个 `@tool`）。
+  三本账的差额全部来自"搬走而不是新增"：穷举量 `1122 → 1122`（`tools/base.py` 62→49、
+  `tools/account_admin.py` 13）；类型棘轮 `190 → 190`（`tools/base.py` 6→5、
+  `tools/account_admin.py` 0→1、`files_checked` 93→94）；ruff `793 → 790`
+  （`tools/base.py` 18→16、新文件 0）。模块台账按文本外科改数（3061/62 → 2416/45）。
+  判据侧取值点跟着搬**两处**、判据字面一字未动、两处都做了反控实测能红：
+  ① `tests/test_write_facts.py` 的源码闭包遍历——它按 `getattr(base, 名)` 找委托的同模块
+  私有函数，而 `freeze_account` 的 `_set_account_frozen` **刻意没有外部消费方、不 re-export**
+  ⇒ 闭包在这里断掉、`fact(` 判据当场红 6 件。正解是**从函数自己的模块取**
+  （`sys.modules[fn.__module__]`），与这条判据原来的语义（"只跟同模块的私有函数"）逐字一致，
+  只是不再假设"同模块 == `tools.base`"。② `tests/test_todo_schedule.py` 的三条源码锁
+  改成"两份文件拼一份视图"（那一刀遗留的口径，本次同批对齐）。⚠️ 这一处让
+  `tests/test_todo_schedule.py` **2073 → 2075 行**（台账 +2，文本外科改数）——多出来的两行
+  就是那句"两份都要读、`_admin_todo_post` 的定义留在 base"的说明；不写它，下一个人会把
+  取值点"顺手统一"回单文件。
+
+- **`tools/base.py` 拆出第九块：对话额度的申请审核那一族（批 3）——对外行为零变更**：
+  2416 行 / 45 个模块级定义 → **2061 行 / 36**；**连续的 387 行、12 个模块级名字**
+  （三张拒绝话术表 + 三个帮手 + 四件工具：读申请队列 / 批准 / 驳回 / 按账号名恢复满额）
+  搬进 `tools/quota_admin.py`（437 行 / 9 个顶层函数），scope 全是 `admin.console` /
+  `write.console`。选刀依据：它自己就是完整闭环（读申请队列 → 按账号名或 uid 解析唯一目标
+  → 代管理员恢复满额 → 读回复核），而"两个入口都是名字通道、只读那件要标出哪几件 agent
+  办不了、拒绝的形态是后端的政策"三条事实都只属于这一族。
+  **67 个工具的名单与顺序、12 个名字的 AST 逐字相同**（逐函数对过 AST），
+  **6 个 docstring 的值一个都没变**；三处折行全是普通语句或相邻字面量拼接（求值不变）。
+  ⚠️ 八个共享帮手全部留在 base、新模块里走 `_base.<名>(...)`：`_user_directory`（族内
+  3 处、套件打桩 24 处）、`_admin_get`（2 处、50 处）、`_quota_pending_index`（2 处、2 处）、
+  `_find_user_by_id`（1 处）、`_find_named_user`（1 处）、`_device_get_user_id`（1 处、2 处）、
+  `_sign_local_jwt`（1 处、2 处）、`_client`（1 处、29 处）。**正控**=`tests/test_chat_quota.py`
+  用 `patch(_user_directory=…, _quota_pending_index=…)` 喂桩、搬到新模块的四件工具确实
+  走到桩上（那条套件本来就红过一次——见第八块那条"打桩形状记漏"的教训）。
+  三本账的差额全部来自"搬走而不是新增"：穷举量 `1122 → 1122`（`tools/base.py` 49→38、
+  `tools/quota_admin.py` 11，登记表里 `_QUOTA_POLICY_REFUSALS` 那条按文本改 `id`/`file`、
+  `category`/`why` 一字不动）；类型棘轮 `190 → 190`（`tools/base.py` 5→2、
+  `tools/quota_admin.py` 0→3、`files_checked` 94→95）；ruff `790 → 789`（见下）。
+  模块台账按文本外科改数（2416/45 → 2061/36）。
+  ⚠️⚠️ **顺带修掉一笔我自己两刀前埋下的 lint 债**：第七块（待办族）把
+  `from tools.dashboard_todos import …` 插在 `from tools.own_data import …` 后面时，两段
+  之间只隔注释、ruff 把它们当成**同一段 import** ⇒ 那一整片 re-export 区（五段）从此
+  **未按模块名排序**，`I001` 当场就该红。当时我把 lint 台账按实测值从 793 收到 790，
+  **等于用"搬走省下来的额度"付掉了自己新引入的那一条**——棘轮只判总数，这一条就这么
+  静默进去了（正是 `docs/lint-baseline.md` 纪律 #1「新增/修改的文件必须 `ruff check` 零
+  error」想防的事；我那次只看了 `Found N errors` 的尾行，没逐条看）。本刀把它修好：
+  五段按模块名重排（`account_admin` < `dashboard_todos` < `notes` < `own_data` <
+  `quota_admin`），**注释块跟着自己那一段走**（⚠️ 直接跑 `ruff --fix` 会把 import 挪走、
+  把注释留在原地——那比不排序更坏，所以是手工搬的整块）。
+  ⇒ 这一笔让 `tools/base.py` 的 ruff 计数从 15 掉到 **14**（`790 → 789`）。
+  教训写进 [[saudade-agent-module-split-discipline]]：**搬完必须逐条看 ruff 输出，不能只看总数**。
+
+- **`tools/base.py` 拆出第十块：标签的建 / 改 / 删那一族（批 3）——对外行为零变更**：
+  2061 行 / 36 个模块级定义 → **1711 行 / 31**；**离散的三段、5 个模块级名字**
+  （两级标签字典 `_tag_index` + 按名字解析 `_find_named_tag` + 三件工具：建 / 改 / 删）
+  搬进 `tools/tag_admin.py`（436 行 / 5 个顶层函数），scope 全是 `write.console`。
+  选刀依据：五件共享同一个解析入口与同一份字典快照，而"两级标签（`level` one/two）让
+  同名标签成为常态、改名会撞名、删标签不删文章（后端外键 `ON DELETE SET NULL`）"三条
+  事实都只属于这一族。
+  **67 个工具的名单与顺序、5 个名字的 AST 逐字相同**（逐函数对过 AST），
+  **docstring 的值一个都没变**；三处文本变更全是**取值不变的排版**：一处 E501 在
+  `（` 边界折成两个相邻 f-string（隐式拼接在 AST 上仍合成同一个 `JoinedStr`，实测往返
+  逐字节相同）、两处 F541（没有占位符的 `f"…"` 去掉 `f` 前缀，取值逐字不变）。
+  ⚠️ 共享帮手全部留在 base、新模块里走 `_base.<名>(...)`：`_admin_get`（族内 2 处、
+  套件打桩 50 处）、`_admin_request`（3 处、49 处）、`_admin_post`（1 处、28 处）、
+  `_near_miss_names`（2 处，按它在 base 的原位置供给公告族与账号族）。
+  ⚠️⚠️ **连本模块自己的 `_tag_index` 也走 `_base._tag_index(...)`（8 处调用点）**：
+  它是这一族里唯一被套件直接打桩的名字（全仓 **47 处** `patch(_tag_index=…)` ⇒
+  `setattr(tools.base, "_tag_index", 桩)`），而函数对象按**自己所在模块**的 `__dict__`
+  解析全局名 ⇒ 裸名调用会解析回本模块的真函数、`tools.base` 上那份桩**静默失效**。
+  **正控**=第一版就是裸名，`tests/test_tag_admin.py` 当场红（`AttributeError:
+  'NoneType' object has no attribute 'get'`——桩喂的是 `config=None`，工具却真去发了
+  请求），`tests/test_admin_write.py` 同因红 9 条；改成属性查找后两套全绿。
+  三本账的差额全部来自"搬走而不是新增"：穷举量 `1122 → 1122`（`tools/base.py` 38→25、
+  `tools/tag_admin.py` 13）；类型棘轮 `190 → 190`（`tools/base.py` 2→1、
+  `tools/tag_admin.py` 0→1、`files_checked` 95→96）；ruff `789 → 784`
+  （`tools/base.py` 14→9，搬走的那 5 条在新文件里当场修净——新文件按纪律 1 必须零 error）。
+  复杂度台账里 `create_tag` / `update_tag` 两条按文本改键名（`tools/base.py::` →
+  `tools/tag_admin.py::`，`c` 仍是 31 / 61 一个字没动）；`create_tag` 的 `lines` 113→114
+  是上面那处 E501 折行的账，与 `tools/own_data.py` 那一刀同款、**已声明**。
+  模块台账按文本外科改数（2061/36 → 1711/31）。
+
+- **`tools/base.py` 拆出第十一块：文章分类的建 / 改 / 删那一族（批 3）——对外行为零变更**：
+  1711 行 / 31 个模块级定义 → **1526 行 / 26**；**连续的 207 行、5 个模块级名字**
+  （分类字典 `_category_index` + 按名字解析 `_find_named_category` + 三件工具：建 / 改 / 删）
+  搬进 `tools/category_admin.py`（260 行 / 5 个顶层函数），scope 全是 `write.console`。
+  选刀依据：五件共享同一份分类字典与同一个解析入口，而"分类是**平铺**的（没有标签那种
+  `level` 收窄，后端对 `categoryTitle` 没有唯一约束、重名真会出现）、删分类不删文章
+  （后端外键 `ON DELETE SET NULL`）、读点打的是**公开面** `/api/category` 而同族的
+  标签走 `/api/tag*`"三条事实都只属于这一族。
+  **67 个工具的名单与顺序、5 个名字的 AST 逐字相同**（逐函数对过 AST），
+  **docstring 的值一个都没变**；唯一一处文本变更是**取值不变的排版**：两处 F541
+  （没有占位符的 `f"…"` 去掉 `f` 前缀）。
+  ⚠️ 共享帮手全部留在 base、新模块里走 `_base.<名>(...)`：`_admin_get`（族内 1 处、
+  套件打桩 50 处）、`_admin_post`（2 处、28 处）、`_admin_request`（1 处、49 处）、
+  `_near_miss_names`（1 处）。
+  ⚠️⚠️ **连本模块自己的 `_category_index` 也走 `_base._category_index(...)`（5 处调用
+  点）**：全仓有 **15 处** `patch(_category_index=…)` ⇒ `setattr(tools.base, …)`，而函数
+  对象按**自己所在模块**的 `__dict__` 解析全局名 ⇒ 裸名调用会让桩静默失效（第十块那条
+  教训的同款，这一刀一开始就按规矩写的）。**正控**=把 `tools.base._category_index` 换成
+  桩，`_find_named_category` 确实走到桩上（真函数拿到 `config=None` 会当场
+  `AttributeError`）；**反控**=`del tools.base._category_index` ⇒ 当场抛响亮的
+  `AttributeError`。
+  ⚠️ 顺带修掉一处 re-export 区的 `I001`：分类那段 re-export 与紧随其后的公告 / 留言两段
+  之间**没有代码**，ruff 把它们当成同一段 import ⇒ 必须按模块名排
+  （`announcements` < `board_moderation` < `category_admin`）。整块（注释头 + import）
+  手工搬到留言段之后——`ruff --fix` 会把 import 挪走、把注释留在原地，那比不排序更坏。
+  三本账的差额全部来自"搬走而不是新增"：穷举量 `1122 → 1122`（`tools/base.py` 25→11、
+  `tools/category_admin.py` 14）；类型棘轮 `190 → 190`（无文件增减，`files_checked`
+  96→97）；ruff `784 → 782`（`tools/base.py` 9→7，搬走的两条在新文件里当场修净）。
+  模块台账按文本外科改数（1711/31 → 1526/26）；复杂度台账**不需要新条目**
+  （这一族没有一件超过 C>30 / 300 行）。
+
+- **`tools/base.py` 拆出第十二块：文章的后台清单 / 改状态 / 打标签那一族（批 3）——
+  对外行为零变更，同时**本文件里一个 `@tool` 都不剩了****：1526 行 / 26 个模块级定义
+  → **1234 行 / 21**。离散的两段、5 个模块级名字（两个读口径 `_read_note` /
+  `_note_index` + 三件工具）搬进 `tools/note_admin.py`（401 行 / 5 个顶层函数），
+  scope 是 `admin.console` + `write.console`。选刀依据：这一族的目标通道是**文章 id**
+  （不是名字——与标签/分类/公告那几族的根本差别），而"读的行必须就是写的行"
+  （`_read_note` 刻意不走 `/api/protected/draft/editor/:id`，那一条会把「编辑修改稿」
+  行解引用成原文章 ⇒ 前值全假、还会多出一篇同标题文章）、"`None` 与 `{}` 是两种事实"
+  两条口径都只属于这一族。
+  ⭐ **67 件工具至此全部按域拆完**（`notes` / `site` / `device` / `own_data` /
+  `admin_read` / `announcements` / `board_moderation` / `dashboard_todos` /
+  `account_admin` / `quota_admin` / `tag_admin` / `category_admin` / `note_admin`），
+  `tools/base.py` 从此只剩**共享 HTTP 通道 + 跨族共享原语 + `_TOOL_REGISTRY`**；
+  它的模块 docstring 原来那句英文（"Each tool is a @tool-decorated function"）已经不成立，
+  一并重写成"本文件现在只留两样东西"。**67 个工具的名单与顺序、5 个名字的 AST 逐字
+  相同**（逐函数对过 AST），**docstring 的值一个都没变**。
+  ⚠️ 八处 E501 折行全是**取值不变的排版**（七处是搬过来的存量、一处是 `_base.` 前缀把
+  那行顶到 106 列）；`f"…"` 的隐式拼接在 AST 上仍合成同一个 `JoinedStr`，实测往返逐字节
+  相同。
+  ⚠️ 共享帮手全部留在 base、新模块里走 `_base.<名>(...)`：`_admin_get`（族内 2 处、
+  套件打桩 50 处）、`_admin_post`（2 处、28 处）、`_admin_read_post`（1 处、7 处）、
+  `_tag_index`（2 处、47 处）、`_category_index`（2 处、15 处）、`_near_miss_names`（2 处）、
+  `_as_article_id`（3 处）。⚠️⚠️ **连本模块自己的 `_read_note` / `_note_index` 也走
+  `_base.<名>(...)`**（各被套件打桩 12 处 / 1 处）——裸名调用会让桩静默失效。
+  **正控**=把 `tools.base._read_note` 换成桩，`set_article_status` 读到的是桩里的标题
+  （`文章 12《桩标题》本来就是公开，无需改动`）；**反控**=`del tools.base._read_note`
+  ⇒ 当场抛响亮的 `AttributeError`。
+  ⚠️ `_as_article_id` 与 `_near_miss_names` **故意没跟着搬**：前者被
+  `tools/own_data.py` 与 `agent/adminops_noop.py` 按名 import、后者供给四族 ⇒ 都是跨族
+  共享原语，搬走只会多一层"按名 re-export 再被按名取"的间接（原地加了一句说明）。
+  ⚠️ 本刀顺带清掉三处**因最后一族搬走而变成死引用**的东西：`Annotated` 与 `tool` 两个
+  import 从 `tools/base.py` 删除；`empty` / `fact` / `ok` / `tgt` 四个信封构造器在本文件
+  已无调用点，但前三个仍有外部消费方（`base.fact(...)` / `base.ok(...)` / `base.tgt(...)`）
+  ⇒ 按本节既有契约补上 `# noqa: F401 —— 外面取：<谁>`；**`empty` 一度被我判成幽灵入口删掉，
+  实测 `tests/test_hardening.py` 按 `base.empty` 取的是**函数对象**（不是调用）⇒ 当场
+  `AttributeError`**，已恢复并补注。教训：找消费方时**不能要求后面跟括号**。
+  ⚠️ re-export 区的 `I001` 又来了一次（同第十一块）：`set_article_status` /
+  `set_article_tags` 两件工具搬走之后，原本被它们隔开的**两段 import 合并成一段**
+  ⇒ 账号管理那段必须按模块名排到公告之前。整块（注释头 + import）手工搬。
+  三本账的差额全部来自"搬走而不是新增"：穷举量 `1122 → 1122`（`tools/base.py` 11→2、
+  `tools/note_admin.py` 9）；类型棘轮 `190 → 190`（`tools/base.py` 1→0、
+  `tools/note_admin.py` 0→1、`files_checked` 97→98）；ruff `782 → 775`
+  （`tools/base.py` **7→0，整条销账**，搬走的七条在新文件里当场修净）。
+  模块台账按文本外科改数（1526/26 → 1234/21；其中 +22 行是本刀重写模块 docstring 的账——原来那句英文
+  "Each tool is a @tool-decorated function" 已经不成立，**已声明**）；复杂度台账
+  `tools/base.py::set_article_status` → `tools/note_admin.py::set_article_status`
+  （按文本改键名，`c` 仍是 31；`lines` 82→84 是上面那两处折行的账，**已声明**）。
+  README 与 `docs/agent-architecture.md` 里"base.py 有 67 个工具"那句改成新口径
+  （67 仍是注册表总数，只是不再住在 base.py 里）。
+- **批 4：两处改名 + 新公开模块的 `__all__`，以及它的机械判据**。四件：
+  ① **标识符改名，协议值一个不动**：`graph._sated_read_workflow` → `_already_read_workflow`
+  （定义/调用/散文 4 处 + 测试 13 处）、dataclass 字段 `native_note` → `planner_note`
+  （9 处 + 3 个测试）。⚠️ **trace 事件名 `sated_read_strip` 与 trace 键 `"native_note"`
+  冻结**（30 天保留窗口内新旧要能分到一堆，且 `eval/token_cost_report.py` /
+  `eval/baseline_group.py` 按后者切语料）⇒ 两处定义点各补了一段"标识符与键名故意不同名，
+  不是漏改"的注记。注记**刻意不写事件名的字面量**——写进 docstring 会把按文本做的断言
+  截断（`test_menu_deny` 当场红，见 ④）。`_SATED_READ_NUDGE` 那句话术同理不动。
+  ② **`__all__` 补齐 11 个模块**（`tools/` 六个 + `agent/workflow_*` 五个），规则是「本模块
+  **所有不以 `_` 开头**的模块级名字」；顺带补上 `agent/workflow_params.py` 漏掉的 `logger`。
+  `tools/base.py` **刻意不写**：它今天的模块级公开名只剩 5 个，而它真正的面是按原名
+  re-export 的 67 件工具 ⇒ 真按机械规则写，`from tools.base import *` 会**当场少掉 67 个
+  名字**（判据亲手制造"看着在跑、其实没跑"）；手抄一份 67 名名单又是本仓点名的反模式。
+  ③ **新判据 `tests/test_module_exports.py`**：把「新公开模块要有 `__all__`」从散文变成机械闸
+  ——`__all__` 的**集合**必须等于机械集合（**比集合不比列表**：次序是排版选择，本仓几张表按
+  ruff 那套"常量优先 + 不区分大小写"排过）。覆盖面只到**这一批产出的模块族**（`tools/**.py`
+  + `agent/workflow_*.py` + `agent/workflow_defs/*.py`，29 个文件），存量模块不扩面。带三样：
+  正控（少列/多列/没写/非字面量/重复，五条合成源必须报红）、覆盖面自检（≥20 个文件 + 点名
+  几个已知文件，防 scope 写歪之后**空转**）、`base.py` 豁免的**反控**（base.py 的真实源码喂
+  进去必须报红，且断言机械集合会藏掉 67/67 件工具）。
+  ④ 同一次排查把**一条按文本做的判据改成读 AST**：`test_menu_deny` 那条"两条事件在同一个
+  函数里、`name_nudge` 在前"原本比两个 `str.index` 下标，被①新加的 docstring 截断——本仓
+  四犯的老坑（注释里写一个选择器就把按文本的断言切断）。改读 AST 之后顺带**真判了**"在同一个
+  函数里"（旧版 check 名字里那句话其实没有人判），并补正控（分住两个函数 / 顺序反了，两条
+  合成源都必须红）。
+  ⚠️ **三条路线裁决（本轮没做，附理由）**：`build_planner_context(slim=False)` 那条分支
+  **不删**——它只剩测试在走，但 `tests/test_slim_workflows.py` 拿它当**对照臂**（判据①要求
+  "删掉的必须是 schema 里逐字有的"，没有完整那一份就无从比；删它等于毁掉一个判据的负控）；
+  `slim` 的**缺省不翻**（约 20 个测试按缺省取的是完整那一份，翻缺省等于把那些测试悄悄改指到
+  另一支）；`rag.sections.slim_frame` 的改名**跳过**（它的"同族"理由随前两条一起塌掉）。
+  ⚠️ 模块台账 `agent/graph.py` 13196 → **13206**（+10 行全是上面那三段注记，**已声明**；
+  它是图本体，本轮按主人裁决不动拆分）。其余四本账**一个数没动**：复杂度 58 条、类型
+  190/29、ruff 775/150、词表闸不变（新增的 `__all__` 是 ASCII 列表，不进词表闸的计数）。
+- **批 5：`pyproject.toml` 补包元数据**（`authors` / `keywords` / `classifiers` 三样；
+  `description` / `readme` / `urls` 本来就有）。三条口径：版权持有者取 `LICENSE` 里那个名字
+  （`Copyright (c) 2026 BigLeopardCat`），邮箱取 GitHub 的 noreply 地址——包元数据是要发出去的，
+  别把私人邮箱写进去；**刻意不写** `License :: OSI Approved :: MIT License` 那条 classifier
+  （`license` 已经是 SPDX 表达式，PEP 639 下两者同场就是同一件事写两处，新一点的打包工具会为
+  它报弃用）；**刻意不写** `Typing :: Typed`（本仓没有 `py.typed`、签名注释也没铺满 ⇒ 那句话
+  会说成假的）。`Development Status :: 4 - Beta` 是**如实**读数（产线在跑，版本仍是 0.2.0、
+  结构还在动）。`[project.urls]` 只留 Homepage：手上就这一个地址，再加一条 `Repository` 是
+  同一个字符串写两遍。`uv lock --check` 复验过——73 个包、lock 未失效（这三样是**与依赖解析
+  无关**的元数据）。**ruff 与 mypy 的口径一个字没动**（`docs/lint-baseline.md` 那条书面取舍
+  照旧：存量不当门禁、只当参照点）。
 ## 20261017
 
 - **计划只有一个读法了：对象那一态是唯一事实源，渲染文本退成只给人看**——此前计划的

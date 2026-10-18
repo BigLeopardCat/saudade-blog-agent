@@ -4,7 +4,7 @@ agent 与 Rust/device-service 同机部署，所以"服务器健康度"不需要
 读 `/proc`、`shutil.disk_usage`、`systemctl`、日志文件就够了。这也让运维报表
 **不经过**后台那道门（不消耗发起人的身份），与审核/用户报表的通道是两回事。
 
-分层理由（与 `rag/sections.py`、`agent/entities.py` 同一手法）：把「真去读 /proc、
+分层理由（与 `rag/sections.py`、`agent/entity_digest.py` 同一手法）：把「真去读 /proc、
 跑 systemctl、tail 日志」和「把这些数字组织成人话」分开。前者只有真机上才有意义，
 后者可以喂构造数据单测——而报表最容易错的恰恰是后者（百分比、单位、边界、截断），
 不是前者。所以本模块的函数分两族：`read_*` 碰系统，`parse_*` / `render_*` 只碰数据。
@@ -26,7 +26,6 @@ agent 与 Rust/device-service 同机部署，所以"服务器健康度"不需要
 
 from __future__ import annotations
 
-import json
 import logging
 import os
 import shutil
@@ -186,29 +185,55 @@ def log_sizes(root: str = LOGS_DIR) -> list[dict]:
     return out
 
 
+def _trace_readers():
+    """`(枚举器, 读取器)` —— 走 `eval/` 那两个模块；取不到 ⇒ `(None, None)`。
+
+    ⚠️ **这个 import 方向是反的**（`agent/` → `eval/`），是故意的：那两个模块刻意
+    零依赖（只吃路径参数、不 import 应用配置，见各自头注），而**枚举只有一个入口**
+    是它们的立身之本——另写一份 glob 就是它们当初要消灭的那种漂移。要换掉这个方向，
+    得先把枚举搬到一个两边都引得动的位置。
+
+    **为什么要换**（20261018 实测）：本函数原来自己 `os.listdir(TRACES_DIR)` +
+    `fn.endswith(".json")`，那是 **20260925 之前**的平铺布局。布局改成"按天一层"
+    （`<root>/<YYYYMMDD>/`）之后，`os.listdir` 回的全是目录名 ⇒ 一份都进不了循环
+    ⇒ 报表上**天天**是"今日 0 轮 / 异常 0 / 质检拦截 0 / 权限拒绝 0"，而 `readable`
+    还是 `True`。**"缺键绝不编 0" 那一族里最坏的一种：它编的是一份全绿。**
+    （`tests/test_reports.py` 的夹具写的就是平铺布局 ⇒ 判据结构上看不见这个。）
+    """
+    try:
+        from eval.trace_files import iter_trace_files
+        from eval.trace_io import load_trace
+    except Exception:  # noqa: BLE001
+        logger.warning("[hostinfo] 取不到 eval.trace_files / eval.trace_io"
+                       " ⇒ trace 统计按'读不到'报（不按 0 报）")
+        return None, None
+    return iter_trace_files, load_trace
+
+
 def trace_stats(day_start: datetime | None = None) -> dict:
     """今日对话 trace 的概况：轮数 / 异常收尾 / 质检拦截 / shadow 权限拒绝。
 
-    trace 文件按天轮转（rename+compress，`.gz` 归档），所以目录里的 `.json` 基本
-    就是当天的。仍按 mtime 过滤一次，避免轮转延迟或手工拷进来的旧文件混进来。
+    **按 mtime 过滤**一次（`day_start` 之后），因为归档、手工拷贝、按天目录的边界
+    都可能把别的日子的文件带进来。`.json` 与 `.gz` 都算（压缩归档也是 trace 语料）。
     """
     day_start = day_start or datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
     cutoff = day_start.timestamp()
     rounds = abnormal = fallback = denied = 0
-    try:
-        names = os.listdir(TRACES_DIR)
-    except OSError:
-        return {"rounds": 0, "abnormal": 0, "fallback": 0, "denied": 0, "readable": False}
-    for fn in names:
-        if not fn.endswith(".json"):
-            continue
-        p = os.path.join(TRACES_DIR, fn)
+    unreadable = {"rounds": 0, "abnormal": 0, "fallback": 0, "denied": 0,
+                  "readable": False}
+    iter_trace_files, load_trace = _trace_readers()
+    if iter_trace_files is None or not os.path.isdir(TRACES_DIR):
+        return unreadable
+    for p in iter_trace_files(TRACES_DIR):
         try:
             if os.path.getmtime(p) < cutoff:
                 continue
-            with open(p) as f:
-                d = json.load(f)
-        except (OSError, ValueError):
+        except OSError:
+            continue
+        # 「读不到」与「里面没有那件事」是两件事（`load_trace` 头注）：坏文件**跳过**，
+        # 不让一个半写的 trace 把整份统计带崩，也不把它算成一轮。
+        d = load_trace(p)
+        if not isinstance(d, dict):
             continue
         rounds += 1
         if d.get("end_reason") != "producer_done":

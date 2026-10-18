@@ -175,6 +175,29 @@ def _ambient_note(env: dict) -> str:
             f"单跑某个套件时请带上 `SAUDADE_IGNORE_ENV_FILE=1` 与 {want}")
 
 
+def _ckpt_layer_note(env: dict) -> str:
+    """每次运行都报一句：**真连库那一层判据这次量了没有**。
+
+    `tests/test_checkpoint_setup_concurrent.py` 缺 DSN 时报的是「未评估」并**退 0**
+    （不许因为量不了就报绿）——但那样一来，汇总表上它就是一行平白的 `✓`，与"真量过"长得
+    一模一样。20261018 那次真停服正是死在这一层、而当时所有套件全绿 ⇒ **"没量"必须每次
+    都说出来**，不能只在那个套件自己的输出里说一遍。
+
+    它判的是**子进程实际会看到的那个取值**（`env`，不是 `os.environ`）：这一层的前提
+    是 DSN，而 DSN 不进 `_PINNED`（钉住它就得钉一个真库，本机没有那个前提）。
+    """
+    dsn = (env.get("SAUDADE_CKPT_TEST_DSN") or "").strip()
+    if not dsn:
+        return ("⏭  真连库 · 4 进程并发建表那一层**本次未评估**"
+                "（没有 SAUDADE_CKPT_TEST_DSN）——上面那个 ✓ 只代表「前提不可用」，"
+                "不代表这一层是绿的")
+    db = dsn.rsplit("/", 1)[-1].split("?", 1)[0]
+    if "saudade_blog" in db:
+        return (f"⏭  真连库 · 4 进程并发建表那一层**本次未评估**"
+                f"（SAUDADE_CKPT_TEST_DSN 指向产线库 {db!r}，套件当场拒跑）")
+    return f"✅ 真连库 · 4 进程并发建表那一层**本次量了**（库 = {db}）"
+
+
 def _coverage_report(env: dict) -> None:
     """把各子进程留下的并行数据文件合起来，出一份**非门禁**报告（见模块头注）。
 
@@ -299,6 +322,8 @@ def main() -> int:
         print(f"{'✓' if rc == 0 else '✗'}  {str(name):<38} rc={rc:<3} {dt:5.1f}s")
     print(f"\n{len(rows) - len(failed)}/{len(rows)} 通过"
           + (f"；红：{'、'.join(str(f) for f in failed)}" if failed else ""))
+    # 紧跟在那句"多少/多少通过"后面：**"通过"这个数不含"哪一层没量"**。
+    print(_ckpt_layer_note(env))
     if args.coverage:
         _coverage_report(env)
     return 1 if failed else 0

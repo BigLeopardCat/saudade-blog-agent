@@ -47,6 +47,11 @@ from tools.base import (
 )
 from tools.result import ToolResult, _shape, fact, not_found, ok, tgt, unavailable
 
+# `__all__` = 本模块**所有不以 `_` 开头**的模块级名字（社区惯例，不留例外；
+# `tests/test_module_exports.py` 按这条规则机械判着，漂了就红）。
+__all__ = ["list_my_favorites", "get_unread_summary", "list_notifications", "add_favorite",
+           "remove_favorite", "read_notifications", "list_my_messages", "read_messages"]
+
 # ---------------------------------------------------------------------------
 # 用户自己的数据工具（20260923：收藏 / 未读汇总 / 站内通知）
 # ---------------------------------------------------------------------------
@@ -65,7 +70,7 @@ from tools.result import ToolResult, _shape, fact, not_found, ok, tgt, unavailab
 #   ③ 返回值走 `_shape(data)`（结构化），**不做中文报表**——它们是"用户要的值"
 #      （标题、日期、已读态），narrator 手上还有完整 ToolMessage 可转述；报表那套
 #      渲染（agent/reports.py）是给"数字必须可信、模型数不了"的管理报表用的。
-#      planner 那一侧由 `_compact_list_frame` 压成一行一条（见 agent/context.py）。
+#      planner 那一侧由 `_compact_list_frame` 压成一行一条（见 agent/prompt_context.py）。
 #
 # 端点（Rust 侧，src/routes/profile.rs）：`/favorites`、`/notifications`、
 # `/notifications/summary` 都只认 auth_uid，**自己读自己**——没有"读别人的"接口。

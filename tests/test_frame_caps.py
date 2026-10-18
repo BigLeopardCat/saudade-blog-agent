@@ -5,9 +5,9 @@
 
   · `tools/base.py::_cap_rows` / `_clip_fields`（列表类工具的行数/字段封顶）
     ＋ `_cap_rows(offset=…)`（**取回更早的那一页**，20261005 收口）
-  · `agent/entities.py::_note_total` / `_note_range`（跨轮摘要必须跟着说真话）
+  · `agent/entity_digest.py::_note_total` / `_note_range`（跨轮摘要必须跟着说真话）
   · `agent/graph.py::_cap_frame_text`（帧文本的单帧硬顶 + 单轮总量顶，**头尾各半**）
-  · `agent/context.py::_frame_texts(article_pointer=…)`（正文不再投喂两遍）
+  · `agent/prompt_context.py::_frame_texts(article_pointer=…)`（正文不再投喂两遍）
 
 判据的核心不是"封顶生效了"，而是**没到上限时一个字节都不变**——三个上限的取值都是
 "今天够不着"的量级（20261005 实测：board 25 行 / talk 11 行 / 公告 9 行，最长单帧
@@ -27,8 +27,8 @@ sys.path.insert(0, str(ROOT))
 from langchain_core.messages import ToolMessage  # noqa: E402
 
 import tools.base as base  # noqa: E402
-from agent import entities  # noqa: E402
-from agent.context import _frame_texts  # noqa: E402
+from agent import entity_digest  # noqa: E402
+from agent.prompt_context import _frame_texts  # noqa: E402
 from agent.graph import (_FRAME_HARD_MAX, _FRAME_MIN_KEEP,  # noqa: E402
                          _TURN_FRAME_TOTAL, _cap_frame_text)
 
@@ -98,9 +98,9 @@ check("offset=60 ⇒ 带回第 61-120 条（**不是**最新那批）",
 check("注记写明号段、总数与下一个 offset",
       "第 61-120 条" in note3 and "共 200 条" in note3 and "offset=120" in note3, note3)
 check("★ 号段与总数都从**同一条注记**读得出（跨轮摘要靠它认这是哪一页）",
-      entities._note_total(base._rows_with_note(rows3, note3)) == 200
-      and entities._note_range(base._rows_with_note(rows3, note3)) == (61, 120),
-      str(entities._note_range(base._rows_with_note(rows3, note3))))
+      entity_digest._note_total(base._rows_with_note(rows3, note3)) == 200
+      and entity_digest._note_range(base._rows_with_note(rows3, note3)) == (61, 120),
+      str(entity_digest._note_range(base._rows_with_note(rows3, note3))))
 
 rows4, note4 = base._cap_rows(_board_rows(200), base._LIST_ROWS_MAX, "留言", 180)
 check("翻到末页 ⇒ 明写『已到末尾』（不让 planner 继续空转）",
@@ -168,21 +168,21 @@ try:
     capped_out = _parse(base.list_guestbook.invoke({}))
 finally:
     base._get = _real_get
-digest = entities.receipt_digest("list_guestbook", repr(capped_out))
+digest = entity_digest.receipt_digest("list_guestbook", repr(capped_out))
 check("摘要里同时出现『最近60条』与『共200条』",
       "最近60条/共200条" in digest, digest[:60])
-check("`_note_total` 从注记里读得出总数", entities._note_total(capped_out) == 200,
-      str(entities._note_total(capped_out)))
+check("`_note_total` 从注记里读得出总数", entity_digest._note_total(capped_out) == 200,
+      str(entity_digest._note_total(capped_out)))
 uncapped = _board_rows(25)
 check("★ 没被裁过时摘要口径不变（仍是『最近25条』，一个字都没多）",
-      entities.receipt_digest("list_guestbook", repr(uncapped)).startswith("最近25条: "),
-      entities.receipt_digest("list_guestbook", repr(uncapped))[:30])
+      entity_digest.receipt_digest("list_guestbook", repr(uncapped)).startswith("最近25条: "),
+      entity_digest.receipt_digest("list_guestbook", repr(uncapped))[:30])
 check("没有注记时 `_note_total` 安静地给 0（不猜）",
-      entities._note_total(uncapped) == 0)
+      entity_digest._note_total(uncapped) == 0)
 check("没有号段时 `_note_range` 安静地给 None（不猜）",
-      entities._note_range(uncapped) is None)
+      entity_digest._note_range(uncapped) is None)
 
-dig_off = entities.receipt_digest("list_guestbook", repr(base._rows_with_note(rows3, note3)))
+dig_off = entity_digest.receipt_digest("list_guestbook", repr(base._rows_with_note(rows3, note3)))
 check("★ 翻页拉回来的那一页**绝不说成『最近 N 条』**（否则跨轮记忆把第 61 条当最新）",
       "第61-120条/共200条" in dig_off and "最近" not in dig_off, dig_off[:50])
 

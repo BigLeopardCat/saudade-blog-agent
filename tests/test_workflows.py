@@ -44,7 +44,7 @@ from agent.graph import (REFLECT_MAX_ROUNDS, _article_fast_path,
                          plan_encode, plan_state, parse_plan, reflector_node,
                          route_after_execute, route_after_reflector)
 from agent.workflow_defs import WORKFLOW_MAP, visible_workflows
-from agent.workflow_defs.nav import NAV_MAP, NAV_VALID_PATHS
+from agent.workflow_defs.nav_map import NAV_MAP, NAV_VALID_PATHS
 from agent.workflow_plan import instantiate_plan
 # 假 planner LLM 的共享桩：把夹具里现成的 `WORKFLOW=/PARAMS=` 文本翻成 tool_calls
 # （20261004 起接口层只剩 native tool calls，桩缺 `bind_tools` 会 AttributeError）。
@@ -412,7 +412,7 @@ def test_nav_fast_path():
     for msg in ["我想去旅行", "帮我留言", "去火星基地", "今天去哪儿",
                 "我想去看看", "怎么去图书馆借书",
                 "小猫咪我们去设备控制台", "去/category/tech",
-                # 20260920b：动词**之后**的否定词（与显示快道对齐，见 decisions.py）
+                # 20260920b：动词**之后**的否定词（与显示快道对齐，见 deterministic_plan.py）
                 "带我去留言板不用了", "去说说算了别去了", "带我去设备控制台，不用麻烦了"]:
         check(f"快道不命中「{msg}」→ None（落回 LLM）",
               _nav_fast_path(msg) is None, str(_nav_fast_path(msg)))
@@ -468,7 +468,7 @@ def test_dashboard_nav_expansion():
       ④ 「转跳后台」不再需要澄清板块，且 planner 提示词里写着这条纪律。
     """
     print("[dashboard_nav] 后台各面板进导航白名单（面板名与后台侧边栏逐字一致）")
-    from agent.workflow_defs.nav import DASHBOARD_PANELS
+    from agent.workflow_defs.nav_map import DASHBOARD_PANELS
     from agent.workflow_menu import _NAV_MAP_LINES
     from agent.graph import _PLANNER_PROMPT
     import tools.base as base
@@ -599,7 +599,7 @@ def test_fast_path_shell_transparency():
     # 因此恒不命中过（导航快道/同意闸/短应答，见 `authz.strip_user_shell` 注）。判据必须
     # 对**两层**都透明，而"透明"的判据是逐字相同的结论，不是"都不命中"（那是恒不命中
     # 那个病本身）——所以最后一条专门断言带称呼的导航命令**确实**命中。
-    from agent.context import _is_short_reply
+    from agent.prompt_context import _is_short_reply
     V = "小猫咪，"
     for _nm, _f, _s in [
         ("导航快道", _nav_fast_path, "带我去留言板"),
@@ -1714,14 +1714,14 @@ def test_gate_false_negative_claim():
 
     判据（graph.py `_false_negative_claim`）：本轮**回执在场** + 回复称"本轮/这轮
     没有（未）执行…任何工具 / 回执为空" → fallback；回执不在场时那是**真话**，必须
-    放行。治本侧在 context.py：空结果渲染成「（已执行，结果为空）」，与"没执行"分开。
+    放行。治本侧在 prompt_context.py：空结果渲染成「（已执行，结果为空）」，与"没执行"分开。
 
     作用域刻意窄（宁漏勿误伤，同 5a-5d）：只认"任何工具"的无差别否认与"回执为空"，
     具名动作的否认（"本轮没有执行任何跳转操作"）不归此判据。
     """
     print("[gate] 假否定声称（谎称本轮未执行）")
-    from agent.context import _frame_texts, _receipts_text
     from agent.graph import _false_negative_claim
+    from agent.prompt_context import _frame_texts, _receipts_text
 
     # ── 治本侧：空结果必须与"没执行"在措辞上分开 ─────────────────────────
     empty_frame = ToolMessage(content="[]", tool_call_id="execute_0", name="search_notes")
@@ -2791,13 +2791,13 @@ def test_execute_node():
 
 
 def test_refs():
-    """参数引用（20260919，agent/refs.py）：planner 在参数里写 `$<工具>[<序号>].<字段>`，
+    """参数引用（20260919，agent/arg_refs.py）：planner 在参数里写 `$<工具>[<序号>].<字段>`，
     execute 从**结构化**的已执行结果取值填参——不是让模型从 300 字截断帧里"读"出 id
     再抄一遍。覆盖：字面量识别（不误伤 /article/$x 这类非引用）/ 取值范围与错误码五族 /
     提示词字段提示（防臆造路径）/ 原因码回取 / execute 集成（同轮与跨轮依赖、失败不执行）
     / 过程行不泄露内部语法。"""
     import agent.graph as g
-    from agent import refs as R
+    from agent import arg_refs as R
     print("[refs] 引用字面量解析")
     check("识别：$tool[0] 与 $tool[2].a.b 都是引用",
           R.is_ref("$search_notes[0]") and R.is_ref("$list_notes[12].noteKey"))
@@ -3842,7 +3842,7 @@ def test_doc_anchors_and_clip():
     rag_search 命中 46《文章向量空间图谱项目文档》→ 被拦截器读全文 → 整轮跑偏。
     锚点注入让"是哪一篇"不再需要检索；_clip_mid 让长回复中段的文档名不再被截掉。
     """
-    from agent.context import _clip_mid, _doc_anchors, _recent_tail
+    from agent.prompt_context import _clip_mid, _doc_anchors, _recent_tail
 
     sys_msg = HumanMessage(content=(
         "[System: user_id=1, page=https://saudade.site/device-console/; current_effects=none; "
@@ -3860,7 +3860,7 @@ def test_doc_anchors_and_clip():
         HumanMessage(content="你看了吗就说没写"),
     ]
     # 解析器按"站内语料"打桩（这条测锚点侧接线，不走网络/索引）；stub 空值 = 语料里没有
-    import agent.context as ctx
+    import agent.prompt_context as ctx
 
     orig_lookup = ctx._doc_id_lookup
     ctx._doc_id_lookup = lambda t: {"文章向量空间图谱项目文档": "46",
@@ -3951,7 +3951,7 @@ def test_doc_anchors_and_clip():
     # 跨轮执行记忆行的**格式契约**（Rust render_exec_row；20260920 批次 c 起行首补
     # 时间、行尾可带（×N））：agent 侧消费方是 _doc_anchors 的读取行正则与 planner
     # 规则 6 的据实转述——格式漂移会让锚点静默失效，这里拿两种真实形态锁住。
-    from agent.context import _DOC_READ_ROW_RE
+    from agent.prompt_context import _DOC_READ_ROW_RE
     row = "09-20 21:03 读取文章 19《Saudade Blog AI Agent（泠月喵）架构文档》"
     m = _DOC_READ_ROW_RE.search(row)
     check("执行记忆行：行首时间不破坏读取行解析", bool(m) and m.group(1) == "19")
@@ -3971,7 +3971,7 @@ def test_doc_title_resolution():
     note 14 存在）。语料索引里本来就有全部可见文章的标题 → id，解析出来即可，模型
     不必猜。纪律：**唯一命中才给 id**——锚点是确定性事实，宁可留"未见过 id"。
     """
-    import agent.context as ctx
+    import agent.prompt_context as ctx
     from rag.search import match_doc_title
     docs = [
         {"type": "note", "id": 14, "title": "ESP32-S3-OBC固件接入参考"},
@@ -4033,8 +4033,8 @@ def test_doc_anchor_grounding():
 
     本测试的语料全部**逐字取自生产 trace**（出处见每条用例注释）。
     """
-    import agent.context as ctx
-    from agent.context import _doc_anchors
+    import agent.prompt_context as ctx
+    from agent.prompt_context import _doc_anchors
 
     # 语料打桩：只有这几篇是站内文章（其余解析不出 ⇒ 不进清单）
     CORPUS = {"Python asyncio 异步并发：进程、线程、协程、任务与事件循环": "23",
@@ -4129,7 +4129,7 @@ def test_short_reply_and_adjacent_pairs():
     ② 新增确定性短应答判定（同意 → 把泠月提议的那件事真的规划出来执行；
     拒绝 → 零调用收尾、绝不执行），提示里直接给出被承接的那句泠月发言。
     """
-    from agent.context import (_SHORT_MAX, _is_short_reply, _last_assistant_utterance,
+    from agent.prompt_context import (_SHORT_MAX, _is_short_reply, _last_assistant_utterance,
                                _recent_tail, _short_core, _short_reply_hint)
 
     # —— 准入 = 形状，零词表（20261015 批 3 换表征）——
@@ -4351,7 +4351,7 @@ def test_site_guide_is_role_rendered():
     都"有据"，据的是那份不会动的清单。判据：清单里的能力行必须由技能注册表推导，
     角色是唯一开关。
     """
-    from agent.context import site_guide
+    from agent.prompt_context import site_guide
     from agent.workflow_defs import WORKFLOWS, visible_workflows
     guest, admin = site_guide(None), site_guide("admin")
     # ① 每个"有 capability 且对某角色可见"的技能，其能力行必须出现在该角色的清单里。
@@ -4377,10 +4377,10 @@ def test_site_guide_is_role_rendered():
     for word in ["新建文章标签", "发布状态", "服务器运行状况"]:
         assert word not in guest, f"访客清单出现管理能力字眼: {word}"
     # ④ 两份清单都必须保住收束句（转述契约的落点）。
-    # 20260929 批 G 起这句是**两句**（防漏列 + 防超纲，见 context._SITE_GUIDE_CLOSING）：
+    # 20260929 批 G 起这句是**两句**（防漏列 + 防超纲，见 prompt_context._SITE_GUIDE_CLOSING）：
     # 这里断言的是**常量整句**而不是手抄的子串——手抄件会随着句子变长悄悄失配
     # （本轮实测：句子尾巴一改，这条就红在"引用了一句已经不存在的话"上）。
-    from agent.context import _SITE_GUIDE_CLOSING
+    from agent.prompt_context import _SITE_GUIDE_CLOSING
     for text in (guest, admin):
         assert text.endswith(_SITE_GUIDE_CLOSING)
         assert "介绍能力时按此完整列出，不要遗漏" in text
@@ -4394,11 +4394,11 @@ def test_site_guide_is_role_rendered():
 
 def test_site_guide_covers_nav_map():
     """SITE_GUIDE（访客变体 site_guide(None)）必须覆盖 NAV_MAP 全部存活路径
-    （`workflow_defs/nav.py` 单一事实来源，新增板块两侧同步；None=已下线不列）。防 narrator 介绍板块漏项——20260905
+    （`workflow_defs/nav_map.py` 单一事实来源，新增板块两侧同步；None=已下线不列）。防 narrator 介绍板块漏项——20260905
     trace 190827 实证：能做啥只列 4 项漏 IoT/河灯。20260921 能力清单改按角色渲染后
     此锁仍指向访客变体（管理能力行不得进访客清单，由 test_site_guide_is_role_rendered 锁）。"""
     import agent.graph as g
-    from agent.workflow_defs.nav import NAV_MAP
+    from agent.workflow_defs.nav_map import NAV_MAP
     alive = {p for p in NAV_MAP.values() if p is not None}
     missing = [p for p in sorted(alive) if p not in g.SITE_GUIDE]
     assert not missing, f"SITE_GUIDE 缺板块路径: {missing}"

@@ -24,7 +24,7 @@ from typing import Any
 
 import agent.adminops_tags as _tags
 from agent.workflow_defs import _WRITE_TARGET_CHANNEL, WORKFLOW_MAP, WRITE_WORKFLOW_NAMES
-from agent.workflow_defs.nav import (
+from agent.workflow_defs.nav_map import (
     _IOT_NAV_ALIASES,
     _IOT_OFF_NOTE,
     _NAV_REF_HINT,
@@ -58,6 +58,10 @@ from agent.workflow_params import (
 )
 from agent.workflow_tools import callable_query_tools, explicit_tools
 from tools.base import IOT_ENABLED, IOT_NAV_PATH, nav_path_valid
+
+# `__all__` = 本模块**所有不以 `_` 开头**的模块级名字（社区惯例，不留例外；
+# `tests/test_module_exports.py` 按这条规则机械判着，漂了就红）。
+__all__ = ["logger", "instantiate_plan"]
 
 logger = logging.getLogger(__name__)
 

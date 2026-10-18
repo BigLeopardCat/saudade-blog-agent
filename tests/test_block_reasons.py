@@ -15,7 +15,7 @@
     （server 贴过程行、本表贴喂给 planner 的类型），漏登记一个码不该是静默的；
   · ③ `_check_spec` 的每个 BLOCK 出口都在表里 —— 源码级总括（含那条 `or` 链末端的
     `error_frame`）+ 行为级抽查（真的调一次，看返回的码进不进表）；
-  · ④ `agent/context.py::blocked_rows` —— 渲染形状：技能名/原因中文（**不裸英文码**）/
+  · ④ `agent/prompt_context.py::blocked_rows` —— 渲染形状：技能名/原因中文（**不裸英文码**）/
     "能不能改参重试"两族措辞/无受阻项时渲染空串（整块只在有受阻项时才付）；
   · ⑤ 接线 —— 模板有槽、渲染函数有形参、`planner_node` 每轮都传、`execute` 往受阻项
     里写了 `workflow`。
@@ -36,8 +36,8 @@ sys.path.insert(0, str(ROOT))
 
 import _ctx_src  # noqa: E402  （`_` 开头 ⇒ 不被 run_all 当套件收）
 
-import agent.context as ctx  # noqa: E402
 import agent.graph as g  # noqa: E402
+import agent.prompt_context as ctx  # noqa: E402
 import server as srv  # noqa: E402
 from agent.block_reasons import REASONS, block_reason_type  # noqa: E402
 
@@ -210,7 +210,7 @@ check("端到端：渲染出来的提示词里真的有这一行（不是只写�
 
 # ── ⑥ 生产侧的码必须都在表里（20261018 批 4）──────────────────────────────
 # ③ 判的是**取回侧**（`_check_spec` 认哪几个字面、六个取回通道还接不接着）。它看不见
-# **生产侧**——往帧里写码的是 `agent/refs.py` 的字面返回，以及 `agent/authz.py` /
+# **生产侧**——往帧里写码的是 `agent/arg_refs.py` 的字面返回，以及 `agent/authz.py` /
 # `agent/adminops_target.py` / `agent/idem.py` 的 `REASON_*` 具名常量。新增一个码却
 # 忘了登记，后果是**静默**的：取回侧的通道是宽松的 `([a-z_]+)`，新码照原样流到 planner
 # 面前——中文回落成裸英文码、`retry_param` 回落成 True（`block_reasons` 的 fail-safe）。
@@ -250,7 +250,7 @@ def produced_codes(sources: dict) -> set:
 _NOT_REASONS = {"ok"}
 
 _SRC = {_p: (ROOT / _p).read_text(encoding="utf-8")
-        for _p in ("agent/refs.py", "agent/authz.py", "agent/adminops_target.py",
+        for _p in ("agent/arg_refs.py", "agent/authz.py", "agent/adminops_target.py",
                    "agent/idem.py", "agent/graph.py")}
 _PRODUCED = produced_codes(_SRC) - _NOT_REASONS
 check("正控：生产侧确实扫到了码（扫不到的话下面那条是**空过**——"

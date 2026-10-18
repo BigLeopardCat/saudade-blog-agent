@@ -20,7 +20,7 @@
   · `quote_spans` —— 读**主人自己打的引号**（标点级封闭结构，不进任何词表）；
   · `sources` —— 列出"他看得到的原文"（本轮原话 / 上一张卡的台账行 / 跨轮任务台账
     / 执行记忆行）。**刻意不含自由形状的工具帧**：跨轮跨工具的取值走既有的
-    `refs.py` `$tool[N].field`（机器解析，比"模型摘抄一段"更严），两条并行来源是
+    `arg_refs.py` `$tool[N].field`（机器解析，比"模型摘抄一段"更严），两条并行来源是
     第二份名单式的隐患；
   · `review` —— 逐参数判 `归一(value) ⊆ 归一(quote) ⊆ 归一(某来源)`，并记下**来源**。
 判定"值 ⊆ 引文"是**逐字**比对（键盘噪声归一见 `agent/textnorm.py`），不含任何
@@ -229,7 +229,7 @@ def review(evidence, wanted, user_msg, ledger_src: str = "",
     `wanted` = 可迭代的 `(arg, value)`（`arg` 是工具参数名，`value` 是要写下去的那个
     值，标量或列表）。**只判非空、非 `$ref` 的值**：空值不是"没出处"（那是
     `check_workflow_params` 的缺参问题），而 `$tool[N].field` 是机器解析出来的引用
-    （`refs.py`），没有字面可核——调用方本来也该在带引用时整条早退。
+    （`arg_refs.py`），没有字面可核——调用方本来也该在带引用时整条早退。
     """
     pairs = parse_evidence(evidence)
     srcs = sources(user_msg, ledger_src, exec_src)

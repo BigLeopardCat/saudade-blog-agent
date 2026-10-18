@@ -29,6 +29,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 import server  # noqa: E402
+from agent import runtime_probe  # noqa: E402
 from config.settings import settings  # noqa: E402
 
 FAILED: list[str] = []
@@ -60,9 +61,15 @@ def wire(r: dict) -> str:
 # `enabled=true / active=false / missing=0`，两个布尔加一个计数拼不出"还在建"这个意思。
 # 20261015：`agent_task_state` 那一格删掉（任务状态撤档**常开** ⇒ 一格恒定真值的
 # "档位"是噪声，同 20261004 删 `planner_engine`）。
+# 20261018（批 6）：加 `checkpoint_backend` 一格——**这个进程到底挂没挂 saver**。
+# 它是"从活体对象读、不从 .env 推"这条纪律的第二个实例（第一个是上面那批内存取值），
+# 而这里推错的代价更直接：**配了 `CHECKPOINT_DSN` 不等于这个进程挂上了 saver**
+# （DSN 连不上/进程是配之前起的/图那个对象上根本没接），读配置的实现会把
+# "配了 DSN"报成"挂上了 saver"——那正是本仓最贵的一类失效。
 DIAL_KEYS = {"planner_native_thinking", "agent_fastpath",
              "llm_provider", "llm_model",
-             "rag_hybrid_enabled", "rag_hybrid_active", "rag_state", "vector_missing"}
+             "rag_hybrid_enabled", "rag_hybrid_active", "rag_state", "vector_missing",
+             "checkpoint_backend"}
 
 print("① 存活探针那半**逐字不变**（scripts/healthcheck.sh 按子串判活）")
 _old_agent = server._agent
@@ -171,6 +178,82 @@ try:
 finally:
     for k, v in _saved_rag.items():
         setattr(settings, k, v)
+
+print()
+print("⑤ checkpoint_backend：**这个进程挂没挂 saver**，且**不许从 .env 推**")
+# 本节的判据全部打在 `runtime_probe.checkpoint_backend` 这个纯函数上（它只收一个对象），
+# 再各配一条走 `/health` 真路由的断言——只判纯函数的话，"路由接没接上"这一格没人看
+# （`DIAL_KEYS` 只判键在不在，不判值从哪来）。
+
+
+def _saver(module: str):
+    """造一个**类住在这个模块名下**的假 saver。不 import 真后端：产线 `.venv` 里
+    一个都没装（`agent/checkpoint.py` 的《可验证面》），为了造个假对象去装它就把判据
+    变成了环境依赖。"""
+    cls = type("FakeSaver", (), {})
+    cls.__module__ = module
+    return cls()
+
+
+class _Graph:
+    """`CompiledStateGraph` 的形状：`checkpointer` 属性（`Pregel.__init__` 设的）。"""
+
+    def __init__(self, checkpointer):
+        self.checkpointer = checkpointer
+
+
+class _Shell:
+    """`agent/checkpoint_arm.py` 那类外壳的形状：saver 挂在自己身上、图套在 `.graph`。"""
+
+    def __init__(self, saver, inner):
+        self.saver = saver
+        self.graph = inner
+
+
+check("没挂 saver 的图 ⇒ none（今天生产的形态）",
+      runtime_probe.checkpoint_backend(_Graph(None)) == "none")
+check("挂 PostgresSaver ⇒ postgres（含 `.aio` 子模块那种异步档）",
+      runtime_probe.checkpoint_backend(
+          _Graph(_saver("langgraph.checkpoint.postgres"))) == "postgres"
+      and runtime_probe.checkpoint_backend(
+          _Graph(_saver("langgraph.checkpoint.postgres.aio"))) == "postgres")
+check("挂内存档 ⇒ memory（**这一档不是噪声**：4 个 worker 下每 worker 各记各的、"
+      "且不报错，它是'挂了错的那种 saver'唯一的出口）",
+      runtime_probe.checkpoint_backend(_Graph(_saver("langgraph.checkpoint.memory"))) == "memory")
+check("外壳把图套在 `.graph` 里 ⇒ 也读得到（只往里钻一层）",
+      runtime_probe.checkpoint_backend(_Shell(None, _Graph(_saver("langgraph.checkpoint.sqlite"))))
+      == "sqlite")
+# 两条**读不出来**的分支。它们各自都要与 `none` 分开：把"取不到"报成"没挂"就是
+# `hostinfo.trace_stats` 那条 `readable` 栽过的同形跟头。
+check("图还没建（`_agent is None`）⇒ unknown，**不许**报成 none",
+      runtime_probe.checkpoint_backend(None) == "unknown")
+check("认不出的对象（三个属性一个都没有）⇒ unknown，**不许**报成 none",
+      runtime_probe.checkpoint_backend(object()) == "unknown")
+check("认不出的 saver 类 ⇒ 回模块路径原文（不编一个已知名字顶上）",
+      runtime_probe.checkpoint_backend(_Graph(_saver("my.custom.saver"))) == "my.custom.saver")
+
+_old_agent = server._agent
+_saved_dsn = settings.checkpoint_dsn
+try:
+    # 走真路由：`/health` 读的必须是 `_agent` 这个活体对象。
+    server._agent = _Graph(_saver("langgraph.checkpoint.postgres"))
+    check("`/health` 的 checkpoint_backend 取自 `_agent`（换成挂了 saver 的图，它当场变）",
+          call()["dials"]["checkpoint_backend"] == "postgres")
+    server._agent = _Graph(None)
+    # **反控**（本节的要点）：把 `CHECKPOINT_DSN` 拨成一个合法 DSN，那一格**必须不变**。
+    # 变了就说明这一格是从配置推的，而"配了 DSN"与"这个进程挂上了 saver"是两件事
+    # （拨的是**已经起好的那个进程**的配置，图那个对象一个字节没变）⇒ 从配置推会把
+    # 前者报成后者。接线落地（批 7）之后这条反控**照旧成立**，理由不变。
+    settings.checkpoint_dsn = "postgresql://u:p@127.0.0.1:5432/x"
+    check("（反控）拨了 CHECKPOINT_DSN 但图没挂 saver ⇒ 仍是 none，**不从 .env 推**",
+          call()["dials"]["checkpoint_backend"] == "none",
+          call()["dials"]["checkpoint_backend"])
+    settings.checkpoint_dsn = ""
+    check("（反控的对照）DSN 拨回去，这一格还是 none（上面那条不是碰巧）",
+          call()["dials"]["checkpoint_backend"] == "none")
+finally:
+    server._agent = _old_agent
+    settings.checkpoint_dsn = _saved_dsn
 
 print()
 if FAILED:

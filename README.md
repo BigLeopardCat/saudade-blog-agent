@@ -176,11 +176,13 @@ gate 失败时生成确定性 fallback，减少再次幻觉的机会。回复不
 
 ```text
 saudade-blog-agent/
+# 下面这张是**缩略图**：只挑读者最常找的几个模块。agent/ 与 tools/ 的**完整地图**
+# （每个模块一行、按族分组）在 docs/agent-architecture.md 的 §2，由 tests/test_module_index.py 双向钉着。
 ├── server.py              FastAPI 入口、SSE 编排、输入限制、并发和取消
 ├── agent/
 │   ├── graph.py           LangGraph 状态、节点和条件边（含声称闸与回执驱动循环）
-│   ├── decisions.py       零 LLM 确定性决策和快道
-│   ├── context.py         上下文、工具帧和回执组装
+│   ├── deterministic_plan.py  零 LLM 确定性决策和快道
+│   ├── prompt_context.py  注入 planner 的提示词文本组装（页面/能力/工具帧/回执）
 │   ├── plan_codec.py      计划文本契约的编解码（plan_encode / plan_state / parse_plan）
 │   ├── tool_specs.py      执行清单条目的解析与去重裁剪（_tool_args / _trim_done_reads 等）
 │   ├── repeat_guard.py    逐字复读判据（_repeat_reason / _recent_ai_replies 等，gate 1b）
@@ -189,16 +191,17 @@ saudade-blog-agent/
 │   ├── authz.py           scope 权限模型
 │   ├── principal.py       调用者身份（uid/role/source）的唯一构造点
 │   ├── confirm.py         无状态 HMAC 确认令牌
-│   ├── adminops.py        后台目标解析、写操作确认文案和回执摘要
-│   ├── refs.py            结构化参数引用
-│   ├── entities.py        执行回执实体摘要
+│   ├── adminops_tags.py   后台标签/分类/文章状态的确定性层（同族另有 7 个按域拆出的模块）
+│   ├── arg_refs.py        结构化参数引用
+│   ├── entity_digest.py   执行回执实体摘要
 │   ├── tasks.py           跨轮任务状态
 │   ├── hostinfo.py        本机运维读数（只读 /proc、systemctl、日志）
 │   ├── prompts.py         ★ 全部模型可见正文（人设 / 叙述纪律 / planner 与 reflector 模板 / 输出契约）
 │   ├── moderator.py       留言 AI 审核侧任务
 │   ├── summarizer.py      对话摘要侧任务
-│   └── …                  其余模块见目录（action_text / factblock / stickers / llm_usage / agent / checkpoint 等）
-├── tools/base.py          67 个工具、工具注册表和 ToolResult 契约
+│   └── …                  其余 40 余个模块见 docs/agent-architecture.md §2（完整地图，逐条列）
+├── tools/base.py          67 个工具的注册表（`_TOOL_REGISTRY`；工具本体 20261018 起
+│                          按域拆在 tools/ 各模块里，这里按原名 re-export）+ 共享 HTTP 通道
 ├── rag/search.py          BM25 内存倒排检索
 ├── rag/sections.py        超长文章分节（索引 / 帧 / 按节取回三处共用；纯函数）
 ├── eval/                  检索评测、golden 评测、trace 分析与跨源对账

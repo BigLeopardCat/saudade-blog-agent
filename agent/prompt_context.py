@@ -6,7 +6,7 @@
 
 拆出动机：graph.py 曾是 2000+ 行单体——图拓扑（节点/边/路由）与该层纯文本
 组装混在一起，读一处要翻半屏无关代码。本层被 graph 的节点调用，自身不依赖
-图（decisions.py 也用它），是天然的叶子层。
+图（deterministic_plan.py 也用它），是天然的叶子层。
 """
 
 import ast
@@ -158,7 +158,7 @@ _NARRATOR_TURNS = 10
 def _is_system_block(m) -> bool:
     """服务端注入的上下文块（`[System: …]` 的 HumanMessage）——**不是主人说的话**。
 
-    全仓原本有四处各写一份，取法还不一致（`context.py:534`/`:573`、`graph.py:6131`
+    全仓原本有四处各写一份，取法还不一致（`prompt_context.py:534`/`:573`、`graph.py:6131`
     是 `startswith`；`graph.py:3865` 是 `.lstrip().startswith`）。这里取**宽的那一版**
     （`.lstrip()`）——判据的意图是"这条是不是注入块"，不是"注入块有没有被缩进过"。
 
@@ -303,7 +303,7 @@ _GUESTBOOK_URL_RE = re.compile(r"/(?:guestbook|he)\b")
 # 未命中即缺失；近义重问还模板复读同文（489=489）。纪律 2 要求"页面存在"须
 # 有据——板块事实不注入，narrator 只能靠记忆碎片或检索命中拼。解法：常驻注入
 # 页面上下文（planner 与 model 均可见，模型只转述），与 GUESTBOOK_GUIDE 同构。
-# 板块路径与 NAV_MAP（`workflow_defs/nav.py` 单一事实来源）保持一致，新增板块须同步此处与
+# 板块路径与 NAV_MAP（`workflow_defs/nav_map.py` 单一事实来源）保持一致，新增板块须同步此处与
 # test_workflows 断言。
 # 物联网平台那一段随开关走（20261002，`IOT_ENABLED`，见 `tools/base.py` 与博客仓 `iot/`）：
 #   · 装了就照旧列进板块清单——它是真实存在的页面，清单必须覆盖它（否则
@@ -433,7 +433,7 @@ def _dashboard_clause() -> str:
     ② 访客问"后台里有什么"、博主问"我能改哪些东西"时，narrator 得答得出来。
     手写这份清单就是第三份副本（本模块 20260921 刚把能力行改成渲染），所以现算。
     """
-    from agent.workflow_defs.nav import DASHBOARD_PANELS  # 局部导入：同 site_guide 的理由（叶子层）
+    from agent.workflow_defs.nav_map import DASHBOARD_PANELS  # 局部导入：叶子层，同 site_guide
     return "、".join(f"{name}（{path}）" for name, path in DASHBOARD_PANELS)
 # 管理能力的引导语（能力**内容**仍来自注册表的 capability 字段，这里只有抬头）
 _ADMIN_GUIDE_HEAD = "🔑 以管理员身份（本轮对话者是博主本人）你还额外能做："

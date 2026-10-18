@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """实体摘要单测（纯函数、零网络、零 LLM，秒级）。
 
-被测 = agent/entities.py 的 receipt_digest()：把数据工具返回压成一行可引用实体摘要
+被测 = agent/entity_digest.py 的 receipt_digest()：把数据工具返回压成一行可引用实体摘要
 （20260920 探针驱动：指代解析已正确但取值靠重跑工具；摘要随回执落 execution_log，
 下轮作为 recent_executions 注入 ⇒ 指代可零调用取值）。
 
@@ -20,7 +20,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent  # 仓根（20260924：测试统一搬进 tests/）
 sys.path.insert(0, str(ROOT))
 
-from agent.entities import receipt_digest  # noqa: E402
+from agent.entity_digest import receipt_digest  # noqa: E402
 
 FAILS: list[str] = []
 

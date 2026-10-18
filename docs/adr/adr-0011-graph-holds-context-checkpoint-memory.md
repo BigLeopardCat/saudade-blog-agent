@@ -1,9 +1,13 @@
 # ADR-0011：上下文由图自己持有（原生 checkpoint 取代手写注入）——方向认可，采纳待写幂等账
+> ⚠️ 20261018 又一批模块已改名（**记录型文档一律保留当时的名字，不回溯改写**）：`agent/absence.py` → `agent/absence_claims.py`、`agent/frames.py` → `agent/frame_contract.py`、`agent/probe.py` → `agent/runtime_probe.py`、`agent/decisions.py` → `agent/deterministic_plan.py`、`agent/entities.py` → `agent/entity_digest.py`、`agent/refs.py` → `agent/arg_refs.py`、`agent/workflow_defs/nav.py` → `agent/workflow_defs/nav_map.py`、`agent/workflow_defs/navigation.py` → `agent/workflow_defs/nav_skills.py`、`agent/workflow_defs/reports.py` → `agent/workflow_defs/report_skills.py`、`agent/context.py` → `agent/prompt_context.py`。**现状地图（每个模块一行）**见 `docs/agent-architecture.md` §2。
 
-- **状态**：**已搁置**（20261016）——方向认可，**采纳的触发条件是批 2（写操作幂等账）落地**，
-  见文末《触发条件》。**该条件已于 20261016 满足**（批 2 落地，见
-  [adr-0012-write-idempotency-ledger.md](adr-0012-write-idempotency-ledger.md)）；采纳本身
-  （三处一起动）**仍未做**，所以状态仍是搁置。
+- **状态**：**已采纳**（20261018，代码面）——"三处一起动"已落地，见文末《20261018 追记：
+  采纳落地》。⚠️ **代码落地 ≠ 生产在跑**：DSN 空则 `build_checkpointer()` 返回 `None`、
+  图不挂 saver，行为与采纳前逐字节相同；跑没跑看 `/health` 的 `checkpoint_backend`。
+  - 采纳前的状态是**已搁置**（20261016）：方向认可，**采纳的触发条件是批 2（写操作幂等账）
+    落地**。**该条件已于 20261016 满足**（批 2 落地，见
+    [adr-0012-write-idempotency-ledger.md](adr-0012-write-idempotency-ledger.md)）；
+    采纳本身（三处一起动）当时仍未做，所以那两天状态仍是搁置。
 - **背景文档**：[../agent-architecture.md](../agent-architecture.md) §4.1（记忆四层）、
   §4.6（`MemorySaver` 为什么不承担记忆）、§4.7（"无状态图能不能中途暂停"）；
   仓外判决文档 `/home/ubuntu/native-checkpoint-verdict-20261015.md`（批 0 的实验读数与
@@ -332,3 +336,82 @@ Rust 发过来的那份 JSON），而 `req.history = [dict, …]` 这种赋值 *
 ⇒ **采纳现在只差"三处一起动"与真机读数**：长会话 K=10 的正向收缩、崩溃重放对**产线等效**
 saver、同会话并发两轮；外加 `pyproject.toml` / `uv.lock` 的依赖。**前置满足不等于采纳完成**
 ——本 ADR 的状态在那一步落地之前仍是"已搁置"。
+
+### 20261018 追记：采纳落地（`docs/platform-roadmap.md` 批 7）
+
+**三处一起动，一次原子提交**。落点与本文《触发条件》写的一处不同，记在这里：
+
+| 本文原本写的 | 实际落地 | 为什么 |
+|---|---|---|
+| `build_graph(checkpointer=…)` | `server._build_arm()` 的 `create_agent(checkpointer=checkpoint.build_checkpointer())` | 生产调用点是 `create_agent`，`build_graph` 只**转发**（`tests/test_checkpoint_factory.py` ⑤ 锁着"只传不造"） |
+| `_build_messages` **删**注入循环 | 给它**套闸门**（`if not _graph_holds_context():`） | 删掉的话，**没挂 saver 的那条路**（DSN 空时的生产、以及没挂 saver 的评测臂）会失去全部跨轮上下文——比"多注入一份"更坏，且同样不报错 |
+| `thread_id` 改会话坐标 | 同上，但**两条路共用** `server._thread_id_for` | 只改一条会让流式/非流式两种线程语义并存，而线上主路径是流式那条，单跑评测看不见 |
+| （未写） | 显式 `durability="sync"`，且**有 saver 才给** | `durability` 是 `stream()` 的参数、不是 `compile()` 的参数（langgraph 1.2.7 实测）；没 saver 时给了会招一条 UserWarning，而 `ReactGoldenArm.stream()` 压根没有这个形参 ⇒ `TypeError` 炸在生产者里 |
+
+**"三处一致"是结构性的，不是约定**：三处共用**同一个判据** `server._graph_holds_context()`
+——它读的是**活体对象上有没有 saver**（`agent/probe.py`，与 `/health` 的
+`checkpoint_backend` 同一个取值实现），不是 `CHECKPOINT_DSN`。于是"配了 DSN 但没挂上"与
+"没配 DSN"在源码形状上是同一个形态，**半接在结构上不可能**；
+`tests/test_checkpoint_adoption.py` 判的就是"四处形态一致"，四条反控各拨一处全部翻红。
+
+**建表加了一把咨询锁**：`saver.setup()` 幂等但**不并发安全**（每条迁移末尾
+`INSERT INTO checkpoint_migrations (v)`，**没有 `ON CONFLICT`**），而产线是 `--workers 4`
+同时启动 ⇒ 后到的那个主键冲突、启动崩。所以建表包在 `pg_advisory_lock` 里。
+⚠️ **这一版是错的，同日上线当天造成了一次真停服**（阻塞式锁 + 迁移里的
+`CREATE INDEX CONCURRENTLY` 成环）⇒ 已改成 `pg_try_advisory_lock` 轮询，见文末
+《20261018 追记（二）》。上面那句"包在 `pg_advisory_lock` 里"**保留原文**，因为它是当时
+的决策原文。
+
+**级联清理是本 ADR 与父仓的跨仓契约**：删除动作在父仓
+`src/routes/conversation.rs::purge_conversation_data`（**两个臂**：`ConversationId` /
+`UserId`），本仓出 `DELETE /checkpoint/{conversation_id}` 钩子。
+⚠️ **父仓那一半截至 20261018 还没接上**——本仓的钩子今天没有任何调用方，这是**已知缺口**
+（判据 `tests/test_checkpoint_cascade.py` ③ 判的是"父仓自己两臂一致"，因为"断言父仓已接"
+会一直红、而红的套件进不了 CI）。
+
+**还没做（不在本批）**：真机读数三条（长会话 K=10 正向收缩、崩溃重放对产线等效 saver、
+同会话并发两轮）。本批只保证"接得上、接得对、半接会红"。
+
+### 20261018 追记（二）：建表锁**造成了一次真停服**，改成 try-lock
+
+上面《20261018 追记》里那句"建表包在 `pg_advisory_lock` 里"是**错的**，同日上线当天就
+炸了。这一段记的是**机制**与**为什么当时四层判据全绿**。
+
+**症状**：4 个 worker 无限期卡死、**一条日志都没有**（`Agent ready` 那行永远打不出来，
+8010 因此根本不监听），`systemctl restart` 也卡在"等旧 worker 退出"上，要等满
+`TimeoutStopSec=120` 才被 SIGKILL。
+
+**机制**（`pg_stat_activity` 实测，成环的三方都在场）：
+
+```
+1 条 idle  持有 advisory 锁
+3 条 active 卡在 Lock/advisory          ← pg_advisory_lock，一条挂着的语句 = 一条没结束的事务
+1 条 active 卡在 Lock/virtualxid 跑 CREATE INDEX CONCURRENTLY
+```
+
+持锁者在跑 CIC，而 CIC 的语义要求**等所有并发事务收尾**（`WaitForOlderSnapshots`）；
+那三条事务在等它放锁；而它要等 CIC 结束才放锁 ⇒ 环。**这不是"慢"，是永不等到的等**。
+
+**修法**：`pg_try_advisory_lock` 轮询 + 总预算（60s，超了响亮抛而不是无限等）。它断环的
+理由是**每次尝试都是一条已提交、已结束的语句**，两次尝试之间**不持有任何事务**——等锁者
+拿到的快照比 CIC 的新，`WaitForOlderSnapshots` 不认它（同一条推理也解释了现场那条 `idle`
+的持锁会话为什么没参与环：idle 的 autocommit 会话 `xmin` 已清零）。**依赖池是
+`autocommit` 的**，所以 `_setup_under_lock` 里加了一条显式断言。
+
+**顺带修掉的第二个洞**：`CREATE INDEX CONCURRENTLY IF NOT EXISTS` 会**永远跳过**一个
+被打断留下的**无效索引**（`indisvalid=false`）⇒ 那张表**永远少一个索引**，而没有任何东西
+会红（被打断的那次正是这副样子：迁移停在 `max(v)=5`、`checkpoints_thread_id_idx` 无效）。
+现在建表前先 `drop_invalid_indexes()`。
+
+**为什么四层判据全绿**：前三层（含那两条"连不上要响亮抛"）**全在 `127.0.0.1:1` 这种必然
+失败的 DSN 上判**——"真连上一个库、真跑一次迁移、4 个进程真的同时来"这条路径**从来没有被
+跑过**。补的第四层是 `tests/test_checkpoint_setup_concurrent.py`（真连库、4 进程同时建表），
+它的红基线是**把建表换回阻塞版**：同一套脚手架下必须卡住、且**迁移跑不完**（实测
+`max(v)=5 < 9`），真实现下 4/4 成功。**"前提不可用"与"前提不可用所以没量"是两件事**——
+这一层缺库时报「未评估」，`tests/run_all.py` 的汇总里每次运行都另起一行说清这次量没量。
+
+⚠️ 同一次补网还撞出一件事，与这个死锁**同源**：**杀掉客户端进程 ≠ PG 那边停了**。红基线
+把 4 个子进程 SIGKILL 掉之后，它们的 PG 后端不会跟着退出——跑着 CIC 的那个继续拿着表上的
+`ShareUpdateExclusiveLock`，卡在 `pg_advisory_lock` 上的那个会在持锁者会话终于消失之后
+**接着把迁移跑完**，于是两个 CIC 后端互等表锁、下一相全卡住。所以每一相之间要
+`pg_terminate_backend` 掉这类僵尸会话再往下走。

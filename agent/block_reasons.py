@@ -12,7 +12,7 @@
 "两版提示词纠偏被 A/B 否掉"的负结果见那里的 1b）。
 
 本模块就是"把类型接上线"的那一格：每个原因码配 `(中文, 改参数重试是否有意义)`。
-渲染端（`agent/context.py::blocked_rows`）据此给 planner 一张**常驻的类型表**，
+渲染端（`agent/prompt_context.py::blocked_rows`）据此给 planner 一张**常驻的类型表**，
 而不是再往纠偏槽里加一句话——20261007 两次 A/B 的教训是"手写散文救不回来"，
 而"由机器从原因码判出来的类型"是另一件可以试一试的事。
 
@@ -44,7 +44,7 @@ REASONS: dict[str, tuple[str, bool]] = {
     "args_parse": ("参数解析失败", True),
     "empty_result": ("结果为空", True),
     "error_frame": ("执行出错", True),
-    # 参数引用失败（`agent/refs.py::ref_error_reason` 取回，20260919）
+    # 参数引用失败（`agent/arg_refs.py::ref_error_reason` 取回，20260919）
     "ref_unknown_tool": ("引用的工具尚未执行", True),
     "ref_unparsed": ("引用的返回不是结构化数据", True),
     "ref_index_range": ("引用的序号越界", True),

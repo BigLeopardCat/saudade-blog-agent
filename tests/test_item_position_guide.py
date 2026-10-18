@@ -24,7 +24,7 @@
 
 三半，缺一不可：
 
-  ① **供给**（`agent/context.py::_item_link_fact()`，经 `site_guide()`）：评论没有
+  ① **供给**（`agent/prompt_context.py::_item_link_fact()`，经 `site_guide()`）：评论没有
      独立页面、评论长在文章正文下方、站内定到**某一条**内容有哪几个形态（**从
      `tools.base._ITEM_POSITION_FORMS` 渲染**：评论 `?cid=` / 河灯留言 `?lid=` /
      说说 `?tk=`）、文章页上的 `#…` 是**阅读进度锚点**不是评论位置。它进的是 planner 与
@@ -55,11 +55,11 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent  # 仓根（测试统一在 tests/）
 sys.path.insert(0, str(ROOT))
 
-import agent.context as C  # noqa: E402
-import agent.entities as E  # noqa: E402
+import agent.prompt_context as C  # noqa: E402
+import agent.entity_digest as E  # noqa: E402
 from agent import authz  # noqa: E402
 from agent.workflow_defs import WORKFLOWS, visible_workflows  # noqa: E402
-from agent.workflow_defs.nav import NAV_MAP  # noqa: E402
+from agent.workflow_defs.nav_map import NAV_MAP  # noqa: E402
 from agent.workflow_plan import instantiate_plan  # noqa: E402
 from agent.workflow_tools import _EXPLICIT_TOOLS  # noqa: E402
 from tools.base import (_FRAME_ID_KEYS, _NAV_EXACT_PATHS, _NAV_PREFIX_PATHS,  # noqa: E402

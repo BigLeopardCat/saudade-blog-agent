@@ -6,7 +6,7 @@
 时被拉进来（包 `__init__` 先于子模块执行）：
 
   · `format_message`（`utils/helpers.py`，9 行「Miscellaneous helper utilities」）——
-    全仓**零调用**（含非 .py 文件）。真正的消息文本塑形住在 `agent/context.py`
+    全仓**零调用**（含非 .py 文件）。真正的消息文本塑形住在 `agent/prompt_context.py`
     （`_msg_text` / `_msg_texts`），另起一个同名概念只会让人以为有第二条通路。
     模块连同这一行一起删了。
   · `speak`（`utils/tts.py`）——`speak` 自己那句注释就写着「全仓没有任何调用方」。

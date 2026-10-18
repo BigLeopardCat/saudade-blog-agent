@@ -101,7 +101,7 @@ EXEMPT = {
     ),
     "tool_data": (
         "请求内累计：`execute_node` 取 `list(state.get(\"tool_data\") or [])` 后 append。"
-        "是参数引用（`$tool[N].field`，见 `agent/refs.py`）的取值源，**顺序即下标**"
+        "是参数引用（`$tool[N].field`，见 `agent/arg_refs.py`）的取值源，**顺序即下标**"
         "——加 reducer 时必须保住顺序语义。"
     ),
     "task_satisfied": (

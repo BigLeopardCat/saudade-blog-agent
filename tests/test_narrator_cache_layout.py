@@ -50,8 +50,8 @@ sys.path.insert(0, str(ROOT))
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage  # noqa: E402
 
 import agent.graph as G  # noqa: E402
-from agent.context import strict_wire_issues  # noqa: E402
 from agent.principal import Principal  # noqa: E402
+from agent.prompt_context import strict_wire_issues  # noqa: E402
 from utils import trace as trace_mod  # noqa: E402
 
 FAILS: list[str] = []

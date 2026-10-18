@@ -157,6 +157,11 @@ def run_case(arm: str, case: str, probe_dir: str, rep: int,
         # 理由见 `scripts/nightly_regression.sh` 那处长注）。四臂必须指同一个身份。
         "GOLDEN_ADMIN_UID": "756",
         "GOLDEN_USER_UID": "722",
+        # 这一遍的编号（20261018 批 6）：`run_golden` 的线程坐标 = (用例, 重复, 臂)，
+        # 重复这一段就靠它（`eval/golden_thread.py`）。**不设它的话每一遍的线程名都
+        # 一样** ⇒ 逐遍跑就变成"在上一遍的 state 上接着跑"，而症状是"读数在漂"。
+        # 下面那个逐遍复位**仍然必需**（臂 B 的线程是 `conv_<id>`，本坐标管不到它）。
+        "GOLDEN_REP": str(rep),
         # **逐 (臂, 用例, 遍) 一个文件**：一份大 JSONL 分不出哪几行是哪条用例的
         # （读数里没有用例 id，只有 pid）。文件名就是坐标。
         "CHECKPOINT_PROBE_OUT": os.path.join(

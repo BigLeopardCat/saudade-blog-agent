@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """快道定价（20261015）：五条确定性快道**到底值不值**的取数装置。
 
-为什么要有它：`agent/decisions.py` 那五条快道（导航 / 指代型导航 / 显示 / 读当前文章 /
+为什么要有它：`agent/deterministic_plan.py` 那五条快道（导航 / 指代型导航 / 显示 / 读当前文章 /
 特效切换）命中即**拿走 planner 的决策权**，而每一条都有真实事故依据（最有名的是
 「不要樱花了改成下雨」——planner LLM 十轮里八轮只做半边）⇒ **不能纸面推定删**。
 但这个仓库的判据一向"要么说清代价、要么别动"，所以先把价钱量出来。
@@ -39,14 +39,14 @@ sys.path.insert(0, ROOT)
 from golden_trace import trace_root  # noqa: E402  （golden trace 根目录的唯一实现）
 from trace_io import load_trace  # noqa: E402  （与 trace_alert 同一个读取实现）
 
-import agent.decisions as D  # noqa: E402
+import agent.deterministic_plan as D  # noqa: E402
 
 GOLDEN = os.path.join(ROOT, "eval", "golden", "basic.jsonl")
 
 
 # ── ① 静态映射 ────────────────────────────────────────────────────────────
 def _page_ctx(ctx: dict) -> str:
-    """与 `agent/context.py::_page_ctx` 拿到的那串同形（`run_golden` 也照这个拼）。"""
+    """与 `agent/prompt_context.py::_page_ctx` 拿到的那串同形（`run_golden` 也照这个拼）。"""
     return (f"user_id={ctx.get('user_id', 0)}, page={ctx.get('current_url', '/')}, "
             f"title={ctx.get('page_title', '')}, current_effects={ctx.get('current_effects', '')}, "
             f"current_darkmode={ctx.get('current_darkmode', '')}")

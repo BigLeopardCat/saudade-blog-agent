@@ -386,7 +386,7 @@ _arm_src = (ROOT / "agent" / "react_arm.py").read_text(encoding="utf-8")
 # 帧契约的唯一事实源（20261016 起）：`_round_state` / `_popup_state` / 四个帧构造器都
 # 搬去了这里。下面几处"接线锁"要同时读两份源码——只读臂那一份，锁会指向**已经搬走**的
 # 字符串（那是"锁的不是事实、是某一行曾经长这样"）。
-_frames_src = (ROOT / "agent" / "frames.py").read_text(encoding="utf-8")
+_frames_src = (ROOT / "agent" / "frame_contract.py").read_text(encoding="utf-8")
 _line_src = (ROOT / "agent" / "react_line.py").read_text(encoding="utf-8")
 check("**判据字面与 graph 一致**（改成「一律拦」= 两臂比的就不是同一件事了）",
       _src_line in _graph_src and _src_line in _line_src)
@@ -830,7 +830,7 @@ check("`plan_encode` **不经手**——臂手上是 `plan_obj`，塑形走 `pla
 # 未声明的键被 langgraph **静默丢掉**（本仓付过 13 次代价的那一族），少一格不报错、
 # 只让闸门少开火。反向对照：从 `AgentState` 里删掉任一格 ⇒ 当场红。
 from agent.graph import AgentState, graph_input  # noqa: E402
-from agent.frames import GATE_STATE_KEYS, POPUP_STATE_KEYS  # noqa: E402
+from agent.frame_contract import GATE_STATE_KEYS, POPUP_STATE_KEYS  # noqa: E402
 _ANN = set(AgentState.__annotations__)
 _GK = {"blocked", "blocked_seen", "confirm_grant"}      # 辅助函数读的那三格（20261012 补）
 check("闸门辅助函数读的那三格是 `AgentState` 的**声明键**（未声明 ⇒ 被静默丢掉）",
@@ -1096,9 +1096,13 @@ _srv_src = (ROOT / "server.py").read_text(encoding="utf-8")
 _set_src = (ROOT / "config" / "settings.py").read_text(encoding="utf-8")
 check("**默认值必须是 `graph`**（反过来等于没人点头就把产线换掉）",
       'agent_arm: str = "graph"' in _set_src)
-check("`graph` 那一支就是原来那一行 `create_agent()`（逐字节：本批没给它加任何参数）",
-      "return create_agent(), arm" in _srv_src
-      and _srv_src.count("_agent, _arm = _build_arm()") == 1)
+# 20261018 批 7 改过这一条：`graph` 那一支现在**多一个 `checkpointer=`**（采纳断点恢复）。
+# 锁跟着钉**新**不变量、不是放宽——"开关不拨 = 生产行为不变"现在由那一格自己的判据保证
+# （**DSN 空 ⇒ `build_checkpointer()` 返回 `None`** ⇒ 与 `create_agent()` 逐字节同义）。
+check("`graph` 那一支只有原来那一行 + 一个 `checkpointer=checkpoint.build_checkpointer()`",
+      "return create_agent(checkpointer=checkpoint.build_checkpointer()), arm" in _srv_src
+      and _srv_src.count("_agent, _arm = _build_arm()") == 1
+      and len(re.findall(r"create_agent\([^)]*\)", _srv_src)) == 1)
 # ⚠️ 只扫**真的 import 行**：整份源码里当然有 `golden_arm` 这几个字（`_build_arm` 的
 # docstring 正文就在写"不 import 它"，逐字扫全文件会把注释判成违规——判据与它要防的
 # 东西不是一回事了）。

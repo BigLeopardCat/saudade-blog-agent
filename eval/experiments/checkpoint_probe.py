@@ -27,7 +27,7 @@ PYTHONPATH=/home/ubuntu/exp/saudade-agent-checkpoint:/home/ubuntu/exp/pydeps \\
 而读端把上一轮的东西当本轮"**——这两件事都住在 reducer 与纯函数里，与模型无关。
 它用**真的 saver**（`agent.checkpoint_arm.make_saver`）跑一张**真的带 `AgentState`
 的小图**，三轮同一 thread，然后拿 langgraph 还回来的 `messages` 去喂**真的读端**
-（`context._page_ctx` / `context._has_frames` / `context._frame_texts` /
+（`prompt_context._page_ctx` / `prompt_context._has_frames` / `prompt_context._frame_texts` /
 `graph.frame_chars`）。一个字节的判据都没有抄第二份。
 """
 import argparse
@@ -45,7 +45,7 @@ if _ROOT not in sys.path:
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage  # noqa: E402
 from langgraph.graph import END, START, StateGraph  # noqa: E402
 
-from agent import context  # noqa: E402
+from agent import prompt_context  # noqa: E402
 from agent import graph as G  # noqa: E402
 from agent import idem  # noqa: E402
 from agent.checkpoint_arm import make_saver  # noqa: E402
@@ -114,15 +114,15 @@ def cmd_deterministic(keep_thread: bool = False) -> int:
         """读端在**这一坨消息**上会读出什么（四个读端全是真实现）。"""
         return {
             "msgs": len(msgs),
-            "chars": sum(len(context._msg_text(m) or "") for m in msgs),
+            "chars": sum(len(prompt_context._msg_text(m) or "") for m in msgs),
             # state 里累计的 ToolMessage 条数（`_frame_texts` 只取最近 limit=5 条，
             # 所以超过 5 之后条数不再涨、但字符仍涨——两列一起看才读得对）。
             "tool_msgs": sum(1 for m in msgs if isinstance(m, ToolMessage)),
-            "has_frames": context._has_frames(msgs),
+            "has_frames": prompt_context._has_frames(msgs),
             # `_frame_texts` 返回的是**渲染好的字符串**（不是列表）⇒ 量它的长度。
-            "frame_render": len(context._frame_texts(msgs)),
+            "frame_render": len(prompt_context._frame_texts(msgs)),
             "frame_chars": G._frame_chars(msgs),
-            "page_ctx_read": context._page_ctx(msgs),
+            "page_ctx_read": prompt_context._page_ctx(msgs),
         }
 
     rows = []
@@ -240,8 +240,8 @@ def cmd_history_dup(n: int = 20) -> int:
         inp["plan_rounds"] = r
         list(mini.stream(inp, cfg, stream_mode=["updates"]))
         msgs = (mini.get_state(cfg).values or {}).get("messages") or []
-        copies = sum(1 for m in msgs if "HIST#" in (context._msg_text(m) or ""))
-        chars = sum(len(context._msg_text(m) or "") for m in msgs)
+        copies = sum(1 for m in msgs if "HIST#" in (prompt_context._msg_text(m) or ""))
+        chars = sum(len(prompt_context._msg_text(m) or "") for m in msgs)
         rows.append((r, len(msgs), copies, chars))
         print(f"{r:>2} | {len(msgs):>5} {copies:>9} {copies / (n * 2):>7.1f} {chars:>8}")
     print()
@@ -1243,20 +1243,20 @@ def _windowed_mini_graph(saver, sink: list):
     def turn(state):
         i = state.get("plan_rounds", 0)
         # ① 冻结（与 `graph.planner_node` **同源**：同一个纯函数，不是重写一遍）
-        start = context.freeze_turn_start(state.get("messages"), state.get("turn_msgs"),
+        start = prompt_context.freeze_turn_start(state.get("messages"), state.get("turn_msgs"),
                                           state.get("turn_start", -1))
         # ② 本轮窗口（图内唯一的取值口，线上走 `graph._turn(state)`）
-        win = context.turn_window(state.get("messages"), start)
+        win = prompt_context.turn_window(state.get("messages"), start)
         whole = state.get("messages") or []
         sink.append({
             "round": i, "frozen_start": start,
             "turn_msgs": state.get("turn_msgs"), "len": len(whole),
             "win_msgs": len(win), "identity": win is whole,
             # 四个读端各读**两遍**：窗口 vs 整表。两列并排才看得出这一刀在治什么。
-            "page_win": context._page_ctx(win),
-            "page_whole": context._page_ctx(whole),
-            "frames_win": context._has_frames(win),
-            "frames_whole": context._has_frames(whole),
+            "page_win": prompt_context._page_ctx(win),
+            "page_whole": prompt_context._page_ctx(whole),
+            "frames_win": prompt_context._has_frames(win),
+            "frames_whole": prompt_context._has_frames(whole),
             "fchars_win": G._frame_chars(win),
             "fchars_whole": G._frame_chars(whole),
         })
@@ -1382,7 +1382,7 @@ def cmd_turn_window() -> int:
 
 
 # ── 批 3：narrator 窗口的**正向收缩**合成探针 ─────────────────────────────
-#: 轮数要**明显超过** `context._NARRATOR_TURNS`（10），否则窗口一次都不触发。
+#: 轮数要**明显超过** `prompt_context._NARRATOR_TURNS`（10），否则窗口一次都不触发。
 NARR_ROUNDS = 12
 
 
@@ -1391,7 +1391,7 @@ def _narr_mini_graph(saver, sink: list):
 
     动作顺序照线上：① `planner_node` 冻结 `turn_start`；② `model_node` 取 narrator 的
     消息表（线上走 `graph._narrator_msgs(state)`，这里直接调它委派的那个纯函数
-    `context.narrator_messages`——**同一个函数**，不是重写一遍）；③ 追加本轮产出。
+    `prompt_context.narrator_messages`——**同一个函数**，不是重写一遍）；③ 追加本轮产出。
 
     每轮额外记两列：`with_tool_call_pairs(win)` 的字符数（narrator 真正发出去的那一段，
     与 `graph.model_node` 量 `_prompt_chars` 同口径）与整表的同一量。两列并排才看得出
@@ -1402,18 +1402,18 @@ def _narr_mini_graph(saver, sink: list):
         i = state.get("plan_rounds", 0)
         msgs = state.get("messages") or []
         # ① 冻结（同源纯函数）
-        start = context.freeze_turn_start(msgs, state.get("turn_msgs"),
+        start = prompt_context.freeze_turn_start(msgs, state.get("turn_msgs"),
                                           state.get("turn_start", -1))
         # ② narrator 的窗口（线上是 `graph._narrator_msgs(state)`）
-        win = context.narrator_messages(msgs, start)
-        win_wire = context.with_tool_call_pairs(win)
-        whole_wire = context.with_tool_call_pairs(msgs)
+        win = prompt_context.narrator_messages(msgs, start)
+        win_wire = prompt_context.with_tool_call_pairs(win)
+        whole_wire = prompt_context.with_tool_call_pairs(msgs)
         sink.append({
             "round": i, "frozen_start": start, "len": len(msgs),
             "win_msgs": len(win), "ident": win is msgs,
-            "first_is_sys": bool(win) and context._is_system_block(win[0]),
-            "chars_win": sum(len(context._msg_text(m) or "") for m in win_wire),
-            "chars_whole": sum(len(context._msg_text(m) or "") for m in whole_wire),
+            "first_is_sys": bool(win) and prompt_context._is_system_block(win[0]),
+            "chars_win": sum(len(prompt_context._msg_text(m) or "") for m in win_wire),
+            "chars_whole": sum(len(prompt_context._msg_text(m) or "") for m in whole_wire),
             "frames_win": len([m for m in win_wire if type(m).__name__ == "ToolMessage"]),
         })
         return {"messages": [AIMessage(content=f"第 {i} 轮回复"),
@@ -1481,7 +1481,7 @@ def cmd_narrator_window() -> int:
     # 用，于是两处判据都在**拿一行跟它自己比**——恒真，而且看起来还印了具体数字。
     # 判据里的"两行之比"必须一眼看出是**两行**。
     i_last = NARR_ROUNDS - 1                    # 第 12 轮
-    i_sat = context._NARRATOR_TURNS - 1         # 第 10 轮：历史刚超过窗口深度 ⇒ 从这轮起饱和
+    i_sat = prompt_context._NARRATOR_TURNS - 1         # 第 10 轮：历史刚超过窗口深度 ⇒ 从这轮起饱和
     tail_w = w[i_sat:]
 
     check("窗口臂：第 1 轮恒等（本轮起点就在表头 ⇒ 这一刀在第一轮无事可做）",

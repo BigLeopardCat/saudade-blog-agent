@@ -11,7 +11,7 @@
     "c": 166,
     "lines": 327
   },
-  "agent/decisions.py::_candidate_detail_plan": {
+  "agent/deterministic_plan.py::_candidate_detail_plan": {
     "c": 51,
     "lines": 99
   },
@@ -129,7 +129,7 @@
   },
   "eval/run_golden.py::run_one": {
     "c": 58,
-    "lines": 259
+    "lines": 262
   },
   "eval/toolcall_probe.py::main": {
     "c": 46,
@@ -207,21 +207,13 @@
     "c": 33,
     "lines": 219
   },
-  "tools/base.py::create_tag": {
-    "c": 31,
-    "lines": 113
-  },
-  "tools/base.py::set_article_status": {
-    "c": 31,
-    "lines": 82
-  },
-  "tools/base.py::update_tag": {
-    "c": 61,
-    "lines": 144
-  },
   "tools/device.py::device_oled_display": {
     "c": 33,
     "lines": 124
+  },
+  "tools/note_admin.py::set_article_status": {
+    "c": 31,
+    "lines": 84
   },
   "tools/own_data.py::read_messages": {
     "c": 32,
@@ -230,5 +222,13 @@
   "tools/own_data.py::read_notifications": {
     "c": 35,
     "lines": 115
+  },
+  "tools/tag_admin.py::create_tag": {
+    "c": 31,
+    "lines": 114
+  },
+  "tools/tag_admin.py::update_tag": {
+    "c": 61,
+    "lines": 144
   }
 }

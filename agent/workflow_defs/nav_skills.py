@@ -31,7 +31,7 @@ WORKFLOWS: list[Workflow] = [
             # 模型只能自己猜，实测猜出来的是 `/article/54#comment`（主人报"转跳评论
             # 位置"那一轮）：文章对了、位置是编的。
             # **位置形态的"知识"不写在这儿**：它进的是 planner 每轮的页面上下文
-            # （`context._item_link_fact()`），是"站内事实"；这里只补
+            # （`prompt_context._item_link_fact()`），是"站内事实"；这里只补
             # "这一格能填什么"，两处各说各的那一半。
             "target": "页面别名（从导航映射表取值）：首页/留言板/说说/时间轴/关于我/登录"
                       + ("/物联网平台" if IOT_ENABLED else "") +
@@ -117,7 +117,7 @@ WORKFLOWS: list[Workflow] = [
         description="用户要求在 IoT 设备（ESP32 OLED 屏幕）上显示某段文字时使用。",
         inputs={"text": "要显示的文字内容（planner 无需填写，由执行模型结合对话创作）"},
         # text 可选（20260925）：pydantic 里它是必填（工具签名无默认值），但**技能策略**
-        # 是"planner 不填、由执行层创作"——`decisions.py` 有一处直接
+        # 是"planner 不填、由执行层创作"——`deterministic_plan.py` 有一处直接
         # `instantiate_plan("device_display", {})`，`graph.py` 在执行时补文案。
         # 不声明这条例外的后果：planner 按提示词不填 text ⇒ 被判"必填没给"⇒ 零工具，
         # 屏幕这条能力**从 planner 通道整体不可达**。

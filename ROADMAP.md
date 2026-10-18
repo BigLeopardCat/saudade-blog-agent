@@ -45,6 +45,15 @@
   因为根本没有绿灯。
 - **看板娘前端与父仓 pin 的 drift 提示**已有一条只警告的独立 job（`widget-pin-drift`），
   但它只在 `main` 上跑，fork PR 同样看不到。
+- **删会话时清 checkpoint（跨仓，另一半在父仓）**。本仓那一半 20261018 已落地：
+  `DELETE /checkpoint/{conversation_id}`（`agent/checkpoint.py::delete_thread`，
+  判据 `tests/test_checkpoint_cascade.py` ①②）。**父仓那一半还没接**——要在
+  `src/routes/conversation.rs::purge_conversation_data` 的**两个臂**里各调一次
+  （`ConversationId` / `UserId`）。**只接一个臂就红**（判据 ③ 判的是"父仓自己两臂一致"，
+  因为"断言父仓已接"会一直红、而红的套件进不了 CI）。
+  没接上之前：删了会话，那个会话的 checkpoint 还留在库里、**没有任何读取路径**——
+  同 `execution_log` / `pending_action` / `agent_task` 当年那个形状（父仓那份头注里记着）。
+  ⚠️ 只有真的挂了 saver（`CHECKPOINT_DSN` 非空）时才有东西可清。
 
 ## 明确不做（防范围蔓延）
 

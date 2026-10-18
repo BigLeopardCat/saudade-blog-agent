@@ -283,7 +283,7 @@ $PY eval/golden_draft.py --days 1 >> "$LOG" 2>&1 || echo "[$TS] golden_draft 运
 # 刚过去的这一夜。异常时它自己写 health.log 的 WARN，这里只留一行结论在日志里。
 echo "--- 跨源对账 (trace ↔ agent.log ↔ monitor.log, 巡检非门禁) ---" >> "$LOG"
 $PY eval/trace_reconcile.py >> "$LOG" 2>&1 || echo "[$TS] trace_reconcile 运行异常（不影响门禁）" >> "$LOG"
-# 20260925 起：单帧预算哨兵（`agent/context.py::_DETAIL_FRAME_PER`，非门禁）。
+# 20260925 起：单帧预算哨兵（`agent/prompt_context.py::_DETAIL_FRAME_PER`，非门禁）。
 # 起因：那个常数的注释原写「覆盖站内全部文章正文长度」，而实测最长那篇去重后 26,847 字
 # ——**这句话早就不成立**，且没有任何东西会告诉你它不成立：超预算的帧会走按节节选
 # （保底正确、planner 少看一截、多花一轮），日志与 golden 里都看不出来。
