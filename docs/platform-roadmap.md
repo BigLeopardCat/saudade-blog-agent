@@ -108,15 +108,32 @@
   `server.py` 已超文件预算 3 倍，加 118 行会被 `tests/test_module_budget.py` 判「长文件又长了」，
   而这两件事**不需要**住在 app 模块里。台账那一格随之 +40 行（2589/52），是这次唯一的放宽。
 
-### 批 4 — 错误与用量：可归因
+### 批 4 — 错误与用量：可归因 ✅ 已落地（其中两项实测**早已做完**）
 
-- **发射侧错误码收敛**：**不新增第三张表**——扩既有那对（`agent/block_reasons.py` 与
-  `tests/test_block_reasons.py`，它已经在判键集相等）。
-- **重试策略归一**：把散在 `agent/graph.py` 的几处收成**一处具名常量**，并写明它与
-  langchain `max_retries` 的关系。**不是「加一个重试策略」——已经有了。**
-  判据：可重试码重试一次、400 不重试、**超时不重试**（那是有意的）。
-- **侧任务计费**：`moderator` / `summarizer` 的 LLM 用量进 trace（今天一行不记）。
-  判据用假 llm 断言各记一行，**现状下这条断言必须先红**（落地即翻绿）。
+- **发射侧错误码收敛** ✅：**没有新增第三张表**。实测清点：生产侧能发出的码一共
+  **20 个**（`agent/refs.py` 的字面返回 + `authz` / `adminops_target` / `idem` /
+  `graph` 的 `REASON_*` 具名常量），**20/20 都已在表里**——没有"裸码"要并。
+  真正缺的是**看着这件事的判据**：`tests/test_block_reasons.py` ③ 判的是**取回侧**
+  （`_check_spec` 认哪几个字面、六个取回通道还接不接着），看不见生产侧。新增一节 ⑥：
+  从源码现取生产侧的码（AST，不手抄名单）断言 ⊆ `REASONS`，带正控（扫不到就空过）
+  与两条反控（合成一个未登记的新码 ⇒ 必须红；`return None, "人话"` 那种不许被当成码）。
+  反控实测：往 `agent/authz.py` 加一个 `REASON_EXPIRED = "consent_expired"` ⇒ 当场红。
+  豁免只有一条且**点名**（`REASON_OK = "ok"` 是裁决常量、不是受阻码），并配一条
+  "这条豁免仍然必要"的判据。
+- **重试策略归一** ✅ **早已做完**：三处常量本来就住在一起（`agent/graph.py` 的
+  `_RETRY_HTTP` / `_RETRY_EXC` / `_llm_retriable`），判据 `tests/test_planner_llm_error.py`
+  已逐码判（4xx 只有 408/409/425/429、5xx 全可重试、**400 不重试**、**超时不重试**）
+  且带源码级共现锁。**没有 langchain `max_retries` 可"归一"**——全仓一处都没设。
+- **侧任务计费** ✅：两条侧任务**走不同的路**（这是本批唯一需要判断的地方）：
+  `summarizer` 跑在**同一轮对话**里（`_submit_with_context` 的 `copy_context` 把 recorder
+  带进 worker 线程）⇒ 直接落本轮 trace 的 `llm_done`；`moderator` **没有** trace 上下文
+  （留言板的独立请求），而 `record()` 没有 recorder 时是**静默空转**——写下去等于生产上
+  什么都没发生。所以它把用量交给调用方（`review(..., on_usage=…)`），由审核端点打进既有
+  那条 `[review]` 日志行；**返回值一个键都没加**（那是 Rust 读的响应体）。
+  `agent/llm_usage.py` 头注原来写着"两条都运行在没有 trace 上下文的位置"——对摘要那条是
+  **错的**，已改。
+  判据 `tests/test_side_tasks.py` ⑧：两条各判一次，**反控实测**——把摘要的 `record()`
+  摘掉只红摘要那两条、把审核的回调摘掉只红审核那一条（两条路确实分开了）。
 
 ### 批 5 — 权限影子读数（只测量，不切换）
 

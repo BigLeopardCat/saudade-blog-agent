@@ -30,10 +30,19 @@
 调用方直接展开即可：`record(..., **usage_fields(resp))`——少这几个键不是错误，
 不需要兜底分支（trace 里没有这一格 = 这次没量到）。
 
-**已知缺口（本批不接）**：`agent/moderator.py` 与 `agent/summarizer.py` 两条侧任务也
-调 LLM，但它们运行在**没有 trace 上下文**的位置（审核/摘要各自独立触发，不挂某一轮
-对话）⇒ 那里没有可写的 `llm_done`。这两条都是单次短调用（提交/摘要文本，输出几十字），
-不是成本主体；要量它们得先有"侧任务自己的账本"，那是另一件事。
+**两条侧任务（20261018 批 4 起都记了，两条走**不同**的路）**：
+
+  · `agent/summarizer.py` ⇒ **落本轮 trace**。它跑在**同一轮对话**里
+    （`server._summarize_dialogue` 经 `_submit_with_context` 提交，那里的 `copy_context`
+    把 recorder 带进 worker 线程）⇒ 直接 `record("summarizer", "llm_done", **usage_fields(resp))`。
+  · `agent/moderator.py` ⇒ **交给调用方**（`review(..., on_usage=…)` 回调），由
+    `server.py` 的审核端点打进既有那条 `[review]` 日志行。它**没有** trace 上下文
+    （审核是留言板的独立请求、不挂任何一轮对话），而 `record()` 在没有 recorder 时是
+    **静默空转** —— 往那里写等于生产上什么都没发生。
+
+  这份头注此前写的是"两条都运行在没有 trace 上下文的位置"⇒ 对摘要那条是**错的**
+  （照它做会得出"摘要没法记"的结论）。别照 moderator 的样子给摘要加回调，也别照摘要的
+  样子给 moderator 加 `record()`：两边的上下文不一样，判据在 `tests/test_side_tasks.py` ⑧。
 """
 
 from __future__ import annotations

@@ -29,6 +29,8 @@ from __future__ import annotations
 import json
 import re
 
+from agent.llm_usage import usage_fields
+
 # 围栏标记：正文里出现同名标记时会被打断（见 _fence），保证围栏不可被"关闭"。
 _OPEN, _CLOSE = "<待审内容>", "</待审内容>"
 _TEXT_MAX = 500          # 送审正文上限（既有行为，保持不变）
@@ -95,11 +97,22 @@ def parse_verdict(out: str) -> tuple[str, str]:
     return verdict, reason
 
 
-def review(text: str, llm=None) -> dict:
+def review(text: str, llm=None, on_usage=None) -> dict:
     """裁决一条留言 → {"verdict": "pass"|"flag", "reason": str}。
 
     llm 缺省时按生产参数构造（低随机、无思考链、80 tokens、25s 上限）；
     单测可注入假 llm 走全链路（不联网）。空正文直接 pass（不调模型）。
+
+    `on_usage`（20261018 批 4）：这次调用的 token 用量（`usage_fields` 那套键），
+    有就调一次。**为什么是回调而不是照摘要那样写 trace**：这条路径**没有** trace
+    上下文——审核是留言板的一个独立请求，不挂在任何一轮对话上；而
+    `utils.trace.record()` 在没有 recorder 时是**静默空转**，写在那里等于生产上
+    什么都没发生（"看着接了、其实没接"）。给它单开一份 trace 又会往
+    `logs/agent/traces/` 塞非对话形状的文件，而那一族的读者（`trace_metrics` /
+    `trace_alert` / `token_cost_report`）都按"一轮对话"的形状读。所以用量交给调用方，
+    生产调用点（`server.py` 的审核端点）把它打进既有那条 `[review]` 日志行。
+    **返回值一个键都不加**：那是 Rust 读的响应体，加一格的代价归跨语言契约那本账，
+    不值得为一行日志去动它。
     """
     text = (text or "").strip()
     if not text:
@@ -108,6 +121,9 @@ def review(text: str, llm=None) -> dict:
         from models import get_llm
         llm = get_llm(streaming=False, max_tokens=80, enable_thinking=False,
                       timeout=25.0, temperature=0.1)
-    out = (llm.invoke(build_prompt(text)).content or "").strip()
+    resp = llm.invoke(build_prompt(text))
+    if on_usage is not None:
+        on_usage(usage_fields(resp))
+    out = (resp.content or "").strip()
     verdict, reason = parse_verdict(out)
     return {"verdict": verdict, "reason": reason}

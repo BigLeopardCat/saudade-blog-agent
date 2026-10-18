@@ -44,7 +44,7 @@
     "top_defs": 36
   },
   "server.py": {
-    "lines": 2589,
+    "lines": 2592,
     "top_defs": 52
   },
   "tests/test_admin_write.py": {
@@ -96,7 +96,7 @@
     "top_defs": 72
   },
   "tools/base.py": {
-    "lines": 5351,
-    "top_defs": 141
+    "lines": 4776,
+    "top_defs": 121
   }
 }

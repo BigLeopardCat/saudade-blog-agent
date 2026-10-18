@@ -26,6 +26,7 @@ A/B 的教训正是"改措辞救不回来"）。
 
 用法：.venv/bin/python tests/test_block_reasons.py
 """
+import ast
 import re
 import sys
 from pathlib import Path
@@ -205,6 +206,69 @@ _prompt = g._render_planner_prompt(
     ref_hints="", reflector_feedback="", correction="", blocked_rows=row)
 check("端到端：渲染出来的提示词里真的有这一行（不是只写进了模板）",
       "技能=account_roster" in _prompt and "改参数重试无效" in _prompt)
+
+
+# ── ⑥ 生产侧的码必须都在表里（20261018 批 4）──────────────────────────────
+# ③ 判的是**取回侧**（`_check_spec` 认哪几个字面、六个取回通道还接不接着）。它看不见
+# **生产侧**——往帧里写码的是 `agent/refs.py` 的字面返回，以及 `agent/authz.py` /
+# `agent/adminops_target.py` / `agent/idem.py` 的 `REASON_*` 具名常量。新增一个码却
+# 忘了登记，后果是**静默**的：取回侧的通道是宽松的 `([a-z_]+)`，新码照原样流到 planner
+# 面前——中文回落成裸英文码、`retry_param` 回落成 True（`block_reasons` 的 fail-safe）。
+# 表自己不报错，取回侧也不报错，而 planner 会拿"不可重试"的码去改参重试。
+#
+# 取值**从源码现取**（AST），不手抄一份名单：手抄的那份会在下一次新增时过期，而过期的
+# 判据恰好只在这个新码没登记时"看起来正常"。
+def produced_codes(sources: dict) -> set:
+    """源码 → 生产侧能发出的原因码集合。**纯函数**，正控/反控直接喂它。"""
+    out = set()
+    for text in sources.values():
+        tree = ast.parse(text)
+        for node in tree.body:                       # ① 模块级 `REASON_XXX = "code"`
+            if isinstance(node, ast.Assign) and isinstance(node.value, ast.Constant) \
+               and isinstance(node.value.value, str):
+                for t in node.targets:
+                    if isinstance(t, ast.Name) and t.id.startswith("REASON_"):
+                        out.add(node.value.value)
+        for node in ast.walk(tree):                  # ② `return <BLOCK|None>, "code"`
+            if isinstance(node, ast.Return) and isinstance(node.value, ast.Tuple):
+                e = node.value.elts
+                if len(e) == 2 and isinstance(e[1], ast.Constant) \
+                   and isinstance(e[1].value, str):
+                    h = e[0]
+                    if getattr(h, "id", None) == "_VERDICT_BLOCK" or \
+                       (isinstance(h, ast.Constant) and h.value is None):
+                        out.add(e[1].value)
+    # **只认原因码的形状**（小写 ASCII + 下划线）：`return None, "读不到现有的标签字典…"`
+    # 那种人话是同一个 AST 形状（`tools/base.py` 里有十来处），不筛的话这一条会变成
+    # "见谁都红"。筛掉的是形状不对的，不是"看着不顺眼"的。
+    return {c for c in out if re.fullmatch(r"[a-z][a-z_]*", c)}
+
+
+# 具名豁免：`REASON_OK` 是 `authz` 的**裁决**常量（"这一条通过了"），不是受阻原因码
+# ——它永远不会进 `blocked`。豁免**点名**，不用 `REASON_*` 前缀模糊掉（那个前缀里本来
+# 就混着这两类）。
+_NOT_REASONS = {"ok"}
+
+_SRC = {_p: (ROOT / _p).read_text(encoding="utf-8")
+        for _p in ("agent/refs.py", "agent/authz.py", "agent/adminops_target.py",
+                   "agent/idem.py", "agent/graph.py")}
+_PRODUCED = produced_codes(_SRC) - _NOT_REASONS
+check("正控：生产侧确实扫到了码（扫不到的话下面那条是**空过**——"
+      "\"没产出\"与\"产出的都登记了\"同形）",
+      len(_PRODUCED) >= 12, f"只扫到 {len(_PRODUCED)} 个：{sorted(_PRODUCED)}")
+check("⭐ 生产侧能发出的每一个码都在 `REASONS` 里（新增码忘了登记 ⇒ 当场红）",
+      _PRODUCED <= set(REASONS),
+      "未登记：" + "、".join(sorted(_PRODUCED - set(REASONS))))
+check("  豁免的 `ok` 确实**不是**受阻原因码（它进不了 REASONS）——"
+      "哪天它真成了受阻码，这条豁免就成了掩护",
+      "ok" not in REASONS)
+# 反控一：喂一份"新增了一个码却没登记"的源码 ⇒ 上面那条必须红
+_FAKE = produced_codes({"x.py": 'REASON_NEW = "brand_new_code"\n'}) - _NOT_REASONS
+check("  反控：合成 `REASON_NEW = \"brand_new_code\"` ⇒ 扫得到、且不在表里",
+      _FAKE == {"brand_new_code"} and not (_FAKE <= set(REASONS)), str(sorted(_FAKE)))
+# 反控二（形状筛）：人话不许被当成码，否则这一条就是"见谁都红"
+check("  反控：`return None, \"读不到现有的标签字典\"` 那种人话不算码",
+      produced_codes({"x.py": 'def f():\n    return None, "读不到现有的标签字典"\n'}) == set())
 
 print("\n" + ("全部通过" if not FAILS else f"失败 {len(FAILS)} 项：" + "; ".join(FAILS)))
 raise SystemExit(1 if FAILS else 0)

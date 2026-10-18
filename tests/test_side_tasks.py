@@ -165,7 +165,11 @@ check("模型异常 → 空串（fail-empty，不让失败变成一条摘要）"
 
 print("⑦ 接线：server.py 真的在用这两个模块（不是又抄了一份）")
 server_src = (ROOT / "server.py").read_text(encoding="utf-8")
-check("review_message 转发到 moderator.review", "moderator.review(text)" in server_src)
+# 20261018 批 4：调用形状从 `moderator.review(text)` 变成带 `on_usage=` 的那个
+# （用量只进日志、不进响应体，理由见 moderator.review 的 docstring）。锁跟着改，
+# 但**仍然锁两件**：转发还在、用量那一路确实接上了。
+check("review_message 转发到 moderator.review，且把用量那一路接上了",
+      "moderator.review(" in server_src and "on_usage=" in server_src)
 check("摘要转发到 agent.summarizer.summarize", "from agent.summarizer import summarize" in server_src
       and "return summarize(user_msg, history, old_summary)" in server_src)
 check("旧的裸插值 `留言内容：` 已从 server.py 移除", "留言内容：" not in server_src)
@@ -192,6 +196,57 @@ if _ts is not None:
     check("父仓 talks.rs 的审核失败分支确实返回「转人工待审」(0, None, None, None)",
           _ts.count("(0, None, None, None)") >= 3,
           f"计到 {_ts.count('(0, None, None, None)')} 处")
+
+
+print("⑧ 侧任务的用量各记一处（20261018 批 4）：两条走**不同**的路，别互相照抄")
+# 摘要在**同一轮对话**里跑（`_submit_with_context` 的 copy_context 把 recorder 带进
+# worker 线程）⇒ 落本轮 trace；审核**没有** trace 上下文（留言板的独立请求）⇒ 交给
+# 调用方（`on_usage`），生产端打进既有那条 `[review]` 日志行。两条判据分开写：把任一条
+# 改成另一条的样子，这里都该红。
+class _UsageResp:
+    def __init__(self, content):
+        self.content = content
+        self.usage_metadata = {"input_tokens": 7, "output_tokens": 2}
+
+
+class _UsageLLM:
+    """假 llm：只回一个带 `usage_metadata` 的响应，不联网。"""
+
+    def __init__(self, content):
+        self._c = content
+
+    def invoke(self, _prompt):
+        return _UsageResp(self._c)
+
+
+from utils.trace import start_trace  # noqa: E402
+
+_rec = start_trace("side-usage-judge", 1, "t")
+summarizer.summarize("u", [], "", llm=_UsageLLM("摘要"))
+_ev = [e for e in _rec.events if e.get("event") == "llm_done"]
+check("⭐ 摘要：用量落**本轮 trace**（它跑在同一轮对话里，recorder 随上下文继承）",
+      len(_ev) == 1 and _ev[0].get("input") == 7 and _ev[0].get("output") == 2, str(_ev))
+check("  摘要：节点名是 `summarizer`（与四个节点各自的 `llm_done` 分得开）",
+      bool(_ev) and _ev[0].get("node") == "summarizer", str(_ev))
+
+_seen = []
+_r = moderator.review("今天也要开开心心", llm=_UsageLLM("pass"), on_usage=_seen.append)
+check("⭐ 审核：用量交给调用方（`on_usage`），一次调用恰好回调一次",
+      _seen == [{"input": 7, "output": 2}], str(_seen))
+check("  审核：**返回值一个键都没加**（那是 Rust 读的响应体，不为一行日志动契约）",
+      set(_r) == {"verdict", "reason"}, str(sorted(_r)))
+_seen2 = []
+moderator.review("   ", llm=_UsageLLM("pass"), on_usage=_seen2.append)
+check("  审核：空正文不调模型 ⇒ 不回调（没有「用了 0」这回事，缺键 ≠ 0）",
+      _seen2 == [], str(_seen2))
+check("  反控：不传 `on_usage` 也不炸（缺省 None —— 生产之外的所有调用方都走这条）",
+      moderator.review("你好", llm=_UsageLLM("pass"))["verdict"] in ("pass", "flag", "reject"))
+# 反控：把摘要那条换成审核那条的写法（即**不**记 trace）⇒ 上面第一条必须红。
+# 这里不真的改源码，而是直接验"没有 recorder 时 record 是空转"这件事本身——
+# 它正是 moderator 不能照抄 summarizer 的理由。
+_no_rec = [e for e in _rec.events if e.get("node") == "moderator"]
+check("  反控：审核那条**没有**、也不该有 trace 事件（它压根没有 recorder）",
+      _no_rec == [], str(_no_rec))
 
 print("\n" + ("全部通过" if not FAILS else f"失败 {len(FAILS)} 项：" + "; ".join(FAILS)))
 raise SystemExit(1 if FAILS else 0)

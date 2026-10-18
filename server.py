@@ -2353,7 +2353,10 @@ def review_message(request: Request, req: ReviewRequest):
         # 实现收进 agent/moderator.py（20260920）：不信任输入（访客正文进围栏）、
         # 输出白名单、fail-open 取向，以及 tests/test_side_tasks.py 的回归锁。
         try:
-            result = moderator.review(text)
+            # 用量只进日志、**不进响应体**（理由见 `moderator.review` 的 docstring）：
+            # 这条调用没有 trace 上下文，日志是它唯一的出口。此前它一分钱都不记。
+            result = moderator.review(
+                text, on_usage=lambda u: logger.info("[review] 用量 %s", u or {}))
         except Exception:
             logger.exception("[review] LLM 调用失败（Rust 侧将转人工待审）")
             raise
