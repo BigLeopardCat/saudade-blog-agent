@@ -127,7 +127,12 @@ check("纪律里仍有不许编造的底线（拆段不是把纪律切成只留 
 # ── ③ 接线：三件真的进了臂的 system prompt ────────────────────────────
 print("\n③ 接线：能力在常量里 ≠ 接上了（`test_source_attribution` ②的同一条道理）")
 R._pending_ledger_frame = lambda *a, **k: ("", {})  # 离线：不读台账
-_sp = R._system_prompt([HumanMessage(content="我有哪些未读通知？")], "admin", UNKNOWN, {}, "")
+# 20261019：`_system_prompt` 的入参从"调用方算好的一把散值"改成 `(state, ctx)`
+# （资产对齐 B —— 提示词改成逐轮重渲染，取值全收进 `react_parity.planner_prompt_args`）。
+# 这一节要验的仍是"那三块叙述资产有没有拼进成品"，所以照新的入参形状喂一份最小现场。
+_sp = R._system_prompt(
+    {"messages": [HumanMessage(content="我有哪些未读通知？")], "plan_rounds": 0},
+    {"role": "admin", "principal": UNKNOWN, "config": {}, "user_msg": ""})
 check("**叙述纪律整段进了臂的系统提示**（不是只在 graph 里躺着）", G.NARRATOR_DISCIPLINE in _sp)
 check("**贴纸名字表进了臂的系统提示**（不接 ⇒ `sticker_*` 结构上产不出）",
       R.STICKER_GUIDE in _sp and "害羞" in _sp and "每轮最多一个" in _sp)
