@@ -154,8 +154,11 @@ check("对照：出厂档那一次打的是历史地址（证明 ③ 判的是�
 # ══════════════════════════════════════════════════════════════════
 print("\n④ 单一事实源：站点字面量只剩 settings 里那一处")
 
-_src = (ROOT / "tools" / "base.py").read_text(encoding="utf-8")
-check("tools/base.py 里不再有站点字面量（写回去 = 又变回一个改不动的常量）",
+# 20261018：公开读那一族搬进 `tools/notes.py` ⇒ 取值点跟着搬（那一族打的就是这个基址）。
+# 判据字面一个字没动，只换了"扫哪几份源码"。
+_src = "".join((ROOT / "tools" / f).read_text(encoding="utf-8")
+               for f in ("base.py", "notes.py"))
+check("tools/base.py + tools/notes.py 里不再有站点字面量（写回去 = 又变回一个改不动的常量）",
       "saudade.site" not in _src,
       f"出现 {_src.count('saudade.site')} 次")
 check("默认值定义在 config/settings.py 的 blog_api_base 上",

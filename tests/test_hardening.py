@@ -53,6 +53,7 @@ def test_tls_verification_on():
     断言的是 SSLContext 的 verify_mode，不是源码文本，避免"注释里写了就行"。"""
     import tools.base as base
     from tools import device as _dev
+    from tools import notes as _notes
     ctx = getattr(getattr(base._client._transport, "_pool", None), "_ssl_context", None)
     check("共享 httpx client 使用 TLS 校验（SSLContext 存在）", ctx is not None,
           f"ctx={ctx!r}")
@@ -62,10 +63,12 @@ def test_tls_verification_on():
     # 双保险：代码里不许再出现 verify=False（防止有人为了"过测试"换构造方式）。
     # 先剔掉注释行——上面那段"不要加 verify=False"的说明本身就是注释，不该触发。
     # 20261017：device 族搬进 `tools/device.py` ⇒ 取值点跟着搬（那一族也在打 httpx）。
+    # 20261018：公开读那一族搬进 `tools/notes.py` ⇒ 同款跟进（那一族走 `base._client`）。
     # 判据字面（`"verify=False" not in …`）一个字没动，只换了"扫哪几份源码"。
-    src = inspect.getsource(base) + inspect.getsource(_dev)
+    src = (inspect.getsource(base) + inspect.getsource(_dev)
+           + inspect.getsource(_notes))
     code_only = "\n".join(l for l in src.splitlines() if not l.strip().startswith("#"))
-    check("tools/base.py + tools/device.py 的代码里没有 verify=False",
+    check("tools/base.py + tools/device.py + tools/notes.py 的代码里没有 verify=False",
           "verify=False" not in code_only.replace(" ", ""))
 
 

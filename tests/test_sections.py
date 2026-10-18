@@ -406,8 +406,16 @@ check("真空节 kind 仍是 ok（有内容可读——候选清单——不是�
       getattr(_read_section(_nd, 19, "8"), "kind", "ok") == "ok")
 
 print("⑦ 接线：工具签名与调用面")
-src = (ROOT / "tools" / "base.py").read_text(encoding="utf-8")
-check("get_article_detail 有 section 参数", "section: Annotated[str," in src)
+# 20261018：公开读那一族（含 `get_article_detail`）搬进 `tools/notes.py` ⇒ 取值点跟着搬
+# （那一族两个函数都在新文件里，所以拼起来看即可）。⚠️ 搬的时候按 `docs/lint-baseline.md`
+# 纪律 1（新增文件零 ruff error）把 `section` 那条 126 列的注解折了行 ⇒
+# `"section: Annotated[str,"` 这个单行字面**在任何一份源码里都不再存在**。
+# 判据因此换成"注解头 + 描述文本都在"——比原来的单行字面**更强**一点：它还钉住了那句
+# 描述本身（原来只钉类型写法，描述改没了也照样绿）。
+src = "".join((ROOT / "tools" / f).read_text(encoding="utf-8")
+              for f in ("base.py", "notes.py"))
+check("get_article_detail 有 section 参数（str 注解 + 描述都在）",
+      "section: Annotated[" in src and '"只读该文章的某一小节' in src)
 check("section 只对 note 生效（talk/board/announcement 走原路）",
       src.index("if not section or not isinstance(data, dict)") < src.index('"talk": ("/talk"'))
 ctx_src = (ROOT / "agent" / "context.py").read_text(encoding="utf-8")
@@ -425,7 +433,8 @@ check("narrator 纪律 14 在位", "14. 工具返回帧标注" in _p_src)
 check("造帧侧（execute）在 ToolMessage 出口去重",
       "sections.slim_frame(str(out))" in g_src)
 check("去重没有动 `_shape`（那是引用取值源，必须保持原样）",
-      "slim_frame" not in (ROOT / "tools" / "base.py").read_text(encoding="utf-8"))
+      "slim_frame" not in "".join((ROOT / "tools" / f).read_text(encoding="utf-8")
+                                  for f in ("base.py", "notes.py")))
 check("trace 记录帧体量 frames_chars", "frames_chars=len(frames_txt)" in g_src)
 rag_src = (ROOT / "rag" / "search.py").read_text(encoding="utf-8")
 # 20261005：`sections.py` 从 `agent/` 搬到 `rag/`（分层，见该模块头注）⇒ 这里锁的

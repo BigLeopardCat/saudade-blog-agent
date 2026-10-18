@@ -272,11 +272,15 @@
         0
       ],
       "tools/base.py": [
-        116,
+        103,
         2
       ],
       "tools/device.py": [
         2,
+        0
+      ],
+      "tools/notes.py": [
+        13,
         0
       ],
       "tools/own_data.py": [
