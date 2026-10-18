@@ -218,16 +218,28 @@ def test_control() -> None:
 def test_order() -> None:
     print("\n④ 位置锁（AST）：纠偏 → 终局 → 去重，顺序照生产")
     tree = ast.parse((ROOT / "agent" / "react_arm.py").read_text(encoding="utf-8"))
+    # ⚠️ 锁的落点是**决策主体**（`_planner_decide`），不是 `planner_node`：20261019
+    # （资产对齐 G）把节点拆成"薄壳 + 主体"（生产 `graph.planner_node` 同款）之后，
+    # 这三处调用住在主体里。只认名字会让这条锁**当场变空**，而"锁变空"与"接线掉了"
+    # 在这里看不出区别 ⇒ 两件一起判（主体在，且壳恰好调它一次）。
+    def _calls_in(node: ast.AST, name: str) -> list[int]:
+        return [n.lineno for n in ast.walk(node)
+                if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)
+                and n.func.id == name]
+
     fn = next((n for n in tree.body if isinstance(n, ast.FunctionDef)
-               and n.name == "planner_node"), None)
-    check("`planner_node` 找得到", fn is not None)
+               and n.name == "_planner_decide"), None)
+    shell = next((n for n in tree.body if isinstance(n, ast.FunctionDef)
+                  and n.name == "planner_node"), None)
+    check("决策主体 `_planner_decide` 找得到", fn is not None)
+    check("薄壳 `planner_node` **恰好调它一次**（壳还在，锁就没变空）",
+          shell is not None and len(_calls_in(shell, "_planner_decide")) == 1,
+          "" if shell is None else str(_calls_in(shell, "_planner_decide")))
     if fn is None:
         return
 
     def _at(name: str) -> list[int]:
-        return [n.lineno for n in ast.walk(fn)
-                if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)
-                and n.func.id == name]
+        return _calls_in(fn, name)
 
     corr, term, dedupe = _at("drop_correction"), _at("unaccounted"), _at("finalize_dedupe")
     check("三处都调了", bool(corr) and bool(term) and bool(dedupe),

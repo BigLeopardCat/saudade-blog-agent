@@ -113,10 +113,6 @@ X"既可能是回忆也可能是谎言；生产那个被判的模型是**零工�
     （不是 `AIMessage` 条数），所以 DB 历史里那些 AI 消息不会吃掉预算。
 
 **这一版仍然不做的**（别当成已经做完了）：
-  · `task_frames`（task_state 族）⇒ **不发**。能力台账里这一族只有 1 条断言
-    （`task_state_resume_settle`），而它的兄弟判据 `require_task_state` 由生产那半的
-    确定性结算满足（`server.py` 的 `rows_to_settle`）⇒ 这一族在本线上是 `armed` 而
-    **没有**变成 `comparable = False` 的来源（20261012 实测）。如实登记为未做。
   · **trace 的节点事件这一族**（20261012 全量双臂实测抓出）：本线每轮**只**留下
     `producer.*` 与 `gate.*` 两类事件（gate 那几格是直调 `graph.gate_node` 顺带记的），
     生产那半每轮的 `planner.llm_done` / `native_decision` / `decision` /
@@ -132,6 +128,15 @@ X"既可能是回忆也可能是谎言；生产那个被判的模型是**零工�
     **其余节点事件的补记仍未做**——它今天一个读数都不改变（没有断言读它们），补它是为
     将来 L3 与本臂真上线，不是为这份读数。**拆成真节点之后补它变得便宜**（每个节点函数
     自己 `record(...)`），那是批 3。
+    （20261019 资产对齐 G 把这一族补了三处**有消费方**的：`planner.task_declare` /
+    `planner.task_auto` 由 `_decide_register` 与 `_auto_task_frames` 自己记（生产同一份
+    代码），`planner.native_fallback` 的 `unknown_tool` 那一档是本臂补的。剩下的
+    `llm_done` / `native_decision` / `decision` / `execute.call` / `execute.check`
+    仍然没有。）
+  · **`task_frames` 20261019 起已发**（原记在这里的"不发"作废）：三个伪函数从调用里
+    摘出来、`_decide_register` 与 `_auto_task_frames` 直调生产那一份，帧经
+    `planner_node` 的薄壳并进 `task_frames`。见 `agent/react_parity.py` §G 与
+    `tests/test_react_task_ledger.py`。
   · （20261012 划掉两条此前记在这里的"缺口"——**实测都不是缺口，所以一个字都没改**：
     · `__EXEC__` **已经在发**：`execute` 的 `receipts` 里就带着 PASS 行的 `cmd`，而
       `__EXEC__` 是 `server._run_agent_stream_to_queue` 从 updates 里读的；
@@ -178,10 +183,12 @@ from agent.react_line import (RunLedger, WorkflowExecutor, convergence_verdict,
 
 # 借生产那几件的**唯一入口**（20261019）。本模块只接线，判据都在 `agent/graph.py` 里；
 # 各段的接法与理由见 `agent/react_parity.py` 的模块头注。
-from agent.react_parity import (confirm_round, denied, display_text, drop_correction,
-                                fast_path, finalize_dedupe, narrator_system_pair,
-                                narrator_wire, plan_has_tools, planner_prompt_args,
-                                unaccounted, write_guard)
+from agent.react_parity import (auto_task_frames, confirm_round, denied, display_text,
+                                drop_correction, fast_path, finalize_dedupe,
+                                narrator_system_pair, narrator_wire, plan_has_tools,
+                                planner_prompt_args, register, split_pseudo_calls,
+                                strip_injected_args, task_decision, unaccounted,
+                                unknown_workflows, write_guard)
 from agent.stickers import repair_sticker_tokens
 from agent.tool_specs import _tool_name
 from agent.workflow_plan import instantiate_plan
@@ -442,14 +449,23 @@ def _norm_state(state: AgentState) -> AgentState:
 # planner 节点：一轮决策（= 旧 `create_agent` 的一轮）
 # ══════════════════════════════════════════════════════════════════════════════
 
-def _plan_update(plan_obj: dict, rounds: int, *, advance: bool = True) -> dict:
+def _plan_update(plan_obj: dict, rounds: int, task_frames: list | None = None, *,
+                 advance: bool = True) -> dict:
     """决策出口的**唯一构造点**（形状与 `graph._plan_update` 逐字同款）。
 
     `advance=False`：这条出口**没花一次 LLM 决策**（快道是确定性的、纠偏是同一条消息的
     第二次决策）⇒ 不该吃轮数预算。理由与 `graph._plan_update` 那条注相同。
+
+    `task_frames` **只有显式登记那一支传**（`_decide_register` 的 `[frame]`）——自动登记
+    那几帧由 `planner_node` 的薄壳统一并进来，两条通道不必各写一遍"怎么把帧拼进 updates"
+    （同 `graph._plan_update` 那条 `is not None` 的注：`[]` 与 `[frame]` 都是**显式**传的，
+    「缺键」与「传空列表」不是一回事）。
     """
-    return {**plan_state(_plan_for_gate(plan_obj)),
-            "plan_rounds": rounds + 1 if advance else rounds, "done": False}
+    upd = {**plan_state(_plan_for_gate(plan_obj)),
+           "plan_rounds": rounds + 1 if advance else rounds, "done": False}
+    if task_frames is not None:
+        upd["task_frames"] = task_frames
+    return upd
 
 
 def _fast_plan(fast: dict) -> dict:
@@ -500,9 +516,39 @@ def planner_node(state: AgentState, config: RunnableConfig | None = None) -> dic
     与 execute 真发出去的 `tool_call_id` 未必对得上（`_frame_id` 是 execute 那一侧算的）
     ⇒ 出站序列非法（deepseek 一律 400，`_frame_id` 的 docstring 记着现场）。
     **决策由 `plan_obj["calls"]` 承载**，不靠消息表。
+
+    **本函数是薄壳**（20261019 资产对齐 G，形状与 `graph.planner_node` 同款）：决策主体
+    是 `_planner_decide`，壳只做一件事——把本轮**确定性登记**的任务帧并进返回。为什么
+    要有这一层：`_planner_decide` 有十几条出口（收尾、纠偏、参数不齐、剔空、卡路径……），
+    逐条补一个 `task_frames` 键等于把登记绑死在"作者记得的那几条"上（漏一条 = 那一族
+    这一轮静默不登记，且没有任何测试会红）。所以只留**一个**注入点。
+    `frames` 为空（绝大多数轮次）时返回的 dict 逐字不变。
+
+    ⚠️ **sink 住在 `ctx` 里、不在这里现建**（与生产唯一的形状差）：生产的
+    `_planner_decide` 内部有 `for _attempt in (0, 1)` 重决策循环，所以一次
+    `planner_node` 调用里第一次尝试登记的帧能活到最终的返回。本臂的"重决策一次"是
+    **再进一次本节点**（出口返回 `{}`、图把控制权交回 planner）⇒ sink 若现建就会在
+    两次调用之间丢掉。放进 `ctx`（一次运行一个实例）之后，语义与生产那层壳逐字相同：
+    登记帧活到**这一轮真正产出返回**的那一次，然后在返回时清空。
     """
     _guard(config)
     ctx = _ctx(config)
+    sink: list = ctx.setdefault("task_sink", [])
+    upd = _planner_decide(state, config, ctx, sink)
+    frames = list(upd.get("task_frames") or []) + list(sink)
+    sink.clear()
+    if frames:
+        upd["task_frames"] = frames
+    return upd
+
+
+def _planner_decide(state: AgentState, config: RunnableConfig | None,
+                    ctx: dict, sink: list) -> dict:
+    """决策主体（本臂的 `graph._planner_decide`）：一轮决策 → 节点的 state 更新。
+
+    `sink` 是壳持有的"本轮确定性登记"载荷（见 `planner_node` 的 docstring）；
+    `_planner_decide` 只往里写、不负责把它拼进返回值。
+    """
     ledger = ctx["ledger"]
     rounds = int(state.get("plan_rounds") or 0)
     messages = list(state.get("messages") or [])
@@ -607,8 +653,27 @@ def planner_node(state: AgentState, config: RunnableConfig | None = None) -> dic
     #    这一格此前**整条不存在**（本臂 0 引用）：形状是"主人没说过那个名字、模型编了
     #    一个，本臂照样把它写进站内"——而 `forbid_*` 那一族负断言在"什么都不做"的臂上
     #    恒真，所以当年的读数并不作废、只是**没在比同一件事**。
-    _plan = _plan_of(resp.tool_calls, ctx.get("role"))
     _frames = _has_frames(_turn_tail(state))
+
+    # ⑥a 伪函数摘除 + 任务台账登记（生产 `_planner_decide` 的 D1 尾 / D3 两段，20261019
+    #     接上）。**顺序照生产**：摘伪函数 → 自动登记（意图清单 − 本轮办了的）→ 显式登记
+    #     → 实例化。这一格此前**整条不存在**，而它缺失的形状是**静默**的：
+    #     `task_hold`/`task_drop`/`task_intents` 三个伪函数**常绑在菜单里**，模型发得出来，
+    #     而 `_plan_of` 拿名字去 `instantiate_plan`，那三个不在 `WORKFLOW_MAP` 里 ⇒
+    #     静默回退成 `chat`、零工具、零注记（实测三种名字都是 `chat [] ''`）。
+    #     ⇒ 模型说"这件事我记下了"，系统读成闲聊，而**没有任何东西会红**。
+    #
+    #     ⚠️ **落点必须在 `_plan_of` 之前**：`_decide_register` 命中时会把整份计划换成
+    #     收尾计划（"这件事我记下了，这一轮到此为止"），在它之后再实例化等于把那份收尾
+    #     覆盖掉——那一轮会照常去执行模型点的技能，而主人刚被告知"记下了"。
+    _rest, _decided, _early = _task_calls(resp, ctx, rounds, _frames)
+    if _early is not None:
+        return _early
+    _plan = _plan_of(_rest, ctx.get("role")) if _rest else _chat_plan(ctx.get("role"))
+    _plan, _early = _register_stage(state, config, ctx, sink, _decided, _plan,
+                                    rounds, _frames)
+    if _early is not None:
+        return _early
     _refused = write_guard(state, ctx=ctx, plan_obj=_plan, rounds=rounds,
                            has_frames=_frames)
     if _refused is not None:
@@ -663,6 +728,86 @@ def planner_node(state: AgentState, config: RunnableConfig | None = None) -> dic
     _sync_calls(_plan)
     ctx["decided"] = "execute"
     return _plan_update(_plan, rounds)
+
+
+def _task_calls(resp, ctx: dict, rounds: int,
+                frames: bool) -> tuple[list, object, dict | None]:
+    """⑥a 前半：伪函数摘除 + 注入参数摘除 + 记账 + "点了菜单外名字"的响亮收尾。
+
+    → `(真调用, decided, 提前返回的更新或 None)`。第三个非空时调用方**直接返回**它。
+
+    为什么要拆成函数（不是为了好看）：这一整段的每一条出口都是"模型发了系统收不下的
+    东西"，而**每一格的后果都不同**——伪函数参数无效要记账继续走，点了菜单外的名字要
+    确定性收尾。混在 `_planner_decide` 里会让那个函数的分支数越过复杂度闸（`C ≤ 30`），
+    而闸的作用正是"读到第 40 个分支的人已经看不出漏了哪条"。
+    """
+    rest, declare, intents, notes = split_pseudo_calls(resp.tool_calls, ctx.get("role"))
+    rest, intents = strip_injected_args(rest, ctx.get("role"), intents)
+    if notes:
+        # 生产把这几笔记进 `PlannerDecision.notes`（trace）。本臂**响亮**：`notes` 里每
+        # 一格都是"模型发了伪函数而系统收不下"（`task_hold_invalid` 之类），静默收下就
+        # 等于把"这次登记无效"伪装成"这轮没有登记"。
+        record("planner", "task_note", round=rounds, notes=list(notes))
+        logger.warning("[react_arm] 任务伪函数记账：%s（round %d）",
+                       "、".join(notes), rounds)
+    bad = unknown_workflows(rest, ctx.get("role"))
+    if bad:
+        # 生产 `tool_calls_to_plan` 在"点了不在本轮 schema 里的函数名"时返回 None ⇒
+        # 确定性收尾。本臂此前让这些名字落进 `instantiate_plan` 的 `or WORKFLOW_MAP["chat"]`
+        # ⇒ "点了个菜单里没有的函数"与"这轮决定闲聊"**长得一模一样**。
+        record("planner", "native_fallback", round=rounds, finish="",
+               disposition="unknown_tool", names=bad)
+        logger.error("[react_arm] 模型点了不在本轮菜单里的函数名：%s → 确定性收尾"
+                     "（本轮零执行）", "、".join(bad))
+        ctx["decided"] = "model"
+        return rest, None, _plan_update(
+            _wrap_up_plan(frames, reason="本轮模型点了菜单里没有的函数名，"
+                                         "没有得到可执行的决策"), rounds)
+    # `workflow` 取**第一条真调用**的技能名（生产 `PlannerDecision.workflow` 就是
+    # `calls[0].name`）；纯伪函数轮没有真调用 ⇒ `chat`（生产那条 `if not calls:` 出口同款）。
+    head = str((rest[0] or {}).get("name") or "") if rest else "chat"
+    return rest, task_decision(declare, intents, head), None
+
+
+def _register_stage(state, config, ctx: dict, sink: list, decided, plan_obj: dict,
+                    rounds: int, frames: bool) -> tuple[dict, dict | None]:
+    """⑥a 后半：自动登记（意图清单 − 本轮办了的）+ 显式登记（`_decide_register`）。
+
+    → `(plan_obj, 提前返回的更新或 None)`。两条出口各走各的通道，与生产逐字同：
+
+      · `"return"`（显式登记收尾）—— `_decide_register` 自己把 `frame_payload` 那一帧
+        拼进 `_plan_update` 的 `task_frames`，这里原样带出去；
+      · `"continue"`（只登记、零工具零问题）—— 走纠偏通道重决策**一次**，返回 `{}`
+        （**不吃轮数**：它没花一次新的 LLM 决策）。`ctx["corrected"]` 与 ④ 的意图纠偏
+        **共用**——生产也是同一个槽（`c.correction`）。
+
+    自动登记那几帧写进壳持有的 `sink`（**覆盖**语义，见下面那句注），由
+    `planner_node` 在返回前并进去。
+    """
+    auto = auto_task_frames(state, config, decided, rounds)
+    if auto:
+        # 覆盖语义（与生产那处 `c.task_sink[:] = _intent_frames_now` 逐字同）：纠偏会
+        # 重决策一次，"只交清单"那一格的重决策正是被摘掉清单逼去点技能的 ⇒ 那一版的
+        # `intents` 必然为空，`extend` 等于把刚收下的枚举留下**两份**（同一个 goal 两帧）。
+        sink[:] = list(auto)
+    new_plan, action, correction, explicit = register(
+        state, ctx=ctx, plan_obj=plan_obj, rounds=rounds, has_frames=frames,
+        decided=decided)
+    if action == "continue":
+        # `planner.task_correct` **不在这里记**：`_decide_register` 自己记了一条（带
+        # `goal`/`steps`/`round` 三格，`eval/corpus_invariants.py` 读的就是它）。
+        # 这里再记一条就是同一个事件两个产地——两处的 `round` 语义一旦漂开（一个数
+        # "纠偏前"、一个数 "纠偏后"），读数会变成"纠偏发生了两次"。
+        ctx["corrected"] = True
+        ctx["correction"] = correction
+        logger.warning("[react_arm] 只登记任务、零工具零问题 → 纠偏重决策一次：%s",
+                       (getattr(decided, "declare", None) or {}).get("goal"))
+        ctx["decided"] = "planner"
+        return plan_obj, {}
+    if action == "return":
+        ctx["decided"] = "model"
+        return new_plan, _plan_update(new_plan, rounds, explicit)
+    return new_plan, None
 
 
 def _sync_calls(plan_obj: dict) -> None:
@@ -1146,6 +1291,11 @@ def make_ctx(*, config: RunnableConfig | None, principal: Any, role: str | None,
         "correction": "", "corrected": False, "decided": "model",
         "lines": {}, "notes": [], "llm": None,
         "calls": [], "origin": {},
+        # 本轮**确定性登记**的任务帧（`graph.planner_node` 那个 `sink` 的同款）。住在这里
+        # 而不是在 `planner_node` 里现建：本臂的"重决策一次"是**再进一次本节点**（出口
+        # 返回 `{}`），现建的 sink 会在两次调用之间丢掉第一次登记的那几帧——详见
+        # `planner_node` 的 docstring。
+        "task_sink": [],
     }
 
 
@@ -1456,6 +1606,23 @@ _CLOSING_RULES = """\
 
 
 # ── plan_obj / blocked 行 ────────────────────────────────────────────
+def _chat_plan(role: str | None) -> dict:
+    """**纯伪函数轮**（只有 `task_hold`/`task_drop`/`task_intents`）的技能位：`chat`。
+
+    取值与生产逐字同源：`planner_llm.tool_calls_to_plan` 在"摘掉伪函数之后一条真调用
+    都不剩"时给的就是 `PlannerDecision(workflow="chat", params={})`，再经
+    `_decide_instantiate` → `instantiate_plan("chat", {})`。所以这一格的形状是
+    "**模型点过函数、但这一轮没有动作要做**"——不是空计划（空 dict 会让下游读 `workflow`
+    的那几处拿到空串，而生产这一轮恒是 `chat`，`_plan_for_gate` 的补缺也就不会触发）。
+
+    `calls` 显式给空列表：它是本臂"这一轮做什么"的唯一载体，缺键与空表在
+    `_sync_calls` 里走的是同一条路，但**显式**写出来才读得出"这里确实没有清单"。
+    """
+    plan = dict(instantiate_plan("chat", {}, role))
+    plan["calls"] = []
+    return plan
+
+
 def _plan_of(tool_calls: list, role: str | None) -> dict:
     """模型这一轮点的技能调用 → 生产的 `plan_obj`（producer 只读 `workflow` 与 `tools`）。
 

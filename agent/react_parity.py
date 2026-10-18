@@ -47,13 +47,19 @@ from agent.deterministic_plan import (_article_fast_path, _display_fast_path,
                                       _effect_switch_fast_path, _intent_hints,
                                       _nav_fast_path, _referent_nav_fast_path,
                                       _wrap_up_plan)
-from agent.graph import (_DecideCtx, _confirm_grant_plan, _create_display_text,
+from agent.graph import (_DecideCtx, _auto_task_frames, _confirm_grant_plan,
+                         _create_display_text, _decide_register,
                          _decide_write_guard, _drop_correction, _evidence_on,
                          _fastpath_on, _finalize_dedupe, _finalize_unaccounted,
                          _narrator_system_pair, _narrator_wire)
-from agent.prompt_context import (_doc_anchors, _has_frames,
+from agent.planner_llm import PlannerDecision, _split_pseudo_calls
+from agent.prompt_context import (REPLY_KIND_ARG, _doc_anchors, _has_frames,
                                   _last_assistant_utterance, _recent_tail,
-                                  _short_reply_hint, blocked_rows)
+                                  _short_reply_hint, blocked_rows,
+                                  parse_reply_kind)
+from agent.provenance import EVIDENCE_ARG, parse_evidence
+from agent.tasks import INTENTS_ARG, normalize_intents
+from agent.workflow_defs import visible_workflows
 
 logger = logging.getLogger(__name__)
 
@@ -64,6 +70,13 @@ logger = logging.getLogger(__name__)
 # 词表"。它确实不是词表，但把它抬出来比给闸门加豁免诚实：豁免是判据替自己打的补丁，
 # 每加一处就少看见一块（那条闸的头注写着这句话）。
 _CONFIRM_WRAP_REASON = "确认轮执行受阻，不重发清单"
+
+# 「这一轮已经纠偏过一次」在本臂的**编码**（见 §G `register` 的长注）：生产把这件事
+# 存在 `_DecideCtx.correction` 这个字符串里（非空 = 纠过），本臂存在 `ctx["corrected"]`
+# 这个布尔里，而 `ctx["correction"]` 喂过提示词就清空了 ⇒ 透传会让登记链每轮都纠。
+# 抬成模块级常量而不是写在调用点上，理由同 `_CONFIRM_WRAP_REASON`（`eval/wordlist_gate.py`
+# 数的是"中文串住在集合字面量里"的数量）。
+_CORRECTED_LATCH = "（本轮已纠偏一次）"
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -224,7 +237,7 @@ def display_text(user_msg: str, page_ctx: str) -> str:
 
 def decide_ctx_kwargs(*, state, config, rounds: int, user_msg: str, role: str,
                       page_ctx: str, principal, plan_obj: dict,
-                      has_frames: bool, decided) -> dict:
+                      has_frames: bool, decided, correction: str = "") -> dict:
     """合成一份 `graph._DecideCtx` 的入参（**逐格给，一个默认值都不省**）。
 
     这张字典就是"本臂喂给生产那条链的全部输入"，所以它同时是**锁的对象**：
@@ -245,8 +258,11 @@ def decide_ctx_kwargs(*, state, config, rounds: int, user_msg: str, role: str,
         ⇒ 结构上恒空。仍然照实传：**"这一格恒空"与"这一格没接"在 trace 上不是一回事**。
       · `_evidence` —— 读**唯一读口** `graph._evidence_on()`。写死 `False` 会让
         "档位开着"与"这一臂没接"长得一样。
+      · `correction` —— **由调用方按段给**（§G 的登记链把它当"这一轮纠过没有"读，
+        §D 的拒绝链一格都不读）。默认空串是 §D 那一侧的中性值；登记链的编码见
+        `register` 的长注（本臂的"纠过没有"住在 `ctx["corrected"]`，不是这个串里）。
       · 其余（`task_sink` / `doc_anchors` / `ledger_frame` / `round_info` / `frames_txt`
-        / `gate_note` / `deny` / `_base_llm` / `llm` / `deny_pseudo` / `correction` /
+        / `gate_note` / `deny` / `_base_llm` / `llm` / `deny_pseudo` /
         `correction_kind` / `planner_note` / `raw` / `workflow_name` / `params` /
         `_tools_off` / `_img_turn` / `llm_attempt`）—— 这一条链**一格都不读**（逐格核过），
         给的是它们各自的中性值。给空不等于判据被削弱：读不到的格影响不了判决。
@@ -258,7 +274,7 @@ def decide_ctx_kwargs(*, state, config, rounds: int, user_msg: str, role: str,
         "ledger_frame": "", "principal": principal, "round_info": "",
         "frames_txt": "", "gate_note": "", "deny": frozenset(),
         "_base_llm": None, "_evidence": _evidence_on(), "llm": None,
-        "deny_pseudo": set(), "correction": "", "correction_kind": "",
+        "deny_pseudo": set(), "correction": correction, "correction_kind": "",
         "planner_note": "", "plan_obj": plan_obj, "raw": None,
         "decided": decided, "workflow_name": "", "params": {},
         "_tools_off": False, "_img_turn": False, "llm_attempt": 0,
@@ -367,6 +383,174 @@ def unaccounted(plan_obj: dict, rounds: int, has_frames: bool) -> dict | None:
     """
     upd = _finalize_unaccounted(plan_obj, rounds, has_frames)
     return None if upd is None else upd.get("plan_obj")
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# §G 任务台账登记：三个伪函数 + 意图清单 → `__TASK__` 帧
+# ══════════════════════════════════════════════════════════════════════════════
+# 这一族的**病**（本臂此前一格都没接）：三个任务伪函数（`task_hold` / `task_drop` /
+# `task_intents`）**常绑在菜单里**（`build_tool_schema`，20261015 撤档后对所有角色可见），
+# 模型完全发得出来；而本臂的 `_plan_of` 拿技能名去 `instantiate_plan`，那三个名字**不在
+# `WORKFLOW_MAP` 里** ⇒ `WORKFLOW_MAP.get(name) or WORKFLOW_MAP["chat"]` 静默回退成
+# `chat`、零工具、零注记、零 trace。实测（离线直调 `instantiate_plan`）：
+#
+#     task_hold -> chat [] ''      task_drop -> chat [] ''      task_intents -> chat [] ''
+#
+# 形状是"模型说「这件事我记下了/这件事不做了」，系统把它读成闲聊"。而**没有任何东西会红**
+# ——`require_task_state` 那一族在本臂上从来没被满足过，报告里只是一条稳定的红。
+#
+# 同族的第二个出口是**挂在每个技能上的 `intents` 字段**（`tasks.intents_prop_schema`）：
+# 本臂此前也没摘 ⇒ 模型枚举的清单被当成一个技能参数送进 `instantiate_plan`，换来一条
+# `param_unknown` 告警 + 清单一个字节都不剩。
+#
+# 接法：**不重写判据**——伪函数拆分直调 `planner_llm._split_pseudo_calls`（生产
+# `tool_calls_to_plan` 用的同一个），登记直调 `graph._decide_register`，自动登记直调
+# `graph._auto_task_frames`。本模块只做三件适配：把本臂的 state 喂成它们认的形状、
+# 把"只纠偏一次"那格译成生产读的那一格、把三格非技能参数摘走。
+#
+# **`_split_pseudo_calls` 是私有名**，仍然直调：它是生产那条路的**唯一拆分点**，
+# 抄一份进本模块就等于把"哪几个名字是伪函数"养成两份，而 `TASK_HOLD` 这些常量在
+# `tasks.py` 里改名时**两份不会一起动**（本仓最贵的那类事故）。宁可 import 一个私有名。
+
+
+def split_pseudo_calls(calls: list, role: str | None) -> tuple[list, dict | None,
+                                                               tuple, list[str]]:
+    """三个伪函数从调用里摘出来 → `(剩下的调用, declare, intents, notes)`。
+
+    直调 `planner_llm._split_pseudo_calls`（生产 `tool_calls_to_plan` 的第 2 步）。
+    `notes` 是**机器可读的异常记账**（`task_drop_ignored` / `task_hold_invalid` /
+    `task_intents_invalid`）——生产把它塞进 `PlannerDecision.notes` 进 trace，本臂
+    由调用方**响亮地**记一笔（见 `react_arm.planner_node` ⑥a）。
+    """
+    return _split_pseudo_calls(list(calls or []), role)
+
+
+def strip_injected_args(calls: list, role: str | None,
+                        intents: tuple = ()) -> tuple[list, tuple]:
+    """把**不是技能参数**的那三格从 args 里摘走 → `(调用, 意图清单)`。
+
+    `intents` / `reply_kind` / `evidence` 由 `build_tool_schema` 挂在**每个**技能上
+    （前者无条件、后者按 `AGENT_EVIDENCE` 射程），却都不是那个技能的参数。生产
+    `tool_calls_to_plan` 在取到第一条调用后把三者 `pop` 走（那边的注写着"摘掉才是
+    「这一格不存在」那条路径逐字节相同"）。本臂此前**没摘** ⇒ 模型填的 `intents`
+    落进 `params`，换来一条 `param_unknown` 告警，而清单本身**一个字节都没留下**。
+
+    ⚠️ **与生产唯一的口径差**：生产只摘**第一条**调用（`parallel_tool_calls=False`
+    保证它那边恒为一条），本臂一轮可能有多条（见模块头注）⇒ 逐条摘、意图按原序合并。
+    摘的**名字集合**与**归一函数**逐字同源（常量 import 自 `tasks` / `prompt_context`
+    / `provenance`），所以改名会一起动。`tests/test_react_task_ledger.py` 拿
+    `tool_calls_to_plan` 的源码做**机械对差**：它 `pop` 哪几个名字，这里就得摘哪几个。
+
+    `reply_kind` 与 `evidence` 的归一产物在这里**丢弃**（生产把它们放进 `PlannerDecision`
+    进 trace）：本臂的节点级 trace 事件族是**已登记的缺口**（见 `react_arm` 模块头注的
+    "这一版仍然不做的"），`reply_kind` 那一格只进 trace、**不据它放行或拦截任何事**，
+    所以丢弃不改这一轮的行为。照实写在这里，免得下次读的人以为接全了。
+    """
+    out: list[dict] = []
+    inline: list[dict] = []
+    for c in calls:
+        args = (c or {}).get("args") if isinstance(c, dict) else None
+        if not isinstance(args, dict):
+            out.append(c)
+            continue
+        args = dict(args)
+        parse_evidence(args.pop(EVIDENCE_ARG, None))
+        parse_reply_kind(args.pop(REPLY_KIND_ARG, None))
+        if INTENTS_ARG in args:
+            inline.extend(normalize_intents({"intents": args.pop(INTENTS_ARG)}, role))
+        out.append({**c, "args": args})
+    return out, tuple(intents) + tuple(inline)
+
+
+def unknown_workflows(calls: list, role: str | None) -> list[str]:
+    """点名的技能里**不在本轮可见清单**的那些（生产 `tool_calls_to_plan` 同一条判据：
+    `name not in {s.name for s in visible_workflows(role)}`）。
+
+    ⚠️ 判据读的是 `visible_workflows`，**不是** `WORKFLOW_MAP`：两者差在
+    `include_system` 的那几件（内部技能不在菜单里，模型点了也认不出）。照生产写，
+    免得"本臂比生产严一点"变成一处说不清的差。
+
+    调用方拿它做**响亮**的那件事（生产是 `tool_calls_to_plan` 返回 None ⇒ 确定性收尾）：
+    本臂此前让这些名字落进 `_plan_of` → `instantiate_plan` 静默回退成 `chat`
+    ⇒ "模型点了个菜单里没有的函数"与"模型这轮决定闲聊"长得一模一样。
+    """
+    ok = {w.name for w in visible_workflows(role)}
+    return [str((c or {}).get("name") or "") for c in calls
+            if str((c or {}).get("name") or "") not in ok]
+
+
+def task_decision(declare: dict | None, intents: tuple, workflow: str,
+                  params: dict | None = None) -> PlannerDecision:
+    """本臂这一轮的决策对象——**用生产那个类型**（`planner_llm.PlannerDecision`）。
+
+    为什么不自己搭一个 shim：`_decide_register` / `_auto_task_frames` / `_acted_workflows`
+    读的是它的 `declare` / `intents` / `workflow` 三格，而生产将来给这个 dataclass
+    加一格（带默认值的那种）时，自己那份 shim **不会跟着长**——症状是"那一格恒空"，
+    正是本模块纪律③要消灭的静默。用同一个类型，加格要么有默认值（无害）、要么构造时
+    当场 TypeError（响亮）。
+
+    `workflow` 取**第一条真调用**的技能名（生产的 `PlannerDecision.workflow` 就是
+    `calls[0].name`），纯登记轮没有真调用 ⇒ `chat`（生产 `tool_calls_to_plan` 那条
+    `if not calls:` 出口逐字同款）。`_acted_workflows` 把 `""` 与 `chat` 都排除在外，
+    所以这个取值决定的是"本轮派下去的那件算不算办过了"。
+    """
+    return PlannerDecision(workflow=workflow, params=dict(params or {}),
+                           declare=declare, intents=tuple(intents or ()))
+
+
+def auto_task_frames(state, config, decided, rounds: int) -> list[dict]:
+    """意图清单 − 本轮办了的 ⇒ 自动登记的 `__TASK__` 载荷。直调 `graph._auto_task_frames`。
+
+    它自己判"清单为空 ⇒ 一个字节都不产生、也不记 trace"，所以调用方不必先判。
+    取现场事实的那几处（`_acted_workflows` / `_task_goal_sources` / `receipts`）都在
+    生产那一侧，本模块一个字都不重写。
+    """
+    return _auto_task_frames(state, config, decided, rounds)
+
+
+def register(state, *, ctx, plan_obj: dict, rounds: int, has_frames: bool,
+             decided) -> tuple[dict, str, str, list | None]:
+    """任务登记（生产 `graph._decide_register`）→
+    `(plan_obj, action, correction, task_frames)`。
+
+    `action` 就是生产 `_Step.action` 的三格：`"next"` 往下走 / `"continue"` 纠偏重决策
+    **一次** / `"return"` 本轮到此收尾（`plan_obj` 已被换成带 `TASK_DONE_NOTE` 或
+    `declaration_note` 的收尾计划，**必须用返回的这份**——拿原来那份等于把登记丢了，
+    那一轮会照常去执行模型点的技能，而主人刚被告知"这件事我记下了"）。
+
+    ⚠️ **"只纠偏一次"那一格要译**：生产读的是 `c.correction`（一个**跨阶段活着的字符串**，
+    `_planner_setup` 建一次、`_decide_register` 只判真假）。本臂把"这一轮纠过没有"
+    放在 `ctx["corrected"]`（一个布尔，与 ④ 的意图纠偏**共用**——生产也是同一个槽），
+    而 `ctx["correction"]` 在喂过提示词之后就被清空（见 `react_arm.planner_node` ③ 的注）。
+    ⇒ 直接透传会让 `_decide_register` 每次都读到空串、**每轮都纠**，而纠偏出口返回的是
+    `{}`（不吃轮数）⇒ 死循环。所以这里按 `ctx["corrected"]` 补一个非空哨兵：它在这条链上
+    只被当**真假**读（`not c.correction` 与 `record(..., corrected=bool(...))` 两处），
+    补哨兵之后 `corrected=True` 记的也正是事实。
+    """
+    latch = (ctx.get("correction") or
+             (_CORRECTED_LATCH if ctx.get("corrected") else ""))
+    kw = decide_ctx_kwargs(state=state, config=ctx.get("config"), rounds=rounds,
+                           user_msg=ctx.get("user_msg") or "",
+                           role=ctx.get("role") or "",
+                           page_ctx=ctx.get("page_ctx") or "",
+                           principal=ctx.get("principal"), plan_obj=plan_obj,
+                           has_frames=has_frames, decided=decided, correction=latch)
+    c = _DecideCtx(**kw)
+    step = _decide_register(c)
+    if step.action == "return":
+        # 第四个返回值是生产那个 `_plan_update(..., [frame] if frame else [])` 里的
+        # **显式登记帧**（`frame_payload` 的产物，落库那一帧）。必须原样带出去：
+        # 丢了它的形状是"计划里写着"这件事记下了"、而 `__TASK__` 帧一个都不发"，
+        # 下一轮 planner 靠那个帧认人 ⇒ 同一件事被登记第二遍。
+        # `is not None` 的语义照 `graph._plan_update`（`[]` 与 `[frame]` 都是显式传的）。
+        return c.plan_obj, "return", "", (step.ret or {}).get("task_frames")
+    if step.action == "continue":
+        return plan_obj, "continue", c.correction, None
+    if step.action == "next":
+        return plan_obj, "next", "", None
+    # 生产那三段只有这三个出口（见 `_decide_register` 的三处 `return _Step(...)`）。
+    # 第四种动作意味着它被改过了，而这里**没有对应的接线** ⇒ 响亮地炸，不猜。
+    raise RuntimeError(f"_decide_register 返回了没接线的动作 {step.action!r}")
 
 
 # ══════════════════════════════════════════════════════════════════════════════

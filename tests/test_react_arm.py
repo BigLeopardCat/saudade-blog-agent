@@ -955,8 +955,18 @@ check("塑形器在臂里**一个都不是标识符**了（`_round_state`/`_gate
 # （它一旦写，`with_tool_call_pairs` 会把工具帧认领进那条 assistant，而 planner 的
 # `tool_calls` 与 execute 真发出去的 `tool_call_id` 对不上 ⇒ 出站序列非法）。
 _planner_tree = ast.parse(_arm_src)
-_pn = next(n for n in _planner_tree.body
-           if isinstance(n, ast.FunctionDef) and n.name == "planner_node")
+# ⚠️ 落点是**决策主体**（20261019 资产对齐 G 起节点是"薄壳 + `_planner_decide`"，
+# 生产 `graph.planner_node` 同款）。只认 `planner_node` 会让这条锁**当场变空**
+# ——壳里一个 dict 都没有，"锁变空"与"接线掉了"在这里看不出区别。两件一起判：
+# 主体在，且壳恰好调它一次。
+_pn = next((n for n in _planner_tree.body
+            if isinstance(n, ast.FunctionDef) and n.name == "_planner_decide"), None)
+_pn_shell = next((n for n in _planner_tree.body
+                  if isinstance(n, ast.FunctionDef) and n.name == "planner_node"), None)
+check("决策主体 `_planner_decide` 找得到，且薄壳**恰好调它一次**（壳还在，锁就没变空）",
+      _pn is not None and _pn_shell is not None
+      and len([n for n in ast.walk(_pn_shell) if isinstance(n, ast.Call)
+               and isinstance(n.func, ast.Name) and n.func.id == "_planner_decide"]) == 1)
 _pn_msg_keys = [k.value for r in ast.walk(_pn) if isinstance(r, ast.Dict)
                 for k in r.keys
                 if isinstance(k, ast.Constant) and k.value == "messages"]
