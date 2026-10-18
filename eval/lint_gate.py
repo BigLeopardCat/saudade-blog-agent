@@ -18,6 +18,12 @@
      混在一句里读者会以为是自己动过的那个老文件）。
 变好**不**报红（标准的棘轮行为：绿着，并提示你可以 `--update` 把账收得更紧）。
 
+**第四类是"账自己坏了"（20261018 补）**：基线里**有**、盘上却没有的键（文件被删掉了）。
+`by_file` 的键只被用来做 `get(f, 0)` ⇒ 它不进上面任何一条判据、也不影响 `total`，
+只会让账慢慢变脏，还会被"已经清零，可以销账"那句**报成好消息**。退 3（账不可用
+⇒ 先 `--update`），与三个量对不上同档。同族的洞在 `eval/type_gate.py` 那处危害更大
+（改名会让新文件按 0 起算），两处一起补的。
+
 **三个量必须同源，否则量的是另一件事**（同 `eval/type_gate.py` 的教训）：
   · **ruff 版本**——升版就换了一套规则实现与默认行为，基线里记着出账时的版本；
   · **`line-length`**——E501 一条就占掉全仓 60% 的条目，改它等于换一套账；
@@ -33,7 +39,8 @@
     python eval/lint_gate.py --ruff "uvx ruff@0.14.4"   # 本机（.venv 是产线 venv，不许 uv sync）
     python eval/lint_gate.py --update           # 重出基线（唯一放宽通道）
 
-退出码：0 通过 / 1 变差 / 3 跑不起来（缺 ruff、输出格式变了、版本或两个配置量对不上）。
+退出码：0 通过 / 1 变差 / 3 跑不起来或**账不可用**（缺 ruff、输出格式变了、三个量
+        （ruff 版本 / line-length / select）对不上、账里有盘上不存在的键）。
 """
 
 from __future__ import annotations
@@ -109,6 +116,21 @@ def judge(by_file: dict[str, int], base_files: dict[str, int]) -> list[str]:
     return bad
 
 
+def ghost_keys(base_files: dict) -> list[str]:
+    """账里有、盘上却没有的键（20261018 补）。
+
+    `by_file` 的键只被用来做 `base_files.get(f, 0)` ⇒ **删掉一个文件**之后旧键永远留在
+    账上：它不出现在 `judge()` 的任何一条判据里（那三条都只遍历**现在**报出来的文件），
+    也不影响 `total`（total 是 ruff 汇总行的数），于是它只是让账慢慢变脏——而下面那句
+    「这些文件已经清零，可以销账」还会把它**当成好消息报出来**。
+
+    与 `eval/type_gate.py` 那处的差别：那里**改名**会让新文件按 0 起算（静默买回一份
+    额度），这里改名会撞上纪律 1（新文件必须零 error）**当场红** ⇒ 危害小一档。
+    但"文件整个删掉、它的 error 也一起消失"那一种，两边一样静默。
+    """
+    return sorted(k for k in base_files if not (ROOT / k).is_file())
+
+
 def _self_check() -> None:
     """正控 + 反控各来一遍：**没有这一段，「闸其实是空的」没人看着**。
 
@@ -141,6 +163,12 @@ def _self_check() -> None:
     assert judge({"a.py": 6, "b.py": 1}, base), "互相抵消（+1/-1）没红"
     assert any("新增文件" in b for b in judge({"c.py": 1}, base)), \
         "新文件那条要与'变脏'分开报（两种事故）"
+
+    # 幽灵键：盘上没有的键要被抓到，盘上有的**不许**被抓（否则它会把整份账判成幽灵）
+    assert ghost_keys({"eval/this_file_was_deleted.py": 3}) == ["eval/this_file_was_deleted.py"], \
+        "盘上没有的键没被抓到 —— 幽灵键守卫是空的"
+    assert ghost_keys({"eval/lint_gate.py": 1}) == [], \
+        "盘上**有**的键被判成幽灵 —— 这是「见谁都红」"
 
 
 def main() -> int:
@@ -179,6 +207,16 @@ def main() -> int:
                 print(f"❌ 基线里的 `{key}` 是 {base.get(key)!r}，现在是 {now_v!r} —— "
                       f"换它等于换一套条目集，先 `--update` 重出账。")
                 return 3
+        # ④ 账里有、盘上却没有的键（见 `ghost_keys` 的注）。排在跑 ruff 之前：这一条
+        # 只读文本，而一次全仓 ruff 是几秒到十几秒——退 3 不该付那个代价，
+        # 反控"改一格 ⇒ 当场红"也就从十几秒变成一瞬。
+        ghosts = ghost_keys(base.get("by_file") or {})
+        if ghosts:
+            print(f"❌ 基线里有 {len(ghosts)} 个键在盘上找不到对应文件（删除后的残留）："
+                  f"{'、'.join(ghosts)}\n"
+                  f"   它们不进 `judge()` 的任何一条判据、也不影响 `total`，只会让账变脏"
+                  f"（下面那句「已经清零，可以销账」还会把它们报成好消息）。先 `--update`。")
+            return 3
 
     r = subprocess.run(prog + ["check", "--no-cache", "--output-format=concise", "."],
                        cwd=ROOT, capture_output=True, text=True)
