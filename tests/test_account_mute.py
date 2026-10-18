@@ -34,10 +34,10 @@ import agent.adminops_account as _account  # noqa: E402
 import agent.adminops_noop as _noop  # noqa: E402
 import agent.authz as authz  # noqa: E402
 import agent.graph as g  # noqa: E402
-from agent.workflow_defs import WORKFLOWS, WRITE_WORKFLOW_NAMES  # noqa: E402
-from agent.workflow_plan import instantiate_plan  # noqa: E402
 import tools.base as base  # noqa: E402
 from agent.principal import ROLE_ADMIN, Principal  # noqa: E402
+from agent.workflow_defs import WORKFLOWS, WRITE_WORKFLOW_NAMES  # noqa: E402
+from agent.workflow_plan import instantiate_plan  # noqa: E402
 
 # ── 密钥桩（同 test_account_freeze 的那一处）────────────────────────────────
 # `_confirm_popup` 在 `settings.jwt_secret` 空缺时**不弹窗**；`_policy_post` 也要它

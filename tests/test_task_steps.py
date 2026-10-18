@@ -34,10 +34,10 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent  # 仓根（测试统一在 tests/）
 sys.path.insert(0, str(ROOT))
 
+from agent import tasks as T  # noqa: E402
 from agent.tool_specs import split_tool_spec  # noqa: E402
 from agent.workflow_params import args_are_bound  # noqa: E402
 from agent.workflow_plan import instantiate_plan  # noqa: E402
-from agent import tasks as T  # noqa: E402
 
 FAILS: list[str] = []
 

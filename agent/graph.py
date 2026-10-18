@@ -1430,7 +1430,12 @@ def _write_command_nudge(plan_obj: dict, user_msg, has_frames: bool,
 # 几十处引用（含测试）一个都不用改。判据侧同步见 `tests/_ctx_src.plan_codec_src()`。
 # ⚠️ 改协议（加行、改分隔符、改 KEY 名）要去 `agent/plan_codec.py`，不是这里。
 from agent.plan_codec import (  # noqa: E402,F401
-    normalize_plan, parse_plan, plan_encode, plan_state, plan_view)
+    normalize_plan,
+    parse_plan,
+    plan_encode,
+    plan_state,
+    plan_view,
+)
 
 # ---------------------------------------------------------------------------
 # 声称检查正则族（gate 确定性兜底用；作用域见 _claim_issue）
@@ -6011,7 +6016,8 @@ def _planner_preflight(state: AgentState, config: RunnableConfig | None = None) 
     if grant and not resumed:
         if rounds == 0:
             plan_obj = _confirm_grant_plan(grant)
-            record("planner", "confirm_grant", workflow=plan_obj["workflow"], tools=plan_obj["tools"])
+            record("planner", "confirm_grant", workflow=plan_obj["workflow"],
+                   tools=plan_obj["tools"])
         else:
             plan_obj = _wrap_up_plan(_has_frames(_turn(state)))
             record("planner", "confirm_wrap", rounds=rounds,

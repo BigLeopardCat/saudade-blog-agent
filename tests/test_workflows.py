@@ -243,14 +243,16 @@ def test_plan_workflow_line_contract():
 
 def test_parse_tolerance():
     print("[plan] 解析容错")
-    parsed = parse_plan("WORKFLOW=navigate\nPARAMS={'target': '物联网平台',}\nTOOLS: x\nNOTE: n\nREPLY: r")
+    parsed = parse_plan("WORKFLOW=navigate\nPARAMS={'target': '物联网平台',}\n"
+                        "TOOLS: x\nNOTE: n\nREPLY: r")
     check("单引号+尾逗号 PARAMS 容错", parsed["params"] == {"target": "物联网平台"}, str(parsed["params"]))
     parsed = parse_plan("```\nWORKFLOW: chat\n```")
     check("markdown 围栏容错", parsed["workflow"] == "chat", str(parsed))
     parsed = parse_plan("完全不是计划格式")
     check("坏输入 → chat 兜底", parsed["workflow"] == "chat" and parsed["chat"], str(parsed))
     parsed = parse_plan("WORKFLOW=navigate\nPARAMS: 不是JSON")
-    check("PARAMS 坏 JSON → 空参数兜底", parsed["params"] == {} and parsed["workflow"] == "navigate", str(parsed))
+    check("PARAMS 坏 JSON → 空参数兜底",
+          parsed["params"] == {} and parsed["workflow"] == "navigate", str(parsed))
 
 
 def test_summary_protocol_removed():
@@ -4391,8 +4393,8 @@ def test_site_guide_is_role_rendered():
 
 
 def test_site_guide_covers_nav_map():
-    """SITE_GUIDE（访客变体 site_guide(None)）必须覆盖 NAV_MAP 全部存活路径（`workflow_defs/nav.py` 单一事实
-    来源，新增板块两侧同步；None=已下线不列）。防 narrator 介绍板块漏项——20260905
+    """SITE_GUIDE（访客变体 site_guide(None)）必须覆盖 NAV_MAP 全部存活路径
+    （`workflow_defs/nav.py` 单一事实来源，新增板块两侧同步；None=已下线不列）。防 narrator 介绍板块漏项——20260905
     trace 190827 实证：能做啥只列 4 项漏 IoT/河灯。20260921 能力清单改按角色渲染后
     此锁仍指向访客变体（管理能力行不得进访客清单，由 test_site_guide_is_role_rendered 锁）。"""
     import agent.graph as g
@@ -5749,7 +5751,8 @@ def test_write_intent_never_expressed_round():
 
 
 def main():
-    for fn in (test_nav_map_integrity, test_navigate_instantiation, test_other_workflows, test_summary_protocol_removed,
+    for fn in (test_nav_map_integrity, test_navigate_instantiation, test_other_workflows,
+               test_summary_protocol_removed,
                test_gate_note_honesty, test_gate_nav_pending_claim, test_plan_roundtrip,
                test_plan_workflow_line_contract, test_parse_tolerance,
                test_nav_fast_path, test_nav_fast_path_item_referent_guard,

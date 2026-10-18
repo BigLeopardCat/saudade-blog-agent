@@ -846,7 +846,7 @@ for _n in ("你已经提交过河灯啦", "要我现在发布吗？你回复「�
 # 端到端：未获确认的写操作 + 叙述说"已发布" → gate 必须兜住
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage  # noqa: E402
 
-from agent.graph import gate_node, plan_encode, plan_state  # noqa: E402
+from agent.graph import gate_node, plan_state  # noqa: E402
 from agent.workflow_plan import instantiate_plan  # noqa: E402
 
 
@@ -1101,7 +1101,7 @@ check("⭐ 超管的人设是管理员档（写死 role == 'admin' 时它会拿�
       audience_block(ROLE_SUPERADMIN) == audience_block(ROLE_ADMIN)
       != audience_block(ROLE_USER))
 
-from agent.workflow_defs import WORKFLOWS, WORKFLOW_MAP  # noqa: E402
+from agent.workflow_defs import WORKFLOW_MAP, WORKFLOWS  # noqa: E402
 from agent.workflow_menu import build_planner_context  # noqa: E402
 
 for name in ADMIN_WORKFLOWS:

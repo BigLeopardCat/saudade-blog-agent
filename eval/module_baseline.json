@@ -8,7 +8,7 @@
     "top_defs": 46
   },
   "agent/graph.py": {
-    "lines": 13190,
+    "lines": 13196,
     "top_defs": 235
   },
   "agent/prompts.py": {
@@ -60,11 +60,11 @@
     "top_defs": 20
   },
   "tests/test_confirm.py": {
-    "lines": 1195,
+    "lines": 1197,
     "top_defs": 7
   },
   "tests/test_judge_offline.py": {
-    "lines": 1433,
+    "lines": 1438,
     "top_defs": 11
   },
   "tests/test_nav_truthfulness.py": {
@@ -80,7 +80,7 @@
     "top_defs": 6
   },
   "tests/test_tag_admin.py": {
-    "lines": 1605,
+    "lines": 1606,
     "top_defs": 16
   },
   "tests/test_todo_schedule.py": {
@@ -92,7 +92,7 @@
     "top_defs": 12
   },
   "tests/test_workflows.py": {
-    "lines": 5799,
+    "lines": 5802,
     "top_defs": 72
   },
   "tools/base.py": {

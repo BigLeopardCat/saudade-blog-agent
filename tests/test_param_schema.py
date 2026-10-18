@@ -409,7 +409,8 @@ def test_enum_closure_derives_from_literal():
     check("裸 enum 取得出来", arg_enum({"enum": ["a", "b"], "type": "string"}) == ("a", "b"),
           str(arg_enum({"enum": ["a", "b"], "type": "string"})))
     check("anyOf 包裹的 enum 也取得出来（Optional[Literal] 的渲染形）",
-          arg_enum({"anyOf": [{"enum": ["x", "y"], "type": "string"}, {"type": "null"}]}) == ("x", "y"),
+          arg_enum({"anyOf": [{"enum": ["x", "y"], "type": "string"},
+                              {"type": "null"}]}) == ("x", "y"),
           str(arg_enum({"anyOf": [{"enum": ["x", "y"], "type": "string"}, {"type": "null"}]})))
     check("没有闭集 ⇒ 空元组（空 = 没有闭集，不是「闭集为空」）",
           arg_enum({"type": "string"}) == () and arg_enum(None) == ()
@@ -444,7 +445,8 @@ def test_enum_closure_derives_from_literal():
                 'Literal["on", "off"]'):
         check(f"tools/base.py 里有 {ann}", ann in base)
     check("参数规格用 arg_enum 派生（不手写枚举表）",
-          "choices=arg_enum(" in (ROOT / "agent" / "workflow_params.py").read_text(encoding="utf-8"))
+          "choices=arg_enum(" in (ROOT / "agent" / "workflow_params.py").read_text(
+              encoding="utf-8"))
 
 
 def test_enum_closure_zeroes_tools_before_pydantic():

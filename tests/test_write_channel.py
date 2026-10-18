@@ -133,7 +133,8 @@ def _dead_entries(declared, workflows: list) -> list:
     return sorted(set(declared) - _write_workflows(workflows))
 
 
-check("③a 没有死条目", not _dead_entries(_declared, WORKFLOWS), str(_dead_entries(_declared, WORKFLOWS)))
+check("③a 没有死条目", not _dead_entries(_declared, WORKFLOWS),
+      str(_dead_entries(_declared, WORKFLOWS)))
 check("③b 变异臂：把 chat 塞进声明集 ⇒ 当场点名它（同上：证明 ③a 不是恒真）",
       _dead_entries(_declared | {"chat"}, WORKFLOWS) == ["chat"])
 
