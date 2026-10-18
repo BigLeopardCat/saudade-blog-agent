@@ -80,7 +80,10 @@ from agent import authz
 from agent.deterministic_plan import _doc_title, _intent_done, _scan_action_intents
 from agent.entity_digest import receipt_digest
 from agent.frame_contract import executed_specs
-from agent.graph import _VERDICT_PASS, _check_spec, _grant_covers, _tool_args, _tool_name
+from agent.graph import (_VERDICT_PASS, _check_spec, _grant_covers, _spec_signature,
+                         _tool_args, _tool_name)
+from tools.base import is_noop
+from utils.trace import record
 
 logger = logging.getLogger(__name__)
 
@@ -331,6 +334,16 @@ class WorkflowExecutor:
         # **请求级、一直在追加、不重置**：生产的 `state["tool_data"]` 就是请求内累计的，
         # 每轮清空会让"上一轮读到的那条 id"下一轮引用不到。
         self.tool_data: list[dict] = []
+        # 零改动的那些 spec 的**归一化签名**（生产 `AgentState.noop_specs` 的同一格，
+        # 20261019 接上）。事实源是工具事实信封里的 `changed`（`tools.base.is_noop` 读
+        # 它），本层只**记账**、不判任何事——判据在两个读端：gate 洞⑩（"这一轮什么都没
+        # 改"的假阴性）与 planner 的零改动重复裁剪（同一件零改动的事再点名一次不重跑）。
+        #
+        # ⚠️ 签名走**生产那一份** `graph._spec_signature`（`react_line.spec_signature` 是
+        # 另一件事：技能级、无进展判据的键）。两处形状不同，混用的形状是**静默的**：
+        # 消费方 `_trim_noop_specs` 拿 `tuple(s)` 做集合成员判断，格式不对就永远不命中
+        # ⇒ 那两条判据恒判"没有零改动"，而没有任何东西会红。
+        self.noop_specs: list[list[str]] = []
 
     def run(self, workflow: str, params: dict) -> tuple[str, int]:
         """→ `(给模型看的正文, 真正执行了几个工具)`。第二项是**无进展判据的输入**。
@@ -486,6 +499,13 @@ class WorkflowExecutor:
             line, verdict = _verdict_of(name, args, args_ok, text, workflow, kind, meta,
                                         self.ledger)
             outs.append(line)
+            # 零改动的**记账**（生产 `graph.execute_node` 的同一格、同一条件）：判据是
+            # 工具事实信封里的 `changed`，本层不解释、只落签名。位置在 verdict 之后是
+            # 刻意的——只有 PASS 才算"这一下真的发生了（只是没改动）"，BLOCK 那些
+            # （错误帧 / 权限拒绝 / 等确认）连"发生"都算不上。
+            if verdict == _VERDICT_PASS and is_noop(meta):
+                self.noop_specs.append(list(_spec_signature(name, args)))
+                record("execute", "noop", tool=name, args=args)
             # `line`（那行"【内部回执】…"）**单独留一格**：它要跟着这一条调用走到模型
             # 窗口里去（`react_arm._expand` 按 `tool_call_id` 取），而**不能**混进
             # `result`——`result` 是发给生产者的工具帧正文，多一行内部旁白就是往

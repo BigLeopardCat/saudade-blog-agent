@@ -641,13 +641,30 @@ try:
     # 这条判据也就无从判起。要判 `_grant_covers`，现场必须落在**模型真在决策的那一轮**
     # ——生产里那就是确认兑现后的续跑轮（`rounds > 0`，`_planner_preflight` 的
     # `resumed` 分支）。改成 0 的话这条会变成恒真/恒假的假判据。
+    # ⚠️ 这句话里**两个名字都在**（20261019 补，夹具让位）：写目标拒绝链接上之后，
+    # `_name_target_fix` 会把"主人这句话里找不到出处"的目标名**校正回主人原话里那一段**
+    # ——用 `W_MSG`（只说「大笨狗」）时，模型点的「别的标签」会被改成「大笨狗」，而它
+    # 正好是令牌签的那一件 ⇒ 这一轮变成"该执行"，判据无从判起。校正本身是**生产行为**
+    # （`_decide_write_guard` 的第一条校正步，与令牌判据无关），所以让位的是夹具：
+    # 主人这句话里两个名字都点到了，模型点的那个**有据**、不被校正，令牌覆盖判据才真的
+    # 被问到。下面紧跟的那条反控用的正是 `W_MSG`（把这一支也钉住）。
+    _W_OTHER = "标签「大笨狗」先放着，把「别的标签」删掉"
     _gf3 = _run([_call("tag_delete", name="别的标签")], {"delete_tag": _nav_tool},
-                principal=ADMIN0, msg=W_MSG, rounds=1,
+                principal=ADMIN0, msg=_W_OTHER, rounds=1,
                 grant={"workflow": "tag_delete",
                        "specs": [{"tool": "delete_tag", "args": {"name": "大笨狗"}}]})
     check("令牌是**另一件**（同工具换目标）⇒ 一件都不执行、照常弹卡",
           RAN == [] and bool(_last_node(_gf3, "execute").get("pending_confirm")),
           f"RAN={RAN}")
+    RAN.clear()
+    _gf3c = _run([_call("tag_delete", name="别的标签")], {"delete_tag": _nav_tool},
+                 principal=ADMIN0, msg=W_MSG, rounds=1,
+                 grant={"workflow": "tag_delete",
+                        "specs": [{"tool": "delete_tag", "args": {"name": "大笨狗"}}]})
+    check("目标名在主人这句话里**无据** ⇒ 校正链先把它改回「大笨狗」⇒ 令牌覆盖它、照常执行"
+          "（**校正优先于令牌覆盖判据**；这条同时是上面那句夹具注的反控——换成 `W_MSG` "
+          "就该走这一支）",
+          [r.get("name") for r in RAN] == ["大笨狗"], f"RAN={RAN}")
 
     print("\n⑥b‴ 首轮 + 令牌在场 ⇒ **确认轮**（零 LLM 照签名执行，这句说什么都不问）")
     RAN.clear()
@@ -1060,7 +1077,13 @@ print("\n⑪ 并发：两项流水交替推进，两本台账互不可见")
 # ⚠️ 与 ②b 同一个根因：target 取静态别名。「设备」不是 `NAV_MAP` 的键 ⇒ A 路第一条调用
 # 算不出路径、只剩一件回执，而下面那条判据要的**正是"两件对一件"这个对比**——
 # 前提塌了它就恒红（当时实测 A=1 B=1，红在这里而不是红在台账串账上）。
-_SA = [_call("navigate", target="首页"), _call("navigate", target="时间轴"),
+# ⚠️ A 路那两件**必须是两个不同的技能**（20261019 补，资产对齐 F）：`_finalize_dedupe`
+# 的动作重复执行防护（生产 `graph.py:7799`）判的是"这一轮要做的工具名**全都已经在帧里
+# 出现过**"，命中即收尾。两条 `navigate` 分两轮走时，第二轮 `{navigate_to} ⊆ {navigate_to}`
+# ⇒ 判据命中、第二件被合理地拦下（**生产同款**：`route_after_execute` 见无未完成意图就
+# 直接去 model，压根不会问 planner 第二轮）——夹具要的"两件对一件"这个对比就塌了
+# （实测 A=1 B=1）。两个不同技能不触发那条判据，两件照跑。
+_SA = [_call("navigate", target="首页"), _call("darkmode", mode="on"),
        AIMessage(content="你要的两处我都带到了")] + [AIMessage(content="都带你去了")] * 2
 _SB = ([_call("navigate", target="留言板"), AIMessage(content="到留言板了")]
        + [AIMessage(content="到留言板了")] * 2)
@@ -1078,7 +1101,14 @@ def _nav_b(**kw):
                 meta={"cmd": {"kind": "navigate", "url": kw.get("path"), "mode": "direct"}})
 
 
-_TA = {"navigate_to": _nav_a}
+def _dark_a(**kw):
+    """A 路第二件（夜间模式）。`cmd.kind` 必须是 `darkmode`——`_check_spec` 的命令形状
+    校验按工具名取（缺了它这一条会判 `cmd_shape` BLOCK、回执行还在而 `receipts` 是空的）。"""
+    return _Res(f"A:darkmode={kw.get('mode')}",
+                meta={"cmd": {"kind": "darkmode", "mode": kw.get("mode")}})
+
+
+_TA = {"navigate_to": _nav_a, "toggle_dark_mode": _dark_a}
 _TB = {"navigate_to": _nav_b}
 
 _scripts, _toolsets = iter([_SA, _SB]), iter([_TA, _TB])
@@ -1088,7 +1118,7 @@ R._real_tools = lambda *a, **k: dict(next(_toolsets))
 R._system_prompt = lambda *a, **k: "你是测试用助手。"
 
 _arm_one = R.build()   # **同一个对象**服务两轮（`server._agent` 就是这个形状）
-_ga = _arm_one.stream({"messages": [HumanMessage(content="帮我看看首页和时间轴")]}, {})
+_ga = _arm_one.stream({"messages": [HumanMessage(content="帮我看看首页，再把夜间模式打开")]}, {})
 _gb = _arm_one.stream({"messages": [HumanMessage(content="帮我看看留言板")]}, {})
 _fa: list = []
 _fb: list = []

@@ -175,13 +175,15 @@ from agent.prompt_context import (_frame_texts, _has_frames,
                            _receipts_text, with_tool_call_pairs)
 from agent.prompts import BLOG_ASSISTANT_PROMPT, STICKER_GUIDE, audience_block
 from agent.react_line import (RunLedger, WorkflowExecutor, convergence_verdict,
-                              wrap_up_text)
+                              spec_signature, wrap_up_text)
 
 # 借生产那几件的**唯一入口**（20261019）。本模块只接线，判据都在 `agent/graph.py` 里；
 # 各段的接法与理由见 `agent/react_parity.py` 的模块头注。
 from agent.react_parity import (confirm_round, denied, display_text, fast_path,
-                                plan_has_tools, planner_prompt_args)
+                                finalize_dedupe, plan_has_tools, planner_prompt_args,
+                                write_guard)
 from agent.stickers import repair_sticker_tokens
+from agent.tool_specs import _tool_name
 from agent.workflow_plan import instantiate_plan
 from config.settings import settings
 from models.llm import get_llm
@@ -591,8 +593,101 @@ def planner_node(state: AgentState, config: RunnableConfig | None = None) -> dic
         ctx["decided"] = "model"
         return {}
 
+    # ⑥ 写目标拒绝链（生产 `_decide_write_guard`，20261019 接上）：引号片段 / 名字值 /
+    #    待办正文 / 目标出处 / 目标 / 台账编号 / 政策，命中即**零写 + 如实收尾**。
+    #
+    #    位置照生产：在**计划成形之后**（`_decide_instantiate` 的下一位）。它要读的是
+    #    模型真填进来的那些参数，所以必须在 `_plan_of` 之后；而"零工具轮"那一支在它
+    #    之前就返回了（那一轮没有目标可拒）。
+    #
+    #    这一格此前**整条不存在**（本臂 0 引用）：形状是"主人没说过那个名字、模型编了
+    #    一个，本臂照样把它写进站内"——而 `forbid_*` 那一族负断言在"什么都不做"的臂上
+    #    恒真，所以当年的读数并不作废、只是**没在比同一件事**。
+    _plan = _plan_of(resp.tool_calls, ctx.get("role"))
+    _frames = _has_frames(_turn_tail(state))
+    _refused = write_guard(state, ctx=ctx, plan_obj=_plan, rounds=rounds,
+                           has_frames=_frames)
+    if _refused is not None:
+        # 收尾那一轮：`decided="model"` ⇒ 去 narrator 拿着那段 note 如实说"没做"。
+        # 与生产同（`_Step("return", _plan_update(c.plan_obj, c.rounds))`）。
+        ctx["decided"] = "model"
+        return _plan_update(_refused, rounds)
+
+    # ⑦ 收尾去重/拦截（生产 `_finalize_dedupe`，20261019 接上）：字面路径修正 + 八条
+    #    守卫（动作重复执行防护、已读裁剪、零改动重复、已办写收尾……）。它在生产里
+    #    跑在决策循环**之外**、`_finalize_wrap` 之前，位置照搬。
+    #
+    #    ⚠️ 它就地改写 `plan_obj["tools"]`（甚至整份换掉），所以**必须**跟着调
+    #    `_sync_calls`——否则判据的结论落不进 execute 拿的那份清单。
+    _plan, _ended = finalize_dedupe(state, ctx=ctx, plan_obj=_plan, rounds=rounds,
+                                    has_frames=_frames,
+                                    turn_messages=_turn_tail(state))
+    if _ended:
+        # 守卫命中即终局（生产那八条出口都是 `return`）。计划里有工具就照常执行、
+        # 没有就去 narrator——与生产 `route_after_planner` 同一条判据。
+        ctx["decided"] = "execute" if plan_has_tools(_plan) else "model"
+        _sync_calls(_plan)
+        return _plan_update(_plan, rounds)
+
+    _sync_calls(_plan)
     ctx["decided"] = "execute"
-    return _plan_update(_plan_of(resp.tool_calls, ctx.get("role")), rounds)
+    return _plan_update(_plan, rounds)
+
+
+def _sync_calls(plan_obj: dict) -> None:
+    """把**定稿后的** `plan_obj["tools"]` 同步回 `calls[*].specs`（就地改）。
+
+    **为什么非同步不可**：`calls` 是"这一轮做什么"从 planner 交到 execute 的唯一载体
+    （见 `planner_node` 的 docstring），而 execute 对**带 `specs` 的**调用走
+    `run_specs`（清单已定稿）。planner 阶段有好几处会**就地改写** `plan_obj["tools"]`：
+    写目标拒绝链里的三条校正（引号片段 / 目标名 / 名字值）、`_finalize_dedupe` 的字面
+    路径修正与三条裁剪。不同步的话，形状是"判据算了、trace 落了、而执行用的是改写之前
+    那份"——系统明明把名字校正回来了，写进站内的还是模型编的那个。这正是本批要消灭的
+    那类静默（**判据在，产物不在**）。
+
+    认领规则：`len(calls) == 1`（生产的形状，本臂也基本如此）⇒ 整份定稿清单给它。
+    多调用那一支是本臂的容差（`_plan_of` 的并集），按**工具名在原序里**贪心认领
+    ——每条调用只认自己那几种工具，先到先得。**认领不到就炸**：清单里有工具不属于
+    任何一条调用，意味着"这一条帧是谁发的"没有答案，而那个答案驱动
+    `_pair_frames` 的合成 assistant（错配的后果是出站序列非法）。
+    """
+    calls = list(plan_obj.get("calls") or [])
+    final = [str(t) for t in (plan_obj.get("tools") or [])]
+    if not calls:
+        # **计划被重建过**（`_name_arg_fix` 那类校正是 `plan_obj.clear() + update(fresh)`，
+        # 而 `fresh` 是 `instantiate_plan` 的产物、没有 `calls` 这一格）⇒ 本臂那个键
+        # 整格消失了。不补的话形状是"判据把名字校正回来了、计划里也写着，而 execute
+        # 读到零条调用 ⇒ 零执行、不弹卡、不报错"——一次写就这么静默消失。
+        # 重建后的计划是**单技能**的一份（校正只可能产自一次调用），所以这里补一条。
+        if not final:
+            return
+        plan_obj["calls"] = [{"workflow": str(plan_obj.get("workflow") or ""),
+                              "params": dict(plan_obj.get("params") or {}),
+                              "specs": final}]
+        return
+    if len(calls) == 1:
+        calls[0]["specs"] = final
+        return
+    # 认领按**一个名字一个坑**逐个走，不是"把这一条调用那几种工具全捞过来"：
+    # 同一轮里点两条同工具调用（`[toggle_effect(off), toggle_effect(on)]` 就是
+    # "把樱花换成下雨"最自然的形态）时，"按名字集合捞"会让**第一条调用把两条都吃掉**、
+    # 第二条只剩空清单 ⇒ 它退回 `run(workflow, params)` 重新实例化，凭空多跑一次。
+    wanted = [[_tool_name(s) for s in (c.get("specs") or [])] for c in calls]
+    taken = [False] * len(final)
+    for c, names in zip(calls, wanted):
+        mine: list[str] = []
+        for nm in names:
+            for i, spec in enumerate(final):
+                if not taken[i] and _tool_name(spec) == nm:
+                    taken[i] = True
+                    mine.append(spec)
+                    break
+        c["specs"] = mine
+    left = [final[i] for i, t in enumerate(taken) if not t]
+    if left:
+        raise RuntimeError(
+            f"_sync_calls 认领不到这些定稿 spec：{left}"
+            f"（calls={[c.get('workflow') for c in calls]}）")
 
 
 def route_after_planner(state: AgentState, config: RunnableConfig | None = None) -> str:
@@ -689,14 +784,22 @@ def execute_node(state: AgentState, config: RunnableConfig | None = None) -> dic
             # 清单**已定稿**的调用（确认轮的签名体、特效切换快道的双 spec）走
             # `run_specs`：它们的产出**本身就是**计划，再实例化一次会把它改坏
             # （理由见 `react_line.WorkflowExecutor.run_specs` 的 docstring）。
-            # 判据是 `is not None`（**不是真值**）：`specs` 存在但为空列表 = "这一份计划
-            # 定稿了、只是没有工具要跑"（导航到不存在的页面那类），与"没给清单、要按
-            # `params` 实例化"是两件事。用真值判会把前者悄悄退回实例化——而实例化出来
-            # 的东西与定稿的那份**未必一样**，这正是本格要防的。
-            _final = (c or {}).get("specs")
-            text, n_tools = (executor.run_specs(workflow, [str(s) for s in _final])
-                             if _final is not None else
-                             executor.run(workflow, dict((c or {}).get("params") or {})))
+            # 判据是"清单**非空**"而不是"`specs` 在不在"：定稿清单为空时走 `run`，是
+            # 为了拿它零工具出口那两句（`note` / `reply` + 回执行）——导航到不存在的
+            # 页面那类**只有注记、没有帧**的计划，注记就是全部内容，走 `run_specs` 会
+            # 得到空串（实测：那一格此前静默丢过）。
+            # 而"定稿为空 ⇒ 重跑一遍实例化会改坏它"这件事在这里**不成立**：没有工具
+            # 就没有"实例化出来的东西与定稿的不一样"这回事。
+            _final = [str(s) for s in ((c or {}).get("specs") or [])]
+            _params = dict((c or {}).get("params") or {})
+            # `sig` **必须由这里传**：无进展判据的键取在字面路径修正**之前**、按
+            # `(workflow, params)` 算，而 `run_specs` 缺省时是从 `{"specs": [...]}` 算的
+            # ——两把键不同源 ⇒ `convergence_verdict` 与台账里那条永远对不上，"同一件事
+            # 原地重做"这一族恒判"有进展"（形态是模型拿着没进展的轮次反复重规划，而
+            # 判据从不触发）。`run` 那条路自己算同一把键，所以这里传的就是它原来那个值。
+            _sig = spec_signature(workflow, _params)
+            text, n_tools = (executor.run_specs(workflow, _final, sig=_sig) if _final
+                             else executor.run(workflow, _params))
             if not n_tools:
                 # 纯应答技能（chat 一类）：零工具 ⇒ **不发帧**（生产那一轮
                 # `if not specs: return {"messages": []}` 同款）。结果只喂模型
@@ -733,6 +836,11 @@ def _exec_body(out: list, ledger: RunLedger, executor: WorkflowExecutor) -> dict
             # 而模型照提示词写不出引用、多步技能只能靠它把上一步的 id 抄一遍
             # （抄错就是另一个病）。形状（`{"tool","data"}`）由 `react_line` 保证。
             "tool_data": list(executor.tool_data),
+            # 零改动签名（生产 `AgentState.noop_specs` 的同一格）：planner 的零改动重复
+            # 裁剪读它。**必须显式回写**——未声明的键会被 langgraph 静默丢出 updates
+            # 流，那一格就恒为空表、判据静默失效（这正是该字段在 AgentState 里那条
+            # 长注写着的坑）。
+            "noop_specs": list(executor.noop_specs),
             # `blocked_seen` 的键形与生产 `execute_node` 的 `_blocked_key` 逐字同款
             # （`工具::原因码`）——闸门与账甲读它。
             "blocked": [_blocked_row(b) for b in ledger.blocked],
@@ -1330,7 +1438,14 @@ def _plan_of(tool_calls: list, role: str | None) -> dict:
             plans.append({"workflow": name, "tools": [], "note": "", "reply": "",
                           "status": ""})
     calls = [{"workflow": str((c or {}).get("name") or ""),
-              "params": dict((c or {}).get("args") or {})} for c in tool_calls]
+              "params": dict((c or {}).get("args") or {}),
+              # 实例化出来的清单（**逐字**）。execute 拿到 `specs` 就走 `run_specs`
+              # （清单已定稿），拿不到才重跑 `instantiate_plan`——而重跑会**丢掉
+              # planner 阶段就地做过的改写**（写目标拒绝链的三条校正、字面路径修正、
+              # 去重裁剪都改 `plan_obj["tools"]`）。所以清单在这里落一次，planner
+              # 收尾时再由 `_sync_calls` 同步成定稿版。
+              "specs": [str(t) for t in (p.get("tools") or [])]}
+             for c, p in zip(tool_calls, plans)]
     if not plans:
         return {}
     if len(plans) == 1:
