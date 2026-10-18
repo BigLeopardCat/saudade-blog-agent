@@ -5,7 +5,7 @@
 
 贴纸的渲染契约是**两个冒号**：两个渲染器（看板娘 fallback
 `frontend/public/live2d-widgets/chat-render.js`、站内 markdown 插件
-`frontend/src/utils/stickers.ts`）都用同一条正则 `/:([^:\\s]{1,12}):/g`，未命中就按
+父仓 `frontend/src/utils/stickers.ts`）都用同一条正则 `/:([^:\\s]{1,12}):/g`，未命中就按
 "原样保留成文本"处理。模型偶尔写残——实测 `logs/agent/traces/20261002/`：
 `20261002T211008_5_r97d4db1.json`「…麻烦呢～ :头疼\n\n虽然…」、
 `20261002T212117_5_r8eb7dfd.json`「…耐心吗～ :生气\n\n我现在…」（同一会话上一轮

@@ -13,7 +13,7 @@
 **这不是渲染层的 bug。** GFM 的 autolink literal 规则就是"一直吃到空白或 `<` 为止，再从末尾
 剥掉 ASCII 标点"。候选串 `…BigLeopardCat**、QQ` 末尾是 `Q`，没得剥 ⇒ 整段进 href。同一段文本
 贴到 GitHub 上渲染结果一样。20261018 逐字符实测（真实前端管线，esbuild 打包
-`frontend/src/utils/chatMarkdown.ts`）得到的确切边界是：
+父仓 `frontend/src/utils/chatMarkdown.ts`）得到的确切边界是：
 
     裸 URL 后面**跟任何非空白字符**都会被吞 —— 不止中文标点，`,` `.` `:` `*` `?` 一样吞；
     **只有行尾 / 空格才安全**。

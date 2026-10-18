@@ -2488,7 +2488,7 @@ async def health():
 
     只回**档位名**（引擎/模型名/布尔），**绝不回任何 key、URL 或密钥**——本端口只绑
     127.0.0.1（见文件末尾 uvicorn.run），nginx 也不反代它，故不构成对外信息面。
-    `scripts/healthcheck.sh` 按 `"agent_ready":true` 子串判活，多这几个键不影响它。
+    父仓 `scripts/healthcheck.sh` 按 `"agent_ready":true` 子串判活，多这几个键不影响它。
     """
     from config.settings import settings
     # 模型名走**派生属性**（已按 provider 解析过），但**不许让认不出的 provider 把本接口

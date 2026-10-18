@@ -3,7 +3,7 @@
 ## 为什么要有这个模块
 
 建图脚本 `scripts/build_word_graph.py` 此前**只在开发机上手跑**：产物写进
-`frontend/public/graph/`，要等一次 `vite build` 才进 dist。于是"别人迁移过去用不了
+父仓 `frontend/public/graph/`，要等一次 `vite build` 才进 dist。于是"别人迁移过去用不了
 这张图"有两层原因——产物里的站点归属是**构建期**烧死的（迁移后重建成功也画不出来），
 而且就算重建成功，服务端写的文件也到不了浏览器。
 

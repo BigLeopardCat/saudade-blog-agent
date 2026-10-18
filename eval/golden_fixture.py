@@ -65,7 +65,7 @@ from tools.base import _get  # noqa: E402  （全仓评测/检索侧统一的公
 
 # 夹具名的保留前缀（与测试账号的 `agent_test_` 同族）。
 # **它是一条结构性质**：清场/排查一律可以写成 `... WHERE name LIKE 'agent_fixture_%'`
-# （见 `scripts/migration/golden_write_fixture_20260925.sql` 的回滚段）⇒ 不可能误删真数据。
+# （见父仓 `scripts/migration/golden_write_fixture_20260925.sql` 的回滚段）⇒ 不可能误删真数据。
 # 用例文件里每一条 `requires_fixture` 的名字必须以此开头，`tests/test_golden_fixture.py`
 # 逐条扫着。改这里等于改那条性质，动手前先想清楚。
 FIXTURE_PREFIX = "agent_fixture_"

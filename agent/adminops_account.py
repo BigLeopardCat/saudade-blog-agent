@@ -22,7 +22,7 @@ from agent.adminops_target import (
 #      登录都进不来" vs "能重新登录了"）；只换动词的两张卡读起来是同一个动作的
 #      两个方向，而真正的区别是"有人被踢下线"这件事可不可逆；
 #   ③ 解冻那句**不许**写成"撤销冻结 / 恢复原状"——那是假话：后端的 `token_version`
-#      **只增不减**（`scripts/probe_token_revoke.py` 的【三】专门验这个），解冻恢复
+#      **只增不减**（父仓 `scripts/probe_token_revoke.py` 的【三】专门验这个），解冻恢复
 #      的只是"能不能登录"。冻结也**不写**「不可撤销」（它可以解冻），要写清的是
 #      **哪半边不可逆**：被踢掉的会话不回来。
 _ACCOUNT_STATE_CN = {True: "已冻结", False: "正常"}

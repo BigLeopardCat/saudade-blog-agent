@@ -127,7 +127,7 @@ def render_todo_pending(pending) -> str:
     **为什么这两类要在这一帧里**（20260929 用户要求「让 agent 能感知到待审核留言和
     对话额度批准、问待办日程它能说出来」）：后台首页把它们与私人待办**并排**显示，
     主人眼里那就是"我日程上等着我处理的事"；但它们**不是** `dashboard_todo` 表的行
-    （不落库、不进 todos，见 `frontend/src/pages/Dashboard/Home/index.tsx` 那两行的
+    （不落库、不进 todos，见父仓 `frontend/src/pages/Dashboard/Home/index.tsx` 那两行的
     注释）。它们真正的来源是同一份红点汇总（`/notifications/summary` 的
     `pendingReview` / `pendingQuota`）——所以这一帧读的是**红点那个源**，不另造一份
     计数（"红点与列表是两套数据源"那件事的教训：能同源就同源）。

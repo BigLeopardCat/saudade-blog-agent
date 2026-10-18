@@ -1859,7 +1859,7 @@ print("\n㉕ 按分类查文章清单（20261009：站内一直有，agent 这�
 # 标签名），搜出来的是标题带"测试"的 8 篇，与"归在「测试」分类下"是两回事。它如实说
 # 没有那份清单、并把「你去后台笔记页按分类筛一遍」这个**本可自动完成**的步骤退给了
 # 主人。而站内这个筛选一直在：后台笔记页就是走 `/api/protected/notes/search` 的
-# `categories` 字段筛的（`frontend/src/pages/Dashboard/Notes/AllNotes/index.tsx`）。
+# `categories` 字段筛的（父仓 `frontend/src/pages/Dashboard/Notes/AllNotes/index.tsx`）。
 # 缺的两处都在 agent 侧：① 工具参数没暴露；② 行里连分类名都不印（`categoryTitle`
 # 早就在 DTO 里）。这一节把两处都锁住，**外加三条"不许把读不到说成没有"**。
 

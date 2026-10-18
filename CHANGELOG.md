@@ -114,6 +114,21 @@
   两条判据都落在 `tests/test_packaging.py` ④ 上：真账现在无幽灵键 + **喂一个假键必须被拦**
   （少了后半条，把守卫整段删掉也全绿）；`test_module_budget.py` 的自检里加了缩小方向的反控
   与"相等不许红"的正控。
+- **注释里指向父仓的路径，必须当场说明它不在本仓**（新套件 `tests/test_parent_repo_paths.py`）。
+  本仓是父仓 `Saudade-Blog` 的子目录，两边各有一套同名目录——而本仓**真的有一个 `scripts/`**
+  （`nightly_regression.sh` 等十几件）、**也真的有一个 `frontend/`**（只有一份 README）。
+  于是 `scripts/healthcheck.sh` 这种路径，读者**没法从路径本身判断它是谁的**：在本仓 grep
+  只会一无所获。判法：`*.py` 里**反引号**括起来的、以 `scripts/` `deploy/` `frontend/`
+  开头的路径，若本仓没有这个文件，则**同一行**必须出现「父仓」或「不在本仓」。落地时 20 处
+  补上了限定（`scripts/probe_token_revoke.py`、`scripts/healthcheck.sh`、
+  `scripts/migration/golden_*_fixture_*.sql`、几处 `frontend/src/**`）。
+  **射程有意划窄**：`src/`（代码里 70 多处，但本仓结构上不可能有 `src/`——入口是仓根的
+  `server.py`，读者不会去找）与 `iot/`（0 处）不判；markdown 不判（那近 200 处绝大多数是
+  `eval/report/**` 生成物）；裸写不带反引号的看不见。它**不**判断"这个路径在父仓里还在不在"
+  ——CI 上没有父仓（浅克隆 + 私有仓），判据要能在 CI 上跑。带正控、反控与三条射程对照
+  （本仓有的同前缀文件不判、`src/` 不判、没反引号的不判）；控制样本在源码里**拆开拼**，
+  否则本文件自己会被扫成"裸着的父仓路径"。
+
 
 - **聊天图片落库，但只做展示——模型仍只看 `[图片]` 标记（跨语言契约，agent 行为零变化）**
   ——`GET /api/chat/history` 的每条 item 多一个 `images` 键（dataURL 数组，缺席/空数组

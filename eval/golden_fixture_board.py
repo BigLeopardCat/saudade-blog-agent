@@ -7,7 +7,7 @@
 待办台账只摆 `approved == 0` 的行（`agent/graph.py::_ledger_target_refusal` 判据③）。
 于是 golden 需要**一条真的在待审态的留言**，才判得动两条断言：`require_ledger_rows`
 （帧里至少印出一个编号）与 `require_card_targets_from_ledger`（卡上的编号必须出自本轮
-帧里印的那批）。夹具由 `scripts/migration/golden_board_fixture_20260930.sql` 建，
+帧里印的那批）。夹具由父仓 `scripts/migration/golden_board_fixture_20260930.sql` 建，
 "它在不在位"由本模块机械检查（不在位 ⇒ 用例**响亮 SKIP**，不静默豁免）。
 
 ## 为什么另开一个文件，而不是塞进 `golden_fixture.py`
