@@ -887,15 +887,12 @@
       // needCreate 空白态，后续首条消息前建会话）。404 conversation_not_found →
       // 会话已删恢复（handleConvGone），不 applyLocal——已删会话的缓存镜像不是
       // 权威，降级会把"已删会话"当历史救回来
-      // DB 历史行 → 核心条目（pullHistory 与 locateHit 回拉共用同一映射：
-      // 'd'+DB 主键 / role→type / process 由 role 决定）
-      const mapDbItems = (rows) => rows.map(it => __chatCore.migrateItem({
-        id: 'd' + it.id,
-        type: it.role === 'user' ? 'user' : 'agent',
-        text: it.content,
-        time: it.time,
-        process: it.role === 'user' ? undefined : lookupProcess(it.content),
-      }));
+      // DB 历史行 → 核心条目（pullHistory 与 locateHit 回拉共用同一映射）。
+      // **映射本体已搬进 chat-core**（`__chatCore.mapDbItems`，20261018 图片落库那批）
+      // —— 这里只剩"把本模块的会话态 `lookupProcess` 递进去"。搬走的理由：
+      // 原来那是个手写白名单，白名单外的新字段（`images`）**静默消失**，而那段是
+      // IIFE 闭包、测不到；搬进 chat-core 之后它有 CI 门禁级的**行为**判据。
+      const mapDbItems = (rows) => __chatCore.mapDbItems(rows, lookupProcess);
       const pullHistory = () => {
         // 返回值 Promise<boolean>（20260903e）：true = 本次拉取已执行（adopt 命中
         // 定位据此续跑 locateHit）；false = 被守卫跳过（流式中暂缓 / 空白态 /

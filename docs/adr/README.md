@@ -78,6 +78,7 @@
 | [0010](adr-0010-state-accumulator-reducers-deferred.md) | state 累加器的合并语义：先立台账，暂不加 reducer | **已搁置** |
 | [0011](adr-0011-graph-holds-context-checkpoint-memory.md) | 上下文由图自己持有（原生 checkpoint 取代手写注入）：方向认可，前置已落地、采纳待做 | **已搁置** |
 | [0012](adr-0012-write-idempotency-ledger.md) | 写操作的幂等账：先记账再动手，至多一次 | 已采纳 |
+| [0013](adr-0013-chat-image-persistence.md) | 聊天图片落库，但只做展示（模型仍只看 `[图片]` 标记） | 已采纳 |
 
 ## 相关的、但不算 ADR 的文档
 
