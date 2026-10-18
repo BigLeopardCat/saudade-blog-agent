@@ -179,9 +179,9 @@ from agent.react_line import (RunLedger, WorkflowExecutor, convergence_verdict,
 
 # 借生产那几件的**唯一入口**（20261019）。本模块只接线，判据都在 `agent/graph.py` 里；
 # 各段的接法与理由见 `agent/react_parity.py` 的模块头注。
-from agent.react_parity import (confirm_round, denied, display_text, fast_path,
-                                finalize_dedupe, plan_has_tools, planner_prompt_args,
-                                write_guard)
+from agent.react_parity import (confirm_round, denied, display_text, drop_correction,
+                                fast_path, finalize_dedupe, plan_has_tools,
+                                planner_prompt_args, unaccounted, write_guard)
 from agent.stickers import repair_sticker_tokens
 from agent.tool_specs import _tool_name
 from agent.workflow_plan import instantiate_plan
@@ -317,8 +317,7 @@ def _window(state: AgentState, ctx: dict) -> list:
     """`planner` 这一轮看到的对话窗口。
 
     = 本轮用户消息（`_inner_message`，图片部件原样带）
-    + **最后一条 `HumanMessage` 之后**的消息（工具帧 + 台账回执行 + 合成注记帧）
-    + 纠偏提示（如果这一轮是纠偏重决策）。
+    + **最后一条 `HumanMessage` 之后**的消息（工具帧 + 台账回执行 + 合成注记帧）。
 
     为什么要"最后一条 HumanMessage 之后"而不是"整条 `state["messages"]`"：那是
     **DB 历史 + 本轮**（`server._build_messages` 注入的 20 条 + 摘要）。历史已经由
@@ -337,12 +336,13 @@ def _window(state: AgentState, ctx: dict) -> list:
                          name=str(n.get("workflow") or ""),
                          tool_call_id=f"note_{i}")
              for i, n in enumerate(ctx.get("notes") or [])]
-    out = ([_inner_message(msgs, ctx.get("user_msg") or "")]
-           + _pair_frames(tail, ctx) + with_tool_call_pairs(notes))
-    corr = str(ctx.get("correction") or "")
-    if corr:
-        out.append(HumanMessage(content=corr))
-    return out
+    # ⚠️ 纠偏提示**不在窗口里**（20261019 资产对齐 E 改）：它走提示词的 `{correction}`
+    # 槽，与生产 `_planner_setup` 的 `correction=` 逐字同路。此前这里额外挂一条
+    # HumanMessage、而提示词那一格恒是缺省语（清空发生在 `_prompt_of` **之前**）——
+    # 于是"纠偏进了提示词"这句话在 `react_parity.planner_prompt_args` 的表里是真的、
+    # 在代码里是假的，两臂的提示词形状也就对不上。
+    return ([_inner_message(msgs, ctx.get("user_msg") or "")]
+            + _pair_frames(tail, ctx) + with_tool_call_pairs(notes))
 
 
 def _pair_frames(tail: list, ctx: dict) -> list:
@@ -562,8 +562,12 @@ def planner_node(state: AgentState, config: RunnableConfig | None = None) -> dic
     try:
         llm = _bound_llm(state, ctx)
         window = _window(state, ctx)
-        ctx["correction"] = ""       # 纠偏提示只喂一次（生产那一格也是每轮重算）
         resp = llm.invoke([SystemMessage(content=_prompt_of(state, ctx))] + window)
+        # 纠偏提示**只喂一次**，喂在**提示词那一格**（`{correction}`，生产
+        # `_planner_setup` 同款）——所以清空必须在 `_prompt_of` **之后**。
+        # 清在它之前（20261019 前）时那一格恒是缺省语：纠偏文本一个字节都没进过
+        # 提示词，而"纠偏一次"这条判据照旧烧掉一轮 ⇒ 模型被问同一个问题两次。
+        ctx["correction"] = ""
     except Exception as e:  # noqa: BLE001 —— 崩溃也要给主人一句诚实的话（见《五》）
         logger.warning("[react_arm] planner 调用异常，按诚实收尾处理：%s", e,
                        exc_info=True)
@@ -612,6 +616,33 @@ def planner_node(state: AgentState, config: RunnableConfig | None = None) -> dic
         # 与生产同（`_Step("return", _plan_update(c.plan_obj, c.rounds))`）。
         ctx["decided"] = "model"
         return _plan_update(_refused, rounds)
+
+    # ⑥b 剔空纠偏（生产 `_decide_late_correct` 的最后一格，20261019 接上）：点名的工具
+    #     **一个都没执行**（`instantiate_plan` 把对不上的那些记在 `dropped` 上）⇒ 把
+    #     "这些工具在哪条通道上"写给它看、**重新决策一次**。理由与现场见
+    #     `react_parity.drop_correction`。
+    #
+    #     位置照生产：在**决策循环的尾巴上**（拒绝链之后）。`ctx["corrected"]` 是
+    #     "只纠一次"的那一格（与 ④ 的意图纠偏**共用**同一个旗子——生产也是同一格
+    #     `c.correction` 非空即不再纠，两条纠偏互斥）。
+    if _plan.get("dropped") and not (_plan.get("tools") or []):
+        if not ctx.get("corrected"):
+            ctx["corrected"] = True
+            ctx["correction"] = drop_correction(_plan["dropped"], ctx.get("role"))
+            record("planner", "drop_correct", dropped=_plan["dropped"], round=rounds)
+            logger.warning("[react_arm] 点名工具全被剔除（本轮零工具）→ 剔空纠偏重决策：%s",
+                           "、".join(str(d) for d in _plan["dropped"]))
+            ctx["decided"] = "planner"      # 打回自己重决策**一次**
+            return {}
+
+    # ⑥c 零工具轮的确定性终局（生产 `_finalize_unaccounted` 的三格，20261019 接上）：
+    #     剔空纠偏之后仍然零工具 / 参数不齐 / 记账字段全空——三种形态都**不该交给
+    #     narrator 自己编**（它手里一帧都没有，只能编）。命中即换成带禁止句的收尾计划。
+    #     位置照生产：在决策循环之外、`_finalize_dedupe` **之前**。
+    _unacct = unaccounted(_plan, rounds, _frames)
+    if _unacct is not None:
+        ctx["decided"] = "model"
+        return _plan_update(_unacct, rounds)
 
     # ⑦ 收尾去重/拦截（生产 `_finalize_dedupe`，20261019 接上）：字面路径修正 + 八条
     #    守卫（动作重复执行防护、已读裁剪、零改动重复、已办写收尾……）。它在生产里
