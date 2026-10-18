@@ -272,7 +272,11 @@
         0
       ],
       "tools/base.py": [
-        25,
+        11,
+        0
+      ],
+      "tools/category_admin.py": [
+        14,
         0
       ],
       "tools/tag_admin.py": [

@@ -630,6 +630,37 @@
   是上面那处 E501 折行的账，与 `tools/own_data.py` 那一刀同款、**已声明**。
   模块台账按文本外科改数（2061/36 → 1711/31）。
 
+- **`tools/base.py` 拆出第十一块：文章分类的建 / 改 / 删那一族（批 3）——对外行为零变更**：
+  1711 行 / 31 个模块级定义 → **1526 行 / 26**；**连续的 207 行、5 个模块级名字**
+  （分类字典 `_category_index` + 按名字解析 `_find_named_category` + 三件工具：建 / 改 / 删）
+  搬进 `tools/category_admin.py`（260 行 / 5 个顶层函数），scope 全是 `write.console`。
+  选刀依据：五件共享同一份分类字典与同一个解析入口，而"分类是**平铺**的（没有标签那种
+  `level` 收窄，后端对 `categoryTitle` 没有唯一约束、重名真会出现）、删分类不删文章
+  （后端外键 `ON DELETE SET NULL`）、读点打的是**公开面** `/api/category` 而同族的
+  标签走 `/api/tag*`"三条事实都只属于这一族。
+  **67 个工具的名单与顺序、5 个名字的 AST 逐字相同**（逐函数对过 AST），
+  **docstring 的值一个都没变**；唯一一处文本变更是**取值不变的排版**：两处 F541
+  （没有占位符的 `f"…"` 去掉 `f` 前缀）。
+  ⚠️ 共享帮手全部留在 base、新模块里走 `_base.<名>(...)`：`_admin_get`（族内 1 处、
+  套件打桩 50 处）、`_admin_post`（2 处、28 处）、`_admin_request`（1 处、49 处）、
+  `_near_miss_names`（1 处）。
+  ⚠️⚠️ **连本模块自己的 `_category_index` 也走 `_base._category_index(...)`（5 处调用
+  点）**：全仓有 **15 处** `patch(_category_index=…)` ⇒ `setattr(tools.base, …)`，而函数
+  对象按**自己所在模块**的 `__dict__` 解析全局名 ⇒ 裸名调用会让桩静默失效（第十块那条
+  教训的同款，这一刀一开始就按规矩写的）。**正控**=把 `tools.base._category_index` 换成
+  桩，`_find_named_category` 确实走到桩上（真函数拿到 `config=None` 会当场
+  `AttributeError`）；**反控**=`del tools.base._category_index` ⇒ 当场抛响亮的
+  `AttributeError`。
+  ⚠️ 顺带修掉一处 re-export 区的 `I001`：分类那段 re-export 与紧随其后的公告 / 留言两段
+  之间**没有代码**，ruff 把它们当成同一段 import ⇒ 必须按模块名排
+  （`announcements` < `board_moderation` < `category_admin`）。整块（注释头 + import）
+  手工搬到留言段之后——`ruff --fix` 会把 import 挪走、把注释留在原地，那比不排序更坏。
+  三本账的差额全部来自"搬走而不是新增"：穷举量 `1122 → 1122`（`tools/base.py` 25→11、
+  `tools/category_admin.py` 14）；类型棘轮 `190 → 190`（无文件增减，`files_checked`
+  96→97）；ruff `784 → 782`（`tools/base.py` 9→7，搬走的两条在新文件里当场修净）。
+  模块台账按文本外科改数（1711/31 → 1526/26）；复杂度台账**不需要新条目**
+  （这一族没有一件超过 C>30 / 300 行）。
+
 ## 20261017
 
 - **计划只有一个读法了：对象那一态是唯一事实源，渲染文本退成只给人看**——此前计划的
