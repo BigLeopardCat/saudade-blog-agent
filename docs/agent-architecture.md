@@ -109,7 +109,7 @@ flowchart TB
 │   │                          #   住这里是为了让下面两层的消费者导入它时不必拉起 langgraph
 │   └── search.py              # RagIndex + search()；recall_eval 直接测本实现（评测即线上行为）
 ├── tools/
-│   ├── base.py                # 工具注册表 `_TOOL_REGISTRY`——全仓 67 个 @tool 工具的唯一入口（工具本体已按域拆进下面几个模块，按原名 re-export）+ 共享 HTTP 帮手（`_get`/`_client`…）+ 后台管理与写工具
+│   ├── base.py                # 工具注册表 `_TOOL_REGISTRY`——全仓 67 个 @tool 工具的唯一入口（**20261018 起本文件里一个 @tool 都没有了**：工具本体全部按域拆进下面几个模块，按原名 re-export）+ 共享 HTTP 通道（`_get`/`_client`/`_admin_*`…）+ 跨族共享原语（`_as_article_id`/`_near_miss_names`）
 │   ├── result.py              # 工具结果的形状：`ToolResult`、信封构造器、列表帧塑形件（20261017 拆出）
 │   ├── device.py              # IoT 设备族：OLED 屏显读/写（20261017 拆出）
 │   ├── own_data.py            # 用户自己那一份数据：收藏 / 未读 / 站内通知 / 站内信（20261018 拆出）
@@ -123,6 +123,7 @@ flowchart TB
 │   ├── quota_admin.py         # 对话额度族：读申请队列 / 批准 / 驳回 / 按账号名恢复满额（20261018 拆出）
 │   ├── tag_admin.py           # 标签族：建 / 改 / 删标签 + 两级标签字典与按名字解析（20261018 拆出）
 │   ├── category_admin.py      # 文章分类族：建 / 改 / 删分类 + 分类字典与按名字解析（20261018 拆出）
+│   ├── note_admin.py          # 文章族：后台清单 / 改状态 / 打标签 + 两个读口径（`_read_note`/`_note_index`）（20261018 拆出）
 │   └── __init__.py
 │      ⚠️ 拆出的模块按**原名**在 `base.py` re-export ⇒ 全仓 `from tools.base import …` 一处不改；
 │         但**被套件打桩的模块全局**（`_client` 等 11 个）在新模块里一律写成 `_base.<名>(…)`

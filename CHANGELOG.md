@@ -661,6 +661,56 @@
   模块台账按文本外科改数（1711/31 → 1526/26）；复杂度台账**不需要新条目**
   （这一族没有一件超过 C>30 / 300 行）。
 
+- **`tools/base.py` 拆出第十二块：文章的后台清单 / 改状态 / 打标签那一族（批 3）——
+  对外行为零变更，同时**本文件里一个 `@tool` 都不剩了****：1526 行 / 26 个模块级定义
+  → **1234 行 / 21**。离散的两段、5 个模块级名字（两个读口径 `_read_note` /
+  `_note_index` + 三件工具）搬进 `tools/note_admin.py`（401 行 / 5 个顶层函数），
+  scope 是 `admin.console` + `write.console`。选刀依据：这一族的目标通道是**文章 id**
+  （不是名字——与标签/分类/公告那几族的根本差别），而"读的行必须就是写的行"
+  （`_read_note` 刻意不走 `/api/protected/draft/editor/:id`，那一条会把「编辑修改稿」
+  行解引用成原文章 ⇒ 前值全假、还会多出一篇同标题文章）、"`None` 与 `{}` 是两种事实"
+  两条口径都只属于这一族。
+  ⭐ **67 件工具至此全部按域拆完**（`notes` / `site` / `device` / `own_data` /
+  `admin_read` / `announcements` / `board_moderation` / `dashboard_todos` /
+  `account_admin` / `quota_admin` / `tag_admin` / `category_admin` / `note_admin`），
+  `tools/base.py` 从此只剩**共享 HTTP 通道 + 跨族共享原语 + `_TOOL_REGISTRY`**；
+  它的模块 docstring 原来那句英文（"Each tool is a @tool-decorated function"）已经不成立，
+  一并重写成"本文件现在只留两样东西"。**67 个工具的名单与顺序、5 个名字的 AST 逐字
+  相同**（逐函数对过 AST），**docstring 的值一个都没变**。
+  ⚠️ 八处 E501 折行全是**取值不变的排版**（七处是搬过来的存量、一处是 `_base.` 前缀把
+  那行顶到 106 列）；`f"…"` 的隐式拼接在 AST 上仍合成同一个 `JoinedStr`，实测往返逐字节
+  相同。
+  ⚠️ 共享帮手全部留在 base、新模块里走 `_base.<名>(...)`：`_admin_get`（族内 2 处、
+  套件打桩 50 处）、`_admin_post`（2 处、28 处）、`_admin_read_post`（1 处、7 处）、
+  `_tag_index`（2 处、47 处）、`_category_index`（2 处、15 处）、`_near_miss_names`（2 处）、
+  `_as_article_id`（3 处）。⚠️⚠️ **连本模块自己的 `_read_note` / `_note_index` 也走
+  `_base.<名>(...)`**（各被套件打桩 12 处 / 1 处）——裸名调用会让桩静默失效。
+  **正控**=把 `tools.base._read_note` 换成桩，`set_article_status` 读到的是桩里的标题
+  （`文章 12《桩标题》本来就是公开，无需改动`）；**反控**=`del tools.base._read_note`
+  ⇒ 当场抛响亮的 `AttributeError`。
+  ⚠️ `_as_article_id` 与 `_near_miss_names` **故意没跟着搬**：前者被
+  `tools/own_data.py` 与 `agent/adminops_noop.py` 按名 import、后者供给四族 ⇒ 都是跨族
+  共享原语，搬走只会多一层"按名 re-export 再被按名取"的间接（原地加了一句说明）。
+  ⚠️ 本刀顺带清掉三处**因最后一族搬走而变成死引用**的东西：`Annotated` 与 `tool` 两个
+  import 从 `tools/base.py` 删除；`empty` / `fact` / `ok` / `tgt` 四个信封构造器在本文件
+  已无调用点，但前三个仍有外部消费方（`base.fact(...)` / `base.ok(...)` / `base.tgt(...)`）
+  ⇒ 按本节既有契约补上 `# noqa: F401 —— 外面取：<谁>`；**`empty` 一度被我判成幽灵入口删掉，
+  实测 `tests/test_hardening.py` 按 `base.empty` 取的是**函数对象**（不是调用）⇒ 当场
+  `AttributeError`**，已恢复并补注。教训：找消费方时**不能要求后面跟括号**。
+  ⚠️ re-export 区的 `I001` 又来了一次（同第十一块）：`set_article_status` /
+  `set_article_tags` 两件工具搬走之后，原本被它们隔开的**两段 import 合并成一段**
+  ⇒ 账号管理那段必须按模块名排到公告之前。整块（注释头 + import）手工搬。
+  三本账的差额全部来自"搬走而不是新增"：穷举量 `1122 → 1122`（`tools/base.py` 11→2、
+  `tools/note_admin.py` 9）；类型棘轮 `190 → 190`（`tools/base.py` 1→0、
+  `tools/note_admin.py` 0→1、`files_checked` 97→98）；ruff `782 → 775`
+  （`tools/base.py` **7→0，整条销账**，搬走的七条在新文件里当场修净）。
+  模块台账按文本外科改数（1526/26 → 1234/21；其中 +22 行是本刀重写模块 docstring 的账——原来那句英文
+  "Each tool is a @tool-decorated function" 已经不成立，**已声明**）；复杂度台账
+  `tools/base.py::set_article_status` → `tools/note_admin.py::set_article_status`
+  （按文本改键名，`c` 仍是 31；`lines` 82→84 是上面那两处折行的账，**已声明**）。
+  README 与 `docs/agent-architecture.md` 里"base.py 有 67 个工具"那句改成新口径
+  （67 仍是注册表总数，只是不再住在 base.py 里）。
+
 ## 20261017
 
 - **计划只有一个读法了：对象那一态是唯一事实源，渲染文本退成只给人看**——此前计划的

@@ -272,7 +272,11 @@
         0
       ],
       "tools/base.py": [
-        11,
+        2,
+        0
+      ],
+      "tools/note_admin.py": [
+        9,
         0
       ],
       "tools/category_admin.py": [

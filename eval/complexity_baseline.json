@@ -207,13 +207,13 @@
     "c": 33,
     "lines": 219
   },
-  "tools/base.py::set_article_status": {
-    "c": 31,
-    "lines": 82
-  },
   "tools/device.py::device_oled_display": {
     "c": 33,
     "lines": 124
+  },
+  "tools/note_admin.py::set_article_status": {
+    "c": 31,
+    "lines": 84
   },
   "tools/own_data.py::read_messages": {
     "c": 32,
