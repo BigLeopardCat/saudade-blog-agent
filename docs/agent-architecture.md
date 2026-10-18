@@ -16,7 +16,7 @@
 
 - React 前端（浏览器）：看板娘 Live2D 形象 + 对话框 UI + SSE 消费 + 命令执行器。
 - Rust 后端（axum，端口 3000）：鉴权、记忆落库、对话编排、SSE 转发、中断清理。**记忆的唯一权威来源**。
-- Python Agent（FastAPI，端口 8010）：LangGraph 图执行（20260903 拓扑 planner ⇄ execute → model → gate，§6.5）、LLM 调用、67 个工具。无状态，记忆全靠请求体注入。
+- Python Agent（FastAPI，端口 8010）：LangGraph 图执行（20260903 拓扑 planner ⇄ execute → model → gate，§6.5）、LLM 调用、70 个工具。无状态，记忆全靠请求体注入。
 - MySQL：`chat_history`（消息流水）、`chat_summary`（每用户压缩摘要）。
 - device-service（端口 3100，独立服务）：IoT 设备（ESP32 OLED）指令下发，agent 以对话用户身份代签 JWT 调用。
 
@@ -30,7 +30,7 @@ flowchart TB
     subgraph Server[生产服务器 3.7GB 内存]
         NGX[nginx :443/:80]
         RUST[Rust 后端 axum :3000<br/>鉴权·记忆·编排·SSE 转发]
-        AGT[Python Agent FastAPI :8010<br/>LangGraph 图<br/>planner⇄execute→model→gate · 67 工具 · 4 workers]
+        AGT[Python Agent FastAPI :8010<br/>LangGraph 图<br/>planner⇄execute→model→gate · 70 工具 · 4 workers]
         MYSQL[(MySQL<br/>chat_history / chat_summary)]
         DEV[device-service :3100<br/>ESP32 OLED 指令下发]
     end
@@ -84,9 +84,9 @@ flowchart TB
 │   ├── 【执行清单族】
 │   ├── tool_specs.py          # ★ TOOLS 行条目的解析与去重裁剪（20261017 第二刀，按原名 re-export）：_tool_args / _spec_signature / _search_retry_kind / _trim_done_reads 一族
 │   │
-│   ├── 【技能注册族】（47 个技能静态定义的实现面）
+│   ├── 【技能注册族】（50 个技能静态定义的实现面）
 │   ├── workflow_model.py      # 数据模型层：Workflow / ParamSpec 两个 dataclass 与共用原语
-│   ├── workflow_defs/            # ★ 技能注册表：47 个技能静态定义（只读/动作 + 写技能，写技能带 roles=admin）
+│   ├── workflow_defs/            # ★ 技能注册表：50 个技能静态定义（只读/动作 + 写技能，写技能带 roles=admin）
 │   │   ├── __init__.py        #   聚合层：把下面八个域分片按序拼成 WORKFLOWS（**顺序是契约**）
 │   │   ├── nav_map.py         #   导航映射表 NAV_MAP 与口语模糊归一（**业务唯一数据源**；页面别名→真实路径）
 │   │   ├── nav_skills.py      #   导航 / 特效 / 夜间 / 设备五条技能（原序列 1–5，顺序是契约）
@@ -107,6 +107,7 @@ flowchart TB
 │   ├── adminops_tags.py       # 标签、分类、文章状态与后台文章列表的确定性层（配色表 + 名字→id 解析 + move_verdict）
 │   ├── adminops_account.py    # 账号冻结/解冻、禁言/解禁、后台账号名录与站内通知
 │   ├── adminops_board.py      # 站内公告与河灯留言人工复核的卡面与回执
+│   ├── adminops_comment.py    # 文章评论人工复核的卡面与回执（与留言是两张表、两个页签）
 │   ├── adminops_confirm.py    # 写操作确认卡：问句、卡面与回执行（这一族文本会直接进用户视野）
 │   ├── adminops_noop.py       # 「状态已达成」判据：已经就是那个样子就别弹卡、别执行（fail-open）
 │   ├── adminops_quota.py      # 对话额度重置申请的卡面与回执
@@ -174,7 +175,7 @@ flowchart TB
 │   │                          #   住这里是为了让下面两层的消费者导入它时不必拉起 langgraph
 │   └── search.py              # RagIndex + search()；recall_eval 直接测本实现（评测即线上行为）
 ├── tools/                     # ★ 工具层：15 个域模块 + base 的共享地基（20261018 批 3 收尾后 base 停在 1255 行 / 21 个定义）
-│   ├── base.py                # 工具注册表 `_TOOL_REGISTRY`——全仓 67 个 @tool 工具的唯一入口（**20261018 起本文件里一个 @tool 都没有了**：工具本体全部按域拆进下面几个模块，按原名 re-export）+ 共享 HTTP 通道（`_get`/`_client`/`_admin_*`…）+ 跨族共享原语（`_as_article_id`/`_near_miss_names`）
+│   ├── base.py                # 工具注册表 `_TOOL_REGISTRY`——全仓 70 个 @tool 工具的唯一入口（**20261018 起本文件里一个 @tool 都没有了**：工具本体全部按域拆进下面几个模块，按原名 re-export）+ 共享 HTTP 通道（`_get`/`_client`/`_admin_*`…）+ 跨族共享原语（`_as_article_id`/`_near_miss_names`）
 │   ├── result.py              # 工具结果的**形状**：`ToolResult`、信封构造器、列表帧塑形件（20261017 拆出）
 │   │
 │   ├── 【公开读族】
@@ -191,6 +192,7 @@ flowchart TB
 │   ├── 【管理助手·写】
 │   ├── announcements.py       # 建 / 改 / 删站内公告（20261018 拆出，scope 全是 write.console）
 │   ├── board_moderation.py    # 河灯留言人工复核族：驳回 / 通过、删除留言（20261018 拆出）
+│   ├── comment_moderation.py  # 文章评论族：读后台评论名册 / 复核 / 删除（20261019；与留言两张表）
 │   ├── dashboard_todos.py     # 后台首页待办 / 日程族：读整份 / 追加 / 翻完成 / 改排期日（20261018 拆出）
 │   ├── account_admin.py       # 账号管理族：冻结 / 解冻 / 禁言 / 解禁 / 变更身份 / 发通知 + 后台名录（20261018 拆出）
 │   ├── quota_admin.py         # 对话额度族：读申请队列 / 批准 / 驳回 / 按账号名恢复满额（20261018 拆出）
@@ -710,7 +712,7 @@ narrator 提示词随会话线性膨胀（当时那一行是 `with_tool_call_pai
 
 ---
 
-## 5. 工具系统（67 个）
+## 5. 工具系统（70 个）
 
 | 分类 | 工具 | 行为 |
 |---|---|---|
@@ -1622,7 +1624,7 @@ agent 是这台机器上最大的常驻服务，也是最不需要 CPU 的那个
 > ⑤写操作的事前同意（秘书前置需求 ③ 的 agent 侧）——权限之后再加一道确定性判据：
 > 需确认的 scope（`CONSENT_SCOPES = {write.content}`）未获用户本轮消息明确确认 →
 > 产 `__ERROR__: 待确认[consent_required]` 帧、不调用工具；用错误帧形态是为了让 gate
-> 5a（错误帧 + 完成式声称 → fallback）自动生效，叙述侧说不成"已发布"。当前 67 个工具里
+> 5a（错误帧 + 完成式声称 → fallback）自动生效，叙述侧说不成"已发布"。当前 70 个工具里
 > 没有一个是 `write.content`，所以这条闸空转（等第一个写工具，声明表驱动、不用改代码）。
 > 本轮排查出一个**静默安全事故**并已修：`graph.py` 顶部一旦写 `from __future__ import
 > annotations`，注解变字符串 ⇒ langgraph 的 config 参数注入失效 ⇒ 节点内的断连/写操作检查

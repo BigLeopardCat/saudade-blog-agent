@@ -9,8 +9,8 @@
 `visible_workflows` 的产出顺序——**顺序变了就是提示词字节变了**，那是要 golden A/B 才
 敢做的事，而批 2 是纯结构改动（无行为变更，所以不跑 golden）。所以六个域模块的选取标准
 不是「主题好看」，是**它们在原序列里各自连续**：导航/特效/夜间/设备（1–5）、公开读（6–7）、
-报表与看板（8–14）、管理助手内容面（15–28）、主人自己的数据与待办（29–36）、账号/配额/
-变更集（37–46）。第 47 条 `chat` 没有域（它是「其余全部」的兜底技能，展开层里那一支也是
+报表与看板（8–15）、管理助手内容面（16–31）、主人自己的数据与待办（32–39）、账号/配额/
+变更集（40–49）。第 50 条 `chat` 没有域（它是「其余全部」的兜底技能，展开层里那一支也是
 「谁都不匹配就落 chat」），就地写在下面——塞进任何一个域模块都得给那个模块起一个它不配的名字。
 
 拼回之后**逐条相同**：判据读的是 `WORKFLOWS` 本身（`tests/test_registry_sync.py`、
@@ -123,6 +123,13 @@ _WRITE_TARGET_CHANNEL: dict[str, str] = {
     # `list_quota_requests` 的行上（quota_reset 不在这一桶，理由见上）。
     "quota_approve": "ledger",
     "quota_reject": "ledger",
+    # 文章评论的两件（20261019）：靶 comment_id，编号印在台账帧 `commentId:<n>` 与评论
+    # 名册的行上。两件都在这一桶——**与留言族刻意不同**（那边删除走名字通道）：留言删除
+    # 认正文原话，是因为"主人嘴里说的就是那句话本身"；评论有稳定的 `commentId`，后台
+    # 评论管理页读的也正是它 ⇒ 认编号比认片段准（两族的可写集都放宽到"名册里的任意一行"，
+    # 见 `graph._ledger_target_refusal`）。
+    "comment_audit": "ledger",
+    "comment_delete": "ledger",
     # 审核队列的**变更集**（20260929 批 F；批 H 交回模型）：一次点头办 N 件，可跨族
     # （留言复核 + 额度批准）。它的 `params` 是**逐条调用清单**
     # （`{"calls":[{"tool","args"}]}`，与 `content_query.calls` 同构，见
@@ -183,11 +190,11 @@ _FREE_TEXT_WRITE_WORKFLOWS = _channel("free_text")
 WORKFLOWS: list[Workflow] = [
     *nav_skills.WORKFLOWS,      # 1–5   导航 / 特效 / 夜间 / 设备
     *public_read.WORKFLOWS,     # 6–7   公开读
-    *report_skills.WORKFLOWS,         # 8–14  报表与看板
-    *content_write.WORKFLOWS,   # 15–28 管理助手内容面（后台清单 + 十三件写）
-    *own_todo.WORKFLOWS,        # 29–36 主人自己的数据与待办
-    *account_write.WORKFLOWS,   # 37–46 账号 / 配额 / 变更集
-    # 47    兜底技能（无域，见文件头注）
+    *report_skills.WORKFLOWS,         # 8–15  报表与看板
+    *content_write.WORKFLOWS,   # 16–31 管理助手内容面（后台清单 + 十五件写）
+    *own_todo.WORKFLOWS,        # 32–39 主人自己的数据与待办
+    *account_write.WORKFLOWS,   # 40–49 账号 / 配额 / 变更集
+    # 50    兜底技能（无域，见文件头注）
     Workflow(
         name="chat",
         capability="闲聊、陪你说话",
