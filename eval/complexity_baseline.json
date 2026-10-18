@@ -207,17 +207,9 @@
     "c": 33,
     "lines": 219
   },
-  "tools/base.py::create_tag": {
-    "c": 31,
-    "lines": 113
-  },
   "tools/base.py::set_article_status": {
     "c": 31,
     "lines": 82
-  },
-  "tools/base.py::update_tag": {
-    "c": 61,
-    "lines": 144
   },
   "tools/device.py::device_oled_display": {
     "c": 33,
@@ -230,5 +222,13 @@
   "tools/own_data.py::read_notifications": {
     "c": 35,
     "lines": 115
+  },
+  "tools/tag_admin.py::create_tag": {
+    "c": 31,
+    "lines": 114
+  },
+  "tools/tag_admin.py::update_tag": {
+    "c": 61,
+    "lines": 144
   }
 }

@@ -600,6 +600,36 @@
   ⇒ 这一笔让 `tools/base.py` 的 ruff 计数从 15 掉到 **14**（`790 → 789`）。
   教训写进 [[saudade-agent-module-split-discipline]]：**搬完必须逐条看 ruff 输出，不能只看总数**。
 
+- **`tools/base.py` 拆出第十块：标签的建 / 改 / 删那一族（批 3）——对外行为零变更**：
+  2061 行 / 36 个模块级定义 → **1711 行 / 31**；**离散的三段、5 个模块级名字**
+  （两级标签字典 `_tag_index` + 按名字解析 `_find_named_tag` + 三件工具：建 / 改 / 删）
+  搬进 `tools/tag_admin.py`（436 行 / 5 个顶层函数），scope 全是 `write.console`。
+  选刀依据：五件共享同一个解析入口与同一份字典快照，而"两级标签（`level` one/two）让
+  同名标签成为常态、改名会撞名、删标签不删文章（后端外键 `ON DELETE SET NULL`）"三条
+  事实都只属于这一族。
+  **67 个工具的名单与顺序、5 个名字的 AST 逐字相同**（逐函数对过 AST），
+  **docstring 的值一个都没变**；三处文本变更全是**取值不变的排版**：一处 E501 在
+  `（` 边界折成两个相邻 f-string（隐式拼接在 AST 上仍合成同一个 `JoinedStr`，实测往返
+  逐字节相同）、两处 F541（没有占位符的 `f"…"` 去掉 `f` 前缀，取值逐字不变）。
+  ⚠️ 共享帮手全部留在 base、新模块里走 `_base.<名>(...)`：`_admin_get`（族内 2 处、
+  套件打桩 50 处）、`_admin_request`（3 处、49 处）、`_admin_post`（1 处、28 处）、
+  `_near_miss_names`（2 处，按它在 base 的原位置供给公告族与账号族）。
+  ⚠️⚠️ **连本模块自己的 `_tag_index` 也走 `_base._tag_index(...)`（8 处调用点）**：
+  它是这一族里唯一被套件直接打桩的名字（全仓 **47 处** `patch(_tag_index=…)` ⇒
+  `setattr(tools.base, "_tag_index", 桩)`），而函数对象按**自己所在模块**的 `__dict__`
+  解析全局名 ⇒ 裸名调用会解析回本模块的真函数、`tools.base` 上那份桩**静默失效**。
+  **正控**=第一版就是裸名，`tests/test_tag_admin.py` 当场红（`AttributeError:
+  'NoneType' object has no attribute 'get'`——桩喂的是 `config=None`，工具却真去发了
+  请求），`tests/test_admin_write.py` 同因红 9 条；改成属性查找后两套全绿。
+  三本账的差额全部来自"搬走而不是新增"：穷举量 `1122 → 1122`（`tools/base.py` 38→25、
+  `tools/tag_admin.py` 13）；类型棘轮 `190 → 190`（`tools/base.py` 2→1、
+  `tools/tag_admin.py` 0→1、`files_checked` 95→96）；ruff `789 → 784`
+  （`tools/base.py` 14→9，搬走的那 5 条在新文件里当场修净——新文件按纪律 1 必须零 error）。
+  复杂度台账里 `create_tag` / `update_tag` 两条按文本改键名（`tools/base.py::` →
+  `tools/tag_admin.py::`，`c` 仍是 31 / 61 一个字没动）；`create_tag` 的 `lines` 113→114
+  是上面那处 E501 折行的账，与 `tools/own_data.py` 那一刀同款、**已声明**。
+  模块台账按文本外科改数（2061/36 → 1711/31）。
+
 ## 20261017
 
 - **计划只有一个读法了：对象那一态是唯一事实源，渲染文本退成只给人看**——此前计划的
