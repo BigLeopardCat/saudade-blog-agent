@@ -310,7 +310,7 @@ trace 与 golden trace 的保留各有其执行者（`eval/trace_retention.py`�
 | `DEVICE_SERVICE_URL` | `http://127.0.0.1:3100` | IoT 设备服务地址 |
 | `IOT_ENABLED` | 不设（= 未部署） | IoT 平台是可选件，**不设变量 = 没装**；装了置 `1` |
 | `TRACE_DIR` | 部署环境的绝对路径（**自建部署须覆盖**） | 对话 trace 落盘目录。**20260925 起写进 `<TRACE_DIR>/<YYYYMMDD>/`**：枚举由 `utils/trace_files.py` 单点负责（四种读取端共用），保留期由 `eval/trace_retention.py` 执行（>24h 压缩、>30 天删；默认只列不删，`--apply` 才动手） |
-| `AGENT_REQUIRE_ASSERTION` | `0` | 置 1 时缺失身份断言的请求直接拒绝（默认只记 WARNING，便于滚动上线） |
+| `AGENT_REQUIRE_ASSERTION` | `1` | 缺失/验签失败的身份断言 ⇒ **401**（20261019 起这是默认值，安全审计 SAU-005）。显式置 `0` 才回退信任请求体里的 `user_id`——那条路径上的身份没有角色，工具一件都调不动（`authz.must_enforce`），别留在生产配置里 |
 | `AUTHZ_ENFORCE` | `0` | 权限模型的强制开关 |
 | `PLANNER_TEMPERATURE` | `0.0` | 规划温度（调优实验可逐臂拨）。**"它能治路由抖动"已被 A/B 证伪**，别拿它当调参理由 |
 | `PLANNER_NATIVE_THINKING` / `_MAX_TOKENS` / `_TIMEOUT` / `_SLOW_S` | `true` / `1200` / `60` / `30` | 接口层的四个旋钮，各自的取舍见 `settings.py` 的注 |

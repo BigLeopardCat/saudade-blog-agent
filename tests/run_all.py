@@ -140,6 +140,13 @@ _PINNED = {"AGENT_EVIDENCE": "0",
            # shell 里 export 过一个非空 DSN，那一条就会**红得与代码无关**。钉空 = 出厂档
            # 就是"没配 saver"（生产今天也确实没挂）。
            "CHECKPOINT_DSN": "",
+           # `AGENT_REQUIRE_ASSERTION`（20261019 安全审计 SAU-005）：**出厂档是 1**
+           # （默认强制服务间身份断言），钉它同样是"离线套件对档位是瞎的"那条教训——
+           # 谁在 shell 里 export 过 0（比如为了复现旧的回退路径），凡是经由
+           # `server._resolve_principal` 的用例都会按另一档判、**红得与代码无关**。
+           # 要验回退档的用例在同一进程里临时拨 `settings.agent_require_assertion`
+           # （`tests/test_hardening.py` 就是那么做的）。
+           "AGENT_REQUIRE_ASSERTION": "1",
            "SAUDADE_IGNORE_ENV_FILE": "1", "IOT_ENABLED": "1"}
 
 

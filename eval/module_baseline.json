@@ -4,8 +4,8 @@
     "top_defs": 14
   },
   "agent/authz.py": {
-    "lines": 1801,
-    "top_defs": 37
+    "lines": 1871,
+    "top_defs": 38
   },
   "agent/claims.py": {
     "lines": 1920,
@@ -60,7 +60,7 @@
     "top_defs": 36
   },
   "server.py": {
-    "lines": 2771,
+    "lines": 2797,
     "top_defs": 61
   },
   "tests/test_admin_write.py": {
@@ -68,7 +68,7 @@
     "top_defs": 24
   },
   "tests/test_authz.py": {
-    "lines": 1272,
+    "lines": 1356,
     "top_defs": 3
   },
   "tests/test_chat_quota.py": {
@@ -88,7 +88,7 @@
     "top_defs": 19
   },
   "tests/test_react_arm.py": {
-    "lines": 1223,
+    "lines": 1245,
     "top_defs": 22
   },
   "tests/test_reports.py": {
@@ -108,7 +108,7 @@
     "top_defs": 12
   },
   "tests/test_workflows.py": {
-    "lines": 5820,
+    "lines": 5830,
     "top_defs": 72
   },
   "tools/base.py": {

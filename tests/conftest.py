@@ -42,6 +42,11 @@ _PINNED = {"AGENT_EVIDENCE": "0",
            "AGENT_FASTPATH": "1",
            "RAG_HYBRID_ENABLED": "0",
            "CHECKPOINT_DSN": "",
+           # `AGENT_REQUIRE_ASSERTION`（20261019 安全审计 SAU-005，随并进 main 同步）：
+           # 出厂档是 1（默认强制服务间身份断言）——不钉的话谁在 shell 里 export 过 0，
+           # 凡是经由 `server._resolve_principal` 的用例都会按另一档判、红得与代码无关。
+           # 要验回退档的用例在同一进程里临时拨 `settings.agent_require_assertion`。
+           "AGENT_REQUIRE_ASSERTION": "1",
            "SAUDADE_IGNORE_ENV_FILE": "1",
            "IOT_ENABLED": "1"}
 for _k, _v in _PINNED.items():

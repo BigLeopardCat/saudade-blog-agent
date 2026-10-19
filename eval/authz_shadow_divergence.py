@@ -29,6 +29,10 @@
         两者**都要修，但修的不是同一处** —— 混在一格里会让"注册表漏声明"这个真信号
         被历史噪声淹掉。
   · `reason=unknown_role` —— 身份不明（uid=0 / 认不出的角色）。零权限是**设计如此**。
+    20261019 起这一格的**含义变了**：未验成的身份（`source="body"`，审计 SAU-005 的
+    回退分支）现在一律硬拦 ⇒ 它的 deny **不再写影子事件**。所以这一格若还有数，只可能
+    来自**断言签过、但角色 agent 认不出**的身份（或 `source="golden"` 的评测直调）——
+    那正是"Rust 多了一档新角色、agent 这边授予表还没跟上"的信号，比原来更值得看一眼。
   · `reason=denied` —— 角色已认、scope 没授予。**要校准的就是这张授予表**：
     它是"授予表写窄了"还是"真的有人越权"，读不出结论、但读得出清单。
 
@@ -43,10 +47,11 @@
 
 ## 一条结构不变量：硬拦 scope 不许出现在影子事件里
 
-`authz._HARD_SCOPES`（`admin.console` / `write.console`）**不吃 shadow** ——
-`enforcing(scope)` 对它们恒 True，所以判 denied 时走的是拒绝分支、**根本不会写影子事件**。
-一条带硬拦 scope 的影子事件 = 写侧那行 `enforcing(decision.scope)` 的判据被绕过了
-（等价于"后台写被 shadow 放行了"）。**这是缺陷，不是读数**，单独列出来、并计入退出码。
+`authz._HARD_SCOPES`（`admin.console` / `write.console` / `write.device`）**不吃 shadow**
+—— `enforcing(scope)` 对它们恒 True，所以判 denied 时走的是拒绝分支、**根本不会写影子事件**。
+一条带硬拦 scope 的影子事件 = 写侧那行 `must_enforce(decision, principal)`（20261019 起
+从 `enforcing(decision.scope)` 换来，见 `agent/authz.py`）的判据被绕过了（等价于"后台写
+被 shadow 放行了"）。**这是缺陷，不是读数**，单独列出来、并计入退出码。
 
 那组 scope **现取不手抄**（对每个 scope 问一次 `enforcing()`）；取不到 agent 包时写
 **"这一项没验"**，不是"没有违规"（同父仓 `scripts/healthcheck.sh` 第 8 项的写法）。
@@ -318,7 +323,8 @@ def render(rep: dict, window: str) -> str:
         L.append(f"\n-- 结构不变量（硬拦 scope {rep['hard_scopes']} 不许出现在影子事件里）--")
         if rep["hard_scope_events"]:
             L.append(f"  ✗ **{len(rep['hard_scope_events'])} 条违约**：这些影子事件带着"
-                     "不吃 shadow 的 scope ⇒ 写侧那行 `enforcing(decision.scope)` 被绕过了。")
+                     "不吃 shadow 的 scope ⇒ 写侧那行 `must_enforce(decision, principal)`"
+                     " 被绕过了。")
             for e in rep["hard_scope_events"][:10]:
                 L.append(f"      {e['trace']}  {e['tool']} scope={e['scope']} role={e['role']}")
         else:
