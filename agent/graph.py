@@ -9753,7 +9753,7 @@ def execute_node(state: AgentState, config: RunnableConfig | None = None) -> dic
                 rcpt["digest"] = digest
             if name == "get_article_detail":
                 # 跨轮执行记忆带标题（20260912）：下轮"那篇讲架构的"要靠它核对指代
-                rcpt["title"] = _doc_title(str(out))
+                rcpt["title"] = _doc_title(out)
             # 后台写回执（20260921 第二轮，用户拍板"零迁移：写进 detail"）：执行身份
             # 与变更前→后随回执落 execution_log —— 写操作是**不可回滚的对外改动**，
             # 库里必须留得下"谁在什么时候把哪一篇从什么改成什么"。
