@@ -105,7 +105,7 @@
   // 同上 ⇒ 必须 bump；这一版尤其不能漏：不 bump 的话**图在库里、界面还是占位块**，
   // 且没有任何东西会红（前端拿的还是旧 chat-engine.js）。
   // 五个同步点见 frontend/README.md。
-  const VER = '20261018a';
+  const VER = '20261019a';
 
   function loadExternalResource(url, type) {
     return new Promise((resolve, reject) => {

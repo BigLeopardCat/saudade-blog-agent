@@ -76,6 +76,8 @@ _FROZEN_ALL = frozenset({
     "quota_approve", "quota_reject",
     "mute_account", "unmute_account",
     "review_inbox", "article_status", "article_tags",
+    # 文章评论的两件（20261019）：冻结之后新增的写技能。
+    "comment_audit", "comment_delete",
 })
 _FROZEN_BUCKETS = {
     "name": frozenset({
@@ -84,21 +86,25 @@ _FROZEN_BUCKETS = {
         "announcement_create", "announcement_update", "announcement_delete",
         "board_delete", "account_freeze", "account_unfreeze", "account_set_role",
         "notice_send", "quota_reset", "mute_account", "unmute_account"}),
-    "ledger": frozenset({"board_audit", "quota_approve", "quota_reject", "review_inbox"}),
+    "ledger": frozenset({"board_audit", "quota_approve", "quota_reject", "review_inbox",
+                         # 文章评论的两件（20261019）：靶是 commentId，与留言删除
+                         # **刻意不同**（那件走名字通道认正文片段），见
+                         # `_WRITE_TARGET_CHANNEL` 那两行的注。
+                         "comment_audit", "comment_delete"}),
     "own": frozenset({"favorite_add", "favorite_remove", "notice_read", "message_read"}),
     "free_text": frozenset({"dashboard_todo_add", "dashboard_todo_done",
                             "dashboard_todo_reschedule"}),
     "article": frozenset({"article_status", "article_tags"}),
 }
 print("① 冻结值：派生结果与改造前的手抄名单逐名相同")
-check("①a 派生名单 == 30 件（逐名）", WRITE_WORKFLOW_NAMES == _FROZEN_ALL,
+check("①a 派生名单 == 32 件（逐名）", WRITE_WORKFLOW_NAMES == _FROZEN_ALL,
       f"{len(WRITE_WORKFLOW_NAMES)} 件；差集 {sorted(WRITE_WORKFLOW_NAMES ^ _FROZEN_ALL)}")
 check("①b 四个桶逐名相同",
       _WRITE_NAME_TARGET_WORKFLOWS == _FROZEN_BUCKETS["name"]
       and _LEDGER_TARGET_WRITE_WORKFLOWS == _FROZEN_BUCKETS["ledger"]
       and _OWN_WRITE_WORKFLOWS == _FROZEN_BUCKETS["own"]
       and _FREE_TEXT_WRITE_WORKFLOWS == _FROZEN_BUCKETS["free_text"])
-check("①c 通道表 30 个键覆盖全部写技能",
+check("①c 通道表 32 个键覆盖全部写技能",
       set(_WRITE_TARGET_CHANNEL) == _FROZEN_ALL, f"{len(_WRITE_TARGET_CHANNEL)} 个键")
 
 print("\n② 覆盖锁：注册表里有写作用域工具的技能必须声明通道（漏 ⇒ 静默落进通用分支）")
@@ -119,7 +125,7 @@ def _uncovered(workflows: list, declared) -> list:
 _declared = set(_WRITE_TARGET_CHANNEL)
 check("②a 没有「带写工具却没声明通道」的技能",
       not _uncovered(WORKFLOWS, _declared), str(_uncovered(WORKFLOWS, _declared)))
-check("②b 这条锁真的在看注册表（30 件里每件都能被它认出是写技能）",
+check("②b 这条锁真的在看注册表（32 件里每件都能被它认出是写技能）",
       _write_workflows(WORKFLOWS) == _FROZEN_ALL)
 check("②c 变异臂：抽掉通道表里的一条 ⇒ 同一判据当场命名那一件"
       "（只判 ②a 的话，「判据能抓住」与「判据恒真」长得一样）",

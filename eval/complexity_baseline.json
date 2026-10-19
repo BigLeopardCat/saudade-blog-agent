@@ -1,15 +1,15 @@
 {
   "agent/action_text.py::_arm_text": {
-    "c": 188,
-    "lines": 427
+    "c": 207,
+    "lines": 466
   },
   "agent/adminops_confirm.py::_confirm_one": {
-    "c": 144,
-    "lines": 341
+    "c": 155,
+    "lines": 376
   },
   "agent/adminops_noop.py::_reached_one": {
-    "c": 166,
-    "lines": 327
+    "c": 173,
+    "lines": 340
   },
   "agent/deterministic_plan.py::_candidate_detail_plan": {
     "c": 51,
@@ -21,7 +21,7 @@
   },
   "agent/graph.py::_confirm_popup": {
     "c": 58,
-    "lines": 343
+    "lines": 347
   },
   "agent/graph.py::_decide_late_correct": {
     "c": 43,
@@ -44,8 +44,8 @@
     "lines": 448
   },
   "agent/workflow_expand_write.py::_expand_write_workflow": {
-    "c": 97,
-    "lines": 473
+    "c": 104,
+    "lines": 505
   },
   "agent/workflow_plan.py::_instantiate_plan": {
     "c": 123,

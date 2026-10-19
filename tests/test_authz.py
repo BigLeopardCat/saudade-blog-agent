@@ -225,12 +225,16 @@ CONSENT_TOOLS = {n for n in TOOL_NAMES if authz.requires_consent(p(ROLE_ADMIN), 
 # 20261002 到二十九个：内容风控下放的禁言两件（`account_mute` / `account_unmute`）。
 # 与冻结族同一条理由，但后果是它的**反面**（禁言不踢人下线，只是让他发不出评论与留言）
 # ⇒ 名额进得来，措辞一个字都不许共用（详见 authz 里那两条 why 与 `adminops._MUTE_*`）。
-check("需确认的工具恰好是二十九个（二十五个后台写 + 四个用户自己的写）",
+# 20261019 到三十一个：文章评论的两件（`audit_comment` / `delete_comment`）。与留言那两件
+# 逐条同族（访客写下的内容、复核可改判、删除没有回收站），但**两族的 why 一个字都不许
+# 共用**——说成「留言」会让主人去翻错的那个后台页（两张表、两个页签）。
+check("需确认的工具恰好是三十一个（二十七个后台写 + 四个用户自己的写）",
       CONSENT_TOOLS == {"create_tag", "update_tag", "delete_tag",
                         "create_category", "update_category", "delete_category",
                         "create_announcement", "update_announcement",
                         "delete_announcement",
                         "audit_board_comment", "delete_board_comment",
+                        "audit_comment", "delete_comment",
                         "create_dashboard_todo", "complete_dashboard_todo",
                         "reschedule_dashboard_todo",
                         "freeze_account", "unfreeze_account",
