@@ -120,8 +120,9 @@ async def _drive(producer) -> list[str]:
     server._agent = object()             # 非 None 即可（503 分支要避开）
     server._run_agent_stream_to_queue = producer
     # 身份断言：本机 .env 把它开着（生产语义），而**错误帧的产生与调用者身份无关**——
-    # 这里要的是"能进到流里"，不是"验签"。置回文档写明的默认值（`AGENT_REQUIRE_ASSERTION=0`，
-    # 未设时只记 WARNING 便于滚动上线），给个 uid=0 的 body 身份即可。
+    # 这里要的是"能进到流里"，不是"验签"。所以**显式拨回 0**（20261019 起这已**不是**
+    # 默认值了，默认是 1），让这条假请求走 body 身份进来即可；这条路径上的身份没有
+    # 工具能力（`authz.must_enforce`），而本节点本来也不碰工具。
     settings.agent_require_assertion = False
     try:
         req = server.ChatRequest(message="测试用消息")

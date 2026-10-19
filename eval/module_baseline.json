@@ -4,8 +4,8 @@
     "top_defs": 14
   },
   "agent/authz.py": {
-    "lines": 1801,
-    "top_defs": 37
+    "lines": 1871,
+    "top_defs": 38
   },
   "agent/graph.py": {
     "lines": 11116,
@@ -60,7 +60,7 @@
     "top_defs": 24
   },
   "tests/test_authz.py": {
-    "lines": 1263,
+    "lines": 1333,
     "top_defs": 5
   },
   "tests/test_chat_quota.py": {
@@ -80,7 +80,7 @@
     "top_defs": 19
   },
   "tests/test_react_arm.py": {
-    "lines": 1223,
+    "lines": 1245,
     "top_defs": 22
   },
   "tests/test_reports.py": {
@@ -100,7 +100,7 @@
     "top_defs": 12
   },
   "tests/test_workflows.py": {
-    "lines": 5821,
+    "lines": 5831,
     "top_defs": 72
   },
   "tools/base.py": {
