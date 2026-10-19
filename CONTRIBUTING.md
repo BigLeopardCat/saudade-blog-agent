@@ -87,7 +87,21 @@ CI 跑的就是这两条（`.github/workflows/eval.yml`）。两点要知道：
   读提交的人没有你脑子里那张表。
 
 正文里写**为什么**，以及**判据在哪儿**。改动对"agent 会怎么做"有影响的，
-同步补一行 [CHANGELOG.md](CHANGELOG.md)（记什么/不记什么，那个文件头写得比这里细）。
+**不要改 [CHANGELOG.md](CHANGELOG.md)，在 [`changelog.d/`](changelog.d/README.md) 加一个碎片**：
+
+```bash
+.venv/bin/python scripts/dev/changelog.py --new <ascii-slug>   # 开一个今天的碎片
+```
+
+**为什么加碎片而不是直接写 CHANGELOG**：那个文件只有**一个**插入点（当日那一节的组首）
+⇒ 任何两个同时开着的 PR 都必然在那里冲突（实测 PR #21 / #22 / #23 连着三次撞的都是同一处）。
+碎片是"一个新文件"，两个 PR 各加一个，三路合并永远不冲突。汇总由人在合并时（或发布前）跑：
+
+```bash
+.venv/bin/python scripts/dev/changelog.py     # 折进 CHANGELOG.md 并删掉碎片
+```
+
+记什么/不记什么，[CHANGELOG.md](CHANGELOG.md) 的头注写得比这里细。
 
 上面这几条里**机器判得了的那几条**（首行长度 / type 白名单 / 空行 / 署名尾注）由
 `.githooks/commit-msg` 拦：本机 `bash scripts/dev/install-hooks.sh` 装一次，CI 的
