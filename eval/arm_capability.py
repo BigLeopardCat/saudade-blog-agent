@@ -314,6 +314,12 @@ def probe_forced_fallback(arm: str, *, uid: int = 1) -> dict:
     ——**所以默认只在需要它的那条臂上跑**（graph 臂的兜底有归档实证，不需要探针）。
     判据是**红里写着"gate fallback"**（不是"有红就行"：别的通用检查也可能顺带开火，
     那种红不算正控命中）。
+
+    ⚠️ **不许带 `SAUDADE_IGNORE_ENV_FILE=1` 跑**（20261019 踩到）：那个变量把 `.env`
+    整个跳过 ⇒ 语料地址与模型凭据一起没了 ⇒ 探针在"建臂"那一步就报
+    `Missing credentials`，**与"判据没接到底"长得一模一样**（都是正控不红、退出码 3）。
+    本仓其余套件为了脱网**默认**带它，照抄到这里就得到一次假诊断。跑探针时**不设**它，
+    要脱网就只对 react 臂（它有假模型替身），graph 臂那一次必须真连。
     """
     from langchain_core.messages import AIMessage
     from langchain_core.language_models.fake_chat_models import GenericFakeChatModel
