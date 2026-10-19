@@ -150,6 +150,7 @@ X"既可能是回忆也可能是谎言；生产那个被判的模型是**零工�
 """
 
 import logging
+import time
 from collections.abc import Hashable
 from typing import Any, cast
 
@@ -173,10 +174,11 @@ from agent.graph import (AgentCancelled, AgentState, NARRATOR_DISCIPLINE, _NARRA
                          _frame_id, _pending_ledger_frame,
                          _principal_of, _render_planner_prompt, _stopped,
                          gate_node as _prod_gate_node, graph_input, plan_state)
+from agent.llm_usage import usage_fields
 from agent.planner_llm import build_tool_schema
 from agent.prompt_context import (_frame_texts, _has_frames,
-                           _last_assistant_utterance, _last_user_msg, _page_ctx,
-                           _prev_user_msg, with_tool_call_pairs)
+                           _last_assistant_utterance, _last_user_msg, _msg_text,
+                           _page_ctx, _prev_user_msg, with_tool_call_pairs)
 from agent.prompts import BLOG_ASSISTANT_PROMPT, STICKER_GUIDE, audience_block
 from agent.react_line import (RunLedger, WorkflowExecutor, convergence_verdict,
                               spec_signature, wrap_up_text)
@@ -608,7 +610,13 @@ def _planner_decide(state: AgentState, config: RunnableConfig | None,
     try:
         llm = _bound_llm(state, ctx)
         window = _window(state, ctx)
+        _t0 = time.monotonic()
         resp = llm.invoke([SystemMessage(content=_prompt_of(state, ctx))] + window)
+        # 用量落 trace（见 `_record_llm`）：`engine="native"` 与生产 `planner.llm_done`
+        # 同档；`corrected` 取的是**这一次提示词里带没带纠偏**，所以必须在下面清空
+        # 那一行**之前**读。
+        _record_llm("planner", resp, _t0, engine="native",
+                    corrected=bool(ctx.get("correction")))
         # 纠偏提示**只喂一次**，喂在**提示词那一格**（`{correction}`，生产
         # `_planner_setup` 同款）——所以清空必须在 `_prompt_of` **之后**。
         # 清在它之前（20261019 前）时那一格恒是缺省语：纠偏文本一个字节都没进过
@@ -1340,6 +1348,25 @@ def build() -> ReactGoldenArm:
     return ReactGoldenArm(_compiled())
 
 
+def _record_llm(node: str, resp: Any, t0: float, **extra: Any) -> None:
+    """一次 LLM 调用的用量落 trace——生产那四处 `llm_done` 的同款记账。
+
+    **为什么这条臂必须自己记**（20261019）：用量只在**调用点**取得到
+    （`usage_fields(resp)` 读的是响应对象本身），而本臂的调用点是**另一处代码**
+    ⇒ 生产那些记账一行都盖不到这里。全量实测：graph 每跑记到约 508 次调用，
+    react 只记到 **1** 次（那是 `execute` 里 `_create_display_text` 自己记的，
+    它是生产函数、记账在它内部）。而成本与**前缀缓存命中率**全靠这一格
+    ⇒ 两臂对照里"成本"那半边此前一直**读不出来**，不是"没有成本"。缺席 ≠ 0
+    （同 `usage_fields` 自己的字段契约）。
+
+    字段与生产逐字对齐：`duration_s` ＋ `usage_fields(resp)`（`input` / `output` /
+    `cache_read`）。`engine` 由调用方给——planner 那一路传 `native`，与生产
+    `planner.llm_done` 同一档，`eval/token_cost_report.py` 的聚合表才按同一行相加。
+    """
+    record(node, "llm_done", duration_s=round(time.monotonic() - t0, 2),
+           **usage_fields(resp), **extra)
+
+
 def _llm() -> Any:
     """决策用 LLM：**与生产 planner 同一组解码参数**。
 
@@ -1417,15 +1444,28 @@ def _narrator_call(msgs: list) -> Any:
     的 dedupe 靠它），重建等于同一段正文发两遍。
     """
     llm = _narrator_llm()
+    _t0 = time.monotonic()
+    _chars = sum(len(_msg_text(m) or "") for m in msgs)
     resp = llm.invoke(msgs)
+    # 记账（见 `_record_llm`）：节点名与事件名照生产 `model_node`，两条补救路径
+    # 也照它的 `model.llm_empty_retry` / `model.llm_toolcall_correct_failed`
+    # ——重试那两次也是真花了钱的调用，漏记等于把这一族的成本少算一截。
+    _slow = time.monotonic() - _t0 > 30
+    (logger.warning if _slow else logger.info)(
+        "[react_arm] narrator LLM %s 耗时=%.1fs", "慢调用" if _slow else "完成",
+        time.monotonic() - _t0)
+    _record_llm("model", resp, _t0, prompt_chars=_chars,
+                **({"slow": True} if _slow else {}))
     if not str(getattr(resp, "content", "") or "").strip():
         logger.warning("[react_arm] narrator 返回空内容 → 重试一次")
         resp = llm.invoke(msgs)
+        record("model", "llm_empty_retry", **usage_fields(resp))
     if getattr(resp, "tool_calls", None):
         _bad = resp
         logger.warning("[react_arm] narrator 回了 tool_calls（零工具节点不该有）n=%d"
                        " → 带纠正重问一次", len(_bad.tool_calls or []))
         _corr = llm.invoke(msgs + [SystemMessage(content=_NARRATOR_NO_TOOLCALL_NUDGE)])
+        record("model", "llm_toolcall_correct_failed", **usage_fields(_corr))
         resp = (_corr if not getattr(_corr, "tool_calls", None)
                 and str(getattr(_corr, "content", "") or "").strip() else _bad)
     text = repair_sticker_tokens(str(getattr(resp, "content", "") or ""))
