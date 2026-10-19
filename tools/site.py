@@ -173,7 +173,7 @@ def get_weather(
             return f"{loc}天气: {resp.text.strip()}"
         return unavailable(f"天气服务返回 HTTP {resp.status_code}")
     except Exception as e:
-        return f"Weather query failed: {e}"
+        return unavailable(f"天气服务查询失败: {e}")
 
 # ---------------------------------------------------------------------------
 # 导航工具

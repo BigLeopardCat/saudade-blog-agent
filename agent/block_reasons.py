@@ -42,6 +42,10 @@ REASONS: dict[str, tuple[str, bool]] = {
     # ── 参数 / 引用 / 形状：改对了就能过，规则 5 的"改参重试一次"成立 ──────────
     "unknown_tool": ("未知工具", True),
     "args_parse": ("参数解析失败", True),
+    # 工具**自己**判出参数不合法（20261019 批 ⑤-1，kind=invalid_args，见
+    # `tools/result.invalid_args`）：与上面那条同族（改对了就能过）但**不是**同一件事
+    # ——那个是"计划里那一行解析不出参数"，这个是"参数解析出来了、值不合法"。
+    "invalid_args": ("参数不合法", True),
     "empty_result": ("结果为空", True),
     "error_frame": ("执行出错", True),
     # 参数引用失败（`agent/arg_refs.py::ref_error_reason` 取回，20260919）
