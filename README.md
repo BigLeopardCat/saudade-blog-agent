@@ -297,10 +297,7 @@ trace 与 golden trace 的保留各有其执行者（`eval/trace_retention.py`�
 
 ## 环境变量
 
-配置分两处，**而这两处的取值来源不是同一份文件**——这是本节最要紧的一件事：
-
-**A. `config/settings.py`（pydantic-settings）**：字段名的全大写即变量名，读 `.env`。
-**你写进 `.env` 的都会生效。** 全部字段就列在 [.env.example](.env.example) 里（那个文件是这一份的镜像，两边的分节一一对应）。常用项：
+配置的取值源**只有一份**：`config/settings.py`（pydantic-settings，读 `.env`）。**你写进 `.env` 的都会生效。** 全部字段就列在 [.env.example](.env.example) 里（那个文件是这一份的镜像，两边的分节一一对应）。常用项：
 
 | 变量 | 默认 | 说明 |
 |---|---|---|
@@ -320,20 +317,11 @@ trace 与 golden trace 的保留各有其执行者（`eval/trace_retention.py`�
 | ~~`AGENT_TASK_STATE`~~、~~`AGENT_TASK_PLAN_EXEC`~~ | **已删（20261015）** | 会话级未完成意图的登记/注入**常开**，没有开关了（任务状态是业界默认必备的，不该有开关把它变成摆设）。**写进 `.env` 现在是鬼键**；理由与判据见 docs/问题记录.md §1.63 |
 | `AGENT_ARM` | `graph` | 跑哪一条 agent 臂：`graph`（生产那条）/ `react`（分支上的试验线，自成 ReAct 循环 + 独立 narrator）。**默认恒 `graph` = 生产行为逐字节不变**；两臂读数**不可互比**，是"让谁更好这个问题可答"的对照物，不是"更快的那个"。拨了要 `systemctl restart saudade-agent`；名字不认识 ⇒ **服务拒绝启动**（不回退 graph） |
 | `RAG_HYBRID_ENABLED`、`EMBEDDING_*`、`RRF_K` | 不设（= 纯词法） | 向量 + RRF 混合检索，可选件。⚠️ **`EMBEDDING_*` 不只管检索**：首页那件「文章向量空间图谱」的建图（`scripts/build_word_graph.py`）与检索（`rag/wordgraph.py`）也用它——配了走它，没配回落 `QWEN_*` + `qwen3.7-text-embedding`（两端共用 `rag/embed_space.py` 一条规则）。**换模型/端点后要重建一次图谱**（后台「站点设置 → 向量图谱」），否则检索侧以 `space_mismatch` 明着降级 |
+| `AGENT_RECURSION_LIMIT` / `AGENT_MAX_BODY_BYTES` / `AGENT_MAX_CONCURRENT` / `AGENT_MAX_REVIEW` / `AGENT_STREAM_IDLE_TIMEOUT` / `AGENT_STREAM_TOTAL_TIMEOUT` | `30` / `12 MiB` / `8` / `4` / `120` / `300` | 服务限额与超时（20261020 双轨收敛入 Settings：**写 `.env` 就生效**，键名与 systemd `Environment=` 时代逐个一致，老部署零改动；两个 STREAM 超时是收敛时**新开的 env 通道**，此前只能改码）。用途与理由注释在 `server.py` 各常量旁；判据 `tests/test_settings_surface.py` ⑥ |
 
-**B. `server.py` 直接读进程环境的常量**：这四个**写进 `.env` 一点作用都没有**——`.env` 只喂给 pydantic-settings 的 `Settings` 对象，**不会进 `os.environ`**（systemd unit 里也没有 `EnvironmentFile=`）。
-要配就得走 systemd 的 `Environment=`、或启动前 `export`。判据是它们**不报错、只是不生效**：默认值恰好就是多数人想要的那个，所以只有在你真想改的时候才会发现改了没用。
+（20261020 之前这里还有一张 B 表——"`server.py` 直读进程环境的四个常量，`.env` 管不到"。双轨收敛后那张表删了：那四个键连同两个此前改不了的流式超时，都成了上面 A 表的成员，`.env` / systemd `Environment=` / 代码缺省三轨同值。历史见 CHANGELOG 20261020。）
 
-| 变量 | 默认 | 说明 | 改它 |
-|---|---|---|---|
-| `AGENT_RECURSION_LIMIT` | `30` | 图递归上界，防止幻觉重试循环烧满流式总时长 | systemd `Environment=` |
-| `AGENT_MAX_BODY_BYTES` | `12 MiB` | 请求体上限，超限 413 | 同上 |
-| `AGENT_MAX_CONCURRENT` | `8` | 每 worker 的流式并发闸，超限 503 | 同上 |
-| `AGENT_MAX_REVIEW` | `4` | 侧任务（审核/摘要）的并发闸 | 同上 |
-
-流式超时（空闲 120s / 总时长 300s）也是 `server.py` 里的常量，**同样不通过环境变量调**（两者都不在 A、B 两表里）。
-
-`GOLDEN_ADMIN_UID` / `GOLDEN_USER_UID` 只给 golden 里“需要真身份”的用例用（未设则那些用例响亮跳过）；`TRACE_TOOL_RESULT_LIMIT` 控制 trace 里工具返回留多长（不设 = 按工具分档）；`SAUDADE_IGNORE_ENV_FILE=1` 让**整份 `.env` 不读**（离线套件用，见 `settings.py` 的注）。这三个都是**进程变量，同样不走 `.env`**。
+`GOLDEN_ADMIN_UID` / `GOLDEN_USER_UID` 只给 golden 里“需要真身份”的用例用（未设则那些用例响亮跳过）；`TRACE_TOOL_RESULT_LIMIT` 控制 trace 里工具返回留多长（不设 = 按工具分档）；`SAUDADE_IGNORE_ENV_FILE=1` 让**整份 `.env` 不读**（离线套件用，见 `settings.py` 的注）。这三个都是**进程变量，不走 `.env`**。
 
 ## 后续维护方向
 

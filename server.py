@@ -13,7 +13,6 @@ import hashlib
 import hmac
 import json
 import logging
-import os
 import re
 import threading
 import time
@@ -34,6 +33,12 @@ from langchain_core.messages import AIMessage, AIMessageChunk, HumanMessage, Sys
 # 之外的 Rust `render_exec_row` 那一份**合并成了一份**，见该模块头注）。这里只保留
 # "什么时候发哪条过程行"，以及受阻原因码的中文（`_REASON_CN`，它贴的是 BLOCK 原因码、
 # 不属于动作措辞）。
+# 六个服务限额/超时常量（STREAM_* / RECURSION_LIMIT / MAX_BODY_BYTES /
+# MAX_CONCURRENT_STREAMS / REVIEW_CONCURRENCY）的真值源：20261020 双轨收敛后
+# 唯一从这里取值（env 键保持 AGENT_* 老名，写 .env 就生效；判据
+# tests/test_settings_surface.py ⑥）。此前那四个 AGENT_* 在本文件直读进程环境
+# ——.env 管不到它们，README 曾把这事当坑记。
+from config.settings import settings
 from agent.action_text import tool_action_text
 from agent import checkpoint  # 采纳（批 7）：造 saver + 会话坐标 + 级联清理
 from agent import confirm  # 待办令牌：签发在 graph 弹窗侧，验签在这里（见 /chat/stream）
@@ -83,17 +88,20 @@ def _submit_with_context(loop, func, *args):
 
 # 流式输出兜底超时（秒）：与前端 120s 空闲超时对齐。
 # LLM/线程池异常挂起时主动终止流，避免对话无限等待（见 event_stream 的 wait_for）
-STREAM_IDLE_TIMEOUT = 120.0
+# （20261020 起真值源是 Settings 的 AGENT_STREAM_IDLE_TIMEOUT——写 .env 就生效，
+# 判据 tests/test_settings_surface.py ⑥；此前这里硬编码，改一次值要动一次码。）
+STREAM_IDLE_TIMEOUT = settings.stream_idle_timeout
 # 流式总时长硬上限（秒）：agent 工具调用循环/超长生成时每轮都有输出帧，
 # 空闲超时不会触发（帧流动会重置），需用总时长兜底保证流必会终止
-STREAM_TOTAL_TIMEOUT = 300.0
+STREAM_TOTAL_TIMEOUT = settings.stream_total_timeout
 
 # agent 图递归上界（防模型幻觉重试循环烧满 STREAM_TOTAL_TIMEOUT）：
 # langchain 1.3 create_agent 默认硬编码 recursion_limit=9999（等效无界），
 # 工具幻觉循环（同一意图反复"表演"调用而不真正调用）会打满总时长上限才断开，
 # 前端表现为 5 分钟"卡死"。压到 30（每轮循环约 2 图步 = 约 15 次模型-工具往返，
 # 正常流程 5 次以内），超限走既有 __ERROR__ 异常路径，卡死窗口缩到 60-90s。
-RECURSION_LIMIT = int(os.environ.get("AGENT_RECURSION_LIMIT", "30"))
+# （env 键 AGENT_RECURSION_LIMIT，20261020 起读 Settings——写 .env 就生效。）
+RECURSION_LIMIT = settings.recursion_limit
 
 # 生产者异常时 `__ERROR__` 帧里给**访客**看的那句话（20260927 拍板，原为"待拍板"）。
 # 此前这一格发的是 `str(异常)` 原文——上线实测的代价：异常名与内部路径顺着它出到
@@ -120,7 +128,7 @@ _RECOVERY_SENTENCE = "喵呜……主人抱歉，泠月喵刚才脑袋卡壳了�
 #   · starlette **默认不限制 body 大小**，直接读进内存——畸形大包先吃满 3.7GB 机器；
 #   · 超长字段会灌进 prompt，白烧 token，还可能撑爆 LLM 侧上下文；
 #   · LLM 调用是最贵的资源（单次最长 180s），无闸时并发涌进来只会一起排队到超时。
-MAX_BODY_BYTES = int(os.environ.get("AGENT_MAX_BODY_BYTES", str(12 * 1024 * 1024)))
+MAX_BODY_BYTES = settings.max_body_bytes
 MAX_MESSAGE_CHARS = 4000
 MAX_HISTORY_ITEMS = 60
 MAX_IMAGES = 6
@@ -139,7 +147,7 @@ MAX_RECENT_TOOLS = 40
 # 它由 Rust 按预算裁过再发，这里的 max_length 只是防线：**多一个字符就是每轮 422**，
 # 所以两边不许各填一个数——改这里必须同步改那边（`tests/test_exec_rows_anchors.py` 锁着）。
 EXEC_ROWS_MAX_CHARS = 8000
-MAX_CONCURRENT_STREAMS = int(os.environ.get("AGENT_MAX_CONCURRENT", "8"))
+MAX_CONCURRENT_STREAMS = settings.max_concurrent_streams
 STREAM_QUEUE_WAIT = 3.0         # 秒；排队超过这个时间就如实 503，不让请求无声堆着
 
 # 并发闸（每 worker 一个；uvicorn --workers 2 ⇒ 全局 2×MAX_CONCURRENT_STREAMS）。
@@ -150,7 +158,7 @@ _stream_slots = asyncio.Semaphore(MAX_CONCURRENT_STREAMS)
 # 闸 ⇒ 任何能连到 8010 的进程都能免费烧模型额度。刻意不共用对话那 8 个槽位：留言审核是
 # 同步短任务（上限 25s），与访客对话抢槽位会让留言高峰把对话打成 503。
 # 用 threading 版（`/review` 是 sync def，FastAPI 放线程池里跑，不占事件循环）。
-REVIEW_CONCURRENCY = int(os.environ.get("AGENT_MAX_REVIEW", "4"))
+REVIEW_CONCURRENCY = settings.review_concurrency
 REVIEW_QUEUE_WAIT = 3.0
 _review_slots = threading.BoundedSemaphore(REVIEW_CONCURRENCY)
 
