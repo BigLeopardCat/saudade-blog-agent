@@ -24,6 +24,46 @@ LangGraph 的 checkpoint **提交粒度是 superstep，不是语句**（实测�
 - 同一 thread 的 3 轮**互不相同** ⇒ 不会把两轮的写合成一次；
 - **没挂 saver 时是随机 uuid4** ⇒ `active()` 为假，本模块**天然惰性**、今天一行账都不记。
 
+⚠️ **上面第一条的前提是「续跑」，而生产不走那条路**（20261019 实测，**这条更正很重要**）。
+
+那三条是在 **`stream(None, config)`**（= "接着跑没跑完的任务"）那条路径上量的。
+而 `server.py` 每轮传的是 **dict 输入**（`graph_input(...)`），langgraph 于是
+**丢弃**上一份 checkpoint 的未完成任务、**从 START 重启**
+（`langgraph/pregel/_loop.py:977-979`，原话 `# discard any unfinished tasks from previous
+checkpoint`；`_first` 的 `is_resuming` 判据见同文件 861-867）。重启 ⇒ 全新的 checkpoint
+血缘 ⇒ `checkpoint_ns` **逐字变了** ⇒ 键变 ⇒ **账认不出同一件写**。
+
+真机读数（`eval/experiments/checkpoint_probe.py --crash-resume --guard [--prod-shape]`，
+同一份夹具、只差"恢复那一次传什么"）：
+
+| 恢复那一次传什么 | 两遍的 `checkpoint_ns` | 同一件写执行了几次 |
+|---|---|---|
+| `None`（续跑，判据与探针走的那条） | **逐字相同** | 1（账压住了） |
+| **dict**（= 生产每轮的形状） | **逐字变了** | **2（账没压住）** ← 批 F 起是 **1** |
+
+⇒ 那时**本模块在生产那条路上恒不命中**。这不是"写了两遍的 bug"，而是"这道保险丝只对着
+一条生产不走的路径通电"——**读本模块时别把它的绿当成生产受保护**。（下面这一节是修法。）
+
+## 修法（20261019）：键降成「会话」，另存「哪一轮的哪一次」
+
+`checkpoint_ns` 既然逐轮重编，它就不该当**键**的身份——降一级，拆成两格：
+
+- **键**（`key_for`）= `sha256([thread_id, 工具名, 参数指纹])`：`thread_id` 是
+  `conv_<会话 id>`（`checkpoint.thread_id_for`），**跨重启逐字不变** ⇒ 账认得出同一件写；
+- **这一次尝试**（`attempt_for`）= `sha256([checkpoint_ns, 参数指纹])`：同一 superstep
+  的重放逐字相同、换一轮（或同一轮的下一个 superstep）就变 ⇒ 分得出重放与"又要了一次"。
+
+跨轮命中时靠一格 `idem_resuming`（服务端算好塞进 config：**上一轮跑没跑完** =
+`get_state().next` 非空）分流：
+
+- **上一轮没跑完** ⇒ 这一行就是那一轮的尝试 ⇒ `done` 重放、`intent` 判结果未知；
+- **上一轮跑完了** ⇒ 主人是**明确再要一次** ⇒ 原子地把那行改回 `intent` 并换 attempt，照常执行。
+
+缺省 `True`（读不到那一格就按"没跑完"办）：失效姿态是**多拦一次**（主人看得见那条帧），
+不是**静默放过一次重做**——所以"服务端忘了设"是响的，不是哑的。
+
+真机读数与两条候选的取舍见 `docs/adr/adr-0012` 的《口径更正（20261019）》与《修法（20261019）》。
+
 ## 两档存储（20261017）
 
 账本本体有**两档**，由 `_shared(config)` 按 saver 自己选：挂 PG saver ⇒ 落**同一个池、
@@ -135,22 +175,62 @@ def active(config) -> bool:
 
 
 def key_for(config, name: str, fingerprint: str) -> str:
-    """幂等键 = sha256([这一轮的节点身份, 工具名, 参数指纹])。
+    """幂等键 = sha256([**会话身份**, 工具名, 参数指纹])。
 
-    三个成分缺一不可：`checkpoint_ns` 把**同一 thread 的不同轮**分开；工具名把同一轮
-    里的不同工具分开；参数指纹把**同一轮里同一工具的两次不同调用**分开——少了最后
+    三个成分缺一不可：`thread_id` 把**不同会话**分开（同一个会话里的同一件写才是"同一件"）；
+    工具名把同一轮里的不同工具分开；参数指纹把**同一工具两次不同调用**分开——少了最后
     那一个，"先建标签 A 再建标签 B"会被合成一次，那是"至多一次"退化成"从不执行"的
     地方，而且**不报错**。
+
+    ⚠️ **这一格 20261019 换过**：原先是 `checkpoint_ns`（= `f"{节点名}:{task_id}"`）。它
+    确实能把同一 thread 的不同轮分开，但**生产每轮传 dict 输入 ⇒ langgraph 丢弃未完成
+    任务、从 START 重启 ⇒ 全新的 checkpoint 血缘 ⇒ 它逐字变** ⇒ 账在生产那条路上恒不
+    命中（读数与机制见头注）。换成 `thread_id` 之后，"哪一轮的哪一次"没有丢——它降级成
+    `attempt_for` 存进行里，用来分"重放"与"主人又要了一次"。
 
     用 sha256 而不是"三段用分隔符拼起来"：分隔符一旦长在某个值里，一条键会被读成
     两条（本仓踩过，见 `saudade-agent-plan-text-separator`）。定长摘要没有这个面。
     """
     try:
+        tid = ((config or {}).get("configurable") or {}).get("thread_id") or ""
+    except AttributeError:
+        tid = ""
+    raw = json.dumps([tid, name, fingerprint], ensure_ascii=False)
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
+def attempt_for(config, fingerprint: str) -> str:
+    """**这一次尝试**的身份 = sha256([checkpoint_ns, 参数指纹])。
+
+    与 `key_for` 是两个角色，别合并：键回答"这是不是**同一件**写"（跨重启要稳定），
+    本函数回答"这是不是**同一次**尝试"（同一 superstep 的重放要稳定、换一轮要变）。
+    两者相等 ⇒ 重放；不相等 + 上一轮没跑完 ⇒ 也是重放；不相等 + 上一轮跑完了 ⇒
+    主人又要了一次。
+
+    `checkpoint_ns` 逐轮重编这件事在这里**不是缺陷而是特性**（见头注《修法》）：它正是
+    "换了一轮"的那个信号。
+    """
+    try:
         ns = ((config or {}).get("configurable") or {}).get("checkpoint_ns") or ""
     except AttributeError:
         ns = ""
-    raw = json.dumps([ns, name, fingerprint], ensure_ascii=False)
+    raw = json.dumps([ns, fingerprint], ensure_ascii=False)
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
+def resuming(config) -> bool:
+    """这一轮开始时**上一轮跑没跑完**（服务端算好，走 `configurable.idem_resuming`）。
+
+    服务端那一侧的算法与理由见 `agent/checkpoint.py::thread_is_resuming`。**缺省 `True`**
+    是刻意的：读不到那一格就按"上一轮没跑完"办 —— 失效姿态落在**多拦一次**（主人会看到
+    `write_outcome_unknown` 那条帧，看得见）而不是**静默放过一次重做**（看不见）。所以
+    "调用点忘了设"是响的，不是哑的。
+    """
+    try:
+        got = ((config or {}).get("configurable") or {}).get("idem_resuming")
+    except AttributeError:
+        return True
+    return True if got is None else bool(got)
 
 
 def replay_reason(text: str) -> str | None:
@@ -196,6 +276,29 @@ def _rehydrate(row) -> str:
     except (TypeError, ValueError):
         meta = {}
     return ToolResult(text, kind or "ok", meta if isinstance(meta, dict) else {})
+
+
+# 取行的 SQL **只此一处**：多取一列 `fp`（本模块自己比对 `attempt` 用），比对完就由
+# `_split_row` 剥掉。两个后端各写一遍列清单是它们各自方言决定的（`?` / `%s`），但**列序
+# 与列数必须是同一份**——否则 `_split_row` 的下标会在一档上错位。
+_SELECT_COLS = "status, fp, text, kind, meta"
+
+
+def _split_row(row) -> tuple[str, tuple | None]:
+    """账本行 → `(status, 交给 `_rehydrate` 的那一段)`。
+
+    ⚠️ **交给 `_rehydrate` 的必须仍是 4 元组** `(status, text, kind, meta)`：PG 那条池的
+    `row_factory` 是 `dict_row`，喂 dict 会**按键名解包**、不报错地回放字面串
+    （`tests/test_write_idempotency.py` 块⑩ 钉的就是这个形状）。`fp` 只用于比对
+    attempt，**不进**那一段。
+    """
+    if row is None:
+        # 插入被忽略（行存在）却回读不到（行没了）——只可能是并发清理撞上了。
+        # **不猜**：抛出去，交给上层 fail-closed（拒绝这次写）。
+        raise RuntimeError("幂等账行状态不可判定（插入被忽略但回读为空）")
+    if row[0] not in ("done", "intent"):
+        raise RuntimeError(f"幂等账行状态认不出：{row[0]!r}")
+    return row[0], (row[0], row[2], row[3], row[4])
 
 
 class Ledger:
@@ -265,28 +368,41 @@ class Ledger:
                     self._conn = self._connect()
         return self._conn
 
-    def claim(self, key: str, tool: str, fp: str) -> tuple[str, tuple | None]:
+    def claim(self, key: str, tool: str, attempt: str, *,
+              resuming: bool = True) -> tuple[str, tuple | None]:
         """占位。返回 `("new"|"done"|"intent", 行或 None)`。
 
         `INSERT OR IGNORE` + 回读是**一次原子判定**：插入成功 ⇒ 这一件从没做过；
-        被忽略 ⇒ 行已存在，看它是 `done`（重放，返回记下的那份）还是 `intent`
-        （上一次死在调用中间 ⇒ 结果未知）。
+        被忽略 ⇒ 行已存在，再按两格分流（口径见头注《修法》）：
+
+          · `行.fp == attempt` ⇒ **同一 superstep 的重放** ⇒ 逐字就是今天的行为；
+          · 换了一轮（`行.fp != attempt`）而 **`resuming`** ⇒ 上一轮没跑完 ⇒ 那一行就是
+            那一轮的尝试 ⇒ `done` 重放 / `intent` 判结果未知；
+          · 换了一轮而**非 `resuming`** ⇒ 主人明确再要一次 ⇒ 把那行原子地改回 `intent`
+            并换 `attempt` ⇒ 当新的一件执行。
+
+        `attempt` 存在 `fp` 列里（**列名与表结构不变**，换的只是值的算法）。
         """
         conn = self._db()
         cur = conn.execute(
             "INSERT OR IGNORE INTO idem(key, tool, fp, status, ts)"
-            " VALUES (?,?,?,'intent',?)", (key, tool, fp, time.time()))
+            " VALUES (?,?,?,'intent',?)", (key, tool, attempt, time.time()))
         if cur.rowcount == 1:
             return "new", None
-        row = conn.execute(
-            "SELECT status, text, kind, meta FROM idem WHERE key=?", (key,)).fetchone()
+        row = conn.execute(f"SELECT {_SELECT_COLS} FROM idem WHERE key=?", (key,)).fetchone()
         if row is None:
-            # 插入被忽略（行存在）却回读不到（行没了）——只可能是并发清理撞上了。
-            # **不猜**：抛出去，交给上层 fail-closed（拒绝这次写）。
             raise RuntimeError("幂等账行状态不可判定（插入被忽略但回读为空）")
-        if row[0] not in ("done", "intent"):
-            raise RuntimeError(f"幂等账行状态认不出：{row[0]!r}")
-        return row[0], row
+        if row[1] == attempt or resuming:
+            return _split_row(row)
+        # 合法的重复：**一次原子的 UPDATE** 才算抢到（`fp` 与 `status` 一起进 WHERE，
+        # 抢不到就是有人同时在动这一行 ⇒ 回读一次再判，不猜）。
+        got = conn.execute(
+            "UPDATE idem SET status='intent', fp=?, text=NULL, kind=NULL, meta=NULL, ts=?"
+            " WHERE key=? AND fp=?", (attempt, time.time(), key, row[1])).rowcount
+        if got == 1:
+            return "new", None
+        return _split_row(conn.execute(
+            f"SELECT {_SELECT_COLS} FROM idem WHERE key=?", (key,)).fetchone())
 
     def finish(self, key: str, out) -> bool:
         """记完成。返回"结果是否因超上限而未留档"（撞顶时上层补一条 trace）。"""
@@ -311,7 +427,8 @@ class NullLedger:
     两次"——否则探针①（有账 ⇒ 只发生一次）不红不算数，它可能只是恒真。
     """
 
-    def claim(self, key: str, tool: str, fp: str) -> tuple[str, tuple | None]:
+    def claim(self, key: str, tool: str, attempt: str, *,
+              resuming: bool = True) -> tuple[str, tuple | None]:
         return "new", None
 
     def finish(self, key: str, out) -> bool:
@@ -387,6 +504,9 @@ def guarded_invoke(tool, name: str, args: dict, config, *,
     `device_oled_display` 缺的 `text` 用 temperature 0.7 的 LLM 现创出来
     （`agent/graph.py::_create_display_text`）——对改后的 args 取指纹，那个工具每次
     指纹都不同，幂等判据对它**恒不命中，而且不报错**。
+
+    键与"这一次尝试"是**两个**值（`key_for` / `attempt_for`，理由见头注《修法》）；
+    `resuming` 那一格由服务端按"上一轮跑没跑完"算好塞进 config（缺省按"没跑完"办）。
     """
     if not active(config):
         return _call(tool, args)        # 今天的形状：直通，一行账都不记
@@ -396,12 +516,13 @@ def guarded_invoke(tool, name: str, args: dict, config, *,
     if not authz.is_write(name):
         return _call(tool, args)
     key = key_for(config, name, fingerprint)
+    attempt = attempt_for(config, fingerprint)
     led = None
     try:
         # 选后端也在这个 `try` 里：PG 档建表/断言失败 ⇒ 与"记账失败"同一个姿态
         # （`unavailable` ⇒ 拒绝这次写），**不静默退回 SQLite**。
         led = ledger if ledger is not None else _shared(config)
-        state, row = led.claim(key, name, fingerprint)
+        state, row = led.claim(key, name, attempt, resuming=resuming(config))
     except Exception as e:
         logger.warning("[idem] 记账失败，拒绝执行写操作 %s: %s", name, e)
         record("execute", "idem_error", name=name,

@@ -176,26 +176,29 @@ def _ambient_note(env: dict) -> str:
 
 
 def _ckpt_layer_note(env: dict) -> str:
-    """每次运行都报一句：**真连库那一层判据这次量了没有**。
+    """每次运行都报一句：**真连库的那两层判据这次量了没有**。
 
-    `tests/test_checkpoint_setup_concurrent.py` 缺 DSN 时报的是「未评估」并**退 0**
-    （不许因为量不了就报绿）——但那样一来，汇总表上它就是一行平白的 `✓`，与"真量过"长得
-    一模一样。20261018 那次真停服正是死在这一层、而当时所有套件全绿 ⇒ **"没量"必须每次
-    都说出来**，不能只在那个套件自己的输出里说一遍。
+    `tests/test_checkpoint_setup_concurrent.py`（4 进程并发建表）与
+    `tests/test_pg_retention_live.py`（保留治理真删一次）缺 DSN 时都报「未评估」并**退 0**
+    （不许因为量不了就报绿）——但那样一来，汇总表上它们就是两行平白的 `✓`，与"真量过"
+    长得一模一样。20261018 那次真停服正是死在第一层、而当时所有套件全绿 ⇒ **"没量"必须
+    每次都说出来**，不能只在套件自己的输出里说一遍。两层共用同一个前提（一个专门的
+    测试库），所以合成一行报。
 
-    它判的是**子进程实际会看到的那个取值**（`env`，不是 `os.environ`）：这一层的前提
-    是 DSN，而 DSN 不进 `_PINNED`（钉住它就得钉一个真库，本机没有那个前提）。
+    它判的是**子进程实际会看到的那个取值**（`env`，不是 `os.environ`）：这两层的前提
+    都是 DSN，而 DSN 不进 `_PINNED`（钉住它就得钉一个真库，本机没有那个前提）。
     """
     dsn = (env.get("SAUDADE_CKPT_TEST_DSN") or "").strip()
+    what = "真连库 · 4 进程并发建表 / PG 保留治理真删"
     if not dsn:
-        return ("⏭  真连库 · 4 进程并发建表那一层**本次未评估**"
-                "（没有 SAUDADE_CKPT_TEST_DSN）——上面那个 ✓ 只代表「前提不可用」，"
-                "不代表这一层是绿的")
+        return (f"⏭  {what} 那两层**本次未评估**"
+                "（没有 SAUDADE_CKPT_TEST_DSN）——上面那两个 ✓ 只代表「前提不可用」，"
+                "不代表这两层是绿的")
     db = dsn.rsplit("/", 1)[-1].split("?", 1)[0]
     if "saudade_blog" in db:
-        return (f"⏭  真连库 · 4 进程并发建表那一层**本次未评估**"
+        return (f"⏭  {what} 那两层**本次未评估**"
                 f"（SAUDADE_CKPT_TEST_DSN 指向产线库 {db!r}，套件当场拒跑）")
-    return f"✅ 真连库 · 4 进程并发建表那一层**本次量了**（库 = {db}）"
+    return f"✅ {what} 那两层**本次量了**（库 = {db}）"
 
 
 def _coverage_report(env: dict) -> None:

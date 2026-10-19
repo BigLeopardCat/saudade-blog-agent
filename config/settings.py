@@ -335,12 +335,22 @@ class Settings(BaseSettings):
     # 双份上下文**），判据 `tests/test_checkpoint_adoption.py`。
     # 取值域 `postgresql://` / `postgres://` / `sqlite://`，**故意不认内存档**（4 个
     # uvicorn worker 下每 worker 各记各的，且不报错）。认不出来/依赖没装都**响亮抛**。
+    # ⚠️ **它指的必须是业务库之外的独立库**：saver 建表走 `PostgresSaver.setup()`，
+    # **没有编号迁移** ⇒ 指进业务库就是在业务库上开一条没人编号、不在 CI 里的 DDL 通道，
+    # 而它建的表与业务表不重名、**不会报错**。完整理由与"旧数据不迁"见
+    # `agent/checkpoint.py` 头注《DSN 指向哪个库》；`/health` 的 `dials.checkpoint_db`
+    # 是它的可读出口（只回库名）。
     # 实验那份 DSN 刻意在**仓外**（`/home/ubuntu/exp/ckpt.env` 的 `CHECKPOINT_PG_DSN`，
     # 由 `agent/checkpoint_arm.py` 读**进程环境**）：golden 的 cwd 是主仓，
     # `env_file=".env"` 会读到产线配置，两件事必须分开。
     # 依赖（`langgraph-checkpoint-postgres` / `psycopg[binary]` / `psycopg-pool`）已在
     # `pyproject.toml` 里声明并进了 `uv.lock`。
     checkpoint_dsn: str = ""               # CHECKPOINT_DSN
+    # 「指错库」的硬闸（20261019）：填一个**库名**，DSN 指到它 ⇒ 启动期当场抛。
+    # **缺省空 = 不拦**——生产库名是运维坐标，**不写进本仓**（本仓是公开仓，
+    # 同族的纪律见 `agent/checkpoint.py` 头注《DSN 指向哪个库》）。
+    # 填了之后要保证它指的是**业务库**，不是 checkpoint 自己的那个库。
+    checkpoint_forbid_db: str = ""         # CHECKPOINT_FORBID_DB
 
     # ── Active provider helpers ─────────────────────────────────────
 

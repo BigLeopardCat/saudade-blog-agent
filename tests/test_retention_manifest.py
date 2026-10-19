@@ -48,25 +48,58 @@ def _bad_class(**over) -> list[dict]:
     return [good, bad]
 
 
+def _pg_checks() -> None:
+    """⑥ PG 那一路（20261019 批 C）：登记了就必须有**真会跑**的执行者。
+
+    `store="pg"` 的类**不在盘上**，所以审计器（`audit`/`unregistered`/`_matcher`）对它一概
+    看不见——它**只能**靠 `owner_ref` 指的那个执行者真的会跑。盘上的那些类至少有"真树零
+    未登记"兜着，这一类没有 ⇒ 这里反过来查执行者本身。
+    """
+    pg = [c for c in rm.CLASSES if rm.store_of(c) == rm.STORE_PG]
+    check("⑥ 至少有一条 store=pg 的登记项（PG 那一路有人在管）",
+          len(pg) >= 1, str([c["key"] for c in pg]))
+    check("⑥ PG 类的判据是 dsn_env + tables，不是 root/patterns（它不在盘上，"
+          "硬塞进路径判据只会得到一条恒不命中的规则）",
+          all(c.get("dsn_env") and c.get("tables") for c in pg)
+          and all("patterns" not in c and "root" not in c for c in pg))
+    for c in pg:
+        p = os.path.join(rm.REPO, c["owner_ref"])
+        src = open(p, encoding="utf-8").read() if os.path.exists(p) else ""
+        check(f"⑥ {c['key']} 的执行者真的在盘上", bool(src), str(c["owner_ref"]))
+        check(f"⑥ {c['key']} 的执行者**默认只列不删**（源码里有 `--apply`）", "--apply" in src)
+        check(f"⑥ {c['key']} 的执行者真的会删（源码里有 `DELETE FROM`）", "DELETE FROM" in src)
+        check(f"⑥ {c['key']} 声明的表与执行者**同源**（改名会当场红）",
+              all(t in src for t in c["tables"]), str(c["tables"]))
+    check("⑥ store 的缺省是 fs —— 老登记项一个都不用改",
+          all(rm.store_of(c) == rm.STORE_FS for c in rm.CLASSES if "root" in c))
+    check("⑥ PG 类**不**出现在任何一根树的归属表里（否则它会抢走盘上那条路径的答案）",
+          all(rm.owner_of("checkpoints", rm.DEFAULT_LOGS_ROOT) != c["key"] for c in pg))
+
+
+def _table_checks() -> None:
+    """① 真表自洽：登记表自己讲不讲得通（`check_classes()` 回答的那几条）。"""
+    probs = rm.check_classes()
+    check("① 真表 check_classes 零问题", probs == [], "；".join(probs[:3]))
+    check("① 登记表里每个 key 都是唯一的",
+          len({c["key"] for c in rm.CLASSES}) == len(rm.CLASSES))
+    check("① 每个类都有 why（登记的意义就是说清为什么是这个处置）",
+          all(c.get("why") for c in rm.CLASSES))
+    check("① managed 的执行者都能在盘上指认（rule / owner_ref / owner_external 三选一）",
+          all(c.get("rule") or c.get("owner_ref") or c.get("owner_external")
+              for c in rm.CLASSES if c["status"] == "managed"))
+    check("① owner_ref 全部指向真实存在的文件（相对本仓）",
+          all(os.path.exists(os.path.join(rm.REPO, c["owner_ref"]))
+              for c in rm.CLASSES if c.get("owner_ref")))
+    check("① 三种 status 都出现过（表不是只有一种处置）",
+          {c["status"] for c in rm.CLASSES} == {"managed", "frozen", "open"},
+          str(sorted({c['status'] for c in rm.CLASSES})))
+
+
 def main() -> int:
     tmp = tempfile.mkdtemp(prefix="retention_manifest_")
     try:
         # ── ① 真表自洽 ────────────────────────────────────────────────────
-        probs = rm.check_classes()
-        check("① 真表 check_classes 零问题", probs == [], "；".join(probs[:3]))
-        check("① 登记表里每个 key 都是唯一的",
-              len({c["key"] for c in rm.CLASSES}) == len(rm.CLASSES))
-        check("① 每个类都有 why（登记的意义就是说清为什么是这个处置）",
-              all(c.get("why") for c in rm.CLASSES))
-        check("① managed 的执行者都能在盘上指认（rule / owner_ref / owner_external 三选一）",
-              all(c.get("rule") or c.get("owner_ref") or c.get("owner_external")
-                  for c in rm.CLASSES if c["status"] == "managed"))
-        check("① owner_ref 全部指向真实存在的文件（相对本仓）",
-              all(os.path.exists(os.path.join(rm.REPO, c["owner_ref"]))
-                  for c in rm.CLASSES if c.get("owner_ref")))
-        check("① 三种 status 都出现过（表不是只有一种处置）",
-              {c["status"] for c in rm.CLASSES} == {"managed", "frozen", "open"},
-              str(sorted({c['status'] for c in rm.CLASSES})))
+        _table_checks()
         # 执行者在别的脚本里的那几个必须**真的**在那些脚本里被调用（不然 rule=None 只是脱身话术）
         for key, ref, needle in (("traces", "eval/trace_retention.py", "--apply"),
                                  ("golden-traces", "eval/golden_trace.py", "def prune")):
@@ -197,7 +230,7 @@ def main() -> int:
             open(os.path.join(f, "rust.log"), "w").write("x")
             open(os.path.join(f, "agent", "traces", "20260925", "t.json"), "w").write("{}")
             open(os.path.join(f, "stray.bin"), "w").write("x")
-            _logs = [c for c in rm.CLASSES if c["root"] == rm.DEFAULT_LOGS_ROOT]
+            _logs = [c for c in rm.CLASSES if c.get("root") == rm.DEFAULT_LOGS_ROOT]
 
             def _claims(rel: str) -> list[str]:
                 return [c["key"] for c in _logs if rm.matches(rel, c)]
@@ -209,11 +242,14 @@ def main() -> int:
                   str(_claims("agent/traces/20260925/t.json")))
             check("⑤ 夹具树：没有类认领的后缀，谁都不认（这正是「缺口」的形状）",
                   _claims("stray.bin") == [], str(_claims("stray.bin")))
-            _reroot = [dict(c, root=f) if c["root"] == rm.DEFAULT_LOGS_ROOT else c
+            _reroot = [dict(c, root=f) if c.get("root") == rm.DEFAULT_LOGS_ROOT else c
                        for c in rm.CLASSES]
             check("⑤ 夹具树：端到端只报出那一条没主人的（root 覆盖到临时目录）",
                   rm.unregistered(f, _reroot) == ["stray.bin"],
                   str(rm.unregistered(f, _reroot)))
+
+        # ── ⑥ PG 那一路（20261019 批 C）───────────────────────────────────
+        _pg_checks()
     finally:
         import shutil
         shutil.rmtree(tmp, ignore_errors=True)

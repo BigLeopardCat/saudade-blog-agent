@@ -247,6 +247,60 @@ def test_tool_result_kinds():
           getattr(via_tool, "kind", None) == "unavailable", getattr(via_tool, "kind", None))
     check("知识库工具失败也走 unavailable", getattr(via_kb, "kind", None) == "unavailable",
           getattr(via_kb, "kind", None))
+    # ── 批 ⑤-1（20261019）：**失败路径裸返回** ⇒ kind 缺省成 ok ⇒ PASS ⇒ 假回执 ──
+    # `execute_node` 那一行是 `getattr(out, "kind", "ok")`：**"没声明"与"声明了 ok"逐字
+    # 相同**。于是 `device_oled_display` 的 8 条硬失败此前全判 PASS，回执「屏幕显示「…」」
+    # 落 `execution_log`，下一轮注回提示词 ⇒ planner/narrator 读成系统确认的事实——而设备
+    # 离线、什么都没显示。这里逐条钉住它们现在的 kind，并**真调一次 `_check_spec`**：
+    # 钉 kind 只是形状，判 BLOCK 才是"不进回执"这件事本身。
+    import tools.device as _dev
+    from agent.graph import _check_spec
+
+    def _blocks(name, args, out):
+        """这条返回在 checker 眼里是不是 BLOCK（不是 PASS 就不会产回执）。"""
+        v, _r = _check_spec(name, args, True, str(out), "device_display",
+                            getattr(out, "kind", "ok"), getattr(out, "meta", None) or {})
+        return v != "PASS"
+
+    _orig_uid, _orig_valid, _orig_put, _orig_jwt = (
+        _dev._device_get_user_id, _dev._valid_device_id, _dev.httpx.put, _dev._sign_user_jwt)
+    _orig_httpx = _dev.httpx
+
+    class _R:
+        def __init__(self, code, body=None):
+            self.status_code, self._b = code, (body or {})
+        def json(self):
+            return self._b
+
+    _dev._sign_user_jwt = lambda uid: "stub"
+    _dev._device_get_user_id = lambda config: 0
+    no_uid = _dev.device_oled_display.invoke({"text": "你好"})
+    _dev._device_get_user_id = lambda config: 7
+    too_long = _dev.device_oled_display.invoke({"text": "x" * 65})
+    _dev._valid_device_id = lambda did: False
+    bad_id = _dev.device_oled_display.invoke({"text": "你好", "device_id": "??"})
+    _dev._valid_device_id = _orig_valid
+    _dev.httpx = type("H", (), {"put": lambda *a, **kw: _R(404)})()
+    miss = _dev.device_oled_display.invoke({"text": "你好", "device_id": "d1"})
+    _dev.httpx = type("H", (), {"put": lambda *a, **kw: _R(409)})()
+    off = _dev.device_oled_display.invoke({"text": "你好", "device_id": "d1"})
+    _dev.httpx = _orig_httpx
+    _dev._device_get_user_id, _dev._sign_user_jwt = _orig_uid, _orig_jwt
+
+    eq(getattr(no_uid, "kind", None), "unavailable", "身份取不到 ⇒ unavailable")
+    eq(getattr(too_long, "kind", None), "invalid_args", "屏文超 64 字 ⇒ invalid_args")
+    eq(getattr(bad_id, "kind", None), "invalid_args", "设备 id 格式非法 ⇒ invalid_args")
+    eq(getattr(miss, "kind", None), "not_found", "设备 404 ⇒ not_found（查无此设备不是故障）")
+    eq(getattr(off, "kind", None), "unavailable", "设备 409 离线 ⇒ unavailable")
+    for _lbl, _out in (("身份", no_uid), ("超长", too_long), ("id 非法", bad_id),
+                       ("404", miss), ("409", off)):
+        check(f"⭐ device 的「{_lbl}」在 checker 眼里判 BLOCK（不再产回执）",
+              _blocks("device_oled_display", {"text": "你好"}, _out), str(_out)[:40])
+    _ok_out = base.ok("OLED 显示指令已下发")
+    check("正控：真下发那条（ok）仍 PASS —— 上面五条不是恒 BLOCK",
+          not _blocks("device_oled_display", {"text": "你好"}, _ok_out))
+    _w = base.get_weather.invoke({"location": "不合法的地方!!!"})
+    eq(getattr(_w, "kind", None), "unavailable", "天气：城市名非法 ⇒ unavailable（本来就有）")
     # 命令类工具（20260926 命令与事实分离）：返回文本是给人看的事实、不带命令前缀，
     # 连线命令搬进 meta["cmd"]（由 cmd_shape 校验形态，不掺 kind）
     nav = base.navigate_to.invoke({"path": "/talk", "confirm": False})
