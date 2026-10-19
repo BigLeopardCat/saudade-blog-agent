@@ -337,12 +337,20 @@ def drop_invalid_indexes(conn) -> list[str]:
     return names
 
 
-def _setup_under_lock(saver, pool=None) -> None:
+def _setup_under_lock(saver, pool=None, *, now=time.monotonic, sleep=time.sleep,
+                      budget: float | None = None) -> None:
     """在咨询锁里建表（**轮询式、有预算**，理由见模块头注《建表》）。
 
     `pool` **由调用方给**（`build_checkpointer` 把 saver 用的那个原样传进来）。
     缺省回落到 `settings.checkpoint_dsn` 只为判据能单独调它——**生产路径不许走缺省**：
     自己去取会让"调用方给的 DSN"与"设置里那一格"不一致时关掉 saver 手里那个池。
+
+    `now` / `sleep` / `budget` **原样透传给 `wait_for_setup_lock`**，理由与它那里逐字相同
+    （判据要能离线跑、不真等 60 秒）。**20261019 补这一层**：此前它们没有透传，
+    而 `tests/test_checkpoint_factory.py` ⑨c 是**唯一**直接调本函数、又必然抢不到锁的
+    调用点 ⇒ 它按真实钟面跑满整个 `_SETUP_WAIT`，一个套件白等 60 秒（全套 452 秒的 13%，
+    且是全套最慢的一个）。同一个文件在 `wait_for_setup_lock` 的注里就写着"不真等 60 秒"
+    ——**判据自己声明的前提，自己没摆**，是本仓点名的那类失效。
     """
     pool = _pool_for(settings.checkpoint_dsn) if pool is None else pool
     with pool.connection() as conn:
@@ -354,7 +362,7 @@ def _setup_under_lock(saver, pool=None) -> None:
                 "建表锁要求连接是 autocommit 的（`_make_pool` 的 kwargs 里那一格）。"
                 "关掉它会让抢锁轮询退化成一条长事务，与 `CREATE INDEX CONCURRENTLY` "
                 "互相等 —— 就是 20261018 那次停服的形状。")
-        wait_for_setup_lock(conn)
+        wait_for_setup_lock(conn, now=now, sleep=sleep, budget=budget)
         try:
             drop_invalid_indexes(conn)
             saver.setup()
