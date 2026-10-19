@@ -449,9 +449,13 @@ WORKFLOWS: list[Workflow] = [
     # 因此下面的 `plan` 是**允许出现在变更集里的工具全集**，不是其余技能那种"固定执行
     # 序列"；`_expand_change_set` 按它逐条核对（`workflow.plan` 仍是同一个字段、同一份读法）。
     #
-    # 允许清单里**没有**两件，各自有据：
-    #   · `delete_board_comment`：删除不属于"复核一条待审留言"（待审与被驳回的都删得掉，
-    #     那不是队列这件事），主人要删走 board_delete 单独点名；
+    # 允许清单里**没有**三件，各自有据：
+    #   · `delete_board_comment` / `delete_comment`：删除不属于"复核一条待审的那条"
+    #     （待审与被驳回的都删得掉，那不是队列这件事），主人要删走 board_delete /
+    #     comment_delete 单独点名；
+    #     ⚠️ `delete_comment` 的**靶通道是 ledger**（见 `_WRITE_TARGET_CHANNEL`），
+    #     与 `delete_board_comment`（name 通道）不同——别因为"两件都叫 delete"就把它们
+    #     当成同一条通道的同类；这一句说的是"它不进变更集"，与通道无关。
     #   · `reject_quota_request`：它的 `reason` **必填**，而主人的授权语里从来不带来理由、
     #     其 docstring 又明令"不要自己编一个"（申请人收到的是主人的裁决）⇒ 驳回这一支在
     #     变更集里结构性不可达（模型想驳回就得自己说清理由，走 quota_reject 单件）。
@@ -464,10 +468,12 @@ WORKFLOWS: list[Workflow] = [
             "主人让**一次办掉台账里那几件审核/额度的事**时使用（「全部批准」"
             "「按你的想法来吧」「都办了吧」「把那两条留言和那个申请都批了」）。"
             "参数 calls=**逐条调用**：`[{\"tool\": 工具名, \"args\": {…}}]`，"
-            "工具只能是 `audit_board_comment`（复核留言）与 `approve_quota_request`"
-            "（批准额度申请）两个之一；每一件的目标都**照抄待办台账帧里的编号**"
-            "（留言抄 `talkId:<编号>`、额度抄 `账号 id=<编号>`）——台账里没有的编号"
-            "**不许编**。每一件做什么、什么方向，全由你按台账事实决定。"
+            "工具只能是 `audit_board_comment`（复核**留言**）、`audit_comment`"
+            "（复核**评论**）与 `approve_quota_request`（批准额度申请）三个之一；"
+            "每一件的目标都**照抄待办台账帧里的编号**"
+            "（留言抄 `talkId:<编号>`、评论抄 `commentId:<编号>`、额度抄 `账号 id=<编号>`）"
+            "——台账里没有的编号**不许编**，**也不许把一边的编号填进另一边的工具**"
+            "（留言与评论是两套东西）。每一件做什么、什么方向，全由你按台账事实决定。"
             "⚠️ 一件都拿不准就别选本技能（选 chat 如实说明）。"
             "⚠️ **本技能一律弹确认框**：卡面逐条印出台账原文与结论，主人点确定才真动手。"
         ),
@@ -477,15 +483,18 @@ WORKFLOWS: list[Workflow] = [
         # 就落成"可选"，schema 里也不会进 `required`（同 `content_query.tools/calls`
         # 那两个"可选"的写法——那两件确实可以只点一个，这一件不行）。
         required_params=("calls",),
-        plan=[("audit_board_comment", {}), ("approve_quota_request", {})],
+        plan=[("audit_board_comment", {}), ("audit_comment", {}),
+              ("approve_quota_request", {})],
         complete_when="清单里的每一条都返回了结果（成败逐条如实转述）",
         reply_contract=(
             "**逐条对照实际返回**：哪几条真办了、各改成了什么，一条一句如实说；"
             "有任何一条没执行/被拒/未确认，就如实说那一条没办成——"
             "**绝不得把没执行的那几条说成办了**，也不得在清单里有失败项时把整批说成"
             "「全都办好了」；"
-            "每一件的措辞边界照它自己的返回（留言复核照 board_audit、额度批准照 "
-            "quota_approve），没拿到回执的那一件不要用完成式"
+            "每一件的措辞边界照它自己的返回（留言复核照 board_audit、评论复核照 "
+            "comment_audit、额度批准照 quota_approve），没拿到回执的那一件不要用完成式；"
+            "⚠️ 留言与评论**分开说**（「留言…复核为通过、评论…复核为驳回」），"
+            "别把两边的条数并成一个数"
         ),
         roles=ADMIN_ROLES,
     ),

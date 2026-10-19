@@ -696,14 +696,15 @@ def test_review_inbox_calls_channel():
     check("tool 闭集 == 该技能 plan 里声明的工具全集（执行端读的是同一个字段）",
           list(ri["properties"]["tool"].get("enum") or []) == allowed,
           f"{ri['properties']['tool'].get('enum')} ≠ {allowed}")
-    check("两个工具名都在闭集里（审核 + 批准额度）",
-          set(allowed) == {"audit_board_comment", "approve_quota_request"}, str(allowed))
+    check("三件都在闭集里（留言复核 + 评论复核 + 批准额度）",
+          set(allowed) == {"audit_board_comment", "audit_comment",
+                           "approve_quota_request"}, str(allowed))
     # 参数名提示挂在 **`calls` 这一格参数**的描述上（不是技能描述）——`args` 声明的是
     # 裸 `{"type":"object"}`，不给键名模型只能猜。
     par = adm["review_inbox"]["parameters"]["properties"]["calls"]
     hint = str(par.get("description") or "")
     check("calls 参数的描述里带上了每件要填的参数名（从工具 schema 现取，不是手抄一份签名）",
-          "talk_id" in hint and "user_id" in hint, hint[:200])
+          all(k in hint for k in ("talk_id", "comment_id", "user_id")), hint[:200])
     check("calls 是必填（空清单 = 一张什么都不办的卡）",
           "calls" in (adm["review_inbox"]["parameters"].get("required") or []),
           str(adm["review_inbox"]["parameters"].get("required")))
