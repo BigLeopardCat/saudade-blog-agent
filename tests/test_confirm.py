@@ -1034,20 +1034,20 @@ check("令牌签发→验签往返（批 H **不改**令牌格式、不改版本
       isinstance(_pay, dict) and _pay.get("v") == confirm._VERSION
       and _pay.get("specs") == _grant_specs, str(_pay)[:80])
 _opts = _confirm.confirm_opts(len(_grant_specs))
-check("卡面 N+2 枚按钮：全部办 + 逐条「只办第 i 件」+ 其他（我来说）+ 取消",
+check("卡面 N+2 枚按钮：全部处理 + 逐条「只处理第 i 个」+ 其他（我来说）+ 取消",
       [o["value"] for o in _opts] == ["yes", "pick:0", "pick:1", "other", "no"],
       str([o["value"] for o in _opts]))
-check("  「全部办」写着件数（主人点之前看得见自己要同意几件）",
-      f"{len(_grant_specs)} 件" in _opts[0]["label"])
+check("  「全部处理」写着任务数（主人点之前看得见自己要同意几个任务）",
+      f"{len(_grant_specs)} 个任务" in _opts[0]["label"])
 for _i in (0, 1):
     _narrowed, _err = confirm.narrow(_pay, _opts[_i + 1]["value"])
     check(f"  按钮「{_opts[_i + 1]['label']}」⇒ 恰好裁到签名清单里那一件",
           _err == "" and (_narrowed or {}).get("specs") == [_grant_specs[_i]],
           f"{_err} {str(_narrowed)[:60]}")
 check("问句里点名的按钮与卡面按钮同一套字面（不一致 = 问句指着一个不存在的按钮）",
-      all(o["label"].startswith("只办第") for o in _opts[1:-2])
-      and "只办第" in _confirm.render_confirm_question(_grant_specs)
-      and "全部办" in _confirm.render_confirm_question(_grant_specs))
+      all(o["label"].startswith("只处理第") for o in _opts[1:-2])
+      and "只处理第" in _confirm.render_confirm_question(_grant_specs)
+      and "全部处理" in _confirm.render_confirm_question(_grant_specs))
 check("  「其他（我来说）」恒紧挨在「取消」前面（两种卡面同一位置）",
       _opts[-2]["value"] == "other" and _confirm.confirm_opts(1)[-2]["value"] == "other")
 check("  多件问句里**逐条编号**（编号就是按钮指的那个下标）",
@@ -1055,17 +1055,17 @@ check("  多件问句里**逐条编号**（编号就是按钮指的那个下标�
       and "2. " in _confirm.render_action_lines(_grant_specs))
 for _bad_pick in ("pick:9", "pick:99", "2", "pick:-1", "pick:", "全部"):
     _n2, _e2 = confirm.narrow(_pay, _bad_pick)
-    check(f"  读不懂/越界的选择「{_bad_pick}」⇒ 空 + 原因（fail-closed，绝不放大成全部办）",
+    check(f"  读不懂/越界的选择「{_bad_pick}」⇒ 空 + 原因（fail-closed，绝不放大成全部处理）",
           _n2 is None and bool(_e2), _e2)
 _n3, _e3 = confirm.narrow(_pay, "")
-check("  空选择 = 全部办（旧客户端不发 confirm_pick 时逐字兼容）",
+check("  空选择 = 全部处理（旧客户端不发 confirm_pick 时逐字兼容）",
       _n3 is not None and len(_n3["specs"]) == 2 and _e3 == "")
 # 20261006：「其他（我来说）」加进来之后，单件卡是**三枚**了（原文写的是"仍是旧的两枚
 # ——字面一个字节没动"，那句话现在不成立，如实改掉，别留一句会骗人的注释）。
-# 加的是**入口**不是**权限**：可点的动词仍是「确定」，问句的字面照旧一个字没动。
-check("  单件三枚（确定 / 其他（我来说）/ 取消），问句字面仍逐字未变",
+# 加的是**入口**不是**权限**：可点的动词仍是「确定」。20261019：句尾动词换成「处理」。
+check("  单件三枚（确定 / 其他（我来说）/ 取消），句尾动词是「处理」",
       [o["label"] for o in _confirm.confirm_opts(1)] == ["确定", "其他（我来说）", "取消"]
-      and _confirm.render_confirm_question(_grant_specs[:1]).endswith("点「确定」我就去办。"))
+      and _confirm.render_confirm_question(_grant_specs[:1]).endswith("点「确定」我就去处理。"))
 # 这张网是给"顺手把 other 也塞进确认请求"准备的：它不是选择记号，服务端必须
 # fail-closed（零执行）。前端把这一支拦在发请求之前（见 chat-stream.js 的顺序判据）。
 _n4, _e4 = confirm.narrow(_pay, "other")
@@ -1084,11 +1084,11 @@ _pair = [{"tool": "create_tag", "args": {"title": "测试"}},
          {"tool": "set_article_tags", "args": {"article_id": 11, "add": ["测试"]}}]
 check("依赖组并成一个单元（一格 = 一次点击能单独办的那件事）",
       _confirm.linked_units(_pair) == [[0, 1]], str(_confirm.linked_units(_pair)))
-check("  ⇒ 卡面退回单件措辞、只剩三枚按钮（没有那枚点不动的「只办第 2 件」）",
+check("  ⇒ 卡面退回单件措辞、只剩三枚按钮（没有那枚点不动的「只处理第 2 个」）",
       [o["label"] for o in _confirm.confirm_opts(len(_confirm.linked_units(_pair)))]
       == ["确定", "其他（我来说）", "取消"]
       and "点「确定」" in _confirm.render_confirm_question(_pair)
-      and "只办第" not in _confirm.render_confirm_question(_pair))
+      and "只处理第" not in _confirm.render_confirm_question(_pair))
 check("  ⇒ 那一格仍把「新建」与名字印出来（主人签字前看得见站里会多一个标签）",
       "新建" in _confirm.render_action_lines(_pair)
       and "测试" in _confirm.render_action_lines(_pair))
@@ -1163,8 +1163,8 @@ check("接线：用例轮里的记号真的接到请求上（run_case → run_on
       and '"confirm_pick"' in _rg_src)
 # 「记号读不懂」那一轮的正文只有**一处字面**（server.INVALID_PICK_TEXT）：生产回复与
 # 评测断言读的是同一句话——抄第二份就是两处会各漂各的措辞。
-check("生产那一句「一件都没有办」只有一处字面，且生成器用的是它",
-      _src.count("一件都没有办") == 1
+check("生产那一句「一个任务都没有处理」只有一处字面，且生成器用的是它",
+      _src.count("一个任务都没有处理") == 1
       and "INVALID_PICK_TEXT = (" in _src
       and "json.dumps(INVALID_PICK_TEXT" in _src
       and "server.INVALID_PICK_TEXT" in _rg_src)
