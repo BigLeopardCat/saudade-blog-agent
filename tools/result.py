@@ -57,25 +57,41 @@ class ToolResult(str):
     # 改一次措辞就静默失配（回执是落库的审计，不能靠"读起来差不多"）。
     # 与 kind 同一条生命线，经 `.invoke()` 透传（test_reports/test_admin_write 有锁）。
     meta: dict = {}
+    # **结构化载荷**（20261019 批 G1）：文本是它的**渲染**，它是文本的**本体**。
+    #
+    # 为什么要有它：`_shape` 的出口此前是 `str(data)`，于是每一个想读结构的消费方
+    # （参数引用 `$x[0].y`、实体摘要、跨轮指代锚点）都得把那个 repr **再解析回来**
+    # ——`agent/arg_refs.py::parse_data` 的 `literal_eval` 兜底、`entity_digest._parse`、
+    # `deterministic_plan._doc_title` 的正则，全是同一件事的不同写法。结构本来就在手上，
+    # 丢掉的只有"它在哪一格"。
+    #
+    # 与 `meta` 的分工别混：`meta` 是**给回执/跨语言契约**看的**小**结构（op/changed/
+    # target/…，`_RCPT_META_KEYS` 是白名单）；`data` 是**工具返回值本身**（列表/字典，
+    # 可能就是几十行），只在本进程里传，**不落回执、不跨语言**。
+    #
+    # 缺省 `None` 而不是 `{}`：`None` 是"这个返回**没有**结构化载荷"（固定告知语、
+    # 纯文本），消费方据此回落文本解析；`{}` 会伪装成"有载荷，只是空的"。
+    data: object = None
 
     def __new__(cls, text: str, kind: str = "ok",
-                meta: dict | None = None) -> "ToolResult":
+                meta: dict | None = None, data: object = None) -> "ToolResult":
         obj = str.__new__(cls, text)
         obj.kind = kind
         obj.meta = dict(meta) if meta else {}
+        obj.data = data
         return obj
 
 
-def ok(text: str, meta: dict | None = None) -> ToolResult:
-    return ToolResult(text, "ok", meta)
+def ok(text: str, meta: dict | None = None, *, data: object = None) -> ToolResult:
+    return ToolResult(text, "ok", meta, data)
 
 
-def empty(text: str, meta: dict | None = None) -> ToolResult:
-    return ToolResult(text, "empty", meta)
+def empty(text: str, meta: dict | None = None, *, data: object = None) -> ToolResult:
+    return ToolResult(text, "empty", meta, data)
 
 
-def unavailable(text: str, meta: dict | None = None) -> ToolResult:
-    return ToolResult(text, "unavailable", meta)
+def unavailable(text: str, meta: dict | None = None, *, data: object = None) -> ToolResult:
+    return ToolResult(text, "unavailable", meta, data)
 
 
 def not_found(text: str, meta: dict | None = None) -> ToolResult:
@@ -95,7 +111,7 @@ def not_found(text: str, meta: dict | None = None) -> ToolResult:
     return ToolResult(text, "not_found", meta)
 
 
-def invalid_args(text: str, meta: dict | None = None) -> ToolResult:
+def invalid_args(text: str, meta: dict | None = None, *, data: object = None) -> ToolResult:
     """工具**自己**判出参数不合法（20261019 批 ⑤-1）——第四个失败族。
 
     与 `args_parse`（`_check_spec` 在 spec 解析那一步给的码）分开：那个说的是"计划里
@@ -110,7 +126,7 @@ def invalid_args(text: str, meta: dict | None = None) -> ToolResult:
     `execution_log` ⇒ 下一轮注回提示词 ⇒ planner/narrator 读成**系统确认的事实**。
     换 `unavailable` 能拦住回执，但过程行会显示「服务不可用」——而设备好好的。
     """
-    return ToolResult(text, "invalid_args", meta)
+    return ToolResult(text, "invalid_args", meta, data)
 
 
 # ── 写工具的**事实信封**（20260930 · F1）────────────────────────────────────
@@ -245,10 +261,19 @@ def _shape(data) -> str:
     出口另做一件事：**把行里的上游字段名换成命名空间名**（见 `_FRAME_ID_KEYS`）。
     出口只有这一个，所以帧、参数引用取值源（`graph.py` 的 `parse_data(str(out))`）
     与实体摘要（`entities.receipt_digest`）三处**同时**看到同一个名字。
+
+    **20261019（批 G1）：结构不再在这里被丢掉。** 出口从"一个普通 str"变成
+    `ToolResult(渲染文本, data=改过名的那个结构)`——文本逐字节不变（所有 `str()`/
+    切片/拼接的调用点一个字都不用改），但下游要读结构时直接拿 `.data`，不必再把
+    repr 解析回来。取法是 `agent/arg_refs.py::structured_of(out)`。
+
+    `data` 存的是**改过名的**那份（与文本同源）——存原始行会让"帧里叫 talkId、
+    取值源里叫 talkKey"这对老问题从另一个门进来。
     """
     if isinstance(data, ToolResult):
         return data
-    return str(_label_id_keys(data))
+    relabeled = _label_id_keys(data)
+    return ToolResult(str(relabeled), "ok", None, relabeled)
 
 
 # 线上 API 的行字段名（`talkKey`/`noteKey`/…）与我们给模型看的**命名空间名**

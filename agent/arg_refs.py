@@ -127,6 +127,26 @@ def parse_data(text) -> object | None:
     return _parse_rag_lines(s)
 
 
+def structured_of(out) -> object | None:
+    """工具返回 → **结构化载荷**；拿不到返回 None（调用方据此报 ref_unparsed，不猜）。
+
+    这是 `parse_data` 之上的那一层（20261019 批 G1）：
+      · 返回带 `data`（`ToolResult` 的本体，`tools/result.py::_shape` 出口填的）
+        ⇒ 直接给它，**文本与结构不再需要一致**；
+      · 没有（固定告知语、纯文本返回、老调用点手搓的 str）⇒ 回落
+        `parse_data(str(out))`，即把 repr 解析回来那一条老路。
+
+    为什么要分两层而不是把 `parse_data` 改掉：`parse_data` 还服务**真正只有文本**
+    的调用方（trace 回放、测试直接喂 repr 串），而那些地方本来就没有本体可取。
+    回落这一支**不是"兜底容错"而是"另一类输入"**——判别的是"有没有本体"，
+    不是"本体坏了没有"。
+    """
+    data = getattr(out, "data", None)
+    if data is not None:
+        return data
+    return parse_data(str(out))
+
+
 # 字段名别名（20260928）：帧里的 id 字段名已统一成**命名空间名**（`noteId`/`talkId`，
 # 单点见 `tools/base.py::_FRAME_ID_KEYS`），而引用字面量是**模型写的措辞**——提示词里的
 # 示例、它见过很多遍的旧写法都带 `Key`。同一个字段的两个名字都对得上时却报
