@@ -2160,11 +2160,15 @@ def _write_target_refusal(plan_obj: dict, config, user_msg=None,
 # 或读工具帧里逐条印出的编号），模型照抄编号 ⇒ 判据不是"这段字面出自主人原话"，
 # 而是"这个编号出自**现场台账**"。
 #
-# **两族的可写集不同，这是刻意的**（20260930）：
+# **各族的可写集不同，这是刻意的**（20260930；20261019 加评论族）：
 #   · 留言复核 —— 可写集 = 现场留言清单里的**任意一行**（含已通过/已驳回的改判，
 #     主人要能反悔。20260930 新增"已通过的也能驳回"）。
 #   · 额度批准/驳回 —— 可写集 = 那一行的**待处理**态（申请一旦被处理就没有"再处理
 #     一次"这回事，pending 队列就是它的全部可写集）。
+#   · 评论复核/删除 —— 可写集 = 现场评论名册里的**任意一行**（与留言族同向：改判与
+#     删除都不限待审）。它与留言族**不是同一张表、不是同一个后台页**（`note_comment`
+#     vs `talk`，`?tab=comment` vs `?tab=review`），所以它是**第三族**而不是留言族的
+#     一个分支——混成一个族会让"主人说的是评论还是留言"这件事在系统侧也分不出来。
 #
 # **与 `_WRITE_NAME_FIELDS` 严格互斥**：同一件工具同时出现在两张表里，"按名字解"与
 # "按编号解"会各判一次，谁先拒都是一句可能更松或更紧的话（`test_target_grounding`
@@ -2173,6 +2177,11 @@ _LEDGER_TARGET_FIELDS = {
     "audit_board_comment": "talk_id",
     "approve_quota_request": "user_id",
     "reject_quota_request": "user_id",
+    # 评论复核（20261019）：与留言复核**逐条同形**，只是它治的是 `note_comment` 表、
+    # 编号印成 `commentId:<id>`（见 `agent/adminops_comment.py` 头注那条"评论与留言
+    # 是两套东西"）。它进本表而不是 `_WRITE_NAME_FIELDS` 的理由与留言那件**同一个**：
+    # 目标是系统印的编号，主人本人认不出，拿正文片段去指认等于让他盲签。
+    "audit_comment": "comment_id",
 }
 
 
@@ -2182,11 +2191,12 @@ def _ledger_target_refusal(plan_obj: dict, config) -> tuple[str, str] | None:
     返回 `(工具名, 拒绝说明)` 或 None（=放行给工具）。判据缺一即拒：
 
       ① **编号解得出来**（`adminops.normalize_target_id`：裸数字与帧里印的
-         `talkId:101` / `账号 id=3` 都算，其余一律认不出）——认不出就如实说，
-         **绝不退回去猜**（猜出来的目标没人签得了字）；
-      ② **现场台账里真有这一行**（留言按 `talkKey`、额度按 `userId`）。
+         `talkId:101` / `账号 id=3` / `commentId:37` 都算，其余一律认不出）——认不出
+         就如实说，**绝不退回去猜**（猜出来的目标没人签得了字）；
+      ② **现场台账里真有这一行**（留言按 `talkKey`、额度按 `userId`、评论按 `id`）。
 
-    留言族**到此为止**（20260930 起）：可写集 = 现场留言清单里的任意一行。此前还有
+    留言族与评论族**到此为止**（留言 20260930 起、评论 20261019 起）：可写集 =
+    现场名册里的任意一行。此前还有
     第三条"那一行还在待审（`approved == 0`）"，它把改判挡在门外——主人说「把刚才那条
     驳回」时，系统回一句「待办台账只摆待审的，要改回来去后台留言管理页」。20260930
     主人点名要"已通过的留言也能驳回"⇒ 那条判据撤掉：**改判本来就是主人的权利**，
@@ -2195,7 +2205,7 @@ def _ledger_target_refusal(plan_obj: dict, config) -> tuple[str, str] | None:
     不管"这个决定该不该做"。撤掉它之后**拒绝话术仍要如实**：查无此条就说查无此条。
 
     额度族保留第三条（申请一旦被处理就没有"再处理一次"这回事，pending 队列就是它的
-    全部可写集）——两族的可写集不同是**结构性**的，见上方 `_LEDGER_TARGET_FIELDS` 注。
+    全部可写集）——各族的可写集不同是**结构性**的，见上方 `_LEDGER_TARGET_FIELDS` 注。
 
     **读不到台账 ⇒ 放行**（与 `_write_target_refusal` 同向）：读不到不是"没有"，
     工具自己会再读一次、那一层读不到才零写。预检只允许比工具**更保守**，绝不允许
@@ -2218,6 +2228,7 @@ def _ledger_target_refusal(plan_obj: dict, config) -> tuple[str, str] | None:
         return None
     from tools.base import (
         _board_index,
+        _comment_index,
         _quota_pending_index,
     )
     field = _LEDGER_TARGET_FIELDS[name]
@@ -2239,6 +2250,19 @@ def _ledger_target_refusal(plan_obj: dict, config) -> tuple[str, str] | None:
         # 这里**不许**再判「必须是待审」（见函数头注）。
         # 那一行现在是什么状态**不参与放行与否**——它由弹卡印给主人看（卡面自带
         # 「现在：已通过/待审/已驳回」），由 `_reached_specs` 判"状态已达成 ⇒ 不弹卡"。
+        return None
+    if name == "audit_comment":
+        # 与留言族逐条同形（含"不判它是不是待审"那条：评论的改判同样是主人的权利，
+        # 由弹卡与人眼兜）。**读的是不带筛选的全量名册**（`_comment_index` 的 docstring
+        # 那条：写前核对必须与工具同一个口径，拿筛过的一份会把"还在、只是被筛掉了"
+        # 读成"站内没有这条评论"）。
+        index = _comment_index(config)
+        if index is None:
+            return None  # 读不到评论名册 ≠ 没有这一条（同留言族那支）
+        row = index.get(tid)
+        if not isinstance(row, dict):
+            return name, (f"站内没有编号为 commentId:{tid} 的评论，本次未改动"
+                          f"（可能记错了编号，或那条已经被删了）")
         return None
     # 额度族：`_quota_pending_index` 读的就是 `?status=pending` ⇒ "这一行在不在"
     # 与"是不是还在待办态"是同一个问题，一次查同时回答两条（见它的头注）。

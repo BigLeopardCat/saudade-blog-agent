@@ -1218,22 +1218,28 @@ finally:
 
 
 # ══════════════════════════════════════════════════════════════════
-print("\n⑯ 报待办时连带报出后台首页上并排的两类「等着你处理」"
-      "（留言待审 + 额度重置申请，两个读都带 status=pending，且都是后台读）")
+print("\n⑯ 报待办时连带报出后台首页上并排的那几类「等着你处理」"
+      "（留言待审 + 评论待审 + 额度重置申请，三个读都带 status=pending，且都是后台读）")
 
 from agent.workflow_defs import WORKFLOW_MAP  # noqa: E402
 
 _todo_read = WORKFLOW_MAP["dashboard_todo_list"]
 _tp = instantiate_plan("dashboard_todo_list", {}, role="admin")
-check("技能展开成**三个**工具：待办清单 + 留言审核状况 + 额度重置申请",
+check("技能展开成**四个**工具：待办清单 + 留言审核状况 + **评论名册** + 额度重置申请",
       _tp["tools"] == ['list_dashboard_todos({})',
                        'get_moderation_status({"status": "pending"})',
+                       'list_admin_comments({"status": "pending"})',
                        'list_quota_requests({"status": "pending"})'],
       str(_tp["tools"]))
-check("后两个读**都必须带 status=pending**（报表的 focus 只展开待审那一类 ⇒ 帧不膨胀；"
-      "不带参数的形态一次列三份名单）",
-      any("pending" in t for t in _tp["tools"] if t.startswith("get_moderation_status"))
-      and any("pending" in t for t in _tp["tools"] if t.startswith("list_quota_requests")))
+check("后面那三个读**都必须带 status=pending**（报表/名册的筛选只展开待审那一类 ⇒ 帧不膨胀；"
+      "不带参数的形态一次列全部）",
+      all(any("pending" in t for t in _tp["tools"] if t.startswith(_n))
+          for _n in ("get_moderation_status", "list_admin_comments",
+                     "list_quota_requests")))
+check("⚠️ 留言与评论是**两条不同的读**（两张表、两个后台页签）：漏了评论那一条，"
+      "主人问「还有什么事没做」时评论待审就只剩待办清单尾巴里的一句计数",
+      'list_admin_comments({"status": "pending"})' in _tp["tools"]
+      and 'list_admin_board' not in " ".join(_tp["tools"]))
 check("它是**只读**技能（不在写名单里、清单里没有写工具）",
       "dashboard_todo_list" not in WRITE_WORKFLOW_NAMES
       and not any(t.split("(")[0] in {"create_dashboard_todo", "complete_dashboard_todo"}

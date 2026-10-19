@@ -114,6 +114,11 @@ _NOARG_VERB = {
     # _EXPLICIT_TOOLS 里（planner 点不到名，只由 `account_roster` 技能模板展开），
     # 但过程行渲染走的是同一张表，缺了就显示"执行 list_accounts"。
     "list_accounts": "查看后台账号名录",
+    # 后台**评论**名册（20261019）：无参那一档，与 `list_admin_board`（留言名册）同族。
+    # ⚠️ 这里**只登记这一格**，`list_admin_board` 那件**没有**进这张表（它的无参档
+    # 由下面那条分支显式 return 同一串字）——两处必须逐字一致（测试锁着）。
+    # 措辞里「评论」两个字必须留住：台账行会经 recent_executions 注回下一轮。
+    "list_admin_comments": "查看后台评论名册",
 }
 
 _REF_SOURCE_CN = {
@@ -126,6 +131,9 @@ _REF_SOURCE_CN = {
     # 后台留言名册（20261001）：`$list_admin_board[N].talkKey` 是"把那条驳回/删掉"
     # （复核与删除都按 talkId 认）的标准走法——缺了它，过程行会打出内部工具名。
     "list_admin_board": "后台留言名册",
+    # 后台评论名册（20261019）：`$list_admin_comments[N].id` 是"把那条评论驳回/删掉"
+    # （两件都按 commentId 认）的标准走法——缺了它，过程行会打出内部工具名。
+    "list_admin_comments": "后台评论名册",
     # 用户自己的数据（20260923 批 6/7）：`$list_my_favorites[0].noteId` 是"取消收藏
     # 那一篇"的标准走法（先读自己的收藏夹拿 id 再撤），`$list_notifications[0].id`
     # 是"把那条公告标记已读"的走法。缺了这两个来源名，过程行会打出内部工具名。
@@ -193,6 +201,12 @@ WRITE_CLAIM_ROOTS = {
     # ── write.console（后台管理面写）────────────────────────────────────
     "audit_board_comment": r"复核|审核|通过|驳回",
     "delete_board_comment": r"删除|删掉|清掉",
+    # 文章评论的两件（20261019）：词根与留言那两件**刻意同形**——它们描述的是同一类
+    # 动作（复核/删除），而判据关心的是"这一轮有没有声称做了一件写"，不关心做在哪张表。
+    # 分开写两份是为了过同步锁（每个 write scope 工具都要有自己的键），**不是**为了
+    # 让两边读出不同的词。
+    "audit_comment": r"复核|审核|通过|驳回",
+    "delete_comment": r"删除|删掉|清掉",
     "approve_quota_request": r"批准|通过",
     "reject_quota_request": r"驳回|拒绝",
     "reset_user_quota": r"重置|恢复额度|额度恢复",
@@ -476,6 +490,30 @@ def _arm_text(name: str, a: dict, m: dict, preview: bool):
             head = f"{head}（{who} 的留言）"
         return f"{head}：{change}" if change else head
 
+    # ── 文章评论（20261019）────────────────────────────────────────────
+    # 与留言那一支同形，措辞**逐字带「评论」**：过程行/台账行是主人事后唯一读得到的
+    # 那句事实，写成「留言」会让他去翻错的后台页（两族的差别见 `adminops_comment`
+    # 头注）。回执侧的 id 取顶层 `comment_id`，**不取 `board_id`**——两个键名各自
+    # 独立，混用会把一条评论的行印成留言的编号。
+    if name in ("audit_comment", "delete_comment"):
+        cid = _m(m, "comment_id")
+        if preview:
+            if name == "delete_comment":
+                return f"删除评论 #{cid}" if cid else "删除评论"
+            v = _tags.normalize_verdict(a.get("verdict"))
+            cn = _tags.BOARD_VERDICT_CN.get(v or "", "")
+            head = f"人工复核评论 #{cid}" if cid else "人工复核评论"
+            return f"{head}：{cn}" if cn else head
+        who = _m(m, "comment_author")
+        change = _m(m, "change")
+        if name == "delete_comment":
+            head = f"删除评论 #{cid}" if cid else "删除评论"
+            return f"{head}（{who} 的评论）" if who else head
+        head = f"人工复核评论 #{cid}" if cid else "人工复核评论"
+        if who:
+            head = f"{head}（{who} 的评论）"
+        return f"{head}：{change}" if change else head
+
     # ── 文章状态 / 标签 ─────────────────────────────────────────────────
     if name == "set_article_status":
         if preview:
@@ -577,6 +615,21 @@ def _arm_text(name: str, a: dict, m: dict, preview: bool):
         if k:
             cond.append(f"关键词「{k[:24] if preview else k}」")
         return "查看后台留言名册（" + "，".join(cond) + "）" if cond else "查看后台留言名册"
+    if name == "list_admin_comments":
+        # 后台**评论**名册（20261019）：与上面那条逐字同形（筛选条件要印进行里，
+        # 理由同它）。**「评论」两个字必须留住**——这一行会经 recent_executions 注回
+        # 下一轮，写成「留言」会让下一轮把"我读过评论名册"当成"我读过留言名册"
+        # （两族的差别见 `adminops_comment` 头注）。
+        cond = []
+        _code = BOARD_STATUS_FILTERS.get(_raw(a.get("status")))
+        st = BOARD_APPROVED_CN.get(_code) if _code is not None else None
+        if st:
+            cond.append(f"只看{st}的")
+        k = _raw(a.get("keyword"))
+        if k:
+            cond.append(f"关键词「{k[:24] if preview else k}」")
+        return ("查看后台评论名册（" + "，".join(cond) + "）" if cond
+                else "查看后台评论名册")
     if name == "list_admin_notes":
         # 无参时与 `_NOARG_VERB` 同字（那一行留在表里，两处必须一致——测试锁着）。
         # 带关键词时**必须把词印出来**：这一行会经 recent_executions 注回下一轮，
