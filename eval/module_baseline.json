@@ -3,6 +3,10 @@
     "lines": 1721,
     "top_defs": 37
   },
+  "agent/entity_digest.py": {
+    "lines": 877,
+    "top_defs": 31
+  },
   "agent/graph.py": {
     "lines": 11014,
     "top_defs": 195

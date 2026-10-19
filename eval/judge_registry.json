@@ -1169,7 +1169,7 @@
       "sample": "后台文章(?:里(?:「(?P<cat>[^」]*)」分类下)?(?:匹配「(?P<kw>[^」]*)」的)?)?共\\s*(?P<n>\\d+)\\s*篇",
       "category": "parser",
       "q": "后台文章(?:里(?:「(?P<cat>[^」]*)」分类下)?(?:匹配「(?P<kw>[^」]*)」的)?)?共\\s*(?P<n>\\d+)\\s*篇",
-      "why": "拆后台文章列表的表头行"
+      "why": "**回落支**（批 G5 起）：只有文本时才走；生产走 `ToolResult.data` 里的 `notes`/`keyword`/`category`/`limit` 结构"
     },
     {
       "id": "agent/graph.py::_TOOL_MENU_LINES",

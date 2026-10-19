@@ -467,7 +467,14 @@ def render_tag_list(ids, index: dict[int, TagInfo] | None, limit: int = 6) -> st
 
 # ── 渲染：后台文章列表 / 变更前后 ─────────────────────────────────────
 
-def render_admin_notes(notes, index: dict[int, TagInfo] | None, limit: int = 60,
+# 后台文章清单一次最多印几行。**唯一一份**：渲染的缺省值与 `tools/note_admin.py`
+# 交给跨轮摘要的那一格都取它——摘要要据此判"这份清单被截断了吗"（截断时行数比总数
+# 少，状态分布只覆盖前 limit 条，报出来就是拿局部冒充全量）。
+ADMIN_NOTES_LIMIT = 60
+
+
+def render_admin_notes(notes, index: dict[int, TagInfo] | None,
+                       limit: int = ADMIN_NOTES_LIMIT,
                        keyword: str = "", category: str = "") -> str:
     """后台文章列表（含草稿与私密）→ 给 planner 看的清单。
 
