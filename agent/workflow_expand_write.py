@@ -476,6 +476,38 @@ def _expand_write_workflow(workflow, params: dict) -> tuple[list[str], str]:
         return [_spec("delete_board_comment", {"quote": quote})], (
             f"删除含「{_tags.clip(quote, 20)}」的那条河灯留言（删掉取不回来）")
 
+    if name == "comment_audit":
+        # 文章评论复核（20261019）：与 `board_audit` 那一支**逐条同形**（编号归一、
+        # 解不出就零工具追问、行在不在由 `graph._ledger_target_refusal` 现场读名册判），
+        # 差别只有三处字面：编号叫 `commentId`、工具叫 `audit_comment`、追问里说的是
+        # **评论名册**而不是留言台账。
+        cid = _target.normalize_target_id(params.get("comment_id"))
+        if cid is None:
+            return [], (f"comment_audit 缺少指认用的评论编号（comment_id，给的是"
+                        f"「{_write_arg(params.get('comment_id')) or '空'}」）：不调用任何"
+                        "工具，如实向主人说明要先把那条评论的编号读出来"
+                        "（评论名册里印着 `commentId:<编号>`，原样抄那个数字）")
+        verdict = _tags.normalize_verdict(params.get("verdict"))
+        if verdict is None:
+            return [], (f"verdict「{params.get('verdict')}」认不出来（只能是通过/pass "
+                        "或驳回/reject）：不调用任何工具，如实向主人问清要放行还是驳回")
+        return ([_spec("audit_comment", {"comment_id": cid, "verdict": verdict})],
+                (f"把评论 commentId:{cid} 人工复核为{_tags.BOARD_VERDICT_CN[verdict]}"
+                 "（卡面会印出那条评论的正文、作者与所属文章，由主人核对）"))
+
+    if name == "comment_delete":
+        # 文章评论删除（20261019）：目标**按编号**（与留言删除那支刻意不同，见
+        # `_WRITE_TARGET_CHANNEL` 里那两行的注——评论有稳定的 commentId，后台评论管理
+        # 页读的也正是它）。编号原样归一，行在不在由 `_ledger_target_refusal` 判。
+        cid = _target.normalize_target_id(params.get("comment_id"))
+        if cid is None:
+            return [], (f"comment_delete 缺少指认用的评论编号（comment_id，给的是"
+                        f"「{_write_arg(params.get('comment_id')) or '空'}」）：不调用任何"
+                        "工具，如实向主人说明要先把那条评论的编号读出来"
+                        "（评论名册里印着 `commentId:<编号>`，原样抄那个数字）")
+        return [_spec("delete_comment", {"comment_id": cid})], (
+            f"删除 commentId:{cid} 的那条文章评论（删掉取不回来）")
+
     if name in ("account_freeze", "account_unfreeze"):
         # 账号冻结 / 解冻（20260926 第九轮）。它与上面那几件同族（目标是一个
         # **名字**、解析在工具侧对着实时名录做），但两条注记的措辞要更硬一档：

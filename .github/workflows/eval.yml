@@ -216,21 +216,31 @@ jobs:
       # 读的 ⏭。父仓这次**真在**（上面两步），所以这一档在 CI 里判的是真东西。
       # 注意它比较的是父仓**默认分支**的 HEAD：Rust 那边的改动还没并进默认分支时，这里会红
       # 而本机（工作区里带着那份改动）是绿的——这是**可见的**红，不是静默的绿（取舍见 ADR-0004）。
+      # `-j 4`（20261019）：这 6 分钟是这一步**最长**的一段，而它长是因为**脚本多**
+      # （170+ 个套件各自的解释器启动与导入），不是因为谁在等网络——串行墙钟几乎就是各
+      # 套件耗时之和。这些套件彼此独立（没有绑端口的、没有往仓内固定路径写的），所以按
+      # 4 路并行跑：本机实测 **453.7s → 145.1s（3.13×）**，两档的汇总表**逐行相同**（含 rc）。
+      # 并行**只在入口内部**（`run_all.py` 的线程池）：每个套件仍是一个独立子进程、同一份
+      # `_PINNED` 环境、同一个 300s 超时 ⇒ 判据一个字没变；`-j 4` 配 `ubuntu-latest` 的 4 核。
+      # 并行安全的前提、以及"要加什么套件得先回到这条注上"写在 `run_all.run_suites` 头注；
+      # 守住它的判据是 `tests/test_run_all_parallel.py`（真重叠 / 同结论 / 独立子进程 / 超时仍咬）。
+      # **夜间那份脚本不加**：它在本机跑、没人等它，而本机内存比 runner 紧。
       - name: 全部离线套件（按磁盘枚举，秒级、无网络、无 LLM）
         if: steps.parent.outputs.available == '1'
         env:
           SAUDADE_PARENT_REPO: ${{ github.workspace }}/_parent
           SAUDADE_REQUIRE_PARENT: "1"
-        run: uv run python tests/run_all.py
+        run: uv run python tests/run_all.py -j 4
 
       # fork PR 的降级跑法：**同一份清单、同一套判据**，只是父仓不在场。
       # 不设 `SAUDADE_PARENT_REPO`：父仓根本没 checkout（上面那一步被 `if` 掉了），
       # 指一个不存在的目录只会多一句误导人的输出。不设 `SAUDADE_REQUIRE_PARENT` ⇒
       # 读父仓的那六处守卫落进"找不到 + 没设要求"那一档：**打一行响亮的说明再返回 None**，
       # 不是静默（那一档的语义写在 tests/_parent_repo.py 头注）。哪些没跑已在 job summary 里记下。
+      # `-j 4` 的理由同上一步。
       - name: 全部离线套件（降级：本 PR 拿不到父仓凭据 ⇒ 跨语言守卫本次不运行）
         if: steps.parent.outputs.available != '1'
-        run: uv run python tests/run_all.py
+        run: uv run python tests/run_all.py -j 4
 
       # 未定义名静态扫描（20260924 补）。Python 没有编译期拦截：一个只在**另一个作用域**
       # 存在的名字（server.py 的 `req` 写进了 `_run_agent_stream_to_queue`）要到运行到那一行

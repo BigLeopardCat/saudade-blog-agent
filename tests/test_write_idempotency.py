@@ -23,7 +23,7 @@ saver 那天重放路径第一次通电，而它一行判据都没有**。本文
 本件的断言**一个字都不改**——续跑那一格仍然有效且必要，只是它盖的不是生产。
 完整口径见 `docs/adr/adr-0012-write-idempotency-ledger.md` 的《口径更正（20261019）》。
 
-被测十一块（每条都配了会红的那一半）：
+被测各块（每条都配了会红的那一半；①–⑪ 是 20261016 那批，⑫ 起是后续批次补的）：
   · ① **§2.6 镜像（续跑那一格）**：真 `StateGraph` + `MemorySaver`，节点做到一半抛异常、
     再 `invoke(None)` **续跑** ⇒ 写**只发生一次**（⚠️ 生产不走续跑，见头注的口径更正）；
   · ② **反控**：同一场景换成 `NullLedger`（今天的形状）⇒ 写**发生两次**。没有这一条，
@@ -42,6 +42,10 @@ saver 那天重放路径第一次通电，而它一行判据都没有**。本文
 ⑨–⑪ 是 20261016 迁 PG 那一批补的：⑨ 钉"账的前提"，⑩ 钉"两个后端交出的行必须是
 **同一种形状**"，⑪ 钉"PG 是**可选档**——没挂 PG saver 的进程（含 CI）一次都不碰 psycopg"。
 三件都是**不报错**的失效，靠读代码看不出来。
+
+⑯（20261019 补）钉"两份实现**是同一个接口**"：`Ledger`（SQLite 降级档）与 `PostgresLedger`
+（挂 PG saver 时的档）的公开方法集合与签名必须逐项相同。⑩ 钉的是**交出的行**同形状，
+⑯ 钉的是**收进去的参数**同形状——同一个病的两半。
 
 为什么主断言落在**调用次数**上而不是"帧文本长什么样"：这一件的失败面是"写真的做了
 两遍"，那是外部可见且不可撤销的。断言一句措辞是假绿——换一句话就过。
@@ -358,7 +362,8 @@ _pg_path = ROOT / "agent" / "idem_pg.py"
 _pg_src = _pg_path.read_text(encoding="utf-8") if _pg_path.exists() else ""
 _pg_imports = [n for n in ast.walk(ast.parse(_pg_src)) if _imports_pg(n)] if _pg_src else []
 check("`agent/idem_pg.py` 存在且它**确实** import 了 psycopg（否则下面两条是恒真）",
-      len(_pg_imports) > 0, f"{_pg_path.name} 存在={_pg_path.exists()}，import 处={len(_pg_imports)}")
+      len(_pg_imports) > 0,
+      f"{_pg_path.name} 存在={_pg_path.exists()}，import 处={len(_pg_imports)}")
 check("`agent/idem.py` 不 import psycopg（PG 是**可选档**：没挂 PG saver 的进程与 CI 都不装它）",
       [n for n in ast.walk(_idem_tree) if _imports_pg(n)] == [])
 check("`agent.idem_pg` 不在 idem.py 的**模块级** import 里（那样 import 期就把 psycopg "
@@ -523,6 +528,83 @@ check("没有会话坐标（空 thread）⇒ 保守侧 True（没有坐标就没
       C.thread_is_resuming(_app15a, "") is True)
 check("反控：同一份夹具、同一个 agent，**只有 thread 名不同** ⇒ 上面那条 True 不是恒真",
       C.thread_is_resuming(_app15a, "conv_15a") is False)
+
+print("\n⑯ 两份账实现**是同一个接口**：公开方法集合与签名逐项相同（20261019 补）")
+# 为什么值得单独一条：调用方（`guarded_invoke`）只写一次，SQLite 与 PG 两条路都走它。
+# 套件里 ⑫⑬⑮ 全部跑在 **SQLite 那条路**上；PG 那条要真连库（`eval/experiments/
+# checkpoint_probe.py`，不在秒级套件里）⇒ **只改一份是静默的**，一路到生产第一次写才炸。
+# 20261019 的现场报的正是 `PostgresLedger.claim() got an unexpected keyword argument
+# 'resuming'`。那一次的直接成因是**部署期**工作区被换掉（进程里同时活着两个 revision，
+# 代码级判据抓不到，另说），但"两份实现漂开"这个**代码**病是同一个形状，这一条钉的是它。
+# 读源码 AST、不 import：`idem_pg` 要 psycopg，而 CI 不装（⑪ 的理由）。
+
+
+def _sig(src: str, cls_name: str) -> dict[str, list[tuple[str, str, bool]]]:
+    """`{公开方法名: [(参数名, 种类, 有没有缺省值)]}`。**读文本**，不 import。
+
+    比的是**可调用的契约**（调用方按位置/关键字传得进来才算数），所以参数名、次序、
+    位置还是仅关键字、以及"有没有缺省值"四样都要比；返回注解**不比**——两个模块写
+    `tuple[str, tuple | None]` 与 `Tuple[...]` 只是拼法不同，判它会变成假红。
+    """
+    cls = next((n for n in ast.walk(ast.parse(src))
+                if isinstance(n, ast.ClassDef) and n.name == cls_name), None)
+    if cls is None:
+        return {}
+    out: dict[str, list[tuple[str, str, bool]]] = {}
+    for fn in cls.body:
+        if not isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        if fn.name.startswith("_"):        # `__init__` 收的东西两份本就不同（path vs pool）
+            continue
+        a = fn.args
+        rows: list[tuple[str, str, bool]] = []
+        pos = [*a.posonlyargs, *a.args]
+        has_def = [False] * (len(pos) - len(a.defaults)) + [True] * len(a.defaults)
+        for i, x in enumerate(pos):
+            rows.append((x.arg, "posonly" if i < len(a.posonlyargs) else "pos", has_def[i]))
+        for x, d in zip(a.kwonlyargs, a.kw_defaults):
+            rows.append((x.arg, "kwonly", d is not None))
+        if a.vararg:
+            rows.append((a.vararg.arg, "vararg", False))
+        if a.kwarg:
+            rows.append((a.kwarg.arg, "kwarg", False))
+        out[fn.name] = rows
+    return out
+
+
+_L16 = _sig(_idem_src, "Ledger")
+_P16 = _sig(_pg_src, "PostgresLedger")
+check("两份实现都解析出来了（解析器坏掉 ⇒ 下面两条是恒真的空过）",
+      len(_L16) >= 3 and len(_P16) >= 3, f"Ledger={sorted(_L16)} PG={sorted(_P16)}")
+check("公开方法**是同一个集合**（少一个 ⇒ 那条路走不通，且只在生产上炸）",
+      set(_L16) == set(_P16),
+      f"只在 Ledger={sorted(set(_L16) - set(_P16))}／只在 PG={sorted(set(_P16) - set(_L16))}")
+_D16 = {k: (_L16[k], _P16[k]) for k in set(_L16) & set(_P16) if _L16[k] != _P16[k]}
+check("每个公开方法的签名**逐项相同**（参数名／次序／位置或仅关键字／有没有缺省值）",
+      not _D16, str(_D16))
+
+# 反控（本仓纪律「正控不红不算数」）：`_sig` 必须**真的**分辨得出这六种漂法。
+# 没有这一组，上面三条可能只是"比较器恒返回相等"。
+
+
+def _cls16(params: str, name: str = "claim") -> str:
+    return f"class X:\n    def {name}({params}):\n        pass\n"
+
+
+_A16 = _cls16("self, key, tool, attempt, *, resuming=True")
+for _tag16, _b16 in (
+        ("参数改名", _cls16("self, key, tool, fp, *, resuming=True")),
+        ("次序颠倒", _cls16("self, tool, key, attempt, *, resuming=True")),
+        ("少了仅关键字那一格", _cls16("self, key, tool, attempt")),
+        ("仅关键字被挪成位置参数", _cls16("self, key, tool, attempt, resuming=True")),
+        ("缺省值的有无不同", _cls16("self, key, tool, attempt, *, resuming")),
+        ("整个方法没了", _cls16("self, key, out", name="finish"))):
+    check(f"反控·{_tag16} ⇒ 必须报出差异", _sig(_A16, "X") != _sig(_b16, "X"))
+check("正控：只加注释与实现体 ⇒ 仍判相同（比的是签名，不是文本）",
+      _sig(_A16, "X") == _sig("class X:\n    # 注\n"
+                              "    def claim(self, key, tool, attempt, *, resuming=True):\n"
+                              "        return None\n", "X"))
+check("正控：类名对不上 ⇒ 空表（不是「什么都没比」还判绿）", _sig(_A16, "Y") == {})
 
 print("\n" + ("全部通过" if not FAILS else f"失败 {len(FAILS)} 项：" + "; ".join(FAILS)))
 raise SystemExit(1 if FAILS else 0)

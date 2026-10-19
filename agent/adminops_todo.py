@@ -122,21 +122,27 @@ TODO_PENDING_UNREAD = object()
 
 
 def render_todo_pending(pending) -> str:
-    """待处理的那两类（留言待审 / 额度重置申请）→ **一行**；`None` ⇒ 空串。
+    """待处理的那几类（留言待审 / 评论待审 / 额度重置申请）→ **一行**；`None` ⇒ 空串。
 
-    **为什么这两类要在这一帧里**（20260929 用户要求「让 agent 能感知到待审核留言和
-    对话额度批准、问待办日程它能说出来」）：后台首页把它们与私人待办**并排**显示，
-    主人眼里那就是"我日程上等着我处理的事"；但它们**不是** `dashboard_todo` 表的行
-    （不落库、不进 todos，见父仓 `frontend/src/pages/Dashboard/Home/index.tsx` 那两行的
-    注释）。它们真正的来源是同一份红点汇总（`/notifications/summary` 的
-    `pendingReview` / `pendingQuota`）——所以这一帧读的是**红点那个源**，不另造一份
-    计数（"红点与列表是两套数据源"那件事的教训：能同源就同源）。
+    **为什么这几类要在这一帧里**（20260929 用户要求「让 agent 能感知到待审核留言和
+    对话额度批准、问待办日程它能说出来」；20261019 补**评论**——它在后台首页是**第三
+    行**、与留言并排，所以 agent 少读它一次就少一件主人眼里"等着我处理的事"）：后台首页
+    把它们与私人待办**并排**显示，主人眼里那就是"我日程上等着我处理的事"；但它们**不是**
+    `dashboard_todo` 表的行（不落库、不进 todos，见父仓
+    `frontend/src/pages/Dashboard/Home/index.tsx` 那几行的注释——父仓的路径）。它们真正的来源是同一份
+    红点汇总（`/notifications/summary` 的 `pendingReview` / `pendingComments` /
+    `pendingQuota`）——所以这一帧读的是**红点那个源**，不另造一份计数
+    （"红点与列表是两套数据源"那件事的教训：能同源就同源）。
+
+    ⚠️ **留言与评论是两行、不是一行**（20261019）：两张表（`talk` / `note_comment`）、
+    两个后台页签（`?tab=review` / `?tab=comment`）、两个字段名。合并成一个数就会让
+    narrator 把"评论还有 3 条"说成"留言还有 3 条"——而主人点进去看到的是另一个页面。
 
     四态，与 `_quota_pair` 同一条纪律——**读不到 ≠ 0**：
       · `pending is None` ⇒ 空串（这一类信息本次不适用，调用方没提供）；
       · `pending is TODO_PENDING_UNREAD` ⇒ 明说"没读到、不确定"，
         **绝不**留空（留空会被读成"没有待处理的事"）；
-      · 两类都是 0 ⇒ 空串（这时"没有"就是事实，不必占一行）；
+      · 各类都是 0 ⇒ 空串（这时"没有"就是事实，不必占一行）；
       · 有一类 > 0 ⇒ 只印 > 0 的那几类（印"留言待审 0 条"是噪声，且会让 narrator
         开始念零）。
     """
@@ -148,16 +154,19 @@ def render_todo_pending(pending) -> str:
         # 一边**把"确实有这两类在等你"说死了**。主人在额度申请为 0 的时候反复读到
         # 「有两类待办」，正是从这句来的（生产 trace 20261018 那几轮）。
         # 没读到就只陈述"没读到"这一件事，存在性留给真读到的那一次说。
-        return ("（后台汇总这一次没读到，**不确定**有没有待审留言或额度重置申请"
-                "——这是「没读到」，不是「没有」；要报给主人时如实说没读到）")
+        return ("（后台汇总这一次没读到，**不确定**有没有待审留言、待审评论或额度重置"
+                "申请——这是「没读到」，不是「没有」；要报给主人时如实说没读到）")
     if not isinstance(pending, dict):
         # 形态不对：**不猜**（当成"没提供"），同 `_todo_rows` 的取向。
         return ""
     review = _nonneg_int(pending.get("review"))
+    comments = _nonneg_int(pending.get("comments"))
     quota = _nonneg_int(pending.get("quota"))
     parts = []
     if review:
         parts.append(f"留言待审 {review} 条")
+    if comments:
+        parts.append(f"评论待审 {comments} 条")
     if quota:
         parts.append(f"额度重置申请 {quota} 份")
     if not parts:
@@ -165,7 +174,9 @@ def render_todo_pending(pending) -> str:
     # 件数**按实际印出来的那几类数**，不写死"两件"（20261019 修）：旧版恒印「另有两件」，
     # 而额度那一类为 0 时下面只列出一条 ⇒ 模型照着念成「另有两件…留言待审 1 条」，
     # 主人读到的是"还有两件事"却只看见一件（生产 trace 20261018T232550 就是这个形状）。
-    lead = "另有一件" if len(parts) == 1 else "另有两件"
+    # 中文量词按**类数**取（一类/两类/三类），仍然不写死——20261019 加评论族之后
+    # 三类的组合真的会出现，所以这里是一张表而不是三元表达式。
+    lead = {1: "另有一件", 2: "另有两件", 3: "另有三件"}[len(parts)]
     return f"{lead}等着你处理（不在上面这张私人待办里）：" + "、".join(parts) + "。"
 
 
