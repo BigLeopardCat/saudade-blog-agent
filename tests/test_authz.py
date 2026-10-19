@@ -1040,9 +1040,16 @@ check("别的 scope 仍跟随全局开关（没顺手把整表改成硬拦）",
           for s in authz.ALL_SCOPES - authz._HARD_SCOPES))
 check("无参调用 = 旧语义（不知道 scope 的调用点行为不变）",
       authz.enforcing() == bool(settings.authz_enforce))
-check("_HARD_SCOPES = 两个后台 scope（改宽了要有人看见）",
-      authz._HARD_SCOPES == frozenset({authz.SCOPE_ADMIN_CONSOLE, authz.SCOPE_WRITE_CONSOLE}),
+# `write.device` 20261019 加进来（安全审计 SAU-007）：它是**第三族**——前两个的入选
+# 理由是"纯新增能力、没有观测期可谈"，它的是"后果落在物理世界、且放行发生在身份没验成
+# 的时候"。这一条锁的不是数量，是**改宽要有人看见**：多一个成员就得在这里改一行。
+check("_HARD_SCOPES = 两个后台 scope + 物理世界写（改宽了要有人看见）",
+      authz._HARD_SCOPES == frozenset({authz.SCOPE_ADMIN_CONSOLE, authz.SCOPE_WRITE_CONSOLE,
+                                       authz.SCOPE_WRITE_DEVICE}),
       str(authz._HARD_SCOPES))
+# 正控：这条锁真的会红——合成一个"少一个成员"的表，必须判不等。
+check("  正控：从上面那集合里去掉一个 ⇒ 判据必须报不等",
+      authz._HARD_SCOPES != frozenset({authz.SCOPE_ADMIN_CONSOLE, authz.SCOPE_WRITE_CONSOLE}))
 check("admin.console 在 ALL_SCOPES 里（否则 admin 也会被拒）",
       authz.SCOPE_ADMIN_CONSOLE in authz.ALL_SCOPES)
 check("write.console 在 ALL_SCOPES 里（否则 admin 自己也写不了）",
