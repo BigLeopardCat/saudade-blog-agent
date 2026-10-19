@@ -57,8 +57,7 @@ from tools.result import ToolResult, empty, ok, unavailable
 # `__all__` = 本模块**所有不以 `_` 开头**的模块级名字（社区惯例，不留例外；
 # `tests/test_module_exports.py` 按这条规则机械判着，漂了就红）。
 __all__ = ["logger", "get_server_status", "get_service_health", "get_moderation_status",
-           "list_admin_board", "list_admin_comments", "get_user_stats", "get_note_stats",
-           "get_note_periods"]
+           "list_admin_board", "get_user_stats", "get_note_stats", "get_note_periods"]
 
 logger = logging.getLogger(__name__)
 
@@ -185,44 +184,6 @@ def list_admin_board(
     except Exception as exc:
         logger.exception("render_board_roster failed")
         return unavailable(f"整理后台留言名册失败: {exc}")
-
-
-@tool
-def list_admin_comments(
-    config: RunnableConfig,
-    status: Annotated[Literal["pending", "passed", "rejected"] | None,
-                      "只看某一类：pending=待审 / passed=已通过 / rejected=未通过（已驳回）；"
-                      "不填就是全部"] = None,
-    keyword: Annotated[str | None,
-                       "按关键词过滤（在评论正文、作者昵称/用户名、文章标题里做子串匹配）；"
-                       "只在评论很多、要定位某一条时填"] = None,
-) -> str:
-    """查看**文章评论**的**后台名册**：逐条给出 commentId、审核状态、时间、发表账号
-    （userId/昵称/用户名）、**挂在哪篇文章下**（文章标题与 noteId）、正文节选。
-    待审与未通过的评论也在这里（公开的评论区只显示已通过的）。
-
-    ⚠ **「评论」与「留言」是两套东西，别混用**：评论长在每篇文章正文下面（后台「评论
-    管理」页，`?tab=comment`）；留言是「河灯集」板块的河灯（后台「留言管理」页，
-    `?tab=review`，工具是 `list_admin_board`）。主人说「评论」就用本工具，
-    说「留言/河灯」就用 `list_admin_board`——答错一边就是答非所问。
-    可选 status 只看某一类审核状态，可选 keyword 按关键词收窄。需要管理员身份。"""
-    from agent import adminops_comment as _cm
-    data = _base._admin_get("/api/protect/comments", config)
-    if isinstance(data, ToolResult):
-        return data
-    rows = data if isinstance(data, list) else []
-    if not rows:
-        return empty("站内还没有任何文章评论（后台名册也是空的）")
-    # 认不出的筛选值由函数签名的闭集挡在门外（`Literal[...]` ⇒ langchain 在调进本函数
-    # 之前就 ArgValidationError，execute 把它包成 `__ERROR__` 帧，原因码 args_parse）。
-    # 同 `list_admin_board` 那条注：此处**不写**手写兜底，真判据是那句注解。
-    approved = _base.BOARD_STATUS_FILTERS.get(str(status)) if status is not None else None
-    try:
-        return ok(_cm.render_comment_roster(rows, approved=approved, keyword=keyword),
-                  meta={"count": len(rows)})
-    except Exception as exc:
-        logger.exception("render_comment_roster failed")
-        return unavailable(f"整理后台评论名册失败: {exc}")
 
 
 @tool

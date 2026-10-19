@@ -75,7 +75,7 @@ def _spec(tool: str, args: dict) -> str:
     return f"{tool}(" + json.dumps(args, ensure_ascii=False) + ")"
 
 
-# ── 逐工具构造：**全部恒弹卡工具**，每个一条"命令 + 尾挂疑问词正文" ────────────
+# ── 逐工具构造：**全部 17 个恒弹卡工具**，每个一条"命令 + 尾挂疑问词正文" ──────
 #   形态统一：前半句是明确的命令（`帮我…` / `把…`），后半句是主人要**写进站内**的
 #   那段话（或他顺口的追问）。后半句里的疑问词**不是主人在问系统**——它是内容。
 CASES: list[tuple[str, str, str, str]] = [
@@ -100,18 +100,6 @@ CASES: list[tuple[str, str, str, str]] = [
      "帮我复核一下 #44 那条留言，他问的到底是什么，直接通过吧",
      _spec("audit_board_comment", {"talk_id": 44, "verdict": "pass"}),
      "board_audit"),
-    # 文章评论的两件（20261019）：与上面两件同族、同一形态（命令 + 尾挂疑问词正文）。
-    # ⚠️ 两句都带「评论」二字——两族的死路守卫共用一套形态，措辞里少一个字不影响
-    # 本判据（它判的是"卡弹不弹得出来"），但会影响下面 ② 那半的 `is_question_like`
-    # 前置（尾挂的疑问词必须在）。
-    ("audit_comment",
-     "帮我复核一下那条评论 #37，他问的到底是什么，直接驳回吧",
-     _spec("audit_comment", {"comment_id": 37, "verdict": "reject"}),
-     "comment_audit"),
-    ("delete_comment",
-     "帮我把那条评论 #37 删掉，还有多少条评论是没审的",
-     _spec("delete_comment", {"comment_id": 37}),
-     "comment_delete"),
     ("create_dashboard_todo",
      "帮我记一条待办：周五交房租，顺便看看我还有多少事没做",
      _spec("create_dashboard_todo", {"text": "周五交房租"}),
@@ -172,7 +160,7 @@ check(f"恒弹卡工具一条不落（现 {len(authz._ALWAYS_CONFIRM_TOOLS)} 个
 check("表里没有非恒弹卡工具（加了它就会红在一个不相干的工具上）", not _extra,
       ",".join(_extra))
 
-print(f"\n② 形态前置：这 {len(CASES)} 句话**确实**被判成「像提问」（不成立的话下面全是假绿）")
+print("\n② 形态前置：这 17 句话**确实**被判成「像提问」（不成立的话下面全是假绿）")
 for tool, msg, _specs, _workflow in CASES:
     check(f"{tool}: is_question_like 为真（疑问词在内容里，不是主人在问）",
           authz.is_question_like(msg) is True, msg)

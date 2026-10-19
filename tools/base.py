@@ -441,11 +441,6 @@ from tools.admin_read import (  # noqa: E402,F401
     get_service_health,
     get_user_stats,
     list_admin_board,
-    # 后台**评论**名册（20261019）：与 `list_admin_board`（留言名册）并列而不是合并
-    # ——两张表、两个后台页。少这一行 `list_admin_comments` 在 `_TOOL_REGISTRY` 里
-    # 查无此工具 ⇒ planner 菜单里那一行渲染不出来（菜单按注册表过滤），而它在
-    # authz 的 scope 表里**是有的** ⇒ 两条清单一个说有一个说没有（本轮实测的形态）。
-    list_admin_comments,
 )
 
 # ---------------------------------------------------------------------------
@@ -957,23 +952,6 @@ from tools.board_moderation import (  # noqa: E402,F401
 )
 
 # ---------------------------------------------------------------------------
-# 管理助手写工具：**文章评论**的人工复核 —— 20261019 直接建成 `tools/comment_moderation.py`
-# ---------------------------------------------------------------------------
-# 与留言那一族同形（同一套 `0 = 驳回` 的请求体方向、同样的读回复核、同样"数字由工具内部
-# 产生"），差异与理由写在 `tools/comment_moderation.py` 的头注里。**改这一族去那里。**
-#
-# ⚠️ 同样守那条：新模块一个名字都不按名从 `tools.base` 取（`_admin_get` / `_admin_request`
-# 是被套件直接打桩的模块全局）⇒ 这里按原名 re-export 只为保持"`from tools.base import …`
-# 与 `base.<名>` 一处不改"这条既有约定，**没有任何内部消费方**。
-from tools.comment_moderation import (  # noqa: E402,F401
-    _comment_index,
-    _comment_label,
-    _find_comment_by_id,
-    audit_comment,
-    delete_comment,
-)
-
-# ---------------------------------------------------------------------------
 # 管理助手写工具：**文章分类**（建 / 改 / 删）—— 20261018 搬进 `tools/category_admin.py`
 # ---------------------------------------------------------------------------
 # 连续的 207 行、5 个模块级名字（分类字典 `_category_index` / 按名字解析
@@ -1190,9 +1168,6 @@ _TOOL_REGISTRY = [
     # 后台**留言名册**（20261001）：同 admin.console，读的是 `GET /api/protect/board`
     # （逐条含发表账号）——与公开的 list_guestbook 是两套视图，别混用
     list_admin_board,
-    # 后台**评论名册**（20261019）：同 admin.console，读的是 `GET /api/protect/comments`。
-    # 与上面那条并列而不是同一件事（两张表、两个后台页签），见 admin_read 的头注。
-    list_admin_comments,
     # 管理助手后台写（20260921 第二轮）：list_admin_notes=admin.console，
     # 写工具=write.console，见"管理助手写工具"节头注
     list_admin_notes,
@@ -1214,12 +1189,6 @@ _TOOL_REGISTRY = [
     # （留言没有名字/标题，见 _find_board_comment）
     audit_board_comment,
     delete_board_comment,
-    # **文章评论**的人工复核两件（20261019）：同 write.console。与上面那两件**不是
-    # 同一张表、不是同一个后台页**（`note_comment`/`?tab=comment` vs `talk`/`?tab=review`），
-    # 目标一律走 **commentId**（两件都是编号通道，见 `_WRITE_TARGET_CHANNEL` 那两行的注）。
-    # 读那一份名册的是 `list_admin_comments`（admin.console）。
-    audit_comment,
-    delete_comment,
     # 用户自己的数据（20260923）：scope = read.own（三档角色都有），见本节头注
     list_my_favorites,
     get_unread_summary,

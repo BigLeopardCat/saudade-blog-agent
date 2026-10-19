@@ -10056,15 +10056,11 @@ def _write_target_refusal(plan_obj: dict, config, user_msg=None,
 # 或读工具帧里逐条印出的编号），模型照抄编号 ⇒ 判据不是"这段字面出自主人原话"，
 # 而是"这个编号出自**现场台账**"。
 #
-# **各族的可写集不同，这是刻意的**（20260930；20261019 加评论族）：
+# **两族的可写集不同，这是刻意的**（20260930）：
 #   · 留言复核 —— 可写集 = 现场留言清单里的**任意一行**（含已通过/已驳回的改判，
 #     主人要能反悔。20260930 新增"已通过的也能驳回"）。
 #   · 额度批准/驳回 —— 可写集 = 那一行的**待处理**态（申请一旦被处理就没有"再处理
 #     一次"这回事，pending 队列就是它的全部可写集）。
-#   · 评论复核/删除 —— 可写集 = 现场评论名册里的**任意一行**（与留言族同向：改判与
-#     删除都不限待审）。它与留言族**不是同一张表、不是同一个后台页**（`note_comment`
-#     vs `talk`，`?tab=comment` vs `?tab=review`），所以它是**第三族**而不是留言族的
-#     一个分支——混成一个族会让"主人说的是评论还是留言"这件事在系统侧也分不出来。
 #
 # **与 `_WRITE_NAME_FIELDS` 严格互斥**：同一件工具同时出现在两张表里，"按名字解"与
 # "按编号解"会各判一次，谁先拒都是一句可能更松或更紧的话（`test_target_grounding`
@@ -10073,11 +10069,6 @@ _LEDGER_TARGET_FIELDS = {
     "audit_board_comment": "talk_id",
     "approve_quota_request": "user_id",
     "reject_quota_request": "user_id",
-    # 评论复核（20261019）：与留言复核**逐条同形**，只是它治的是 `note_comment` 表、
-    # 编号印成 `commentId:<id>`（见 `agent/adminops_comment.py` 头注那条"评论与留言
-    # 是两套东西"）。它进本表而不是 `_WRITE_NAME_FIELDS` 的理由与留言那件**同一个**：
-    # 目标是系统印的编号，主人本人认不出，拿正文片段去指认等于让他盲签。
-    "audit_comment": "comment_id",
 }
 
 # 编号字段 → 它属于**哪一份队列**（`_read_ledger_family` 的族名）。收尾那一问
@@ -10085,14 +10076,13 @@ _LEDGER_TARGET_FIELDS = {
 # 那一份——两族都读会把一次与台账无关的确认轮变成一句"顺嘴提两句待审留言"。
 # 它的键集合必须**恰好**等于 `_LEDGER_TARGET_FIELDS` 的值集合（tests 有锁）：漏一个
 # 新字段的后果是那一族静默少问一句（方向安全，但看起来像"模型没问"）。
-_LEDGER_FIELD_FAMILY = {"talk_id": "board", "user_id": "quota", "comment_id": "comment"}
+_LEDGER_FIELD_FAMILY = {"talk_id": "board", "user_id": "quota"}
 
-# 台账帧里**印出来的编号前缀** → 族名（`talkId:101` / `账号 id=3` / `commentId:37`
-# 这串东西的前半截）。
+# 台账帧里**印出来的编号前缀** → 族名（`talkId:101` / `用户 id=3` 这串东西的 `talkId`）。
 # 渲染端（`_ledger_fact_blocks`）与读端（golden 的"卡片上的编号出不出自本轮台账"
 # 断言）共用**这一张表**：两边各写一份前缀字面量，前缀一改就变成"卡片编号一个都对
 # 不上"的**假红**——而假红比不判更坏，它会让人去改本来没错的代码。
-_LEDGER_TAG_FAMILY = {"talkId": "board", "userId": "quota", "commentId": "comment"}
+_LEDGER_TAG_FAMILY = {"talkId": "board", "userId": "quota"}
 # 反向只在渲染端用（族名 → 前缀），由上面那张表派生——不写第二张（同源纪律）。
 _LEDGER_FAMILY_TAG = {v: k for k, v in _LEDGER_TAG_FAMILY.items()}
 
@@ -10103,12 +10093,11 @@ def _ledger_target_refusal(plan_obj: dict, config) -> tuple[str, str] | None:
     返回 `(工具名, 拒绝说明)` 或 None（=放行给工具）。判据缺一即拒：
 
       ① **编号解得出来**（`adminops.normalize_target_id`：裸数字与帧里印的
-         `talkId:101` / `账号 id=3` / `commentId:37` 都算，其余一律认不出）——认不出
-         就如实说，**绝不退回去猜**（猜出来的目标没人签得了字）；
-      ② **现场台账里真有这一行**（留言按 `talkKey`、额度按 `userId`、评论按 `id`）。
+         `talkId:101` / `账号 id=3` 都算，其余一律认不出）——认不出就如实说，
+         **绝不退回去猜**（猜出来的目标没人签得了字）；
+      ② **现场台账里真有这一行**（留言按 `talkKey`、额度按 `userId`）。
 
-    留言族与评论族**到此为止**（留言 20260930 起、评论 20261019 起）：可写集 =
-    现场名册里的任意一行。此前还有
+    留言族**到此为止**（20260930 起）：可写集 = 现场留言清单里的任意一行。此前还有
     第三条"那一行还在待审（`approved == 0`）"，它把改判挡在门外——主人说「把刚才那条
     驳回」时，系统回一句「待办台账只摆待审的，要改回来去后台留言管理页」。20260930
     主人点名要"已通过的留言也能驳回"⇒ 那条判据撤掉：**改判本来就是主人的权利**，
@@ -10117,7 +10106,7 @@ def _ledger_target_refusal(plan_obj: dict, config) -> tuple[str, str] | None:
     不管"这个决定该不该做"。撤掉它之后**拒绝话术仍要如实**：查无此条就说查无此条。
 
     额度族保留第三条（申请一旦被处理就没有"再处理一次"这回事，pending 队列就是它的
-    全部可写集）——各族的可写集不同是**结构性**的，见上方 `_LEDGER_TARGET_FIELDS` 注。
+    全部可写集）——两族的可写集不同是**结构性**的，见上方 `_LEDGER_TARGET_FIELDS` 注。
 
     **读不到台账 ⇒ 放行**（与 `_write_target_refusal` 同向）：读不到不是"没有"，
     工具自己会再读一次、那一层读不到才零写。预检只允许比工具**更保守**，绝不允许
@@ -10140,7 +10129,6 @@ def _ledger_target_refusal(plan_obj: dict, config) -> tuple[str, str] | None:
         return None
     from tools.base import (
         _board_index,
-        _comment_index,
         _quota_pending_index,
     )
     field = _LEDGER_TARGET_FIELDS[name]
@@ -10162,19 +10150,6 @@ def _ledger_target_refusal(plan_obj: dict, config) -> tuple[str, str] | None:
         # 这里**不许**再判「必须是待审」（见函数头注）。
         # 那一行现在是什么状态**不参与放行与否**——它由弹卡印给主人看（卡面自带
         # 「现在：已通过/待审/已驳回」），由 `_reached_specs` 判"状态已达成 ⇒ 不弹卡"。
-        return None
-    if name == "audit_comment":
-        # 与留言族逐条同形（含"不判它是不是待审"那条：评论的改判同样是主人的权利，
-        # 由弹卡与人眼兜）。**读的是不带筛选的全量名册**（`_comment_index` 的 docstring
-        # 那条：写前核对必须与工具同一个口径，拿筛过的一份会把"还在、只是被筛掉了"
-        # 读成"站内没有这条评论"）。
-        index = _comment_index(config)
-        if index is None:
-            return None  # 读不到评论名册 ≠ 没有这一条（同留言族那支）
-        row = index.get(tid)
-        if not isinstance(row, dict):
-            return name, (f"站内没有编号为 commentId:{tid} 的评论，本次未改动"
-                          f"（可能记错了编号，或那条已经被删了）")
         return None
     # 额度族：`_quota_pending_index` 读的就是 `?status=pending` ⇒ "这一行在不在"
     # 与"是不是还在待办态"是同一个问题，一次查同时回答两条（见它的头注）。
@@ -10289,17 +10264,6 @@ def _freeze_policy_refusal(plan_obj: dict, config,
 # 额度族另起一份（两族读的是两份队列，一份正则分不出该读哪份）。
 _REVIEW_INTENT_RE = re.compile(r"留言|审核|复核|待审|驳回|放行|通过|隐藏")
 _QUOTA_INTENT_RE = re.compile(r"额度|配额|申请")
-# 评论族**另起一份**（20261019），与额度族当初的理由逐字相同：三族读的是三份**不同的
-# 后台队列**，一份正则分不出该读哪份。
-#
-# ⚠️ 词表刻意**只有「评论」两个字**，不复用上面那份：
-#   · 上面那份里的「审核/复核/待审/驳回/通过/隐藏」是**通用审核词**，它们同样描述
-#     评论这件事——但把它们搬过来，等于让任何一句"审核一下"同时预读留言与评论两份
-#     队列（每条短消息再多一次网络读，而这两份里必有一份与主人这句话无关）；
-#   · 「留言」这个词更不能进来：它出现时主人说的就是留言，读评论队列是白读。
-#   代价是主人只说「把那条驳回了」（不点名评论）时评论队列不预读——那种话的形状是
-#   **短消息**，而短消息那一条（`_is_short_reply`）本来就三族全摆，覆盖得住。
-_COMMENT_INTENT_RE = re.compile(r"评论")
 
 
 def _render_pending_facts(pending: list) -> str:
@@ -10380,37 +10344,6 @@ def _render_quota_facts(quota: list, reachable=None) -> str:
             f"**不要自己编**：那几条就如实告诉他「要驳得您给一句理由」。")
 
 
-def _render_comment_facts(rows: list) -> str:
-    """待审**文章评论**的**系统事实**行（与留言那份同源同纪律，读自后台评论名册）。
-
-    与 `_render_pending_facts`（留言）**不是同一个渲染器**，因为两者要认的东西不同：
-    留言没有归属，认它就是认那句话本身；评论**长在某篇文章下面**，主人脑子里的指代
-    常常是「那篇讲 X 的文章下面那条」⇒ 每一行必须把**文章标题**一起印出来。
-
-    行里印 `commentId:<id>` 与 `（文章《…》）`，与 `agent/adminops_comment.comment_ref`
-    **同一套指称形状**（编号前缀由 `_LEDGER_TAG_FAMILY` 那张表说了算，两处不许各写
-    一份字面量：前缀一改就变成"卡片编号一个都对不上"的假红）。
-
-    正文与标题都是**访客可控文本**（评论是他写的、标题是文章作者写的）⇒ 一律经
-    `sanitize_untrusted` + 截断（同留言族那条）。
-    """
-    if not rows:
-        return ("当前**没有任何待审评论**（`note_comment.approved=0` 的为 0 条）——如实"
-                "告诉主人现在没有等他复核的评论即可，不要凭空说出一条。")
-    from agent.adminops_tags import clip as _clip
-    from agent.reports import sanitize_untrusted
-    lines = []
-    for r in rows[:5]:
-        body = _clip(sanitize_untrusted(str(r.get("content") or ""), 30), 30)
-        title = _clip(sanitize_untrusted(str(r.get("noteTitle") or ""), 20), 20)
-        who = _clip(sanitize_untrusted(str(r.get("nickname") or r.get("username") or ""), 16), 16)
-        lines.append(f"　　· commentId:{r.get('id')}「{body}」"
-                     f"（{who or '账号未知'} · 文章《{title or '已删除'}》）")
-    more = f"\n　　· …还有 {len(rows) - 5} 条未列出" if len(rows) > 5 else ""
-    return (f"当前**待审**（approved=0）的文章评论共 {len(rows)} 条：\n"
-            + "\n".join(lines) + more)
-
-
 def _ledger_family_allowed(family: str, principal) -> bool:
     """这一族主人办不办得了（权限判据的**唯一一处**，20260929 批 H · S4）。
 
@@ -10422,15 +10355,7 @@ def _ledger_family_allowed(family: str, principal) -> bool:
     族名 → 守卫工具是**族自己的属性**（读这份队列要的那件工具），不让调用方传：
     传进来的话，同一个族在两处可以是两件工具（正是上面那条分岔）。
     """
-    # 三族的守卫工具（表里没有的族名 ⇒ `None` ⇒ 一律不放行，fail-closed：一个还没
-    # 登记守卫的族**不该**被悄悄读出来摆上桌）。写成一表而不是三元链，是为了让"加一族
-    # 忘了加守卫"这件事变成一次查表落空，而不是一个静默走错的 else 分支。
-    tool = {"board": "audit_board_comment",
-            "quota": "approve_quota_request",
-            "comment": "audit_comment"}.get(family)
-    if tool is None:
-        logger.warning("[planner] 待办台账：族名 %r 没有登记守卫工具，按不放行处理", family)
-        return False
+    tool = "audit_board_comment" if family == "board" else "approve_quota_request"
     return bool(authz.check(principal, tool).allowed)
 
 
@@ -10442,7 +10367,7 @@ def _ledger_due_families(user_msg: str, prev_ai: str, principal, config) -> list
     两个消费方（S1 的帧、S4 的收尾一问）走同一个函数才能保证同进同出。
     """
     due = _ledger_families_due(user_msg, prev_ai, config)
-    return [f for f in ("board", "quota", "comment")
+    return [f for f in ("board", "quota")
             if due[f] and _ledger_family_allowed(f, principal)]
 
 
@@ -10461,21 +10386,6 @@ def _read_ledger_family(family: str, config) -> tuple[list, bool]:
                 return [], False
             rows = [r for r in index.values() if r.get("approved") == 0]
             rows.sort(key=lambda r: int(r.get("talkKey") or 0))
-            return rows, True
-        if family == "comment":
-            # 与留言族逐条同形，两处判据都在"待审"这一档上：
-            #   · `approved == 0`——台账摆的是**等着主人点头**的那几件（已通过/已驳回
-            #     的评论照样能改判，但那是主人点名时的事，不是"队列里等着办"）；
-            #   · `not isDeleted`——已软删的评论**不可再审**（父仓 `audit_comment` 直接拒），
-            #     把它摆上桌等于请主人去点一件系统注定拒绝的事。留言那边没这一条是因为
-            #     它是**真删**（行都没了，`_board_index` 里自然没有）。
-            from tools.base import _comment_index
-            index = _comment_index(config)
-            if index is None:
-                return [], False
-            rows = [r for r in index.values()
-                    if r.get("approved") == 0 and not r.get("isDeleted")]
-            rows.sort(key=lambda r: int(r.get("id") or 0))
             return rows, True
         from tools.base import _quota_pending_index
         pending = _quota_pending_index(config)
@@ -10508,20 +10418,19 @@ def _recent_tools_of(config) -> set:
 
 
 def _ledger_families_due(user_msg: str, prev_ai: str, config) -> dict:
-    """这一轮要把哪几族的**待办台账**摆上桌（`{"board": bool, "quota": bool, "comment": bool}`）。
+    """这一轮要把哪几族的**待办台账**摆上桌（`{"board": bool, "quota": bool}`）。
 
     三条来源，取或：
-      · 主人这句话或上一轮泠月那句里提到了这一族（`_REVIEW_INTENT_RE` / `_QUOTA_INTENT_RE`
-        / `_COMMENT_INTENT_RE`）——这三个正则自此**只做帧触发器**，不再替模型读结论
-        （旧确定性快道已删）；
-      · 这句话**形状上是短消息**（`prompt_context._is_short_reply`）⇒ **三族都摆**——这类话里
+      · 主人这句话或上一轮泠月那句里提到了这一族（`_REVIEW_INTENT_RE` / `_QUOTA_INTENT_RE`）
+        ——这两个正则自此**只做帧触发器**，不再替模型读结论（旧确定性快道已删）；
+      · 这句话**形状上是短消息**（`prompt_context._is_short_reply`）⇒ **两族都摆**——这类话里
         目标根本没出现（"你看着办"/"全都要"/"全部批准"，以及任何一句短话），
         "有什么正等着办"是系统必须给的事实；
       · 上一轮**真的读过**这份队列（`_QUEUE_READ_TOOLS` ∩ `recent_tools`）。
     都不命中 ⇒ 该族一次都不读（"不提也不读的族不读队列"的零额外网络开销纪律照旧）。
 
     ⚠️ **第二条 20261015 批 3 放宽过**（判据从三张手写词表换成纯结构准入）：短消息现在
-    一律预读**三族**（20261019 加评论族），代价是"每条短消息多读几份队列"。这是拿下那三张词表的价钱，
+    一律预读两族，代价是"每条短消息多一次两队列读"。这是拿下那三张词表的价钱，
     而且**有界**：`_ledger_due_families` 的权限闸（`_ledger_family_allowed`）先把
     办不了这两件事的主人挡掉（非管理员两族都不读 ⇒ 访客/普通用户一分钱不花）⇒ 价钱全
     落在主人自己说话的时候：全量语料 194 轮里 74 轮的触发器会新命中（族读数 28 → 169）。
@@ -10538,8 +10447,6 @@ def _ledger_families_due(user_msg: str, prev_ai: str, config) -> dict:
                   or bool(_REVIEW_INTENT_RE.search(prev)) or "board" in touched),
         "quota": (bulk or bool(_QUOTA_INTENT_RE.search(msg))
                   or bool(_QUOTA_INTENT_RE.search(prev)) or "quota" in touched),
-        "comment": (bulk or bool(_COMMENT_INTENT_RE.search(msg))
-                    or bool(_COMMENT_INTENT_RE.search(prev)) or "comment" in touched),
     }
 
 
@@ -10561,16 +10468,10 @@ def _ledger_fact_blocks(families: list[str], config) -> tuple[list[str], dict]:
         meta[family] = len(rows) if readable else 0
         meta["rows"][family] = len(rows) if readable else 0
         if readable:
-            # 编号字段**逐族不同**（留言是 `talkKey`、额度是 `userId`、评论是 `id`）：
-            # 三族里有两族的字段名与族名对不上，所以这张表必须显式写全——少一族就会
-            # 在 `meta["ids"]` 里印出 `commentId:None`（下游 golden 那条"卡片上的编号
-            # 出不出自本轮台账"会因此判不出，而它看起来只是"编号有点怪"）。
-            key = {"board": "talkKey", "quota": "userId", "comment": "id"}[family]
+            key = "talkKey" if family == "board" else "userId"
             meta["ids"] += [f"{_LEDGER_FAMILY_TAG[family]}:{r.get(key)}" for r in rows]
             if family == "board":
                 blocks.append(_render_pending_facts(rows))
-            elif family == "comment":
-                blocks.append(_render_comment_facts(rows))
             else:
                 # 只有**真有额度行**时才去读那份名录（`_reachable_uids`）：它是为了标注
                 # "够不着的那几件"，没有行就没有要标的东西——零额外网络开销的纪律照旧。
@@ -10583,16 +10484,14 @@ def _ledger_fact_blocks(families: list[str], config) -> tuple[list[str], dict]:
     return blocks, meta
 
 
-# 「读不到」那几段话住在这里而不是各自内联：每族一句、字面量必须与渲染器
-# （`_render_pending_facts` / `_render_quota_facts` / `_render_comment_facts` 的 0 条
-# 那支）**长得不一样**——"没读到"与"没有"混掉的后果正是本族最怕的那句假话。
+# 「读不到」那两段话住在这里而不是各自内联：两族各一句、字面量必须与渲染器
+# （`_render_pending_facts` / `_render_quota_facts` 的 0 条那支）**长得不一样**
+# ——"没读到"与"没有"混掉的后果正是本族最怕的那句假话。
 _LEDGER_UNREAD_BLOCK = {
     "board": ("留言审核队列**这一次没读到**（后台接口没返回）——不确定还有几条等着"
               "复核：如实告诉主人「没读到、不确定」，**不要**说成「没有待审」"),
     "quota": ("额度重置申请队列**这一次没读到**（后台接口没返回）——不确定还有几件："
               "如实告诉主人「没读到、不确定」，**不要**说成「没有申请」"),
-    "comment": ("评论审核队列**这一次没读到**（后台接口没返回）——不确定还有几条等着"
-                "复核：如实告诉主人「没读到、不确定」，**不要**说成「没有待审评论」"),
 }
 
 
@@ -10617,9 +10516,8 @@ def _pending_ledger_frame(user_msg: str, prev_ai: str, principal, config
               "**当前真的在等主人点头**的事——**只有主人这句话真的指向它们时才办**；"
               "与他这句话无关的一轮里，这一块只是背景，不要拿它去凑一句话。\n"
               "办哪几件、办成哪一种**由你定**；目标一律填台账里的 **id**"
-              "（`talkId:` 是**河灯留言**、`commentId:` 是**文章评论**、`账号 id=` 是"
-              "额度申请人）——**留言与评论是两套东西**，别把一边的编号填进另一边的"
-              "工具；**不要**用原话片段或账号名代替 id——系统会拿现场台账校验你填的 id。\n")
+              "（`talkId:` 是留言、`账号 id=` 是额度申请人），**不要**用原话片段或账号名"
+              "代替 id——系统会拿现场台账校验你填的 id。\n")
     text = header + "\n".join(blocks)
     meta["chars"] = len(text)
     return text, meta
@@ -10840,12 +10738,7 @@ def _ledger_closing_note(state, config) -> str:
 
 
 _QUEUE_READ_TOOLS = {"get_moderation_status": "board", "list_admin_board": "board",
-                     "list_quota_requests": "quota",
-                     # 评论族（20261019）：读这份队列的那件工具。`get_moderation_status`
-                     # 与它**不是**同一件事——那张报表读的是**留言**（`talk` 表），评论
-                     # 走自己的名册。把它当成"审核状况"的同类加进来，会让"上一轮读过
-                     # 审核状况"把**评论**那一族也判成读过（跨族串味）。
-                     "list_admin_comments": "comment"}
+                     "list_quota_requests": "quota"}
 
 # ── 「疑问词在内容里，还是主人在问？」（20261006，与 `_confirm_popup` 同一批）──────
 #
@@ -11077,12 +10970,11 @@ def _satisfied_specs(already: list) -> list:
 
 
 def _popup_index_snaps(picks: list, config, principal) -> dict:
-    """渲染问句要的五份「名字字典」：标签 / 分类 / 留言 / **评论** / 文章。
+    """渲染问句要的四份「名字字典」：标签 / 分类 / 留言 / 文章。
 
     它们喂 `adminops.render_confirm_question`——卡面得写出父标签**名字**、会失去分类的
-    文章数、匹配到的那一条留言（#id + 作者 + 原文）、那一条评论（#id + 作者 + 原文 +
-    所属文章）、要改的那篇文章的标题与现状。
-    五份**只在对应工具族真进了候选时才各读一次**（这条纪律随每一族重申一遍：别的写弹窗
+    文章数、匹配到的那一条留言（#id + 作者 + 原文）、要改的那篇文章的标题与现状。
+    四份**只在对应工具族真进了候选时才各读一次**（这条纪律随每一族重申一遍：别的写弹窗
     一次都不多花）；读不到一律留 `None` ⇒ 问句退回名字/id 原文，**绝不因此不弹卡**
     （回退到"判成歧义就追问"才是真正的死路形态）。
     """
@@ -11114,19 +11006,6 @@ def _popup_index_snaps(picks: list, config, principal) -> dict:
             board_index = _board_index(config)
         except Exception:
             board_index = None
-    # 评论名册同理（20261019）：卡面要印出**那一条评论**（#id + 作者 + 原文 + 所属
-    # 文章），否则主人签的是一个只有数字的编号。⚠️ 判据必须按**评论那两个工具名**取，
-    # 不能复用上面那条 `endswith("_board_comment")`（`audit_comment`/`delete_comment`
-    # 都不以它结尾）——复用的话这一支恒不命中、`comments` 恒 None，卡面退回只写编号，
-    # 而这**看起来只是"这次没读到名册"**（最坏的那种静默：判据写错长得像读失败）。
-    comment_index = None
-    if any(str(s.get("tool") or "") in ("audit_comment", "delete_comment")
-           for s in picks):
-        try:
-            from tools.base import _comment_index
-            comment_index = _comment_index(config)
-        except Exception:
-            comment_index = None
     # 文章清单同理：文章写操作的问句**不能只有内部 id**
     # （「修改文章 46」），是整套写面里唯一的盲签——主人看不出那是不是他说的那篇，
     # 而弹窗点确定正是文章这类写操作唯一的人类兜底（"目标有据 ≠ 目标唯一"）。
@@ -11145,8 +11024,7 @@ def _popup_index_snaps(picks: list, config, principal) -> dict:
         except Exception:
             note_index = None
     return {"tag_index": tag_index, "cat_index": cat_index,
-            "board_index": board_index, "comment_index": comment_index,
-            "note_index": note_index}
+            "board_index": board_index, "note_index": note_index}
 
 
 def _popup_people_snaps(picks: list, config) -> dict:
@@ -11486,7 +11364,6 @@ def _confirm_popup(state: AgentState, specs: list, principal, user_msg: str,
     tag_index = snaps["tag_index"]
     cat_index = snaps["cat_index"]
     board_index = snaps["board_index"]
-    comment_index = snaps["comment_index"]
     note_index = snaps["note_index"]
     users = snaps["users"]
     todos = snaps["todos"]
@@ -11507,7 +11384,7 @@ def _confirm_popup(state: AgentState, specs: list, principal, user_msg: str,
                                      notes=note_index, users=users, todos=todos,
                                      favorites=favorites, notifications=notifications,
                                      messages=messages, announcements=announcements,
-                                     quota_requests=quota_requests, comments=comment_index)
+                                     quota_requests=quota_requests)
     if already:
         record("confirm", "idem_reached", tools=[str(x.get("tool") or "") for x in already],
                kept=[str(x.get("tool") or "") for x in picks])
@@ -11560,8 +11437,7 @@ def _confirm_popup(state: AgentState, specs: list, principal, user_msg: str,
         record("confirm", "token_sign_failed", tools=[p.get("tool") for p in picks])
         return None
     question = _confirm.render_confirm_question(picks, tag_index, cat_index, board_index,
-                                         note_index, users, todos, quota_requests,
-                                         comment_index)
+                                         note_index, users, todos, quota_requests)
     # 按钮按**单元**数生成（20260929 批 F4，20261010 改数单元）：≥ 2 时给「全部办」
     # + 逐条「只办第 i 件」+「取消」（`pick:<i>` 0 基，服务端按同一份 `units` 裁）；
     # 为 1 时仍是旧的两枚，字面一个字节没动。
@@ -11599,8 +11475,7 @@ def _confirm_popup(state: AgentState, specs: list, principal, user_msg: str,
             "skill": _plan_workflow(state),
             "specs": picks,
             "target": _confirm.render_action_lines(picks, tag_index, cat_index, board_index,
-                                            note_index, users, todos, quota_requests,
-                                            comment_index),
+                                            note_index, users, todos, quota_requests),
             "requested_by": "user",
             "source_event": "confirm_popup",
             # 卡片本体一并落库：只活在当轮的 SSE 帧里的话——刷新、
@@ -11630,8 +11505,7 @@ def _confirm_popup(state: AgentState, specs: list, principal, user_msg: str,
         # 这个参数（`_confirm_one` 里只有 todo 两族看它）⇒ 其余族逐字节不变。
         "confirm_text": _confirm.render_confirm_text(picks, tag_index, cat_index, board_index,
                                                note_index, users, todos,
-                                               quota_requests=quota_requests,
-                                               comments=comment_index)
+                                               quota_requests=quota_requests)
                         + _noop.render_already_note(already),
     }
 

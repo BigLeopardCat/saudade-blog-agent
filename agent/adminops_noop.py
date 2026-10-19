@@ -15,9 +15,6 @@ from agent.adminops_account import (
     normalize_role,
     role_cn,
 )
-from agent.adminops_comment import (
-    _comment_row_by_id,
-)
 from agent.adminops_quota import (
     quota_limit,
     quota_used,
@@ -81,8 +78,7 @@ from agent.adminops_todo import (
 
 def reached_specs(specs, *, index=None, boards=None, notes=None, users=None, todos=None,
                   favorites=None, notifications=None, messages=None,
-                  announcements=None, quota_requests=None,
-                  comments=None) -> tuple[list, list]:
+                  announcements=None, quota_requests=None) -> tuple[list, list]:
     """写 spec 清单 → `(该弹卡的, 已达成)`。
 
     纯函数（无网络、无 LLM、无 config）：快照由调用方读好传进来——它们本来就都是
@@ -107,7 +103,7 @@ def reached_specs(specs, *, index=None, boards=None, notes=None, users=None, tod
     snaps = {"index": index, "boards": boards, "notes": notes, "users": users,
              "todos": todos, "favorites": favorites, "notifications": notifications,
              "messages": messages, "announcements": announcements,
-             "quota_requests": quota_requests, "comments": comments}
+             "quota_requests": quota_requests}
     kept: list = []
     already: list = []
     for spec in specs or []:
@@ -399,19 +395,6 @@ def _reached_one(tool: str, a: dict, s: dict) -> str | None:
             return None
         who = str(hit.get("author") or hit.get("nickname") or "").strip()
         return (f"留言 #{hit.get('talkKey')}{f'（{who} 的）' if who else ''}"
-                f"现在就是{BOARD_VERDICT_CN[v]}状态")
-    if tool == "audit_comment":
-        # 与 `audit_board_comment` 那一支**逐条同形**（只判审核、不判删除；快照判不了
-        # 就照弹）。快照是**评论名册**（`comments`）不是留言清单——拿错一份的后果是
-        # "评论 #37" 撞上"留言 #37"，一次本来该弹的卡被静默摘掉。
-        v = normalize_verdict(a.get("verdict"))
-        if v is None:
-            return None
-        hit = _comment_row_by_id(s.get("comments"), a.get("comment_id"))
-        if hit is None or hit.get("approved") != BOARD_VERDICT_APPROVED[v]:
-            return None
-        who = str(hit.get("nickname") or hit.get("username") or "").strip()
-        return (f"评论 #{hit.get('id')}{f'（{who} 的）' if who else ''}"
                 f"现在就是{BOARD_VERDICT_CN[v]}状态")
     if tool == "create_tag":
         index = s.get("index")
