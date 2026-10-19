@@ -20,7 +20,7 @@
         429
       ],
       "agent/action_text.py": [
-        95,
+        91,
         0
       ],
       "agent/adminops_account.py": [
@@ -52,7 +52,7 @@
         33
       ],
       "agent/adminops_todo.py": [
-        14,
+        11,
         0
       ],
       "agent/agent.py": [
@@ -60,7 +60,7 @@
         0
       ],
       "agent/authz.py": [
-        80,
+        76,
         441
       ],
       "agent/block_reasons.py": [
@@ -108,8 +108,8 @@
         0
       ],
       "agent/graph.py": [
-        199,
-        3483
+        198,
+        3481
       ],
       "agent/hostinfo.py": [
         0,
@@ -216,7 +216,7 @@
         0
       ],
       "agent/workflow_defs/content_write.py": [
-        48,
+        45,
         0
       ],
       "agent/workflow_defs/nav_map.py": [
@@ -236,7 +236,7 @@
         0
       ],
       "agent/workflow_defs/report_skills.py": [
-        6,
+        4,
         0
       ],
       "agent/workflow_expand.py": [
@@ -308,7 +308,7 @@
         0
       ],
       "tools/admin_read.py": [
-        6,
+        4,
         0
       ],
       "tools/device.py": [
@@ -334,19 +334,11 @@
       "server.py": [
         22,
         0
-      ],
-      "agent/adminops_comment.py": [
-        2,
-        0
-      ],
-      "tools/comment_moderation.py": [
-        4,
-        0
       ]
     },
     "total": [
-      1147,
-      4858
+      1122,
+      4856
     ]
   },
   "entries": [
@@ -479,7 +471,7 @@
       "file": "agent/action_text.py",
       "kind": "collection",
       "name": "_NOARG_VERB",
-      "size": 25,
+      "size": 24,
       "category": "system_data",
       "q": "_NOARG_VERB",
       "why": "工具名 → 动作文案的渲染表（键是工具名，无参调用时的显示字）"
@@ -489,7 +481,7 @@
       "file": "agent/action_text.py",
       "kind": "collection",
       "name": "_REF_SOURCE_CN",
-      "size": 12,
+      "size": 11,
       "category": "parser",
       "q": "_REF_SOURCE_CN",
       "why": "拆工具返回里的检索来源标记，再渲染成中文"
@@ -2139,19 +2131,6 @@
       "category": "system_data",
       "q": "_QUOTA_POLICY_REFUSALS",
       "why": "对着 **Rust 侧产出**的拒绝文案"
-    },
-    {
-      "id": "agent/graph.py::_COMMENT_INTENT_RE",
-      "file": "agent/graph.py",
-      "kind": "regex",
-      "name": "_COMMENT_INTENT_RE",
-      "size": 2,
-      "sample": "评论",
-      "category": "open",
-      "q": "_COMMENT_INTENT_RE",
-      "why": "在 narrator 的**叙述文字**里找中文词，判断它有没有声称/有没有如实（与 _REVIEW_INTENT_RE / _QUOTA_INTENT_RE 同族：三份后台队列，一份正则分不出该读哪份）",
-      "replacement": "判**结构事实**（帧/回执/命令帧/任务态）而不是叙述措辞——同族工作见 docs/问题记录.md 声称闸洞①–⑭",
-      "sunset": "声称闸工作流（另册：docs/toolcall-stability-roadmap.md §6）"
     }
   ],
   "eval_vocab": {

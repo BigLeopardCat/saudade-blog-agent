@@ -215,7 +215,7 @@
         // 点了确定、等到令牌过期都没回音：正是最难查的那种静默失败，必须留痕
         reportConfirm('点了确定之后等到令牌过期仍没有回复（卡片：确认中 → 已过期）');
       }
-      askSettle('已过期，没有执行任何操作；要处理的话再跟我说一次', undefined, 'expired');
+      askSettle('已过期，没有执行任何操作；要办的话再跟我说一次', undefined, 'expired');
     };
     const askArmTimer = (ask) => {
       if (askTimer) { clearTimeout(askTimer); askTimer = null; }
