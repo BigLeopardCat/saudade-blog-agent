@@ -7727,9 +7727,9 @@ def _check_spec(name: str, args: dict, args_ok: bool, raw: str, workflow: str,
     PASS → 该执行成为系统确认事实（receipts，跨轮执行记忆原料）；
     BLOCK → 该执行不进回执（错误结果不是事实），进 blocked 交 planner/reflector。
 
-    kind=unavailable 单独判 BLOCK：**"服务挂了"不是事实**，不能进跨轮执行记忆
-    （否则下轮质疑"你刚才查到了什么"时，agent 会照着一条故障回执编）。kind=empty
-    仍走 PASS——"查到了，就是空的"本身是事实。
+    kind=unavailable / invalid_args 单独判 BLOCK：**"服务挂了"与"参数不合法"都不是事实**，
+    不能进跨轮执行记忆（否则下轮质疑"你刚才查到了什么"时，agent 会照着故障回执编）；
+    后者与 `args_parse` 分开（20261019 批 ⑤-1，过程行要说准）。kind=empty 走 PASS——空是事实。
     """
     if name not in _TOOL_MAP:
         # 白名单结构上到不了 execute，防御保留（执行器不静默吞越权）
@@ -7738,6 +7738,8 @@ def _check_spec(name: str, args: dict, args_ok: bool, raw: str, workflow: str,
         return _VERDICT_BLOCK, "args_parse"
     if kind == "unavailable":
         return _VERDICT_BLOCK, "unavailable"
+    if kind == "invalid_args":
+        return _VERDICT_BLOCK, "invalid_args"
     if kind == "not_found":
         # 目标不存在 / 不在我能确认的范围内（20260923 三轮，见 tools.base.not_found）：
         # 同样 BLOCK（什么都没改成事实），但与 unavailable 分开给原因码——planner 的
