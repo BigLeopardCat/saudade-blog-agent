@@ -42,7 +42,7 @@ from agent import runtime_probe  # /version 与 /ready 的判定逻辑（纯函�
 from agent.factblock import (action_facts,  # 动作事实块（D3）
                              compose, render_fact_block, strip_fact_lines)
 from agent import create_agent
-from agent.graph import AgentCancelled, graph_input, _cmd_wire
+from agent.graph import AgentCancelled, graph_input, _cmd_wire, _tool_args, _tool_name
 from agent.principal import Principal
 from agent.summarizer import summarize
 # `NAV_MAP` 的 import 随渲染一起搬走了（20260928）：路径→中文别名的反查只服务于
@@ -1052,24 +1052,17 @@ def _spec_one(spec: str):
     """一条 TOOLS spec（`<工具名>(<json 参数>)`）→ `(工具名, 参数 dict|None)`。
 
     参数解析失败/空参给 None——过程行只出动作词，不硬猜参数。
-    「（无）」与空串 → None（不是一条动作）。与 `graph.parse_plan` 里那段**逐条**
-    解析同源（那边从文本行切出来，这边从 `plan_obj["tools"]` 直取，落到的都是同一
-    形状的 spec 串）。
+    「（无）」与空串 → None（不是一条动作）。**20261019 批 G6 起走生产的
+    `graph._tool_name` / `_tool_args`**（spec 是 `ToolCall` 时直接取 `.name`/`.args`，
+    只有落到这里的文本才解析）——此前这里自己写了一条 `^[^(]+\\((.+)\\)\\s*$` 的正则，
+    是同一形状的**第六份**解析器；同一份 spec 在 `plan_obj["tools"]` 那一侧已经解析过
+    一次了。
     """
     spec = (spec or "").strip()
     if not spec or spec in ("（无）",):
         return None
-    nm = spec.split("(", 1)[0].strip()
-    args = None
-    am = re.match(r"^[^(]+\((.+)\)\s*$", spec, re.DOTALL)
-    if am:
-        try:
-            obj = json.loads(am.group(1))
-            if isinstance(obj, dict):
-                args = obj
-        except Exception:
-            pass
-    return (nm, args)
+    args, ok = _tool_args(spec)
+    return (_tool_name(spec), args if (ok and args) else None)
 
 
 def _specs_from_tools(tools) -> list:

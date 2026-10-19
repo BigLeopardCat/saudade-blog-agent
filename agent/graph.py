@@ -135,7 +135,7 @@ from agent.workflow_defs import WORKFLOW_MAP, _WRITE_NAME_TARGET_WORKFLOWS, visi
 from agent.workflow_defs.capability import CAPABILITY_DENIAL_OBJECTS, CAPABILITY_DENIAL_VERBS
 from agent.workflow_defs.nav_map import FUZZY_NAV_RULES, NAV_MAP, _NAV_REAL_PAGES, _NAV_REF_HINT
 from agent.workflow_menu import build_planner_context
-from agent.workflow_model import DROP_SUFFIX_BAD_ARGS, DROP_SUFFIX_NOT_OBJECT
+from agent.workflow_model import DROP_SUFFIX_BAD_ARGS, DROP_SUFFIX_NOT_OBJECT, ToolCall
 from agent.workflow_params import (
     arg_type_short,
     args_are_bound,
@@ -3460,7 +3460,7 @@ def _plan_exec_next_card(state: AgentState, config) -> "_PlanExec | None":
     # 拼装与 `_confirm_grant_plan` 同款（同一份 TOOLS 行契约，同一处 `NOTE` 位置）。
     # 注记只描述**事实与禁止**，不写"系统会去弹卡"那种机制（写给 narrator 的机制描述
     # 会变成它的词汇——同 `_finalize_unaccounted` 的教训）。
-    tools = [f"{s['tool']}({json.dumps(s['args'], ensure_ascii=False)})" for s in unit]
+    tools = [ToolCall(s["tool"], s["args"]) for s in unit]
     note = ("这一步是**跨轮台账里已经登记、参数已备**的下一步（主人之前交代过的那件事），"
             "照登记的参数执行；不得增删改任何参数、不得换工具")
     record("planner", "plan_step_bound", task_id=task_id, cursor=cursor, tools=tools)
@@ -7801,8 +7801,7 @@ def _confirm_grant_plan(grant: dict) -> dict:
     workflow_name = str(grant.get("workflow") or "")
     specs = [s for s in (grant.get("specs") or []) if isinstance(s, dict)]
     workflow = WORKFLOW_MAP.get(workflow_name)
-    tools = [f"{s.get('tool')}({json.dumps(s.get('args') or {}, ensure_ascii=False)})"
-             for s in specs if s.get("tool")]
+    tools = [ToolCall(s["tool"], s.get("args") or {}) for s in specs if s.get("tool")]
     # 技能与工具必须**对得上**：令牌里点名了技能 X，清单里的工具就必须是 X 的
     # 固定序列里的（`Workflow.plan` 就是那份清单）。这不是防伪造（令牌是我们自己签的），
     # 是防**内部不一致**——签的时候用技能 A、执行的时候却被塞进工具 B，只会是
