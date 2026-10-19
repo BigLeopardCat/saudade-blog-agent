@@ -280,7 +280,14 @@ INVOCATIONS = [
 
 _saved_client = base._client
 _saved_host = {k: getattr(H, k, None) for k in _HOST}
+# `_jwt_secret` 也是**边界**（读环境），桩掉它而不是去配一个真密钥：套件按出厂档跑
+# （`run_all._PINNED` 设了 `SAUDADE_IGNORE_ENV_FILE=1` ⇒ 空密钥），而 20261019 安全审计
+# （SAU-012）之后 `_sign_local_jwt` 空密钥直接抛。这一件判的是**报表摘要**，不该顺带判
+# "这台机器配没配 JWT_SECRET"——那会变成一条与它无关的红（同族：判据不许读跑它那台机器的
+# .env）。桩的取值只够让 HS256 算出签名，不参与任何断言。
+_saved_secret = base._jwt_secret
 base._client = _Fake(_HTTP)
+base._jwt_secret = lambda: "offline-test-secret-not-a-real-key"  # noqa: E731
 for _k, _v in _HOST.items():
     setattr(H, _k, _v)
 try:
@@ -295,6 +302,7 @@ try:
               f"{receipt_digest(_name, str(_out))!r}")
 finally:
     base._client = _saved_client
+    base._jwt_secret = _saved_secret
     for _k, _v in _saved_host.items():
         if _v is None:
             delattr(H, _k)
