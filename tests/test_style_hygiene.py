@@ -143,8 +143,14 @@ def _check_changelog() -> None:
         _frag_dates = []
         check(f"读得出 `changelog.d/` 里的碎片（{e}）", False)
     newest_record = max([dates[0] if dates else ""] + _frag_dates)
-    head = subprocess.run(["git", "log", "-1", "--date=short", "--format=%ad"],
-                          cwd=ROOT, capture_output=True, text=True)
+    # 日期一律按**本仓钟面**（+08:00）读，与 `_today_cn` 同一条纪律。`--date=short` 印的
+    # 是**提交自己记的时区**，而 CI 上这条读到的常常是 **PR 的 merge commit**——GitHub 现场
+    # 造、时区 +0000 ⇒ 同一份碎片在 +08:00 的 00:00–08:00 这个窗口推上去就红、别的时间绿
+    # （20261020 实测：碎片写 20261020、判据读回 20261019，而本机同一条绿）。这不是"某次
+    # 假红"：判据自己在读**提交者那台机器的钟**，正是它下面那条反面锁要挡的东西。
+    head = subprocess.run(["git", "log", "-1", "--date=format-local:%Y-%m-%d", "--format=%ad"],
+                          cwd=ROOT, capture_output=True, text=True,
+                          env={**os.environ, "TZ": "Asia/Shanghai"})
     latest = head.stdout.strip().replace("-", "")
     if len(latest) == 8 and latest.isdigit():
         check(f"最新记录日期 == 最后一笔提交日期（{latest}）", newest_record == latest,
