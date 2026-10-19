@@ -60,10 +60,13 @@ uvx ruff@0.14.4 check --select F821 --no-cache .               # 未定义名扫
 
 CI 跑的就是这两条（`.github/workflows/eval.yml`）。两点要知道：
 
-- **CI 只在 push 到 `main` 时跑，PR 上不跑**（见 [ROADMAP.md](ROADMAP.md) 的待办）；
+- **CI 在 push 到 `main` 与 PR（同仓分支）上都会跑**（20261019 起）。此前只在 push 到
+  `main` 时才跑 ⇒ 一个 PR 从推上去到合并之间**没有任何自动检查**，"没有红灯"其实是
+  "什么都没跑"；
 - CI 里有一条**跨语言守卫**需要一枚本仓的只读凭据去读一个**私有**父仓。
-  fork 的 PR 从结构上拿不到这枚凭据 ⇒ 那一条在你这边必然缺席，不是你的问题，
-  合并进 `main` 时会补跑。
+  **fork 的 PR 从结构上拿不到这枚凭据** ⇒ 那一条在你这边必然缺席。这不是静默跳过：
+  workflow 会打 `::warning::` 并在 job summary 里写明"哪些判据本次没跑、合并后会补跑"，
+  其余判据照常跑。
 
 **改动落在哪个文件**：本仓用「预算 + 台账、只许缩小」的棘轮管体量，一共三道——
 函数级（`tests/test_complexity_budget.py`）、类型级（`eval/type_gate.py`）、
