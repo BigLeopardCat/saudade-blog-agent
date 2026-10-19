@@ -131,7 +131,10 @@ check("enforcing() 与设置一致", authz.enforcing() == bool(settings.authz_en
 
 print("⑦ 接线在位（图与 server 真的用了这套判据）")
 root = ROOT
-graph_src = (root / "agent" / "graph.py").read_text(encoding="utf-8")
+# 20261020 判据族搬家：写内容声称词表（_WRITE_CONTENT_CLAIM_RE 一族）搬进
+# agent/claims.py ⇒ 取值点换成拼接视图，判据字面一字不动（见 tests/_ctx_src.py 先例）。
+graph_src = "\n".join(p.read_text(encoding="utf-8") for p in (
+    root / "agent" / "claims.py", root / "agent" / "graph.py"))
 server_src = (root / "server.py").read_text(encoding="utf-8")
 check("execute_node 调用 authz.check", "decision = authz.check(principal, name)" in graph_src)
 check("拒绝只发生在调用之前（denial_frame 产帧而非 invoke）",
