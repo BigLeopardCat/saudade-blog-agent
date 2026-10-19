@@ -30,8 +30,8 @@
 
 # `__all__` = 本模块**所有不以 `_` 开头**的模块级名字（社区惯例，不留例外；
 # `tests/test_module_exports.py` 按这条规则机械判着，漂了就红）。
-__all__ = ["ToolResult", "ok", "empty", "unavailable", "not_found", "TGT_KINDS", "tgt", "fact",
-           "is_noop", "UPSTREAM_DOWN"]
+__all__ = ["ToolResult", "ok", "empty", "unavailable", "not_found", "invalid_args", "TGT_KINDS",
+           "tgt", "fact", "is_noop", "UPSTREAM_DOWN"]
 
 # ── 工具返回值的结构化"两类"（20260916 加固）──
 # 背景：工具失败时返回的是**人话字符串**，与正常内容同型；`_get` 更是把所有上游故障
@@ -93,6 +93,24 @@ def not_found(text: str, meta: dict | None = None) -> ToolResult:
     只回最近 100 条，措辞里必须如实交代这个边界）。
     """
     return ToolResult(text, "not_found", meta)
+
+
+def invalid_args(text: str, meta: dict | None = None) -> ToolResult:
+    """工具**自己**判出参数不合法（20261019 批 ⑤-1）——第四个失败族。
+
+    与 `args_parse`（`_check_spec` 在 spec 解析那一步给的码）分开：那个说的是"计划里
+    那一行根本解析不出参数"，这个说的是"参数解析出来了，但值不合法"（屏文超 64 字、
+    设备 id 格式不对）。两者对 planner 的**应对相同**（改参数），但过程行与 `blocked`
+    的类型要说得准——`args_parse` 的文案是「参数解析失败」，用在一个已经解析成功的
+    参数上是**谎**。
+
+    为什么**必须**有它、不能拿 `unavailable` 顶（20261019 实测）：`device_oled_display`
+    的"屏文超 64 字"此前是一条**裸字符串**，`execute_node` 那一行 `getattr(out, "kind",
+    "ok")` 把"没声明"读成"声明了 ok" ⇒ checker 判 PASS ⇒ 回执「屏幕显示「…」」落
+    `execution_log` ⇒ 下一轮注回提示词 ⇒ planner/narrator 读成**系统确认的事实**。
+    换 `unavailable` 能拦住回执，但过程行会显示「服务不可用」——而设备好好的。
+    """
+    return ToolResult(text, "invalid_args", meta)
 
 
 # ── 写工具的**事实信封**（20260930 · F1）────────────────────────────────────

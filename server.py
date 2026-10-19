@@ -1000,8 +1000,8 @@ async def chat(req: ChatRequest, request: Request):
 # 且**两侧的期望值都锁在** `tests/test_action_text.py`。
 
 _REASON_CN = {"unknown_tool": "未知工具", "args_parse": "参数解析失败",
-              "empty_result": "结果为空", "error_frame": "执行出错",
-              "cmd_shape": "返回格式异常",
+              "invalid_args": "参数不合法", "empty_result": "结果为空",
+              "error_frame": "执行出错", "cmd_shape": "返回格式异常",
               # 参数引用失败（agent/arg_refs.py 的原因码，20260919）
               "ref_unknown_tool": "引用的工具尚未执行",
               "ref_unparsed": "引用的返回不是结构化数据",
