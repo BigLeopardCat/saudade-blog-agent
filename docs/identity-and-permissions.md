@@ -27,6 +27,14 @@ Principal(uid=7, role="user", source="assertion")
     **这条路径上 role 恒为 `None`**，绝不因为"读不到角色"而默认授予；且它的**每一次**
     工具调用都被硬拦（`authz.must_enforce`），只剩对话，见 §3.3。
 - 取不到 principal（老调用方、直调图的单测）→ `UNKNOWN`（uid=0、role=None）。
+- **哪些端点走它**（20261020 复核）：`/chat`、`/chat/stream`、`/review`、`/graph/rebuild*`
+  一直都在；`/graph/query` 与 `/checkpoint/*`（`DELETE /checkpoint/{id}`、
+  `POST /checkpoint/{id}/drop_turn`）**20261020 才补上**（安全审计 SAU-018 / SAU-006
+  ——前者是 agent 侧唯一"匿名可信"的内部端点，本机进程可白嫖 embedding；后者那一族
+  **一格鉴权都没有**，而删 checkpoint 是不可逆的上下文丢失）。
+  带 uid 的那一格（请求体字段 / 查询串 `?uid=`）只是"调用方自报"，**身份以签名为准**；
+  对不上会记一条 WARNING。判据在 `tests/test_hardening.py::test_internal_endpoint_identity`
+  （三处 × 无头 / 假签名 / 合法断言 / 回退档 + 接线锁）。
 - 角色名与取值域：`superadmin` / `admin` / `user` / `zako`，两侧同名（`agent/principal.py` ↔ `src/authz.rs`）。
   （`superadmin` = 超级管理员，20260926 新增；`zako` = 杂鱼，20261002 新增，见 §3.6）
 

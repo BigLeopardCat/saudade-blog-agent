@@ -2482,22 +2482,33 @@ class GraphQueryRequest(BaseModel):
     # 前端本来就截到 64 字符（locate.ts QUERY_MAX），这里留一倍余量做上限——
     # 超长串会白烧一次 embedding 调用（20260916 加固）。
     q: str = Field(default="", max_length=128)
+    # 发起人 uid（身份断言核对与日志留痕用，与 `/review` 同款）
+    uid: int = Field(default=0, ge=0)
 
 
 @app.post("/graph/query")
-async def graph_query(req: GraphQueryRequest):
+async def graph_query(req: GraphQueryRequest, request: Request):
     """首页展示柜「文章向量空间」的向量检索：查询串 → 图谱里最近的若干词。
 
     **可降级端点**：任何失败都返回 HTTP 200 + ok=false（前端据此退回本地关键词
     匹配），绝不抛 4xx/5xx——这不是 CRUD 资源，404 之类的语义在这里只会让调用方
-    的降级分支更难写。
+    的降级分支更难写。**唯一的例外是身份**：缺断言时 401（见下），调用方
+    `src/routes/graph.rs::graph_query` 对非 2xx 走的就是那条降级分支。
 
-    鉴权不在这里：本服务只监听 127.0.0.1，走 nginx 的那一层在 Rust
-    （`/api/public/graph/query` 要求登录，防匿名刷 embedding 费用）。
+    鉴权（20261020 安全审计 SAU-018）：此前这里写着"鉴权在 Rust 那一层"——
+    那条推理只挡得住浏览器，**挡不住本机进程**（8010 上谁连得上就能白嫖 embedding
+    调用，费用面）。而本仓整套身份断言防的正是这个威胁模型。现在与 `/chat` 同款走
+    `_resolve_principal`（同一个开关 `AGENT_REQUIRE_ASSERTION`）。
+    ⚠️ **部署顺序是硬要求**（同 `/review`）：开关在生产 .env 里已经是 1 ⇒ 父仓的
+    `graph_query` 必须先开始随请求发 `X-Agent-Assertion`，顺序反了展示柜会**静默降级**
+    成关键词匹配（不报错，只是没向量了）。
 
     跑在线程池里（纯 Python 点积 + 一次阻塞的 HTTP embedding 调用），并显式传播
     context 以便日志带上 tid。
     """
+    # 返回值这里用不到（本端点只判"是不是可信的内部调用"，不做权限判定），
+    # 但**必须调用**——它才是那道闸；缺断言时它抛 401。
+    _resolve_principal(request, req.uid)
     loop = asyncio.get_running_loop()
     return await _submit_with_context(loop, wordgraph.query_words,
                                       req.q, wordgraph.TOP_K_DEFAULT)
@@ -2676,7 +2687,7 @@ async def health():
 
 
 @app.delete("/checkpoint/{conversation_id}")
-async def checkpoint_delete(conversation_id: str):
+async def checkpoint_delete(conversation_id: str, request: Request, uid: int = 0):
     """删会话时清掉那个会话的 checkpoint（**级联清理**，批 7 的跨仓契约之一半）。
 
     ⚠️ **另一半在父仓** `src/routes/conversation.rs` 的 `DELETE /api/chat/conversations/:id`
@@ -2684,11 +2695,18 @@ async def checkpoint_delete(conversation_id: str):
     调到**，症状是"删了会话、checkpoint 还躺在库里"（`tests/test_checkpoint_cascade.py`
     有一条父仓守卫盯它，`SAUDADE_REQUIRE_PARENT=1` 时父仓不在场就红）。
 
+    **身份（20261020 安全审计 SAU-006）**：这一族此前**一格鉴权都没有**——同文件里
+    `/chat`、`/review`、`/graph/rebuild*` 全都有，只有它裸着，而它做的是**不可逆**的
+    上下文丢失（删掉的那份正文没有任何读取路径）。调用方只有父仓 Rust 一处、它持有
+    `JWT_SECRET` ⇒ 复用现成的服务间断言，不新开一套鉴权（`uid` 是调用方自报的
+    发起人，**身份以签名为准**，见 `_resolve_principal`）。
+
     `deleted` 恒是**"删完读回来确认"**的结果，不是"没抛异常"；`false` 时 `why` 点名是
     哪一条（`no_saver` / `bad_conversation_id` / `still_readable`）。理由见
     `agent/checkpoint.py::delete_thread`——一个恒不生效的删除与真删除**长得一模一样**，
     所以这一格必须是可读的事实。
     """
+    principal = _resolve_principal(request, uid)
     saver = checkpoint.live_saver(_agent)
     if saver is None:
         logger.info("[checkpoint] 级联删除跳过：本进程没挂 saver（conv=%s）", conversation_id)
@@ -2697,7 +2715,8 @@ async def checkpoint_delete(conversation_id: str):
         logger.warning("[checkpoint] 级联删除拒绝：会话 id 非法（%r）", conversation_id)
         return {"deleted": False, "why": "bad_conversation_id"}
     gone = await asyncio.to_thread(checkpoint.delete_thread, saver, conversation_id)
-    logger.info("[checkpoint] 级联删除 conv=%s deleted=%s", conversation_id, gone)
+    logger.info("[checkpoint] 级联删除 conv=%s deleted=%s by=%s",
+                conversation_id, gone, principal.uid)
     return {"deleted": gone, "why": "" if gone else "still_readable"}
 
 
@@ -2707,12 +2726,17 @@ class DropTurnReq(BaseModel):
     空串不算填：没有原文就没法确认"state 里最后那条 user 是不是被丢弃的那一轮"，
     而摘错的代价不可逆 ⇒ 不动手、`why` 回 `no_text`（理由与匹配规则见
     `agent/checkpoint.py::drop_last_user_turn`）。
+
+    `uid` = 发起人（**身份断言核对与日志留痕用**，与 `/graph/rebuild` 同款）：
+    身份以签名为准，这一格只是"调用方说他是谁"，对不上会在 `_resolve_principal`
+    里记一条 WARNING。
     """
     text: str = ""
+    uid: int = Field(default=0, ge=0)
 
 
 @app.post("/checkpoint/{conversation_id}/drop_turn")
-async def checkpoint_drop_turn(conversation_id: str, req: DropTurnReq):
+async def checkpoint_drop_turn(conversation_id: str, req: DropTurnReq, request: Request):
     """把**丢弃那一轮**同步到图自己的 state（批 E 的跨仓契约之一半）。
 
     父仓 `POST /api/chat/discard` 删的是 `chat_history` 里那一轮，而 20261018 之后 agent
@@ -2720,11 +2744,13 @@ async def checkpoint_drop_turn(conversation_id: str, req: DropTurnReq):
     **另一半在父仓** `src/routes/chat.rs::discard_handler`（删除成功之后调它）。
 
     `dropped` 恒是**读回来确认**的结果；`false` 时 `why` 点名是哪一条（`no_text` /
-    `mismatch` 都**不是错误**——它们是"没动手"的如实回执）。三支照 `checkpoint_delete`。
+    `mismatch` 都**不是错误**——它们是"没动手"的如实回执）。三支照 `checkpoint_delete`
+    （含身份那一格：同一次审计的 SAU-006）。
     """
+    principal = _resolve_principal(request, req.uid)
     out = await checkpoint.drop_last_user_turn(_agent, conversation_id, req.text)
-    logger.info("[checkpoint] 丢弃那一轮 conv=%s dropped=%s why=%s",
-                conversation_id, out.get("dropped"), out.get("why"))
+    logger.info("[checkpoint] 丢弃那一轮 conv=%s dropped=%s why=%s by=%s",
+                conversation_id, out.get("dropped"), out.get("why"), principal.uid)
     return out
 
 
