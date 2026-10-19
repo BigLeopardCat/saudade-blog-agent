@@ -50,6 +50,7 @@
 import ast
 import importlib.util
 import sys
+import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -501,11 +502,26 @@ check("（反控）预算给够 ⇒ 同一条路径**不抛**（上一条不是�
                             sleep=lambda d: None, budget=5.0) == 3)
 
 # ⑨c 预算到期之后**不许**再调 setup、也不许解锁（锁根本没拿到）
+# ⚠️ **假钟必须传进去**（20261019 补）：本函数是**唯一**直接调 `_setup_under_lock`、
+# 又必然抢不到锁的调用点 —— 不透传 `now`/`sleep` 的话它按真实钟面跑满整个 `_SETUP_WAIT`
+# （60s × 0.5s 轮询），一个套件白等 60 秒。同一个文件在 `wait_for_setup_lock` 的注里
+# 就写着"不真等 60 秒"，而这里恰恰没摆那个前提。下面那条墙钟判据钉的就是它。
 _c3, _s3 = _FakeConn([False]), _Saver()
+_clock3 = _Clock()
+_t0 = time.monotonic()
 try:
-    C._setup_under_lock(_s3, pool=_FakePool(_c3))
-except RuntimeError:
-    pass
+    # ⚠️ `sleep` **必须是会走字的那个假钟**（`_clock3.sleep`），不能写 `lambda d: None`：
+    # `wait_for_setup_lock` 的判据是 `now() >= deadline`，一个不前进的钟 ⇒ **死循环**。
+    # ⑨b 那两个 `lambda d: None` 之所以没事，是因为那里最终**抢到了**锁、不走预算那条路。
+    C._setup_under_lock(_s3, pool=_FakePool(_c3), now=_clock3.now,
+                        sleep=_clock3.sleep, budget=2.0)
+    _msg3 = ""
+except RuntimeError as e:
+    _msg3 = str(e)
+_dt3 = time.monotonic() - _t0
+check("★ 这一格**不真等**：注入假钟之后整块墙钟 < 5 秒（透传断掉就会退化成真等 60 秒）",
+      _dt3 < 5.0, f"实测 {_dt3:.2f}s（真等的话 ≈60s）")
+check("  且确实抛了（上面那条不是「没抛所以很快」）", bool(_msg3), _msg3[:60])
 check("没抢到锁 ⇒ 一次 setup 都不调、一次 unlock 都不发",
       _s3.calls == 0 and _c3.unlocks == 0, f"setup={_s3.calls} unlock={_c3.unlocks}")
 
