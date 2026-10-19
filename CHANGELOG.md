@@ -16,6 +16,20 @@
 
 ## 20261020
 
+- **实验臂（`GOLDEN_ARM=react`）planner 提示词改装配顺序：静态资产在前、契约在后**
+  （⚠️ **生产臂 `graph` 与线上行为零变更**；本臂是评测臂，且**此改动尚未跑 golden A/B**）。
+  六块叙述资产（人设 / 角色能力 / 立场改写 / 叙述纪律 / 贴纸表 / 收尾规则，合计 **11297 字**，
+  一个字节都不随请求变）此前拼在 planner 契约**后面**，而契约里**逐轮在变**的那几格
+  （`tool_results` / `intent_hints` / `recent_context` / `correction`）落在契约**最末尾**、
+  `user_msg` 是最后一格 ⇒ 那 11297 字整段落在公共前缀的断点**之后**，一次都进不了缓存。
+  离线实测（两个只差 `user_msg` 的相邻用例）：SystemMessage 公共前缀 **62.3% → 100.0%**
+  （`role=admin` 时 66.4% → 100.0%）；两臂**内部口径**也随之对齐——narrator 那条路
+  （`_narrator_prompt` 的 `(_head, _tail)`）早就是"稳定头在前"，只有 planner 是反的。
+  三处方位词跟着改（`_DISCIPLINE_STANCE` 的「本文档前面技能表」、`_CLOSING_RULES` 的
+  「上面的技能表」「上面的工具结果」），**改的是方位词、不是内容**；六块之间的相对顺序
+  一个字没动。新增 `tests/test_react_planner_cache_layout.py` 锁住这条装配（含反控：
+  按旧顺序拼 ⇒ 公共前缀塌到 66.5%）。**提示词字节变更 ⇒ 落地前要 golden A/B。**
+
 - **实验臂（`GOLDEN_ARM=react`）补上决策事件 `planner.native_decision`**（⚠️ **生产臂
   `graph` 与线上行为零变更**，改的是**读 trace 的判据**）。此前该臂**一条决策事件都不记**，
   于是"这一轮模型点了什么、填了几条意图"读不出来——查 `planner.task_auto` 残差
