@@ -948,8 +948,6 @@ def _has_frames(messages: list) -> bool:
 # 解法与 intent_hints 同构：系统把锚点确定性抽出来注入（给事实、不夺决策——用户
 # 到底指哪篇仍由 planner 判断），planner 不必为了"知道是哪篇"再跑检索。
 _DOC_TITLE_RE = re.compile(r"《([^》\n]{2,60})》")
-# 跨轮执行记忆的动作行（Rust render_exec_row 的产物，"读取文章 19《标题》"）
-_DOC_READ_ROW_RE = re.compile(r"读取文章\s*(\d+)\s*《([^》\n]{1,60})》")
 # 文章链接 = **唯一被认的邻域 id 形态**。裸 `id=N` 已于 20260925 摘除：它不具名，
 # 邻域里任何一个 id 都能被认成文章 id——线上实测把**标签 id** 认成了文章 id
 # （会话摘要写「为文章《Python asyncio 异步并发》添加…同**名一级标签（id=19）**」
@@ -1107,13 +1105,40 @@ def _linked_doc_id(text: str, tm) -> str:
     return ""
 
 
-def _doc_anchors(messages: list, limit: int = 6, budget: int = 700) -> str:
+def _doc_read_rows(exec_rows: list | None) -> list[tuple[str, str]]:
+    """`execution_rows`（Rust 的回执原文）→ 文章读取行 `[(标题, id)]`（20261020）。
+
+    三条边界都在这里，且都是**结构**判的：只认 `get_article_detail`；只认
+    `doc_type ∈ {None, note}`（留言/说说/公告是另一个 id 命名空间，`doc_type` 缺席
+    = 老回执 = 这件工具的默认档，四个源见 `tools.notes.DOC_TYPE_CN`）；`payload`
+    为 null（20260927 之前的存量行）拿不到结构 ⇒ 丢掉，**不回落去解析渲染文本**。
+    顺序是旧→新：调用方按"最近的一次最后 `_add`"处理，同篇合并时它带来的全称能留下。
+    """
+    out: list[tuple[str, str]] = []
+    for row in reversed(exec_rows or []):
+        payload = row.get("payload") if isinstance(row, dict) else None
+        if not isinstance(payload, dict) or payload.get("tool") != "get_article_detail":
+            continue
+        args = payload.get("args")
+        args = args if isinstance(args, dict) else {}
+        if args.get("doc_type") not in (None, "note"):
+            continue
+        title = str(payload.get("title") or "").strip()
+        aid = str(args.get("article_id") or "").strip()
+        if title and aid:
+            out.append((title, aid))
+    return out
+
+
+def _doc_anchors(messages: list, limit: int = 6, budget: int = 700,
+                 exec_rows: list | None = None) -> str:
     """本会话已点名文档清单（《标题》+ id + 是否已读全文）——跨轮指代的确定性锚点。
 
-    来源 = 全部窗口消息（[System:…] 的 recent_executions 行 + 20 条人机历史，
-    含工具帧之外的正文），**由近及远**扫描：最近被点到的排前面（越近越可能是
-    用户在说的那篇）。同一篇被正文简称与执行记忆全称各提一次时并成一行（简称
-    留作别名），免得 planner 把一篇数成两篇。
+    来源 = 全部窗口消息（[System:…] 的台账块 + 20 条人机历史，含工具帧之外的正文），
+    **由近及远**扫描：最近被点到的排前面（越近越可能是用户在说的那篇）。同一篇被
+    正文简称与执行记忆全称各提一次时并成一行（简称留作别名），免得 planner 把一篇
+    数成两篇。**跨轮读取事实另从结构来**（`exec_rows`，Rust 的回执原文，20261020
+    起）——不再对注入的渲染文本跑正则，理由见下面 `<结构那份>` 那一段。
 
     **进清单的门（20260925 收紧）：一条《…》要么带**有来源的 id**，要么能解析成
     站内文章；两者都不满足就**丢掉**。** 起因是线上实测「假文章污染」：
@@ -1133,11 +1158,16 @@ def _doc_anchors(messages: list, limit: int = 6, budget: int = 700) -> str:
       `26《标题》`（实体摘要格式），与文章读取行同形 ⇒ 被当成了文档。
     - 语料索引未就绪时（解析全返回 ""）不再逐条降级成假象，改为在块尾如实注记。
 
-    **id 只有两种来源**：跨轮执行记忆的 `读取文章 N《标题》` 行（系统写的、文章
-    命名空间，**最高可信**），与结构性绑定的 `/article/N` 链接（自由文本里的，
-    可能本身是叙述幻觉 ⇒ 语料能唯一定位时以语料为准，链接 id 只用于草稿这类
-    语料里没有的篇目）。两者都没有、语料也解析不出的标题会被丢掉——当前消息
-    本身永远全文可见，真要找它还有规则 4③ 的 list_notes 通道。
+    **id 只有两种来源**：跨轮执行记忆的读取回执（系统的 `exec_rows`：文章命名空间，
+    **最高可信**），与结构性绑定的 `/article/N` 链接（自由文本里的，可能本身是叙述
+    幻觉 ⇒ 语料能唯一定位时以语料为准，链接 id 只用于草稿这类语料里没有的篇目）。
+    两者都没有、语料也解析不出的标题会被丢掉——当前消息本身永远全文可见，真要找它
+    还有规则 4③ 的 list_notes 通道。
+
+    `<结构那份>`（20261020）：读取事实从 `exec_rows` 取，每一格都是类型化的
+    （`tool` / `args.article_id` / `title`）。此前对注入的渲染行跑正则
+    `读取文章 N《标题》`——措辞一改就静默断。`payload` 为 null（20260927 之前的
+    存量回执）**不进锚点**：拿不到结构就如实少一行，不为历史包袱留第二条抠文本的路。
     """
     rows: list[tuple[str, str, bool, str]] = []   # (标题, id 或 "", 是否已读全文, 简称)
 
@@ -1173,8 +1203,6 @@ def _doc_anchors(messages: list, limit: int = 6, budget: int = 700) -> str:
         text = _msg_text(m) or ""
         if not text:
             continue
-        for dm in _DOC_READ_ROW_RE.finditer(text):        # 跨轮执行记忆的读取行
-            _add(dm.group(2), dm.group(1), True)
         for tm in _DOC_TITLE_RE.finditer(text):
             # 邻域只认 `/article/N`（20260925：裸 `id=N` 不具名，会把标签/通知/留言
             # 的 id 当文章 id）。标题**之内**也要看（《[标题](/article/13)》），
@@ -1182,6 +1210,12 @@ def _doc_anchors(messages: list, limit: int = 6, budget: int = 700) -> str:
             # 邻域 id 只认**结构性绑定**（见 _linked_doc_id）：裸 `id=N` 不具名，
             # 48 字窗口内的链接也不一定属于本篇（跨句就会记错）。
             _add(_clean_title(tm.group(1)), _linked_doc_id(text, tm), False)
+
+    # 跨轮读取事实：**结构那份**（Rust `execution_rows`）。放在消息循环**之后** ⇒
+    # 优先级最低，与"台账块住在 messages[0]、由近及远扫到最后才轮到它"的位次等价
+    # （同一篇在正文与台账里各出现一次时，合并结果逐字不变）。
+    for _t, _aid in _doc_read_rows(exec_rows):
+        _add(_t, _aid, True)
 
     if not rows:
         return "（本会话还没有点名的文档）"

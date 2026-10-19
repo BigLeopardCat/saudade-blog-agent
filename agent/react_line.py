@@ -81,6 +81,7 @@ from agent.deterministic_plan import _doc_title, _intent_done, _scan_action_inte
 from agent.entity_digest import receipt_digest
 from agent.frame_contract import executed_specs
 from agent.graph import _VERDICT_PASS, _check_spec, _grant_covers, _tool_args, _tool_name
+from agent.workflow_model import ToolCall
 
 logger = logging.getLogger(__name__)
 
@@ -119,14 +120,16 @@ def attempted_specs(ledger: RunLedger) -> list[str]:
     PASS 与 BLOCK **都算**：生产侧的口径是"上过计划的动作（哪怕被拒）spec 都进了
     `executed`"，被拒过再推它重试一次是另一种病（同一个动作原地打转）。同意闸上
     攒下的 `ledger.pending` **不算**——那些一次都没执行（见 `RunLedger.pending`）。
+
+    20261019 批 G6 起"同构"由 `ToolCall` 保证（此前是本模块自己 `json.dumps` 拼串，
+    靠这句话守着）：生产那十余处写端与本处走的是同一个 `__new__`。
     """
     out: list[str] = []
     for r in (*ledger.receipts, *ledger.blocked):
         try:
-            args = json.dumps(r.get("args") or {}, ensure_ascii=False)
+            out.append(ToolCall(str(r.get("tool") or ""), r.get("args") or {}))
         except Exception:  # noqa: BLE001 —— 参数里有不可序列化的东西：降级成空集
-            args = "{}"
-        out.append(f"{r.get('tool') or ''}({args})")
+            out.append(f"{r.get('tool') or ''}({{}})")
     return out
 
 
@@ -220,7 +223,8 @@ class RunLedger:
 
 
 def _verdict_of(name: str, args: dict, args_ok: bool, text: str, workflow: str,
-                kind: str, meta: dict, ledger: RunLedger) -> tuple[str, str]:
+                kind: str, meta: dict, ledger: RunLedger,
+                data: object = None) -> tuple[str, str]:
     """跑生产 checker、记台账、返回 `(给模型看的那一行回执, verdict)`。"""
     verdict, reason = _check_spec(name, args, args_ok, text, workflow, kind, meta)
     receipt = {"skill": workflow, "tool": name,
@@ -240,11 +244,12 @@ def _verdict_of(name: str, args: dict, args_ok: bool, text: str, workflow: str,
         cmd = (meta or {}).get("cmd")
         if isinstance(cmd, dict):
             receipt["cmd"] = cmd
-        digest = receipt_digest(name, text)
+        digest = receipt_digest(name, text, meta=meta, data=data)
         if digest:
             receipt["digest"] = digest
         if name == "get_article_detail":
-            receipt["title"] = _doc_title(text)
+            # 标题走**结构**（批 G3）：`data` 是工具返回的结构本体，没有才回落文本。
+            receipt["title"] = _doc_title(data if data is not None else text)
         ledger.receipts.append(receipt)
         return f"{RECEIPT_HEAD} {name} 已执行，结果已验收（{kind}）。", verdict
     receipt["reason"] = reason
@@ -390,7 +395,7 @@ class WorkflowExecutor:
         for spec in specs:
             name = _tool_name(spec)
             args, args_ok = _tool_args(spec)
-            text, kind, meta = "", "ok", {}
+            text, kind, meta, data = "", "ok", {}, None
             if args_ok:
                 args, ref_err = resolve_args(args, tool_data)
                 if ref_err:
@@ -409,19 +414,21 @@ class WorkflowExecutor:
                 text = text or f"__ERROR__: 工具 {name} 不在本轮可执行清单里"
             elif not decision.allowed and authz.must_enforce(decision, self.principal):
                 text = authz.denial_frame(decision, self.principal)
+                meta = getattr(text, "meta", None) or {}   # 原因码住在这一格（批 G4）
                 logger.info("[react_line] 权限拒绝，不执行: %s → %s", name, decision)
             else:
                 try:
                     res = fn(**args)
                     text, kind = str(res), str(getattr(res, "kind", "ok") or "ok")
                     meta = getattr(res, "meta", None) or {}
+                    data = getattr(res, "data", None)
                 except Exception as e:  # noqa: BLE001 —— 异常必须变成数据（见文件头注）
                     text = f"__ERROR__ {type(e).__name__}: {e}"
                     logger.info("[react_line] 工具 %s 抛错：%s", name, e)
             tool_data.append({"tool": name, "result": text[:2000]})
             outs.append(f"[{name}] {text}")
             line, verdict = _verdict_of(name, args, args_ok, text, workflow, kind, meta,
-                                        self.ledger)
+                                        self.ledger, data)
             outs.append(line)
             # `line`（那行"【内部回执】…"）**单独留一格**：它要跟着这一条调用走到模型
             # 窗口里去（`react_arm._expand` 按 `tool_call_id` 取），而**不能**混进
