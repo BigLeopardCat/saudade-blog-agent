@@ -8,7 +8,7 @@
     "I",
     "W"
   ],
-  "total": 754,
+  "total": 753,
   "by_file": {
     "agent/action_text.py": 2,
     "agent/authz.py": 5,
@@ -72,7 +72,7 @@
     "tests/test_admin_write.py": 9,
     "tests/test_arm_capability.py": 2,
     "tests/test_artifact_retention.py": 1,
-    "tests/test_authz.py": 8,
+    "tests/test_authz.py": 7,
     "tests/test_block_reasons.py": 1,
     "tests/test_blog_api_base.py": 1,
     "tests/test_cancel.py": 9,

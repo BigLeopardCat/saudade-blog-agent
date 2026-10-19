@@ -115,8 +115,11 @@ check("夜间导出了 SAUDADE_REQUIRE_PARENT=1（父仓守卫跑不到 ⇒ 红�
       re.search(r"^\s*export\s+SAUDADE_REQUIRE_PARENT=1\s*$", _night, re.M) is not None)
 
 print("\n④ run_all.py 的枚举规则：按磁盘，不写名单")
+# `conftest.py`（20261020 双轨起步起）与 `run_all.py` 同列例外：pytest 的测试现场，
+# 只有装配逻辑、没有任何判据——枚进去会把总数虚加一格。此例外与 `run_all.suites()`
+# 和 `test_tests_dir_shape.py::suites_on_disk` 三处同源，改一处必须同步另两处。
 _disk = {p.name for p in sorted((ROOT / "tests").glob("*.py"))
-         if not p.name.startswith("_") and p.name != "run_all.py"}
+         if not p.name.startswith("_") and p.name not in ("run_all.py", "conftest.py")}
 _enum = {p.name for p in run_all.suites()}
 check("枚举 == 磁盘（漏在磁盘上的文件就是「从不运行」的那种漏）",
       _disk == _enum, f"只在磁盘：{sorted(_disk - _enum)}；只在枚举：{sorted(_enum - _disk)}")

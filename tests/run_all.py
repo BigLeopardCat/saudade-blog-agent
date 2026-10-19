@@ -147,7 +147,10 @@ def suites(keyword: str = "") -> list[pathlib.Path]:
     """按磁盘枚举要跑的套件（不写名单）。"""
     out = []
     for p in sorted(TESTS.glob("*.py")):
-        if p.name.startswith("_") or p.name == pathlib.Path(__file__).name:
+        # `conftest.py`（20261020 批 1 起）是 pytest 的测试现场（环境钉子/收集名单），
+        # 不是套件——跑它只有模块级装配、没有任何判据，混进枚举只会把总数虚加一格。
+        if (p.name.startswith("_") or p.name == pathlib.Path(__file__).name
+                or p.name == "conftest.py"):
             continue
         if keyword and keyword not in p.name:
             continue

@@ -171,6 +171,14 @@
     "c": 38,
     "lines": 170
   },
+  "tests/test_authz.py::test_authz": {
+    "c": 202,
+    "lines": 1222
+  },
+  "tests/test_capability_denial.py::test_capability_denial": {
+    "c": 29,
+    "lines": 310
+  },
   "tests/test_judge_offline.py::main": {
     "c": 75,
     "lines": 205
@@ -186,6 +194,10 @@
   "tests/test_retention_manifest.py::main": {
     "c": 41,
     "lines": 178
+  },
+  "tests/test_settings_surface.py::test_settings_surface": {
+    "c": 37,
+    "lines": 141
   },
   "tests/test_trace_retention.py::main": {
     "c": 48,
