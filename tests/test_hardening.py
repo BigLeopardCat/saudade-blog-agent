@@ -13,9 +13,14 @@
   ④ 并发闸：拿满槽位后第 N+1 个请求拿到 False（而不是静默排队），归还后可再拿
 """
 import asyncio
+import base64
+import hashlib
+import hmac
 import inspect
+import json
 import ssl
 import sys
+import time
 from pathlib import Path
 
 # ── 仓根（20260924：测试统一搬进 tests/）───────────────────────────────────────
@@ -40,6 +45,38 @@ def eq(got, exp, name):
     第一版写成 check(got == exp, name) 就变成了"拿名字当条件"——name 是非空字符串恒真，
     六条断言全是空转的绿（自己出过，留个记号）。"""
     check(name, got == exp, {"got": got, "exp": exp})
+
+
+# ── 内部端点身份判据的**共用夹具**（20261020 收口）────────────────────────────
+# 服务间断言（HS256、`aud=agent`）的测试签名器与最小请求壳。此前本文件里 `sign()` 被
+# 各函数**各抄一份**（`test_user_assertion` / `test_review_endpoint_hardening`），
+# 两份的形参还各不相同（一份带 `aud`、一份带 `role`）——"两份会漂的规则"正是本仓
+# 反复吃的亏，而这一批又多了三处端点要判 ⇒ 收成一处。
+#
+# ⚠️ 三条纪律（前两条是 20260917 那次真踩出来的）：
+#   · **测试自己钉密钥，不读环境**：CI 没有 .env，读环境值必然"本机绿 CI 红"或反过来；
+#   · 断言**代码默认值**（`Settings.model_fields[...].default`）而不是运行时配置，同理；
+#   · 用完**还原**（`settings.jwt_secret` / `settings.agent_require_assertion`）。
+TEST_SECRET = "ci-test-secret-不参与生产"
+
+
+class _Req:
+    """只实现 `_resolve_principal` 用到的 `headers.get`（其余字段它不碰）。"""
+
+    def __init__(self, headers=None):
+        self.headers = headers or {}
+
+
+def sign_assertion(sub, role=None, aud="agent", ttl=60, secret=TEST_SECRET):
+    """签一条与 Rust `auth_jwt::create_agent_assertion` 同形状的断言（HS256）。"""
+    b = lambda x: base64.urlsafe_b64encode(x).rstrip(b"=")   # noqa: E731
+    h = b(json.dumps({"alg": "HS256", "typ": "JWT"}).encode())
+    payload = {"sub": str(sub), "aud": aud, "exp": int(time.time()) + ttl}
+    if role:
+        payload["role"] = role
+    p = b(json.dumps(payload).encode())
+    sig = hmac.new(secret.encode(), h + b"." + p, hashlib.sha256).digest()
+    return (h + b"." + p + b"." + b(sig)).decode()
 
 
 # ────────────────────────────────── ① TLS 校验
@@ -352,25 +389,13 @@ def test_history_model_and_review_limits():
 def test_user_assertion():
     """服务间身份断言（20260917）：Rust 签名 → agent 验签并覆盖 body 里的 user_id。
     这条是外部审计里唯一"改了就把根拔掉"的项：身份不再依赖"只听回环"这个部署假设。"""
-    import base64 as b64
-    import hashlib as hl
-    import hmac as hm
-    import json as js
-    import time as tm
-
     import server
     from config.settings import settings
 
-    # ⚠️ **不依赖环境里的 JWT_SECRET**：CI 没有 .env（这一版第一次就是因此在 CI 红的——
-    # 我断言了"密钥已配置"，那是在测环境不是测代码）。测试自己钉一个密钥、验完还原。
-    TEST_SECRET = "ci-test-secret-不参与生产"
+    # 密钥与签名器来自本模块顶上的共用夹具（`sign_assertion` / `TEST_SECRET`）——
+    # 理由（"不依赖环境里的 JWT_SECRET"）写在那一块的头注里。
+    sign = sign_assertion
     orig_secret = settings.jwt_secret
-
-    def sign(sub, aud="agent", ttl=60, secret=TEST_SECRET):
-        b = lambda x: b64.urlsafe_b64encode(x).rstrip(b"=")
-        h = b(js.dumps({"alg": "HS256", "typ": "JWT"}).encode())
-        p = b(js.dumps({"sub": str(sub), "aud": aud, "exp": int(tm.time()) + ttl}).encode())
-        return (h + b"." + p + b"." + b(hm.new(secret.encode(), h + b"." + p, hl.sha256).digest())).decode()
 
     try:
         # fail-closed：密钥为空时一律不通过（没密钥就不该信任何断言）
@@ -391,8 +416,17 @@ def test_user_assertion():
         # 拿 settings 的当前值当期望会让"本机绿、CI 红"或反过来——同一条测试第二次犯的同一个错。
         from config.settings import Settings
         dflt = Settings.model_fields["agent_require_assertion"].default
-        check("代码默认不强制断言（滚动上线的前提：Rust 未发头时不能把在途请求打成 401）",
-              dflt is False, dflt)
+        # 20261019 翻转（安全审计 SAU-005）：出厂默认**强制**断言。旧默认 False 的理由
+        # 是滚动上线（Rust 未发头时不能把在途请求打成 401），那个前提今天不成立
+        # （Rust 早已发头、生产 .env 本来就是 1）——而 False 只在"克隆即部署"的人手里
+        # 生效，他们拿到的正是最不安全的那一档。要回退必须显式写 0，且回退后那个身份
+        # 仍然写不进私有数据（`authz.must_enforce`，见 tests/test_authz.py ⑪）。
+        check("代码默认强制断言（默认安全；要回退得显式写 0）", dflt is True, dflt)
+        # 出厂档必须同时进 `_PINNED`（同 `AGENT_FASTPATH` / `AGENT_EVIDENCE` 那条纪律：
+        # 离线套件对档位是瞎的，谁在 shell 里 export 过 0，整套就按另一档判）。
+        _runner = (Path(__file__).resolve().parent.parent / "tests" / "run_all.py").read_text(
+            encoding="utf-8")
+        check("出厂档进了 `tests/run_all.py::_PINNED`", '"AGENT_REQUIRE_ASSERTION": "1"' in _runner)
     finally:
         settings.jwt_secret = orig_secret
 
@@ -548,33 +582,15 @@ def test_review_endpoint_hardening():
 
     ⚠️ 与 `test_user_assertion` 同款纪律：**测试自己钉开关与密钥，不读环境**
     （本机 .env 是 1、CI 无 .env ⇒ 读环境值必然本机绿 CI 红，或者反过来）。"""
-    import base64 as b64
-    import hashlib as hl
-    import hmac as hm
-    import json as js
-    import time as tm
     from unittest.mock import patch
 
     import fastapi
     import server
     from config.settings import settings
 
-    class _Req:
-        """只实现 `_resolve_principal` 用到的 `headers.get`。"""
-        def __init__(self, headers=None):
-            self.headers = headers or {}
-
-    TEST_SECRET = "ci-test-secret-不参与生产"
+    # 签名器与请求壳来自本模块顶上的共用夹具（`sign_assertion` / `_Req` / `TEST_SECRET`）。
+    sign = sign_assertion
     orig_secret, orig_flag = settings.jwt_secret, settings.agent_require_assertion
-
-    def sign(sub, role=None, ttl=60):
-        b = lambda x: b64.urlsafe_b64encode(x).rstrip(b"=")
-        h = b(js.dumps({"alg": "HS256", "typ": "JWT"}).encode())
-        payload = {"sub": str(sub), "aud": "agent", "exp": int(tm.time()) + ttl}
-        if role:
-            payload["role"] = role
-        p = b(js.dumps(payload).encode())
-        return (h + b"." + p + b"." + b(hm.new(TEST_SECRET.encode(), h + b"." + p, hl.sha256).digest())).decode()
 
     check("ReviewRequest 收 uid（老调用方不传仍是 0）",
           server.ReviewRequest(content="x").uid == 0
@@ -590,7 +606,8 @@ def test_review_endpoint_hardening():
     with patch("agent.moderator.review",
                lambda t, on_usage=None:
                    seen.append(t) or {"verdict": "pass", "reason": ""}):
-        # ① 开关关（代码默认）= 滚动期的兼容行为：无头照常审核，只记 WARNING
+        # ① 显式关掉开关 = 滚动期的兼容行为（20261019 起这**不是**代码默认值了，
+        #    默认是 1；这一格测的是"谁把开关拨回 0 会怎样"）：无头照常审核，只记 WARNING
         settings.agent_require_assertion = False
         out = server.review_message(_Req(), server.ReviewRequest(content="你好", uid=721))
         check("开关关 + 无断言 → 按 body uid 照常审核（滚动期行为不变）",
@@ -638,6 +655,106 @@ def test_review_endpoint_hardening():
           server._review_slots.acquire(blocking=False) and not server._review_slots.release())
 
 
+def test_internal_endpoint_identity():
+    """内部端点的身份闸（20261020 安全审计 SAU-006 / SAU-018）。
+
+    **判什么**：三处只给内部调用方用的端点此前**一格鉴权都没有**——
+      · `DELETE /checkpoint/{id}`：删一个会话的 checkpoint，**不可逆**的上下文丢失；
+      · `POST /checkpoint/{id}/drop_turn`：把"丢弃那一轮"同步进图自己的 state；
+      · `POST /graph/query`：向量检索，**费用面**（一次真 embedding 调用，谁连得上就白嫖）。
+    同文件里 `/chat`、`/review`、`/graph/rebuild*` 全都有身份，只有这三处裸着
+    ⇒ 审计点的是「**鉴权纪律不一致**」。修法**不新开一套**：复用现成的服务间断言
+    （调用方只有父仓 Rust 一处，它持有 `JWT_SECRET`）。
+
+    **判据形状**（本仓纪律「正控不红不算数」）：
+      · 开关开 + 无头 ⇒ 401（三处各一遍）——**判据本体**；
+      · 开关开 + 头在场但**用别的密钥签** ⇒ 401（证明真在**验签**，不是只看有没有这个头）；
+      · 开关开 + 合法断言 ⇒ 放行并走到各自的机制分支（证明这道闸**不是恒 401**）；
+      · 开关**关** + 无头 ⇒ 放行（滚动期的回退档）——**正控**：没有这一条，
+        上面那几条"恒 401"的实现也能全绿。
+    """
+    from unittest.mock import patch
+
+    import fastapi
+    import server
+    from config.settings import settings
+
+    # 签名器 / 请求壳 / 密钥来自本模块顶上的共用夹具。
+    orig_secret, orig_flag = settings.jwt_secret, settings.agent_require_assertion
+    orig_agent = server._agent
+
+    def _hit(req, uid=1):
+        """三处端点各调一次（**不碰库、不碰网络**：`_agent=None` ⇒ 前两处回 `no_saver`，
+        `query_words` 被桩掉 ⇒ 第三处不出网）。返回 `[(名, 结果或异常)]`。"""
+        out = []
+        for name, call in (
+            ("DELETE /checkpoint/{id}",
+             lambda: asyncio.run(server.checkpoint_delete("7", req, uid))),
+            ("POST /checkpoint/{id}/drop_turn",
+             lambda: asyncio.run(server.checkpoint_drop_turn(
+                 "7", server.DropTurnReq(text="那一句", uid=uid), req))),
+            ("POST /graph/query",
+             lambda: asyncio.run(server.graph_query(
+                 server.GraphQueryRequest(q="月", uid=uid), req))),
+        ):
+            try:
+                out.append((name, call()))
+            except Exception as e:      # 只该抛 HTTPException；别的异常说明夹具不对
+                out.append((name, e))
+        return out
+
+    def _all_401(rows):
+        return all(isinstance(r, fastapi.HTTPException) and r.status_code == 401
+                   for _, r in rows)
+
+    try:
+        settings.jwt_secret = TEST_SECRET
+        server._agent = None                      # 前两处的桩：不连库
+        with patch.object(server.wordgraph, "query_words",
+                          lambda *a, **kw: {"ok": False, "reason": "identity_test"}):
+            # ① 生产档（开关开）+ 无头 ⇒ 三处全部 401
+            settings.agent_require_assertion = True
+            rows = _hit(_Req())
+            for name, r in rows:
+                check(f"{name}：无断言 ⇒ 401（此前这一处一格鉴权都没有）",
+                      isinstance(r, fastapi.HTTPException) and r.status_code == 401,
+                      f"{type(r).__name__}: {r}")
+
+            # ② 头在场但**验签不过** ⇒ 仍然 401（否则"只查有没有这个头"也能过 ①）
+            bad = _hit(_Req({server._ASSERTION_HEADER: sign_assertion(721, secret="别的密钥")}))
+            check("头在场但签名是别的密钥签的 ⇒ 三处仍然 401（真验签，不是查在场）",
+                  _all_401(bad), bad)
+
+            # ③ 合法断言 ⇒ 放行，并进到各自的机制分支（闸**不是恒 401**）
+            good = _hit(_Req({server._ASSERTION_HEADER: sign_assertion(721, role="user")}))
+            check("合法断言 ⇒ 三处全部放行（进到各自的机制分支）",
+                  all(not isinstance(r, Exception) for _, r in good), good)
+            check("（对照）前两处放行后走到的是**真机制**：`_agent=None` ⇒ 如实回 `no_saver`",
+                  all(r.get("why") == "no_saver" for n, r in good if n != "POST /graph/query"),
+                  good)
+
+            # ④ 正控：开关**关** + 无头 ⇒ 放行（滚动期的回退档，行为与改造前一致）
+            settings.agent_require_assertion = False
+            rollback = _hit(_Req())
+            check("（正控）开关关 + 无头 ⇒ 三处照旧放行（回退档；没有这一条，"
+                  "上面几条'恒 401'的实现也能全绿）",
+                  all(not isinstance(r, Exception) for _, r in rollback), rollback)
+
+        # ⑤ 接线锁：三处**都走**同一个 `_resolve_principal`，且 uid 来自各自请求
+        # （`uid` 只是"调用方说他是谁"，身份以签名为准）。锚在函数体上——挪走这一行
+        # 或换一套鉴权都会当场红。
+        for fn, arg in ((server.checkpoint_delete, "uid"),
+                        (server.checkpoint_drop_turn, "req.uid"),
+                        (server.graph_query, "req.uid")):
+            src = inspect.getsource(fn)
+            check(f"`{fn.__name__}` 走 `_resolve_principal(request, {arg})`（不新开一套鉴权）",
+                  f"_resolve_principal(request, {arg})" in src, fn.__name__)
+    finally:
+        settings.jwt_secret = orig_secret
+        settings.agent_require_assertion = orig_flag
+        server._agent = orig_agent
+
+
 def main():
     for fn in (test_tls_verification_on, test_request_limits,
                test_body_limit_middleware, test_stream_slots,
@@ -646,7 +763,8 @@ def main():
                test_rag_unavailable_vs_empty,
                test_client_ctx_field_sanitizing,
                test_weather_location_shape_gate,
-               test_review_endpoint_hardening):
+               test_review_endpoint_hardening,
+               test_internal_endpoint_identity):
         print(f"\n── {fn.__name__} ──")
         fn()
     if FAILS:

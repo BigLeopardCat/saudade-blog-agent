@@ -26,8 +26,9 @@
     `convergence_verdict` 的对照方（模型的原始 `tool_calls`）同源，错一条 ⇒ 无进展判据
     恒不触发（症状是"同一个动作原地打转到撞预算"，报告里看着像模型不听话）；
   · **三条收敛判据**：预算（入口相）/ 无进展（出口相）/ 意图纠偏（只此一次）；
-  · **权限闸**（P1，20261004）：判据字面与 `graph.execute_node` **同一条**
-    （`not allowed and authz.enforcing(scope)`），被拒的调用**也记进台账**。
+  · **权限闸**（P1，20261004）：判据与 `graph.execute_node` **同一条**
+    （`not allowed and authz.must_enforce(decision, principal)`，20261019 起从
+    `enforcing(scope)` 换来），被拒的调用**也记进台账**。
 
 ⚠️ 这里**没有假模型**：本文件不再跑循环。循环级用例（含假模型）在 `test_react_arm.py`，
 那是"接线"那一层；"模型会不会用工具"只有真链路的 A/B
@@ -67,9 +68,13 @@ def check(desc: str, cond: bool, detail: str = "") -> None:
 
 
 def authz_deny(principal, tool: str) -> bool:
-    """这个身份调这个工具**会不会被闸拦下**（判据字面与 `graph.execute_node` 同一条）。"""
+    """这个身份调这个工具**会不会被闸拦下**（判据与 `graph.execute_node` 同一条）。
+
+    20261019 起是 `must_enforce(decision, principal)` 而不是 `enforcing(decision.scope)`：
+    "这一次拦不拦"多看一眼这次是谁在调（未验成的身份不进灰度，见 tests/test_authz.py ⑪）。
+    """
     d = authz.check(principal, tool)
-    return not d.allowed and authz.enforcing(d.scope)
+    return not d.allowed and authz.must_enforce(d, principal)
 
 
 def _call(name: str, **args) -> AIMessage:
