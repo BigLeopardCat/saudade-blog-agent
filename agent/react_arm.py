@@ -1694,9 +1694,20 @@ def _plan_of(tool_calls: list, role: str | None) -> dict:
         return {}
     if len(plans) == 1:
         out = plans[0]
+        # 这一行抄的是生产 `_decide_instantiate` 紧随 `instantiate_plan` 的那一句
+        # （`plan_obj["params"] = c.params`），**它不是可选的**：`_finalize_dedupe` 的
+        # 字面路径修正直接下标这一格，而 `instantiate_plan` 的产物里没有它 ⇒
+        # 「navigate 技能 + 原话里带 / 路径」的用例整轮打成 `__ERROR__`（nav_nonexistent
+        # 全量实测 3/3：空回复、error='params'）。生产 20260922 在收尾路径上踩过同一个
+        # 坑（见 `_decide_write_guard` 那处 refusal 为什么必须 return），治法就是这一行。
+        out["params"] = dict(calls[0]["params"])
     else:
         out = {"workflow": "|".join(str(p.get("workflow") or "") for p in plans),
                "tools": [t for p in plans for t in (p.get("tools") or [])],
                "note": "", "reply": "", "status": ""}
+        # 多调用那一支是本臂的容差（生产 `parallel_tool_calls=False` 恒一条）⇒ 没有
+        # "这一份计划的参数"可言。给空表、不拿第一条的顶替：宁可"没有"显式，也不编一个
+        # 看起来像真的（该分支的 `workflow` 是 `a|b` 形状，字面路径修正不会命中）。
+        out["params"] = {}
     out["calls"] = calls
     return out
