@@ -36,7 +36,16 @@ import _ctx_src  # noqa: E402  （`_` 开头 ⇒ 不被 run_all 当套件收）
 from agent import adminops_confirm as _confirm  # noqa: E402
 from agent import adminops_noop as _noop  # noqa: E402
 from agent import adminops_tags as _tags  # noqa: E402
+from config.settings import settings as _settings  # noqa: E402
 import tools.base as base  # noqa: E402
+
+# ── 密钥桩（20261019，提到文件顶部）─────────────────────────────────────
+# 这里的写通道走 `_admin_request` ⇒ `_sign_local_jwt` 要一把非空密钥；CI 没有 `.env`，
+# `settings.jwt_secret` 默认空串，而 20261019 起**空密钥不许签**（SAU-012）。
+# 此前文件末尾那段弹窗矩阵才临时打桩，前面各节默认"本机 `.env` 里有产线密钥"——
+# 那正是套件头注点名不许继承的运维取值。桩值不取环境值：判据的前提自己摆。
+_SAVED_SECRET_TOP = _settings.jwt_secret
+_settings.jwt_secret = "test-secret-for-confirm-tokens"
 
 FAILS: list[str] = []
 
@@ -1611,6 +1620,8 @@ try:
 finally:
     _settings.jwt_secret = _saved_secret
 
+
+_settings.jwt_secret = _SAVED_SECRET_TOP   # 收尾：还原顶部那次桩
 
 print("\n" + ("=== 全部通过 ===" if not FAILS else f"=== {len(FAILS)} 项失败 ==="))
 for f in FAILS:

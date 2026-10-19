@@ -50,7 +50,7 @@ from utils.logging import get_trace_id
 
 # `__all__` = 本模块**所有不以 `_` 开头**的模块级名字（社区惯例，不留例外；
 # `tests/test_module_exports.py` 按这条规则机械判着，漂了就红）。
-__all__ = ["logger", "DEVICE_SERVICE_URL", "JWT_SECRET", "list_devices", "device_oled_display"]
+__all__ = ["logger", "DEVICE_SERVICE_URL", "list_devices", "device_oled_display"]
 
 logger = logging.getLogger(__name__)
 
@@ -61,7 +61,19 @@ logger = logging.getLogger(__name__)
 
 # 从 settings 读取（模块顶部已 import，见那里的说明）
 DEVICE_SERVICE_URL = _settings.device_service_url
-JWT_SECRET = _settings.jwt_secret
+
+
+def _jwt_secret() -> str:
+    """当前配置里的 HS256 密钥。
+
+    **调用时取，不是导入时快照**（20261019）：此前这里是 `JWT_SECRET = _settings.jwt_secret`
+    这样一个模块级常量，而套件按既有纪律打的是 `settings.jwt_secret` 的键桩
+    （见 `tests/test_admin_write.py` 头部）——桩打在一个地方、签名读的是另一个地方，
+    桩**静默不生效**。改成函数后两边同源，桩就是真的。
+    空串的处置在两条签名路径各自的调用点（`_sign_user_jwt` / `_sign_local_jwt`），
+    这里只管取。
+    """
+    return _settings.jwt_secret
 
 # 显示指令幂等去重：同一用户短时间内相同内容的重复下发直接跳过。
 # 场景：多轮重复调用（planner 重试/多轮规划） / 客户端重试 / MQTT QoS1
@@ -85,9 +97,18 @@ _last_display_lock = threading.Lock()
 
 def _sign_user_jwt(user_id: int) -> str:
     """用与博客相同的 JWT_SECRET 签发 HS256 JWT（sub=user_id，5 分钟有效），
-    供 device-service 鉴权与设备归属校验（用户只能操作自己的设备）。"""
+    供 device-service 鉴权与设备归属校验（用户只能操作自己的设备）。
+
+    空密钥**不许签**（20261019 安全审计 SAU-012，CWE-321）：HMAC 拿空 key 照样算得出
+    签名 ⇒ 这一路会静静地签出一枚"格式完全正确、但谁都能伪造"的令牌。
+    与 `tools/base.py::_sign_local_jwt` 是同一条判据的两个入口。
+    """
     def _b64(b: bytes) -> bytes:
         return base64.urlsafe_b64encode(b).rstrip(b"=")
+
+    secret = _jwt_secret()
+    if not secret:
+        raise RuntimeError("JWT_SECRET 未配置（空密钥不许代签令牌）——检查 .env / 环境变量")
 
     header = _b64(json.dumps({"alg": "HS256", "typ": "JWT"}).encode())
     payload = _b64(json.dumps({
@@ -95,7 +116,7 @@ def _sign_user_jwt(user_id: int) -> str:
         "exp": int(time.time()) + 300,
         "role": "user",
     }).encode())
-    sig = _b64(hmac.new(JWT_SECRET.encode(), header + b"." + payload, hashlib.sha256).digest())
+    sig = _b64(hmac.new(secret.encode(), header + b"." + payload, hashlib.sha256).digest())
     return (header + b"." + payload + b"." + sig).decode()
 
 

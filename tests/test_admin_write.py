@@ -1634,8 +1634,11 @@ check("  读失败不拦弹窗（note_index 为空时问句退化成 id，不是
 # 跨模块口径：弹窗里的「现在」必须描述**写操作真正会改的那一行**——`_note_index`
 # 与写工具的读前值 `_read_note` 必须走同一个端点（谁改成 draft/editor 那条，
 # 弹窗描述的就会是另一行：那条对修改稿行会解引用成原文章）。
+import hashlib as _hl  # noqa: E402
+import hmac as _hm  # noqa: E402
 import inspect  # noqa: E402
 from tools import base as _B  # noqa: E402
+from tools import device as _D  # noqa: E402
 _rn = inspect.getsource(_B._read_note)
 _ni = inspect.getsource(_B._note_index)
 check("文章清单与写工具的读前值走同一端点（弹窗里的「现在」= 真正被改的那一行）",
@@ -1659,6 +1662,31 @@ check("代调令牌**不带 ver**（无 ver 的那一支是刻意保留的，不
       "ver" not in _payload, f"{sorted(_payload)}")
 check("代调令牌不带 aud（Rust 用 Validation::default()，多个 aud 会验签失败）",
       "aud" not in _payload, f"{sorted(_payload)}")
+
+# ── 空密钥不许签约（20261019 安全审计 SAU-012，CWE-321）──────────────────────
+# HMAC 拿空 key 照样算得出签名 ⇒ 此前这一路会**静静地**签出一枚空密钥令牌，失效时刻
+# 被推到 Rust 那边的一次 401。判据两头都要有：空 ⇒ 响亮拒绝；有 ⇒ 照常签得出
+# （否则"永远抛"也能让第一条绿）。
+_secret_saved = settings.jwt_secret
+try:
+    settings.jwt_secret = ""
+    for _name, _fn in (("_sign_local_jwt", lambda: _B._sign_local_jwt(721, "admin")),
+                       ("_sign_user_jwt", lambda: _D._sign_user_jwt(721))):
+        try:
+            _fn()
+            check(f"{_name}：空密钥 ⇒ 拒绝签发", False, "它签了")
+        except RuntimeError as _e:
+            check(f"{_name}：空密钥 ⇒ 拒绝签发（不是静默签一枚空密钥令牌）",
+                  "JWT_SECRET" in str(_e), str(_e)[:40])
+finally:
+    settings.jwt_secret = _secret_saved
+_tok2 = _B._sign_local_jwt(721, "admin")
+_h2, _p2, _s2 = (_tok2.split(".") + ["", "", ""])[:3]
+_pad2 = _h2 + "=" * (-len(_h2) % 4)
+_sig2 = _hm.new(_secret_saved.encode(), f"{_h2}.{_p2}".encode(), _hl.sha256).digest()
+check("反控：有密钥时照常签得出，且签名就是这把密钥算出来的",
+      _hm.compare_digest(_b64.urlsafe_b64encode(_sig2).rstrip(b"=").decode(), _s2),
+      _tok2[:20])
 
 print("\n㉔ 一次建多个标签：整批一起问（20261008：弹卡整轮生效，快道那几件不许被静默丢下）")
 

@@ -554,7 +554,9 @@ import tools.base as _tb  # noqa: E402
 from config.settings import settings as _settings  # noqa: E402
 
 W_MSG = "标签「大笨狗」我不想要了，删掉吧"   # 有意向、判不成命令 ⇒ 该弹卡
-W_CMD = "帮我删掉标签「大笨狗」"             # 明确命令 ⇒ 免弹窗直执行
+# 明确命令。**20261019 起 `delete_tag` 进了一律弹窗族**（SAU-014）⇒ 这句也弹卡，
+# 见 ⑥b；"命令形态免问"只剩两档族（公告/复核/待办以外那些）还走，本文件不另立夹具。
+W_CMD = "帮我删掉标签「大笨狗」"
 # 身份必须是**有权的管理员**（uid=0 是 golden 的形状）：`tag_delete` 展开成
 # `delete_tag`（`write.console`，硬 scope）——换个无权的身份，卡在权限那一道就
 # `continue` 掉了，弹不出来（那时红的是权限闸，不是同意闸，测的就不是这一节）。
@@ -591,13 +593,20 @@ try:
     check("**轮次到此为止**：脚本第二句（「已经帮你删掉啦」）一个字都没上正文",
           "删掉啦" not in "".join(str(c.content) for c in _chunks(_pf)))
 
-    print("\n⑥b 明确命令 / 已点过确定 ⇒ 放行直执行（闸只拦「没获同意」那一类）")
+    print("\n⑥b 命令形态对「一律弹窗」族**不豁免**；获授权那类照旧放行")
     RAN.clear()
     _gf = _run([_call("tag_delete", name="大笨狗")], {"delete_tag": _nav_tool},
                principal=ADMIN0, msg=W_CMD)
-    check("命令形态 ⇒ 工具真的执行了", len(RAN) == 1, str(RAN))
-    check("且**不弹卡**（同一条判据的另一面）",
-          not _last_node(_gf, "execute").get("pending_confirm"))
+    # 20261019（安全审计 SAU-014）：`delete_tag` 从两档族改为一律弹窗族——
+    # 判得出"这是命令"不等于该免问（删一级标签连坐子标签、无回收站）。
+    # 这一格此前断言的是"命令 ⇒ 直执行"，语义随族别一起改，**不是**放宽。
+    check("命令形态 ⇒ 仍然弹卡、一件都不执行",
+          RAN == [] and bool(_last_node(_gf, "execute").get("pending_confirm")),
+          f"RAN={RAN}")
+    check("  且卡面问句照常印出来（不是静默拦下）",
+          bool((_last_node(_gf, "execute").get("pending_confirm") or {}).get("q")))
+    # 反控（下面 _gf2）：同一件写、同一句话，只多一枚覆盖它的令牌 ⇒ 必须放行。
+    # 没有这一条，"闸恒拦"也能让上面两条全绿。
     RAN.clear()
     # 令牌形状必须是**生产真会产出的那种**（`confirm.verify` 出来的 payload）：
     # `{"workflow": …, "specs": [{"tool": …, "args": …}]}`。此前这里喂的是
