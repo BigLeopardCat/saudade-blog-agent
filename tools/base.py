@@ -957,23 +957,6 @@ from tools.board_moderation import (  # noqa: E402,F401
 )
 
 # ---------------------------------------------------------------------------
-# 管理助手写工具：**文章评论**的人工复核 —— 20261019 直接建成 `tools/comment_moderation.py`
-# ---------------------------------------------------------------------------
-# 与留言那一族同形（同一套 `0 = 驳回` 的请求体方向、同样的读回复核、同样"数字由工具内部
-# 产生"），差异与理由写在 `tools/comment_moderation.py` 的头注里。**改这一族去那里。**
-#
-# ⚠️ 同样守那条：新模块一个名字都不按名从 `tools.base` 取（`_admin_get` / `_admin_request`
-# 是被套件直接打桩的模块全局）⇒ 这里按原名 re-export 只为保持"`from tools.base import …`
-# 与 `base.<名>` 一处不改"这条既有约定，**没有任何内部消费方**。
-from tools.comment_moderation import (  # noqa: E402,F401
-    _comment_index,
-    _comment_label,
-    _find_comment_by_id,
-    audit_comment,
-    delete_comment,
-)
-
-# ---------------------------------------------------------------------------
 # 管理助手写工具：**文章分类**（建 / 改 / 删）—— 20261018 搬进 `tools/category_admin.py`
 # ---------------------------------------------------------------------------
 # 连续的 207 行、5 个模块级名字（分类字典 `_category_index` / 按名字解析
@@ -998,6 +981,23 @@ from tools.category_admin import (  # noqa: E402,F401
     create_category,
     delete_category,
     update_category,
+)
+
+# ---------------------------------------------------------------------------
+# 管理助手写工具：**文章评论**的人工复核 —— 20261019 直接建成 `tools/comment_moderation.py`
+# ---------------------------------------------------------------------------
+# 与留言那一族同形（同一套 `0 = 驳回` 的请求体方向、同样的读回复核、同样"数字由工具内部
+# 产生"），差异与理由写在 `tools/comment_moderation.py` 的头注里。**改这一族去那里。**
+#
+# ⚠️ 同样守那条：新模块一个名字都不按名从 `tools.base` 取（`_admin_get` / `_admin_request`
+# 是被套件直接打桩的模块全局）⇒ 这里按原名 re-export 只为保持"`from tools.base import …`
+# 与 `base.<名>` 一处不改"这条既有约定，**没有任何内部消费方**。
+from tools.comment_moderation import (  # noqa: E402,F401
+    _comment_index,
+    _comment_label,
+    _find_comment_by_id,
+    audit_comment,
+    delete_comment,
 )
 
 # ---------------------------------------------------------------------------

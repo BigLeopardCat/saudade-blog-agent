@@ -25,6 +25,7 @@ from agent.adminops_tags import (
     BOARD_VERDICT_CN,
     clip,
 )
+
 # 状态词表（0=待审 / 1=通过 / 2=未通过）**只此一份**，住在 `tools/board_moderation.py`
 # ——它与 `audit_comment` 端点真正写进去的那个值同源（Rust `comments.rs::CommentAdminDto`
 # 的列注）。`agent/action_text.py` / `agent/adminops_confirm.py` 也读它。
