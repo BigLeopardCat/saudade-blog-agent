@@ -51,6 +51,13 @@ from agent.workflow_defs import visible_workflows  # noqa: E402
 from config import settings  # noqa: E402
 from utils import trace as trace_mod  # noqa: E402
 
+# ── 密钥桩（20261019）──
+# 写通道的用例会走到 `_principal_get` ⇒ `_sign_local_jwt`；CI 没有 `.env`，
+# `settings.jwt_secret` 默认空串，而 20261019 起**空密钥不许签**（SAU-012）。
+# 桩值不取环境值：判据的前提自己摆，不继承运维取值（同 test_confirm 的成例）。
+_SAVED_SECRET = settings.jwt_secret
+settings.jwt_secret = "test-secret-for-planner-wiring"
+
 FAILS: list[str] = []
 
 
