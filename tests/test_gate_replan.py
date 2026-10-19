@@ -39,7 +39,7 @@ from tools import base as _base  # noqa: E402  工具的返回值契约（ToolRe
 
 import agent.graph as g  # noqa: E402
 from agent.graph import build_graph, graph_input, parse_plan  # noqa: E402
-from agent.principal import Principal  # noqa: E402
+from agent.principal import SOURCE_ASSERTION, Principal  # noqa: E402
 from _planner_stub import bind_tools_stub, toolcall_reply  # noqa: E402
 
 FAILED: list[str] = []
@@ -159,7 +159,7 @@ _PLAN_SEARCH = ('WORKFLOW: content_query\nPARAMS: {"calls": [{"tool": "search_no
 
 def _run(plans: list, narrations: list, user_msg: str = "西顿学院",
          tool_name: str = "search_notes", fake=None, uid: int = 5,
-         role: str | None = None):
+         role: str | None = "user"):
     """跑一遍真图，返回 (最终 state, 假 LLM, 假工具, trace 事件列表)。
 
     `tool_name` / `fake` 让别的族复用同一台真图（④ 的写族打的是 `read_notifications`，
@@ -178,8 +178,12 @@ def _run(plans: list, narrations: list, user_msg: str = "西顿学院",
     g.record = lambda node, event, **data: events.append((node, event, data))
     g._TOOL_MAP[tool_name] = tool
     try:
+        # `source` 显式给"断言"（20261019）：它现在是拦截判据的输入之一，默认来源
+        # （"body"）在私有面/写面上不进灰度（`authz.must_enforce`）——本文件测的是
+        # gate 打回与重规划，身份只是夹具，不该由它决定工具跑不跑得动。
         cfg = {"configurable": {"thread_id": "t-gate-replan", "user_id": uid,
-                                "principal": Principal(uid=uid, role=role),
+                                "principal": Principal(uid=uid, role=role,
+                                                       source=SOURCE_ASSERTION),
                                 "conversation_id": 1, "stop_event": None}}
         out = build_graph().invoke(
             graph_input([HumanMessage(content=user_msg)]), cfg)

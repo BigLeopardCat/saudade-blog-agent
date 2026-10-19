@@ -115,9 +115,20 @@ class Settings(BaseSettings):
 
     # ── 服务间身份断言（20260917）────────────────────────────────────
     # Rust 用 jwt_secret 签 `X-Agent-Assertion: {sub: uid, aud: "agent", exp:+60s}`，
-    # agent 验签后据此覆盖请求体里的 user_id（见 server._resolve_user_id）。
-    # 默认 False 是**滚动上线**需要的：Rust 还没发这个头时打开它会把在途请求打成 401。
-    agent_require_assertion: bool = False
+    # agent 验签后据此覆盖请求体里的 user_id（见 server._resolve_principal）。
+    # **默认 True**（20261019 安全审计 SAU-005，CWE-290）：关掉它，断言缺席的请求就
+    # 回退信任 `body.user_id` —— 谁写一个整数谁就是那个人，agent 再以那个 uid 现签
+    # JWT 代调 Rust，而 Rust 侧只认 `claims.sub`。唯一的防线是"端口只监听回环"这一条
+    # 部署假设，`systemd` 改 `0.0.0.0` / nginx 误反代 / 本机任意进程都能击穿它。
+    #
+    # 20260917 当初默认 False 的理由是**滚动上线**（Rust 还没发这个头时打开会把在途
+    # 请求打成 401）。那个前提**今天不成立**：Rust 侧早已发头（`middleware.rs`），
+    # 生产 `.env` 里这一格本来就是 1 —— 也就是说，旧默认值只在"克隆即部署"的人手里
+    # 生效，而他们拿到的正是最不安全的那一档。所以默认值翻过来：**默认安全，要回退
+    # 得显式写 0**，且回退时身份仍未验成 ⇒ `authz.must_enforce` 把该身份的拒绝全部
+    # 硬拦（纵深防御，见 agent/authz.py）。评测/离线套件若需要旧路径，在自己的
+    # 进程里显式拨这一格（`tests/run_all.py` 的 `_PINNED` 已按出厂档钉 1）。
+    agent_require_assertion: bool = True
 
     # ── 权限模型（20260920，身份与权限地基）──────────────────────────
     # False（默认）= **shadow**：execute 照算 authz 决策、把「拒绝」记进 trace，

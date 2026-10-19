@@ -10,6 +10,8 @@
   决策照算、照进 trace，但不改变行为。这是收口前的测绘——真实流量里
   跑一段，看"谁在什么时候被拒"，用证据校准授予表，再打开开关。理由同
   `agent_require_assertion` 的滚动上线：先观测、后收口，别拿在途请求做实验。
+  唯一的例外是 `must_enforce`：**未验成的身份**（`source="body"`）不进灰度——
+  它不是"另一种用户"，是"身份没验成"，没有既有流量可观测（20261019 审计 SAU-005）。
 
 失败取向（enforce 打开后）：
   - 未知角色（role=None / 不在 KNOWN_ROLES）→ **零权限**。从不"默认放行"，
@@ -30,8 +32,8 @@ import re
 from dataclasses import dataclass
 from typing import NamedTuple
 
-from agent.principal import (KNOWN_ROLES, ROLE_ADMIN,
-                            ROLE_SUPERADMIN, ROLE_USER, ROLE_ZAKO, Principal)
+from agent.principal import (KNOWN_ROLES, ROLE_ADMIN, ROLE_SUPERADMIN,
+                            ROLE_USER, ROLE_ZAKO, SOURCE_BODY, Principal)
 
 # ── scope 词汇表 ─────────────────────────────────────────────────────
 # 命名 = <动作>.<对象>。对象轴现在只有「谁的」这一维（public / own），
@@ -95,11 +97,22 @@ _HARD_SCOPES = frozenset({SCOPE_ADMIN_CONSOLE, SCOPE_WRITE_CONSOLE, SCOPE_WRITE_
 #   ① scope 本身（三个角色都授予，但没有身份就没有 uid，工具层 uid<=0 直接不发请求）
 #   ② 同意闸（判"本轮有没有明确命令"，见 `_own_command`）
 #   ③ 工具层的写后复核（复核不出那一行就报 unavailable，不谎称成功）
-# 同一批审计另举了 `read.own`（隐私面）也**没进**，理由与 `write.own` 不同：
-# 三个真角色（user/admin/superadmin）**都**授予它（`_ROLE_SCOPES`）⇒ 它唯一能拒的
-# 是 `zako` 与未知角色，而 `zako` 在 `principal.CHAT_ONLY_ROLES` 里、整轮零工具
-# （够不着任何工具调用），未知角色本就按"身份不明零权限"处理 ⇒ 硬拦只是把同一个
-# 结局换一个原因码，买不到新防线。
+#
+# `read.own` / `write.own` 20261019 复核（安全审计 SAU-007 的"隐私面"那半 + SAU-005
+# 的越权链）——**结论仍是留在表外**，但上面那条理由里有一句是错的，改掉：
+#   原文写"硬拦只是把同一个结局换一个原因码，买不到新防线"。那是按**已收口**（enforce）
+#   的情形推的；在 shadow 档下，deny 只是记一笔、工具**照常执行** ⇒ 结局根本不同。
+#   真正的分界不是"能不能多拦一次"，而是**这条 deny 有没有真实可达的路径**：
+#     · `read.own`：三个真角色全授予 ⇒ 能拒的只有 `zako`（`CHAT_ONLY_ROLES`，planner
+#       顶层短路 ⇒ 整轮零工具，够不着）与**未验成的身份**；
+#     · `write.own`：同上，且它写的是调用者自己的私有数据。
+#   ⇒ 所以堵口不在"把 scope 拉进本表"，而在**"未验成的身份一律硬拦"**那一条（见
+#   `must_enforce`）：它精确覆盖了这两条 deny 的唯一真实可达路径，且不牵连
+#   `source="golden"` 的评测身份（golden 的用例默认 `role=None`，若按 scope 硬拦，
+#   一整族既有用例会从"shadow 放行"变成 BLOCK —— 那是**判据基线**的移动，不该由一次
+#   安全加固顺带做掉）。审计那一条给的入选理由是"与 write.console 同属纯新增能力、
+#   无既有流量可观测"——对 `read.own` 不成立（自己的收藏/通知/会话历史是**早就在跑**的
+#   既有能力，观测期正是给它设的），这一处分歧连同理由记在 PR 正文里。
 
 # ── 要不要把"谁执行的"写进回执（20260921）─────────────────────────────
 # 回执会经 execution_log.detail 落生产库、并被下一轮的 recent_executions 注入
@@ -1507,11 +1520,68 @@ def enforcing(scope: str | None = None) -> bool:
 
     `scope=None` = 沿用旧的"全局开关"语义（不知道 scope 的调用点用它）。
     传了 scope 且它在 `_HARD_SCOPES` 里 → 恒 True（见该常量的注释）。
+
+    ⚠️ **拦截判据点不要直接调它**——用 `must_enforce(decision, principal)`。这个函数
+    只看 scope，看不见"这次是谁在调"，而有一类身份是**不该有灰度期**的（见下）。
     """
     if scope in _HARD_SCOPES:
         return True
     from config.settings import settings
     return bool(getattr(settings, "authz_enforce", False))
+
+
+# 未验成的身份**唯一保留的那一面**（见 `must_enforce`）：公开内容 + 它自己那一屏。
+#
+# 为什么是这两条：它们恰好是**不需要身份**的那两件事——读公开内容本来就匿名可读
+# （访客不登录也能看文章），`write.page` 的效果只是一条发给**请求方自己浏览器**的
+# 命令（导航/特效/夜间模式），不落库、不碰别人的东西、不碰物理世界。
+# 反过来，`read.own`（别人的收藏/通知/会话历史）、`write.own`（往别人账号里写）、
+# `write.device`（物理动作）、两个后台 scope —— 每一条都以"我们知道你是谁"为前提，
+# 而回退身份**没有**这个前提。
+_PUBLIC_SURFACE = frozenset({SCOPE_READ_PUBLIC, SCOPE_WRITE_PAGE})
+
+
+def must_enforce(decision: Decision, principal: Principal | None) -> bool:
+    """**这一次的拒绝**要不要真的拦——四个拦截判据点的唯一入口（20261019）。
+
+    与 `enforcing(scope)` 的分工：那个回答"这个 scope 参不参与灰度"（只看 scope），
+    这个回答"这一次的拒绝拦不拦"（多看一眼 principal）。四个调用点（graph 三处：
+    硬拦 / shadow 记账 / 弹窗前置筛，react_line 一处）**都换成它**——直接问
+    `enforcing` 会把下面这一类漏过去。
+
+    ── 为什么"未验成的身份"没有灰度期（安全审计 SAU-005 的纵深那一半）──
+    shadow 的正当性建立在一个前提上：**被观测的能力本来就在跑**，所以"先只记不拦"
+    是在测绘既有流量，放行错了顶多多做一件本来也会发生的事。
+    `source == SOURCE_BODY` 的身份不满足这个前提，而且差得比"纯新增能力"更远——
+    它**不是另一种用户，是身份没验成**：`server._resolve_principal` 在断言缺席/验签
+    失败时把 `body.user_id` 原样当身份（`role=None` ⇒ 零权限），也就是说这个 uid 是
+    请求方自己写的一个整数。以它为 principal 的每一次 deny 都恰好是"我们根本不知道
+    你是谁"——而 shadow 会把它**放行**，于是 uid 即身份、水平越权成立（审计给的复现
+    就是一句 curl）。所以这一类在**私有面与写面**上一律硬拦，只留 `_PUBLIC_SURFACE`
+    （读公开内容 + 驱动它自己那一屏）——见那个常量的注释。
+
+    落点值得写清楚：`server._resolve_principal` 的回退分支**恒给 `role=None`**
+    （"读不到角色就绝不默认授予任何权限"），而 `check()` 对 role=None 判零权限 ⇒
+    这个身份的**每一次**工具调用都是 deny，于是被 shadow 放行的不是"某几条敏感
+    scope"，而是"身份不明"这个结论本身——`check` 说零权限、`enforcing` 说先别拦，
+    两句话在阴影里同时成立了一整个观测期。两个开关各管各的：出厂默认已经把
+    `AGENT_REQUIRE_ASSERTION` 翻成 1（SAU-005 的主体），这一条是**独立的第二道**，
+    谁把那个开关拨回去都还拦得住。
+
+    ⚠️ 判据是 `source`，**不是** `role is None`：`source="golden"` 的评测身份同样
+    `role=None`（`eval/run_golden.py::build_principal`，用例不写 `context.role` 就是
+    它），拿 role 判会把一整族既有用例从"shadow 放行"打成 BLOCK——那是判据基线的
+    移动，不该由一次安全加固顺带做掉。`source` 是**身份怎么来的**，正是这里要问的。
+
+    已放行的决策一律 False：本函数只回答"拒绝拦不拦"，调用点若漏写
+    `not decision.allowed` 也不至于给一次合法调用产拒绝帧（fail-safe 方向）。
+    """
+    if decision.allowed:
+        return False
+    if (principal is not None and principal.source == SOURCE_BODY
+            and decision.scope not in _PUBLIC_SURFACE):
+        return True
+    return enforcing(decision.scope)
 
 
 def denial_frame(decision: Decision, principal: Principal | None) -> str:
