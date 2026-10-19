@@ -344,6 +344,62 @@ check(f"ADR 里写了同一个秘密名（{_ADR_NAME}）",
 check("eval.yml 指着那份 ADR（接线与轮换只有一处说明）",
       _ADR_NAME in _eval_txt)
 
+print("\n⑦ PR 上也跑门禁的接线（20261019）：不许静默地退回「PR 上什么都不跑」")
+# 此前 workflow 只 `push: branches: [main]` ⇒ 一个 PR 从推上去到合并之间**没有任何自动
+# 检查**，红是"合进 main 那一刻"才发现的（20261017 实测：PR #8 合流当场带出两条红）。
+# 加 `pull_request` 之后多出一个结构性难题：门禁里的跨语言守卫要读**私有**父仓，而
+# **GitHub 不向 fork 的 PR 传 secret** ⇒ fork PR 上那一步跑不了，只能**显式降级**。
+#
+# 这一节判的就是那条降级接线。四条判据各自对应一种**静默**失效——都不是"红得难看"，
+# 而是"看着在跑、其实没跑"：
+#   ① 没有 `pull_request` ⇒ PR 上什么都不跑，而 PR 页面看着"没有红灯"；
+#   ② 依赖父仓的步骤没挂 `if` ⇒ fork PR 红在 checkout/凭据上，红的理由看着像代码问题；
+#   ③ 降级支自己设了 `SAUDADE_REQUIRE_PARENT` ⇒ 降级路径自己红，等于没降级；
+#   ④ 凭据缺失时不写 job summary ⇒ "本次这些判据没跑"没人看得见。
+_STEP_SPLIT_RE = re.compile(r"\n(?=[ \t]*- (?:name|uses):)")
+_GUARD = "steps.parent.outputs.available == '1'"
+
+
+def _pr_gate_problems(txt: str) -> list[str]:
+    """`eval.yml` 里 PR 门禁接线的问题清单；空 = 接线完整。
+
+    **只问"某一步设了什么"**，不问"整个文件里有没有那个字符串"——后者会被另一处无关的
+    写法蒙过去（本仓踩过：注释里提一句也算接线）。所以先按 step 切块再判。
+    """
+    bad: list[str] = []
+    if not re.search(r"^  pull_request:\s*$", txt, re.M):
+        bad.append("on: 里没有 pull_request 触发")
+    guarded = len(re.findall(re.escape("if: " + _GUARD), txt))
+    if guarded < 3:
+        bad.append(f"挂 `if: {_GUARD}` 的步骤只有 {guarded} 个"
+                   "（父仓 checkout / 落位自检 / 完整套件 都该挂）")
+    deg = [s for s in _STEP_SPLIT_RE.split(txt) if "available != '1'" in s]
+    if len(deg) != 1:
+        bad.append(f"挂在 `available != '1'` 上的步骤有 {len(deg)} 个（应恰好 1 个：降级套件）")
+    else:
+        d = deg[0]
+        if "tests/run_all.py" not in d:
+            bad.append("降级支跑的不是 tests/run_all.py（同一份清单是这条接线的要点）")
+        if "SAUDADE_REQUIRE_PARENT" in d:
+            bad.append("降级步骤设了 SAUDADE_REQUIRE_PARENT ⇒ 降级路径自己红")
+    if "GITHUB_STEP_SUMMARY" not in txt:
+        bad.append("凭据缺失时没写 job summary ⇒ 这次降级是**静默**的")
+    return bad
+
+
+_bad_gate = _pr_gate_problems(_eval_txt)
+check("PR 门禁接线完整（触发 / 父仓步骤挂 if / 降级支 / summary 记录）",
+      _bad_gate == [], "；".join(_bad_gate))
+# 正控：四条判据**各自**都要能红，否则它们是装饰（本仓纪律：正控不红不算数）。
+for _desc, _mut in (
+    ("去掉 pull_request 触发", _eval_txt.replace("  pull_request:", "  # pull_request:")),
+    ("依赖父仓的步骤不挂 if", _eval_txt.replace("if: " + _GUARD, "if: true")),
+    ("降级支也设 SAUDADE_REQUIRE_PARENT",
+     _eval_txt.replace("available != '1'", "available == '1'")),
+    ("降级不写 job summary", _eval_txt.replace("$GITHUB_STEP_SUMMARY", "$SUMMARY_OFF")),
+):
+    check(f"  正控：{_desc} ⇒ 判据必须报红", _pr_gate_problems(_mut) != [])
+
 print()
 if FAILED:
     print(f"失败 {len(FAILED)} 项：" + "；".join(FAILED))
