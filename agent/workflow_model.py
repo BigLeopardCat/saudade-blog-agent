@@ -14,6 +14,7 @@
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -22,8 +23,52 @@ __all__ = [
     "DROP_SUFFIX_NOT_OBJECT",
     "DROP_SUFFIX_WORKFLOW_NO_CALLS",
     "ParamSpec",
+    "ToolCall",
     "Workflow",
 ]
+
+
+class ToolCall(str):
+    """计划里的一条调用：`工具名({json 参数})`（20261019 批 G6）。
+
+    **`.name` / `.args` 是本体，`str()` 是它的渲染**——与 `tools/result.py::ToolResult`
+    同一个形状（`str` 子类 + 结构挂在实例属性上）。这一形状换来的是：`json.dumps` /
+    f-string / `str()` / 切片 / `==` 在它上面**取到的都是同一个串**，于是全仓读
+    `plan_obj["tools"]` 的那二十几个消费点**一个都不用改**，只有真正想读结构的几处
+    改成读属性。
+
+    为什么值得：这条形状此前是**写端十余处各自 `json.dumps`、读端六套解析器**——
+    `tool_specs.split_tool_spec`（形状正则）、`tool_specs._tool_args`（json/ast 双容错）、
+    `tasks.bound_steps`（严格 `json.loads`）、`deterministic_plan._tool_name`
+    （`split("(")`）、`server._spec_one`（又一条形状正则），外加两条**正则抠值**的
+    （`deterministic_plan._spec_arg` 抠 `key: value`、`_DETAIL_SPEC_RE` 抠 `article_id`）。
+    写端多一处、读端就多一处漂移面；那两条抠值的更是"从我们自己渲染出来的串里把参数
+    猜回来"，改一次 JSON 排版（加个空格、换个引号）就静默取不到。
+
+    G6 落地后的分工：**写端全部**改成构造 `ToolCall`（形状只由 `__new__` 一处决定）；
+    读端一律"先读属性、读不到才回落到文本"——上面那四套解析器都**留着**（见
+    `tool_specs` 的注：`plan_obj` 会落进 checkpoint 再读回来，`str` 子类过一遍序列化
+    就退化成纯 `str`；测试与 trace 回放也直接喂文本），**两条抠值的正则已删**。
+
+    ⚠️ **`args` 在构造时过一次 JSON 往返**（`json.loads(json.dumps(...))`），这不是洁癖：
+    它让两条不变量**同时**成立——
+      · `str(call)` 与写端今天那行 f-string **逐字节相同**（同一个 `json.dumps`、
+        同一份 `ensure_ascii=False`）；
+      · `call.args` 与"把 `str(call)` 再解析回来"**逐键相同**，于是写幂等账的指纹
+        （`tool_specs._spec_signature`，它拿的是 (名字, 参数字典)）**一个字节都不变**。
+    JSON 存不下的东西（元组、非字符串键）本来就在 `json.dumps` 那一步变形，这里只是把
+    那次变形提前到构造时、让它**只发生一次**。
+    """
+
+    name: str
+    args: dict
+
+    def __new__(cls, name: str, args: dict | None = None) -> "ToolCall":
+        raw = json.dumps(dict(args or {}), ensure_ascii=False)
+        obj = str.__new__(cls, f"{name}({raw})")
+        obj.name = str(name)
+        obj.args = json.loads(raw)
+        return obj
 
 
 @dataclass

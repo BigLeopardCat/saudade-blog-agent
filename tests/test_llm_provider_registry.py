@@ -15,8 +15,9 @@ assistant 消息回放时缺 `reasoning_content` ⇒ 严格服务商**整轮 400
     ——替它猜一个字段名就是把"静默丢"换成"静默错"，两种都是本仓最忌的失效；
   · `Settings.check_provider()`：认不出 ⇒ raise（**拒绝启动**）；归一化只有 `_provider_prefix`
     一处，所以 `" DEEPSEEK "` 这种手写 `.env` 的常见形态既过校验也取得到值；
-  · `eval/llm_judge.py::_DIALECTS` **覆盖 `KNOWN_LLM_PROVIDERS` 全集**（加服务商却忘了
-    登记方言 ⇒ 这里红；那条路的静默降级是"181 条判据全废而夜里照旧 ALL PASS"）；
+  · `models/llm.py::DIALECT_PROVIDERS` **覆盖 `KNOWN_LLM_PROVIDERS` 全集**（加服务商却忘了
+    登记方言 ⇒ 这里红；那条路的静默降级是"整份输出作废而没人知道"）。表 20261019 批 G7
+    从 `eval/llm_judge.py` 上移到这里（`eval.*` 不能被生产引，而复盘器要用同一套方言）；
   · schema 的 `additionalProperties: False` **只长在函数参数的顶层**——内层
     `calls[].args` / `steps[].{}` 是**自由形状**（键就是被调工具的形参名），在那儿加会
     把它关死；这条负控与正控一样重要（正控挡住了"忘了写"，负控挡住"顺手写多了"）。
@@ -183,22 +184,38 @@ def test_get_llm_merges_translation_into_extra_body():
               str(llm_mod.get_llm(**kw, extra_body={"foo": 1}).extra_body))
 
 
-# ── ③ 评审员的结构化输出方言表 ────────────────────────────────────────
-def test_judge_dialect_table_covers_every_provider():
-    missing = sorted(KNOWN_LLM_PROVIDERS - set(judge._DIALECTS))
+# ── ③ 结构化输出的方言表（20261019 批 G7 起住 `models/llm.py`）──────────
+def test_dialect_table_covers_every_provider():
+    """方言表从 `eval/llm_judge.py` 上移到 `models/llm.py`（批 G7）——**改的是指向，不是
+    契约**：这一族仍然"每一家一行 + 认不出出声 + 覆盖 `KNOWN_LLM_PROVIDERS` 全集"。
+    上移的理由是 `eval.*` 不能被生产引（wheel 边界），而复盘器要用同一套方言 ⇒
+    表只能有一份，且必须住在生产侧。
+    """
+    _JSON_OBJECT = {"type": "json_object"}
+    _S = {"type": "object", "properties": {}, "required": []}
+
+    def _fmt(prov: str) -> dict:
+        return llm_mod.response_format(prov, _S, name="verdict")
+
+    missing = sorted(KNOWN_LLM_PROVIDERS - set(llm_mod.DIALECT_PROVIDERS))
     check("方言表覆盖 `KNOWN_LLM_PROVIDERS` 全集（加服务商却忘了登记 ⇒ 这条红）",
           not missing, f"缺: {missing}")
-    check("deepseek 只认 json_object（实测 400 的那家）",
-          judge.response_format("deepseek") == judge._JSON_OBJECT_FORMAT)
+    check("deepseek 只认 json_object（实测 400 的那家）", _fmt("deepseek") == _JSON_OBJECT)
     for prov in ("qwen", "openai"):
-        check(f"{prov} 用 json_schema", judge.response_format(prov) == judge._RESPONSE_FORMAT)
-    check("大小写/空白归一（`DeepSeek ` 也认）",
-          judge.response_format(" DeepSeek ") == judge._JSON_OBJECT_FORMAT)
-    with _capture("eval.llm_judge") as cap:
-        got = judge.response_format("brandnew")
-    check("没登记的服务商按默认走，但**出声**（这里静默 = 整份判据作废而夜里 ALL PASS）",
-          got == judge._RESPONSE_FORMAT and len(cap.records) == 1,
+        check(f"{prov} 用 json_schema",
+              _fmt(prov).get("type") == "json_schema"
+              and _fmt(prov)["json_schema"]["strict"] is True
+              and _fmt(prov)["json_schema"]["name"] == "verdict")
+    check("大小写/空白归一（`DeepSeek ` 也认）", _fmt(" DeepSeek ") == _JSON_OBJECT)
+    with _capture("models.llm") as cap:
+        got = _fmt("brandnew")
+    check("没登记的服务商按默认走，但**出声**（这里静默 = 整份输出作废而没人知道）",
+          got.get("type") == "json_schema" and len(cap.records) == 1,
           f"{got} {len(cap.records)} 条")
+    # 评审员那一侧仍走同一张表（薄包装，20261019 批 G7）：两处**不许**各有一份方言。
+    check("评审员的 `response_format(provider)` 是同一张表的薄包装",
+          judge.response_format("deepseek") == _JSON_OBJECT
+          and judge.response_format("qwen")["json_schema"]["name"] == "verdict")
 
 
 # ── ④ schema：`additionalProperties: False` 只长在顶层 ────────────────
@@ -278,7 +295,7 @@ if __name__ == "__main__":
                test_thinking_extra_translates_each_provider,
                test_thinking_extra_unknown_provider_speaks_up,
                test_get_llm_merges_translation_into_extra_body,
-               test_judge_dialect_table_covers_every_provider,
+               test_dialect_table_covers_every_provider,
                test_additional_properties_on_function_params,
                test_additional_properties_on_pseudo_tools,
                test_additional_properties_NOT_on_inner_objects,

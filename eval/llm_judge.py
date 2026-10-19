@@ -43,7 +43,6 @@ from __future__ import annotations
 import argparse
 import datetime as dt
 import json
-import logging
 import pathlib
 import re
 import sys
@@ -86,52 +85,27 @@ _JUDGE_SCHEMA = {
 
 # 结构化输出：POC（20260925）在本项目生产端点上实测**被强制**——enum 与 required
 # 都拦得住，模型绕不过去。绑不上时降级为纯 prompt 约束（见 judge_one 的 degraded）。
-_RESPONSE_FORMAT = {"type": "json_schema",
-                    "json_schema": {"name": "verdict", "strict": True, "schema": _JUDGE_SCHEMA}}
-
-# **但结构化输出的方言不是通用的**（20261012 实测）：DeepSeek 对上面那个 json_schema
-# 直接 400 `This response_format type is unavailable now`，它只认 `{"type": "json_object"}`
-# （官方 JSON Output 文档：设 response_format 为它、提示词里必须出现 json 字样**并给出
-# 目标格式的样例**、max_tokens 要给够，且它自己承认有概率返回空 content）。
-# 写死一种方言 = 另一家每次都走降级，而那时的降级路径**没有任何地方定义过输出契约**
-# （契约只长在 schema 里）——后果不是"判得松一点"，是 181 条全废：模型回了
-# `{"unsupported": [], "answered": false, "verdict": "ok"}`（实测原文），`parse_verdict`
-# 抛「缺字段 reason」，而夜里汇总照旧 ALL PASS（它非门禁 ⇒ 瞎了也没人知道）。
-# ⇒ 两件一起做：①方言按服务商选；②**字段契约写进 `_JUDGE_SYS`**，不再只挂在 schema 上
-# （schema 是加成，提示词才是所有路径的共同底座）。
-_JSON_OBJECT_FORMAT = {"type": "json_object"}
-
-# 方言表（20261012 第二版）：**每一家都在这儿有一行**，不再写成
-# `if provider == "deepseek" ... else 默认`——那种写法的缺省支是**隐式**的，加一个服务商
-# 时"它落进 else 了"这件事没有任何地方说过，形状与 `models/llm.py` 那个少 else 的
-# 思考开关译法一模一样（同一个 bug 的第二份拷贝，本次一并修）。
-# 取值域与 `config.settings.KNOWN_LLM_PROVIDERS` 由 `tests/test_llm_provider_registry.py`
-# 对锁：**加服务商却忘了登记这张表 ⇒ 离线套件红**（机械闸门，不靠人记得）。
-_DIALECTS = {
-    "qwen": _RESPONSE_FORMAT,        # POC 在产线端点上实测强制生效（见上一段）
-    "openai": _RESPONSE_FORMAT,      # json_schema 的原生地
-    "deepseek": _JSON_OBJECT_FORMAT, # 只认 json_object，见上一段 400 原文
-}
+# **方言表本身不住这里了**（20261019 批 G7 上移 `models/llm.py::response_format`）：
+# `eval.*` 不能被生产引（wheel 边界），而复盘器要用同一套方言 ⇒ 表只能有一份，
+# 且必须住在生产侧。这里留的 `response_format` 只是**薄包装**（既有调用点与
+# `tests/test_llm_judge.py` 的签名都不用改）。
+#
+# **但字段契约仍住在这里**（`_JUDGE_SYS`，见 `test_output_contract_lives_in_the_prompt`）：
+# DeepSeek 只认 `json_object`（对 json_schema 直接 400），那一档下 schema 只是装饰，
+# 提示词才是所有路径的共同底座。同一条纪律对复盘器也成立（见 `agent/planner_llm.py`
+# 的 `REFLECT_SCHEMA` 与 `_REFLECTOR_PROMPT`）。
 
 
 def response_format(provider: str = "") -> dict:
-    """当前服务商的结构化输出方言。空串 ⇒ 现读配置（测试可显式传，免得依赖当前档位）。
+    """当前服务商的结构化输出方言（**薄包装**，20261019 批 G7）。
 
-    没登记的服务商**出声**再按默认走：这里的静默降级后果是"整份判据作废而夜里照旧
-    ALL PASS"（见上一段），所以哪怕最后仍按默认走，也必须留下一条日志——它是这条路
-    上唯一"还看得见"的地方。
+    空串 ⇒ 现读配置（测试可显式传，免得依赖当前档位）。
     """
-    if not provider:
-        from config import settings          # 延后 import：本文件要能被离线套件直接引（同 make_llm）
-        provider = settings.llm_provider
-    dialect = _DIALECTS.get((provider or "").strip().lower())
-    if dialect is None:
-        logging.getLogger(__name__).warning(
-            "[judge] provider=%r 的结构化输出方言没登记 ⇒ 按默认 json_schema 走。"
-            "换服务商请先探针实测它认哪种方言，再登记进 `_DIALECTS`"
-            "（未登记就默认，正是 20261012 那 181 条判据全废的形状）。", provider)
-        dialect = _RESPONSE_FORMAT
-    return dialect
+    # 延后 import：本文件要能被离线套件直接引（同 `make_llm`）
+    from config import settings
+    from models.llm import response_format as _rf
+    return _rf(provider or settings.llm_provider, _JUDGE_SCHEMA, name="verdict")
+
 
 _JUDGE_SYS = """你是评测评审员，只做一件事：核对一条客服回复**有没有编材料**。
 

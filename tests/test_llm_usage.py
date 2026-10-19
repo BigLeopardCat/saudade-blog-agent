@@ -30,6 +30,7 @@ sys.path.insert(0, str(ROOT))
 from langchain_core.messages import AIMessage, HumanMessage  # noqa: E402
 
 import agent.graph as G  # noqa: E402
+import agent.planner_llm as PL  # noqa: E402  （复盘那次调用住这里，桩打在这一侧）
 from agent.llm_usage import usage_fields  # noqa: E402
 from agent.principal import Principal  # noqa: E402
 from utils import trace as trace_mod  # noqa: E402
@@ -74,6 +75,11 @@ class _FakeLLM:
 
     def bind_tools(self, tools, **kw):
         self.bound = {"tools": tools, **kw}
+        return self
+
+    def bind(self, **kw):
+        """复盘那次调用走这条（20261019 批 G7：按服务商方言绑 `response_format`）。"""
+        self.bound = kw
         return self
 
     def invoke(self, prompt):
@@ -260,17 +266,23 @@ def test_display_text_failure_path_still_quiet():
 def test_reflector_records_usage():
     print("\n[接线] reflector（复盘）")
     rec = _new_trace("t_usage_reflector")
-    fake, made = _patch_one(AIMessage(content="ISSUE: 缺 id\nDECIDE: wrap_up",
+    # 复盘那次调用 20261019 批 G7 起住在 `agent.planner_llm.invoke_reflector` ⇒ **桩要打在
+    # 新家**。打在旧家（`G.get_llm`）上时假 LLM 一次都不会被调用，而"真 LLM 恰好也失败"
+    # 会让下面那条断言**绿得毫无意义**（本仓点名的形状：按名打桩，搬走即静默失效）。
+    fake, made = _patch_one(AIMessage(content='{"issue": "缺 id", "decision": "wrap_up"}',
                                       usage_metadata=dict(_REAL)))
-    old_get, G.get_llm = G.get_llm, fake
+    old_get, PL.get_llm = PL.get_llm, fake
     try:
         G.reflector_node({"messages": [HumanMessage(content=_MSG)], "plan": "WORKFLOW=x",
                           "blocked": [{"spec": "get_article_detail({})",
                                        "reason": "empty_result", "result": "（空）"}],
                           "reflect_rounds": 0}, _CFG)
     finally:
-        G.get_llm = old_get
+        PL.get_llm = old_get
     check("复盘 LLM 被调用过", len(made["llm"].prompts) == 1)
+    check("结构化那条路真的走到了（绑的是当前服务商的方言，不是降级支）",
+          made["llm"].bound is not None
+          and "response_format" in made["llm"].bound, str(made["llm"].bound))
     ev = _events(rec, "reflector", "llm_done")
     check("reflector.llm_done 带 input/output/cache_read",
           len(ev) == 1 and ev[0].get("input") == 25200
