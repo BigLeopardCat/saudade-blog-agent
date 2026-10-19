@@ -480,7 +480,8 @@ def unknown_workflows(calls: list, role: str | None) -> list[str]:
 
 
 def task_decision(declare: dict | None, intents: tuple, workflow: str,
-                  params: dict | None = None) -> PlannerDecision:
+                  params: dict | None = None, raw_calls: list | None = None,
+                  finish_reason: str = "") -> PlannerDecision:
     """本臂这一轮的决策对象——**用生产那个类型**（`planner_llm.PlannerDecision`）。
 
     为什么不自己搭一个 shim：`_decide_register` / `_auto_task_frames` / `_acted_workflows`
@@ -493,9 +494,22 @@ def task_decision(declare: dict | None, intents: tuple, workflow: str,
     `calls[0].name`），纯登记轮没有真调用 ⇒ `chat`（生产 `tool_calls_to_plan` 那条
     `if not calls:` 出口逐字同款）。`_acted_workflows` 把 `""` 与 `chat` 都排除在外，
     所以这个取值决定的是"本轮派下去的那件算不算办过了"。
+
+    `raw_calls` = **这一轮模型原样发出来的调用清单**（含三个伪函数），填进
+    `PlannerDecision.raw_tool_calls`（20261020，资产对齐 J）。生产那一格在
+    `tool_calls_to_plan` 里是 `base = {"raw_tool_calls": tuple(calls)}`——取的是**拆分
+    伪函数之前**的整份清单，`planner_llm.tool_call_names` 读的就是它。本臂此前不填 ⇒
+    那一格恒空 ⇒ 想在生产同名事件 `planner.native_decision` 里记 `calls` 只能**手抄
+    一遍**那个 join（本仓最贵的那类事故：抄一份判据，改名时两份不会一起动）。
+    **不传**（`None`）⇒ 空元组，与生产"一个函数都没点"那一格逐字同形。
+
+    `finish_reason` 由调用方给（零工具那一支要把端点回的那个值原样带进 trace，
+    生产也是 `finish_reason(resp)`）。缺省空串 = "不知道"，不是 `stop`。
     """
     return PlannerDecision(workflow=workflow, params=dict(params or {}),
-                           declare=declare, intents=tuple(intents or ()))
+                           declare=declare, intents=tuple(intents or ()),
+                           raw_tool_calls=tuple(raw_calls or ()),
+                           finish_reason=finish_reason)
 
 
 def auto_task_frames(state, config, decided, rounds: int) -> list[dict]:
