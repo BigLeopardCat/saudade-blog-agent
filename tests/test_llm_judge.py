@@ -32,6 +32,7 @@ sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "eval"))
 
 import llm_judge  # noqa: E402
+import models.llm as llm_mod  # noqa: E402  （批 G7：方言表的家，见 test_response_format_dialect）
 
 
 FAILS = []
@@ -239,6 +240,13 @@ def test_response_format_dialect():
           str(qwen_fmt)[:80])
     check("不点名服务商 ⇒ 现读配置、不抛（值取决于当前档位，故不断言它）",
           llm_judge.response_format().get("type") in ("json_object", "json_schema"))
+    # 20261019 批 G7：表上移到 `models/llm.py`（`eval.*` 不能被生产引，而复盘器要用
+    # 同一套方言）⇒ 这里改的是**指向**，判据本身一个字没松：两边必须是同一张表。
+    check("评审员这一侧是同一张表的薄包装（两处各存一份方言就是漂移源）",
+          llm_judge.response_format("deepseek")
+          == llm_mod.response_format("deepseek", llm_judge._JUDGE_SCHEMA, name="verdict")
+          and llm_judge.response_format("qwen")["json_schema"]["schema"]
+          is llm_judge._JUDGE_SCHEMA)
 
 
 class _Msg:

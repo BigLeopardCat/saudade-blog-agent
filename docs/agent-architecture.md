@@ -1217,8 +1217,12 @@ flowchart TB
   reflector。键是「工具::原因码」而非 spec 原文（20260925 收窄）：参数每轮都会被重写，按 spec
   原文判重会让"同一个工具同一个原因"永远判不出来。
   输入结构性无散文（计划文本 + blocked 项 spec/原因码/截断结果 + 回执 + 工具帧截断，≤900
-  字），LLM 输出两行契约 `ISSUE: <每项|缺什么|怎么改>` + `DECIDE: replan|wrap_up`（temp 0.0/300
-  tokens/30s/无 thinking）；解析失败/预算耗尽 → `_terminal_plan` 确定性终局（无静默 accept）。
+  字），LLM 输出**结构化**（20261019 批 G7 起）：按服务商方言绑 `response_format` 取一个 json
+  对象 `{"issue": <每项|缺什么|怎么改>, "decision": "replan|wrap_up"}`（temp 0.0/300
+  tokens/30s/无 thinking），字段契约**同时写在提示词里**（deepseek 那一档 schema 不强制）；
+  解析 **JSON 优先**，老的两行文本 `ISSUE:`/`DECIDE:` 退居**回落支**，两条路都读不出时留下一条
+  WARNING 再按 wrap_up（静默降级正是这一族的老病）。预算耗尽 → `_terminal_plan` 确定性终局
+  （无静默 accept）。
   replan → ISSUE 单行注入 planner 提示词；wrap_up → 确定性收尾计划 → model 叙述 → gate 照常检查。
   复盘不评价叙述质量（图序 execute→reflector 先于 model，叙述根本还没生成——老 reflector 的
   死因 1.26/1.30/1.32 全部绕开）。

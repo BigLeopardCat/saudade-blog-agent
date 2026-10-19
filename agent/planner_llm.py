@@ -43,6 +43,9 @@ API 的 `tools` 字段 + `tool_calls` 返回——格式由服务端约定、参
 
 from __future__ import annotations
 
+import json
+import logging
+import re
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -76,6 +79,9 @@ from agent.workflow_menu import render_tool_marks
 from agent.workflow_model import ParamSpec
 from agent.workflow_params import tool_arg_schemas, workflow_param_specs
 from agent.workflow_tools import callable_query_tools, explicit_tools
+from models.llm import get_llm
+
+logger = logging.getLogger(__name__)
 
 # 技能参数的短类型名（`ParamSpec.type`，见 `workflow_params.py::arg_type_short`）→ JSON Schema。
 # `any` / `?` 是"推不出映射"，不在表里——由 `_param_schema` 兜（见那里的注）。
@@ -654,3 +660,114 @@ def tool_call_names(decision: PlannerDecision) -> str:
     if not decision.raw_tool_calls:
         return ""
     return ",".join(str((c or {}).get("name") or "?") for c in decision.raw_tool_calls)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# 复盘器（`graph.reflector_node`）的输出：结构化优先、文本回落（20261019 批 G7）
+# ══════════════════════════════════════════════════════════════════════════════
+# **为什么住在这一层**：本模块是"模型输出的形状与解析"的接线层——planner 那一路是
+# `tools`/`tool_calls`（`tool_calls_to_plan`），复盘器这一路是 `response_format` + JSON。
+# 不放进 `agent/graph.py` 或 `agent/prompts.py` 的理由很硬：那两个文件都在行数台账里
+# （**只许变小**），塞不进新表；而 schema 与它的解析必须**同处一地**，否则又是两份会漂。
+# schema 只带**结构**（类型 / 枚举 / 必填 / 不许加键）：字段**语义**写在
+# `_REFLECTOR_PROMPT` 里，不在这儿再写一份 `description`——`json_object` 那一档 schema
+# 本来就没人读，契约必须在提示词；两边各写一份只会漂（且漂了没人看得出来）。
+REFLECT_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "decision": {"type": "string", "enum": ["replan", "wrap_up"]},
+        "issue": {"type": "string"},
+    },
+    "required": ["decision", "issue"],
+    "additionalProperties": False,
+}
+
+# 文本回落支的两条正则（**老口径**，20261019 之前是唯一通道）。留着不是怀旧：
+# `json_object` 那一档下 schema 只是装饰，而任何一家都可能在端点侧忽略 response_format
+# ——那时模型仍按提示词回 JSON（下面先按 JSON 解），只有它**没**按提示词走时才轮到这两条。
+# `[*_`]*` 那两格是 G7 补的：模型极爱写 `**DECIDE:** replan`，而老正则要求关键词后
+# 紧跟 `:`/`=` ⇒ 加粗这种最常见的排版**恰恰匹配不到**（静默落成 wrap_up 的那一次）。
+# 只许装饰出现在**关键词与冒号之间**：值里的 `_`（`article_id`）一个字都不许动。
+_DECOR = r"\s*[*_`]*\s*"
+_DECIDE_RE = re.compile(r"DECIDE" + _DECOR + r"[:=]" + _DECOR + r"(\w+)", re.IGNORECASE)
+_ISSUE_RE = re.compile(r"ISSUE" + _DECOR + r"[:=]" + _DECOR + r"(.+)", re.IGNORECASE | re.DOTALL)
+_DECISIONS = ("replan", "wrap_up")
+
+
+def _one_line(v: Any) -> str:
+    """契约是单行 ⇒ 多行只留第一行（两条路同一口径）。"""
+    return str(v or "").strip().split("\n")[0].strip()[:300]
+
+
+def parse_reflector_output(raw: str) -> tuple[str, str]:
+    """复盘器的一次输出 → `(decision, issue)`；**判不了就是 `wrap_up` + 空 issue**。
+
+    20261019 批 G7：此前**只有**文本正则（`DECIDE\\s*[:=]\\s*(\\w+)`），而模型写的
+    `**DECIDE:** replan`（加粗）匹配不到 ⇒ 静默落成 `wrap_up`：模型想重规划、系统当成
+    收尾（`tests/test_reflector_output.py` 把这三个形状钉住了）。现在 JSON 优先——
+    它同时兜住"端点不吃 response_format、但模型照提示词回了 JSON"这条路。
+
+    取值口径（两条路合起来，顺序就是下面四步）：①JSON 对象里的 `issue`（单行化）；
+    ②`decision` 取 JSON 里的，**必须是两值之一**（别的写法一律不认，落到 ③）；
+    ③没有 JSON（或 JSON 里那个值不合法）时看文本行的 `DECIDE:`；④都没有 ⇒ `wrap_up`。
+
+    ⚠️ 两条路都读不出时**出声**（`logger.warning`）：这一族的教训是"降级路径静默"比
+    "降级"坏得多——`wrap_up` 与"判据坏了"在 trace 里长得一样。
+    """
+    text = (raw or "").strip()
+    obj = _first_json_object(text)
+    issue = _one_line(obj.get("issue")) if isinstance(obj, dict) else ""
+    if isinstance(obj, dict):
+        decision = str(obj.get("decision") or "").strip().lower()
+        if decision in _DECISIONS:
+            return decision, issue
+    dm = _DECIDE_RE.search(text)
+    if dm:
+        im = _ISSUE_RE.search(text)
+        return dm.group(1).lower(), issue or (_one_line(im.group(1)) if im else "")
+    if text:
+        logger.warning("[reflector] 输出既不是约定的 JSON、也没有 DECIDE 行 ⇒ 按 wrap_up "
+                       "收尾（这一条**不是**模型的判断，是解析失败）：%.120s", text)
+    return "wrap_up", issue
+
+
+def _first_json_object(text: str) -> Any:
+    """从一段可能带围栏/前后缀的文字里取出**第一个** JSON 对象；取不到给 None。
+
+    容的是模型最常见的两种包装：` ```json … ``` ` 与"先说一句话再给对象"。**不做**
+    宽松解析（不用 `ast.literal_eval` 兜单引号）：这不是给人手写的输入，宽容只会把
+    "模型没按契约答"洗成"答对了"。
+    """
+    i = text.find("{")
+    while i >= 0:
+        try:
+            obj, _end = json.JSONDecoder().raw_decode(text[i:])
+        except ValueError:
+            i = text.find("{", i + 1)
+            continue
+        if isinstance(obj, dict):
+            return obj
+        i = text.find("{", i + 1)
+    return None
+
+
+def invoke_reflector(prompt: str) -> Any:
+    """复盘器的一次 LLM 调用：**按服务商绑结构化输出方言**，绑不上就降级纯文本。
+
+    降级**出声**（一条 WARNING）：静默降级的后果不是"判得松一点"，是输出契约没人管
+    （`json_object` 那一档的字段契约只长在提示词里，见 `_REFLECTOR_PROMPT`）。
+
+    参数与 20261019 之前逐字相同（`temperature=0.0, max_tokens=300, timeout=30,
+    enable_thinking=False`）——复盘是确定性诊断（判两值），不需要任何随机性。
+    """
+    from config import settings
+    from models.llm import response_format
+
+    llm = get_llm(temperature=0.0, max_tokens=300, timeout=30, enable_thinking=False)
+    try:
+        return llm.bind(response_format=response_format(
+            settings._provider_prefix, REFLECT_SCHEMA, name="reflect")).invoke(prompt)
+    except Exception as e:  # noqa: BLE001 —— 端点不吃结构化输出 ⇒ 降级，但要让人知道
+        logger.warning("[reflector] 结构化输出不可用，降级为纯 prompt 约束：%s: %s",
+                       type(e).__name__, e)
+        return llm.invoke(prompt)
