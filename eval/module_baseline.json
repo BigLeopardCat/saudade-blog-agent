@@ -8,7 +8,7 @@
     "top_defs": 37
   },
   "agent/graph.py": {
-    "lines": 13332,
+    "lines": 13334,
     "top_defs": 236
   },
   "agent/prompt_context.py": {
@@ -20,7 +20,7 @@
     "top_defs": 1
   },
   "agent/react_arm.py": {
-    "lines": 1248,
+    "lines": 1252,
     "top_defs": 40
   },
   "agent/tasks.py": {
@@ -36,8 +36,8 @@
     "top_defs": 30
   },
   "eval/experiments/checkpoint_probe.py": {
-    "lines": 1591,
-    "top_defs": 35
+    "lines": 1713,
+    "top_defs": 37
   },
   "eval/run_golden.py": {
     "lines": 3686,
@@ -48,8 +48,8 @@
     "top_defs": 36
   },
   "server.py": {
-    "lines": 2656,
-    "top_defs": 56
+    "lines": 2711,
+    "top_defs": 59
   },
   "tests/test_admin_write.py": {
     "lines": 2003,
