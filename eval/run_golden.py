@@ -89,6 +89,17 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 
+# 仓根按**本文件的位置**算，并插在 `sys.path` **最前**（20261019）：`agent` / `server`
+# 这些包在 venv 里有一条 editable 安装指向**主仓**（`_editable_impl_saudade_agent.pth`），
+# 而 `python eval/run_golden.py` 的 `sys.path[0]` 是 `eval/`、**不含仓根** ⇒ 在 worktree
+# 里跑本文件时 `import agent` 命中的是**主仓**那棵树：改了哪棵树、跑的又是哪棵树，
+# 静默分成两半。`golden_case_runner.py` 早就按文件位置算（见它头注那段长说明），本文件
+# 此前没算 ⇒ **同一个 run 的父进程与子进程 import 的不是同一棵树**。实测症状：react 臂
+# 的 trace 里 planner / model 事件一个都没有（那些 `record` 来自 worktree 那棵树的新代码，
+# 而跑的是主仓那棵旧臂）；同一批用例走进程隔离那条路却是全的。
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, ROOT)
+
 # 复用 server 内部链路（不走 HTTP，与 test_fallback_replay.py 同模式）
 import server
 from server import (ChatRequest, HistoryItem, _build_messages,
