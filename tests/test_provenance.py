@@ -171,7 +171,10 @@ _deny = P.always_confirm_tools()
 check("射程里一个一律弹窗族的工具都没有（卡面印全值 ⇒ 人眼是核验方）",
       not (_scope & _deny), str(sorted(_scope & _deny)))
 check("射程 ⊇ 免弹窗写族（判据一的射程与今天那道闸是同一族）",
-      {"create_tag", "update_tag", "delete_tag", "set_article_tags",
+      # `delete_tag` 20261019 起进了 `_ALWAYS_CONFIRM_TOOLS`（SAU-014：删一级
+      # 标签连坐子标签、无回收站 ⇒ 卡面是核验方，不再要点名出处）⇒ 它**应该**在射程外。
+      # 这一格断言的是"射程跟着闸走"，所以族别一变、期望也得跟着变——不是放宽。
+      {"create_tag", "update_tag", "set_article_tags",
        "create_category", "update_category", "delete_category"} <= _scope,
       str(sorted(_scope)))
 check("★ 四条历史刻意豁免自动落在射程**外**（通知正文/角色档位/禁言时长/待办正文）",
@@ -195,7 +198,7 @@ def _schema(role, **kw):
 _off, _on = _schema("admin"), _schema("admin", evidence=True)
 _with = sorted(k for k in _on if "evidence" in _on[k]["parameters"]["properties"])
 check("开档：射程内的技能多出 evidence 一格",
-      "tag_delete" in _with and "tag_create" in _with, str(_with))
+      "tag_update" in _with and "tag_create" in _with, str(_with))
 check("射程外的技能**没有**它（通知/公告/留言族走弹卡，卡面就是核验方）",
       not [k for k in ("send_user_notice", "account_set_role", "board_audit",
                        "announcement_create") if k in _with])

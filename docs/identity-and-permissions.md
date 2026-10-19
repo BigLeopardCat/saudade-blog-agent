@@ -57,6 +57,15 @@ scope 词汇表（`<动作>.<对象>`）：`read.public` / `read.own` /
   checker 判 BLOCK（`reason=scope_denied`）→ 走既有受阻链路（planner 如实收尾 / reflector
   受限复盘）。**不新增决策分支**，也不静默吞掉。
 - 失败取向：未知角色、未声明工具一律**拒绝**（fail-closed）。从不默认放行、从不默认管理员。
+- **不吃 shadow 的那一档**：`_HARD_SCOPES`（`admin.console` / `write.console` /
+  **`write.device`**）的拒绝**恒生效**，与 `authz_enforce` 取哪一档无关。前两条的理由是
+  "纯新增能力、没有观测期可谈"；`write.device`（20261019，安全审计 SAU-007）的理由不同——
+  **后果落在物理世界**（`device_oled_display` 把一段字刷到设备屏上），放行错了收不回来，
+  这一类不该有灰度期。三个真角色都授予它 ⇒ 对正常用户一字不改，它拦的只有"身份不明"。
+  `read.own` 与 `write.own` **都不进**：前者唯一能拒的是 `zako`（整轮零工具）与未知角色，
+  硬拦买不到新防线；后者的论证见 §3.4。
+  两个方向都有锁：`tests/test_authz.py`（集合相等 + 少一个就报不等）、
+  `tests/test_admin_write.py`（`authz_enforce=False` 下非 admin 仍被拦）。
 
 ### 3.4 人在回路：权限之后还有一次"同意"
 
@@ -461,6 +470,14 @@ execute 遇到写 spec 卡在同意闸上
 | 改标签（改名/改色/换父级/换层级） | `update_tag` | `PUT /tagone|tagtwo/:id`（仅改名改色）/ **`POST /api/protected/tag/move`**（动了层级或父级） | PUT 的 title+color **都是必填** ⇒ 只改名时把**当前色**从索引原样回传，**不猜** |
 | 删标签 | `delete_tag` | `DELETE /api/protected/tag` | **任何标签都能删**（用户拍板），代价写进确认卡：会从 N 篇文章上摘掉引用 + 子标签连坐；`prune_note_tags` **不可回滚** |
 | 建/改/删分类 | `create_category` / `update_category` / `delete_category` | `POST /api/protected/category`、`POST …/category/:id`、`DELETE …/category` | 建分类**不回 id**（复核靠重拉列表按名找）；改分类**空串 = 不改**；删分类 `ON DELETE SET NULL`（文章变成没有分类） |
+
+**删标签 20261019 起进 `_ALWAYS_CONFIRM_TOOLS`**（安全审计 SAU-014，CWE-354）：它此前走两档
+族——原话里有命令骨架就免问直执行。改判的理由是**不可逆 + 连坐**：删一级标签会 CASCADE 掉它
+下面所有二级标签、并从所有文章上摘掉引用，`prune_note_tags` 没有回滚。同族的判据在
+`tests/test_confirm.py`（「一律弹窗」族不许被改回两档）、`tests/test_write_dead_end_guard.py`
+（该族唯一的执行路径就是弹卡，逐个工具枚举）与 `tests/test_provenance.py`（射程 = 写集 −
+一律弹窗族，它因此**移出**出处核对的强制域）。`delete_category` **刻意不进**：它那条是
+`ON DELETE SET NULL`（文章变成"没有分类"，可再指定），没有连坐删除。
 
 **这一轮真正的机制改动是"名字通道"**（用户拍板 ②）：写技能参数一律写**名字**——人嘴里说的就是
 名字，跨轮执行记忆里也只有名字（回执行摘要**刻意不带 id**）；工具在 execute 阶段对着**实时标签

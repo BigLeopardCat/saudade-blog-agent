@@ -38,6 +38,13 @@ from agent.entity_digest import receipt_digest  # noqa: E402
 from agent.graph import _CMD_PREFIX_RE  # noqa: E402
 import tools.base as base  # noqa: E402
 
+# ── 密钥桩（20261019）──
+# 报表工具走 `_principal_get` ⇒ `_sign_local_jwt`；CI 没有 `.env`，
+# `settings.jwt_secret` 默认空串，而 20261019 起**空密钥不许签**（SAU-012）。
+from config.settings import settings as _settings  # noqa: E402
+_SAVED_SECRET = _settings.jwt_secret
+_settings.jwt_secret = "test-secret-for-reports"
+
 FAILS: list[str] = []
 
 
@@ -934,6 +941,8 @@ _u = base.list_admin_board.invoke({}, config=_cfg(7, role="user"))
 check("读不到（无权）⇒ unavailable（不是「一条都没有」）",
       _u.kind == "unavailable" and "无权" in _u, f"{_u.kind}: {_u}")
 base._client = real_client
+
+_settings.jwt_secret = _SAVED_SECRET   # 收尾：还原（见头部密钥桩）
 
 print("\n" + ("全部通过" if not FAILS else f"失败 {len(FAILS)} 项：" + "; ".join(FAILS)))
 raise SystemExit(1 if FAILS else 0)
