@@ -10,21 +10,29 @@ import re
 
 # ── 目标 id 的归一（20260929 批 H · S2）─────────────────────────────────
 # 写通道从"名字/正文片段"改成"台账里的 id"之后，模型填进来的值有两种合法写法：
-# 裸数字（`101`）与**帧里印出来的带命名空间写法**（`talkId:101` / `账号 id=3` /
-# `userId:3` / `#101`）。`_board_label` 印的就是前者，而 `_render_quota_facts`
-# 印的是「（账号 id=3，…）」——模型照抄整段时会把命名空间一起抄进来。
+# 裸数字（`101`）与**帧里印出来的带命名空间写法**（`talkId:101` / `commentId:37` /
+# `账号 id=3` / `userId:3` / `#101`）。`_board_label` 与 `comment_ref` 印的是前者，
+# 而 `_render_quota_facts` 印的是「（账号 id=3，…）」——模型照抄整段时会把命名空间
+# 一起抄进来。
+#
+# ⚠️ **`commentId` 必须单独列进这一串**（20261019）：`fullmatch` 是从头锚定的，而
+# 这个串以 `comment` 起头 ⇒ 里面那条 `id` 备选**够不着它**（"commentId:37" 在位置 0
+# 既不是 `talkId` 也不是 `id`）。漏了它的症状是：planner 老老实实照抄系统印的
+# `commentId:37`，系统回一句"那不是编号"——而**照抄正是系统要求它做的动作**。
+# 同族：`talkId` 与 `userId` 各自也在串里，理由一模一样。
 #
 # **宽容的只是写法，不是"猜"**：剥掉命名空间后必须剩下**一个纯整数**，多一个
 # 字符都算认不出（返回 None ⇒ 零工具/零写，交回 planner）。所以这里既不是模糊
 # 匹配、也不替模型解释它想说的是谁——"这个 id 是不是真的存在"由**现场台账**判
 # （`tools.base` 的 id 分支与 `graph._ledger_target_refusal`）。
 _TARGET_ID_NS_RE = re.compile(
-    r"(?:talkId|talk_id|talkid|userId|user_id|userid|账号\s*id|account_id|id|#)"
+    r"(?:talkId|talk_id|talkid|commentId|comment_id|commentid|userId|user_id|userid"
+    r"|账号\s*id|account_id|id|#)"
     r"\s*[:=#]?\s*#?(\d+)", re.IGNORECASE)
 
 
 def normalize_target_id(value) -> int | None:
-    """写目标 id（留言 talkId / 额度申请人的 userId）→ 正整数；认不出 → None。
+    """写目标 id（留言 talkId / 评论 commentId / 额度申请人的 userId）→ 正整数；认不出 → None。
 
     认三种形态：`int`、纯数字串、带命名空间的写法（见上面那张正则的注）。
     **不认**：负数、0（id 从 1 起）、浮点、带别的内容的串——一律 None。

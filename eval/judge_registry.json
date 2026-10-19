@@ -20,7 +20,7 @@
         429
       ],
       "agent/action_text.py": [
-        91,
+        95,
         0
       ],
       "agent/adminops_account.py": [
@@ -29,6 +29,10 @@
       ],
       "agent/adminops_board.py": [
         0,
+        0
+      ],
+      "agent/adminops_comment.py": [
+        2,
         0
       ],
       "agent/adminops_confirm.py": [
@@ -52,15 +56,19 @@
         33
       ],
       "agent/adminops_todo.py": [
-        11,
+        14,
         0
       ],
       "agent/agent.py": [
         0,
         0
       ],
+      "agent/arg_refs.py": [
+        0,
+        3
+      ],
       "agent/authz.py": [
-        76,
+        80,
         441
       ],
       "agent/block_reasons.py": [
@@ -87,10 +95,6 @@
         3,
         0
       ],
-      "agent/prompt_context.py": [
-        1,
-        55
-      ],
       "agent/deterministic_plan.py": [
         38,
         325
@@ -108,8 +112,8 @@
         0
       ],
       "agent/graph.py": [
-        136,
-        3436
+        137,
+        3438
       ],
       "agent/hostinfo.py": [
         0,
@@ -151,9 +155,9 @@
         0,
         0
       ],
-      "agent/runtime_probe.py": [
-        0,
-        0
+      "agent/prompt_context.py": [
+        1,
+        55
       ],
       "agent/prompts.py": [
         0,
@@ -171,16 +175,16 @@
         0,
         0
       ],
-      "agent/arg_refs.py": [
-        0,
-        3
-      ],
       "agent/repeat_guard.py": [
         0,
         45
       ],
       "agent/reports.py": [
         19,
+        0
+      ],
+      "agent/runtime_probe.py": [
+        0,
         0
       ],
       "agent/stickers.py": [
@@ -216,7 +220,7 @@
         0
       ],
       "agent/workflow_defs/content_write.py": [
-        45,
+        48,
         0
       ],
       "agent/workflow_defs/nav_map.py": [
@@ -236,7 +240,7 @@
         0
       ],
       "agent/workflow_defs/report_skills.py": [
-        4,
+        6,
         0
       ],
       "agent/workflow_expand.py": [
@@ -267,15 +271,31 @@
         0,
         0
       ],
+      "agent/write_grounding.py": [
+        62,
+        45
+      ],
       "tools/__init__.py": [
         0,
+        0
+      ],
+      "tools/account_admin.py": [
+        13,
+        0
+      ],
+      "tools/admin_read.py": [
+        6,
+        0
+      ],
+      "tools/announcements.py": [
+        8,
         0
       ],
       "tools/base.py": [
         2,
         0
       ],
-      "tools/note_admin.py": [
+      "tools/board_moderation.py": [
         9,
         0
       ],
@@ -283,36 +303,20 @@
         14,
         0
       ],
-      "tools/tag_admin.py": [
-        13,
-        0
-      ],
-      "tools/quota_admin.py": [
-        11,
-        0
-      ],
-      "tools/account_admin.py": [
-        13,
+      "tools/comment_moderation.py": [
+        4,
         0
       ],
       "tools/dashboard_todos.py": [
         5,
         0
       ],
-      "tools/board_moderation.py": [
-        9,
-        0
-      ],
-      "tools/announcements.py": [
-        8,
-        0
-      ],
-      "tools/admin_read.py": [
-        4,
-        0
-      ],
       "tools/device.py": [
         2,
+        0
+      ],
+      "tools/note_admin.py": [
+        9,
         0
       ],
       "tools/notes.py": [
@@ -323,6 +327,10 @@
         9,
         0
       ],
+      "tools/quota_admin.py": [
+        11,
+        0
+      ],
       "tools/result.py": [
         1,
         0
@@ -331,18 +339,18 @@
         15,
         2
       ],
+      "tools/tag_admin.py": [
+        13,
+        0
+      ],
       "server.py": [
         23,
         0
-      ],
-      "agent/write_grounding.py": [
-        62,
-        45
       ]
     },
     "total": [
-      1122,
-      4856
+      1149,
+      4858
     ]
   },
   "entries": [
@@ -475,7 +483,7 @@
       "file": "agent/action_text.py",
       "kind": "collection",
       "name": "_NOARG_VERB",
-      "size": 24,
+      "size": 25,
       "category": "system_data",
       "q": "_NOARG_VERB",
       "why": "工具名 → 动作文案的渲染表（键是工具名，无参调用时的显示字）"
@@ -485,7 +493,7 @@
       "file": "agent/action_text.py",
       "kind": "collection",
       "name": "_REF_SOURCE_CN",
-      "size": 11,
+      "size": 12,
       "category": "parser",
       "q": "_REF_SOURCE_CN",
       "why": "拆工具返回里的检索来源标记，再渲染成中文"
@@ -628,7 +636,7 @@
       "kind": "regex",
       "name": "_TARGET_ID_NS_RE",
       "size": 2,
-      "sample": "(?:talkId|talk_id|talkid|userId|user_id|userid|账号\\s*id|account_id|id|#)\\s*[:=#]?",
+      "sample": "(?:talkId|talk_id|talkid|commentId|comment_id|commentid|userId|user_id|userid|账号",
       "category": "parser",
       "q": "(?:talkId|talk_id|talkid|userId|user_id|userid|账号\\s*id|account_id|id|#)\\s*[:=#]?",
       "why": "拆 wire 里的 id 命名空间前缀（talkId/userId…）"
@@ -720,6 +728,17 @@
       "why": "主人怎么表达『清空/取消』这个截止日",
       "replacement": "模型声明 clear 布尔参数",
       "sunset": "写参数出处第二批（挂起：等真实流量定价，见 docs/write-provenance-shadow-20261014.md §7）"
+    },
+    {
+      "id": "agent/arg_refs.py::_RAG_LINE_RE",
+      "file": "agent/arg_refs.py",
+      "kind": "regex",
+      "name": "_RAG_LINE_RE",
+      "size": 3,
+      "sample": "^\\d+\\.\\s+type=(\\S+)\\s+id=(\\d+)\\s+score=([\\d.]+)\\s+title=(.*?)(?:\\s+命中节=(.*))?$",
+      "category": "parser",
+      "q": "^\\d+\\.\\s+type=(\\S+)\\s+id=(\\d+)\\s+score=([\\d.]+)\\s+title=(.*?)(?:\\s+命中节=(.*))?$",
+      "why": "拆 RAG 工具返回的行（type=/id=/score=/title=）"
     },
     {
       "id": "agent/authz.py::_CONSOLE_QUESTION_RE",
@@ -937,30 +956,6 @@
       "category": "parser",
       "q": "待确认\\[([a-z_]+)\\]",
       "why": "拆 Rust 侧『待确认[skill]』错误码"
-    },
-    {
-      "id": "agent/prompt_context.py::_RECALL_RE",
-      "file": "agent/prompt_context.py",
-      "kind": "regex",
-      "name": "_RECALL_RE",
-      "size": 51,
-      "sample": "刚才|刚刚|刚说|刚讲|刚提|刚发|刚问|上面(?:说|提|讲|给|那)|上述|前述|前面(?:说|提|讲|给|那)|先前|之前(?:说|提|讲|给|那)|上一",
-      "category": "open",
-      "q": "刚才|刚刚|刚说|刚讲|刚提|刚发|刚问|上面(?:说|提|讲|给|那)|上述|前述|前面(?:说|提|讲|给|那)|先前|之前(?:说|提|讲|给|那)|上一",
-      "why": "判断主人是不是在指上一轮（决定 `_recent_tail` 窗口 4 → 10 轮）",
-      "replacement": "待定：等 golden 定价（实测 194 轮里命中 8 轮，「`_is_short_reply` ∪ 代词」兜住 5/8、**漏掉的 3 轮全是追述/纠正** ⇒ 整族删会把 20261007 那批 4→10 轮的收益退回去）",
-      "sunset": "批 6（跨轮指代族，与 config 注入/摘要那条一起定价）"
-    },
-    {
-      "id": "agent/prompt_context.py::_DOC_READ_ROW_RE",
-      "file": "agent/prompt_context.py",
-      "kind": "regex",
-      "name": "_DOC_READ_ROW_RE",
-      "size": 4,
-      "sample": "读取文章\\s*(\\d+)\\s*《([^》\\n]{1,60})》",
-      "category": "parser",
-      "q": "读取文章\\s*(\\d+)\\s*《([^》\\n]{1,60})》",
-      "why": "拆 execution_log 里系统写定的『读取文章 12《…》』行"
     },
     {
       "id": "agent/deterministic_plan.py::_QUESTION_RE",
@@ -1849,67 +1844,6 @@
       "sunset": "声称闸工作流（另册：docs/toolcall-stability-roadmap.md §6）"
     },
     {
-      "id": "agent/write_grounding.py::_ANN_TITLE_RE",
-      "file": "agent/write_grounding.py",
-      "kind": "regex",
-      "name": "_ANN_TITLE_RE",
-      "size": 13,
-      "sample": "(?:标题|题目|名字|名称)\\s*(?:叫|叫做|是|为|：|:)\\s*[「『“\\\"]([^」』”\\\"]{1,60})[」』”\\\"]",
-      "category": "open",
-      "q": "(?:标题|题目|名字|名称)\\s*(?:叫|叫做|是|为|：|:)\\s*[「『“\\\"]([^」』”\\\"]{1,60})[」』”\\\"]",
-      "why": "从主人原话里**按措辞**认写参数（词表 + 位置窗口）（公告标题）",
-      "replacement": "引文核对：模型吐引文、代码逐字比对（agent/provenance.py 第一批已落地）",
-      "sunset": "写参数出处第二批（挂起：等真实流量定价，见 docs/write-provenance-shadow-20261014.md §7）"
-    },
-    {
-      "id": "agent/write_grounding.py::_ANN_BODY_RE",
-      "file": "agent/write_grounding.py",
-      "kind": "regex",
-      "name": "_ANN_BODY_RE",
-      "size": 22,
-      "sample": "(?:正文|内容)\\s*(?:改成|改为|换成|变成|更新为|更新成|写|是|为|说|：|:)\\s*[:：]?\\s*(.+)",
-      "category": "open",
-      "q": "(?:正文|内容)\\s*(?:改成|改为|换成|变成|更新为|更新成|写|是|为|说|：|:)\\s*[:：]?\\s*(.+)",
-      "why": "从主人原话里**按措辞**认写参数（词表 + 位置窗口）（公告正文）",
-      "replacement": "引文核对：模型吐引文、代码逐字比对（agent/provenance.py 第一批已落地）",
-      "sunset": "写参数出处第二批（挂起：等真实流量定价，见 docs/write-provenance-shadow-20261014.md §7）"
-    },
-    {
-      "id": "agent/write_grounding.py::_NAME_MARKS",
-      "file": "agent/write_grounding.py",
-      "kind": "collection",
-      "name": "_NAME_MARKS",
-      "size": 20,
-      "category": "open",
-      "q": "_NAME_MARKS",
-      "why": "从主人原话里**按措辞**认写参数（词表 + 位置窗口）",
-      "replacement": "引文核对：模型吐引文、代码逐字比对（agent/provenance.py 第一批已落地）",
-      "sunset": "写参数出处第二批（挂起：等真实流量定价，见 docs/write-provenance-shadow-20261014.md §7）"
-    },
-    {
-      "id": "agent/write_grounding.py::_DEICTIC_WORDS",
-      "file": "agent/write_grounding.py",
-      "kind": "collection",
-      "name": "_DEICTIC_WORDS",
-      "size": 27,
-      "category": "closed",
-      "q": "_DEICTIC_WORDS",
-      "why": "代词是封闭类——它划定义域（『它』天然是原话子串，会自满足逐字核对），不是打补丁。书面论证见 docs/native-toolcalls-mainline.md §4"
-    },
-    {
-      "id": "agent/write_grounding.py::_PARENT_TAIL_RE",
-      "file": "agent/write_grounding.py",
-      "kind": "regex",
-      "name": "_PARENT_TAIL_RE",
-      "size": 10,
-      "sample": "\\s*(?:下面|底下|之下|下|里|内|中)",
-      "category": "open",
-      "q": "\\s*(?:下面|底下|之下|下|里|内|中)",
-      "why": "从主人原话里**按措辞**认写参数（词表 + 位置窗口）",
-      "replacement": "引文核对：模型吐引文、代码逐字比对（agent/provenance.py 第一批已落地）",
-      "sunset": "写参数出处第二批（挂起：等真实流量定价，见 docs/write-provenance-shadow-20261014.md §7）"
-    },
-    {
       "id": "agent/graph.py::_REVIEW_INTENT_RE",
       "file": "agent/graph.py",
       "kind": "regex",
@@ -1932,6 +1866,19 @@
       "category": "open",
       "q": "额度|配额|申请",
       "why": "在 narrator 的**叙述文字**里找中文词，判断它有没有声称/有没有如实",
+      "replacement": "判**结构事实**（帧/回执/命令帧/任务态）而不是叙述措辞——同族工作见 docs/问题记录.md 声称闸洞①–⑭",
+      "sunset": "声称闸工作流（另册：docs/toolcall-stability-roadmap.md §6）"
+    },
+    {
+      "id": "agent/graph.py::_COMMENT_INTENT_RE",
+      "file": "agent/graph.py",
+      "kind": "regex",
+      "name": "_COMMENT_INTENT_RE",
+      "size": 2,
+      "sample": "评论",
+      "category": "open",
+      "q": "_COMMENT_INTENT_RE",
+      "why": "在 narrator 的**叙述文字**里找中文词，判断它有没有声称/有没有如实（与 _REVIEW_INTENT_RE / _QUOTA_INTENT_RE 同族：三份后台队列，一份正则分不出该读哪份）",
       "replacement": "判**结构事实**（帧/回执/命令帧/任务态）而不是叙述措辞——同族工作见 docs/问题记录.md 声称闸洞①–⑭",
       "sunset": "声称闸工作流（另册：docs/toolcall-stability-roadmap.md §6）"
     },
@@ -2012,15 +1959,28 @@
       "sunset": "写参数出处第二批（挂起：等真实流量定价，见 docs/write-provenance-shadow-20261014.md §7）"
     },
     {
-      "id": "agent/arg_refs.py::_RAG_LINE_RE",
-      "file": "agent/arg_refs.py",
+      "id": "agent/prompt_context.py::_RECALL_RE",
+      "file": "agent/prompt_context.py",
       "kind": "regex",
-      "name": "_RAG_LINE_RE",
-      "size": 3,
-      "sample": "^\\d+\\.\\s+type=(\\S+)\\s+id=(\\d+)\\s+score=([\\d.]+)\\s+title=(.*?)(?:\\s+命中节=(.*))?$",
+      "name": "_RECALL_RE",
+      "size": 51,
+      "sample": "刚才|刚刚|刚说|刚讲|刚提|刚发|刚问|上面(?:说|提|讲|给|那)|上述|前述|前面(?:说|提|讲|给|那)|先前|之前(?:说|提|讲|给|那)|上一",
+      "category": "open",
+      "q": "刚才|刚刚|刚说|刚讲|刚提|刚发|刚问|上面(?:说|提|讲|给|那)|上述|前述|前面(?:说|提|讲|给|那)|先前|之前(?:说|提|讲|给|那)|上一",
+      "why": "判断主人是不是在指上一轮（决定 `_recent_tail` 窗口 4 → 10 轮）",
+      "replacement": "待定：等 golden 定价（实测 194 轮里命中 8 轮，「`_is_short_reply` ∪ 代词」兜住 5/8、**漏掉的 3 轮全是追述/纠正** ⇒ 整族删会把 20261007 那批 4→10 轮的收益退回去）",
+      "sunset": "批 6（跨轮指代族，与 config 注入/摘要那条一起定价）"
+    },
+    {
+      "id": "agent/prompt_context.py::_DOC_READ_ROW_RE",
+      "file": "agent/prompt_context.py",
+      "kind": "regex",
+      "name": "_DOC_READ_ROW_RE",
+      "size": 4,
+      "sample": "读取文章\\s*(\\d+)\\s*《([^》\\n]{1,60})》",
       "category": "parser",
-      "q": "^\\d+\\.\\s+type=(\\S+)\\s+id=(\\d+)\\s+score=([\\d.]+)\\s+title=(.*?)(?:\\s+命中节=(.*))?$",
-      "why": "拆 RAG 工具返回的行（type=/id=/score=/title=）"
+      "q": "读取文章\\s*(\\d+)\\s*《([^》\\n]{1,60})》",
+      "why": "拆 execution_log 里系统写定的『读取文章 12《…》』行"
     },
     {
       "id": "agent/repeat_guard.py::_REDO_REQUEST_RE",
@@ -2086,6 +2046,67 @@
       "why": "公开页面名（主页/说说）占用检查"
     },
     {
+      "id": "agent/write_grounding.py::_ANN_TITLE_RE",
+      "file": "agent/write_grounding.py",
+      "kind": "regex",
+      "name": "_ANN_TITLE_RE",
+      "size": 13,
+      "sample": "(?:标题|题目|名字|名称)\\s*(?:叫|叫做|是|为|：|:)\\s*[「『“\\\"]([^」』”\\\"]{1,60})[」』”\\\"]",
+      "category": "open",
+      "q": "(?:标题|题目|名字|名称)\\s*(?:叫|叫做|是|为|：|:)\\s*[「『“\\\"]([^」』”\\\"]{1,60})[」』”\\\"]",
+      "why": "从主人原话里**按措辞**认写参数（词表 + 位置窗口）（公告标题）",
+      "replacement": "引文核对：模型吐引文、代码逐字比对（agent/provenance.py 第一批已落地）",
+      "sunset": "写参数出处第二批（挂起：等真实流量定价，见 docs/write-provenance-shadow-20261014.md §7）"
+    },
+    {
+      "id": "agent/write_grounding.py::_ANN_BODY_RE",
+      "file": "agent/write_grounding.py",
+      "kind": "regex",
+      "name": "_ANN_BODY_RE",
+      "size": 22,
+      "sample": "(?:正文|内容)\\s*(?:改成|改为|换成|变成|更新为|更新成|写|是|为|说|：|:)\\s*[:：]?\\s*(.+)",
+      "category": "open",
+      "q": "(?:正文|内容)\\s*(?:改成|改为|换成|变成|更新为|更新成|写|是|为|说|：|:)\\s*[:：]?\\s*(.+)",
+      "why": "从主人原话里**按措辞**认写参数（词表 + 位置窗口）（公告正文）",
+      "replacement": "引文核对：模型吐引文、代码逐字比对（agent/provenance.py 第一批已落地）",
+      "sunset": "写参数出处第二批（挂起：等真实流量定价，见 docs/write-provenance-shadow-20261014.md §7）"
+    },
+    {
+      "id": "agent/write_grounding.py::_NAME_MARKS",
+      "file": "agent/write_grounding.py",
+      "kind": "collection",
+      "name": "_NAME_MARKS",
+      "size": 20,
+      "category": "open",
+      "q": "_NAME_MARKS",
+      "why": "从主人原话里**按措辞**认写参数（词表 + 位置窗口）",
+      "replacement": "引文核对：模型吐引文、代码逐字比对（agent/provenance.py 第一批已落地）",
+      "sunset": "写参数出处第二批（挂起：等真实流量定价，见 docs/write-provenance-shadow-20261014.md §7）"
+    },
+    {
+      "id": "agent/write_grounding.py::_DEICTIC_WORDS",
+      "file": "agent/write_grounding.py",
+      "kind": "collection",
+      "name": "_DEICTIC_WORDS",
+      "size": 27,
+      "category": "closed",
+      "q": "_DEICTIC_WORDS",
+      "why": "代词是封闭类——它划定义域（『它』天然是原话子串，会自满足逐字核对），不是打补丁。书面论证见 docs/native-toolcalls-mainline.md §4"
+    },
+    {
+      "id": "agent/write_grounding.py::_PARENT_TAIL_RE",
+      "file": "agent/write_grounding.py",
+      "kind": "regex",
+      "name": "_PARENT_TAIL_RE",
+      "size": 10,
+      "sample": "\\s*(?:下面|底下|之下|下|里|内|中)",
+      "category": "open",
+      "q": "\\s*(?:下面|底下|之下|下|里|内|中)",
+      "why": "从主人原话里**按措辞**认写参数（词表 + 位置窗口）",
+      "replacement": "引文核对：模型吐引文、代码逐字比对（agent/provenance.py 第一批已落地）",
+      "sunset": "写参数出处第二批（挂起：等真实流量定价，见 docs/write-provenance-shadow-20261014.md §7）"
+    },
+    {
       "id": "server.py::_REASON_CN",
       "file": "server.py",
       "kind": "collection",
@@ -2094,17 +2115,6 @@
       "category": "system_data",
       "q": "_REASON_CN",
       "why": "帧退出原因的显示字。**19→20（20261016）**：新码 `action_conflict`（反极性改选，docs/问题记录.md §1.57）——这张表**不是判据词表**，是给主人看的显示字，且与 `agent/block_reasons.py::REASONS` 有一道**跨侧同值锁**（tests/test_block_reasons.py：键集相等 + 逐值相等）。⇒ 新增一个原因码**必然**在这里 +1，没有第二条路可走；这不是「往判据里加词」。**20→21（20261016）**：新码 `write_outcome_unknown`（写操作幂等账，ADR-0012 / docs/问题记录.md §1.66）——同上。这一次同时说明另一侧的读数：`agent/block_reasons.py` 的**穷举量** 20→21 是**同一件事的第二个读数**，不是又长了一张新表——那一侧至今没有登记条目，因为 `REASONS` 的中文住在**元组值**里（`(\"写操作结果未知\", False)`），而窄口径的 `_direct_cjk` 只认集合字面量的**直接**元素、不下钻嵌套 ⇒ ① 看不见它，只有 ② 的补网抓得到。⇒ 两处 +1 都不是「往判据里加词」，是这条跨侧同值锁的另一端。**21→22（20261019）**：新码 `invalid_args`（工具**自己**判出参数不合法，批 ⑤-1，见 `tools/result.invalid_args` 与 `agent/graph.py::_check_spec` 的 `kind == \"invalid_args\"` 分支）——第三次同上。`agent/block_reasons.py` 的穷举量同步 21→22，仍是这条锁的另一端而不是新表。"
-    },
-    {
-      "id": "tools/site.py::_WEATHER_LOC_RE",
-      "file": "tools/site.py",
-      "kind": "regex",
-      "name": "_WEATHER_LOC_RE",
-      "size": 2,
-      "sample": "[A-Za-z一-龥 ,.'\\-]{1,40}",
-      "category": "parser",
-      "q": "[A-Za-z一-龥 ,.'\\-]{1,40}",
-      "why": "从参数里截出地名（字符类，不是词表）"
     },
     {
       "id": "tools/base.py::_NOTICE_TARGET_REFUSALS",
@@ -2135,6 +2145,17 @@
       "category": "system_data",
       "q": "_QUOTA_POLICY_REFUSALS",
       "why": "对着 **Rust 侧产出**的拒绝文案"
+    },
+    {
+      "id": "tools/site.py::_WEATHER_LOC_RE",
+      "file": "tools/site.py",
+      "kind": "regex",
+      "name": "_WEATHER_LOC_RE",
+      "size": 2,
+      "sample": "[A-Za-z一-龥 ,.'\\-]{1,40}",
+      "category": "parser",
+      "q": "[A-Za-z一-龥 ,.'\\-]{1,40}",
+      "why": "从参数里截出地名（字符类，不是词表）"
     }
   ],
   "eval_vocab": {
