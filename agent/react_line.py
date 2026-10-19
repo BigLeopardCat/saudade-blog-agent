@@ -398,14 +398,16 @@ class WorkflowExecutor:
             fn = self.tools.get(name)
             # 权限判据（P1，20261004）：**在执行之前**，与参数引用解析同层——确定性、
             # 无 LLM、无一例外。生产在 `graph.execute_node` 里做的是同一件事
-            # （`authz.check` + `authz.enforcing(decision.scope)` → `denial_frame`），
-            # 本线此前**没有**这一道。拒绝的形态也要同源：产 `__ERROR__: 权限不足[…]`
-            # 帧，`_check_spec` 认得出它（`authz.scope_error_reason`）并判 BLOCK，
-            # 于是受阻链路（blocked 回执 + 原因码）照旧成立。
+            # （`authz.check` + `authz.must_enforce(decision, principal)` →
+            # `denial_frame`），本线此前**没有**这一道。拒绝的形态也要同源：产
+            # `__ERROR__: 权限不足[…]` 帧，`_check_spec` 认得出它
+            # （`authz.scope_error_reason`）并判 BLOCK，于是受阻链路（blocked 回执 +
+            # 原因码）照旧成立。用 `must_enforce` 而不是 `enforcing(scope)`（20261019）：
+            # 两臂比的必须是**同一条**判据，见 tests/test_react_arm.py ③ 的字面锁。
             decision = authz.check(self.principal, name)
             if not args_ok or fn is None:
                 text = text or f"__ERROR__: 工具 {name} 不在本轮可执行清单里"
-            elif not decision.allowed and authz.enforcing(decision.scope):
+            elif not decision.allowed and authz.must_enforce(decision, self.principal):
                 text = authz.denial_frame(decision, self.principal)
                 logger.info("[react_line] 权限拒绝，不执行: %s → %s", name, decision)
             else:

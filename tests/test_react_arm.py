@@ -50,7 +50,7 @@ import agent.react_arm as R  # noqa: E402
 # 换掉的是**模块属性**、原函数就此从命名空间里消失。⑬ 要验的正是它里面那一行留痕，
 # 所以在这里存一份——**必须在任何一节跑之前**（模块级赋值按行序执行）。
 _REAL_SYSTEM_PROMPT = R._system_prompt
-from agent.principal import UNKNOWN, Principal  # noqa: E402
+from agent.principal import SOURCE_ASSERTION, UNKNOWN, Principal  # noqa: E402
 from agent.react_line import RunLedger, WorkflowExecutor  # noqa: E402
 
 FAILS: list[str] = []
@@ -380,7 +380,12 @@ check("空工具结果仍产 messages 帧（过滤是 producer 的事，本层�
 
 # ── ③ 权限闸（P1） ───────────────────────────────────────────────────
 print("\n③ 权限闸：与 `graph.execute_node` **同一条**条件（不是更严、也不是更松）")
-_src_line = "not decision.allowed and authz.enforcing(decision.scope)"
+# 20261019：判据函数从 `enforcing(decision.scope)` 换成 `must_enforce(decision, …)`
+# ——"这一次拦不拦"要看这次是谁在调（未验成的身份不进灰度，见 tests/test_authz.py ⑪）。
+# 两臂传的身份是同一个对象，只是本线把它挂在 `self.principal` 上 ⇒ 锁到逗号为止：
+# **函数与第一个实参必须逐字相同**，后半截（`principal` / `self.principal`）按各自的
+# 持有方式。这已经够挡住"改成一律拦 / 换回裸 enforcing"这两类漂移。
+_src_line = "not decision.allowed and authz.must_enforce(decision, "
 _graph_src = (ROOT / "agent" / "graph.py").read_text(encoding="utf-8")
 _arm_src = (ROOT / "agent" / "react_arm.py").read_text(encoding="utf-8")
 # 帧契约的唯一事实源（20261016 起）：`_round_state` / `_popup_state` / 四个帧构造器都
@@ -400,8 +405,13 @@ try:
         scope=authz.SCOPE_ADMIN_CONSOLE, tool=t)
     RAN.clear()
     led = RunLedger()
+    # 身份**显式标成断言来源**（20261019）：这条判据要证明的是"硬 scope 不吃 shadow"。
+    # 用默认来源（`SOURCE_BODY`）的话，`must_enforce` 会先按"未验成的身份"硬拦 ⇒ 判据
+    # 变成绿的，但绿在一个与此处无关的分支上（把 admin.console 移出 `_HARD_SCOPES`
+    # 也不会红——正是"看着在测、其实没测"）。
     _ex = WorkflowExecutor({"list_admin_notes": lambda **kw: _nav_tool(**kw)}, led,
-                        role="admin", principal=Principal(uid=9, role="admin"))
+                        role="admin", principal=Principal(uid=9, role="admin",
+                                                          source=SOURCE_ASSERTION))
     _ex.run("admin_notes", {})
     check("**技能入口拒绝时工具一次都没真的跑**", RAN == [], str(RAN))
     check("账上记的是受阻、不是事实",
@@ -462,11 +472,23 @@ print("\n③c 影子 scope 不拦（`authz_enforce=False` 时两臂都放行—�
 RAN.clear()
 _run([_call("navigate", target="首页"), AIMessage(content="好")],
      {"navigate_to": _nav_tool}, principal=UNKNOWN)
-check("身份不明 + 影子 scope（write.page）⇒ **照样执行**（与 graph 同：影子期语义，"
-      "不是本层漏了闸）", len(RAN) == 1, str(RAN))
+# 20261019：放行的**理由变了**——不再是"影子期一律放行"，而是 `write.page` 在
+# `_PUBLIC_SURFACE` 里（未验成的身份只留公开面，见 authz.must_enforce）。
+check("身份不明 + 公开面 scope（write.page）⇒ **照样执行**（与 graph 同一条条件）",
+      len(RAN) == 1, str(RAN))
 check("`write.console` 是硬 scope、`write.page` 不是（闸随 authz 表走，本层不另设）",
       authz.enforcing(authz.SCOPE_WRITE_CONSOLE)
       and not authz.enforcing(authz.SCOPE_WRITE_PAGE))
+# 反控（20261019 新增）：**同一个身份、换一件私有面的工具 ⇒ 必须拦**。
+# 没有这一条，"③c 放行"与"本层根本没有闸"长得一模一样。
+# 靶子挑 `device_query`（→ `list_devices`，read.own）：它是**读**、不吃同意闸，
+# 所以拦住它的只可能是权限闸——挑 `favorite_add` 那种写会先被同意闸截停，
+# 那测的是另一道闸（同 test_react_line ⑤ 里选靶子的那条注）。
+RAN.clear()
+_run([_call("device_query", args={}), AIMessage(content="好")],
+     {"list_devices": lambda **kw: RAN.append(kw) or "在线设备: 无"}, principal=UNKNOWN)
+check("身份不明 + 私有面读（read.own）⇒ **不执行**（未验成的身份不进灰度）",
+      RAN == [], str(RAN))
 _rot = _run([_call("不存在的技能", args={}), AIMessage(content="好")], {})
 check("身份通道缺省（config 里没有 principal）也不炸（`_principal_of` 兜底）",
       bool(_ups(_rot)))
