@@ -3374,16 +3374,16 @@ def test_reflector_routes_and_budget():
     check("无受阻项 → 防御终局（reflect_end=True）",
           out2["reflect_end"] is True and parse_plan(out2["plan"])["tools"] == [],
           str(out2))
-    # 有受阻项 + 预算内 → 走 LLM 复盘路径（单测不实调：monkeypatch 抛异常 →
-    # 节点异常兜底转终局，验证"调用失败一律 wrap_up 兜底"不炸图、不出 replan）
-    from agent import graph as graph_mod
-    orig_get_llm = graph_mod.get_llm
-    graph_mod.get_llm = lambda **kw: _LLMBoom()
+    # 有受阻项 + 预算内 → 走 LLM 复盘路径（单测不实调：monkeypatch 抛异常 → 节点异常兜底
+    # 转终局；桩打在**新家** `planner_llm.get_llm`——批 G7 起复盘调用住 `invoke_reflector`）
+    from agent import planner_llm as pl_mod
+    orig_get_llm = pl_mod.get_llm
+    pl_mod.get_llm = lambda **kw: _LLMBoom()
     try:
         out3 = reflector_node(_st(blocked=[{"spec": "a", "reason": "empty_result",
                                             "result": ""}]))
     finally:
-        graph_mod.get_llm = orig_get_llm
+        pl_mod.get_llm = orig_get_llm
     check("复盘 LLM 异常 → 兜底终局（reflect_end=True 收尾计划）",
           out3["reflect_end"] is True and parse_plan(out3["plan"])["tools"] == []
           and out3["reflect_rounds"] == 1,

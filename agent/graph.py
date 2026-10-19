@@ -113,7 +113,8 @@ from agent.entity_digest import receipt_digest
 from agent.factblock import (action_facts, is_action_family, is_block_family,
                              render_fact_block)
 from agent.llm_usage import usage_fields
-from agent.planner_llm import (bind_planner_tools, finish_reason, tool_call_names,
+from agent.planner_llm import (bind_planner_tools, finish_reason, invoke_reflector,
+                               parse_reflector_output, tool_call_names,
                                tool_calls_to_plan)
 from agent.principal import CHAT_ONLY_ROLES, UNKNOWN as UNKNOWN_PRINCIPAL
 from agent.prompts import (BLOG_ASSISTANT_PROMPT, NARRATOR_DISCIPLINE, STICKER_GUIDE,
@@ -9873,8 +9874,8 @@ def execute_node(state: AgentState, config: RunnableConfig | None = None) -> dic
 # 与老 reflector 的三个结构性差异：
 #   1. 输入无散文——图序 execute→reflector 先于 model，叙述尚未生成、结构上
 #      看不到（检查对象是受阻项/回执/帧，不是叙述文本）；
-#   2. 输出两行契约（ISSUE:/DECIDE:），replan 只把 ISSUE 给 planner 当修正
-#      指引（planner 仍是唯一决策点），wrap_up/预算耗尽 → 确定性收尾计划；
+#   2. 输出走结构化（20261019 批 G7；ISSUE:/DECIDE: 两行退居回落支），replan 只把
+#      issue 给 planner 当修正指引（planner 仍是唯一决策点），wrap_up → 确定性收尾计划；
 #   3. 预算 REFLECT_MAX_ROUNDS=2 硬顶 + 解析失败一律 wrap_up 兜底——LLM 复盘
 #      循环不失控，到顶即终局（无静默 accept，gate 照常检查终局轮叙述）。
 
@@ -9883,7 +9884,7 @@ def execute_node(state: AgentState, config: RunnableConfig | None = None) -> dic
 # 复盘提示词正文（`_REFLECTOR_PROMPT`）同批搬到 `agent/prompts.py`，顶部按原名取回。
 def reflector_node(state: AgentState, config: RunnableConfig | None = None) -> dict:
     """复盘受阻执行（20260904）：同 spec 二次受阻后路由至此（route_after_execute），
-    由复盘 LLM 判 ISSUE+DECIDE，输出只驱动两种去向——replan 把修正指引给
+    由复盘 LLM 判 issue+decision（结构化输出），输出只驱动两种去向——replan 把修正指引给
     planner（唯一决策点不变），wrap_up/预算耗尽走确定性收尾计划 + reflect_end
     → model 叙述、gate 照常检查。复盘不计入 plan_rounds（planner 轮次上限语义
     不变），只占 REFLECT_MAX_ROUNDS 次复盘预算。
@@ -9920,10 +9921,10 @@ def reflector_node(state: AgentState, config: RunnableConfig | None = None) -> d
            round=rounds + 1)
     _t0 = time.monotonic()
     try:
-        # 复盘是确定性诊断（判 replan/wrap_up 两值）——最低温 + 短输出 + 无思考
-        llm = get_llm(temperature=0.0, max_tokens=300, timeout=30,
-                      enable_thinking=False)
-        resp = llm.invoke(_REFLECTOR_PROMPT.format(
+        # 复盘是确定性诊断（判 replan/wrap_up 两值）——最低温 + 短输出 + 无思考；
+        # 20261019 批 G7 起走 `invoke_reflector`：按服务商方言绑结构化输出，绑不上降级
+        # 纯文本并**出声**（那一条 WARNING 是这条路唯一还看得见的地方）。
+        resp = invoke_reflector(_REFLECTOR_PROMPT.format(
             plan=plan_txt, blocked=blocked_txt, frames=facts))
     except Exception as e:
         logger.warning("[reflector] LLM 异常，按收尾终局: %s", e)
@@ -9934,12 +9935,9 @@ def reflector_node(state: AgentState, config: RunnableConfig | None = None) -> d
     logger.info("[reflector] LLM 复盘耗时=%.1fs（round %d/%d）",
                 dur, rounds + 1, REFLECT_MAX_ROUNDS)
     raw = (getattr(resp, "content", str(resp)) or "").strip()
-    dm = re.search(r"DECIDE\s*[:=]\s*(\w+)", raw, re.IGNORECASE)
-    decide = dm.group(1).lower() if dm else "wrap_up"  # 解析失败 → wrap_up 兜底
-    im = re.search(r"ISSUE\s*[:=]\s*(.+)", raw, re.IGNORECASE | re.DOTALL)
-    issue = ""
-    if im:
-        issue = im.group(1).strip().split("\n")[0].strip()[:300]  # 契约单行
+    # 结构化优先、文本回落（20261019 批 G7）：解析与它的 schema 同住 `planner_llm`，
+    # 判不了时那条路**出声**——`wrap_up` 与"判据坏了"在 trace 里长得一样。
+    decide, issue = parse_reflector_output(raw)
     record("reflector", "verdict", blocked=[b.get("spec") for b in blocked],
            decide=decide, issue=issue[:120], round=rounds + 1)
     if decide == "replan" and issue:
