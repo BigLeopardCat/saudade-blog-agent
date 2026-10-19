@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import re
 
+from tools.result import ToolResult, error_frame
+
 # ── 目标 id 的归一（20260929 批 H · S2）─────────────────────────────────
 # 写通道从"名字/正文片段"改成"台账里的 id"之后，模型填进来的值有两种合法写法：
 # 裸数字（`101`）与**帧里印出来的带命名空间写法**（`talkId:101` / `commentId:37` /
@@ -215,15 +217,15 @@ def target_verb(name: str) -> str:
     return _TARGET_VERB.get(name or "", "改")
 
 
-def unknown_target_frame(name: str) -> str:
+def unknown_target_frame(name: str) -> ToolResult:
     """目标无据时的错误帧（checker 判 BLOCK，planner 先读再写）。"""
     verb = target_verb(name)
-    return (f"__ERROR__: 目标未经确认[{REASON_UNKNOWN_TARGET}]"
+    return error_frame(f"__ERROR__: 目标未经确认[{REASON_UNKNOWN_TARGET}]"
             f"（{name} 要{verb}的那篇文章这一轮没有读到过——先读后台文章列表或正文拿到 id，"
-            f"或让主人点名是哪一篇，再{verb}；不要凭记忆写一个 id）")
+            f"或让主人点名是哪一篇，再{verb}；不要凭记忆写一个 id）", REASON_UNKNOWN_TARGET)
 
 
-def target_conflict_frame(name: str, named: set[int], got) -> str:
+def target_conflict_frame(name: str, named: set[int], got) -> ToolResult:
     """写目标与用户点名不一致时的错误帧（checker 判 BLOCK）。
 
     20260921 第三轮活体探针实证：管理员说「把文章 1 置顶」，planner 把
@@ -235,14 +237,14 @@ def target_conflict_frame(name: str, named: set[int], got) -> str:
     """
     verb = target_verb(name)
     want = "、".join(str(x) for x in sorted(named))
-    return (f"__ERROR__: 目标与主人点名的不是同一篇[{REASON_TARGET_MISMATCH}]"
+    return error_frame(f"__ERROR__: 目标与主人点名的不是同一篇[{REASON_TARGET_MISMATCH}]"
             f"（{name} 这一轮填的是文章 {got}，而主人点名的是文章 {want}——"
             f"以主人点名的为准，下一轮把 article_id 改成 {want} 再{verb}；"
-            f"若主人确实要动文章 {got}，先把这一点问清楚）")
+            f"若主人确实要动文章 {got}，先把这一点问清楚）", REASON_TARGET_MISMATCH)
 
 
 def target_error_reason(text: str) -> str | None:
-    """从错误帧取回原因码（非本族帧 → None），供 _check_spec 用。"""
+    """从错误帧取回原因码（非本族帧 → None），供 _check_spec 用（**回落支**，批 G4）。"""
     s = str(text or "")
     if f"[{REASON_TARGET_MISMATCH}]" in s:
         return REASON_TARGET_MISMATCH
@@ -264,7 +266,7 @@ def target_error_reason(text: str) -> str | None:
 REASON_POLICY_REFUSED = "policy_refused"
 
 
-def policy_frame(message: str) -> str:
+def policy_frame(message: str) -> ToolResult:
     """后端政策拒绝的错误帧（checker 判 BLOCK；planner 读到原因码后应当**如实
     转述、不再改参重试**）。
 
@@ -273,14 +275,14 @@ def policy_frame(message: str) -> str:
     变成假话。帧里的指引也据此写成"如实转告"，而不是"换个参数再试"：这条请求
     再试一百次也是同一个结果，而每一轮重试都会让主人在等一件永远不会发生的事。
     """
-    return (f"__ERROR__: 后台规则拒绝[{REASON_POLICY_REFUSED}]"
+    return error_frame(f"__ERROR__: 后台规则拒绝[{REASON_POLICY_REFUSED}]"
             f"（{str(message or '').strip() or '后台拒绝了这次改动'}——"
             f"这条不是系统故障、也不是你没填对参数，是后台的规则不许这件事发生。"
             f"**不要换参数重试**（再试多少次都是这个结果），把上面这句话如实转告主人，"
-            f"并说明本次**一个字节都没有改动**）")
+            f"并说明本次**一个字节都没有改动**）", REASON_POLICY_REFUSED)
 
 
 def policy_error_reason(text: str) -> str | None:
-    """从错误帧取回原因码（非本族帧 → None），供 _check_spec 用。"""
+    """从错误帧取回原因码（非本族帧 → None），供 _check_spec 用（**回落支**，批 G4）。"""
     return (REASON_POLICY_REFUSED
             if f"[{REASON_POLICY_REFUSED}]" in str(text or "") else None)

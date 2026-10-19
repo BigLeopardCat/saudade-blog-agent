@@ -29,13 +29,11 @@
 
 from __future__ import annotations
 
-import json
-
 import agent.adminops_tags as _tags
 import agent.adminops_todo as _todo
 from agent.arg_refs import is_ref
 from agent.workflow_expand_write import _write_arg
-from agent.workflow_model import DROP_SUFFIX_WORKFLOW_NO_CALLS
+from agent.workflow_model import DROP_SUFFIX_WORKFLOW_NO_CALLS, ToolCall
 from tools.base import _TODO_TEXT_LIMIT, _as_bool
 
 # `__all__` = 本模块**所有不以 `_` 开头**的模块级名字（社区惯例，不留例外；
@@ -169,8 +167,8 @@ def _expand_own_workflow(workflow, params: dict) -> tuple[list[str], str]:
     """
     name = workflow.name
 
-    def _spec(tool_name: str, args: dict) -> str:
-        return f"{tool_name}({json.dumps(args, ensure_ascii=False)})"
+    def _spec(tool_name: str, args: dict) -> ToolCall:
+        return ToolCall(tool_name, args)
 
     if name in ("favorite_add", "favorite_remove"):
         aid = _norm_id_or_ref(params.get("article_id"))
@@ -254,7 +252,7 @@ def _expand_todo_workflow(workflow, params: dict) -> tuple[list[str], str]:
     args: dict = {"text": text}
     if due:
         args["date"] = due
-    return ([f"create_dashboard_todo({json.dumps(args, ensure_ascii=False)})"],
+    return ([ToolCall("create_dashboard_todo", args)],
             (f"往他**自己**后台首页的待办里加一条「{_tags.clip(text, 20)}」"
              + (f"，排期 {_todo.due_date_cn(due)}" if due else "（未排期）")
              + "；只追加这一条，列表里原有的都不动"))
@@ -285,7 +283,7 @@ def _expand_todo_done_workflow(workflow, params: dict) -> tuple[list[str], str]:
         return [], (f"dashboard_todo_done 的正文太长（{len(text)} 字，"
                     f"上限 {_TODO_TEXT_LIMIT} 字）：不调用任何工具，"
                     "如实请主人照列表里的写法说短一点（**不许**替他截断）")
-    return ([f"complete_dashboard_todo({json.dumps({'text': text}, ensure_ascii=False)})"],
+    return ([ToolCall("complete_dashboard_todo", {"text": text})],
             (f"把他自己后台首页的待办里「{_tags.clip(text, 20)}」那一条勾成完成"
              f"（只翻完成标记，正文与排期都不动）"))
 
@@ -319,9 +317,8 @@ def _expand_todo_reschedule_workflow(workflow, params: dict) -> tuple[list[str],
                     f"「{_todo._TODO_CLEAR_WORD}」）")
     if raw in _todo._TODO_CLEAR_DATES:
         # 清空：传**契约词**（不是主人嘴里那个说法）——工具与卡面都只认这一个字面。
-        _clear = json.dumps({"text": text, "date": _todo._TODO_CLEAR_WORD},
-                            ensure_ascii=False)
-        return ([f"reschedule_dashboard_todo({_clear})"],
+        return ([ToolCall("reschedule_dashboard_todo",
+                          {"text": text, "date": _todo._TODO_CLEAR_WORD})],
                 f"把他自己后台首页的待办里「{_tags.clip(text, 20)}」那一条的**排期清掉**"
                 f"（只动排期，正文与完成标记都不动）")
     due = _todo.normalize_due_date(raw)
@@ -330,8 +327,7 @@ def _expand_todo_reschedule_workflow(workflow, params: dict) -> tuple[list[str],
                     f"（只认 {_todo.DUE_DATE_FORMS_CN}；清空排期填"
                     f"「{_todo._TODO_CLEAR_WORD}」）：不调用任何工具，"
                     "如实向主人问清是哪一天——**不许**自己挑一个日子顶上")
-    return ([f"reschedule_dashboard_todo("
-             f"{json.dumps({'text': text, 'date': due}, ensure_ascii=False)})"],
+    return ([ToolCall("reschedule_dashboard_todo", {"text": text, "date": due})],
             (f"把他自己后台首页的待办里「{_tags.clip(text, 20)}」那一条的排期改成"
              f"{_todo.due_date_cn(due)}（只动排期，正文与完成标记都不动）"))
 
@@ -393,8 +389,11 @@ def _expand_article_status(params: dict,
         fields["status"] = status
     if top is not None:
         fields["is_top"] = top
-    out = [f"set_article_status({json.dumps({'article_id': one, **fields}, ensure_ascii=False)})"
-           for one in aids]
+    # 标注成 `list[str]`：`ToolCall` 是 `str` 子类，而 `list` 是**不变**的
+    # （`list[ToolCall]` 不是 `list[str]`）——不标这一格，mypy 按推导出的元素类型
+    # 判返回值，这一族就得跟着改成一串 `list[ToolCall]`。
+    out: list[str] = [ToolCall("set_article_status", {"article_id": one, **fields})
+                      for one in aids]
     note = (f"修改文章 {'、'.join(str(x) for x in aids)}："
             + "、".join(filter(None, [
                 f"状态→{_tags.status_cn(status)}" if status is not None else "",

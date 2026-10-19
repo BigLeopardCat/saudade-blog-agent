@@ -613,9 +613,9 @@ def bound_steps(workflow_name: str, params: Any, role: str | None,
         if not tool or tool not in closed:
             return []
         try:
-            # 严格 JSON：这串是**本进程刚由 `json.dumps` 产出**的（展开器那十余处
-            # 写端），不需要 `graph._tool_args` 那套容模型的漂移（单引号/尾逗号）。
-            args = json.loads(raw) if raw.strip() else {}
+            # 结构优先（批 G6）：`ToolCall` 直接给字典；纯文本条目走严格 JSON（本进程产出）
+            args = getattr(spec, "args", None)
+            args = args if isinstance(args, dict) else (json.loads(raw) if raw.strip() else {})
         except (ValueError, TypeError):
             return []
         if not args_are_bound(args):

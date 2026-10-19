@@ -1942,12 +1942,12 @@ def test_gate_site_absence_claim():
           _site_absence_claim("站内没有讲过这个", True) is False)
     check("站内没结论[默认实参 = 不豁免，旧调用点行为不变]",
           _site_absence_claim("站内没有讲过这个") is True)
-    check("回执检索痕迹识别（Rust render_exec_row 定稿措辞）",
-          _exec_memory_has_search([SystemMessage(content="确认与执行事实（系统台账）: · 已执行（系统验收过）: 09-21 10:00 "
-                                                        "站内检索「Rust async」 — 3 篇")]) is True)
-    check("无检索行（只有读取行）→ 不算依据",
-          _exec_memory_has_search([SystemMessage(content="确认与执行事实（系统台账）: · 已执行（系统验收过）: 09-21 10:00 "
-                                                        "读取文章 12《ESP32-S3 OTA》")]) is False)
+    check("检索痕迹识别[search_notes]（渲染成「检索文章「…」」后正则漏掉的那一格）",
+          _exec_memory_has_search({"configurable": {"recent_tools": ["search_notes"]}}) is True)
+    check("检索痕迹识别[rag_search]",
+          _exec_memory_has_search({"configurable": {"recent_tools": ["rag_search"]}}) is True)
+    check("无检索工具（只有读取行）→ 不算依据",
+          _exec_memory_has_search({"configurable": {"recent_tools": ["get_article_detail"]}}) is False)
 
     # ── gate 集成 ───────────────────────────────────────────────────────
     def _st(workflow, msgs_after_plan, **plan_kw):
@@ -1965,10 +1965,10 @@ def test_gate_site_absence_claim():
     o2 = gate_node(_st("chat", [AIMessage(content="站内没有下载板块喵，你可以去网盘看看")]))
     check("零帧 + 页面/入口结论 → pass（不误伤）",
           o2["done"] is True and not o2.get("fallback_text"), str(o2))
-    # 零帧 + 跨轮回执里有检索痕迹 → pass（rule 6 据回执转述）
-    o3 = gate_node(_st("chat", [SystemMessage(content="确认与执行事实（系统台账）: · 已执行（系统验收过）: 09-21 10:00 "
-                                                     "站内检索「Rust async」 — 2 篇"),
-                                AIMessage(content=absence)]))
+    # 零帧 + 跨轮回执里有检索痕迹 → pass（rule 6 据回执转述）。痕迹来自**结构**
+    # （`config.recent_tools`），不是那串渲染文本；反控见 `test_exec_search_evidence`。
+    o3 = gate_node(_st("chat", [AIMessage(content=absence)]),
+                   {"configurable": {"recent_tools": ["rag_search"]}})
     check("零帧 + 回执含检索痕迹 → pass（说结论有据）",
           o3["done"] is True and not o3.get("fallback_text"), str(o3))
     # 零帧 + navigate 已下线注记轮 → pass（"站内没有这个页面"是 NAV_MAP 的事实）：
@@ -3395,16 +3395,16 @@ def test_reflector_routes_and_budget():
     check("无受阻项 → 防御终局（reflect_end=True）",
           out2["reflect_end"] is True and parse_plan(out2["plan"])["tools"] == [],
           str(out2))
-    # 有受阻项 + 预算内 → 走 LLM 复盘路径（单测不实调：monkeypatch 抛异常 →
-    # 节点异常兜底转终局，验证"调用失败一律 wrap_up 兜底"不炸图、不出 replan）
-    from agent import graph as graph_mod
-    orig_get_llm = graph_mod.get_llm
-    graph_mod.get_llm = lambda **kw: _LLMBoom()
+    # 有受阻项 + 预算内 → 走 LLM 复盘路径（单测不实调：monkeypatch 抛异常 → 节点异常兜底
+    # 转终局；桩打在**新家** `planner_llm.get_llm`——批 G7 起复盘调用住 `invoke_reflector`）
+    from agent import planner_llm as pl_mod
+    orig_get_llm = pl_mod.get_llm
+    pl_mod.get_llm = lambda **kw: _LLMBoom()
     try:
         out3 = reflector_node(_st(blocked=[{"spec": "a", "reason": "empty_result",
                                             "result": ""}]))
     finally:
-        graph_mod.get_llm = orig_get_llm
+        pl_mod.get_llm = orig_get_llm
     check("复盘 LLM 异常 → 兜底终局（reflect_end=True 收尾计划）",
           out3["reflect_end"] is True and parse_plan(out3["plan"])["tools"] == []
           and out3["reflect_rounds"] == 1,
@@ -3869,6 +3869,8 @@ def test_doc_anchors_and_clip():
     锚点注入让"是哪一篇"不再需要检索；_clip_mid 让长回复中段的文档名不再被截掉。
     """
     from agent.prompt_context import _clip_mid, _doc_anchors, _recent_tail
+    _er = lambda aid, t: [{"at": "09-20 21:03", "n": 1, "payload": {  # noqa: E731
+        "tool": "get_article_detail", "args": {"article_id": aid, "doc_type": "note"}, "title": t}}]
 
     sys_msg = HumanMessage(content=(
         "[System: user_id=1, page=https://saudade.site/device-console/; current_effects=none; "
@@ -3892,7 +3894,8 @@ def test_doc_anchors_and_clip():
     ctx._doc_id_lookup = lambda t: {"文章向量空间图谱项目文档": "46",
                                     "IoT 设备接入物联网平台指南": "22"}.get(t, "")
     try:
-        out = _doc_anchors([sys_msg] + hist)
+        out = _doc_anchors([sys_msg] + hist,
+                           exec_rows=_er("19", "Saudade Blog AI Agent（泠月喵）架构文档"))
         check("锚点：跨轮执行记忆的读取行 → 标题 + id + 已读标记",
               "《Saudade Blog AI Agent（泠月喵）架构文档》 noteId=19（本会话已读过全文）" in out)
         check("锚点：markdown 文章链接 → id", "《TEST8》 noteId=13" in out)
@@ -3914,13 +3917,13 @@ def test_doc_anchors_and_clip():
         ctx._doc_id_lookup = orig_lookup
     # 简称 ↔ 全称同篇：同一篇不列成两篇（实测正文口语简称《AI Agent 架构文档》 vs
     # 跨轮执行记忆的全称带 id）——并入一行，简称保留为别名
-    out3 = _doc_anchors([AIMessage(content="这个「导航关键词正则快道」我这篇《AI Agent 架构文档》里没写到"),
-                         AIMessage(content="· 读取文章 19《Saudade Blog AI Agent（泠月喵）架构文档》")])
+    out3 = _doc_anchors([AIMessage(content="这个「导航关键词正则快道」我这篇《AI Agent 架构文档》里没写到")],
+                        exec_rows=_er("19", "Saudade Blog AI Agent（泠月喵）架构文档"))
     check("锚点：简称并入全称行且不重复计数",
           out3.count("·") == 1 and "noteId=19" in out3 and "上文亦称《AI Agent 架构文档》" in out3)
     # 反向（简称在先、全称在后）同样并入，且留长标题
-    out4 = _doc_anchors([AIMessage(content="· 读取文章 19《Saudade Blog AI Agent（泠月喵）架构文档》"),
-                         AIMessage(content="这篇《AI Agent 架构文档》里没写到")])
+    out4 = _doc_anchors([AIMessage(content="这篇《AI Agent 架构文档》里没写到")],
+                        exec_rows=_er("19", "Saudade Blog AI Agent（泠月喵）架构文档"))
     check("锚点：反序并入同篇", out4.count("·") == 1 and "《Saudade Blog AI Agent（泠月喵）架构文档》 noteId=19" in out4)
     # 短标题不参与简/全称合并——防"物联网平台"并进"物联网平台接入指南"这类**不同**篇
     # （错并 = 把 A 篇 id 挂到 B 篇名下，正是本次要修的故障形态，宁可漏并不错并）
@@ -3974,18 +3977,15 @@ def test_doc_anchors_and_clip():
     tail = _recent_tail([HumanMessage(content="上一句"), AIMessage(content=long_reply),
                          HumanMessage(content="你看了吗就说没写")])
     check("节选：长回复中段点名的文档不丢", "架构文档" in tail)
-    # 跨轮执行记忆行的**格式契约**（Rust render_exec_row；20260920 批次 c 起行首补
-    # 时间、行尾可带（×N））：agent 侧消费方是 _doc_anchors 的读取行正则与 planner
-    # 规则 6 的据实转述——格式漂移会让锚点静默失效，这里拿两种真实形态锁住。
-    from agent.prompt_context import _DOC_READ_ROW_RE
-    row = "09-20 21:03 读取文章 19《Saudade Blog AI Agent（泠月喵）架构文档》"
-    m = _DOC_READ_ROW_RE.search(row)
-    check("执行记忆行：行首时间不破坏读取行解析", bool(m) and m.group(1) == "19")
-    out_ts = _doc_anchors([HumanMessage(content=f"[System: page=/; 确认与执行事实（系统台账）: · 已执行（系统验收过）: · {row}")])
-    check("执行记忆行：带时间戳的读取行仍产出文档锚点",
+    # 跨轮执行记忆的**结构契约**（20261020）：锚点只认 `execution_rows` 里的
+    # tool/args/title——渲染行的措辞再怎么变都不影响它（旧正则已经因措辞演进断过）。
+    out_ts = _doc_anchors([HumanMessage(content="你看了吗就说没写")], exec_rows=[
+        {"at": "09-20 21:03", "n": 2,
+         "payload": {"tool": "get_article_detail",
+                     "args": {"article_id": "19", "doc_type": "note"},
+                     "title": "Saudade Blog AI Agent（泠月喵）架构文档"}}])
+    check("执行记忆[结构]：带时间戳/重复次数的行仍产出文档锚点",
           "《Saudade Blog AI Agent（泠月喵）架构文档》 noteId=19" in out_ts)
-    check("执行记忆行：重复标记（×N）不影响读取行解析",
-          bool(_DOC_READ_ROW_RE.search("09-20 21:05 读取文章 22《IoT 设备接入物联网平台指南》（×3）")))
 
 
 def test_doc_title_resolution():
@@ -4032,11 +4032,10 @@ def test_doc_title_resolution():
               "· 《ESP32-S3-OBC固件接入参考》 noteId=14（站内标题匹配）" in out)
         check("锚点：解析不出就不进清单（不编 id、也不留「未见过 id」占位）",
               "·" not in ctx._doc_anchors([HumanMessage(content="把《查无此篇》读一遍")]))
-        dup = ctx._doc_anchors([
-            HumanMessage(content="[System: page=/; 确认与执行事实（系统台账）: · 已执行（系统验收过）: "
-                                 "· 09-20 21:03 读取文章 14《ESP32-S3-OBC固件接入参考》"),
-            HumanMessage(content="再读一遍《ESP32-S3-OBC固件接入参考》"),
-        ])
+        dup = ctx._doc_anchors([HumanMessage(content="再读一遍《ESP32-S3-OBC固件接入参考》")],
+                               exec_rows=[{"at": "09-20 21:03", "n": 1, "payload": {
+                                   "tool": "get_article_detail", "title": "ESP32-S3-OBC固件接入参考",
+                                   "args": {"article_id": "14", "doc_type": "note"}}}])
         check("锚点：解析出的 id 与已读行同篇只留一行",
               dup.count("·") == 1 and "noteId=14" in dup and "本会话已读过全文" in dup)
     finally:

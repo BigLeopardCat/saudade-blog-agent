@@ -279,6 +279,22 @@ checkpoint 的未完成任务、**从 START 重启**（`langgraph/pregel/_loop.p
 3. 键里**没有** `thread_id` 之外的轮次坐标 ⇒ 表里**仍然没有** `thread_id` 列，`DELETE`
    仍然做不了（清场口径与《迁移到 PG》那一节写的**一样**，没有变）。
 
+### 复测（20261019，批 F 落地之后）
+
+上面两张真机读数表量的都是**修法之前**。批 F 落地后按同一份夹具重跑了五格
+（`eval/experiments/checkpoint_probe.py`；真 PG，实验库 `agent_checkpoint`，账与 saver
+同库同表。跑的是批 G 那个工作树——批 G 不碰 `idem` / `checkpoint_arm` 任何一行）：
+
+| 探针 | 读数 | 反控 |
+|---|---|---|
+| `--crash-resume --guard` | 同一件写 **1 次**；两遍 `checkpoint_ns` 逐字相同 | 同一条命令里的内置反控（干净轮之后重复同一件写）⇒ **2 次** |
+| `--crash-resume --guard --prod-shape` | **1 次**（改前 2）；两遍 `checkpoint_ns` **逐字变了**（证明真的从 START 重启了），而账照样认得出 | 同上 ⇒ **2 次**（合法的重复照常执行） |
+| `--crash-resume --guard-unsafe` | **2 次**（占位留在一笔没提交的事务里） | —— 它本身就是上一格的反控 |
+| `--backend-parity` | 两档账本 **18 步读数逐字相等**；两档重放拿到的行都是元组；撞 `_RESULT_MAX` 那件两档都判 capped，降级帧同一句 | —— |
+
+`--prod-shape` 那一格是这一批的**正控**（改前 2、改后 1）；它同一条命令里的内置反控
+（⇒ 2）挡住"账退化成从不执行"这条假绿。
+
 ## 触发条件
 
 满足**任一条**就该回来重读本份：

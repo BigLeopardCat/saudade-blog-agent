@@ -192,9 +192,13 @@ def list_admin_notes(
             return empty(f"按关键词「{kw}」没有搜到文章（后台文章清单本身不是空的；"
                          f"这是这一次的搜索结果，换个词或去掉关键词再看）")
         return empty("后台文章列表是空的（一篇文章都没有）")
+    # `data` 是渲染用的那**同一份**（批 G5）：跨轮实体摘要此前只能从渲染出来的中文
+    # 表头里正则抠"共 N 篇"、再从行文本里数状态分布——改一句措辞就静默变空。
     return ok(_tags.render_admin_notes(notes, _base._tag_index(config), keyword=kw, category=cat),
               meta={"count": len(notes), "keyword": kw or None,
-                    "category": hit.name if hit is not None else None})
+                    "category": hit.name if hit is not None else None},
+              data={"notes": notes, "keyword": kw, "category": cat,
+                    "limit": _tags.ADMIN_NOTES_LIMIT})
 
 
 

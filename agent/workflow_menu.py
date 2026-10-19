@@ -22,8 +22,6 @@
 
 from __future__ import annotations
 
-import json
-
 from agent.workflow_defs import visible_workflows
 from agent.workflow_defs.nav_map import _IOT_NAV_ALIASES, DASHBOARD_PANELS, NAV_MAP
 from agent.workflow_model import (
@@ -31,6 +29,7 @@ from agent.workflow_model import (
     _NO_DEFAULT,
     _PARAM_TOOLS_MARK,
     ParamSpec,
+    ToolCall,
     Workflow,
 )
 from agent.workflow_params import workflow_param_specs
@@ -106,8 +105,12 @@ _NAV_MAP_LINES = _nav_map_lines()
 
 
 def _workflow_plan_seq(s) -> str:
-    """技能的固定工具序列渲染成一行（`工具(参数模板) → 工具(参数模板)`）。"""
-    return " → ".join(f"{t}({json.dumps(a, ensure_ascii=False)})" for t, a in s.plan)
+    """技能的固定工具序列渲染成一行（`工具(参数模板) → 工具(参数模板)`）。
+
+    这是**给 planner 看的菜单文本**，`ToolCall` 在这里只是借它的渲染（`str()`），
+    不参与任何解析。
+    """
+    return " → ".join(ToolCall(t, a) for t, a in s.plan)
 
 
 def build_planner_context(role: str | None = None, *, slim: bool = False,
