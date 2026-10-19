@@ -246,7 +246,7 @@ def _confirm_one(spec: dict, index=None, cats=None, boards=None, notes=None,
         #   · 目标**只有编号一条通道**（留言删除还认正文片段）——评论有稳定的
         #     `commentId`，见 `_WRITE_TARGET_CHANNEL` 那两行的注。
         # `comments` 给不起（读不到名册）时退回编号 + 明说"没核对上"，不装作核对过。
-        from tools.base import BOARD_APPROVED_CN
+        from tools.base import BOARD_APPROVED_CN as _APPR_CN
         cid = normalize_target_id(a.get("comment_id"))
         hit = _comment_row_by_id(comments, cid)
         head = f"#{cid}" if cid is not None else "（没有给出评论编号）"
@@ -261,7 +261,7 @@ def _confirm_one(spec: dict, index=None, cats=None, boards=None, notes=None,
             title = clip(str(hit.get("noteTitle") or ""), 20) or "（文章已删除）"
             if who:
                 head += f"（{who} 的评论）"
-            head += f"（文章《{title}》，现在：{BOARD_APPROVED_CN.get(hit.get('approved'), '状态未知')}）"
+            head += f"（文章《{title}》，现在：{_APPR_CN.get(hit.get('approved'), '状态未知')}）"
         if tool == "audit_comment":
             v = normalize_verdict(a.get("verdict"))
             what = BOARD_VERDICT_FULL.get(v or "", f"复核为「{a.get('verdict')}」")
