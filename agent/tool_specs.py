@@ -7,13 +7,18 @@
 13513 / 246——那个数才是棘轮现在的天花板）。选它当第二刀的理由与第一刀**不同**——
 第一刀靠"边界干净"（三个名字、一套文本协议），这一刀靠**出边为零**：这一族对外只有
 8 个名字（8 个函数 + `EXECUTED_ONCE_WORKFLOWS`），而它们加起来只用到
-`_tool_name`（`agent.deterministic_plan`）、`split_tool_spec`（**本模块**，20261018 从
-`agent/tool_specs.py` 搬回）、
+`split_tool_spec`（**本模块**，20261018 从 `agent/tool_specs.py` 搬回）、
 `action_text` / `authz` 两个包、`logger`，加上 `EXECUTED_ONCE_WORKFLOWS` 这一个常量
 （连它的长注一起搬来了，全仓只有本族在用）。**一个来自 graph.py 的名字都不需要**
 ⇒ 不存在循环 import，也不需要"反向 import graph"那种形状（本仓明令不许，见
 `agent/textnorm.py` 头注：`provenance` 绝不能反向）。**出边为零是能整体搬走的充要条件**，
 这条经验是这两刀共同得出的。
+
+20261019 批 G6 把 `_tool_name` 从 `agent/deterministic_plan` **搬进了本模块**（它此前是
+本族唯一的仓内出边）——它读的正是本模块管的那条形状（`名字(...)`），住在这里才不散。
+搬完的**收益**不只是干净：`deterministic_plan` 反过来要用 `_tool_args`（见那边的
+`_search_terms`），而"那边 import 这边、这边 import 那边"就是成环。现在边只有一条：
+`deterministic_plan → tool_specs`。
 
 **这一族是什么**：`plan_obj["tools"]` 里那些 spec（`名字({"参数": 值})`）的进与出——
   · **进**：`_tool_args` 把一条 spec 解析成 (参数字典, 是否解析成功)；
@@ -49,21 +54,27 @@ import re
 from typing import Any
 
 from agent import action_text, authz
-from agent.deterministic_plan import _tool_name
 
 logger = logging.getLogger(__name__)
 
 
 # 一条 spec 的字面形状：`工具名({json 参数})`。**拆分规则只能有一处**，所以它跟着
 # 消费方住在这里（`_tool_args` 就是它的第一个读者）。写端**不在这里**——展开层与实例化
-# 层各自 `json.dumps` 出这个形状（`workflow_expand_write` / `workflow_expand` /
-# `workflow_plan` 十余处），读端有三处（`graph._tool_args`、`tasks.bound_steps`、测试）。
+# 层各自出这个形状（`workflow_expand_write` / `workflow_expand` / `workflow_plan`
+# 十余处），读端有三处（`graph._tool_args`、`tasks.bound_steps`、测试）。
 # 同族教训见 `agent/plan_codec.py` `_esc_spec` 的注："改一处要同步十三处"正是全仓审计
 # 点名的主导缺陷。
 #
 # 20261018 批 2 收尾刀从 `agent/workflows.py` 搬进来：此前它留那边是因为
 # `tool_specs → decisions → workflows` 是一条现成的链，搬过来就成环；转发层删掉之后
 # 这条边没了（`decisions` 不再指向任何 workflow 模块），它才回得了家。
+#
+# ⚠️ 20261019 批 G6 起，**写端不再各自 `json.dumps`**：那十余处一律改成
+# `ToolCall(名字, 参数字典)`（住 `agent/workflow_model.py`，零出边），
+# **形状只由 `ToolCall.__new__` 一处决定**，`str(call)` 与旧 f-string 逐字节相同
+# （判据 `tests/test_tool_call_ir.py`）。本模块这一对仍是**回落支**：`plan_obj` 会被
+# 落进 checkpoint 再读回来（`str` 子类过一遍序列化就退化成纯 `str`）、测试与 trace
+# 回放也直接喂文本，所以形状正则与容错解析器一条都不能删。
 _TOOL_SPEC_RE = re.compile(r"^(\w+)\((.*)\)$", re.DOTALL)
 
 
@@ -79,6 +90,20 @@ def split_tool_spec(spec: Any) -> tuple[str, str]:
     if not m:
         return "", ""
     return m.group(1), m.group(2)
+
+
+def _tool_name(tool_spec: Any) -> str:
+    """TOOLS 行条目 → 工具名（'get_article_detail({"article_id": 21})' → get_article_detail）。
+
+    20261019 批 G6 起条目的本体是 `ToolCall`（`.name`/`.args`），文本只是它的渲染 ⇒
+    优先读属性。回落支（纯字符串：过了 checkpoint 序列化的、测试与 trace 回放直接喂的）
+    仍按老口径切第一个左括号——**切出来的名字与 `ToolCall` 里的那个逐字相同**，
+    两条路不会给出两个答案。
+    """
+    name = getattr(tool_spec, "name", None)
+    if isinstance(name, str):
+        return name
+    return str(tool_spec).split("(", 1)[0].strip()
 
 
 # 后台写技能（20260921 第二轮）：**不是**快照型——见 planner 里的重复规划防护。
@@ -374,12 +399,23 @@ def _plan_trims_to_empty(plan_obj, state) -> bool:
 
 
 def _tool_args(tool_spec: str) -> tuple[dict, bool]:
-    """TOOLS 行条目 → (参数字典, 解析是否成功)。spec 参数由 instantiate_plan 以
-    json.dumps 落盘（JSON 的 true/false/null 不是 Python 字面量，ast.literal_eval
-    会拒），故先 json.loads（规范格式）再 ast.literal_eval（容手写 Python 风格），
-    都失败兜底空参 + ok=False——checker 据此判 args_parse（调用方按错误帧处理；
-    工具签名必填参数缺失时工具层自会报 __ERROR__，不炸图）。
+    """TOOLS 行条目 → (参数字典, 解析是否成功)。
+
+    20261019 批 G6 起，条目是 `ToolCall` 时**直接取 `.args`**——那是构造时就过过一次
+    JSON 往返的本体，读它等于"不再把渲染出来的文本重新猜一遍"。
+
+    回落支（纯字符串条目）保留原口径：spec 参数由 instantiate_plan 以 json.dumps 落盘
+    （JSON 的 true/false/null 不是 Python 字面量，ast.literal_eval 会拒），故先 json.loads
+    （规范格式）再 ast.literal_eval（容手写 Python 风格），都失败兜底空参 + ok=False——
+    checker 据此判 args_parse（调用方按错误帧处理；工具签名必填参数缺失时工具层自会报
+    __ERROR__，不炸图）。
+
+    **两条路给出的字典逐键相同**（`ToolCall.args` 的定义就是 `json.loads(str(call) 里
+    那一段)`）⇒ 写幂等账的指纹 `_spec_signature` 一个字节都不变。
     """
+    args = getattr(tool_spec, "args", None)
+    if isinstance(args, dict):
+        return dict(args), True
     # 拆分（`名字(args)` 那对括号）走本模块的 `split_tool_spec`——规则只该有一处。
     # 这里只保留"怎么读那串参数"的容错。
     m, raw = split_tool_spec(tool_spec)

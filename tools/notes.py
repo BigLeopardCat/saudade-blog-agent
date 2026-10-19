@@ -507,14 +507,15 @@ def get_announcements(
     列表比一次能带的多时，只带回最新的一批；帧尾注记会写明一共多少条、**以及**
     取回更早那一页要填的 `offset`——照注记写的填即可，不必自己猜。"""
     data = _get("/announcements")
+    page = None
     if isinstance(data, list):
         # 只封顶行数、**不封字段**（20261005）：公告是管理员写的，正文常是长文，
         # 单条详情另有 get_article_detail 的 announcement 分支；在这里截正文等于
         # 让"公告里到底写了什么"永远读不全。
-        data, capped = _cap_rows(data, _LIST_ROWS_MAX, "公告", offset)
+        data, capped, page = _cap_rows(data, _LIST_ROWS_MAX, "公告", offset)
         if capped:
             data = _rows_with_note(data, capped)
-    return _shape(data)
+    return _shape(data, meta={"page": page} if page else None)
 
 # ---------------------------------------------------------------------------
 # 留言板 工具
@@ -548,11 +549,12 @@ def list_guestbook(
     这类问题时，需同时调用 list_talks 检查说说内容，两个都查全后才能回答。
     """
     data = _get("/board")
+    page = None
     if isinstance(data, list):
         # 读帧的人（planner 与 narrator）都要看得见这条边界：上游恒按 Approved=1 过滤，
         # "列表里没有"不是"这条不存在"。不写这一句，帧就只在**数量**上沉默，而
         # "站内没有这条留言"这个结论会被当成列表给的事实（20260928 现场那条就是）。
-        data, capped = _cap_rows(data, _LIST_ROWS_MAX, "留言", offset)
+        data, capped, page = _cap_rows(data, _LIST_ROWS_MAX, "留言", offset)
         data = _board_text_keys(data)
         data = _drop_dead_mine(data)
         data = _clip_fields(data, _LIST_FIELD_MAX)
@@ -565,7 +567,7 @@ def list_guestbook(
                   "list_admin_board（放灯必须登录，那里逐条带真实账号）。"
                   "**本列表也不带「哪条是你自己放的」**——「我自己放过的灯（含待审/"
                   "未通过）」是另一条通道：`list_my_board`")
-    return _shape(data)
+    return _shape(data, meta={"page": page} if page else None)
 
 
 # 公开池里的 `mine` 字段是**恒假的**（20261008 删）：上游 `talk_embed` 按
@@ -600,10 +602,11 @@ def list_my_board(config: RunnableConfig) -> str:
     没携带身份时如实告知读不到。
     """
     data = _own_get("/api/protect/board/mine", config)
+    page = None
     if isinstance(data, list):
-        # 与公开池同一套封顶（`共 N 条` 的子串是 `entities._note_total` 的读法，
-        # 跨轮摘要据此说总数——别自己拼一句同义但正则读不到的说明）。
-        data, cap = _cap_rows(data, _LIST_ROWS_MAX, "你的河灯")
+        # 与公开池同一套封顶。总数**走结构**（`page` → `meta["page"]`，批 G2）：跨轮摘要
+        # 读的是那一格，不再从注记的「共 N 条」里抠——注记是给人看的那份渲染。
+        data, cap, page = _cap_rows(data, _LIST_ROWS_MAX, "你的河灯")
         data = _board_text_keys(data)
         # `mine` 这个键名**只在公开池那里才有信息量**（"这条是不是你的"）；在这里
         # 逐行都是 true，留着只会让"帧里有个 `mine` 字段"变成一条可迁移的错觉。
@@ -616,7 +619,7 @@ def list_my_board(config: RunnableConfig) -> str:
                   "所以那里查无此条不等于不存在）。`approved`：1=已通过 / 0=待审 / "
                   "2=未通过（驳回理由在 rejectReason，只有这一态有）。"
                   "每行的「留名」是你当时自己填的字（自由文本），不是账号。")
-    return _shape(data)
+    return _shape(data, meta={"page": page} if page else None)
 
 # ---------------------------------------------------------------------------
 # 说说 / 动态 工具
@@ -637,8 +640,9 @@ def list_talks(
     这类问题时，需同时调用 list_guestbook 检查留言板内容，两个都查全后才能回答。
     """
     data = _get("/talk")
+    page = None
     if isinstance(data, list):
-        data, capped = _cap_rows(data, _LIST_ROWS_MAX, "说说", offset)
+        data, capped, page = _cap_rows(data, _LIST_ROWS_MAX, "说说", offset)
         data = _board_text_keys(data)
         data = _clip_fields(data, _LIST_FIELD_MAX)
         data = _rows_with_note(
@@ -646,7 +650,7 @@ def list_talks(
                   + "本列表只含**已通过审核**的说说；待审/被驳回的不在这里，"
                   "查无此条不等于不存在。每行的「留名」是发表人**自己填的字**"
                   "（自由文本，可留空=匿名），**不是账号**——别拿它认人")
-    return _shape(data)
+    return _shape(data, meta={"page": page} if page else None)
 
 # ---------------------------------------------------------------------------
 # 站点信息 工具

@@ -317,11 +317,13 @@ JWT 走 Authorization: Bearer 头（`localStorage.tokenKey`），不在 body 里
 2. 存用户消息：`chat_history` 插入 `(user_id, role="user", content)`。
 3. 读历史：该会话按 `id` 倒序取最近 21 条（排除刚插入的当前条）再翻转正序取 20 → `history[]`。
 4. 读摘要：`chat_summary` 按会话取一条 → `summary`。
-5. 读执行记忆（20260904）：`execution_log` 按会话倒序取最近 8 条（detail 写时已渲染定稿，
-   直取零映射）→ "· " 拼串 → `executions`。
+5. 读执行记忆（20260904）：`execution_log` 按会话倒序取最近 40 条 → 读侧按 detail 去重
+   （重复动作一行 + `（×N）`）→ 取最近 8 条（detail 写时已渲染定稿，直取零映射）→ "· "
+   拼串 → `executions`；**同一批行另出一份结构** `execution_rows`（20261020，
+   `[{at,n,payload}]` 的 JSON 数组串，payload = 回执原文）——给判据用，不给模型看。
 6. 统计与清理：COUNT 总消息数决定 `needs_summary`；超 `CHAT_HISTORY_LIMIT`（默认 500）删最旧。
 
-组装请求体转发给 Agent（`user_id`、`history`、`summary`、`executions`、`needs_summary` 都在这里产生）。请求体上限 1MB（chat.rs `prepare_chat` 内校验）。
+组装请求体转发给 Agent（`user_id`、`history`、`summary`、`executions`、`execution_rows`、`recent_tools`、`needs_summary` 都在这里产生）。请求体上限 1MB（chat.rs `prepare_chat` 内校验）。
 
 非流式路径（/chat，内部与兼容用，看板娘走流式）：Rust 调 agent `/chat`，传输层错误自动重试最多 3 次
 （间隔 800ms），超时不重试——超时说明生成确实很慢（长回答单次可达 180s，reqwest 超时即 180s），
@@ -449,6 +451,7 @@ flowchart TB
         R2 --> R3[_build_messages 全量注入 20 条<br/>按 role 注入 Human/AIMessage]
         R4[chat_summary 取摘要] --> R5[conversation_summary: 注入 System 上下文]
         R6[execution_log 取最近 8 条] -->|"· " 拼串| R7[recent_executions: 注入 System 上下文<br/>截 1500 字]
+        R6 -->|同一批行的结构| R8[execution_rows: 判据读它<br/>文档锚点/工具名，不进提示词]
     end
     subgraph Rollback[回滚与清理]
         D1[用户停止生成] -->|前端显式 POST /api/chat/discard| D2[删除该条 user 消息<br/>及其后的残缺回复]
@@ -1219,8 +1222,12 @@ flowchart TB
   reflector。键是「工具::原因码」而非 spec 原文（20260925 收窄）：参数每轮都会被重写，按 spec
   原文判重会让"同一个工具同一个原因"永远判不出来。
   输入结构性无散文（计划文本 + blocked 项 spec/原因码/截断结果 + 回执 + 工具帧截断，≤900
-  字），LLM 输出两行契约 `ISSUE: <每项|缺什么|怎么改>` + `DECIDE: replan|wrap_up`（temp 0.0/300
-  tokens/30s/无 thinking）；解析失败/预算耗尽 → `_terminal_plan` 确定性终局（无静默 accept）。
+  字），LLM 输出**结构化**（20261019 批 G7 起）：按服务商方言绑 `response_format` 取一个 json
+  对象 `{"issue": <每项|缺什么|怎么改>, "decision": "replan|wrap_up"}`（temp 0.0/300
+  tokens/30s/无 thinking），字段契约**同时写在提示词里**（deepseek 那一档 schema 不强制）；
+  解析 **JSON 优先**，老的两行文本 `ISSUE:`/`DECIDE:` 退居**回落支**，两条路都读不出时留下一条
+  WARNING 再按 wrap_up（静默降级正是这一族的老病）。预算耗尽 → `_terminal_plan` 确定性终局
+  （无静默 accept）。
   replan → ISSUE 单行注入 planner 提示词；wrap_up → 确定性收尾计划 → model 叙述 → gate 照常检查。
   复盘不评价叙述质量（图序 execute→reflector 先于 model，叙述根本还没生成——老 reflector 的
   死因 1.26/1.30/1.32 全部绕开）。

@@ -47,11 +47,12 @@
 """
 from __future__ import annotations
 
-import json
 import logging
 from typing import Any
 
 from langchain_core.messages import ToolMessage
+
+from agent.workflow_model import ToolCall
 
 logger = logging.getLogger(__name__)
 
@@ -156,20 +157,20 @@ def spec_text(tool: str, args: Any) -> str:
 
     读侧永远是生产的 `graph._tool_args` / `_tool_name`（臂直接 import），所以漂移面只剩
     **构造**这一侧；而构造此前在 `react_arm._blocked_row`、`graph.py:8765`、
-    `graph.py:3562` 各写了一遍。本模块收的是**臂这一侧**的唯一构造点
-    （`graph.py` 那两处不动——那一半是生产路径，本批一个字节都不碰，见 ADR-0008 的
-    《不做》）。`json.dumps` 的 `ensure_ascii=False` 与 `separators` 都必须与生产同款：
+    `graph.py:3562` 各写了一遍。本模块收的是**臂这一侧**的唯一构造点（`graph.py` 那两处
+    是生产路径，由 20261019 批 G6 统一改——见 ADR-0008 的《不做》：那一批之前这里只管
+    臂侧）。**形态的唯一事实源是 `agent/workflow_model.py::ToolCall`**：`ensure_ascii=False`
+    那一个 `json.dumps` 只长在那里，这里与生产两侧都只是它的调用点，谁都不再自己拼串。
     读侧 `_tool_args` 先 `json.loads` 再 `ast.literal_eval`，空白与转义方式不影响解析，
-    但**指纹**（`_spec_signature` 的 `str(v)[:200]`）比的是值不是串，所以这里只要
-    能被解析回来即可——真正要逐字一致的是**回执**，那由 `tool_frame` 那一侧保证。
+    但**指纹**（`_spec_signature` 的 `str(v)[:200]`）比的是值不是串，所以这里只要能解析
+    回来即可——真正要逐字一致的是**回执**，那由 `tool_frame` 那一侧保证。
     """
     try:
-        body = json.dumps(args or {}, ensure_ascii=False)
+        return str(ToolCall(tool or "", args))
     except Exception:  # noqa: BLE001 —— 见 `blocked_row`：宁可给一个解析得出的空参
         logger.warning("[frames] spec 参数不可序列化，按空参落串：tool=%s", tool,
                        exc_info=True)
-        body = "{}"
-    return f"{tool or ''}({body})"
+        return f"{tool or ''}({{}})"
 
 
 def executed_specs(calls: list) -> list[str]:

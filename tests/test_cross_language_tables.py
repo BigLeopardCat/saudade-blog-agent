@@ -328,7 +328,8 @@ print("\n⑤ 扫一遍：不许有**没登记**的站点也写这套词")
 
 # 这些是**别的**协议族的帧标签，与本词表同形（全大写 + 冒号）但不是命令前缀：
 # `TOOLS:`/`NOTE:`/`REPLY:` 是内部计划文本协议（`plan_encode`/`parse_plan`，
-# 见 `agent/graph.py` 那段注释），`ISSUE:`/`DECIDE:` 是 reflector 的两行契约。
+# 见 `agent/graph.py` 那段注释），`ISSUE:`/`DECIDE:` 是 reflector 的**回落支**契约（20261019
+# 批 G7 起它走结构化输出，这两行只在"端点不吃 response_format / 模型没按 JSON 回"时读）。
 OTHER_TAG_FAMILIES = {"TOOLS", "NOTE", "REPLY", "ISSUE", "DECIDE"}
 
 # **已退休**的协议标签（20261016）：`TODO:` 那一行整行退休（写端 `plan_encode` / 读端

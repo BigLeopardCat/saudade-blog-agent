@@ -222,7 +222,7 @@ try:
         base._client = c
         out = tool.invoke({}, config=cfg(7))
         check(f"{name} → 原样透出接口数据（结构化，不做中文报表）",
-              out == str(sample) and not getattr(out, "kind", ""), str(out)[:50])
+              out == str(sample) and getattr(out, "kind", "ok") == "ok", str(out)[:50])
         check(f"{name} 打的端点在 /api/protected 下", len(c.calls) == 1, str(c.calls))
 
         c = _Client(_Resp(200, {"code": 200, "data": sample}))
@@ -239,7 +239,7 @@ try:
     base._client = c
     out = base.list_my_favorites.invoke({}, config=cfg(7))
     check("收藏为空 → 原样透出 '[]'（不是 unavailable、不是『暂无收藏』这种人话）",
-          out == "[]" and not getattr(out, "kind", ""), f"{getattr(out, 'kind', '')}: {out}")
+          out == "[]" and getattr(out, "kind", "ok") == "ok", f"{getattr(out, 'kind', '')}: {out}")
 finally:
     base._client = real_client
 
@@ -282,7 +282,7 @@ try:
     base._client = c
     out = base.list_my_board.invoke({}, config=cfg(7))
     check("一条都没有 → 帧仍是结构化文本（不塌成 unavailable，也不编『暂无』这种人话）",
-          "〔系统注记〕" in out and not getattr(out, "kind", ""), f"{out[:60]}")
+          "〔系统注记〕" in out and getattr(out, "kind", "ok") == "ok", f"{out[:60]}")
     check("  ↑ 空列表下摘要器不产摘要（没有值可取，不是把 0 编成一条）",
           receipt_digest("list_my_board", out) == "")
 
@@ -360,7 +360,7 @@ try:
     base._client = c
     out = base.get_unread_summary.invoke({}, config=cfg(7))
     check("条目读失败 → 计数照旧透出、unread_items 为空但带『没读到』说明",
-          not getattr(out, "kind", "") and "'total': 3" in out
+          getattr(out, "kind", "ok") == "ok" and "'total': 3" in out
           and "没读到" in out and "没有未读" not in str(out),
           f"{getattr(out, 'kind', '')}: {out}")
     check("条目读失败**不说**未登录/管理员（那是故障不是身份问题）",
@@ -387,7 +387,7 @@ try:
     base._client = c
     out = base.get_unread_summary.invoke({}, config=cfg(7))
     check("零未读 → 空条目 + 计数 0（是事实，不是失败）",
-          not getattr(out, "kind", "") and "'unread_items': []" in out
+          getattr(out, "kind", "ok") == "ok" and "'unread_items': []" in out
           and "'total': 0" in out, f"{getattr(out, 'kind', '')}: {out}")
 finally:
     base._client = real_client

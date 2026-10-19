@@ -113,7 +113,8 @@ from agent.entity_digest import receipt_digest
 from agent.factblock import (action_facts, is_action_family, is_block_family,
                              render_fact_block)
 from agent.llm_usage import usage_fields
-from agent.planner_llm import (bind_planner_tools, finish_reason, tool_call_names,
+from agent.planner_llm import (bind_planner_tools, finish_reason, invoke_reflector,
+                               parse_reflector_output, tool_call_names,
                                tool_calls_to_plan)
 from agent.principal import CHAT_ONLY_ROLES, UNKNOWN as UNKNOWN_PRINCIPAL
 from agent.prompts import (BLOG_ASSISTANT_PROMPT, NARRATOR_DISCIPLINE, STICKER_GUIDE,
@@ -121,7 +122,7 @@ from agent.prompts import (BLOG_ASSISTANT_PROMPT, NARRATOR_DISCIPLINE, STICKER_G
                            _PLANNER_OUTPUT_CONTRACT_NATIVE,
                            _PLANNER_PROMPT, _REFLECTOR_PROMPT, audience_block)
 from agent.provenance import QUOTE_SPAN_RE as _QUOTE_SPAN_RE
-from agent.arg_refs import parse_data, ref_error_reason, ref_hints, resolve_args
+from agent.arg_refs import ref_error_frame, ref_error_reason, ref_hints, resolve_args, structured_of
 from agent.textnorm import (  # noqa: F401
     FULLWIDTH_ASCII_MAP as _FULLWIDTH_ASCII_MAP,
     fold_typing as _fold_typing,
@@ -135,7 +136,7 @@ from agent.workflow_defs import WORKFLOW_MAP, _WRITE_NAME_TARGET_WORKFLOWS, visi
 from agent.workflow_defs.capability import CAPABILITY_DENIAL_OBJECTS, CAPABILITY_DENIAL_VERBS
 from agent.workflow_defs.nav_map import FUZZY_NAV_RULES, NAV_MAP, _NAV_REAL_PAGES, _NAV_REF_HINT
 from agent.workflow_menu import build_planner_context
-from agent.workflow_model import DROP_SUFFIX_BAD_ARGS, DROP_SUFFIX_NOT_OBJECT
+from agent.workflow_model import DROP_SUFFIX_BAD_ARGS, DROP_SUFFIX_NOT_OBJECT, ToolCall
 from agent.workflow_params import (
     arg_type_short,
     args_are_bound,
@@ -482,9 +483,11 @@ class AgentState(TypedDict):
     #                 之前，"已提出未执行"只存在于上一轮的自然语言里（execution_log
     #                 只装已执行的事实），下一轮只能回历史挑一句当目标（13:19 事故）。
     pending_action: dict
-    # ledger: 本请求**注入用**的两块台账原文（{"executions": str, "pending": str}，
-    #                 server.py 由 ChatRequest 填）——gate 的台账否认判据（洞⑦）据此
-    #                 判"被否认的是不是系统事实"，命中时还把这两行如实列举进兜底回复。
+    # ledger: 本请求**注入用**的台账原文（`executions`/`pending` 两串渲染，外加
+    #                 20261020 的 `exec_rows`＝同一批行的结构，见 server._parse_exec_rows）
+    #                 ——gate 的台账否认判据（洞⑦）据此判"被否认的是不是系统事实"，
+    #                 命中时还把这两行如实列举进兜底回复。
+    #                 `exec_rows` 只喂文档锚点（`_doc_anchors`），不进任何提示词。
     #                 **必须显式声明**（理由同 fallback_text：未声明的 key 会被
     #                 LangGraph 静默丢出 updates 流，判据恒收到 None ⇒ 静默失效）。
     #                 与 pending_action（execute 写的**结构化提议**）分工不同：
@@ -3460,7 +3463,7 @@ def _plan_exec_next_card(state: AgentState, config) -> "_PlanExec | None":
     # 拼装与 `_confirm_grant_plan` 同款（同一份 TOOLS 行契约，同一处 `NOTE` 位置）。
     # 注记只描述**事实与禁止**，不写"系统会去弹卡"那种机制（写给 narrator 的机制描述
     # 会变成它的词汇——同 `_finalize_unaccounted` 的教训）。
-    tools = [f"{s['tool']}({json.dumps(s['args'], ensure_ascii=False)})" for s in unit]
+    tools = [ToolCall(s["tool"], s["args"]) for s in unit]
     note = ("这一步是**跨轮台账里已经登记、参数已备**的下一步（主人之前交代过的那件事），"
             "照登记的参数执行；不得增删改任何参数、不得换工具")
     record("planner", "plan_step_bound", task_id=task_id, cursor=cursor, tools=tools)
@@ -3819,9 +3822,8 @@ def _capability_absent_clause(text: str, role: str | None) -> str:
     return hit[1] if hit else ""
 
 
-# 跨轮回执行记忆里的"检索类动作"痕迹（Rust render_exec_row 定稿措辞：rag_search →
-# "站内检索「…」"、search_notes → "搜索「…」"）——有它即视为站内结论有据
-_EXEC_SEARCH_TRACE_RE = re.compile(r"站内检索「|搜索「")
+# 跨轮回执行记忆里的"检索类动作"= **工具名**（Rust 的 `recent_tools` 就是这个列表）
+_SEARCH_TOOLS = frozenset({"rag_search", "search_notes"})
 
 
 # 收尾轮附给 narrator 的那一句（`planner_node` 末尾"末轮落成 chat 但本回合已有工具帧"
@@ -3838,10 +3840,9 @@ _CARRY_NOTE = (
     "也不许说你这一轮又新查了一次。")
 
 
-def _exec_memory_has_search(msgs: list) -> bool:
-    """跨轮回执行记忆里是否留下过检索类动作（见 _EXEC_SEARCH_TRACE_RE）。"""
-    return any(_EXEC_SEARCH_TRACE_RE.search(str(getattr(m, "content", "")))
-               for m in msgs)
+def _exec_memory_has_search(config) -> bool:
+    """跨轮回执行记忆里是否留下过检索类动作（读结构 `recent_tools`，不读渲染文本）。"""
+    return bool(_recent_tools_of(config) & _SEARCH_TOOLS)
 
 
 def _site_absence_claim_clause(text: str, search_evidence: bool = False) -> str | None:
@@ -6085,7 +6086,8 @@ def _planner_preflight(state: AgentState, config: RunnableConfig | None = None) 
 
     page_ctx = _page_ctx(_turn(state), role)
     has_frames = _has_frames(_turn(state))
-    doc_anchors = _doc_anchors(state["messages"])
+    doc_anchors = _doc_anchors(state["messages"],   # 跨轮读取走结构（与本轮注入同源）
+                               exec_rows=(state.get("ledger") or {}).get("exec_rows"))
     # 实验读数（20261015，见 agent/_ckpt_probe.py）：`msgs` 是本轮 planner 看到的
     # 消息条数（线程复用后会带上历史），`has_frames` 决定首轮五条确定性快道开不开
     # ——上一轮的 ToolMessage 会让它恒 True。未设 `CHECKPOINT_PROBE_OUT` 时是空操作。
@@ -7758,14 +7760,14 @@ def _check_spec(name: str, args: dict, args_ok: bool, raw: str, workflow: str,
         # planner 的应对是去问，而不是当成"做不到"。
         # 后台政策拒绝同办（20260926）：policy_refused 是"规则不许做"，planner 的
         # 应对是如实转述、**不是改参重试**——与上面三个原因码并列的第四个消费者
-        # （生产方 = adminops.policy_frame，见那里"为什么走错误帧族"的长注：
-        # 这一条接不上的后果是良性的「执行出错」，而新开一个 ToolResult kind
-        # 漏接的后果是**静默**产回执）。
-        return _VERDICT_BLOCK, (ref_error_reason(text) or authz.scope_error_reason(text)
+        # （生产方 = adminops.policy_frame，见那里"为什么走错误帧族"的长注：这条
+        # 接不上只退化成「执行出错」，而新开一个 ToolResult kind 漏接是**静默**产回执）。
+        # **批 G4 起原因码住在 `meta["reason"]`** ⇒ 下面七个取回函数退居**回落支**。
+        return _VERDICT_BLOCK, ((meta or {}).get("reason") or ref_error_reason(text)
+                                or authz.scope_error_reason(text)
                                 or authz.consent_error_reason(text)
                                 or authz.action_conflict_error_reason(text)
-                                or _target.target_error_reason(text)
-                                or idem.replay_reason(text)
+                                or _target.target_error_reason(text) or idem.replay_reason(text)
                                 or _target.policy_error_reason(text) or "error_frame")
     # 命令工具契约层校验（20260926 批 2 改键）：动作工具必须交出**连线命令**——但
     # 判据从"返回文本的前缀"改成"`meta["cmd"]` 的 kind"。工具返回形态漂移（忘了带
@@ -7801,8 +7803,7 @@ def _confirm_grant_plan(grant: dict) -> dict:
     workflow_name = str(grant.get("workflow") or "")
     specs = [s for s in (grant.get("specs") or []) if isinstance(s, dict)]
     workflow = WORKFLOW_MAP.get(workflow_name)
-    tools = [f"{s.get('tool')}({json.dumps(s.get('args') or {}, ensure_ascii=False)})"
-             for s in specs if s.get("tool")]
+    tools = [ToolCall(s["tool"], s.get("args") or {}) for s in specs if s.get("tool")]
     # 技能与工具必须**对得上**：令牌里点名了技能 X，清单里的工具就必须是 X 的
     # 固定序列里的（`Workflow.plan` 就是那份清单）。这不是防伪造（令牌是我们自己签的），
     # 是防**内部不一致**——签的时候用技能 A、执行的时候却被塞进工具 B，只会是
@@ -9498,10 +9499,10 @@ def _cap_frame_text(text: str, used: int) -> tuple[str, dict | None]:
     **为什么是头尾各半而不是只留头部**（20261005 修）：帧的**尾巴**上住着事实，不只是
     收尾的括号。`_rows_with_note` 把 `〔系统注记〕本次只带回最近 60 条，留言共 137 条`
     追加成列表的最后一个元素，`get_article_detail` 的帧末也常是尾部小节的正文；只留
-    头部时，封顶一触发就把这条总数注记整条切掉，而 `entities._note_total` 正是读它报
-    总数的 ⇒ **跨轮实体摘要会把"共 137 条"说错**（切口自己把注记吞了，是"截断必须说
-    出口"这条纪律在另一个方向上的反面）。注记放**中间**而不是尾部，是因为它标记的正是
-    缺口的位置：两头都在、中间没了。
+    头部时，封顶一触发就把这条总数注记整条切掉，而读帧的模型正是从注记里知道"还有更早
+    的"⇒ 它会拿手上这 60 行当全部（切口自己把注记吞了，是"截断必须说出口"这条纪律在
+    另一个方向上的反面）。注记放**中间**而不是尾部，是因为它标记的正是缺口的位置：两头
+    都在、中间没了。（批 G2 起跨轮摘要不再受影响——总数走 `meta["page"]`，与帧文本无关。）
     """
     raw = len(text)
     keep = min(raw, _FRAME_HARD_MAX)
@@ -9741,7 +9742,7 @@ def execute_node(state: AgentState, config: RunnableConfig | None = None) -> dic
             args["text"] = _create_display_text(user_msg, page_ctx)
         _t_tool = time.monotonic()
         if ref_err:
-            out = f"__ERROR__: 参数引用无法解析[{ref_err}]（上一步返回里没有这个值——改参数或换个工具）"
+            out: str = ref_error_frame(ref_err)
             logger.warning("[execute] 参数引用解析失败，不执行: %s → %s", spec, ref_err)
         elif not decision.allowed and authz.must_enforce(decision, principal):
             out = authz.denial_frame(decision, principal)
@@ -9803,9 +9804,9 @@ def execute_node(state: AgentState, config: RunnableConfig | None = None) -> dic
             name=name))
         logger.info("[execute] %s(%s) → %.100s", name, json.dumps(args, ensure_ascii=False),
                     str(out))
-        # 结构化返回值入 tool_data（引用取值源）：帧文本是给人看的（还截断），
-        # 引用要走结构。解析不出 → data=None（引用它时报 ref_unparsed，不猜）。
-        tool_data.append({"tool": name, "data": parse_data(str(out)),
+        # 结构化返回值入 tool_data（引用取值源）：帧文本是给人看的（还截断），引用要走
+        # 结构——批 G1 起先取 `ToolResult.data` 本体（见 `arg_refs.structured_of`）。
+        tool_data.append({"tool": name, "data": structured_of(out),
                           "round": state.get("plan_rounds", 0)})
         # 落进 trace 的返回文本：留多长由 utils/trace.tool_result_text 一处决定（20260925 起
         # **按工具分档**：正文 8000、其余 4000、rag_search 全文；golden 轮由
@@ -9850,12 +9851,12 @@ def execute_node(state: AgentState, config: RunnableConfig | None = None) -> dic
             # 实体摘要（20260920，见 agent/entity_digest.py）：数据工具取回的条目/计数
             # 压成一行随回执落 execution_log —— 工具帧只活当轮，不落这一行的话
             # 下轮「第二条写了什么」只能把工具再跑一遍（探针实测）。
-            digest = receipt_digest(name, str(out))
+            digest = receipt_digest(name, str(out), meta=out_meta, data=structured_of(out))
             if digest:
                 rcpt["digest"] = digest
             if name == "get_article_detail":
                 # 跨轮执行记忆带标题（20260912）：下轮"那篇讲架构的"要靠它核对指代
-                rcpt["title"] = _doc_title(str(out))
+                rcpt["title"] = _doc_title(out)
             # 后台写回执（20260921 第二轮，用户拍板"零迁移：写进 detail"）：执行身份
             # 与变更前→后随回执落 execution_log —— 写操作是**不可回滚的对外改动**，
             # 库里必须留得下"谁在什么时候把哪一篇从什么改成什么"。
@@ -9976,8 +9977,8 @@ def execute_node(state: AgentState, config: RunnableConfig | None = None) -> dic
 # 与老 reflector 的三个结构性差异：
 #   1. 输入无散文——图序 execute→reflector 先于 model，叙述尚未生成、结构上
 #      看不到（检查对象是受阻项/回执/帧，不是叙述文本）；
-#   2. 输出两行契约（ISSUE:/DECIDE:），replan 只把 ISSUE 给 planner 当修正
-#      指引（planner 仍是唯一决策点），wrap_up/预算耗尽 → 确定性收尾计划；
+#   2. 输出走结构化（20261019 批 G7；ISSUE:/DECIDE: 两行退居回落支），replan 只把
+#      issue 给 planner 当修正指引（planner 仍是唯一决策点），wrap_up → 确定性收尾计划；
 #   3. 预算 REFLECT_MAX_ROUNDS=2 硬顶 + 解析失败一律 wrap_up 兜底——LLM 复盘
 #      循环不失控，到顶即终局（无静默 accept，gate 照常检查终局轮叙述）。
 
@@ -9986,7 +9987,7 @@ def execute_node(state: AgentState, config: RunnableConfig | None = None) -> dic
 # 复盘提示词正文（`_REFLECTOR_PROMPT`）同批搬到 `agent/prompts.py`，顶部按原名取回。
 def reflector_node(state: AgentState, config: RunnableConfig | None = None) -> dict:
     """复盘受阻执行（20260904）：同 spec 二次受阻后路由至此（route_after_execute），
-    由复盘 LLM 判 ISSUE+DECIDE，输出只驱动两种去向——replan 把修正指引给
+    由复盘 LLM 判 issue+decision（结构化输出），输出只驱动两种去向——replan 把修正指引给
     planner（唯一决策点不变），wrap_up/预算耗尽走确定性收尾计划 + reflect_end
     → model 叙述、gate 照常检查。复盘不计入 plan_rounds（planner 轮次上限语义
     不变），只占 REFLECT_MAX_ROUNDS 次复盘预算。
@@ -10023,10 +10024,10 @@ def reflector_node(state: AgentState, config: RunnableConfig | None = None) -> d
            round=rounds + 1)
     _t0 = time.monotonic()
     try:
-        # 复盘是确定性诊断（判 replan/wrap_up 两值）——最低温 + 短输出 + 无思考
-        llm = get_llm(temperature=0.0, max_tokens=300, timeout=30,
-                      enable_thinking=False)
-        resp = llm.invoke(_REFLECTOR_PROMPT.format(
+        # 复盘是确定性诊断（判 replan/wrap_up 两值）——最低温 + 短输出 + 无思考；
+        # 20261019 批 G7 起走 `invoke_reflector`：按服务商方言绑结构化输出，绑不上降级
+        # 纯文本并**出声**（那一条 WARNING 是这条路唯一还看得见的地方）。
+        resp = invoke_reflector(_REFLECTOR_PROMPT.format(
             plan=plan_txt, blocked=blocked_txt, frames=facts))
     except Exception as e:
         logger.warning("[reflector] LLM 异常，按收尾终局: %s", e)
@@ -10037,12 +10038,9 @@ def reflector_node(state: AgentState, config: RunnableConfig | None = None) -> d
     logger.info("[reflector] LLM 复盘耗时=%.1fs（round %d/%d）",
                 dur, rounds + 1, REFLECT_MAX_ROUNDS)
     raw = (getattr(resp, "content", str(resp)) or "").strip()
-    dm = re.search(r"DECIDE\s*[:=]\s*(\w+)", raw, re.IGNORECASE)
-    decide = dm.group(1).lower() if dm else "wrap_up"  # 解析失败 → wrap_up 兜底
-    im = re.search(r"ISSUE\s*[:=]\s*(.+)", raw, re.IGNORECASE | re.DOTALL)
-    issue = ""
-    if im:
-        issue = im.group(1).strip().split("\n")[0].strip()[:300]  # 契约单行
+    # 结构化优先、文本回落（20261019 批 G7）：解析与它的 schema 同住 `planner_llm`，
+    # 判不了时那条路**出声**——`wrap_up` 与"判据坏了"在 trace 里长得一样。
+    decide, issue = parse_reflector_output(raw)
     record("reflector", "verdict", blocked=[b.get("spec") for b in blocked],
            decide=decide, issue=issue[:120], round=rounds + 1)
     if decide == "replan" and issue:
@@ -10479,8 +10477,8 @@ def gate_node(state: AgentState, config: RunnableConfig | None = None) -> dict:
     msgs = state["messages"]
     # **两个视野，别混**（20261015 批 1）：
     #   `turn` = 本轮窗口（`_turn`），给"本轮证据"类判据用 —— `frames`（本轮帧）、
-    #            `page_ctx`（本轮页面）、`_has_exec_memory` / `_exec_memory_has_search`
-    #            （读的是**本轮注入**的 `[System: …]` 块）；
+    #            `page_ctx`（本轮页面）、`_has_exec_memory`（读的是**本轮注入**的
+    #            `[System: …]` 块；`_exec_memory_has_search` 改读 `config` 的结构）；
     #   `msgs` = 整份列表，给"跨轮"类判据用 —— `_recent_ai_replies`（复读比对面本来就
     #            要往回看 N 轮）、`_url_trusted`、`_last_user_msg`（从后往前扫，天然自愈）。
     # 无 saver 时两者是同一个对象，这里拆开**不改任何行为**；线程一复用就分道扬镳，
@@ -10560,7 +10558,7 @@ def gate_node(state: AgentState, config: RunnableConfig | None = None) -> dict:
         for f in frames
     )
     issue = _claim_issue(reply, plan["workflow"], plan, bool(frames),
-                         _has_exec_memory(turn, state.get("ledger")), _exec_memory_has_search(turn),
+                         _has_exec_memory(turn, state.get("ledger")), _exec_memory_has_search(config),
                          has_popup=bool(state.get("pending_confirm")),
                          ledger=state.get("ledger"), receipts=receipts,
                          noop_specs=state.get("noop_specs"),
@@ -10756,7 +10754,7 @@ def gate_node(state: AgentState, config: RunnableConfig | None = None) -> dict:
                                     plan, len(frames))
         # 5f. 站内"没有"结论 vs 本轮内容类帧（洞④的混合轮形态，20260921）：本轮只跑了
         #     动作类工具（导航/特效/设备），回复却对站内内容下"没有"的结论 → 无依据。
-        clause5f = _site_absence_claim_clause(own5d, _exec_memory_has_search(turn))
+        clause5f = _site_absence_claim_clause(own5d, _exec_memory_has_search(config))
         if clause5f:
             logger.info("[gate] 站内『没有』结论但本轮无内容类工具帧（执行=%s）｜子句=%s → fallback",
                         "、".join(sorted(n for n in executed_names if n)) or "无",
