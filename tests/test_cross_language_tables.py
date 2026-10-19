@@ -6,6 +6,9 @@
 字符串元组。每次协议一动，四处得**手工同步**，而漏一处**不报错**：本仓自认的头号系统
 风险（`CHANGELOG.md` 记的"94 处手抄清单"）。
 
+（20261020 判据族自 `graph.py` 搬入 `agent/claims.py`：本文件取值点已跟着走，
+`agent.graph` 门牌不变；台账键名里的 `graph` 字样对应历史 CHANGELOG 编号。）
+
 **这一站锁什么**：不是"四处必须一字不差"（它们**本来就该不同**——见下面台账），而是
 **每一处与其余各处的差集都必须是被写下来、有理由的**。差集由源码现取值算出，台账里
 多写一条或漏写一条都当场红（双向断言）。
@@ -14,7 +17,7 @@
   · A 角色 **消毒**：`agent/reports.py::_CMD_WORD_RE` 洗**访客可控原文**（留言/举报正文
     会进报表）。它的职责是**宁滥勿缺**——任何一个下游可能当命令读的前缀，都要在
     `sanitize_untrusted` 里被打断（插零宽空格），所以它是**超集**。
-  · B 角色 **判模型**：`agent/graph.py::_CMD_PREFIX_RE` 判"模型是不是在正文里假装发了
+  · B 角色 **判模型**：`agent/claims.py::_CMD_PREFIX_RE` 判"模型是不是在正文里假装发了
     命令"，命中即兜底道歉。这里**误伤代价极高**（用户收到一句假道歉，20260920 的现场），
     所以它只放**真的会执行/真的会被组帧**的那几个词 ⇒ 是子集。
   · C 角色 **执行/展示**：`chat-core.js::COMMAND_RE` 既做展示剥除、又做 SSE 分流，
@@ -195,7 +198,7 @@ def read_site(rel: str, name: str, kind: str) -> dict[str, bool]:
 
 SITES = {
     "A·消毒 reports._CMD_WORD_RE": ("agent/reports.py", "_CMD_WORD_RE", "py"),
-    "B·判模型 graph._CMD_PREFIX_RE": ("agent/graph.py", "_CMD_PREFIX_RE", "py"),
+    "B·判模型 claims._CMD_PREFIX_RE": ("agent/claims.py", "_CMD_PREFIX_RE", "py"),
     "B·核对 graph._CMD_PREFIX_PAYLOAD_RE": ("agent/graph.py", "_CMD_PREFIX_PAYLOAD_RE", "py"),
     "C·执行/展示 chat-core.js COMMAND_RE":
         ("frontend/public/live2d-widgets/chat-core.js", "COMMAND_RE", "js"),
@@ -204,13 +207,13 @@ SITES = {
 # 「差集台账」：某站**故意没有**某个词 ⇒ 这里必须有一条，且理由写清。
 # 双向断言：台账里多写一条（那个差集不存在了）会红，少写一条也会红。
 WORD_LEDGER: dict[tuple[str, str], str] = {
-    ("B·判模型 graph._CMD_PREFIX_RE", "SUMMARY"): (
+    ("B·判模型 claims._CMD_PREFIX_RE", "SUMMARY"): (
         "gate 只放**真的会执行/真的会被组帧**的词。`SUMMARY:` 是文档摘要帧的前缀，"
         "从不作为可执行命令出现在正文里 ⇒ 不该由兜底道歉来管（误伤代价：用户收到一句假话）。"
         "⚠️ 这一格**不是**当年拍板收窄的：`_CMD_PREFIX_RE` 自 f69315e（20260903 planner 全权"
         "重写）引入起就是 4 词，`SUMMARY`/`System` 从来没进来过——是**没考察过**，不是"
         "考察后排除的。要加它属于**行为改动**（会改变什么触发兜底），得单独一批带 golden 证据。"),
-    ("B·判模型 graph._CMD_PREFIX_RE", "System"): (
+    ("B·判模型 claims._CMD_PREFIX_RE", "System"): (
         "`[System: …]` 是**上下文注入/模型对其复述**的标记，不是命令。B 角色的职责是"
         "『模型假装发了命令』；把系统注记算成命令会让 `[System:` 出现在正文时触发兜底。"
         "同上：当年没考察过（f69315e 起就 4 词），加它属于行为改动。"),
@@ -351,7 +354,8 @@ def _ignored_tag(word: str) -> bool:
     """
     return word in OTHER_TAG_FAMILIES or word in RETIRED_TAG_FAMILIES
 
-_SWEEP_FILES = ["server.py", "agent/graph.py", "agent/prompts.py", "agent/deterministic_plan.py",
+_SWEEP_FILES = ["server.py", "agent/graph.py", "agent/claims.py",
+                "agent/prompts.py", "agent/deterministic_plan.py",
                 "agent/reports.py", "eval/run_golden.py", "eval/corpus_invariants.py",
                 "scripts/agent_metrics.py",
                 "frontend/public/live2d-widgets/chat-core.js",

@@ -7,13 +7,17 @@
     "lines": 1801,
     "top_defs": 37
   },
+  "agent/claims.py": {
+    "lines": 1920,
+    "top_defs": 53
+  },
   "agent/entity_digest.py": {
     "lines": 877,
     "top_defs": 31
   },
   "agent/graph.py": {
-    "lines": 11114,
-    "top_defs": 196
+    "lines": 9469,
+    "top_defs": 143
   },
   "agent/prompt_context.py": {
     "lines": 1746,
@@ -64,7 +68,7 @@
     "top_defs": 24
   },
   "tests/test_authz.py": {
-    "lines": 1263,
+    "lines": 1266,
     "top_defs": 5
   },
   "tests/test_chat_quota.py": {
