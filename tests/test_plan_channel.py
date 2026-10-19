@@ -51,6 +51,7 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 from agent import graph as G        # noqa: E402
+from agent.principal import SOURCE_ASSERTION, Principal  # noqa: E402
 from agent.workflow_defs import WORKFLOW_MAP  # noqa: E402
 from agent.workflow_params import _param_problem_plan  # noqa: E402
 from agent.workflow_plan import instantiate_plan  # noqa: E402
@@ -405,7 +406,13 @@ class _Spy:
 _spy = _Spy()
 _orig_spy = G._TOOL_MAP.get("spy_read")
 G._TOOL_MAP["spy_read"] = _spy
-_cfg = {"configurable": {"user_id": 0}}
+# 身份显式给全（20261019）：`source` 现在是拦截判据的输入之一，缺省来源（"body"）
+# 在私有面/写面上不进灰度（`authz.must_enforce`）。这里的 `spy_read` 还是个**没在
+# manifest 里声明**的假工具（reason=no_manifest）⇒ 拿缺省身份跑，反控会红在权限闸上，
+# 而不是红在它要测的那件事（"给了对象才去 execute"）。
+_cfg = {"configurable": {"user_id": 0,
+                         "principal": Principal(uid=7, role="user",
+                                                source=SOURCE_ASSERTION)}}
 try:
     _r = G.execute_node(dict(_text_only), _cfg)
     check("⑤b 正控（改读对象之后必红的那条）：文本在场、对象缺席 ⇒ 路由去 model、执行零条",

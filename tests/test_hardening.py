@@ -391,8 +391,17 @@ def test_user_assertion():
         # 拿 settings 的当前值当期望会让"本机绿、CI 红"或反过来——同一条测试第二次犯的同一个错。
         from config.settings import Settings
         dflt = Settings.model_fields["agent_require_assertion"].default
-        check("代码默认不强制断言（滚动上线的前提：Rust 未发头时不能把在途请求打成 401）",
-              dflt is False, dflt)
+        # 20261019 翻转（安全审计 SAU-005）：出厂默认**强制**断言。旧默认 False 的理由
+        # 是滚动上线（Rust 未发头时不能把在途请求打成 401），那个前提今天不成立
+        # （Rust 早已发头、生产 .env 本来就是 1）——而 False 只在"克隆即部署"的人手里
+        # 生效，他们拿到的正是最不安全的那一档。要回退必须显式写 0，且回退后那个身份
+        # 仍然写不进私有数据（`authz.must_enforce`，见 tests/test_authz.py ⑪）。
+        check("代码默认强制断言（默认安全；要回退得显式写 0）", dflt is True, dflt)
+        # 出厂档必须同时进 `_PINNED`（同 `AGENT_FASTPATH` / `AGENT_EVIDENCE` 那条纪律：
+        # 离线套件对档位是瞎的，谁在 shell 里 export 过 0，整套就按另一档判）。
+        _runner = (Path(__file__).resolve().parent.parent / "tests" / "run_all.py").read_text(
+            encoding="utf-8")
+        check("出厂档进了 `tests/run_all.py::_PINNED`", '"AGENT_REQUIRE_ASSERTION": "1"' in _runner)
     finally:
         settings.jwt_secret = orig_secret
 
@@ -590,7 +599,8 @@ def test_review_endpoint_hardening():
     with patch("agent.moderator.review",
                lambda t, on_usage=None:
                    seen.append(t) or {"verdict": "pass", "reason": ""}):
-        # ① 开关关（代码默认）= 滚动期的兼容行为：无头照常审核，只记 WARNING
+        # ① 显式关掉开关 = 滚动期的兼容行为（20261019 起这**不是**代码默认值了，
+        #    默认是 1；这一格测的是"谁把开关拨回 0 会怎样"）：无头照常审核，只记 WARNING
         settings.agent_require_assertion = False
         out = server.review_message(_Req(), server.ReviewRequest(content="你好", uid=721))
         check("开关关 + 无断言 → 按 body uid 照常审核（滚动期行为不变）",

@@ -492,8 +492,8 @@ async def body_limit_middleware(request: Request, call_next):
 # 修法：Rust 用同一个 JWT_SECRET 签一条**短时效的身份断言**（aud=agent，60s）放在
 # `X-Agent-Assertion` 头里，agent 验签通过后**用它覆盖请求体里的 user_id**。
 # 这样边界从"回环"升级成"签名"——直连 agent 的人也伪造不出别人的身份。
-# 滚动上线：`AGENT_REQUIRE_ASSERTION=0`（默认）时缺头只记 WARNING、行为不变；
-# Rust 部署完再在 .env 打开它，避免"先重启 agent"把在途请求打成 401。
+# 滚动上线：`AGENT_REQUIRE_ASSERTION=0`（**显式拨回**才有这一档；20261019 起代码默认已是
+# 1，见 settings 那段注）时缺头只记 WARNING、行为不变；Rust 部署完再打开它，避免把在途请求打成 401。
 _ASSERTION_HEADER = "X-Agent-Assertion"
 _ASSERTION_AUD = "agent"
 
