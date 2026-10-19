@@ -4,7 +4,7 @@
     "top_defs": 37
   },
   "agent/graph.py": {
-    "lines": 11012,
+    "lines": 11014,
     "top_defs": 195
   },
   "agent/prompt_context.py": {
