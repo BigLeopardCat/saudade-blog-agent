@@ -51,7 +51,7 @@ jobs:
     env:
       PARENT_REPO_TOKEN: ${{ secrets.PARENT_REPO_TOKEN }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           # 提交信息闸门要跑 `git log BEFORE..SHA`（比本次 push 带来的那个区间），
           # 而默认的 `fetch-depth: 1` 只有一条提交 ⇒ 每一步都会落进"取不到基线 ⇒ 跳过"，
@@ -95,7 +95,7 @@ jobs:
 
       - name: 取父仓源码（只读、浅、稀疏）
         if: steps.parent.outputs.available == '1'
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           repository: BigLeopardCat/Saudade-Blog
           token: ${{ secrets.PARENT_REPO_TOKEN }}
@@ -143,7 +143,7 @@ jobs:
       # 退役 Node 20 支持时这两步会失效——升到 v5 / v6 是**另一件事**（要连带核对 checkout 在
       # 父仓那一处用的 `sparse-checkout` 输入是否改名），别混进无关的提交里。
       - name: Setup uv
-        uses: astral-sh/setup-uv@v5
+        uses: astral-sh/setup-uv@v7
         with:
           # 与 `requires-python` / `.python-version` 同一个值（`tests/test_packaging.py`
           # ⑥ 判着——CI 装 3.10 而声明 3.12 是"CI 绿但产线跑不了"那种假绿的反面：
@@ -300,7 +300,7 @@ jobs:
       BEFORE: ${{ github.event.before || github.event.pull_request.base.sha }}
       SHA: ${{ github.sha }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0        # 要比 before..sha 的改动区间
       - name: 与父仓 pin 比对（漂移则 ::warning::，恒退 0）
