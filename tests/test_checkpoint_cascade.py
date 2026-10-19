@@ -107,14 +107,30 @@ print()
 print("② 端点 `server.checkpoint_delete`：三条分支各判一次")
 
 import server  # noqa: E402
+from config.settings import settings  # noqa: E402
+
+
+class _Req:
+    """`_resolve_principal` 只看 `headers`；断言头缺席 ⇒ 走"开关未强制"的回退分支。
+
+    **本节判的是机制**（删没删掉、读回来确认），与调用者是谁无关——身份那一格
+    （20261020 安全审计 SAU-006）在 `tests/test_hardening.py::test_internal_endpoint_identity`
+    里单独判（那里真签一条断言）。所以这里**把开关自己钉成 0**：`tests/run_all.py` 的
+    `_PINNED` 把出厂档钉成 1，不拨回来的话这一节会**全部 401**、红得看不出原因。
+    """
+
+    def __init__(self, headers=None):
+        self.headers = headers or {}
 
 
 def _call(conv_id):
-    return asyncio.run(server.checkpoint_delete(conv_id))
+    return asyncio.run(server.checkpoint_delete(conv_id, _Req()))
 
 
 _old_agent = server._agent
+_old_flag = settings.agent_require_assertion
 try:
+    settings.agent_require_assertion = False   # 见 `_Req` 的注（测试自己钉，不读环境）
     server._agent = None                     # 没挂 saver（= 今天生产）
     _r = _call("42")
     check("没挂 saver ⇒ `deleted=false` 且点名 `no_saver`（不假装成功）",
@@ -140,6 +156,7 @@ try:
           _r.get("deleted") is False and _r.get("why") == "still_readable", str(_r))
 finally:
     server._agent = _old_agent
+    settings.agent_require_assertion = _old_flag
 
 # ── 跨仓契约 ─────────────────────────────────────────────────────────────────
 print()
@@ -203,6 +220,40 @@ def parent_halves(conv_src: str, temp_src: str) -> tuple[str, str]:
                   "这正是父仓自己记过的那个 bug 的形状（清单两处各写一遍、写的不是同一份）")
 
 
+def hook_identity(conv_src: str) -> tuple[str, str]:
+    """父仓那两个钩子**带不带身份断言**。三档：`都带` / `都不带` / `半带`。
+
+    为什么判的是**一致性**而不是"已带"：父仓是另一个仓、CI 里的父仓取自它默认分支的
+    当前状态（`eval.yml` 那一处 checkout 没写 `ref:`）⇒ 写成"断言已带"，在父仓那一行
+    落地之前就是一条**恒红**的判据，而红的套件进不了 CI（同 `parent_halves` 头注记的
+    那次）。三档里**只有「半带」是缺陷形状**：两个钩子住在同一个文件、同一套调用约定，
+    一个带一个不带，说明有人只改了一半。
+
+    为什么必须有它：agent 侧这两处现在**要求**断言（`_resolve_principal`，SAU-006）
+    ⇒ 父仓不带 = 这两条钩子 401 = "删了会话、checkpoint 还躺在库里"，而钩子是
+    **best-effort**（失败只 warn）⇒ 这条契约断了**不会响**。
+
+    ⚠️ **认的是头名 `X-Agent-Assertion`，不是 `create_agent_assertion`**：反控实测过
+    ——把 `.header("X-Agent-Assertion", &assertion)` 那一行删掉、只留签名那一句，
+    判据照样判「都带」。**"签了但没带上"正是这条契约最可能的失效形状**（签名与发送
+    隔了十几行），所以字面落在"头发出去"这一端。（父仓另外四处也是这个字面。）
+    """
+    marks = []
+    for key in ("async fn drop_checkpoint_threads", "async fn drop_checkpoint_turn"):
+        body = _fn_body(conv_src, key)
+        if body is None:
+            return "锚点没了", f"父仓里找不到 `{key}`（判据的前提没了）"
+        marks.append("X-Agent-Assertion" in body)
+    if all(marks):
+        return "都带", "两个钩子都随请求发身份断言"
+    if not any(marks):
+        return "都不带", ("两个钩子都没带身份断言 —— agent 侧已要求断言（SAU-006）⇒ "
+                       "这两条今天会 401，而钩子是 best-effort，失败只 warn（不会响）")
+    return "半带", ("只有「%s」那个钩子带了断言 —— 同一个文件、同一套调用约定，"
+                  "只改了一半" % ("drop_checkpoint_threads" if marks[0]
+                                else "drop_checkpoint_turn"))
+
+
 # 正控/反控用**合成源码**，不依赖父仓在不在（本仓纪律：判据的前提要自己摆出来）。
 _CONV_FAKE = """
 async fn purge_conversation_data<C>(db: &C, scope: ConvScope) -> Result<Vec<i32>, DbErr> {
@@ -246,6 +297,26 @@ check("（正控）锚点没了要**报**出来，不许空过",
 check("（正控）调用点之一没了也要报（不许当成'没接'——那会变成一条恒绿的判据）",
       parent_halves(_CONV_FAKE % _CALL, "fn other() {}")[0] == "锚点没了")
 
+# 身份断言那一档的合成正控/反控（同上：前提自己摆，不依赖父仓在不在）。
+_HOOKS_FAKE = """
+pub(crate) async fn drop_checkpoint_threads(ids: &[i32], uid: i32) {
+    %s
+}
+pub(crate) async fn drop_checkpoint_turn(conversation_id: i32, text: &str, uid: i32) {
+    %s
+}
+"""
+_HDR = '.header("X-Agent-Assertion", crate::auth_jwt::create_agent_assertion(uid, None))'
+check("（反控）两个钩子都不带断言 ⇒ 判「都不带」",
+      hook_identity(_HOOKS_FAKE % ("", ""))[0] == "都不带")
+check("（正控）两个钩子都带 ⇒ 判「都带」",
+      hook_identity(_HOOKS_FAKE % (_HDR, _HDR))[0] == "都带")
+check("（反控）只改了一个钩子 ⇒ 当场判「半带」（两个方向都抓）",
+      hook_identity(_HOOKS_FAKE % (_HDR, ""))[0] == "半带"
+      and hook_identity(_HOOKS_FAKE % ("", _HDR))[0] == "半带")
+check("（正控）钩子函数没了要**报**出来，不许空过",
+      hook_identity("fn other() {}")[0] == "锚点没了")
+
 import _parent_repo  # noqa: E402
 
 _rs = _parent_repo.read(
@@ -271,6 +342,17 @@ else:
     # **把 id 返回给调用方**（签名里有 `Vec<i32>`）。
     check("父仓那份清单**仍然只有一处**：会话 id 由 `purge_conversation_data` 返回给调用方",
           "-> Result<Vec<i32>" in _rs, "签名里看不到 `Vec<i32>` 返回值")
+    # 身份那一档（20261020 安全审计 SAU-006）：本仓这两处现在**要求**断言 ⇒ 父仓不带
+    # 就是 401，而钩子 best-effort（失败只 warn）⇒ 断了不会响。判**一致性**、不判"已带"
+    # 的理由写在 `hook_identity` 的 docstring 里。
+    _ist, _iwhy = hook_identity(_rs)
+    print(f"     父仓钩子的身份：{_ist} —— {_iwhy}")
+    check("父仓两个钩子带不带身份断言**一致**（半带＝只改了一半）",
+          _ist != "半带", _iwhy)
+    if _ist == "都不带":
+        print("     · 父仓那一半**还没带断言**：agent 侧已要求（SAU-006）⇒ 这两条钩子今天"
+              "会 401，而它们 best-effort、失败只 warn。这是已知缺口（跨仓同批推进），"
+              "不是判据失败——同上面那条'只报不判'的理由。")
     if _st == "两臂都没接":
         print("     · 父仓那一半**还没接上**：本仓的钩子今天没有任何调用方。"
               "这是已知缺口（roadmap 批 7 记着），不是判据失败——本件判的是"

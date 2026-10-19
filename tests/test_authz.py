@@ -140,15 +140,19 @@ check("execute_node 调用 authz.check", "decision = authz.check(principal, name
 check("拒绝只发生在调用之前（denial_frame 产帧而非 invoke）",
       "out = authz.denial_frame(decision, principal)" in graph_src)
 check("shadow 只记拒绝不改行为（authz_shadow 事件）",
-      '"authz_shadow"' in graph_src and "not authz.enforcing(decision.scope)" in graph_src)
+      '"authz_shadow"' in graph_src and "not authz.must_enforce(decision, principal)" in graph_src)
 # 拦截判据点**逐个点名**（20260921 起 3 处）：① execute 的 shadow 记录
 # ② execute 的硬拦 ③ _confirm_popup 的"能不能做"前置筛（无权做的写操作**不弹窗**
 #    ——弹了就是承诺一件做不到的事，用户点完只会拿到一句拒绝）。
 # 这个数字是**有意的**：每加一处都得先回答"它会不会放宽权限"。③ 只会减少
-# 弹窗，不会让任何东西被允许（它用的是同一个 decision 与同一个 enforcing）。
-check("拦截判据按 scope 取（admin.console 不吃 shadow，见 ⑩）——3 处：shadow/硬拦/弹窗前置筛",
-      graph_src.count("authz.enforcing(decision.scope)") == 3,
-      str(graph_src.count("authz.enforcing(decision.scope)")))
+# 弹窗，不会让任何东西被允许（它用的是同一个 decision 与同一个判据）。
+# 20261019 字面从 `authz.enforcing(decision.scope)` 换成
+# `authz.must_enforce(decision, principal)`（SAU-005 的纵深那一半）——**判据点没增减**，
+# 换的是"这一次拦不拦"多看了一眼**这次是谁在调**（未验成的身份不进灰度，见 ⑪）。
+# 锁仍然按**字面**数：看得见"又多了一处"，正是这个数字的用处。
+check("拦截判据 = must_enforce（不是裸 enforcing，见 ⑪）——3 处：shadow/硬拦/弹窗前置筛",
+      graph_src.count("authz.must_enforce(decision, principal)") == 3,
+      str(graph_src.count("authz.must_enforce(decision, principal)")))
 check("checker 认得 scope_denied 原因码", "authz.scope_error_reason(text)" in graph_src)
 check("principal 经 config 注入图", "def _principal_of" in graph_src)
 check("server 构造 principal（含角色来源标注）", "_resolve_principal" in server_src
@@ -1092,6 +1096,72 @@ for tool in ADMIN_TOOLS:
           authz.check(p(ROLE_USER), tool).reason == authz.REASON_DENIED)
 check("杂鱼一档**没有**被顺手放开（_ROLE_SCOPES 未动）",
       not any(authz.check(p(ROLE_ZAKO), t).allowed for t in ADMIN_TOOLS))
+
+print("⑪ 未验成的身份不进灰度（must_enforce，20261019 审计 SAU-005 的纵深那一半）")
+# 判据一句话：**这一次的拒绝**拦不拦，不只看 scope，还看**这个身份是怎么来的**。
+# 三档来源各有判据（每档都配正控，见下）：
+#   · `source="body"`（断言缺席/验签失败的回退身份，`server._resolve_principal` 恒给
+#     role=None）⇒ **硬拦**：它不是"另一种用户"，是"身份没验成"；
+#   · `source="assertion"`（Rust 签名断言，uid/role 都权威）⇒ 跟随 `authz_enforce`；
+#   · `source="golden"`（评测直调身份，`eval/run_golden.py::build_principal`）⇒ 跟随
+#     开关。它与回退身份长得很像（同样 role=None），但**没有 HTTP 入口**、uid 也不是
+#     请求方写的——按 role 判会把一整族既有用例从"shadow 放行"打成 BLOCK，那是判据
+#     基线的移动，不该由一次安全加固顺带做掉。这一条就是**防这个**的回归锁。
+_BODY = Principal(uid=9, role=None, source=SOURCE_BODY)
+_GOLDEN = Principal(uid=0, role=None, source="golden")
+_show = settings.authz_enforce          # 本节点在 shadow 档下跑（下面是前提断言）
+check("前提：本节点跑在 shadow 档（否则比较不出「进不进灰度」）", _show is False)
+# 私有面与写面：**硬拦**。靶子挑软 scope（read.own / write.own）——硬 scope 本来就拦，
+# 拿它当靶子测的是 `_HARD_SCOPES`（上一个节点），不是这条新判据。
+for _t in ("add_favorite", "get_chat_history", "list_notifications", "list_devices"):
+    _d = authz.check(_BODY, _t)
+    check(f"回退身份 · {_t}：check 判 deny（role=None ⇒ 零权限）",
+          not _d.allowed and _d.reason == authz.REASON_UNKNOWN_ROLE, str(_d))
+    check(f"  且 **硬拦**（shadow 档下 `enforcing()` 说别拦，`must_enforce` 说拦）",
+          authz.must_enforce(_d, _BODY) is True and authz.enforcing(_d.scope) is False,
+          f"must={authz.must_enforce(_d, _BODY)} shadow={authz.enforcing(_d.scope)}")
+# 硬 scope 那一族不必靠新判据（两条路都拦）——写出来是为了说明"覆盖，不是替代"。
+_d_dev = authz.check(_BODY, "device_oled_display")
+check("回退身份 · 物理世界写：两条判据都说拦（硬 scope 与新判据重叠，不是互替）",
+      authz.must_enforce(_d_dev, _BODY) is True and authz.enforcing(_d_dev.scope) is True)
+# 公开面**保留**（`_PUBLIC_SURFACE` = 读公开内容 + 驱动它自己那一屏）：这两条不需要身份
+# ——读公开内容本来就匿名可读，`write.page` 的效果只是一条发给请求方自己浏览器的命令。
+for _t in ("list_notes", "navigate_to", "toggle_dark_mode"):
+    _d = authz.check(_BODY, _t)
+    check(f"回退身份 · {_t}：**保留**（公开面不吃新判据，仍按 shadow 放行）",
+          not _d.allowed and authz.must_enforce(_d, _BODY) is False, str(_d))
+check("公开面就是那两条 scope（多一条都得在这里改一行）",
+      authz._PUBLIC_SURFACE == frozenset({authz.SCOPE_READ_PUBLIC, authz.SCOPE_WRITE_PAGE}),
+      str(authz._PUBLIC_SURFACE))
+# 正控：这条集合锁真的会红——合成一个"多一条"的表，必须判不等。
+check("  正控：往上面那集合里加一条 ⇒ 判据必须报不等",
+      authz._PUBLIC_SURFACE != frozenset({authz.SCOPE_READ_PUBLIC, authz.SCOPE_WRITE_PAGE,
+                                          authz.SCOPE_READ_OWN}))
+# 反控 ①：同一个 decision、换一个**验过**的身份 ⇒ 不进硬拦（否则就是"一律拦"）。
+_d_fav = authz.check(_BODY, "add_favorite")
+_a_fav = authz.check(p(ROLE_USER), "add_favorite")
+check("  反控：同一件写，断言身份（role=user）⇒ allow，must_enforce 不拦",
+      _a_fav.allowed and authz.must_enforce(_a_fav, p(ROLE_USER)) is False, str(_a_fav))
+check("  反控：软 scope 的 deny 在断言身份下**仍走灰度**（must_enforce 不吃整表）",
+      authz.must_enforce(authz.Decision(False, authz.REASON_DENIED, authz.SCOPE_READ_PUBLIC, "x"),
+                         p(ROLE_USER)) is False)
+# 反控 ②（本仓纪律）：golden 身份 + 同样的 deny ⇒ **不硬拦**，否则 golden 的
+# role=None 用例会集体变 BLOCK。这条是上面那段注释的机械判据。
+check("  反控：golden 身份 + 同样的 deny ⇒ 跟随开关（不硬拦，金标基线不动）",
+      authz.must_enforce(authz.check(_GOLDEN, "add_favorite"), _GOLDEN) is False,
+      str(authz.check(_GOLDEN, "add_favorite")))
+# fail-safe：已放行的决策一律 False（万一调用点漏写 `not decision.allowed`）
+check("已放行的决策 ⇒ must_enforce False（不会给合法调用产拒绝帧）",
+      authz.must_enforce(authz.Decision(True, authz.REASON_OK, authz.SCOPE_READ_PUBLIC, "x"),
+                         _BODY) is False)
+# 接线：**全仓没有一处还在裸问 `enforcing(decision.scope)`**——除 `must_enforce` 自己
+# 内部那一句（它就在 authz.py 里，按文件排除）。少了这条，将来新加一个拦截点照抄旧
+# 写法就把回退身份放过去了，而上面所有断言都还是绿的。
+_agent_dir = ROOT / "agent"
+_bare = sorted(f.name for f in _agent_dir.glob("*.py")
+               if "authz.enforcing(decision" in f.read_text(encoding="utf-8"))
+check("全仓拦截点都走 must_enforce（没有第二处裸问 enforcing(decision.scope)）",
+      _bare == [], str(_bare))
 
 # ── 超级管理员（20260926）──────────────────────────────────────────────
 # "超管有最高权限"在 agent 这一侧的落点就是**这两条**：授予与管理员一致（不新开一档）

@@ -7508,8 +7508,8 @@ def _confirm_popup(state: AgentState, specs: list, principal, user_msg: str,
             fast.append((idx, {"tool": name, "args": args}))
             continue  # 明确命令 + 目标地基都在：直接执行，不弹窗
         decision = authz.check(principal, name)
-        if not decision.allowed and authz.enforcing(decision.scope):
-            continue  # 权限硬拦：弹窗也改不了"这个人不能做"，走既有拒绝链路
+        if not decision.allowed and authz.must_enforce(decision, principal):
+            continue  # 权限硬拦（must_enforce：未验成的身份也不进灰度），走既有拒绝链路
         if not args_ok or arg_refs.has_refs([{"tool": name, "args": args}]):
             # 参数没解析出来 / 还挂着 $ref（引用依赖的是签发那一轮的工具帧，执行轮
             # 早已不在）→ 不签发，退回既有错误帧链路让 planner 自己收拾
@@ -8034,9 +8034,9 @@ def execute_node(state: AgentState, config: RunnableConfig | None = None) -> dic
         # 参数引用解析同一层（确定性、无 LLM、无一例外）。默认 shadow——
         # 只算决策、只把**拒绝**记进 trace，行为不变（先观测、后收口，见 agent/authz.py）。
         decision = authz.check(principal, name)
-        # 传 decision.scope 而不是无参调用：`admin.console` 是不吃 shadow 的硬拦
-        # （20260921，见 authz._HARD_SCOPES），其余 scope 仍走全局开关。
-        if not decision.allowed and not authz.enforcing(decision.scope):
+        # `must_enforce` 而不是无参 `enforcing()`：`_HARD_SCOPES`（20260921）与
+        # **未验成的身份**（source="body"，20261019 SAU-005 纵深）两类都不吃 shadow。
+        if not decision.allowed and not authz.must_enforce(decision, principal):
             record("execute", "authz_shadow", tool=name, principal=str(principal),
                    decision=str(decision))
         # 写操作的「人在回路」确认（20260920）：**权限判"能不能做"，这里判"这一次用户
@@ -8100,7 +8100,7 @@ def execute_node(state: AgentState, config: RunnableConfig | None = None) -> dic
         if ref_err:
             out: str = ref_error_frame(ref_err)
             logger.warning("[execute] 参数引用解析失败，不执行: %s → %s", spec, ref_err)
-        elif not decision.allowed and authz.enforcing(decision.scope):
+        elif not decision.allowed and authz.must_enforce(decision, principal):
             out = authz.denial_frame(decision, principal)
             logger.warning("[execute] 权限拒绝，不执行: %s → %s", spec, decision)
         elif consent_missing:
