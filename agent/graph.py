@@ -3820,9 +3820,8 @@ def _capability_absent_clause(text: str, role: str | None) -> str:
     return hit[1] if hit else ""
 
 
-# 跨轮回执行记忆里的"检索类动作"痕迹（Rust render_exec_row 定稿措辞：rag_search →
-# "站内检索「…」"、search_notes → "搜索「…」"）——有它即视为站内结论有据
-_EXEC_SEARCH_TRACE_RE = re.compile(r"站内检索「|搜索「")
+# 跨轮回执行记忆里的"检索类动作"= **工具名**（Rust 的 `recent_tools` 就是这个列表）
+_SEARCH_TOOLS = frozenset({"rag_search", "search_notes"})
 
 
 # 收尾轮附给 narrator 的那一句（`planner_node` 末尾"末轮落成 chat 但本回合已有工具帧"
@@ -3839,10 +3838,9 @@ _CARRY_NOTE = (
     "也不许说你这一轮又新查了一次。")
 
 
-def _exec_memory_has_search(msgs: list) -> bool:
-    """跨轮回执行记忆里是否留下过检索类动作（见 _EXEC_SEARCH_TRACE_RE）。"""
-    return any(_EXEC_SEARCH_TRACE_RE.search(str(getattr(m, "content", "")))
-               for m in msgs)
+def _exec_memory_has_search(config) -> bool:
+    """跨轮回执行记忆里是否留下过检索类动作（读结构 `recent_tools`，不读渲染文本）。"""
+    return bool(_recent_tools_of(config) & _SEARCH_TOOLS)
 
 
 def _site_absence_claim_clause(text: str, search_evidence: bool = False) -> str | None:
@@ -10476,8 +10474,8 @@ def gate_node(state: AgentState, config: RunnableConfig | None = None) -> dict:
     msgs = state["messages"]
     # **两个视野，别混**（20261015 批 1）：
     #   `turn` = 本轮窗口（`_turn`），给"本轮证据"类判据用 —— `frames`（本轮帧）、
-    #            `page_ctx`（本轮页面）、`_has_exec_memory` / `_exec_memory_has_search`
-    #            （读的是**本轮注入**的 `[System: …]` 块）；
+    #            `page_ctx`（本轮页面）、`_has_exec_memory`（读的是**本轮注入**的
+    #            `[System: …]` 块；`_exec_memory_has_search` 改读 `config` 的结构）；
     #   `msgs` = 整份列表，给"跨轮"类判据用 —— `_recent_ai_replies`（复读比对面本来就
     #            要往回看 N 轮）、`_url_trusted`、`_last_user_msg`（从后往前扫，天然自愈）。
     # 无 saver 时两者是同一个对象，这里拆开**不改任何行为**；线程一复用就分道扬镳，
@@ -10557,7 +10555,7 @@ def gate_node(state: AgentState, config: RunnableConfig | None = None) -> dict:
         for f in frames
     )
     issue = _claim_issue(reply, plan["workflow"], plan, bool(frames),
-                         _has_exec_memory(turn, state.get("ledger")), _exec_memory_has_search(turn),
+                         _has_exec_memory(turn, state.get("ledger")), _exec_memory_has_search(config),
                          has_popup=bool(state.get("pending_confirm")),
                          ledger=state.get("ledger"), receipts=receipts,
                          noop_specs=state.get("noop_specs"),
@@ -10753,7 +10751,7 @@ def gate_node(state: AgentState, config: RunnableConfig | None = None) -> dict:
                                     plan, len(frames))
         # 5f. 站内"没有"结论 vs 本轮内容类帧（洞④的混合轮形态，20260921）：本轮只跑了
         #     动作类工具（导航/特效/设备），回复却对站内内容下"没有"的结论 → 无依据。
-        clause5f = _site_absence_claim_clause(own5d, _exec_memory_has_search(turn))
+        clause5f = _site_absence_claim_clause(own5d, _exec_memory_has_search(config))
         if clause5f:
             logger.info("[gate] 站内『没有』结论但本轮无内容类工具帧（执行=%s）｜子句=%s → fallback",
                         "、".join(sorted(n for n in executed_names if n)) or "无",

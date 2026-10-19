@@ -113,7 +113,7 @@
       ],
       "agent/graph.py": [
         137,
-        3438
+        3432
       ],
       "agent/hostinfo.py": [
         0,
@@ -1654,17 +1654,6 @@
       "why": "在 narrator 的**叙述文字**里找中文词，判断它有没有声称/有没有如实",
       "replacement": "判**结构事实**（帧/回执/命令帧/任务态）而不是叙述措辞——同族工作见 docs/问题记录.md 声称闸洞①–⑭",
       "sunset": "声称闸工作流（另册：docs/toolcall-stability-roadmap.md §6）"
-    },
-    {
-      "id": "agent/graph.py::_EXEC_SEARCH_TRACE_RE",
-      "file": "agent/graph.py",
-      "kind": "regex",
-      "name": "_EXEC_SEARCH_TRACE_RE",
-      "size": 6,
-      "sample": "站内检索「|搜索「",
-      "category": "parser",
-      "q": "站内检索「|搜索「",
-      "why": "拆回执行行『站内检索「…」』"
     },
     {
       "id": "agent/graph.py::_LEDGER_THIS_TURN_RE",

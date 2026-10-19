@@ -1928,12 +1928,12 @@ def test_gate_site_absence_claim():
           _site_absence_claim("站内没有讲过这个", True) is False)
     check("站内没结论[默认实参 = 不豁免，旧调用点行为不变]",
           _site_absence_claim("站内没有讲过这个") is True)
-    check("回执检索痕迹识别（Rust render_exec_row 定稿措辞）",
-          _exec_memory_has_search([SystemMessage(content="确认与执行事实（系统台账）: · 已执行（系统验收过）: 09-21 10:00 "
-                                                        "站内检索「Rust async」 — 3 篇")]) is True)
-    check("无检索行（只有读取行）→ 不算依据",
-          _exec_memory_has_search([SystemMessage(content="确认与执行事实（系统台账）: · 已执行（系统验收过）: 09-21 10:00 "
-                                                        "读取文章 12《ESP32-S3 OTA》")]) is False)
+    check("检索痕迹识别[search_notes]（渲染成「检索文章「…」」后正则漏掉的那一格）",
+          _exec_memory_has_search({"configurable": {"recent_tools": ["search_notes"]}}) is True)
+    check("检索痕迹识别[rag_search]",
+          _exec_memory_has_search({"configurable": {"recent_tools": ["rag_search"]}}) is True)
+    check("无检索工具（只有读取行）→ 不算依据",
+          _exec_memory_has_search({"configurable": {"recent_tools": ["get_article_detail"]}}) is False)
 
     # ── gate 集成 ───────────────────────────────────────────────────────
     def _st(workflow, msgs_after_plan, **plan_kw):
@@ -1951,10 +1951,10 @@ def test_gate_site_absence_claim():
     o2 = gate_node(_st("chat", [AIMessage(content="站内没有下载板块喵，你可以去网盘看看")]))
     check("零帧 + 页面/入口结论 → pass（不误伤）",
           o2["done"] is True and not o2.get("fallback_text"), str(o2))
-    # 零帧 + 跨轮回执里有检索痕迹 → pass（rule 6 据回执转述）
-    o3 = gate_node(_st("chat", [SystemMessage(content="确认与执行事实（系统台账）: · 已执行（系统验收过）: 09-21 10:00 "
-                                                     "站内检索「Rust async」 — 2 篇"),
-                                AIMessage(content=absence)]))
+    # 零帧 + 跨轮回执里有检索痕迹 → pass（rule 6 据回执转述）。痕迹来自**结构**
+    # （`config.recent_tools`），不是那串渲染文本；反控见 `test_exec_search_evidence`。
+    o3 = gate_node(_st("chat", [AIMessage(content=absence)]),
+                   {"configurable": {"recent_tools": ["rag_search"]}})
     check("零帧 + 回执含检索痕迹 → pass（说结论有据）",
           o3["done"] is True and not o3.get("fallback_text"), str(o3))
     # 零帧 + navigate 已下线注记轮 → pass（"站内没有这个页面"是 NAV_MAP 的事实）：
