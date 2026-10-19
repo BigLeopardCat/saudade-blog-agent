@@ -202,10 +202,13 @@ def _is_turn_call(node: ast.AST) -> bool:
 _WINDOWED = (
     "_page_ctx", "_has_frames", "_frame_texts", "_frame_chars", "_any_error_frame",
     "_candidate_detail_plan",
-    # 这两个读的是**本轮注入**的 `[System: …]` 台账块（`_LEDGER_EXEC_MARK` 就写在那里）：
+    # 这个读的是**本轮注入**的 `[System: …]` 台账块（`_LEDGER_EXEC_MARK` 就写在那里）：
     # 全表扫会在"本轮台账为空、上一轮非空"时判成"本轮有执行记忆"，而它是 gate 的
     # 回执豁免前提之一 ⇒ 一条判据静默放宽。
-    "_has_exec_memory", "_exec_memory_has_search",
+    # （同族的 `_exec_memory_has_search` 20261020 起改读 `config` 的结构化
+    #  `recent_tools`、不再收 messages ⇒ 已从本表移出；"只看本轮"改由**按请求注入**
+    #  的那份结构保证——它与注入的台账块同源，不是窗口口径。）
+    "_has_exec_memory",
 )
 
 #: 允许出现在第一个实参位置的**非 `_turn` 表达式**（按源码首行逐字匹配）。

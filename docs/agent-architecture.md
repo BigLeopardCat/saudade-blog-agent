@@ -317,11 +317,13 @@ JWT 走 Authorization: Bearer 头（`localStorage.tokenKey`），不在 body 里
 2. 存用户消息：`chat_history` 插入 `(user_id, role="user", content)`。
 3. 读历史：该会话按 `id` 倒序取最近 21 条（排除刚插入的当前条）再翻转正序取 20 → `history[]`。
 4. 读摘要：`chat_summary` 按会话取一条 → `summary`。
-5. 读执行记忆（20260904）：`execution_log` 按会话倒序取最近 8 条（detail 写时已渲染定稿，
-   直取零映射）→ "· " 拼串 → `executions`。
+5. 读执行记忆（20260904）：`execution_log` 按会话倒序取最近 40 条 → 读侧按 detail 去重
+   （重复动作一行 + `（×N）`）→ 取最近 8 条（detail 写时已渲染定稿，直取零映射）→ "· "
+   拼串 → `executions`；**同一批行另出一份结构** `execution_rows`（20261020，
+   `[{at,n,payload}]` 的 JSON 数组串，payload = 回执原文）——给判据用，不给模型看。
 6. 统计与清理：COUNT 总消息数决定 `needs_summary`；超 `CHAT_HISTORY_LIMIT`（默认 500）删最旧。
 
-组装请求体转发给 Agent（`user_id`、`history`、`summary`、`executions`、`needs_summary` 都在这里产生）。请求体上限 1MB（chat.rs `prepare_chat` 内校验）。
+组装请求体转发给 Agent（`user_id`、`history`、`summary`、`executions`、`execution_rows`、`recent_tools`、`needs_summary` 都在这里产生）。请求体上限 1MB（chat.rs `prepare_chat` 内校验）。
 
 非流式路径（/chat，内部与兼容用，看板娘走流式）：Rust 调 agent `/chat`，传输层错误自动重试最多 3 次
 （间隔 800ms），超时不重试——超时说明生成确实很慢（长回答单次可达 180s，reqwest 超时即 180s），
@@ -449,6 +451,7 @@ flowchart TB
         R2 --> R3[_build_messages 全量注入 20 条<br/>按 role 注入 Human/AIMessage]
         R4[chat_summary 取摘要] --> R5[conversation_summary: 注入 System 上下文]
         R6[execution_log 取最近 8 条] -->|"· " 拼串| R7[recent_executions: 注入 System 上下文<br/>截 1500 字]
+        R6 -->|同一批行的结构| R8[execution_rows: 判据读它<br/>文档锚点/工具名，不进提示词]
     end
     subgraph Rollback[回滚与清理]
         D1[用户停止生成] -->|前端显式 POST /api/chat/discard| D2[删除该条 user 消息<br/>及其后的残缺回复]
