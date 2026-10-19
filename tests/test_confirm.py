@@ -1060,12 +1060,12 @@ for _bad_pick in ("pick:9", "pick:99", "2", "pick:-1", "pick:", "全部"):
 _n3, _e3 = confirm.narrow(_pay, "")
 check("  空选择 = 全部处理（旧客户端不发 confirm_pick 时逐字兼容）",
       _n3 is not None and len(_n3["specs"]) == 2 and _e3 == "")
-# 20261006：「其他（我来说）」加进来之后，单件卡是**三枚**了（原文写的是"仍是旧的两枚
-# ——字面一个字节没动"，那句话现在不成立，如实改掉，别留一句会骗人的注释）。
-# 加的是**入口**不是**权限**：可点的动词仍是「确定」。20261019：句尾动词换成「处理」。
+# 20261006：单件卡是**三枚**（「其他（我来说）」）；20261019 句尾换「处理」；20261020 单件那支
+# 改成与多件**同形**（动作独占一段）⇒ 句尾字面随之变；判据见 tests/test_confirm_question_shape.py
 check("  单件三枚（确定 / 其他（我来说）/ 取消），句尾动词是「处理」",
       [o["label"] for o in _confirm.confirm_opts(1)] == ["确定", "其他（我来说）", "取消"]
-      and _confirm.render_confirm_question(_grant_specs[:1]).endswith("点「确定」我就去处理。"))
+      and _confirm.render_confirm_question(_grant_specs[:1]).endswith(
+          "点「确定」我就去处理；点「取消」就当没说过。"))
 # 这张网是给"顺手把 other 也塞进确认请求"准备的：它不是选择记号，服务端必须
 # fail-closed（零执行）。前端把这一支拦在发请求之前（见 chat-stream.js 的顺序判据）。
 _n4, _e4 = confirm.narrow(_pay, "other")
