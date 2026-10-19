@@ -6,6 +6,7 @@ Set ``LLM_PROVIDER=deepseek|qwen|openai`` to choose the active one.
 
 import os
 
+from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # ── Provider registry ──────────────────────────────────────────────
@@ -47,6 +48,11 @@ class Settings(BaseSettings):
         env_file_encoding="utf-8",
         case_sensitive=False,
         extra="ignore",
+        # 20261020：下面六个限额字段带 `validation_alias`（env 键名保持 AGENT_* 老名，
+        # 老部署的 systemd unit 零改动），开了 populate_by_name ⇒ 显式构造时**字段名
+        # 传参与 alias 传参都认**——否则 `Settings(recursion_limit=77)` 会被静默忽略
+        # （pydantic 默认只认 alias），那是"看着传了参、其实没传"的新缝。
+        populate_by_name=True,
     )
 
     # ── Provider selection ─────────────────────────────────────────
@@ -102,9 +108,25 @@ class Settings(BaseSettings):
     # `rotate 14`、`logs/archive/`、`eval/report/runs/`）。留着一个恒无效的旋钮比没有更坏，
     # 因为它看起来是对的。`AGENT_EARLY_STOPPING` 那一条还多一层：键名与字段名不匹配
     # （字段名是 `..._method`），**连 pydantic 都收不到它**。
-    # 真要限轮次，那个旋钮是 `AGENT_RECURSION_LIMIT`（**读进程环境，不读 .env**，
-    # 见 server.py:89 与 README《环境变量》那一节）。
+    # 真要限轮次，那个旋钮是 `AGENT_RECURSION_LIMIT`——20261020 起它读 Settings
+    # （写 .env 就生效，见下面《服务限额与超时》块）；此前"只读进程环境、不读 .env"
+    # 的双轨形状已收敛（判据 `tests/test_settings_surface.py` ⑥）。
     agent_verbose: bool = True
+
+    # ── 服务限额与超时（20261020 双轨收敛：原本 server.py 顶部直读进程环境）──
+    # 这六个值原先在 `server.py` 里 `os.environ.get(...)` 直读（四个 AGENT_*）或
+    # 硬编码（两个 STREAM_*），`.env` 管不到它们——README 曾把"写进 .env 一点
+    # 作用都没有"当坑记着。收敛后**唯一真值源在这里**：`.env` / 进程环境 / 代码
+    # 缺省三轨同值，`server.py` 只按门牌转发（六个常量名不变，下游引用零改动）。
+    # 两个 STREAM_* 是**新开的 env 通道**：此前它们连拨的地方都没有（只能改码重启）。
+    # 用途与理由注释跟着常量留在 server.py（那里才是消费现场），这里只登记值。
+    stream_idle_timeout: float = Field(default=120.0, validation_alias="AGENT_STREAM_IDLE_TIMEOUT")
+    stream_total_timeout: float = Field(
+        default=300.0, validation_alias="AGENT_STREAM_TOTAL_TIMEOUT")
+    recursion_limit: int = Field(default=30, validation_alias="AGENT_RECURSION_LIMIT")
+    max_body_bytes: int = Field(default=12 * 1024 * 1024, validation_alias="AGENT_MAX_BODY_BYTES")
+    max_concurrent_streams: int = Field(default=8, validation_alias="AGENT_MAX_CONCURRENT")
+    review_concurrency: int = Field(default=4, validation_alias="AGENT_MAX_REVIEW")
 
     # ── TTS (Text-to-Speech) ───────────────────────────────────────
     tts_enabled: bool = False
