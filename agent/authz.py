@@ -32,7 +32,7 @@ from typing import NamedTuple
 
 from agent.principal import (KNOWN_ROLES, ROLE_ADMIN,
                             ROLE_SUPERADMIN, ROLE_USER, ROLE_ZAKO, Principal)
-from tools.result import error_frame
+from tools.result import ToolResult, error_frame
 
 # ── scope 词汇表 ─────────────────────────────────────────────────────
 # 命名 = <动作>.<对象>。对象轴现在只有「谁的」这一维（public / own），
@@ -1123,7 +1123,7 @@ def action_conflict(msg: str | None, tool: str | None) -> bool:
 REASON_ACTION_CONFLICT = "action_conflict"
 
 
-def action_conflict_frame(tool: str, sibling: str | None = None) -> str:
+def action_conflict_frame(tool: str, sibling: str | None = None) -> ToolResult:
     """反极性改选时的错误帧（checker 判 BLOCK，planner 按帧改回来）。
 
     形态与 `adminops.target_conflict_frame` 同族（`__ERROR__` + 原因码），论证也
@@ -1462,7 +1462,7 @@ def enforcing(scope: str | None = None) -> bool:
     return bool(getattr(settings, "authz_enforce", False))
 
 
-def denial_frame(decision: Decision, principal: Principal | None) -> str:
+def denial_frame(decision: Decision, principal: Principal | None) -> ToolResult:
     """拒绝时的 __ERROR__ 帧文本。形态与参数引用失败同族，带原因码——
     planner 据此如实告知（不是"系统故障"，是"你的身份不允许"）。"""
     who = f"uid={principal.uid} role={(principal.role if principal else None) or '未知'}"
@@ -1667,7 +1667,7 @@ _CONSENT_WHY_TOOL = {
 }
 
 
-def consent_frame(tool: str, principal: Principal | None) -> str:
+def consent_frame(tool: str, principal: Principal | None) -> ToolResult:
     """未获确认时的 __ERROR__ 帧文本。
 
     形态与权限拒绝同族（同为**确定性拒绝**、同走 blocked 链路），但语义不同：
@@ -1713,7 +1713,7 @@ def consent_block_reason(user_msg: str | None, tool: str | None) -> str:
 
 
 def consent_block_frame(tool: str, principal: Principal | None,
-                        user_msg: str | None) -> str:
+                        user_msg: str | None) -> ToolResult:
     """同一格的**帧文**。`action_conflict` 为真时改说"你排反了"（否则模型只会收到
     一句"要不要做"——那正是它已经答错的那个问题）。"""
     if action_conflict(user_msg, tool):

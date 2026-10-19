@@ -9639,7 +9639,7 @@ def execute_node(state: AgentState, config: RunnableConfig | None = None) -> dic
             args["text"] = _create_display_text(user_msg, page_ctx)
         _t_tool = time.monotonic()
         if ref_err:
-            out = ref_error_frame(ref_err)
+            out: str = ref_error_frame(ref_err)
             logger.warning("[execute] 参数引用解析失败，不执行: %s → %s", spec, ref_err)
         elif not decision.allowed and authz.enforcing(decision.scope):
             out = authz.denial_frame(decision, principal)
@@ -9748,7 +9748,7 @@ def execute_node(state: AgentState, config: RunnableConfig | None = None) -> dic
             # 实体摘要（20260920，见 agent/entity_digest.py）：数据工具取回的条目/计数
             # 压成一行随回执落 execution_log —— 工具帧只活当轮，不落这一行的话
             # 下轮「第二条写了什么」只能把工具再跑一遍（探针实测）。
-            digest = receipt_digest(name, str(out), meta=out_meta)
+            digest = receipt_digest(name, str(out), meta=out_meta, data=structured_of(out))
             if digest:
                 rcpt["digest"] = digest
             if name == "get_article_detail":

@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import re
 
-from tools.result import error_frame
+from tools.result import ToolResult, error_frame
 
 # ── 目标 id 的归一（20260929 批 H · S2）─────────────────────────────────
 # 写通道从"名字/正文片段"改成"台账里的 id"之后，模型填进来的值有两种合法写法：
@@ -209,7 +209,7 @@ def target_verb(name: str) -> str:
     return _TARGET_VERB.get(name or "", "改")
 
 
-def unknown_target_frame(name: str) -> str:
+def unknown_target_frame(name: str) -> ToolResult:
     """目标无据时的错误帧（checker 判 BLOCK，planner 先读再写）。"""
     verb = target_verb(name)
     return error_frame(f"__ERROR__: 目标未经确认[{REASON_UNKNOWN_TARGET}]"
@@ -217,7 +217,7 @@ def unknown_target_frame(name: str) -> str:
             f"或让主人点名是哪一篇，再{verb}；不要凭记忆写一个 id）", REASON_UNKNOWN_TARGET)
 
 
-def target_conflict_frame(name: str, named: set[int], got) -> str:
+def target_conflict_frame(name: str, named: set[int], got) -> ToolResult:
     """写目标与用户点名不一致时的错误帧（checker 判 BLOCK）。
 
     20260921 第三轮活体探针实证：管理员说「把文章 1 置顶」，planner 把
@@ -258,7 +258,7 @@ def target_error_reason(text: str) -> str | None:
 REASON_POLICY_REFUSED = "policy_refused"
 
 
-def policy_frame(message: str) -> str:
+def policy_frame(message: str) -> ToolResult:
     """后端政策拒绝的错误帧（checker 判 BLOCK；planner 读到原因码后应当**如实
     转述、不再改参重试**）。
 

@@ -217,7 +217,7 @@
   },
   "tools/own_data.py::read_notifications": {
     "c": 35,
-    "lines": 115
+    "lines": 119
   },
   "tools/tag_admin.py::create_tag": {
     "c": 31,

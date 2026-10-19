@@ -486,10 +486,14 @@ def read_notifications(
     m_after = (after_sum or {}).get("messages")
     tail = (f" / 私信 {m_after}"
             if isinstance(m_after, int) and not isinstance(m_after, bool) else "")
+    # 三个数**同时**当结构交出去（批 G5）：回执那句话是给人看的**渲染**，而跨轮摘要
+    # （`agent/entity_digest.py`）此前只能对它跑正则抠「已把 N 条…」「现在未读：通知 N 条」
+    # ——改一句措辞，下一轮问"你真给我标了吗"就只剩动作行，答"标好了"与"没标"长得一样。
     return ok(f"已把 {marked} 条通知标记为已读（现在未读：通知 {n_after} 条{tail}）。",
               meta=fact("notice_read", changed=True,
                         before=f"未读 {n_before} 条", after=f"未读 {n_after} 条",
-                        evidence=f"未读 {n_after} 条", change=f"标记已读 {marked} 条"))
+                        evidence=f"未读 {n_after} 条", change=f"标记已读 {marked} 条"),
+              data={"marked": marked, "unread": n_after, "unread_messages": m_after})
 
 
 # ---------------------------------------------------------------------------

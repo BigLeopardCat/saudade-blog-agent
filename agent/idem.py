@@ -243,7 +243,7 @@ def replay_reason(text: str) -> str | None:
     return REASON_OUTCOME_UNKNOWN if _REASON_RE.search(str(text or "")) else None
 
 
-def unknown_frame(name: str) -> str:
+def unknown_frame(name: str) -> ToolResult:
     """「上一次发出去了、但没拿到返回」的错误帧（checker 判 BLOCK）。"""
     return error_frame(f"__ERROR__: 写操作结果未知[{REASON_OUTCOME_UNKNOWN}]"
             f"（{name} 上一次已经发出，进程在拿到返回之前中断了——**不要重试**，"
