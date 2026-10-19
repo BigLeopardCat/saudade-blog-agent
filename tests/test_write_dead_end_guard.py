@@ -161,6 +161,12 @@ CASES: list[tuple[str, str, str, str]] = [
      _spec("reject_quota_request", {"user_id": 5,
                                     "reason": "本月的量已经够了，还有什么问题再问"}),
      "quota_reject"),
+    # 20261019（SAU-014）从两档族迁进来的：命令骨架在场、尾挂的是**内容**
+    # （主人顺口问的后果），按本文件的病根这就是同一类死路形态。
+    ("delete_tag",
+     "帮我把标签「大笨狗」删掉，还有多少文章挂着它",
+     _spec("delete_tag", {"name": "大笨狗"}),
+     "tag_delete"),
 ]
 
 print("① 完备性：这张构造表**必须**覆盖 `_ALWAYS_CONFIRM_TOOLS` 里的每一个工具")
