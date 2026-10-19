@@ -69,6 +69,30 @@ idle 的 autocommit 会话 `xmin` 已清零，不挡 CIC；挡住的是三条**�
 `DELETE /checkpoint/{conversation_id}`，**删除动作在父仓** `src/routes/conversation.rs`
 （跨仓契约，`tests/test_checkpoint_cascade.py` 有一条父仓守卫盯着）。
 
+## DSN 指向哪个库：**必须是业务库之外的独立库**
+
+`build_checkpointer()` 会在 DSN 指的那个库里建 **4 张本 agent 自持的表**
+（`checkpoints` / `checkpoint_writes` / `checkpoint_blobs` + 幂等账 `agent_write_idem`），
+而建表走的是 `PostgresSaver.setup()` ——**它没有编号迁移**。
+
+⇒ **不许指进博客业务库。** 业务库的结构只许由父仓的**编号迁移**改（父仓
+`scripts/migration/pg/` 下那套；父仓 `scripts/migration/pg/verify_parity.py` ⓪ 段判的
+就是"业务库里不该有 checkpoint 表"）。把 `setup()` 指进去，等于在业务库上开一条
+**没人编号、没人 review、也不在 CI 里**的 DDL 通道——它建的表与业务表不重名，
+所以**不会报错**，这正是它难发现的地方。20261018 采纳的第一版指的正是业务库，
+父仓随即补了那条点名判据。
+
+⚠️ **生产库名不写进本仓**（本仓是**公开仓**，运维坐标历来不落仓）。要把它变成硬闸
+就配 `CHECKPOINT_FORBID_DB`（缺省空 = 不拦）：填上库名之后，DSN 指到那个库 ⇒
+`build_checkpointer()` **当场响亮抛、进程起不来**（同"连不上就响亮抛"——坏 saver 的
+失效时刻本该是启动，不是第一轮对话的第一次写 checkpoint）。可读出口是 `/health` 的
+`dials.checkpoint_db`（只回库名，不回口令/主机）。
+
+**旧数据不迁**：checkpoint 是**派生上下文**，换库最坏退化成"老会话第一轮看不见历史"
+（`docs/platform-roadmap.md` 批 7 里记着的那条已知缺口），而迁的代价是两套库坐标
+从此要一起维护。**"指向哪个库"这件事本模块是唯一取值实现**（`db_name`），
+`/health` 那一格与那条硬闸都走它。
+
 ## 可验证面（别过度承诺）
 
 判据分四层：
@@ -143,6 +167,24 @@ def redact(dsn: str) -> str:
     head, tail = dsn.split("@", 1)
     scheme = head.split("://", 1)[0] if "://" in head else ""
     return f"{scheme}://***@{tail}" if scheme else f"***@{tail}"
+
+
+def db_name(dsn: str) -> str:
+    """DSN 里的**库名**；解析不出来 ⇒ 空串。**本仓"指向哪个库"的唯一取值实现**。
+
+    两个消费方（都是"看一眼就知道有没有指错"）：`/health` 的 `dials.checkpoint_db`
+    （`agent/runtime_probe.checkpoint_db` 转调本函数）与 `CHECKPOINT_FORBID_DB` 那条硬闸。
+    各写一份解析的话，两处迟早给出不同的库名，而"指错库"没有第三个地方能发现。
+
+    ⚠️ **只认 URL 形**（`scheme://…/dbname`）：`backend_for()` 已经把非 URL 的 DSN
+    响亮拒掉了（它要求 scheme 在取值域里），所以这里再认一遍 `host=… dbname=…` 那种
+    conninfo 形就是**第二个取值实现**。带 `?params` 的照切——`urlparse` 的 `.path`
+    不含 query。
+
+    **不许拿它拼 SQL、也不许拿它做任何连接决策**：它是给人看的那一格。
+    """
+    from urllib.parse import urlparse
+    return urlparse(dsn).path.strip("/")
 
 
 # ── 会话坐标 ─────────────────────────────────────────────────────────
@@ -285,7 +327,7 @@ def drop_invalid_indexes(conn) -> list[str]:
     删掉它，下一次 `setup()` 就会老老实实重建。
 
     **限定 `current_schema()` + 表名前缀 `checkpoint`**：那是本 agent 自持的表集
-    （DSN 那一节写着"别指错库"），碰不到博客业务表。
+    （见头注《DSN 指向哪个库》——那一节写着"别指错库"），碰不到博客业务表。
     """
     from psycopg import sql
     names = [r["name"] for r in conn.execute(_INVALID_IDX_SQL).fetchall()]
@@ -335,8 +377,20 @@ def build_checkpointer(dsn: str | None = None) -> object | None:
     """
     if dsn is None:
         dsn = settings.checkpoint_dsn
-    if not dsn.strip():
+    dsn = dsn.strip()
+    if not dsn:
         return None
+
+    # 指错库的硬闸（**缺省空 = 不拦**）：库名是运维坐标，不写进本仓（公开仓）。
+    # 这里抛 = **启动失败**，不是"第一轮对话的第一次写 checkpoint 才炸"。
+    _forbid = (settings.checkpoint_forbid_db or "").strip()
+    if _forbid and db_name(dsn) == _forbid:
+        raise RuntimeError(
+            f"CHECKPOINT_DSN 指到了 CHECKPOINT_FORBID_DB 点名的库（{_forbid}）："
+            f"{redact(dsn)}。业务库的结构只许由**编号迁移**改，而 saver 建表走的是 "
+            "PostgresSaver.setup()、没有编号迁移 ⇒ 指进去就是在业务库上开一条没人编号、"
+            "不在 CI 里的 DDL 通道（表不重名，所以不报错）。把它指到一个独立库"
+            "（见本模块头注《DSN 指向哪个库》），或者把这个开关清空。")
 
     mod_path, pkg = backend_for(dsn)
     if mod_path != _PG_MOD:
@@ -393,3 +447,142 @@ def delete_thread(saver, conversation_id: object) -> bool:
         return False
     saver.delete_thread(tid)
     return saver.get_tuple({"configurable": {"thread_id": tid}}) is None
+
+
+def thread_is_resuming(agent, thread_id: object) -> bool:
+    """这一轮开始**之前**，那个 thread 的上一轮跑没跑完（写幂等账靠它分流，批 F）。
+
+    判据 = 图状态的 `next` 非空：上一轮**正常收尾**的线程它为空，**崩溃/被取消**留下的
+    非空（批 E 第 ⑤ 节实测记过）。为什么这条必须由服务端在轮次开始前算、而不是在节点里
+    推：`checkpoint_ns` 逐轮重编（生产每轮传 dict 输入 ⇒ langgraph 从 START 重启），
+    节点里**看不出**"上一轮跑没跑完"——它只知道自己这一次尝试的身份。
+
+    **读不到就返回 `True`（保守侧）**：`True` = "按上一轮没跑完办" ⇒ 幂等账会重放已完成
+    的写、把未决的写判成结果未知。那一条主人**看得见**（有帧）；反过来（默认 `False`）
+    的失效是**静默放过一次重做**，看不见。所以这里宁可保守，而且**每次都记一行
+    warning**——这不是"正常路径上的一个分支"，是"判据缺失"，别让它哑着。
+    """
+    tid = str(thread_id or "").strip()
+    getter = getattr(agent, "get_state", None)
+    if not tid or getter is None:
+        logger.warning("[checkpoint] 取不到图状态（thread=%r，get_state=%s）⇒ 按上一轮没跑完办",
+                       tid, getter is not None)
+        return True
+    try:
+        snap = getter({"configurable": {"thread_id": tid}})
+    except Exception as e:
+        # 读不到就是判据缺失（不是"没崩"）：按保守侧办 + 留痕，见上面的注。
+        logger.warning("[checkpoint] 读图状态失败（thread=%s, %s）⇒ 按上一轮没跑完办", tid, e)
+        return True
+    return bool(getattr(snap, "next", ()) or ())
+
+
+# ── 「丢弃那一轮」要同步到图自己的 state（批 E）──────────────────────────
+# 现状（20261019 之前）：Rust 从 `chat_history` 删掉那一轮的 user 消息与残缺回复，而
+# **图自持的 state 里那条还在**——历史注入已关（`_graph_holds_context()`），DB 不再是
+# 上下文来源 ⇒ 「丢弃」这个动作**对 agent 不再生效**：主人点了"停止生成"，agent 下一轮
+# 照样记得那句被丢掉的话。本组函数是那一半。
+_CUR_Q = "[当前问题]: "
+
+
+def _user_text_of(msg) -> str:
+    """从 state 里那条 user 消息取出**主人原话**（剥掉当前问题锚点）。
+
+    锚点见 `server._build_messages`：当前那条一律是 `[当前问题]: <原话>`（带图轮是
+    `[{image_url…}, {type:text, text:"[当前问题]: <原话>"}]` 的块数组）。**历史那几条没有
+    这个前缀**，而本函数只用在"最后一条 user"上，所以剥前缀这件事是安全的。
+    """
+    content = getattr(msg, "content", "")
+    if isinstance(content, list):
+        content = next((b.get("text", "") for b in content
+                        if isinstance(b, dict) and b.get("type") == "text"), "")
+    if not isinstance(content, str):
+        content = str(content)
+    return content[len(_CUR_Q):] if content.startswith(_CUR_Q) else content
+
+
+def _same_turn(state_text: str, given: str) -> bool:
+    """state 里那句话是不是 `given` 指的那一轮。
+
+    `given` 由父仓给，取的是它刚从 `chat_history` 删掉那行的 **DB content**；带图轮那边
+    存的是 `原文\\n[图片…]`（`prepare_chat` 入库时拼的）⇒ 只比"是不是同一条"，方向与
+    父仓 `discard_handler` 的 `strip_prefix` 一致（那边剥的也是这个后缀）。
+
+    **对不上就不动手**：宁可留着（保留期会清），也不要摘错一条——摘错是**删掉主人还想
+    留着的话**，那是不可逆的。
+    """
+    if state_text == given:
+        return True
+    if not state_text or not given.startswith(state_text):
+        return False
+    rest = given[len(state_text):]
+    return rest == "" or rest.startswith("\n[图片")
+
+
+async def drop_last_user_turn(agent, conversation_id: object, text: str = "") -> dict:
+    """把该会话 state 里**最后一条 user 消息及其之后的一切**摘掉（**丢弃那一轮**）。
+
+    返回 `{"dropped": bool, "why": str}`——`dropped` 恒是**读回来确认**的结果，不是
+    "没抛异常"（同 `delete_thread` 那条纪律：一个恒不生效的摘除与真摘除**长得一模一样**）。
+    `why` 点名是哪一条：`no_saver` / `no_graph_state` / `bad_conversation_id` /
+    `no_user_message` / `no_text` / `mismatch` / `still_present`。
+
+    **摘的是"那条 user 及其之后"**（`msgs[idx:]`）而不是只摘那一条：父仓删的是
+    `id >= u.id`，也就是 user 消息 + 残缺回复；只摘 user 会把那半截 AI 留在 state 里，
+    下一轮 narrator 会把它当"我方已经说过的话"（同 `graph._fallback_result` 里
+    `RemoveMessage` 记的那条克隆链）。
+
+    ⚠️ **如实的残余（实测，`/home/ubuntu/exp/ckpt_drop_turn/`）**：被打断在节点中途的线程，
+    `get_state().next` **非空**（实测 `('b',)`），而 `aupdate_state` **保留**它（不带
+    `as_node` 时；带 `as_node=<被打断那个节点>` 也只是把 pending 往前挪一格——那个节点的
+    后继就是新的 pending）。**这不是本函数引入的**：中断那一刻它就已经非空了。今天生产
+    每轮传 dict 输入 ⇒ langgraph 会**丢弃**未完成任务、从 START 重启
+    （`langgraph/pregel/_loop.py:977-979`），下一轮走完 `next` 自己回到空。**潜伏面**：
+    任何 `stream(None)` 的续跑会去跑那个 pending 节点。判据
+    `tests/test_checkpoint_drop_turn.py` 把这条现状**记下来**，没有假装它是干净的。
+
+    `text` 为空 ⇒ **不动手**（`no_text`）：没有原文就没法确认"最后那条 user 是不是被丢弃
+    的那一轮"，而摘错的代价不可逆。父仓手里有那一行的 content，一律会带上。
+    """
+    saver = live_saver(agent)
+    if saver is None:
+        return {"dropped": False, "why": "no_saver"}
+    tid = conversation_thread(conversation_id)
+    if tid is None:
+        return {"dropped": False, "why": "bad_conversation_id"}
+    getter = getattr(agent, "aget_state", None)
+    setter = getattr(agent, "aupdate_state", None)
+    if getter is None or setter is None:
+        return {"dropped": False, "why": "no_graph_state"}
+
+    from langchain_core.messages import HumanMessage, RemoveMessage
+
+    cfg = {"configurable": {"thread_id": tid}}
+    snap = await getter(cfg)
+    msgs = list((getattr(snap, "values", None) or {}).get("messages") or [])
+    idx = next((i for i in range(len(msgs) - 1, -1, -1)
+                if isinstance(msgs[i], HumanMessage)), None)
+    if idx is None:
+        return {"dropped": False, "why": "no_user_message"}
+    target = msgs[idx]
+    if not text.strip():
+        return {"dropped": False, "why": "no_text"}
+    if not _same_turn(_user_text_of(target), text):
+        return {"dropped": False, "why": "mismatch"}
+    removes = [RemoveMessage(id=m.id) for m in msgs[idx:] if getattr(m, "id", None)]
+    if not removes:
+        return {"dropped": False, "why": "still_present"}
+    # **不传 `as_node`**：`aupdate_state` 会从 `versions_seen` 推"最后是谁写的"，
+    # 生产形状的图（planner/execute/model/gate）推得出来（实测）。推不出来时它抛
+    # `InvalidUpdateError`（"Ambiguous update"）——**如实收成一支回执**，别让它变成父仓
+    # discard 路上的一个 500（那边只看 `dropped`，`why` 进日志）。
+    try:
+        await setter(cfg, {"messages": removes})
+    except Exception as e:                                  # noqa: BLE001
+        logger.warning("[checkpoint] 丢弃那一轮写不进去（%s: %s）conv=%s",
+                       type(e).__name__, e, tid)
+        return {"dropped": False, "why": "ambiguous_update"}
+    after = await getter(cfg)
+    left = list((getattr(after, "values", None) or {}).get("messages") or [])
+    gone = not any(getattr(m, "id", None) == getattr(target, "id", None) for m in left)
+    return {"dropped": gone, "why": "" if gone else "still_present"}

@@ -66,10 +66,15 @@ def wire(r: dict) -> str:
 # 而这里推错的代价更直接：**配了 `CHECKPOINT_DSN` 不等于这个进程挂上了 saver**
 # （DSN 连不上/进程是配之前起的/图那个对象上根本没接），读配置的实现会把
 # "配了 DSN"报成"挂上了 saver"——那正是本仓最贵的一类失效。
+# 20261019（批 B）：加 `checkpoint_db` 一格——**这一格恰好是读配置的**（回的是
+# `CHECKPOINT_DSN` 指的库名，只回库名）。它与 `checkpoint_backend` **不是一回事**，
+# 合起来才读得通（`checkpoint_db=某库` + `checkpoint_backend=none` = 配了 DSN 而图
+# 没挂上）。它存在的理由只有一个：把"指错库"变成一眼可见——业务库不该有 checkpoint 表，
+# 因为 saver 建表**没有编号迁移**（见 `agent/checkpoint.py` 头注《DSN 指向哪个库》）。
 DIAL_KEYS = {"planner_native_thinking", "agent_fastpath",
              "llm_provider", "llm_model",
              "rag_hybrid_enabled", "rag_hybrid_active", "rag_state", "vector_missing",
-             "checkpoint_backend"}
+             "checkpoint_backend", "checkpoint_db"}
 
 print("① 存活探针那半**逐字不变**（scripts/healthcheck.sh 按子串判活）")
 _old_agent = server._agent
@@ -254,6 +259,54 @@ try:
 finally:
     server._agent = _old_agent
     settings.checkpoint_dsn = _saved_dsn
+
+print()
+print("⑥ checkpoint_db：**配置指到哪个库**（只回库名），与上面那格**不是一回事**")
+# ⑥ 与 ⑤ 取向**相反**：⑤ 刻意从活体对象读、绝不看配置；⑥ 读的**就是配置**。
+# 两格合起来才读得通（`checkpoint_db=某库` + `checkpoint_backend=none` = 配了 DSN
+# 而图没挂上 saver）。⑥ 存在的理由只有一个：把**"指错库"变成一眼可见**
+# （业务库不该有 checkpoint 表——saver 建表没有编号迁移，见
+# `agent/checkpoint.py` 头注《DSN 指向哪个库》）。
+
+
+def _db(dsn: str) -> str:
+    return runtime_probe.checkpoint_db(dsn)
+
+
+check("没配 DSN ⇒ 空串（**不是** unknown：'没配'与'写了个解析不出来的'要分开）",
+      _db("") == "" and _db("   ") == "")
+check("URL 形 ⇒ 库名",
+      _db("postgresql://u:secret@10.0.0.9:5432/ckpt_db") == "ckpt_db")
+check("带 `?params` 的照切（query 不算库名的一部分）",
+      _db("postgresql://u:p@h:5432/ckpt_db?sslmode=require") == "ckpt_db")
+check("unix socket 形（`postgresql:///db`，主机段是空的）也认",
+      _db("postgresql:///ckpt_db") == "ckpt_db")
+check("配了但解析不出库名 ⇒ `unknown`，**不许**退回空串"
+      "（把'写了个解析不出来的 DSN'报成'没配 DSN'就是 ⑤ 那条注里骂过的同形错误）",
+      _db("postgresql://u:p@h:5432") == "unknown" and _db("postgresql://") == "unknown")
+# **反控**：这一格进 `/health`，而 dials 的纪律是"绝不回 key / URL / 密钥"
+# （`server.health` 那段注）。只回库名 ⇒ 口令与主机名都不该出现。
+_got = _db("postgresql://u:secret@10.0.0.9:5432/ckpt_db")
+check("（反控）返回值里既没有口令也没有主机名",
+      "secret" not in _got and "10.0.0.9" not in _got, _got)
+_saved_dsn6 = settings.checkpoint_dsn
+try:
+    # **对照**（本节的要点）：这一格跟着配置走，而 `checkpoint_backend` 跟着**活体
+    # 对象**走。拨配置**不动**那一格 ⇒ 两格量的确实是两件事。这里不写死"那一格是
+    # none"——它取的是本进程 `_agent` 的形态（`tests/run_all.py` 与单跑都可能不同），
+    # 写死会变成一条与本节无关的环境断言。
+    _live_before = call()["dials"]["checkpoint_backend"]
+    settings.checkpoint_dsn = "postgresql://u:p@h:5432/from_settings"
+    check("走真路由：`/health` 的 checkpoint_db 取自本进程 settings（改内存即刻变）",
+          call()["dials"]["checkpoint_db"] == "from_settings",
+          call()["dials"]["checkpoint_db"])
+    check("（对照）拨配置**不动** checkpoint_backend —— 两格量的不是一件事",
+          call()["dials"]["checkpoint_backend"] == _live_before, _live_before)
+    settings.checkpoint_dsn = ""
+    check("DSN 清空 ⇒ 这一格回到空串（上面那条不是碰巧）",
+          call()["dials"]["checkpoint_db"] == "")
+finally:
+    settings.checkpoint_dsn = _saved_dsn6
 
 print()
 if FAILED:

@@ -10,6 +10,9 @@
       --guard         加这一档：真子进程崩在工具调用中途，**幂等账**把写压成一次
                       （2× → 1×；不带 --guard 的那条就是它的内置反控）
       --guard-unsafe  上一条的反控：占位留在一笔**没提交**的事务里 ⇒ 读数应回到两次
+      --prod-shape    配 --guard：恢复那一次传 **dict 输入**（= 生产每轮的形状）
+                      ⇒ 20261019 批 F 起读数 **1×**（改前是 2×：账恒不命中）。
+                      两格反控 = 同夹具不带本开关（1×）+ 干净轮之后重复同一件写（2×）
     --pg-stats        实验库里有什么（逐 thread 的 checkpoint 行数/字节、单行大小）
     --backend-parity  两档账本（PG / SQLite）跑同一份序列 ⇒ 读数必须**逐字相等**
     --summarize       把 `CHECKPOINT_PROBE_OUT` 那份 JSONL 汇总成逐轮曲线
@@ -46,6 +49,7 @@ from langchain_core.messages import AIMessage, HumanMessage, ToolMessage  # noqa
 from langgraph.graph import END, START, StateGraph  # noqa: E402
 
 from agent import prompt_context  # noqa: E402
+from agent import checkpoint  # noqa: E402
 from agent import graph as G  # noqa: E402
 from agent import idem  # noqa: E402
 from agent.checkpoint_arm import make_saver  # noqa: E402
@@ -350,8 +354,8 @@ def cmd_crash_resume() -> int:
 # 没有 PG，块⑪ 只能钉"psycopg 没漏进 idem.py"，钉不了"真的选对了"。
 #
 # **清场靠换一个没人用过的 thread 名**（`uuid` 后缀）：键是 sha256，表里没有 thread_id
-# 列，没有 DELETE 可做。换了 thread 名 ⇒ 新的 `task_id` ⇒ 新的键 ⇒ 一片干净的行，
-# 而且**顺带**证明了"每次全新输入都是新键"（见下面竞态那格的 ②）。
+# 列，没有 DELETE 可做。换了 thread 名 ⇒ 新的 `thread_id`（20261019 批 F 起它是**键**的
+# 第一格）⇒ 一片干净的行，而且**顺带**证明了"每次全新输入都是新键"（见下面竞态那格的 ②）。
 #
 # **DSN 不上屏**：它是凭据（`.env` 里那份都没它），日志里只印"落在 PG 哪张表"。
 
@@ -369,6 +373,23 @@ class _SideEffectTool:
         return "写好了"
 
 
+def _note_ns(config) -> None:
+    """把这一格节点看到的 `checkpoint_ns` 记进 `PROBE_NS` 那个文件。
+
+    这一格要回答的是「**它在崩溃前后逐字相同吗**」，所以必须从**节点内**取：它是
+    `idem.attempt_for`（= "这一次尝试"的身份）的成分，从图外面取拿到的是另一个东西。
+    ⚠️ **20261019 批 F 起它不再是键的成分**（键是会话级的）——所以"逐字变了"不再等于
+    "账认不出同一件写"，本文件里凡按它下结论的地方都改过了。
+    没设 `PROBE_NS` 就什么都不做（其余档位零影响）。
+    """
+    path = os.environ.get("PROBE_NS")
+    if not path:
+        return
+    ns = ((config or {}).get("configurable") or {}).get("checkpoint_ns")
+    with open(path, "a", encoding="utf-8") as f:
+        f.write(f"{ns}\n")
+
+
 def _guard_graph(saver, ledger):
     """真图：唯一那次写走**账**（与 `graph.execute_node` 里那一行同一个入口）。
 
@@ -378,6 +399,7 @@ def _guard_graph(saver, ledger):
     checkpointer"，账从 saver 上认。
     """
     def execute(state, config):
+        _note_ns(config)
         out = idem.guarded_invoke(_SideEffectTool(), "set_article_status", {}, config,
                                   fingerprint="probe", ledger=ledger)
         return {"messages": [ToolMessage(content=str(out), tool_call_id="probe")]}
@@ -456,7 +478,7 @@ class _UnsafeLedger:
         self.table = idem_pg.TABLE
         self.conn = _pg_conn(autocommit=False)   # ← 从这一刻起，占位都留在一笔没提交的事务里
 
-    def claim(self, key, tool, fp):
+    def claim(self, key, tool, attempt, *, resuming=True):
         with self.conn.cursor() as cur:
             cur.execute(f"SELECT status, text, kind, meta FROM {self.table} WHERE key=%s",
                         (key,))
@@ -464,7 +486,7 @@ class _UnsafeLedger:
             if row is not None:
                 return row[0], row
             cur.execute(f"INSERT INTO {self.table}(key, tool, fp, status)"
-                        " VALUES (%s,%s,%s,'intent')", (key, tool, fp))
+                        " VALUES (%s,%s,%s,'intent')", (key, tool, attempt))
         return "new", None             # ← **没有 COMMIT**，这就是"不安全"的全部
 
     def finish(self, key, out):
@@ -506,7 +528,7 @@ class _RaceUnsafeLedger:
         self.table = idem_pg.TABLE
         self.conn = _pg_conn(autocommit=True)
 
-    def claim(self, key, tool, fp):
+    def claim(self, key, tool, attempt, *, resuming=True):
         with self.conn.cursor() as cur:
             cur.execute(f"SELECT status, text, kind, meta FROM {self.table} WHERE key=%s",
                         (key,))
@@ -517,7 +539,7 @@ class _RaceUnsafeLedger:
         with self.conn.cursor() as cur:
             cur.execute(f"INSERT INTO {self.table}(key, tool, fp, status)"
                         " VALUES (%s,%s,%s,'intent') ON CONFLICT (key) DO NOTHING",
-                        (key, tool, fp))
+                        (key, tool, attempt))
         return "new", None             # ← 不看有没有插进去：被挡下也当自己抢到了
 
     def finish(self, key, out):
@@ -545,13 +567,28 @@ def _ledger_for(kind: str, dsn: str):
     return None if cls is None else cls(dsn)
 
 
+def _stream_once(saver, thread: str, ledger, prod_shape: bool) -> None:
+    """跑一轮。**那一格（`idem_resuming`）按生产同一份推导现算**。
+
+    生产是 `server._idem_resuming(thread_id)` ⇒ `checkpoint.thread_is_resuming`（读图状态
+    的 `next`）。探针**走同一个函数**，不在探针里手摆这个前提——手摆的话，这里量的就只剩
+    "账本自己那一侧"，而"服务端算得对不对"那一半没人管（本仓纪律：判据的前提别自己摆）。
+
+    必须在 `stream` **之前**算：它问的是"这一轮**开始时**上一轮跑没跑完"。
+    """
+    app = _guard_graph(saver, ledger)
+    cfg = {"configurable": {
+        "thread_id": thread,
+        "idem_resuming": checkpoint.thread_is_resuming(app, thread)}}
+    list(app.stream(G.graph_input([]) if prod_shape else None, cfg,
+                    stream_mode=["updates"], durability=idem.REQUIRED_DURABILITY))
+
+
 def _guard_worker(thread: str, unsafe: bool, dsn: str) -> None:
     """子进程体。**必须是模块级函数**：`spawn` 要 pickle 它（同 `_conc_worker`）。"""
     os.environ["PROBE_CRASH"] = "1"
-    saver = make_saver()
-    app = _guard_graph(saver, _ledger_for("crash-unsafe" if unsafe else "safe", dsn))
-    list(app.stream(G.graph_input([]), {"configurable": {"thread_id": thread}},
-                    stream_mode=["updates"], durability=idem.REQUIRED_DURABILITY))
+    _stream_once(make_saver(), thread,
+                 _ledger_for("crash-unsafe" if unsafe else "safe", dsn), prod_shape=True)
     os._exit(3)          # 到不了：工具里就硬杀了
 
 
@@ -572,8 +609,21 @@ def _scalar(conn, sql: str, params: tuple = ()):
     return None if row is None else next(iter(row.values()))
 
 
-def cmd_crash_resume_guard(unsafe: bool = False) -> int:
-    """`--crash-resume --guard`：真子进程崩在工具调用中途 ⇒ 账把重放压住（2× → 1×）。"""
+def cmd_crash_resume_guard(unsafe: bool = False, prod_shape: bool = False) -> int:
+    """`--crash-resume --guard`：真子进程崩在工具调用中途 ⇒ 账把重放压住（2× → 1×）。
+
+    `--prod-shape`（20261019 补）：**恢复那一次改成传 dict 输入**，也就是**生产每轮
+    的形状**。这一档量的是"这本账在生产那条路上认不认得出同一件写"。改前答案是
+    **不认**（读数 2×）：生产形状下 langgraph **丢弃未完成任务、从 START 重启**
+    （`langgraph/pregel/_loop.py:977-979`），重启后 `checkpoint_ns` 逐字变了 ⇒ 键变。
+    **批 F（20261019）之后读数是 1×**——键降成会话级、`checkpoint_ns` 降级成 `attempt`
+    的成分，跨轮命中时按 `idem_resuming`（= 上一轮跑没跑完）分流。
+
+    两格内置反控，各治一件事（本仓纪律：正控不红不算数）：
+      · 不带 `--prod-shape` 的 `stream(None)` 同夹具（读数 1×）——归因于"输入形状"；
+      · **干净轮之后重复同一件写 ⇒ 必须 2×**（批 F 加的）——证明"读 1"不是"账退化成
+        从不执行"，两格只差**上一轮跑没跑完**。
+    """
     import multiprocessing as mp
     import tempfile
     import uuid
@@ -590,7 +640,11 @@ def cmd_crash_resume_guard(unsafe: bool = False) -> int:
     with tempfile.NamedTemporaryFile(prefix="probe-guard-", suffix=".txt",
                                      delete=False) as fh:
         side = fh.name
+    with tempfile.NamedTemporaryFile(prefix="probe-ns-", suffix=".txt",
+                                     delete=False) as fh:
+        ns_path = fh.name
     os.environ["PROBE_SIDE"] = side
+    os.environ["PROBE_NS"] = ns_path
     os.environ.pop("PROBE_CRASH", None)
 
     print(f"thread : {thread}")
@@ -607,27 +661,71 @@ def cmd_crash_resume_guard(unsafe: bool = False) -> int:
     print(f"第 1 次跑（真子进程 pid={p.pid}，退出码 {p.exitcode}）：崩在工具调用中途")
     print(f"  此刻「库」里已有：{after_crash}")
     print()
-    print("模拟重启后再来一次（输入 None = 从 checkpoint 恢复，**本进程**接着跑）：")
-    app = _guard_graph(saver, _ledger_for("crash-unsafe" if unsafe else "safe", dsn))
-    list(app.stream(None, {"configurable": {"thread_id": thread}},
-                    stream_mode=["updates"], durability=idem.REQUIRED_DURABILITY))
+    if prod_shape:
+        print("模拟重启后再来一次（输入 **dict** = 生产每轮的形状 ⇒ langgraph 丢弃未完成"
+              "任务、从 START 重启）：")
+    else:
+        print("模拟重启后再来一次（输入 None = 从 checkpoint 恢复，**本进程**接着跑）：")
+    _stream_once(saver, thread, _ledger_for("crash-unsafe" if unsafe else "safe", dsn),
+                 prod_shape=prod_shape)
     final = _side_lines(side)
     print(f"  跑完后「库」里是：{final}")
     print()
+    ns = _side_lines(ns_path)
+    print("  `checkpoint_ns`（**「这一次尝试」的身份**，节点内实测）两遍分别是：")
+    for i, v in enumerate(ns, 1):
+        print(f"    第 {i} 遍：{v}")
+    if len(ns) >= 2:
+        same = ns[0] == ns[-1]
+        print(f"    逐字相同？ **{same}**"
+              + ("" if same else "  ⇒ 换了一轮（20261019 起它是 `attempt` 的成分，不再是键的）"))
+    print()
     n = len(final)
+    # 批 F：`--prod-shape` 的期望从 2 改成 1 —— 键降成会话级之后，换了一轮也认得出来。
     want = 2 if unsafe else 1
     ok = n == want
     print(f"  [{'PASS' if ok else 'FAIL'}] 同一件写执行了 {n} 次（期望 {want}）："
-          + ("账把重放压住了" if want == 1 else "占位没提交 ⇒ 账白做（反控成立）"))
+          + ("账把重放压住了" if want == 1 else "账**没**压住"))
     print()
+    # ── 内置反控（批 F）：干净轮之后重复同一件写 ⇒ **必须照常执行** ──────────────
+    # 没有这一格，"读 1"可能只是"账退化成从不执行"——那比双写更坏，而且同样**不报错**
+    # （主人说"再显示一次"，系统回"已经显示过了"）。它与主读数只差**一轮有没有跑完**：
+    # 主读数是"上一轮崩了"，这里是"上一轮干净收尾"。
+    if not unsafe:
+        ctl_thread = f"{thread}-repeat"
+        with tempfile.NamedTemporaryFile(prefix="probe-repeat-", suffix=".txt",
+                                         delete=False) as fh:
+            ctl_side = fh.name
+        os.environ["PROBE_SIDE"] = ctl_side
+        os.environ.pop("PROBE_CRASH", None)
+        for _ in range(2):        # 第 1 轮干净跑完（`next` 空）⇒ 第 2 轮 = 主人又要了一次
+            _stream_once(saver, ctl_thread, None, prod_shape=True)
+        ctl = len(_side_lines(ctl_side))
+        ok = ok and ctl == 2
+        print(f"  [{'PASS' if ctl == 2 else 'FAIL'}] 内置反控：干净轮之后重复同一件写 ⇒ "
+              f"{ctl} 次（期望 2）："
+              + ("合法的重复照常执行" if ctl == 2 else "**重复被吞了** ⇒ 账退化成「从不执行」"))
+        print()
+        os.unlink(ctl_side)
+        os.environ["PROBE_SIDE"] = side
     if unsafe:
         print("结论：**占位必须按语句即时落库**。占位留在一笔没提交的事务里时，它随崩溃"
               "一起回滚 ⇒ 重放照旧发生，而表面上一切正常。")
+    elif prod_shape:
+        print("结论：**这本账在生产那条路上认得出同一件写了**（批 F，20261019）。改前这里"
+              "读 2×：键里含 `checkpoint_ns`，而生产每轮传 dict 输入 ⇒ langgraph 从 START "
+              "重启 ⇒ 那个值逐字变 ⇒ 键变。现在键是**会话级**的（跨重启稳定），"
+              "`checkpoint_ns` 降级成 `attempt` 的成分，跨轮命中时按「上一轮跑没跑完」"
+              "（`idem_resuming`，本档由 `checkpoint.thread_is_resuming` 现算）分流。"
+              "上面那条**内置反控**（干净轮之后重复同一件写 ⇒ 2×）证明它没有退化成"
+              "「从不执行」——两格只差**上一轮跑没跑完**。")
     else:
         print("结论：真子进程被硬杀之后**占位仍在库里**，恢复那一轮的第 1 件走"
               "「结果未知」（不重发、判 BLOCK）⇒ 这一格从「可能双写」变成"
-              "「at-most-once」。内置反控 = 上面那条不带 --guard 的 `--crash-resume`（2×）。")
+              "「at-most-once」。这一档走的是 `stream(None)`（**续跑**）；生产每轮的形状"
+              "（dict 输入）见 `--prod-shape`——批 F 之后**两档读数都是 1×**。")
     os.unlink(side)
+    os.unlink(ns_path)
     return 0 if ok else 1
 
 
@@ -712,15 +810,18 @@ def cmd_concurrency(n: int = 4) -> int:
 #      （所以读数是"总共 1 次，恢复那轮走 in-doubt"）；这一格崩在**占位之前**，
 #      所以键是**空的**，N 个 worker 是"谁先抢到谁写"。两格不是同一个问题。
 #
-#   ② **N 个 worker 恢复同一个 checkpoint**：`checkpoint_ns` = `f"{节点名}:{task_id}"`，
-#      而 `__pregel_task_id` 由 `(checkpoint_id, ns, step, 节点名, triggers)` 算出
-#      （`_algo.py:616`）⇒ 只要读的是**同一个** checkpoint、节点名都是 `execute`、
-#      指纹相同，N 个 worker 的键就**逐字相同**。
+#   ② **N 个 worker 恢复同一个 checkpoint**：键是 `sha256([thread_id, 工具名, 参数指纹])`
+#      （20261019 批 F 起），N 个 worker 的 thread 与工具与指纹都相同 ⇒ 键**逐字相同**。
+#      而"这一次尝试"那一格 `attempt_for` 用 `checkpoint_ns` = `f"{节点名}:{task_id}"`，
+#      `__pregel_task_id` 由 `(checkpoint_id, ns, step, 节点名, triggers)` 算出
+#      （`_algo.py:616`）⇒ 读的是**同一个** checkpoint、节点名都是 `execute`、指纹相同
+#      ⇒ `attempt` 也逐字相同 ⇒ 走"同一 superstep 的重放"那一支（今天的行为）。
 #      ⚠️ 这条前提是**实测**的，不是推的：崩那次与恢复那次拿到的 task_id 同一个
-#      （`tid_probe2` 的读数），而**两次全新输入**的 run 拿到的是**两个不同的** id
-#      （`tid_probe`：`85bc4deb…` vs `41bca42a…`）——因为每次全新输入都会造一个新的
-#      input checkpoint。⇒ **闸的射程真的只到"重放同一个 superstep"**，新的一轮
-#      永远是新键、永远不会被这本账压住。这一格顺手把这条也钉住了。
+#      （`tid_probe2` 的读数）。
+#      ⚠️ **它曾经顺手钉住的那条结论（"新的一轮永远是新键、永远不会被这本账压住"）
+#      20261019 批 F 起已经不成立**——那正是被修掉的缺口：键降成会话级之后，新的一轮
+#      与上一轮**同键**，靠 `idem_resuming`（上一轮跑没跑完）分流。见 ADR-0012 的
+#      《修法（20261019，批 F）》。
 #
 #   ③ **节点第一行 `barrier.wait()`**：保证 N 个 worker **都读完 checkpoint、都算完
 #      task_id** 之后才开抢。少了它，先跑完的那个提交了 step 0，后到的 worker
@@ -763,8 +864,9 @@ _RACE_KIND_CN = {_RAW: "赢家（真调了工具）", _REPLAYED: "回放赢家�
                  _UNAVAIL: "**账本不可用 ⇒ 这次写被拒**（fail-closed）"}
 
 
-# 夹具①那个节点看到的 `checkpoint_ns`（= `f"{节点名}:{task_id}"`）。父进程要从它算出
-# 本格的键，而那个键**只在这个节点里存在过**（节点崩了 ⇒ 没有别的出口能拿到它）。
+# 夹具①那个节点看到的 `checkpoint_ns`（= `f"{节点名}:{task_id}"`）。**20261019 批 F 起
+# 它只用于打印**：键降成会话级之后，父进程算键只需要 `thread_id`（它本来就拿得到）。
+# 留着它是因为"这一格到底变没变"在并发那一格仍然是可读的事实。
 # 模块级的一个列表就够了：夹具①是在**父进程**里跑的。
 _PREP_NS: list[str] = []
 
@@ -772,8 +874,7 @@ _PREP_NS: list[str] = []
 def _prep_crash_node(state, config):
     """夹具①：节点**在占位之前**就崩（`BaseException` 拦不住 ⇒ 节点不返回 ⇒ 不提交）。
 
-    崩之前先把 `checkpoint_ns` 记下来（见 `_PREP_NS`）：本格所有行数判据都按**这一个键**
-    查，而键要用它算。**不另抄一遍 ns 的拼法**（抄一遍就多了一处会与实现漂开的公式）。
+    崩之前把 `checkpoint_ns` 记下来（见 `_PREP_NS`）——只为了把它**打印**出来。
     """
     _PREP_NS.append(str((config.get("configurable") or {}).get("checkpoint_ns") or ""))
     raise BaseException("prep: 崩在占位之前")
@@ -857,7 +958,10 @@ def _race_prepare(saver, thread: str, sink: str) -> tuple[bool, int, str]:
         crashed = True
         print(f"夹具① 崩在占位之前：{type(e).__name__}: {e}")
     ns = _PREP_NS[0] if _PREP_NS else ""
-    key = idem.key_for({"configurable": {"checkpoint_ns": ns}}, "set_article_status", "probe")
+    # ⚠️ **20261019 批 F 起键不再含 `checkpoint_ns`**（它降级成 `attempt` 的成分）⇒ 本格
+    # 的键直接由 `thread_id` 算，与 worker 那边（节点里拿真 config 算）逐字同源。
+    # `checkpoint_ns` 现在只用于**打印**：它仍然是"哪一次尝试"的身份（见 `_note_ns`）。
+    key = idem.key_for({"configurable": {"thread_id": thread}}, "set_article_status", "probe")
     rows = _idem_key_rows(key)
     print(f"  待跑任务的 checkpoint_ns：{ns!r}")
     print(f"  它的幂等键：{key[:16]}…（sha256 前 16 位）")
@@ -1070,7 +1174,14 @@ _PARITY_TOOL = "set_article_status"
 def _parity_sequence(led, cases: list) -> list:
     """在**一本账**上跑同一份序列，把每一步的读数收成一份可逐字比较的形状。
 
-    一件写三步：`claim`（新键 ⇒ 必须 `new`）→ `finish` → 再 `claim`（⇒ `done` + 重放）。
+    一件写六步：`claim`（新键 ⇒ 必须 `new`）→ `finish` → 再 `claim`（⇒ `done` + 重放）
+    → **换一个 attempt 且 `resuming=True`**（⇒ 仍是 `done`：上一轮没跑完）→
+    **再换一个 attempt 且 `resuming=False`**（⇒ `new`：主人又要了一次，那行被改回
+    `intent`）→ 同一 attempt 再 `claim`（⇒ `intent`）。
+
+    后三步是 20261019 批 F 加的：那一支（"原子地改回 intent"）**两个后端各写了一遍**，
+    而"两份实现各自绿、合起来错"正是本仓反复吃过的形状——`UPDATE ... WHERE` 的
+    `rowcount` 语义、`ts` 的写法（`now()` vs `time.time()`）都可能在这一档上分家。
 
     记下**行的类型**（`type(row).__name__`）是刻意的：那是 `_rehydrate` 那个坑的真机
     判据——CI 的块⑩ 只能喂一个**手搓的** dict，证明不了"PG 那条路真的会交元组"。
@@ -1084,6 +1195,12 @@ def _parity_sequence(led, cases: list) -> list:
         r = idem._rehydrate(row)
         seq.append(("replay", state, type(row).__name__, str(r),
                     getattr(r, "kind", None), getattr(r, "meta", None)))
+        state, row = led.claim(key, tool, fp + "-turn2", resuming=True)
+        seq.append(("turn2-resuming", state, type(row).__name__))
+        state, row = led.claim(key, tool, fp + "-turn3", resuming=False)
+        seq.append(("turn3-repeat", state, type(row).__name__))
+        state, row = led.claim(key, tool, fp + "-turn3", resuming=False)
+        seq.append(("turn3-again", state, type(row).__name__))
     return seq
 
 
@@ -1114,7 +1231,7 @@ def cmd_backend_parity() -> int:
     finally:
         sqlite.close()
 
-    print(f"同一份 {len(cases)} 件写 × 3 步，走两档账本：")
+    print(f"同一份 {len(cases)} 件写 × 6 步（含批 F 的换轮两支），走两档账本：")
     print(f"  · SQLite：{sqlite.path}")
     print(f"  · PG    ：与 saver **同一个库**、表 `{idem_pg.TABLE}`（DSN 是凭据，不上屏）")
     print()
@@ -1551,6 +1668,10 @@ def main() -> int:
     ap.add_argument("--guard-unsafe", action="store_true",
                     help="上两条的反控（两格各一个：崩档 = 占位不提交 ⇒ 回到两次；"
                          "并发档 = 占位判定与插入拆成两句 ⇒ 回到 N 次）")
+    ap.add_argument("--prod-shape", action="store_true",
+                    help="配 --crash-resume --guard：恢复那一次传 **dict 输入**（= 生产"
+                         "每轮的形状）。20261019 批 F 起读数 1×（改前 2×：账恒不命中）。"
+                         "两格反控 = 同夹具不带本开关（1×）+ 干净轮之后重复同一件写（2×）")
     ap.add_argument("--concurrency", type=int, default=0, metavar="N",
                     help="同一 thread 上 N 个进程并发写（生产 4 worker 那一格）；配 --guard "
                          "则改成 N 个进程**同时重放同一个未完成的 superstep**")
@@ -1568,8 +1689,9 @@ def main() -> int:
     if args.history_dup:
         return cmd_history_dup(args.history_dup)
     if args.crash_resume:
-        if args.guard or args.guard_unsafe:
-            return cmd_crash_resume_guard(unsafe=args.guard_unsafe)
+        if args.guard or args.guard_unsafe or args.prod_shape:
+            return cmd_crash_resume_guard(unsafe=args.guard_unsafe,
+                                          prod_shape=args.prod_shape)
         return cmd_crash_resume()
     if args.concurrency:
         if args.guard or args.guard_unsafe or args.guard_slow:

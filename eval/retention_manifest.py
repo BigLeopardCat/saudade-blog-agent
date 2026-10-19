@@ -54,6 +54,22 @@ KEEP_DAYS_ARCHIVE = 90          # logs/archive/ 下手工归档的东西，三�
 KEEP_COUNT_REPORTS = 20         # eval/report/ 每族报告保留最近 N 份
 KEEP_COUNT_DRAFTS = 10          # 例外：golden 草稿族只留 10 份（人审用品的窗口比复审单短）
 KEEP_COUNT_WORDGRAPH = 10       # 词图构建中间产物
+# PG 那一路（`store="pg"`）的保留期。**与 `eval/pg_retention.py::KEEP_DAYS_DEFAULT` 是
+# 同一个数**，两处都要改（这里是人读的登记，那里是执行者的缺省）——判据
+# `tests/test_pg_retention.py` 钉着它们相等。
+KEEP_DAYS_CHECKPOINT = 30
+
+# 存放形态（20261019 批 C）。`fs` = 盘上的树（本表原来只管这一种）；`pg` = PG 里的表，
+# **不在盘上**，所以它没有 root/patterns，判据换成 `dsn_env`（哪个环境变量给出库坐标）
+# 与 `tables`（哪些表）。审计器（`audit`/`unregistered`/`_matcher`）**跳过非 fs 的类**
+# ——它们本来就不是"某棵树下的一条路径"，硬塞进路径判据只会得到一条恒不命中的规则。
+STORE_FS = "fs"
+STORE_PG = "pg"
+
+
+def store_of(c: dict) -> str:
+    """这条登记项管的是哪一种存放（**缺省 `fs`**——表里绝大多数是盘上的树）。"""
+    return c.get("store", STORE_FS)
 
 # 报告文件名：`<族>_<YYYYMMDD>[-_]<HHMMSS>.<ext>`。族名非贪婪取到第一个 8 位日期前
 # （`golden_drafts_20260921_014611.jsonl` ⇒ 族 = `golden_drafts`）。日期与时刻的分隔符
@@ -77,6 +93,7 @@ WORDGRAPH_RE = re.compile(r"^(\d{8})-(\d{6})_")
 #   retention      人读的保留期
 #   why            为什么是这个处置（**必填**，包括 frozen/open 也要写）
 #   rule           交给 `eval/artifact_retention.py` 的机器可读规则；None = 执行者在别处
+#   store          `fs`（缺省，盘上的树）/ `pg`（PG 里的表，判据换成 dsn_env + tables）
 CLASSES = [
     dict(
         key="service-logs",
@@ -137,6 +154,31 @@ CLASSES = [
             "分开清会正好帮倒忙）。⚠️ **PG 那张表不在本清单的射程内**（这里只审计 `logs/` 树）"
             "⇒ 它的保留口径写在 ADR-0012 的《迁移到 PG》，并且是一条**欠账**",
         rule=None,
+    ),
+    dict(
+        key="agent-checkpoint-store",
+        label="对话上下文与幂等账（**PG**：langgraph checkpoint 三张表 + 幂等账表）",
+        # **不在盘上** ⇒ 没有 root/patterns，判据是"哪个库、哪些表"（见 store_of 上面那段）。
+        store=STORE_PG,
+        status="managed",
+        owner="eval/pg_retention.py",
+        owner_ref="eval/pg_retention.py",
+        retention=f"线程最近活动 >{KEEP_DAYS_CHECKPOINT} 天裁（与幂等账**同窗、同事务**）",
+        why="20261019 批 C 新增。它此前**整个不在本表的射程内**——本表只审计 `logs/` 与 "
+            "`eval/report/` 两棵树，而 20261018 采纳之后 agent 的上下文落进了 PG："
+            "`checkpoints` 那一族**每个 checkpoint 存整份快照**（实测 messages 通道的 blob "
+            "1417 → 2917 → 2441 → 3713 → 5135 → 6646 字节随会话长度单调长），checkpoint 数又"
+            "随轮数线性长 ⇒ **按会话长度平方增长**，而没有任何东西在裁它。"
+            "**为什么与 `agent-idem-ledger`（上面那条）不是同一条**：那条登记的是"
+            "**降级档**（agent 自持的 SQLite，住在 `logs/` 树下、今天根本不存在）；"
+            "这条是挂 PG saver 时的**正档**，两个库、两个执行者、两套坐标。"
+            "**执行者**：`eval/pg_retention.py`（默认只列不删、`--apply` 才动手，接在 "
+            "`scripts/nightly_regression.sh` 末位）。**两条不变量写在那个文件的头注里**："
+            "账与 checkpoint 必须同窗同事务一起裁（半裁比不裁更坏）；取不到时间的线程永不裁。"
+            "⚠️ 库坐标**不写在这张表里**（本仓是公开仓）：DSN 由 `dsn_env` 指的那个环境变量给。",
+        rule=None,
+        dsn_env="CHECKPOINT_DSN",
+        tables=["checkpoints", "checkpoint_blobs", "checkpoint_writes", "agent_write_idem"],
     ),
     dict(
         key="golden-traces",
@@ -384,9 +426,16 @@ def iter_entries(root: str) -> list[str]:
 
 
 def _matcher(classes: list[dict], root: str) -> list[tuple[str, re.Pattern]]:
-    """[(class_key, 编译后的正则)]——只取 root 与当前根相同的类。"""
+    """[(class_key, 编译后的正则)]——只取 root 与当前根相同的**盘上**的类。
+
+    `store != fs` 的类（PG 表）**跳过**：它们没有 root/patterns，本来就判不进"某棵树下
+    的一条路径"。塞进来只会得到一条恒不命中的规则，而那种规则的表现是"看着登记了、
+    其实什么都没管"——本表最不该有的形态。
+    """
     out = []
     for c in classes:
+        if store_of(c) != STORE_FS:
+            continue
         if os.path.abspath(c["root"]) != os.path.abspath(root):
             continue
         for pat in c["patterns"]:
@@ -446,7 +495,7 @@ def _frozen_covered(classes: list[dict]) -> list[str]:
     那个类的 exclude 必须盖住它。少了这层，保护就只活在"我记得加过 exclude"里。"""
     bad = []
     for fc in classes:
-        if fc["status"] != "frozen":
+        if fc["status"] != "frozen" or store_of(fc) != STORE_FS:
             continue
         for pat in fc["patterns"]:
             sp = _sample_path(pat)
@@ -478,7 +527,8 @@ def check_classes(classes: list[dict] | None = None) -> list[str]:
     classes = CLASSES if classes is None else classes
     bad: list[str] = []
     seen: set[str] = set()
-    frozen = {p for c in classes if c["status"] == "frozen" for p in c["patterns"]}
+    frozen = {p for c in classes if c["status"] == "frozen" and store_of(c) == STORE_FS
+              for p in c["patterns"]}
     for c in classes:
         k = c.get("key", "?")
         if k in seen:
@@ -486,9 +536,15 @@ def check_classes(classes: list[dict] | None = None) -> list[str]:
         seen.add(k)
         if not c.get("why"):
             bad.append(f"{k}：没写 why（登记的意义就在于说清为什么是这个处置）")
-        for f in ("label", "root", "patterns", "status", "retention"):
+        for f in ("label", "status", "retention"):
             if not c.get(f):
                 bad.append(f"{k}：缺字段 {f}")
+        # 归属判据按存放形态二选一：盘上的树要 root+patterns，PG 表要 dsn_env+tables。
+        # **不许两者都缺**——那样这条登记就没有任何判据，只是一句"有这么个东西"。
+        need = ("root", "patterns") if store_of(c) == STORE_FS else ("dsn_env", "tables")
+        for f in need:
+            if not c.get(f):
+                bad.append(f"{k}：store={store_of(c)} 却缺字段 {f}")
         if c["status"] not in ("managed", "frozen", "open"):
             bad.append(f"{k}：status 不认识（{c['status']}）")
         # owner_ref 的存在性对所有类都查（frozen 的 owner_ref 指「谁在用它」，一样不许指向空气）
