@@ -1,22 +1,18 @@
 {
-  "agent/action_text.py": {
-    "lines": 844,
-    "top_defs": 14
-  },
   "agent/authz.py": {
-    "lines": 1758,
+    "lines": 1721,
     "top_defs": 37
   },
   "agent/graph.py": {
-    "lines": 13332,
-    "top_defs": 236
+    "lines": 13206,
+    "top_defs": 235
   },
   "agent/prompt_context.py": {
     "lines": 1712,
     "top_defs": 46
   },
   "agent/prompts.py": {
-    "lines": 856,
+    "lines": 840,
     "top_defs": 1
   },
   "agent/react_arm.py": {
@@ -56,7 +52,7 @@
     "top_defs": 24
   },
   "tests/test_authz.py": {
-    "lines": 1256,
+    "lines": 1252,
     "top_defs": 5
   },
   "tests/test_chat_quota.py": {
@@ -80,15 +76,15 @@
     "top_defs": 22
   },
   "tests/test_reports.py": {
-    "lines": 939,
+    "lines": 932,
     "top_defs": 6
   },
   "tests/test_tag_admin.py": {
-    "lines": 1615,
+    "lines": 1606,
     "top_defs": 16
   },
   "tests/test_todo_schedule.py": {
-    "lines": 2093,
+    "lines": 2075,
     "top_defs": 29
   },
   "tests/test_userdata.py": {
@@ -96,11 +92,11 @@
     "top_defs": 12
   },
   "tests/test_workflows.py": {
-    "lines": 5809,
+    "lines": 5802,
     "top_defs": 72
   },
   "tools/base.py": {
-    "lines": 1286,
+    "lines": 1255,
     "top_defs": 21
   }
 }
