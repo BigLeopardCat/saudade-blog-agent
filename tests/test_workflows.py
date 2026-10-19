@@ -1475,8 +1475,12 @@ def test_phantom_tool_claim():
     # 66 → 67 是 20261008 的我自己的河灯一件：list_my_board（读
     # `GET /api/protect/board/mine`——公开池恒 Approved=1，且那几行的 `mine`
     # 结构上恒假，"我哪条留言通过了"只有这件读得出来）。
+    # 67 → 70 是 20261019 的**文章评论**三件：list_admin_comments（后台评论名册）+
+    # audit_comment / delete_comment（复核与删除）。评论与留言是**两张表**
+    # （`note_comment` / `talk`）、两个后台页签，此前 agent 只有留言那一侧 ⇒
+    # 主人说"评论"时它只有留言可读，读出来的东西对不上他点进去看到的页面。
     check("工具名名单覆盖注册表全量",
-          len(_TOOL_MAP) == 67 and all(n in _TOOL_NAMES_ALT for n in _TOOL_MAP),
+          len(_TOOL_MAP) == 70 and all(n in _TOOL_NAMES_ALT for n in _TOOL_MAP),
           f"names={len(_TOOL_MAP)}")
 
 
@@ -2026,9 +2030,10 @@ def test_ledger_target_guard():
     check("⭐ `_LEDGER_TARGET_FIELDS` 与 `_WRITE_NAME_FIELDS` 无交集",
           not (set(G._LEDGER_TARGET_FIELDS) & set(G._WRITE_NAME_FIELDS)),
           str(sorted(set(G._LEDGER_TARGET_FIELDS) & set(G._WRITE_NAME_FIELDS))))
-    check("  台账编号通道恰好三件（留言复核 + 额度批准/驳回）",
+    check("  台账编号通道恰好四件（留言复核 + 评论复核 + 额度批准/驳回）",
           set(G._LEDGER_TARGET_FIELDS) ==
-          {"audit_board_comment", "approve_quota_request", "reject_quota_request"},
+          {"audit_board_comment", "audit_comment",
+           "approve_quota_request", "reject_quota_request"},
           str(sorted(G._LEDGER_TARGET_FIELDS)))
 
     # ── ② 事实块：0 条时说的是"没有待审"，多条时连作者与原文一起列 ─────────────
@@ -2151,7 +2156,8 @@ def test_review_inbox_calls_whitelist():
     _ri = WORKFLOW_MAP["review_inbox"]
     _allowed = {t for t, _ in (_ri.plan or ())}
     check("白名单来自 `workflow.plan`（注册表唯一对应关系）",
-          _allowed == {"audit_board_comment", "approve_quota_request"}, str(sorted(_allowed)))
+          _allowed == {"audit_board_comment", "audit_comment", "approve_quota_request"},
+          str(sorted(_allowed)))
 
     _good, _note = _expand_change_set(_ri, {"calls": [
         {"tool": "audit_board_comment", "args": {"talk_id": 94, "verdict": "reject"}},
@@ -3161,17 +3167,17 @@ def test_tag_create_batch():
           "主人一点，站里就多一个叫 $titles 的标签）",
           obj["tools"] == [] and obj.get("status") == "param_missing", str(obj)[:100])
 
-    # 卡面这一层是"一批"给人看的地方：名字逐条印、多件时换「全部办」那一套措辞。
+    # 卡面这一层是"一批"给人看的地方：名字逐条印、多件时换「全部处理」那一套措辞。
     card = _confirm.render_confirm_text([
         {"tool": "create_tag", "args": {"title": "Git", "parent_tag": "编程"}},
         {"tool": "create_tag", "args": {"title": "SVN", "parent_tag": "编程"}}])
     check("卡面把两个名字都印出来（主人核对的就是这一行，少一个名字等于让他盲签）",
           "Git" in card and "SVN" in card, card[:160])
-    check("  多件时用多件措辞（「全部办」/「只办第 N 件」），不是单件的「确定」",
-          "全部办" in card and "只办第 N 件" in card and "点「确定」" not in card,
-          card[:200])
-    check("  单件时仍是单件措辞（老语料的话术一个字节没变）",
-          "点「确定」" in _confirm.render_confirm_text(
+    check("  多件时用多件措辞且**逐条另起一行**（不是一整段用分号连），不是单件的「确定」",
+          "全部处理" in card and "只处理第 N 个" in card and "点「确定」" not in card
+          and "\n1. **" in card and "\n2. **" in card and "；2." not in card, card[:200])
+    check("  单件时仍是单件措辞（只换句尾动词，动作词与编号没动）",
+          "点「确定」我就去处理；" in _confirm.render_confirm_text(
               [{"tool": "create_tag", "args": {"title": "Git"}}]))
 
 
@@ -4296,9 +4302,10 @@ def test_no_sibling_tool_name_in_user_text():
     DYNAMIC = {"chat", "content_query"}
     root = ROOT
 
-    # ① adminops 渲染层（20261018 批 3 拆成 8 个域模块）：全部字符串字面量
+    # ① adminops 渲染层（20261018 批 3 拆成 8 个域模块，20261019 加评论域 ⇒ 9 个）：
+    #    全部字符串字面量
     #    （去 docstring、去"整串就是工具名"的比较常量）。
-    #    ⚠️ 取值点**必须扫全部 8 个模块**：只扫其中一个会让另外七个的泄漏静默通过
+    #    ⚠️ 取值点**必须扫全部 9 个模块**：只扫其中一个会让另外八个的泄漏静默通过
     #    ——"判据只覆盖了一部分"正是这条断言要防的形状。
     leaks = []
     for _mod in sorted((root / "agent").glob("adminops_*.py")):
@@ -4318,9 +4325,9 @@ def test_no_sibling_tool_name_in_user_text():
             for n in sorted(names):
                 if n in s:
                     leaks.append(f"{_mod.name}:{node.lineno} [{n}] {s.strip()[:60]}")
-    check("adminops 渲染层无工具名泄漏（8 个域模块全扫）", not leaks, "；".join(leaks))
+    check("adminops 渲染层无工具名泄漏（9 个域模块全扫）", not leaks, "；".join(leaks))
     check("★ 反控：上面那条真的扫到了模块（glob 落空 ⇒ 它恒绿）",
-          len(list((root / "agent").glob("adminops_*.py"))) == 8)
+          len(list((root / "agent").glob("adminops_*.py"))) == 9)
 
     # ② 技能 reply_contract：不许出现兄弟工具名
     #    按**整词**匹配（20260926）：冻结/解冻这对工具名互为子串
