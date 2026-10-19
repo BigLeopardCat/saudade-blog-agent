@@ -121,7 +121,7 @@ from agent.prompts import (BLOG_ASSISTANT_PROMPT, NARRATOR_DISCIPLINE, STICKER_G
                            _PLANNER_OUTPUT_CONTRACT_NATIVE,
                            _PLANNER_PROMPT, _REFLECTOR_PROMPT, audience_block)
 from agent.provenance import QUOTE_SPAN_RE as _QUOTE_SPAN_RE
-from agent.arg_refs import parse_data, ref_error_reason, ref_hints, resolve_args
+from agent.arg_refs import ref_error_reason, ref_hints, resolve_args, structured_of
 from agent.textnorm import (  # noqa: F401
     FULLWIDTH_ASCII_MAP as _FULLWIDTH_ASCII_MAP,
     fold_typing as _fold_typing,
@@ -9701,9 +9701,9 @@ def execute_node(state: AgentState, config: RunnableConfig | None = None) -> dic
             name=name))
         logger.info("[execute] %s(%s) → %.100s", name, json.dumps(args, ensure_ascii=False),
                     str(out))
-        # 结构化返回值入 tool_data（引用取值源）：帧文本是给人看的（还截断），
-        # 引用要走结构。解析不出 → data=None（引用它时报 ref_unparsed，不猜）。
-        tool_data.append({"tool": name, "data": parse_data(str(out)),
+        # 结构化返回值入 tool_data（引用取值源）：帧文本是给人看的（还截断），引用要走
+        # 结构——批 G1 起先取 `ToolResult.data` 本体（见 `arg_refs.structured_of`）。
+        tool_data.append({"tool": name, "data": structured_of(out),
                           "round": state.get("plan_rounds", 0)})
         # 落进 trace 的返回文本：留多长由 utils/trace.tool_result_text 一处决定（20260925 起
         # **按工具分档**：正文 8000、其余 4000、rag_search 全文；golden 轮由
