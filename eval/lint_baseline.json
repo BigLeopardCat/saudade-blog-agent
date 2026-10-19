@@ -8,7 +8,7 @@
     "I",
     "W"
   ],
-  "total": 753,
+  "total": 749,
   "by_file": {
     "agent/action_text.py": 2,
     "agent/authz.py": 5,
@@ -72,7 +72,7 @@
     "tests/test_admin_write.py": 9,
     "tests/test_arm_capability.py": 2,
     "tests/test_artifact_retention.py": 1,
-    "tests/test_authz.py": 7,
+    "tests/test_authz.py": 6,
     "tests/test_block_reasons.py": 1,
     "tests/test_blog_api_base.py": 1,
     "tests/test_cancel.py": 9,
@@ -102,7 +102,7 @@
     "tests/test_golden_rerun_offline.py": 1,
     "tests/test_golden_trace.py": 9,
     "tests/test_graph_build.py": 6,
-    "tests/test_hardening.py": 15,
+    "tests/test_hardening.py": 12,
     "tests/test_id_namespaces.py": 3,
     "tests/test_idem_noop.py": 2,
     "tests/test_identity_preflight.py": 1,

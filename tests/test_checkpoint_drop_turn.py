@@ -248,6 +248,20 @@ print()
 print("③ 端点 `server.checkpoint_drop_turn`：三支各判一次")
 
 import server  # noqa: E402
+from config.settings import settings  # noqa: E402
+
+
+class _Req:
+    """`_resolve_principal` 只看 `headers`；断言头缺席 ⇒ 走"开关未强制"的回退分支。
+
+    **本节判的是机制**（摘没摘掉、读回来确认），与调用者是谁无关——身份那一格
+    （20261020 安全审计 SAU-006）在 `tests/test_hardening.py::test_internal_endpoint_identity`
+    里单独判（那里真签一条断言）。所以这里**把开关自己钉成 0**：`tests/run_all.py` 的
+    `_PINNED` 把出厂档钉成 1，不拨回来的话这一节会**全部 401**、红得看不出原因。
+    """
+
+    def __init__(self, headers=None):
+        self.headers = headers or {}
 
 
 class _Shell:
@@ -267,17 +281,22 @@ class _Shell:
 _ep = _graph()
 asyncio.run(_seed(_ep, _c, [HumanMessage(content="[当前问题]: 端点那句")]))
 _old_agent = server._agent
+_old_flag = settings.agent_require_assertion
 try:
+    settings.agent_require_assertion = False   # 见 `_Req` 的注（测试自己钉，不读环境）
     server._agent = None                     # 没挂 saver
-    _r = asyncio.run(server.checkpoint_drop_turn("7", server.DropTurnReq(text="端点那句")))
+    _r = asyncio.run(server.checkpoint_drop_turn("7", server.DropTurnReq(text="端点那句"),
+                                                 _Req()))
     check("没挂 saver ⇒ `dropped=false` 且点名 `no_saver`（不假装成功）",
           _r.get("dropped") is False and _r.get("why") == "no_saver", str(_r))
 
     server._agent = _Shell(_ep)
-    _r = asyncio.run(server.checkpoint_drop_turn("0", server.DropTurnReq(text="端点那句")))
+    _r = asyncio.run(server.checkpoint_drop_turn("0", server.DropTurnReq(text="端点那句"),
+                                                 _Req()))
     check("会话 id 非法 ⇒ `bad_conversation_id`", _r.get("why") == "bad_conversation_id", str(_r))
 
-    _r = asyncio.run(server.checkpoint_drop_turn("7", server.DropTurnReq(text="端点那句")))
+    _r = asyncio.run(server.checkpoint_drop_turn("7", server.DropTurnReq(text="端点那句"),
+                                                 _Req()))
     check("正常 ⇒ `dropped=true`", _r.get("dropped") is True, str(_r))
     check("（对照）端点走完之后 state 里那条真没了",
           "[当前问题]: 端点那句" not in _texts(
@@ -287,11 +306,13 @@ try:
     _noop = _NoopUpdate(_graph())
     asyncio.run(_seed(_noop.graph, _c, [HumanMessage(content="[当前问题]: 又一次")]))
     server._agent = _noop
-    _r = asyncio.run(server.checkpoint_drop_turn("7", server.DropTurnReq(text="又一次")))
+    _r = asyncio.run(server.checkpoint_drop_turn("7", server.DropTurnReq(text="又一次"),
+                                                 _Req()))
     check("（反控）摘除没生效 ⇒ 端点必须回 `dropped=false` / `still_readable`",
           _r.get("dropped") is False and _r.get("why") == "still_present", str(_r))
 finally:
     server._agent = _old_agent
+    settings.agent_require_assertion = _old_flag
 
 # ── ④ 跨仓契约 ───────────────────────────────────────────────────────────────
 print()
