@@ -378,7 +378,8 @@ def _prompt_of(state: AgentState, ctx: dict) -> str:
     if ctx.get("system_prompt") is None:
         ctx["system_prompt"] = _system_prompt(
             list(state.get("messages") or []), ctx.get("role"), ctx.get("principal"),
-            ctx.get("config"), ctx.get("user_msg") or "")
+            ctx.get("config"), ctx.get("user_msg") or "",
+            exec_rows=(state.get("ledger") or {}).get("exec_rows"))
     return str(ctx["system_prompt"])
 
 
@@ -1059,7 +1060,7 @@ def _real_tools(config: RunnableConfig | None = None) -> dict[str, Any]:
 
 def _system_prompt(messages: list, role: str | None, principal: Any,
                    config: dict | None, user_msg: str,
-                   fast_frames: list | None = None) -> str:
+                   fast_frames: list | None = None, exec_rows: list | None = None) -> str:
     """系统提示 = 判断器提示词（生产的唯一渲染入口）+ 人设 + **叙述纪律** + 循环说明。
 
     **为什么拼这几块**：本线的决策模型（`planner` 节点）还兼任"决定够了没有"，而叙述
@@ -1117,7 +1118,7 @@ def _system_prompt(messages: list, role: str | None, principal: Any,
         # 就在消息流里，模型自己看得见），而提示词这一格只说"扫到的动作完成没完成"
         # ——给空的后果是动作被标成"**未完成**"，即"别忘了做"，方向是安全的那一边。
         intent_hints=_intent_hints([], user_msg),
-        doc_anchors=_doc_anchors(messages),
+        doc_anchors=_doc_anchors(messages, exec_rows=exec_rows),   # 读取事实走结构
         recent_context=_recent_tail(messages),
         short_reply_hint=_short_reply_hint(messages),
         # 工具帧与引用提示都走各自 helper 的**空输入**取值（`（本轮尚无工具执行）` /

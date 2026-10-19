@@ -113,7 +113,7 @@
       ],
       "agent/graph.py": [
         137,
-        3438
+        3432
       ],
       "agent/hostinfo.py": [
         0,
@@ -157,7 +157,7 @@
       ],
       "agent/prompt_context.py": [
         1,
-        55
+        51
       ],
       "agent/prompts.py": [
         0,
@@ -1656,17 +1656,6 @@
       "sunset": "声称闸工作流（另册：docs/toolcall-stability-roadmap.md §6）"
     },
     {
-      "id": "agent/graph.py::_EXEC_SEARCH_TRACE_RE",
-      "file": "agent/graph.py",
-      "kind": "regex",
-      "name": "_EXEC_SEARCH_TRACE_RE",
-      "size": 6,
-      "sample": "站内检索「|搜索「",
-      "category": "parser",
-      "q": "站内检索「|搜索「",
-      "why": "拆回执行行『站内检索「…」』"
-    },
-    {
       "id": "agent/graph.py::_LEDGER_THIS_TURN_RE",
       "file": "agent/graph.py",
       "kind": "regex",
@@ -1970,17 +1959,6 @@
       "why": "判断主人是不是在指上一轮（决定 `_recent_tail` 窗口 4 → 10 轮）",
       "replacement": "待定：等 golden 定价（实测 194 轮里命中 8 轮，「`_is_short_reply` ∪ 代词」兜住 5/8、**漏掉的 3 轮全是追述/纠正** ⇒ 整族删会把 20261007 那批 4→10 轮的收益退回去）",
       "sunset": "批 6（跨轮指代族，与 config 注入/摘要那条一起定价）"
-    },
-    {
-      "id": "agent/prompt_context.py::_DOC_READ_ROW_RE",
-      "file": "agent/prompt_context.py",
-      "kind": "regex",
-      "name": "_DOC_READ_ROW_RE",
-      "size": 4,
-      "sample": "读取文章\\s*(\\d+)\\s*《([^》\\n]{1,60})》",
-      "category": "parser",
-      "q": "读取文章\\s*(\\d+)\\s*《([^》\\n]{1,60})》",
-      "why": "拆 execution_log 里系统写定的『读取文章 12《…》』行"
     },
     {
       "id": "agent/repeat_guard.py::_REDO_REQUEST_RE",
