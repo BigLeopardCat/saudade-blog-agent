@@ -8,9 +8,12 @@
      重写、让按行处理的脚本读到乱码（`.gz` 语料那一族的教训同型：报表照样出、只是小一号）。
   ② **`.editorconfig` 是声明不是执行者**：声明与判据分家（文件里写 LF、测试查 CRLF）正是审计
      里"改一处必须同步另一处"那 94 处的形状 ⇒ 这里把声明**解析出来**与判据常量同源比对。
-  ③ **CHANGELOG 的价值全在"能信"**：日期倒序、每条有正文、最新日期不晚于最后一笔提交。
+  ③ **CHANGELOG 的价值全在"能信"**：日期倒序、每条有正文、最新记录日期不晚于最后一笔提交。
      最后一条是**强制决定**：那一天"没有值得记的行为变更"也是一个决定，写成一行
      `- （这天只有文档/排版与测试补件，无行为变更）` 即可——不许默默不写。
+     （**20261019 起 CHANGELOG 由 `changelog.d/` 的碎片汇总而成** ⇒ "记了没有"要看**两处**：
+     CHANGELOG 那一节的最新日期，与 `changelog.d/` 里最新碎片的日期，取较晚的那个。
+     碎片**先落、汇总后跑**是正常状态——汇总由人在合并/发布时跑，不是每笔提交都跑。）
      "今天"一律取**本仓钟面**（+08:00，见 `_today_cn`）：判据读机器本地钟的后果是
      本机与 CI 看的不是同一件事（20260929 实测：CI 恒红）。
   ④ **版本号只有一个来源**（`pyproject.toml`）：另立 `VERSION` 文件或 `__version__` 常量
@@ -28,6 +31,9 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent  # 仓根
 sys.path.insert(0, str(ROOT))
+sys.path.insert(0, str(ROOT / "scripts" / "dev"))
+
+import changelog as _changelog  # noqa: E402  （碎片机制的工具，按路径取，不是包）
 
 FAILS: list[str] = []
 
@@ -95,8 +101,71 @@ def _parse_editorconfig(text: str) -> tuple[dict, dict]:
             continue
         if "=" in ln:
             k, v = ln.split("=", 1)
-            (sections.setdefault(cur, {}) if cur is not None else top)[k.strip().lower()] = v.strip()
+            bucket = sections.setdefault(cur, {}) if cur is not None else top
+            bucket[k.strip().lower()] = v.strip()
     return top, sections
+
+
+def _check_changelog() -> None:
+    """③ CHANGELOG：日期倒序、每条有正文、最新记录日期不晚于最后一笔提交。
+
+    **20261019 起要两处合起来看**（`CHANGELOG.md` 那一节 + `changelog.d/` 里的碎片）：
+    碎片是"记了、还没汇总"，只盯着 CHANGELOG.md 会把它判成"忘了记"。读碎片不合法
+    （`FragmentError` 是 `ValueError`）时**不当"没有碎片"**：那是另一条闸的活，这里必须
+    报出来，否则一条写坏的碎片会让本套件静默放行。
+
+    单独一个函数（不是 `main` 里的一段）：这一段自带一个**反面锁**——换时区再跑一遍整个
+    套件。留在 `main` 里会让它一路长大顶破函数级复杂度台账（`tests/test_complexity_budget.py`）。
+    """
+    print("\n③ CHANGELOG：日期倒序、每条有正文、最新日期不晚于最后一笔提交")
+    cl = ROOT / "CHANGELOG.md"
+    check("CHANGELOG.md 在位", cl.is_file())
+    if not cl.is_file():
+        return
+    text = cl.read_text(encoding="utf-8")
+    # 只认行首的 `## YYYYMMDD`（正文里提到日期的句子不算条目）
+    secs = [(m.group(1), m.start(), m.end())
+            for m in re.finditer(r"^##\s+(\d{8})\s*$", text, re.M)]
+    check("至少有一条日期条目", len(secs) >= 1, f"{len(secs)} 条")
+    dates = [d for d, _, _ in secs]
+    check("日期倒序（最新在最上）", dates == sorted(dates, reverse=True), "、".join(dates))
+    empty = []
+    for i, (d, _s, e) in enumerate(secs):
+        body = text[e:secs[i + 1][1] if i + 1 < len(secs) else len(text)]
+        if not re.search(r"^-\s+\S", body, re.M):
+            empty.append(d)
+    check("每条日期下都有 `- ` 正文（哪怕是「这天无行为变更」那一行）",
+          not empty, "、".join(empty))
+    # 与真实历史对齐：这一条是**强制决定**——那天没什么可记也要写一行。
+    try:
+        _frag_dates = sorted({d for d, _n, _b in _changelog.read_fragments()})
+    except ValueError as e:
+        _frag_dates = []
+        check(f"读得出 `changelog.d/` 里的碎片（{e}）", False)
+    newest_record = max([dates[0] if dates else ""] + _frag_dates)
+    head = subprocess.run(["git", "log", "-1", "--date=short", "--format=%ad"],
+                          cwd=ROOT, capture_output=True, text=True)
+    latest = head.stdout.strip().replace("-", "")
+    if len(latest) == 8 and latest.isdigit():
+        check(f"最新记录日期 == 最后一笔提交日期（{latest}）", newest_record == latest,
+              f"CHANGELOG={dates[0] if dates else None} 碎片={_frag_dates}")
+    else:
+        check("取到最后一笔提交的日期（取不到就不算通过）", False, repr(latest))
+    check("最新记录日期不是未来", bool(newest_record) and newest_record <= _today_cn(),
+          f"记录={newest_record} 本仓钟面今天={_today_cn()}")
+    # 反面锁：**判据本身必须环境无关**。上面那条在另一个时区里跑整个套件再判一次——
+    # 子进程里所有断言都重跑，所以"有一次读回了跑它的那台机器的钟"就会红。用环境变量
+    # 挡住递归（子进程不再套娃）；America/New_York 与 +08:00 的日期在一天里大半时间不同，
+    # 正是 CI 那个窗口的形状。成本约 0.1 秒。
+    if os.environ.get("SAUDADE_STYLE_TZ_LOCK") == "1":
+        return
+    _sub = subprocess.run(
+        [sys.executable, str(Path(__file__).resolve())],
+        cwd=ROOT, capture_output=True, text=True, timeout=60,
+        env={**os.environ, "TZ": "America/New_York", "SAUDADE_STYLE_TZ_LOCK": "1"})
+    _tail = [ln for ln in (_sub.stdout or _sub.stderr or "").splitlines() if ln.strip()]
+    check("换一个时区（TZ=America/New_York）跑本套件仍然通过（判据不读跑它那台机器的钟）",
+          _sub.returncode == 0, _tail[-1].strip() if _tail and _sub.returncode else "")
 
 
 def main() -> int:
@@ -154,49 +223,7 @@ def main() -> int:
         check("　且例外只在生成物上（没把别的目录也放出去）",
               sum(1 for s in sections if "report" in s) == 1, str(sorted(sections)))
 
-    print("\n③ CHANGELOG：日期倒序、每条有正文、最新日期不晚于最后一笔提交")
-    cl = ROOT / "CHANGELOG.md"
-    check("CHANGELOG.md 在位", cl.is_file())
-    if cl.is_file():
-        text = cl.read_text(encoding="utf-8")
-        # 只认行首的 `## YYYYMMDD`（正文里提到日期的句子不算条目）
-        secs = [(m.group(1), m.start(), m.end())
-                for m in re.finditer(r"^##\s+(\d{8})\s*$", text, re.M)]
-        check("至少有一条日期条目", len(secs) >= 1, f"{len(secs)} 条")
-        dates = [d for d, _, _ in secs]
-        check("日期倒序（最新在最上）", dates == sorted(dates, reverse=True), "、".join(dates))
-        empty = []
-        for i, (d, _s, e) in enumerate(secs):
-            body = text[e:secs[i + 1][1] if i + 1 < len(secs) else len(text)]
-            if not re.search(r"^-\s+\S", body, re.M):
-                empty.append(d)
-        check("每条日期下都有 `- ` 正文（哪怕是「这天无行为变更」那一行）",
-              not empty, "、".join(empty))
-        # 与真实历史对齐：这一条是**强制决定**——那天没什么可记也要写一行
-        head = subprocess.run(["git", "log", "-1", "--date=short", "--format=%ad"],
-                              cwd=ROOT, capture_output=True, text=True)
-        latest = head.stdout.strip().replace("-", "")
-        if len(latest) == 8 and latest.isdigit():
-            check(f"最新条目日期 == 最后一笔提交日期（{latest}）", dates and dates[0] == latest,
-                  f"条目={dates[0] if dates else None}")
-        else:
-            check("取到最后一笔提交的日期（取不到就不算通过）", False, repr(latest))
-        check("最新条目日期不是未来", bool(dates) and dates[0] <= _today_cn(),
-              f"条目={dates[0] if dates else None} 本仓钟面今天={_today_cn()}")
-        # 反面锁：**判据本身必须环境无关**。上面那条在另一个时区里跑整个套件再判一次——
-        # 子进程里所有断言都重跑，所以"有一次读回了跑它的那台机器的钟"就会红。用环境变量
-        # 挡住递归（子进程不再套娃）；America/New_York 与 +08:00 的日期在一天里大半时间不同，
-        # 正是 CI 那个窗口的形状。成本约 0.1 秒。
-        if os.environ.get("SAUDADE_STYLE_TZ_LOCK") == "1":
-            pass
-        else:
-            _sub = subprocess.run(
-                [sys.executable, str(Path(__file__).resolve())],
-                cwd=ROOT, capture_output=True, text=True, timeout=60,
-                env={**os.environ, "TZ": "America/New_York", "SAUDADE_STYLE_TZ_LOCK": "1"})
-            _tail = [ln for ln in (_sub.stdout or _sub.stderr or "").splitlines() if ln.strip()]
-            check("换一个时区（TZ=America/New_York）跑本套件仍然通过（判据不读跑它那台机器的钟）",
-                  _sub.returncode == 0, _tail[-1].strip() if _tail and _sub.returncode else "")
+    _check_changelog()
 
     print("\n④ 版本号只有一个来源（pyproject.toml）")
     pyproject = (ROOT / "pyproject.toml").read_text(encoding="utf-8")

@@ -8,13 +8,40 @@
 前端的帧、字段、字面）；③ 判据（新加的断言、被放宽的断言）。**不记什么**：目录与排版、
 注释、纯测试补件、依赖升版、评测跑的读数——那些不影响"agent 会怎么做"。
 
+**这一份是汇总出来的**（20261019 起）：开 PR 时**不要改它**，在
+[`changelog.d/`](changelog.d/README.md) 加一个碎片（`python scripts/dev/changelog.py --new <slug>`），
+合并时跑 `python scripts/dev/changelog.py` 折进来。原因是它只有**一个**插入点 ⇒ 任何两个
+同时开着的 PR 都必然在这里冲突（实测 PR #21 / #22 / #23 连着三次撞的都是同一处）。
+
 **日期是本地（+08:00）日期、倒序**，与 `docs/问题记录.md` 的日期戳同源。
-`tests/test_style_hygiene.py` 盯着这里的三条结构（日期倒序、每条有 `- ` 正文、最新日期不
-晚于最后一笔提交），改格式前先看它。
+`tests/test_style_hygiene.py` 盯着这里的三条结构（日期倒序、每条有 `- ` 正文、最新记录日期不
+晚于最后一笔提交——"最新记录"是**这一份与 `changelog.d/` 里最新碎片合起来**算的），
+改格式前先看它。
 
 **覆盖范围**：20260928 建立，回溯到 20260925（建立前一周）。更早的变更去 `git log`。
 
 ## 20261019
+
+- **CHANGELOG 改成"碎片汇总"：PR 之间不再冲突**（⚠️ **agent 对外行为零变更**，改的是
+  **协作流程与一条判据**）。三件：
+  ① **起因是一个形状问题，不是谁不小心**：`CHANGELOG.md` 只有**一个**插入点（当日那一节的
+  组首）⇒ **任何两个同时开着的 PR 都必然在那里冲突**。实测 PR #21 / #22 / #23 连着三次撞的
+  都是同一处，每次都要手工把两侧的条目都留下。
+  ② **先试了行业里常见的那条路，实测不成立**：`.gitattributes` 写 `CHANGELOG.md merge=union`。
+  GitHub **不跑** gitattributes 里的合并驱动 —— 同一个锚点两侧各加一条，PR 上照样报
+  `CONFLICTING`（20261019 用一条 throwaway PR 量的，结论留在 PR #24 的关闭说明里）。
+  所以换成**碎片**：每条变更一个 `changelog.d/<YYYYMMDD>-<slug>.md`，两个 PR 各加一个**新文件**
+  ⇒ 三路合并永远不冲突。工具 `scripts/dev/changelog.py`（`--new` 开碎片、`--check` 只看、
+  不带参数汇总并删碎片），约定写在 `changelog.d/README.md`。**指路的四处同批改掉**（只改一处
+  就是本仓点名的"改一处忘另一处"）：`CONTRIBUTING.md` §3、本文件头注、`.github/PULL_REQUEST_TEMPLATE.md`
+  的勾选项、`docs/README.md` 与 `docs/platform-roadmap.md` 里"行为变更进 CHANGELOG"那句。
+  ③ **判据**：`tests/test_changelog_fragments.py` 七条——机制在位（目录/README/脚本，**这条是
+  覆盖率自检**：目录被删掉的话下面全是空过）、真碎片逐个合法、同一天没有两条正文相同、日期不是
+  未来、**`CHANGELOG.md` 自己不许留冲突标记**（这条此前没人判，解冲突解歪了是静默的）、组装器
+  正控、端到端幂等（折一次 ⇒ 碎片被删且 CHANGELOG 变了；再跑一次**一字不变**）。七条反控各自
+  证明能红。`tests/test_style_hygiene.py` ③ 跟着放宽成"**最新记录日期** == 最后一笔提交日期"，
+  其中"最新记录"= CHANGELOG 那一节与 `changelog.d/` 里最新碎片**合起来**算——碎片先落、汇总后跑
+  是正常状态，只盯着 CHANGELOG.md 会把它判成"忘了记"。
 
 - **`agent/graph.py` 的"写参数落位与拒答"那一族整块搬出**（⚠️ **对外行为零变更**）。四件：
   ① **搬走的是「出边为零」的一整块闭包**：planner 定下写哪一件之后、真正落到工具参数之前

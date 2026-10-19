@@ -46,7 +46,8 @@
 仓根还有几份不属于 `docs/`： [README.md](../README.md)（是什么、怎么跑）、
 [CONTRIBUTING.md](../CONTRIBUTING.md)（判据规矩、能/不能在本机跑什么）、
 [ROADMAP.md](../ROADMAP.md)（现在做什么 / 等触发条件 / 明确不做）、
-[SECURITY.md](../SECURITY.md)（安全问题走私密通道）、[CHANGELOG.md](../CHANGELOG.md)（对外行为与判据的变更）。
+[SECURITY.md](../SECURITY.md)（安全问题走私密通道）、[CHANGELOG.md](../CHANGELOG.md)（对外行为与判据的变更；
+**新变更写在 [changelog.d/](../changelog.d/README.md) 的碎片里**，汇总后再折进那一份）。
 
 ## ⚠️ 跨仓引用契约：这四组编号/标题**不许动**
 

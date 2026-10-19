@@ -527,7 +527,8 @@ saver 挂上之后历史注入被闸门关掉，而**没有任何"播种"路径*
   （不设该变量，几条跨语言守卫找不到父仓）。
 - **静态**：改动的文件 `ruff check` 零 error；`eval/type_gate.py`。
 - **台账**：收紧一律**文本改那一个数**。
-- **文档**：新文档必须进 [docs/README.md](README.md) 索引；行为变更进 `CHANGELOG.md`。
+- **文档**：新文档必须进 [docs/README.md](README.md) 索引；行为变更在
+  [`changelog.d/`](../changelog.d/README.md) 加一个碎片（20261019 起，别直接改 `CHANGELOG.md`）。
 - **接线自查**（每个提交前问一遍）：套件清单是否只有 `tests/run_all.py` 一处？钉值是否同步？
   ruff 版本是否与 `pyproject.toml` 的 dev 组一致？新增的运行期产物是否登记了保留期？
 
