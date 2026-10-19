@@ -909,11 +909,11 @@ check("写工具**不进** _CONTENT_TOOLS（否则「建了个标签」会变成
       not ({"set_article_status", "set_article_tags", "create_tag"} & _CONTENT_TOOLS)
       and "list_admin_notes" in _CONTENT_TOOLS, str(sorted(_CONTENT_TOOLS)))
 # 判据点从 2 → 3（20260921）：新增的第三处在 _confirm_popup——**无权做的写操作
-# 不弹窗**（弹了就是承诺一件做不到的事）。同一 decision、同一 enforcing，只减少
-# 弹窗、不放宽任何权限。数字仍是硬断言：下一个人加第四处时先回答"会不会放宽"。
-check("authz.enforcing(decision.scope) 三处（shadow/硬拦/弹窗前置筛），无新增放宽点",
-      gsrc.count("authz.enforcing(decision.scope)") == 3,
-      str(gsrc.count("authz.enforcing(decision.scope)")))
+# 不弹窗**（弹了就是承诺一件做不到的事）。判据函数 20261019 换成 `must_enforce`（未验成
+# 的身份不进灰度，见 tests/test_authz.py ⑪）。数字仍是硬断言：加第四处先回答"会不会放宽"。
+check("authz.must_enforce(decision, principal) 三处（shadow/硬拦/弹窗前置筛），无新增放宽点",
+      gsrc.count("authz.must_enforce(decision, principal)") == 3,
+      str(gsrc.count("authz.must_enforce(decision, principal)")))
 
 
 print("\n⑭ 参数类型非法：产错误帧如实退回 planner，绝不炸图")
