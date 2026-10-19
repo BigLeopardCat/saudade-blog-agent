@@ -14,6 +14,21 @@
 
 **覆盖范围**：20260928 建立，回溯到 20260925（建立前一周）。更早的变更去 `git log`。
 
+## 20261020
+
+- **实验臂（`GOLDEN_ARM=react`）补上决策事件 `planner.native_decision`**（⚠️ **生产臂
+  `graph` 与线上行为零变更**，改的是**读 trace 的判据**）。此前该臂**一条决策事件都不记**，
+  于是"这一轮模型点了什么、填了几条意图"读不出来——查 `planner.task_auto` 残差
+  （graph 64 条 vs react 15 条）时，只能拿"两臂恰好都记的那几条事件"当代理，绕了一大圈才
+  把"这是读数差不是行为差"钉住。现在与生产**同名同格**（`workflow`/`round`/`calls`/`finish`
+  + 四个解码旋钮），**多一格 `intents`**（条数；生产那格由 `task_auto` 的 `listed` 补，而它
+  只在清单非空时才记 ⇒ "模型没填"在生产 trace 里是**缺席**，与"这格不存在"分不开）。
+  **零工具轮也记**——生产的 `native_decision` 覆盖全部规划轮，两臂的分母才是同一件事。
+  `react_parity.task_decision` 同时补上 `raw_tool_calls`（取**拆分伪函数之前**的整份清单，
+  与生产 `tool_calls_to_plan` 的 `base` 同源）与 `finish_reason`。新增
+  `tests/test_react_decision_trace.py` 锁住这四件事，含一条反控（`calls` 记的必须是 raw
+  而不是摘完剩下的 `rest`）。
+
 ## 20261019
 
 - **写操作幂等账的口径更正：它只在「续跑」那条路径上有效，而生产不走那条路**（⚠️ **对外行为
