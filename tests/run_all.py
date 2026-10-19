@@ -4,13 +4,21 @@
 
 **为什么是 glob 而不是名单**：套件清单此前散在三处（CI 的 eval.yml 逐步列、夜间脚本单列、
 README 正文），加一个套件要改三处，漏一处就变成"看着在跑、其实没跑"。这里按**磁盘**枚举——
-文件躺在 tests/ 下就自动进队（`_` 开头的辅助模块与 run_all.py 自己除外），增删套件不用改任何名单。
+说准确一点：**枚举 `tests/` 这一个目录下的 `*.py`**（不递归子目录），文件躺在那儿就自动进队
+（`_` 开头的辅助模块与 run_all.py 自己除外），增删套件不用改任何名单。
+（这一条以前写成光秃秃的"按磁盘"，容易被读成"整个仓按磁盘扫"；实际射程就是 `tests/*.py`
+这一层。**不递归**是刻意的——见 `tests/test_tests_dir_shape.py`：`tests/` 下不许有子目录，
+套件想带数据就自己开 `tempfile`。）
 
 跑法（在仓根，用仓的 venv）：
   .venv/bin/python tests/run_all.py                 # 全部
   .venv/bin/python tests/run_all.py -k authz        # 只跑文件名含 authz 的
   .venv/bin/python tests/run_all.py --timeout 600   # 单套件超时（默认 300s）
+  .venv/bin/python tests/run_all.py -j 4            # 并行 4 路（默认 1＝串行；见 run_suites）
   .venv/bin/python tests/run_all.py --coverage      # 多出一份覆盖率报告（**非门禁**）
+
+**串行是默认，不是"没做并行"**：`-j 1` 时输出**边跑边出**（现场能看到卡在哪个套件上），
+`-j >1` 时改成"谁跑完整块打谁"——两者不是同一个东西，所以默认值不动，CI 显式写 `-j 4`。
 
 **覆盖率只出报告、不设阈值，也不进 CI**（20261013）：只有形状判据配当门禁，百分比会把
 "该测的没测"与"测了但那一支没走到"混成一个数，拿它当闸门只会把人推去测 getter；它回答的
@@ -62,6 +70,7 @@ CI 里则由 dev 组的 `uv sync --frozen` 装。覆盖率这一档起不来时�
 可能与这里相反——所以红了的套件先按上面打印的那行环境重跑一遍，再判断是不是真缺陷。
 """
 import argparse
+import concurrent.futures
 import os
 import pathlib
 import shutil
@@ -243,10 +252,93 @@ def _coverage_problem() -> str:
     return lines[-1].strip() if lines else f"退出码 {r.returncode}"
 
 
+def _suite_cmd(p: pathlib.Path, coverage: bool) -> list[str]:
+    """跑一个套件的命令。子进程的形状只多一层薄壳：`coverage run <套件>` 的退出码就是
+    套件的退出码（判据一个字不变，这也是覆盖率**可以**挂在路上的前提）。"""
+    return ([sys.executable, "-m", "coverage", "run", str(p)] if coverage
+            else [sys.executable, str(p)])
+
+
+def _as_text(x) -> str:
+    """`TimeoutExpired` 抓下来的半截输出：有 bytes 有 str，两种都收。"""
+    if x is None:
+        return ""
+    return x.decode("utf-8", "replace") if isinstance(x, bytes) else x
+
+
+def run_suites(todo, *, jobs: int = 1, timeout: float = 300.0, env: dict | None = None,
+               coverage: bool = False, cwd: pathlib.Path = ROOT,
+               root: pathlib.Path = ROOT, out=None) -> list[tuple]:
+    """跑一批套件 → `[(相对名, rc, 秒数)]`，**按传入顺序**（汇总表要的就是文件序）。
+
+    `jobs == 1` 走**串行**：子进程直接继承本进程的 stdout ⇒ 输出**边跑边出**，块头在
+    跑之前打（这就是 20260924 以来的行为，一个字没改）。
+
+    `jobs > 1` 走**并行**：每个套件仍然是一个**独立的子进程**、同一份 `env`、同一个
+    `timeout`——这三件与串行**共用同一段代码**，不另抄一份（抄一份就等于两处约定，早晚
+    分岔）。区别只有一处：stdout 被**捕获**下来、等它跑完再整块打出来。并行下没法同时
+    做到"保序"与"直播"，只能选一个：这里选**保序 + 谁跑完打谁**。块头仍带套件名，所以
+    看到的是"谁跑完了"，不是"谁在跑"——这一点写在这里，免得有人以为并行档卡住了。
+
+    为什么是线程池而不是进程池：真正干活的是 `subprocess`，线程在这里只负责等它，GIL
+    不参与。
+
+    ⚠️ **并行安全的前提**（20261019 实测，不是推的）：`tests/` 下**没有**任何套件绑端口、
+    起服务，或往**仓内固定路径**写。判据是"两份 `run_all.py` 同时跑一遍，两边都是
+    170/170、零超时"——比任何静态审计可靠（审计脚本给过一堆假阳性）。写台账的那两条
+    （`test_module_budget` / `wordlist_gate`）**只在 `--update` 档写**，常规路径只读。
+    **要加"往仓内固定路径写"或"绑端口"的套件，得先回到这条注上**：并行度一开，
+    这类套件就会自己撞自己，而症状是随机的假红。
+    """
+    root = pathlib.Path(root)
+    out = out if out is not None else sys.stdout
+
+    def _one(p: pathlib.Path):
+        name = p.relative_to(root)
+        cmd = _suite_cmd(p, coverage)
+        t0 = time.monotonic()
+        if jobs <= 1:
+            print(f"\n{'─' * 8} {name} {'─' * 8}", file=out, flush=True)
+            try:
+                rc = subprocess.run(cmd, cwd=cwd, timeout=timeout, env=env).returncode
+            except subprocess.TimeoutExpired:
+                rc = -1
+                print(f"⏱ 超时（>{timeout:g}s）——套件内部多半有东西在等网络/挂起了",
+                      file=out, flush=True)
+            return name, rc, time.monotonic() - t0, None
+        try:
+            r = subprocess.run(cmd, cwd=cwd, timeout=timeout, env=env,
+                               capture_output=True, text=True)
+            return name, r.returncode, time.monotonic() - t0, _as_text(r.stdout + r.stderr)
+        except subprocess.TimeoutExpired as e:
+            # 超时也要把那半截输出留着：套件挂在哪儿，往往就在这半截的最后一行。
+            return (name, -1, time.monotonic() - t0,
+                    _as_text(e.stdout) + _as_text(e.stderr)
+                    + f"\n⏱ 超时（>{timeout:g}s）——套件内部多半有东西在等网络/挂起了\n")
+
+    if jobs <= 1:
+        return [(n, rc, dt) for n, rc, dt, _ in (_one(p) for p in todo)]
+
+    done: dict[pathlib.Path, tuple[int, float]] = {}
+    with concurrent.futures.ThreadPoolExecutor(max_workers=jobs) as ex:
+        futs = [ex.submit(_one, p) for p in todo]
+        for f in concurrent.futures.as_completed(futs):
+            name, rc, dt, text = f.result()
+            done[name] = (rc, dt)
+            print(f"\n{'─' * 8} {name} {'─' * 8}", file=out, flush=True)
+            if text:
+                print(text, end="" if text.endswith("\n") else "\n", file=out, flush=True)
+    # 汇总表按**文件序**（`todo` 的顺序），不按完成序——完成序每次都不同，两次跑的
+    # 汇总表没法逐行对读，那等于把这张表废了。
+    return [(n, *done[n]) for n in (p.relative_to(root) for p in todo)]
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description="跑 tests/ 下全部离线套件")
     ap.add_argument("-k", "--keyword", default="", help="只跑文件名含该串的套件")
     ap.add_argument("--timeout", type=float, default=300.0, help="单个套件超时秒数（默认 300）")
+    ap.add_argument("-j", "--jobs", type=int, default=1,
+                    help="并行跑几个套件（默认 1＝串行、输出边跑边出；>1 时输出按套件整块打）")
     ap.add_argument("--coverage", action="store_true",
                     help="逐套件收集覆盖率并在结尾出一份报告（非门禁；需要 coverage）")
     args = ap.parse_args()
@@ -301,24 +393,9 @@ def main() -> int:
         # 有人盯着这行才知道今天的绿是在产线档位之外跑出来的。
         print("⚠️  " + note)
 
-    rows, failed = [], []
-    for p in todo:
-        name = p.relative_to(ROOT)
-        print(f"\n{'─' * 8} {name} {'─' * 8}", flush=True)
-        # 子进程的形状只多一层薄壳：`coverage run <套件>` 的退出码就是套件的退出码
-        # （判据一个字不变，这也是覆盖率**可以**挂在路上的前提）。
-        cmd = [sys.executable, "-m", "coverage", "run", str(p)] if args.coverage \
-            else [sys.executable, str(p)]
-        t0 = time.monotonic()
-        try:
-            rc = subprocess.run(cmd, cwd=ROOT, timeout=args.timeout, env=env).returncode
-        except subprocess.TimeoutExpired:
-            rc = -1
-            print(f"⏱ 超时（>{args.timeout:g}s）——套件内部多半有东西在等网络/挂起了", flush=True)
-        dt = time.monotonic() - t0
-        rows.append((name, rc, dt))
-        if rc != 0:
-            failed.append(name)
+    rows = run_suites(todo, jobs=args.jobs, timeout=args.timeout, env=env,
+                      coverage=args.coverage, cwd=ROOT)
+    failed = [name for name, rc, _dt in rows if rc != 0]
 
     print(f"\n{'=' * 8} 汇总 {'=' * 8}")
     for name, rc, dt in rows:
