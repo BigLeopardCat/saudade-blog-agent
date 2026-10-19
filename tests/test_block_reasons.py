@@ -39,6 +39,9 @@ import _ctx_src  # noqa: E402  （`_` 开头 ⇒ 不被 run_all 当套件收）
 import agent.graph as g  # noqa: E402
 import agent.prompt_context as ctx  # noqa: E402
 import server as srv  # noqa: E402
+from agent import adminops_target as _target  # noqa: E402
+from agent import authz, idem  # noqa: E402
+from agent.arg_refs import ref_error_frame  # noqa: E402
 from agent.block_reasons import REASONS, block_reason_type  # noqa: E402
 
 FAILS: list[str] = []
@@ -269,6 +272,57 @@ check("  反控：合成 `REASON_NEW = \"brand_new_code\"` ⇒ 扫得到、且�
 # 反控二（形状筛）：人话不许被当成码，否则这一条就是"见谁都红"
 check("  反控：`return None, \"读不到现有的标签字典\"` 那种人话不算码",
       produced_codes({"x.py": 'def f():\n    return None, "读不到现有的标签字典"\n'}) == set())
+
+# ── ⑦ 原因码住在**结构**里（20261019 批 G4）────────────────────────────────
+# ⑥ 判的是"生产侧发出的码有没有登记"，看不见**码是怎么交给取回侧的**：此前它只长在
+# 帧文本中间那对方括号里（`权限不足[denied]`），取回侧拿七个函数去抠中文——改一句
+# 措辞就静默退化成末端兜底的 `error_frame`，而 planner 的应对（改参数？去问主人？
+# 如实告知？）正是按这个码分叉的。现在生产方交 `ToolResult.meta["reason"]`。
+#
+# 判据成对写：① 每个生产方都交出码、且与帧文里那个方括号**一致**；② 反控——**把帧文
+# 的中文标签整段换掉**，带 meta 的那一路仍判得准，而不带 meta 的那一路当场退化成
+# `error_frame`（今天就是那一路 ⇒ 上面那条不是白绿）。
+_DEN = authz.Decision(False, authz.REASON_DENIED, "write.console", "set_article_status")
+_PRN = authz.Principal(uid=1, role="user")
+_FRAMES = {
+    "denial": authz.denial_frame(_DEN, _PRN),
+    "consent": authz.consent_frame("set_article_status", _PRN),
+    "action_conflict": authz.action_conflict_frame("remove_favorite", "add_favorite"),
+    "unknown_target": _target.unknown_target_frame("set_article_status"),
+    "target_mismatch": _target.target_conflict_frame("set_article_status", {12}, 46),
+    "policy_refused": _target.policy_frame("后端说不行"),
+    "write_outcome_unknown": idem.unknown_frame("set_article_status"),
+    "ref_unparsed": ref_error_frame("ref_unparsed"),
+}
+_FRAME_CODES = {k: (getattr(v, "meta", None) or {}).get("reason") for k, v in _FRAMES.items()}
+check("正控：八个帧生产方**都**交出了 `meta[\"reason\"]`（少一个下面那条就是空过）",
+      all(_FRAME_CODES.values()), str(_FRAME_CODES))
+check("⭐ 交出的每一个码都在 `REASONS` 里（`_check_spec` 拿它当 blocked 的原因）",
+      set(_FRAME_CODES.values()) <= set(REASONS),
+      "未登记：" + "、".join(sorted(set(_FRAME_CODES.values()) - set(REASONS))))
+check("结构与帧文里那个方括号**说的是同一件事**（两条通道不许分岔）",
+      all(f"[{c}]" in str(_FRAMES[k]) for k, c in _FRAME_CODES.items()),
+      str({k: c for k, c in _FRAME_CODES.items() if f"[{c}]" not in str(_FRAMES[k])}))
+# 引用失败那一族**两格取的不是同一段**：帧文带 `<码>:<引用原文>`（planner 照着那串
+# 引用改参数），meta 只放冒号前的码。把 `:ref` 一起当码，`_REASON_CN` 就查不到中文、
+# `block_reasons` 也落进 fail-safe 的"可重试"——两条都是**静默**的。
+_ref_f = ref_error_frame("ref_unknown_tool:$fake_search[0].noteKey")
+check("引用失败：帧文带全串、`meta` 只放冒号前的码",
+      _ref_f.meta["reason"] == "ref_unknown_tool"
+      and "ref_unknown_tool:$fake_search[0].noteKey" in str(_ref_f),
+      f"{_ref_f.meta} / {str(_ref_f)[:60]}")
+check("  ⇒ 真的走一遍 `_check_spec`：得到的是那个**查得到中文**的码",
+      g._check_spec("search_notes", {}, True, _ref_f, "content_query",
+                    meta=_ref_f.meta) == ("BLOCK", "ref_unknown_tool"))
+# 反控：把帧文的**中文标签整段换掉**——取回侧的七个函数认的正是那些中文。
+_MANGLED = str(_FRAMES["denial"]).replace("权限不足", "这条不行")
+check("  反控的正控：帧文改掉之后，**文本那一支**取不回那个码了（下面那条不是白绿）",
+      g._check_spec("set_article_status", {}, True, _MANGLED, "article_status")
+      == ("BLOCK", "error_frame"),
+      str(g._check_spec("set_article_status", {}, True, _MANGLED, "article_status")))
+check("⭐ 反控：同一份帧**带上 `meta`** ⇒ 原因码仍然准（措辞改一百遍也不影响分叉）",
+      g._check_spec("set_article_status", {}, True, _MANGLED, "article_status",
+                    meta=_FRAMES["denial"].meta) == ("BLOCK", "denied"))
 
 print("\n" + ("全部通过" if not FAILS else f"失败 {len(FAILS)} 项：" + "; ".join(FAILS)))
 raise SystemExit(1 if FAILS else 0)

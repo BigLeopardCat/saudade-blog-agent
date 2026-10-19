@@ -96,6 +96,7 @@ import time
 from agent import authz
 from config import settings
 from tools.base import ToolResult, unavailable
+from tools.result import error_frame
 from utils.trace import record
 
 logger = logging.getLogger(__name__)
@@ -244,9 +245,10 @@ def replay_reason(text: str) -> str | None:
 
 def unknown_frame(name: str) -> str:
     """「上一次发出去了、但没拿到返回」的错误帧（checker 判 BLOCK）。"""
-    return (f"__ERROR__: 写操作结果未知[{REASON_OUTCOME_UNKNOWN}]"
+    return error_frame(f"__ERROR__: 写操作结果未知[{REASON_OUTCOME_UNKNOWN}]"
             f"（{name} 上一次已经发出，进程在拿到返回之前中断了——**不要重试**，"
-            f"重试可能把它做第二遍。先读一次确认它到底成没成，再把结果如实告诉主人）")
+            f"重试可能把它做第二遍。先读一次确认它到底成没成，再把结果如实告诉主人）",
+            REASON_OUTCOME_UNKNOWN)
 
 
 def _call(tool, args):

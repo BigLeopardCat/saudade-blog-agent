@@ -121,7 +121,7 @@ from agent.prompts import (BLOG_ASSISTANT_PROMPT, NARRATOR_DISCIPLINE, STICKER_G
                            _PLANNER_OUTPUT_CONTRACT_NATIVE,
                            _PLANNER_PROMPT, _REFLECTOR_PROMPT, audience_block)
 from agent.provenance import QUOTE_SPAN_RE as _QUOTE_SPAN_RE
-from agent.arg_refs import ref_error_reason, ref_hints, resolve_args, structured_of
+from agent.arg_refs import ref_error_frame, ref_error_reason, ref_hints, resolve_args, structured_of
 from agent.textnorm import (  # noqa: F401
     FULLWIDTH_ASCII_MAP as _FULLWIDTH_ASCII_MAP,
     fold_typing as _fold_typing,
@@ -7758,14 +7758,14 @@ def _check_spec(name: str, args: dict, args_ok: bool, raw: str, workflow: str,
         # planner 的应对是去问，而不是当成"做不到"。
         # 后台政策拒绝同办（20260926）：policy_refused 是"规则不许做"，planner 的
         # 应对是如实转述、**不是改参重试**——与上面三个原因码并列的第四个消费者
-        # （生产方 = adminops.policy_frame，见那里"为什么走错误帧族"的长注：
-        # 这一条接不上的后果是良性的「执行出错」，而新开一个 ToolResult kind
-        # 漏接的后果是**静默**产回执）。
-        return _VERDICT_BLOCK, (ref_error_reason(text) or authz.scope_error_reason(text)
+        # （生产方 = adminops.policy_frame，见那里"为什么走错误帧族"的长注：这条
+        # 接不上只退化成「执行出错」，而新开一个 ToolResult kind 漏接是**静默**产回执）。
+        # **批 G4 起原因码住在 `meta["reason"]`** ⇒ 下面七个取回函数退居**回落支**。
+        return _VERDICT_BLOCK, ((meta or {}).get("reason") or ref_error_reason(text)
+                                or authz.scope_error_reason(text)
                                 or authz.consent_error_reason(text)
                                 or authz.action_conflict_error_reason(text)
-                                or _target.target_error_reason(text)
-                                or idem.replay_reason(text)
+                                or _target.target_error_reason(text) or idem.replay_reason(text)
                                 or _target.policy_error_reason(text) or "error_frame")
     # 命令工具契约层校验（20260926 批 2 改键）：动作工具必须交出**连线命令**——但
     # 判据从"返回文本的前缀"改成"`meta["cmd"]` 的 kind"。工具返回形态漂移（忘了带
@@ -9639,7 +9639,7 @@ def execute_node(state: AgentState, config: RunnableConfig | None = None) -> dic
             args["text"] = _create_display_text(user_msg, page_ctx)
         _t_tool = time.monotonic()
         if ref_err:
-            out = f"__ERROR__: 参数引用无法解析[{ref_err}]（上一步返回里没有这个值——改参数或换个工具）"
+            out = ref_error_frame(ref_err)
             logger.warning("[execute] 参数引用解析失败，不执行: %s → %s", spec, ref_err)
         elif not decision.allowed and authz.enforcing(decision.scope):
             out = authz.denial_frame(decision, principal)

@@ -619,13 +619,13 @@ def _policy_post(path: str, payload: dict, config: RunnableConfig):
         return unavailable(f"接口返回的不是 JSON{_NO_SUCCESS_TAIL}")
     if body.get("code") != 200:
         logger.warning("admin status post %s refused: %s", path, body.get("message"))
-        # ⚠️ 必须包成 `ToolResult` 再往外传（**不是**裸字符串）：调用方的失败判据是
-        # `isinstance(data, ToolResult)`，而 `policy_frame` 返回的是普通 str——
-        # 裸传会被当成"成功返回的 data"接着往下走写后复核，最后报成
-        # 「改动请求已发出…本次改动未确认生效」（一句**假话**：这条请求根本没改任何
-        # 东西，它是被政策拒了）。kind 仍是 "ok"：这一族的判据是**帧的形态**
-        # （`__ERROR__:` 前缀）而不是 kind，`_check_spec` 照旧 BLOCK + policy_refused。
-        return ToolResult(_target.policy_frame(str(body.get("message") or "后台拒绝了这次改动")))
+        # ⚠️ `policy_frame` 的返回值**直接返回，不许再套一层 `ToolResult(...)`**：
+        # 调用方的失败判据是 `isinstance(data, ToolResult)`，裸字符串会被当成"成功
+        # 返回的 data"接着往下走写后复核，最后报成「改动请求已发出…本次改动未确认
+        # 生效」（一句**假话**：这条请求根本没改任何东西，它是被政策拒了）；而多套一
+        # 层还会把它的 `meta["reason"]` 丢掉（`ToolResult(x)` 新建对象，不像 `_shape`
+        # 那样身份透传）。kind 仍是 "ok"：这一族的判据是**帧的形态**，照旧 BLOCK。
+        return _target.policy_frame(str(body.get("message") or "后台拒绝了这次改动"))
     return body.get("data")
 
 
