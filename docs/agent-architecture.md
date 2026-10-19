@@ -733,7 +733,7 @@ narrator 提示词随会话线性膨胀（当时那一行是 `with_tool_call_pai
 | 导航 | `navigate_to(path, confirm)` | 返回 `NAVIGATE:https://…`（confirm=true）或 `AUTO_NAVIGATE:https://…`（confirm=false） |
 | 特效 | `toggle_effect(effect, action)` | 返回 `EFFECT:{effect}:{action}`，前端按显式意图执行 |
 | 夜间模式 | `toggle_dark_mode(mode)` | 返回 `DARKMODE:{mode}` |
-| IoT 设备 | `list_devices`、`device_oled_display` | 代签 JWT 调 device-service；支持自动选在线设备、幂等去重 |
+| IoT 设备 | `list_devices`、`device_oled_display` | 代签 JWT 调 device-service；支持自动选在线设备、幂等去重；`device_oled_display` 的 scope `write.device` **20261019 起进 `_HARD_SCOPES`**（审计 SAU-007：后果落在物理世界，不吃 shadow 灰度） |
 | 后台只读（admin） | `list_admin_notes`、`get_server_status`、`get_service_health`、`get_moderation_status`、`get_user_stats`、`get_note_stats`、`get_note_periods`、`list_admin_board` | 以发起人身份代调 `127.0.0.1:3000` 的受保护接口（现签 60 秒 JWT）；scope `admin.console`，进 `_HARD_SCOPES`（非 admin 结构上够不到）；`list_admin_notes` 是草稿/私密文章的**唯一可达读口**；`get_note_stats` 与 `get_note_periods` 是两张纸（同一批统计面：前者是当下快照＋三张总榜，后者按期切开成周报/月报/年报，粒度是必填参数），`get_moderation_status` 是审核状况报表（按状态切三份名单），`list_admin_board` 是逐条名册（每条带真实发表账号——公开的 `list_guestbook` 只有留名框里填的自由文本，认人会认错，见 §6.7） |
 | 后台写（admin） | `create_tag`、`update_tag`、`delete_tag`、`create_category`、`update_category`、`delete_category`、`create_announcement`、`update_announcement`、`delete_announcement`、`audit_board_comment`、`delete_board_comment`、`set_article_status`、`set_article_tags` | scope `write.console`（`_HARD_SCOPES` + `CONSENT_SCOPES`）；只能由写技能模板展开——`PARAMS.calls` 名单里没有它们，越权清单在技能白名单那一步就被剥掉；三道门见 §5.3；身份/目标的地基见 §6.6 |
 | 用户自己的读（own） | `list_my_favorites`、`get_unread_summary`、`list_notifications` | scope `read.own`（三档角色都有、匿名没有）；以本轮发起人身份读他自己的数据（代签 60 秒 JWT 调 `/api/protected/*`，"自己读自己"由 uid 落地）；见 §5.6 |
@@ -802,7 +802,7 @@ narrator 加纪律 14（未展开的小节没有读过，不得引用、不得�
 |---|---|---|---|
 | 建标签（一级/二级） | `create_tag(title, parent_tag?, color?)` | `POST /api/protected/tagone` / `tagtwo` | 先查后建 + 建后复核；`parent_tag` 是名字 |
 | 改标签（改名/改色/换父级/换层级） | `update_tag(name, level?, new_title?, color?, parent_tag?, to_level?)` | 有 `parent_tag`/`to_level` → `POST /api/protected/tag/move`；否则 `PUT /tagone|tagtwo/:id` | PUT 的 title/color 都是必填：只改名时必须把当前色从索引原样回传（不猜） |
-| 删标签 | `delete_tag(name, level?)` | `DELETE /api/protected/tag` | 删除触发全表 `prune_note_tags`（把引用从所有文章上摘掉），**不可回滚** |
+| 删标签 | `delete_tag(name, level?)` | `DELETE /api/protected/tag` | 删除触发全表 `prune_note_tags`（把引用从所有文章上摘掉）、一级标签还连坐子标签，**不可回滚**；20261019 起进 `_ALWAYS_CONFIRM_TOOLS`（一律弹卡，命令式措辞不再免问） |
 | 建/改/删分类 | `create_category` / `update_category` / `delete_category` | `POST /api/protected/category`、`POST …/category/:id`、`DELETE …/category` | 建分类不回 id（复核靠重拉列表按名找）；改分类空串 = 不改，只传点名字段；删分类是 `ON DELETE SET NULL`（文章失去分类） |
 
 ② 父标签 id 的真通道 = 名字通道（用户拍板"给条真通道，否则把技能描述里的引用写法先删掉"）。

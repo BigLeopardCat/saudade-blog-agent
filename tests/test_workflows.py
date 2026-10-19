@@ -52,6 +52,11 @@ from agent.workflow_plan import instantiate_plan
 # （20261004 起接口层只剩 native tool calls，桩缺 `bind_tools` 会 AttributeError）。
 from _planner_stub import bind_tools_stub, toolcall_reply  # noqa: E402
 
+# ── 密钥桩（20261019）──
+# 管理/写通道的用例会走到 `_principal_get` ⇒ `_sign_local_jwt`；CI 没有 `.env`，
+# `settings.jwt_secret` 默认空串，而 20261019 起**空密钥不许签**（SAU-012）。
+from config.settings import settings as _settings  # noqa: E402
+_settings.jwt_secret = "test-secret-for-workflows"
 
 FAILS = []
 

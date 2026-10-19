@@ -41,6 +41,14 @@ from agent.entity_digest import receipt_digest  # noqa: E402
 from agent.principal import Principal  # noqa: E402
 import tools.base as base  # noqa: E402
 
+# ── 密钥桩（20261019）─────────────────────────────────────────────────────
+# 这些工具走 `_principal_get` ⇒ `_sign_local_jwt` 要一把非空密钥。CI 没有 `.env`，
+# `settings.jwt_secret` 默认空串，而 20261019 起**空密钥不许签**（SAU-012）⇒ 不打桩
+# 本套件在 CI 里会当场抛。桩值不取环境值：判据的前提自己摆，不继承运维取值。
+from config.settings import settings as _settings  # noqa: E402
+_saved_secret = _settings.jwt_secret
+_settings.jwt_secret = "test-secret-for-userdata-tools"
+
 FAILS: list[str] = []
 
 
@@ -1233,6 +1241,8 @@ _s_src = (ROOT / "server.py").read_text(encoding="utf-8")
 check("过程行有中文：target_not_found →「目标不存在」（不是「服务不可用」）",
       '"target_not_found": "目标不存在"' in _s_src and '"unavailable": "服务不可用"' in _s_src,
       str([l for l in _s_src.splitlines() if "target_not_found" in l]))
+
+_settings.jwt_secret = _saved_secret   # 收尾：还原成进来时的样子（见头部密钥桩）
 
 print("\n" + ("全部通过" if not FAILS else f"失败 {len(FAILS)} 项：" + "; ".join(FAILS)))
 raise SystemExit(1 if FAILS else 0)

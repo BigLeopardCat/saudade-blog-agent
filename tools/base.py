@@ -197,17 +197,17 @@ def _get(path: str, *, not_found_text: str = "") -> dict | list | ToolResult:
 # IoT 设备族 —— 20261017 搬进 tools/device.py
 # ---------------------------------------------------------------------------
 # 这一族（10 个顶层名：list_devices / device_oled_display / _sign_user_jwt /
-# _device_get_user_id / _valid_device_id / DEVICE_SERVICE_URL / JWT_SECRET /
+# _device_get_user_id / _valid_device_id / DEVICE_SERVICE_URL / _jwt_secret /
 # _DISPLAY_DEDUP_SECONDS / _last_display / _last_display_lock）对 base.py 的
 # **出边为零**：信封构造器直接取自 `tools/result.py`，其余全是 stdlib / httpx /
 # langchain / settings ⇒ 搬得动，且搬完不成环。按**原名** re-export
-# ⇒ 全仓 `from tools.base import ...` 与下面管理族借用 `JWT_SECRET` /
+# ⇒ 全仓 `from tools.base import ...` 与下面管理族借用 `_jwt_secret` /
 # `_device_get_user_id` 的地方一处不改。⚠️ 改这一族去 `tools/device.py`，不是这里。
 from tools.device import (  # noqa: E402,F401
     _DISPLAY_DEDUP_SECONDS,
     DEVICE_SERVICE_URL,
-    JWT_SECRET,
     _device_get_user_id,
+    _jwt_secret,
     _last_display,
     _last_display_lock,
     _sign_user_jwt,
@@ -296,13 +296,24 @@ def _sign_local_jwt(uid: int, role: str | None) -> str:
     def _b64(b: bytes) -> bytes:
         return base64.urlsafe_b64encode(b).rstrip(b"=")
 
+    # 空密钥**不许签**（20261019 安全审计 SAU-012，CWE-321）：HMAC 拿空 key 照样算得出
+    # 签名、`jwt.encode` 也不报错 ⇒ 这一路此前会**静静地**签出一枚用空密钥签的令牌，
+    # 而失效时刻被推到"Rust 那边 401"，现场看起来像"后台接口坏了"而不是"密钥没配"。
+    # 同仓 `agent/confirm.py::sign()` 早就是 fail-closed（空密钥返回空串，调用方据此不弹卡）
+    # ——**同一件事两处处置不一致**本身就是缺陷，这一条把它补齐。
+    # 取"抛"而不是"返回空串"：返回空串会让 `"Bearer " + ""` 发出去、变成一次语义不明的
+    # 401，而这里抛出去的是**当场可读的原因**，工具层照常把它收成错误帧。
+    secret = _jwt_secret()
+    if not secret:
+        raise RuntimeError("JWT_SECRET 未配置（空密钥不许代签令牌）——检查 .env / 环境变量")
+
     header = _b64(json.dumps({"alg": "HS256", "typ": "JWT"}).encode())
     payload = _b64(json.dumps({
         "sub": uid,
         "exp": int(time.time()) + 60,
         "role": role or "user",
     }).encode())
-    sig = _b64(hmac.new(JWT_SECRET.encode(), header + b"." + payload, hashlib.sha256).digest())
+    sig = _b64(hmac.new(secret.encode(), header + b"." + payload, hashlib.sha256).digest())
     return (header + b"." + payload + b"." + sig).decode()
 
 
