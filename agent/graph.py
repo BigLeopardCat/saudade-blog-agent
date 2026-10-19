@@ -483,9 +483,11 @@ class AgentState(TypedDict):
     #                 之前，"已提出未执行"只存在于上一轮的自然语言里（execution_log
     #                 只装已执行的事实），下一轮只能回历史挑一句当目标（13:19 事故）。
     pending_action: dict
-    # ledger: 本请求**注入用**的两块台账原文（{"executions": str, "pending": str}，
-    #                 server.py 由 ChatRequest 填）——gate 的台账否认判据（洞⑦）据此
-    #                 判"被否认的是不是系统事实"，命中时还把这两行如实列举进兜底回复。
+    # ledger: 本请求**注入用**的台账原文（`executions`/`pending` 两串渲染，外加
+    #                 20261020 的 `exec_rows`＝同一批行的结构，见 server._parse_exec_rows）
+    #                 ——gate 的台账否认判据（洞⑦）据此判"被否认的是不是系统事实"，
+    #                 命中时还把这两行如实列举进兜底回复。
+    #                 `exec_rows` 只喂文档锚点（`_doc_anchors`），不进任何提示词。
     #                 **必须显式声明**（理由同 fallback_text：未声明的 key 会被
     #                 LangGraph 静默丢出 updates 流，判据恒收到 None ⇒ 静默失效）。
     #                 与 pending_action（execute 写的**结构化提议**）分工不同：
@@ -6084,7 +6086,8 @@ def _planner_preflight(state: AgentState, config: RunnableConfig | None = None) 
 
     page_ctx = _page_ctx(_turn(state), role)
     has_frames = _has_frames(_turn(state))
-    doc_anchors = _doc_anchors(state["messages"])
+    doc_anchors = _doc_anchors(state["messages"],   # 跨轮读取走结构（与本轮注入同源）
+                               exec_rows=(state.get("ledger") or {}).get("exec_rows"))
     # 实验读数（20261015，见 agent/_ckpt_probe.py）：`msgs` 是本轮 planner 看到的
     # 消息条数（线程复用后会带上历史），`has_frames` 决定首轮五条确定性快道开不开
     # ——上一轮的 ToolMessage 会让它恒 True。未设 `CHECKPOINT_PROBE_OUT` 时是空操作。

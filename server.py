@@ -135,6 +135,10 @@ MAX_CONFIRM_TOKEN_CHARS = 4000
 # 不进 prompt。Rust 侧从本会话最近 8 条回执去重后给出，上限取 40 是给"旧 Rust 忘了
 # 去重"留余量——超出即截断，最坏结果是那一条结构化判据落空、退回散文判据（fail-open）。
 MAX_RECENT_TOOLS = 40
+# 跨轮执行记忆的**结构那份**（20261020）：与 Rust `chat.rs::EXEC_ROWS_MAX_CHARS` **同值**。
+# 它由 Rust 按预算裁过再发，这里的 max_length 只是防线：**多一个字符就是每轮 422**，
+# 所以两边不许各填一个数——改这里必须同步改那边（`tests/test_exec_rows_anchors.py` 锁着）。
+EXEC_ROWS_MAX_CHARS = 8000
 MAX_CONCURRENT_STREAMS = int(os.environ.get("AGENT_MAX_CONCURRENT", "8"))
 STREAM_QUEUE_WAIT = 3.0         # 秒；排队超过这个时间就如实 503，不让请求无声堆着
 
@@ -249,6 +253,14 @@ class ChatRequest(BaseModel):
     #   · 旧 Rust 端没有这个字段 ⇒ `[]` ⇒ 第三条触发器不成立 ⇒ 那一轮少摆一次台账
     #     （少摆就不读，方向安全：模型手里的信息少一点，不会凭空多出一次写）。
     recent_tools: list[str] = Field(default_factory=list, max_length=MAX_RECENT_TOOLS)
+    # 跨轮执行记忆的**结构那份**（20261020）：`[{at,n,payload}]` 数组串，与上面
+    # `executions` 同一批行、同一顺序。那是给人（模型）看的渲染，这是给**判据**用的
+    # 结构（`prompt_context._doc_anchors` 取 tool/args/title 造锚点，不再对渲染文本
+    # 跑正则——`search_notes` 与「读取留言/说说/公告」两格已经因措辞演进静默断过）。
+    # · 空串 = 本会话没有执行记录；解不出来 ⇒ `None`（"读不到" ≠ "没有"）。
+    # · `payload` 为 null（20260927 之前的存量行）⇒ 不进锚点，不留第二条抠文本的路。
+    # · 上限与 Rust `EXEC_ROWS_MAX_CHARS` 同值：那边按预算裁过，超了就是每轮 422。
+    execution_rows: str = Field(default="", max_length=EXEC_ROWS_MAX_CHARS)
 
     # ── 对话额度（20260929，跨语言契约 C1/C3）──────────────────────────
     # chat_quota：访客的终身额度现状（C1）。**读不到时整个键缺席**（Rust 侧 DB 故障
@@ -646,15 +658,62 @@ def _ledger_block(req: ChatRequest, confirmed: bool = False) -> str:
             + (req.pending_action.strip()[:800] or "（本会话暂无记录）"))
 
 
+def _parse_exec_rows(raw: str) -> list | None:
+    """`execution_rows` → 行列表；**解不出来返回 `None`**（"读不到" ≠ "这一轮没有记录"）。
+
+    形状判得很死（`list[dict]`）：它是 Rust 拼的 wire 结构，形状不对只说明两侧契约
+    漂了——那时锚点照旧为空，但 `_ledger_for_graph` 会为它记一条 WARNING，不让
+    "这一轮的锚点突然空了"无声发生。
+    """
+    s = (raw or "").strip()
+    if not s:
+        return []
+    try:
+        rows = json.loads(s)
+    except (TypeError, ValueError):
+        return None
+    if not isinstance(rows, list) or not all(isinstance(r, dict) for r in rows):
+        return None
+    return rows
+
+
+# "`executions` 非空、结构那份读不到"的发声闸（每个进程只报一次，同 `_WARNED_*` 口径）。
+_WARNED_EXEC_ROWS = False
+
+
+def _warn_exec_rows(raw: str, exec_text: str) -> None:
+    """`executions` 非空而结构那份读不到 ⇒ **每个进程只报一次**。
+
+    两种情形都落这里、都必须看得见：旧 Rust 还没发这个键（部署顺序反了/灰度中）、
+    或发了但拼的不是合法 JSON（两侧契约漂了）。"两个都空"**不在**这里——那是
+    "本会话没有执行记录"，确定的事实，不是故障（同 `chat_quota` 的"缺席 ≠ 零值"）。
+    """
+    global _WARNED_EXEC_ROWS
+    if _WARNED_EXEC_ROWS or not (exec_text or "").strip():
+        return
+    _WARNED_EXEC_ROWS = True
+    logger.warning("[ledger] execution_rows 缺席或不可解析（%d 字节）而 executions 非空 ⇒ "
+                   "本轮文档锚点不含跨轮读取行（Rust 那一侧还没上？见 chat.rs::exec_rows_json）",
+                   len(raw or ""))
+
+
 def _ledger_for_graph(req: ChatRequest, confirmed: bool = False) -> dict:
     """给图内判据（洞⑦ 台账否认）的台账事实——**与 `_ledger_block` 注入的同源**。
 
     判据要看的就是"系统给模型看过什么"：注入说待办还没办，判据就得认这一半非空；
     注入改写成了"正在执行"（confirmed），判据就不能再把否认当假话（那时候说
     "系统里已经没有待确认的了"是真话）。两个来源各算各的必然对不上。
+
+    `exec_rows`（20261020）不是给洞⑦ 的：它是同一批行的**结构**，只喂文档锚点
+    （`prompt_context._doc_anchors`）。放在同一本账里，因为它就是"这一轮给模型看过
+    的那批执行记录"的另一半——两个来源分开取必然对不上。
     """
+    exec_rows = _parse_exec_rows(req.execution_rows)
+    if exec_rows is None or (not req.execution_rows.strip() and req.executions.strip()):
+        _warn_exec_rows(req.execution_rows, req.executions)
     return {"executions": req.executions.strip(),
-            "pending": "" if confirmed else req.pending_action.strip()}
+            "pending": "" if confirmed else req.pending_action.strip(),
+            "exec_rows": exec_rows}
 
 
 def _ctx_field(s, limit: int = 500) -> str:
