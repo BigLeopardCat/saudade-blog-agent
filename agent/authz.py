@@ -32,6 +32,7 @@ from typing import NamedTuple
 
 from agent.principal import (KNOWN_ROLES, ROLE_ADMIN,
                             ROLE_SUPERADMIN, ROLE_USER, ROLE_ZAKO, Principal)
+from tools.result import error_frame
 
 # ── scope 词汇表 ─────────────────────────────────────────────────────
 # 命名 = <动作>.<对象>。对象轴现在只有「谁的」这一维（public / own），
@@ -1138,19 +1139,18 @@ def action_conflict_frame(tool: str, sibling: str | None = None) -> str:
     又会漂——`eval/wordlist_gate.py` 正是为"判据层不许长新词表"立的闸）。
     """
     sibling = sibling or ""
-    return (f"__ERROR__: 与主人这句话要的动作相反[{REASON_ACTION_CONFLICT}]"
+    return error_frame(f"__ERROR__: 与主人这句话要的动作相反[{REASON_ACTION_CONFLICT}]"
             f"（主人这句明确要的是「{sibling}」，而你排的是「{tool}」"
             f"——两件事相反。下一轮按主人说的那件重新规划；"
-            f"**办不成也如实告诉他没办成**，不要拿相反的那一件来充数）")
+            f"**办不成也如实告诉他没办成**，不要拿相反的那一件来充数）", REASON_ACTION_CONFLICT)
 
 
 _OWN_ACTION_ERR_RE = re.compile(rf"\[{REASON_ACTION_CONFLICT}\]")
 
 
 def action_conflict_error_reason(text: str) -> str | None:
-    """从错误帧取回原因码（非本族帧 → None），供 `_check_spec` 用。"""
-    return (REASON_ACTION_CONFLICT
-            if _OWN_ACTION_ERR_RE.search(str(text or "")) else None)
+    """从错误帧取回原因码（非本族帧 → None），供 `_check_spec` 用（**回落支**，批 G4）。"""
+    return REASON_ACTION_CONFLICT if _OWN_ACTION_ERR_RE.search(str(text or "")) else None
 
 
 # ── 「在问我自己那份数据」的问句判据（20261003）─────────────────────────────
@@ -1466,8 +1466,9 @@ def denial_frame(decision: Decision, principal: Principal | None) -> str:
     """拒绝时的 __ERROR__ 帧文本。形态与参数引用失败同族，带原因码——
     planner 据此如实告知（不是"系统故障"，是"你的身份不允许"）。"""
     who = f"uid={principal.uid} role={(principal.role if principal else None) or '未知'}"
-    return (f"__ERROR__: 权限不足[{decision.reason}] —— {who} 无权调用 {decision.tool}"
-            f"（需要 {decision.scope}，身份声明不含它；不要换工具绕，如实告知用户）")
+    return error_frame(f"__ERROR__: 权限不足[{decision.reason}] —— {who} 无权调用 {decision.tool}"
+            f"（需要 {decision.scope}，身份声明不含它；不要换工具绕，如实告知用户）",
+            decision.reason)
 
 
 _SCOPE_ERR_RE = re.compile(r"权限不足\[([a-z_]+)\]")
@@ -1477,8 +1478,7 @@ def scope_error_reason(text: str) -> str | None:
     """从 __ERROR__ 帧文本里取回权限拒绝的原因码（execute 产帧 → checker 判 reason）。
 
     与 refs.ref_error_reason 同形（帧格式：`__ERROR__: 权限不足[<原因码>] —— …`），
-    让拒绝在受阻链路里带上可判读的原因，而不是笼统的 error_frame。
-    """
+    让拒绝在受阻链路里带上可判读的原因，而不是笼统的 error_frame。**回落支**（批 G4）。"""
     m = _SCOPE_ERR_RE.search(text or "")
     return m.group(1) if m else None
 
@@ -1682,16 +1682,16 @@ def consent_frame(tool: str, principal: Principal | None) -> str:
     scope = required_scope(tool) or ""
     why, ask = _CONSENT_WHY_TOOL.get(tool) or _CONSENT_WHY.get(
         scope, ("会改动站点上的数据", "请先向用户确认这一次要不要做"))
-    return (f"__ERROR__: 待确认[{REASON_CONSENT}] —— {who} 请求的写操作 {tool} "
+    return error_frame(f"__ERROR__: 待确认[{REASON_CONSENT}] —— {who} 请求的写操作 {tool} "
             f"{why}，而**用户本轮消息里没有明确确认**。"
-            f"本轮未执行、也不得声称已完成：{ask}。")
+            f"本轮未执行、也不得声称已完成：{ask}。", REASON_CONSENT)
 
 
 _CONSENT_ERR_RE = re.compile(r"待确认\[([a-z_]+)\]")
 
 
 def consent_error_reason(text: str) -> str | None:
-    """从 __ERROR__ 帧文本里取回确认拒绝的原因码（checker 判 reason 用）。"""
+    """从 __ERROR__ 帧文本里取回确认拒绝的原因码（checker 判 reason 用，**回落支**）。"""
     m = _CONSENT_ERR_RE.search(text or "")
     return m.group(1) if m else None
 

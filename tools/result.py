@@ -31,7 +31,7 @@
 # `__all__` = 本模块**所有不以 `_` 开头**的模块级名字（社区惯例，不留例外；
 # `tests/test_module_exports.py` 按这条规则机械判着，漂了就红）。
 __all__ = ["ToolResult", "ok", "empty", "unavailable", "not_found", "invalid_args", "TGT_KINDS",
-           "tgt", "fact", "is_noop", "UPSTREAM_DOWN"]
+           "tgt", "fact", "is_noop", "UPSTREAM_DOWN", "error_frame"]
 
 # ── 工具返回值的结构化"两类"（20260916 加固）──
 # 背景：工具失败时返回的是**人话字符串**，与正常内容同型；`_get` 更是把所有上游故障
@@ -216,6 +216,26 @@ def is_noop(meta) -> bool:
     if isinstance(ch, bool):
         return not ch
     return bool(meta.get("noop"))
+
+
+def error_frame(text: str, reason: str) -> ToolResult:
+    """`__ERROR__` 帧 + 它的**原因码**（20261019 批 G4）。
+
+    帧文本本来就是**渲染**：原因码此前只长在它中间那对方括号里（`权限不足[scope_denied]`），
+    于是唯一的读端 `graph._check_spec` 只能拿七个 `*_error_reason` 正则/子串把它抠回来
+    ——**改一句措辞就静默退化成笼统的 `error_frame`**，而 planner 的应对（改参数？去问主人？
+    如实告知？）正是按这个码分叉的。生产方手上本来就有那个常量，这里只是给它一格。
+
+    ⚠️ **kind 仍是 `ok`，不新增 kind**：`_check_spec` 是一条显式 if 链，新 kind 漏接分支
+    会 fallthrough 到"文本非空 ⇒ PASS" ⇒ 产回执 ⇒ 进 execution_log ⇒ 下一轮把一次
+    **被拒绝的**写当成已完成的事实（见 `agent/adminops_target.py` 里 policy_frame 的长注：
+    那是本族最不能出的错，而且完全静默）。`__ERROR__` 文本逐字节不变 ⇒ 线格式、Rust 的
+    前缀分类、gate 分支 5a（错误帧 + 完成式声称）全都不动。
+
+    ⚠️ **已经是 `ToolResult` 的别再套一层**：`ToolResult(x)` 会新建一个对象、把 `meta`
+    丢掉（它不像 `_shape` 那样有身份透传）。调用方拿到本函数的返回值应当**直接返回**。
+    """
+    return ToolResult(text, "ok", {"reason": reason})
 
 
 # 上游故障哨兵：`_get` 失败时返回它而不是 `[]`（"故障伪装成空"的源头就在那）。

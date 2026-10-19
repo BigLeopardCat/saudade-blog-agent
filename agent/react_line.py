@@ -409,6 +409,7 @@ class WorkflowExecutor:
                 text = text or f"__ERROR__: 工具 {name} 不在本轮可执行清单里"
             elif not decision.allowed and authz.enforcing(decision.scope):
                 text = authz.denial_frame(decision, self.principal)
+                meta = getattr(text, "meta", None) or {}   # 原因码住在这一格（批 G4）
                 logger.info("[react_line] 权限拒绝，不执行: %s → %s", name, decision)
             else:
                 try:

@@ -39,6 +39,8 @@ import ast
 import json
 import re
 
+from tools.result import ToolResult, error_frame
+
 # 引用字面量：$tool[0] 或 $tool[0].path.to.field（字段名允许点分嵌套）
 REF_RE = re.compile(r"^\$([a-z_][a-z0-9_]*)\[(\d+)\](?:\.([A-Za-z0-9_.]+))?$")
 
@@ -333,6 +335,26 @@ def ref_error_reason(text: str) -> str | None:
     """从 __ERROR__ 帧文本里取回引用失败原因码（execute 产帧 → checker 判 reason）。
 
     帧格式：`__ERROR__: 参数引用无法解析[<原因码>:<引用原文>]`；非引用失败返回 None。
+
+    **批 G4**：这只是**回落支**。生产那一路由 `ref_error_frame` 把原因码放进
+    `meta["reason"]`，`_check_spec` 先读它——这里留着是给"只有文本"的输入
+    （trace 回放、测试直接喂帧串），与 `_note_total` 的回落支同一条理由。
     """
     m = re.search(r"参数引用无法解析\[([a-z_]+):", text or "")
     return m.group(1) if m else None
+
+
+def ref_error_frame(reason: str) -> ToolResult:
+    """参数引用失败的错误帧（**带原因码**，批 G4）。
+
+    帧文本从 `graph.execute_node` 搬到这里，与它的读端 `ref_error_reason` 同住一格
+    ——那两半是一条契约的两头，分开写就会各自漂（这正是本批要收的那一族）。
+
+    `reason` 是 `"<原因码>:<引用原文>"`（见 `resolve_args`），所以**两格取的不是
+    同一段**：帧文里带全（planner 要照着那串引用去改参数），`meta["reason"]` 只放
+    冒号前的原因码（`_check_spec` 拿它当 blocked 的码，`server._REASON_CN` 按它取
+    中文；把 `:ref` 一起塞进去会得到一个查不到中文的码）。
+    """
+    return error_frame(
+        f"__ERROR__: 参数引用无法解析[{reason}]（上一步返回里没有这个值——改参数或换个工具）",
+        reason.split(":", 1)[0])

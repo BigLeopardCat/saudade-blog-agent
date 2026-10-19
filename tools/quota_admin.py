@@ -147,12 +147,12 @@ def _admin_quota_post(path: str, payload: dict, config: RunnableConfig):
                 return not_found(msg or "后台账号列表里没有这个账号")
         for phrase in _QUOTA_POLICY_REFUSALS:
             if phrase in msg:
-                # ⚠️ 必须包成 `ToolResult`（`policy_frame` 返回的是普通 str）：调用方的
-                # 失败判据是 `isinstance(data, ToolResult)`，裸传会被当成"成功返回的
-                # data"接着往下走写后复核，最后报成「已受理…未确认生效」——一句假话
-                # （这条请求根本没改任何东西，它是被状态判据挡下的）。同
-                # `_policy_post` 里那段一模一样的警告。
-                return ToolResult(_target.policy_frame(msg))
+                # ⚠️ `policy_frame` 的返回值**直接返回，不许再套一层 `ToolResult(...)`**：
+                # 调用方的失败判据是 `isinstance(data, ToolResult)`，裸字符串会被当成
+                # "成功返回的 data"接着往下走写后复核，最后报成「已受理…未确认生效」
+                # ——一句假话（这条请求根本没改任何东西，它是被状态判据挡下的）。而多套
+                # 一层会把它的 `meta["reason"]` 丢掉（同 `_policy_post` 那段警告）。
+                return _target.policy_frame(msg)
         return unavailable(f"后台拒绝了这次额度操作（{msg or '没有给出原因'}）"
                            f"{_base._NO_SUCCESS_TAIL}")
     return body.get("data")
@@ -310,7 +310,7 @@ def _review_quota_request(user_id, approved: bool, reason, config: RunnableConfi
         # `没有找到这条额度申请`）。这里刻意另说一句更准的——"他没申请过"比"没找到
         # 这条申请"对主人有用得多，而分类只认我方的 policy_frame（早退不经网络，
         # 不存在"后端改字认不出"的问题）。**别把这两句写成同一句**：它们来源不同。
-        return ToolResult(_target.policy_frame("该账号没有待处理的额度申请"))
+        return _target.policy_frame("该账号没有待处理的额度申请")
     try:
         rid = int(entry.get("id"))
     except (TypeError, ValueError):
