@@ -16,8 +16,8 @@
     "top_defs": 1
   },
   "agent/react_arm.py": {
-    "lines": 1753,
-    "top_defs": 48
+    "lines": 1801,
+    "top_defs": 49
   },
   "agent/tasks.py": {
     "lines": 1658,
@@ -36,7 +36,7 @@
     "top_defs": 36
   },
   "eval/run_golden.py": {
-    "lines": 3686,
+    "lines": 3697,
     "top_defs": 51
   },
   "scripts/build_word_graph.py": {

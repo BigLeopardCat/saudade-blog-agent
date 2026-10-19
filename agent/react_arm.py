@@ -175,7 +175,7 @@ from agent.graph import (AgentCancelled, AgentState, NARRATOR_DISCIPLINE, _NARRA
                          _principal_of, _render_planner_prompt, _stopped,
                          gate_node as _prod_gate_node, graph_input, plan_state)
 from agent.llm_usage import usage_fields
-from agent.planner_llm import build_tool_schema
+from agent.planner_llm import build_tool_schema, finish_reason, tool_call_names
 from agent.prompt_context import (_frame_texts, _has_frames,
                            _last_assistant_utterance, _last_user_msg, _msg_text,
                            _page_ctx, _prev_user_msg, with_tool_call_pairs)
@@ -648,6 +648,12 @@ def _planner_decide(state: AgentState, config: RunnableConfig | None,
     #    narrator。**不写计划**：与旧臂的 `last_plan` 同义——state 里留着上一轮那份计划，
     #    narrator 与闸门读到的就是"最近一次真计划"（`_norm_state` 再归一，空则补 chat）。
     if not (getattr(resp, "tool_calls", None) or []):
+        # 零工具轮**也要记一条决策事件**（20261020）：生产的 `_decide_llm` 在这条路上
+        # 照记（`workflow="chat"`、`calls=""`），所以生产的 `native_decision` 条数 =
+        # **全部**规划轮数。本臂只在有调用时才记的话，两臂的 `native_decision` 分母就
+        # 不是同一件事——而"填意图清单的频率"这个比值正是拿它当分母算的。
+        _record_decision(task_decision(None, (), "chat",
+                                       finish_reason=finish_reason(resp)), rounds)
         ctx["decided"] = "model"
         return {}
 
@@ -677,6 +683,14 @@ def _planner_decide(state: AgentState, config: RunnableConfig | None,
     _rest, _decided, _early = _task_calls(resp, ctx, rounds, _frames)
     if _early is not None:
         return _early
+    # 决策落 trace（生产 `_decide_llm` 的同名事件，见 `_record_decision`）。
+    #
+    # ⚠️ **与生产的一处顺序差，如实记在这里**：生产那条排在 `task_auto` **之后**
+    # （`_decide_llm` 里先跑 `_auto_task_frames`、再记 `native_decision`），本臂的
+    # 自动登记住在 `_register_stage` 里、排在下面 ⇒ 读事件序时两臂是**反的**。
+    # 载荷与判据一个字都没差，只是这两条事件的先后；按序读 trace 的对账脚本要照这
+    # 一条放宽（不按顺序、按 `round` 配对）。
+    _record_decision(_decided, rounds)
     _plan = _plan_of(_rest, ctx.get("role")) if _rest else _chat_plan(ctx.get("role"))
     _plan, _early = _register_stage(state, config, ctx, sink, _decided, _plan,
                                     rounds, _frames)
@@ -779,7 +793,41 @@ def _task_calls(resp, ctx: dict, rounds: int,
     # `workflow` 取**第一条真调用**的技能名（生产 `PlannerDecision.workflow` 就是
     # `calls[0].name`）；纯伪函数轮没有真调用 ⇒ `chat`（生产那条 `if not calls:` 出口同款）。
     head = str((rest[0] or {}).get("name") or "") if rest else "chat"
-    return rest, task_decision(declare, intents, head), None
+    # `raw_calls` 取**拆分之前**的整份清单（生产的 `raw_tool_calls` 同款，见 `task_decision`）
+    # ——`rest` 已经把伪函数与注入参数摘掉了，拿它当 `calls` 会少记那几个名字。
+    return rest, task_decision(declare, intents, head,
+                               raw_calls=list(getattr(resp, "tool_calls", None) or ()),
+                               finish_reason=finish_reason(resp)), None
+
+
+def _record_decision(decided, rounds: int) -> None:
+    """一轮决策落 trace——生产 `_decide_llm` 那条 `planner.native_decision` 的同名同格。
+
+    **为什么非记不可**（20261020，资产对齐 J）：本臂此前**一条决策事件都不记**，于是
+    读 trace 的人分不出"这一轮模型点了什么"，`decided.intents` 有几条更是无从查起。
+    具名的代价：20261020 查 `task_auto` 残差（graph 64 条 vs react 15 条）时，两臂的
+    规划轮数与每轮意图条数**都读不出来**，只能拿"两臂恰好都记的那几条事件"当代理，
+    绕了一大圈才把"这是读数差不是行为差"这个结论钉住。轮数那一半后来由 `planner.llm_done`
+    补上了（327af3e），**意图条数这一半只有这里能给**。
+
+    **多一格 `intents`**（生产那条没有）：生产的信息量由 `task_auto` 的 `listed` 补，
+    而 `task_auto` **只在清单非空时才记** ⇒ "模型没填这一格"在生产的 trace 里是
+    **缺席**，与"这一格不存在"分不开（缺席 ≠ 0，见 `agent/llm_usage.py` 的字段契约）。
+    条数写在这里（`0` 是显式的一格）才回答得了"两臂填清单的频率差多少"。
+
+    四个解码旋钮与生产**同源**（都读 `settings`，与 `get_llm` 的实际入参同源）：调参
+    实验要能回答"这份 trace 是哪一组旋钮跑出来的"，而缺了它们就只能靠跑的人记得。
+
+    **两个产地、一份载荷**（零工具轮那一支见 `_planner_decide` ⑤）：生产也是同一条
+    事件覆盖两种形状（`calls=""` / `calls="content_query"`），所以形状必须只有一处可改。
+    """
+    record("planner", "native_decision", workflow=decided.workflow, round=rounds,
+           calls=tool_call_names(decided), finish=decided.finish_reason,
+           intents=len(decided.intents or ()),
+           provider=settings.llm_provider,
+           model=str(getattr(settings, "active_llm_model", "") or ""),
+           temp=settings.planner_temperature, seed=settings.llm_seed,
+           thinking=bool(settings.planner_native_thinking))
 
 
 def _register_stage(state, config, ctx: dict, sink: list, decided, plan_obj: dict,
