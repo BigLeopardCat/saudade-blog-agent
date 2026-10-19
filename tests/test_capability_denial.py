@@ -171,7 +171,11 @@ check("  `content_query` 走显式表（它的 plan 里没有写工具可借）"
 # ══════════════════════════════════════════════════════════════════
 print("\n④b 给予义谓词槽（20261003 放宽）：两副形状**都要**接，不许只补一半")
 
-_DENIED_SRC = (ROOT / "agent" / "graph.py").read_text(encoding="utf-8")
+# 20261020 判据族搬家（agent/graph.py → agent/claims.py）：取值点换成拼接视图，
+# 判据字面一字不动（同 plan_codec / write_grounding 两刀的口径，见 tests/_ctx_src.py）。
+# 顺序：claims（本体）在前、graph（调用方）在后。
+_DENIED_SRC = "\n".join(p.read_text(encoding="utf-8") for p in (
+    ROOT / "agent" / "claims.py", ROOT / "agent" / "graph.py"))
 _AT = _DENIED_SRC.index("def _capability_denied(")
 _SHAPES = _DENIED_SRC[_AT:_DENIED_SRC.index("\ndef ", _AT + 10)]
 check("新槽定义在场，且是**可选**的（不给也接老形状）",
@@ -243,7 +247,7 @@ check("  `_ClaimFamily` 真的加了这一格、且循环里真的按它换文�
 # ══════════════════════════════════════════════════════════════════
 print("\n⑤ 接线锁：族在表里、排在洞④ 之前、role 真的传下来了、且挂号重规划")
 
-_SRC = (ROOT / "agent" / "graph.py").read_text(encoding="utf-8")
+_SRC = _DENIED_SRC
 
 
 def _fn_src(name: str) -> str:
