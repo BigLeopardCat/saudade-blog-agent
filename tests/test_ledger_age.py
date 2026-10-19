@@ -92,7 +92,7 @@ def test_edge_cases():
 def test_raw_ledger_stays_raw():
     print("[注入边界] 只有注入块带年龄，gate 判据读的原文不带")
     req = types.SimpleNamespace(executions="09-25 00:42 查看服务器状态 — CPU 30.0%／负载 0.45",
-                                pending_action="")
+                                pending_action="", execution_rows="")
     raw = server._ledger_for_graph(req)
     check("_ledger_for_graph 是原文（洞⑦ 台账否认判据按子串核对，不许被标记污染）",
           "（" not in raw["executions"] and raw["executions"].startswith("09-25 00:42 查看服务器状态"),

@@ -312,14 +312,15 @@ check("留言详情帧走出口改名：`talkId` 在、上游的 `talkKey` 不�
       "'talkId': 100" in _board_frame and "talkKey" not in _board_frame,
       _board_frame[:80])
 
-# ⑥c 换措辞的**第二重收益**：文章指代锚点只认「读取文章 N《标题》」行，而留言读取
-# 行从今天起不再冒充它（此前若那条留言恰好在公开列表里、标题又非空，就会被当成本
-# 会话已点名的**文章** anchor）。判据钉在正反两侧。
-from agent.prompt_context import _DOC_READ_ROW_RE as _DRR  # noqa: E402
-check("跨轮执行记忆里，文章读取行仍被认成文档锚点",
-      bool(_DRR.search("09-20 21:03 读取文章 19《Saudade Blog AI Agent（泠月喵）架构文档》")))
-check("  留言读取行**不再**冒充文章锚点（换措辞顺带堵掉的旧耦合）",
-      not _DRR.search("09-28 03:23 读取留言 100") and not _DRR.search("09-28 03:23 读取说说 88"))
+# ⑥c 换措辞的**第二重收益**：文章指代锚点现在只认结构（`exec_rows` 里
+# `doc_type ∈ {None, note}` 的读取回执），留言读取**结构上**就进不去（id 命名空间不同）。
+from agent.prompt_context import _doc_anchors as _DA  # noqa: E402
+_row = lambda dt: [{"at": "09-28 03:23", "n": 1, "payload": {  # noqa: E731
+    "tool": "get_article_detail", "args": {"article_id": "100", "doc_type": dt}, "title": "T"}}]
+check("文章读取回执 ⇒ 进文档锚点", "noteId=100" in _DA([], exec_rows=_row("note")))
+check("  留言/说说读取回执 ⇒ **不进**文章锚点",
+      "noteId" not in _DA([], exec_rows=_row("board"))
+      and "noteId" not in _DA([], exec_rows=_row("talk")))
 
 # ⑥d Rust 侧是同一个散文契约的另一半（父仓独立 checkout 时跳过，同 test_user_notice
 # 的做法）：`render_exec_row` 必须按 doc_type 分名词，否则线上落库的台账又会是"读取文章"。
