@@ -676,13 +676,44 @@ def _candidate_detail_plan(messages: list, executed: list, terms: set[str]) -> d
     return plan_obj
 
 
-def _doc_title(raw: str) -> str:
-    """从详情工具返回（Python repr 的 dict）里取标题——跨轮执行记忆的指代锚点。
+# 标题进回执前的封顶。**截了就带 `…`**——静默砍到 N 字与"本来就这么长"在回执里
+# 长得一样，而这条值下一轮要拿来核对指代（见 `_doc_title`）。
+_DOC_TITLE_MAX = 80
+
+
+def _doc_title(payload) -> str:
+    """详情工具返回的标题——跨轮执行记忆的指代锚点。
 
     20260912：execution_log 行此前只记"读取文章 19"，下轮用户说"那篇讲架构的"
     无从核对（id 无语义）；回执带标题后 render 侧可展示《标题》，跨轮指代与
     核对才有依据。
+
+    **批 G3：先吃结构，不再对着 repr 跑正则。** `payload` 可以是 `ToolResult`
+    （读它那一格 `.data`）、已解析的 dict/list，或一串文本（trace 回放、测试直接
+    喂 repr 串——只有文本的输入不是病，同 `entity_digest._note_total` 的回落支）。
+
+    为什么必须换：旧路是 `str(out)` + 一条正则，实测在三种**真标题**上给错值——
+
+      · `He said "hi"` ⇒ `He said `（在引号处截断，这不是"短了点"而是**另一个值**）
+      · `It's a test`  ⇒ `It`
+      · 120 字的标题   ⇒ 静默砍到 80，且回执上看不出被砍过
+
+    这个值进 `rcpt["title"]` → 落 execution_log → Rust `render_exec_row` 渲染成
+    《…》给下一轮当指代锚点 ⇒ **拿一个错的锚点去核对指代，比没有锚点更坏**。
     """
+    obj = getattr(payload, "data", None)
+    if obj is not None:
+        payload = obj
+    if isinstance(payload, dict):
+        title = payload.get("noteTitle")
+    elif isinstance(payload, list):
+        title = next((r.get("noteTitle") for r in payload
+                      if isinstance(r, dict) and r.get("noteTitle")), "")
+    else:
+        title = ""
+    if isinstance(title, str) and title:
+        return title if len(title) <= _DOC_TITLE_MAX else title[:_DOC_TITLE_MAX] + "…"
+    raw = payload if isinstance(payload, str) else ""
     m = re.search(r"['\"]noteTitle['\"]\s*:\s*['\"]([^'\"]{1,80})", raw)
     return m.group(1) if m else ""
 

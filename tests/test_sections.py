@@ -41,7 +41,7 @@ from agent.deterministic_plan import _doc_title           # noqa: E402
 from agent.arg_refs import parse_data                 # noqa: E402
 from langchain_core.messages import ToolMessage  # noqa: E402
 from rag.search import chunk_note                # noqa: E402
-from tools.base import _read_section             # noqa: E402
+from tools.base import _read_section, _shape     # noqa: E402
 
 FAILS: list[str] = []
 
@@ -364,6 +364,46 @@ d = ast.literal_eval(str(miss))
 check("取不到小节 → 不返回空，列出候选（可行动）",
       d["availableSections"] == SEC_NAMES and d["sectionText"] == "")
 check("取不到时也保留 noteTitle（_doc_title 不炸）", _doc_title(str(miss)) == TITLE)
+check("取不到时也保留 noteTitle（结构那一路）", _doc_title(miss) == TITLE)
+# ── ⑥c 回执标题吃结构（20261019 批 G3）──────────────────────────────────────
+# 旧路 = `str(out)` 上跑一条正则。它在**真标题**上给错值，而这条值进 `rcpt["title"]`
+# → 落 execution_log → Rust `render_exec_row` 渲染成《…》给下一轮当**指代锚点**。
+# 判据成对写：结构那一路对、老正则那一路**当场就是错的**（正控不红不算数）。
+_OLD_RE = re.compile(r"['\"]noteTitle['\"]\s*:\s*['\"]([^'\"]{1,80})")
+
+
+def _old_doc_title(raw: str) -> str:
+    m = _OLD_RE.search(raw)
+    return m.group(1) if m else ""
+
+
+# 前两个是**今天真出错**的（引号把正则的 `[^'"]{1,80}` 掐断）；第三个只作对照——
+# 老路在它上面本来就对，写进来是为了说明"这一族不是所有标题都错"。
+for _t in ["It's a test", 'He said "hi"']:
+    _payload = {"noteKey": 19, "noteTitle": _t, "noteContent": "正文"}
+    check(f"结构那一路给出**完整**标题：{_t!r}", _doc_title(_payload) == _t,
+          _doc_title(_payload))
+    check("  ★ 反控：老正则那一路在同一个标题上给的是**另一个值**"
+          "（证明上面那条不是白绿）", _old_doc_title(str(_payload)) != _t,
+          _old_doc_title(str(_payload)))
+_no_quote = "带「书名号」与（括号）的标题"
+check("没有引号的标题老路本来就对（这一族不是'所有标题都错'）",
+      _doc_title({"noteTitle": _no_quote}) == _old_doc_title(
+          str({"noteTitle": _no_quote})) == _no_quote)
+_long_t = "标" * 120
+check("超长标题：截到 80 且**带 `…`**（截了要说出口，不许静默砍）",
+      _doc_title({"noteTitle": _long_t}) == "标" * 80 + "…",
+      _doc_title({"noteTitle": _long_t}))
+check("  ★ 反控：老正则那一路静默砍到 80、看不出被砍过（与'本来就这么长'同形）",
+      _old_doc_title(str({"noteTitle": _long_t})) == "标" * 80)
+check("`ToolResult` 直接递进来也认（读它那一格 `.data`）",
+      _doc_title(_shape({"noteKey": 19, "noteTitle": "结构本体", "noteContent": "x"}))
+      == "结构本体")
+check("★ 回落支：**只有文本**的输入仍走老正则，结果与今天逐字相同（不是病）",
+      _doc_title(str({"noteTitle": "架构漫谈"})) == _old_doc_title(
+          str({"noteTitle": "架构漫谈"})) == "架构漫谈")
+check("没有 noteTitle 的 dict 与裸文本一样安静地给空串（不猜）",
+      _doc_title({"noteKey": 19}) == "" and _doc_title("服务暂时不可用") == "")
 check("取不到时 kind 仍是 ok（有内容可读，不是'空结果'）",
       getattr(miss, "kind", "ok") == "ok")
 amb = _read_section({"noteKey": 19, "noteTitle": TITLE, "noteContent": LONG}, 19, "机制")

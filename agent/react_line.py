@@ -220,7 +220,8 @@ class RunLedger:
 
 
 def _verdict_of(name: str, args: dict, args_ok: bool, text: str, workflow: str,
-                kind: str, meta: dict, ledger: RunLedger) -> tuple[str, str]:
+                kind: str, meta: dict, ledger: RunLedger,
+                data: object = None) -> tuple[str, str]:
     """跑生产 checker、记台账、返回 `(给模型看的那一行回执, verdict)`。"""
     verdict, reason = _check_spec(name, args, args_ok, text, workflow, kind, meta)
     receipt = {"skill": workflow, "tool": name,
@@ -244,7 +245,8 @@ def _verdict_of(name: str, args: dict, args_ok: bool, text: str, workflow: str,
         if digest:
             receipt["digest"] = digest
         if name == "get_article_detail":
-            receipt["title"] = _doc_title(text)
+            # 标题走**结构**（批 G3）：`data` 是工具返回的结构本体，没有才回落文本。
+            receipt["title"] = _doc_title(data if data is not None else text)
         ledger.receipts.append(receipt)
         return f"{RECEIPT_HEAD} {name} 已执行，结果已验收（{kind}）。", verdict
     receipt["reason"] = reason
@@ -390,7 +392,7 @@ class WorkflowExecutor:
         for spec in specs:
             name = _tool_name(spec)
             args, args_ok = _tool_args(spec)
-            text, kind, meta = "", "ok", {}
+            text, kind, meta, data = "", "ok", {}, None
             if args_ok:
                 args, ref_err = resolve_args(args, tool_data)
                 if ref_err:
@@ -413,13 +415,14 @@ class WorkflowExecutor:
                     res = fn(**args)
                     text, kind = str(res), str(getattr(res, "kind", "ok") or "ok")
                     meta = getattr(res, "meta", None) or {}
+                    data = getattr(res, "data", None)
                 except Exception as e:  # noqa: BLE001 —— 异常必须变成数据（见文件头注）
                     text = f"__ERROR__ {type(e).__name__}: {e}"
                     logger.info("[react_line] 工具 %s 抛错：%s", name, e)
             tool_data.append({"tool": name, "result": text[:2000]})
             outs.append(f"[{name}] {text}")
             line, verdict = _verdict_of(name, args, args_ok, text, workflow, kind, meta,
-                                        self.ledger)
+                                        self.ledger, data)
             outs.append(line)
             # `line`（那行"【内部回执】…"）**单独留一格**：它要跟着这一条调用走到模型
             # 窗口里去（`react_arm._expand` 按 `tool_call_id` 取），而**不能**混进
