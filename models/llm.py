@@ -44,6 +44,55 @@ def _thinking_extra(provider: str, thinking: bool) -> dict:
     return {}
 
 
+# ── 结构化输出的方言（20261019 批 G7：从 `eval/llm_judge.py` 上移）────────────
+# **方言不是通用的**（20261012 实测）：DeepSeek 对 `json_schema` 直接 400
+# `This response_format type is unavailable now`，它只认 `{"type": "json_object"}`
+# （官方 JSON Output 文档：设 response_format 为它、提示词里必须出现 json 字样**并给出
+# 目标格式的样例**、max_tokens 要给够，且它自己承认有概率返回空 content）。
+#
+# **为什么上移**：这一族此前住在 `eval/llm_judge.py`，而 `eval.*` 不能被生产引
+# （wheel 边界，`tests/test_packaging.py`）⇒ 复盘器（`agent/graph.py::reflector_node`）
+# 要用同一套方言就只能抄第二份。它与本模块的 `_thinking_extra` 是**同一个形状**：
+# 按服务商取译法 + 认不出的**出声**再按默认走。
+#
+# ⚠️ **`json_object` 那一档的字段契约必须同时写进提示词**（两边的调用方都照办了）：
+# 那一档下 schema 只是装饰（服务商不校验），"契约只长在 schema 里"的后果不是"判得松
+# 一点"，是**整份输出作废**——模型回一个字段齐缺的对象，下游按"没解析出来"静默走兜底，
+# 而夜里汇总照旧 ALL PASS（20261012 那 181 条的形状）。
+_JSON_OBJECT_PROVIDERS = frozenset({"deepseek"})   # 只认它，见上一段 400 原文
+_JSON_SCHEMA_PROVIDERS = frozenset({"qwen", "openai"})  # json_schema + strict 的原生地
+# 上面两个集合**就是**分派表（不是给判据看的第二份拷贝）：下面按它们分派，认不出的才
+# 落进缺省支并出声。登记与分派同源 ⇒ 加服务商只改一处。
+DIALECT_PROVIDERS = _JSON_OBJECT_PROVIDERS | _JSON_SCHEMA_PROVIDERS
+_WARNED_FORMAT_PROVIDERS: set[str] = set()
+
+
+def response_format(provider: str, schema: dict, *, name: str = "result") -> dict:
+    """`(服务商, JSON schema)` → 该服务商的 `response_format` 取值。
+
+    **每一家都在 `DIALECT_PROVIDERS` 里登记过**，不写成 `if provider == "deepseek" …
+    else 默认`——那种写法的缺省支是**隐式**的，加一个服务商时"它落进 else 了"这件事没有
+    任何地方说过（同 `_thinking_extra` 少 else 的那个 bug）。认不出的服务商**出声**再按
+    默认走：静默降级的后果是"整份输出作废而没人知道"。
+
+    取值域与 `config.settings.KNOWN_LLM_PROVIDERS` 由 `tests/test_llm_provider_registry.py`
+    对锁：**加服务商却忘了登记这一族 ⇒ 离线套件红**（机械闸门，不靠人记得）。
+    """
+    key = (provider or "").strip().lower()
+    if key in _JSON_OBJECT_PROVIDERS:
+        return {"type": "json_object"}
+    if key not in DIALECT_PROVIDERS and key not in _WARNED_FORMAT_PROVIDERS:
+        _WARNED_FORMAT_PROVIDERS.add(key)
+        logger.warning(
+            "[llm] provider=%r 的结构化输出方言没登记 ⇒ 按默认 json_schema 走"
+            "（本进程只报一次）。换服务商请先探针实测它认哪种方言，再登记进 "
+            "`models/llm.py::DIALECT_PROVIDERS`——未登记就默认，正是 20261012 那 181 条"
+            "判据全废的形状。", provider)
+    # json_schema 的原生地；qwen 已在产线端点上实测**被强制**（enum/required 拦得住）
+    return {"type": "json_schema",
+            "json_schema": {"name": name, "strict": True, "schema": schema}}
+
+
 def get_llm(**kwargs) -> ChatOpenAI:
     """Create and return a configured LLM instance.
 

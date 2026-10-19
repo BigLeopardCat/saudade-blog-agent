@@ -28,6 +28,10 @@ import ast
 import json
 import logging
 import re
+from collections.abc import Callable
+
+from agent import adminops_tags as _tags
+from agent import reports as R
 
 logger = logging.getLogger(__name__)
 
@@ -117,14 +121,21 @@ _NOTE_TOTAL_RE = re.compile(r"共 (\d+) 条")
 _NOTE_RANGE_RE = re.compile(r"第 (\d+)-(\d+) 条")
 
 
-def _note_total(data) -> int:
-    """从帧尾的〔系统注记〕里读"共 N 条"（列表工具封顶时写进去的总数）。没有则 0。
+def _note_total(data, page=None) -> int:
+    """这一列表**一共多少条**：先读结构（`page["total"]`），没有才从注记里正则抠。
 
     为什么摘要要读它：`tools/base.py::_cap_rows` 按上限裁行之后，`len(rows)` 只剩
     上限条数，而摘要这条要说的恰恰是**站点里一共多少条**。不读总数就等于让系统在
     跨轮执行记忆里把 137 条说成 60 条——那是**系统自己**说假话，比模型编还坏。
-    注记是**非 dict 尾元素**（同 `_rows` 的过滤口径），所以这里显式跳过 dict 找字符串。
+
+    **批 G2**：`page` 是 `_cap_rows` 与注记**同源**的那一份（`tools/result.py::_page`），
+    经 `ToolResult.meta` 到这里。两个数本来就在手上，此前却只把它渲染成中文、再在这里
+    用正则抠回来——注记的措辞一改，摘要就把 137 条说成 60 条，**而且全程不报错**。
+    注记仍是**非 dict 尾元素**（同 `_rows` 的过滤口径），文本那一支留着是给**只有文本的
+    输入**用的（trace 回放、直接喂 repr 串的调用点），不是"结构坏了兜一下"。
     """
+    if isinstance(page, dict) and isinstance(page.get("total"), int):
+        return page["total"]
     if not isinstance(data, list):
         return 0
     for x in data:
@@ -136,14 +147,23 @@ def _note_total(data) -> int:
     return 0
 
 
-def _note_range(data) -> tuple[int, int] | None:
-    """从帧尾的〔系统注记〕里读"第 A-B 条"（取回更早那一页时的号段）。没有则 None。
+def _note_range(data, page=None) -> tuple[int, int] | None:
+    """这一页**是不是最新的那批**：`page` 说得出就按它，说不出才从注记里正则抠。
 
     为什么摘要也要读它：`offset > 0` 时手上这 60 行**不是最近的那批**（是第 61-120 条），
     而 `_entry_digest` 原来只会按 `len(rows)` 说"最近 60 条"——那会让跨轮执行记忆把
     "翻页拉回来的那一页"错说成"最新的一页"，正是本仓最不能忍的那类假话（系统自己说的，
-    比模型编还坏，同 `_note_total` 的理由）。注记里的号段是唯一能区分两者的信息。
+    比模型编还坏，同 `_note_total` 的理由）。
+
+    **批 G2**：有 `page` 时**信它**——`start > 0` 就是号段，`start == 0` 就是"最新那批、
+    没有号段"（`_page` 的缺省），不去注记里再抠一遍（结构在手上还去读渲染串，正是本批
+    要收的那一族）。`page is None` 才是"这一轮没有结构可说" ⇒ 回落正则。
     """
+    if isinstance(page, dict):
+        start, end = page.get("start"), page.get("end")
+        if isinstance(start, int) and isinstance(end, int) and start > 0:
+            return start, end
+        return None
     if not isinstance(data, list):
         return None
     for x in data:
@@ -155,7 +175,7 @@ def _note_range(data) -> tuple[int, int] | None:
     return None
 
 
-def _entry_digest(data) -> str:
+def _entry_digest(data, page=None) -> str:
     """留言板/说说：序号 + 分类 + 内容首段（序号是"第二条"能对号的关键）。
 
     **分类要看得见是分类**（20261001）：`cat`/`talkTitle` 是心情词（寄/忆/诉/愿），
@@ -173,8 +193,8 @@ def _entry_digest(data) -> str:
         if not body:
             continue
         items.append(f"{i}.〔{cat}〕「{body}」" if cat else f"{i}.「{body}」")
-    total = _note_total(data)
-    span = _note_range(data)
+    total = _note_total(data, page)
+    span = _note_range(data, page)
     # 只在本轮**真的**被裁过（总数 > 手上条数）时才改口径，否则输出与从前逐字节相同。
     if span:
         # 取回更早那一页 ⇒ 手上这批**不是**最新的，绝不能说"最近 N 条"（见 `_note_range`）。
@@ -192,7 +212,7 @@ def _entry_digest(data) -> str:
 _BOARD_STATE_WORD = {1: "通过", 0: "待审", 2: "未通过"}
 
 
-def _my_board_digest(data) -> str:
+def _my_board_digest(data, page=None) -> str:
     """我的河灯（20261008）：`talkId` + 状态 + 分类 + 内容首段。
 
     比 `_entry_digest` 多两样，两样都是这条通道**独有**的：
@@ -215,7 +235,7 @@ def _my_board_digest(data) -> str:
         head = f"{i}.talkId:{tid}" if isinstance(tid, int) else f"{i}."
         cat = _clip(r.get("cat") or r.get("talkTitle") or "", 4)
         items.append(f"{head}[{state}]" + (f"〔{cat}〕" if cat else "") + f"「{body}」")
-    total = _note_total(data)
+    total = _note_total(data, page)
     head = f"最近{len(rows)}条/共{total}条" if total > len(rows) else f"最近{len(rows)}条"
     return f"我的河灯 {head}: " + _join(items) if items else ""
 
@@ -437,12 +457,16 @@ _DIGESTERS = {
 }
 
 
-# ── 文本型摘要器（20260921，管理助手报表）────────────────────────────
+# ── 文本型摘要器（20260921，管理助手报表）—— **批 G5 起是回落支** ────────
 # 报表类工具刻意返回**渲染好的中文报表**而不是 `_shape(data)`（WHY 见
 # agent/reports.py 头注），所以它们进不了上面那族结构化摘要器（`_parse` 对纯文本
 # 返回 None）。这里退一步按**文本正则**抽几个关键数字——目的只有一个：跨轮
 # 「刚才磁盘占用多少」能零调用取值（rule 6b），**不是**复述整张报表。
 # 抽不到就返回空串（退化成"没有摘要"，与改动前一致），绝不猜。
+#
+# ⚠️ **20261019 批 G5**：这七件工具现在把结构一并交出（`ToolResult.data`），摘要
+# 走下面的 `_REPORT_DIGESTERS`；这一支只剩"手上真的只有文本"的调用方（trace 回放、
+# 测试直接喂报表串）。**别在这里加新条目**——新工具请连结构一起交（`data=`）。
 
 def _find(text: str, pattern: str) -> str | None:
     m = re.search(pattern, text or "")
@@ -636,12 +660,214 @@ _TEXT_DIGESTERS = {
 }
 
 
-def receipt_digest(tool: str, result: str) -> str:
-    """数据工具返回 → 一行实体摘要（无摘要能力/解析失败 → ""）。"""
+# ── 报表摘要器（批 G5）：读**结构**，不读我们自己渲染出来的中文 ─────────────
+# 上面那一族是**回落支**。七件报表工具（`tools/admin_read.py` 六件 + `tools/note_admin.py`
+# 的 `list_admin_notes`）与 `read_notifications` 从批 G5 起把结构一并交出
+# （`ToolResult.data`），摘要改从结构取值；留文本那一支是给"只有文本"的输入
+# （trace 回放、测试直接喂报表串）——与 `_note_total` 的回落支同一条理由。
+#
+# 为什么必须换：这一族的输入是**我们自己渲染的中文**，正则等于把已经算好的数重新
+# 猜一遍——`render_*` 改一句措辞，摘要就**静默变空**（不报错、不留痕），跨轮指代
+# 取值于是只能重跑工具。判据 `tests/test_report_digest_structure.py` 成对钉着：
+# 同一份夹具上两条路**逐字相同**，且把渲染文案整段改写之后结构那一支一个字都不变。
+#
+# ⚠️ 结构缺失/形状不符一律返回空串（由 `receipt_digest` 回落文本那一支），**不猜**
+# （同本模块头注的纪律）。
+
+
+def _report_server_status(d: dict) -> str:
+    """`get_server_status` 的结构（渲染器那几个入参本身）→ 一行摘要。"""
+    parts = []
+    cpu = d.get("cpu_pct")
+    if cpu is not None:
+        parts.append(f"CPU {cpu}%")
+    load = d.get("load")
+    if load:
+        parts.append(f"负载 {load[0]:.2f}")
+    mem = d.get("mem") or {}
+    if mem:
+        parts.append(f"内存 {mem.get('pct')}%")
+    disks = [f"{x.get('path')} {x.get('pct')}%" for x in (d.get("disks") or [])
+             if isinstance(x, dict)]
+    if disks:
+        parts.append("磁盘 " + "、".join(disks[:2]))
+    return "服务器状态: " + "／".join(parts) if parts else ""
+
+
+def _report_service_health(d: dict) -> str:
+    """`get_service_health` 的结构 → 一行摘要（读不到的服务照实标"读不到"）。
+
+    服务的"状态"取 `ActiveState`——与渲染行 `active/running，重启 …` 里正则能抠到的
+    是同一段（那个正则取到**第一个斜杠为止**）。
+    """
+    parts = []
+    states = []
+    for unit, info in (d.get("services") or []):
+        name = str(unit).removeprefix("saudade-")
+        if not info:
+            states.append(f"{name}=读不到")
+            continue
+        state = f"{info.get('ActiveState', '?')}/{info.get('SubState', '?')}"
+        states.append(f"{name}={state.split('/', 1)[0]}")
+    if states:
+        parts.append("服务 " + " ".join(states))
+    w = d.get("health") or {}
+    if w:
+        parts.append(f"心跳 WARN {w.get('warn') or 0}/FAIL {w.get('fail') or 0}")
+    t = d.get("traces") or {}
+    if t.get("readable"):
+        parts.append(f"今日 {t.get('rounds', 0)} 轮（异常 {t.get('abnormal', 0)}）")
+    return "服务健康: " + "；".join(parts) if parts else ""
+
+
+def _report_moderation(d: dict) -> str:
+    """`get_moderation_status` 的结构 → 一行摘要。
+
+    只报**人工侧三态**：`AI 拦下待审` 那一支已随渲染器一起消失（今天的报表里没有
+    那句话），照旧写就等于凭空多出一条摘要——跨轮取值要的是"系统真说过什么"。
+    """
+    rows = d.get("rows")
+    if not isinstance(rows, list) or not rows:
+        return ""
+    counts = [sum(1 for r in rows if r.get("approved") == k) for k in
+              (R.APPROVED_PENDING, R.APPROVED_OK, R.APPROVED_REJECT)]
+    return "审核: 留言 {} 条；待审 {}、通过 {}、驳回 {}".format(len(rows), *counts)
+
+
+def _report_user_stats(d: dict) -> str:
+    """`get_user_stats` 的结构 → 一行摘要（一律用服务端聚合值，不拿明细行重算）。"""
+    if not d:
+        return ""
+    return "用户数据: 用户 {} 人；会话 {}、消息 {}；近 7 天活跃 {} 人".format(
+        d.get("totalUsers", 0), d.get("totalConversations", 0),
+        d.get("totalMessages", 0), d.get("activeUsers7d", 0))
+
+
+# 三张榜：结构键 → 那一行的计数键。**顺序即摘要里的顺序**。量词不在这里再抄一份
+# （`阅读`/`点赞`/`收藏` 是渲染榜名的同一个字），取 `reports._COUNT_WORDS`。
+_METRIC_OF_BOARD = (("topViewed", "views"), ("topLiked", "likes"),
+                    ("topFavorited", "favorites"))
+
+
+def _report_note_traffic(d: dict) -> str:
+    """`get_note_stats` 的结构 → 一行摘要（合计 + 三张榜的榜首）。
+
+    榜首那一格的数从**这一张榜自己的计数键**取，不是从行文本里找词——渲染出来的行
+    同时带着三个数，按词找会张冠李戴（`_note_traffic_digest` 的注释记着首版就踩过）。
+    """
+    words = dict(R._COUNT_WORDS)
+    parts = []
+    views = R._count_int(d.get("totalViews"))
+    likes = R._count_int(d.get("totalLikes"))
+    if views is not None:
+        parts.append(f"阅读合计 {views}" + (f"、点赞 {likes}" if likes is not None else ""))
+    for key, metric in _METRIC_OF_BOARD:
+        rows = d.get(key)
+        if not isinstance(rows, list) or not rows:
+            continue
+        row = rows[0] if isinstance(rows[0], dict) else {}
+        title = R.sanitize_untrusted(str(row.get("title") or ""), 40) or "（无标题）"
+        n = R._count_int(row.get(metric))
+        parts.append(f"{words[metric]}榜首《{title}》" + ("" if n is None else str(n)))
+    return "文章流量: " + "；".join(parts) if parts else ""
+
+
+def _report_admin_notes(d: dict) -> str:
+    """`list_admin_notes` 的结构 → 一行摘要（四支措辞见 `_ADMIN_NOTES_HEAD_RE` 的注）。
+
+    状态分布只在**没被截断**（行数就是总数）且**每一行都认得出状态**时才报：截断时
+    那一分布只覆盖前 `limit` 条，报出来就是拿局部冒充全量。
+    """
+    notes = d.get("notes")
+    if not isinstance(notes, list):
+        return ""
+    n = len(notes)
+    kw = str(d.get("keyword") or "").strip()
+    cat = str(d.get("category") or "").strip()
+    if kw:
+        where = f"分类「{cat}」，按「{kw}」筛" if cat else f"按「{kw}」筛"
+        out = f"后台文章列表（{where}） — 匹配 {n} 篇"
+    elif cat:
+        out = f"后台文章列表（分类「{cat}」） — 该分类下 {n} 篇"
+    else:
+        out = f"后台文章列表 — 共 {n} 篇"
+    limit = d.get("limit")
+    if not isinstance(limit, int) or isinstance(limit, bool):
+        limit = _tags.ADMIN_NOTES_LIMIT
+    if n <= limit:
+        rows = [x for x in notes if isinstance(x, dict)]
+        cns = [_tags.status_cn(x.get("status")) for x in rows]
+        words = list(_tags.STATUS_CN.values())
+        if len(rows) == n and all(c in words for c in cns):
+            out += "（" + " / ".join(
+                f"{s} {sum(1 for c in cns if c == s)}" for s in words) + "）"
+    return out
+
+
+def _report_notice_read(d: dict) -> str:
+    """`read_notifications` 的结构 → 一行摘要（"标了几条、现在还剩几条未读"）。"""
+    marked = d.get("marked")
+    if not isinstance(marked, int) or isinstance(marked, bool):
+        return ""
+    parts = [f"标记已读 {marked} 条"]
+    n = d.get("unread")
+    if isinstance(n, int) and not isinstance(n, bool):
+        m = d.get("unread_messages")
+        tail = f"/私信 {m}" if isinstance(m, int) and not isinstance(m, bool) else ""
+        parts.append(f"未读 通知 {n} 条{tail}")
+    return "；".join(parts)
+
+
+# 工具名 → **结构**摘要器。键集合必须与 `_TEXT_DIGESTERS` **相等**（同一个工具两条
+# 通道：有结构走这里、只有文本回落那里）；这条相等由判据钉着，别只改一侧。
+_REPORT_DIGESTERS = {
+    "get_server_status": _report_server_status,
+    "get_service_health": _report_service_health,
+    "get_moderation_status": _report_moderation,
+    "get_user_stats": _report_user_stats,
+    "get_note_stats": _report_note_traffic,
+    "read_notifications": _report_notice_read,
+    "list_admin_notes": _report_admin_notes,
+}
+
+
+# 会**读页码结构**的那几个摘要器（批 G2）：只有它们多收一个 `page` 实参。
+# 用一张名单而不是给所有摘要器都加一个用不上的形参：签名说明"谁真的在读它"，
+# 而多出来的那个参数要是没人读，下一个人会以为它早就生效了。
+_PAGE_AWARE = {"list_guestbook", "list_talks", "list_my_board"}
+
+
+def receipt_digest(tool: str, result: str, *, meta=None, data=None) -> str:
+    """数据工具返回 → 一行实体摘要（无摘要能力/解析失败 → ""）。
+
+    **批 G2**：`meta` 是工具返回的**结构化副产物**（`ToolResult.meta`），目前只用到
+    一格 `page`（`{"total","start","end"}`，见 `tools/result.py::_page`）。传了它，
+    摘要就不去中文注记里正则抠「共 N 条」「第 A-B 条」——注记是给人看的那份**渲染**，
+    改一句措辞就能让系统在跨轮记忆里把 137 条说成 60 条而**不报错**。
+
+    **批 G5**：`data` 是工具返回的**结构本体**（`ToolResult.data`）。报表那一族
+    （`_REPORT_DIGESTERS`）**只认它**：那些帧的文本是我们自己渲染的中文报表，正则
+    读它等于把已经算好的数重新猜一遍。
+
+    缺省 `None` = "这一轮没有结构可说"（trace 回放、测试直接喂 repr 串）⇒ 回落文本
+    那一支。**关键字实参**：老调用点（`receipt_digest(name, text)`）一个都不用改。
+    """
     name = tool or ""
+    page = meta.get("page") if isinstance(meta, dict) else None
     try:
-        if name in _DIGESTERS:
-            out = _DIGESTERS[name](_parse(result))
+        if data is not None and name in _REPORT_DIGESTERS:
+            # 结构在手边就以它为准。**读不动**（形状不符、生成器自己有 bug）时退回
+            # 文本那一支，而不是给一个空串："摘要没了"与"摘要有 bug"必须分得开——
+            # 空串在这条链上是**静默**的（下一轮只是取值取不到）。回落这一支的产物
+            # 与今天逐字相同（判据 ⑤），所以这条退路不改变任何既有行为。
+            try:
+                out = _REPORT_DIGESTERS[name](data)
+            except Exception:
+                out = _TEXT_DIGESTERS[name](result or "")
+        elif name in _DIGESTERS:
+            data = _parse(result)
+            fn: Callable[..., str] = _DIGESTERS[name]
+            out = fn(data, page) if name in _PAGE_AWARE else fn(data)
         elif name in _TEXT_DIGESTERS:
             out = _TEXT_DIGESTERS[name](result or "")
         else:

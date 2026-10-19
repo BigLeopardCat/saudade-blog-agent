@@ -77,14 +77,13 @@ def get_server_status() -> str:
         if cpu is None and not mem:
             # 两样都读不到 = 这根本不是一台正常机器，如实说"读不到"而不是给一张空报表
             return unavailable("读取服务器状态失败：本机 /proc 不可读")
-        return ok(R.render_server_status(
-            cpu_pct=cpu,
-            cores=os.cpu_count() or 0,
-            load=H.parse_loadavg(H.read_loadavg()),
-            mem=mem,
-            disks=H.disk_rows(),
-            uptime_s=H.read_uptime(),
-        ))
+        # 渲染用的那几个数**同时**当结构交出去（批 G5）：报表文本是给人看的**渲染**，
+        # 而跨轮实体摘要（`entity_digest`）此前只能对着它跑正则抽数字——改一句措辞
+        # 摘要就静默变空。数本来就在这个作用域里，这里只是让它们多留一格。
+        kw: R.ServerStatusKw = {"cpu_pct": cpu, "cores": os.cpu_count() or 0,
+              "load": H.parse_loadavg(H.read_loadavg()), "mem": mem,
+              "disks": H.disk_rows(), "uptime_s": H.read_uptime()}
+        return ok(R.render_server_status(**kw), data=kw)
     except Exception as exc:
         logger.exception("get_server_status failed")
         return unavailable(f"读取服务器状态失败: {exc}")
@@ -102,12 +101,9 @@ def get_service_health() -> str:
         services = [(unit, H.service_show(unit)) for unit in H.SERVICES]
         health = H.parse_health_log(H.read_text_tail(H.HEALTH_LOG),
                                     H.health_window(24))
-        return ok(R.render_service_health(
-            services=services,
-            health=health,
-            traces=H.trace_stats(),
-            sizes=H.log_sizes(),
-        ))
+        kw: R.ServiceHealthKw = {"services": services, "health": health,
+              "traces": H.trace_stats(), "sizes": H.log_sizes()}
+        return ok(R.render_service_health(**kw), data=kw)
     except Exception as exc:
         logger.exception("get_service_health failed")
         return unavailable(f"读取服务健康失败: {exc}")
@@ -137,7 +133,8 @@ def get_moderation_status(
     if not data:
         return empty("河灯留言板目前还没有任何留言，没有可审核的内容")
     try:
-        return ok(R.render_moderation_status(data, status=status))
+        return ok(R.render_moderation_status(data, status=status),
+                  data={"rows": data, "status": status})
     except Exception as exc:
         logger.exception("render_moderation_status failed")
         return unavailable(f"整理审核状况失败: {exc}")
@@ -237,7 +234,7 @@ def get_user_stats(config: RunnableConfig) -> str:
     if not data:
         return empty("后台没有返回用户统计数据")
     try:
-        return ok(R.render_user_stats(data))
+        return ok(R.render_user_stats(data), data=data)
     except Exception as exc:
         logger.exception("render_user_stats failed")
         return unavailable(f"整理用户报表失败: {exc}")
@@ -261,7 +258,7 @@ def get_note_stats(config: RunnableConfig) -> str:
     if not data:
         return empty("后台没有返回文章流量数据")
     try:
-        return ok(R.render_note_stats(data))
+        return ok(R.render_note_stats(data), data=data)
     except Exception as exc:
         logger.exception("render_note_stats failed")
         return unavailable(f"整理文章流量报表失败: {exc}")
@@ -294,7 +291,7 @@ def get_note_periods(
     if not data:
         return empty("后台没有返回分期报表数据")
     try:
-        return ok(R.render_note_periods(data))
+        return ok(R.render_note_periods(data), data=data)
     except Exception as exc:
         logger.exception("render_note_periods failed")
         return unavailable(f"整理分期报表失败: {exc}")

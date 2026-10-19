@@ -7,20 +7,24 @@
     "lines": 1801,
     "top_defs": 37
   },
+  "agent/entity_digest.py": {
+    "lines": 877,
+    "top_defs": 31
+  },
   "agent/graph.py": {
-    "lines": 11116,
+    "lines": 11114,
     "top_defs": 196
   },
   "agent/prompt_context.py": {
-    "lines": 1712,
-    "top_defs": 46
+    "lines": 1746,
+    "top_defs": 47
   },
   "agent/prompts.py": {
     "lines": 856,
     "top_defs": 1
   },
   "agent/react_arm.py": {
-    "lines": 1248,
+    "lines": 1249,
     "top_defs": 40
   },
   "agent/tasks.py": {
@@ -44,7 +48,7 @@
     "top_defs": 37
   },
   "eval/run_golden.py": {
-    "lines": 3686,
+    "lines": 3689,
     "top_defs": 51
   },
   "scripts/build_word_graph.py": {
@@ -52,8 +56,8 @@
     "top_defs": 36
   },
   "server.py": {
-    "lines": 2711,
-    "top_defs": 59
+    "lines": 2763,
+    "top_defs": 61
   },
   "tests/test_admin_write.py": {
     "lines": 2036,
@@ -100,7 +104,7 @@
     "top_defs": 12
   },
   "tests/test_workflows.py": {
-    "lines": 5821,
+    "lines": 5820,
     "top_defs": 72
   },
   "tools/base.py": {

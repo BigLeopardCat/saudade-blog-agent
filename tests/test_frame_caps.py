@@ -5,7 +5,8 @@
 
   · `tools/base.py::_cap_rows` / `_clip_fields`（列表类工具的行数/字段封顶）
     ＋ `_cap_rows(offset=…)`（**取回更早的那一页**，20261005 收口）
-  · `agent/entity_digest.py::_note_total` / `_note_range`（跨轮摘要必须跟着说真话）
+  · `agent/entity_digest.py::_note_total` / `_note_range`（跨轮摘要必须跟着说真话；
+    批 G2 起先读 `meta["page"]`，正则那一支只是**只有文本时**的回落）
   · `agent/graph.py::_cap_frame_text`（帧文本的单帧硬顶 + 单轮总量顶，**头尾各半**）
   · `agent/prompt_context.py::_frame_texts(article_pointer=…)`（正文不再投喂两遍）
 
@@ -14,8 +15,8 @@
 26,887 字）⇒ 防线必须是**潜伏**的。所以每条都成对写：触顶长什么样、不触顶长什么样。
 
 20261005 收口那批加的两条判据同样是"成对"的：① 截断后**帧尾**的内容还在不在
-（只留头部时列表帧尾的『共 N 条』会整条消失，而跨轮摘要正是读它）；② 取回的那一页
-会不会被说成"最近 N 条"（会的话跨轮记忆就把第 61 条当成最新的了）。
+（只留头部时列表帧尾的『共 N 条』会整条消失，而**读帧的人**正是从它知道"还有更早的"）；
+② 取回的那一页会不会被说成"最近 N 条"（会的话跨轮记忆就把第 61 条当成最新的了）。
 """
 import ast
 import sys
@@ -59,17 +60,20 @@ def _parse(out: str) -> list:
 # ── ① 行数封顶 ───────────────────────────────────────────────────────────────
 print("① 列表行数封顶：只回最近 N 条，且说清一共多少条")
 
-rows, note = base._cap_rows(_board_rows(200), base._LIST_ROWS_MAX, "留言")
+rows, note, page = base._cap_rows(_board_rows(200), base._LIST_ROWS_MAX, "留言")
 check(f"200 行 ⇒ 只回 {base._LIST_ROWS_MAX} 行", len(rows) == base._LIST_ROWS_MAX,
       str(len(rows)))
 check("保留的是**最近**的那批（上游序即最新在前，不重排）",
       [r["talkKey"] for r in rows] == [1000 - i for i in range(base._LIST_ROWS_MAX)])
 check("截断说明写明了总数", "共 200 条" in note, note)
 check("截断说明写明了本次带回多少", f"最近{base._LIST_ROWS_MAX}条" in note, note)
+check("★ 与注记**同源**的结构那份也在（批 G2）：`{total:200, start:0, end:0}`",
+      page == {"total": 200, "start": 0, "end": 0}, repr(page))
 
-rows2, note2 = base._cap_rows(_board_rows(25), base._LIST_ROWS_MAX, "留言")
-check("★ 25 行（今天的真实体量）⇒ 原样、**说明是空串**（今天一个字节都不变）",
-      len(rows2) == 25 and note2 == "", repr(note2))
+rows2, note2, page2 = base._cap_rows(_board_rows(25), base._LIST_ROWS_MAX, "留言")
+check("★ 25 行（今天的真实体量）⇒ 原样、**说明是空串**、**页码是 None**"
+      "（今天一个字节都不变）",
+      len(rows2) == 25 and note2 == "" and page2 is None, f"{note2!r} {page2!r}")
 
 # 打桩真跑一遍工具：判据要落在"模型真看到的那串文本"上，不是落在纯函数上
 _real_get = base._get
@@ -92,21 +96,23 @@ check("工具出口：行序未变 ⇒ `$ref` 下标（第 0 行）仍是最新�
       dict_rows[0]["talkId"] == 1000, str(dict_rows[0])[:60])
 
 # 取回更早的那一页（offset>0，20261005）：光说"还有更早的"不够，得**能取回来**
-rows3, note3 = base._cap_rows(_board_rows(200), base._LIST_ROWS_MAX, "留言", 60)
+rows3, note3, page3 = base._cap_rows(_board_rows(200), base._LIST_ROWS_MAX, "留言", 60)
 check("offset=60 ⇒ 带回第 61-120 条（**不是**最新那批）",
       [r["talkKey"] for r in rows3] == [1000 - i for i in range(60, 120)], str(len(rows3)))
 check("注记写明号段、总数与下一个 offset",
       "第 61-120 条" in note3 and "共 200 条" in note3 and "offset=120" in note3, note3)
-check("★ 号段与总数都从**同一条注记**读得出（跨轮摘要靠它认这是哪一页）",
+check("★ 号段与总数都从**同一条注记**读得出（文本回落那一支，仍是活的）",
       entity_digest._note_total(base._rows_with_note(rows3, note3)) == 200
       and entity_digest._note_range(base._rows_with_note(rows3, note3)) == (61, 120),
       str(entity_digest._note_range(base._rows_with_note(rows3, note3))))
+check("★ 结构那一支给的是同一个答案（`page3` = 第 61-120 条 / 共 200 条）",
+      page3 == {"total": 200, "start": 61, "end": 120}, repr(page3))
 
-rows4, note4 = base._cap_rows(_board_rows(200), base._LIST_ROWS_MAX, "留言", 180)
+rows4, note4, page4 = base._cap_rows(_board_rows(200), base._LIST_ROWS_MAX, "留言", 180)
 check("翻到末页 ⇒ 明写『已到末尾』（不让 planner 继续空转）",
       len(rows4) == 20 and "已到末尾" in note4 and "共 200 条" in note4, note4)
 
-rows5, note5 = base._cap_rows(_board_rows(25), base._LIST_ROWS_MAX, "留言", 500)
+rows5, note5, page5 = base._cap_rows(_board_rows(25), base._LIST_ROWS_MAX, "留言", 500)
 check("★ offset 超范围 ⇒ 零行 + 说明里仍带总数（**绝不静默给空**）",
       rows5 == [] and "共 25 条" in note5 and "超出范围" in note5, note5)
 
@@ -185,6 +191,39 @@ check("没有号段时 `_note_range` 安静地给 None（不猜）",
 dig_off = entity_digest.receipt_digest("list_guestbook", repr(base._rows_with_note(rows3, note3)))
 check("★ 翻页拉回来的那一页**绝不说成『最近 N 条』**（否则跨轮记忆把第 61 条当最新）",
       "第61-120条/共200条" in dig_off and "最近" not in dig_off, dig_off[:50])
+
+# ── ⑦ 页码走结构（20261019 批 G2）────────────────────────────────────────────
+print("⑦ 分页页码不再只长在中文注记里：结构在 `meta[\"page\"]`，注记是它的渲染")
+
+base._get = lambda path, **kw: _board_rows(200)
+try:
+    page_out = base.list_guestbook.invoke({})
+finally:
+    base._get = _real_get
+page_meta = getattr(page_out, "meta", None)
+check("工具出口带着 `meta[\"page\"]`（总数 200；这一页就是最新那批 ⇒ start=end=0）",
+      isinstance(page_meta, dict)
+      and page_meta.get("page") == {"total": 200, "start": 0, "end": 0},
+      repr(page_meta))
+check("★ 结构那一路与文本那一路给出**逐字相同**的摘要（今天的行为一个字没变）",
+      entity_digest.receipt_digest("list_guestbook", str(page_out), meta=page_meta)
+      == entity_digest.receipt_digest("list_guestbook", repr(capped_out)),
+      entity_digest.receipt_digest("list_guestbook", str(page_out), meta=page_meta)[:40])
+
+# 反控（本仓纪律：正控不红不算数）：**把注记文案整段换掉**，两个数字一个字都不留。
+_mangled = list(_board_rows(200)[60:120]) + [
+    "〔系统注记〕翻页说明已整段改写，这里没有那两个数字了。"]
+check("反控的正控：注记改掉之后，**文本那一支**读不出总数与号段（下面那条不是白绿）",
+      entity_digest._note_total(_mangled) == 0
+      and entity_digest._note_range(_mangled) is None)
+check("★ 反控：同一份数据**带上 `meta[\"page\"]`** ⇒ 总数与号段仍然对"
+      "（措辞改一百遍也不影响跨轮记忆）",
+      "第61-120条/共200条" in entity_digest.receipt_digest(
+          "list_guestbook", repr(_mangled),
+          meta={"page": {"total": 200, "start": 61, "end": 120}}),
+      entity_digest.receipt_digest(
+          "list_guestbook", repr(_mangled),
+          meta={"page": {"total": 200, "start": 61, "end": 120}})[:40])
 
 # ── ④⑤ 帧文本封顶 ───────────────────────────────────────────────────────────
 print("④⑤ 帧文本封顶：单帧硬顶 + 单轮总量顶，且截断必须写出来")
