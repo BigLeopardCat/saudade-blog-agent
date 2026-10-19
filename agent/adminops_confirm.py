@@ -491,7 +491,7 @@ def confirm_opts(count: int) -> list:
     20261010 起；无依赖时它就等于 spec 条数）：按钮的 `value` 是 `pick:<i>`（0 基），
     服务端 `confirm.narrow` 就按这个下标去裁签名过的 `units`——按钮那一侧若自己数
     一遍（例如拿 `picks` 之外的列表、或数的是 spec 条数），点第 2 件就会办成别的
-    第 2 件。这里的字面与 `render_confirm_question` 里写的「只办第 N 件」是**同一套**，
+    第 2 件。这里的字面与 `render_confirm_question` 里写的「只处理第 N 个」是**同一套**，
     改一处必须改另一处（两侧不一致时，问句指的那个按钮在卡上根本不存在）。
 
     **「其他（我来说）」（20261006）**：每张卡都多这一枚，位置恒在「取消」**前面**。
@@ -502,48 +502,93 @@ def confirm_opts(count: int) -> list:
     所以这条拦截必须留在发请求之前——插错位置就会变成"卡片结算了、看着在跑、
     其实一个字节都没执行"。
 
-    单件 = 确定 / 其他 / 取消，多件 = 全部办 / 只办第 N 件… / 其他 / 取消
+    单件 = 确定 / 其他 / 取消，多件 = 全部处理 / 只处理第 N 个… / 其他 / 取消
     （`tests/test_confirm.py` 两处按钮形态的锁按这份写）。
     """
     n = int(count or 0)
     if n <= 1:
         opts = [{"label": "确定", "value": "yes", "kind": "primary"}]
     else:
-        opts = [{"label": f"全部办（{n} 件）", "value": "yes", "kind": "primary"}]
-        opts += [{"label": f"只办第 {i} 件", "value": f"pick:{i - 1}", "kind": "default"}
+        opts = [{"label": f"全部处理（{n} 个任务）", "value": "yes", "kind": "primary"}]
+        opts += [{"label": f"只处理第 {i} 个", "value": f"pick:{i - 1}", "kind": "default"}
                  for i in range(1, n + 1)]
     opts.append({"label": "其他（我来说）", "value": "other", "kind": "default"})
     opts.append({"label": "取消", "value": "no", "kind": "default"})
     return opts
 
 
+def _action_items(specs, index=None, cats=None, boards=None, notes=None,
+                  users=None, todos=None, quota_requests=None,
+                  comments=None) -> list:
+    """一份调用清单 → 逐**单元**的人话（**不带**编号、不带分隔符）。
+
+    措辞的唯一产出点：`render_action_lines`（台账 target）与 `render_action_lines_md`
+    （卡片面）都从这里取，所以"主人在弹窗里看到的那句话"与"他事后在待办/回执里读到
+    的那句话"逐字相同——这正是"盲签"那条纪律的延伸：系统对同一件事的两种表述不一致
+    时，点「确定」的人无从判断谁是真的。两者差**只有**排版（分隔符与加粗），不差用词。
+
+    **一条 = 一个「单元」不是一条 spec**（20261010，见 `linked_units`）：「先建再挂」
+    那样一组**有依赖**的 spec 共用一个编号（两条人话用「，并」连），因为单独切走里面
+    任何一步都可能注定失败。没有依赖时单元就是逐条 spec ⇒ 老卡面一个字节没变。
+    """
+    specs = list(specs) if isinstance(specs, (list, tuple)) else []
+    return ["，并".join(_confirm_one(specs[i], index, cats, boards, notes, users,
+                                     todos, quota_requests, comments)
+                        for i in unit)
+            for unit in linked_units(specs)]
+
+
 def render_action_lines(specs, index=None, cats=None, boards=None, notes=None,
                         users=None, todos=None, quota_requests=None,
                         comments=None) -> str:
-    """一份调用清单 → 主人看得懂的动作串（"；"分隔）。
+    """一份调用清单 → 主人看得懂的动作串（**"；"分隔，单行**）。
 
-    三处共用同一份措辞：确认框问句、确认轮的气泡正文、**跨轮待办的人读目标**
-    （`pending_action.target`）。分开写必然漂移——主人在弹窗里看到的目标，与他
-    事后在待办/回执里读到的目标，必须是同一句话（这正是"盲签"那条纪律的延伸：
-    系统对同一件事的两种表述不一致时，点「确定」的人无从判断谁是真的）。
+    读端是**跨轮待办的人读目标**（`pending_action.target`，Rust 渲染进台账那一行）——
+    台账是一行一条的表格，这里因此刻意保持单行、且不带 markdown 标记。卡片面（问句与
+    气泡正文）走 `render_action_lines_md`，两者措辞同源、只差排版。
 
-    **多件（20260929 批 F4）**：同一句话换成**编号列表**（`1. …；2. …`）——编号
-    是卡面上「只办第 i 件」那几枚按钮**唯一能指的东西**，所以编号只在本函数里生成
+    **多件（20260929 批 F4）**：换成**编号**（`1. …；2. …`）——编号是卡面上
+    「只处理第 i 个」那几枚按钮**唯一能指的东西**，所以编号只在这一族函数里生成
     一次：按钮上的 N 与卡面上的 N 必然指向同一件。若让按钮那一侧自己数一遍，主人
-    点「只办 2」而系统执行另一件这种事就只是时间问题。
-
-    **编号数的是「单元」不是「spec」**（20261010，见 `linked_units`）：「先建再挂」那样
-    一组**有依赖**的 spec 共用一个编号（两条人话用「，并」连），因为单独切走里面任何
-    一步都可能注定失败。没有依赖时单元就是逐条 spec ⇒ 老卡面一个字节没变。
+    点「只处理 2」而系统处理另一个这种事就只是时间问题。
     """
-    specs = list(specs) if isinstance(specs, (list, tuple)) else []
-    items = ["，并".join(_confirm_one(specs[i], index, cats, boards, notes, users,
-                                      todos, quota_requests, comments)
-                         for i in unit)
-             for unit in linked_units(specs)]
+    items = _action_items(specs, index, cats, boards, notes, users, todos,
+                          quota_requests, comments)
     if len(items) > 1:
         return "；".join(f"{i}. {t}" for i, t in enumerate(items, 1))
     return "；".join(items)
+
+
+def _bold(text: str) -> str:
+    """整条加粗（卡面用）：**先摘掉条目自带的 `**`，再包外面这一层**。
+
+    为什么非摘不可：`_confirm_one` 的几支本来就带强调——「把**全部**未读通知标记为
+    已读」「（甲、乙）**会一起删除**」。直接在外面再包一层 `**`，得到的是
+    `**把**全部**未读通知标记为已读**`：星号成对错位，渲染出来是一段加粗加错的正文。
+    而整条已经加粗时，条目内部那层强调本来就是多余的（粗体套粗体看不出差别），
+    所以摘掉它、只留外面这一层——**只摘 `**`**，条目里的其它 markdown 原样保留。
+    """
+    return f"**{text.replace('**', '')}**"
+
+
+def render_action_lines_md(specs, index=None, cats=None, boards=None, notes=None,
+                           users=None, todos=None, quota_requests=None,
+                           comments=None) -> str:
+    """同上，但给**卡片面**用：markdown、**一个任务一行**、逐条加粗。
+
+    为什么不能沿用 `render_action_lines` 的单行串（用户 20261019 报"一大段分不清"）：
+    多件时那一串是 `1. 甲；2. 乙`——整串落在**同一个段落**里，渲染出来是一坨，主人
+    要自己找分号才知道有几件事。这里换成真正的 markdown 有序列表：`1. **甲**` 与
+    `2. **乙**` 各占一行（列表项由渲染器保证换行，不依赖软换行设置），每一条加粗。
+
+    **编号与 `render_action_lines` 同源**（都数 `linked_units` 的单元数、都从 1 起）：
+    卡面第 N 行与按钮 `pick:<N-1>` 必须指向同一件事，理由见 `confirm_opts` 的头注。
+    """
+    items = _action_items(specs, index, cats, boards, notes, users, todos,
+                          quota_requests, comments)
+    if len(items) > 1:
+        return "\n".join(f"{i}. {_bold(t)}" for i, t in enumerate(items, 1))
+    return _bold(items[0]) if items else ""
 
 
 def render_confirm_question(specs, index=None, cats=None, boards=None, notes=None,
@@ -557,18 +602,18 @@ def render_confirm_question(specs, index=None, cats=None, boards=None, notes=Non
     （`index`/`cats`/`notes` 见 _confirm_one；读不到字典时退化成名字原文或 id，
     不因此不弹窗——这一轮的价值就是让主人确认，读不到就少说，不是不弹。）
     """
-    acts = render_action_lines(specs, index, cats, boards, notes, users, todos,
-                               quota_requests, comments)
+    acts = render_action_lines_md(specs, index, cats, boards, notes, users, todos,
+                                  quota_requests, comments)
     if len(linked_units(specs)) > 1:
-        # 多件（20260929 批 F4）：这一句话里必须把"能只办一件"讲出来——否则主人
+        # 多件（20260929 批 F4）：这一句话里必须把"能只处理一个"讲出来——否则主人
         # 看到一串编号却只有一枚「确定」，他唯一能做的就是全签（盲签的反面不是
-        # "问一句"，是"让他能只同意其中一件"）。按钮名与 `_confirm_opts` 同一套字面。
+        # "问一句"，是"让他能只同意其中一个"）。按钮名与 `confirm_opts` 同一套字面。
         # 判据与编号同源：数的是**单元**（`linked_units`），不是 spec 条数——「先建再挂」
         # 那一对只有一个单元，卡面因此退回单件的「确定」措辞，与 `confirm_opts` 一致。
-        return (f"要办这几件事吗？\n\n{acts}\n\n"
-                f"点「全部办」我就都办；只想办其中一件，"
-                f"点「只办第 N 件」（N 就是上面的编号）。")
-    return f"要{acts}吗？点「确定」我就去办。"
+        return (f"要处理这几个任务吗？\n\n{acts}\n\n"
+                f"点「全部处理」我就都处理；只想处理其中一个任务，"
+                f"点「只处理第 N 个」（N 就是上面的编号）。")
+    return f"要{acts}吗？点「确定」我就去处理。"
 
 
 def render_confirm_text(specs, index=None, cats=None, boards=None, notes=None,
@@ -576,20 +621,20 @@ def render_confirm_text(specs, index=None, cats=None, boards=None, notes=None,
                         comments=None) -> str:
     """弹窗那一轮的**对话气泡正文**（系统给的，不经 narrator）。
 
-    刻意写得像"在等你的意思"而不是"已经在办了"：这一轮零执行。给一个明确
+    刻意写得像"在等你的意思"而不是"已经在处理了"：这一轮零执行。给一个明确
     的操作路径（点按钮 / 直接打字），两条路都通向同一条写通道。
     """
-    acts = render_action_lines(specs, index, cats, boards, notes, users, todos,
-                               quota_requests, comments)
+    acts = render_action_lines_md(specs, index, cats, boards, notes, users, todos,
+                                  quota_requests, comments)
     # 不说"上面/下面"：20260921d 起确认卡片渲染在**对话流里**（问句气泡之后），
     # 方位词只会随排版漂移——只点按钮名，两侧 UI 都能对上
     if len(linked_units(specs)) > 1:
         return (f"好呀，这一步要动到站内数据，我先跟你确认一下：\n\n"
-                f"**{acts}**\n\n"
-                f"点「全部办」我就都办；只想办其中一件，点对应的"
-                f"「只办第 N 件」；点「取消」就当没说过，"
+                f"{acts}\n\n"
+                f"点「全部处理」我就都处理；只想处理其中一个任务，点对应的"
+                f"「只处理第 N 个」；点「取消」就当没说过，"
                 f"或者直接告诉我改成别的。")
     return (f"好呀，这一步要动到站内数据，我先跟你确认一下：\n\n"
-            f"**{acts}**\n\n"
-            f"点「确定」我就去办；点「取消」就当没说过，"
+            f"{acts}\n\n"
+            f"点「确定」我就去处理；点「取消」就当没说过，"
             f"或者直接告诉我改成别的。")

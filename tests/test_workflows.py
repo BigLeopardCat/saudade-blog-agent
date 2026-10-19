@@ -3162,17 +3162,17 @@ def test_tag_create_batch():
           "主人一点，站里就多一个叫 $titles 的标签）",
           obj["tools"] == [] and obj.get("status") == "param_missing", str(obj)[:100])
 
-    # 卡面这一层是"一批"给人看的地方：名字逐条印、多件时换「全部办」那一套措辞。
+    # 卡面这一层是"一批"给人看的地方：名字逐条印、多件时换「全部处理」那一套措辞。
     card = _confirm.render_confirm_text([
         {"tool": "create_tag", "args": {"title": "Git", "parent_tag": "编程"}},
         {"tool": "create_tag", "args": {"title": "SVN", "parent_tag": "编程"}}])
     check("卡面把两个名字都印出来（主人核对的就是这一行，少一个名字等于让他盲签）",
           "Git" in card and "SVN" in card, card[:160])
-    check("  多件时用多件措辞（「全部办」/「只办第 N 件」），不是单件的「确定」",
-          "全部办" in card and "只办第 N 件" in card and "点「确定」" not in card,
-          card[:200])
-    check("  单件时仍是单件措辞（老语料的话术一个字节没变）",
-          "点「确定」" in _confirm.render_confirm_text(
+    check("  多件时用多件措辞且**逐条另起一行**（不是一整段用分号连），不是单件的「确定」",
+          "全部处理" in card and "只处理第 N 个" in card and "点「确定」" not in card
+          and "\n1. **" in card and "\n2. **" in card and "；2." not in card, card[:200])
+    check("  单件时仍是单件措辞（只换句尾动词，动作词与编号没动）",
+          "点「确定」我就去处理；" in _confirm.render_confirm_text(
               [{"tool": "create_tag", "args": {"title": "Git"}}]))
 
 
