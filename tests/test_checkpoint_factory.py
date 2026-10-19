@@ -94,6 +94,18 @@ def _not_none_or_raised(dsn: str) -> tuple[bool, str]:
 
 
 print("① 惰性：不给 DSN ⇒ None，且一次 import 都不发")
+# ⚠️ **前提自己摆，不许继承运维取值**（20261019 批 B 实测踩到）：`build_checkpointer()`
+# 不给参数时读 `settings.checkpoint_dsn`，而它来自**这台机器上的 `.env`**。20261018 采纳
+# 之后产线把那行填上了 ⇒ 本节当场红两条，而代码一个字没错——判据把"运维动了配置"报成了
+# "代码坏了"。所以先把它钉成空串，**并且先证明钉住了**（钉不住的失效是静默的）。
+# 打的是**实例属性**：`config/__init__.py` 导出的就是那个单例，与 `agent/checkpoint.py`
+# 的 `from config import settings` 拿到的是**同一个对象** ⇒ 钉的是真通路，不是影子。
+from config import settings as _S  # noqa: E402
+
+_ambient_dsn = _S.checkpoint_dsn
+_S.checkpoint_dsn = ""
+check("（前提）DSN 已钉成空串——本节量的是「没配 DSN」那一支，不是这台机器 `.env` 的值",
+      _S.checkpoint_dsn == "", repr(_S.checkpoint_dsn))
 _imported: list[str] = []
 _real_import = C.importlib.import_module
 
@@ -113,6 +125,7 @@ finally:
 check("空 DSN 返回 None（= 今天的行为）", _none is None, repr(_none))
 check("只有空白也当没配", _blank is None, repr(_blank))
 check("空 DSN **一次 import 都不发**（不是 import 完才发现没配）", _imported == [], str(_imported))
+_S.checkpoint_dsn = _ambient_dsn          # 本节只借那一格判"没配 DSN"那一支，还回去
 
 print("\n② 反控：给了 DSN 就绝不许静默返回 None")
 for _dsn in (_DEAD, "sqlite:////tmp/ckpt.sqlite3"):
@@ -310,10 +323,8 @@ print("\n⑦ 缺省参数取自 `settings.checkpoint_dsn`（不是第二个写�
 # 20261017：`config/settings.py` 加了 `checkpoint_dsn` 这一格，`build_checkpointer()` 不给
 # 参数时读它。这一条必须证明**那条通路真的通**：不通的话那一格就是幽灵旋钮——填了不生效、
 # 也不报错（本仓在配置面上栽过五次，见 `tests/test_settings_surface.py` 头注）。
-# 打的是**实例属性**：`config/__init__.py` 导出的就是那个单例，与 `agent/checkpoint.py`
-# `from config import settings` 拿到的是**同一个对象** ⇒ 测的是真通路，不是影子。
-from config import settings as _S  # noqa: E402
-
+# 打的是**实例属性**（`_S` 就是上面 ① 里那个单例，两处同一个对象）⇒ 测的是真通路，
+# 不是影子。
 _old_dsn = _S.checkpoint_dsn
 try:
     _S.checkpoint_dsn = _DEAD
@@ -581,6 +592,52 @@ check("（反控）源码文本里**确实**出现过阻塞版的名字（在头
       "上面那条不是被说明文字骗绿的",
       "pg_advisory_lock" in _ckpt_src and len(_lits) == 2,
       f"源码文本 {_ckpt_src.count('pg_advisory_lock')} 次，字面只有 {len(_lits)} 条")
+
+print("\n⑩ 指错库：`db_name` 的取值 + `CHECKPOINT_FORBID_DB` 硬闸（20261019 批 B）")
+# 立项理由：`build_checkpointer()` 会在 DSN 指的那个库里建 4 张**没有编号迁移**的表，
+# 而它们与业务表**不重名** ⇒ 指进业务库**不报错**（20261018 采纳的第一版就是这么指的，
+# 业务库的 schema 于是在没人记账的情况下被第三方库改过）。这一节钉两件事：
+#   ① 「DSN → 库名」只有**一处**实现（`db_name`）——`/health` 那一格与硬闸共用它；
+#   ② 硬闸**真拦得住**、且**缺省不拦**（否则它自己就成了新的"配了不生效"的幽灵旋钮）。
+check("URL 形 ⇒ 库名", C.db_name("postgresql://u:p@h:5432/ckpt") == "ckpt")
+check("带 `?params` 的照切（query 不是库名的一部分）",
+      C.db_name("postgresql://u:p@h:5432/ckpt?sslmode=require") == "ckpt")
+check("unix socket 形（主机段是空的）也认", C.db_name("postgresql:///ckpt") == "ckpt")
+check("解析不出库名 ⇒ 空串（**不许编一个**）", C.db_name("postgresql://u:p@h:5432") == "")
+
+_forbid_old = _S.checkpoint_forbid_db
+_dsn_old10 = _S.checkpoint_dsn
+# `mysql://` 的 scheme 认不出来 ⇒ 拿它当对照最省事：硬闸若**没**先发，报出来的会是
+# scheme 那条（而且这一支**不连库**，判据不会变成"本机有没有 PG"）。
+_MYSQL = "mysql://u:s3cret@127.0.0.1:1/blog"
+try:
+    _S.checkpoint_forbid_db = "blog"
+    _m10 = _raises(C.build_checkpointer, _MYSQL)
+    check("填了库名 + DSN 指到它 ⇒ **响亮抛**（且不是被 scheme 那条盖住的）",
+          "CHECKPOINT_FORBID_DB" in _m10, _m10[:100] or "（没抛 = 硬闸是空的）")
+    check("消息点名了那个库，也说清了「为什么」（业务库的结构只许由编号迁移改）",
+          "blog" in _m10 and "编号迁移" in _m10, _m10[:200])
+    check("消息里**没有口令**（走 `redact`，同 `_make_pool` 那条）",
+          "s3cret" not in _m10, _m10[:120])
+    _S.checkpoint_forbid_db = "   "
+    _m10b = _raises(C.build_checkpointer, _MYSQL)
+    check("（反控）只填空白 ⇒ 当没填，落回 scheme 那条（⇒ 上面那条只可能来自硬闸）",
+          "CHECKPOINT_FORBID_DB" not in _m10b and _m10b.startswith("RuntimeError:"),
+          _m10b[:90])
+    _S.checkpoint_forbid_db = "another_db"
+    _m10c = _raises(C.build_checkpointer, _MYSQL)
+    check("（反控）填的库名与 DSN 指的**不是**同一个 ⇒ 不拦（不是「见谁都拦」）",
+          "CHECKPOINT_FORBID_DB" not in _m10c, _m10c[:90])
+    _S.checkpoint_forbid_db = "blog"
+    check("（反控）DSN 空 ⇒ 硬闸碰都不碰（返回 None，不是抛）",
+          C.build_checkpointer("") is None)
+    _S.checkpoint_dsn = _MYSQL
+    _m10d = _raises(C.build_checkpointer)
+    check("不给参数 ⇒ 也拦（硬闸接在 `settings` 那条通路上，不是只认显式入参）",
+          "CHECKPOINT_FORBID_DB" in _m10d, _m10d[:100] or "（没抛）")
+finally:
+    _S.checkpoint_dsn = _dsn_old10
+    _S.checkpoint_forbid_db = _forbid_old
 
 print()
 if FAILS:

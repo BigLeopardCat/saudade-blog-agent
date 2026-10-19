@@ -365,8 +365,13 @@ check("回执与生产同键（skill 是 `__EXEC__` 帧体键，随 Rust 那批�
 check("工具真的只跑了一次（决策轮没有因为重渲染提示词而重复执行）", len(RAN) == 1, str(RAN))
 
 print("\n②b 一轮多条调用：合并成一份 plan_obj（`parallel_tool_calls` 未钉住的那条容差）")
+# ⚠️ 两个 target 都必须是 `NAV_MAP` 里**恒有值**的静态别名。这里曾写「设备」——而
+# `设备` 从来不是别名（IoT 那族的别名是「设备控制台」，且开关关掉时**映射为 None**），
+# `instantiate_plan` 于是老实产出 `tools: []`，下面那条断言从写下那天起就**恒红**。
+# 判据要的是"两条调用的工具取并集"，前提是两条都真能算出路径——**前提过期=判据恒红**，
+# 而恒红的判据比不判更坏（它让人以为代码坏了）。
 _p2 = R._plan_of([{"name": "navigate", "args": {"target": "首页"}, "id": "a"},
-                  {"name": "navigate", "args": {"target": "设备"}, "id": "b"}], None)
+                  {"name": "navigate", "args": {"target": "留言板"}, "id": "b"}], None)
 check("技能名用 `|` 连接（两条都留下，不丢）", "|" in str(_p2.get("workflow")), _p2.get("workflow"))
 check("tools 取并集而不是覆盖", len(_p2.get("tools") or []) == 2, str(_p2.get("tools")))
 check("instantiate_plan 抛错时仍产一格（整轮不该因为一条坏调用消失）",
@@ -1015,7 +1020,10 @@ print("\n⑪ 并发：两项流水交替推进，两本台账互不可见")
 # 其实是替身不够用）。收尾丢意图纠偏（`ConvergenceMiddleware._intent_correction`）会
 # 在零工具收尾之后再要一条，所以脚本要留一格；留两格是因为它**只纠一次**——第二格
 # 保证"再被问一次也能答上来"，而不是让判据去猜该发几条。
-_SA = [_call("navigate", target="首页"), _call("navigate", target="设备"),
+# ⚠️ 与 ②b 同一个根因：target 取静态别名。「设备」不是 `NAV_MAP` 的键 ⇒ A 路第一条调用
+# 算不出路径、只剩一件回执，而下面那条判据要的**正是"两件对一件"这个对比**——
+# 前提塌了它就恒红（当时实测 A=1 B=1，红在这里而不是红在台账串账上）。
+_SA = [_call("navigate", target="首页"), _call("navigate", target="时间轴"),
        AIMessage(content="你要的两处我都带到了")] + [AIMessage(content="都带你去了")] * 2
 _SB = ([_call("navigate", target="留言板"), AIMessage(content="到留言板了")]
        + [AIMessage(content="到留言板了")] * 2)
@@ -1043,7 +1051,7 @@ R._real_tools = lambda *a, **k: dict(next(_toolsets))
 R._system_prompt = lambda *a, **k: "你是测试用助手。"
 
 _arm_one = R.build()   # **同一个对象**服务两轮（`server._agent` 就是这个形状）
-_ga = _arm_one.stream({"messages": [HumanMessage(content="带我去首页和设备")]}, {})
+_ga = _arm_one.stream({"messages": [HumanMessage(content="带我去首页和时间轴")]}, {})
 _gb = _arm_one.stream({"messages": [HumanMessage(content="带我去留言板")]}, {})
 _fa: list = []
 _fb: list = []

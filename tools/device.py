@@ -45,7 +45,7 @@ from langchain_core.runnables.config import RunnableConfig
 from langchain_core.tools import tool
 
 from config import settings as _settings
-from tools.result import empty, fact, ok, tgt, unavailable
+from tools.result import empty, fact, invalid_args, not_found, ok, tgt, unavailable
 from utils.logging import get_trace_id
 
 # `__all__` = 本模块**所有不以 `_` 开头**的模块级名字（社区惯例，不留例外；
@@ -147,9 +147,9 @@ def device_oled_display(
     # 写成 Optional[RunnableConfig] 会破坏注入导致拿不到 user_id
     uid = _device_get_user_id(config)
     if uid <= 0:
-        return "无法获取当前用户身份，指令未下发"
+        return unavailable("无法获取当前用户身份，指令未下发")
     if not text or len(text) > 64:
-        return "显示内容为空或超过 64 字符限制"
+        return invalid_args("显示内容为空或超过 64 字符限制")
     # 幂等去重：30s 内相同用户相同内容不重复下发（防多轮重复调用、QoS1 重投）
     now = time.time()
     with _last_display_lock:
@@ -187,9 +187,9 @@ def device_oled_display(
                 return empty("当前用户还没有绑定任何 IoT 设备")
             device_id = chosen.get("id")
             if not device_id:
-                return "设备列表返回异常，无法获取设备 id"
+                return unavailable("设备列表返回异常，无法获取设备 id")
         if not _valid_device_id(device_id):
-            return "设备 id 格式非法"
+            return invalid_args("设备 id 格式非法")
         # 链路关联（图改进Ⅳ）：请求 trace_id 透传 device-service（其日志/回执带同一 id）
         headers = {"Authorization": "Bearer " + _sign_user_jwt(uid)}
         tid = get_trace_id()
@@ -202,11 +202,11 @@ def device_oled_display(
             timeout=10,
         )
         if resp.status_code == 404:
-            return "设备不存在或不属于当前用户"
+            return not_found("设备不存在或不属于当前用户")
         if resp.status_code == 409:
-            return "设备当前不在线，无法显示该内容（设备可能断电或 MQTT 连接断开）"
+            return unavailable("设备当前不在线，无法显示该内容（设备可能断电或 MQTT 连接断开）")
         if resp.status_code != 200:
-            return f"指令下发失败（HTTP {resp.status_code}）: {resp.text[:100]}"
+            return unavailable(f"指令下发失败（HTTP {resp.status_code}）: {resp.text[:100]}")
         sent = True          # 已真正下发 ⇒ 占位保留，30s 内的重复调用会被去重
         # 回执确认（图改进Ⅴ）：幽灵在线窗口（断电→遗嘱到达前，曾达 ~2 分钟）内下发
         # 会"假成功"——publish 入队即 200，设备实际收不到。轮询 device-service 的
@@ -249,7 +249,7 @@ def device_oled_display(
                             target=tgt("device", device_id, text[:20]),
                             before="原屏文", after="指令已下发", text=text))
     except Exception as e:
-        return f"指令下发失败: {e}"
+        return unavailable(f"指令下发失败: {e}")
     finally:
         # **没真正下发就把占位撤掉**：否则一次失败（设备离线/HTTP 错/身份缺失）会把
         # 30s 内的正常重试也一并挡掉——那是加锁时最容易引入的行为回归。

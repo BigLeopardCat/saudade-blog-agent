@@ -362,12 +362,14 @@ saver、同会话并发两轮；外加 `pyproject.toml` / `uv.lock` 的依赖。
 《20261018 追记（二）》。上面那句"包在 `pg_advisory_lock` 里"**保留原文**，因为它是当时
 的决策原文。
 
-**级联清理是本 ADR 与父仓的跨仓契约**：删除动作在父仓
-`src/routes/conversation.rs::purge_conversation_data`（**两个臂**：`ConversationId` /
-`UserId`），本仓出 `DELETE /checkpoint/{conversation_id}` 钩子。
-⚠️ **父仓那一半截至 20261018 还没接上**——本仓的钩子今天没有任何调用方，这是**已知缺口**
-（判据 `tests/test_checkpoint_cascade.py` ③ 判的是"父仓自己两臂一致"，因为"断言父仓已接"
-会一直红、而红的套件进不了 CI）。
+**级联清理是本 ADR 与父仓的跨仓契约**：删除动作在父仓，本仓出
+`DELETE /checkpoint/{conversation_id}` 钩子。
+⚠️ **父仓那一半截至 20261018 还没接上**——当时本仓的钩子没有任何调用方，是已知缺口。
+**20261019 批 D 接上了**：父仓 `conversation.rs::drop_checkpoint_threads` 在
+`delete_conversation`（`commit()` **之后**——HTTP 不能进事务）与 `delete_temp_user`
+两个调用点各调一次，会话 id 由 `purge_conversation_data` **返回**（清单仍只有一处）。
+判据 `tests/test_checkpoint_cascade.py` ③ 随之把锚点从"清单的两个 match 臂"挪到"两个调用点
+的函数体"：老锚点在新形状下恒判「两臂都没接」，而**一条恒绿的判据比没有更坏**。
 
 **还没做（不在本批）**：真机读数三条（长会话 K=10 正向收缩、崩溃重放对产线等效 saver、
 同会话并发两轮）。本批只保证"接得上、接得对、半接会红"。
@@ -415,3 +417,28 @@ saver、同会话并发两轮；外加 `pyproject.toml` / `uv.lock` 的依赖。
 `ShareUpdateExclusiveLock`，卡在 `pg_advisory_lock` 上的那个会在持锁者会话终于消失之后
 **接着把迁移跑完**，于是两个 CIC 后端互等表锁、下一相全卡住。所以每一相之间要
 `pg_terminate_backend` 掉这类僵尸会话再往下走。
+
+### 20261019 追记（三）：`CHECKPOINT_DSN` **必须指业务库之外的独立库**
+
+采纳那天的运维口径写的是"生产候选 = 业务库、**不建议**再另起一个专库（多一个库就多一份
+运维面）"。**这条取舍作废**，理由与"少一个库"无关：
+
+`build_checkpointer()` 会在 DSN 指的那个库里建 4 张本 agent 自持的表，而建表走的是
+`PostgresSaver.setup()`——**它没有编号迁移**。业务库的结构只许由父仓的**编号迁移**改
+（父仓的迁移校验脚本 `verify_parity.py` ⓪ 段判的正是"业务库里不该有 checkpoint 表"）
+⇒ 指进业务库，等于在业务库上开一条**没人编号、没人 review、也不在 CI 里**的 DDL 通道；
+而那 4 张表与业务表**不重名**，所以**不会报错**——这正是它难发现的地方。
+
+实测（20261019）：`.env` 里那一行当时已填上、`/health` 回 `checkpoint_backend=postgres`，
+而它指的正是业务库 ⇒ `setup()` 在每次启动时把表**幂等地建回来**，父仓 ⓪ 因此红着。
+本批把口径反转、并把"指错库"做成可读与可拦的两件东西：
+
+  · `/health` 的 `dials.checkpoint_db`（**只回库名**，不回主机/口令）——它是这一块里
+    **唯一一格读配置的**，与 `checkpoint_backend`（读活体对象）合起来才读得通；
+  · `CHECKPOINT_FORBID_DB`（**缺省空 = 不拦**）：填业务库的库名 ⇒ DSN 指到它时
+    `build_checkpointer()` 当场抛、**进程起不来**。**生产库名不写进本仓**（公开仓，
+    运维坐标不落仓），所以硬闸只能是个配置项。
+
+**旧数据不迁**：checkpoint 是派生上下文，换库最坏退化成"老会话第一轮看不见历史"
+（`docs/platform-roadmap.md` 批 7 里记着的那条已知缺口），而迁的代价是两套库坐标
+从此要一起维护。

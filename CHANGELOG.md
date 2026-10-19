@@ -16,6 +16,29 @@
 
 ## 20261019
 
+- **工具的失败路径不再伪装成成功（⚠️ 有对外行为变更）。** `execute_node` 那一行是
+  `getattr(out, "kind", "ok")`——**"没声明 kind"与"声明了 ok"读出来逐字相同**。于是
+  `device_oled_display` 的 8 条硬失败（身份取不到 / 屏文超 64 字 / 设备 id 非法 / 404 /
+  409 离线 / HTTP 非 200 / 抛异常）与 `get_weather` 的 `except` 那条都是**裸字符串** ⇒
+  判 PASS ⇒ 产回执 ⇒ 落 `execution_log` ⇒ 下一轮 `recent_executions` 注回提示词 ⇒
+  planner/narrator 读成**系统确认的事实**。实测最刺眼的一格：设备离线时那条回执被 Rust
+  渲染成「屏幕显示「你好」」——主人下一轮问"你真显示了？"，agent 会**据实转述**它。
+  现在：404 判 `not_found`（查无此设备不是故障）、409 / HTTP 非 200 / 身份 / 异常判
+  `unavailable`、参数不合法判**新 kind `invalid_args`**（与 `args_parse` 分开——那个是
+  "解析不出"，这个是"解析出来了、值不合法"；过程行显示「参数不合法」而不是「服务不可用」）。
+  这四种 kind 在 checker 眼里**全判 BLOCK ⇒ 不进回执**，真下发那条照常 PASS。
+  判据：`tests/test_tool_kind_contract.py`（新——工具返回值契约的登记表：每件 `@tool` 的
+  裸文本返回必须登记、台账双向、`failure` 必须带收口批次，外加"工具能声明的 kind ⊆
+  `_check_spec` 认得的 kind"防下一个新 kind 静默落进 PASS）+ `tests/test_hardening.py`
+  的五条 device 失败逐条判 BLOCK（带"真下发仍 PASS"的正控）。
+- **写操作幂等账在生产那条路上第一次真的通电（⚠️ 有对外行为变更）。** 此前它的键里含
+  `checkpoint_ns`，而生产每轮传 dict 输入 ⇒ langgraph 从 START 重启 ⇒ 那个值逐字变 ⇒
+  **账认不出同一件写**（真机读数：同一件写执行 2 次）。后果是**「已经发出去了、没拿到返回」
+  那一支无声**——主人看到一张新的确认卡、点确定，那件写就真做了第二遍，而他永远不会被告知。
+  修法：键降成**会话级**（跨重启稳定），"哪一轮的哪一次"降级存进行里；跨轮命中时按
+  **上一轮跑没跑完**分流——**没跑完** ⇒ 那是上一轮的续（已完成的写重放、未决的写判
+  「写操作结果未知」）；**跑完了** ⇒ 主人明确再要一次 ⇒ 照常执行（合法的重复不被吞）。
+  账的表结构、保留期、两个后端一个字没动。
 - **agent 能读、能审「文章评论」了：与留言同形，但**处处分家**（⚠️ 有对外行为变更）。五件：
   ① **三件新工具**：`list_admin_comments`（后台评论名册，读 `GET /api/protect/comments`）、
   `audit_comment`（人工复核为通过/驳回）、`delete_comment`（删，软删）。此前 agent 手里只有
@@ -39,6 +62,97 @@
   test_pending_ledger.py` 两族→三族；`tests/test_todo_schedule.py` 断言留言与评论是**两次不同的
   读**；`tests/test_authz.py` 强制确认清单 29→31。`eval/judge_registry.json` 记下新增的
   `_COMMENT_INTENT_RE`（`open` 类，与额度族同一条出路）。
+- **`CHECKPOINT_DSN` 必须指业务库之外的独立库：口径反转 + 两件让「指错库」看得见的东西**
+  （⚠️ **agent 对外行为零变更**，改的是**运维口径与可观测面**）。三件：
+  ① **口径反转**：采纳那天写的是「生产候选 = 业务库、**不建议**再另起一个专库」，**这条取舍
+  作废**。理由与"少一个库"无关——saver 建表走 `PostgresSaver.setup()`、**没有编号迁移**，
+  而业务库的结构只许由父仓的编号迁移改 ⇒ 指进业务库等于在业务库上开一条**没人编号、不在
+  CI 里**的 DDL 通道，且那 4 张表与业务表**不重名**、**不会报错**。**实测（20261019）：生产
+  的 `CHECKPOINT_DSN` 当时指的正是业务库**，`setup()` 每次启动把它幂等建回来。
+  ② **`/health` 加一格 `dials.checkpoint_db`**（只回库名，不回主机/口令）——它是这一块里
+  **唯一一格读配置的**，与 `checkpoint_backend`（读活体对象）合起来才读得通。
+  ③ **可配的硬闸 `CHECKPOINT_FORBID_DB`**（**缺省空 = 不拦**）：填业务库的库名 ⇒ DSN 指到
+  它时**启动期当场抛**。生产库名**不写进本仓**（公开仓，运维坐标不落仓），所以硬闸只能是
+  配置项。**挪库那一步归主人**，顺序见 `docs/platform-roadmap.md` 批 7 的运维交接
+  （**先换 DSN 重启、再跑父仓 `0008` 清业务库残留**——反了会被建回来）。
+  另修一条判据的前提：`tests/test_checkpoint_factory.py` ① 此前**继承这台机器 `.env` 的
+  DSN 取值**，产线把那行填上之后它当场红两条（代码一个字没错）——改成**自己把前提钉成空串**。
+
+- **写操作幂等账的口径更正：它只在「续跑」那条路径上有效，而生产不走那条路**（⚠️ **对外行为
+  零变更**，改的是**读法与判据口径**）。两件事：① 探针 `eval/experiments/checkpoint_probe.py`
+  新增 `--crash-resume --guard --prod-shape` 一档——恢复那一次传 **dict 输入**（= 生产每轮的
+  形状）而不是 `stream(None)`。真机读数：**同一件写执行 2 次**，两遍的 `checkpoint_ns`
+  （幂等键的身份成分）**逐字不同**；同夹具不带该开关的那条（续跑）读数是 **1 次、ns 逐字相同**
+  —— 内置反控，两档只差输入形状。根因：生产每轮传 dict 输入 ⇒ langgraph **丢弃**上一份
+  checkpoint 的未完成任务、**从 START 重启**（`langgraph/pregel/_loop.py:977-979`）⇒ 全新的
+  checkpoint 血缘 ⇒ 键变 ⇒ 账认不出同一件写。② 把口径改诚实：`agent/idem.py` 头注那张三条
+  实测表、`docs/adr/adr-0012` 新增《口径更正（20261019）》、`tests/test_write_idempotency.py`
+  块① 的措辞，都写明它们量的是**续跑**那一格。**断言一条都没改**（续跑那一格仍然有效且必要，
+  只是它盖的不是生产）。**这是已知缺口**，两条修法候选与触发条件记在 ADR-0012 里。
+
+- **checkpoint store 与幂等账有保留治理了（新增 `eval/pg_retention.py`）**（⚠️ **agent 对外行为
+  零变更**，改的是**数据保留与审计面**）。起因：20261018 起 agent 的上下文落进 PG，而
+  `eval/retention_manifest.py` 那张登记表**只审计盘上的树**（`logs/` 与 `eval/report/`）⇒ 它对
+  PG 表是瞎的，`checkpoints` 那一族**零清理**——实测每个 checkpoint 存**整份快照**（`messages`
+  通道的 blob 随会话长度 1417→6646 字节单调长），而 checkpoint 数随轮数线性长 ⇒ **存储按会话
+  长度平方增长**（同族坑第五次：R2 `--keep 3`、logrotate `rotate 14`、traces 保留期、
+  `logs/archive`——保留策略必须由一个**真会跑的东西**执行，写进配置或登记表里不算）。四件：
+  ① 新执行者 `eval/pg_retention.py`（照 `eval/trace_retention.py` 的形状：**默认只列不删**、
+  `--apply` 才动手；**与库无关**，DSN 从 `CHECKPOINT_DSN`/`--dsn` 读，不硬编码库名），接进
+  `scripts/nightly_regression.sh` 末位。线程的「最近活动」取自 `max(checkpoint->>'ts')`
+  （`checkpoints` **没有时间列**，时间只住在那个 JSONB 里）；**取不到时间（NULL）的线程永不裁**
+  ——判据缺失时不动手，否则一次 `ts` 形态漂移就是一次**静默全库删除**。
+  ② **不变量「账与 checkpoint 必须一起裁」**（ADR-0012 要堵的那个洞）：同一个 cutoff、**同一个
+  事务**、**commit 前断言**；断言不成立就整个回滚（宁可什么都不删，也不留下"checkpoint 没了、
+  账还在"的半裁状态）。⚠️ **如实的残余**：`agent_write_idem` **没有 `thread_id` 列**（键是
+  sha256）⇒ 口径是「**同窗**」不是「同一批线程」，长效会话里早于 N 天的 checkpoint 会留下、
+  对应的账行会被删——**方向是安全的**（重放只针对线程的**最新** checkpoint，而活跃线程的最新
+  checkpoint 必然在窗内），要结构性保证得给账表加 `thread_id` 列，列为后续。**保留期 30 天**
+  （与 `trace_retention` 同量级，远大于崩溃恢复窗口）。③ **归口**：登记表给类加一个可选 `store`
+  字段（缺省 `fs`，PG 写 `pg`），新增 `agent-checkpoint-store`（`managed`），审计器**跳过**
+  `store != "fs"` 的类（它不在盘上，硬塞进路径判据只会得到一条恒不命中的规则）。④ 判据两件：
+  `tests/test_pg_retention.py`（纯函数 + 很小的假连接，判**分类规则与事务形状**——三条反控各自
+  证明"把取不到时间的并进该裁"「去掉事务」「摘掉断言」会让判据红）、`tests/test_pg_retention_live.py`
+  （**真连一个库、真删一次、真回滚**，前提模式照 `test_checkpoint_setup_concurrent.py`：读
+  `SAUDADE_CKPT_TEST_DSN`、缺席报「未评估」退 0、`SAUDADE_REQUIRE_CKPT_TEST=1` 时退 1、DSN 指向
+  业务库当场拒跑）。**没有配 DSN 时它印一行"这一层没量"并退 0**——那是「前提不可用」，不是
+  「跑过了、没有可删的」。
+
+- **删会话/删账号时 checkpoint 跟着一起清（跨仓契约接上了）**（⚠️ **对外行为有变更**：删除
+  动作多了一次对 agent 的 best-effort 调用，用户的可见行为不变）。父仓那一半此前是**已知
+  缺口**：`DELETE /checkpoint/{conversation_id}` 钩子零调用方 ⇒ 会话删了、那份正文还躺在
+  checkpoint 库里，**没有任何读取路径、也没有任何东西会红**。四件：① 父仓新增
+  `drop_checkpoint_threads`（best-effort：超时 3s/条 + **总预算 10s**，失败只 `tracing::warn`，
+  绝不挡业务删除——残留由上面那条保留期兜底；「点了没反应」在本仓是禁止的，所以必须有痕）。
+  ② **HTTP 不进 DB 事务**：`delete_conversation` 在 `commit()` **之后**调、`delete_temp_user`
+  紧随那份清单；会话 id 由 `purge_conversation_data` **返回**给调用方（**清单仍只有一处**——
+  两个调用点各自再查一遍就是 20261018 那个 bug 的形状）。③ 基址复用父仓
+  `graph.rs::agent_base_url()`（提为 `pub(crate)`），不再抄第二份坐标。④
+  `tests/test_checkpoint_cascade.py` ③ **换了锚点**：从"清单的两个 match 臂"改成"两个调用点
+  的函数体"（钩子必须落在事务之外，老锚点在新形状下**恒判「两臂都没接」**——一条恒绿的判据
+  比没有更坏），并加一条"id 清单仍只有一处"；绿条件**没有收紧**（仍是"不许半接"）。
+  **实测现在报「两臂都接」**。⚠️ 父仓那三行要 push + 重启 Rust 才生效。
+
+- **「停止生成」现在对 agent 也生效了：丢弃那一轮会同步到图自己的 state**（⚠️ **对外行为
+  有变更**：主人点"停止生成"之后，agent 下一轮**不再记得**那句被丢掉的话）。缺口：20261018
+  起 agent 的上下文**由图自持**（历史注入已关）⇒ `chat_history` 不再是上下文来源，而父仓
+  `POST /api/chat/discard` 删的只是 `chat_history` 里那一轮 ⇒ **「丢弃」对 agent 不再生效**
+  （主人明确说"不想要这条进记忆"，而记忆里还有），且没有任何东西会红。四件：
+  ① 本仓新增 `agent/checkpoint.py::drop_last_user_turn`（原语 = `aupdate_state` +
+  `RemoveMessage`，先例是 gate 重规划那一处）+ 薄壳端点 `POST /checkpoint/{id}/drop_turn`。
+  摘的是**那条 user 及其之后的一切**（父仓删的是 `id >= u.id`；只摘 user 会把半截 AI 留在
+  state 里，下一轮 narrator 会把它当"我方已经说过的话"）。② **原文对不上就不动手**
+  （`mismatch` / `no_text`）——摘错的代价不可逆（删掉主人还想留着的话），所以判据缺失时不动手；
+  返回值恒是**读回来确认**，不是"没抛异常"。③ 父仓 `chat.rs::discard_handler` 在删除成功之后
+  调它、**带上刚删那行的 content**（best-effort，失败只 warn；`mismatch` 分支不调）。
+  ④ 新 `tests/test_checkpoint_drop_turn.py`（真图 + `MemorySaver`，**图按生产形状造**——
+  一个节点的图 `aupdate_state` 推不出"最后是谁写的"、会抛 `Ambiguous update`）：反控 = 把
+  `aupdate_state` 打桩成 no-op ⇒ 必须回 `dropped=false`。
+  ⚠️ **如实的残余（实测）**：被打断在节点中途的线程，`get_state().next` **非空**，而
+  `aupdate_state` 保留它。这不是本函数引入的（中断那一刻就已经非空），今天生产每轮传 dict
+  输入 ⇒ 下一轮走完自己回到空；**潜伏面**是任何 `stream(None)` 的续跑会去跑那个 pending
+  节点。判据把这条现状**记下来**，没有假装它是干净的。
+
 - **模块地图补全 + 10 处模块改名**（⚠️ **对外行为零变更**）。四件：
   ① **`docs/agent-architecture.md` §2 那张目录树此前已经烂了，而没有任何东西会红**：实测点名了
   3 个已不存在的文件（`adminops.py` / `helpers.py` / `native_plan.py`），磁盘上 38/81 个模块它

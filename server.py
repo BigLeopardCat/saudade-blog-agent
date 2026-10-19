@@ -333,6 +333,23 @@ def _stream_kwargs() -> dict:
     return {"durability": idem.REQUIRED_DURABILITY} if _graph_holds_context() else {}
 
 
+def _idem_resuming(thread_id: str) -> bool:
+    """给写幂等账的那一格：**这一轮开始时，上一轮跑没跑完**（批 F）。
+
+    账本靠它分流"重放"与"主人又要了一次"——键现在是会话级的（跨重启稳定），
+    `checkpoint_ns` 降级成"这一次尝试"，于是"换了一轮"这件事必须由别处告诉账本，
+    否则**合法的重复会被吞**（"再显示一次"变成"已经显示过了"）。
+
+    判定与理由在 `agent/checkpoint.py::thread_is_resuming`（读图状态的 `next`；读不到
+    按保守侧 `True` 办）。**没挂 saver ⇒ `False`**：那种环境账本 `active()` 为假、
+    根本不查这一格，给 `False` 与"今天逐字相同"一致；而给它 `True` 会让"没挂 saver"
+    与"上一轮崩了"在日志里长得一样。
+
+    与 `_stream_kwargs` 同形：两条路（`/chat` 与 `/chat/stream`）共用，**只此一处**。
+    """
+    return checkpoint.thread_is_resuming(_agent, thread_id) if _graph_holds_context() else False
+
+
 def _build_arm():
     """按 `AGENT_ARM` 选臂（20261012 批 4）。`graph` ⇒ **逐字节就是原来那一行**。
 
@@ -804,10 +821,13 @@ def _run_agent_sync(messages: list, thread_id: str, user_id: int = 0,
     # ledger 一并注入：gate 的台账否认判据（洞⑦）读它，见 _ledger_for_graph
     # recent_tools 一并注入：授权式审核快道的**结构化准入判据**（20260929 批 F1'，
     #   与流式那半同源同义，见 `_run_agent_stream_to_queue` 的同名参数注）
+    # idem_resuming 一并注入：写幂等账的**分流判据**（批 F）——这一轮开始时上一轮跑没
+    #   跑完。与流式那半同源同义，见 `_run_agent_stream_to_queue` 的同名参数注。
     # recursion_limit 覆盖默认 9999（等效无界）：幻觉重试循环有界
     config = {"configurable": {"thread_id": thread_id, "user_id": user_id,
                                "principal": principal or Principal(uid=user_id),
-                               "recent_tools": list(recent_tools or [])},
+                               "recent_tools": list(recent_tools or []),
+                               "idem_resuming": _idem_resuming(thread_id)},
               "recursion_limit": RECURSION_LIMIT}
     full_reply = ""
     nav_line = ""
@@ -980,8 +1000,8 @@ async def chat(req: ChatRequest, request: Request):
 # 且**两侧的期望值都锁在** `tests/test_action_text.py`。
 
 _REASON_CN = {"unknown_tool": "未知工具", "args_parse": "参数解析失败",
-              "empty_result": "结果为空", "error_frame": "执行出错",
-              "cmd_shape": "返回格式异常",
+              "invalid_args": "参数不合法", "empty_result": "结果为空",
+              "error_frame": "执行出错", "cmd_shape": "返回格式异常",
               # 参数引用失败（agent/arg_refs.py 的原因码，20260919）
               "ref_unknown_tool": "引用的工具尚未执行",
               "ref_unparsed": "引用的返回不是结构化数据",
@@ -1299,7 +1319,11 @@ def _run_agent_stream_to_queue(messages: list, thread_id: str, queue: asyncio.Qu
                                # 输入，没有回写需求）。传 `[]` 而不是缺键——"上一轮什么
                                # 都没执行"是一个确定的事实（与 chat_quota 的"读不到 ⇒
                                # 整个键缺席"恰好相反，见 ChatRequest 那条注）。
-                               "recent_tools": list(recent_tools or [])},
+                               "recent_tools": list(recent_tools or []),
+                               # 写幂等账的分流判据（批 F）：这一轮开始时上一轮跑没跑完。
+                               # 走 configurable 与上面几格同一条路——图里（`idem.py` 的
+                               # `resuming`）读得到、又不必动 AgentState。见 `_idem_resuming`。
+                               "idem_resuming": _idem_resuming(thread_id)},
               "recursion_limit": RECURSION_LIMIT}
     try:
         # 双 stream_mode：
@@ -2591,6 +2615,10 @@ async def health():
             # **读的是 `_agent` 这个活体对象，不是 `CHECKPOINT_DSN`**——配了 DSN 而图没挂
             # 上 saver 时读配置会报成"挂了"，那是本仓最贵的一类失效。
             "checkpoint_backend": runtime_probe.checkpoint_backend(_agent),
+            # `CHECKPOINT_DSN` 指到哪个库（**只回库名**）。本块**唯一一格读配置的**，
+            # 与上面那格合起来才读得通；存在理由 = 把"指错库"变成一眼可见
+            # （理由与硬闸见 `agent/runtime_probe.checkpoint_db`）。
+            "checkpoint_db": runtime_probe.checkpoint_db(settings.checkpoint_dsn),
         },
     }
 
@@ -2619,6 +2647,33 @@ async def checkpoint_delete(conversation_id: str):
     gone = await asyncio.to_thread(checkpoint.delete_thread, saver, conversation_id)
     logger.info("[checkpoint] 级联删除 conv=%s deleted=%s", conversation_id, gone)
     return {"deleted": gone, "why": "" if gone else "still_readable"}
+
+
+class DropTurnReq(BaseModel):
+    """`text` = 被丢弃那一轮的**原文**（父仓手里有那一行的 content，一律会带上）。
+
+    空串不算填：没有原文就没法确认"state 里最后那条 user 是不是被丢弃的那一轮"，
+    而摘错的代价不可逆 ⇒ 不动手、`why` 回 `no_text`（理由与匹配规则见
+    `agent/checkpoint.py::drop_last_user_turn`）。
+    """
+    text: str = ""
+
+
+@app.post("/checkpoint/{conversation_id}/drop_turn")
+async def checkpoint_drop_turn(conversation_id: str, req: DropTurnReq):
+    """把**丢弃那一轮**同步到图自己的 state（批 E 的跨仓契约之一半）。
+
+    父仓 `POST /api/chat/discard` 删的是 `chat_history` 里那一轮，而 20261018 之后 agent
+    的上下文**由图自持**（历史注入已关）⇒ DB 不再是上下文来源，「丢弃」对 agent 不再生效。
+    **另一半在父仓** `src/routes/chat.rs::discard_handler`（删除成功之后调它）。
+
+    `dropped` 恒是**读回来确认**的结果；`false` 时 `why` 点名是哪一条（`no_text` /
+    `mismatch` 都**不是错误**——它们是"没动手"的如实回执）。三支照 `checkpoint_delete`。
+    """
+    out = await checkpoint.drop_last_user_turn(_agent, conversation_id, req.text)
+    logger.info("[checkpoint] 丢弃那一轮 conv=%s dropped=%s why=%s",
+                conversation_id, out.get("dropped"), out.get("why"))
+    return out
 
 
 @app.get("/version")

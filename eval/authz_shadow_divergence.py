@@ -49,7 +49,7 @@
 （等价于"后台写被 shadow 放行了"）。**这是缺陷，不是读数**，单独列出来、并计入退出码。
 
 那组 scope **现取不手抄**（对每个 scope 问一次 `enforcing()`）；取不到 agent 包时写
-**"这一项没验"**，不是"没有违规"（同 `scripts/healthcheck.sh` 第 8 项的写法）。
+**"这一项没验"**，不是"没有违规"（同父仓 `scripts/healthcheck.sh` 第 8 项的写法）。
 
 ## 跑法
 
