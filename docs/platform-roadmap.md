@@ -28,7 +28,7 @@
 
 | 面 | 现状 | 证据 |
 |---|---|---|
-| 断点恢复 | 建账时**无**：生产不挂 saver；`agent/checkpoint.py` 的 `build_checkpointer()` 是响亮桩、零生产调用方；`thread_id` 每请求随机。**"挂没挂"现在看得见了**（**已补**：批 6a，`/health` 的 `checkpoint_backend`；半接会被 `tests/test_checkpoint_adoption.py` 判红）。**接线已落地**（**已补**：批 7，"三处一起动"共用同一个判据）——**但生产是否在跑仍取决于 `CHECKPOINT_DSN`**，空则与从前逐字节相同 | `agent/checkpoint.py`、`server.py` |
+| 断点恢复 | 建账时**无**：生产不挂 saver；`agent/checkpoint.py` 的 `build_checkpointer()` 是响亮桩、零生产调用方；`thread_id` 每请求随机。**"挂没挂"现在看得见了**（**已补**：批 6a，`/health` 的 `checkpoint_backend`；半接会被 `tests/test_checkpoint_adoption.py` 判红）。**接线已落地**（**已补**：批 7，"三处一起动"共用同一个判据），且 **20261018 起生产真的在跑**（`/health` 回 `postgres`）。⚠️ **但它现在指在业务库上**——20261019 批 B 反转了"指哪个库"的口径（**必须独立库**）、加了 `dials.checkpoint_db` 与 `CHECKPOINT_FORBID_DB` 硬闸，**挪库那一步归主人**（顺序见批 7 的运维交接） | `agent/checkpoint.py`、`server.py` |
 | 幂等账 | **已建成但惰性**：`agent/idem.py` 的 `active()` 要求 checkpointer 在场 ⇒ 恒 False | `agent/idem.py` |
 | 版本可见性 | **无** `/version`、无 build-info；`/health` 只回声 dials （**已补**：批 3，`agent/probe.version_payload`） | `server.py`、`agent/probe.py` |
 | 错误码 | BLOCK 原因码**已有闭集**（`agent/block_reasons.py` + `tests/test_block_reasons.py`）；**发射侧**没有对应闭集 | 同上 |
@@ -297,8 +297,26 @@
 **级联清理**：`agent/checkpoint.py::delete_thread`（返回值是**"删完读回来确认"**，不是
 "没抛异常"——`DELETE ... WHERE` 删不存在的线程同样不抛，只看"没抛"的话恒不生效的删除与
 真删除**长得一模一样**）+ `DELETE /checkpoint/{conversation_id}` 钩子。
-⚠️ **父仓那一半截至 20261018 还没接上**（`src/routes/conversation.rs::purge_conversation_data`
-的两个臂都没调钩子）⇒ 本仓的钩子今天**没有任何调用方**，这是**已知缺口**。
+**父仓那一半 20261019 已接上**（批 D）：父仓 `conversation.rs::drop_checkpoint_threads` 在
+两个调用点各调一次（`delete_conversation` 在 `commit()` **之后**、`delete_temp_user` 紧随
+那份清单），会话 id 由 `purge_conversation_data` **返回**（清单仍只有一处）。
+⚠️ 接线时判据 ③ 的锚点跟着挪了位：从"清单的两个 match 臂"改成"两个调用点的函数体"——
+因为钩子必须落在**事务之外**（HTTP 不能进 `txn`）。老锚点在新形状下恒判「两臂都没接」，
+**一条恒绿的判据比没有更坏**。
+
+**「丢弃那一轮」也要同步到图自己的 state**（20261019 批 E）：`agent/checkpoint.py::drop_last_user_turn`
++ `POST /checkpoint/{conversation_id}/drop_turn`，父仓 `chat.rs::discard_handler` 删完
+`chat_history` 之后调它。**为什么必须有**：20261018 起 agent 的上下文**由图自持**（历史注入
+已关）⇒ `chat_history` 不再是上下文来源，「丢弃」这个动作对 agent **不再生效**——主人点了
+"停止生成"，agent 下一轮照样记得那句被丢掉的话。三条纪律：① 摘的是**那条 user 及其之后的
+一切**（父仓删的是 `id >= u.id`；只摘 user 会把半截 AI 留在 state 里，下一轮 narrator 会把它
+当"我方已经说过的话"）；② `text`（父仓带上刚删那行的 content）**对不上就不动手**——摘错的
+代价不可逆；③ 返回值是**读回来确认**，不是"没抛异常"。
+⚠️ **如实的残余（实测）**：被打断在节点中途的线程，`get_state().next` **非空**，而
+`aupdate_state` 保留它（`as_node=<被打断那个节点>` 只是把 pending 往前挪一格）。这不是本函数
+引入的——中断那一刻就已经非空；今天生产每轮传 dict 输入 ⇒ langgraph 丢弃未完成任务、从
+START 重启 ⇒ 下一轮走完自己回到空。**潜伏面** = 任何 `stream(None)` 的续跑会去跑那个 pending
+节点。判据 `tests/test_checkpoint_drop_turn.py` ⑤ 把这条现状记下来，没有假装它是干净的。
 
 **判据**（四份，全绿）：
 - `tests/test_checkpoint_adoption.py`：四处形态**一致即绿**。批 6 时是 0/4（全未接），
@@ -314,9 +332,11 @@
 - `tests/test_checkpoint_cascade.py`（**新建**）：① 机制（含"删了没生效必须返回 False"
   的反控）② 端点三支 + "不许把没删掉报成删掉了"的反控 ③ **跨仓守卫**。
   ⚠️ ③ **判的不是"父仓接了吗"**（那会一直红、而红的套件进不了 CI，同批 6 那次）：
-  判的是**父仓自己两臂的一致**——`purge_conversation_data` 的 `ConversationId` / `UserId`
-  两臂要么都调钩子、要么都不调，**半接就红**。这不是编出来的判据：父仓自己在那份头注里
-  写着它上一版正是"清单两处各写一遍、写的不是同一份"，漏掉的三张表因此变成孤儿。
+  判的是**父仓那两条删会话数据的路的一致**——会话臂 `delete_conversation` 与账号臂
+  `delete_temp_user` 要么都调钩子、要么都不调，**半接就红**（外加一条"id 清单仍只有一处"：
+  钩子挪到调用点之后，两个调用点各自再查一遍 id 是最容易滑回去的写法）。这不是编出来的
+  判据：父仓自己在那份头注里写着它上一版正是"清单两处各写一遍、写的不是同一份"，
+  漏掉的三张表因此变成孤儿。
 - `tests/test_checkpoint_setup_concurrent.py`（**20261018 停服之后补的第四份**）：真连一个库、
   4 个进程同时建表。**它才是抓得住那次停服的那一层**——前三份全在 `127.0.0.1:1` 这种必然
   失败的 DSN 上判。缺 `SAUDADE_CKPT_TEST_DSN` 时它报「未评估」并退 0（`SAUDADE_REQUIRE_CKPT_TEST=1`
@@ -376,12 +396,22 @@ saver 挂上之后历史注入被闸门关掉，而**没有任何"播种"路径*
    《迁移到 PG》；建表那一步是**轮询抢锁 + 预算**，4 个 worker 同时启动安全）。
    ⚠️ **DSN 指向哪个库是要挑的**：它会在那个库里建 4 张表
    （`checkpoints` / `checkpoint_writes` / `checkpoint_blobs` + 幂等账 `agent_write_idem`），
-   这些是**本 agent 自己的表**、与博客业务表不重名；但**别指错库**。
-   · 生产候选 = **`saudade_blog`**（`saudade_app` 有 CREATE，且 20261018 那次实验已经在那里
-     建到 `max(v)=5`、没有无效索引 ⇒ 这次启动会从 6 继续跑到底）。
+   这些是**本 agent 自己的表**、与博客业务表不重名 ⇒ **建错库不报错**，这才是危险的地方。
+   · **必须指一个业务库之外的独立库**（同一实例、新建一个 database 即可，要有 CREATE 权限）。
+     理由：saver 建表走 `PostgresSaver.setup()`、**没有编号迁移**；而业务库的结构只许由父仓的
+     **编号迁移**改（父仓的迁移校验脚本 `verify_parity.py` ⓪ 段判的正是"业务库里不该有
+     checkpoint 表"）⇒ 指进业务库等于在业务库上开一条**没人编号、不在 CI 里**的 DDL 通道。
+   · ⚠️ **本段口径 20261019 反转**（原文写着"生产候选 = `saudade_blog`"＋"**不建议**再另起一个
+     专库"）：采纳的第一版按那个口径指的**就是业务库**。取舍作废——少一个库省的是一行 DSN，
+     换来的是业务库结构多一条**无编号**的改动路径。**独立库的名字不写进本仓**（本仓是公开仓，
+     运维坐标不落仓）；完整理由与"旧数据不迁"见 `agent/checkpoint.py` 头注《DSN 指向哪个库》。
    · **`agent_checkpoint` 不归生产**：那是实验线（`/home/ubuntu/exp/ckpt.env`，owner `agent_ckpt`）
      的库，别拿它当生产 saver 的家。
-   · 全新库也行（要有 CREATE 权限）。**不建议**再另起一个专库——多一个库就多一份要记的运维面。
+   · **旧数据不迁**：checkpoint 是**派生上下文**，换库最坏退化成"老会话第一轮看不见历史"
+     （上面那条已知缺口），而迁的代价是两套库坐标从此要一起维护。
+   · **「指错库」现在看得见**：`/health` 的 `dials.checkpoint_db` 回**库名**（脱敏后，
+     与 `checkpoint_backend` 合起来读）；要变成硬闸就配 `CHECKPOINT_FORBID_DB`（缺省空 = 不拦，
+     填的是**业务库**的库名）。
    `.venv` 里 `langgraph.checkpoint.postgres` / `psycopg` / `psycopg_pool` **已在**。
    ⚠️ **如果这个库上还有上一次被打断留下的痕迹**（迁移停在中间、或
    `SELECT c.relname FROM pg_index i JOIN pg_class c ON c.oid = i.indexrelid WHERE NOT i.indisvalid`
@@ -401,18 +431,62 @@ saver 挂上之后历史注入被闸门关掉，而**没有任何"播种"路径*
    旧版才会成环（现在这一版是 try-lock + 60s 预算，最坏是一条点名的启动错误）；
    **真遇到了**：`SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE …` 点掉
    那几个后端，`systemctl restart` 就会立刻回来。
-3. **读回执**（**唯一能证明它在跑的东西**）：
+3. **读回执**（**唯一能证明它在跑的东西**）：两格一起读——一格是"挂没挂"，
+   另一格是"指到哪个库"：
    ```bash
-   curl -s http://127.0.0.1:8010/health | python3 -c 'import json,sys;print(json.load(sys.stdin)["dials"]["checkpoint_backend"])'
+   curl -s http://127.0.0.1:8010/health | python3 -c 'import json,sys;d=json.load(sys.stdin)["dials"];print(d["checkpoint_backend"], d["checkpoint_db"])'
    ```
    要看到 `postgres`。看到 `none` ⇒ DSN 没读到（`SAUDADE_IGNORE_ENV_FILE`？）；
    看到 `unknown` ⇒ 图那个对象上读不出 saver。**`none`/`unknown` 都算没接上**。
+   `checkpoint_db` 那一格回的是 **DSN 指的库名**（20261019 批 B 加的）——它必须是
+   **业务库之外**的独立库（见上面那一段）；`""` = 没配 DSN，`unknown` = 配了但解析不出库名。
 
-**父仓那一半（同样是主人那边的事，本仓改不了）**：在
-`src/routes/conversation.rs::purge_conversation_data` 的**两个臂**里各加一次对本仓钩子的调用
-（`DELETE http://127.0.0.1:8010/checkpoint/{id}`，`UserId` 那一臂要按该 uid 的会话逐个删）。
-**只加一个臂 ⇒ `tests/test_checkpoint_cascade.py` ③ 当场红**——那正是父仓自己踩过的形状。
-没接上之前：删了会话、checkpoint 还留在库里（**已知缺口**，判据 ③ 会打一行字说明）。
+#### ⚠️ 20261019 追加：DSN 现在指着**业务库**，要挪走（**顺序不能反**）
+
+实测（20261019）：`.env` 里 `CHECKPOINT_DSN` 已经填上、`/health` 回
+`checkpoint_backend=postgres`，而 `checkpoint_db` 是**业务库** ⇒ agent 启动时
+`saver.setup()` 又在业务库里把 4 张表建回来了（实测行数：`checkpoints` **13** /
+`checkpoint_blobs` **31** / `checkpoint_writes` **94**，即真有会话在往里写），
+而父仓的迁移校验脚本 `verify_parity.py` ⓪ 段判的正是这件事（它的报错文本就写着
+"`CHECKPOINT_DSN` 与 `DATABASE_URL` 逐字相同"）。
+**四步，顺序不能反**：
+
+1. 把 `.env` 的 `CHECKPOINT_DSN` 改成**独立库**那一行（同一个 PG 实例，角色要有 CREATE）；
+2. `sudo systemctl restart saudade-agent && sleep 8`，读 `/health` 两格：
+   `postgres` + 那个独立库的名字；
+3. **然后**才跑父仓的 `scripts/migration/pg/0008_drop_stray_checkpoint_tables.sql` 清业务库残留。
+   ⚠️ **反了的话白跑**：先跑 0008 再重启，`setup()` 会把它们**幂等地建回来**（那一节自己
+   写着"这不是一扇单向门"）。**0008 的头注里"现在 agent `.env` 那一行是注释掉的"这句
+   已经过期**——它是按 20261018 那次的状态写的；
+4. 跑父仓的迁移校验脚本 `verify_parity.py`，期望 0 处对不上。
+
+**父仓那一半：20261019 批 D 已落地**（`conversation.rs::drop_checkpoint_threads`，两个调用点；
+基址复用 `graph.rs::agent_base_url`，提为 `pub(crate)`）。**只接一个调用点 ⇒
+`tests/test_checkpoint_cascade.py` ③ 当场红**——那正是父仓自己踩过的形状。
+钩子失败只 warn、不挡业务删除（残留由批 C 的保留期兜底）。
+⚠️ **父仓那三行要 push + 重启 Rust 才生效**（本机只 `cargo check`，见本仓 CLAUDE.md §部署）。
+
+#### 20261019 追加（批 F）：幂等账在生产那条路上第一次真的通电
+
+批 7 落地之后实测出来的那条缺口：**写操作幂等账在生产那条路上恒不命中**。原因是键里
+含 `checkpoint_ns`，而生产每轮传 dict 输入 ⇒ langgraph 丢弃未完成任务、**从 START 重启**
+⇒ `checkpoint_ns` 逐字变 ⇒ 键变（真机读数 2 次 vs 续跑路径的 1 次，见 `docs/adr/adr-0012`
+的《口径更正（20261019）》）。**批 F 修掉了**：
+
+- **键降成会话级**（`sha256([thread_id, 工具名, 参数指纹])`，跨重启稳定），"哪一轮的哪一次"
+  降级成 `attempt_for` 存进**原来的 `fp` 列** ⇒ **表结构、保留期、两个后端一个字没动**；
+- 跨轮命中时按 **`idem_resuming`**（= 上一轮跑没跑完，`get_state().next` 非空）分流：
+  **没跑完** ⇒ 那是上一轮的续（`done` 重放 / `intent` 判「结果未知」）；**跑完了** ⇒
+  主人明确再要一次 ⇒ 照常执行。缺省 `True`（读不到就按"没跑完"办——失效落在**看得见**
+  的那一侧）；
+- 那一格由 `server._idem_resuming(thread_id)` 算，**两条路（`/chat` 与 `/chat/stream`）
+  共用**，判据块⑭ 按源码锁钉两处。
+
+**残留（如实记着，别读成"重放这条路全干净了"）**：① 同一会话并发两轮时，后到那轮会把
+先到那轮的 in-flight `intent` 读成"结果未知"（前端有 busy 锁，理论上到不了）；② `intent`
+那一行的释放靠**下一轮跑完之后**——主人被告知"结果未知"之后**再要一次就会真做**（一个
+永久拦着、没有出口的死锁比"已经告知过的风险"更坏）。读数与两条候选的取舍见
+`docs/adr/adr-0012` 的《修法（20261019，批 F）》。
 
 ### 批 8 — 权限从影子到强制（触发条件驱动，不硬排）
 
@@ -443,6 +517,7 @@ saver 挂上之后历史注入被闸门关掉，而**没有任何"播种"路径*
 | 第三张错误码表 | 已有 BLOCK 原因码闭集，再叠一张只多一份要同步的东西 | 永不 |
 | 自己装 SIGTERM handler 做「关停排空」 | uvicorn **已经**有优雅停机（SIGTERM 后在途请求自然收尾），自己再装一个就是**顶掉它**、把这件事重实现一遍；而真正的缝在**跨仓**：父仓 unit 的 `TimeoutStopSec=120` **小于**本仓 `STREAM_TOTAL_TIMEOUT=300` ⇒ 走到第 120 秒还在跑的流会被 SIGKILL，那时进程已经没了、`end_reason` **写不出来**（这一条不是本仓能补的） | 出现一次「部署重启后用户看到半截回复，而 `logs/agent/agent.log` 里没有对应的 `[stream] end reason=` 行」⇒ 那时把父仓 unit 的 `TimeoutStopSec` 抬到 >300，**不要**在本仓加 handler |
 | OTel / 任务队列 / 缓存层 / 向量库 / 管理 UI | 超出本仓形状 | 永不 |
+| 让生产走**续跑**路径（幂等账的另一条候选） | 20261019 批 F 选了「键换成跨重启稳定」并已落地（见批 7 的追加段）⇒ 这条**没有剩下的理由**：它要先把「崩溃」与「被主人取消」分开，而两者在 checkpoint 里留下的形状一模一样；批 F 的修法根本不需要那个区分 | 永不（除非将来真的要让"上一轮没跑完"自动续跑——那时是**另一个**需求，不是本账的） |
 
 ---
 

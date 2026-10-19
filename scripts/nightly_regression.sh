@@ -311,6 +311,15 @@ $PY eval/trace_retention.py --apply >> "$LOG" 2>&1 || echo "[$TS] trace_retentio
 # 一天落不了 20 份。删了什么逐条落进本日志 = 审计轨迹。
 echo "--- 产物保留执行 (logs/archive + eval/report，明细即审计轨迹) ---" >> "$LOG"
 $PY eval/artifact_retention.py --apply >> "$LOG" 2>&1 || echo "[$TS] artifact_retention 运行异常（不影响门禁）" >> "$LOG"
+# 20261019 起：**PG 那一路的保留执行**（checkpoint 三张表 + 幂等账）。上一步管的是盘上的树，
+# 而 20261018 采纳之后 agent 的上下文落进了 PG —— 那张登记表对它是瞎的。
+# 为什么必须有这一步：`checkpoints` 每个 checkpoint 存整份快照（实测 messages 通道的 blob
+# 随会话长度 1417→6646 字节单调长），checkpoint 数又随轮数线性长 ⇒ **按会话长度平方增长**，
+# 而此前没有任何东西在裁它（同族第五次：R2 `--keep 3`、logrotate `rotate 14`、traces 保留期、
+# `logs/archive`）。**没有配 `CHECKPOINT_DSN` 时它会印一行"这一层没量"并退 0**——那是
+# 「前提不可用」，不是「跑过了、没有可删的」。删了什么逐条落进本日志 = 审计轨迹。
+echo "--- PG 保留治理 (checkpoint 三张表 + 幂等账，超 30 天裁; 明细即审计轨迹) ---" >> "$LOG"
+$PY eval/pg_retention.py --apply >> "$LOG" 2>&1 || echo "[$TS] pg_retention 运行异常（不影响门禁；明细见上方）" >> "$LOG"
 
 if [ "$fail" -eq 0 ]; then
   echo "[$TS] ALL PASS" >> "$LOG"
