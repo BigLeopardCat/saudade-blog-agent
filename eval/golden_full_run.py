@@ -17,6 +17,12 @@ failed_first_run）与汇总打印。复跑的 trace 用 `<case>__rerun` 名，�
 import argparse, io, json, os, signal, subprocess, sys, time
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", line_buffering=True)
 sys.path.insert(0, "eval")
+# 仓根按**本文件的位置**算，插在 `sys.path` **最前**（20261019）：`agent` / `server` 在
+# venv 里有一条 editable 安装指向**主仓**，而上面那一行插的是相对路径 `eval`、**不含仓根**
+# ⇒ 在 worktree 里跑本文件时，本进程 `import agent` 命中的是**主仓**那棵树（子进程由
+# `golden_case_runner` 自己按文件位置算，两半不是同一棵树）。理由与实测症状见
+# `eval/run_golden.py` 顶部同一段注。
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import report_archive   # 同目录：留档文件名（秒级 ts 同秒撞车 → 见模块头注）
 import golden_trace     # 同目录：trace 开关 + 靠 trace 才判得动的 gold 键（见下面的闸）
 import golden_arm       # 同目录：选臂/分栏（20261004，见 eval/golden_arm.py 头注）
