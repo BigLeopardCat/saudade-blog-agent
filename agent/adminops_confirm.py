@@ -13,9 +13,6 @@ from agent.adminops_account import (
     render_account_role,
     render_notice_action,
 )
-from agent.adminops_comment import (
-    _comment_row_by_id,
-)
 from agent.adminops_quota import (
     render_quota_action,
 )
@@ -47,7 +44,7 @@ from agent.adminops_todo import (
 
 
 def _confirm_one(spec: dict, index=None, cats=None, boards=None, notes=None,
-                 users=None, todos=None, quota_requests=None, comments=None) -> str:
+                 users=None, todos=None, quota_requests=None) -> str:
     """单条写 spec → 「做什么」的人话（与 server._tool_action_text 同口径）。
 
     `index` = 可选的标签字典（`{id: TagInfo}`，见 build_tag_index）：给得起就
@@ -70,11 +67,6 @@ def _confirm_one(spec: dict, index=None, cats=None, boards=None, notes=None,
     `quota_requests` = 可选的**待处理额度申请**快照（`{uid: 行}`，见
     tools.base._quota_pending_index）：额度三件的卡面靠它印出**申请理由**与
     「他有没有待处理的申请」。给不起（读到 None）→ 少说一句，**不因此不弹窗**。
-
-    `comments` = 可选的**后台评论名册**快照（`{commentId: 行}`，见
-    tools.base._comment_index）：评论两件的卡面靠它印出**正文、作者与所属文章**。
-    与 `boards` 并列但**不是同一份**（两张表、两个后台页）——拿留言快照去渲染评论
-    的卡面，`#37` 会指到一条**留言**上（看着像核对过了）。给不起 → 退回只写编号。
     """
     tool = str(spec.get("tool") or "")
     a = spec.get("args") or {}
@@ -237,36 +229,6 @@ def _confirm_one(spec: dict, index=None, cats=None, boards=None, notes=None,
                 head += f"（{who} 的留言）"
             head += f"（现在：{BOARD_APPROVED_CN.get(hit.get('approved'), '状态未知')}）"
         return f"删除留言 {head}{where}（删掉取不回来）"
-    if tool in ("audit_comment", "delete_comment"):
-        # 文章评论的两件（20261019）：与留言那两件**同一条判据**——卡面必须把那一行
-        # 印全（#id + 作者 + 原文 + 现状），否则主人签的是他自己都认不出的东西。
-        # 差别只有两处，都来自"评论挂在某篇文章下"：
-        #   · 卡面**多印一截「文章《标题》」**——评论与留言在卡面上长得几乎一样，
-        #     少了这一截，主人核对的是"一条没有归属的评论"；
-        #   · 目标**只有编号一条通道**（留言删除还认正文片段）——评论有稳定的
-        #     `commentId`，见 `_WRITE_TARGET_CHANNEL` 那两行的注。
-        # `comments` 给不起（读不到名册）时退回编号 + 明说"没核对上"，不装作核对过。
-        from tools.base import BOARD_APPROVED_CN
-        cid = normalize_target_id(a.get("comment_id"))
-        hit = _comment_row_by_id(comments, cid)
-        head = f"#{cid}" if cid is not None else "（没有给出评论编号）"
-        if hit is None:
-            where = ("（没能核对上站内具体是哪一条：评论名册没读到，"
-                     "或名册里没有这个编号）")
-        else:
-            where = ""
-            head = (f"#{hit.get('id')}"
-                    f"「{clip(str(hit.get('content') or ''), 40)}」")
-            who = clip(str(hit.get("nickname") or hit.get("username") or ""), 16)
-            title = clip(str(hit.get("noteTitle") or ""), 20) or "（文章已删除）"
-            if who:
-                head += f"（{who} 的评论）"
-            head += f"（文章《{title}》，现在：{BOARD_APPROVED_CN.get(hit.get('approved'), '状态未知')}）"
-        if tool == "audit_comment":
-            v = normalize_verdict(a.get("verdict"))
-            what = BOARD_VERDICT_FULL.get(v or "", f"复核为「{a.get('verdict')}」")
-            return f"把评论 {head}{where} 人工复核为 {what}"
-        return f"删除评论 {head}{where}（删掉取不回来）"
     if tool == "set_article_status":
         head = f"修改文章 {a.get('article_id')}{where_article}"
         bits = []
@@ -518,8 +480,7 @@ def confirm_opts(count: int) -> list:
 
 
 def render_action_lines(specs, index=None, cats=None, boards=None, notes=None,
-                        users=None, todos=None, quota_requests=None,
-                        comments=None) -> str:
+                        users=None, todos=None, quota_requests=None) -> str:
     """一份调用清单 → 主人看得懂的动作串（"；"分隔）。
 
     三处共用同一份措辞：确认框问句、确认轮的气泡正文、**跨轮待办的人读目标**
@@ -538,8 +499,7 @@ def render_action_lines(specs, index=None, cats=None, boards=None, notes=None,
     """
     specs = list(specs) if isinstance(specs, (list, tuple)) else []
     items = ["，并".join(_confirm_one(specs[i], index, cats, boards, notes, users,
-                                      todos, quota_requests, comments)
-                         for i in unit)
+                                      todos, quota_requests) for i in unit)
              for unit in linked_units(specs)]
     if len(items) > 1:
         return "；".join(f"{i}. {t}" for i, t in enumerate(items, 1))
@@ -547,8 +507,7 @@ def render_action_lines(specs, index=None, cats=None, boards=None, notes=None,
 
 
 def render_confirm_question(specs, index=None, cats=None, boards=None, notes=None,
-                            users=None, todos=None, quota_requests=None,
-                            comments=None) -> str:
+                            users=None, todos=None, quota_requests=None) -> str:
     """确认框的问题行：**把要发生的事说全**（含颜色名与色值），再问一句。
 
     用户点的是"确定"，他有权在点之前从这句话里看出自己将同意什么——
@@ -558,7 +517,7 @@ def render_confirm_question(specs, index=None, cats=None, boards=None, notes=Non
     不因此不弹窗——这一轮的价值就是让主人确认，读不到就少说，不是不弹。）
     """
     acts = render_action_lines(specs, index, cats, boards, notes, users, todos,
-                               quota_requests, comments)
+                               quota_requests)
     if len(linked_units(specs)) > 1:
         # 多件（20260929 批 F4）：这一句话里必须把"能只办一件"讲出来——否则主人
         # 看到一串编号却只有一枚「确定」，他唯一能做的就是全签（盲签的反面不是
@@ -572,15 +531,14 @@ def render_confirm_question(specs, index=None, cats=None, boards=None, notes=Non
 
 
 def render_confirm_text(specs, index=None, cats=None, boards=None, notes=None,
-                        users=None, todos=None, quota_requests=None,
-                        comments=None) -> str:
+                        users=None, todos=None, quota_requests=None) -> str:
     """弹窗那一轮的**对话气泡正文**（系统给的，不经 narrator）。
 
     刻意写得像"在等你的意思"而不是"已经在办了"：这一轮零执行。给一个明确
     的操作路径（点按钮 / 直接打字），两条路都通向同一条写通道。
     """
     acts = render_action_lines(specs, index, cats, boards, notes, users, todos,
-                               quota_requests, comments)
+                               quota_requests)
     # 不说"上面/下面"：20260921d 起确认卡片渲染在**对话流里**（问句气泡之后），
     # 方位词只会随排版漂移——只点按钮名，两侧 UI 都能对上
     if len(linked_units(specs)) > 1:

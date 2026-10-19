@@ -646,11 +646,6 @@ _MIN_PARAMS = {
     # 72，正是要锁**归一发生在确定性层**（进 spec 的必须是归一后的小时数）。
     "mute_account": {"name": "probe_target_1", "hours": "三天"},
     "unmute_account": {"name": "probe_target_1"},
-    # 文章评论的复核 / 删除（20261019）：编号通道（与留言复核同一套归一），目标一律是
-    # 一个**明显不存在的** commentId——展开器是纯函数、不发请求，编号在不在名册里由
-    # 规划轮的目标预检与工具侧各判一次（同上面那条"将来谁把这条改成真跑也只是零写"）。
-    "comment_audit": {"comment_id": "commentId:90000001", "verdict": "pass"},
-    "comment_delete": {"comment_id": 90000001},
 }
 _EXPECT_TOOL = {
     "tag_create": "create_tag", "tag_update": "update_tag", "tag_delete": "delete_tag",
@@ -661,10 +656,6 @@ _EXPECT_TOOL = {
     "announcement_delete": "delete_announcement",
     "board_audit": "audit_board_comment",
     "board_delete": "delete_board_comment",
-    # 文章评论的两件（20261019）：技能名与工具名不是一套字面量（技能 comment_audit /
-    # 工具 audit_comment），同冻结族那条注——别按语序"改顺"。
-    "comment_audit": "audit_comment",
-    "comment_delete": "delete_comment",
     "article_status": "set_article_status",
     # 挂标签（20261009）：要加的名字站内没有时**同一步先建再挂**——`add` 里每个名字
     # 一条 `create_tag`，再接一条 `set_article_tags`（已有的那几条由 `reached_specs`

@@ -71,24 +71,17 @@ QUOTA_PENDING = {5: {"id": 71, "userId": 5, "username": "guest5", "reason": "写
 
 
 class _Ledger:
-    """三份队列的读取桩：既当夹具，也当「读了几次」的判据（零读 = 一次都没连）。
+    """两份队列的读取桩：既当夹具，也当「读了几次」的判据（零读 = 一次都没连）。
 
     第三条桩是**账号名录**（`tb._user_directory`，台账帧拿它判"这一件够不够得着"）：
     `users=None` = 名录里什么账号都没有（这是**合法的**生产形态：额度队列可以出现
     超管或已注销的申请人）。它单独记在 `user_reads` 里而不是并进 `reads`——`reads`
-    的断言读的是"那几份**队列**读了没有"（零额外网络开销那条纪律），两种读数是
+    的三条断言读的是"两份**队列**读了没有"（零额外网络开销那条纪律），两种读数是
     两件事，混在一起会让那些断言变得看不懂。
-
-    ⚠️ **评论那一份（`_comment_index`）必须一起打桩**（20261019）：`_read_ledger_family`
-    现在有三支，短消息那一档会**三族全读**（`_ledger_families_due` 的 `bulk` 那条）。
-    少打这一桩的后果不是"报错"，是它真去发网络请求、读不到 ⇒ 那一族进 `unread`
-    ⇒ 每条断言都变成"没读到"的形态（**看着像"评论队列空了"，其实是桩没接上**）。
     """
 
-    def __init__(self, board=BOARD_PENDING, quota=QUOTA_PENDING, users=None,
-                 comments=None):
+    def __init__(self, board=BOARD_PENDING, quota=QUOTA_PENDING, users=None):
         self.board, self.quota = board, quota
-        self.comments = comments if comments is not None else {}
         self.users = users if users is not None else {
             int(r["userId"]) for r in quota.values() if r.get("userId") is not None}
         self.reads: list[str] = []
@@ -96,8 +89,7 @@ class _Ledger:
         self.saved = None
 
     def install(self):
-        self.saved = (tb._board_index, tb._quota_pending_index, tb._user_directory,
-                      tb._comment_index)
+        self.saved = (tb._board_index, tb._quota_pending_index, tb._user_directory)
 
         def _board(config):
             self.reads.append("board")
@@ -107,23 +99,17 @@ class _Ledger:
             self.reads.append("quota")
             return self.quota
 
-        def _comments(config):
-            self.reads.append("comment")
-            return self.comments
-
         def _users(config):
             self.user_reads.append("users")
             return {u: {"id": u, "username": f"u{u}"} for u in self.users}
 
         tb._board_index, tb._quota_pending_index = _board, _quota
-        tb._comment_index = _comments
         tb._user_directory = _users
         return self
 
     def uninstall(self):
         if self.saved:
-            (tb._board_index, tb._quota_pending_index, tb._user_directory,
-             tb._comment_index) = self.saved
+            tb._board_index, tb._quota_pending_index, tb._user_directory = self.saved
             self.saved = None
         return self
 
@@ -157,14 +143,13 @@ try:
 
     _lg.reads.clear()
     _t3, _m3 = _frame("你看着办")
-    check("短消息 ⇒ **三族都读**", sorted(_lg.reads) == ["board", "comment", "quota"],
-          str(_lg.reads))
-    check("  该有事实的那两族都在帧里", "talkId:101" in _t3 and "guest5" in _t3)
+    check("短消息 ⇒ **两族都读**", sorted(_lg.reads) == ["board", "quota"], str(_lg.reads))
+    check("  两族都在帧里", "talkId:101" in _t3 and "guest5" in _t3)
 
     _lg.reads.clear()
     _frame("好的", "我把留言板上那条隐藏，并批准 guest5 的额度申请。")
-    check("上一轮那句提议提到了两族 ⇒ 那两族都读（这句是短消息 ⇒ 评论族也跟着摆）",
-          sorted(_lg.reads) == ["board", "comment", "quota"], str(_lg.reads))
+    check("上一轮那句提议提到了两族 ⇒ 两族都读",
+          sorted(_lg.reads) == ["board", "quota"], str(_lg.reads))
 
     _lg.reads.clear()
     _frame("那除了这些，还有别的什么需要我看看的吗？", "", ADMIN,
@@ -173,28 +158,28 @@ try:
 finally:
     _lg.uninstall()
 
-print("② 形态族（20261015 批 3 换表征）：短消息就摆那几族，长句照旧一次都不读")
+print("② 形态族（20261015 批 3 换表征）：短消息就摆两族，长句照旧一次都不读")
 # 旧版这里是三张手写中文词表判"这句算不算授权式/全选式"，负例正是「现在几点了」
 # 这类"像承接"的短话。准入换成**形状**之后这些短话一律进 ⇒ 它们不再是负例——上界
 # 改由**权限闸**给（下面那条非管理员的断言）。这是本批的价钱，钉在这里不许漂。
 for t in ("全部批准", "都办", "两个都办", "全都要", "你看着办", "按你的想法来吧", "一起办吧",
-          # 旧负例：现在**故意**进准入（形状上是短消息 ⇒ 预读各队列）
+          # 旧负例：现在**故意**进准入（形状上是短消息 ⇒ 预读两族）
           "现在几点了", "然后呢", "这样可以吗", "这是什么"):
-    check(f"「{t}」形状上是短消息 ⇒ 摆那几族", _is_short_reply(t))
+    check(f"「{t}」形状上是短消息 ⇒ 摆两族", _is_short_reply(t))
 _lg = _Ledger().install()
 try:
     _lg.reads.clear()
     _frame("现在几点了", "", ADMIN)
-    check("  短消息·非授权式 ⇒ 真的去读了那几族（代价落地，不是纸面）",
-          sorted(_lg.reads) == ["board", "comment", "quota"], str(_lg.reads))
+    check("  短消息·非授权式 ⇒ 真的去读了两族（代价落地，不是纸面）",
+          sorted(_lg.reads) == ["board", "quota"], str(_lg.reads))
     _lg.reads.clear()
     _frame("通过搜索找到的那篇", "", ADMIN)   # 9 字 ⇒ 进准入
-    check("  同上（上界不靠措辞，靠形状）",
-          sorted(_lg.reads) == ["board", "comment", "quota"], str(_lg.reads))
+    check("  同上（上界不靠措辞，靠形状）", sorted(_lg.reads) == ["board", "quota"],
+          str(_lg.reads))
     # **上界**：不是管理员 ⇒ 一条队列都不读（办不了这两件事的主人，读了也只能白拿 403）
     _lg.reads.clear()
     _frame("你看着办", "", GUEST)
-    check("  非管理员：短消息也一条队列都不读（上界在这里，不在词表里）",
+    check("  非管理员：短消息也两族都不读（上界在这里，不在词表里）",
           _lg.reads == [], str(_lg.reads))
     # 长句 / 不提这两族的轮次照旧零读（零额外网络开销的纪律没动）
     _lg.reads.clear()
@@ -202,8 +187,8 @@ try:
     check("  长句 ⇒ 一次都不读", _lg.reads == [], str(_lg.reads))
     _lg.reads.clear()
     _frame("谢啦", "我把结果都整理好了，你随时可以来看。", ADMIN)  # 2 字 ⇒ 仍进准入
-    check("  短消息即使上一轮没提这几族也读（形状即准入）",
-          sorted(_lg.reads) == ["board", "comment", "quota"], str(_lg.reads))
+    check("  短消息即使上一轮没提这两族也读（形状即准入）",
+          sorted(_lg.reads) == ["board", "quota"], str(_lg.reads))
 finally:
     _lg.uninstall()
 # 边界：`_SHORT_MAX` 上取到、多一字即出界——判据只有这一条尺子
@@ -370,8 +355,8 @@ check("回执判据只认**写**工具（读回执不是'办了几件'）",
 check("编号字段 → 队列的这张表与 `_LEDGER_TARGET_FIELDS` 的值集合**相等**"
       "（加一件新的台账编号工具而漏了这里，是静默少问一句）",
       set(g._LEDGER_FIELD_FAMILY) == set(g._LEDGER_TARGET_FIELDS.values()))
-check("  且族名就是 `_read_ledger_family` 认的那几个",
-      set(g._LEDGER_FIELD_FAMILY.values()) == {"board", "quota", "comment"})
+check("  且族名就是 `_read_ledger_family` 认的那两个",
+      set(g._LEDGER_FIELD_FAMILY.values()) == {"board", "quota"})
 
 _lg = _Ledger().install()
 try:
@@ -524,8 +509,7 @@ try:
     check("  逐条 id 的 trace 元数据照旧两件都在（标注不改 id 清单）",
           [i for i in _m.get("ids", []) if i.startswith("userId:")] == ["userId:1", "userId:5"],
           str(_m))
-    check("  那几族队列都照常读（这句是短消息 ⇒ 三族全摆）",
-          sorted(_lg.reads) == ["board", "comment", "quota"], str(_lg.reads))
+    check("  两族队列都照常读", sorted(_lg.reads) == ["board", "quota"], str(_lg.reads))
     check("  名录只读一次（不是为了标注就对每个 uid 各读一次）",
           _lg.user_reads == ["users"], str(_lg.user_reads))
 finally:

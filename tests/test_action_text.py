@@ -345,10 +345,6 @@ _NO_LEGACY_ARM = _DEAD | {
                                    # 能在后台账号列表里看到"的读入口，读 GET /api/temp-users）
     "list_my_board",               # 20261008 我自己的河灯：同上（读 GET /api/protect/board/mine；
                                    # 措辞刻意与公开池的"查看留言板"分开，见 action_text 里那条注）
-    # 文章评论的三件（20261019）：冻结之后新增，动作词只在 Python 侧。三件**都要列**——
-    # 漏一件就是"新工具进了注册表却没在这里现形"，而那正是本判据存在的全部理由。
-    "list_admin_comments",         # 读 GET /api/protect/comments（后台评论名册）
-    "audit_comment", "delete_comment",  # 复核 / 删除一条文章评论（同留言那两件，另一张表）
 }
 
 _rs = _parent_repo.read(

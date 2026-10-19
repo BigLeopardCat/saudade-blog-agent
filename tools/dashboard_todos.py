@@ -93,19 +93,13 @@ def _todo_row_key(row: dict) -> tuple[str, str]:
 
 
 def _todo_pending(config: RunnableConfig):
-    """后台首页那几类"等着你处理"的计数（留言待审 / 评论待审 / 额度重置申请）→ 渲染入参。
+    """后台首页那两类"等着你处理"的计数（留言待审 / 额度重置申请）→ 渲染入参。
 
     **读的是红点那一份汇总**（`/notifications/summary` 的 `pendingReview` /
-    `pendingComments` / `pendingQuota`），不另造第二份计数：前端后台首页那几行提示取的
-    也正是它（`useUnread` → `unread.pendingComments` 等），同源才不会出现"红点说有 2 条、
-    agent 说没有"。这几个字段**只对能进后台的人算**（后端 `is_console_user`），
+    `pendingQuota`），不另造第二份计数：前端后台首页那两行提示取的也正是它
+    （`useUnread` → `unread.pendingQuota`），同源才不会出现"红点说有 2 条、
+    agent 说没有"。这两个字段**只对能进后台的人算**（后端 `is_console_user`），
     而本工具本身就是 `read.console` ⇒ 不存在"普通用户读到 0"的误读。
-
-    ⚠️ **留言与评论是两个字段、两个数**（20261019 加 `pendingComments`）：合并成一个数
-    会让 narrator 把"评论还有 3 条"说成"留言还有 3 条"——而那是两个后台页签。缺键
-    （后端还没部署到带 `pendingComments` 的版本）**不是 0**：这里照实传 `None` 出去，
-    由 `render_todo_pending` 的 `_nonneg_int` 落成"不印这一项"，与"读不到整份汇总"
-    （哨兵）**分开**——那一份是"不确定有没有"，这一份是"这一项没提供"。
 
     读不到 ⇒ **`A.TODO_PENDING_UNREAD` 哨兵，不是 0 也不是"没提供"**：
     `render_todo_pending` 对这三种形态的措辞完全不同，而"没有待处理的事"在主人
@@ -117,18 +111,15 @@ def _todo_pending(config: RunnableConfig):
     data = _base._own_get("/api/protected/notifications/summary", config)
     if isinstance(data, ToolResult) or not isinstance(data, dict):
         return _todo.TODO_PENDING_UNREAD
-    return {"review": data.get("pendingReview"),
-            "comments": data.get("pendingComments"),
-            "quota": data.get("pendingQuota")}
+    return {"review": data.get("pendingReview"), "quota": data.get("pendingQuota")}
 
 
 @tool
 def list_dashboard_todos(config: RunnableConfig) -> str:
     """查看**后台首页**的待办 / 日程列表（主人自己在后台首页那张卡里记的事）：
     每行给出正文、排期日（写「未排期」的是没定日子那条）与是否已完成；
-    末尾还会给出**另外几类等着你处理的**计数——留言待审几条、评论待审几条、
-    额度重置申请几份（它们与私人待办并排显示在后台首页，但不在那张名单里，不落库；
-    只印真的 > 0 的那几类，所以印出来的条数每次可能不同）。
+    末尾还会给出**另有两类等着你处理的**计数——留言待审几条、额度重置申请几份
+    （它们与私人待办并排显示在后台首页，但不在那张名单里，不落库）。
     主人问"我有哪些待办 / 我日程上有什么 / 有没有什么事等着我处理 /
     那个 xx 是不是还没做"时都用它。
     这是**他自己那份私人列表**，站内公开页面上看不到；需要管理员身份。"""

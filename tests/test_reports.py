@@ -671,7 +671,7 @@ for name, tool, args in [("admin_notes", "list_admin_notes", {}),
     check(f"技能 {name} 在位、对管理员族可见、计划首项是 {tool}",
           sk is not None and sk.roles == ADMIN_ROLES
           and [t for t, _ in sk.plan] == [tool], str(sk and (sk.roles, sk.plan)))
-check("写技能名单 = 三十二个**技能**名（instantiate_plan 缺参守卫按它分支；"
+check("写技能名单 = 三十个**技能**名（instantiate_plan 缺参守卫按它分支；"
       "注意它与工具名不是一套字面量，混用会让守卫静默不生效）",
       WRITE_WORKFLOW_NAMES == frozenset({"tag_create", "tag_update", "tag_delete",
                                       "category_create", "category_update",
@@ -679,13 +679,6 @@ check("写技能名单 = 三十二个**技能**名（instantiate_plan 缺参守�
                                       "announcement_create", "announcement_update",
                                       "announcement_delete",
                                       "board_audit", "board_delete",
-                                      # 文章评论的复核 / 删除（20261019）：与上面两件
-                                      # 同族（同一个恒弹卡桶、同一条编号通道），但是
-                                      # **另一张表、另一个后台页**。技能名与工具名也不是
-                                      # 一套字面量（技能 comment_audit / 工具 audit_comment）
-                                      # ——混用会让 `_expand_write_workflow` 的分支静默
-                                      # 不命中，尾部的"未知的写技能"兜底零工具零写还不报错。
-                                      "comment_audit", "comment_delete",
                                       "article_status", "article_tags",
                                       # 用户自己账号里的写（20260923 批 7）
                                       "favorite_add", "favorite_remove",
