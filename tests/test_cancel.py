@@ -29,6 +29,7 @@ sys.path.insert(0, str(ROOT))
 
 import agent.graph as g
 from agent.graph import AgentCancelled, execute_node, gate_node, model_node, planner_node, reflector_node
+from agent.principal import SOURCE_ASSERTION, Principal  # noqa: E402
 from agent.workflow_plan import instantiate_plan
 from _planner_stub import bind_tools_stub, toolcall_reply
 
@@ -48,7 +49,14 @@ def _cfg(stop: bool = False):
     ev = threading.Event()
     if stop:
         ev.set()
-    return {"configurable": {"stop_event": ev}}, ev
+    # 身份**显式给全**（20261019）：本文件测的是"取消能不能拦住工具"，与身份无关，
+    # 但 `execute_node` 的权限判据现在会看**这条身份是怎么来的**——不给 principal 时
+    # `_principal_of` 兜底成 `UNKNOWN`（source="body"、role=None），它在私有面/写面上
+    # 不进灰度（`authz.must_enforce`）⇒ 本节所有"已执行的那个照常调用一次"会静默变红。
+    # 给一个生产形状的身份（断言签过、role=user），让这条用例继续只测它要测的那件事。
+    return {"configurable": {"stop_event": ev,
+                             "principal": Principal(uid=7, role="user",
+                                                    source=SOURCE_ASSERTION)}}, ev
 
 
 class _Spy:

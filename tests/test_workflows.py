@@ -45,6 +45,7 @@ from agent.graph import (REFLECT_MAX_ROUNDS, _article_fast_path,
                          execute_node, gate_node,
                          plan_encode, plan_state, parse_plan, reflector_node,
                          route_after_execute, route_after_reflector)
+from agent.principal import SOURCE_ASSERTION, Principal  # noqa: E402
 from agent.workflow_defs import WORKFLOW_MAP, visible_workflows
 from agent.workflow_defs.nav_map import NAV_MAP, NAV_VALID_PATHS
 from agent.workflow_plan import instantiate_plan
@@ -56,6 +57,14 @@ from _planner_stub import bind_tools_stub, toolcall_reply  # noqa: E402
 # 管理/写通道的用例会走到 `_principal_get` ⇒ `_sign_local_jwt`；CI 没有 `.env`，
 # `settings.jwt_secret` 默认空串，而 20261019 起**空密钥不许签**（SAU-012）。
 from config.settings import settings as _settings  # noqa: E402
+
+# 直调 `execute_node` 的用例要自带身份（20261019）：权限判据现在看**这条身份怎么来的**
+# ——不给 config 时 `_principal_of` 兜底成 `UNKNOWN`（source="body"、role=None），而它在
+# 私有面/写面上不进灰度（`authz.must_enforce`）⇒ 那些"工具真的执行了一次"的断言会红在
+# 权限闸上，而不是红在它们各自要测的那件事。给一个**生产形状**的身份：role 只来自
+# Rust 的签名断言（`source=SOURCE_ASSERTION`），uid/role 都不缺。
+VERIFIED_CFG = {"configurable": {"principal": Principal(uid=7, role="user",
+                                                        source=SOURCE_ASSERTION)}}
 _settings.jwt_secret = "test-secret-for-workflows"
 
 FAILS = []
@@ -2767,7 +2776,8 @@ def test_execute_node():
         obj = instantiate_plan("navigate", {"target": "物联网平台"})
         obj["tools"] = tools_list  # 手工覆盖清单（模拟 planner 决策产物）
         return execute_node({**plan_state(obj), "plan_rounds": 1, "done": False,
-                             "messages": [HumanMessage(content="带我去设备控制台")]})
+                             "messages": [HumanMessage(content="带我去设备控制台")]},
+                            VERIFIED_CFG)
 
     # 计划内工具 → 确定性执行（参数照 spec 字面）
     out = _run(['navigate_to({"path": "/device-console/", "confirm": false})'])
@@ -2970,7 +2980,7 @@ def test_refs():
     try:
         # 跨轮：第 1 轮检索 → 第 2 轮用引用读全文（生产主路径）
         r1 = execute_node(_plan(['fake_search({"keyword": "ota"})'], plan_rounds=1, done=False,
-                                messages=_msg))
+                                messages=_msg), VERIFIED_CFG)
         check("轮1：结构化返回入 tool_data（引用取值源）",
               len(r1["tool_data"]) == 1 and r1["tool_data"][0]["tool"] == "fake_search"
               and isinstance(r1["tool_data"][0]["data"], list),
@@ -2978,7 +2988,7 @@ def test_refs():
         calls.clear()
         r2 = execute_node(_plan(['fake_read({"article_id": "$fake_search[0].noteKey"})'],
                                 plan_rounds=2, done=False, tool_data=r1["tool_data"],
-                                messages=_msg))
+                                messages=_msg), VERIFIED_CFG)
         check("轮2：引用被解析成真实 id 再调用（不是把 $x[0].y 当参数发出去）",
               calls == [{"article_id": 12}], str(calls))
         check("轮2：回执 args 是解析后值（✅ 过程行可读）",
@@ -2988,13 +2998,13 @@ def test_refs():
         calls.clear()
         r3 = execute_node(_plan(['fake_search({"keyword": "ota"})',
                                  'fake_read({"article_id": "$fake_search[1].noteKey"})'],
-                                plan_rounds=1, done=False, messages=_msg))
+                                plan_rounds=1, done=False, messages=_msg), VERIFIED_CFG)
         check("同轮：后一条 spec 能引前一条 spec 的返回（轮内依赖打通）",
               calls == [{"keyword": "ota"}, {"article_id": 14}], str(calls))
         # 失败：引用不可解析 → 该 spec 不执行 + 带原因码错误帧 + blocked 走改参重试
         calls.clear()
         r4 = execute_node(_plan(['fake_read({"article_id": "$fake_search[0].noteKey"})'],
-                                plan_rounds=1, done=False, messages=_msg))
+                                plan_rounds=1, done=False, messages=_msg), VERIFIED_CFG)
         frm = str(r4["messages"][-1].content)
         check("失败：不执行工具（拿 $x[0].y 当参数去查是更坏的结果）", calls == [], str(calls))
         check("失败：__ERROR__ 帧带原因码",

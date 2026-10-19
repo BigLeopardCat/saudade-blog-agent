@@ -22,8 +22,10 @@ Principal(uid=7, role="user", source="assertion")
 - **唯一构造点**是 `server.py::_resolve_principal`，两条来源：
   - `source="assertion"`：Rust 签的 60s 断言，**role 取自 DB**（`chat.rs::prepare_chat` 单次
     `find_by_id`，与 `middleware::auth_guard` 同一条纪律：不信登录 token 里可能 7 天前的角色）；
-  - `source="body"`：回退信任请求体（`AGENT_REQUIRE_ASSERTION=0` 时的旧路径）——
-    **这条路径上 role 恒为 `None`**，绝不因为"读不到角色"而默认授予。
+  - `source="body"`：回退信任请求体（**只在显式设 `AGENT_REQUIRE_ASSERTION=0` 时才会发生**
+    ——20261019 起出厂默认是 1，安全审计 SAU-005）——
+    **这条路径上 role 恒为 `None`**，绝不因为"读不到角色"而默认授予；且它的**每一次**
+    工具调用都被硬拦（`authz.must_enforce`），只剩对话，见 §3.3。
 - 取不到 principal（老调用方、直调图的单测）→ `UNKNOWN`（uid=0、role=None）。
 - 角色名与取值域：`superadmin` / `admin` / `user` / `zako`，两侧同名（`agent/principal.py` ↔ `src/authz.rs`）。
   （`superadmin` = 超级管理员，20260926 新增；`zako` = 杂鱼，20261002 新增，见 §3.6）
@@ -62,9 +64,22 @@ scope 词汇表（`<动作>.<对象>`）：`read.public` / `read.own` /
   "纯新增能力、没有观测期可谈"；`write.device`（20261019，安全审计 SAU-007）的理由不同——
   **后果落在物理世界**（`device_oled_display` 把一段字刷到设备屏上），放行错了收不回来，
   这一类不该有灰度期。三个真角色都授予它 ⇒ 对正常用户一字不改，它拦的只有"身份不明"。
-  `read.own` 与 `write.own` **都不进**：前者唯一能拒的是 `zako`（整轮零工具）与未知角色，
-  硬拦买不到新防线；后者的论证见 §3.4。
-  两个方向都有锁：`tests/test_authz.py`（集合相等 + 少一个就报不等）、
+- **未验成的身份也没有灰度期**（20261019，安全审计 SAU-005 的纵深那一半）：
+  `authz.must_enforce(decision, principal)` 是四个拦截判据点的唯一入口（`graph.py` 三处 +
+  `react_line.py` 一处），它比 `enforcing(scope)` 多看一眼**这次是谁在调**——
+  `source="body"`（断言缺席/验签失败的回退身份，role 恒 None）的拒绝**一律硬拦**。
+  这类身份不是"另一种用户"，是"身份没验成"：`check` 判它零权限、shadow 却把它放行，
+  于是 uid 即身份（审计的复现就是一句 curl）。修完之后它**只剩公开面**
+  （`_PUBLIC_SURFACE` = 读公开内容 + 驱动它自己那一屏，见那个常量的注释）——
+  私有数据、落库写、物理世界、后台面一律硬拦。
+  ⚠️ 判据是 `source`，不是 `role is None`——`source="golden"` 的评测直调身份同样 role=None，
+  按 role 判会把一整族既有用例从"shadow 放行"打成 BLOCK。回归锁在 `tests/test_authz.py` ⑪
+  （三档来源各有正控 + 反控）。
+- `read.own` 与 `write.own` **都不进 `_HARD_SCOPES`**：它们是**既有能力**（收藏/通知/会话
+  历史早就在跑），满足 shadow 的观测前提；能拒它们的只有 `zako`（整轮零工具）与
+  **未验成的身份**——后者已由上面那条 `must_enforce` 硬拦，两条 deny 路径都堵上了。
+  `write.own` 的其余论证见 §3.4。
+  两个方向都有锁：`tests/test_authz.py`（集合相等 + 少一个就报不等 + ⑪ 三档来源）、
   `tests/test_admin_write.py`（`authz_enforce=False` 下非 admin 仍被拦）。
 
 ### 3.4 人在回路：权限之后还有一次"同意"
@@ -182,7 +197,7 @@ grep -l authz_shadow /home/ubuntu/Saudade-Blog/logs/agent/traces/*.json | wc -l
 |---|---|---|---|
 | ① 技能可见性 | `workflows.visible_workflows`（`role in CHAT_ONLY_ROLES and not s.chat`） | planner 菜单 / 工具 schema / narrator 能力清单三处**同源**只剩 `chat` | **软**：`instantiate_plan` 不校验可见性，LLM 点名不可见技能照样成行 |
 | ② 工具 schema | `planner_llm.build_tool_schema` | 模型**发得出**的技能只剩 `chat` | **软**：schema 约束的是模型能*发出*什么，不是系统*接受*什么——`instantiate_plan` 照样收下点名别的技能（与 ① 是同一道口子的另一个入口；20261017 更正：原文写的"只对 native 档生效、默认档是 text"自 20261004 文本契约档删除后已不成立） |
-| ③ authz 空 scope | `authz._ROLE_SCOPES[ROLE_ZAKO] = frozenset()` | 执行前的 `authz.check` | **软**：`execute_node` 在 shadow 档下（`not allowed and not enforcing`）**只记账不拦**，而 `zako` 会拿到的那些 scope 没有一个在 `_HARD_SCOPES` |
+| ③ authz 空 scope | `authz._ROLE_SCOPES[ROLE_ZAKO] = frozenset()` | 执行前的 `authz.check` | **软**：`execute_node` 在 shadow 档下（`not allowed and not must_enforce`）**只记账不拦**，而 `zako` 会拿到的那些 scope 没有一个在 `_HARD_SCOPES`（20261019 补：`must_enforce` 硬拦的是**未验成的身份**，`zako` 是断言签过的真角色，不在此列） |
 | ④ planner 短路 | `graph.planner_node` 顶部 | 结构上不产出 TOOLS 行 ⇒ `execute` **永不被进入** | **硬**（确定性、无 LLM、无配置开关） |
 
 失效链（不加 ④ 就会真发生）：planner 点名一个已不可见但仍在 `WORKFLOW_MAP` 里的技能 →
@@ -686,8 +701,9 @@ unset ADMIN_PW
 - 断言里的 `role` 是 Rust **每请求查库**得到的（不是读 token）⇒ 改了 `role` 立即生效、不必重新登录；
   反过来把 `admin` 降成 `user`，已登录的后台会话**下一次请求**就会被 `auth_guard` 挡下。
 - **`AGENT_AUTHZ_ENFORCE` 仍**未设**（shadow 期只记不拦），而 `AGENT_REQUIRE_ASSERTION=1`
-  已在生产生效（不带断言头直连得 401）。要让它真的"拦下什么"，得先收 shadow 证据再打开
-  enforce。
+  已在生产生效（不带断言头直连得 401；20261019 起这也是**代码默认值**）。要让它真的
+  "拦下什么"，得先收 shadow 证据再打开 enforce——`_HARD_SCOPES` 与未验成的身份例外
+  （见 §3.3），它们本来就不吃 shadow。
 
 ### 7.5 为什么不做代码（20260921 拍板记录）
 

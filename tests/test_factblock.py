@@ -50,7 +50,7 @@ from agent.factblock import (  # noqa: E402
     strip_fact_lines,
 )
 from agent.graph import build_graph, graph_input  # noqa: E402
-from agent.principal import Principal  # noqa: E402
+from agent.principal import SOURCE_ASSERTION, Principal  # noqa: E402
 from _planner_stub import bind_tools_stub, toolcall_reply  # noqa: E402
 from tools import base as _base  # noqa: E402
 
@@ -321,7 +321,7 @@ _FACT_WRITE_BLOCK = FACT_MARK + _FACT_WRITE_LINE
 
 
 def _run_graph(plans, narrations, result=None, tool_name="toggle_effect",
-               message="把樱花打开", role=None):
+               message="把樱花打开", role="user"):
     """跑一轮**真图**（不是假 producer）。两个夹具形态由 `tool_name` 决定：
 
     · `toggle_effect`（命令族）——验"不印但帧还在"（20261002 的新契约）；
@@ -340,9 +340,13 @@ def _run_graph(plans, narrations, result=None, tool_name="toggle_effect",
     g.record = lambda node, event, **data: events.append((node, event, data))
     g._TOOL_MAP[tool_name] = tool
     try:
+        # 身份**显式给全**（20261019）：本文件测的是事实块的印/摘，与身份无关，而
+        # `source` 现在是拦截判据的输入之一——默认来源（"body"）在私有面/写面上不进
+        # 灰度（`authz.must_enforce`），用它构造的 principal 会让下面所有"工具真的
+        # 执行了一次"静默变红。这里给一个生产形状的身份：role 只来自 Rust 的签名断言。
         cfg = {"configurable": {"thread_id": "t-factblock", "user_id": 5,
-                                "principal": Principal(uid=5) if role is None
-                                else Principal(uid=5, role=role),
+                                "principal": Principal(uid=5, role=role,
+                                                       source=SOURCE_ASSERTION),
                                 "conversation_id": 1, "stop_event": None}}
         out = build_graph().invoke(graph_input([HumanMessage(content=message)]), cfg)
     finally:
