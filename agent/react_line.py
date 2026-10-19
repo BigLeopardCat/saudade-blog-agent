@@ -81,6 +81,7 @@ from agent.deterministic_plan import _doc_title, _intent_done, _scan_action_inte
 from agent.entity_digest import receipt_digest
 from agent.frame_contract import executed_specs
 from agent.graph import _VERDICT_PASS, _check_spec, _grant_covers, _tool_args, _tool_name
+from agent.workflow_model import ToolCall
 
 logger = logging.getLogger(__name__)
 
@@ -119,14 +120,16 @@ def attempted_specs(ledger: RunLedger) -> list[str]:
     PASS 与 BLOCK **都算**：生产侧的口径是"上过计划的动作（哪怕被拒）spec 都进了
     `executed`"，被拒过再推它重试一次是另一种病（同一个动作原地打转）。同意闸上
     攒下的 `ledger.pending` **不算**——那些一次都没执行（见 `RunLedger.pending`）。
+
+    20261019 批 G6 起"同构"由 `ToolCall` 保证（此前是本模块自己 `json.dumps` 拼串，
+    靠这句话守着）：生产那十余处写端与本处走的是同一个 `__new__`。
     """
     out: list[str] = []
     for r in (*ledger.receipts, *ledger.blocked):
         try:
-            args = json.dumps(r.get("args") or {}, ensure_ascii=False)
+            out.append(ToolCall(str(r.get("tool") or ""), r.get("args") or {}))
         except Exception:  # noqa: BLE001 —— 参数里有不可序列化的东西：降级成空集
-            args = "{}"
-        out.append(f"{r.get('tool') or ''}({args})")
+            out.append(f"{r.get('tool') or ''}({{}})")
     return out
 
 

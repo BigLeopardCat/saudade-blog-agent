@@ -8,7 +8,7 @@
     "top_defs": 31
   },
   "agent/graph.py": {
-    "lines": 11014,
+    "lines": 11013,
     "top_defs": 195
   },
   "agent/prompt_context.py": {
@@ -52,7 +52,7 @@
     "top_defs": 36
   },
   "server.py": {
-    "lines": 2711,
+    "lines": 2704,
     "top_defs": 59
   },
   "tests/test_admin_write.py": {

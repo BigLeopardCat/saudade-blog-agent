@@ -23,13 +23,13 @@
 
 from __future__ import annotations
 
-import json
 import re
 
 import agent.adminops_account as _account
 import agent.adminops_tags as _tags
 import agent.adminops_target as _target
 from agent.workflow_defs import WORKFLOW_MAP
+from agent.workflow_model import ToolCall
 from tools.base import (
     _NOTICE_CONTENT_LIMIT,
     _NOTICE_TITLE_LIMIT,
@@ -219,8 +219,10 @@ def _expand_change_set(workflow, params: dict) -> tuple[list[str], str]:
             bad.append(f"「{name}」不在本技能的允许清单里")
             continue
         # 调用行的写法是**跨模块契约**：`<工具名>(<JSON>)`，读端是
-        # `graph._tool_name` / `_tool_args` 与 `_confirm_grant_plan`（它拼的是同一形状）。
-        tools.append(f"{name}({json.dumps(args, ensure_ascii=False)})")
+        # `tool_specs._tool_args` / `deterministic_plan._tool_name` 与
+        # `_confirm_grant_plan`（它拼的是同一形状）。20261019 批 G6 起这一行是
+        # `ToolCall` 的渲染——形状只由 `ToolCall.__new__` 一处决定。
+        tools.append(ToolCall(name, args))
     if bad or not tools:
         return [], ("变更集里有条目不合格（" + "、".join(bad[:5])
                     + "）：不调用任何工具，如实告诉主人这一轮什么都没有办")
@@ -240,8 +242,8 @@ def _expand_write_workflow(workflow, params: dict) -> tuple[list[str], str]:
     """
     name = workflow.name
 
-    def _spec(tool_name: str, args: dict) -> str:
-        return f"{tool_name}({json.dumps(args, ensure_ascii=False)})"
+    def _spec(tool_name: str, args: dict) -> ToolCall:
+        return ToolCall(tool_name, args)
 
     if name == "tag_create":
         names = _tag_names(params)

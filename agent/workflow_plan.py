@@ -18,7 +18,6 @@
 
 from __future__ import annotations
 
-import json
 import logging
 from typing import Any
 
@@ -47,7 +46,7 @@ from agent.workflow_expand_write import (
     _unfilled_placeholder,
     _write_arg,
 )
-from agent.workflow_model import DROP_SUFFIX_BAD_ARGS, DROP_SUFFIX_NOT_OBJECT
+from agent.workflow_model import DROP_SUFFIX_BAD_ARGS, DROP_SUFFIX_NOT_OBJECT, ToolCall
 from agent.workflow_params import (
     _param_alias_fix,
     _param_problem_plan,
@@ -177,7 +176,7 @@ def _instantiate_plan(workflow_name: str, params: dict,
             # 会往里塞字符串列表 ⇒ 类型要宽到能装下两种，且**标注只写在这一处**
             # （同函数内重复标注会被 mypy 判 no-redef）。
             args: dict[str, Any] = {"path": mapped, "confirm": False}
-            tools.append(f"navigate_to({json.dumps(args, ensure_ascii=False)})")
+            tools.append(ToolCall("navigate_to", args))
             note = f"目标页: {target} → {mapped}"
         elif target.startswith("/"):
             # 字面路径：预校验白名单（单一事实来源 = 工具层常量）。白名单外的路径
@@ -186,7 +185,7 @@ def _instantiate_plan(workflow_name: str, params: dict,
             # （把 /iot 猜成 /device-console/ 属于替身导航）。
             if nav_path_valid(target):
                 args = {"path": target, "confirm": False}
-                tools.append(f"navigate_to({json.dumps(args, ensure_ascii=False)})")
+                tools.append(ToolCall("navigate_to", args))
                 note = f"目标页: {target}（字面路径，白名单校验通过）"
             elif not IOT_ENABLED and target.rstrip("/") == IOT_NAV_PATH.rstrip("/"):
                 # 字面写出 IoT 路径而平台没装：白名单已经收掉了它，落到下面那支的话
@@ -206,7 +205,7 @@ def _instantiate_plan(workflow_name: str, params: dict,
             hit, fuzzy_hit = fuzzy_nav_hit(target)
             if hit and fuzzy_hit:
                 args = {"path": fuzzy_hit, "confirm": False}
-                tools.append(f"navigate_to({json.dumps(args, ensure_ascii=False)})")
+                tools.append(ToolCall("navigate_to", args))
                 note = f"目标页: {target}（口语模糊归一）→ {fuzzy_hit}"
             elif hit:
                 # 命中了规则、但那个页面本站没有（当前只有 IoT 这一种）：
@@ -228,7 +227,7 @@ def _instantiate_plan(workflow_name: str, params: dict,
             note = "read_article 缺少 article_id（当前页面非文章详情页？），按闲聊处理"
         else:
             args = {"article_id": int(aid) if str(aid).isdigit() else aid}
-            tools.append(f"get_article_detail({json.dumps(args, ensure_ascii=False)})")
+            tools.append(ToolCall("get_article_detail", args))
             note = f"读取当前文章全文（ID={aid}）"
     elif workflow.name == "content_query" and (params.get("tools") or params.get("calls")):
         consumed_calls = True
@@ -282,7 +281,7 @@ def _instantiate_plan(workflow_name: str, params: dict,
                         dropped.append(f"{cname}{DROP_SUFFIX_BAD_ARGS}"
                                        + "、".join(vchk["bad"]) + "）")
                     else:
-                        spec = f"{cname}({json.dumps(vchk['args'], ensure_ascii=False)})"
+                        spec = ToolCall(cname, vchk["args"])
                         if spec not in picked:
                             picked.append(spec)
                         if vchk["unknown"]:
@@ -300,7 +299,7 @@ def _instantiate_plan(workflow_name: str, params: dict,
         # 折叠**不写进 `dropped`**：那不是"够不到/参数错"的剔除，不该触发纠偏重决策
         # （`_drop_correction` 认后缀选话术，这里没有话术可给）；也不会把 `picked`
         # 剔空——`called` 非空就意味着至少有一条带参调用留下。
-        called = {t.split("(", 1)[0].strip() for t in picked if "(" in t}
+        called = {t.name for t in picked if isinstance(t, ToolCall)}
         if called:
             folded = [t for t in picked if "(" not in t and t in called]
             if folded:
@@ -311,7 +310,7 @@ def _instantiate_plan(workflow_name: str, params: dict,
             if "(" in t:
                 tools.append(t)
             else:
-                tools.append(f"{t}({{}})")
+                tools.append(ToolCall(t, {}))
         if tools:
             note = f"按 planner 决策执行：{'、'.join(tools)}"
     elif workflow.name in WRITE_WORKFLOW_NAMES:
@@ -510,9 +509,8 @@ def _instantiate_plan(workflow_name: str, params: dict,
                                 tag_spec["parent_tag"] = pname
                             if hexval:
                                 tag_spec["color"] = hexval
-                            tools.append(
-                                f"create_tag({json.dumps(tag_spec, ensure_ascii=False)})")
-                        tools.append(f"set_article_tags({json.dumps(args, ensure_ascii=False)})")
+                            tools.append(ToolCall("create_tag", tag_spec))
+                        tools.append(ToolCall("set_article_tags", args))
                         # 注记必须把**两件事**都说出来：它进 NOTE 行，narrator 照它组织
                         # 回复（卡面上那几行由 `render_action_lines` 从 specs 印，不走这里）。
                         extra = ("（先建再挂：站内已经有的直接用，没有的先新建——"
@@ -533,7 +531,7 @@ def _instantiate_plan(workflow_name: str, params: dict,
             return _param_problem_plan(workflow, chk, specs)
         for tool_name, tmpl in workflow.plan:
             args = expand_template_args(tmpl, params, specs)
-            tools.append(f"{tool_name}({json.dumps(args, ensure_ascii=False)})")
+            tools.append(ToolCall(tool_name, args))
     if (not tools and not dropped and not status and not workflow.chat
             and workflow.name != "content_query"):
         # ── 零工具轮不许"不成账"（20260929 批 G，D1）──────────────────────────

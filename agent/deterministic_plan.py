@@ -20,7 +20,6 @@
 """
 
 import ast
-import json
 import logging
 import re
 
@@ -28,8 +27,13 @@ from langchain_core.messages import ToolMessage
 
 from agent.authz import strip_user_shell
 from agent.prompt_context import _msg_text
+# `_tool_name` / `_tool_args` 住 `agent/tool_specs.py`（20261019 批 G6 起）——那边管
+# TOOLS 行条目的形状与解析。**这里仍是它们的对外出口**（`agent/write_grounding.py` 等
+# 从本模块 import `_tool_name`），所以别把这行当"可以删的转发"。
+from agent.tool_specs import _tool_args, _tool_name
 from agent.workflow_defs import WORKFLOW_MAP
 from agent.workflow_defs.nav_map import NAV_MAP, fuzzy_nav_hit
+from agent.workflow_model import ToolCall
 from agent.workflow_plan import instantiate_plan
 from tools.base import IOT_ENABLED
 # 与检索侧同一分词（2/3-gram）——候选标题相关性判定复用，避免两套词法
@@ -179,9 +183,9 @@ def _effect_switch_fast_path(user_msg: str, current_effects: str) -> dict | None
         return None  # 换到当前已开效果 = 幂等，落回 planner 叙述
     tools = []
     if old is not None and old in cur:
-        tools.append(f"toggle_effect({json.dumps({'effect': old, 'action': 'off'}, ensure_ascii=False)})")
+        tools.append(ToolCall("toggle_effect", {"effect": old, "action": "off"}))
     if target not in cur:
-        tools.append(f"toggle_effect({json.dumps({'effect': target, 'action': 'on'}, ensure_ascii=False)})")
+        tools.append(ToolCall("toggle_effect", {"effect": target, "action": "on"}))
     if not tools:
         return None
     note = f"特效切换快道（确定性，非模型决策）：{'、'.join(tools)}"
@@ -496,11 +500,17 @@ def _scan_action_intents(user_msg: str) -> list[dict]:
 
 
 def _intent_done(intent: dict, executed: list) -> bool:
-    """该意图是否已有执行事实（executed spec 的工具名 + 参数片段齐备）。"""
+    """该意图是否已有执行事实（executed spec 的工具名 + **参数逐键相等**）。
+
+    20261019 批 G6：参数那一半此前是在**渲染出来的串**上做子串匹配（键与值只要在串里
+    任意位置出现过就算数）⇒ `{"mode": "light", "note": "dark"}` 会让"切到深色"判成
+    已执行（`"mode"` ✓、`"dark"` 在**别人的值**里 ✓）。现在按解析出来的字典逐键比。
+    """
     for s in executed:
         if _tool_name(s) != intent["tool"]:
             continue
-        if all(f'"{k}"' in s and f'"{v}"' in s for k, v in intent["args"].items()):
+        args = _tool_args(s)[0]
+        if all(str(args.get(k)) == str(v) for k, v in intent["args"].items()):
             return True
     return False
 
@@ -526,7 +536,6 @@ _EXPERIENCE_TITLE_RE = re.compile(
 # score 要捕获（20260920 候选改读闸用，见 _candidate_detail_plan）。
 _RAG_ROW_RE = re.compile(
     r"^\s*\d+\.\s*type=(\w+)\s+id=(\d+)\s+score=([\d.]+)\s+title=(.*)$", re.M)
-_DETAIL_SPEC_RE = re.compile(r'article_id["\']?\s*[:=]\s*(\d+)')
 
 # 候选相关性判定（20260912，检索重复拦截的位置规则加固）
 # 关键词检索（search_notes）的候选行序：**20260912 起 = 后端相关度降序**（Rust
@@ -543,27 +552,27 @@ _CANDIDATE_STOPWORDS = {
 }
 
 
-def _spec_arg(spec: str, key: str) -> str:
-    """取 TOOLS 行 spec 的字符串参数（'search_notes({"keyword": "架构"})' → 架构）。"""
-    m = re.search(key + r'["\']?\s*[:=]\s*["\']([^"\']+)["\']', spec)
-    return m.group(1) if m else ""
-
-
 def _search_terms(plan_obj: dict, executed: list, user_msg: str) -> set[str]:
     """本轮检索的实词集合：优先取检索 spec 里的关键词原文（planner 抽的词），
     没有可用 spec 时退回用户消息。用于判定候选标题是否"对得上"检索意图。
 
     取 spec 而非用户整句，是因为判断对象是"这次检索查的是什么"——planner 抽的
     关键词才是候选集的成因；用户整句里还混着称呼/语气词，会稀释判断。
+
+    20261019 批 G6：参数从 `_tool_args` 取（`ToolCall` 时直接是构造时那份字典）。
+    此前这里住着 `_spec_arg`——一条正则，从**渲染出来的 JSON 文本**里把值抠回来；
+    改一次排版（加个空格、换个引号）就静默取不到，而取不到的表现是"退回用户整句"
+    ——不报错、只是判据悄悄变钝。那条正则已随本批删除。
     """
     terms: list[str] = []
     specs = [s for s in executed if _tool_name(s) in ("search_notes", "rag_search")]
     specs += [s for s in (plan_obj.get("tools") or [])
               if _tool_name(s) in ("search_notes", "rag_search")]
     for s in specs:
+        args = _tool_args(s)[0]
         for key in ("keyword", "query"):
-            v = _spec_arg(s, key)
-            if v:
+            v = args.get(key)
+            if isinstance(v, str) and v:
                 terms.append(v)
     text = " ".join(terms) if terms else user_msg
     return {t for t in _rag_tokenize(text)
@@ -575,6 +584,9 @@ def _title_relevant(title: str, terms: set[str]) -> bool:
     return bool(terms & set(_rag_tokenize(title)))
 
 
+# 已读集合（函数里那个 `done_ids`）从**解析出来的参数**取（20261019 批 G6）。此前是
+# 一条正则在 spec 文本里搜 `article_id`：写法一变就搜不到，而后果不是报错，是**同一篇
+# 被当成没读过再读一遍**。只认整数值——正则那一版同样只认"后面直接跟数字"。
 def _candidate_detail_plan(messages: list, executed: list, terms: set[str]) -> dict | None:
     """重复拦截的确定性出路：从最近检索帧候选行里挑"能对上号"的未读文档读全文。
 
@@ -593,8 +605,8 @@ def _candidate_detail_plan(messages: list, executed: list, terms: set[str]) -> d
     池内按分降序，且分数不高于"已读候选最高分"的一律不读——读全文的收益只来自
     最好的那份证据，低分候选是小语料 top_k 的填充物（见函数内注释的实证数据）。
     """
-    done_ids = {m.group(1) for s in executed for m in [_DETAIL_SPEC_RE.search(s)]
-                if m is not None}
+    done_ids = {str(aid) for s in executed
+                for aid in [_tool_args(s)[0].get("article_id")] if isinstance(aid, int)}
     frames = [m for m in messages if isinstance(m, ToolMessage)]
     # (id, doc_type, title, src, score)——score 只有 rag 行有（BM25 分），kw 行 None
     rows: list[tuple[str, str, str, str, float | None]] = []
@@ -782,8 +794,3 @@ def _wrap_up_plan(has_frames: bool, reason: str = "", note: str = "") -> dict:
     return _terminal_plan(has_frames,
                           reason or f"已达规划轮次上限（{MAX_PLAN_ROUNDS}）",
                           note=note)
-
-
-def _tool_name(tool_spec: str) -> str:
-    """TOOLS 行条目 → 工具名（'get_article_detail({"article_id": 21})' → get_article_detail）。"""
-    return tool_spec.split("(", 1)[0].strip()
