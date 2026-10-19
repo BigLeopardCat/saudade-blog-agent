@@ -9396,10 +9396,10 @@ def _cap_frame_text(text: str, used: int) -> tuple[str, dict | None]:
     **为什么是头尾各半而不是只留头部**（20261005 修）：帧的**尾巴**上住着事实，不只是
     收尾的括号。`_rows_with_note` 把 `〔系统注记〕本次只带回最近 60 条，留言共 137 条`
     追加成列表的最后一个元素，`get_article_detail` 的帧末也常是尾部小节的正文；只留
-    头部时，封顶一触发就把这条总数注记整条切掉，而 `entities._note_total` 正是读它报
-    总数的 ⇒ **跨轮实体摘要会把"共 137 条"说错**（切口自己把注记吞了，是"截断必须说
-    出口"这条纪律在另一个方向上的反面）。注记放**中间**而不是尾部，是因为它标记的正是
-    缺口的位置：两头都在、中间没了。
+    头部时，封顶一触发就把这条总数注记整条切掉，而读帧的模型正是从注记里知道"还有更早
+    的"⇒ 它会拿手上这 60 行当全部（切口自己把注记吞了，是"截断必须说出口"这条纪律在
+    另一个方向上的反面）。注记放**中间**而不是尾部，是因为它标记的正是缺口的位置：两头
+    都在、中间没了。（批 G2 起跨轮摘要不再受影响——总数走 `meta["page"]`，与帧文本无关。）
     """
     raw = len(text)
     keep = min(raw, _FRAME_HARD_MAX)
@@ -9748,7 +9748,7 @@ def execute_node(state: AgentState, config: RunnableConfig | None = None) -> dic
             # 实体摘要（20260920，见 agent/entity_digest.py）：数据工具取回的条目/计数
             # 压成一行随回执落 execution_log —— 工具帧只活当轮，不落这一行的话
             # 下轮「第二条写了什么」只能把工具再跑一遍（探针实测）。
-            digest = receipt_digest(name, str(out))
+            digest = receipt_digest(name, str(out), meta=out_meta)
             if digest:
                 rcpt["digest"] = digest
             if name == "get_article_detail":
