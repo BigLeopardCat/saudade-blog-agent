@@ -81,7 +81,7 @@ def _state(plan=None, **kw):
 
 # ────────────────────────── ① 节点入口检查
 
-def test_node_entry_checks():
+def _node_entry_checks():
     print("[cancel] 各节点入口检查")
     cfg, _ = _cfg(stop=True)
     for fn, name in ((planner_node, "planner"), (execute_node, "execute"),
@@ -98,7 +98,7 @@ def test_node_entry_checks():
 
 # ────────────────────────── ②③ 写操作绝不发生在用户离开之后
 
-def test_write_never_runs_after_cancel():
+def _write_never_runs_after_cancel():
     print("[cancel] 写操作与取消的关系")
     # ② 入口取消：一个写操作都不该被调用
     oled = _Spy("device_oled_display", "已送达")
@@ -140,7 +140,7 @@ def test_write_never_runs_after_cancel():
 
 # ────────────────────────── ④ 能力边界：LLM 调用不可打断，但下一个检查点一定拦得住
 
-def test_cancel_during_blocking_llm():
+def _cancel_during_blocking_llm():
     print("[cancel] 取消发生在阻塞的 LLM 调用期间（能力边界）")
     cfg, ev = _cfg(stop=False)
 
@@ -185,18 +185,14 @@ def test_cancel_during_blocking_llm():
         g._TOOL_MAP["device_oled_display"] = orig_map
 
 
-def main():
-    for fn in (test_node_entry_checks, test_write_never_runs_after_cancel,
-               test_cancel_during_blocking_llm):
+def test_cancel():
+    for fn in (_node_entry_checks, _write_never_runs_after_cancel,
+               _cancel_during_blocking_llm):
         print(f"\n── {fn.__name__} ──")
         fn()
-    if FAILS:
-        print(f"\n=== {len(FAILS)} 项失败 ===")
-        for f in FAILS:
-            print("  -", f)
-        sys.exit(1)
+    assert not FAILS, f"{len(FAILS)} 项失败：" + "；".join(FAILS)
     print("\n=== 全部通过 ===")
 
 
 if __name__ == "__main__":
-    main()
+    test_cancel()
