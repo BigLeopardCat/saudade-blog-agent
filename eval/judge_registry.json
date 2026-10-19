@@ -108,8 +108,8 @@
         0
       ],
       "agent/graph.py": [
-        198,
-        3481
+        136,
+        3436
       ],
       "agent/hostinfo.py": [
         0,
@@ -334,6 +334,10 @@
       "server.py": [
         22,
         0
+      ],
+      "agent/write_grounding.py": [
+        62,
+        45
       ]
     },
     "total": [
@@ -1845,8 +1849,8 @@
       "sunset": "声称闸工作流（另册：docs/toolcall-stability-roadmap.md §6）"
     },
     {
-      "id": "agent/graph.py::_ANN_TITLE_RE",
-      "file": "agent/graph.py",
+      "id": "agent/write_grounding.py::_ANN_TITLE_RE",
+      "file": "agent/write_grounding.py",
       "kind": "regex",
       "name": "_ANN_TITLE_RE",
       "size": 13,
@@ -1858,8 +1862,8 @@
       "sunset": "写参数出处第二批（挂起：等真实流量定价，见 docs/write-provenance-shadow-20261014.md §7）"
     },
     {
-      "id": "agent/graph.py::_ANN_BODY_RE",
-      "file": "agent/graph.py",
+      "id": "agent/write_grounding.py::_ANN_BODY_RE",
+      "file": "agent/write_grounding.py",
       "kind": "regex",
       "name": "_ANN_BODY_RE",
       "size": 22,
@@ -1871,8 +1875,8 @@
       "sunset": "写参数出处第二批（挂起：等真实流量定价，见 docs/write-provenance-shadow-20261014.md §7）"
     },
     {
-      "id": "agent/graph.py::_NAME_MARKS",
-      "file": "agent/graph.py",
+      "id": "agent/write_grounding.py::_NAME_MARKS",
+      "file": "agent/write_grounding.py",
       "kind": "collection",
       "name": "_NAME_MARKS",
       "size": 20,
@@ -1883,8 +1887,8 @@
       "sunset": "写参数出处第二批（挂起：等真实流量定价，见 docs/write-provenance-shadow-20261014.md §7）"
     },
     {
-      "id": "agent/graph.py::_DEICTIC_WORDS",
-      "file": "agent/graph.py",
+      "id": "agent/write_grounding.py::_DEICTIC_WORDS",
+      "file": "agent/write_grounding.py",
       "kind": "collection",
       "name": "_DEICTIC_WORDS",
       "size": 27,
@@ -1893,8 +1897,8 @@
       "why": "代词是封闭类——它划定义域（『它』天然是原话子串，会自满足逐字核对），不是打补丁。书面论证见 docs/native-toolcalls-mainline.md §4"
     },
     {
-      "id": "agent/graph.py::_PARENT_TAIL_RE",
-      "file": "agent/graph.py",
+      "id": "agent/write_grounding.py::_PARENT_TAIL_RE",
+      "file": "agent/write_grounding.py",
       "kind": "regex",
       "name": "_PARENT_TAIL_RE",
       "size": 10,

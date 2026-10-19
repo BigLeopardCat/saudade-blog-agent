@@ -1454,13 +1454,18 @@ _value_case("  反向：名字逐字在主人这句话里 ⇒ 一个字不改（
             "我想在「编程」下面加两个二级标签，名字叫「Tokio」和「Axum」", None)
 
 _seen_v: list = []
-_saved_v = g.record
+# 桩打在"`_name_arg_fix` 现在住的那个模块"上：20261019 起它在 `agent/write_grounding.py`，
+# 那边是 `from utils.trace import record` 绑到**自己的**模块全局上的 ⇒ 继续打
+# `g.record` 会**静默失效**（桩装上、事件一条不落，判据红在"没留痕"上，看着像功能坏了）。
+# 按函数对象自己的 `__module__` 取，下次再搬家也不会漏。
+_wgv = sys.modules[g._name_arg_fix.__module__]
+_saved_v = _wgv.record
 try:
-    g.record = lambda *a, **k: _seen_v.append(a)
+    _wgv.record = lambda *a, **k: _seen_v.append(a)
     g._name_arg_fix(instantiate_plan("tag_create", {"title": "临时标签"}) | {"params": {"title": "临时标签"}},
                     "帮我建一个标签")
 finally:
-    g.record = _saved_v
+    _wgv.record = _saved_v
 check("  拒绝这一支要留痕（零写的决定必须能在 trace 里复盘）",
       any(a[:2] == ("planner", "write_value_unresolved") for a in _seen_v),
       str(_seen_v)[:80])

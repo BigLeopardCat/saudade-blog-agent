@@ -85,6 +85,41 @@ def plan_codec_src():
                      for p in (GRAPH, ROOT / "agent" / "plan_codec.py"))
 
 
+WRITE_GUARD = ROOT / "agent" / "write_grounding.py"
+
+
+def write_guard_src():
+    """**写参数落位与拒答**那一族的全量文本（20261019 起住在 `agent/write_grounding.py`）。
+
+    给"整文件源码文本锁"取值。这一族（planner 决定写哪一件之后、真正落到工具参数上
+    之前那道关：落位 / 引文核对 / 拒答）20261019 从 `agent/graph.py` 整块搬走 ⇒
+    原来"读 graph.py 整文件"的那批接线锁会整族假红（代码还在、只是换了文件）。
+    取值点换成这一族**全部文件**的拼接视图，于是那些断言**一个字都不用改**
+    （同 `deprefix` / `plan_codec_src` / `prose()` 三次的思路）。
+
+    **列的是文件、不是"整个 agent 包"**：整个包拼起来会把别处同名的字面量也数进来，
+    那是把锁放松，不是搬家。两份用 `\\n` 相接 ⇒ 行号会平移，但判据只在这一份文本内部
+    找串/比先后，**两份共用同一张行号表**，自洽。
+
+    ⚠️ **顺序是有讲究的：被搬走的那一族在前，graph.py 在后。** 因为这一族里也有
+    **顺序锁**（"这一句排在那一句之前"），而拆完之后跨文件的那一对是
+    `_decide_write_guard`（本体，搬走了）→ `_decide_late_correct`（收尾校正，留在图里）：
+    原来在 graph.py 里就是本体在前（原 7207 < 7470）。口径按**本体在前、调用方在后**
+    ——这一族是"写参数落位与拒答"的**实现**，graph.py 剩下的是**图与调用方**。
+    （反过来拼会让 `tests/test_tag_admin.py` 那条顺序锁红，而红的理由看着像"接线断了"。）
+    """
+    return "\n".join(p.read_text(encoding="utf-8") for p in (WRITE_GUARD, GRAPH))
+
+
+def write_guard_deprefixed():
+    """同上，但把 `c.<字段>` 还原成裸名（给那批本来用 `graph_deprefixed()` 的套件）。
+
+    搬过去的那一族里也有 `c.plan_obj` / `c.user_msg` 这类取值（`_DecideCtx` 的字段），
+    所以去前缀必须作用在**拼接后的全文**上，不能只作用在 graph.py 那一半。
+    """
+    return deprefix(write_guard_src())
+
+
 def prose():
     """**模型可见正文**的全量文本（20261014 起住在 `agent/prompts.py`）。
 
