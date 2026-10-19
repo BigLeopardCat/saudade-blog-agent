@@ -253,7 +253,7 @@ UPSTREAM_DOWN = unavailable("服务暂时不可用，请稍后再试")
 #     （静默兜底会把它变成和 `status` 同一种坏法）。
 
 
-def _shape(data) -> str:
+def _shape(data, *, meta: dict | None = None) -> str:
     """`_get` 结果的统一出口。**别写 `str(data)`**：`str()` 作用在 str 子类上会退化成
     普通 str（CPython 行为），kind 标记就丢了——20260916 加 kind 时出过这个错，
     单测里有一条专门盯"经 .invoke() 透传后标记仍在"。
@@ -269,11 +269,15 @@ def _shape(data) -> str:
 
     `data` 存的是**改过名的**那份（与文本同源）——存原始行会让"帧里叫 talkId、
     取值源里叫 talkKey"这对老问题从另一个门进来。
+
+    `meta`（批 G2）只给**列表类**工具用：分页页码（`_cap_rows` 的 `_page`）随它
+    出去，跨轮实体摘要就不必再从中文字注记里正则抠「共 N 条」。它不是
+    `_RCPT_META_KEYS` 的成员 ⇒ **不落回执、不跨语言**（白名单在 `graph.py`）。
     """
     if isinstance(data, ToolResult):
         return data
     relabeled = _label_id_keys(data)
-    return ToolResult(str(relabeled), "ok", None, relabeled)
+    return ToolResult(str(relabeled), "ok", meta, relabeled)
 
 
 # 线上 API 的行字段名（`talkKey`/`noteKey`/…）与我们给模型看的**命名空间名**
@@ -349,13 +353,30 @@ _LIST_FIELD_MAX = 500
 _LIST_FIELD_KEYS = ("content", "talkContent", "留名")
 
 
-def _cap_rows(rows: list, limit: int, noun: str, offset: int = 0) -> tuple[list, str]:
-    """行数封顶：超上限只保留**最新的** limit 行，返回 `(行, 截断说明)`。
+def _page(total: int, start: int = 0, end: int = 0) -> dict:
+    """注记里那两个数的**结构化那一份**（20261019 批 G2）。
+
+    为什么要有：`total` / `start` / `end` 此前**只**长在中文注记里，跨轮实体摘要
+    （`entities._note_total` / `_note_range`）于是只能拿 `共 (\\d+) 条` /
+    `第 (\\d+)-(\\d+) 条` 把它们抠回来——措辞一改，摘要就会把 137 条说成 60 条，
+    **系统自己说假话**，而且全程不报错（`_cap_rows` 自己的注里早把这条耦合写明了）。
+
+    注记**文本一字不动**（planner/narrator 读的还是那句话），多出来的只是这一格。
+    `start`/`end` 都为 0 = "这一页就是最新那批，没有号段"（与 `_note_range` 的
+    "没有则 None" 同义）。
+    """
+    return {"total": total, "start": start, "end": end}
+
+
+def _cap_rows(rows: list, limit: int, noun: str,
+              offset: int = 0) -> tuple[list, str, dict | None]:
+    """行数封顶：超上限只保留**最新的** limit 行，返回 `(行, 截断说明, 页码)`。
 
     上游序即"最新在前"（`list_by_src` 按 `CreatedAt DESC, Id DESC`）⇒ `rows[:limit]`
     就是最近的那批，不需要重排。
 
-    没触发时说明是空串——调用方拼进注记的那一步因此今天一字不变。
+    没触发时说明是空串、页码是 `None`——调用方拼进注记的那一步因此今天一字不变，
+    而 `None` 是"这一轮没有页码可说"（不是"页码是 0 条"）。
     **说明里必须写总数**：跨轮执行记忆的实体摘要（`entities._entry_digest`）读的就是
     这一句，不写总数就等于让系统在跨轮记忆里把"M 条"说成"limit 条"。
 
@@ -366,28 +387,31 @@ def _cap_rows(rows: list, limit: int, noun: str, offset: int = 0) -> tuple[list,
     `entities._note_range`**：跨轮摘要据它说"第 61-120 条"，不会把"取回来的这一页"
     错说成"最近的一页"。
 
-    两个分支的**「共 N 条」子串**必须一字不差地留着（`entities._note_total` 的正则是
-    `共 (\\d+) 条`），口径一漂，跨轮摘要的总数就跟着漂。
+    批 G2 起这两件事**不再只能从注记里读**：第三个返回值 `_page(...)` 与注记同源，
+    调用方把它塞进 `_shape(..., meta={"page": …})` ⇒ 摘要读结构、注记只给人看。
+    注记文本仍然一字不改（`共 N 条` / `第 A-B 条` 两个子串留着），因为它同时是
+    **给模型看的边界事实**，且 `receipt_digest` 没有 meta 时仍走文本回落那一支。
     """
     total = sum(1 for r in rows if isinstance(r, dict))
     if offset <= 0:
         # 今天的行为**逐字节不变**（除了把"更早的未列入"换成可取回的写法）。
         if total <= limit:
-            return list(rows), ""
+            return list(rows), "", None
         return list(rows[:limit]), (
             f"本次只带回最近{limit}条，{noun}共 {total} 条"
-            f"（更早的还有；要取更早的，带上 offset={limit} 再调一次）。")
+            f"（更早的还有；要取更早的，带上 offset={limit} 再调一次）。"), _page(total)
     start = max(0, offset)
     window = list(rows[start:start + limit])
     if not window:
         # ⚠ 这里返回**空列表**是安全的，因为调用方紧接着会 `_rows_with_note` 挂上注记
         # ⇒ 出口帧非空、`kind` 仍是 `ok`。若哪个调用方把注记去掉，裸 `[]` 会被 checker
         # 判成 `empty_result` 并拒绝进跨轮执行记忆——那是另一个事实，别让它悄悄发生。
-        return [], f"offset={start} 已超出范围：{noun}共 {total} 条，没有更早的了。"
+        return [], f"offset={start} 已超出范围：{noun}共 {total} 条，没有更早的了。", _page(total)
     end = start + len(window)
     tail = ("（已到末尾，没有更早的了）。" if end >= total
             else f"（更早的还有；要取更早的，带上 offset={end} 再调一次）。")
-    return window, f"本次带回第 {start + 1}-{end} 条，{noun}共 {total} 条{tail}"
+    return (window, f"本次带回第 {start + 1}-{end} 条，{noun}共 {total} 条{tail}",
+            _page(total, start + 1, end))
 
 
 def _clip_fields(rows: list, cap: int) -> list:

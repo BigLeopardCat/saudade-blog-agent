@@ -240,7 +240,7 @@ def _verdict_of(name: str, args: dict, args_ok: bool, text: str, workflow: str,
         cmd = (meta or {}).get("cmd")
         if isinstance(cmd, dict):
             receipt["cmd"] = cmd
-        digest = receipt_digest(name, text)
+        digest = receipt_digest(name, text, meta=meta)
         if digest:
             receipt["digest"] = digest
         if name == "get_article_detail":

@@ -117,14 +117,21 @@ _NOTE_TOTAL_RE = re.compile(r"共 (\d+) 条")
 _NOTE_RANGE_RE = re.compile(r"第 (\d+)-(\d+) 条")
 
 
-def _note_total(data) -> int:
-    """从帧尾的〔系统注记〕里读"共 N 条"（列表工具封顶时写进去的总数）。没有则 0。
+def _note_total(data, page=None) -> int:
+    """这一列表**一共多少条**：先读结构（`page["total"]`），没有才从注记里正则抠。
 
     为什么摘要要读它：`tools/base.py::_cap_rows` 按上限裁行之后，`len(rows)` 只剩
     上限条数，而摘要这条要说的恰恰是**站点里一共多少条**。不读总数就等于让系统在
     跨轮执行记忆里把 137 条说成 60 条——那是**系统自己**说假话，比模型编还坏。
-    注记是**非 dict 尾元素**（同 `_rows` 的过滤口径），所以这里显式跳过 dict 找字符串。
+
+    **批 G2**：`page` 是 `_cap_rows` 与注记**同源**的那一份（`tools/result.py::_page`），
+    经 `ToolResult.meta` 到这里。两个数本来就在手上，此前却只把它渲染成中文、再在这里
+    用正则抠回来——注记的措辞一改，摘要就把 137 条说成 60 条，**而且全程不报错**。
+    注记仍是**非 dict 尾元素**（同 `_rows` 的过滤口径），文本那一支留着是给**只有文本的
+    输入**用的（trace 回放、直接喂 repr 串的调用点），不是"结构坏了兜一下"。
     """
+    if isinstance(page, dict) and isinstance(page.get("total"), int):
+        return page["total"]
     if not isinstance(data, list):
         return 0
     for x in data:
@@ -136,14 +143,23 @@ def _note_total(data) -> int:
     return 0
 
 
-def _note_range(data) -> tuple[int, int] | None:
-    """从帧尾的〔系统注记〕里读"第 A-B 条"（取回更早那一页时的号段）。没有则 None。
+def _note_range(data, page=None) -> tuple[int, int] | None:
+    """这一页**是不是最新的那批**：`page` 说得出就按它，说不出才从注记里正则抠。
 
     为什么摘要也要读它：`offset > 0` 时手上这 60 行**不是最近的那批**（是第 61-120 条），
     而 `_entry_digest` 原来只会按 `len(rows)` 说"最近 60 条"——那会让跨轮执行记忆把
     "翻页拉回来的那一页"错说成"最新的一页"，正是本仓最不能忍的那类假话（系统自己说的，
-    比模型编还坏，同 `_note_total` 的理由）。注记里的号段是唯一能区分两者的信息。
+    比模型编还坏，同 `_note_total` 的理由）。
+
+    **批 G2**：有 `page` 时**信它**——`start > 0` 就是号段，`start == 0` 就是"最新那批、
+    没有号段"（`_page` 的缺省），不去注记里再抠一遍（结构在手上还去读渲染串，正是本批
+    要收的那一族）。`page is None` 才是"这一轮没有结构可说" ⇒ 回落正则。
     """
+    if isinstance(page, dict):
+        start, end = page.get("start"), page.get("end")
+        if isinstance(start, int) and isinstance(end, int) and start > 0:
+            return start, end
+        return None
     if not isinstance(data, list):
         return None
     for x in data:
@@ -155,7 +171,7 @@ def _note_range(data) -> tuple[int, int] | None:
     return None
 
 
-def _entry_digest(data) -> str:
+def _entry_digest(data, page=None) -> str:
     """留言板/说说：序号 + 分类 + 内容首段（序号是"第二条"能对号的关键）。
 
     **分类要看得见是分类**（20261001）：`cat`/`talkTitle` 是心情词（寄/忆/诉/愿），
@@ -173,8 +189,8 @@ def _entry_digest(data) -> str:
         if not body:
             continue
         items.append(f"{i}.〔{cat}〕「{body}」" if cat else f"{i}.「{body}」")
-    total = _note_total(data)
-    span = _note_range(data)
+    total = _note_total(data, page)
+    span = _note_range(data, page)
     # 只在本轮**真的**被裁过（总数 > 手上条数）时才改口径，否则输出与从前逐字节相同。
     if span:
         # 取回更早那一页 ⇒ 手上这批**不是**最新的，绝不能说"最近 N 条"（见 `_note_range`）。
@@ -192,7 +208,7 @@ def _entry_digest(data) -> str:
 _BOARD_STATE_WORD = {1: "通过", 0: "待审", 2: "未通过"}
 
 
-def _my_board_digest(data) -> str:
+def _my_board_digest(data, page=None) -> str:
     """我的河灯（20261008）：`talkId` + 状态 + 分类 + 内容首段。
 
     比 `_entry_digest` 多两样，两样都是这条通道**独有**的：
@@ -215,7 +231,7 @@ def _my_board_digest(data) -> str:
         head = f"{i}.talkId:{tid}" if isinstance(tid, int) else f"{i}."
         cat = _clip(r.get("cat") or r.get("talkTitle") or "", 4)
         items.append(f"{head}[{state}]" + (f"〔{cat}〕" if cat else "") + f"「{body}」")
-    total = _note_total(data)
+    total = _note_total(data, page)
     head = f"最近{len(rows)}条/共{total}条" if total > len(rows) else f"最近{len(rows)}条"
     return f"我的河灯 {head}: " + _join(items) if items else ""
 
@@ -636,12 +652,30 @@ _TEXT_DIGESTERS = {
 }
 
 
-def receipt_digest(tool: str, result: str) -> str:
-    """数据工具返回 → 一行实体摘要（无摘要能力/解析失败 → ""）。"""
+# 会**读页码结构**的那几个摘要器（批 G2）：只有它们多收一个 `page` 实参。
+# 用一张名单而不是给所有摘要器都加一个用不上的形参：签名说明"谁真的在读它"，
+# 而多出来的那个参数要是没人读，下一个人会以为它早就生效了。
+_PAGE_AWARE = {"list_guestbook", "list_talks", "list_my_board"}
+
+
+def receipt_digest(tool: str, result: str, *, meta=None) -> str:
+    """数据工具返回 → 一行实体摘要（无摘要能力/解析失败 → ""）。
+
+    **批 G2**：`meta` 是工具返回的**结构化副产物**（`ToolResult.meta`），目前只用到
+    一格 `page`（`{"total","start","end"}`，见 `tools/result.py::_page`）。传了它，
+    摘要就不去中文注记里正则抠「共 N 条」「第 A-B 条」——注记是给人看的那份**渲染**，
+    改一句措辞就能让系统在跨轮记忆里把 137 条说成 60 条而**不报错**。
+
+    缺省 `None` = "这一轮没有结构可说"（trace 回放、测试直接喂 repr 串）⇒ 回落文本
+    那一支。**关键字实参**：老调用点（`receipt_digest(name, text)`）一个都不用改。
+    """
     name = tool or ""
+    page = meta.get("page") if isinstance(meta, dict) else None
     try:
         if name in _DIGESTERS:
-            out = _DIGESTERS[name](_parse(result))
+            data = _parse(result)
+            fn = _DIGESTERS[name]
+            out = fn(data, page) if name in _PAGE_AWARE else fn(data)
         elif name in _TEXT_DIGESTERS:
             out = _TEXT_DIGESTERS[name](result or "")
         else:

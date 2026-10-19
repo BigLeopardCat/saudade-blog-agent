@@ -1137,7 +1137,7 @@
       "sample": "共 (\\d+) 条",
       "category": "parser",
       "q": "共 (\\d+) 条",
-      "why": "拆工具返回的『共 N 条』"
+      "why": "**回落支**（批 G2 起）：只有文本时（trace 回放/直接喂 repr 串）才走；生产走 `meta[\"page\"]` 结构"
     },
     {
       "id": "agent/entity_digest.py::_NOTE_RANGE_RE",
@@ -1148,7 +1148,7 @@
       "sample": "第 (\\d+)-(\\d+) 条",
       "category": "parser",
       "q": "第 (\\d+)-(\\d+) 条",
-      "why": "拆工具返回的『第 a-b 条』"
+      "why": "**回落支**（批 G2 起）：只有文本时才走；生产走 `meta[\"page\"]` 结构"
     },
     {
       "id": "agent/entity_digest.py::_BOARD_STATE_WORD",
