@@ -237,7 +237,7 @@ def _evidence_fields(plan_obj: "dict | None", user_msg, ledger_src: str = ""
             wanted.append((name, nk, got, today))
         if name in scope and name not in _WRITE_VALUE_FIELDS \
                 and name not in _WRITE_NAME_FIELDS:
-            ks = ",".join(sorted(args))
+            ks = ",".join(sorted(args))  # ⚠️ 不是 spec：只有参数名、没有值，只喂下面的 scope
             widen.append(f"{name}({ks})" if ks else name)
     return wanted, widen
 

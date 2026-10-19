@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import re
 from datetime import datetime
+from typing import TypedDict
 
 from agent import hostinfo as H
 
@@ -68,6 +69,30 @@ def _ts(now: datetime | None = None) -> str:
 
 
 # ── 报表 ①：服务器状态 ───────────────────────────────────────────────
+
+class ServerStatusKw(TypedDict):
+    """`render_server_status` 的六个入参（20261019 批 G5）。
+
+    为什么要有这张表：调用方（`tools/admin_read.py`）现在把**同一份**结构既喂渲染器、
+    又当 `ToolResult.data` 交出去，只能写成 `R.render_server_status(**kw)`——而一个
+    裸 dict 的 `**` 展开会让类型检查在这六个口子上**同时失明**（实测十个 arg-type）。
+    这张表就是那个 dict 的形状：写一次，调用方与渲染器都按它走。
+    """
+    cpu_pct: float | None
+    cores: int
+    load: tuple[float, float, float] | None
+    mem: dict
+    disks: list[dict]
+    uptime_s: float | None
+
+
+class ServiceHealthKw(TypedDict):
+    """`render_service_health` 的四个入参（同上，批 G5）。"""
+    services: list[tuple[str, dict]]
+    health: dict
+    traces: dict
+    sizes: list[dict]
+
 
 def render_server_status(*, cpu_pct: float | None, cores: int,
                          load: tuple[float, float, float] | None,

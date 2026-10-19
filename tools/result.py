@@ -31,7 +31,7 @@
 # `__all__` = 本模块**所有不以 `_` 开头**的模块级名字（社区惯例，不留例外；
 # `tests/test_module_exports.py` 按这条规则机械判着，漂了就红）。
 __all__ = ["ToolResult", "ok", "empty", "unavailable", "not_found", "invalid_args", "TGT_KINDS",
-           "tgt", "fact", "is_noop", "UPSTREAM_DOWN"]
+           "tgt", "fact", "is_noop", "UPSTREAM_DOWN", "error_frame"]
 
 # ── 工具返回值的结构化"两类"（20260916 加固）──
 # 背景：工具失败时返回的是**人话字符串**，与正常内容同型；`_get` 更是把所有上游故障
@@ -57,25 +57,41 @@ class ToolResult(str):
     # 改一次措辞就静默失配（回执是落库的审计，不能靠"读起来差不多"）。
     # 与 kind 同一条生命线，经 `.invoke()` 透传（test_reports/test_admin_write 有锁）。
     meta: dict = {}
+    # **结构化载荷**（20261019 批 G1）：文本是它的**渲染**，它是文本的**本体**。
+    #
+    # 为什么要有它：`_shape` 的出口此前是 `str(data)`，于是每一个想读结构的消费方
+    # （参数引用 `$x[0].y`、实体摘要、跨轮指代锚点）都得把那个 repr **再解析回来**
+    # ——`agent/arg_refs.py::parse_data` 的 `literal_eval` 兜底、`entity_digest._parse`、
+    # `deterministic_plan._doc_title` 的正则，全是同一件事的不同写法。结构本来就在手上，
+    # 丢掉的只有"它在哪一格"。
+    #
+    # 与 `meta` 的分工别混：`meta` 是**给回执/跨语言契约**看的**小**结构（op/changed/
+    # target/…，`_RCPT_META_KEYS` 是白名单）；`data` 是**工具返回值本身**（列表/字典，
+    # 可能就是几十行），只在本进程里传，**不落回执、不跨语言**。
+    #
+    # 缺省 `None` 而不是 `{}`：`None` 是"这个返回**没有**结构化载荷"（固定告知语、
+    # 纯文本），消费方据此回落文本解析；`{}` 会伪装成"有载荷，只是空的"。
+    data: object = None
 
     def __new__(cls, text: str, kind: str = "ok",
-                meta: dict | None = None) -> "ToolResult":
+                meta: dict | None = None, data: object = None) -> "ToolResult":
         obj = str.__new__(cls, text)
         obj.kind = kind
         obj.meta = dict(meta) if meta else {}
+        obj.data = data
         return obj
 
 
-def ok(text: str, meta: dict | None = None) -> ToolResult:
-    return ToolResult(text, "ok", meta)
+def ok(text: str, meta: dict | None = None, *, data: object = None) -> ToolResult:
+    return ToolResult(text, "ok", meta, data)
 
 
-def empty(text: str, meta: dict | None = None) -> ToolResult:
-    return ToolResult(text, "empty", meta)
+def empty(text: str, meta: dict | None = None, *, data: object = None) -> ToolResult:
+    return ToolResult(text, "empty", meta, data)
 
 
-def unavailable(text: str, meta: dict | None = None) -> ToolResult:
-    return ToolResult(text, "unavailable", meta)
+def unavailable(text: str, meta: dict | None = None, *, data: object = None) -> ToolResult:
+    return ToolResult(text, "unavailable", meta, data)
 
 
 def not_found(text: str, meta: dict | None = None) -> ToolResult:
@@ -95,7 +111,7 @@ def not_found(text: str, meta: dict | None = None) -> ToolResult:
     return ToolResult(text, "not_found", meta)
 
 
-def invalid_args(text: str, meta: dict | None = None) -> ToolResult:
+def invalid_args(text: str, meta: dict | None = None, *, data: object = None) -> ToolResult:
     """工具**自己**判出参数不合法（20261019 批 ⑤-1）——第四个失败族。
 
     与 `args_parse`（`_check_spec` 在 spec 解析那一步给的码）分开：那个说的是"计划里
@@ -110,7 +126,7 @@ def invalid_args(text: str, meta: dict | None = None) -> ToolResult:
     `execution_log` ⇒ 下一轮注回提示词 ⇒ planner/narrator 读成**系统确认的事实**。
     换 `unavailable` 能拦住回执，但过程行会显示「服务不可用」——而设备好好的。
     """
-    return ToolResult(text, "invalid_args", meta)
+    return ToolResult(text, "invalid_args", meta, data)
 
 
 # ── 写工具的**事实信封**（20260930 · F1）────────────────────────────────────
@@ -206,6 +222,26 @@ def is_noop(meta) -> bool:
     return bool(meta.get("noop"))
 
 
+def error_frame(text: str, reason: str) -> ToolResult:
+    """`__ERROR__` 帧 + 它的**原因码**（20261019 批 G4）。
+
+    帧文本本来就是**渲染**：原因码此前只长在它中间那对方括号里（`权限不足[scope_denied]`），
+    于是唯一的读端 `graph._check_spec` 只能拿七个 `*_error_reason` 正则/子串把它抠回来
+    ——**改一句措辞就静默退化成笼统的 `error_frame`**，而 planner 的应对（改参数？去问主人？
+    如实告知？）正是按这个码分叉的。生产方手上本来就有那个常量，这里只是给它一格。
+
+    ⚠️ **kind 仍是 `ok`，不新增 kind**：`_check_spec` 是一条显式 if 链，新 kind 漏接分支
+    会 fallthrough 到"文本非空 ⇒ PASS" ⇒ 产回执 ⇒ 进 execution_log ⇒ 下一轮把一次
+    **被拒绝的**写当成已完成的事实（见 `agent/adminops_target.py` 里 policy_frame 的长注：
+    那是本族最不能出的错，而且完全静默）。`__ERROR__` 文本逐字节不变 ⇒ 线格式、Rust 的
+    前缀分类、gate 分支 5a（错误帧 + 完成式声称）全都不动。
+
+    ⚠️ **已经是 `ToolResult` 的别再套一层**：`ToolResult(x)` 会新建一个对象、把 `meta`
+    丢掉（它不像 `_shape` 那样有身份透传）。调用方拿到本函数的返回值应当**直接返回**。
+    """
+    return ToolResult(text, "ok", {"reason": reason})
+
+
 # 上游故障哨兵：`_get` 失败时返回它而不是 `[]`（"故障伪装成空"的源头就在那）。
 # 工具的出口要用 `_shape(data)` 而不是 `str(data)`——理由见 _shape 的注释。
 UPSTREAM_DOWN = unavailable("服务暂时不可用，请稍后再试")
@@ -241,7 +277,7 @@ UPSTREAM_DOWN = unavailable("服务暂时不可用，请稍后再试")
 #     （静默兜底会把它变成和 `status` 同一种坏法）。
 
 
-def _shape(data) -> str:
+def _shape(data, *, meta: dict | None = None) -> str:
     """`_get` 结果的统一出口。**别写 `str(data)`**：`str()` 作用在 str 子类上会退化成
     普通 str（CPython 行为），kind 标记就丢了——20260916 加 kind 时出过这个错，
     单测里有一条专门盯"经 .invoke() 透传后标记仍在"。
@@ -249,10 +285,23 @@ def _shape(data) -> str:
     出口另做一件事：**把行里的上游字段名换成命名空间名**（见 `_FRAME_ID_KEYS`）。
     出口只有这一个，所以帧、参数引用取值源（`graph.py` 的 `parse_data(str(out))`）
     与实体摘要（`entities.receipt_digest`）三处**同时**看到同一个名字。
+
+    **20261019（批 G1）：结构不再在这里被丢掉。** 出口从"一个普通 str"变成
+    `ToolResult(渲染文本, data=改过名的那个结构)`——文本逐字节不变（所有 `str()`/
+    切片/拼接的调用点一个字都不用改），但下游要读结构时直接拿 `.data`，不必再把
+    repr 解析回来。取法是 `agent/arg_refs.py::structured_of(out)`。
+
+    `data` 存的是**改过名的**那份（与文本同源）——存原始行会让"帧里叫 talkId、
+    取值源里叫 talkKey"这对老问题从另一个门进来。
+
+    `meta`（批 G2）只给**列表类**工具用：分页页码（`_cap_rows` 的 `_page`）随它
+    出去，跨轮实体摘要就不必再从中文字注记里正则抠「共 N 条」。它不是
+    `_RCPT_META_KEYS` 的成员 ⇒ **不落回执、不跨语言**（白名单在 `graph.py`）。
     """
     if isinstance(data, ToolResult):
         return data
-    return str(_label_id_keys(data))
+    relabeled = _label_id_keys(data)
+    return ToolResult(str(relabeled), "ok", meta, relabeled)
 
 
 # 线上 API 的行字段名（`talkKey`/`noteKey`/…）与我们给模型看的**命名空间名**
@@ -328,13 +377,30 @@ _LIST_FIELD_MAX = 500
 _LIST_FIELD_KEYS = ("content", "talkContent", "留名")
 
 
-def _cap_rows(rows: list, limit: int, noun: str, offset: int = 0) -> tuple[list, str]:
-    """行数封顶：超上限只保留**最新的** limit 行，返回 `(行, 截断说明)`。
+def _page(total: int, start: int = 0, end: int = 0) -> dict:
+    """注记里那两个数的**结构化那一份**（20261019 批 G2）。
+
+    为什么要有：`total` / `start` / `end` 此前**只**长在中文注记里，跨轮实体摘要
+    （`entities._note_total` / `_note_range`）于是只能拿 `共 (\\d+) 条` /
+    `第 (\\d+)-(\\d+) 条` 把它们抠回来——措辞一改，摘要就会把 137 条说成 60 条，
+    **系统自己说假话**，而且全程不报错（`_cap_rows` 自己的注里早把这条耦合写明了）。
+
+    注记**文本一字不动**（planner/narrator 读的还是那句话），多出来的只是这一格。
+    `start`/`end` 都为 0 = "这一页就是最新那批，没有号段"（与 `_note_range` 的
+    "没有则 None" 同义）。
+    """
+    return {"total": total, "start": start, "end": end}
+
+
+def _cap_rows(rows: list, limit: int, noun: str,
+              offset: int = 0) -> tuple[list, str, dict | None]:
+    """行数封顶：超上限只保留**最新的** limit 行，返回 `(行, 截断说明, 页码)`。
 
     上游序即"最新在前"（`list_by_src` 按 `CreatedAt DESC, Id DESC`）⇒ `rows[:limit]`
     就是最近的那批，不需要重排。
 
-    没触发时说明是空串——调用方拼进注记的那一步因此今天一字不变。
+    没触发时说明是空串、页码是 `None`——调用方拼进注记的那一步因此今天一字不变，
+    而 `None` 是"这一轮没有页码可说"（不是"页码是 0 条"）。
     **说明里必须写总数**：跨轮执行记忆的实体摘要（`entities._entry_digest`）读的就是
     这一句，不写总数就等于让系统在跨轮记忆里把"M 条"说成"limit 条"。
 
@@ -345,28 +411,31 @@ def _cap_rows(rows: list, limit: int, noun: str, offset: int = 0) -> tuple[list,
     `entities._note_range`**：跨轮摘要据它说"第 61-120 条"，不会把"取回来的这一页"
     错说成"最近的一页"。
 
-    两个分支的**「共 N 条」子串**必须一字不差地留着（`entities._note_total` 的正则是
-    `共 (\\d+) 条`），口径一漂，跨轮摘要的总数就跟着漂。
+    批 G2 起这两件事**不再只能从注记里读**：第三个返回值 `_page(...)` 与注记同源，
+    调用方把它塞进 `_shape(..., meta={"page": …})` ⇒ 摘要读结构、注记只给人看。
+    注记文本仍然一字不改（`共 N 条` / `第 A-B 条` 两个子串留着），因为它同时是
+    **给模型看的边界事实**，且 `receipt_digest` 没有 meta 时仍走文本回落那一支。
     """
     total = sum(1 for r in rows if isinstance(r, dict))
     if offset <= 0:
         # 今天的行为**逐字节不变**（除了把"更早的未列入"换成可取回的写法）。
         if total <= limit:
-            return list(rows), ""
+            return list(rows), "", None
         return list(rows[:limit]), (
             f"本次只带回最近{limit}条，{noun}共 {total} 条"
-            f"（更早的还有；要取更早的，带上 offset={limit} 再调一次）。")
+            f"（更早的还有；要取更早的，带上 offset={limit} 再调一次）。"), _page(total)
     start = max(0, offset)
     window = list(rows[start:start + limit])
     if not window:
         # ⚠ 这里返回**空列表**是安全的，因为调用方紧接着会 `_rows_with_note` 挂上注记
         # ⇒ 出口帧非空、`kind` 仍是 `ok`。若哪个调用方把注记去掉，裸 `[]` 会被 checker
         # 判成 `empty_result` 并拒绝进跨轮执行记忆——那是另一个事实，别让它悄悄发生。
-        return [], f"offset={start} 已超出范围：{noun}共 {total} 条，没有更早的了。"
+        return [], f"offset={start} 已超出范围：{noun}共 {total} 条，没有更早的了。", _page(total)
     end = start + len(window)
     tail = ("（已到末尾，没有更早的了）。" if end >= total
             else f"（更早的还有；要取更早的，带上 offset={end} 再调一次）。")
-    return window, f"本次带回第 {start + 1}-{end} 条，{noun}共 {total} 条{tail}"
+    return (window, f"本次带回第 {start + 1}-{end} 条，{noun}共 {total} 条{tail}",
+            _page(total, start + 1, end))
 
 
 def _clip_fields(rows: list, cap: int) -> list:
