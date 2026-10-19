@@ -30,6 +30,15 @@ import re
 import sys
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
+# 仓根也插，**且插在最前**（20261020）：`python tests/test_ci_suite_list.py` 的
+# `sys.path[0]` 是 `tests/`、**不含仓根**，于是本进程的 `config` / `agent` 全靠
+# venv 里那条 `_editable_impl_*.pth`（指向**主仓**）解析。在 worktree 里跑套件时
+# 主仓往往领先 worktree，而本文件的环境探针**恰好是跨进程比同一件事**：
+# 父进程量的是**主仓**的 `Settings.model_fields`，子进程（`_PROBE` 里显式
+# `sys.path.insert(0, ROOT)`）量的是 **worktree** 的 ⇒ 主仓多一个字段就报
+# 「偏离的字段=None」（子进程 `getattr` 抛异常、rc≠0），**假红**。修法与
+# `eval/run_golden.py:92-101` 同一处、同一理由（那条是 20261019 修的同一个坑）。
+sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "tests"))
 
 import run_all  # noqa: E402  （只为断言它的枚举规则，不跑它）
