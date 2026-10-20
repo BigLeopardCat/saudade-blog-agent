@@ -36,6 +36,8 @@ narrator 的 system prompt、并且**"要让访客看见或复制地址本身时
 import sys
 from pathlib import Path
 
+from _judge import collector
+
 ROOT = Path(__file__).resolve().parent.parent  # 仓根
 
 
@@ -46,12 +48,7 @@ from agent import graph as g  # noqa: E402
 from agent.prompts import BLOG_ASSISTANT_PROMPT  # noqa: E402
 
 FAILS: list[str] = []
-
-
-def check(desc: str, cond: bool, detail: str = "") -> None:
-    print(("  ✅ " if cond else "  ❌ ") + desc + (f"  [{detail}]" if detail else ""))
-    if not cond:
-        FAILS.append(desc)
+check = collector(FAILS)
 
 
 def _has_rule(text: str) -> bool:

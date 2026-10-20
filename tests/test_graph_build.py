@@ -26,6 +26,8 @@ import sys
 import tempfile
 from pathlib import Path
 
+from _judge import collector
+
 ROOT = Path(__file__).resolve().parent.parent
 
 
@@ -43,12 +45,7 @@ from agent.principal import (  # noqa: E402
 from rag import graph_build as gb  # noqa: E402
 
 FAILS: list[str] = []
-
-
-def check(desc: str, cond: bool, detail="") -> None:
-    print(("  ✅ " if cond else "  ❌ ") + desc + (f"  [{detail}]" if detail else ""))
-    if not cond:
-        FAILS.append(desc)
+check = collector(FAILS)
 
 
 def _fresh(*payload_files: tuple[Path, dict]):

@@ -28,6 +28,7 @@ import sys
 import time
 from pathlib import Path
 
+from _judge import collector
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
 ROOT = Path(__file__).resolve().parent.parent  # 仓根（20260924：测试统一搬进 tests/）
@@ -50,12 +51,7 @@ from agent.workflow_plan import instantiate_plan  # noqa: E402
 from tools import base as _base  # 工具的返回值契约（ToolResult：str 子类 + kind）
 
 FAILED: list[str] = []
-
-
-def check(name: str, ok: bool, extra: str = "") -> None:
-    print(f"  {'✅' if ok else '❌'} {name}" + (f"  [{extra}]" if extra else ""))
-    if not ok:
-        FAILED.append(name)
+check = collector(FAILED)
 
 
 import hashlib  # noqa: E402

@@ -60,6 +60,8 @@ import tempfile
 from pathlib import Path
 from typing import TypedDict
 
+from _judge import collector
+
 ROOT = Path(__file__).resolve().parent.parent  # 仓根
 
 
@@ -76,12 +78,7 @@ from agent import checkpoint as C  # noqa: E402
 from tools.base import ToolResult  # noqa: E402
 
 FAILS: list[str] = []
-
-
-def check(desc: str, cond: bool, detail: str = "") -> None:
-    print(("  ✅ " if cond else "  ❌ ") + desc + (f"  [{detail}]" if detail else ""))
-    if not cond:
-        FAILS.append(desc)
+check = collector(FAILS)
 
 
 class _Boom(Exception):

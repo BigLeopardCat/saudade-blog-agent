@@ -25,6 +25,8 @@ import shutil
 import sys
 import tempfile
 
+from _judge import collector
+
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))  # 仓根（tests/ 的上一级）
 
 
@@ -34,12 +36,7 @@ sys.path.insert(0, os.path.join(ROOT, "eval"))
 import trace_reconcile as tr  # noqa: E402
 
 FAILS: list = []
-
-
-def check(desc, cond, detail=""):
-    print(("  ✅ " if cond else "  ❌ ") + desc + (f"  [{detail}]" if detail else ""))
-    if not cond:
-        FAILS.append(desc)
+check = collector(FAILS)
 
 
 def put_trace(tdir, tid, uid, started, end_reason="producer_done", frames=5,

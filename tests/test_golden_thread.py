@@ -34,6 +34,8 @@ import json
 import sys
 from pathlib import Path
 
+from _judge import collector
+
 ROOT = Path(__file__).resolve().parent.parent
 
 
@@ -43,12 +45,7 @@ sys.path.insert(0, str(ROOT / "eval"))
 import golden_thread as gt  # noqa: E402
 
 FAILED: list[str] = []
-
-
-def check(desc: str, ok: bool, detail: str = "") -> None:
-    print(f"  {'✅' if ok else '❌'} {desc}" + (f"  [{detail}]" if detail else ""))
-    if not ok:
-        FAILED.append(desc)
+check = collector(FAILED)
 
 
 def _call_name(node: ast.expr) -> str | None:

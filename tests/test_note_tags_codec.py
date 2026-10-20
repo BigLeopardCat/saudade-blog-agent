@@ -39,6 +39,8 @@ import re
 import sys
 from pathlib import Path
 
+from _judge import collector
+
 ROOT = Path(__file__).resolve().parent.parent  # 仓根（测试统一在 tests/）
 
 
@@ -50,12 +52,7 @@ from agent.adminops_tags import parse_tag_ids as PARSE  # noqa: E402
 from tests import _parent_repo  # noqa: E402
 
 FAILED: list[str] = []
-
-
-def check(name: str, ok: bool, extra: str = "") -> None:
-    print(f"  {'✅' if ok else '❌'} {name}" + (f"  [{extra}]" if extra else ""))
-    if not ok:
-        FAILED.append(name)
+check = collector(FAILED)
 
 
 def _func_src(src: str, name: str) -> str:

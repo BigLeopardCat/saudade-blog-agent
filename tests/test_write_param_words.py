@@ -49,6 +49,8 @@ import pathlib
 import re
 import sys
 
+from _judge import collector
+
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 
 
@@ -59,12 +61,7 @@ from agent import adminops_tags as _tags  # noqa: E402
 from tests import _parent_repo, _rust_src  # noqa: E402
 
 FAILED: list[str] = []
-
-
-def check(name: str, ok: bool, extra: str = "") -> None:
-    print(f"  {'✅' if ok else '❌'} {name}" + (f"  [{extra}]" if extra else ""))
-    if not ok:
-        FAILED.append(name)
+check = collector(FAILED)
 
 
 _ADMINOPS = (ROOT / "agent" / "adminops_tags.py").read_text(encoding="utf-8")

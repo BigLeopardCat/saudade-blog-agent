@@ -30,6 +30,8 @@
 import sys
 from pathlib import Path
 
+from _judge import collector
+
 ROOT = Path(__file__).resolve().parent.parent  # 仓根（测试统一在 tests/ 下）
 
 
@@ -42,12 +44,7 @@ sys.path.insert(0, str(ROOT / "eval"))
 import golden_fixture as gf  # noqa: E402
 
 FAILS: list[str] = []
-
-
-def check(name: str, ok: bool, extra: str = "") -> None:
-    print(f"  {'✅' if ok else '❌'} {name}" + (f"  [{extra}]" if extra else ""))
-    if not ok:
-        FAILS.append(name)
+check = collector(FAILS)
 
 
 _WRITE_VERBS = (".post(", ".put(", ".delete(", ".patch(", ".request(")

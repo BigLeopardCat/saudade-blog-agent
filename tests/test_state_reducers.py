@@ -66,6 +66,8 @@ import sys
 from pathlib import Path
 from typing import Annotated, get_origin
 
+from _judge import collector
+
 ROOT = Path(__file__).resolve().parent.parent
 
 
@@ -120,12 +122,7 @@ EXEMPT = {
 
 
 FAILED: list = []
-
-
-def check(desc: str, ok: bool, detail: str = "") -> None:
-    print(("  ✅ " if ok else "  ❌ ") + desc + (f"  [{detail}]" if detail else ""))
-    if not ok:
-        FAILED.append(desc)
+check = collector(FAILED)
 
 
 def bare_list_keys(annotations: dict) -> set:

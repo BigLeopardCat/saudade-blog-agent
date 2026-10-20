@@ -41,6 +41,8 @@ import sys
 import tempfile
 from pathlib import Path
 
+from _judge import collector
+
 ROOT = Path(__file__).resolve().parent.parent  # 仓根（测试统一在 tests/）
 
 
@@ -60,6 +62,7 @@ from config import settings  # noqa: E402
 from utils import trace as trace_mod  # noqa: E402
 
 FAILS: list[str] = []
+check = collector(FAILS)
 
 
 _ROLES = ("admin", "user", None)
@@ -70,12 +73,6 @@ _KEEP = {
     "能力边界兜底段": "以上技能都不覆盖主人这一轮的请求时",
     "口语变体说明": "口语变体（大小写 IOT",
 }
-
-
-def check(desc: str, cond: bool, detail: str = "") -> None:
-    print(("  ✅ " if cond else "  ❌ ") + desc + (f"  [{detail}]" if detail else ""))
-    if not cond:
-        FAILS.append(desc)
 
 
 def _schema_desc(role) -> dict[str, str]:

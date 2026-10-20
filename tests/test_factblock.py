@@ -31,6 +31,7 @@ import sys
 import threading
 from pathlib import Path
 
+from _judge import collector
 from langchain_core.messages import AIMessage, AIMessageChunk, HumanMessage, SystemMessage
 
 ROOT = Path(__file__).resolve().parent.parent  # 仓根（测试统一在 tests/）
@@ -61,12 +62,7 @@ from agent.principal import SOURCE_ASSERTION, Principal  # noqa: E402
 from tools import base as _base  # noqa: E402
 
 FAILS: list[str] = []
-
-
-def check(desc: str, cond: bool, detail: str = "") -> None:
-    print(("  ✅ " if cond else "  ❌ ") + desc + (f"  [{detail}]" if detail else ""))
-    if not cond:
-        FAILS.append(desc)
+check = collector(FAILS)
 
 
 _RCPT_CMD = {"workflow": "effect", "tool": "toggle_effect", "args": {"effect": "sakura"},

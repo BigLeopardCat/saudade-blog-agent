@@ -32,6 +32,8 @@ helper。于是这条前提**住在模型够不着的地方**，它只能去抓�
 import sys
 from pathlib import Path
 
+from _judge import collector
+
 ROOT = Path(__file__).resolve().parent.parent  # 仓根
 
 
@@ -56,12 +58,7 @@ from agent.workflow_tools import _CALLABLE_QUERY_TOOLS, _EXPLICIT_TOOLS  # noqa:
 from config.settings import settings  # noqa: E402
 
 FAILS: list[str] = []
-
-
-def check(desc: str, cond: bool, detail: str = "") -> None:
-    print(("  ✅ " if cond else "  ❌ ") + desc + (f"  [{detail}]" if detail else ""))
-    if not cond:
-        FAILS.append(desc)
+check = collector(FAILS)
 
 
 class _Resp:

@@ -37,6 +37,8 @@ import sys
 import tempfile
 from datetime import datetime, timedelta, timezone
 
+from _judge import collector
+
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 
 
@@ -52,12 +54,7 @@ SRC = ROOT / "eval" / "pg_retention.py"
 
 
 FAILS: list[str] = []
-
-
-def check(desc: str, cond: bool, detail: str = "") -> None:
-    print(("  ✅ " if cond else "  ❌ ") + desc + (f"  [{detail}]" if detail else ""))
-    if not cond:
-        FAILS.append(desc)
+check = collector(FAILS)
 
 
 class _Cur:

@@ -22,6 +22,8 @@ import sys
 import tempfile
 from pathlib import Path
 
+from _judge import collector
+
 ROOT = Path(__file__).resolve().parent.parent  # 仓根
 
 
@@ -34,12 +36,7 @@ sys.path.insert(0, str(ROOT / "eval"))
 import landing_gate as lg  # noqa: E402
 
 FAILS: list[str] = []
-
-
-def check(desc: str, cond: bool, detail: str = "") -> None:
-    print(("  ✅ " if cond else "  ❌ ") + desc + (f"  [{detail}]" if detail else ""))
-    if not cond:
-        FAILS.append(desc)
+check = collector(FAILS)
 
 
 def _cases(n_total: int, n_red: int, *, n_regression: int = 0, prefix: str = "c") -> list:

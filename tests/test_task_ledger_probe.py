@@ -31,6 +31,8 @@ import sys
 import tempfile
 from pathlib import Path
 
+from _judge import collector
+
 ROOT = Path(__file__).resolve().parent.parent
 
 
@@ -41,12 +43,7 @@ import agent.graph as g  # noqa: E402
 from utils import trace as trace_mod  # noqa: E402
 
 FAILED: list[str] = []
-
-
-def check(name: str, ok: bool, extra: str = "") -> None:
-    print(f"  {'✅' if ok else '❌'} {name}" + (f"  [{extra}]" if extra else ""))
-    if not ok:
-        FAILED.append(name)
+check = collector(FAILED)
 
 
 def _row(tid: str, tools: list[str]) -> dict:

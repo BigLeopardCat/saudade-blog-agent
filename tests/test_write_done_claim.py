@@ -32,6 +32,8 @@ import re
 import sys
 from pathlib import Path
 
+from _judge import collector
+
 ROOT = Path(__file__).resolve().parent.parent
 
 
@@ -43,12 +45,7 @@ from agent import graph as G  # noqa: E402
 from agent.authz import TOOL_SCOPE, WRITE_SCOPES  # noqa: E402
 
 FAILS: list[str] = []
-
-
-def check(desc: str, cond: bool, detail: str = "") -> None:
-    print(("  ✅ " if cond else "  ❌ ") + desc + (f"  [{detail}]" if detail else ""))
-    if not cond:
-        FAILS.append(desc)
+check = collector(FAILS)
 
 
 _SRC = (ROOT / "agent" / "graph.py").read_text(encoding="utf-8")

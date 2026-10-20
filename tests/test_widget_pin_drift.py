@@ -16,6 +16,8 @@ import subprocess
 import sys
 import tempfile
 
+from _judge import collector
+
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 
 
@@ -26,14 +28,7 @@ WIDGET = "frontend/public/live2d-widgets"
 
 
 FAILED = []
-
-
-def check(cond, name, extra=""):
-    if cond:
-        print(f"  ✅ {name}" + (f"  [{extra}]" if extra else ""))
-        return
-    FAILED.append(name)
-    print(f"  ❌ {name}" + (f"  [{extra}]" if extra else ""))
+check = collector(FAILED)
 
 
 def build_repo(tmp: pathlib.Path) -> tuple[str, str, str]:

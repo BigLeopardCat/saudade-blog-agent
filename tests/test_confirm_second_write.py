@@ -42,6 +42,8 @@ import sys
 import tempfile
 from pathlib import Path
 
+from _judge import collector
+
 ROOT = Path(__file__).resolve().parent.parent  # 仓根（测试统一在 tests/）
 
 
@@ -56,12 +58,7 @@ from config.settings import settings  # noqa: E402
 from utils import trace as trace_mod  # noqa: E402
 
 FAILS: list[str] = []
-
-
-def check(desc: str, cond: bool, detail: str = "") -> None:
-    print(("  ✅ " if cond else "  ❌ ") + desc + (f"  [{detail}]" if detail else ""))
-    if not cond:
-        FAILS.append(desc)
+check = collector(FAILS)
 
 
 _BAR = "｜"          # 全角竖线：服务商特判 token 用的是它，不是 ASCII 的 |

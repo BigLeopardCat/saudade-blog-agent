@@ -24,6 +24,8 @@ gate 直调 + 兜底文案）。全部秒级、零网络、零 LLM。
 import sys
 from pathlib import Path
 
+from _judge import collector
+
 ROOT = Path(__file__).resolve().parent.parent  # 仓根
 
 
@@ -49,12 +51,7 @@ from agent.graph import (  # noqa: E402
 from agent.workflow_plan import instantiate_plan  # noqa: E402
 
 FAILS: list[str] = []
-
-
-def check(desc: str, cond: bool, detail: str = "") -> None:
-    print(("  ✅ " if cond else "  ❌ ") + desc + (f"  [{detail}]" if detail else ""))
-    if not cond:
-        FAILS.append(desc)
+check = collector(FAILS)
 
 
 ASK = "不错收藏啦，开启夜间模式和雪花"

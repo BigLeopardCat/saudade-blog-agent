@@ -22,6 +22,8 @@ import sys
 import tempfile
 from pathlib import Path
 
+from _judge import collector
+
 ROOT = Path(__file__).resolve().parent.parent
 
 
@@ -34,12 +36,7 @@ sys.path.insert(0, str(ROOT / "eval"))
 import daily_metrics as dm  # noqa: E402
 
 FAILS = []
-
-
-def check(name: str, ok: bool, extra: str = "") -> None:
-    print(f"  {'✅' if ok else '❌'} {name}" + (f"  [{extra}]" if extra else ""))
-    if not ok:
-        FAILS.append(name)
+check = collector(FAILS)
 
 
 def _ev(node, event, **kw):
