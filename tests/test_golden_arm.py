@@ -28,6 +28,8 @@ import sys
 import types
 from pathlib import Path
 
+from _judge import collector
+
 ROOT = Path(__file__).resolve().parent.parent   # 仓根（tests/ 的上一层）
 
 
@@ -40,12 +42,7 @@ sys.path.insert(0, str(EVAL))
 import golden_arm as ga  # noqa: E402
 
 FAILS: list[str] = []
-
-
-def check(desc: str, cond: bool, detail: str = "") -> None:
-    print(("  ✅ " if cond else "  ❌ ") + desc + (f"  [{detail}]" if detail else ""))
-    if not cond:
-        FAILS.append(desc)
+check = collector(FAILS)
 
 
 def _src(name: str) -> str:

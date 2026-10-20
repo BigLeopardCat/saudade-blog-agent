@@ -23,6 +23,8 @@ import ast
 import sys
 from pathlib import Path
 
+from _judge import collector
+
 ROOT = Path(__file__).resolve().parent.parent  # 仓根
 
 
@@ -42,12 +44,7 @@ from agent.graph import (  # noqa: E402
 from agent.prompt_context import _frame_texts  # noqa: E402
 
 FAILS: list[str] = []
-
-
-def check(desc: str, cond: bool, detail: str = "") -> None:
-    print(("  ✅ " if cond else "  ❌ ") + desc + (f"  [{detail}]" if detail else ""))
-    if not cond:
-        FAILS.append(desc)
+check = collector(FAILS)
 
 
 def _board_rows(n: int, *, body: str = "想说的话", author: str = "") -> list:

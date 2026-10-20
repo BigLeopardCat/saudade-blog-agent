@@ -27,6 +27,8 @@
 import sys
 from pathlib import Path
 
+from _judge import collector
+
 ROOT = Path(__file__).resolve().parent.parent  # 仓根（测试统一在 tests/）
 
 
@@ -39,12 +41,7 @@ from agent.arg_refs import parse_data, structured_of  # noqa: E402
 from tools.result import UPSTREAM_DOWN, ToolResult, _label_id_keys, _shape, ok  # noqa: E402
 
 FAILS: list[str] = []
-
-
-def check(desc: str, cond: bool, detail: str = "") -> None:
-    print(("  ✅ " if cond else "  ❌ ") + desc + (f"  [{detail}]" if detail else ""))
-    if not cond:
-        FAILS.append(desc)
+check = collector(FAILS)
 
 
 @tool

@@ -54,6 +54,8 @@ import ast
 import sys
 from pathlib import Path
 
+from _judge import collector
+
 ROOT = Path(__file__).resolve().parent.parent
 
 
@@ -93,12 +95,7 @@ def _fake_node2(state):
 
 
 FAILED: list = []
-
-
-def check(desc: str, ok: bool, detail: str = "") -> None:
-    print(("  ✅ " if ok else "  ❌ ") + desc + (f"  [{detail}]" if detail else ""))
-    if not ok:
-        FAILED.append(desc)
+check = collector(FAILED)
 
 
 def _outer_dicts(node):

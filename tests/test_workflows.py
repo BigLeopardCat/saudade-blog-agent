@@ -28,6 +28,7 @@ import re
 import sys
 from pathlib import Path
 
+from _judge import collector
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 
 ROOT = Path(__file__).resolve().parent.parent  # 仓根（20260924：测试统一搬进 tests/）
@@ -69,6 +70,7 @@ VERIFIED_CFG = {"configurable": {"principal": Principal(uid=7, role="user",
 
 
 FAILS = []
+check = collector(FAILS)
 
 
 class _LLMBoom:
@@ -76,14 +78,6 @@ class _LLMBoom:
 
     def invoke(self, *a, **kw):
         raise RuntimeError("boom: llm unavailable")
-
-
-def check(name, cond, detail=""):
-    if not cond:
-        FAILS.append(f"{name}: {detail}")
-        print(f"  ✗ {name} {detail}")
-    else:
-        print(f"  ✓ {name}")
 
 
 def _no_id(text, n):

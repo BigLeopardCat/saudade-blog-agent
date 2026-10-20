@@ -45,6 +45,8 @@ import pathlib
 import re
 import sys
 
+from _judge import collector
+
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 
 
@@ -52,12 +54,7 @@ sys.path.insert(0, str(ROOT))
 
 
 FAILED: list[str] = []
-
-
-def check(name: str, ok: bool, extra: str = "") -> None:
-    print(f"  {'✅' if ok else '❌'} {name}" + (f"  [{extra}]" if extra else ""))
-    if not ok:
-        FAILED.append(name)
+check = collector(FAILED)
 
 
 def _strip_comments(text: str) -> str:

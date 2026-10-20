@@ -29,6 +29,7 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
+from _judge import collector
 from langchain_core.messages import AIMessage, HumanMessage
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -45,12 +46,7 @@ from agent.principal import SOURCE_ASSERTION, Principal  # noqa: E402
 from tools import base as _base  # noqa: E402  工具的返回值契约（ToolResult：str 子类 + kind）
 
 FAILED: list[str] = []
-
-
-def check(name: str, ok: bool, extra: str = "") -> None:
-    print(f"  {'✅' if ok else '❌'} {name}" + (f"  [{extra}]" if extra else ""))
-    if not ok:
-        FAILED.append(name)
+check = collector(FAILED)
 
 
 class _ScriptedLLM:

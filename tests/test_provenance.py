@@ -44,6 +44,8 @@ import sys
 from pathlib import Path
 from types import SimpleNamespace
 
+from _judge import collector
+
 ROOT = Path(__file__).resolve().parent.parent
 
 
@@ -57,12 +59,7 @@ from agent import provenance as P  # noqa: E402
 from agent import textnorm as T  # noqa: E402
 
 FAILED: list[str] = []
-
-
-def check(name: str, ok: bool, extra: str = "") -> None:
-    print(f"  {'✅' if ok else '❌'} {name}" + (f"  [{extra}]" if extra else ""))
-    if not ok:
-        FAILED.append(name)
+check = collector(FAILED)
 
 
 def _plan(tool: str, args: dict, workflow: str = "chat") -> dict:

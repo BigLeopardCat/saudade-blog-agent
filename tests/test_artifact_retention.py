@@ -24,6 +24,8 @@ import tempfile
 import time
 from pathlib import Path
 
+from _judge import collector
+
 ROOT = Path(__file__).resolve().parent.parent
 
 
@@ -37,15 +39,10 @@ import artifact_retention as ar  # noqa: E402
 import retention_manifest as rm  # noqa: E402
 
 FAILS: list[str] = []
+check = collector(FAILS)
 
 
 DAY = 86400.0
-
-
-def check(desc: str, cond: bool, detail: str = "") -> None:
-    print(("  ✅ " if cond else "  ❌ ") + desc + (f"  [{detail}]" if detail else ""))
-    if not cond:
-        FAILS.append(desc)
 
 
 def write(path: str, *, age_days: float = 0.0, body: str = "x") -> str:

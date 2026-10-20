@@ -19,6 +19,8 @@ import ast
 import sys
 from pathlib import Path
 
+from _judge import collector
+
 ROOT = Path(__file__).resolve().parent.parent  # 仓根（套件统一住在 tests/）
 
 
@@ -33,12 +35,7 @@ from agent.graph import parse_plan, planner_node  # noqa: E402
 from agent.principal import Principal  # noqa: E402
 
 FAILS: list[str] = []
-
-
-def check(desc: str, cond: bool, detail: str = "") -> None:
-    print(("  ✅ " if cond else "  ❌ ") + desc + (f"  [{detail}]" if detail else ""))
-    if not cond:
-        FAILS.append(desc)
+check = collector(FAILS)
 
 
 def _cfg():

@@ -48,6 +48,8 @@ import pathlib
 import re
 import sys
 
+from _judge import collector
+
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 
 
@@ -69,12 +71,7 @@ from agent.workflow_params import _param_problem_plan  # noqa: E402
 from agent.workflow_plan import instantiate_plan  # noqa: E402
 
 FAILS: list[str] = []
-
-
-def check(desc: str, cond: bool, detail: str = "") -> None:
-    print(("  ✅ " if cond else "  ❌ ") + desc + (f"  [{detail}]" if detail else ""))
-    if not cond:
-        FAILS.append(desc)
+check = collector(FAILS)
 
 
 _GRAPH_SRC = _ctx_src.plan_codec_src()

@@ -42,6 +42,8 @@ import re
 import sys
 from pathlib import Path
 
+from _judge import collector
+
 ROOT = Path(__file__).resolve().parent.parent  # 仓根（20260924：测试统一搬进 tests/）
 
 
@@ -73,12 +75,7 @@ from agent.principal import Principal  # noqa: E402
 from agent.workflow_plan import instantiate_plan  # noqa: E402
 
 FAILS: list[str] = []
-
-
-def check(desc: str, cond: bool, detail: str = "") -> None:
-    print(("  ✅ " if cond else "  ❌ ") + desc + (f"  [{detail}]" if detail else ""))
-    if not cond:
-        FAILS.append(desc)
+check = collector(FAILS)
 
 
 D1_REPLY = ("主人，已经带你跳到《文章向量空间图谱项目文档》这篇文章啦喵～就是随便挑的"

@@ -53,6 +53,8 @@
 import sys
 from pathlib import Path
 
+from _judge import collector
+
 ROOT = Path(__file__).resolve().parent.parent  # 仓根（测试统一在 tests/）
 
 
@@ -78,6 +80,7 @@ from tools.base import (  # noqa: E402
 )
 
 FAILS: list[str] = []
+check = collector(FAILS)
 
 
 _FORM_CMT = "/article/<文章 id>?cid=<评论 id>"
@@ -90,12 +93,6 @@ _CID = "/article/54?cid=9"        # 端到端那一半用的具体实例
 
 
 _LID = "/guestbook?lid=109"
-
-
-def check(desc: str, cond: bool, detail: str = "") -> None:
-    print(("  ✅ " if cond else "  ❌ ") + desc + (f"  [{detail}]" if detail else ""))
-    if not cond:
-        FAILS.append(desc)
 
 
 def _nav_inputs_desc() -> str:

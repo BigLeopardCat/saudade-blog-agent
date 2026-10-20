@@ -37,6 +37,8 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
+from _judge import collector
+
 ROOT = Path(__file__).resolve().parent.parent          # 仓根
 
 
@@ -54,12 +56,7 @@ from agent.principal import ROLE_ADMIN, ROLE_USER, Principal  # noqa: E402
 from agent.prompt_context import _SHORT_MAX, _is_short_reply, _short_reply_hint  # noqa: E402
 
 FAILED: list[str] = []
-
-
-def check(name: str, ok: bool, extra: str = "") -> None:
-    print(f"  {'✅' if ok else '❌'} {name}" + (f"  [{extra}]" if extra else ""))
-    if not ok:
-        FAILED.append(name)
+check = collector(FAILED)
 
 
 BOARD_PENDING = {

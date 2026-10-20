@@ -29,6 +29,8 @@ import re
 import sys
 from pathlib import Path
 
+from _judge import collector
+
 ROOT = Path(__file__).resolve().parent.parent  # 仓根（20260924：测试统一搬进 tests/）
 
 
@@ -39,14 +41,7 @@ import agent.graph as _G  # noqa: E402
 from agent.workflow_tools import callable_query_tools  # noqa: E402
 
 FAILS = []
-
-
-def check(name, cond, detail=""):
-    if not cond:
-        FAILS.append(f"{name}: {detail}")
-        print(f"  ✗ {name} {detail}")
-    else:
-        print(f"  ✓ {name}")
+check = collector(FAILS)
 
 
 _SEG = re.compile(r"^([A-Za-z_][A-Za-z0-9_]*):(.+?)(\*)?(?:=(\S+))?$")

@@ -27,6 +27,8 @@ import dataclasses
 import sys
 from pathlib import Path
 
+from _judge import collector
+
 ROOT = Path(__file__).resolve().parent.parent
 
 
@@ -40,15 +42,10 @@ import agent.graph as G  # noqa: E402
 from agent.workflow_plan import instantiate_plan  # noqa: E402
 
 FAILED: list[str] = []
+check = collector(FAILED)
 
 
 SRC = _ctx_src.write_guard_src()
-
-
-def check(name: str, ok: bool, extra: str = "") -> None:
-    print(f"  {'✅' if ok else '❌'} {name}" + (f"  [{extra}]" if extra else ""))
-    if not ok:
-        FAILED.append(name)
 
 
 OWNER = "想给账号「agent_fixture_freeze_a」发一条通知；另外还想在后台待办里加一条「身份变更复核」"

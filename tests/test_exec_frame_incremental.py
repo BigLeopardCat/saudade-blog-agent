@@ -45,6 +45,8 @@ import sys
 import threading
 from pathlib import Path
 
+from _judge import collector
+
 ROOT = Path(__file__).resolve().parent.parent  # 仓根（20260924：测试统一搬进 tests/）
 
 
@@ -57,14 +59,7 @@ import server  # noqa: E402
 from agent.graph import AgentCancelled  # noqa: E402
 
 FAILS: list[str] = []
-
-
-def check(name, cond, detail=""):
-    if not cond:
-        FAILS.append(name)
-        print(f"  ✗ {name}" + (f"  → {detail}" if detail else ""))
-    else:
-        print(f"  ✓ {name}")
+check = collector(FAILS)
 
 
 def receipt(tool: str, result: str, args: dict | None = None, **extra) -> dict:

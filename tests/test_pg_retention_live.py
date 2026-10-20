@@ -29,6 +29,8 @@ import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+from _judge import collector
+
 ROOT = Path(__file__).resolve().parent.parent
 
 
@@ -48,12 +50,7 @@ PREFIX = "pgret_"
 
 
 FAILS: list[str] = []
-
-
-def check(desc: str, cond: bool, detail: str = "") -> None:
-    print(f"  {'✅' if cond else '❌'} {desc}" + (f"  [{detail}]" if detail else ""))
-    if not cond:
-        FAILS.append(desc)
+check = collector(FAILS)
 
 
 def _skip(why: str) -> None:

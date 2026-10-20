@@ -27,6 +27,8 @@ import json
 import sys
 from pathlib import Path
 
+from _judge import collector
+
 ROOT = Path(__file__).resolve().parent.parent  # 仓根（20260924：测试统一搬进 tests/）
 
 
@@ -41,14 +43,7 @@ import llm_judge  # noqa: E402
 import models.llm as llm_mod  # noqa: E402  （批 G7：方言表的家，见 test_response_format_dialect）
 
 FAILS = []
-
-
-def check(name, cond, detail=""):
-    if not cond:
-        FAILS.append(f"{name}: {detail}")
-        print(f"  ✗ {name} {detail}")
-    else:
-        print(f"  ✓ {name}")
+check = collector(FAILS)
 
 
 def _trace(**kw):
