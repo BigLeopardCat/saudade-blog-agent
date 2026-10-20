@@ -213,7 +213,7 @@ flowchart TB
 │      但**被套件打桩的模块全局**（`_client` 等 11 个）在新模块里一律写成 `_base.<名>(…)`
 │      属性查找——函数对象取的是**自己所在模块**的 `__dict__`，按名 import 会让桩静默失效。
 ├── models/
-│   ├── llm.py                 # get_llm 工厂：provider 三选一（qwen/deepseek/openai）；enable_thinking 走 extra_body
+│   ├── llm.py                 # get_llm 工厂：provider 四选一（qwen/deepseek/openai/opencode）；enable_thinking 走 extra_body
 │   └── __init__.py            # 包门面
 ├── config/
 │   └── settings.py            # pydantic-settings：全部可配项（LLM/超时/JWT/device-service/trace_dir）
@@ -1446,7 +1446,7 @@ flowchart TB
 
 ## 7. LLM 与配置
 
-- Provider 机制（settings.py）：`LLM_PROVIDER=qwen|deepseek|openai` 三选一，各配独立 API key/base_url/model；
+- Provider 机制（settings.py）：`LLM_PROVIDER=qwen|deepseek|openai|opencode` 四选一，各配独立 API key/base_url/model；
   当前生产 `qwen` → `qwen3.8-flash`（阿里云 MaaS compatible-mode；settings.py 代码默认仍是 qwen3.6-flash，
   由生产 .env `QWEN_MODEL` 覆盖）。
 - 关键参数：`temperature=0.7`、`max_tokens=8192`、`timeout=120s`。
