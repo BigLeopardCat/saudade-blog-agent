@@ -126,7 +126,7 @@ def _dir(*rows):
 
 def test_account_mute():
     _SAVED_SECRET = settings.jwt_secret
-    settings.jwt_secret = "test-secret-for-confirm-tokens"
+    settings.jwt_secret = "test-secret-for-confirm-tokens-not-a-real-secret"
     print("\n① normalize_mute_hours：认得出才动手，认不出一律零写")
     for value, want, why in [
         (None, (True, None), "没给时长 = 永久（与后端 hours=null 同义）"),

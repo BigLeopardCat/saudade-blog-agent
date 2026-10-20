@@ -113,7 +113,7 @@ from agent.workflow_menu import build_planner_context  # noqa: E402
 
 def test_reports():
     _SAVED_SECRET = _settings.jwt_secret
-    _settings.jwt_secret = "test-secret-for-reports"
+    _settings.jwt_secret = "test-secret-for-reports-not-a-real-secret"
     MEMINFO = """MemTotal:        3845224 kB
 MemFree:          184320 kB
 MemAvailable:    1310720 kB

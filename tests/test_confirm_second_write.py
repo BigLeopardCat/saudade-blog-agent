@@ -317,7 +317,7 @@ def _test_grant_spent_after_first_use():
 
 def test_confirm_second_write():
     _SAVED_SECRET = settings.jwt_secret
-    settings.jwt_secret = "test-secret-for-confirm-tokens"
+    settings.jwt_secret = "test-secret-for-confirm-tokens-not-a-real-secret"
     for fn in (_test_second_write_pops_card,
                _test_card_only_still_blocks,
                _test_intent_src_boundary,

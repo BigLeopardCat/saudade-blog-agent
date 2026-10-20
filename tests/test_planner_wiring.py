@@ -617,7 +617,7 @@ def _test_decision_event_carries_the_arm_identity():
 
 def test_planner_wiring():
     _SAVED_SECRET = settings.jwt_secret
-    settings.jwt_secret = "test-secret-for-planner-wiring"
+    settings.jwt_secret = "test-secret-for-planner-wiring-not-a-real-secret"
     for fn in (_test_binds_schema_and_takes_the_tool_call_as_the_plan,
                _test_multi_call_takes_first_and_accounts,
                _test_zero_call_is_nudged_once_then_accepted_as_chat,
