@@ -120,7 +120,7 @@ def reports_dir_of(arm: str) -> str:
     return os.path.join(MAIN, golden_arm.reports_dir(arm))
 
 
-def run_arm(arm: str, rep: int, ids: list[str]) -> dict:
+def run_arm(arm: str, rep: int, ids: list[str], provider: str = "") -> dict:
     """跑一遍（这一臂 × 这批 id），返回那份报告。
 
     读法同 `ckpt_ab_driver.run_case`：**跑前记下目录里已有的报告，跑后取新增的那一份**
@@ -136,6 +136,7 @@ def run_arm(arm: str, rep: int, ids: list[str]) -> dict:
         # 逐遍跑就变成"在上一遍的 state 上接着跑"，而症状是"读数在漂"。
         "GOLDEN_REP": str(rep),
         **IDENTITY_ENV,
+        **provider_env(provider),
     })
     t0 = time.time()
     try:
@@ -313,8 +314,19 @@ def _parse_args(argv=None):
     ap.add_argument("--arms", default=",".join(ARMS))
     ap.add_argument("--ids-file", default=IDS_FILE)
     ap.add_argument("--limit", type=int, default=0, help="只跑前 N 条（冒烟用）")
+    ap.add_argument("--provider", default="",
+                    help="**只给子进程**的 LLM_PROVIDER 覆盖（不动 `.env`、不重启服务）。"
+                         "空 = 用 `.env` 那一档。20261020 用它绕开 qwen 的账号级 403")
     ap.add_argument("--tag", default=time.strftime("%Y%m%d_%H%M%S"))
     return ap.parse_args(argv)
+
+
+def provider_env(provider: str) -> dict:
+    """子进程的 provider 覆盖。**只改子进程环境**：`.env` 是生产那一份，改它等于改线上
+    （见 [[saudade-llm-provider-outage-20260927]] 那条"改缺省值修不了产线"）；重启服务
+    更不是本 POC 该做的事。pydantic-settings 的取值顺序是 环境变量 > `.env` ⇒ 这一格够用。
+    """
+    return {"LLM_PROVIDER": provider} if provider else {}
 
 
 def main(argv=None) -> int:
@@ -331,6 +343,8 @@ def main(argv=None) -> int:
     arms = [a.strip() for a in args.arms.split(",") if a.strip()]
     free = disk_free_gb()
     print(f"[ab] tag={args.tag}  arms={arms}  ids={len(ids)}  reps={args.reps}")
+    print(f"[ab] provider={args.provider or '(.env 那一档)'}"
+          + ("  ⚠️ **只给子进程**，`.env` 与生产服务一个字没动" if args.provider else ""))
     print(f"[ab] 盘余 {free:.2f}G" + ("  ⚠ 低于警戒线，先清 trace" if free < DISK_MIN_GB else ""))
     if free < DISK_MIN_GB:
         return 3
@@ -342,7 +356,7 @@ def main(argv=None) -> int:
     for rep in range(1, args.reps + 1):
         for i, arm in enumerate(arms, 1):
             t0 = time.time()
-            doc = run_arm(arm, rep, ids)
+            doc = run_arm(arm, rep, ids, args.provider)
             reports[(arm, rep)] = doc
             if "_error" in doc:
                 print(f"[r{rep} {i}/{len(arms)}] {arm:<6} ✗ {doc['_error']} "
@@ -402,6 +416,10 @@ def main(argv=None) -> int:
     os.makedirs(os.path.dirname(OUT_JSON), exist_ok=True)
     with open(OUT_JSON, "w", encoding="utf-8") as f:
         json.dump({"tag": args.tag, "ids": ids, "arms": arms, "reps": args.reps,
+                   "provider": args.provider or "(.env)",
+                   "outage": {f"{a}/r{r}": len((reports.get((a, r)) or {})
+                                               .get("_outage_cases") or [])
+                              for a in arms for r in range(1, args.reps + 1)},
                    "matrix": m, "pairs": pairs, "cost": cost, "families": fam},
                   f, ensure_ascii=False, indent=1)
     print(f"\n[ab] 汇总已写 {OUT_JSON}")
