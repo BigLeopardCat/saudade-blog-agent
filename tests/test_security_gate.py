@@ -10,6 +10,7 @@
 | 某个文件里加一行 `# nosec` | 那条 finding 不进 `results`、只进 `metrics.nosec` | ③ |
 | 换 bandit 跑在哪个解释器上 | 同一份源码 3.10 读 205 / 3.12 读 211 ⇒ 换了条目集 | ② |
 | 版本行只认一种启动器形状 | CI 走 `-m`、印 `__main__.py 1.9.4` ⇒ 闸恒退 3 | ⑥ |
+| 排除面交给 bandit 的 `--exclude` | target 是 `.` 时它**空转** ⇒ CI 把 `.venv` 扫进来 | ⑦ |
 | 键退回"光文件" | 同文件里 B105 换 B608 按文件数是"没变" | ②（`by_key` 的形状） |
 | CI 没接这一步 | 闸在本机绿、在 CI 从不运行 | ④ |
 | 闸自己坏了（JSON 解析、判据恒绿） | 全部绿 | ⑤（跑它自带的 `_self_check`） |
@@ -22,6 +23,7 @@
 from __future__ import annotations
 
 import ast
+import fnmatch
 import importlib.util
 import json
 import pathlib
@@ -58,10 +60,15 @@ def _calls_in_main(name: str) -> int:
     **只数"整份源码里有没有这个名字"是不够的**：守卫的定义本身、别的助手里的调用都算，
     于是把调用从 `main()` 里挪走（守卫变死代码）也照样绿。
     """
+    return _calls_in("main", name)
+
+
+def _calls_in(func: str, name: str) -> int:
+    """`func()` 函数体里 `name(...)` 的调用处数（同族：AST 比行号靠得住）。"""
     tree = ast.parse(_GATE.read_text(encoding="utf-8"))
-    main = next(n for n in tree.body
-                if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)) and n.name == "main")
-    return sum(1 for n in ast.walk(main)
+    fn = next(n for n in tree.body
+              if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)) and n.name == func)
+    return sum(1 for n in ast.walk(fn)
                if isinstance(n, ast.Call) and isinstance(n.func, ast.Name) and n.func.id == name)
 
 
@@ -225,6 +232,63 @@ def test_version_line_parses_both_launcher_shapes():
     _report(bad)
 
 
+# CI 那趟真实扫出来的路径形状（逐字抄自 run 39447397092 的失败日志）。
+_CI_PATHS = [
+    ".venv/lib/python3.12/site-packages/rich/pretty.py",
+    "./.venv/lib/python3.12/site-packages/uvicorn/server.py",
+    ".git/objects/pack/x.py",
+    ".pytest_cache/v/cache/x.py",
+    "frontend/dist/assets/x.py",
+]
+
+
+def test_exclude_surface_is_judged_by_the_gate_itself():
+    """⑦ **排除面由闸自己判**，不靠 bandit 的 `--exclude`（那个开关在 target 是 `.` 时空转）。
+
+    实测（真 `.venv` 目录，三种写法）：`--exclude ".venv,.git"` ⇒ **一条都排不掉**；
+    `--exclude "./.venv,./.git"` 与 `--exclude "*/.venv/*,*/.git/*"` ⇒ 排得掉。
+    成因在 bandit 自己：`discover_files()` 对每个 `-x` 项做 `if os.path.isdir(path)` ⇒
+    把裸名改写成 `.venv/*`，而 `_is_file_included()` 拿 os.walk 走出来的 `./.venv/lib/x.py`
+    去比 ⇒ 既 fnmatch 不上、也不是它的子串。
+    **本机为什么看不见**：worktree 里的 `.venv` 是**软链**（指向产线 venv），
+    `os.walk` 默认不跟软链 ⇒ 那个目录根本没被走过；CI 里它是真目录 ⇒ 460 条。
+    """
+    bad: list[str] = []
+    print("⑦ 排除面")
+    gate = _gate_module()
+    for p in _CI_PATHS:
+        ok = gate._excluded(p)
+        print(f"  {'✅' if ok else '❌'} 排掉  {p}")
+        if not ok:
+            bad.append(f"{p} 没被排掉")
+    for p in ("agent/graph.py", "tests/test_security_gate.py", "frontend/src/main.ts"):
+        ok = not gate._excluded(p)
+        print(f"  {'✅' if ok else '❌'} 保留  {p}")
+        if not ok:
+            bad.append(f"{p} 被误排（这是「见谁都排」）")
+    # 反控：**裸目录名那种写法必须排不掉** —— 否则这一条判不出上面那个 bug
+    old = [".venv", ".git", "node_modules", "__pycache__", ".mypy_cache",
+           ".ruff_cache", ".pytest_cache", ".coverage-data", "frontend/dist"]
+    vacuous = all(fnmatch.fnmatch(f"./{e}/x.py", e) for e in old)
+    print(f"  {'✅' if not vacuous else '❌'} 反控：裸名写法**不**匹配 `./<名>/x.py`（旧写法空转）")
+    if vacuous:
+        bad.append("反控没生效（裸名竟然匹配得上 ⇒ 这一条判不出东西）")
+    # 交给 bandit 的那份 glob：对 bandit 真会走出来的两种深度都要成立
+    globs = gate._exclude_globs()
+    ok = all(fnmatch.fnmatch(f"./{e}/x.py", g) and fnmatch.fnmatch(f"./a/b/{e}/x.py", g)
+             for e, g in zip(gate.EXCLUDE, globs))
+    print(f"  {'✅' if ok else '❌'} 交给 bandit 的 glob 对 `./<名>/x.py` 与嵌套都成立"
+          f"  [{globs[:2]}…]")
+    if not ok:
+        bad.append("glob 形状不成立（排除会空转）")
+    # 接线：`_run_json` 真的用了这份 glob（不是留着两套、跑的是另一套）
+    calls = _calls_in("_run_json", "_exclude_globs")
+    print(f"  {'✅' if calls else '❌'} `_run_json()` 里用的是它  [{calls} 处]")
+    if not calls:
+        bad.append("`_run_json` 没用 `_exclude_globs()`（两套写法会分岔）")
+    _report(bad)
+
+
 def test_gate_self_check_passes():
     """⑤ 跑闸自带的正控/反控（`_self_check`）—— 没有这一段，"闸其实是空的"没人看着。"""
     print("⑤ 闸自带的正控/反控")
@@ -242,6 +306,7 @@ if __name__ == "__main__":
                 test_baseline_quantities_are_single_sourced,
                 test_no_auto_discovered_config_and_no_nosec,
                 test_gate_is_wired_into_ci,
+                test_exclude_surface_is_judged_by_the_gate_itself,
                 test_version_line_parses_both_launcher_shapes,
                 test_gate_self_check_passes):
         _fn()

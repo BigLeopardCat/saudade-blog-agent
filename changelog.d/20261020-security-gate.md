@@ -27,6 +27,20 @@
 - 工程坑记一笔：bandit 的 logging 与进度条打在 **stdout** 上，与 `-f json` 的输出混在一起
   ⇒ 必须用 `-o` 落文件再读（按"第一行是不是 `{`"去认会当场认错，`--update` 第一次跑就撞上）。
 - 依赖：`bandit==1.9.4` 进 `[dependency-groups] dev` + `uv lock`（同 ruff/mypy 的形制；
-  CI 的 `uv sync --frozen` 要锁里有它才装得上）。新套件 `tests/test_security_gate.py`（5 条）
+  CI 的 `uv sync --frozen` 要锁里有它才装得上）。新套件 `tests/test_security_gate.py`（7 条）
   盯接线与账；CI 加一步 `uv run --frozen python eval/security_gate.py`；
   `docs/lint-baseline.md` 补「同族的第六道」一节。
+- **⚠️ 两处只有 CI 才看得见的洞（PR #39 的 CI 连红两次抓出来的，本机两次都是绿的）**：
+  ① **版本行只认一种启动器形状**：默认启动器 `sys.executable -m bandit` 印的是
+  `__main__.py 1.9.4`（不是 `bandit 1.9.4`）⇒ 闸在 CI 里**恒退 3**（"跑不起来"），
+  而本机配方走 uvx 那条 ⇒ 永远看不见。正则改认"第一行第一个 token + 版本号"，两种形状
+  各端到端跑过一遍，读数逐字相同。
+  ② **排除面交给 bandit 的 `--exclude` 是空转的**：`discover_files()` 对裸名做
+  `os.path.isdir(path)` ⇒ 改写成 `.venv/*`，而 `_is_file_included()` 拿 os.walk 走出来的
+  `./.venv/lib/x.py` 去比 ⇒ 一条都排不掉。**本机看不见是因为 worktree 里的 `.venv` 是软链**
+  （`os.walk` 默认不跟软链）；CI 里它是真目录 ⇒ 扫描面从 142 条涨到 **460 条**。
+  修法两层：交给 bandit 的改成 glob 形状（实测 `*/.venv/*` 排得掉、`./.venv` 也排得掉，
+  取前者因为它同时管到嵌套），**并且排除面归闸自己判**（`_excluded()` 后置过滤，丢掉的条数
+  打在汇总行上——排除面是扫描面的一部分，它不该是静默的）。基线只重出了 `_note` 那一处，
+  读数仍是 142 / 80。判据 ⑥⑦ 各配反控（跑不起来的 Traceback 输出不许被当成版本行；
+  **裸名写法必须排不掉**，否则 ⑦ 判不出东西）。

@@ -67,6 +67,7 @@
 from __future__ import annotations
 
 import argparse
+import fnmatch
 import json
 import pathlib
 import re
@@ -150,24 +151,53 @@ def _norm(path: str) -> str:
     return p
 
 
-def _counts(data: dict) -> tuple[dict[str, int], int]:
-    """bandit 的 JSON ⇒（逐 `文件::规则` 计数, 总数）。**两个口径必须对上**。
+def _excluded(path: str) -> bool:
+    """这条 finding 落在被排除的目录里吗（**闸自己判，不靠 bandit 的 `--exclude`**）。
 
-    总数取 `metrics._totals` 的 SEVERITY 之和（那是 bandit 自己数的），逐行数出来的
-    必须与它相等 —— 一旦分岔，棘轮就在悄悄量另一个东西（同 `lint_gate._counts`）。
+    见 `_exclude_globs()` 上面那段实测：bandit 的排除在"target 是 `.`"这个用法下**是空转的**。
+    排除面归本闸自己管之后，判据可以是一个纯函数（`tests/test_security_gate.py` ⑦）。
+    """
+    p = _norm(path)
+    return any(p == e or p.startswith(e + "/") or f"/{e}/" in p for e in EXCLUDE)
+
+
+def _exclude_globs() -> list[str]:
+    """`EXCLUDE` 交给 bandit 时用的 glob 形状。
+
+    ⚠️ **裸目录名是空转的**（实测，不是推测）：`discover_files()` 对每个 `-x` 项做
+    `if os.path.isdir(path): path = os.path.join(path, "*")`，而 `_is_file_included()` 拿
+    **os.walk 走出来的原始路径**去比 —— target 是 `.` 时那些路径长 `./.venv/lib/x.py`，
+    于是 `.venv/*` 既 fnmatch 不上、也不是它的子串 ⇒ **一条都排不掉**。
+    实测三种写法（同一份目录树，真 `.venv`）：`.venv,.git` ⇒ 三个文件全扫到；
+    `./.venv,./.git` ⇒ 只扫到 `src/app.py`；`*/.venv/*,*/.git/*` ⇒ 同上。
+    取最后一种：它同时管到嵌套的 `.venv`。
+    """
+    return [f"*/{e}/*" for e in EXCLUDE]
+
+
+def _counts(data: dict) -> tuple[dict[str, int], int, int]:
+    """bandit 的 JSON ⇒（逐 `文件::规则` 计数, 总数, 落在排除目录里被丢掉的条数）。
+
+    **两个口径必须对上**：总数取 `metrics._totals` 的 SEVERITY 之和（bandit 自己数的），
+    它必须等于"留下的 + 丢掉的"—— 一旦分岔，棘轮就在悄悄量另一个东西（同 `lint_gate._counts`）。
+    丢掉的条数**返回出去并打在汇总行上**：排除面是扫描面的一部分，它不该是静默的。
     """
     by_key: dict[str, int] = {}
+    dropped = 0
     for r in data.get("results") or []:
+        if _excluded(str(r.get("filename", ""))):
+            dropped += 1
+            continue
         key = f"{_norm(str(r.get('filename', '')))}::{r.get('test_id', '?')}"
         by_key[key] = by_key.get(key, 0) + 1
     tot = ((data.get("metrics") or {}).get("_totals") or {})
     if not tot:
         raise ValueError("bandit 的 JSON 里没有 `metrics._totals`（输出格式变了？）")
     n = sum(int(tot.get(f"SEVERITY.{s}", 0)) for s in ("HIGH", "MEDIUM", "LOW"))
-    if n != sum(by_key.values()):
-        raise ValueError(f"`metrics` 说 {n} 条，`results` 只数出 {sum(by_key.values())} 条 "
-                         f"—— 两个口径分岔了，先查 bandit 的版本与输出格式")
-    return by_key, n
+    if n != sum(by_key.values()) + dropped:
+        raise ValueError(f"`metrics` 说 {n} 条，`results` 数出 {sum(by_key.values())} 条"
+                         f" + 排除 {dropped} 条 —— 两个口径分岔了，先查 bandit 的版本与输出格式")
+    return by_key, sum(by_key.values()), dropped
 
 
 def judge(by_key: dict[str, int], base: dict[str, int], nosec: int,
@@ -206,10 +236,24 @@ def _self_check() -> None:
         ],
         "metrics": {"_totals": {"SEVERITY.HIGH": 0, "SEVERITY.MEDIUM": 2, "SEVERITY.LOW": 1}},
     }
-    got, n = _counts(data)
+    got, n, dropped = _counts(data)
     assert got == {"agent/a.py::B608": 2, "tools/b.py::B105": 1}, f"逐键计数错了：{got}"
-    assert n == 3, f"总数错了：{n}"
+    assert n == 3 and dropped == 0, f"总数错了：{n} / 丢掉 {dropped}"
     assert _norm("./x/y.py") == "x/y.py" and _norm("x/y.py") == "x/y.py", "路径归一化错了"
+    # 排除面：闸自己判（bandit 的 `--exclude` 在 target `.` 下是空转的，见 `_exclude_globs`）
+    assert _excluded("./.venv/lib/python3.12/site-packages/x.py"), "排除目录里的没被排掉"
+    assert _excluded("frontend/dist/a.py") and not _excluded("frontend/src/a.py"), \
+        "两段式排除项判错了"
+    assert not _excluded("agent/graph.py"), "正常源码被判成排除了 —— 这是「见谁都排」"
+    mixed = {"results": [{"filename": "./agent/a.py", "test_id": "B608"},
+                         {"filename": "./.venv/lib/x.py", "test_id": "B105"}],
+             "metrics": {"_totals": {"SEVERITY.MEDIUM": 1, "SEVERITY.LOW": 1}}}
+    got2, n2, dropped2 = _counts(mixed)
+    assert got2 == {"agent/a.py::B608": 1} and n2 == 1 and dropped2 == 1, \
+        f"排除与口径对不上：{got2} / {n2} / 丢 {dropped2}"
+    assert all(fnmatch.fnmatch(f"./{e}/x.py", g)
+               for e, g in zip(EXCLUDE, _exclude_globs())), \
+        "交给 bandit 的 glob 对 `./<名>/x.py` 这种形状不成立 —— 排除会空转"
     try:
         _counts({"results": [], "metrics": {"_totals": {"SEVERITY.HIGH": 5}}})
     except ValueError:
@@ -243,7 +287,7 @@ def _run_json(prog: list[str]) -> dict:
     —— 按"第一行是不是 `{`"去认会当场认错。这个坑是 `--update` 第一次跑就撞上的。
     """
     cmd = prog + ["-r", "-f", "json", "--exit-zero", "-s", ",".join(SKIPS),
-                  "--exclude", ",".join(EXCLUDE)] + TARGETS
+                  "--exclude", ",".join(_exclude_globs())] + TARGETS
     with tempfile.TemporaryDirectory() as td:
         out_path = pathlib.Path(td) / "bandit.json"
         r = subprocess.run(cmd + ["-o", str(out_path)], cwd=ROOT, capture_output=True, text=True)
@@ -309,7 +353,7 @@ def main() -> int:
 
     try:
         data = _run_json(prog)
-        by_key, total = _counts(data)
+        by_key, total, dropped = _counts(data)
     except (RuntimeError, ValueError, json.JSONDecodeError) as e:
         print(f"❌ {e}")
         return 3
@@ -328,7 +372,10 @@ def main() -> int:
                      "误报换成一条真问题，按文件计数是'没变'，按键才看得见。**只记账、不批量改**："
                      "首次 205 条里没有一条是真的可利用漏洞（大头是 B105 字典键误报、"
                      "B603/B404 subprocess、B608 拼模块级常量表名），真值得看的是 8 条 B324"
-                     "（sha1/md5 用于去重键，正解是补 usedforsecurity=False）。",
+                     "（sha1/md5 用于去重键，正解是补 usedforsecurity=False）。"
+                     "⚠️ **排除面（`exclude`）由闸自己判**，不靠 bandit 的 `--exclude` ——"
+                     "那个开关在 target 是 `.` 时是空转的（实测：真 `.venv` 目录照样被扫成"
+                     "460 条，见 `_exclude_globs`）。",
             "bandit_version": running,
             "interpreter": interp,
             "skips": SKIPS,
@@ -344,7 +391,8 @@ def main() -> int:
     bad = judge(by_key, base["by_key"], nosec, base.get("nosec", 0))
     print(f"[扫描] bandit {running} / py{interp} · skip={SKIPS}：{total} 条 / "
           f"{len(by_key)} 个键（基线 {base['total']} / {len(base['by_key'])} 个；"
-          f"nosec {nosec}，基线 {base.get('nosec', 0)}）")
+          f"nosec {nosec}，基线 {base.get('nosec', 0)}；"
+          f"排除面丢 {dropped} 条）")
     for b in bad:
         print(f"  ❌ {b}")
     if total > base["total"]:
