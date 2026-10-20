@@ -424,8 +424,14 @@ def _build_arm():
         # 实验代码的 import 成本，且给"两条臂同时在进程里"留出误用的口子。
         from agent.react_arm import build as build_react_arm
         return build_react_arm(), arm
+    if arm == "capability":
+        # 能力索引臂（20261021）：planner 选能力、索引把那条能力的工具面交给执行层。
+        # 与 `react` 同一条延迟 import 的理由；它 import 的比 `react` 还多一层
+        # （`capability_index` + `tool_menu` + `tool_prompt`）。
+        from agent.capability_arm import build as build_capability_arm
+        return build_capability_arm(), arm
     raise RuntimeError(
-        f"AGENT_ARM={arm!r} 不是已知的臂（只有 `graph` 与 `react`）——拒绝启动。"
+        f"AGENT_ARM={arm!r} 不是已知的臂（只有 `graph` / `react` / `capability`）——拒绝启动。"
         "不回退 graph：静默回退会把'这一轮到底是谁在跑'从日志里抹掉。")
 
 

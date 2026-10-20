@@ -380,14 +380,42 @@ def _prompt_of(state: AgentState, ctx: dict) -> str:
     缺省 `None` ⇒ 走本函数原来那一行，**逐字节不变**。接缝放在 `ctx` 里而不是
     `build_graph()` 的参数里：图是编一次、跨请求共用的单例（`_compiled`），参数只能
     从 `config["configurable"]["react_ctx"]` 走——与 `principal` / `stop_event` 同源。
+
+    **20261021：缓存跟着菜单身份走**（`_menu_key`）。缺省菜单是常量 ⇒ 身份永不变 ⇒
+    本函数与改动之前**逐字同一行为**（渲染一次、之后直取缓存）。菜单按轮变的那条臂
+    （能力索引：第一轮能力表、之后工具面）需要提示词跟着换——提示词里写着"你能选什么"，
+    菜单换了而提示词不换就是一份自相矛盾的提示词，而矛盾提示词的失效方式是不定向的。
+    读 `menu_key` 而不是自己再算一遍菜单：菜单是 `_bound_llm` 建的，而在 `planner_node`
+    里它**先于**本函数被调用（`llm = _bound_llm(ctx)` 在 `llm.invoke([… _prompt_of …])`
+    之前）⇒ 这一格在本函数读到时恒是**本轮**的值。
     """
-    if ctx.get("system_prompt") is None:
+    key = ctx.get("menu_key")
+    if ctx.get("system_prompt") is None or ctx.get("prompt_key") != key:
         build = ctx.get("prompt_builder")
         ctx["system_prompt"] = build(state, ctx) if build else _system_prompt(
             list(state.get("messages") or []), ctx.get("role"), ctx.get("principal"),
             ctx.get("config"), ctx.get("user_msg") or "",
             exec_rows=(state.get("ledger") or {}).get("exec_rows"))
+        ctx["prompt_key"] = key
     return str(ctx["system_prompt"])
+
+
+def _menu_key(menu: Any) -> tuple[str, ...]:
+    """一份菜单的**身份**：函数名序列（**含顺序**）。
+
+    为什么要它而不是"菜单变没变"的布尔量：`_bound_llm` 要判"这一轮的菜单还是不是
+    上一轮那份"。比对象身份不行（每轮都是新造的 list）、比内容也不行（描述里带角色
+    渲染的标记，逐字比等于每轮都重绑）。函数名 + 顺序是菜单的**语义身份**——两份菜单
+    只要名字与排列相同，绑给模型的东西就等价（描述变了不影响绑定形状，模型看到的是
+    调用时那一份）。
+    """
+    out: list[str] = []
+    for t in menu or []:
+        name = getattr(t, "name", None)
+        if name is None and isinstance(t, dict):
+            name = (t.get("function") or {}).get("name")
+        out.append(str(name or ""))
+    return tuple(out)
 
 
 def _bound_llm(ctx: dict) -> Any:
@@ -397,14 +425,36 @@ def _bound_llm(ctx: dict) -> Any:
     客户端**——连接池、`timeout`、上游的缓存命中全都跟着重置，而这是每一轮都发生的事。
     生产 planner 那侧是每请求一份（`_planner_setup` 把 `llm` 放进 `_Ctx`），本线照同源。
 
-    `ctx["menu_builder"]`（可选，20261020）：`(role) -> list[StructuredTool]`。缺省
+    `ctx["menu_builder"]`（可选，20261020）：`(role, ctx) -> list[StructuredTool]`。缺省
     `None` ⇒ 技能菜单，**逐字节不变**。这一格与 `prompt_builder` 必须**成对**换：只换
     菜单不换提示词，等于拿一份写着"技能注册表"的提示词去考一张工具表（`eval/experiments/
     react_line_ab.py` 20261011 那条教训）。
+
+    **20261021：菜单可以逐轮变**（能力索引那条路：第一轮是能力表、之后是该能力的工具面）。
+    做法是**三格而不是一格**，边界划在"谁来作废"上：
+
+      · `llm_client` —— 每请求一份。连接池 / `timeout` / 上游缓存都挂在它身上，**重绑
+        不重建**（重建等于把上面那三条每轮重置一次）。
+      · `menu` —— **本请求当前那一份菜单**，建一次就缓存。⚠️ **作废由建菜单的那条臂
+        自己负责**（`ctx["menu"] = None`）：能力索引那条臂在 `plan_of` 里记下"这一轮选了
+        哪条能力"的同时把它清掉，于是下一轮重建成该能力的工具面。**没有"每轮都调一次
+        builder 再比一比"这条兜底路**——那条路会让缺省臂每轮重建一次 50 条技能的 schema
+        （`tests/test_arm_seams.py` ②a 数的就是 builder 被调了几次）。
+      · `llm` —— 绑好的模型，只在**菜单身份**（`_menu_key`）变了时重绑。
+
+    缺省臂不清缓存、菜单身份也恒定 ⇒ 三格各自只写一次，与改动之前**逐字同一行为**
+    （`tests/test_react_arm.py` 与 `tests/test_arm_seams.py` 的缺省档判据钉着）。
     """
-    if ctx.get("llm") is None:
-        build_menu = ctx.get("menu_builder") or _workflow_menu
-        ctx["llm"] = _llm().bind_tools(build_menu(ctx.get("role")))
+    if ctx.get("llm_client") is None:
+        ctx["llm_client"] = _llm()
+    build_menu = ctx.get("menu_builder") or _workflow_menu
+    if ctx.get("menu") is None:
+        ctx["menu"] = build_menu(ctx.get("role"), ctx)
+    menu = ctx["menu"]
+    key = _menu_key(menu)
+    if ctx.get("llm") is None or ctx.get("menu_key") != key:
+        ctx["llm"] = ctx["llm_client"].bind_tools(menu)
+        ctx["menu_key"] = key
     return ctx["llm"]
 
 
@@ -544,10 +594,12 @@ def planner_node(state: AgentState, config: RunnableConfig | None = None) -> dic
         return {}
 
     ctx["decided"] = "execute"
-    # `ctx["plan_builder"]`（可选，20261020）：`(tool_calls, role) -> plan_obj`。缺省
-    # `None` ⇒ 技能实例化那条路（`_plan_of`），**逐字节不变**。
+    # `ctx["plan_builder"]`（可选，20261020）：`(tool_calls, role, ctx) -> plan_obj`。缺省
+    # `None` ⇒ 技能实例化那条路（`_plan_of`），**逐字节不变**。`ctx` 那一格是 20261021
+    # 加的：能力索引那条路要在折算计划时**记下这一轮选了哪条能力**（菜单下一轮按它换），
+    # 而"选了什么"只有折算这一处看得见（`planner_node` 不往 `messages` 里写东西）。
     build_plan = ctx.get("plan_builder") or _plan_of
-    return _plan_update(build_plan(resp.tool_calls, ctx.get("role")), rounds)
+    return _plan_update(build_plan(resp.tool_calls, ctx.get("role"), ctx), rounds)
 
 
 def route_after_planner(state: AgentState, config: RunnableConfig | None = None) -> str:
@@ -909,8 +961,8 @@ def make_ctx(*, config: RunnableConfig | None, principal: Any, role: str | None,
     ⇒ 每一格各自回落到今天那一行，**缺省档与改动之前逐字节相同**：
 
       · `prompt_builder(state, ctx) -> str`：系统提示（缺省 = `_system_prompt`）；
-      · `menu_builder(role) -> list[StructuredTool]`：绑给模型的菜单（缺省 = 技能菜单）；
-      · `plan_builder(tool_calls, role) -> dict`：模型的调用 → `plan_obj`（缺省 =
+      · `menu_builder(role, ctx) -> list[StructuredTool]`：绑给模型的菜单（缺省 = 技能菜单）；
+      · `plan_builder(tool_calls, role, ctx) -> dict`：模型的调用 → `plan_obj`（缺省 =
         技能实例化 `_plan_of`）；
       · `executor_factory(ledger, *, role, principal, user_msg, state, real_tools) ->
         执行器`：跑清单的那一层（缺省 = `WorkflowExecutor`，即"技能展开成工具"；工具臂
@@ -922,6 +974,11 @@ def make_ctx(*, config: RunnableConfig | None, principal: Any, role: str | None,
     上另有一条未合并的分支在大改（资产对齐），两边将来合并时冲突面越小越好。三个决策侧
     接缝必须**成对**换（菜单 + 提示词 + 计划折算），只换一个量出来的差是"提示词不匹配"
     而不是架构差。
+
+    **20261021：`menu_builder` / `plan_builder` 各多收一格 `ctx`**。理由是"菜单按轮变"
+    这件事需要**一份每请求私有的记忆**（这一轮选了哪条能力），而 `ctx` 正好是它——放
+    `state` 会进 checkpoint（那是跨请求的），放模块级会串请求。**缺省档一格都不读它**，
+    所以这一格对已有的两条臂是纯形参。
 
     为什么不放进图 state：图是 `build()` 时编一次、跨请求共用的单例，而账是**一次运行
     一个实例**。放进 state 才是错的（并发两个请求会往同一本账上写）；放进
@@ -1063,12 +1120,16 @@ def _narrator_call(msgs: list) -> Any:
     return resp
 
 
-def _workflow_menu(role: str | None) -> list[StructuredTool]:
+def _workflow_menu(role: str | None, ctx: dict | None = None) -> list[StructuredTool]:
     """技能级菜单：与 planner 看到的 schema **逐字同一份**（`build_tool_schema`）。
 
     `func` 只是占位——`WorkflowExecutor` 才是真正被调的那一层（它转给真工具）。占位体故意
     抛异常：万一将来接线断了，症状是**响亮的一次调用失败**，而不是"调了个什么都不做的桩"
     （后者会让整轮看起来跑通了、其实一个工具都没执行）。
+
+    `ctx`（20261021）：接缝的第二格，只有"菜单按轮变"的那条臂（`capability_arm`）用得上；
+    缺省菜单是常量、一个字节都不读它。**保留这个形参而不是让它可选缺省**：`_bound_llm`
+    按固定位置传两格，签名不齐会在**每一条决策轮**上炸，而不是在导入期炸。
     """
     out: list[StructuredTool] = []
     # 三个任务伪函数**常绑**（20261015 撤掉 `AGENT_TASK_STATE` 档位，理由见
@@ -1269,8 +1330,11 @@ _CLOSING_RULES = """\
 
 
 # ── plan_obj / blocked 行 ────────────────────────────────────────────
-def _plan_of(tool_calls: list, role: str | None) -> dict:
+def _plan_of(tool_calls: list, role: str | None, ctx: dict | None = None) -> dict:
     """模型这一轮点的技能调用 → 生产的 `plan_obj`（producer 只读 `workflow` 与 `tools`）。
+
+    `ctx`（20261021）：接缝的第三格，只有"菜单按轮变"的那条臂用得上（见 `planner_node`
+    那一处的注）；缺省这条路一个字节都不读它。
 
     一轮多条调用时合并成一份：`workflow` 用 `|` 连起来，`tools` 取并集——生产
     `parallel_tool_calls=False` 保证它那边恒为一条，这里是有意的容差（见模块头注的
