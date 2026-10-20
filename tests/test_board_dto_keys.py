@@ -57,7 +57,7 @@ from tools import base as B  # noqa: E402
 
 # pytest 收集路径下父仓不在场 ⇒ 模块级 skip（黄，不是红）：跨语言守卫没有对象可锁，
 # 红掉只会把"环境缺父仓"混进"契约真破了"。两个前提都不许绕：
-#   · 直跑（`__main__`）不走这支——直跑与 tests/run_all.py 语义原样（父仓不在场照旧红）；
+#   · 直跑（`__main__`）不走这支——直跑与整套跑法语义原样（父仓不在场照旧红）；
 #   · 设了 SAUDADE_REQUIRE_PARENT=1（CI/夜间门禁）也不走这支——那时"跑不到"本身就该红。
 if ("pytest" in sys.modules
         and not os.environ.get("SAUDADE_REQUIRE_PARENT")

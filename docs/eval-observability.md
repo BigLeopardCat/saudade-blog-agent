@@ -205,7 +205,7 @@
 
 ## 1. 定位与原则
 
-- **评测 = 离线质量门禁**（"做得好不好"）：L0 秒级套件（`tests/run_all.py` 全跑一遍，**套件数与用例数以该清单为准、这里不抄**——抄一次漂一次；CI 侧 `.github/workflows/eval.yml` 逐个 `uv run python tests/...` + 一条 `ruff --select F821`）在 CI 里跑（push 即拦截）；L2 全量 golden 在**本机**跑（20260920 起，CI 侧跨网链路不可用，见 §4 末注）。
+- **评测 = 离线质量门禁**（"做得好不好"）：L0 秒级套件（`.venv/bin/python -m pytest -q` 全跑一遍，**套件数与用例数不在这里抄**——抄一次漂一次，以 `pyproject.toml` 的 `testpaths` 收走的那份为准；CI 侧 `.github/workflows/eval.yml` 一条 `uv run --frozen pytest -q -n 4` + 一条 `ruff --select F821`）在 CI 里跑（push 即拦截）；L2 全量 golden 在**本机**跑（20260920 起，CI 侧跨网链路不可用，见 §4 末注）。
 - **可观测性 = 线上实时监控**（"现在跑得怎么样"）：trace/metrics/logs 三支柱。
 - **回放打通两者**：线上日志采样 → 离线评测 → 行为漂移检测。
 - **原则一：评测与语料解耦**。检索器质量、生成鲁棒性用开源数据集评测（与博客文章无关）；
@@ -252,6 +252,15 @@ flowchart LR
 | **L2 任务级** | 整个 agent 行为 | 自建 golden set（§4，条数以用例文件为准）；**LLM 评审员**（20260925，报告非门禁，见 §2 末） | task success、tool call accuracy、hallucination rate、faithfulness、延迟、成本（efficiency 断言代理：resets/打回轮/首轮即调率） | 图重写、多 agent、防幻觉 |
 | **L3 对账级**（原设计为"回放级"） | 线上行为的**跨源一致性** | `eval/trace_reconcile.py`：trace ↔ `agent.log` ↔ `monitor.log` 三源确定性对账（零 LLM、只读） | 各判据条数：trace 有收尾行没有 / 收尾行有 trace 没有 / 重复 trace_id / end_reason·frames 不等 / 只在失败分支出现的前端上报 | 全部（每次升级后跑） |
 | **渲染层**（不在 L0–L3 编号里，与被测对象不同：测前端而非 agent） | 前端组件在真浏览器里的渲染与时序 | 父仓 `frontend/tests/` 下的渲染沙箱（Playwright 打真组件 + 无头 Chrome，把后端桩掉；**数目以父仓 `run-suites.mjs` 的清单为准，这里不抄**——抄一次就会漂一次） | 断言通过率；时序判据（时刻证人）| 前端任何改动（sass/esbuild 两步是本机唯一能拦下构建级缺陷的环节） |
+
+**L0 里的注入边界（20261020 补）**：`tests/test_injection_boundary.py` 判的是
+"**用户文本伪造不出控制面结构**"——同一组 25 条注入 payload × 四个**用户可达**的通道
+（客户端字段 → `[System: …]` 那一段、工具参数值 → 计划文本的 `;` 分隔符、fact 行标记
+`〔系统〕 `、参数引用 `$tool[N].field` 的锚定），每条通道调**生产函数**本身并各配一个反控。
+⚠️ **它判不了审计意见 §4.2.2 想要的那一半**："模型会不会泄露系统提示词"要真打一次 LLM，
+与"离线套件无网络无 LLM"冲突。能离线判的是**它前面那一段**（结构层不被伪造），那才是这份
+套件的射程；别把它读成"注入已经被测过了"。伪造签名那一半在 `tests/test_confirm.py`，
+fact 行的接线在 `tests/test_factblock.py`，计划文本通道驱动不了执行在 `tests/test_plan_channel.py`。
 
 **L3 的现状要说清**：文档原写的"生产对话脱敏采样 → 离线重放"**没有做**，落地的是**跨源对账**——
 它不重放、不判"行为漂移方向"，只判"同一轮对话在两个源里的记录对不对得上"。这条比前者便宜得多
@@ -533,11 +542,30 @@ FAIL 复审单把回归组红置顶（当天必修）。混跑的坏处正是这
 `eval/golden_full_run.py` 已提供进程隔离 + 单条 180s 超时（防悬挂污染），是本机的看门狗。
 CI 只留 L0 秒级套件。
 
-**L0 的覆盖率是"报告"不是"门禁"（20261013）**：`tests/run_all.py --coverage` 逐套件收集、
+**L0 的覆盖率是"报告"不是"门禁"（20261013；20261020 换入口后仍是同一件事）**：
+`bash scripts/dev/coverage.sh`（`pytest --cov`）逐进程收集、
 结尾合成一份报告（配置在 `pyproject.toml` 的 `[tool.coverage.*]`，`source` 只列生产包——
 `tests/` 与 `eval/` 是被测对象、不是被测代码）。**不设阈值、不进 CI**：只有形状判据配当门禁，
 百分比会把"该测的没测"与"测了但那一支没走到"混成一个数，拿它当闸门只会把人推去测 getter；
 它回答的是另一个问题——"这轮动得多不多、哪些文件一直没人碰"。因此 CI 的墙钟不为它翻倍。
+
+**基线读数（20261020 实测，16702 语句 / 1870 未覆盖 ⇒ 88.8%）**——这是**快照**，引用前
+自己跑一遍（数字会漂，同 `docs/lint-baseline.md` 那张表的规矩）：
+
+  | 包 | 语句 | 未覆盖 | 覆盖率 |
+  |---|---|---|---|
+  | `agent/` | 12238 | 1074 | 91.2% |
+  | `tools/` | 2555 | 436 | 82.9% |
+  | `rag/` | 1558 | 320 | 79.5% |
+  | `utils/` | 220 | 40 | 81.8% |
+  | `config/` + `models/` | 131 | 0 | 100% |
+
+  ⚠️ **这个 88.8% 里没有 `server.py`**：`[tool.coverage.run].source` 只列了六个包，而
+  `server.py` 是 FastAPI 应用层（只有真起服务、走真链路才碰得到），它的覆盖要靠线上探针
+  而不是离线套件。**引用这个数的时候要连着这句话一起引用**，否则读者会以为全仓 88.8%。
+  最低的几处正好说明"百分比不配当门禁"：0% 的是三个 `checkpoint_*_arm.py`（A/B 臂，
+  只在调参档里被驱动）与 `idem_pg.py`（PG 幂等账，本机无 PG 时整段跳过）——
+  **它们是"这轮没被驱动"，不是"没人写测试"**，而百分比分不出这两件事。
 
 **golden 也落 trace（20260922）**：跑 golden 时每条用例落一份 trace——
 `logs/agent/golden_traces/<run_id>/<case_id>.json`（`eval/golden_trace.py`）。此前一条都没有：
@@ -661,7 +689,7 @@ device-service）；每轮对话落一份 trace JSON（utils/trace.py → `logs/
 **20260925 补**：`eval/llm_judge.py`（LLM 评审员，判"回复有没有编材料"，**只出报告不进任何门禁**，
 **已接进夜间**（跑在 golden 之后、不置 `fail=1`），口径与四条纪律见 §2 末）+ trace 的工具返回上限可配（`TRACE_TOOL_RESULT_LIMIT`，golden 轮 40000，
 生产仍 200——评审员拿摘要当材料会误判，这条是它的前置条件）。**20261015 补**：快道的**定价装置**
-——档位 `AGENT_FASTPATH`（出厂开、唯一读口 `graph._fastpath_on()`、进 `run_all._PINNED`，
+——档位 `AGENT_FASTPATH`（出厂开、唯一读口 `graph._fastpath_on()`、进 `conftest._PINNED`，
 档位显式落 `planner.context` 的 `fastpath` 格）+ `eval/trace_alert.py` 的 **R5** 段（生产 trace
 的命中分布与每次的价钱）+ `eval/fastpath_pricing.py`（`map` 静态映射 / `run` 两臂交替读计数，
 `--ids/--tag` 供单条复采样）+ 锁 `tests/test_fastpath_dial.py`；读数与删除/收窄清单见

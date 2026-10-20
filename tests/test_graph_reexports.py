@@ -1,5 +1,3 @@
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
 """`agent/graph.py` 的 re-export 面：**全仓引用点**必须都还取得着（离线、秒级）。
 
 **为什么要有这一条**：`agent/graph.py` 一直是对外的一层 **re-export 面**——十几个套件写
@@ -34,6 +32,7 @@ F401 自动修正是本仓常用命令）。而少一个名字的后果是——
 用法：.venv/bin/python tests/test_graph_reexports.py
 """
 
+
 from __future__ import annotations
 
 import ast
@@ -42,6 +41,8 @@ import sys
 import warnings
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
+
+
 sys.path.insert(0, str(ROOT))
 
 
@@ -56,9 +57,12 @@ def _parse(src: str) -> ast.AST:
         warnings.simplefilter("ignore", SyntaxWarning)
         return ast.parse(src)
 
-# 扫哪些目录：生产包 + 套件 + 评测。**不扫** `frontend/`（没有 .py）与 `.venv`（第三方）。
+
 SCAN_DIRS = ("agent", "tools", "config", "models", "rag", "utils", "tests", "eval")
+
+
 SCAN_FILES = ("server.py",)
+
 
 FAILED: list[str] = []
 
@@ -67,11 +71,6 @@ def check(name: str, ok: bool, extra: str = "") -> None:
     print(f"  {'✅' if ok else '❌'} {name}" + (f"  [{extra}]" if extra else ""))
     if not ok:
         FAILED.append(name)
-
-
-# ══════════════════════════════════════════════════════════════════
-# 扫描器：从一棵 AST 里取出「指向 `agent.graph` 的那些引用」
-# 读程序上 AST，不读源码文本——注释/文档里写个 `g.foo` 会把按文本做的判据当场骗过。
 
 
 def _dotted(node: ast.AST) -> str | None:
@@ -150,47 +149,7 @@ def _scan_files() -> list[pathlib.Path]:
     return sorted(files)
 
 
-# ══════════════════════════════════════════════════════════════════
-# 取值：全仓扫一遍
-print("① 全仓引用点：`agent.graph` 上的名字一个都不能少")
-
-_hits: dict[str, dict[str, set[str]]] = {}       # 名字 → {文件: 写法}
-_alias_files: list[str] = []
-for _f in _scan_files():
-    try:
-        _tree = _parse(_f.read_text(encoding="utf-8"))
-    except SyntaxError:                       # 语法坏的文件不是本套件的活（有别的闸管）
-        continue
-    if _graph_aliases(_tree)[0]:
-        _alias_files.append(str(_f.relative_to(ROOT)))
-    for _name, _forms in refs_from_graph(_tree).items():
-        _hits.setdefault(_name, {})[str(_f.relative_to(ROOT))] = _forms
-
-# 扫描器自检：先证明它真的看见东西了，否则下面那条"全都在"是空过。
-check("扫描器在真输入上认出了别名写法（`import agent.graph as g` 一类）",
-      len(_alias_files) >= 40, f"只认出 {len(_alias_files)} 个文件")
-check("扫描器取到了足够多的名字（下界，防解析器半坏）",
-      len(_hits) >= 200, f"只取到 {len(_hits)} 个")
-# 抽四个已知存在的名字当**扫描器正控**（不是契约清单：契约是"引用点全都取得着"）。
-_KNOWN = ("_lexicon", "_bare_target_name", "plan_state", "settings")
-check("四个已知名字都被扫到（`g._lexicon(...)` 这种别名写法在里面）",
-      all(k in _hits for k in _KNOWN), f"缺：{[k for k in _KNOWN if k not in _hits]}")
-
 import agent.graph as _G  # noqa: E402
-
-_missing = sorted(n for n in _hits if not hasattr(_G, n))
-check("⭐ `agent.graph` 上取得到**每一个**被引用的名字（少一个 = 某个套件会在"
-      "AttributeError 上红，而红的理由看着像那一族坏了）",
-      not _missing,
-      "；".join(f"`{n}` ← " + "、".join(sorted(_hits[n])) for n in _missing[:6]))
-
-
-# ══════════════════════════════════════════════════════════════════
-# ② 搬过家的族：graph.py 里不许再长一份同名定义
-print("\n② 搬过家的族不许在 graph.py 里再定义一份（唯一例外：`logger`）")
-
-_GSRC = (ROOT / "agent" / "graph.py").read_text(encoding="utf-8")
-_GTREE = _parse(_GSRC)
 
 
 def top_names(tree: ast.AST) -> set[str]:
@@ -206,72 +165,93 @@ def top_names(tree: ast.AST) -> set[str]:
     return out
 
 
-# 射程**从 graph.py 自己现取**（它 import 了谁），不是手抄一份名单——名单会漂。
-_SOURCES = sorted({n.module for n in ast.walk(_GTREE)
-                   if isinstance(n, ast.ImportFrom) and n.level == 0
-                   and (n.module or "").startswith("agent.")
-                   and n.module != "agent.graph"})
-check("从 graph.py 的 AST 现取到了它的本仓依赖面（取不到 ⇒ 下面那条没有判据，直接红）",
-      len(_SOURCES) >= 20, f"{len(_SOURCES)} 个：{_SOURCES[:6]}…")
-
-_G_TOP = top_names(_GTREE)
-# `logger` 是**写下来的**例外：每族各写一行 `logging.getLogger("agent.graph")`，
-# 故意让日志来源仍是图文件（否则搬一次家，`logging.getLogger("agent.graph")` 的
-# 套件会取到 0 条记录而**不报错**——见 `tests/test_turn_window.py` 那一课）。
-_LOGGER_EXC = {"logger"}
-_dup: dict[str, list[str]] = {}
-for _mod in _SOURCES:
-    _p = ROOT / (_mod.replace(".", "/") + ".py")
-    if not _p.exists():
-        continue
-    _both = sorted(_G_TOP & top_names(_parse(_p.read_text(encoding="utf-8"))))
-    if _both:
-        _dup[_mod] = _both
-_dup_extra = {m: [n for n in ns if n not in _LOGGER_EXC] for m, ns in _dup.items()}
-_dup_extra = {m: ns for m, ns in _dup_extra.items() if ns}
-check("⭐ 没有任何名字在 graph.py 与它 import 的本仓模块里**各定义一次**",
-      not _dup_extra,
-      "；".join(f"{m}: {ns}" for m, ns in sorted(_dup_extra.items())))
-check("  例外只有 `logger`，且它**确实**出现在至少一处（例外表过期了要销账）",
-      any(ns == ["logger"] for ns in _dup.values()), f"{_dup}")
-
-
-# ══════════════════════════════════════════════════════════════════
-print("\n③ 正控：六种写法各喂一个合成样本，必须一个不多一个不少")
-_SAMPLES = {
-    "from-import": "from agent.graph import _lexicon",
-    "from-import-as": "from agent.graph import _lexicon as _lx",
-    "import-as": "import agent.graph as g\ng._lexicon('x')",
-    "from-agent-as": "from agent import graph as gg\ngg._lexicon('x')",
-    "import-plain": "import agent.graph\nagent.graph._lexicon('x')",
-    "from-agent-plain": "from agent import graph\ngraph._lexicon('x')",
-    "getattr": "import agent.graph as g\ngetattr(g, '_lexicon')",
-    "setattr": "import agent.graph as g\nsetattr(g, '_lexicon', 1)",
-}
-for _tag, _code in _SAMPLES.items():
-    _got = set(refs_from_graph(_parse(_code)))
-    check(f"正控·{_tag} ⇒ 只取到 `_lexicon`", _got == {"_lexicon"}, f"取到 {sorted(_got)}")
-
-# 反控：别的模块的别名、以及指向**别的**包的 `g`，一个都不许混进来
-_NOISE = ("import agent.name_grounding as g\ng._lexicon()\n"
+def test_graph_reexports():
+    print("① 全仓引用点：`agent.graph` 上的名字一个都不能少")
+    _hits: dict[str, dict[str, set[str]]] = {}       # 名字 → {文件: 写法}
+    _alias_files: list[str] = []
+    for _f in _scan_files():
+        try:
+            _tree = _parse(_f.read_text(encoding="utf-8"))
+        except SyntaxError:                       # 语法坏的文件不是本套件的活（有别的闸管）
+            continue
+        if _graph_aliases(_tree)[0]:
+            _alias_files.append(str(_f.relative_to(ROOT)))
+        for _name, _forms in refs_from_graph(_tree).items():
+            _hits.setdefault(_name, {})[str(_f.relative_to(ROOT))] = _forms
+    check("扫描器在真输入上认出了别名写法（`import agent.graph as g` 一类）",
+          len(_alias_files) >= 40, f"只认出 {len(_alias_files)} 个文件")
+    check("扫描器取到了足够多的名字（下界，防解析器半坏）",
+          len(_hits) >= 200, f"只取到 {len(_hits)} 个")
+    _KNOWN = ("_lexicon", "_bare_target_name", "plan_state", "settings")
+    check("四个已知名字都被扫到（`g._lexicon(...)` 这种别名写法在里面）",
+          all(k in _hits for k in _KNOWN), f"缺：{[k for k in _KNOWN if k not in _hits]}")
+    _missing = sorted(n for n in _hits if not hasattr(_G, n))
+    check("⭐ `agent.graph` 上取得到**每一个**被引用的名字（少一个 = 某个套件会在"
+      "AttributeError 上红，而红的理由看着像那一族坏了）",
+          not _missing,
+          "；".join(f"`{n}` ← " + "、".join(sorted(_hits[n])) for n in _missing[:6]))
+    print("\n② 搬过家的族不许在 graph.py 里再定义一份（唯一例外：`logger`）")
+    _GSRC = (ROOT / "agent" / "graph.py").read_text(encoding="utf-8")
+    _GTREE = _parse(_GSRC)
+    _SOURCES = sorted({n.module for n in ast.walk(_GTREE)
+                       if isinstance(n, ast.ImportFrom) and n.level == 0
+                       and (n.module or "").startswith("agent.")
+                       and n.module != "agent.graph"})
+    check("从 graph.py 的 AST 现取到了它的本仓依赖面（取不到 ⇒ 下面那条没有判据，直接红）",
+          len(_SOURCES) >= 20, f"{len(_SOURCES)} 个：{_SOURCES[:6]}…")
+    _G_TOP = top_names(_GTREE)
+    _LOGGER_EXC = {"logger"}
+    _dup: dict[str, list[str]] = {}
+    for _mod in _SOURCES:
+        _p = ROOT / (_mod.replace(".", "/") + ".py")
+        if not _p.exists():
+            continue
+        _both = sorted(_G_TOP & top_names(_parse(_p.read_text(encoding="utf-8"))))
+        if _both:
+            _dup[_mod] = _both
+    _dup_extra = {m: [n for n in ns if n not in _LOGGER_EXC] for m, ns in _dup.items()}
+    _dup_extra = {m: ns for m, ns in _dup_extra.items() if ns}
+    check("⭐ 没有任何名字在 graph.py 与它 import 的本仓模块里**各定义一次**",
+          not _dup_extra,
+          "；".join(f"{m}: {ns}" for m, ns in sorted(_dup_extra.items())))
+    check("  例外只有 `logger`，且它**确实**出现在至少一处（例外表过期了要销账）",
+          any(ns == ["logger"] for ns in _dup.values()), f"{_dup}")
+    print("\n③ 正控：六种写法各喂一个合成样本，必须一个不多一个不少")
+    _SAMPLES = {
+        "from-import": "from agent.graph import _lexicon",
+        "from-import-as": "from agent.graph import _lexicon as _lx",
+        "import-as": "import agent.graph as g\ng._lexicon('x')",
+        "from-agent-as": "from agent import graph as gg\ngg._lexicon('x')",
+        "import-plain": "import agent.graph\nagent.graph._lexicon('x')",
+        "from-agent-plain": "from agent import graph\ngraph._lexicon('x')",
+        "getattr": "import agent.graph as g\ngetattr(g, '_lexicon')",
+        "setattr": "import agent.graph as g\nsetattr(g, '_lexicon', 1)",
+    }
+    for _tag, _code in _SAMPLES.items():
+        _got = set(refs_from_graph(_parse(_code)))
+        check(f"正控·{_tag} ⇒ 只取到 `_lexicon`", _got == {"_lexicon"}, f"取到 {sorted(_got)}")
+    _NOISE = ("import agent.name_grounding as g\ng._lexicon()\n"
           "import other.graph as g2\ng2._lexicon()\n"
           "from agent.graph import _lexicon\nx = _lexicon\n")
-check("反控·指向别的模块的别名与裸名调用都不混进来",
-      set(refs_from_graph(_parse(_NOISE))) == {"_lexicon"},
-      f"取到 {sorted(refs_from_graph(_parse(_NOISE)))}")
-check("反控·`g.settings.agent_evidence` 只取第一段（门牌是 `settings`，"
+    check("反控·指向别的模块的别名与裸名调用都不混进来",
+          set(refs_from_graph(_parse(_NOISE))) == {"_lexicon"},
+          f"取到 {sorted(refs_from_graph(_parse(_NOISE)))}")
+    check("反控·`g.settings.agent_evidence` 只取第一段（门牌是 `settings`，"
       "它后面的属性不归 graph.py 保证）",
-      set(refs_from_graph(_parse("import agent.graph as g\ng.settings.agent_evidence = 1")))
-      == {"settings"})
+          set(refs_from_graph(_parse("import agent.graph as g\ng.settings.agent_evidence = 1")))
+          == {"settings"})
+    _ghost = refs_from_graph(_parse("import agent.graph as g\ng._no_such_name_zzz()"))
+    check("正控·幽灵名字确实被扫到（否则 ① 是空过）",
+          set(_ghost) == {"_no_such_name_zzz"} and not hasattr(_G, "_no_such_name_zzz"))
+    print()
+    if FAILED:
+        print(f"❌ 失败 {len(FAILED)} 项：" + "、".join(FAILED))
+        sys.exit(1)
+    print(f"✅ 全绿（扫了 {len(_hits)} 个名字 / {len(_alias_files)} 个别名文件）")
 
-# 反控·判据本身会红：拿一个**不存在**的名字喂进去，① 那一条必须报出来
-_ghost = refs_from_graph(_parse("import agent.graph as g\ng._no_such_name_zzz()"))
-check("正控·幽灵名字确实被扫到（否则 ① 是空过）",
-      set(_ghost) == {"_no_such_name_zzz"} and not hasattr(_G, "_no_such_name_zzz"))
+    assert not FAILED, (
+        f"{len(FAILED)} 条未通过：" + "；".join(FAILED))
 
-# ══════════════════════════════════════════════════════════════════
-print()
-if FAILED:
-    print(f"❌ 失败 {len(FAILED)} 项：" + "、".join(FAILED))
-    sys.exit(1)
-print(f"✅ 全绿（扫了 {len(_hits)} 个名字 / {len(_alias_files)} 个别名文件）")
+
+if __name__ == "__main__":
+    test_graph_reexports()

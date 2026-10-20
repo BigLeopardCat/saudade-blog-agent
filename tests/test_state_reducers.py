@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """`AgentState` 的**累加器**要么带 reducer、要么在豁免台账里写明理由——机械闸（20261016）。
 
 ## 为什么要有这一条
@@ -62,20 +61,22 @@ LangGraph 合并两份 state 更新时，**只有带 reducer 的键**才做"合�
 用法：.venv/bin/python tests/test_state_reducers.py
 """
 
+
 import sys
 from pathlib import Path
 from typing import Annotated, get_origin
 
 ROOT = Path(__file__).resolve().parent.parent
+
+
 sys.path.insert(0, str(ROOT))
+
 
 import agent.graph as G  # noqa: E402
 
-# 理由的**代理判据**：够长才算"写了理由"。它判不出理由对不对（那是人的事），
-# 只拦得住"空着"与"随手两个字"——所以 ⑤ 反控专门喂一份空的进来，证明这一格能红。
 _MIN_REASON = 20
 
-# 豁免台账：键 -> 理由（含**写点**，用函数名不用行号）。改这张表 = 改判据，须在此写理由。
+
 EXEMPT = {
     "executed": (
         "请求内累计 + 去重：`execute_node` 返回 "
@@ -117,6 +118,7 @@ EXEMPT = {
     ),
 }
 
+
 FAILED: list = []
 
 
@@ -126,7 +128,6 @@ def check(desc: str, ok: bool, detail: str = "") -> None:
         FAILED.append(desc)
 
 
-# ── 判据本体：纯函数，喂合成输入也能跑（反控靠这条）──────────────────────────
 def bare_list_keys(annotations: dict) -> set:
     """注解映射里**裸 list** 的键（带 `Annotated` 元数据 = 有 reducer，不算）。"""
     out = set()
@@ -161,13 +162,16 @@ def audit(annotations: dict, exempt: dict) -> tuple:
     return unregistered, stale, weak
 
 
-# ── 反控用的合成输入 ────────────────────────────────────────────────────────
 def _noop_reducer(left, right):      # 反控只关心"有没有元数据"，不关心它做什么
     return right
 
 
 _NEG_STRIPPED = {"messages": list, "receipts": list[dict]}          # ④ 摘掉 reducer
+
+
 _NEG_WEAK = {"receipts": ""}                                        # ⑤ 理由为空
+
+
 _NEG_STALE = {"messages": "这条已经带上 reducer 了，还挂在台账里就是过期条目"}  # ⑥
 
 
@@ -211,5 +215,12 @@ def main() -> int:
     return 0
 
 
+def test_state_reducers():
+    main()
+
+    assert not FAILED, (
+        f"{len(FAILED)} 条未通过：" + "；".join(FAILED))
+
+
 if __name__ == "__main__":
-    sys.exit(main())
+    test_state_reducers()

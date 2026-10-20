@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """帧契约的机械锁：`agent/frame_contract.py` 的**声明**与 `graph.py`/`server.py` 的
 **取值**双向比对。
 
@@ -67,20 +66,33 @@
 用法：.venv/bin/python tests/test_frame_contract.py
 """
 
+
 import ast
 import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
+
+
 sys.path.insert(0, str(ROOT))
+
 
 from agent import frame_contract as F  # noqa: E402
 
 GRAPH = ROOT / "agent" / "graph.py"
+
+
 PLAN_CODEC = ROOT / "agent" / "plan_codec.py"
+
+
 ARM = ROOT / "agent" / "react_arm.py"
+
+
 SERVER = ROOT / "server.py"
+
+
 LINE = ROOT / "agent" / "react_line.py"
+
 
 FAILED: list = []
 
@@ -90,10 +102,6 @@ def check(desc: str, ok: bool, detail: str = "") -> None:
     if not ok:
         FAILED.append(desc)
 
-
-# ══════════════════════════════════════════════════════════════════════════════
-# 静态分析：一个函数的**读侧传递闭包**（它 + 它调用的函数一共从 state 读了哪些键）
-# ══════════════════════════════════════════════════════════════════════════════
 
 def _funcs(tree) -> dict:
     """全树的函数定义，按名字索引（模块级与嵌套一视同仁——闭包靠名字解析调用点）。"""
@@ -208,10 +216,6 @@ def _sec_closure(gtree) -> set:
     return g_real
 
 
-# ══════════════════════════════════════════════════════════════════════════════
-# ③ 结构：图里真有那四个节点；两张表全是声明键
-# ══════════════════════════════════════════════════════════════════════════════
-
 def nodes_ok(nodes: set, declared) -> bool:
     """图的节点集必须 ⊇ 声明的帧名（判据本体，反向对照也走它）。"""
     return set(declared) <= set(nodes)
@@ -251,10 +255,6 @@ def _sec_structure() -> None:
           (set(F.GATE_STATE_KEYS) | set(F.POPUP_STATE_KEYS)) <= g0,
           str(sorted((set(F.GATE_STATE_KEYS) | set(F.POPUP_STATE_KEYS)) - g0)))
 
-
-# ══════════════════════════════════════════════════════════════════════════════
-# ④ 手搓的门焊死了没有
-# ══════════════════════════════════════════════════════════════════════════════
 
 def _sec_no_handmade(atree, ftree) -> None:
     """臂里不许再有"手搓帧"的痕迹——适配器的本体就是这三样。"""
@@ -452,5 +452,12 @@ def main() -> int:
     return 0
 
 
+def test_frame_contract():
+    main()
+
+    assert not FAILED, (
+        f"{len(FAILED)} 条未通过：" + "；".join(FAILED))
+
+
 if __name__ == "__main__":
-    sys.exit(main())
+    test_frame_contract()

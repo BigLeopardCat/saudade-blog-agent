@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """计划执行器（20261012 批 B）：兑现一张卡之后**零 LLM** 把下一步发出去。
 
 **病灶**（用户点名的现场，五天内五次，形状一样）：主人一句话里三件写 ⇒ agent 识别对了、
@@ -22,10 +21,12 @@
      判据只剩"台账里有没有现在能动手的一件"；本节反转成"不许把档位加回来"的锁
      （裸 `if resumed:` 守卫 + 单调用点 + 反向对照：台账在场但不是兑现轮 ⇒ 也不出卡）。
      **撤档前**这一节判的是"关档 ⇒ 这条路不存在"（`AGENT_TASK_PLAN_EXEC=0`，出厂档，
-     `run_all._PINNED` 钉住它）——那个对照臂随档位一起没了。
+     `conftest._PINNED` 钉住它）——那个对照臂随档位一起没了。
 
 用法：.venv/bin/python tests/test_plan_executor.py
 """
+
+
 from __future__ import annotations
 
 import json
@@ -34,7 +35,10 @@ import tempfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
+
+
 sys.path.insert(0, str(ROOT))
+
 
 import agent.graph as G  # noqa: E402
 import agent.tasks as T  # noqa: E402
@@ -52,38 +56,32 @@ def check(name: str, ok: bool, extra: str = "") -> None:
 ROLE = "superadmin"
 
 
-# ⚠️ **20261015 撤档**：这里原来有一个 `_Dials` 夹具，把 `AGENT_TASK_STATE` 与
-# `AGENT_TASK_PLAN_EXEC` 两个档位拨到指定位置——`_ledger_next` 的第一格判据就是前者
-# （关 ⇒ 台账整个不读），执行器建在它之上。两个档位都已按主人裁决撤掉（任务状态在
-# 业界是默认必备的，不该有开关把它变成摆设；**产线上撤档是零行为差异**：`.env` 的
-# `AGENT_TASK_STATE` 自 20261002 起一直是 `1`，计划执行器那一档从没打开过）。
-# ⇒ 本套件现在**没有关档手臂可跑**，也没了 `**dials` 形参。不许把档位加回来的判据在
-# `tests/test_task_continuation.py` ③（全仓 grep 锁）。
-
-
-
-# ── 夹具：行全部**从真登记通道产出**（不手抄形状）────────────────────────────
-# 手搓一行 `steps` 的话，本套件验的就成了"我抄的形状对得上我抄的形状"。这里走
-# `intents_to_declarations`（意图清单 ⇒ 步骤）＋ `frame_payload`（落库帧），
-# 与生产登记那一刻**同一份代码**。
 _SRC = "给文章 46 加个标签 embeding"
+
+
 _DECL = T.intents_to_declarations(
     [{"goal": _SRC, "workflow": "article_tags",
       "params": {"article_id": 46, "add": ["embeding"]}}],
     role=ROLE, sources=(_SRC,))
+
+
 _FRAME = T.frame_payload(T.normalize_declaration(_DECL[0]), 346)
+
+
 _STEPS = _FRAME["steps"]
 
 
-# **第二行**（另一件写、另一个技能）：⑩ 要用它验"刚兑现完的那一行不再发"。
-# 真实链路上台账里就是这样并排躺着两行（一行一个意图），而 `next_actionable` 取的是
-# **列表里第一件还能动手的**——所以"第一行刚办完"这一格必须是显式验过的，
-# 不能靠"发出来的正好是第二行"的运气。
 _SRC2 = "在后台待办里加一条「身份变更复核」"
+
+
 _DECL2 = T.intents_to_declarations(
     [{"goal": _SRC2, "workflow": "dashboard_todo_add", "params": {"text": "身份变更复核"}}],
     role=ROLE, sources=(_SRC2,))
+
+
 _FRAME2 = T.frame_payload(T.normalize_declaration(_DECL2[0]), 347)
+
+
 _STEPS2 = _FRAME2["steps"]
 
 
@@ -135,8 +133,7 @@ def _ev(events: list, name: str) -> list[dict]:
     return [e for e in events if e.get("event") == name]
 
 
-# ══════════════════════════════════════════════════════════════════════════
-def test_confirm_resume_emits_the_next_card_without_llm():
+def _test_confirm_resume_emits_the_next_card_without_llm():
     print("\n① 确认兑现轮的续跑：下一步已绑实参 ⇒ 零 LLM 出下一张卡")
     pre, ev = _run(_state(), _cfg([_row()]))
     check("`_planner_preflight` 直接 early 返回（**没有**走到 LLM 决策轮）",
@@ -170,8 +167,7 @@ def test_confirm_resume_emits_the_next_card_without_llm():
           and _ev(ev, "plan_card_next")[0].get("cursor") == 0)
 
 
-# ══════════════════════════════════════════════════════════════════════════
-def test_grant_does_not_cover_the_next_card():
+def _test_grant_does_not_cover_the_next_card():
     print("\n② 越位拒绝：上一张卡的令牌**不许**覆盖这一张卡的 spec")
     pre, _ = _run(_state(), _cfg([_row()]))
     specs = G.parse_plan(pre.early["plan"])["tools"]
@@ -188,8 +184,7 @@ def test_grant_does_not_cover_the_next_card():
           all(G._grant_covers(st, s) is False for s in specs))
 
 
-# ══════════════════════════════════════════════════════════════════════════
-def test_unbound_next_step_goes_back_to_planner():
+def _test_unbound_next_step_goes_back_to_planner():
     print("\n③ 不猜：实参不齐 / `$tool[N]` 引用 / 技能认不出 ⇒ 退回 planner 补参")
     cases = [
         ("没有 `args` 这一格（批 A 的占位步）",
@@ -209,8 +204,7 @@ def test_unbound_next_step_goes_back_to_planner():
         check(f"  留下一条如实的痕（`{event}`）", len(_ev(ev, event)) == 1)
 
 
-# ══════════════════════════════════════════════════════════════════════════
-def test_progress_guard_stops_a_silent_loop():
+def _test_progress_guard_stops_a_silent_loop():
     print("\n④ 进度守卫：同一行同一游标连着发两次而回执没动 ⇒ 停手")
     st = _state()
     pre1, _ = _run(st, _cfg([_row()]))
@@ -234,8 +228,7 @@ def test_progress_guard_stops_a_silent_loop():
           str(pre3.early and pre3.early["plan_obj"]["tools"]))
 
 
-# ══════════════════════════════════════════════════════════════════════════
-def test_unit_is_the_card_granularity():
+def _test_unit_is_the_card_granularity():
     print("\n⑤ 单元推进：卡的最小单位＝`adminops.linked_units` 的单元")
     check("「先建再挂」是**一个**单元（两张卡的第二张注定点不动）",
           G._unit_at(_STEPS, 0) == _STEPS, str(G._unit_at(_STEPS, 0)))
@@ -256,8 +249,7 @@ def test_unit_is_the_card_granularity():
           G._unit_at([multi[2], multi[1], multi[0]], 1) == [multi[1]])
 
 
-# ══════════════════════════════════════════════════════════════════════════
-def test_no_dial_keeps_the_executor_always_on():
+def _test_no_dial_keeps_the_executor_always_on():
     print("\n⑥ 撤档（20261015）⇒ 这一支**常开**，且不许再长出第二格档位判据")
 
     # 撤档前这一节判的是"关档 ⇒ 这条路不存在（逐字节退回本批之前）"。档位撤掉之后
@@ -282,11 +274,9 @@ def test_no_dial_keeps_the_executor_always_on():
           src.count("if resumed:\n        pe = _plan_exec_next_card(") == 1)
     check("源码锁：`_plan_exec_next_card` 只有一处调用点（另一处是定义）",
           src.count("_plan_exec_next_card(") == 2)
-    # 全仓 grep 锁在 `tests/test_task_continuation.py` ③（两个档位名一处都不许再有）。
 
 
-# ══════════════════════════════════════════════════════════════════════════
-def test_state_fields_are_declared_and_read():
+def _test_state_fields_are_declared_and_read():
     print("\n⑦ 结构锁：守卫的两格**必须显式声明**（未声明的键会被静默丢弃）")
     ann = G.AgentState.__annotations__
     check("`AgentState` 声明了 `plan_task_id` / `plan_cursor`",
@@ -302,8 +292,7 @@ def test_state_fields_are_declared_and_read():
           "advance=False" in src and "plan_cursor=pe.cursor" in src)
 
 
-# ══════════════════════════════════════════════════════════════════════════
-def test_done_probe_is_observable():
+def _test_done_probe_is_observable():
     print("\n⑧ 到头了要有对偶事件（否则分不出「没生效」与「办完了」）")
     rcp = [{"tool": "create_tag", "args": {"title": "embeding"}, "result": "ok", "ts": 1.0},
            {"tool": "set_article_tags", "args": {"article_id": 46, "add": ["embeding"]},
@@ -327,8 +316,7 @@ def test_done_probe_is_observable():
           not [e for e in rec2.events if e.get("event") == "plan_done"])
 
 
-# ══════════════════════════════════════════════════════════════════════════
-def test_next_cursor_is_the_single_cursor_authority():
+def _test_next_cursor_is_the_single_cursor_authority():
     print("\n⑨ `next_cursor` 是游标的**唯一**算法（两处各推一份迟早分叉）")
     row = _row()
     check("没有回执 ⇒ 停在落库的游标上", T.next_cursor(row, []) == 0)
@@ -349,8 +337,7 @@ def test_next_cursor_is_the_single_cursor_authority():
           and "advance_by_receipts(" not in body)
 
 
-# ══════════════════════════════════════════════════════════════════════════
-def test_the_row_just_settled_is_not_re_emitted():
+def _test_the_row_just_settled_is_not_re_emitted():
     print("\n⑩ 台账里两行并排：刚兑现完的那一行**不再发**，第二张卡是**另一行**的")
 
     # 这一格的现场形状（`logs/agent/traces/20261012/054330`）：主人一句话两件写 ⇒ 弹卡①
@@ -389,17 +376,23 @@ def test_the_row_just_settled_is_not_re_emitted():
           and pre2.early["plan_obj"]["tools"] == [_spec(s) for s in _STEPS])
 
 
-if __name__ == "__main__":
-    for fn in (test_confirm_resume_emits_the_next_card_without_llm,
-               test_grant_does_not_cover_the_next_card,
-               test_unbound_next_step_goes_back_to_planner,
-               test_progress_guard_stops_a_silent_loop,
-               test_unit_is_the_card_granularity,
-               test_no_dial_keeps_the_executor_always_on,
-               test_state_fields_are_declared_and_read,
-               test_done_probe_is_observable,
-               test_next_cursor_is_the_single_cursor_authority,
-               test_the_row_just_settled_is_not_re_emitted):
+def test_plan_executor():
+    for fn in (_test_confirm_resume_emits_the_next_card_without_llm,
+               _test_grant_does_not_cover_the_next_card,
+               _test_unbound_next_step_goes_back_to_planner,
+               _test_progress_guard_stops_a_silent_loop,
+               _test_unit_is_the_card_granularity,
+               _test_no_dial_keeps_the_executor_always_on,
+               _test_state_fields_are_declared_and_read,
+               _test_done_probe_is_observable,
+               _test_next_cursor_is_the_single_cursor_authority,
+               _test_the_row_just_settled_is_not_re_emitted):
         fn()
     print("\n" + ("全部通过 ✅" if not FAILED else f"失败 {len(FAILED)} 项 ❌: {FAILED}"))
-    sys.exit(1 if FAILED else 0)
+
+    assert not FAILED, (
+        f"{len(FAILED)} 条未通过：" + "；".join(FAILED))
+
+
+if __name__ == "__main__":
+    test_plan_executor()

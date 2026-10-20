@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """gate 打回 → 交回 planner 重规划一次（20260926，用户点名的现场）。
 
 现场（trace `20260926T091548`，主人只说了「西顿学院」）：planner 落 `chat` 零工具，
@@ -24,6 +23,7 @@ narrator 写下「站内并没有关于或名为且关联西顿学院的详细�
 用法：.venv/bin/python tests/test_gate_replan.py
 """
 
+
 from __future__ import annotations
 
 import sys
@@ -31,16 +31,18 @@ from pathlib import Path
 
 from langchain_core.messages import AIMessage, HumanMessage
 
-# ── 仓根（同 tests/ 下其余套件：搬进 tests/ 后要靠这两行才 import 得到 agent/）
 ROOT = Path(__file__).resolve().parent.parent
+
+
 sys.path.insert(0, str(ROOT))
 
-from tools import base as _base  # noqa: E402  工具的返回值契约（ToolResult：str 子类 + kind）
+
+from _planner_stub import bind_tools_stub, toolcall_reply  # noqa: E402
 
 import agent.graph as g  # noqa: E402
 from agent.graph import build_graph, graph_input, parse_plan  # noqa: E402
 from agent.principal import SOURCE_ASSERTION, Principal  # noqa: E402
-from _planner_stub import bind_tools_stub, toolcall_reply  # noqa: E402
+from tools import base as _base  # noqa: E402  工具的返回值契约（ToolResult：str 子类 + kind）
 
 FAILED: list[str] = []
 
@@ -51,11 +53,6 @@ def check(name: str, ok: bool, extra: str = "") -> None:
         FAILED.append(name)
 
 
-# ── 脚本化的假 LLM：planner 与 model 共用 get_llm ────────────────────────────
-# 按**入参形态**分流而不是按节点名：planner_node 传的是格式化好的提示词字符串，
-# model_node 传的是 `[system] + state["messages"]` 列表（见 graph.py 两处调用点）。
-# 这条分流判据一变（比如将来 planner 也传消息列表），下面的用例会立刻红——这正是
-# 想要的：假 LLM 分不清节点时，"planner 被调了几次"的断言就会静默失去意义。
 class _ScriptedLLM:
     bind_tools = bind_tools_stub      # `bind_planner_tools` 要用（见 _planner_stub 头注）
 
@@ -145,16 +142,7 @@ class _FakeNoopNoticeTool(_FakeNoticeTool):
                               "noop": True})
 
 
-# 两句措辞不同、但都属于"站内没有"结论的叙述——第二句刻意**不逐字重复**第一句，
-# 否则先触发的会是复读闸（`repeat_prev_reply`），而它不在 `_REPLAN_ISSUES` 里，
-# 用例就测不到"重规划只发生一次"这条（会变成"复读直接兜底"的另一回事）。
-_LIE_1 = "抱歉喵，目前站内并没有关于或名为且关联西顿学院的详细文章记录。"
-_LIE_2 = "站内暂时没有西顿学院相关的文章呢，要不要换个关键词试试？"
-_TRUTH = "站内检索到 1 篇与西顿学院相关的文章：《西顿学院小记》。"
-
 _PLAN_CHAT = "WORKFLOW: chat\nPARAMS: {}"
-_PLAN_SEARCH = ('WORKFLOW: content_query\nPARAMS: {"calls": [{"tool": "search_notes", '
-                '"args": {"keyword": "西顿学院"}}]}')
 
 
 def _run(plans: list, narrations: list, user_msg: str = "西顿学院",
@@ -208,295 +196,8 @@ def _rounds(llm: "_ScriptedLLM", n: int) -> list[str]:
     return [p for p in llm.planner_prompts if f"第 {n}/{g.MAX_PLAN_ROUNDS} 轮" in p]
 
 
-print("\n① 打回 → 回 planner 重规划，重查之后如实作答")
-_out, _llm, _tool, _ev = _run([_PLAN_CHAT, _PLAN_SEARCH, _PLAN_CHAT], [_LIE_1, _TRUTH])
-check("脚本足够跑完这一轮（没有一轮是靠「脚本用尽」混过去的）",
-      _llm.exhausted == [], str(_llm.exhausted))
-check("planner **真的重新决策了一次**（第 2 轮规划存在 = 不是兜底收尾）",
-      len(_rounds(_llm, 2)) == 1, f"各轮次数={[len(_rounds(_llm, n)) for n in (1, 2, 3)]}")
-check("  且重规划那一轮**看得见**打回原因（确定性提示进了提示词，不是只躺在消息流里）",
-      bool(_rounds(_llm, 2)) and "已被系统否定" in _rounds(_llm, 2)[0],
-      "第 2 轮提示词里找不到打回说明")
-check("  第 1 轮（正常决策）**没有**这条提示——只有被打回的那一轮才有",
-      bool(_rounds(_llm, 1)) and "已被系统否定" not in _rounds(_llm, 1)[0])
-check("重规划那一轮真的执行了检索工具（不是又空跑一轮）",
-      len(_tool.calls) == 1 and _tool.calls[0].get("keyword") == "西顿学院",
-      str(_tool.calls))
-check("最终回复是重查之后那条有依据的叙述",
-      (_out["messages"][-1].content or "").strip() == _TRUTH,
-      repr((_out["messages"][-1].content or "")[:40]))
-check("被否定的那段叙述**不在**最终 state 里（不留成下一轮的范文）",
-      _LIE_1 not in _ai_text(_out) and _LIE_1 not in "\n".join(
-          str(getattr(m, "content", "")) for m in _out["messages"]))
-check("没有走兜底（fallback_text 为空、done 为真）",
-      not _out.get("fallback_text") and _out.get("done") is True)
-check("gate_replan 已在终局路径复位", _out.get("gate_replan") is False)
-check("trace 里有 gate/replan 事件（判据可回溯）",
-      ("gate", "replan") in [(n, e) for n, e, _ in _ev],
-      str([(n, e) for n, e, _ in _ev]))
-
-
-print("\n② 重规划只发生一次：第二次仍打回 → 确定性兜底，不无限循环")
-_out2, _llm2, _tool2, _ev2 = _run([_PLAN_CHAT, _PLAN_CHAT], [_LIE_1, _LIE_2])
-check("脚本足够跑完这一轮", _llm2.exhausted == [], str(_llm2.exhausted))
-check("没有第 3 轮规划（重规划不是每轮都发生）",
-      len(_rounds(_llm2, 3)) == 0, f"各轮次数={[len(_rounds(_llm2, n)) for n in (1, 2, 3)]}")
-check("第二次打回走兜底：final_reply 换成如实文本、done 收尾",
-      bool(_out2.get("fallback_text")) and _out2.get("done") is True,
-      repr(str(_out2.get("fallback_text") or "")[:40]))
-# 注：兜底路径**刻意不摘掉**那条叙述消息（与 `_replan_result` 不同）——`_fallback_result`
-# 是终局：这一轮到此结束、state 随请求丢弃，而服务端据末尾那条 `[Fallback 决定]` 把要
-# 展示、要入库的回复**整段替换**成兜底文本（见 server.py 的 gate 分支）。重规划那条路
-# 则**必须**摘掉，因为那一轮还要继续跑——留着它就成了下一轮 planner/narrator 的范文。
-# 所以这里锁的是"末端那条决定帧在场"（服务端唯一认的替换凭据），不是"假话不在 state 里"。
-check("  末尾那条 `[Fallback 决定]` 在场（服务端据此替换回复的唯一凭据）",
-      str(_out2["messages"][-1].content).startswith("[Fallback 决定]"),
-      repr(str(_out2["messages"][-1].content)[:30]))
-check("  这次走的是兜底分支而不是又一次重规划（trace 里 fallback 事件在场）",
-      any(e == "fallback" for _n, e, _d in _ev2),
-      str([(n, e) for n, e, _ in _ev2]))
-check("  gate_replan 复位（否则 route_after_gate 会把收尾轮又送回 planner）",
-      _out2.get("gate_replan") is False)
-check("  两次打回只有一条 replan 事件（后一条是 fallback）",
-      sorted(e for _n, e, _d in _ev2 if e in ("replan", "fallback")) == ["fallback", "replan"],
-      str([(n, e) for n, e, _ in _ev2]))
-
-
-print("\n③ 正常通过的一轮不受影响（零回归：没有 replan 事件、没有打回提示）")
-_out3, _llm3, _tool3, _ev3 = _run([_PLAN_SEARCH, _PLAN_CHAT], [_TRUTH])
-check("脚本足够跑完这一轮", _llm3.exhausted == [], str(_llm3.exhausted))
-check("检索工具执行了一次", len(_tool3.calls) == 1)
-check("没有 replan 事件（这条通道只在打回时开）",
-      "replan" not in [e for _n, e, _d in _ev3])
-check("提示词里不带任何打回说明", all(
-    "已被系统否定" not in p for p in _llm3.planner_prompts))
-check("最终回复就是那条叙述", (_out3["messages"][-1].content or "").strip() == _TRUTH)
-
-
-print("\n④ 洞⑨ 那族也走重规划：拦住谎之后**把事办成**，而不是就此道歉收尾")
-# 现场（trace `20260930T123938`，uid=1 真主人）：主人说「我的未读信息全部就标记为
-# 已读」（一条明确的祈使写请求），planner 判 chat 零工具，narrator 回「这一轮系统真的
-# 办成了：你（id=1）的未读站内信已全部标记为已读」——那句还是**抄的**紧邻上一条真办成
-# 那轮的句式。洞⑨ 拦住了这句谎；这一段锁的是拦住之后那一步：不打回重规划的话，主人
-# 看到的是"我刚才那句是编的……要不要我真的去办一遍"——谎没了，事还是没办。
-_LIE_WRITE = ("主人，这一轮系统真的办成了：你的未读站内信已全部标记为已读，"
-              "现在未读是 **0 封**，列表清干净了喵～")
-_TRUTH_WRITE = "主人，4 条未读通知已经真的标记为已读了喵。"
-_PLAN_NOTICE = 'WORKFLOW: notice_read\nPARAMS: {"all": true}'
-_out4, _llm4, _tool4, _ev4 = _run([_PLAN_CHAT, _PLAN_NOTICE, _PLAN_CHAT],
-                                  [_LIE_WRITE, _TRUTH_WRITE],
-                                  user_msg="猫咪我的未读信息全部就标记为已读",
-                                  tool_name="read_notifications",
-                                  fake=_FakeNoticeTool())
-check("脚本足够跑完这一轮", _llm4.exhausted == [], str(_llm4.exhausted))
-check("planner **真的重新决策了一次**（第 2 轮规划存在 = 不是道歉收尾）",
-      len(_rounds(_llm4, 2)) == 1, f"各轮次数={[len(_rounds(_llm4, n)) for n in (1, 2, 3)]}")
-check("重规划那一轮真的把写工具执行了（不是又空跑一轮）——事办成了",
-      _tool4.calls == [{"all": True}], str(_tool4.calls))
-check("  打回提示给的是**写族**的出路（去动手），不是检索族那套（去查）",
-      bool(_rounds(_llm4, 2)) and "该动手就去动手" in _rounds(_llm4, 2)[0]
-      and "选检索类技能" not in _rounds(_llm4, 2)[0],
-      (": ".join(_rounds(_llm4, 2)[0].splitlines()[-4:])[:160]
-       if _rounds(_llm4, 2) else "第 2 轮提示词不存在"))
-check("最终回复是重办之后那条有依据的叙述",
-      (_out4["messages"][-1].content or "").strip() == _TRUTH_WRITE,
-      repr((_out4["messages"][-1].content or "")[:40]))
-check("被否定的那句**不在**最终 state 里（不留成下一轮的范文）",
-      _LIE_WRITE not in _ai_text(_out4))
-check("没有走兜底（fallback_text 为空、done 为真）",
-      not _out4.get("fallback_text") and _out4.get("done") is True)
-check("trace 里有 gate/replan 事件（判据可回溯）",
-      ("gate", "replan") in [(n, e) for n, e, _ in _ev4],
-      str([(n, e) for n, e, _ in _ev4]))
-
-print("\n⑤ 同步锁：零帧轮声称表的每一族都得挂号（新加一张网忘了加 _REPLAN_ISSUES = 这里红）")
-# 两张表各写各的：`_zero_frame_families` 是"有哪些网"，`_REPLAN_ISSUES` 是"哪些网
-# 打回后值得交回 planner"。20260930 实测两族**上线时都漏挂了**（洞⑨ 与第三人称取数
-# 声称）——拦住之后一步兜底、主人看到的是一句道歉，而那句话正是要它动手的。
-# 锁成"每一族都在"而不是"两边相等"：有帧轮的族（phantom_* 等）本来就不在这张零帧表里。
-_ZF = {f.issue for f in g._zero_frame_families({}, "chat")}
-check("零帧轮声称表非空（表被改名/搬走时这条先红，别让下面那条空转）", len(_ZF) >= 5,
-      str(sorted(_ZF)))
-check("零帧轮声称表的每一族都在 _REPLAN_ISSUES 里",
-      _ZF <= set(g._REPLAN_ISSUES),
-      "漏挂：" + "、".join(sorted(_ZF - set(g._REPLAN_ISSUES))))
-check("_REPLAN_ADVICE 的键都是 _REPLAN_ISSUES 的成员（挂在非成员上 = 读不到的死代码）",
-      set(g._REPLAN_ADVICE) <= set(g._REPLAN_ISSUES),
-      "、".join(sorted(set(g._REPLAN_ADVICE) - set(g._REPLAN_ISSUES))))
-check("建议措辞真按族发：写族拿「去动手」、检索族拿「去查」（接错表 = planner 被指错路）",
-      "该动手就去动手" in g._replan_note("sys_write_claim_without_tool", "x")
-      and "选检索类技能" not in g._replan_note("sys_write_claim_without_tool", "x")
-      and "选检索类技能" in g._replan_note("site_absence_claim_without_tool", "x"))
-check("  没写建议的族退回缺省那一份（新增 issue 不会拿到半截提示）",
-      "选检索类技能" in g._replan_note("这个 issue 不存在", "x"))
-check("  洞⑩ 的否定说明**不跟着缺省那句走**（它说的是「这一轮真执行过」，"
-      "而缺省那句写的是「一个工具都没有执行」——当着 planner 的面说反话）",
-      "真的执行过" in g._replan_note("write_change_denial", "x")
-      and "一个工具都没有执行" not in g._replan_note("write_change_denial", "x"))
-
-print("\n⑥ 洞⑩ 走重规划：真改了东西却说「这一轮什么都没改」 ⇒ 打回重说（用户上线后报告）")
-# 现场（trace `20260930T192729_1`，uid=1 真主人）：主人点「确定」那一轮，
-# `read_notifications` **真执行**、回执写着「已把 1 条通知标记为已读（现在未读：通知 0 条）」，
-# narrator 却说「通知这边其实本来就没有未读的，所以这一轮没有可标记的、什么都没改」——
-# 主人刚亲手点的确定，被告知站内什么都没发生。根因是**技能回复契约**里那句可抄的否认句
-# （已同步改措辞），判据是兜底：措辞只降概率，兑现轮说反话必须拦得住。
-_LIE_NOCHANGE = "通知这边其实本来就没有未读的，所以这一轮没有可标记的、什么都没改喵。"
-_out6, _llm6, _tool6, _ev6 = _run([_PLAN_NOTICE, _PLAN_CHAT, _PLAN_CHAT],
-                                  [_LIE_NOCHANGE, _TRUTH_WRITE],
-                                  user_msg="猫咪我的未读信息全部就标记为已读",
-                                  tool_name="read_notifications",
-                                  fake=_FakeNoticeTool())
-check("脚本足够跑完这一轮", _llm6.exhausted == [], str(_llm6.exhausted))
-check("写**真的执行了**（这是本用例的前提：判定要的是「真有改动」)",
-      _tool6.calls == [{"all": True}], str(_tool6.calls))
-check("planner **真的重新决策了一次**（第 3 轮规划存在 = 不是兜底道歉收尾）",
-      len(_rounds(_llm6, 3)) == 1, f"各轮次数={[len(_rounds(_llm6, n)) for n in (1, 2, 3)]}")
-check("  打回提示给的是洞⑩ 那一族（「照回执如实说、不用再执行一次」），不是检索族",
-      bool(_rounds(_llm6, 3)) and "不需要再执行一次" in _rounds(_llm6, 3)[0]
-      and "选检索类技能" not in _rounds(_llm6, 3)[0])
-check("最终回复是重说之后那条有依据的叙述",
-      (_out6["messages"][-1].content or "").strip() == _TRUTH_WRITE,
-      repr((_out6["messages"][-1].content or "")[:40]))
-check("被否定的那句**不在**最终 state 里（不留成下一轮的范文）",
-      "没有可标记的" not in _ai_text(_out6))
-check("没有走兜底（fallback_text 为空、done 为真）",
-      not _out6.get("fallback_text") and _out6.get("done") is True)
-check("trace 里有 gate/replan 事件（判据可回溯）",
-      ("gate", "replan") in [(n, e) for n, e, _ in _ev6],
-      str([(n, e) for n, e, _ in _ev6]))
-
-print("\n⑥b 负锁：零改动的那一轮说「本来就没有」**不打回**（门要认得工具自报的 noop 证书）")
-# 与 ⑥ 只差一件事：工具返回的是**零改动**（`meta["noop"]`）。此时 narrator 说的
-# 「本来就没有未读的、没有可标的」是**真话**——门绝不能把如实说明当成谎打回，
-# 否则诚实叙述会被反复重写（这正是加 `noop_specs` 这个事实通道的全部理由）。
-_NOOP_TEXT = "主人，你的通知本来就没有未读的，所以这一轮没有可标的、什么都没改喵～"
-_out6b, _llm6b, _tool6b, _ev6b = _run([_PLAN_NOTICE, _PLAN_CHAT], [_NOOP_TEXT],
-                                      user_msg="猫咪我的未读信息全部就标记为已读",
-                                      tool_name="read_notifications",
-                                      fake=_FakeNoopNoticeTool())
-check("脚本足够跑完这一轮", _llm6b.exhausted == [], str(_llm6b.exhausted))
-check("工具真跑了（零改动也是执行过）", len(_tool6b.calls) == 1, str(_tool6b.calls))
-check("**没有**打回（零改动轮的如实说明不算改动否认）",
-      ("gate", "replan") not in [(n, e) for n, e, _ in _ev6b]
-      and ("gate", "fallback") not in [(n, e) for n, e, _ in _ev6b],
-      str([(n, e) for n, e, _ in _ev6b]))
-check("  最终回复就是那句如实说明（没被兜底换掉）",
-      (_out6b["messages"][-1].content or "").strip() == _NOOP_TEXT)
-
-print("\n⑦ 零改动重复不再重跑（用户原话：「第二轮连调三次工具」）")
-# 现场（trace `20260930T192824`）：`add_favorite(23)` 零改动返回后，planner **拿不到
-# "目标已达成"这个事实**，连规划 4 轮同一件、每轮各执行一次（每次都是零改动），
-# 12.5 秒 / 5 次 LLM 换来一个"什么都没发生"。判据 = 工具自报的 noop 证书（execute 落进
-# `noop_specs`）⇒ 同一件零改动的 spec 第二次点名不再执行。
-_out7, _llm7, _tool7, _ev7 = _run([_PLAN_NOTICE, _PLAN_NOTICE, _PLAN_CHAT],
-                                  [_NOOP_TEXT],
-                                  user_msg="猫咪我的未读信息全部就标记为已读",
-                                  tool_name="read_notifications",
-                                  fake=_FakeNoopNoticeTool())
-check("脚本足够跑完这一轮", _llm7.exhausted == [], str(_llm7.exhausted))
-check("同一件零改动的写**只执行了一次**（第 2 轮规划被确定性地剔掉了）",
-      len(_tool7.calls) == 1, f"执行了 {len(_tool7.calls)} 次：{_tool7.calls}")
-check("  拦截事件落了 trace（reason=noop_repeat，判据可回溯）",
-      ("planner", "intercept") in [(n, e) for n, e, _ in _ev7]
-      and any(e == "intercept" and d.get("reason") == "noop_repeat"
-              for n, e, d in _ev7),
-      str([(n, e, d.get("reason")) for n, e, d in _ev7 if e in ("intercept",)]))
-check("  收尾注记把「零改动」说清楚（narrator 才不会两头都敢说）",
-      "状态本来就是目标值" in (parse_plan(_out7.get("plan", ""))["note"] or ""),
-      repr((parse_plan(_out7.get("plan", ""))["note"] or "")[:60]))
-check("最终回复是那句如实说明",
-      (_out7["messages"][-1].content or "").strip() == _NOOP_TEXT)
-
-print("\n⑦b 负锁：**真改过**的同一件 spec 不受这条裁剪管辖（换的是事实，不是工具名）")
-# 与 ⑦ 只差工具返回：这次是真的标了 4 条。第二轮的同一件 spec **照旧放行**——
-# 裁剪键的是工具自己声明的"零改动"，不是"这个签名出现过"（后者会把"再来一次"
-# 这种合法的新请求一并吞掉）。
-_out7b, _llm7b, _tool7b, _ev7b = _run([_PLAN_NOTICE, _PLAN_NOTICE, _PLAN_CHAT],
-                                      [_TRUTH_WRITE],
-                                      user_msg="猫咪我的未读信息全部就标记为已读",
-                                      tool_name="read_notifications",
-                                      fake=_FakeNoticeTool())
-check("脚本足够跑完这一轮", _llm7b.exhausted == [], str(_llm7b.exhausted))
-check("真改过的那件第二轮**照旧执行**（只有零改动的才被剔）",
-      len(_tool7b.calls) == 2, f"执行了 {len(_tool7b.calls)} 次")
-
-print("\n⑧ 判据的两个零件各自可验（纯函数，不经过图）")
-# `_has_real_change` 是**前提**：有写回执、且那条回执不在 noop 里。
-_SIG = ["add_favorite", '{"article_id": "23"}']
-check("  写回执 + 不在 noop 里 ⇒ 真有改动",
-      g._has_real_change([{"tool": "add_favorite", "args": {"article_id": 23}}], []))
-check("  同一条回执但工具自报零改动 ⇒ **不算**真有改动",
-      not g._has_real_change([{"tool": "add_favorite", "args": {"article_id": 23}}], [_SIG]))
-check("  只有只读回执 ⇒ 不算真有改动（读不改变任何东西）",
-      not g._has_real_change([{"tool": "search_notes", "args": {"keyword": "x"}}], []))
-check("  `noop_specs` 缺失（老 state / 未声明）⇒ 写回执全按「真改动」从严判",
-      g._has_real_change([{"tool": "add_favorite", "args": {"article_id": 23}}], None))
-check("  谓词的**前提**真的挡在前面：没有真改动时，同一句否认不成立",
-      g._change_denial_claim("这一轮什么都没改喵", True)
-      and not g._change_denial_claim("这一轮什么都没改喵", False))
-check("  多件轮里如实说**其中一件**没改不在此列（无本轮作用域标记）",
-      not g._change_denial_claim("额度那条没有改动，留言那条已经通过了", True))
-check("  逐字段的如实报告不在此列（「颜色：这次没改」——作用域是那一格、不是整轮）",
-      not g._change_denial_claim("**颜色**：这次没改，名字和父级都已经换好了", True)
-      and not g._change_denial_claim("- **颜色**：这次没改", True)
-      and not g._change_denial_claim("这次跳转没有带动画", True))
-check("  但带量词的整轮否认照样命中（裸「改」只是被量词锚定，不是被删掉）",
-      g._change_denial_claim("这次一个字节都没改喵", True)
-      and g._change_denial_claim("这一轮什么都没改", True))
-check("  引号里转述不算 narrator 自己的声称（调用方剥引号后判）",
-      not g._change_denial_claim(g._strip_quoted_spans("留言里写着「这一轮什么都没改」"),
-                                 True))
-# 20261008 补的词形（现场 trace `20261008T083153_1`）：模型换的说法是「**操作**」——
-# 上面四支的名词表收 改动/变动/请求/改，洞③（`_NO_EXEC_CLAIM_RE`）那一侧只收「工具/
-# 回执是空的」⇒ 那一整句从**两族判据中间**漏过去，一次真写成功被说成"什么都没做"。
-check("  量词锚定的整轮否认「没有执行任何操作」照样命中（两族名词表中间那个词）",
-      g._change_denial_claim(
-          "主人，这一轮系统**没有执行任何操作**——我这边没看到这次批准的执行记录，"
-          "所以 niuniu 的额度申请还没批、什么都没改。", True)
-      and g._change_denial_claim("本轮没做任何动作", True)
-      and g._change_denial_claim("这次没有进行任何操作", True))
-check("  「任何/一点/半点」是这一支的必要条件：**具体某类动作**的如实说明不在此列"
-      "（只跑了检索的一轮里「没有执行删除操作」是真话）",
-      not g._change_denial_claim("这一轮没有执行删除操作，只读了那一篇", True)
-      and not g._change_denial_claim("这次没有做冻结动作", True))
-check("  条件/疑问框架照旧豁免（不是声称）",
-      not g._change_denial_claim("要是本轮没有执行任何操作，我就再说一遍", True)
-      and not g._change_denial_claim("这一轮没有执行任何操作吗", True))
-# ⚠️ **已知缺口，本次没治、也不是本次引入**（20261008 现场记）：疑问式「有没有…？」落在
-# 哪个子句里都挡住豁免——`_CLAUSE_RE` 按标点切分、标点本身不属于子句，豁免表里那条
-# `[?？]` 实际够不着，整句只剩 `没有` 能命中判据。实测**旧四支同病**：
-# 「这一轮有没有什么改动？」在没有⑤这一支时就已经命中（`没有` + "什么" + `改动`）。
-# 补法是往 `_NO_EXEC_EXEMPT_RE` 加 `有没有`（`是不是` 已在表里，两者同类），
-# 但那是**判据改动**，未获点头前不动——这一行只把证据留在现场。
-# `_trim_noop_specs`：签名按 `_spec_signature` 归一（与回执侧同源）。
-_P70 = {"workflow": "notice_read", "tools": ["read_notifications({'all': True})"],
-        "params": {"all": True}, "note": ""}
-check("  签名在 noop 里 ⇒ 剔除",
-      g._trim_noop_specs(_P70, [list(g._spec_signature(
-          "read_notifications", {"all": True}))]) is not None)
-check("  签名不在 noop 里 ⇒ 一件都不剔（返回 None，计划原样走）",
-      g._trim_noop_specs(_P70, [list(g._spec_signature(
-          "read_notifications", {"all": False}))]) is None)
-check("  剔空之后 PARAMS 同步剔（两行不一致 = narrator 只能猜到底做了没有）",
-      (g._trim_noop_specs(
-          {"workflow": "notice_read", "tools": ["read_notifications({'all': True})"],
-           "params": {"all": True, "tools": ["read_notifications",
-                                             "list_notifications"]}, "note": ""},
-          [list(g._spec_signature("read_notifications", {"all": True}))])[0]["params"]
-       .get("tools")) == ["list_notifications"])
-
-
-print("\n⑧c 洞⑮ 的判据零件（纯函数）：**办成了却说还在等**（20261008）")
-# 与 ⑧ 是**同一件事实的两个方向**：⑧ 那族抓"什么都没改"（洞⑩），这一族抓"还没落地"
-# （洞⑮）。现场 trace `20261008T083153_1`：`approve_quota_request` 真 PASS（回执「剩
-# 500/500」），narrator 却念着卡面快照里的旧数说"还在待处理队列里……剩 451/500"。
-# 整段里"没有执行任何操作"那一半已被 ⑧ 那一族接住，**"还在队列里／没落地"这一半当天
-# 全站无网**——`tests/test_round_facts.py` ② 把这条当红基线逐字锁着。本节只锁**零件**
-# （词形 + 三道闸 + 与洞⑩ 的优先级），端到端与供给侧在那一套件里。
 _REC_15 = [{"workflow": "quota_approve", "tool": "approve_quota_request",
             "args": {"user_id": 5}, "result": "剩 500/500", "ts": 0.0}]
-_SENT2_15 = ("我能确定的是：他的申请还在待处理队列里（账号「niuniu」id=5，剩 451/500 轮），"
-             "刚才那次确认没落地。要不要我再走一遍？")
 
 
 def _facts15(**kw):
@@ -514,86 +215,6 @@ def _gate15(text, facts=None):
                           **({"facts": facts} if facts is not None else {}))
 
 
-check("  正例：08:31 那第 2 句 ⇒ `round_not_landed`（**仅第 2 句**——第 1 句归洞⑩）",
-      (_gate15(_SENT2_15) or ("",))[0] == "round_not_landed")
-check("  队列类（不要求锚定）/ 锚定类 / 量词类三种形态都命中",
-      (_gate15("那笔申请还在待确认，你点一下我就去办。") or ("",))[0] == "round_not_landed"
-      and (_gate15("刚才那次确认没落地，我再等等。") or ("",))[0] == "round_not_landed"
-      and (_gate15("你交代的那几件事一个都没落地。") or ("",))[0] == "round_not_landed")
-check("  **锚定是必要条件**：同轮一件办成、另一件没过时，「那篇的置顶还没落地」是**真话**"
-      "（没有整轮作用域标记 ⇒ 放行；取向同 `not blocked_writes`）",
-      _gate15("那篇的置顶还没落地，等下我再试试。") is None
-      and _gate15("本轮那件批准还没落地。",
-                  facts=_facts15(blocked_writes=("audit_board_comment",))) is None)
-check("  `ledger_pending` 那一档（台账里**真有一行在等**）「还在等你点头」是**真话** ⇒ 放行"
-      "（两道闸与 `RoundFacts.awaiting_owner` 同源）",
-      _gate15("那件申请还在待处理队列里，等你点头。",
-              facts=_facts15(ledger_pending=True)) is None)
-check("  优先级：两族同时在场时保留**先到者**洞⑩（不改今天在跑的 issue 名与分族）",
-      (_gate15("这一轮系统没有执行任何操作，什么都没改。" + _SENT2_15) or ("",))[0]
-      == "write_change_denial")
-check("  兜底文案：认错 + 摆回执原文，且**不复述**被判掉的那句（它会进下一轮上下文）",
-      "剩 500/500" in g._fallback_round_not_landed(_facts15(), _REC_15)
-      and not any(k in g._fallback_round_not_landed(_facts15(), _REC_15)
-                  for k in ("待处理队列", "还没落地", "没有执行任何操作")))
-check("  挂号：`round_not_landed` 在 `_REPLAN_ISSUES` 里，且建议/原因**指向**洞⑩ 那两份",
-      "round_not_landed" in g._REPLAN_ISSUES
-      and g._REPLAN_ADVICE["round_not_landed"] is g._REPLAN_ADVICE["write_change_denial"]
-      and g._REPLAN_WHY["round_not_landed"] is g._REPLAN_WHY["write_change_denial"])
-
-
-print("\n⑥ 零帧纯作答轮 + 主人在问**自己那份数据** → 打回重规划（20261003 补的那半）")
-# 现场（uid=1 会话 320，trace `20261003T194144`；下面两段取自那份 trace 原文的**开头**）：
-# 主人问「我有哪些未读通知呀」，planner 落 chat 零工具，narrator 回了一段**关于上一轮话题
-# （翻服务日志 / worker respawn）的真话**。上面每一族问的都是"这句话真不真"——那段话字字
-# 属实，于是原先直接 gate PASS（zero_frame=True）。这一节锁的就是补上的那半：**这轮答的是
-# 不是主人刚问的那件事**（判据与射程数据见 `agent/authz.py::is_own_read_question` 的头注）。
-_LIE_OWN = ("主人，这一轮我得跟你说实话喵——我手上没有“翻原始日志文件”的工具，"
-            "journalctl / rust.log / agent.log 的原文我这轮取不到，所以没法把这次 "
-            "respawn 的具体堆栈贴给你看。")
-_TRUTH_OWN = "主人，你现在有 2 条未读通知喵～（私信 0 条）"
-_PLAN_OWN = ('WORKFLOW: content_query\nPARAMS: {"calls": [{"tool": "get_unread_summary", '
-             '"args": {}}]}')
-# ⚠️ **本节的脚本于 20261004 改过一处（`_PLAN_CHAT` 写了两遍）**，别改回去：判据已经
-# **前移到决策层**（`graph.planner_node` 的 `data_question_no_tool` 纠偏，同 `agent/authz.py`
-# 那两条窄判据），所以"planner 第一次落 chat 零工具"这一版现在会被 planner 自己拦下重决策
-# ——再喂一次 `_PLAN_OWN`，工具就在第 1 轮执行掉了，gate 根本看不到零帧轮（零帧那一节的
-# 前提消失，本节会退化成"没被测到"）。故意让它**第二次仍然点 chat**，这一节才仍然是
-# **闸门兜底**那一层的用例：前一道防线（planner 纠偏一次）判断失败时，闸门照样接得住。
-# 决策层那一步的成功路径锁在 `tests/test_planner_wiring.py`
-# （`test_chat_on_a_data_question_is_nudged_once_then_lands_on_a_tool`）。
-_out6, _llm6, _tool6, _ev6 = _run([_PLAN_CHAT, _PLAN_CHAT, _PLAN_OWN, _PLAN_CHAT],
-                                  [_LIE_OWN, _TRUTH_OWN],
-                                  user_msg="小猫咪！我有哪些未读通知呀",
-                                  tool_name="get_unread_summary",
-                                  fake=_FakeOwnReadTool())
-check("脚本足够跑完这一轮", _llm6.exhausted == [], str(_llm6.exhausted))
-check("★ 前一道防线确实开了火（planner 记了 `data_question_no_tool`）——"
-      "本节测的是它判断失败之后的闸门兜底，少了这一条，本节可能压根没走到被验的形状",
-      [e for _n, e, _d in _ev6 if e == "data_question_no_tool"] == ["data_question_no_tool"],
-      str([(e) for _n, e, _d in _ev6 if e.startswith("data_question")]))
-check("planner **真的重新决策了一次**（不是直接兜底道歉）",
-      len(_rounds(_llm6, 2)) == 1, f"各轮次数={[len(_rounds(_llm6, n)) for n in (1, 2, 3)]}")
-check("重规划那一轮真的把取数工具执行了（不是又空跑一轮）",
-      _tool6.calls == [{}], str(_tool6.calls))
-check("打回提示给的是**取数族**的出路（这几个工具不需要参数），不是检索族那套",
-      bool(_rounds(_llm6, 2)) and "不需要参数" in _rounds(_llm6, 2)[0]
-      and "选检索类技能" not in _rounds(_llm6, 2)[0],
-      (": ".join(_rounds(_llm6, 2)[0].splitlines()[-4:])[:160]
-       if _rounds(_llm6, 2) else "第 2 轮提示词不存在"))
-check("最终回复是重查之后那条有依据的叙述",
-      (_out6["messages"][-1].content or "").strip() == _TRUTH_OWN,
-      repr((_out6["messages"][-1].content or "")[:40]))
-check("被否定的那段**不在**最终 state 里（不留成下一轮的范文）",
-      _LIE_OWN not in _ai_text(_out6))
-check("没有走兜底（fallback_text 为空、done 为真）",
-      not _out6.get("fallback_text") and _out6.get("done") is True)
-check("trace 里 replan 的 issue 就是本族（判据可回溯）",
-      any(d.get("issue") == "own_read_question_without_tool"
-          for _n, e, d in _ev6 if e == "replan"),
-      str([(e, d.get("issue")) for _n, e, d in _ev6 if e in ("replan", "fallback")]))
-
-print("\n⑥b 守卫：这些轮**不许**开火（开火了就是把本来对的回答换成兜底）")
 _NEUTRAL = "嗯嗯，这个我知道喵～"
 
 
@@ -603,197 +224,456 @@ def _no_fire(user_msg: str, uid: int = 5):
     return [e for _n, e, _d in _e], _o
 
 
-_e, _o = _no_fire("我有哪些未读通知？", uid=0)
-check("uid=0（未登录）：「读不到你自己的数据」本身就是如实的答案 ⇒ 不开火",
-      "replan" not in _e and "fallback" not in _e, str(_e))
-check("  且那一轮照常 PASS 收尾（golden 的 `own_*_not_logged_in` 两条正是这一档）",
-      not _o.get("fallback_text") and (_o["messages"][-1].content or "") == _NEUTRAL)
-for _msg, _why in [("你可以单独把一个消息标记已读吗", "能力问句：如实答「不能」就是出路"),
-                   ("猫咪我的未读信息全部就标记为已读", "写命令：归洞⑨（写侧那族）"),
-                   ("读取站内通知读不到吗", "「通知」是通用词、句里没有自指"),
-                   ("小猫咪你会做蛋糕吗", "闲聊")]:
-    _e, _o = _no_fire(_msg)
-    check(f"不开火：{_msg}（{_why}）",
-          "replan" not in _e and "fallback" not in _e, str(_e))
-# 原先这张表里还有一条「站内最近有什么公告吗？」（golden `data_announcements` 同形）——20261004
-# 公开面那一族（⑥d/⑥e）上线后它**改成开火了**：uid>0 的主人问站内的公告而这一轮零工具，
-# 站里明明备着 `get_announcements` ⇒ 打回重规划才是对的（这里 `_no_fire` 用的 `_PLAN_CHAT`
-# 第二次仍落 chat，于是那轮会走到兜底——那是脚本写死的结果，不是判据错）。它现在锁在 ⑥e
-# 的**真阳性**一行；本族（私有面）对它的判定没变，仍是不开火。
-
-print("\n⑥c 源码锁：开火点在零帧块里，三张表都挂了号，兜底文案不许带读数")
-_GSRC_OWN = Path(g.__file__).read_text(encoding="utf-8")
-_OWN_CALL = "authz.is_own_read_question(_last_user_msg(msgs))"
-check("判据接在 gate 里（源码里认得出这个调用点）", _OWN_CALL in _GSRC_OWN)
-check("  且排在 `if not frames:` **之后**（有帧 = 这一轮真取过数了，不该被这条拦）",
-      _GSRC_OWN.index("if not frames:") < _GSRC_OWN.index(_OWN_CALL))
-check("家族在 `_REPLAN_ISSUES` / `_REPLAN_ADVICE` / `_REPLAN_WHY` 三张表里都挂了号",
-      "own_read_question_without_tool" in g._REPLAN_ISSUES
-      and "own_read_question_without_tool" in g._REPLAN_ADVICE
-      and "own_read_question_without_tool" in g._REPLAN_WHY)
-check("  否定说明**不跟缺省那句走**（缺省写的是「那条结论没有任何依据」，"
-      "而本族的前提是「句句属实但答错了题」）",
-      "没有去取" in g._replan_note("own_read_question_without_tool", "x")
-      and "没有任何依据" not in g._replan_note("own_read_question_without_tool", "x"))
-check("兜底文案如实说「没去取」，且**不含任何读数**（走到兜底时一个字节都没取到）",
-      "没有去取你自己的数据" in g._FALLBACK_OWN_READ
-      and not any(k in g._FALLBACK_OWN_READ for k in ("0 条", "0 封", "没有未读")))
-
-
-print("\n⑥d 零帧纯作答轮 + 主人在问**站内语料** → 打回重规划（20261004 补的公开面孪生族）")
-# 要治的形状：主人问站内有些什么，narrator 回「我这边**没有工具**可以帮你查具体的文章标题和
-# 链接」。上面各族的判据问的都是"这句话真不真"——那句"没有工具"**字字属实**（当轮确实一次
-# 检索都没跑），于是原先直接 gate PASS。这一节锁的是补上的那半：站里明明备着 `rag_search`/
-# `search_notes`/`list_notes`，"零检索就去下结论"本身就不该放行（判据与射程数据见
-# `agent/authz.py::is_site_corpus_question` 的头注）。
-#
-# ⚠️ 这一节原先把这个形状的出处写成「生产 trace `20261002T195955_9_r8d7`：planner 落 chat、
-# 零工具、零帧」——**那句话是错的**（20261004 复扫时更正，同一条更正也写在 authz.py 的头注里）：
-# 那条 trace 的 uid=9 是**杂鱼**，planner 在 `zako_shortcut` 就短路了（trace 里没有 `decision`
-# 事件），计划是 `wrapped`，对那个身份"手上没有工具"本来就是事实。所以**不要**再拿那条 trace
-# 当本族的现场；本族真正的现场是下面 ⑥d 这一台（uid=5，普通身份，narrator 声称没有工具而
-# 站里备着检索工具），以及 ⑥e 末尾那条杂鱼对照锁（同一个句子、换身份 ⇒ 必须放行）。
-_LIE_SITE = ("主人，我这边**没有工具**可以帮你查具体的文章标题和链接喵～"
-             "你要是想找哪篇，直接跟我说标题我看看记不记得。")
-_TRUTH_SITE = "主人，站内一共有 3 篇文章喵：《西顿学院小记》《Docker 部署笔记》《测试文章 TEST8》。"
-_PLAN_SITE = ('WORKFLOW: content_query\nPARAMS: {"calls": [{"tool": "search_notes", '
-              '"args": {"keyword": "文章"}}]}')
-# ⚠️ 同 ⑥：`_PLAN_CHAT` 写两遍是**刻意的**（判据前移之后，第一次落 chat 会被 planner
-# 自己的 `data_question_no_tool` 纠偏接走，gate 就看不到零帧轮了）——本节锁的仍是
-# **闸门兜底**那一层。
-_out6d, _llm6d, _tool6d, _ev6d = _run([_PLAN_CHAT, _PLAN_CHAT, _PLAN_SITE, _PLAN_CHAT],
-                                      [_LIE_SITE, _TRUTH_SITE],
-                                      user_msg="博客有哪些文章呢")
-check("脚本足够跑完这一轮", _llm6d.exhausted == [], str(_llm6d.exhausted))
-check("★ 前一道防线确实开了火（planner 记了 `data_question_no_tool`）",
-      [e for _n, e, _d in _ev6d if e == "data_question_no_tool"] == ["data_question_no_tool"],
-      str([e for _n, e, _d in _ev6d if e.startswith("data_question")]))
-check("planner **真的重新决策了一次**（不是直接兜底道歉）",
-      len(_rounds(_llm6d, 2)) == 1,
-      f"各轮次数={[len(_rounds(_llm6d, n)) for n in (1, 2, 3)]}")
-check("重规划那一轮真的把检索工具执行了（不是又空跑一轮）",
-      _tool6d.calls == [{"keyword": "文章"}], str(_tool6d.calls))
-check("打回提示给的是**检索族**的出路（去查），不是取数族那套（去取本人的数）",
-      bool(_rounds(_llm6d, 2)) and "检索类技能" in _rounds(_llm6d, 2)[0]
-      and "不需要参数" not in _rounds(_llm6d, 2)[0],
-      (": ".join(_rounds(_llm6d, 2)[0].splitlines()[-5:])[:180]
-       if _rounds(_llm6d, 2) else "第 2 轮提示词不存在"))
-check("最终回复是重查之后那条有依据的叙述",
-      (_out6d["messages"][-1].content or "").strip() == _TRUTH_SITE,
-      repr((_out6d["messages"][-1].content or "")[:40]))
-check("被否定的那段**不在**最终 state 里（不留成下一轮的范文）",
-      _LIE_SITE not in _ai_text(_out6d))
-check("没有走兜底（fallback_text 为空、done 为真）",
-      not _out6d.get("fallback_text") and _out6d.get("done") is True)
-check("trace 里 replan 的 issue 就是本族（判据可回溯；别与取数族记混）",
-      any(d.get("issue") == "site_corpus_question_without_tool"
-          for _n, e, d in _ev6d if e == "replan"),
-      str([(e, d.get("issue")) for _n, e, d in _ev6d if e in ("replan", "fallback")]))
-
-print("\n⑥e 守卫：这些轮**不许**开本族（尤其是跨轮取值那条现在绿的 golden）")
-# 与 ⑥b 同一台真图、同一触发形状（chat/answer_only + 零帧），只换消息或 uid。
-
-
 def _issues(user_msg: str, uid: int = 5, role: str | None = None) -> tuple[list, dict]:
     """跑一轮 chat/answer_only，返回 (replan 事件里出现的 issue 列表, 最终 state)。"""
     _o, _l, _t, _e = _run([_PLAN_CHAT], [_NEUTRAL], user_msg=user_msg, uid=uid, role=role)
     return [d.get("issue") for _n, e, d in _e if e == "replan"], _o
 
 
-_SITE_ISSUE = "site_corpus_question_without_tool"
-for _msg, _why in [("编程那个分类下面有几篇文章？",
-                    "★ 指代/取值型：按 rule 6b 照抄跨轮摘要，零工具才对"
+def test_gate_replan():
+    _LIE_1 = "抱歉喵，目前站内并没有关于或名为且关联西顿学院的详细文章记录。"
+    _LIE_2 = "站内暂时没有西顿学院相关的文章呢，要不要换个关键词试试？"
+    _TRUTH = "站内检索到 1 篇与西顿学院相关的文章：《西顿学院小记》。"
+    _PLAN_SEARCH = ('WORKFLOW: content_query\nPARAMS: {"calls": [{"tool": "search_notes", '
+                '"args": {"keyword": "西顿学院"}}]}')
+    print("\n① 打回 → 回 planner 重规划，重查之后如实作答")
+    _out, _llm, _tool, _ev = _run([_PLAN_CHAT, _PLAN_SEARCH, _PLAN_CHAT], [_LIE_1, _TRUTH])
+    check("脚本足够跑完这一轮（没有一轮是靠「脚本用尽」混过去的）",
+          _llm.exhausted == [], str(_llm.exhausted))
+    check("planner **真的重新决策了一次**（第 2 轮规划存在 = 不是兜底收尾）",
+          len(_rounds(_llm, 2)) == 1, f"各轮次数={[len(_rounds(_llm, n)) for n in (1, 2, 3)]}")
+    check("  且重规划那一轮**看得见**打回原因（确定性提示进了提示词，不是只躺在消息流里）",
+          bool(_rounds(_llm, 2)) and "已被系统否定" in _rounds(_llm, 2)[0],
+          "第 2 轮提示词里找不到打回说明")
+    check("  第 1 轮（正常决策）**没有**这条提示——只有被打回的那一轮才有",
+          bool(_rounds(_llm, 1)) and "已被系统否定" not in _rounds(_llm, 1)[0])
+    check("重规划那一轮真的执行了检索工具（不是又空跑一轮）",
+          len(_tool.calls) == 1 and _tool.calls[0].get("keyword") == "西顿学院",
+          str(_tool.calls))
+    check("最终回复是重查之后那条有依据的叙述",
+          (_out["messages"][-1].content or "").strip() == _TRUTH,
+          repr((_out["messages"][-1].content or "")[:40]))
+    check("被否定的那段叙述**不在**最终 state 里（不留成下一轮的范文）",
+          _LIE_1 not in _ai_text(_out) and _LIE_1 not in "\n".join(
+              str(getattr(m, "content", "")) for m in _out["messages"]))
+    check("没有走兜底（fallback_text 为空、done 为真）",
+          not _out.get("fallback_text") and _out.get("done") is True)
+    check("gate_replan 已在终局路径复位", _out.get("gate_replan") is False)
+    check("trace 里有 gate/replan 事件（判据可回溯）",
+          ("gate", "replan") in [(n, e) for n, e, _ in _ev],
+          str([(n, e) for n, e, _ in _ev]))
+    print("\n② 重规划只发生一次：第二次仍打回 → 确定性兜底，不无限循环")
+    _out2, _llm2, _tool2, _ev2 = _run([_PLAN_CHAT, _PLAN_CHAT], [_LIE_1, _LIE_2])
+    check("脚本足够跑完这一轮", _llm2.exhausted == [], str(_llm2.exhausted))
+    check("没有第 3 轮规划（重规划不是每轮都发生）",
+          len(_rounds(_llm2, 3)) == 0, f"各轮次数={[len(_rounds(_llm2, n)) for n in (1, 2, 3)]}")
+    check("第二次打回走兜底：final_reply 换成如实文本、done 收尾",
+          bool(_out2.get("fallback_text")) and _out2.get("done") is True,
+          repr(str(_out2.get("fallback_text") or "")[:40]))
+    check("  末尾那条 `[Fallback 决定]` 在场（服务端据此替换回复的唯一凭据）",
+          str(_out2["messages"][-1].content).startswith("[Fallback 决定]"),
+          repr(str(_out2["messages"][-1].content)[:30]))
+    check("  这次走的是兜底分支而不是又一次重规划（trace 里 fallback 事件在场）",
+          any(e == "fallback" for _n, e, _d in _ev2),
+          str([(n, e) for n, e, _ in _ev2]))
+    check("  gate_replan 复位（否则 route_after_gate 会把收尾轮又送回 planner）",
+          _out2.get("gate_replan") is False)
+    check("  两次打回只有一条 replan 事件（后一条是 fallback）",
+          sorted(e for _n, e, _d in _ev2 if e in ("replan", "fallback")) == ["fallback", "replan"],
+          str([(n, e) for n, e, _ in _ev2]))
+    print("\n③ 正常通过的一轮不受影响（零回归：没有 replan 事件、没有打回提示）")
+    _out3, _llm3, _tool3, _ev3 = _run([_PLAN_SEARCH, _PLAN_CHAT], [_TRUTH])
+    check("脚本足够跑完这一轮", _llm3.exhausted == [], str(_llm3.exhausted))
+    check("检索工具执行了一次", len(_tool3.calls) == 1)
+    check("没有 replan 事件（这条通道只在打回时开）",
+          "replan" not in [e for _n, e, _d in _ev3])
+    check("提示词里不带任何打回说明", all(
+        "已被系统否定" not in p for p in _llm3.planner_prompts))
+    check("最终回复就是那条叙述", (_out3["messages"][-1].content or "").strip() == _TRUTH)
+    print("\n④ 洞⑨ 那族也走重规划：拦住谎之后**把事办成**，而不是就此道歉收尾")
+    _LIE_WRITE = ("主人，这一轮系统真的办成了：你的未读站内信已全部标记为已读，"
+              "现在未读是 **0 封**，列表清干净了喵～")
+    _TRUTH_WRITE = "主人，4 条未读通知已经真的标记为已读了喵。"
+    _PLAN_NOTICE = 'WORKFLOW: notice_read\nPARAMS: {"all": true}'
+    _out4, _llm4, _tool4, _ev4 = _run([_PLAN_CHAT, _PLAN_NOTICE, _PLAN_CHAT],
+                                      [_LIE_WRITE, _TRUTH_WRITE],
+                                      user_msg="猫咪我的未读信息全部就标记为已读",
+                                      tool_name="read_notifications",
+                                      fake=_FakeNoticeTool())
+    check("脚本足够跑完这一轮", _llm4.exhausted == [], str(_llm4.exhausted))
+    check("planner **真的重新决策了一次**（第 2 轮规划存在 = 不是道歉收尾）",
+          len(_rounds(_llm4, 2)) == 1, f"各轮次数={[len(_rounds(_llm4, n)) for n in (1, 2, 3)]}")
+    check("重规划那一轮真的把写工具执行了（不是又空跑一轮）——事办成了",
+          _tool4.calls == [{"all": True}], str(_tool4.calls))
+    check("  打回提示给的是**写族**的出路（去动手），不是检索族那套（去查）",
+          bool(_rounds(_llm4, 2)) and "该动手就去动手" in _rounds(_llm4, 2)[0]
+          and "选检索类技能" not in _rounds(_llm4, 2)[0],
+          (": ".join(_rounds(_llm4, 2)[0].splitlines()[-4:])[:160]
+           if _rounds(_llm4, 2) else "第 2 轮提示词不存在"))
+    check("最终回复是重办之后那条有依据的叙述",
+          (_out4["messages"][-1].content or "").strip() == _TRUTH_WRITE,
+          repr((_out4["messages"][-1].content or "")[:40]))
+    check("被否定的那句**不在**最终 state 里（不留成下一轮的范文）",
+          _LIE_WRITE not in _ai_text(_out4))
+    check("没有走兜底（fallback_text 为空、done 为真）",
+          not _out4.get("fallback_text") and _out4.get("done") is True)
+    check("trace 里有 gate/replan 事件（判据可回溯）",
+          ("gate", "replan") in [(n, e) for n, e, _ in _ev4],
+          str([(n, e) for n, e, _ in _ev4]))
+    print("\n⑤ 同步锁：零帧轮声称表的每一族都得挂号（新加一张网忘了加 _REPLAN_ISSUES = 这里红）")
+    _ZF = {f.issue for f in g._zero_frame_families({}, "chat")}
+    check("零帧轮声称表非空（表被改名/搬走时这条先红，别让下面那条空转）", len(_ZF) >= 5,
+          str(sorted(_ZF)))
+    check("零帧轮声称表的每一族都在 _REPLAN_ISSUES 里",
+          _ZF <= set(g._REPLAN_ISSUES),
+          "漏挂：" + "、".join(sorted(_ZF - set(g._REPLAN_ISSUES))))
+    check("_REPLAN_ADVICE 的键都是 _REPLAN_ISSUES 的成员（挂在非成员上 = 读不到的死代码）",
+          set(g._REPLAN_ADVICE) <= set(g._REPLAN_ISSUES),
+          "、".join(sorted(set(g._REPLAN_ADVICE) - set(g._REPLAN_ISSUES))))
+    check("建议措辞真按族发：写族拿「去动手」、检索族拿「去查」（接错表 = planner 被指错路）",
+          "该动手就去动手" in g._replan_note("sys_write_claim_without_tool", "x")
+          and "选检索类技能" not in g._replan_note("sys_write_claim_without_tool", "x")
+          and "选检索类技能" in g._replan_note("site_absence_claim_without_tool", "x"))
+    check("  没写建议的族退回缺省那一份（新增 issue 不会拿到半截提示）",
+          "选检索类技能" in g._replan_note("这个 issue 不存在", "x"))
+    check("  洞⑩ 的否定说明**不跟着缺省那句走**（它说的是「这一轮真执行过」，"
+      "而缺省那句写的是「一个工具都没有执行」——当着 planner 的面说反话）",
+          "真的执行过" in g._replan_note("write_change_denial", "x")
+          and "一个工具都没有执行" not in g._replan_note("write_change_denial", "x"))
+    print("\n⑥ 洞⑩ 走重规划：真改了东西却说「这一轮什么都没改」 ⇒ 打回重说（用户上线后报告）")
+    _LIE_NOCHANGE = "通知这边其实本来就没有未读的，所以这一轮没有可标记的、什么都没改喵。"
+    _out6, _llm6, _tool6, _ev6 = _run([_PLAN_NOTICE, _PLAN_CHAT, _PLAN_CHAT],
+                                      [_LIE_NOCHANGE, _TRUTH_WRITE],
+                                      user_msg="猫咪我的未读信息全部就标记为已读",
+                                      tool_name="read_notifications",
+                                      fake=_FakeNoticeTool())
+    check("脚本足够跑完这一轮", _llm6.exhausted == [], str(_llm6.exhausted))
+    check("写**真的执行了**（这是本用例的前提：判定要的是「真有改动」)",
+          _tool6.calls == [{"all": True}], str(_tool6.calls))
+    check("planner **真的重新决策了一次**（第 3 轮规划存在 = 不是兜底道歉收尾）",
+          len(_rounds(_llm6, 3)) == 1, f"各轮次数={[len(_rounds(_llm6, n)) for n in (1, 2, 3)]}")
+    check("  打回提示给的是洞⑩ 那一族（「照回执如实说、不用再执行一次」），不是检索族",
+          bool(_rounds(_llm6, 3)) and "不需要再执行一次" in _rounds(_llm6, 3)[0]
+          and "选检索类技能" not in _rounds(_llm6, 3)[0])
+    check("最终回复是重说之后那条有依据的叙述",
+          (_out6["messages"][-1].content or "").strip() == _TRUTH_WRITE,
+          repr((_out6["messages"][-1].content or "")[:40]))
+    check("被否定的那句**不在**最终 state 里（不留成下一轮的范文）",
+          "没有可标记的" not in _ai_text(_out6))
+    check("没有走兜底（fallback_text 为空、done 为真）",
+          not _out6.get("fallback_text") and _out6.get("done") is True)
+    check("trace 里有 gate/replan 事件（判据可回溯）",
+          ("gate", "replan") in [(n, e) for n, e, _ in _ev6],
+          str([(n, e) for n, e, _ in _ev6]))
+    print("\n⑥b 负锁：零改动的那一轮说「本来就没有」**不打回**（门要认得工具自报的 noop 证书）")
+    _NOOP_TEXT = "主人，你的通知本来就没有未读的，所以这一轮没有可标的、什么都没改喵～"
+    _out6b, _llm6b, _tool6b, _ev6b = _run([_PLAN_NOTICE, _PLAN_CHAT], [_NOOP_TEXT],
+                                          user_msg="猫咪我的未读信息全部就标记为已读",
+                                          tool_name="read_notifications",
+                                          fake=_FakeNoopNoticeTool())
+    check("脚本足够跑完这一轮", _llm6b.exhausted == [], str(_llm6b.exhausted))
+    check("工具真跑了（零改动也是执行过）", len(_tool6b.calls) == 1, str(_tool6b.calls))
+    check("**没有**打回（零改动轮的如实说明不算改动否认）",
+          ("gate", "replan") not in [(n, e) for n, e, _ in _ev6b]
+          and ("gate", "fallback") not in [(n, e) for n, e, _ in _ev6b],
+          str([(n, e) for n, e, _ in _ev6b]))
+    check("  最终回复就是那句如实说明（没被兜底换掉）",
+          (_out6b["messages"][-1].content or "").strip() == _NOOP_TEXT)
+    print("\n⑦ 零改动重复不再重跑（用户原话：「第二轮连调三次工具」）")
+    _out7, _llm7, _tool7, _ev7 = _run([_PLAN_NOTICE, _PLAN_NOTICE, _PLAN_CHAT],
+                                      [_NOOP_TEXT],
+                                      user_msg="猫咪我的未读信息全部就标记为已读",
+                                      tool_name="read_notifications",
+                                      fake=_FakeNoopNoticeTool())
+    check("脚本足够跑完这一轮", _llm7.exhausted == [], str(_llm7.exhausted))
+    check("同一件零改动的写**只执行了一次**（第 2 轮规划被确定性地剔掉了）",
+          len(_tool7.calls) == 1, f"执行了 {len(_tool7.calls)} 次：{_tool7.calls}")
+    check("  拦截事件落了 trace（reason=noop_repeat，判据可回溯）",
+          ("planner", "intercept") in [(n, e) for n, e, _ in _ev7]
+          and any(e == "intercept" and d.get("reason") == "noop_repeat"
+                  for n, e, d in _ev7),
+          str([(n, e, d.get("reason")) for n, e, d in _ev7 if e in ("intercept",)]))
+    check("  收尾注记把「零改动」说清楚（narrator 才不会两头都敢说）",
+          "状态本来就是目标值" in (parse_plan(_out7.get("plan", ""))["note"] or ""),
+          repr((parse_plan(_out7.get("plan", ""))["note"] or "")[:60]))
+    check("最终回复是那句如实说明",
+          (_out7["messages"][-1].content or "").strip() == _NOOP_TEXT)
+    print("\n⑦b 负锁：**真改过**的同一件 spec 不受这条裁剪管辖（换的是事实，不是工具名）")
+    _out7b, _llm7b, _tool7b, _ev7b = _run([_PLAN_NOTICE, _PLAN_NOTICE, _PLAN_CHAT],
+                                          [_TRUTH_WRITE],
+                                          user_msg="猫咪我的未读信息全部就标记为已读",
+                                          tool_name="read_notifications",
+                                          fake=_FakeNoticeTool())
+    check("脚本足够跑完这一轮", _llm7b.exhausted == [], str(_llm7b.exhausted))
+    check("真改过的那件第二轮**照旧执行**（只有零改动的才被剔）",
+          len(_tool7b.calls) == 2, f"执行了 {len(_tool7b.calls)} 次")
+    print("\n⑧ 判据的两个零件各自可验（纯函数，不经过图）")
+    _SIG = ["add_favorite", '{"article_id": "23"}']
+    check("  写回执 + 不在 noop 里 ⇒ 真有改动",
+          g._has_real_change([{"tool": "add_favorite", "args": {"article_id": 23}}], []))
+    check("  同一条回执但工具自报零改动 ⇒ **不算**真有改动",
+          not g._has_real_change([{"tool": "add_favorite", "args": {"article_id": 23}}], [_SIG]))
+    check("  只有只读回执 ⇒ 不算真有改动（读不改变任何东西）",
+          not g._has_real_change([{"tool": "search_notes", "args": {"keyword": "x"}}], []))
+    check("  `noop_specs` 缺失（老 state / 未声明）⇒ 写回执全按「真改动」从严判",
+          g._has_real_change([{"tool": "add_favorite", "args": {"article_id": 23}}], None))
+    check("  谓词的**前提**真的挡在前面：没有真改动时，同一句否认不成立",
+          g._change_denial_claim("这一轮什么都没改喵", True)
+          and not g._change_denial_claim("这一轮什么都没改喵", False))
+    check("  多件轮里如实说**其中一件**没改不在此列（无本轮作用域标记）",
+          not g._change_denial_claim("额度那条没有改动，留言那条已经通过了", True))
+    check("  逐字段的如实报告不在此列（「颜色：这次没改」——作用域是那一格、不是整轮）",
+          not g._change_denial_claim("**颜色**：这次没改，名字和父级都已经换好了", True)
+          and not g._change_denial_claim("- **颜色**：这次没改", True)
+          and not g._change_denial_claim("这次跳转没有带动画", True))
+    check("  但带量词的整轮否认照样命中（裸「改」只是被量词锚定，不是被删掉）",
+          g._change_denial_claim("这次一个字节都没改喵", True)
+          and g._change_denial_claim("这一轮什么都没改", True))
+    check("  引号里转述不算 narrator 自己的声称（调用方剥引号后判）",
+          not g._change_denial_claim(g._strip_quoted_spans("留言里写着「这一轮什么都没改」"),
+                                     True))
+    check("  量词锚定的整轮否认「没有执行任何操作」照样命中（两族名词表中间那个词）",
+          g._change_denial_claim(
+              "主人，这一轮系统**没有执行任何操作**——我这边没看到这次批准的执行记录，"
+          "所以 niuniu 的额度申请还没批、什么都没改。", True)
+          and g._change_denial_claim("本轮没做任何动作", True)
+          and g._change_denial_claim("这次没有进行任何操作", True))
+    check("  「任何/一点/半点」是这一支的必要条件：**具体某类动作**的如实说明不在此列"
+      "（只跑了检索的一轮里「没有执行删除操作」是真话）",
+          not g._change_denial_claim("这一轮没有执行删除操作，只读了那一篇", True)
+          and not g._change_denial_claim("这次没有做冻结动作", True))
+    check("  条件/疑问框架照旧豁免（不是声称）",
+          not g._change_denial_claim("要是本轮没有执行任何操作，我就再说一遍", True)
+          and not g._change_denial_claim("这一轮没有执行任何操作吗", True))
+    _P70 = {"workflow": "notice_read", "tools": ["read_notifications({'all': True})"],
+            "params": {"all": True}, "note": ""}
+    check("  签名在 noop 里 ⇒ 剔除",
+          g._trim_noop_specs(_P70, [list(g._spec_signature(
+              "read_notifications", {"all": True}))]) is not None)
+    check("  签名不在 noop 里 ⇒ 一件都不剔（返回 None，计划原样走）",
+          g._trim_noop_specs(_P70, [list(g._spec_signature(
+              "read_notifications", {"all": False}))]) is None)
+    check("  剔空之后 PARAMS 同步剔（两行不一致 = narrator 只能猜到底做了没有）",
+          (g._trim_noop_specs(
+              {"workflow": "notice_read", "tools": ["read_notifications({'all': True})"],
+               "params": {"all": True, "tools": ["read_notifications",
+                                                 "list_notifications"]}, "note": ""},
+              [list(g._spec_signature("read_notifications", {"all": True}))])[0]["params"]
+           .get("tools")) == ["list_notifications"])
+    print("\n⑧c 洞⑮ 的判据零件（纯函数）：**办成了却说还在等**（20261008）")
+    _SENT2_15 = ("我能确定的是：他的申请还在待处理队列里（账号「niuniu」id=5，剩 451/500 轮），"
+             "刚才那次确认没落地。要不要我再走一遍？")
+    check("  正例：08:31 那第 2 句 ⇒ `round_not_landed`（**仅第 2 句**——第 1 句归洞⑩）",
+          (_gate15(_SENT2_15) or ("",))[0] == "round_not_landed")
+    check("  队列类（不要求锚定）/ 锚定类 / 量词类三种形态都命中",
+          (_gate15("那笔申请还在待确认，你点一下我就去办。") or ("",))[0] == "round_not_landed"
+          and (_gate15("刚才那次确认没落地，我再等等。") or ("",))[0] == "round_not_landed"
+          and (_gate15("你交代的那几件事一个都没落地。") or ("",))[0] == "round_not_landed")
+    check("  **锚定是必要条件**：同轮一件办成、另一件没过时，「那篇的置顶还没落地」是**真话**"
+      "（没有整轮作用域标记 ⇒ 放行；取向同 `not blocked_writes`）",
+          _gate15("那篇的置顶还没落地，等下我再试试。") is None
+          and _gate15("本轮那件批准还没落地。",
+                      facts=_facts15(blocked_writes=("audit_board_comment",))) is None)
+    check("  `ledger_pending` 那一档（台账里**真有一行在等**）「还在等你点头」是**真话** ⇒ 放行"
+      "（两道闸与 `RoundFacts.awaiting_owner` 同源）",
+          _gate15("那件申请还在待处理队列里，等你点头。",
+                  facts=_facts15(ledger_pending=True)) is None)
+    check("  优先级：两族同时在场时保留**先到者**洞⑩（不改今天在跑的 issue 名与分族）",
+          (_gate15("这一轮系统没有执行任何操作，什么都没改。" + _SENT2_15) or ("",))[0]
+          == "write_change_denial")
+    check("  兜底文案：认错 + 摆回执原文，且**不复述**被判掉的那句（它会进下一轮上下文）",
+          "剩 500/500" in g._fallback_round_not_landed(_facts15(), _REC_15)
+          and not any(k in g._fallback_round_not_landed(_facts15(), _REC_15)
+                      for k in ("待处理队列", "还没落地", "没有执行任何操作")))
+    check("  挂号：`round_not_landed` 在 `_REPLAN_ISSUES` 里，且建议/原因**指向**洞⑩ 那两份",
+          "round_not_landed" in g._REPLAN_ISSUES
+          and g._REPLAN_ADVICE["round_not_landed"] is g._REPLAN_ADVICE["write_change_denial"]
+          and g._REPLAN_WHY["round_not_landed"] is g._REPLAN_WHY["write_change_denial"])
+    print("\n⑥ 零帧纯作答轮 + 主人在问**自己那份数据** → 打回重规划（20261003 补的那半）")
+    _LIE_OWN = ("主人，这一轮我得跟你说实话喵——我手上没有“翻原始日志文件”的工具，"
+            "journalctl / rust.log / agent.log 的原文我这轮取不到，所以没法把这次 "
+            "respawn 的具体堆栈贴给你看。")
+    _TRUTH_OWN = "主人，你现在有 2 条未读通知喵～（私信 0 条）"
+    _PLAN_OWN = ('WORKFLOW: content_query\nPARAMS: {"calls": [{"tool": "get_unread_summary", '
+             '"args": {}}]}')
+    _out6, _llm6, _tool6, _ev6 = _run([_PLAN_CHAT, _PLAN_CHAT, _PLAN_OWN, _PLAN_CHAT],
+                                      [_LIE_OWN, _TRUTH_OWN],
+                                      user_msg="小猫咪！我有哪些未读通知呀",
+                                      tool_name="get_unread_summary",
+                                      fake=_FakeOwnReadTool())
+    check("脚本足够跑完这一轮", _llm6.exhausted == [], str(_llm6.exhausted))
+    check("★ 前一道防线确实开了火（planner 记了 `data_question_no_tool`）——"
+      "本节测的是它判断失败之后的闸门兜底，少了这一条，本节可能压根没走到被验的形状",
+          [e for _n, e, _d in _ev6 if e == "data_question_no_tool"] == ["data_question_no_tool"],
+          str([(e) for _n, e, _d in _ev6 if e.startswith("data_question")]))
+    check("planner **真的重新决策了一次**（不是直接兜底道歉）",
+          len(_rounds(_llm6, 2)) == 1, f"各轮次数={[len(_rounds(_llm6, n)) for n in (1, 2, 3)]}")
+    check("重规划那一轮真的把取数工具执行了（不是又空跑一轮）",
+          _tool6.calls == [{}], str(_tool6.calls))
+    check("打回提示给的是**取数族**的出路（这几个工具不需要参数），不是检索族那套",
+          bool(_rounds(_llm6, 2)) and "不需要参数" in _rounds(_llm6, 2)[0]
+          and "选检索类技能" not in _rounds(_llm6, 2)[0],
+          (": ".join(_rounds(_llm6, 2)[0].splitlines()[-4:])[:160]
+           if _rounds(_llm6, 2) else "第 2 轮提示词不存在"))
+    check("最终回复是重查之后那条有依据的叙述",
+          (_out6["messages"][-1].content or "").strip() == _TRUTH_OWN,
+          repr((_out6["messages"][-1].content or "")[:40]))
+    check("被否定的那段**不在**最终 state 里（不留成下一轮的范文）",
+          _LIE_OWN not in _ai_text(_out6))
+    check("没有走兜底（fallback_text 为空、done 为真）",
+          not _out6.get("fallback_text") and _out6.get("done") is True)
+    check("trace 里 replan 的 issue 就是本族（判据可回溯）",
+          any(d.get("issue") == "own_read_question_without_tool"
+              for _n, e, d in _ev6 if e == "replan"),
+          str([(e, d.get("issue")) for _n, e, d in _ev6 if e in ("replan", "fallback")]))
+    print("\n⑥b 守卫：这些轮**不许**开火（开火了就是把本来对的回答换成兜底）")
+    _e, _o = _no_fire("我有哪些未读通知？", uid=0)
+    check("uid=0（未登录）：「读不到你自己的数据」本身就是如实的答案 ⇒ 不开火",
+          "replan" not in _e and "fallback" not in _e, str(_e))
+    check("  且那一轮照常 PASS 收尾（golden 的 `own_*_not_logged_in` 两条正是这一档）",
+          not _o.get("fallback_text") and (_o["messages"][-1].content or "") == _NEUTRAL)
+    for _msg, _why in [("你可以单独把一个消息标记已读吗", "能力问句：如实答「不能」就是出路"),
+                       ("猫咪我的未读信息全部就标记为已读", "写命令：归洞⑨（写侧那族）"),
+                       ("读取站内通知读不到吗", "「通知」是通用词、句里没有自指"),
+                       ("小猫咪你会做蛋糕吗", "闲聊")]:
+        _e, _o = _no_fire(_msg)
+        check(f"不开火：{_msg}（{_why}）",
+              "replan" not in _e and "fallback" not in _e, str(_e))
+    print("\n⑥c 源码锁：开火点在零帧块里，三张表都挂了号，兜底文案不许带读数")
+    _GSRC_OWN = Path(g.__file__).read_text(encoding="utf-8")
+    _OWN_CALL = "authz.is_own_read_question(_last_user_msg(msgs))"
+    check("判据接在 gate 里（源码里认得出这个调用点）", _OWN_CALL in _GSRC_OWN)
+    check("  且排在 `if not frames:` **之后**（有帧 = 这一轮真取过数了，不该被这条拦）",
+          _GSRC_OWN.index("if not frames:") < _GSRC_OWN.index(_OWN_CALL))
+    check("家族在 `_REPLAN_ISSUES` / `_REPLAN_ADVICE` / `_REPLAN_WHY` 三张表里都挂了号",
+          "own_read_question_without_tool" in g._REPLAN_ISSUES
+          and "own_read_question_without_tool" in g._REPLAN_ADVICE
+          and "own_read_question_without_tool" in g._REPLAN_WHY)
+    check("  否定说明**不跟缺省那句走**（缺省写的是「那条结论没有任何依据」，"
+      "而本族的前提是「句句属实但答错了题」）",
+          "没有去取" in g._replan_note("own_read_question_without_tool", "x")
+          and "没有任何依据" not in g._replan_note("own_read_question_without_tool", "x"))
+    check("兜底文案如实说「没去取」，且**不含任何读数**（走到兜底时一个字节都没取到）",
+          "没有去取你自己的数据" in g._FALLBACK_OWN_READ
+          and not any(k in g._FALLBACK_OWN_READ for k in ("0 条", "0 封", "没有未读")))
+    print("\n⑥d 零帧纯作答轮 + 主人在问**站内语料** → 打回重规划（20261004 补的公开面孪生族）")
+    _LIE_SITE = ("主人，我这边**没有工具**可以帮你查具体的文章标题和链接喵～"
+             "你要是想找哪篇，直接跟我说标题我看看记不记得。")
+    _TRUTH_SITE = ("主人，站内一共有 3 篇文章喵：《西顿学院小记》"
+                  "《Docker 部署笔记》《测试文章 TEST8》。")
+    _PLAN_SITE = ('WORKFLOW: content_query\nPARAMS: {"calls": [{"tool": "search_notes", '
+              '"args": {"keyword": "文章"}}]}')
+    _out6d, _llm6d, _tool6d, _ev6d = _run([_PLAN_CHAT, _PLAN_CHAT, _PLAN_SITE, _PLAN_CHAT],
+                                          [_LIE_SITE, _TRUTH_SITE],
+                                          user_msg="博客有哪些文章呢")
+    check("脚本足够跑完这一轮", _llm6d.exhausted == [], str(_llm6d.exhausted))
+    check("★ 前一道防线确实开了火（planner 记了 `data_question_no_tool`）",
+          [e for _n, e, _d in _ev6d if e == "data_question_no_tool"] == ["data_question_no_tool"],
+          str([e for _n, e, _d in _ev6d if e.startswith("data_question")]))
+    check("planner **真的重新决策了一次**（不是直接兜底道歉）",
+          len(_rounds(_llm6d, 2)) == 1,
+          f"各轮次数={[len(_rounds(_llm6d, n)) for n in (1, 2, 3)]}")
+    check("重规划那一轮真的把检索工具执行了（不是又空跑一轮）",
+          _tool6d.calls == [{"keyword": "文章"}], str(_tool6d.calls))
+    check("打回提示给的是**检索族**的出路（去查），不是取数族那套（去取本人的数）",
+          bool(_rounds(_llm6d, 2)) and "检索类技能" in _rounds(_llm6d, 2)[0]
+          and "不需要参数" not in _rounds(_llm6d, 2)[0],
+          (": ".join(_rounds(_llm6d, 2)[0].splitlines()[-5:])[:180]
+           if _rounds(_llm6d, 2) else "第 2 轮提示词不存在"))
+    check("最终回复是重查之后那条有依据的叙述",
+          (_out6d["messages"][-1].content or "").strip() == _TRUTH_SITE,
+          repr((_out6d["messages"][-1].content or "")[:40]))
+    check("被否定的那段**不在**最终 state 里（不留成下一轮的范文）",
+          _LIE_SITE not in _ai_text(_out6d))
+    check("没有走兜底（fallback_text 为空、done 为真）",
+          not _out6d.get("fallback_text") and _out6d.get("done") is True)
+    check("trace 里 replan 的 issue 就是本族（判据可回溯；别与取数族记混）",
+          any(d.get("issue") == "site_corpus_question_without_tool"
+              for _n, e, d in _ev6d if e == "replan"),
+          str([(e, d.get("issue")) for _n, e, d in _ev6d if e in ("replan", "fallback")]))
+    print("\n⑥e 守卫：这些轮**不许**开本族（尤其是跨轮取值那条现在绿的 golden）")
+    _SITE_ISSUE = "site_corpus_question_without_tool"
+    for _msg, _why in [("编程那个分类下面有几篇文章？",
+                        "★ 指代/取值型：按 rule 6b 照抄跨轮摘要，零工具才对"
                     "（golden `followup_entity_slot_category` 原句，现在判绿）"),
-                   ("那个分类下面有几篇文章？",
-                    "同上（golden `followup_entity_slot_ambiguous`）"),
-                   ("你能编辑文章吗", "能力问句：如实答「不能」就是出路"),
-                   ("你用哪些工具读文章", "元问句：问的是「你有什么」，不是「给我一份数据」"),
-                   ("好猫猫，亲一个", "闲聊"),
-                   ("小猫咪你会做蛋糕吗", "闲聊（与站内语料无关）")]:
-    _is, _o = _issues(_msg)
-    check(f"不开本族：{_msg}（{_why}）", _SITE_ISSUE not in _is, str(_is))
-# uid=0（身份没传进来）：站里有没有文章这个问题本身答不了不是重点——这一档下
-# 「读不到」是系统侧的如实告知，打回去只会换个说法（与 ⑥b 同源）。
-_is0, _o0 = _issues("博客有哪些文章呢", uid=0)
-check("uid=0（身份缺失）：本族不开火（同 ⑥b 的身份守卫）",
-      _SITE_ISSUE not in _is0, str(_is0))
-check("  且那一轮照常 PASS 收尾（没有变成兜底）",
-      not _o0.get("fallback_text") and (_o0["messages"][-1].content or "") == _NEUTRAL)
-# 「我有哪些未读通知呀」会被**取数族**接走——本族必须让路（同一句两边都开火，第一次打回
-# 会指向两个方向，`_replan_note` 只能选一条）。这一条锁的是"两面互斥"在 gate 里也成立。
-_is_own, _o_own = _issues("我有哪些未读通知呀")
-check("自指数据归取数族：同一句只有 `own_read_question_without_tool` 开火，本族让路",
-      _is_own == ["own_read_question_without_tool"], str(_is_own))
-# 真阳性一侧：**清单型**站内问句也算（不是只有"某篇文章里写了什么"才算）——站里的公告
-# 备着 `get_announcements`，uid>0 的主人问了而这一轮零工具，同样该打回。golden
-# `data_announcements`（uid=0）与这条不同形：那一档被判据的身份守卫排除（见 ⑥e 上一行）。
-_is_ann, _o_ann = _issues("站内最近有什么公告吗？")
-check("真阳性：站内公开数据（公告）而这一轮零工具 ⇒ 开本族",
-      _is_ann == [_SITE_ISSUE], str(_is_ann))
-check("  且打回建议里点名了**清单型**的出路（公告/分类/标签这类走对应数据工具），"
+                       ("那个分类下面有几篇文章？",
+                        "同上（golden `followup_entity_slot_ambiguous`）"),
+                       ("你能编辑文章吗", "能力问句：如实答「不能」就是出路"),
+                       ("你用哪些工具读文章", "元问句：问的是「你有什么」，不是「给我一份数据」"),
+                       ("好猫猫，亲一个", "闲聊"),
+                       ("小猫咪你会做蛋糕吗", "闲聊（与站内语料无关）")]:
+        _is, _o = _issues(_msg)
+        check(f"不开本族：{_msg}（{_why}）", _SITE_ISSUE not in _is, str(_is))
+    _is0, _o0 = _issues("博客有哪些文章呢", uid=0)
+    check("uid=0（身份缺失）：本族不开火（同 ⑥b 的身份守卫）",
+          _SITE_ISSUE not in _is0, str(_is0))
+    check("  且那一轮照常 PASS 收尾（没有变成兜底）",
+          not _o0.get("fallback_text") and (_o0["messages"][-1].content or "") == _NEUTRAL)
+    _is_own, _o_own = _issues("我有哪些未读通知呀")
+    check("自指数据归取数族：同一句只有 `own_read_question_without_tool` 开火，本族让路",
+          _is_own == ["own_read_question_without_tool"], str(_is_own))
+    _is_ann, _o_ann = _issues("站内最近有什么公告吗？")
+    check("真阳性：站内公开数据（公告）而这一轮零工具 ⇒ 开本族",
+          _is_ann == [_SITE_ISSUE], str(_is_ann))
+    check("  且打回建议里点名了**清单型**的出路（公告/分类/标签这类走对应数据工具），"
       "不是只指检索一条路",
-      any("公告" in a for a in g._REPLAN_ADVICE[_SITE_ISSUE]),
-      str(g._REPLAN_ADVICE[_SITE_ISSUE])[:120])
-# ★ 杂鱼对照锁（20261004，全量 trace 复扫时补）：**同一句话、换身份，结论必须相反**。
-# 生产 trace `20261002T195955_9_r8d7` 的主人（uid=9）问的正是「博客有哪些文章呢」，而它
-# 是**杂鱼**——`CHAT_ONLY_ROLES` 在 `planner_node` 顶部短路（连 LLM 都不调），计划直接是
-# `wrapped`。对那个身份说"我这边没有工具"**本来就是事实**（它结构上零工具），所以那条
-# 回复不是缺陷、gate 放行也是对的。这条锁有两个作用：
-#   ① 挡住"把守卫从 `status == answer_only` 放宽成只判 `plan['chat']`"这类改动——
-#      那样会告诉一个**永远做不到**的主人"站里备着 rag_search"，打回重规划到一个它
-#      走不通的出路，最后落在那句兜底上；
-#   ② 挡住"按 uid 造身份"的测法——生产里 uid 与角色是两根轴（角色来自 Rust 的签名断言），
-#      只按 uid 造身份会把杂鱼当普通访客，测出来的结论正好是反的。
-_zo, _zl, _zt, _ze = _run([_PLAN_CHAT], [_NEUTRAL], user_msg="博客有哪些文章呢",
-                          uid=9, role="zako")
-_zako_issues = [d.get("issue") for _n, e, d in _ze if e == "replan"]
-check("★ 杂鱼身份：同一句「博客有哪些文章呢」**不开**本族（计划是 wrapped，不是纯作答轮）",
-      _zako_issues == [], str(_zako_issues))
-check("  且那一轮的 planner 是**短路**的（事件里只有 zako_shortcut、没有 decision）"
+          any("公告" in a for a in g._REPLAN_ADVICE[_SITE_ISSUE]),
+          str(g._REPLAN_ADVICE[_SITE_ISSUE])[:120])
+    _zo, _zl, _zt, _ze = _run([_PLAN_CHAT], [_NEUTRAL], user_msg="博客有哪些文章呢",
+                              uid=9, role="zako")
+    _zako_issues = [d.get("issue") for _n, e, d in _ze if e == "replan"]
+    check("★ 杂鱼身份：同一句「博客有哪些文章呢」**不开**本族（计划是 wrapped，不是纯作答轮）",
+          _zako_issues == [], str(_zako_issues))
+    check("  且那一轮的 planner 是**短路**的（事件里只有 zako_shortcut、没有 decision）"
       "——守卫靠的正是这一点，不是「碰巧没命中」",
-      any(e == "zako_shortcut" for _n, e, _d in _ze)
-      and not any(e == "decision" for _n, e, _d in _ze),
-      str([e for _n, e, _d in _ze]))
-check("  且照常 PASS 收尾（没变成兜底、也没凭空多出一轮）",
-      not _zo.get("fallback_text") and not _zako_issues)
-_zu, _zul, _zut, _zue = _run([_PLAN_CHAT], [_NEUTRAL], user_msg="博客有哪些文章呢",
-                             uid=9, role="user")
-check("  对照：**同一个 uid、只把角色换成普通访客** ⇒ 当场开本族"
+          any(e == "zako_shortcut" for _n, e, _d in _ze)
+          and not any(e == "decision" for _n, e, _d in _ze),
+          str([e for _n, e, _d in _ze]))
+    check("  且照常 PASS 收尾（没变成兜底、也没凭空多出一轮）",
+          not _zo.get("fallback_text") and not _zako_issues)
+    _zu, _zul, _zut, _zue = _run([_PLAN_CHAT], [_NEUTRAL], user_msg="博客有哪些文章呢",
+                                 uid=9, role="user")
+    check("  对照：**同一个 uid、只把角色换成普通访客** ⇒ 当场开本族"
       "（这一对才是这条锁的承重点：结论由角色决定，不由 uid 决定）",
-      [d.get("issue") for _n, e, d in _zue if e == "replan"] == [_SITE_ISSUE],
-      str([d.get("issue") for _n, e, d in _zue if e == "replan"]))
-
-print("\n⑥f 源码锁：开火点在零帧块里、三张表都挂了号、兜底与否定说明都是本族自己的")
-_GSRC_SITE = Path(g.__file__).read_text(encoding="utf-8")
-_SITE_CALL = "authz.is_site_corpus_question(_last_user_msg(msgs))"
-check("判据接在 gate 里（源码里认得出这个调用点）", _SITE_CALL in _GSRC_SITE)
-check("  且排在 `if not frames:` **之后**（有帧 = 这一轮真查过了，不该被这条拦）",
-      _GSRC_SITE.index("if not frames:") < _GSRC_SITE.index(_SITE_CALL))
-check("  且排在取数族那条**之后**（同一句两族都能认时，先到先得的是取数族）",
-      _GSRC_SITE.index("authz.is_own_read_question(_last_user_msg(msgs))")
-      < _GSRC_SITE.index(_SITE_CALL))
-check("家族在 `_REPLAN_ISSUES` / `_REPLAN_ADVICE` / `_REPLAN_WHY` 三张表里都挂了号",
-      _SITE_ISSUE in g._REPLAN_ISSUES
-      and _SITE_ISSUE in g._REPLAN_ADVICE
-      and _SITE_ISSUE in g._REPLAN_WHY)
-check("  否定说明**不跟缺省那句走**（缺省说「一个工具都没有执行」，本族的前提是"
+          [d.get("issue") for _n, e, d in _zue if e == "replan"] == [_SITE_ISSUE],
+          str([d.get("issue") for _n, e, d in _zue if e == "replan"]))
+    print("\n⑥f 源码锁：开火点在零帧块里、三张表都挂了号、兜底与否定说明都是本族自己的")
+    _GSRC_SITE = Path(g.__file__).read_text(encoding="utf-8")
+    _SITE_CALL = "authz.is_site_corpus_question(_last_user_msg(msgs))"
+    check("判据接在 gate 里（源码里认得出这个调用点）", _SITE_CALL in _GSRC_SITE)
+    check("  且排在 `if not frames:` **之后**（有帧 = 这一轮真查过了，不该被这条拦）",
+          _GSRC_SITE.index("if not frames:") < _GSRC_SITE.index(_SITE_CALL))
+    check("  且排在取数族那条**之后**（同一句两族都能认时，先到先得的是取数族）",
+          _GSRC_SITE.index("authz.is_own_read_question(_last_user_msg(msgs))")
+          < _GSRC_SITE.index(_SITE_CALL))
+    check("家族在 `_REPLAN_ISSUES` / `_REPLAN_ADVICE` / `_REPLAN_WHY` 三张表里都挂了号",
+          _SITE_ISSUE in g._REPLAN_ISSUES
+          and _SITE_ISSUE in g._REPLAN_ADVICE
+          and _SITE_ISSUE in g._REPLAN_WHY)
+    check("  否定说明**不跟缺省那句走**（缺省说「一个工具都没有执行」，本族的前提是"
       "「查都没查过 / 拿世界知识顶上」）",
-      "一次检索都没有跑" in g._replan_note(_SITE_ISSUE, "x")
-      and "没有任何依据" not in g._replan_note(_SITE_ISSUE, "x"))
-check("  打回建议给**两条出口**（真问站内内容 → 检索；其实延续上一轮摘要 → 照抄），"
+          "一次检索都没有跑" in g._replan_note(_SITE_ISSUE, "x")
+          and "没有任何依据" not in g._replan_note(_SITE_ISSUE, "x"))
+    check("  打回建议给**两条出口**（真问站内内容 → 检索；其实延续上一轮摘要 → 照抄），"
       "而不是只指一条路白烧一轮",
-      any("检索" in a for a in g._REPLAN_ADVICE[_SITE_ISSUE])
-      and any("照抄" in a for a in g._REPLAN_ADVICE[_SITE_ISSUE]))
-check("兜底文案如实说「没去站内查过」，且**不含任何可抄的结论句**"
+          any("检索" in a for a in g._REPLAN_ADVICE[_SITE_ISSUE])
+          and any("照抄" in a for a in g._REPLAN_ADVICE[_SITE_ISSUE]))
+    check("兜底文案如实说「没去站内查过」，且**不含任何可抄的结论句**"
       "（走到兜底时一个字节都没查到）",
-      "没有去站内查过" in g._FALLBACK_SITE_CORPUS
-      and not any(k in g._FALLBACK_SITE_CORPUS
-                  for k in ("站内没有", "没有相关", "我这边没有工具")))
+          "没有去站内查过" in g._FALLBACK_SITE_CORPUS
+          and not any(k in g._FALLBACK_SITE_CORPUS
+                      for k in ("站内没有", "没有相关", "我这边没有工具")))
+    print()
+    if FAILED:
+        print(f"❌ {len(FAILED)} 条未通过：")
+        for _n in FAILED:
+            print(f"   - {_n}")
+        sys.exit(1)
+    print("✅ 全部通过")
 
-print()
-if FAILED:
-    print(f"❌ {len(FAILED)} 条未通过：")
-    for _n in FAILED:
-        print(f"   - {_n}")
-    sys.exit(1)
-print("✅ 全部通过")
+    assert not FAILED, (
+        f"{len(FAILED)} 条未通过：" + "；".join(FAILED))
+
+
+if __name__ == "__main__":
+    test_gate_replan()

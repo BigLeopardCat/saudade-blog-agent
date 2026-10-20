@@ -170,7 +170,7 @@ def synonyms() -> tuple[dict, ...]:
 
 # 扩展开关（**只给 A/B 与判据用，生产恒开**）。做成模块级而不是 `.env` 拨盘，是因为它
 # 唯一的消费方是"同一进程里跑两臂"的评测：离线套件按出厂档跑、结构上只会跑一档
-# （见 tests/run_all.py 头注），做成 .env 拨盘等于让判据永远看不见另一臂。
+# （见 tests/conftest.py 里 `_PINNED` 上方那段说明），做成 .env 拨盘等于让判据永远看不见另一臂。
 _EXPANSION_ENABLED = True
 
 

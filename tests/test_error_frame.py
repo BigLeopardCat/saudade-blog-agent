@@ -53,13 +53,13 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent  # 仓根（20260924：测试统一搬进 tests/）
 sys.path.insert(0, str(ROOT))
-sys.path.insert(0, str(ROOT / "tests"))          # 同目录的 `_` 辅助模块（run_all 不收它们）
+sys.path.insert(0, str(ROOT / "tests"))          # 同目录的 `_` 辅助模块（pytest 不收它们）
 
-import _parent_repo                              # noqa: E402
+import _parent_repo  # noqa: E402
 
-import server                                    # noqa: E402
-from utils import trace as trace_mod             # noqa: E402
-from utils.logging import set_trace_id           # noqa: E402
+import server  # noqa: E402
+from utils import trace as trace_mod  # noqa: E402
+from utils.logging import set_trace_id  # noqa: E402
 
 FAILS: list[str] = []
 

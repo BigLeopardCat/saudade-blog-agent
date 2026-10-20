@@ -20,14 +20,25 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent  # 仓根（20260924：测试统一搬进 tests/）
 sys.path.insert(0, str(ROOT))
 
-from agent import authz  # noqa: E402
+from agent import (
+    authz,  # noqa: E402
+    deterministic_plan,  # noqa: E402  ⑨h 用：导航快道的剥壳口径
+)
 from agent import prompt_context as pctx  # noqa: E402  ⑨h 用：短应答判据的剥壳口径
-from agent import deterministic_plan  # noqa: E402  ⑨h 用：导航快道的剥壳口径
 from agent.graph import execute_node  # noqa: E402
+from agent.principal import (  # noqa: E402
+    ADMIN_ROLES,
+    KNOWN_ROLES,
+    ROLE_ADMIN,
+    ROLE_SUPERADMIN,
+    ROLE_USER,
+    ROLE_ZAKO,
+    SOURCE_ASSERTION,
+    SOURCE_BODY,
+    UNKNOWN,
+    Principal,
+)
 from agent.prompts import audience_block  # noqa: E402
-from agent.principal import (ADMIN_ROLES, KNOWN_ROLES, ROLE_ADMIN,  # noqa: E402
-                             ROLE_USER, ROLE_ZAKO, SOURCE_ASSERTION,
-                             SOURCE_BODY, ROLE_SUPERADMIN, UNKNOWN, Principal)
 from tools.base import _TOOL_REGISTRY  # noqa: E402
 
 FAILS: list[str] = []
@@ -898,10 +909,10 @@ def test_authz():
     # 判据改动依据（20260921）：516 条真实 trace（含归档 .gz）按各自真实 gating 条件
     # 复扫，改前改后命中差异 **0**（历史里没有后台写轮，故这一族没有历史实证可依，
     # 靠的是"每句都成对写出来"）。
-    from agent.graph import (_COMPLETION_CLAIM_RE as C5,  # noqa: E402
-                             _EXECUTION_CLAIM_RE as E5,
-                             _STATE_ACTION_CLAIM_RE as _SAR,
-                             _state_action_claim as _state_claim)
+    from agent.graph import _COMPLETION_CLAIM_RE as C5  # noqa: E402
+    from agent.graph import _EXECUTION_CLAIM_RE as E5
+    from agent.graph import _STATE_ACTION_CLAIM_RE as _SAR
+    from agent.graph import _state_action_claim as _state_claim
 
     _WRITE_CONTENT_CLAIM_PATTERN = W.pattern
     _STATE_ACTION_PATTERN = _SAR.pattern

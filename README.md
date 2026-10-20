@@ -236,18 +236,19 @@ saudade-blog-agent/
 ```bash
 uv sync
 
-# L0 离线、秒级、无 LLM、无网络——整个秒级套件
-.venv/bin/python tests/run_all.py
+# L0 离线、秒级、无 LLM、无网络——整个套件（pytest 按目录收集 tests/）
+.venv/bin/python -m pytest -q
 
-# L0 局部（-k 按文件名筛选；改技能注册表/计划契约后至少跑 workflows + authz + confirm）
-.venv/bin/python tests/run_all.py -k workflows
-# 套件清单**只有 run_all.py 一处**（按磁盘枚举）：加套件不用改 CI、不用改夜间脚本、不用改本文。
+# L0 局部（-k 按用例名筛选；改技能注册表/计划契约后至少跑 workflows + authz + confirm）
+.venv/bin/python -m pytest -q -k workflows
+# 套件清单**只有"pytest 按目录收集"一处**（`pyproject.toml` 的 `testpaths`）：
+# 加套件不用改 CI、不用改夜间脚本、不用改本文——落一个 `tests/test_xxx.py` 上去，下一轮就在跑。
 
 # L0 顺带出一份覆盖率报告：**非门禁、不进 CI**，不设阈值、红了也拦不住任何东西。
 # 为什么不做门禁：只有形状判据配当门禁，百分比会把"该测的没测"与"测了但那一支没走到"
 # 混成一个数，拿它当闸门只会把人推去测 getter。它回答的是"这轮动得多不多、哪些文件
 # 一直没人碰"——是个**给人看的**东西。
-.venv/bin/python tests/run_all.py --coverage
+bash scripts/dev/coverage.sh
 
 # L1 检索基准（recall@k / MRR，直接测线上 rag/search.py，秒级、无网）
 .venv/bin/python eval/recall_eval.py

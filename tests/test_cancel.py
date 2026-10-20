@@ -16,10 +16,9 @@
 """
 import sys
 import threading
+from pathlib import Path
 
 from langchain_core.messages import HumanMessage
-
-from pathlib import Path
 
 # ── 仓根（20260924：测试统一搬进 tests/）───────────────────────────────────────
 # 此前本文件就躺在仓根，`sys.path[0]` 天然是仓根；搬进 tests/ 之后要靠这两行才 import
@@ -27,12 +26,19 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent  # 仓根（20260924：测试统一搬进 tests/）
 sys.path.insert(0, str(ROOT))
 
-import agent.graph as g
-from agent.graph import AgentCancelled, execute_node, gate_node, model_node, planner_node, reflector_node
-from agent.principal import SOURCE_ASSERTION, Principal  # noqa: E402
-from agent.workflow_plan import instantiate_plan
 from _planner_stub import bind_tools_stub, toolcall_reply
 
+import agent.graph as g
+from agent.graph import (
+    AgentCancelled,
+    execute_node,
+    gate_node,
+    model_node,
+    planner_node,
+    reflector_node,
+)
+from agent.principal import SOURCE_ASSERTION, Principal  # noqa: E402
+from agent.workflow_plan import instantiate_plan
 
 FAILS: list[str] = []
 

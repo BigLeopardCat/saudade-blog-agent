@@ -3,7 +3,7 @@
 """D4 POC：生产模型对 `response_format=json_schema` 与 function calling 的支持度/稳定性/延迟。
 
 **只读实验**：只发 LLM 请求，不碰数据库、不写 trace、不改任何生产状态。需要网络与 API key，
-**因此不入 L0 套件、不进夜间**（`tests/run_all.py` 按磁盘枚举 tests/*.py，本文件在 eval/）。
+**因此不入 L0 套件、不进夜间**（pytest 按目录收集 `tests/`，本文件在 eval/）。
 
 ## 它要回答什么（roadmap D4 的"前置未知量"）
 

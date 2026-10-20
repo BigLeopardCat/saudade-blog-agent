@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """产物保留执行者（`eval/artifact_retention.py`）单测。
 
 离线、秒级、零网络、零生产目录改动（全部在 tmpdir 里）。
@@ -15,6 +14,8 @@
      从来不是删除的理由；
   ④ **干跑绝不动盘、真删不许越界**（`_under` 那道闸要有反向实证）。
 """
+
+
 import json
 import os
 import shutil
@@ -24,13 +25,20 @@ import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
+
+
 sys.path.insert(0, str(ROOT))
+
+
 sys.path.insert(0, str(ROOT / "eval"))
+
 
 import artifact_retention as ar  # noqa: E402
 import retention_manifest as rm  # noqa: E402
 
 FAILS: list[str] = []
+
+
 DAY = 86400.0
 
 
@@ -258,5 +266,12 @@ def main() -> int:
     return 0
 
 
+def test_artifact_retention():
+    main()
+
+    assert not FAILS, (
+        f"{len(FAILS)} 条未通过：" + "；".join(FAILS))
+
+
 if __name__ == "__main__":
-    sys.exit(main())
+    test_artifact_retention()

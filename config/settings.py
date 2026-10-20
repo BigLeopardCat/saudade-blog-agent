@@ -39,7 +39,8 @@ class Settings(BaseSettings):
 
     model_config = SettingsConfigDict(
         # `SAUDADE_IGNORE_ENV_FILE=1` ⇒ **整份 .env 不读**（环境变量照读）。离线套件用
-        # （`tests/run_all.py` 给每个子进程设上）：本机 `.env` 是**产线那份**，离线判据若
+        # （`tests/conftest.py` 在收集前设进环境，子进程自然继承）：本机 `.env` 是
+        # **产线那份**，离线判据若
         # 跟着它走，同一份代码在本机与 CI 上的结论会不同——而那正是 20260928 实测到的形状：
         # `tests/test_confirm.py` 的弹窗矩阵只有在 `JWT_SECRET` 非空时签得出令牌
         # ⇒ **本机恒绿、CI 恒红**，红得与代码一个字都没关系。判据钉代码形状，不钉这台机器
@@ -149,7 +150,7 @@ class Settings(BaseSettings):
     # 生效，而他们拿到的正是最不安全的那一档。所以默认值翻过来：**默认安全，要回退
     # 得显式写 0**，且回退时身份仍未验成 ⇒ `authz.must_enforce` 把该身份的拒绝全部
     # 硬拦（纵深防御，见 agent/authz.py）。评测/离线套件若需要旧路径，在自己的
-    # 进程里显式拨这一格（`tests/run_all.py` 的 `_PINNED` 已按出厂档钉 1）。
+    # 进程里显式拨这一格（`tests/conftest.py` 的 `_PINNED` 已按出厂档钉 1）。
     agent_require_assertion: bool = True
 
     # ── 权限模型（20260920，身份与权限地基）──────────────────────────
@@ -249,7 +250,7 @@ class Settings(BaseSettings):
     # planner LLM。两臂交替跑，读的是**命中计数与轮数**（不读通过率）——两臂
     # 都绿不说明什么，命中数才是价钱。
     #
-    # ⚠️ 必须同时进 `tests/run_all.py::_PINNED`（本仓教训：离线套件对档位是瞎的，
+    # ⚠️ 必须同时进 `tests/conftest.py::_PINNED`（本仓教训：离线套件对档位是瞎的，
     # 判据跟着 shell 档位走会让本机与 CI 结论不同）。定价读数出自生产 trace 的
     # `fastpath` 事件 + golden 两臂，见 `eval/fastpath_pricing.py`。
     agent_fastpath: bool = True

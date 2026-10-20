@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """台账终态：开着的行要么被回执结掉、要么被期限结掉（`agent/tasks.py::expire_transitions`）。
 
 **为什么单独一套**（20261015）：这一步治的是"有一族账永远结不掉"——生产库直读实测
@@ -29,6 +28,8 @@
   · **帧形状**：转换帧与结算帧**逐字同形**（8 键里少 `idempotency_key` 那一格，
     不带身份两列），且 `steps` **不清空**（那是事后唯一的线索）。
 """
+
+
 import json
 import re
 import sys
@@ -36,7 +37,10 @@ from datetime import datetime
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent  # 仓根（测试统一在 tests/）
+
+
 sys.path.insert(0, str(ROOT))
+
 
 from agent import tasks as T  # noqa: E402
 
@@ -49,7 +53,6 @@ def check(desc: str, cond: bool, detail: str = "") -> None:
         FAILS.append(desc)
 
 
-# 现时锚点：所有用例都用它，**不取 `datetime.now()`**——判据必须可复现。
 NOW = datetime(2026, 10, 15, 12, 0)
 
 
@@ -74,8 +77,7 @@ def _states(rows, **kw):
     return {t["task_id"]: (t["state"], t["pending_question"]) for t in tr}
 
 
-# ── ① 软期限：催办 = 状态转换 ⇒ 只问一次 ──────────────────────────────────
-def test_soft_deadline_asks_once():
+def _test_soft_deadline_asks_once():
     print("\n[软期限] 到点转 input_required + 催办问句；**转过之后不再问第二遍**")
     check("11h59 ⇒ 不产出（差一分钟都不算到期）",
           _states([_row(ago_min=11 * 60 + 59)]) == {},
@@ -97,8 +99,7 @@ def test_soft_deadline_asks_once():
           f"{T.TASK_STALE_SOFT_HOURS} < {T.TASK_STALE_HARD_HOURS}")
 
 
-# ── ② 硬期限：终态，且**不豁免**已经在等回话的行 ──────────────────────────
-def test_hard_deadline_is_terminal():
+def _test_hard_deadline_is_terminal():
     print("\n[硬期限] 到点 ⇒ cancelled + 清空问句；`input_required` 的行照样收掉")
     got = _states([_row(ago_min=48 * 60)])
     check("48h00 ⇒ cancelled、pending_question 清空（撤下的事不该还挂着问题）",
@@ -116,8 +117,7 @@ def test_hard_deadline_is_terminal():
           "cancelled" not in T.TASK_OPEN_STATES, str(T.TASK_OPEN_STATES))
 
 
-# ── ③ 同意闸挡下：当场，不看年龄 ─────────────────────────────────────────
-def test_consent_block_is_immediate():
+def _test_consent_block_is_immediate():
     print("\n[同意闸] 本轮被挡下的那一步 ⇒ 当场 input_required（**不看年龄**）")
     row = _row(ago_min=0, steps=[{"label": "建待办", "tool": "create_dashboard_todo"}])
     got = _states([row], consent_asks={"create_dashboard_todo": T.TASK_CONSENT_ASK})
@@ -144,8 +144,7 @@ def test_consent_block_is_immediate():
           T.TASK_CONSENT_ASK)
 
 
-# ── ④ 先结账、后催账 ─────────────────────────────────────────────────────
-def test_settled_rows_are_not_expired():
+def _test_settled_rows_are_not_expired():
     print("\n[顺序] 本轮已被回执结掉的行 ⇒ 不许在同一轮被判过期")
     old = _row(ago_min=72 * 60)                     # 早就过了硬期限
     check("不传 settled ⇒ 判过期（这一格不是恒不命中）",
@@ -158,8 +157,7 @@ def test_settled_rows_are_not_expired():
           str(_states([old, _row("at_2", ago_min=72 * 60)], settled=["at_1"])))
 
 
-# ── ⑤ 同值不产出（别刷 attempts） ────────────────────────────────────────
-def test_no_op_transitions_are_suppressed():
+def _test_no_op_transitions_are_suppressed():
     print("\n[同值不产出] 目标 state + 问句与当前逐字相同 ⇒ 不产帧")
     same = _row(ago_min=13 * 60, state="input_required",
                 pending_question=T.TASK_STALE_ASK)
@@ -177,8 +175,7 @@ def test_no_op_transitions_are_suppressed():
                             pending_question="降成哪个身份？")])))
 
 
-# ── ⑥ 认不出必须响亮，但"刚登记"不算认不出 ───────────────────────────────
-def test_unreadable_timestamp_is_loud():
+def _test_unreadable_timestamp_is_loud():
     print("\n[认不出] `created_at` 读不出来 ⇒ 不转换 + 进 undecidable（不静默）")
     tr, und = T.expire_transitions([_row(created_at="")], now=NOW)
     check("缺 created_at ⇒ 零转换 + 记进 undecidable",
@@ -209,8 +206,7 @@ def test_unreadable_timestamp_is_loud():
           tr7 == [] and und7 == ["at_1"], f"{tr7} / {und7}")
 
 
-# ── ⑦ 跨年：复用 `age_minutes` 那一条规则 ─────────────────────────────────
-def test_year_rollover():
+def _test_year_rollover():
     print("\n[跨年] `12-31 23:50` 在 `01-01 00:10` 读到 ⇒ 20 分钟，不是一年")
     check("跨年退一年（否则按当年解析 = 十一个月后的未来）",
           T.age_minutes("12-31 23:50", datetime(2027, 1, 1, 0, 10)) == 20,
@@ -242,8 +238,7 @@ def test_year_rollover():
           "两处各写一份 ⇒ 同一行时间两个年龄，且没有任何东西会红")
 
 
-# ── ⑧ 系统问句在游标推进后必须清掉 ───────────────────────────────────────
-def test_system_ask_cleared_on_advance():
+def _test_system_ask_cleared_on_advance():
     print("\n[清问句] 游标一推进 ⇒ 系统写的问句必须清掉（否则那一行被永久挡住）")
     two = _row(steps=[{"label": "a", "tool": "send_user_notice"},
                       {"label": "b", "tool": "reset_user_quota"}],
@@ -267,8 +262,7 @@ def test_system_ask_cleared_on_advance():
           adv2 is not None and adv2["pending_question"] == "降成哪个身份？", str(adv2))
 
 
-# ── ⑨ 帧形状：与结算帧逐字同形 ───────────────────────────────────────────
-def test_transition_frames_match_settlement_shape():
+def _test_transition_frames_match_settlement_shape():
     print("\n[帧] 转换帧与结算帧逐字同形（少 `idempotency_key` 那一格、不带身份）")
     rows = [_row("at_1", ago_min=72 * 60, steps=[{"label": "办一件事",
                                                   "tool": "send_user_notice",
@@ -296,8 +290,7 @@ def test_transition_frames_match_settlement_shape():
           T.transition_frames([], tr) == [], str(T.transition_frames([], tr)))
 
 
-# ── ⑩ 跨语言：三条期限的关系，读侧那个数从父仓现读 ────────────────────────
-def test_deadline_invariant_mirrors_parent_repo():
+def _test_deadline_invariant_mirrors_parent_repo():
     print("\n[跨语言] `SOFT < HARD < TASK_READ_TTL_HOURS`，后者从父仓 `chat.rs` 现读")
     import _parent_repo  # noqa: E402
 
@@ -334,8 +327,7 @@ def test_deadline_invariant_mirrors_parent_repo():
               m2.group(1).strip() if m2 else "没找到 TASK_OPEN_STATES")
 
 
-# ── ⑪ 接线：producer 里两处都接上了，且顺序是先结算后收口 ─────────────────
-def test_producer_wiring():
+def _test_producer_wiring():
     print("\n[接线] producer 里结算与收口都在、顺序是**先结算后收口**")
     src = (ROOT / "server.py").read_text(encoding="utf-8")
     i_settle = src.find("advs = _task_advance_rows(")
@@ -361,8 +353,7 @@ def test_producer_wiring():
           str(src.count('queue.put("__TASK__:" + json.dumps(')))
 
 
-# ── ⑫ 反控：两条判据都**真的会红**（改真源头，不是改上面那个抽出来的小函数） ────
-def test_reverse_controls():
+def _test_reverse_controls():
     print("\n[反控] 把真源头改坏 ⇒ 对应判据当场红（不是恒绿的装饰）")
     soft, hard = T.TASK_STALE_SOFT_HOURS, T.TASK_STALE_HARD_HOURS
     try:
@@ -393,19 +384,25 @@ def test_reverse_controls():
           soft == 12 and hard == 48, f"{soft} / {hard}")
 
 
-if __name__ == "__main__":
-    for fn in (test_soft_deadline_asks_once,
-               test_hard_deadline_is_terminal,
-               test_consent_block_is_immediate,
-               test_settled_rows_are_not_expired,
-               test_no_op_transitions_are_suppressed,
-               test_unreadable_timestamp_is_loud,
-               test_year_rollover,
-               test_system_ask_cleared_on_advance,
-               test_transition_frames_match_settlement_shape,
-               test_deadline_invariant_mirrors_parent_repo,
-               test_producer_wiring,
-               test_reverse_controls):
+def test_task_expiry():
+    for fn in (_test_soft_deadline_asks_once,
+               _test_hard_deadline_is_terminal,
+               _test_consent_block_is_immediate,
+               _test_settled_rows_are_not_expired,
+               _test_no_op_transitions_are_suppressed,
+               _test_unreadable_timestamp_is_loud,
+               _test_year_rollover,
+               _test_system_ask_cleared_on_advance,
+               _test_transition_frames_match_settlement_shape,
+               _test_deadline_invariant_mirrors_parent_repo,
+               _test_producer_wiring,
+               _test_reverse_controls):
         fn()
     print("\n" + ("全部通过 ✅" if not FAILS else f"失败 {len(FAILS)} 项 ❌: {FAILS}"))
-    sys.exit(1 if FAILS else 0)
+
+    assert not FAILS, (
+        f"{len(FAILS)} 条未通过：" + "；".join(FAILS))
+
+
+if __name__ == "__main__":
+    test_task_expiry()

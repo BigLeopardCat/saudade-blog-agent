@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """planner 菜单的参数签名（20260925）：必填/类型/默认值必须**从 args_schema 派生**。
 
 "参数 schema 化"缺的两半里，这一半是**展示**：在此之前菜单只给参数名
@@ -24,17 +23,20 @@
 
 用法：.venv/bin/python tests/test_tools_desc.py
 """
+
+
 import re
 import sys
-
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent  # 仓根（20260924：测试统一搬进 tests/）
+
+
 sys.path.insert(0, str(ROOT))
+
 
 import agent.graph as _G  # noqa: E402
 from agent.workflow_tools import callable_query_tools  # noqa: E402
-
 
 FAILS = []
 
@@ -81,7 +83,7 @@ class _StubNoSchema:
     args_schema = None
 
 
-def test_required_marker_matches_schema():
+def _test_required_marker_matches_schema():
     """① + ②：全量工具逐个对 args_schema 核（期望值在测试里**独立算**，不调被测私有函数）。"""
     print("[required_marker] 48 个工具逐个反射：`*`  ↔  args_schema.required")
     bad = []
@@ -136,7 +138,7 @@ def test_required_marker_matches_schema():
               _G._menu_arg_signature(uc))
 
 
-def test_broken_schema_never_guesses():
+def _test_broken_schema_never_guesses():
     """③：拿不到 schema 时只渲染名字:类型，**不许标必填、不许标默认值**、不许崩。"""
     print("[broken_schema] 取不到 args_schema ⇒ 不猜必填")
     for stub in (_StubTool, _StubNoSchema):
@@ -150,7 +152,7 @@ def test_broken_schema_never_guesses():
               "*" not in sig and "=" not in sig, sig)
 
 
-def test_menu_shape():
+def _test_menu_shape():
     """④ + ⑤：行形状（`- 名字(…)：说明`）、图例、缓存一致、无参渲染 `()`。"""
     print("[menu_shape] 行形状 / 图例 / 缓存")
     for role in (None, "admin"):
@@ -181,7 +183,7 @@ def test_menu_shape():
 
 
 def main():
-    for fn in (test_required_marker_matches_schema, test_broken_schema_never_guesses, test_menu_shape):
+    for fn in (_test_required_marker_matches_schema, _test_broken_schema_never_guesses, _test_menu_shape):
         fn()
     if FAILS:
         print(f"\n=== {len(FAILS)} 项失败 ===")
@@ -189,5 +191,12 @@ def main():
     print("\n=== 全部通过 ===")
 
 
-if __name__ == "__main__":
+def test_tools_desc():
     main()
+
+    assert not FAILS, (
+        f"{len(FAILS)} 条未通过：" + "；".join(FAILS))
+
+
+if __name__ == "__main__":
+    test_tools_desc()

@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """真连一个库、**4 个进程同时建表**（20261018 真停服之后新增的那一层判据）。
 
 **这一件为什么存在**：`agent/checkpoint.py` 的建表锁第一版是**阻塞式**
@@ -53,8 +52,10 @@ DSN 指到产线库（`saudade_blog`）上**当场拒跑**。
 **没有那个变量时这一件不报绿，它报「未评估」**（一整块大字），并且
 `SAUDADE_REQUIRE_CKPT_TEST=1` 会把"未评估"变成失败——本仓把"没量"与"量了是绿的"
 分得很开（同 `tests/_parent_repo.py` 那条：找不到父仓就响亮地说"没验"，不许静默算过）。
-`tests/run_all.py` 的汇总里另有一行**每次运行都报**这一层量没量。
+那一条自己每次运行都另打一行**每次运行都报**这一层量没量。
 """
+
+
 from __future__ import annotations
 
 import os
@@ -66,15 +67,22 @@ import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
+
+
 sys.path.insert(0, str(ROOT))
 
+
 DSN = os.environ.get("SAUDADE_CKPT_TEST_DSN", "").strip()
+
+
 STRICT = bool(os.environ.get("SAUDADE_REQUIRE_CKPT_TEST"))
 
-_TIMEOUT = 45.0          # 绿：同步放行之后整批的上限（真实现下几秒就完）
-_RED_TIMEOUT = 25.0      # 红基线：阻塞版**永远不返回**，够判"卡住"了
+
 _WARM_TIMEOUT = 60.0     # 等四个子进程把池开好（冷 import 最慢的那一段）
+
+
 _TABLES = ("checkpoint_migrations", "checkpoint_writes", "checkpoint_blobs", "checkpoints")
+
 
 FAILS: list[str] = []
 
@@ -99,37 +107,38 @@ def _skip(why: str) -> None:
     if STRICT:
         print("SAUDADE_REQUIRE_CKPT_TEST=1 ⇒ 未评估算失败（本次退出码 1）")
         raise SystemExit(1)
+    if "pytest" in sys.modules:
+        # pytest 轨：`SystemExit` 在任何嵌套深度都被判为**失败**（黄要显式 skip 才是黄）。
+        # `allow_module_level=True` 是必需的 —— 本函数**既在 import 期被调**（psycopg 没装 /
+        # 连不上），**也在驱动里被调**（没给 DSN）；不给这个开关，前者会退化成
+        # `ERROR ... Interrupted: 1 error during collection`（**红**，不是黄）。
+        # 直跑轨照旧走下面的 `raise SystemExit(0)`，语义不变。
+        import pytest  # noqa: PLC0415
+        pytest.skip(why, allow_module_level=True)
     raise SystemExit(0)
 
-
-# ── 前提：一个**专门的测试库**（这一件会 DROP TABLE） ────────────────────────
-if not DSN:
-    _skip("没有 SAUDADE_CKPT_TEST_DSN")
-
-_DB = DSN.rsplit("/", 1)[-1].split("?", 1)[0]
-if not _DB or "saudade_blog" in _DB:
-    _skip(f"DSN 指向的库是 {_DB!r}——本件会 **DROP TABLE**，拒绝在产线库上跑")
 
 try:
     import psycopg
 except ImportError as e:                                       # pragma: no cover
     _skip(f"psycopg 没装（{e}）")
 
+
 try:
     from langgraph.checkpoint.postgres.base import MIGRATIONS
 except ImportError as e:                                       # pragma: no cover
     _skip(f"langgraph 的 PG 后端没装（{e}）")
+
 
 try:
     CONN = psycopg.connect(DSN, autocommit=True, connect_timeout=5)
 except Exception as e:
     _skip(f"连不上（{type(e).__name__}: {e}）")
 
-# 清理/收尾也要有上限：被 kill 的子进程在 PG 那边收尸要一会儿，没上限的话这一件
-# 自己会卡在 DROP 上——那正是它要判的那件事，判据不该自己犯。
-CONN.execute("SET lock_timeout = '15s'")
 
 _TMP = Path(tempfile.mkdtemp(prefix="ckpt_conc_"))
+
+
 _GO = _TMP / "go"
 
 
@@ -222,9 +231,6 @@ def _quiesce(tag: str) -> None:
           f"锁{'还被拿着' if not _lock_free() else '已放开'}）——下面的判据可能因此假红")
 
 
-# ── 子进程：**必须是真的两个进程**，不是两个线程 ─────────────────────────────
-# 线程共用同一个模块级池与同一把锁的持有关系，复现不出"四个进程各开一个池、各抢一次锁"
-# 那个形状——而那正是生产上的形状（`uvicorn --workers 4`）。
 _BLOCKING = (
     "# 把建表那一步换回**阻塞版**（20261018 上线时的那个版本，逐字）\n"
     "def _blocking(saver, pool=None):\n"
@@ -304,63 +310,67 @@ def _summary(rows: list[tuple[bool, int, str]]) -> str:
     return "；".join(f"{'卡住' if t else rc}" for t, rc, _ in rows)
 
 
-print(f"测试库 = {_DB}（本件会 DROP TABLE；产线库已拒）")
-_n = len(MIGRATIONS) - 1      # 从 langgraph 现取，不手抄那个数
+def test_checkpoint_setup_concurrent():
+    _TIMEOUT = 45.0          # 绿：同步放行之后整批的上限（真实现下几秒就完）
+    _RED_TIMEOUT = 25.0      # 红基线：阻塞版**永远不返回**，够判"卡住"了
+    if not DSN:
+        _skip("没有 SAUDADE_CKPT_TEST_DSN")
+    _DB = DSN.rsplit("/", 1)[-1].split("?", 1)[0]
+    if not _DB or "saudade_blog" in _DB:
+        _skip(f"DSN 指向的库是 {_DB!r}——本件会 **DROP TABLE**，拒绝在产线库上跑")
+    CONN.execute("SET lock_timeout = '15s'")
+    print(f"测试库 = {_DB}（本件会 DROP TABLE；产线库已拒）")
+    _n = len(MIGRATIONS) - 1      # 从 langgraph 现取，不手抄那个数
+    print(f"\n① 红基线：建表那一步换回**阻塞版** ⇒ 必须有进程卡住（{_RED_TIMEOUT:.0f}s）")
+    _drop_all()
+    _red, _warmed = _run_batch(blocking=True, timeout=_RED_TIMEOUT)
+    _hung = sum(1 for t, _, _ in _red if t)
+    _red_v = _max_migration()
+    check("4 个进程都预热到同步点了（否则下面的'卡住'可能是别的原因）", _warmed == 4,
+          f"预热 {_warmed}/4")
+    check(f"阻塞版下有进程**没能在 {_RED_TIMEOUT:.0f}s 内返回**（那就是死锁的形状）",
+          _hung >= 1, f"卡住 {_hung}/4；退出码 {[rc for _, rc, _ in _red]}")
+    check("  **不止一个**卡住 ⇒ 是环（持锁那个也在等 CIC 等的那些事务），不是单个进程自己慢",
+          _hung >= 2, f"卡住 {_hung}/4")
+    check(f"  阻塞版下**迁移没跑到底**（`max(v)` = {_red_v} < {_n}）", _red_v < _n,
+          f"实测 {_red_v}")
+    print("     · 现场形状：持锁者在跑 `CREATE INDEX CONCURRENTLY`，其余卡在 `pg_advisory_lock`")
+    time.sleep(1.0)          # 让被 kill 的会话在 PG 那边收尸
+    _quiesce("① 之后")
+    _drop_all()              # 清掉被掐断留下的半截（含无效索引）
+    print(f"\n② 绿：真实现 ⇒ 4 个进程同时在**空库**上建表（{_TIMEOUT:.0f}s 预算）")
+    _green, _warmed2 = _run_batch(blocking=False, timeout=_TIMEOUT)
+    if any(t for t, _, _ in _green):
+        _dump_activity("② 真实现下卡住了")
+    check("4 个进程都预热到同步点了", _warmed2 == 4, f"预热 {_warmed2}/4")
+    check("4/4 都在预算内正常退出且打印 OK",
+          all((not t) and rc == 0 and "OK" in out for t, rc, out in _green),
+          _summary(_green))
+    check(f"（对照）同一套脚手架在真实现下 0/4 卡住，而阻塞版卡住 {_hung}/4 ⇒ 差异归因于锁",
+          _hung >= 1 and not any(t for t, _, _ in _green), f"阻塞版 {_hung}/4")
+    check(f"迁移跑到底了（`max(v)` = {_n}）", _max_migration() == _n, f"实测 {_max_migration()}")
+    check("没有留下**无效索引**（被打断的 CIC 会留下一个，而 `IF NOT EXISTS` 永远跳过它）",
+          _invalid_indexes() == [], str(_invalid_indexes()))
+    check("咨询锁已经放开（没把锁带进下一个请求）", _lock_free())
+    print(f"\n③ 已经建好之后再 4 个进程同时来一次（= 重启的形状，{_TIMEOUT:.0f}s 预算）")
+    _quiesce("② 之后")
+    _g2, _ = _run_batch(blocking=False, timeout=_TIMEOUT)
+    if any(t for t, _, _ in _g2):
+        _dump_activity("③ 真实现下卡住了")
+    check("4/4 仍然正常退出（幂等那一支：全都看到版本号、直接跳过）",
+          all((not t) and rc == 0 and "OK" in out for t, rc, out in _g2), _summary(_g2))
+    check("  且没有重复跑迁移（版本号没被再插一遍）", _max_migration() == _n,
+          f"实测 {_max_migration()}")
+    shutil.rmtree(_TMP, ignore_errors=True)
+    print()
+    if FAILS:
+        print(f"失败 {len(FAILS)} 项 ❌：" + "；".join(FAILS))
+        raise SystemExit(1)
+    print("全部通过 ✅")
 
-# ── ① 红基线：阻塞版必须卡住 ─────────────────────────────────────────────────
-print(f"\n① 红基线：建表那一步换回**阻塞版** ⇒ 必须有进程卡住（{_RED_TIMEOUT:.0f}s）")
-_drop_all()
-_red, _warmed = _run_batch(blocking=True, timeout=_RED_TIMEOUT)
-_hung = sum(1 for t, _, _ in _red if t)
-_red_v = _max_migration()
-check("4 个进程都预热到同步点了（否则下面的'卡住'可能是别的原因）", _warmed == 4,
-      f"预热 {_warmed}/4")
-check(f"阻塞版下有进程**没能在 {_RED_TIMEOUT:.0f}s 内返回**（那就是死锁的形状）",
-      _hung >= 1, f"卡住 {_hung}/4；退出码 {[rc for _, rc, _ in _red]}")
-check("  **不止一个**卡住 ⇒ 是环（持锁那个也在等 CIC 等的那些事务），不是单个进程自己慢",
-      _hung >= 2, f"卡住 {_hung}/4")
-# 实质判据（比"卡住几个"更硬）：阻塞版下**表根本没建完**。`_hung` 数的是进程，
-# 而这里数的是结果——四个进程同时来，阻塞版留在这个库上的是一套**没建完的表**。
-check(f"  阻塞版下**迁移没跑到底**（`max(v)` = {_red_v} < {_n}）", _red_v < _n,
-      f"实测 {_red_v}")
-print("     · 现场形状：持锁者在跑 `CREATE INDEX CONCURRENTLY`，其余卡在 `pg_advisory_lock`")
-time.sleep(1.0)          # 让被 kill 的会话在 PG 那边收尸
-_quiesce("① 之后")
-_drop_all()              # 清掉被掐断留下的半截（含无效索引）
+    assert not FAILS, (
+        f"{len(FAILS)} 条未通过：" + "；".join(FAILS))
 
-# ── ② 绿：真实现，空库上 4 个进程同时来 ─────────────────────────────────────
-print(f"\n② 绿：真实现 ⇒ 4 个进程同时在**空库**上建表（{_TIMEOUT:.0f}s 预算）")
-_green, _warmed2 = _run_batch(blocking=False, timeout=_TIMEOUT)
-if any(t for t, _, _ in _green):
-    _dump_activity("② 真实现下卡住了")
-check("4 个进程都预热到同步点了", _warmed2 == 4, f"预热 {_warmed2}/4")
-check("4/4 都在预算内正常退出且打印 OK",
-      all((not t) and rc == 0 and "OK" in out for t, rc, out in _green),
-      _summary(_green))
-# ①↔② 的对读：**同一套脚手架**，换的只有建表那一步 ⇒ ① 的卡住归因于阻塞版，
-# 不是"这台机器起不了 4 个进程"或者"这个库本身有问题"。
-check(f"（对照）同一套脚手架在真实现下 0/4 卡住，而阻塞版卡住 {_hung}/4 ⇒ 差异归因于锁",
-      _hung >= 1 and not any(t for t, _, _ in _green), f"阻塞版 {_hung}/4")
-check(f"迁移跑到底了（`max(v)` = {_n}）", _max_migration() == _n, f"实测 {_max_migration()}")
-check("没有留下**无效索引**（被打断的 CIC 会留下一个，而 `IF NOT EXISTS` 永远跳过它）",
-      _invalid_indexes() == [], str(_invalid_indexes()))
-check("咨询锁已经放开（没把锁带进下一个请求）", _lock_free())
 
-# ── ③ 已经建好之后再 4 个进程同时来一次（= 重启的形状） ──────────────────────
-print(f"\n③ 已经建好之后再 4 个进程同时来一次（= 重启的形状，{_TIMEOUT:.0f}s 预算）")
-_quiesce("② 之后")
-_g2, _ = _run_batch(blocking=False, timeout=_TIMEOUT)
-if any(t for t, _, _ in _g2):
-    _dump_activity("③ 真实现下卡住了")
-check("4/4 仍然正常退出（幂等那一支：全都看到版本号、直接跳过）",
-      all((not t) and rc == 0 and "OK" in out for t, rc, out in _g2), _summary(_g2))
-check("  且没有重复跑迁移（版本号没被再插一遍）", _max_migration() == _n,
-      f"实测 {_max_migration()}")
-
-shutil.rmtree(_TMP, ignore_errors=True)
-print()
-if FAILS:
-    print(f"失败 {len(FAILS)} 项 ❌：" + "；".join(FAILS))
-    raise SystemExit(1)
-print("全部通过 ✅")
-raise SystemExit(0)
+if __name__ == "__main__":
+    test_checkpoint_setup_concurrent()

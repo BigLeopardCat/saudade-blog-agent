@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """`eval/daily_metrics.py`（每日零成本观测一行）的离线自测。
 
 **为什么需要这条锁**：这一行是**替一条停掉的哨兵线**值班的——20261012 起夜间回归
@@ -15,6 +14,8 @@
 
 用法：.venv/bin/python tests/test_daily_metrics.py
 """
+
+
 import json
 import os
 import sys
@@ -22,8 +23,13 @@ import tempfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
+
+
 sys.path.insert(0, str(ROOT))
+
+
 sys.path.insert(0, str(ROOT / "eval"))
+
 
 import daily_metrics as dm  # noqa: E402
 
@@ -131,5 +137,12 @@ def main() -> int:
     return 0
 
 
+def test_daily_metrics():
+    main()
+
+    assert not FAILS, (
+        f"{len(FAILS)} 条未通过：" + "；".join(FAILS))
+
+
 if __name__ == "__main__":
-    sys.exit(main())
+    test_daily_metrics()

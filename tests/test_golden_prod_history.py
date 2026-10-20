@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """`GOLDEN_PROD_HISTORY` 注入进去的，必须是**能被读的历史**（20261016 批 3）。
 
 ## 这个文件是为什么写的
@@ -35,16 +34,24 @@
 
 用法：.venv/bin/python tests/test_golden_prod_history.py
 """
+
+
 import json
 import os
 import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
+
+
 sys.path.insert(0, str(ROOT))
+
+
 sys.path.insert(0, str(ROOT / "eval"))
 
+
 import run_golden as rg  # noqa: E402
+
 from server import HistoryItem, _build_messages  # noqa: E402
 
 FAILS: list[str] = []
@@ -56,8 +63,6 @@ def check(desc: str, cond: bool, detail: str = "") -> None:
         FAILS.append(desc)
 
 
-#: 语料里那条 3 轮用例（多轮族里可跑的一条；第 3 轮还带 `context.executions`，
-#: 正好覆盖"同一轮既有用例自带字段、又要被注入 history"那一格）。
 CASE_ID = "mt3_detour_then_return_ledger_value"
 
 
@@ -192,5 +197,12 @@ def main() -> int:
     return 0
 
 
+def test_golden_prod_history():
+    main()
+
+    assert not FAILS, (
+        f"{len(FAILS)} 条未通过：" + "；".join(FAILS))
+
+
 if __name__ == "__main__":
-    raise SystemExit(main())
+    test_golden_prod_history()

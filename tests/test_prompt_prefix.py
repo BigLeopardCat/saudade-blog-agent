@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """提示词的**稳定前缀**（= 前缀缓存的命中长度）单测：离线、秒级、零网络零 LLM。
 
 **为什么存在**：前缀缓存按**渲染后字符串的连续前缀**逐字节命中，命中那部分按缓存价
@@ -19,11 +18,16 @@
 ⚠️ 判据只用**渲染后的字符串**，不读模板常量——模板可以随便重排，只要渲染出来的
 前缀长度与方向词自洽。
 """
+
+
 import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent  # 仓根（测试统一在 tests/）
+
+
 sys.path.insert(0, str(ROOT))
+
 
 import agent.graph as G  # noqa: E402
 
@@ -46,18 +50,16 @@ def lcp(a: str, b: str) -> int:
     return n
 
 
-# 两组"另一轮"的值：每个易变块都不一样。里面刻意放了对**位置**敏感的长文本
-# （页面上下文/工具帧本来就可能很长），免得前缀恰好被某个短值蒙对。
 _VOLA = dict(page_ctx="页面A：/article/7（特效 sakura 开着）", round_info="当前决策：第 1/4 轮。",
              intent_hints="本句动作意图：开特效（未完成）", doc_anchors="已点名文档：19《架构文档》",
              recent_context="泠月：好呀～", short_reply_hint="这是短应答，承接上一轮的提议",
              pending_ledger="台账帧：talkId:101 访客（2026-09-29 22:10）「画板我已经回退掉了。」",
              tool_results="（本轮尚无工具执行）", ref_hints="search_notes: noteKey/title",
              reflector_feedback="（本决策轮无复盘建议）", correction="（本决策轮无纠偏提示）")
+
+
 _VOLB = {k: v.replace("A", "B").replace("1", "2").replace("7", "8").replace("19", "46")
          for k, v in _VOLA.items()}
-_VOLB.update(page_ctx="页面B：/dashboard", tool_results="get_article_detail 返回：正文……",
-             ref_hints="list_notes: noteKey", recent_context="访客：那篇讲什么的？")
 
 
 def _planner_pair():
@@ -79,8 +81,7 @@ def _narrator_pair():
     return a, b
 
 
-# ── ① planner：固定文本整段落在稳定前缀里 ──────────────────────────────────
-def test_planner_prefix_covers_rules():
+def _test_planner_prefix_covers_rules():
     print("\n[planner] 稳定前缀必须盖住 技能菜单 + 工具菜单 + 判定规则正文")
     a, b = _planner_pair()
     n = lcp(a, b)
@@ -105,8 +106,7 @@ def test_planner_prefix_covers_rules():
               a.index(val) > tail, f"{name} 在 {a.index(val)}，规则最后一条在 {tail}")
 
 
-# ── ② narrator：纪律块整段落在稳定前缀里 ──────────────────────────────────
-def test_narrator_prefix_covers_disciplines():
+def _test_narrator_prefix_covers_disciplines():
     print("\n[narrator] 稳定前缀必须盖住 叙述纪律正文")
     a, b = _narrator_pair()
     n = lcp(a, b)
@@ -120,11 +120,6 @@ def test_narrator_prefix_covers_disciplines():
           f"计划在 {a.index('WORKFLOW=effect（第 1 轮）')}，纪律最后一条在 {last}")
 
 
-# ── ③ 方向词与真实位置自洽 ─────────────────────────────────────────────────
-# 块名（规则正文里的指代词）→ 渲染串里该块的**表头**（固定文本，用它定位）。
-# 表头一律取**行首**那一段（下面按 `"\n" + header` 找）：块名在规则正文里也会被
-# 提到（如「下方"本会话已点名文档"」），按裸子串找会定位到那句引用上——位置错了，
-# 判据却可能恰好判成"通过"（第一版就是这么写的，靠运气绿了一条）。
 _BLOCKS = {
     "技能注册表": "技能注册表（唯一可选集合",
     "菜单": "本轮可规划执行的查询工具",
@@ -137,7 +132,7 @@ _BLOCKS = {
 }
 
 
-def test_direction_words_match_real_positions():
+def _test_direction_words_match_real_positions():
     print("\n[方向词] 规则正文写「上方/下方 X」必须与 X 的真实位置一致")
     import re
     a, _b = _planner_pair()
@@ -161,10 +156,18 @@ def test_direction_words_match_real_positions():
     check("方向词引用确实扫到了（不是零命中蒙混过关）", hits >= 6, f"命中 {hits} 处")
 
 
-if __name__ == "__main__":
-    for fn in (test_planner_prefix_covers_rules,
-               test_narrator_prefix_covers_disciplines,
-               test_direction_words_match_real_positions):
+def test_prompt_prefix():
+    _VOLB.update(page_ctx="页面B：/dashboard", tool_results="get_article_detail 返回：正文……",
+                 ref_hints="list_notes: noteKey", recent_context="访客：那篇讲什么的？")
+    for fn in (_test_planner_prefix_covers_rules,
+               _test_narrator_prefix_covers_disciplines,
+               _test_direction_words_match_real_positions):
         fn()
     print("\n" + ("全部通过 ✅" if not FAILS else f"失败 {len(FAILS)} 项 ❌: {FAILS}"))
-    sys.exit(1 if FAILS else 0)
+
+    assert not FAILS, (
+        f"{len(FAILS)} 条未通过：" + "；".join(FAILS))
+
+
+if __name__ == "__main__":
+    test_prompt_prefix()

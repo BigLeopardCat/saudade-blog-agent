@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """服务加固单元测试（20260916）：TLS 校验、输入限额、请求体积、并发闸。
 
 纯函数 / 无网络 / 秒级——与 tests/test_workflows.py 同款，供 CI（eval.yml）在 push 时跑。
@@ -12,6 +11,8 @@
   ③ 体积上限中间件：Content-Length 超限 → 413；正常 → 放行
   ④ 并发闸：拿满槽位后第 N+1 个请求拿到 False（而不是静默排队），归还后可再拿
 """
+
+
 import asyncio
 import base64
 import hashlib
@@ -23,11 +24,11 @@ import sys
 import time
 from pathlib import Path
 
-# ── 仓根（20260924：测试统一搬进 tests/）───────────────────────────────────────
-# 此前本文件就躺在仓根，`sys.path[0]` 天然是仓根；搬进 tests/ 之后要靠这两行才 import
-# 得到 agent/ tools/ rag/。
 ROOT = Path(__file__).resolve().parent.parent  # 仓根（20260924：测试统一搬进 tests/）
+
+
 sys.path.insert(0, str(ROOT))
+
 
 FAILS: list[str] = []
 
@@ -47,16 +48,6 @@ def eq(got, exp, name):
     check(name, got == exp, {"got": got, "exp": exp})
 
 
-# ── 内部端点身份判据的**共用夹具**（20261020 收口）────────────────────────────
-# 服务间断言（HS256、`aud=agent`）的测试签名器与最小请求壳。此前本文件里 `sign()` 被
-# 各函数**各抄一份**（`test_user_assertion` / `test_review_endpoint_hardening`），
-# 两份的形参还各不相同（一份带 `aud`、一份带 `role`）——"两份会漂的规则"正是本仓
-# 反复吃的亏，而这一批又多了三处端点要判 ⇒ 收成一处。
-#
-# ⚠️ 三条纪律（前两条是 20260917 那次真踩出来的）：
-#   · **测试自己钉密钥，不读环境**：CI 没有 .env，读环境值必然"本机绿 CI 红"或反过来；
-#   · 断言**代码默认值**（`Settings.model_fields[...].default`）而不是运行时配置，同理；
-#   · 用完**还原**（`settings.jwt_secret` / `settings.agent_require_assertion`）。
 TEST_SECRET = "ci-test-secret-不参与生产"
 
 
@@ -79,9 +70,7 @@ def sign_assertion(sub, role=None, aud="agent", ttl=60, secret=TEST_SECRET):
     return (h + b"." + p + b"." + b(sig)).decode()
 
 
-# ────────────────────────────────── ① TLS 校验
-
-def test_tls_verification_on():
+def _test_tls_verification_on():
     """共享 client 必须处在**校验**状态。
 
     这条不是形式主义：20260916 之前它是 `httpx.Client(timeout=15, verify=False)`，
@@ -109,10 +98,9 @@ def test_tls_verification_on():
           "verify=False" not in code_only.replace(" ", ""))
 
 
-# ────────────────────────────────── ② 请求模型限额
-
-def test_request_limits():
+def _test_request_limits():
     from pydantic import ValidationError
+
     import server
 
     # 正常请求必须原样通过（限额不能误伤生产流量）
@@ -135,6 +123,14 @@ def test_request_limits():
          {"message": "hi", "current_url": "x" * (server.MAX_SHORT_FIELD_CHARS + 1)}),
         ("executions 超长",
          {"message": "hi", "executions": "x" * (server.MAX_TEXT_FIELD_CHARS + 1)}),
+        # 20261020 补齐：这两个限额**此前一个套件都没提过**（`grep MAX_CONFIRM_TOKEN_CHARS
+        # tests/` 与 `MAX_RECENT_TOOLS` 都是 0 命中），而它们各自守着一个具体的洞 ——
+        # 前者是唯一凭据（`confirm.verify` 之前先被这里挡一道），后者是"上一轮读过审核
+        # 队列吗"的判据输入。限额写了却没判据 = 改小/改没都不会有人发现。
+        ("confirm_token 超长",
+         {"message": "hi", "confirm_token": "x" * (server.MAX_CONFIRM_TOKEN_CHARS + 1)}),
+        ("recent_tools 超量",
+         {"message": "hi", "recent_tools": ["t"] * (server.MAX_RECENT_TOOLS + 1)}),
     ]
     for name, payload in cases:
         try:
@@ -158,14 +154,13 @@ def test_request_limits():
         check("拦住超长查询串（图谱检索）", True)
 
 
-# ────────────────────────────────── ③ 请求体积上限
-
-def test_body_limit_middleware():
+def _test_body_limit_middleware():
     """Content-Length 超限直接 413——starlette 默认**不限制** body 大小，
     畸形大包会在解析前就把 3.7GB 机器吃满。"""
-    import server
     from starlette.requests import Request
     from starlette.responses import Response
+
+    import server
 
     async def call_next_ok(_req):
         return Response("ok")
@@ -190,9 +185,7 @@ def test_body_limit_middleware():
           f"status={none.status_code}")
 
 
-# ────────────────────────────────── ④ 并发闸
-
-def test_stream_slots():
+def _test_stream_slots():
     """拿满槽位后，第 N+1 个请求要在 STREAM_QUEUE_WAIT 内**如实失败**，
     而不是无声排队——排队只会让所有人一起变慢、最后一起超时。"""
     import server
@@ -213,7 +206,7 @@ def test_stream_slots():
     check("归还后可以再拿到", again is True, again)
 
 
-def test_tool_result_kinds():
+def _test_tool_result_kinds():
     """工具返回值的"两类"（`tools/base.py` 的 ToolResult）：**故障不再伪装成空结果**。
 
     盯两件事：① 三类构造出来的仍是 str（下游 `str()`/切片/拼接/命令帧校验全部不受
@@ -349,13 +342,13 @@ def test_tool_result_kinds():
           repr(str(nav)[:60]) + " / " + repr(getattr(nav, "meta", None)))
 
 
-
-def test_history_model_and_review_limits():
+def _test_history_model_and_review_limits():
     """请求模型的两条加固（20260917 外部审计）：
     ① history 从 `list[dict]` 换成结构化 HistoryItem —— 畸形项以前会在
        `_build_messages` 里 KeyError → 500；
     ② /review 的 content 加长度上限（此前可以顶着 12MB body 上限灌进来）。"""
     from pydantic import ValidationError
+
     import server
 
     ok_req = server.ChatRequest(message="hi", history=[
@@ -386,7 +379,7 @@ def test_history_model_and_review_limits():
             check(f"/review 超限被拒（{list(bad)}）", True)
 
 
-def test_user_assertion():
+def _test_user_assertion():
     """服务间身份断言（20260917）：Rust 签名 → agent 验签并覆盖 body 里的 user_id。
     这条是外部审计里唯一"改了就把根拔掉"的项：身份不再依赖"只听回环"这个部署假设。"""
     import server
@@ -424,14 +417,18 @@ def test_user_assertion():
         check("代码默认强制断言（默认安全；要回退得显式写 0）", dflt is True, dflt)
         # 出厂档必须同时进 `_PINNED`（同 `AGENT_FASTPATH` / `AGENT_EVIDENCE` 那条纪律：
         # 离线套件对档位是瞎的，谁在 shell 里 export 过 0，整套就按另一档判）。
-        _runner = (Path(__file__).resolve().parent.parent / "tests" / "run_all.py").read_text(
+        # 钉子表的持有者 20261020 从 `tests/run_all.py` 搬到 `tests/conftest.py`（自研
+        # runner 删了）。判据本身一字未动：**出厂档必须进那张表**，否则谁在 shell 里
+        # export 过 0，凡是经由 `server._resolve_principal` 的用例就按另一档判。
+        _runner = (Path(__file__).resolve().parent.parent / "tests" / "conftest.py").read_text(
             encoding="utf-8")
-        check("出厂档进了 `tests/run_all.py::_PINNED`", '"AGENT_REQUIRE_ASSERTION": "1"' in _runner)
+        check("出厂档进了 `tests/conftest.py::_PINNED`",
+              '"AGENT_REQUIRE_ASSERTION": "1"' in _runner)
     finally:
         settings.jwt_secret = orig_secret
 
 
-def test_display_idempotency_race():
+def _test_display_idempotency_race():
     """屏显幂等（20260917）：原来是裸 dict 的 check-then-act，两个并发请求能同时通过
     ⇒ 同一条指令下发两次。加锁 + 下发前占位；失败要把占位撤掉，否则一次失败会挡掉
     30s 内的正常重试（加锁最容易引入的行为回归）。"""
@@ -486,7 +483,7 @@ def test_display_idempotency_race():
         _dev._last_display.clear()
 
 
-def test_rag_unavailable_vs_empty():
+def _test_rag_unavailable_vs_empty():
     """RAG：索引不可用 ≠ 没命中（20260917 审计指出）。search() 现在用 None 表达
     "索引建不起来"，[] 仍然只表示"确实没命中"。"""
     import unittest.mock as mock
@@ -506,7 +503,7 @@ def test_rag_unavailable_vs_empty():
         eq(getattr(out2, "kind", None), "empty", "真没命中仍是 empty（照常进回执）")
 
 
-def test_client_ctx_field_sanitizing():
+def _test_client_ctx_field_sanitizing():
     """客户端上报字段进 `[System: …]` 前先清洗（20260925 安全审计）。
 
     `current_url`/`page_title`/`current_effects`/`current_darkmode` 由浏览器给，拼进
@@ -537,7 +534,7 @@ def test_client_ctx_field_sanitizing():
           server._ctx_field(None) == "" and server._ctx_field("") == "")
 
 
-def test_weather_location_shape_gate():
+def _test_weather_location_shape_gate():
     """`get_weather` 的城市名要有形状闸（20260925 安全审计）。
 
     host 固定 `wttr.in`（不是 SSRF），但这个值直接进 URL 路径段 ⇒ 任意字符串不该进
@@ -571,7 +568,7 @@ def test_weather_location_shape_gate():
           "wttr.in/%E6%9D%AD%E5%B7%9E" in calls[0] and "杭州天气" in str(good), calls)
 
 
-def test_review_endpoint_hardening():
+def _test_review_endpoint_hardening():
     """`/review` 的身份与并发闸（20260925 安全审计）。
 
     这个端点的失败处理在**调用方**（Rust 侧超时/非 200/解析失败一律转人工待审，绝不放行）
@@ -585,6 +582,7 @@ def test_review_endpoint_hardening():
     from unittest.mock import patch
 
     import fastapi
+
     import server
     from config.settings import settings
 
@@ -655,7 +653,7 @@ def test_review_endpoint_hardening():
           server._review_slots.acquire(blocking=False) and not server._review_slots.release())
 
 
-def test_internal_endpoint_identity():
+def _test_internal_endpoint_identity():
     """内部端点的身份闸（20261020 安全审计 SAU-006 / SAU-018）。
 
     **判什么**：三处只给内部调用方用的端点此前**一格鉴权都没有**——
@@ -676,6 +674,7 @@ def test_internal_endpoint_identity():
     from unittest.mock import patch
 
     import fastapi
+
     import server
     from config.settings import settings
 
@@ -756,15 +755,15 @@ def test_internal_endpoint_identity():
 
 
 def main():
-    for fn in (test_tls_verification_on, test_request_limits,
-               test_body_limit_middleware, test_stream_slots,
-               test_tool_result_kinds, test_history_model_and_review_limits,
-               test_user_assertion, test_display_idempotency_race,
-               test_rag_unavailable_vs_empty,
-               test_client_ctx_field_sanitizing,
-               test_weather_location_shape_gate,
-               test_review_endpoint_hardening,
-               test_internal_endpoint_identity):
+    for fn in (_test_tls_verification_on, _test_request_limits,
+               _test_body_limit_middleware, _test_stream_slots,
+               _test_tool_result_kinds, _test_history_model_and_review_limits,
+               _test_user_assertion, _test_display_idempotency_race,
+               _test_rag_unavailable_vs_empty,
+               _test_client_ctx_field_sanitizing,
+               _test_weather_location_shape_gate,
+               _test_review_endpoint_hardening,
+               _test_internal_endpoint_identity):
         print(f"\n── {fn.__name__} ──")
         fn()
     if FAILS:
@@ -775,5 +774,12 @@ def main():
     print("\n=== 全部通过 ===")
 
 
-if __name__ == "__main__":
+def test_hardening():
     main()
+
+    assert not FAILS, (
+        f"{len(FAILS)} 条未通过：" + "；".join(FAILS))
+
+
+if __name__ == "__main__":
+    test_hardening()
