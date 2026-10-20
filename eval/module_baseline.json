@@ -80,7 +80,7 @@
     "top_defs": 20
   },
   "tests/test_confirm.py": {
-    "lines": 1021,
+    "lines": 1024,
     "top_defs": 7
   },
   "tests/test_judge_offline.py": {

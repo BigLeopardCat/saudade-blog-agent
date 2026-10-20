@@ -24,6 +24,8 @@ import re
 import sys
 from pathlib import Path
 
+from _judge import collector
+
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
@@ -43,14 +45,10 @@ from langchain_core.tools import StructuredTool  # noqa: E402
 import agent.react_arm as R  # noqa: E402
 from agent.principal import Principal  # noqa: E402
 from agent.react_line import WorkflowExecutor  # noqa: E402
+from agent.tools_arm import ToolsGoldenArm  # noqa: E402
 
-FAILS: list[str] = []
-
-
-def check(desc: str, cond: bool, detail: str = "") -> None:
-    print(("  ✅ " if cond else "  ❌ ") + desc + (f"  [{detail}]" if detail else ""))
-    if not cond:
-        FAILS.append(desc)
+FAILED: list[str] = []
+check = collector(FAILED)
 
 
 # ── 替身 ─────────────────────────────────────────────────────────────
@@ -202,162 +200,161 @@ ADMIN = Principal(uid=9, role="admin")
 _SCRIPT = [_call("navigate", target="首页"), AIMessage(content="带你到首页了")]
 
 
-# ── ① 缺省档零行为变更 ───────────────────────────────────────────────
-print("\n① 缺省档 —— 四个接缝缺省 `None` ⇒ 与改动之前逐字节相同")
-check("`ReactGoldenArm.ctx_hooks` 是**空字典**（基类不许自带接缝）",
-      R.ReactGoldenArm.ctx_hooks == {}, str(R.ReactGoldenArm.ctx_hooks))
 
-_ctx0 = R.make_ctx(config=None, principal=ADMIN, role="admin", user_msg="带我去首页",
-                   state={"messages": []}, real_tools={})
-check("缺省建出来的执行器**逐字就是 `WorkflowExecutor`**（不是它的某个子类）",
-      type(_ctx0["executor"]) is WorkflowExecutor, type(_ctx0["executor"]).__name__)
-check("四个接缝在账里都在场且都是 `None`（在场 = 三处 `ctx.get` 读的是同一批键）",
-      all(_ctx0.get(k) is None for k in ("prompt_builder", "menu_builder",
-                                         "plan_builder", "executor_factory")),
-      str([k for k in ("prompt_builder", "menu_builder", "plan_builder",
-                       "executor_factory") if _ctx0.get(k) is not None]))
+def test_arm_seams():
+    FAILED.clear()
+    # ── ① 缺省档零行为变更 ───────────────────────────────────────────────
+    print("\n① 缺省档 —— 四个接缝缺省 `None` ⇒ 与改动之前逐字节相同")
+    check("`ReactGoldenArm.ctx_hooks` 是**空字典**（基类不许自带接缝）",
+          R.ReactGoldenArm.ctx_hooks == {}, str(R.ReactGoldenArm.ctx_hooks))
 
-# **逐字节**：一次走缺省基类，一次走"四个接缝显式传 None"的子类。后者是工具臂那条路径
-# 的形状（子类恒有 `ctx_hooks`，只是这一轮四格都是 None）⇒ 两条必须产出同一串帧。
-_f_default = _run(_SCRIPT, principal=ADMIN)
-_f_explicit_none = _run(_SCRIPT, principal=ADMIN,
-                        hooks={"prompt_builder": None, "menu_builder": None,
-                               "plan_builder": None, "executor_factory": None})
-_p_default, _p_none = _proj(_f_default), _proj(_f_explicit_none)
-check("**帧序列逐字节相同**（缺省基类 vs 四格显式 None 的子类）",
-      _p_default == _p_none,
-      f"{len(_p_default)} 帧 vs {len(_p_none)} 帧"
-      + ("" if _p_default == _p_none else
-         "；首处不同 = " + str(next((a, b) for a, b in zip(_p_default, _p_none) if a != b))))
-check("这条轨迹**非空过**：真的走完了 planner + execute 两个节点",
-      bool(_planner_plan(_f_default))
-      and any("execute" in u for u in _ups(_f_default)),
-      f"planner={bool(_planner_plan(_f_default))} "
-      f"execute={any('execute' in u for u in _ups(_f_default))}")
+    _ctx0 = R.make_ctx(config=None, principal=ADMIN, role="admin", user_msg="带我去首页",
+                       state={"messages": []}, real_tools={})
+    check("缺省建出来的执行器**逐字就是 `WorkflowExecutor`**（不是它的某个子类）",
+          type(_ctx0["executor"]) is WorkflowExecutor, type(_ctx0["executor"]).__name__)
+    check("四个接缝在账里都在场且都是 `None`（在场 = 三处 `ctx.get` 读的是同一批键）",
+          all(_ctx0.get(k) is None for k in ("prompt_builder", "menu_builder",
+                                             "plan_builder", "executor_factory")),
+          str([k for k in ("prompt_builder", "menu_builder", "plan_builder",
+                           "executor_factory") if _ctx0.get(k) is not None]))
 
-
-# ── ② 四条接缝各自真的被读 ───────────────────────────────────────────
-print("\n② 四条接缝 —— 每一条都要证明'传进去真的被读'，不是被 `**kwargs` 吞掉")
-
-# ②a `menu_builder`：绑给模型的工具名 == 桩返回的那一个
-_menu_seen: list = []
-_SENTINEL_TOOL = StructuredTool(
-    name="SEAM_ONLY_TOOL", description="接缝哨兵", args_schema={"type": "object",
-                                                              "properties": {}},
-    func=lambda **kw: "哨兵")
+    # **逐字节**：一次走缺省基类，一次走"四个接缝显式传 None"的子类。后者是工具臂那条路径
+    # 的形状（子类恒有 `ctx_hooks`，只是这一轮四格都是 None）⇒ 两条必须产出同一串帧。
+    _f_default = _run(_SCRIPT, principal=ADMIN)
+    _f_explicit_none = _run(_SCRIPT, principal=ADMIN,
+                            hooks={"prompt_builder": None, "menu_builder": None,
+                                   "plan_builder": None, "executor_factory": None})
+    _p_default, _p_none = _proj(_f_default), _proj(_f_explicit_none)
+    check("**帧序列逐字节相同**（缺省基类 vs 四格显式 None 的子类）",
+          _p_default == _p_none,
+          f"{len(_p_default)} 帧 vs {len(_p_none)} 帧"
+          + ("" if _p_default == _p_none else
+             "；首处不同 = " + str(next((a, b) for a, b in zip(_p_default, _p_none) if a != b))))
+    check("这条轨迹**非空过**：真的走完了 planner + execute 两个节点",
+          bool(_planner_plan(_f_default))
+          and any("execute" in u for u in _ups(_f_default)),
+          f"planner={bool(_planner_plan(_f_default))} "
+          f"execute={any('execute' in u for u in _ups(_f_default))}")
 
 
-def _menu(role):
-    _menu_seen.append(role)
-    return [_SENTINEL_TOOL]
+    # ── ② 四条接缝各自真的被读 ───────────────────────────────────────────
+    print("\n② 四条接缝 —— 每一条都要证明'传进去真的被读'，不是被 `**kwargs` 吞掉")
+
+    # ②a `menu_builder`：绑给模型的工具名 == 桩返回的那一个
+    _menu_seen: list = []
+    _SENTINEL_TOOL = StructuredTool(
+        name="SEAM_ONLY_TOOL", description="接缝哨兵", args_schema={"type": "object",
+                                                                  "properties": {}},
+        func=lambda **kw: "哨兵")
 
 
-_run(_SCRIPT, principal=ADMIN, hooks={"menu_builder": _menu})
-check("`menu_builder` 被调用且收到角色", _menu_seen == ["admin"], str(_menu_seen))
-check("绑给模型的菜单**就是桩返回的那一个**（缺省档下这是技能菜单，绝不可能是它）",
-      BOUND and BOUND[0] == ["SEAM_ONLY_TOOL"], str(BOUND[:2]))
-_run(_SCRIPT, principal=ADMIN)
-check("阳性对照：缺省档绑的是技能菜单（名字集合里没有那个哨兵）",
-      bool(BOUND) and "SEAM_ONLY_TOOL" not in BOUND[0], str(BOUND[0][:4]))
-
-# ②b `prompt_builder`：模型收到的 SystemMessage == 桩的正文
-_prompt_seen: list = []
+    def _menu(role):
+        _menu_seen.append(role)
+        return [_SENTINEL_TOOL]
 
 
-def _prompt(state, ctx):
-    _prompt_seen.append(ctx.get("role"))
-    return "SEAM-PROMPT-ONLY"
+    _run(_SCRIPT, principal=ADMIN, hooks={"menu_builder": _menu})
+    check("`menu_builder` 被调用且收到角色", _menu_seen == ["admin"], str(_menu_seen))
+    check("绑给模型的菜单**就是桩返回的那一个**（缺省档下这是技能菜单，绝不可能是它）",
+          BOUND and BOUND[0] == ["SEAM_ONLY_TOOL"], str(BOUND[:2]))
+    _run(_SCRIPT, principal=ADMIN)
+    check("阳性对照：缺省档绑的是技能菜单（名字集合里没有那个哨兵）",
+          bool(BOUND) and "SEAM_ONLY_TOOL" not in BOUND[0], str(BOUND[0][:4]))
+
+    # ②b `prompt_builder`：模型收到的 SystemMessage == 桩的正文
+    _prompt_seen: list = []
 
 
-def _sys_prompts() -> list[str]:
-    return [str(m.content) for msgs in SEEN for m in msgs if isinstance(m, SystemMessage)]
+    def _prompt(state, ctx):
+        _prompt_seen.append(ctx.get("role"))
+        return "SEAM-PROMPT-ONLY"
 
 
-_run(_SCRIPT, principal=ADMIN, hooks={"prompt_builder": _prompt})
-check("`prompt_builder` 被调用且收到账（`ctx['role']`）",
-      _prompt_seen == ["admin"], str(_prompt_seen))
-check("模型收到的系统提示**就是桩那一句**", "SEAM-PROMPT-ONLY" in _sys_prompts(),
-      str(_sys_prompts()[:1])[:120])
-_run(_SCRIPT, principal=ADMIN)
-check("阳性对照：缺省档收到的是 `_system_prompt` 那句桩（不是哨兵）",
-      not any("SEAM-PROMPT-ONLY" in s for s in _sys_prompts())
-      and "你是测试用助手。" in _sys_prompts(), str(_sys_prompts()[:1])[:120])
-
-# ②c `plan_builder`：它**收到模型的原始 tool_calls**，返回值进 `planner` 那一格
-_plan_seen: list = []
+    def _sys_prompts() -> list[str]:
+        return [str(m.content) for msgs in SEEN for m in msgs if isinstance(m, SystemMessage)]
 
 
-def _plan(calls, role):
-    _plan_seen.append(([str((c or {}).get("name") or "") for c in calls or []], role))
-    return {"workflow": "chat", "tools": [], "calls": [], "note": "SEAM-PLAN",
-            "reply": "", "status": ""}
+    _run(_SCRIPT, principal=ADMIN, hooks={"prompt_builder": _prompt})
+    check("`prompt_builder` 被调用且收到账（`ctx['role']`）",
+          _prompt_seen == ["admin"], str(_prompt_seen))
+    check("模型收到的系统提示**就是桩那一句**", "SEAM-PROMPT-ONLY" in _sys_prompts(),
+          str(_sys_prompts()[:1])[:120])
+    _run(_SCRIPT, principal=ADMIN)
+    check("阳性对照：缺省档收到的是 `_system_prompt` 那句桩（不是哨兵）",
+          not any("SEAM-PROMPT-ONLY" in s for s in _sys_prompts())
+          and "你是测试用助手。" in _sys_prompts(), str(_sys_prompts()[:1])[:120])
+
+    # ②c `plan_builder`：它**收到模型的原始 tool_calls**，返回值进 `planner` 那一格
+    _plan_seen: list = []
 
 
-_f_plan = _run(_SCRIPT, principal=ADMIN, hooks={"plan_builder": _plan})
-check("`plan_builder` 收到**模型的原始调用名**与角色",
-      _plan_seen == [(["navigate"], "admin")], str(_plan_seen))
-check("返回值真的进了 `planner` 那一格（缺省档这里是 `navigate`，不是 `chat`）",
-      _planner_plan(_f_plan).get("workflow") == "chat",
-      str(_planner_plan(_f_plan).get("workflow")))
-check("阳性对照：缺省档的 `workflow` 是技能实例化出来的 `navigate`",
-      _planner_plan(_f_default).get("workflow") == "navigate",
-      str(_planner_plan(_f_default).get("workflow")))
-
-# ②d `executor_factory`：**逐字**就是那个工厂的返回值，且五格参数一个不少
-_got: list = []
+    def _plan(calls, role):
+        _plan_seen.append(([str((c or {}).get("name") or "") for c in calls or []], role))
+        return {"workflow": "chat", "tools": [], "calls": [], "note": "SEAM-PLAN",
+                "reply": "", "status": ""}
 
 
-class _SeamExecutor(WorkflowExecutor):
-    pass
+    _f_plan = _run(_SCRIPT, principal=ADMIN, hooks={"plan_builder": _plan})
+    check("`plan_builder` 收到**模型的原始调用名**与角色",
+          _plan_seen == [(["navigate"], "admin")], str(_plan_seen))
+    check("返回值真的进了 `planner` 那一格（缺省档这里是 `navigate`，不是 `chat`）",
+          _planner_plan(_f_plan).get("workflow") == "chat",
+          str(_planner_plan(_f_plan).get("workflow")))
+    check("阳性对照：缺省档的 `workflow` 是技能实例化出来的 `navigate`",
+          _planner_plan(_f_default).get("workflow") == "navigate",
+          str(_planner_plan(_f_default).get("workflow")))
+
+    # ②d `executor_factory`：**逐字**就是那个工厂的返回值，且五格参数一个不少
+    _got: list = []
 
 
-def _factory(ledger, *, role, principal, user_msg, state, real_tools):
-    _got.append({"ledger": ledger, "role": role, "principal": principal,
-                 "user_msg": user_msg, "state": state, "real_tools": real_tools})
-    return _SeamExecutor(real_tools, ledger, role=role, principal=principal,
-                         user_msg=user_msg, state=state)
+    class _SeamExecutor(WorkflowExecutor):
+        pass
 
 
-_ctx1 = R.make_ctx(config=None, principal=ADMIN, role="admin", user_msg="带我去首页",
-                   state={"messages": []}, real_tools={"navigate_to": _nav_tool},
-                   executor_factory=_factory)
-check("`executor_factory` 的返回值就是账里那个执行器（`type(...) is` 哨兵类）",
-      type(_ctx1["executor"]) is _SeamExecutor, type(_ctx1["executor"]).__name__)
-check("五格参数**逐个显式传**（不是让调用方闭包捕获）",
-      len(_got) == 1 and _got[0]["role"] == "admin" and _got[0]["principal"] is ADMIN
-      and _got[0]["user_msg"] == "带我去首页"
-      and _got[0]["ledger"] is _ctx1["ledger"]
-      and _got[0]["real_tools"] == {"navigate_to": _nav_tool},
-      str(sorted(_got[0]) if _got else "没被调用"))
-check("工厂收到的那本账**就是**账里那本（另建一份 ⇒ 调用方手上的账永远是空的）",
-      _got and _got[0]["ledger"] is _ctx1["ledger"])
+    def _factory(ledger, *, role, principal, user_msg, state, real_tools):
+        _got.append({"ledger": ledger, "role": role, "principal": principal,
+                     "user_msg": user_msg, "state": state, "real_tools": real_tools})
+        return _SeamExecutor(real_tools, ledger, role=role, principal=principal,
+                             user_msg=user_msg, state=state)
 
 
-# ── ③ 台账：加接缝必须显式改这里 ─────────────────────────────────────
-print("\n③ 台账 —— 键集、签名、源码里那一处 `ctx.get`")
-SEAMS = ("prompt_builder", "menu_builder", "plan_builder", "executor_factory")
-_params = set(inspect.signature(R.make_ctx).parameters)
-_arm_src = (ROOT / "agent" / "react_arm.py").read_text(encoding="utf-8")
-
-from agent.tools_arm import ToolsGoldenArm  # noqa: E402
-
-check("工具臂的 `ctx_hooks` 键集 == 那四个（加接缝必须显式改这条台账）",
-      set(ToolsGoldenArm.ctx_hooks) == set(SEAMS), str(sorted(ToolsGoldenArm.ctx_hooks)))
-check("每个键都是 `make_ctx` 的具名形参（拼错键 ⇒ `**hooks` 只在运行时 TypeError）",
-      set(ToolsGoldenArm.ctx_hooks) <= _params,
-      str(sorted(set(ToolsGoldenArm.ctx_hooks) - _params)))
-check("三个决策侧接缝各有一处 `ctx.get(\"…\")`（少一处 ⇒ 那一格静默走缺省）",
-      all(f'ctx.get("{k}")' in _arm_src for k in SEAMS[:3]),
-      str([k for k in SEAMS[:3] if f'ctx.get("{k}")' not in _arm_src]))
-check("`executor_factory` 在 `make_ctx` 里被读（它是建账那一行的分支条件）",
-      "if executor_factory else" in _arm_src)
-check("`stream` 把 `self.ctx_hooks` 摊进 `make_ctx`（不摊 ⇒ 子类的接缝一个都不生效）",
-      "**self.ctx_hooks" in _arm_src)
+    _ctx1 = R.make_ctx(config=None, principal=ADMIN, role="admin", user_msg="带我去首页",
+                       state={"messages": []}, real_tools={"navigate_to": _nav_tool},
+                       executor_factory=_factory)
+    check("`executor_factory` 的返回值就是账里那个执行器（`type(...) is` 哨兵类）",
+          type(_ctx1["executor"]) is _SeamExecutor, type(_ctx1["executor"]).__name__)
+    check("五格参数**逐个显式传**（不是让调用方闭包捕获）",
+          len(_got) == 1 and _got[0]["role"] == "admin" and _got[0]["principal"] is ADMIN
+          and _got[0]["user_msg"] == "带我去首页"
+          and _got[0]["ledger"] is _ctx1["ledger"]
+          and _got[0]["real_tools"] == {"navigate_to": _nav_tool},
+          str(sorted(_got[0]) if _got else "没被调用"))
+    check("工厂收到的那本账**就是**账里那本（另建一份 ⇒ 调用方手上的账永远是空的）",
+          _got and _got[0]["ledger"] is _ctx1["ledger"])
 
 
-if FAILS:
-    print(f"\n❌ {len(FAILS)} 项未过：")
-    for f in FAILS:
-        print("   -", f)
-    sys.exit(1)
-print("\n✅ 全部通过")
+    # ── ③ 台账：加接缝必须显式改这里 ─────────────────────────────────────
+    print("\n③ 台账 —— 键集、签名、源码里那一处 `ctx.get`")
+    SEAMS = ("prompt_builder", "menu_builder", "plan_builder", "executor_factory")
+    _params = set(inspect.signature(R.make_ctx).parameters)
+    _arm_src = (ROOT / "agent" / "react_arm.py").read_text(encoding="utf-8")
+
+    check("工具臂的 `ctx_hooks` 键集 == 那四个（加接缝必须显式改这条台账）",
+          set(ToolsGoldenArm.ctx_hooks) == set(SEAMS), str(sorted(ToolsGoldenArm.ctx_hooks)))
+    check("每个键都是 `make_ctx` 的具名形参（拼错键 ⇒ `**hooks` 只在运行时 TypeError）",
+          set(ToolsGoldenArm.ctx_hooks) <= _params,
+          str(sorted(set(ToolsGoldenArm.ctx_hooks) - _params)))
+    check("三个决策侧接缝各有一处 `ctx.get(\"…\")`（少一处 ⇒ 那一格静默走缺省）",
+          all(f'ctx.get("{k}")' in _arm_src for k in SEAMS[:3]),
+          str([k for k in SEAMS[:3] if f'ctx.get("{k}")' not in _arm_src]))
+    check("`executor_factory` 在 `make_ctx` 里被读（它是建账那一行的分支条件）",
+          "if executor_factory else" in _arm_src)
+    check("`stream` 把 `self.ctx_hooks` 摊进 `make_ctx`（不摊 ⇒ 子类的接缝一个都不生效）",
+          "**self.ctx_hooks" in _arm_src)
+
+    assert not FAILED, f"{len(FAILED)} 条未过：" + "；".join(FAILED)
+
+
+if __name__ == "__main__":
+    test_arm_seams()

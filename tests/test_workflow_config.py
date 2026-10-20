@@ -37,6 +37,8 @@ import sys
 import tempfile
 import types
 
+from _judge import collector
+
 ROOT = pathlib.Path(__file__).resolve().parent.parent  # 仓根（测试统一在 tests/）
 sys.path.insert(0, str(ROOT))
 
@@ -47,9 +49,8 @@ from agent.workflow_model import Workflow  # noqa: E402
 PKG_DIR = ROOT / "agent" / "workflow_defs"
 
 
-def check(desc: str, cond: bool, detail: str = "") -> bool:
-    print(("  ✅ " if cond else "  ❌ ") + desc + (f"  [{detail}]" if detail else ""))
-    return bool(cond)
+FAILED: list[str] = []
+check = collector(FAILED)
 
 
 def _fields(w: Workflow) -> dict:
@@ -85,15 +86,15 @@ def _toml_cfgs() -> list[L.WorkflowConfig]:
 # ── ① 试点域逐字段对得上 ───────────────────────────────────────────────────
 def test_pilot_domain_matches_registry():
     print("\n[① 试点域：配置文件产出的那两条 == 注册表里的那两条]")
-    ok = True
+    FAILED.clear()
     cfg_names = {c.name for c in _toml_cfgs()}
-    ok &= check("试点域非空（空 = 这一组在空转）", bool(cfg_names), "、".join(sorted(cfg_names)))
+    check("试点域非空（空 = 这一组在空转）", bool(cfg_names), "、".join(sorted(cfg_names)))
     loaded = {w.name: w for w in L.load_dir(PKG_DIR)}
     reg = {w.name: w for w in D.WORKFLOWS}
     for name in sorted(cfg_names):
-        ok &= check(f"{name} 在注册表里", name in reg)
+        check(f"{name} 在注册表里", name in reg)
         if name in reg:
-            ok &= check(f"{name} 逐字段相同", _fields(loaded[name]) == _fields(reg[name]))
+            check(f"{name} 逐字段相同", _fields(loaded[name]) == _fields(reg[name]))
     # 序位：TOML 这一组在 `WORKFLOWS` 里必须**占据连续一段**，且起点 == 最小 order / 10。
     # 这一条同时钉住两件事：`order` 没被改（改了 ⇒ 起点对不上），以及拼回时没把这组挪到
     # 别处（挪了 ⇒ 不连续）。它也是"稀疏编号 ⇒ order/10 就是位次"那句话的机器凭据。
@@ -101,36 +102,36 @@ def test_pilot_domain_matches_registry():
     slots = sorted(pos[n] for n in cfg_names)
     start = min(c.order for c in _toml_cfgs()) // 10
     contiguous = list(range(slots[0], slots[0] + len(slots)))
-    ok &= check("TOML 这一组在 WORKFLOWS 里连续", slots == contiguous, str(slots))
-    ok &= check(f"起点位次 {slots[0]} == 最小 order / 10 = {start}", slots[0] == start)
-    assert ok, "① 见上面 ❌ 那几行"
+    check("TOML 这一组在 WORKFLOWS 里连续", slots == contiguous, str(slots))
+    check(f"起点位次 {slots[0]} == 最小 order / 10 = {start}", slots[0] == start)
+    assert not FAILED, "① 见上面 ❌ 那几行"
 
 
 # ── ② 格式表达力（承重点）──────────────────────────────────────────────────
 def test_format_round_trips_every_workflow():
     print("\n[② 格式表达力：全部 50 条过一遍配置格式再回来，必须原样相等]")
-    ok = True
-    ok &= check("往返的是全部 50 条（不是只测转过的那两条）",
+    FAILED.clear()
+    check("往返的是全部 50 条（不是只测转过的那两条）",
                 len(D.WORKFLOWS) == 50, f"{len(D.WORKFLOWS)} 条")
     bad = []
     for i, w in enumerate(D.WORKFLOWS, 1):
         back = L.WorkflowConfig.from_workflow(w, order=i).to_workflow()
         if _fields(back) != _fields(w):
             bad.append(w.name)
-    ok &= check("逐字段相同（含 inputs / plan 的顺序）", not bad, "、".join(bad) or "50/50")
+    check("逐字段相同（含 inputs / plan 的顺序）", not bad, "、".join(bad) or "50/50")
 
     # 灵敏度反控：比较必须**真的会红**——把配置改掉一个字段，上面那句就得报出来。
     # 没有这一条，"全等"可能只是因为比较函数恒返回 True。
     probe = L.WorkflowConfig.from_workflow(D.WORKFLOWS[0], order=1)
     probe.capability = probe.capability + "（故意改一个字）"
-    ok &= check("反控：改一个字段 ⇒ 比较必须红",
+    check("反控：改一个字段 ⇒ 比较必须红",
                 _fields(probe.to_workflow()) != _fields(D.WORKFLOWS[0]))
     probe2 = L.WorkflowConfig.from_workflow(D.WORKFLOWS[0], order=1)
     probe2.plan = []
-    ok &= check("反控：清空 plan ⇒ 比较必须红（顺序/条数也在比较范围内）",
+    check("反控：清空 plan ⇒ 比较必须红（顺序/条数也在比较范围内）",
                 _fields(probe2.to_workflow()) != _fields(D.WORKFLOWS[0])
                 or not D.WORKFLOWS[0].plan)
-    assert ok, "② 见上面 ❌ 那几行"
+    assert not FAILED, "② 见上面 ❌ 那几行"
 
 
 # ── ③ 严格性：六种坏法全部响亮抛 ────────────────────────────────────────────
@@ -147,7 +148,7 @@ def _raises(fn) -> bool:
 
 def test_bad_configs_are_loud():
     print("\n[③ 严格性：坏配置必须响亮抛，不许静默取缺省]")
-    ok = True
+    FAILED.clear()
     with tempfile.TemporaryDirectory() as td:
         d = pathlib.Path(td)
 
@@ -156,80 +157,80 @@ def test_bad_configs_are_loud():
             p.write_text(text, encoding="utf-8")
             return p
 
-        ok &= check("好配置不抛（否则下面五条是空跑）",
+        check("好配置不抛（否则下面五条是空跑）",
                     not _raises(lambda: L.load_file(write(_MINIMAL.format(name="x"), "x"))))
-        ok &= check("未知键 ⇒ 抛（`extra=\"forbid\"`）",
+        check("未知键 ⇒ 抛（`extra=\"forbid\"`）",
                     _raises(lambda: L.load_file(
                         write(_MINIMAL.format(name="x") + "complete_wen = \"oops\"\n"))))
-        ok &= check("缺 `order` ⇒ 抛（它是保序契约，缺了就没法排）",
+        check("缺 `order` ⇒ 抛（它是保序契约，缺了就没法排）",
                     _raises(lambda: L.load_file(write('name = "x"\ndescription = "d"\n'))))
-        ok &= check("缺 `name` ⇒ 抛",
+        check("缺 `name` ⇒ 抛",
                     _raises(lambda: L.load_file(write('order = 1\ndescription = "d"\n'))))
-        ok &= check("`name` 与文件名不符 ⇒ 抛（否则「这条技能住哪」又得靠搜）",
+        check("`name` 与文件名不符 ⇒ 抛（否则「这条技能住哪」又得靠搜）",
                     _raises(lambda: L.load_file(write(_MINIMAL.format(name="y"), "x"))))
-        ok &= check("TOML 语法坏 ⇒ 抛，且**消息里有文件名**（50 个文件里光报行列没用）",
+        check("TOML 语法坏 ⇒ 抛，且**消息里有文件名**（50 个文件里光报行列没用）",
                     _raises(lambda: L.load_file(write("order = = 1\n"))))
         try:
             L.load_file(write("order = = 1\n", "broken"))
         except Exception as exc:    # noqa: BLE001
-            ok &= check("  —— 那句消息确实带上了路径", "broken.toml" in str(exc), str(exc)[:80])
+            check("  —— 那句消息确实带上了路径", "broken.toml" in str(exc), str(exc)[:80])
 
         # 目录级的三条
         for p in d.glob("*.toml"):
             p.unlink()
-        ok &= check("空目录 ⇒ 抛（注册表为空从来不成立，那是路径写错了）",
+        check("空目录 ⇒ 抛（注册表为空从来不成立，那是路径写错了）",
                     _raises(lambda: L.load_dir(d)))
         write(_MINIMAL.format(name="a"), "a")
         write(_MINIMAL.format(name="b"), "b")           # 两条都是 order = 1
-        ok &= check("`order` 撞 ⇒ 抛（排序会取决于 glob 的字典序）",
+        check("`order` 撞 ⇒ 抛（排序会取决于 glob 的字典序）",
                     _raises(lambda: L.load_dir(d)))
         # ⚠️ **没有"`name` 撞"这一条**：`load_file` 要求 name == 文件名，而同一目录里
         # 两个文件不会同名 ⇒ 重名按构造不可能。这里只把那条**前提**钉住（它才是承重的）：
         write('order = 1\nname = "zzz"\ndescription = "d"\n', "a")
-        ok &= check("  前提：文件名与 name 不符就进不来 ⇒ 重名按构造不可能（不必写那条判据）",
+        check("  前提：文件名与 name 不符就进不来 ⇒ 重名按构造不可能（不必写那条判据）",
                     _raises(lambda: L.load_dir(d)))
-    assert ok, "③ 见上面 ❌ 那几行"
+    assert not FAILED, "③ 见上面 ❌ 那几行"
 
 
 # ── ④ 没有第二份事实源 ──────────────────────────────────────────────────────
 def test_no_second_source_of_truth():
     print("\n[④ 两边不许各留一份：TOML 的名字 ∩ Python 字面量的名字 == 空]")
-    ok = True
+    FAILED.clear()
     mods = _domain_modules()
-    ok &= check("找到的域模块 ≥ 5（派生没写歪）", len(mods) >= 5,
+    check("找到的域模块 ≥ 5（派生没写歪）", len(mods) >= 5,
                 "、".join(sorted(m.__name__ for m in mods)))
     py_names = {w.name for m in mods for w in m.WORKFLOWS}
     toml_names = {c.name for c in _toml_cfgs()}
     both = sorted(py_names & toml_names)
-    ok &= check("同一个技能名不许两边都有", not both, "、".join(both) or "无交集")
+    check("同一个技能名不许两边都有", not both, "、".join(both) or "无交集")
     all_names = {w.name for w in D.WORKFLOWS}
-    ok &= check("两边并起来 + 就地写的 `chat` == 注册表全部",
+    check("两边并起来 + 就地写的 `chat` == 注册表全部",
                 py_names | toml_names | {"chat"} == all_names,
                 f"缺 {sorted(all_names - py_names - toml_names - {'chat'})}、"
                 f"多 {sorted((py_names | toml_names) - all_names)}")
-    ok &= check("`public_read.py` 已删（搬完的域不留空壳）",
+    check("`public_read.py` 已删（搬完的域不留空壳）",
                 not (PKG_DIR / "public_read.py").exists())
-    assert ok, "④ 见上面 ❌ 那几行"
+    assert not FAILED, "④ 见上面 ❌ 那几行"
 
 
 # ── ⑤ 顺序契约 ──────────────────────────────────────────────────────────────
 def test_order_contract():
     print("\n[⑤ 顺序契约：order 唯一，且 WORKFLOWS 确实按它排]")
-    ok = True
+    FAILED.clear()
     cfgs = _toml_cfgs()
     orders = [c.order for c in cfgs]
-    ok &= check("TOML 侧的 order 互不相同", len(set(orders)) == len(orders), str(orders))
+    check("TOML 侧的 order 互不相同", len(set(orders)) == len(orders), str(orders))
     names = [w.name for w in D.WORKFLOWS]
-    ok &= check("注册表里技能名唯一（同名 ⇒ WORKFLOW_MAP 静默少一条）",
+    check("注册表里技能名唯一（同名 ⇒ WORKFLOW_MAP 静默少一条）",
                 len(set(names)) == len(names), f"{len(set(names))}/{len(names)}")
-    ok &= check("按 order 排 == 注册表里的相对次序",
+    check("按 order 排 == 注册表里的相对次序",
                 [c.name for c in sorted(cfgs, key=lambda c: c.order)]
                 == [n for n in names if n in {c.name for c in cfgs}])
     # 新增技能时的落点：`order` 必须留出空位，否则"插一条"要动一串数字
-    ok &= check("order 两两间隔 ≥ 2（插得进新技能，不必重编号）",
+    check("order 两两间隔 ≥ 2（插得进新技能，不必重编号）",
                 all(b - a >= 2 for a, b in zip(sorted(orders), sorted(orders)[1:]))
                 or len(orders) < 2, str(sorted(orders)))
-    assert ok, "⑤ 见上面 ❌ 那几行"
+    assert not FAILED, "⑤ 见上面 ❌ 那几行"
 
 
 if __name__ == "__main__":
