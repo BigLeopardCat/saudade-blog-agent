@@ -1,0 +1,361 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""裸脚本套件 → 原生 pytest 的 codemod（20261020 批 1 工装）。
+
+**它只搬位置，不改判据。** 放行口不是这个脚本，是 `scripts/dev/migration_parity.py` 的三层对拍
+（AST 判据条数 / 两轨红绿等价 / 注入必假判据两轨都红）。这个脚本认不出的形状**一律不动**，
+列进 `--check` 的 MANUAL 清单交人工 —— "改错了但看着像改对了"是这件事最贵的失效。
+
+## 搬什么、留什么（规则来自 PR #38 已迁移的 10 个试点，逐条比对出来的）
+
+留（模块级）：
+  · 模块 docstring；
+  · 全部 `Import` / `ImportFrom`；
+  · 全部 `FunctionDef` / `AsyncFunctionDef` / `ClassDef` —— 包括助手；
+  · **被任一模块级 def/class 体读到的裸名赋值**（如 `TOOL_NAMES`、`READY_KEYS`）：
+    搬进函数会让它变局部名，助手读全局当场 `NameError`；
+  · **最后一个 import 之前的 `Expr` / `Assign` / `AnnAssign`** —— `ROOT = ...` 与
+    `sys.path.insert(0, ROOT)` 这类前导段。只按"被 def 读"判会漏掉 `ROOT`（它不被任何
+    def 读），搬进函数后本模块自己的 `sys.path.insert` 当场 `NameError`。
+
+搬（进驱动函数）：
+  · 其余一切可执行语句，**保持原有相对顺序**。
+
+改名：**按 AST 位置改，不做文本替换**（理由见 `_rename_ids`）
+  · 顶层 `def test_*` ⇒ `_<原名>`：它们是助手不是用例，被 pytest 单独收集会**恒绿**
+    （它们调 `check()` 往模块级 FAILS 里塞，断言在模块尾，不在自己身上）；
+  · 形态 D 的 `__main__` 里 `for fn in (test_a, test_b): fn()` 是**裸名引用**，
+    文本替换的 `name()` 形式扫不到 —— 这是必须走 AST 的那一半理由。
+
+收尾：**驱动函数体 = 搬来的模块级语句 + `__main__` 块的正文**（顺序即今天的执行顺序）。
+`__main__` 正文只做一件事 —— 处理收尾：
+
+  · `sys.exit(<模块级零参函数>())` ⇒ **拆成裸调用**（`sys.exit(main())` → `main()`）；
+    入口函数本体**原样留着**，不搬进来。搬进来会让它那套 `return 1` / `return 0` 老退出
+    路径把尾部的 assert 变成**不可达代码** ⇒ pytest 恒绿（工装抓出来的第二个 bug）。
+  · 其余收尾（`sys.exit(1)` / `raise SystemExit(...)`）⇒ 顶层整条丢；**嵌套的不动**
+    （实测 pytest 在任意嵌套深度都把 `SystemExit` 判为失败，行为等价）。
+
+最后尾补 `assert not FAILED`（`FAILED` 名字从判据收集器的 append 目标现取，不写死），
+末尾补 `if __name__ == "__main__": <stem>()` ⇒ **直跑语义原样保留**。
+
+**用例函数名 = 文件词干本身**（`test_write_facts.py` → `def test_write_facts()`），
+不是 `test_` + 词干 —— PR #38 的 10 个试点逐字如此。
+
+顶层已经有 `def <stem>()` 的文件直接判 MANUAL —— 那是 PR #38 已迁移的形态，不重做。
+
+用法：
+    python3 scripts/dev/pytest_migrate.py --check --all
+    python3 scripts/dev/pytest_migrate.py tests/test_x.py            # 就地改写
+"""
+
+from __future__ import annotations
+
+import argparse
+import ast
+import pathlib
+import sys
+import textwrap
+
+ROOT = pathlib.Path(__file__).resolve().parent.parent.parent
+TESTS = ROOT / "tests"
+
+
+class Manual(Exception):
+    """认不出的形状 —— 不动它，交人工。理由写在消息里。"""
+
+
+def _fail_name(tree: ast.Module) -> str:
+    """判据收集器往哪个模块级名字里 append（`FAILS` / `FAILED` 两种都有，现取）。
+
+    收集器**不都叫 `check`**：`test_zako_role.py` 那个叫 `check_`。所以按**前缀**认
+    （`check` / `check_` / `checker`…），认名字不认字面 —— 名字是习惯、append 目标才是契约。
+    """
+    found: set[str] = set()
+    for n in tree.body:
+        if isinstance(n, ast.FunctionDef) and n.name.startswith("check"):
+            for sub in ast.walk(n):
+                if (isinstance(sub, ast.Attribute) and sub.attr == "append"
+                        and isinstance(sub.value, ast.Name)):
+                    found.add(sub.value.id)
+    if not found:
+        raise Manual("找不到判据收集器（模块级 def check*）往哪个名字里 append")
+    if len(found) > 1:
+        raise Manual(f"check() 同时往 {sorted(found)} 里 append，判不出收口用哪个")
+    return found.pop()
+
+
+def _names_read_by_defs(tree: ast.Module) -> set[str]:
+    """模块级 def/class 体里读到的裸名 —— 这些名字必须留在模块级。"""
+    out: set[str] = set()
+    for d in tree.body:
+        if not isinstance(d, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            continue
+        for sub in ast.walk(ast.Module(body=d.body, type_ignores=[])):
+            if isinstance(sub, ast.Name) and isinstance(sub.ctx, ast.Load):
+                out.add(sub.id)
+    return out
+
+
+def _zero_arg_fn(tree: ast.Module, name: str) -> bool:
+    d = next((x for x in tree.body
+              if isinstance(x, ast.FunctionDef) and x.name == name), None)
+    if d is None:
+        return False
+    a = d.args
+    return not (a.args or a.posonlyargs or a.kwonlyargs or a.vararg or a.kwarg)
+
+
+def _exit_inner(node: ast.AST) -> ast.expr | None:
+    """收尾语句里"真正要跑的那件事"：`sys.exit(main())` → `main()` 这个 Call。"""
+    call = None
+    if isinstance(node, ast.Expr) and isinstance(node.value, ast.Call):
+        call = node.value
+    elif isinstance(node, ast.Raise) and isinstance(node.exc, ast.Call):
+        call = node.exc
+    if call is None or len(call.args) != 1 or call.keywords:
+        return None
+    return call.args[0]
+
+
+def _main_body(src: str, tree: ast.Module, node: ast.If) -> str:
+    """`if __name__ == "__main__":` 块的**正文**（去缩进前的原文）。
+
+    **驱动函数体就是它**，所以这里要做的只有一件事：处理收尾。
+
+      · `sys.exit(<模块级零参函数>())` ⇒ **拆成裸调用**（`sys.exit(main())` → `main()`）；
+        入口函数的 `return 0/1` 因此原样留着，不用搬它的函数体（搬了尾部的 assert 会
+        变成不可达代码 ⇒ 恒绿）。
+      · 其余收尾（`sys.exit(1)` / `raise SystemExit(...)`）⇒ **整条丢**。
+        只丢**顶层**的：嵌套在 `if FAILS:` 里的 `sys.exit(1)` 原样留着 —— 实测 pytest
+        在任意嵌套深度都把 `SystemExit` 判为失败（`/tmp` 探针），行为等价，不动更安全。
+    """
+    if not node.body:
+        return ""
+    if node.body[0].lineno == node.lineno:
+        raise Manual('`__main__` 块的语句跟 `if` 同行，认不出')
+    out: list[str] = []
+    for st in node.body:
+        if _is_exit(st):
+            inner = _exit_inner(st)
+            if (isinstance(inner, ast.Call) and isinstance(inner.func, ast.Name)
+                    and _zero_arg_fn(tree, inner.func.id)):
+                out.append(f"{inner.func.id}()")
+            continue
+        out.append(_seg(src, st))
+    # 这些语句在原文里带 4 空格缩进（`__main__` 块的体），去平了再交给统一的 +4 ——
+    # 否则它们比搬来的模块级语句多缩一层，`unindent does not match`。
+    return textwrap.dedent("\n".join(out))
+
+
+def _seg(src: str, node: ast.AST) -> str:
+    """按行号取回一段源码原文（含装饰器）。"""
+    lines = src.splitlines()
+    start = min([node.lineno] + [d.lineno for d in getattr(node, "decorator_list", [])])
+    end = node.end_lineno or node.lineno
+    return "\n".join(lines[start - 1:end])
+
+
+def _is_main_block(node: ast.AST) -> bool:
+    return (isinstance(node, ast.If)
+            and any(isinstance(s, ast.Constant) and s.value == "__main__"
+                    for s in ast.walk(node.test)))
+
+
+def _is_exit(node: ast.AST) -> bool:
+    """`sys.exit(...)` / `raise SystemExit(...)` —— 搬迁块里要删掉的收尾。"""
+    if isinstance(node, ast.Raise) and node.exc is not None:
+        exc = node.exc
+        return ((isinstance(exc, ast.Call) and isinstance(exc.func, ast.Name)
+                 and exc.func.id == "SystemExit")
+                or (isinstance(exc, ast.Name) and exc.id == "SystemExit"))
+    if isinstance(node, ast.Expr) and isinstance(node.value, ast.Call):
+        f = node.value.func
+        if isinstance(f, ast.Attribute) and f.attr == "exit" and isinstance(f.value, ast.Name):
+            return f.value.id == "sys"
+        if isinstance(f, ast.Name) and f.id == "exit":
+            return True
+    return False
+
+
+def _target_names(node: ast.AST) -> list[str]:
+    if isinstance(node, ast.Assign):
+        return [t.id for t in node.targets if isinstance(t, ast.Name)]
+    if isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
+        return [node.target.id]
+    return []
+
+
+def _rename_ids(src: str, tree: ast.Module, renames: dict[str, str]) -> str:
+    """助手改名（`test_x` → `_test_x`）：**按 AST 位置改标识符，不做文本替换**。
+
+    两个坑把文本替换否掉了：
+
+      · `def test_x():` 里含子串 `test_x()`，所以"只改调用点"的 `str.replace` 会连定义行
+        一起改 —— 看着正好，但先改定义行再全局替换就会把 `_test_x()` 再改一次成 `__test_x()`；
+      · 形态 D 的 `__main__` 里是 `for fn in (test_a, test_b): fn()` —— 那是对**裸名**的
+        引用，不是调用点，`name()` 形式的替换根本扫不到。
+
+    位置取自**原文**（未重新分段的源码），所以行号/列号都有效；改名不引入换行，行号不变，
+    下游 `_seg` 照旧可用。列号是 **UTF-8 字节偏移**，本仓满屏中文，所以逐行 encode 再切。
+    """
+    if not renames:
+        return src
+    lines = src.splitlines()
+    spans: list[tuple[int, int, int, str, str]] = []      # lineno, c0, c1, old, new
+    for n in ast.walk(tree):
+        if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Load) and n.id in renames:
+            spans.append((n.lineno, n.col_offset, n.end_col_offset, n.id, renames[n.id]))
+        elif isinstance(n, ast.FunctionDef) and n.name in renames:
+            c0 = n.col_offset + 4                          # `def ` 之后
+            spans.append((n.lineno, c0, c0 + len(n.name), n.name, renames[n.name]))
+    for lineno, c0, c1, old, new in sorted(spans, reverse=True):
+        raw = lines[lineno - 1].encode("utf-8")
+        got = raw[c0:c1].decode("utf-8")
+        if got != old:
+            raise Manual(f"L{lineno} 第 {c0} 列应是 {old!r}，实际 {got!r}")
+        lines[lineno - 1] = (raw[:c0] + new.encode("utf-8") + raw[c1:]).decode("utf-8")
+    return "\n".join(lines)
+
+
+def _classify(tree: ast.Module) -> tuple[set[int], list[int]]:
+    """把顶层语句分成「留模块级」与「搬进驱动」，返回 `(keep_idx, move_idx)`。
+
+    `__main__` 块两边都不进 —— 它由 `_main_body` 单独取正文。
+    """
+    needed = _names_read_by_defs(tree)
+    last_import = max((i for i, n in enumerate(tree.body)
+                       if isinstance(n, (ast.Import, ast.ImportFrom))), default=-1)
+
+    keep_idx: set[int] = set()
+    move_idx: list[int] = []
+    for i, n in enumerate(tree.body):
+        if _is_main_block(n):
+            continue
+        if i == 0 and isinstance(n, ast.Expr) and isinstance(n.value, ast.Constant) \
+                and isinstance(n.value.value, str):
+            keep_idx.add(i)                       # 模块 docstring
+            continue
+        if isinstance(n, (ast.Import, ast.ImportFrom)):
+            keep_idx.add(i)
+            continue
+        if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            keep_idx.add(i)
+            continue
+        # ⚠️ **前导段整段留在模块级**（`ROOT = ...` / `sys.path.insert(0, ROOT)` /
+        #    `AnnAssign` 都在这里）：`sys.path.insert` 要靠 `ROOT`，而 `ROOT` 又不被任何
+        #    def 读 —— 只按"被 def 读"判会把它搬进函数，本模块自己的 import 当场
+        #    `NameError: ROOT`（这一条是工装自己抓出来的第一版 bug）。
+        if i <= last_import and isinstance(n, (ast.Expr, ast.Assign, ast.AnnAssign)):
+            keep_idx.add(i)
+            continue
+        tgts = _target_names(n)
+        if tgts and all(t in needed for t in tgts):
+            keep_idx.add(i)                       # 助手要读的模块级常量
+            continue
+        move_idx.append(i)
+    return keep_idx, move_idx
+
+
+def _rename_map(tree: ast.Module, stem: str) -> dict[str, str]:
+    """顶层 `def test_*` 一律变助手（`_` 前缀）。
+
+    它们调判据收集器往**模块级** FAILS 里塞，断言在模块尾、不在自己身上 —— 被 pytest
+    单独收集会**恒绿**（正是 PR #38 那条注说的假绿）。`stem` 自己排除掉：那是驱动函数的
+    名字，改了会自递归。
+    """
+    return {n.name: "_" + n.name for n in tree.body
+            if isinstance(n, ast.FunctionDef)
+            and n.name.startswith("test_") and n.name != stem}
+
+
+def _indent(text: str) -> str:
+    """整块 +4 空格（空行不动），再补一个尾空行。"""
+    if not text.strip():
+        return ""
+    return "\n".join("    " + ln if ln.strip() else ln
+                     for ln in text.splitlines()) + "\n\n"
+
+
+def transform(path: pathlib.Path) -> str:
+    """返回改写后的全文；认不出就抛 Manual。"""
+    src = path.read_text(encoding="utf-8")
+    tree = ast.parse(src)
+    stem = path.stem
+
+    fail_name = _fail_name(tree)
+    main_node = next((n for n in tree.body if _is_main_block(n)), None)
+    keep_idx, move_idx = _classify(tree)
+
+    # 顶层已经有 `def <stem>()` ⇒ 这个文件已经是迁移后的形态（PR #38 的 10 个试点）。
+    # 不拦的话下面的驱动会跟它重名 ⇒ 自递归。
+    if any(isinstance(n, ast.FunctionDef) and n.name == stem for n in tree.body):
+        raise Manual(f"顶层已有 def {stem}()（已经是原生形态）")
+
+    if not move_idx and main_node is None:
+        raise Manual("没有可搬的模块级语句、也没有 __main__ 块")
+
+    # ── 改名 ───────────────────────────────────────────────────────────────
+    # **在分段之前**按 AST 位置做，这样 `__main__` 里对它们的裸名引用（形态 D 的 for
+    # 循环）也跟着改。
+    src = _rename_ids(src, tree, _rename_map(tree, stem))
+
+    # ── 留下的部分 ─────────────────────────────────────────────────────────
+    out = [_seg(src, n) for i, n in enumerate(tree.body) if i in keep_idx]
+
+    # ── 驱动函数体 = 搬来的模块级语句 + `__main__` 块正文 ────────────────────
+    # 顺序正是今天的执行顺序（模块级先跑，`__main__` 块最后）。
+    moved = [_seg(src, n) for n in (tree.body[i] for i in move_idx) if not _is_exit(n)]
+    if main_node is not None:
+        moved.append(_main_body(src, tree, main_node))
+    head = "\n".join(s for s in moved if s.strip())
+    if not head.strip():
+        raise Manual("搬迁块 + __main__ 正文合起来是空的")
+
+    out.append(f"def {stem}():\n{_indent(head)}"
+               f"    assert not {fail_name}, (\n"
+               f"        f\"{{len({fail_name})}} 条未通过：\" + \"；\".join({fail_name}))")
+
+    text = "\n\n\n".join(out).rstrip() + "\n\n\n"
+    text += f'if __name__ == "__main__":\n    {stem}()\n'
+
+    try:
+        ast.parse(text)
+    except SyntaxError as exc:
+        raise Manual(f"生成结果语法不合法：{exc}") from exc
+    return text
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser()
+    ap.add_argument("paths", nargs="*", type=pathlib.Path)
+    ap.add_argument("--all", action="store_true", help="体检 tests/ 下全部 test_*.py")
+    ap.add_argument("--check", action="store_true", help="只报告，不写回")
+    args = ap.parse_args()
+
+    paths = sorted(TESTS.glob("test_*.py")) if args.all else args.paths
+    if not paths:
+        ap.error("给路径，或 --all")
+
+    ok = manual = 0
+    for p in paths:
+        try:
+            text = transform(p)
+        except Manual as exc:
+            manual += 1
+            print(f"MANUAL  {p.name}  ← {exc}")
+            continue
+        except SyntaxError as exc:
+            manual += 1
+            print(f"MANUAL  {p.name}  ← 解析失败 {exc}")
+            continue
+        ok += 1
+        print(f"OK      {p.name}")
+        if not args.check:
+            p.write_text(text, encoding="utf-8")
+    print(f"\n可自动转写 {ok} 个；需人工 {manual} 个（共 {len(paths)}）")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
