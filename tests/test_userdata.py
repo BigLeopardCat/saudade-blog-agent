@@ -178,7 +178,7 @@ from tools.base import _TOOL_REGISTRY  # noqa: E402
 
 def test_userdata():
     _saved_secret = _settings.jwt_secret
-    _settings.jwt_secret = "test-secret-for-userdata-tools"
+    _settings.jwt_secret = "test-secret-for-userdata-tools-not-a-real-secret"
     READ_TOOLS = ["list_my_favorites", "get_unread_summary", "list_notifications",
                   "list_my_messages", "list_my_board"]
     BOARD_MINE = [{"talkKey": 109, "talkTitle": "", "content": "今天的月亮很好看",

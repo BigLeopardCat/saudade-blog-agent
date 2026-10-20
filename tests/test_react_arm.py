@@ -624,7 +624,7 @@ def test_react_arm():
     ADMIN0 = Principal(uid=0, role="admin")
     _oi, _os = _tb._tag_index, _settings.jwt_secret
     _tb._tag_index = lambda *a, **k: None
-    _settings.jwt_secret = "test-secret-react-arm"
+    _settings.jwt_secret = "test-secret-react-arm-not-a-real-secret"
     try:
         RAN.clear()
         _pf = _run([_call("tag_delete", name="大笨狗"), AIMessage(content="已经帮你删掉啦")],
