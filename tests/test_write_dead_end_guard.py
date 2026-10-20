@@ -86,7 +86,7 @@ def _card_tools(popup) -> set:
 
 
 def test_write_dead_end_guard():
-    settings.jwt_secret = "test-secret-for-dead-end-guard"
+    settings.jwt_secret = "test-secret-for-dead-end-guard-not-a-real-secret"
     CASES: list[tuple[str, str, str, str]] = [
         # (工具名, 命令句（尾挂疑问词正文）, spec 原文, 技能名)
         ("create_announcement",
