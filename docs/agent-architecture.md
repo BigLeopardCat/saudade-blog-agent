@@ -135,6 +135,7 @@ flowchart TB
 │   ├── prompts.py             # ★ 全部模型可见正文的唯一落点：人设 + 叙述纪律 + planner / reflector 模板 + 输出契约（渲染点与全部逻辑仍在 graph.py）
 │   ├── planner_llm.py         # ★ 技能表 ↔ API tools/tool_calls 的接线层（20261004 起**唯一**接口层；20261017 前名 native_plan.py）
 │   ├── tool_index.py          # 技能索引档（ADR-0015 阶段 0，**出厂关**）：描述压成一行索引 + describe_skill 按需取回原文；结构一字节不动
+│   ├── capability_index.py    # 能力索引（ADR-0015 阶段 2）：每条技能 → 索引行 + 工具面 + 完成判定/回复契约，供 planner 选能力、执行层拿工具面跑 ReAct；全部从注册表派生
 │   ├── deterministic_plan.py           # ★ 确定性决策层（零 LLM）：快道（当前文章读取 / 特效切换 / 导航 / 屏幕显示）+ 动作意图扫描 + 检索候选裁决 + 终局计划
 │   ├── arg_refs.py                # ★ `$<工具>[<序号>].<字段>` 参数引用：把上一步的真实返回值绑进下一步的参数（五个错误码，解不出必须响亮）
 │   │
