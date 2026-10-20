@@ -14,9 +14,10 @@ POC 要答的问题是「把模型的动作空间从 50 条手写技能模板换
 
 ## 与生产那份的关系（块序与资产同源，正文各写各的）
 
-块序与 `agent/react_arm.py::_system_prompt` **逐块对齐**（人设 → 受众 → 决策块 → 立场改写
-→ 叙述纪律 → 贴纸 → 循环说明），复用的是**同一批资产**：`prompts.BLOG_ASSISTANT_PROMPT`、
-`audience_block`、`NARRATOR_DISCIPLINE`、`STICKER_GUIDE`、`react_arm._DISCIPLINE_STANCE`。
+块序与 `agent/react_arm.py::_system_prompt` **逐块对齐**（人设 → 受众 → 决策块 →
+**按条裁过的**叙述纪律 → 贴纸 → 循环说明），复用的是**同一批资产**：
+`prompts.BLOG_ASSISTANT_PROMPT`、`audience_block`、`NARRATOR_DISCIPLINE_LOOP`、
+`STICKER_GUIDE`（"立场改写"那一层 20261021 已退场，见 `agent/narrator_discipline.py` 的头注）。
 动态槽位（页面上下文 / 本轮信息 / 文档锚点 / 近期上下文 / 待办台账 / 工具结果 / 受阻行 /
 纠偏）也由 `react_arm` 的那几个 helper 算——**同一个事实只算一遍**，两臂看到的背景信息相同，
 差的只有"菜单是什么、怎么表达决定"。
@@ -30,10 +31,9 @@ from __future__ import annotations
 
 from typing import Any
 
+from agent.narrator_discipline import NARRATOR_DISCIPLINE_LOOP
 from agent.prompts import BLOG_ASSISTANT_PROMPT
 from agent.react_arm import (
-    _DISCIPLINE_STANCE,
-    NARRATOR_DISCIPLINE,
     STICKER_GUIDE,
     _doc_anchors,
     _frame_texts,
@@ -186,7 +186,7 @@ def build_tool_prompt(*, messages: list, role: str | None, principal: Any,
     # ⚠️ 这与 `agent/tool_prompt.py` 的契约内部顺序是**两件事**：契约里那几段静态规则
     # （判定规则 / 记账口 / 输出契约）也挪到了易变槽位之前，见 `_TOOL_PLANNER_PROMPT`。
     return "\n\n".join([BLOG_ASSISTANT_PROMPT or "", audience_block(role),
-                        _DISCIPLINE_STANCE, NARRATOR_DISCIPLINE, STICKER_GUIDE,
+                        NARRATOR_DISCIPLINE_LOOP, STICKER_GUIDE,
                         _TOOL_CLOSING_RULES, planner])
 
 
