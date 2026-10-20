@@ -26,6 +26,25 @@
 **本闸不是"禁止长文件"，是"长文件不许再长"**。真需要它变大，就在同一个提交里
 `--update` 并说明为什么 ⇒ 把隐式增长变成一次需要辩护的动作。
 
+**第二本账：注释行数（`eval/comment_baseline.json`）**。同一个文件里还有一格读数不
+是"多少行"，而是"**其中多少行是注释**"——`agent/graph.py` 实测 53%（11078 行里
+5848 行是纯 `#` 注释或 docstring 行）。它值得单独一本账，是因为**文件级预算看不见
+注释的膨胀**：一次事故复盘往同一个函数里塞 40 行"当时为什么会这样"，总行数只动
+3.6%，`lines` 那格照样绿。判法与 `lines` 逐字同形（**双向**：变大要红，变小也要
+在同一个提交里收紧台账），唯一差别是**射程**——
+
+  · 射程 = **台账里已有的键**，不是一个预算阈值。`agent/graph.py` 是第一个（也是
+    目前唯一一个）。**把一个模块加进来是一次显式的一行动作**（往
+    `eval/comment_baseline.json` 加一个键），不是"自动扫描全仓"。
+  · 为什么不自动扫全仓：本仓的注释风格是**成族**的（`authz.py` 42%、
+    `tools/base.py` 37%、`server.py` 32%——见 `docs/agent-architecture.md`），
+    一上来就全仓上闸等于一次性冻结几百处正当的说明文字；先挂住**已知最胖的那
+    一个**，其余按需加。
+  · 为什么**不是**"禁止出现日期/批次号"那种判据：本仓有一条写在判据里的立场
+    （`tests/test_task_continuation.py`「判据逼人擦史」）——一条**明令禁止历史**的
+    规则，形状上正是逼下一个人把历史从注释里删掉。棘轮不禁止任何具体内容，只要求
+    **注释不再变多**。
+
 **棘轮是双向的（20261018 补）**：只判"长大了"的话，一次大缩小之后台账会留下**永久免费
 额度**——下一批增长只要没回到旧水位，就一格都不报。实测抓到过：`agent/graph.py` 台账记着
 `13263 / 237`，盘上早就是 `13190 / 235`，那 73 行是**静默**的（`judge()` 当时只在
@@ -46,6 +65,7 @@ import sys
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 LEDGER = ROOT / "eval" / "module_baseline.json"
+COMMENT_LEDGER = ROOT / "eval" / "comment_baseline.json"
 
 # 预算。**阈值只要稳定就有意义**（同 `test_complexity_budget.py` 的口径）：本闸判的是
 # ratchet（"它没变大"），不必是某个规范值。换阈值 = 全仓台账重写 ⇒ 必须同一次 `--update`。
@@ -132,7 +152,7 @@ def dump(ledger: dict) -> str:
     return json.dumps(ledger, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
 
 
-def order_violation(raw: str) -> str | None:
+def order_violation(raw: str, path: pathlib.Path = LEDGER) -> str | None:
     """盘上台账的**字节**是否就是 `--update` 会写出来的那一份；不是就返回一句说明。
 
     为什么这值得一条判据（20261018 审计 A5）：`--update` 的产物是排序过的，而盘上这份
@@ -147,10 +167,50 @@ def order_violation(raw: str) -> str | None:
     want = dump(json.loads(raw))
     if want == raw:
         return None
-    return (f"{LEDGER.relative_to(ROOT)} 的盘上格式/键序与 `--update` 的产物不一致"
+    return (f"{path.relative_to(ROOT)} 的盘上格式/键序与 `--update` 的产物不一致"
             f"（往返 {len(want)} 字节 vs 盘上 {len(raw)} 字节）——"
             f"跑一次 `--update` 校正。⚠️ 那一次 diff **只该动键序与空白，值一个都不许变**；"
             f"值变了就是另一次放宽，要单独说理")
+
+
+# ── 第二本账：注释行数（射程与理由见模块头注《第二本账》）──────────────────────
+
+
+def count_comments(text: str) -> int:
+    """一份源码里的**注释行数**：纯 `#` 行 ∪ docstring 行。
+
+    两个口径要一起用，少一个都会漏掉本仓最肥的那一半（`graph.py` 的 3832 行纯 `#`
+    与 2053 行 docstring 是两种写法、同一件事）。**并集不是相加**：docstring 里以
+    `#` 开头的那几行（本仓的 docstring 大量这么写）会被两边同时数到。
+    """
+    lines = text.splitlines()
+    tree = ast.parse(text)
+    doc: set[int] = set()
+    for n in ast.walk(tree):
+        if isinstance(n, (ast.Module, ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)):
+            b = n.body
+            if b and isinstance(b[0], ast.Expr) and isinstance(b[0].value, ast.Constant) \
+                    and isinstance(b[0].value.value, str):
+                doc.update(range(b[0].lineno, b[0].end_lineno + 1))
+    return sum(1 for i, ln in enumerate(lines, 1)
+               if i in doc or ln.lstrip().startswith("#"))
+
+
+def judge_comments(current: dict, ledger: dict) -> list[str]:
+    """返回违规清单（空 = 全绿）。**只判台账里已有的键**——射程就是那本账本身。"""
+    bad: list[str] = []
+    for key, base in sorted(ledger.items()):
+        n = current.get(key)
+        if n is None:
+            bad.append(f"台账过期    {key}  源码里没有这个文件了 —— 删掉这一条")
+            continue
+        if n > base:
+            bad.append(f"注释变多    {key}  {n} 行（台账 {base}，只许缩小）—— "
+                       f"新加的说明请并进已有的注里，别在同一个函数上再叠一段")
+        elif n < base:
+            bad.append(f"台账该收紧  {key}  实测 {n} 行，台账还记着 {base} —— "
+                       f"把这一条改小（棘轮只许缩小）")
+    return bad
 
 
 # ── 自检：读数 + 判据（没有这一段，「闸其实是空的」没人看着）──────────────────
@@ -223,6 +283,22 @@ def _self_check() -> None:
                                       ensure_ascii=False, indent=2)) is not None, \
         "少了结尾换行却没红"
 
+    # ⑦ 注释行数棘轮：口径 + 双向 + 射程，四条各来一遍。
+    #    反控是这一段存在的理由：合成一份"注释变多"的源码 ⇒ 必须红。
+    _few = '"""一行的 docstring。"""\nx = 1\n'
+    _many = '"""一行的 docstring。"""\n# 又加了一段说明\nx = 1\n'
+    assert count_comments(_few) == 1, f"docstring 行没数进去：{count_comments(_few)}"
+    assert count_comments(_many) == 2, f"纯 # 行没数进去：{count_comments(_many)}"
+    # 并集不是相加：docstring 里以 `#` 开头的行只算一次
+    _both = '"""\n# docstring 里的第一行\n"""\nx = 1\n'
+    assert count_comments(_both) == 3, f"docstring 与 # 行重复计数：{count_comments(_both)}"
+    assert judge_comments({"x.py": 2}, {"x.py": 1}), "注释变多没红 —— 闸是空的"
+    assert judge_comments({"x.py": 0}, {"x.py": 1}), "注释变少没提示收紧"
+    assert not judge_comments({"x.py": 1}, {"x.py": 1}), "没动却红了"
+    assert judge_comments({}, {"x.py": 1}), "台账过期没红"
+    assert not judge_comments({"x.py": 1, "y.py": 99}, {"x.py": 1}), \
+        "未在册的模块被自动判了 —— 射程必须只等于那本账（加一个模块是显式的一行动作）"
+
 
 def main() -> int:
     ap = argparse.ArgumentParser(description="模块体量预算闸")
@@ -238,6 +314,13 @@ def main() -> int:
         LEDGER.write_text(dump(rewrite(current, args.lines_max, args.defs_max)),
                           encoding="utf-8")
         print(f"台账已重写：{LEDGER.relative_to(ROOT)}（{len(rewrite(current, args.lines_max, args.defs_max))} 条）")
+        # 注释那本账**只收紧在册的键**，不扩射程：加一个模块进来是一次手写的
+        # 一行动作（见模块头注），`--update` 不该替你扩。
+        c_raw = COMMENT_LEDGER.read_text(encoding="utf-8") if COMMENT_LEDGER.exists() else "{}"
+        c_old = json.loads(c_raw) if c_raw else {}
+        c_new = {k: count_comments((ROOT / k).read_text(encoding="utf-8")) for k in sorted(c_old)}
+        COMMENT_LEDGER.write_text(dump(c_new), encoding="utf-8")
+        print(f"注释台账已收紧：{COMMENT_LEDGER.relative_to(ROOT)}（{len(c_new)} 条）")
         return 0
 
     raw = LEDGER.read_text(encoding="utf-8") if LEDGER.exists() else ""
@@ -249,11 +332,29 @@ def main() -> int:
         drift = order_violation(raw)
         if drift:
             bad.append(drift)
+
+    c_raw = COMMENT_LEDGER.read_text(encoding="utf-8") if COMMENT_LEDGER.exists() else ""
+    c_ledger = json.loads(c_raw) if c_raw else {}
+    measured = {}
+    for key in sorted(c_ledger):
+        p = ROOT / key
+        if p.exists():
+            measured[key] = count_comments(p.read_text(encoding="utf-8"))
+    c_bad = judge_comments(measured, c_ledger)
+    print(f"注释台账 {len(c_ledger)} 条"
+          + (f"（实测 {'、'.join(f'{k} {v}' for k, v in sorted(measured.items()))} 行）"
+             if measured else "（空）"))
+    if c_raw:
+        drift = order_violation(c_raw, COMMENT_LEDGER)
+        if drift:
+            c_bad.append(drift)
+    bad += c_bad
+
     if bad:
         print("\n".join("✗ " + b for b in bad))
         print(f"\n{len(bad)} 条违规。**别急着 --update**：先看能不能按主题拆。")
         return 1
-    print("✓ 全部模块都在预算内（或台账内只减不增）")
+    print("✓ 全部模块都在预算内（或台账内只减不增）；注释台账只减不增")
     return 0
 
 
