@@ -74,8 +74,8 @@ from agent.tasks import (
     normalize_intents,
     pseudo_tool_schemas,
 )
+from agent.tool_index import describe_skill_schema, index_line, skill_description
 from agent.workflow_defs import WORKFLOW_MAP, visible_workflows
-from agent.workflow_menu import render_tool_marks
 from agent.workflow_model import ParamSpec
 from agent.workflow_params import tool_arg_schemas, workflow_param_specs
 from agent.workflow_tools import callable_query_tools, explicit_tools
@@ -291,7 +291,8 @@ def _has_write_tool(workflow) -> bool:
 
 def build_tool_schema(role: str | None, *, evidence: bool = False,
                       deny: frozenset[str] | set[str] | None = None,
-                      deny_pseudo: frozenset[str] | set[str] | None = None) -> list[dict]:
+                      deny_pseudo: frozenset[str] | set[str] | None = None,
+                      index: bool = False) -> list[dict]:
     """本轮这个身份能选的技能 → OpenAI `tools` 数组。
 
     **来源只有一处**：`visible_workflows(role)` × `workflow_param_specs(workflow)`——与渲染
@@ -342,6 +343,13 @@ def build_tool_schema(role: str | None, *, evidence: bool = False,
     纯话术纠不动一个它本来就想交的答案，所以这一格也走 1d 那条
     验证过的路：**把选项从 schema 里摘掉**，而不是再劝一次（同 §1.55 的 1b 结论）。
     `task_hold` / `task_drop` 同理可摘，只是今天没有触发它们的现场。
+
+    **`index=True`（20261020，ADR-0015 阶段 0，出厂关）**：每个技能的 `description` 从
+    整段散文压成**一行索引**，并追加一个 `describe_skill(name)` 让模型按需取回原文。
+    **结构与散文的边界是**：函数名 / type / enum / required / 嵌套 schema 一个字符不动
+    （`enum` 是带参清单的拦截点），只换 `description` 那一格的内容。
+    缺省 `False` ⇒ **本参数不存在时这条路径逐字节相同**（`tests/test_prompt_prefix.py`
+    钉住），理由、实测依据与"为什么是外置不是删除"见 `agent/tool_index.py` 头注。
     """
     tools: list[dict] = []
     for workflow in visible_workflows(role):
@@ -382,9 +390,11 @@ def build_tool_schema(role: str | None, *, evidence: bool = False,
         # `render_tool_marks`）⇒ 接口层把**未展开的标记原样**发给了模型（实测 admin/None
         # 各 1 处）。两处渲染同一份
         # 描述文本，展开器只能有一个（同"手抄第二份名单"的教训）。
-        desc = render_tool_marks(workflow.description, role)
-        if workflow.complete_when:
-            desc = f"{desc}\n完成判定：{workflow.complete_when}"
+        # 20261020：展开那两行搬进 `tool_index.skill_description`——索引档要取回**同一份**
+        # 文本（`describe_skill` 的返回），写两处就会悄悄分叉，而分叉没有判据看得见。
+        desc = skill_description(workflow, role)
+        if index:
+            desc = index_line(desc)
         fn: dict[str, Any] = {"name": workflow.name, "description": desc,
                               "parameters": {"type": "object", "properties": props,
                                              "additionalProperties": False}}
@@ -402,6 +412,12 @@ def build_tool_schema(role: str | None, *, evidence: bool = False,
     # 头注那条）。
     tools.extend(s for s in pseudo_tool_schemas(role)
                  if not (deny_pseudo and s["function"]["name"] in deny_pseudo))
+    # 索引档才有的取回口（ADR-0015 阶段 0）。**不并进 `pseudo_tool_schemas`**：那三个伪函数
+    # 是"任务状态"这一族（有开关史、有集合断言），而 `describe_skill` 是**读自己菜单**的
+    # 纯只读口——它无副作用、不进 `_split_pseudo_calls`、缺省档一次都不出现。
+    # 放在**最后**：它是对上面那份菜单的注释，不是菜单里的一项。
+    if index:
+        tools.append(describe_skill_schema())
     return tools
 
 

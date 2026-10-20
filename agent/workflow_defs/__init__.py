@@ -16,19 +16,27 @@
 拼回之后**逐条相同**：判据读的是 `WORKFLOWS` 本身（`tests/test_registry_sync.py`、
 `test_workflows.py`），不读源码文本，所以「顺序没动」这件事靠名单本身守，不靠注释。
 
+**20261021：公开读那两条（6–7）已搬出 Python，改成一条技能一个 TOML 文件**
+（`loader.load_dir`，见 `loader.py` 头注的来龙去脉）。搬的是**同一个域的全部正文**，
+搬完 `public_read.py` 整份删除——**不留两份事实源**。其余五域仍是 Python 字面量，逐个转；
+判据 `tests/test_workflow_config.py` 有一条"格式表达力"的往返，把还没转的那些逐字段过
+一遍配置格式再回来必须原样相等，所以"格式够用"不靠"转过的恰好没撞上死角"来相信。
+
 本模块还承接注册表的**派生件**：写技能的靶通道表与四个桶、写名单、可见性判据。它们都只
 读 `WORKFLOWS` 那一张表，与六个域模块同层、同住这个包。"""
 
 from __future__ import annotations
+
+import pathlib
 
 from agent.authz import SCOPE_WRITE_CONSOLE, SCOPE_WRITE_OWN, TOOL_SCOPE
 from agent.principal import CHAT_ONLY_ROLES
 from agent.workflow_defs import (
     account_write,
     content_write,
+    loader,
     nav_skills,
     own_todo,
-    public_read,
     report_skills,
 )
 from agent.workflow_model import Workflow
@@ -187,9 +195,14 @@ _FREE_TEXT_WRITE_WORKFLOWS = _channel("free_text")
 # 保序拼回：**顺序是一份契约**（见文件头注）
 # ---------------------------------------------------------------------------
 # 六个域模块在原序列里各自连续，所以「按域展开」与「逐条抄一遍」产出同一份名单。
+# 6–7 那两条（公开读）20261021 起改成**一条技能一个 TOML 文件**（`loader.load_dir` 按
+# 各自的 `order` 排）——它们是配置层的试点域，见 `loader.py` 头注。其余五域仍是 Python
+# 字面量，逐个转过去；**转过去的域不许在两边各留一份**。
+_WORKFLOW_FILES = pathlib.Path(__file__).resolve().parent
+
 WORKFLOWS: list[Workflow] = [
     *nav_skills.WORKFLOWS,      # 1–5   导航 / 特效 / 夜间 / 设备
-    *public_read.WORKFLOWS,     # 6–7   公开读
+    *loader.load_dir(_WORKFLOW_FILES),   # 6–7   公开读（TOML 配置）
     *report_skills.WORKFLOWS,         # 8–15  报表与看板
     *content_write.WORKFLOWS,   # 16–31 管理助手内容面（后台清单 + 十五件写）
     *own_todo.WORKFLOWS,        # 32–39 主人自己的数据与待办

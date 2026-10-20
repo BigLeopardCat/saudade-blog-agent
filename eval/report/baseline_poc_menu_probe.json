@@ -1,0 +1,109 @@
+{
+ "what": "POC 步骤 1：菜单形状定点探针（技能菜单 vs 工具菜单），离线桩工具、零真实写",
+ "date": "20261020",
+ "role": "user",
+ "decode": {
+  "temperature": 0.2,
+  "max_tokens": 1200,
+  "timeout": 60,
+  "enable_thinking": false
+ },
+ "rec_limit": 12,
+ "menu_size": {
+  "skill": 14,
+  "tool": 34
+ },
+ "arms": [
+  "skill",
+  "tool"
+ ],
+ "per_round": {
+  "skill": [
+   {
+    "called_any": "19/25",
+    "matched": "17/18",
+    "zero_ok": "5/7",
+    "nav_arg_ok": "5/6",
+    "wrong_direction": 1,
+    "unfolded": 0,
+    "capped": 0,
+    "errors": 0,
+    "llm_rounds": 48,
+    "secs": 129.2
+   },
+   {
+    "called_any": "19/25",
+    "matched": "17/18",
+    "zero_ok": "5/7",
+    "nav_arg_ok": "5/6",
+    "wrong_direction": 1,
+    "unfolded": 0,
+    "capped": 0,
+    "errors": 0,
+    "llm_rounds": 46,
+    "secs": 104.2
+   },
+   {
+    "called_any": "19/25",
+    "matched": "17/18",
+    "zero_ok": "5/7",
+    "nav_arg_ok": "5/6",
+    "wrong_direction": 1,
+    "unfolded": 0,
+    "capped": 0,
+    "errors": 0,
+    "llm_rounds": 46,
+    "secs": 103.2
+   }
+  ],
+  "tool": [
+   {
+    "called_any": "19/25",
+    "matched": "16/18",
+    "zero_ok": "5/7",
+    "nav_arg_ok": "5/6",
+    "wrong_direction": 1,
+    "unfolded": 0,
+    "capped": 0,
+    "errors": 0,
+    "llm_rounds": 44,
+    "secs": 131.1
+   },
+   {
+    "called_any": "18/25",
+    "matched": "16/18",
+    "zero_ok": "6/7",
+    "nav_arg_ok": "5/6",
+    "wrong_direction": 1,
+    "unfolded": 0,
+    "capped": 0,
+    "errors": 0,
+    "llm_rounds": 43,
+    "secs": 123.1
+   },
+   {
+    "called_any": "17/25",
+    "matched": "16/18",
+    "zero_ok": "6/7",
+    "nav_arg_ok": "5/6",
+    "wrong_direction": 1,
+    "unfolded": 0,
+    "capped": 0,
+    "errors": 0,
+    "llm_rounds": 42,
+    "secs": 115.3
+   }
+  ]
+ },
+ "notes": [
+  "读数是**计数**不是通过率；单遍不可判读，这里三遍逐轮同值（skill 命中 17/18 ×3、tool 16/18 ×3），所以差异是稳的、不是噪声。",
+  "两臂唯一的稳定差异只有一句：rag_git_branch（'Git 的分支为什么很轻量？'）——工具臂三轮都零调用（凭记忆答），技能臂三轮都点 content_query。这是**per-skill 散文没有家**那条边界的现场（content_query 的技能说明写着站内问题必须检索，工具菜单只有全局规则）。",
+  "nav_nonexistent（'帮我去 /iot 这个页面'）**两臂都跳了**：探针的提示词里没有路径白名单（那是 `_NAV_EXACT_PATHS` / nav_map 的活），所以这条是**两臂共有的缺资产**，不是菜单形状差。",
+  "challenge_claim_phantom_nav：技能臂三轮都点 content_query，工具臂 r1 点 get_site_map、r2/r3 忍住。两臂都不稳定，方向无差别。",
+  "结论的边界：这是**决策层**探针——没有 gate / 同意卡 / 回执 / narrator / 多轮。它只说明'菜单从 14 条技能换成 34 条工具，选对与填对参数没有塌'，不说明 harness 撑得住。"
+ ],
+ "corpus": {
+  "file": "eval/golden/basic.jsonl",
+  "sha256_16": "5c532e6e2efe3e94"
+ }
+}

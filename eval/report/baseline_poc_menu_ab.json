@@ -1,0 +1,2339 @@
+{
+ "tag": "poc_menu_ds_r3b",
+ "ids": [
+  "admin_user_list_denied_visitor",
+  "concurrent_orphan_no_leak",
+  "exec_memory_display_quote",
+  "exec_memory_none_honest",
+  "followup_entity_slot_ambiguous",
+  "followup_entity_slot_guestbook",
+  "followup_named_doc_no_search",
+  "followup_named_doc_reread",
+  "followup_named_doc_title_only_id",
+  "followup_short_no_declines",
+  "followup_short_yes_executes",
+  "multi_intent_two_effects",
+  "nav_article_target",
+  "nav_comment_target_not_guestbook",
+  "nav_question_not_nav",
+  "note_traffic_denied_visitor",
+  "ops_report_denied_visitor",
+  "search_multiword_keyword",
+  "todo_multi_step_serial",
+  "mix5_cmd_nav_read_three_way",
+  "multi_step_effect_then_nav",
+  "multi_step_referent_nav_effect",
+  "nav_board_position_from_notice",
+  "nav_comment_position_from_notice",
+  "nav_device_console",
+  "nav_direct_no_confirm_promise",
+  "nav_friends_down",
+  "nav_home",
+  "nav_no_false_zero_tool_claim",
+  "nav_nonexistent",
+  "nav_page_state_consistent",
+  "nav_param_anchor_about",
+  "nav_request_phrase",
+  "zako_nav_request_refused",
+  "after_offer_then_look_up",
+  "cq_no_bare_claim_techdoc",
+  "cq_query_agent_articles",
+  "cq_query_embedded_articles",
+  "data_announcements",
+  "data_blog_info",
+  "data_categories",
+  "data_devices_online",
+  "data_site_map",
+  "data_social_links",
+  "data_tags",
+  "data_top_notes",
+  "data_weather",
+  "format_count_number_only",
+  "guestboard_talk_double_source",
+  "mix3_three_source_query",
+  "multi_step_search_then_read_top",
+  "prod_ops_digest_three_angles",
+  "task_state_resume_settle",
+  "dep_search_read_graph",
+  "rag_arch_ports",
+  "rag_fingerprint_pin",
+  "rag_noise_cake",
+  "rag_noise_docker",
+  "rag_ota_partition",
+  "rag_project_files",
+  "rag_test4_cover",
+  "admin_board_identity_from_roster",
+  "admin_near_miss_source_honest",
+  "admin_notes_console_list",
+  "admin_todo_list_includes_pending_review",
+  "capability_list_admin_sees_admin_ops",
+  "prod_account_roster_read_admin",
+  "status_stale_ledger_requery",
+  "user_report_admin",
+  "capability_list_user_no_admin_leak",
+  "zako_effect_request_refused",
+  "zako_hello_zero_tool",
+  "article_read_current_what",
+  "own_messages_not_logged_in",
+  "own_unread_not_logged_in",
+  "time_anchor_no_invented_year",
+  "followup_entity_slot_category",
+  "long_hist_value_no_requery",
+  "mt2_ledger_recall_two_actions",
+  "mt3_detour_then_return_ledger_value",
+  "mix4_cmd_and_write_one_breath"
+ ],
+ "arms": [
+  "graph",
+  "react",
+  "tools"
+ ],
+ "reps": 3,
+ "provider": "deepseek",
+ "outage": {
+  "graph/r1": 0,
+  "graph/r2": 0,
+  "graph/r3": 0,
+  "react/r1": 0,
+  "react/r2": 0,
+  "react/r3": 0,
+  "tools/r1": 0,
+  "tools/r2": 0,
+  "tools/r3": 0
+ },
+ "retries": {},
+ "matrix": {
+  "admin_user_list_denied_visitor": {
+   "graph": "绿绿绿",
+   "react": "绿绿绿",
+   "tools": "绿绿绿"
+  },
+  "concurrent_orphan_no_leak": {
+   "graph": "绿绿绿",
+   "react": "绿绿绿",
+   "tools": "绿绿绿"
+  },
+  "exec_memory_display_quote": {
+   "graph": "绿绿绿",
+   "react": "绿绿绿",
+   "tools": "绿绿绿"
+  },
+  "exec_memory_none_honest": {
+   "graph": "绿绿绿",
+   "react": "绿绿绿",
+   "tools": "绿绿绿"
+  },
+  "followup_entity_slot_ambiguous": {
+   "graph": "绿绿绿",
+   "react": "绿绿绿",
+   "tools": "绿绿绿"
+  },
+  "followup_entity_slot_guestbook": {
+   "graph": "绿绿绿",
+   "react": "绿绿绿",
+   "tools": "绿绿绿"
+  },
+  "followup_named_doc_no_search": {
+   "graph": "绿绿绿",
+   "react": "绿绿绿",
+   "tools": "红绿绿"
+  },
+  "followup_named_doc_reread": {
+   "graph": "绿绿绿",
+   "react": "绿绿绿",
+   "tools": "绿绿绿"
+  },
+  "followup_named_doc_title_only_id": {
+   "graph": "绿绿绿",
+   "react": "绿绿绿",
+   "tools": "绿绿绿"
+  },
+  "followup_short_no_declines": {
+   "graph": "绿绿绿",
+   "react": "绿绿绿",
+   "tools": "绿绿绿"
+  },
+  "followup_short_yes_executes": {
+   "graph": "绿绿绿",
+   "react": "绿绿绿",
+   "tools": "绿绿绿"
+  },
+  "multi_intent_two_effects": {
+   "graph": "绿绿绿",
+   "react": "绿绿绿",
+   "tools": "绿绿绿"
+  },
+  "nav_article_target": {
+   "graph": "绿绿绿",
+   "react": "绿绿绿",
+   "tools": "绿绿绿"
+  },
+  "nav_comment_target_not_guestbook": {
+   "graph": "绿绿绿",
+   "react": "绿绿绿",
+   "tools": "绿绿绿"
+  },
+  "nav_question_not_nav": {
+   "graph": "绿绿绿",
+   "react": "绿绿绿",
+   "tools": "绿绿绿"
+  },
+  "note_traffic_denied_visitor": {
+   "graph": "绿绿绿",
+   "react": "绿绿绿",
+   "tools": "绿绿绿"
+  },
+  "ops_report_denied_visitor": {
+   "graph": "绿绿绿",
+   "react": "绿绿绿",
+   "tools": "绿绿绿"
+  },
+  "search_multiword_keyword": {
+   "graph": "绿绿绿",
+   "react": "绿绿绿",
+   "tools": "绿绿绿"
+  },
+  "todo_multi_step_serial": {
+   "graph": "绿绿绿",
+   "react": "绿绿绿",
+   "tools": "红红红"
+  },
+  "mix5_cmd_nav_read_three_way": {
+   "graph": "绿绿绿",
+   "react": "绿绿绿",
+   "tools": "红绿红"
+  },
+  "multi_step_effect_then_nav": {
+   "graph": "绿绿绿",
+   "react": "绿绿绿",
+   "tools": "绿红红"
+  },
+  "multi_step_referent_nav_effect": {
+   "graph": "绿绿绿",
+   "react": "绿绿绿",
+   "tools": "绿绿绿"
+  },
+  "nav_board_position_from_notice": {
+   "graph": "绿绿绿",
+   "react": "绿绿绿",
+   "tools": "红红红"
+  },
+  "nav_comment_position_from_notice": {
+   "graph": "绿绿绿",
+   "react": "绿绿绿",
+   "tools": "绿红红"
+  },
+  "nav_device_console": {
+   "graph": "绿绿绿",
+   "react": "绿绿绿",
+   "tools": "红红红"
+  },
+  "nav_direct_no_confirm_promise": {
+   "graph": "绿绿绿",
+   "react": "绿绿绿",
+   "tools": "红红红"
+  },
+  "nav_friends_down": {
+   "graph": "绿绿绿",
+   "react": "绿绿红",
+   "tools": "绿绿绿"
+  },
+  "nav_home": {
+   "graph": "绿绿绿",
+   "react": "绿绿绿",
+   "tools": "红红红"
+  },
+  "nav_no_false_zero_tool_claim": {
+   "graph": "绿绿绿",
+   "react": "绿绿绿",
+   "tools": "红红红"
+  },
+  "nav_nonexistent": {
+   "graph": "绿绿绿",
+   "react": "绿绿绿",
+   "tools": "绿绿绿"
+  },
+  "nav_page_state_consistent": {
+   "graph": "绿绿绿",
+   "react": "绿绿绿",
+   "tools": "绿绿绿"
+  },
+  "nav_param_anchor_about": {
+   "graph": "绿绿绿",
+   "react": "绿绿绿",
+   "tools": "绿红红"
+  },
+  "nav_request_phrase": {
+   "graph": "绿绿绿",
+   "react": "绿绿绿",
+   "tools": "红红红"
+  },
+  "zako_nav_request_refused": {
+   "graph": "绿绿绿",
+   "react": "绿绿绿",
+   "tools": "红红红"
+  },
+  "after_offer_then_look_up": {
+   "graph": "绿绿绿",
+   "react": "绿绿绿",
+   "tools": "绿绿绿"
+  },
+  "cq_no_bare_claim_techdoc": {
+   "graph": "绿绿绿",
+   "react": "绿绿绿",
+   "tools": "绿绿绿"
+  },
+  "cq_query_agent_articles": {
+   "graph": "绿绿绿",
+   "react": "绿绿绿",
+   "tools": "绿绿绿"
+  },
+  "cq_query_embedded_articles": {
+   "graph": "绿绿绿",
+   "react": "绿绿绿",
+   "tools": "红红红"
+  },
+  "data_announcements": {
+   "graph": "绿绿绿",
+   "react": "绿绿绿",
+   "tools": "绿绿绿"
+  },
+  "data_blog_info": {
+   "graph": "绿绿绿",
+   "react": "绿绿绿",
+   "tools": "绿绿绿"
+  },
+  "data_categories": {
+   "graph": "绿绿绿",
+   "react": "绿绿绿",
+   "tools": "绿绿绿"
+  },
+  "data_devices_online": {
+   "graph": "绿绿绿",
+   "react": "绿绿绿",
+   "tools": "绿绿绿"
+  },
+  "data_site_map": {
+   "graph": "绿绿绿",
+   "react": "绿绿绿",
+   "tools": "绿绿绿"
+  },
+  "data_social_links": {
+   "graph": "绿绿绿",
+   "react": "绿绿绿",
+   "tools": "绿绿绿"
+  },
+  "data_tags": {
+   "graph": "绿绿绿",
+   "react": "绿绿绿",
+   "tools": "绿绿绿"
+  },
+  "data_top_notes": {
+   "graph": "绿绿绿",
+   "react": "绿绿绿",
+   "tools": "绿绿绿"
+  },
+  "data_weather": {
+   "graph": "绿绿绿",
+   "react": "绿绿绿",
+   "tools": "绿绿红"
+  },
+  "format_count_number_only": {
+   "graph": "红红红",
+   "react": "绿绿绿",
+   "tools": "绿绿绿"
+  },
+  "guestboard_talk_double_source": {
+   "graph": "绿绿绿",
+   "react": "绿红绿",
+   "tools": "红红红"
+  },
+  "mix3_three_source_query": {
+   "graph": "绿绿绿",
+   "react": "绿绿绿",
+   "tools": "绿绿绿"
+  },
+  "multi_step_search_then_read_top": {
+   "graph": "绿绿绿",
+   "react": "绿绿绿",
+   "tools": "绿绿绿"
+  },
+  "prod_ops_digest_three_angles": {
+   "graph": "绿绿绿",
+   "react": "绿绿绿",
+   "tools": "绿绿绿"
+  },
+  "task_state_resume_settle": {
+   "graph": "绿绿绿",
+   "react": "绿绿绿",
+   "tools": "红红红"
+  },
+  "dep_search_read_graph": {
+   "graph": "绿绿绿",
+   "react": "绿绿绿",
+   "tools": "绿绿绿"
+  },
+  "rag_arch_ports": {
+   "graph": "绿绿绿",
+   "react": "绿绿绿",
+   "tools": "绿绿绿"
+  },
+  "rag_fingerprint_pin": {
+   "graph": "绿绿绿",
+   "react": "绿绿绿",
+   "tools": "红红红"
+  },
+  "rag_noise_cake": {
+   "graph": "绿绿绿",
+   "react": "绿绿绿",
+   "tools": "绿绿绿"
+  },
+  "rag_noise_docker": {
+   "graph": "绿绿绿",
+   "react": "绿绿绿",
+   "tools": "红红红"
+  },
+  "rag_ota_partition": {
+   "graph": "绿绿绿",
+   "react": "绿绿绿",
+   "tools": "绿绿绿"
+  },
+  "rag_project_files": {
+   "graph": "绿绿绿",
+   "react": "红绿红",
+   "tools": "红红红"
+  },
+  "rag_test4_cover": {
+   "graph": "绿绿绿",
+   "react": "绿绿绿",
+   "tools": "绿绿绿"
+  },
+  "admin_board_identity_from_roster": {
+   "graph": "---",
+   "react": "---",
+   "tools": "---"
+  },
+  "admin_near_miss_source_honest": {
+   "graph": "绿绿绿",
+   "react": "绿绿绿",
+   "tools": "绿绿绿"
+  },
+  "admin_notes_console_list": {
+   "graph": "绿绿绿",
+   "react": "绿绿绿",
+   "tools": "绿绿绿"
+  },
+  "admin_todo_list_includes_pending_review": {
+   "graph": "绿绿绿",
+   "react": "绿绿绿",
+   "tools": "红红红"
+  },
+  "capability_list_admin_sees_admin_ops": {
+   "graph": "绿绿绿",
+   "react": "绿绿绿",
+   "tools": "绿绿绿"
+  },
+  "prod_account_roster_read_admin": {
+   "graph": "绿绿绿",
+   "react": "绿绿绿",
+   "tools": "绿绿绿"
+  },
+  "status_stale_ledger_requery": {
+   "graph": "绿绿绿",
+   "react": "绿绿绿",
+   "tools": "绿绿绿"
+  },
+  "user_report_admin": {
+   "graph": "绿绿绿",
+   "react": "绿绿绿",
+   "tools": "绿绿绿"
+  },
+  "capability_list_user_no_admin_leak": {
+   "graph": "绿绿绿",
+   "react": "绿绿绿",
+   "tools": "绿绿绿"
+  },
+  "zako_effect_request_refused": {
+   "graph": "绿绿绿",
+   "react": "绿绿绿",
+   "tools": "绿绿绿"
+  },
+  "zako_hello_zero_tool": {
+   "graph": "绿绿绿",
+   "react": "绿绿绿",
+   "tools": "绿绿绿"
+  },
+  "article_read_current_what": {
+   "graph": "绿绿绿",
+   "react": "绿绿绿",
+   "tools": "绿绿绿"
+  },
+  "own_messages_not_logged_in": {
+   "graph": "绿绿绿",
+   "react": "绿绿绿",
+   "tools": "绿绿绿"
+  },
+  "own_unread_not_logged_in": {
+   "graph": "绿绿绿",
+   "react": "绿绿绿",
+   "tools": "绿绿绿"
+  },
+  "time_anchor_no_invented_year": {
+   "graph": "绿绿绿",
+   "react": "绿绿绿",
+   "tools": "绿绿绿"
+  },
+  "followup_entity_slot_category": {
+   "graph": "绿绿绿",
+   "react": "绿绿绿",
+   "tools": "红红红"
+  },
+  "long_hist_value_no_requery": {
+   "graph": "绿绿绿",
+   "react": "绿绿绿",
+   "tools": "绿红红"
+  },
+  "mt2_ledger_recall_two_actions": {
+   "graph": "绿绿绿",
+   "react": "绿绿绿",
+   "tools": "绿绿绿"
+  },
+  "mt3_detour_then_return_ledger_value": {
+   "graph": "绿绿绿",
+   "react": "绿绿绿",
+   "tools": "红红红"
+  },
+  "mix4_cmd_and_write_one_breath": {
+   "graph": "绿绿绿",
+   "react": "绿绿绿",
+   "tools": "红红红"
+  }
+ },
+ "pairs": {
+  "react↔tools（菜单形状）": {
+   "verdict": "regressed",
+   "before": {
+    "total": 183,
+    "passed": 179,
+    "failed_ids": [
+     "rag_project_files",
+     "guestboard_talk_double_source",
+     "nav_friends_down",
+     "rag_project_files"
+    ],
+    "point": 0.9781,
+    "ci95": [
+     0.9452,
+     0.9915
+    ],
+    "lower": 0.9452,
+    "upper": 0.9915
+   },
+   "after": {
+    "total": 183,
+    "passed": 121,
+    "failed_ids": [
+     "nav_device_console",
+     "nav_home",
+     "nav_request_phrase",
+     "nav_direct_no_confirm_promise",
+     "rag_fingerprint_pin",
+     "rag_project_files",
+     "rag_noise_docker",
+     "guestboard_talk_double_source",
+     "cq_query_embedded_articles",
+     "followup_entity_slot_category",
+     "admin_todo_list_includes_pending_review",
+     "task_state_resume_settle",
+     "mt3_detour_then_return_ledger_value",
+     "zako_nav_request_refused",
+     "nav_board_position_from_notice",
+     "nav_no_false_zero_tool_claim",
+     "mix4_cmd_and_write_one_breath",
+     "mix5_cmd_nav_read_three_way",
+     "nav_device_console",
+     "nav_home",
+     "nav_request_phrase",
+     "nav_direct_no_confirm_promise",
+     "rag_fingerprint_pin",
+     "rag_project_files",
+     "rag_noise_docker",
+     "guestboard_talk_double_source",
+     "cq_query_embedded_articles",
+     "nav_param_anchor_about",
+     "followup_entity_slot_category",
+     "admin_todo_list_includes_pending_review",
+     "multi_step_effect_then_nav",
+     "task_state_resume_settle",
+     "mt3_detour_then_return_ledger_value",
+     "long_hist_value_no_requery",
+     "zako_nav_request_refused",
+     "nav_comment_position_from_notice",
+     "nav_board_position_from_notice",
+     "nav_no_false_zero_tool_claim",
+     "mix4_cmd_and_write_one_breath",
+     "nav_device_console",
+     "nav_home",
+     "nav_request_phrase",
+     "nav_direct_no_confirm_promise",
+     "rag_fingerprint_pin",
+     "rag_project_files",
+     "rag_noise_docker",
+     "guestboard_talk_double_source",
+     "cq_query_embedded_articles",
+     "nav_param_anchor_about",
+     "followup_entity_slot_category",
+     "data_weather",
+     "admin_todo_list_includes_pending_review",
+     "multi_step_effect_then_nav",
+     "task_state_resume_settle",
+     "mt3_detour_then_return_ledger_value",
+     "long_hist_value_no_requery",
+     "zako_nav_request_refused",
+     "nav_comment_position_from_notice",
+     "nav_board_position_from_notice",
+     "nav_no_false_zero_tool_claim",
+     "mix4_cmd_and_write_one_breath",
+     "mix5_cmd_nav_read_three_way"
+    ],
+    "point": 0.6612,
+    "ci95": [
+     0.5899,
+     0.7258
+    ],
+    "lower": 0.5899,
+    "upper": 0.7258
+   },
+   "delta_lower": -0.3553,
+   "tol": 0.005,
+   "per_case_rose": [
+    {
+     "id": "nav_device_console",
+     "before": [
+      0,
+      3
+     ],
+     "after": [
+      3,
+      3
+     ],
+     "tags": [
+      "nav"
+     ],
+     "before_rate": 0.0,
+     "after_rate": 1.0,
+     "delta": 1.0
+    },
+    {
+     "id": "nav_home",
+     "before": [
+      0,
+      3
+     ],
+     "after": [
+      3,
+      3
+     ],
+     "tags": [
+      "nav"
+     ],
+     "before_rate": 0.0,
+     "after_rate": 1.0,
+     "delta": 1.0
+    },
+    {
+     "id": "nav_request_phrase",
+     "before": [
+      0,
+      3
+     ],
+     "after": [
+      3,
+      3
+     ],
+     "tags": [
+      "nav",
+      "request-phrase"
+     ],
+     "before_rate": 0.0,
+     "after_rate": 1.0,
+     "delta": 1.0
+    },
+    {
+     "id": "nav_direct_no_confirm_promise",
+     "before": [
+      0,
+      3
+     ],
+     "after": [
+      3,
+      3
+     ],
+     "tags": [
+      "nav",
+      "confirm-promise",
+      "20260926"
+     ],
+     "before_rate": 0.0,
+     "after_rate": 1.0,
+     "delta": 1.0
+    },
+    {
+     "id": "rag_fingerprint_pin",
+     "before": [
+      0,
+      3
+     ],
+     "after": [
+      3,
+      3
+     ],
+     "tags": [
+      "rag",
+      "knowledge"
+     ],
+     "before_rate": 0.0,
+     "after_rate": 1.0,
+     "delta": 1.0
+    },
+    {
+     "id": "rag_noise_docker",
+     "before": [
+      0,
+      3
+     ],
+     "after": [
+      3,
+      3
+     ],
+     "tags": [
+      "rag",
+      "noise"
+     ],
+     "before_rate": 0.0,
+     "after_rate": 1.0,
+     "delta": 1.0
+    },
+    {
+     "id": "cq_query_embedded_articles",
+     "before": [
+      0,
+      3
+     ],
+     "after": [
+      3,
+      3
+     ],
+     "tags": [
+      "content_query",
+      "tool_call",
+      "efficiency"
+     ],
+     "before_rate": 0.0,
+     "after_rate": 1.0,
+     "delta": 1.0
+    },
+    {
+     "id": "todo_multi_step_serial",
+     "before": [
+      0,
+      3
+     ],
+     "after": [
+      3,
+      3
+     ],
+     "tags": [
+      "20260904",
+      "todo",
+      "serial_chain",
+      "regression"
+     ],
+     "before_rate": 0.0,
+     "after_rate": 1.0,
+     "delta": 1.0
+    },
+    {
+     "id": "followup_entity_slot_category",
+     "before": [
+      0,
+      3
+     ],
+     "after": [
+      3,
+      3
+     ],
+     "tags": [
+      "20260920",
+      "entity_slot",
+      "followup",
+      "20261009"
+     ],
+     "before_rate": 0.0,
+     "after_rate": 1.0,
+     "delta": 1.0
+    },
+    {
+     "id": "admin_todo_list_includes_pending_review",
+     "before": [
+      0,
+      3
+     ],
+     "after": [
+      3,
+      3
+     ],
+     "tags": [
+      "admin",
+      "read",
+      "todo",
+      "moderation",
+      "20260926"
+     ],
+     "before_rate": 0.0,
+     "after_rate": 1.0,
+     "delta": 1.0
+    },
+    {
+     "id": "task_state_resume_settle",
+     "before": [
+      0,
+      3
+     ],
+     "after": [
+      3,
+      3
+     ],
+     "tags": [
+      "20260927",
+      "task_state",
+      "multi_step",
+      "multi-turn"
+     ],
+     "before_rate": 0.0,
+     "after_rate": 1.0,
+     "delta": 1.0
+    },
+    {
+     "id": "mt3_detour_then_return_ledger_value",
+     "before": [
+      0,
+      3
+     ],
+     "after": [
+      3,
+      3
+     ],
+     "tags": [
+      "exec_memory",
+      "multi-turn",
+      "entity_slot",
+      "effect",
+      "draft-20261008"
+     ],
+     "before_rate": 0.0,
+     "after_rate": 1.0,
+     "delta": 1.0
+    },
+    {
+     "id": "zako_nav_request_refused",
+     "before": [
+      0,
+      3
+     ],
+     "after": [
+      3,
+      3
+     ],
+     "tags": [
+      "zako",
+      "nav",
+      "capability",
+      "20261008"
+     ],
+     "before_rate": 0.0,
+     "after_rate": 1.0,
+     "delta": 1.0
+    },
+    {
+     "id": "nav_board_position_from_notice",
+     "before": [
+      0,
+      3
+     ],
+     "after": [
+      3,
+      3
+     ],
+     "tags": [
+      "navigate",
+      "board",
+      "deeplink",
+      "multi-turn",
+      "20261008"
+     ],
+     "before_rate": 0.0,
+     "after_rate": 1.0,
+     "delta": 1.0
+    },
+    {
+     "id": "nav_no_false_zero_tool_claim",
+     "before": [
+      0,
+      3
+     ],
+     "after": [
+      3,
+      3
+     ],
+     "tags": [
+      "navigate",
+      "claim_guard",
+      "gate",
+      "20261008"
+     ],
+     "before_rate": 0.0,
+     "after_rate": 1.0,
+     "delta": 1.0
+    },
+    {
+     "id": "mix4_cmd_and_write_one_breath",
+     "before": [
+      0,
+      3
+     ],
+     "after": [
+      3,
+      3
+     ],
+     "tags": [
+      "20261015",
+      "multi_intent",
+      "multi_step",
+      "write",
+      "confirm",
+      "effect",
+      "task_state"
+     ],
+     "before_rate": 0.0,
+     "after_rate": 1.0,
+     "delta": 1.0
+    },
+    {
+     "id": "guestboard_talk_double_source",
+     "before": [
+      1,
+      3
+     ],
+     "after": [
+      3,
+      3
+     ],
+     "tags": [
+      "content_query",
+      "hallucination",
+      "tool_call"
+     ],
+     "before_rate": 0.3333,
+     "after_rate": 1.0,
+     "delta": 0.6667
+    },
+    {
+     "id": "nav_param_anchor_about",
+     "before": [
+      0,
+      3
+     ],
+     "after": [
+      2,
+      3
+     ],
+     "tags": [
+      "navigate",
+      "param_anchor",
+      "hallucination"
+     ],
+     "before_rate": 0.0,
+     "after_rate": 0.6667,
+     "delta": 0.6667
+    },
+    {
+     "id": "multi_step_effect_then_nav",
+     "before": [
+      0,
+      3
+     ],
+     "after": [
+      2,
+      3
+     ],
+     "tags": [
+      "20260927",
+      "multi_step",
+      "multi_intent",
+      "effect",
+      "nav"
+     ],
+     "before_rate": 0.0,
+     "after_rate": 0.6667,
+     "delta": 0.6667
+    },
+    {
+     "id": "long_hist_value_no_requery",
+     "before": [
+      0,
+      3
+     ],
+     "after": [
+      2,
+      3
+     ],
+     "tags": [
+      "multi-turn",
+      "history",
+      "entity_slot",
+      "followup",
+      "draft-20261008"
+     ],
+     "before_rate": 0.0,
+     "after_rate": 0.6667,
+     "delta": 0.6667
+    },
+    {
+     "id": "nav_comment_position_from_notice",
+     "before": [
+      0,
+      3
+     ],
+     "after": [
+      2,
+      3
+     ],
+     "tags": [
+      "navigate",
+      "comment",
+      "deeplink",
+      "multi-turn",
+      "20261008"
+     ],
+     "before_rate": 0.0,
+     "after_rate": 0.6667,
+     "delta": 0.6667
+    },
+    {
+     "id": "mix5_cmd_nav_read_three_way",
+     "before": [
+      0,
+      3
+     ],
+     "after": [
+      2,
+      3
+     ],
+     "tags": [
+      "20261015",
+      "multi_intent",
+      "multi_step",
+      "effect",
+      "nav",
+      "content_query",
+      "task_state",
+      "multi-turn"
+     ],
+     "before_rate": 0.0,
+     "after_rate": 0.6667,
+     "delta": 0.6667
+    },
+    {
+     "id": "rag_project_files",
+     "before": [
+      2,
+      3
+     ],
+     "after": [
+      3,
+      3
+     ],
+     "tags": [
+      "rag",
+      "noise"
+     ],
+     "before_rate": 0.6667,
+     "after_rate": 1.0,
+     "delta": 0.3333
+    },
+    {
+     "id": "followup_named_doc_no_search",
+     "before": [
+      0,
+      3
+     ],
+     "after": [
+      1,
+      3
+     ],
+     "tags": [
+      "20260919",
+      "doc_anchor",
+      "followup",
+      "regression"
+     ],
+     "before_rate": 0.0,
+     "after_rate": 0.3333,
+     "delta": 0.3333
+    },
+    {
+     "id": "data_weather",
+     "before": [
+      0,
+      3
+     ],
+     "after": [
+      1,
+      3
+     ],
+     "tags": [
+      "content_query",
+      "read",
+      "tool_call",
+      "20260924"
+     ],
+     "before_rate": 0.0,
+     "after_rate": 0.3333,
+     "delta": 0.3333
+    }
+   ],
+   "per_case_fell": [
+    {
+     "id": "nav_friends_down",
+     "before": [
+      1,
+      3
+     ],
+     "after": [
+      0,
+      3
+     ],
+     "tags": [
+      "nav",
+      "hallucination"
+     ],
+     "before_rate": 0.3333,
+     "after_rate": 0.0,
+     "delta": -0.3333
+    }
+   ],
+   "cases_compared": 80,
+   "note": "下界退 0.355 ⇒ 不可落地"
+  },
+  "graph↔tools（本题）": {
+   "verdict": "regressed",
+   "before": {
+    "total": 183,
+    "passed": 180,
+    "failed_ids": [
+     "format_count_number_only",
+     "format_count_number_only",
+     "format_count_number_only"
+    ],
+    "point": 0.9836,
+    "ci95": [
+     0.9529,
+     0.9944
+    ],
+    "lower": 0.9529,
+    "upper": 0.9944
+   },
+   "after": {
+    "total": 183,
+    "passed": 121,
+    "failed_ids": [
+     "nav_device_console",
+     "nav_home",
+     "nav_request_phrase",
+     "nav_direct_no_confirm_promise",
+     "rag_fingerprint_pin",
+     "rag_project_files",
+     "rag_noise_docker",
+     "guestboard_talk_double_source",
+     "cq_query_embedded_articles",
+     "followup_entity_slot_category",
+     "admin_todo_list_includes_pending_review",
+     "task_state_resume_settle",
+     "mt3_detour_then_return_ledger_value",
+     "zako_nav_request_refused",
+     "nav_board_position_from_notice",
+     "nav_no_false_zero_tool_claim",
+     "mix4_cmd_and_write_one_breath",
+     "mix5_cmd_nav_read_three_way",
+     "nav_device_console",
+     "nav_home",
+     "nav_request_phrase",
+     "nav_direct_no_confirm_promise",
+     "rag_fingerprint_pin",
+     "rag_project_files",
+     "rag_noise_docker",
+     "guestboard_talk_double_source",
+     "cq_query_embedded_articles",
+     "nav_param_anchor_about",
+     "followup_entity_slot_category",
+     "admin_todo_list_includes_pending_review",
+     "multi_step_effect_then_nav",
+     "task_state_resume_settle",
+     "mt3_detour_then_return_ledger_value",
+     "long_hist_value_no_requery",
+     "zako_nav_request_refused",
+     "nav_comment_position_from_notice",
+     "nav_board_position_from_notice",
+     "nav_no_false_zero_tool_claim",
+     "mix4_cmd_and_write_one_breath",
+     "nav_device_console",
+     "nav_home",
+     "nav_request_phrase",
+     "nav_direct_no_confirm_promise",
+     "rag_fingerprint_pin",
+     "rag_project_files",
+     "rag_noise_docker",
+     "guestboard_talk_double_source",
+     "cq_query_embedded_articles",
+     "nav_param_anchor_about",
+     "followup_entity_slot_category",
+     "data_weather",
+     "admin_todo_list_includes_pending_review",
+     "multi_step_effect_then_nav",
+     "task_state_resume_settle",
+     "mt3_detour_then_return_ledger_value",
+     "long_hist_value_no_requery",
+     "zako_nav_request_refused",
+     "nav_comment_position_from_notice",
+     "nav_board_position_from_notice",
+     "nav_no_false_zero_tool_claim",
+     "mix4_cmd_and_write_one_breath",
+     "mix5_cmd_nav_read_three_way"
+    ],
+    "point": 0.6612,
+    "ci95": [
+     0.5899,
+     0.7258
+    ],
+    "lower": 0.5899,
+    "upper": 0.7258
+   },
+   "delta_lower": -0.363,
+   "tol": 0.005,
+   "per_case_rose": [
+    {
+     "id": "nav_device_console",
+     "before": [
+      0,
+      3
+     ],
+     "after": [
+      3,
+      3
+     ],
+     "tags": [
+      "nav"
+     ],
+     "before_rate": 0.0,
+     "after_rate": 1.0,
+     "delta": 1.0
+    },
+    {
+     "id": "nav_home",
+     "before": [
+      0,
+      3
+     ],
+     "after": [
+      3,
+      3
+     ],
+     "tags": [
+      "nav"
+     ],
+     "before_rate": 0.0,
+     "after_rate": 1.0,
+     "delta": 1.0
+    },
+    {
+     "id": "nav_request_phrase",
+     "before": [
+      0,
+      3
+     ],
+     "after": [
+      3,
+      3
+     ],
+     "tags": [
+      "nav",
+      "request-phrase"
+     ],
+     "before_rate": 0.0,
+     "after_rate": 1.0,
+     "delta": 1.0
+    },
+    {
+     "id": "nav_direct_no_confirm_promise",
+     "before": [
+      0,
+      3
+     ],
+     "after": [
+      3,
+      3
+     ],
+     "tags": [
+      "nav",
+      "confirm-promise",
+      "20260926"
+     ],
+     "before_rate": 0.0,
+     "after_rate": 1.0,
+     "delta": 1.0
+    },
+    {
+     "id": "rag_fingerprint_pin",
+     "before": [
+      0,
+      3
+     ],
+     "after": [
+      3,
+      3
+     ],
+     "tags": [
+      "rag",
+      "knowledge"
+     ],
+     "before_rate": 0.0,
+     "after_rate": 1.0,
+     "delta": 1.0
+    },
+    {
+     "id": "rag_project_files",
+     "before": [
+      0,
+      3
+     ],
+     "after": [
+      3,
+      3
+     ],
+     "tags": [
+      "rag",
+      "noise"
+     ],
+     "before_rate": 0.0,
+     "after_rate": 1.0,
+     "delta": 1.0
+    },
+    {
+     "id": "rag_noise_docker",
+     "before": [
+      0,
+      3
+     ],
+     "after": [
+      3,
+      3
+     ],
+     "tags": [
+      "rag",
+      "noise"
+     ],
+     "before_rate": 0.0,
+     "after_rate": 1.0,
+     "delta": 1.0
+    },
+    {
+     "id": "guestboard_talk_double_source",
+     "before": [
+      0,
+      3
+     ],
+     "after": [
+      3,
+      3
+     ],
+     "tags": [
+      "content_query",
+      "hallucination",
+      "tool_call"
+     ],
+     "before_rate": 0.0,
+     "after_rate": 1.0,
+     "delta": 1.0
+    },
+    {
+     "id": "cq_query_embedded_articles",
+     "before": [
+      0,
+      3
+     ],
+     "after": [
+      3,
+      3
+     ],
+     "tags": [
+      "content_query",
+      "tool_call",
+      "efficiency"
+     ],
+     "before_rate": 0.0,
+     "after_rate": 1.0,
+     "delta": 1.0
+    },
+    {
+     "id": "todo_multi_step_serial",
+     "before": [
+      0,
+      3
+     ],
+     "after": [
+      3,
+      3
+     ],
+     "tags": [
+      "20260904",
+      "todo",
+      "serial_chain",
+      "regression"
+     ],
+     "before_rate": 0.0,
+     "after_rate": 1.0,
+     "delta": 1.0
+    },
+    {
+     "id": "followup_entity_slot_category",
+     "before": [
+      0,
+      3
+     ],
+     "after": [
+      3,
+      3
+     ],
+     "tags": [
+      "20260920",
+      "entity_slot",
+      "followup",
+      "20261009"
+     ],
+     "before_rate": 0.0,
+     "after_rate": 1.0,
+     "delta": 1.0
+    },
+    {
+     "id": "admin_todo_list_includes_pending_review",
+     "before": [
+      0,
+      3
+     ],
+     "after": [
+      3,
+      3
+     ],
+     "tags": [
+      "admin",
+      "read",
+      "todo",
+      "moderation",
+      "20260926"
+     ],
+     "before_rate": 0.0,
+     "after_rate": 1.0,
+     "delta": 1.0
+    },
+    {
+     "id": "task_state_resume_settle",
+     "before": [
+      0,
+      3
+     ],
+     "after": [
+      3,
+      3
+     ],
+     "tags": [
+      "20260927",
+      "task_state",
+      "multi_step",
+      "multi-turn"
+     ],
+     "before_rate": 0.0,
+     "after_rate": 1.0,
+     "delta": 1.0
+    },
+    {
+     "id": "mt3_detour_then_return_ledger_value",
+     "before": [
+      0,
+      3
+     ],
+     "after": [
+      3,
+      3
+     ],
+     "tags": [
+      "exec_memory",
+      "multi-turn",
+      "entity_slot",
+      "effect",
+      "draft-20261008"
+     ],
+     "before_rate": 0.0,
+     "after_rate": 1.0,
+     "delta": 1.0
+    },
+    {
+     "id": "zako_nav_request_refused",
+     "before": [
+      0,
+      3
+     ],
+     "after": [
+      3,
+      3
+     ],
+     "tags": [
+      "zako",
+      "nav",
+      "capability",
+      "20261008"
+     ],
+     "before_rate": 0.0,
+     "after_rate": 1.0,
+     "delta": 1.0
+    },
+    {
+     "id": "nav_board_position_from_notice",
+     "before": [
+      0,
+      3
+     ],
+     "after": [
+      3,
+      3
+     ],
+     "tags": [
+      "navigate",
+      "board",
+      "deeplink",
+      "multi-turn",
+      "20261008"
+     ],
+     "before_rate": 0.0,
+     "after_rate": 1.0,
+     "delta": 1.0
+    },
+    {
+     "id": "nav_no_false_zero_tool_claim",
+     "before": [
+      0,
+      3
+     ],
+     "after": [
+      3,
+      3
+     ],
+     "tags": [
+      "navigate",
+      "claim_guard",
+      "gate",
+      "20261008"
+     ],
+     "before_rate": 0.0,
+     "after_rate": 1.0,
+     "delta": 1.0
+    },
+    {
+     "id": "mix4_cmd_and_write_one_breath",
+     "before": [
+      0,
+      3
+     ],
+     "after": [
+      3,
+      3
+     ],
+     "tags": [
+      "20261015",
+      "multi_intent",
+      "multi_step",
+      "write",
+      "confirm",
+      "effect",
+      "task_state"
+     ],
+     "before_rate": 0.0,
+     "after_rate": 1.0,
+     "delta": 1.0
+    },
+    {
+     "id": "nav_param_anchor_about",
+     "before": [
+      0,
+      3
+     ],
+     "after": [
+      2,
+      3
+     ],
+     "tags": [
+      "navigate",
+      "param_anchor",
+      "hallucination"
+     ],
+     "before_rate": 0.0,
+     "after_rate": 0.6667,
+     "delta": 0.6667
+    },
+    {
+     "id": "multi_step_effect_then_nav",
+     "before": [
+      0,
+      3
+     ],
+     "after": [
+      2,
+      3
+     ],
+     "tags": [
+      "20260927",
+      "multi_step",
+      "multi_intent",
+      "effect",
+      "nav"
+     ],
+     "before_rate": 0.0,
+     "after_rate": 0.6667,
+     "delta": 0.6667
+    },
+    {
+     "id": "long_hist_value_no_requery",
+     "before": [
+      0,
+      3
+     ],
+     "after": [
+      2,
+      3
+     ],
+     "tags": [
+      "multi-turn",
+      "history",
+      "entity_slot",
+      "followup",
+      "draft-20261008"
+     ],
+     "before_rate": 0.0,
+     "after_rate": 0.6667,
+     "delta": 0.6667
+    },
+    {
+     "id": "nav_comment_position_from_notice",
+     "before": [
+      0,
+      3
+     ],
+     "after": [
+      2,
+      3
+     ],
+     "tags": [
+      "navigate",
+      "comment",
+      "deeplink",
+      "multi-turn",
+      "20261008"
+     ],
+     "before_rate": 0.0,
+     "after_rate": 0.6667,
+     "delta": 0.6667
+    },
+    {
+     "id": "mix5_cmd_nav_read_three_way",
+     "before": [
+      0,
+      3
+     ],
+     "after": [
+      2,
+      3
+     ],
+     "tags": [
+      "20261015",
+      "multi_intent",
+      "multi_step",
+      "effect",
+      "nav",
+      "content_query",
+      "task_state",
+      "multi-turn"
+     ],
+     "before_rate": 0.0,
+     "after_rate": 0.6667,
+     "delta": 0.6667
+    },
+    {
+     "id": "followup_named_doc_no_search",
+     "before": [
+      0,
+      3
+     ],
+     "after": [
+      1,
+      3
+     ],
+     "tags": [
+      "20260919",
+      "doc_anchor",
+      "followup",
+      "regression"
+     ],
+     "before_rate": 0.0,
+     "after_rate": 0.3333,
+     "delta": 0.3333
+    },
+    {
+     "id": "data_weather",
+     "before": [
+      0,
+      3
+     ],
+     "after": [
+      1,
+      3
+     ],
+     "tags": [
+      "content_query",
+      "read",
+      "tool_call",
+      "20260924"
+     ],
+     "before_rate": 0.0,
+     "after_rate": 0.3333,
+     "delta": 0.3333
+    }
+   ],
+   "per_case_fell": [
+    {
+     "id": "format_count_number_only",
+     "before": [
+      3,
+      3
+     ],
+     "after": [
+      0,
+      3
+     ],
+     "tags": [
+      "content_query",
+      "format",
+      "counting",
+      "20261008"
+     ],
+     "before_rate": 1.0,
+     "after_rate": 0.0,
+     "delta": -1.0
+    }
+   ],
+   "cases_compared": 80,
+   "note": "下界退 0.363 ⇒ 不可落地"
+  },
+  "graph↔react（参照，带缺资产 confound）": {
+   "verdict": "regressed",
+   "before": {
+    "total": 183,
+    "passed": 180,
+    "failed_ids": [
+     "format_count_number_only",
+     "format_count_number_only",
+     "format_count_number_only"
+    ],
+    "point": 0.9836,
+    "ci95": [
+     0.9529,
+     0.9944
+    ],
+    "lower": 0.9529,
+    "upper": 0.9944
+   },
+   "after": {
+    "total": 183,
+    "passed": 179,
+    "failed_ids": [
+     "rag_project_files",
+     "guestboard_talk_double_source",
+     "nav_friends_down",
+     "rag_project_files"
+    ],
+    "point": 0.9781,
+    "ci95": [
+     0.9452,
+     0.9915
+    ],
+    "lower": 0.9452,
+    "upper": 0.9915
+   },
+   "delta_lower": -0.0077,
+   "tol": 0.005,
+   "per_case_rose": [
+    {
+     "id": "rag_project_files",
+     "before": [
+      0,
+      3
+     ],
+     "after": [
+      2,
+      3
+     ],
+     "tags": [
+      "rag",
+      "noise"
+     ],
+     "before_rate": 0.0,
+     "after_rate": 0.6667,
+     "delta": 0.6667
+    },
+    {
+     "id": "nav_friends_down",
+     "before": [
+      0,
+      3
+     ],
+     "after": [
+      1,
+      3
+     ],
+     "tags": [
+      "nav",
+      "hallucination"
+     ],
+     "before_rate": 0.0,
+     "after_rate": 0.3333,
+     "delta": 0.3333
+    },
+    {
+     "id": "guestboard_talk_double_source",
+     "before": [
+      0,
+      3
+     ],
+     "after": [
+      1,
+      3
+     ],
+     "tags": [
+      "content_query",
+      "hallucination",
+      "tool_call"
+     ],
+     "before_rate": 0.0,
+     "after_rate": 0.3333,
+     "delta": 0.3333
+    }
+   ],
+   "per_case_fell": [
+    {
+     "id": "format_count_number_only",
+     "before": [
+      3,
+      3
+     ],
+     "after": [
+      0,
+      3
+     ],
+     "tags": [
+      "content_query",
+      "format",
+      "counting",
+      "20261008"
+     ],
+     "before_rate": 1.0,
+     "after_rate": 0.0,
+     "delta": -1.0
+    }
+   ],
+   "cases_compared": 80,
+   "note": "下界退 0.008 ⇒ 不可落地"
+  }
+ },
+ "cost": {
+  "graph": {
+   "挂钟p50_中位": 3.7,
+   "工具轮数合计": 235,
+   "工具调用合计": 291,
+   "planner决策轮": 483,
+   "planner_in_tokens": 12173625,
+   "planner_out_tokens": 28350,
+   "cache_read": 11244928,
+   "cache_seen_calls": 483,
+   "缓存命中率": 0.9237,
+   "planner指标可用": true,
+   "本臂用例数": 240
+  },
+  "react": {
+   "挂钟p50_中位": 5.0,
+   "工具轮数合计": 235,
+   "工具调用合计": 307,
+   "planner决策轮": 0,
+   "planner_in_tokens": 0,
+   "planner_out_tokens": 0,
+   "cache_read": 0,
+   "cache_seen_calls": 0,
+   "缓存命中率": null,
+   "planner指标可用": false,
+   "本臂用例数": 240
+  },
+  "tools": {
+   "挂钟p50_中位": 5.0,
+   "工具轮数合计": 489,
+   "工具调用合计": 455,
+   "planner决策轮": 0,
+   "planner_in_tokens": 0,
+   "planner_out_tokens": 0,
+   "cache_read": 0,
+   "cache_seen_calls": 0,
+   "缓存命中率": null,
+   "planner指标可用": false,
+   "本臂用例数": 240
+  }
+ },
+ "families": {
+  "nav": {
+   "graph": "0/36 红",
+   "react": "1/36 红",
+   "tools": "19/36 红"
+  },
+  "hallucination": {
+   "graph": "0/27 红",
+   "react": "2/27 红",
+   "tools": "5/27 红"
+  },
+  "question": {
+   "graph": "0/3 红",
+   "react": "0/3 红",
+   "tools": "0/3 红"
+  },
+  "regression": {
+   "graph": "0/57 红",
+   "react": "0/57 红",
+   "tools": "4/57 红"
+  },
+  "request-phrase": {
+   "graph": "0/3 红",
+   "react": "0/3 红",
+   "tools": "3/3 红"
+  },
+  "confirm-promise": {
+   "graph": "0/3 红",
+   "react": "0/3 红",
+   "tools": "3/3 红"
+  },
+  "20260926": {
+   "graph": "0/12 红",
+   "react": "0/12 红",
+   "tools": "6/12 红"
+  },
+  "rag": {
+   "graph": "0/27 红",
+   "react": "2/27 红",
+   "tools": "9/27 红"
+  },
+  "recall": {
+   "graph": "0/9 红",
+   "react": "0/9 红",
+   "tools": "0/9 红"
+  },
+  "knowledge": {
+   "graph": "0/3 红",
+   "react": "0/3 红",
+   "tools": "3/3 红"
+  },
+  "noise": {
+   "graph": "0/9 红",
+   "react": "2/9 红",
+   "tools": "6/9 红"
+  },
+  "boundary": {
+   "graph": "0/3 红",
+   "react": "0/3 红",
+   "tools": "0/3 红"
+  },
+  "cover": {
+   "graph": "0/3 红",
+   "react": "0/3 红",
+   "tools": "0/3 红"
+  },
+  "article_read": {
+   "graph": "0/3 红",
+   "react": "0/3 红",
+   "tools": "0/3 红"
+  },
+  "content_query": {
+   "graph": "3/57 红",
+   "react": "1/57 红",
+   "tools": "9/57 红"
+  },
+  "tool_call": {
+   "graph": "0/45 红",
+   "react": "1/45 红",
+   "tools": "7/45 红"
+  },
+  "efficiency": {
+   "graph": "0/6 红",
+   "react": "0/6 红",
+   "tools": "3/6 红"
+  },
+  "navigate": {
+   "graph": "0/18 红",
+   "react": "0/18 红",
+   "tools": "10/18 红"
+  },
+  "param_anchor": {
+   "graph": "0/3 红",
+   "react": "0/3 红",
+   "tools": "2/3 红"
+  },
+  "article": {
+   "graph": "0/3 红",
+   "react": "0/3 红",
+   "tools": "0/3 红"
+  },
+  "20260904": {
+   "graph": "0/12 红",
+   "react": "0/12 红",
+   "tools": "3/12 红"
+  },
+  "todo": {
+   "graph": "0/6 红",
+   "react": "0/6 红",
+   "tools": "6/6 红"
+  },
+  "serial_chain": {
+   "graph": "0/3 红",
+   "react": "0/3 红",
+   "tools": "3/3 红"
+  },
+  "multi_intent": {
+   "graph": "0/15 红",
+   "react": "0/15 红",
+   "tools": "7/15 红"
+  },
+  "serial_rounds": {
+   "graph": "0/3 红",
+   "react": "0/3 红",
+   "tools": "0/3 红"
+  },
+  "exec_memory": {
+   "graph": "0/15 红",
+   "react": "0/15 红",
+   "tools": "3/15 红"
+  },
+  "truth_query": {
+   "graph": "0/6 红",
+   "react": "0/6 红",
+   "tools": "0/6 红"
+  },
+  "honest_deny": {
+   "graph": "0/3 红",
+   "react": "0/3 红",
+   "tools": "0/3 红"
+  },
+  "20260905": {
+   "graph": "0/3 红",
+   "react": "0/3 红",
+   "tools": "0/3 红"
+  },
+  "planner": {
+   "graph": "0/3 红",
+   "react": "0/3 红",
+   "tools": "0/3 红"
+  },
+  "follow-up": {
+   "graph": "0/3 红",
+   "react": "0/3 红",
+   "tools": "0/3 红"
+  },
+  "20260919": {
+   "graph": "0/6 红",
+   "react": "0/6 红",
+   "tools": "1/6 红"
+  },
+  "doc_anchor": {
+   "graph": "0/9 红",
+   "react": "0/9 红",
+   "tools": "1/9 红"
+  },
+  "followup": {
+   "graph": "0/30 红",
+   "react": "0/30 红",
+   "tools": "6/30 红"
+  },
+  "dep": {
+   "graph": "0/3 红",
+   "react": "0/3 红",
+   "tools": "0/3 红"
+  },
+  "refs": {
+   "graph": "0/3 红",
+   "react": "0/3 红",
+   "tools": "0/3 红"
+  },
+  "20260920": {
+   "graph": "0/21 红",
+   "react": "0/21 红",
+   "tools": "3/21 红"
+  },
+  "short_reply": {
+   "graph": "0/6 红",
+   "react": "0/6 红",
+   "tools": "0/6 红"
+  },
+  "search": {
+   "graph": "0/3 红",
+   "react": "0/3 红",
+   "tools": "0/3 红"
+  },
+  "multiword": {
+   "graph": "0/3 红",
+   "react": "0/3 红",
+   "tools": "0/3 红"
+  },
+  "entity_slot": {
+   "graph": "0/15 红",
+   "react": "0/15 红",
+   "tools": "8/15 红"
+  },
+  "20261009": {
+   "graph": "0/3 红",
+   "react": "0/3 红",
+   "tools": "3/3 红"
+  },
+  "multi-turn": {
+   "graph": "0/30 红",
+   "react": "0/30 红",
+   "tools": "15/30 红"
+  },
+  "concurrent": {
+   "graph": "0/3 红",
+   "react": "0/3 红",
+   "tools": "0/3 红"
+  },
+  "admin": {
+   "graph": "0/33 红",
+   "react": "0/33 红",
+   "tools": "3/33 红"
+  },
+  "security": {
+   "graph": "0/15 红",
+   "react": "0/15 红",
+   "tools": "0/15 红"
+  },
+  "20260921": {
+   "graph": "0/6 红",
+   "react": "0/6 红",
+   "tools": "0/6 红"
+  },
+  "report": {
+   "graph": "0/9 红",
+   "react": "0/9 红",
+   "tools": "0/9 红"
+  },
+  "20260924": {
+   "graph": "0/39 红",
+   "react": "0/39 红",
+   "tools": "1/39 红"
+  },
+  "own": {
+   "graph": "0/6 红",
+   "react": "0/6 红",
+   "tools": "0/6 红"
+  },
+  "read": {
+   "graph": "0/39 红",
+   "react": "0/39 红",
+   "tools": "4/39 红"
+  },
+  "not_logged_in": {
+   "graph": "0/6 红",
+   "react": "0/6 红",
+   "tools": "0/6 红"
+  },
+  "20260923": {
+   "graph": "0/6 红",
+   "react": "0/6 红",
+   "tools": "0/6 红"
+  },
+  "tag": {
+   "graph": "0/3 红",
+   "react": "0/3 红",
+   "tools": "0/3 红"
+  },
+  "announcement": {
+   "graph": "0/3 红",
+   "react": "0/3 红",
+   "tools": "0/3 红"
+  },
+  "device": {
+   "graph": "0/3 红",
+   "react": "0/3 红",
+   "tools": "0/3 红"
+  },
+  "chat": {
+   "graph": "0/12 红",
+   "react": "0/12 红",
+   "tools": "0/12 红"
+  },
+  "capability": {
+   "graph": "0/15 红",
+   "react": "0/15 红",
+   "tools": "3/15 红"
+  },
+  "staleness": {
+   "graph": "0/3 红",
+   "react": "0/3 红",
+   "tools": "0/3 红"
+  },
+  "20260925": {
+   "graph": "0/3 红",
+   "react": "0/3 红",
+   "tools": "0/3 红"
+  },
+  "honest": {
+   "graph": "0/6 红",
+   "react": "0/6 红",
+   "tools": "0/6 红"
+  },
+  "source": {
+   "graph": "0/3 红",
+   "react": "0/3 红",
+   "tools": "0/3 红"
+  },
+  "moderation": {
+   "graph": "0/3 红",
+   "react": "0/3 红",
+   "tools": "3/3 红"
+  },
+  "20260927": {
+   "graph": "0/12 红",
+   "react": "0/12 红",
+   "tools": "5/12 红"
+  },
+  "multi_step": {
+   "graph": "0/18 红",
+   "react": "0/18 红",
+   "tools": "10/18 红"
+  },
+  "effect": {
+   "graph": "0/18 红",
+   "react": "0/18 红",
+   "tools": "10/18 红"
+  },
+  "task_state": {
+   "graph": "0/9 红",
+   "react": "0/9 红",
+   "tools": "8/9 红"
+  },
+  "20260930": {
+   "graph": "0/3 红",
+   "react": "0/3 红",
+   "tools": "0/3 红"
+  },
+  "20261001": {
+   "graph": "0/3 红",
+   "react": "0/3 红",
+   "tools": "0/3 红"
+  },
+  "idempotency": {
+   "graph": "0/3 红",
+   "react": "0/3 红",
+   "tools": "0/3 红"
+  },
+  "20261002": {
+   "graph": "0/3 红",
+   "react": "0/3 红",
+   "tools": "0/3 红"
+  },
+  "draft-20261008": {
+   "graph": "0/18 红",
+   "react": "0/18 红",
+   "tools": "5/18 红"
+  },
+  "account": {
+   "graph": "0/3 红",
+   "react": "0/3 红",
+   "tools": "0/3 红"
+  },
+  "history": {
+   "graph": "0/3 红",
+   "react": "0/3 红",
+   "tools": "2/3 红"
+  },
+  "zako": {
+   "graph": "0/9 红",
+   "react": "0/9 红",
+   "tools": "3/9 红"
+  },
+  "20261008": {
+   "graph": "3/24 红",
+   "react": "0/24 红",
+   "tools": "11/24 红"
+  },
+  "comment": {
+   "graph": "0/6 红",
+   "react": "0/6 红",
+   "tools": "2/6 红"
+  },
+  "deeplink": {
+   "graph": "0/6 红",
+   "react": "0/6 红",
+   "tools": "5/6 红"
+  },
+  "board": {
+   "graph": "0/3 红",
+   "react": "0/3 红",
+   "tools": "3/3 红"
+  },
+  "claim_guard": {
+   "graph": "0/3 红",
+   "react": "0/3 红",
+   "tools": "3/3 红"
+  },
+  "gate": {
+   "graph": "0/3 红",
+   "react": "0/3 红",
+   "tools": "3/3 红"
+  },
+  "format": {
+   "graph": "3/3 红",
+   "react": "0/3 红",
+   "tools": "0/3 红"
+  },
+  "counting": {
+   "graph": "3/3 红",
+   "react": "0/3 红",
+   "tools": "0/3 红"
+  },
+  "20261015": {
+   "graph": "0/6 红",
+   "react": "0/6 红",
+   "tools": "5/6 红"
+  },
+  "write": {
+   "graph": "0/3 红",
+   "react": "0/3 红",
+   "tools": "3/3 红"
+  },
+  "confirm": {
+   "graph": "0/3 红",
+   "react": "0/3 红",
+   "tools": "3/3 红"
+  }
+ }
+}
