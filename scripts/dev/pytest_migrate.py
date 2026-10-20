@@ -12,11 +12,13 @@
   · 模块 docstring；
   · 全部 `Import` / `ImportFrom`；
   · 全部 `FunctionDef` / `AsyncFunctionDef` / `ClassDef` —— 包括助手；
-  · **被任一模块级 def/class 体读到的裸名赋值**（如 `TOOL_NAMES`、`READY_KEYS`）：
-    搬进函数会让它变局部名，助手读全局当场 `NameError`；
-  · **最后一个 import 之前的 `Expr` / `Assign` / `AnnAssign`** —— `ROOT = ...` 与
-    `sys.path.insert(0, ROOT)` 这类前导段。只按"被 def 读"判会漏掉 `ROOT`（它不被任何
-    def 读），搬进函数后本模块自己的 `sys.path.insert` 当场 `NameError`。
+  · **被留下的语句读到的模块级常量**（如 `TOOL_NAMES`、`READY_KEYS`）：搬进函数会让它变
+    局部名，助手读全局当场 `NameError`。**迭代到不动点**，只看一层会漏
+    （`Y = BIG + 1` 留了、`BIG` 没留）；
+  · **最后一个 import 之前的 setup**（`ROOT = ...` / `sys.path.insert(0, ROOT)`）——
+    **但判据调用与 `print` 横幅除外**：本仓有一族套件的 import 是散着写的
+    （`test_account_freeze.py` 到 593 行还在 import），`last_import` 落在很后面，
+    "前导段整段留"会把大量 `check(...)` 留在模块级、而它引用的量被搬走 ⇒ `NameError`。
 
 搬（进驱动函数）：
   · 其余一切可执行语句，**保持原有相对顺序**。
@@ -83,18 +85,6 @@ def _fail_name(tree: ast.Module) -> str:
     if len(found) > 1:
         raise Manual(f"check() 同时往 {sorted(found)} 里 append，判不出收口用哪个")
     return found.pop()
-
-
-def _names_read_by_defs(tree: ast.Module) -> set[str]:
-    """模块级 def/class 体里读到的裸名 —— 这些名字必须留在模块级。"""
-    out: set[str] = set()
-    for d in tree.body:
-        if not isinstance(d, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
-            continue
-        for sub in ast.walk(ast.Module(body=d.body, type_ignores=[])):
-            if isinstance(sub, ast.Name) and isinstance(sub.ctx, ast.Load):
-                out.add(sub.id)
-    return out
 
 
 def _zero_arg_fn(tree: ast.Module, name: str) -> bool:
@@ -186,6 +176,54 @@ def _target_names(node: ast.AST) -> list[str]:
     return []
 
 
+def _bound_names(node: ast.AST) -> list[str]:
+    """一个**非定义**语句往模块级绑定的名字（含 import 的绑定名）。
+
+    `_target_names` 只认赋值，看不出 `import a.b as c` 绑的是 `c`、`from m import n` 绑的是 `n`
+    —— 而"import 重绑一个已有名字"正是 `test_account_freeze.py` 踩的那个坑。
+    """
+    if isinstance(node, ast.Import):
+        return [a.asname or a.name.split(".", 1)[0] for a in node.names]
+    if isinstance(node, ast.ImportFrom):
+        return [a.asname or a.name for a in node.names]
+    if isinstance(node, ast.With):
+        return [n.id for it in node.items if isinstance(it.optional_vars, ast.Name)
+                for n in [it.optional_vars]]
+    if isinstance(node, ast.For) and isinstance(node.target, ast.Name):
+        return [node.target.id]
+    return _target_names(node)
+
+
+def _late_rebind_hazard(tree: ast.Module, keep_idx: set[int], move_idx: list[int]) -> list[str]:
+    """被搬走的代码读到的名字，有没有被某条**更晚的**留模块级非定义语句重新绑定？
+
+    这是**顺序**问题，不是重名问题，`clash` 那条抓不到：原文件里
+    `import agent.adminops_confirm as _confirm`（27 行）、545 行用、**711 行又
+    `from agent import confirm as _confirm`** —— 三次都在模块级、按源码顺序跑，所以 545 行
+    看到的是前一个。迁移把 545 行那条判据搬到了**末尾** ⇒ 它只能看到最后一次绑定，
+    读到 `agent.confirm` 上没有的属性（`test_account_freeze` / `test_account_role` 实测：
+    `AttributeError: module 'agent.confirm' has no attribute 'render_confirm_question'`）。
+
+    定义（def/class）不算：它们在模块加载时全部就位，驱动跑之前就都是最终值，没有顺序问题。
+    """
+    moved_reads = set()
+    for i in move_idx:
+        moved_reads |= _read_names(tree.body[i])
+    hazards: list[str] = []
+    for i in sorted(keep_idx):
+        n = tree.body[i]
+        if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            continue
+        for name in _bound_names(n):
+            if name not in moved_reads:
+                continue
+            earlier = any(tree.body[j].lineno < n.lineno and name in _read_names(tree.body[j])
+                          for j in move_idx)
+            if earlier:
+                hazards.append(f"{name}@L{n.lineno}")
+    return sorted(set(hazards))
+
+
 def _rename_ids(src: str, tree: ast.Module, renames: dict[str, str]) -> str:
     """助手改名（`test_x` → `_test_x`）：**按 AST 位置改标识符，不做文本替换**。
 
@@ -218,15 +256,122 @@ def _rename_ids(src: str, tree: ast.Module, renames: dict[str, str]) -> str:
     return "\n".join(lines)
 
 
+def _read_names(node: ast.AST) -> set[str]:
+    """一个语句里读到的裸名（`Load` 上下文）。"""
+    return {s.id for s in ast.walk(node)
+            if isinstance(s, ast.Name) and isinstance(s.ctx, ast.Load)}
+
+
+def _free_names(node: ast.FunctionDef | ast.AsyncFunctionDef) -> set[str]:
+    """函数体真正依赖的**模块级**名字 = 读到的名字 − 它自己的参数与局部绑定。
+
+    ⚠️ 直接用 `_read_names(def)` 是错的：它会把参数和局部变量一起算成"依赖"，于是
+    `def _use(post): return post.foo` 里的 `post` 会让模块级的 `post = _Post(...)`
+    被"救"回模块级 —— 那个 `post` 本来该跟着流水线搬进驱动（`test_admin_write` 实测
+    救出一片假"重绑"）。局部绑定按 AST 粗算：Store/Del 的 Name、内层 def/class 名、
+    内层 import 的绑定名、`except ... as e` 的 `e`，以及**内层函数的参数**
+    （`def _run(): def inner(out): return out.foo` 里的 `out` 是 `inner` 的参数，
+    不算进来就会漏成"模块依赖" —— `test_todo_schedule` 实测：模块级
+    `out = expand(...)` 整条流水线被救回模块级，于是又跟驱动撞成"重绑"）。
+    """
+    reads = _read_names(node)
+    bound: set[str] = set()
+    for sub in ast.walk(node):
+        if isinstance(sub, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            bound.add(sub.name)
+            a = sub.args
+            for arg in [*a.posonlyargs, *a.args, *a.kwonlyargs]:
+                bound.add(arg.arg)
+            for extra in (a.vararg, a.kwarg):
+                if extra is not None:
+                    bound.add(extra.arg)
+        elif isinstance(sub, ast.Name) and isinstance(sub.ctx, (ast.Store, ast.Del)):
+            bound.add(sub.id)
+        elif isinstance(sub, ast.ClassDef):
+            bound.add(sub.name)
+        elif isinstance(sub, (ast.Import, ast.ImportFrom)):
+            bound |= set(_bound_names(sub))
+        elif isinstance(sub, ast.ExceptHandler) and sub.name:
+            bound.add(sub.name)
+    return reads - bound
+
+
+def _module_deps(node: ast.AST) -> set[str]:
+    """一条**定义**（def / class）真正依赖的模块级名字。
+
+    `class` 只走类体那一层、并且**方法用 `_free_names`** —— 早先图省事用
+    `_read_names(classdef)`，把方法里的局部名也当成了模块依赖（同一族的漏）。
+    """
+    if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+        return _free_names(node)
+    if not isinstance(node, ast.ClassDef):
+        return set()
+    deps: set[str] = set()
+    bound: set[str] = set()
+    for st in node.body:
+        if isinstance(st, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            deps |= _free_names(st)
+        elif isinstance(st, ast.ClassDef):
+            deps |= _module_deps(st)
+        else:
+            deps |= _read_names(st)
+            bound |= set(_bound_names(st))
+    return deps - bound
+
+
+def _dotted(node: ast.AST) -> str:
+    """`a.b.c` 形态的点号路径（认不出返回空串）。"""
+    parts: list[str] = []
+    while isinstance(node, ast.Attribute):
+        parts.append(node.attr)
+        node = node.value
+    if isinstance(node, ast.Name):
+        parts.append(node.id)
+    return ".".join(reversed(parts))
+
+
+def _is_import_setup(node: ast.AST) -> bool:
+    """**import 期 setup** —— 只有这三种必须留在模块级，否则本模块自己的 `import` 会失败。
+
+      · `sys.path.insert/append(...)`（212 处，把仓根与 `eval/` 挂进 import 路径）；
+      · `os.environ.setdefault(...)`（后续 import 在导入期读环境）；
+      · `sys.modules[...] = ...`（桩一个模块）。
+
+    ⚠️ **这一条必须窄**。早先写的是"最后一个 import 之前的整段都留"，实测是错的：
+    本仓有一族套件的 import 是**散着写**的（`test_account_freeze.py` 到 593 行还在
+    `import agent.authz`），于是"前导段"把**整段测试体**都留下了 —— 普查出 1649 个
+    `Assign` 加一批 `With`/`For`/`Try`/`If`。两个后果都实测到了：
+      · 判据调用留在模块级、它引用的量被搬进函数 ⇒ `NameError: name '_nxt' is not defined`；
+      · 前导段绑一个 `_payload`、驱动函数里又绑一个同名的 ⇒ 驱动里**局部遮蔽全局**，
+        原来读全局的那句变成 `UnboundLocalError`（`test_chat_quota.py` 实测）。
+    """
+    if isinstance(node, ast.Assign) and len(node.targets) == 1:
+        t = node.targets[0]
+        return isinstance(t, ast.Subscript) and _dotted(t.value).startswith("sys.modules")
+    if not (isinstance(node, ast.Expr) and isinstance(node.value, ast.Call)):
+        return False
+    p = _dotted(node.value.func)
+    return p.startswith("sys.path.") or p.startswith("os.environ.")
+
+
 def _classify(tree: ast.Module) -> tuple[set[int], list[int]]:
     """把顶层语句分成「留模块级」与「搬进驱动」，返回 `(keep_idx, move_idx)`。
 
+    三条规则，缺一条都会踩到实测过的坑：
+
+    **① 定义留原地** —— docstring / `import` / `def` / `class`。
+
+    **② import 期 setup 留原地** —— `sys.path.insert(0, str(ROOT))` 这类，搬走会让本模块
+    自己的 `import` 当场失败；它读的 `ROOT = ...` 由 ③ 兜住。判据口径见 `_is_import_setup`
+    （**必须窄**，写成"最后一个 import 之前的整段都留"会踩两个实测到的坑）。
+
+    **③ 名字依赖闭包（不动点）** —— 被"留下的语句"读到的模块级常量必须一起留下
+    （`TOOL_NAMES` / `READY_KEYS` 那一族：搬进函数它就变局部名，助手读全局当场
+    `NameError`）。**必须迭代到不动点**：`Y = BIG + 1` 被留（助手读 `Y`）时 `BIG` 也得留，
+    只看一层会漏。
+
     `__main__` 块两边都不进 —— 它由 `_main_body` 单独取正文。
     """
-    needed = _names_read_by_defs(tree)
-    last_import = max((i for i, n in enumerate(tree.body)
-                       if isinstance(n, (ast.Import, ast.ImportFrom))), default=-1)
-
     keep_idx: set[int] = set()
     move_idx: list[int] = []
     for i, n in enumerate(tree.body):
@@ -242,18 +387,60 @@ def _classify(tree: ast.Module) -> tuple[set[int], list[int]]:
         if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
             keep_idx.add(i)
             continue
-        # ⚠️ **前导段整段留在模块级**（`ROOT = ...` / `sys.path.insert(0, ROOT)` /
-        #    `AnnAssign` 都在这里）：`sys.path.insert` 要靠 `ROOT`，而 `ROOT` 又不被任何
-        #    def 读 —— 只按"被 def 读"判会把它搬进函数，本模块自己的 import 当场
-        #    `NameError: ROOT`（这一条是工装自己抓出来的第一版 bug）。
-        if i <= last_import and isinstance(n, (ast.Expr, ast.Assign, ast.AnnAssign)):
-            keep_idx.add(i)
-            continue
-        tgts = _target_names(n)
-        if tgts and all(t in needed for t in tgts):
-            keep_idx.add(i)                       # 助手要读的模块级常量
+        if _is_import_setup(n):
+            keep_idx.add(i)                       # ② import 期 setup
             continue
         move_idx.append(i)
+
+    # ③ 名字依赖闭包，到不动点。**种子只取两类读者**：
+    #    · 留模块级的 def/class 体（`TOOL_NAMES` / `READY_KEYS` 那一族 —— 搬进函数它就变
+    #      局部名，助手读全局当场 `NameError`）；
+    #    · import setup 语句（`sys.path.insert(0, str(ROOT))` 要 `ROOT`）。
+    #    ⚠️ **不能拿"所有留下的语句"当种子**：`post = _Post(...)` 只要被任何一条留下的语句
+    #    读到就会被救回模块级，而它本来是模块级流水线上的一环 —— 救回来之后又跟驱动里的
+    #    同名绑定撞上（`test_admin_write` 实测出一片假"重绑"）。
+    seed_reads: set[str] = set()
+    for i in keep_idx:
+        n = tree.body[i]
+        if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            seed_reads |= _module_deps(n)
+        elif _is_import_setup(n):
+            seed_reads |= _read_names(n)
+    while True:
+        rescued = [i for i in move_idx
+                   if _target_names(tree.body[i])
+                   and all(t in seed_reads for t in _target_names(tree.body[i]))]
+        if not rescued:
+            break
+        for i in rescued:
+            keep_idx.add(i)
+            move_idx.remove(i)
+            seed_reads |= _read_names(tree.body[i])
+
+    # 同名两处绑定 ⇒ 驱动函数里的那个会把模块级的**遮蔽**掉，原来读全局的语句变成
+    # `UnboundLocalError`。认得出就救（模块级那处没人读时搬进驱动、只剩一个作用域），
+    # 认不出就交人工 —— 猜错了是静默改语义。
+    moved_names = {t for i in move_idx for t in _target_names(tree.body[i])}
+    kept_names = {t for i in keep_idx for t in _target_names(tree.body[i])}
+    clash = moved_names & kept_names
+    if clash:
+        readers = set()
+        for i in keep_idx:
+            readers |= _read_names(tree.body[i])
+        unrescuable = sorted(n for n in clash
+                             if any(n in _target_names(tree.body[i]) for i in keep_idx
+                                    if _is_import_setup(tree.body[i])) or n in readers)
+        if unrescuable:
+            raise Manual(f"同名两处绑定且模块级那处被读到：{unrescuable} —— 交人工")
+        for i in sorted(keep_idx):
+            if set(_target_names(tree.body[i])) & clash:
+                keep_idx.discard(i)
+                move_idx.append(i)
+        move_idx.sort()
+
+    late = _late_rebind_hazard(tree, keep_idx, move_idx)
+    if late:
+        raise Manual(f"被搬的代码读到的名字在更晚处被重绑：{'、'.join(late)} —— 交人工")
     return keep_idx, move_idx
 
 
