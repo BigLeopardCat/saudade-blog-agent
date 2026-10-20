@@ -48,7 +48,7 @@ def eq(got, exp, name):
     check(name, got == exp, {"got": got, "exp": exp})
 
 
-TEST_SECRET = "ci-test-secret-不参与生产"
+TEST_SECRET = "ci-test-secret-不参与生产-not-a-real-secret"
 
 
 class _Req:

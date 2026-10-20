@@ -316,7 +316,7 @@ import _parent_repo  # noqa: E402
 
 def test_chat_quota():
     _SAVED_SECRET = settings.jwt_secret
-    settings.jwt_secret = "test-secret-for-confirm-tokens"
+    settings.jwt_secret = "test-secret-for-confirm-tokens-not-a-real-secret"
     DIRD_ZERO = {**DIRD, 126: row(126, "Alice", used=0)}
     PEND = {126: {"id": 900, "userId": 126, "username": "Alice", "nickname": "Alice",
                   "used": 137, "limit": 500, "reason": "额度用完了，我想接着问",

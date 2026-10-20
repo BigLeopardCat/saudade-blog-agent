@@ -346,7 +346,7 @@ from agent.workflow_defs import WORKFLOWS as _SK  # noqa: E402
 
 def test_admin_write():
     _SAVED_SECRET = settings.jwt_secret
-    _STUB_SECRET = "test-secret-for-confirm-tokens"
+    _STUB_SECRET = "test-secret-for-confirm-tokens-not-a-real-secret"
     settings.jwt_secret = _STUB_SECRET
     print("\n① 纯函数：状态映射（认不出来就拒绝，绝不猜）")
     check("口语/别名 → 存储值", _tags.normalize_status("公开") == "public"

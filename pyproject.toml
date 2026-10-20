@@ -81,6 +81,15 @@ dependencies = [
     "psycopg-pool==3.3.3",
     "pydantic==2.13.4",
     "pydantic-settings==2.14.2",
+    # JWT 验签与签发（20261020，ADR-0014）。**归运行时而不是 dev 组**：三条路径都在
+    # 生产请求链路上（`server._verify_assertion_claims` 验 Rust 的身份断言、
+    # `tools/base._sign_local_jwt` 与 `tools/device._sign_user_jwt` 签代调令牌）。
+    # 此前这三处都是手写的 base64 + HMAC —— 验签侧自己盯不住 `alg` 混淆 / 空签名 /
+    # 边界时钟，而标准库不会替你看（20261019 安全审计 §1.1）。
+    # ⚠️ **版本必须是 2.15.1（最新）**：审计文档写的 `==3.0.0` 不存在。
+    # ⚠️ 它本来就在 `.venv` 里（某条传递依赖带的）⇒ **"import 得到"不代表"声明了"**，
+    # 而 CI 的 `uv sync --frozen` 只装 lock 里的东西。这一行是补声明。
+    "PyJWT==2.15.1",
     "starlette==1.6.0",
     "uvicorn==0.52.4",
 ]
