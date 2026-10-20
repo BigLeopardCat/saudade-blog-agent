@@ -102,6 +102,35 @@ def instantiate_plan(workflow_name: str, params: dict,
     return plan
 
 
+def _expand_free_text_workflow(workflow, params: dict) -> tuple[list[str], str, dict]:
+    """自由文本靶那一桶（待办/日程三件）的分派 → (TOOLS 行清单, 注记, 系统派生的值)。
+
+    （20261020 从 `_instantiate_plan` 抽出来。抽它的理由是**行数棘轮**：那个函数在
+    台账里记着 516 行（`eval/complexity_baseline.json`，只许缩小），而这一批要给它
+    加"派生值"那条通道 ⇒ 与其把注释删短去凑数，不如把这一段本来就有独立头注的
+    三分支搬出来——**这就是棘轮想换来的东西**。）
+
+    目标是**自由文本**的写技能：待办 / 日程（20260926 第八轮 + 第十轮，20260929
+    批 G 加第三件）。前两组的目标都能在站内核对（名字 / id），这一组只有"正文在不在、
+    日期说清楚没有"那几条判据——见三个展开函数各自的头注。
+
+    ⚠️ **必须按技能名三分**：桶成员资格只说"目标是自由文本"，而"加一条 / 勾一条 /
+    改一条的排期"是三个展开函数。默认支（`_expand_todo_workflow`）对 text/date 都认，
+    所以漏了分支**不会报错**——它会把"勾完成"展开成 `create_dashboard_todo`
+    （**多记一条待办**），把"改排期"展开成 `create_dashboard_todo({'text':…,
+    'date':…})`（**又记一条**，而主人以为只是改了日子）。两次都是"主人收到成功回执、
+    列表却多了东西"。
+
+    第三项（派生值）三个函数都返回：加一条与改排期可能是派生的，勾完成恒空——
+    **同族同形**，见各函数头注。
+    """
+    if workflow.name == "dashboard_todo_done":
+        return _expand_todo_done_workflow(workflow, params)
+    if workflow.name == "dashboard_todo_reschedule":
+        return _expand_todo_reschedule_workflow(workflow, params)
+    return _expand_todo_workflow(workflow, params)
+
+
 def _instantiate_plan(workflow_name: str, params: dict,
                       role: str | None = None) -> dict:
     """技能模板 + 参数 → 结构化计划。
@@ -143,6 +172,14 @@ def _instantiate_plan(workflow_name: str, params: dict,
     # 或旧版计划上，系统性计划一定有值（`plan_encode` 写那一行）。
     # `str | None`：同 `note`——article_status 那一支可能回 `None`，收尾处会补默认。
     status: str | None = ""
+    # **系统替主人派生的值**（20261020，非契约键）：`{"<参数名>": "derived"}`，只有
+    # 展开层真的算过一个值时才非空。它回答的是"计划里这个值**是谁定的**"——主人没说
+    # 具体日子、系统按他的相对说法算了一个出来（`adminops_todo.derive_due_date`），
+    # 卡面与叙述都必须写明是系统排的，否则等于系统替主人改了字还让他以为是自己说的。
+    # 与 `refusal`（write_grounding）同一条纪律：**非契约键**，`normalize_plan` 原样
+    # 保留、不进 `_CONTRACT_KEYS`、不进 AgentState、不落进 plan 文本（`plan_encode`
+    # 只写契约行）——它只被"卡面渲染"与"trace 记账"两个读侧消费。
+    derived_values: dict = {}
     if workflow.name == "navigate":
         # 跳转恒直达（20260926）：下面三条出口（映射命中/字面路径/模糊归一）都写
         # `confirm: False`。原来的 `mode` 参数（direct/suggest）已删——见技能定义里
@@ -364,21 +401,7 @@ def _instantiate_plan(workflow_name: str, params: dict,
             wtools, note = _expand_own_workflow(workflow, params)
             tools.extend(wtools)
         elif _chan == "free_text":
-            # 目标是**自由文本**的写技能：待办 / 日程（20260926 第八轮 + 第十轮，
-            # 20260929 批 G 加第三件）。前两组的目标都能在站内核对（名字 / id），
-            # 这一组只有"正文在不在、日期说清楚没有"那几条判据——见三个展开函数的头注。
-            # ⚠️ **必须按技能名三分**：桶成员资格只说"目标是自由文本"，而"加一条 /
-            # 勾一条 / 改一条的排期"是三个展开函数。默认支（`_expand_todo_workflow`）
-            # 对 text/date 都认，所以漏了分支**不会报错**——它会把"勾完成"展开成
-            # `create_dashboard_todo`（**多记一条待办**），把"改排期"展开成
-            # `create_dashboard_todo({'text':…, 'date':…})`（**又记一条**，而主人以为
-            # 只是改了日子）。两次都是"主人收到成功回执、列表却多了东西"。
-            if workflow.name == "dashboard_todo_done":
-                wtools, note = _expand_todo_done_workflow(workflow, params)
-            elif workflow.name == "dashboard_todo_reschedule":
-                wtools, note = _expand_todo_reschedule_workflow(workflow, params)
-            else:
-                wtools, note = _expand_todo_workflow(workflow, params)
+            wtools, note, derived_values = _expand_free_text_workflow(workflow, params)
             tools.extend(wtools)
         elif _chan != "article":
             # fail-closed（20260923；20261015 批 1 起判据换成"**没有声明靶通道**"）：
@@ -616,4 +639,11 @@ def _instantiate_plan(workflow_name: str, params: dict,
         # "点名却未执行"同族，同样只记账不阻断（工具照常跑）。见 planner_node 的
         # `planner.param_unknown` 事件。
         "param_unknown": param_unknown,
+        # 系统替主人派生的值（20261020，只读、非契约键）：见本函数上方那段注。
+        # ⚠️ **只在**这个收尾字典里有这一键——`_param_problem_plan` 那几条零工具出口
+        # （参数不齐 / 认不出）走的是另一个构造点，**没有**这一键。这是有意的：那些
+        # 出口压根没有派生过任何值，凭空补一个空字典等于替一个没发生的事实记账。
+        # ⇒ 消费方一律写 `plan.get("derived_values") or {}`（缺键与空字典同义），
+        # 别写 `.get("derived_values")["date"]` 也别拿 `is None` 当判据。
+        "derived_values": derived_values,
     }

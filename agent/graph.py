@@ -9072,6 +9072,23 @@ def _popup_snapshots(picks: list, config, principal) -> dict:
             **_popup_reached_snaps(picks, config)}
 
 
+def _derived_values(state: AgentState) -> dict:
+    """本轮计划里**系统替主人派生**的参数值（`{"date": "derived"}`）；没有就是空表。
+
+    只在弹卡那三个渲染点读（问句 / 跨轮 `target` / 卡面正文）：三处必须看到**同一份**
+    出处，否则卡面写着「系统替你排的」而台账那一行不写（或反过来），主人事后对账会
+    以为那个日子是自己说的。
+
+    经 `plan_view` 读（计划的**唯一**读入口，见 `plan_codec`）——别直接摸
+    `state["plan_obj"]`：那条路上没有归一，读到的是"写的人填了什么"而不是规范形态。
+
+    ⚠️ 空表与缺键**同义**（`plan.get(...) or {}`）：零工具出口（`_param_problem_plan`）
+    的计划里压根没有这一键，那是对的——那些出口没有派生过任何值，凭空补一个空字典
+    等于替一件没发生的事记账。消费方一律 `or {}`，别写 `.get(...)["date"]`。
+    """
+    return plan_view(state).get("derived_values") or {}
+
+
 def _confirm_popup(state: AgentState, specs: list, principal, user_msg: str,
                    config) -> dict | None:
     """本轮要不要弹"写操作确认框"？要就返回 `pending_confirm` 的 state 增量。
@@ -9346,7 +9363,7 @@ def _confirm_popup(state: AgentState, specs: list, principal, user_msg: str,
         return None
     question = _confirm.render_confirm_question(picks, tag_index, cat_index, board_index,
                                          note_index, users, todos, quota_requests,
-                                         comment_index)
+                                         comment_index, _derived_values(state))
     # 按钮按**单元**数生成（20260929 批 F4，20261010 改数单元）：≥ 2 时给「全部办」
     # + 逐条「只办第 i 件」+「取消」（`pick:<i>` 0 基，服务端按同一份 `units` 裁）；
     # 为 1 时仍是旧的两枚，字面一个字节没动。
@@ -9385,7 +9402,7 @@ def _confirm_popup(state: AgentState, specs: list, principal, user_msg: str,
             "specs": picks,
             "target": _confirm.render_action_lines(picks, tag_index, cat_index, board_index,
                                             note_index, users, todos, quota_requests,
-                                            comment_index),
+                                            comment_index, _derived_values(state)),
             "requested_by": "user",
             "source_event": "confirm_popup",
             # 卡片本体一并落库：只活在当轮的 SSE 帧里的话——刷新、
@@ -9416,7 +9433,7 @@ def _confirm_popup(state: AgentState, specs: list, principal, user_msg: str,
         "confirm_text": _confirm.render_confirm_text(picks, tag_index, cat_index, board_index,
                                                note_index, users, todos,
                                                quota_requests=quota_requests,
-                                               comments=comment_index)
+                                               comments=comment_index, derived=_derived_values(state))
                         + _noop.render_already_note(already),
     }
 

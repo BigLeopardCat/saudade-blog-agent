@@ -40,7 +40,8 @@ _DUE_MONTH_DAY_RE = re.compile(r"^(\d{1,2})\s*[-/.月]\s*(\d{1,2})\s*"
 # 「认哪些写法」这句人话**只写一次**（四处报错文案共用）：它此前手抄在
 # `workflow_defs/`×2 与 `tools/base.py`×2，四处已经开始各漂各的——改一处漏一处，就是
 # "系统告诉模型的面"与"真正认的面"不是同一张（同族病：`_ITEM_POSITION_FORMS`）。
-DUE_DATE_FORMS_CN = "年-月-日 / 年/月/日 / X月X日（X月X号也算） / 今天·明天·后天"
+DUE_DATE_FORMS_CN = ("年-月-日 / 年/月/日 / X月X日（X月X号也算） / 今天·明天·后天"
+                     " / N天之内·N天后 / 下周X·周X / 月底·下个月X号")
 
 
 def normalize_due_date(value, *, today=None) -> str | None:
@@ -83,6 +84,246 @@ def normalize_due_date(value, *, today=None) -> str | None:
         except ValueError:
             return None
     return None
+
+
+# ── 排期日的**推导**（20261020）──────────────────────────────────────────
+# 上一版到这里就没了：`normalize_due_date` 认不出 ⇒ 调用方零写 + 追问。而主人嘴里
+# 最自然的排期说法恰恰在闭集之外——生产 trace `20261020T084447`/`T084521`：「猫咪加条
+# 待办，**两天之内**发布泠月喵正式版第一版」，planner 技能选对、正文抄对，只因为
+# 「两天之内」不在那张闭集里，**整轮一件事都没办成**（零工具 → 纠偏空转 → 确定性收尾）。
+# 而那句话是完全清楚的：今天 10-20，两天之内就是 10-22。**系统算得出来，却去问主人**
+# ——这不是"不猜"，这是把一件机器能算的事推给主人。
+#
+# 于是补一条**推导**路径（`derive_due_date`），闭集不动：
+#   · 闭集管"主人报了一个日子"（照抄即可），推导管"主人给了一个相对/指示说法"
+#     （要用钟面算）。**两者分开是承重的**：`tests/test_todo_schedule.py:186-189` 逐字
+#     锁着「裸的 27号 / 3号楼 / 5号窗口 一律不认」，把推导并进归一会当场把它推翻。
+#   · 推导出来的值**不是主人的话**，所以它必须**标出处**（调用方往计划里写
+#     `derived_values`，卡面与 narrator 注记都写明「系统替你排的」）——主人的日子与
+#     系统的日子在卡面上必须看得出区别，否则等于系统替主人改了字。
+#   · **完全推不出来的仍走零写 + 追问**（用户 20261020 裁决：主人压根没提日子 ⇒ 留空，
+#     不硬塞一个）。两条判据见函数内那两段。
+#
+# 收哪些说法是**封闭判据**（不是"什么算日期"的开放推断），每一条都能在钟面上算出唯一
+# 一个日子，且都不与闭集重叠。
+_DUE_DAY_NUM = r"(?:\d{1,2}|[一二两三四五六七八九十]{1,3})"
+
+
+class _NoMatch:
+    """「正则压根没匹配上」的**哨兵**——与 `None` 严格区分。
+
+    这一层是承重的：`_derive_month` 的两个 `None` 出口意思是"**匹配上了、但那天不
+    存在**"（9月31日 / 31号 而那个月没有 31 天），调用方必须**当场终局**；而"压根
+    没匹配上"要继续往下试别的形状。把两者都写成 `None`，`9月31日` 就会一路落到
+    "是排期说法但算不出 ⇒ 默认今天"那一格——主人写错的日子被悄悄改成今天，卡面上
+    还一切正常。本仓 20261020 那条纪律（"缺键绝不编 0"）在这里的另一副面孔就是它。
+    """
+
+    __slots__ = ()
+
+
+_DUE_NO_MATCH = _NoMatch()
+_DUE_MONTH_NUM = r"(?:\d{1,2}|[一二三四五六七八九十]{1,3})"
+_DUE_OFFSET_RE = re.compile(
+    r"^(" + _DUE_DAY_NUM + r")\s*[天日]\s*(?:之内|以内|内|里|后|之后|以后)$")
+# 「今天之内」「明天以前」这类：基底词闭集已经认，加上界限词之后整串不在闭集里
+# （闭集是 `^…$` 全匹配），于是「明天以前」此前也翻不出来。
+_DUE_BASE_LIMIT_RE = re.compile(
+    r"^(今天|今日|明天|明日|后天|後天|大后天|大後天)\s*(?:之内|以内|内|里|之前|以前|前)$")
+# 周几：`周一` / `星期三` / `礼拜5` / `下周五` / `这周日`。映射按 `date.weekday()`
+# （周一 = 0 … 周日 = 6），与 `utils/clock.WEEKDAYS` 同一套下标。
+_DUE_WEEKDAYS = {"一": 0, "二": 1, "三": 2, "四": 3, "五": 4, "六": 5, "日": 6, "天": 6,
+                 "1": 0, "2": 1, "3": 2, "4": 3, "5": 4, "6": 5, "7": 6}
+_DUE_WEEKDAY_RE = re.compile(r"^(下下|下个|下|这个|本个|这|本)?\s*(?:周|星期|礼拜)\s*"
+                             r"([一二三四五六日天1-7])$")
+# 「下周」这种不带周几的：落**下周一**（"下周"就是一个可算的区间起点）。
+_DUE_WEEK_ONLY_RE = re.compile(r"^(下下|下个|下)\s*(?:周|星期|礼拜)$")
+# 月份那一截有**两种**说法，别混成一个槽：
+#   · 相对（「下个月」「这个月」「本月」）——基数就是现在这个月，句子里**没有**月份数字；
+#   · 绝对（「9月」「九月」）——主人报的是月份本身，按**当年**解释（同闭集那条规则）。
+# 前者带一个「个」字（下个月），所以两条正则共用一个 `_DUE_MONTH_HEAD`：组①=相对词
+# （绝对形态时为 None），组②=绝对月份数字。
+_DUE_MONTH_HEAD = r"(?:(下个|下|这个|本个|这|本)个?月|(" + _DUE_MONTH_NUM + r")月)"
+_DUE_MONTH_DAY_WORD_RE = re.compile(r"^" + _DUE_MONTH_HEAD + r"\s*(" + _DUE_DAY_NUM
+                                    + r")\s*[号日]$")
+_DUE_MONTH_END_RE = re.compile(r"^" + _DUE_MONTH_HEAD + r"\s*(?:底|末)$")
+# 裸的「月底」/「月末」（不带月份那一截）：就是**这个月**的月底。
+_DUE_MONTH_END_BARE_RE = re.compile(r"^(?:这个|本|这)?月(?:底|末)$")
+# 裸的「下个月」/「下月」（不带日号）：落**下个月 1 号**（同「下周」→ 下周一）。
+_DUE_MONTH_ONLY_RE = re.compile(r"^(下个|下|这个|本个|这|本)个?月$")
+# 裸的「27号」：主人说了日子、只是没说是哪个月 ⇒ 按**下一次**的那个日号算（同"周几"
+# 那条规则）。`normalize_due_date` 仍不认它（那条锁不动，见它自己那段注）；这里是
+# **推导**：说得出日号就是排期意图，而"算不出哪个月"不该让整轮什么都办不成。
+_DUE_BARE_DAY_RE = re.compile(r"^(" + _DUE_DAY_NUM + r")\s*[号日]$")
+# 「尽快」这类：主人表达了排期意图，但**没有可算的锚**——按 20261020 裁决落默认今天
+# （卡面会把日子印出来让他核对）。`这两天` 字面上也指今天起的两天内。
+_DUE_SOON_WORDS = ("尽快", "尽早", "赶紧", "这两天", "这两天里", "这两天之内",
+                   "马上", "立刻", "现在", "今天之内", "今日之内")
+# 「像某个具体日子、但那天不存在」（9月31日 / 2026-02-30）：**不许落默认今天**——
+# 那是"那一天不存在"，不是"算不出来"，静默改成今天等于替主人改字。
+_DUE_DATED_LIKE_RE = re.compile(r"\d\s*[-/.年月]\s*\d")
+# 有没有**排期语素**（决定"算不出来时能不能落默认今天"）：一个都没有 ⇒ planner 往
+# date 槽里填的压根不是时间（幻觉/串了上文），那不是排期意图 ⇒ 仍零写 + 追问。
+# ⚠️ **「号」刻意不在表里**：它是"日号"那个字的同形字，`3号楼` / `5号窗口` 会因此
+# 被误判成排期说法、静默落成今天——而那两个串压根不是时间。日号那一路由上面
+# `_DUE_BARE_DAY_RE`（全匹配 `^\d+[号日]$`）接走，不需要在这里再兜一层。
+_DUE_TIME_MORPHEMES = ("天", "日", "周", "星期", "礼拜", "月", "底", "末",
+                       "尽快", "尽早", "赶紧", "之内", "以内", "之后", "以后")
+
+
+def _due_day_number(text: str) -> int | None:
+    """`N天` 里的那个 N：阿拉伯数字或中文数字（`两天` → 2）。认不出 → None。
+
+    中文数字借 `adminops_account._cn_number`（`禁他三天` 那一族用的同一个）——
+    **不另写一份**：同一门语言的同一段规则抄两遍，就是本仓点过名的那种病。
+    """
+    text = str(text or "").strip()
+    if text.isdigit():
+        return int(text)
+    from agent.adminops_account import _cn_number      # 局部导入：避免模块级成环
+    return _cn_number(text)
+
+
+def _due_month(lead: str | None, num: str | None, base: datetime.date) -> tuple[int, int]:
+    """月份那一截 → `(年, 月)`：相对说法（下个月/这个月）按基数月推，绝对说法按当年。
+
+    「下个月」跨年由这里兜（12 月说「下个月」⇒ 明年 1 月）。
+    """
+    if lead in ("下", "下个"):
+        year, month = base.year, base.month + 1
+        return year + (month - 1) // 12, (month - 1) % 12 + 1
+    if lead:
+        return base.year, base.month          # 这个月 / 本月
+    return base.year, _due_day_number(num) or 0
+
+
+def _month_end(year: int, month: int) -> str:
+    """那一个月的最后一天。"""
+    nxt = datetime.date(year + (month == 12), month % 12 + 1, 1)
+    return (nxt - datetime.timedelta(days=1)).isoformat()
+
+
+def derive_due_date(value, *, today=None) -> str | None:
+    """排期日 → `YYYY-MM-DD`；**闭集认不出的相对说法算一个**；实在算不出 → None。
+
+    与 `normalize_due_date` 的分工（这一条决定了两个函数为什么不是一个）：
+      · `normalize_due_date` = **照抄**：主人报了一个日子，系统只做格式归一；
+      · `derive_due_date` = **算**：主人给的是相对/指示说法，要拿钟面推。
+    本函数**先跑一遍归一**（认得就直接返回它）⇒ 它是"排期日的总解析器"，调用方不必
+    自己判断该走哪一个；认得的那些写法与闭集**逐字节同结论**。
+
+    三种出口，调用方按它区分出处（见模块顶部那段）：
+      · 算得出（含闭集认得的）⇒ 一个 ISO 日子；
+      · 算不出、但**是**排期说法（「过几天」「有空的时候」）⇒ **今天**（用户裁决：
+        系统自己挑一个，卡面印出来让主人核对）；
+      · 算不出、且**不是**排期说法（往 date 槽里填了不相干的词）⇒ None，调用方零写 + 追问。
+
+    `today` 只为测试注入（默认取本地今天，与全站 +08:00 钟面约定一致）。
+    """
+    iso = normalize_due_date(value, today=today)
+    if iso:
+        return iso
+    if value is None or isinstance(value, bool):
+        return None
+    s = str(value).strip().strip("「」『』“”\"'").strip()
+    if not s:
+        return None
+    base = today or datetime.date.today()
+    if s in _DUE_SOON_WORDS:
+        return base.isoformat()
+    m = _DUE_BASE_LIMIT_RE.match(s)
+    if m:
+        return normalize_due_date(m.group(1), today=base)   # 基底词闭集一定认得
+    m = _DUE_OFFSET_RE.match(s)
+    if m:
+        n = _due_day_number(m.group(1))
+        if n:
+            return (base + datetime.timedelta(days=n)).isoformat()
+    v = _derive_week(s, base)
+    if v is _DUE_NO_MATCH:
+        v = _derive_month(s, base)
+    if v is not _DUE_NO_MATCH:
+        # 可能是个真日子，也可能是 `None`（"9月31日"这类——正则匹配上了、那天不存在）。
+        # 两种都是**终局**：不许从这里再落到下面"默认今天"那一格。
+        return v
+    if _DUE_DATED_LIKE_RE.search(s):
+        return None                          # 像日子却不存在：不许落默认今天
+    if any(w in s for w in _DUE_TIME_MORPHEMES):
+        return base.isoformat()              # 是排期说法但算不出 ⇒ 默认今天
+    return None                              # 压根不是排期说法 ⇒ 交回调用方去问
+
+
+def _derive_week(s: str, base: datetime.date) -> str | None | _NoMatch:
+    """周几族（`下下周五` / `下周五` / `周五` / `下周`）→ ISO；都不匹配 → `_DUE_NO_MATCH`。
+
+    抽出来只因**复杂度预算**（C ≤ 30，`tests/test_complexity_budget.py`）：这一族四条
+    出口各自要算一次"离目标周几还有几天"，与月族、日号族在正则与算式上都不相干，
+    合在一个函数里只是把三个互不相干的判据串成一条长链。
+
+    三个分支的语义差别（别把它们统一成一句"下一个周五"）：
+      · `下下周五` = 隔一整周的那一周的周五；
+      · `下周五` = **下一个自然周**的周五（不是"七天后的周五"）；
+      · 裸的 `周五` / `这周五` = **下一次**的那个周几（今天就是周五 ⇒ 今天）。
+        已过去的"这周五"不落一个过去的日期——主人说这句话时心里想的一定是下一次。
+    """
+    m = _DUE_WEEKDAY_RE.match(s)
+    if m:
+        lead, day = m.group(1) or "", _DUE_WEEKDAYS[m.group(2)]
+        if lead in ("下下",):
+            return (base + datetime.timedelta(days=7 - base.weekday() + 7 + day)).isoformat()
+        if lead in ("下", "下个"):
+            return (base + datetime.timedelta(days=7 - base.weekday() + day)).isoformat()
+        return (base + datetime.timedelta(days=(day - base.weekday()) % 7)).isoformat()
+    if _DUE_WEEK_ONLY_RE.match(s):
+        return (base + datetime.timedelta(days=7 - base.weekday())).isoformat()
+    return _DUE_NO_MATCH
+
+
+def _derive_month(s: str, base: datetime.date) -> str | None | _NoMatch:
+    """月/日号族 → ISO 或 `None`（正则匹配上了、那天不存在）；都不匹配 → `_DUE_NO_MATCH`。
+
+    与 `_derive_week` 同一条抽出理由（复杂度预算）。五个分支由**粗到细**排：先"某月
+    某号"、再"某月底"、再"裸的月底/某月"、最后"裸的日号"——顺序不能换，`27号` 与
+    `27日月` 这类形状的宽窄就靠这个顺序定。
+
+    两个 `None` 出口是**承重**的：`9月31日` / `31号`（那个月没有 31 天）这类"像日子
+    却不存在"必须当场终局，**绝不许**落回调用方那格"默认今天"——那会把主人写错的
+    日子悄悄改成今天，而卡面上看起来一切正常。
+    """
+    m = _DUE_MONTH_DAY_WORD_RE.match(s)
+    if m:
+        year, month = _due_month(m.group(1), m.group(2), base)
+        n = _due_day_number(m.group(3))
+        if month and n:
+            try:
+                return datetime.date(year, month, n).isoformat()
+            except ValueError:
+                return None                  # 9月31日 / 下个月 31 号这类：那天不存在
+    m = _DUE_MONTH_END_RE.match(s)
+    if m:
+        year, month = _due_month(m.group(1), m.group(2), base)
+        if month:
+            return _month_end(year, month)
+    if _DUE_MONTH_END_BARE_RE.match(s):
+        return _month_end(base.year, base.month)
+    m = _DUE_MONTH_ONLY_RE.match(s)
+    if m:
+        year, month = _due_month(m.group(1), None, base)
+        if month and m.group(1) in ("下", "下个"):
+            return datetime.date(year, month, 1).isoformat()
+        return base.isoformat()          # 「这个月」= 现在就在这个月里
+    m = _DUE_BARE_DAY_RE.match(s)
+    if m:
+        n = _due_day_number(m.group(1))
+        if n and 1 <= n <= 31:
+            # 下一次的那个日号：本月还没到就是本月，已经到了就是下个月。
+            year, month = base.year, base.month + (1 if n < base.day else 0)
+            year, month = year + (month - 1) // 12, (month - 1) % 12 + 1
+            try:
+                return datetime.date(year, month, n).isoformat()
+            except ValueError:
+                return None                  # 「31号」而那个月没有 31 天
+    return _DUE_NO_MATCH
 
 
 def due_date_cn(iso) -> str:
