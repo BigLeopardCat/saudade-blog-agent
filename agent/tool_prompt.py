@@ -71,27 +71,36 @@ _TOOL_OUTPUT_CONTRACT = f"""\
 
 _TOOL_CLOSING_RULES = """\
 循环机制（你既是决策者也是回复者）：
-1. 要做事就**直接调用工具**（上面那张表就是你的全部本领）；系统会立刻执行并把真实结果
+1. 要做事就**直接调用工具**（下面那张表就是你的全部本领）；系统会立刻执行并把真实结果
    作为一条工具消息还给你。
 2. 信息已经够回答主人了 ⇒ **不要再调用任何工具**——那一轮就到此为止，收尾正文由系统另派
    一位零工具的叙述者按工具回执写（所以你说的每一件站内事实都必须能在工具结果、页面上下文
    或执行回执里找到出处；找不到就如实说没查到）。
 3. 同一件事不要重复做：工具回执里写着"未生效"就换参数或换工具，别原样重试。
-4. 复核：说出口的每一件站内事实，都要能在上面的工具结果、页面上下文或执行回执里找到出处。"""
+4. 复核：说出口的每一件站内事实，都要能在下面的工具结果、页面上下文或执行回执里找到出处。"""
 
 
-def tool_menu_text(role: str | None) -> str:
+def tool_menu_text(role: str | None, names: set[str] | None = None) -> str:
     """工具菜单的**文本块**（提示词里那一段）。名字与说明只从 `build_tool_menu` 读。
 
     只列**真工具**；三个伪函数（`task_hold` / `task_drop` / `task_intents`）是跨轮任务的
     申报口，绑在 schema 上、也在提示词里有自己的说明段落，不混进"可调用的本领"这张表里
     ——它们不是本领，是记账（同 `react_arm._workflow_menu` 那条注的取向）。
+
+    `names`（20261021）：只列这几个工具（`None` = 全列）。**能力索引臂必须传它**——
+    那一臂的 schema 只绑了那条能力那一批（多数 1–3 件），提示词却印着全部 73 件，
+    而这段的抬头写着"**唯一可选集合**"：模型会照着文本去点一个它**结构上点不到**的名字。
+    POC 里 A 族（13 条路由红）红在"近义工具里选错"，这一格是把那件事从 schema 侧治好
+    之后又在文本侧放回去。`build_tool_menu` 的顺序（`visible_tools` 升序）原样保留
+    ⇒ 清单逐字节可复现、能进前缀缓存。
     """
     lines = []
-    for entry in build_tool_menu(role):
+    for entry in build_tool_menu(role, slots=False):
         fn = entry.get("function") or {}
         name = str(fn.get("name") or "")
         if not name or name in PSEUDO_NAMES:
+            continue
+        if names is not None and name not in names:
             continue
         desc = str(fn.get("description") or "").replace("\n", " ")
         lines.append(f"· {name} — {desc}" if desc else f"· {name}")
@@ -126,7 +135,8 @@ def pseudo_menu_text(role: str | None) -> str:
 def build_tool_prompt(*, messages: list, role: str | None, principal: Any,
                       config: dict | None, user_msg: str,
                       ledger_frame: str = "", correction: str = "",
-                      exec_rows: list | None = None, capability: str = "") -> str:
+                      exec_rows: list | None = None, capability: str = "",
+                      tool_names: set[str] | None = None) -> str:
     """工具臂的系统提示（**每请求只渲染一次**，缓存由 `react_arm._prompt_of` 负责）。
 
     与 `react_arm._system_prompt` 的差别**只有三处**：菜单块（技能表 → 工具表）、输出契约、
@@ -136,9 +146,15 @@ def build_tool_prompt(*, messages: list, role: str | None, principal: Any,
     `capability`（20261021）：能力索引那条臂在**工具态**要的那一段（见
     `capability_block_text`）。缺省 `""` ⇒ 渲染成空串，本臂提示词**逐字节不变**
     （工具臂的读数已经归档，不该被后来的一笔悄悄换掉自变量）。
+
+    `tool_names`（20261021）：只把这几个工具印进 `{tool_menu}` 那一格（`None` = 全列）。
+    同样只有能力索引臂传它，理由见 `tool_menu_text`——那一臂绑的 schema 是**那条能力的
+    工具面**，提示词印全表就是两份自相矛盾的清单。缺省 `None` ⇒ 工具臂逐字节不变。
+
+    ⚠️ **装配顺序是承重的**（见函数末尾那段注）：静态块在前、契约在后。
     """
     planner = _TOOL_PLANNER_PROMPT.format(
-        tool_menu=tool_menu_text(role),
+        tool_menu=tool_menu_text(role, tool_names),
         capability_block=capability_block_text(capability),
         page_ctx=_page_ctx(messages, role),
         round_info=round_info_text(0),
@@ -155,9 +171,23 @@ def build_tool_prompt(*, messages: list, role: str | None, principal: Any,
         max_rounds=MAX_TOOL_ROUNDS,
         correction=correction or "（本决策轮无纠偏提示）",
         output_contract=_TOOL_OUTPUT_CONTRACT)
-    return "\n\n".join([planner, BLOG_ASSISTANT_PROMPT or "", audience_block(role),
+    # ⚠️ **静态块在前、契约在后**（20261021）——顺序是**承重的**，别顺手改回去。
+    #
+    # 契约（`_TOOL_PLANNER_PROMPT` 的产物）里有十四格注入值，其中**逐轮在变**的那几格
+    # （`page_ctx` / `intent_hints` / `doc_anchors` / `recent_context` / `short_reply_hint`
+    # / `pending_ledger` / `correction` / `user_msg`）连成一片。那六块叙述资产
+    # （人设 / 角色能力 / 立场改写 / 叙述纪律 / 贴纸表 / 收尾规则，合计 11297 字）
+    # **一个字节都不随请求变**：拼在契约**后面** ⇒ 整段落在断点之后，一次都进不了
+    # 公共前缀。离线实测（两个只差 `user_msg` 的相邻用例）：本臂 SystemMessage 的公共
+    # 前缀 **51%**；把静态块挪到前面之后升到 **≈90%**（同一手法、同一实测口径见
+    # `react_arm._system_prompt` 与提交 `8bbe3f0`）。
+    #
+    # 两块都是静态的，谁在前谁在后对**内容**没有影响，只影响"哪一段能被前缀缓存吃到"。
+    # ⚠️ 这与 `agent/tool_prompt.py` 的契约内部顺序是**两件事**：契约里那几段静态规则
+    # （判定规则 / 记账口 / 输出契约）也挪到了易变槽位之前，见 `_TOOL_PLANNER_PROMPT`。
+    return "\n\n".join([BLOG_ASSISTANT_PROMPT or "", audience_block(role),
                         _DISCIPLINE_STANCE, NARRATOR_DISCIPLINE, STICKER_GUIDE,
-                        _TOOL_CLOSING_RULES])
+                        _TOOL_CLOSING_RULES, planner])
 
 
 # 提示词正文。槽位与生产那份**同名同义**（渲染点只换数据、不换代码），正文为工具菜单
@@ -171,6 +201,32 @@ _TOOL_PLANNER_PROMPT = """\
 可调用工具（**唯一可选集合**，禁止自创工具名或自由发挥；参数一律以工具自己的 schema 为准）：
 {tool_menu}
 {capability_block}
+判定规则：
+1. **要动手的事，这一轮就动手**：直接调用上面表里那个工具。**登记不是做**——
+   `task_hold` / `task_intents` 只记"还剩什么"，调它们不会让任何事发生；主人让你回首页，
+   你就要在这一轮调 `navigate_to`，而不是把"回首页"记下来。主人这一句里交代了几件事，
+   就把几件事的工具都点上；同一件事不要点两次。已经办过的（工具回执里写着结果）不要再点。
+2. **参数从哪来**：id 类的参数只能取上一轮工具返回里的真实值，或写成引用
+   `$<工具名>[<序号>].<字段>`；**不许编造**。名字类的参数用主人原话里的那个名字。
+3. **短应答先还原语义**：消息只是"要/好/可以/不用了/算了/你看着办"这类短应答时，它
+   **不是新话题**——含义由上一轮泠月的发言决定（下方短应答提示会点明）。同意 ⇒ 把上一轮
+   那件事的工具点上；拒绝 ⇒ 一个都不点。
+4. **知识型问题先检索，再回答**：问技术细节、原理、站内写过什么，都先调
+   `rag_search` / `search_knowledge_base` / `search_notes` 去站内知识库里找——**站内有资料
+   就以站内为准**（它是这个站的作者写的，比你的记忆权威，也可能与你的记忆不一致）。
+   找到了就按资料答；确实没有就如实说没有，不要凭记忆编内容。**"这个问题很通用"不是
+   不检索的理由**（20261020 实测：`Git 的分支为什么很轻量？` 上本臂三轮都直接凭记忆答，
+   而站内知识库里有这篇）。
+5. **页面状态类问题**（现在在哪一页、特效开没开、夜间模式）以页面上下文字段为准，不要
+   凭对话历史推断，也不要为此调用工具。
+6. **做不到就说做不到**：工具不在上面的表里、或主人要的东西站内没有，如实说明，不要拿
+   别的工具去凑一个看起来像的答案。
+
+三个**记账口**（`task_hold` / `task_drop` / `task_intents`）：它们只登记"还剩什么"、
+撤下、或逐件申报，**不代替动作**——要做事就直接调上面表里的工具。用法见它们各自的 schema。
+
+{output_contract}
+
 页面上下文：{page_ctx}
 本轮信息：{round_info}
 
@@ -195,35 +251,9 @@ _TOOL_PLANNER_PROMPT = """\
 引用提示：
 {ref_hints}
 
-判定规则：
-1. **要动手的事，这一轮就动手**：直接调用上面表里那个工具。**登记不是做**——
-   `task_hold` / `task_intents` 只记"还剩什么"，调它们不会让任何事发生；主人让你回首页，
-   你就要在这一轮调 `navigate_to`，而不是把"回首页"记下来。主人这一句里交代了几件事，
-   就把几件事的工具都点上；同一件事不要点两次。已经办过的（工具回执里写着结果）不要再点。
-2. **参数从哪来**：id 类的参数只能取上一轮工具返回里的真实值，或写成引用
-   `$<工具名>[<序号>].<字段>`；**不许编造**。名字类的参数用主人原话里的那个名字。
-3. **短应答先还原语义**：消息只是"要/好/可以/不用了/算了/你看着办"这类短应答时，它
-   **不是新话题**——含义由上一轮泠月的发言决定（下方短应答提示会点明）。同意 ⇒ 把上一轮
-   那件事的工具点上；拒绝 ⇒ 一个都不点。
-4. **知识型问题先检索，再回答**：问技术细节、原理、站内写过什么，都先调
-   `rag_search` / `search_knowledge_base` / `search_notes` 去站内知识库里找——**站内有资料
-   就以站内为准**（它是这个站的作者写的，比你的记忆权威，也可能与你的记忆不一致）。
-   找到了就按资料答；确实没有就如实说没有，不要凭记忆编内容。**"这个问题很通用"不是
-   不检索的理由**（20261020 实测：`Git 的分支为什么很轻量？` 上本臂三轮都直接凭记忆答，
-   而站内知识库里有这篇）。
-5. **页面状态类问题**（现在在哪一页、特效开没开、夜间模式）以页面上下文字段为准，不要
-   凭对话历史推断，也不要为此调用工具。
-6. **做不到就说做不到**：工具不在上面的表里、或主人要的东西站内没有，如实说明，不要拿
-   别的工具去凑一个看起来像的答案。
-
 系统纠偏（确定性事实——只在你上一版决策**不可用**时才有内容，正常决策轮是缺省语。
 有内容时按它重新决策）：
 {correction}
-
-三个**记账口**（`task_hold` / `task_drop` / `task_intents`）：它们只登记"还剩什么"、
-撤下、或逐件申报，**不代替动作**——要做事就直接调上面表里的工具。用法见它们各自的 schema。
-
-{output_contract}
 
 用户消息：{user_msg}
 """

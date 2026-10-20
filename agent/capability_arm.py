@@ -116,12 +116,19 @@ def _index_menu(role: str | None) -> list[StructuredTool]:
     函数名 / 参数 / `required` / `enum` 一个字符不动（`build_tool_schema` 出什么就是什么）
     ——ADR-0015 阶段 1 就是"路由收窄"这一件事，改 schema 结构会把这个自变量弄脏。
     伪函数（`task_hold` / `task_drop` / `task_intents`）不在索引里 ⇒ 说明原样保留。
+
+    **`slots=False`（20261021）**：不挂 `intents` / `reply_kind` 那两个跨切面槽位。本臂
+    折算计划时走 `tool_menu.strip_slots`——**填了就扔**；而它们单份 799 字符 × 49 条能力
+    = 本菜单的 **59%**（67,441 → 27,892 字符）。`build_tool_schema` 的缺省仍是 `True`
+    ⇒ 生产那条路逐字节不变。⚠️ 这一格**不是**"顺手瘦身"：槽位是"给模型一个地方填"的
+    申报口，填了没人读等于**骗模型以为申报过了**；摘掉之后意图那条路只剩 `task_intents`
+    一个真被读的出口（它自带 `intents`，不受本参数影响）。
     """
     def describe(fn: dict) -> str:
         cap = capability_of(str(fn.get("name") or ""), role)
         return index_entry(cap) if cap is not None else str(fn.get("description") or "")
 
-    return _wrap(build_tool_schema(role), describe)
+    return _wrap(build_tool_schema(role, slots=False), describe)
 
 
 def _tools_menu(role: str | None, caps: list[Capability]) -> list[StructuredTool]:
@@ -131,11 +138,24 @@ def _tools_menu(role: str | None, caps: list[Capability]) -> list[StructuredTool
 
     三个记账口（`task_hold` / `task_drop` / `task_intents`）**恒在**：它们是跨切面槽位，
     与这一轮做哪条能力无关（同 `build_tool_menu` 末尾那两行）。
+
+    **`slots=False`**：同 `_index_menu`——`intents` / `reply_kind` 在本臂**填了就扔**，
+    每一件工具白背 799 字符。
     """
-    want = {t for cap in caps for t in cap.tools}
-    return _wrap([i for i in build_tool_menu(role)
-                  if _menu_name(i) in want or _menu_name(i) in PSEUDO_NAMES],
+    return _wrap([i for i in build_tool_menu(role, slots=False)
+                  if _menu_name(i) in _face_names(role, caps)
+                  or _menu_name(i) in PSEUDO_NAMES],
                  lambda fn: str(fn.get("description") or ""))
+
+
+def _face_names(role: str | None, caps: list[Capability]) -> set[str]:
+    """这几条能力那一批**真工具名**（不含三个记账口）。
+
+    菜单与**提示词里那张清单**读的是同一格（`tool_menu_text(role, names=...)`）——
+    两份清单各说各话正是 POC 里 A 族那 13 条的成因：提示词写着"可调用工具（唯一可选
+    集合）"却列出全部 73 件，而绑给模型的只有 4 件。
+    """
+    return {t for cap in caps for t in cap.tools}
 
 
 def _menu_name(item: dict) -> str:
@@ -166,6 +186,10 @@ def capability_prompt(state: dict, ctx: dict) -> str:
         提示词（技能表 + 规则 + 输出契约）。选能力这一步与生产是同一份资产，不另写一份；
       · **工具态**：`tool_prompt.build_tool_prompt` + 能力简报（`capability_brief`）。
         简报里那三格（工具面 / 完成判定 / 回复契约）正是 B、C 两族的修复点。
+        **`tool_names` 必须传**：不传 ⇒ `{tool_menu}` 那一格印的是**全部 73 件**工具，
+        而绑给模型的 schema 只有这一批（多数 1–3 件）——两份自相矛盾的清单，且抬头上
+        写着"**唯一可选集合**"。POC 的 A 族（13 条路由红）红在"近义工具里选错"，
+        这一格是把那件事从 schema 侧治好之后又在文本侧放回去。
     """
     caps = _caps_of(ctx, ctx.get("role"))
     messages = list(state.get("messages") or [])
@@ -182,7 +206,8 @@ def capability_prompt(state: dict, ctx: dict) -> str:
             messages, ctx.get("principal"), ctx.get("config"), user_msg),
         correction=str(ctx.get("correction") or ""),
         exec_rows=(state.get("ledger") or {}).get("exec_rows"),
-        capability="\n\n".join(capability_brief(c) for c in caps))
+        capability="\n\n".join(capability_brief(c) for c in caps),
+        tool_names=_face_names(ctx.get("role"), caps))
 
 
 def plan_of(tool_calls: list, role: str | None, ctx: dict | None = None) -> dict:
