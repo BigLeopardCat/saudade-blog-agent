@@ -1,5 +1,3 @@
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
 """来源归属（20260926 洞⑧）：系统给的事实，不许说成"我自己脑补的"。零网络零 LLM。
 
 **这一条为什么单独成文。** 现场（trace `20260926T171235`，会话 247）：主人说「给 xinguan
@@ -25,79 +23,76 @@ xinguanyu」，模型答「**是我自己脑补的**…本轮的工具执行记�
 
 用法：.venv/bin/python tests/test_source_attribution.py
 """
+
+
 import sys
 from pathlib import Path
 
+from _judge import collector
+
 ROOT = Path(__file__).resolve().parent.parent  # 仓根
+
+
 sys.path.insert(0, str(ROOT))
 
-import _ctx_src  # noqa: E402  （`_` 开头 ⇒ 不被 run_all 当套件收）
+
+import _ctx_src  # noqa: E402  （`_` 开头 ⇒ 不被 pytest 当套件收）
 
 from agent import graph as g  # noqa: E402
 from agent.prompts import BLOG_ASSISTANT_PROMPT  # noqa: E402
 
 FAILS: list[str] = []
+check = collector(FAILS)
 
 
-def check(desc: str, cond: bool, detail: str = "") -> None:
-    print(("  ✅ " if cond else "  ❌ ") + desc + (f"  [{detail}]" if detail else ""))
-    if not cond:
-        FAILS.append(desc)
+def test_source_attribution():
+    print("\n① 诚实底线里两句话都在（「不得声称」与「不许自我否认」是两回事）")
+    _core = BLOG_ASSISTANT_PROMPT
+    check("原有的那一维没被顶掉：本轮没有工具返回时不得声称查过/读过/打开过/执行过",
+          "本轮没有工具返回时不得声称查过/读过/打开过/执行过" in _core)
+    check("  质疑操作是否真执行时如实承认没有执行记录（绝不圆场说其实已经做了）",
+          "这边没有看到执行记录" in _core and "其实已经做了" in _core)
+    check("新增的一维：**系统给过的东西**（工具帧/系统核对结论/页面上下文/上一轮的核对结果）",
+          "系统给过的东西" in _core and "上一轮系统" in _core)
+    check("  并且点名了要允许的说法：来源就说系统（两个例子逐字在）",
+          "来源就说系统" in _core and "系统核对过后台账号列表" in _core)
+    check("  且明写**不许**说成脑补/编的/猜的（这是这一维的反面）",
+          "脑补" in _core and "我编的" in _core and "我猜的" in _core)
+    check("  零系统来源时的出口仍只是「这一轮我没看到」，不是自我否认代替核对",
+          "这一轮我没有看到" in _core and "不要用自我否认代替核对" in _core)
+    print("\n② 接线：那条规则真的进了 narrator 的 system prompt（能力有测试≠接线有测试）")
+    _sys = g._EXECUTOR_PROMPT.format(
+        persona=BLOG_ASSISTANT_PROMPT, audience="【对话者：访客】",
+        plan="（本轮没有计划）", tool_frames="（本轮没有工具返回）",
+        exec_receipts="（无）", page_ctx="（无）", sticker_guide="（无）",
+        # 动作事实块（20260927 D3）：新槽必须在这里也填上——`.format` 漏槽会直接
+        # KeyError（下面那条"花括号不许留给模型看"的判据就是这个理由）。这一节的价值
+        # 恰恰在于**它是真的在格式化那份 prompt**：槽变了它就红，而不是躺在常量里自证。
+        fact_block="（本轮没有动作族执行）")
+    check("narrator 的 system prompt 里含来源归属这条（不是只在常量里躺着）",
+          "系统给过的东西" in _sys and "来源就说系统" in _sys)
+    check("  也含原有的那一维（两维同在，不是替换关系）",
+          "本轮没有工具返回时不得声称查过" in _sys and "这边没有看到执行记录" in _sys)
+    check("  人设段确实是拼进 narrator prompt 的那一份（`persona=` 槽没接错常量）",
+          BLOG_ASSISTANT_PROMPT.strip()[:30] in _sys)
+    check("  且 `.format` 的槽都填上了（漏一个槽会留一串花括号文本给模型看）",
+          "{" not in _sys and "}" not in _sys)
+    print("\n③ 确定性收尾注也给出口（禁止句旁边必须有允许的说法）")
+    _src = _ctx_src.write_guard_src()
+    check("注记里那句禁止句仍在（洞⑦ 的判据靠它，别被这轮的括注挤掉）",
+          "不许**出现「看过/读过/查过/检索过/调用过工具」这类说法" in _src)
+    check("  紧跟着给了允许的说法：禁的是把系统的动作说成你做的",
+          "禁的是把**系统的动作**说成你做的" in _src)
+    check("  并点明「照原样转述」与「也**不许**反过来」（两个方向都写全）",
+          "照原样转述" in _src and "也**不许**反过来把它说成" in _src)
+    check("  且**排在禁止句之后**（注记是从上往下读的一段话，出口不能落在前面）",
+          _src.index("不许**出现「看过/读过/查过/检索过/调用过工具」这类说法")
+          < _src.index("禁的是把**系统的动作**说成你做的"))
+    print("\n" + ("全部通过" if not FAILS else f"失败 {len(FAILS)} 项：" + "; ".join(FAILS)))
+
+    assert not FAILS, (
+        f"{len(FAILS)} 条未通过：" + "；".join(FAILS))
 
 
-# ══════════════════════════════════════════════════════════════════
-print("\n① 诚实底线里两句话都在（「不得声称」与「不许自我否认」是两回事）")
-
-_core = BLOG_ASSISTANT_PROMPT
-check("原有的那一维没被顶掉：本轮没有工具返回时不得声称查过/读过/打开过/执行过",
-      "本轮没有工具返回时不得声称查过/读过/打开过/执行过" in _core)
-check("  质疑操作是否真执行时如实承认没有执行记录（绝不圆场说其实已经做了）",
-      "这边没有看到执行记录" in _core and "其实已经做了" in _core)
-check("新增的一维：**系统给过的东西**（工具帧/系统核对结论/页面上下文/上一轮的核对结果）",
-      "系统给过的东西" in _core and "上一轮系统" in _core)
-check("  并且点名了要允许的说法：来源就说系统（两个例子逐字在）",
-      "来源就说系统" in _core and "系统核对过后台账号列表" in _core)
-check("  且明写**不许**说成脑补/编的/猜的（这是这一维的反面）",
-      "脑补" in _core and "我编的" in _core and "我猜的" in _core)
-check("  零系统来源时的出口仍只是「这一轮我没看到」，不是自我否认代替核对",
-      "这一轮我没有看到" in _core and "不要用自我否认代替核对" in _core)
-
-# ══════════════════════════════════════════════════════════════════
-print("\n② 接线：那条规则真的进了 narrator 的 system prompt（能力有测试≠接线有测试）")
-
-_sys = g._EXECUTOR_PROMPT.format(
-    persona=BLOG_ASSISTANT_PROMPT, audience="【对话者：访客】",
-    plan="（本轮没有计划）", tool_frames="（本轮没有工具返回）",
-    exec_receipts="（无）", page_ctx="（无）", sticker_guide="（无）",
-    # 动作事实块（20260927 D3）：新槽必须在这里也填上——`.format` 漏槽会直接
-    # KeyError（下面那条"花括号不许留给模型看"的判据就是这个理由）。这一节的价值
-    # 恰恰在于**它是真的在格式化那份 prompt**：槽变了它就红，而不是躺在常量里自证。
-    fact_block="（本轮没有动作族执行）")
-check("narrator 的 system prompt 里含来源归属这条（不是只在常量里躺着）",
-      "系统给过的东西" in _sys and "来源就说系统" in _sys)
-check("  也含原有的那一维（两维同在，不是替换关系）",
-      "本轮没有工具返回时不得声称查过" in _sys and "这边没有看到执行记录" in _sys)
-check("  人设段确实是拼进 narrator prompt 的那一份（`persona=` 槽没接错常量）",
-      BLOG_ASSISTANT_PROMPT.strip()[:30] in _sys)
-check("  且 `.format` 的槽都填上了（漏一个槽会留一串花括号文本给模型看）",
-      "{" not in _sys and "}" not in _sys)
-
-# ══════════════════════════════════════════════════════════════════
-print("\n③ 确定性收尾注也给出口（禁止句旁边必须有允许的说法）")
-
-# 取值点跟着代码搬（20261019）：写参数落位与拒答那一族住进了
-# `agent/write_grounding.py` ⇒ 判据字面一个字没动，只把"读 graph.py 全文"
-# 换成"读这一族的全部文件"（`tests/_ctx_src.py::write_guard_src`）。
-_src = _ctx_src.write_guard_src()
-check("注记里那句禁止句仍在（洞⑦ 的判据靠它，别被这轮的括注挤掉）",
-      "不许**出现「看过/读过/查过/检索过/调用过工具」这类说法" in _src)
-check("  紧跟着给了允许的说法：禁的是把系统的动作说成你做的",
-      "禁的是把**系统的动作**说成你做的" in _src)
-check("  并点明「照原样转述」与「也**不许**反过来」（两个方向都写全）",
-      "照原样转述" in _src and "也**不许**反过来把它说成" in _src)
-check("  且**排在禁止句之后**（注记是从上往下读的一段话，出口不能落在前面）",
-      _src.index("不许**出现「看过/读过/查过/检索过/调用过工具」这类说法")
-      < _src.index("禁的是把**系统的动作**说成你做的"))
-
-print("\n" + ("全部通过" if not FAILS else f"失败 {len(FAILS)} 项：" + "; ".join(FAILS)))
-raise SystemExit(1 if FAILS else 0)
+if __name__ == "__main__":
+    test_source_attribution()

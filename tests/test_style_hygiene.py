@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """仓库形态的四条纪律（秒级、零网络、零 LLM、只读）。
 
 **为什么值得有这一套**：这四样都属于"不会因为谁做坏事而出错、只会因为没人执行而慢慢烂掉"
@@ -22,6 +21,8 @@
 
 用法：.venv/bin/python tests/test_style_hygiene.py
 """
+
+
 import os
 import re
 import subprocess
@@ -29,39 +30,37 @@ import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+from _judge import collector
+
 ROOT = Path(__file__).resolve().parent.parent  # 仓根
+
+
 sys.path.insert(0, str(ROOT))
+
+
 sys.path.insert(0, str(ROOT / "scripts" / "dev"))
+
 
 import changelog as _changelog  # noqa: E402  （碎片机制的工具，按路径取，不是包）
 
 FAILS: list[str] = []
+check = collector(FAILS)
 
 
-def check(desc: str, cond: bool, detail: str = "") -> None:
-    print(("  ✅ " if cond else "  ❌ ") + desc + (f"  [{detail}]" if detail else ""))
-    if not cond:
-        FAILS.append(desc)
-
-
-# 手写文本文件的扩展名（扫的就是这些）。**生成物不在内**：`eval/report/*.json` 是
-# `json.dump` 写的历史读数，不带末尾换行是它的原生形态，改它没有意义（也改不回来）。
 TEXT_EXT = {".py", ".md", ".toml", ".sh", ".yml", ".yaml", ".txt", ".cfg", ".ini",
             ".json", ".html", ".mjs", ".ts", ".css"}
+
+
 TEXT_NAMES = {".gitignore", ".editorconfig", ".env.example"}
+
+
 GENERATED = re.compile(r"^eval/report/.*\.json$")
 
-# 判据常量：与 `.editorconfig` 的 `[*]` 段**同源**（下面 ② 会去解析那份文件并比对）
+
 WANT = {"charset": "utf-8", "end_of_line": "lf",
         "insert_final_newline": "true", "trim_trailing_whitespace": "true"}
 
 
-# 「今天」= **本仓钟面**（+08:00 本地日）的当天，与 CHANGELOG 头注「日期是本地（+08:00）
-# 日期」、`docs/问题记录.md` 的日期戳同源。**不能用 `date.today()`**：它取的是"跑这条判据
-# 的那台机器"的本地日期，而 CI runner 是 UTC —— 每晚 16:00–24:00 UTC（= 本地 00:00–08:00）
-# 之间提交的条目会被判成"未来"，症状正是本仓最怕的那种：**本机恒绿、CI 恒红，两边看的都
-# 不是代码**（家族教训见 20260928 的 `JWT_SECRET` 那条）。固定 +08:00 而不是 `ZoneInfo`：
-# 中国无夏令时，+08:00 就是"本地钟面"的定义，且不依赖那台机器装没装 tzdata。
 _CST = timezone(timedelta(hours=8))
 
 
@@ -256,5 +255,12 @@ def main() -> int:
     return 0
 
 
+def test_style_hygiene():
+    main()
+
+    assert not FAILS, (
+        f"{len(FAILS)} 条未通过：" + "；".join(FAILS))
+
+
 if __name__ == "__main__":
-    sys.exit(main())
+    test_style_hygiene()

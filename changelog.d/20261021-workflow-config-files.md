@@ -29,4 +29,4 @@
   `calls` 参数描述里那份示例 JSON 少一个 `}`（`[{…{"keyword": "用户原词"}]`）——原源码里
   `}}` 是 f-string 转义、求值后只剩一个。改成配置之后这种"源码里看着是两个、值是另一个"
   的地方就看得见了。
-  设计与取舍见 `docs/adr/adr-0015-skill-registry-becomes-config-files.md`。
+  设计与取舍见 `docs/adr/adr-0016-skill-registry-becomes-config-files.md`。

@@ -51,25 +51,20 @@ import threading
 import time
 from pathlib import Path
 
+from _judge import collector
+
 ROOT = Path(__file__).resolve().parent.parent  # 仓根（20260924：测试统一搬进 tests/）
 sys.path.insert(0, str(ROOT))
-sys.path.insert(0, str(ROOT / "tests"))          # 同目录的 `_` 辅助模块（run_all 不收它们）
+sys.path.insert(0, str(ROOT / "tests"))          # 同目录的 `_` 辅助模块（pytest 不收它们）
 
-import _parent_repo                              # noqa: E402
+import _parent_repo  # noqa: E402
 
-import server                                    # noqa: E402
-from utils import trace as trace_mod             # noqa: E402
-from utils.logging import set_trace_id           # noqa: E402
+import server  # noqa: E402
+from utils import trace as trace_mod  # noqa: E402
+from utils.logging import set_trace_id  # noqa: E402
 
 FAILS: list[str] = []
-
-
-def check(name, cond, detail=""):
-    if not cond:
-        FAILS.append(f"{name}: {detail}")
-        print(f"  ✗ {name} {detail}")
-    else:
-        print(f"  ✓ {name}")
+check = collector(FAILS)
 
 
 class _FakeRequest:
@@ -136,7 +131,7 @@ async def _drive(producer) -> list[str]:
 
 # ────────────────────────── ① 生产者异常：形态 + 终止性
 
-def test_producer_error_frame():
+def _producer_error_frame():
     print("\n── ① 生产者异常路径 ──")
     chunks = asyncio.run(_drive(_producer(RuntimeError("boom"))))
     fr = _frames(chunks)
@@ -160,7 +155,7 @@ def test_producer_error_frame():
 
 # ────────────────────────── ② 换行/引号不撕帧
 
-def test_payload_escaping():
+def _payload_escaping():
     print("\n── ② 载荷里的换行与引号不撕帧 ──")
     # 20260927：载荷改成常量之后，**必须**把常量换掉再测——否则这一格没有变量，
     # 判据退化成"常量不含换行"（永远为真）。这正是常量写成模块级名字的理由。
@@ -188,7 +183,7 @@ def test_payload_escaping():
 
 # ────────────────────────── ②b 载荷不泄漏内部标识（20260927 事故输入）
 
-def test_producer_error_hides_internals():
+def _producer_error_hides_internals():
     print("\n── ②b 内部错误名不许进气泡（20260927 07:29 生产事故形态）──")
     # 以**事故当天的真异常**为输入：`graph.execute_node` 的 KeyError('pending_confirm')
     # （调用方只认一种出口、第二种一命中就炸）。主人当初看到的是
@@ -208,7 +203,7 @@ def test_producer_error_hides_internals():
 
 # ────────────────────────── ③ 空闲超时（真等 2s 轮询窗口）
 
-def test_idle_timeout_frame():
+def _idle_timeout_frame():
     print("\n── ③ 空闲超时路径 ──")
     hold = threading.Event()
     old_idle = server.STREAM_IDLE_TIMEOUT
@@ -240,7 +235,7 @@ def test_idle_timeout_frame():
 _ERR_SITE = re.compile(r"__ERROR__:(?!\{json\.dumps\()")
 
 
-def test_all_sites_json_encoded():
+def _all_sites_json_encoded():
     print("\n── ④ 接线：全仓 __ERROR__ 发出点都走 json.dumps ──")
     src = (ROOT / "server.py").read_text(encoding="utf-8")
     lines = [f"{i}: {l.strip()}" for i, l in enumerate(src.splitlines(), 1)
@@ -255,7 +250,7 @@ def test_all_sites_json_encoded():
 
 # ────────────────────────── ⑤ 同族通道：非流式 /chat 不能把异常吞成"成功但空"
 
-def test_sync_chat_failure_shape():
+def _sync_chat_failure_shape():
     print("\n── ⑤ 同族通道：非流式 /chat 的内部异常（同一族、同一句话术）──")
     # 20260927 的 SSE 事故有第二个入口：`/chat` 非流式。它此前是
     # `reply=""` + `error=str(e)`，而 HTTP 状态码仍是 200 —— 调用方只看状态码就把它
@@ -304,7 +299,7 @@ def test_sync_chat_failure_shape():
           boom in str(KeyError(boom)))
 
 
-def test_sync_chat_source_shape():
+def _sync_chat_source_shape():
     print("\n── ⑤b 接线：非流式那半没有第二个出口形状 ──")
     src = (ROOT / "server.py").read_text(encoding="utf-8")
     body = src.split("async def chat(req: ChatRequest, request: Request):", 1)[1]
@@ -327,7 +322,7 @@ def test_sync_chat_source_shape():
               "agent_reply_of" in rsrc and 'data.get("success")' in rsrc, "chat.rs")
 
 
-def main():
+def test_error_frame():
     with tempfile.TemporaryDirectory() as tmp:
         # trace 落盘目录指到 tmpdir：本测试会真跑 chat_stream，它按设计落一份 trace；
         # 落进生产 trace 目录等于往巡检语料里掺测试流量（trace_alert/trace_metrics 扫的就是那儿）。
@@ -335,20 +330,16 @@ def main():
         trace_mod.TRACE_DIR = tmp
         set_trace_id("test_error_frame")
         try:
-            for fn in (test_producer_error_frame, test_payload_escaping,
-                       test_producer_error_hides_internals,
-                       test_idle_timeout_frame, test_all_sites_json_encoded,
-                       test_sync_chat_failure_shape, test_sync_chat_source_shape):
+            for fn in (_producer_error_frame, _payload_escaping,
+                       _producer_error_hides_internals,
+                       _idle_timeout_frame, _all_sites_json_encoded,
+                       _sync_chat_failure_shape, _sync_chat_source_shape):
                 fn()
         finally:
             trace_mod.TRACE_DIR = old_dir
-    if FAILS:
-        print(f"\n=== {len(FAILS)} 项失败 ===")
-        for f in FAILS:
-            print("  -", f)
-        sys.exit(1)
+    assert not FAILS, f"{len(FAILS)} 项失败：" + "；".join(FAILS)
     print("\n=== 全部通过 ===")
 
 
 if __name__ == "__main__":
-    main()
+    test_error_frame()

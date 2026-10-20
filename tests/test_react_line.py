@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """`agent/react_line.py` 的单测：离线、秒级、零网络零 LLM。
 
 **20261016 重写**。这份文件此前驱动的是 `create_agent` + `ConvergenceMiddleware` +
@@ -34,11 +33,18 @@
 那是"接线"那一层；"模型会不会用工具"只有真链路的 A/B
 （`eval/experiments/react_line_ab.py`）能回答，别拿这份绿灯去替它背书。
 """
+
+
 import sys
 from pathlib import Path
 
+from _judge import collector
+
 ROOT = Path(__file__).resolve().parent.parent  # 仓根（测试统一在 tests/）
+
+
 sys.path.insert(0, str(ROOT))
+
 
 from langchain_core.messages import AIMessage  # noqa: E402
 
@@ -52,19 +58,11 @@ from agent.react_line import (  # noqa: E402
     wrap_up_text,
 )
 
-# 用例里的动作是**管理动作**（`freeze_account`，硬 scope `admin.console`）。20261004 起
-# 本线接了权限闸（P1，与 `graph.execute_node` 同一条判据）⇒ 「工具真的被执行了」这句话
-# 必须**带上是谁在调**才成立：不给身份 = 身份不明 = 硬 scope 一律拒（fail-closed）。
-# 所以这里显式给一个管理员，而不是让用例退化成"匿名也能封号"。
 ADMIN = Principal(uid=1, role="superadmin")
 
+
 FAILS: list[str] = []
-
-
-def check(desc: str, cond: bool, detail: str = "") -> None:
-    print(("  ✅ " if cond else "  ❌ ") + desc + (f"  [{detail}]" if detail else ""))
-    if not cond:
-        FAILS.append(desc)
+check = collector(FAILS)
 
 
 def authz_deny(principal, tool: str) -> bool:
@@ -298,5 +296,12 @@ def _with_blocked() -> RunLedger:
     return led
 
 
+def test_react_line():
+    main()
+
+    assert not FAILS, (
+        f"{len(FAILS)} 条未通过：" + "；".join(FAILS))
+
+
 if __name__ == "__main__":
-    sys.exit(main())
+    test_react_line()

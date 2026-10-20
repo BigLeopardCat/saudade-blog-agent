@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """贴纸残记号修补（20261002）：`:头疼` → `:头疼:`，别的什么都不动。
 
 ## 为什么这条测试存在
@@ -24,33 +23,35 @@
 
 无网络 / 无 LLM：`get_llm` 换成脚本假 LLM，直接调**真的** `model_node`。
 """
+
+
 import re
 import sys
 import tempfile
 from pathlib import Path
 
+from _judge import collector
+
 ROOT = Path(__file__).resolve().parent.parent  # 仓根（测试统一在 tests/）
+
+
 sys.path.insert(0, str(ROOT))
+
 
 from langchain_core.messages import AIMessage, HumanMessage  # noqa: E402
 
 import agent.graph as G  # noqa: E402
 from agent.principal import Principal  # noqa: E402
-from agent.stickers import STICKER_NAMES, repair_sticker_tokens as R  # noqa: E402
+from agent.stickers import STICKER_NAMES  # noqa: E402
+from agent.stickers import repair_sticker_tokens as R
 from tests import _parent_repo  # noqa: E402
 from utils import trace as trace_mod  # noqa: E402
 
 FAILS: list[str] = []
+check = collector(FAILS)
 
 
-def check(desc: str, cond: bool, detail: str = "") -> None:
-    print(("  ✅ " if cond else "  ❌ ") + desc + (f"  [{detail}]" if detail else ""))
-    if not cond:
-        FAILS.append(desc)
-
-
-# ── ① 两条实证原句 ─────────────────────────────────────────────────────
-def test_real_traces():
+def _test_real_traces():
     print("\n① 生产 trace 的两条残记号（20261002）")
     real = ("哼，杂鱼真是麻烦呢～ :头疼\n\n虽然导航栏里没显示，但**物联网平台控制台**的直达"
             "链接其实是存在的。")
@@ -66,8 +67,7 @@ def test_real_traces():
           repr(got2[:20]))
 
 
-# ── ② 边界：不许动的东西 ────────────────────────────────────────────────
-def test_boundaries():
+def _test_boundaries():
     print("\n② 边界（宁漏勿误伤）")
     same = [
         ("已完整的记号", "好耶 :比耶: 完成", "`:比耶:` 不会被补成 `:比耶::`（幂等）"),
@@ -89,9 +89,12 @@ def test_boundaries():
           repr(R("好耶 :比耶 完成")))
 
 
-# ── ③ 接线：model_node 出口就是补好的那条 ───────────────────────────────
 _MSG = "随便说点什么"          # 内容与本套件无关：假 LLM 全接管，不经过 planner
+
+
 _PLAN = "WORKFLOW=chat\nPARAMS={}\nTOOLS:\nNOTE: （无）\nREPLY: （无）"
+
+
 _CFG = {"configurable": {"principal": Principal(uid=7, role="admin"),
                          "user_id": 7, "conversation_id": 42, "stop_event": None}}
 
@@ -125,7 +128,7 @@ def _run(tid: str, text: str):
     return out["messages"][0], fake, rec
 
 
-def test_model_node_wiring():
+def _test_model_node_wiring():
     print("\n③ 接线：`model_node` 出口 = 下游读到的那一份")
     got, fake, rec = _run("t_sticker_fix", "别急 :头疼\n\n本喵给你看看。")
     check("返回的 AIMessage 正文已补全（gate 与流式读的都是它）",
@@ -142,8 +145,7 @@ def test_model_node_wiring():
           and [e for e in rec2.events if e.get("event") == "llm_empty_retry"] == [])
 
 
-# ── ④ 三处同步：名字清单 ────────────────────────────────────────────────
-def test_name_list_sync():
+def _test_name_list_sync():
     print("\n④ 名字清单三处同步（agent 一份 + 前端两处字面量）")
     js = (ROOT / "frontend" / "public" / "live2d-widgets" / "chat-render.js")
     if js.is_file():
@@ -167,11 +169,11 @@ def test_name_list_sync():
               names == set(STICKER_NAMES), f"{sorted(names)} vs {list(STICKER_NAMES)}")
 
 
-if __name__ == "__main__":
-    test_real_traces()
-    test_boundaries()
-    test_model_node_wiring()
-    test_name_list_sync()
+def test_sticker_repair():
+    _test_real_traces()
+    _test_boundaries()
+    _test_model_node_wiring()
+    _test_name_list_sync()
     print()
     if FAILS:
         print(f"=== {len(FAILS)} 项失败 ===")
@@ -179,3 +181,10 @@ if __name__ == "__main__":
             print("  ❌ " + f)
         sys.exit(1)
     print("=== 全部通过 ===")
+
+    assert not FAILS, (
+        f"{len(FAILS)} 条未通过：" + "；".join(FAILS))
+
+
+if __name__ == "__main__":
+    test_sticker_repair()

@@ -49,7 +49,7 @@ native 引擎 + 目标来源态判据那批修好（轮 0 navigate → 轮 1 eff
     同意闸会当场挡下 ⇒ 走 `via=consent` 分支（**也对**，但不是期限那条路）。故轮 3 先判
     "这一轮没动那两行"这条前提，前提不成立时后面几条按**未评估**读，不许当期限判据通过。
   · **不是门禁**：结果打印给人看，默认退出码 0（同 `llm_judge.py` 的取向）。需要时加 `--strict`。
-  · **不入 L0 套件、不进夜间**：要网络与 API key（`tests/run_all.py` 只收 `tests/*.py`）。
+  · **不入 L0 套件、不进夜间**：要网络与 API key（pytest 只收 `tests/` 下的文件）。
 
 跑法（cd saudade-blog-agent，需网络）：
 

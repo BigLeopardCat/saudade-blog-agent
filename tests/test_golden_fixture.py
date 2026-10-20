@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """真写夹具的只读在位检查（`eval/golden_fixture.py` 与它的账号族 / 留言族，20260925 起）。
 
 **为什么这条测试存在**：`golden_write_category_delete_exec` 是本仓第一条**真删生产库**的用例，
@@ -26,69 +25,31 @@
 
 无网络（HTTP 那条路径一次都不走：全部走注入的 `titles`）、无 LLM、秒级。
 """
+
+
 import sys
 from pathlib import Path
 
+from _judge import collector
+
 ROOT = Path(__file__).resolve().parent.parent  # 仓根（测试统一在 tests/ 下）
+
+
 sys.path.insert(0, str(ROOT))
+
+
 sys.path.insert(0, str(ROOT / "eval"))
+
 
 import golden_fixture as gf  # noqa: E402
 
 FAILS: list[str] = []
+check = collector(FAILS)
 
 
-def check(name: str, ok: bool, extra: str = "") -> None:
-    print(f"  {'✅' if ok else '❌'} {name}" + (f"  [{extra}]" if extra else ""))
-    if not ok:
-        FAILS.append(name)
-
-
-print("① 三态分列：读不到不是没有")
-check("清单里有 → present", gf.fixture_state("agent_fixture_category_a",
-                                             ["编程", "agent_fixture_category_a"]) == "present")
-check("清单里没有 → absent", gf.fixture_state("agent_fixture_category_a", ["编程"]) == "absent")
-check("读不到（titles=None）→ unreadable",
-      gf.fixture_state("agent_fixture_category_a", None) == "unreadable")
-check("absent 与 unreadable 是两个答案（前者是事实，后者是不知道）",
-      gf.fixture_state("x", ["y"]) != gf.fixture_state("x", None))
-# 名字**不是**夹具时也不该因为"名字像"而误判——判据是相等，不是包含
-check("只认整名相等（前缀相同但不是它 ⇒ absent）",
-      gf.fixture_state("agent_fixture_category_a",
-                       ["agent_fixture_category_ab"]) == "absent")
-
-print("\n② 残留按前缀认（与清场 SQL 同一判据）")
-_t = ["编程", "agent_fixture_x", "agent_fixture_y", "我 agent_fixture_z", "AGENT_FIXTURE_w"]
-check("前缀族全部挑出来", gf.leftovers(_t) == ["agent_fixture_x", "agent_fixture_y"],
-      str(gf.leftovers(_t)))
-check("名字中间出现该串的不算残留（清场删不掉它 ⇒ 哨兵不该报它）",
-      "我 agent_fixture_z" not in gf.leftovers(_t))
-check("大小写不同的不算（SQL 的 LIKE 在默认排序规则外不做大小写折叠，两边判据要一致）",
-      "AGENT_FIXTURE_w" not in gf.leftovers(_t))
-check("没有残留 → 空列表（不是 None：清单读到了，就是没有）", gf.leftovers(["编程"]) == [])
-
-print("\n③ --verify 的退出码与行标")
-check("干净 → 0", gf.verify(["编程"])[0] == 0)
-_c, _lines = gf.verify(["编程", "agent_fixture_a"])
-check("有残留 → 1", _c == 1)
-check("残留行带 [fixture-leftover] 且点了名",
-      all(gf.LEFTOVER_TAG in ln for ln in _lines) and any("agent_fixture_a" in ln for ln in _lines),
-      str(_lines))
-_c, _lines = gf.verify(None)
-check("读不到 → 2", _c == 2)
-check("读不到的行带 [fixture-check-failed] 且写明不等于没有",
-      gf.UNREADABLE_TAG in _lines[0] and "不等于" in _lines[0], _lines[0])
-check("残留优先于干净（两件事不会互相掩盖）", gf.verify(["agent_fixture_a"])[0] == 1)
-
-print("\n④ 本模块里没有第二条写通道（源码扫描）")
-_SRC = (ROOT / "eval/golden_fixture.py").read_text(encoding="utf-8")
-# 扫描的是**代码**，不是注释/文档：这两个模块的头注里正写着"不读凭据、不做写""只允许
-# GET"这些字，把整份文本拿去扫会**自伤**（判红在自己写的说明文字上，下一个人只会把
-# 说明删掉——纪律就从"被扫出来的"变成"不许提的"）。所以剥两样：行尾 `#` 注释 + docstring。
-# 够用的扫描器不是解析器（它拦手滑、不拦恶意），但"提都不能提"是纯粹的自伤，值得剥干净。
-# 写形状只写一处：账号族（⑦c）**非带身份不可**，它要被扫的清单是"写动词 + 本端点特有的
-# 形状"，而"动词"这半必须与分类族逐字同源——抄一份过去，下一个动词出现时就漏掉一边。
 _WRITE_VERBS = (".post(", ".put(", ".delete(", ".patch(", ".request(")
+
+
 _WRITE_PATTERNS = (
     "os.environ", "getenv",              # 凭据/环境（真写通道会从这里开始）
     "/api/protected",                    # 后台写接口前缀
@@ -130,347 +91,22 @@ def scan(text: str, patterns: tuple = _WRITE_PATTERNS) -> list[str]:
     return hits
 
 
-_tool = scan(_SRC)
-check("模块里没有凭据读取 / 写方法 / protected 路径", not _tool, f"命中：{sorted(set(_tool))}")
-# 扫描器有牙齿：拿 5 条样本喂它，命中与不命中都要符合预期（不然"没命中"可能只是它瞎了）
-_SAMPLES = [
-    ('resp = _client.post(f"{url}/x", json=payload)', True),
-    ('uid = os.environ.get("GOLDEN_ADMIN_UID")', True),
-    ('headers = {"Authorization": "Bearer " + tok}', True),
-    ('    # 顺手 .delete( 一下会怎样', False),        # 注释：不算
-    ('from tools.base import _get  # noqa: E402', False),
-]
-for _s, _want in _SAMPLES:
-    _got = bool(scan(_s))
-    check(f"扫描器样本：{('命中' if _want else '不命中')} ← {_s.strip()[:44]}", _got == _want)
-check("扫描器对本模块只说没命中（不是因为它什么都扫不到）",
-      bool(scan("import subprocess")) is False and bool(scan("x.post(1)")) is True)
-# 剥 docstring 这一层要有牙齿：说明文字里提到写形状**不算**（否则纪律变成"不许提"），
-# 而同样这段字出现在**代码**里必须命中（否则这一层就成了新的藏身处）。
-_DOC_FRAG = '"""本模块只用 _get，不做 .post( /api/protected。"""\nx = 1\n'
-check("docstring 里提到的写形状不判红（剥掉的是说明，不是判据）", not scan(_DOC_FRAG))
-check("同一段字当字符串常量赋值 ⇒ 照样命中（剥 docstring 没有顺手把代码也剥掉）",
-      bool(scan('_DOC = "只用 _get，不做 .post("\n')))
-check("函数 docstring 同样剥（不只模块头那一段）",
-      not scan('def f():\n    """不做 .put(。"""\n    return 1\n')
-      and bool(scan('def f():\n    """不做 .put(。"""\n    return _c.put(1)\n')))
-
-print("\n⑤ 用例侧的不变量（机械守着前缀这条性质）")
 import json  # noqa: E402
-
-_CASES = [json.loads(ln) for ln in
-          (ROOT / "eval/golden/basic.jsonl").read_text(encoding="utf-8").splitlines() if ln.strip()]
-_fix = [(c["id"], c["requires_fixture"]) for c in _CASES if c.get("requires_fixture")]
-check("有声明 requires_fixture 的用例（本键不是摆设）", bool(_fix), str(_fix))
-check("每条 requires_fixture 的名字都带保留前缀（否则清场 SQL 覆盖不到它）",
-      all(n.startswith(gf.FIXTURE_PREFIX) for _, n in _fix),
-      str([n for _, n in _fix if not n.startswith(gf.FIXTURE_PREFIX)]))
-_write = [c["id"] for c in _CASES if c.get("needs_real_write")]
-check("每条 needs_real_write 用例都声明了 requires_fixture（真写不许无界）",
-      all(c.get("requires_fixture") for c in _CASES if c.get("needs_real_write")),
-      str([c["id"] for c in _CASES
-           if c.get("needs_real_write") and not c.get("requires_fixture")]))
-# 真写用例必须同时要真身份：uid=0 是哨兵，写不动 ⇒ 用例会红成一个误导性的"没反应"
-check("每条 needs_real_write 用例都要真身份（needs_admin_uid 或 needs_user_uid）",
-      all(c.get("needs_admin_uid") or c.get("needs_user_uid") for c in _CASES
-          if c.get("needs_real_write")),
-      str(_write))
-
-print("\n⑥ CLI 入口")
-check("不给 --verify → 用不出来的用法（2，不是 0）", gf.main([]) == 2)
-_old = gf.category_titles
-gf.category_titles = lambda: ["编程"]      # 注入：这一节一次网络都不走
-try:
-    check("--verify 干净 → 0", gf.main(["--verify"]) == 0)
-    gf.category_titles = lambda: None
-    check("--verify 读不到 → 2", gf.main(["--verify"]) == 2)
-    gf.category_titles = lambda: ["agent_fixture_a"]
-    check("--verify 有残留 → 1", gf.main(["--verify"]) == 1)
-finally:
-    gf.category_titles = _old
-
-print("\n⑦ 账号族夹具（eval/golden_fixture_account.py，20260926）")
-import golden_fixture_account as gfa  # noqa: E402
-
-_FIXROW = {"username": "agent_fixture_freeze_a", "status": 1, "role": "user", "id": 7}
-_DIR_OK = {"agent_fixture_freeze_a": _FIXROW, "sora": {"username": "sora", "status": 0}}
-check("行在且状态是期望态（冻结）→ present",
-      gfa.fixture_state("agent_fixture_freeze_a", _DIR_OK) == "present")
-check("名录里没有这个名字 → absent",
-      gfa.fixture_state("agent_fixture_other", _DIR_OK) == "absent")
-check("读不到名录（None）→ unreadable",
-      gfa.fixture_state("agent_fixture_freeze_a", None) == "unreadable")
-check("行在但状态是「正常」→ wrong_state（**这条就是那条假绿的守卫**：放它跑，"
-      "后端走真 no-op 分支，回执照样生成、断言照样过）",
-      gfa.fixture_state("agent_fixture_freeze_a",
-                        {"agent_fixture_freeze_a": {"username": "x", "status": 0}}) == "wrong_state")
-check("状态字段读不出来（缺字段）→ wrong_state（不是 present）",
-      gfa.fixture_state("agent_fixture_freeze_a",
-                        {"agent_fixture_freeze_a": {"username": "x"}}) == "wrong_state")
-check("状态是脏值（非数字）→ wrong_state",
-      gfa.fixture_state("agent_fixture_freeze_a",
-                        {"agent_fixture_freeze_a": {"username": "x", "status": "?"}}) == "wrong_state")
-check("expect_status 可显式传（默认值不是写死的判据：要正常态夹具的用例传 0 就 present）",
-      gfa.fixture_state("agent_fixture_freeze_a", _DIR_OK, expect_status=0) == "wrong_state"
-      and gfa.fixture_state("agent_fixture_freeze_a",
-                            {"agent_fixture_freeze_a": {"username": "x", "status": 0}},
-                            expect_status=0) == "present")
-for _st in ("absent", "wrong_state", "unreadable"):
-    _lb = gfa.state_label(_st, "agent_fixture_freeze_a")
-    check(f"{_st} 的跳过原因是**可行动**的一句人话（点名要跑哪个 SQL / 先修哪条前置）",
-          bool(_lb.strip()) and "agent_fixture_freeze_a" in _lb, _lb[:60])
-
-print("\n⑦b 残留哨兵（与分类族有一处刻意的不对称：声明的夹具要放行）")
-_DECL = ["agent_fixture_freeze_a"]
-check("声明的那个夹具**不算**残留（它是常驻的：用例只改状态、不复位就得重跑 SQL）",
-      gfa.leftovers(_DIR_OK, _DECL) == [], str(gfa.leftovers(_DIR_OK, _DECL)))
-check("前缀族里**没声明**的才算残留（中断的 SQL / 手工插入 / 探针没清干净）",
-      gfa.leftovers({**_DIR_OK, "agent_fixture_freeze_b": {"username": "agent_fixture_freeze_b",
-                                                           "status": 1}}, _DECL)
-      == ["agent_fixture_freeze_b"])
-check("真账号（不带前缀）不报", gfa.leftovers({"sora": {}, "guest5": {}}, []) == [])
-check("名字中间出现前缀的账号不报（清场 SQL 删不掉它 ⇒ 哨兵也不该报它）",
-      gfa.leftovers({"我 agent_fixture_x": {}}, []) == [])
-check("大小写不同的不报（与 SQL 的 LIKE 同一判据）",
-      gfa.leftovers({"AGENT_FIXTURE_x": {}}, []) == [])
-check("干净 → 退出码 0", gfa.verify(_DIR_OK, _DECL)[0] == 0)
-_c, _l = gfa.verify({**_DIR_OK, "agent_fixture_z": {}}, _DECL)
-check("有残留 → 1，且行带 [fixture-leftover] 点了名",
-      _c == 1 and gfa.LEFTOVER_TAG in _l[0] and "agent_fixture_z" in _l[0], str(_l)[:120])
-check("读不到 → 2，且行带 [fixture-check-failed] 写明不等于没有",
-      gfa.verify(None, _DECL)[0] == 2 and gfa.UNREADABLE_TAG in gfa.verify(None, _DECL)[1][0]
-      and "不等于" in gfa.verify(None, _DECL)[1][0])
-check("不给 --verify → 用法（退出码 2，不是 0）", gfa.main([]) == 2)
-_decl_real = gfa.declared_fixtures()
-check("声明的账号夹具是**从用例文件派生**的（不是手抄名单）", _decl_real == ["agent_fixture_freeze_a"],
-      str(_decl_real))
-
-print("\n⑦c 账号族只有一条读通道（源码扫描，与分类族的纪律互为镜像）")
-# 两半的清单**必须**不同，这不是偷懒：分类族（④）禁止的是"带身份"（那条路必须零凭据），
-# 账号族**非带身份不可**（名录是管理员域接口，不带就读不到 ⇒ 真写用例永远静默跳过），
-# 所以它的纪律只剩一条：**只有 GET**。把两族的清单写成同一份，等于逼其中一个让步——
-# 共享的只该是"写动词"那半（`_WRITE_VERBS`），再加本端点特有的形状。
 import os  # noqa: E402
 
-_SRC_ACC = (ROOT / "eval/golden_fixture_account.py").read_text(encoding="utf-8")
-_ACC_PATTERNS = _WRITE_VERBS + ('"POST"', '"PUT"', '"DELETE"', "method=",
-                                "/status", "frozen", "subprocess", "os.system")
-_hits = scan(_SRC_ACC, _ACC_PATTERNS)
-check("账号族模块里没有任何写形状 / 端点特有的写形状（只有 GET）",
-      not _hits, f"命中：{sorted(set(_hits))}")
-for _s, _want in [
-    ('_req = Request(url, data, headers={"Authorization": tok}, method="POST")', True),
-    ('urllib.request.Request(url, headers={"Authorization": "Bearer " + tok})', False),
-    ('    # 顺手 .delete( 一下会怎样', False),          # 注释：不算（与 ④ 同一个剥注释规则）
-    ('    return f"{BASE}/api/temp-users/{uid}/status"', True),
-    ('if row.get("frozen"):', True),
-]:
-    check(f"账号族扫描样本：{'命中' if _want else '不命中'} ← {_s.strip()[:46]}",
-          bool(scan(_s, _ACC_PATTERNS)) == _want)
-check("身份那一半**必须在**（不在的话 directory() 恒 None ⇒ 真写用例永远静默跳过，"
-      "而「跳过」看起来只是「前置没配好」、不像是这一族坏了）",
-      "_sign_local_jwt" in _SRC_ACC and "Authorization" in _SRC_ACC)
-check("'读不到'与'没有'在源码里就分得开（`if directory is None` 早退，不是 try 里吞异常）",
-      "if directory is None" in _SRC_ACC)
-# 行为上再验一次（比文本扫描硬）：没有 GOLDEN_ADMIN_UID 时**必须**在发请求之前就返回 None
-_old_uid = os.environ.pop("GOLDEN_ADMIN_UID", None)
-try:
-    check("没设 GOLDEN_ADMIN_UID ⇒ directory() 返回 None（不发那次注定被拒的请求）",
-          gfa.directory() is None)
-finally:
-    if _old_uid is not None:
-        os.environ["GOLDEN_ADMIN_UID"] = _old_uid
-
-print("\n⑦d 留言族只有一条读通道（与账号族互为镜像）")
+import golden_fixture_account as gfa  # noqa: E402
 import golden_fixture_board as gfb  # noqa: E402
 
-# 与账号族（⑦c）同一形状、不同端点：待审留言**公开接口读不到**（`/api/public/board` 只放行
-# approved=1），所以它也非带身份不可，纪律同样只剩"只有 GET"。本端点特有的写形状另列：
-# `/audit` 是复核那条写路径（`PUT /api/protect/board/{id}/audit`）。
 _BOARD_FIX = "agent_fixture_待审留言（评测夹具，用后即删）"   # 与那份迁移 SQL 逐字同源
-_SRC_BRD = (ROOT / "eval/golden_fixture_board.py").read_text(encoding="utf-8")
-_BRD_PATTERNS = _WRITE_VERBS + ('"POST"', '"PUT"', '"DELETE"', "method=",
-                                "/audit", "subprocess", "os.system")
-_hits_b = scan(_SRC_BRD, _BRD_PATTERNS)
-check("留言族模块里没有任何写形状 / 本端点特有的写形状（只有 GET）",
-      not _hits_b, f"命中：{sorted(set(_hits_b))}")
-for _s, _want in [
-    ('_req = Request(url, data, headers=tok, method="PUT")', True),
-    ('urllib.request.Request(f"{ADMIN_BASE}{BOARD_PATH}", headers=h)', False),
-    ('    # 顺手 .post( 一下会怎样', False),          # 注释：不算（与 ④/⑦c 同一个剥注释规则）
-    ('    return f"{ADMIN_BASE}/api/protect/board/{tid}/audit"', True),
-]:
-    check(f"留言族扫描样本：{'命中' if _want else '不命中'} ← {_s.strip()[:46]}",
-          bool(scan(_s, _BRD_PATTERNS)) == _want)
-check("身份那一半**必须在**（不在的话 board() 恒 None ⇒ 真写用例永远静默跳过，"
-      "而「跳过」看起来只是「前置没配好」、不像是这一族坏了）",
-      "_sign_local_jwt" in _SRC_BRD and "Authorization" in _SRC_BRD)
-check("'读不到'与'没有'在源码里就分得开（`if board_map is None` 早退，不是 try 里吞异常）",
-      "if board_map is None" in _SRC_BRD)
 
 
 def _brow(tid: int, content: str = _BOARD_FIX, approved: int = 0) -> dict:
     return {"talkKey": tid, "content": content, "approved": approved}
 
 
-check("在位：正文以夹具名打头 + 待审 ⇒ present",
-      gfb.fixture_state(_BOARD_FIX, {"108": _brow(108)}) == "present")
-check("行在、已被复核掉（approved=1）⇒ wrong_state（不是「在位」）—— 那条假绿的守卫",
-      gfb.fixture_state(_BOARD_FIX, {"108": _brow(108, approved=1)}) == "wrong_state")
-check("清单里一行都没有 ⇒ absent", gfb.fixture_state(_BOARD_FIX, {}) == "absent")
-check("读不到清单 ⇒ unreadable（不是 absent）", gfb.fixture_state(_BOARD_FIX, None) == "unreadable")
-check("approved 读不出来（脏值）⇒ wrong_state（不知道它什么态，不猜待审）",
-      gfb.fixture_state(_BOARD_FIX, {"108": {"talkKey": 108, "content": _BOARD_FIX}}) == "wrong_state")
-check("真留言（不以夹具前缀打头）不算数",
-      gfb.fixture_state(_BOARD_FIX, {"7": _brow(7, "垃圾博客")}) == "absent")
-check("**前缀**而不是整名相等：SQL 的幂等/清场判据就是前缀，检查不能更严（否则"
-      "「检查说没有、清场删不掉」那种行）",
-      gfb.fixture_state(_BOARD_FIX, {"108": _brow(108, _BOARD_FIX + "（第二份）")}) == "present")
-
-_lb = {st: gfb.state_label(st, _BOARD_FIX) for st in ("absent", "wrong_state", "unreadable")}
-check("三种不可用状态各说各的（absent→建、wrong_state→重建、unreadable→身份活着吗）",
-      "先按授权串跑" in _lb["absent"] and "重跑" in _lb["wrong_state"]
-      and "都不知道" in _lb["unreadable"], str(_lb)[:160])
-check("present 没有话要说（空串，别让调用方拿到一句莫名其妙的话）",
-      gfb.state_label("present", _BOARD_FIX) == "")
-
-print("\n⑦e 留言族的残留哨兵：声明的那个放行，其余照报")
-_DECL_B = [_BOARD_FIX]
-check("声明的那个放行（留言夹具是**常驻**的，不像分类夹具跑完即消失）",
-      gfb.leftovers({"108": _brow(108)}, _DECL_B) == [])
-check("前缀族里没被声明的那个照报（中断的 SQL / 手工插入 / 探针没清干净）",
-      gfb.leftovers({"108": _brow(108), "109": _brow(109, "agent_fixture_别的")},
-                    _DECL_B) == ["agent_fixture_别的"])
-check("真留言不报", gfb.leftovers({"7": _brow(7, "垃圾博客")}, []) == [])
-check("正文**中间**出现该串的不报（清场语句 `LIKE 'agent_fixture\\_%'` 也删不掉它）",
-      gfb.leftovers({"7": _brow(7, "骂 agent_fixture_ 的人")}, []) == [])
-check("干净 → 退出码 0、行标 [fixture-clean]",
-      gfb.verify({"108": _brow(108)}, _DECL_B)[0] == 0
-      and not any(gfb.LEFTOVER_TAG in ln for ln in gfb.verify({"108": _brow(108)}, _DECL_B)[1]))
-_c_b, _l_b = gfb.verify({"108": _brow(108), "109": _brow(109, "agent_fixture_别的")}, _DECL_B)
-check("有残留 → 退出码 1、逐行点名（带上前缀与清场去向）",
-      _c_b == 1 and gfb.LEFTOVER_TAG in _l_b[0] and "agent_fixture_别的" in _l_b[0]
-      and "回滚段" in _l_b[0], str(_l_b)[:140])
-check("读不到 → 退出码 2 且明说「不等于没有被残留」（与另两族逐字同一条取向）",
-      gfb.verify(None, _DECL_B)[0] == 2
-      and gfb.UNREADABLE_TAG in gfb.verify(None, _DECL_B)[1][0]
-      and "不等于" in gfb.verify(None, _DECL_B)[1][0])
-check("不给 --verify → 用法（退出码 2，不是 0）", gfb.main([]) == 2)
-# 行为上再验一次（比文本扫描硬）：没有 GOLDEN_ADMIN_UID 时**必须**在发请求之前就返回 None
-_old_uid_b = os.environ.pop("GOLDEN_ADMIN_UID", None)
-try:
-    check("没设 GOLDEN_ADMIN_UID ⇒ board() 返回 None（不发那次注定被拒的请求）",
-          gfb.board() is None)
-finally:
-    if _old_uid_b is not None:
-        os.environ["GOLDEN_ADMIN_UID"] = _old_uid_b
-
-print("\n⑧ 夹具闸（三族共用一个实现，两个跑法调用同一个函数）")
-_GATE_CASES = [
-    {"id": "c1", "requires_fixture": "agent_fixture_category_a"},
-    {"id": "c2", "requires_fixture": "agent_fixture_freeze_a", "requires_fixture_kind": "account"},
-    {"id": "c3", "requires_fixture": "agent_fixture_category_b"},
-    {"id": "c4"},
-    {"id": "c5", "requires_fixture": _BOARD_FIX, "requires_fixture_kind": "board"},
-]
-_SNAPS = {"category": ["编程"],
-          "account": {"agent_fixture_freeze_a": _FIXROW},
-          "board": {"108": _brow(108)}}
-_old_snap = gf.snapshot
-gf.snapshot = lambda kind: _SNAPS[kind]
-try:
-    _kept, _drop, _lines = gf.gate(list(_GATE_CASES))
-    check("在位的那条留着、不在位的摘掉、没声明的原样通过",
-          [c["id"] for c in _kept] == ["c2", "c4", "c5"], str([c["id"] for c in _kept]))
-    check("被摘掉的 id 按声明逐个报出来（计入分母变化）", _drop == ["c1", "c3"], str(_drop))
-    check("不写 kind = 分类族（存量用例的语义一个字都没变）",
-          "c1" in _drop and "c2" not in _drop)
-    # 第二遍：三族夹具**分别在位/不在位**——每一族的理由各说各的（分类族指公开列表，
-    # 账号族指复位 SQL，留言族指"被人在后台复核掉了、重跑那份 SQL"）。只跑一遍
-    # "夹具都在位"是看不到这三句话里任何一句的。
-    gf.snapshot = lambda kind: {"category": ["agent_fixture_category_a"],
-                                "account": {"agent_fixture_freeze_a": {"status": 0}},
-                                "board": {"108": _brow(108, approved=1)}}[kind]
-    _kept2, _drop2, _lines2 = gf.gate(list(_GATE_CASES))
-    _cat_ln = [ln for ln in _lines2 if ln.startswith("[skip] c3")]
-    _acc_ln = [ln for ln in _lines2 if ln.startswith("[skip] c2")]
-    _brd_ln = [ln for ln in _lines2 if ln.startswith("[skip] c5")]
-    check("夹具行在但状态不对 ⇒ 不可用（不是「在位」）—— 这就是那条假绿的守卫",
-          _drop2 == ["c2", "c3", "c5"] and [c["id"] for c in _kept2] == ["c1", "c4"],
-          str((_drop2, [c["id"] for c in _kept2])))
-    check("三族的跳过理由各说各的（公开列表 / 复位 SQL / 复核掉了）",
-          bool(_cat_ln) and "公开分类" in _cat_ln[0]
-          and bool(_acc_ln) and "复位" in _acc_ln[0]
-          and bool(_brd_ln) and "复核" in _brd_ln[0], str(_lines2)[:240])
-    # 快照按 kind 只取一次：两条分类用例共用一份（省一次往返，也保证看到同一份清单）
-    _calls: list[str] = []
-    gf.snapshot = lambda kind: (_calls.append(kind), _SNAPS[kind])[1]
-    gf.gate(list(_GATE_CASES))
-    check("同族夹具只取一次快照（同一批用例看到同一份）", _calls.count("category") == 1,
-          str(_calls))
-    # 未知 kind 必须**响亮报错**：拼错一个字母会让闸去查另一族 ⇒ 用例静默跳过，
-    # 而打印出来的理由是"那一族里没有它"（读的人只会去查那一族）。
-    gf.snapshot = _old_snap
-    try:
-        gf.gate([{"id": "c9", "requires_fixture": "agent_fixture_x",
-                  "requires_fixture_kind": "acount"}])
-        check("未知 kind → 响亮报错（不是退回分类族）", False, "没报错")
-    except SystemExit as e:
-        check("未知 kind → 响亮报错（不是退回分类族）", "acount" in str(e), str(e)[:80])
-except Exception as e:  # noqa: BLE001
-    check(f"夹具闸的用例集跑通（异常：{type(e).__name__}: {e}）", False)
-finally:
-    gf.snapshot = _old_snap
-
-# 用例文件侧：kind 的取值域受控（新写一个 kind 而没登记 ⇒ 红在这里，而不是运行期）
-_kinds = {(c["id"], str(c.get("requires_fixture_kind") or "category"))
-          for c in _CASES if c.get("requires_fixture")}
-check("用例里出现的每个 requires_fixture_kind 都在 FIXTURE_KINDS 里",
-      all(k in gf.FIXTURE_KINDS for _, k in _kinds), str(sorted(_kinds)))
-_acc_cases = [cid for cid, k in _kinds if k == "account"]
-check("账号族夹具用例真的在文件里（这条闸不是空转的）", bool(_acc_cases), str(_acc_cases))
-check("账号族用例声明的名字与 declared_fixtures() 同源（哨兵要放行它，名字只能有一处来源）",
-      set(gfa.declared_fixtures()) == {c["requires_fixture"] for c in _CASES
-                                       if c.get("requires_fixture")
-                                       and str(c.get("requires_fixture_kind") or "") == "account"},
-      str(gfa.declared_fixtures()))
-_board_cases = [cid for cid, k in _kinds if k == "board"]
-check("留言族夹具用例真的在文件里（这条闸不是空转的）", bool(_board_cases), str(_board_cases))
-check("留言族用例声明的名字与 declared_fixtures() 同源（哨兵要放行它，名字只能有一处来源）",
-      set(gfb.declared_fixtures()) == {c["requires_fixture"] for c in _CASES
-                                       if c.get("requires_fixture")
-                                       and str(c.get("requires_fixture_kind") or "") == "board"},
-      str(gfb.declared_fixtures()))
-check("留言族用例声明的那个名字，正是那份迁移 SQL 建出来的正文（用例改了名字而 SQL 还在建"
-      "旧的 ⇒ 红在这里，而不是红成「模型没按台账办」）",
-      gfb.declared_fixtures() == [_BOARD_FIX], str(gfb.declared_fixtures()))
-
-print("\n⑦f 待办族只有一条读通道（源码扫描，与账号族 / 留言族互为镜像）")
 import golden_fixture_todo as gft  # noqa: E402
 
-# 与另两族同一形状、不同端点：后台首页那份待办列表也是**管理员域**接口（全站没有第二条
-# 读能回答"某个人的列表里有没有这一条"），所以它也非带身份不可，纪律同样只剩"只有 GET"。
-# 本端点特有的写形状另列：`/item`（追加）、`/done`（勾完成）、`/date`（改排期）。
 _TODO_FIX = "agent_fixture_todo_pending_a（评测夹具，勿手改）"   # 与那份迁移 SQL 逐字同源
-_SRC_TODO = (ROOT / "eval/golden_fixture_todo.py").read_text(encoding="utf-8")
-_TODO_PATTERNS = _WRITE_VERBS + ('"POST"', '"PUT"', '"DELETE"', "method=",
-                                 "/item", "/done", "/date", "subprocess", "os.system")
-_hits_t = scan(_SRC_TODO, _TODO_PATTERNS)
-check("待办族模块里没有任何写形状 / 本端点特有的写形状（只有 GET）",
-      not _hits_t, f"命中：{sorted(set(_hits_t))}")
-for _s, _want in [
-    ('_req = Request(url, data, headers=tok, method="POST")', True),
-    ('urllib.request.Request(f"{ADMIN_BASE}{TODO_PATH}", headers=h)', False),
-    ('    # 顺手 .post( 一下会怎样', False),          # 注释：不算（与 ④/⑦c/⑦d 同一个剥注释规则）
-    ('    return f"{ADMIN_BASE}/api/protected/todos/done"', True),
-]:
-    check(f"待办族扫描样本：{'命中' if _want else '不命中'} ← {_s.strip()[:46]}",
-          bool(scan(_s, _TODO_PATTERNS)) == _want)
-check("身份那一半**必须在**（不在的话 todo_rows() 恒 None ⇒ 用例永远静默跳过，"
-      "而「跳过」看起来只是「前置没配好」、不像是这一族坏了）",
-      "_sign_local_jwt" in _SRC_TODO and "Authorization" in _SRC_TODO)
-check("'读不到'与'没有'在源码里就分得开（`if rows is None` 早退，不是 try 里吞异常）",
-      "if rows is None" in _SRC_TODO)
 
 
 def _trow(text: str = _TODO_FIX, done: bool = False,
@@ -479,129 +115,464 @@ def _trow(text: str = _TODO_FIX, done: bool = False,
     return {"text": text, "done": done, "date": date}
 
 
-check("在位：正文对得上 + 未完成 + 排期对得上 ⇒ present",
-      gft.fixture_state(_TODO_FIX, [_trow()]) == "present")
-check("行在、**已经完成** ⇒ wrong_state（不是「在位」）—— 这一条就是那条守卫：勾完成的卡"
-      "前面有「状态已达成 ⇒ 掏空、不弹卡」，放它跑，用例要的那张卡根本不存在",
-      gft.fixture_state(_TODO_FIX, [_trow(done=True)]) == "wrong_state")
-check("同名两条 ⇒ wrong_state（歧义即零写，卡弹不出来）",
-      gft.fixture_state(_TODO_FIX, [_trow(), _trow()]) == "wrong_state")
-check("排期不是约定的那个日子 ⇒ wrong_state（用例断言里逐字带着它渲染出的中文；不判就会"
-      "红成「模型没按台账念」——同一张红脸底下是前提过期，不是回归）",
-      gft.fixture_state(_TODO_FIX, [_trow(date="2026-12-01")]) == "wrong_state")
-check("排期读不出来（缺键 / null）⇒ wrong_state（没排期的那一天也是「不是约定的那天」）",
-      gft.fixture_state(_TODO_FIX, [_trow(date=None)]) == "wrong_state"
-      and gft.fixture_state(_TODO_FIX, [{"text": _TODO_FIX, "done": False}]) == "wrong_state")
-check("expect_date=None ⇒ **不判排期**（给将来不留排期的夹具留的口子，不是默认）",
-      gft.fixture_state(_TODO_FIX, [_trow(date=None)], expect_date=None) == "present")
-check("排期那半个判据剔两端空白后**串相等**（与正文判据同一条取向：不同形状的等价物不该被判成"
-      "两种状态，脏值也不该被猜成一个日子）",
-      gft.fixture_state(_TODO_FIX, [_trow(date=" 2026-11-30 ")]) == "present"
-      and gft.fixture_state(_TODO_FIX, [_trow(date="2026-11-30T00:00:00")]) == "wrong_state")
-check("空列表 ⇒ absent（读到了、就是没有——这是事实）",
-      gft.fixture_state(_TODO_FIX, []) == "absent")
-check("读不到列表 ⇒ unreadable（不是 absent）", gft.fixture_state(_TODO_FIX, None) == "unreadable")
-check("完成态读不出来（缺键）⇒ wrong_state（不知道它什么态，不猜未完成）",
-      gft.fixture_state(_TODO_FIX, [{"text": _TODO_FIX}]) == "wrong_state")
-check("真待办（不以夹具前缀打头）不算数",
-      gft.fixture_state(_TODO_FIX, [_trow("给多肉浇水")]) == "absent")
-check("**前缀**而不是整名相等：SQL 的幂等/清场判据就是前缀，检查不能更严（否则"
-      "「检查说没有、清场删不掉」那种行）",
-      gft.fixture_state(_TODO_FIX, [_trow(_TODO_FIX + "（第二份）")]) == "present")
-check("expect_done 可显式传（默认值不是写死的判据：要已完成夹具的用例传 True 就 present）",
-      gft.fixture_state(_TODO_FIX, [_trow(done=True)], expect_done=True) == "present")
-
-_lt = {st: gft.state_label(st, _TODO_FIX) for st in ("absent", "wrong_state", "unreadable")}
-check("三种不可用状态各说各的（absent→建、wrong_state→复位、unreadable→身份活着吗）",
-      "先按授权串跑" in _lt["absent"] and "重跑" in _lt["wrong_state"]
-      and "都不知道" in _lt["unreadable"], str(_lt)[:160])
-check("wrong_state 那句点名了**两个**成因（已完成 / 同名多条），不然读的人只会去查一个方向",
-      "勾成完成" in _lt["wrong_state"] and "同名" in _lt["wrong_state"], _lt["wrong_state"][:120])
-check("present 没有话要说（空串，别让调用方拿到一句莫名其妙的话）",
-      gft.state_label("present", _TODO_FIX) == "")
-
-print("\n⑦g 待办族的残留哨兵：声明的那个放行，其余照报")
-_DECL_T = [_TODO_FIX]
-check("声明的那个放行（待办夹具是**常驻**的：用例只读它、不改它）",
-      gft.leftovers([_trow()], _DECL_T) == [])
-check("前缀族里没被声明的那个照报（中断的 SQL / 手工插入）",
-      gft.leftovers([_trow(), _trow("agent_fixture_别的")], _DECL_T) == ["agent_fixture_别的"])
-check("真待办不报", gft.leftovers([_trow("给多肉浇水")], []) == [])
-check("正文**中间**出现该串的不报（清场语句 `LIKE 'agent_fixture\\_%'` 也删不掉它）",
-      gft.leftovers([_trow("去改 agent_fixture_ 的靶子")], []) == [])
-check("干净 → 退出码 0、行标 [fixture-clean]",
-      gft.verify([_trow()], _DECL_T)[0] == 0
-      and not any(gft.LEFTOVER_TAG in ln for ln in gft.verify([_trow()], _DECL_T)[1]))
-_c_t, _l_t = gft.verify([_trow(), _trow("agent_fixture_别的")], _DECL_T)
-check("有残留 → 退出码 1、逐行点名（带上前缀与清场去向）",
-      _c_t == 1 and gft.LEFTOVER_TAG in _l_t[0] and "agent_fixture_别的" in _l_t[0]
-      and "回滚段" in _l_t[0], str(_l_t)[:140])
-check("读不到 → 退出码 2 且明说「不等于没有被残留」（与另三族逐字同一条取向）",
-      gft.verify(None, _DECL_T)[0] == 2
-      and gft.UNREADABLE_TAG in gft.verify(None, _DECL_T)[1][0]
-      and "不等于" in gft.verify(None, _DECL_T)[1][0])
-check("不给 --verify → 用法（退出码 2，不是 0）", gft.main([]) == 2)
-# 行为上再验一次（比文本扫描硬）：没有 GOLDEN_ADMIN_UID 时**必须**在发请求之前就返回 None
-_old_uid_t = os.environ.pop("GOLDEN_ADMIN_UID", None)
-try:
-    check("没设 GOLDEN_ADMIN_UID ⇒ todo_rows() 返回 None（不发那次注定被拒的请求）",
-          gft.todo_rows() is None)
-finally:
-    if _old_uid_t is not None:
-        os.environ["GOLDEN_ADMIN_UID"] = _old_uid_t
-
-print("\n⑦h 夹具闸的三处分派都认得 todo 族（少一处会**静默**退回分类族的判据）")
-# 为什么单独钉这一条：闸的三处分派（snapshot / state_of / skip_reason）各写一个 if，
-# 新加一族时漏掉中间那个 if 的后果不是"少判一次"，而是拿分类族的判据去判待办族——
-# 待办夹具会被判成 absent（"公开分类列表里没有它"），理由也指着一份不相干的 SQL。
-_old_todo_rows, _old_snap_t = gft.todo_rows, gf.snapshot
-gft.todo_rows = lambda: [_trow()]
-try:
-    _snap_t = gf.snapshot("todo")
-    check("snapshot('todo') 走的是待办族那条读路径",
-          _snap_t == [_trow()], str(_snap_t))
-    check("state_of('todo', …) 用的是待办族的判据（未完成 ⇒ present；分类族会判 absent）",
-          gf.state_of("todo", _TODO_FIX, [_trow()]) == "present")
-    check("state_of('todo', …) 的 wrong_state 也是待办族那一套（同名两条 ⇒ 不可用）",
-          gf.state_of("todo", _TODO_FIX, [_trow(), _trow()]) == "wrong_state")
-    check("skip_reason('todo', …) 说的是待办族那句（点名待办那份 SQL）",
-          "golden_fixture_todo_20261003.sql" in gf.skip_reason("todo", _TODO_FIX, "absent"))
-finally:
-    gft.todo_rows, gf.snapshot = _old_todo_rows, _old_snap_t
-
-_todo_cases = [cid for cid, k in _kinds if k == "todo"]
-check("待办族夹具用例真的在文件里（这条闸不是空转的）", bool(_todo_cases), str(_todo_cases))
-check("待办族用例声明的名字与 declared_fixtures() 同源（哨兵要放行它，名字只能有一处来源）",
-      set(gft.declared_fixtures()) == {c["requires_fixture"] for c in _CASES
-                                       if c.get("requires_fixture")
-                                       and str(c.get("requires_fixture_kind") or "") == "todo"},
-      str(gft.declared_fixtures()))
-check("待办族用例声明的那个正文，正是那份迁移 SQL 建出来的（用例改了正文而 SQL 还在建"
-      "旧的 ⇒ 红在这里，而不是红成「模型没按台账办」）",
-      gft.declared_fixtures() == [_TODO_FIX], str(gft.declared_fixtures()))
-check("用上待办夹具的那条用例带真身份（夹具闸会读管理员域接口，没身份就只会一直跳过）",
-      all(c.get("needs_admin_uid") for c in _CASES
-          if str(c.get("requires_fixture_kind") or "") == "todo"),
-      str(_todo_cases))
-
-# 用例断言的那半个字面量（卡面上那一对括号）与夹具约定必须是**同一个日子**。
-# 三处同源：那份 SQL 的 `due_date` / 本模块的 `EXPECT_DATE` / 用例断言里渲染出的中文；
-# 前两处由 SQL 注释与 EXPECT_DATE 的注释人挂着，后两处在这里机械锁住（同留言族那一条的
-# 取向：**改一处不改另一处要红在契约上，不是红成「模型没按台账办」**）。
 import agent.adminops_todo as _todo  # noqa: E402  （渲染那串中文的唯一来源，别在测试里手拼）
-_todo_gold = next(c for c in _CASES if c["id"] == "admin_todo_done_popup")["gold"]
-_rx_t = " ".join(_todo_gold.get("text_any_regex") or [])
-check("用例断言的排期，正是待办族约定的那一个日子渲染出来的（EXPECT_DATE ↔ 用例断言）",
-      f"排期 {_todo.due_date_cn(gft.EXPECT_DATE)}，现在：未完成" in _rx_t,
-      _rx_t[:120])
-check("用例断言里带着「现在：未完成」——这半句只在**读到唯一命中行**时才印（uid=0 的退化卡面"
-      "只有正文、没有这对括号），所以它就是「真身份那一跳真的落到了那一行」的证据",
-      "现在：未完成" in _rx_t)
 
-print()
-if FAILS:
-    print(f"=== {len(FAILS)} 项失败 ===")
-    for f in FAILS:
-        print("  -", f)
-    sys.exit(1)
-print("=== 全部通过 ===")
+
+def test_golden_fixture():
+    print("① 三态分列：读不到不是没有")
+    check("清单里有 → present", gf.fixture_state("agent_fixture_category_a",
+                                                 ["编程", "agent_fixture_category_a"]) == "present")
+    check("清单里没有 → absent", gf.fixture_state("agent_fixture_category_a", ["编程"]) == "absent")
+    check("读不到（titles=None）→ unreadable",
+          gf.fixture_state("agent_fixture_category_a", None) == "unreadable")
+    check("absent 与 unreadable 是两个答案（前者是事实，后者是不知道）",
+          gf.fixture_state("x", ["y"]) != gf.fixture_state("x", None))
+    check("只认整名相等（前缀相同但不是它 ⇒ absent）",
+          gf.fixture_state("agent_fixture_category_a",
+                           ["agent_fixture_category_ab"]) == "absent")
+    print("\n② 残留按前缀认（与清场 SQL 同一判据）")
+    _t = ["编程", "agent_fixture_x", "agent_fixture_y", "我 agent_fixture_z", "AGENT_FIXTURE_w"]
+    check("前缀族全部挑出来", gf.leftovers(_t) == ["agent_fixture_x", "agent_fixture_y"],
+          str(gf.leftovers(_t)))
+    check("名字中间出现该串的不算残留（清场删不掉它 ⇒ 哨兵不该报它）",
+          "我 agent_fixture_z" not in gf.leftovers(_t))
+    check("大小写不同的不算（SQL 的 LIKE 在默认排序规则外不做大小写折叠，两边判据要一致）",
+          "AGENT_FIXTURE_w" not in gf.leftovers(_t))
+    check("没有残留 → 空列表（不是 None：清单读到了，就是没有）", gf.leftovers(["编程"]) == [])
+    print("\n③ --verify 的退出码与行标")
+    check("干净 → 0", gf.verify(["编程"])[0] == 0)
+    _c, _lines = gf.verify(["编程", "agent_fixture_a"])
+    check("有残留 → 1", _c == 1)
+    check("残留行带 [fixture-leftover] 且点了名",
+          all(gf.LEFTOVER_TAG in ln for ln in _lines)
+              and any("agent_fixture_a" in ln for ln in _lines),
+          str(_lines))
+    _c, _lines = gf.verify(None)
+    check("读不到 → 2", _c == 2)
+    check("读不到的行带 [fixture-check-failed] 且写明不等于没有",
+          gf.UNREADABLE_TAG in _lines[0] and "不等于" in _lines[0], _lines[0])
+    check("残留优先于干净（两件事不会互相掩盖）", gf.verify(["agent_fixture_a"])[0] == 1)
+    print("\n④ 本模块里没有第二条写通道（源码扫描）")
+    _SRC = (ROOT / "eval/golden_fixture.py").read_text(encoding="utf-8")
+    _tool = scan(_SRC)
+    check("模块里没有凭据读取 / 写方法 / protected 路径", not _tool, f"命中：{sorted(set(_tool))}")
+    _SAMPLES = [
+        ('resp = _client.post(f"{url}/x", json=payload)', True),
+        ('uid = os.environ.get("GOLDEN_ADMIN_UID")', True),
+        ('headers = {"Authorization": "Bearer " + tok}', True),
+        ('    # 顺手 .delete( 一下会怎样', False),        # 注释：不算
+        ('from tools.base import _get  # noqa: E402', False),
+    ]
+    for _s, _want in _SAMPLES:
+        _got = bool(scan(_s))
+        check(f"扫描器样本：{('命中' if _want else '不命中')} ← {_s.strip()[:44]}", _got == _want)
+    check("扫描器对本模块只说没命中（不是因为它什么都扫不到）",
+          bool(scan("import subprocess")) is False and bool(scan("x.post(1)")) is True)
+    _DOC_FRAG = '"""本模块只用 _get，不做 .post( /api/protected。"""\nx = 1\n'
+    check("docstring 里提到的写形状不判红（剥掉的是说明，不是判据）", not scan(_DOC_FRAG))
+    check("同一段字当字符串常量赋值 ⇒ 照样命中（剥 docstring 没有顺手把代码也剥掉）",
+          bool(scan('_DOC = "只用 _get，不做 .post("\n')))
+    check("函数 docstring 同样剥（不只模块头那一段）",
+          not scan('def f():\n    """不做 .put(。"""\n    return 1\n')
+          and bool(scan('def f():\n    """不做 .put(。"""\n    return _c.put(1)\n')))
+    print("\n⑤ 用例侧的不变量（机械守着前缀这条性质）")
+    _CASES = [json.loads(ln) for ln in
+              (ROOT / "eval/golden/basic.jsonl")
+                  .read_text(encoding="utf-8").splitlines() if ln.strip()]
+    _fix = [(c["id"], c["requires_fixture"]) for c in _CASES if c.get("requires_fixture")]
+    check("有声明 requires_fixture 的用例（本键不是摆设）", bool(_fix), str(_fix))
+    check("每条 requires_fixture 的名字都带保留前缀（否则清场 SQL 覆盖不到它）",
+          all(n.startswith(gf.FIXTURE_PREFIX) for _, n in _fix),
+          str([n for _, n in _fix if not n.startswith(gf.FIXTURE_PREFIX)]))
+    _write = [c["id"] for c in _CASES if c.get("needs_real_write")]
+    check("每条 needs_real_write 用例都声明了 requires_fixture（真写不许无界）",
+          all(c.get("requires_fixture") for c in _CASES if c.get("needs_real_write")),
+          str([c["id"] for c in _CASES
+               if c.get("needs_real_write") and not c.get("requires_fixture")]))
+    check("每条 needs_real_write 用例都要真身份（needs_admin_uid 或 needs_user_uid）",
+          all(c.get("needs_admin_uid") or c.get("needs_user_uid") for c in _CASES
+              if c.get("needs_real_write")),
+          str(_write))
+    print("\n⑥ CLI 入口")
+    check("不给 --verify → 用不出来的用法（2，不是 0）", gf.main([]) == 2)
+    _old = gf.category_titles
+    gf.category_titles = lambda: ["编程"]      # 注入：这一节一次网络都不走
+    try:
+        check("--verify 干净 → 0", gf.main(["--verify"]) == 0)
+        gf.category_titles = lambda: None
+        check("--verify 读不到 → 2", gf.main(["--verify"]) == 2)
+        gf.category_titles = lambda: ["agent_fixture_a"]
+        check("--verify 有残留 → 1", gf.main(["--verify"]) == 1)
+    finally:
+        gf.category_titles = _old
+    print("\n⑦ 账号族夹具（eval/golden_fixture_account.py，20260926）")
+    _FIXROW = {"username": "agent_fixture_freeze_a", "status": 1, "role": "user", "id": 7}
+    _DIR_OK = {"agent_fixture_freeze_a": _FIXROW, "sora": {"username": "sora", "status": 0}}
+    check("行在且状态是期望态（冻结）→ present",
+          gfa.fixture_state("agent_fixture_freeze_a", _DIR_OK) == "present")
+    check("名录里没有这个名字 → absent",
+          gfa.fixture_state("agent_fixture_other", _DIR_OK) == "absent")
+    check("读不到名录（None）→ unreadable",
+          gfa.fixture_state("agent_fixture_freeze_a", None) == "unreadable")
+    check("行在但状态是「正常」→ wrong_state（**这条就是那条假绿的守卫**：放它跑，"
+      "后端走真 no-op 分支，回执照样生成、断言照样过）",
+          gfa.fixture_state("agent_fixture_freeze_a",
+                            {"agent_fixture_freeze_a": {"username": "x", "status": 0}}) == "wrong_state")
+    check("状态字段读不出来（缺字段）→ wrong_state（不是 present）",
+          gfa.fixture_state("agent_fixture_freeze_a",
+                            {"agent_fixture_freeze_a": {"username": "x"}}) == "wrong_state")
+    check("状态是脏值（非数字）→ wrong_state",
+          gfa.fixture_state("agent_fixture_freeze_a",
+                            {"agent_fixture_freeze_a": {"username": "x", "status": "?"}}) == "wrong_state")
+    check("expect_status 可显式传（默认值不是写死的判据：要正常态夹具的用例传 0 就 present）",
+          gfa.fixture_state("agent_fixture_freeze_a", _DIR_OK, expect_status=0) == "wrong_state"
+          and gfa.fixture_state("agent_fixture_freeze_a",
+                                {"agent_fixture_freeze_a": {"username": "x", "status": 0}},
+                                expect_status=0) == "present")
+    for _st in ("absent", "wrong_state", "unreadable"):
+        _lb = gfa.state_label(_st, "agent_fixture_freeze_a")
+        check(f"{_st} 的跳过原因是**可行动**的一句人话（点名要跑哪个 SQL / 先修哪条前置）",
+              bool(_lb.strip()) and "agent_fixture_freeze_a" in _lb, _lb[:60])
+    print("\n⑦b 残留哨兵（与分类族有一处刻意的不对称：声明的夹具要放行）")
+    _DECL = ["agent_fixture_freeze_a"]
+    check("声明的那个夹具**不算**残留（它是常驻的：用例只改状态、不复位就得重跑 SQL）",
+          gfa.leftovers(_DIR_OK, _DECL) == [], str(gfa.leftovers(_DIR_OK, _DECL)))
+    check("前缀族里**没声明**的才算残留（中断的 SQL / 手工插入 / 探针没清干净）",
+          gfa.leftovers({**_DIR_OK, "agent_fixture_freeze_b": {"username": "agent_fixture_freeze_b",
+                                                               "status": 1}}, _DECL)
+          == ["agent_fixture_freeze_b"])
+    check("真账号（不带前缀）不报", gfa.leftovers({"sora": {}, "guest5": {}}, []) == [])
+    check("名字中间出现前缀的账号不报（清场 SQL 删不掉它 ⇒ 哨兵也不该报它）",
+          gfa.leftovers({"我 agent_fixture_x": {}}, []) == [])
+    check("大小写不同的不报（与 SQL 的 LIKE 同一判据）",
+          gfa.leftovers({"AGENT_FIXTURE_x": {}}, []) == [])
+    check("干净 → 退出码 0", gfa.verify(_DIR_OK, _DECL)[0] == 0)
+    _c, _l = gfa.verify({**_DIR_OK, "agent_fixture_z": {}}, _DECL)
+    check("有残留 → 1，且行带 [fixture-leftover] 点了名",
+          _c == 1 and gfa.LEFTOVER_TAG in _l[0] and "agent_fixture_z" in _l[0], str(_l)[:120])
+    check("读不到 → 2，且行带 [fixture-check-failed] 写明不等于没有",
+          gfa.verify(None, _DECL)[0] == 2 and gfa.UNREADABLE_TAG in gfa.verify(None, _DECL)[1][0]
+          and "不等于" in gfa.verify(None, _DECL)[1][0])
+    check("不给 --verify → 用法（退出码 2，不是 0）", gfa.main([]) == 2)
+    _decl_real = gfa.declared_fixtures()
+    check("声明的账号夹具是**从用例文件派生**的（不是手抄名单）", _decl_real == ["agent_fixture_freeze_a"],
+          str(_decl_real))
+    print("\n⑦c 账号族只有一条读通道（源码扫描，与分类族的纪律互为镜像）")
+    _SRC_ACC = (ROOT / "eval/golden_fixture_account.py").read_text(encoding="utf-8")
+    _ACC_PATTERNS = _WRITE_VERBS + ('"POST"', '"PUT"', '"DELETE"', "method=",
+                                    "/status", "frozen", "subprocess", "os.system")
+    _hits = scan(_SRC_ACC, _ACC_PATTERNS)
+    check("账号族模块里没有任何写形状 / 端点特有的写形状（只有 GET）",
+          not _hits, f"命中：{sorted(set(_hits))}")
+    for _s, _want in [
+        ('_req = Request(url, data, headers={"Authorization": tok}, method="POST")', True),
+        ('urllib.request.Request(url, headers={"Authorization": "Bearer " + tok})', False),
+        ('    # 顺手 .delete( 一下会怎样', False),          # 注释：不算（与 ④ 同一个剥注释规则）
+        ('    return f"{BASE}/api/temp-users/{uid}/status"', True),
+        ('if row.get("frozen"):', True),
+    ]:
+        check(f"账号族扫描样本：{'命中' if _want else '不命中'} ← {_s.strip()[:46]}",
+              bool(scan(_s, _ACC_PATTERNS)) == _want)
+    check("身份那一半**必须在**（不在的话 directory() 恒 None ⇒ 真写用例永远静默跳过，"
+      "而「跳过」看起来只是「前置没配好」、不像是这一族坏了）",
+          "_sign_local_jwt" in _SRC_ACC and "Authorization" in _SRC_ACC)
+    check("'读不到'与'没有'在源码里就分得开（`if directory is None` 早退，不是 try 里吞异常）",
+          "if directory is None" in _SRC_ACC)
+    _old_uid = os.environ.pop("GOLDEN_ADMIN_UID", None)
+    try:
+        check("没设 GOLDEN_ADMIN_UID ⇒ directory() 返回 None（不发那次注定被拒的请求）",
+              gfa.directory() is None)
+    finally:
+        if _old_uid is not None:
+            os.environ["GOLDEN_ADMIN_UID"] = _old_uid
+    print("\n⑦d 留言族只有一条读通道（与账号族互为镜像）")
+    _SRC_BRD = (ROOT / "eval/golden_fixture_board.py").read_text(encoding="utf-8")
+    _BRD_PATTERNS = _WRITE_VERBS + ('"POST"', '"PUT"', '"DELETE"', "method=",
+                                    "/audit", "subprocess", "os.system")
+    _hits_b = scan(_SRC_BRD, _BRD_PATTERNS)
+    check("留言族模块里没有任何写形状 / 本端点特有的写形状（只有 GET）",
+          not _hits_b, f"命中：{sorted(set(_hits_b))}")
+    for _s, _want in [
+        ('_req = Request(url, data, headers=tok, method="PUT")', True),
+        ('urllib.request.Request(f"{ADMIN_BASE}{BOARD_PATH}", headers=h)', False),
+        ('    # 顺手 .post( 一下会怎样', False),          # 注释：不算（与 ④/⑦c 同一个剥注释规则）
+        ('    return f"{ADMIN_BASE}/api/protect/board/{tid}/audit"', True),
+    ]:
+        check(f"留言族扫描样本：{'命中' if _want else '不命中'} ← {_s.strip()[:46]}",
+              bool(scan(_s, _BRD_PATTERNS)) == _want)
+    check("身份那一半**必须在**（不在的话 board() 恒 None ⇒ 真写用例永远静默跳过，"
+      "而「跳过」看起来只是「前置没配好」、不像是这一族坏了）",
+          "_sign_local_jwt" in _SRC_BRD and "Authorization" in _SRC_BRD)
+    check("'读不到'与'没有'在源码里就分得开（`if board_map is None` 早退，不是 try 里吞异常）",
+          "if board_map is None" in _SRC_BRD)
+    check("在位：正文以夹具名打头 + 待审 ⇒ present",
+          gfb.fixture_state(_BOARD_FIX, {"108": _brow(108)}) == "present")
+    check("行在、已被复核掉（approved=1）⇒ wrong_state（不是「在位」）—— 那条假绿的守卫",
+          gfb.fixture_state(_BOARD_FIX, {"108": _brow(108, approved=1)}) == "wrong_state")
+    check("清单里一行都没有 ⇒ absent", gfb.fixture_state(_BOARD_FIX, {}) == "absent")
+    check("读不到清单 ⇒ unreadable（不是 absent）", gfb
+        .fixture_state(_BOARD_FIX, None) == "unreadable")
+    check("approved 读不出来（脏值）⇒ wrong_state（不知道它什么态，不猜待审）",
+          gfb.fixture_state(_BOARD_FIX, {"108": {"talkKey": 108, "content": _BOARD_FIX}}) == "wrong_state")
+    check("真留言（不以夹具前缀打头）不算数",
+          gfb.fixture_state(_BOARD_FIX, {"7": _brow(7, "垃圾博客")}) == "absent")
+    check("**前缀**而不是整名相等：SQL 的幂等/清场判据就是前缀，检查不能更严（否则"
+      "「检查说没有、清场删不掉」那种行）",
+          gfb.fixture_state(_BOARD_FIX, {"108": _brow(108,
+              _BOARD_FIX + "（第二份）")}) == "present")
+    _lb = {st: gfb.state_label(st, _BOARD_FIX) for st in ("absent", "wrong_state", "unreadable")}
+    check("三种不可用状态各说各的（absent→建、wrong_state→重建、unreadable→身份活着吗）",
+          "先按授权串跑" in _lb["absent"] and "重跑" in _lb["wrong_state"]
+          and "都不知道" in _lb["unreadable"], str(_lb)[:160])
+    check("present 没有话要说（空串，别让调用方拿到一句莫名其妙的话）",
+          gfb.state_label("present", _BOARD_FIX) == "")
+    print("\n⑦e 留言族的残留哨兵：声明的那个放行，其余照报")
+    _DECL_B = [_BOARD_FIX]
+    check("声明的那个放行（留言夹具是**常驻**的，不像分类夹具跑完即消失）",
+          gfb.leftovers({"108": _brow(108)}, _DECL_B) == [])
+    check("前缀族里没被声明的那个照报（中断的 SQL / 手工插入 / 探针没清干净）",
+          gfb.leftovers({"108": _brow(108), "109": _brow(109, "agent_fixture_别的")},
+                        _DECL_B) == ["agent_fixture_别的"])
+    check("真留言不报", gfb.leftovers({"7": _brow(7, "垃圾博客")}, []) == [])
+    check("正文**中间**出现该串的不报（清场语句 `LIKE 'agent_fixture\\_%'` 也删不掉它）",
+          gfb.leftovers({"7": _brow(7, "骂 agent_fixture_ 的人")}, []) == [])
+    check("干净 → 退出码 0、行标 [fixture-clean]",
+          gfb.verify({"108": _brow(108)}, _DECL_B)[0] == 0
+          and not any(gfb.LEFTOVER_TAG in ln for ln in gfb.verify({"108": _brow(108)}, _DECL_B)[1]))
+    _c_b, _l_b = gfb.verify({"108": _brow(108), "109": _brow(109, "agent_fixture_别的")}, _DECL_B)
+    check("有残留 → 退出码 1、逐行点名（带上前缀与清场去向）",
+          _c_b == 1 and gfb.LEFTOVER_TAG in _l_b[0] and "agent_fixture_别的" in _l_b[0]
+          and "回滚段" in _l_b[0], str(_l_b)[:140])
+    check("读不到 → 退出码 2 且明说「不等于没有被残留」（与另两族逐字同一条取向）",
+          gfb.verify(None, _DECL_B)[0] == 2
+          and gfb.UNREADABLE_TAG in gfb.verify(None, _DECL_B)[1][0]
+          and "不等于" in gfb.verify(None, _DECL_B)[1][0])
+    check("不给 --verify → 用法（退出码 2，不是 0）", gfb.main([]) == 2)
+    _old_uid_b = os.environ.pop("GOLDEN_ADMIN_UID", None)
+    try:
+        check("没设 GOLDEN_ADMIN_UID ⇒ board() 返回 None（不发那次注定被拒的请求）",
+              gfb.board() is None)
+    finally:
+        if _old_uid_b is not None:
+            os.environ["GOLDEN_ADMIN_UID"] = _old_uid_b
+    print("\n⑧ 夹具闸（三族共用一个实现，两个跑法调用同一个函数）")
+    _GATE_CASES = [
+        {"id": "c1", "requires_fixture": "agent_fixture_category_a"},
+        {"id": "c2", "requires_fixture": "agent_fixture_freeze_a",
+            "requires_fixture_kind": "account"},
+        {"id": "c3", "requires_fixture": "agent_fixture_category_b"},
+        {"id": "c4"},
+        {"id": "c5", "requires_fixture": _BOARD_FIX, "requires_fixture_kind": "board"},
+    ]
+    _SNAPS = {"category": ["编程"],
+              "account": {"agent_fixture_freeze_a": _FIXROW},
+              "board": {"108": _brow(108)}}
+    _old_snap = gf.snapshot
+    gf.snapshot = lambda kind: _SNAPS[kind]
+    try:
+        _kept, _drop, _lines = gf.gate(list(_GATE_CASES))
+        check("在位的那条留着、不在位的摘掉、没声明的原样通过",
+              [c["id"] for c in _kept] == ["c2", "c4", "c5"], str([c["id"] for c in _kept]))
+        check("被摘掉的 id 按声明逐个报出来（计入分母变化）", _drop == ["c1", "c3"], str(_drop))
+        check("不写 kind = 分类族（存量用例的语义一个字都没变）",
+              "c1" in _drop and "c2" not in _drop)
+        # 第二遍：三族夹具**分别在位/不在位**——每一族的理由各说各的（分类族指公开列表，
+        # 账号族指复位 SQL，留言族指"被人在后台复核掉了、重跑那份 SQL"）。只跑一遍
+        # "夹具都在位"是看不到这三句话里任何一句的。
+        gf.snapshot = lambda kind: {"category": ["agent_fixture_category_a"],
+                                    "account": {"agent_fixture_freeze_a": {"status": 0}},
+                                    "board": {"108": _brow(108, approved=1)}}[kind]
+        _kept2, _drop2, _lines2 = gf.gate(list(_GATE_CASES))
+        _cat_ln = [ln for ln in _lines2 if ln.startswith("[skip] c3")]
+        _acc_ln = [ln for ln in _lines2 if ln.startswith("[skip] c2")]
+        _brd_ln = [ln for ln in _lines2 if ln.startswith("[skip] c5")]
+        check("夹具行在但状态不对 ⇒ 不可用（不是「在位」）—— 这就是那条假绿的守卫",
+              _drop2 == ["c2", "c3", "c5"] and [c["id"] for c in _kept2] == ["c1", "c4"],
+              str((_drop2, [c["id"] for c in _kept2])))
+        check("三族的跳过理由各说各的（公开列表 / 复位 SQL / 复核掉了）",
+              bool(_cat_ln) and "公开分类" in _cat_ln[0]
+              and bool(_acc_ln) and "复位" in _acc_ln[0]
+              and bool(_brd_ln) and "复核" in _brd_ln[0], str(_lines2)[:240])
+        # 快照按 kind 只取一次：两条分类用例共用一份（省一次往返，也保证看到同一份清单）
+        _calls: list[str] = []
+        gf.snapshot = lambda kind: (_calls.append(kind), _SNAPS[kind])[1]
+        gf.gate(list(_GATE_CASES))
+        check("同族夹具只取一次快照（同一批用例看到同一份）", _calls.count("category") == 1,
+              str(_calls))
+        # 未知 kind 必须**响亮报错**：拼错一个字母会让闸去查另一族 ⇒ 用例静默跳过，
+        # 而打印出来的理由是"那一族里没有它"（读的人只会去查那一族）。
+        gf.snapshot = _old_snap
+        try:
+            gf.gate([{"id": "c9", "requires_fixture": "agent_fixture_x",
+                      "requires_fixture_kind": "acount"}])
+            check("未知 kind → 响亮报错（不是退回分类族）", False, "没报错")
+        except SystemExit as e:
+            check("未知 kind → 响亮报错（不是退回分类族）", "acount" in str(e), str(e)[:80])
+    except Exception as e:  # noqa: BLE001
+        check(f"夹具闸的用例集跑通（异常：{type(e).__name__}: {e}）", False)
+    finally:
+        gf.snapshot = _old_snap
+    _kinds = {(c["id"], str(c.get("requires_fixture_kind") or "category"))
+              for c in _CASES if c.get("requires_fixture")}
+    check("用例里出现的每个 requires_fixture_kind 都在 FIXTURE_KINDS 里",
+          all(k in gf.FIXTURE_KINDS for _, k in _kinds), str(sorted(_kinds)))
+    _acc_cases = [cid for cid, k in _kinds if k == "account"]
+    check("账号族夹具用例真的在文件里（这条闸不是空转的）", bool(_acc_cases), str(_acc_cases))
+    check("账号族用例声明的名字与 declared_fixtures() 同源（哨兵要放行它，名字只能有一处来源）",
+          set(gfa.declared_fixtures()) == {c["requires_fixture"] for c in _CASES
+                                           if c.get("requires_fixture")
+                                           and str(c.get("requires_fixture_kind")
+                                               or "") == "account"},
+          str(gfa.declared_fixtures()))
+    _board_cases = [cid for cid, k in _kinds if k == "board"]
+    check("留言族夹具用例真的在文件里（这条闸不是空转的）", bool(_board_cases), str(_board_cases))
+    check("留言族用例声明的名字与 declared_fixtures() 同源（哨兵要放行它，名字只能有一处来源）",
+          set(gfb.declared_fixtures()) == {c["requires_fixture"] for c in _CASES
+                                           if c.get("requires_fixture")
+                                           and str(c.get("requires_fixture_kind")
+                                               or "") == "board"},
+          str(gfb.declared_fixtures()))
+    check("留言族用例声明的那个名字，正是那份迁移 SQL 建出来的正文（用例改了名字而 SQL 还在建"
+      "旧的 ⇒ 红在这里，而不是红成「模型没按台账办」）",
+          gfb.declared_fixtures() == [_BOARD_FIX], str(gfb.declared_fixtures()))
+    print("\n⑦f 待办族只有一条读通道（源码扫描，与账号族 / 留言族互为镜像）")
+    _SRC_TODO = (ROOT / "eval/golden_fixture_todo.py").read_text(encoding="utf-8")
+    _TODO_PATTERNS = _WRITE_VERBS + ('"POST"', '"PUT"', '"DELETE"', "method=",
+                                     "/item", "/done", "/date", "subprocess", "os.system")
+    _hits_t = scan(_SRC_TODO, _TODO_PATTERNS)
+    check("待办族模块里没有任何写形状 / 本端点特有的写形状（只有 GET）",
+          not _hits_t, f"命中：{sorted(set(_hits_t))}")
+    for _s, _want in [
+        ('_req = Request(url, data, headers=tok, method="POST")', True),
+        ('urllib.request.Request(f"{ADMIN_BASE}{TODO_PATH}", headers=h)', False),
+        ('    # 顺手 .post( 一下会怎样', False),
+            # 注释：不算（与 ④/⑦c/⑦d 同一个剥注释规则）
+        ('    return f"{ADMIN_BASE}/api/protected/todos/done"', True),
+    ]:
+        check(f"待办族扫描样本：{'命中' if _want else '不命中'} ← {_s.strip()[:46]}",
+              bool(scan(_s, _TODO_PATTERNS)) == _want)
+    check("身份那一半**必须在**（不在的话 todo_rows() 恒 None ⇒ 用例永远静默跳过，"
+      "而「跳过」看起来只是「前置没配好」、不像是这一族坏了）",
+          "_sign_local_jwt" in _SRC_TODO and "Authorization" in _SRC_TODO)
+    check("'读不到'与'没有'在源码里就分得开（`if rows is None` 早退，不是 try 里吞异常）",
+          "if rows is None" in _SRC_TODO)
+    check("在位：正文对得上 + 未完成 + 排期对得上 ⇒ present",
+          gft.fixture_state(_TODO_FIX, [_trow()]) == "present")
+    check("行在、**已经完成** ⇒ wrong_state（不是「在位」）—— 这一条就是那条守卫：勾完成的卡"
+      "前面有「状态已达成 ⇒ 掏空、不弹卡」，放它跑，用例要的那张卡根本不存在",
+          gft.fixture_state(_TODO_FIX, [_trow(done=True)]) == "wrong_state")
+    check("同名两条 ⇒ wrong_state（歧义即零写，卡弹不出来）",
+          gft.fixture_state(_TODO_FIX, [_trow(), _trow()]) == "wrong_state")
+    check("排期不是约定的那个日子 ⇒ wrong_state（用例断言里逐字带着它渲染出的中文；不判就会"
+      "红成「模型没按台账念」——同一张红脸底下是前提过期，不是回归）",
+          gft.fixture_state(_TODO_FIX, [_trow(date="2026-12-01")]) == "wrong_state")
+    check("排期读不出来（缺键 / null）⇒ wrong_state（没排期的那一天也是「不是约定的那天」）",
+          gft.fixture_state(_TODO_FIX, [_trow(date=None)]) == "wrong_state"
+          and gft.fixture_state(_TODO_FIX, [{"text": _TODO_FIX, "done": False}]) == "wrong_state")
+    check("expect_date=None ⇒ **不判排期**（给将来不留排期的夹具留的口子，不是默认）",
+          gft.fixture_state(_TODO_FIX, [_trow(date=None)], expect_date=None) == "present")
+    check("排期那半个判据剔两端空白后**串相等**（与正文判据同一条取向：不同形状的等价物不该被判成"
+      "两种状态，脏值也不该被猜成一个日子）",
+          gft.fixture_state(_TODO_FIX, [_trow(date=" 2026-11-30 ")]) == "present"
+          and gft.fixture_state(_TODO_FIX, [_trow(date="2026-11-30T00:00:00")]) == "wrong_state")
+    check("空列表 ⇒ absent（读到了、就是没有——这是事实）",
+          gft.fixture_state(_TODO_FIX, []) == "absent")
+    check("读不到列表 ⇒ unreadable（不是 absent）", gft
+        .fixture_state(_TODO_FIX, None) == "unreadable")
+    check("完成态读不出来（缺键）⇒ wrong_state（不知道它什么态，不猜未完成）",
+          gft.fixture_state(_TODO_FIX, [{"text": _TODO_FIX}]) == "wrong_state")
+    check("真待办（不以夹具前缀打头）不算数",
+          gft.fixture_state(_TODO_FIX, [_trow("给多肉浇水")]) == "absent")
+    check("**前缀**而不是整名相等：SQL 的幂等/清场判据就是前缀，检查不能更严（否则"
+      "「检查说没有、清场删不掉」那种行）",
+          gft.fixture_state(_TODO_FIX, [_trow(_TODO_FIX + "（第二份）")]) == "present")
+    check("expect_done 可显式传（默认值不是写死的判据：要已完成夹具的用例传 True 就 present）",
+          gft.fixture_state(_TODO_FIX, [_trow(done=True)], expect_done=True) == "present")
+    _lt = {st: gft.state_label(st, _TODO_FIX) for st in ("absent", "wrong_state", "unreadable")}
+    check("三种不可用状态各说各的（absent→建、wrong_state→复位、unreadable→身份活着吗）",
+          "先按授权串跑" in _lt["absent"] and "重跑" in _lt["wrong_state"]
+          and "都不知道" in _lt["unreadable"], str(_lt)[:160])
+    check("wrong_state 那句点名了**两个**成因（已完成 / 同名多条），不然读的人只会去查一个方向",
+          "勾成完成" in _lt["wrong_state"] and "同名"
+              in _lt["wrong_state"], _lt["wrong_state"][:120])
+    check("present 没有话要说（空串，别让调用方拿到一句莫名其妙的话）",
+          gft.state_label("present", _TODO_FIX) == "")
+    print("\n⑦g 待办族的残留哨兵：声明的那个放行，其余照报")
+    _DECL_T = [_TODO_FIX]
+    check("声明的那个放行（待办夹具是**常驻**的：用例只读它、不改它）",
+          gft.leftovers([_trow()], _DECL_T) == [])
+    check("前缀族里没被声明的那个照报（中断的 SQL / 手工插入）",
+          gft.leftovers([_trow(), _trow("agent_fixture_别的")], _DECL_T) == ["agent_fixture_别的"])
+    check("真待办不报", gft.leftovers([_trow("给多肉浇水")], []) == [])
+    check("正文**中间**出现该串的不报（清场语句 `LIKE 'agent_fixture\\_%'` 也删不掉它）",
+          gft.leftovers([_trow("去改 agent_fixture_ 的靶子")], []) == [])
+    check("干净 → 退出码 0、行标 [fixture-clean]",
+          gft.verify([_trow()], _DECL_T)[0] == 0
+          and not any(gft.LEFTOVER_TAG in ln for ln in gft.verify([_trow()], _DECL_T)[1]))
+    _c_t, _l_t = gft.verify([_trow(), _trow("agent_fixture_别的")], _DECL_T)
+    check("有残留 → 退出码 1、逐行点名（带上前缀与清场去向）",
+          _c_t == 1 and gft.LEFTOVER_TAG in _l_t[0] and "agent_fixture_别的" in _l_t[0]
+          and "回滚段" in _l_t[0], str(_l_t)[:140])
+    check("读不到 → 退出码 2 且明说「不等于没有被残留」（与另三族逐字同一条取向）",
+          gft.verify(None, _DECL_T)[0] == 2
+          and gft.UNREADABLE_TAG in gft.verify(None, _DECL_T)[1][0]
+          and "不等于" in gft.verify(None, _DECL_T)[1][0])
+    check("不给 --verify → 用法（退出码 2，不是 0）", gft.main([]) == 2)
+    _old_uid_t = os.environ.pop("GOLDEN_ADMIN_UID", None)
+    try:
+        check("没设 GOLDEN_ADMIN_UID ⇒ todo_rows() 返回 None（不发那次注定被拒的请求）",
+              gft.todo_rows() is None)
+    finally:
+        if _old_uid_t is not None:
+            os.environ["GOLDEN_ADMIN_UID"] = _old_uid_t
+    print("\n⑦h 夹具闸的三处分派都认得 todo 族（少一处会**静默**退回分类族的判据）")
+    _old_todo_rows, _old_snap_t = gft.todo_rows, gf.snapshot
+    gft.todo_rows = lambda: [_trow()]
+    try:
+        _snap_t = gf.snapshot("todo")
+        check("snapshot('todo') 走的是待办族那条读路径",
+              _snap_t == [_trow()], str(_snap_t))
+        check("state_of('todo', …) 用的是待办族的判据（未完成 ⇒ present；分类族会判 absent）",
+              gf.state_of("todo", _TODO_FIX, [_trow()]) == "present")
+        check("state_of('todo', …) 的 wrong_state 也是待办族那一套（同名两条 ⇒ 不可用）",
+              gf.state_of("todo", _TODO_FIX, [_trow(), _trow()]) == "wrong_state")
+        check("skip_reason('todo', …) 说的是待办族那句（点名待办那份 SQL）",
+              "golden_fixture_todo_20261003.sql" in gf.skip_reason("todo", _TODO_FIX, "absent"))
+    finally:
+        gft.todo_rows, gf.snapshot = _old_todo_rows, _old_snap_t
+    _todo_cases = [cid for cid, k in _kinds if k == "todo"]
+    check("待办族夹具用例真的在文件里（这条闸不是空转的）", bool(_todo_cases), str(_todo_cases))
+    check("待办族用例声明的名字与 declared_fixtures() 同源（哨兵要放行它，名字只能有一处来源）",
+          set(gft.declared_fixtures()) == {c["requires_fixture"] for c in _CASES
+                                           if c.get("requires_fixture")
+                                           and str(c.get("requires_fixture_kind") or "") == "todo"},
+          str(gft.declared_fixtures()))
+    check("待办族用例声明的那个正文，正是那份迁移 SQL 建出来的（用例改了正文而 SQL 还在建"
+      "旧的 ⇒ 红在这里，而不是红成「模型没按台账办」）",
+          gft.declared_fixtures() == [_TODO_FIX], str(gft.declared_fixtures()))
+    check("用上待办夹具的那条用例带真身份（夹具闸会读管理员域接口，没身份就只会一直跳过）",
+          all(c.get("needs_admin_uid") for c in _CASES
+              if str(c.get("requires_fixture_kind") or "") == "todo"),
+          str(_todo_cases))
+    _todo_gold = next(c for c in _CASES if c["id"] == "admin_todo_done_popup")["gold"]
+    _rx_t = " ".join(_todo_gold.get("text_any_regex") or [])
+    check("用例断言的排期，正是待办族约定的那一个日子渲染出来的（EXPECT_DATE ↔ 用例断言）",
+          f"排期 {_todo.due_date_cn(gft.EXPECT_DATE)}，现在：未完成" in _rx_t,
+          _rx_t[:120])
+    check("用例断言里带着「现在：未完成」——这半句只在**读到唯一命中行**时才印（uid=0 的退化卡面"
+      "只有正文、没有这对括号），所以它就是「真身份那一跳真的落到了那一行」的证据",
+          "现在：未完成" in _rx_t)
+    print()
+    if FAILS:
+        print(f"=== {len(FAILS)} 项失败 ===")
+        for f in FAILS:
+            print("  -", f)
+        sys.exit(1)
+    print("=== 全部通过 ===")
+
+    assert not FAILS, (
+        f"{len(FAILS)} 条未通过：" + "；".join(FAILS))
+
+
+if __name__ == "__main__":
+    test_golden_fixture()

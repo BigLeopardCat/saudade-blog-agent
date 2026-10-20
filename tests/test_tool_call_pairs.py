@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """`with_tool_call_pairs` 的离线单测（20260928）。
 
 **为什么这个补形状的函数要有测试**：它坐在 narrator 的**唯一一次 LLM 调用**前面，
@@ -16,25 +15,27 @@ qwen 端点容忍 `role:"tool"` 前面没有 `tool_calls` 的非法序列，deep
 秒级、纯数据，不联网、不跑 LLM。
 用法：.venv/bin/python tests/test_tool_call_pairs.py
 """
+
+
 from __future__ import annotations
 
 import sys
 from pathlib import Path
 
+from _judge import collector
+
 ROOT = Path(__file__).resolve().parent.parent
+
+
 sys.path.insert(0, str(ROOT))
+
 
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage  # noqa: E402
 
 from agent.prompt_context import with_tool_call_pairs  # noqa: E402
 
 FAILED: list[str] = []
-
-
-def check(name: str, ok: bool, extra: str = "") -> None:
-    print(f"  {'✅' if ok else '❌'} {name}" + (f"  [{extra}]" if extra else ""))
-    if not ok:
-        FAILED.append(name)
+check = collector(FAILED)
 
 
 def frame(name: str, idx: int, text: str = "已执行") -> ToolMessage:
@@ -42,71 +43,6 @@ def frame(name: str, idx: int, text: str = "已执行") -> ToolMessage:
     return ToolMessage(content=text, tool_call_id=f"execute_{idx}", name=name)
 
 
-print("① 孤儿帧被认领")
-msgs = [HumanMessage(content="帮我开樱花特效"), frame("toggle_effect", 0)]
-out = with_tool_call_pairs(msgs)
-check("多出一条 assistant，位置在帧之前",
-      [type(m).__name__ for m in out] == ["HumanMessage", "AIMessage", "ToolMessage"],
-      str([type(m).__name__ for m in out]))
-ai = out[1]
-check("tool_calls 的 id 就是帧自己那个（服务商靠它配对）",
-      [tc["id"] for tc in ai.tool_calls] == ["execute_0"], str(ai.tool_calls))
-check("函数名取自帧的 name", [tc["name"] for tc in ai.tool_calls] == ["toggle_effect"],
-      str(ai.tool_calls))
-check("assistant 正文为空——补的是形状，不是给模型加话",
-      not ai.content, repr(ai.content))
-check("帧对象本身没被改动（同一份材料照旧进提示词）",
-      out[2] is msgs[1] and out[2].content == "已执行")
-
-print("\n② 连续多条合进同一条 assistant")
-msgs = [HumanMessage(content="带我去留言板"), frame("navigate_to", 0),
-        frame("toggle_effect", 1)]
-out = with_tool_call_pairs(msgs)
-check("只多一条 assistant（= 一轮并行调用）",
-      [type(m).__name__ for m in out] ==
-      ["HumanMessage", "AIMessage", "ToolMessage", "ToolMessage"],
-      str([type(m).__name__ for m in out]))
-check("两个 id 都在同一条上",
-      [tc["id"] for tc in out[1].tool_calls] == ["execute_0", "execute_1"],
-      str(out[1].tool_calls))
-
-print("\n③ 幂等：本来合法的序列原样透过")
-legal = [HumanMessage(content="带我去留言板"),
-         AIMessage(content="", tool_calls=[{"name": "navigate_to", "args": {},
-                                            "id": "execute_0", "type": "tool_call"}]),
-         frame("navigate_to", 0)]
-again = with_tool_call_pairs(legal)
-check("不再补第二条 assistant（补过头 = 给模型看它没做过的调用）",
-      [type(m).__name__ for m in again] ==
-      ["HumanMessage", "AIMessage", "ToolMessage"], str([type(m).__name__ for m in again]))
-check("跑两遍与跑一遍结果同形", with_tool_call_pairs(again) == again or
-      [type(m).__name__ for m in with_tool_call_pairs(again)] ==
-      [type(m).__name__ for m in again])
-part = [HumanMessage(content="x"),
-        AIMessage(content="", tool_calls=[{"name": "a", "args": {}, "id": "execute_0",
-                                          "type": "tool_call"}]),
-        frame("a", 0), frame("b", 1)]
-out = with_tool_call_pairs(part)
-check("只认领了一半的帧组照样补（配对逐条对，不是「前一条是 assistant 就算」）",
-      [type(m).__name__ for m in out] ==
-      ["HumanMessage", "AIMessage", "ToolMessage", "AIMessage", "ToolMessage"],
-      str([type(m).__name__ for m in out]))
-check("被补的那条只认领没被认领的帧（认领过的前缀原样透过，不重复挂）",
-      [tc["id"] for tc in out[3].tool_calls] == ["execute_1"], str(out[3].tool_calls))
-
-print("\n④ 零帧 / 纯历史：一个字节都不动")
-plain = [HumanMessage(content="你好"), AIMessage(content="喵～")]
-check("没有 ToolMessage 时原样返回（引用相等，连拷贝都不做）",
-      with_tool_call_pairs(plain) == plain and len(with_tool_call_pairs(plain)) == 2)
-check("空列表不炸", with_tool_call_pairs([]) == [])
-check("末尾是帧时也收尾（循环后必须 flush 一次）",
-      len(with_tool_call_pairs([HumanMessage(content="x"), frame("t", 0)])) == 3)
-
-print("\n⑤ 跨轮唯一性：id 是**请求内**的身份，不是本轮位次（20261006）")
-# 这一节治的是"形状函数的输入"：`task_id` 一旦在同一请求里重复，服务商就拒收整条
-# 序列（`Duplicate value for 'tool_call_id' of execute_0`，原话见 graph.py::_frame_id）。
-# 上面四节全部照样通过——它们每次只喂**一轮**的帧，而这正是它在生产里藏了 8 天的原因：
-# 判据（以及 qwen 端点）都只看一轮。
 from langchain_core.messages import ToolMessage as _TM  # noqa: E402
 
 from agent.graph import _frame_id  # noqa: E402
@@ -141,126 +77,172 @@ def round_frames(prev: list, tools: list[str], old: bool = False) -> list:
     return out
 
 
-# 修前现场：两轮各一条（第 2 轮是 planner 受阻后重决策，最常见）。
-_PREV = [HumanMessage(content="帮我删掉标签「大笨狗」")]
-_R1_OLD = round_frames(_PREV, ["list_tags"], old=True)
-_R2_OLD = round_frames(_PREV + _R1_OLD, ["list_tags"], old=True)
-check("★ 正控（修前口径）：两轮并进一条 assistant 后**确实**出现重复 id"
-      "——这条不红，下面那条绿就是假的",
-      dup_ids(with_tool_call_pairs(_PREV + _R1_OLD + _R2_OLD)) == ["execute_0"],
-      str(dup_ids(with_tool_call_pairs(_PREV + _R1_OLD + _R2_OLD))))
-
-_R1 = round_frames(_PREV, ["list_tags"])
-_R2 = round_frames(_PREV + _R1, ["delete_tag"])
-_WIRE = with_tool_call_pairs(_PREV + _R1 + _R2)
-check("修后：同一条序列喂进去，一个重复都没有",
-      dup_ids(_WIRE) == [], str(dup_ids(_WIRE)))
-check("  两轮的帧仍并进同一条 assistant（补形状的语义没变，只换 id）",
-      [type(m).__name__ for m in _WIRE] ==
-      ["HumanMessage", "AIMessage", "ToolMessage", "ToolMessage"],
-      str([type(m).__name__ for m in _WIRE]))
-check("  配对仍然成立：每条帧的 id 都被它前面那条 assistant 声明过",
-      [str(tc["id"]) for tc in _WIRE[1].tool_calls] ==
-      [str(getattr(m, "tool_call_id", "")) for m in _WIRE[2:]],
-      str([tc["id"] for tc in _WIRE[1].tool_calls]))
-check("  id 单调可读（第 2 轮接着第 1 轮往下数，不回退）",
-      [str(getattr(m, "tool_call_id", "")) for m in _R1 + _R2] ==
-      ["execute_0", "execute_1"],
-      str([getattr(m, "tool_call_id", "") for m in _R1 + _R2]))
-
-# 同一轮里多条并行帧：base 对整轮是常量、靠 idx 分开（别把 base 也当成逐帧累加）。
-_R3 = round_frames(_PREV + _R1 + _R2, ["a", "b", "c"])
-check("同一轮 3 条并行帧互不相同，且接在已有帧之后",
-      [str(getattr(m, "tool_call_id", "")) for m in _R3] ==
-      ["execute_2", "execute_3", "execute_4"],
-      str([getattr(m, "tool_call_id", "") for m in _R3]))
-check("入参不被改动（纯函数；`state[\"messages\"]` 是别人的）",
-      _frame_id(_PREV + _R1, 0) == "execute_1" and len(_PREV) == 1)
-check("空/无帧序列不炸", _frame_id([], 0) == "execute_0"
-      and _frame_id(None, 2) == "execute_2")
-
-# 生产端的接线：`execute_node` 必须**调**这个函数，不能把 `execute_{idx}` 写回来。
-_SRC = (ROOT / "agent" / "graph.py").read_text(encoding="utf-8")
-check("接线：帧的 id 由 `_frame_id` 出（写回 `execute_{idx}` 会被这条抓住）",
-      "tool_call_id=_frame_id(state.get(\"messages\"), idx)" in _SRC)
-check("  旧的逐轮位次写法在源码里已经不存在",
-      'tool_call_id=f"execute_{idx}"' not in _SRC)
-
-print("\n⑥ 出站合规绊线：发出去之前自己先量一遍（20261006）")
-# 这一节治的是"合法性只由服务商来告诉我们"：`tool_call_id` 的重复让 deepseek 整轮 400，
-# 而 qwen 容忍 ⇒ 生产一直绿、洞躺了 8 天。`strict_wire_issues` 把服务商的拒收理由变成
-# 我们这边一条**零成本、离线可测**的读数；它**只报不修**（修在 `_frame_id`）。
 from agent.prompt_context import strict_wire_issues  # noqa: E402
 
-check("★ 正控（修前口径）：两轮的帧并进一条 assistant ⇒ 绊线必须亮",
-      any(s.startswith("a:") for s in strict_wire_issues(with_tool_call_pairs(_PREV + _R1_OLD + _R2_OLD))),
-      str(strict_wire_issues(with_tool_call_pairs(_PREV + _R1_OLD + _R2_OLD))[:1]))
-check("修后的真序列：一处不合规都没有（两条修一起才对得上）",
-      strict_wire_issues(_WIRE) == [], str(strict_wire_issues(_WIRE)))
-check("  same-round 并行帧那组也合规", strict_wire_issues(
-    with_tool_call_pairs(_PREV + _R3)) == [],
-    str(strict_wire_issues(with_tool_call_pairs(_PREV + _R3))))
-check("原本就合法的序列（③ 那组）合规", strict_wire_issues(legal) == [],
-      str(strict_wire_issues(legal)))
 
-check("b: 同一个 id 出现在两条帧上 → 亮",
-      any(s.startswith("b:") for s in strict_wire_issues(
-          [HumanMessage(content="x"), frame("a", 0), frame("b", 0)])),
-      str(strict_wire_issues([HumanMessage(content="x"), frame("a", 0), frame("b", 0)])))
-check("c: 帧前面没有 assistant 声明过 → 亮（`role:\"tool\"` 不许凭空出现）",
-      any(s.startswith("c:") for s in strict_wire_issues(
-          [HumanMessage(content="x"), frame("a", 0)])),
-      str(strict_wire_issues([HumanMessage(content="x"), frame("a", 0)])))
-check("d: 非末尾的 assistant 声明了 id 却没有帧回应 → 亮",
-      any(s.startswith("d:") for s in strict_wire_issues(
-          [HumanMessage(content="x"),
-           AIMessage(content="", tool_calls=[{"name": "a", "args": {}, "id": "execute_0",
-                                             "type": "tool_call"}]),
-           HumanMessage(content="还在吗")])),
-      str(strict_wire_issues(
-          [HumanMessage(content="x"),
-           AIMessage(content="", tool_calls=[{"name": "a", "args": {}, "id": "execute_0",
-                                             "type": "tool_call"}]),
-           HumanMessage(content="还在吗")])))
-check("  例外：**末尾**那条 assistant 声明着调用是正常形态（等模型接着调）→ 不亮",
-      strict_wire_issues(
-          [HumanMessage(content="x"),
-           AIMessage(content="", tool_calls=[{"name": "a", "args": {}, "id": "execute_0",
-                                             "type": "tool_call"}])]) == [])
-check("纯函数：量一遍不改入参（形状也不改）",
-      (lambda s: (strict_wire_issues(s), s == _WIRE)[1])(_WIRE) and
-      len(strict_wire_issues([])) == 0)
+def test_tool_call_pairs():
+    print("① 孤儿帧被认领")
+    msgs = [HumanMessage(content="帮我开樱花特效"), frame("toggle_effect", 0)]
+    out = with_tool_call_pairs(msgs)
+    check("多出一条 assistant，位置在帧之前",
+          [type(m).__name__ for m in out] == ["HumanMessage", "AIMessage", "ToolMessage"],
+          str([type(m).__name__ for m in out]))
+    ai = out[1]
+    check("tool_calls 的 id 就是帧自己那个（服务商靠它配对）",
+          [tc["id"] for tc in ai.tool_calls] == ["execute_0"], str(ai.tool_calls))
+    check("函数名取自帧的 name", [tc["name"] for tc in ai.tool_calls] == ["toggle_effect"],
+          str(ai.tool_calls))
+    check("assistant 正文为空——补的是形状，不是给模型加话",
+          not ai.content, repr(ai.content))
+    check("帧对象本身没被改动（同一份材料照旧进提示词）",
+          out[2] is msgs[1] and out[2].content == "已执行")
+    print("\n② 连续多条合进同一条 assistant")
+    msgs = [HumanMessage(content="带我去留言板"), frame("navigate_to", 0),
+            frame("toggle_effect", 1)]
+    out = with_tool_call_pairs(msgs)
+    check("只多一条 assistant（= 一轮并行调用）",
+          [type(m).__name__ for m in out] ==
+          ["HumanMessage", "AIMessage", "ToolMessage", "ToolMessage"],
+          str([type(m).__name__ for m in out]))
+    check("两个 id 都在同一条上",
+          [tc["id"] for tc in out[1].tool_calls] == ["execute_0", "execute_1"],
+          str(out[1].tool_calls))
+    print("\n③ 幂等：本来合法的序列原样透过")
+    legal = [HumanMessage(content="带我去留言板"),
+             AIMessage(content="", tool_calls=[{"name": "navigate_to", "args": {},
+                                                "id": "execute_0", "type": "tool_call"}]),
+             frame("navigate_to", 0)]
+    again = with_tool_call_pairs(legal)
+    check("不再补第二条 assistant（补过头 = 给模型看它没做过的调用）",
+          [type(m).__name__ for m in again] ==
+          ["HumanMessage", "AIMessage", "ToolMessage"], str([type(m).__name__ for m in again]))
+    check("跑两遍与跑一遍结果同形", with_tool_call_pairs(again) == again or
+          [type(m).__name__ for m in with_tool_call_pairs(again)] ==
+          [type(m).__name__ for m in again])
+    part = [HumanMessage(content="x"),
+            AIMessage(content="", tool_calls=[{"name": "a", "args": {}, "id": "execute_0",
+                                              "type": "tool_call"}]),
+            frame("a", 0), frame("b", 1)]
+    out = with_tool_call_pairs(part)
+    check("只认领了一半的帧组照样补（配对逐条对，不是「前一条是 assistant 就算」）",
+          [type(m).__name__ for m in out] ==
+          ["HumanMessage", "AIMessage", "ToolMessage", "AIMessage", "ToolMessage"],
+          str([type(m).__name__ for m in out]))
+    check("被补的那条只认领没被认领的帧（认领过的前缀原样透过，不重复挂）",
+          [tc["id"] for tc in out[3].tool_calls] == ["execute_1"], str(out[3].tool_calls))
+    print("\n④ 零帧 / 纯历史：一个字节都不动")
+    plain = [HumanMessage(content="你好"), AIMessage(content="喵～")]
+    check("没有 ToolMessage 时原样返回（引用相等，连拷贝都不做）",
+          with_tool_call_pairs(plain) == plain and len(with_tool_call_pairs(plain)) == 2)
+    check("空列表不炸", with_tool_call_pairs([]) == [])
+    check("末尾是帧时也收尾（循环后必须 flush 一次）",
+          len(with_tool_call_pairs([HumanMessage(content="x"), frame("t", 0)])) == 3)
+    print("\n⑤ 跨轮唯一性：id 是**请求内**的身份，不是本轮位次（20261006）")
+    _PREV = [HumanMessage(content="帮我删掉标签「大笨狗」")]
+    _R1_OLD = round_frames(_PREV, ["list_tags"], old=True)
+    _R2_OLD = round_frames(_PREV + _R1_OLD, ["list_tags"], old=True)
+    check("★ 正控（修前口径）：两轮并进一条 assistant 后**确实**出现重复 id"
+      "——这条不红，下面那条绿就是假的",
+          dup_ids(with_tool_call_pairs(_PREV + _R1_OLD + _R2_OLD)) == ["execute_0"],
+          str(dup_ids(with_tool_call_pairs(_PREV + _R1_OLD + _R2_OLD))))
+    _R1 = round_frames(_PREV, ["list_tags"])
+    _R2 = round_frames(_PREV + _R1, ["delete_tag"])
+    _WIRE = with_tool_call_pairs(_PREV + _R1 + _R2)
+    check("修后：同一条序列喂进去，一个重复都没有",
+          dup_ids(_WIRE) == [], str(dup_ids(_WIRE)))
+    check("  两轮的帧仍并进同一条 assistant（补形状的语义没变，只换 id）",
+          [type(m).__name__ for m in _WIRE] ==
+          ["HumanMessage", "AIMessage", "ToolMessage", "ToolMessage"],
+          str([type(m).__name__ for m in _WIRE]))
+    check("  配对仍然成立：每条帧的 id 都被它前面那条 assistant 声明过",
+          [str(tc["id"]) for tc in _WIRE[1].tool_calls] ==
+          [str(getattr(m, "tool_call_id", "")) for m in _WIRE[2:]],
+          str([tc["id"] for tc in _WIRE[1].tool_calls]))
+    check("  id 单调可读（第 2 轮接着第 1 轮往下数，不回退）",
+          [str(getattr(m, "tool_call_id", "")) for m in _R1 + _R2] ==
+          ["execute_0", "execute_1"],
+          str([getattr(m, "tool_call_id", "") for m in _R1 + _R2]))
+    _R3 = round_frames(_PREV + _R1 + _R2, ["a", "b", "c"])
+    check("同一轮 3 条并行帧互不相同，且接在已有帧之后",
+          [str(getattr(m, "tool_call_id", "")) for m in _R3] ==
+          ["execute_2", "execute_3", "execute_4"],
+          str([getattr(m, "tool_call_id", "") for m in _R3]))
+    check("入参不被改动（纯函数；`state[\"messages\"]` 是别人的）",
+          _frame_id(_PREV + _R1, 0) == "execute_1" and len(_PREV) == 1)
+    check("空/无帧序列不炸", _frame_id([], 0) == "execute_0"
+          and _frame_id(None, 2) == "execute_2")
+    _SRC = (ROOT / "agent" / "graph.py").read_text(encoding="utf-8")
+    check("接线：帧的 id 由 `_frame_id` 出（写回 `execute_{idx}` 会被这条抓住）",
+          "tool_call_id=_frame_id(state.get(\"messages\"), idx)" in _SRC)
+    check("  旧的逐轮位次写法在源码里已经不存在",
+          'tool_call_id=f"execute_{idx}"' not in _SRC)
+    print("\n⑥ 出站合规绊线：发出去之前自己先量一遍（20261006）")
+    check("★ 正控（修前口径）：两轮的帧并进一条 assistant ⇒ 绊线必须亮",
+          any(s.startswith("a:") for s in strict_wire_issues(with_tool_call_pairs(_PREV + _R1_OLD + _R2_OLD))),
+          str(strict_wire_issues(with_tool_call_pairs(_PREV + _R1_OLD + _R2_OLD))[:1]))
+    check("修后的真序列：一处不合规都没有（两条修一起才对得上）",
+          strict_wire_issues(_WIRE) == [], str(strict_wire_issues(_WIRE)))
+    check("  same-round 并行帧那组也合规", strict_wire_issues(
+        with_tool_call_pairs(_PREV + _R3)) == [],
+        str(strict_wire_issues(with_tool_call_pairs(_PREV + _R3))))
+    check("原本就合法的序列（③ 那组）合规", strict_wire_issues(legal) == [],
+          str(strict_wire_issues(legal)))
+    check("b: 同一个 id 出现在两条帧上 → 亮",
+          any(s.startswith("b:") for s in strict_wire_issues(
+              [HumanMessage(content="x"), frame("a", 0), frame("b", 0)])),
+          str(strict_wire_issues([HumanMessage(content="x"), frame("a", 0), frame("b", 0)])))
+    check("c: 帧前面没有 assistant 声明过 → 亮（`role:\"tool\"` 不许凭空出现）",
+          any(s.startswith("c:") for s in strict_wire_issues(
+              [HumanMessage(content="x"), frame("a", 0)])),
+          str(strict_wire_issues([HumanMessage(content="x"), frame("a", 0)])))
+    check("d: 非末尾的 assistant 声明了 id 却没有帧回应 → 亮",
+          any(s.startswith("d:") for s in strict_wire_issues(
+              [HumanMessage(content="x"),
+               AIMessage(content="", tool_calls=[{"name": "a", "args": {}, "id": "execute_0",
+                                                 "type": "tool_call"}]),
+               HumanMessage(content="还在吗")])),
+          str(strict_wire_issues(
+              [HumanMessage(content="x"),
+               AIMessage(content="", tool_calls=[{"name": "a", "args": {}, "id": "execute_0",
+                                                 "type": "tool_call"}]),
+               HumanMessage(content="还在吗")])))
+    check("  例外：**末尾**那条 assistant 声明着调用是正常形态（等模型接着调）→ 不亮",
+          strict_wire_issues(
+              [HumanMessage(content="x"),
+               AIMessage(content="", tool_calls=[{"name": "a", "args": {}, "id": "execute_0",
+                                                 "type": "tool_call"}])]) == [])
+    check("纯函数：量一遍不改入参（形状也不改）",
+          (lambda s: (strict_wire_issues(s), s == _WIRE)[1])(_WIRE) and
+          len(strict_wire_issues([])) == 0)
+    _SRC2 = (ROOT / "agent" / "graph.py").read_text(encoding="utf-8")
+    check("接线：narrator 出站前真的量了一遍（这一句被删掉，绊线就成了装饰）",
+          "_wire_bad = strict_wire_issues(_msgs)" in _SRC2)
+    _i_model = _SRC2.index("def model_node(")
+    _MSGS_LINE = next(ln for ln in _SRC2[_i_model:].splitlines()
+                      if ln.lstrip().startswith("_msgs = "))
+    _i_assign = _SRC2.index(_MSGS_LINE)
+    _i_wire = _SRC2.index("_wire_bad = strict_wire_issues(_msgs)", _i_model)
+    check("  量在构造 `_msgs` **之后**（量的是真正发出去的那份）", _i_assign < _i_wire)
+    check("  `_msgs` 经 `_narrator_wire` 装配（补形状就在那条链路上）",
+          "_narrator_wire(" in _MSGS_LINE, _MSGS_LINE.strip())
+    _WIRE_FN = _SRC2[_SRC2.index("def _narrator_wire"):_SRC2.index("def _narrator_system_pair")]
+    check("  `_narrator_wire` 里真的调了 `with_tool_call_pairs`",
+          "with_tool_call_pairs(messages)" in _WIRE_FN)
+    check("  `_narrator_wire` 在 `model_node` 之前定义（链路没绕回后面另造一份）",
+          _SRC2.index("def _narrator_wire") < _i_model)
+    check("  只报不修：这一层不许出现对 id 的就地改写",
+          "wire_illegal" in _SRC2 and "_frame_id(_msgs" not in _SRC2)
+    print()
+    if FAILED:
+        print(f"❌ {len(FAILED)} 项未通过：")
+        for name in FAILED:
+            print(f"   - {name}")
+        sys.exit(1)
+    print("✅ 全部通过")
 
-_SRC2 = (ROOT / "agent" / "graph.py").read_text(encoding="utf-8")
-check("接线：narrator 出站前真的量了一遍（这一句被删掉，绊线就成了装饰）",
-      "_wire_bad = strict_wire_issues(_msgs)" in _SRC2)
-# 锁**关系**不锁字面（本仓的老毛病：`test_react_arm.py` ⑥d 钉了字面，把漂移永久化）。
-# 这一节钉的是"补形状在量之前、且量的是真正发出去的那份"。它已经漂过两次：
-#   ① 原版 `_msgs = [system] + with_tool_call_pairs(state["messages"])`（钉整行）；
-#   ② 批 3 入参换成窗口化的 `_narrator_msgs(state)`（行为没变，整行钉法红了）；
-#   ③ 20261016 前缀缓存把补形状收进 `_narrator_wire`（`model_node` 里不再直接调它）。
-# 三次都是**同一句意图**换了写法。所以现在跟着**链路**走：
-#   `_msgs` 由 `_narrator_wire` 出，补形状在 `_narrator_wire` 里面，量在 `_msgs` 之后。
-_i_model = _SRC2.index("def model_node(")
-_MSGS_LINE = next(ln for ln in _SRC2[_i_model:].splitlines()
-                  if ln.lstrip().startswith("_msgs = "))
-_i_assign = _SRC2.index(_MSGS_LINE)
-_i_wire = _SRC2.index("_wire_bad = strict_wire_issues(_msgs)", _i_model)
-check("  量在构造 `_msgs` **之后**（量的是真正发出去的那份）", _i_assign < _i_wire)
-check("  `_msgs` 经 `_narrator_wire` 装配（补形状就在那条链路上）",
-      "_narrator_wire(" in _MSGS_LINE, _MSGS_LINE.strip())
-_WIRE_FN = _SRC2[_SRC2.index("def _narrator_wire"):_SRC2.index("def _narrator_system_pair")]
-check("  `_narrator_wire` 里真的调了 `with_tool_call_pairs`",
-      "with_tool_call_pairs(messages)" in _WIRE_FN)
-check("  `_narrator_wire` 在 `model_node` 之前定义（链路没绕回后面另造一份）",
-      _SRC2.index("def _narrator_wire") < _i_model)
-check("  只报不修：这一层不许出现对 id 的就地改写",
-      "wire_illegal" in _SRC2 and "_frame_id(_msgs" not in _SRC2)
+    assert not FAILED, (
+        f"{len(FAILED)} 条未通过：" + "；".join(FAILED))
 
-print()
-if FAILED:
-    print(f"❌ {len(FAILED)} 项未通过：")
-    for name in FAILED:
-        print(f"   - {name}")
-    sys.exit(1)
-print("✅ 全部通过")
+
+if __name__ == "__main__":
+    test_tool_call_pairs()

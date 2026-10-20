@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """留言驳回后的「作者还看得到吗」：**事实供给**与**判据**必须成对（20261005, A5）。
 
 **病**：golden `admin_board_question_no_popup`（「把留言驳回了，作者自己还能看到吗？」）
@@ -26,29 +25,34 @@
   ② **判据**：拿那一条的 `text_any_regex` 跑一组正/反例；外加**变异锁**——把 20261005
      收紧**前**那一版正则放回来，必须当场漏判（否则"放宽"这一步是本文件想象出来的）。
 
-秒级、纯离线、无网络无 LLM；由 `tests/run_all.py` glob 自动纳入（push 时 eval.yml 跑）。
+秒级、纯离线、无网络无 LLM；由 pytest 按目录收集自动纳入（push 时 eval.yml 跑）。
 """
+
+
 import json
 import re
 import sys
 from pathlib import Path
 
+from _judge import collector
+
 ROOT = Path(__file__).resolve().parent.parent  # 仓根（测试统一在 tests/）
+
+
 sys.path.insert(0, str(ROOT))
+
 
 import agent.prompt_context as C  # noqa: E402
 from agent.workflow_defs import visible_workflows  # noqa: E402
 
 FAILS: list[str] = []
+check = collector(FAILS)
+
 
 _CASE_ID = "admin_board_question_no_popup"
+
+
 _ROLES = (None, "user", "admin")
-
-
-def check(desc: str, cond: bool, detail: str = "") -> None:
-    print(("  ✅ " if cond else "  ❌ ") + desc + (f"  [{detail}]" if detail else ""))
-    if not cond:
-        FAILS.append(desc)
 
 
 def _load_case() -> dict:
@@ -60,8 +64,7 @@ def _load_case() -> dict:
     raise AssertionError(f"语料里没有 {_CASE_ID}")
 
 
-# ── ① 供给：事实真的进了 planner/narrator 共用的那份上下文 ──────────────────
-def test_fact_is_in_the_shared_page_context():
+def _test_fact_is_in_the_shared_page_context():
     print("\n[供给] 事实进的是 planner 与 narrator 共用的那份页面上下文")
     fact = C._SITE_GUIDE_BOARD_FACT
     check("事实句非空且够长（不是一句空壳）", len(fact) >= 40, f"{len(fact)} 字")
@@ -81,7 +84,7 @@ def test_fact_is_in_the_shared_page_context():
           fact in C._attach_page_guide("current_url=/about", "user"))
 
 
-def test_fact_is_a_standalone_sentence_not_a_capability():
+def _test_fact_is_a_standalone_sentence_not_a_capability():
     print("\n[供给] 它是**站内事实**、单独成句——不混进能力枚举")
     fact = C._SITE_GUIDE_BOARD_FACT
     caps = [s.capability or "" for s in visible_workflows("admin")]
@@ -95,8 +98,6 @@ def test_fact_is_a_standalone_sentence_not_a_capability():
         check(f"事实里逐字带着「{kw}」", kw in fact)
 
 
-# ── ② 判据：拿磁盘上那份正则跑正/反例 + 变异锁 ──────────────────────────────
-# 正例写的是**正确语义**的各种措辞（含 markdown 星号、括号补充——实测回复里都有）。
 _GOOD = [
     "主人，结论：**看得到**——驳回只是对**访客**隐藏，**留言的作者本人**在「我的河灯」里"
     "**仍然看得到**那条（显示为未通过）。",
@@ -108,7 +109,8 @@ _GOOD = [
     "被驳回的留言，发留言的人在我的河灯里还是能看到（显示未通过）。",
     "作者本人并非看不到——他在「我的河灯」里仍能看到未通过的那条。",
 ]
-# 反例 = 实测与推演出来的**错误答复**：主语错（访客/你）、结论错（看不到）、或带否定前缀。
+
+
 _BAD = [
     "访客和作者本人都无法看到这条留言了。",
     "作者本人也不会看到这条留言。",
@@ -121,12 +123,11 @@ _BAD = [
     "主人，这件事我没有做过，站内文档里也没有查到相关说明。",
 ]
 
-# 20261005 收紧**前**那一版（见本文件头注：太松 + 太紧同时存在）。只作变异锁用，
-# **不是**当前判据——当前判据永远从语料现取。
+
 _OLD_RX = r"(?:作者|他|她|访客|留言)[^。\\n]{0,40}(?:看到|可见|显示)"
 
 
-def test_judgement_matches_the_fact_both_ways():
+def _test_judgement_matches_the_fact_both_ways():
     print("\n[判据] 现取语料里那一条的正则，跑正例（必须全中）与反例（必须全不中）")
     case = _load_case()
     pats = case["gold"]["text_any_regex"]
@@ -145,7 +146,7 @@ def test_judgement_matches_the_fact_both_ways():
           all(k in pats[0] for k in ("作者", "留言人", "本人", "发留言的人")))
 
 
-def test_old_regex_would_have_failed_both_directions():
+def _test_old_regex_would_have_failed_both_directions():
     print("\n[变异锁] 把收紧前那一版放回来 ⇒ 必须当场漏判/误放（否则'放宽'是想象出来的）")
     old = re.compile(_OLD_RX)
     missed = [t for t in _GOOD if not old.search(t)]
@@ -156,7 +157,7 @@ def test_old_regex_would_have_failed_both_directions():
           len(leaked) >= 1, f"{len(leaked)} 条")
 
 
-def test_widening_the_text_judgement_kept_the_teeth():
+def _test_widening_the_text_judgement_kept_the_teeth():
     print("\n[判据] 只放宽文本、不拔掉「不许动」的那几颗牙")
     gold = _load_case()["gold"]
     check("仍禁确认帧（这是**提问轮**，不许弹卡）",
@@ -168,12 +169,18 @@ def test_widening_the_text_judgement_kept_the_teeth():
     check("仍禁「已经驳回/帮你驳回」这类完成式声称", bool(gold.get("text_not_match_regex")))
 
 
-if __name__ == "__main__":
-    for fn in (test_fact_is_in_the_shared_page_context,
-               test_fact_is_a_standalone_sentence_not_a_capability,
-               test_judgement_matches_the_fact_both_ways,
-               test_old_regex_would_have_failed_both_directions,
-               test_widening_the_text_judgement_kept_the_teeth):
+def test_board_visibility_judgement():
+    for fn in (_test_fact_is_in_the_shared_page_context,
+               _test_fact_is_a_standalone_sentence_not_a_capability,
+               _test_judgement_matches_the_fact_both_ways,
+               _test_old_regex_would_have_failed_both_directions,
+               _test_widening_the_text_judgement_kept_the_teeth):
         fn()
     print("\n" + ("全部通过 ✅" if not FAILS else f"失败 {len(FAILS)} 项 ❌: {FAILS}"))
-    sys.exit(1 if FAILS else 0)
+
+    assert not FAILS, (
+        f"{len(FAILS)} 条未通过：" + "；".join(FAILS))
+
+
+if __name__ == "__main__":
+    test_board_visibility_judgement()

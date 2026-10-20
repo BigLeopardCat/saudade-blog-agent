@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """评测侧 LLM 评审员（`eval/llm_judge.py`）的离线自测：**不联网、不调 LLM、秒级**。
 
 判官本身要调模型（同源、非 ground truth），但"它看到什么材料""它的回答怎么被解读"
@@ -22,28 +21,29 @@
 
 用法：.venv/bin/python tests/test_llm_judge.py
 """
+
+
 import json
 import sys
-
 from pathlib import Path
 
+from _judge import collector
+
 ROOT = Path(__file__).resolve().parent.parent  # 仓根（20260924：测试统一搬进 tests/）
+
+
 sys.path.insert(0, str(ROOT))
+
+
 sys.path.insert(0, str(ROOT / "eval"))
 
+
 import llm_judge  # noqa: E402
+
 import models.llm as llm_mod  # noqa: E402  （批 G7：方言表的家，见 test_response_format_dialect）
 
-
 FAILS = []
-
-
-def check(name, cond, detail=""):
-    if not cond:
-        FAILS.append(f"{name}: {detail}")
-        print(f"  ✗ {name} {detail}")
-    else:
-        print(f"  ✓ {name}")
+check = collector(FAILS)
 
 
 def _trace(**kw):
@@ -58,7 +58,7 @@ def _call(name, args=None, result=""):
             "args": args or {}, "result": result}
 
 
-def test_material_completeness():
+def _test_material_completeness():
     print("[material] 四段齐全 + 盲区声明 + 零工具轮如实说")
     tr = _trace(events=[_call("get_article_detail", {"article_id": 16}, "正文" * 500)],
                 reply="这篇文章讲了分支")
@@ -99,7 +99,7 @@ def test_material_completeness():
     check("trace 缺字段时不抛、如实写「（缺）」", "（缺）" in m2)
 
 
-def test_material_clip_is_visible():
+def _test_material_clip_is_visible():
     print("[clip] 截断必须留可见标记（判官的判据依赖它）")
     long_text = "x" * (llm_judge.RESULT_LIMIT + 50)
     m = llm_judge.material(_trace(events=[_call("get_article_detail", result=long_text)],
@@ -114,7 +114,7 @@ def test_material_clip_is_visible():
           "截断" in llm_judge.material(_trace(reply="z" * (llm_judge.REPLY_LIMIT + 1))))
 
 
-def test_truncation_detector():
+def _test_truncation_detector():
     print("[stub] 材料是否被 trace 截断：标记优先，老 trace 退化为长度启发式")
     # 以下三条都是**老 trace** 的兜底启发式（无标记）：声明了上限的按"恰等于"判
     # （golden 20260925 起落 input.tool_result_limit；这里的 8000 只是夹具取值，
@@ -162,7 +162,7 @@ def test_truncation_detector():
           "在 trace 里被截断过" in m and "99999" in m)
 
 
-def test_parse_verdict_strictness():
+def _test_parse_verdict_strictness():
     print("[parse] 判官答坏了就抛，绝不洗成 ok")
     good = json.dumps({"unsupported": ["说了 5 条，材料只有 3 条"], "answered": True,
                        "verdict": "suspect", "reason": "条数对不上"})
@@ -204,7 +204,7 @@ def test_parse_verdict_strictness():
           v["verdict"] == "ok", v["verdict"])
 
 
-def test_output_contract_lives_in_the_prompt():
+def _test_output_contract_lives_in_the_prompt():
     """20261012 实测的**根因锁**：输出契约只挂在 schema 上，降级路径就没人管了。
 
     那天 DeepSeek 不吃 `json_schema`（400 `This response_format type is unavailable now`）
@@ -228,7 +228,7 @@ def test_output_contract_lives_in_the_prompt():
               set(parsed) == {"unsupported", "answered", "verdict", "reason"}, str(sorted(parsed)))
 
 
-def test_response_format_dialect():
+def _test_response_format_dialect():
     print("[format] 结构化输出的方言按服务商给（写死一种 = 另一家每次都走降级）")
     check("deepseek ⇒ json_object（官方 JSON Output 的写法）",
           llm_judge.response_format("deepseek") == {"type": "json_object"})
@@ -274,7 +274,7 @@ class _FakeLLM:
         return _Msg(self.text)
 
 
-def test_judge_one_paths():
+def _test_judge_one_paths():
     print("[judge_one] 结构化优先；端点不支持才降级，且降级留痕")
     text = json.dumps({"unsupported": [], "answered": True, "verdict": "ok", "reason": "好"})
     llm = _FakeLLM(text)
@@ -304,7 +304,7 @@ def test_judge_one_paths():
     check("带 markdown 围栏的答案也能解析（形状崩了要吵，围栏不算崩）", v4["verdict"] == "ok")
 
 
-def test_report_and_no_gate():
+def _test_report_and_no_gate():
     print("[report] 报告把可疑与出错分开、可疑必须附材料原文；判官不进任何门禁")
     rows = [
         {"case": "a", "verdict": {"unsupported": ["5 条 vs 3 条"], "answered": True,
@@ -337,7 +337,7 @@ def test_report_and_no_gate():
     check("纪律 1（不是判分器）写在模块头注里", "不是判分器" in src)
 
 
-def test_golden_runs_raise_the_trace_limit():
+def _test_golden_runs_raise_the_trace_limit():
     print("[接线] 跑法把 trace 的工具返回上限放开——判官有材料可看")
     from utils import trace as trace_mod
     src_run = (ROOT / "eval" / "run_golden.py").read_text(encoding="utf-8")
@@ -383,7 +383,7 @@ def test_golden_runs_raise_the_trace_limit():
             _os.environ[trace_mod.TOOL_RESULT_LIMIT_ENV] = old
 
 
-def test_nightly_runs_the_judge():
+def _test_nightly_runs_the_judge():
     """接线锁（20260925）：评审员进了夜间，但**没有**因此变成门禁。
 
     纪律 1 说它"不是判分器"，那么夜间脚本里它就不许出现在 `{ fail=1; … }` 那一支；
@@ -413,12 +413,12 @@ def test_nightly_runs_the_judge():
 
 
 def main():
-    for fn in (test_material_completeness, test_material_clip_is_visible,
-               test_truncation_detector, test_parse_verdict_strictness,
-               test_output_contract_lives_in_the_prompt, test_response_format_dialect,
-               test_judge_one_paths, test_report_and_no_gate,
-               test_golden_runs_raise_the_trace_limit,
-               test_nightly_runs_the_judge):
+    for fn in (_test_material_completeness, _test_material_clip_is_visible,
+               _test_truncation_detector, _test_parse_verdict_strictness,
+               _test_output_contract_lives_in_the_prompt, _test_response_format_dialect,
+               _test_judge_one_paths, _test_report_and_no_gate,
+               _test_golden_runs_raise_the_trace_limit,
+               _test_nightly_runs_the_judge):
         fn()
     if FAILS:
         print(f"\n=== {len(FAILS)} 项失败 ===")
@@ -428,5 +428,12 @@ def main():
     print("\n=== 全部通过 ===")
 
 
-if __name__ == "__main__":
+def test_llm_judge():
     main()
+
+    assert not FAILS, (
+        f"{len(FAILS)} 条未通过：" + "；".join(FAILS))
+
+
+if __name__ == "__main__":
+    test_llm_judge()

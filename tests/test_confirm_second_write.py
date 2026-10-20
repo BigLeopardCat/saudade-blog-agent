@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """确认兑现轮里的**第二件写**：该弹的第二张卡，和兜住裸调用正文的那道网（20261012）。
 
 ## 现场（生产 trace `20261012T101621`，会话 342，一句话两件写）
@@ -35,40 +34,36 @@
 
 无网络 / 无 LLM：假工具 + 真 `execute_node` / 真 `gate_node`。
 """
+
+
 import json
 import os
 import sys
 import tempfile
 from pathlib import Path
 
+from _judge import collector
+
 ROOT = Path(__file__).resolve().parent.parent  # 仓根（测试统一在 tests/）
+
+
 sys.path.insert(0, str(ROOT))
+
 
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage  # noqa: E402
 
 import agent.graph as G  # noqa: E402
 from agent.principal import Principal  # noqa: E402
+from config.settings import settings  # noqa: E402
 from utils import trace as trace_mod  # noqa: E402
 
-# ── 密钥桩（同 test_account_freeze / test_admin_write 的那一处）───────────────
-# `_confirm_popup` 在 `settings.jwt_secret` 空缺时**不弹窗**（宁可退回追问，也不发一个
-# 验不过的令牌）⇒ 本机有 `.env` 会绿、CI 里没有 ⇒ ①的反例整组静默消失（本仓最忌的
-# "判据没生效却全绿"）。全局单例，收尾还原。
-from config.settings import settings  # noqa: E402
-
-_SAVED_SECRET = settings.jwt_secret
-settings.jwt_secret = "test-secret-for-confirm-tokens"
-
 FAILS: list[str] = []
-
-
-def check(desc: str, cond: bool, detail: str = "") -> None:
-    print(("  ✅ " if cond else "  ❌ ") + desc + (f"  [{detail}]" if detail else ""))
-    if not cond:
-        FAILS.append(desc)
+check = collector(FAILS)
 
 
 _BAR = "｜"          # 全角竖线：服务商特判 token 用的是它，不是 ASCII 的 |
+
+
 _TOKEN = _BAR * 2 + "DSML" + _BAR * 2
 
 
@@ -85,13 +80,22 @@ def _real_reply() -> str:
 
 OWNER = ("猫咪给用户demo发个通知告诉他被降级为杂鱼了，理由你随便填，"
          "以你的身份口吻说，然后给他身份降级为杂鱼")
-# 卡面文本（`render_confirm_question` 产的那一份，前端点「确定」时合成发回）
+
+
 CARD = ("确认执行：要给账号「demo」（账号 id=747）发一条**站内通知**（标题「站内通知」）"
         "吗？点「确定」我就去办。")
+
+
 NOTICE = {"tool": "send_user_notice", "args": {"name": "demo", "content": "喵～"}}
+
+
 ROLE_SPEC = 'set_account_role({"name": "demo", "role": "zako"})'
+
+
 PLAN_OBJ = {"workflow": "account_set_role", "params": {}, "tools": [ROLE_SPEC],
             "note": "x", "reply": "y"}
+
+
 _CFG = {"configurable": {"principal": Principal(uid=1, role="superadmin"),
                          "user_id": 1, "conversation_id": 342, "stop_event": None}}
 
@@ -128,8 +132,7 @@ def _execute(messages: list) -> dict:
     return out
 
 
-# ── ① 确认兑现轮：第二件写弹卡（不是 BLOCK）─────────────────────────────
-def test_second_write_pops_card():
+def _test_second_write_pops_card():
     print("\n[源头] 确认兑现轮里，令牌没签的第二件写 ⇒ 弹卡（零执行）")
     out = _execute([HumanMessage(content=OWNER), HumanMessage(content=CARD),
                     ToolMessage(content="已把通知发给账号「demo」（账号 id=747）",
@@ -145,8 +148,7 @@ def test_second_write_pops_card():
     check("没有新增回执", not out.get("receipts"), str(out.get("receipts")))
 
 
-# ── ② 反控：只有卡面（没有主人原话）⇒ 复现修前那条 BLOCK ─────────────────
-def test_card_only_still_blocks():
+def _test_card_only_still_blocks():
     print("\n[反控] 前提不在场（只剩卡面文本）⇒ 判成 consent_required BLOCK")
     out = _execute([HumanMessage(content=CARD)])
     check("没弹卡", not out.get("pending_confirm"), str(out.get("pending_confirm")))
@@ -156,8 +158,7 @@ def test_card_only_still_blocks():
     check("零执行", out["_calls"] == 0, str(out["_calls"]))
 
 
-# ── ③ 换源不外溢：非确认轮仍读最后一条 ──────────────────────────────────
-def test_intent_src_boundary():
+def _test_intent_src_boundary():
     print("\n[边界] `_intent_src` 只在确认兑现轮换源")
     two = [HumanMessage(content=OWNER), HumanMessage(content=CARD)]
     check("确认兑现轮读主人原话",
@@ -169,7 +170,6 @@ def test_intent_src_boundary():
                          "confirm_grant": {"token": "t"}}) == OWNER)
 
 
-# ── ④ 兜底：现场那段裸调用过真 gate ⇒ 换成如实话术 ────────────────────────
 def _gate(reply: str, tid: str) -> tuple[dict, list]:
     rec = trace_mod.start_trace(tid, 1, "th", {}, dir=tempfile.mkdtemp(),
                                 by_day=False)
@@ -184,7 +184,7 @@ def _gate(reply: str, tid: str) -> tuple[dict, list]:
     return G.gate_node(st, _CFG), rec.events
 
 
-def test_wire_markup_reply_falls_back():
+def _test_wire_markup_reply_falls_back():
     print("\n[兜底] 正文里的裸调用 ⇒ fallback（`__RESET__` 撤回已展示正文）")
     out, events = _gate(_real_reply(), "t_wire_real")
     ev = [e for e in events if e.get("event") == "fallback"]
@@ -198,8 +198,7 @@ def test_wire_markup_reply_falls_back():
           bool(ev and ev[0].get("clause")), str(ev))
 
 
-# ── ⑤ 反向对照：正常回复一个字都不动 ────────────────────────────────────
-def test_normal_reply_untouched():
+def _test_normal_reply_untouched():
     print("\n[反向对照] 正常回复 ⇒ 不兜底")
     out, events = _gate("好呀～通知已经送给 demo 啦，降级那件事我再跟你确认一次。",
                         "t_wire_ok")
@@ -208,8 +207,7 @@ def test_normal_reply_untouched():
           [e for e in events if e.get("event") == "fallback"] == [])
 
 
-# ── ⑥ 提及不是调用（与命令前缀族同一条豁免）─────────────────────────────
-def test_mention_spans_exempt():
+def _test_mention_spans_exempt():
     print("\n[豁免] 讲机制时举例 ⇒ 放行")
     cases = [
         ("引号", '正文里写「<invoke name="x">」这种工具调用格式会被系统拦下，不会执行。'),
@@ -224,8 +222,7 @@ def test_mention_spans_exempt():
           bool(G._toolcall_markup_hit('好的，<invoke name="x"> 我这就去办。')))
 
 
-# ── ⑦ 结构：不去重规划、兜底文案不反问 ──────────────────────────────────
-def test_not_a_replan_issue():
+def _test_not_a_replan_issue():
     print("\n[结构] 这一族走兜底，不消耗那枚一次性的重规划令牌")
     check("不在 `_REPLAN_ISSUES` 里",
           "toolcall_markup_reply" not in G._REPLAN_ISSUES)
@@ -243,25 +240,28 @@ def test_not_a_replan_issue():
     check("五种线格式都在网内", not miss, str(miss))
 
 
-# ── ⑧ 令牌只授权一次：同一轮内已执行过的那一件不再被覆盖（现场 195727）────
-# 现场（`logs/agent/traces/20261012/195727`，会话 344）：一句话四件写 ⇒ 第一件 `create_
-# dashboard_todo` 弹卡 ⇒ 主人点「确定」⇒ 执行完（回执 PASS）⇒ 台账还剩三件 ⇒ 路由如实把
-# 这一轮交回 planner（三次）⇒ **而模型照着前端合成的确认回显把那件待办又排了两遍**。
-# 那一件逐字落在签名体里 ⇒ `_all_granted` 让弹卡闭嘴、`consent_missing` 让同意闸放行
-# ——**两处一起被免掉**，同一个调用静默落库三份（三个同名待办）。判据在 `_grant_covers`：
-# 令牌用在那一件上就作废（"令牌只授权一次执行，不是一张可反复使用的通行证"）。
 TODO_SPEC = 'create_dashboard_todo({"text": "给用户niuniu重置额度"})'
+
+
 _TODO_SPEC_D = {"tool": "create_dashboard_todo", "args": {"text": "给用户niuniu重置额度"}}
+
+
 _GRANT_TODO = {"token": "tok", "workflow": "dashboard_todo_add", "specs": [_TODO_SPEC_D]}
+
+
 _QUOTA_TOKEN = {"token": "tok", "workflow": "quota_reset",
                 "specs": [{"tool": "reset_user_quota", "args": {"uid": 9}}]}
+
+
 _OWNER_4 = ("猫咪加条待办给用户niuniu重置额度，然后去把他额度重置，"
             "然后把待审的留言你审核一下是否通过，然后再发一条公告，以你的口吻随便说点声明")
+
+
 _CARD_TODO = ("确认执行：要在后台首页的待办里加一条「给用户niuniu重置额度」，排期 未排期"
               "（那是你自己那份列表，加完随时能改删）吗？点「确定」我就去办。")
 
 
-def test_grant_spent_after_first_use():
+def _test_grant_spent_after_first_use():
     print("\n[令牌] 一次点头 = 那一件只办一次（同一轮里第二次不再静默执行）")
     _fresh = {"confirm_grant": _GRANT_TODO, "executed": []}
     _spent = {"confirm_grant": _GRANT_TODO, "executed": [TODO_SPEC]}
@@ -312,15 +312,17 @@ def test_grant_spent_after_first_use():
           str(pop.get("specs")))
 
 
-if __name__ == "__main__":
-    for fn in (test_second_write_pops_card,
-               test_card_only_still_blocks,
-               test_intent_src_boundary,
-               test_wire_markup_reply_falls_back,
-               test_normal_reply_untouched,
-               test_mention_spans_exempt,
-               test_not_a_replan_issue,
-               test_grant_spent_after_first_use):
+def test_confirm_second_write():
+    _SAVED_SECRET = settings.jwt_secret
+    settings.jwt_secret = "test-secret-for-confirm-tokens-not-a-real-secret"
+    for fn in (_test_second_write_pops_card,
+               _test_card_only_still_blocks,
+               _test_intent_src_boundary,
+               _test_wire_markup_reply_falls_back,
+               _test_normal_reply_untouched,
+               _test_mention_spans_exempt,
+               _test_not_a_replan_issue,
+               _test_grant_spent_after_first_use):
         fn()
     print()
     settings.jwt_secret = _SAVED_SECRET   # 全局单例：还原成进来时的样子
@@ -330,3 +332,10 @@ if __name__ == "__main__":
             print("   -", f)
         sys.exit(1)
     print("✅ 全部通过")
+
+    assert not FAILS, (
+        f"{len(FAILS)} 条未通过：" + "；".join(FAILS))
+
+
+if __name__ == "__main__":
+    test_confirm_second_write()

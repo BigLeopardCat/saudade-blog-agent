@@ -344,7 +344,7 @@ def build_tool_schema(role: str | None, *, evidence: bool = False,
     验证过的路：**把选项从 schema 里摘掉**，而不是再劝一次（同 §1.55 的 1b 结论）。
     `task_hold` / `task_drop` 同理可摘，只是今天没有触发它们的现场。
 
-    **`index=True`（20261020，ADR-0014 阶段 0，出厂关）**：每个技能的 `description` 从
+    **`index=True`（20261020，ADR-0015 阶段 0，出厂关）**：每个技能的 `description` 从
     整段散文压成**一行索引**，并追加一个 `describe_skill(name)` 让模型按需取回原文。
     **结构与散文的边界是**：函数名 / type / enum / required / 嵌套 schema 一个字符不动
     （`enum` 是带参清单的拦截点），只换 `description` 那一格的内容。
@@ -412,7 +412,7 @@ def build_tool_schema(role: str | None, *, evidence: bool = False,
     # 头注那条）。
     tools.extend(s for s in pseudo_tool_schemas(role)
                  if not (deny_pseudo and s["function"]["name"] in deny_pseudo))
-    # 索引档才有的取回口（ADR-0014 阶段 0）。**不并进 `pseudo_tool_schemas`**：那三个伪函数
+    # 索引档才有的取回口（ADR-0015 阶段 0）。**不并进 `pseudo_tool_schemas`**：那三个伪函数
     # 是"任务状态"这一族（有开关史、有集合断言），而 `describe_skill` 是**读自己菜单**的
     # 纯只读口——它无副作用、不进 `_split_pseudo_calls`、缺省档一次都不出现。
     # 放在**最后**：它是对上面那份菜单的注释，不是菜单里的一项。

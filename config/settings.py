@@ -6,6 +6,7 @@ Set ``LLM_PROVIDER=deepseek|qwen|openai|opencode`` to choose the active one.
 
 import os
 
+from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # ── Provider registry ──────────────────────────────────────────────
@@ -49,7 +50,8 @@ class Settings(BaseSettings):
 
     model_config = SettingsConfigDict(
         # `SAUDADE_IGNORE_ENV_FILE=1` ⇒ **整份 .env 不读**（环境变量照读）。离线套件用
-        # （`tests/run_all.py` 给每个子进程设上）：本机 `.env` 是**产线那份**，离线判据若
+        # （`tests/conftest.py` 在收集前设进环境，子进程自然继承）：本机 `.env` 是
+        # **产线那份**，离线判据若
         # 跟着它走，同一份代码在本机与 CI 上的结论会不同——而那正是 20260928 实测到的形状：
         # `tests/test_confirm.py` 的弹窗矩阵只有在 `JWT_SECRET` 非空时签得出令牌
         # ⇒ **本机恒绿、CI 恒红**，红得与代码一个字都没关系。判据钉代码形状，不钉这台机器
@@ -58,6 +60,11 @@ class Settings(BaseSettings):
         env_file_encoding="utf-8",
         case_sensitive=False,
         extra="ignore",
+        # 20261020：下面六个限额字段带 `validation_alias`（env 键名保持 AGENT_* 老名，
+        # 老部署的 systemd unit 零改动），开了 populate_by_name ⇒ 显式构造时**字段名
+        # 传参与 alias 传参都认**——否则 `Settings(recursion_limit=77)` 会被静默忽略
+        # （pydantic 默认只认 alias），那是"看着传了参、其实没传"的新缝。
+        populate_by_name=True,
     )
 
     # ── Provider selection ─────────────────────────────────────────
@@ -118,9 +125,25 @@ class Settings(BaseSettings):
     # `rotate 14`、`logs/archive/`、`eval/report/runs/`）。留着一个恒无效的旋钮比没有更坏，
     # 因为它看起来是对的。`AGENT_EARLY_STOPPING` 那一条还多一层：键名与字段名不匹配
     # （字段名是 `..._method`），**连 pydantic 都收不到它**。
-    # 真要限轮次，那个旋钮是 `AGENT_RECURSION_LIMIT`（**读进程环境，不读 .env**，
-    # 见 server.py:89 与 README《环境变量》那一节）。
+    # 真要限轮次，那个旋钮是 `AGENT_RECURSION_LIMIT`——20261020 起它读 Settings
+    # （写 .env 就生效，见下面《服务限额与超时》块）；此前"只读进程环境、不读 .env"
+    # 的双轨形状已收敛（判据 `tests/test_settings_surface.py` ⑥）。
     agent_verbose: bool = True
+
+    # ── 服务限额与超时（20261020 双轨收敛：原本 server.py 顶部直读进程环境）──
+    # 这六个值原先在 `server.py` 里 `os.environ.get(...)` 直读（四个 AGENT_*）或
+    # 硬编码（两个 STREAM_*），`.env` 管不到它们——README 曾把"写进 .env 一点
+    # 作用都没有"当坑记着。收敛后**唯一真值源在这里**：`.env` / 进程环境 / 代码
+    # 缺省三轨同值，`server.py` 只按门牌转发（六个常量名不变，下游引用零改动）。
+    # 两个 STREAM_* 是**新开的 env 通道**：此前它们连拨的地方都没有（只能改码重启）。
+    # 用途与理由注释跟着常量留在 server.py（那里才是消费现场），这里只登记值。
+    stream_idle_timeout: float = Field(default=120.0, validation_alias="AGENT_STREAM_IDLE_TIMEOUT")
+    stream_total_timeout: float = Field(
+        default=300.0, validation_alias="AGENT_STREAM_TOTAL_TIMEOUT")
+    recursion_limit: int = Field(default=30, validation_alias="AGENT_RECURSION_LIMIT")
+    max_body_bytes: int = Field(default=12 * 1024 * 1024, validation_alias="AGENT_MAX_BODY_BYTES")
+    max_concurrent_streams: int = Field(default=8, validation_alias="AGENT_MAX_CONCURRENT")
+    review_concurrency: int = Field(default=4, validation_alias="AGENT_MAX_REVIEW")
 
     # ── TTS (Text-to-Speech) ───────────────────────────────────────
     tts_enabled: bool = False
@@ -143,7 +166,7 @@ class Settings(BaseSettings):
     # 生效，而他们拿到的正是最不安全的那一档。所以默认值翻过来：**默认安全，要回退
     # 得显式写 0**，且回退时身份仍未验成 ⇒ `authz.must_enforce` 把该身份的拒绝全部
     # 硬拦（纵深防御，见 agent/authz.py）。评测/离线套件若需要旧路径，在自己的
-    # 进程里显式拨这一格（`tests/run_all.py` 的 `_PINNED` 已按出厂档钉 1）。
+    # 进程里显式拨这一格（`tests/conftest.py` 的 `_PINNED` 已按出厂档钉 1）。
     agent_require_assertion: bool = True
 
     # ── 权限模型（20260920，身份与权限地基）──────────────────────────
@@ -243,7 +266,7 @@ class Settings(BaseSettings):
     # planner LLM。两臂交替跑，读的是**命中计数与轮数**（不读通过率）——两臂
     # 都绿不说明什么，命中数才是价钱。
     #
-    # ⚠️ 必须同时进 `tests/run_all.py::_PINNED`（本仓教训：离线套件对档位是瞎的，
+    # ⚠️ 必须同时进 `tests/conftest.py::_PINNED`（本仓教训：离线套件对档位是瞎的，
     # 判据跟着 shell 档位走会让本机与 CI 结论不同）。定价读数出自生产 trace 的
     # `fastpath` 事件 + golden 两臂，见 `eval/fastpath_pricing.py`。
     agent_fastpath: bool = True
