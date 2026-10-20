@@ -108,7 +108,12 @@ _CONFIG_SOURCES = {
     "pyproject.toml": "[tool.bandit]",
 }
 
-_VER_RE = re.compile(r"^bandit (?P<v>[0-9][^\s]*)", re.M)
+# ⚠️ **程序名不一定是 `bandit`**：`bandit --version` 印 `bandit 1.9.4`，而
+# `python -m bandit --version` 印 `__main__.py 1.9.4`。**默认启动器是后者**（CI 走的就是它）
+# ⇒ 只认字面 `bandit ` 会让这道闸在 CI 里**恒退 3**（"跑不起来"），而本机配方用的是
+# uvx 那条（印 `bandit 1.9.4`）⇒ 本机永远看不见。实测：PR #39 的 CI 就是这么红的。
+# 判据是 `tests/test_security_gate.py` ⑥，拿两种真实输出形状各喂一遍。
+_VER_RE = re.compile(r"^(?P<prog>\S+) (?P<v>[0-9][^\s]*)", re.M)
 _PY_RE = re.compile(r"python version = (?P<v>\d+\.\d+)")
 
 

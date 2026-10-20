@@ -9,6 +9,7 @@
 | `pyproject.toml` 里加一句 `[tool.bandit]` | bandit **自动发现**它 ⇒ 少报、闸报绿 | ③ |
 | 某个文件里加一行 `# nosec` | 那条 finding 不进 `results`、只进 `metrics.nosec` | ③ |
 | 换 bandit 跑在哪个解释器上 | 同一份源码 3.10 读 205 / 3.12 读 211 ⇒ 换了条目集 | ② |
+| 版本行只认一种启动器形状 | CI 走 `-m`、印 `__main__.py 1.9.4` ⇒ 闸恒退 3 | ⑥ |
 | 键退回"光文件" | 同文件里 B105 换 B608 按文件数是"没变" | ②（`by_key` 的形状） |
 | CI 没接这一步 | 闸在本机绿、在 CI 从不运行 | ④ |
 | 闸自己坏了（JSON 解析、判据恒绿） | 全部绿 | ⑤（跑它自带的 `_self_check`） |
@@ -184,6 +185,46 @@ def test_gate_is_wired_into_ci():
     _report(bad)
 
 
+# 两种启动器**真实印出来**的那两行（各跑一次逐字抄下来）。默认启动器是第二条。
+_VER_OUTPUTS = {
+    "console script（`bandit --version`，本机配方的形状）":
+        "bandit 1.9.4\n  python version = 3.12.3 (main, Jun 19 2026, 12:46:06) [GCC 13.3.0]",
+    "`python -m bandit --version`（**默认启动器**，CI 走这条）":
+        "__main__.py 1.9.4\n  python version = 3.12.3 (main, Jun 19 2026, 12:46:06) [GCC 13.3.0]",
+}
+
+
+def test_version_line_parses_both_launcher_shapes():
+    """⑥ 版本那一行**两种启动器都认得**。
+
+    **为什么单列一条**：默认启动器是 `sys.executable -m bandit`（CI 走它），而它印的是
+    `__main__.py 1.9.4` 不是 `bandit 1.9.4`。只认后一种 ⇒ 那道闸在 CI 里**恒退 3**
+    （"跑不起来"），而本机配方用的是 uvx 那条 ⇒ **本机永远看不见**。PR #39 的 CI 就是这么红的。
+    """
+    bad: list[str] = []
+    print("⑥ 版本行的两种形状")
+    gate = _gate_module()
+    for name, out in _VER_OUTPUTS.items():
+        vm, pm = gate._VER_RE.search(out), gate._PY_RE.search(out)
+        got = (vm.group("v") if vm else None, pm.group("v") if pm else None)
+        ok = got == ("1.9.4", "3.12")
+        print(f"  {'✅' if ok else '❌'} {name}  [版本={got[0]} 解释器={got[1]}]")
+        if not ok:
+            bad.append(f"{name} 认不出来：{got}")
+    # 反控：**认不出来的必须真的认不出**（否则上面两格可能是"随便什么都匹配"）
+    junk = "Traceback (most recent call last):\n  ModuleNotFoundError: No module named 'bandit'"
+    ok = gate._VER_RE.search(junk) is None and gate._PY_RE.search(junk) is None
+    print(f"  {'✅' if ok else '❌'} 反控：跑不起来的那种输出**不**被当成版本行")
+    if not ok:
+        bad.append("反控没生效（正则把什么输出都当版本行）")
+    # 上面第一格不是"以后可能用到"：默认启动器就是 `-m` 那条 ⇒ CI 每天走的是它。
+    ok = '"-m", "bandit"' in _GATE.read_text(encoding="utf-8")
+    print(f"  {'✅' if ok else '❌'} 默认启动器确实是 `-m bandit`（CI 走的就是这一格）")
+    if not ok:
+        bad.append("默认启动器换了形状 ⇒ 这条判据的样本要跟着换，别让它静默漂")
+    _report(bad)
+
+
 def test_gate_self_check_passes():
     """⑤ 跑闸自带的正控/反控（`_self_check`）—— 没有这一段，"闸其实是空的"没人看着。"""
     print("⑤ 闸自带的正控/反控")
@@ -201,6 +242,7 @@ if __name__ == "__main__":
                 test_baseline_quantities_are_single_sourced,
                 test_no_auto_discovered_config_and_no_nosec,
                 test_gate_is_wired_into_ci,
+                test_version_line_parses_both_launcher_shapes,
                 test_gate_self_check_passes):
         _fn()
     print("\n全部通过")
