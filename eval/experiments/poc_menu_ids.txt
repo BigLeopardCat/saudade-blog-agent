@@ -1,0 +1,91 @@
+# POC 预注册 id 表（20261020 冻结，跑前提交、跑后不许改）
+#
+# 语料 sha256[:16] = 5c532e6e2efe3e94（eval/golden/basic.jsonl）
+# 池子定义（确定性）：tags 不含 write/confirm，且 gold 无 needs_real_write ⇒ 共 130 条。
+# 选法：19 条 regression 全要（硬层，否则空过）+ nav/content_query/multi_step/multi_intent 全量
+#       + rag 8 / admin 只读 8 / 身份越权 7 / 声称诚实 4 / 跨轮 7（random.Random(20261020) 抽样）。
+# **末尾两条是能力台账的见证者，不在射程内**：`arm_capability` 的 `forbid_task_state` 与
+# `forbid_frame_prefix` 两族在只读射程里**没有兄弟用例**（实测：前者语料里只有 1 条、
+# 后者 34 条全是写/确认），不带上它们 ⇒ `comparable=False` ⇒ **退出码 3、pass_rate 不许引用**。
+# 这两条的读数只用来武装台账，不作射程结论。
+admin_user_list_denied_visitor
+concurrent_orphan_no_leak
+exec_memory_display_quote
+exec_memory_none_honest
+followup_entity_slot_ambiguous
+followup_entity_slot_guestbook
+followup_named_doc_no_search
+followup_named_doc_reread
+followup_named_doc_title_only_id
+followup_short_no_declines
+followup_short_yes_executes
+multi_intent_two_effects
+nav_article_target
+nav_comment_target_not_guestbook
+nav_question_not_nav
+note_traffic_denied_visitor
+ops_report_denied_visitor
+search_multiword_keyword
+todo_multi_step_serial
+mix5_cmd_nav_read_three_way
+multi_step_effect_then_nav
+multi_step_referent_nav_effect
+nav_board_position_from_notice
+nav_comment_position_from_notice
+nav_device_console
+nav_direct_no_confirm_promise
+nav_friends_down
+nav_home
+nav_no_false_zero_tool_claim
+nav_nonexistent
+nav_page_state_consistent
+nav_param_anchor_about
+nav_request_phrase
+zako_nav_request_refused
+after_offer_then_look_up
+cq_no_bare_claim_techdoc
+cq_query_agent_articles
+cq_query_embedded_articles
+data_announcements
+data_blog_info
+data_categories
+data_devices_online
+data_site_map
+data_social_links
+data_tags
+data_top_notes
+data_weather
+format_count_number_only
+guestboard_talk_double_source
+mix3_three_source_query
+multi_step_search_then_read_top
+prod_ops_digest_three_angles
+task_state_resume_settle
+dep_search_read_graph
+rag_arch_ports
+rag_fingerprint_pin
+rag_noise_cake
+rag_noise_docker
+rag_ota_partition
+rag_project_files
+rag_test4_cover
+admin_board_identity_from_roster
+admin_near_miss_source_honest
+admin_notes_console_list
+admin_todo_list_includes_pending_review
+capability_list_admin_sees_admin_ops
+prod_account_roster_read_admin
+status_stale_ledger_requery
+user_report_admin
+capability_list_user_no_admin_leak
+zako_effect_request_refused
+zako_hello_zero_tool
+article_read_current_what
+own_messages_not_logged_in
+own_unread_not_logged_in
+time_anchor_no_invented_year
+followup_entity_slot_category
+long_hist_value_no_requery
+mt2_ledger_recall_two_actions
+mt3_detour_then_return_ledger_value
+mix4_cmd_and_write_one_breath
