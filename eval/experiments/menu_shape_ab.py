@@ -80,6 +80,7 @@ from langchain_core.messages import AIMessage, HumanMessage, ToolMessage  # noqa
 from langchain_core.tools import StructuredTool  # noqa: E402
 
 import agent.react_arm as RA  # noqa: E402
+from agent import tool_index as TI  # noqa: E402
 from agent.planner_llm import build_tool_schema  # noqa: E402
 from agent.tool_menu import build_tool_menu  # noqa: E402
 from agent.workflow_defs import WORKFLOWS  # noqa: E402
@@ -93,9 +94,13 @@ REC_LIMIT = 12          # 图级保险丝：撞到这里说明模型在绕圈，
 BUDGET = 6
 
 PSEUDO = {"task_hold", "task_drop", "task_intents"}   # 跨轮任务的申报口，不是动作
-# 两臂里"什么都不做"的编码：技能臂有 `chat` 这个纯应答技能（模板是空的），工具臂没有
-# 对应函数 ⇒ 零调用。判"有没有动手"时必须把这两者归一到同一格（见 `judge`）。
-NO_ACTION = PSEUDO | {"chat"}
+# 索引档的取回口（ADR-0014 阶段 0）：**读自己菜单**的纯只读口，不是动作。
+DESCRIBE = TI.DESCRIBE_SKILL
+# 各臂里"什么都不做"的编码：技能臂有 `chat` 这个纯应答技能（模板是空的），工具臂没有
+# 对应函数 ⇒ 零调用。判"有没有动手"时必须把这几者归一到同一格（见 `judge`）。
+# `describe_skill` 同 `chat`：它不改变站内任何东西，把它算成"动手"会让索引臂在
+# `none` 句上恒判"没忍住"——那读出来像"索引菜单更容易乱动手"，其实是口径。
+NO_ACTION = PSEUDO | {"chat", DESCRIBE}
 
 # ── 期望族（工具级）──────────────────────────────────────────────────────────
 NAV = {"navigate_to"}
@@ -170,6 +175,14 @@ _MENU_HEAD_TOOL = ("## 你能调用的工具\n"
                    "**直接用工具调用表达你的决定**：本轮要做什么就调用那个工具，\n"
                    "参数按工具自己的定义填。没有「技能」这一层，也没有工具序列给你抄。\n")
 
+# 索引臂多出来的一句：菜单上每个本领只有一行索引，完整说明要**主动取**。这句只给
+# `index` 臂——`names` 臂是对照（名字都没有说明、也没有取回口），它不该看见这句话，
+# 否则量到的就不是"取回值多少"而是"提示词值多少"。
+_MENU_HEAD_INDEX_EXTRA = (
+    "\n⚠️ 上面每个本领**只有一行索引**。不确定某个本领到底管什么、或者要在两三个近义\n"
+    "本领里挑一个时，先调 `describe_skill(name)` 把它的完整说明取回来再决定"
+    "（一次可以查一到三个）。\n")
+
 _CONTRACT_SKILL = """## 怎么表达决定
 1. 你的决定通过**工具调用**表达：调用的函数名 = 上面那张表里的**技能名**，参数按它的
    schema 填。
@@ -177,6 +190,10 @@ _CONTRACT_SKILL = """## 怎么表达决定
 3. 正文**不是**决策通道：正文只用来补充说明，系统只看你的工具调用。
 4. 闲聊、问候、情感、反问、或者你不需要任何技能就能答：调用 `chat`（没有参数）。
 5. 信息够了就调用 `chat` 收尾，别反复调同一个技能。"""
+
+_CONTRACT_INDEX = _CONTRACT_SKILL + """
+6. 说明只有一行。**不确定某个本领管什么、或者要在几个近义本领里挑一个时**，先调
+   `describe_skill(name)` 取回它的完整说明，再决定调哪个技能。"""
 
 _CONTRACT_TOOL = """## 怎么表达决定
 1. 你的决定通过**工具调用**表达：直接调用上面那张表里的**那个工具**，参数按它的
@@ -189,18 +206,23 @@ _CONTRACT_TOOL = """## 怎么表达决定
 
 
 def _prompt(arm: str, role: str | None, sent: str, lines: list[tuple[str, str]]) -> str:
-    """两臂的提示词由**同一个渲染器**生成（见头注「为什么」）。
+    """各臂的提示词由**同一个渲染器**生成（见头注「为什么」）。
 
-    块序：人设 → 受众 → 菜单 → 契约 → 当前页面 → 主人这一句。两臂之间只有两处不同：
-    菜单数据、契约里「技能/工具」这一个名词（`_CONTRACT_SKILL` vs `_CONTRACT_TOOL`）。
+    块序：人设 → 受众 → 菜单 → 契约 → 当前页面 → 主人这一句。臂之间只有两处不同：
+    菜单数据、契约块（`_CONTRACT_SKILL` / `_CONTRACT_INDEX` / `_CONTRACT_TOOL`）。
     """
-    skill = arm == "skill"
+    skillish = arm in ("skill", "index", "names")
     menu = "\n".join(f"· {n} — {d}" if d else f"· {n}" for n, d in lines)
+    if skillish:
+        head = _MENU_HEAD_SKILL + (_MENU_HEAD_INDEX_EXTRA if arm == "index" else "")
+        contract = _CONTRACT_INDEX if arm == "index" else _CONTRACT_SKILL
+    else:
+        head, contract = _MENU_HEAD_TOOL, _CONTRACT_TOOL
     return "\n\n".join(x for x in (
         RA.BLOG_ASSISTANT_PROMPT or "",
         RA.audience_block(role),
-        (_MENU_HEAD_SKILL if skill else _MENU_HEAD_TOOL) + menu,
-        _CONTRACT_SKILL if skill else _CONTRACT_TOOL,
+        head + menu,
+        contract,
         "## 当前页面\n路径 /，标题「首页」，无特效，白天模式。",
         f"## 主人这一句\n{sent}",
     ) if x)
@@ -241,6 +263,66 @@ def _skill_payload(name: str) -> str:
     """技能桩回的载荷按**它展开后第一件工具**取（`chat`/`content_query` 没有展开 ⇒ 用它自己）。"""
     tools = _WORKFLOW_TOOLS.get(name) or set()
     return sorted(tools)[0] if tools else name
+
+
+# ── 三条技能菜单的臂：skill（现状）/ index（索引档）/ names（对照）─────────────
+def _names_only(entries: list[dict]) -> list[dict]:
+    """`names` 对照臂：**只留名字**——说明清空、取回口摘掉。
+
+    它是"索引档到底值不值"的**分母**：`index` 与它打平 ⇒ 索引行没在起作用，
+    `describe_skill` 是多余的（ADR-0014《复验》第一条：出现这种情况就**停**）。
+    **不能省掉这条臂**——没有它，"index 比 skill 差多少"这个数里分不开
+    "索引切掉了信息"与"描述本来就没人读"。
+    """
+    out = []
+    for e in entries:
+        if e["function"]["name"] == DESCRIBE:
+            continue
+        e = json.loads(json.dumps(e))
+        e["function"]["description"] = ""
+        out.append(e)
+    return out
+
+
+def _describe_stub(role: str | None) -> StructuredTool:
+    """`describe_skill` 的桩：回**真说明**（`tool_index.describe_skill_text`）。
+
+    回真文本而不是假载荷是这一臂的全部意义——模型取回什么，就是它决策时看到什么。
+    够不着的名字回一句明说"没这个本领"，**不静默回空**（静默回空会把"名字写错了"
+    读成"这个本领没说明"）。
+    """
+    def _call(name: str = "", **_kw) -> str:
+        txt = TI.describe_skill_text(name, role)
+        return txt if txt else f"（没有叫「{name}」的本领，或者你的身份看不到它。）"
+
+    return StructuredTool(name=DESCRIBE, description="查看某个本领的完整说明。",
+                          args_schema={"type": "object",
+                                       "properties": {"name": {"type": "string"}},
+                                       "required": ["name"]},
+                          func=_call)
+
+
+def _arm_entries(arm: str, role: str | None) -> list[dict]:
+    """一条臂的 OpenAI `tools` 数组（**唯一**来源，`main` 与 `_selfcheck` 都走这里）。"""
+    if arm == "skill":
+        return build_tool_schema(role)
+    if arm == "index":
+        return build_tool_schema(role, index=True)
+    if arm == "names":
+        return _names_only(build_tool_schema(role, index=True))
+    if arm == "tool":
+        return build_tool_menu(role)
+    raise SystemExit(f"未知的臂：{arm}（可选 skill / index / names / tool）")
+
+
+def _arm_stubs(arm: str, role: str | None) -> list:
+    """一条臂的桩集合（零真实写）。索引臂多挂一个 `describe_skill`。"""
+    entries = _arm_entries(arm, role)
+    payload = (lambda n: n) if arm == "tool" else _skill_payload
+    stubs = _menu_stubs(entries, payload)
+    if arm == "index":
+        stubs.append(_describe_stub(role))
+    return stubs
 
 
 # ── 折算：技能名 → 工具名（两臂可比的前提）──────────────────────────────────
@@ -378,6 +460,11 @@ def judge(r: dict, exp: set, must_not: set, kind: str, want_path: str | None) ->
         zero_ok = not acted
     elif kind == "refuse":
         zero_ok = not (tools & set(must_not or ()))
+    # 取回率（ADR-0014 阶段 0 的**主读数**）：模型有没有真去取回说明。只对索引臂非零，
+    # 其余臂恒 0（它们没有那个口）——所以这一栏**只许在臂之间横着读**，不许当"质量"读。
+    asked = sorted({str((c.get("args") or {}).get("name") or "").strip()
+                    for c in r["calls"] if str(c.get("name") or "") == DESCRIBE})
+    asked = [x for x in asked if x]
     return {"called_any": acted,
             "hit": sorted(hit),
             "matched": (bool(hit) and not wrong) if kind == "act" else None,
@@ -385,6 +472,8 @@ def judge(r: dict, exp: set, must_not: set, kind: str, want_path: str | None) ->
             "zero_ok": zero_ok,
             "unfolded": acted and not tools,
             "nav_arg_ok": nav_ok,
+            "retrieved": bool(asked),
+            "asked": asked,
             "rounds": int(r.get("rounds") or 0),
             "capped": bool(r.get("capped"))}
 
@@ -460,24 +549,61 @@ def _selfcheck(role: str) -> list[str]:
     ck("`want=None` ⇒ 不可判（None，不是 False——「没查过」与「错了」是两件事）",
        _nav_resolves("友链", None) is None)
 
-    print("\n④ 两臂的菜单非空、且名字集合不相交（有交集则折算歧义）")
-    sk = {n for n, _d in _menu_lines(build_tool_schema(role))}
-    tl = {n for n, _d in _menu_lines(build_tool_menu(role))}
-    ck(f"{role!r} 技能菜单非空（{len(sk)} 个）", len(sk) > 0)
-    ck(f"{role!r} 工具菜单非空（{len(tl)} 个）", len(tl) > 0)
-    ck("两臂的说明都非空（空说明 = 模型只看得见名字）",
-       all(d for _n, d in _menu_lines(build_tool_schema(role)))
-       and all(d for _n, d in _menu_lines(build_tool_menu(role))))
+    print("\n④ 各臂的菜单非空、且动作名集合不相交（有交集则折算歧义）")
+    sk = {n for n, _d in _menu_lines(_arm_entries("skill", role))}
+    ix = {n for n, _d in _menu_lines(_arm_entries("index", role))}
+    nm = {n for n, _d in _menu_lines(_arm_entries("names", role))}
+    tl = {n for n, _d in _menu_lines(_arm_entries("tool", role))}
+    for tag, s in (("技能", sk), ("索引", ix), ("名字对照", nm), ("工具", tl)):
+        ck(f"{role!r} {tag}菜单非空（{len(s)} 个）", len(s) > 0)
+    ck("skill / index / tool 三臂的说明都非空（空说明 = 模型只看得见名字）",
+       all(d for _n, d in _menu_lines(_arm_entries("skill", role)))
+       and all(d for _n, d in _menu_lines(_arm_entries("index", role)))
+       and all(d for _n, d in _menu_lines(_arm_entries("tool", role))))
+    # `names` 臂的**全部意义**就是说明为空、且没有取回口 —— 这两条要是失效，
+    # 它就不再是对照臂，而 `index` 与它的差会被读成 0（看着像"索引没用"）。
+    ck("names 臂的说明**全空**（它是「只看得见名字」那条对照）",
+       not any(d for _n, d in _menu_lines(_arm_entries("names", role))))
+    ck(f"names 臂没有 {DESCRIBE}（没有取回口才叫对照）", DESCRIBE not in nm)
+    ck(f"index 臂有且只有一个 {DESCRIBE}、且排最后",
+       [e["function"]["name"] for e in _arm_entries("index", role)].count(DESCRIBE) == 1
+       and _arm_entries("index", role)[-1]["function"]["name"] == DESCRIBE)
+    ck("skill / index / names 三臂的**技能名集合相同**（只换说明，不换菜单本身；"
+       "索引臂多出来的那一格只能是取回口）",
+       sk == (ix - {DESCRIBE}) == nm,
+       str(sorted(sk ^ (ix - {DESCRIBE})) + sorted(sk ^ nm)))
     # **动作名**不相交（三个伪函数两臂都有——它们是 harness 资产，见头注；
     # 折算歧义只可能出在动作名上，所以这里比的是 `sk - PSEUDO` 与 `tl - PSEUDO`）。
-    ck("两臂的**动作名**集合不相交（有交集则 `_WORKFLOW_TOOLS` 与真名分不开）",
+    ck("技能族与工具臂的**动作名**集合不相交（有交集则 `_WORKFLOW_TOOLS` 与真名分不开）",
        not ((sk - PSEUDO) & (tl - PSEUDO)), str(sorted((sk - PSEUDO) & (tl - PSEUDO))))
-    ck("三个伪函数**两臂都在**（照搬的跨切面槽位，见头注 ③）",
+    ck("三个伪函数**技能族与工具臂都在**（照搬的跨切面槽位，见头注 ③）",
        PSEUDO <= sk and PSEUDO <= tl, str(sorted(PSEUDO - sk | (PSEUDO - tl))))
     ck("工具菜单里的名字**都是真工具或三个伪函数**", tl <= (TOOL_NAMES | PSEUDO),
        str(sorted(tl - TOOL_NAMES - PSEUDO)))
-    ck("技能菜单里的名字**都是真技能或三个伪函数**", sk <= ({w.name for w in WORKFLOWS} | PSEUDO),
-       str(sorted(sk - {w.name for w in WORKFLOWS} - PSEUDO)))
+    ck("技能族菜单里的名字**都是真技能或申报过的那几个**",
+       sk <= ({w.name for w in WORKFLOWS} | PSEUDO | {DESCRIBE}),
+       str(sorted(sk - {w.name for w in WORKFLOWS} - PSEUDO - {DESCRIBE})))
+    # 索引臂的说明必须**真的是索引**（不是把整段描述原样搬过来）——否则这一臂与
+    # `skill` 臂逐字节相同，跑出来的"没差别"会被读成"索引不影响决策"。
+    idx_lines = _menu_lines(_arm_entries("index", role))
+    full_lines = dict(_menu_lines(_arm_entries("skill", role)))
+    shorter = [n for n, d in idx_lines if n in full_lines and len(d) < len(full_lines[n])]
+    ck("索引臂的说明**确实比现状短**（否则这一臂等于现状，跑出来的差恒 0）",
+       len(shorter) >= len(full_lines) - 5, f"变短 {len(shorter)}/{len(full_lines)}")
+
+    print("\n④b 取回口的判据（它坏了 ⇒ 取回率恒 0，读出来像「模型不需要索引」）")
+    ck("`describe_skill` **不算动手**（同 `chat`：它不改变站内任何东西）",
+       judge({"tools": set(), "calls": [{"name": DESCRIBE, "args": {"name": "navigate"}}]},
+             set(), NAV, "none", None)["called_any"] is False)
+    ck("`describe_skill` 调用被记成**取回**",
+       judge({"tools": set(), "calls": [{"name": DESCRIBE, "args": {"name": "navigate"}}]},
+             set(), NAV, "none", None)["retrieved"] is True)
+    ck("没取回 ⇒ `retrieved` 为假", judge({"tools": set(), "calls": []}, set(), NAV,
+                                          "none", None)["retrieved"] is False)
+    ck("取回桩回的是**真说明**（不是空串/不是假载荷）",
+       len(TI.describe_skill_text("navigate", role) or "") > 10)
+    ck("取回桩对**够不着的名字**明说没这个本领（不静默回空）",
+       "没有叫" in _describe_stub(role).func(name="no_such_skill_xyz"))
 
     print("\n⑤ 句子表自身的完备性")
     ck("每句的期望族与反向族都在真工具名里",
@@ -499,10 +625,13 @@ def _frac(recs: list, key: str) -> str:
 
 
 def _summarize(arm: str, rnd: int, recs: list, secs: float) -> dict:
+    asked_n = sum(len(x.get("asked") or []) for x in recs)
     row = {"called_any": _frac(recs, "called_any"),
            "matched": _frac(recs, "matched"),
            "zero_ok": _frac(recs, "zero_ok"),
            "nav_arg_ok": _frac(recs, "nav_arg_ok"),
+           "retrieved": _frac(recs, "retrieved"),
+           "asked_total": asked_n,
            "wrong_direction": sum(1 for x in recs if x["wrong_direction"]),
            "unfolded": sum(1 for x in recs if x["unfolded"]),
            "capped": sum(1 for x in recs if x["capped"]),
@@ -512,6 +641,7 @@ def _summarize(arm: str, rnd: int, recs: list, secs: float) -> dict:
     print(f"== {arm} r{rnd}: 有调用 {row['called_any']}  命中 {row['matched']}"
           f"  忍住 {row['zero_ok']}  导航参数对 {row['nav_arg_ok']}"
           f"  反向 {row['wrong_direction']}  点了折不出 {row['unfolded']}"
+          f"  取回 {row['retrieved']}（共 {asked_n} 次）"
           f"  撞上限 {row['capped']}  出错 {row['errors']}"
           f"  模型轮数 {row['llm_rounds']}  用时 {row['secs']}s", flush=True)
     return row
@@ -540,17 +670,18 @@ def main() -> int:
 
     sents = SENTS[:a.limit] if a.limit else SENTS
     arms = [s for s in a.arms.split(",") if s]
-    skill_entries = build_tool_schema(a.role)
-    tool_entries = build_tool_menu(a.role)
-    stubs = {"skill": _menu_stubs(skill_entries, _skill_payload),
-             "tool": _menu_stubs(tool_entries, lambda n: n)}
-    menu_lines = {"skill": _menu_lines(skill_entries), "tool": _menu_lines(tool_entries)}
-    print(f"\n菜单规模：技能 {len(skill_entries)} 项 / 工具 {len(tool_entries)} 项"
-          f"（role={a.role}）")
+    entries = {arm: _arm_entries(arm, a.role) for arm in arms}
+    stubs = {arm: _arm_stubs(arm, a.role) for arm in arms}
+    menu_lines = {arm: _menu_lines(entries[arm]) for arm in arms}
+    print(f"\n菜单规模（role={a.role}）："
+          + " / ".join(f"{arm} {len(entries[arm])} 项" for arm in arms))
 
     R: dict = {"role": a.role, "decode": DECODE, "rec_limit": REC_LIMIT,
-               "arms": arms, "menu_size": {"skill": len(skill_entries),
-                                           "tool": len(tool_entries)},
+               "arms": arms,
+               "menu_size": {arm: len(entries[arm]) for arm in arms},
+               # 菜单侧字符数：索引档省下来的量**在这一层就是死的数**（不用等模型）。
+               "menu_chars": {arm: len(json.dumps(entries[arm], ensure_ascii=False))
+                              for arm in arms},
                "rounds": []}
     for r in range(1, a.rounds + 1):
         order = arms if r % 2 else list(reversed(arms))   # 两臂交替，抵消端点漂移
