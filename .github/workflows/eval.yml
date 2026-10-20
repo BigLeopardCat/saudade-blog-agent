@@ -304,6 +304,22 @@ jobs:
       - name: 盲捕获棘轮（BLE001 只许变小）
         run: uv run --frozen python eval/except_gate.py
 
+      # 安全扫描棘轮（20261020 补，审计意见 §安全扫描）。bandit 全仓 142 条，而**没有一条
+      # 是真的可利用漏洞**（大头是 B105 字典键误报、B608 拼模块级常量表名、B108 写 /tmp）——
+      # 同族第六道棘轮：记基线、只许变小、`--update` 是唯一放宽通道。
+      # ⚠️ **跳过集是四条**（`B101` assert / `B404`+`B603`+`B607` subprocess 记账三项）：
+      # 本仓的既定形态就是 shell 出去调 git/systemctl/psql，这三项每调一次都报。不安全的
+      # 变体 `B602`(`shell=True`) / `B609`(通配符注入)**没有跳**，那才是要看的（当前 0 条）。
+      # ⚠️ **四个量任一换掉就退 3**：bandit 版本 / **它跑在哪个解释器上** / 跳过集 / 扫描面。
+      # 解释器那一条是实测出来的：同一份源码，`uvx bandit`（自带 3.10）读到 205、
+      # `uvx --python 3.12 bandit` 读到 211（同 `eval/type_gate.py` 的
+      # `--python-executable` 那个洞）。本机跑法见该脚本头注。
+      # ⚠️ 还有两个"悄悄关闸"的口子也堵了：bandit **自动发现**的配置源
+      # （`.bandit` / `setup.cfg` / **`pyproject.toml` 的 `[tool.bandit]`**）在场就退 3；
+      # `# nosec` 行内豁免进账且**只许变小**（现在 0 ⇒ 等于不许用）。
+      - name: 安全扫描棘轮（bandit 只许变小）
+        run: uv run --frozen python eval/security_gate.py
+
   # ═ 看板娘 pin 漂移提示（20261002）════════════════════════════════════════
   # **独立 job、只警告、恒绿**。上面那个 eval job 是门禁，这一条不是：它回答的是
   # "这次改了看板娘前端，父仓那个 pin 跟上了没有"。

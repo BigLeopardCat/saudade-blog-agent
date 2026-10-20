@@ -131,6 +131,7 @@ dependencies = [
 # `uvx ruff@0.14.4 check …`（与这里同版；升版 = 改这一行 + `uv lock`，本机命令一起改）。
 [dependency-groups]
 dev = [
+    "bandit==1.9.4",
     "coverage[toml]==7.16.2",
     "langchain==1.3.11",
     "mypy==2.4.0",
