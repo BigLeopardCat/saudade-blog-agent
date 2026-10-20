@@ -49,7 +49,7 @@
   },
   "agent/workflow_plan.py::_instantiate_plan": {
     "c": 123,
-    "lines": 516
+    "lines": 515
   },
   "agent/write_grounding.py::_name_arg_fix": {
     "c": 68,
@@ -171,6 +171,14 @@
     "c": 38,
     "lines": 170
   },
+  "tests/test_authz.py::test_authz": {
+    "c": 211,
+    "lines": 1306
+  },
+  "tests/test_capability_denial.py::test_capability_denial": {
+    "c": 29,
+    "lines": 312
+  },
   "tests/test_judge_offline.py::main": {
     "c": 75,
     "lines": 205
@@ -184,12 +192,16 @@
     "lines": 246
   },
   "tests/test_retention_manifest.py::main": {
-    "c": 41,
-    "lines": 178
+    "c": 31,
+    "lines": 167
+  },
+  "tests/test_settings_surface.py::test_settings_surface": {
+    "c": 37,
+    "lines": 141
   },
   "tests/test_trace_retention.py::main": {
-    "c": 48,
-    "lines": 167
+    "c": 47,
+    "lines": 166
   },
   "tests/test_workflows.py::test_admin_console_role_channel": {
     "c": 44,

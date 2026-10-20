@@ -128,7 +128,16 @@ dependencies = [
 # ⚠️ 本机 `.venv` 是**产线 venv**，不许 `uv sync` ⇒ 本机跑静态扫描仍用隔离的
 # `uvx ruff@0.14.4 check …`（与这里同版；升版 = 改这一行 + `uv lock`，本机命令一起改）。
 [dependency-groups]
-dev = ["coverage[toml]==7.16.2", "langchain==1.3.11", "mypy==2.4.0", "ruff==0.14.4"]
+dev = [
+    "coverage[toml]==7.16.2",
+    "langchain==1.3.11",
+    "mypy==2.4.0",
+    "pytest==9.1.1",
+    "pytest-cov==7.1.0",
+    "pytest-timeout==2.4.0",
+    "pytest-xdist==3.8.0",
+    "ruff==0.14.4",
+]
 
 [project.urls]
 Homepage = "https://github.com/BigLeopardCat/saudade-blog-agent"
@@ -145,6 +154,17 @@ build-backend = "hatchling.build"
 # import 的 `rag/`（`agent/graph.py` 等十几处）——列错不会报错，因为从没构建过。
 # 判据：`tests/test_packaging.py` 逐项断言"这个目录真的在磁盘上"，防止它再漂。
 packages = ["agent", "config", "models", "rag", "tools", "utils"]
+
+[tool.pytest.ini_options]
+# 双轨期（20261020 批 1 起）：pytest 与 tests/run_all.py 并行跑同一批套件，红绿必须
+# 一致（对拍判据 tests/test_pytest_parity.py，末批 PR 删 run_all 时它一并退役）。
+# 批 1 只收集**迁移台账**（tests/conftest.py 的 _MIGRATED，那里的注释写清为什么台账
+# 是真值源）里登记的文件——未迁移的裸脚本判据长在模块级，pytest 收集即 import，
+# 会把它们当场执行掉（其中 sys.exit 直接杀收集器），必须挡在门外。
+testpaths = ["tests"]
+# 单测试超时对齐 run_all 的 300s 套件档；并行（-n 4）由 CI 显式传，这里不写死——
+# 串行是默认，与 run_all「串行是默认、CI 显式 -j 4」同一条纪律。
+timeout = 300
 
 [tool.ruff]
 line-length = 100

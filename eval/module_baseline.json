@@ -68,8 +68,8 @@
     "top_defs": 24
   },
   "tests/test_authz.py": {
-    "lines": 1336,
-    "top_defs": 5
+    "lines": 1356,
+    "top_defs": 3
   },
   "tests/test_chat_quota.py": {
     "lines": 1047,
