@@ -42,9 +42,11 @@ from langchain_core.outputs import ChatGenerationChunk  # noqa: E402
 from agent import capability_arm as CA  # noqa: E402
 from agent import react_arm as R  # noqa: E402
 from agent import tool_menu as TM  # noqa: E402
+from agent import tool_prompt as TP  # noqa: E402
 from agent import workflow_defs as W  # noqa: E402
 from agent.capability_index import capabilities_for  # noqa: E402
 from agent.principal import Principal  # noqa: E402
+from agent.prompts import BLOG_ASSISTANT_PROMPT  # noqa: E402
 from agent.tool_prompt import PSEUDO_NAMES  # noqa: E402
 
 FAILED: list[str] = []
@@ -178,8 +180,23 @@ def test_menu_two_phases():
           != {t.name for t in CA.capability_menu("admin", {"caps": ["navigate"]})})
 
 
-# ── ② 只换 description ────────────────────────────────────────────────────
+# ── ② 只换 description（＋摘掉两个没人读的槽位） ──────────────────────────
 def test_index_menu_only_swaps_description():
+    """索引态相对生产 schema 的差别**只有两处**，两处都要钉住：
+
+      · `description` 那一格换成 `index_entry`（阶段 1 的自变量就是它）；
+      · **两个跨切面槽位被摘掉**（`slots=False`）——本臂折算计划时走
+        `tool_menu.strip_slots`，`intents` / `reply_kind` **填了就扔**，而它们单份
+        799 字符 × 49 条能力 = 索引菜单的 59%。摘槽位**不是**"顺手瘦身"：填了没人读
+        等于骗模型以为申报过了。三个伪函数不受影响（`task_intents` 自带 `intents`）。
+
+    ⚠️ 判据要**同时**钉"该摘的摘了"与"不该动的没动"：只判前者，把整个 `properties`
+    清空也过。
+    """
+    from agent.planner_llm import build_tool_schema
+    from agent.prompt_context import REPLY_KIND_ARG
+    from agent.tasks import INTENTS_ARG
+
     def strip(node: Any) -> Any:
         if isinstance(node, dict):
             return {k: strip(v) for k, v in node.items() if k != "description"}
@@ -188,14 +205,35 @@ def test_index_menu_only_swaps_description():
         return node
 
     for role in (None, "user", "admin"):
-        from agent.planner_llm import build_tool_schema
-        prod = {t["function"]["name"]: strip(t["function"]) for t in build_tool_schema(role)}
+        prod = {t["function"]["name"]: strip(t["function"])
+                for t in build_tool_schema(role, slots=False)}
         for tool in CA.capability_menu(role, {}):
             schema = tool.args_schema if isinstance(tool.args_schema, dict) else {}
             got = strip({"name": tool.name, "parameters": schema})
             check(f"索引态只换描述、结构一字节不动：{tool.name}（role={role}）",
                   tool.name in prod and got == strip(prod[tool.name]),
                   f"{str(got)[:60]} vs {str(prod.get(tool.name))[:60]}")
+
+    # 反控 ①：槽位**真的被摘掉了**（否则上面那条判的是"摘了等于没摘"）
+    for role in ("admin",):
+        for tool in CA.capability_menu(role, {}):
+            props = (tool.args_schema or {}).get("properties") or {}
+            if tool.name in PSEUDO_NAMES:
+                continue
+            check(f"反控：索引菜单里没有槽位 `{tool.name}`",
+                  INTENTS_ARG not in props and REPLY_KIND_ARG not in props,
+                  str(sorted(props))[:60])
+    # 反控 ②：`slots=True`（生产那条路）**照旧挂着**——摘的只是本臂这一份
+    on = {t["function"]["name"]: t["function"] for t in build_tool_schema("admin")}
+    check("反控：生产 schema（slots=True）两个槽位照旧在（没顺手把生产也摘了）",
+          INTENTS_ARG in on["navigate"]["parameters"]["properties"]
+          and REPLY_KIND_ARG in on["navigate"]["parameters"]["properties"])
+    # 反控 ③：`task_intents` 自带的 `intents` **不许**被 `slots=False` 连带摘掉
+    # （它才是 `tasks.normalize_intents` 真读的那个出口）
+    pseudo = {t.name: (t.args_schema or {}) for t in CA.capability_menu("admin", {})}
+    check("反控：`task_intents` 自己的 `intents` 参数没被连带摘掉",
+          INTENTS_ARG in ((pseudo.get("task_intents") or {}).get("properties") or {}),
+          str(sorted(((pseudo.get("task_intents") or {}).get("properties") or {}))))
 
     # 反控：索引态的描述**确实被换过**（否则上面那条判的是"没换"）
     from agent.capability_index import capability_of, index_entry
@@ -258,6 +296,33 @@ def test_prompt_follows_menu():
           "该调的工具都调上" in second)
     check("反控：简报确实进了提示词（逐字子串，不是「看着像」）", brief.split("\n")[0] in second,
           brief.split("\n")[0])
+
+    # ⚠️ 提示词里那张清单必须与**绑给模型的 schema** 是同一批工具（20261021）。
+    # 不判这条的后果实测过：schema 只绑了 `navigate_to`，提示词却印着全部 73 件，
+    # 而抬头上写着"**唯一可选集合**"——模型照着文本去点一个它结构上点不到的名字，
+    # 正是 POC 里 A 族（13 条路由红）的形态。
+    # 只取 `{tool_menu}` 那一格（"可调用工具（" 到 "判定规则：" 之间）——整份提示词里
+    # 还有别的 `· ` 行（立场改写、纪律那几段），不圈定范围就会把它们当成工具名。
+    seg = second[second.find("可调用工具（"):second.find("判定规则：")]
+    listed = [ln.split(" — ")[0].removeprefix("· ").strip()
+              for ln in seg.splitlines() if ln.startswith("· ")]
+    check("工具态提示词里的工具清单 == 那条能力的工具面（不是全表）",
+          set(listed) == {"navigate_to"}, str(listed[:8]))
+    full, face = TP.tool_menu_text("admin"), TP.tool_menu_text("admin", {"navigate_to"})
+    check("反控：全量菜单文本**确实更长**（否则上面那条判的是「本来就短」）",
+          len(full) > len(face), f"{len(full)} vs {len(face)}")
+
+    # 装配顺序：静态块在契约**之前**（前缀缓存的承重件，同提交 `8bbe3f0` 的手法）。
+    # 判据读**真发出去那一份**、且用**资产自己的第一行**当地标（不手抄一句提示词正文：
+    # 抄一句就多一个漂移源，资产改了这个判据会静默失效）。
+    head = next(ln for ln in (BLOG_ASSISTANT_PROMPT or "").splitlines() if ln.strip())
+    check("工具态提示词是「静态资产在前、契约在后」（前缀缓存的承重件）",
+          0 <= second.find(head) < second.find("可调用工具（"),
+          f"人设首行 @{second.find(head)}，菜单抬头 @{second.find('可调用工具（')}")
+    # 契约**内部**同理：静态的判定规则要在易变的「页面上下文」之前
+    check("契约内部也是「静态规则在前、易变数据在后」",
+          0 <= second.find("判定规则：") < second.find("页面上下文："),
+          f"判定规则 @{second.find('判定规则：')}，页面上下文 @{second.find('页面上下文：')}")
 
 
 # ── ⑤ 不扩权 + 不重写 harness ─────────────────────────────────────────────

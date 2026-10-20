@@ -292,7 +292,7 @@ def _has_write_tool(workflow) -> bool:
 def build_tool_schema(role: str | None, *, evidence: bool = False,
                       deny: frozenset[str] | set[str] | None = None,
                       deny_pseudo: frozenset[str] | set[str] | None = None,
-                      index: bool = False) -> list[dict]:
+                      index: bool = False, slots: bool = True) -> list[dict]:
     """本轮这个身份能选的技能 → OpenAI `tools` 数组。
 
     **来源只有一处**：`visible_workflows(role)` × `workflow_param_specs(workflow)`——与渲染
@@ -350,6 +350,13 @@ def build_tool_schema(role: str | None, *, evidence: bool = False,
     （`enum` 是带参清单的拦截点），只换 `description` 那一格的内容。
     缺省 `False` ⇒ **本参数不存在时这条路径逐字节相同**（`tests/test_prompt_prefix.py`
     钉住），理由、实测依据与"为什么是外置不是删除"见 `agent/tool_index.py` 头注。
+
+    **`slots=False`（20261021，出厂开）**：不挂 `intents` / `reply_kind` 那两个**跨切面
+    槽位**。缺省 `True` ⇒ **本参数不存在时这条路径逐字节相同**（`tests/test_prompt_prefix.py`
+    与 `tests/test_planner_llm.py` 的集合断言钉着）。**唯一消费方是能力索引臂**——它折算
+    计划时走 `tool_menu.strip_slots`，那两格**填了就扔**；而它们单份 799 字符 × 49 条
+    能力 = 索引菜单的 **59%**。三个伪函数**不受影响**（`task_intents` 自带 `intents`，
+    它才是被 `tasks.normalize_intents` 真读的那个出口），理由见 `tool_menu.build_tool_menu`。
     """
     tools: list[dict] = []
     for workflow in visible_workflows(role):
@@ -362,20 +369,23 @@ def build_tool_schema(role: str | None, *, evidence: bool = False,
             props[name] = _override_for(role, workflow.name, name) or _param_schema(sp)
             if sp.required:
                 required.append(name)
-        # 意图清单的**第二个出口**（20261008，见 `tasks.intents_prop_schema`）：每个
-        # 技能函数多带一格**可选**的 `intents`。**不进 `required`**——它是"一句话里
-        # 有两件以上时才填"，填不填都不影响这一轮的动作决策（模型不填 = 今天的行为）。
-        # 挂在每一个技能上而不是只挂写技能：要办的两件可以都不是写（"查一下 X 再顺手
-        # 把它置顶"），而"哪几件"这件事与技能是不是写无关。
-        props[INTENTS_ARG] = intents_prop_schema(INTENTS_FIELD_DESC)
-        # 短应答的自我申报（20261015 批 3，`prompt_context.REPLY_KIND_FIELD_DESC`）：**挂在每个
-        # 技能上、没有任何档位**。与 `intents` 一样**不进 `required`、不进 `params`**
-        # （`tool_calls_to_plan` 摘走），所以"模型不填"这条路径与本参数不存在时逐字节相同。
-        # 拷 `tasks.py` 那份体例的两处不同见 `prompt_context.REPLY_KIND_ARG` 的注；这里只补一条
-        # 为什么**不**像 `evidence` 那样按技能射程收窄：短应答的三种出口各自落到哪个技能
-        # 是不定的（同意多半落在读、授权多半落在写），而"模型读成了哪一类"这件事与技能
-        # 无关——按射程收窄会让大部分轮次没有申报口，读数就断了。
-        props[REPLY_KIND_ARG] = reply_kind_prop_schema(REPLY_KIND_FIELD_DESC)
+        # 两个**跨切面槽位**（`slots`，见 docstring）：它们是"给模型一个地方填"的申报口，
+        # 不进 `required`、不进 `params`（`tool_calls_to_plan` 摘走），所以"模型不填"
+        # 这条路径与本参数不存在时逐字节相同。
+        if slots:
+            # 意图清单的**第二个出口**（20261008，见 `tasks.intents_prop_schema`）：每个
+            # 技能函数多带一格**可选**的 `intents`。**不进 `required`**——它是"一句话里
+            # 有两件以上时才填"，填不填都不影响这一轮的动作决策（模型不填 = 今天的行为）。
+            # 挂在每一个技能上而不是只挂写技能：要办的两件可以都不是写（"查一下 X 再顺手
+            # 把它置顶"），而"哪几件"这件事与技能是不是写无关。
+            props[INTENTS_ARG] = intents_prop_schema(INTENTS_FIELD_DESC)
+            # 短应答的自我申报（20261015 批 3，`prompt_context.REPLY_KIND_FIELD_DESC`）：
+            # **挂在每个技能上、没有任何档位**。拷 `tasks.py` 那份体例的两处不同见
+            # `prompt_context.REPLY_KIND_ARG` 的注；这里只补一条为什么**不**像 `evidence`
+            # 那样按技能射程收窄：短应答的三种出口各自落到哪个技能是不定的（同意多半落
+            # 在读、授权多半落在写），而"模型读成了哪一类"这件事与技能无关——按射程收窄
+            # 会让大部分轮次没有申报口，读数就断了。
+            props[REPLY_KIND_ARG] = reply_kind_prop_schema(REPLY_KIND_FIELD_DESC)
         # 出处引文（20261014 第一批，`evidence` 那一格）：**只挂在会产出写工具的
         # 技能上**。射程由 `agent/provenance.write_scope_tools` 派生（= authz 里声明
         # 为写 ∧ 不在"一律弹窗"族），不是第二份手抄名单——挂多了是给模型白送一格

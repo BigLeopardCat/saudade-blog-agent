@@ -93,11 +93,24 @@ def _json_schema(tool: Any) -> dict:
     return dict(schema.model_json_schema())
 
 
-def build_tool_menu(role: str | None, *, evidence: bool = False) -> list[dict]:
+def build_tool_menu(role: str | None, *, evidence: bool = False,
+                    slots: bool = True) -> list[dict]:
     """这个身份能选的工具 → OpenAI `tools` 数组（形状与技能级那份逐格对齐）。
 
     `evidence`（出厂关，同 `planner_llm.build_tool_schema` 的 `evidence`）：只挂在
     `authz.is_write` 为真的工具上——射程仍由权限表派生，不另立名单。
+
+    `slots`（20261021，出厂开）：要不要把两个**跨切面槽位**（`intents` / `reply_kind`）
+    挂在每一个工具上。**缺省 `True` ⇒ 逐字节不变**；能力索引臂传 `False`。
+
+    **为什么那条臂要传 `False`**：槽位是"给模型一个地方填"的申报口，而消费方在别处
+    ——`tasks.normalize_intents`（从 `planner_llm.tool_calls_to_plan` 里读）与
+    `prompt_context.parse_reply_kind`。能力索引臂两条都不走：它折算计划时走的是
+    `tool_menu.strip_slots`，**填了就扔**。于是那两格在那条臂上纯是负担，而且**贵**：
+    单份 799 字符 × 49 条能力 = 索引菜单的 **59%**（67,441 → 27,892 字符），工具面
+    同样每件多背 799。更坏的是它**骗模型**——模型把"剩下还有哪几件"填进 `intents`，
+    系统一声不响地扔掉，而它以为已经申报过了。摘掉之后意图那条路只剩 `task_intents`
+    这一个**真被读**的出口（它不进本函数的射程，见下面那两行）。
     """
     by_name = {t.name: t for t in get_all_tools()}
     tools: list[dict] = []
@@ -107,8 +120,9 @@ def build_tool_menu(role: str | None, *, evidence: bool = False) -> list[dict]:
         props: dict[str, dict] = dict(schema.get("properties") or {})
         required: list[str] = list(schema.get("required") or [])
         # 与技能级那两格同源同形：意图清单（第二个出口）与短应答自我申报。
-        props[INTENTS_ARG] = intents_prop_schema(INTENTS_FIELD_DESC)
-        props[REPLY_KIND_ARG] = reply_kind_prop_schema(REPLY_KIND_FIELD_DESC)
+        if slots:
+            props[INTENTS_ARG] = intents_prop_schema(INTENTS_FIELD_DESC)
+            props[REPLY_KIND_ARG] = reply_kind_prop_schema(REPLY_KIND_FIELD_DESC)
         if evidence and authz.is_write(name):
             props[EVIDENCE_ARG] = evidence_prop_schema(EVIDENCE_FIELD_DESC)
         desc = _TOOL_MENU_LINES.get(name) or (tool.description or "")
