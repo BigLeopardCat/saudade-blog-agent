@@ -112,7 +112,7 @@ schema"）。**这是一处具体的、可修的缺陷**，不是"模型不行"�
 `task_intents`）；`multi_step_effect_then_nav` / `mix5_cmd_nav_read_three_way` 是同一族的跨步版本。
 
 **另一副面孔是"调了菜单里没有的名字"**（1.1%：455 次调用里 5 次）。`todo_multi_step_serial`
-该调 `get_article_detail`，调了 **`read_article`——那是技能名**（`agent/workflow_defs/public_read.py`），
+该调 `get_article_detail`，调了 **`read_article`——那是技能名**（`agent/workflow_defs/` 里的；20261021 起它住 `read_article.toml`），
 工具菜单里没有它。⇒ 模型手上仍有一份**技能名**词汇表（来源待查：`task_intents` 的
 "本领名"描述是嫌疑之一），而工具臂的菜单认不出它。
 近义名同族：`guestboard_talk_double_source` 该调 `list_talks`，调了 `list_guestbook`。
