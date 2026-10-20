@@ -167,11 +167,12 @@ from agent.frame_contract import (NOOP_TEXT,
                           executed_specs,
                           plan_for_gate as _plan_for_gate)
 from agent.graph import (AgentCancelled, AgentState, _EXECUTOR_PROMPT,
-                         NARRATOR_DISCIPLINE, _NARRATOR_NO_TOOLCALL_NUDGE,
+                         _NARRATOR_NO_TOOLCALL_NUDGE,
                          _NO_PRINTED_FACTS, _NO_PRINTED_FACTS_ACTION, _confirm_popup,
                          _frame_id, _narrator_plan, _pending_ledger_frame,
                          _principal_of, _render_planner_prompt, _stopped,
                          gate_node as _prod_gate_node, graph_input, plan_state)
+from agent.narrator_discipline import NARRATOR_DISCIPLINE_LOOP
 from agent.planner_llm import build_tool_schema
 from agent.prompts import BLOG_ASSISTANT_PROMPT, STICKER_GUIDE, audience_block
 from agent.react_line import (RunLedger, WorkflowExecutor, convergence_verdict,
@@ -1210,18 +1211,16 @@ def _system_prompt(messages: list, role: str | None, principal: Any,
       规则、输出契约全在里面，**照着抄第二份就是抄一个漂移源**；
     · 第二块是 `BLOG_ASSISTANT_PROMPT`（人设 + 叙述边界 + 诚实底线，narrator 用的同一份
       资产）。没有它，收尾正文是"规划器口吻"的、且没有任何反幻觉纪律；
-    · 第三块是 `NARRATOR_DISCIPLINE`（20261005 起，**与生产 narrator 逐字同一份**，
-      `graph._EXECUTOR_PROMPT` 的纪律段）。此前一条都没接，代价实测可数：`own_*` 族
-      整族慢性红——模型如实说了"读不到"，却**又多派了一句"你先去登录"**，而纪律 20
-      明令禁止（生产的账不许算在主人头上）。同族还有"读不到 ≠ 空"那几条；
+    · 第三块是 `NARRATOR_DISCIPLINE_LOOP`——**按条裁过的**叙述纪律（20261021，见
+      `agent/narrator_discipline.py` 的头注）。此前是"整份 `NARRATOR_DISCIPLINE` 照搬 + 前面挂
+      一段 `_DISCIPLINE_STANCE` 逐条作废"，于是一条调用里同时出现「你没有工具」和
+      「你有工具、自己调用」两句相反的话、靠第三段裁定。现在前提为假的那些条
+      **直接不进提示词**，留下的条逐字取自生产那一份。此前一条都不接的代价实测可数：
+      `own_*` 族整族慢性红——模型如实说了"读不到"，却**又多派了一句"你先去登录"**，
+      而纪律 20 明令禁止（生产的账不许算在主人头上）。同族还有"读不到 ≠ 空"那几条；
     · 第四块是 `STICKER_GUIDE`（情绪贴纸的**唯一**名字表）。不接它，`:害羞:` 这些
       记号结构上产不出来（`sticker_*` 用例整族恒红），而语料只认这 12 个名字；
     · 第五块是循环机制（怎么终止），只有三五句。
-
-    **纪律块要带立场改写**（`_DISCIPLINE_STANCE`）：那份纪律是 narrator（零工具节点）
-    的立场——第 1 条写着"你没有任何可以直接调用的工具"。本循环正好相反，所以紧挨着它
-    前面放一段"哪几句按本循环读、其余一个字不放宽"。**不改写就是自相矛盾的提示词**，
-    而矛盾提示词的失效方式是不定向的。
 
     `fast_frames`：**本线恒传 `None`**（保留形参只为签名兼容）。快道那一次读取的工具帧
     已经在 `state["messages"]` 里、会由 `_window` 交给模型（生产是渲染进 `tool_results`
@@ -1246,8 +1245,7 @@ def _system_prompt(messages: list, role: str | None, principal: Any,
         reflector_feedback="（本决策轮无复盘建议）",
         correction="（本决策轮无纠偏提示）")
     return "\n\n".join([planner, BLOG_ASSISTANT_PROMPT or "", audience_block(role),
-                        _DISCIPLINE_STANCE, NARRATOR_DISCIPLINE, STICKER_GUIDE,
-                        _CLOSING_RULES])
+                        NARRATOR_DISCIPLINE_LOOP, STICKER_GUIDE, _CLOSING_RULES])
 
 
 def _crash_text(ledger: RunLedger, err: Exception) -> str:
@@ -1264,57 +1262,18 @@ def _crash_text(ledger: RunLedger, err: Exception) -> str:
             "这一轮没有任何一件办成，我没有假装办好了。")
 
 
-# 叙述纪律的**立场改写**（20261005）。同 `audience_block` 的手法：纪律文本只有一份，
-# 变的只是"对谁、在哪个循环里读"——这里改的是**循环立场**那一维。
+# 叙述纪律的**立场改写**这一层（`_DISCIPLINE_STANCE`，886 字，20261005–20261021）
+# **已经退场**。它做的事——把 narrator 立场的那几条逐条作废——现在由
+# `agent.narrator_discipline.NARRATOR_DISCIPLINE_LOOP` **按条裁**取代：前提为假的那些条**根本不进
+# 提示词**，而不是"进来了再声明作废"。理由与逐条依据见 `agent/narrator_discipline.py` 的头注；
+# 判据 `tests/test_narrator_discipline_loop.py`。
 #
-# 为什么必须有它：`NARRATOR_DISCIPLINE` 开篇就是"你是回复者，不是执行者""你没有任何
-# 可以直接调用的工具。站内查询、跳转…都由系统在下面的执行计划中完成"。本线的模型
-# **既是决策者也是回复者**，工具就在它手里——原样照读会得到一份自相矛盾的提示词
-# （前面给的技能表说"调它"，紧接着说"你没有工具"）。
-#
-# **为什么是"逐条点名作废"而不是一句"你有工具"**（20261005 实测）：头一版只写了
-# "你有工具、自己调用"，结果**工具调用整体掉了三格**——`guestboard_talk_double_source`
-# /`after_offer_then_look_up` 变成"一个工具都没调"，`own_favorite_add_not_logged_in`
-# 变成"没调 add_favorite"。对得上号的正是那几条**前提为假**的纪律：纪律 3 前半
-# （"本轮尚无工具执行 ⇒ 如实说无法确认，或建议稍后再问"）在本循环里是"还没开始查"，
-# 却被读成"答不了"；纪律 18（"要动站内数据的操作由系统自己走确认流程、确认框一个字
-# 别提"）让模型**根本不碰写工具**。泛泛的一句"你有工具"压不住紧跟着的 23 条正文，
-# 所以这里把作废的**条号与首句逐字点名**（模型对"第 3 条前半作废"这种指认比对话语
-# 敏感得多），并**只作废前提为假的那半句**——同一号纪律里前提仍成立的那半（空结果
-# ≠ 没执行、只按回执说结果）照旧生效。
-#
-# 边界写死：只改写**立场**，一条实质纪律都不放宽——尤其 20（读不到 ≠ 空 / 不许派主人
-# 去登录）与"只按回执说结果"。
-_DISCIPLINE_STANCE = """\
-叙述纪律的读法（本循环的立场改写——纪律**原文**在后面，一字未改）：
-下面那份纪律是生产 narrator 节点的（那个节点零工具、只负责把系统的执行记录说成人话）。
-本循环里你**既是决策者也是回复者**，工具就在你手上。因此先按下面五条**作废/换指称**，
-**其余各条（含同号纪律的后半句）一个字都不放宽**：
-
-· **纪律 1 作废**（「你没有任何可以直接调用的工具…由系统在下面的执行计划中完成」）：
-  你**有**工具，就是本文档里那张本领表里那些，要做事就**自己调用**；纪律里说的
-  「执行计划」在本循环里 = 那张表。
-· **纪律 3 的前半句作废**（「工具执行记录为本轮尚无工具执行时…站内问题如实说明无法
-  确认，或建议用户稍后再问」）：本循环里"还没有工具记录"只说明你**还没开始查**——
-  想回答就先调工具，**不许**用"无法确认"收尾。**后半句（空结果 ≠ 没执行）照旧生效**。
-· **纪律 9 作废**（「回复遵循计划 REPLY 行的契约组织」）：本循环没有计划行，信息够了
-  就直接写最终答复。
-· **纪律 18 的前半句作废**（「要动站内数据的操作由系统自己走确认流程」）：写操作
-  **你要自己调工具**——同意闸会在你真动手之前拦下并弹卡（那一轮轮不到你说话，与本条
-  同理）。**后半句照旧生效**：只按回执说结果，绝不说"已经发起/已经办好了"。
-· **纪律 23 作废**（它按「本轮系统代印的事实」那一格分岔，本循环没有那一格；而 20261005
-  起生产那一格也恒为占位、写族同样归 narrator 说）：
-  写族的结果**归你说**，按它 ② 那半执行——照回执原话说，不作完成式陈述。
-· 纪律里凡说「工具执行记录 / 本轮执行回执」→ 你自己这一轮调用工具后拿到的真实返回
-  （就在消息流里）。
-
-其余全部照旧生效：不许编造、**读不到 ≠ 空**、只按回执说结果、不许把还没动手讲成已经
-办好、不许给主人派「你先去登录」这类活……**这些一条都不放宽**。"""
+# ⚠️ 别把它请回来：那条路留下的形状是"一条调用里同时出现「你没有工具」和「你有工具」，
+# 靠第三段裁定哪句算数"——累积就是这么长出来的。
 
 
 # 收尾说明（模块私有，三五句）：把"这个循环里你怎么结束"讲清楚。**不写叙述纪律**
-# ——那件事由上面的 `NARRATOR_DISCIPLINE` 负责（纪律前还有 `_DISCIPLINE_STANCE`），
-# 这里只讲机制。
+# ——那件事由 `NARRATOR_DISCIPLINE_LOOP` 负责，这里只讲机制。
 _CLOSING_RULES = """\
 循环机制（你既是决策者也是回复者）：
 1. 要做事就**直接调用技能工具**（上面的技能表就是你的全部本领）；系统会立刻执行并把

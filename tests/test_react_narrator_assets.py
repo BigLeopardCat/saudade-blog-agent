@@ -39,6 +39,7 @@ from langchain_core.messages import HumanMessage  # noqa: E402
 
 import agent.graph as G  # noqa: E402
 import agent.react_arm as R  # noqa: E402
+from agent.narrator_discipline import NARRATOR_DISCIPLINE_LOOP  # noqa: E402
 from agent.principal import UNKNOWN  # noqa: E402
 
 FAILS: list[str] = []
@@ -80,27 +81,32 @@ def test_react_narrator_assets():
     print("\n③ 接线：能力在常量里 ≠ 接上了（`test_source_attribution` ②的同一条道理）")
     R._pending_ledger_frame = lambda *a, **k: ("", {})  # 离线：不读台账
     _sp = R._system_prompt([HumanMessage(content="我有哪些未读通知？")], "admin", UNKNOWN, {}, "")
-    check("**叙述纪律整段进了臂的系统提示**（不是只在 graph 里躺着）", G.NARRATOR_DISCIPLINE in _sp)
+    check("**叙述纪律（按条裁过的那一份）进了臂的系统提示**（不是只在 graph 里躺着）",
+          NARRATOR_DISCIPLINE_LOOP in _sp)
     check("**贴纸名字表进了臂的系统提示**（不接 ⇒ `sticker_*` 结构上产不出）",
           R.STICKER_GUIDE in _sp and "害羞" in _sp and "每轮最多一个" in _sp)
     check("`R.STICKER_GUIDE is graph 用的那一份`（同一个对象，不是抄的第二份）",
           R.STICKER_GUIDE is G.STICKER_GUIDE)
-    check("立场改写也在（纪律 1「你没有工具」与本循环相反，不写就是自相矛盾的提示词）",
-          R._DISCIPLINE_STANCE in _sp)
-    check("**立场改写排在纪律之前**（放在后面等于先让模型照 narrator 的立场读一遍）",
-          _sp.index(R._DISCIPLINE_STANCE) < _sp.index(G.NARRATOR_DISCIPLINE))
-    check("立场改写点破了纪律 1 那句（「你没有工具」→「你有工具」）",
-          "你没有任何可以直接调用的工具" in R._DISCIPLINE_STANCE
-          and "自己调用" in R._DISCIPLINE_STANCE)
-    check("  且写明**实质纪律一条都不放宽**（改的是指称，不是底线）",
-          "一条都不放宽" in R._DISCIPLINE_STANCE or "全部照旧生效" in R._DISCIPLINE_STANCE)
-    check("前提为假的那几条纪律**逐条点名作废**（20261005 实测：泛泛一句「你有工具」"
-      "压不住紧跟着的 20+ 条正文，工具调用整体掉了三格）",
-          all(f"纪律 {n}" in R._DISCIPLINE_STANCE for n in (1, 3, 9, 18, 23)))
-    check("  且**只作废前提为假的那半句**：3 与 18 的诚实那半照旧生效"
+    check("臂接的是**按条裁过的**那一份（`NARRATOR_DISCIPLINE_LOOP`，20261021）",
+          NARRATOR_DISCIPLINE_LOOP in _sp)
+    check("**生产那一份整份不再进臂的提示词**（「接整份 + 作废」那条路已退场）",
+          G.NARRATOR_DISCIPLINE not in _sp)
+    # ⚠️ 只在**纪律那一块**里找条号：整份提示词里还有别的编号表（planner 的判定规则
+    # 1–6、收尾说明 1–5），不圈定范围这条判的是它们、而不是纪律。
+    _disc = _sp[_sp.index(NARRATOR_DISCIPLINE_LOOP):
+                _sp.index(R.STICKER_GUIDE)]
+    check("前提为假的那些条**根本不在提示词里**（不是「进来了再声明作废」）",
+          all(f"\n{n}. " not in _disc for n in (1, 9, 10, 12, 13, 23, 24)),
+          str([n for n in (1, 9, 10, 12, 13, 23, 24) if f"\n{n}. " in _disc]))
+    check("  **留下的条一个都不少**（裁的是那几条，不是把整块切短）",
+          all(f"\n{n}. " in _disc for n in (2, 4, 5, 7, 8, 11, 14, 15, 16, 17, 19, 20, 21, 22)),
+          str([n for n in (2, 4, 5, 7, 8, 11, 14, 15, 16, 17, 19, 20, 21, 22)
+               if f"\n{n}. " not in _disc]))
+    check("  立场那一句仍在（本循环既是决策者也是回复者，不讲清就是自相矛盾的提示词）",
+          "既是决策者也是回复者" in _sp and "一条都不放宽" in _sp)
+    check("  且**只裁前提为假的那半句**：3 与 18 的诚实那半照旧在"
       "（空结果 ≠ 没执行 / 只按回执说结果）",
-          R._DISCIPLINE_STANCE.count("照旧生效") >= 2
-          and "空结果" in R._DISCIPLINE_STANCE and "只按回执说结果" in R._DISCIPLINE_STANCE)
+          "空结果就如实说" in _sp and "只按回执说结果" in _sp)
     check("臂的提示词里 `.format` 的槽都填好了（拼的是渲染结果，不是模板）",
           "{persona}" not in _sp and "{sticker_guide}" not in _sp)
     print("\n④ 多模态：文本口径不变，非文本部件原样带上")

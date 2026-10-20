@@ -75,6 +75,14 @@
         22,
         0
       ],
+      "agent/capability_arm.py": [
+        0,
+        0
+      ],
+      "agent/capability_index.py": [
+        0,
+        0
+      ],
       "agent/checkpoint.py": [
         0,
         0
@@ -142,6 +150,10 @@
       "agent/name_grounding.py": [
         115,
         25
+      ],
+      "agent/narrator_discipline.py": [
+        21,
+        0
       ],
       "agent/plan_codec.py": [
         0,
@@ -211,7 +223,19 @@
         2,
         0
       ],
+      "agent/tool_menu.py": [
+        0,
+        0
+      ],
+      "agent/tool_prompt.py": [
+        0,
+        0
+      ],
       "agent/tool_specs.py": [
+        0,
+        0
+      ],
+      "agent/tools_arm.py": [
         0,
         0
       ],
@@ -357,7 +381,7 @@
       ]
     },
     "total": [
-      1150,
+      1163,
       4848
     ]
   },
@@ -1954,6 +1978,17 @@
       "why": "从主人原话里**按措辞**认写参数（词表 + 位置窗口）",
       "replacement": "引文核对：模型吐引文、代码逐字比对（agent/provenance.py 第一批已落地）",
       "sunset": "写参数出处第二批（挂起：等真实流量定价，见 docs/write-provenance-shadow-20261014.md §7）"
+    },
+    {
+      "id": "agent/narrator_discipline.py::NARRATOR_DISCIPLINE_LOOP_OVERRIDES",
+      "file": "agent/narrator_discipline.py",
+      "kind": "collection",
+      "name": "NARRATOR_DISCIPLINE_LOOP_OVERRIDES",
+      "size": 3,
+      "category": "prompt_text",
+      "q": "",
+      "why": "循环臂读的那份叙述纪律的**裁掉表**（条号 → 替换正文）。它是一张**提示词文本表**，不是判据词表：里面那三格中文是第 3/6/18 条改指称之后的正文（空串＝整条不进）。同族登记见 `agent/prompts.py::NARRATOR_DISCIPLINE`（生产那一份，也在本表里）。⚠️ 同文件另有一张 `_LOOP_KEEP_REASONS`（**故意原样留着**的那几条为什么不裁），它**不是匹配器**所以窄口径看不见它——本文件穷举量 13→21 那一格增长就是它，逐条理由见 `tests/test_narrator_discipline_loop.py` ② 与 changelog ⑪。",
+      "replacement": "没有替代品，也不需要：它**就是**提示词正文。防漂移靠 `tests/test_narrator_discipline_loop.py`——留条正文必须逐字等于生产那一条，改一个字节就红。"
     },
     {
       "id": "agent/prompt_context.py::_RECALL_RE",
