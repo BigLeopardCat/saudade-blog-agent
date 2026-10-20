@@ -303,7 +303,7 @@ trace 与 golden trace 的保留各有其执行者（`eval/trace_retention.py`�
 | 变量 | 默认 | 说明 |
 |---|---|---|
 | `LLM_PROVIDER` | `qwen` | 选 `qwen` / `deepseek` / `openai` / `opencode`，各家的 key/base_url/model 各自独立 |
-| `QWEN_API_KEY` / `QWEN_BASE_URL` / `QWEN_MODEL` | — | 当前生产提供方的三项（其余提供方同名同形）。**`QWEN_BASE_URL` 自己部署必须显式设**：端点形状（百炼公开端点 / 业务空间专属端点 / 聚合平台地址）见 `.env.example` |
+| `QWEN_API_KEY` / `QWEN_BASE_URL` / `QWEN_MODEL` | — | 每家有同形的三项（`DEEPSEEK_*` / `OPENAI_*` / `OPENCODE_*`），这里以 qwen 为例。**`QWEN_BASE_URL` 自己部署必须显式设**：端点形状（百炼公开端点 / 业务空间专属端点 / 聚合平台地址）见 `.env.example` |
 | `LLM_TIMEOUT` | `120` | 单次 LLM 调用超时（秒） |
 | `BLOG_API_BASE` | 部署方自己的站点（`.env` 未设时落到代码默认值） | **自己部署必改**：所有只读工具与 RAG 语料的取数地址，导航链接的站点根也由它反推。不改的话工具查的是维护者的博客（接口通、返回真，只是不是你的） |
 | `JWT_SECRET` | — | 与 Rust 侧共用，服务间身份断言与短时效 JWT 的签名键 |

@@ -35,7 +35,7 @@ flowchart TB
         DEV[device-service :3100<br/>ESP32 OLED 指令下发]
     end
 
-    LLM[LLM API<br/>qwen3.8-flash（生产）<br/>thinking 默认开<br/>图内调用均显式关]
+    LLM[LLM API<br/>opencode · deepseek-v4.1-flash（生产）<br/>thinking 默认开<br/>图内调用均显式关]
 
     UI <-->|"POST /api/chat/stream ⇄ SSE 帧（X-Accel-Buffering:no）"| NGX
     NGX <-->|"反代 ⇄ 帧转发"| RUST
@@ -1447,8 +1447,8 @@ flowchart TB
 ## 7. LLM 与配置
 
 - Provider 机制（settings.py）：`LLM_PROVIDER=qwen|deepseek|openai|opencode` 四选一，各配独立 API key/base_url/model；
-  当前生产 `qwen` → `qwen3.8-flash`（阿里云 MaaS compatible-mode；settings.py 代码默认仍是 qwen3.6-flash，
-  由生产 .env `QWEN_MODEL` 覆盖）。
+  当前生产 `opencode` → `deepseek-v4.1-flash`（opencode zen 网关的 Go 端点，OpenAI 兼容；
+  settings.py 代码默认是同一家的 `longcat-2.5-preview-free`，由生产 .env `OPENCODE_MODEL` 覆盖）。
 - 关键参数：`temperature=0.7`、`max_tokens=8192`、`timeout=120s`。
 - `agent_max_iterations=10` / `agent_early_stopping_method` 在 settings.py 有定义但**从未被代码读取**
   （create_agent 时代遗留的 LangChain 参数，手写图不消费）——死配置，实际生成有界性靠 `recursion_limit=30`（§6.4）。
