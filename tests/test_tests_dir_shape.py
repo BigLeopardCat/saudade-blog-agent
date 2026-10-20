@@ -80,10 +80,16 @@ def helpers(entries: list[str]) -> list[str]:
 
 
 def suites_on_disk(entries: list[str]) -> list[str]:
-    """盘上**该**被入口收走的：一级、`.py`、不以 `_` 开头、不是入口自己。"""
+    """盘上**该**被入口收走的：一级、`.py`、不以 `_` 开头、不是入口自己。
+
+    `conftest.py`（20261020 双轨起步起）也除外：它是 pytest 的测试现场（环境钉子/
+    收集名单），只有装配逻辑、没有任何判据——与 `run_all.py` 同列。⚠️ 这条例外与
+    `run_all.suites()` / `test_ci_suite_list.py` 的枚举规则**三处同源**，改一处必须
+    同步另两处（`test_ci_suite_list` ④ 的"枚举 == 磁盘"会把漂移当场报出来）。
+    """
     return sorted(e for e in entries
                   if "/" not in e and e.endswith(".py")
-                  and not e.startswith("_") and e != ENTRY)
+                  and not e.startswith("_") and e != ENTRY and e != "conftest.py")
 
 
 def non_test_suites(entries: list[str]) -> list[str]:
@@ -208,7 +214,7 @@ check("正控：`from __future__ import annotations` ⇒ 不算幽灵（双下�
 
 print("\n③ 会被收走的 `.py` 名字都是 `test_*`（否则是一行没有内容的 `✓`）")
 _NON = non_test_suites(_ENTRIES)
-check("一级非 `_` 开头的 `.py` 全是 `test_*`（`run_all.py` 自己除外）", not _NON,
+check("一级非 `_` 开头的 `.py` 全是 `test_*`（`run_all.py` / `conftest.py` 除外）", not _NON,
       "、".join(_NON) or "无")
 check("反控：放一个 `helpers.py` ⇒ 必须报出来（它会被当套件跑、退 0、什么都不判）",
       non_test_suites(["test_a.py", "helpers.py"]) == ["helpers.py"])
