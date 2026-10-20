@@ -8,7 +8,7 @@
     "I",
     "W"
   ],
-  "total": 624,
+  "total": 622,
   "by_file": {
     "agent/action_text.py": 2,
     "agent/authz.py": 5,
@@ -64,7 +64,6 @@
     "scripts/layout_ab.py": 1,
     "scripts/sticker_smoke.py": 1,
     "server.py": 12,
-    "tests/run_all.py": 2,
     "tests/test_account_freeze.py": 4,
     "tests/test_account_role.py": 3,
     "tests/test_account_roster.py": 2,

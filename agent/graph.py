@@ -2278,7 +2278,7 @@ def _ledger_next(state, config) -> "tuple[dict, dict] | None":
     是默认必备的，不该有个开关把它变成摆设）。撤之前的形状是"关 ⇒ 逐字节退回本批之前
     的行为"，而产线 `.env` 自 20261002 起一直是 `1` ⇒ **撤掉这一档在产线上是零行为差
     异**（档位那一格的取值本来就是常量真）。档位存在时的真代价是：离线套件钉的是
-    `0`（`tests/run_all.py::_PINNED`），于是 CI 与夜间**从来看不到**这一族判据，
+    `0`（`tests/conftest.py::_PINNED`），于是 CI 与夜间**从来看不到**这一族判据，
     本机裸跑又直接红——判据跑在哪一档成了第三件事。
     """
     if not _ledger_in_scope(state, config):

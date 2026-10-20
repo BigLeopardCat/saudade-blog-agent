@@ -50,7 +50,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 
-import _ctx_src  # noqa: E402  （`_` 开头 ⇒ 不被 run_all 当套件收）
+import _ctx_src  # noqa: E402  （`_` 开头 ⇒ 不被 pytest 当套件收）
 
 from agent import authz  # noqa: E402
 from agent import provenance as P  # noqa: E402
@@ -100,6 +100,8 @@ def _cjk_collections(tree):
 import agent.graph as g  # noqa: E402
 
 
+# 钉子表的持有者 20261020 从 `tests/run_all.py` 搬到 `tests/conftest.py`（自研 runner 删了），
+# 所以下面那条读的是 conftest.py；**判据的意思一字未变**：出厂档必须进那张表。
 def test_provenance():
     print("① 逐字核对：值 ⊆ 引文 ⊆ 来源，来源分档（user > ledger > exec）")
     _msg = "把标签「大笨狗」和 Python 两个标签都删掉"
@@ -378,7 +380,7 @@ def test_provenance():
           'ev.get("values")' in _ta and "REFUSAL_SOURCES" in _ta)
     check("旧 trace 没有 values= 时**单独计数**（「读不到」与「没有误拒」不许混成一个 0）",
           "r4_readable" in _ta and "r4_seen" in _ta)
-    _ra = (ROOT / "tests" / "run_all.py").read_text(encoding="utf-8")
+    _ra = (ROOT / "tests" / "conftest.py").read_text(encoding="utf-8")
     check("出厂档进了 `_PINNED`（否则谁 export 过就按另一档判）",
           '"AGENT_EVIDENCE": "0"' in _ra)
     print("\n" + ("全部通过" if not FAILED else f"失败 {len(FAILED)} 项：" + "; ".join(FAILED)))

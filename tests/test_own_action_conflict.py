@@ -39,7 +39,7 @@ ROOT = Path(__file__).resolve().parent.parent  # 仓根
 sys.path.insert(0, str(ROOT))
 
 
-import _ctx_src  # noqa: E402  （`_` 开头 ⇒ 不被 run_all 当套件收）
+import _ctx_src  # noqa: E402  （`_` 开头 ⇒ 不被 pytest 当套件收）
 from langchain_core.messages import HumanMessage  # noqa: E402
 
 import agent.graph as g  # noqa: E402

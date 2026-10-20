@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Nightly regression: tests/run_all.py（全部离线套件，按磁盘枚举） + 检索基准 + golden set（语料 149 条，夜间实跑 146
+# Nightly regression: pytest（全部离线套件，按目录收集） + 检索基准 + golden set（语料 149 条，夜间实跑 146
 # ——唯一的例外是那 3 条会真写生产库的用例，它们按设计不由任何无人看着的跑法触发）+ 巡检
 # ⚠️ **本仓默认不装任何 cron（出厂关）**（20261017）：这是公开仓库，而这个脚本一次全量要真调
 # LLM 跑 golden（≈10M tok / ¥2.4，维护者实测的量级），跑的还是**维护者那台机器上的**博客语料
@@ -68,18 +68,23 @@ echo "=== nightly regression $TS ===" >> "$LOG"
 export SAUDADE_REQUIRE_PARENT=1
 
 fail=0
-# 20260928 起：这一节从"单跑 test_workflows.py"换成 **tests/run_all.py**（按磁盘枚举 tests/*.py）。
+# 20260928 起：这一节从"单跑 test_workflows.py"换成**按目录枚举整个 tests/**。
 # 理由是审计实测出来的那个数：CI 的 eval.yml 手工维护 26 个 step，而磁盘上有 50+ 个套件
 # ⇒ **一半以上的判据从不在任何自动化里运行**（其中就有前缀缓存稳定性的唯一哨兵
 # test_prompt_prefix 与 test_slim_workflows）。夜间此前也只跑一个套件。名单制（三处各抄一份）
-# 正是这个漏的来源 ⇒ 夜间也改成按磁盘枚举，加套件不用改这里。
-# run_all.py 自带出厂档钉子（`AGENT_EVIDENCE=0` / `AGENT_FASTPATH=1` 等项 + **整份 .env
-# 不读**的 `SAUDADE_IGNORE_ENV_FILE=1`）：本机 `.env` 是产线那份，不钉的话离线判据会跟着
-# 运维取值变。（`PLANNER_ENGINE` 那一项 20261004 删了——接口层只剩 native 一条，没有档可钉；
-# `AGENT_TASK_STATE` / `AGENT_TASK_PLAN_EXEC` 两项 20261015 删了——任务状态整族撤档、常开。）
-# **夜间也走这个入口**，所以夜间的绿与 CI 的绿是同一套环境下的绿。
-echo "--- tests/run_all.py (全部离线套件, 按磁盘枚举, 秒级, 无网络无 LLM) ---" >> "$LOG"
-$PY tests/run_all.py >> "$LOG" 2>&1 || { fail=1; echo "[$TS] run_all FAILED" >> "$LOG"; }
+# 正是这个漏的来源 ⇒ 夜间也改成按目录收集，加套件不用改这里。
+# 20260928 那次落点是自研 runner `tests/run_all.py`；**20261020 这 180 个裸脚本套件整体转成
+# 原生 pytest**（过程与逐批读数见 changelog.d/20261020-pytest-migration-*.md），入口换成
+# `pytest` 本身、run_all.py 删除。**夜间与 CI 走同一个入口**（都是 `pytest`，只是 CI 多传
+# `-n 4`），所以夜间的绿与 CI 的绿是同一套环境下的绿。
+# 出厂档钉子随入口一起搬进 `tests/conftest.py` 的 `_PINNED`（`AGENT_EVIDENCE=0` /
+# `AGENT_FASTPATH=1` 等项 + **整份 .env 不读**的 `SAUDADE_IGNORE_ENV_FILE=1`）：本机 `.env`
+# 是产线那份，不钉的话离线判据会跟着运维取值变。（`PLANNER_ENGINE` 那一项 20261004 删了
+# ——接口层只剩 native 一条，没有档可钉；`AGENT_TASK_STATE` / `AGENT_TASK_PLAN_EXEC` 两项
+# 20261015 删了——任务状态整族撤档、常开。）
+# 不加 `-n`：这一趟在本机跑、没人等它，而本机内存比 runner 紧（CI 那一份才按 4 路并行）。
+echo "--- pytest (全部离线套件, 按目录收集, 秒级, 无网络无 LLM) ---" >> "$LOG"
+$PY -m pytest -q >> "$LOG" 2>&1 || { fail=1; echo "[$TS] pytest FAILED" >> "$LOG"; }
 # 20260924 起：检索基准（recall@k / MRR，直接测线上 rag/search.py，秒级、无网）。
 # README 里一直写着 nightly 跑 L1/L2 两项，实际只有 L2——这一节把它补齐。
 # 非门禁：已知 FAIL 是词法表征的局限（脚本自己在报告里点名），不该让夜间任务变红。
@@ -100,7 +105,7 @@ echo "--- 断崖证书探针 (真语料上跑有/无断崖两臂, 秒级, 非门
 # 函数，每发一篇文章都该重跑一次）。
 #
 # **非门禁**（同语料漂移哨兵那族）：保底那段代码被改回去时，同一夜**第一步**的
-# `tests/run_all.py` 里的离线套件已经红了（那个是门禁）——本探针不是它的备份，是它的
+# 第一步那套离线套件已经红了（那个是门禁）——本探针不是它的备份，是它的
 # **两个不同前提**：离线那半的前提是"夹具还做得出病灶"，这半的前提是"今天的语料是今天的
 # 语料"。两者都可能单独失守（夹具腐烂 / 语料形态变了），所以各自报各自的。
 # 退出码：0 一致 / 1 有回归（断崖动了 top-3 名次）/ 2 读不到语料（**无法确认**，不是"没有"）。

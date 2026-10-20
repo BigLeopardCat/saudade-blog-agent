@@ -10,7 +10,7 @@
      那道 meta 闸只放 `AUDIT_SCOPES` = `write.console`）⇒ Rust 只能从 args 渲染出
      「收藏文章 12」——一次根本没发生的写被写进了执行台账。
 
-本套件锁四件事（秒级、无网络无 LLM；由 run_all.py 自动收）：
+本套件锁四件事（秒级、无网络无 LLM；由 pytest 自动收）：
 
   ① **判据本身**（`adminops.reached_specs`，纯函数）：各族的「已达成 / 未达成 /
      读不到 ⇒ 照弹」判定表——**fail-open 的方向永远是弹卡**，任何一条不成立

@@ -17,12 +17,12 @@
 事实，但**没有**接进任何自动通道；把它接进探针是父仓那侧的活。别把这一套读成
 "生产已经在按 /ready 摘流量了"。
 
-**前提由判据自己摆**：离线套件跑在 `SAUDADE_IGNORE_ENV_FILE=1` 下（`tests/run_all.py::_PINNED`），
+**前提由判据自己摆**：离线套件跑在 `SAUDADE_IGNORE_ENV_FILE=1` 下（`tests/conftest.py::_PINNED`），
 `.env` 根本不读 ⇒ `*_api_key` 全是空的。"凭据在位"这一格必须由本文件自己设——继承运维取值的话，
 它会**单跑绿、进套件红**（实测撞上过一次）。同 `test_checkpoint_factory.py` ① 钉
 `CHECKPOINT_DSN=""` 的理由：判据量的是被测代码，不是这台机器的 `.env`。
 
-秒级、无网络、不跑 LLM；由 `tests/run_all.py` 按磁盘枚举自动收。
+秒级、无网络、不跑 LLM；由 pytest 按目录收集自动收。
 
 用法：.venv/bin/python tests/test_ready.py
 """
@@ -66,7 +66,7 @@ def test_ready():
     print("① 正常态：就绪，且与 /health 一致（都在说'活着且能干活'）")
     _agent_saved = server._agent
     # ⚠️ **凭据由本判据自己摆，不许继承运维取值**：离线套件跑在
-    # `SAUDADE_IGNORE_ENV_FILE=1` 下（见 `tests/run_all.py::_PINNED`），`.env` **根本不读**
+    # `SAUDADE_IGNORE_ENV_FILE=1` 下（见 `tests/conftest.py::_PINNED`），`.env` **根本不读**
     # ⇒ `*_api_key` 全是空的。直接断言"凭据在位 ⇒ 200"会**单跑绿、进套件红**（实测撞上过
     # 一次，症状是 ① 报 `reasons=['missing_credentials']`）。同 `test_checkpoint_factory.py` ①
     # 钉 `CHECKPOINT_DSN=""` 的理由：判据的前提要自己摆出来，否则它量的是这台机器的 `.env`。

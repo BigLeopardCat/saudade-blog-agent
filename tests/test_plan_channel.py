@@ -38,7 +38,7 @@
 **不测什么**：不测 `plan_encode` 的**排版**（`test_workflows.py` 有往返用例）、不测
 planner/gate 行为（各有专测）。这里只锁"通道的形状"。
 
-跑法：`.venv/bin/python tests/run_all.py -k plan_channel`
+跑法：`.venv/bin/python -m pytest -q -k plan_channel`
 """
 
 
@@ -54,7 +54,7 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 
-import _ctx_src  # noqa: E402  （`_` 开头 ⇒ 不被 run_all 当套件收）
+import _ctx_src  # noqa: E402  （`_` 开头 ⇒ 不被 pytest 当套件收）
 
 import server as SRV  # noqa: E402  （③ 读它的新读法：`_spec_one`/`_specs_from_tools`）
 from agent import deterministic_plan as D  # noqa: E402  （② 取样 `_terminal_plan`/`_wrap_up_plan`）

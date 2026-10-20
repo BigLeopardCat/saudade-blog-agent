@@ -16,7 +16,7 @@
    且**一次 embedding 调用都不花**（`_embed_one` 被换成计数器：它动了就是红）。
 
 ⚠️ 本套件不依赖本机 `.env`：`resolve()` 全部显式传 dict，`Settings` 全部显式传参
-（`tests/run_all.py` 的钉子环境与产线取值无关，判据也不能跟着它变）。
+（`tests/conftest.py` 的钉子环境与产线取值无关，判据也不能跟着它变）。
 """
 
 

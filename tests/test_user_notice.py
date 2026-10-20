@@ -156,7 +156,7 @@ from agent.workflow_tools import _CALLABLE_QUERY_TOOLS, _EXPLICIT_TOOLS  # noqa:
 sys.path.insert(0, str(ROOT / "tests"))
 
 
-import _parent_repo  # noqa: E402  （`_` 开头 ⇒ 不被 run_all 当套件收）
+import _parent_repo  # noqa: E402  （`_` 开头 ⇒ 不被 pytest 当套件收）
 from langchain_core.messages import HumanMessage  # noqa: E402
 
 from agent.graph import execute_node, plan_state  # noqa: E402

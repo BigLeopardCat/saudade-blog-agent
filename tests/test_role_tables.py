@@ -53,7 +53,7 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 
-import _ctx_src  # noqa: E402  （`_` 开头 ⇒ 不被 run_all 当套件收）
+import _ctx_src  # noqa: E402  （`_` 开头 ⇒ 不被 pytest 当套件收）
 
 from agent import adminops_account as _account  # noqa: E402
 from agent import graph as G  # noqa: E402  （④ 比的是**在跑的**那张预检表，不是源码文本）

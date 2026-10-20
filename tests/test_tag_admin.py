@@ -35,7 +35,7 @@ ROOT = Path(__file__).resolve().parent.parent  # 仓根（20260924：测试统�
 sys.path.insert(0, str(ROOT))
 
 
-import _ctx_src  # noqa: E402  （`_` 开头 ⇒ 不被 run_all 当套件收）
+import _ctx_src  # noqa: E402  （`_` 开头 ⇒ 不被 pytest 当套件收）
 
 import tools.base as base  # noqa: E402
 from agent import adminops_confirm as _confirm  # noqa: E402

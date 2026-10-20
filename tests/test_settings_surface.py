@@ -30,7 +30,7 @@ pydantic-settings 按字段名定变量名，而那一位叫 `agent_early_stoppi
 
 本套件只判"**面**"上的三件事，不判任何取值语义：**不读 `.env`**（本机那份是产线配置，
 读它就是在拿产线事实当判据），只看 `settings.py` 的字段声明与 `.env.example` 的键。
-秒级、无网络、不跑 LLM；由 `tests/run_all.py` 按磁盘枚举自动收。
+秒级、无网络、不跑 LLM；由 pytest 按目录收集自动收。
 
 用法：.venv/bin/python tests/test_settings_surface.py
 """

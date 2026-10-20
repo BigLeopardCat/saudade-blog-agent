@@ -111,8 +111,9 @@ dependencies = [
 #     那份**看不到三方库**、把 import 全退化成 Any，同一条命令会少报 8 个（212 vs 220）。
 #     `type_gate.py` 现在恒带这个参数并把值钉成启动器的解释器，所以本机**必须**
 #     用那个已装好依赖的解释器去启动脚本，再让它去跑隔离的 mypy（细节见该文件 docstring）。
-#   · `coverage[toml]` —— **20261013 补**：`tests/run_all.py --coverage` 用它出那份
-#     **非门禁**的覆盖率报告（逐套件 `coverage run` + 结尾 `combine`）。为什么**不设阈值**：
+#   · `coverage[toml]` —— **20261013 补**：`scripts/dev/coverage.sh` 用它出那份
+#     **非门禁**的覆盖率报告（`pytest --cov`；20261020 前是 `tests/run_all.py --coverage`，
+#     逐套件 `coverage run` + 结尾 `combine`，入口随自研 runner 一起删了）。为什么**不设阈值**：
 #     只有形状判据配当门禁，百分比会把"该测的没测"与"测了但那一支没走到"混成一个数，拿它
 #     当闸门只会把人推去测 getter；它回答的是"这轮动得多不多、哪些文件一直没人碰"。
 #     配置在文件末尾的 `[tool.coverage.*]`（`source` 只列生产包）。
@@ -123,8 +124,9 @@ dependencies = [
 #     **多余但无害**的声明。留着的理由只有一个：**判据不该依赖"当前解释器恰好带了
 #     TOML"**——写下来的是一个"配置必须读得进来"的形状，不是"这一版正好不用装东西"。
 #     它带 `tomli` 的 marker 是 `python_full_version <= '3.11'` ⇒ 在 3.12 上不装任何东西。
-#     ⚠️ 同前：本机不许 `uv sync` ⇒ 本机跑它给产线 venv **临时挂一份**（`PYTHONPATH` 指
-#     到隔离装的那份，见 `tests/run_all.py` 头注的三行命令），CI 里才由 `uv sync --frozen` 装。
+#     ⚠️ **20261020 起本机不再需要"临时挂一份"**：那份 `uv venv /tmp/cov` + `PYTHONPATH`
+#     指的配方是围着"产线 venv 里没有 coverage"写的，而它现在就在下面这个 dev 分组里
+#     （同 pytest / pytest-cov），一次 `uv sync` 就有。
 # ⚠️ 本机 `.venv` 是**产线 venv**，不许 `uv sync` ⇒ 本机跑静态扫描仍用隔离的
 # `uvx ruff@0.14.4 check …`（与这里同版；升版 = 改这一行 + `uv lock`，本机命令一起改）。
 [dependency-groups]
@@ -156,14 +158,16 @@ build-backend = "hatchling.build"
 packages = ["agent", "config", "models", "rag", "tools", "utils"]
 
 [tool.pytest.ini_options]
-# 双轨期（20261020 批 1 起）：pytest 与 tests/run_all.py 并行跑同一批套件，红绿必须
-# 一致（对拍判据 tests/test_pytest_parity.py，末批 PR 删 run_all 时它一并退役）。
-# 批 1 只收集**迁移台账**（tests/conftest.py 的 _MIGRATED，那里的注释写清为什么台账
-# 是真值源）里登记的文件——未迁移的裸脚本判据长在模块级，pytest 收集即 import，
-# 会把它们当场执行掉（其中 sys.exit 直接杀收集器），必须挡在门外。
+# 20261020 起 `tests/` 就是一套**原生 pytest 套件**（179 个套件整体从「自研 runner
+# tests/run_all.py + 裸脚本判据」迁过来，逐批读数见 changelog.d/20261020-pytest-migration-*.md）。
+# 双轨期那一版这里写的是「只收集 _MIGRATED 台账里登记的文件」（未迁移的裸脚本判据长在
+# 模块级，收集即 import 会把它们当场执行掉），台账随末批一起删了。
+#
+# 下面两项都**刻意不写 `python_files`**：默认的 `test_*.py` 就是这套的收集规则，写出来
+# 等于多一处可以漂的事实源（tests/test_tests_dir_shape.py ④ 判着「没被改掉」）。
 testpaths = ["tests"]
-# 单测试超时对齐 run_all 的 300s 套件档；并行（-n 4）由 CI 显式传，这里不写死——
-# 串行是默认，与 run_all「串行是默认、CI 显式 -j 4」同一条纪律。
+# 单测试超时 300s（对齐原 run_all 的套件档）。并行（`-n 4`）由 CI 显式传、这里不写死——
+# 串行是默认（本机与夜间都串行），与 run_all「串行是默认、CI 显式 -j 4」同一条纪律。
 timeout = 300
 
 [tool.ruff]
@@ -186,18 +190,19 @@ strict = false
 ignore_missing_imports = true
 
 # 覆盖率（20261013）：只出报告，**不设阈值、不进 CI**（见 dev 组那段注释）。跑法 =
-# `tests/run_all.py --coverage`；`source` 只列**生产包**——`tests/` 与 `eval/` 是被测对象
+# `bash scripts/dev/coverage.sh`；`source` 只列**生产包**——`tests/` 与 `eval/` 是被测对象
 # 不是被测代码，把它们算进去只会把那个百分比稀释成一个谁都不看的数。
 [tool.coverage.run]
 source = ["agent", "config", "models", "rag", "tools", "utils"]
-# `parallel = true`：每个套件是**独立子进程**（run_all.py 的形状），各写各的
-# `.coverage.<host>.<pid>.<rand>`，跑完 `combine` 合成一份。不开这个，后一个子进程会
-# **整份覆盖**前一个的数据，报出来的永远是"最后一个套件跑了什么"。
+# `parallel = true`：每个进程各写各的 `.coverage.<host>.<pid>.<rand>`，跑完 `combine`
+# 合成一份（`scripts/dev/coverage.sh` 指定它们的落点）。不开这个，后一个进程会
+# **整份覆盖**前一个的数据，报出来的永远是"最后跑的那一份是什么"。
+# 今天比 20261013 那次更要紧：`pytest -n 4` 与 `pytest-cov` 都会起多个进程。
 parallel = true
 # `no-data-collected` 这条警告**按套件**打：有一套是纯读文件做判据的（编码/换行/CHANGELOG
 # 结构），一行生产代码都不碰 ⇒ 它每一次都合法地"没采到数据"，而那句话会插在套件输出中间，
-# 反复喊一件正常的事。真正需要人知道的那种"整档没工作"由 `run_all.py` 自己判（一个数据
-# 文件都没有 ⇒ 一行 ⚠️），不靠这里的噪声。
+# 反复喊一件正常的事。（20261013 那版还有半句"整档没工作由 run_all.py 自己判"——那个
+# 判断随 run_all.py 一起没了；今天 `.coverage-data/` 空着就是"没采到"，看一眼就知道。）
 disable_warnings = ["no-data-collected"]
 
 [tool.coverage.report]

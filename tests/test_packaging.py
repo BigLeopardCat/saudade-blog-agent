@@ -13,7 +13,7 @@
   ④ `[tool.mypy]` 配了却**从不执行**（mypy 不在依赖、不在 lock、CI 没有这一步）
      ⇒ 函数签名注释了约 78% 而没有一个被校验。补成真之后，"棘轮真的接在 CI 上"
      与"三处写的 mypy 版本是同一个"同样需要有人看着——否则它会以 ① 那种方式再死一次。
-  ⑤ 覆盖率那一档（`run_all.py --coverage`）的 pin 与配置：pin 少写 `[toml]` extra ⇒
+  ⑤ 覆盖率那一档（`scripts/dev/coverage.sh`）的 pin 与配置：pin 少写 `[toml]` extra ⇒
      coverage 读不了 `pyproject.toml`、**每个套件都退 1**（现场像整批代码坏了；
      当年是 3.10，标准库没有 TOML）；`[tool.coverage.run].source` 少列一个包 ⇒
      那个包**整份**从报告里消失，而"哪些文件一直没人碰"这个问题的答案就悄悄少一块。
@@ -107,12 +107,23 @@ def _reads_runtime_version(tree: ast.AST) -> bool:
     return False
 
 
+# 覆盖率那一档 20261020 换了入口：原 `tests/run_all.py --coverage`（逐套件 `coverage run` +
+# 结尾 `combine`）随 run_all.py 一起删掉，改成 `scripts/dev/coverage.sh`（`pytest --cov`）。
+# **两处麻烦同时消失了**，所以下面几条旧判据不是"漏了"，是**对象没有了**：
+#   · 旧配方要临时 `uv venv /tmp/cov` 再把 site-packages 挂 `PYTHONPATH`（产线 venv 里
+#     没有 coverage）⇒ 那三行"起不来时的配方"、`lib/python3.X/site-packages` 与
+#     `--python {sys.executable}` 三条判据都是围着它写的。今天 `coverage[toml]` 与
+#     `pytest-cov` 就在 `[dependency-groups] dev` 里，⑤ 开头那条 pin 判据管的正是这件事。
+#   · 旧配方要自己给子进程挂 `tests/`（`env["PYTHONPATH"] = str(TESTS)`）⇒ 今天归
+#     `tests/conftest.py` 管（收集前插 `sys.path`），**一处**而不是两处。
+# ⚠️ ⑤ 判的是那个脚本的**代码**，不是整份文件：它的头注里写着"旧配方要临时建一个隔离 venv
+# 挂 coverage"（留档，说明那套麻烦为什么消失），拿整份文本去判"不许出现它"会被脚本自己的
+# 说明文字绊倒 —— 同 `_called_suites` 那条"抹掉整行注释"的教训。所以读进来先剥掉注释行。
 def test_packaging():
     PYPROJECT = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
     PROJECT_SEC = _section(PYPROJECT, "project")
     EVAL_YML = ROOT / ".github" / "workflows" / "eval.yml"
     WHEEL_SEC = _section(PYPROJECT, "tool.hatch.build.targets.wheel")
-    RALL = (ROOT / "tests" / "run_all.py").read_text(encoding="utf-8")
     _m = re.search(r'^version\s*=\s*"([^"]+)"', PROJECT_SEC, re.M)
     PROJECT_VERSION = _m.group(1) if _m else None
     print("① wheel 包列表 == 磁盘事实（列错不会报错，所以必须有人看着）")
@@ -289,7 +300,7 @@ def test_packaging():
     _bad_ver = [f"{f}@{v}" for f, v in _hits if v != MYPY_PIN]
     check(f"  整仓的 `uvx mypy@X` 与 dev 分组同版（{MYPY_PIN}）——升版只改一处就会被这条抓住",
           not _bad_ver, "、".join(_bad_ver))
-    print("\n⑤ 覆盖率那一档（`run_all.py --coverage`）：pin 要带 extra，量的面要与打包的面同源")
+    print("\n⑤ 覆盖率那一档（`scripts/dev/coverage.sh`）：pin 要带 extra，量的面要与打包的面同源")
     _cov_pin = re.search(r'"coverage(\[[^\]]*\])?==([0-9][^"]*)"', _dg_sec)
     check("pyproject 的 dev 分组钉了 coverage 版本", _cov_pin is not None,
           _cov_pin.group(2) if _cov_pin else "dependency-groups 里没有钉死的 coverage==")
@@ -308,15 +319,19 @@ def test_packaging():
           re.search(r"^\s*parallel\s*=\s*true", _run_sec, re.M | re.I) is not None)
     check("`[tool.coverage.report]` 在场（`show_missing` 那份人看的表就长在这节里）",
           bool(_section(PYPROJECT, "tool.coverage.report").strip()))
+    _cov_sh = re.sub(r"(?m)^\s*#.*$", "",
+                     (ROOT / "scripts" / "dev" / "coverage.sh").read_text(encoding="utf-8"))
     _gi = (ROOT / ".gitignore").read_text(encoding="utf-8")
-    check("`.coverage-data/` 既在 run_all.py 里、也在 .gitignore 里（两处同一个名字）",
-          "COV_DIR = ROOT / \".coverage-data\"" in RALL and ".coverage-data/" in _gi)
-    check("  run_all.py 给子进程挂上了 `tests/`（否则覆盖率档下同目录助手 import 不到）",
-          'env["PYTHONPATH"] = str(TESTS)' in RALL)
-    check("  配方不写死 `lib/python3.X/site-packages`（改问 `coverage.__file__`）",
-          "lib/python3." not in RALL and "SITE=$(/tmp/cov/bin/python -c" in RALL)
-    check("  起不来时打出来的三行配方也**按当前解释器算**（`sys.executable`，不写死版本号）",
-          "--python {sys.executable}" in RALL and "--python {v}" not in RALL)
+    check("`.coverage-data/` 既在覆盖率脚本里、也在 .gitignore 里（两处同一个名字）",
+          'COV_DIR=".coverage-data"' in _cov_sh and ".coverage-data/" in _gi)
+    check("  脚本先清上一轮的数据（残片会被 combine 合进来 ⇒ 报告里混进**上一版**的行号）",
+          'rm -rf "$COV_DIR"' in _cov_sh)
+    check("  射程不在这里抄第二份（`--cov` 不带值 ⇒ 取 `[tool.coverage.run].source`）",
+          "--cov " in _cov_sh and "--cov=" not in _cov_sh)
+    check("  不再临时建 venv 挂 coverage（它已是 dev 分组的声明依赖）",
+          "uv venv" not in _cov_sh and "/tmp/cov" not in _cov_sh)
+    check("  这一档有唯一入口且文档指着它（没有第二个覆盖率配方）",
+          "scripts/dev/coverage.sh" in (ROOT / "CONTRIBUTING.md").read_text(encoding="utf-8"))
     print("\n⑥ 解释器版本只有一处事实源（六处手写 + 一份生成物，必须是同一个值）")
     _pf = re.search(r'^requires-python\s*=\s*">=\s*([0-9]+\.[0-9]+)"', PROJECT_SEC, re.M)
     PY_FLOOR = _pf.group(1) if _pf else None

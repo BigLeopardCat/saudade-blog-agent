@@ -8,7 +8,7 @@
 
 **为什么必须开子进程**：`API_BASE` 是模块级常量（import 时从 settings 定型），
 `SITE_BASE` 由它算出，导航事实文本的拼装也定型在函数里。同一个进程里改不了档——
-只能各起一个子进程，把 env 喂进去再读结果。这也正是 `run_all.py` 与
+只能各起一个子进程，把 env 喂进去再读结果。这也正是 `tests/conftest.py` 与
 `tests/test_iot_switch.py` 的做法。
 
 **两档各自的失法**（都不报错）：
