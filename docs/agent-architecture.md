@@ -259,6 +259,43 @@ Saudade-Blog/src/entity/chat_history.rs     # 消息表实体
 Saudade-Blog/src/entity/chat_summary.rs     # 摘要表实体
 ```
 
+### 2.1 `graph.py` 为什么不拆成子包（20261020 实测，免得下一个人再问一遍）
+
+`agent/graph.py` 11078 行、196 个模块级定义，全仓最胖。它**不是没拆过**——按主题
+切出去的有 `plan_codec` / `tool_specs` / `write_grounding` / `textnorm` /
+`absence_claims` / `repeat_guard` / `name_grounding` / `prompts` / `tasks` 一族。
+"剩下的再拆成一个 `agent/graph/` 包"这件事，实测的结论是**不拆**：
+
+1. **剩下的部分是一个连通分量。** 按 AST 算每个顶层名的出边闭包，最大零出边子闭包
+   只有总量的一个小零头 ⇒ 任何一刀都会切出一条"两半互相 import"的边，或者留下一个
+   仍然超预算的文件。同一种形状本仓撞过一次并写进 CHANGELOG（`write_grounding` 那
+   59 个顶层名，最大零出边子闭包 15/59）。
+2. **唯一严格满足「出边为零」的一刀是 nudge 语料**（10 个 `_*_NUDGE` 常量、223 行、
+   0 defs、0 出边）。收益 11078 → 10855——**为满足判据而拆，不值**。
+3. **`utils.py` 那个桶是假的。** 一份审计给的包结构里 `utils.py` 标 ~300 行；按同一
+   套分法实测是 **7395 行**（24.6×）。那不是分解，是把 5 个节点函数搬出去、把剩下
+   364 个顶层名倒进一个新的大文件。
+4. **`PlannerContext` / `NarratorContext` / `GraphConfig` 是新抽象，不是搬家。** 本仓
+   已经为 planner 做过一次同样的事（`_DecideCtx`），代价是必须养一个
+   `tests/_ctx_src.py` 去前缀视图来保住整文件源码锁。
+5. **39 个套件把 `agent/graph.py` 读成文本。** 包化之后这个路径不存在了，
+   `_ctx_src.py` 得再长出一个"把整包拼起来"的视图（`write_guard_src()` 有先例，但
+   那是 8 个套件，这是 39 个）。
+6. **~20 个套件的桩会静默失效。** `g.record` / `g.get_llm` / `g._confirm_popup` /
+   `g._fastpath_on` / `g.bind_planner_tools` / `g._pending_intents` 都是
+   `setattr(agent.graph, …)` 装的；函数一搬家，桩装上了但事件一条不落，判据只读到空
+   列表（write_grounding 那次就是这么栽的）。
+7. **两条契约会静默变弱**：`test_block_reasons.py` 硬编码文件清单扫 `REASON_*`
+   生产者；`test_cross_language_tables.py` 的 `_SWEEP_FILES`。常量搬走后扫描**不红、
+   只是不再覆盖**。
+8. **台账要重键**：`eval/complexity_baseline.json` 7 条、`eval/judge_registry.json`
+   57 条 `agent/graph.py::*`。
+
+真正让这个文件难维护的是**注释占 53%**（11078 行里 5848 行是纯 `#` 注释或 docstring），
+不是行数。这一半已经单独上了棘轮（`eval/comment_baseline.json` +
+`tests/test_module_budget.py` 的《第二本账》），治的是"下一次事故复盘再往同一个函数上
+叠 40 行说明"。
+
 ---
 
 ## 3. 一次对话的完整链路
