@@ -203,6 +203,10 @@
         0,
         0
       ],
+      "agent/tool_index.py": [
+        2,
+        0
+      ],
       "agent/tool_specs.py": [
         0,
         0
@@ -349,8 +353,8 @@
       ]
     },
     "total": [
-      1149,
-      4858
+      1151,
+      4848
     ]
   },
   "entries": [
