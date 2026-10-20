@@ -5,7 +5,7 @@
     "BLE001"
   ],
   "project_lint_ignore": null,
-  "total": 117,
+  "total": 116,
   "by_file": {
     "agent/arg_refs.py": 1,
     "agent/authz.py": 1,
@@ -38,7 +38,7 @@
     "rag/sections.py": 2,
     "scripts/build_word_graph.py": 2,
     "scripts/sticker_smoke.py": 1,
-    "server.py": 2,
+    "server.py": 1,
     "tests/test_admin_write.py": 1,
     "tests/test_cancel.py": 1,
     "tests/test_checkpoint_factory.py": 2,

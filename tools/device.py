@@ -31,16 +31,13 @@ device-service 据此鉴权并校验设备归属——**用户只能操作自己
 字面与逻辑均逐字不变，多出来的只是排版）。
 """
 
-import base64
-import hashlib
-import hmac
-import json
 import logging
 import threading
 import time
 from typing import Annotated
 
 import httpx
+import jwt  # 签发 device-service 令牌（`_sign_user_jwt`，20261020 换掉手写 HS256）
 from langchain_core.runnables.config import RunnableConfig
 from langchain_core.tools import tool
 
@@ -102,22 +99,22 @@ def _sign_user_jwt(user_id: int) -> str:
     空密钥**不许签**（20261019 安全审计 SAU-012，CWE-321）：HMAC 拿空 key 照样算得出
     签名 ⇒ 这一路会静静地签出一枚"格式完全正确、但谁都能伪造"的令牌。
     与 `tools/base.py::_sign_local_jwt` 是同一条判据的两个入口。
-    """
-    def _b64(b: bytes) -> bytes:
-        return base64.urlsafe_b64encode(b).rstrip(b"=")
 
+    **20261020 起签发交给 PyJWT**（`jwt.encode`，见 ADR-0014）。**形状一字未改**：
+    `{sub, exp, role}` 且**不带 aud**——Rust `auth_jwt::verify_token` 用
+    `Validation::default()`，多一个 aud 会被判 audience 无效直接验签失败。
+    ⚠️ 与验签侧那条 `verify_sub` 的地雷**方向相反**：这里是**签**，`sub` 本来就该是
+    数字（Rust `AssertionClaims.sub: i32`），PyJWT 的 `encode` 不做任何声明校验，
+    所以签发侧不受影响——地雷只在 `decode` 上。
+    """
     secret = _jwt_secret()
     if not secret:
         raise RuntimeError("JWT_SECRET 未配置（空密钥不许代签令牌）——检查 .env / 环境变量")
-
-    header = _b64(json.dumps({"alg": "HS256", "typ": "JWT"}).encode())
-    payload = _b64(json.dumps({
+    return jwt.encode({
         "sub": user_id,
         "exp": int(time.time()) + 300,
         "role": "user",
-    }).encode())
-    sig = _b64(hmac.new(secret.encode(), header + b"." + payload, hashlib.sha256).digest())
-    return (header + b"." + payload + b"." + sig).decode()
+    }, secret, algorithm="HS256")
 
 
 def _device_get_user_id(config: RunnableConfig) -> int:
