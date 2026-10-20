@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """产物保留登记表（`eval/retention_manifest.py`）单测。
 
 离线、秒级、零网络、零生产目录改动（真树只读）。
@@ -15,14 +14,21 @@
 第 ① 项还要**反向**验一次（`_bad_class`）：只证明"真表干净"不能说明检查有效，
 得证明"坏表会被抓住"——否则那些校验就只是装饰（同族教训：装饰性的东西看起来都对）。
 """
+
+
 import os
 import sys
 import tempfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
+
+
 sys.path.insert(0, str(ROOT))
+
+
 sys.path.insert(0, str(ROOT / "eval"))
+
 
 import retention_manifest as rm  # noqa: E402
 
@@ -264,5 +270,12 @@ def main() -> int:
     return 0
 
 
+def test_retention_manifest():
+    main()
+
+    assert not FAILS, (
+        f"{len(FAILS)} 条未通过：" + "；".join(FAILS))
+
+
 if __name__ == "__main__":
-    sys.exit(main())
+    test_retention_manifest()

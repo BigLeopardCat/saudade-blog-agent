@@ -97,6 +97,19 @@ def _run(path: pathlib.Path, timeout: float = 300.0) -> int:
 
 # 旧文本**不落进仓内**：跑法是 `python -c <这段> <临时文件> <真路径>`，用真路径当 `__file__`。
 #
+# ⚠️ 光把 `{'__name__': '__main__', '__file__': real}` 当 exec 的 globals **不够**：
+# 那个字典不是 `sys.modules` 里的真模块，凡是**回头查模块全局**的库都会炸 ——
+# `langgraph` 建 StateGraph 时 `get_type_hints(schema)` 去 `sys.modules[cls.__module__]`
+# 拿全局，拿到空字典 ⇒ `NameError: name 'Annotated' is not defined`。表现是**旧文件假红**
+# （`test_checkpoint_drop_turn` 实测：同一段文本当文件跑 rc=0、走 exec 跑 rc=1）。
+# 正解是造一个真模块、**顶替 `sys.modules['__main__']`**（`python file.py` 就是这么干的），
+# 这样 `__name__ == '__main__'` 与"全局可查"两件事同时成立。
+#
+# 同理 `sys.argv` 也要改：`python -c <runner> <tmp> <real>` 的 argv 是 `['-c', tmp, real]`，
+# 凡是带 `argparse` 的套件（`test_complexity_budget` / `test_module_budget` 都有
+# `--update`）会把 tmp 与 real 当成位置参数 ⇒ `error: unrecognized arguments`、**退 2**。
+# 表现同样是旧文件假红（"旧 2 → 新 1"），看着像新旧不一致，其实是工装自己把参数递错了。
+#
 # 早先是写 `tests/_mig_old_<stem>.py` 再跑。两个问题，第二个是真缺陷：
 #   · 以 `_` 开头 ⇒ `run_all.suites()` 不收（那半边想对了）；
 #   · **但扫仓的套件会看见它** —— `test_complexity_budget` / `test_module_budget` /
@@ -105,10 +118,14 @@ def _run(path: pathlib.Path, timeout: float = 300.0) -> int:
 #     扫描扫到一半文件被删了）。**造出来的文件污染被测对象**，这是工装最不该犯的错。
 # 放 `/tmp` 也不行：`ROOT = Path(__file__).resolve().parent.parent` 会算成 `/`。
 _OLD_RUNNER = (
-    "import sys\n"
+    "import sys, types\n"
     "src = open(sys.argv[1], encoding='utf-8').read()\n"
     "real = sys.argv[2]\n"
-    "exec(compile(src, real, 'exec'), {'__name__': '__main__', '__file__': real})\n"
+    "mod = types.ModuleType('__main__')\n"
+    "mod.__file__ = real\n"
+    "sys.argv = [real]\n"
+    "sys.modules['__main__'] = mod\n"
+    "exec(compile(src, real, 'exec'), mod.__dict__)\n"
 )
 
 
@@ -160,6 +177,26 @@ def _old_text(path: pathlib.Path, base: str) -> str | None:
     return p.stdout if p.returncode == 0 else None
 
 
+def _fail_name(tree: ast.Module) -> str | None:
+    """判据收集器往哪个模块级名字里 append（`FAILS` / `FAILED`），现取。
+
+    判据收集器**不都叫 `check`**（`test_zako_role.py` 那个叫 `check_`），所以按**前缀**认；
+    认名字不认字面 —— 名字是习惯、append 目标才是契约。没有收集器的是形态 A′
+    （`def main() -> int` 自己攒 `bad`、返回退出码），那种套件第 ③ 层不适用、报未评估。
+
+    工装**自己抄一份、不 import codemod 的**：它是独立判官，共用一份实现的话，codemod 把
+    这条规则改错会同时改掉尺子（同族教训见仓里「收窄判据会架空测试尺子」那条）。
+    """
+    found: set[str] = set()
+    for n in tree.body:
+        if isinstance(n, ast.FunctionDef) and n.name.startswith("check"):
+            for sub in ast.walk(n):
+                if (isinstance(sub, ast.Attribute) and sub.attr == "append"
+                        and isinstance(sub.value, ast.Name)):
+                    found.add(sub.value.id)
+    return found.pop() if len(found) == 1 else None
+
+
 def _check_calls(src: str) -> list[str]:
     """模块里每个判据调用的第一个实参（常量才有值，非常量记 `?`）—— 判据指纹。
 
@@ -198,6 +235,22 @@ def _target_def(src: str, stem: str) -> ast.FunctionDef | None:
                  if isinstance(n, ast.FunctionDef) and n.name == stem), None)
 
 
+def _has_top_level_test(src: str) -> bool:
+    """顶层有没有**任何** `def test_*` —— 「pytest 收得到吗」的真正判据。
+
+    上面那条「函数名 == 词干」是 **codemod 的产物**（它转写的每个文件都长这样），不是
+    pytest 的要求。手写的原生 pytest 文件（`test_process_isolation.py`：四个各管一事的
+    `def test_*`，没有一个是词干名）会被那条规则误判成"收集不到" ⇒ **假红**。所以
+    "收集不到"这条只在**一个 `def test_*` 都没有**时才成立。
+    """
+    try:
+        tree = ast.parse(src)
+    except SyntaxError:
+        return False
+    return any(isinstance(n, ast.FunctionDef) and n.name.startswith("test_")
+               for n in tree.body)
+
+
 def check_one(path: pathlib.Path, skip_layer2: bool, base: str) -> tuple[list[str], list[str]]:
     """返回 `(红, 未评估)` 两份清单（都空 = 全过）。
 
@@ -222,9 +275,16 @@ def check_one(path: pathlib.Path, skip_layer2: bool, base: str) -> tuple[list[st
             if diff:
                 bad.append(f"① check() 取值点变了 {len(diff)} 处：{diff[:3]}")
 
-    # 新文件必须真的可被 pytest 收集到（否则"迁移"是空转）
+    # 新文件必须真的可被 pytest 收集到（否则"迁移"是空转）。
+    # **但"没迁移"和"迁移错了"是两件事**：codemod 认不出的形状一律不动（MANUAL 清单），
+    # 那些文件在盘上就是原样 —— 报红是误伤，报绿是假绿。判据：文本与旧文本逐字相同
+    # ⇒ 这一条根本没动过 ⇒ 未评估（退 3），不进红名单。
     if _target_def(new_src, stem) is None:
-        bad.append(f"① 新文件里没有模块级 `def {stem}()` —— pytest 收集不到")
+        if old_src is not None and new_src == old_src:
+            soft.append("① 这个文件**没有被迁移**（codemod 判了 MANUAL）—— 三层都没评估")
+            return bad, soft
+        if not _has_top_level_test(new_src):
+            bad.append(f"① 新文件里没有模块级 `def {stem}()` —— pytest 收集不到")
 
     if skip_layer2:
         return bad, soft
@@ -245,10 +305,21 @@ def check_one(path: pathlib.Path, skip_layer2: bool, base: str) -> tuple[list[st
     fn = _target_def(new_src, stem)
     if fn is None:
         return bad, soft
+    # 变异体**直接往收集器里塞一条**，不走 `check(...)`。两把错的尺子都试过：
+    #   · `check(MUTANT, False)` —— `test_zako_role` 里 `check` 是 **`agent.authz.check`**
+    #     （鉴权函数，`check(principal, tool)`），压根不是判据收集器（那个叫 `check_`）：
+    #     注入的调用跑去问鉴权，不报错也不记账 ⇒ 反控"通过"而判据一次没跑。
+    #   · 同一个形状在 `test_widget_pin_drift` 上栽在**实参顺序**：那里的收集器签名是
+    #     `check(cond, name, extra="")`，`MUTANT` 落在 `cond` 位上恒真 ⇒ 同样假通过。
+    # 直接 `FAILS.append(...)` 与收集器的名字、签名、实参顺序全都无关。
+    fail_name = _fail_name(ast.parse(new_src))
+    if fail_name is None:
+        soft.append("③ 反控未评估：这个文件没有判据收集器（形态 A′），注入点不存在")
+        return bad, soft
     lines = new_src.splitlines()
     at = fn.body[0].lineno            # 函数体第一行之前插入
     mutated = "\n".join(
-        lines[:at - 1] + [f"    check({MUTANT!r}, False)"] + lines[at - 1:]) + "\n"
+        lines[:at - 1] + [f"    {fail_name}.append({MUTANT!r})"] + lines[at - 1:]) + "\n"
     if not mutated.strip():
         return bad, soft
     backup = new_src
@@ -256,12 +327,17 @@ def check_one(path: pathlib.Path, skip_layer2: bool, base: str) -> tuple[list[st
         path.write_text(mutated, encoding="utf-8")
         m_rc = _run(path)
         m_pt = _pytest_outcome(path)
-        if m_rc == 0:
-            bad.append("③ 反控：注入必假判据后直跑仍绿 —— 判据没被执行")
         if m_pt == "skip":
-            soft.append("③ 反控未评估：注入必假判据后 pytest 轨 skip（不是绿、也不是红）")
-        elif m_pt == "pass":
-            bad.append("③ 反控：注入必假判据后 pytest 仍绿 —— 判据没被执行")
+            # pytest 轨 skip ⇒ **前提不在场**（要活 DSN / 要父仓的那一族），判据一次都没跑。
+            # 这时"直跑仍绿"不是"判据没被执行"，而是"根本没到判据"—— 报红是误伤。
+            # 两个条件必须一起看：只看直跑绿会把 `test_pg_retention_live` 这类
+            # 前提缺位的套件判成缺陷；只看 pytest skip 又会把"两轨都真空"放过去。
+            soft.append("③ 反控未评估：注入必假判据后 pytest 轨 skip —— 前提不在场，判据没跑")
+        else:
+            if m_rc == 0:
+                bad.append("③ 反控：注入必假判据后直跑仍绿 —— 判据没被执行")
+            if m_pt == "pass":
+                bad.append("③ 反控：注入必假判据后 pytest 仍绿 —— 判据没被执行")
     finally:
         path.write_text(backup, encoding="utf-8")
     return bad, soft

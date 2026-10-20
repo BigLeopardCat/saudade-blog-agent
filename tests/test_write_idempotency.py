@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """写操作幂等账的判据（20261016 批 2）：真图崩溃+恢复、零 LLM、零网络。
 
 **这一件为什么存在**：LangGraph 的 checkpoint 提交粒度是 **superstep 不是语句** ⇒
@@ -52,6 +51,8 @@ saver 那天重放路径第一次通电，而它一行判据都没有**。本文
 
 用法：.venv/bin/python tests/test_write_idempotency.py
 """
+
+
 import ast
 import os
 import sys
@@ -60,7 +61,10 @@ from pathlib import Path
 from typing import TypedDict
 
 ROOT = Path(__file__).resolve().parent.parent  # 仓根
+
+
 sys.path.insert(0, str(ROOT))
+
 
 from langgraph.checkpoint.memory import MemorySaver  # noqa: E402
 from langgraph.graph import END, START, StateGraph  # noqa: E402
@@ -72,7 +76,6 @@ from agent import checkpoint as C  # noqa: E402
 from tools.base import ToolResult  # noqa: E402
 
 FAILS: list[str] = []
-_TMP = tempfile.mkdtemp(prefix="idem-judge-")
 
 
 def check(desc: str, cond: bool, detail: str = "") -> None:
@@ -96,8 +99,6 @@ def _mk_tool(idx: int, hits: list, meta: dict | None = None):
     return _T()
 
 
-# 两个**真**写工具名（`authz.TOOL_SCOPE` 里落在 `WRITE_SCOPES` 的那一族）：
-# 用假名字的话 `is_write` 为假 ⇒ `guarded_invoke` 直通 ⇒ 整套探针恒绿。
 _W0, _W1 = "add_favorite", "toggle_effect"
 
 
@@ -155,99 +156,6 @@ def _cfg(ns: str, saver=True) -> dict:
     return {"configurable": conf}
 
 
-print("① §2.6 镜像（**续跑**那一格，不是生产那一格）：崩溃 + `invoke(None)` 续跑后，写只发生一次")
-_led = idem.Ledger(os.path.join(_TMP, "a.sqlite3"))
-_hits, _seen = _run(_led, crash_after=0, thread="t1")
-check("挂了 saver 的 config 里真有 `__pregel_checkpointer`（否则整套探针恒绿）",
-      "__pregel_checkpointer" in _seen[0], str(_seen[0][:4]))
-check("节点做到一半崩、再从 checkpoint **续跑**（`invoke(None)`）⇒ 第一件写**只执行一次**"
-      "（生产形状下不是这样：账不命中，读数 2×，见头注）",
-      _hits == [0, 1], f"实际执行序列={_hits}")
-
-print("\n② 反控：没有账本（今天的形状）时，同一场景写发生**两次**")
-_rev, _ = _run(idem.NullLedger(), crash_after=0, thread="t2")
-check("`NullLedger` ⇒ 第一件写执行两次（证明①不是恒真）",
-      _rev == [0, 0, 1], f"实际执行序列={_rev}")
-
-print("\n③ intent 窗口：留在 `intent` 的那一行 = 结果未知，且**不许重跑**")
-_led3 = idem.Ledger(os.path.join(_TMP, "b.sqlite3"))
-_key = idem.key_for(_cfg("n:deadbeef"), _W0, "fpZ")
-_led3.claim(_key, _W0, "fpZ")            # 模拟"记了账、还没拿到返回就死了"
-_hits3: list = []
-_out3 = idem.guarded_invoke(_mk_tool(0, _hits3), _W0, {}, _cfg("n:deadbeef"),
-                            fingerprint="fpZ", ledger=_led3)
-check("留 `intent` ⇒ 第二次**不执行**", _hits3 == [], f"执行序列={_hits3}")
-check("返回的是本族的错误帧，取回函数认得出",
-      idem.replay_reason(str(_out3)) == idem.REASON_OUTCOME_UNKNOWN, str(_out3)[:80])
-check("`_check_spec` 判 BLOCK 且原因是 `write_outcome_unknown`（接上受阻链路）",
-      g._check_spec(_W0, {}, True, str(_out3), "chat") ==
-      (g._VERDICT_BLOCK, "write_outcome_unknown"),
-      str(g._check_spec(_W0, {}, True, str(_out3), "chat")))
-check("原因码在两张表里都有，且**不可重试**（重试正是要防的那件事）",
-      br.REASONS.get(idem.REASON_OUTCOME_UNKNOWN, (None, None))[1] is False
-      and br.block_reason_type(idem.REASON_OUTCOME_UNKNOWN)[0] == "写操作结果未知",
-      str(br.block_reason_type(idem.REASON_OUTCOME_UNKNOWN)))
-
-print("\n④ 惰性：没挂 saver ⇒ 闸为假，且**连库文件都不该被创建**")
-check("`active(None)` / `active({})` / 没 checkpointer 的 config 全为假",
-      idem.active(None) is False and idem.active({}) is False
-      and idem.active({"configurable": {"__pregel_checkpointer": None}}) is False)
-check("挂了 saver 的 config 为真（否则闸恒关，等于没有这本账）",
-      idem.active(_cfg("n:x")) is True)
-_never = os.path.join(_TMP, "never", "never.sqlite3")
-_hits4: list = []
-idem.guarded_invoke(_mk_tool(0, _hits4), _W0, {}, {"configurable": {"checkpoint_ns": "n:x"}},
-                    fingerprint="f", ledger=idem.Ledger(_never))
-check("没挂 saver 时写照常执行、账本一次都没被碰过",
-      _hits4 == [0] and not os.path.exists(_never))
-
-print("\n⑤ 不误合并：参数不同 / 工具不同的两次调用**都要执行**")
-_hits5, _ = _run(idem.Ledger(os.path.join(_TMP, "c.sqlite3")), crash_after=None,
-                 thread="t5", fp0="A", fp1="B")
-check("同一轮、同一工具、**参数不同** ⇒ 两件都执行（少这一格就是「从不执行」）",
-      _hits5 == [0, 1], f"执行序列={_hits5}")
-_led5b = idem.Ledger(os.path.join(_TMP, "d.sqlite3"))
-_hits5b: list = []
-for i, nm in enumerate((_W0, _W1)):
-    idem.guarded_invoke(_mk_tool(i, _hits5b), nm, {}, _cfg("n:same"),
-                        fingerprint="same-fp", ledger=_led5b)
-check("同一轮、**同一指纹但工具不同** ⇒ 两件都执行（键里含工具名）",
-      _hits5b == [0, 1], f"执行序列={_hits5b}")
-
-print("\n⑥ 重放要**逐字**还回返回值（含 `meta`），不能只还文本")
-_led6 = idem.Ledger(os.path.join(_TMP, "e.sqlite3"))
-_CMD_TOOL = "navigate_to"          # 真命令工具（`_check_spec` 的 `cmd_shape` 只认它那一族）
-_cmd = {"kind": "navigate", "url": "/about"}
-_hits6: list = []
-_first = idem.guarded_invoke(_mk_tool(0, _hits6, {"cmd": _cmd}), _CMD_TOOL, {}, _cfg("n:m"),
-                             fingerprint="f", ledger=_led6)
-_second = idem.guarded_invoke(_mk_tool(0, _hits6, {"cmd": _cmd}), _CMD_TOOL, {}, _cfg("n:m"),
-                              fingerprint="f", ledger=_led6)
-check("第二次是重放命中，工具没再执行", _hits6 == [0] and str(_second) == str(_first))
-check("重放还回了 `meta['cmd']`（只还文本会让命令帧判 BLOCK，那是一次**凭空**的失败）",
-      isinstance(_second, ToolResult) and _second.meta.get("cmd") == _cmd
-      and _second.kind == "ok", f"meta={getattr(_second, 'meta', None)}")
-check("重放出来的命令帧仍能通过 `_check_spec`（照 `cmd_shape` 校验）",
-      g._check_spec(_CMD_TOOL, {}, True, str(_second), "chat", _second.kind, _second.meta)
-      == (g._VERDICT_PASS, "ok"),
-      str(g._check_spec(_CMD_TOOL, {}, True, str(_second), "chat",
-                        _second.kind, _second.meta)))
-
-print("\n⑦ fail-closed：账本不可用 ⇒ 拒绝执行（不降级成「不记账」）")
-_bad = idem.Ledger(_TMP)          # 指向一个**目录** ⇒ sqlite 打不开
-_hits7: list = []
-_out7 = idem.guarded_invoke(_mk_tool(0, _hits7), _W0, {}, _cfg("n:boom"),
-                            fingerprint="f", ledger=_bad)
-check("账本打不开 ⇒ 写**一个都没执行**", _hits7 == [], f"执行序列={_hits7}")
-check("返回 kind=unavailable ⇒ `_check_spec` 判 BLOCK `unavailable`（响亮，不静默）",
-      getattr(_out7, "kind", None) == "unavailable"
-      and g._check_spec(_W0, {}, True, str(_out7), "chat",
-                        getattr(_out7, "kind", "ok")) == (g._VERDICT_BLOCK, "unavailable"),
-      f"kind={getattr(_out7, 'kind', None)}")
-
-print("\n⑧ 接线锁：写操作的出口只剩一个")
-
-
 def _invoke_calls(src: str) -> int:
     """源码里 `tool.invoke(...)` **真的被调用**的次数。
 
@@ -259,83 +167,6 @@ def _invoke_calls(src: str) -> int:
                if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
                and n.func.attr == "invoke"
                and isinstance(n.func.value, ast.Name) and n.func.value.id == "tool")
-
-
-_src = (ROOT / "agent" / "graph.py").read_text(encoding="utf-8")
-_idem_src = (ROOT / "agent" / "idem.py").read_text(encoding="utf-8")
-check("`agent/graph.py` 里不再有 `tool.invoke(...)`（绕过收口就是绕过幂等账）",
-      _invoke_calls(_src) == 0, f"出现 {_invoke_calls(_src)} 次")
-check("`tool.invoke(...)` 在 `agent/idem.py` 里**恰好一处**（收口真的搬过去了，不是被删了）",
-      _invoke_calls(_idem_src) == 1, f"出现 {_invoke_calls(_idem_src)} 次")
-check("`guarded_invoke` 在 graph.py 里**恰好被调一次**（两处调用 = 有一条路绕过账本）",
-      _src.count("idem.guarded_invoke(") == 1, f"出现 {_src.count('idem.guarded_invoke(')} 次")
-# 指纹必须取自**改动之前**的 args：`device_oled_display` 的 text 是 temperature 0.7
-# 现创的，对改后的 args 取指纹 ⇒ 那个工具恒不命中，而且不报错。判据钉**先后顺序**。
-_fn = next(n for n in ast.walk(ast.parse(_src))
-           if isinstance(n, ast.FunctionDef) and n.name == "execute_node")
-_fp_line = min(n.lineno for n in ast.walk(_fn)
-               if isinstance(n, ast.Call) and getattr(n.func, "id", "") == "_spec_signature")
-_mut_line = min(n.lineno for n in ast.walk(_fn)
-                if isinstance(n, ast.Assign) and any(
-                    isinstance(t, ast.Subscript) and isinstance(t.value, ast.Name)
-                    and t.value.id == "args" for t in n.targets))
-_call_line = min(n.lineno for n in ast.walk(_fn)
-                 if isinstance(n, ast.Call) and getattr(n.func, "attr", "") == "guarded_invoke")
-check("指纹在**改动 args 之前**取、且在调用之前（顺序反了 ⇒ 屏显恒不命中且不报错）",
-      _fp_line < _mut_line < _call_line, f"指纹@{_fp_line} < 改参@{_mut_line} < 调用@{_call_line}")
-
-print("\n⑨ durability 自断言：账本在场就必须 `sync` 档（缺省 `async` ⇒ 账**静默失效**）")
-check("`REQUIRED_DURABILITY` 就是 `sync`（改这个字面等于改账的前提）",
-      idem.REQUIRED_DURABILITY == "sync", repr(idem.REQUIRED_DURABILITY))
-_hits9: list = []
-idem.guarded_invoke(_mk_tool(0, _hits9), _W0, {}, _cfg("n:dur"),
-                    fingerprint="f", ledger=idem.Ledger(os.path.join(_TMP, "f.sqlite3")))
-check("`sync` 档：照常执行（断言没把功能一起挡掉）", _hits9 == [0], f"执行序列={_hits9}")
-for _bad in ("async", "exit", None):
-    _conf = {"checkpoint_ns": "n:dur", "__pregel_checkpointer": MemorySaver()}
-    if _bad is not None:
-        _conf["__pregel_durability"] = _bad      # `None` = 那个键**整个缺席**（缺省档）
-    _h9: list = []
-    _o9, _raised = None, None
-    try:
-        _o9 = idem.guarded_invoke(_mk_tool(0, _h9), _W0, {}, {"configurable": _conf},
-                                  fingerprint="f",
-                                  ledger=idem.Ledger(os.path.join(_TMP, "g.sqlite3")))
-    except idem.ReplayMisconfigured as e:
-        _o9, _raised = None, e
-    # 两件事一起判：①抛的是**异常**（若 `require_sync_durability` 落在那个 `try` 里，
-    # 这里拿到的会是一条 `unavailable` 回执 —— 整轮静悄悄地全不执行，更难发现）；
-    # ②写**一件都没执行**（抛在 `is_write` 之前，任何工具都当场炸）。
-    check(f"档位 {_bad!r} ⇒ 抛 `ReplayMisconfigured`（不是回执）且写一件都没执行",
-          _raised is not None and _o9 is None and _h9 == [],
-          f"{type(_raised).__name__}: {_raised}")
-_never9 = os.path.join(_TMP, "never9", "n.sqlite3")
-_h9c: list = []
-idem.guarded_invoke(_mk_tool(0, _h9c), _W0, {},
-                    {"configurable": {"checkpoint_ns": "n:x", "__pregel_durability": "async"}},
-                    fingerprint="f", ledger=idem.Ledger(_never9))
-check("没挂 saver ⇒ 连档位都不查（今天就是这个形状：那一格不存在，一行都不该动）",
-      _h9c == [0] and not os.path.exists(_never9), f"执行序列={_h9c}")
-
-print("\n⑩ 重放的行**必须是元组**：喂 dict 会**不报错地**回放字面串（PG 那条路的正控）")
-_row10 = ("done", "正文", "ok", '{"cmd": {"kind": "navigate"}}')
-_r10 = idem._rehydrate(_row10)
-check("4 元组 ⇒ 逐字还原（`status` 被丢掉，text / kind / meta 三样都在）",
-      isinstance(_r10, ToolResult) and str(_r10) == "正文" and _r10.kind == "ok"
-      and _r10.meta.get("cmd") == {"kind": "navigate"}, f"{str(_r10)!r} / {_r10.kind!r}")
-_dict10 = {"status": "done", "text": "正文", "kind": "ok", "meta": "{}"}
-_d10 = idem._rehydrate(_dict10)
-check("喂 dict ⇒ 解包到的是**键名**（正文变 `'text'`、kind 变 `'kind'`），且**不抛**"
-      " ⇒ PG 那条池若交出 `dict_row`，重放会静默腐化",
-      str(_d10) == "text" and _d10.kind == "kind", f"{str(_d10)!r} / {_d10.kind!r}")
-_led10 = idem.Ledger(os.path.join(_TMP, "h.sqlite3"))
-_led10.claim("k10", _W0, "f")
-_kind10, _row10 = _led10.claim("k10", _W0, "f")
-check("SQLite 这条路交出的行**就是元组**（两个后端同一份契约，这条是它的正控）",
-      isinstance(_row10, tuple) and _row10[0] == "intent" and _kind10 == "intent",
-      f"{_kind10!r} / {_row10!r}")
-
-print("\n⑪ 依赖面锁：psycopg 只住在 `agent/idem_pg.py`，且只在真要用时才被 import")
 
 
 def _import_targets(n) -> list[str]:
@@ -357,29 +188,6 @@ def _imports_pg(n) -> bool:
     return any(t.split(".")[0] == "psycopg" for t in _import_targets(n))
 
 
-_idem_tree = ast.parse(_idem_src)
-_pg_path = ROOT / "agent" / "idem_pg.py"
-_pg_src = _pg_path.read_text(encoding="utf-8") if _pg_path.exists() else ""
-_pg_imports = [n for n in ast.walk(ast.parse(_pg_src)) if _imports_pg(n)] if _pg_src else []
-check("`agent/idem_pg.py` 存在且它**确实** import 了 psycopg（否则下面两条是恒真）",
-      len(_pg_imports) > 0,
-      f"{_pg_path.name} 存在={_pg_path.exists()}，import 处={len(_pg_imports)}")
-check("`agent/idem.py` 不 import psycopg（PG 是**可选档**：没挂 PG saver 的进程与 CI 都不装它）",
-      [n for n in ast.walk(_idem_tree) if _imports_pg(n)] == [])
-check("`agent.idem_pg` 不在 idem.py 的**模块级** import 里（那样 import 期就把 psycopg "
-      "拖进来，没装 psycopg 的进程会**整个** import 失败）",
-      [n for n in _idem_tree.body if "agent.idem_pg" in _import_targets(n)] == [])
-_shared_fn = next(n for n in ast.walk(_idem_tree)
-                  if isinstance(n, ast.FunctionDef) and n.name == "_shared")
-check("`agent.idem_pg` 只在 `_shared` 函数体内懒 import（恰好一处）",
-      sum(1 for n in ast.walk(_shared_fn)
-          if "agent.idem_pg" in _import_targets(n)) == 1)
-
-print("\n⑫ 生产形状（批 F）：换了一轮之后账仍认得出同一件写——但只在「上一轮没跑完」时")
-# 这一块是 20261019 那条缺口（账在生产那条路上恒不命中）的判据。口径见 `agent/idem.py`
-# 头注《修法》：键降成会话级、`checkpoint_ns` 降级成"这一次尝试"、跨轮命中时按
-# `idem_resuming` 分流。**上一轮跑没跑完**由服务端算（`checkpoint.thread_is_resuming`），
-# 这里直接给那一格——本块量的是账本那一侧的分流，不是服务端那一侧的推导。
 _TH = "conv_7"
 
 
@@ -389,11 +197,6 @@ def _cfg12(ns: str, *, resuming: bool, thread: str = _TH) -> dict:
     conf["thread_id"] = thread
     conf["idem_resuming"] = resuming
     return {"configurable": conf}
-
-
-check("`resuming` 缺省 True（读不到那一格 ⇒ 按「上一轮没跑完」办：失效落在**看得见**的那一侧）",
-      idem.resuming({}) is True and idem.resuming({"configurable": {}}) is True
-      and idem.resuming({"configurable": {"idem_resuming": False}}) is False)
 
 
 def _plant_intent(path: str, ns: str, fp: str):
@@ -406,86 +209,6 @@ def _plant_intent(path: str, ns: str, fp: str):
     cfg = _cfg12(ns, resuming=True)
     led.claim(idem.key_for(cfg, _W0, fp), _W0, idem.attempt_for(cfg, fp))
     return led
-
-
-_led12 = _plant_intent(os.path.join(_TMP, "i.sqlite3"), "n:turnA", "fpK")
-_h12: list = []
-_out12 = idem.guarded_invoke(_mk_tool(0, _h12), _W0, {}, _cfg12("n:turnB", resuming=True),
-                             fingerprint="fpK", ledger=_led12)
-check("换了一轮（`checkpoint_ns` 变了）+ 上一轮**没跑完** ⇒ 这件写**不执行**（改前这里是 2 次）",
-      _h12 == [], f"执行序列={_h12}")
-check("回的是本族的错误帧，取回函数认得出（主人看得见，不是静默）",
-      idem.replay_reason(str(_out12)) == idem.REASON_OUTCOME_UNKNOWN, str(_out12)[:80])
-
-# 反控 A：同一份夹具，只把"上一轮跑没跑完"翻过来 ⇒ 必须**照常执行**。
-# 没有这一格，上面那条可能只是"账变成了从不执行"（本仓纪律：正控不红不算数）。
-_led12b = _plant_intent(os.path.join(_TMP, "j.sqlite3"), "n:turnA", "fpK")
-_h12b: list = []
-_out12b = idem.guarded_invoke(_mk_tool(0, _h12b), _W0, {}, _cfg12("n:turnB", resuming=False),
-                              fingerprint="fpK", ledger=_led12b)
-check("反控 A：同样的两轮，但上一轮**正常收尾**（resuming=False）⇒ 照常执行"
-      "（合法的重复不被吞）", _h12b == [0], f"执行序列={_h12b}")
-check("反控 A 的那一次**不是**错误帧（真的执行了，不是换了个理由不执行）",
-      idem.replay_reason(str(_out12b)) is None, str(_out12b)[:80])
-
-# 反控 B：没有账本（今天的形状）⇒ 一律执行——证明这一块量的是账本，不是恒真。
-_h12c: list = []
-idem.guarded_invoke(_mk_tool(0, _h12c), _W0, {}, _cfg12("n:turnB", resuming=True),
-                    fingerprint="fpK", ledger=idem.NullLedger())
-check("反控 B：没有账本 ⇒ 照常执行（这一块不是恒真）", _h12c == [0], f"执行序列={_h12c}")
-
-# `done` 那一支：写**已经完成**、进程死在收尾 ⇒ 上一轮没跑完 ⇒ 重放记下的那份。
-_led12d = idem.Ledger(os.path.join(_TMP, "k.sqlite3"))
-_h12d: list = []
-_first12d = idem.guarded_invoke(_mk_tool(0, _h12d, {"n": 0}), _W0, {},
-                                _cfg12("n:turnA", resuming=False),
-                                fingerprint="fpK", ledger=_led12d)
-_again12d = idem.guarded_invoke(_mk_tool(0, _h12d, {"n": 0}), _W0, {},
-                                _cfg12("n:turnB", resuming=True),
-                                fingerprint="fpK", ledger=_led12d)
-check("`done` 行 + 换了一轮 + 上一轮没跑完 ⇒ **重放**（工具没再执行、结果逐字还回）",
-      _h12d == [0] and str(_again12d) == str(_first12d), f"执行序列={_h12d}")
-_led12e = idem.Ledger(os.path.join(_TMP, "l.sqlite3"))
-_h12e: list = []
-idem.guarded_invoke(_mk_tool(0, _h12e, {"n": 0}), _W0, {}, _cfg12("n:turnA", resuming=False),
-                    fingerprint="fpK", ledger=_led12e)
-idem.guarded_invoke(_mk_tool(0, _h12e, {"n": 0}), _W0, {}, _cfg12("n:turnB", resuming=False),
-                    fingerprint="fpK", ledger=_led12e)
-check("反控 C：`done` 行 + 换了一轮 + 上一轮**正常收尾** ⇒ 照常执行（主人又要了一次）",
-      _h12e == [0, 0], f"执行序列={_h12e}")
-
-print("\n⑬ 键的稳定面（批 F 的全部内容）：`checkpoint_ns` 不再是**键**的成分")
-_k1 = idem.key_for(_cfg12("n:turnA", resuming=False), _W0, "fpK")
-check("换了一轮（`checkpoint_ns` 变了）⇒ **键相同**——这就是「账认得出同一件写」",
-      _k1 == idem.key_for(_cfg12("n:turnB", resuming=False), _W0, "fpK"))
-check("反控：换会话 ⇒ 键变（否则两个会话的同一件写会被合成一次）",
-      idem.key_for(_cfg12("n:turnA", resuming=False, thread="conv_8"), _W0, "fpK") != _k1)
-check("反控：换参数指纹 ⇒ 键变（少了这一格，「先建标签 A 再建标签 B」会退化成只建一个）",
-      idem.key_for(_cfg12("n:turnA", resuming=False), _W0, "fpK2") != _k1)
-check("反控：换工具 ⇒ 键变",
-      idem.key_for(_cfg12("n:turnA", resuming=False), _W1, "fpK") != _k1)
-check("attempt 反而**必须**逐轮变（否则「换了一轮」这个信号就没了）",
-      idem.attempt_for(_cfg12("n:turnA", resuming=False), "fpK")
-      != idem.attempt_for(_cfg12("n:turnB", resuming=False), "fpK"))
-check("attempt 在同一 superstep 内**稳定**（同一 ns + 同一指纹 ⇒ 相同，重放才认得出来）",
-      idem.attempt_for(_cfg12("n:turnA", resuming=False), "fpK")
-      == idem.attempt_for(_cfg12("n:turnA", resuming=True), "fpK"))
-check("反控：同一会话、同一件写，**attempt 也随指纹变**（不然「同一件」与「这一次」会混成一个）",
-      idem.attempt_for(_cfg12("n:turnA", resuming=False), "fpK")
-      != idem.attempt_for(_cfg12("n:turnA", resuming=False), "fpK2"))
-
-print("\n⑭ 接线锁：两条路都要给那一格（单改一处 ⇒ 两套语义并存）")
-_srv = (ROOT / "server.py").read_text(encoding="utf-8")
-check("`server.py` 里 `\"idem_resuming\"` **恰好两处**（`/chat` 与 `/chat/stream` 各一）",
-      _srv.count('"idem_resuming"') == 2, f"出现 {_srv.count('"idem_resuming"')} 次")
-check("两处都走**同一个推导** `_idem_resuming(...)`（不在调用点各写一份条件："
-      "def 一处 + 调用两处 = 3）", _srv.count("_idem_resuming(") == 3,
-      f"出现 {_srv.count('_idem_resuming(')} 次")
-check("反控：`agent/graph.py` 里**没有**这一格（它是 config 输入，不是 state 键——"
-      "多一个 state 键就要多一处初值，而 `tests/test_state_keys.py` 判键集**恰好相等**）",
-      "idem_resuming" not in (ROOT / "agent" / "graph.py").read_text(encoding="utf-8"))
-
-print("\n⑮ 那一格判据**本身**：`checkpoint.thread_is_resuming` = 上一轮跑没跑完")
 
 
 class _S15(TypedDict, total=False):
@@ -506,37 +229,6 @@ def _app15(node):
     graph.add_edge(START, "n")
     graph.add_edge("n", END)
     return graph.compile(checkpointer=MemorySaver())
-
-
-_app15a = _app15(_clean15)
-check("反控：**全新的** thread（一个 checkpoint 都没有）⇒ False（不是「没跑完」）",
-      C.thread_is_resuming(_app15a, "conv_15a") is False)
-_app15a.invoke({}, {"configurable": {"thread_id": "conv_15a"}})
-check("干净跑完一轮 ⇒ False ⇒ 幂等账按「主人又要了一次」办（合法的重复照常执行）",
-      C.thread_is_resuming(_app15a, "conv_15a") is False)
-_app15b = _app15(_boom15)
-try:
-    _app15b.invoke({}, {"configurable": {"thread_id": "conv_15b"}})
-except _Boom:
-    pass
-check("上一轮**崩在节点里**（节点没返回 ⇒ `next` 非空）⇒ True ⇒ 幂等账按「上一轮的续」办",
-      C.thread_is_resuming(_app15b, "conv_15b") is True)
-check("读不到图状态（agent 上根本没有 `get_state`）⇒ **保守侧 True**"
-      "（失效落在看得见的那一侧，见 `agent/checkpoint.py` 的注）",
-      C.thread_is_resuming(object(), "conv_x") is True)
-check("没有会话坐标（空 thread）⇒ 保守侧 True（没有坐标就没有「跑没跑完」可判）",
-      C.thread_is_resuming(_app15a, "") is True)
-check("反控：同一份夹具、同一个 agent，**只有 thread 名不同** ⇒ 上面那条 True 不是恒真",
-      C.thread_is_resuming(_app15a, "conv_15a") is False)
-
-print("\n⑯ 两份账实现**是同一个接口**：公开方法集合与签名逐项相同（20261019 补）")
-# 为什么值得单独一条：调用方（`guarded_invoke`）只写一次，SQLite 与 PG 两条路都走它。
-# 套件里 ⑫⑬⑮ 全部跑在 **SQLite 那条路**上；PG 那条要真连库（`eval/experiments/
-# checkpoint_probe.py`，不在秒级套件里）⇒ **只改一份是静默的**，一路到生产第一次写才炸。
-# 20261019 的现场报的正是 `PostgresLedger.claim() got an unexpected keyword argument
-# 'resuming'`。那一次的直接成因是**部署期**工作区被换掉（进程里同时活着两个 revision，
-# 代码级判据抓不到，另说），但"两份实现漂开"这个**代码**病是同一个形状，这一条钉的是它。
-# 读源码 AST、不 import：`idem_pg` 要 psycopg，而 CI 不装（⑪ 的理由）。
 
 
 def _sig(src: str, cls_name: str) -> dict[str, list[tuple[str, str, bool]]]:
@@ -572,39 +264,310 @@ def _sig(src: str, cls_name: str) -> dict[str, list[tuple[str, str, bool]]]:
     return out
 
 
-_L16 = _sig(_idem_src, "Ledger")
-_P16 = _sig(_pg_src, "PostgresLedger")
-check("两份实现都解析出来了（解析器坏掉 ⇒ 下面两条是恒真的空过）",
-      len(_L16) >= 3 and len(_P16) >= 3, f"Ledger={sorted(_L16)} PG={sorted(_P16)}")
-check("公开方法**是同一个集合**（少一个 ⇒ 那条路走不通，且只在生产上炸）",
-      set(_L16) == set(_P16),
-      f"只在 Ledger={sorted(set(_L16) - set(_P16))}／只在 PG={sorted(set(_P16) - set(_L16))}")
-_D16 = {k: (_L16[k], _P16[k]) for k in set(_L16) & set(_P16) if _L16[k] != _P16[k]}
-check("每个公开方法的签名**逐项相同**（参数名／次序／位置或仅关键字／有没有缺省值）",
-      not _D16, str(_D16))
-
-# 反控（本仓纪律「正控不红不算数」）：`_sig` 必须**真的**分辨得出这六种漂法。
-# 没有这一组，上面三条可能只是"比较器恒返回相等"。
-
-
 def _cls16(params: str, name: str = "claim") -> str:
     return f"class X:\n    def {name}({params}):\n        pass\n"
 
 
-_A16 = _cls16("self, key, tool, attempt, *, resuming=True")
-for _tag16, _b16 in (
-        ("参数改名", _cls16("self, key, tool, fp, *, resuming=True")),
-        ("次序颠倒", _cls16("self, tool, key, attempt, *, resuming=True")),
-        ("少了仅关键字那一格", _cls16("self, key, tool, attempt")),
-        ("仅关键字被挪成位置参数", _cls16("self, key, tool, attempt, resuming=True")),
-        ("缺省值的有无不同", _cls16("self, key, tool, attempt, *, resuming")),
-        ("整个方法没了", _cls16("self, key, out", name="finish"))):
-    check(f"反控·{_tag16} ⇒ 必须报出差异", _sig(_A16, "X") != _sig(_b16, "X"))
-check("正控：只加注释与实现体 ⇒ 仍判相同（比的是签名，不是文本）",
-      _sig(_A16, "X") == _sig("class X:\n    # 注\n"
+def test_write_idempotency():
+    _TMP = tempfile.mkdtemp(prefix="idem-judge-")
+    print("① §2.6 镜像（**续跑**那一格，不是生产那一格）"
+        "：崩溃 + `invoke(None)` 续跑后，写只发生一次")
+    _led = idem.Ledger(os.path.join(_TMP, "a.sqlite3"))
+    _hits, _seen = _run(_led, crash_after=0, thread="t1")
+    check("挂了 saver 的 config 里真有 `__pregel_checkpointer`（否则整套探针恒绿）",
+          "__pregel_checkpointer" in _seen[0], str(_seen[0][:4]))
+    check("节点做到一半崩、再从 checkpoint **续跑**（`invoke(None)`）⇒ 第一件写**只执行一次**"
+      "（生产形状下不是这样：账不命中，读数 2×，见头注）",
+          _hits == [0, 1], f"实际执行序列={_hits}")
+    print("\n② 反控：没有账本（今天的形状）时，同一场景写发生**两次**")
+    _rev, _ = _run(idem.NullLedger(), crash_after=0, thread="t2")
+    check("`NullLedger` ⇒ 第一件写执行两次（证明①不是恒真）",
+          _rev == [0, 0, 1], f"实际执行序列={_rev}")
+    print("\n③ intent 窗口：留在 `intent` 的那一行 = 结果未知，且**不许重跑**")
+    _led3 = idem.Ledger(os.path.join(_TMP, "b.sqlite3"))
+    _key = idem.key_for(_cfg("n:deadbeef"), _W0, "fpZ")
+    _led3.claim(_key, _W0, "fpZ")            # 模拟"记了账、还没拿到返回就死了"
+    _hits3: list = []
+    _out3 = idem.guarded_invoke(_mk_tool(0, _hits3), _W0, {}, _cfg("n:deadbeef"),
+                                fingerprint="fpZ", ledger=_led3)
+    check("留 `intent` ⇒ 第二次**不执行**", _hits3 == [], f"执行序列={_hits3}")
+    check("返回的是本族的错误帧，取回函数认得出",
+          idem.replay_reason(str(_out3)) == idem.REASON_OUTCOME_UNKNOWN, str(_out3)[:80])
+    check("`_check_spec` 判 BLOCK 且原因是 `write_outcome_unknown`（接上受阻链路）",
+          g._check_spec(_W0, {}, True, str(_out3), "chat") ==
+          (g._VERDICT_BLOCK, "write_outcome_unknown"),
+          str(g._check_spec(_W0, {}, True, str(_out3), "chat")))
+    check("原因码在两张表里都有，且**不可重试**（重试正是要防的那件事）",
+          br.REASONS.get(idem.REASON_OUTCOME_UNKNOWN, (None, None))[1] is False
+          and br.block_reason_type(idem.REASON_OUTCOME_UNKNOWN)[0] == "写操作结果未知",
+          str(br.block_reason_type(idem.REASON_OUTCOME_UNKNOWN)))
+    print("\n④ 惰性：没挂 saver ⇒ 闸为假，且**连库文件都不该被创建**")
+    check("`active(None)` / `active({})` / 没 checkpointer 的 config 全为假",
+          idem.active(None) is False and idem.active({}) is False
+          and idem.active({"configurable": {"__pregel_checkpointer": None}}) is False)
+    check("挂了 saver 的 config 为真（否则闸恒关，等于没有这本账）",
+          idem.active(_cfg("n:x")) is True)
+    _never = os.path.join(_TMP, "never", "never.sqlite3")
+    _hits4: list = []
+    idem.guarded_invoke(_mk_tool(0, _hits4), _W0, {}, {"configurable": {"checkpoint_ns": "n:x"}},
+                        fingerprint="f", ledger=idem.Ledger(_never))
+    check("没挂 saver 时写照常执行、账本一次都没被碰过",
+          _hits4 == [0] and not os.path.exists(_never))
+    print("\n⑤ 不误合并：参数不同 / 工具不同的两次调用**都要执行**")
+    _hits5, _ = _run(idem.Ledger(os.path.join(_TMP, "c.sqlite3")), crash_after=None,
+                     thread="t5", fp0="A", fp1="B")
+    check("同一轮、同一工具、**参数不同** ⇒ 两件都执行（少这一格就是「从不执行」）",
+          _hits5 == [0, 1], f"执行序列={_hits5}")
+    _led5b = idem.Ledger(os.path.join(_TMP, "d.sqlite3"))
+    _hits5b: list = []
+    for i, nm in enumerate((_W0, _W1)):
+        idem.guarded_invoke(_mk_tool(i, _hits5b), nm, {}, _cfg("n:same"),
+                            fingerprint="same-fp", ledger=_led5b)
+    check("同一轮、**同一指纹但工具不同** ⇒ 两件都执行（键里含工具名）",
+          _hits5b == [0, 1], f"执行序列={_hits5b}")
+    print("\n⑥ 重放要**逐字**还回返回值（含 `meta`），不能只还文本")
+    _led6 = idem.Ledger(os.path.join(_TMP, "e.sqlite3"))
+    _CMD_TOOL = "navigate_to"          # 真命令工具（`_check_spec` 的 `cmd_shape` 只认它那一族）
+    _cmd = {"kind": "navigate", "url": "/about"}
+    _hits6: list = []
+    _first = idem.guarded_invoke(_mk_tool(0, _hits6, {"cmd": _cmd}), _CMD_TOOL, {}, _cfg("n:m"),
+                                 fingerprint="f", ledger=_led6)
+    _second = idem.guarded_invoke(_mk_tool(0, _hits6, {"cmd": _cmd}), _CMD_TOOL, {}, _cfg("n:m"),
+                                  fingerprint="f", ledger=_led6)
+    check("第二次是重放命中，工具没再执行", _hits6 == [0] and str(_second) == str(_first))
+    check("重放还回了 `meta['cmd']`（只还文本会让命令帧判 BLOCK，那是一次**凭空**的失败）",
+          isinstance(_second, ToolResult) and _second.meta.get("cmd") == _cmd
+          and _second.kind == "ok", f"meta={getattr(_second, 'meta', None)}")
+    check("重放出来的命令帧仍能通过 `_check_spec`（照 `cmd_shape` 校验）",
+          g._check_spec(_CMD_TOOL, {}, True, str(_second), "chat", _second.kind, _second.meta)
+          == (g._VERDICT_PASS, "ok"),
+          str(g._check_spec(_CMD_TOOL, {}, True, str(_second), "chat",
+                            _second.kind, _second.meta)))
+    print("\n⑦ fail-closed：账本不可用 ⇒ 拒绝执行（不降级成「不记账」）")
+    _bad = idem.Ledger(_TMP)          # 指向一个**目录** ⇒ sqlite 打不开
+    _hits7: list = []
+    _out7 = idem.guarded_invoke(_mk_tool(0, _hits7), _W0, {}, _cfg("n:boom"),
+                                fingerprint="f", ledger=_bad)
+    check("账本打不开 ⇒ 写**一个都没执行**", _hits7 == [], f"执行序列={_hits7}")
+    check("返回 kind=unavailable ⇒ `_check_spec` 判 BLOCK `unavailable`（响亮，不静默）",
+          getattr(_out7, "kind", None) == "unavailable"
+          and g._check_spec(_W0, {}, True, str(_out7), "chat",
+                            getattr(_out7, "kind", "ok")) == (g._VERDICT_BLOCK, "unavailable"),
+          f"kind={getattr(_out7, 'kind', None)}")
+    print("\n⑧ 接线锁：写操作的出口只剩一个")
+    _src = (ROOT / "agent" / "graph.py").read_text(encoding="utf-8")
+    _idem_src = (ROOT / "agent" / "idem.py").read_text(encoding="utf-8")
+    check("`agent/graph.py` 里不再有 `tool.invoke(...)`（绕过收口就是绕过幂等账）",
+          _invoke_calls(_src) == 0, f"出现 {_invoke_calls(_src)} 次")
+    check("`tool.invoke(...)` 在 `agent/idem.py` 里**恰好一处**（收口真的搬过去了，不是被删了）",
+          _invoke_calls(_idem_src) == 1, f"出现 {_invoke_calls(_idem_src)} 次")
+    check("`guarded_invoke` 在 graph.py 里**恰好被调一次**（两处调用 = 有一条路绕过账本）",
+          _src.count("idem.guarded_invoke(") == 1, f"出现 {_src.count('idem.guarded_invoke(')} 次")
+    _fn = next(n for n in ast.walk(ast.parse(_src))
+               if isinstance(n, ast.FunctionDef) and n.name == "execute_node")
+    _fp_line = min(n.lineno for n in ast.walk(_fn)
+                   if isinstance(n, ast.Call) and getattr(n.func, "id", "") == "_spec_signature")
+    _mut_line = min(n.lineno for n in ast.walk(_fn)
+                    if isinstance(n, ast.Assign) and any(
+                        isinstance(t, ast.Subscript) and isinstance(t.value, ast.Name)
+                        and t.value.id == "args" for t in n.targets))
+    _call_line = min(n.lineno for n in ast.walk(_fn)
+                     if isinstance(n, ast.Call) and getattr(n.func, "attr", "") == "guarded_invoke")
+    check("指纹在**改动 args 之前**取、且在调用之前（顺序反了 ⇒ 屏显恒不命中且不报错）",
+          _fp_line < _mut_line < _call_line,
+              f"指纹@{_fp_line} < 改参@{_mut_line} < 调用@{_call_line}")
+    print("\n⑨ durability 自断言：账本在场就必须 `sync` 档（缺省 `async` ⇒ 账**静默失效**）")
+    check("`REQUIRED_DURABILITY` 就是 `sync`（改这个字面等于改账的前提）",
+          idem.REQUIRED_DURABILITY == "sync", repr(idem.REQUIRED_DURABILITY))
+    _hits9: list = []
+    idem.guarded_invoke(_mk_tool(0, _hits9), _W0, {}, _cfg("n:dur"),
+                        fingerprint="f", ledger=idem.Ledger(os.path.join(_TMP, "f.sqlite3")))
+    check("`sync` 档：照常执行（断言没把功能一起挡掉）", _hits9 == [0], f"执行序列={_hits9}")
+    for _bad in ("async", "exit", None):
+        _conf = {"checkpoint_ns": "n:dur", "__pregel_checkpointer": MemorySaver()}
+        if _bad is not None:
+            _conf["__pregel_durability"] = _bad      # `None` = 那个键**整个缺席**（缺省档）
+        _h9: list = []
+        _o9, _raised = None, None
+        try:
+            _o9 = idem.guarded_invoke(_mk_tool(0, _h9), _W0, {}, {"configurable": _conf},
+                                      fingerprint="f",
+                                      ledger=idem.Ledger(os.path.join(_TMP, "g.sqlite3")))
+        except idem.ReplayMisconfigured as e:
+            _o9, _raised = None, e
+        # 两件事一起判：①抛的是**异常**（若 `require_sync_durability` 落在那个 `try` 里，
+        # 这里拿到的会是一条 `unavailable` 回执 —— 整轮静悄悄地全不执行，更难发现）；
+        # ②写**一件都没执行**（抛在 `is_write` 之前，任何工具都当场炸）。
+        check(f"档位 {_bad!r} ⇒ 抛 `ReplayMisconfigured`（不是回执）且写一件都没执行",
+              _raised is not None and _o9 is None and _h9 == [],
+              f"{type(_raised).__name__}: {_raised}")
+    _never9 = os.path.join(_TMP, "never9", "n.sqlite3")
+    _h9c: list = []
+    idem.guarded_invoke(_mk_tool(0, _h9c), _W0, {},
+                        {"configurable": {"checkpoint_ns": "n:x", "__pregel_durability": "async"}},
+                        fingerprint="f", ledger=idem.Ledger(_never9))
+    check("没挂 saver ⇒ 连档位都不查（今天就是这个形状：那一格不存在，一行都不该动）",
+          _h9c == [0] and not os.path.exists(_never9), f"执行序列={_h9c}")
+    print("\n⑩ 重放的行**必须是元组**：喂 dict 会**不报错地**回放字面串（PG 那条路的正控）")
+    _row10 = ("done", "正文", "ok", '{"cmd": {"kind": "navigate"}}')
+    _r10 = idem._rehydrate(_row10)
+    check("4 元组 ⇒ 逐字还原（`status` 被丢掉，text / kind / meta 三样都在）",
+          isinstance(_r10, ToolResult) and str(_r10) == "正文" and _r10.kind == "ok"
+          and _r10.meta.get("cmd") == {"kind": "navigate"}, f"{str(_r10)!r} / {_r10.kind!r}")
+    _dict10 = {"status": "done", "text": "正文", "kind": "ok", "meta": "{}"}
+    _d10 = idem._rehydrate(_dict10)
+    check("喂 dict ⇒ 解包到的是**键名**（正文变 `'text'`、kind 变 `'kind'`），且**不抛**"
+      " ⇒ PG 那条池若交出 `dict_row`，重放会静默腐化",
+          str(_d10) == "text" and _d10.kind == "kind", f"{str(_d10)!r} / {_d10.kind!r}")
+    _led10 = idem.Ledger(os.path.join(_TMP, "h.sqlite3"))
+    _led10.claim("k10", _W0, "f")
+    _kind10, _row10 = _led10.claim("k10", _W0, "f")
+    check("SQLite 这条路交出的行**就是元组**（两个后端同一份契约，这条是它的正控）",
+          isinstance(_row10, tuple) and _row10[0] == "intent" and _kind10 == "intent",
+          f"{_kind10!r} / {_row10!r}")
+    print("\n⑪ 依赖面锁：psycopg 只住在 `agent/idem_pg.py`，且只在真要用时才被 import")
+    _idem_tree = ast.parse(_idem_src)
+    _pg_path = ROOT / "agent" / "idem_pg.py"
+    _pg_src = _pg_path.read_text(encoding="utf-8") if _pg_path.exists() else ""
+    _pg_imports = [n for n in ast.walk(ast.parse(_pg_src)) if _imports_pg(n)] if _pg_src else []
+    check("`agent/idem_pg.py` 存在且它**确实** import 了 psycopg（否则下面两条是恒真）",
+          len(_pg_imports) > 0,
+          f"{_pg_path.name} 存在={_pg_path.exists()}，import 处={len(_pg_imports)}")
+    check("`agent/idem.py` 不 import psycopg（PG "
+        "是**可选档**：没挂 PG saver 的进程与 CI 都不装它）",
+          [n for n in ast.walk(_idem_tree) if _imports_pg(n)] == [])
+    check("`agent.idem_pg` 不在 idem.py 的**模块级** import 里（那样 import 期就把 psycopg "
+      "拖进来，没装 psycopg 的进程会**整个** import 失败）",
+          [n for n in _idem_tree.body if "agent.idem_pg" in _import_targets(n)] == [])
+    _shared_fn = next(n for n in ast.walk(_idem_tree)
+                      if isinstance(n, ast.FunctionDef) and n.name == "_shared")
+    check("`agent.idem_pg` 只在 `_shared` 函数体内懒 import（恰好一处）",
+          sum(1 for n in ast.walk(_shared_fn)
+              if "agent.idem_pg" in _import_targets(n)) == 1)
+    print("\n⑫ 生产形状（批 F）：换了一轮之后账仍认得出同一件写——但只在「上一轮没跑完」时")
+    check("`resuming` 缺省 True（读不到那一格 ⇒ 按「上一轮没跑完」办：失效落在**看得见**的那一侧）",
+          idem.resuming({}) is True and idem.resuming({"configurable": {}}) is True
+          and idem.resuming({"configurable": {"idem_resuming": False}}) is False)
+    _led12 = _plant_intent(os.path.join(_TMP, "i.sqlite3"), "n:turnA", "fpK")
+    _h12: list = []
+    _out12 = idem.guarded_invoke(_mk_tool(0, _h12), _W0, {}, _cfg12("n:turnB", resuming=True),
+                                 fingerprint="fpK", ledger=_led12)
+    check("换了一轮（`checkpoint_ns` 变了）+ 上一轮**没跑完** "
+        "⇒ 这件写**不执行**（改前这里是 2 次）",
+          _h12 == [], f"执行序列={_h12}")
+    check("回的是本族的错误帧，取回函数认得出（主人看得见，不是静默）",
+          idem.replay_reason(str(_out12)) == idem.REASON_OUTCOME_UNKNOWN, str(_out12)[:80])
+    _led12b = _plant_intent(os.path.join(_TMP, "j.sqlite3"), "n:turnA", "fpK")
+    _h12b: list = []
+    _out12b = idem.guarded_invoke(_mk_tool(0, _h12b), _W0, {}, _cfg12("n:turnB", resuming=False),
+                                  fingerprint="fpK", ledger=_led12b)
+    check("反控 A：同样的两轮，但上一轮**正常收尾**（resuming=False）⇒ 照常执行"
+      "（合法的重复不被吞）", _h12b == [0], f"执行序列={_h12b}")
+    check("反控 A 的那一次**不是**错误帧（真的执行了，不是换了个理由不执行）",
+          idem.replay_reason(str(_out12b)) is None, str(_out12b)[:80])
+    _h12c: list = []
+    idem.guarded_invoke(_mk_tool(0, _h12c), _W0, {}, _cfg12("n:turnB", resuming=True),
+                        fingerprint="fpK", ledger=idem.NullLedger())
+    check("反控 B：没有账本 ⇒ 照常执行（这一块不是恒真）", _h12c == [0], f"执行序列={_h12c}")
+    _led12d = idem.Ledger(os.path.join(_TMP, "k.sqlite3"))
+    _h12d: list = []
+    _first12d = idem.guarded_invoke(_mk_tool(0, _h12d, {"n": 0}), _W0, {},
+                                    _cfg12("n:turnA", resuming=False),
+                                    fingerprint="fpK", ledger=_led12d)
+    _again12d = idem.guarded_invoke(_mk_tool(0, _h12d, {"n": 0}), _W0, {},
+                                    _cfg12("n:turnB", resuming=True),
+                                    fingerprint="fpK", ledger=_led12d)
+    check("`done` 行 + 换了一轮 + 上一轮没跑完 ⇒ **重放**（工具没再执行、结果逐字还回）",
+          _h12d == [0] and str(_again12d) == str(_first12d), f"执行序列={_h12d}")
+    _led12e = idem.Ledger(os.path.join(_TMP, "l.sqlite3"))
+    _h12e: list = []
+    idem.guarded_invoke(_mk_tool(0, _h12e, {"n": 0}), _W0, {}, _cfg12("n:turnA", resuming=False),
+                        fingerprint="fpK", ledger=_led12e)
+    idem.guarded_invoke(_mk_tool(0, _h12e, {"n": 0}), _W0, {}, _cfg12("n:turnB", resuming=False),
+                        fingerprint="fpK", ledger=_led12e)
+    check("反控 C：`done` 行 + 换了一轮 + 上一轮**正常收尾** ⇒ 照常执行（主人又要了一次）",
+          _h12e == [0, 0], f"执行序列={_h12e}")
+    print("\n⑬ 键的稳定面（批 F 的全部内容）：`checkpoint_ns` 不再是**键**的成分")
+    _k1 = idem.key_for(_cfg12("n:turnA", resuming=False), _W0, "fpK")
+    check("换了一轮（`checkpoint_ns` 变了）⇒ **键相同**——这就是「账认得出同一件写」",
+          _k1 == idem.key_for(_cfg12("n:turnB", resuming=False), _W0, "fpK"))
+    check("反控：换会话 ⇒ 键变（否则两个会话的同一件写会被合成一次）",
+          idem.key_for(_cfg12("n:turnA", resuming=False, thread="conv_8"), _W0, "fpK") != _k1)
+    check("反控：换参数指纹 ⇒ 键变（少了这一格，「先建标签 A 再建标签 B」会退化成只建一个）",
+          idem.key_for(_cfg12("n:turnA", resuming=False), _W0, "fpK2") != _k1)
+    check("反控：换工具 ⇒ 键变",
+          idem.key_for(_cfg12("n:turnA", resuming=False), _W1, "fpK") != _k1)
+    check("attempt 反而**必须**逐轮变（否则「换了一轮」这个信号就没了）",
+          idem.attempt_for(_cfg12("n:turnA", resuming=False), "fpK")
+          != idem.attempt_for(_cfg12("n:turnB", resuming=False), "fpK"))
+    check("attempt 在同一 superstep 内**稳定**（同一 ns + 同一指纹 ⇒ 相同，重放才认得出来）",
+          idem.attempt_for(_cfg12("n:turnA", resuming=False), "fpK")
+          == idem.attempt_for(_cfg12("n:turnA", resuming=True), "fpK"))
+    check("反控：同一会话、同一件写，**attempt "
+        "也随指纹变**（不然「同一件」与「这一次」会混成一个）",
+          idem.attempt_for(_cfg12("n:turnA", resuming=False), "fpK")
+          != idem.attempt_for(_cfg12("n:turnA", resuming=False), "fpK2"))
+    print("\n⑭ 接线锁：两条路都要给那一格（单改一处 ⇒ 两套语义并存）")
+    _srv = (ROOT / "server.py").read_text(encoding="utf-8")
+    check("`server.py` 里 `\"idem_resuming\"` **恰好两处**（`/chat` 与 `/chat/stream` 各一）",
+          _srv.count('"idem_resuming"') == 2, f"出现 {_srv.count('"idem_resuming"')} 次")
+    check("两处都走**同一个推导** `_idem_resuming(...)`（不在调用点各写一份条件："
+      "def 一处 + 调用两处 = 3）", _srv.count("_idem_resuming(") == 3,
+          f"出现 {_srv.count('_idem_resuming(')} 次")
+    check("反控：`agent/graph.py` 里**没有**这一格（它是 config 输入，不是 state 键——"
+      "多一个 state 键就要多一处初值，而 `tests/test_state_keys.py` 判键集**恰好相等**）",
+          "idem_resuming" not in (ROOT / "agent" / "graph.py").read_text(encoding="utf-8"))
+    print("\n⑮ 那一格判据**本身**：`checkpoint.thread_is_resuming` = 上一轮跑没跑完")
+    _app15a = _app15(_clean15)
+    check("反控：**全新的** thread（一个 checkpoint 都没有）⇒ False（不是「没跑完」）",
+          C.thread_is_resuming(_app15a, "conv_15a") is False)
+    _app15a.invoke({}, {"configurable": {"thread_id": "conv_15a"}})
+    check("干净跑完一轮 ⇒ False ⇒ 幂等账按「主人又要了一次」办（合法的重复照常执行）",
+          C.thread_is_resuming(_app15a, "conv_15a") is False)
+    _app15b = _app15(_boom15)
+    try:
+        _app15b.invoke({}, {"configurable": {"thread_id": "conv_15b"}})
+    except _Boom:
+        pass
+    check("上一轮**崩在节点里**（节点没返回 ⇒ `next` 非空）⇒ True ⇒ 幂等账按「上一轮的续」办",
+          C.thread_is_resuming(_app15b, "conv_15b") is True)
+    check("读不到图状态（agent 上根本没有 `get_state`）⇒ **保守侧 True**"
+      "（失效落在看得见的那一侧，见 `agent/checkpoint.py` 的注）",
+          C.thread_is_resuming(object(), "conv_x") is True)
+    check("没有会话坐标（空 thread）⇒ 保守侧 True（没有坐标就没有「跑没跑完」可判）",
+          C.thread_is_resuming(_app15a, "") is True)
+    check("反控：同一份夹具、同一个 agent，**只有 thread 名不同** ⇒ 上面那条 True 不是恒真",
+          C.thread_is_resuming(_app15a, "conv_15a") is False)
+    print("\n⑯ 两份账实现**是同一个接口**：公开方法集合与签名逐项相同（20261019 补）")
+    _L16 = _sig(_idem_src, "Ledger")
+    _P16 = _sig(_pg_src, "PostgresLedger")
+    check("两份实现都解析出来了（解析器坏掉 ⇒ 下面两条是恒真的空过）",
+          len(_L16) >= 3 and len(_P16) >= 3, f"Ledger={sorted(_L16)} PG={sorted(_P16)}")
+    check("公开方法**是同一个集合**（少一个 ⇒ 那条路走不通，且只在生产上炸）",
+          set(_L16) == set(_P16),
+          f"只在 Ledger={sorted(set(_L16) - set(_P16))}／只在 PG={sorted(set(_P16) - set(_L16))}")
+    _D16 = {k: (_L16[k], _P16[k]) for k in set(_L16) & set(_P16) if _L16[k] != _P16[k]}
+    check("每个公开方法的签名**逐项相同**（参数名／次序／位置或仅关键字／有没有缺省值）",
+          not _D16, str(_D16))
+    _A16 = _cls16("self, key, tool, attempt, *, resuming=True")
+    for _tag16, _b16 in (
+            ("参数改名", _cls16("self, key, tool, fp, *, resuming=True")),
+            ("次序颠倒", _cls16("self, tool, key, attempt, *, resuming=True")),
+            ("少了仅关键字那一格", _cls16("self, key, tool, attempt")),
+            ("仅关键字被挪成位置参数", _cls16("self, key, tool, attempt, resuming=True")),
+            ("缺省值的有无不同", _cls16("self, key, tool, attempt, *, resuming")),
+            ("整个方法没了", _cls16("self, key, out", name="finish"))):
+        check(f"反控·{_tag16} ⇒ 必须报出差异", _sig(_A16, "X") != _sig(_b16, "X"))
+    check("正控：只加注释与实现体 ⇒ 仍判相同（比的是签名，不是文本）",
+          _sig(_A16, "X") == _sig("class X:\n    # 注\n"
                               "    def claim(self, key, tool, attempt, *, resuming=True):\n"
                               "        return None\n", "X"))
-check("正控：类名对不上 ⇒ 空表（不是「什么都没比」还判绿）", _sig(_A16, "Y") == {})
+    check("正控：类名对不上 ⇒ 空表（不是「什么都没比」还判绿）", _sig(_A16, "Y") == {})
+    print("\n" + ("全部通过" if not FAILS else f"失败 {len(FAILS)} 项：" + "; ".join(FAILS)))
 
-print("\n" + ("全部通过" if not FAILS else f"失败 {len(FAILS)} 项：" + "; ".join(FAILS)))
-raise SystemExit(1 if FAILS else 0)
+    assert not FAILS, (
+        f"{len(FAILS)} 条未通过：" + "；".join(FAILS))
+
+
+if __name__ == "__main__":
+    test_write_idempotency()

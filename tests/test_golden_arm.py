@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """第二臂（arm）接线锁：同一套语料/判据，跑的是哪一套循环（20261004）。
 
 **被锁的缺陷**：「ReAct 能不能到 95%」这个问题此前**没有读数**——`eval/run_golden.py` 把
@@ -21,6 +20,8 @@
 
 秒级、零网络、零 LLM、零生产写入：不 import `agent`/`server`（用一个假 `agent` 模块顶替）。
 """
+
+
 import os
 import re
 import sys
@@ -28,8 +29,13 @@ import types
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent   # 仓根（tests/ 的上一层）
+
+
 EVAL = ROOT / "eval"
+
+
 sys.path.insert(0, str(EVAL))
+
 
 import golden_arm as ga  # noqa: E402
 
@@ -61,124 +67,124 @@ def _code(name: str) -> str:
     return "\n".join(out)
 
 
-# 假 `agent` 模块：本套件不许把 langgraph/图的构建拖进来（离线套件要秒级），而
-# `build_agent` 只做 `from agent import create_agent` / `importlib.import_module` 两件事
-# ——这两件都能用假的顶。
 _FAKE = types.ModuleType("agent")
-CALLS: list = []
-_SENTINEL = object()
-_FAKE.create_agent = lambda: (CALLS.append("create_agent"), _SENTINEL)[1]
-sys.modules.setdefault("agent", _FAKE)
 
-print("① 选臂：`GOLDEN_ARM`（缺省 graph），**不认识的取值响亮失败**")
-_env_bak = os.environ.get(ga.ENV_ARM)
-try:
-    os.environ.pop(ga.ENV_ARM, None)
-    check("缺省 = graph", ga.arm_name() == ga.ARM_GRAPH)
-    os.environ[ga.ENV_ARM] = ""
-    check("空串 = graph（不是未知值）", ga.arm_name() == ga.ARM_GRAPH)
-    os.environ[ga.ENV_ARM] = "react"
-    check("取值照读", ga.arm_name() == ga.ARM_REACT)
-    os.environ[ga.ENV_ARM] = "  REACT  "
-    check("大小写/空白归一（日志里粘过来的值也能用）", ga.arm_name() == ga.ARM_REACT)
-    os.environ[ga.ENV_ARM] = "reakt"          # 拼错一个字母
+
+# ⚠️ 原来是**模块级** `sys.modules.setdefault("agent", _FAKE)`：单进程跑全部套件时
+# `agent` 早被别的套件 import 过了，`setdefault` 不生效 ⇒ `ga.build_agent` 拿到真
+# `agent`、调真 `create_agent`，③ 那三条判据当场红；文件末尾那句
+# `sys.modules.pop("agent", None)` 还会把**真** `agent` 摘掉，殃及后面的套件。
+# 改成驱动里**保存/还原**（批 N+1：跨套件全局不许泄漏）。
+
+
+def test_golden_arm():
+    _SAVED_AGENT_MOD = sys.modules.get("agent")
+    sys.modules["agent"] = _FAKE
+    CALLS: list = []
+    _SENTINEL = object()
+    _FAKE.create_agent = lambda: (CALLS.append("create_agent"), _SENTINEL)[1]
+    print("① 选臂：`GOLDEN_ARM`（缺省 graph），**不认识的取值响亮失败**")
+    _env_bak = os.environ.get(ga.ENV_ARM)
     try:
-        ga.arm_name()
-        check("拼错的臂名抛错（不许静默退回 graph）", False, "它没抛")
+        os.environ.pop(ga.ENV_ARM, None)
+        check("缺省 = graph", ga.arm_name() == ga.ARM_GRAPH)
+        os.environ[ga.ENV_ARM] = ""
+        check("空串 = graph（不是未知值）", ga.arm_name() == ga.ARM_GRAPH)
+        os.environ[ga.ENV_ARM] = "react"
+        check("取值照读", ga.arm_name() == ga.ARM_REACT)
+        os.environ[ga.ENV_ARM] = "  REACT  "
+        check("大小写/空白归一（日志里粘过来的值也能用）", ga.arm_name() == ga.ARM_REACT)
+        os.environ[ga.ENV_ARM] = "reakt"          # 拼错一个字母
+        try:
+            ga.arm_name()
+            check("拼错的臂名抛错（不许静默退回 graph）", False, "它没抛")
+        except RuntimeError as e:
+            check("拼错的臂名抛错（不许静默退回 graph）", "reakt" in str(e))
+        # 子进程继承：选臂走的是**环境变量**而不是 argv（`golden_full_run.py` 每条用例起一个
+        # 子进程，argv 管道要穿透三层壳）。这条是那个设计选择的判据。
+        check("选臂的载体是环境变量（子进程天然继承）", ga.ENV_ARM == "GOLDEN_ARM")
+    finally:
+        os.environ.pop(ga.ENV_ARM, None)
+        if _env_bak is not None:
+            os.environ[ga.ENV_ARM] = _env_bak
+    print("\n② 分栏：engine / 目录 / 基线归属")
+    check("graph 臂的 engine **逐字** `native`（历史基线的归档键，加后缀会把基线劈成两档）",
+          ga.engine_for(ga.ARM_GRAPH) == "native", repr(ga.engine_for(ga.ARM_GRAPH)))
+    check("试验臂的 engine 带臂名、且仍以 native 开头（看得出它改良自哪一层）",
+          ga.engine_for(ga.ARM_REACT) == "native+react", repr(ga.engine_for(ga.ARM_REACT)))
+    check("graph 臂的留档目录 = 历史那个（一个旧档都不挪）",
+          ga.reports_dir(ga.ARM_GRAPH) == "eval/report/runs")
+    check("试验臂另开目录", ga.reports_dir(ga.ARM_REACT) == "eval/report/runs_react")
+    check("**臂名只进目录、不进文件名**（文件名序 = 时间序是全仓不变量，见 report_archive）",
+          ga.ARM_REACT not in os.path.basename(ga.reports_dir(ga.ARM_REACT))
+          or ga.reports_dir(ga.ARM_REACT) != ga.reports_dir(ga.ARM_GRAPH))
+    check("能当基线的只有 graph 臂（`last_run.json` 的写入资格）",
+          ga.is_baseline_arm(ga.ARM_GRAPH) and not ga.is_baseline_arm(ga.ARM_REACT))
+    check("matrix 臂另开目录（生产档那个 `runs/` 只留生产档的读数）",
+          ga.reports_dir(ga.ARM_MATRIX) == "eval/report/runs_matrix"
+          and ga.reports_dir(ga.ARM_MATRIX) != ga.reports_dir(ga.ARM_GRAPH))
+    check("matrix 臂**不能**当基线（它覆盖 `last_run.json` = 把基线悄悄换成调参档的读数）",
+          not ga.is_baseline_arm(ga.ARM_MATRIX))
+    check("matrix 臂的 engine 仍以 native 开头（它改良自哪一层看得出）",
+          ga.engine_for(ga.ARM_MATRIX) == "native+matrix", repr(ga.engine_for(ga.ARM_MATRIX)))
+    print("\n③ 建臂路由：graph 走 create_agent；别的臂**要么建起来、要么响亮失败**（不回退）")
+    _agent_mod = sys.modules["agent"]
+    check("graph 臂确实走 `agent.create_agent`（不是顺手走了别的什么）",
+          ga.build_agent(ga.ARM_GRAPH) is _SENTINEL and CALLS == ["create_agent"])
+    try:
+        ga.build_agent("nosucharm")               # 本树里没有 `agent.nosucharm_arm`
+        check("试验臂模块缺席时抛错", False, "它没抛")
     except RuntimeError as e:
-        check("拼错的臂名抛错（不许静默退回 graph）", "reakt" in str(e))
-    # 子进程继承：选臂走的是**环境变量**而不是 argv（`golden_full_run.py` 每条用例起一个
-    # 子进程，argv 管道要穿透三层壳）。这条是那个设计选择的判据。
-    check("选臂的载体是环境变量（子进程天然继承）", ga.ENV_ARM == "GOLDEN_ARM")
-finally:
-    os.environ.pop(ga.ENV_ARM, None)
-    if _env_bak is not None:
-        os.environ[ga.ENV_ARM] = _env_bak
+        check("试验臂模块缺席时抛错", "nosucharm" in str(e))
+        check("错误信息里写明**不回退 graph**（读的人要立刻知道这不是「用不了就算了」）",
+              "回退" in str(e))
+    check("上面那次失败**没有**去建 graph（静默退回 = 一份看着像第二条臂的假读数）",
+          CALLS == ["create_agent"])
+    check("matrix 臂与 graph **同一份实现**（它换的是旋钮不是循环 ⇒ 不许去找 `agent.matrix_arm`）",
+          (CALLS.clear(), ga.build_agent(ga.ARM_MATRIX) is _SENTINEL)[1]
+          and CALLS == ["create_agent"], str(CALLS))
+    check("试验臂按约定名 `agent.<臂>_arm` 去找（改名要连着改这里）",
+          'f"agent.{arm}_arm"' in (EVAL / "golden_arm.py").read_text(encoding="utf-8"))
+    print("\n④ 接线锁（能力有测试 ≠ 接线有测试）：三处 eval 壳")
+    _rg, _fr, _cr = _src("run_golden.py"), _src("golden_full_run.py"), _src("golden_case_runner.py")
+    check("run_golden: ensure_agent 经 golden_arm 建臂", "golden_arm.build_agent(_arm)" in _rg)
+    check("run_golden: 不再直接 `from agent import create_agent`（建哪条臂必须是可拨的）",
+          "from agent import create_agent" not in _rg)
+    check("run_golden: engine 按臂派生", '"engine": golden_arm.engine_for(_ARM)' in _rg)
+    check("run_golden: 留档目录按臂分", "os.makedirs(_REPORTS_DIR" in _rg
+          and "open_archive(_REPORTS_DIR)" in _rg)
+    check("run_golden: 没有残留的硬编码 graph 留档目录",
+          'open_archive("eval/report/runs")' not in _rg)
+    check("run_golden: `last_run.json` 多一道臂的闸", "is_baseline_arm(_ARM)" in _rg)
+    check("run_golden: 臂名在开跑前解析（拼错不许跑完 18 分钟才发现）",
+          re.search(r"_ARM = golden_arm\.arm_name\(\)", _rg) is not None)
+    check("golden_full_run: engine 与目录同源", '"engine": golden_arm.engine_for(_ARM)' in _fr
+          and "open_archive(_REPORTS_DIR)" in _fr)
+    check("golden_full_run: 子进程拿到的也是分臂目录",
+          "_REPORTS_DIR]" in _fr and '"eval/report/runs"' not in _fr)
+    check("golden_full_run: 基线闸同源", "is_baseline_arm(_ARM)" in _fr)
+    check("golden_full_run: 解释器用 `sys.executable`（worktree 里没有 `.venv`）",
+          "sys.executable" in _code("golden_full_run.py")
+          and '".venv/bin/python"' not in _code("golden_full_run.py"))
+    check("golden_case_runner: 不再硬编码主仓绝对路径（否则 worktree 里 import 到主仓）",
+          "/home/ubuntu/Saudade-Blog" not in _code("golden_case_runner.py"))
+    check("golden_case_runner: 仓根按**本文件位置**算",
+          "os.path.dirname(os.path.dirname(os.path.abspath(__file__)))" in _cr
+          and "sys.path.insert(0, ROOT)" in _cr)
+    print("\n⑤ `engine` 的字面量只有一份（改了实现而漏改某个产出者，这里会红）")
+    check("字面量在 golden_arm", ga.INTERFACE_LAYER == "native")
+    check("run_golden 只做再导出、不再各写一遍",
+          "from golden_arm import INTERFACE_LAYER" in _rg
+          and 'INTERFACE_LAYER = "native"' not in _rg)
+    if _SAVED_AGENT_MOD is None:
+        sys.modules.pop("agent", None)
+    else:
+        sys.modules["agent"] = _SAVED_AGENT_MOD
+    print("\n" + ("全部通过" if not FAILS else f"失败 {len(FAILS)} 项：" + "; ".join(FAILS)))
 
-print("\n② 分栏：engine / 目录 / 基线归属")
-check("graph 臂的 engine **逐字** `native`（历史基线的归档键，加后缀会把基线劈成两档）",
-      ga.engine_for(ga.ARM_GRAPH) == "native", repr(ga.engine_for(ga.ARM_GRAPH)))
-check("试验臂的 engine 带臂名、且仍以 native 开头（看得出它改良自哪一层）",
-      ga.engine_for(ga.ARM_REACT) == "native+react", repr(ga.engine_for(ga.ARM_REACT)))
-check("graph 臂的留档目录 = 历史那个（一个旧档都不挪）",
-      ga.reports_dir(ga.ARM_GRAPH) == "eval/report/runs")
-check("试验臂另开目录", ga.reports_dir(ga.ARM_REACT) == "eval/report/runs_react")
-check("**臂名只进目录、不进文件名**（文件名序 = 时间序是全仓不变量，见 report_archive）",
-      ga.ARM_REACT not in os.path.basename(ga.reports_dir(ga.ARM_REACT))
-      or ga.reports_dir(ga.ARM_REACT) != ga.reports_dir(ga.ARM_GRAPH))
-check("能当基线的只有 graph 臂（`last_run.json` 的写入资格）",
-      ga.is_baseline_arm(ga.ARM_GRAPH) and not ga.is_baseline_arm(ga.ARM_REACT))
-# `matrix` 臂（20261006）：`eval/param_matrix.py` 跑的是**同一套循环、另一套旋钮**，
-# 但归档身份必须与生产档分开——它此前落进 `runs/`，被 `landing_gate` 的 readiness /
-# 慢性红榜整目录扫进窗口（实测：最近 12 份"全量"里 9 份是它），而写 `last_run.json`
-# 的资格也开着（param_matrix 头注却写着"不写 last_run.json"）。**资格开着 ≠ 真发生过**：
-# 那 9 份的 `full_run` 全 False ⇒ 那道闸一次都没响。这三条是让那句头注**变成真的**
-# ——判据要靠结构立着，不靠"恰好没开火"。
-check("matrix 臂另开目录（生产档那个 `runs/` 只留生产档的读数）",
-      ga.reports_dir(ga.ARM_MATRIX) == "eval/report/runs_matrix"
-      and ga.reports_dir(ga.ARM_MATRIX) != ga.reports_dir(ga.ARM_GRAPH))
-check("matrix 臂**不能**当基线（它覆盖 `last_run.json` = 把基线悄悄换成调参档的读数）",
-      not ga.is_baseline_arm(ga.ARM_MATRIX))
-check("matrix 臂的 engine 仍以 native 开头（它改良自哪一层看得出）",
-      ga.engine_for(ga.ARM_MATRIX) == "native+matrix", repr(ga.engine_for(ga.ARM_MATRIX)))
+    assert not FAILS, (
+        f"{len(FAILS)} 条未通过：" + "；".join(FAILS))
 
-print("\n③ 建臂路由：graph 走 create_agent；别的臂**要么建起来、要么响亮失败**（不回退）")
-_agent_mod = sys.modules["agent"]
-check("graph 臂确实走 `agent.create_agent`（不是顺手走了别的什么）",
-      ga.build_agent(ga.ARM_GRAPH) is _SENTINEL and CALLS == ["create_agent"])
-try:
-    ga.build_agent("nosucharm")               # 本树里没有 `agent.nosucharm_arm`
-    check("试验臂模块缺席时抛错", False, "它没抛")
-except RuntimeError as e:
-    check("试验臂模块缺席时抛错", "nosucharm" in str(e))
-    check("错误信息里写明**不回退 graph**（读的人要立刻知道这不是「用不了就算了」）",
-          "回退" in str(e))
-check("上面那次失败**没有**去建 graph（静默退回 = 一份看着像第二条臂的假读数）",
-      CALLS == ["create_agent"])
-check("matrix 臂与 graph **同一份实现**（它换的是旋钮不是循环 ⇒ 不许去找 `agent.matrix_arm`）",
-      (CALLS.clear(), ga.build_agent(ga.ARM_MATRIX) is _SENTINEL)[1]
-      and CALLS == ["create_agent"], str(CALLS))
-# 试验臂的**模块名约定**（`agent.<臂>_arm`）本身是接线的一部分：改名会让主线那份壳
-# 认不出试验分支的实现，而症状是上面那条 RuntimeError（响亮，可查）。这里锁住约定文字，
-# 免得日后"顺手"把模块挪个位置、判定却仍写着旧名。
-check("试验臂按约定名 `agent.<臂>_arm` 去找（改名要连着改这里）",
-      'f"agent.{arm}_arm"' in (EVAL / "golden_arm.py").read_text(encoding="utf-8"))
 
-print("\n④ 接线锁（能力有测试 ≠ 接线有测试）：三处 eval 壳")
-_rg, _fr, _cr = _src("run_golden.py"), _src("golden_full_run.py"), _src("golden_case_runner.py")
-
-check("run_golden: ensure_agent 经 golden_arm 建臂", "golden_arm.build_agent(_arm)" in _rg)
-check("run_golden: 不再直接 `from agent import create_agent`（建哪条臂必须是可拨的）",
-      "from agent import create_agent" not in _rg)
-check("run_golden: engine 按臂派生", '"engine": golden_arm.engine_for(_ARM)' in _rg)
-check("run_golden: 留档目录按臂分", "os.makedirs(_REPORTS_DIR" in _rg
-      and "open_archive(_REPORTS_DIR)" in _rg)
-check("run_golden: 没有残留的硬编码 graph 留档目录",
-      'open_archive("eval/report/runs")' not in _rg)
-check("run_golden: `last_run.json` 多一道臂的闸", "is_baseline_arm(_ARM)" in _rg)
-check("run_golden: 臂名在开跑前解析（拼错不许跑完 18 分钟才发现）",
-      re.search(r"_ARM = golden_arm\.arm_name\(\)", _rg) is not None)
-check("golden_full_run: engine 与目录同源", '"engine": golden_arm.engine_for(_ARM)' in _fr
-      and "open_archive(_REPORTS_DIR)" in _fr)
-check("golden_full_run: 子进程拿到的也是分臂目录",
-      "_REPORTS_DIR]" in _fr and '"eval/report/runs"' not in _fr)
-check("golden_full_run: 基线闸同源", "is_baseline_arm(_ARM)" in _fr)
-check("golden_full_run: 解释器用 `sys.executable`（worktree 里没有 `.venv`）",
-      "sys.executable" in _code("golden_full_run.py")
-      and '".venv/bin/python"' not in _code("golden_full_run.py"))
-check("golden_case_runner: 不再硬编码主仓绝对路径（否则 worktree 里 import 到主仓）",
-      "/home/ubuntu/Saudade-Blog" not in _code("golden_case_runner.py"))
-check("golden_case_runner: 仓根按**本文件位置**算",
-      "os.path.dirname(os.path.dirname(os.path.abspath(__file__)))" in _cr
-      and "sys.path.insert(0, ROOT)" in _cr)
-
-print("\n⑤ `engine` 的字面量只有一份（改了实现而漏改某个产出者，这里会红）")
-check("字面量在 golden_arm", ga.INTERFACE_LAYER == "native")
-check("run_golden 只做再导出、不再各写一遍",
-      "from golden_arm import INTERFACE_LAYER" in _rg
-      and 'INTERFACE_LAYER = "native"' not in _rg)
-
-sys.modules.pop("agent", None)
-
-print("\n" + ("全部通过" if not FAILS else f"失败 {len(FAILS)} 项：" + "; ".join(FAILS)))
-raise SystemExit(1 if FAILS else 0)
+if __name__ == "__main__":
+    test_golden_arm()

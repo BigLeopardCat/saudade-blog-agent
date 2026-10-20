@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """受阻原因码的**类型**单测：纯查表 + 纯渲染 + 源码接线，零网络、零 LLM。
 
 **这一件为什么存在**：`_check_spec` 判 BLOCK 给出的原因码，此前只有两个去处——trace
@@ -26,13 +25,18 @@ A/B 的教训正是"改措辞救不回来"）。
 
 用法：.venv/bin/python tests/test_block_reasons.py
 """
+
+
 import ast
 import re
 import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent  # 仓根
+
+
 sys.path.insert(0, str(ROOT))
+
 
 import _ctx_src  # noqa: E402  （`_` 开头 ⇒ 不被 run_all 当套件收）
 
@@ -53,174 +57,6 @@ def check(desc: str, cond: bool, detail: str = "") -> None:
         FAILS.append(desc)
 
 
-# 刀 2（20261009）后 `_planner_decide` 拆成阶段函数、跨段量改从 ctx 上取
-# （`rounds` → `c.rounds`）⇒ 本文件的整文件文本锁先去掉那个前缀再看：
-# 判据文本与拆分之前**逐字相同**（前缀清单从 graph.py 的 AST 读，见 `_ctx_src`）。
-_GRAPH_SRC = _ctx_src.graph_deprefixed()
-
-
-# ── ① 类型表本身 ────────────────────────────────────────────────────────────
-# "不可重试"这一族是**刻意**列出来的：每多一个 False，就等于对 planner 说"这一条
-# 重试没用、换路或如实说"。多写一个的代价是掐掉一条合法重试，所以这个集合要有人复核
-# （这条断言就是这个作用——与 planner 模板占位符集合那条同一个纪律）。
-# 20261016 批 2 加第八个 `write_outcome_unknown`：写操作已经发出、进程在拿到返回
-# 之前中断。**重试就是这一族要防的那件事本身**（一次写会变成两次，而写对外可见且
-# 不可撤销）⇒ planner 的下一步是"先读一次确认到底成没成"，不是"再来一遍"。
-_NON_RETRY = {"unavailable", "cmd_shape", "policy_refused", "consent_required",
-              "denied", "no_manifest", "unknown_role", "write_outcome_unknown"}
-check("表非空，每项形如 (非空中文, bool)",
-      bool(REASONS) and all(isinstance(v, tuple) and len(v) == 2 and v[0]
-                            and not v[0].isascii() and isinstance(v[1], bool)
-                            for v in REASONS.values()))
-check("「改参数重试无效」那一族就是这八个（多一个少一个都要有人复核）",
-      {k for k, v in REASONS.items() if not v[1]} == _NON_RETRY,
-      str(sorted(k for k, v in REASONS.items() if not v[1])))
-check("unavailable 与 target_not_found 是**两族**（一个重试无效、一个换 id 可救）",
-      block_reason_type("unavailable")[1] is False
-      and block_reason_type("target_not_found")[1] is True)
-check("fail-safe：未登记的码 → 可重试 + 中文退回码本身（行为不变，不误判成不可重试）",
-      block_reason_type("brand_new_code") == ("brand_new_code", True),
-      str(block_reason_type("brand_new_code")))
-check("空值/None 不炸，且仍按可重试兜底",
-      block_reason_type(None)[1] is True and bool(block_reason_type(None)[0])
-      and block_reason_type("")[1] is True)
-
-
-# ── ② 与 server._REASON_CN 的关系：两张表、一份清单 ─────────────────────────
-# 键集合相等是**总括锁**：任何一侧加了码而另一侧没加，这条立刻红。逐值相等让两句话术
-# 不会各说各的（同一件事在 planner 眼里叫「服务不可用」、在访客眼里也得是）。
-check("键集合与 server._REASON_CN **相等**（一侧加码，另一侧必须同改）",
-      set(REASONS) == set(srv._REASON_CN),
-      f"仅本表={sorted(set(REASONS) - set(srv._REASON_CN))} "
-      f"仅 server={sorted(set(srv._REASON_CN) - set(REASONS))}")
-check("逐值相等（同一个码在两侧是同一句中文）",
-      all(REASONS[k][0] == srv._REASON_CN[k] for k in REASONS if k in srv._REASON_CN),
-      str([(k, REASONS[k][0], srv._REASON_CN.get(k)) for k in REASONS
-           if k in srv._REASON_CN and REASONS[k][0] != srv._REASON_CN[k]]))
-
-
-# ── ③ `_check_spec` 的每个 BLOCK 出口都在表里 ───────────────────────────────
-_BODY = _GRAPH_SRC.split("def _check_spec(", 1)[1].split("\ndef ", 1)[0]
-_LITS = set(re.findall(r'_VERDICT_BLOCK, "([a-z_]+)"', _BODY))
-check("源码级：`_check_spec` 里 `_VERDICT_BLOCK, \"…\"` 形状的字面码全都登记了",
-      bool(_LITS) and _LITS <= set(REASONS), str(sorted(_LITS)))
-# 那条 or 链（ref / scope / consent / target / policy 五族）不是上面那个形状，
-# 末端兜底的 `error_frame` 单独锁一句——它是最容易被漏掉的那个码。
-check("源码级：or 链末端的 error_frame 也登记了",
-      'or "error_frame"' in _BODY and "error_frame" in REASONS)
-check("源码级：六个取回通道都还接在 `_check_spec` 上（摘一个就少一族码）",
-      all(fn in _BODY for fn in
-          ("ref_error_reason", "scope_error_reason", "consent_error_reason",
-           "target_error_reason", "policy_error_reason", "replay_reason")))
-# 行为级抽查：不走源码文本，真的调一次。取的是 or 链上的一族（权限不足帧），
-# "从源码里看见字面"与"真的从帧里取回这个码"是两件事。
-_r = g._check_spec("read_notifications", {}, True,
-                   "__ERROR__: 权限不足[denied] —— 普通用户 无权调用 read_notifications",
-                   "notice_read")
-check("行为级：权限不足帧 → (BLOCK, denied)，且 denied 在表里",
-      _r == ("BLOCK", "denied") and "denied" in REASONS, str(_r))
-_r2 = g._check_spec("read_notifications", {}, True, "…", "notice_read", kind="unavailable")
-check("行为级：kind=unavailable → 表里标的是不可重试",
-      _r2 == ("BLOCK", "unavailable") and block_reason_type(_r2[1])[1] is False, str(_r2))
-# 写操作幂等账（20261016）：崩溃重放时"上一次已经发出、没拿到返回"这一格。
-# 走的是**错误帧族**（`agent/idem.py::unknown_frame`，`__ERROR__` 开头 + 原因码），
-# 不是新 kind——与 authz / adminops 那几族同一个取回口（`replay_reason` 接在 or 链上）。
-# 这一格的后果是**静默产回执**：非空文本一律 PASS ⇒ 一件"可能没写进去"的写会进
-# receipts、经 `__EXEC__` 落库、下一轮 narrator 照着它讲。
-_r3 = g._check_spec("set_article_status", {}, True,
-                    g.idem.unknown_frame("set_article_status"), "article_status")
-check("行为级：幂等账的「结果未知」帧 → (BLOCK, write_outcome_unknown)，且不可重试",
-      _r3 == ("BLOCK", "write_outcome_unknown")
-      and block_reason_type(_r3[1])[1] is False, str(_r3))
-# 反向对照：**同一句话但摘掉原因码** ⇒ 走末端兜底的 error_frame，而不是被认成这一族
-# （否则这条判据只是"看着像错帧就红"，说不出取回通道在不在）。
-_r3n = g._check_spec("set_article_status", {}, True, "__ERROR__: 随便什么别的失败",
-                     "article_status")
-check("反向对照：没有那个原因码的错帧取不回这一族（判的是码，不是帧形）",
-      _r3n == ("BLOCK", "error_frame"), str(_r3n))
-
-
-# ── ④ 渲染：blocked_rows 的形状 ────────────────────────────────────────────
-_UNAVAIL = [{"spec": 'list_accounts({"role": "user"})', "tool": "list_accounts",
-             "reason": "unavailable", "workflow": "account_roster",
-             "result": "UPSTREAM_DOWN\n第二行不该出现"}]
-row = ctx.blocked_rows(_UNAVAIL)
-check("行里有**技能名**（planner 选的是技能，这一格必须跟着走）",
-      "技能=account_roster" in row, row)
-check("行里有原因**中文**且不裸英文码", "服务不可用" in row and "unavailable" not in row, row)
-check("不可重试那一族写明「改参数重试无效」",
-      "改参数重试无效" in row and "仍可能成功" not in row, row)
-_row_line = [l for l in row.splitlines() if l.startswith("· ")][0]
-check("工具返回被压成一行（换行不炸行结构）",
-      "UPSTREAM_DOWN 第二行不该出现" in _row_line, _row_line)
-row_ok = ctx.blocked_rows([{"spec": 'rag_search({"q": "x"})', "tool": "rag_search",
-                            "reason": "args_parse", "workflow": "content_query",
-                            "result": "bad json"}])
-check("可救那一族写「改对参数再试一次仍可能成功」，且不误标无效",
-      "仍可能成功" in row_ok and "无效" not in row_ok, row_ok)
-check("缺 workflow 也不炸（标「未标注」而不是编一个技能名）",
-      "技能=（未标注）" in ctx.blocked_rows([{"tool": "t", "reason": "denied"}]))
-check("空/None → **渲染成空串**（没有受阻项时整块都不出现）",
-      ctx.blocked_rows([]) == "" and ctx.blocked_rows(None) == ""
-      and ctx.BLOCKED_ROWS_EMPTY == "",
-      repr(ctx.blocked_rows([])))
-# 成本锁（20261007 定稿的口径）：模板每一轮都要发，**整块**——表头（含「受阻项」三个
-# 字）、前言、行——都只在真有受阻项时才该付。写死在模板里、或给空值配一句占位语，
-# 都等于每一轮替一件没发生的事付费；且会把"受阻"这个概念摆到**没有受阻项**的那一轮
-# 眼前（实测那 33 token 的账：planner 提示词从 26512 → 26545）。两处各锁一遍。
-check("整块（含表头）只在有受阻项时出现：缺省语里没有「受阻项」也没有前言",
-      "受阻项" not in ctx.blocked_rows([]) and "不可重试" not in ctx.blocked_rows([])
-      and "受阻项" in row and "不可重试" in row,
-      repr(ctx.blocked_rows([])))
-check("模板里**没有**写死表头/前言（表头住在 ctx.blocked_rows 里，模板那一格只有槽）",
-      "本轮工具调用的" not in g._PLANNER_PROMPT
-      and "不可重试" not in g._PLANNER_PROMPT)
-check("形参默认值与常量同源（缺省即空串；两处不一致就分不清'没受阻'与'没接上'）",
-      (g._render_planner_prompt.__kwdefaults__ or {}).get("blocked_rows")
-      == ctx.BLOCKED_ROWS_EMPTY == "",
-      str(g._render_planner_prompt.__kwdefaults__))
-
-
-# ── ⑤ 接线：模板 / 渲染函数 / 调用点 / 写入点 ──────────────────────────────
-check("模板里有 {blocked_rows} 槽", "{blocked_rows}" in g._PLANNER_PROMPT)
-check("§1.55 的推断（不可重试 ⇒ 目标不存在）被那句话说掉了：在**渲染值**里、不在模板里",
-      "不可重试 ≠ 你要办的事" in ctx.blocked_rows(_UNAVAIL)
-      and "不可重试 ≠ 你要办的事" not in g._PLANNER_PROMPT)
-# 存在性先判、再比顺序：短路是刻意的——槽被删掉时这条要**红**，不是抛 ValueError
-# （抛异常会让整个文件在这里停住，后面 ⑤ 的几条谁也不跑，"红"就变成"崩"）。
-_TPL = g._PLANNER_PROMPT
-check("槽在工具结果之后、可引用字段之前（它说的是刚发生的那一轮）",
-      all(s in _TPL for s in ("{tool_results}", "{blocked_rows}", "{ref_hints}"))
-      and _TPL.index("{tool_results}") < _TPL.index("{blocked_rows}")
-      < _TPL.index("{ref_hints}"))
-check("渲染函数**必须有**这个形参（漏传即 TypeError）",
-      "blocked_rows" in g._render_planner_prompt.__code__.co_varnames)
-check("`planner_node` 每轮把它算进 `_prompt_args`",
-      "blocked_rows=blocked_rows(state.get(\"blocked\") or [])" in _GRAPH_SRC)
-# 判据取的是 `blocked.append(...)` **那一段**里的 workflow，不是全文件找字面——
-# `rcpt = {"workflow": plan["workflow"], ...}`（回执那一行）逐字相同，全文件找的话
-# 这一条**永远不会红**（写这条时实测过：把 append 里那一行删掉，全文件找仍然绿）。
-_APPEND = _GRAPH_SRC.split("blocked.append(", 1)[1].split("})", 1)[0]
-check("`execute` 往受阻项里写了 workflow（类型接上线的另一半，另一半在 checker）",
-      '"workflow"' in _APPEND and 'plan["workflow"]' in _APPEND, _APPEND[:120])
-_prompt = g._render_planner_prompt(
-    "admin", "ctx", "round", user_msg="u", intent_hints="i", doc_anchors="d",
-    recent_context="r", short_reply_hint="s", tool_results="t", pending_ledger="p",
-    ref_hints="", reflector_feedback="", correction="", blocked_rows=row)
-check("端到端：渲染出来的提示词里真的有这一行（不是只写进了模板）",
-      "技能=account_roster" in _prompt and "改参数重试无效" in _prompt)
-
-
-# ── ⑥ 生产侧的码必须都在表里（20261018 批 4）──────────────────────────────
-# ③ 判的是**取回侧**（`_check_spec` 认哪几个字面、六个取回通道还接不接着）。它看不见
-# **生产侧**——往帧里写码的是 `agent/arg_refs.py` 的字面返回，以及 `agent/authz.py` /
-# `agent/adminops_target.py` / `agent/idem.py` 的 `REASON_*` 具名常量。新增一个码却
-# 忘了登记，后果是**静默**的：取回侧的通道是宽松的 `([a-z_]+)`，新码照原样流到 planner
-# 面前——中文回落成裸英文码、`retry_param` 回落成 True（`block_reasons` 的 fail-safe）。
-# 表自己不报错，取回侧也不报错，而 planner 会拿"不可重试"的码去改参重试。
-#
-# 取值**从源码现取**（AST），不手抄一份名单：手抄的那份会在下一次新增时过期，而过期的
-# 判据恰好只在这个新码没登记时"看起来正常"。
 def produced_codes(sources: dict) -> set:
     """源码 → 生产侧能发出的原因码集合。**纯函数**，正控/反控直接喂它。"""
     out = set()
@@ -247,82 +83,178 @@ def produced_codes(sources: dict) -> set:
     return {c for c in out if re.fullmatch(r"[a-z][a-z_]*", c)}
 
 
-# 具名豁免：`REASON_OK` 是 `authz` 的**裁决**常量（"这一条通过了"），不是受阻原因码
-# ——它永远不会进 `blocked`。豁免**点名**，不用 `REASON_*` 前缀模糊掉（那个前缀里本来
-# 就混着这两类）。
-_NOT_REASONS = {"ok"}
-
-_SRC = {_p: (ROOT / _p).read_text(encoding="utf-8")
-        for _p in ("agent/arg_refs.py", "agent/authz.py", "agent/adminops_target.py",
-                   "agent/idem.py", "agent/graph.py")}
-_PRODUCED = produced_codes(_SRC) - _NOT_REASONS
-check("正控：生产侧确实扫到了码（扫不到的话下面那条是**空过**——"
+def test_block_reasons():
+    _GRAPH_SRC = _ctx_src.graph_deprefixed()
+    _NON_RETRY = {"unavailable", "cmd_shape", "policy_refused", "consent_required",
+                  "denied", "no_manifest", "unknown_role", "write_outcome_unknown"}
+    check("表非空，每项形如 (非空中文, bool)",
+          bool(REASONS) and all(isinstance(v, tuple) and len(v) == 2 and v[0]
+                                and not v[0].isascii() and isinstance(v[1], bool)
+                                for v in REASONS.values()))
+    check("「改参数重试无效」那一族就是这八个（多一个少一个都要有人复核）",
+          {k for k, v in REASONS.items() if not v[1]} == _NON_RETRY,
+          str(sorted(k for k, v in REASONS.items() if not v[1])))
+    check("unavailable 与 target_not_found 是**两族**（一个重试无效、一个换 id 可救）",
+          block_reason_type("unavailable")[1] is False
+          and block_reason_type("target_not_found")[1] is True)
+    check("fail-safe：未登记的码 → 可重试 + 中文退回码本身（行为不变，不误判成不可重试）",
+          block_reason_type("brand_new_code") == ("brand_new_code", True),
+          str(block_reason_type("brand_new_code")))
+    check("空值/None 不炸，且仍按可重试兜底",
+          block_reason_type(None)[1] is True and bool(block_reason_type(None)[0])
+          and block_reason_type("")[1] is True)
+    check("键集合与 server._REASON_CN **相等**（一侧加码，另一侧必须同改）",
+          set(REASONS) == set(srv._REASON_CN),
+          f"仅本表={sorted(set(REASONS) - set(srv._REASON_CN))} "
+      f"仅 server={sorted(set(srv._REASON_CN) - set(REASONS))}")
+    check("逐值相等（同一个码在两侧是同一句中文）",
+          all(REASONS[k][0] == srv._REASON_CN[k] for k in REASONS if k in srv._REASON_CN),
+          str([(k, REASONS[k][0], srv._REASON_CN.get(k)) for k in REASONS
+               if k in srv._REASON_CN and REASONS[k][0] != srv._REASON_CN[k]]))
+    _BODY = _GRAPH_SRC.split("def _check_spec(", 1)[1].split("\ndef ", 1)[0]
+    _LITS = set(re.findall(r'_VERDICT_BLOCK, "([a-z_]+)"', _BODY))
+    check("源码级：`_check_spec` 里 `_VERDICT_BLOCK, \"…\"` 形状的字面码全都登记了",
+          bool(_LITS) and _LITS <= set(REASONS), str(sorted(_LITS)))
+    check("源码级：or 链末端的 error_frame 也登记了",
+          'or "error_frame"' in _BODY and "error_frame" in REASONS)
+    check("源码级：六个取回通道都还接在 `_check_spec` 上（摘一个就少一族码）",
+          all(fn in _BODY for fn in
+              ("ref_error_reason", "scope_error_reason", "consent_error_reason",
+               "target_error_reason", "policy_error_reason", "replay_reason")))
+    _r = g._check_spec("read_notifications", {}, True,
+                       "__ERROR__: 权限不足[denied] —— 普通用户 无权调用 read_notifications",
+                       "notice_read")
+    check("行为级：权限不足帧 → (BLOCK, denied)，且 denied 在表里",
+          _r == ("BLOCK", "denied") and "denied" in REASONS, str(_r))
+    _r2 = g._check_spec("read_notifications", {}, True, "…", "notice_read", kind="unavailable")
+    check("行为级：kind=unavailable → 表里标的是不可重试",
+          _r2 == ("BLOCK", "unavailable") and block_reason_type(_r2[1])[1] is False, str(_r2))
+    _r3 = g._check_spec("set_article_status", {}, True,
+                        g.idem.unknown_frame("set_article_status"), "article_status")
+    check("行为级：幂等账的「结果未知」帧 → (BLOCK, write_outcome_unknown)，且不可重试",
+          _r3 == ("BLOCK", "write_outcome_unknown")
+          and block_reason_type(_r3[1])[1] is False, str(_r3))
+    _r3n = g._check_spec("set_article_status", {}, True, "__ERROR__: 随便什么别的失败",
+                         "article_status")
+    check("反向对照：没有那个原因码的错帧取不回这一族（判的是码，不是帧形）",
+          _r3n == ("BLOCK", "error_frame"), str(_r3n))
+    _UNAVAIL = [{"spec": 'list_accounts({"role": "user"})', "tool": "list_accounts",
+                 "reason": "unavailable", "workflow": "account_roster",
+                 "result": "UPSTREAM_DOWN\n第二行不该出现"}]
+    row = ctx.blocked_rows(_UNAVAIL)
+    check("行里有**技能名**（planner 选的是技能，这一格必须跟着走）",
+          "技能=account_roster" in row, row)
+    check("行里有原因**中文**且不裸英文码", "服务不可用" in row and "unavailable" not in row, row)
+    check("不可重试那一族写明「改参数重试无效」",
+          "改参数重试无效" in row and "仍可能成功" not in row, row)
+    _row_line = [l for l in row.splitlines() if l.startswith("· ")][0]
+    check("工具返回被压成一行（换行不炸行结构）",
+          "UPSTREAM_DOWN 第二行不该出现" in _row_line, _row_line)
+    row_ok = ctx.blocked_rows([{"spec": 'rag_search({"q": "x"})', "tool": "rag_search",
+                                "reason": "args_parse", "workflow": "content_query",
+                                "result": "bad json"}])
+    check("可救那一族写「改对参数再试一次仍可能成功」，且不误标无效",
+          "仍可能成功" in row_ok and "无效" not in row_ok, row_ok)
+    check("缺 workflow 也不炸（标「未标注」而不是编一个技能名）",
+          "技能=（未标注）" in ctx.blocked_rows([{"tool": "t", "reason": "denied"}]))
+    check("空/None → **渲染成空串**（没有受阻项时整块都不出现）",
+          ctx.blocked_rows([]) == "" and ctx.blocked_rows(None) == ""
+          and ctx.BLOCKED_ROWS_EMPTY == "",
+          repr(ctx.blocked_rows([])))
+    check("整块（含表头）只在有受阻项时出现：缺省语里没有「受阻项」也没有前言",
+          "受阻项" not in ctx.blocked_rows([]) and "不可重试" not in ctx.blocked_rows([])
+          and "受阻项" in row and "不可重试" in row,
+          repr(ctx.blocked_rows([])))
+    check("模板里**没有**写死表头/前言（表头住在 ctx.blocked_rows 里，模板那一格只有槽）",
+          "本轮工具调用的" not in g._PLANNER_PROMPT
+          and "不可重试" not in g._PLANNER_PROMPT)
+    check("形参默认值与常量同源（缺省即空串；两处不一致就分不清'没受阻'与'没接上'）",
+          (g._render_planner_prompt.__kwdefaults__ or {}).get("blocked_rows")
+          == ctx.BLOCKED_ROWS_EMPTY == "",
+          str(g._render_planner_prompt.__kwdefaults__))
+    check("模板里有 {blocked_rows} 槽", "{blocked_rows}" in g._PLANNER_PROMPT)
+    check("§1.55 的推断（不可重试 ⇒ 目标不存在）被那句话说掉了：在**渲染值**里、不在模板里",
+          "不可重试 ≠ 你要办的事" in ctx.blocked_rows(_UNAVAIL)
+          and "不可重试 ≠ 你要办的事" not in g._PLANNER_PROMPT)
+    _TPL = g._PLANNER_PROMPT
+    check("槽在工具结果之后、可引用字段之前（它说的是刚发生的那一轮）",
+          all(s in _TPL for s in ("{tool_results}", "{blocked_rows}", "{ref_hints}"))
+          and _TPL.index("{tool_results}") < _TPL.index("{blocked_rows}")
+          < _TPL.index("{ref_hints}"))
+    check("渲染函数**必须有**这个形参（漏传即 TypeError）",
+          "blocked_rows" in g._render_planner_prompt.__code__.co_varnames)
+    check("`planner_node` 每轮把它算进 `_prompt_args`",
+          "blocked_rows=blocked_rows(state.get(\"blocked\") or [])" in _GRAPH_SRC)
+    _APPEND = _GRAPH_SRC.split("blocked.append(", 1)[1].split("})", 1)[0]
+    check("`execute` 往受阻项里写了 workflow（类型接上线的另一半，另一半在 checker）",
+          '"workflow"' in _APPEND and 'plan["workflow"]' in _APPEND, _APPEND[:120])
+    _prompt = g._render_planner_prompt(
+        "admin", "ctx", "round", user_msg="u", intent_hints="i", doc_anchors="d",
+        recent_context="r", short_reply_hint="s", tool_results="t", pending_ledger="p",
+        ref_hints="", reflector_feedback="", correction="", blocked_rows=row)
+    check("端到端：渲染出来的提示词里真的有这一行（不是只写进了模板）",
+          "技能=account_roster" in _prompt and "改参数重试无效" in _prompt)
+    _NOT_REASONS = {"ok"}
+    _SRC = {_p: (ROOT / _p).read_text(encoding="utf-8")
+            for _p in ("agent/arg_refs.py", "agent/authz.py", "agent/adminops_target.py",
+                       "agent/idem.py", "agent/graph.py")}
+    _PRODUCED = produced_codes(_SRC) - _NOT_REASONS
+    check("正控：生产侧确实扫到了码（扫不到的话下面那条是**空过**——"
       "\"没产出\"与\"产出的都登记了\"同形）",
-      len(_PRODUCED) >= 12, f"只扫到 {len(_PRODUCED)} 个：{sorted(_PRODUCED)}")
-check("⭐ 生产侧能发出的每一个码都在 `REASONS` 里（新增码忘了登记 ⇒ 当场红）",
-      _PRODUCED <= set(REASONS),
-      "未登记：" + "、".join(sorted(_PRODUCED - set(REASONS))))
-check("  豁免的 `ok` 确实**不是**受阻原因码（它进不了 REASONS）——"
+          len(_PRODUCED) >= 12, f"只扫到 {len(_PRODUCED)} 个：{sorted(_PRODUCED)}")
+    check("⭐ 生产侧能发出的每一个码都在 `REASONS` 里（新增码忘了登记 ⇒ 当场红）",
+          _PRODUCED <= set(REASONS),
+          "未登记：" + "、".join(sorted(_PRODUCED - set(REASONS))))
+    check("  豁免的 `ok` 确实**不是**受阻原因码（它进不了 REASONS）——"
       "哪天它真成了受阻码，这条豁免就成了掩护",
-      "ok" not in REASONS)
-# 反控一：喂一份"新增了一个码却没登记"的源码 ⇒ 上面那条必须红
-_FAKE = produced_codes({"x.py": 'REASON_NEW = "brand_new_code"\n'}) - _NOT_REASONS
-check("  反控：合成 `REASON_NEW = \"brand_new_code\"` ⇒ 扫得到、且不在表里",
-      _FAKE == {"brand_new_code"} and not (_FAKE <= set(REASONS)), str(sorted(_FAKE)))
-# 反控二（形状筛）：人话不许被当成码，否则这一条就是"见谁都红"
-check("  反控：`return None, \"读不到现有的标签字典\"` 那种人话不算码",
-      produced_codes({"x.py": 'def f():\n    return None, "读不到现有的标签字典"\n'}) == set())
+          "ok" not in REASONS)
+    _FAKE = produced_codes({"x.py": 'REASON_NEW = "brand_new_code"\n'}) - _NOT_REASONS
+    check("  反控：合成 `REASON_NEW = \"brand_new_code\"` ⇒ 扫得到、且不在表里",
+          _FAKE == {"brand_new_code"} and not (_FAKE <= set(REASONS)), str(sorted(_FAKE)))
+    check("  反控：`return None, \"读不到现有的标签字典\"` 那种人话不算码",
+          produced_codes({"x.py": 'def f():\n    return None, "读不到现有的标签字典"\n'}) == set())
+    _DEN = authz.Decision(False, authz.REASON_DENIED, "write.console", "set_article_status")
+    _PRN = authz.Principal(uid=1, role="user")
+    _FRAMES = {
+        "denial": authz.denial_frame(_DEN, _PRN),
+        "consent": authz.consent_frame("set_article_status", _PRN),
+        "action_conflict": authz.action_conflict_frame("remove_favorite", "add_favorite"),
+        "unknown_target": _target.unknown_target_frame("set_article_status"),
+        "target_mismatch": _target.target_conflict_frame("set_article_status", {12}, 46),
+        "policy_refused": _target.policy_frame("后端说不行"),
+        "write_outcome_unknown": idem.unknown_frame("set_article_status"),
+        "ref_unparsed": ref_error_frame("ref_unparsed"),
+    }
+    _FRAME_CODES = {k: (getattr(v, "meta", None) or {}).get("reason") for k, v in _FRAMES.items()}
+    check("正控：八个帧生产方**都**交出了 `meta[\"reason\"]`（少一个下面那条就是空过）",
+          all(_FRAME_CODES.values()), str(_FRAME_CODES))
+    check("⭐ 交出的每一个码都在 `REASONS` 里（`_check_spec` 拿它当 blocked 的原因）",
+          set(_FRAME_CODES.values()) <= set(REASONS),
+          "未登记：" + "、".join(sorted(set(_FRAME_CODES.values()) - set(REASONS))))
+    check("结构与帧文里那个方括号**说的是同一件事**（两条通道不许分岔）",
+          all(f"[{c}]" in str(_FRAMES[k]) for k, c in _FRAME_CODES.items()),
+          str({k: c for k, c in _FRAME_CODES.items() if f"[{c}]" not in str(_FRAMES[k])}))
+    _ref_f = ref_error_frame("ref_unknown_tool:$fake_search[0].noteKey")
+    check("引用失败：帧文带全串、`meta` 只放冒号前的码",
+          _ref_f.meta["reason"] == "ref_unknown_tool"
+          and "ref_unknown_tool:$fake_search[0].noteKey" in str(_ref_f),
+          f"{_ref_f.meta} / {str(_ref_f)[:60]}")
+    check("  ⇒ 真的走一遍 `_check_spec`：得到的是那个**查得到中文**的码",
+          g._check_spec("search_notes", {}, True, _ref_f, "content_query",
+                        meta=_ref_f.meta) == ("BLOCK", "ref_unknown_tool"))
+    _MANGLED = str(_FRAMES["denial"]).replace("权限不足", "这条不行")
+    check("  反控的正控：帧文改掉之后，**文本那一支**取不回那个码了（下面那条不是白绿）",
+          g._check_spec("set_article_status", {}, True, _MANGLED, "article_status")
+          == ("BLOCK", "error_frame"),
+          str(g._check_spec("set_article_status", {}, True, _MANGLED, "article_status")))
+    check("⭐ 反控：同一份帧**带上 `meta`** ⇒ 原因码仍然准（措辞改一百遍也不影响分叉）",
+          g._check_spec("set_article_status", {}, True, _MANGLED, "article_status",
+                        meta=_FRAMES["denial"].meta) == ("BLOCK", "denied"))
+    print("\n" + ("全部通过" if not FAILS else f"失败 {len(FAILS)} 项：" + "; ".join(FAILS)))
 
-# ── ⑦ 原因码住在**结构**里（20261019 批 G4）────────────────────────────────
-# ⑥ 判的是"生产侧发出的码有没有登记"，看不见**码是怎么交给取回侧的**：此前它只长在
-# 帧文本中间那对方括号里（`权限不足[denied]`），取回侧拿七个函数去抠中文——改一句
-# 措辞就静默退化成末端兜底的 `error_frame`，而 planner 的应对（改参数？去问主人？
-# 如实告知？）正是按这个码分叉的。现在生产方交 `ToolResult.meta["reason"]`。
-#
-# 判据成对写：① 每个生产方都交出码、且与帧文里那个方括号**一致**；② 反控——**把帧文
-# 的中文标签整段换掉**，带 meta 的那一路仍判得准，而不带 meta 的那一路当场退化成
-# `error_frame`（今天就是那一路 ⇒ 上面那条不是白绿）。
-_DEN = authz.Decision(False, authz.REASON_DENIED, "write.console", "set_article_status")
-_PRN = authz.Principal(uid=1, role="user")
-_FRAMES = {
-    "denial": authz.denial_frame(_DEN, _PRN),
-    "consent": authz.consent_frame("set_article_status", _PRN),
-    "action_conflict": authz.action_conflict_frame("remove_favorite", "add_favorite"),
-    "unknown_target": _target.unknown_target_frame("set_article_status"),
-    "target_mismatch": _target.target_conflict_frame("set_article_status", {12}, 46),
-    "policy_refused": _target.policy_frame("后端说不行"),
-    "write_outcome_unknown": idem.unknown_frame("set_article_status"),
-    "ref_unparsed": ref_error_frame("ref_unparsed"),
-}
-_FRAME_CODES = {k: (getattr(v, "meta", None) or {}).get("reason") for k, v in _FRAMES.items()}
-check("正控：八个帧生产方**都**交出了 `meta[\"reason\"]`（少一个下面那条就是空过）",
-      all(_FRAME_CODES.values()), str(_FRAME_CODES))
-check("⭐ 交出的每一个码都在 `REASONS` 里（`_check_spec` 拿它当 blocked 的原因）",
-      set(_FRAME_CODES.values()) <= set(REASONS),
-      "未登记：" + "、".join(sorted(set(_FRAME_CODES.values()) - set(REASONS))))
-check("结构与帧文里那个方括号**说的是同一件事**（两条通道不许分岔）",
-      all(f"[{c}]" in str(_FRAMES[k]) for k, c in _FRAME_CODES.items()),
-      str({k: c for k, c in _FRAME_CODES.items() if f"[{c}]" not in str(_FRAMES[k])}))
-# 引用失败那一族**两格取的不是同一段**：帧文带 `<码>:<引用原文>`（planner 照着那串
-# 引用改参数），meta 只放冒号前的码。把 `:ref` 一起当码，`_REASON_CN` 就查不到中文、
-# `block_reasons` 也落进 fail-safe 的"可重试"——两条都是**静默**的。
-_ref_f = ref_error_frame("ref_unknown_tool:$fake_search[0].noteKey")
-check("引用失败：帧文带全串、`meta` 只放冒号前的码",
-      _ref_f.meta["reason"] == "ref_unknown_tool"
-      and "ref_unknown_tool:$fake_search[0].noteKey" in str(_ref_f),
-      f"{_ref_f.meta} / {str(_ref_f)[:60]}")
-check("  ⇒ 真的走一遍 `_check_spec`：得到的是那个**查得到中文**的码",
-      g._check_spec("search_notes", {}, True, _ref_f, "content_query",
-                    meta=_ref_f.meta) == ("BLOCK", "ref_unknown_tool"))
-# 反控：把帧文的**中文标签整段换掉**——取回侧的七个函数认的正是那些中文。
-_MANGLED = str(_FRAMES["denial"]).replace("权限不足", "这条不行")
-check("  反控的正控：帧文改掉之后，**文本那一支**取不回那个码了（下面那条不是白绿）",
-      g._check_spec("set_article_status", {}, True, _MANGLED, "article_status")
-      == ("BLOCK", "error_frame"),
-      str(g._check_spec("set_article_status", {}, True, _MANGLED, "article_status")))
-check("⭐ 反控：同一份帧**带上 `meta`** ⇒ 原因码仍然准（措辞改一百遍也不影响分叉）",
-      g._check_spec("set_article_status", {}, True, _MANGLED, "article_status",
-                    meta=_FRAMES["denial"].meta) == ("BLOCK", "denied"))
+    assert not FAILS, (
+        f"{len(FAILS)} 条未通过：" + "；".join(FAILS))
 
-print("\n" + ("全部通过" if not FAILS else f"失败 {len(FAILS)} 项：" + "; ".join(FAILS)))
-raise SystemExit(1 if FAILS else 0)
+
+if __name__ == "__main__":
+    test_block_reasons()

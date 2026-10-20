@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """LLM 用量记账（`agent/llm_usage.py` + 四个落点）单测：离线、秒级、零网络零 LLM。
 
 **为什么单独一套**：这个仓反复吃过"能力有测试 ≠ **接线**有测试"的亏（探针跑绿、
@@ -20,12 +19,17 @@
 直接出计划），否则假 LLM 一次都没被调用、断言"绿得毫无意义"——每个用例因此都断言了
 假 LLM 确实被调用过。
 """
+
+
 import sys
 import tempfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent  # 仓根（测试统一在 tests/）
+
+
 sys.path.insert(0, str(ROOT))
+
 
 from langchain_core.messages import AIMessage, HumanMessage  # noqa: E402
 
@@ -45,9 +49,12 @@ def check(desc: str, cond: bool, detail: str = "") -> None:
 
 
 _MSG = "帮我把樱花打开"          # 不命中任何快道（同 test_planner_wiring 的那句）
+
+
 _CFG = {"configurable": {"principal": Principal(uid=7, role="admin"),
                          "user_id": 7, "conversation_id": 42, "stop_event": None}}
-# 端点实测的形状（20260927 探针：13 tok 的短提问也带 input_token_details）
+
+
 _REAL = {"input_tokens": 25200, "output_tokens": 96, "total_tokens": 25296,
          "input_token_details": {"cache_read": 17588}, "output_token_details": {}}
 
@@ -97,8 +104,7 @@ def _new_trace(tid: str):
     return trace_mod.start_trace(tid, 7, "th", {}, dir=tempfile.mkdtemp(), by_day=False)
 
 
-# ── ① 纯函数：两种形状、缺席不补 0、炸不了 ─────────────────────────────────
-def test_shape_langchain_and_raw():
+def _test_shape_langchain_and_raw():
     print("\n[提取] 两种形状都认")
     got = usage_fields(AIMessage(content="x", usage_metadata=dict(_REAL)))
     check("langchain 形状：input/output/cache_read 三个数",
@@ -115,7 +121,7 @@ def test_shape_langchain_and_raw():
               "input_tokens": "12", "output_tokens": "3"})) == {"input": 12, "output": 3})
 
 
-def test_cache_read_absent_is_not_zero():
+def _test_cache_read_absent_is_not_zero():
     print("\n[提取] cache_read 缺席 = 量不到，**不补 0**")
     got = usage_fields(_Resp(usage_metadata={
         "input_tokens": 900, "output_tokens": 5}))
@@ -128,7 +134,7 @@ def test_cache_read_absent_is_not_zero():
           got0.get("cache_read") == 0 and "cache_read" in got0, str(got0))
 
 
-def test_no_usage_returns_empty_and_never_raises():
+def _test_no_usage_returns_empty_and_never_raises():
     print("\n[提取] 取不到就回空 dict，且绝不许抛")
     for resp, why in ((AIMessage(content="x"), "完全没有用量"),
                       (None, "响应是 None"),
@@ -144,7 +150,6 @@ def test_no_usage_returns_empty_and_never_raises():
               "input_tokens": True, "output_tokens": 1})) == {"output": 1})
 
 
-# ── ② 接线：planner ───────────────────────────────────────────────────────
 def _patch_llm(reply):
     """planner 那只 LLM 的假桩：**只有一只**。
 
@@ -163,8 +168,6 @@ def _patch_llm(reply):
     return _fake_get_llm, made
 
 
-# planner 的"有效决策"形状：正文空 + 一个工具调用（native 单通道，20261004）。
-# 正文非空且零调用 = `undecided` ⇒ 走一次纠偏，把 `_FakeLLM` 的单条脚本用光而炸。
 _PLANNER_REPLY = AIMessage(content="", tool_calls=[
     {"name": "effect", "args": {"effect": "sakura", "action": "on"},
      "id": "c1", "type": "tool_call"}])
@@ -183,7 +186,7 @@ def _run_planner(reply: AIMessage):
     return rec, made
 
 
-def test_planner_records_usage():
+def _test_planner_records_usage():
     print("\n[接线] planner：llm_done 带用量")
     rec, made = _run_planner(AIMessage(content="", usage_metadata=dict(_REAL),
                                        tool_calls=list(_PLANNER_REPLY.tool_calls)))
@@ -200,7 +203,6 @@ def test_planner_records_usage():
           and "frames_chars" in ev[0], str(sorted(ev[0])) if ev else "无事件")
 
 
-# ── ③ 接线：narrator / 屏幕文案 / 复盘 ────────────────────────────────────
 def _patch_one(reply):
     made: dict = {}
 
@@ -213,7 +215,7 @@ def _patch_one(reply):
     return _fake_get_llm, made
 
 
-def test_narrator_records_usage():
+def _test_narrator_records_usage():
     print("\n[接线] narrator（model 节点）")
     rec = _new_trace("t_usage_narrator")
     fake, made = _patch_one(AIMessage(content="好呀～", usage_metadata=dict(_REAL)))
@@ -231,7 +233,7 @@ def test_narrator_records_usage():
           and ev[0].get("cache_read") == 17588, str(ev))
 
 
-def test_display_text_records_usage():
+def _test_display_text_records_usage():
     print("\n[接线] 屏幕文案创作（execute 内）")
     rec = _new_trace("t_usage_display")
     fake, made = _patch_one(AIMessage(content="主人来看我啦喵", usage_metadata=dict(_REAL)))
@@ -250,7 +252,7 @@ def test_display_text_records_usage():
           == ["主人来看我啦喵"])
 
 
-def test_display_text_failure_path_still_quiet():
+def _test_display_text_failure_path_still_quiet():
     print("\n[接线] 屏幕文案：创作失败 → 兜底文案，且不炸")
     class _Boom:
         def invoke(self, prompt):
@@ -263,7 +265,7 @@ def test_display_text_failure_path_still_quiet():
     check("失败仍是兜底文案（行为不变）", out.startswith("主人来看我啦"), out)
 
 
-def test_reflector_records_usage():
+def _test_reflector_records_usage():
     print("\n[接线] reflector（复盘）")
     rec = _new_trace("t_usage_reflector")
     # 复盘那次调用 20261019 批 G7 起住在 `agent.planner_llm.invoke_reflector` ⇒ **桩要打在
@@ -291,7 +293,7 @@ def test_reflector_records_usage():
           [e.get("decide") for e in _events(rec, "reflector", "verdict")] == ["wrap_up"])
 
 
-def test_no_usage_does_not_break_any_site():
+def _test_no_usage_does_not_break_any_site():
     print("\n[接线] 端点不回用量 → 三条路照常跑完，trace 里只是少一格")
     rec, made = _run_planner(_PLANNER_REPLY)
     ev = _events(rec, "planner", "llm_done")
@@ -300,16 +302,22 @@ def test_no_usage_does_not_break_any_site():
           and "input" not in ev[0], str(ev))
 
 
-if __name__ == "__main__":
-    for fn in (test_shape_langchain_and_raw,
-               test_cache_read_absent_is_not_zero,
-               test_no_usage_returns_empty_and_never_raises,
-               test_planner_records_usage,
-               test_narrator_records_usage,
-               test_display_text_records_usage,
-               test_display_text_failure_path_still_quiet,
-               test_reflector_records_usage,
-               test_no_usage_does_not_break_any_site):
+def test_llm_usage():
+    for fn in (_test_shape_langchain_and_raw,
+               _test_cache_read_absent_is_not_zero,
+               _test_no_usage_returns_empty_and_never_raises,
+               _test_planner_records_usage,
+               _test_narrator_records_usage,
+               _test_display_text_records_usage,
+               _test_display_text_failure_path_still_quiet,
+               _test_reflector_records_usage,
+               _test_no_usage_does_not_break_any_site):
         fn()
     print("\n" + ("全部通过 ✅" if not FAILS else f"失败 {len(FAILS)} 项 ❌: {FAILS}"))
-    sys.exit(1 if FAILS else 0)
+
+    assert not FAILS, (
+        f"{len(FAILS)} 条未通过：" + "；".join(FAILS))
+
+
+if __name__ == "__main__":
+    test_llm_usage()

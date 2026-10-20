@@ -1,5 +1,3 @@
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
 """正文地址的形状（20261018）：一律 `[文字](URL)`，且**必须**留住"文字就是地址本身"那一支。
 
 **为什么单起一套。** 现场（trace `20261017T110235`，主人说「猫咪给我个B站链接，我去看凡人
@@ -33,11 +31,16 @@ narrator 的 system prompt、并且**"要让访客看见或复制地址本身时
 
 用法：.venv/bin/python tests/test_link_shape.py
 """
+
+
 import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent  # 仓根
+
+
 sys.path.insert(0, str(ROOT))
+
 
 from agent import graph as g  # noqa: E402
 from agent.prompts import BLOG_ASSISTANT_PROMPT  # noqa: E402
@@ -64,56 +67,47 @@ def _has_rule(text: str) -> bool:
             and "放进反引号里" in text)
 
 
-# ══════════════════════════════════════════════════════════════════
-print("\n① 人设里有这条规矩（三支齐：正形 / 取地址支 / 不给链接支）")
+def test_link_shape():
+    print("\n① 人设里有这条规矩（三支齐：正形 / 取地址支 / 不给链接支）")
+    _core = BLOG_ASSISTANT_PROMPT
+    check("地址一律写成 [文字](URL)", "一律写成 [文字](URL)" in _core)
+    check("  取地址支在：文字就写地址本身（「给我个链接」的出口）",
+          "文字就写地址本身" in _core and "](https://<真实地址>)" in _core)
+    check("  不给链接支在：反引号兜住裸地址",
+          "放进反引号里" in _core)
+    check("  并点名了「既能点」与「地址串照旧可选可复制」两个好处（少了它这支读起来像降级）",
+          "可选可复制" in _core and "既能点" in _core)
+    print("\n①b 正控（判据不是恒真的）")
+    for _cut in ("一律写成 [文字](URL)", "文字就写地址本身",
+                 "](https://<真实地址>)", "放进反引号里"):
+        check(f"  删掉「{_cut[:16]}」后判据变假",
+              not _has_rule(_core.replace(_cut, "")))
+    print("\n② 接线：规矩真的进了 narrator 的 system prompt（在常量里躺着不算）")
+    _sys = g._EXECUTOR_PROMPT.format(
+        persona=BLOG_ASSISTANT_PROMPT, audience="【对话者：访客】",
+        plan="（本轮没有计划）", tool_frames="（本轮没有工具返回）",
+        exec_receipts="（无）", page_ctx="（无）", sticker_guide="（无）",
+        fact_block="（本轮没有动作族执行）")
+    check("narrator 的 system prompt 里含这条规矩",
+          "一律写成 [文字](URL)" in _sys and "文字就写地址本身" in _sys)
+    check("  且是**格式化之后**仍在（`persona=` 槽没接错常量）",
+          BLOG_ASSISTANT_PROMPT.strip()[:30] in _sys)
+    check("  且 `.format` 的槽都填上了（漏槽会留一串花括号文本给模型看）",
+          "{" not in _sys and "}" not in _sys)
+    print("\n③ 旧规矩没被顶掉（是推广，不是替换）")
+    check("引用站内文章附链接那条仍在（含绝不编造 id 或 URL）",
+          "推荐/引用站内文章" in _core and "绝不编造 id 或 URL" in _core)
+    check("  页面跳转仍由系统执行那条仍在（正文链接不许冒充已跳转）",
+          "不得用链接冒充已跳转" in _core)
+    print("\n④ 契约里不许出现**可抄的坏形状**（同「不许出现可抄的否认句」那条纪律）")
+    check("人设里没有加粗裸 URL 的示范（`**https://`）", "**https://" not in _core)
+    check("  也没有裸 URL 紧跟非空白的示范（`](…)`/反引号之外不留裸地址写法）",
+          "看 https://" not in _core and "地址：https://" not in _core)
+    print("\n" + ("全部通过" if not FAILS else f"失败 {len(FAILS)} 项：" + "; ".join(FAILS)))
 
-_core = BLOG_ASSISTANT_PROMPT
-check("地址一律写成 [文字](URL)", "一律写成 [文字](URL)" in _core)
-check("  取地址支在：文字就写地址本身（「给我个链接」的出口）",
-      "文字就写地址本身" in _core and "](https://<真实地址>)" in _core)
-check("  不给链接支在：反引号兜住裸地址",
-      "放进反引号里" in _core)
-check("  并点名了「既能点」与「地址串照旧可选可复制」两个好处（少了它这支读起来像降级）",
-      "可选可复制" in _core and "既能点" in _core)
+    assert not FAILS, (
+        f"{len(FAILS)} 条未通过：" + "；".join(FAILS))
 
-# ── 正控：把三支任一拆掉，同一条判据必须变假 ────────────────────
-# 判据前移的纪律：不实测一次"能红"，就没法排除"这条 check 恒真"。
-print("\n①b 正控（判据不是恒真的）")
-for _cut in ("一律写成 [文字](URL)", "文字就写地址本身",
-             "](https://<真实地址>)", "放进反引号里"):
-    check(f"  删掉「{_cut[:16]}」后判据变假",
-          not _has_rule(_core.replace(_cut, "")))
 
-# ══════════════════════════════════════════════════════════════════
-print("\n② 接线：规矩真的进了 narrator 的 system prompt（在常量里躺着不算）")
-
-_sys = g._EXECUTOR_PROMPT.format(
-    persona=BLOG_ASSISTANT_PROMPT, audience="【对话者：访客】",
-    plan="（本轮没有计划）", tool_frames="（本轮没有工具返回）",
-    exec_receipts="（无）", page_ctx="（无）", sticker_guide="（无）",
-    fact_block="（本轮没有动作族执行）")
-check("narrator 的 system prompt 里含这条规矩",
-      "一律写成 [文字](URL)" in _sys and "文字就写地址本身" in _sys)
-check("  且是**格式化之后**仍在（`persona=` 槽没接错常量）",
-      BLOG_ASSISTANT_PROMPT.strip()[:30] in _sys)
-check("  且 `.format` 的槽都填上了（漏槽会留一串花括号文本给模型看）",
-      "{" not in _sys and "}" not in _sys)
-
-# ══════════════════════════════════════════════════════════════════
-print("\n③ 旧规矩没被顶掉（是推广，不是替换）")
-
-check("引用站内文章附链接那条仍在（含绝不编造 id 或 URL）",
-      "推荐/引用站内文章" in _core and "绝不编造 id 或 URL" in _core)
-check("  页面跳转仍由系统执行那条仍在（正文链接不许冒充已跳转）",
-      "不得用链接冒充已跳转" in _core)
-
-# ══════════════════════════════════════════════════════════════════
-print("\n④ 契约里不许出现**可抄的坏形状**（同「不许出现可抄的否认句」那条纪律）")
-
-# 事故本体就是 `**https://…**`。留一个能抄的坏示范，比不写规矩更糟。
-check("人设里没有加粗裸 URL 的示范（`**https://`）", "**https://" not in _core)
-check("  也没有裸 URL 紧跟非空白的示范（`](…)`/反引号之外不留裸地址写法）",
-      "看 https://" not in _core and "地址：https://" not in _core)
-
-print("\n" + ("全部通过" if not FAILS else f"失败 {len(FAILS)} 项：" + "; ".join(FAILS)))
-raise SystemExit(1 if FAILS else 0)
+if __name__ == "__main__":
+    test_link_shape()

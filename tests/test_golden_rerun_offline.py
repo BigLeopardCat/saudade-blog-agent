@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """回归组「FAIL 重跑一次再判」的离线锁（20260924）。
 
 被锁的纪律：回归组（`tags` 含 regression）是 L2 里唯一"一条红即整轮红"的硬判据，而它
@@ -16,6 +15,8 @@
 **相对路径**，整体落进 tmpdir；外加 `GOLDEN_NO_TRACE=1`（不落 golden trace）⇒ 生产报告、
 留档、trace **零写入**。秒级、零网络、零 LLM。
 """
+
+
 import contextlib
 import glob
 import io
@@ -29,13 +30,20 @@ import types
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent  # 仓根（20260924：本文件已搬进 tests/）
+
+
 EVAL = ROOT / "eval"                           # run_golden / golden_trace 仍在 eval/
+
+
 sys.path.insert(0, str(EVAL))
+
+
 sys.path.insert(0, str(ROOT))
 
-import golden_trace          # noqa: E402
-import report_archive        # noqa: E402
-import run_golden as rg      # noqa: E402
+
+import golden_trace  # noqa: E402
+import report_archive  # noqa: E402
+import run_golden as rg  # noqa: E402
 
 FAILS: list[str] = []
 
@@ -176,97 +184,12 @@ def drive(cases: list[dict], plan: dict, argv_extra: list[str] | None = None,
             shutil.rmtree(tmp, ignore_errors=True)
 
 
-RED, GREEN = False, True
-
-print("① 首跑红、复跑仍红 → 真 FAIL（照旧硬判，退出码 1）")
-r = drive([mkcase("reg_red_both", ["regression", "hallucination"])],
-          {"reg_red_both": [RED, RED]})
-rep = r["report"]
-check("退出码 1（回归组硬判，不按通过率放行）", r["code"] == 1, str(r["code"]))
-check("复跑仍红进 regression.failed_ids", rep["regression"]["failed_ids"] == ["reg_red_both"]
-      and rep["regression"]["all_passed"] is False, str(rep["regression"]))
-check("flaked_ids 为空（复跑没绿就不许当方差）", rep["regression"]["flaked_ids"] == [])
-check("恰好多跑一次（**不许重跑到绿为止**）",
-      [c["case"] for c in r["calls"]] == ["reg_red_both", "reg_red_both__rerun"],
-      str([c["case"] for c in r["calls"]]))
-check("复跑与首跑是**同一用例、同一身份**（不是拿别的用例凑出来的绿）",
-      r["calls"][0]["message"] == r["calls"][1]["message"]
-      and r["calls"][0]["principal"] == r["calls"][1]["principal"])
-check("首跑与复跑的结论各存一份（cases[].ok / cases[].rerun.ok 都在）",
-      rep["cases"][0]["ok"] is False and rep["cases"][0]["rerun"]["ok"] is False
-      and rep["cases"][0]["final_ok"] is False)
-check("首跑输出没被复跑覆盖（报告里两段文本分开存）",
-      rep["cases"][0]["text"] == "跑偏" and rep["cases"][0]["rerun"]["text"] == "跑偏")
-check("复审单置顶「不得放行」且标明复跑仍红",
-      "不得放行" in r["review"] and "复跑：仍红" in r["review"], r["review"][:80])
-
-print("\n② 首跑红、复跑绿 → 按方差放行，但必须响")
-r = drive([mkcase("reg_flake", ["regression"]), mkcase("reg_green", ["regression"])],
-          {"reg_flake": [RED, GREEN], "reg_green": [GREEN]})
-rep = r["report"]
-check("退出码 0（终判按复跑）", r["code"] == 0, str(r["code"]))
-check("首跑红的用例进了 regression.flaked_ids", rep["regression"]["flaked_ids"] == ["reg_flake"]
-      and rep["regression"]["failed_ids"] == [] and rep["regression"]["all_passed"] is True,
-      str(rep["regression"]))
-check("报告同时留着首跑口径（failed_first_run=1 / failed=0）",
-      rep["failed_first_run"] == 1 and rep["failed"] == 0)
-check("cases[] 里两条结论都在（首跑红 / 复跑绿）",
-      rep["cases"][0]["ok"] is False and rep["cases"][0]["rerun"]["ok"] is True
-      and rep["cases"][0]["final_ok"] is True)
-check("汇总「复跑绿」出声（放行不等于静默宽恕）",
-      "复跑才绿" in r["out"] and "按方差放行" in r["out"], r["out"][-200:])
-check("首跑绿的不重跑（calls 只有一条 reg_green）",
-      [c["case"] for c in r["calls"]] == ["reg_flake", "reg_green", "reg_flake__rerun"],
-      str([c["case"] for c in r["calls"]]))
-check("复审单为「只有复跑才绿」也生成，并置顶点名该用例",
-      "复跑才绿" in r["review"] and "reg_flake" in r["review"]
-      and "复跑：绿（按方差放行）" in r["review"], r["review"][:120])
-check("留档也写了一份（runs/<ts>.json，与 last_run.json 同口径）",
-      len(r["archived"]) == 1
-      and r["archived_doc"]["regression"]["flaked_ids"] == ["reg_flake"]
-      and r["archived_doc"]["failed_first_run"] == 1)
-
-print("\n③ 能力题首跑红 → 不重跑（本来就按通过率放宽，不占第二条判据）")
-r = drive([mkcase("abil_red", ["chat"])], {"abil_red": [RED]})
-rep = r["report"]
-check("退出码 1（通过率 0 < 门禁 1.0）", r["code"] == 1, str(r["code"]))
-check("一次都不重跑", [c["case"] for c in r["calls"]] == ["abil_red"],
-      str([c["case"] for c in r["calls"]]))
-check("回归组块分母为 0（不把能力题算进回归组）",
-      rep["regression"]["total"] == 0 and rep["regression"]["failed_ids"] == [])
-check("cases[].rerun 显式为 None（没有的事不许含糊）",
-      rep["cases"][0]["rerun"] is None and rep["cases"][0]["final_ok"] is False)
-
-print("\n④ 全绿：不动、不吭声、不留复审单")
-r = drive([mkcase("reg_ok", ["regression"]), mkcase("abil_ok", ["chat"])],
-          {"reg_ok": [GREEN], "abil_ok": [GREEN]})
-check("退出码 0", r["code"] == 0, str(r["code"]))
-check("没有复跑", [c["case"] for c in r["calls"]] == ["reg_ok", "abil_ok"])
-check("不写复审单", r["review"] == "")
-check("打印里不出现「复跑才绿」", "复跑才绿" not in r["out"])
-
-print("\n⑤ --only 挑一条回归用例时同样走复跑（诊断链路时口径一致）")
-r = drive([mkcase("reg_a", ["regression"]), mkcase("reg_b", ["regression"])],
-          {"reg_a": [RED, GREEN]}, argv_extra=["--only", "reg_a"])
-check("--only 之外的用例不跑、也不进报告分母",
-      [c["case"] for c in r["calls"]] == ["reg_a", "reg_a__rerun"]
-      and r["archived_doc"]["total"] == 1, str([c["case"] for c in r["calls"]]))
-check("复跑绿照样按方差放行", r["code"] == 0
-      and r["archived_doc"]["regression"]["flaked_ids"] == ["reg_a"])
-# 非全量跑**不写** last_run.json（20260924 收窄）：它被当成"当前基线"读，
-# 一次 --only 的调试跑覆盖它 = 把基线写成 total=1（正是要治的病）。留档 runs/<ts>.json 照写。
-check("--only 不覆盖 last_run.json（基线不被调试跑改写）", r["report"] is None)
-check("非全量跑如实告知没覆盖（不静默）",
-      "非全量跑" in r["out"] and "last_run.json" in r["out"], r["out"][-160:])
-check("非全量仍留档 runs/<ts>.json", len(r["archived"]) == 1 and r["archived_doc"]["total"] == 1)
-
-print("\n⑥ 同一目录先全量、后 --only：基线必须还是全量那一份")
-_tmp = tempfile.mkdtemp(prefix="golden_rerun_base_")
-# **把撞车钉出来**（20261002）：真实时钟下这两次跑相隔几十毫秒，撞不上——而缺陷的条件
-# 恰恰是"两次跑落在同一刻"。只把"取时刻"这一处钉死（命名、`O_EXCL` 占位、写盘都是真
-# 实现），两次跑就落在同一个毫秒上：留档名必须各占一个，先跑那份不许被覆盖。
 _real_open = report_archive.open_archive
+
+
 _frozen_calls: list = []
+
+
 _FROZEN_TS = 1759366400.125      # 任意一个带毫秒的整秒
 
 
@@ -276,125 +199,202 @@ def _frozen_open(dirpath, *, ext=".json", now=None):
                       now=_FROZEN_TS if len(_frozen_calls) <= 2 else now)
 
 
-report_archive.open_archive = _frozen_open
-try:
-    r1 = drive([mkcase("reg_a", ["regression"]), mkcase("reg_b", ["regression"])],
-               {"reg_a": [GREEN], "reg_b": [GREEN]}, tmp=_tmp)
-    check("全量跑写了基线（total=2、full_run=True）",
-          r1["report"] is not None and r1["report"]["total"] == 2
-          and r1["report"]["full_run"] is True,
-          str(r1["report"] and {k: r1["report"][k] for k in ("total", "full_run")}))
-    r2 = drive([mkcase("reg_a", ["regression"])], {"reg_a": [GREEN]},
-               argv_extra=["--only", "reg_a"], tmp=_tmp)
-    # 注意 ⑥ 与 ⑤ 的判据不同：⑤ 的目录里从来没有基线（读回 None = 没写），
-    # ⑥ 的目录里**已经有**基线，所以"没写"的判据是"读回来的还是上一轮那份"。
-    #
-    # 读**最新**那份（`archived[-1]`），不是 `archived[0]`（20261002）：这个目录里先跑过
-    # 一次全量，`archived[0]` 恒是它（文件名是秒级时间戳、按时间排序），拿它当"这一轮
-    # 自己的留档"读出来的总是 total=2。此前这条能绿，靠的是**留档被覆盖**这个缺陷——
-    # 两次跑落在同一秒时 `runs/<ts>.json` 同名，后写的把那一次覆盖掉，目录里只剩一份
-    # （恰好是这一轮的）。同一秒撞车一旦不发生（两次跑跨过秒边界），这条就红。判据要测
-    # 的是"这一轮自己那份是 total=1"，两种时序下都得成立。
-    _own = (json.load(open(r2["archived"][-1], encoding="utf-8"))
-            if r2["archived"] else None)
-    # 「这一轮自己的那份」能被读到，前提是**两份都在**：留档名此前是秒级 ts，全量跑与
-    # `--only` 跑落在同一秒就同名，先跑那份被覆盖（20261002 修，见 eval/report_archive.py）。
-    # 这条断言此前只在"没撞车"那半时序里绿——现在两种时序都得两份。
-    # 期望名**按本机钟面算**（戳是本地时间，CI 是 UTC ⇒ 写死字符串会在那边红，20261002 实测）。
-    _base = time.strftime("%Y%m%d_%H%M%S", time.localtime(_FROZEN_TS))
-    _stems = [os.path.basename(x)[: -len(".json")] for x in r2["archived"]]
-    check("两次跑被钉在同一毫秒，留档仍各占一个（第二个顺延一毫秒，两份都在）",
-          len(_stems) == 2
-          and _stems[0] == f"{_base}_125" and _stems[1] == f"{_base}_126",
-          f"{_stems}（期望 {_base}_125 / {_base}_126）")
-    check("--only 这一轮自己的留档是 total=1（它确实只跑了 1 条）",
-          _own is not None and _own["total"] == 1,
-          f"{(_own or {}).get('total')}（目录里 {len(r2['archived'])} 份留档）")
-    check("而读回来的基线仍是 total=2（两份文件各说各话，基线归全量）",
-          r2["report"]["total"] == 2, str(r2["report"]["total"]))
-    _after = json.load(open(os.path.join(_tmp, "eval", "report", "last_run.json"),
-                            encoding="utf-8"))
-    check("**基线原封不动**（仍是全量那一份：total=2、full_run=True）",
-          _after["total"] == 2 and _after["full_run"] is True,
-          str({k: _after[k] for k in ("total", "full_run")}))
-finally:
-    report_archive.open_archive = _real_open
-    shutil.rmtree(_tmp, ignore_errors=True)
-
-print("\n⑦ 双轮用例：第 2 轮的令牌只能来自第 1 轮的控制帧（20260925）")
-_r = drive([mk2("wr_ok", {"round": 1, "text_contains": ["回答"]},
-                {"round": 2, "text_contains": ["回答"]})],
-           {"wr_ok": [GREEN, GREEN]}, tokens={"wr_ok": ["tok-1"]})
-check("两轮都跑了、退出码 0", _r["code"] == 0
-      and [c["case"] for c in _r["calls"]] == ["wr_ok", "wr_ok"], str(_r["code"]))
-check("第 2 轮带的是第 1 轮签出的**那张**令牌（不是自己造的、也不是空的）",
-      _r["calls"][0]["confirm_token"] == "" and _r["calls"][1]["confirm_token"] == "tok-1",
-      str([c["confirm_token"] for c in _r["calls"]]))
-check("两轮同一个会话（令牌把会话签进签名，换了会话就等于换了张卡）",
-      [c["conversation_id"] for c in _r["calls"]] == [4242, 4242],
-      str([c["conversation_id"] for c in _r["calls"]]))
-check("第 2 轮发的是**合成消息**（生产上前端发的是「确认执行：<卡面摘要>」）",
-      _r["calls"][1]["message"] == "确认执行：删除分类「X」", _r["calls"][1]["message"])
-check("报告逐轮留档（两轮各自的 round，末轮的扁平结果不淹掉第 1 轮）",
-      [x["round"] for x in _r["report"]["cases"][0]["rounds"]] == [1, 2],
-      str(_r["report"]["cases"][0]["rounds"]))
-# 报告里**留载荷、抹令牌**：载荷（技能/参数）是红了要照着读的现场；令牌是 10 分钟有效的
-# 写授权凭据，落盘等于在生产机上多存一份可用的授权（同 server.py 只记布尔 has_confirm）。
-check("报告带着解开的载荷（红了照着读「这张卡问了什么」）",
-      _r["report"]["cases"][0]["rounds"][0]["confirm_payloads"][0]["workflow"] == "tag_delete",
-      str(_r["report"]["cases"][0]["rounds"][0]["confirm_payloads"]))
-check("报告里没有原始令牌（帧体里的 token 被抹成占位符）",
-      "tok-1" not in json.dumps(_r["report"], ensure_ascii=False)
-      and "<redacted>" in json.dumps(_r["report"]["cases"][0]["rounds"][0]["frames"],
-                                     ensure_ascii=False),
-      json.dumps(_r["report"]["cases"][0]["rounds"][0]["frames"], ensure_ascii=False))
-
-print("\n⑧ 第 1 轮没弹卡 ⇒ 第 2 轮**不发** + 响亮失败（不静默降级成普通轮）")
-_r = drive([mk2("wr_notoken", {"round": 1, "text_contains": ["回答"]},
-                {"round": 2, "text_contains": ["回答"]})], {"wr_notoken": [GREEN]})
-check("退出码 1（没令牌是失败，不是「跳过」）", _r["code"] == 1, str(_r["code"]))
-# 这一条是**安全**判据不只是正确性判据：第 2 轮的消息是合成命令式文本，而写路径有一条
-# "同轮命令即确认"的放行通道——把它当普通轮发出去，可能另找一条路把写做掉。
-check("第 2 轮一次都没发出去（零请求 ⇒ 结构上不可能另走一条路把写做掉）",
-      [c["case"] for c in _r["calls"]] == ["wr_notoken"],
-      str([c["case"] for c in _r["calls"]]))
-check("报告里两处都点了名：轮数不符 **和** 它的原因（没有签出令牌）",
-      any("轮数不符" in f for f in _r["report"]["cases"][0]["fails"])
-      and any("没有签出确认令牌" in f for f in _r["report"]["cases"][0]["fails"]),
-      str(_r["report"]["cases"][0]["fails"]))
-
-print("\n⑨ gold 贴错行 ⇒ 红在「这一轮的 gold 不是给这一轮的」，不是红在莫名其妙的断言上")
-_r = drive([mk2("wr_mislabel", {"round": 1, "text_contains": ["回答"]},
-                {"round": 1, "text_contains": ["回答"]})],
-           {"wr_mislabel": [GREEN, GREEN]}, tokens={"wr_mislabel": ["tok-1"]})
-check("退出码 1", _r["code"] == 1, str(_r["code"]))
-check("红信息点名 gold 的自标号与轮次不符（第 2 轮的 gold 写着 round=1）",
-      any("与轮次不符" in f for f in _r["report"]["cases"][0]["fails"]),
-      str(_r["report"]["cases"][0]["fails"]))
-
-print("\n⑩ 用例被摘空 ⇒ 响亮退出码 2（空分母不是一个通过率，旧行为是退 0 + 「0/0 通过」）")
-_r = drive([mkcase("reg_only_one", ["regression"])], {"reg_only_one": [GREEN]},
-           argv_extra=["--only", "typo_not_a_case"])
-check("退出码 2（静默的绿在这里是最坏的结果：看起来这轮全过，其实一条都没跑）",
-      _r["code"] == 2, str(_r["code"]))
-check("出声说明这一轮没有评测任何东西", "没有评测任何东西" in _r["out"], _r["out"][-160:])
-check("一份留档都不写（没有通过率可留，也不该留一个 0/0 的）",
-      not _r["archived"], str(_r["archived"]))
-check("一条用例都没执行（桩没被叫到）", not _r["calls"], str(_r["calls"]))
-
-print("\n⑪ 真写用例被闸摘掉 ⇒ 报告里单列一栏（不与「分母真的变小」混在一个 skipped_ids 里）")
 os.environ.pop("GOLDEN_ALLOW_REAL_WRITE", None)   # 这一节测的就是"没放行"这一态
-_wr = mkcase("wr_gated", ["write"])
-_wr["needs_real_write"] = True
-_r = drive([mkcase("reg_ok", ["regression"]), _wr], {"reg_ok": [GREEN]})
-# 有跳过 ⇒ 不是全量跑 ⇒ 不写 `last_run.json`（读留档那份，见 ⑥ 的口径）
-_rep = _r["archived_doc"]
-check("真写用例进了 skipped_ids（照旧不静默豁免）",
-      _rep["skipped_ids"] == ["wr_gated"], str(_rep["skipped_ids"]))
-check("同时又单列在 skipped_real_write_ids（读报告的人能一眼分出「按设计不跑」）",
-      _rep["skipped_real_write_ids"] == ["wr_gated"],
-      str(_rep.get("skipped_real_write_ids")))
-check("分母只剩它实际评的那一条", _rep["total"] == 1, str(_rep["total"]))
 
-print("\n" + ("全部通过" if not FAILS else f"失败 {len(FAILS)} 项：" + "; ".join(FAILS)))
-raise SystemExit(1 if FAILS else 0)
+
+def test_golden_rerun_offline():
+    RED, GREEN = False, True
+    print("① 首跑红、复跑仍红 → 真 FAIL（照旧硬判，退出码 1）")
+    r = drive([mkcase("reg_red_both", ["regression", "hallucination"])],
+              {"reg_red_both": [RED, RED]})
+    rep = r["report"]
+    check("退出码 1（回归组硬判，不按通过率放行）", r["code"] == 1, str(r["code"]))
+    check("复跑仍红进 regression.failed_ids", rep["regression"]["failed_ids"] == ["reg_red_both"]
+          and rep["regression"]["all_passed"] is False, str(rep["regression"]))
+    check("flaked_ids 为空（复跑没绿就不许当方差）", rep["regression"]["flaked_ids"] == [])
+    check("恰好多跑一次（**不许重跑到绿为止**）",
+          [c["case"] for c in r["calls"]] == ["reg_red_both", "reg_red_both__rerun"],
+          str([c["case"] for c in r["calls"]]))
+    check("复跑与首跑是**同一用例、同一身份**（不是拿别的用例凑出来的绿）",
+          r["calls"][0]["message"] == r["calls"][1]["message"]
+          and r["calls"][0]["principal"] == r["calls"][1]["principal"])
+    check("首跑与复跑的结论各存一份（cases[].ok / cases[].rerun.ok 都在）",
+          rep["cases"][0]["ok"] is False and rep["cases"][0]["rerun"]["ok"] is False
+          and rep["cases"][0]["final_ok"] is False)
+    check("首跑输出没被复跑覆盖（报告里两段文本分开存）",
+          rep["cases"][0]["text"] == "跑偏" and rep["cases"][0]["rerun"]["text"] == "跑偏")
+    check("复审单置顶「不得放行」且标明复跑仍红",
+          "不得放行" in r["review"] and "复跑：仍红" in r["review"], r["review"][:80])
+    print("\n② 首跑红、复跑绿 → 按方差放行，但必须响")
+    r = drive([mkcase("reg_flake", ["regression"]), mkcase("reg_green", ["regression"])],
+              {"reg_flake": [RED, GREEN], "reg_green": [GREEN]})
+    rep = r["report"]
+    check("退出码 0（终判按复跑）", r["code"] == 0, str(r["code"]))
+    check("首跑红的用例进了 regression.flaked_ids", rep["regression"]["flaked_ids"] == ["reg_flake"]
+          and rep["regression"]["failed_ids"] == [] and rep["regression"]["all_passed"] is True,
+          str(rep["regression"]))
+    check("报告同时留着首跑口径（failed_first_run=1 / failed=0）",
+          rep["failed_first_run"] == 1 and rep["failed"] == 0)
+    check("cases[] 里两条结论都在（首跑红 / 复跑绿）",
+          rep["cases"][0]["ok"] is False and rep["cases"][0]["rerun"]["ok"] is True
+          and rep["cases"][0]["final_ok"] is True)
+    check("汇总「复跑绿」出声（放行不等于静默宽恕）",
+          "复跑才绿" in r["out"] and "按方差放行" in r["out"], r["out"][-200:])
+    check("首跑绿的不重跑（calls 只有一条 reg_green）",
+          [c["case"] for c in r["calls"]] == ["reg_flake", "reg_green", "reg_flake__rerun"],
+          str([c["case"] for c in r["calls"]]))
+    check("复审单为「只有复跑才绿」也生成，并置顶点名该用例",
+          "复跑才绿" in r["review"] and "reg_flake" in r["review"]
+          and "复跑：绿（按方差放行）" in r["review"], r["review"][:120])
+    check("留档也写了一份（runs/<ts>.json，与 last_run.json 同口径）",
+          len(r["archived"]) == 1
+          and r["archived_doc"]["regression"]["flaked_ids"] == ["reg_flake"]
+          and r["archived_doc"]["failed_first_run"] == 1)
+    print("\n③ 能力题首跑红 → 不重跑（本来就按通过率放宽，不占第二条判据）")
+    r = drive([mkcase("abil_red", ["chat"])], {"abil_red": [RED]})
+    rep = r["report"]
+    check("退出码 1（通过率 0 < 门禁 1.0）", r["code"] == 1, str(r["code"]))
+    check("一次都不重跑", [c["case"] for c in r["calls"]] == ["abil_red"],
+          str([c["case"] for c in r["calls"]]))
+    check("回归组块分母为 0（不把能力题算进回归组）",
+          rep["regression"]["total"] == 0 and rep["regression"]["failed_ids"] == [])
+    check("cases[].rerun 显式为 None（没有的事不许含糊）",
+          rep["cases"][0]["rerun"] is None and rep["cases"][0]["final_ok"] is False)
+    print("\n④ 全绿：不动、不吭声、不留复审单")
+    r = drive([mkcase("reg_ok", ["regression"]), mkcase("abil_ok", ["chat"])],
+              {"reg_ok": [GREEN], "abil_ok": [GREEN]})
+    check("退出码 0", r["code"] == 0, str(r["code"]))
+    check("没有复跑", [c["case"] for c in r["calls"]] == ["reg_ok", "abil_ok"])
+    check("不写复审单", r["review"] == "")
+    check("打印里不出现「复跑才绿」", "复跑才绿" not in r["out"])
+    print("\n⑤ --only 挑一条回归用例时同样走复跑（诊断链路时口径一致）")
+    r = drive([mkcase("reg_a", ["regression"]), mkcase("reg_b", ["regression"])],
+              {"reg_a": [RED, GREEN]}, argv_extra=["--only", "reg_a"])
+    check("--only 之外的用例不跑、也不进报告分母",
+          [c["case"] for c in r["calls"]] == ["reg_a", "reg_a__rerun"]
+          and r["archived_doc"]["total"] == 1, str([c["case"] for c in r["calls"]]))
+    check("复跑绿照样按方差放行", r["code"] == 0
+          and r["archived_doc"]["regression"]["flaked_ids"] == ["reg_a"])
+    check("--only 不覆盖 last_run.json（基线不被调试跑改写）", r["report"] is None)
+    check("非全量跑如实告知没覆盖（不静默）",
+          "非全量跑" in r["out"] and "last_run.json" in r["out"], r["out"][-160:])
+    check("非全量仍留档 runs/<ts>.json", len(r["archived"])
+        == 1 and r["archived_doc"]["total"] == 1)
+    print("\n⑥ 同一目录先全量、后 --only：基线必须还是全量那一份")
+    _tmp = tempfile.mkdtemp(prefix="golden_rerun_base_")
+    report_archive.open_archive = _frozen_open
+    try:
+        r1 = drive([mkcase("reg_a", ["regression"]), mkcase("reg_b", ["regression"])],
+                   {"reg_a": [GREEN], "reg_b": [GREEN]}, tmp=_tmp)
+        check("全量跑写了基线（total=2、full_run=True）",
+              r1["report"] is not None and r1["report"]["total"] == 2
+              and r1["report"]["full_run"] is True,
+              str(r1["report"] and {k: r1["report"][k] for k in ("total", "full_run")}))
+        r2 = drive([mkcase("reg_a", ["regression"])], {"reg_a": [GREEN]},
+                   argv_extra=["--only", "reg_a"], tmp=_tmp)
+        # 注意 ⑥ 与 ⑤ 的判据不同：⑤ 的目录里从来没有基线（读回 None = 没写），
+        # ⑥ 的目录里**已经有**基线，所以"没写"的判据是"读回来的还是上一轮那份"。
+        #
+        # 读**最新**那份（`archived[-1]`），不是 `archived[0]`（20261002）：这个目录里先跑过
+        # 一次全量，`archived[0]` 恒是它（文件名是秒级时间戳、按时间排序），拿它当"这一轮
+        # 自己的留档"读出来的总是 total=2。此前这条能绿，靠的是**留档被覆盖**这个缺陷——
+        # 两次跑落在同一秒时 `runs/<ts>.json` 同名，后写的把那一次覆盖掉，目录里只剩一份
+        # （恰好是这一轮的）。同一秒撞车一旦不发生（两次跑跨过秒边界），这条就红。判据要测
+        # 的是"这一轮自己那份是 total=1"，两种时序下都得成立。
+        _own = (json.load(open(r2["archived"][-1], encoding="utf-8"))
+                if r2["archived"] else None)
+        # 「这一轮自己的那份」能被读到，前提是**两份都在**：留档名此前是秒级 ts，全量跑与
+        # `--only` 跑落在同一秒就同名，先跑那份被覆盖（20261002 修，见 eval/report_archive.py）。
+        # 这条断言此前只在"没撞车"那半时序里绿——现在两种时序都得两份。
+        # 期望名**按本机钟面算**（戳是本地时间，CI 是 UTC ⇒ 写死字符串会在那边红，20261002 实测）。
+        _base = time.strftime("%Y%m%d_%H%M%S", time.localtime(_FROZEN_TS))
+        _stems = [os.path.basename(x)[: -len(".json")] for x in r2["archived"]]
+        check("两次跑被钉在同一毫秒，留档仍各占一个（第二个顺延一毫秒，两份都在）",
+              len(_stems) == 2
+              and _stems[0] == f"{_base}_125" and _stems[1] == f"{_base}_126",
+              f"{_stems}（期望 {_base}_125 / {_base}_126）")
+        check("--only 这一轮自己的留档是 total=1（它确实只跑了 1 条）",
+              _own is not None and _own["total"] == 1,
+              f"{(_own or {}).get('total')}（目录里 {len(r2['archived'])} 份留档）")
+        check("而读回来的基线仍是 total=2（两份文件各说各话，基线归全量）",
+              r2["report"]["total"] == 2, str(r2["report"]["total"]))
+        _after = json.load(open(os.path.join(_tmp, "eval", "report", "last_run.json"),
+                                encoding="utf-8"))
+        check("**基线原封不动**（仍是全量那一份：total=2、full_run=True）",
+              _after["total"] == 2 and _after["full_run"] is True,
+              str({k: _after[k] for k in ("total", "full_run")}))
+    finally:
+        report_archive.open_archive = _real_open
+        shutil.rmtree(_tmp, ignore_errors=True)
+    print("\n⑦ 双轮用例：第 2 轮的令牌只能来自第 1 轮的控制帧（20260925）")
+    _r = drive([mk2("wr_ok", {"round": 1, "text_contains": ["回答"]},
+                    {"round": 2, "text_contains": ["回答"]})],
+               {"wr_ok": [GREEN, GREEN]}, tokens={"wr_ok": ["tok-1"]})
+    check("两轮都跑了、退出码 0", _r["code"] == 0
+          and [c["case"] for c in _r["calls"]] == ["wr_ok", "wr_ok"], str(_r["code"]))
+    check("第 2 轮带的是第 1 轮签出的**那张**令牌（不是自己造的、也不是空的）",
+          _r["calls"][0]["confirm_token"] == "" and _r["calls"][1]["confirm_token"] == "tok-1",
+          str([c["confirm_token"] for c in _r["calls"]]))
+    check("两轮同一个会话（令牌把会话签进签名，换了会话就等于换了张卡）",
+          [c["conversation_id"] for c in _r["calls"]] == [4242, 4242],
+          str([c["conversation_id"] for c in _r["calls"]]))
+    check("第 2 轮发的是**合成消息**（生产上前端发的是「确认执行：<卡面摘要>」）",
+          _r["calls"][1]["message"] == "确认执行：删除分类「X」", _r["calls"][1]["message"])
+    check("报告逐轮留档（两轮各自的 round，末轮的扁平结果不淹掉第 1 轮）",
+          [x["round"] for x in _r["report"]["cases"][0]["rounds"]] == [1, 2],
+          str(_r["report"]["cases"][0]["rounds"]))
+    check("报告带着解开的载荷（红了照着读「这张卡问了什么」）",
+          _r["report"]["cases"][0]["rounds"][0]["confirm_payloads"][0]["workflow"] == "tag_delete",
+          str(_r["report"]["cases"][0]["rounds"][0]["confirm_payloads"]))
+    check("报告里没有原始令牌（帧体里的 token 被抹成占位符）",
+          "tok-1" not in json.dumps(_r["report"], ensure_ascii=False)
+          and "<redacted>" in json.dumps(_r["report"]["cases"][0]["rounds"][0]["frames"],
+                                         ensure_ascii=False),
+          json.dumps(_r["report"]["cases"][0]["rounds"][0]["frames"], ensure_ascii=False))
+    print("\n⑧ 第 1 轮没弹卡 ⇒ 第 2 轮**不发** + 响亮失败（不静默降级成普通轮）")
+    _r = drive([mk2("wr_notoken", {"round": 1, "text_contains": ["回答"]},
+                    {"round": 2, "text_contains": ["回答"]})], {"wr_notoken": [GREEN]})
+    check("退出码 1（没令牌是失败，不是「跳过」）", _r["code"] == 1, str(_r["code"]))
+    check("第 2 轮一次都没发出去（零请求 ⇒ 结构上不可能另走一条路把写做掉）",
+          [c["case"] for c in _r["calls"]] == ["wr_notoken"],
+          str([c["case"] for c in _r["calls"]]))
+    check("报告里两处都点了名：轮数不符 **和** 它的原因（没有签出令牌）",
+          any("轮数不符" in f for f in _r["report"]["cases"][0]["fails"])
+          and any("没有签出确认令牌" in f for f in _r["report"]["cases"][0]["fails"]),
+          str(_r["report"]["cases"][0]["fails"]))
+    print("\n⑨ gold 贴错行 ⇒ 红在「这一轮的 gold 不是给这一轮的」，不是红在莫名其妙的断言上")
+    _r = drive([mk2("wr_mislabel", {"round": 1, "text_contains": ["回答"]},
+                    {"round": 1, "text_contains": ["回答"]})],
+               {"wr_mislabel": [GREEN, GREEN]}, tokens={"wr_mislabel": ["tok-1"]})
+    check("退出码 1", _r["code"] == 1, str(_r["code"]))
+    check("红信息点名 gold 的自标号与轮次不符（第 2 轮的 gold 写着 round=1）",
+          any("与轮次不符" in f for f in _r["report"]["cases"][0]["fails"]),
+          str(_r["report"]["cases"][0]["fails"]))
+    print("\n⑩ 用例被摘空 ⇒ 响亮退出码 2（空分母不是一个通过率，旧行为是退 0 + 「0/0 通过」）")
+    _r = drive([mkcase("reg_only_one", ["regression"])], {"reg_only_one": [GREEN]},
+               argv_extra=["--only", "typo_not_a_case"])
+    check("退出码 2（静默的绿在这里是最坏的结果：看起来这轮全过，其实一条都没跑）",
+          _r["code"] == 2, str(_r["code"]))
+    check("出声说明这一轮没有评测任何东西", "没有评测任何东西" in _r["out"], _r["out"][-160:])
+    check("一份留档都不写（没有通过率可留，也不该留一个 0/0 的）",
+          not _r["archived"], str(_r["archived"]))
+    check("一条用例都没执行（桩没被叫到）", not _r["calls"], str(_r["calls"]))
+    print("\n⑪ 真写用例被闸摘掉 ⇒ 报告里单列一栏（不与「分母真的变小」混在一个 skipped_ids 里）")
+    _wr = mkcase("wr_gated", ["write"])
+    _wr["needs_real_write"] = True
+    _r = drive([mkcase("reg_ok", ["regression"]), _wr], {"reg_ok": [GREEN]})
+    _rep = _r["archived_doc"]
+    check("真写用例进了 skipped_ids（照旧不静默豁免）",
+          _rep["skipped_ids"] == ["wr_gated"], str(_rep["skipped_ids"]))
+    check("同时又单列在 skipped_real_write_ids（读报告的人能一眼分出「按设计不跑」）",
+          _rep["skipped_real_write_ids"] == ["wr_gated"],
+          str(_rep.get("skipped_real_write_ids")))
+    check("分母只剩它实际评的那一条", _rep["total"] == 1, str(_rep["total"]))
+    print("\n" + ("全部通过" if not FAILS else f"失败 {len(FAILS)} 项：" + "; ".join(FAILS)))
+
+    assert not FAILS, (
+        f"{len(FAILS)} 条未通过：" + "；".join(FAILS))
+
+
+if __name__ == "__main__":
+    test_golden_rerun_offline()

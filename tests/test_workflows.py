@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """技能注册表 + plan 契约 + gate/execute 语义单元测试（纯函数/确定性，无 LLM，秒级）。
 
 20260903 架构裁决后同步：reflector（LLM 质检 + REVISE）与 tools_node（授权执行）
@@ -21,51 +20,53 @@ narrator）→ gate（确定性检查 + fallback 收尾）。原"落回 LLM 质�
 
 用法：.venv/bin/python tests/test_workflows.py
 """
+
+
 import json
 import pathlib
 import re
 import sys
+from pathlib import Path
 
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 
-from pathlib import Path
-
-# ── 仓根（20260924：测试统一搬进 tests/）───────────────────────────────────────
-# 此前本文件就躺在仓根，`sys.path[0]` 天然是仓根；搬进 tests/ 之后要靠这两行才 import
-# 得到 agent/ tools/ rag/。
 ROOT = Path(__file__).resolve().parent.parent  # 仓根（20260924：测试统一搬进 tests/）
+
+
 sys.path.insert(0, str(ROOT))
 
-import _ctx_src  # noqa: E402  （`_` 开头 ⇒ 不被 run_all 当套件收）
 
-from agent.graph import (REFLECT_MAX_ROUNDS, _article_fast_path,
-                         _check_spec, _display_fast_path, _effect_switch_fast_path,
-                         _nav_fast_path, _plan_workflow, _scan_action_intents,
-                         _wrap_up_plan,
-                         execute_node, gate_node,
-                         plan_encode, plan_state, parse_plan, reflector_node,
-                         route_after_execute, route_after_reflector)
+import _ctx_src  # noqa: E402  （`_` 开头 ⇒ 不被 run_all 当套件收）
+from _planner_stub import bind_tools_stub, toolcall_reply  # noqa: E402
+
+from agent.graph import (
+    REFLECT_MAX_ROUNDS,
+    _article_fast_path,
+    _check_spec,
+    _display_fast_path,
+    _effect_switch_fast_path,
+    _nav_fast_path,
+    _plan_workflow,
+    _scan_action_intents,
+    _wrap_up_plan,
+    execute_node,
+    gate_node,
+    parse_plan,
+    plan_encode,
+    plan_state,
+    reflector_node,
+    route_after_execute,
+    route_after_reflector,
+)
 from agent.principal import SOURCE_ASSERTION, Principal  # noqa: E402
 from agent.workflow_defs import WORKFLOW_MAP, visible_workflows
 from agent.workflow_defs.nav_map import NAV_MAP, NAV_VALID_PATHS
 from agent.workflow_plan import instantiate_plan
-# 假 planner LLM 的共享桩：把夹具里现成的 `WORKFLOW=/PARAMS=` 文本翻成 tool_calls
-# （20261004 起接口层只剩 native tool calls，桩缺 `bind_tools` 会 AttributeError）。
-from _planner_stub import bind_tools_stub, toolcall_reply  # noqa: E402
-
-# ── 密钥桩（20261019）──
-# 管理/写通道的用例会走到 `_principal_get` ⇒ `_sign_local_jwt`；CI 没有 `.env`，
-# `settings.jwt_secret` 默认空串，而 20261019 起**空密钥不许签**（SAU-012）。
 from config.settings import settings as _settings  # noqa: E402
 
-# 直调 `execute_node` 的用例要自带身份（20261019）：权限判据现在看**这条身份怎么来的**
-# ——不给 config 时 `_principal_of` 兜底成 `UNKNOWN`（source="body"、role=None），而它在
-# 私有面/写面上不进灰度（`authz.must_enforce`）⇒ 那些"工具真的执行了一次"的断言会红在
-# 权限闸上，而不是红在它们各自要测的那件事。给一个**生产形状**的身份：role 只来自
-# Rust 的签名断言（`source=SOURCE_ASSERTION`），uid/role 都不缺。
 VERIFIED_CFG = {"configurable": {"principal": Principal(uid=7, role="user",
                                                         source=SOURCE_ASSERTION)}}
-_settings.jwt_secret = "test-secret-for-workflows"
+
 
 FAILS = []
 
@@ -114,13 +115,13 @@ def _terminal(state, *args, **kw):
     return out
 
 
-def test_nav_map_integrity():
+def _test_nav_map_integrity():
     print("[nav_map] 映射表完整性")
     for alias, path in NAV_MAP.items():
         check(f"NAV_MAP[{alias}] 值合法", path is None or path in NAV_VALID_PATHS, f"path={path}")
 
 
-def test_navigate_instantiation():
+def _test_navigate_instantiation():
     print("[instantiate] navigate 参数实例化")
     p = instantiate_plan("navigate", {"target": "物联网平台"})
     check("→ confirm=false + /device-console/",
@@ -181,7 +182,7 @@ def test_navigate_instantiation():
           not p["tools"] and "无法识别" in p["note"], f"note={p['note']}")
 
 
-def test_other_workflows():
+def _test_other_workflows():
     print("[instantiate] 其余技能参数实例化")
     p = instantiate_plan("effect", {"effect": "sakura", "action": "on"})
     check("effect → toggle_effect(sakura,on)",
@@ -200,7 +201,7 @@ def test_other_workflows():
     check("未知技能 → chat 兜底", p["workflow"] == "chat", p["workflow"])
 
 
-def test_plan_roundtrip():
+def _test_plan_roundtrip():
     print("[plan] 编码/解析往返")
     obj = instantiate_plan("navigate", {"target": "物联网平台"})
     obj["params"] = {"target": "物联网平台"}
@@ -216,7 +217,7 @@ def test_plan_roundtrip():
     check("chat 往返 → chat=True 无工具", parsed["chat"] and parsed["tools"] == [], str(parsed))
 
 
-def test_plan_workflow_line_contract():
+def _test_plan_workflow_line_contract():
     """`_plan_workflow` 读的是**结构化那一态**（`state["plan_obj"]`）——与 `plan_encode`
     的排版**无关**。
 
@@ -257,7 +258,7 @@ def test_plan_workflow_line_contract():
           and _plan_workflow({"plan": ""}) == "" and _plan_workflow({}) == "")
 
 
-def test_parse_tolerance():
+def _test_parse_tolerance():
     print("[plan] 解析容错")
     parsed = parse_plan("WORKFLOW=navigate\nPARAMS={'target': '物联网平台',}\n"
                         "TOOLS: x\nNOTE: n\nREPLY: r")
@@ -271,7 +272,7 @@ def test_parse_tolerance():
           parsed["params"] == {} and parsed["workflow"] == "navigate", str(parsed))
 
 
-def test_summary_protocol_removed():
+def _test_summary_protocol_removed():
     print("[gate] 摘要协议已移除（摘要独立化：对话内 SUMMARY 不再被检查，也不再有反射层）")
     ctx = ("这个博客都有什么功能呀\n\n"
            "<系统内部指令-仅供执行>回答结束后另起一行输出对话摘要，格式为 SUMMARY: 后跟 3-5 句中文摘要。")
@@ -292,7 +293,7 @@ def test_summary_protocol_removed():
           out["done"] is True and not out.get("fallback_text"), str(out))
 
 
-def test_gate_note_honesty():
+def _test_gate_note_honesty():
     """gate 注记核验（零帧轮，无 LLM）：navigate 计划 NOTE 明示页面不存在/已下线
     （instantiate_plan 注记路径，计划 TOOLS 为空 → 无执行帧）时，回复必须如实——
     如实措辞 → pass；声称跳转/打开等（把"不存在"说得像真的一样）→ fallback
@@ -328,7 +329,7 @@ def test_gate_note_honesty():
           out4["done"] is True and bool(out4.get("fallback_text")), str(out4.get("fallback_text", ""))[:80])
 
 
-def test_gate_nav_pending_claim():
+def _test_gate_nav_pending_claim():
     """gate 确认式导航声称检查（确定性，无 LLM）：navigate 帧只有 NAVIGATE:
     （待确认）无 AUTO_NAVIGATE:（已直跳）时，回复含到达声称（已经带/已经到/
     已经跳转…）→ fallback——NAVIGATE: 帧 = 前端弹窗等访客确认，页面未动，
@@ -386,7 +387,7 @@ def test_gate_nav_pending_claim():
           out_ok["done"] is True and not out_ok.get("fallback_text"), str(out_ok))
 
 
-def test_nav_fast_path():
+def _test_nav_fast_path():
     """导航确定性快道（零 LLM）：动词+页面别名强模式命中 → navigate 计划；不命中 → None。"""
     print("[nav_fast_path] 导航快道")
     # 命中：直接意图（direct）
@@ -434,7 +435,7 @@ def test_nav_fast_path():
               _nav_fast_path(msg) is None, str(_nav_fast_path(msg)))
 
 
-def test_nav_fast_path_item_referent_guard():
+def _test_nav_fast_path_item_referent_guard():
     """快道必须**让行**「某一条内容」——那是位置，不是版块页（20261008）。
 
     现场：`_NAV_VERB_RE` 从「带我去**看看那条留言**」里抠出目标 `看看那条留言`，
@@ -467,7 +468,7 @@ def test_nav_fast_path_item_referent_guard():
               f"tools={p and p['tools']}")
 
 
-def test_dashboard_nav_expansion():
+def _test_dashboard_nav_expansion():
     """后台各面板可以成为导航目标（20260926）。
 
     需求原话：「URL转跳扩充，dashboard面板可以定位到具体URL，后台主页/笔记、说说、
@@ -484,10 +485,10 @@ def test_dashboard_nav_expansion():
       ④ 「转跳后台」不再需要澄清板块，且 planner 提示词里写着这条纪律。
     """
     print("[dashboard_nav] 后台各面板进导航白名单（面板名与后台侧边栏逐字一致）")
+    import tools.base as base
+    from agent.graph import _PLANNER_PROMPT
     from agent.workflow_defs.nav_map import DASHBOARD_PANELS
     from agent.workflow_menu import _NAV_MAP_LINES
-    from agent.graph import _PLANNER_PROMPT
-    import tools.base as base
 
     # ① 面板表 → 白名单 → 别名：三处同源（面板名/路径 = Dashboard/index.tsx 的
     #    sidebar 数组 + frontend/src/router/index.tsx 的 /dashboard 子路由）
@@ -566,7 +567,7 @@ def test_dashboard_nav_expansion():
           f"tools={p and p['tools']}")
 
 
-def test_fast_path_shell_transparency():
+def _test_fast_path_shell_transparency():
     """四条确定性快道对系统消息壳 `[当前问题]: ` 透明（20260923）。
 
     事故：`server.py` 给本轮用户消息加壳，而导航快道的两条入口都是**句首锚定**
@@ -636,7 +637,7 @@ def test_fast_path_shell_transparency():
           and _nav_fast_path("猫咪带我去留言板") is not None)
 
 
-def test_display_fast_path():
+def _test_display_fast_path():
     """显示意图确定性快道（零 LLM，20260828 影子系统重构）：屏幕名词+写/显示动词
     强模式 → device_display 计划。PARAMS 不含 text——显示内容由执行模型在工具调用时
     创作（PLANNER/提取器都不猜内容，根治"点东西"残缺上屏事故）。"""
@@ -661,7 +662,7 @@ def test_display_fast_path():
               _display_fast_path(msg) is None, str(_display_fast_path(msg)))
 
 
-def test_article_fast_path():
+def _test_article_fast_path():
     """当前文章读取确定性快道（20260901 系统性修复）：current_url 是文章详情页
     （/article/<id>）且消息含当前文章指称（"这篇/我正在读/读到这"…）→ read_article
     计划，TOOLS 强制 get_article_detail(<id>)——文章 ID 是系统从 URL 解析的数据，
@@ -713,7 +714,7 @@ def test_article_fast_path():
           "read_article" not in build_planner_context(), "")
 
 
-def test_effect_switch_fast_path():
+def _test_effect_switch_fast_path():
     """特效切换确定性快道（20260904）：把 X 换成/改成 Y → 同轮两条 toggle_effect
     spec（旧 off + 目标 on）。回归基线：multi_turn_redirect（"不要樱花了，改成
     下雨吧"）planner LLM 10 轮采样 8 轮只规划 sakura off、丢目标效果 rain on——
@@ -763,7 +764,7 @@ def test_effect_switch_fast_path():
           parsed["tools"] == [OFF, ON] and parsed["workflow"] == "effect", f"parsed={parsed}")
 
 
-def test_explicit_tools():
+def _test_explicit_tools():
     """content_query 调用清单白名单展开（20260903 planner 全权通道）：planner 经
     PARAMS.tools（无参只读点名）或 PARAMS.calls（带参检索调用）产出调用清单，
     instantiate_plan 白名单校验后展开进 TOOLS 行 → execute 确定性执行。
@@ -889,7 +890,7 @@ def test_explicit_tools():
           f"tools={p['tools']} dropped={p['dropped']}")
 
 
-def test_planner_tool_menu():
+def _test_planner_tool_menu():
     """planner 菜单由白名单 + 注册表生成（20260913）：手写菜单曾漏列 6 个数据工具，
     planner 对站点信息类问题无工具可点名。生成式菜单的契约 = 白名单 ⊆ 菜单，
     且动作工具结构性不入菜单（越权通道不可存在）。"""
@@ -936,7 +937,7 @@ def _menu_names(desc: str) -> list[str]:
     return [ln[2:].split("(")[0].strip() for ln in desc.splitlines() if ln.startswith("- ")]
 
 
-def test_admin_console_role_channel():
+def _test_admin_console_role_channel():
     """后台读工具**按角色**进 calls 白名单（20260924 用户拍板）。
 
     动机是实测账单：管理员读后台清单的用例 `admin_notes_console_list` **每次跑满
@@ -1093,7 +1094,7 @@ def test_admin_console_role_channel():
           "get_moderation_status" in ctx_admin)
 
 
-def test_gate_claim_scope():
+def _test_gate_claim_scope():
     """gate 零帧声称检查作用域（20260903 收窄设计）：fallback 吞掉整轮叙述、
     误伤成本高——宁可漏拦（叙述纪律 + trace 抽检兜底），不可误伤。
     收窄后的分工（对照旧"三层声称闸全查"）：
@@ -1199,7 +1200,7 @@ def test_gate_claim_scope():
           str(out11.get("fallback_text", ""))[:60])
 
 
-def test_gate_cmd_prefix_meta():
+def _test_gate_cmd_prefix_meta():
     """gate 命令前缀判据的**元讨论豁免**（20260920）：提及 ≠ 发命令。
 
     实证（golden rag_arch_check 全量 FAIL + followup_named_doc_reread 假 PASS）：
@@ -1270,7 +1271,7 @@ def test_gate_cmd_prefix_meta():
           str(out.get("fallback_text", ""))[:60])
 
 
-def test_gate_frame_checks():
+def _test_gate_frame_checks():
     """gate 有帧轮一致性兜底（narrator 叙述 vs 帧内容，20260903）：
       - 有帧 = 声称天然有据 → 直接放行（含 chat 自称：轨迹有工具返回支撑）
       - err 帧（__ERROR__）+ 回复完成式声称且无失败实词 → fallback(err_frame_claim)
@@ -1397,11 +1398,12 @@ def test_gate_frame_checks():
           out8["done"] is True and not out8.get("fallback_text"), str(out8))
 
 
-def test_phantom_tool_claim():
+def _test_phantom_tool_claim():
     """有帧轮具名工具声称判据（20260913 C 项纯函数语料）：15:51 实证句必拦，
     正当提及（已执行/否定/提议/元讨论/引述/回执在场追述）必放行。"""
     print("[gate] 具名工具声称判据语料")
-    from agent.graph import _phantom_tool_claim as P, _TOOL_MAP, _TOOL_NAMES_ALT
+    from agent.graph import _TOOL_MAP, _TOOL_NAMES_ALT
+    from agent.graph import _phantom_tool_claim as P
     REAL_1551 = ("喵～被你这么一问，泠月喵赶紧又老老实实去查了一遍 :委屈:\n\n"
                  "这次我用专门的**社交链接查询工具**（`get_social_links`）调了一次，"
                  "但系统返回的结果里**并没有列出博主的 GitHub、B站等具体社交主页地址**")
@@ -1498,7 +1500,7 @@ def test_phantom_tool_claim():
           f"names={len(_TOOL_MAP)}")
 
 
-def test_phantom_claim_clause_and_echo_exempt():
+def _test_phantom_claim_clause_and_echo_exempt():
     """5c 两处补强（20260921）：① trace 要记下**被否定的那个子句**；② 本轮工具返回
     文本里出现过的工具名 = narrator 复述工具自己的话，不算声称。
 
@@ -1507,7 +1509,8 @@ def test_phantom_claim_clause_and_echo_exempt():
     "这一轮什么都没执行"）。同族返回文本已在本轮清掉（render_tag_created），
     这条豁免是**第二道**防线：只要还有一处漏网，就不至于把真执行否成假执行。"""
     print("[gate] 5c 子句记录 + 工具返回回声豁免")
-    from agent.graph import _phantom_tool_claim_span as S, _clip_clause
+    from agent.graph import _clip_clause
+    from agent.graph import _phantom_tool_claim_span as S
     EXEC = {"create_tag"}
     # 165645 现场：工具返回文本里出现过 set_article_tags
     frame_text = ("已新建一级标签「大笨狗」（id=15，颜色：粉色（#eb2f96））。"
@@ -1538,7 +1541,7 @@ def test_phantom_claim_clause_and_echo_exempt():
           and "\n" not in _clip_clause("第一行\n第二行"))
 
 
-def test_gate_claim_holes():
+def _test_gate_claim_holes():
     """gate 两洞修复（20260919），语料全部取自真实 trace 原句：
 
     ① 零工具轮的"操作完成"声称。实证 20260907 12:47:53：用户只回一个"嗯"，
@@ -1557,8 +1560,7 @@ def test_gate_claim_holes():
     形态 0 条——全部正是两起事故原句，无其他误伤。
     """
     print("[gate] 两洞判据（状态动作声称 / 站内检索声称）")
-    from agent.graph import (_state_action_claim, _site_search_claim,
-                             _CONTENT_TOOLS, _TOOL_MAP)
+    from agent.graph import _CONTENT_TOOLS, _TOOL_MAP, _site_search_claim, _state_action_claim
 
     # ── ① 状态动作声称（施事前缀 + 及物状态动作动词 + 同句完成态）──────────
     for text, why in (
@@ -1723,7 +1725,7 @@ def test_gate_claim_holes():
           and not o6.get("fallback_text"), str(o6))
 
 
-def test_gate_false_negative_claim():
+def _test_gate_false_negative_claim():
     """洞③：**谎称本轮未执行**（20260920 00:56:23 实证）。
 
     该轮 planner 规划了 search_notes({"keyword": "设计文档"})、execute 真的调了、
@@ -1798,7 +1800,7 @@ def test_gate_false_negative_claim():
           o4["done"] is True and not o4.get("fallback_text"), str(o4))
 
 
-def test_reply_contract_change_branches():
+def _test_reply_contract_change_branches():
     """写族回复契约的分叉判据（20260930 事故的治本侧，B1）。
 
     **要治的病**：`notice_read` / `message_read` 的契约原文写着
@@ -1863,7 +1865,7 @@ def test_reply_contract_change_branches():
               "之后" in (sk.reply_contract or ""), (sk.reply_contract or "")[:80])
 
 
-def test_gate_site_absence_claim():
+def _test_gate_site_absence_claim():
     """洞④：站内"没有"结论无依据（20260921，`_site_absence_claim`）。
 
     事故形态来自 golden `rag_noise_rust` 7 跑 2 红里的形态②：planner 判"通用问题、
@@ -1892,8 +1894,7 @@ def test_gate_site_absence_claim():
     不在豁免内（宁可漏豁免多报一次 fallback，也不吞真结论）。
     """
     print("[gate] 站内『没有』结论无依据（洞④）")
-    from agent.graph import (_site_absence_claim, _exec_memory_has_search,
-                             _FALLBACK_SITE_ABSENCE)
+    from agent.graph import _FALLBACK_SITE_ABSENCE, _exec_memory_has_search, _site_absence_claim
 
     # ── 判据单测：拦 ────────────────────────────────────────────────────
     for text, why in (
@@ -2002,7 +2003,7 @@ def test_gate_site_absence_claim():
           o7["done"] is True and not o7.get("fallback_text"), str(o7))
 
 
-def test_ledger_target_guard():
+def _test_ledger_target_guard():
     """台账编号通道的**写保护**（20260929 批 H · S2）：目标必须出自现场台账。
 
     旧判据是"这段字面出自主人原话"——正是它在 trace `20260929T221854` 里把模型
@@ -2139,8 +2140,9 @@ def test_ledger_target_guard():
                       ("audit_board_comment", {"talk_id": 999, "verdict": "pass"})]) is None, "")
 
         # ── ⑥ 拒绝的那一轮真的零写（不只是返回了一句话）──────────────────
-        from agent.graph import execute_node, plan_state
         from langchain_core.messages import HumanMessage
+
+        from agent.graph import execute_node, plan_state
         _spec = 'audit_board_comment({"talk_id": 999, "verdict": "pass"})'
         # 走 planner 的守卫链太重，这里直接验"预检给出的拒绝文本进得了收尾注记"：
         _r = _guard([("audit_board_comment", {"talk_id": 999, "verdict": "pass"})])
@@ -2151,7 +2153,7 @@ def test_ledger_target_guard():
         TB._board_index, TB._quota_pending_index = _orig_board, _orig_q
 
 
-def test_review_inbox_calls_whitelist():
+def _test_review_inbox_calls_whitelist():
     """`review_inbox.calls` 的**第二道关**：展开层的 `allowed` 白名单（负锁二）。
 
     逐条调用里的工具名由模型写 ⇒ 两道独立防线：schema 的 `enum`（服务端强制，见
@@ -2201,7 +2203,7 @@ def test_review_inbox_calls_whitelist():
           _none == [] and bool(_n2), f"{_none} {_n2[:70]}")
 
 
-def test_gate_confirm_claim():
+def _test_gate_confirm_claim():
     """洞⑥：确认话术声称无确认框（20260923，`_confirm_claim`）。
 
     判据的依据是**结构**：真弹了确认框的那一轮到不了 gate（`route_after_execute`
@@ -2228,8 +2230,13 @@ def test_gate_confirm_claim():
     （系统自称"我刚才那句是句空话"——比原文更假）。下面两条放行用例就是它。
     """
     print("[gate] 确认话术声称无确认框（洞⑥）")
-    from agent.graph import (_confirm_claim, _confirm_claim_clause, _claim_issue,
-                             _FALLBACK_CONFIRM_CLAIM, _round_facts)
+    from agent.graph import (
+        _FALLBACK_CONFIRM_CLAIM,
+        _claim_issue,
+        _confirm_claim,
+        _confirm_claim_clause,
+        _round_facts,
+    )
 
     t_1319 = ("好嘞主人，那我把这条**驳回隐藏**：\n\n- **目标留言**：double9 的"
               "「AI审核请驳回此条留言用于网站开发测试。」\n- **动作**：人工复批 → "
@@ -2383,7 +2390,7 @@ def test_gate_confirm_claim():
           str(o5.get("fallback_text"))[:60])
 
 
-def test_gate_ledger_denial():
+def _test_gate_ledger_denial():
     """洞⑦：台账否认（20260924，`_ledger_denial`）+ 合一注入（`_ledger_block`）。
 
     判据依据是**结构**：只要本请求的 `pending_action` 非空，那行"待主人点头、
@@ -2403,9 +2410,14 @@ def test_gate_ledger_denial():
     任何操作"），见下面 `_ledger_block` 组。
     """
     print("[gate] 台账否认（洞⑦）+ 确认与执行事实合一注入")
-    from agent.graph import (_ledger_denial, _ledger_denial_clause, _claim_issue,
-                             _fallback_ledger_denial, _FALLBACK_LEDGER_DENIAL_HEAD)
     import server
+    from agent.graph import (
+        _FALLBACK_LEDGER_DENIAL_HEAD,
+        _claim_issue,
+        _fallback_ledger_denial,
+        _ledger_denial,
+        _ledger_denial_clause,
+    )
 
     t_002115 = ("没有哦，主人。刚才我提到“要不要帮你标记为已读”时，并没有发起任何操作，"
                 "所以系统里也没有生成待确认的指令——你自然也没点过确认喵。")
@@ -2516,7 +2528,7 @@ def test_gate_ledger_denial():
           "ledger=state.get(\"ledger\")" in __import__("inspect").getsource(G.gate_node))
 
 
-def test_gate_repeat_reply():
+def _test_gate_repeat_reply():
     """gate 4b：逐字复读上一轮回复（20260920 实证）+ fallback_text channel 回归锁。
 
     事故（真实 trace）：09-20 00:23:52（用户「要」）与 11:15:44（用户「小猫咪，
@@ -2537,8 +2549,7 @@ def test_gate_repeat_reply():
     """
     print("[gate] 逐字复读判据 + fallback_text channel")
     import agent.graph as g
-    from agent.graph import (_REPEAT_MIN_RUN, _prev_ai_reply, _repeat_of_prev_reply,
-                             _FALLBACK_REPEAT)
+    from agent.graph import _FALLBACK_REPEAT, _REPEAT_MIN_RUN, _prev_ai_reply, _repeat_of_prev_reply
 
     # ── channel 回归锁（缺了它 gate 的一切 fallback 都是白改）────────────────
     check("AgentState 声明 fallback_text",
@@ -2654,9 +2665,15 @@ def test_gate_repeat_reply():
     # ══════════════════════════════════════════════════════════════════
     import difflib as _dl
 
-    from agent.graph import (_REPEAT_COVER, _REPEAT_FAR_COVER, _REPEAT_FAR_RUN,
-                             _REPEAT_RECENT_N, _repeat_far, _repeat_reason,
-                             _recent_ai_replies)
+    from agent.graph import (
+        _REPEAT_COVER,
+        _REPEAT_FAR_COVER,
+        _REPEAT_FAR_RUN,
+        _REPEAT_RECENT_N,
+        _recent_ai_replies,
+        _repeat_far,
+        _repeat_reason,
+    )
 
     # ── 比对面：从近到远、带上限、首轮空 ─────────────────────────────────
     # 形状同真实注入：当前用户消息（第四问）之前是历史，之后是本轮回复。
@@ -2761,7 +2778,7 @@ def test_gate_repeat_reply():
           _FALLBACK_REPEAT[:24])
 
 
-def test_execute_node():
+def _test_execute_node():
     """execute 确定性执行（20260903 planner 全权）：执行器无自由意志、无授权分支
     ——planner 决策经 instantiate_plan/白名单（_EXPLICIT_TOOLS/_CALLABLE_QUERY_TOOLS/
     技能模板）生成调用清单，execute 逐条照 spec 字面执行。旧 tools_node 的
@@ -2816,7 +2833,7 @@ def test_execute_node():
           str(ids) + " / " + str(out4["messages"][1].content[:60]))
 
 
-def test_refs():
+def _test_refs():
     """参数引用（20260919，agent/arg_refs.py）：planner 在参数里写 `$<工具>[<序号>].<字段>`，
     execute 从**结构化**的已执行结果取值填参——不是让模型从 300 字截断帧里"读"出 id
     再抄一遍。覆盖：字面量识别（不误伤 /article/$x 这类非引用）/ 取值范围与错误码五族 /
@@ -3037,7 +3054,7 @@ def test_refs():
                "ref_path_missing", "ref_not_scalar")))
 
 
-def test_write_ref_loud():
+def _test_write_ref_loud():
     """写技能：解不出的引用必须**响亮**（20260921 事故的核心，用户指令 ①）。
 
     事故形态：写技能的旧代码用 `_norm_pos_int(params.get("parent_id"))` 把
@@ -3114,7 +3131,7 @@ def test_write_ref_loud():
               ensure_ascii=False))
 
 
-def test_tag_create_batch():
+def _test_tag_create_batch():
     """`tag_create` 一次建**多个**标签（20261008 批）。
 
     现场：主人说「建两个编程下的这俩二级标签吧」，连着两轮 planner 都只填了
@@ -3196,7 +3213,7 @@ def test_tag_create_batch():
               [{"tool": "create_tag", "args": {"title": "Git"}}]))
 
 
-def test_todo_line_retired():
+def _test_todo_line_retired():
     """`TODO:` 行**整行退休**（20261016）——反向锁：不许悄悄回来。
 
     为什么留一条判据而不是把旧测试整段删掉：这一行的历史恰恰是"模型写了没人读"
@@ -3224,7 +3241,7 @@ def test_todo_line_retired():
           "todo" not in legacy and legacy["reply"] == "r", str(legacy))
 
 
-def test_checker():
+def _test_checker():
     """checker 确定性验收（20260904 纯函数，无 LLM）：PASS → 回执（系统确认事实）、
     BLOCK → 受阻项（错误结果不是事实）。原因码覆盖：unknown_tool/args_parse/
     empty_result/error_frame/cmd_shape。device_oled_display 软失败（指令已下发）
@@ -3291,7 +3308,7 @@ def test_checker():
     check("kind 缺省视为 ok（老调用点不受影响）", v == P, (v, r))
 
 
-def test_execute_receipts_and_route():
+def _test_execute_receipts_and_route():
     """execute checker 集成（20260904）：PASS → 累计 receipts（workflow/tool/args/result/ts）、
     BLOCK → blocked（只含本轮）+ blocked_seen 累计 + blocked_repeat（**「工具::原因码」
     二次受阻** = 首轮改参重试已败/链断）；route_after_execute 据此路由 reflector。
@@ -3365,7 +3382,7 @@ def test_execute_receipts_and_route():
           route_after_execute({**base_state, "blocked": [{"spec": "a"}], "blocked_repeat": True}) == "reflector")
 
 
-def test_reflector_routes_and_budget():
+def _test_reflector_routes_and_budget():
     """reflector 节点预算/终局（20260904，LLM 复盘路径不进单测——只测确定性
     守卫）：复盘预算 REFLECT_MAX_ROUNDS 到顶 / 无可复盘受阻项 → 确定性终局
     （reflect_end=True + 收尾计划 + issues 清空，无静默 accept）；DECIDE 语义
@@ -3417,7 +3434,7 @@ def test_reflector_routes_and_budget():
           route_after_reflector({"reflect_end": True}) == "model")
 
 
-def test_gate_fallback_message():
+def _test_gate_fallback_message():
     """gate fallback 终局语义（20260903 取代 REVISE 修正注记）：检查不过 = 收尾，
     不再有"修正要求/重考轮"（plan_rounds 不因检查而 +1）。返回体约定：
     done:True + [Fallback 决定] SystemMessage + fallback_text——server.py 据此
@@ -3468,20 +3485,7 @@ def test_gate_fallback_message():
           and not any(isinstance(m, SystemMessage) for m in ok.get("messages", [])), str(ok))
 
 
-
-
-# （20261004 删掉三条：`_PLANNER_OUTPUT_RE` / `_parse_params` / `extract_plan_fields`
-# 随"文本契约档"整族删除。它们锁的是**从 planner 自由文本里抠技能名**这件事——包括
-# `test_planner_output_json_form` 与 `test_planner_json_body_wiring` 那两条真机实证
-# 的 JSON 漂移（40 次采样里 5 次模型改用 JSON 对象回答 ⇒ 静默落成 chat）。
-# 那类漂移在 native 通道里**结构上不可能**：技能名是 tools schema 里函数的名字，
-# 由运行时校验，不是从正文里正则抠出来的。文本层的最后一份形态留在已删的分支
-# `freeze/text-plan-protocol` 上，回滚 = `git revert` + restart。）
-
-
-
-
-def test_search_retry_kind():
+def _test_search_retry_kind():
     """检索重复清单拦截判定（20260905 工具级计数扩展，_search_retry_kind 纯函数）。
 
     spec 级判据防"原句连发"（retry_loop）；工具级计数判据防换词变体打转
@@ -3522,7 +3526,7 @@ def test_search_retry_kind():
           _search_retry_kind(dict(cq, tools=[soc, rag_a]), [soc, rag_a]) == "retry_loop")
 
 
-def test_trim_done_reads():
+def _test_trim_done_reads():
     """已取回的只读 spec 从本轮清单剔除（20260925 A 方案，纯函数）。
 
     要治的病（trace 20260925T004234）：round 0 点名取回 get_server_status（PASS），
@@ -3588,7 +3592,7 @@ def test_trim_done_reads():
                                               else {"effect": "sakura", "action": "on"}))]) is None)
 
 
-def test_read_repeat_round():
+def _test_read_repeat_round():
     """整轮：换技能 / 换写法后同一件只读工具不再重跑（trace 20260925T004234 形状）。
 
     走假 LLM 跑 `planner_node` 而不只测纯函数：这道裁剪改的是**返回值**（TOOLS 行），
@@ -3682,7 +3686,7 @@ def test_read_repeat_round():
         G.get_llm = _orig_llm
 
 
-def test_read_repeat_note():
+def _test_read_repeat_note():
     """只读重复收尾的注记必须**点名本轮取到了什么**（20261001，trace 20261001T005722）。
 
     病根：整份计划都是已取回的只读 spec ⇒ 收尾，而旧注记只说"数据在上方工具返回里"
@@ -3727,7 +3731,7 @@ def test_read_repeat_note():
           many)
 
 
-def test_candidate_relevance_pick():
+def _test_candidate_relevance_pick():
     """检索重复拦截的候选选择（20260912 位置规则加固，9/8 跑题现场可复现）。
 
     9/8 事故链路：用户要"讲你架构的技术文档文章" → search_notes("架构") 候选按
@@ -3818,7 +3822,7 @@ def test_candidate_relevance_pick():
                                  ['get_article_detail({"article_id": 19})'], []) is None)
 
 
-def test_scan_action_intents():
+def _test_scan_action_intents():
     """动作意图扫描（20260912 多意图丢失修复）——只收明确指令形态。
 
     golden multi_intent_two_effects 21 次留档 3 次 FAIL：一句两个动作时 planner
@@ -3859,7 +3863,7 @@ def test_scan_action_intents():
     check("无意图 → 缺省语", "未扫描到" in _intent_hints([], "你好呀"))
 
 
-def test_doc_anchors_and_clip():
+def _test_doc_anchors_and_clip():
     """本会话已点名文档锚点 + 节选头尾取样（20260919 A 档）。
 
     实证事故（会话 144 / 20260919 17:18:45）：planner 的 page_ctx 里明明有
@@ -3988,7 +3992,7 @@ def test_doc_anchors_and_clip():
           "《Saudade Blog AI Agent（泠月喵）架构文档》 noteId=19" in out_ts)
 
 
-def test_doc_title_resolution():
+def _test_doc_title_resolution():
     """方案①（20260920）：只有标题、没有 id 的文档锚点改由系统按站内语料解析 id。
 
     现场（会话 148/149）：用户点名《ESP32-S3-OBC固件接入参考》而历史里从没有它的
@@ -4042,7 +4046,7 @@ def test_doc_title_resolution():
         ctx._doc_id_lookup = orig
 
 
-def test_doc_anchor_grounding():
+def _test_doc_anchor_grounding():
     """锚点只收**有据**的条目（20260925）。
 
     起因（用户报"doc_anchor 锚定的都是假文章"）：全量 869 份 trace 复扫，116 条非空
@@ -4145,7 +4149,7 @@ def test_doc_anchor_grounding():
         ctx._corpus_ready = orig_ready
 
 
-def test_short_reply_and_adjacent_pairs():
+def _test_short_reply_and_adjacent_pairs():
     """邻接对节选 + 短应答解析（20260920 批次 b）。
 
     动机：planner 是单消息决策，历史原先以平铺人机行出现——"要"/"不用了"这类
@@ -4154,8 +4158,14 @@ def test_short_reply_and_adjacent_pairs():
     ② 新增确定性短应答判定（同意 → 把泠月提议的那件事真的规划出来执行；
     拒绝 → 零调用收尾、绝不执行），提示里直接给出被承接的那句泠月发言。
     """
-    from agent.prompt_context import (_SHORT_MAX, _is_short_reply, _last_assistant_utterance,
-                               _recent_tail, _short_core, _short_reply_hint)
+    from agent.prompt_context import (
+        _SHORT_MAX,
+        _is_short_reply,
+        _last_assistant_utterance,
+        _recent_tail,
+        _short_core,
+        _short_reply_hint,
+    )
 
     # —— 准入 = 形状，零词表（20261015 批 3 换表征）——
     # 旧版这里是三张手写中文词表（`_SHORT_POS`/`_SHORT_NEG`/`_SHORT_AUTH`）在判
@@ -4265,6 +4275,7 @@ def test_short_reply_and_adjacent_pairs():
           "泠月：" in _h_q and "按字面当新话题" in _h_q, _h_q[:60])
     # 模板占位符即契约：多一个少一个都在这里红（漏传 → 运行时 KeyError）
     from string import Formatter
+
     import agent.graph as g
     fields = {f for _, f, _, _ in Formatter().parse(g._PLANNER_PROMPT) if f}
     # `output_contract`（20260927 主线批 A）是**唯一按接口层档位取值**的占位符：
@@ -4288,7 +4299,7 @@ def test_short_reply_and_adjacent_pairs():
           "短应答先还原语义" in g._PLANNER_PROMPT and "不是新话题" in g._PLANNER_PROMPT)
 
 
-def test_no_sibling_tool_name_in_user_text():
+def _test_no_sibling_tool_name_in_user_text():
     """工具名泄漏 lint（20260921 生产事故的同源锁）。
 
     **规则**（精确到"能造成 5c 误杀"的结构条件，不是"见名就报"）：
@@ -4305,7 +4316,9 @@ def test_no_sibling_tool_name_in_user_text():
     实现是 AST 扫描（不是 grep）：注释与 docstring 不算（它们不进任何提示词/回复），
     整串恰好等于工具名的字面量也不算（那是 `tool == "create_tag"` 这类比较常量）。
     """
-    import ast, pathlib
+    import ast
+    import pathlib
+
     from agent.graph import _TOOL_MAP
     from agent.workflow_defs import WORKFLOWS
     from agent.workflow_tools import _CALLABLE_QUERY_TOOLS, _EXPLICIT_TOOLS
@@ -4368,7 +4381,7 @@ def test_no_sibling_tool_name_in_user_text():
     check("lint 反向探针：事故原句能被检出", probe_hit)
 
 
-def test_site_guide_is_role_rendered():
+def _test_site_guide_is_role_rendered():
     """能力清单按角色渲染（20260921）。
 
     事故形态（20260921 生产 trace 165525/165544 vs 165645/165937）：清单是手写死
@@ -4418,7 +4431,7 @@ def test_site_guide_is_role_rendered():
     assert "；；" not in guest and "：；" not in guest[:400], "空能力行会留下空分隔符"
 
 
-def test_site_guide_covers_nav_map():
+def _test_site_guide_covers_nav_map():
     """SITE_GUIDE（访客变体 site_guide(None)）必须覆盖 NAV_MAP 全部存活路径
     （`workflow_defs/nav_map.py` 单一事实来源，新增板块两侧同步；None=已下线不列）。防 narrator 介绍板块漏项——20260905
     trace 190827 实证：能做啥只列 4 项漏 IoT/河灯。20260921 能力清单改按角色渲染后
@@ -4433,7 +4446,7 @@ def test_site_guide_covers_nav_map():
         assert kw in g.SITE_GUIDE, f"SITE_GUIDE 缺技能关键词: {kw}"
 
 
-def test_drop_correction():
+def _test_drop_correction():
     """剔空纠偏（20260921 22:34 生产事故的回归锁）。
 
     用户报：「小猫咪那篇文章都有什么标签呀」这句的回答被降级了，但是居然就直接
@@ -4536,7 +4549,7 @@ def test_drop_correction():
         G.get_llm = _orig_llm
 
 
-def test_multi_step_intent_correction():
+def _test_multi_step_intent_correction():
     """多步链第二件事丢失（20261003）：两道门都只"拦"不"引"，各补一次同轮纠偏。
 
     现场是 golden `multi_step_referent_nav_effect`：「带我过去，然后帮我把樱花打开」
@@ -4674,7 +4687,7 @@ def test_multi_step_intent_correction():
         G.get_llm, G.record = _orig_llm, _orig_record
 
 
-def test_unaccounted_zero_tool_round():
+def _test_unaccounted_zero_tool_round():
     """「不成账」的零工具轮 → 确定性收尾，绝不直落 narrator（20260929 批 G，D1）。
 
     形状 = 零工具 ∧ `dropped` 空 ∧ 无 `param_problem` ∧ 非 chat ∧ `status` 空。
@@ -4775,7 +4788,7 @@ def test_unaccounted_zero_tool_round():
         G.get_llm = _orig_llm
 
 
-def test_calls_in_wrong_workflow_round():
+def _test_calls_in_wrong_workflow_round():
     """点名写进了不读清单的技能 → 记账 + 同轮纠偏（20260925 批 C）。
 
     **要治的洞**：`instantiate_plan` 里只有 `content_query` 分支读
@@ -4797,6 +4810,7 @@ def test_calls_in_wrong_workflow_round():
     import agent.graph as G
     from agent.graph import _drop_correction, parse_plan, planner_node
     from agent.principal import Principal
+
     # 常量的家是 `agent.workflow_model`（批 2 刀 2a 下沉层），刀 2d 之后
     # 收尾刀把 `agent/workflows.py` 整块删掉 ⇒ 取值点跟着定义走。
     from agent.workflow_model import DROP_SUFFIX_WORKFLOW_NO_CALLS
@@ -4874,7 +4888,7 @@ def test_calls_in_wrong_workflow_round():
         G.get_llm = _orig
 
 
-def test_write_target_refusal_round():
+def _test_write_target_refusal_round():
     """写目标解不出来 → **整轮**跑通（假 LLM + 假字典），且零工具、注记带原因。
 
     为什么要跑整轮而不是只测 `_write_target_refusal` 的返回值（test_tag_admin ⑨
@@ -4970,7 +4984,7 @@ def test_write_target_refusal_round():
         G.get_llm, TB._tag_index = _orig_llm, _orig_index
 
 
-def test_write_grounding_round():
+def _test_write_grounding_round():
     """②防线（20260922）：写操作的**身份必须落在主人这句话里**，整轮跑通。
 
     事故现场（同日首跑 golden 八条新用例，一条用例两次跑出两个不同的错）：
@@ -5129,7 +5143,7 @@ def test_write_grounding_round():
         G.get_llm, TB._board_index = _orig_llm, _orig_board
 
 
-def test_write_ledger_note_round():
+def _test_write_ledger_note_round():
     """确定性收尾轮的洞④ 豁免锚（20260922）：系统给的台账结论不许被当成零帧编造。
 
     事故现场：golden `admin_board_unresolved_target_honest` 首跑 resets=1——目标预检
@@ -5185,7 +5199,7 @@ def test_write_ledger_note_round():
           "_LEDGER_NOTE_PREFIX in _note" in _tbl)
 
 
-def test_announcement_text_round():
+def _test_announcement_text_round():
     """公告的 title/content 校正到主人标出来的原话（20260922 ②防线续）。
 
     事故现场（golden `admin_announcement_create_popup` 连跑两跑全红，两种错法）：
@@ -5289,7 +5303,7 @@ def test_announcement_text_round():
         G.get_llm = _orig_llm
 
 
-def test_name_target_round():
+def _test_name_target_round():
     """名字通道的**目标名** = 主人引号里那一段（20260922 ②防线续二）。
 
     事故现场（golden `admin_tag_move_unresolved_target_honest` 八跑）：主人说
@@ -5619,7 +5633,7 @@ def test_name_target_round():
         G.get_llm, TB._tag_index = _orig_llm, _orig_tags
 
 
-def test_write_desc_no_example_names():
+def _test_write_desc_no_example_names():
     """写技能描述里**不许出现具体名字**，占位符统一写 〈…〉（20260922 实测的缺陷）。
 
     缺陷形态（离线复现，生产同款 prompt 组装）：主人说「加个二级标签，名字叫
@@ -5683,7 +5697,7 @@ def test_write_desc_no_example_names():
     check("  narrator prompt 里没有写死的文章 id 举例", m is None, m.group(0) if m else "")
 
 
-def test_write_intent_never_expressed_round():
+def _test_write_intent_never_expressed_round():
     """写意图整轮没被表达出来 → 两处供给侧补丁（20260926 洞⑥ 复盘）。
 
     现场（trace 20260926T020217，同形两例）：主人说「测试公告清除了吧」，planner
@@ -5779,45 +5793,45 @@ def test_write_intent_never_expressed_round():
 
 
 def main():
-    for fn in (test_nav_map_integrity, test_navigate_instantiation, test_other_workflows,
-               test_summary_protocol_removed,
-               test_gate_note_honesty, test_gate_nav_pending_claim, test_plan_roundtrip,
-               test_plan_workflow_line_contract, test_parse_tolerance,
-               test_nav_fast_path, test_nav_fast_path_item_referent_guard,
-               test_dashboard_nav_expansion,
-               test_fast_path_shell_transparency,
-               test_display_fast_path, test_article_fast_path, test_effect_switch_fast_path,
-               test_explicit_tools, test_planner_tool_menu, test_admin_console_role_channel,
-               test_gate_claim_scope, test_gate_frame_checks,
-               test_gate_cmd_prefix_meta,
-               test_phantom_tool_claim, test_phantom_claim_clause_and_echo_exempt,
-               test_gate_claim_holes,
-               test_gate_false_negative_claim, test_reply_contract_change_branches,
-               test_gate_site_absence_claim,
-               test_gate_confirm_claim, test_gate_ledger_denial, test_ledger_target_guard,
-               test_review_inbox_calls_whitelist,
-               test_gate_repeat_reply,
-               test_execute_node, test_refs, test_write_ref_loud,
-               test_tag_create_batch, test_todo_line_retired,
-               test_checker,
-               test_execute_receipts_and_route, test_reflector_routes_and_budget,
-               test_gate_fallback_message,
-               test_search_retry_kind, test_trim_done_reads, test_read_repeat_note,
-               test_read_repeat_round,
-               test_candidate_relevance_pick,
-               test_scan_action_intents, test_doc_anchors_and_clip,
-               test_doc_title_resolution, test_doc_anchor_grounding,
-               test_short_reply_and_adjacent_pairs,
-               test_no_sibling_tool_name_in_user_text, test_site_guide_is_role_rendered,
-               test_site_guide_covers_nav_map, test_drop_correction,
-               test_multi_step_intent_correction,
-               test_unaccounted_zero_tool_round,
-               test_calls_in_wrong_workflow_round,
-               test_write_target_refusal_round, test_write_grounding_round,
-               test_write_ledger_note_round,
-               test_announcement_text_round, test_name_target_round,
-               test_write_intent_never_expressed_round,
-               test_write_desc_no_example_names):
+    for fn in (_test_nav_map_integrity, _test_navigate_instantiation, _test_other_workflows,
+               _test_summary_protocol_removed,
+               _test_gate_note_honesty, _test_gate_nav_pending_claim, _test_plan_roundtrip,
+               _test_plan_workflow_line_contract, _test_parse_tolerance,
+               _test_nav_fast_path, _test_nav_fast_path_item_referent_guard,
+               _test_dashboard_nav_expansion,
+               _test_fast_path_shell_transparency,
+               _test_display_fast_path, _test_article_fast_path, _test_effect_switch_fast_path,
+               _test_explicit_tools, _test_planner_tool_menu, _test_admin_console_role_channel,
+               _test_gate_claim_scope, _test_gate_frame_checks,
+               _test_gate_cmd_prefix_meta,
+               _test_phantom_tool_claim, _test_phantom_claim_clause_and_echo_exempt,
+               _test_gate_claim_holes,
+               _test_gate_false_negative_claim, _test_reply_contract_change_branches,
+               _test_gate_site_absence_claim,
+               _test_gate_confirm_claim, _test_gate_ledger_denial, _test_ledger_target_guard,
+               _test_review_inbox_calls_whitelist,
+               _test_gate_repeat_reply,
+               _test_execute_node, _test_refs, _test_write_ref_loud,
+               _test_tag_create_batch, _test_todo_line_retired,
+               _test_checker,
+               _test_execute_receipts_and_route, _test_reflector_routes_and_budget,
+               _test_gate_fallback_message,
+               _test_search_retry_kind, _test_trim_done_reads, _test_read_repeat_note,
+               _test_read_repeat_round,
+               _test_candidate_relevance_pick,
+               _test_scan_action_intents, _test_doc_anchors_and_clip,
+               _test_doc_title_resolution, _test_doc_anchor_grounding,
+               _test_short_reply_and_adjacent_pairs,
+               _test_no_sibling_tool_name_in_user_text, _test_site_guide_is_role_rendered,
+               _test_site_guide_covers_nav_map, _test_drop_correction,
+               _test_multi_step_intent_correction,
+               _test_unaccounted_zero_tool_round,
+               _test_calls_in_wrong_workflow_round,
+               _test_write_target_refusal_round, _test_write_grounding_round,
+               _test_write_ledger_note_round,
+               _test_announcement_text_round, _test_name_target_round,
+               _test_write_intent_never_expressed_round,
+               _test_write_desc_no_example_names):
         fn()
     if FAILS:
         print(f"\n=== {len(FAILS)} 项失败 ===")
@@ -5825,6 +5839,13 @@ def main():
     print("\n=== 全部通过 ===")
 
 
-if __name__ == "__main__":
+def test_workflows():
+    _settings.jwt_secret = "test-secret-for-workflows"
     main()
 
+    assert not FAILS, (
+        f"{len(FAILS)} 条未通过：" + "；".join(FAILS))
+
+
+if __name__ == "__main__":
+    test_workflows()
