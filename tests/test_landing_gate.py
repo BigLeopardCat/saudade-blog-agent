@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """落地指标判据单测（纯函数 + 合成报告，零网络零 LLM，秒级）。
 
 被测 = `eval/landing_gate.py`：三个数（`FLOOR` 地板 / `ENTRY` 档位 / `TARGET` 目标）、
@@ -15,6 +14,8 @@
 
 用法：.venv/bin/python tests/test_landing_gate.py
 """
+
+
 import json
 import shutil
 import sys
@@ -22,8 +23,13 @@ import tempfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent  # 仓根
+
+
 sys.path.insert(0, str(ROOT))
+
+
 sys.path.insert(0, str(ROOT / "eval"))
+
 
 import landing_gate as lg  # noqa: E402
 
@@ -48,7 +54,7 @@ def _cases(n_total: int, n_red: int, *, n_regression: int = 0, prefix: str = "c"
     return out
 
 
-def test_wilson_and_sample_size():
+def _test_wilson_and_sample_size():
     print("\n① Wilson 区间与样本量规则（判据的算术地基）")
     # 已知值（20261001 从 27 次全量报告里核过）：零失败时下界 = n/(n+z²)
     check("110/110 下界 0.966（rule of three 说的 ~0.966 同一个数）",
@@ -75,7 +81,7 @@ def test_wilson_and_sample_size():
           lg.wilson_ci(146, 146)[0] < 1.0)
 
 
-def test_verdict_states():
+def _test_verdict_states():
     print("\n② verdict 五态：只有事故置红，没到档位只记")
     base = dict(floor=lg.FLOOR, entry=lg.ENTRY, target=lg.TARGET)
     v = lg.verdict(_cases(146, 0), [], **base)
@@ -137,7 +143,7 @@ def test_verdict_states():
           "0 红" in v["hard"]["criterion"] and "%" not in v["hard"]["criterion"])
 
 
-def test_ab_compare():
+def _test_ab_compare():
     print("\n③ A/B：改动的落地判据（绝对值今天到不了目标，只能用相对判据）")
     def rep(cases: list) -> dict:
         return {"cases": cases}
@@ -171,7 +177,7 @@ def test_ab_compare():
           r["cases_compared"] == 60, str(r["cases_compared"]))
 
 
-def test_chronic_reds(tmp: Path):
+def _test_chronic_reds(tmp: Path):
     print("\n④ 慢性红榜：只收全量跑、按终判算（这两条错了整张榜就是错的）")
     runs = tmp / "runs"
     runs.mkdir()
@@ -200,7 +206,7 @@ def test_chronic_reds(tmp: Path):
           lg.chronic_reds(str(runs), min_runs=3) == [], "空")
 
 
-def test_raise_hint(tmp: Path):
+def _test_raise_hint(tmp: Path):
     print("\n⑤ 抬档提示：要「夜夜达档」这个证据，不是一夜运气")
     runs = tmp / "runs2"
     runs.mkdir()
@@ -227,7 +233,7 @@ def test_raise_hint(tmp: Path):
           h["ready"] and h["next"] == 0.95, h["reason"])
 
 
-def test_wiring():
+def _test_wiring():
     print("\n⑥ 接线锁：判据只有一处实现，门禁只在事故时红")
     src = (ROOT / "eval" / "run_golden.py").read_text(encoding="utf-8")
     check("run_golden 用 landing_gate.verdict（不在本文件里重算阈值/区间）",
@@ -261,7 +267,7 @@ def _night(runs: Path, name: str, cases: list) -> None:
     (runs / name).write_text(json.dumps({"cases": cases}), encoding="utf-8")
 
 
-def test_enterprise_criteria(tmp: Path):
+def _test_enterprise_criteria(tmp: Path):
     print("\n⑦ 企业落地三条：面判据跨夜聚合、只有 scope=text 才算伤害")
     # ── 伤害口径：**只有终局兜底（scope=text）**算"用户真收到道歉" ──
     # scope=all 是 gate 打回后 planner 重规划答对了 —— 用户看到的是真回答，
@@ -383,7 +389,7 @@ def test_enterprise_criteria(tmp: Path):
           [c["detail"] for c in r4["criteria"] if c["key"] == "overall"][0])
 
 
-def test_wiring():
+def _test_wiring():
     print("\n⑥ 接线锁：判据只有一处实现，门禁只在事故时红")
     src = (ROOT / "eval" / "run_golden.py").read_text(encoding="utf-8")
     check("run_golden 用 landing_gate.verdict（不在本文件里重算阈值/区间）",
@@ -422,13 +428,13 @@ def test_wiring():
 def main():
     tmp = Path(tempfile.mkdtemp(prefix="landing_gate_test_"))
     try:
-        test_wilson_and_sample_size()
-        test_verdict_states()
-        test_ab_compare()
-        test_chronic_reds(tmp)
-        test_raise_hint(tmp)
-        test_enterprise_criteria(tmp)
-        test_wiring()
+        _test_wilson_and_sample_size()
+        _test_verdict_states()
+        _test_ab_compare()
+        _test_chronic_reds(tmp)
+        _test_raise_hint(tmp)
+        _test_enterprise_criteria(tmp)
+        _test_wiring()
     finally:
         shutil.rmtree(tmp, ignore_errors=True)   # 本仓纪律：mkdtemp 必须配 rmtree
     if FAILS:
@@ -439,5 +445,12 @@ def main():
     print("\n=== 全部通过 ===")
 
 
-if __name__ == "__main__":
+def test_landing_gate():
     main()
+
+    assert not FAILS, (
+        f"{len(FAILS)} 条未通过：" + "；".join(FAILS))
+
+
+if __name__ == "__main__":
+    test_landing_gate()

@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """手抄表的机器锁 · 第五站：**写通道的两个枚举词表**（20261013，行业规范收口批 3f）。
 
 **契约**：agent 通过 `/api/protect/notes` 与标签接口写东西，有两个字段不是自由文本而是
@@ -42,6 +41,7 @@
 用法：.venv/bin/python tests/test_write_param_words.py
 """
 
+
 from __future__ import annotations
 
 import ast
@@ -50,7 +50,10 @@ import re
 import sys
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
+
+
 sys.path.insert(0, str(ROOT))
+
 
 from agent import adminops_tags as _tags  # noqa: E402
 from tests import _parent_repo, _rust_src  # noqa: E402
@@ -91,72 +94,6 @@ def _dict_literal(name: str) -> dict:
     return {}
 
 
-_LEVEL_SRC = _func_src(_ADMINOPS, "normalize_level")
-_LEVEL_OF_SRC = _func_src(_ADMINOPS, "level_of")
-_STATUS_ALIASES = _dict_literal("_STATUS_ALIASES")
-
-_RUST_TAGS = _parent_repo.read(
-    "src/routes/tags.rs",
-    why="标签层级词表的**另一侧**：agent 把 `level` / `to_level` 发过去，Rust 用 "
-        "`parse_level` 判；这个词表两侧不同源时，后端的表现是**直接拒掉这次移动**") or ""
-_RUST_NOTES = _parent_repo.read(
-    "src/routes/notes.rs",
-    why="文章状态词表的**另一侧**：后端认得的词决定 agent 发出的词会不会被 400 拒收"
-        "（本笔之前更糟——未知词原样写库，只顺带设 `is_public`，会留下 status 与 is_public"
-        "互相矛盾的记录且不报错）") or ""
-
-# ══ ① 层级词表：Rust 的"认"与"产出"两侧 ═══════════════════════════════════
-print("① 层级词表：Rust `parse_level` 认的 == `from_code`/`to_code` 产出的")
-
-_pl = _rust_src.fn_body(_RUST_TAGS, "parse_level")
-_parse_set = set(re.findall(r'"([a-z]+)"\s*=>', _pl))
-check("取到了 `parse_level` 的 match 臂字面量（取不到 ⇒ 下面每条都没有判据，直接红）",
-      bool(_parse_set), f"{sorted(_parse_set)}")
-check("  它有一个 `_ => None` 兜底（认不出的**拒**，不是随手当成一级）",
-      re.search(r"_\s*=>\s*None", _pl) is not None, _pl.strip()[-40:])
-_out_set: set[str] = set()
-for _fn in ("from_code", "to_code"):
-    _pairs = re.findall(r'\{\s*"(\w+)"\s*\}\s*else\s*\{\s*"(\w+)"\s*\}',
-                        _rust_src.fn_body(_RUST_TAGS, _fn))
-    check(f"  取到了 `{_fn}` 的两个产出字面量", bool(_pairs), f"{_pairs}")
-    _out_set |= {w for pair in _pairs for w in pair}
-check("⭐ 后端**认的**与后端**产出的**是同一组词（回执里的 fromLevel/toLevel 要能被再读回来）",
-      bool(_parse_set) and _parse_set == _out_set,
-      f"认={sorted(_parse_set)} 产出={sorted(_out_set)}")
-
-# agent 侧的产出：两个产出点 + 真调一遍语料
-_LVL_RETURNS = re.findall(r'return "(one|two)"', _LEVEL_SRC)
-check("`normalize_level` 的产出点就是那两个字面量（不是从别处拼出来的）",
-      set(_LVL_RETURNS) == _parse_set, f"{sorted(set(_LVL_RETURNS))}")
-
-_LVL_INPUTS = ["one", "ONE", " One ", "1", "一", "一级", "two", "TWO", "2", "二", "二级",
-               "二级 ", "三", "three", "3", "0", "", "   ", None, "one级", "两"]
-_lvl_out = {_tags.normalize_level(v) for v in _LVL_INPUTS}
-check("⭐ `normalize_level` 的**每一个产出**都在后端认的词表里（发出去的后端都认）",
-      _lvl_out - {None} <= _parse_set and len(_lvl_out) > 1,
-      f"产出={sorted(x for x in _lvl_out if x)} 后端={sorted(_parse_set)}")
-check("⭐ 层级这一族两侧**完全同集**（没有台账：本侧不会产出后端不认的词，也不缺哪一档）",
-      _lvl_out - {None} == _parse_set, f"本侧={sorted(x for x in _lvl_out if x)}")
-
-
-# ══ ② 第二个产出点：`level_of`（TagInfo → 词）══════════════════════════════
-print("\n② 第二个产出点 `level_of`（TagInfo → 词）：同一组词，同一份判据")
-
-_taginfo = _tags.TagInfo
-check("`level_of(None)` 进 None 出（缺信息不许兜成「一级」）", _tags.level_of(None) is None)
-_lof = [_tags.level_of(_taginfo(id=1, name="x", level=1)), _tags.level_of(_taginfo(id=2, name="y",
-                                                                        level=2))]
-check("⭐ `level_of` 的产出也在后端词表里（一个是描述、一个是实参，写错哪一个后端都不认）",
-      bool(set(_lof)) and set(_lof) <= _parse_set and len(set(_lof)) == 2, f"{_lof}")
-check("  与 `normalize_level` 同源（同一组字面量，不是各写一份）",
-      set(re.findall(r'"(one|two)"', _LEVEL_OF_SRC)) <= _parse_set,
-      f"{sorted(set(re.findall(chr(34) + '(one|two)' + chr(34), _LEVEL_OF_SRC)))}")
-
-
-# ══ ③ 状态词表：只有**单向**要求（后端认的比本侧会写的多）═════════════════
-print("\n③ 文章状态：本侧产出的每一个词后端都认（后端认得多的那一族走台账）")
-
-
 def _status_words_from_rust(src: str) -> tuple[set[str], str]:
     """后端**认得**的状态词 + 它是从哪取到的（来源串只为把红信息写清楚）。
 
@@ -185,80 +122,125 @@ def _status_words_from_rust(src: str) -> tuple[set[str], str]:
     return _legacy, "`create_note`/`update_note` 里的比较与缺省值"
 
 
-_recog, _recog_where = _status_words_from_rust(_RUST_NOTES)
-check(f"  从后端源码取到了状态词（来源：{_recog_where}）", bool(_recog), f"{sorted(_recog)}")
-check("⭐ 后端**认得**的状态词取全了（无论词住在新解析点的 match 臂还是旧的两个写函数里，"
+def test_write_param_words():
+    _LEVEL_SRC = _func_src(_ADMINOPS, "normalize_level")
+    _LEVEL_OF_SRC = _func_src(_ADMINOPS, "level_of")
+    _STATUS_ALIASES = _dict_literal("_STATUS_ALIASES")
+    _RUST_TAGS = _parent_repo.read(
+        "src/routes/tags.rs",
+        why="标签层级词表的**另一侧**：agent 把 `level` / `to_level` 发过去，Rust 用 "
+        "`parse_level` 判；这个词表两侧不同源时，后端的表现是**直接拒掉这次移动**") or ""
+    _RUST_NOTES = _parent_repo.read(
+        "src/routes/notes.rs",
+        why="文章状态词表的**另一侧**：后端认得的词决定 agent 发出的词会不会被 400 拒收"
+        "（本笔之前更糟——未知词原样写库，只顺带设 `is_public`，会留下 status 与 is_public"
+        "互相矛盾的记录且不报错）") or ""
+    print("① 层级词表：Rust `parse_level` 认的 == `from_code`/`to_code` 产出的")
+    _pl = _rust_src.fn_body(_RUST_TAGS, "parse_level")
+    _parse_set = set(re.findall(r'"([a-z]+)"\s*=>', _pl))
+    check("取到了 `parse_level` 的 match 臂字面量（取不到 ⇒ 下面每条都没有判据，直接红）",
+          bool(_parse_set), f"{sorted(_parse_set)}")
+    check("  它有一个 `_ => None` 兜底（认不出的**拒**，不是随手当成一级）",
+          re.search(r"_\s*=>\s*None", _pl) is not None, _pl.strip()[-40:])
+    _out_set: set[str] = set()
+    for _fn in ("from_code", "to_code"):
+        _pairs = re.findall(r'\{\s*"(\w+)"\s*\}\s*else\s*\{\s*"(\w+)"\s*\}',
+                            _rust_src.fn_body(_RUST_TAGS, _fn))
+        check(f"  取到了 `{_fn}` 的两个产出字面量", bool(_pairs), f"{_pairs}")
+        _out_set |= {w for pair in _pairs for w in pair}
+    check("⭐ 后端**认的**与后端**产出的**是同一组词（回执里的 fromLevel/toLevel 要能被再读回来）",
+          bool(_parse_set) and _parse_set == _out_set,
+          f"认={sorted(_parse_set)} 产出={sorted(_out_set)}")
+    _LVL_RETURNS = re.findall(r'return "(one|two)"', _LEVEL_SRC)
+    check("`normalize_level` 的产出点就是那两个字面量（不是从别处拼出来的）",
+          set(_LVL_RETURNS) == _parse_set, f"{sorted(set(_LVL_RETURNS))}")
+    _LVL_INPUTS = ["one", "ONE", " One ", "1", "一", "一级", "two", "TWO", "2", "二", "二级",
+                   "二级 ", "三", "three", "3", "0", "", "   ", None, "one级", "两"]
+    _lvl_out = {_tags.normalize_level(v) for v in _LVL_INPUTS}
+    check("⭐ `normalize_level` 的**每一个产出**都在后端认的词表里（发出去的后端都认）",
+          _lvl_out - {None} <= _parse_set and len(_lvl_out) > 1,
+          f"产出={sorted(x for x in _lvl_out if x)} 后端={sorted(_parse_set)}")
+    check("⭐ 层级这一族两侧**完全同集**（没有台账：本侧不会产出后端不认的词，也不缺哪一档）",
+          _lvl_out - {None} == _parse_set, f"本侧={sorted(x for x in _lvl_out if x)}")
+    print("\n② 第二个产出点 `level_of`（TagInfo → 词）：同一组词，同一份判据")
+    _taginfo = _tags.TagInfo
+    check("`level_of(None)` 进 None 出（缺信息不许兜成「一级」）", _tags.level_of(None) is None)
+    _lof = [_tags.level_of(_taginfo(id=1, name="x",
+        level=1)), _tags.level_of(_taginfo(id=2, name="y",
+                                                                            level=2))]
+    check("⭐ `level_of` 的产出也在后端词表里（一个是描述、一个是实参，写错哪一个后端都不认）",
+          bool(set(_lof)) and set(_lof) <= _parse_set and len(set(_lof)) == 2, f"{_lof}")
+    check("  与 `normalize_level` 同源（同一组字面量，不是各写一份）",
+          set(re.findall(r'"(one|two)"', _LEVEL_OF_SRC)) <= _parse_set,
+          f"{sorted(set(re.findall(chr(34) + '(one|two)' + chr(34), _LEVEL_OF_SRC)))}")
+    print("\n③ 文章状态：本侧产出的每一个词后端都认（后端认得多的那一族走台账）")
+    _recog, _recog_where = _status_words_from_rust(_RUST_NOTES)
+    check(f"  从后端源码取到了状态词（来源：{_recog_where}）", bool(_recog), f"{sorted(_recog)}")
+    check("⭐ 后端**认得**的状态词取全了（无论词住在新解析点的 match 臂还是旧的两个写函数里，"
       "认得的都是这四个）", _recog >= {"public", "published", "private", "draft"},
-      f"{sorted(_recog)}")
-
-_p_out = set(_STATUS_ALIASES.values())
-check("`normalize_status` 的值域取自源码那张表（不是手抄一份）", bool(_p_out), f"{sorted(_p_out)}")
-check("⭐ 本侧产出的**每一个**状态词后端都认（少一条就会写出一行 status 与 is_public "
+          f"{sorted(_recog)}")
+    _p_out = set(_STATUS_ALIASES.values())
+    check("`normalize_status` 的值域取自源码那张表（不是手抄一份）",
+        bool(_p_out), f"{sorted(_p_out)}")
+    check("⭐ 本侧产出的**每一个**状态词后端都认（少一条就会写出一行 status 与 is_public "
       "互相矛盾的记录，而且没有任何东西会报错）",
-      _p_out <= _recog, f"本侧={sorted(_p_out)} 后端={sorted(_recog)}")
-
-# 台账**双向**：后端认得而本侧从不产出的词，逐条写下来；漏写红、过期也红。
-LEDGER = {
-    "published",   # 后端的历史写法（`create_note` 的缺省值就是它）：本侧一律归一到 "public"
-}
-_missing = sorted(_recog - _p_out - LEDGER)
-_stale = sorted(LEDGER - (_recog - _p_out))
-check("⭐ 后端认得而本侧不产出的词**逐条写在台账里**（漏一条红）",
-      not _missing, "、".join(_missing))
-check("⭐ 台账里也不许多写（本侧开始产出它了就要销账）", not _stale, "、".join(_stale))
-check("  方向是安全的：本侧只会少写一个后端认得的旧词，不会多写一个后端不认的",
-      not _missing and bool(LEDGER), f"台账 {len(LEDGER)} 条")
-
-# 真调一遍：产出必须落在后端认得的集合里，且覆盖本侧值域的全部三档
-_STATUS_INPUTS = ["public", "PUBLIC", " public ", "公开", "发布", "publish", "published", "1",
-                  "private", "私密", "隐藏", "hidden", "0", "draft", "草稿", "drafted",
-                  "半公开", "hidden2", "", "  ", None, "2"]
-_st_out = {_tags.normalize_status(v) for v in _STATUS_INPUTS}
-check("⭐ 语料里每一个非 None 的产出都在后端词表内",
-      _st_out - {None} <= _recog, f"{sorted(x for x in _st_out if x)}")
-check("  三档都产得出来（本侧值域 == 后端那三个词，不含 `published`）",
-      _st_out - {None} == _p_out, f"{sorted(x for x in _st_out if x)}")
-
-
-# ══ ④ 失败取向：两侧都是"认不出就拒"，且本侧**从不猜** ══════════════════════
-print("\n④ 失败取向：认不出就拒（后端返回 None，本侧返回 None 让调用方拒）")
-
-check("本侧层级：未知词一律 None（`三`/`three`/`3`/`0`/空串/None/`one级`）",
-      all(_tags.normalize_level(v) is None
-          for v in ("三", "three", "3", "0", "", "   ", None, "one级", "两")),
-      f"{ {v: _tags.normalize_level(v) for v in ('三', '3', '', None)} }")
-check("本侧状态：未知词一律 None（`半公开`/`hidden2`/`2`/空串/None）",
-      all(_tags.normalize_status(v) is None
-          for v in ("半公开", "hidden2", "2", "", "  ", None)),
-      f"{ {v: _tags.normalize_status(v) for v in ('半公开', '2', None)} }")
-check("  容错只做**大小写与首尾空白**（`ONE` / ` One ` 都认；不做别的模糊匹配）",
-      _tags.normalize_level("ONE") == "one" and _tags.normalize_level(" One ") == "one"
-      and _tags.normalize_status("PUBLIC") == "public")
-check("★ 这一站补上了 `normalize_level` 的**行为覆盖**：此前全仓没有一处测试调过它"
+          _p_out <= _recog, f"本侧={sorted(_p_out)} 后端={sorted(_recog)}")
+    LEDGER = {
+        "published",   # 后端的历史写法（`create_note` 的缺省值就是它）：本侧一律归一到 "public"
+    }
+    _missing = sorted(_recog - _p_out - LEDGER)
+    _stale = sorted(LEDGER - (_recog - _p_out))
+    check("⭐ 后端认得而本侧不产出的词**逐条写在台账里**（漏一条红）",
+          not _missing, "、".join(_missing))
+    check("⭐ 台账里也不许多写（本侧开始产出它了就要销账）", not _stale, "、".join(_stale))
+    check("  方向是安全的：本侧只会少写一个后端认得的旧词，不会多写一个后端不认的",
+          not _missing and bool(LEDGER), f"台账 {len(LEDGER)} 条")
+    _STATUS_INPUTS = ["public", "PUBLIC", " public ", "公开", "发布", "publish", "published", "1",
+                      "private", "私密", "隐藏", "hidden", "0", "draft", "草稿", "drafted",
+                      "半公开", "hidden2", "", "  ", None, "2"]
+    _st_out = {_tags.normalize_status(v) for v in _STATUS_INPUTS}
+    check("⭐ 语料里每一个非 None 的产出都在后端词表内",
+          _st_out - {None} <= _recog, f"{sorted(x for x in _st_out if x)}")
+    check("  三档都产得出来（本侧值域 == 后端那三个词，不含 `published`）",
+          _st_out - {None} == _p_out, f"{sorted(x for x in _st_out if x)}")
+    print("\n④ 失败取向：认不出就拒（后端返回 None，本侧返回 None 让调用方拒）")
+    check("本侧层级：未知词一律 None（`三`/`three`/`3`/`0`/空串/None/`one级`）",
+          all(_tags.normalize_level(v) is None
+              for v in ("三", "three", "3", "0", "", "   ", None, "one级", "两")),
+          f"{ {v: _tags.normalize_level(v) for v in ('三', '3', '', None)} }")
+    check("本侧状态：未知词一律 None（`半公开`/`hidden2`/`2`/空串/None）",
+          all(_tags.normalize_status(v) is None
+              for v in ("半公开", "hidden2", "2", "", "  ", None)),
+          f"{ {v: _tags.normalize_status(v) for v in ('半公开', '2', None)} }")
+    check("  容错只做**大小写与首尾空白**（`ONE` / ` One ` 都认；不做别的模糊匹配）",
+          _tags.normalize_level("ONE") == "one" and _tags.normalize_level(" One ") == "one"
+          and _tags.normalize_status("PUBLIC") == "public")
+    check("★ 这一站补上了 `normalize_level` 的**行为覆盖**：此前全仓没有一处测试调过它"
       "（`normalize_status` 在 `test_admin_write.py` 里有，层级那半没有）",
-      _tags.normalize_level("一级") == "one" and _tags.normalize_level("二级") == "two"
-      and _tags.normalize_level("1") == "one" and _tags.normalize_level("2") == "two")
+          _tags.normalize_level("一级") == "one" and _tags.normalize_level("二级") == "two"
+          and _tags.normalize_level("1") == "one" and _tags.normalize_level("2") == "two")
+    print("\n⑤ agent 独有（Rust 侧没有对应物，故只判自洽）：")
+    print("   · 口语别名（`1`/`一`/`一级`、`公开`/`发布`/`隐藏`…）——入参归一化，后端不做这个")
+    print("   · `_TOP_ALIASES`（置顶）——`0/1` 整数，Rust 那边没有词表")
+    print("   · `STATUS_CN`——说给主人听的中文名，不是写回去的值")
+    check("  `_STATUS_ALIASES` 的**值**都在本侧值域里（认出一个不存在的档 = 拿它去问后端）",
+          set(_tags._STATUS_ALIASES.values()) <= _p_out,
+          f"越界：{sorted(set(_tags._STATUS_ALIASES.values()) - _p_out)}")
+    check("  `STATUS_CN` 的键 == 本侧值域（缺一档 = 显示时回落成「未知状态…」）",
+          set(_tags.STATUS_CN) == _p_out, f"{sorted(_tags.STATUS_CN)}")
+    check("  `_TOP_ALIASES` 的值只有 0/1（置顶是布尔语义，不许出现第三个值）",
+          set(_tags._TOP_ALIASES.values()) == {0, 1}, f"{sorted(set(_tags._TOP_ALIASES.values()))}")
+    check("  `normalize_top` 认不出也是 None（同一条纪律：宁可问一句，不猜）",
+          _tags.normalize_top("差不多吧") is None and _tags.normalize_top(None) is None)
+    print()
+    if FAILED:
+        print(f"❌ 失败 {len(FAILED)} 项：" + "、".join(FAILED))
+        sys.exit(1)
+    print("✅ 全绿")
+
+    assert not FAILED, (
+        f"{len(FAILED)} 条未通过：" + "；".join(FAILED))
 
 
-# ══ ⑤ agent 独有那几张表：只判自洽，并写下它们**没有** Rust 对应物 ═════════
-print("\n⑤ agent 独有（Rust 侧没有对应物，故只判自洽）：")
-print("   · 口语别名（`1`/`一`/`一级`、`公开`/`发布`/`隐藏`…）——入参归一化，后端不做这个")
-print("   · `_TOP_ALIASES`（置顶）——`0/1` 整数，Rust 那边没有词表")
-print("   · `STATUS_CN`——说给主人听的中文名，不是写回去的值")
-
-check("  `_STATUS_ALIASES` 的**值**都在本侧值域里（认出一个不存在的档 = 拿它去问后端）",
-      set(_tags._STATUS_ALIASES.values()) <= _p_out,
-      f"越界：{sorted(set(_tags._STATUS_ALIASES.values()) - _p_out)}")
-check("  `STATUS_CN` 的键 == 本侧值域（缺一档 = 显示时回落成「未知状态…」）",
-      set(_tags.STATUS_CN) == _p_out, f"{sorted(_tags.STATUS_CN)}")
-check("  `_TOP_ALIASES` 的值只有 0/1（置顶是布尔语义，不许出现第三个值）",
-      set(_tags._TOP_ALIASES.values()) == {0, 1}, f"{sorted(set(_tags._TOP_ALIASES.values()))}")
-check("  `normalize_top` 认不出也是 None（同一条纪律：宁可问一句，不猜）",
-      _tags.normalize_top("差不多吧") is None and _tags.normalize_top(None) is None)
-
-# ══════════════════════════════════════════════════════════════════════════
-print()
-if FAILED:
-    print(f"❌ 失败 {len(FAILED)} 项：" + "、".join(FAILED))
-    sys.exit(1)
-print("✅ 全绿")
+if __name__ == "__main__":
+    test_write_param_words()

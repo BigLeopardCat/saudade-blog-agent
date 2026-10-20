@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """单帧预算哨兵（`eval/frame_budget.py`）的离线回归锁（20260925）。
 
 哨兵本身要联网（量的是线上语料），所以这里锁的是它的**判据**——`summarize()` 这个
@@ -10,12 +9,19 @@
   ② **不静默**：超预算的篇目必须逐篇出现在 `over` 里（带上超了多少），
      而且 `longest` 与 `over` 不能互相矛盾（最长那篇超了、`over` 却空 = 报告在骗人）。
 """
+
+
 import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
+
+
 sys.path.insert(0, str(ROOT))
+
+
 sys.path.insert(0, str(ROOT / "eval"))
+
 
 import frame_budget as fb  # noqa: E402
 
@@ -78,5 +84,12 @@ def main() -> int:
     return 0
 
 
+def test_frame_budget():
+    main()
+
+    assert not FAILS, (
+        f"{len(FAILS)} 条未通过：" + "；".join(FAILS))
+
+
 if __name__ == "__main__":
-    sys.exit(main())
+    test_frame_budget()

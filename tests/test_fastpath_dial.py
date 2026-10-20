@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """快道定价档（`AGENT_FASTPATH`）的回归锁：五条快道**逐条**受这一档管，档位本身可读。
 
 这一档不是给人用的开关，是**定价装置**（快道命中即拿走 planner 的决策权，删/收窄
@@ -14,12 +13,17 @@
 ③ 关档不是"少一条快路"而是"换一个人做决定"，所以关档那一臂必须**仍能走完**：
    落回 planner LLM（`len(prompts) == 1`），不是崩、也不是零计划。
 """
+
+
 import ast
 import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent  # 仓根（套件统一住在 tests/）
+
+
 sys.path.insert(0, str(ROOT))
+
 
 from _planner_stub import bind_tools_stub, toolcall_reply  # noqa: E402
 from langchain_core.messages import AIMessage, HumanMessage  # noqa: E402
@@ -84,17 +88,10 @@ def _sys(ctx: str) -> HumanMessage:
 _PREV_WITH_LINK = ("给你找到啦：[文章向量空间图谱项目文档]"
                    "(https://saudade.site/article/19) 就是这篇～")
 
+
 _CHAT_PLAN = "WORKFLOW=chat\nPARAMS={}\nREPLY: 这个交给模型决定就好"
 
-# 五个形状 × 一条一定能命中该快道的输入（页面上下文跟在后面的那条 System 消息里）。
-# `kind` = `record("planner", "fastpath", kind=…)` 那一格的名字；`tools` = 快道计划的
-# 工具名（只取"名字"这一段：参数是另一族判据的事，本文件只关心**谁做的决定**）。
-# 特效切换那条是**两条** spec（关旧 + 开新）——双 spec 正是这条快道存在的理由
-# （planner LLM 反复只解出半边），所以它对着的位置写两个名字。
-#
-# `off_calls` = 关档那一臂脚本要备几份"模型自己的决定"。**特效那条要两份**：
-# 「把樱花换成下雨」带着写形态的动作词（换成）而脚本第一次排的是零写规格的 chat，
-# 系统按既有纠偏规则再问一次（那条纠偏与快道档位无关，是 planner 自己的纪律）。
+
 _CASES = [
     {"kind": "nav", "off_calls": 1,
      "msgs": [HumanMessage(content="带我去留言板")], "tools": ["navigate_to"]},
@@ -119,7 +116,7 @@ def _tool_names(plan: dict) -> list[str]:
     return [t.split("(")[0] for t in plan.get("tools") or []]
 
 
-def test_on_arm_each_kind():
+def _test_on_arm_each_kind():
     """① 开档（出厂档）：五条快道逐条命中、零 LLM、计划就是快道那一张。"""
     print("[fastpath_dial] 开档：五条快道逐条命中（零 LLM）")
     _orig_llm, _orig_record = G.get_llm, G.record
@@ -150,7 +147,7 @@ def test_on_arm_each_kind():
         G.get_llm, G.record = _orig_llm, _orig_record
 
 
-def test_off_arm_each_kind():
+def _test_off_arm_each_kind():
     """② 关档：同一条消息**换人做决定**——planner LLM 被问恰好一次，计划是它的。
 
     这是本文件的核心：判据不是"没有 fastpath 事件"（那只说明事件没落），而是
@@ -190,7 +187,7 @@ def test_off_arm_each_kind():
         G.get_llm, G.record = _orig_llm, _orig_record
 
 
-def test_dial_not_leaked():
+def _test_dial_not_leaked():
     """③ 拨盘退出后必须还原（泄漏会让后面的用例按另一档判，且红得毫无理由）。"""
     print("[fastpath_dial] 拨盘不泄漏")
     before = G.settings.agent_fastpath
@@ -200,7 +197,7 @@ def test_dial_not_leaked():
           and G._fastpath_on() is True, str(G.settings.agent_fastpath))
 
 
-def test_mutation_arm():
+def _test_mutation_arm():
     """④ 变异臂：把**读口**换成恒 True（档位照旧关着）⇒ 同一判据当场翻红。
 
     这一臂证明 ② 断的是真东西：关档那几条不是恒真的——`_fastpath_on` 一旦不读档位，
@@ -226,7 +223,7 @@ def test_mutation_arm():
         G.get_llm, G._fastpath_on = _orig_llm, _orig_fn
 
 
-def test_single_reader_and_pinned():
+def _test_single_reader_and_pinned():
     """⑤ 单一读口 + 运行器钉住这一档（两处都是**源码级**的性质，AST 上读）。"""
     print("[fastpath_dial] 唯一读口 + 套件运行器钉档位")
     src = (ROOT / "agent" / "graph.py").read_text(encoding="utf-8")
@@ -263,7 +260,7 @@ def test_single_reader_and_pinned():
           _pinned.get("AGENT_FASTPATH") == "1", str(_pinned.get("AGENT_FASTPATH")))
 
 
-def test_settings_default():
+def _test_settings_default():
     """⑥ 出厂档 = 开（与从前逐字节相同），且 `.env.example` 里写着这一档。"""
     print("[fastpath_dial] 出厂档与样例环境")
     from config.settings import Settings
@@ -276,12 +273,12 @@ def test_settings_default():
 
 def main() -> int:
     print("=" * 60)
-    test_on_arm_each_kind()
-    test_off_arm_each_kind()
-    test_dial_not_leaked()
-    test_mutation_arm()
-    test_single_reader_and_pinned()
-    test_settings_default()
+    _test_on_arm_each_kind()
+    _test_off_arm_each_kind()
+    _test_dial_not_leaked()
+    _test_mutation_arm()
+    _test_single_reader_and_pinned()
+    _test_settings_default()
     print("=" * 60)
     if FAILS:
         print(f"FAIL: {len(FAILS)} 条")
@@ -292,5 +289,12 @@ def main() -> int:
     return 0
 
 
+def test_fastpath_dial():
+    main()
+
+    assert not FAILS, (
+        f"{len(FAILS)} 条未通过：" + "；".join(FAILS))
+
+
 if __name__ == "__main__":
-    sys.exit(main())
+    test_fastpath_dial()

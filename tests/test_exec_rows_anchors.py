@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """文档锚点改读**结构**（20261020，批 G 第二段 ②）。
 
 被测 = `agent/prompt_context.py::_doc_anchors(..., exec_rows=…)`：跨轮"读过哪篇文章"
@@ -17,12 +16,19 @@
 
 外加一条"旧路确实没了"的正控：**只有渲染文本、没有结构**时，`noteId=19` 不会出现。
 """
+
+
 import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent  # 仓根
+
+
 sys.path.insert(0, str(ROOT))
+
+
 sys.path.insert(0, str(ROOT / "tests"))
+
 
 from _parent_repo import read as _read_parent  # noqa: E402
 from langchain_core.messages import HumanMessage, SystemMessage  # noqa: E402
@@ -50,63 +56,56 @@ def _row(*, title: str = "架构文档", aid: str = "19", doc_type: str | None =
     return {"at": "09-21 10:00", "n": n, "payload": payload}
 
 
-MSGS = [HumanMessage(content="你看了吗就说没写")]
-
-# ── ① 结构在场 ⇒ 锚点有 id / 标题 / 已读 ────────────────────────────────────
-print("① 结构那份 ⇒ 锚点")
-out = _doc_anchors(MSGS, exec_rows=[_row()])
-check("带 id、带标题", "noteId=19" in out and "架构文档" in out, out)
-check("标成已读全文（_add(read=True)）", "已读过全文" in out, out)
-
-# 反控①：只改回执里的 title ⇒ 锚点跟着变（证明它读结构、不读文本）
-out2 = _doc_anchors([SystemMessage(content="读取文章 19《旧标题》")],
-                    exec_rows=[_row(title="回执里的新标题")])
-check("★ 反控：改回执 title ⇒ 锚点跟着变（不读渲染文本）",
-      "回执里的新标题" in out2 and "旧标题" not in out2, out2)
-
-# ── ② doc_type 过滤：留言/说说/公告不是文章 ────────────────────────────────
-print("② doc_type：只有 note（或缺席）才进文章锚点")
-for dt in ("board", "talk", "announcement"):
-    o = _doc_anchors(MSGS, exec_rows=[_row(doc_type=dt)])
-    check(f"doc_type={dt} ⇒ 不进文章锚点", "noteId=19" not in o, o)
-o = _doc_anchors(MSGS, exec_rows=[_row(doc_type=None)])
-check("doc_type 缺席 = 老回执 = 默认档 note ⇒ 进", "noteId=19" in o, o)
-o = _doc_anchors(MSGS, exec_rows=[_row(tool="rag_search")])
-check("别的工具 ⇒ 不进锚点", "noteId=19" not in o, o)
-
-# ── ③ 老行口径：payload 为 null ⇒ 不进锚点 ─────────────────────────────────
-print("③ 老行（payload = null）不进锚点——主人拍板的取舍")
-o = _doc_anchors(MSGS, exec_rows=[{"at": "09-21 10:00", "n": 1, "payload": None}])
-check("payload=null ⇒ 没有 id（拿不到结构就如实少一行）", "noteId" not in o, o)
-o = _doc_anchors(MSGS, exec_rows=[{"at": "09-21 10:00", "n": 1}])
-check("payload 键缺席 ⇒ 同上", "noteId" not in o, o)
-
-# ── ④ 旧路确实拆了：只有渲染文本 ⇒ 不会出现 noteId ─────────────────────────
-print("④ 反控：只有那串渲染文本、没有结构 ⇒ noteId 不会出现（正则已整族删除）")
-o = _doc_anchors([SystemMessage(content="· 已执行（系统验收过）: 09-21 10:00 "
+def test_exec_rows_anchors():
+    MSGS = [HumanMessage(content="你看了吗就说没写")]
+    print("① 结构那份 ⇒ 锚点")
+    out = _doc_anchors(MSGS, exec_rows=[_row()])
+    check("带 id、带标题", "noteId=19" in out and "架构文档" in out, out)
+    check("标成已读全文（_add(read=True)）", "已读过全文" in out, out)
+    out2 = _doc_anchors([SystemMessage(content="读取文章 19《旧标题》")],
+                        exec_rows=[_row(title="回执里的新标题")])
+    check("★ 反控：改回执 title ⇒ 锚点跟着变（不读渲染文本）",
+          "回执里的新标题" in out2 and "旧标题" not in out2, out2)
+    print("② doc_type：只有 note（或缺席）才进文章锚点")
+    for dt in ("board", "talk", "announcement"):
+        o = _doc_anchors(MSGS, exec_rows=[_row(doc_type=dt)])
+        check(f"doc_type={dt} ⇒ 不进文章锚点", "noteId=19" not in o, o)
+    o = _doc_anchors(MSGS, exec_rows=[_row(doc_type=None)])
+    check("doc_type 缺席 = 老回执 = 默认档 note ⇒ 进", "noteId=19" in o, o)
+    o = _doc_anchors(MSGS, exec_rows=[_row(tool="rag_search")])
+    check("别的工具 ⇒ 不进锚点", "noteId=19" not in o, o)
+    print("③ 老行（payload = null）不进锚点——主人拍板的取舍")
+    o = _doc_anchors(MSGS, exec_rows=[{"at": "09-21 10:00", "n": 1, "payload": None}])
+    check("payload=null ⇒ 没有 id（拿不到结构就如实少一行）", "noteId" not in o, o)
+    o = _doc_anchors(MSGS, exec_rows=[{"at": "09-21 10:00", "n": 1}])
+    check("payload 键缺席 ⇒ 同上", "noteId" not in o, o)
+    print("④ 反控：只有那串渲染文本、没有结构 ⇒ noteId 不会出现（正则已整族删除）")
+    o = _doc_anchors([SystemMessage(content="· 已执行（系统验收过）: 09-21 10:00 "
                                         "读取文章 19《Saudade Blog AI Agent 架构文档》")])
-check("渲染行里的 19 不再变成锚点 id", "noteId=19" not in o, o)
-o = _doc_anchors([SystemMessage(content="· 已执行（系统验收过）: 09-21 10:00 "
+    check("渲染行里的 19 不再变成锚点 id", "noteId=19" not in o, o)
+    o = _doc_anchors([SystemMessage(content="· 已执行（系统验收过）: 09-21 10:00 "
                                         "检索文章「Rust async」")])
-check("「检索文章」措辞也不会被误当成文章读取", "noteId" not in o, o)
+    check("「检索文章」措辞也不会被误当成文章读取", "noteId" not in o, o)
+    print("⑤ 同篇合并（结构行在消息循环之后处理＝优先级最低）")
+    o = _doc_anchors([SystemMessage(content="《架构文档》"), HumanMessage(content="那篇呢")],
+                     exec_rows=[_row()])
+    check("同一篇只出一行且带 id", o.count("架构文档") == 1 and "noteId=19" in o, o)
+    print("⑥ 跨语言锁（父仓不在场时由 `_parent_repo` 按它自己的三分支处理）")
+    _src = _read_parent("src/routes/chat.rs", "agent 的 execution_rows 是 Rust 拼的")
+    if _src is not None:
+        check("Rust 侧下发字段名是 execution_rows",
+              '"execution_rows": execution_rows' in _src)
+        check("Rust 侧预算常量与 agent 的 EXEC_ROWS_MAX_CHARS 同值",
+              f"const EXEC_ROWS_MAX_CHARS: usize = {EXEC_ROWS_MAX_CHARS};" in _src)
+    print()
+    if FAILS:
+        print(f"失败 {len(FAILS)} 项 ❌: {FAILS}")
+        sys.exit(1)
+    print("全部通过 ✅")
 
-# ── ⑤ 同篇合并 + 位次：正文与结构各提一次 ⇒ 一行 ───────────────────────────
-print("⑤ 同篇合并（结构行在消息循环之后处理＝优先级最低）")
-o = _doc_anchors([SystemMessage(content="《架构文档》"), HumanMessage(content="那篇呢")],
-                 exec_rows=[_row()])
-check("同一篇只出一行且带 id", o.count("架构文档") == 1 and "noteId=19" in o, o)
+    assert not FAILS, (
+        f"{len(FAILS)} 条未通过：" + "；".join(FAILS))
 
-# ── ⑥ 跨语言：字段名与预算常量两侧同值 ─────────────────────────────────────
-print("⑥ 跨语言锁（父仓不在场时由 `_parent_repo` 按它自己的三分支处理）")
-_src = _read_parent("src/routes/chat.rs", "agent 的 execution_rows 是 Rust 拼的")
-if _src is not None:
-    check("Rust 侧下发字段名是 execution_rows",
-          '"execution_rows": execution_rows' in _src)
-    check("Rust 侧预算常量与 agent 的 EXEC_ROWS_MAX_CHARS 同值",
-          f"const EXEC_ROWS_MAX_CHARS: usize = {EXEC_ROWS_MAX_CHARS};" in _src)
 
-print()
-if FAILS:
-    print(f"失败 {len(FAILS)} 项 ❌: {FAILS}")
-    sys.exit(1)
-print("全部通过 ✅")
+if __name__ == "__main__":
+    test_exec_rows_anchors()

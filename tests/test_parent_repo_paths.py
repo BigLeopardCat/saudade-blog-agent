@@ -1,5 +1,3 @@
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
 """注释里指向**父仓**的路径，必须当场说明它不在本仓（20261018，批 1 自净）。
 
 **要回答的问题**：本仓是父仓 `Saudade-Blog` 里的一个子目录（同时是一个**独立公开仓库**），
@@ -31,6 +29,7 @@
 退出码：0 全部带限定 / 1 有裸路径。
 """
 
+
 from __future__ import annotations
 
 import pathlib
@@ -39,18 +38,20 @@ import sys
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 
-# 同名或形近、且本仓**可能**有目录的那三个前缀。理由见模块头注。
+
 PARENT_PREFIXES = ("scripts/", "deploy/", "frontend/")
-# 同一行出现任一个，就算说清了"这是谁的"。
+
+
 _MARKERS = ("父仓", "不在本仓")
+
 
 _PATH_RE = re.compile(r"`((?:" + "|".join(re.escape(p) for p in PARENT_PREFIXES)
                       + r")[A-Za-z0-9_./\-]+)`")
 
+
 _SKIP_DIRS = {".venv", "node_modules", ".git", "__pycache__", ".mypy_cache"}
 
-# 本仓确实存在的、同前缀的一个文件——用来证明"本仓有 ⇒ 不判"这一半不是空过。
-# `_self_check` 会先断言它还在，改名了就当场喊，而不是让那一条静默变绿。
+
 _LOCAL_SAMPLE = "scripts/nightly_regression.sh"
 
 
@@ -121,5 +122,18 @@ def main() -> int:
     return 1
 
 
+def test_parent_repo_paths():
+
+
+    _argv = sys.argv
+    if "pytest" in sys.modules:      # 只在 pytest 轨收窄（直跑轨的 CLI 照旧可用）
+        sys.argv = _argv[:1]
+    try:
+        _rc = main()
+    finally:
+        sys.argv = _argv
+    assert _rc == 0, "main() 非零：上面那些 ❌ 就是原因"
+
+
 if __name__ == "__main__":
-    sys.exit(main())
+    test_parent_repo_paths()

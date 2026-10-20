@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """planner 接口层的**接线**单测：离线、秒级、零网络零 LLM。
 
 **为什么单独一套**：`agent/planner_llm.py` 的纯函数测试（`tests/test_planner_llm.py`）
@@ -33,12 +32,17 @@ tool calls 一条路，没有第二档可比。
 会零 LLM 直接出计划，用例句子一旦命中快道，下面所有断言都会"绿得毫无意义"。每个用例
 因此都断言了"假 LLM 确实被调用过"。
 """
+
+
 import sys
 import tempfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent  # 仓根（测试统一在 tests/）
+
+
 sys.path.insert(0, str(ROOT))
+
 
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage  # noqa: E402
 
@@ -51,13 +55,6 @@ from agent.workflow_defs import visible_workflows  # noqa: E402
 from config import settings  # noqa: E402
 from utils import trace as trace_mod  # noqa: E402
 
-# ── 密钥桩（20261019）──
-# 写通道的用例会走到 `_principal_get` ⇒ `_sign_local_jwt`；CI 没有 `.env`，
-# `settings.jwt_secret` 默认空串，而 20261019 起**空密钥不许签**（SAU-012）。
-# 桩值不取环境值：判据的前提自己摆，不继承运维取值（同 test_confirm 的成例）。
-_SAVED_SECRET = settings.jwt_secret
-settings.jwt_secret = "test-secret-for-planner-wiring"
-
 FAILS: list[str] = []
 
 
@@ -67,12 +64,12 @@ def check(desc: str, cond: bool, detail: str = "") -> None:
         FAILS.append(desc)
 
 
-# 这句**不命中任何快道**（导航/文章/特效切换/屏幕显示都要更具体的形态），
-# 保证每一轮都真的走到 LLM 决策——见文件头注的"绿得毫无意义"那条。
 _MSG = "帮我把樱花打开"
-# 零调用反锁那一节要一句**不含任何动作意图**的话：有帧 + 零工具 + 清单里还剩没做过的
-# 动作 ⇒ 会触发另一条纠偏（"收尾丢意图"），把这一段要测的东西盖掉。
+
+
 _MSG_NO_INTENT = "谢谢你呀"
+
+
 _CFG = {"configurable": {"principal": Principal(uid=7, role="admin"),
                          "user_id": 7, "conversation_id": 42, "stop_event": None}}
 
@@ -158,8 +155,7 @@ def _expected_schema_names(role: str) -> set[str]:
     return names
 
 
-# ── ① 单通道接线：schema / 预算 / 提示词 / 计划来源 ─────────────────────────
-def test_binds_schema_and_takes_the_tool_call_as_the_plan():
+def _test_binds_schema_and_takes_the_tool_call_as_the_plan():
     print("\n[接线] 预算取 native 那一组、schema 与 visible_workflows 同源、计划来自工具调用")
     out, rec, llm = _run([_call()])
     check("确实走到了 LLM 决策轮（没被快道截走）", len(llm.prompts) == 1)
@@ -194,7 +190,7 @@ def test_binds_schema_and_takes_the_tool_call_as_the_plan():
           not _events(rec, "no_call_nudge") and not _events(rec, "no_call_accepted"))
 
 
-def test_multi_call_takes_first_and_accounts():
+def _test_multi_call_takes_first_and_accounts():
     print("\n[接线] 多调用：只取第一条 + 记账进 decision 事件")
     two = AIMessage(content="", tool_calls=[
         {"name": "effect", "args": {"effect": "sakura", "action": "on"},
@@ -211,8 +207,7 @@ def test_multi_call_takes_first_and_accounts():
           str(dec[0].get("native_note")))
 
 
-# ── ② 零调用纠偏：本批的靶子 ───────────────────────────────────────────────
-def test_zero_call_is_nudged_once_then_accepted_as_chat():
+def _test_zero_call_is_nudged_once_then_accepted_as_chat():
     print("\n[零调用] 第一次纠偏、第二次认成 chat（`no_call_accepted` 恰一条）")
     out, rec, llm = _run([_zero_call(), _zero_call()])
     check("LLM 被问了两次（一版响应 + 一次纠偏）", len(llm.prompts) == 2, str(len(llm.prompts)))
@@ -233,7 +228,7 @@ def test_zero_call_is_nudged_once_then_accepted_as_chat():
           _plan_obj(out)["tools"] == [], str(_plan_obj(out)["tools"]))
 
 
-def test_zero_call_then_a_real_tool_call_lands_on_the_workflow():
+def _test_zero_call_then_a_real_tool_call_lands_on_the_workflow():
     print("\n[零调用] 纠偏真的把工具调用找回来了（第二次点了函数）")
     out, rec, llm = _run([_zero_call(), _call()])
     check("LLM 被问了两次", len(llm.prompts) == 2, str(len(llm.prompts)))
@@ -245,7 +240,7 @@ def test_zero_call_then_a_real_tool_call_lands_on_the_workflow():
           len(_events(rec, "no_call_nudge")) == 1)
 
 
-def test_zero_call_with_frames_is_not_nudged():
+def _test_zero_call_with_frames_is_not_nudged():
     print("\n[零调用·反锁] 已有工具帧之后的零调用 = 合法收尾轮，不打扰")
     frames = [HumanMessage(content=_MSG_NO_INTENT),
               ToolMessage(content="特效 樱花(sakura) 已打开", tool_call_id="c1")]
@@ -257,17 +252,10 @@ def test_zero_call_with_frames_is_not_nudged():
     check("计划仍是 chat", "WORKFLOW=chat" in out["plan"], out["plan"].splitlines()[0])
 
 
-# ── ②″ 零调用 + **写形态**的请求：话术用写形态那一份（20261008）─────────────
-# 这一格（零调用 + 正文非空）此前一律用通用话术 `_NO_CALL_NUDGE`，而
-# `_name_write_nudge` 的零工具形态本来就是为它写的——调用点在循环末尾，够不到。
-# 现场（golden `capability_absent_after_card_in_history`，**同一句话**）：
-# `20261007_074615` 走到写形态话术 ⇒ 第二轮排出写规格并弹卡；`20261008_010948`
-# 走通用话术 ⇒ 第二轮仍零调用、认成 chat ⇒ 判据红。本用例钉住的就是"哪一份话术"。
-# 负控（**同批**）：上一节那句「你好呀～」（无写域动作词）必须仍走通用话术。
 _MSG_WRITE_SHAPE = "给他发个通知，让他以后老实一点，不然就永久冻结"
 
 
-def test_zero_call_on_a_write_request_uses_the_write_shaped_nudge():
+def _test_zero_call_on_a_write_request_uses_the_write_shaped_nudge():
     print("\n[零调用·写形态] 话术是写形态那一份，且它真的把写规格找回来了")
     st = {"messages": [HumanMessage(content=_MSG_WRITE_SHAPE)]}
     out, rec, llm = _run([_zero_call(),
@@ -288,24 +276,18 @@ def test_zero_call_on_a_write_request_uses_the_write_shaped_nudge():
           not _events(rec, "no_call_accepted"))
 
 
-# ── ②‴ 菜单摘项之后「当场放弃」：把那一支收口（20261008）────────────────────
-# 现场（golden `account_unmute_popup`）：round0 planner 点 `account_roster`（读）→
-# `list_accounts` 回"账号列表不可用" → checker 判 BLOCK（`unavailable` = 改参数重试无效
-# 那一族）⇒ 该技能这一轮**从菜单里摘掉**。round1 的两种落法：4/6 跑改选 `unmute_account`
-# （弹卡 ✅）、2/6 跑**点 `chat`、零工具收尾** ⇒ narrator 手里只有一条失败帧，只能如实说
-# "办不了"（判据红）。这一格此前没有任何纠偏够得到：`_name_write_nudge` 的零工具形态只认
-# 首轮、且它的动作词表**刻意不含**禁言/解禁。本用例钉的就是新加的那条通道。
-#
-# 用的正是那一族的动作词形态（引号点名 + 族别动作词）——判定条件是**各自独立**的三道：
-# 有摘项（`blocked`）/ 原话里点了名 / 非提问；下面两条负控分别掐掉其中一道。
 _MSG_DENY_WRITE = "账号「probe_target_1」解禁吧"
+
+
 _BLOCKED_ROSTER = [{"workflow": "account_roster", "reason": "unavailable"}]
+
+
 _FRAMES_AFTER_BLOCK = [HumanMessage(content=_MSG_DENY_WRITE),
                        ToolMessage(content="服务不可用：账号列表这一轮读不到",
                                    tool_call_id="c1")]
 
 
-def test_giveup_after_a_menu_denied_prerequisite_is_nudged_once():
+def _test_giveup_after_a_menu_denied_prerequisite_is_nudged_once():
     print("\n[菜单摘项·放弃] 被摘之后零工具收尾 → 纠偏一次，且它真的改选了写技能")
     out, rec, llm = _run([_chat(), _call("unmute_account", {"name": "probe_target_1"})],
                          state_over={"messages": _FRAMES_AFTER_BLOCK,
@@ -326,7 +308,7 @@ def test_giveup_after_a_menu_denied_prerequisite_is_nudged_once():
           len(_events(rec, "menu_denied")) == 1)
 
 
-def test_giveup_nudge_needs_a_deny():
+def _test_giveup_nudge_needs_a_deny():
     print("\n[菜单摘项·反锁] 本轮没有摘项 ⇒ 同样的零工具收尾一次都不打扰")
     out, rec, llm = _run([_chat()],
                          state_over={"messages": _FRAMES_AFTER_BLOCK,
@@ -336,7 +318,7 @@ def test_giveup_nudge_needs_a_deny():
     check("计划仍是 chat", "WORKFLOW=chat" in out["plan"], out["plan"].splitlines()[0])
 
 
-def test_giveup_nudge_needs_a_named_target():
+def _test_giveup_nudge_needs_a_named_target():
     print("\n[菜单摘项·反锁] 原话里没点名的写请求 ⇒ 不纠（「把那个账号冻结掉」是如实拒绝）")
     frames = [HumanMessage(content="把那个账号冻结掉"),
               ToolMessage(content="服务不可用：账号列表这一轮读不到", tool_call_id="c1")]
@@ -349,25 +331,15 @@ def test_giveup_nudge_needs_a_named_target():
     check("计划仍是 chat", "WORKFLOW=chat" in out["plan"], out["plan"].splitlines()[0])
 
 
-# ── ②⁗ 写命令在**已有帧之后**零工具收尾：uid 哨兵那族的 fail-open（20261009）──────
-# 现场（golden `own_favorite_add_vocative_not_logged_in`，trace `20261009_194123`）：
-# round0 被文章快道吃掉（`kind=article_read`，零 LLM）⇒ 模型第一次决策时 `rounds` 已经
-# 是 1。那条消息剥壳后是一条**写命令**（`authz.is_own_write_command` 命中 `add_favorite`
-# 族），模型却点 `chat`、零工具，收尾包装把它落成 `status='wrapped'` + 正文一句
-# 「马上帮你把这篇收进你的收藏夹里！🐾」——`add_favorite` 一次都没排出来。
-#
-# 三格既有纠偏**结构上都够不到**这一格（＝下面那条红基线要钉的东西）：
-#   · 6377 那一族「零工具决策不是决策」要求 `not has_frames`（收尾轮被刻意放过）；
-#   · `_name_write_nudge` 的零工具形态要求 `rounds == 0`，且它的动作词表是**改名通道**
-#     的表，刻意不含「收藏」（收藏按 id 走，不按名字）；
-#   · `_deny_giveup_nudge` 要求本轮有**摘项**（`deny` 非空），这一格压根没有摘项。
 _MSG_OWN_WRITE = "小猫咪把我当前在读的文章收藏了"
+
+
 _FRAMES_AFTER_READ = [HumanMessage(content=_MSG_OWN_WRITE),
                       ToolMessage(content="文章 12《ESP32-S3 OTA 问题与解决记录》",
                                   tool_call_id="c1")]
 
 
-def test_write_command_zero_call_after_frames_is_nudged_once():
+def _test_write_command_zero_call_after_frames_is_nudged_once():
     print("\n[写命令·有帧] 零工具收尾 → 纠偏一次，且它真的把写规格排出来了")
     out, rec, llm = _run([_chat(), _call("favorite_add", {"article_id": 12})],
                          state_over={"messages": _FRAMES_AFTER_READ, "plan_rounds": 1})
@@ -386,14 +358,14 @@ def test_write_command_zero_call_after_frames_is_nudged_once():
           out["plan"].splitlines()[:2])
 
 
-def test_write_command_nudge_needs_frames():
+def _test_write_command_nudge_needs_frames():
     print("\n[写命令·反锁 ①] 零帧轮不归它管（那一格是「零工具决策不是决策」那一族的事）")
     _out, rec, _llm = _run([_chat()], state_over={
         "messages": [HumanMessage(content=_MSG_OWN_WRITE)]})
     check("★ `write_command_correct` 缺席", not _events(rec, "write_command_correct"))
 
 
-def test_write_command_nudge_needs_a_write_command():
+def _test_write_command_nudge_needs_a_write_command():
     print("\n[写命令·反锁 ②] 同样零工具收尾、但原话不是写命令 ⇒ 一次都不打扰")
     frames = [HumanMessage(content=_MSG_NO_INTENT),
               ToolMessage(content="特效 樱花(sakura) 已打开", tool_call_id="c1")]
@@ -403,7 +375,7 @@ def test_write_command_nudge_needs_a_write_command():
           not _events(rec, "write_command_correct"))
 
 
-def test_write_command_nudge_needs_no_write_yet():
+def _test_write_command_nudge_needs_no_write_yet():
     print("\n[写命令·反锁 ③] 本轮已经办成过这件写 ⇒ 不纠（再说一次就是重复执行）")
     _out, rec, llm = _run([_chat()], state_over={
         "messages": _FRAMES_AFTER_READ, "plan_rounds": 1,
@@ -414,7 +386,7 @@ def test_write_command_nudge_needs_no_write_yet():
           not _events(rec, "write_command_correct"))
 
 
-def test_write_command_nudge_yields_when_the_write_itself_was_blocked():
+def _test_write_command_nudge_yields_when_the_write_itself_was_blocked():
     """**守卫**：本轮**排过**写、被系统挡下 ⇒ 这一格闭嘴（那句是假话，且推着模型换动作）。
 
     账甲那三列只记"成了的"，于是「写被 BLOCK」与「压根没排过写」在
@@ -441,7 +413,7 @@ def test_write_command_nudge_yields_when_the_write_itself_was_blocked():
                             "reason": "unavailable", "result": "服务不可用"}]}) is not None)
 
 
-def test_write_command_nudge_yields_to_tools_off():
+def _test_write_command_nudge_yields_to_tools_off():
     print("\n[写命令·反锁 ④] 主人原话里明说不要工具 ⇒ 不纠（那一支本来就不该有工具）")
     msg = "把通知都标记成已读，别调用工具"
     frames = [HumanMessage(content=msg),
@@ -454,7 +426,7 @@ def test_write_command_nudge_yields_to_tools_off():
           not _events(rec, "write_command_correct"))
 
 
-def test_write_command_nudge_is_the_only_channel_that_catches_it():
+def _test_write_command_nudge_is_the_only_channel_that_catches_it():
     """**红基线**：这格在既有三格**结构上都够不到**（新通道不是"多此一举"）。
 
     断言逐格证伪——`_name_write_nudge` 的零工具形态、它的名字通道、`_deny_giveup_nudge`
@@ -476,12 +448,9 @@ def test_write_command_nudge_is_the_only_channel_that_catches_it():
           G._write_command_nudge(plan_obj, _MSG_OWN_WRITE, True, {}) is not None)
 
 
-# ── ②′ 该取数却点 `chat`：判据前移到决策层（20261004 第二批）────────────────
-# 这句命中 `authz.is_own_read_question`（"我都有哪些收藏" = 自己账号里的私有数据），
-# 且**不命中任何快道**。带上 `state_over` 换掉默认消息即可（`_run` 先铺默认再 update）。
 _MSG_OWN_DATA = "小猫咪我都有哪些收藏"
-# 语义上正确的落点：`content_query` 点名无参只读工具 `list_my_favorites`（见 workflow_tools.py
-# 的 `_EXPLICIT_TOOLS_ORDER`——"我收藏了哪些文章"正是那一族被加进菜单的理由）。
+
+
 _READ_ARGS = {"tools": ["list_my_favorites"]}
 
 
@@ -497,7 +466,7 @@ def _chat() -> AIMessage:
         {"name": "chat", "args": {}, "id": "c0", "type": "tool_call"}])
 
 
-def test_chat_on_a_data_question_is_nudged_once_then_lands_on_a_tool():
+def _test_chat_on_a_data_question_is_nudged_once_then_lands_on_a_tool():
     print("\n[该取数却点 chat] 纠偏一次、第二次落到真工具（`data_question_no_tool` 恰一条）")
     out, rec, llm = _run([_chat(), _call("content_query", _READ_ARGS)],
                          state_over={"messages": [HumanMessage(content=_MSG_OWN_DATA)]})
@@ -516,7 +485,7 @@ def test_chat_on_a_data_question_is_nudged_once_then_lands_on_a_tool():
           not _events(rec, "data_question_still_no_tool"))
 
 
-def test_chat_still_on_a_data_question_is_released_not_nudged_twice():
+def _test_chat_still_on_a_data_question_is_released_not_nudged_twice():
     print("\n[该取数却点 chat·第二次] 不救第二遍：记账放行，闸门仍是兜底")
     out, rec, llm = _run([_chat()],
                          state_over={"messages": [HumanMessage(content=_MSG_OWN_DATA)]})
@@ -530,7 +499,7 @@ def test_chat_still_on_a_data_question_is_released_not_nudged_twice():
           str(_plan_obj(out).get("status")))
 
 
-def test_chat_without_a_data_question_is_not_nudged():
+def _test_chat_without_a_data_question_is_not_nudged():
     print("\n[该取数却点 chat·反锁 ①] 闲聊句点 chat 是**对的**，不许打扰")
     out, rec, llm = _run([_chat()],
                          state_over={"messages": [HumanMessage(content=_MSG_NO_INTENT)]})
@@ -542,7 +511,7 @@ def test_chat_without_a_data_question_is_not_nudged():
           str(_plan_obj(out).get("status")))
 
 
-def test_chat_on_a_data_question_with_frames_is_not_nudged():
+def _test_chat_on_a_data_question_with_frames_is_not_nudged():
     print("\n[该取数却点 chat·反锁 ②] 已有工具帧之后 = 合法收尾轮，不打扰")
     frames = [HumanMessage(content=_MSG_OWN_DATA),
               ToolMessage(content="收藏夹里共有 3 篇", tool_call_id="c1")]
@@ -555,7 +524,7 @@ def test_chat_on_a_data_question_with_frames_is_not_nudged():
     check("计划仍是 chat", "WORKFLOW=chat" in out["plan"], out["plan"].splitlines()[0])
 
 
-def test_chat_on_a_data_question_without_a_uid_is_not_nudged():
+def _test_chat_on_a_data_question_without_a_uid_is_not_nudged():
     print("\n[该取数却点 chat·反锁 ③] uid<=0（零工具身份）不催它取数")
     cfg = {"configurable": {"principal": Principal(uid=0, role="visitor"),
                             "user_id": 0, "conversation_id": 42, "stop_event": None}}
@@ -565,8 +534,7 @@ def test_chat_on_a_data_question_without_a_uid_is_not_nudged():
           not _events(rec, "data_question_no_tool"), str(len(llm.prompts)))
 
 
-# ── ③ 截断轨：`finish=length` 不是闲聊 ─────────────────────────────────────
-def test_truncated_output_goes_to_the_truncation_track():
+def _test_truncated_output_goes_to_the_truncation_track():
     print("\n[截断] finish=length → 确定性收尾，且**不**发零调用纠偏（两种病不混）")
     out, rec, llm = _run([_zero_call("半截的正文……", finish="length")])
     check("只问了 LLM 一次（截断是预算失败，同一条消息再问多半截在同一处）",
@@ -584,7 +552,7 @@ def test_truncated_output_goes_to_the_truncation_track():
           _plan_obj(out).get("status") == "wrapped", str(_plan_obj(out).get("status")))
 
 
-def test_unparseable_output_is_nudged_once_then_wrapped():
+def _test_unparseable_output_is_nudged_once_then_wrapped():
     print("\n[不可解析] 形态坏 → 纠偏一次；两次都坏 → 确定性收尾")
     broken = AIMessage(content="", invalid_tool_calls=[
         {"name": "effect", "args": '{"effect": "sak', "id": "c", "error": "parse"}])
@@ -600,8 +568,7 @@ def test_unparseable_output_is_nudged_once_then_wrapped():
           str(_plan_obj(out).get("status")))
 
 
-# ── ④ 契约源码锁 ───────────────────────────────────────────────────────────
-def test_contract_no_longer_licenses_an_empty_decision():
+def _test_contract_no_longer_licenses_an_empty_decision():
     print("\n[契约] 规则 7 不再许可「什么都不点」，且把 chat 说成显式动作")
     n = G._PLANNER_OUTPUT_CONTRACT_NATIVE
     check("★ 没有「可以不调用任何函数」这类许可句（那就是本批要消灭的那条合法退路）",
@@ -616,13 +583,7 @@ def test_contract_no_longer_licenses_an_empty_decision():
     check("仍是规则 7（改契约不该改规则编号）", n.startswith("7. "))
 
 
-# ── ⑬ 路由确定性：规划温度必须**从 settings 读**，不许再有写死的字面量 ───────
-# 为什么值得单独钉一条：planner 的 `temperature` 曾经是**写死的 0.2**，而它同时
-# 是"路由确定性"这枚旋钮和调优实验的因子——一旦有人把 `settings.planner_temperature`
-# 换回字面量，改设置**静默无效**（本仓吃过这个亏：`from __future__ import annotations`
-# 让 config 注入静默失效那一类洞）。所以这里钉的不是"0.0 这个值"（调优实验结论若指向
-# 别的值就该改默认，那条不该被测试挡住），而是**"planner 读的是设置"这条接线**。
-def test_planner_temperature_comes_from_settings():
+def _test_planner_temperature_comes_from_settings():
     print("\n[接线] 规划温度取 settings.planner_temperature（不是写死的字面量）")
     old = settings.planner_temperature
     settings.planner_temperature = 0.37      # 一个绝不会与字面量撞车的哨兵值
@@ -636,10 +597,7 @@ def test_planner_temperature_comes_from_settings():
           old == 0.0, str(old))
 
 
-# ── ⑭ 臂的身份证：trace 里必须能读出这次是哪组旋钮跑的 ───────────────────
-# 为什么值得钉：调参实验的全部意义是"逐臂比较"，而在此之前 planner 的温度/种子/
-# 模型在 trace 里**一个字都没有**——一堆报告跑完，谁也说不清哪份对应哪臂。
-def test_decision_event_carries_the_arm_identity():
+def _test_decision_event_carries_the_arm_identity():
     print("\n[接线] native_decision 带臂的身份证（provider/model/temp/seed/thinking）")
     _out, rec, _llm = _run([_call()])
     nd = _events(rec, "native_decision")
@@ -657,33 +615,41 @@ def test_decision_event_carries_the_arm_identity():
           e.get("thinking") == settings.planner_native_thinking, str(e.get("thinking")))
 
 
-if __name__ == "__main__":
-    for fn in (test_binds_schema_and_takes_the_tool_call_as_the_plan,
-               test_multi_call_takes_first_and_accounts,
-               test_zero_call_is_nudged_once_then_accepted_as_chat,
-               test_zero_call_then_a_real_tool_call_lands_on_the_workflow,
-               test_zero_call_with_frames_is_not_nudged,
-               test_zero_call_on_a_write_request_uses_the_write_shaped_nudge,
-               test_giveup_after_a_menu_denied_prerequisite_is_nudged_once,
-               test_giveup_nudge_needs_a_deny,
-               test_giveup_nudge_needs_a_named_target,
-               test_write_command_zero_call_after_frames_is_nudged_once,
-               test_write_command_nudge_needs_frames,
-               test_write_command_nudge_needs_a_write_command,
-               test_write_command_nudge_needs_no_write_yet,
-               test_write_command_nudge_yields_when_the_write_itself_was_blocked,
-               test_write_command_nudge_yields_to_tools_off,
-               test_write_command_nudge_is_the_only_channel_that_catches_it,
-               test_chat_on_a_data_question_is_nudged_once_then_lands_on_a_tool,
-               test_chat_still_on_a_data_question_is_released_not_nudged_twice,
-               test_chat_without_a_data_question_is_not_nudged,
-               test_chat_on_a_data_question_with_frames_is_not_nudged,
-               test_chat_on_a_data_question_without_a_uid_is_not_nudged,
-               test_truncated_output_goes_to_the_truncation_track,
-               test_unparseable_output_is_nudged_once_then_wrapped,
-               test_contract_no_longer_licenses_an_empty_decision,
-               test_planner_temperature_comes_from_settings,
-               test_decision_event_carries_the_arm_identity):
+def test_planner_wiring():
+    _SAVED_SECRET = settings.jwt_secret
+    settings.jwt_secret = "test-secret-for-planner-wiring"
+    for fn in (_test_binds_schema_and_takes_the_tool_call_as_the_plan,
+               _test_multi_call_takes_first_and_accounts,
+               _test_zero_call_is_nudged_once_then_accepted_as_chat,
+               _test_zero_call_then_a_real_tool_call_lands_on_the_workflow,
+               _test_zero_call_with_frames_is_not_nudged,
+               _test_zero_call_on_a_write_request_uses_the_write_shaped_nudge,
+               _test_giveup_after_a_menu_denied_prerequisite_is_nudged_once,
+               _test_giveup_nudge_needs_a_deny,
+               _test_giveup_nudge_needs_a_named_target,
+               _test_write_command_zero_call_after_frames_is_nudged_once,
+               _test_write_command_nudge_needs_frames,
+               _test_write_command_nudge_needs_a_write_command,
+               _test_write_command_nudge_needs_no_write_yet,
+               _test_write_command_nudge_yields_when_the_write_itself_was_blocked,
+               _test_write_command_nudge_yields_to_tools_off,
+               _test_write_command_nudge_is_the_only_channel_that_catches_it,
+               _test_chat_on_a_data_question_is_nudged_once_then_lands_on_a_tool,
+               _test_chat_still_on_a_data_question_is_released_not_nudged_twice,
+               _test_chat_without_a_data_question_is_not_nudged,
+               _test_chat_on_a_data_question_with_frames_is_not_nudged,
+               _test_chat_on_a_data_question_without_a_uid_is_not_nudged,
+               _test_truncated_output_goes_to_the_truncation_track,
+               _test_unparseable_output_is_nudged_once_then_wrapped,
+               _test_contract_no_longer_licenses_an_empty_decision,
+               _test_planner_temperature_comes_from_settings,
+               _test_decision_event_carries_the_arm_identity):
         fn()
     print("\n" + ("全部通过 ✅" if not FAILS else f"失败 {len(FAILS)} 项 ❌: {FAILS}"))
-    sys.exit(1 if FAILS else 0)
+
+    assert not FAILS, (
+        f"{len(FAILS)} 条未通过：" + "；".join(FAILS))
+
+
+if __name__ == "__main__":
+    test_planner_wiring()

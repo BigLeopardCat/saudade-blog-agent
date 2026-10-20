@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """`tests/` 这个目录的**形状**：入口按磁盘枚举它，"盘上有什么"就得有判据管着。
 
 **为什么单起一套**（20261019）：`run_all.py` 的枚举规则是 `sorted(TESTS.glob("*.py"))`
@@ -24,6 +23,7 @@
 用法：.venv/bin/python tests/test_tests_dir_shape.py
 """
 
+
 from __future__ import annotations
 
 import ast
@@ -31,12 +31,16 @@ import pathlib
 import sys
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
+
+
 sys.path.insert(0, str(ROOT / "tests"))
+
 
 import run_all  # noqa: E402  （判 ③ 要问它"你到底会收走哪些"，不跑它）
 
-TESTS = ROOT / "tests"
 ENTRY = pathlib.Path(run_all.__file__).name
+
+
 FAILED: list[str] = []
 
 
@@ -44,13 +48,6 @@ def check(name: str, ok: bool, extra: str = "") -> None:
     print(f"  {'✅' if ok else '❌'} {name}" + (f"  [{extra}]" if extra else ""))
     if not ok:
         FAILED.append(name)
-
-
-# ——— 五个纯函数：输入是"一个 listing"——`tests/` 下的相对路径（posix 风格），
-#     **目录带尾斜杠**（`sub/` 是目录，`sub/x.py` 是它里面的文件）。带这一格是因为
-#     只给裸路径时"空目录"与"文件"长得一样，判据会把一个子目录报成"非 .py 的一级文件"
-#     ——话说不准，读的人就得去猜。这样反控可以喂合成数据，不必去动真盘
-#     （动真盘的反控没法在同一进程里收回来）。
 
 
 def subdirs(entries: list[str]) -> list[str]:
@@ -152,88 +149,85 @@ def ghost_helpers(entries: list[str], imports: dict[str, set[str]]) -> list[str]
     return sorted(seen - have)
 
 
-# ——— 真盘
-
-
-_ENTRIES = sorted(p.relative_to(TESTS).as_posix() + ("/" if p.is_dir() else "")
-                  for p in TESTS.rglob("*"))
-_SOURCES = {e: (TESTS / e).read_text(encoding="utf-8")
-            for e in _ENTRIES if e.endswith(".py")}
-
-print("① `tests/` 下没有子目录（glob 不递归 ⇒ 藏进去的套件一个都不跑，且没有任何东西会报）")
-_SUB = subdirs(_ENTRIES)
-check("一级子目录只有 `__pycache__`（已被排除）", not _SUB,
-      "、".join(_SUB) or "无")
-_STRAY = stray_files(_ENTRIES)
-check("没有非 `.py` 的一级文件（数据夹具请套件自己开 tempfile）", not _STRAY,
-      "、".join(_STRAY) or "无")
-# 正控 / 反控：判据本身得能红，也得不能滥红（本仓纪律：正控不红不算数）。
-check("反控：`tests/sub/test_x.py` ⇒ 报出子目录 `sub`",
-      subdirs(["test_a.py", "sub/test_x.py"]) == ["sub"])
-check("反控：**空**子目录（只有 `sub/` 那一行）⇒ 同样报出来",
-      subdirs(["test_a.py", "sub/"]) == ["sub"])
-check("正控：`__pycache__/x.pyc` ⇒ 不算子目录（解释器自己拉的，不进 git）",
-      subdirs(["test_a.py", "__pycache__/x.pyc"]) == [])
-check("反控：一级多一个 `data.json` ⇒ 报出来",
-      stray_files(["test_a.py", "data.json"]) == ["data.json"])
-check("正控：子目录**不**被重复报成「非 `.py` 的一级文件」（同一条毛病别说成两句）",
-      stray_files(["test_a.py", "sub/", "sub/test_x.py"]) == [])
-
-print("\n② 每个 `_*.py` 助手都有人在用（没人 import ⇒ 死代码，或改名改了一半）")
-check("扫描覆盖了盘上每一个文件（漏谁，谁就成了隐形引用者 ⇒ 孤儿判成假绿）",
-      set(_SOURCES) == {e for e in _ENTRIES if e.endswith(".py")},
-      f"{len(_SOURCES)} 份源码 / {len(_ENTRIES)} 个条目")
-check("解析器不是空转（真扫到了助手，否则下面那条是恒真的空过）",
-      len(helpers(_ENTRIES)) >= 3, f"{len(helpers(_ENTRIES))} 个助手")
-_IMPORTS = parse_all(_SOURCES)
-_ORPH = orphan_helpers(_ENTRIES, _IMPORTS)
-check("没有孤儿助手", not _ORPH, "、".join(_ORPH) or "无")
-_GHOST = ghost_helpers(_ENTRIES, _IMPORTS)
-check("没有被 import 却盘上不存在的 `_*` 名字（改名残留）", not _GHOST,
-      "、".join(_GHOST) or "无")
-# 三种导入写法各来一发正控：少认一种，用着它的助手就全被判成孤儿。
-for _desc, _src in (("`import _x`", "import _x\n"),
-                    ("`from _x import f`", "from _x import f\n"),
-                    ("`from tests import _x`", "from tests import _x\n")):
-    check(f"正控：{_desc} ⇒ 认得出这是在用 `_x`",
-          orphan_helpers(["_x.py", "test_a.py"],
-                         parse_all({"_x.py": "", "test_a.py": _src})) == [])
-check("反控：加一个没人 import 的 `_dead.py` ⇒ 必须报出来",
-      orphan_helpers(["_used.py", "_dead.py", "test_a.py"],
-                     parse_all({"_used.py": "", "_dead.py": "",
-                                "test_a.py": "import _used\n"})) == ["_dead.py"])
-check("反控：只被**自己** import ⇒ 仍是孤儿（自己不算引用者）",
-      orphan_helpers(["_selfish.py"],
-                     parse_all({"_selfish.py": "import _selfish\n"})) == ["_selfish.py"])
-check("反控：`from tests import _已改名` 而盘上没有 ⇒ 报出幽灵名",
-      ghost_helpers(["test_a.py"],
-                    parse_all({"test_a.py": "from tests import _已改名\n"})) == ["_已改名"])
-check("正控：`from __future__ import annotations` ⇒ 不算幽灵（双下划线开头）",
-      ghost_helpers(["test_a.py"], parse_all(
-          {"test_a.py": "from __future__ import annotations\n"})) == [])
-
-print("\n③ 会被收走的 `.py` 名字都是 `test_*`（否则是一行没有内容的 `✓`）")
-_NON = non_test_suites(_ENTRIES)
-check("一级非 `_` 开头的 `.py` 全是 `test_*`（`run_all.py` / `conftest.py` 除外）", not _NON,
-      "、".join(_NON) or "无")
-check("反控：放一个 `helpers.py` ⇒ 必须报出来（它会被当套件跑、退 0、什么都不判）",
-      non_test_suites(["test_a.py", "helpers.py"]) == ["helpers.py"])
-check("正控：`run_all.py` 自己不算（入口不是套件）",
-      non_test_suites([ENTRY, "test_a.py"]) == [])
-
-print("\n④ 入口真收走的 == 盘上该收走的（把枚举规则钉在**磁盘**上，不钉在它自己身上）")
-_real = {p.name for p in run_all.suites()}
-check("`run_all.suites()` 收走的就是盘上全部该收走的",
-      _real == set(suites_on_disk(_ENTRIES)),
-      f"入口 {len(_real)} 个 / 盘上 {len(suites_on_disk(_ENTRIES))} 个；"
+def test_tests_dir_shape():
+    TESTS = ROOT / "tests"
+    _ENTRIES = sorted(p.relative_to(TESTS).as_posix() + ("/" if p.is_dir() else "")
+                      for p in TESTS.rglob("*"))
+    _SOURCES = {e: (TESTS / e).read_text(encoding="utf-8")
+                for e in _ENTRIES if e.endswith(".py")}
+    print("① `tests/` 下没有子目录（glob 不递归 ⇒ 藏进去的套件一个都不跑，且没有任何东西会报）")
+    _SUB = subdirs(_ENTRIES)
+    check("一级子目录只有 `__pycache__`（已被排除）", not _SUB,
+          "、".join(_SUB) or "无")
+    _STRAY = stray_files(_ENTRIES)
+    check("没有非 `.py` 的一级文件（数据夹具请套件自己开 tempfile）", not _STRAY,
+          "、".join(_STRAY) or "无")
+    check("反控：`tests/sub/test_x.py` ⇒ 报出子目录 `sub`",
+          subdirs(["test_a.py", "sub/test_x.py"]) == ["sub"])
+    check("反控：**空**子目录（只有 `sub/` 那一行）⇒ 同样报出来",
+          subdirs(["test_a.py", "sub/"]) == ["sub"])
+    check("正控：`__pycache__/x.pyc` ⇒ 不算子目录（解释器自己拉的，不进 git）",
+          subdirs(["test_a.py", "__pycache__/x.pyc"]) == [])
+    check("反控：一级多一个 `data.json` ⇒ 报出来",
+          stray_files(["test_a.py", "data.json"]) == ["data.json"])
+    check("正控：子目录**不**被重复报成「非 `.py` 的一级文件」（同一条毛病别说成两句）",
+          stray_files(["test_a.py", "sub/", "sub/test_x.py"]) == [])
+    print("\n② 每个 `_*.py` 助手都有人在用（没人 import ⇒ 死代码，或改名改了一半）")
+    check("扫描覆盖了盘上每一个文件（漏谁，谁就成了隐形引用者 ⇒ 孤儿判成假绿）",
+          set(_SOURCES) == {e for e in _ENTRIES if e.endswith(".py")},
+          f"{len(_SOURCES)} 份源码 / {len(_ENTRIES)} 个条目")
+    check("解析器不是空转（真扫到了助手，否则下面那条是恒真的空过）",
+          len(helpers(_ENTRIES)) >= 3, f"{len(helpers(_ENTRIES))} 个助手")
+    _IMPORTS = parse_all(_SOURCES)
+    _ORPH = orphan_helpers(_ENTRIES, _IMPORTS)
+    check("没有孤儿助手", not _ORPH, "、".join(_ORPH) or "无")
+    _GHOST = ghost_helpers(_ENTRIES, _IMPORTS)
+    check("没有被 import 却盘上不存在的 `_*` 名字（改名残留）", not _GHOST,
+          "、".join(_GHOST) or "无")
+    for _desc, _src in (("`import _x`", "import _x\n"),
+                        ("`from _x import f`", "from _x import f\n"),
+                        ("`from tests import _x`", "from tests import _x\n")):
+        check(f"正控：{_desc} ⇒ 认得出这是在用 `_x`",
+              orphan_helpers(["_x.py", "test_a.py"],
+                             parse_all({"_x.py": "", "test_a.py": _src})) == [])
+    check("反控：加一个没人 import 的 `_dead.py` ⇒ 必须报出来",
+          orphan_helpers(["_used.py", "_dead.py", "test_a.py"],
+                         parse_all({"_used.py": "", "_dead.py": "",
+                                    "test_a.py": "import _used\n"})) == ["_dead.py"])
+    check("反控：只被**自己** import ⇒ 仍是孤儿（自己不算引用者）",
+          orphan_helpers(["_selfish.py"],
+                         parse_all({"_selfish.py": "import _selfish\n"})) == ["_selfish.py"])
+    check("反控：`from tests import _已改名` 而盘上没有 ⇒ 报出幽灵名",
+          ghost_helpers(["test_a.py"],
+                        parse_all({"test_a.py": "from tests import _已改名\n"})) == ["_已改名"])
+    check("正控：`from __future__ import annotations` ⇒ 不算幽灵（双下划线开头）",
+          ghost_helpers(["test_a.py"], parse_all(
+              {"test_a.py": "from __future__ import annotations\n"})) == [])
+    print("\n③ 会被收走的 `.py` 名字都是 `test_*`（否则是一行没有内容的 `✓`）")
+    _NON = non_test_suites(_ENTRIES)
+    check("一级非 `_` 开头的 `.py` 全是 `test_*`（`run_all.py` / `conftest.py` 除外）", not _NON,
+          "、".join(_NON) or "无")
+    check("反控：放一个 `helpers.py` ⇒ 必须报出来（它会被当套件跑、退 0、什么都不判）",
+          non_test_suites(["test_a.py", "helpers.py"]) == ["helpers.py"])
+    check("正控：`run_all.py` 自己不算（入口不是套件）",
+          non_test_suites([ENTRY, "test_a.py"]) == [])
+    print("\n④ 入口真收走的 == 盘上该收走的（把枚举规则钉在**磁盘**上，不钉在它自己身上）")
+    _real = {p.name for p in run_all.suites()}
+    check("`run_all.suites()` 收走的就是盘上全部该收走的",
+          _real == set(suites_on_disk(_ENTRIES)),
+          f"入口 {len(_real)} 个 / 盘上 {len(suites_on_disk(_ENTRIES))} 个；"
       f"差集 {sorted(_real ^ set(suites_on_disk(_ENTRIES)))[:5]}")
-# 上一条两边都由 `_ENTRIES` 推出来，所以"枚举规则被改窄成空表"也能满足它——
-# 这一条把量级钉住（改窄到 0 个时它会红）。
-check("且不是空集（枚举规则被改成 `return []` 也满足上一条）",
-      len(_real) >= 100, f"{len(_real)} 个套件")
+    check("且不是空集（枚举规则被改成 `return []` 也满足上一条）",
+          len(_real) >= 100, f"{len(_real)} 个套件")
+    print()
+    if FAILED:
+        print(f"失败 {len(FAILED)} 项：" + "；".join(FAILED))
+        sys.exit(1)
+    print("全部通过")
 
-print()
-if FAILED:
-    print(f"失败 {len(FAILED)} 项：" + "；".join(FAILED))
-    sys.exit(1)
-print("全部通过")
+    assert not FAILED, (
+        f"{len(FAILED)} 条未通过：" + "；".join(FAILED))
+
+
+if __name__ == "__main__":
+    test_tests_dir_shape()

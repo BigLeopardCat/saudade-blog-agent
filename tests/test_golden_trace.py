@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """golden set 的 trace 落盘（`eval/golden_trace.py` + `utils/trace.py` 的 dir/name 覆盖）回归锁。
 
 被锁住的问题（20260922）：golden 是**进程内**直调链路（`run_golden.run_one`），而
@@ -36,6 +35,8 @@
 `settings.trace_dir` 在本套件里被指到临时目录 ⇒ 生产 trace 目录（`logs/agent/traces`）
 在整轮测试中零写入。
 """
+
+
 import contextlib
 import io
 import json
@@ -47,11 +48,17 @@ import tempfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent  # 仓根（20260924：测试统一搬进 tests/）
+
+
 sys.path.insert(0, str(ROOT))
+
+
 sys.path.insert(0, str(ROOT / "eval"))
 
+
+import golden_trace  # noqa: E402
+
 from config.settings import settings  # noqa: E402
-import golden_trace                    # noqa: E402
 
 FAILS: list[str] = []
 
@@ -62,155 +69,13 @@ def check(desc: str, cond: bool, detail: str = "") -> None:
         FAILS.append(desc)
 
 
-PROD_DIR = os.path.abspath(settings.trace_dir)
 TMP = tempfile.mkdtemp(prefix="golden_trace_test_")
-# 临时根：生产 trace 目录指到 TMP/traces ⇒ golden 根 = TMP/golden_traces（形状与线上一致）
-settings.trace_dir = os.path.join(TMP, "traces")
-GOLDEN_ROOT = golden_trace.trace_root()
 
-print("① 目录形状与越界守卫（不碰生产目录）")
-check("golden 根 = 生产 trace 目录的兄弟目录",
-      os.path.dirname(GOLDEN_ROOT) == os.path.dirname(os.path.abspath(settings.trace_dir)),
-      GOLDEN_ROOT)
-check("golden 根**不在**生产 trace 目录里",
-      not os.path.abspath(settings.trace_dir).startswith(GOLDEN_ROOT + os.sep)
-      and not GOLDEN_ROOT.startswith(os.path.abspath(settings.trace_dir) + os.sep))
-for bad in ("../evil", "/tmp/evil", "a/../../evil", ""):
-    try:
-        golden_trace.case_dir(bad)
-        check(f"越界 run_id {bad!r} 被拒绝", False, "竟然建了目录")
-    except RuntimeError as e:
-        check(f"越界 run_id {bad!r} 被拒绝", True, str(e)[:40])
-# run_id 里带斜杠也必须是"平级目录名"，不许拼出子路径（prune 只认时间戳形状，散出去的目录清不掉）
-try:
-    golden_trace.case_dir("20260101_010101/../../x")
-    check("带路径的 run_id 被拒绝", False, "竟然建了目录")
-except RuntimeError:
-    check("带路径的 run_id 被拒绝", True)
 
-print("\n② 真跑一次 start → record → finish")
 os.environ.pop(golden_trace.ENV_OFF, None)
-run_id = golden_trace.resolve_run_id()
-check("resolve_run_id 无参时是时间戳形状（prune 认的形状）",
-      bool(re.match(r"^\d{8}_\d{6}$", run_id)), run_id)
-check("显式参数优先于环境变量",
-      golden_trace.resolve_run_id("20200101_000000") == "20200101_000000")
-tid = golden_trace.start_case(run_id, "case_demo", "把标签 X 挪到 Y 下面", "admin")
+
+
 from utils.trace import record  # noqa: E402  （生产同款入口，验证 contextvar 挂上了）
-record("planner", "llm_done", plan="WORKFLOW=tag_update")
-path = golden_trace.finish_case(tid, 1.5, frames=3)
-check("trace 落到 golden 目录下、文件名 = 用例 id",
-      bool(path) and path == os.path.join(GOLDEN_ROOT, run_id, "case_demo.json"),
-      str(path))
-doc = json.load(open(path, encoding="utf-8")) if path else {}
-check("user_id 恒 0（真管理员 uid 不落字段、不落文件名）", doc.get("user_id") == 0,
-      str(doc.get("user_id")))
-check("事件非空（contextvar 真的传到了 record）", len(doc.get("events") or []) == 1,
-      str(doc.get("events")))
-check("输入摘要里带 golden/run/case/role 四元（读 trace 就知道是哪条用例）",
-      (doc.get("input") or {}).get("golden") is True
-      and (doc.get("input") or {}).get("case") == "case_demo"
-      and (doc.get("input") or {}).get("role") == "admin")
-check("frames/end_reason 落进顶层（收尾元数据不丢）",
-      doc.get("frames") == 3 and doc.get("end_reason") == "golden_done")
-# 空壳（start 晚于提交 / contextvar 没传过去）必须吭声——静默当成功就是又一次"看起来在记录"
-_buf = io.StringIO()
-with contextlib.redirect_stdout(_buf):
-    tid2 = golden_trace.start_case(run_id, "case_empty")
-    golden_trace.finish_case(tid2, 0.1)
-check("事件为空时打警告（不静默）", "事件为空" in _buf.getvalue(), _buf.getvalue().strip()[:60])
-check("生产 trace 目录零写入（整轮测试）",
-      not os.path.exists(os.path.join(PROD_DIR, "case_demo.json"))
-      and not os.path.exists(os.path.join(PROD_DIR, "case_empty.json")))
-print("\n③ 接线与清理")
-src_run = (ROOT / "eval" / "run_golden.py").read_text(encoding="utf-8")
-src_runner = (ROOT / "eval" / "golden_case_runner.py").read_text(encoding="utf-8")
-src_full = (ROOT / "eval" / "golden_full_run.py").read_text(encoding="utf-8")
-check("run_golden.py 逐条传 trace_ctx（run + case + 复跑后缀）",
-      'trace_ctx=({"run": run_id, "case": case["id"] + suffix} if run_id else None)' in src_run
-      and "def run_case(case: dict, *, run_id: str = \"\", suffix: str = \"\")" in src_run)
-check("run_golden.py 每条用例的 trace 路径进了报告",
-      '"trace": result.get("trace")' in src_run)
-check("run_golden.py 报告的 trace_run/trace_dir 从**实际落盘路径**反推",
-      "_first_trace = next((r.get(\"trace\") for r in results if r.get(\"trace\")), None)" in src_run
-      and '"trace_dir": os.path.dirname(_first_trace) if _first_trace else None' in src_run)
-check("run_golden.py 收尾调 prune（keep 可配，默认取 KEEP_DEFAULT）",
-      "golden_trace.prune(args.keep_traces)" in src_run
-      and "--keep-traces" in src_run and "--no-trace" in src_run)
-check("进度打印里红条带 trace 路径（红了照着读，不再靠复采样猜）",
-      'print(f"          └ trace: {result[\'trace\']}")' in src_run)
-check("隔离跑法：子进程按父进程给的 run_id 落同一目录（轮次驱动统一走 run_golden.run_case）",
-      "golden_trace.resolve_run_id()" in src_runner
-      and "run_golden.run_case(case, run_id=run_id, suffix=suffix)" in src_runner)
-check("隔离跑法：父进程定 run_id 并 prune + 报告带 trace_run",
-      "os.environ[golden_trace.ENV_RUN] = GOLDEN_RUN" in src_full
-      and "golden_trace.prune()" in src_full and '"trace_run": GOLDEN_RUN' in src_full)
-check("生产调用点（server.py）不传 dir/name（行为与改动前逐字一致）",
-      "start_trace(" in (ROOT / "server.py").read_text(encoding="utf-8")
-      and "dir=" not in re.search(r"start_trace\((?:[^()]|\([^()]*\))*\)",
-                                  (ROOT / "server.py").read_text(encoding="utf-8")).group(0))
-
-# 回归组 FAIL 重跑一次再判（20260924）：两个跑法都要接上，且复跑 trace 必须换个名字——
-# 同名文件会把首跑那份覆盖掉，而"首跑为什么红"正是复跑要回答的问题（能力有测试
-# ≠ 接线有测试：本仓已在 langgraph-future-annotations 上栽过一次）
-src_runner_case = (ROOT / "eval" / "golden_case_runner.py").read_text(encoding="utf-8")
-check("run_golden.py 对首跑红的回归用例复跑一次（按 tags 挑，不重跑能力题）",
-      '_rerun_ids = [r["id"] for r in results' in src_run
-      and 'and "regression" in (r.get("tags") or [])' in src_run
-      and '_rr = run_case(_case, run_id=run_id, suffix="__rerun")' in src_run)
-check("run_golden.py 复跑落**另一份** trace（`__rerun` 后缀，首跑的证据不被覆盖）",
-      'suffix="__rerun"' in src_run
-      and 'sys.argv[3] if len(sys.argv) > 3 else ""' in src_runner_case
-      and 'run_golden.run_case(case, run_id=run_id, suffix=suffix)' in src_runner_case)
-check("run_golden.py 判据用复跑后的终判（final_ok），首跑红另计 failed_first_run",
-      'r["final_ok"] = r["ok"] or _rok' in src_run
-      and '"failed_first_run": failed_first' in src_run
-      and '_reg_bad = [r["id"] for r in _reg if not r.get("final_ok", r["ok"])]' in src_run)
-check("run_golden.py 复跑绿进 flaked_ids + 出声（放行但不静默宽恕）",
-      '"flaked_ids": _reg_flaked' in src_run
-      and 'if _reg_flaked:' in src_run
-      and '_reg_flaked = [r["id"] for r in _reg if not r["ok"] and r.get("final_ok")]' in src_run
-      and "复跑才绿" in src_run)
-check("隔离跑法同款：复跑仍走独立子进程 + 报告带 regression 块与 flaked_ids",
-      'rr = spawn_case(case, "_rerun")' in src_full
-      and '"flaked_ids": _reg_flaked' in src_full
-      and '"failed_first_run": failed_first' in src_full
-      and '"all_passed": not _reg_bad' in src_full)
-
-# 身份通道（20260924）：role 决定"能做什么"、uid 决定"对谁做"——需要真身份真调上游的
-# 用例（管理员读后台清单、普通用户的写请求被拒）声明 `needs_admin_uid` / `needs_user_uid`，
-# 跑法按表注入 context.user_id；未设环境变量则**响亮跳过**（跳过关乎通过率分母，不许静默）。
-# 三条纪律都在这里锁住：两条通道两个跑法都在、只给声明的条目注入、标记与角色配对。
-check("两条身份通道在**两个跑法**里都在（needs_admin_uid / needs_user_uid）",
-      '"needs_user_uid", "GOLDEN_USER_UID"' in src_run
-      and '"needs_user_uid", "GOLDEN_USER_UID"' in src_full
-      and "_UID_CHANNELS" in src_run and "_UID_CHANNELS" in src_full)
-check("未设变量 ⇒ 响亮 SKIP（打印 + 记进 skipped_ids + 本轮剔除），不静默豁免",
-      'print(f"[skip] {cid}: SKIP (needs {_env})")' in src_run
-      and "skip_ids += _need_uid" in src_run
-      and "cases = [c for c in cases if not c.get(_marker)]" in src_run
-      and '"skipped_ids": skip_ids' in src_run
-      and 'print(f"[skip] {_cid}: SKIP (needs {_env})", flush=True)' in src_full
-      and "_SKIPPED_IDS += _NEED_UID" in src_full
-      and "CASES = [c for c in CASES if not c.get(_marker)]" in src_full)
-check("只给**用例自己声明要身份**的条目注入 uid（uid=0 哨兵是写面最后一道保险）",
-      "if c.get(_marker):" in src_run and "if _c.get(_marker):" in src_full
-      and '["user_id"] = int(_real_uid)' in src_run
-      and '["user_id"] = int(_real_uid)' in src_full)
-
-# 用例侧契约：标记与 context.role 必须配对（role 是权限判定的唯一输入）；带标记的用例
-# 若要**要求确认帧**，其卡片要动的那一族工具必须全在「一律弹窗」族里。
-#
-# **20261001 收窄**：这条此前写的是"带标记 ⇒ 一律不得要求确认帧"，理由是"弹卡轮意味着
-# 写路径可达，那条路要靠 uid=0 哨兵兜模型跑飞真写下去"。**这条理由对「一律弹窗」族不
-# 成立**——那族（`authz._ALWAYS_CONFIRM_TOOLS`，审核/额度/公告都在里面）的写在**同轮
-# 结构上不可能落地**：一律弹卡，主人不签字就不执行。也就是说"要求弹卡"恰恰是安全的那
-# 一侧；真正危险的形状是**能不经卡片直接执行的写**。旧规矩是那条真意图的一个**代理**，
-# 而它在 20260930 的设计变更（`127f631`：审核族恒弹卡）之后就只剩副作用——它逼着
-# `admin_board_audit_reviewed_refusal` 这条用例去锁"不弹卡"，而设计要的正是弹卡。
-# 判据改成按族判：卡上那件（技能）的工具集合 ⊆ 「一律弹窗」族。拿不到判据（导入失败）
-# ⇒ 空集 ⇒ **一律不放行**（失败朝严格那侧，不许静默放行）。
-_MARK_ROLE = {"needs_admin_uid": "admin", "needs_user_uid": "user"}
 
 
 def _always_confirm_tools() -> frozenset:
@@ -234,90 +99,7 @@ def _workflow_tools(workflow_name: str) -> "frozenset | None":
         return None
 
 
-_cases_jsonl = [json.loads(l) for l in (ROOT / "eval" / "golden" / "basic.jsonl")
-                .read_text(encoding="utf-8").splitlines() if l.strip()]
-import run_golden as rg        # 局部导入：本节的卡断言要按轮取（rg.iter_rounds），
-                               # 与本文件末尾那次导入同一份模块（重复 import 不重复付出代价）
-for _c in _cases_jsonl:
-    for _m, _role in _MARK_ROLE.items():
-        if not _c.get(_m):
-            continue
-        check(f"{_c['id']}: {_m} 与 context.role 配对",
-              (_c.get("context") or {}).get("role") == _role,
-              f"role={(_c.get('context') or {}).get('role')!r}")
-        if _c.get("needs_real_write"):
-            # 豁免：这几条**故意真写**（要主人的显式开关 `GOLDEN_ALLOW_REAL_WRITE=1` 才跑，
-            # 默认被摘掉）——本条不变量禁的正是"没人看着时真写"，对它们是反向的。
-            # 判据同样要求它们声明身份 + 角色配对（上面那句照跑）。
-            continue
-        # **卡在哪一轮要**：20261007 补洞。此前只读顶层 `gold`，而多轮用例的判据全在
-        # `rounds` 里 ⇒ 凡是多轮用例，对这条不变量等于**不存在**（"看着有、其实没有"
-        # 的老毛病，同一族）。洞里的实例：`mt2_short_yes_resubmits_card` 带着
-        # `needs_admin_uid` + 逐轮要求 `tag_create` 的卡进来，一句都没被拦。
-        for _r in rg.iter_rounds(_c):
-            _gold = _r.get("gold") or {}
-            _frames = _gold.get("require_frame_prefix") or []
-            if not any(f in ("__CONFIRM__:", "__PENDING__:") for f in _frames):
-                # 不要求卡 ⇒ 这条通道的经典用法，无写路径断言（旧规矩的形状照旧放行）
-                continue
-            _pay = _gold.get("require_confirm_payload") or {}
-            _workflows = list(_pay.get("workflow_any") or
-                           ([_pay["workflow"]] if _pay.get("workflow") else []))
-            _tools: set = set()
-            for _s in _workflows:
-                # 技能取不到 ⇒ 空集 ⇒ 断言不放行（与 `_always_confirm_tools` 同一条纪律：
-                # 拿不到判据时朝严格那侧倒）
-                _tools |= set(_workflow_tools(_s) or ())
-            _always = _always_confirm_tools()
-            check(f"{_c['id']}（第 {_r.get('round', '?')} 轮）: 声明身份 + 要求弹卡 ⇒ "
-                  "卡上那族必须全在「一律弹窗」族"
-                  "（恒弹卡 ⇒ 同轮结构上写不下去；否则真身份下真写是可能的）",
-                  bool(_tools) and bool(_always) and _tools <= _always,
-                  f"workflows={_workflows!r} plan={sorted(_tools) or None} "
-                  f"always_confirm={len(_always)} 条")
-
-# 判据自己的反向对照（这条族判定既不许恒真也不许恒假）：`board_audit` 的 plan 全在恒弹卡
-# 族里（所以上面那条对它放行），`tag_create` 不在（"同轮命令即确认"那条路是活的）——
-# 同一条判据对两个技能给出相反答案，才说明它真的在判东西。
-check("弹卡族判据的反向对照：board_audit 全在恒弹卡族、tag_create 不在",
-      bool(_workflow_tools("board_audit"))
-      and _workflow_tools("board_audit") <= _always_confirm_tools()
-      and not (_workflow_tools("tag_create") <= _always_confirm_tools()),
-      f"board_audit={sorted(_workflow_tools('board_audit') or [])} "
-      f"tag_create={sorted(_workflow_tools('tag_create') or [])}")
-
-# 接线（能力有测试 ≠ 接线有测试）：通道落在跑法里不代表夜间真给身份——脚本里少了那行
-# export，夜里跑的仍是 uid=0 的虚构态，而报告里只会安静地多出几条 SKIP。两条都要在，
-# 且都带"未设即响亮跳过"的说明（与 test_reconcile_offline 读脚本原文同一纪律）。
-_nightly_src = (ROOT / "scripts" / "nightly_regression.sh")
-_nightly = _nightly_src.read_text(encoding="utf-8") if _nightly_src.exists() else ""
-# 判据落在**接线**上，不落在那个 uid 的具体取值上（20261017 改）：原断言写死
-# `=721`，而 721 是评测残留夹具、当天被降权成 user ⇒ 换指 748 是**正确**的运维动作，
-# 却会把这把尺子弄红——那把尺子量的是"夜里到底给不给身份"，不是"给的是哪个号"。
-# 非零数字才是本判据真正要的东西：uid=0 是 agent 侧的"虚构态"哨兵（见上面那段注释），
-# 给了 0 等于没给。取值本身另有在位检查（`eval/identity_preflight.py`）与探针去验。
-_uid_line = r"^export GOLDEN_%s_UID=[1-9][0-9]*$"
-check("夜间脚本真给两条身份（export GOLDEN_ADMIN_UID / GOLDEN_USER_UID）",
-      re.search(_uid_line % "ADMIN", _nightly, re.M) is not None
-      and re.search(_uid_line % "USER", _nightly, re.M) is not None, str(_nightly_src))
-check("两条 export 都写明了「未设即响亮跳过」（跳过关乎通过率分母）",
-      _nightly.count("响亮跳过") >= 2)
-
-# prune：只认时间戳目录、只留最近 N 个，**外加所有有失败的旧 run 一律不清理**
-root = golden_trace.trace_root()
-names = [f"2026090{i}_12000{i}" for i in range(1, 8)]  # 7 个时间戳目录
-for n in names:
-    os.makedirs(os.path.join(root, n), exist_ok=True)
-os.makedirs(os.path.join(root, "handmade_samples"), exist_ok=True)   # 非时间戳目录
-open(os.path.join(root, "note.txt"), "w").write("x")                  # 根下的散文件
-open(os.path.join(root, "handmade_samples", "keep.json"), "w").write("{}")
-_ts_dirs = sorted(names + [run_id])           # 7 个人造的 + 本用例真跑出来的那个
-
-# 反查留档的目录指到 tmpdir（否则读的是真实 eval/report/runs/，离线测试不该依赖它；
-# 更要紧的是：写出/读走生产留档 = 测试改了别人的证据链）
 _reports = os.path.join(TMP, "reports")
-os.makedirs(_reports, exist_ok=True)
-golden_trace._REPORT_DIR = _reports
 
 
 def _write_report(name, doc) -> None:
@@ -325,107 +107,13 @@ def _write_report(name, doc) -> None:
         json.dump(doc, f, ensure_ascii=False)
 
 
-# 被淘汰区（最旧 3 个）各给一种情况：
-_write_report("clean.json", {"trace_run": _ts_dirs[0], "failed": 0,
-                             "regression": {"all_passed": True}})        # 干净 → 可删
-_write_report("red.json", {"trace_run": _ts_dirs[1], "failed": 2})       # 红了 → 留
-# _ts_dirs[2] 没有留档 → 证据不足 → 留
-_buf = io.StringIO()
-with contextlib.redirect_stdout(_buf):
-    doomed = golden_trace.prune(keep=5)
-check("prune 只删「留档能证明它干净」的那一个（红的、无留档的都留着）",
-      doomed == [_ts_dirs[0]], str(doomed))
-check("红那晚的目录还在（判红的 trace 就是证据）",
-      os.path.isdir(os.path.join(root, _ts_dirs[1])))
-check("没有留档的旧 run 一并留下（证据不足 ≠ 干净）",
-      os.path.isdir(os.path.join(root, _ts_dirs[2])))
-check("留下的这批**吭声**（不静默保留：下次没人知道它为什么还在）",
-      "保留" in _buf.getvalue() and _ts_dirs[1] in _buf.getvalue(), _buf.getvalue().strip()[:80])
-check("被删的目录真的不在了", not os.path.exists(os.path.join(root, _ts_dirs[0])))
-check("非时间戳目录与散文件一个不碰",
-      os.path.isdir(os.path.join(root, "handmade_samples"))
-      and os.path.isfile(os.path.join(root, "handmade_samples", "keep.json"))
-      and os.path.isfile(os.path.join(root, "note.txt")))
-check("最近 5 个都在（含本次 run 自己）",
-      all(os.path.isdir(os.path.join(root, n)) for n in _ts_dirs[-5:]))
-# 回归组红（failed=0 但组内红）同样算"这一晚是红的"
-_write_report("reg.json", {"trace_run": _ts_dirs[3], "failed": 0,
-                           "regression": {"all_passed": False}})
-check("回归组红也算红（不只看 failed 计数）",
-      golden_trace._run_verdicts().get(_ts_dirs[3]) is True)
-# 首跑红复跑绿（flaked_ids，20260924）：门禁按方差放行了，但那一夜的 trace 是唯一能
-# 回答"首跑为什么红"的东西 ⇒ 与判红同等对待，不清理
-_write_report("flake.json", {"trace_run": _ts_dirs[5], "failed": 0,
-                             "regression": {"all_passed": True,
-                                            "flaked_ids": ["case_x"]}})
-check("首跑红复跑绿也算「这一晚不干净」（那份首跑 trace 是唯一证据）",
-      golden_trace._run_verdicts().get(_ts_dirs[5]) is True)
-# 形态不认识的留档（旧格式没有 trace_run / 字段不是 int / JSON 坏）一律不当成"干净"
-_write_report("old.json", {"failed": 0})
-_write_report("weird.json", {"trace_run": _ts_dirs[4], "failed": "0"})
-open(os.path.join(_reports, "broken.json"), "w").write("{ 不是 json")
-_v = golden_trace._run_verdicts()
-check("旧格式/坏字段/坏 JSON 都不进判据（查不到 ⇒ 不删）",
-      _ts_dirs[4] not in _v, str(_v))
-check("判据收的是「能确定的那几个」：干净的 False、红的 True",
-      _v.get(_ts_dirs[0]) is False and _v.get(_ts_dirs[1]) is True
-      and _v.get(_ts_dirs[3]) is True, str(_v))
-check("keep 默认值来自 KEEP_DEFAULT（两处不再各写一个数字）",
-      golden_trace.KEEP_DEFAULT >= 30
-      and "default=golden_trace.KEEP_DEFAULT" in src_run)
-check("keep<=0 = 不清理", golden_trace.prune(0) == []
-      and all(os.path.isdir(os.path.join(root, n)) for n in _ts_dirs[-5:]))
-
-# 关掉开关：start_case 返回 None、finish_case(None) 也 None，且**不建目录**
-os.environ[golden_trace.ENV_OFF] = "1"
-off_run = "20200101_235959"
-check("GOLDEN_NO_TRACE=1 → 不落盘", golden_trace.start_case(off_run, "x") is None
-      and golden_trace.finish_case(None, 0.1) is None
-      and not os.path.exists(os.path.join(root, off_run)))
 os.environ.pop(golden_trace.ENV_OFF, None)
-
-# ── 关掉 trace 时那三条台账判据的处置（20261004）─────────────────────────────
-# 现场：`--only <台账用例> --no-trace` 重跑，红在「待办台账**没摆上桌**（模型手里没有可
-# 决策的目标）」——一句**关于模型**的断言；而真相是这一轮压根没有那条证据链
-# （`start_case()` 回 None ⇒ `run_one` 的 `ledger_frames` 恒 `[]`）。红的是**跑法**。
-#
-# 两条出口都要锁死，缺一条就重演：判据侧把"判不了"写成 `[未评估]`（**未评估 ≠ 通过**），
-# 跑法侧摘用例 + 进 `skipped_ids` + 退出码 3。键表与语料**双向**绑定——表里少一个键 ⇒
-# 那条用例照旧被误判成模型退化；多一个键 ⇒ 摘用例的范围悄悄扩大。
-import run_golden as rg      # 局部导入：它拉 server/agent（重），本套件其余部分不必付这笔钱
 
 
 def _case(cid: str, **gold) -> dict:
     return {"id": cid, "gold": gold}
 
 
-_MULTI = {"id": "multi", "rounds": [{"gold": {"require_ledger_frame": True}},
-                                    {"gold": {"require_ledger_frame": True,
-                                              "require_ledger_rows": True}}]}
-
-check("trace_derived_keys：单轮用例认得出那条键",
-      golden_trace.trace_derived_keys(_case("a", require_ledger_frame=True))
-      == ["require_ledger_frame"])
-check("多轮用例（键写在 rounds 里）同样认得出，且**不重复**",
-      sorted(golden_trace.trace_derived_keys(_MULTI))
-      == ["require_ledger_frame", "require_ledger_rows"])
-check("与台账无关的用例返回空表（处置范围不扩大）",
-      golden_trace.trace_derived_keys(
-          _case("b", require_cmd_prefixes=["AUTO_NAVIGATE"], nonempty=True)) == [])
-
-# 语料 × 键表双向绑定：语料是判据的输入，键表是摘用例的依据——两边各漂各的就是"漏诊"。
-_CORPUS = [json.loads(l) for l in open(ROOT / "eval" / "golden" / "basic.jsonl",
-                                       encoding="utf-8") if l.strip()]
-_LEDGER_CASES = sorted(c["id"] for c in _CORPUS if golden_trace.trace_derived_keys(c))
-_CORPUS_KEYS = {k for c in _CORPUS for k in golden_trace.trace_derived_keys(c)}
-check("键表与语料**双向**相等（少一个 = 漏诊；多一个 = 摘用例范围悄悄扩大）",
-      _CORPUS_KEYS == set(golden_trace.TRACE_DERIVED_GOLD_KEYS), str(sorted(_CORPUS_KEYS)))
-check("带这几条键的用例确实只有那两条（语料增删要同步这一行）",
-      _LEDGER_CASES == ["admin_board_audit_reviewed_refusal",
-                        "board_audit_from_ledger_exec"], str(_LEDGER_CASES))
-
-# 判据的入参形状照 `test_golden_keys.py` 那份最小结果（`check_gold` 有几处是直接下标取的，
-# 少一个键就抛 KeyError——那是"探针自己坏了"，不是判据在说话）。
 def _res(**over) -> dict:
     res = {"text": "在的", "commands": [], "tool_calls": [], "exec_rows": [],
            "exec_tools": [], "frames": [], "confirm_tokens": [], "confirm_payloads": [],
@@ -435,47 +123,300 @@ def _res(**over) -> dict:
     return res
 
 
-os.environ[golden_trace.ENV_OFF] = "1"
-try:
-    _kept, _skipped, _rows = rg.check_trace_premises(
-        [_case("led", require_ledger_frame=True), _case("plain", nonempty=True)])
-    _off_fails = rg.check_gold({"require_ledger_frame": True}, _res())
-finally:
-    os.environ.pop(golden_trace.ENV_OFF, None)
-check("trace 关着：台账用例被摘成「未评估」，无关用例照跑",
-      [c["id"] for c in _kept] == ["plain"] and _skipped == ["led"]
-      and _rows[0]["keys"] == ["require_ledger_frame"], str(_rows))
-check("判据侧报的是「未评估」，**不是**「待办台账没摆上桌」",
-      any("未评估" in f for f in _off_fails)
-      and not any("没摆上桌" in f for f in _off_fails), str(_off_fails))
-_on_fails = rg.check_gold({"require_ledger_frame": True}, _res())
-check("trace 开着、帧真的缺 ⇒ 照旧红（修的是跑法，不是把这条判据放走）",
-      any("没摆上桌" in f for f in _on_fails)
-      and not any("未评估" in f for f in _on_fails), str(_on_fails))
-
-check("两个跑法都接上了这条闸（判据只有一处实现，接线各自一段）",
-      "check_trace_premises(cases)" in src_run
-      and "golden_trace.trace_derived_keys(c)" in src_full)
-check("未评估要进 skipped_ids 且单列一个报告字段（否则看着像被静默豁免）",
-      "skip_ids += _trace_skipped" in src_run and "_SKIPPED_IDS += _TRACE_SKIPPED" in src_full
-      and '"skipped_trace_ids"' in src_run and '"skipped_trace_ids"' in src_full)
-# 判的是**成员资格**，不是那一行的全文（20261006 改）：此前钉的是整串字面量
-# （`_code = 3 if (_precondition_bad or _trace_bad) else 2`），于是**又有**一条前提族
-# 挤进同一个退出码组（语料出处闸，`_corpus_bad`）时，这条锁红在一个跟 trace 无关的
-# 地方——红的是"组里多了一个成员"，而它要守的其实是"trace 还在组里、而且这一组报 3"。
-# 改成抓 `_code = 3 if (…) else 2` 的括号内、断言 trace 那一项在里面：新增成员不再误伤，
-# 把 trace 从组里**摘出去**（或把 3 改回 2）仍然会红。
-_m3_run = re.search(r"^\s*_code = 3 if \((?P<grp>[^)]*)\) else 2", src_run, re.M)
-_m3_full = re.search(r"^\s*_code = 3 if \((?P<grp>[^)]*)\) else 2", src_full, re.M)
-check("空分母的退出码：前提类闸报 3 而不是 2（两个跑法同口径）",
-      bool(_m3_run) and "_trace_bad" in _m3_run.group("grp")
-      and bool(_m3_full) and "_TRACE_SKIPPED" in _m3_full.group("grp"),
-      f"run={_m3_run.group('grp') if _m3_run else '没找到那一行'}；"
+def test_golden_trace():
+    PROD_DIR = os.path.abspath(settings.trace_dir)
+    settings.trace_dir = os.path.join(TMP, "traces")
+    GOLDEN_ROOT = golden_trace.trace_root()
+    print("① 目录形状与越界守卫（不碰生产目录）")
+    check("golden 根 = 生产 trace 目录的兄弟目录",
+          os.path.dirname(GOLDEN_ROOT) == os.path.dirname(os.path.abspath(settings.trace_dir)),
+          GOLDEN_ROOT)
+    check("golden 根**不在**生产 trace 目录里",
+          not os.path.abspath(settings.trace_dir).startswith(GOLDEN_ROOT + os.sep)
+          and not GOLDEN_ROOT.startswith(os.path.abspath(settings.trace_dir) + os.sep))
+    for bad in ("../evil", "/tmp/evil", "a/../../evil", ""):
+        try:
+            golden_trace.case_dir(bad)
+            check(f"越界 run_id {bad!r} 被拒绝", False, "竟然建了目录")
+        except RuntimeError as e:
+            check(f"越界 run_id {bad!r} 被拒绝", True, str(e)[:40])
+    try:
+        golden_trace.case_dir("20260101_010101/../../x")
+        check("带路径的 run_id 被拒绝", False, "竟然建了目录")
+    except RuntimeError:
+        check("带路径的 run_id 被拒绝", True)
+    print("\n② 真跑一次 start → record → finish")
+    run_id = golden_trace.resolve_run_id()
+    check("resolve_run_id 无参时是时间戳形状（prune 认的形状）",
+          bool(re.match(r"^\d{8}_\d{6}$", run_id)), run_id)
+    check("显式参数优先于环境变量",
+          golden_trace.resolve_run_id("20200101_000000") == "20200101_000000")
+    tid = golden_trace.start_case(run_id, "case_demo", "把标签 X 挪到 Y 下面", "admin")
+    record("planner", "llm_done", plan="WORKFLOW=tag_update")
+    path = golden_trace.finish_case(tid, 1.5, frames=3)
+    check("trace 落到 golden 目录下、文件名 = 用例 id",
+          bool(path) and path == os.path.join(GOLDEN_ROOT, run_id, "case_demo.json"),
+          str(path))
+    doc = json.load(open(path, encoding="utf-8")) if path else {}
+    check("user_id 恒 0（真管理员 uid 不落字段、不落文件名）", doc.get("user_id") == 0,
+          str(doc.get("user_id")))
+    check("事件非空（contextvar 真的传到了 record）", len(doc.get("events") or []) == 1,
+          str(doc.get("events")))
+    check("输入摘要里带 golden/run/case/role 四元（读 trace 就知道是哪条用例）",
+          (doc.get("input") or {}).get("golden") is True
+          and (doc.get("input") or {}).get("case") == "case_demo"
+          and (doc.get("input") or {}).get("role") == "admin")
+    check("frames/end_reason 落进顶层（收尾元数据不丢）",
+          doc.get("frames") == 3 and doc.get("end_reason") == "golden_done")
+    _buf = io.StringIO()
+    with contextlib.redirect_stdout(_buf):
+        tid2 = golden_trace.start_case(run_id, "case_empty")
+        golden_trace.finish_case(tid2, 0.1)
+    check("事件为空时打警告（不静默）", "事件为空" in _buf.getvalue(), _buf.getvalue().strip()[:60])
+    check("生产 trace 目录零写入（整轮测试）",
+          not os.path.exists(os.path.join(PROD_DIR, "case_demo.json"))
+          and not os.path.exists(os.path.join(PROD_DIR, "case_empty.json")))
+    print("\n③ 接线与清理")
+    src_run = (ROOT / "eval" / "run_golden.py").read_text(encoding="utf-8")
+    src_runner = (ROOT / "eval" / "golden_case_runner.py").read_text(encoding="utf-8")
+    src_full = (ROOT / "eval" / "golden_full_run.py").read_text(encoding="utf-8")
+    check("run_golden.py 逐条传 trace_ctx（run + case + 复跑后缀）",
+          'trace_ctx=({"run": run_id, "case": case["id"] + suffix} if run_id else None)' in src_run
+          and "def run_case(case: dict, *, run_id: str = \"\", suffix: str = \"\")" in src_run)
+    check("run_golden.py 每条用例的 trace 路径进了报告",
+          '"trace": result.get("trace")' in src_run)
+    check("run_golden.py 报告的 trace_run/trace_dir 从**实际落盘路径**反推",
+          "_first_trace = next((r.get(\"trace\") for r in results if r.get(\"trace\")), None)" in src_run
+          and '"trace_dir": os.path.dirname(_first_trace) if _first_trace else None' in src_run)
+    check("run_golden.py 收尾调 prune（keep 可配，默认取 KEEP_DEFAULT）",
+          "golden_trace.prune(args.keep_traces)" in src_run
+          and "--keep-traces" in src_run and "--no-trace" in src_run)
+    check("进度打印里红条带 trace 路径（红了照着读，不再靠复采样猜）",
+          'print(f"          └ trace: {result[\'trace\']}")' in src_run)
+    check("隔离跑法：子进程按父进程给的 run_id 落同一目录（轮次驱动统一走 run_golden.run_case）",
+          "golden_trace.resolve_run_id()" in src_runner
+          and "run_golden.run_case(case, run_id=run_id, suffix=suffix)" in src_runner)
+    check("隔离跑法：父进程定 run_id 并 prune + 报告带 trace_run",
+          "os.environ[golden_trace.ENV_RUN] = GOLDEN_RUN" in src_full
+          and "golden_trace.prune()" in src_full and '"trace_run": GOLDEN_RUN' in src_full)
+    check("生产调用点（server.py）不传 dir/name（行为与改动前逐字一致）",
+          "start_trace(" in (ROOT / "server.py").read_text(encoding="utf-8")
+          and "dir=" not in re.search(r"start_trace\((?:[^()]|\([^()]*\))*\)",
+                                      (ROOT / "server.py").read_text(encoding="utf-8")).group(0))
+    src_runner_case = (ROOT / "eval" / "golden_case_runner.py").read_text(encoding="utf-8")
+    check("run_golden.py 对首跑红的回归用例复跑一次（按 tags 挑，不重跑能力题）",
+          '_rerun_ids = [r["id"] for r in results' in src_run
+          and 'and "regression" in (r.get("tags") or [])' in src_run
+          and '_rr = run_case(_case, run_id=run_id, suffix="__rerun")' in src_run)
+    check("run_golden.py 复跑落**另一份** trace（`__rerun` 后缀，首跑的证据不被覆盖）",
+          'suffix="__rerun"' in src_run
+          and 'sys.argv[3] if len(sys.argv) > 3 else ""' in src_runner_case
+          and 'run_golden.run_case(case, run_id=run_id, suffix=suffix)' in src_runner_case)
+    check("run_golden.py 判据用复跑后的终判（final_ok），首跑红另计 failed_first_run",
+          'r["final_ok"] = r["ok"] or _rok' in src_run
+          and '"failed_first_run": failed_first' in src_run
+          and '_reg_bad = [r["id"] for r in _reg if not r.get("final_ok", r["ok"])]' in src_run)
+    check("run_golden.py 复跑绿进 flaked_ids + 出声（放行但不静默宽恕）",
+          '"flaked_ids": _reg_flaked' in src_run
+          and 'if _reg_flaked:' in src_run
+          and '_reg_flaked = [r["id"] for r in _reg if not r["ok"] and r.get("final_ok")]'
+              in src_run
+          and "复跑才绿" in src_run)
+    check("隔离跑法同款：复跑仍走独立子进程 + 报告带 regression 块与 flaked_ids",
+          'rr = spawn_case(case, "_rerun")' in src_full
+          and '"flaked_ids": _reg_flaked' in src_full
+          and '"failed_first_run": failed_first' in src_full
+          and '"all_passed": not _reg_bad' in src_full)
+    check("两条身份通道在**两个跑法**里都在（needs_admin_uid / needs_user_uid）",
+          '"needs_user_uid", "GOLDEN_USER_UID"' in src_run
+          and '"needs_user_uid", "GOLDEN_USER_UID"' in src_full
+          and "_UID_CHANNELS" in src_run and "_UID_CHANNELS" in src_full)
+    check("未设变量 ⇒ 响亮 SKIP（打印 + 记进 skipped_ids + 本轮剔除），不静默豁免",
+          'print(f"[skip] {cid}: SKIP (needs {_env})")' in src_run
+          and "skip_ids += _need_uid" in src_run
+          and "cases = [c for c in cases if not c.get(_marker)]" in src_run
+          and '"skipped_ids": skip_ids' in src_run
+          and 'print(f"[skip] {_cid}: SKIP (needs {_env})", flush=True)' in src_full
+          and "_SKIPPED_IDS += _NEED_UID" in src_full
+          and "CASES = [c for c in CASES if not c.get(_marker)]" in src_full)
+    check("只给**用例自己声明要身份**的条目注入 uid（uid=0 哨兵是写面最后一道保险）",
+          "if c.get(_marker):" in src_run and "if _c.get(_marker):" in src_full
+          and '["user_id"] = int(_real_uid)' in src_run
+          and '["user_id"] = int(_real_uid)' in src_full)
+    _MARK_ROLE = {"needs_admin_uid": "admin", "needs_user_uid": "user"}
+    _cases_jsonl = [json.loads(l) for l in (ROOT / "eval" / "golden" / "basic.jsonl")
+                    .read_text(encoding="utf-8").splitlines() if l.strip()]
+    import run_golden as rg  # 局部导入：本节的卡断言要按轮取（rg.iter_rounds），
+    for _c in _cases_jsonl:
+        for _m, _role in _MARK_ROLE.items():
+            if not _c.get(_m):
+                continue
+            check(f"{_c['id']}: {_m} 与 context.role 配对",
+                  (_c.get("context") or {}).get("role") == _role,
+                  f"role={(_c.get('context') or {}).get('role')!r}")
+            if _c.get("needs_real_write"):
+                # 豁免：这几条**故意真写**（要主人的显式开关 `GOLDEN_ALLOW_REAL_WRITE=1` 才跑，
+                # 默认被摘掉）——本条不变量禁的正是"没人看着时真写"，对它们是反向的。
+                # 判据同样要求它们声明身份 + 角色配对（上面那句照跑）。
+                continue
+            # **卡在哪一轮要**：20261007 补洞。此前只读顶层 `gold`，而多轮用例的判据全在
+            # `rounds` 里 ⇒ 凡是多轮用例，对这条不变量等于**不存在**（"看着有、其实没有"
+            # 的老毛病，同一族）。洞里的实例：`mt2_short_yes_resubmits_card` 带着
+            # `needs_admin_uid` + 逐轮要求 `tag_create` 的卡进来，一句都没被拦。
+            for _r in rg.iter_rounds(_c):
+                _gold = _r.get("gold") or {}
+                _frames = _gold.get("require_frame_prefix") or []
+                if not any(f in ("__CONFIRM__:", "__PENDING__:") for f in _frames):
+                    # 不要求卡 ⇒ 这条通道的经典用法，无写路径断言（旧规矩的形状照旧放行）
+                    continue
+                _pay = _gold.get("require_confirm_payload") or {}
+                _workflows = list(_pay.get("workflow_any") or
+                               ([_pay["workflow"]] if _pay.get("workflow") else []))
+                _tools: set = set()
+                for _s in _workflows:
+                    # 技能取不到 ⇒ 空集 ⇒ 断言不放行（与 `_always_confirm_tools` 同一条纪律：
+                    # 拿不到判据时朝严格那侧倒）
+                    _tools |= set(_workflow_tools(_s) or ())
+                _always = _always_confirm_tools()
+                check(f"{_c['id']}（第 {_r.get('round', '?')} 轮）: 声明身份 + 要求弹卡 ⇒ "
+                  "卡上那族必须全在「一律弹窗」族"
+                  "（恒弹卡 ⇒ 同轮结构上写不下去；否则真身份下真写是可能的）",
+                      bool(_tools) and bool(_always) and _tools <= _always,
+                      f"workflows={_workflows!r} plan={sorted(_tools) or None} "
+                  f"always_confirm={len(_always)} 条")
+    check("弹卡族判据的反向对照：board_audit 全在恒弹卡族、tag_create 不在",
+          bool(_workflow_tools("board_audit"))
+          and _workflow_tools("board_audit") <= _always_confirm_tools()
+          and not (_workflow_tools("tag_create") <= _always_confirm_tools()),
+          f"board_audit={sorted(_workflow_tools('board_audit') or [])} "
+      f"tag_create={sorted(_workflow_tools('tag_create') or [])}")
+    _nightly_src = (ROOT / "scripts" / "nightly_regression.sh")
+    _nightly = _nightly_src.read_text(encoding="utf-8") if _nightly_src.exists() else ""
+    _uid_line = r"^export GOLDEN_%s_UID=[1-9][0-9]*$"
+    check("夜间脚本真给两条身份（export GOLDEN_ADMIN_UID / GOLDEN_USER_UID）",
+          re.search(_uid_line % "ADMIN", _nightly, re.M) is not None
+          and re.search(_uid_line % "USER", _nightly, re.M) is not None, str(_nightly_src))
+    check("两条 export 都写明了「未设即响亮跳过」（跳过关乎通过率分母）",
+          _nightly.count("响亮跳过") >= 2)
+    root = golden_trace.trace_root()
+    names = [f"2026090{i}_12000{i}" for i in range(1, 8)]  # 7 个时间戳目录
+    for n in names:
+        os.makedirs(os.path.join(root, n), exist_ok=True)
+    os.makedirs(os.path.join(root, "handmade_samples"), exist_ok=True)   # 非时间戳目录
+    open(os.path.join(root, "note.txt"), "w").write("x")                  # 根下的散文件
+    open(os.path.join(root, "handmade_samples", "keep.json"), "w").write("{}")
+    _ts_dirs = sorted(names + [run_id])           # 7 个人造的 + 本用例真跑出来的那个
+    os.makedirs(_reports, exist_ok=True)
+    golden_trace._REPORT_DIR = _reports
+    _write_report("clean.json", {"trace_run": _ts_dirs[0], "failed": 0,
+                                 "regression": {"all_passed": True}})        # 干净 → 可删
+    _write_report("red.json", {"trace_run": _ts_dirs[1], "failed": 2})       # 红了 → 留
+    _buf = io.StringIO()
+    with contextlib.redirect_stdout(_buf):
+        doomed = golden_trace.prune(keep=5)
+    check("prune 只删「留档能证明它干净」的那一个（红的、无留档的都留着）",
+          doomed == [_ts_dirs[0]], str(doomed))
+    check("红那晚的目录还在（判红的 trace 就是证据）",
+          os.path.isdir(os.path.join(root, _ts_dirs[1])))
+    check("没有留档的旧 run 一并留下（证据不足 ≠ 干净）",
+          os.path.isdir(os.path.join(root, _ts_dirs[2])))
+    check("留下的这批**吭声**（不静默保留：下次没人知道它为什么还在）",
+          "保留" in _buf.getvalue() and _ts_dirs[1] in _buf
+              .getvalue(), _buf.getvalue().strip()[:80])
+    check("被删的目录真的不在了", not os.path.exists(os.path.join(root, _ts_dirs[0])))
+    check("非时间戳目录与散文件一个不碰",
+          os.path.isdir(os.path.join(root, "handmade_samples"))
+          and os.path.isfile(os.path.join(root, "handmade_samples", "keep.json"))
+          and os.path.isfile(os.path.join(root, "note.txt")))
+    check("最近 5 个都在（含本次 run 自己）",
+          all(os.path.isdir(os.path.join(root, n)) for n in _ts_dirs[-5:]))
+    _write_report("reg.json", {"trace_run": _ts_dirs[3], "failed": 0,
+                               "regression": {"all_passed": False}})
+    check("回归组红也算红（不只看 failed 计数）",
+          golden_trace._run_verdicts().get(_ts_dirs[3]) is True)
+    _write_report("flake.json", {"trace_run": _ts_dirs[5], "failed": 0,
+                                 "regression": {"all_passed": True,
+                                                "flaked_ids": ["case_x"]}})
+    check("首跑红复跑绿也算「这一晚不干净」（那份首跑 trace 是唯一证据）",
+          golden_trace._run_verdicts().get(_ts_dirs[5]) is True)
+    _write_report("old.json", {"failed": 0})
+    _write_report("weird.json", {"trace_run": _ts_dirs[4], "failed": "0"})
+    open(os.path.join(_reports, "broken.json"), "w").write("{ 不是 json")
+    _v = golden_trace._run_verdicts()
+    check("旧格式/坏字段/坏 JSON 都不进判据（查不到 ⇒ 不删）",
+          _ts_dirs[4] not in _v, str(_v))
+    check("判据收的是「能确定的那几个」：干净的 False、红的 True",
+          _v.get(_ts_dirs[0]) is False and _v.get(_ts_dirs[1]) is True
+          and _v.get(_ts_dirs[3]) is True, str(_v))
+    check("keep 默认值来自 KEEP_DEFAULT（两处不再各写一个数字）",
+          golden_trace.KEEP_DEFAULT >= 30
+          and "default=golden_trace.KEEP_DEFAULT" in src_run)
+    check("keep<=0 = 不清理", golden_trace.prune(0) == []
+          and all(os.path.isdir(os.path.join(root, n)) for n in _ts_dirs[-5:]))
+    os.environ[golden_trace.ENV_OFF] = "1"
+    off_run = "20200101_235959"
+    check("GOLDEN_NO_TRACE=1 → 不落盘", golden_trace.start_case(off_run, "x") is None
+          and golden_trace.finish_case(None, 0.1) is None
+          and not os.path.exists(os.path.join(root, off_run)))
+    import run_golden as rg  # 局部导入：它拉 server/agent（重），本套件其余部分不必付这笔钱
+    _MULTI = {"id": "multi", "rounds": [{"gold": {"require_ledger_frame": True}},
+                                        {"gold": {"require_ledger_frame": True,
+                                                  "require_ledger_rows": True}}]}
+    check("trace_derived_keys：单轮用例认得出那条键",
+          golden_trace.trace_derived_keys(_case("a", require_ledger_frame=True))
+          == ["require_ledger_frame"])
+    check("多轮用例（键写在 rounds 里）同样认得出，且**不重复**",
+          sorted(golden_trace.trace_derived_keys(_MULTI))
+          == ["require_ledger_frame", "require_ledger_rows"])
+    check("与台账无关的用例返回空表（处置范围不扩大）",
+          golden_trace.trace_derived_keys(
+              _case("b", require_cmd_prefixes=["AUTO_NAVIGATE"], nonempty=True)) == [])
+    _CORPUS = [json.loads(l) for l in open(ROOT / "eval" / "golden" / "basic.jsonl",
+                                           encoding="utf-8") if l.strip()]
+    _LEDGER_CASES = sorted(c["id"] for c in _CORPUS if golden_trace.trace_derived_keys(c))
+    _CORPUS_KEYS = {k for c in _CORPUS for k in golden_trace.trace_derived_keys(c)}
+    check("键表与语料**双向**相等（少一个 = 漏诊；多一个 = 摘用例范围悄悄扩大）",
+          _CORPUS_KEYS == set(golden_trace.TRACE_DERIVED_GOLD_KEYS), str(sorted(_CORPUS_KEYS)))
+    check("带这几条键的用例确实只有那两条（语料增删要同步这一行）",
+          _LEDGER_CASES == ["admin_board_audit_reviewed_refusal",
+                            "board_audit_from_ledger_exec"], str(_LEDGER_CASES))
+    os.environ[golden_trace.ENV_OFF] = "1"
+    try:
+        _kept, _skipped, _rows = rg.check_trace_premises(
+            [_case("led", require_ledger_frame=True), _case("plain", nonempty=True)])
+        _off_fails = rg.check_gold({"require_ledger_frame": True}, _res())
+    finally:
+        os.environ.pop(golden_trace.ENV_OFF, None)
+    check("trace 关着：台账用例被摘成「未评估」，无关用例照跑",
+          [c["id"] for c in _kept] == ["plain"] and _skipped == ["led"]
+          and _rows[0]["keys"] == ["require_ledger_frame"], str(_rows))
+    check("判据侧报的是「未评估」，**不是**「待办台账没摆上桌」",
+          any("未评估" in f for f in _off_fails)
+          and not any("没摆上桌" in f for f in _off_fails), str(_off_fails))
+    _on_fails = rg.check_gold({"require_ledger_frame": True}, _res())
+    check("trace 开着、帧真的缺 ⇒ 照旧红（修的是跑法，不是把这条判据放走）",
+          any("没摆上桌" in f for f in _on_fails)
+          and not any("未评估" in f for f in _on_fails), str(_on_fails))
+    check("两个跑法都接上了这条闸（判据只有一处实现，接线各自一段）",
+          "check_trace_premises(cases)" in src_run
+          and "golden_trace.trace_derived_keys(c)" in src_full)
+    check("未评估要进 skipped_ids 且单列一个报告字段（否则看着像被静默豁免）",
+          "skip_ids += _trace_skipped" in src_run and "_SKIPPED_IDS += _TRACE_SKIPPED" in src_full
+          and '"skipped_trace_ids"' in src_run and '"skipped_trace_ids"' in src_full)
+    _m3_run = re.search(r"^\s*_code = 3 if \((?P<grp>[^)]*)\) else 2", src_run, re.M)
+    _m3_full = re.search(r"^\s*_code = 3 if \((?P<grp>[^)]*)\) else 2", src_full, re.M)
+    check("空分母的退出码：前提类闸报 3 而不是 2（两个跑法同口径）",
+          bool(_m3_run) and "_trace_bad" in _m3_run.group("grp")
+          and bool(_m3_full) and "_TRACE_SKIPPED" in _m3_full.group("grp"),
+          f"run={_m3_run.group('grp') if _m3_run else '没找到那一行'}；"
       f"full={_m3_full.group('grp') if _m3_full else '没找到那一行'}")
+    settings.trace_dir = PROD_DIR
+    shutil.rmtree(TMP, ignore_errors=True)
+    print("\n" + ("全部通过" if not FAILS else f"失败 {len(FAILS)} 项：" + "; ".join(FAILS)))
 
-# 收尾：还原 settings、清临时目录（本套件自己造的东西自己清）
-settings.trace_dir = PROD_DIR
-shutil.rmtree(TMP, ignore_errors=True)
+    assert not FAILS, (
+        f"{len(FAILS)} 条未通过：" + "；".join(FAILS))
 
-print("\n" + ("全部通过" if not FAILS else f"失败 {len(FAILS)} 项：" + "; ".join(FAILS)))
-raise SystemExit(1 if FAILS else 0)
+
+if __name__ == "__main__":
+    test_golden_trace()

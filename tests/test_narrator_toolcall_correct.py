@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """零工具 narrator 回了 tool_calls ⇒ 带纠正重问一次（20261006）。
 
 ## 为什么这条测试存在
@@ -42,12 +41,17 @@ narrator 不 `bind_tools`，但这**只约束我们不传工具**，不约束服
 
 无网络 / 无 LLM：`agent.graph.get_llm` 换成脚本假 LLM，直接调**真的** `model_node`。
 """
+
+
 import sys
 import tempfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent  # 仓根（测试统一在 tests/）
+
+
 sys.path.insert(0, str(ROOT))
+
 
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage  # noqa: E402
 
@@ -65,7 +69,11 @@ def check(desc: str, cond: bool, detail: str = "") -> None:
 
 
 _MSG = "随便说点什么"          # 内容与本套件无关：假 LLM 全接管，不经过 planner
+
+
 _PLAN = "WORKFLOW=chat\nPARAMS={}\nTOOLS:\nNOTE: （无）\nREPLY: （无）"
+
+
 _CFG = {"configurable": {"principal": Principal(uid=7, role="admin"),
                          "user_id": 7, "conversation_id": 42, "stop_event": None}}
 
@@ -120,12 +128,7 @@ def _events(rec, node: str, name: str) -> list[dict]:
     return [e for e in rec.events if e.get("node") == node and e.get("event") == name]
 
 
-# ── ① 空正文 + tool_calls ⇒ 纠正后正文胜出 ──────────────────────────────
-# 脚本照 **现场那三次** 排：call1 空+tool_call ⇒ （既有语义）同消息盲重试 call2
-# **仍是**空+tool_call（同输入同采样，trace 实证必然复现）⇒ 才轮到带纠正的 call3。
-# 这条顺序本身就是判据：**盲重试的语义没被改动**（它照旧是逐字同一份消息），
-# 纠正只是接在它后面。
-def test_empty_toolcall_is_corrected():
+def _test_empty_toolcall_is_corrected():
     print("\n[纠正] 正文为空 + tool_calls ⇒ 盲重试之后带纠正再问一次")
     out, fake, rec = _run("t_tc_empty",
                           [_ai("", out=14, calls=[_tc()]),
@@ -146,8 +149,7 @@ def test_empty_toolcall_is_corrected():
           ev and ev[0].get("names") == ["search_notes"], str(ev))
 
 
-# ── ② 只有前言那一副面孔（正文非空）也走同一条路 ────────────────────────
-def test_preamble_only_toolcall_is_corrected():
+def _test_preamble_only_toolcall_is_corrected():
     print("\n[纠正] 只有开场白 + tool_calls ⇒ 同样纠正（正文非空不是放行理由）")
     out, fake, _ = _run("t_tc_preamble",
                         [_ai("喵呜～让我帮你找找看～", out=50, calls=[_tc()]),
@@ -158,8 +160,7 @@ def test_preamble_only_toolcall_is_corrected():
           repr(out["messages"][0].content))
 
 
-# ── ③ 纠正后仍不可用 ⇒ 退回纠正前那份正文（fail-open 不变）─────────────
-def test_correct_then_fail_falls_back():
+def _test_correct_then_fail_falls_back():
     print("\n[兜底] 纠正后又带 tool_calls ⇒ 不抛、不再试第三次")
     out, fake, rec = _run("t_tc_fail",
                           [_ai("喵呜～让我帮你找找看～", out=50, calls=[_tc()]),
@@ -173,8 +174,7 @@ def test_correct_then_fail_falls_back():
           len(_events(rec, "model", "llm_done")) == 1)
 
 
-# ── ④ 反向对照：正常回复一次都不多重问 ─────────────────────────────────
-def test_normal_reply_not_corrected():
+def _test_normal_reply_not_corrected():
     print("\n[反向对照] 正常回复 ⇒ 一次都不多重问")
     out, fake, rec = _run("t_tc_ok", [_ai("好呀～", out=96)])
     check("invoke 恰好一次", len(fake.prompts) == 1, str(len(fake.prompts)))
@@ -182,10 +182,7 @@ def test_normal_reply_not_corrected():
     check("没有纠正事件", _events(rec, "model", "llm_toolcall_correct") == [])
 
 
-# ── ⑤ 形状：纠正那次 = 原消息 + 一条 SystemMessage，原消息一字不动 ──────
-# 与盲重试的 ⑤（"逐字同一份"）**刻意相反**——这正是两件事的区别：盲重试是同一次采样的
-# 重放，纠正是**换一次带指令的采样**。
-def test_correction_appends_system_message():
+def _test_correction_appends_system_message():
     print("\n[形状] 纠正 = 同一份前缀 + 一条纠正 SystemMessage")
     _, fake, _ = _run("t_tc_shape",
                       [_ai("喵呜～先看看～", out=14, calls=[_tc()]), _ai("好了", out=104)])
@@ -200,8 +197,7 @@ def test_correction_appends_system_message():
           "不要输出任何工具调用" in str(b[-1].content))
 
 
-# ── ⑥ 记账：纠正那条事件带**被否掉那次**的用量 ──────────────────────────
-def test_correction_traced_with_its_own_usage():
+def _test_correction_traced_with_its_own_usage():
     print("\n[记账] 被否掉那次的 token 不凭空消失")
     _, _, rec = _run("t_tc_trace",
                      [_ai("喵呜～先看看～", out=14, inp=25200, cache=17000, calls=[_tc()]),
@@ -217,13 +213,13 @@ def test_correction_traced_with_its_own_usage():
           and done[0].get("output") == 104, str(done))
 
 
-if __name__ == "__main__":
-    for fn in (test_empty_toolcall_is_corrected,
-               test_preamble_only_toolcall_is_corrected,
-               test_correct_then_fail_falls_back,
-               test_normal_reply_not_corrected,
-               test_correction_appends_system_message,
-               test_correction_traced_with_its_own_usage):
+def test_narrator_toolcall_correct():
+    for fn in (_test_empty_toolcall_is_corrected,
+               _test_preamble_only_toolcall_is_corrected,
+               _test_correct_then_fail_falls_back,
+               _test_normal_reply_not_corrected,
+               _test_correction_appends_system_message,
+               _test_correction_traced_with_its_own_usage):
         fn()
     print()
     if FAILS:
@@ -232,3 +228,10 @@ if __name__ == "__main__":
             print("   -", f)
         sys.exit(1)
     print("✅ 全部通过")
+
+    assert not FAILS, (
+        f"{len(FAILS)} 条未通过：" + "；".join(FAILS))
+
+
+if __name__ == "__main__":
+    test_narrator_toolcall_correct()

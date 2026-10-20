@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """「丢弃那一轮」同步到图自己的 state（20261019 批 E）：**真图 + MemorySaver**，零网络零真库。
 
 **这一件为什么存在**：20261018 起 agent 的上下文**由图自持**（`server._graph_holds_context()`
@@ -27,6 +26,8 @@
 
 用法：`.venv/bin/python tests/test_checkpoint_drop_turn.py`
 """
+
+
 from __future__ import annotations
 
 import asyncio
@@ -35,8 +36,13 @@ from pathlib import Path
 from typing import Annotated, TypedDict
 
 ROOT = Path(__file__).resolve().parent.parent
+
+
 sys.path.insert(0, str(ROOT))
+
+
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+
 
 from langchain_core.messages import AIMessage, HumanMessage  # noqa: E402
 from langgraph.checkpoint.memory import MemorySaver  # noqa: E402
@@ -46,7 +52,6 @@ from langgraph.graph.message import add_messages  # noqa: E402
 from agent import checkpoint as C  # noqa: E402
 
 FAILED: list[str] = []
-SKIPPED: list[str] = []
 
 
 def check(desc: str, ok: bool, detail: str = "") -> None:
@@ -57,12 +62,6 @@ def check(desc: str, ok: bool, detail: str = "") -> None:
         print(f"  ❌ {desc} —— {detail}")
 
 
-# ── 一张最小的真图：**形状照生产那张来**（多节点、每个节点都写一个通道）──────
-# ⚠️ **为什么不是"一个节点的图"**：`aupdate_state` 不传 `as_node` 时会从
-# `versions_seen` 推"最后是谁写的"；**一个节点的图上推不出来**（同一个节点的多个通道
-# 版本号相同 ⇒ 排序后最后两项相等 ⇒ `InvalidUpdateError: Ambiguous update`）。
-# 生产那张图（planner/execute/model/gate）推得出来——`tests/` 里这张图就是照它造的，
-# 所以这里量的才是**被测函数在生产形状上的行为**，而不是一个夹具巧合。
 class S(TypedDict):
     messages: Annotated[list, add_messages]
     tick: int
@@ -115,8 +114,9 @@ def _texts(msgs: list) -> list[str]:
     return [getattr(m, "content", m) for m in msgs]
 
 
-print("① 机制：摘掉最后一条 user **及其之后的一切**，返回值是「读回来确认」")
 _app = _graph()
+
+
 _c = _cfg()
 
 
@@ -241,12 +241,6 @@ async def _case_interrupted() -> None:
           "所以这条如实记下来。")
 
 
-asyncio.run(_case_main())
-
-# ── ③ 端点 ───────────────────────────────────────────────────────────────────
-print()
-print("③ 端点 `server.checkpoint_drop_turn`：三支各判一次")
-
 import server  # noqa: E402
 from config.settings import settings  # noqa: E402
 
@@ -278,85 +272,95 @@ class _Shell:
         return await self.graph.aupdate_state(cfg, values, **kw)
 
 
-_ep = _graph()
-asyncio.run(_seed(_ep, _c, [HumanMessage(content="[当前问题]: 端点那句")]))
-_old_agent = server._agent
-_old_flag = settings.agent_require_assertion
-try:
-    settings.agent_require_assertion = False   # 见 `_Req` 的注（测试自己钉，不读环境）
-    server._agent = None                     # 没挂 saver
-    _r = asyncio.run(server.checkpoint_drop_turn("7", server.DropTurnReq(text="端点那句"),
-                                                 _Req()))
-    check("没挂 saver ⇒ `dropped=false` 且点名 `no_saver`（不假装成功）",
-          _r.get("dropped") is False and _r.get("why") == "no_saver", str(_r))
-
-    server._agent = _Shell(_ep)
-    _r = asyncio.run(server.checkpoint_drop_turn("0", server.DropTurnReq(text="端点那句"),
-                                                 _Req()))
-    check("会话 id 非法 ⇒ `bad_conversation_id`", _r.get("why") == "bad_conversation_id", str(_r))
-
-    _r = asyncio.run(server.checkpoint_drop_turn("7", server.DropTurnReq(text="端点那句"),
-                                                 _Req()))
-    check("正常 ⇒ `dropped=true`", _r.get("dropped") is True, str(_r))
-    check("（对照）端点走完之后 state 里那条真没了",
-          "[当前问题]: 端点那句" not in _texts(
-              asyncio.run(_ep.aget_state(_c)).values["messages"]))
-
-    # 反控：端点**不许**把"没摘掉"报成"摘掉了"。
-    _noop = _NoopUpdate(_graph())
-    asyncio.run(_seed(_noop.graph, _c, [HumanMessage(content="[当前问题]: 又一次")]))
-    server._agent = _noop
-    _r = asyncio.run(server.checkpoint_drop_turn("7", server.DropTurnReq(text="又一次"),
-                                                 _Req()))
-    check("（反控）摘除没生效 ⇒ 端点必须回 `dropped=false` / `still_readable`",
-          _r.get("dropped") is False and _r.get("why") == "still_present", str(_r))
-finally:
-    server._agent = _old_agent
-    settings.agent_require_assertion = _old_flag
-
-# ── ④ 跨仓契约 ───────────────────────────────────────────────────────────────
-print()
-print("④ 跨仓契约：调用方在父仓 `chat.rs::discard_handler`")
-
 import _parent_repo  # noqa: E402
 
-HOOK = "drop_checkpoint_turn"
-_rs = _parent_repo.read(
-    "src/routes/chat.rs",
-    "本仓的 POST /checkpoint/{id}/drop_turn 必须由父仓的 discard_handler 调用（否则主人点了"
+
+def test_checkpoint_drop_turn():
+    SKIPPED: list[str] = []
+    print("① 机制：摘掉最后一条 user **及其之后的一切**，返回值是「读回来确认」")
+    asyncio.run(_case_main())
+    print()
+    print("③ 端点 `server.checkpoint_drop_turn`：三支各判一次")
+    _ep = _graph()
+    asyncio.run(_seed(_ep, _c, [HumanMessage(content="[当前问题]: 端点那句")]))
+    _old_agent = server._agent
+    _old_flag = settings.agent_require_assertion
+    try:
+        settings.agent_require_assertion = False   # 见 `_Req` 的注（测试自己钉，不读环境）
+        server._agent = None                     # 没挂 saver
+        _r = asyncio.run(server.checkpoint_drop_turn("7", server.DropTurnReq(text="端点那句"),
+                                                     _Req()))
+        check("没挂 saver ⇒ `dropped=false` 且点名 `no_saver`（不假装成功）",
+              _r.get("dropped") is False and _r.get("why") == "no_saver", str(_r))
+
+        server._agent = _Shell(_ep)
+        _r = asyncio.run(server.checkpoint_drop_turn("0", server.DropTurnReq(text="端点那句"),
+                                                     _Req()))
+        check("会话 id 非法 ⇒ `bad_conversation_id`", _r
+            .get("why") == "bad_conversation_id", str(_r))
+
+        _r = asyncio.run(server.checkpoint_drop_turn("7", server.DropTurnReq(text="端点那句"),
+                                                     _Req()))
+        check("正常 ⇒ `dropped=true`", _r.get("dropped") is True, str(_r))
+        check("（对照）端点走完之后 state 里那条真没了",
+              "[当前问题]: 端点那句" not in _texts(
+                  asyncio.run(_ep.aget_state(_c)).values["messages"]))
+
+        # 反控：端点**不许**把"没摘掉"报成"摘掉了"。
+        _noop = _NoopUpdate(_graph())
+        asyncio.run(_seed(_noop.graph, _c, [HumanMessage(content="[当前问题]: 又一次")]))
+        server._agent = _noop
+        _r = asyncio.run(server.checkpoint_drop_turn("7", server.DropTurnReq(text="又一次"),
+                                                     _Req()))
+        check("（反控）摘除没生效 ⇒ 端点必须回 `dropped=false` / `still_readable`",
+              _r.get("dropped") is False and _r.get("why") == "still_present", str(_r))
+    finally:
+        server._agent = _old_agent
+        settings.agent_require_assertion = _old_flag
+    print()
+    print("④ 跨仓契约：调用方在父仓 `chat.rs::discard_handler`")
+    HOOK = "drop_checkpoint_turn"
+    _rs = _parent_repo.read(
+        "src/routes/chat.rs",
+        "本仓的 POST /checkpoint/{id}/drop_turn 必须由父仓的 discard_handler 调用（否则主人点了"
     "「停止生成」，agent 下一轮照样记得那句被丢掉的话）")
-if _rs is None:
-    SKIPPED.append("父仓不在场 ⇒ 第 ④ 节没验")
-else:
-    _i = _rs.find("pub async fn discard_handler")
-    _body = None
-    if _i >= 0:
-        _j = _rs.find("{", _i)
-        _depth = 0
-        for _k in range(_j, len(_rs)):
-            if _rs[_k] == "{":
-                _depth += 1
-            elif _rs[_k] == "}":
-                _depth -= 1
-                if _depth == 0:
-                    _body = _rs[_j:_k + 1]
-                    break
-    if _body is None:
-        check("父仓 `discard_handler` 还在（判据的前提）", False, "找不到这个函数了")
-    elif HOOK in _body:
-        check("父仓 `discard_handler` 里调了 drop_turn 钩子", True)
+    if _rs is None:
+        SKIPPED.append("父仓不在场 ⇒ 第 ④ 节没验")
     else:
-        # ⚠️ **刻意不置红**：本仓是**公开仓**，CI 里的父仓是**钉住的一个 ref**——父仓那一行
-        # 没推进那个 ref 之前，写成"断言已接"就是一条**恒红**的判据，而红的套件进不了 CI
-        # （同 `tests/test_checkpoint_cascade.py` 头注记的那次）。**收紧留到父仓那一行进了
-        # 被钉住的那个 ref 之后**（判据的口径与 `test_checkpoint_cascade.py` ③ 同源）。
-        print("     · 父仓那一半**还没接上**：`chat.rs::discard_handler` 没调 drop_turn 钩子。"
+        _i = _rs.find("pub async fn discard_handler")
+        _body = None
+        if _i >= 0:
+            _j = _rs.find("{", _i)
+            _depth = 0
+            for _k in range(_j, len(_rs)):
+                if _rs[_k] == "{":
+                    _depth += 1
+                elif _rs[_k] == "}":
+                    _depth -= 1
+                    if _depth == 0:
+                        _body = _rs[_j:_k + 1]
+                        break
+        if _body is None:
+            check("父仓 `discard_handler` 还在（判据的前提）", False, "找不到这个函数了")
+        elif HOOK in _body:
+            check("父仓 `discard_handler` 里调了 drop_turn 钩子", True)
+        else:
+            # ⚠️ **刻意不置红**：本仓是**公开仓**，CI 里的父仓是**钉住的一个 ref**——父仓那一行
+            # 没推进那个 ref 之前，写成"断言已接"就是一条**恒红**的判据，而红的套件进不了 CI
+            # （同 `tests/test_checkpoint_cascade.py` 头注记的那次）。**收紧留到父仓那一行进了
+            # 被钉住的那个 ref 之后**（判据的口径与 `test_checkpoint_cascade.py` ③ 同源）。
+            print("     · 父仓那一半**还没接上**：`chat.rs::discard_handler` 没调 drop_turn 钩子。"
               "这是**已知缺口**（roadmap 批 7 记着），不是判据失败——本件判的是"
               "「机制与端点自己站得住」，跨仓那一半**只报不判**。")
+    print()
+    if FAILED:
+        print(f"失败 {len(FAILED)} 项：" + "；".join(FAILED))
+        sys.exit(1)
+    print("全部通过" + (f"（{SKIPPED[0]}）" if SKIPPED else ""))
 
-print()
-if FAILED:
-    print(f"失败 {len(FAILED)} 项：" + "；".join(FAILED))
-    sys.exit(1)
-print("全部通过" + (f"（{SKIPPED[0]}）" if SKIPPED else ""))
-sys.exit(0)
+    assert not FAILED, (
+        f"{len(FAILED)} 条未通过：" + "；".join(FAILED))
+
+
+if __name__ == "__main__":
+    test_checkpoint_drop_turn()

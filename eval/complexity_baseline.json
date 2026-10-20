@@ -167,6 +167,30 @@
     "c": 43,
     "lines": 257
   },
+  "tests/test_account_freeze.py::test_account_freeze": {
+    "c": 143,
+    "lines": 531
+  },
+  "tests/test_account_mute.py::test_account_mute": {
+    "c": 91,
+    "lines": 323
+  },
+  "tests/test_account_role.py::test_account_role": {
+    "c": 129,
+    "lines": 458
+  },
+  "tests/test_account_roster.py::test_account_roster": {
+    "c": 58,
+    "lines": 177
+  },
+  "tests/test_action_text.py::test_action_text": {
+    "c": 48,
+    "lines": 370
+  },
+  "tests/test_admin_write.py::test_admin_write": {
+    "c": 278,
+    "lines": 1419
+  },
   "tests/test_artifact_retention.py::main": {
     "c": 38,
     "lines": 170
@@ -175,45 +199,269 @@
     "c": 211,
     "lines": 1306
   },
+  "tests/test_block_reasons.py::test_block_reasons": {
+    "c": 52,
+    "lines": 171
+  },
   "tests/test_capability_denial.py::test_capability_denial": {
     "c": 29,
     "lines": 312
+  },
+  "tests/test_chat_quota.py::test_chat_quota": {
+    "c": 163,
+    "lines": 636
+  },
+  "tests/test_checkpoint_factory.py::test_checkpoint_factory": {
+    "c": 40,
+    "lines": 272
+  },
+  "tests/test_ci_suite_list.py::test_ci_suite_list": {
+    "c": 46,
+    "lines": 169
+  },
+  "tests/test_confirm.py::test_confirm": {
+    "c": 208,
+    "lines": 855
+  },
+  "tests/test_corpus_terms.py::test_corpus_terms": {
+    "c": 54,
+    "lines": 176
+  },
+  "tests/test_cross_language_tables.py::test_cross_language_tables": {
+    "c": 34,
+    "lines": 133
+  },
+  "tests/test_docs_links.py::test_docs_links": {
+    "c": 42,
+    "lines": 87
+  },
+  "tests/test_frame_caps.py::test_frame_caps": {
+    "c": 45,
+    "lines": 199
+  },
+  "tests/test_gate_replan.py::test_gate_replan": {
+    "c": 144,
+    "lines": 443
+  },
+  "tests/test_golden_corpus_provenance.py::test_golden_corpus_provenance": {
+    "c": 36,
+    "lines": 169
+  },
+  "tests/test_golden_fixture.py::test_golden_fixture": {
+    "c": 118,
+    "lines": 454
+  },
+  "tests/test_golden_fixture_corpus.py::test_golden_fixture_corpus": {
+    "c": 58,
+    "lines": 156
+  },
+  "tests/test_golden_keys.py::test_golden_keys": {
+    "c": 215,
+    "lines": 456
+  },
+  "tests/test_golden_rerun_offline.py::test_golden_rerun_offline": {
+    "c": 60,
+    "lines": 192
+  },
+  "tests/test_golden_thread.py::test_golden_thread": {
+    "c": 44,
+    "lines": 99
+  },
+  "tests/test_golden_trace.py::test_golden_trace": {
+    "c": 115,
+    "lines": 293
+  },
+  "tests/test_graph_build.py::test_graph_build": {
+    "c": 43,
+    "lines": 254
+  },
+  "tests/test_graph_reexports.py::test_graph_reexports": {
+    "c": 31,
+    "lines": 86
+  },
+  "tests/test_id_namespaces.py::test_id_namespaces": {
+    "c": 43,
+    "lines": 211
+  },
+  "tests/test_idem_noop.py::test_idem_noop": {
+    "c": 171,
+    "lines": 484
   },
   "tests/test_judge_offline.py::main": {
     "c": 75,
     "lines": 205
   },
-  "tests/test_landing_gate.py::test_enterprise_criteria": {
+  "tests/test_landing_gate.py::_test_enterprise_criteria": {
     "c": 42,
     "lines": 120
   },
-  "tests/test_nav_truthfulness.py::test_gate_nav_present_claim_verified_against_page_ctx": {
+  "tests/test_menu_deny.py::test_menu_deny": {
+    "c": 67,
+    "lines": 255
+  },
+  "tests/test_narrator_window.py::test_narrator_window": {
+    "c": 33,
+    "lines": 117
+  },
+  "tests/test_nav_truthfulness.py::_test_gate_nav_present_claim_verified_against_page_ctx": {
     "c": 38,
     "lines": 246
+  },
+  "tests/test_note_stats.py::test_note_stats": {
+    "c": 62,
+    "lines": 257
+  },
+  "tests/test_note_tags_codec.py::test_note_tags_codec": {
+    "c": 44,
+    "lines": 101
+  },
+  "tests/test_own_action_conflict.py::test_own_action_conflict": {
+    "c": 44,
+    "lines": 255
+  },
+  "tests/test_packaging.py::test_packaging": {
+    "c": 124,
+    "lines": 315
+  },
+  "tests/test_param_matrix_tokens.py::test_param_matrix_tokens": {
+    "c": 32,
+    "lines": 158
+  },
+  "tests/test_pending_ledger.py::test_pending_ledger": {
+    "c": 59,
+    "lines": 452
+  },
+  "tests/test_pg_retention.py::test_pg_retention": {
+    "c": 37,
+    "lines": 120
+  },
+  "tests/test_plan_channel.py::test_plan_channel": {
+    "c": 58,
+    "lines": 194
+  },
+  "tests/test_planner_llm_error.py::test_planner_llm_error": {
+    "c": 88,
+    "lines": 181
+  },
+  "tests/test_provenance.py::test_provenance": {
+    "c": 70,
+    "lines": 285
+  },
+  "tests/test_query_expansion.py::test_query_expansion": {
+    "c": 34,
+    "lines": 86
+  },
+  "tests/test_react_arm.py::test_react_arm": {
+    "c": 202,
+    "lines": 628
+  },
+  "tests/test_reconcile_offline.py::test_reconcile_offline": {
+    "c": 57,
+    "lines": 260
+  },
+  "tests/test_registry_sync.py::test_registry_sync": {
+    "c": 34,
+    "lines": 73
+  },
+  "tests/test_reports.py::test_reports": {
+    "c": 154,
+    "lines": 742
   },
   "tests/test_retention_manifest.py::main": {
     "c": 31,
     "lines": 167
   },
+  "tests/test_role_tables.py::test_role_tables": {
+    "c": 73,
+    "lines": 179
+  },
+  "tests/test_round_facts.py::test_round_facts": {
+    "c": 31,
+    "lines": 163
+  },
+  "tests/test_sections.py::test_sections": {
+    "c": 91,
+    "lines": 459
+  },
   "tests/test_settings_surface.py::test_settings_surface": {
     "c": 37,
     "lines": 141
+  },
+  "tests/test_status_judgements.py::test_status_judgements": {
+    "c": 40,
+    "lines": 178
+  },
+  "tests/test_tag_admin.py::test_tag_admin": {
+    "c": 329,
+    "lines": 1178
+  },
+  "tests/test_tag_color_tables.py::test_tag_color_tables": {
+    "c": 59,
+    "lines": 110
+  },
+  "tests/test_target_grounding.py::test_target_grounding": {
+    "c": 96,
+    "lines": 448
+  },
+  "tests/test_task_continuation.py::test_task_continuation": {
+    "c": 38,
+    "lines": 245
+  },
+  "tests/test_todo_schedule.py::test_todo_schedule": {
+    "c": 362,
+    "lines": 1403
+  },
+  "tests/test_tool_call_pairs.py::test_tool_call_pairs": {
+    "c": 40,
+    "lines": 162
   },
   "tests/test_trace_retention.py::main": {
     "c": 47,
     "lines": 166
   },
-  "tests/test_workflows.py::test_admin_console_role_channel": {
+  "tests/test_turn_window.py::test_turn_window": {
+    "c": 116,
+    "lines": 308
+  },
+  "tests/test_user_notice.py::test_user_notice": {
+    "c": 105,
+    "lines": 481
+  },
+  "tests/test_userdata.py::test_userdata": {
+    "c": 207,
+    "lines": 961
+  },
+  "tests/test_vector_index.py::test_vector_index": {
+    "c": 77,
+    "lines": 372
+  },
+  "tests/test_wordlist_gate.py::test_wordlist_gate": {
+    "c": 60,
+    "lines": 272
+  },
+  "tests/test_workflows.py::_test_admin_console_role_channel": {
     "c": 44,
     "lines": 155
   },
-  "tests/test_workflows.py::test_name_target_round": {
+  "tests/test_workflows.py::_test_name_target_round": {
     "c": 35,
     "lines": 328
   },
-  "tests/test_workflows.py::test_refs": {
+  "tests/test_workflows.py::_test_refs": {
     "c": 33,
     "lines": 219
+  },
+  "tests/test_write_idempotency.py::test_write_idempotency": {
+    "c": 60,
+    "lines": 299
+  },
+  "tests/test_write_param_words.py::test_write_param_words": {
+    "c": 33,
+    "lines": 118
+  },
+  "tests/test_zako_role.py::test_zako_role": {
+    "c": 44,
+    "lines": 178
   },
   "tools/device.py::device_oled_display": {
     "c": 33,

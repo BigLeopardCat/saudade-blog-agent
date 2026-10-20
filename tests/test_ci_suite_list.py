@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """自动化入口的**接线契约**：套件清单只有一处事实源，跨语言守卫不许静默跳过。
 
 **为什么单起一套**（20260928 架构规范化 ①）：审计实测——磁盘上 50+ 个 `tests/*.py`，
@@ -22,6 +21,7 @@ checkout 到 `_parent/`，接线与凭据轮换见 `docs/adr/adr-0004-cross-lang
 用法：.venv/bin/python tests/test_ci_suite_list.py
 """
 
+
 from __future__ import annotations
 
 import os
@@ -30,7 +30,10 @@ import re
 import sys
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
+
+
 sys.path.insert(0, str(ROOT / "tests"))
+
 
 import run_all  # noqa: E402  （只为断言它的枚举规则，不跑它）
 
@@ -43,15 +46,7 @@ def check(name: str, ok: bool, extra: str = "") -> None:
         FAILED.append(name)
 
 
-EVAL_YML = ROOT / ".github" / "workflows" / "eval.yml"
-NIGHTLY = ROOT / "scripts" / "nightly_regression.sh"
-
-# 抓"某个入口脚本里直接调用了一个套件文件"的所有落点。刻意宽松（不锚定 `python`）：
-# 写成 `$PY tests/x.py` / `uv run python tests/x.py` / `python3 tests/x.py` 都能抓到——
-# 要防的是"逐套件列举"这个形状，不是某一种写法。
 _SUITE_CALL_RE = re.compile(r"tests/([A-Za-z0-9_]+\.py)")
-
-_ALLOWED = {"run_all.py"}  # 唯一允许被入口逐个调用的文件
 
 
 def _called_suites(text: str) -> set[str]:
@@ -65,98 +60,18 @@ def _called_suites(text: str) -> set[str]:
     return {m for m in _SUITE_CALL_RE.findall(code) if m not in {"_parent_repo.py"}}
 
 
-print("① CI（.github/workflows/eval.yml）：不许再抄名单")
-_eval = EVAL_YML.read_text(encoding="utf-8")
-_called = _called_suites(_eval)
-check("CI 跑的是 tests/run_all.py（按磁盘枚举）", "tests/run_all.py" in _eval)
-check("CI 里没有任何逐个套件的调用（加套件不用改 CI）",
-      _called <= _ALLOWED, f"逐套件调用：{sorted(_called - _ALLOWED)}")
-check("CI 不传 -k（传了就是静默地把 CI 收窄成子集）",
-      "run_all.py -k" not in _eval and "run_all.py --keyword" not in _eval)
-
-print("\n①b ruff 版本只有一处事实源（pyproject 的 dev 分组）")
-_eval_code = "\n".join(ln for ln in _eval.splitlines() if not ln.lstrip().startswith("#"))
-# 注释里提一句"本机用 uvx ruff@X"不算手写版本——判据看的是**会执行的**那一行
-check("CI 的 lint 步骤从项目环境取 ruff（uv run --frozen ruff）",
-      "uv run --frozen ruff" in _eval_code and "uvx ruff" not in _eval_code)
-_pyproject = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
-# 判据 = "dev 分组里钉着 ruff 的版本"，**不是**"dev 分组里只有 ruff"。
-# 20261005 前这里写的是 `^dev\s*=\s*\[\s*"ruff==…"\s*\]`——它顺手把"唯一一项"也判了进去，
-# 于是给 dev 组加第二个包（那天加的是第二条臂要的 langchain）就会让这条红，
-# 而它红的时候说的却是"没找到 dev = [\"ruff==X\"]"，与真因（数组多了一项）差着一层。
-# 现在按**分组体**取：先切出 [dependency-groups] 这一节，再在里面找 ruff 的钉死项。
-_dg = re.search(r'^\[dependency-groups\](?P<body>.*?)(?=^\[|\Z)', _pyproject, re.M | re.S)
-_m = re.search(r'"ruff==([0-9.]+)"', _dg.group("body")) if _dg else None
-check("pyproject 的 [dependency-groups] dev 钉了 ruff 版本",
-      _m is not None, _m.group(1) if _m else "dependency-groups 里没有钉死的 ruff==")
-if _m:
-    _pin = _m.group(1)
-    # 本机命令散在文档里写的是 `uvx ruff@X`（隔离环境，不碰产线 venv）：**必须同版**。
-    # 这条是"改一处忘另一处"唯一能被机械抓住的形状（升版只改 pyproject 忘了改文档）。
-    _bad = []
-    for p in [ROOT / "README.md", ROOT / "CLAUDE.md"] + sorted((ROOT / "docs").glob("*.md")):
-        if not p.exists():
-            continue
-        _bad += [f"{p.name}@{v}" for v in re.findall(r"uvx ruff@([0-9.]+)",
-                                                   p.read_text(encoding="utf-8")) if v != _pin]
-    check(f"文档里的 `uvx ruff@X` 与 dev 分组同版（{_pin}）", not _bad, "、".join(_bad))
-
-print("\n② 夜间（scripts/nightly_regression.sh）：与 CI 同一份清单")
-_night = NIGHTLY.read_text(encoding="utf-8")
-_night_called = _called_suites(_night)
-check("夜间跑的也是 tests/run_all.py", "tests/run_all.py" in _night)
-check("夜间没有逐个套件的调用（此前这里是单列 test_workflows.py）",
-      _night_called <= _ALLOWED, f"逐套件调用：{sorted(_night_called - _ALLOWED)}")
-check("夜间给 run_all 也没传 -k（夜间=全量）",
-      "run_all.py -k" not in _night and "run_all.py --keyword" not in _night)
-
-print("\n③ 夜间：跨语言守卫跑不到就是红，不是静默跳过")
-check("夜间导出了 SAUDADE_REQUIRE_PARENT=1（父仓守卫跑不到 ⇒ 红）",
-      re.search(r"^\s*export\s+SAUDADE_REQUIRE_PARENT=1\s*$", _night, re.M) is not None)
-
-print("\n④ run_all.py 的枚举规则：按磁盘，不写名单")
-# `conftest.py`（20261020 双轨起步起）与 `run_all.py` 同列例外：pytest 的测试现场，
-# 只有装配逻辑、没有任何判据——枚进去会把总数虚加一格。此例外与 `run_all.suites()`
-# 和 `test_tests_dir_shape.py::suites_on_disk` 三处同源，改一处必须同步另两处。
-_disk = {p.name for p in sorted((ROOT / "tests").glob("*.py"))
-         if not p.name.startswith("_") and p.name not in ("run_all.py", "conftest.py")}
-_enum = {p.name for p in run_all.suites()}
-check("枚举 == 磁盘（漏在磁盘上的文件就是「从不运行」的那种漏）",
-      _disk == _enum, f"只在磁盘：{sorted(_disk - _enum)}；只在枚举：{sorted(_enum - _disk)}")
-check("枚举结果非空且覆盖多套（不是把 glob 换成了空名单）", len(_enum) >= 10, f"{len(_enum)} 套")
-# 20261015 撤档把 `AGENT_TASK_STATE` / `AGENT_TASK_PLAN_EXEC` 两格从钉子表里删掉了
-# （两格一起换成 `AGENT_EVIDENCE` / `AGENT_FASTPATH`，理由见 `run_all._PINNED` 上面那段注）。
-# 这一条守的不变量不变：**钉子表里必须留着"真设置项"那几格**——只有环境开关（离线套件
-# 与 IoT）的话，`_ambient_note` 那个"本机 .env 与出厂档不同"的机构会静默变成空跑。
-check("出厂档钉子还在（判据不跟运维取值走）",
-      run_all._PINNED.get("AGENT_EVIDENCE") == "0"
-      and run_all._PINNED.get("AGENT_FASTPATH") == "1"
-      and run_all._PINNED.get("IOT_ENABLED") == "1", str(run_all._PINNED))
-from config.settings import Settings  # noqa: E402  （默认值从声明取，不手抄一份）
-check("接口层没有第二个档可钉（`PLANNER_ENGINE` 已删，20261004）",
-      "PLANNER_ENGINE" not in run_all._PINNED
-      and "planner_engine" not in Settings.model_fields,
-      f"钉子={run_all._PINNED}；字段里有 planner_engine="
-      f"{'planner_engine' in Settings.model_fields}")
-
-print("\n④b 出厂环境：离线套件**不读 .env**（20260928）")
-# 为什么这一条和上面几条并列：CI 绿、本机绿，而**绿的理由不同**是同一族失效——
-# 实测那次是本机 `.env` 里有产线 `JWT_SECRET` ⇒ 弹窗签得出令牌 ⇒ `test_confirm.py`
-# 的弹窗矩阵恒绿；CI 没有 .env ⇒ 空密钥 ⇒ 同一片判据恒红（红得与代码无关）。
-# 这里验两半：**声明**（run_all 钉了它）+ **机制真的咬**（子进程里 .env 被跳过）。
 import json  # noqa: E402
 import subprocess  # noqa: E402
 
-check("run_all 给子进程设了 SAUDADE_IGNORE_ENV_FILE=1（环境由入口定义，不由这台机器定义）",
-      run_all._PINNED.get("SAUDADE_IGNORE_ENV_FILE") == "1", str(run_all._PINNED))
-# 子进程只回报**与声明默认值不同的字段名**，不回报值：`jwt_secret` / `*_api_key` 都在
-# 这批字段里，把值打进测试输出等于把凭据写进日志（本仓纪律：凭据一次都不许打印）。
+from config.settings import Settings  # noqa: E402  （默认值从声明取，不手抄一份）
+
 _PROBE = ("import json,sys;sys.path.insert(0,%r);"
           "from config.settings import settings;"
           "d=json.loads(%r);"
           "print(json.dumps(sorted(k for k, v in d.items() "
           "if str(getattr(settings, k)) != v)))")
-# 第二支探针（见 `_pinned_effective`）：只回报**钉子档位**的实际生效值。
+
+
 _TAKE = ("import json,sys;sys.path.insert(0,%r);"
          "from config.settings import settings;"
          "print(json.dumps({'agent_evidence': bool(settings.agent_evidence),"
@@ -204,83 +119,15 @@ def _pinned_effective() -> dict | None:
     return json.loads(out.stdout.strip().splitlines()[-1])
 
 
-# （`Settings` 的 import 在 ④ 那一节已做——上面那条"接口层没有第二个档"要用它。）
-
-# 全字段比较（不挑三个）：但凡 `.env` 能改的东西都在这条判据的作用范围内。
 _DEFAULTS = {k: str(f.default) for k, f in Settings.model_fields.items()}
-_factory = _mismatch(ignore=True)
-check("机制真的咬：带 SAUDADE_IGNORE_ENV_FILE=1 的子进程里，一个字段都不偏离默认值",
-      _factory == [], f"偏离的字段={_factory}")
-_ambient = _mismatch(ignore=False)
-if (ROOT / ".env").exists():
-    check("对照（本机有 .env）：不带那个变量时**确实有偏离**（否则这一整套是装饰）",
-          bool(_ambient), f"本机偏离的字段={_ambient}")
-else:
-    print("  ⏭  没有 .env（CI 就这样）⇒ 这一半无从对照；机制那半已在上一条验过")
 
-# 另一半：钉了要真的生效（上一条把钉子摘掉了才验得干净）。逐值核对三个钉子档位。
-_eff = _pinned_effective()
-check("⭐⭐ 入口钉住的档位**真的生效**（钉了不生效 ⇒ 套件按另一档跑，且静默）",
-      _eff is not None
-      and _eff["agent_evidence"] == (run_all._PINNED["AGENT_EVIDENCE"] == "1")
-      and _eff["agent_fastpath"] == (run_all._PINNED["AGENT_FASTPATH"] == "1")
-      and _eff["iot_enabled"] == (run_all._PINNED["IOT_ENABLED"] == "1"),
-      f"实际生效={_eff}；声明={run_all._PINNED}")
 
-print("\n⑤ 三态守卫（tests/_parent_repo.py）本机行为")
 sys.path.insert(0, str(ROOT / "tests"))
+
+
 import _parent_repo  # noqa: E402
-_old_repo = os.environ.get("SAUDADE_PARENT_REPO")
-_old_req = os.environ.get("SAUDADE_REQUIRE_PARENT")
-try:
-    os.environ["SAUDADE_PARENT_REPO"] = "/nonexistent-parent-for-test"
-    os.environ.pop("SAUDADE_REQUIRE_PARENT", None)
-    check("找不到父仓 + 没设要求 ⇒ 返回 None（**不是**抛错，CI 是常态）",
-          _parent_repo.parent_root() is None)
-    os.environ["SAUDADE_REQUIRE_PARENT"] = "1"
-    try:
-        _parent_repo.read("src/routes/chat.rs", why="测试用")
-        check("设了要求 ⇒ 跑不到就 SystemExit(1)", False, "没有退出")
-    except SystemExit as e:
-        check("设了要求 ⇒ 跑不到就 SystemExit(1)", e.code == 1, f"code={e.code}")
-    # 指错位置必须是"找不到"，不是"绕过检查"：env 只用来指位置。
-    check("env 指着不存在的目录 ⇒ 等同找不到（不许因为设了 env 就当通过）",
-          _parent_repo.parent_root() is None)
-finally:
-    for k, v in (("SAUDADE_PARENT_REPO", _old_repo), ("SAUDADE_REQUIRE_PARENT", _old_req)):
-        if v is None:
-            os.environ.pop(k, None)
-        else:
-            os.environ[k] = v
 
-print("\n⑥ CI 与父仓的接线（跨语言守卫在 CI 里也真判）")
-# 判的是**接线**不是语义：CI 有没有把父仓拉下来、有没有把"跑不到就红"设上、锥够不够。
-# 为什么值得单判：这道守卫此前在 CI 里恒跳过，而跳过**没有任何东西会告诉你**（本机绿、
-# CI 也绿）。凭据本身（只读 PAT）由人配置——这里判的是"配好之后接线对不对"。
-_ADR = ROOT / "docs" / "adr" / "adr-0004-cross-language-guard-in-ci.md"
-_ADR_NAME = _ADR.name
-_eval_txt = EVAL_YML.read_text(encoding="utf-8")        # 含注释：接线信息有一半写在注释里
-check("CI 里 checkout 了父仓（只读凭据 + 稀疏锥 + 浅克隆）",
-      "repository: BigLeopardCat/Saudade-Blog" in _eval_txt
-      and "secrets.PARENT_REPO_TOKEN" in _eval_txt
-      and "sparse-checkout:" in _eval_txt
-      and "persist-credentials: false" in _eval_txt, "eval.yml")
-check("父仓 checkout 的 token 是仓库秘密，不是写在 yml 里的字面凭据",
-      re.search(r"token:\s*\$\{\{\s*secrets\.", _eval_txt) is not None)
-check("CI 给套件设了 SAUDADE_PARENT_REPO（指到 checkout 落点）",
-      re.search(r"^\s*SAUDADE_PARENT_REPO:\s*\S+", _eval_txt, re.M) is not None)
-check("CI 给套件设了 SAUDADE_REQUIRE_PARENT=1（**跑不到就红**，与夜间同一条纪律）",
-      re.search(r'^\s*SAUDADE_REQUIRE_PARENT:\s*"?1"?\s*$', _eval_txt, re.M) is not None)
-check("CI 自检落位锚（锥配错/空目录会让守卫**假绿**）",
-      "test -f _parent/src/routes/chat.rs" in _eval_txt)
-# 凭据不许进日志。判据只看**展开**（`$PARENT_REPO_TOKEN` / `${PARENT_REPO_TOKEN}`）——
-# 出错信息里写出这个名字（不展开）是有意为之，不算泄漏。
-check("CI 不把凭据展开进日志（echo/printf 里不许出现变量展开）",
-      re.search(r"(echo|printf)[^\n]*\$\{?PARENT_REPO_TOKEN", _eval_txt) is None)
 
-# 锥够不够：**机械核对**所有守卫实际读的父仓路径是否落在 `sparse-checkout` 的锥里。
-# 这是"改一处忘另一处"在这一处的形状——新加一条读别处源码的守卫，CI 会因为"文件不在"
-# 而红，而红的理由看着像"Rust 那边没改"，有人会顺手把守卫删掉。把这条接线的边界先钉死。
 def _cone_patterns(txt: str) -> list[str]:
     """把 `sparse-checkout` 的值读成**逐条模式**，两种合法写法都认（20261001）。
 
@@ -305,18 +152,6 @@ def _cone_patterns(txt: str) -> list[str]:
     return body
 
 
-_CONE_FIXTURES = ("sparse-checkout: a,b", "sparse-checkout: |\n  a\n  b\nnext: 1\n")
-check("锥的读法两种写法都认（单行逗号 / YAML 块标量；块标量读到缩进收回为止）",
-      all(_cone_patterns(t) == ["a", "b"] for t in _CONE_FIXTURES),
-      " / ".join(f"{t!r}→{_cone_patterns(t)}" for t in _CONE_FIXTURES))
-_patterns = _cone_patterns(_eval_txt)
-_cone = ", ".join(_patterns)                       # 只给下面失败信息里的"锥=…"用
-_reads: dict[str, list[str]] = {}
-for _p in sorted((ROOT / "tests").glob("*.py")):
-    for _rel in re.findall(r'_parent_repo\.read\(\s*"([^"]+)"', _p.read_text(encoding="utf-8")):
-        _reads.setdefault(_rel, []).append(_p.name)
-
-
 def _cone_dirs(cone: str) -> set[str]:
     """cone 模式实际会落盘哪些目录：锥 + 它的各级祖先 + 仓根（祖先目录的**直系文件**也在）。
 
@@ -326,40 +161,9 @@ def _cone_dirs(cone: str) -> set[str]:
     return {"/".join(parts[:i]) for i in range(len(parts) + 1)}
 
 
-_covered = set().union(*(_cone_dirs(p) for p in _patterns)) if _patterns else _cone_dirs("")
-_outside = sorted(f"{rel}（{'+'.join(who)}）" for rel, who in _reads.items()
-                  if "/".join(rel.split("/")[:-1]) not in _covered)
-check("锥里真含父仓锚（`_SENTINEL`）——锥配窄了连「父仓在哪」都认不出来",
-      "/".join(_parent_repo._SENTINEL.split("/")[:-1]) in _covered)
-check(f"守卫读的每一个父仓文件都落在 CI 拉的锥里（锥={_cone or '未声明'}）[{len(_reads)} 处]",
-      not _outside, "锥外的：" + "、".join(_outside))
-check("锥的判据是**扫源码得出**的，不是这里手抄一份名单（扫不到路径=判据失效）",
-      len(_reads) >= 2, f"扫到 {len(_reads)} 处")
-# 上面那条"都在锥里"要能**判出不在**才算判据，否则它就是装饰（换成另一处锥重算一遍）。
-_other = sorted(rel for rel in _reads
-                if "/".join(rel.split("/")[:-1]) not in _cone_dirs("frontend/src"))
-check("锥判据真的咬：换成另一处锥（frontend/src）重算，扫到的路径全被判成锥外",
-      len(_other) == len(_reads) and len(_reads) > 0, f"锥外：{_other}")
-# 秘密名与文档同源：改名只改 yml 会留下一份「文档说 A、CI 用 B」的说明
-check(f"ADR 里写了同一个秘密名（{_ADR_NAME}）",
-      _ADR.is_file() and "PARENT_REPO_TOKEN" in _ADR.read_text(encoding="utf-8"),
-      _ADR_NAME)
-check("eval.yml 指着那份 ADR（接线与轮换只有一处说明）",
-      _ADR_NAME in _eval_txt)
-
-print("\n⑦ PR 上也跑门禁的接线（20261019）：不许静默地退回「PR 上什么都不跑」")
-# 此前 workflow 只 `push: branches: [main]` ⇒ 一个 PR 从推上去到合并之间**没有任何自动
-# 检查**，红是"合进 main 那一刻"才发现的（20261017 实测：PR #8 合流当场带出两条红）。
-# 加 `pull_request` 之后多出一个结构性难题：门禁里的跨语言守卫要读**私有**父仓，而
-# **GitHub 不向 fork 的 PR 传 secret** ⇒ fork PR 上那一步跑不了，只能**显式降级**。
-#
-# 这一节判的就是那条降级接线。四条判据各自对应一种**静默**失效——都不是"红得难看"，
-# 而是"看着在跑、其实没跑"：
-#   ① 没有 `pull_request` ⇒ PR 上什么都不跑，而 PR 页面看着"没有红灯"；
-#   ② 依赖父仓的步骤没挂 `if` ⇒ fork PR 红在 checkout/凭据上，红的理由看着像代码问题；
-#   ③ 降级支自己设了 `SAUDADE_REQUIRE_PARENT` ⇒ 降级路径自己红，等于没降级；
-#   ④ 凭据缺失时不写 job summary ⇒ "本次这些判据没跑"没人看得见。
 _STEP_SPLIT_RE = re.compile(r"\n(?=[ \t]*- (?:name|uses):)")
+
+
 _GUARD = "steps.parent.outputs.available == '1'"
 
 
@@ -390,21 +194,176 @@ def _pr_gate_problems(txt: str) -> list[str]:
     return bad
 
 
-_bad_gate = _pr_gate_problems(_eval_txt)
-check("PR 门禁接线完整（触发 / 父仓步骤挂 if / 降级支 / summary 记录）",
-      _bad_gate == [], "；".join(_bad_gate))
-# 正控：四条判据**各自**都要能红，否则它们是装饰（本仓纪律：正控不红不算数）。
-for _desc, _mut in (
-    ("去掉 pull_request 触发", _eval_txt.replace("  pull_request:", "  # pull_request:")),
-    ("依赖父仓的步骤不挂 if", _eval_txt.replace("if: " + _GUARD, "if: true")),
-    ("降级支也设 SAUDADE_REQUIRE_PARENT",
-     _eval_txt.replace("available != '1'", "available == '1'")),
-    ("降级不写 job summary", _eval_txt.replace("$GITHUB_STEP_SUMMARY", "$SUMMARY_OFF")),
-):
-    check(f"  正控：{_desc} ⇒ 判据必须报红", _pr_gate_problems(_mut) != [])
+def test_ci_suite_list():
+    EVAL_YML = ROOT / ".github" / "workflows" / "eval.yml"
+    NIGHTLY = ROOT / "scripts" / "nightly_regression.sh"
+    _ALLOWED = {"run_all.py"}  # 唯一允许被入口逐个调用的文件
+    print("① CI（.github/workflows/eval.yml）：不许再抄名单")
+    _eval = EVAL_YML.read_text(encoding="utf-8")
+    _called = _called_suites(_eval)
+    check("CI 跑的是 tests/run_all.py（按磁盘枚举）", "tests/run_all.py" in _eval)
+    check("CI 里没有任何逐个套件的调用（加套件不用改 CI）",
+          _called <= _ALLOWED, f"逐套件调用：{sorted(_called - _ALLOWED)}")
+    check("CI 不传 -k（传了就是静默地把 CI 收窄成子集）",
+          "run_all.py -k" not in _eval and "run_all.py --keyword" not in _eval)
+    print("\n①b ruff 版本只有一处事实源（pyproject 的 dev 分组）")
+    _eval_code = "\n".join(ln for ln in _eval.splitlines() if not ln.lstrip().startswith("#"))
+    check("CI 的 lint 步骤从项目环境取 ruff（uv run --frozen ruff）",
+          "uv run --frozen ruff" in _eval_code and "uvx ruff" not in _eval_code)
+    _pyproject = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
+    _dg = re.search(r'^\[dependency-groups\](?P<body>.*?)(?=^\[|\Z)', _pyproject, re.M | re.S)
+    _m = re.search(r'"ruff==([0-9.]+)"', _dg.group("body")) if _dg else None
+    check("pyproject 的 [dependency-groups] dev 钉了 ruff 版本",
+          _m is not None, _m.group(1) if _m else "dependency-groups 里没有钉死的 ruff==")
+    if _m:
+        _pin = _m.group(1)
+        # 本机命令散在文档里写的是 `uvx ruff@X`（隔离环境，不碰产线 venv）：**必须同版**。
+        # 这条是"改一处忘另一处"唯一能被机械抓住的形状（升版只改 pyproject 忘了改文档）。
+        _bad = []
+        for p in [ROOT / "README.md", ROOT / "CLAUDE.md"] + sorted((ROOT / "docs").glob("*.md")):
+            if not p.exists():
+                continue
+            _bad += [f"{p.name}@{v}" for v in re.findall(r"uvx ruff@([0-9.]+)",
+                                                       p.read_text(encoding="utf-8")) if v != _pin]
+        check(f"文档里的 `uvx ruff@X` 与 dev 分组同版（{_pin}）", not _bad, "、".join(_bad))
+    print("\n② 夜间（scripts/nightly_regression.sh）：与 CI 同一份清单")
+    _night = NIGHTLY.read_text(encoding="utf-8")
+    _night_called = _called_suites(_night)
+    check("夜间跑的也是 tests/run_all.py", "tests/run_all.py" in _night)
+    check("夜间没有逐个套件的调用（此前这里是单列 test_workflows.py）",
+          _night_called <= _ALLOWED, f"逐套件调用：{sorted(_night_called - _ALLOWED)}")
+    check("夜间给 run_all 也没传 -k（夜间=全量）",
+          "run_all.py -k" not in _night and "run_all.py --keyword" not in _night)
+    print("\n③ 夜间：跨语言守卫跑不到就是红，不是静默跳过")
+    check("夜间导出了 SAUDADE_REQUIRE_PARENT=1（父仓守卫跑不到 ⇒ 红）",
+          re.search(r"^\s*export\s+SAUDADE_REQUIRE_PARENT=1\s*$", _night, re.M) is not None)
+    print("\n④ run_all.py 的枚举规则：按磁盘，不写名单")
+    _disk = {p.name for p in sorted((ROOT / "tests").glob("*.py"))
+             if not p.name.startswith("_") and p.name not in ("run_all.py", "conftest.py")}
+    _enum = {p.name for p in run_all.suites()}
+    check("枚举 == 磁盘（漏在磁盘上的文件就是「从不运行」的那种漏）",
+          _disk == _enum, f"只在磁盘：{sorted(_disk - _enum)}；只在枚举：{sorted(_enum - _disk)}")
+    check("枚举结果非空且覆盖多套（不是把 glob 换成了空名单）",
+        len(_enum) >= 10, f"{len(_enum)} 套")
+    check("出厂档钉子还在（判据不跟运维取值走）",
+          run_all._PINNED.get("AGENT_EVIDENCE") == "0"
+          and run_all._PINNED.get("AGENT_FASTPATH") == "1"
+          and run_all._PINNED.get("IOT_ENABLED") == "1", str(run_all._PINNED))
+    check("接口层没有第二个档可钉（`PLANNER_ENGINE` 已删，20261004）",
+          "PLANNER_ENGINE" not in run_all._PINNED
+          and "planner_engine" not in Settings.model_fields,
+          f"钉子={run_all._PINNED}；字段里有 planner_engine="
+          f"{'planner_engine' in Settings.model_fields}")
+    print("\n④b 出厂环境：离线套件**不读 .env**（20260928）")
+    check("run_all 给子进程设了 SAUDADE_IGNORE_ENV_FILE=1（环境由入口定义，不由这台机器定义）",
+          run_all._PINNED.get("SAUDADE_IGNORE_ENV_FILE") == "1", str(run_all._PINNED))
+    _factory = _mismatch(ignore=True)
+    check("机制真的咬：带 SAUDADE_IGNORE_ENV_FILE=1 的子进程里，一个字段都不偏离默认值",
+          _factory == [], f"偏离的字段={_factory}")
+    _ambient = _mismatch(ignore=False)
+    if (ROOT / ".env").exists():
+        check("对照（本机有 .env）：不带那个变量时**确实有偏离**（否则这一整套是装饰）",
+              bool(_ambient), f"本机偏离的字段={_ambient}")
+    else:
+        print("  ⏭  没有 .env（CI 就这样）⇒ 这一半无从对照；机制那半已在上一条验过")
+    _eff = _pinned_effective()
+    check("⭐⭐ 入口钉住的档位**真的生效**（钉了不生效 ⇒ 套件按另一档跑，且静默）",
+          _eff is not None
+          and _eff["agent_evidence"] == (run_all._PINNED["AGENT_EVIDENCE"] == "1")
+          and _eff["agent_fastpath"] == (run_all._PINNED["AGENT_FASTPATH"] == "1")
+          and _eff["iot_enabled"] == (run_all._PINNED["IOT_ENABLED"] == "1"),
+          f"实际生效={_eff}；声明={run_all._PINNED}")
+    print("\n⑤ 三态守卫（tests/_parent_repo.py）本机行为")
+    _old_repo = os.environ.get("SAUDADE_PARENT_REPO")
+    _old_req = os.environ.get("SAUDADE_REQUIRE_PARENT")
+    try:
+        os.environ["SAUDADE_PARENT_REPO"] = "/nonexistent-parent-for-test"
+        os.environ.pop("SAUDADE_REQUIRE_PARENT", None)
+        check("找不到父仓 + 没设要求 ⇒ 返回 None（**不是**抛错，CI 是常态）",
+              _parent_repo.parent_root() is None)
+        os.environ["SAUDADE_REQUIRE_PARENT"] = "1"
+        try:
+            _parent_repo.read("src/routes/chat.rs", why="测试用")
+            check("设了要求 ⇒ 跑不到就 SystemExit(1)", False, "没有退出")
+        except SystemExit as e:
+            check("设了要求 ⇒ 跑不到就 SystemExit(1)", e.code == 1, f"code={e.code}")
+        # 指错位置必须是"找不到"，不是"绕过检查"：env 只用来指位置。
+        check("env 指着不存在的目录 ⇒ 等同找不到（不许因为设了 env 就当通过）",
+              _parent_repo.parent_root() is None)
+    finally:
+        for k, v in (("SAUDADE_PARENT_REPO", _old_repo), ("SAUDADE_REQUIRE_PARENT", _old_req)):
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+    print("\n⑥ CI 与父仓的接线（跨语言守卫在 CI 里也真判）")
+    _ADR = ROOT / "docs" / "adr" / "adr-0004-cross-language-guard-in-ci.md"
+    _ADR_NAME = _ADR.name
+    _eval_txt = EVAL_YML.read_text(encoding="utf-8")        # 含注释：接线信息有一半写在注释里
+    check("CI 里 checkout 了父仓（只读凭据 + 稀疏锥 + 浅克隆）",
+          "repository: BigLeopardCat/Saudade-Blog" in _eval_txt
+          and "secrets.PARENT_REPO_TOKEN" in _eval_txt
+          and "sparse-checkout:" in _eval_txt
+          and "persist-credentials: false" in _eval_txt, "eval.yml")
+    check("父仓 checkout 的 token 是仓库秘密，不是写在 yml 里的字面凭据",
+          re.search(r"token:\s*\$\{\{\s*secrets\.", _eval_txt) is not None)
+    check("CI 给套件设了 SAUDADE_PARENT_REPO（指到 checkout 落点）",
+          re.search(r"^\s*SAUDADE_PARENT_REPO:\s*\S+", _eval_txt, re.M) is not None)
+    check("CI 给套件设了 SAUDADE_REQUIRE_PARENT=1（**跑不到就红**，与夜间同一条纪律）",
+          re.search(r'^\s*SAUDADE_REQUIRE_PARENT:\s*"?1"?\s*$', _eval_txt, re.M) is not None)
+    check("CI 自检落位锚（锥配错/空目录会让守卫**假绿**）",
+          "test -f _parent/src/routes/chat.rs" in _eval_txt)
+    check("CI 不把凭据展开进日志（echo/printf 里不许出现变量展开）",
+          re.search(r"(echo|printf)[^\n]*\$\{?PARENT_REPO_TOKEN", _eval_txt) is None)
+    _CONE_FIXTURES = ("sparse-checkout: a,b", "sparse-checkout: |\n  a\n  b\nnext: 1\n")
+    check("锥的读法两种写法都认（单行逗号 / YAML 块标量；块标量读到缩进收回为止）",
+          all(_cone_patterns(t) == ["a", "b"] for t in _CONE_FIXTURES),
+          " / ".join(f"{t!r}→{_cone_patterns(t)}" for t in _CONE_FIXTURES))
+    _patterns = _cone_patterns(_eval_txt)
+    _cone = ", ".join(_patterns)                       # 只给下面失败信息里的"锥=…"用
+    _reads: dict[str, list[str]] = {}
+    for _p in sorted((ROOT / "tests").glob("*.py")):
+        for _rel in re.findall(r'_parent_repo\.read\(\s*"([^"]+)"', _p.read_text(encoding="utf-8")):
+            _reads.setdefault(_rel, []).append(_p.name)
+    _covered = set().union(*(_cone_dirs(p) for p in _patterns)) if _patterns else _cone_dirs("")
+    _outside = sorted(f"{rel}（{'+'.join(who)}）" for rel, who in _reads.items()
+                      if "/".join(rel.split("/")[:-1]) not in _covered)
+    check("锥里真含父仓锚（`_SENTINEL`）——锥配窄了连「父仓在哪」都认不出来",
+          "/".join(_parent_repo._SENTINEL.split("/")[:-1]) in _covered)
+    check(f"守卫读的每一个父仓文件都落在 CI 拉的锥里（锥={_cone or '未声明'}）[{len(_reads)} 处]",
+          not _outside, "锥外的：" + "、".join(_outside))
+    check("锥的判据是**扫源码得出**的，不是这里手抄一份名单（扫不到路径=判据失效）",
+          len(_reads) >= 2, f"扫到 {len(_reads)} 处")
+    _other = sorted(rel for rel in _reads
+                    if "/".join(rel.split("/")[:-1]) not in _cone_dirs("frontend/src"))
+    check("锥判据真的咬：换成另一处锥（frontend/src）重算，扫到的路径全被判成锥外",
+          len(_other) == len(_reads) and len(_reads) > 0, f"锥外：{_other}")
+    check(f"ADR 里写了同一个秘密名（{_ADR_NAME}）",
+          _ADR.is_file() and "PARENT_REPO_TOKEN" in _ADR.read_text(encoding="utf-8"),
+          _ADR_NAME)
+    check("eval.yml 指着那份 ADR（接线与轮换只有一处说明）",
+          _ADR_NAME in _eval_txt)
+    print("\n⑦ PR 上也跑门禁的接线（20261019）：不许静默地退回「PR 上什么都不跑」")
+    _bad_gate = _pr_gate_problems(_eval_txt)
+    check("PR 门禁接线完整（触发 / 父仓步骤挂 if / 降级支 / summary 记录）",
+          _bad_gate == [], "；".join(_bad_gate))
+    for _desc, _mut in (
+        ("去掉 pull_request 触发", _eval_txt.replace("  pull_request:", "  # pull_request:")),
+        ("依赖父仓的步骤不挂 if", _eval_txt.replace("if: " + _GUARD, "if: true")),
+        ("降级支也设 SAUDADE_REQUIRE_PARENT",
+         _eval_txt.replace("available != '1'", "available == '1'")),
+        ("降级不写 job summary", _eval_txt.replace("$GITHUB_STEP_SUMMARY", "$SUMMARY_OFF")),
+    ):
+        check(f"  正控：{_desc} ⇒ 判据必须报红", _pr_gate_problems(_mut) != [])
+    print()
+    if FAILED:
+        print(f"失败 {len(FAILED)} 项：" + "；".join(FAILED))
+        sys.exit(1)
+    print("全部通过")
 
-print()
-if FAILED:
-    print(f"失败 {len(FAILED)} 项：" + "；".join(FAILED))
-    sys.exit(1)
-print("全部通过")
+    assert not FAILED, (
+        f"{len(FAILED)} 条未通过：" + "；".join(FAILED))
+
+
+if __name__ == "__main__":
+    test_ci_suite_list()
