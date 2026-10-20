@@ -42,6 +42,8 @@ import sys
 import textwrap
 from pathlib import Path
 
+from _judge import collector
+
 ROOT = Path(__file__).resolve().parent.parent
 
 
@@ -58,12 +60,7 @@ MIXED = "半接"
 
 
 FAILED: list[str] = []
-
-
-def check(desc: str, ok: bool, detail: str = "") -> None:
-    print(f"  {'✅' if ok else '❌'} {desc}" + (f"  [{detail}]" if detail else ""))
-    if not ok:
-        FAILED.append(desc)
+check = collector(FAILED)
 
 
 def _src(rel: str, sources: dict | None = None) -> str:

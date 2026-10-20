@@ -23,6 +23,8 @@ import sys
 import urllib.error
 from pathlib import Path
 
+from _judge import collector
+
 ROOT = Path(__file__).resolve().parent.parent  # 仓根（测试统一在 tests/ 下）
 
 
@@ -35,12 +37,7 @@ sys.path.insert(0, str(ROOT / "eval"))
 import identity_preflight as ip  # noqa: E402
 
 FAILS: list[str] = []
-
-
-def check(name: str, ok: bool, extra: str = "") -> None:
-    print(f"  {'✅' if ok else '❌'} {name}" + (f"  [{extra}]" if extra else ""))
-    if not ok:
-        FAILS.append(name)
+check = collector(FAILS)
 
 
 import tools.base as _tb  # noqa: E402

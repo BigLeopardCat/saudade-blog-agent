@@ -18,6 +18,7 @@ import sys
 import threading
 from pathlib import Path
 
+from _judge import collector
 from langchain_core.messages import HumanMessage
 
 # ── 仓根（20260924：测试统一搬进 tests/）───────────────────────────────────────
@@ -41,14 +42,7 @@ from agent.principal import SOURCE_ASSERTION, Principal  # noqa: E402
 from agent.workflow_plan import instantiate_plan
 
 FAILS: list[str] = []
-
-
-def check(name, cond, detail=""):
-    if not cond:
-        FAILS.append(f"{name}: {detail}")
-        print(f"  ✗ {name} {detail}")
-    else:
-        print(f"  ✓ {name}")
+check = collector(FAILS)
 
 
 def _cfg(stop: bool = False):

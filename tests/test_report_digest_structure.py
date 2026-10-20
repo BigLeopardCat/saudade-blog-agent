@@ -29,6 +29,8 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
+from _judge import collector
+
 ROOT = Path(__file__).resolve().parent.parent
 
 
@@ -48,12 +50,7 @@ from agent.entity_digest import (  # noqa: E402
 from agent.principal import Principal  # noqa: E402
 
 FAILS: list[str] = []
-
-
-def check(desc: str, cond: bool, detail: str = "") -> None:
-    print(("  ✅ " if cond else "  ❌ ") + desc + (f"  [{detail}]" if detail else ""))
-    if not cond:
-        FAILS.append(desc)
+check = collector(FAILS)
 
 
 def _brow(i, approved, ai, body="内容", who="访客"):

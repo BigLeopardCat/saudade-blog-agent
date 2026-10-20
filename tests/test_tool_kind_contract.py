@@ -50,6 +50,8 @@ import ast
 import pathlib
 import sys
 
+from _judge import collector
+
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 
 
@@ -57,12 +59,7 @@ sys.path.insert(0, str(ROOT))
 
 
 FAILED: list[str] = []
-
-
-def check(name: str, ok: bool, extra: str = "") -> None:
-    print(f"  {'✅' if ok else '❌'} {name}" + (f"  [{extra}]" if extra else ""))
-    if not ok:
-        FAILED.append(name)
+check = collector(FAILED)
 
 
 _TEXT_METHODS = {"join", "strip", "format", "replace", "lower", "upper",

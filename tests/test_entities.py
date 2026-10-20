@@ -18,6 +18,8 @@ tagone,topnotes,announcements}），字段名照抄，防"改了字段名测试�
 import sys
 from pathlib import Path
 
+from _judge import collector
+
 ROOT = Path(__file__).resolve().parent.parent  # 仓根（20260924：测试统一搬进 tests/）
 
 
@@ -27,12 +29,7 @@ sys.path.insert(0, str(ROOT))
 from agent.entity_digest import receipt_digest  # noqa: E402
 
 FAILS: list[str] = []
-
-
-def check(desc: str, cond: bool, detail: str = "") -> None:
-    print(("  ✅ " if cond else "  ❌ ") + desc + (f"  [{detail}]" if detail else ""))
-    if not cond:
-        FAILS.append(desc)
+check = collector(FAILS)
 
 
 from agent.adminops_tags import render_admin_notes  # noqa: E402

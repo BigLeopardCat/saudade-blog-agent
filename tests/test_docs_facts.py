@@ -40,6 +40,8 @@ import re
 import sys
 import tomllib
 
+from _judge import collector
+
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 
 
@@ -50,14 +52,7 @@ from agent.workflow_defs import WORKFLOWS  # noqa: E402
 from tools.base import _TOOL_REGISTRY  # noqa: E402
 
 FAILS: list[str] = []
-
-
-def check(desc: str, cond: bool, detail: str = "") -> None:
-    if cond:
-        print(f"  ✅ {desc}")
-    else:
-        FAILS.append(f"{desc} —— {detail}")
-        print(f"  ❌ {desc} —— {detail}")
+check = collector(FAILS)
 
 
 def test_docs_facts():

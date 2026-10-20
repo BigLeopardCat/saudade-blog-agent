@@ -35,6 +35,8 @@ from __future__ import annotations
 import pathlib
 import sys
 
+from _judge import collector
+
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 
 
@@ -59,12 +61,7 @@ from agent.workflow_model import Workflow  # noqa: E402
 from agent.workflow_plan import instantiate_plan  # noqa: E402
 
 FAILED: list[str] = []
-
-
-def check(name: str, ok: bool, extra: str = "") -> None:
-    print(f"  {'✅' if ok else '❌'} {name}" + (f"  [{extra}]" if extra else ""))
-    if not ok:
-        FAILED.append(name)
+check = collector(FAILED)
 
 
 def _write_workflows(workflows: list) -> set:

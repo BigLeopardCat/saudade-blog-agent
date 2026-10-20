@@ -47,6 +47,8 @@ import pathlib
 import re
 import sys
 
+from _judge import collector
+
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 
 
@@ -68,12 +70,7 @@ from agent.principal import (  # noqa: E402
 from tests import _parent_repo, _rust_src  # noqa: E402
 
 FAILED: list[str] = []
-
-
-def check(name: str, ok: bool, extra: str = "") -> None:
-    print(f"  {'✅' if ok else '❌'} {name}" + (f"  [{extra}]" if extra else ""))
-    if not ok:
-        FAILED.append(name)
+check = collector(FAILED)
 
 
 def _py_consts(rel: str) -> dict[str, object]:

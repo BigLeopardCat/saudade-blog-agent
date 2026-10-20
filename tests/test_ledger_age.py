@@ -24,6 +24,8 @@ import types
 from datetime import datetime
 from pathlib import Path
 
+from _judge import collector
+
 ROOT = Path(__file__).resolve().parent.parent  # 仓根（20260924：测试统一搬进 tests/）
 
 
@@ -39,12 +41,7 @@ import agent.graph as G  # noqa: E402  （提示词正文本体；20261014 起�
 import server  # noqa: E402
 
 FAILS: list[str] = []
-
-
-def check(desc: str, cond: bool, detail: str = "") -> None:
-    print(("  ✅ " if cond else "  ❌ ") + desc + (f"  [{detail}]" if detail else ""))
-    if not cond:
-        FAILS.append(desc)
+check = collector(FAILS)
 
 
 NOW = datetime(2026, 9, 25, 4, 2, 0)

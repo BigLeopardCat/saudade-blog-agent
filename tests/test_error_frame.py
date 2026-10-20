@@ -51,6 +51,8 @@ import threading
 import time
 from pathlib import Path
 
+from _judge import collector
+
 ROOT = Path(__file__).resolve().parent.parent  # 仓根（20260924：测试统一搬进 tests/）
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "tests"))          # 同目录的 `_` 辅助模块（pytest 不收它们）
@@ -62,14 +64,7 @@ from utils import trace as trace_mod  # noqa: E402
 from utils.logging import set_trace_id  # noqa: E402
 
 FAILS: list[str] = []
-
-
-def check(name, cond, detail=""):
-    if not cond:
-        FAILS.append(f"{name}: {detail}")
-        print(f"  ✗ {name} {detail}")
-    else:
-        print(f"  ✓ {name}")
+check = collector(FAILS)
 
 
 class _FakeRequest:

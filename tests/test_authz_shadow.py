@@ -29,6 +29,8 @@ import sys
 from contextlib import redirect_stdout
 from pathlib import Path
 
+from _judge import collector
+
 ROOT = Path(__file__).resolve().parent.parent
 
 
@@ -45,12 +47,7 @@ from agent.principal import Principal  # noqa: E402
 from config.settings import settings  # noqa: E402
 
 FAILED: list[str] = []
-
-
-def check(name: str, ok: bool, extra: str = "") -> None:
-    print(f"  {'✅' if ok else '❌'} {name}" + (f"  [{extra}]" if extra else ""))
-    if not ok:
-        FAILED.append(name)
+check = collector(FAILED)
 
 
 def shadow_ev(tool: str, reason: str = authz.REASON_DENIED, scope: str | None = "read.public",

@@ -29,6 +29,8 @@ import time
 import types
 from pathlib import Path
 
+from _judge import collector
+
 ROOT = Path(__file__).resolve().parent.parent  # 仓根（20260924：本文件已搬进 tests/）
 
 
@@ -46,12 +48,7 @@ import report_archive  # noqa: E402
 import run_golden as rg  # noqa: E402
 
 FAILS: list[str] = []
-
-
-def check(desc: str, cond: bool, detail: str = "") -> None:
-    print(("  ✅ " if cond else "  ❌ ") + desc + (f"  [{detail}]" if detail else ""))
-    if not cond:
-        FAILS.append(desc)
+check = collector(FAILS)
 
 
 def mkcase(cid: str, tags: list[str]) -> dict:

@@ -30,6 +30,8 @@ import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+from _judge import collector
+
 ROOT = Path(__file__).resolve().parent.parent  # 仓根
 
 
@@ -42,12 +44,7 @@ sys.path.insert(0, str(ROOT / "scripts" / "dev"))
 import changelog as _changelog  # noqa: E402  （碎片机制的工具，按路径取，不是包）
 
 FAILS: list[str] = []
-
-
-def check(desc: str, cond: bool, detail: str = "") -> None:
-    print(("  ✅ " if cond else "  ❌ ") + desc + (f"  [{detail}]" if detail else ""))
-    if not cond:
-        FAILS.append(desc)
+check = collector(FAILS)
 
 
 TEXT_EXT = {".py", ".md", ".toml", ".sh", ".yml", ".yaml", ".txt", ".cfg", ".ini",

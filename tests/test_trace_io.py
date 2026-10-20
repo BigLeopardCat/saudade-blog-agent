@@ -23,6 +23,8 @@ import tempfile
 from datetime import datetime
 from pathlib import Path
 
+from _judge import collector
+
 ROOT = Path(__file__).resolve().parent.parent
 
 
@@ -37,12 +39,7 @@ from utils import trace_files as tf  # noqa: E402
 from utils import trace_io  # noqa: E402
 
 FAILS = []
-
-
-def check(name: str, ok: bool, extra: str = "") -> None:
-    print(f"  {'✅' if ok else '❌'} {name}" + (f"  [{extra}]" if extra else ""))
-    if not ok:
-        FAILS.append(name)
+check = collector(FAILS)
 
 
 def src(rel: str) -> str:

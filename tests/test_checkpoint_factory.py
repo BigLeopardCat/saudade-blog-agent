@@ -54,6 +54,8 @@ import sys
 import time
 from pathlib import Path
 
+from _judge import collector
+
 ROOT = Path(__file__).resolve().parent.parent
 
 
@@ -63,14 +65,7 @@ sys.path.insert(0, str(ROOT))
 import agent.checkpoint as C  # noqa: E402
 
 FAILS: list[str] = []
-
-
-def check(desc: str, cond: bool, detail: str = "") -> None:
-    if cond:
-        print(f"  ✅ {desc}")
-    else:
-        FAILS.append(f"{desc} —— {detail}")
-        print(f"  ❌ {desc} —— {detail}")
+check = collector(FAILS)
 
 
 def _raises(fn, *a, **kw) -> str:

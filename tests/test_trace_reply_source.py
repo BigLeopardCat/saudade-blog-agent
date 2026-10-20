@@ -58,6 +58,8 @@ import tempfile
 import threading
 from pathlib import Path
 
+from _judge import collector
+
 ROOT = Path(__file__).resolve().parent.parent  # 仓根
 
 
@@ -70,17 +72,10 @@ import server  # noqa: E402
 from utils import trace as tracemod  # noqa: E402
 
 FAILS: list[str] = []
+check = collector(FAILS)
 
 
 _SEQ = itertools.count()
-
-
-def check(name, cond, detail=""):
-    if not cond:
-        FAILS.append(name)
-        print(f"  ✗ {name}" + (f"  → {detail}" if detail else ""))
-    else:
-        print(f"  ✓ {name}")
 
 
 class _StubGraph:

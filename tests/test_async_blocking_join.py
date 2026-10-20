@@ -58,13 +58,10 @@ import pathlib
 import sys
 import warnings
 
+from _judge import collector
+
 FAILED: list[str] = []
-
-
-def check(name: str, ok: bool, extra: str = "") -> None:
-    print(f"  {'✅' if ok else '❌'} {name}" + (f"  [{extra}]" if extra else ""))
-    if not ok:
-        FAILED.append(name)
+check = collector(FAILED)
 
 
 def _scan(src: str) -> list[tuple[int, str]]:

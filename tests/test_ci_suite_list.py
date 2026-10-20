@@ -29,6 +29,8 @@ import pathlib
 import re
 import sys
 
+from _judge import collector
+
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 
 
@@ -38,12 +40,7 @@ sys.path.insert(0, str(ROOT / "tests"))
 import conftest  # noqa: E402  （只为读它的出厂档钉子 `_PINNED`，不跑它）
 
 FAILED: list[str] = []
-
-
-def check(name: str, ok: bool, extra: str = "") -> None:
-    print(f"  {'✅' if ok else '❌'} {name}" + (f"  [{extra}]" if extra else ""))
-    if not ok:
-        FAILED.append(name)
+check = collector(FAILED)
 
 
 _SUITE_CALL_RE = re.compile(r"tests/([A-Za-z0-9_]+\.py)")
