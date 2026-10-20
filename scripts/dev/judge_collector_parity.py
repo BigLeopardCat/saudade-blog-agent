@@ -4,16 +4,24 @@
 为什么这条判据长这样：这次改的是**收集器**（打印与记账那一处），不是判据本身。
 所以"改坏了"的唯一形状是——**某条判据没被喂进来 / 名字变了 / 条件变了 / 明细变了**。
 把两版的收集器都换成同一只**间谍**（只记录、不打印、不记账），各跑一遍驱动函数，
-比 `(名字, 条件, 明细)` 三元组的序列：逐字相同才算过 —— 明细里那几族**本来就每跑一次
-都不一样**的东西（墙钟、JWT 的 `exp`+签名、随机 id）先打码，见 `normalize_detail`。
+比 `(名字, 条件, 明细)` 三元组的序列：逐字相同才算过。
+
+**明细里有几族本来就每跑一次都不一样**（墙钟、JWT 的 `exp`+签名、随机 id、内核给的端口…），
+不处理的话这条判据会把**每一次**运行都报成缺陷。处理它的顺序是有讲究的：
+**先问「能不能从根上消掉」，能消的不要打码**（打码的代价是判据写不出来，见 `_VOLATILE`）。
 
 **为什么不比 stdout**：15 个版本里打印符号本来就有 `✅/❌` 与 `✓/✗` 两种，
 归一之后统一成前者 —— 那是这次**故意**的不同（`tests/_judge.py` 头注写着），
 比 stdout 只会把故意的不同报成缺陷。判据序列才是语义。
 
-用法：
-    .venv/bin/python scripts/dev/judge_collector_parity.py --base HEAD tests/test_authz.py
-    .venv/bin/python scripts/dev/judge_collector_parity.py --all      # 173 个（约 10 分钟）
+用法（子进程要能读到父仓 ⇒ 带 `SAUDADE_PARENT_REPO`）：
+    SAUDADE_PARENT_REPO=… .venv/bin/python scripts/dev/judge_collector_parity.py \
+        --base origin/main tests/test_authz.py
+    SAUDADE_PARENT_REPO=… .venv/bin/python scripts/dev/judge_collector_parity.py \
+        --all --base origin/main          # 184 个（约半小时）
+
+⚠️ **别开两个实例**：golden 那族套件会在 `eval/` 里就地写报告，两边互踩 ⇒ 假红
+（实测 `FileNotFoundError: eval/golden/basic.jsonl`）。
 """
 
 from __future__ import annotations
@@ -38,12 +46,16 @@ _TMPROOT = pathlib.Path(tempfile.gettempdir()) / "judge_parity_tmp"
 # 判据本身是 `(名字, 条件)`，明细是"看见了什么"；墙钟与随机 id 本来就每跑一次都不一样，
 # 拿它们判"改坏了"会把**每一次**运行都判成缺陷。
 #
-# ⚠️ **先问「能不能从根上消掉」，能消的不要打码**：这里只留了**消不掉**的两族。
-# 消掉的两族（比打码干净得多，也不占"窄"的额度）：
+# ⚠️ **先问「能不能从根上消掉」，能消的不要打码**：下面这些是**消不掉**的才留在打码表里。
+# 从根上消掉的三族（比打码干净得多，也不占"窄"的额度，怎么消的见 `_SPY_RUNNER` 与
+# `_child_env`）：
 #   · 集合/字典的迭代序 ⇒ 子进程 `PYTHONHASHSEED=0`（`test_authz.py` 的
 #     `frozenset({'write.page', 'read.public'})` 与 `{'read.public', 'write.page'}`）；
-#   · `tempfile` 的随机名 ⇒ 子进程里把名字序列换成定种子（`_SPY_RUNNER` 那段，
-#     `test_artifact_retention.py` 的 `/tmp/artifact_retention_gfwwf3xn`）。
+#   · `tempfile` 的随机名 ⇒ 子进程里把名字序列换成定种子 + 每遍从空 TMPDIR 起跑
+#     （`test_artifact_retention.py` 的 `/tmp/artifact_retention_gfwwf3xn`）；
+#   · 一切随机 id（`uuid4` / `secrets.token_hex`）⇒ `os.urandom` 与 `secrets._sysrand`
+#     一起换。**这一族非消不可**：`test_confirm.py` 有一条判据把令牌载荷**截断**着打出来，
+#     `jti` 只剩两个十六进制字符 —— 没有任何形状能认（认了就是把所有两位数都吃掉）。
 _VOLATILE: tuple[tuple[re.Pattern, str], ...] = (
     # 墙钟秒（带小数）—— `test_cancel.py` 的 `'ts': 1792515419.2763867`
     (re.compile(r"\d+\.\d{4,}"), "«ts»"),
