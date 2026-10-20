@@ -173,7 +173,7 @@ def test_authz():
     check("回退信任 body 的分支不给角色（role=None）",
           "Principal(uid=body_uid, role=None, source=SOURCE_BODY)" in server_src)
     check("角色只来自断言（不读 body 里的任何角色字段）",
-          'payload.get("role")' in server_src and "req.role" not in server_src)
+          'role=claims["role"]' in server_src and "req.role" not in server_src)
 
     print("⑧ 图节点真的收得到 config（**20260920 实测过的陷阱，别重蹈**）")
     # 背景：`from __future__ import annotations` 会把注解变成字符串，而 langgraph 用

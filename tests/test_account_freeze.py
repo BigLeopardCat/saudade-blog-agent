@@ -205,7 +205,7 @@ def _run_exec(msg, spec, workflow="account_freeze", grant=None):
 def test_account_freeze():
     import agent.adminops_confirm as _confirm  # noqa: E402
     _SAVED_SECRET = settings.jwt_secret
-    settings.jwt_secret = "test-secret-for-confirm-tokens"
+    settings.jwt_secret = "test-secret-for-confirm-tokens-not-a-real-secret"
     print("\n① _user_directory：**裸数组**台账（这一个形状写错，生产路径会整条挂掉）")
     _real_client = base._client
     try:
