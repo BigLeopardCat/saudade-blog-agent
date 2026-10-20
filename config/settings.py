@@ -108,10 +108,14 @@ class Settings(BaseSettings):
 
     # ── Agent ───────────────────────────────────────────────────────
     # 跑哪一条臂（20261012 批 4，`AGENT_ARM`）。**默认 `graph` = 生产那条，逐字节不变**；
-    # 另一档 `react` 是本分支的试验线（`agent/react_arm.py`，自成一个 ReAct 循环 +
-    # 独立 narrator，见该模块头注）。
+    # 另两档都是 ReAct 线：`react`（`agent/react_arm.py`，技能级菜单 + 独立 narrator）、
+    # `capability`（`agent/capability_arm.py`，planner 选能力 → 索引交出那条能力的工具面，
+    # 20261021 加）。三档都必须在这里列出来，选臂那一步（`server._build_arm`）不认识的名字
+    # **拒绝启动**。
     # **默认值必须是 graph**：这一档要是反过来，等于在没人点头的情况下把产线换掉，
-    # 而两臂的读数**不可互比**（P6 之后尤其，见 CHANGELOG 20261012）。
+    # 而几臂的读数**不可互比**（P6 之后尤其，见 CHANGELOG 20261012）。`capability` 这一档
+    # 尤其——它 20261021 才落地，**没有跑过 golden A/B**（离线判据只证明"接线与不变量成立"，
+    # 不证明"读数更好"）。要切它得先按 `docs/agent-ab-method.md` 跑交错 A/B。
     # 真值源与 `AGENT_REQUIRE_ASSERTION` 同族 = `.env`；**这里只声明**，
     # 选臂那一步在 `server._build_arm`（不 import `eval/golden_arm.py`——生产不该依赖
     # 评测侧的壳）。拨它要重启服务才生效（`sudo systemctl restart saudade-agent`）。

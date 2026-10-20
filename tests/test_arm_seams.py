@@ -248,13 +248,17 @@ def test_arm_seams():
         func=lambda **kw: "哨兵")
 
 
-    def _menu(role):
-        _menu_seen.append(role)
+    def _menu(role, ctx):
+        # 第二格是**每请求私有**的那本账（20261021 加）：菜单按轮变的那条臂靠它记
+        # "这一轮选了哪条能力"。判据是"它确实是本请求那一份"——拿 `ctx` 里的 role
+        # 与位置参数对一下，两边不同就说明传错了对象。
+        _menu_seen.append((role, ctx.get("role")))
         return [_SENTINEL_TOOL]
 
 
     _run(_SCRIPT, principal=ADMIN, hooks={"menu_builder": _menu})
-    check("`menu_builder` 被调用且收到角色", _menu_seen == ["admin"], str(_menu_seen))
+    check("`menu_builder` 被调用且收到角色（位置参数与 `ctx['role']` 同源）",
+          _menu_seen == [("admin", "admin")], str(_menu_seen))
     check("绑给模型的菜单**就是桩返回的那一个**（缺省档下这是技能菜单，绝不可能是它）",
           BOUND and BOUND[0] == ["SEAM_ONLY_TOOL"], str(BOUND[:2]))
     _run(_SCRIPT, principal=ADMIN)
@@ -288,15 +292,20 @@ def test_arm_seams():
     _plan_seen: list = []
 
 
-    def _plan(calls, role):
-        _plan_seen.append(([str((c or {}).get("name") or "") for c in calls or []], role))
+    def _plan(calls, role, ctx):
+        # 第三格同 ②a 的第二格：本请求那一本账。**它必须能被写**——能力索引那条臂
+        # 正是在这里记下"这一轮选了哪条能力"，菜单下一轮按它换（写不进去 ⇒ 菜单永远
+        # 停在第一轮的能力表上，而症状是"工具一个都不调"，看不出是接缝没接上）。
+        ctx["seam_plan_saw"] = role
+        _plan_seen.append(([str((c or {}).get("name") or "") for c in calls or []], role,
+                           ctx.get("role")))
         return {"workflow": "chat", "tools": [], "calls": [], "note": "SEAM-PLAN",
                 "reply": "", "status": ""}
 
 
     _f_plan = _run(_SCRIPT, principal=ADMIN, hooks={"plan_builder": _plan})
-    check("`plan_builder` 收到**模型的原始调用名**与角色",
-          _plan_seen == [(["navigate"], "admin")], str(_plan_seen))
+    check("`plan_builder` 收到**模型的原始调用名**、角色与账（第三格可写）",
+          _plan_seen == [(["navigate"], "admin", "admin")], str(_plan_seen))
     check("返回值真的进了 `planner` 那一格（缺省档这里是 `navigate`，不是 `chat`）",
           _planner_plan(_f_plan).get("workflow") == "chat",
           str(_planner_plan(_f_plan).get("workflow")))
