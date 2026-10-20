@@ -1203,24 +1203,23 @@ def ledger_frame_for(messages: list, principal: Any, config: dict | None,
 def _system_prompt(messages: list, role: str | None, principal: Any,
                    config: dict | None, user_msg: str,
                    fast_frames: list | None = None, exec_rows: list | None = None) -> str:
-    """系统提示 = 判断器提示词（生产的唯一渲染入口）+ 人设 + **叙述纪律** + 循环说明。
+    """系统提示 = 人设 + 叙述纪律 + 贴纸 + 循环说明 + 判断器提示词（生产唯一渲染入口）。
 
     **为什么拼这几块**：本线的决策模型（`planner` 节点）还兼任"决定够了没有"，而叙述
     纪律那几块是给**说人话**的那一半用的（narrator 节点的提示词是另一份资产）。
-    · 第一块就是 planner 逐字那份（`_render_planner_prompt`，"唯一入口"）——技能表、
-      规则、输出契约全在里面，**照着抄第二份就是抄一个漂移源**；
-    · 第二块是 `BLOG_ASSISTANT_PROMPT`（人设 + 叙述边界 + 诚实底线，narrator 用的同一份
+    · `BLOG_ASSISTANT_PROMPT`（人设 + 叙述边界 + 诚实底线，narrator 用的同一份
       资产）。没有它，收尾正文是"规划器口吻"的、且没有任何反幻觉纪律；
-    · 第三块是 `NARRATOR_DISCIPLINE_LOOP`——**按条裁过的**叙述纪律（20261021，见
-      `agent/narrator_discipline.py` 的头注）。此前是"整份 `NARRATOR_DISCIPLINE` 照搬 + 前面挂
-      一段 `_DISCIPLINE_STANCE` 逐条作废"，于是一条调用里同时出现「你没有工具」和
-      「你有工具、自己调用」两句相反的话、靠第三段裁定。现在前提为假的那些条
-      **直接不进提示词**，留下的条逐字取自生产那一份。此前一条都不接的代价实测可数：
-      `own_*` 族整族慢性红——模型如实说了"读不到"，却**又多派了一句"你先去登录"**，
-      而纪律 20 明令禁止（生产的账不许算在主人头上）。同族还有"读不到 ≠ 空"那几条；
-    · 第四块是 `STICKER_GUIDE`（情绪贴纸的**唯一**名字表）。不接它，`:害羞:` 这些
-      记号结构上产不出来（`sticker_*` 用例整族恒红），而语料只认这 12 个名字；
-    · 第五块是循环机制（怎么终止），只有三五句。
+    · `NARRATOR_DISCIPLINE_LOOP`——**按条裁过的**叙述纪律（20261021，见
+      `agent/narrator_discipline.py` 头注）。此前是"整份照搬 + 前面挂一段
+      `_DISCIPLINE_STANCE` 逐条作废"，于是一条调用里同时出现「你没有工具」和「你有工具」
+      两句相反的话、靠第三段裁定。此前一条都不接的代价实测可数：`own_*` 族整族慢性红
+      ——模型如实说了"读不到"，却**又多派了一句"你先去登录"**，而纪律 20 明令禁止；
+    · `STICKER_GUIDE`（情绪贴纸的**唯一**名字表）。不接它，`:害羞:` 这些记号结构上
+      产不出来（`sticker_*` 用例整族恒红），而语料只认这 12 个名字；
+    · 循环机制（怎么终止），只有三五句；
+    · 最后才是 planner 逐字那份（`_render_planner_prompt`，"唯一入口"）——技能表、
+      规则、输出契约全在里面，**照着抄第二份就是抄一个漂移源**（它排最后是缓存布局的
+      要求，见下面 join 处的注）。
 
     `fast_frames`：**本线恒传 `None`**（保留形参只为签名兼容）。快道那一次读取的工具帧
     已经在 `state["messages"]` 里、会由 `_window` 交给模型（生产是渲染进 `tool_results`
@@ -1244,8 +1243,12 @@ def _system_prompt(messages: list, role: str | None, principal: Any,
         pending_ledger=ledger_frame or "（本轮没有去读待办台账）",
         reflector_feedback="（本决策轮无复盘建议）",
         correction="（本决策轮无纠偏提示）")
-    return "\n\n".join([planner, BLOG_ASSISTANT_PROMPT or "", audience_block(role),
-                        NARRATOR_DISCIPLINE_LOOP, STICKER_GUIDE, _CLOSING_RULES])
+    # ⚠️ **块序 = 缓存布局，不是可读性**（20261021，配方同 `8bbe3f0`）：`planner` 里那几格
+    # （`page_ctx` / `round_info` / `user_msg`…）每轮都在变，它内部已把静态规则排在易变槽位之前。
+    # 这五块排在它**之后**就落在首个易变字节之后、一次都进不了公共前缀（实测 73.6% → 100%）。
+    # 判据 `tests/test_react_prompt_layout.py`；方位词（"上面的技能表/工具结果" → "下面"）跟着改了。
+    return "\n\n".join([BLOG_ASSISTANT_PROMPT or "", audience_block(role),
+                        NARRATOR_DISCIPLINE_LOOP, STICKER_GUIDE, _CLOSING_RULES, planner])
 
 
 def _crash_text(ledger: RunLedger, err: Exception) -> str:
@@ -1262,21 +1265,18 @@ def _crash_text(ledger: RunLedger, err: Exception) -> str:
             "这一轮没有任何一件办成，我没有假装办好了。")
 
 
-# 叙述纪律的**立场改写**这一层（`_DISCIPLINE_STANCE`，886 字，20261005–20261021）
-# **已经退场**。它做的事——把 narrator 立场的那几条逐条作废——现在由
-# `agent.narrator_discipline.NARRATOR_DISCIPLINE_LOOP` **按条裁**取代：前提为假的那些条**根本不进
-# 提示词**，而不是"进来了再声明作废"。理由与逐条依据见 `agent/narrator_discipline.py` 的头注；
-# 判据 `tests/test_narrator_discipline_loop.py`。
-#
-# ⚠️ 别把它请回来：那条路留下的形状是"一条调用里同时出现「你没有工具」和「你有工具」，
-# 靠第三段裁定哪句算数"——累积就是这么长出来的。
+# 叙述纪律的**立场改写**这一层（`_DISCIPLINE_STANCE`，886 字，20261005–20261021）**已退场**：
+# 它做的事——把 narrator 立场那几条逐条作废——现在由 `NARRATOR_DISCIPLINE_LOOP` **按条裁**
+# 取代（前提为假的那些条根本不进提示词，而不是"进来了再声明作废"）。逐条依据见
+# `agent/narrator_discipline.py` 头注、判据 `tests/test_narrator_discipline_loop.py`。
+# ⚠️ 别请回来：那条路留下的形状是"一条调用里同时出现「你没有工具」和「你有工具」，靠第三段裁定"。
 
 
 # 收尾说明（模块私有，三五句）：把"这个循环里你怎么结束"讲清楚。**不写叙述纪律**
 # ——那件事由 `NARRATOR_DISCIPLINE_LOOP` 负责，这里只讲机制。
 _CLOSING_RULES = """\
 循环机制（你既是决策者也是回复者）：
-1. 要做事就**直接调用技能工具**（上面的技能表就是你的全部本领）；系统会立刻执行并把
+1. 要做事就**直接调用技能工具**（下面那张表就是你的全部本领）；系统会立刻执行并把
    真实结果作为一条工具消息还给你。
 2. 信息已经够回答主人了 ⇒ **不要再调用任何工具**——那一轮就到此为止，收尾正文由系统
    另派一位零工具的叙述者按工具回执写（所以你说的每一件站内事实都必须能在工具结果、
@@ -1284,7 +1284,7 @@ _CLOSING_RULES = """\
 3. 调用 `chat` 技能是**闲聊兜底**（把答复文本填进 reply），它不产生任何执行事实；能用
    一句正常的最终答复说清的事，就别绕它。
 4. 同一件事不要重复做：工具回执里写着"未生效"就换参数或换工具，别原样重试。
-5. 复核：说出口的每一件站内事实，都要能在上面的工具结果、页面上下文或执行回执里找到
+5. 复核：说出口的每一件站内事实，都要能在下面的工具结果、页面上下文或执行回执里找到
    出处；找不到就如实说没查到。"""
 
 
