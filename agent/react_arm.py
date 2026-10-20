@@ -374,9 +374,16 @@ def _pair_run(run: list, key: Any, calls: list) -> list:
 
 
 def _prompt_of(state: AgentState, ctx: dict) -> str:
-    """系统提示（**每请求只渲染一次**，缓存在 `ctx` 里——见模块头注的口径偏差）。"""
+    """系统提示（**每请求只渲染一次**，缓存在 `ctx` 里——见模块头注的口径偏差）。
+
+    `ctx["prompt_builder"]`（可选，20261020 为工具臂加的接缝）：`(state, ctx) -> str`。
+    缺省 `None` ⇒ 走本函数原来那一行，**逐字节不变**。接缝放在 `ctx` 里而不是
+    `build_graph()` 的参数里：图是编一次、跨请求共用的单例（`_compiled`），参数只能
+    从 `config["configurable"]["react_ctx"]` 走——与 `principal` / `stop_event` 同源。
+    """
     if ctx.get("system_prompt") is None:
-        ctx["system_prompt"] = _system_prompt(
+        build = ctx.get("prompt_builder")
+        ctx["system_prompt"] = build(state, ctx) if build else _system_prompt(
             list(state.get("messages") or []), ctx.get("role"), ctx.get("principal"),
             ctx.get("config"), ctx.get("user_msg") or "",
             exec_rows=(state.get("ledger") or {}).get("exec_rows"))
@@ -384,14 +391,20 @@ def _prompt_of(state: AgentState, ctx: dict) -> str:
 
 
 def _bound_llm(ctx: dict) -> Any:
-    """决策模型（**每请求一份**，绑好技能菜单，缓存在 `ctx` 里）。
+    """决策模型（**每请求一份**，绑好菜单，缓存在 `ctx` 里）。
 
     为什么必须缓存而不是每轮 `_llm().bind_tools(...)` 新建：新建出来的每次都是**另一个
     客户端**——连接池、`timeout`、上游的缓存命中全都跟着重置，而这是每一轮都发生的事。
     生产 planner 那侧是每请求一份（`_planner_setup` 把 `llm` 放进 `_Ctx`），本线照同源。
+
+    `ctx["menu_builder"]`（可选，20261020）：`(role) -> list[StructuredTool]`。缺省
+    `None` ⇒ 技能菜单，**逐字节不变**。这一格与 `prompt_builder` 必须**成对**换：只换
+    菜单不换提示词，等于拿一份写着"技能注册表"的提示词去考一张工具表（`eval/experiments/
+    react_line_ab.py` 20261011 那条教训）。
     """
     if ctx.get("llm") is None:
-        ctx["llm"] = _llm().bind_tools(_workflow_menu(ctx.get("role")))
+        build_menu = ctx.get("menu_builder") or _workflow_menu
+        ctx["llm"] = _llm().bind_tools(build_menu(ctx.get("role")))
     return ctx["llm"]
 
 
@@ -531,7 +544,10 @@ def planner_node(state: AgentState, config: RunnableConfig | None = None) -> dic
         return {}
 
     ctx["decided"] = "execute"
-    return _plan_update(_plan_of(resp.tool_calls, ctx.get("role")), rounds)
+    # `ctx["plan_builder"]`（可选，20261020）：`(tool_calls, role) -> plan_obj`。缺省
+    # `None` ⇒ 技能实例化那条路（`_plan_of`），**逐字节不变**。
+    build_plan = ctx.get("plan_builder") or _plan_of
+    return _plan_update(build_plan(resp.tool_calls, ctx.get("role")), rounds)
 
 
 def route_after_planner(state: AgentState, config: RunnableConfig | None = None) -> str:
@@ -830,6 +846,11 @@ class ReactGoldenArm:
     """
 
     name = ARM_NAME
+    # `make_ctx` 的四个可选接缝（20261020）。**本类恒为空字典** ⇒ 建账那一行走的是
+    # `make_ctx` 的缺省档，与改动之前逐字节相同。子类（`agent/tools_arm.py`）在这里
+    # 放自己那四个 builder。放在类属性上而不是覆写 `stream`：`stream` 那 25 行是
+    # "输入归一 + 注入 + 转交"，覆写它就是复制一遍——本仓点名的反模式。
+    ctx_hooks: dict = {}
 
     def __init__(self, graph: Any) -> None:
         self._graph = graph
@@ -870,7 +891,7 @@ class ReactGoldenArm:
         if _CTX_KEY not in conf:
             conf[_CTX_KEY] = make_ctx(config=config, principal=principal, role=role,
                                       user_msg=user_msg, state=st,
-                                      real_tools=_real_tools(config))
+                                      real_tools=_real_tools(config), **self.ctx_hooks)
         cfg = {**(config or {}), "configurable": conf,
                "recursion_limit": (config or {}).get("recursion_limit") or REC_LIMIT}
         yield from self._graph.stream(st, cfg,
@@ -879,8 +900,28 @@ class ReactGoldenArm:
 
 # ── 建臂 ─────────────────────────────────────────────────────────────
 def make_ctx(*, config: RunnableConfig | None, principal: Any, role: str | None,
-             user_msg: str, state: dict, real_tools: dict | None = None) -> dict:
+             user_msg: str, state: dict, real_tools: dict | None = None,
+             prompt_builder: Any = None, menu_builder: Any = None,
+             plan_builder: Any = None, executor_factory: Any = None) -> dict:
     """一次运行的 `react_ctx`（**唯一构造点**：`ReactGoldenArm.stream` 与离线探针共用）。
+
+    **四个可选接缝**（20261020，为工具臂 `agent/tool_arm.py` 加的）——全部缺省 `None`
+    ⇒ 每一格各自回落到今天那一行，**缺省档与改动之前逐字节相同**：
+
+      · `prompt_builder(state, ctx) -> str`：系统提示（缺省 = `_system_prompt`）；
+      · `menu_builder(role) -> list[StructuredTool]`：绑给模型的菜单（缺省 = 技能菜单）；
+      · `plan_builder(tool_calls, role) -> dict`：模型的调用 → `plan_obj`（缺省 =
+        技能实例化 `_plan_of`）；
+      · `executor_factory(ledger, *, role, principal, user_msg, state, real_tools) ->
+        执行器`：跑清单的那一层（缺省 = `WorkflowExecutor`，即"技能展开成工具"；工具臂
+        传的是"调用本身就是工具规格"）。参数**逐个显式传**而不是让调用方闭包捕获：
+        执行器那五格（谁在调、原话是什么、令牌在不在、真工具在哪）两臂必须完全同源，
+        闭包捕获会把"两臂的执行器接得不一样"这件事藏进各自的模块里。
+
+    **接缝只加这四处，且都只是"可选覆盖"**：这一刀是刻意小的——`agent/react_arm.py`
+    上另有一条未合并的分支在大改（资产对齐），两边将来合并时冲突面越小越好。三个决策侧
+    接缝必须**成对**换（菜单 + 提示词 + 计划折算），只换一个量出来的差是"提示词不匹配"
+    而不是架构差。
 
     为什么不放进图 state：图是 `build()` 时编一次、跨请求共用的单例，而账是**一次运行
     一个实例**。放进 state 才是错的（并发两个请求会往同一本账上写）；放进
@@ -899,9 +940,13 @@ def make_ctx(*, config: RunnableConfig | None, principal: Any, role: str | None,
         "每条工具帧是哪一条调用发的"（见 `_pair_frames`）。
     """
     ledger = RunLedger()
-    executor = WorkflowExecutor(real_tools if real_tools is not None else {}, ledger,
-                             role=role, principal=principal, user_msg=user_msg,
-                             grant=state.get("confirm_grant"), state=state)
+    tools = real_tools if real_tools is not None else {}
+    executor = (executor_factory(ledger, role=role, principal=principal,
+                                 user_msg=user_msg, state=state, real_tools=tools)
+                if executor_factory else
+                WorkflowExecutor(tools, ledger, role=role, principal=principal,
+                                 user_msg=user_msg, grant=state.get("confirm_grant"),
+                                 state=state))
     return {
         "ledger": ledger, "executor": executor,
         "principal": principal, "role": role, "user_msg": user_msg,
@@ -910,6 +955,12 @@ def make_ctx(*, config: RunnableConfig | None, principal: Any, role: str | None,
         "correction": "", "corrected": False, "decided": "model",
         "lines": {}, "notes": [], "llm": None,
         "calls": [], "origin": {},
+        # 三个决策侧接缝（20261020，工具臂用）：全部缺省 `None`
+        # ⇒ `_prompt_of` / `_bound_llm` / `planner_node` 各自回落到今天那一行，
+        # **缺省档逐字节等于改动之前**（`tests/test_react_arm.py` 与
+        # `tests/test_prompt_prefix.py` 钉着那几条渲染与四个节点名）。
+        "prompt_builder": prompt_builder, "menu_builder": menu_builder,
+        "plan_builder": plan_builder,
     }
 
 
@@ -1058,6 +1109,35 @@ def _real_tools(config: RunnableConfig | None = None) -> dict[str, Any]:
     return {t.name: (lambda _t=t, **kw: _t.invoke(kw, config=cfg)) for t in get_all_tools()}
 
 
+def ledger_frame_for(messages: list, principal: Any, config: dict | None,
+                     user_msg: str) -> str:
+    """待办台账帧（含"进了提示词就必须留痕"那条纪律）。**唯一取用点**。
+
+    **为什么抽出来**（20261020）：工具臂（`agent/tool_prompt.py`）也要这一帧，而它
+    自己那份提示词是重写的、用不了 `_system_prompt`。复制这五行就是**把一条判据的
+    证据通道抄成两份**——`require_ledger_frame` / `require_ledger_rows` /
+    `require_card_targets_from_ledger` 三条读的唯一证据就是这里记的那条 trace 事件，
+    两处只要有一处忘了记，那一臂上那三条判据**恒假**（症状是"要求型断言恒红，而行为
+    逐字相同"，20261012 那次的现场见下）。所以只留一处，两边都调它。
+
+    台账帧**进了这一轮的提示词**这件事必须留痕（事件名与形状逐字同
+    `graph.py` 的 planner：`record("planner", "ledger_frame", **meta)`）。
+    条件与生产同源（`graph.py` 的 `if rounds == 0 and ledger_frame`）：本线的提示词
+    每请求只建一次，等价于生产那个 `rounds == 0`；空帧不记——"没摆上桌"与"摆了张
+    空的"在那三条判据里是两件事（`require_ledger_frame` 明写「只判摆没摆，不管队列
+    空不空」，而生产连空帧都不记 ⇒ 本线照抄，别自作聪明放宽）。
+    """
+    try:
+        frame, meta = _pending_ledger_frame(
+            user_msg, _last_assistant_utterance(messages), principal, config)
+    except Exception:  # noqa: BLE001 —— 台账读不到不该炸掉整轮（它只是背景事实）
+        logger.warning("[react_arm] 待办台账读取失败，按「没有台账」处理", exc_info=True)
+        return ""
+    if frame:
+        record("planner", "ledger_frame", **meta)
+    return frame
+
+
 def _system_prompt(messages: list, role: str | None, principal: Any,
                    config: dict | None, user_msg: str,
                    fast_frames: list | None = None, exec_rows: list | None = None) -> str:
@@ -1086,31 +1166,7 @@ def _system_prompt(messages: list, role: str | None, principal: Any,
     已经在 `state["messages"]` 里、会由 `_window` 交给模型（生产是渲染进 `tool_results`
     那一格）——两处都给就是同一份事实发两遍。
     """
-    try:
-        ledger_frame, _meta = _pending_ledger_frame(
-            user_msg, _last_assistant_utterance(messages), principal, config)
-    except Exception:  # noqa: BLE001 —— 台账读不到不该炸掉整轮（它只是背景事实）
-        logger.warning("[react_arm] 待办台账读取失败，按「没有台账」处理", exc_info=True)
-        ledger_frame, _meta = "", {}
-    if ledger_frame:
-        # 台账帧**进了这一轮的提示词**这件事必须留痕（事件名与形状逐字同
-        # `graph.py` 的 planner：`record("planner", "ledger_frame", **meta)`）。
-        #
-        # 为什么非记不可：`require_ledger_frame` / `require_ledger_rows` /
-        # `require_card_targets_from_ledger` 三条判据读的**唯一证据**就是这个 trace
-        # 事件（`run_golden` 从 `planner.ledger_frame` 取 `ids`/`rows`）。本线此前
-        # 把台账读进了提示词却一个字都没记 ⇒ 那三条判据在本线上**恒假**：20261012
-        # 全量双臂里 `admin_board_audit_reviewed_refusal` 因此报红，而两臂那一轮的
-        # 行为**逐字相同**（回复正文一字不差、确认卡载荷的 workflow/tool/args 全同）
-        # ——红的是证据通道，不是行为。这与 `forbid_fallback` 那 138 条是同一个病的
-        # 两个方向：那边是"做不到 ⇒ 纯否定断言恒真"（假绿），这边是"不产证据 ⇒
-        # 要求型断言恒假"（假红）。
-        #
-        # 条件与生产同源（`graph.py` 的 `if rounds == 0 and ledger_frame`）：本线的
-        # 提示词每请求只建一次，等价于生产那个 `rounds == 0`；空帧不记——"没摆上桌"
-        # 与"摆了张空的"在那三条判据里是两件事（`require_ledger_frame` 明写「只判摆
-        # 没摆，不管队列空不空」，而生产连空帧都不记 ⇒ 本线照抄，别自作聪明放宽）。
-        record("planner", "ledger_frame", **_meta)
+    ledger_frame = ledger_frame_for(messages, principal, config, user_msg)
     planner = _render_planner_prompt(
         role=role, page_ctx=_page_ctx(messages, role), round_info=_ROUND_INFO,
         user_msg=user_msg,

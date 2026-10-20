@@ -64,7 +64,13 @@ ARM_CHECKPOINT_RANDOM = "checkpoint_random"
 # 让"臂 C 与臂 B 的差集"恰好等于注入过 history 的那几条用例。实现见
 # `agent/checkpoint_delta_arm.py` 头注。
 ARM_CHECKPOINT_DELTA = "checkpoint_delta"
-KNOWN_ARMS = (ARM_GRAPH, ARM_REACT, ARM_MATRIX,
+# `tools`（20261020，POC）：**菜单是工具，不是技能模板**。`react` 臂的模型点的是
+# `navigate` 这种技能名、由 `instantiate_plan` 展开成工具序列；这一臂的模型直接点
+# `navigate_to`，没有中间那一层。实现见 `agent/tools_arm.py` 头注（四个接缝 + 射程边界）。
+# 它与 `react` 臂**共用同一张真图**（`react_arm.build_graph`），只换四个可选接缝
+# ⇒ `react↔tools` 这一对是"菜单形状"最干净的对照（`graph↔tools` 那一对还掺着循环形状差）。
+ARM_TOOLS = "tools"
+KNOWN_ARMS = (ARM_GRAPH, ARM_REACT, ARM_TOOLS, ARM_MATRIX,
               ARM_CHECKPOINT, ARM_CHECKPOINT_RANDOM, ARM_CHECKPOINT_DELTA)
 ENV_ARM = "GOLDEN_ARM"
 
