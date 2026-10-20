@@ -53,6 +53,14 @@ def check(name: str, ok: bool, extra: str = "") -> None:
 
 SETTINGS = ROOT / "config" / "settings.py"
 ENV_EXAMPLE = ROOT / ".env.example"
+
+# 唯一一处 import 本仓代码（其余判据读 AST 不 import，见文件头注）：要的就是
+# `PROVIDER_DEFAULTS` **这个对象本身**——豁免名单从它派生，抄一份常量就等于把
+# "手抄第二份名单"请回来（见 `_PROVIDER_FIELDS` 上面那段）。
+sys.path.insert(0, str(ROOT))
+
+from config.settings import PROVIDER_DEFAULTS  # noqa: E402
+
 README = ROOT / "README.md"
 
 # 字段声明：`class Settings` 里 4 空格缩进的 `名字: 类型 = 默认值`。
@@ -63,11 +71,17 @@ _FIELD_RE = re.compile(r"^    ([a-z][a-z0-9_]*)\s*:", re.M)
 _ENV_KEY_RE = re.compile(r"^\s*#?\s*([A-Z][A-Z0-9_]*)\s*=", re.M)
 
 # ── 豁免名单：每一条都要写清理由，否则就该去改代码而不是往这里加 ────────────
-# 三家 provider 的 api_key/base_url 由 settings.py 自己的 `active_llm_*` 属性
+# 各 provider 的 api_key/base_url/model 由 settings.py 自己的 `active_llm_*` 属性
 # **按 `f"{prefix}_{suffix}"` 拼名取**（`active_llm_api_key` 等），所以源码里搜不到
 # 完整的字段名——它们有消费点，只是那个消费点是生成式的。
-_PROVIDER_SLUGS = ("deepseek", "qwen", "openai")
-_PROVIDER_FIELDS = {f"{p}_{s}" for p in _PROVIDER_SLUGS
+#
+# **20261021：这份名单不再手抄，改成从 `PROVIDER_DEFAULTS` 的键派生。**
+# 此前它写死 `("deepseek", "qwen", "openai")`，于是给 settings 加第四家（`opencode`）时
+# 这一套立刻红——红得对，但红在"名单漏了"上，而那是本仓点过名的"手抄第二份名单"。
+# 派生之后**加服务商只改一处**（同 `config/settings.py` 里 `KNOWN_LLM_PROVIDERS` 那条
+# 头注的取舍）。字段名的形状仍然手写：`api_key/base_url/model` 是 `active_llm_*` 那一族
+# 的拼名约定，与有哪些服务商无关。
+_PROVIDER_FIELDS = {f"{p}_{s}" for p in PROVIDER_DEFAULTS
                     for s in ("api_key", "base_url", "model")}
 
 # 允许出现在 `.env.example` 里、但**不属于** settings 字段的键：它们读的是进程环境。
