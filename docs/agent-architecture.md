@@ -89,9 +89,11 @@ flowchart TB
 │   ├── workflow_model.py      # 数据模型层：Workflow / ParamSpec 两个 dataclass 与共用原语
 │   ├── workflow_defs/            # ★ 技能注册表：50 个技能静态定义（只读/动作 + 写技能，写技能带 roles=admin）
 │   │   ├── __init__.py        #   聚合层：把下面八个域分片按序拼成 WORKFLOWS（**顺序是契约**）
+│   │   ├── loader.py          #   配置层：一条技能一个 TOML（`*.toml`）→ Workflow；严格校验，坏配置响亮抛
+│   │   ├── content_query.toml #   公开读·查站内内容（原序列 6）—— 20261021 起是**配置**不是 Python 字面量
+│   │   ├── read_article.toml  #   公开读·读当前文章（原序列 7；系统专用快道，planner 不可见）
 │   │   ├── nav_map.py         #   导航映射表 NAV_MAP 与口语模糊归一（**业务唯一数据源**；页面别名→真实路径）
 │   │   ├── nav_skills.py      #   导航 / 特效 / 夜间 / 设备五条技能（原序列 1–5，顺序是契约）
-│   │   ├── public_read.py     #   公开读两条：content_query 与 read_article（后者是系统专用快道，planner 不可见）
 │   │   ├── report_skills.py   #   报表与看板七条只读技能（原序列 8–14，roles=ADMIN_ROLES）
 │   │   ├── content_write.py   #   管理助手内容写面：后台文章清单（读）+ 十三件写（原序列 15–28）
 │   │   ├── own_todo.py        #   主人**自己**的数据八件（原序列 29–36；分界是"动谁的东西"不是"要不要确认"）
@@ -132,6 +134,7 @@ flowchart TB
 │   ├── prompt_context.py      # 注入 planner/model 的**提示词文本**组装（纯函数叶子层，零 LLM / 零 LangGraph）：消息文本提取（多模态兼容）/ page_ctx / 页面操作指南 / 工具帧摘要 / checker 回执摘要
 │   ├── prompts.py             # ★ 全部模型可见正文的唯一落点：人设 + 叙述纪律 + planner / reflector 模板 + 输出契约（渲染点与全部逻辑仍在 graph.py）
 │   ├── planner_llm.py         # ★ 技能表 ↔ API tools/tool_calls 的接线层（20261004 起**唯一**接口层；20261017 前名 native_plan.py）
+│   ├── tool_index.py          # 技能索引档（ADR-0015 阶段 0，**出厂关**）：描述压成一行索引 + describe_skill 按需取回原文；结构一字节不动
 │   ├── deterministic_plan.py           # ★ 确定性决策层（零 LLM）：快道（当前文章读取 / 特效切换 / 导航 / 屏幕显示）+ 动作意图扫描 + 检索候选裁决 + 终局计划
 │   ├── arg_refs.py                # ★ `$<工具>[<序号>].<字段>` 参数引用：把上一步的真实返回值绑进下一步的参数（五个错误码，解不出必须响亮）
 │   │
@@ -157,6 +160,9 @@ flowchart TB
 │   ├── frame_contract.py              # 帧契约：第二条臂与生产（graph.py / server.py）之间的唯一事实源
 │   ├── react_arm.py           # golden 第二条臂（GOLDEN_ARM=react）
 │   ├── react_line.py          # ReAct 试验线：把现网攒下的收敛判据 / 工具级回执装到第二条臂上
+│   ├── tool_menu.py           # 工具级菜单（POC）：70 个工具按 authz 的 scope 表过滤成 OpenAI tools 数组
+│   ├── tool_prompt.py         # 工具臂的系统提示：菜单是工具不是技能，正文为工具菜单重写
+│   ├── tools_arm.py           # golden 工具臂（GOLDEN_ARM=tools，POC）：复用 react 那张图，只换四个接缝
 │   ├── checkpoint.py          # checkpointer 的**接线点**与级联清理（空 DSN 恒返回 None，见 §4.6）
 │   ├── checkpoint_arm.py      # golden 第三条臂（GOLDEN_ARM=checkpoint）
 │   ├── checkpoint_delta_arm.py # golden 第四条臂（GOLDEN_ARM=checkpoint_delta，臂 C）

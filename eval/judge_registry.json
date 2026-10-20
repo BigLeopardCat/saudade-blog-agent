@@ -207,6 +207,10 @@
         0,
         0
       ],
+      "agent/tool_index.py": [
+        2,
+        0
+      ],
       "agent/tool_specs.py": [
         0,
         0
@@ -227,6 +231,10 @@
         48,
         0
       ],
+      "agent/workflow_defs/loader.py": [
+        0,
+        0
+      ],
       "agent/workflow_defs/nav_map.py": [
         75,
         0
@@ -237,10 +245,6 @@
       ],
       "agent/workflow_defs/own_todo.py": [
         11,
-        0
-      ],
-      "agent/workflow_defs/public_read.py": [
-        1,
         0
       ],
       "agent/workflow_defs/report_skills.py": [
@@ -353,7 +357,7 @@
       ]
     },
     "total": [
-      1149,
+      1150,
       4848
     ]
   },

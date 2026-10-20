@@ -28,8 +28,8 @@
     "top_defs": 1
   },
   "agent/react_arm.py": {
-    "lines": 1249,
-    "top_defs": 40
+    "lines": 1305,
+    "top_defs": 41
   },
   "agent/tasks.py": {
     "lines": 1658,

@@ -5,6 +5,7 @@ Reads the active provider's config from ``settings.active_llm_*``.
 """
 
 import logging
+import uuid
 
 from langchain_openai import ChatOpenAI
 from config import settings
@@ -34,6 +35,15 @@ def _thinking_extra(provider: str, thinking: bool) -> dict:
         return {"enable_thinking": bool(thinking)}
     if provider == "deepseek":
         return {"thinking": {"type": "enabled" if thinking else "disabled"}}
+    if provider == "opencode":
+        # **刻意一个键都不发**（20261020 实测）：① 这个网关不强制
+        # `reasoning_content` 回传 —— 回放一条缺它的 assistant 消息照样 200
+        # （DeepSeek 官方会 400，那正是 deepseek 那一支必须译的理由）；② 它的
+        # `minimax-m3.1-flash-free` 对 `thinking` 键**回 400**，而这是免费档里唯一
+        # 又快又稳的（3.5s / 工具 4/4），`longcat-2.5-preview-free` 慢一倍（8.5s）
+        # 但两种都收。⇒ 不发的代价是零，发的代价是换模型就炸。
+        # 换模型/换端点前先重探这两格（`thinking` 键 + 多轮回放）。
+        return {}
     if provider not in _WARNED_PROVIDERS:
         _WARNED_PROVIDERS.add(provider)
         logger.warning(
@@ -41,6 +51,20 @@ def _thinking_extra(provider: str, thinking: bool) -> dict:
             "**被丢弃**（本进程只报一次）。图内四个调用点都靠它关思考，而开着思考的 "
             "assistant 消息回放会让严格服务商整轮 400 ⇒ 要么在这里登记它的字段名，"
             "要么确认这家根本没有思考开关。", provider, thinking)
+    return {}
+
+
+def _provider_headers(provider: str) -> dict:
+    """服务商要求的**自定义请求头**（走 `ChatOpenAI(default_headers=…)`）。
+
+    目前只有 opencode zen 一家：它按 `x-opencode-session` 路由，缺了直接回
+    `400 MissingSessionID`（20261020 实测；`ChatOpenAI` 只会发 `Authorization`，
+    与它「只认 `x-api-key`」的 Anthropic 那条路不是一回事——OpenAI 兼容路径上
+    `Bearer` 单独就能过）。每次调用给一个新 session id：这是**请求身份**，不是凭据，
+    没有复用价值，也不会进任何日志。
+    """
+    if (provider or "").strip().lower() == "opencode":
+        return {"x-opencode-session": uuid.uuid4().hex}
     return {}
 
 
@@ -60,7 +84,7 @@ def _thinking_extra(provider: str, thinking: bool) -> dict:
 # 一点"，是**整份输出作废**——模型回一个字段齐缺的对象，下游按"没解析出来"静默走兜底，
 # 而夜里汇总照旧 ALL PASS（20261012 那 181 条的形状）。
 _JSON_OBJECT_PROVIDERS = frozenset({"deepseek"})   # 只认它，见上一段 400 原文
-_JSON_SCHEMA_PROVIDERS = frozenset({"qwen", "openai"})  # json_schema + strict 的原生地
+_JSON_SCHEMA_PROVIDERS = frozenset({"qwen", "openai", "opencode"})  # json_schema + strict 的原生地
 # 上面两个集合**就是**分派表（不是给判据看的第二份拷贝）：下面按它们分派，认不出的才
 # 落进缺省支并出声。登记与分派同源 ⇒ 加服务商只改一处。
 DIALECT_PROVIDERS = _JSON_OBJECT_PROVIDERS | _JSON_SCHEMA_PROVIDERS
@@ -149,6 +173,11 @@ def get_llm(**kwargs) -> ChatOpenAI:
     _extra.update(_thinking_extra(settings._provider_prefix, thinking))
     if _extra:
         params["extra_body"] = _extra
+    # 自定义请求头同理：合并而不是覆盖（调用方自己传了 default_headers 时不许抹掉）。
+    _hdrs = dict(params.get("default_headers") or {})
+    _hdrs.update(_provider_headers(settings._provider_prefix))
+    if _hdrs:
+        params["default_headers"] = _hdrs
     if seed:                       # 0/空 ⇒ 不设，见上面的注
         params["seed"] = int(seed)
     return ChatOpenAI(**params)

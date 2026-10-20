@@ -100,7 +100,7 @@ def _test_known_providers_is_the_table_keys():
     check("取值域 = `PROVIDER_DEFAULTS` 的键（不是手抄的第二份名单）",
           KNOWN_LLM_PROVIDERS == frozenset(PROVIDER_DEFAULTS),
           str(sorted(KNOWN_LLM_PROVIDERS)))
-    check("三家都在", KNOWN_LLM_PROVIDERS == {"qwen", "deepseek", "openai"},
+    check("四家都在", KNOWN_LLM_PROVIDERS == {"qwen", "deepseek", "openai", "opencode"},
           str(sorted(KNOWN_LLM_PROVIDERS)))
 
 

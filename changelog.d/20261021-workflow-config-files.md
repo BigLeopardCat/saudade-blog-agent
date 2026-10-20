@@ -1,0 +1,46 @@
+- **技能注册表开始从 Python 字面量搬成配置**（⚠️ **agent 对外行为零变更**：50 条技能逐字段
+  逐字节相同，planner 提示词、展开层、判据一个字未动）。这一笔只搬**一个域**（公开读两条：
+  `content_query` / `read_article`）当试点，搬完 `agent/workflow_defs/public_read.py`
+  **整份删除**——不留两份事实源。
+  ① **形状**：**一条技能一个 TOML 文件**，新增 `agent/workflow_defs/loader.py`（`tomllib`
+  是标准库 ⇒ **零新依赖**；pydantic `extra="forbid"` ⇒ 打错键名当场抛）。散文用多行基本
+  字符串 + 行尾 `\` 续行，断点与原 Python 相邻字符串字面量**一一对应**；换行必须是显式
+  `\n`（`description` 的第一个换行是"触发条件 / 必须怎么做"的切点，`Workflow.contract`
+  按它切）。`order` 是**稀疏排序键**（位次 6 → `order = 60`）⇒ 插技能不必重编号。
+  ② **起因**：主人 20261017 / 20261021 两次点名的「改动不断叠进同一个文件」「禁止上帝
+  文件」——技能是**数据**（触发条件/参数说明/完成判定/回复契约），而注册表字面量是
+  2554 行 Python、单模块 110–635 行，"加一条技能要在几百行里找位置"。按域分只把 1700 行
+  降到几百行，问题没变；按技能分才是"加技能 = 加文件"。
+  ③ **判据**：新增 `tests/test_workflow_config.py` 五组——试点域逐字段相同 / **格式表达力
+  往返**（**全部 50 条**过一遍配置格式再回来必须原样相等，附灵敏度反控：改一个字段比较
+  必须红）/ 六种坏配置全部**响亮抛** / TOML 与 Python 两边的技能名**不相交**且并起来正好
+  50 条 / 顺序契约。⚠️ 本文件用**真 `assert`**：本仓"打印 + 记 `FAILS`"那种写法在 pytest
+  下**恒绿**。
+  ④ **判据面缩小了一格，如实记**：`eval/judge_registry.json` 的中文穷举量按文件记，而 TOML
+  不在扫描面 ⇒ 试点域那 1 处中文 dict（`content_query` 的 `inputs`）移出词表闸视野。移出的
+  是**话术**（`prompt_text`：只进提示词/卡面，无判定分支读它），不是匹配器。动作是**销账**
+  （删 `agent/workflow_defs/public_read.py [1,0]` 那一格、`total` 1151→1150、新文件
+  `loader.py` 记 `[0,0]`），**不是 `--update`**；后续每转一个域按同一口径销账。
+  ⑤ **一处没验过的事，写下来别当结论**：`*.toml` 是本仓**第一次**往打包目录里放非 `.py`
+  文件（wheel 包列表那六个目录此前一个数据文件都没有）⇒ 它们进不进 wheel **依赖
+  hatchling 的整包默认行为，本机没验过**（本机不 build）。**但漏了不是静默的**：
+  `load_dir` 找不到任何 `*.toml` 时带着路径响亮抛 ⇒ agent 起不来，而不是"少看见几个本领"。
+  ⑥ 顺带记下一处**既存的小瑕疵**（本笔**未改**，改了就是改提示词字节）：`content_query` 的
+  `calls` 参数描述里那份示例 JSON 少一个 `}`（`[{…{"keyword": "用户原词"}]`）——原源码里
+  `}}` 是 f-string 转义、求值后只剩一个。改成配置之后这种"源码里看着是两个、值是另一个"
+  的地方就看得见了。
+  ⑦ **并进 main 之后的适配，如实记**：main 上那批 pytest 迁移（`run_all.py` 已删、判据收进
+  `tests/_judge.collector`）与本笔同时落地，并完之后本笔的四个 POC 套件
+  （`test_arm_seams` / `test_confirm_question_shape` / `test_slot_stability` /
+  `test_tool_menu`）仍是**裸脚本形态**——判据长在模块级、靠 `sys.exit(1)` 报红。
+  pytest 下那等于**收集到 0 条**（`tests/test_tests_dir_shape.py` 就是抓这个的），所以四个
+  都包进 `def test_*()` 并把尾部换成 `assert not FAILED`。**这是迁移没做完，不是迁移改弱了**：
+  一条判据都没删，`FAILED` 里记的东西逐字不变。
+  另有两处**并库时的账目回退**，一并纠正：`eval/module_baseline.json` 与
+  `eval/complexity_baseline.json` 里 `tests/test_confirm.py` 那两个数（1021 / 855）取的是本
+  支的旧值，而 main 侧那三笔编辑已把它长到 1024 / 858 ⇒ 并完必然红。改回 main 的值是
+  **记账回到事实**，不是放宽棘轮（那两个数的实际值就是 1024 / 858）。反方向也销了一笔：
+  `eval/lint_baseline.json` 里 `agent/react_line.py: 1` 本支改完已清零 ⇒ 按"只许缩小"手动
+  销账（620→619、129→128 个文件），**手改那一个数，不是 `--update`**。
+
+设计与取舍见 `docs/adr/adr-0016-skill-registry-becomes-config-files.md`。
