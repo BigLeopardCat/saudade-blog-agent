@@ -62,8 +62,8 @@ def _from_authz(role) -> list[str]:
     return sorted(n for n in all_tool_names() if authz.required_scope(n) in scopes)
 
 
-def main() -> int:
-    # ── ① 可见性只有一处判据 ──────────────────────────────────────────────────
+def _sec_role_filter() -> None:
+    """① 可见性只有一处判据（含一条**正控**，见那段注）。"""
     print("\n① 角色过滤 —— 判据只有 authz 那张表一处：")
     check("注册表里的工具全部在 TOOL_SCOPE 里有声明（漏声明 ⇒ fail-closed 恒不可见）",
           [t.name for t in get_all_tools() if authz.required_scope(t.name) is None] == [],
@@ -95,7 +95,9 @@ def main() -> int:
     check("正控还原后 search_notes 回来（否则下面的用例都在被污染的表上跑）",
           "search_notes" in visible_tools("admin"))
 
-    # ── ② 形状与技能级那份对齐 ────────────────────────────────────────────────
+
+def _sec_shape() -> None:
+    """② 形状与技能级那份逐格对齐（对不齐 ⇒ A/B 比的就不是菜单内容）。"""
     print("\n② 形状 —— 与 planner_llm.build_tool_schema 逐格同形：")
     for role in ("user", "admin"):
         tools = build_tool_menu(role)
@@ -114,7 +116,11 @@ def main() -> int:
               all(("required" in _fn(e)["parameters"])
                   == bool(_fn(e)["parameters"].get("required")) for e in tools))
 
-    # ── ③ 跨切面槽位在场（少了就是把两个变量混成一个） ─────────────────────────
+def _sec_slots() -> list[dict]:
+    """③ 跨切面槽位在场（少了就是把"菜单形状"与"丢了两条通道"混成一个变量）。
+
+    返回 `real`（不带三个伪函数的那批）——④ 接着用它。
+    """
     print("\n③ 跨切面槽位 —— harness 资产照搬，不是模板资产：")
     tools = build_tool_menu("admin")
     real = [e for e in tools if _fn(e)["name"] not in PSEUDO]
@@ -138,8 +144,11 @@ def main() -> int:
               == authz.is_write(_fn(e)["name"]) for e in ev_real))
     check("evidence=True 时至少有一个工具带它（否则上一条是空过）",
           any("evidence" in _fn(e)["parameters"]["properties"] for e in ev_real))
+    return real
 
-    # ── ④ 描述同源：不抄第二份 ────────────────────────────────────────────────
+
+def _sec_descriptions(real: list[dict]) -> None:
+    """④ 描述同源：人工说明仍住在 `graph._TOOL_MENU_LINES`，这里只读不抄。"""
     print("\n④ 描述 —— 人工说明仍住在 graph._TOOL_MENU_LINES，这里只读：")
     by_name = {t.name: t for t in get_all_tools()}
     overridden = [e for e in real if _fn(e)["name"] in _TOOL_MENU_LINES]
@@ -151,12 +160,20 @@ def main() -> int:
           all(_fn(e)["description"] == (by_name[_fn(e)["name"]].description or "")
               for e in rest))
     check("描述一个都不为空（空描述 = 模型只看得见名字）",
-          all(_fn(e)["description"] for e in tools))
+          all(_fn(e)["description"] for e in build_tool_menu("admin")))
 
-    # ── ⑤ 确定性 ─────────────────────────────────────────────────────────────
+def _sec_determinism() -> None:
+    """⑤ 确定性（前缀缓存按内容寻址 ⇒ 菜单抖动会整片打掉命中率）。"""
     print("\n⑤ 确定性 —— 同一角色两次调用逐字节相同：")
     check("user 菜单两次相同", build_tool_menu("user") == build_tool_menu("user"))
     check("admin 菜单两次相同", build_tool_menu("admin") == build_tool_menu("admin"))
+
+
+def main() -> int:
+    _sec_role_filter()
+    _sec_shape()
+    _sec_descriptions(_sec_slots())
+    _sec_determinism()
 
     if FAILS:
         print(f"\n❌ {len(FAILS)} 项未过：")

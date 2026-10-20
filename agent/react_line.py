@@ -329,7 +329,6 @@ class WorkflowExecutor:
         台账登记（`ledger.record`）的口径见上面《`ledger.record` 的两条硬要求》
         ——**签名必须与判据的对照方同源**，错一条 ⇒ 无进展判据恒不触发。
         """
-        from agent.arg_refs import resolve_args
         from agent.workflow_plan import instantiate_plan
 
         # 无进展判据的键（**取参在字面路径修正之前**，见类上面那一段 ①②）。
@@ -360,11 +359,31 @@ class WorkflowExecutor:
                         f"（status={plan.get('status') or '?'}）。"), 0
             return f"{reply}\n{RECEIPT_HEAD} {workflow}：本技能没有要执行的工具（纯应答）。", 0
 
+        return self.run_specs(specs, sig=sig, workflow=workflow)
+
+    def run_specs(self, specs: list[str], *, sig: str = "",
+                  workflow: str = "") -> tuple[str, int]:
+        """跑一串**已经算好的工具规格**（`name(args)` 形态）。
+
+        **为什么把它从 `run` 里切出来**（20261020）：工具臂（`agent/tool_arm.py`）的模型
+        直接点真工具，没有"技能展开"这一步——它需要的正是**这一步之后**的全部机器：
+        同意闸 → 权限闸 → 参数引用解析 → 真调用 → 生产 checker 的 PASS/BLOCK → 回执。
+        复制一份循环就是复制判据（本仓点名的反模式），所以这里只切一刀，`run` 与工具臂
+        **共用同一个循环**。
+
+        `sig`：无进展判据的键（`spec_signature`）。技能臂传的是**技能级**签名（取参在
+        字面路径修正之前，见类头注 ①②）；工具臂传的是**工具级**签名——两边都必须与
+        各自的对照方（模型的原始 `tool_calls`）同源。空串 = 这一批不登记（工具臂逐条
+        调用时，登记由调用方按条做）。
+        """
+        from agent.arg_refs import resolve_args
+
         # ── 同意闸（P3，20261005）：写操作**整批先判、一件都不执行** ──────────────
         # 生产这边的分工是两道、都在 `graph.execute_node`：① `_confirm_popup` 在**逐
         # spec 循环之前**判一次，命中就整批回 `pending_confirm`（"一次点击确认的是
         # 一整批，不该以执行一半为代价"——读工具也一样不跑）；② 没命中的那些，进循环
-        # 后逐条还有 `consent_missing`（见 `graph.py` 的 `execute_node`）。两道合起来的效果是一句话：
+        # 后逐条还有 `consent_missing`（见 `graph.py` 的 `execute_node`）。两道合起来是
+        # 一句话：
         # **未获同意的写 spec 在生产里从不执行**——要么变成一张卡，要么变成一条
         # `__ERROR__: 待确认[…]` 帧。
         # 本线此前两道都没有，于是模型点到写工具就**真的执行**（golden 的工具是真的，
@@ -436,8 +455,9 @@ class WorkflowExecutor:
             # "系统确认的事实"里掺话（闸门与 narrator 读的都是 `result`）。
             self.calls.append({"tool": name, "args": args, "result": text,
                                "kind": kind, "verdict": verdict, "line": line})
-        # 真跑了工具 ⇒ 登记技能级签名（无进展判据的对照方，见 docstring）。
-        self.ledger.record(sig)
+        # 真跑了工具 ⇒ 登记签名（无进展判据的对照方，见 docstring）。空串 = 调用方自己登记。
+        if sig:
+            self.ledger.record(sig)
         return "\n".join(outs), len(specs)
 
     def _grant_covers(self, spec: str) -> bool:
