@@ -169,7 +169,7 @@ def main() -> int:
         # ── ④ 哪些类真的会执行 ───────────────────────────────────────────
         keys = [p["key"] for p in ar.plan()]
         check("④ 只有带 rule 的类被执行（trace / golden-traces 有别的执行者）",
-              keys == ["archive", "eval-reports", "wordgraph-builds"], str(keys))
+              keys == ["archive", "eval-reports", "slot-stability", "wordgraph-builds"], str(keys))
         check("④ trace-audio 是 open ⇒ 本轮不执行（登记了但还没接管）",
               "trace-audio" not in keys)
 
