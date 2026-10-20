@@ -305,8 +305,13 @@ def cost_of(reports: dict, arms: list[str], reps: int) -> dict:
             calls += int(pe.get("tool_calls_total") or 0)
             try:
                 m = dial_matrix.trace_metrics_for(doc)
-            except Exception:  # noqa: BLE001 —— 没落 trace 不该把整张表弄死
-                continue
+            except Exception as exc:  # noqa: BLE001 —— 没落 trace 不该把整张表弄死
+                # 读不出就**记成"这一遍没有可读的 trace"**（空表 ⇒ 下面那些 `.get` 全给 0），
+                # 而不是 `continue` 跳过这一遍的余下几行——两者在**当前**代码里等价，但
+                # `continue` 会在以后有人往 try 后面加一行时**静默**把它也跳掉。顺带这也是
+                # bandit B112（`except: continue`）那条告警指的形状。
+                print(f"[ab] ⚠ {arm} r{r} 读不出 trace（{type(exc).__name__}）⇒ 该遍用量记 0")
+                m = {}
             dec += int(m.get("native_decisions") or 0)
             for node, u in (m.get("usage") or {}).items():
                 if node != "planner":
