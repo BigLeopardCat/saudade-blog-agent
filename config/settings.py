@@ -1,7 +1,7 @@
 """Application configuration using pydantic-settings.
 
 Each LLM provider keeps its own environment variables.
-Set ``LLM_PROVIDER=deepseek|qwen|openai`` to choose the active one.
+Set ``LLM_PROVIDER=deepseek|qwen|openai|opencode`` to choose the active one.
 """
 
 import os
@@ -22,6 +22,17 @@ PROVIDER_DEFAULTS = {
     "openai": {
         "model": "gpt-4o",
         "base_url": "https://api.openai.com/v1",
+    },
+    # opencode zen 网关（OpenAI 兼容）。**两条与别家不同的实测约束**：① 必须带
+    # `x-opencode-session` 头，缺了回 400 `MissingSessionID`（`ChatOpenAI` 只会发
+    # `Authorization` ⇒ 由 `models/llm.py::_provider_headers` 补）；② Cloudflare 按 UA
+    # 指纹封，`urllib` 裸 UA 回 403 `error code: 1010`（openai SDK 的 UA 不受影响）。
+    # 免费档（`*-free`）只在**这个 Go 端点**可用：非 go 的 `/zen/v1` 回 403
+    # `FreeTierError`（"can only be used from within OpenCode"）；Go 端点自身有月度额度，
+    # 用光回 429 `GoUsageLimitError`（`deepseek-v4.1-flash` 20261020 即是）。
+    "opencode": {
+        "model": "longcat-2.5-preview-free",
+        "base_url": "https://opencode.ai/zen/go/v1",
     },
 }
 
@@ -66,6 +77,11 @@ class Settings(BaseSettings):
     openai_api_key: str = ""
     openai_base_url: str = PROVIDER_DEFAULTS["openai"]["base_url"]
     openai_model: str = PROVIDER_DEFAULTS["openai"]["model"]
+
+    # ── opencode zen ───────────────────────────────────────────────
+    opencode_api_key: str = ""
+    opencode_base_url: str = PROVIDER_DEFAULTS["opencode"]["base_url"]
+    opencode_model: str = PROVIDER_DEFAULTS["opencode"]["model"]
 
     # ── Shared LLM params ─────────────────────────────────────────
     llm_temperature: float = 0.7

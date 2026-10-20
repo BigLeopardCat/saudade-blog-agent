@@ -46,8 +46,28 @@ from agent.adminops_todo import (
 )
 
 
+def _todo_when(raw_date, derived) -> str:
+    """待办卡面上「排期 …」那一格：翻成人话 + 标出**系统替你排的**（20261020）。
+
+    分成一个函数不是为了好看，是 `_confirm_one` 在复杂度台账里记着只许缩小
+    （C=155 / 376 行）——这一批要给它加"派生值"那一格，就得同时搬走等量的一段。
+
+    `derived` 非空 = 这个日子**不是主人说的**，是系统按他的相对说法算出来的
+    （`adminops_todo.derive_due_date`，见那条长注）。卡面必须写明：主人点「确定」时
+    核对的就是这句话，把系统算的日子印成光秃秃的「排期 10月22日」，等于让他以为
+    自己说过这个日子。主人**没说**日子（未排期）与**说了**一个系统算的日子是两件事，
+    这一格是它们唯一分开的地方。
+    """
+    if not str(raw_date or "").strip():
+        return "未排期"
+    # ⚠️ 这一格**不带 markdown 加粗**：`render_action_lines` 的读端是跨轮台账那一行
+    # （Rust 的表格列），它要求单行且不带标记；卡片面由 `_bold()` 整行加粗，不缺这一处。
+    mark = "（系统替你排的）" if (derived or {}).get("date") else ""
+    return due_date_cn(raw_date) + mark
+
+
 def _confirm_one(spec: dict, index=None, cats=None, boards=None, notes=None,
-                 users=None, todos=None, quota_requests=None, comments=None) -> str:
+                 users=None, todos=None, quota_requests=None, comments=None, derived=None) -> str:
     """单条写 spec → 「做什么」的人话（与 server._tool_action_text 同口径）。
 
     `index` = 可选的标签字典（`{id: TagInfo}`，见 build_tag_index）：给得起就
@@ -351,7 +371,7 @@ def _confirm_one(spec: dict, index=None, cats=None, boards=None, notes=None,
         # 卡上要让他能验算这个日子对不对——翻错了正是在这一步被他看见）。
         text = str(a.get("text") or "").strip()
         raw_date = a.get("date")
-        when = due_date_cn(raw_date) if str(raw_date or "").strip() else "未排期"
+        when = _todo_when(raw_date, derived)
         # **一格都不截**（20260926 修）：上面那段注释写着"逐字念出正文"，实现的却是
         # `clip(text, 60)`——`clip` 是**回执字段**的收口工具（Rust 侧 detail 列宽有限），
         # 用在卡面上就是拿列宽的尺子量主人要核对的那句话。真实现场（trace
@@ -519,7 +539,7 @@ def confirm_opts(count: int) -> list:
 
 def _action_items(specs, index=None, cats=None, boards=None, notes=None,
                   users=None, todos=None, quota_requests=None,
-                  comments=None) -> list:
+                  comments=None, derived=None) -> list:
     """一份调用清单 → 逐**单元**的人话（**不带**编号、不带分隔符）。
 
     措辞的唯一产出点：`render_action_lines`（台账 target）与 `render_action_lines_md`
@@ -533,14 +553,14 @@ def _action_items(specs, index=None, cats=None, boards=None, notes=None,
     """
     specs = list(specs) if isinstance(specs, (list, tuple)) else []
     return ["，并".join(_confirm_one(specs[i], index, cats, boards, notes, users,
-                                     todos, quota_requests, comments)
+                                     todos, quota_requests, comments, derived)
                         for i in unit)
             for unit in linked_units(specs)]
 
 
 def render_action_lines(specs, index=None, cats=None, boards=None, notes=None,
                         users=None, todos=None, quota_requests=None,
-                        comments=None) -> str:
+                        comments=None, derived=None) -> str:
     """一份调用清单 → 主人看得懂的动作串（**"；"分隔，单行**）。
 
     读端是**跨轮待办的人读目标**（`pending_action.target`，Rust 渲染进台账那一行）——
@@ -553,7 +573,7 @@ def render_action_lines(specs, index=None, cats=None, boards=None, notes=None,
     点「只处理 2」而系统处理另一个这种事就只是时间问题。
     """
     items = _action_items(specs, index, cats, boards, notes, users, todos,
-                          quota_requests, comments)
+                          quota_requests, comments, derived)
     if len(items) > 1:
         return "；".join(f"{i}. {t}" for i, t in enumerate(items, 1))
     return "；".join(items)
@@ -573,7 +593,7 @@ def _bold(text: str) -> str:
 
 def render_action_lines_md(specs, index=None, cats=None, boards=None, notes=None,
                            users=None, todos=None, quota_requests=None,
-                           comments=None) -> str:
+                           comments=None, derived=None) -> str:
     """同上，但给**卡片面**用：markdown、**一个任务一行**、逐条加粗。
 
     为什么不能沿用 `render_action_lines` 的单行串（用户 20261019 报"一大段分不清"）：
@@ -585,7 +605,7 @@ def render_action_lines_md(specs, index=None, cats=None, boards=None, notes=None
     卡面第 N 行与按钮 `pick:<N-1>` 必须指向同一件事，理由见 `confirm_opts` 的头注。
     """
     items = _action_items(specs, index, cats, boards, notes, users, todos,
-                          quota_requests, comments)
+                          quota_requests, comments, derived)
     if len(items) > 1:
         return "\n".join(f"{i}. {_bold(t)}" for i, t in enumerate(items, 1))
     return _bold(items[0]) if items else ""
@@ -593,7 +613,7 @@ def render_action_lines_md(specs, index=None, cats=None, boards=None, notes=None
 
 def render_confirm_question(specs, index=None, cats=None, boards=None, notes=None,
                             users=None, todos=None, quota_requests=None,
-                            comments=None) -> str:
+                            comments=None, derived=None) -> str:
     """确认框的问题行：**把要发生的事说全**（含颜色名与色值），再问一句。
 
     用户点的是"确定"，他有权在点之前从这句话里看出自己将同意什么——
@@ -603,7 +623,7 @@ def render_confirm_question(specs, index=None, cats=None, boards=None, notes=Non
     不因此不弹窗——这一轮的价值就是让主人确认，读不到就少说，不是不弹。）
     """
     acts = render_action_lines_md(specs, index, cats, boards, notes, users, todos,
-                                  quota_requests, comments)
+                                  quota_requests, comments, derived)
     if len(linked_units(specs)) > 1:
         # 多件（20260929 批 F4）：这一句话里必须把"能只处理一个"讲出来——否则主人
         # 看到一串编号却只有一枚「确定」，他唯一能做的就是全签（盲签的反面不是
@@ -630,14 +650,14 @@ def render_confirm_question(specs, index=None, cats=None, boards=None, notes=Non
 
 def render_confirm_text(specs, index=None, cats=None, boards=None, notes=None,
                         users=None, todos=None, quota_requests=None,
-                        comments=None) -> str:
+                        comments=None, derived=None) -> str:
     """弹窗那一轮的**对话气泡正文**（系统给的，不经 narrator）。
 
     刻意写得像"在等你的意思"而不是"已经在处理了"：这一轮零执行。给一个明确
     的操作路径（点按钮 / 直接打字），两条路都通向同一条写通道。
     """
     acts = render_action_lines_md(specs, index, cats, boards, notes, users, todos,
-                                  quota_requests, comments)
+                                  quota_requests, comments, derived)
     # 不说"上面/下面"：20260921d 起确认卡片渲染在**对话流里**（问句气泡之后），
     # 方位词只会随排版漂移——只点按钮名，两侧 UI 都能对上
     if len(linked_units(specs)) > 1:

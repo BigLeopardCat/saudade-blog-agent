@@ -216,8 +216,8 @@ def _expand_own_workflow(workflow, params: dict) -> tuple[list[str], str]:
     return [], f"{name}：未知的写技能（不调用任何工具）"
 
 
-def _expand_todo_workflow(workflow, params: dict) -> tuple[list[str], str]:
-    """后台首页待办 / 日程（20260926 第八轮）→ (TOOLS 行清单, 注记)。
+def _expand_todo_workflow(workflow, params: dict) -> tuple[list[str], str, dict]:
+    """后台首页待办 / 日程（20260926 第八轮）→ (TOOLS 行清单, 注记, **系统派生的值**)。
 
     与 `_expand_write_workflow` 分开写（同 `_expand_own_workflow` 的理由）：那两套的前提
     都是"目标能在站内核对"——一个按名字解析 id，一个认 article_id / 通知 id。这一件
@@ -229,37 +229,49 @@ def _expand_todo_workflow(workflow, params: dict) -> tuple[list[str], str]:
     判据只剩两条，都是"缺了就不写"：
       · 正文空 → 零工具 + 注记（"记一下"三个字本身就是正文时，那是主人的口误，
         不是一件待办）；
-      · 排期翻不出来 → 零工具 + 注记，**绝不挑一个日子顶上**（翻成什么由
-        `A.normalize_due_date` 一处决定；这里翻出来的值同时进 TOOLS 行、确认框与
-        令牌载荷，三处是同一个值）。
+      · 排期**连推导都推不出来** → 零工具 + 注记（推不出来只剩两种：主人压根没说
+        日子——那一路根本不进这里；以及 planner 往 date 槽里填了个不是时间的词）。
     超长也在这里挡（**不截断**：截断等于替主人改字，同 Rust 侧的取舍）。
+
+    **排期那一格是三态**（20261020 用户裁决，见 `A.derive_due_date` 那段长注）：
+      · 没说 → 留空（未排期）；
+      · 说了、闭集认得 → 照抄那个日子；
+      · 说了、是相对说法（「两天之内」）→ **系统算一个**，并把它记进第三个返回值
+        `derived`（`{"date": "derived"}`）——这个值不是主人的话，卡面与注记都必须写明
+        「系统替你排的」，否则等于系统替主人改了字还让他以为是自己说的。
     """
     text = _write_arg(params.get("text"))
     if not text:
         return [], ("dashboard_todo_add 缺少正文（text）：不调用任何工具，"
-                    "如实向主人问清要记的是哪一件事；**不要**拿他这句话本身当正文猜一个")
+                    "如实向主人问清要记的是哪一件事；**不要**拿他这句话本身当正文猜一个"), {}
     if len(text) > _TODO_TEXT_LIMIT:
         # 上限与服务端同源（tools/base.py 的 `_TODO_TEXT_LIMIT` = Rust MAX_TEXT_CHARS）；
         # 这里挡一道只是为了"零写 + 能说清原因"，服务端那一道才是判据。
         return [], (f"dashboard_todo_add 的正文太长（{len(text)} 字，上限 {_TODO_TEXT_LIMIT} 字）："
-                    "不调用任何工具，如实请主人把这件事说短一点（**不许**替他截断）")
+                    "不调用任何工具，如实请主人把这件事说短一点（**不许**替他截断）"), {}
     raw = _write_arg(params.get("date"))
+    derived: dict = {}
     due = _todo.normalize_due_date(raw) if raw else None
     if raw and due is None:
-        return [], (f"dashboard_todo_add 的排期日「{raw}」认不出来"
-                    f"（只认 {_todo.DUE_DATE_FORMS_CN}）：不调用任何工具，"
-                    "如实向主人问清是哪一天——**不许**自己挑一个日子顶上")
+        due = _todo.derive_due_date(raw)
+        if due is None:
+            return [], (f"dashboard_todo_add 的排期日「{raw}」认不出来"
+                        f"（只认 {_todo.DUE_DATE_FORMS_CN}）：不调用任何工具，"
+                        "如实向主人问清是哪一天——**不许**自己挑一个日子顶上"), {}
+        derived["date"] = "derived"
     args: dict = {"text": text}
     if due:
         args["date"] = due
     return ([ToolCall("create_dashboard_todo", args)],
             (f"往他**自己**后台首页的待办里加一条「{_tags.clip(text, 20)}」"
              + (f"，排期 {_todo.due_date_cn(due)}" if due else "（未排期）")
-             + "；只追加这一条，列表里原有的都不动"))
+             + ("（**系统替你排的**，主人没给具体日子）" if due and derived else "")
+             + "；只追加这一条，列表里原有的都不动"),
+            derived)
 
 
-def _expand_todo_done_workflow(workflow, params: dict) -> tuple[list[str], str]:
-    """待办「勾完成」（20260926 第十轮）→ (TOOLS 行清单, 注记)。
+def _expand_todo_done_workflow(workflow, params: dict) -> tuple[list[str], str, dict]:
+    """待办「勾完成」（20260926 第十轮）→ (TOOLS 行清单, 注记, **系统派生的值**)。
 
     与 `_expand_todo_workflow`（追加一条）共用"目标是自由文本"这个前提，**但判据更少**：
     那一件还要多一道"排期翻不翻得出来"（它有 date 参数），这一件只认 text。剩下的
@@ -273,63 +285,77 @@ def _expand_todo_done_workflow(workflow, params: dict) -> tuple[list[str], str]:
     惰性读一次，见 `graph._confirm_popup`），而把"查无此条 ⇒ 零工具"写在这里会把
     "读不到列表"与"列表里没有这一条"混成同一件事——前者是系统读不到，后者是主人
     说错了正文。真正的定位判据在工具侧对着**实时**列表做一次，那一次同时是写前读。
+
+    第三项恒空（这一件没有可派生的槽）：**同一族同一个形状**是刻意的——调用点按一个
+    形状解包，将来给某一支加参数槽时不会因为"这一支是二元组"而在解包处炸掉。
     """
     text = _write_arg(params.get("text"))
     if not text:
         return [], ("dashboard_todo_done 缺少正文（text）：不调用任何工具，"
                     "如实向主人问清指的是哪一条（可先选 dashboard_todo_list 把列表读出来"
-                    "给他挑，**不要**替他挑一条）")
+                    "给他挑，**不要**替他挑一条）"), {}
     if len(text) > _TODO_TEXT_LIMIT:
         return [], (f"dashboard_todo_done 的正文太长（{len(text)} 字，"
                     f"上限 {_TODO_TEXT_LIMIT} 字）：不调用任何工具，"
-                    "如实请主人照列表里的写法说短一点（**不许**替他截断）")
+                    "如实请主人照列表里的写法说短一点（**不许**替他截断）"), {}
     return ([ToolCall("complete_dashboard_todo", {"text": text})],
             (f"把他自己后台首页的待办里「{_tags.clip(text, 20)}」那一条勾成完成"
-             f"（只翻完成标记，正文与排期都不动）"))
+             f"（只翻完成标记，正文与排期都不动）"), {})
 
 
-def _expand_todo_reschedule_workflow(workflow, params: dict) -> tuple[list[str], str]:
-    """改某一条待办的排期日（20260929 批 G）→ (TOOLS 行清单, 注记)。
+def _expand_todo_reschedule_workflow(workflow, params: dict) -> tuple[list[str], str, dict]:
+    """改某一条待办的排期日（20260929 批 G）→ (TOOLS 行清单, 注记, **系统派生的值**)。
 
     与 `_expand_todo_done_workflow` 同一族（目标是一段自由文本，站内没有东西可核对，
     连"这一条在不在列表里"都要到工具侧对着实时列表判），差别只有一处：**日期是
     这一件事的全部内容**，所以它必须说清楚。而"说清楚"要分**三**种处境，别混：
       · 契约词「未排期」⇒ **清空**（主人说"不用排期了/把日子清掉"就是它，见
         `adminops._TODO_CLEAR_WORD`；这是与"没说日子"完全不同的第三态）；
-      · 说了日子、但翻不出来 ⇒ 零写 + 追问（**绝不挑一天顶上**——错一天的日程会
-        静静地躺在后台日历的错误格子里）；
+      · 说了日子、但**连推导都推不出来** ⇒ 零写 + 追问（推不出来只剩两种：主人压根
+        没说日子——那一路在上一支就分走了；以及 planner 往 date 槽里填了个不是时间
+        的词。**绝不挑一天顶上**——错一天的日程会静静地躺在后台日历的错误格子里）；
       · **压根没说**日子 ⇒ 零写 + 追问，问的是另一句（"要改到哪一天"）。
     三种出口的注记各不相同：planner 同轮纠偏读的就是这段正文（`graph.param_correct`）。
+
+    日期那一格与 `_expand_todo_workflow` 同三态（见那边的长注）：归一出值 ⇒ 照抄；
+    归一不出、推导出值 ⇒ 算一个并记进第三项（卡面与注记写明「系统替你排的」）。
     """
     text = _write_arg(params.get("text"))
     if not text:
         return [], ("dashboard_todo_reschedule 缺少正文（text）：不调用任何工具，"
                     "如实向主人问清改的是哪一条（可先选 dashboard_todo_list 把列表读出来"
-                    "给他挑，**不要**替他挑一条）")
+                    "给他挑，**不要**替他挑一条）"), {}
     if len(text) > _TODO_TEXT_LIMIT:
         return [], (f"dashboard_todo_reschedule 的正文太长（{len(text)} 字，上限 "
                     f"{_TODO_TEXT_LIMIT} 字）：不调用任何工具，如实请主人照列表里的写法"
-                    f"说短一点（**不许**替他截断）")
+                    f"说短一点（**不许**替他截断）"), {}
     raw = _write_arg(params.get("date"))
     if not raw:
         return [], ("dashboard_todo_reschedule 没给日期（date）：不调用任何工具，"
                     f"如实向主人问清要改到哪一天（他要是说不要排期了，date 就填"
-                    f"「{_todo._TODO_CLEAR_WORD}」）")
+                    f"「{_todo._TODO_CLEAR_WORD}」）"), {}
     if raw in _todo._TODO_CLEAR_DATES:
         # 清空：传**契约词**（不是主人嘴里那个说法）——工具与卡面都只认这一个字面。
         return ([ToolCall("reschedule_dashboard_todo",
                           {"text": text, "date": _todo._TODO_CLEAR_WORD})],
                 f"把他自己后台首页的待办里「{_tags.clip(text, 20)}」那一条的**排期清掉**"
-                f"（只动排期，正文与完成标记都不动）")
+                f"（只动排期，正文与完成标记都不动）", {})
+    derived: dict = {}
     due = _todo.normalize_due_date(raw)
     if due is None:
-        return [], (f"dashboard_todo_reschedule 的排期日「{raw}」认不出来"
-                    f"（只认 {_todo.DUE_DATE_FORMS_CN}；清空排期填"
-                    f"「{_todo._TODO_CLEAR_WORD}」）：不调用任何工具，"
-                    "如实向主人问清是哪一天——**不许**自己挑一个日子顶上")
+        due = _todo.derive_due_date(raw)
+        if due is None:
+            return [], (f"dashboard_todo_reschedule 的排期日「{raw}」认不出来"
+                        f"（只认 {_todo.DUE_DATE_FORMS_CN}；清空排期填"
+                        f"「{_todo._TODO_CLEAR_WORD}」）：不调用任何工具，"
+                        "如实向主人问清是哪一天——**不许**自己挑一个日子顶上"), {}
+        derived["date"] = "derived"
     return ([ToolCall("reschedule_dashboard_todo", {"text": text, "date": due})],
             (f"把他自己后台首页的待办里「{_tags.clip(text, 20)}」那一条的排期改成"
-             f"{_todo.due_date_cn(due)}（只动排期，正文与完成标记都不动）"))
+             f"{_todo.due_date_cn(due)}"
+             + ("（**系统替你排的**，主人没给具体日子）" if derived else "")
+             + "（只动排期，正文与完成标记都不动）"),
+            derived)
 
 
 def _expand_article_status(params: dict,

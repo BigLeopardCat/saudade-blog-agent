@@ -56,8 +56,8 @@
         33
       ],
       "agent/adminops_todo.py": [
-        14,
-        0
+        55,
+        83
       ],
       "agent/agent.py": [
         0,
@@ -349,8 +349,8 @@
       ]
     },
     "total": [
-      1149,
-      4858
+      1190,
+      4931
     ]
   },
   "entries": [
@@ -713,8 +713,110 @@
       "size": 8,
       "category": "open",
       "q": "_DUE_REL_DAYS",
-      "why": "主人说『今天/明天/后天』这种相对日期",
-      "replacement": "相对日期由模型换算成日期参数",
+      "why": "主人说『今天/明天/后天』这种相对日期——**照抄**那一半（归一认得的写法）",
+      "replacement": "planner 声明**结构化**相对日期（`{\"offset_days\": 2}` / `{\"weekday\": 3}` / `{\"month_end\": true}`）由系统换算，而不是把中文说法原样塞进 date 槽——20261020 裁决：换算这一步**留在系统里**（生产实证 planner 只会把「两天之内」原样抄进槽），模型只负责声明意图",
+      "sunset": "写参数出处第二批（挂起：等真实流量定价，见 docs/write-provenance-shadow-20261014.md §7）"
+    },
+    {
+      "id": "agent/adminops_todo.py::_DUE_BASE_LIMIT_RE",
+      "file": "agent/adminops_todo.py",
+      "kind": "regex",
+      "name": "_DUE_BASE_LIMIT_RE",
+      "size": 29,
+      "sample": "^(今天|今日|明天|明日|后天|後天|大后天|大後天)\\s*(?:之内|以内|内|里|之前|以前|前)$",
+      "category": "open",
+      "q": "_DUE_BASE_LIMIT_RE",
+      "why": "主人拿「今天/明天/后天」当**期限的基底**说事（「今天之内」「后天以前」），要认出基底词才算得出是哪天",
+      "replacement": "planner 声明**结构化**相对日期（`{\"offset_days\": 2}` / `{\"weekday\": 3}` / `{\"month_end\": true}`）由系统换算，而不是把中文说法原样塞进 date 槽——20261020 裁决：换算这一步**留在系统里**（生产实证 planner 只会把「两天之内」原样抄进槽），模型只负责声明意图",
+      "sunset": "写参数出处第二批（挂起：等真实流量定价，见 docs/write-provenance-shadow-20261014.md §7）"
+    },
+    {
+      "id": "agent/adminops_todo.py::_DUE_WEEKDAY_RE",
+      "file": "agent/adminops_todo.py",
+      "kind": "regex",
+      "name": "_DUE_WEEKDAY_RE",
+      "size": 24,
+      "sample": "^(下下|下个|下|这个|本个|这|本)?\\s*(?:周|星期|礼拜)\\s*([一二三四五六日天1-7])$",
+      "category": "open",
+      "q": "_DUE_WEEKDAY_RE",
+      "why": "主人用周几指日子（「下周三」「这周五」「礼拜二」）——周几只有对着钟面才算得出，是他措辞里最常见的一族",
+      "replacement": "planner 声明**结构化**相对日期（`{\"offset_days\": 2}` / `{\"weekday\": 3}` / `{\"month_end\": true}`）由系统换算，而不是把中文说法原样塞进 date 槽——20261020 裁决：换算这一步**留在系统里**（生产实证 planner 只会把「两天之内」原样抄进槽），模型只负责声明意图",
+      "sunset": "写参数出处第二批（挂起：等真实流量定价，见 docs/write-provenance-shadow-20261014.md §7）"
+    },
+    {
+      "id": "agent/adminops_todo.py::_DUE_WEEK_ONLY_RE",
+      "file": "agent/adminops_todo.py",
+      "kind": "regex",
+      "name": "_DUE_WEEK_ONLY_RE",
+      "size": 10,
+      "sample": "^(下下|下个|下)\\s*(?:周|星期|礼拜)$",
+      "category": "open",
+      "q": "_DUE_WEEK_ONLY_RE",
+      "why": "「下周」不带周几（默认下周一）：与上一条分开是因为它没有周几那一格，算出来的日子也不同",
+      "replacement": "planner 声明**结构化**相对日期（`{\"offset_days\": 2}` / `{\"weekday\": 3}` / `{\"month_end\": true}`）由系统换算，而不是把中文说法原样塞进 date 槽——20261020 裁决：换算这一步**留在系统里**（生产实证 planner 只会把「两天之内」原样抄进槽），模型只负责声明意图",
+      "sunset": "写参数出处第二批（挂起：等真实流量定价，见 docs/write-provenance-shadow-20261014.md §7）"
+    },
+    {
+      "id": "agent/adminops_todo.py::_DUE_MONTH_END_BARE_RE",
+      "file": "agent/adminops_todo.py",
+      "kind": "regex",
+      "name": "_DUE_MONTH_END_BARE_RE",
+      "size": 7,
+      "sample": "^(?:这个|本|这)?月(?:底|末)$",
+      "category": "open",
+      "q": "_DUE_MONTH_END_BARE_RE",
+      "why": "裸的「月底 / 月末」（不带月份词）——按**当月**解释",
+      "replacement": "planner 声明**结构化**相对日期（`{\"offset_days\": 2}` / `{\"weekday\": 3}` / `{\"month_end\": true}`）由系统换算，而不是把中文说法原样塞进 date 槽——20261020 裁决：换算这一步**留在系统里**（生产实证 planner 只会把「两天之内」原样抄进槽），模型只负责声明意图",
+      "sunset": "写参数出处第二批（挂起：等真实流量定价，见 docs/write-provenance-shadow-20261014.md §7）"
+    },
+    {
+      "id": "agent/adminops_todo.py::_DUE_MONTH_ONLY_RE",
+      "file": "agent/adminops_todo.py",
+      "kind": "regex",
+      "name": "_DUE_MONTH_ONLY_RE",
+      "size": 11,
+      "sample": "^(下个|下|这个|本个|这|本)个?月$",
+      "category": "open",
+      "q": "_DUE_MONTH_ONLY_RE",
+      "why": "「下个月 / 这个月」不带日号（下个月=1 号，这个月=今天）",
+      "replacement": "planner 声明**结构化**相对日期（`{\"offset_days\": 2}` / `{\"weekday\": 3}` / `{\"month_end\": true}`）由系统换算，而不是把中文说法原样塞进 date 槽——20261020 裁决：换算这一步**留在系统里**（生产实证 planner 只会把「两天之内」原样抄进槽），模型只负责声明意图",
+      "sunset": "写参数出处第二批（挂起：等真实流量定价，见 docs/write-provenance-shadow-20261014.md §7）"
+    },
+    {
+      "id": "agent/adminops_todo.py::_DUE_SOON_WORDS",
+      "file": "agent/adminops_todo.py",
+      "kind": "collection",
+      "name": "_DUE_SOON_WORDS",
+      "size": 11,
+      "category": "open",
+      "q": "_DUE_SOON_WORDS",
+      "why": "「尽快 / 赶紧 / 这两天」这类**表达了排期意图、但没给任何日子**的说法 ⇒ 落默认今天",
+      "replacement": "planner 声明**结构化**相对日期（`{\"offset_days\": 2}` / `{\"weekday\": 3}` / `{\"month_end\": true}`）由系统换算，而不是把中文说法原样塞进 date 槽——20261020 裁决：换算这一步**留在系统里**（生产实证 planner 只会把「两天之内」原样抄进槽），模型只负责声明意图",
+      "sunset": "写参数出处第二批（挂起：等真实流量定价，见 docs/write-provenance-shadow-20261014.md §7）"
+    },
+    {
+      "id": "agent/adminops_todo.py::_DUE_DATED_LIKE_RE",
+      "file": "agent/adminops_todo.py",
+      "kind": "regex",
+      "name": "_DUE_DATED_LIKE_RE",
+      "size": 2,
+      "sample": "\\d\\s*[-/.年月]\\s*\\d",
+      "category": "open",
+      "q": "_DUE_DATED_LIKE_RE",
+      "why": "反控：看着像日子的串（`9-31` 这种）⇒ **不许**落默认今天（写错的日子不许被悄悄改成今天）",
+      "replacement": "planner 声明**结构化**相对日期（`{\"offset_days\": 2}` / `{\"weekday\": 3}` / `{\"month_end\": true}`）由系统换算，而不是把中文说法原样塞进 date 槽——20261020 裁决：换算这一步**留在系统里**（生产实证 planner 只会把「两天之内」原样抄进槽），模型只负责声明意图",
+      "sunset": "写参数出处第二批（挂起：等真实流量定价，见 docs/write-provenance-shadow-20261014.md §7）"
+    },
+    {
+      "id": "agent/adminops_todo.py::_DUE_TIME_MORPHEMES",
+      "file": "agent/adminops_todo.py",
+      "kind": "collection",
+      "name": "_DUE_TIME_MORPHEMES",
+      "size": 15,
+      "category": "open",
+      "q": "_DUE_TIME_MORPHEMES",
+      "why": "反控的另一半：串里**有没有排期语素**决定「算不出」时是落默认今天还是交回调用方追问（「过几天」vs「有空的时候」）",
+      "replacement": "planner 声明**结构化**相对日期（`{\"offset_days\": 2}` / `{\"weekday\": 3}` / `{\"month_end\": true}`）由系统换算，而不是把中文说法原样塞进 date 槽——20261020 裁决：换算这一步**留在系统里**（生产实证 planner 只会把「两天之内」原样抄进槽），模型只负责声明意图",
       "sunset": "写参数出处第二批（挂起：等真实流量定价，见 docs/write-provenance-shadow-20261014.md §7）"
     },
     {
