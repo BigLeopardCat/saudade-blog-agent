@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """接口层技能块去重（`build_planner_context(..., slim=True)`）单测：离线、秒级、零 LLM。
 
 **为什么存在**：接口层一轮里下发的是**同一张技能表的两份形态**——提示词里的散文菜单
@@ -35,43 +34,45 @@
 `settings.planner_engine` 一起删了），此前"两档各自拿到该拿的那份"的对照节随之报废。
 接线那一段现在只有一臂：**slim 就是生产形态**。
 """
+
+
 import json
 import sys
 import tempfile
 from pathlib import Path
 
+from _judge import collector
+
 ROOT = Path(__file__).resolve().parent.parent  # 仓根（测试统一在 tests/）
+
+
 sys.path.insert(0, str(ROOT))
+
 
 from langchain_core.messages import AIMessage, HumanMessage  # noqa: E402
 
 import agent.graph as G  # noqa: E402
 from agent.planner_llm import build_tool_schema  # noqa: E402
 from agent.principal import Principal  # noqa: E402
+from agent.tasks import TASK_DROP, TASK_HOLD, TASK_INTENTS  # noqa: E402
 from agent.workflow_defs import visible_workflows  # noqa: E402
 from agent.workflow_menu import build_planner_context, render_tool_marks  # noqa: E402
 from agent.workflow_params import workflow_param_specs  # noqa: E402
-from agent.tasks import TASK_DROP, TASK_HOLD, TASK_INTENTS  # noqa: E402
 from config import settings  # noqa: E402
 from utils import trace as trace_mod  # noqa: E402
 
 FAILS: list[str] = []
+check = collector(FAILS)
 
-# 三个档都过一遍：admin 档技能最多（删得也最多），None/user 是保守侧。
+
 _ROLES = ("admin", "user", None)
 
-# slim 里**必须还在**的独有信息（schema 里没有，删了就真丢）。
+
 _KEEP = {
     "导航映射表表头": "导航映射表（navigate 的 target 参数从这里取值）",
     "能力边界兜底段": "以上技能都不覆盖主人这一轮的请求时",
     "口语变体说明": "口语变体（大小写 IOT",
 }
-
-
-def check(desc: str, cond: bool, detail: str = "") -> None:
-    print(("  ✅ " if cond else "  ❌ ") + desc + (f"  [{detail}]" if detail else ""))
-    if not cond:
-        FAILS.append(desc)
 
 
 def _schema_desc(role) -> dict[str, str]:
@@ -96,8 +97,7 @@ def _expected_schema_names(role: str) -> set[str]:
     return names
 
 
-# ── ① 删掉的三行必须在 schema 里逐字找得到（"能删"的全部依据）──────────────
-def test_deleted_lines_exist_verbatim_in_the_schema():
+def _test_deleted_lines_exist_verbatim_in_the_schema():
     print("\n[依据] 删掉的三行必须在 tools schema 里逐字存在，否则不许删")
     for role in _ROLES:
         sch = {t["function"]["name"]: t["function"] for t in build_tool_schema(role)}
@@ -124,7 +124,7 @@ def test_deleted_lines_exist_verbatim_in_the_schema():
               not miss_arg, str(miss_arg))
 
 
-def test_schema_marks_are_expanded_all_roles():
+def _test_schema_marks_are_expanded_all_roles():
     """schema 侧不得漏出未展开的占位标记（本批修掉的真缺陷）。"""
     print("\n[缺陷] schema 描述里的工具枚举标记必须展开（此前只展开文本菜单那一路）")
     from agent.workflow_model import _EXPLICIT_TOOLS_MARK, _PARAM_TOOLS_MARK
@@ -142,8 +142,7 @@ def test_schema_marks_are_expanded_all_roles():
           and not any(t in none_raw for t in adm_only), str(sorted(adm_only)))
 
 
-# ── ② slim 的形状：删了什么、留下了什么 ─────────────────────────────────────
-def test_slim_drops_exactly_the_three_duplicated_lines():
+def _test_slim_drops_exactly_the_three_duplicated_lines():
     print("\n[形状] slim 只删三行：技能描述行、参数行、完成判定行")
     for role in _ROLES:
         full, slim = build_planner_context(role), build_planner_context(role, slim=True)
@@ -173,7 +172,7 @@ def test_slim_drops_exactly_the_three_duplicated_lines():
               len(full) >= len(slim) * floor, f"full={len(full)} slim={len(slim)}")
 
 
-def test_slim_keeps_what_the_schema_does_not_have():
+def _test_slim_keeps_what_the_schema_does_not_have():
     print("\n[形状] slim 留下 schema 里没有的那几样（固定工具序列 / NAV 表 / 兜底段…）")
     for role in _ROLES:
         slim = build_planner_context(role, slim=True)
@@ -196,8 +195,7 @@ def test_slim_keeps_what_the_schema_does_not_have():
               all(f"- {n}：（无固定工具）" in slim for n in planless), str(planless))
 
 
-# ── ②b 规划契约：**只有一个家**（`description`）——四臂 A/B 逼出来的那条纪律 ──
-def test_contract_is_in_the_schema_and_nowhere_else():
+def _test_contract_is_in_the_schema_and_nowhere_else():
     """契约句**只住在 `description` 里**：schema 拿得到一份，别处没有第二份。
 
     依据（20261017 四臂重验，`eval/contract_position_ab.py`）：**整句删掉才掉**——
@@ -226,7 +224,7 @@ def test_contract_is_in_the_schema_and_nowhere_else():
           any(s.contract for s in visible_workflows("admin")))
 
 
-def test_content_query_pairs_the_two_sources_from_one_place():
+def _test_content_query_pairs_the_two_sources_from_one_place():
     """成对点名这条契约在 `content_query` 里只有**一个**来源。
 
     它原本写在两处（`description` 里一句、`inputs["tools"]` 里一句），措辞还不一样；
@@ -254,7 +252,7 @@ def test_content_query_pairs_the_two_sources_from_one_place():
           build_planner_context("user", slim=True).count("成对") == 0)
 
 
-def test_dual_source_pairing_is_deterministic():
+def _test_dual_source_pairing_is_deterministic():
     """成对点名那条契约的**另一半**：确定性兜底（20261005）。
 
     契约（prompt）管不住 11% 的轮次——历史主线 46 次真跑里 5 次没凑齐两个工具，其中
@@ -305,7 +303,7 @@ def test_dual_source_pairing_is_deterministic():
           and specs[1].startswith("list_talks("), str(specs))
 
 
-def test_slim_only_changes_rendering_not_judgements():
+def _test_slim_only_changes_rendering_not_judgements():
     """slim 只影响渲染：可选集合与参数规格一个字都不受影响。"""
     print("\n[边界] slim 不碰判据（谁能选 / 参数规格 / schema 本身）")
     a, b = build_planner_context("admin", slim=True), build_planner_context("admin")
@@ -319,8 +317,9 @@ def test_slim_only_changes_rendering_not_judgements():
           b == build_planner_context("admin", slim=False) and a != b)
 
 
-# ── ③ 接线：真跑 planner_node，发出去的那份确实是 slim ────────────────────
 _MSG = "帮我把樱花打开"   # 不命中任何快道
+
+
 _CFG = {"configurable": {"principal": Principal(uid=7, role="admin"),
                          "user_id": 7, "conversation_id": 42, "stop_event": None}}
 
@@ -362,7 +361,7 @@ def _run_planner(reply, msg: str = _MSG):
     return out, llm
 
 
-def test_wiring_planner_really_sends_the_slim_block():
+def _test_wiring_planner_really_sends_the_slim_block():
     print("\n[接线] 真跑 planner_node：发出去的就是 slim 那份，且 schema 照旧绑着")
     reply = AIMessage(content="", tool_calls=[
         {"name": "effect", "args": {"effect": "sakura", "action": "on"},
@@ -387,16 +386,22 @@ def test_wiring_planner_really_sends_the_slim_block():
           "WORKFLOW=effect" in out["plan"], out["plan"].splitlines()[0])
 
 
-if __name__ == "__main__":
-    for fn in (test_deleted_lines_exist_verbatim_in_the_schema,
-               test_schema_marks_are_expanded_all_roles,
-               test_slim_drops_exactly_the_three_duplicated_lines,
-               test_slim_keeps_what_the_schema_does_not_have,
-               test_contract_is_in_the_schema_and_nowhere_else,
-               test_content_query_pairs_the_two_sources_from_one_place,
-               test_dual_source_pairing_is_deterministic,
-               test_slim_only_changes_rendering_not_judgements,
-               test_wiring_planner_really_sends_the_slim_block):
+def test_slim_workflows():
+    for fn in (_test_deleted_lines_exist_verbatim_in_the_schema,
+               _test_schema_marks_are_expanded_all_roles,
+               _test_slim_drops_exactly_the_three_duplicated_lines,
+               _test_slim_keeps_what_the_schema_does_not_have,
+               _test_contract_is_in_the_schema_and_nowhere_else,
+               _test_content_query_pairs_the_two_sources_from_one_place,
+               _test_dual_source_pairing_is_deterministic,
+               _test_slim_only_changes_rendering_not_judgements,
+               _test_wiring_planner_really_sends_the_slim_block):
         fn()
     print("\n" + ("全部通过 ✅" if not FAILS else f"失败 {len(FAILS)} 项 ❌: {FAILS}"))
-    sys.exit(1 if FAILS else 0)
+
+    assert not FAILS, (
+        f"{len(FAILS)} 条未通过：" + "；".join(FAILS))
+
+
+if __name__ == "__main__":
+    test_slim_workflows()

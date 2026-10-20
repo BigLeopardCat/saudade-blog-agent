@@ -1,4 +1,4 @@
-# ADR-0015：技能注册表从 Python 字面量改成**一条技能一个 TOML 配置**
+# ADR-0016：技能注册表从 Python 字面量改成**一条技能一个 TOML 配置**
 
 - **状态**：已采纳（20261021）—— 试点域（公开读两条）已落地，其余五域逐个转
 - **背景文档**：`docs/agent-architecture.md` §2、`agent/workflow_defs/loader.py`（头注是这条

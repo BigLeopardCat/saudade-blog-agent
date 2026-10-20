@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """golden 家族政策：声明了同一前提的用例，不许对着干（20261003）。
 
 **要治的病**：同一 tag 家族里两条用例对**同一件事**给出**相反**的工具断言——
@@ -27,37 +26,36 @@
 用法：.venv/bin/python tests/test_golden_family_policy.py
 """
 
+
 from __future__ import annotations
 
 import json
 import sys
 from pathlib import Path
 
+from _judge import collector
+
 ROOT = Path(__file__).resolve().parent.parent
+
+
 sys.path.insert(0, str(ROOT / "eval"))
+
 
 import run_golden as rg  # noqa: E402
 
 FAILED: list[str] = []
+check = collector(FAILED)
 
 
-def check(name: str, ok: bool, extra: str = "") -> None:
-    print(f"  {'✅' if ok else '❌'} {name}" + (f"  [{extra}]" if extra else ""))
-    if not ok:
-        FAILED.append(name)
-
-
-# ── 声明了同一前提的家族（每个都必须给出理由；样本 < MIN_FAMILY 视为表项陈旧）──────
 POLICY_TAGS: dict[str, str] = {
     "not_logged_in": "uid≤0 时对 own 数据发起的读/写请求（家族政策：写请求必到 uid 哨兵 ⇒ "
                      "`require_tool_calls*`，要「连读都不许」得整族一起改）",
 }
+
+
 MIN_FAMILY = 3
 
-# 「用户可见面」的断言键：用户读得到、或用户看得到的东西（回复文本 / 命令帧 / 兜底 / 拒绝）。
-# 与它相对的是**机制**断言（工具调用、执行回执、确认载荷）——机制断言可以整条撤掉
-# （20261003 撤了 incident 条的那一条），用户可见面撤掉就等于用例没有牙。`nonempty`
-# 不算：空回复也是「回复文本」这一族的最低限度，但它自己不判任何内容。
+
 USER_VISIBLE_KEYS = frozenset({
     "text_contains", "text_any_regex", "text_not_contains", "text_not_match_regex",
     "not_contains_exempt_quote", "require_denial", "require_absence",
@@ -166,5 +164,12 @@ def main() -> None:
     print("全部通过")
 
 
-if __name__ == "__main__":
+def test_golden_family_policy():
     main()
+
+    assert not FAILED, (
+        f"{len(FAILED)} 条未通过：" + "；".join(FAILED))
+
+
+if __name__ == "__main__":
+    test_golden_family_policy()

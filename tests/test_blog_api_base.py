@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """工具出口地址（`BLOG_API_BASE`，20261006）：**两档都要验**。
 
 `tools/base.py` 的 `API_BASE` 决定 agent 读的是**谁的博客**——所有只读工具（文章、分类、
@@ -9,7 +8,7 @@
 
 **为什么必须开子进程**：`API_BASE` 是模块级常量（import 时从 settings 定型），
 `SITE_BASE` 由它算出，导航事实文本的拼装也定型在函数里。同一个进程里改不了档——
-只能各起一个子进程，把 env 喂进去再读结果。这也正是 `run_all.py` 与
+只能各起一个子进程，把 env 喂进去再读结果。这也正是 `tests/conftest.py` 与
 `tests/test_iot_switch.py` 的做法。
 
 **两档各自的失法**（都不报错）：
@@ -20,32 +19,26 @@
 ⚠️ 本套件**不断言本进程跑在哪一档**（产线 `.env` 若设了这一项，进程内就不是默认值——
 那是配置事实、不是缺陷）。默认值在 ① 的子进程里验（那里显式不设该变量、且不读 `.env`）。
 """
+
+
 import json
 import os
 import subprocess
 import sys
 from pathlib import Path
 
+from _judge import collector
+
 ROOT = Path(__file__).resolve().parent.parent  # 仓根
+
+
 sys.path.insert(0, str(ROOT))
 
-# 出厂默认值（`config/settings.py` 的 `blog_api_base`；`tools/base.py` 的 `API_BASE` 读它）。
-# ① 拿它当"出厂档"的期望值——**这一条就是"默认没变"的判据**，
-# 不是随手抄一份（改了默认值它必须红）。
-LEGACY_API_BASE = "https://saudade.site/api/public"
 
 FAILS: list[str] = []
+check = collector(FAILS)
 
 
-def check(desc: str, cond: bool, detail: str = "") -> None:
-    print(("  ✅ " if cond else "  ❌ ") + desc + (f"  [{detail}]" if detail else ""))
-    if not cond:
-        FAILS.append(desc)
-
-
-# ── 子进程探针 ─────────────────────────────────────────────────────────
-# 只回报**判据对象**，不回报任何配置值（本仓纪律：凭据一次都不许打印；这里虽然是公开
-# 地址，但保持同一个形状，免得将来有人往探针里加字段时顺手带上密钥）。
 _PROBE = r"""
 import json, sys
 sys.path.insert(0, %r)
@@ -83,7 +76,7 @@ print(json.dumps({
 }, ensure_ascii=False))
 """
 
-# 与 run_all 同一形状的钉子：出厂档 + .env 不读（本机 .env 是产线那份）。
+
 _PINS = {"SAUDADE_IGNORE_ENV_FILE": "1", "IOT_ENABLED": "1"}
 
 
@@ -103,85 +96,78 @@ def probe(api_base: str = "") -> dict:
     return json.loads(r.stdout.strip().splitlines()[-1])
 
 
-# ══════════════════════════════════════════════════════════════════
-print("\n① 出厂档（不设变量、不读 .env）：与历史上那个写死的字面量逐字相同")
-
-out = probe()
-
-check("API_BASE 就是历史值（改了默认 = 改了本站线上行为）",
-      out["api_base"] == LEGACY_API_BASE, out["api_base"])
-check("站点根 = 该地址的 origin（导航链接由它拼）",
-      out["site_base"] == "https://saudade.site", out["site_base"])
-check("同源关系成立：站点根 + /api/public == API_BASE",
-      out["site_base"] + "/api/public" == out["api_base"])
-check("导航事实文本逐字未变",
-      out["nav_talk"] == "页面已跳转：https://saudade.site/talk", out["nav_talk"])
-check("整页目标的另一套措辞也逐字未变（它还没跳，字不一样）",
-      out["nav_whole"] == "页面即将跳转：https://saudade.site/device-console/（本条回复说完再跳）",
-      out["nav_whole"])
-check("连线命令里的 url 也是那个绝对地址",
-      out["nav_talk_cmd"] == {"kind": "navigate", "url": "https://saudade.site/talk",
-                              "mode": "direct"}, str(out["nav_talk_cmd"]))
-
-# ══════════════════════════════════════════════════════════════════
-print("\n② 换档（BLOG_API_BASE=别的站）：读接口与导航链接**一起**跟着走")
-
-OTHER = "https://blog.example.test/api/public"
-alt = probe(OTHER)
-
-check("API_BASE 读到了子进程里那个值",
-      alt["api_base"] == OTHER, alt["api_base"])
-check("导航链接换成新站根（只换一半 ⇒ 前端同源校验拦下跳转、模型照常说已跳转）",
-      alt["nav_talk"] == "页面已跳转：https://blog.example.test/talk", alt["nav_talk"])
-check("整页目标同样跟着换",
-      alt["nav_whole"] == "页面即将跳转：https://blog.example.test/device-console/（本条回复说完再跳）",
-      alt["nav_whole"])
-check("连线命令里的 url 用的是新站根",
-      alt["nav_talk_cmd"] == {"kind": "navigate", "url": "https://blog.example.test/talk",
-                              "mode": "direct"}, str(alt["nav_talk_cmd"]))
-
-# ══════════════════════════════════════════════════════════════════
-print("\n③ 接线：换档之后**真出去**的 URL 落在新站（只改常量、不改调用点是不行的）")
-
-_expected = [["GET", OTHER + "/notes"], ["POST", OTHER + "/notes/search"]]
-
-check("_get 与 search_notes 两个动词都打到新基址",
-      alt["outbound"] == _expected, str(alt["outbound"]))
-check("对照：出厂档那一次打的是历史地址（证明 ③ 判的是环境、不是恒定值）",
-      out["outbound"] == [["GET", LEGACY_API_BASE + "/notes"],
-                          ["POST", LEGACY_API_BASE + "/notes/search"]], str(out["outbound"]))
-
-# ══════════════════════════════════════════════════════════════════
-print("\n④ 单一事实源：站点字面量只剩 settings 里那一处")
-
-# 20261018：公开读那一族搬进 `tools/notes.py` ⇒ 取值点跟着搬（那一族打的就是这个基址）。
-# 判据字面一个字没动，只换了"扫哪几份源码"。
-_src = "".join((ROOT / "tools" / f).read_text(encoding="utf-8")
-               for f in ("base.py", "notes.py"))
-check("tools/base.py + tools/notes.py 里不再有站点字面量（写回去 = 又变回一个改不动的常量）",
-      "saudade.site" not in _src,
-      f"出现 {_src.count('saudade.site')} 次")
-check("默认值定义在 config/settings.py 的 blog_api_base 上",
-      "blog_api_base" in (ROOT / "config" / "settings.py").read_text(encoding="utf-8"))
-check("README 的环境变量表点出这一项（改配置的人得知道它存在）",
-      "BLOG_API_BASE" in (ROOT / "README.md").read_text(encoding="utf-8"))
-
-# ── 本进程：只验"常量跟着 settings 走"这件接线事实（任何档都成立），不验档位本身 ──
 sys.path.insert(0, str(ROOT / "tests"))
-import tools.base as B           # noqa: E402
+
+
+import tools.base as B  # noqa: E402
 from config import settings as S  # noqa: E402  （`config/__init__` 导出的就是那个实例）
 
-check("本进程：API_BASE 是 settings.blog_api_base 的引用（不是另抄的一份字面量）",
-      B.API_BASE == S.blog_api_base, B.API_BASE)
-check("本进程：站点根与 API 基址同源",
-      B.API_BASE.startswith(B.SITE_BASE + "/") if B.SITE_BASE else True,
-      f"{B.SITE_BASE} + {B.API_BASE}")
 
-# ══════════════════════════════════════════════════════════════════
-print()
-if FAILS:
-    print(f"❌ {len(FAILS)} 项未过：")
-    for f in FAILS:
-        print("   - " + f)
-    raise SystemExit(1)
-print("✅ 工具出口地址（两档）：全部通过")
+def test_blog_api_base():
+    LEGACY_API_BASE = "https://saudade.site/api/public"
+    print("\n① 出厂档（不设变量、不读 .env）：与历史上那个写死的字面量逐字相同")
+    out = probe()
+    check("API_BASE 就是历史值（改了默认 = 改了本站线上行为）",
+          out["api_base"] == LEGACY_API_BASE, out["api_base"])
+    check("站点根 = 该地址的 origin（导航链接由它拼）",
+          out["site_base"] == "https://saudade.site", out["site_base"])
+    check("同源关系成立：站点根 + /api/public == API_BASE",
+          out["site_base"] + "/api/public" == out["api_base"])
+    check("导航事实文本逐字未变",
+          out["nav_talk"] == "页面已跳转：https://saudade.site/talk", out["nav_talk"])
+    check("整页目标的另一套措辞也逐字未变（它还没跳，字不一样）",
+          out["nav_whole"]
+              == "页面即将跳转：https://saudade.site/device-console/（本条回复说完再跳）",
+          out["nav_whole"])
+    check("连线命令里的 url 也是那个绝对地址",
+          out["nav_talk_cmd"] == {"kind": "navigate", "url": "https://saudade.site/talk",
+                                  "mode": "direct"}, str(out["nav_talk_cmd"]))
+    print("\n② 换档（BLOG_API_BASE=别的站）：读接口与导航链接**一起**跟着走")
+    OTHER = "https://blog.example.test/api/public"
+    alt = probe(OTHER)
+    check("API_BASE 读到了子进程里那个值",
+          alt["api_base"] == OTHER, alt["api_base"])
+    check("导航链接换成新站根（只换一半 ⇒ 前端同源校验拦下跳转、模型照常说已跳转）",
+          alt["nav_talk"] == "页面已跳转：https://blog.example.test/talk", alt["nav_talk"])
+    check("整页目标同样跟着换",
+          alt["nav_whole"] == "页面即将跳转：https://blog.example.test/device-console/（本条回复说完再跳）",
+          alt["nav_whole"])
+    check("连线命令里的 url 用的是新站根",
+          alt["nav_talk_cmd"] == {"kind": "navigate", "url": "https://blog.example.test/talk",
+                                  "mode": "direct"}, str(alt["nav_talk_cmd"]))
+    print("\n③ 接线：换档之后**真出去**的 URL 落在新站（只改常量、不改调用点是不行的）")
+    _expected = [["GET", OTHER + "/notes"], ["POST", OTHER + "/notes/search"]]
+    check("_get 与 search_notes 两个动词都打到新基址",
+          alt["outbound"] == _expected, str(alt["outbound"]))
+    check("对照：出厂档那一次打的是历史地址（证明 ③ 判的是环境、不是恒定值）",
+          out["outbound"] == [["GET", LEGACY_API_BASE + "/notes"],
+                              ["POST", LEGACY_API_BASE + "/notes/search"]], str(out["outbound"]))
+    print("\n④ 单一事实源：站点字面量只剩 settings 里那一处")
+    _src = "".join((ROOT / "tools" / f).read_text(encoding="utf-8")
+                   for f in ("base.py", "notes.py"))
+    check("tools/base.py + tools/notes.py 里不再有站点字面量（写回去 = 又变回一个改不动的常量）",
+          "saudade.site" not in _src,
+          f"出现 {_src.count('saudade.site')} 次")
+    check("默认值定义在 config/settings.py 的 blog_api_base 上",
+          "blog_api_base" in (ROOT / "config" / "settings.py").read_text(encoding="utf-8"))
+    check("README 的环境变量表点出这一项（改配置的人得知道它存在）",
+          "BLOG_API_BASE" in (ROOT / "README.md").read_text(encoding="utf-8"))
+    check("本进程：API_BASE 是 settings.blog_api_base 的引用（不是另抄的一份字面量）",
+          B.API_BASE == S.blog_api_base, B.API_BASE)
+    check("本进程：站点根与 API 基址同源",
+          B.API_BASE.startswith(B.SITE_BASE + "/") if B.SITE_BASE else True,
+          f"{B.SITE_BASE} + {B.API_BASE}")
+    print()
+    if FAILS:
+        print(f"❌ {len(FAILS)} 项未过：")
+        for f in FAILS:
+            print("   - " + f)
+        raise SystemExit(1)
+    print("✅ 工具出口地址（两档）：全部通过")
+
+    assert not FAILS, (
+        f"{len(FAILS)} 条未通过：" + "；".join(FAILS))
+
+
+if __name__ == "__main__":
+    test_blog_api_base()

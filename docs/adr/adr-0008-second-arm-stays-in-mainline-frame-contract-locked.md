@@ -127,7 +127,7 @@ langchain 大版本，而主线要升）；③ 同仓 A/B 的价值消失（主�
 cd /home/ubuntu/Saudade-Blog/saudade-blog-agent
 .venv/bin/python tests/test_frame_contract.py     # 本 ADR 的判据本体
 .venv/bin/python tests/test_react_arm.py          # 行为面（⑥b / ⑥b′ / ⑥b″）
-.venv/bin/python tests/run_all.py
+.venv/bin/python -m pytest -q
 .venv/bin/python eval/type_gate.py                # 两个数只许缩
 .venv/bin/python -m ruff check --select F821 .
 .venv/bin/python eval/arm_capability.py --arm react --probe   # comparable 仍须为 True

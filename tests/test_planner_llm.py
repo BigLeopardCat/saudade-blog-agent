@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """native tool calls 接线层（`agent/planner_llm.py`）单测：离线、秒级、零网络零 LLM。
 
 **为什么单独一套**：接口层把"模型能选什么"从**提示词里的一段散文**搬到了**服务端的
@@ -26,13 +25,20 @@
     把伪函数摘出菜单的是 `deny_pseudo`（上一轮受阻那一族，见 ①b）；
   · 本模块**不许 import `agent.graph`**（graph 是消费方，反向会成环）。
 """
+
+
 import ast
 import re
 import sys
 from pathlib import Path
 
+from _judge import collector
+
 ROOT = Path(__file__).resolve().parent.parent  # 仓根（测试统一在 tests/）
+
+
 sys.path.insert(0, str(ROOT))
+
 
 from langchain_core.messages import AIMessage  # noqa: E402
 
@@ -45,24 +51,17 @@ from agent.workflow_tools import callable_query_tools, explicit_tools  # noqa: E
 from tools.base import get_all_tools  # noqa: E402
 
 FAILS: list[str] = []
-
-
-def check(desc: str, cond: bool, detail: str = "") -> None:
-    print(("  ✅ " if cond else "  ❌ ") + desc + (f"  [{detail}]" if detail else ""))
-    if not cond:
-        FAILS.append(desc)
+check = collector(FAILS)
 
 
 def _by_name(role: str | None) -> dict[str, dict]:
     return {t["function"]["name"]: t["function"] for t in N.build_tool_schema(role)}
 
 
-# 恒在的三个任务伪函数（见模块头注）：集合相等里的"多出来的那几格"就是它。
 _PSEUDO = {T.TASK_HOLD, T.TASK_DROP, T.TASK_INTENTS}
 
 
-# ── ① 不扩权：函数名集合与可见技能**相等** ─────────────────────────────────
-def test_name_set_equals_visible_workflows():
+def _test_name_set_equals_visible_workflows():
     print("\n[不扩权] tools 的名字集合 == visible_workflows 的名字集合")
     for role in (None, "user", "admin"):
         got = set(_by_name(role))
@@ -117,15 +116,13 @@ def test_name_set_equals_visible_workflows():
           > set(enum.get("enum") or []))
 
 
-
-def test_function_names_are_openai_safe():
+def _test_function_names_are_openai_safe():
     print("\n[不扩权] 函数名满足 OpenAI 的命名约束")
     bad = [n for n in _by_name("admin") if not re.fullmatch(r"[a-zA-Z0-9_-]{1,64}", n)]
     check("全部技能名匹配 ^[a-zA-Z0-9_-]{1,64}$", not bad, str(bad))
 
 
-# ── ①b `deny_pseudo`：只减不增的同一条规则（20261008 批 ②）─────────────────
-def test_deny_pseudo_removes_only_named_pseudo():
+def _test_deny_pseudo_removes_only_named_pseudo():
     print("\n[不扩权] deny_pseudo 只摘点名的伪函数，技能一格不动")
 
     def _names(**kw):
@@ -161,8 +158,7 @@ def test_deny_pseudo_removes_only_named_pseudo():
           _names(deny_pseudo={"chat"}) == full)
 
 
-# ── ①c 意图清单的第二个出口：挂在每个技能上的可选 `intents` ────────────────
-def test_intents_field_on_every_workflow():
+def _test_intents_field_on_every_workflow():
     """意图清单挂在**每个技能函数**上的那一格（20261008 批 ②，见 `intents_prop_schema`）。
 
     为什么有这一格：`parallel_tool_calls=False` 让"单独交清单"与"点技能"在同一轮里
@@ -208,7 +204,7 @@ def test_intents_field_on_every_workflow():
           field["description"][:40])
 
 
-def test_intents_field_inlined_with_action():
+def _test_intents_field_inlined_with_action():
     """动作调用上那一格真的被读走：**进 `decided.intents`、不进 `params`**。
 
     后半句和前半句一样要紧：`params` 是技能的真实参数，多一个键会一路漏到 `PARAMS=`
@@ -245,16 +241,8 @@ def test_intents_field_inlined_with_action():
           got is not None and got.workflow == "category_create" and got.intents == ()
           and got.notes == ("task_intents_field_invalid",), str(got and got.notes))
 
-    # ⚠️ **20261015 撤档时删掉了一条判据**：这里原来是"开关关（默认）时那一格不存在
-    # ⇒ 会不会炸"那一臂（关档下 `intents` 与"没人读的参数"同路，走既有的 `param_unknown`）。
-    # 档位没了就只剩一个手臂可跑，而"不炸 + 技能照旧"由上面 `got` 那两条**同一条调用**
-    # 的断言覆盖 —— 留一个只改档位、其余逐字相同的手臂，只会变成"拿它跟自己比"。
-    # 取而代之的恒常锁在 `test_params_mirror_workflow_param_specs`（那一格必须在每个技能上、
-    # 且不进 `required`）。
 
-
-# ── ② 参数逐项同源 ───────────────────────────────────────────────────────
-def test_params_mirror_workflow_param_specs():
+def _test_params_mirror_workflow_param_specs():
     print("\n[同源] 参数名/必填/闭集逐项等于 workflow_param_specs")
     overrides = set(N._SCHEMA_OVERRIDES)
     # **伪参数**：不是技能参数、由 `tool_calls_to_plan` 摘走的那几格。恒在的有两格——
@@ -296,7 +284,7 @@ def test_params_mirror_workflow_param_specs():
     check("reply_kind：每个技能都挂、且闭集就是三种出口", not missing_kind, str(missing_kind))
 
 
-def test_reply_kind_is_stripped_from_params():
+def _test_reply_kind_is_stripped_from_params():
     print("\n[摘走] reply_kind 填了也不进 params（它是伪参数，不是技能参数）")
     msg = AIMessage(content="", tool_calls=[{
         "name": "category_create", "id": "c", "type": "tool_call",
@@ -323,7 +311,7 @@ def test_reply_kind_is_stripped_from_params():
           N.tool_calls_to_plan(plain, "admin").reply_kind == "")
 
 
-def test_override_table_is_closed():
+def _test_override_table_is_closed():
     print("\n[同源] 覆盖表只有申报过的几格")
     # 钉成字面量：加一格必须同改这里（= 有人复核这一格为什么推不出形状）
     # 20260929 批 H 加的第三格 `review_inbox.calls`：与 `content_query.calls` 同一个
@@ -341,7 +329,7 @@ def test_override_table_is_closed():
           str(sorted(N._SCHEMA_OVERRIDES)))
 
 
-def test_tag_create_titles_is_array_of_strings():
+def _test_tag_create_titles_is_array_of_strings():
     print("\n[同源] tag_create.titles 声明成字符串数组（一次办多个名字的入口）")
     fns = _by_name("admin")
     sk = fns.get("tag_create")
@@ -365,7 +353,7 @@ def test_tag_create_titles_is_array_of_strings():
           str(sk["parameters"].get("required")))
 
 
-def test_override_enums_follow_role():
+def _test_override_enums_follow_role():
     print("\n[同源] 覆盖格的闭集按角色展开（白名单只有一处来源）")
     for role in (None, "admin"):
         fns = _by_name(role)
@@ -381,7 +369,7 @@ def test_override_enums_follow_role():
           > set(pub["parameters"]["properties"]["calls"]["items"]["properties"]["tool"]["enum"]))
 
 
-def test_array_items_come_from_tool_schema():
+def _test_array_items_come_from_tool_schema():
     print("\n[同源] 数组 items 类型从工具原始片段回查")
     props = _by_name("admin")["notice_read"]["parameters"]["properties"]
     check("notice_read.ids.items.type == integer", props["ids"]["items"]["type"] == "integer",
@@ -395,8 +383,7 @@ def test_array_items_come_from_tool_schema():
           and list(props["effect"]["enum"]) == ["sakura", "rain", "snow"], str(props["effect"]))
 
 
-# ── ③ 决策映射 ───────────────────────────────────────────────────────────
-def test_no_call_is_plain_chat():
+def _test_no_call_is_plain_chat():
     print("\n[决策] 零调用 = 闲聊轮（params 给空，不编字段）")
     got = N.tool_calls_to_plan(AIMessage(content="你好呀～"), None)
     check("workflow=chat", got is not None and got.workflow == "chat", str(got))
@@ -414,7 +401,7 @@ def test_no_call_is_plain_chat():
           N.tool_calls_to_plan(AIMessage(content="   "), None) is None)
 
 
-def test_explicit_chat_call_params_pass_through():
+def _test_explicit_chat_call_params_pass_through():
     """模型**显式**点 `chat` 并自带参数 → **原样传下去，不在这里清洗**。
 
     这是 1A 探针实测到的真形状（`eval/native_probe_20260927T032021.md`：思考档 2/3 次
@@ -435,7 +422,7 @@ def test_explicit_chat_call_params_pass_through():
           N.tool_call_names(got) == "chat", repr(got and N.tool_call_names(got)))
 
 
-def test_single_call_maps_to_workflow_params():
+def _test_single_call_maps_to_workflow_params():
     print("\n[决策] 单条调用 → 技能名 + 技能级参数")
     msg = AIMessage(content="", tool_calls=[{
         "name": "navigate", "args": {"target": "物联网平台"},
@@ -447,7 +434,7 @@ def test_single_call_maps_to_workflow_params():
     check("单条不产生记账", got is not None and got.notes == ())
 
 
-def test_multi_call_keeps_first_and_accounts():
+def _test_multi_call_keeps_first_and_accounts():
     print("\n[决策] 多条调用只取第一条 + 记账（绝不拼两个技能）")
     msg = AIMessage(content="", tool_calls=[
         {"name": "effect", "args": {"effect": "sakura", "action": "on"},
@@ -461,7 +448,7 @@ def test_multi_call_keeps_first_and_accounts():
           got is not None and N.tool_call_names(got) == "effect,darkmode")
 
 
-def test_unmappable_returns_none():
+def _test_unmappable_returns_none():
     print("\n[决策] 判不了就返回 None（调用方退回既有文本解析，不猜）")
     truncated = AIMessage(content="", invalid_tool_calls=[
         {"name": "effect", "args": '{"effect": "sak', "id": "c", "error": "parse"}])
@@ -481,7 +468,7 @@ def test_unmappable_returns_none():
     check("args 不是对象 → None", N.tool_calls_to_plan(_Stub(), None) is None)
 
 
-def test_truncated_empty_calls_is_not_chat():
+def _test_truncated_empty_calls_is_not_chat():
     """零 `tool_calls` + `finish_reason=length` ⇒ **判不了**，不是闲聊轮（20261001）。
 
     这两种形状在响应里一模一样（都是零 `tool_calls`），而含义相反：前者是"模型的话
@@ -530,7 +517,7 @@ def _hold_call(goal: str, *, steps: list | None = None, cid: str = "t") -> dict:
                      else [{"label": "开启特效", "tool": "toggle_effect"}]}}
 
 
-def test_task_hold_declaration():
+def _test_task_hold_declaration():
     """登记伪函数（20260927 批 D）：与技能调用**同轮共存**，**恒可被认**（20261015 撤档）。
 
     两条边界各钉一格：
@@ -586,7 +573,7 @@ def test_task_hold_declaration():
           got is not None and got.notes == ("task_hold_invalid",), str(got and got.notes))
 
 
-def test_empty_steps_hold_is_invalid_not_cancel():
+def _test_empty_steps_hold_is_invalid_not_cancel():
     """**空 steps 的登记 = 无效，不是撤下**（20260927 拆形状的回归锁，见 tasks.TASK_DROP）。
 
     现场：模型把剩下那一步做完后，又用同一个 goal、空 steps 登记一次（它的意思是"我没剩
@@ -611,7 +598,7 @@ def test_empty_steps_hold_is_invalid_not_cancel():
           and "task_hold_invalid" in got.notes, str(got and got.notes))
 
 
-def test_task_drop_declaration():
+def _test_task_drop_declaration():
     """撤下伪函数：**只有主人说不做了**才该出现，参数只有 goal。"""
     print("\n[撤下] task_drop 独立成一次调用（不再借空 steps 表达）")
     goal = "带我过去后开启一个特效"
@@ -655,7 +642,7 @@ def test_task_drop_declaration():
           N.tool_calls_to_plan(only, None).workflow == "chat")
 
 
-def test_role_filter_applies_at_decision_time():
+def _test_role_filter_applies_at_decision_time():
     print("\n[决策] 管理员技能在公开身份下判不出来")
     msg = AIMessage(content="", tool_calls=[
         {"name": "account_freeze", "args": {"uid": 1}, "id": "c", "type": "tool_call"}])
@@ -663,8 +650,7 @@ def test_role_filter_applies_at_decision_time():
     check("role='admin' → 认", (N.tool_calls_to_plan(msg, "admin") or None) is not None)
 
 
-# ── ④ 源码锁：本模块不许反向 import graph ─────────────────────────────────
-def test_review_inbox_calls_channel():
+def _test_review_inbox_calls_channel():
     """`review_inbox.calls` = 一次点头办 N 件的那份清单（20260929 批 H · S2）。
 
     这一格是本批最要紧的新面：**逐条调用里的工具名由模型写**，所以它同时受两道收
@@ -710,7 +696,7 @@ def test_review_inbox_calls_channel():
           str(adm["review_inbox"]["parameters"].get("required")))
 
 
-def test_module_does_not_import_graph():
+def _test_module_does_not_import_graph():
     print("\n[结构] planner_llm 不许 import agent.graph（会成环）")
     tree = ast.parse((ROOT / "agent" / "planner_llm.py").read_text(encoding="utf-8"))
     hits = []
@@ -722,27 +708,33 @@ def test_module_does_not_import_graph():
     check("没有 agent.graph 的 import", not hits, str(hits))
 
 
-if __name__ == "__main__":
-    for fn in (test_name_set_equals_visible_workflows,
-               test_function_names_are_openai_safe,
-               test_deny_pseudo_removes_only_named_pseudo,
-               test_intents_field_on_every_workflow,
-               test_intents_field_inlined_with_action,
-               test_params_mirror_workflow_param_specs,
-               test_override_table_is_closed,
-               test_override_enums_follow_role,
-               test_tag_create_titles_is_array_of_strings,
-               test_array_items_come_from_tool_schema,
-               test_no_call_is_plain_chat,
-               test_explicit_chat_call_params_pass_through,
-               test_single_call_maps_to_workflow_params,
-               test_multi_call_keeps_first_and_accounts,
-               test_unmappable_returns_none,
-               test_truncated_empty_calls_is_not_chat,
-               test_task_hold_declaration,
-               test_role_filter_applies_at_decision_time,
-               test_review_inbox_calls_channel,
-               test_module_does_not_import_graph):
+def test_planner_llm():
+    for fn in (_test_name_set_equals_visible_workflows,
+               _test_function_names_are_openai_safe,
+               _test_deny_pseudo_removes_only_named_pseudo,
+               _test_intents_field_on_every_workflow,
+               _test_intents_field_inlined_with_action,
+               _test_params_mirror_workflow_param_specs,
+               _test_override_table_is_closed,
+               _test_override_enums_follow_role,
+               _test_tag_create_titles_is_array_of_strings,
+               _test_array_items_come_from_tool_schema,
+               _test_no_call_is_plain_chat,
+               _test_explicit_chat_call_params_pass_through,
+               _test_single_call_maps_to_workflow_params,
+               _test_multi_call_keeps_first_and_accounts,
+               _test_unmappable_returns_none,
+               _test_truncated_empty_calls_is_not_chat,
+               _test_task_hold_declaration,
+               _test_role_filter_applies_at_decision_time,
+               _test_review_inbox_calls_channel,
+               _test_module_does_not_import_graph):
         fn()
     print("\n" + ("全部通过 ✅" if not FAILS else f"失败 {len(FAILS)} 项 ❌: {FAILS}"))
-    sys.exit(1 if FAILS else 0)
+
+    assert not FAILS, (
+        f"{len(FAILS)} 条未通过：" + "；".join(FAILS))
+
+
+if __name__ == "__main__":
+    test_planner_llm()

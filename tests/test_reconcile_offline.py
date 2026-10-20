@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """跨源对账离线自测（`eval/trace_reconcile.py`）：假夹具 + 纯函数，秒级、不联网、不碰生产目录。
 
 为什么要有这一套：对账的判据全是"两个源对不上"的确定性规则，而**真实数据里对不上是稀罕事**
@@ -16,6 +15,8 @@
 
 用法：.venv/bin/python tests/test_reconcile_offline.py → 全符合预期时退出码 0。
 """
+
+
 import gzip
 import json
 import os
@@ -24,21 +25,20 @@ import shutil
 import sys
 import tempfile
 
+from _judge import collector
+
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))  # 仓根（tests/ 的上一级）
-# 对账脚本本身留在 eval/（它是产物生成脚本、被 nightly 调用），测试陪它跨目录
+
+
 sys.path.insert(0, os.path.join(ROOT, "eval"))
+
+
 import trace_reconcile as tr  # noqa: E402
 
 FAILS: list = []
+check = collector(FAILS)
 
 
-def check(desc, cond, detail=""):
-    print(("  ✅ " if cond else "  ❌ ") + desc + (f"  [{detail}]" if detail else ""))
-    if not cond:
-        FAILS.append(desc)
-
-
-# ── 夹具构造 ────────────────────────────────────────────────────────────────
 def put_trace(tdir, tid, uid, started, end_reason="producer_done", frames=5,
               popup=False, gz=False, name=None):
     """落一份 trace。`started` 用 `2026-09-22T10:00:00` 形状（trace 的 started_at 就是它）。"""
@@ -88,295 +88,271 @@ def win(from_s="2026-09-22 00:00:00", to_s="2026-09-23 00:00:00"):
     return (datetime.strptime(from_s, tr.TS_FMT), datetime.strptime(to_s, tr.TS_FMT))
 
 
-TMP = tempfile.mkdtemp(prefix="reconcile_test_")
-
-print("① 正常配对：能配上的全配上 ⇒ 无异常；配不上的那条**在覆盖交集之外**，不判缺失")
-D = mkdirs(TMP, "happy")
-# 最早那份（09:59）**故意不配收尾行**，且它早于日志覆盖起点（10:10）⇒ 属于"两源没交集"
-# 的那一段：只能记 UNCOVERED，不能报成"trace 有、收尾行没有"。
-for i, (tid, hh) in enumerate([("r" + "a" * 31, "09:59:00"), ("r" + "b" * 31, "10:10:00"),
-                               ("r" + "c" * 31, "10:20:00"), ("r" + "d" * 31, "10:30:00")]):
-    put_trace(os.path.join(D, "traces"), tid, 1, f"2026-09-22T{hh}")
-write(os.path.join(D, "log", "agent.log"), "".join(
-    end_line(f"2026-09-22 {hh}", tid) for tid, hh in
-    [("r" + "b" * 31, "10:10:00"), ("r" + "c" * 31, "10:20:05"),
-     ("r" + "d" * 31, "10:30:05")]))
-write(os.path.join(D, "mon", "monitor.log"), monitor_line("2026-09-22 10:11:00", "fetch_fail"))
-r = tr.reconcile(D + "/traces", D + "/log", D + "/mon", *win())
-for k in ("trace_without_end", "end_without_trace", "dup_tid", "mismatch",
-          "monitor_failure", "orphan_card", "shape_odd"):
-    check(f"① 正常配对：{k} 为空", r[k] == [], f"{len(r[k])} 条")
-check("① 正常配对：has_anomaly=False", r["has_anomaly"] is False)
-check("① 正常配对：self_check 不吭声", r["self_check"] == "")
-check("① 正常配对：trace 4 份 / 收尾行 3 条", (r["trace_records"], r["ends"]) == (4, 3))
-check("① 正常配对：判定区间 = 两源覆盖的交集（下界取两源较大者）",
-      r["coverage"]["interval"] == ["2026-09-22 10:10:00", "2026-09-22 10:30:00"],
-      str(r["coverage"]["interval"]))
-check("① 边界项记 UNCOVERED、不报缺失（最早那份 trace 早于日志覆盖起点）",
-      r["uncovered_traces"] == 1 and r["trace_without_end"] == [],
-      f'uncovered_traces={r["uncovered_traces"]}')
-
-print("② trace 有、收尾行没有（该报的报了；孤儿行有佐证=dump_failed，无佐证=process_death）")
-D = mkdirs(TMP, "missing")
-put_trace(os.path.join(D, "traces"), "r" + "1" * 31, 1, "2026-09-22T10:00:00")
-put_trace(os.path.join(D, "traces"), "r" + "2" * 31, 1, "2026-09-22T10:05:00")
-put_trace(os.path.join(D, "traces"), "r" + "3" * 31, 1, "2026-09-22T10:10:00")
-write(os.path.join(D, "log", "agent.log"),
-      end_line("2026-09-22 10:00:05", "r" + "1" * 31)
-      + end_line("2026-09-22 10:10:05", "r" + "3" * 31)
-      + end_line("2026-09-22 10:15:00", "r" + "9" * 31)          # 没有 trace：process_death
-      + end_line("2026-09-22 10:16:00", "r" + "8" * 31)          # 没有 trace：有佐证行 ⇒ dump_failed
-      + "2026-09-22 10:15:59 | utils.trace | ERROR | trace dump failed trace_id=" + "r" + "8" * 31 + "\n")
-write(os.path.join(D, "mon", "monitor.log"), "")
-r = tr.reconcile(D + "/traces", D + "/log", D + "/mon", *win())
-check("② trace 有、收尾行没有：恰好 1 条且点名 r2 那份",
-      len(r["trace_without_end"]) == 1
-      and r["trace_without_end"][0]["tid"] == "r" + "2" * 31,
-      json.dumps(r["trace_without_end"], ensure_ascii=False, default=str))
-kinds = sorted(x["kind"] for x in r["end_without_trace"])
-check("② 收尾行有、trace 没有：2 条，子类分别是 dump_failed / process_death",
-      kinds == ["dump_failed", "process_death"], str(kinds))
-check("② 有缺失时 has_anomaly=True", r["has_anomaly"] is True)
-
-print("③ 重复 trace_id（同一 tid 落了两份文件）")
-D = mkdirs(TMP, "dup")
-put_trace(os.path.join(D, "traces"), "r" + "5" * 31, 1, "2026-09-22T11:00:00")
-put_trace(os.path.join(D, "traces"), "r" + "5" * 31, 1, "2026-09-22T11:00:01")
-write(os.path.join(D, "log", "agent.log"), end_line("2026-09-22 11:00:05", "r" + "5" * 31))
-write(os.path.join(D, "mon", "monitor.log"), "")
-r = tr.reconcile(D + "/traces", D + "/log", D + "/mon", *win())
-check("③ 重复 tid 报 1 条、两个文件都列出",
-      len(r["dup_tid"]) == 1 and len(r["dup_tid"][0]["paths"]) == 2,
-      json.dumps(r["dup_tid"], ensure_ascii=False, default=str))
-check("③ 重复 tid 不算'缺收尾'（存在性判定用全量索引）", r["trace_without_end"] == [])
-
-print("④ 字段不符（end_reason / frames 不等）")
-D = mkdirs(TMP, "mismatch")
-put_trace(os.path.join(D, "traces"), "r" + "6" * 31, 1, "2026-09-22T12:00:00", frames=5)
-put_trace(os.path.join(D, "traces"), "r" + "7" * 31, 1, "2026-09-22T12:05:00",
-          end_reason="producer_done", frames=3)
-write(os.path.join(D, "log", "agent.log"),
-      end_line("2026-09-22 12:00:05", "r" + "6" * 31, frames=6)
-      + end_line("2026-09-22 12:05:05", "r" + "7" * 31, reason="idle_timeout", frames=3))
-write(os.path.join(D, "mon", "monitor.log"), "")
-r = tr.reconcile(D + "/traces", D + "/log", D + "/mon", *win())
-check("④ frames 不等与 end_reason 不等各报 1 条", len(r["mismatch"]) == 2,
-      json.dumps(r["mismatch"], ensure_ascii=False, default=str))
-
-print("⑤ uid=0 跳过并计数（golden/诊断产出不该落生产目录）")
-D = mkdirs(TMP, "uid0")
-put_trace(os.path.join(D, "traces"), "r" + "8" * 31, 0, "2026-09-22T13:00:00")
-put_trace(os.path.join(D, "traces"), "r" + "9" * 31, 1, "2026-09-22T13:05:00")
-put_trace(os.path.join(D, "traces"), "diag_1790032810_0_admin_tag_move", 1, "2026-09-22T13:10:00",
-          name="20260922T131000_1_diag_179.json")
-write(os.path.join(D, "log", "agent.log"),
-      end_line("2026-09-22 13:00:05", "r" + "8" * 31)
-      + end_line("2026-09-22 13:05:05", "r" + "9" * 31)
-      + end_line("2026-09-22 13:10:05", "diag_1790032810_0_admin_tag_move"))
-write(os.path.join(D, "mon", "monitor.log"), "")
-r = tr.reconcile(D + "/traces", D + "/log", D + "/mon", *win())
-check("⑤ uid=0 的那份不进对账（计数 1，不是缺失）",
-      r["uid0"] == 1 and r["trace_records"] == 2 and r["trace_without_end"] == [])
-check("⑤ 生产目录里的异物报 2 条（uid=0 + 文件名非标准形状）", len(r["shape_odd"]) == 2,
-      json.dumps(r["shape_odd"], ensure_ascii=False, default=str))
-
-print("⑥ gz 归档里的 trace 也要读得到（轮转后只剩 .json.N.gz）")
-D = mkdirs(TMP, "gzonly")
-put_trace(os.path.join(D, "traces"), "r" + "a" * 30 + "9", 1, "2026-09-22T14:00:00", gz=True)
-put_trace(os.path.join(D, "traces"), "r" + "b" * 30 + "9", 1, "2026-09-22T14:05:00")
-write(os.path.join(D, "log", "agent.log"),
-      end_line("2026-09-22 14:00:05", "r" + "a" * 30 + "9")
-      + end_line("2026-09-22 14:05:05", "r" + "b" * 30 + "9"))
-write(os.path.join(D, "mon", "monitor.log"), "")
-r = tr.reconcile(D + "/traces", D + "/log", D + "/mon", *win())
-check("⑥ 只在 .gz 里的那份也进了对账（2 份、零缺失）",
-      r["trace_records"] == 2 and r["trace_without_end"] == [], str(r["trace_records"]))
-
-print("⑦ monitor：伪造的带空格 type 不炸、也不算前端异常；真 confirm_card 与弹窗轮配对")
-D = mkdirs(TMP, "monitor")
-put_trace(os.path.join(D, "traces"), "r" + "c" * 31, 1, "2026-09-22T15:00:00", popup=True)
-put_trace(os.path.join(D, "traces"), "r" + "d" * 31, 1, "2026-09-22T15:40:00", popup=True)
-write(os.path.join(D, "log", "agent.log"),
-      end_line("2026-09-22 15:00:05", "r" + "c" * 31)
-      + end_line("2026-09-22 15:40:05", "r" + "d" * 31))
-write(os.path.join(D, "mon", "monitor.log"),
-      # 伪造形态：type 里带空格、还想混出别的字段名——原文照抄，不认它当证据
-      monitor_line("2026-09-22 15:01:00", "evil type with spaces",
-                   extra="uid=1 url=/fake msg=x stack=")
-      + monitor_line("2026-09-22 15:02:00", "confirm_card", uid="1")     # 与 15:00 弹窗轮差 2 分钟
-      + monitor_line("2026-09-22 16:10:00", "confirm_card", uid="1")     # 与 15:40 差 30 分钟
-      + monitor_line("2026-09-22 15:03:00", "orphan_dom_drop", uid="1")
-      # 20261004 起行尾多了 ua=/webgl=/dup=（服务端拼的）：新字段必须追加在尾部，
-      # 且不能吃掉前面 type/uid/msg 的解析（这就是那条"追加而非插入"纪律的回归锁）
-      + monitor_line("2026-09-22 15:04:00", "fetch_fail",
-                     extra="url=/x msg=y stack= ua=Mozilla/5.0 (X11; Linux) webgl=no dup=3"))
-r = tr.reconcile(D + "/traces", D + "/log", D + "/mon", *win())
-check("⑦ 伪造的 type 不炸、不落进'前端异常'",
-      all(ev["type"] != "evil type with spaces" for ev in r["monitor_failure"]),
-      json.dumps(r["monitor_failure"], ensure_ascii=False, default=str))
-check("⑦ 前端异常只数 confirm_card / orphan_dom_drop（共 3 条）",
-      len(r["monitor_failure"]) == 3, str(len(r["monitor_failure"])))
-_ev = [e for e in tr.read_monitor(D + "/mon")["events"] if e["type"] == "fetch_fail"]
-check("⑦ 行尾新字段（ua=/webgl=/dup=）不吃掉 type/uid/msg 的解析",
-      len(_ev) == 1 and _ev[0]["uid"] == "guest" and _ev[0]["msg"] == "y",
-      json.dumps(_ev, ensure_ascii=False, default=str))
-check("⑦ 弹窗轮 2 个、线索配对 1 条（2 分钟那条）",
-      r["popup_rounds"] == 2 and len(r["clues"]) == 1,
-      json.dumps(r["clues"], ensure_ascii=False, default=str))
-check("⑦ 配对窗口外的那条 confirm_card 落进 orphan_card（更强的异常）",
-      len(r["orphan_card"]) == 1 and r["orphan_card"][0]["ts"].strftime("%H:%M") == "16:10",
-      json.dumps([c["ts"].strftime("%H:%M") for c in r["orphan_card"]]))
-
-print("⑧ 自检出口：有 trace 却一条收尾行都没有 ⇒ 说'日志级别/轮转变了'，不说'N 条对不上'")
-D = mkdirs(TMP, "selfcheck")
-put_trace(os.path.join(D, "traces"), "r" + "e" * 31, 1, "2026-09-22T16:00:00")
-write(os.path.join(D, "log", "agent.log"), "2026-09-22 16:00:00 | server | INFO | 只是普通日志\n")
-write(os.path.join(D, "mon", "monitor.log"), "")
-r = tr.reconcile(D + "/traces", D + "/log", D + "/mon", *win())
-check("⑧ self_check 命中且措辞指向日志级别/轮转", "日志级别或轮转" in r["self_check"], r["self_check"])
-check("⑧ 此时不做缺失判定（区间为空 ⇒ 一条不判）",
-      r["trace_without_end"] == [] and r["coverage"]["judged"] is False)
-
-print("⑨ 两个方向的裁剪不一样：trace 侧按窗口裁，收尾行侧按'盘上有没有'裁")
-D = mkdirs(TMP, "uncovered")
-put_trace(os.path.join(D, "traces"), "r" + "f" * 31, 1, "2026-09-20T09:00:00")   # 窗口外
-write(os.path.join(D, "log", "agent.log"), end_line("2026-09-22 10:00:05", "r" + "0" * 31))
-write(os.path.join(D, "mon", "monitor.log"), "")
-r = tr.reconcile(D + "/traces", D + "/log", D + "/mon", *win())
-check("⑨ 窗口外的 trace 不进统计、也不判'缺收尾'（它压根没被判）",
-      r["trace_records"] == 0 and r["trace_without_end"] == [],
-      json.dumps({k: r[k] for k in ("trace_records", "uncovered_traces")}, ensure_ascii=False))
-check("⑨ 但窗口内这条孤儿收尾行照报（trace 目录两周全量里都没有它的 tid）",
-      len(r["end_without_trace"]) == 1
-      and r["end_without_trace"][0]["tid"] == "r" + "0" * 31
-      and r["end_without_trace"][0]["kind"] == "process_death",
-      json.dumps([x["tid"] for x in r["end_without_trace"]], ensure_ascii=False))
-
-print("⑩ 渲染与一行结论（报告不炸、关键小节都在）")
-md = tr.render_md(r)
-for sec in ("# 跨源对账", "## 结论", "覆盖：", "| 判据 | 数量 |"):
-    check(f"⑩ 报告含「{sec}」", sec in md)
-check("⑩ 一行结论里带窗口与'干净/有异常'", "对账" in tr.summarize(r) and "⇒" in tr.summarize(r),
-      tr.summarize(r))
-md2 = tr.render_md({**r, "has_anomaly": True, "self_check": "日志级别或轮转方式变了？"})
-check("⑩ 有异常的报告里出现自检提示", "日志级别或轮转方式变了？" in md2)
-
-print("⑪ 接线：nightly 脚本里真的有对账那一节（能力有测试 ≠ 接线有测试）")
-nightly = os.path.join(ROOT, "scripts", "nightly_regression.sh")
-src = open(nightly, encoding="utf-8").read() if os.path.exists(nightly) else ""
-check("⑪ 脚本存在", bool(src), nightly)
-check("⑪ 脚本里跑 trace_reconcile.py", "eval/trace_reconcile.py" in src)
-check("⑪ 对账是**非门禁**（失败不置 fail 标记）",
-      "trace_reconcile.py" in src
-      and not any("trace_reconcile" in ln and "fail=1" in ln for ln in src.splitlines()),
-      "对账红了不该让整个夜间任务变红")
-check("⑪ 脚本头部提到对账这一节（考古锚点）", "跨源对账" in src)
-
-# 20260924：`>> "$LOG"echo "…"` 这种"两条语句粘成一行"不会报语法错（bash -n 全绿），
-# 但后一条变成了前一条 `||` 的右支：段头只在**上一条失败时**才打进日志。实测就是这么
-# 埋进去的——golden 那一节的段头从此不见了。判据：重定向目标 `"$LOG"` 之后只能接空白、
-# 行尾或 shell 分隔符（`;` `&` `|` `)`），接别的就是粘了一个裸词上去。
-_glued = [ln for ln in src.splitlines()
-          if re.search(r'"\$LOG"[^\s;&|)]', ln)]
-check("⑪ 没有语句粘连（`>> \"$LOG\"` 后面不得直接跟词）", not _glued,
-      "；".join(_glued) or "粘连的语句会退化成一行的右支，段头只在失败时才出现")
-_golden_hdr = [ln for ln in src.splitlines() if ln.startswith("echo ") and "golden set" in ln]
-check("⑪ golden 那一节的段头自占一行（它就是被粘连吃掉的那一条）", len(_golden_hdr) == 1,
-      _golden_hdr or "找不到 golden set 段头")
-
-print("⑫ 弹窗链（正常分支埋点）：同一枚待办串成一条链，跳数不齐才算线索")
-D = mkdirs(TMP, "flow")
-put_trace(os.path.join(D, "traces"), "r" + "g" * 31, 1, "2026-09-22T15:00:00", popup=True)
-write(os.path.join(D, "log", "agent.log"), end_line("2026-09-22 15:00:05", "r" + "g" * 31))
-
-
 def flow_line(ts, msg, uid="1"):
     return monitor_line(ts, "confirm_flow", uid=uid, extra=f"url=/x msg={msg} stack=")
 
 
-# ① 完整一条链（五个阶段齐、以 ok 收尾）——不该出线索
-_ok = "".join(flow_line(f"2026-09-22 15:0{i}:0{i}", m) for i, m in enumerate([
-    "stage=frame n=1 id=chainok opts=2 exp=yes q=要把这篇加进收藏吗",
-    "stage=card n=2 id=chainok",
-    "stage=click n=3 id=chainok value=yes",
-    "stage=sent n=4 id=chainok conv=1",
-    "stage=settle n=5 id=chainok result=ok"], start=0))
-# ② 有请求、没有点击记录（结构性：请求该由点击发起）——线索，且它的 frame 落在
-#    monitor.log.1.gz 里（跨归档文件也要合成同一条链）
-# ③ 点了却没有任何结论，附近也没有该轮次的失败上报——线索
-# ④ 忙守卫形态：点了没结论，但 4 分钟前有一条同 uid 的 confirm_card 留痕 ⇒ **不算线索**
-# ⑤ 帧到手、卡片没挂上（20260923 那类形态）——线索
-# ⑥ 埋点新增了阶段名而这里没同步——线索（静默漏掉才是问题）
-# ⑦ 没有 id 的埋点：串不成链，单独计数、不猜
-write(os.path.join(D, "mon", "monitor.log"), _ok
-      + flow_line("2026-09-22 15:50:00", "stage=sent n=3 id=noclick conv=1")
-      + flow_line("2026-09-22 16:00:00", "stage=frame n=1 id=stuck")
-      + flow_line("2026-09-22 16:00:01", "stage=card n=2 id=stuck")
-      + flow_line("2026-09-22 16:00:02", "stage=click n=3 id=stuck value=yes")
-      + flow_line("2026-09-22 15:05:00", "stage=frame n=1 id=busy")
-      + flow_line("2026-09-22 15:05:01", "stage=card n=2 id=busy")
-      + flow_line("2026-09-22 15:05:02", "stage=click n=3 id=busy value=yes")
-      + flow_line("2026-09-22 17:00:00", "stage=frame n=1 id=nocard")
-      + flow_line("2026-09-22 18:00:00", "stage=teleported n=1 id=weird")
-      + flow_line("2026-09-22 19:00:00", "stage=frame n=1")
-      # 忙守卫那一跳本尊（与 15:00 弹窗轮差 1 分钟 ⇒ 配对得上，不作 orphan）
-      + monitor_line("2026-09-22 15:01:00", "confirm_card", uid="1"))
-with gzip.open(os.path.join(D, "mon", "monitor.log.1.gz"), "wt", encoding="utf-8") as f:
-    f.write(flow_line("2026-09-22 15:49:59", "stage=frame n=1 id=noclick")
-            + flow_line("2026-09-22 15:50:01", "stage=card n=2 id=noclick"))
-r = tr.reconcile(D + "/traces", D + "/log", D + "/mon", *win())
-ids = {c["id"]: c for c in r["flow_clues"]}
-why = lambda cid: "；".join(ids.get(cid, {}).get("why", []))     # noqa: E731
+def test_reconcile_offline():
+    TMP = tempfile.mkdtemp(prefix="reconcile_test_")
+    print("① 正常配对：能配上的全配上 ⇒ 无异常；配不上的那条**在覆盖交集之外**，不判缺失")
+    D = mkdirs(TMP, "happy")
+    for i, (tid, hh) in enumerate([("r" + "a" * 31, "09:59:00"), ("r" + "b" * 31, "10:10:00"),
+                                   ("r" + "c" * 31, "10:20:00"), ("r" + "d" * 31, "10:30:00")]):
+        put_trace(os.path.join(D, "traces"), tid, 1, f"2026-09-22T{hh}")
+    write(os.path.join(D, "log", "agent.log"), "".join(
+        end_line(f"2026-09-22 {hh}", tid) for tid, hh in
+        [("r" + "b" * 31, "10:10:00"), ("r" + "c" * 31, "10:20:05"),
+         ("r" + "d" * 31, "10:30:05")]))
+    write(os.path.join(D, "mon", "monitor.log"), monitor_line("2026-09-22 10:11:00", "fetch_fail"))
+    r = tr.reconcile(D + "/traces", D + "/log", D + "/mon", *win())
+    for k in ("trace_without_end", "end_without_trace", "dup_tid", "mismatch",
+              "monitor_failure", "orphan_card", "shape_odd"):
+        check(f"① 正常配对：{k} 为空", r[k] == [], f"{len(r[k])} 条")
+    check("① 正常配对：has_anomaly=False", r["has_anomaly"] is False)
+    check("① 正常配对：self_check 不吭声", r["self_check"] == "")
+    check("① 正常配对：trace 4 份 / 收尾行 3 条", (r["trace_records"], r["ends"]) == (4, 3))
+    check("① 正常配对：判定区间 = 两源覆盖的交集（下界取两源较大者）",
+          r["coverage"]["interval"] == ["2026-09-22 10:10:00", "2026-09-22 10:30:00"],
+          str(r["coverage"]["interval"]))
+    check("① 边界项记 UNCOVERED、不报缺失（最早那份 trace 早于日志覆盖起点）",
+          r["uncovered_traces"] == 1 and r["trace_without_end"] == [],
+          f'uncovered_traces={r["uncovered_traces"]}')
+    print("② trace 有、收尾行没有（该报的报了；孤儿行有佐证=dump_failed，无佐证=process_death）")
+    D = mkdirs(TMP, "missing")
+    put_trace(os.path.join(D, "traces"), "r" + "1" * 31, 1, "2026-09-22T10:00:00")
+    put_trace(os.path.join(D, "traces"), "r" + "2" * 31, 1, "2026-09-22T10:05:00")
+    put_trace(os.path.join(D, "traces"), "r" + "3" * 31, 1, "2026-09-22T10:10:00")
+    write(os.path.join(D, "log", "agent.log"),
+          end_line("2026-09-22 10:00:05", "r" + "1" * 31)
+          + end_line("2026-09-22 10:10:05", "r" + "3" * 31)
+          + end_line("2026-09-22 10:15:00", "r" + "9" * 31)          # 没有 trace：process_death
+          + end_line("2026-09-22 10:16:00", "r" + "8" * 31)          # 没有 trace：有佐证行 ⇒ dump_failed
+          + "2026-09-22 10:15:59 | utils.trace | ERROR | trace dump failed trace_id=" + "r" + "8" * 31 + "\n")
+    write(os.path.join(D, "mon", "monitor.log"), "")
+    r = tr.reconcile(D + "/traces", D + "/log", D + "/mon", *win())
+    check("② trace 有、收尾行没有：恰好 1 条且点名 r2 那份",
+          len(r["trace_without_end"]) == 1
+          and r["trace_without_end"][0]["tid"] == "r" + "2" * 31,
+          json.dumps(r["trace_without_end"], ensure_ascii=False, default=str))
+    kinds = sorted(x["kind"] for x in r["end_without_trace"])
+    check("② 收尾行有、trace 没有：2 条，子类分别是 dump_failed / process_death",
+          kinds == ["dump_failed", "process_death"], str(kinds))
+    check("② 有缺失时 has_anomaly=True", r["has_anomaly"] is True)
+    print("③ 重复 trace_id（同一 tid 落了两份文件）")
+    D = mkdirs(TMP, "dup")
+    put_trace(os.path.join(D, "traces"), "r" + "5" * 31, 1, "2026-09-22T11:00:00")
+    put_trace(os.path.join(D, "traces"), "r" + "5" * 31, 1, "2026-09-22T11:00:01")
+    write(os.path.join(D, "log", "agent.log"), end_line("2026-09-22 11:00:05", "r" + "5" * 31))
+    write(os.path.join(D, "mon", "monitor.log"), "")
+    r = tr.reconcile(D + "/traces", D + "/log", D + "/mon", *win())
+    check("③ 重复 tid 报 1 条、两个文件都列出",
+          len(r["dup_tid"]) == 1 and len(r["dup_tid"][0]["paths"]) == 2,
+          json.dumps(r["dup_tid"], ensure_ascii=False, default=str))
+    check("③ 重复 tid 不算'缺收尾'（存在性判定用全量索引）", r["trace_without_end"] == [])
+    print("④ 字段不符（end_reason / frames 不等）")
+    D = mkdirs(TMP, "mismatch")
+    put_trace(os.path.join(D, "traces"), "r" + "6" * 31, 1, "2026-09-22T12:00:00", frames=5)
+    put_trace(os.path.join(D, "traces"), "r" + "7" * 31, 1, "2026-09-22T12:05:00",
+              end_reason="producer_done", frames=3)
+    write(os.path.join(D, "log", "agent.log"),
+          end_line("2026-09-22 12:00:05", "r" + "6" * 31, frames=6)
+          + end_line("2026-09-22 12:05:05", "r" + "7" * 31, reason="idle_timeout", frames=3))
+    write(os.path.join(D, "mon", "monitor.log"), "")
+    r = tr.reconcile(D + "/traces", D + "/log", D + "/mon", *win())
+    check("④ frames 不等与 end_reason 不等各报 1 条", len(r["mismatch"]) == 2,
+          json.dumps(r["mismatch"], ensure_ascii=False, default=str))
+    print("⑤ uid=0 跳过并计数（golden/诊断产出不该落生产目录）")
+    D = mkdirs(TMP, "uid0")
+    put_trace(os.path.join(D, "traces"), "r" + "8" * 31, 0, "2026-09-22T13:00:00")
+    put_trace(os.path.join(D, "traces"), "r" + "9" * 31, 1, "2026-09-22T13:05:00")
+    put_trace(os.path.join(D, "traces"),
+        "diag_1790032810_0_admin_tag_move", 1, "2026-09-22T13:10:00",
+              name="20260922T131000_1_diag_179.json")
+    write(os.path.join(D, "log", "agent.log"),
+          end_line("2026-09-22 13:00:05", "r" + "8" * 31)
+          + end_line("2026-09-22 13:05:05", "r" + "9" * 31)
+          + end_line("2026-09-22 13:10:05", "diag_1790032810_0_admin_tag_move"))
+    write(os.path.join(D, "mon", "monitor.log"), "")
+    r = tr.reconcile(D + "/traces", D + "/log", D + "/mon", *win())
+    check("⑤ uid=0 的那份不进对账（计数 1，不是缺失）",
+          r["uid0"] == 1 and r["trace_records"] == 2 and r["trace_without_end"] == [])
+    check("⑤ 生产目录里的异物报 2 条（uid=0 + 文件名非标准形状）", len(r["shape_odd"]) == 2,
+          json.dumps(r["shape_odd"], ensure_ascii=False, default=str))
+    print("⑥ gz 归档里的 trace 也要读得到（轮转后只剩 .json.N.gz）")
+    D = mkdirs(TMP, "gzonly")
+    put_trace(os.path.join(D, "traces"), "r" + "a" * 30 + "9", 1, "2026-09-22T14:00:00", gz=True)
+    put_trace(os.path.join(D, "traces"), "r" + "b" * 30 + "9", 1, "2026-09-22T14:05:00")
+    write(os.path.join(D, "log", "agent.log"),
+          end_line("2026-09-22 14:00:05", "r" + "a" * 30 + "9")
+          + end_line("2026-09-22 14:05:05", "r" + "b" * 30 + "9"))
+    write(os.path.join(D, "mon", "monitor.log"), "")
+    r = tr.reconcile(D + "/traces", D + "/log", D + "/mon", *win())
+    check("⑥ 只在 .gz 里的那份也进了对账（2 份、零缺失）",
+          r["trace_records"] == 2 and r["trace_without_end"] == [], str(r["trace_records"]))
+    print("⑦ monitor：伪造的带空格 type 不炸、也不算前端异常；真 confirm_card 与弹窗轮配对")
+    D = mkdirs(TMP, "monitor")
+    put_trace(os.path.join(D, "traces"), "r" + "c" * 31, 1, "2026-09-22T15:00:00", popup=True)
+    put_trace(os.path.join(D, "traces"), "r" + "d" * 31, 1, "2026-09-22T15:40:00", popup=True)
+    write(os.path.join(D, "log", "agent.log"),
+          end_line("2026-09-22 15:00:05", "r" + "c" * 31)
+          + end_line("2026-09-22 15:40:05", "r" + "d" * 31))
+    write(os.path.join(D, "mon", "monitor.log"),
+          # 伪造形态：type 里带空格、还想混出别的字段名——原文照抄，不认它当证据
+          monitor_line("2026-09-22 15:01:00", "evil type with spaces",
+                       extra="uid=1 url=/fake msg=x stack=")
+          + monitor_line("2026-09-22 15:02:00", "confirm_card",
+              uid="1")     # 与 15:00 弹窗轮差 2 分钟
+          + monitor_line("2026-09-22 16:10:00", "confirm_card", uid="1")     # 与 15:40 差 30 分钟
+          + monitor_line("2026-09-22 15:03:00", "orphan_dom_drop", uid="1")
+          # 20261004 起行尾多了 ua=/webgl=/dup=（服务端拼的）：新字段必须追加在尾部，
+          # 且不能吃掉前面 type/uid/msg 的解析（这就是那条"追加而非插入"纪律的回归锁）
+          + monitor_line("2026-09-22 15:04:00", "fetch_fail",
+                         extra="url=/x msg=y stack= ua=Mozilla/5.0 (X11; Linux) webgl=no dup=3"))
+    r = tr.reconcile(D + "/traces", D + "/log", D + "/mon", *win())
+    check("⑦ 伪造的 type 不炸、不落进'前端异常'",
+          all(ev["type"] != "evil type with spaces" for ev in r["monitor_failure"]),
+          json.dumps(r["monitor_failure"], ensure_ascii=False, default=str))
+    check("⑦ 前端异常只数 confirm_card / orphan_dom_drop（共 3 条）",
+          len(r["monitor_failure"]) == 3, str(len(r["monitor_failure"])))
+    _ev = [e for e in tr.read_monitor(D + "/mon")["events"] if e["type"] == "fetch_fail"]
+    check("⑦ 行尾新字段（ua=/webgl=/dup=）不吃掉 type/uid/msg 的解析",
+          len(_ev) == 1 and _ev[0]["uid"] == "guest" and _ev[0]["msg"] == "y",
+          json.dumps(_ev, ensure_ascii=False, default=str))
+    check("⑦ 弹窗轮 2 个、线索配对 1 条（2 分钟那条）",
+          r["popup_rounds"] == 2 and len(r["clues"]) == 1,
+          json.dumps(r["clues"], ensure_ascii=False, default=str))
+    check("⑦ 配对窗口外的那条 confirm_card 落进 orphan_card（更强的异常）",
+          len(r["orphan_card"]) == 1 and r["orphan_card"][0]["ts"].strftime("%H:%M") == "16:10",
+          json.dumps([c["ts"].strftime("%H:%M") for c in r["orphan_card"]]))
+    print("⑧ 自检出口：有 trace 却一条收尾行都没有 ⇒ 说'日志级别/轮转变了'，不说'N 条对不上'")
+    D = mkdirs(TMP, "selfcheck")
+    put_trace(os.path.join(D, "traces"), "r" + "e" * 31, 1, "2026-09-22T16:00:00")
+    write(os.path.join(D, "log", "agent.log"),
+        "2026-09-22 16:00:00 | server | INFO | 只是普通日志\n")
+    write(os.path.join(D, "mon", "monitor.log"), "")
+    r = tr.reconcile(D + "/traces", D + "/log", D + "/mon", *win())
+    check("⑧ self_check 命中且措辞指向日志级别/轮转", "日志级别或轮转" in r["self_check"], r["self_check"])
+    check("⑧ 此时不做缺失判定（区间为空 ⇒ 一条不判）",
+          r["trace_without_end"] == [] and r["coverage"]["judged"] is False)
+    print("⑨ 两个方向的裁剪不一样：trace 侧按窗口裁，收尾行侧按'盘上有没有'裁")
+    D = mkdirs(TMP, "uncovered")
+    put_trace(os.path.join(D, "traces"), "r" + "f" * 31, 1, "2026-09-20T09:00:00")   # 窗口外
+    write(os.path.join(D, "log", "agent.log"), end_line("2026-09-22 10:00:05", "r" + "0" * 31))
+    write(os.path.join(D, "mon", "monitor.log"), "")
+    r = tr.reconcile(D + "/traces", D + "/log", D + "/mon", *win())
+    check("⑨ 窗口外的 trace 不进统计、也不判'缺收尾'（它压根没被判）",
+          r["trace_records"] == 0 and r["trace_without_end"] == [],
+          json.dumps({k: r[k] for k in ("trace_records", "uncovered_traces")}, ensure_ascii=False))
+    check("⑨ 但窗口内这条孤儿收尾行照报（trace 目录两周全量里都没有它的 tid）",
+          len(r["end_without_trace"]) == 1
+          and r["end_without_trace"][0]["tid"] == "r" + "0" * 31
+          and r["end_without_trace"][0]["kind"] == "process_death",
+          json.dumps([x["tid"] for x in r["end_without_trace"]], ensure_ascii=False))
+    print("⑩ 渲染与一行结论（报告不炸、关键小节都在）")
+    md = tr.render_md(r)
+    for sec in ("# 跨源对账", "## 结论", "覆盖：", "| 判据 | 数量 |"):
+        check(f"⑩ 报告含「{sec}」", sec in md)
+    check("⑩ 一行结论里带窗口与'干净/有异常'", "对账" in tr.summarize(r) and "⇒" in tr.summarize(r),
+          tr.summarize(r))
+    md2 = tr.render_md({**r, "has_anomaly": True, "self_check": "日志级别或轮转方式变了？"})
+    check("⑩ 有异常的报告里出现自检提示", "日志级别或轮转方式变了？" in md2)
+    print("⑪ 接线：nightly 脚本里真的有对账那一节（能力有测试 ≠ 接线有测试）")
+    nightly = os.path.join(ROOT, "scripts", "nightly_regression.sh")
+    src = open(nightly, encoding="utf-8").read() if os.path.exists(nightly) else ""
+    check("⑪ 脚本存在", bool(src), nightly)
+    check("⑪ 脚本里跑 trace_reconcile.py", "eval/trace_reconcile.py" in src)
+    check("⑪ 对账是**非门禁**（失败不置 fail 标记）",
+          "trace_reconcile.py" in src
+          and not any("trace_reconcile" in ln and "fail=1" in ln for ln in src.splitlines()),
+          "对账红了不该让整个夜间任务变红")
+    check("⑪ 脚本头部提到对账这一节（考古锚点）", "跨源对账" in src)
+    _glued = [ln for ln in src.splitlines()
+              if re.search(r'"\$LOG"[^\s;&|)]', ln)]
+    check("⑪ 没有语句粘连（`>> \"$LOG\"` 后面不得直接跟词）", not _glued,
+          "；".join(_glued) or "粘连的语句会退化成一行的右支，段头只在失败时才出现")
+    _golden_hdr = [ln for ln in src.splitlines() if ln.startswith("echo ") and "golden set" in ln]
+    check("⑪ golden 那一节的段头自占一行（它就是被粘连吃掉的那一条）", len(_golden_hdr) == 1,
+          _golden_hdr or "找不到 golden set 段头")
+    print("⑫ 弹窗链（正常分支埋点）：同一枚待办串成一条链，跳数不齐才算线索")
+    D = mkdirs(TMP, "flow")
+    put_trace(os.path.join(D, "traces"), "r" + "g" * 31, 1, "2026-09-22T15:00:00", popup=True)
+    write(os.path.join(D, "log", "agent.log"), end_line("2026-09-22 15:00:05", "r" + "g" * 31))
+    _ok = "".join(flow_line(f"2026-09-22 15:0{i}:0{i}", m) for i, m in enumerate([
+        "stage=frame n=1 id=chainok opts=2 exp=yes q=要把这篇加进收藏吗",
+        "stage=card n=2 id=chainok",
+        "stage=click n=3 id=chainok value=yes",
+        "stage=sent n=4 id=chainok conv=1",
+        "stage=settle n=5 id=chainok result=ok"], start=0))
+    write(os.path.join(D, "mon", "monitor.log"), _ok
+          + flow_line("2026-09-22 15:50:00", "stage=sent n=3 id=noclick conv=1")
+          + flow_line("2026-09-22 16:00:00", "stage=frame n=1 id=stuck")
+          + flow_line("2026-09-22 16:00:01", "stage=card n=2 id=stuck")
+          + flow_line("2026-09-22 16:00:02", "stage=click n=3 id=stuck value=yes")
+          + flow_line("2026-09-22 15:05:00", "stage=frame n=1 id=busy")
+          + flow_line("2026-09-22 15:05:01", "stage=card n=2 id=busy")
+          + flow_line("2026-09-22 15:05:02", "stage=click n=3 id=busy value=yes")
+          + flow_line("2026-09-22 17:00:00", "stage=frame n=1 id=nocard")
+          + flow_line("2026-09-22 18:00:00", "stage=teleported n=1 id=weird")
+          + flow_line("2026-09-22 19:00:00", "stage=frame n=1")
+          # 忙守卫那一跳本尊（与 15:00 弹窗轮差 1 分钟 ⇒ 配对得上，不作 orphan）
+          + monitor_line("2026-09-22 15:01:00", "confirm_card", uid="1"))
+    with gzip.open(os.path.join(D, "mon", "monitor.log.1.gz"), "wt", encoding="utf-8") as f:
+        f.write(flow_line("2026-09-22 15:49:59", "stage=frame n=1 id=noclick")
+                + flow_line("2026-09-22 15:50:01", "stage=card n=2 id=noclick"))
+    r = tr.reconcile(D + "/traces", D + "/log", D + "/mon", *win())
+    ids = {c["id"]: c for c in r["flow_clues"]}
+    why = lambda cid: "；".join(ids.get(cid, {}).get("why", []))     # noqa: E731
+    def stages_of(cid):
+        return ids.get(cid, {}).get("stage", {})
+    check("⑫ 链数 6 条（无 id 的那条不算链）",
+          r["flow_chains"] == 6, str(r["flow_chains"]))
+    check("⑫ 没有 id 的埋点单独计数、不硬凑成链", r["flow_noid"] == 1, str(r["flow_noid"]))
+    check("⑫ 完整链不出线索", "chainok" not in ids, str(sorted(ids)))
+    check("⑫ 结论分布只数 settle 的 result",
+          r["flow_results"] == {"ok": 1}, json.dumps(r["flow_results"], ensure_ascii=False))
+    check("⑫ 有请求没有点击记录 ⇒ 线索",
+          "没有对应的点击记录" in why("noclick"), why("noclick"))
+    check("⑫ 该链跨 monitor.log.1.gz 归档也合成了一条",
+          stages_of("noclick").get("frame") == 1 and stages_of("noclick").get("sent") == 1,
+          json.dumps(stages_of("noclick"), ensure_ascii=False))
+    check("⑫ 点了却没有任何结论（附近也没有失败上报）⇒ 线索",
+          "点了却没有任何结论" in why("stuck"), why("stuck"))
+    check("⑫ 忙守卫形态不算线索（点了没结论但附近有该轮次的 confirm_card 留痕）",
+          "busy" not in ids, why("busy"))
+    check("⑫ 帧到手卡片没挂上 ⇒ 线索", "卡片没挂上" in why("nocard"), why("nocard"))
+    check("⑫ 阶段名不认识 ⇒ 线索（埋点与对账没同步要看得见）",
+          "不认识" in why("weird"), why("weird"))
+    check("⑫ 正常分支埋点不算'前端异常'（数异常的口径里只有失败类型）",
+          all(ev["type"] != tr.FLOW_TYPE for ev in r["monitor_failure"])
+          and tr.FLOW_TYPE not in tr.MON_FAILURE_TYPES,
+          json.dumps([ev["type"] for ev in r["monitor_failure"]]))
+    check("⑫ 上面那条 has_anomaly 的唯一来源是刻意种下的失败上报，不是链（这条夹具里 orphan_card 应为空）",
+          r["has_anomaly"] is True and len(r["monitor_failure"]) == 1 and not r["orphan_card"],
+          json.dumps({k: len(r[k]) for k in ("orphan_card", "monitor_failure")}))
+    F = mkdirs(TMP, "flow_only")
+    put_trace(os.path.join(F, "traces"), "r" + "h" * 31, 1, "2026-09-22T15:00:00")
+    write(os.path.join(F, "log", "agent.log"), end_line("2026-09-22 15:00:05", "r" + "h" * 31))
+    write(os.path.join(F, "mon", "monitor.log"), flow_line("2026-09-22 20:00:00", "stage=frame n=1 id=onlyclue"))
+    r2 = tr.reconcile(F + "/traces", F + "/log", F + "/mon", *win())
+    check("⑫ 只有跳数不齐的线索时 has_anomaly 不翻（关页签也会留下不齐的链）",
+          r2["has_anomaly"] is False and r2["flow_clues"] and not r2["flow_noid"],
+          json.dumps({"clues": [c["id"] for c in r2["flow_clues"]],
+                      "has_anomaly": r2["has_anomaly"],
+                      **{k: len(r2[k]) for k in ("orphan_card", "monitor_failure")}}, ensure_ascii=False))
+    check("⑫ 但线索在报告里看得见（不出声 ≠ 藏起来）",
+          "onlyclue" in tr.render_md(r2) and "跳数不齐 1" in tr.summarize(r2),
+          tr.summarize(r2))
+    md = tr.render_md(r)
+    check("⑫ 报告里有弹窗链小节与结论分布", "弹窗链"
+        in md and "跳数不齐" in md and "结论分布" in md)
+    check("⑫ 一行结论带弹窗链计数", "弹窗链 6 条" in tr.summarize(r), tr.summarize(r))
+    shutil.rmtree(TMP, ignore_errors=True)
+    print("\n" + ("全部符合预期" if
+        not FAILS else f"不符预期 {len(FAILS)} 项：" + "; ".join(FAILS)))
+
+    assert not FAILS, (
+        f"{len(FAILS)} 条未通过：" + "；".join(FAILS))
 
 
-def stages_of(cid):
-    return ids.get(cid, {}).get("stage", {})
-
-
-check("⑫ 链数 6 条（无 id 的那条不算链）",
-      r["flow_chains"] == 6, str(r["flow_chains"]))
-check("⑫ 没有 id 的埋点单独计数、不硬凑成链", r["flow_noid"] == 1, str(r["flow_noid"]))
-check("⑫ 完整链不出线索", "chainok" not in ids, str(sorted(ids)))
-check("⑫ 结论分布只数 settle 的 result",
-      r["flow_results"] == {"ok": 1}, json.dumps(r["flow_results"], ensure_ascii=False))
-check("⑫ 有请求没有点击记录 ⇒ 线索",
-      "没有对应的点击记录" in why("noclick"), why("noclick"))
-check("⑫ 该链跨 monitor.log.1.gz 归档也合成了一条",
-      stages_of("noclick").get("frame") == 1 and stages_of("noclick").get("sent") == 1,
-      json.dumps(stages_of("noclick"), ensure_ascii=False))
-check("⑫ 点了却没有任何结论（附近也没有失败上报）⇒ 线索",
-      "点了却没有任何结论" in why("stuck"), why("stuck"))
-check("⑫ 忙守卫形态不算线索（点了没结论但附近有该轮次的 confirm_card 留痕）",
-      "busy" not in ids, why("busy"))
-check("⑫ 帧到手卡片没挂上 ⇒ 线索", "卡片没挂上" in why("nocard"), why("nocard"))
-check("⑫ 阶段名不认识 ⇒ 线索（埋点与对账没同步要看得见）",
-      "不认识" in why("weird"), why("weird"))
-check("⑫ 正常分支埋点不算'前端异常'（数异常的口径里只有失败类型）",
-      all(ev["type"] != tr.FLOW_TYPE for ev in r["monitor_failure"])
-      and tr.FLOW_TYPE not in tr.MON_FAILURE_TYPES,
-      json.dumps([ev["type"] for ev in r["monitor_failure"]]))
-check("⑫ 上面那条 has_anomaly 的唯一来源是刻意种下的失败上报，不是链（这条夹具里 orphan_card 应为空）",
-      r["has_anomaly"] is True and len(r["monitor_failure"]) == 1 and not r["orphan_card"],
-      json.dumps({k: len(r[k]) for k in ("orphan_card", "monitor_failure")}))
-# 真判据要单独关灯验：一个只有不齐的链、别的什么都没种的目录，has_anomaly 必须**不翻**
-# ——否则"关掉页签"这种完全正常的成因会让 health.log 每晚响一次（判据 ⑦ 的全文理由）。
-F = mkdirs(TMP, "flow_only")
-put_trace(os.path.join(F, "traces"), "r" + "h" * 31, 1, "2026-09-22T15:00:00")
-write(os.path.join(F, "log", "agent.log"), end_line("2026-09-22 15:00:05", "r" + "h" * 31))
-write(os.path.join(F, "mon", "monitor.log"), flow_line("2026-09-22 20:00:00", "stage=frame n=1 id=onlyclue"))
-r2 = tr.reconcile(F + "/traces", F + "/log", F + "/mon", *win())
-check("⑫ 只有跳数不齐的线索时 has_anomaly 不翻（关页签也会留下不齐的链）",
-      r2["has_anomaly"] is False and r2["flow_clues"] and not r2["flow_noid"],
-      json.dumps({"clues": [c["id"] for c in r2["flow_clues"]],
-                  "has_anomaly": r2["has_anomaly"],
-                  **{k: len(r2[k]) for k in ("orphan_card", "monitor_failure")}}, ensure_ascii=False))
-check("⑫ 但线索在报告里看得见（不出声 ≠ 藏起来）",
-      "onlyclue" in tr.render_md(r2) and "跳数不齐 1" in tr.summarize(r2),
-      tr.summarize(r2))
-md = tr.render_md(r)
-check("⑫ 报告里有弹窗链小节与结论分布", "弹窗链" in md and "跳数不齐" in md and "结论分布" in md)
-check("⑫ 一行结论带弹窗链计数", "弹窗链 6 条" in tr.summarize(r), tr.summarize(r))
-
-shutil.rmtree(TMP, ignore_errors=True)
-print("\n" + ("全部符合预期" if not FAILS else f"不符预期 {len(FAILS)} 项：" + "; ".join(FAILS)))
-sys.exit(1 if FAILS else 0)
+if __name__ == "__main__":
+    test_reconcile_offline()

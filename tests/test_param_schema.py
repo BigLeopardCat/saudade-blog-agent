@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """技能参数 schema（参数通道的**校验侧**）单测：离线、秒级、零网络零 LLM。
 
 为什么单独一套：`instantiate_plan` 是这个系统里唯一"把模型输出变成工具实参"的地方，
@@ -31,12 +30,19 @@
   · **`param_unknown` 在每个分支都填**（由 `instantiate_plan` 这层公开薄壳统一补齐，
     不是"每个分支记得填"）——写技能/content_query/read_article 三条路此前从不填。
 """
+
+
 import ast
 import sys
 from pathlib import Path
 
+from _judge import collector
+
 ROOT = Path(__file__).resolve().parent.parent  # 仓根（测试统一在 tests/）
+
+
 sys.path.insert(0, str(ROOT))
+
 
 from agent import graph as G  # noqa: E402
 from agent.workflow_defs import WORKFLOW_MAP, WORKFLOWS, WRITE_WORKFLOW_NAMES  # noqa: E402
@@ -54,20 +60,14 @@ from agent.workflow_params import (  # noqa: E402
 from agent.workflow_plan import instantiate_plan  # noqa: E402
 
 FAILS: list[str] = []
-
-
-def check(desc: str, cond: bool, detail: str = "") -> None:
-    print(("  ✅ " if cond else "  ❌ ") + desc + (f"  [{detail}]" if detail else ""))
-    if not cond:
-        FAILS.append(desc)
+check = collector(FAILS)
 
 
 def _tools(specs: list[str]) -> list[str]:
     return [s.split("(", 1)[0] for s in specs]
 
 
-# ── ① 派生：规格必须来自工具 schema，且与工具的必填/类型一致 ─────────────────
-def test_specs_derive_from_tool_schema():
+def _test_specs_derive_from_tool_schema():
     print("\n[派生] 类型/必填/默认值从工具 args_schema 来")
     schemas = tool_arg_schemas()
     specs = {s.name: workflow_param_specs(s) for s in WORKFLOWS}
@@ -119,8 +119,7 @@ def test_specs_derive_from_tool_schema():
         check(f"{sk_name}.{pname} 必填性有显式结论", sp.required == want_req, f"{sp}")
 
 
-# ── ② 例外清单：只许这四条，且每条都要有实证依据 ──────────────────────────────
-def test_declared_exceptions_are_the_known_three():
+def _test_declared_exceptions_are_the_known_three():
     print("\n[例外] 技能盖掉派生结果的地方只有这四件")
     declared = {s.name: (s.required_params, s.optional_params) for s in WORKFLOWS}
     non_empty = {n: v for n, v in declared.items() if v[0] or v[1]}
@@ -151,8 +150,7 @@ def test_declared_exceptions_are_the_known_three():
     check("device_display.text 不是必填（否则技能整体不可达）", not sp.required, f"{sp}")
 
 
-# ── ③ 合法集合 = inputs：模板死占位符不许进参数表 ────────────────────────────
-def test_param_set_is_inputs_only():
+def _test_param_set_is_inputs_only():
     print("\n[集合] 合法参数 = inputs 的键；模板死占位符不进去")
     # 已知的死占位符（模板里有、但值由技能自己的代码算出来，planner 填了也没人读）。
     # 新增一个就红——那时要选：要么进 inputs（planner 真填），要么进这里并写明理由。
@@ -197,8 +195,7 @@ def test_param_set_is_inputs_only():
           "status:str" in mr and "*" not in mr.split("（")[0], mr)
 
 
-# ── ④ 校验行为（走 instantiate_plan 端到端） ─────────────────────────────────
-def test_missing_and_bad_params_zero_the_tools():
+def _test_missing_and_bad_params_zero_the_tools():
     print("\n[校验] 缺/坏 ⇒ 零工具 + 只说事实的注记")
     p = instantiate_plan("effect", {"effect": "sakura"})
     check("缺必填 action ⇒ 零工具", p["tools"] == [], str(p["tools"]))
@@ -239,7 +236,7 @@ def test_missing_and_bad_params_zero_the_tools():
           _tools(p["tools"]) == [], str(p["tools"]))
 
 
-def test_coercion_and_null_args():
+def _test_coercion_and_null_args():
     print("\n[归一] 无损归一照做；没值的可选参数不落进实参")
     p = instantiate_plan("content_query", {"calls": [
         {"tool": "get_article_detail", "args": {"article_id": "96", "doc_type": "note"}}]})
@@ -279,7 +276,7 @@ def test_coercion_and_null_args():
           not bad, "；".join(bad[:3]))
 
 
-def test_param_refs_pass_through():
+def _test_param_refs_pass_through():
     print("\n[引用] $tool[N].field 原样透传，永不因类型判据被判不合格")
     ref = "$search_notes[0].noteKey"
     p = instantiate_plan("content_query", {"calls": [
@@ -297,7 +294,7 @@ def test_param_refs_pass_through():
                                                  "add": ["$list_tags[0].title"]})["bad"] == [], "")
 
 
-def test_unknown_params_are_loud_but_not_blocking():
+def _test_unknown_params_are_loud_but_not_blocking():
     print("\n[没人读的参数] 只记账、不阻断（与「点名被剔除」是两种事）")
     p = instantiate_plan("effect", {"effect": "sakura", "action": "on", "speed": 3})
     check("多写的参数名进 param_unknown", p["param_unknown"] == ["speed"], str(p["param_unknown"]))
@@ -310,8 +307,7 @@ def test_unknown_params_are_loud_but_not_blocking():
           p["param_unknown"] == ["path"], str(p["param_unknown"]))
 
 
-# ── ⑤ content_query.calls：同一条通道、两种原因、两种话术 ────────────────────
-def test_call_args_dropped_with_typed_reasons():
+def _test_call_args_dropped_with_typed_reasons():
     print("\n[调用清单] 参数不合格剔除时带原因后缀，且与「args 非对象」分开")
     p = instantiate_plan("content_query", {"calls": [
         {"tool": "get_article_detail", "args": {"doc_type": "note"}}]})
@@ -349,8 +345,7 @@ def test_call_args_dropped_with_typed_reasons():
         check("  都要求重决策、都禁止声称执行过", "重新决策" in msg and "调用过" in msg, "")
 
 
-# ── ⑤b 显式填的默认值 = 没填：两条通道必须在同一个字形上合流（20261005）──────
-def test_explicit_defaults_render_as_absent():
+def _test_explicit_defaults_render_as_absent():
     """为什么值得单钉一条：**这件事只在跨轮才显形**。
 
     trace `20261005T194519` 实测——问"留言板多少条"，第 0 轮 planner 走无参点名通道
@@ -400,8 +395,7 @@ def test_explicit_defaults_render_as_absent():
                                p_tools["tools"]) is None, "")
 
 
-# ── ⑥ 闭集参数（20260926 批 5）：Literal 是唯一来源，判在工具层之前 ──────────
-def test_enum_closure_derives_from_literal():
+def _test_enum_closure_derives_from_literal():
     print("\n[闭集] 取值集合从工具 schema 的 enum 派生（不造第二份手写表）")
     # arg_enum 的三种形状：裸 enum / Optional[Literal] 的 anyOf 包裹 / 没有闭集。
     # 第三条不是凑数：`arg_type_short` 早就写了 anyOf 遍历，arg_enum 若只读顶层
@@ -458,7 +452,7 @@ def test_enum_closure_derives_from_literal():
               encoding="utf-8"))
 
 
-def test_enum_closure_zeroes_tools_before_pydantic():
+def _test_enum_closure_zeroes_tools_before_pydantic():
     print("\n[闭集] 非法取值 ⇒ 零工具 + 同轮纠偏（不是 pydantic 的 __ERROR__ 帧）")
     p = instantiate_plan("effect", {"effect": "樱花", "action": "on"})
     check("中文值不在闭集里 ⇒ 零工具（工具一个都没发出去）", p["tools"] == [], str(p["tools"]))
@@ -506,7 +500,7 @@ def test_enum_closure_zeroes_tools_before_pydantic():
                                    workflow_param_specs(WORKFLOW_MAP["effect"]))["bad"]), "")
 
 
-def test_alias_normalized_params_stay_open():
+def _test_alias_normalized_params_stay_open():
     print("\n[闭集·边界] 带别名归一层的参数刻意保持 str（闭集在 adminops 里）")
     # 这几格的取值由**技能自己的归一表**认中文（`adminops._VERDICT_ALIASES` 等），
     # 归一发生在 `_instantiate_plan` 内部、**晚于** pydantic。写成 Literal 的话
@@ -531,7 +525,7 @@ def test_alias_normalized_params_stay_open():
           bad["tools"] == [] and "认不出来" in bad["note"], bad["note"][:60])
 
 
-def test_param_unknown_is_filled_by_every_branch():
+def _test_param_unknown_is_filled_by_every_branch():
     print("\n[没人读的参数] 每个分支都填（由公开薄壳统一补齐）")
     for sk_name, params in (("read_article", {"article_id": 19, "bogus": 1}),
                             ("content_query", {"tools": ["list_guestbook"], "bogus": 1}),
@@ -589,8 +583,7 @@ def test_param_unknown_is_filled_by_every_branch():
           "别照着它们逐分支补" in src, "")
 
 
-# ── ⑩ 接线：判据与展示同源不同形 ────────────────────────────────────────────
-def test_wiring():
+def _test_wiring():
     print("\n[接线] 菜单与校验读同一份规格；类型写法只有一处")
     # 只扫**代码**、不扫注释/散文：这几条断言查的正是"某个写法有没有以赋值/定义
     # 的形式存在"，而注释里提到旧名字是**合理的**（"这里原来是什么、搬哪去了"正是
@@ -660,7 +653,7 @@ def test_wiring():
           f"{sig} / {p['tools']}")
 
 
-def test_param_name_alias_layer():
+def _test_param_name_alias_layer():
     print("\n[参数名归一] 多数派叫法撞在少数派技能上时，搬到真正的槽（有护栏）")
     # 现场（20261005 `announcement_update_zero_write`，历史 33 次里 5 次）：planner 发
     # `{"name": …}`，公告族收的是 `title` ⇒ `title` 落进 missing ⇒ 零工具 ⇒ 回落 chat。
@@ -712,21 +705,21 @@ def test_param_name_alias_layer():
 
 
 def main():
-    for fn in (test_specs_derive_from_tool_schema,
-               test_declared_exceptions_are_the_known_three,
-               test_param_set_is_inputs_only,
-               test_missing_and_bad_params_zero_the_tools,
-               test_coercion_and_null_args,
-               test_param_refs_pass_through,
-               test_unknown_params_are_loud_but_not_blocking,
-               test_call_args_dropped_with_typed_reasons,
-               test_explicit_defaults_render_as_absent,
-               test_enum_closure_derives_from_literal,
-               test_enum_closure_zeroes_tools_before_pydantic,
-               test_alias_normalized_params_stay_open,
-               test_param_unknown_is_filled_by_every_branch,
-               test_param_name_alias_layer,
-               test_wiring):
+    for fn in (_test_specs_derive_from_tool_schema,
+               _test_declared_exceptions_are_the_known_three,
+               _test_param_set_is_inputs_only,
+               _test_missing_and_bad_params_zero_the_tools,
+               _test_coercion_and_null_args,
+               _test_param_refs_pass_through,
+               _test_unknown_params_are_loud_but_not_blocking,
+               _test_call_args_dropped_with_typed_reasons,
+               _test_explicit_defaults_render_as_absent,
+               _test_enum_closure_derives_from_literal,
+               _test_enum_closure_zeroes_tools_before_pydantic,
+               _test_alias_normalized_params_stay_open,
+               _test_param_unknown_is_filled_by_every_branch,
+               _test_param_name_alias_layer,
+               _test_wiring):
         fn()
     if FAILS:
         print(f"\n=== {len(FAILS)} 项失败 ===")
@@ -736,5 +729,12 @@ def main():
     print("\n=== 全部通过 ===")
 
 
-if __name__ == "__main__":
+def test_param_schema():
     main()
+
+    assert not FAILS, (
+        f"{len(FAILS)} 条未通过：" + "；".join(FAILS))
+
+
+if __name__ == "__main__":
+    test_param_schema()

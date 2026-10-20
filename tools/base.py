@@ -46,15 +46,12 @@
      掉一处打桩点。**行数不是这里的目标。**
 """
 
-import base64
-import hashlib
-import hmac
-import json
 import logging
 import re
 import time
 
 import httpx
+import jwt  # 签发本机代调令牌（`_sign_local_jwt`，20261020 换掉手写 HS256，见 ADR-0014）
 from langchain_core.runnables.config import RunnableConfig
 
 # 配置（pydantic-settings 负责 .env 加载；`os.getenv` 读不到 .env）。
@@ -292,10 +289,11 @@ def _sign_local_jwt(uid: int, role: str | None) -> str:
 
     有效期 60 秒（设备那条是 300）：这是一个当场用掉的请求，没有"持有一段时间"的
     场景，短一点少一分被复用的余地。
-    """
-    def _b64(b: bytes) -> bytes:
-        return base64.urlsafe_b64encode(b).rstrip(b"=")
 
+    **20261020 起签发交给 PyJWT**（`jwt.encode`，见 ADR-0014）：这段 base64 + HMAC
+    的手写拼装与 `tools/device.py::_sign_user_jwt` 逐字重复，两处一起改才是对的。
+    ⚠️ **`sub` 保持数字、且不许加 `aud` / 不许加 `ver`** —— 见上面两段，形状一个字都没动。
+    """
     # 空密钥**不许签**（20261019 安全审计 SAU-012，CWE-321）：HMAC 拿空 key 照样算得出
     # 签名、`jwt.encode` 也不报错 ⇒ 这一路此前会**静静地**签出一枚用空密钥签的令牌，
     # 而失效时刻被推到"Rust 那边 401"，现场看起来像"后台接口坏了"而不是"密钥没配"。
@@ -306,15 +304,11 @@ def _sign_local_jwt(uid: int, role: str | None) -> str:
     secret = _jwt_secret()
     if not secret:
         raise RuntimeError("JWT_SECRET 未配置（空密钥不许代签令牌）——检查 .env / 环境变量")
-
-    header = _b64(json.dumps({"alg": "HS256", "typ": "JWT"}).encode())
-    payload = _b64(json.dumps({
+    return jwt.encode({
         "sub": uid,
         "exp": int(time.time()) + 60,
         "role": role or "user",
-    }).encode())
-    sig = _b64(hmac.new(secret.encode(), header + b"." + payload, hashlib.sha256).digest())
-    return (header + b"." + payload + b"." + sig).decode()
+    }, secret, algorithm="HS256")
 
 
 def _principal_get(path: str, config: RunnableConfig, *,

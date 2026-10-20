@@ -19,6 +19,15 @@
 `baseline.mypy_version` 与 `pyproject.toml` 里 dev 组钉的版本对不上就直接退 3
 （`tests/test_packaging.py` ④ 也断言这一条，两道）。
 
+**⚠️ 上面那一条只比了"账 vs 钉住的版本"，漏了"**真正在跑的那个**"（20261020 补）**：
+`--mypy` 传一个别的版本（形如 `uvx mypy@<另一个版本>`）过去会一路走到判据里，报出来的是
+`agent/graph.py 81（基线 79）—— 这一处变多了` + 总数变大 ⇒ **退 1**。于是"换了一个量"
+被读成"代码变差了"，而扫描行还把 `pin` 当版本印出来，日志上完全看不出区别。
+同族的 `lint_gate` / `except_gate` 都读运行版本（`ruff --version`），只有这里漏了。
+现在先读 `mypy --version`，与钉住的版本不一致**退 3**（不是 1），扫描行也改印运行版本。
+（这段说明刻意不写具体版本号：`tests/test_packaging.py` 会整仓扫 `uvx mypy@X` 并要求
+全部同版，写一个"错的例子"会被自己的说明文字绊倒。）
+
 **解释器目标同理，而且它是后补的洞（20261013 升 3.12 时发现）**：本脚本调 mypy 时
 **不传 `--python-version`** ⇒ 目标只来自 `pyproject.toml` 的 `[tool.mypy].python_version`。
 而那一项**会改变报出来的错误集**（3.11+ 的 `Self`/`ExceptionGroup`、3.12 的泛型语法…）。
@@ -78,6 +87,8 @@ _ERR_RE = re.compile(r"^(?P<file>[^:\n]+):\d+(?::\d+)?: error: ")
 _SUM_RE = re.compile(r"^Found (?P<n>\d+) errors? in (?P<files>\d+) files? "
                      r"\(checked (?P<checked>\d+) ", re.M)
 _OK_RE = re.compile(r"^Success: no issues found in (?P<checked>\d+) ", re.M)
+# `mypy --version` 的一行：`mypy 2.4.0 (compiled: yes)`。
+_VER_RE = re.compile(r"^mypy (?P<v>[0-9][^\s]*)", re.M)
 
 
 def _pinned_mypy() -> str | None:
@@ -214,6 +225,21 @@ def _baseline_guards(base: dict, pin: str | None, py_target: str | None) -> bool
     return True
 
 
+def _running_mypy(prog: list[str]) -> str | None:
+    """**真正在跑的那个 mypy 版本**（不是 `pyproject.toml` 里钉的那个）。
+
+    这一段补的是「三个量」里的第一个：此前 `mypy_version` 只在**基线**与**钉住的版本**
+    之间比，**从没读过跑起来的那个**。于是 `--mypy` 传一个别的版本这种"换了一个量"的
+    调用会被读成**代码变差了**——实测它报的是 `agent/graph.py 81（基线 79）—— 这一处
+    变多了` 加总数变大，退 1；而真相是换了个 mypy、错误集整个变了。同族的
+    `lint_gate` / `except_gate` 都读运行版本，只有这里漏了，扫描行还把 `pin` 当版本印出来
+    （日志上看不出区别）。**退 3 而不是 1**：这不是变差，是换了一个量。
+    """
+    r = subprocess.run(prog + ["--version"], cwd=ROOT, capture_output=True, text=True)
+    m = _VER_RE.search((r.stdout or "") + (r.stderr or ""))
+    return m.group("v") if m else None
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description="mypy 错误数棘轮（只许变小）")
     ap.add_argument("--mypy", default="", help='用哪条命令跑 mypy（默认 "<python> -m mypy"）')
@@ -228,6 +254,17 @@ def main() -> int:
 
     # 先判三道量、再跑 mypy：`_gather()` 要一分钟，而这几条只读文本。
     if not _launcher_guard(py_target):
+        return 3
+    running = _running_mypy(prog)
+    if running is None:
+        print("❌ 跑不起来：" + " ".join(prog) + " —— 连 `--version` 都认不出。\n"
+              f'  本机请用隔离环境的解释器启动：`…/bin/python eval/type_gate.py '
+              f'--mypy "uvx mypy@{pin or "<版本>"}"`')
+        return 3
+    if pin and running != pin:
+        print(f"❌ 正在跑的是 mypy {running}，而 `pyproject.toml` 的 dev 分组钉的是 {pin} —— "
+              f"**换了一个量**（错误集整个变），不是代码变差。下面那些'变多了'会把你带到"
+              f"错的结论上。要么跑同版本，要么明说要升版并 `--update` 重出账。")
         return 3
     if not args.update:
         if not BASELINE.is_file():
@@ -251,7 +288,7 @@ def main() -> int:
 
     grew = {f: (n, base["by_file"].get(f, 0)) for f, n in by_file.items()
             if n > base["by_file"].get(f, 0)}
-    print(f"[扫描] mypy {pin} / py{py_target}：{total} 个错误 / {len(by_file)} 个文件"
+    print(f"[扫描] mypy {running} / py{py_target}：{total} 个错误 / {len(by_file)} 个文件"
           f"（基线 {base['total']} / {len(base['by_file'])} 个；查过 {checked} 个源文件）")
     for f, (now, was) in sorted(grew.items()):
         print(f"  ❌ {f}  {now}（基线 {was}）—— 这一处变多了")

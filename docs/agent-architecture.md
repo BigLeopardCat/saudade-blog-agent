@@ -72,9 +72,10 @@ flowchart TB
 ```
 本仓库（saudade-blog-agent）    # ★ Python Agent（独立 git 仓库，推送即 CI 评测门禁 + 部署；线上改动重启 systemd 服务生效）
 ├── server.py                  # FastAPI 入口：/chat、/chat/stream、/health；trace_id 中间件；流式编排
-├── agent/                     # ★ 对话 Agent 本体（65 个模块，前缀成族，不建子包；**完整地图就是这一节**）
+├── agent/                     # ★ 对话 Agent 本体（66 个模块，前缀成族，不建子包；**完整地图就是这一节**）
 │   │                          #   族标题行不含 .py —— `tests/test_module_index.py` 按"树里每个文件一行"判双向一致
 │   ├── graph.py               # ★ 图本体：手写 LangGraph——State/契约/声称闸 + planner(唯一决策) ⇄ execute(确定性执行) → (reflector) → model(零工具叙述) → gate(确定性检查) + 条件边路由
+│   ├── claims.py              # ★ 叙述文本的**声称判据族**（20261020 从 graph.py 切出，那边按原名 re-export）：导航到达/特效状态/幻影工具/命令前缀/写完成/能力否认/台账缺席等纯文本判据 + 脚下正则词表；不读 AgentState（工具名派生的三件留 graph）
 │   ├── agent.py               # create_agent：手写图入口（build_graph）
 │   │
 │   ├── 【计划契约族】
@@ -133,7 +134,7 @@ flowchart TB
 │   ├── prompt_context.py      # 注入 planner/model 的**提示词文本**组装（纯函数叶子层，零 LLM / 零 LangGraph）：消息文本提取（多模态兼容）/ page_ctx / 页面操作指南 / 工具帧摘要 / checker 回执摘要
 │   ├── prompts.py             # ★ 全部模型可见正文的唯一落点：人设 + 叙述纪律 + planner / reflector 模板 + 输出契约（渲染点与全部逻辑仍在 graph.py）
 │   ├── planner_llm.py         # ★ 技能表 ↔ API tools/tool_calls 的接线层（20261004 起**唯一**接口层；20261017 前名 native_plan.py）
-│   ├── tool_index.py          # 技能索引档（ADR-0014 阶段 0，**出厂关**）：描述压成一行索引 + describe_skill 按需取回原文；结构一字节不动
+│   ├── tool_index.py          # 技能索引档（ADR-0015 阶段 0，**出厂关**）：描述压成一行索引 + describe_skill 按需取回原文；结构一字节不动
 │   ├── deterministic_plan.py           # ★ 确定性决策层（零 LLM）：快道（当前文章读取 / 特效切换 / 导航 / 屏幕显示）+ 动作意图扫描 + 检索候选裁决 + 终局计划
 │   ├── arg_refs.py                # ★ `$<工具>[<序号>].<字段>` 参数引用：把上一步的真实返回值绑进下一步的参数（五个错误码，解不出必须响亮）
 │   │

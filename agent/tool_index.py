@@ -1,4 +1,4 @@
-"""技能索引：把 schema 里那份**内联的目录**换成一行索引 + 按需取回（ADR-0014 阶段 0）。
+"""技能索引：把 schema 里那份**内联的目录**换成一行索引 + 按需取回（ADR-0015 阶段 0）。
 
 **问题**：`build_tool_schema` 发给模型的每个技能函数里，`description` 是一整段散文。
 实测（20261020，`docs/prefix-cache-audit-20261020.md` §1）：planner 单次输入 52,145 tok，

@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """用户自己的数据工具单测（纯函数 / 假 httpx，零网络零 LLM，秒级）。
 
 被测各批：
@@ -27,86 +26,30 @@
 写法沿用 tests/test_reports.py：假 httpx 只桩边界（`base._client`），工具的输入输出
 一律用真对象。
 """
+
+
 import base64
 import json
 import sys
 import time
 from pathlib import Path
 
+from _judge import collector
+
 ROOT = Path(__file__).resolve().parent.parent  # 仓根（20260924：测试统一搬进 tests/）
+
+
 sys.path.insert(0, str(ROOT))
 
+
+import tools.base as base  # noqa: E402
 from agent import authz  # noqa: E402
 from agent.entity_digest import receipt_digest  # noqa: E402
 from agent.principal import Principal  # noqa: E402
-import tools.base as base  # noqa: E402
-
-# ── 密钥桩（20261019）─────────────────────────────────────────────────────
-# 这些工具走 `_principal_get` ⇒ `_sign_local_jwt` 要一把非空密钥。CI 没有 `.env`，
-# `settings.jwt_secret` 默认空串，而 20261019 起**空密钥不许签**（SAU-012）⇒ 不打桩
-# 本套件在 CI 里会当场抛。桩值不取环境值：判据的前提自己摆，不继承运维取值。
 from config.settings import settings as _settings  # noqa: E402
-_saved_secret = _settings.jwt_secret
-_settings.jwt_secret = "test-secret-for-userdata-tools"
 
 FAILS: list[str] = []
-
-
-def check(desc: str, cond: bool, detail: str = "") -> None:
-    print(("  ✅ " if cond else "  ❌ ") + desc + (f"  [{detail}]" if detail else ""))
-    if not cond:
-        FAILS.append(desc)
-
-
-READ_TOOLS = ["list_my_favorites", "get_unread_summary", "list_notifications",
-              "list_my_messages", "list_my_board"]
-
-# 「我自己的河灯」（20261008）：与上面四条同族（`_own_get` / read.own / 零请求的
-# 未登录分支），但它不是"原样透出"——帧要经 `_board_text_keys`（`author`→`留名`）、
-# 摘掉恒假的 `mine`、按 `_clip_fields` 封顶、尾巴挂一条系统注记。所以它不进下面那个
-# `CASES` 循环（那条契约对它不成立），单列在 ②c。
-BOARD_MINE = [{"talkKey": 109, "talkTitle": "", "content": "今天的月亮很好看",
-               "cat": "诉", "v": 3, "author": "Sora", "nickname": None,
-               "avatar": None, "mine": True, "approved": 1, "rejectReason": None,
-               "createTime": "2026-10-01 12:00:00", "updateTime": "2026-10-01 12:00:00"}]
-
-# 三个端点的返回样本（形态抄自 src/routes/profile.rs 的 FavoriteDto /
-# UnreadDto / NotificationListDto，字段名一个不差——它们是 Python↔Rust 的契约）
-FAVS = [{"noteId": 12, "title": "留言板怎么用", "status": "published",
-         "createdAt": "2026-09-20 11:02:00"},
-        {"noteId": 19, "title": "Saudade Blog AI Agent（泠月喵）架构文档", "status": "published",
-         "createdAt": "2026-09-18 09:30:00"}]
-UNREAD = {"notifications": 3, "messages": 1, "total": 4}
-# 站内信（20260923 批 8）：Rust `MailboxDto{inbox, outbox, unread}` 的形态——
-# **不是行列表**（所以进不了 `_rows` 那族摘要器），字段名抄自 src/routes/profile.rs
-# 的 MessageDto（peerName 是"对方的展示名"，title 可为 null = 没填标题）
-MAILBOX = {"unread": 2, "inbox": [
-    {"id": 11, "fromUserId": 3, "toUserId": 7, "peerName": "小猫咪",
-     "peerAvatar": None, "title": "河灯集那篇", "content": "第三段的说法想跟你确认一下",
-     "isRead": False, "createdAt": "2026-09-22 21:00:00"},
-    {"id": 9, "fromUserId": 4, "toUserId": 7, "peerName": "阿岚", "peerAvatar": None,
-     "title": None, "content": "上次那个 ESP32 的问题解决了",
-     "isRead": False, "createdAt": "2026-09-21 10:00:00"},
-    {"id": 8, "fromUserId": 5, "toUserId": 7, "peerName": "路人甲", "peerAvatar": None,
-     "title": "问好", "content": "你好呀", "isRead": True,
-     "createdAt": "2026-09-01 08:00:00"},
-], "outbox": [
-    {"id": 10, "fromUserId": 7, "toUserId": 3, "peerName": "小猫咪",
-     "peerAvatar": None, "title": "回你", "content": "好，我看下", "isRead": True,
-     "createdAt": "2026-09-22 22:00:00"},
-]}
-NOTICES = {"unread": 2, "items": [
-    {"id": 7, "type": "announcement", "title": "国庆维护公告", "content": "10 月 1 日凌晨维护",
-     "link": "/article/3", "isRead": False, "createdAt": "2026-09-22 10:00:00"},
-    {"id": 6, "type": "notice", "title": "你的留言已通过审核", "content": "理由：无",
-     "link": "/guestbook?lid=88", "isRead": False, "createdAt": "2026-09-21 21:40:00"},
-    {"id": 5, "type": "notice", "title": "欢迎来到 Saudade", "content": "随便逛逛",
-     "link": None, "isRead": True, "createdAt": "2026-09-01 08:00:00"},
-]}
-
-
-# ══════════════════════════════════════════════════════════════════
-print("\n① _own_get：请求形状与失败取向（假 httpx 客户端，只桩边界）")
+check = collector(FAILS)
 
 
 class _Resp:
@@ -137,172 +80,6 @@ def cfg(uid, role="user"):
     return {"configurable": {"user_id": uid, "principal": Principal(uid=uid, role=role)}}
 
 
-real_client = base._client
-try:
-    c = _Client(_Resp(200, {"code": 200, "data": FAVS}))
-    base._client = c
-    out = base._own_get("/api/protected/favorites", cfg(7))
-    check("正常路径 → 返回 data 字段", out == FAVS, str(out)[:40])
-    url, hdrs = c.calls[0]
-    check("打的是本机回环后台地址（/api/protected 前缀）",
-          url.startswith(base.ADMIN_BASE + "/api/protected/"), url)
-    tok = hdrs.get("Authorization", "")
-    check("带 Bearer 局部 JWT（两段点 = 三段式）",
-          tok.startswith("Bearer ") and tok.count(".") == 2)
-    seg = tok.split(".")[1]
-    payload = json.loads(base64.urlsafe_b64decode(seg + "=" * (-len(seg) % 4)))
-    check("JWT sub = 本轮发起人 uid（自己读自己，服务端再按 uid 过滤）",
-          payload.get("sub") == 7, str(payload))
-    check("JWT 有效期 60 秒（当场用掉，不持有）", 50 <= payload["exp"] - time.time() <= 60)
-    check("JWT 不带 aud（Rust verify_token 用 Validation::default）",
-          "aud" not in payload, str(list(payload)))
-
-    # 401/403：**身份**问题不是故障，且措辞必须是"你自己的数据"那一套
-    for status, why in ((401, "未带/验签失败"), (403, "身份有效但无权")):
-        c = _Client(_Resp(status))
-        base._client = c
-        r = base._own_get("/api/protected/favorites", cfg(7))
-        check(f"{status}（{why}）→ unavailable 且措辞是『无权』",
-              r.kind == "unavailable" and "无权" in r, f"{r.kind}: {r}")
-        check(f"{status} → **不说**『仅管理员可用』（这是访客自己的数据）",
-              "管理员" not in str(r), str(r))
-
-    c = _Client(_Resp(500))
-    base._client = c
-    r = base._own_get("/api/protected/favorites", cfg(7))
-    check("HTTP 500 → unavailable（不是空列表）", r.kind == "unavailable", f"{r.kind}: {r}")
-
-    c = _Client(_Resp(200, None))
-    base._client = c
-    r = base._own_get("/api/protected/favorites", cfg(7))
-    check("非 JSON 响应 → unavailable", r.kind == "unavailable", f"{r.kind}: {r}")
-
-    # Rust 的 ApiResponse::error 是 HTTP 200 + code 500（src/utils.rs）——
-    # 只看状态码会把"未登录/查询失败"读成成功
-    c = _Client(_Resp(200, {"code": 500, "message": "未登录"}))
-    base._client = c
-    r = base._own_get("/api/protected/favorites", cfg(7))
-    check("业务码非 200 → unavailable（HTTP 200 也不当成功）",
-          r.kind == "unavailable" and "未登录" in r, f"{r.kind}: {r}")
-
-    c = _Client(exc=RuntimeError("connection refused"))
-    base._client = c
-    r = base._own_get("/api/protected/favorites", cfg(7))
-    check("连接异常 → unavailable", r.kind == "unavailable", f"{r.kind}: {r}")
-
-    c = _Client(_Resp(200, {"code": 200, "data": []}))
-    base._client = c
-    r = base._own_get("/api/protected/favorites", cfg(0))
-    check("uid ≤ 0 → unavailable（身份拿不到就不发请求）", r.kind == "unavailable", f"{r.kind}: {r}")
-    # 20261004 改口（主人拍板）：原先这里锁的是「措辞说的是『未登录』」。那个前提
-    # **在生产里到不了**——和 agent 对话本身就必须登录（uid>0 恒成立），uid<=0 只能
-    # 是身份没传进来。所以措辞改成陈述**系统这一侧的事实**，并且**反向锁**一句：
-    # 不许把原因说成"要登录"（那既没用又误导，他明明登录着）。
-    # 不变的那条最要紧：读不到就说读不到，**绝不说成"没有"**（另有一条在旁边锁）。
-    check("uid ≤ 0 的措辞陈述系统这一侧（『没有携带…身份』），不说成『未登录』",
-          "没有携带" in str(r) and "身份" in str(r), str(r))
-    check("uid ≤ 0 的措辞**不给主人派活**（不许出现『登录』/『登陆』/『/login』）",
-          not any(w in str(r) for w in ("登录", "登陆", "/login")), str(r))
-    check("uid ≤ 0 时**没有**发出任何请求", c.calls == [], str(c.calls))
-finally:
-    base._client = real_client
-
-
-# ══════════════════════════════════════════════════════════════════
-print("\n② 三个读工具：以发起人身份读、读不到就如实说（走真工具）")
-
-CASES = [("list_my_favorites", FAVS),
-         ("list_notifications", NOTICES), ("list_my_messages", MAILBOX)]
-# `get_unread_summary` **不在这一组**：20260924 起它多打一个列表端点、返回合并结构
-# （计数 + 未读条目），"一次请求、原样透出"那条契约对它已不成立——它单列在 ②b。
-try:
-    for name, sample in CASES:
-        tool = getattr(base, name)
-        c = _Client(_Resp(200, {"code": 200, "data": sample}))
-        base._client = c
-        out = tool.invoke({}, config=cfg(7))
-        check(f"{name} → 原样透出接口数据（结构化，不做中文报表）",
-              out == str(sample) and getattr(out, "kind", "ok") == "ok", str(out)[:50])
-        check(f"{name} 打的端点在 /api/protected 下", len(c.calls) == 1, str(c.calls))
-
-        c = _Client(_Resp(200, {"code": 200, "data": sample}))
-        base._client = c
-        out = tool.invoke({}, config=cfg(0))
-        check(f"{name} 未登录 → kind=unavailable 且零请求",
-              out.kind == "unavailable" and c.calls == [], f"{out.kind}: {out}")
-        check(f"{name} 未登录的措辞里没有『管理员』", "管理员" not in str(out), str(out))
-
-    # 空结果**不是**故障：`_shape([])` 出来的就是 `"[]"`（无 kind 标记 ⇒ 上层按
-    # kind 默认 ok 判 PASS，"查到了、就是空的"是事实）。这条与上面那条要分开锁——
-    # 混了以后"你还没收藏过文章"与"我读不到"就分不开了。
-    c = _Client(_Resp(200, {"code": 200, "data": []}))
-    base._client = c
-    out = base.list_my_favorites.invoke({}, config=cfg(7))
-    check("收藏为空 → 原样透出 '[]'（不是 unavailable、不是『暂无收藏』这种人话）",
-          out == "[]" and getattr(out, "kind", "ok") == "ok", f"{getattr(out, 'kind', '')}: {out}")
-finally:
-    base._client = real_client
-
-
-# ══════════════════════════════════════════════════════════════════
-print("\n②c 我自己的河灯（20261008）：读得到『我哪条通过了』，帧里带 `talkId`")
-
-# 动机（主人报的现场）：问「带我去看看我已经通过的留言」时，公开池 `list_guestbook`
-# 恒 `Approved=1` ⇒ **"我哪条通过了"这个问题在那边结构上问不出来**；而公开池每行的
-# `mine` 是上游按"有没有 uid"算的，本工具的 `_get("/board")` 不带令牌 ⇒ 那一格恒假。
-# 于是模型只能空转（trace `20261008T024742`：`list_guestbook` 连点两次 → 重复拦截 →
-# 收尾轮编出"已经带你过去了"）。这一条补的正是那个缺掉的读通道。
-try:
-    c = _Client(_Resp(200, {"code": 200, "data": BOARD_MINE}))
-    base._client = c
-    out = base.list_my_board.invoke({}, config=cfg(7))
-    check("打的是「我的河灯」那个端点（不是公开池的 /board）",
-          c.calls and c.calls[0][0].endswith("/api/protect/board/mine"), str(c.calls))
-    check("★ 帧里 id 是 `talkId`（`/guestbook?lid=` 要填的正是它）",
-          "'talkId': 109" in out and "talkKey" not in out, out[:120])
-    check("★ 审核态原样在（0/1/2 三态是这条通道存在的理由）", "'approved': 1" in out)
-    check("驳回理由那一格原样在（approved=2 时才有值）", "rejectReason" in out)
-    check("留名按公开池同规改名（`author`→`留名`，措辞不许让 planner 读成账号）",
-          "'留名': 'Sora'" in out and "'author'" not in out, out[:120])
-    check("★ 恒假的 `mine` 被摘掉（留着就是系统在说『这条不是你的』这种假话）",
-          "'mine'" not in out)
-    check("帧尾有系统注记，写明它含待审/未通过（公开池里没有这两种）",
-          "〔系统注记〕" in out and "待审" in out)
-
-    c = _Client(_Resp(200, {"code": 200, "data": BOARD_MINE}))
-    base._client = c
-    out = base.list_my_board.invoke({}, config=cfg(0))
-    check("未登录 → kind=unavailable 且**零请求**（读不到 ≠ 是空的）",
-          out.kind == "unavailable" and c.calls == [], f"{getattr(out, 'kind', '')}: {out}")
-    check("未登录的措辞里没有『管理员』、也不给主人派活",
-          "管理员" not in str(out) and "登录" not in str(out), str(out))
-
-    # 空是事实：注记照挂、没有 dict 行（摘要器因此不产摘要，退化成"无摘要"）
-    c = _Client(_Resp(200, {"code": 200, "data": []}))
-    base._client = c
-    out = base.list_my_board.invoke({}, config=cfg(7))
-    check("一条都没有 → 帧仍是结构化文本（不塌成 unavailable，也不编『暂无』这种人话）",
-          "〔系统注记〕" in out and getattr(out, "kind", "ok") == "ok", f"{out[:60]}")
-    check("  ↑ 空列表下摘要器不产摘要（没有值可取，不是把 0 编成一条）",
-          receipt_digest("list_my_board", out) == "")
-
-    # 摘掉 `mine` 是**逐行**的（公开池那一半也走同一个出口），别只对本人那一份生效
-    check("摘 `mine` 对公开池的行同样生效（同一个出口函数）",
-          "'mine'" not in base._shape(base._drop_dead_mine(
-              [{"talkId": 1, "mine": False}])))
-finally:
-    base._client = real_client
-
-
-# ══════════════════════════════════════════════════════════════════
-print("\n②b 未读汇总连带条目（20260924）：计数 + 未读的那几条")
-
-# 动机：红点问的是"几条"，紧接着的一句必定是"是什么"。只有计数时那一句要么再调一次
-# list_notifications（多一轮），要么拿计数去编内容。合并之后"是什么"在同一次返回里。
-# 三条纪律照旧不许破：读不到 ≠ 是空的、未登录零请求、缺字段绝不编。
-UNREAD_MERGE = {"notifications": 2, "messages": 1, "total": 3}
-
-
 def _two(summary, notices):
     """按调用顺序喂两个端点的返回（summary → notifications）。"""
     class _Seq:
@@ -314,202 +91,6 @@ def _two(summary, notices):
             self.calls.append(url)
             return self.resps.pop(0)
     return _Seq()
-
-
-try:
-    c = _two(_Resp(200, {"code": 200, "data": UNREAD_MERGE}),
-             _Resp(200, {"code": 200, "data": NOTICES}))
-    base._client = c
-    out = base.get_unread_summary.invoke({}, config=cfg(7))
-    check("计数 + 未读条目一起回来（三个计数一个不少）",
-          "notifications" in out and "total" in out and "unread_items" in out, str(out)[:60])
-    check("条目只含**未读**的（已读那条 5 不进 unread_items）",
-          "'id': 7" in out and "'id': 6" in out and "'id': 5" not in out, out[-120:])
-    check("条目带 id/type/title/content/link/createdAt"
-          "（20260924 二改：content 进条目——留言审核的驳回理由就写在正文里）",
-          "国庆维护公告" in out and "凌晨维护" in out and "/guestbook?lid=88" in out,
-          out[-160:])
-    check("两个端点都打了（summary 在前，列表在后）",
-          [u.rsplit("/api", 1)[1] for u in c.calls]
-          == ["/protected/notifications/summary", "/protected/notifications"], str(c.calls))
-    check("条数对得上时**不加**说明字段（别让正常路径多一句噪音）",
-          "unread_items_note" not in out, out[-80:])
-
-    # 正文过长 → 截断（条目是摘要，要原文走 list_notifications；别把整条通知搬进帧）
-    _long = "理由：" + "很长的驳回说明" * 30
-    c = _two(_Resp(200, {"code": 200, "data": UNREAD_MERGE}),
-             _Resp(200, {"code": 200, "data": {"unread": 1, "items": [
-                 {"id": 9, "type": "notice", "title": "留言未通过审核", "content": _long,
-                  "link": "/guestbook?lid=96", "isRead": False,
-                  "createdAt": "2026-09-23 22:06:09"}]}}))
-    base._client = c
-    out = base.get_unread_summary.invoke({}, config=cfg(7))
-    check("正文过长 → 截断到 120 字并带省略号",
-          _long[:120] in out and _long[:121] not in out and "…" in out, out[-160:])
-
-    # 计数说 3、列表只带回 2 条（模拟未读里较早的落在列表接口最近 100 条窗口外）
-    c = _two(_Resp(200, {"code": 200, "data": UNREAD}),
-             _Resp(200, {"code": 200, "data": NOTICES}))
-    base._client = c
-    out = base.get_unread_summary.invoke({}, config=cfg(7))
-    check("带回来的比计数少 → unread_items_note 如实说少给了几条",
-          "只带回 2 条" in out and "共 3 条" in out, out[-90:])
-
-    # 条目那半读失败：计数是真读到的（ok 进回执），但**绝不许**说成"没有未读条目"
-    c = _two(_Resp(200, {"code": 200, "data": UNREAD_MERGE}), _Resp(500))
-    base._client = c
-    out = base.get_unread_summary.invoke({}, config=cfg(7))
-    check("条目读失败 → 计数照旧透出、unread_items 为空但带『没读到』说明",
-          getattr(out, "kind", "ok") == "ok" and "'total': 3" in out
-          and "没读到" in out and "没有未读" not in str(out),
-          f"{getattr(out, 'kind', '')}: {out}")
-    check("条目读失败**不说**未登录/管理员（那是故障不是身份问题）",
-          "未登录" not in str(out) and "管理员" not in str(out), str(out))
-
-    # 未登录：第一跳就 unavailable ⇒ 不应再打第二个端点（fail-closed 的早退）
-    c = _two(_Resp(200, {"code": 500, "message": "未登录"}), _Resp(200, {"code": 200, "data": NOTICES}))
-    base._client = c
-    out = base.get_unread_summary.invoke({}, config=cfg(7))
-    check("计数读不到 → unavailable 且**不补一次列表调用**",
-          out.kind == "unavailable" and len(c.calls) == 1, f"{out.kind}: {c.calls}")
-
-    c = _two(_Resp(200, {"code": 200, "data": UNREAD_MERGE}), _Resp(200, {"code": 200, "data": NOTICES}))
-    base._client = c
-    out = base.get_unread_summary.invoke({}, config=cfg(0))
-    check("未登录 → kind=unavailable 且零请求（连带那一路也不发）",
-          out.kind == "unavailable" and c.calls == [], f"{out.kind}: {c.calls}")
-
-    # 一条未读都没有：`unread_items` 为空数组，**不是** unavailable
-    c = _two(_Resp(200, {"code": 200, "data": {"notifications": 0, "messages": 0, "total": 0}}),
-             _Resp(200, {"code": 200, "data": {"unread": 0, "items": [
-                 {"id": 5, "type": "notice", "title": "欢迎来到 Saudade", "link": None,
-                  "isRead": True, "createdAt": "2026-09-01 08:00:00"}]}}))
-    base._client = c
-    out = base.get_unread_summary.invoke({}, config=cfg(7))
-    check("零未读 → 空条目 + 计数 0（是事实，不是失败）",
-          getattr(out, "kind", "ok") == "ok" and "'unread_items': []" in out
-          and "'total': 0" in out, f"{getattr(out, 'kind', '')}: {out}")
-finally:
-    base._client = real_client
-
-
-# ══════════════════════════════════════════════════════════════════
-print("\n③ 实体摘要：跨轮指代的取值来源")
-
-check("收藏 → `noteId:<id>《标题》`（id 带命名空间；noteId 是 favorites 的字段名，此前只有 noteKey/key）",
-      receipt_digest("list_my_favorites", str(FAVS))
-      == "我的收藏: noteId:12《留言板怎么用》/noteId:19《Saudade Blog AI Agent》",
-      receipt_digest("list_my_favorites", str(FAVS)))
-check("通知 → 总条数 + 未读条数 + **id《标题》**（未读标出来）",
-      receipt_digest("list_notifications", str(NOTICES))
-      == "通知共 3 条（未读 2）: notifId:7《国庆维护公告》（未读）"
-         "/notifId:6《你的留言已通过审核》（未读）/notifId:5《欢迎来到 Saudade》",
-      receipt_digest("list_notifications", str(NOTICES)))
-# 20260923 三轮（trace 实证）：摘要里的"3 条"曾被 planner 读成 id 填进参数
-# ⇒ 一次注定 0 行的写 + 一次「服务不可用」误报。两条判据分开锁：
-#   ① id 必须给足（上面那条）；
-#   ② 条数不得写成可被读成 id 的形态（抬头带"共"字、且数字紧贴"条"）。
-check("通知条数带「共…条」措辞（「3 条」不再是一个可被读成 id 的裸数字）",
-      "共 3 条" in receipt_digest("list_notifications", str(NOTICES))
-      and not receipt_digest("list_notifications", str(NOTICES)).startswith("通知 3"))
-check("通知条目缺 id 字段 → 不编 id（只给标题）",
-      receipt_digest("list_notifications", str({"unread": 0, "items": [
-          {"title": "没有 id 的通知", "isRead": True}]})) ==
-      "通知共 1 条（未读 0）: 没有 id 的通知")
-check("通知**正文不进摘要**（挤进来只会把标题挤掉——要正文就再调一次工具）",
-      "10 月 1 日" not in receipt_digest("list_notifications", str(NOTICES)))
-# ── 站内信（20260923 批 8）─────────────────────────────────────
-check("站内信 → 收件/发出封数 + 未读封数 + **id《标题》寄自谁（未读）**",
-      receipt_digest("list_my_messages", str(MAILBOX))
-      == "信箱: 收件 3 封（未读 2） / 发出 1 封: mailId:11《河灯集那篇》寄自小猫咪（未读）"
-         "/mailId:9（无标题信）寄自阿岚（未读）/mailId:8《问好》寄自路人甲",
-      receipt_digest("list_my_messages", str(MAILBOX)))
-# id 给足是**判据的一部分**：20260923 三轮那次「把条数当 id」的误导，堵法只有
-# "摘要里每个可点名的东西都带编号"（见 agent/entity_digest.py `_mailbox_digest` 头注）。
-check("信件摘要里每封都带**具名**编号（planner 不必编 id 就能点名，且知道这是信的 id）",
-      all(f"mailId:{i}" in receipt_digest("list_my_messages", str(MAILBOX)) for i in (11, 9, 8)))
-check("信件摘要用**封**这个量词（通知是「条」——量词分开，两个 id 空间就不会被混）",
-      "封" in receipt_digest("list_my_messages", str(MAILBOX))
-      and "条" not in receipt_digest("list_my_messages", str(MAILBOX)))
-check("发给别人的信**不进摘要**（发件箱里的 isRead 是别人的事，也不能被当成本人收到过）",
-      "10《回你》" not in receipt_digest("list_my_messages", str(MAILBOX)))
-check("信件**正文不进摘要**（要正文就再调一次工具）",
-      "第三段" not in receipt_digest("list_my_messages", str(MAILBOX)))
-check("缺 id 的信 → 不编编号（只给标题/寄信人）",
-      receipt_digest("list_my_messages",
-                     str({"inbox": [{"peerName": "无 id 无标题"}], "outbox": [],
-                          "unread": 1})) == "信箱: 收件 1 封（未读 1） / 发出 0 封: （无标题信）寄自无 id 无标题（未读）")
-check("空信箱 → 只留封数（不是空串：**一封都没有**是事实，与「读不到」不是一回事）",
-      receipt_digest("list_my_messages",
-                     str({"inbox": [], "outbox": [], "unread": 0}))
-      == "信箱: 收件 0 封（未读 0） / 发出 0 封")
-check("信箱形态不符（缺 inbox/outbox）→ 空摘要（不猜）",
-      receipt_digest("list_my_messages", str({"unread": 0, "items": []})) == ""
-      and receipt_digest("list_my_messages", "未登录：读不到你自己的数据") == "")
-
-check("未读汇总 → 两个数 + 合计（key 名与 Rust UnreadDto 同源）",
-      receipt_digest("get_unread_summary", str(UNREAD))
-      == "未读: 通知 3 条 / 私信 1 条（合计 4）",
-      receipt_digest("get_unread_summary", str(UNREAD)))
-# 20260924：条目那半随摘要进跨轮记忆——**id 必须给**（read_notifications 要的是 id
-# 列表，只给"3 条"就是 20260923 三轮那个"把条数当 id"的坑）；标题带书名号，正文不进。
-check("未读汇总带条目 → 计数 + 未读条目的 `id《标题》`",
-      receipt_digest("get_unread_summary",
-                     str({**UNREAD, "unread_items": [
-                         {"id": 7, "type": "announcement", "title": "国庆维护公告",
-                          "link": "/article/3", "createdAt": "2026-09-22 10:00:00"},
-                         {"id": 6, "title": "你的留言已通过审核", "isRead": False}]}))
-      == "未读: 通知 3 条 / 私信 1 条（合计 4） — 未读通知: notifId:7《国庆维护公告》"
-         "/notifId:6《你的留言已通过审核》",
-      receipt_digest("get_unread_summary",
-                     str({**UNREAD, "unread_items": [
-                         {"id": 7, "title": "国庆维护公告"},
-                         {"id": 6, "title": "你的留言已通过审核"}]})))
-check("未读条目缺 id → 不编 id（只给标题）",
-      receipt_digest("get_unread_summary",
-                     str({**UNREAD, "unread_items": [{"title": "国庆维护公告"}]}))
-      == "未读: 通知 3 条 / 私信 1 条（合计 4） — 未读通知: 《国庆维护公告》",
-      receipt_digest("get_unread_summary",
-                     str({**UNREAD, "unread_items": [{"title": "国庆维护公告"}]})))
-check("条目读失败（空条目 + 说明字段）→ 退化成计数版，不编条目",
-      receipt_digest("get_unread_summary",
-                     str({**UNREAD, "unread_items": [],
-                          "unread_items_note": "未读条目的内容这次没读到（只有计数是可信的）"}))
-      == "未读: 通知 3 条 / 私信 1 条（合计 4）",
-      receipt_digest("get_unread_summary", str({**UNREAD, "unread_items": []})))
-check("未读摘要 ≤150 字（Rust detail 列宽的一半留给动作行）",
-      len(receipt_digest("get_unread_summary",
-                         str({**UNREAD, "unread_items": [
-                             {"id": i, "title": "国庆维护公告与站点维护安排的详细说明" * 2}
-                             for i in range(1, 11)]}))) <= 150,
-      str(len(receipt_digest("get_unread_summary",
-                             str({**UNREAD, "unread_items": [
-                                 {"id": i, "title": "国庆维护公告与站点维护安排的详细说明" * 2}
-                                 for i in range(1, 11)]})))))
-
-# 缺字段/形态不符一律空串——**不写 0**（"0 条未读"是结论，"没读到字段"不是）
-check("未读汇总缺字段 → 空摘要（不写 0）",
-      receipt_digest("get_unread_summary", str({"notifications": 3})) == "")
-check("未读汇总字段是字符串 → 空摘要（不 int() 硬转）",
-      receipt_digest("get_unread_summary", str({"notifications": "3", "messages": 0, "total": 3})) == "")
-check("空列表 → 空摘要（退化为改动前行为）",
-      receipt_digest("list_my_favorites", "[]") == ""
-      and receipt_digest("list_notifications", str({"unread": 0, "items": []})) == "")
-check("读不到（UPSTREAM_DOWN 文本）→ 空摘要",
-      receipt_digest("list_my_favorites", "UPSTREAM_DOWN") == ""
-      and receipt_digest("list_notifications", "未登录：读不到你自己的数据") == "")
-check("通知摘要 ≤150 字（Rust detail 列 varchar(300) 的一半留给动作行）",
-      len(receipt_digest("list_notifications",
-                         str({"unread": 0, "items": [
-                             {"id": i, "title": "很长很长的一条通知标题用来把摘要撑爆" * 2,
-                              "isRead": True} for i in range(8)]}))) <= 150)
-
-
-# ══════════════════════════════════════════════════════════════════
-print("\n④ 写侧：写前先读（读不到就不写）＋ 写后复核（读不回就不确认）")
-
-WRITE_TOOLS = ["add_favorite", "remove_favorite", "read_notifications",
-               "read_messages"]
 
 
 def _data(x):
@@ -554,344 +135,13 @@ def _writes(c):
     return [(m, u, p) for m, u, _h, p in c.calls if m != "GET"]
 
 
-FAV12 = {"noteId": 12, "title": "留言板怎么用", "status": "published",
-         "createdAt": "2026-09-20 11:02:00"}
-
-try:
-    # ── add_favorite：成功路径 ────────────────────────────────────
-    base._client = _SeqClient(_data([FAVS[1]]), _data({"ok": True}),
-                              _data([FAVS[1], FAV12]))
-    c = base._client
-    out = base.add_favorite.invoke({"article_id": 12}, config=cfg(7))
-    check("收藏成功 → ok，回执写明文章 id 与标题",
-          out.kind == "ok" and "已收藏文章 12《留言板怎么用》" in out, f"{out.kind}: {out}")
-    check("回执带上收藏夹条数（读得出来才写，读不出不写 0）",
-          "你的收藏夹现在有 2 篇" in out, str(out))
-    check("顺序 = 写前读 → 写 → 写后再读（三次请求）",
-          [m for m, _u, _h, _p in c.calls] == ["GET", "POST", "GET"],
-          str([m for m, _u, _h, _p in c.calls]))
-    check("写请求体是 {'noteId': 12}（Rust 侧字段名，不是 article_id）",
-          _writes(c) == [("POST", base.ADMIN_BASE + "/api/protected/favorites", {"noteId": 12})],
-          str(_writes(c)))
-    check("三次请求都带同一把局部 JWT（写前读与写同一身份）",
-          len({h.get("Authorization") for _m, _u, h, _p in c.calls}) == 1, str(c.calls[0][2]))
-
-    # ── add_favorite：幂等（写前读的副产品）────────────────────────
-    base._client = _SeqClient(_data([FAV12]))
-    c = base._client
-    out = base.add_favorite.invoke({"article_id": 12}, config=cfg(7))
-    check("已收藏过 → 如实说本来就有，**零写请求**",
-          out.kind == "ok" and "本来就在你的收藏夹里" in out and _writes(c) == [],
-          f"{out.kind}: {out} / {_writes(c)}")
-    check("幂等分支带回执标记 noop（跨轮执行记忆据此区分「改过」与「本来如此」）",
-          out.meta.get("noop") is True and out.meta.get("change") == "本来已收藏", str(out.meta))
-
-    # ── add_favorite：fail-closed 三条 ────────────────────────────
-    base._client = _SeqClient(_err(500))
-    c = base._client
-    out = base.add_favorite.invoke({"article_id": 12}, config=cfg(7))
-    check("写前读失败 → unavailable 且零写请求（读不到就不写）",
-          out.kind == "unavailable" and _writes(c) == [], f"{out.kind}: {out}")
-    check("写前读失败的措辞说了『未改动』", "未改动" in str(out), str(out))
-
-    base._client = _SeqClient(_data({"ok": True}))
-    c = base._client
-    out = base.add_favorite.invoke({"article_id": 0}, config=cfg(7))
-    check("文章 id 不合法（0）→ unavailable 且**一个请求都不发**",
-          out.kind == "unavailable" and c.calls == [], f"{out.kind}: {out} / {c.calls}")
-
-    base._client = _SeqClient(_data([FAVS[1]]), _data({"ok": True}), _data([FAVS[1]]))
-    c = base._client
-    out = base.add_favorite.invoke({"article_id": 12}, config=cfg(7))
-    check("写后复核：读回来还是没有这一篇 → unavailable（不拿接口的成功文案当事实）",
-          out.kind == "unavailable" and "未确认生效" in str(out), f"{out.kind}: {out}")
-    check("写后复核失败的措辞明确写了『不要声称已收藏』", "不要声称已收藏" in str(out), str(out))
-
-    base._client = _SeqClient(_data([FAVS[1]]), _data({"ok": True}), _err(500))
-    out = base.add_favorite.invoke({"article_id": 12}, config=cfg(7))
-    check("写已发出但复核读失败 → 措辞是『已发出 + 未确认生效』（不是读侧那句原话）",
-          out.kind == "unavailable" and "收藏请求已发出" in str(out)
-          and "不要声称已收藏" in str(out), f"{out.kind}: {out}")
-
-    # ── remove_favorite ──────────────────────────────────────────
-    base._client = _SeqClient(_data([FAVS[1], FAV12]), _data({"ok": True}), _data([FAVS[1]]))
-    c = base._client
-    out = base.remove_favorite.invoke({"article_id": 12}, config=cfg(7))
-    check("取消收藏成功 → DELETE 到 /favorites/<id>（payload 为 None，端点从路径取参）",
-          _writes(c) == [("DELETE", base.ADMIN_BASE + "/api/protected/favorites/12", None)],
-          str(_writes(c)))
-    check("取消收藏成功回执写明标题（取的是写前那一行——写后就没了）",
-          out.kind == "ok" and "已取消收藏文章 12《留言板怎么用》" in out, f"{out.kind}: {out}")
-
-    base._client = _SeqClient(_data([FAVS[1]]))
-    c = base._client
-    out = base.remove_favorite.invoke({"article_id": 12}, config=cfg(7))
-    check("本来就没收藏 → 如实说，**零写请求**（同一个按钮点两次不该报错）",
-          out.kind == "ok" and "本来就不在你的收藏夹里" in out and _writes(c) == [],
-          f"{out.kind}: {out} / {_writes(c)}")
-
-    base._client = _SeqClient(_data([FAVS[1], FAV12]), _data({"ok": True}),
-                              _data([FAVS[1], FAV12]))
-    out = base.remove_favorite.invoke({"article_id": 12}, config=cfg(7))
-    check("写后复核：读回来还在 → unavailable 且写明『不要声称已取消』",
-          out.kind == "unavailable" and "不要声称已取消" in str(out), f"{out.kind}: {out}")
-
-    # ── read_notifications：范围判据（没范围就零工具）──────────────
-    base._client = _SeqClient(_data(NOTICES))
-    c = base._client
-    out = base.read_notifications.invoke({}, config=cfg(7))
-    check("既没给 id 也没说『全部』→ unavailable 且零请求（不猜范围）",
-          out.kind == "unavailable" and c.calls == [], f"{out.kind}: {out} / {c.calls}")
-    base._client = _SeqClient(_data(NOTICES))
-    c = base._client
-    out = base.read_notifications.invoke({"all": False}, config=cfg(7))
-    check("all=False 不等于『全部』→ 同样零请求（不默认 True）",
-          out.kind == "unavailable" and c.calls == [], f"{out.kind}: {out} / {c.calls}")
-
-    # ── read_notifications：幂等两态 ──────────────────────────────
-    base._client = _SeqClient(_data(NOTICES))
-    c = base._client
-    out = base.read_notifications.invoke({"ids": [5]}, config=cfg(7))
-    check("点名的 id 本来就是已读 → 零写请求、如实说本来就读过",
-          out.kind == "ok" and "本来就是已读" in out and _writes(c) == [],
-          f"{out.kind}: {out} / {_writes(c)}")
-    base._client = _SeqClient(_data({"unread": 0, "items": [NOTICES["items"][2]]}))
-    c = base._client
-    out = base.read_notifications.invoke({"all": True}, config=cfg(7))
-    check("全部已读 → 零写请求、如实说本来就没有未读",
-          out.kind == "ok" and "本来就没有未读的" in out and _writes(c) == [],
-          f"{out.kind}: {out} / {_writes(c)}")
-
-    # ── read_notifications：点名的 id 不在自己列表里（20260923 三轮）────
-    # 生产事故（trace `20260923T130033_9`）：planner 把摘要里的**条数**「3」当 id
-    # 填进 `ids:[3]`（真实那条是 23）⇒ 服务端按 3 匹配 0 行 ⇒ 写后复核报
-    # "未确认生效"，过程行还显示成「服务不可用」。现在**写之前**就判：读到的列表里
-    # 没有这几个编号 ⇒ 一个字节都不发 + kind=not_found（与"服务挂了"分开）。
-    base._client = _SeqClient(_data(NOTICES))
-    c = base._client
-    out = base.read_notifications.invoke({"ids": [3]}, config=cfg(7))
-    check("点名的 id 不在读到的列表里 → kind=not_found 且**零写请求**（不是服务故障）",
-          out.kind == "not_found" and _writes(c) == [], f"{out.kind}: {out} / {_writes(c)}")
-    check("措辞点名了那个 id、写明一个字节没改、并把列表上限如实交代（不谎称站内没有）",
-          "通知 3 不在" in str(out) and "一个字节都没改" in str(out)
-          and "100" in str(out) and "未确认生效" not in str(out), str(out))
-
-    base._client = _SeqClient(_data(NOTICES))
-    c = base._client
-    out = base.read_notifications.invoke({"ids": [7, 8]}, config=cfg(7))
-    check("混着来（7 在列表里、8 不在）→ 同样**整批零写**（绝不部分改）",
-          out.kind == "not_found" and _writes(c) == [], f"{out.kind}: {out} / {_writes(c)}")
-    check("混着来的措辞也给另一条出口（「全部标记已读」由系统按未读的来标）",
-          "全部标记已读" in str(out), str(out))
-
-    base._client = _SeqClient(_data(NOTICES), _data(UNREAD), _data({"ok": True}),
-                              _data({"notifications": 0, "messages": 1, "total": 1}))
-    c = base._client
-    out = base.read_notifications.invoke({"all": True}, config=cfg(7))
-    check("「全部」路径不受新判据影响（它不点名 id，直接按读到的未读来标）",
-          out.kind == "ok" and _writes(c) and _writes(c)[0][2] == {"ids": [], "all": True},
-          f"{out.kind}: {out} / {_writes(c)}")
-
-    # ── read_notifications：成功路径（复核判据 = 未读数真的下降）───
-    base._client = _SeqClient(_data(NOTICES), _data(UNREAD), _data({"ok": True}),
-                              _data({"notifications": 0, "messages": 1, "total": 1}))
-    c = base._client
-    out = base.read_notifications.invoke({"all": True}, config=cfg(7))
-    check("全部标记已读 → POST payload {'ids': [], 'all': True}",
-          _writes(c) == [("POST", base.ADMIN_BASE + "/api/protected/notifications/read",
-                          {"ids": [], "all": True})], str(_writes(c)))
-    check("成功回执报的是**减少的条数**（3→0）与剩余未读",
-          out.kind == "ok" and "已把 3 条通知标记为已读" in out
-          and "现在未读：通知 0 条 / 私信 1" in out, f"{out.kind}: {out}")
-    check("顺序 = 写前读列表 → 写前读汇总 → 写 → 写后读汇总（四次，复核是独立读数）",
-          [m for m, _u, _h, _p in c.calls] == ["GET", "GET", "POST", "GET"],
-          str([m for m, _u, _h, _p in c.calls]))
-
-    base._client = _SeqClient(_data(NOTICES), _data(UNREAD), _data({"ok": True}),
-                              _data({"notifications": 1, "messages": 1, "total": 2}))
-    c = base._client
-    out = base.read_notifications.invoke({"ids": [7, 6, 7]}, config=cfg(7))
-    check("点名 id 路径 → payload 用 sorted 去重后的 id（'all': False）",
-          _writes(c)[0][2] == {"ids": [6, 7], "all": False}, str(_writes(c)))
-    check("复核只认服务端重数出来的未读数：2→1 也在降，报 2 条",
-          out.kind == "ok" and "已把 2 条通知标记为已读" in out, f"{out.kind}: {out}")
-
-    base._client = _SeqClient(_data(NOTICES), _data(UNREAD), _data({"ok": True}),
-                              _data({"notifications": 3, "messages": 1, "total": 4}))
-    out = base.read_notifications.invoke({"all": True}, config=cfg(7))
-    check("复核判据 = 未读数**真的下降**：没降 → unavailable（接口说成功也不算数）",
-          out.kind == "unavailable" and "未确认生效" in str(out), f"{out.kind}: {out}")
-    check("未下降的措辞明确写了『不要声称已标记』", "不要声称已标记" in str(out), str(out))
-
-    base._client = _SeqClient(_data(NOTICES), _err(500))
-    c = base._client
-    out = base.read_notifications.invoke({"all": True}, config=cfg(7))
-    check("写前读汇总失败 → 零写请求（拿不到基准数就不写）",
-          out.kind == "unavailable" and _writes(c) == [], f"{out.kind}: {out} / {_writes(c)}")
-
-    base._client = _SeqClient(_data(NOTICES), _data({"unread": "3"}), _data({"ok": True}))
-    c = base._client
-    out = base.read_notifications.invoke({"all": True}, config=cfg(7))
-    check("基准数不是 int（形态不符）→ 零写请求（不 int() 硬转）",
-          out.kind == "unavailable" and _writes(c) == [], f"{out.kind}: {out} / {_writes(c)}")
-
-    base._client = _SeqClient(_data(NOTICES), _data(UNREAD), _data({"ok": True}), _err(500))
-    out = base.read_notifications.invoke({"all": True}, config=cfg(7))
-    check("写已发出但复核读失败 → 措辞是『已发出 + 未确认生效』",
-          out.kind == "unavailable" and "标记已读请求已发出" in str(out)
-          and "不要声称已标记" in str(out), f"{out.kind}: {out}")
-
-    # ── read_messages（20260923 批 8）：与 read_notifications 同一形状，
-    #    但物件是**收到**的信——发件箱里的 id 不能标、别人读没读也不归他管。──
-    MB_AFTER = {"unread": 1, "inbox": [MAILBOX["inbox"][0],
-                                       {**MAILBOX["inbox"][1], "isRead": True},
-                                       MAILBOX["inbox"][2]],
-                "outbox": MAILBOX["outbox"]}
-    MB_ALL_READ = {"unread": 0,
-                   "inbox": [{**r, "isRead": True} for r in MAILBOX["inbox"]],
-                   "outbox": MAILBOX["outbox"]}
-
-    base._client = _SeqClient(_data(MAILBOX))
-    c = base._client
-    out = base.read_messages.invoke({}, config=cfg(7))
-    check("既没给 id 也没说『全部』→ unavailable 且零请求（同一句命令的双胞胎工具也不猜）",
-          out.kind == "unavailable" and c.calls == [], f"{out.kind}: {out} / {c.calls}")
-    base._client = _SeqClient(_data(MAILBOX))
-    c = base._client
-    out = base.read_messages.invoke({"all": False}, config=cfg(7))
-    check("all=False 不等于『全部』→ 同样零请求",
-          out.kind == "unavailable" and c.calls == [], f"{out.kind}: {out} / {c.calls}")
-
-    base._client = _SeqClient(_data(MAILBOX))
-    c = base._client
-    out = base.read_messages.invoke({"ids": [8]}, config=cfg(7))
-    check("点名的信本来就是已读 → 零写请求、如实说本来就读过",
-          out.kind == "ok" and "本来就是已读" in out and _writes(c) == [],
-          f"{out.kind}: {out} / {_writes(c)}")
-    base._client = _SeqClient(_data(MB_ALL_READ))
-    c = base._client
-    out = base.read_messages.invoke({"all": True}, config=cfg(7))
-    check("全部已读 → 零写请求、如实说本来就没有未读的信",
-          out.kind == "ok" and "本来就没有未读的信" in out and _writes(c) == [],
-          f"{out.kind}: {out} / {_writes(c)}")
-
-    # 发件箱里的 id（10 是"我发出去的那封"）同样不在收件箱里 ⇒ 一个字节都不发。
-    # 这条是这族工具的**独有**风险：通知只有一个列表，信有两个（收/发），
-    # 拿发件箱的 id 去标已读是"改别人的东西"的错觉。
-    base._client = _SeqClient(_data(MAILBOX))
-    c = base._client
-    out = base.read_messages.invoke({"ids": [10]}, config=cfg(7))
-    check("点的是**发件箱**里的信（我发出去的）→ kind=not_found 且零写请求",
-          out.kind == "not_found" and _writes(c) == [], f"{out.kind}: {out} / {_writes(c)}")
-    check("措辞把出口写清楚（先说读一遍信箱拿 id），且不谎称站内没有这封信",
-          "不在我读到的收件箱" in str(out) and "一个字节都没改" in str(out)
-          and "未确认生效" not in str(out), str(out))
-
-    base._client = _SeqClient(_data(MAILBOX))
-    c = base._client
-    out = base.read_messages.invoke({"ids": [11, 99]}, config=cfg(7))
-    check("混着来（11 在、99 不在）→ **整批零写**（绝不部分改）",
-          out.kind == "not_found" and _writes(c) == [], f"{out.kind}: {out} / {_writes(c)}")
-
-    # 成功路径：写前读 → 写 → 写后再读（三次，复核是独立读数）
-    base._client = _SeqClient(_data(MAILBOX), _data({"ok": True}), _data(MB_ALL_READ))
-    c = base._client
-    out = base.read_messages.invoke({"all": True}, config=cfg(7))
-    check("全部标记已读 → POST {'ids': [], 'all': True} 到 /messages/read",
-          _writes(c) == [("POST", base.ADMIN_BASE + "/api/protected/messages/read",
-                          {"ids": [], "all": True})], str(_writes(c)))
-    check("顺序 = 写前读信箱 → 写 → 写后再读信箱（三次）",
-          [m for m, _u, _h, _p in c.calls] == ["GET", "POST", "GET"],
-          str([m for m, _u, _h, _p in c.calls]))
-    check("成功回执报的是**减少的封数**（2→0）与收件箱剩余未读",
-          out.kind == "ok" and "已把 2 封信标记为已读" in out
-          and "收件箱现在未读 0 封" in out, f"{out.kind}: {out}")
-    check("回执 meta 是 message_read（与通知那族的 op 分开——跨轮记忆按 op 区分）",
-          out.meta.get("op") == "message_read", str(out.meta))
-
-    base._client = _SeqClient(_data(MAILBOX), _data({"ok": True}), _data(MB_AFTER))
-    c = base._client
-    out = base.read_messages.invoke({"ids": [9, 9]}, config=cfg(7))
-    check("点名路径 → payload 用 sorted 去重后的 id（'all': False）",
-          _writes(c)[0][2] == {"ids": [9], "all": False}, str(_writes(c)))
-    check("复核只认服务端重数出来的未读封数（2→1 也在降）",
-          out.kind == "ok" and "已把 1 封信标记为已读" in out, f"{out.kind}: {out}")
-
-    # 「报的是服务端重数出来的数」与「报的是我点了几封」在数字上通常是同一个，
-    # 这里造一个**能让两者分开**的夹具：收件箱列表被截到只剩 2 封未读可见（最多
-    # 100 封），而服务端报的未读是 5 —— 复核读回来 4 ⇒ 净降 1，如实报 1（不是 2）。
-    # 宁可报小：跨轮执行记忆里"标了 2 封"而实际只降了 1 是虚报。
-    MB_TRUNC = {"unread": 5, "inbox": MAILBOX["inbox"][:2], "outbox": MAILBOX["outbox"]}
-    MB_TRUNC_AFTER = {"unread": 4,
-                      "inbox": [{**r, "isRead": True} for r in MAILBOX["inbox"][:2]],
-                      "outbox": MAILBOX["outbox"]}
-    base._client = _SeqClient(_data(MB_TRUNC), _data({"ok": True}), _data(MB_TRUNC_AFTER))
-    out = base.read_messages.invoke({"all": True}, config=cfg(7))
-    check("报的封数 = 服务端两次读数之差（不是「我点了几封」）",
-          out.kind == "ok" and "已把 1 封信标记为已读" in out, f"{out.kind}: {out}")
-
-    # 复核判据是**两条**：封数真降 + 点名的每一封都确实已读。只看"降了"会在
-    # "标错了一封、又漏了一封"的巧合下判成功（净变化相同）。
-    base._client = _SeqClient(_data(MAILBOX), _data({"ok": True}), _data(MB_AFTER))
-    out = base.read_messages.invoke({"all": True}, config=cfg(7))
-    check("封数降了但有一封仍不是已读 → unavailable（净变化相同也能抓出来）",
-          out.kind == "unavailable" and "还不是已读" in str(out), f"{out.kind}: {out}")
-    check("未确认生效的措辞明确写了『不要声称已标记』", "不要声称已标记" in str(out), str(out))
-
-    base._client = _SeqClient(_data(MAILBOX), _data({"ok": True}),
-                              _data({"unread": 2, "inbox": [{**r, "isRead": False}
-                                                            for r in MAILBOX["inbox"]],
-                                     "outbox": MAILBOX["outbox"]}))
-    out = base.read_messages.invoke({"all": True}, config=cfg(7))
-    check("未读封数**没降** → unavailable（接口说成功也不算数）",
-          out.kind == "unavailable" and "未确认生效" in str(out), f"{out.kind}: {out}")
-
-    base._client = _SeqClient(_err(500))
-    c = base._client
-    out = base.read_messages.invoke({"all": True}, config=cfg(7))
-    check("写前读失败 → 零写请求（读不到就不写）",
-          out.kind == "unavailable" and _writes(c) == [] and "未改动" in str(out),
-          f"{out.kind}: {out} / {_writes(c)}")
-
-    base._client = _SeqClient(_data({"unread": "2", "inbox": [MAILBOX["inbox"][0]],
-                                     "outbox": []}))
-    c = base._client
-    out = base.read_messages.invoke({"all": True}, config=cfg(7))
-    check("未读封数形态不符（字符串）→ 零写请求（不 int() 硬转）",
-          out.kind == "unavailable" and _writes(c) == [], f"{out.kind}: {out} / {_writes(c)}")
-
-    base._client = _SeqClient(_data(MAILBOX), _data({"ok": True}), _err(500))
-    out = base.read_messages.invoke({"all": True}, config=cfg(7))
-    check("写已发出但复核读失败 → 措辞是『已发出 + 未确认生效』",
-          out.kind == "unavailable" and "标记已读请求已发出" in str(out)
-          and "不要声称已标记" in str(out), f"{out.kind}: {out}")
-
-    # ── 未登录：写侧比读侧更严（一个字节都不发）───────────────────
-    for name, args in (("add_favorite", {"article_id": 12}),
-                       ("remove_favorite", {"article_id": 12}),
-                       ("read_notifications", {"all": True}),
-                       ("read_messages", {"all": True})):
-        base._client = _SeqClient(_data([]))
-        c = base._client
-        out = getattr(base, name).invoke(args, config=cfg(0))
-        check(f"{name} 未登录 → unavailable 且**零请求**（写最不该在没身份时猜）",
-              out.kind == "unavailable" and c.calls == [], f"{out.kind}: {out} / {c.calls}")
-        check(f"{name} 未登录的措辞说了『未改动』且不提『管理员』",
-              "未改动" in str(out) and "管理员" not in str(out), str(out))
-finally:
-    base._client = real_client
-
-
-# ══════════════════════════════════════════════════════════════════
-print("\n⑤ 写技能展开：范围缺失就零工具（不是零参数硬跑）")
-
 from agent.workflow_defs import (  # noqa: E402
-    WORKFLOW_MAP,
-    WRITE_WORKFLOW_NAMES,
     _FREE_TEXT_WRITE_WORKFLOWS,
     _LEDGER_TARGET_WRITE_WORKFLOWS,
     _OWN_WRITE_WORKFLOWS,
     _WRITE_NAME_TARGET_WORKFLOWS,
+    WORKFLOW_MAP,
+    WRITE_WORKFLOW_NAMES,
 )
 from agent.workflow_plan import instantiate_plan  # noqa: E402
 
@@ -906,343 +156,985 @@ def _args(spec):
     return tool, json.loads(rest.rstrip(")"))
 
 
-p = _plan("favorite_add", {"article_id": 12})
-check("favorite_add 展开成一条 add_favorite（参数是确切 id，不是 null）",
-      len(p["tools"]) == 1 and _args(p["tools"][0]) == ("add_favorite", {"article_id": 12}),
-      str(p["tools"]))
-p = _plan("favorite_add", {"article_id": "$tool[0].noteId"})
-check("favorite_add 认引用语法（$tool[…] 不被当成 PARAMS 里的键、原样落进参数）",
-      p["tools"] and _args(p["tools"][0])[1] == {"article_id": "$tool[0].noteId"},
-      str(p["tools"]))
-p = _plan("favorite_add", {})
-check("favorite_add 缺 article_id → 零工具 + 注记（不猜一篇文章去收藏）",
-      p["tools"] == [] and p["note"], f"{p['tools']} / {p['note']}")
-
-p = _plan("favorite_remove", {"article_id": 12})
-check("favorite_remove 展开成一条 remove_favorite",
-      len(p["tools"]) == 1 and _args(p["tools"][0])[0] == "remove_favorite", str(p["tools"]))
-
-p = _plan("notice_read", {"all": True})
-check("notice_read all=True → 一条 read_notifications({'all': True})",
-      len(p["tools"]) == 1 and _args(p["tools"][0]) == ("read_notifications", {"all": True}),
-      str(p["tools"]))
-p = _plan("notice_read", {"ids": [7, 8]})
-check("notice_read ids → 一条 read_notifications({'ids': [7, 8]})",
-      p["tools"] and _args(p["tools"][0])[1] == {"ids": [7, 8]}, str(p["tools"]))
-p = _plan("notice_read", {})
-check("notice_read 既没 id 也没 all → **零工具**（最危险的一份「全部标记已读」绝不擅自展开）",
-      p["tools"] == [] and p["note"], f"{p['tools']} / {p['note']}")
-p = _plan("notice_read", {"all": True, "ids": [7]})
-check("notice_read all 与 ids 同时给 → 零工具 + 追问（两者语义冲突，不替用户选）",
-      p["tools"] == [] and p["note"], f"{p['tools']} / {p['note']}")
-p = _plan("notice_read", {"all": "True"})
-check("notice_read all 是字符串 'True'（planner 常见形态）也认",
-      p["tools"] and _args(p["tools"][0]) == ("read_notifications", {"all": True}),
-      str(p["tools"]))
-p = _plan("notice_read", {"all": "maybe"})
-check("notice_read all 认不出来（'maybe'）→ 零工具（不默认 True）",
-      p["tools"] == [] and p["note"], f"{p['tools']} / {p['note']}")
-
-# notice_read 的双胞胎（20260923 批 8）：同一形状、另一个物件。这一组刻意**逐条
-# 对称**——两个技能共用 `_expand_own_workflow` 的同一个分支，哪一条不对称就说明
-# 有一边漏改了（例如"缺范围就零工具"只在通知那半保留着）。
-p = _plan("message_read", {"all": True})
-check("message_read all=True → 一条 read_messages({'all': True})",
-      len(p["tools"]) == 1 and _args(p["tools"][0]) == ("read_messages", {"all": True}),
-      str(p["tools"]))
-p = _plan("message_read", {"ids": [11, 9]})
-check("message_read ids → 一条 read_messages({'ids': [11, 9]})",
-      p["tools"] and _args(p["tools"][0])[1] == {"ids": [11, 9]}, str(p["tools"]))
-p = _plan("message_read", {})
-check("message_read 既没 id 也没 all → **零工具**（把全部未读一次清掉是不可逆的）",
-      p["tools"] == [] and p["note"], f"{p['tools']} / {p['note']}")
-p = _plan("message_read", {"all": True, "ids": [11]})
-check("message_read all 与 ids 同时给 → 零工具 + 追问",
-      p["tools"] == [] and p["note"], f"{p['tools']} / {p['note']}")
-p = _plan("message_read", {"all": "True"})
-check("message_read all 是字符串 'True' 也认",
-      p["tools"] and _args(p["tools"][0]) == ("read_messages", {"all": True}),
-      str(p["tools"]))
-p = _plan("message_read", {})
-check("message_read 的注记指向 list_my_messages（要 id 就先读信箱，不是读通知）",
-      "list_my_messages" in p["note"] and "list_notifications" not in p["note"],
-      p["note"])
-p = _plan("message_read", {"all": True})
-check("message_read 的注记说的是**信**、不是通知（两个 id 空间不许混）",
-      "信" in p["note"] and "通知" not in p["note"], p["note"])
-
-check("own 写技能都落在 _OWN_WRITE_WORKFLOWS 里（不是靠减法落到名字通道）",
-      _OWN_WRITE_WORKFLOWS == {"favorite_add", "favorite_remove", "notice_read",
-                            "message_read"},
-      str(sorted(_OWN_WRITE_WORKFLOWS)))
-check("own 写技能与名字通道不重叠（两套展开器的判据互斥）",
-      not (_OWN_WRITE_WORKFLOWS & _WRITE_NAME_TARGET_WORKFLOWS))
-# 20260929 批 H · S2 起是**五者**：多一条 `_LEDGER_TARGET_WRITE_WORKFLOWS`（目标是台账
-# 编号的那一族）。这张分类表的用途是"每条写技能都有人管"——漏一个就落进尾部兜底、
-# 零工具零写还不报错，所以它必须随名单生长一起长。
-_BUCKETS = (_WRITE_NAME_TARGET_WORKFLOWS | _OWN_WRITE_WORKFLOWS | _FREE_TEXT_WRITE_WORKFLOWS
-            | _LEDGER_TARGET_WRITE_WORKFLOWS
-            | {"article_status", "article_tags"})
-check("注册表里每个写技能都落进五者之一（名字通道 / 台账编号 / own 通道 / 自由文本 / 文章两件）",
-      WRITE_WORKFLOW_NAMES <= _BUCKETS,
-      str(sorted(WRITE_WORKFLOW_NAMES - _BUCKETS)))
-check("  且台账编号通道与名字通道**不重叠**（一件工具被两套目标判据同时管 = 判据分裂）",
-      not (_LEDGER_TARGET_WRITE_WORKFLOWS & _WRITE_NAME_TARGET_WORKFLOWS),
-      str(sorted(_LEDGER_TARGET_WRITE_WORKFLOWS & _WRITE_NAME_TARGET_WORKFLOWS)))
-for n in sorted(_OWN_WRITE_WORKFLOWS):
-    sk = WORKFLOW_MAP.get(n)
-    check(f"own 写技能 {n} 不设 roles（三档角色都看得见：动的是他自己的数据）",
-          sk is not None and not sk.roles, str(sk and sk.roles))
-
-
-# ══════════════════════════════════════════════════════════════════
-print("\n⑥ 接线在位（改坏了这几处，上面的功能静默失效）")
-
-
 def _src(p):
     return (ROOT / p).read_text(encoding="utf-8")
 
 
-# 父仓那一半（`src/routes/chat.rs` 的 render_exec_row 同名臂）：措辞必须与
-# `server.py::_tool_action_text` **逐字一致**（预告帧与落库回执行是同一件事的两处
-# 渲染，两处不一样会让主人以为发生了两件事）。agent 仓单独 checkout（CI）时读不到
-# 父仓 —— 那时**明说跳过**，不假装通过。
 sys.path.insert(0, str(ROOT / "tests"))
-import _parent_repo  # noqa: E402
+
+
 import _ctx_src  # noqa: E402  （模型可见正文的取值入口：`prose()`）
+import _parent_repo  # noqa: E402
 
-_rust = _parent_repo.read(
-    "src/routes/chat.rs",
-    why="这几条措辞（站内信/收藏的动作行）是 Rust 写时渲染定稿的 ⇒ 只改 Python 一侧，"
-        "线上台账里仍是旧措辞；下面的 `if _rust:` 读不到就整段不判")
-
-
+import agent.graph as _G  # noqa: E402
+from agent.action_text import tool_action_text as _act  # noqa: E402
 from agent.graph import _CONTENT_TOOLS  # noqa: E402
 from agent.workflow_tools import _CALLABLE_QUERY_TOOLS, _EXPLICIT_TOOLS  # noqa: E402
 from tools.base import _TOOL_REGISTRY  # noqa: E402
 
-_s = _src("agent/action_text.py")
-# 动作措辞 20260928 从 `server.py` 搬进 `agent/action_text.py`（唯一实现，见模块头注）；
-# 下面这几条从"扫源码里有没有那个字符串"改成**调一次看结果**——同样的判据，
-# 但改内部写法（换 if/elif、改分支顺序）不会再假红。
-from agent.action_text import tool_action_text as _act  # noqa: E402
-check("三个读工具都在注册表里",
-      all(n in {t.name for t in _TOOL_REGISTRY} for n in READ_TOOLS),
-      str(sorted(n for n in READ_TOOLS if n not in {t.name for t in _TOOL_REGISTRY})))
-check("scope 声明为 read.own（不是 admin.console——判据是『以谁的 uid 去读』）",
-      all(authz.required_scope(n) == authz.SCOPE_READ_OWN for n in READ_TOOLS),
-      str({n: authz.required_scope(n) for n in READ_TOOLS}))
-check("三档角色都授予 read.own（角色轴在这里没有信息量）",
-      all(authz.SCOPE_READ_OWN in authz._ROLE_SCOPES[r]
-          for r in (authz.ROLE_USER, authz.ROLE_ADMIN)))
-check("匿名（role=None）四处都拿不到：没有身份就没有这份数据",
-      all(not authz.check(Principal(uid=0, role=None), n).allowed for n in READ_TOOLS))
-check("读工具**不进** CONSENT_SCOPES（读自己的收藏不需要当轮命令）",
-      authz.SCOPE_READ_OWN not in authz.CONSENT_SCOPES)
-check("三个都在 planner 点名白名单（无参只读，走 PARAMS.tools）",
-      all(n in _EXPLICIT_TOOLS and n in _CALLABLE_QUERY_TOOLS for n in READ_TOOLS))
-check("三个都在 _CONTENT_TOOLS（否则『你还没有未读通知』这句站内结论没有帧）",
-      all(n in _CONTENT_TOOLS for n in READ_TOOLS))
-check("三个都有中文动作词（否则过程行显示『执行 list_notifications』）",
-      all(f'"{n}":' in _s for n in READ_TOOLS)
-      and all(_act(n, {}) != f"执行 {n}" for n in READ_TOOLS))
-check("工具描述里写了『自己』（措辞不许让 planner 读成『全站』）",
-      all("自己" in getattr(base, n).description for n in READ_TOOLS))
-# 菜单是白名单 × 注册表**生成**的（不手抄）：进了白名单就必然进菜单，且带着
-# 工具描述——少了这一条，planner 会看到菜单里没有这三项，于是拿检索去绕。
-import agent.graph as _G  # noqa: E402
-check("三个都在 planner 菜单里（带描述，`- name():` 形态）",
-      all(f"- {n}()：" in _G._tools_desc(None) for n in READ_TOOLS),
-      str([n for n in READ_TOOLS if f"- {n}()：" not in _G._tools_desc(None)]))
 
-# ── 写侧接线（20260923 批 7）────────────────────────────────────────
-check("三个写工具都在注册表里",
-      all(n in {t.name for t in _TOOL_REGISTRY} for n in WRITE_TOOLS),
-      str(sorted(n for n in WRITE_TOOLS if n not in {t.name for t in _TOOL_REGISTRY})))
-check("scope 声明为 write.own（与后台写的 write.console 是**两个** scope）",
-      all(authz.required_scope(n) == authz.SCOPE_WRITE_OWN for n in WRITE_TOOLS),
-      str({n: authz.required_scope(n) for n in WRITE_TOOLS}))
-check("两档角色都授予 write.own（代博主收藏是对自己的号写状态）",
-      all(authz.SCOPE_WRITE_OWN in authz._ROLE_SCOPES[r]
-          for r in (authz.ROLE_USER, authz.ROLE_ADMIN)))
-check("匿名（role=None）拿不到：没有身份就没有收藏夹",
-      all(not authz.check(Principal(uid=0, role=None), n).allowed for n in WRITE_TOOLS))
-check("写工具**不进** _HARD_SCOPES（不吃 shadow，与后台写刻意分开）",
-      authz.SCOPE_WRITE_OWN not in authz._HARD_SCOPES)
-check("写工具**进** CONSENT_SCOPES（写自己的东西也要当轮一条命令）",
-      authz.SCOPE_WRITE_OWN in authz.CONSENT_SCOPES
-      and all(authz.requires_consent(Principal(uid=7, role="user"), n) for n in WRITE_TOOLS))
-check("同意闸对同一句话给出**不同**工具各自的结论（判据按工具名，不是按 scope）",
-      authz.consent_granted(Principal(uid=7, role="user"), "add_favorite", "收藏这篇文章")
-      and not authz.consent_granted(Principal(uid=7, role="user"),
-                                    "read_notifications", "收藏这篇文章"))
-check("站内信**读**工具也进 planner 点名白名单（自指提问：我信箱里有什么）",
-      "list_my_messages" in _EXPLICIT_TOOLS and "list_my_messages" in _CALLABLE_QUERY_TOOLS
-      and "list_my_messages" in _G._tools_desc(None)
-      and "list_my_messages" in _CONTENT_TOOLS)
-check("站内信**写**工具（read_messages）**不在**任何 planner 白名单（写只走技能模板）",
-      "read_messages" not in _EXPLICIT_TOOLS and "read_messages" not in _CALLABLE_QUERY_TOOLS
-      and "read_messages" not in _G._tools_desc(None))
-check("read_messages 与 read_notifications 共用一个同意闸族（同一句命令的两种目标）",
-      authz.TOOL_SCOPE["read_messages"] == authz.TOOL_SCOPE["read_notifications"]
-      == authz.SCOPE_WRITE_OWN
-      and authz._OWN_TOOL_FAMILY["read_messages"] == authz._OWN_TOOL_FAMILY["read_notifications"],
-      f"{authz.TOOL_SCOPE['read_messages']} / {authz._OWN_TOOL_FAMILY.get('read_messages')}")
-check("站内信两件都有中文动作词分支（否则过程行显示『执行 read_messages』）",
-      _act("read_messages", {"all": "True"}) == "标记站内信已读（全部未读）"
-      and _act("list_my_messages", {}) == "查看站内信"
-      and '"list_my_messages": "查看站内信"' in _s)
-if _rust:
-    check("Rust 侧两个臂都在，且措辞与 agent 侧同源",
-          '"list_my_messages" => "查看站内信"' in _rust
-          and '"标记站内信已读（全部未读）"' in _rust,
-          "src/routes/chat.rs 缺臂")
-    check("Rust 侧通知/信两族的措辞**不同字**（同字=有一族被复制粘贴漏改）",
-          '"标记站内信已读（全部未读）"' in _rust
-          and '"标记站内通知已读（全部未读）"' in _rust)
-check("两件描述里都写了『自己』，且都点了『与河灯留言是两回事』",
-      all("自己" in getattr(base, n).description for n in
-          ("list_my_messages", "read_messages"))
-      and "河灯留言" in base.list_my_messages.description,
-      base.list_my_messages.description[:40])
+def test_userdata():
+    _saved_secret = _settings.jwt_secret
+    _settings.jwt_secret = "test-secret-for-userdata-tools-not-a-real-secret"
+    READ_TOOLS = ["list_my_favorites", "get_unread_summary", "list_notifications",
+                  "list_my_messages", "list_my_board"]
+    BOARD_MINE = [{"talkKey": 109, "talkTitle": "", "content": "今天的月亮很好看",
+                   "cat": "诉", "v": 3, "author": "Sora", "nickname": None,
+                   "avatar": None, "mine": True, "approved": 1, "rejectReason": None,
+                   "createTime": "2026-10-01 12:00:00", "updateTime": "2026-10-01 12:00:00"}]
+    FAVS = [{"noteId": 12, "title": "留言板怎么用", "status": "published",
+             "createdAt": "2026-09-20 11:02:00"},
+            {"noteId": 19, "title": "Saudade Blog AI Agent（泠月喵）架构文档",
+                "status": "published",
+             "createdAt": "2026-09-18 09:30:00"}]
+    UNREAD = {"notifications": 3, "messages": 1, "total": 4}
+    MAILBOX = {"unread": 2, "inbox": [
+        {"id": 11, "fromUserId": 3, "toUserId": 7, "peerName": "小猫咪",
+         "peerAvatar": None, "title": "河灯集那篇", "content": "第三段的说法想跟你确认一下",
+         "isRead": False, "createdAt": "2026-09-22 21:00:00"},
+        {"id": 9, "fromUserId": 4, "toUserId": 7, "peerName": "阿岚", "peerAvatar": None,
+         "title": None, "content": "上次那个 ESP32 的问题解决了",
+         "isRead": False, "createdAt": "2026-09-21 10:00:00"},
+        {"id": 8, "fromUserId": 5, "toUserId": 7, "peerName": "路人甲", "peerAvatar": None,
+         "title": "问好", "content": "你好呀", "isRead": True,
+         "createdAt": "2026-09-01 08:00:00"},
+    ], "outbox": [
+        {"id": 10, "fromUserId": 7, "toUserId": 3, "peerName": "小猫咪",
+         "peerAvatar": None, "title": "回你", "content": "好，我看下", "isRead": True,
+         "createdAt": "2026-09-22 22:00:00"},
+    ]}
+    NOTICES = {"unread": 2, "items": [
+        {"id": 7, "type": "announcement", "title": "国庆维护公告", "content": "10 月 1 日凌晨维护",
+         "link": "/article/3", "isRead": False, "createdAt": "2026-09-22 10:00:00"},
+        {"id": 6, "type": "notice", "title": "你的留言已通过审核", "content": "理由：无",
+         "link": "/guestbook?lid=88", "isRead": False, "createdAt": "2026-09-21 21:40:00"},
+        {"id": 5, "type": "notice", "title": "欢迎来到 Saudade", "content": "随便逛逛",
+         "link": None, "isRead": True, "createdAt": "2026-09-01 08:00:00"},
+    ]}
+    print("\n① _own_get：请求形状与失败取向（假 httpx 客户端，只桩边界）")
+    real_client = base._client
+    try:
+        c = _Client(_Resp(200, {"code": 200, "data": FAVS}))
+        base._client = c
+        out = base._own_get("/api/protected/favorites", cfg(7))
+        check("正常路径 → 返回 data 字段", out == FAVS, str(out)[:40])
+        url, hdrs = c.calls[0]
+        check("打的是本机回环后台地址（/api/protected 前缀）",
+              url.startswith(base.ADMIN_BASE + "/api/protected/"), url)
+        tok = hdrs.get("Authorization", "")
+        check("带 Bearer 局部 JWT（两段点 = 三段式）",
+              tok.startswith("Bearer ") and tok.count(".") == 2)
+        seg = tok.split(".")[1]
+        payload = json.loads(base64.urlsafe_b64decode(seg + "=" * (-len(seg) % 4)))
+        check("JWT sub = 本轮发起人 uid（自己读自己，服务端再按 uid 过滤）",
+              payload.get("sub") == 7, str(payload))
+        check("JWT 有效期 60 秒（当场用掉，不持有）", 50 <= payload["exp"] - time.time() <= 60)
+        check("JWT 不带 aud（Rust verify_token 用 Validation::default）",
+              "aud" not in payload, str(list(payload)))
 
-check("写工具都不在 planner 点名白名单（写只能由技能模板展开）",
-      all(n not in _EXPLICIT_TOOLS and n not in _CALLABLE_QUERY_TOOLS
-          and n not in _G._tools_desc(None) for n in WRITE_TOOLS))
-check("三个写工具都有中文动作词分支（否则过程行显示『执行 add_favorite』）",
-      _act("add_favorite", {"article_id": "12"}) == "收藏文章 12"
-      and _act("remove_favorite", {"article_id": "12"}) == "取消收藏文章 12"
-      and _act("read_notifications", {"all": "True"}) == "标记站内通知已读（全部未读）")
-if _rust:
-    check("过程行动作词与 Rust render_exec_row 的同名臂措辞同源（收藏/取消收藏）",
-          '收藏文章 {}' in _rust and '取消收藏文章 {}' in _rust,
-          "src/routes/chat.rs 缺臂")
-    check("Rust 侧认得 args 里的 Python 形态（列表是 repr 字符串、bool 是 'True'）",
-          'fn py_int_list' in _rust
-          and 'matches!(arg("all").as_str(), "True" | "true" | "1")' in _rust)
-check("写工具描述里也写了『自己』", all("自己" in getattr(base, n).description
-                                       for n in WRITE_TOOLS))
-check("收藏/取消收藏都进『目标有据』名单（写错文章的 id 是不可回滚的对外改动）",
-      {"add_favorite", "remove_favorite"} <= set(_G._ARTICLE_WRITE_TOOLS))
-check("收藏两件**不在**弹窗标题工具名单里（普通访客没有读后台清单的权限）",
-      not ({"add_favorite", "remove_favorite"} & set(_G._POPUP_TITLE_TOOLS)))
-check("收藏列表进了『有据』的帧来源（收藏过的文章 id 也算有据）",
-      "list_my_favorites" in _G._TARGET_EVIDENCE_TOOLS)
+        # 401/403：**身份**问题不是故障，且措辞必须是"你自己的数据"那一套
+        for status, why in ((401, "未带/验签失败"), (403, "身份有效但无权")):
+            c = _Client(_Resp(status))
+            base._client = c
+            r = base._own_get("/api/protected/favorites", cfg(7))
+            check(f"{status}（{why}）→ unavailable 且措辞是『无权』",
+                  r.kind == "unavailable" and "无权" in r, f"{r.kind}: {r}")
+            check(f"{status} → **不说**『仅管理员可用』（这是访客自己的数据）",
+                  "管理员" not in str(r), str(r))
 
-# ══════════════════════════════════════════════════════════════════
-print("\n⑦ 语料与判据（20260923 批 8：这套能力「读不到时会说什么」是判据的一部分）")
+        c = _Client(_Resp(500))
+        base._client = c
+        r = base._own_get("/api/protected/favorites", cfg(7))
+        check("HTTP 500 → unavailable（不是空列表）", r.kind == "unavailable", f"{r.kind}: {r}")
 
-_g_src = _ctx_src.prose()   # 下面整段判的是**叙述纪律正文本体**（20261014 起住 prompts.py；
-                            # 仍读 graph.py 全文会假红——句子还在，只是换了文件）
-# 20261004 改口：纪律 20 与帧文案同批改。这一条锁的是"纪律与帧**同源**"——纪律里
-# 引的帧原话必须就是 `tools/base._NO_IDENTITY_READ` 那句，不然模型会照着一句不存在的
-# 帧措辞去编。
-# **20261009 收口（两跑都红的两种说法）**：这一格此前举了反例句（"你先去登录"），
-# 实测模型**照着反例句换词复用**（"先确认你是登录"）⇒ 例句整句删掉，改为只说**不许
-# 说什么形状**：这一格「登录」「登陆」二字一次都不许出口。所以**别再用「你先去登录」
-# 当在位判据**（那句话已经不在源码里了），也别用「需要先登录博客」——它们都不在了。
-check("narrator 纪律 20 在位（没携带身份/读不到 ≠ 空）",
-      "（帧里原话「没有携带当前用户身份：…」）" in _g_src
-      and "**一个字都不许说成" in _g_src)
-check("纪律 20 把三种结局分开说（读到了是空 / 没携带身份 / 读不到）",
-      "读到了确实是空" in _g_src and "没携带身份" in _g_src
-      and "这次没读到，不敢下结论" in _g_src)
-check("纪律 20 反向锁：这一格『登录』『登陆』二字一次都不许出口（20261009 收口）",
-      "「登录」「登陆」这两个字一次都不许出口" in _g_src
-      and "把系统的账" in _g_src)
-check("  且系统这一侧的事不许写成条件句/前置条件（同一格换词的第二种说法）",
-      "不许写成条件句或前置条件" in _g_src and "才行" in _g_src)
-check("  反例句已经删掉（留着会被照着改写一遍再用出来）",
-      "你先去登录" not in _g_src)
-check("纪律 20 管到「改没改成功」（只认执行回执，不把未确认生效说成好了）",
-      "未确认生效" in _g_src and "只认本轮执行回执" in _g_src)
-check("纪律 18 的括注已扩到收藏 / 标记已读（原先只有新建标签、改文章状态）",
-      "新建标签、改文章状态、收藏/取消收藏、标记通知已读" in _g_src)
-check("纪律 18 收尾写明：这三件写自己的数据**不弹框**、只能按回执说",
-      "只能按回执说" in _g_src and "系统**不弹框**" in _g_src)
+        c = _Client(_Resp(200, None))
+        base._client = c
+        r = base._own_get("/api/protected/favorites", cfg(7))
+        check("非 JSON 响应 → unavailable", r.kind == "unavailable", f"{r.kind}: {r}")
 
-# golden 三条：写面的 golden 只有"未登录"这一种形态（本机即生产库，带真 uid 的写用例
-# 会真改主人的收藏夹 —— 见 test_userdata 头注）。这里锁的是"用例还在 + 它依赖的
-# 输入形态判据没变"：authz 的判据一改，用例的**性质**会悄悄从"免弹窗直执行"变成
-# "走确认弹窗"，而用例本身不会报错。
-_gold = [json.loads(line) for line in
-         (_src("eval/golden/basic.jsonl")).splitlines() if line.strip()]
-_by_id = {c["id"]: c for c in _gold}
-NEW_CASES = {
-    "own_favorite_add_not_logged_in": {"require_tool_calls": ["add_favorite"]},
-    "own_unread_not_logged_in": {"require_tool_calls_any": ["list_notifications",
-                                                            "get_unread_summary"]},
-    "own_mark_read_not_logged_in": {"require_tool_calls": ["read_notifications"]},
-    # 站内信（20260923 批 8）：同一对形态的另一个物件。断言刻意**点名同族的另一个
-    # 工具**（read_messages 而非 read_notifications）：两族 id 空间不同，走错族
-    # 会把通知标成已读、信一封没动，而回执看着像成功——这种错只能靠"点名哪个工具"
-    # 抓（见两条用例 _note 里的"术语分辨"）。
-    "own_messages_not_logged_in": {"require_tool_calls_any": ["list_my_messages",
-                                                             "get_unread_summary"]},
-    "own_message_read_not_logged_in": {"require_tool_calls": ["read_messages"]},
-    # 句首称呼壳（20260930，同族第 4 例）：同一句话带上「小猫咪」前缀，此前同意闸
-    # 判不出命令 ⇒ 落回弹窗 ⇒ 这条用例会变成"走确认弹窗、零调用"（性质悄悄变了而
-    # 用例本身不报错，正是这段注释开头那条纪律说的形态）。生产 trace 里这句出现过
-    # 4 次、主人每次都在弹窗上点了确定 ⇒ 真行为就是"能直执行"。
-    "own_favorite_add_vocative_not_logged_in": {"require_tool_calls": ["add_favorite"]},
-}
-for _cid, _want in NEW_CASES.items():
-    _c = _by_id.get(_cid)
-    check(f"golden 用例在位：{_cid}", _c is not None)
-    if not _c:
-        continue
-    _g = _c["gold"]
-    check(f"  {_cid}：断言了真调过工具（否则「需要登录」这句可以是零帧编的）",
-          all(_g.get(k) == v for k, v in _want.items()))
-    check(f"  {_cid}：禁 fallback（兜底道歉不算如实说）", _g.get("forbid_fallback") is True)
-    # 20261001：这条原先要求回复里**出现「登录」这个词**。主人当天拍板的前提是
-    # 「**必须登录才能和 agent 对话**」（`src/routes/chat.rs::prepare_chat` 无令牌直接回
-    # 合规文案、根本到不了 agent）⇒ 生产里 uid>0 恒成立、uid≤0 不可达，而那条断言在
-    # **奖励**一句生产里恒为假的话。改判「如实表达做不到」（`require_denial` = 共享的
-    # 诚实拒绝族，族里本就含「未登录」，只会放宽不会收紧）——判据换了，锁还在：
-    # 没有这条断言（也没了旧词表）的用例在这里照样红。
-    check(f"  {_cid}：正文如实表达「做不到」（诚实拒绝族，不再点名『登录』）",
-          _g.get("require_denial") is True)
-    check(f"  {_cid}：有负断言（不得声称已改/不得说成空）",
-          bool(_g.get("text_not_match_regex")))
-    check(f"  {_cid}：匿名（无 user_id / 无 role）",
-          "user_id" not in _c.get("context", {}) and "role" not in _c.get("context", {}))
+        # Rust 的 ApiResponse::error 是 HTTP 200 + code 500（src/utils.rs）——
+        # 只看状态码会把"未登录/查询失败"读成成功
+        c = _Client(_Resp(200, {"code": 500, "message": "未登录"}))
+        base._client = c
+        r = base._own_get("/api/protected/favorites", cfg(7))
+        check("业务码非 200 → unavailable（HTTP 200 也不当成功）",
+              r.kind == "unavailable" and "未登录" in r, f"{r.kind}: {r}")
 
-check("站内信那两条点名的是**信**这一族的工具（复制粘贴时最容易串成通知族）",
-      "list_my_messages" in NEW_CASES["own_messages_not_logged_in"]
-      ["require_tool_calls_any"]
-      and NEW_CASES["own_message_read_not_logged_in"]["require_tool_calls"]
-      == ["read_messages"])
+        c = _Client(exc=RuntimeError("connection refused"))
+        base._client = c
+        r = base._own_get("/api/protected/favorites", cfg(7))
+        check("连接异常 → unavailable", r.kind == "unavailable", f"{r.kind}: {r}")
 
-check("输入形态判据仍是「命令式 ⇒ 免弹窗直执行」（改了 authz 判据这条先红）",
-      authz.consent_granted(Principal(uid=7, role="user"), "add_favorite", "收藏这篇文章")
-      and authz.consent_granted(Principal(uid=7, role="user"),
-                                "read_notifications", "把通知都标记成已读"))
-check("  带句首称呼的命令同样免弹窗（否则上面那条新用例会在弹窗上停住、零调用）",
-      authz.consent_granted(Principal(uid=7, role="user"), "add_favorite",
-                            "小猫咪把我当前在读的文章收藏了"))
-check("两条提问形态仍是「提问 ⇒ 不弹窗」（否则用例会落进确认弹窗、测的不是同一条链路）",
-      authz.is_question_like("我有哪些未读通知？"))
+        c = _Client(_Resp(200, {"code": 200, "data": []}))
+        base._client = c
+        r = base._own_get("/api/protected/favorites", cfg(0))
+        check("uid ≤ 0 → unavailable（身份拿不到就不发请求）", r.kind == "unavailable", f"{r.kind}: {r}")
+        # 20261004 改口（主人拍板）：原先这里锁的是「措辞说的是『未登录』」。那个前提
+        # **在生产里到不了**——和 agent 对话本身就必须登录（uid>0 恒成立），uid<=0 只能
+        # 是身份没传进来。所以措辞改成陈述**系统这一侧的事实**，并且**反向锁**一句：
+        # 不许把原因说成"要登录"（那既没用又误导，他明明登录着）。
+        # 不变的那条最要紧：读不到就说读不到，**绝不说成"没有"**（另有一条在旁边锁）。
+        check("uid ≤ 0 的措辞陈述系统这一侧（『没有携带…身份』），不说成『未登录』",
+              "没有携带" in str(r) and "身份" in str(r), str(r))
+        check("uid ≤ 0 的措辞**不给主人派活**（不许出现『登录』/『登陆』/『/login』）",
+              not any(w in str(r) for w in ("登录", "登陆", "/login")), str(r))
+        check("uid ≤ 0 时**没有**发出任何请求", c.calls == [], str(c.calls))
+    finally:
+        base._client = real_client
+    print("\n② 三个读工具：以发起人身份读、读不到就如实说（走真工具）")
+    CASES = [("list_my_favorites", FAVS),
+             ("list_notifications", NOTICES), ("list_my_messages", MAILBOX)]
+    try:
+        for name, sample in CASES:
+            tool = getattr(base, name)
+            c = _Client(_Resp(200, {"code": 200, "data": sample}))
+            base._client = c
+            out = tool.invoke({}, config=cfg(7))
+            check(f"{name} → 原样透出接口数据（结构化，不做中文报表）",
+                  out == str(sample) and getattr(out, "kind", "ok") == "ok", str(out)[:50])
+            check(f"{name} 打的端点在 /api/protected 下", len(c.calls) == 1, str(c.calls))
 
-# ── 原因码：not_found 是**独立**一族（20260923 三轮）──────────────────
-# 事故形态：工具把"你要标的第 3 条不存在"报成 unavailable ⇒ checker 用同一个码 ⇒
-# 过程行显示「服务不可用」（用户看到的就是这句）。判据两头都要锁：checker 给出
-# **不同**的原因码，且 server 的 `_REASON_CN` 里有对应人话（新码漏配中文 = 过程行
-# 原样打英文，20260921 之前 `unavailable` 就是这样）。
-check("checker：kind=not_found → BLOCK + 独立原因码 target_not_found",
-      _G._check_spec("read_notifications", {"ids": [3]}, True, "通知 3 不在…", "notice_read",
-                     kind="not_found") == ("BLOCK", "target_not_found"),
-      str(_G._check_spec("read_notifications", {"ids": [3]}, True, "…", "notice_read",
-                         kind="not_found")))
-check("checker：kind=unavailable 仍是它自己的码（两族不许合并）",
-      _G._check_spec("read_notifications", {}, True, "…", "notice_read",
-                     kind="unavailable") == ("BLOCK", "unavailable"))
-_s_src = (ROOT / "server.py").read_text(encoding="utf-8")
-check("过程行有中文：target_not_found →「目标不存在」（不是「服务不可用」）",
-      '"target_not_found": "目标不存在"' in _s_src and '"unavailable": "服务不可用"' in _s_src,
-      str([l for l in _s_src.splitlines() if "target_not_found" in l]))
+            c = _Client(_Resp(200, {"code": 200, "data": sample}))
+            base._client = c
+            out = tool.invoke({}, config=cfg(0))
+            check(f"{name} 未登录 → kind=unavailable 且零请求",
+                  out.kind == "unavailable" and c.calls == [], f"{out.kind}: {out}")
+            check(f"{name} 未登录的措辞里没有『管理员』", "管理员" not in str(out), str(out))
 
-_settings.jwt_secret = _saved_secret   # 收尾：还原成进来时的样子（见头部密钥桩）
+        # 空结果**不是**故障：`_shape([])` 出来的就是 `"[]"`（无 kind 标记 ⇒ 上层按
+        # kind 默认 ok 判 PASS，"查到了、就是空的"是事实）。这条与上面那条要分开锁——
+        # 混了以后"你还没收藏过文章"与"我读不到"就分不开了。
+        c = _Client(_Resp(200, {"code": 200, "data": []}))
+        base._client = c
+        out = base.list_my_favorites.invoke({}, config=cfg(7))
+        check("收藏为空 → 原样透出 '[]'（不是 unavailable、不是『暂无收藏』这种人话）",
+              out == "[]" and getattr(out, "kind", "ok")
+                  == "ok", f"{getattr(out, 'kind', '')}: {out}")
+    finally:
+        base._client = real_client
+    print("\n②c 我自己的河灯（20261008）：读得到『我哪条通过了』，帧里带 `talkId`")
+    try:
+        c = _Client(_Resp(200, {"code": 200, "data": BOARD_MINE}))
+        base._client = c
+        out = base.list_my_board.invoke({}, config=cfg(7))
+        check("打的是「我的河灯」那个端点（不是公开池的 /board）",
+              c.calls and c.calls[0][0].endswith("/api/protect/board/mine"), str(c.calls))
+        check("★ 帧里 id 是 `talkId`（`/guestbook?lid=` 要填的正是它）",
+              "'talkId': 109" in out and "talkKey" not in out, out[:120])
+        check("★ 审核态原样在（0/1/2 三态是这条通道存在的理由）", "'approved': 1" in out)
+        check("驳回理由那一格原样在（approved=2 时才有值）", "rejectReason" in out)
+        check("留名按公开池同规改名（`author`→`留名`，措辞不许让 planner 读成账号）",
+              "'留名': 'Sora'" in out and "'author'" not in out, out[:120])
+        check("★ 恒假的 `mine` 被摘掉（留着就是系统在说『这条不是你的』这种假话）",
+              "'mine'" not in out)
+        check("帧尾有系统注记，写明它含待审/未通过（公开池里没有这两种）",
+              "〔系统注记〕" in out and "待审" in out)
 
-print("\n" + ("全部通过" if not FAILS else f"失败 {len(FAILS)} 项：" + "; ".join(FAILS)))
-raise SystemExit(1 if FAILS else 0)
+        c = _Client(_Resp(200, {"code": 200, "data": BOARD_MINE}))
+        base._client = c
+        out = base.list_my_board.invoke({}, config=cfg(0))
+        check("未登录 → kind=unavailable 且**零请求**（读不到 ≠ 是空的）",
+              out.kind == "unavailable" and c.calls == [], f"{getattr(out, 'kind', '')}: {out}")
+        check("未登录的措辞里没有『管理员』、也不给主人派活",
+              "管理员" not in str(out) and "登录" not in str(out), str(out))
+
+        # 空是事实：注记照挂、没有 dict 行（摘要器因此不产摘要，退化成"无摘要"）
+        c = _Client(_Resp(200, {"code": 200, "data": []}))
+        base._client = c
+        out = base.list_my_board.invoke({}, config=cfg(7))
+        check("一条都没有 → 帧仍是结构化文本（不塌成 unavailable，也不编『暂无』这种人话）",
+              "〔系统注记〕" in out and getattr(out, "kind", "ok") == "ok", f"{out[:60]}")
+        check("  ↑ 空列表下摘要器不产摘要（没有值可取，不是把 0 编成一条）",
+              receipt_digest("list_my_board", out) == "")
+
+        # 摘掉 `mine` 是**逐行**的（公开池那一半也走同一个出口），别只对本人那一份生效
+        check("摘 `mine` 对公开池的行同样生效（同一个出口函数）",
+              "'mine'" not in base._shape(base._drop_dead_mine(
+                  [{"talkId": 1, "mine": False}])))
+    finally:
+        base._client = real_client
+    print("\n②b 未读汇总连带条目（20260924）：计数 + 未读的那几条")
+    UNREAD_MERGE = {"notifications": 2, "messages": 1, "total": 3}
+    try:
+        c = _two(_Resp(200, {"code": 200, "data": UNREAD_MERGE}),
+                 _Resp(200, {"code": 200, "data": NOTICES}))
+        base._client = c
+        out = base.get_unread_summary.invoke({}, config=cfg(7))
+        check("计数 + 未读条目一起回来（三个计数一个不少）",
+              "notifications" in out and "total" in out and "unread_items" in out, str(out)[:60])
+        check("条目只含**未读**的（已读那条 5 不进 unread_items）",
+              "'id': 7" in out and "'id': 6" in out and "'id': 5" not in out, out[-120:])
+        check("条目带 id/type/title/content/link/createdAt"
+          "（20260924 二改：content 进条目——留言审核的驳回理由就写在正文里）",
+              "国庆维护公告" in out and "凌晨维护" in out and "/guestbook?lid=88" in out,
+              out[-160:])
+        check("两个端点都打了（summary 在前，列表在后）",
+              [u.rsplit("/api", 1)[1] for u in c.calls]
+              == ["/protected/notifications/summary", "/protected/notifications"], str(c.calls))
+        check("条数对得上时**不加**说明字段（别让正常路径多一句噪音）",
+              "unread_items_note" not in out, out[-80:])
+
+        # 正文过长 → 截断（条目是摘要，要原文走 list_notifications；别把整条通知搬进帧）
+        _long = "理由：" + "很长的驳回说明" * 30
+        c = _two(_Resp(200, {"code": 200, "data": UNREAD_MERGE}),
+                 _Resp(200, {"code": 200, "data": {"unread": 1, "items": [
+                     {"id": 9, "type": "notice", "title": "留言未通过审核", "content": _long,
+                      "link": "/guestbook?lid=96", "isRead": False,
+                      "createdAt": "2026-09-23 22:06:09"}]}}))
+        base._client = c
+        out = base.get_unread_summary.invoke({}, config=cfg(7))
+        check("正文过长 → 截断到 120 字并带省略号",
+              _long[:120] in out and _long[:121] not in out and "…" in out, out[-160:])
+
+        # 计数说 3、列表只带回 2 条（模拟未读里较早的落在列表接口最近 100 条窗口外）
+        c = _two(_Resp(200, {"code": 200, "data": UNREAD}),
+                 _Resp(200, {"code": 200, "data": NOTICES}))
+        base._client = c
+        out = base.get_unread_summary.invoke({}, config=cfg(7))
+        check("带回来的比计数少 → unread_items_note 如实说少给了几条",
+              "只带回 2 条" in out and "共 3 条" in out, out[-90:])
+
+        # 条目那半读失败：计数是真读到的（ok 进回执），但**绝不许**说成"没有未读条目"
+        c = _two(_Resp(200, {"code": 200, "data": UNREAD_MERGE}), _Resp(500))
+        base._client = c
+        out = base.get_unread_summary.invoke({}, config=cfg(7))
+        check("条目读失败 → 计数照旧透出、unread_items 为空但带『没读到』说明",
+              getattr(out, "kind", "ok") == "ok" and "'total': 3" in out
+              and "没读到" in out and "没有未读" not in str(out),
+              f"{getattr(out, 'kind', '')}: {out}")
+        check("条目读失败**不说**未登录/管理员（那是故障不是身份问题）",
+              "未登录" not in str(out) and "管理员" not in str(out), str(out))
+
+        # 未登录：第一跳就 unavailable ⇒ 不应再打第二个端点（fail-closed 的早退）
+        c = _two(_Resp(200, {"code": 500, "message": "未登录"}), _Resp(200, {"code": 200, "data": NOTICES}))
+        base._client = c
+        out = base.get_unread_summary.invoke({}, config=cfg(7))
+        check("计数读不到 → unavailable 且**不补一次列表调用**",
+              out.kind == "unavailable" and len(c.calls) == 1, f"{out.kind}: {c.calls}")
+
+        c = _two(_Resp(200, {"code": 200, "data": UNREAD_MERGE}), _Resp(200, {"code": 200, "data": NOTICES}))
+        base._client = c
+        out = base.get_unread_summary.invoke({}, config=cfg(0))
+        check("未登录 → kind=unavailable 且零请求（连带那一路也不发）",
+              out.kind == "unavailable" and c.calls == [], f"{out.kind}: {c.calls}")
+
+        # 一条未读都没有：`unread_items` 为空数组，**不是** unavailable
+        c = _two(_Resp(200, {"code": 200, "data": {"notifications": 0, "messages": 0, "total": 0}}),
+                 _Resp(200, {"code": 200, "data": {"unread": 0, "items": [
+                     {"id": 5, "type": "notice", "title": "欢迎来到 Saudade", "link": None,
+                      "isRead": True, "createdAt": "2026-09-01 08:00:00"}]}}))
+        base._client = c
+        out = base.get_unread_summary.invoke({}, config=cfg(7))
+        check("零未读 → 空条目 + 计数 0（是事实，不是失败）",
+              getattr(out, "kind", "ok") == "ok" and "'unread_items': []" in out
+              and "'total': 0" in out, f"{getattr(out, 'kind', '')}: {out}")
+    finally:
+        base._client = real_client
+    print("\n③ 实体摘要：跨轮指代的取值来源")
+    check("收藏 → `noteId:<id>《标题》`（id 带命名空间；noteId 是 favorites 的字段名，此前只有 noteKey/key）",
+          receipt_digest("list_my_favorites", str(FAVS))
+          == "我的收藏: noteId:12《留言板怎么用》/noteId:19《Saudade Blog AI Agent》",
+          receipt_digest("list_my_favorites", str(FAVS)))
+    check("通知 → 总条数 + 未读条数 + **id《标题》**（未读标出来）",
+          receipt_digest("list_notifications", str(NOTICES))
+          == "通知共 3 条（未读 2）: notifId:7《国庆维护公告》（未读）"
+         "/notifId:6《你的留言已通过审核》（未读）/notifId:5《欢迎来到 Saudade》",
+          receipt_digest("list_notifications", str(NOTICES)))
+    check("通知条数带「共…条」措辞（「3 条」不再是一个可被读成 id 的裸数字）",
+          "共 3 条" in receipt_digest("list_notifications", str(NOTICES))
+          and not receipt_digest("list_notifications", str(NOTICES)).startswith("通知 3"))
+    check("通知条目缺 id 字段 → 不编 id（只给标题）",
+          receipt_digest("list_notifications", str({"unread": 0, "items": [
+              {"title": "没有 id 的通知", "isRead": True}]})) ==
+          "通知共 1 条（未读 0）: 没有 id 的通知")
+    check("通知**正文不进摘要**（挤进来只会把标题挤掉——要正文就再调一次工具）",
+          "10 月 1 日" not in receipt_digest("list_notifications", str(NOTICES)))
+    check("站内信 → 收件/发出封数 + 未读封数 + **id《标题》寄自谁（未读）**",
+          receipt_digest("list_my_messages", str(MAILBOX))
+          == "信箱: 收件 3 封（未读 2） / 发出 1 封: mailId:11《河灯集那篇》寄自小猫咪（未读）"
+         "/mailId:9（无标题信）寄自阿岚（未读）/mailId:8《问好》寄自路人甲",
+          receipt_digest("list_my_messages", str(MAILBOX)))
+    check("信件摘要里每封都带**具名**编号（planner 不必编 id 就能点名，且知道这是信的 id）",
+          all(f"mailId:{i}" in receipt_digest("list_my_messages",
+              str(MAILBOX)) for i in (11, 9, 8)))
+    check("信件摘要用**封**这个量词（通知是「条」——量词分开，两个 id 空间就不会被混）",
+          "封" in receipt_digest("list_my_messages", str(MAILBOX))
+          and "条" not in receipt_digest("list_my_messages", str(MAILBOX)))
+    check("发给别人的信**不进摘要**（发件箱里的 isRead 是别人的事，也不能被当成本人收到过）",
+          "10《回你》" not in receipt_digest("list_my_messages", str(MAILBOX)))
+    check("信件**正文不进摘要**（要正文就再调一次工具）",
+          "第三段" not in receipt_digest("list_my_messages", str(MAILBOX)))
+    check("缺 id 的信 → 不编编号（只给标题/寄信人）",
+          receipt_digest("list_my_messages",
+                         str({"inbox": [{"peerName": "无 id 无标题"}], "outbox": [],
+                              "unread": 1})) == "信箱: 收件 1 封（未读 1） / 发出 0 封: （无标题信）寄自无 id 无标题（未读）")
+    check("空信箱 → 只留封数（不是空串：**一封都没有**是事实，与「读不到」不是一回事）",
+          receipt_digest("list_my_messages",
+                         str({"inbox": [], "outbox": [], "unread": 0}))
+          == "信箱: 收件 0 封（未读 0） / 发出 0 封")
+    check("信箱形态不符（缺 inbox/outbox）→ 空摘要（不猜）",
+          receipt_digest("list_my_messages", str({"unread": 0, "items": []})) == ""
+          and receipt_digest("list_my_messages", "未登录：读不到你自己的数据") == "")
+    check("未读汇总 → 两个数 + 合计（key 名与 Rust UnreadDto 同源）",
+          receipt_digest("get_unread_summary", str(UNREAD))
+          == "未读: 通知 3 条 / 私信 1 条（合计 4）",
+          receipt_digest("get_unread_summary", str(UNREAD)))
+    check("未读汇总带条目 → 计数 + 未读条目的 `id《标题》`",
+          receipt_digest("get_unread_summary",
+                         str({**UNREAD, "unread_items": [
+                             {"id": 7, "type": "announcement", "title": "国庆维护公告",
+                              "link": "/article/3", "createdAt": "2026-09-22 10:00:00"},
+                             {"id": 6, "title": "你的留言已通过审核", "isRead": False}]}))
+          == "未读: 通知 3 条 / 私信 1 条（合计 4） — 未读通知: notifId:7《国庆维护公告》"
+         "/notifId:6《你的留言已通过审核》",
+          receipt_digest("get_unread_summary",
+                         str({**UNREAD, "unread_items": [
+                             {"id": 7, "title": "国庆维护公告"},
+                             {"id": 6, "title": "你的留言已通过审核"}]})))
+    check("未读条目缺 id → 不编 id（只给标题）",
+          receipt_digest("get_unread_summary",
+                         str({**UNREAD, "unread_items": [{"title": "国庆维护公告"}]}))
+          == "未读: 通知 3 条 / 私信 1 条（合计 4） — 未读通知: 《国庆维护公告》",
+          receipt_digest("get_unread_summary",
+                         str({**UNREAD, "unread_items": [{"title": "国庆维护公告"}]})))
+    check("条目读失败（空条目 + 说明字段）→ 退化成计数版，不编条目",
+          receipt_digest("get_unread_summary",
+                         str({**UNREAD, "unread_items": [],
+                              "unread_items_note": "未读条目的内容这次没读到（只有计数是可信的）"}))
+          == "未读: 通知 3 条 / 私信 1 条（合计 4）",
+          receipt_digest("get_unread_summary", str({**UNREAD, "unread_items": []})))
+    check("未读摘要 ≤150 字（Rust detail 列宽的一半留给动作行）",
+          len(receipt_digest("get_unread_summary",
+                             str({**UNREAD, "unread_items": [
+                                 {"id": i, "title": "国庆维护公告与站点维护安排的详细说明" * 2}
+                                 for i in range(1, 11)]}))) <= 150,
+          str(len(receipt_digest("get_unread_summary",
+                                 str({**UNREAD, "unread_items": [
+                                     {"id": i, "title": "国庆维护公告与站点维护安排的详细说明" * 2}
+                                     for i in range(1, 11)]})))))
+    check("未读汇总缺字段 → 空摘要（不写 0）",
+          receipt_digest("get_unread_summary", str({"notifications": 3})) == "")
+    check("未读汇总字段是字符串 → 空摘要（不 int() 硬转）",
+          receipt_digest("get_unread_summary", str({"notifications": "3", "messages": 0, "total": 3})) == "")
+    check("空列表 → 空摘要（退化为改动前行为）",
+          receipt_digest("list_my_favorites", "[]") == ""
+          and receipt_digest("list_notifications", str({"unread": 0, "items": []})) == "")
+    check("读不到（UPSTREAM_DOWN 文本）→ 空摘要",
+          receipt_digest("list_my_favorites", "UPSTREAM_DOWN") == ""
+          and receipt_digest("list_notifications", "未登录：读不到你自己的数据") == "")
+    check("通知摘要 ≤150 字（Rust detail 列 varchar(300) 的一半留给动作行）",
+          len(receipt_digest("list_notifications",
+                             str({"unread": 0, "items": [
+                                 {"id": i, "title": "很长很长的一条通知标题用来把摘要撑爆" * 2,
+                                  "isRead": True} for i in range(8)]}))) <= 150)
+    print("\n④ 写侧：写前先读（读不到就不写）＋ 写后复核（读不回就不确认）")
+    WRITE_TOOLS = ["add_favorite", "remove_favorite", "read_notifications",
+                   "read_messages"]
+    FAV12 = {"noteId": 12, "title": "留言板怎么用", "status": "published",
+             "createdAt": "2026-09-20 11:02:00"}
+    try:
+        # ── add_favorite：成功路径 ────────────────────────────────────
+        base._client = _SeqClient(_data([FAVS[1]]), _data({"ok": True}),
+                                  _data([FAVS[1], FAV12]))
+        c = base._client
+        out = base.add_favorite.invoke({"article_id": 12}, config=cfg(7))
+        check("收藏成功 → ok，回执写明文章 id 与标题",
+              out.kind == "ok" and "已收藏文章 12《留言板怎么用》" in out, f"{out.kind}: {out}")
+        check("回执带上收藏夹条数（读得出来才写，读不出不写 0）",
+              "你的收藏夹现在有 2 篇" in out, str(out))
+        check("顺序 = 写前读 → 写 → 写后再读（三次请求）",
+              [m for m, _u, _h, _p in c.calls] == ["GET", "POST", "GET"],
+              str([m for m, _u, _h, _p in c.calls]))
+        check("写请求体是 {'noteId': 12}（Rust 侧字段名，不是 article_id）",
+              _writes(c) == [("POST", base.ADMIN_BASE
+                  + "/api/protected/favorites", {"noteId": 12})],
+              str(_writes(c)))
+        check("三次请求都带同一把局部 JWT（写前读与写同一身份）",
+              len({h.get("Authorization") for _m, _u, h, _p in c.calls}) == 1, str(c.calls[0][2]))
+
+        # ── add_favorite：幂等（写前读的副产品）────────────────────────
+        base._client = _SeqClient(_data([FAV12]))
+        c = base._client
+        out = base.add_favorite.invoke({"article_id": 12}, config=cfg(7))
+        check("已收藏过 → 如实说本来就有，**零写请求**",
+              out.kind == "ok" and "本来就在你的收藏夹里" in out and _writes(c) == [],
+              f"{out.kind}: {out} / {_writes(c)}")
+        check("幂等分支带回执标记 noop（跨轮执行记忆据此区分「改过」与「本来如此」）",
+              out.meta.get("noop") is True and out.meta
+                  .get("change") == "本来已收藏", str(out.meta))
+
+        # ── add_favorite：fail-closed 三条 ────────────────────────────
+        base._client = _SeqClient(_err(500))
+        c = base._client
+        out = base.add_favorite.invoke({"article_id": 12}, config=cfg(7))
+        check("写前读失败 → unavailable 且零写请求（读不到就不写）",
+              out.kind == "unavailable" and _writes(c) == [], f"{out.kind}: {out}")
+        check("写前读失败的措辞说了『未改动』", "未改动" in str(out), str(out))
+
+        base._client = _SeqClient(_data({"ok": True}))
+        c = base._client
+        out = base.add_favorite.invoke({"article_id": 0}, config=cfg(7))
+        check("文章 id 不合法（0）→ unavailable 且**一个请求都不发**",
+              out.kind == "unavailable" and c.calls == [], f"{out.kind}: {out} / {c.calls}")
+
+        base._client = _SeqClient(_data([FAVS[1]]), _data({"ok": True}), _data([FAVS[1]]))
+        c = base._client
+        out = base.add_favorite.invoke({"article_id": 12}, config=cfg(7))
+        check("写后复核：读回来还是没有这一篇 → unavailable（不拿接口的成功文案当事实）",
+              out.kind == "unavailable" and "未确认生效" in str(out), f"{out.kind}: {out}")
+        check("写后复核失败的措辞明确写了『不要声称已收藏』",
+            "不要声称已收藏" in str(out), str(out))
+
+        base._client = _SeqClient(_data([FAVS[1]]), _data({"ok": True}), _err(500))
+        out = base.add_favorite.invoke({"article_id": 12}, config=cfg(7))
+        check("写已发出但复核读失败 → 措辞是『已发出 + 未确认生效』（不是读侧那句原话）",
+              out.kind == "unavailable" and "收藏请求已发出" in str(out)
+              and "不要声称已收藏" in str(out), f"{out.kind}: {out}")
+
+        # ── remove_favorite ──────────────────────────────────────────
+        base._client = _SeqClient(_data([FAVS[1], FAV12]), _data({"ok": True}), _data([FAVS[1]]))
+        c = base._client
+        out = base.remove_favorite.invoke({"article_id": 12}, config=cfg(7))
+        check("取消收藏成功 → DELETE 到 /favorites/<id>（payload 为 None，端点从路径取参）",
+              _writes(c) == [("DELETE", base.ADMIN_BASE + "/api/protected/favorites/12", None)],
+              str(_writes(c)))
+        check("取消收藏成功回执写明标题（取的是写前那一行——写后就没了）",
+              out.kind == "ok" and "已取消收藏文章 12《留言板怎么用》" in out, f"{out.kind}: {out}")
+
+        base._client = _SeqClient(_data([FAVS[1]]))
+        c = base._client
+        out = base.remove_favorite.invoke({"article_id": 12}, config=cfg(7))
+        check("本来就没收藏 → 如实说，**零写请求**（同一个按钮点两次不该报错）",
+              out.kind == "ok" and "本来就不在你的收藏夹里" in out and _writes(c) == [],
+              f"{out.kind}: {out} / {_writes(c)}")
+
+        base._client = _SeqClient(_data([FAVS[1], FAV12]), _data({"ok": True}),
+                                  _data([FAVS[1], FAV12]))
+        out = base.remove_favorite.invoke({"article_id": 12}, config=cfg(7))
+        check("写后复核：读回来还在 → unavailable 且写明『不要声称已取消』",
+              out.kind == "unavailable" and "不要声称已取消" in str(out), f"{out.kind}: {out}")
+
+        # ── read_notifications：范围判据（没范围就零工具）──────────────
+        base._client = _SeqClient(_data(NOTICES))
+        c = base._client
+        out = base.read_notifications.invoke({}, config=cfg(7))
+        check("既没给 id 也没说『全部』→ unavailable 且零请求（不猜范围）",
+              out.kind == "unavailable" and c.calls == [], f"{out.kind}: {out} / {c.calls}")
+        base._client = _SeqClient(_data(NOTICES))
+        c = base._client
+        out = base.read_notifications.invoke({"all": False}, config=cfg(7))
+        check("all=False 不等于『全部』→ 同样零请求（不默认 True）",
+              out.kind == "unavailable" and c.calls == [], f"{out.kind}: {out} / {c.calls}")
+
+        # ── read_notifications：幂等两态 ──────────────────────────────
+        base._client = _SeqClient(_data(NOTICES))
+        c = base._client
+        out = base.read_notifications.invoke({"ids": [5]}, config=cfg(7))
+        check("点名的 id 本来就是已读 → 零写请求、如实说本来就读过",
+              out.kind == "ok" and "本来就是已读" in out and _writes(c) == [],
+              f"{out.kind}: {out} / {_writes(c)}")
+        base._client = _SeqClient(_data({"unread": 0, "items": [NOTICES["items"][2]]}))
+        c = base._client
+        out = base.read_notifications.invoke({"all": True}, config=cfg(7))
+        check("全部已读 → 零写请求、如实说本来就没有未读",
+              out.kind == "ok" and "本来就没有未读的" in out and _writes(c) == [],
+              f"{out.kind}: {out} / {_writes(c)}")
+
+        # ── read_notifications：点名的 id 不在自己列表里（20260923 三轮）────
+        # 生产事故（trace `20260923T130033_9`）：planner 把摘要里的**条数**「3」当 id
+        # 填进 `ids:[3]`（真实那条是 23）⇒ 服务端按 3 匹配 0 行 ⇒ 写后复核报
+        # "未确认生效"，过程行还显示成「服务不可用」。现在**写之前**就判：读到的列表里
+        # 没有这几个编号 ⇒ 一个字节都不发 + kind=not_found（与"服务挂了"分开）。
+        base._client = _SeqClient(_data(NOTICES))
+        c = base._client
+        out = base.read_notifications.invoke({"ids": [3]}, config=cfg(7))
+        check("点名的 id 不在读到的列表里 → kind=not_found 且**零写请求**（不是服务故障）",
+              out.kind == "not_found" and _writes(c) == [], f"{out.kind}: {out} / {_writes(c)}")
+        check("措辞点名了那个 id、写明一个字节没改、并把列表上限如实交代（不谎称站内没有）",
+              "通知 3 不在" in str(out) and "一个字节都没改" in str(out)
+              and "100" in str(out) and "未确认生效" not in str(out), str(out))
+
+        base._client = _SeqClient(_data(NOTICES))
+        c = base._client
+        out = base.read_notifications.invoke({"ids": [7, 8]}, config=cfg(7))
+        check("混着来（7 在列表里、8 不在）→ 同样**整批零写**（绝不部分改）",
+              out.kind == "not_found" and _writes(c) == [], f"{out.kind}: {out} / {_writes(c)}")
+        check("混着来的措辞也给另一条出口（「全部标记已读」由系统按未读的来标）",
+              "全部标记已读" in str(out), str(out))
+
+        base._client = _SeqClient(_data(NOTICES), _data(UNREAD), _data({"ok": True}),
+                                  _data({"notifications": 0, "messages": 1, "total": 1}))
+        c = base._client
+        out = base.read_notifications.invoke({"all": True}, config=cfg(7))
+        check("「全部」路径不受新判据影响（它不点名 id，直接按读到的未读来标）",
+              out.kind == "ok" and _writes(c) and _writes(c)[0][2] == {"ids": [], "all": True},
+              f"{out.kind}: {out} / {_writes(c)}")
+
+        # ── read_notifications：成功路径（复核判据 = 未读数真的下降）───
+        base._client = _SeqClient(_data(NOTICES), _data(UNREAD), _data({"ok": True}),
+                                  _data({"notifications": 0, "messages": 1, "total": 1}))
+        c = base._client
+        out = base.read_notifications.invoke({"all": True}, config=cfg(7))
+        check("全部标记已读 → POST payload {'ids': [], 'all': True}",
+              _writes(c) == [("POST", base.ADMIN_BASE + "/api/protected/notifications/read",
+                              {"ids": [], "all": True})], str(_writes(c)))
+        check("成功回执报的是**减少的条数**（3→0）与剩余未读",
+              out.kind == "ok" and "已把 3 条通知标记为已读" in out
+              and "现在未读：通知 0 条 / 私信 1" in out, f"{out.kind}: {out}")
+        check("顺序 = 写前读列表 → 写前读汇总 → 写 → 写后读汇总（四次，复核是独立读数）",
+              [m for m, _u, _h, _p in c.calls] == ["GET", "GET", "POST", "GET"],
+              str([m for m, _u, _h, _p in c.calls]))
+
+        base._client = _SeqClient(_data(NOTICES), _data(UNREAD), _data({"ok": True}),
+                                  _data({"notifications": 1, "messages": 1, "total": 2}))
+        c = base._client
+        out = base.read_notifications.invoke({"ids": [7, 6, 7]}, config=cfg(7))
+        check("点名 id 路径 → payload 用 sorted 去重后的 id（'all': False）",
+              _writes(c)[0][2] == {"ids": [6, 7], "all": False}, str(_writes(c)))
+        check("复核只认服务端重数出来的未读数：2→1 也在降，报 2 条",
+              out.kind == "ok" and "已把 2 条通知标记为已读" in out, f"{out.kind}: {out}")
+
+        base._client = _SeqClient(_data(NOTICES), _data(UNREAD), _data({"ok": True}),
+                                  _data({"notifications": 3, "messages": 1, "total": 4}))
+        out = base.read_notifications.invoke({"all": True}, config=cfg(7))
+        check("复核判据 = 未读数**真的下降**：没降 → unavailable（接口说成功也不算数）",
+              out.kind == "unavailable" and "未确认生效" in str(out), f"{out.kind}: {out}")
+        check("未下降的措辞明确写了『不要声称已标记』", "不要声称已标记" in str(out), str(out))
+
+        base._client = _SeqClient(_data(NOTICES), _err(500))
+        c = base._client
+        out = base.read_notifications.invoke({"all": True}, config=cfg(7))
+        check("写前读汇总失败 → 零写请求（拿不到基准数就不写）",
+              out.kind == "unavailable" and _writes(c) == [], f"{out.kind}: {out} / {_writes(c)}")
+
+        base._client = _SeqClient(_data(NOTICES), _data({"unread": "3"}), _data({"ok": True}))
+        c = base._client
+        out = base.read_notifications.invoke({"all": True}, config=cfg(7))
+        check("基准数不是 int（形态不符）→ 零写请求（不 int() 硬转）",
+              out.kind == "unavailable" and _writes(c) == [], f"{out.kind}: {out} / {_writes(c)}")
+
+        base._client = _SeqClient(_data(NOTICES), _data(UNREAD), _data({"ok": True}), _err(500))
+        out = base.read_notifications.invoke({"all": True}, config=cfg(7))
+        check("写已发出但复核读失败 → 措辞是『已发出 + 未确认生效』",
+              out.kind == "unavailable" and "标记已读请求已发出" in str(out)
+              and "不要声称已标记" in str(out), f"{out.kind}: {out}")
+
+        # ── read_messages（20260923 批 8）：与 read_notifications 同一形状，
+        #    但物件是**收到**的信——发件箱里的 id 不能标、别人读没读也不归他管。──
+        MB_AFTER = {"unread": 1, "inbox": [MAILBOX["inbox"][0],
+                                           {**MAILBOX["inbox"][1], "isRead": True},
+                                           MAILBOX["inbox"][2]],
+                    "outbox": MAILBOX["outbox"]}
+        MB_ALL_READ = {"unread": 0,
+                       "inbox": [{**r, "isRead": True} for r in MAILBOX["inbox"]],
+                       "outbox": MAILBOX["outbox"]}
+
+        base._client = _SeqClient(_data(MAILBOX))
+        c = base._client
+        out = base.read_messages.invoke({}, config=cfg(7))
+        check("既没给 id 也没说『全部』→ unavailable 且零请求（同一句命令的双胞胎工具也不猜）",
+              out.kind == "unavailable" and c.calls == [], f"{out.kind}: {out} / {c.calls}")
+        base._client = _SeqClient(_data(MAILBOX))
+        c = base._client
+        out = base.read_messages.invoke({"all": False}, config=cfg(7))
+        check("all=False 不等于『全部』→ 同样零请求",
+              out.kind == "unavailable" and c.calls == [], f"{out.kind}: {out} / {c.calls}")
+
+        base._client = _SeqClient(_data(MAILBOX))
+        c = base._client
+        out = base.read_messages.invoke({"ids": [8]}, config=cfg(7))
+        check("点名的信本来就是已读 → 零写请求、如实说本来就读过",
+              out.kind == "ok" and "本来就是已读" in out and _writes(c) == [],
+              f"{out.kind}: {out} / {_writes(c)}")
+        base._client = _SeqClient(_data(MB_ALL_READ))
+        c = base._client
+        out = base.read_messages.invoke({"all": True}, config=cfg(7))
+        check("全部已读 → 零写请求、如实说本来就没有未读的信",
+              out.kind == "ok" and "本来就没有未读的信" in out and _writes(c) == [],
+              f"{out.kind}: {out} / {_writes(c)}")
+
+        # 发件箱里的 id（10 是"我发出去的那封"）同样不在收件箱里 ⇒ 一个字节都不发。
+        # 这条是这族工具的**独有**风险：通知只有一个列表，信有两个（收/发），
+        # 拿发件箱的 id 去标已读是"改别人的东西"的错觉。
+        base._client = _SeqClient(_data(MAILBOX))
+        c = base._client
+        out = base.read_messages.invoke({"ids": [10]}, config=cfg(7))
+        check("点的是**发件箱**里的信（我发出去的）→ kind=not_found 且零写请求",
+              out.kind == "not_found" and _writes(c) == [], f"{out.kind}: {out} / {_writes(c)}")
+        check("措辞把出口写清楚（先说读一遍信箱拿 id），且不谎称站内没有这封信",
+              "不在我读到的收件箱" in str(out) and "一个字节都没改" in str(out)
+              and "未确认生效" not in str(out), str(out))
+
+        base._client = _SeqClient(_data(MAILBOX))
+        c = base._client
+        out = base.read_messages.invoke({"ids": [11, 99]}, config=cfg(7))
+        check("混着来（11 在、99 不在）→ **整批零写**（绝不部分改）",
+              out.kind == "not_found" and _writes(c) == [], f"{out.kind}: {out} / {_writes(c)}")
+
+        # 成功路径：写前读 → 写 → 写后再读（三次，复核是独立读数）
+        base._client = _SeqClient(_data(MAILBOX), _data({"ok": True}), _data(MB_ALL_READ))
+        c = base._client
+        out = base.read_messages.invoke({"all": True}, config=cfg(7))
+        check("全部标记已读 → POST {'ids': [], 'all': True} 到 /messages/read",
+              _writes(c) == [("POST", base.ADMIN_BASE + "/api/protected/messages/read",
+                              {"ids": [], "all": True})], str(_writes(c)))
+        check("顺序 = 写前读信箱 → 写 → 写后再读信箱（三次）",
+              [m for m, _u, _h, _p in c.calls] == ["GET", "POST", "GET"],
+              str([m for m, _u, _h, _p in c.calls]))
+        check("成功回执报的是**减少的封数**（2→0）与收件箱剩余未读",
+              out.kind == "ok" and "已把 2 封信标记为已读" in out
+              and "收件箱现在未读 0 封" in out, f"{out.kind}: {out}")
+        check("回执 meta 是 message_read（与通知那族的 op 分开——跨轮记忆按 op 区分）",
+              out.meta.get("op") == "message_read", str(out.meta))
+
+        base._client = _SeqClient(_data(MAILBOX), _data({"ok": True}), _data(MB_AFTER))
+        c = base._client
+        out = base.read_messages.invoke({"ids": [9, 9]}, config=cfg(7))
+        check("点名路径 → payload 用 sorted 去重后的 id（'all': False）",
+              _writes(c)[0][2] == {"ids": [9], "all": False}, str(_writes(c)))
+        check("复核只认服务端重数出来的未读封数（2→1 也在降）",
+              out.kind == "ok" and "已把 1 封信标记为已读" in out, f"{out.kind}: {out}")
+
+        # 「报的是服务端重数出来的数」与「报的是我点了几封」在数字上通常是同一个，
+        # 这里造一个**能让两者分开**的夹具：收件箱列表被截到只剩 2 封未读可见（最多
+        # 100 封），而服务端报的未读是 5 —— 复核读回来 4 ⇒ 净降 1，如实报 1（不是 2）。
+        # 宁可报小：跨轮执行记忆里"标了 2 封"而实际只降了 1 是虚报。
+        MB_TRUNC = {"unread": 5, "inbox": MAILBOX["inbox"][:2], "outbox": MAILBOX["outbox"]}
+        MB_TRUNC_AFTER = {"unread": 4,
+                          "inbox": [{**r, "isRead": True} for r in MAILBOX["inbox"][:2]],
+                          "outbox": MAILBOX["outbox"]}
+        base._client = _SeqClient(_data(MB_TRUNC), _data({"ok": True}), _data(MB_TRUNC_AFTER))
+        out = base.read_messages.invoke({"all": True}, config=cfg(7))
+        check("报的封数 = 服务端两次读数之差（不是「我点了几封」）",
+              out.kind == "ok" and "已把 1 封信标记为已读" in out, f"{out.kind}: {out}")
+
+        # 复核判据是**两条**：封数真降 + 点名的每一封都确实已读。只看"降了"会在
+        # "标错了一封、又漏了一封"的巧合下判成功（净变化相同）。
+        base._client = _SeqClient(_data(MAILBOX), _data({"ok": True}), _data(MB_AFTER))
+        out = base.read_messages.invoke({"all": True}, config=cfg(7))
+        check("封数降了但有一封仍不是已读 → unavailable（净变化相同也能抓出来）",
+              out.kind == "unavailable" and "还不是已读" in str(out), f"{out.kind}: {out}")
+        check("未确认生效的措辞明确写了『不要声称已标记』", "不要声称已标记" in str(out), str(out))
+
+        base._client = _SeqClient(_data(MAILBOX), _data({"ok": True}),
+                                  _data({"unread": 2, "inbox": [{**r, "isRead": False}
+                                                                for r in MAILBOX["inbox"]],
+                                         "outbox": MAILBOX["outbox"]}))
+        out = base.read_messages.invoke({"all": True}, config=cfg(7))
+        check("未读封数**没降** → unavailable（接口说成功也不算数）",
+              out.kind == "unavailable" and "未确认生效" in str(out), f"{out.kind}: {out}")
+
+        base._client = _SeqClient(_err(500))
+        c = base._client
+        out = base.read_messages.invoke({"all": True}, config=cfg(7))
+        check("写前读失败 → 零写请求（读不到就不写）",
+              out.kind == "unavailable" and _writes(c) == [] and "未改动" in str(out),
+              f"{out.kind}: {out} / {_writes(c)}")
+
+        base._client = _SeqClient(_data({"unread": "2", "inbox": [MAILBOX["inbox"][0]],
+                                         "outbox": []}))
+        c = base._client
+        out = base.read_messages.invoke({"all": True}, config=cfg(7))
+        check("未读封数形态不符（字符串）→ 零写请求（不 int() 硬转）",
+              out.kind == "unavailable" and _writes(c) == [], f"{out.kind}: {out} / {_writes(c)}")
+
+        base._client = _SeqClient(_data(MAILBOX), _data({"ok": True}), _err(500))
+        out = base.read_messages.invoke({"all": True}, config=cfg(7))
+        check("写已发出但复核读失败 → 措辞是『已发出 + 未确认生效』",
+              out.kind == "unavailable" and "标记已读请求已发出" in str(out)
+              and "不要声称已标记" in str(out), f"{out.kind}: {out}")
+
+        # ── 未登录：写侧比读侧更严（一个字节都不发）───────────────────
+        for name, args in (("add_favorite", {"article_id": 12}),
+                           ("remove_favorite", {"article_id": 12}),
+                           ("read_notifications", {"all": True}),
+                           ("read_messages", {"all": True})):
+            base._client = _SeqClient(_data([]))
+            c = base._client
+            out = getattr(base, name).invoke(args, config=cfg(0))
+            check(f"{name} 未登录 → unavailable 且**零请求**（写最不该在没身份时猜）",
+                  out.kind == "unavailable" and c.calls == [], f"{out.kind}: {out} / {c.calls}")
+            check(f"{name} 未登录的措辞说了『未改动』且不提『管理员』",
+                  "未改动" in str(out) and "管理员" not in str(out), str(out))
+    finally:
+        base._client = real_client
+    print("\n⑤ 写技能展开：范围缺失就零工具（不是零参数硬跑）")
+    p = _plan("favorite_add", {"article_id": 12})
+    check("favorite_add 展开成一条 add_favorite（参数是确切 id，不是 null）",
+          len(p["tools"]) == 1 and _args(p["tools"][0]) == ("add_favorite", {"article_id": 12}),
+          str(p["tools"]))
+    p = _plan("favorite_add", {"article_id": "$tool[0].noteId"})
+    check("favorite_add 认引用语法（$tool[…] 不被当成 PARAMS 里的键、原样落进参数）",
+          p["tools"] and _args(p["tools"][0])[1] == {"article_id": "$tool[0].noteId"},
+          str(p["tools"]))
+    p = _plan("favorite_add", {})
+    check("favorite_add 缺 article_id → 零工具 + 注记（不猜一篇文章去收藏）",
+          p["tools"] == [] and p["note"], f"{p['tools']} / {p['note']}")
+    p = _plan("favorite_remove", {"article_id": 12})
+    check("favorite_remove 展开成一条 remove_favorite",
+          len(p["tools"]) == 1 and _args(p["tools"][0])[0] == "remove_favorite", str(p["tools"]))
+    p = _plan("notice_read", {"all": True})
+    check("notice_read all=True → 一条 read_notifications({'all': True})",
+          len(p["tools"]) == 1 and _args(p["tools"][0]) == ("read_notifications", {"all": True}),
+          str(p["tools"]))
+    p = _plan("notice_read", {"ids": [7, 8]})
+    check("notice_read ids → 一条 read_notifications({'ids': [7, 8]})",
+          p["tools"] and _args(p["tools"][0])[1] == {"ids": [7, 8]}, str(p["tools"]))
+    p = _plan("notice_read", {})
+    check("notice_read 既没 id 也没 all → **零工具**（最危险的一份「全部标记已读」绝不擅自展开）",
+          p["tools"] == [] and p["note"], f"{p['tools']} / {p['note']}")
+    p = _plan("notice_read", {"all": True, "ids": [7]})
+    check("notice_read all 与 ids 同时给 → 零工具 + 追问（两者语义冲突，不替用户选）",
+          p["tools"] == [] and p["note"], f"{p['tools']} / {p['note']}")
+    p = _plan("notice_read", {"all": "True"})
+    check("notice_read all 是字符串 'True'（planner 常见形态）也认",
+          p["tools"] and _args(p["tools"][0]) == ("read_notifications", {"all": True}),
+          str(p["tools"]))
+    p = _plan("notice_read", {"all": "maybe"})
+    check("notice_read all 认不出来（'maybe'）→ 零工具（不默认 True）",
+          p["tools"] == [] and p["note"], f"{p['tools']} / {p['note']}")
+    p = _plan("message_read", {"all": True})
+    check("message_read all=True → 一条 read_messages({'all': True})",
+          len(p["tools"]) == 1 and _args(p["tools"][0]) == ("read_messages", {"all": True}),
+          str(p["tools"]))
+    p = _plan("message_read", {"ids": [11, 9]})
+    check("message_read ids → 一条 read_messages({'ids': [11, 9]})",
+          p["tools"] and _args(p["tools"][0])[1] == {"ids": [11, 9]}, str(p["tools"]))
+    p = _plan("message_read", {})
+    check("message_read 既没 id 也没 all → **零工具**（把全部未读一次清掉是不可逆的）",
+          p["tools"] == [] and p["note"], f"{p['tools']} / {p['note']}")
+    p = _plan("message_read", {"all": True, "ids": [11]})
+    check("message_read all 与 ids 同时给 → 零工具 + 追问",
+          p["tools"] == [] and p["note"], f"{p['tools']} / {p['note']}")
+    p = _plan("message_read", {"all": "True"})
+    check("message_read all 是字符串 'True' 也认",
+          p["tools"] and _args(p["tools"][0]) == ("read_messages", {"all": True}),
+          str(p["tools"]))
+    p = _plan("message_read", {})
+    check("message_read 的注记指向 list_my_messages（要 id 就先读信箱，不是读通知）",
+          "list_my_messages" in p["note"] and "list_notifications" not in p["note"],
+          p["note"])
+    p = _plan("message_read", {"all": True})
+    check("message_read 的注记说的是**信**、不是通知（两个 id 空间不许混）",
+          "信" in p["note"] and "通知" not in p["note"], p["note"])
+    check("own 写技能都落在 _OWN_WRITE_WORKFLOWS 里（不是靠减法落到名字通道）",
+          _OWN_WRITE_WORKFLOWS == {"favorite_add", "favorite_remove", "notice_read",
+                                "message_read"},
+          str(sorted(_OWN_WRITE_WORKFLOWS)))
+    check("own 写技能与名字通道不重叠（两套展开器的判据互斥）",
+          not (_OWN_WRITE_WORKFLOWS & _WRITE_NAME_TARGET_WORKFLOWS))
+    _BUCKETS = (_WRITE_NAME_TARGET_WORKFLOWS | _OWN_WRITE_WORKFLOWS | _FREE_TEXT_WRITE_WORKFLOWS
+                | _LEDGER_TARGET_WRITE_WORKFLOWS
+                | {"article_status", "article_tags"})
+    check("注册表里每个写技能都落进五者之一（名字通道 "
+        "/ 台账编号 / own 通道 / 自由文本 / 文章两件）",
+          WRITE_WORKFLOW_NAMES <= _BUCKETS,
+          str(sorted(WRITE_WORKFLOW_NAMES - _BUCKETS)))
+    check("  且台账编号通道与名字通道**不重叠**（一件工具被两套目标判据同时管 = 判据分裂）",
+          not (_LEDGER_TARGET_WRITE_WORKFLOWS & _WRITE_NAME_TARGET_WORKFLOWS),
+          str(sorted(_LEDGER_TARGET_WRITE_WORKFLOWS & _WRITE_NAME_TARGET_WORKFLOWS)))
+    for n in sorted(_OWN_WRITE_WORKFLOWS):
+        sk = WORKFLOW_MAP.get(n)
+        check(f"own 写技能 {n} 不设 roles（三档角色都看得见：动的是他自己的数据）",
+              sk is not None and not sk.roles, str(sk and sk.roles))
+    print("\n⑥ 接线在位（改坏了这几处，上面的功能静默失效）")
+    _rust = _parent_repo.read(
+        "src/routes/chat.rs",
+        why="这几条措辞（站内信/收藏的动作行）是 Rust 写时渲染定稿的 ⇒ 只改 Python 一侧，"
+        "线上台账里仍是旧措辞；下面的 `if _rust:` 读不到就整段不判")
+    _s = _src("agent/action_text.py")
+    check("三个读工具都在注册表里",
+          all(n in {t.name for t in _TOOL_REGISTRY} for n in READ_TOOLS),
+          str(sorted(n for n in READ_TOOLS if n not in {t.name for t in _TOOL_REGISTRY})))
+    check("scope 声明为 read.own（不是 admin.console——判据是『以谁的 uid 去读』）",
+          all(authz.required_scope(n) == authz.SCOPE_READ_OWN for n in READ_TOOLS),
+          str({n: authz.required_scope(n) for n in READ_TOOLS}))
+    check("三档角色都授予 read.own（角色轴在这里没有信息量）",
+          all(authz.SCOPE_READ_OWN in authz._ROLE_SCOPES[r]
+              for r in (authz.ROLE_USER, authz.ROLE_ADMIN)))
+    check("匿名（role=None）四处都拿不到：没有身份就没有这份数据",
+          all(not authz.check(Principal(uid=0, role=None), n).allowed for n in READ_TOOLS))
+    check("读工具**不进** CONSENT_SCOPES（读自己的收藏不需要当轮命令）",
+          authz.SCOPE_READ_OWN not in authz.CONSENT_SCOPES)
+    check("三个都在 planner 点名白名单（无参只读，走 PARAMS.tools）",
+          all(n in _EXPLICIT_TOOLS and n in _CALLABLE_QUERY_TOOLS for n in READ_TOOLS))
+    check("三个都在 _CONTENT_TOOLS（否则『你还没有未读通知』这句站内结论没有帧）",
+          all(n in _CONTENT_TOOLS for n in READ_TOOLS))
+    check("三个都有中文动作词（否则过程行显示『执行 list_notifications』）",
+          all(f'"{n}":' in _s for n in READ_TOOLS)
+          and all(_act(n, {}) != f"执行 {n}" for n in READ_TOOLS))
+    check("工具描述里写了『自己』（措辞不许让 planner 读成『全站』）",
+          all("自己" in getattr(base, n).description for n in READ_TOOLS))
+    check("三个都在 planner 菜单里（带描述，`- name():` 形态）",
+          all(f"- {n}()：" in _G._tools_desc(None) for n in READ_TOOLS),
+          str([n for n in READ_TOOLS if f"- {n}()：" not in _G._tools_desc(None)]))
+    check("三个写工具都在注册表里",
+          all(n in {t.name for t in _TOOL_REGISTRY} for n in WRITE_TOOLS),
+          str(sorted(n for n in WRITE_TOOLS if n not in {t.name for t in _TOOL_REGISTRY})))
+    check("scope 声明为 write.own（与后台写的 write.console 是**两个** scope）",
+          all(authz.required_scope(n) == authz.SCOPE_WRITE_OWN for n in WRITE_TOOLS),
+          str({n: authz.required_scope(n) for n in WRITE_TOOLS}))
+    check("两档角色都授予 write.own（代博主收藏是对自己的号写状态）",
+          all(authz.SCOPE_WRITE_OWN in authz._ROLE_SCOPES[r]
+              for r in (authz.ROLE_USER, authz.ROLE_ADMIN)))
+    check("匿名（role=None）拿不到：没有身份就没有收藏夹",
+          all(not authz.check(Principal(uid=0, role=None), n).allowed for n in WRITE_TOOLS))
+    check("写工具**不进** _HARD_SCOPES（不吃 shadow，与后台写刻意分开）",
+          authz.SCOPE_WRITE_OWN not in authz._HARD_SCOPES)
+    check("写工具**进** CONSENT_SCOPES（写自己的东西也要当轮一条命令）",
+          authz.SCOPE_WRITE_OWN in authz.CONSENT_SCOPES
+          and all(authz.requires_consent(Principal(uid=7, role="user"), n) for n in WRITE_TOOLS))
+    check("同意闸对同一句话给出**不同**工具各自的结论（判据按工具名，不是按 scope）",
+          authz.consent_granted(Principal(uid=7, role="user"), "add_favorite", "收藏这篇文章")
+          and not authz.consent_granted(Principal(uid=7, role="user"),
+                                        "read_notifications", "收藏这篇文章"))
+    check("站内信**读**工具也进 planner 点名白名单（自指提问：我信箱里有什么）",
+          "list_my_messages" in _EXPLICIT_TOOLS and "list_my_messages" in _CALLABLE_QUERY_TOOLS
+          and "list_my_messages" in _G._tools_desc(None)
+          and "list_my_messages" in _CONTENT_TOOLS)
+    check("站内信**写**工具（read_messages）**不在**任何 planner 白名单（写只走技能模板）",
+          "read_messages" not in _EXPLICIT_TOOLS and "read_messages" not in _CALLABLE_QUERY_TOOLS
+          and "read_messages" not in _G._tools_desc(None))
+    check("read_messages 与 read_notifications 共用一个同意闸族（同一句命令的两种目标）",
+          authz.TOOL_SCOPE["read_messages"] == authz.TOOL_SCOPE["read_notifications"]
+          == authz.SCOPE_WRITE_OWN
+          and authz._OWN_TOOL_FAMILY["read_messages"]
+              == authz._OWN_TOOL_FAMILY["read_notifications"],
+          f"{authz.TOOL_SCOPE['read_messages']} / {authz._OWN_TOOL_FAMILY.get('read_messages')}")
+    check("站内信两件都有中文动作词分支（否则过程行显示『执行 read_messages』）",
+          _act("read_messages", {"all": "True"}) == "标记站内信已读（全部未读）"
+          and _act("list_my_messages", {}) == "查看站内信"
+          and '"list_my_messages": "查看站内信"' in _s)
+    if _rust:
+        check("Rust 侧两个臂都在，且措辞与 agent 侧同源",
+              '"list_my_messages" => "查看站内信"' in _rust
+              and '"标记站内信已读（全部未读）"' in _rust,
+              "src/routes/chat.rs 缺臂")
+        check("Rust 侧通知/信两族的措辞**不同字**（同字=有一族被复制粘贴漏改）",
+              '"标记站内信已读（全部未读）"' in _rust
+              and '"标记站内通知已读（全部未读）"' in _rust)
+    check("两件描述里都写了『自己』，且都点了『与河灯留言是两回事』",
+          all("自己" in getattr(base, n).description for n in
+              ("list_my_messages", "read_messages"))
+          and "河灯留言" in base.list_my_messages.description,
+          base.list_my_messages.description[:40])
+    check("写工具都不在 planner 点名白名单（写只能由技能模板展开）",
+          all(n not in _EXPLICIT_TOOLS and n not in _CALLABLE_QUERY_TOOLS
+              and n not in _G._tools_desc(None) for n in WRITE_TOOLS))
+    check("三个写工具都有中文动作词分支（否则过程行显示『执行 add_favorite』）",
+          _act("add_favorite", {"article_id": "12"}) == "收藏文章 12"
+          and _act("remove_favorite", {"article_id": "12"}) == "取消收藏文章 12"
+          and _act("read_notifications", {"all": "True"}) == "标记站内通知已读（全部未读）")
+    if _rust:
+        check("过程行动作词与 Rust render_exec_row 的同名臂措辞同源（收藏/取消收藏）",
+              '收藏文章 {}' in _rust and '取消收藏文章 {}' in _rust,
+              "src/routes/chat.rs 缺臂")
+        check("Rust 侧认得 args 里的 Python 形态（列表是 repr 字符串、bool 是 'True'）",
+              'fn py_int_list' in _rust
+              and 'matches!(arg("all").as_str(), "True" | "true" | "1")' in _rust)
+    check("写工具描述里也写了『自己』", all("自己" in getattr(base, n).description
+                                           for n in WRITE_TOOLS))
+    check("收藏/取消收藏都进『目标有据』名单（写错文章的 id 是不可回滚的对外改动）",
+          {"add_favorite", "remove_favorite"} <= set(_G._ARTICLE_WRITE_TOOLS))
+    check("收藏两件**不在**弹窗标题工具名单里（普通访客没有读后台清单的权限）",
+          not ({"add_favorite", "remove_favorite"} & set(_G._POPUP_TITLE_TOOLS)))
+    check("收藏列表进了『有据』的帧来源（收藏过的文章 id 也算有据）",
+          "list_my_favorites" in _G._TARGET_EVIDENCE_TOOLS)
+    print("\n⑦ 语料与判据（20260923 批 8：这套能力「读不到时会说什么」是判据的一部分）")
+    _g_src = _ctx_src.prose()   # 下面整段判的是**叙述纪律正文本体**（20261014 起住 prompts.py；
+    check("narrator 纪律 20 在位（没携带身份/读不到 ≠ 空）",
+          "（帧里原话「没有携带当前用户身份：…」）" in _g_src
+          and "**一个字都不许说成" in _g_src)
+    check("纪律 20 把三种结局分开说（读到了是空 / 没携带身份 / 读不到）",
+          "读到了确实是空" in _g_src and "没携带身份" in _g_src
+          and "这次没读到，不敢下结论" in _g_src)
+    check("纪律 20 反向锁：这一格『登录』『登陆』二字一次都不许出口（20261009 收口）",
+          "「登录」「登陆」这两个字一次都不许出口" in _g_src
+          and "把系统的账" in _g_src)
+    check("  且系统这一侧的事不许写成条件句/前置条件（同一格换词的第二种说法）",
+          "不许写成条件句或前置条件" in _g_src and "才行" in _g_src)
+    check("  反例句已经删掉（留着会被照着改写一遍再用出来）",
+          "你先去登录" not in _g_src)
+    check("纪律 20 管到「改没改成功」（只认执行回执，不把未确认生效说成好了）",
+          "未确认生效" in _g_src and "只认本轮执行回执" in _g_src)
+    check("纪律 18 的括注已扩到收藏 / 标记已读（原先只有新建标签、改文章状态）",
+          "新建标签、改文章状态、收藏/取消收藏、标记通知已读" in _g_src)
+    check("纪律 18 收尾写明：这三件写自己的数据**不弹框**、只能按回执说",
+          "只能按回执说" in _g_src and "系统**不弹框**" in _g_src)
+    _gold = [json.loads(line) for line in
+             (_src("eval/golden/basic.jsonl")).splitlines() if line.strip()]
+    _by_id = {c["id"]: c for c in _gold}
+    NEW_CASES = {
+        "own_favorite_add_not_logged_in": {"require_tool_calls": ["add_favorite"]},
+        "own_unread_not_logged_in": {"require_tool_calls_any": ["list_notifications",
+                                                                "get_unread_summary"]},
+        "own_mark_read_not_logged_in": {"require_tool_calls": ["read_notifications"]},
+        # 站内信（20260923 批 8）：同一对形态的另一个物件。断言刻意**点名同族的另一个
+        # 工具**（read_messages 而非 read_notifications）：两族 id 空间不同，走错族
+        # 会把通知标成已读、信一封没动，而回执看着像成功——这种错只能靠"点名哪个工具"
+        # 抓（见两条用例 _note 里的"术语分辨"）。
+        "own_messages_not_logged_in": {"require_tool_calls_any": ["list_my_messages",
+                                                                 "get_unread_summary"]},
+        "own_message_read_not_logged_in": {"require_tool_calls": ["read_messages"]},
+        # 句首称呼壳（20260930，同族第 4 例）：同一句话带上「小猫咪」前缀，此前同意闸
+        # 判不出命令 ⇒ 落回弹窗 ⇒ 这条用例会变成"走确认弹窗、零调用"（性质悄悄变了而
+        # 用例本身不报错，正是这段注释开头那条纪律说的形态）。生产 trace 里这句出现过
+        # 4 次、主人每次都在弹窗上点了确定 ⇒ 真行为就是"能直执行"。
+        "own_favorite_add_vocative_not_logged_in": {"require_tool_calls": ["add_favorite"]},
+    }
+    for _cid, _want in NEW_CASES.items():
+        _c = _by_id.get(_cid)
+        check(f"golden 用例在位：{_cid}", _c is not None)
+        if not _c:
+            continue
+        _g = _c["gold"]
+        check(f"  {_cid}：断言了真调过工具（否则「需要登录」这句可以是零帧编的）",
+              all(_g.get(k) == v for k, v in _want.items()))
+        check(f"  {_cid}：禁 fallback（兜底道歉不算如实说）", _g.get("forbid_fallback") is True)
+        # 20261001：这条原先要求回复里**出现「登录」这个词**。主人当天拍板的前提是
+        # 「**必须登录才能和 agent 对话**」（`src/routes/chat.rs::prepare_chat` 无令牌直接回
+        # 合规文案、根本到不了 agent）⇒ 生产里 uid>0 恒成立、uid≤0 不可达，而那条断言在
+        # **奖励**一句生产里恒为假的话。改判「如实表达做不到」（`require_denial` = 共享的
+        # 诚实拒绝族，族里本就含「未登录」，只会放宽不会收紧）——判据换了，锁还在：
+        # 没有这条断言（也没了旧词表）的用例在这里照样红。
+        check(f"  {_cid}：正文如实表达「做不到」（诚实拒绝族，不再点名『登录』）",
+              _g.get("require_denial") is True)
+        check(f"  {_cid}：有负断言（不得声称已改/不得说成空）",
+              bool(_g.get("text_not_match_regex")))
+        check(f"  {_cid}：匿名（无 user_id / 无 role）",
+              "user_id" not in _c.get("context", {}) and "role" not in _c.get("context", {}))
+    check("站内信那两条点名的是**信**这一族的工具（复制粘贴时最容易串成通知族）",
+          "list_my_messages" in NEW_CASES["own_messages_not_logged_in"]
+          ["require_tool_calls_any"]
+          and NEW_CASES["own_message_read_not_logged_in"]["require_tool_calls"]
+          == ["read_messages"])
+    check("输入形态判据仍是「命令式 ⇒ 免弹窗直执行」（改了 authz 判据这条先红）",
+          authz.consent_granted(Principal(uid=7, role="user"), "add_favorite", "收藏这篇文章")
+          and authz.consent_granted(Principal(uid=7, role="user"),
+                                    "read_notifications", "把通知都标记成已读"))
+    check("  带句首称呼的命令同样免弹窗（否则上面那条新用例会在弹窗上停住、零调用）",
+          authz.consent_granted(Principal(uid=7, role="user"), "add_favorite",
+                                "小猫咪把我当前在读的文章收藏了"))
+    check("两条提问形态仍是「提问 ⇒ 不弹窗」（否则用例会落进确认弹窗、测的不是同一条链路）",
+          authz.is_question_like("我有哪些未读通知？"))
+    check("checker：kind=not_found → BLOCK + 独立原因码 target_not_found",
+          _G._check_spec("read_notifications", {"ids": [3]}, True, "通知 3 不在…", "notice_read",
+                         kind="not_found") == ("BLOCK", "target_not_found"),
+          str(_G._check_spec("read_notifications", {"ids": [3]}, True, "…", "notice_read",
+                             kind="not_found")))
+    check("checker：kind=unavailable 仍是它自己的码（两族不许合并）",
+          _G._check_spec("read_notifications", {}, True, "…", "notice_read",
+                         kind="unavailable") == ("BLOCK", "unavailable"))
+    _s_src = (ROOT / "server.py").read_text(encoding="utf-8")
+    check("过程行有中文：target_not_found →「目标不存在」（不是「服务不可用」）",
+          '"target_not_found": "目标不存在"' in _s_src and '"unavailable": "服务不可用"' in _s_src,
+          str([l for l in _s_src.splitlines() if "target_not_found" in l]))
+    _settings.jwt_secret = _saved_secret   # 收尾：还原成进来时的样子（见头部密钥桩）
+    print("\n" + ("全部通过" if not FAILS else f"失败 {len(FAILS)} 项：" + "; ".join(FAILS)))
+
+    assert not FAILS, (
+        f"{len(FAILS)} 条未通过：" + "；".join(FAILS))
+
+
+if __name__ == "__main__":
+    test_userdata()

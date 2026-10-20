@@ -229,7 +229,7 @@ dotenv**（实测：把 `AGENT_TASK_STATE=0` 塞进环境即以它为准）⇒ d
 
 **拨盘**：真值源仍是 `.env` 一处（drop-in 20261008 22:45 已退役）。本批改的是"点了技能那一
 轮"，与 schema 档位无关 ⇒ 离线套件在 `AGENT_TASK_STATE=0` 与 `1` 两档**各跑一遍，红套件数都是
-0**（`tests/run_all.py` 110/110；`run_all.py` 那把钉子把档位钉成 0，所以第二档必须手工单跑一遍
+0**（`tests/run_all.py`（已删）110/110；`run_all.py` 那把钉子把档位钉成 0，所以第二档必须手工单跑一遍
 ——"离线套件对档位是瞎的"这条纪律照旧）。
 
 **追记一：目标里的号必须有出处**（`tasks.reconcile_goal`，`sources` 贯穿 `intent_frames` →
@@ -283,7 +283,7 @@ dotenv**（实测：把 `AGENT_TASK_STATE=0` 塞进环境即以它为准）⇒ d
 | 同上，改后（三批连跑 17 次，**均为"④ 还是第一版"的代码**） | **13/17** 通过；其中一批 6/6 全部走了内联字段通道（trace `note: task_intents_field:category_create`） |
 | `task_state_resume_settle` 改后单跑 | **3/3** 通过 |
 | `admin_write_intent_named_target_only` 改后单跑 | **3/3** 通过（**这一条按设计跑在 uid=0 哨兵下**——写面用例不在 `needs_admin_uid` 通道里，`run_golden.py` 有注释；它的 gold 判的是"零写、零待确认卡"，哨兵正是最后那道保险。所以这 3 个绿只证"没有乱写"，不证"身份路径通"） |
-| 离线 | `tests/run_all.py` **110/110**；新套件 `tests/test_intents_backfill.py` 两档各一次全绿；逐套件两档扫描红套件数 **0** |
+| 离线 | `tests/run_all.py`（已删）**110/110**；新套件 `tests/test_intents_backfill.py` 两档各一次全绿；逐套件两档扫描红套件数 **0** |
 
 **那 4/17 的红逐条定过性**（如实记，`raw_*` 那两格就是为这一步加的）：
 

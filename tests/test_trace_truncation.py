@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """trace 工具返回的截断策略（`utils/trace.tool_result_text`）单测：离线、秒级、零网络。
 
 为什么要单独一套：这个函数决定**事后核查能拿到什么材料**——判官判"回复有没有编材料"
@@ -16,22 +15,26 @@
   · `is_truncated()` 是唯一的机器判据，别处不许硬编码标记文本；
   · 档位表里的工具名必须真实存在（写错名字不会报错，只会让那一档静默失效）。
 """
+
+
 import sys
 from pathlib import Path
 
+from _judge import collector
+
 ROOT = Path(__file__).resolve().parent.parent  # 仓根（20260924：测试统一搬进 tests/）
+
+
 sys.path.insert(0, str(ROOT))
+
+
 sys.path.insert(0, str(ROOT / "eval"))
+
 
 from utils import trace as trace_mod  # noqa: E402
 
 FAILS: list[str] = []
-
-
-def check(desc: str, cond: bool, detail: str = "") -> None:
-    print(("  ✅ " if cond else "  ❌ ") + desc + (f"  [{detail}]" if detail else ""))
-    if not cond:
-        FAILS.append(desc)
+check = collector(FAILS)
 
 
 def _with_env(value):
@@ -48,7 +51,7 @@ def _with_env(value):
     return restore
 
 
-def test_tiers():
+def _test_tiers():
     print("[分档] 不设 env 时按工具取档，没列的走默认档")
     restore = _with_env(None)
     try:
@@ -79,7 +82,7 @@ def test_tiers():
         restore()
 
 
-def test_env_override():
+def _test_env_override():
     print("[env] 全局覆盖优先于分档；值写坏退回分档")
     t = trace_mod.tool_result_text
     restore = _with_env("8000")
@@ -112,7 +115,7 @@ def test_env_override():
         restore()
 
 
-def test_marker():
+def _test_marker():
     print("[标记] 唯一的机器判据")
     check("标记里带原文长度",
           trace_mod.truncation_mark(12345) == f"{trace_mod.TRUNCATION_MARK_PREFIX}12345 字符]")
@@ -123,7 +126,7 @@ def test_marker():
           trace_mod.is_truncated(None) is False and trace_mod.is_truncated(123) is False)
 
 
-def test_tier_table_is_sound():
+def _test_tier_table_is_sound():
     print("[档位表] 名字必须真实存在——写错就是静默失效")
     from agent.graph import _TOOL_MAP
     names = set(_TOOL_MAP)
@@ -138,7 +141,7 @@ def test_tier_table_is_sound():
           all(isinstance(v, int) for v in trace_mod.TOOL_RESULT_LIMITS.values()))
 
 
-def test_judge_reads_the_marker():
+def _test_judge_reads_the_marker():
     print("[下游] 判官认标记，不自己抄一份标记文本")
     import llm_judge
     marked = "x" * 300 + trace_mod.truncation_mark(99999)
@@ -172,7 +175,7 @@ def test_judge_reads_the_marker():
           "from utils import trace as trace_mod" in src and "trace_mod.is_truncated(" in src)
 
 
-def test_wiring():
+def _test_wiring():
     print("[接线] 落盘那一处必须传工具名，否则分档不生效")
     src_graph = (ROOT / "agent" / "graph.py").read_text(encoding="utf-8")
     # 20260925 批 D：落盘的那份文本从 `str(out)` 改成 `frame_text`（= 模型看到的帧，
@@ -190,8 +193,8 @@ def test_wiring():
 
 
 def main():
-    for fn in (test_tiers, test_env_override, test_marker,
-               test_tier_table_is_sound, test_judge_reads_the_marker, test_wiring):
+    for fn in (_test_tiers, _test_env_override, _test_marker,
+               _test_tier_table_is_sound, _test_judge_reads_the_marker, _test_wiring):
         fn()
     if FAILS:
         print(f"\n=== {len(FAILS)} 项失败 ===")
@@ -201,5 +204,12 @@ def main():
     print("\n=== 全部通过 ===")
 
 
-if __name__ == "__main__":
+def test_trace_truncation():
     main()
+
+    assert not FAILS, (
+        f"{len(FAILS)} 条未通过：" + "；".join(FAILS))
+
+
+if __name__ == "__main__":
+    test_trace_truncation()

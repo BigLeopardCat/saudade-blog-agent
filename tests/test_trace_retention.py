@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """trace 目录布局与保留治理（`utils/trace` + `trace_files` / `trace_retention`）单测。
 
 离线、秒级、零网络、零生产目录（全部在 tmpdir 里）。
@@ -17,6 +16,8 @@
 golden 那半也要盯（`by_day=False`）：它一旦被套上 `<YYYYMMDD>/`，
 `llm_judge` 的 `glob("*.json")` 与 `golden_trace.prune` 会一起落空、而且不报错。
 """
+
+
 import json
 import os
 import shutil
@@ -25,9 +26,16 @@ import tempfile
 import time
 from pathlib import Path
 
+from _judge import collector
+
 ROOT = Path(__file__).resolve().parent.parent  # 仓根
+
+
 sys.path.insert(0, str(ROOT))
+
+
 sys.path.insert(0, str(ROOT / "eval"))
+
 
 import trace_retention as tr  # noqa: E402
 
@@ -35,13 +43,10 @@ from utils import trace as trace_mod  # noqa: E402
 from utils import trace_files as tf  # noqa: E402
 
 FAILS: list[str] = []
+check = collector(FAILS)
+
+
 DAY = 86400.0
-
-
-def check(desc: str, cond: bool, detail: str = "") -> None:
-    print(("  ✅ " if cond else "  ❌ ") + desc + (f"  [{detail}]" if detail else ""))
-    if not cond:
-        FAILS.append(desc)
 
 
 def write(path: str, *, age_days: float = 0.0, body: dict | None = None) -> str:
@@ -232,5 +237,12 @@ def main() -> int:
     return 0
 
 
+def test_trace_retention():
+    main()
+
+    assert not FAILS, (
+        f"{len(FAILS)} 条未通过：" + "；".join(FAILS))
+
+
 if __name__ == "__main__":
-    sys.exit(main())
+    test_trace_retention()

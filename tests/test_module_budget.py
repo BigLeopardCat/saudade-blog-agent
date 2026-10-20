@@ -1,5 +1,3 @@
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
 """模块体量**预算闸**（20261017）——治"改动不断叠进同一个文件"。
 
 **要回答的问题**：本仓已经用「预算 + 台账」治过**函数级**复杂度
@@ -33,11 +31,13 @@
 逼你在同一个提交里把那一格改小——`--update` 出来的账**恰好等于**当时的实测，两边本来就该相等。
 
 用法（cd 仓根，用仓的 venv）：
-  .venv/bin/python tests/test_module_budget.py                  # 检查（run_all.py 这样调）
+  .venv/bin/python tests/test_module_budget.py                  # 检查（CI 这样调）
   .venv/bin/python tests/test_module_budget.py --update         # 重写台账
   .venv/bin/python tests/test_module_budget.py --lines-max 400 --defs-max 30  # 临时换阈值
 退出码：0 全在预算内 / 1 有模块超预算、长大了，或台账过期。
 """
+
+
 import argparse
 import ast
 import json
@@ -45,12 +45,16 @@ import pathlib
 import sys
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
+
+
 LEDGER = ROOT / "eval" / "module_baseline.json"
 
-# 预算。**阈值只要稳定就有意义**（同 `test_complexity_budget.py` 的口径）：本闸判的是
-# ratchet（"它没变大"），不必是某个规范值。换阈值 = 全仓台账重写 ⇒ 必须同一次 `--update`。
+
 LINES_MAX = 800     # 文件行数上限：超过就进台账
+
+
 DEFS_MAX = 60       # 模块级定义数上限：同上
+
 
 _SKIP_DIRS = {".venv", "__pycache__", ".git", "node_modules", "dist", ".mypy_cache"}
 
@@ -153,7 +157,6 @@ def order_violation(raw: str) -> str | None:
             f"值变了就是另一次放宽，要单独说理")
 
 
-# ── 自检：读数 + 判据（没有这一段，「闸其实是空的」没人看着）──────────────────
 _SELF_FLAT = '''\
 def a():
     pass
@@ -167,6 +170,7 @@ class B:
 async def c():
     pass
 '''
+
 
 _SELF_NESTED = '''\
 def outer():
@@ -257,5 +261,18 @@ def main() -> int:
     return 0
 
 
+def test_module_budget():
+
+
+    _argv = sys.argv
+    if "pytest" in sys.modules:      # 只在 pytest 轨收窄（直跑轨的 CLI 照旧可用）
+        sys.argv = _argv[:1]
+    try:
+        _rc = main()
+    finally:
+        sys.argv = _argv
+    assert _rc == 0, "main() 非零：上面那些 ❌ 就是原因"
+
+
 if __name__ == "__main__":
-    sys.exit(main())
+    test_module_budget()

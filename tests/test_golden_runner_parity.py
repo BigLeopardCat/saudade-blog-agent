@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """**判据的输入不许随跑法变**：同一个用例，进程内跑法与隔离跑法必须得到同一个答案（20261002）。
 
 两个跑法各有驱动（`eval/run_golden.py::main` 进程内；`eval/golden_full_run.py` 父进程 +
@@ -43,6 +42,8 @@ app**，父进程也没有别的入口替它预热 ⇒ 子进程跑用例的那�
 
 用法：.venv/bin/python tests/test_golden_runner_parity.py
 """
+
+
 import contextlib
 import importlib.util
 import io
@@ -53,19 +54,21 @@ import sys
 import tempfile
 from pathlib import Path
 
+from _judge import collector
+
 ROOT = Path(__file__).resolve().parent.parent
+
+
 sys.path.insert(0, str(ROOT))
+
+
 sys.path.insert(0, str(ROOT / "eval"))
+
 
 import run_golden as rg  # noqa: E402
 
 FAILS: list[str] = []
-
-
-def check(desc: str, cond: bool, detail: str = "") -> None:
-    print(("  ✅ " if cond else "  ❌ ") + desc + (f"  [{detail}]" if detail else ""))
-    if not cond:
-        FAILS.append(desc)
+check = collector(FAILS)
 
 
 def _load_runner():
@@ -133,61 +136,61 @@ def drive(snapshot) -> dict:
         shutil.rmtree(tmp, ignore_errors=True)
 
 
-print("① 预热在跑用例**之前**（顺序，不是「文件里有这行」）")
-_snap = {"docs": [{"type": "note", "id": 14, "title": "某篇", "content": "正文"}]}
-r = drive(_snap)
-_order = [c[0] for c in r["calls"]]
-check("调用顺序 = 预热 → 跑用例 → 判据",
-      _order == ["judge_corpus", "run_case", "check_case"], str(_order))
-check("判据复用的是同一份快照（不是跑完再取一次）",
-      r["calls"][2][1] is _snap, repr(r["calls"][2][1])[:60])
-check("子进程照常收尾、退出码 0（桩判据全过）", r["code"] == 0, str(r["code"]))
-
-print("\n② 预热失败（None）不阻断：用例照跑，判据如实拿到 None")
-r2 = drive(None)
-check("用例仍然跑了（不是把整轮中止）",
-      [c[0] for c in r2["calls"]] == ["judge_corpus", "run_case", "check_case"],
-      str([c[0] for c in r2["calls"]]))
-check("判据拿到的是 None ⇒ 带 `require_doc_terms` 的用例判「未评估」"
+def test_golden_runner_parity():
+    print("① 预热在跑用例**之前**（顺序，不是「文件里有这行」）")
+    _snap = {"docs": [{"type": "note", "id": 14, "title": "某篇", "content": "正文"}]}
+    r = drive(_snap)
+    _order = [c[0] for c in r["calls"]]
+    check("调用顺序 = 预热 → 跑用例 → 判据",
+          _order == ["judge_corpus", "run_case", "check_case"], str(_order))
+    check("判据复用的是同一份快照（不是跑完再取一次）",
+          r["calls"][2][1] is _snap, repr(r["calls"][2][1])[:60])
+    check("子进程照常收尾、退出码 0（桩判据全过）", r["code"] == 0, str(r["code"]))
+    print("\n② 预热失败（None）不阻断：用例照跑，判据如实拿到 None")
+    r2 = drive(None)
+    check("用例仍然跑了（不是把整轮中止）",
+          [c[0] for c in r2["calls"]] == ["judge_corpus", "run_case", "check_case"],
+          str([c[0] for c in r2["calls"]]))
+    check("判据拿到的是 None ⇒ 带 `require_doc_terms` 的用例判「未评估」"
       "（不是静默通过）", r2["calls"][2][1] is None, repr(r2["calls"][2][1]))
+    print("\n③ 反向对照：把预热挪到跑用例**之后**（= 改回旧形状）⇒ ① 当场红")
+    _after = [c for c in r["calls"] if c[0] != "judge_corpus"] + [("judge_corpus",)]
+    check("顺序变了就不再是 [judge_corpus, run_case, check_case]",
+          [c[0] for c in _after] != ["judge_corpus", "run_case", "check_case"],
+          str([c[0] for c in _after]))
+    print("\n④ 进程内跑法也在循环之前预热（源码顺序锁：只有一边接上等于没接）")
+    _src = (ROOT / "eval/run_golden.py").read_text(encoding="utf-8")
+    _i_warm = _src.find("judge_docs = judge_corpus()")
+    _i_first_case = _src.find("result = run_case(case, run_id=run_id)")
+    check("`judge_corpus()` 在第一次 `run_case(...)` 之前",
+          _i_warm > 0 and _i_first_case > _i_warm, f"{_i_warm} vs {_i_first_case}")
+    check("判据吃的是那一份（`docs=judge_docs`）", _src.count("docs=judge_docs") >= 2,
+          str(_src.count("docs=judge_docs")))
+    print("\n⑤ 哨兵在**判据入口**展开（同一个用例换谁跑都得同一个答案）")
+    _wc = sorted(rg.write_console_tools())
+    check("authz.TOOL_SCOPE 读得到写工具全集（哨兵的单一事实源）", len(_wc) >= 10, f"{len(_wc)} 个")
+    _probe_case = {"id": "parity_sentinel", "user_input": "删掉那篇文章",
+                   "gold": {"forbid_tool_calls": ["@write_console"]}}
+    _probe_res = _stub_result()
+    _probe_res["tool_calls"] = [_wc[0]]
+    _pf = rg.check_case(_probe_case, _probe_res)
+    check("未展开的用例（`@write_console` 还是字面量）调了写工具 ⇒ 判据当场红",
+          any("不应调用工具" in f for f in _pf), str(_pf)[:120])
+    check("  反向对照：字面量比对本身永远不响（「哨兵不展开」就是这么静默放行的）",
+          "@write_console" not in [_wc[0]], _wc[0])
+    _probe_res["tool_calls"] = []
+    check("  换一条只读调用 ⇒ 同一份用例照样放行（不是把清单当成了「一律有罪」）",
+          not rg.check_case(_probe_case, _probe_res), str(rg
+              .check_case(_probe_case, _probe_res))[:120])
+    print()
+    if FAILS:
+        print(f"失败 {len(FAILS)} 项：" + "；".join(FAILS))
+        sys.exit(1)
+    print("全部通过")
 
-print("\n③ 反向对照：把预热挪到跑用例**之后**（= 改回旧形状）⇒ ① 当场红")
-_after = [c for c in r["calls"] if c[0] != "judge_corpus"] + [("judge_corpus",)]
-check("顺序变了就不再是 [judge_corpus, run_case, check_case]",
-      [c[0] for c in _after] != ["judge_corpus", "run_case", "check_case"],
-      str([c[0] for c in _after]))
+    assert not FAILS, (
+        f"{len(FAILS)} 条未通过：" + "；".join(FAILS))
 
-print("\n④ 进程内跑法也在循环之前预热（源码顺序锁：只有一边接上等于没接）")
-_src = (ROOT / "eval/run_golden.py").read_text(encoding="utf-8")
-_i_warm = _src.find("judge_docs = judge_corpus()")
-_i_first_case = _src.find("result = run_case(case, run_id=run_id)")
-check("`judge_corpus()` 在第一次 `run_case(...)` 之前",
-      _i_warm > 0 and _i_first_case > _i_warm, f"{_i_warm} vs {_i_first_case}")
-check("判据吃的是那一份（`docs=judge_docs`）", _src.count("docs=judge_docs") >= 2,
-      str(_src.count("docs=judge_docs")))
 
-print("\n⑤ 哨兵在**判据入口**展开（同一个用例换谁跑都得同一个答案）")
-# 病根同上：`forbid_tool_calls: ["@write_console"]` 的展开此前只发生在
-# `run_golden.main()` 读完 jsonl 之后（就地改写用例 dict），隔离子进程吃的是父进程写下的
-# **原始** json ⇒ 哨兵被当成一个字面工具名去比 ⇒ 36 条用例的"不许写"断言恒不响，方向是
-# 放行。这条锁不管跑法，直接问判据：**没有经过加载期展开**的用例喂进来，它响不响。
-_wc = sorted(rg.write_console_tools())
-check("authz.TOOL_SCOPE 读得到写工具全集（哨兵的单一事实源）", len(_wc) >= 10, f"{len(_wc)} 个")
-_probe_case = {"id": "parity_sentinel", "user_input": "删掉那篇文章",
-               "gold": {"forbid_tool_calls": ["@write_console"]}}
-_probe_res = _stub_result()
-_probe_res["tool_calls"] = [_wc[0]]
-_pf = rg.check_case(_probe_case, _probe_res)
-check("未展开的用例（`@write_console` 还是字面量）调了写工具 ⇒ 判据当场红",
-      any("不应调用工具" in f for f in _pf), str(_pf)[:120])
-check("  反向对照：字面量比对本身永远不响（「哨兵不展开」就是这么静默放行的）",
-      "@write_console" not in [_wc[0]], _wc[0])
-_probe_res["tool_calls"] = []
-check("  换一条只读调用 ⇒ 同一份用例照样放行（不是把清单当成了「一律有罪」）",
-      not rg.check_case(_probe_case, _probe_res), str(rg.check_case(_probe_case, _probe_res))[:120])
-
-print()
-if FAILS:
-    print(f"失败 {len(FAILS)} 项：" + "；".join(FAILS))
-    sys.exit(1)
-print("全部通过")
+if __name__ == "__main__":
+    test_golden_runner_parity()

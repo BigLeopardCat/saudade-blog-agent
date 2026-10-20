@@ -76,7 +76,7 @@ agent 读的还是别人的博客，读数是真的、只是不属于你。
 
 ## 谁守着这个夹具
 
-`tests/test_golden_fixture_corpus.py`（离线、无网络、无 LLM，跟 `tests/run_all.py` 一起跑）
+`tests/test_golden_fixture_corpus.py`（离线、无网络、无 LLM，跟着整套一起跑）
 守四件事：
 
 1. 桩真的供出了 `corpus/` 的那几篇（**起真桩、走真读路径**：`tools/base._get` →

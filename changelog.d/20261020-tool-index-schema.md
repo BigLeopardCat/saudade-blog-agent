@@ -11,4 +11,4 @@
   ② **判据**：新增 `tests/test_tool_index.py` 五组——缺省档不含取回口且描述就是原文 /
   索引档剥掉 description 后与缺省档**逐字节相同** / `describe_skill` 的返回**逐字等于**
   索引化前那一格 / 索引行恒为原文前缀且非空互异 / 体积棘轮（索引 ≤ 描述原文的 25%）。
-  设计与分阶段见 `docs/adr/adr-0014-planner-becomes-router-schema-on-demand.md`。
+  设计与分阶段见 `docs/adr/adr-0015-planner-becomes-router-schema-on-demand.md`。

@@ -6,58 +6,87 @@ Run with:
 """
 
 import asyncio
-import base64
 import contextvars
 import functools
-import hashlib
-import hmac
 import json
 import logging
-import os
 import re
 import threading
 import time
 import uuid
-from datetime import datetime
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
+from datetime import datetime
 from importlib.metadata import PackageNotFoundError
 from importlib.metadata import version as _pkg_version
 from typing import Literal
-from concurrent.futures import ThreadPoolExecutor
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse, StreamingResponse
+
+# 断言验签（20261020，ADR-0014）。`InvalidTokenError` 是 PyJWT 全部验签失败的基类。
+from jwt import InvalidTokenError
+from langchain_core.messages import (
+    AIMessage,
+    AIMessageChunk,
+    HumanMessage,
+    SystemMessage,
+    ToolMessage,
+)
 from pydantic import BaseModel, Field, field_validator
-from langchain_core.messages import AIMessage, AIMessageChunk, HumanMessage, SystemMessage, ToolMessage
+
+from agent import (
+    checkpoint,  # 采纳（批 7）：造 saver + 会话坐标 + 级联清理
+    confirm,  # 待办令牌：签发在 graph 弹窗侧，验签在这里（见 /chat/stream）
+    create_agent,
+    idem,  # 持久化档的唯一常量（REQUIRED_DURABILITY，见 agent/idem.py）
+    runtime_probe,  # /version 与 /ready 的判定逻辑（纯函数，见该模块头注）
+)
+from agent.action_text import tool_action_text
+from agent.factblock import (  # 动作事实块（D3）
+    action_facts,
+    compose,
+    render_fact_block,
+    strip_fact_lines,
+)
+from agent.graph import AgentCancelled, _cmd_wire, _tool_args, _tool_name, graph_input
+from agent.principal import Principal
+from agent.summarizer import summarize
+
+# `NAV_MAP` 的 import 随渲染一起搬走了（20260928）：路径→中文别名的反查只服务于
+# 过程行，现在在 `agent/action_text.py` 里。
+# 会话级任务状态（20260927 批 D）：登记帧的发出与流尾的**确定性结算**都在 producer
+# （这里拿得到 req 与流内全部回执——两样东西凑齐的地方只有这一处，见 _run_agent_stream_to_queue）
+from agent.tasks import (
+    TASK_CONSENT_ASK,
+    TS_MMDD_HHMM_RE,
+    advance_by_tools,
+    age_minutes,
+    done_tools,
+    expire_transitions,
+    render_open_tasks,
+    rows_to_settle,
+    task_rows,
+    transition_frames,
+)
 
 # 过程行/台账行的中文措辞（20260928）：唯一实现在 `agent/action_text.py`（与本文件
 # 之外的 Rust `render_exec_row` 那一份**合并成了一份**，见该模块头注）。这里只保留
 # "什么时候发哪条过程行"，以及受阻原因码的中文（`_REASON_CN`，它贴的是 BLOCK 原因码、
 # 不属于动作措辞）。
-from agent.action_text import tool_action_text
-from agent import checkpoint  # 采纳（批 7）：造 saver + 会话坐标 + 级联清理
-from agent import confirm  # 待办令牌：签发在 graph 弹窗侧，验签在这里（见 /chat/stream）
-from agent import idem  # 持久化档的唯一常量（REQUIRED_DURABILITY，见 agent/idem.py）
-from agent import runtime_probe  # /version 与 /ready 的判定逻辑（纯函数，见该模块头注）
-from agent.factblock import (action_facts,  # 动作事实块（D3）
-                             compose, render_fact_block, strip_fact_lines)
-from agent import create_agent
-from agent.graph import AgentCancelled, graph_input, _cmd_wire, _tool_args, _tool_name
-from agent.principal import Principal
-from agent.summarizer import summarize
-# `NAV_MAP` 的 import 随渲染一起搬走了（20260928）：路径→中文别名的反查只服务于
-# 过程行，现在在 `agent/action_text.py` 里。
-# 会话级任务状态（20260927 批 D）：登记帧的发出与流尾的**确定性结算**都在 producer
-# （这里拿得到 req 与流内全部回执——两样东西凑齐的地方只有这一处，见 _run_agent_stream_to_queue）
-from agent.tasks import (TASK_CONSENT_ASK, TS_MMDD_HHMM_RE, advance_by_tools,
-                         age_minutes, done_tools, expire_transitions,
-                         render_open_tasks, rows_to_settle, task_rows,
-                         transition_frames)
+# 六个服务限额/超时常量（STREAM_* / RECURSION_LIMIT / MAX_BODY_BYTES /
+# MAX_CONCURRENT_STREAMS / REVIEW_CONCURRENCY）的真值源：20261020 双轨收敛后
+# 唯一从这里取值（env 键保持 AGENT_* 老名，写 .env 就生效；判据
+# tests/test_settings_surface.py ⑥）。此前那四个 AGENT_* 在本文件直读进程环境
+# ——.env 管不到它们，README 曾把这事当坑记。
+from config.settings import settings
+
 # 写工具参数的归一（20260923 批 7）原在本文件 import：`_tool_action_text` 用它把
 # "预告帧"与"计划文本"对同一个参数值的理解对齐。**20260928 渲染搬进
 # `agent/action_text.py` 后这里不再需要**（那两件仍从同一处 import，纪律不变：
 # 两侧不许各写一份归一）。
-from rag import search as rag_search, wordgraph
+from rag import search as rag_search
+from rag import wordgraph
 from utils.clock import format_local_now
 from utils.logging import get_trace_id, set_trace_id, setup_logging
 from utils.trace import finish_trace, record, start_trace
@@ -83,17 +112,20 @@ def _submit_with_context(loop, func, *args):
 
 # 流式输出兜底超时（秒）：与前端 120s 空闲超时对齐。
 # LLM/线程池异常挂起时主动终止流，避免对话无限等待（见 event_stream 的 wait_for）
-STREAM_IDLE_TIMEOUT = 120.0
+# （20261020 起真值源是 Settings 的 AGENT_STREAM_IDLE_TIMEOUT——写 .env 就生效，
+# 判据 tests/test_settings_surface.py ⑥；此前这里硬编码，改一次值要动一次码。）
+STREAM_IDLE_TIMEOUT = settings.stream_idle_timeout
 # 流式总时长硬上限（秒）：agent 工具调用循环/超长生成时每轮都有输出帧，
 # 空闲超时不会触发（帧流动会重置），需用总时长兜底保证流必会终止
-STREAM_TOTAL_TIMEOUT = 300.0
+STREAM_TOTAL_TIMEOUT = settings.stream_total_timeout
 
 # agent 图递归上界（防模型幻觉重试循环烧满 STREAM_TOTAL_TIMEOUT）：
 # langchain 1.3 create_agent 默认硬编码 recursion_limit=9999（等效无界），
 # 工具幻觉循环（同一意图反复"表演"调用而不真正调用）会打满总时长上限才断开，
 # 前端表现为 5 分钟"卡死"。压到 30（每轮循环约 2 图步 = 约 15 次模型-工具往返，
 # 正常流程 5 次以内），超限走既有 __ERROR__ 异常路径，卡死窗口缩到 60-90s。
-RECURSION_LIMIT = int(os.environ.get("AGENT_RECURSION_LIMIT", "30"))
+# （env 键 AGENT_RECURSION_LIMIT，20261020 起读 Settings——写 .env 就生效。）
+RECURSION_LIMIT = settings.recursion_limit
 
 # 生产者异常时 `__ERROR__` 帧里给**访客**看的那句话（20260927 拍板，原为"待拍板"）。
 # 此前这一格发的是 `str(异常)` 原文——上线实测的代价：异常名与内部路径顺着它出到
@@ -120,7 +152,7 @@ _RECOVERY_SENTENCE = "喵呜……主人抱歉，泠月喵刚才脑袋卡壳了�
 #   · starlette **默认不限制 body 大小**，直接读进内存——畸形大包先吃满 3.7GB 机器；
 #   · 超长字段会灌进 prompt，白烧 token，还可能撑爆 LLM 侧上下文；
 #   · LLM 调用是最贵的资源（单次最长 180s），无闸时并发涌进来只会一起排队到超时。
-MAX_BODY_BYTES = int(os.environ.get("AGENT_MAX_BODY_BYTES", str(12 * 1024 * 1024)))
+MAX_BODY_BYTES = settings.max_body_bytes
 MAX_MESSAGE_CHARS = 4000
 MAX_HISTORY_ITEMS = 60
 MAX_IMAGES = 6
@@ -139,7 +171,7 @@ MAX_RECENT_TOOLS = 40
 # 它由 Rust 按预算裁过再发，这里的 max_length 只是防线：**多一个字符就是每轮 422**，
 # 所以两边不许各填一个数——改这里必须同步改那边（`tests/test_exec_rows_anchors.py` 锁着）。
 EXEC_ROWS_MAX_CHARS = 8000
-MAX_CONCURRENT_STREAMS = int(os.environ.get("AGENT_MAX_CONCURRENT", "8"))
+MAX_CONCURRENT_STREAMS = settings.max_concurrent_streams
 STREAM_QUEUE_WAIT = 3.0         # 秒；排队超过这个时间就如实 503，不让请求无声堆着
 
 # 并发闸（每 worker 一个；uvicorn --workers 2 ⇒ 全局 2×MAX_CONCURRENT_STREAMS）。
@@ -150,7 +182,7 @@ _stream_slots = asyncio.Semaphore(MAX_CONCURRENT_STREAMS)
 # 闸 ⇒ 任何能连到 8010 的进程都能免费烧模型额度。刻意不共用对话那 8 个槽位：留言审核是
 # 同步短任务（上限 25s），与访客对话抢槽位会让留言高峰把对话打成 503。
 # 用 threading 版（`/review` 是 sync def，FastAPI 放线程池里跑，不占事件循环）。
-REVIEW_CONCURRENCY = int(os.environ.get("AGENT_MAX_REVIEW", "4"))
+REVIEW_CONCURRENCY = settings.review_concurrency
 REVIEW_QUEUE_WAIT = 3.0
 _review_slots = threading.BoundedSemaphore(REVIEW_CONCURRENCY)
 
@@ -499,11 +531,7 @@ _ASSERTION_AUD = "agent"
 
 
 def _verify_user_assertion(token: str) -> int | None:
-    """验 Rust 签的身份断言，返回其中的用户 id；任何一步不成立返回 None。
-
-    手写 HS256 校验（与 tools/base.py 的 `_sign_user_jwt` 同源）：只为一条内部断言
-    引一个 JWT 依赖不值得，而 python 标准库就够（hmac + base64 + json）。
-    """
+    """验 Rust 签的身份断言，返回其中的用户 id；任何一步不成立返回 None。"""
     claims = _verify_assertion_claims(token)
     return claims["uid"] if claims else None
 
@@ -514,29 +542,41 @@ def _verify_assertion_claims(token: str) -> dict | None:
     role 是 20260920 加的（身份与权限地基：agent 侧要知道"我代表的是谁、他能
     让我做什么"）。**Rust 还没部署带 role 的断言时这里是 None**，由调用方按
     "身份不明"处理（agent/authz.py：零权限 + shadow 只记不拦），不做任何默认授予。
+
+    **20261020 起验签交给 PyJWT**（此前是手写 HMAC + base64 + json 拼的）。判据一字
+    未改（签名 / `aud` / `exp` / `sub` 正整数），但手写验签要自己盯住 `alg` 混淆、空签名、
+    边界时钟，而标准库不会替你看 —— 完整的来龙去脉、三处收紧、以及为什么不是审计文档
+    写的 `==3.0.0`，见 `docs/adr/adr-0014-assertion-verify-via-pyjwt.md`。
+
+    ⚠️ **`verify_sub` 必须关掉，这是这次改动唯一的地雷**：Rust
+    `auth_jwt::AssertionClaims.sub` 是 **`i32`**（JSON 数字），PyJWT 的 `decode` 默认
+    `verify_sub=True` ⇒ `InvalidSubjectError`；生产 `AGENT_REQUIRE_ASSERTION=1` ⇒
+    **每一条断言都被拒 ⇒ 全站对话 401**。已有的 `test_hardening.sign_assertion` 签的是
+    **字符串** `sub`、两种设置下都过 ⇒ **抓不到它**；`tests/test_assertion_contract.py`
+    拿 Rust 同形状（数字 sub）的令牌锁住这一条，并带"拨回默认就必须红"的反控。
     """
     try:
-        from config.settings import settings
-        secret = (settings.jwt_secret or "").encode()
+        import jwt as _pyjwt
+        secret = settings.jwt_secret or ""
         if not secret:
             return None
-        h_b64, p_b64, sig_b64 = token.split(".")
-        signing_input = f"{h_b64}.{p_b64}".encode()
-        expected = hmac.new(secret, signing_input, hashlib.sha256).digest()
-        got = base64.urlsafe_b64decode(sig_b64 + "=" * (-len(sig_b64) % 4))
-        if not hmac.compare_digest(expected, got):
-            return None
-        payload = json.loads(base64.urlsafe_b64decode(p_b64 + "=" * (-len(p_b64) % 4)))
-        if payload.get("aud") != _ASSERTION_AUD:
-            return None
-        if float(payload.get("exp") or 0) < time.time():
-            return None
-        uid = int(payload.get("sub") or 0)
+        claims = _pyjwt.decode(
+            token, secret, algorithms=["HS256"], audience=_ASSERTION_AUD,
+            # `require`：这三条**必须在场**。旧手写实现里 `exp` 缺席会被
+            # `float(payload.get("exp") or 0) < time.time()` 判成过期（fail-closed），
+            # 这里用 `require` 把同一件事写成显式的。
+            options={"require": ["exp", "sub", "aud"], "verify_sub": False},
+        )
+        uid = int(claims.get("sub") or 0)
         if uid <= 0:
             return None
-        role = payload.get("role")
+        role = claims.get("role")
         return {"uid": uid, "role": str(role) if role else None}
-    except Exception:
+    except (InvalidTokenError, ValueError, TypeError):
+        # 收窄到这三族（20261019 审计 §1.2 的"异常精细化"，**只在新写的这一处**做，
+        # 不回头批量改存量）：`InvalidTokenError` 是 PyJWT 全部验签失败的基类
+        # （过期 / 错 aud / 缺声明 / 坏签名 / alg 不在白名单），`ValueError`/`TypeError`
+        # 兜 `int(sub)` 与"token 不是 str"这两条。
         return None
 
 

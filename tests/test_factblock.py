@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """动作事实块（D3，`agent/factblock.py` + 接线）单测：离线、秒级、零网络零 LLM。
 
 **为什么单独一套**：D3 把动作族轮次的**叙述权**从模型搬到系统——用户可见正文 =
@@ -24,6 +23,7 @@
 用法：.venv/bin/python tests/test_factblock.py
 """
 
+
 from __future__ import annotations
 
 import asyncio
@@ -31,52 +31,58 @@ import sys
 import threading
 from pathlib import Path
 
-# 出厂档钉子（与 `tests/run_all.py` 的 `_PINNED` 同值）。**必须在 import `agent.graph`
-# 之前设**（settings 在那一刻构造）。
-# （20261004 去掉了 `PLANNER_ENGINE` 那一钉：接口层只剩 native 一条、拨盘已删，桩自带
-# `bind_tools`——见 `tests/_planner_stub.py`。20261015 去掉了 `AGENT_TASK_STATE` 那一钉：
-# 档位整族撤掉、任务状态常开 ⇒ 这里**没有本套件自己要钉的档位了**，环境由入口给。）
-
-from langchain_core.messages import (AIMessage, AIMessageChunk, HumanMessage,
-                                     SystemMessage)
+from _judge import collector
+from langchain_core.messages import AIMessage, AIMessageChunk, HumanMessage, SystemMessage
 
 ROOT = Path(__file__).resolve().parent.parent  # 仓根（测试统一在 tests/）
+
+
 sys.path.insert(0, str(ROOT))
+
+
+from _planner_stub import bind_tools_stub, toolcall_reply  # noqa: E402
 
 import agent.graph as g  # noqa: E402
 from agent.factblock import (  # noqa: E402
-    FACT_MARK, FAMILY_CMD, FAMILY_DATA, FAMILY_WRITE, action_facts, block_of,
-    compose, family_of, is_action_family, is_block_family, render_fact_block,
+    FACT_MARK,
+    FAMILY_CMD,
+    FAMILY_DATA,
+    FAMILY_WRITE,
+    action_facts,
+    block_of,
+    compose,
+    family_of,
+    is_action_family,
+    is_block_family,
+    render_fact_block,
     strip_fact_lines,
 )
 from agent.graph import build_graph, graph_input  # noqa: E402
 from agent.principal import SOURCE_ASSERTION, Principal  # noqa: E402
-from _planner_stub import bind_tools_stub, toolcall_reply  # noqa: E402
 from tools import base as _base  # noqa: E402
 
 FAILS: list[str] = []
+check = collector(FAILS)
 
 
-def check(desc: str, cond: bool, detail: str = "") -> None:
-    print(("  ✅ " if cond else "  ❌ ") + desc + (f"  [{detail}]" if detail else ""))
-    if not cond:
-        FAILS.append(desc)
-
-
-# ── 回执行形状（与 `execute_node` 的构造同形；`cmd` 非空 = 命令族）────────────
 _RCPT_CMD = {"workflow": "effect", "tool": "toggle_effect", "args": {"effect": "sakura"},
              "result": "特效 樱花(sakura) 已打开",
              "cmd": {"kind": "effect", "effect": "sakura", "action": "on"}, "ts": 0}
+
+
 _RCPT_WRITE = {"workflow": "admin_notes", "tool": "create_tag", "args": {"name": "音乐"},
                "result": "标签「音乐」已创建", "ts": 0}
+
+
 _RCPT_WRITE2 = {"workflow": "admin_notes", "tool": "update_tag", "args": {"name": "音乐"},
                 "result": "标签「音乐」已改名「歌单」", "ts": 0}
+
+
 _RCPT_DATA = {"workflow": "content_query", "tool": "search_notes", "args": {"keyword": "x"},
               "result": '[{"id": 46, "title": "架构"}]', "ts": 0}
 
 
-# ── ① 分类：射程只有命令族 + 写族（数据族刻意不收）───────────────────────
-def test_family_of():
+def _test_family_of():
     print("\n[分类] 射程＝命令族 + 写族（照 JSON 讲人话是模型的活，D3 不碰）")
     check("回执带 cmd → 命令族（与工具名无关）",
           family_of("toggle_effect", True) == FAMILY_CMD)
@@ -97,7 +103,7 @@ def test_family_of():
               "remove_favorite", "move_tag")))
 
 
-def test_action_facts():
+def _test_action_facts():
     """**20261005 的新契约**（主人拍板：写族也退出印出）＝射程空集。
 
     这一节此前判的是"只取写族、去重、保序"——那些规则**一条都没有被推翻**，只是
@@ -125,7 +131,7 @@ def test_action_facts():
     check("None/空列表安全", action_facts(None) == [] and action_facts([]) == [])
 
 
-def test_render_and_compose():
+def _test_render_and_compose():
     print("\n[渲染/拼接] 事实一字不改、行首盖说话人标记；块在前、幂等")
     check("渲染**不改事实一个字**，只盖行首标记（说话人，不是标签）",
           render_fact_block(["页面已跳转：https://a/b", "特效 樱花(sakura) 已打开"])
@@ -159,7 +165,7 @@ def test_render_and_compose():
     check("全空 ⇒ 空串", compose("", "") == "")
 
 
-def test_strip_fact_lines():
+def _test_strip_fact_lines():
     print("\n[剥离] 系统印的事实行不进模型语境（按行首标记，不靠形状猜）")
     block = render_fact_block(["页面已跳转：https://a/b", "特效 樱花(sakura) 已打开"])
     check("整段都是事实行 ⇒ 抹成空串（调用方据此整轮跳过）",
@@ -181,7 +187,7 @@ def test_strip_fact_lines():
           strip_fact_lines("页面已跳转：https://a/b") == "页面已跳转：https://a/b")
 
 
-def test_injection_points():
+def _test_injection_points():
     """接线：三处模型可见的读点都真的过了一遍剥离（能力有测试 ≠ 接线有测试）。"""
     print("\n[接线] 历史注入点与 planner 读点都剥离（生产实证 20261001T230954）")
     block = render_fact_block(["页面已跳转：https://saudade.site/device-console/"])
@@ -223,7 +229,7 @@ def test_injection_points():
           str([str(m.content)[:20] for m in msgs if isinstance(m, HumanMessage)]))
 
 
-def test_share_one_classifier():
+def _test_share_one_classifier():
     print("\n[同源] 量化脚本与射程共用同一份分类（两处各写一份必然漂移）")
     import eval.narrator_facts_share as nfs  # noqa: E402
     from agent import factblock as fb  # noqa: E402
@@ -236,7 +242,6 @@ def test_share_one_classifier():
           == {nfs.FAMILY_CMD, nfs.FAMILY_WRITE, nfs.FAMILY_DATA})
 
 
-# ── ③ 判据：动作族轮次的复述式声称（gate 5g）───────────────────────────────
 _RESTATE_HITS = [
     "已经帮你打开啦～",                      # 施事前缀 + 完成态（旧网也能抓）
     "页面也跳转过去啦",                      # 无施事：旧网的①支抓不到（新增的那半）
@@ -245,6 +250,8 @@ _RESTATE_HITS = [
     "通知也发送完成",                         # 完成态的另一形态
     "那条留言我驳回掉了",                     # 写族（审核）
 ]
+
+
 _RESTATE_PASS = [
     "樱花特效现在是开启状态",                 # 状态陈述：幂等轮的正确答案（不带完成标记）
     "已经打开的樱花会一直飘",                 # 定语用法：描述状态不是声称动作
@@ -256,7 +263,7 @@ _RESTATE_PASS = [
 ]
 
 
-def test_action_restate_regex():
+def _test_action_restate_regex():
     print("\n[判据] 完成式复述抓得住；状态陈述/提议/假设放行")
     for s in _RESTATE_HITS:
         check("拦：%s" % s,
@@ -266,7 +273,6 @@ def test_action_restate_regex():
               g._clause_hit(s, g._ACTION_RESTATE_RE, g._STATE_ACTION_EXEMPT_RE) is None)
 
 
-# ── ③ 真图：提示词接线 + 兜底替代文本 ──────────────────────────────────────
 class _ScriptedLLM:
     """按入参形态分流 planner / model（同 `test_gate_replan.py` 的理由）。
 
@@ -306,18 +312,21 @@ class _FakeTool:
 
 
 _PLAN_EFFECT = 'WORKFLOW: effect\nPARAMS: {"effect": "sakura", "action": "on"}'
-_PLAN_CHAT = "WORKFLOW: chat\nPARAMS: {}"
-_FACT_LINE = "特效 樱花(sakura) 已打开"          # 命令族：**不印**（20261002）
-_FACT_BLOCK = FACT_MARK + _FACT_LINE
 
-# 写族（**系统印这一族**）——两笔夹具都用它，理由见 `agent/factblock.py` 的
-# `BLOCK_FAMILIES`：`add_favorite` 是写族里最轻的一件（自己的数据、不弹卡、无管理
-# 角色要求、不需要确认令牌），离线真图上跑得通；`create_tag` 走 `_ALWAYS_CONFIRM_TOOLS`
-# ⇒ 测试环境没有 jwt_secret 时它连工具都到不了（会停在 consent_required）。
+
+_PLAN_CHAT = "WORKFLOW: chat\nPARAMS: {}"
+
+
+_FACT_LINE = "特效 樱花(sakura) 已打开"          # 命令族：**不印**（20261002）
+
+
 _PLAN_FAV = 'WORKFLOW: favorite_add\nPARAMS: {"article_id": 46}'
+
+
 _FAV_MSG = "把文章 46 收藏一下"
+
+
 _FACT_WRITE_LINE = "已收藏文章 46"
-_FACT_WRITE_BLOCK = FACT_MARK + _FACT_WRITE_LINE
 
 
 def _run_graph(plans, narrations, result=None, tool_name="toggle_effect",
@@ -371,7 +380,7 @@ def _system_prompt(llm: "_ScriptedLLM") -> str:
                    if isinstance(m, SystemMessage))
 
 
-def test_graph_command_round_not_printed():
+def _test_graph_command_round_not_printed():
     """**命令族不印**（20261002 立、20261005 扩到全体）：一轮真跳了页/开了特效的对话——
 
     ① 系统**不印**那一行（气泡里只有泠月的话）；② 但工具帧与回执**一个字都不摘**
@@ -408,7 +417,7 @@ def test_graph_command_round_not_printed():
           repr(str(out["messages"][-1].content)[:40]))
 
 
-def test_graph_wiring():
+def _test_graph_wiring():
     """**写族退出印出**（20261005，主人拍板）——这一节是那次改动的**主锁**。
 
     改前：写族的帧与回执**被摘掉**（`_drop` 非空）而系统替它印 —— 那套的前提是
@@ -464,7 +473,7 @@ def test_graph_wiring():
     check("  没走重规划（gate_replan 未被置真）", not out.get("gate_replan"))
 
 
-def test_graph_no_false_positive():
+def _test_graph_no_false_positive():
     print("\n[真图] 非完成式包装照常通过（零回归：这条网不是「一律兜底」）")
     wrapper = "这次的动作用的是页面特效那一档，想换别的风格随时说～"
     out, llm, tool, events = _run_graph([_PLAN_EFFECT, _PLAN_CHAT], [wrapper])
@@ -478,7 +487,7 @@ def test_graph_no_false_positive():
     check("同时没有走兜底", not out.get("fallback_text"))
 
 
-def test_graph_zero_frame_no_authorization():
+def _test_graph_zero_frame_no_authorization():
     """**20261002 二改的锁**：零命令轮的占位**不发授权、不点族名**（02:02 实证）。
 
     现场（trace 20261002T020256）：主人「猫咪带我去你的设计文档」（站内无此页），
@@ -505,7 +514,7 @@ def test_graph_zero_frame_no_authorization():
           "由你自己说" not in _slot, repr(_slot[:80]))
 
 
-def test_graph_data_round_untouched():
+def _test_graph_data_round_untouched():
     print("\n[真图] 数据族轮次不产生事实块（讲 JSON 人话是模型的活）")
     plan = ('WORKFLOW: content_query\nPARAMS: {"calls": [{"tool": "search_notes", '
             '"args": {"keyword": "架构"}}]}')
@@ -546,7 +555,6 @@ def test_graph_data_round_untouched():
     check("最终回复就是那条叙述", str(out["messages"][-1].content).strip() == "站内检索到 1 篇讲架构的文章。")
 
 
-# ── ② 假 producer：时序（块先于 narrator）与 RESET 重发 ────────────────────
 class _FakeAgent:
     """假 `_agent`：按脚本产出 (mode, data)，让 producer 的时序完全可测。"""
 
@@ -558,12 +566,11 @@ class _FakeAgent:
             yield item
 
 
-# 假 producer 用的回执行：**写族**（20261002 起只有写族会真印出块）。
-# 命令族的行仍然可以进 receipts（台账/跨轮记忆照旧），但它渲染出来是空串 ——
-# `test_producer_no_facts_for_cmd_round` 专门钉这条。
 _ROW = {"workflow": "favorite_add", "tool": "add_favorite",
         "args": {"article_id": 46},
         "result": _FACT_WRITE_LINE, "ts": 0}
+
+
 _ROW_CMD = {"workflow": "effect", "tool": "toggle_effect",
             "args": {"effect": "sakura", "action": "on"},
             "result": _FACT_LINE, "ts": 0,
@@ -611,7 +618,7 @@ def _ai_chunks(items: list) -> list:
     return [str(i.content) for i in items if isinstance(i, AIMessageChunk)]
 
 
-def test_producer_order_and_reset():
+def _test_producer_order_and_reset():
     print("\n[真 producer] 射程空集：一行都不代印；RESET 与兜底替换照旧")
     script = [
         ("updates", {"execute": {"receipts": [_ROW]}}),
@@ -646,7 +653,7 @@ def test_producer_order_and_reset():
           _reset < _last_ai, f"reset=#{_reset} last_ai=#{_last_ai}")
 
 
-def test_producer_pass_round():
+def _test_producer_pass_round():
     print("\n[真 producer] 通过的一轮：正文就是 narrator 那一句（没有块可拼）")
     script = [
         ("updates", {"execute": {"receipts": [_ROW]}}),
@@ -681,15 +688,23 @@ def test_producer_pass_round():
           ])))
 
 
-if __name__ == "__main__":
-    for fn in (test_family_of, test_action_facts, test_render_and_compose,
-               test_strip_fact_lines, test_injection_points,
-               test_share_one_classifier, test_action_restate_regex,
-               test_graph_command_round_not_printed,
-               test_graph_wiring, test_graph_no_false_positive,
-               test_graph_zero_frame_no_authorization,
-               test_graph_data_round_untouched,
-               test_producer_order_and_reset, test_producer_pass_round):
+def test_factblock():
+    _FACT_BLOCK = FACT_MARK + _FACT_LINE
+    _FACT_WRITE_BLOCK = FACT_MARK + _FACT_WRITE_LINE
+    for fn in (_test_family_of, _test_action_facts, _test_render_and_compose,
+               _test_strip_fact_lines, _test_injection_points,
+               _test_share_one_classifier, _test_action_restate_regex,
+               _test_graph_command_round_not_printed,
+               _test_graph_wiring, _test_graph_no_false_positive,
+               _test_graph_zero_frame_no_authorization,
+               _test_graph_data_round_untouched,
+               _test_producer_order_and_reset, _test_producer_pass_round):
         fn()
     print("\n" + ("全部通过 ✅" if not FAILS else f"失败 {len(FAILS)} 项 ❌: {FAILS}"))
-    sys.exit(1 if FAILS else 0)
+
+    assert not FAILS, (
+        f"{len(FAILS)} 条未通过：" + "；".join(FAILS))
+
+
+if __name__ == "__main__":
+    test_factblock()
