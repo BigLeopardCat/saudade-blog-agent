@@ -198,7 +198,7 @@ def test_user_notice():
     import agent.adminops_confirm as _confirm  # noqa: E402
     _ENVELOPE_ONLY = {"changed", "target", "evidence", "noop"}
     _SAVED_SECRET = settings.jwt_secret
-    settings.jwt_secret = "test-secret-for-confirm-tokens"
+    settings.jwt_secret = "test-secret-for-confirm-tokens-not-a-real-secret"
     _real_client = base._client   # 兜底还原用（run_tool 自己也会还）
     URL = base.ADMIN_BASE + "/api/temp-users/126/notice"
     print("\n① 目标解析：0 / 多 / 唯一 —— 只有唯一那一种才发请求")
