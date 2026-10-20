@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """trace 的正文必须是**主人真读到的那份**（20261002）。
 
 ## 为什么这条测试存在
@@ -46,6 +45,8 @@
 `_run_agent_stream_to_queue`，走**真的** trace recorder（`start_trace` 的 context 按
 生产那条路 `copy_context` 传进 producer 线程），断言落盘 JSON 里的正文。
 """
+
+
 import asyncio
 import contextvars
 import functools
@@ -58,14 +59,19 @@ import threading
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent  # 仓根
+
+
 sys.path.insert(0, str(ROOT))
+
 
 from langchain_core.messages import AIMessage, AIMessageChunk, HumanMessage  # noqa: E402
 
-import server                                                     # noqa: E402
-from utils import trace as tracemod                               # noqa: E402
+import server  # noqa: E402
+from utils import trace as tracemod  # noqa: E402
 
 FAILS: list[str] = []
+
+
 _SEQ = itertools.count()
 
 
@@ -169,9 +175,7 @@ def _flat(x: str) -> str:
     return " ".join((x or "").split())
 
 
-# ─────────────────────── ① H1：带 tool_calls 的正文不许被丢掉
-
-def test_tool_calls_do_not_drop_content():
+def _test_tool_calls_do_not_drop_content():
     print("\n── ① model 消息带 tool_calls 且内容非空 ⇒ trace 落帧流那份 ──")
     body = "好的，已经带你来到文章第 19 篇的页面了。"
     res = drive([
@@ -199,9 +203,7 @@ def test_tool_calls_do_not_drop_content():
           str(_events(res, "stream_end"))[:120])
 
 
-# ─────────────────────── ② 反向对照：正常形状不许报异常
-
-def test_plain_shape_is_quiet():
+def _test_plain_shape_is_quiet():
     print("\n── ② 正常形状（不带 tool_calls）⇒ 无 mismatch、无 tool_calls 事件 ──")
     body = "这篇文章讲了河灯与雨。"
     res = drive([_text("这篇文章讲了"), _text("河灯与雨。"), _model(body)])
@@ -214,9 +216,7 @@ def test_plain_shape_is_quiet():
           and not _events(res, "reply_capture_missing"))
 
 
-# ─────────────────────── ③ H2：接没接住，都要自己说话
-
-def test_capture_gaps_are_visible():
+def _test_capture_gaps_are_visible():
     print("\n── ③ 没接住的两态各自留证据 ──")
     res = drive([_text("正文到了。"), ("updates", {"model": {"messages": []}})])
     _sk = _events(res, "reply_capture_skipped")
@@ -263,9 +263,7 @@ def test_capture_gaps_are_visible():
           str(_mm3))
 
 
-# ─────────────────────── ④ 被否定的那段绝不许留在 trace 里
-
-def test_reset_drops_rejected_text():
+def _test_reset_drops_rejected_text():
     print("\n── ④ gate 打回重规划 ⇒ 被否定的那段随 __RESET__ 一起作废 ──")
     res = drive([
         _text("我先随便说一句没依据的话。"),
@@ -283,9 +281,7 @@ def test_reset_drops_rejected_text():
           str(_events(res, "reply_mismatch")))
 
 
-# ─────────────────────── ⑤ fallback 替换：替换文本本身就是最终正文
-
-def test_fallback_text_is_the_reply():
+def _test_fallback_text_is_the_reply():
     print("\n── ⑤ gate fallback ⇒ reply 就是替换文本，且不报 mismatch ──")
     res = drive([
         _text("这段会被作废。"),
@@ -297,9 +293,7 @@ def test_fallback_text_is_the_reply():
           not _events(res, "reply_mismatch"), str(_events(res, "reply_mismatch")))
 
 
-# ─────────────────────── ⑥ llm_streaming 关掉那一档：以重建为准、不报分歧
-
-def test_no_stream_chunks_falls_back_to_rebuilt():
+def _test_no_stream_chunks_falls_back_to_rebuilt():
     print("\n── ⑥ 正文只在 updates 里（无 chunk）⇒ 以重建为准且不报分歧 ──")
     body = "只有重建里有这段正文。"
     res = drive([_model(body)])
@@ -308,13 +302,20 @@ def test_no_stream_chunks_falls_back_to_rebuilt():
           not _events(res, "reply_mismatch"), str(_events(res, "reply_mismatch")))
 
 
-for fn in (test_tool_calls_do_not_drop_content, test_plain_shape_is_quiet,
-           test_capture_gaps_are_visible, test_reset_drops_rejected_text,
-           test_fallback_text_is_the_reply, test_no_stream_chunks_falls_back_to_rebuilt):
-    fn()
+def test_trace_reply_source():
+    for fn in (_test_tool_calls_do_not_drop_content, _test_plain_shape_is_quiet,
+               _test_capture_gaps_are_visible, _test_reset_drops_rejected_text,
+               _test_fallback_text_is_the_reply, _test_no_stream_chunks_falls_back_to_rebuilt):
+        fn()
+    print()
+    if FAILS:
+        print(f"失败 {len(FAILS)} 项：" + "；".join(FAILS))
+        sys.exit(1)
+    print("全部通过")
 
-print()
-if FAILS:
-    print(f"失败 {len(FAILS)} 项：" + "；".join(FAILS))
-    sys.exit(1)
-print("全部通过")
+    assert not FAILS, (
+        f"{len(FAILS)} 条未通过：" + "；".join(FAILS))
+
+
+if __name__ == "__main__":
+    test_trace_reply_source()

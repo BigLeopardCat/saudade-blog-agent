@@ -1,5 +1,3 @@
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
 """手写文档的**索引 / 链接 / 跨界锚点**（离线、秒级）。
 
 要回答的问题：这一仓 12,000 行手写文档此前**没有任何机制**看着它们——链接指向不存在的
@@ -27,11 +25,11 @@
 
 用法：.venv/bin/python tests/test_docs_links.py
 """
+
+
 import pathlib
 import re
 import sys
-
-ROOT = pathlib.Path(__file__).resolve().parent.parent
 
 FAILS: list[str] = []
 
@@ -44,98 +42,94 @@ def check(desc: str, cond: bool, detail: str = "") -> None:
         print(f"  ❌ {desc} —— {detail}")
 
 
-# 只扫**手写**文档：仓根 md + docs/**（含 adr/）。排除生成物目录与依赖目录。
-SKIP_PARTS = {".venv", "node_modules", ".git", "_parent", "runs", "__pycache__"}
-HANDWRITTEN = [p for p in list(ROOT.glob("*.md")) + list(ROOT.glob("docs/**/*.md"))
-               if not any(s in p.parts for s in SKIP_PARTS)]
-
-_LINK_RE = re.compile(r"\[[^\]]*\]\(([^)\s]+)\)")
-
-print(f"① 手写文档里的相对 md 链接都指得着（扫 {len(HANDWRITTEN)} 份）")
-_broken: list[str] = []
-for p in HANDWRITTEN:
-    for m in _LINK_RE.finditer(p.read_text(encoding="utf-8")):
-        t = m.group(1).split("#")[0]
-        if not t or not t.endswith(".md") or t.startswith(("http", "mailto:", "/")):
-            continue
-        r = (p.parent / t).resolve()
-        try:
-            r.relative_to(ROOT)          # 指到仓外（父仓）的不归本套件管
-        except ValueError:
-            continue
-        if not r.is_file():
-            _broken.append(f"{p.relative_to(ROOT)} → {t}")
-check("没有指向不存在文件的相对链接", not _broken, "；".join(_broken))
-
-print("\n② docs/README.md 索引 ↔ 磁盘 docs/*.md 双向一致")
-INDEX = ROOT / "docs/README.md"
-_index_txt = INDEX.read_text(encoding="utf-8")
-_listed = {t for m in _LINK_RE.finditer(_index_txt)
-           for t in [m.group(1)] if re.fullmatch(r"[^/()]+\.md", t)}
-_disk = {p.name for p in (ROOT / "docs").glob("*.md")} - {INDEX.name}
-check("索引把磁盘上每份 docs/*.md 都列了", not (_disk - _listed),
-      f"漏列：{sorted(_disk - _listed)}")
-check("索引里每一行都对应磁盘上真有的文件", not (_listed - _disk),
-      f"列了不存在的：{sorted(_listed - _disk)}")
-check("索引自己也提一下 adr/ 的索引",
-      "adr/README.md" in _index_txt, "少了 adr/README.md 的链接")
-
-print("\n③ 跨仓引用锚点仍在（父仓按编号/标题引，改了会静默打断）")
-_ANCHORS = [
-    ("docs/问题记录.md", r"^### 2\.1\b", "§2.1（父仓 iot-device-integration / 固件开发指南）"),
-    ("docs/identity-and-permissions.md", r"^### 3\.4\b", "§3.4（父仓 security-boundary）"),
-    ("docs/identity-and-permissions.md", r"^### 3\.6\b", "§3.6（父仓 security-boundary / zako_role 迁移）"),
-    ("docs/identity-and-permissions.md", r"^### 5\.2\b", "§5.2（父仓 security-boundary）"),
-    ("docs/identity-and-permissions.md", r"^### 5\.3\b", "§5.3（父仓 security-boundary）"),
-    ("docs/agent-architecture.md", r"^## 3\. 一次对话的完整链路\s*$", "《3. 一次对话的完整链路》（父仓 README）"),
-] + [("docs/toolcall-stability-roadmap.md", rf"^### D{n}\b", f"D{n}（execution_log_struct 迁移）")
-     for n in range(1, 7)]
-for rel, pat, why in _ANCHORS:
-    txt = (ROOT / rel).read_text(encoding="utf-8")
-    check(f"{rel} 仍有 {why}", bool(re.search(pat, txt, re.M)), f"找不到 /{pat}/m")
-
-print("\n④ docs/ 里点名的仓内 .py 路径存在（历史叙述除外）")
-_TOPS = {d.name for d in ROOT.iterdir()
-         if d.is_dir() and d.name not in SKIP_PARTS and not d.name.startswith(".")}
-_MARKERS = ("已删", "删除", "待建", "未建", "占位", "xxx")
-_PY_RE = re.compile(r"`([A-Za-z0-9_./\-]+/[A-Za-z0-9_./\-]+\.py)`")
-# **改名的旧路径**（20261017 `skill` → `workflow`）：记录型文档逐字留着当时的文件名，
-# 那不是"指向不存在的文件"，是"当时叫这个"。旧的**文件级豁免**会把这一整族判据一起放走
-# （记录型文档里真指错了也看不见）；这里改成从说明行现读一张**改名表**，逐条精确放行：
-#   · 表来自文档正文里的 `` `旧.py` → `新.py` ``，不写死在测试里（改名再来一次不必改这里）；
-#   · **新路径必须在盘上**——否则一张自说自话的"改名表"就能把任意幽灵路径洗白；
-#   · 不在表里、盘上也没有的路径**照旧红**（判据没有收窄成"记录型文档免检"）。
-_RENAME_RE = re.compile(r"`([A-Za-z0-9_./\-]+\.py)`\s*→\s*`([A-Za-z0-9_./\-]+\.py)`")
-_RENAMED: dict[str, str] = {}
-for p in HANDWRITTEN:
-    for line in p.read_text(encoding="utf-8").splitlines():
-        if "已改名" not in line:
-            continue
-        for old, new in _RENAME_RE.findall(line):
-            _RENAMED[old] = new
-check("改名表里的新路径都在盘上（自说自话的改名表不许洗白幽灵路径）",
-      all((ROOT / v).exists() for v in _RENAMED.values()) and bool(_RENAMED),
-      f"表={_RENAMED}")
-_ghost: list[str] = []
-for p in HANDWRITTEN:
-    if p.parent == ROOT and p.name != "README.md":
-        continue                          # 仓根只查 README（见文件头注：CHANGELOG 是记录型）
-    for i, line in enumerate(p.read_text(encoding="utf-8").splitlines(), 1):
-        for m in _PY_RE.finditer(line):
-            t = m.group(1)
-            if t.startswith("/") or ".." in t or t.split("/")[0] not in _TOPS:
-                continue                  # 库内路径（langgraph/…）与父仓路径不归本套件管
-            if (ROOT / t).exists() or t in _RENAMED or any(k in line for k in _MARKERS):
+def test_docs_links():
+    ROOT = pathlib.Path(__file__).resolve().parent.parent
+    SKIP_PARTS = {".venv", "node_modules", ".git", "_parent", "runs", "__pycache__"}
+    HANDWRITTEN = [p for p in list(ROOT.glob("*.md")) + list(ROOT.glob("docs/**/*.md"))
+                   if not any(s in p.parts for s in SKIP_PARTS)]
+    _LINK_RE = re.compile(r"\[[^\]]*\]\(([^)\s]+)\)")
+    print(f"① 手写文档里的相对 md 链接都指得着（扫 {len(HANDWRITTEN)} 份）")
+    _broken: list[str] = []
+    for p in HANDWRITTEN:
+        for m in _LINK_RE.finditer(p.read_text(encoding="utf-8")):
+            t = m.group(1).split("#")[0]
+            if not t or not t.endswith(".md") or t.startswith(("http", "mailto:", "/")):
                 continue
-            _ghost.append(f"{p.relative_to(ROOT)}:{i} → {t}")
-check("没有指向不存在文件的仓内 .py 路径（除已标已删/待建/未建的）",
-      not _ghost, "；".join(_ghost))
+            r = (p.parent / t).resolve()
+            try:
+                r.relative_to(ROOT)          # 指到仓外（父仓）的不归本套件管
+            except ValueError:
+                continue
+            if not r.is_file():
+                _broken.append(f"{p.relative_to(ROOT)} → {t}")
+    check("没有指向不存在文件的相对链接", not _broken, "；".join(_broken))
+    print("\n② docs/README.md 索引 ↔ 磁盘 docs/*.md 双向一致")
+    INDEX = ROOT / "docs/README.md"
+    _index_txt = INDEX.read_text(encoding="utf-8")
+    _listed = {t for m in _LINK_RE.finditer(_index_txt)
+               for t in [m.group(1)] if re.fullmatch(r"[^/()]+\.md", t)}
+    _disk = {p.name for p in (ROOT / "docs").glob("*.md")} - {INDEX.name}
+    check("索引把磁盘上每份 docs/*.md 都列了", not (_disk - _listed),
+          f"漏列：{sorted(_disk - _listed)}")
+    check("索引里每一行都对应磁盘上真有的文件", not (_listed - _disk),
+          f"列了不存在的：{sorted(_listed - _disk)}")
+    check("索引自己也提一下 adr/ 的索引",
+          "adr/README.md" in _index_txt, "少了 adr/README.md 的链接")
+    print("\n③ 跨仓引用锚点仍在（父仓按编号/标题引，改了会静默打断）")
+    _ANCHORS = [
+        ("docs/问题记录.md", r"^### 2\.1\b", "§2.1（父仓 iot-device-integration / 固件开发指南）"),
+        ("docs/identity-and-permissions.md", r"^### 3\.4\b", "§3.4（父仓 security-boundary）"),
+        ("docs/identity-and-permissions.md", r"^### 3\.6\b", "§3.6（父仓 security-boundary / zako_role 迁移）"),
+        ("docs/identity-and-permissions.md", r"^### 5\.2\b", "§5.2（父仓 security-boundary）"),
+        ("docs/identity-and-permissions.md", r"^### 5\.3\b", "§5.3（父仓 security-boundary）"),
+        ("docs/agent-architecture.md", r"^## 3\. 一次对话的完整链路\s*$", "《3. 一次对话的完整链路》（父仓 README）"),
+    ] + [("docs/toolcall-stability-roadmap.md",
+        rf"^### D{n}\b", f"D{n}（execution_log_struct 迁移）")
+         for n in range(1, 7)]
+    for rel, pat, why in _ANCHORS:
+        txt = (ROOT / rel).read_text(encoding="utf-8")
+        check(f"{rel} 仍有 {why}", bool(re.search(pat, txt, re.M)), f"找不到 /{pat}/m")
+    print("\n④ docs/ 里点名的仓内 .py 路径存在（历史叙述除外）")
+    _TOPS = {d.name for d in ROOT.iterdir()
+             if d.is_dir() and d.name not in SKIP_PARTS and not d.name.startswith(".")}
+    _MARKERS = ("已删", "删除", "待建", "未建", "占位", "xxx")
+    _PY_RE = re.compile(r"`([A-Za-z0-9_./\-]+/[A-Za-z0-9_./\-]+\.py)`")
+    _RENAME_RE = re.compile(r"`([A-Za-z0-9_./\-]+\.py)`\s*→\s*`([A-Za-z0-9_./\-]+\.py)`")
+    _RENAMED: dict[str, str] = {}
+    for p in HANDWRITTEN:
+        for line in p.read_text(encoding="utf-8").splitlines():
+            if "已改名" not in line:
+                continue
+            for old, new in _RENAME_RE.findall(line):
+                _RENAMED[old] = new
+    check("改名表里的新路径都在盘上（自说自话的改名表不许洗白幽灵路径）",
+          all((ROOT / v).exists() for v in _RENAMED.values()) and bool(_RENAMED),
+          f"表={_RENAMED}")
+    _ghost: list[str] = []
+    for p in HANDWRITTEN:
+        if p.parent == ROOT and p.name != "README.md":
+            continue                          # 仓根只查 README（见文件头注：CHANGELOG 是记录型）
+        for i, line in enumerate(p.read_text(encoding="utf-8").splitlines(), 1):
+            for m in _PY_RE.finditer(line):
+                t = m.group(1)
+                if t.startswith("/") or ".." in t or t.split("/")[0] not in _TOPS:
+                    continue                  # 库内路径（langgraph/…）与父仓路径不归本套件管
+                if (ROOT / t).exists() or t in _RENAMED or any(k in line for k in _MARKERS):
+                    continue
+                _ghost.append(f"{p.relative_to(ROOT)}:{i} → {t}")
+    check("没有指向不存在文件的仓内 .py 路径（除已标已删/待建/未建的）",
+          not _ghost, "；".join(_ghost))
+    print()
+    if FAILS:
+        print(f"FAILS({len(FAILS)}):")
+        for f in FAILS:
+            print(f"  - {f}")
+        raise SystemExit(1)
+    print("全部通过。")
 
-print()
-if FAILS:
-    print(f"FAILS({len(FAILS)}):")
-    for f in FAILS:
-        print(f"  - {f}")
-    raise SystemExit(1)
-print("全部通过。")
-raise SystemExit(0)
+    assert not FAILS, (
+        f"{len(FAILS)} 条未通过：" + "；".join(FAILS))
+
+
+if __name__ == "__main__":
+    test_docs_links()

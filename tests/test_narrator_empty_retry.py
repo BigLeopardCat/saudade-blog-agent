@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """narrator 空内容重试一次（20261001）：`model_node` 对采样失败的兜底。
 
 ## 为什么这条测试存在
@@ -39,12 +38,17 @@
 
 无网络 / 无 LLM：`agent.graph.get_llm` 换成脚本假 LLM，直接调**真的** `model_node`。
 """
+
+
 import sys
 import tempfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent  # 仓根（测试统一在 tests/）
+
+
 sys.path.insert(0, str(ROOT))
+
 
 from langchain_core.messages import AIMessage, HumanMessage  # noqa: E402
 
@@ -62,7 +66,11 @@ def check(desc: str, cond: bool, detail: str = "") -> None:
 
 
 _MSG = "随便说点什么"          # 内容与本套件无关：假 LLM 全接管，不经过 planner
+
+
 _PLAN = "WORKFLOW=chat\nPARAMS={}\nTOOLS:\nNOTE: （无）\nREPLY: （无）"
+
+
 _CFG = {"configurable": {"principal": Principal(uid=7, role="admin"),
                          "user_id": 7, "conversation_id": 42, "stop_event": None}}
 
@@ -117,8 +125,7 @@ def _events(rec, node: str, name: str) -> list[dict]:
     return [e for e in rec.events if e.get("node") == node and e.get("event") == name]
 
 
-# ── ① 空 ⇒ 重试，第二次胜出 ──────────────────────────────────────────────
-def test_empty_retries_once():
+def _test_empty_retries_once():
     print("\n[重试] 空内容 ⇒ 再问一次")
     out, fake, _ = _run("t_retry_empty", [_ai("", out=14), _ai("好了主人～", out=104)])
     check("invoke 恰好两次", len(fake.prompts) == 2, str(len(fake.prompts)))
@@ -128,8 +135,7 @@ def test_empty_retries_once():
           isinstance(got, AIMessage), type(got).__name__)
 
 
-# ── ② 反向对照：不空就一次都不多重试 ─────────────────────────────────────
-def test_nonempty_does_not_retry():
+def _test_nonempty_does_not_retry():
     print("\n[反向对照] 正常回复 ⇒ 一次都不多重试")
     out, fake, rec = _run("t_retry_ok", [_ai("好呀～", out=96)])
     check("invoke 恰好一次", len(fake.prompts) == 1, str(len(fake.prompts)))
@@ -139,8 +145,7 @@ def test_nonempty_does_not_retry():
           str(_events(rec, "model", "llm_empty_retry")))
 
 
-# ── ③ 两次都空：不抛、原样返回（兜底仍归 gate）──────────────────────────
-def test_both_empty_fail_open():
+def _test_both_empty_fail_open():
     print("\n[兜底] 两次都空 ⇒ 不抛、不再试第三次")
     out, fake, rec = _run("t_retry_both_empty", [_ai("", out=9), _ai("   ", out=9)])
     check("恰好两次（没有第三次重试）", len(fake.prompts) == 2, str(len(fake.prompts)))
@@ -153,8 +158,7 @@ def test_both_empty_fail_open():
           len(_events(rec, "model", "llm_done")) == 1)
 
 
-# ── ⑥ 判空看 .strip()：纯空白算空，"0" 不算 ─────────────────────────────
-def test_blankness_judge():
+def _test_blankness_judge():
     print("\n[判据] 纯空白算空、有内容不算空")
     out, fake, _ = _run("t_retry_ws", [_ai("   \n  ", out=11), _ai("补上了", out=50)])
     check("纯空白 ⇒ 重试（与 gate 的 `(content or '').strip()` 同一判据）",
@@ -164,8 +168,7 @@ def test_blankness_judge():
     check("'0' 不是空 ⇒ 不重试", len(fake.prompts) == 1, str(len(fake.prompts)))
 
 
-# ── ⑤ 重试用的是同一份消息 ──────────────────────────────────────────────
-def test_retry_reuses_same_messages():
+def _test_retry_reuses_same_messages():
     print("\n[形状] 重试 = 同一次采样的重放")
     _, fake, _ = _run("t_retry_same", [_ai("", out=14), _ai("好了", out=104)])
     check("两次调用逐字同一份消息（不追加「请再答一次」、不换提示词）",
@@ -175,8 +178,7 @@ def test_retry_reuses_same_messages():
           fake.kw.get("enable_thinking") is False, str(fake.kw))
 
 
-# ── ④ 留痕与记账：两次调用各记一笔，谁也不吞谁的 ──────────────────────────
-def test_retry_is_traced_with_its_own_usage():
+def _test_retry_is_traced_with_its_own_usage():
     print("\n[记账] 重试的用量留在它自己那条事件上")
     _, fake, rec = _run("t_retry_trace",
                         [_ai("", out=14, inp=25200, cache=17000),
@@ -194,13 +196,19 @@ def test_retry_is_traced_with_its_own_usage():
           str(done))
 
 
-if __name__ == "__main__":
-    for fn in (test_empty_retries_once,
-               test_nonempty_does_not_retry,
-               test_both_empty_fail_open,
-               test_blankness_judge,
-               test_retry_reuses_same_messages,
-               test_retry_is_traced_with_its_own_usage):
+def test_narrator_empty_retry():
+    for fn in (_test_empty_retries_once,
+               _test_nonempty_does_not_retry,
+               _test_both_empty_fail_open,
+               _test_blankness_judge,
+               _test_retry_reuses_same_messages,
+               _test_retry_is_traced_with_its_own_usage):
         fn()
     print("\n" + ("全部通过 ✅" if not FAILS else f"失败 {len(FAILS)} 项 ❌: {FAILS}"))
-    sys.exit(1 if FAILS else 0)
+
+    assert not FAILS, (
+        f"{len(FAILS)} 条未通过：" + "；".join(FAILS))
+
+
+if __name__ == "__main__":
+    test_narrator_empty_retry()

@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """洞⑪ 第二半：零帧轮的**特效/夜间模式状态**声称 → 与实时上报核对（纯离线）。
 
 与 `test_nav_truthfulness.py` 的第 ④ 组同族：那半核的是 `page=`（主人现在在哪一页），
@@ -17,19 +16,31 @@
 
 用法：.venv/bin/python tests/test_effect_truthfulness.py
 """
+
+
 import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent  # 仓根（20260924：测试统一搬进 tests/）
+
+
 sys.path.insert(0, str(ROOT))
+
 
 from langchain_core.messages import AIMessage, HumanMessage  # noqa: E402
 
 import agent.graph as G  # noqa: E402
 from agent.graph import (  # noqa: E402
-    _FALLBACK_EFFECT_NO_FRAME, _claim_issue, _effect_state_claim,
-    _effect_state_claim_clause, _live_darkmode, _live_effects,
-    gate_node, parse_plan, plan_encode, plan_state,
+    _FALLBACK_EFFECT_NO_FRAME,
+    _claim_issue,
+    _effect_state_claim,
+    _effect_state_claim_clause,
+    _live_darkmode,
+    _live_effects,
+    gate_node,
+    parse_plan,
+    plan_encode,
+    plan_state,
 )
 from agent.principal import Principal  # noqa: E402
 from agent.workflow_plan import instantiate_plan  # noqa: E402
@@ -43,13 +54,18 @@ def check(desc: str, cond: bool, detail: str = "") -> None:
         FAILS.append(desc)
 
 
-# ── 页面上下文的四条夹具（真值各不相同；字段顺序照 `server.py::_build_messages`）──
 NONE_ = ("user_id=1, page=/, title=Saudade Blog; current_effects=none; "
          "current_darkmode=off")
+
+
 SAKURA = ("user_id=1, page=/, title=Saudade Blog; current_effects=sakura; "
           "current_darkmode=off")
+
+
 RAIN = ("user_id=1, page=/, title=Saudade Blog; current_effects=rain; "
         "current_darkmode=off")
+
+
 DARK = ("user_id=1, page=/, title=Saudade Blog; current_effects=none; "
         "current_darkmode=on")
 
@@ -68,7 +84,7 @@ def _chat_state(msgs, **kw):
     return st
 
 
-def test_live_truth_parsing():
+def _test_live_truth_parsing():
     """① 真值解析：`none`/空 = **真值**（一个都没开），缺席/脏值 = **没有真值**。"""
     print("[洞⑪b] page_ctx 的真值解析")
     check("`current_effects=none` ⇒ 空集（能判假）",
@@ -91,7 +107,7 @@ def test_live_truth_parsing():
           _live_effects("current_effects=none; current_darkmode=on") == set())
 
 
-def test_fabricated_state_claim_judged():
+def _test_fabricated_state_claim_judged():
     """② 反例面：真值说没开、回复说"已经打开了" ⇒ 判假（洞① 当年放掉的那一格）。"""
     print("[洞⑪b] 编造的开合声称（与实时上报不符）→ 兜底")
     human = HumanMessage(content="我有点想看樱花")
@@ -159,7 +175,7 @@ def test_fabricated_state_claim_judged():
     check("  提示里的禁止句在（不许说'已经打开了'）", "已经打开了" in _note)
 
 
-def test_idempotent_and_truthful_pass():
+def _test_idempotent_and_truthful_pass():
     """③ 正例面：真值**一致** ⇒ 同一句话必须放行（幂等轮的真话）。"""
     print("[洞⑪b] 真值一致 / 提议 / 能力罗列 → 放行")
     human = HumanMessage(content="樱花开了吗")
@@ -185,7 +201,7 @@ def test_idempotent_and_truthful_pass():
               o.get("done") is True and not o.get("fallback_text"), str(o)[:50])
 
 
-def test_no_truth_and_guards():
+def _test_no_truth_and_guards():
     """④ 没有真值 / 完成态缺席 / 追述 ⇒ 不判（宁漏勿误伤的三条护栏）。"""
     print("[洞⑪b] 护栏：没有真值 / 完成态 / 追述豁免")
     human = HumanMessage(content="帮我开个樱花")
@@ -220,7 +236,7 @@ def test_no_truth_and_guards():
           str(o.get("fallback_text"))[:36])
 
 
-def test_frame_round_not_in_scope():
+def _test_frame_round_not_in_scope():
     """⑤ 本族**只跑零帧轮**，且这是必须的——同一个形状在有帧轮是**真话**。
 
     复扫实测（20260927T021605 / 20260927T074831 两条真实 trace）：那一轮
@@ -241,7 +257,7 @@ def test_frame_round_not_in_scope():
           o.get("done") is True and not o.get("fallback_text"), str(o)[:50])
 
 
-def test_family_wiring():
+def _test_family_wiring():
     """⑥ 接线锁：族名进了重规划表、advice 有对应条目、两个谓词都认同一句。"""
     print("[洞⑪b] 接线（族表 / 重规划 / 谓词是同一个）")
     fams = {f.issue: f for f in G._zero_frame_families(parse_plan(
@@ -264,12 +280,12 @@ def test_family_wiring():
 
 
 def main():
-    for fn in (test_live_truth_parsing,
-               test_fabricated_state_claim_judged,
-               test_idempotent_and_truthful_pass,
-               test_no_truth_and_guards,
-               test_frame_round_not_in_scope,
-               test_family_wiring):
+    for fn in (_test_live_truth_parsing,
+               _test_fabricated_state_claim_judged,
+               _test_idempotent_and_truthful_pass,
+               _test_no_truth_and_guards,
+               _test_frame_round_not_in_scope,
+               _test_family_wiring):
         fn()
     print()
     if FAILS:
@@ -281,5 +297,12 @@ def main():
     return 0
 
 
+def test_effect_truthfulness():
+    main()
+
+    assert not FAILS, (
+        f"{len(FAILS)} 条未通过：" + "；".join(FAILS))
+
+
 if __name__ == "__main__":
-    sys.exit(main())
+    test_effect_truthfulness()

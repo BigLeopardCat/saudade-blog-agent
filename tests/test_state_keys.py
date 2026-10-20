@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """节点交给图的键 ⊆ `AgentState` 声明键——**机械闸**（20261015）。
 
 ## 为什么要有这一条
@@ -50,18 +49,22 @@ LangGraph 只把 state schema 里**声明过**的键透出 updates 流；节点�
 用法：.venv/bin/python tests/test_state_keys.py
 """
 
+
 import ast
 import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
+
+
 sys.path.insert(0, str(ROOT))
+
 
 import agent.graph as G  # noqa: E402
 
 GRAPH = ROOT / "agent" / "graph.py"
 
-# 豁免台账：函数名 -> (理由, **恰好**允许的非 state 键集合)。改这张表 = 改判据，须在此写理由。
+
 EXEMPT = {
     "_confirm_popup": (
         "载荷判别器：`kind` 由 execute_node 剥掉再进 state（见该处注释）；"
@@ -74,7 +77,7 @@ EXEMPT = {
     ),
 }
 
-# ⑥ 反控：字面量里的未声明键 + `updates["k"] = …` 逐键写的未声明键，两种都要抓到
+
 _NEG_STRAY = """
 def _fake_node(state):
     updates = {"messages": [], "plan": "", "not_a_state_key": 1}
@@ -82,11 +85,12 @@ def _fake_node(state):
     return updates
 """
 
-# ⑦ 反控：**嵌套** dict 的键不是 state 键（只取最外层；`_confirm_popup` 靠这条不误报）
+
 _NEG_NESTED = """
 def _fake_node2(state):
     return {"plan": "", "pending_confirm": {"q": "x", "opts": []}}
 """
+
 
 FAILED: list = []
 
@@ -97,7 +101,6 @@ def check(desc: str, ok: bool, detail: str = "") -> None:
         FAILED.append(desc)
 
 
-# ── 静态分析：一份 dict 到底有没有交给图 ─────────────────────────────────────
 def _outer_dicts(node):
     """表达式里**最外层**的 dict 字面量（不下钻进 dict 的**值**——值里的 dict 是载荷）。"""
     if isinstance(node, ast.Dict):
@@ -211,5 +214,12 @@ def main() -> int:
     return 0
 
 
+def test_state_keys():
+    main()
+
+    assert not FAILED, (
+        f"{len(FAILED)} 条未通过：" + "；".join(FAILED))
+
+
 if __name__ == "__main__":
-    sys.exit(main())
+    test_state_keys()

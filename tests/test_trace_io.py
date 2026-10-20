@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """`utils/trace_io.py`（trace 读取的唯一实现）的离线自测。
 
 **为什么需要这条锁**：`.gz` 那一支漏掉任何一个读取端，那个脚本就**静默少看一半语料**——
@@ -12,6 +11,8 @@ trace"，862 份 `.gz` 全部抛异常被跳过，于是"948 份里只有 1 条"
 
 用法：.venv/bin/python tests/test_trace_io.py
 """
+
+
 import gzip
 import json
 import os
@@ -23,8 +24,13 @@ from datetime import datetime
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
+
+
 sys.path.insert(0, str(ROOT))
+
+
 sys.path.insert(0, str(ROOT / "eval"))
+
 
 from utils import trace as trace_mod  # noqa: E402  （⑦ 那条：真落一份盘看顶层字段）
 from utils import trace_files as tf  # noqa: E402
@@ -248,5 +254,12 @@ def main() -> int:
     return 0
 
 
+def test_trace_io():
+    main()
+
+    assert not FAILS, (
+        f"{len(FAILS)} 条未通过：" + "；".join(FAILS))
+
+
 if __name__ == "__main__":
-    sys.exit(main())
+    test_trace_io()

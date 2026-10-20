@@ -14,7 +14,7 @@
 #   cd saudade-blog-agent
 #   .venv/bin/python eval/run_golden.py                     # 全量；--limit N / --only a,b / --min-pass-rate
 #   .venv/bin/python eval/golden_full_run.py                # 进程隔离版：逐条独立进程 + 180s 超时，防悬挂
-#   夜间 04:00 有 scripts/nightly_regression.sh（crontab）跑 tests/run_all.py + 全量 golden + trace 巡检，
+#   夜间 04:00 有 scripts/nightly_regression.sh（crontab）跑 pytest + 全量 golden + trace 巡检，
 #   **但那个 cron 默认不装**（一次全量 ≈10M tok / ¥2.4；开关 scripts/enable_nightly.sh）——
 #   所以上面那句"CI 只跑 L0"在默认部署下是全部，别把没跑的夜间当成跑过且绿。
 #
@@ -159,9 +159,9 @@ jobs:
       # 不会被 clone 带走 ⇒ 只挂本机钩子等于"闸门只对配过 `scripts/dev/install-hooks.sh`
       # 的人生效"。这一层不依赖任何人的本地配置，它才是闸门。
       # ⚠️ 这里**必须**直接调 `.githooks/commit-msg`，不许改调 `tests/test_commit_msg_hook.py`：
-      # `tests/test_ci_suite_list.py` ① 判的是"套件清单只有 `tests/run_all.py` 一处"，
+      # `tests/test_ci_suite_list.py` ① 判的是"套件清单只有 `pytest` 按目录收集一处"，
       # 逐套件点名会让那一条当场红。那个套件自己（钩子在不在、坏消息会不会被拒、
-      # type 白名单与 CONTRIBUTING 是否逐字同源）走下面的 `run_all.py`。
+      # type 白名单与 CONTRIBUTING 是否逐字同源）走下面的 `pytest` 那一步。
       # 本仓没有 `.github/dependabot.yml`（`tests/test_packaging.py` ③ 判着），所以这里
       # **不做**父仓那份 dependabot 豁免。真启用机器人时它会在这里红——那是一次可见的、
       # 需要人加一行豁免的红，而不是一个"首行长度不由人控制"的慢性假红。
@@ -195,20 +195,28 @@ jobs:
           done < <(git log --no-merges --format=%H "${BEFORE}..${SHA}")
           exit "$fail"
 
-      # 套件清单**只有一处事实源**：`tests/run_all.py` 按**磁盘**枚举 `tests/*.py`
-      # （`_` 开头的辅助模块与 run_all 自己除外）。此前这里是**手工维护**的名单（一个套件一个
-      # step），而审计实测（20260928）：磁盘上 50+ 个套件、这份名单只引用了 26 个
-      # ⇒ **一半以上的判据在 CI 里从不运行**——其中就有 `test_prompt_prefix`（提示词前缀缓存
-      # 稳定性的唯一哨兵）与 `test_slim_workflows`。加了新套件忘了来这里加一行，表现是
-      # "看着在跑、其实没跑"，而这种失效没有任何东西会告诉你。
-      # 收敛成一条 step 之后，**加套件不用改 CI**。回归锁：`tests/test_ci_suite_list.py`
-      # 断言这里不许再出现逐套件的 `tests/test_*.py` 调用，也断言夜间脚本与本文同源。
-      # 全套秒级、无网络、无 LLM；run_all.py 内部钉住出厂档（`_PINNED`：AGENT_EVIDENCE=0 /
-      # AGENT_FASTPATH=1 / RAG_HYBRID_ENABLED=0 / IOT_ENABLED=1 / SAUDADE_IGNORE_ENV_FILE=1——
-      # 20261004 删掉了 `PLANNER_ENGINE` 那一钉：接口层只剩 native 一条，没有第二个取值可钉；
-      # 20261015 又删掉了 `AGENT_TASK_STATE` / `AGENT_TASK_PLAN_EXEC` 两钉：任务状态整族撤档、
-      # 常开。钉子表没被清空，理由见 `tests/run_all.py` 那段 ⚠️），
-      # 即给子进程设 `SAUDADE_IGNORE_ENV_FILE=1`（**整份 .env 不读**）
+      # 套件清单**只有一处事实源**：pytest 按**目录**收集 `tests/`（`pyproject.toml` 的
+      # `testpaths = ["tests"]`，收集规则用默认的 `test_*.py`），谁都不抄名单。此前这里是
+      # **手工维护**的名单（一个套件一个 step），而审计实测（20260928）：磁盘上 50+ 个套件、
+      # 这份名单只引用了 26 个 ⇒ **一半以上的判据在 CI 里从不运行**——其中就有
+      # `test_prompt_prefix`（提示词前缀缓存稳定性的唯一哨兵）与 `test_slim_workflows`。
+      # 加了新套件忘了来这里加一行，表现是"看着在跑、其实没跑"，而这种失效没有任何东西会
+      # 告诉你。收敛成一条 step 之后，**加套件不用改 CI**。
+      # 那条收敛 20260928 先落在自研 runner pytest 上；20261020 这 180 个
+      # 裸脚本套件**整体转成原生 pytest**（过程与逐批读数见
+      # changelog.d/20261020-pytest-migration-*.md），入口从 pytest 换成 `pytest` 本身、
+      # pytest 随之删除。回归锁 `tests/test_ci_suite_list.py` 原样跟着改判：
+      # 断言这里跑的是 pytest，断言这里与夜间脚本都**不许**再出现逐套件的 `tests/test_*.py`
+      # 调用，也不许出现收窄收集面的选项（`-k` / `--deselect` / `--ignore` / `--lf`——
+      # 它们的失效形状是同一条：静默地只跑子集，汇总表上还是一片绿）。
+      # 全套秒级、无网络、无 LLM；出厂档钉子在 `tests/conftest.py` 的 `_PINNED`
+      # （AGENT_EVIDENCE=0 / AGENT_FASTPATH=1 / RAG_HYBRID_ENABLED=0 / IOT_ENABLED=1 /
+      # AGENT_REQUIRE_ASSERTION=1 / SAUDADE_IGNORE_ENV_FILE=1——20261004 删掉了
+      # `PLANNER_ENGINE` 那一钉：接口层只剩 native 一条，没有第二个取值可钉；20261015 又
+      # 删掉了 `AGENT_TASK_STATE` / `AGENT_TASK_PLAN_EXEC` 两钉：任务状态整族撤档、常开。
+      # 钉子表没被清空，理由见 `tests/conftest.py` 那段 ⚠️），conftest 在**收集之前**把它们
+      # 写进 `os.environ`（子进程自然继承；原来是 pytest 对每个套件子进程 `env.update`，
+      # 换了持有者、没换语义），其中 `SAUDADE_IGNORE_ENV_FILE=1` 是**整份 .env 不读**
       # ⇒ 判据不随仓库/运维环境的取值漂移。20260928 加后半句的实测理由：CI 没有 .env、
       # 本机有产线那份 ⇒ 同一片判据在这里红、在本机绿，而两边都没在看代码。
       # 跨语言守卫**跑不到就算红**（`tests/_parent_repo.py` 的三态），与夜间同一条纪律：
@@ -216,31 +224,31 @@ jobs:
       # 读的 ⏭。父仓这次**真在**（上面两步），所以这一档在 CI 里判的是真东西。
       # 注意它比较的是父仓**默认分支**的 HEAD：Rust 那边的改动还没并进默认分支时，这里会红
       # 而本机（工作区里带着那份改动）是绿的——这是**可见的**红，不是静默的绿（取舍见 ADR-0004）。
-      # `-j 4`（20261019）：这 6 分钟是这一步**最长**的一段，而它长是因为**脚本多**
-      # （170+ 个套件各自的解释器启动与导入），不是因为谁在等网络——串行墙钟几乎就是各
-      # 套件耗时之和。这些套件彼此独立（没有绑端口的、没有往仓内固定路径写的），所以按
-      # 4 路并行跑：本机实测 **453.7s → 145.1s（3.13×）**，两档的汇总表**逐行相同**（含 rc）。
-      # 并行**只在入口内部**（`run_all.py` 的线程池）：每个套件仍是一个独立子进程、同一份
-      # `_PINNED` 环境、同一个 300s 超时 ⇒ 判据一个字没变；`-j 4` 配 `ubuntu-latest` 的 4 核。
-      # 并行安全的前提、以及"要加什么套件得先回到这条注上"写在 `run_all.run_suites` 头注；
-      # 守住它的判据是 `tests/test_run_all_parallel.py`（真重叠 / 同结论 / 独立子进程 / 超时仍咬）。
+      # `-n 4`（20261019 起是 `pytest -j 4`，20261020 换成 pytest-xdist 的 `-n 4`）：
+      # 这一步是这套 CI 里最长的一段，而它长是因为**脚本多**（179 个套件各自的导入），
+      # 不是因为谁在等网络。这些套件彼此独立（没有绑端口的、没有往仓内固定路径写的），
+      # 所以按 4 路并行跑，配 `ubuntu-latest` 的 4 核。
+      # 并行只改**谁在哪个进程里跑**，不改判据与环境：每个 worker 各自加载同一份
+      # `tests/conftest.py`（同一套 `_PINNED`）、同一个 300s 单测超时（`pyproject.toml` 的
+      # `timeout`）。跨套件全局的还原层（conftest 的 autouse `_process_isolation`）在
+      # 每个 worker 里都生效——它本来就是为"多个套件共用一个进程"写的。
       # **夜间那份脚本不加**：它在本机跑、没人等它，而本机内存比 runner 紧。
-      - name: 全部离线套件（按磁盘枚举，秒级、无网络、无 LLM）
+      - name: 全部离线套件（按目录收集，秒级、无网络、无 LLM）
         if: steps.parent.outputs.available == '1'
         env:
           SAUDADE_PARENT_REPO: ${{ github.workspace }}/_parent
           SAUDADE_REQUIRE_PARENT: "1"
-        run: uv run python tests/run_all.py -j 4
+        run: uv run --frozen pytest -q -n 4
 
       # fork PR 的降级跑法：**同一份清单、同一套判据**，只是父仓不在场。
       # 不设 `SAUDADE_PARENT_REPO`：父仓根本没 checkout（上面那一步被 `if` 掉了），
       # 指一个不存在的目录只会多一句误导人的输出。不设 `SAUDADE_REQUIRE_PARENT` ⇒
       # 读父仓的那六处守卫落进"找不到 + 没设要求"那一档：**打一行响亮的说明再返回 None**，
       # 不是静默（那一档的语义写在 tests/_parent_repo.py 头注）。哪些没跑已在 job summary 里记下。
-      # `-j 4` 的理由同上一步。
+      # `-n 4` 的理由同上一步。
       - name: 全部离线套件（降级：本 PR 拿不到父仓凭据 ⇒ 跨语言守卫本次不运行）
         if: steps.parent.outputs.available != '1'
-        run: uv run python tests/run_all.py -j 4
+        run: uv run --frozen pytest -q -n 4
 
       # 未定义名静态扫描（20260924 补）。Python 没有编译期拦截：一个只在**另一个作用域**
       # 存在的名字（server.py 的 `req` 写进了 `_run_agent_stream_to_queue`）要到运行到那一行
@@ -282,6 +290,35 @@ jobs:
       # （venv 的 dev 组里就有同版 ruff；隔离跑法见该脚本头注）。
       - name: 静态检查棘轮（ruff E/F/I/W 只许变小）
         run: uv run --frozen python eval/lint_gate.py
+
+      # 盲捕获棘轮（20261020 补，审计意见 §异常精细化）。`except Exception:` 全仓 117 条，
+      # 而其中**大多是故意的降级路径**（工具层返回 `unavailable` 让模型换条路、图里"这一帧
+      # 取不到就少一帧"）——一上来当门禁只会逼人把降级改成崩溃。所以同族第五道棘轮：
+      # 记基线、只许变小、`--update` 是唯一放宽通道。**只记账、不批量改**。
+      # ⚠️ 它**刻意不把 `BLE001` 写进 `pyproject.toml` 的 `select`**：那条路会让上面那道
+      # `lint_gate` 的账换量（622 条当场变成 700 多，两件事混进一个数）。select 的落点
+      # 就在 `eval/except_gate.py` 自己。
+      # ⚠️ **三个量任一换掉就退 3**（ruff 版本 / 本闸的 select / pyproject 的 lint `ignore`）。
+      # 第三条是真的洞：`--select BLE001` 仍然服从 `ignore` 表，谁往里加一句 `"BLE001"`，
+      # 这个闸会静默读到 0 条然后报绿 —— 基线里记着出账时那份表，对不上就退 3。
+      - name: 盲捕获棘轮（BLE001 只许变小）
+        run: uv run --frozen python eval/except_gate.py
+
+      # 安全扫描棘轮（20261020 补，审计意见 §安全扫描）。bandit 全仓 142 条，而**没有一条
+      # 是真的可利用漏洞**（大头是 B105 字典键误报、B608 拼模块级常量表名、B108 写 /tmp）——
+      # 同族第六道棘轮：记基线、只许变小、`--update` 是唯一放宽通道。
+      # ⚠️ **跳过集是四条**（`B101` assert / `B404`+`B603`+`B607` subprocess 记账三项）：
+      # 本仓的既定形态就是 shell 出去调 git/systemctl/psql，这三项每调一次都报。不安全的
+      # 变体 `B602`(`shell=True`) / `B609`(通配符注入)**没有跳**，那才是要看的（当前 0 条）。
+      # ⚠️ **四个量任一换掉就退 3**：bandit 版本 / **它跑在哪个解释器上** / 跳过集 / 扫描面。
+      # 解释器那一条是实测出来的：同一份源码，`uvx bandit`（自带 3.10）读到 205、
+      # `uvx --python 3.12 bandit` 读到 211（同 `eval/type_gate.py` 的
+      # `--python-executable` 那个洞）。本机跑法见该脚本头注。
+      # ⚠️ 还有两个"悄悄关闸"的口子也堵了：bandit **自动发现**的配置源
+      # （`.bandit` / `setup.cfg` / **`pyproject.toml` 的 `[tool.bandit]`**）在场就退 3；
+      # `# nosec` 行内豁免进账且**只许变小**（现在 0 ⇒ 等于不许用）。
+      - name: 安全扫描棘轮（bandit 只许变小）
+        run: uv run --frozen python eval/security_gate.py
 
   # ═ 看板娘 pin 漂移提示（20261002）════════════════════════════════════════
   # **独立 job、只警告、恒绿**。上面那个 eval job 是门禁，这一条不是：它回答的是

@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """「带我去某条评论/某条留言的位置」：**事实供给**、**参数通道**、**取值通道**三样必须成对。
 
 **病**（主人报的原文：「意图明显是去对应评论位置，第一次带到了留言板。还不能转跳评论
@@ -47,31 +46,49 @@
 第 ⑥节是**单一事实来源锁**：形态表逐行白名单自检 + 事实句必须是渲染来的（不许再手写
 条数——「站内只有两个形态」正是一句可抄的错句）。
 
-秒级、纯离线、无网络无 LLM；由 `tests/run_all.py` glob 自动纳入（push 时 eval.yml 跑）。
+秒级、纯离线、无网络无 LLM；由 pytest 按目录收集自动纳入（push 时 eval.yml 跑）。
 """
+
+
 import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent  # 仓根（测试统一在 tests/）
+
+
 sys.path.insert(0, str(ROOT))
 
-import agent.prompt_context as C  # noqa: E402
+
 import agent.entity_digest as E  # noqa: E402
+import agent.prompt_context as C  # noqa: E402
 from agent import authz  # noqa: E402
 from agent.workflow_defs import WORKFLOWS, visible_workflows  # noqa: E402
 from agent.workflow_defs.nav_map import NAV_MAP  # noqa: E402
 from agent.workflow_plan import instantiate_plan  # noqa: E402
 from agent.workflow_tools import _EXPLICIT_TOOLS  # noqa: E402
-from tools.base import (_FRAME_ID_KEYS, _NAV_EXACT_PATHS, _NAV_PREFIX_PATHS,  # noqa: E402
-                        get_all_tools, list_my_board, nav_path_valid,
-                        nav_pure_path, navigate_to)
+from tools.base import (  # noqa: E402
+    _FRAME_ID_KEYS,
+    _NAV_EXACT_PATHS,
+    _NAV_PREFIX_PATHS,
+    get_all_tools,
+    list_my_board,
+    nav_path_valid,
+    nav_pure_path,
+    navigate_to,
+)
 
 FAILS: list[str] = []
 
-# 站内两个位置形态（判据锚点写一次，下面都用它）
+
 _FORM_CMT = "/article/<文章 id>?cid=<评论 id>"
+
+
 _FORM_LID = "/guestbook?lid=<留言 id>"
+
+
 _CID = "/article/54?cid=9"        # 端到端那一半用的具体实例
+
+
 _LID = "/guestbook?lid=109"
 
 
@@ -90,8 +107,7 @@ def _tool_names() -> set[str]:
     return {getattr(t, "name", "") for t in get_all_tools()}
 
 
-# ── ① 供给：事实真的进了 planner/narrator 共用的那份上下文 ──────────────────
-def test_fact_is_in_the_shared_page_context():
+def _test_fact_is_in_the_shared_page_context():
     print("\n[供给] 事实进的是 planner 与 narrator 共用的那份页面上下文")
     fact = C._item_link_fact()
     check("事实句非空且够长（不是一句空壳）", len(fact) >= 40, f"{len(fact)} 字")
@@ -118,7 +134,7 @@ def test_fact_is_in_the_shared_page_context():
           fact.count("通知") >= 1 and "照抄" in fact)
 
 
-def test_fact_is_a_standalone_sentence_not_a_capability():
+def _test_fact_is_a_standalone_sentence_not_a_capability():
     print("\n[供给] 它是**站内事实**、单独成句——不混进能力枚举")
     fact = C._item_link_fact()
     caps = [s.capability or "" for s in visible_workflows("admin")]
@@ -132,7 +148,7 @@ def test_fact_is_a_standalone_sentence_not_a_capability():
           and C._SITE_GUIDE_BOARD_FACT not in fact and fact not in C._SITE_GUIDE_BOARD_FACT)
 
 
-def test_fact_does_not_teach_the_wrong_shape():
+def _test_fact_does_not_teach_the_wrong_shape():
     print("\n[供给] 事实里**不许**出现错形状的例句（可抄句纪律）")
     fact = C._item_link_fact()
     check("★ 没有 `#comment` 这个具体错形状（写了就成了可抄的例句）",
@@ -143,8 +159,7 @@ def test_fact_does_not_teach_the_wrong_shape():
     check("`#` 只在那句解释里露面一次", fact.count("#") == 1, f"{fact.count('#')} 处")
 
 
-# ── ② 参数通道：说明书与实现必须同时放行同一个形态 ─────────────────────────
-def test_param_doc_names_the_literal_path_grid():
+def _test_param_doc_names_the_literal_path_grid():
     print("\n[参数通道] navigate.target 的说明书里写着字面路径与两个位置形态")
     desc = _nav_inputs_desc()
     check("说明书里点出「可以直接填字面路径」这一格（此前只写别名，与实现不一致）",
@@ -157,7 +172,7 @@ def test_param_doc_names_the_literal_path_grid():
     check("说明书里没有出现 `#` 锚点的错形状", "#" not in desc)
 
 
-def test_impl_actually_accepts_both_forms():
+def _test_impl_actually_accepts_both_forms():
     print("\n[参数通道] instantiate_plan 与 navigate_to 真的放行**两个**形态")
     for target in (_CID, _LID, "/article/54"):
         plan = instantiate_plan("navigate", {"target": target})
@@ -184,8 +199,7 @@ def test_impl_actually_accepts_both_forms():
           not nav_path_valid("/nope") and not nav_path_valid("/guestbook/../admin"))
 
 
-# ── ③ 取值通道：`?lid=` 的值（talkId）真的读得出来 ──────────────────────────
-def test_lid_value_has_a_read_channel():
+def _test_lid_value_has_a_read_channel():
     print("\n[取值通道] 「我自己那几条（含待审/未通过）」有读通道，值就是 `talkId`")
     check("★ list_my_board 在工具注册表里（不在表里 = planner 拿不到）",
           "list_my_board" in _tool_names())
@@ -222,8 +236,7 @@ def test_lid_value_has_a_read_channel():
           "状态未知" in unknown and "待审" not in unknown, unknown)
 
 
-# ── ④ 反向锁：评论不是独立页面，不许给它 NAV_MAP 别名 ──────────────────────
-def test_comment_has_no_nav_alias():
+def _test_comment_has_no_nav_alias():
     print("\n[反向锁] 「评论」不许进 NAV_MAP（有别名 = 把'带去留言板'写进系统数据）")
     for alias in ("评论", "评论区", "评论页", "我的评论"):
         check(f"NAV_MAP 里没有「{alias}」", alias not in NAV_MAP)
@@ -232,8 +245,7 @@ def test_comment_has_no_nav_alias():
           NAV_MAP.get("留言板") == "/guestbook" and NAV_MAP.get("河灯") == "/guestbook")
 
 
-# ── ⑥ 单一事实来源：形态表 ⇄ 事实句 ⇄ 白名单，三处必须同源 ──────────────────
-def test_forms_table_is_the_single_source():
+def _test_forms_table_is_the_single_source():
     print("\n[单一事实来源] 形态表（tools.base._ITEM_POSITION_FORMS）逐行自洽")
     from tools.base import _ITEM_POSITION_FORMS as FORMS
     fact = C._item_link_fact()
@@ -259,14 +271,14 @@ def test_forms_table_is_the_single_source():
 
 
 def main() -> int:
-    for fn in (test_fact_is_in_the_shared_page_context,
-               test_fact_is_a_standalone_sentence_not_a_capability,
-               test_fact_does_not_teach_the_wrong_shape,
-               test_param_doc_names_the_literal_path_grid,
-               test_impl_actually_accepts_both_forms,
-               test_lid_value_has_a_read_channel,
-               test_comment_has_no_nav_alias,
-               test_forms_table_is_the_single_source):
+    for fn in (_test_fact_is_in_the_shared_page_context,
+               _test_fact_is_a_standalone_sentence_not_a_capability,
+               _test_fact_does_not_teach_the_wrong_shape,
+               _test_param_doc_names_the_literal_path_grid,
+               _test_impl_actually_accepts_both_forms,
+               _test_lid_value_has_a_read_channel,
+               _test_comment_has_no_nav_alias,
+               _test_forms_table_is_the_single_source):
         fn()
     print()
     if FAILS:
@@ -278,5 +290,12 @@ def main() -> int:
     return 0
 
 
+def test_item_position_guide():
+    main()
+
+    assert not FAILS, (
+        f"{len(FAILS)} 条未通过：" + "；".join(FAILS))
+
+
 if __name__ == "__main__":
-    raise SystemExit(main())
+    test_item_position_guide()

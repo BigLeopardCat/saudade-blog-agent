@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """narrator 出站序列的**装配顺序**（20261016）：稳定头在前、每轮都变的那段在历史之后。
 
 ## 为什么这条测试存在
@@ -40,12 +39,17 @@
 
 用法：.venv/bin/python tests/test_narrator_cache_layout.py
 """
+
+
 import sys
 import tempfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent  # 仓根（测试统一在 tests/）
+
+
 sys.path.insert(0, str(ROOT))
+
 
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage  # noqa: E402
 
@@ -63,15 +67,16 @@ def check(desc: str, cond: bool, detail: str = "") -> None:
         FAILS.append(desc)
 
 
-_MSG = "这篇讲了什么"
 _PLAN = "WORKFLOW=content_query\nPARAMS={}\nTOOLS:\nNOTE: （无）\nREPLY: （无）"
+
+
 _PLAN2 = "WORKFLOW=chat\nPARAMS={}\nTOOLS:\nNOTE: （无）\nREPLY: （无）"
+
+
 _CFG = {"configurable": {"principal": Principal(uid=7, role="admin"),
                          "user_id": 7, "conversation_id": 42, "stop_event": None}}
 
-# 两轮对话共用的那段历史（逐字相同 = 真实情况下它来自 DB，写入后不再变）。
-# 刻意铺到与生产同量级（生产 narrator 的历史中位 ~9000 字）：太短的话"公共前缀多覆盖
-# 了历史"这条断言只值几十个字，反控臂的对比也就看不出来了。
+
 _HIST = [
     HumanMessage(content="你好"),
     AIMessage(content="你好呀～我是泠月喵，这个博客的看板娘。有什么想问的尽管说，"
@@ -280,5 +285,13 @@ def main() -> int:
     return 0
 
 
+def test_narrator_cache_layout():
+    _MSG = "这篇讲了什么"
+    main()
+
+    assert not FAILS, (
+        f"{len(FAILS)} 条未通过：" + "；".join(FAILS))
+
+
 if __name__ == "__main__":
-    sys.exit(main())
+    test_narrator_cache_layout()
