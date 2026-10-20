@@ -15,8 +15,9 @@
 **为什么旧文件要真的跑一遍**：①②只看文本与退出码的对应关系，如果转写恰好把"某条判据
 变成永不执行"，①的条数还对得上（字还在），只有真跑旧文件才能发现"旧的红、新绿了"。
 
-旧文件落到 `tests/_mig_old_<stem>.py` 再删 —— 以 `_` 开头，`run_all.suites()` 与
-`test_tests_dir_shape` ③ 都不收它，跑完立刻删。
+旧文本**不落进仓内**（`_run_source`：`exec` 配真 `__file__`）—— 早先写
+`tests/_mig_old_<stem>.py`，`run_all.suites()` 确实不收它，但**扫仓的套件会看见**，
+造出来的文件污染被测对象。
 
 用法（**必须在提交前跑** —— 旧文本取自 `--base`，默认 `HEAD`；提交后 HEAD 就是新文本，
 ①② 两层退化成自比、恒过）：
@@ -44,6 +45,7 @@ import pathlib
 import re
 import subprocess
 import sys
+import tempfile
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent.parent
 TESTS = ROOT / "tests"
@@ -90,6 +92,38 @@ def _run(path: pathlib.Path, timeout: float = 300.0) -> int:
                            capture_output=True, text=True, timeout=timeout)
     except subprocess.TimeoutExpired:
         return -1
+    return p.returncode
+
+
+# 旧文本**不落进仓内**：跑法是 `python -c <这段> <临时文件> <真路径>`，用真路径当 `__file__`。
+#
+# 早先是写 `tests/_mig_old_<stem>.py` 再跑。两个问题，第二个是真缺陷：
+#   · 以 `_` 开头 ⇒ `run_all.suites()` 不收（那半边想对了）；
+#   · **但扫仓的套件会看见它** —— `test_complexity_budget` / `test_module_budget` /
+#     `test_tests_dir_shape` / `test_parent_repo_paths` 是走 `ROOT.rglob` 的，那个临时文件
+#     会进它们的账（`FileNotFoundError: tests/_mig_old_test_capability_truth.py` 实测：
+#     扫描扫到一半文件被删了）。**造出来的文件污染被测对象**，这是工装最不该犯的错。
+# 放 `/tmp` 也不行：`ROOT = Path(__file__).resolve().parent.parent` 会算成 `/`。
+_OLD_RUNNER = (
+    "import sys\n"
+    "src = open(sys.argv[1], encoding='utf-8').read()\n"
+    "real = sys.argv[2]\n"
+    "exec(compile(src, real, 'exec'), {'__name__': '__main__', '__file__': real})\n"
+)
+
+
+def _run_source(src: str, real: pathlib.Path, timeout: float = 300.0) -> int:
+    """把一段源码当 `__main__` 跑一遍，`__file__` 指着**真路径**（`ROOT` 才算得对）。"""
+    tmp = pathlib.Path(tempfile.gettempdir()) / f"_mig_old_{real.stem}.py"
+    tmp.write_text(src, encoding="utf-8")
+    try:
+        p = subprocess.run([sys.executable, "-c", _OLD_RUNNER, str(tmp), str(real)],
+                           cwd=ROOT, env=_child_env(), capture_output=True, text=True,
+                           timeout=timeout)
+    except subprocess.TimeoutExpired:
+        return -1
+    finally:
+        tmp.unlink(missing_ok=True)
     return p.returncode
 
 
@@ -196,14 +230,7 @@ def check_one(path: pathlib.Path, skip_layer2: bool, base: str) -> tuple[list[st
         return bad, soft
 
     # ── ② 行为层 ──────────────────────────────────────────────────────────
-    old_rc = None
-    if old_src is not None:
-        tmp = TESTS / f"_mig_old_{stem}.py"
-        tmp.write_text(old_src, encoding="utf-8")
-        try:
-            old_rc = _run(tmp)
-        finally:
-            tmp.unlink(missing_ok=True)
+    old_rc = None if old_src is None else _run_source(old_src, path.resolve())
 
     new_rc = _run(path)
     new_pt = _pytest_outcome(path)
