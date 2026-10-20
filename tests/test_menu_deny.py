@@ -450,7 +450,14 @@ check("`_decide_late_correct` 里那两半合成**一次调用**，且排在动�
       "（动作技能留自己的通道；那函数已超复杂度预算，只许缩小）",
       _GRAPH_SRC.count("_name_write_correct(") == 2
       and _GRAPH_SRC.index("if _name_write_correct(c):")
-      < _GRAPH_SRC.index("动作重复纠偏（20261003）"))
+      # 锚在**代码**上（`c.correction_kind = "动作重复"`），不锚在注释上：
+      # 注释是能被改写的散文，拿它当锚等于"改注释就断判据"——而这条判据要守的是
+      # "两半合成一次调用、且排在动作重复那一支之前"这个**结构**。
+      # 锚在**代码**上（`correction_kind = "动作重复"`），不锚在注释上：
+      # 注释是能被改写的散文，拿它当锚等于"改注释就断判据"——而这条判据要守的是
+      # "两半合成一次调用、且排在动作重复那一支之前"这个**结构**。
+      # （`_GRAPH_SRC` 是去前缀视图 ⇒ 这里写的是 `correction_kind`，不是 `c.correction_kind`。）
+      < _GRAPH_SRC.index('correction_kind = "动作重复"'))
 
 print("\n" + ("全部通过" if not FAILS else f"失败 {len(FAILS)} 项：" + "; ".join(FAILS)))
 raise SystemExit(1 if FAILS else 0)

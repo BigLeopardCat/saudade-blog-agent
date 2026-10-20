@@ -232,7 +232,9 @@ check("  端到端（零帧）：转述别人那句整句否认 ⇒ 放行",
 check("  零帧族挂了 `name_quotes=True`",
       re.search(r'_ClaimFamily\("capability_absent_though_registered".{0,400}?'
                 r'name_quotes=True', _DENIED_SRC, re.S) is not None)
-_A5F2 = _DENIED_SRC.index("# 5f2.")
+# 锚在**代码**上（那一块的开头 `if`），不锚在注释上：注释是能被改写的散文，
+# 拿它当锚等于"改注释就断判据"。
+_A5F2 = _DENIED_SRC.index('if (plan.get("status") not in PLAN_STATUS_ABSENCE_EXEMPT')
 check("  有帧那一半（5f2）用的是同一个 helper（不是通用剥引号）",
       "_capability_absent_clause(_quotes_dropped_but_named_kept(reply)" in
       _DENIED_SRC[_A5F2:_A5F2 + 4000])
@@ -284,7 +286,7 @@ check("  建议里给的是**动手/去查**两条路（不是洞④ 那句「�
       "该动手就去动手" in _ADV and "检索类技能" in _ADV)
 # ── 有帧轮那一半（5f2）：**本族唯一一次生产命中就是有帧轮**，只挂零帧等于漏掉它
 #    （`frames` 是 turn-scoped，第 4 节整族在 `if not frames:` 下面进不去）
-_A4 = _SRC.index("# 5f2.")
+_A4 = _SRC.index('if (plan.get("status") not in PLAN_STATUS_ABSENCE_EXEMPT')
 _A4B = _SRC[_A4:_A4 + 4000]
 check("有帧那一半挂在 `gate_node` 里（5f2）", "_capability_absent_clause" in _A4B)
 check("  用的是**同一个原因码**（两副面孔一份打回口径与兜底文案）", _FAM in _A4B)
