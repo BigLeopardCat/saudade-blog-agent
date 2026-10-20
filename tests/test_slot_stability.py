@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """槽稳定性读数（`eval/slot_stability.py`）的**聚合层**单测。
 
 离线、秒级、零网络、零 LLM——本套件只喂**合成的** RESULT 给那几个纯函数。
@@ -11,6 +10,8 @@
 
 用法：.venv/bin/python tests/test_slot_stability.py
 """
+
+
 from __future__ import annotations
 
 import json
@@ -20,14 +21,19 @@ from pathlib import Path
 from _judge import collector
 
 ROOT = Path(__file__).resolve().parent.parent
+
+
 sys.path.insert(0, str(ROOT))
+
+
 sys.path.insert(0, str(ROOT / "eval"))
+
 
 import retention_manifest as rm  # noqa: E402
 import slot_stability as ss  # noqa: E402
 
-FAILED: list[str] = []
-check = collector(FAILED)
+FAILS: list[str] = []
+check = collector(FAILS)
 
 
 def _result(specs, *, top=False):
@@ -40,15 +46,13 @@ def _result(specs, *, top=False):
 
 
 def test_slot_stability():
-    FAILED.clear()
     print("① 取槽：两个产出者的位置都收（顶层与 rounds[]）")
     _v = ss.extract_slot(_result([("create_dashboard_todo", {"text": "亲亲泠月喵"})]),
                          "create_dashboard_todo", "text")
     check("  rounds[].confirm_payloads 里取得到", _v == "亲亲泠月喵", repr(_v))
     _v2 = ss.extract_slot(_result([("create_dashboard_todo", {"text": "A"})], top=True),
                           "create_dashboard_todo", "text")
-    check("  顶层 confirm_payloads 里也取得到（两个产出者都写过这个位置）",
-          _v2 == "A", repr(_v2))
+    check("  顶层 confirm_payloads 里也取得到（两个产出者都写过这个位置）", _v2 == "A", repr(_v2))
     check("  工具名对不上 ⇒ 取不到（不许拿别的工具的参来顶）",
           ss.extract_slot(_result([("delete_tag", {"text": "X"})]),
                           "create_dashboard_todo", "text") is None)
@@ -59,7 +63,6 @@ def test_slot_stability():
           ss.extract_slot(_result([("create_dashboard_todo", {"text": "先"}),
                                    ("create_dashboard_todo", {"text": "后"})]),
                           "create_dashboard_todo", "text") == "先")
-
     print("\n② 聚合：一致率算得对不对，以及**它在该掉的时候真的掉**")
     _same = ss.summarize(["A"] * 12)
     check("  12 遍全一样 ⇒ 1.0", _same["agreement"] == 1.0, str(_same))
@@ -71,7 +74,6 @@ def test_slot_stability():
           ss.summarize(["A"] * 11 + ["B"])["agreement"] < 1.0)
     check("  全不一样 ⇒ 1/N（不是 0，也不是 1）",
           abs(ss.summarize(["A", "B"])["agreement"] - 0.5) < 1e-9)
-
     print("\n③ 缺席**算进分母**，不静默跳过")
     _miss = ss.summarize(["A", "A", ss.MISSING, ss.MISSING])
     check("  2A + 2 缺席 ⇒ 50%，分母是 4 不是 2",
@@ -80,11 +82,8 @@ def test_slot_stability():
           _miss["missing_n"] == 2, str(_miss["values"]))
     check("  空表 ⇒ agreement 是 None（判不了，不许编一个 1.0 出来）",
           ss.summarize([])["agreement"] is None)
-    # 这一条是本套件的**边界声明**，不是缺陷：读数只回答"稳不稳"，不回答"对不对"。
-    # 每一遍都抄错是不稳定读数的反面——它稳定地错，必须由 gold 断言抓，不能指望这里。
     check("  边界：12 遍都错得一模一样 ⇒ 仍读 1.0（对错不归本读数管）",
           ss.summarize(["整条原话"] * 12)["agreement"] == 1.0)
-
     print("\n④ 用例取不到就响亮退出（静默跑空表 = 一份「全绿」的假读数）")
     try:
         ss.load_cases(["根本没有这条用例"])
@@ -96,7 +95,6 @@ def test_slot_stability():
           len(_ids) == 1 and _ids[0]["id"] == "admin_todo_add_popup")
     check("  用例声明的就是待办那条写通道（否则这条读数会恒「缺席」）",
           "dashboard_todo_add" in json.dumps(_ids[0], ensure_ascii=False))
-
     print("\n⑤ 留档有主：新目录不许变成「未登记」的缺口")
     check("  `slot_stability/**` 归属登记为 slot-stability",
           rm.owner_of("slot_stability/20261020_120000_123.json", rm.DEFAULT_REPORT_ROOT)
@@ -107,9 +105,15 @@ def test_slot_stability():
           _cls and _cls[0]["status"] == "managed" and (_cls[0].get("rule") or {}).get("keep"))
     check("  报告名与 name_re 对得上（对不上就会被记进 unknown ⇒ 永远不删）",
           bool(rm.SLOT_STABILITY_RE.match("20261020_120000_123.json")))
-
-    assert not FAILED, f"{len(FAILED)} 条未过：" + "；".join(FAILED)
+    if FAILS:
+        print(f"\n失败 {len(FAILS)} 项：")
+        for f in FAILS:
+            print(f"  - {f}")
+        sys.exit(1)
     print("\n全部通过")
+
+    assert not FAILS, (
+        f"{len(FAILS)} 条未通过：" + "；".join(FAILS))
 
 
 if __name__ == "__main__":

@@ -20,7 +20,7 @@
     "top_defs": 143
   },
   "agent/prompt_context.py": {
-    "lines": 1746,
+    "lines": 1728,
     "top_defs": 47
   },
   "agent/prompts.py": {
@@ -112,7 +112,7 @@
     "top_defs": 12
   },
   "tests/test_workflows.py": {
-    "lines": 5845,
+    "lines": 5830,
     "top_defs": 72
   },
   "tools/base.py": {
