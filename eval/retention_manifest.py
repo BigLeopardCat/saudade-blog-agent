@@ -341,6 +341,22 @@ CLASSES = [
         rule=None,
     ),
     dict(
+        key="golden-run-archive-tools",
+        label="工具菜单臂（`GOLDEN_ARM=tools`）每轮 golden 跑的留档",
+        root=DEFAULT_REPORT_ROOT,
+        patterns=["runs_tools/**"],
+        status="open",
+        owner=None,
+        owner_ref=None,
+        retention="未接管（与 golden-traces 必须一起设计——与 `runs/` 同一条理由）",
+        why="20261020 起工具级菜单 POC 那条臂的留档落在这里"
+            "（`eval/golden_arm.py::ARM_TOOLS` + `reports_dir`）。"
+            "**为什么与 `runs/` 同处置**：它同样是 `golden_trace.prune` 的判据源"
+            "（每条留档都带 `trace` 路径），单独清同样会让窗口外的 trace 变成"
+            "「证据不足」永久保留。POC 的三臂读数引用见 `docs/tool-menu-poc-20261020.md`。",
+        rule=None,
+    ),
+    dict(
         key="golden-run-archive-matrix",
         label="`GOLDEN_ARM=matrix` 臂（`eval/param_matrix.py` 的调参跑）每轮留档",
         root=DEFAULT_REPORT_ROOT,
