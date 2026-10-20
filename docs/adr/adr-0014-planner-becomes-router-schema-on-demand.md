@@ -1,14 +1,16 @@
 # ADR-0014：planner 降成路由器，schema 索引化按需取
 
-- **状态**：提议中（20261020）——阶段 0 落地且判据在跑之后转 `已采纳`
+- **状态**：提议中（20261020）——**阶段 0 代码面已落地、模型读数未跑**；四阶段全部落地且判据在跑之后转 `已采纳`
 - **背景文档**：[../react-architecture-plan-20261020.md](../react-architecture-plan-20261020.md)（方案全文，含分阶段判据）、
   [../tool-menu-poc-20261020.md](../tool-menu-poc-20261020.md)（三臂读数）、
   [../prefix-cache-audit-20261020.md](../prefix-cache-audit-20261020.md)（成本审计）、
   [adr-0001-native-toolcalls-skill-level-seam.md](adr-0001-native-toolcalls-skill-level-seam.md)（**本 ADR 部分取代它**）、
   [adr-0009-react-arm-becomes-a-real-graph.md](adr-0009-react-arm-becomes-a-real-graph.md)（第二条臂已是真图）
 - **影响范围**：
-  · **阶段 0**：`agent/planner_llm.py::build_tool_schema`（description 截成一句索引）、
-    新增 `describe_skill`、`agent/prompts.py` 的规划规则块。**不碰技能层、`instantiate_plan`、gate、写族。**
+  · **阶段 0（已落地 20261020，出厂关）**：新增 `agent/tool_index.py`（索引行 / 取回口 /
+    原文单一来源）、`agent/planner_llm.py::build_tool_schema` 多一格 `index: bool = False`、
+    新增 `tests/test_tool_index.py`。**不碰技能层、`instantiate_plan`、gate、写族。**
+    **`agent/prompts.py` 的规划规则块还没动**（那是阶段 1 的事，见下表）。
   · **阶段 1**：`agent/react_arm.py` 的 `menu_builder` 接缝（已在，缺省档逐字节不变）。
   · **阶段 2**：`agent/tools_arm.py`（POC 已建）、`agent/tool_menu.py`、`workflow_defs/nav_map.py`
     （`NAV_MAP` 下沉到工具层，见《取舍》第 2 条）。**射程只有只读 + 导航 + 检索。**
@@ -133,6 +135,7 @@ checker、同意闸、`reply_contract` 都已经把这些**显式写下来了** 
 | 观测到的事实 | 该做什么 |
 |---|---|
 | 阶段 0 的取回率与 `names-only` 臂打平 | **停**。索引没在起作用，`describe_skill` 是多余的 |
+| 阶段 0 的 schema 侧省量远小于预期 | **先查估算，再怀疑实现**。本 ADR 的初稿估算**已经错过一次**（把参数级描述算进函数级散文，见方案件 §3.1 的更正）：函数级描述只占 schema 的 26.4%，**阶段 0 的天花板就是 −21.9% 的 schema 字符**；参数级那 28.8% 是另一个杠杆 |
 | 阶段 0 golden A/B 出现回归 | 退回：散文留在 schema。**先查是不是"索引切得太狠"**（截断规则），再怀疑设计 |
 | 阶段 2 的 B 族（8 条定序漏步）掉了 | **停在阶段 1**。定序脱不开 `instantiate_plan`，这是本方案的真实边界 |
 | 阶段 2 `arm_capability --probe` 不是 `comparable=True` | **退出码 3，`pass_rate` 不许引用**——纯否定族在"什么都不产出"的臂上恒真 |
