@@ -683,7 +683,14 @@
 }
 .chat-nav-confirm.active { display: block; }
 .chat-nav-confirm .nav-question { margin-bottom: 6px; }
-.chat-nav-btns { display: flex; gap: 8px; justify-content: center; }
+/* `flex-wrap: wrap` 是**必需**的，不是排版偏好（20261020）：按钮一行放不下时，
+   flex 的默认行为（nowrap）是**把它们压窄**，而按钮的 `min-width: auto` 在中文上
+   等于"一个字一列"（CJK 处处可断行）——于是标签被压成 2–5 行的竖排字堆。
+   实测（线上真站 + 真 CSS，多件卡五枚按钮、卡片 376px）：
+     桌面宽度： 「取消」已断成 2 行、「全部处理（2 个任务）」断成 3 行；
+     375px 窄屏：「只处理第 1 个」断成 5 行（文字盒宽 7.6px = 一个字一列）。
+   换成 wrap 之后放不下就**换行**，按钮保持自然宽度、标签恒单行。 */
+.chat-nav-btns { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; }
 .chat-nav-btn {
   border: 1px solid #ddd;
   border-radius: 8px;
@@ -692,6 +699,11 @@
   cursor: pointer;
   background: #fff;
   transition: all 0.2s;
+  /* 标签恒单行：配合上面的 wrap，宁可整枚按钮换到下一行，也不许把「只处理第 1 个」
+     拆成几行竖排（`max-width` 兜住"面板窄到连一枚按钮都放不下"的极端，那时按行宽
+     收缩、由浏览器在行内断行，而不是撑破卡片）。 */
+  white-space: nowrap;
+  max-width: 100%;
 }
 .chat-nav-btn.yes { border-color: #e74c3c; color: #e74c3c; }
 .chat-nav-btn.yes:hover { background: #e74c3c; color: #fff; }

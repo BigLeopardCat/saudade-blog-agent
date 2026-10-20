@@ -178,7 +178,7 @@ def test_golden_keys():
     check("没有裸 `note`（注释键是 `_note`；写成 `note` 等于这条注释不存在）",
           not any(u.endswith("gold.note") for u in _unknown))
     _ids = [c.get("id", "?") for c in _cases]
-    check("用例数（192 条）", len(_ids) == 192, f"实际 {len(_ids)}")
+    check("用例数（193 条）", len(_ids) == 193, f"实际 {len(_ids)}")
     check("用例 id 无重复", len(_ids) == len(set(_ids)),
           f"重复：{sorted({i for i in _ids if _ids.count(i) > 1})}")
     _no_assert = [c.get("id") for c in _cases

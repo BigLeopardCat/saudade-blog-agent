@@ -217,7 +217,7 @@ flowchart TB
 │   ├── clock.py               # 本地钟面的**唯一**格式器（20261018 审计 A2）：get_current_time 与 server 的 current_time= 两处逐字同形（判据在 test_truth_source_parity）
 │   ├── tts.py                 # edge-tts 语音合成（预留，TTS 未启用）
 │   └── __init__.py            # 包门面
-├── eval/                      # 评测：eval/golden/basic.jsonl（192 条）+ run_golden.py（L2 真实 LLM 端到端）
+├── eval/                      # 评测：eval/golden/basic.jsonl（193 条）+ run_golden.py（L2 真实 LLM 端到端）
 │   │                          #       + golden_case_runner.py / golden_full_run.py（进程隔离跑法）
 │   │                          #       + recall_eval.py（L1 检索：recall@k/MRR，直接测 rag/search.py）
 ├── scripts/                   # agent_metrics（质量指标）+ nightly_regression（cron 04:00；

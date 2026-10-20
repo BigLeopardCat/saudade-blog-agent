@@ -221,7 +221,7 @@
   },
   "tests/test_confirm.py::test_confirm": {
     "c": 208,
-    "lines": 855
+    "lines": 858
   },
   "tests/test_corpus_terms.py::test_corpus_terms": {
     "c": 54,
