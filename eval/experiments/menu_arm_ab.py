@@ -42,6 +42,7 @@ import argparse
 import glob
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -170,15 +171,50 @@ OUTAGE_MARKS = ("Access to model denied", "AccessDenied", "PermissionDeniedError
 
 
 def outage_cases(doc: dict) -> list[str]:
-    """这一遍里**因服务商停摆而红**的用例 id（不是行为差，是环境差）。"""
+    """这一遍里**因服务商停摆而红**的用例 id（不是行为差，是环境差）。
+
+    两条口径，缺一条都会漏：
+
+      · **指纹**：报错文本里出现 `OUTAGE_MARKS` 之一（403 / 401 / 限流 / 连接层）；
+      · **整批同型**：臂把内层异常就地写成正文（`我停在这里了：内部出了点问题（X）`）
+        ⇒ 报错原文**不在报告里**，指纹那条看不见它。20261020 实测：一遍 80 条里
+        **80 条全是同一个 `BadRequestError`、中位耗时 0.4s**（= 每一次调用都被当场拒），
+        而 7 分钟前同一臂同一批用例全绿、7 分钟后又全绿 ⇒ 那是服务商的一个窗口，
+        不是臂退化。判据取**同一个异常类覆盖 ≥ 一半用例**——单条崩溃是真缺陷，留着；
+        半数以上一起崩，只可能是环境。
+    """
+    cases = doc.get("cases") or []
     hits = []
-    for c in doc.get("cases") or []:
+    for c in cases:
         blob = " ".join(str(c.get(k) or "") for k in ("error", "fails", "text"))
         for r in c.get("rounds") or []:
             blob += " " + str(r.get("error") or "")
         if any(m in blob for m in OUTAGE_MARKS):
             hits.append(c["id"])
-    return hits
+    cls, n = systemic_error(cases)
+    if n:
+        hits.extend(c["id"] for c in cases if cls in str(c.get("text") or ""))
+    return sorted(set(hits))
+
+
+#: 臂把内层异常就地写成正文时的那句壳（`agent/react_arm._crash_text`）。
+CRASH_RE = re.compile(r"内部出了点问题（(\w+)）")
+
+#: "同一个异常类覆盖这么多用例 ⇒ 判环境"的那条线。
+SYSTEMIC_SHARE = 0.5
+
+
+def systemic_error(cases: list) -> tuple[str, int]:
+    """→ `(异常类名, 命中数)`；没到线就是 `("", 0)`。"""
+    cnt: dict[str, int] = {}
+    for c in cases:
+        m = CRASH_RE.search(str(c.get("text") or ""))
+        if m:
+            cnt[m.group(1)] = cnt.get(m.group(1), 0) + 1
+    if not cnt or not cases:
+        return "", 0
+    cls, n = max(cnt.items(), key=lambda kv: kv[1])
+    return (cls, n) if n >= SYSTEMIC_SHARE * len(cases) else ("", 0)
 
 
 def _ok(case: dict) -> bool:
@@ -317,6 +353,8 @@ def _parse_args(argv=None):
     ap.add_argument("--provider", default="",
                     help="**只给子进程**的 LLM_PROVIDER 覆盖（不动 `.env`、不重启服务）。"
                          "空 = 用 `.env` 那一档。20261020 用它绕开 qwen 的账号级 403")
+    ap.add_argument("--retry-outage", type=int, default=1,
+                    help="一遍被判停摆/整批同型时重跑几次（缺省 1；作废那份照样记进汇总）")
     ap.add_argument("--tag", default=time.strftime("%Y%m%d_%H%M%S"))
     return ap.parse_args(argv)
 
@@ -329,14 +367,8 @@ def provider_env(provider: str) -> dict:
     return {"LLM_PROVIDER": provider} if provider else {}
 
 
-def main(argv=None) -> int:
-    # **行缓冲**（20261020 实测）：stdout 重定向到文件时是块缓冲，而跑臂那几行用
-    # `flush=True` 抢跑了 ⇒ 汇总那几节挤在缓冲里，`> out.txt` 之后**读到的文件短了一截**，
-    # 症状是"矩阵与三对读数两节凭空消失、成本那节还在"（看着像代码没跑到那儿）。
-    # 一次跑半小时，读数少一截 = 白跑。这一行把它钉死，别靠调用方记得加 `-u`。
-    if hasattr(sys.stdout, "reconfigure"):
-        sys.stdout.reconfigure(line_buffering=True)
-    args = _parse_args(argv)
+def _preflight(args) -> tuple[list[str], list[str]] | None:
+    """id 表 / 臂表 / 盘余 / 臂标。盘不够 ⇒ `None`（调用方返回退出码 3）。"""
     ids = load_ids(args.ids_file)
     if args.limit:
         ids = ids[: args.limit]
@@ -347,31 +379,123 @@ def main(argv=None) -> int:
           + ("  ⚠️ **只给子进程**，`.env` 与生产服务一个字没动" if args.provider else ""))
     print(f"[ab] 盘余 {free:.2f}G" + ("  ⚠ 低于警戒线，先清 trace" if free < DISK_MIN_GB else ""))
     if free < DISK_MIN_GB:
-        return 3
+        return None
     for arm in arms:
         print(f"[ab] 臂标 {arm:<6} → {arm_marker(arm)}")
     print(f"[ab] 读数落点 {WT}/{golden_arm.reports_dir('graph').rsplit('/', 1)[0]}/runs*/")
+    return ids, arms
 
+
+def _run_one_pass(arm: str, rep: int, i: int, n_arms: int, ids: list[str],
+                  args, retries: dict) -> dict:
+    """跑一遍（作废则按 `--retry-outage` 重跑），返回最后那一份报告。
+
+    **为什么自动重跑**：一遍 15 分钟、九遍两小时，而服务商的一个 1 分钟窗口就废掉其中一遍
+    ——20261020 实测那遍 `react 7/80` 全是瞬时 400（中位 0.4s），7 分钟后同一臂同一批用例
+    全绿。作废那份不写进汇总，但**重跑次数记着**：丢掉几遍、为什么丢，本身就是读数的一部分。
+    """
+    doc = run_arm(arm, rep, ids, args.provider)
+    for attempt in range(args.retry_outage):
+        if "_error" not in doc and not doc.get("_outage_cases"):
+            break
+        retries[f"{arm}/r{rep}"] = retries.get(f"{arm}/r{rep}", 0) + 1
+        bad = (f"{len(doc['_outage_cases'])} 条作废" if "_error" not in doc
+               else doc["_error"])
+        print(f"[r{rep} {i}/{n_arms}] {arm:<6} ⚠️ {bad} ⇒ 重跑"
+              f"（第 {attempt + 1}/{args.retry_outage} 次）", flush=True)
+        doc = run_arm(arm, rep, ids, args.provider)
+    if "_error" in doc:
+        print(f"[r{rep} {i}/{n_arms}] {arm:<6} ✗ {doc['_error']} "
+              f"（{doc['_elapsed']}s）\n        {doc['_tail'][-300:]}", flush=True)
+        return doc
+    ok = sum(1 for c in doc["cases"] if _ok(c))
+    out = doc.get("_outage_cases") or []
+    cls, n = systemic_error(doc.get("cases") or [])
+    why = (f"停摆/整批同型 {len(out)} 条" + (f"（{cls}×{n}）" if cls else "")) if out else ""
+    print(f"[r{rep} {i}/{n_arms}] {arm:<6} {ok}/{doc['total']} "
+          f"engine={doc.get('engine')} 跳{len(doc.get('skipped_ids') or [])} "
+          f"真写跳{len(doc.get('skipped_real_write_ids') or [])} {doc['_elapsed']}s"
+          + (f"  ⚠️ {why} ⇒ **这一遍作废**" if out else ""), flush=True)
+    return doc
+
+
+def _run_matrix(ids: list[str], arms: list[str], args) -> tuple[dict, dict]:
+    """外层遍、内层臂（同一遍里三臂挨着跑，采样窗口最接近）。"""
     reports: dict[tuple, dict] = {}
+    retries: dict[str, int] = {}
     for rep in range(1, args.reps + 1):
         for i, arm in enumerate(arms, 1):
-            t0 = time.time()
-            doc = run_arm(arm, rep, ids, args.provider)
-            reports[(arm, rep)] = doc
-            if "_error" in doc:
-                print(f"[r{rep} {i}/{len(arms)}] {arm:<6} ✗ {doc['_error']} "
-                      f"（{doc['_elapsed']}s）\n        {doc['_tail'][-300:]}", flush=True)
-                continue
-            ok = sum(1 for c in doc["cases"] if _ok(c))
-            out = doc.get("_outage_cases") or []
-            print(f"[r{rep} {i}/{len(arms)}] {arm:<6} {ok}/{doc['total']} "
-                  f"engine={doc.get('engine')} 跳{len(doc.get('skipped_ids') or [])} "
-                  f"真写跳{len(doc.get('skipped_real_write_ids') or [])} "
-                  f"{round(time.time() - t0, 1)}s"
-                  + (f"  ⚠️ 服务商停摆 {len(out)} 条 ⇒ **这一遍作废**" if out else ""),
-                  flush=True)
+            reports[(arm, rep)] = _run_one_pass(arm, rep, i, len(arms), ids, args, retries)
+    return reports, retries
 
-    # ── ① 逐用例 × 逐臂（主判据：差集，不是通过率）──────────────────────
+
+def _print_matrix(reports: dict, ids: list[str], arms: list[str], reps: int) -> dict:
+    """① 逐用例 × 逐臂（主判据：差集，不是通过率）。"""
+    print("\n" + "=" * 96)
+    print("逐用例 × 逐臂（每格 = 各遍的绿/红/停，顺序 = 遍号）")
+    print("=" * 96)
+    m = case_matrix(reports, ids, arms, reps)
+    hdr = "  ".join(f"{a:>{reps + 2}}" for a in arms)
+    print(f"{'用例':<46} {hdr}")
+    for cid in ids:
+        row = m[cid]
+        if all(set(v) <= {"绿"} for v in row.values()):
+            continue                      # 三臂全绿 ⇒ 没话可说（省掉满屏同形行）
+        print(f"{cid:<46} " + "  ".join(f"{row[a]:>{reps + 2}}" for a in arms))
+    return m
+
+
+def _print_pairs(reports: dict, arms: list[str], reps: int) -> dict:
+    """② 三对读数。"""
+    pairs = compare(reports, arms, reps)
+    print("\n" + "=" * 96)
+    print("三对读数（`ab_compare`：下界不低于 before - 0.005 才算没退）")
+    print("=" * 96)
+    for name, v in pairs.items():
+        print(f"\n{name}")
+        if v.get("verdict") == "no_data":
+            print(f"  {v['note']}")
+            continue
+        print(f"  判决 {v['verdict']}  before={v['before']['lower']} → "
+              f"after={v['after']['lower']}（Δ={v['delta_lower']}）"
+              f"  可比用例 {v['cases_compared']}")
+        for e in (v["per_case_fell"] or [])[:8]:
+            print(f"    ↓ {e['id']:<44} {e['before_rate']} → {e['after_rate']}")
+        for e in (v["per_case_rose"] or [])[:8]:
+            print(f"    ↑ {e['id']:<44} {e['before_rate']} → {e['after_rate']}")
+    return pairs
+
+
+def main(argv=None) -> int:
+    # **行缓冲**（20261020 实测）：stdout 重定向到文件时是块缓冲，而跑臂那几行用
+    # `flush=True` 抢跑了 ⇒ 汇总那几节挤在缓冲里，`> out.txt` 之后**读到的文件短了一截**，
+    # 症状是"矩阵与三对读数两节凭空消失、成本那节还在"（看着像代码没跑到那儿）。
+    # 一次跑半小时，读数少一截 = 白跑。这一行把它钉死，别靠调用方记得加 `-u`。
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(line_buffering=True)
+    args = _parse_args(argv)
+    ready = _preflight(args)
+    if ready is None:
+        return 3
+    ids, arms = ready
+    reports, retries = _run_matrix(ids, arms, args)
+
+    m = _print_matrix(reports, ids, arms, args.reps)
+    pairs = _print_pairs(reports, arms, args.reps)
+
+    cost = cost_of(reports, arms, args.reps)
+    print("\n" + "=" * 96)
+    print("成本对照")
+    print("=" * 96)
+    for arm in arms:
+        print(f"  {ARM_CN.get(arm, arm):<16} {cost[arm]}")
+
+    fam = families(reports, arms, args.reps)
+    print("\n" + "=" * 96)
+    print("逐 tag 红率")
+    print("=" * 96)
+    for t, by in sorted(fam.items()):
+        print(f"  {t:<24} " + "  ".join(f"{a}:{by.get(a, '-')}" for a in arms))
     print("\n" + "=" * 96)
     print("逐用例 × 逐臂（每格 = 各遍的绿/红，顺序 = 遍号）")
     print("=" * 96)
@@ -420,6 +544,7 @@ def main(argv=None) -> int:
                    "outage": {f"{a}/r{r}": len((reports.get((a, r)) or {})
                                                .get("_outage_cases") or [])
                               for a in arms for r in range(1, args.reps + 1)},
+                   "retries": retries,
                    "matrix": m, "pairs": pairs, "cost": cost, "families": fam},
                   f, ensure_ascii=False, indent=1)
     print(f"\n[ab] 汇总已写 {OUT_JSON}")
