@@ -123,6 +123,14 @@ def _test_request_limits():
          {"message": "hi", "current_url": "x" * (server.MAX_SHORT_FIELD_CHARS + 1)}),
         ("executions 超长",
          {"message": "hi", "executions": "x" * (server.MAX_TEXT_FIELD_CHARS + 1)}),
+        # 20261020 补齐：这两个限额**此前一个套件都没提过**（`grep MAX_CONFIRM_TOKEN_CHARS
+        # tests/` 与 `MAX_RECENT_TOOLS` 都是 0 命中），而它们各自守着一个具体的洞 ——
+        # 前者是唯一凭据（`confirm.verify` 之前先被这里挡一道），后者是"上一轮读过审核
+        # 队列吗"的判据输入。限额写了却没判据 = 改小/改没都不会有人发现。
+        ("confirm_token 超长",
+         {"message": "hi", "confirm_token": "x" * (server.MAX_CONFIRM_TOKEN_CHARS + 1)}),
+        ("recent_tools 超量",
+         {"message": "hi", "recent_tools": ["t"] * (server.MAX_RECENT_TOOLS + 1)}),
     ]
     for name, payload in cases:
         try:
