@@ -665,7 +665,15 @@ device-service）；每轮对话落一份 trace JSON（utils/trace.py → `logs/
 档位显式落 `planner.context` 的 `fastpath` 格）+ `eval/trace_alert.py` 的 **R5** 段（生产 trace
 的命中分布与每次的价钱）+ `eval/fastpath_pricing.py`（`map` 静态映射 / `run` 两臂交替读计数，
 `--ids/--tag` 供单条复采样）+ 锁 `tests/test_fastpath_dial.py`；读数与删除/收窄清单见
-[docs/fastpath-pricing-20261015.md](fastpath-pricing-20261015.md)。**它只定价，不改行为** |
+[docs/fastpath-pricing-20261015.md](fastpath-pricing-20261015.md)。**它只定价，不改行为**。
+**20261020 补**：**槽稳定性读数** `eval/slot_stability.py` —— 同一条用例跑 N 遍，看某一格
+取值是不是每一遍都一样（`--case` / `--slot <工具>.<参数>` / `--trials N`，可选
+`--min-agreement` 当闸；留档落 `eval/report/slot_stability/`，保留期见
+`eval/retention_manifest.py` 的 `slot-stability` 类）。**它补的是 L2 的一个结构性盲区**：
+`run_golden` 每条用例只跑一次，一个七成可靠的槽在单发金标里 100% 绿，而"复跑按 flake
+放行"正好把不稳定抹掉。**它只回答稳不稳、不回答对不对**（每一遍都错也读 1.0）——对错仍
+归 gold 断言。**不进夜间、不进 CI**（跑真 LLM，成本随 N 线性涨），是"改提示词前后各跑一次"
+的仪器。离线聚合层单测在 `tests/test_slot_stability.py` |
 | 1 图重写 | ✅ 已完成（2026-08-25 技能注册表 + 受限规划，§6.5）：golden 补防幻觉/注入分层（attack_embed_command / attack_prompt_leak），断言反转跟进摘要独立化（summary_round 不得含 SUMMARY:）；20260830 修 golden 断言过严三条（行为正确不判失败） |
 | 2 Eval | ✅ CI 评测门禁已上线（`.github/workflows/eval.yml`，push 触发 L0 秒级套件硬门禁）；L2 全量 golden 本机跑（20260920 起撤出 CI）+ 夜间 cron（`scripts/nightly_regression.sh`，失败标 `~/agent_regression.failed`）——**夜间那班默认不装，`scripts/enable_nightly.sh --apply` 才开**（20261017 口径）。**未做**：L1 三基准接入（BEIR/RGB/CRAG） |
 | 3 记忆 | 🟡 部分完成：摘要独立化（2026-08-26）结构性关闭污染面；**未做**：记忆专项评测（召回相关性、摘要合并质量、污染检测） |

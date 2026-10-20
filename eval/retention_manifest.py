@@ -54,6 +54,10 @@ KEEP_DAYS_ARCHIVE = 90          # logs/archive/ 下手工归档的东西，三�
 KEEP_COUNT_REPORTS = 20         # eval/report/ 每族报告保留最近 N 份
 KEEP_COUNT_DRAFTS = 10          # 例外：golden 草稿族只留 10 份（人审用品的窗口比复审单短）
 KEEP_COUNT_WORDGRAPH = 10       # 词图构建中间产物
+# 槽稳定性读数（`eval/slot_stability.py`）。**比别的族短**：它是一份"改提示词前后各跑一次"
+# 的仪器读数，对照面只在**最近几次改动**之间；每份都含逐遍的原始取值（N 遍 × 若干用例），
+# 留太多只是把盘占住。
+KEEP_COUNT_SLOT_STABILITY = 10
 # PG 那一路（`store="pg"`）的保留期。**与 `eval/pg_retention.py::KEEP_DAYS_DEFAULT` 是
 # 同一个数**，两处都要改（这里是人读的登记，那里是执行者的缺省）——判据
 # `tests/test_pg_retention.py` 钉着它们相等。
@@ -78,6 +82,9 @@ FAMILY_RE = re.compile(r"^([a-z][a-z0-9_]*?)_(\d{8})[-_](\d{6})\.(md|jsonl)$")
 
 # 词图中间产物：`<YYYYMMDD>-<HHMMSS>_<vocab.txt|build.json>`
 WORDGRAPH_RE = re.compile(r"^(\d{8})-(\d{6})_")
+# 槽稳定性读数的留档名（`report_archive.open_archive` 的产物）：`<YYYYMMDD>_<HHMMSS>_<mmm>.json`。
+# 前两组就是 `name_re` 要的日期与时刻（`_stamp_epoch` 按 `YYYYMMDD-HHMMSS` 解）。
+SLOT_STABILITY_RE = re.compile(r"^(\d{8})_(\d{6})_\d{3}\.json$")
 
 
 # ── 登记表 ────────────────────────────────────────────────────────────────────
@@ -354,6 +361,24 @@ CLASSES = [
             "它同样是 `golden_trace.prune` 的判据源（每条留档都带 `trace` 路径），"
             "单独清同样会让窗口外的 trace 变成「证据不足」永久保留。",
         rule=None,
+    ),
+    dict(
+        key="slot-stability",
+        label="槽稳定性读数（`eval/slot_stability.py` 的留档）",
+        root=DEFAULT_REPORT_ROOT,
+        patterns=["slot_stability/**"],
+        status="managed",
+        owner="eval/artifact_retention.py",
+        owner_ref="eval/artifact_retention.py",
+        retention=f"保留最近 {KEEP_COUNT_SLOT_STABILITY} 份",
+        why="`<YYYYMMDD>_<HHMMSS>_<mmm>.json`，跑一次落一份（含逐遍的原始槽值）。"
+            "**为什么与 `runs/` 分开一个目录**：那一个是 `golden_trace.prune` 的判据源、"
+            "`landing_gate` 又按目录整扫，本读数混进去会被当成一次 golden 跑"
+            "（`param_matrix` 当初混进 `runs/` 就是这个形状，见那条登记）。"
+            "**为什么这一族敢单独清**：它自足——不像 `runs/` 那样是别的产物的证据源，"
+            "一份读数删掉只影响它自己。",
+        rule=dict(kind="keep-count", keep=KEEP_COUNT_SLOT_STABILITY,
+                  name_re=SLOT_STABILITY_RE.pattern),
     ),
     dict(
         key="wordgraph-builds",
