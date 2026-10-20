@@ -28,8 +28,8 @@
     "top_defs": 1
   },
   "agent/react_arm.py": {
-    "lines": 1305,
-    "top_defs": 41
+    "lines": 1369,
+    "top_defs": 42
   },
   "agent/tasks.py": {
     "lines": 1658,
@@ -64,7 +64,7 @@
     "top_defs": 36
   },
   "server.py": {
-    "lines": 2829,
+    "lines": 2835,
     "top_defs": 61
   },
   "tests/test_admin_write.py": {

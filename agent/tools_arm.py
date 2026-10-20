@@ -63,7 +63,7 @@ from langchain_core.tools import StructuredTool
 from agent.frame_contract import spec_text
 from agent.react_arm import ReactGoldenArm, _compiled, ledger_frame_for
 from agent.react_line import RunLedger, WorkflowExecutor, spec_signature
-from agent.tool_menu import build_tool_menu
+from agent.tool_menu import build_tool_menu, strip_slots
 from agent.tool_prompt import build_tool_prompt
 from agent.workflow_params import check_call_args
 from agent.workflow_plan import instantiate_plan
@@ -98,12 +98,15 @@ def _label_of(tool_names: list[str]) -> str:
     return "content_query" if tool_names else "chat"
 
 
-def menu_of(role: str | None) -> list[StructuredTool]:
+def menu_of(role: str | None, ctx: dict | None = None) -> list[StructuredTool]:
     """工具级菜单：与 `tool_prompt.tool_menu_text` 同一份数据（`tool_menu.build_tool_menu`）。
 
     `func` 只是占位——真正被调的是 `ToolExecutor` → `WorkflowExecutor.run_specs` → 真工具。
     占位体故意抛异常：接线断了要**响亮**地失败，而不是"调了个什么都不做的桩"（后者会让整轮
     看起来跑通了、其实一个工具都没执行）。与 `react_arm._workflow_menu` 逐字同源。
+
+    `ctx`（20261021）：接缝的第二格。本臂的菜单是**角色常量**、与轮次无关 ⇒ 收下不用
+    （签名必须齐：`_bound_llm` 按固定位置传两格）。
     """
     out: list[StructuredTool] = []
     for item in build_tool_menu(role):
@@ -120,25 +123,26 @@ def menu_of(role: str | None) -> list[StructuredTool]:
 
 
 def _strip_slots(args: dict) -> dict:
-    """摘掉两个**跨切面槽位**：`intents`（意图清单）与 `reply_kind`（短应答自我申报）。
+    """摘掉两个**跨切面槽位**（`intents` / `reply_kind`）。
 
-    它们不是工具参数，是 harness 的申报口（消费方分别是 `tasks.normalize_intents` 与
-    `prompt_context.parse_reply_kind`），绑在每个函数上只为让模型有地方填。混进 spec 会被
-    checker 当成"多写的参数"。摘法与 `planner_llm.tool_calls_to_plan` 同一条口径
-    （那边也是摘走、不进 `params`）——**不是**"本臂不支持这两个通道"。
+    **20261021 起只转发 `tool_menu.strip_slots`**：本臂原来自己 `pop` 两个**字面量**键名，
+    而那两个名字的事实源在 `tasks.INTENTS_ARG` / `prompt_context.REPLY_KIND_ARG`——抄字面量
+    就等于在"槽位叫什么"这件事上留了第二份表，改名时它不会跟着红。槽位的挂载点
+    （`build_tool_menu`）与摘除点（这里转发的那个函数）现在住同一个模块，
+    `capability_arm` 走的是同一条路。
     """
-    out = dict(args or {})
-    out.pop("intents", None)
-    out.pop("reply_kind", None)
-    return out
+    return strip_slots(args)
 
 
-def plan_of(tool_calls: list, role: str | None) -> dict:
+def plan_of(tool_calls: list, role: str | None, ctx: dict | None = None) -> dict:
     """模型的 `tool_calls` → `plan_obj`。与 `react_arm._plan_of` 同形，只差**不实例化技能**。
 
     `tools` 那一格是 spec 串（`frame_contract.spec_text` 是 spec 串形态的唯一事实源）；
     `calls` 是本图自己的键（`execute_node` 的清单来源）——两处都必须有，理由见
     `react_arm._plan_of` 的 docstring。
+
+    `ctx`（20261021）：接缝的第三格，本臂收下不用（它的菜单与轮次无关 ⇒ 没有"这一轮选了
+    哪条能力"要记）。签名必须齐：`planner_node` 按固定位置传三格。
     """
     names: list[str] = []
     tools: list[str] = []

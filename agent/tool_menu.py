@@ -45,6 +45,29 @@ def all_tool_names() -> list[str]:
     return [t.name for t in get_all_tools()]
 
 
+def strip_slots(args: dict) -> dict:
+    """摘掉两个**跨切面槽位**（`intents` / `reply_kind`），返回新字典。
+
+    它们不是工具参数，是 harness 的申报口（消费方分别是 `tasks.normalize_intents` 与
+    `prompt_context.parse_reply_kind`），`build_tool_menu` 把它们挂在**每个**工具上只为让
+    模型有地方填。摘除与挂载住同一个模块：**槽位叫什么、有几个，只有这一处说了算**
+    （两处各抄一份字面量就是本仓点名的反模式——改名时另一份不会跟着红）。混进 spec 会被
+    checker 当成"多写的参数"，混进 `params` 会一路走到计划文本与执行期的参数校验。
+
+    **与 `planner_llm.tool_calls_to_plan` 的关系**：那边是**摘下来还要用**（`intents` 要
+    归一成帧、`reply_kind` 要落 trace），所以它自己 `pop` + 解析；这里是**摘下来就扔**
+    ——工具态与能力态那两条臂没有这两个消费方，只要"别让它们流进 spec"。
+
+    ⚠️ 摘掉之后，`plan_obj["calls"][i].params` 与模型原始 `tool_calls[i].args` **不再逐字
+    相等** ⇒ `convergence_verdict` 的"无进展"判据在模型填了槽位的那一轮会漏判一次。
+    方向是安全的（少判一次停，不误停），槽位本来就少填；要收口得让判据也走同一归一化。
+    """
+    out = dict(args or {})
+    out.pop(INTENTS_ARG, None)
+    out.pop(REPLY_KIND_ARG, None)
+    return out
+
+
 def visible_tools(role: str | None) -> list[str]:
     """这个身份能选的**工具名**，按名字升序（顺序确定 ⇒ 菜单逐字节可复现）。
 
