@@ -22,6 +22,8 @@ import sys
 from copy import deepcopy
 from pathlib import Path
 
+from _judge import collector
+
 ROOT = Path(__file__).resolve().parent.parent  # 仓根（测试统一在 tests/）
 sys.path.insert(0, str(ROOT))
 
@@ -33,7 +35,8 @@ from agent.tasks import INTENTS_ARG, TASK_DROP, TASK_HOLD, TASK_INTENTS  # noqa:
 from agent.tool_menu import all_tool_names, build_tool_menu, visible_tools  # noqa: E402
 from tools.base import get_all_tools  # noqa: E402
 
-FAILS: list[str] = []
+FAILED: list[str] = []
+check = collector(FAILED)
 
 # 各角色可见的工具数**台账**（与 `tests/test_workflows.py` 的工具数台账同性质）：
 # 新增工具或改 `TOOL_SCOPE` 时这个数会变 ⇒ 那一笔改动必须显式改这里，
@@ -42,11 +45,6 @@ LEDGER = {"user": 31, "admin": 70, "zako": 0, None: 0}
 TOTAL_TOOLS = 70
 PSEUDO = (TASK_HOLD, TASK_DROP, TASK_INTENTS)
 
-
-def check(desc: str, cond: bool, detail: str = "") -> None:
-    print(("  ✅ " if cond else "  ❌ ") + desc + (f"  [{detail}]" if detail else ""))
-    if not cond:
-        FAILS.append(desc)
 
 
 def _fn(entry: dict) -> dict:
@@ -169,20 +167,16 @@ def _sec_determinism() -> None:
     check("admin 菜单两次相同", build_tool_menu("admin") == build_tool_menu("admin"))
 
 
-def main() -> int:
+def test_tool_menu():
+    FAILED.clear()
     _sec_role_filter()
     _sec_shape()
     _sec_descriptions(_sec_slots())
     _sec_determinism()
 
-    if FAILS:
-        print(f"\n❌ {len(FAILS)} 项未过：")
-        for f in FAILS:
-            print("   -", f)
-        return 1
+    assert not FAILED, f"{len(FAILED)} 条未过：" + "；".join(FAILED)
     print("\n✅ 全部通过")
-    return 0
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    test_tool_menu()

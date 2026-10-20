@@ -29,4 +29,18 @@
   `calls` 参数描述里那份示例 JSON 少一个 `}`（`[{…{"keyword": "用户原词"}]`）——原源码里
   `}}` 是 f-string 转义、求值后只剩一个。改成配置之后这种"源码里看着是两个、值是另一个"
   的地方就看得见了。
-  设计与取舍见 `docs/adr/adr-0016-skill-registry-becomes-config-files.md`。
+  ⑦ **并进 main 之后的适配，如实记**：main 上那批 pytest 迁移（`run_all.py` 已删、判据收进
+  `tests/_judge.collector`）与本笔同时落地，并完之后本笔的四个 POC 套件
+  （`test_arm_seams` / `test_confirm_question_shape` / `test_slot_stability` /
+  `test_tool_menu`）仍是**裸脚本形态**——判据长在模块级、靠 `sys.exit(1)` 报红。
+  pytest 下那等于**收集到 0 条**（`tests/test_tests_dir_shape.py` 就是抓这个的），所以四个
+  都包进 `def test_*()` 并把尾部换成 `assert not FAILED`。**这是迁移没做完，不是迁移改弱了**：
+  一条判据都没删，`FAILED` 里记的东西逐字不变。
+  另有两处**并库时的账目回退**，一并纠正：`eval/module_baseline.json` 与
+  `eval/complexity_baseline.json` 里 `tests/test_confirm.py` 那两个数（1021 / 855）取的是本
+  支的旧值，而 main 侧那三笔编辑已把它长到 1024 / 858 ⇒ 并完必然红。改回 main 的值是
+  **记账回到事实**，不是放宽棘轮（那两个数的实际值就是 1024 / 858）。反方向也销了一笔：
+  `eval/lint_baseline.json` 里 `agent/react_line.py: 1` 本支改完已清零 ⇒ 按"只许缩小"手动
+  销账（620→619、129→128 个文件），**手改那一个数，不是 `--update`**。
+
+设计与取舍见 `docs/adr/adr-0016-skill-registry-becomes-config-files.md`。

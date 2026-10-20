@@ -25,6 +25,8 @@ import json
 import sys
 from pathlib import Path
 
+from _judge import collector
+
 ROOT = Path(__file__).resolve().parent.parent  # 仓根（测试统一在 tests/）
 sys.path.insert(0, str(ROOT))
 
@@ -32,22 +34,12 @@ from agent import planner_llm as N  # noqa: E402
 from agent import tool_index as I  # noqa: E402
 from agent.workflow_defs import visible_workflows  # noqa: E402
 
-FAILS: list[str] = []
+FAILED: list[str] = []
 
 ROLES = (None, "user", "admin")
 
 
-def check(desc: str, cond: bool, detail: str = "") -> None:
-    """判 + 打印 + **红就抛**。
-
-    ⚠️ 末那一步不能省：只"打印 + 往 `FAILS` 里追加"的写法在 pytest 下**恒绿**（函数照样
-    返回 None）——本仓点过名的"看着在跑、其实没跑"。抛了之后两种跑法都真的会红：
-    `run_all.py` 取退出码（下面的 `__main__` 逐组捕获、接着跑下一组），pytest 收集函数。
-    """
-    print(("  ✅ " if cond else "  ❌ ") + desc + (f"  [{detail}]" if detail else ""))
-    if not cond:
-        FAILS.append(desc)
-        raise AssertionError(desc + (f"  [{detail}]" if detail else ""))
+check = collector(FAILED)
 
 
 def _strip(node):
@@ -65,6 +57,7 @@ def _by_name(tools: list[dict]) -> dict[str, dict]:
 
 # ── ① 缺省档没被碰 ─────────────────────────────────────────────────────────
 def test_default_path_is_untouched():
+    FAILED.clear()
     print("\n[① 缺省档] 不传 / index=False 都不含取回口，且描述就是原文")
     for role in ROLES:
         plain = _by_name(N.build_tool_schema(role))
@@ -80,10 +73,12 @@ def test_default_path_is_untouched():
                if plain[w.name]["description"] != I.skill_description(w, role)]
         check(f"role={role!r} 缺省档 description == skill_description（原文未改）",
               not bad, "、".join(bad[:3]))
+    assert not FAILED, "；".join(FAILED)
 
 
 # ── ② 只换 description 那一格 ──────────────────────────────────────────────
 def test_structure_is_byte_identical():
+    FAILED.clear()
     print("\n[② 结构] 索引档剥掉 description 后与缺省档逐字节相同")
     for role in ROLES:
         full = [t for t in N.build_tool_schema(role)]
@@ -97,10 +92,12 @@ def test_structure_is_byte_identical():
         # 之后未必看得出来——上面那条已经覆盖，这里给一个读起来更直白的读数。
         check(f"role={role!r} 技能数不变", len(full) == len(idx),
               f"{len(full)} vs {len(idx)}")
+    assert not FAILED, "；".join(FAILED)
 
 
 # ── ③ 取回的原文 == 索引化前那一格 ─────────────────────────────────────────
 def test_describe_skill_returns_the_original():
+    FAILED.clear()
     print("\n[③ 承重点] describe_skill 的返回逐字等于缺省档的 description")
     for role in ROLES:
         plain = _by_name(N.build_tool_schema(role))
@@ -121,10 +118,12 @@ def test_describe_skill_returns_the_original():
             if not I.skill_description(w, role).startswith(line):
                 bad.append(w.name)
     check("索引行恒为原文前缀（只切不写）", not bad, "、".join(sorted(set(bad))[:3]))
+    assert not FAILED, "；".join(FAILED)
 
 
 # ── ④ 索引行本身 + 不扩权 ─────────────────────────────────────────────────
 def test_index_lines_and_no_privilege_escalation():
+    FAILED.clear()
     print("\n[④ 索引行 / 不扩权]")
     for role in ROLES:
         ws = visible_workflows(role)
@@ -154,10 +153,12 @@ def test_index_lines_and_no_privilege_escalation():
           idx[-1]["function"]["name"])
     check(f"{I.DESCRIBE_SKILL} 不与任何技能名相撞（同一命名空间）",
           I.DESCRIBE_SKILL not in {w.name for w in visible_workflows("admin")})
+    assert not FAILED, "；".join(FAILED)
 
 
 # ── ⑤ 体积棘轮（这一档存在的理由就是省字符） ───────────────────────────────
 def test_size_ratchet():
+    FAILED.clear()
     """索引档必须真的小一截，否则 `index_line` 被改成了恒等函数。
 
     棘轮钉在**描述文本**上（`索引合计 ≤ 原文的 25%`）而不是整份 schema 的比例：整份的
@@ -179,6 +180,7 @@ def test_size_ratchet():
         b = len(json.dumps(N.build_tool_schema(role, index=True), ensure_ascii=False))
         check(f"role={role!r} 整份 schema 严格更小（{b}/{a} = {100 * b / a:.1f}%）",
               b < a, f"{b} vs {a}")
+    assert not FAILED, "；".join(FAILED)
 
 
 if __name__ == "__main__":
@@ -188,5 +190,5 @@ if __name__ == "__main__":
                test_index_lines_and_no_privilege_escalation,
                test_size_ratchet):
         fn()
-    print("\n" + ("全部通过 ✅" if not FAILS else f"失败 {len(FAILS)} 项 ❌: {FAILS}"))
-    sys.exit(1 if FAILS else 0)
+    print("\n" + ("全部通过 ✅" if not FAILED else f"失败 {len(FAILED)} 项 ❌: {FAILED}"))
+    sys.exit(1 if FAILED else 0)
