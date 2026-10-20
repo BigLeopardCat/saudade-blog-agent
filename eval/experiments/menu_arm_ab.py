@@ -153,7 +153,31 @@ def run_arm(arm: str, rep: int, ids: list[str]) -> dict:
     rep_doc = json.load(open(new[-1], encoding="utf-8"))
     rep_doc["_elapsed"] = elapsed
     rep_doc["_rc"] = rc
+    rep_doc["_report"] = os.path.basename(new[-1])
+    rep_doc["_outage_cases"] = outage_cases(rep_doc)
     return rep_doc
+
+
+#: 服务商停摆的指纹。**必须按"整批不相关用例一起红"来认，不能按单条**：
+#: 20261020 实测（本次）：11:05 那两遍 `graph 0/80`、`react 7/80`，红的原因逐字是
+#: `Error code: 403 - Access to model denied … AccessDenied.Unpurchased`，而**同一批用例
+#: 一小时前两臂都是 78–79/80**。不认出来的话，一份"工具臂比生产差 60 条"的结论会直接
+#: 从这种噪声里长出来——而它比没有读数坏得多。
+OUTAGE_MARKS = ("Access to model denied", "AccessDenied", "PermissionDeniedError",
+                "AuthenticationError", "invalid_api_key", "insufficient_quota",
+                "RateLimitError", "APIConnectionError", "APITimeoutError")
+
+
+def outage_cases(doc: dict) -> list[str]:
+    """这一遍里**因服务商停摆而红**的用例 id（不是行为差，是环境差）。"""
+    hits = []
+    for c in doc.get("cases") or []:
+        blob = " ".join(str(c.get(k) or "") for k in ("error", "fails", "text"))
+        for r in c.get("rounds") or []:
+            blob += " " + str(r.get("error") or "")
+        if any(m in blob for m in OUTAGE_MARKS):
+            hits.append(c["id"])
+    return hits
 
 
 def _ok(case: dict) -> bool:
@@ -170,7 +194,11 @@ def case_matrix(reports: dict, ids: list[str], arms: list[str], reps: int) -> di
             for r in range(1, reps + 1):
                 doc = reports.get((arm, r)) or {}
                 c = next((c for c in doc.get("cases") or [] if c["id"] == cid), None)
-                seen.append("-" if c is None else ("绿" if _ok(c) else "红"))
+                # **"停"与"红"必须分开**（20261020）：服务商停摆那一遍的红不是行为差，
+                # 混进同一个字符位就等于把环境故障读成了臂的退化。
+                outage = cid in (doc.get("_outage_cases") or [])
+                seen.append("-" if c is None else ("停" if outage else
+                                                   ("绿" if _ok(c) else "红")))
             row[arm] = "".join(seen)
         out[cid] = row
     return out
@@ -188,7 +216,8 @@ def _pair(before: list, after: list) -> dict:
     """
     import landing_gate
 
-    keep = [d for d in before if "cases" in d], [d for d in after if "cases" in d]
+    keep = ([d for d in before if "cases" in d and not d.get("_outage_cases")],
+            [d for d in after if "cases" in d and not d.get("_outage_cases")])
     if not keep[0] or not keep[1]:
         return {"verdict": "no_data", "note": "有一侧没有产出报告 ⇒ 不判（别拿它当绿）"}
     return landing_gate.ab_compare(*keep)
@@ -228,6 +257,8 @@ def cost_of(reports: dict, arms: list[str], reps: int) -> dict:
         cases_seen = 0
         for r in range(1, reps + 1):
             doc = reports.get((arm, r)) or {}
+            if doc.get("_outage_cases"):
+                continue          # 停摆那一遍的挂钟与轮数都不可比（它根本没跑完）
             cases_seen += len(doc.get("cases") or [])
             lat.append((doc.get("latency_s") or {}).get("p50"))
             pe = doc.get("plan_efficiency") or {}
@@ -264,7 +295,10 @@ def families(reports: dict, arms: list[str], reps: int) -> dict:
     agg: dict[str, dict[str, list[int]]] = {}
     for arm in arms:
         for r in range(1, reps + 1):
-            for c in (reports.get((arm, r)) or {}).get("cases") or []:
+            doc = reports.get((arm, r)) or {}
+            if doc.get("_outage_cases"):
+                continue          # 停摆那一遍不进红率（否则整张表被环境故障涂红）
+            for c in doc.get("cases") or []:
                 for t in c.get("tags") or []:
                     cell = agg.setdefault(t, {}).setdefault(arm, [0, 0])
                     cell[1] += 1
@@ -315,10 +349,13 @@ def main(argv=None) -> int:
                       f"（{doc['_elapsed']}s）\n        {doc['_tail'][-300:]}", flush=True)
                 continue
             ok = sum(1 for c in doc["cases"] if _ok(c))
+            out = doc.get("_outage_cases") or []
             print(f"[r{rep} {i}/{len(arms)}] {arm:<6} {ok}/{doc['total']} "
                   f"engine={doc.get('engine')} 跳{len(doc.get('skipped_ids') or [])} "
                   f"真写跳{len(doc.get('skipped_real_write_ids') or [])} "
-                  f"{round(time.time() - t0, 1)}s", flush=True)
+                  f"{round(time.time() - t0, 1)}s"
+                  + (f"  ⚠️ 服务商停摆 {len(out)} 条 ⇒ **这一遍作废**" if out else ""),
+                  flush=True)
 
     # ── ① 逐用例 × 逐臂（主判据：差集，不是通过率）──────────────────────
     print("\n" + "=" * 96)
