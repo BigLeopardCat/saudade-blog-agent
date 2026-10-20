@@ -100,8 +100,8 @@ def test_pilot_domain_matches_registry():
     pos = {w.name: i for i, w in enumerate(D.WORKFLOWS, 1)}
     slots = sorted(pos[n] for n in cfg_names)
     start = min(c.order for c in _toml_cfgs()) // 10
-    ok &= check("TOML 这一组在 WORKFLOWS 里连续", slots == list(range(slots[0], slots[0] + len(slots))),
-                str(slots))
+    contiguous = list(range(slots[0], slots[0] + len(slots)))
+    ok &= check("TOML 这一组在 WORKFLOWS 里连续", slots == contiguous, str(slots))
     ok &= check(f"起点位次 {slots[0]} == 最小 order / 10 = {start}", slots[0] == start)
     assert ok, "① 见上面 ❌ 那几行"
 
