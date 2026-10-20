@@ -434,6 +434,17 @@ def run_one(arm: str, role: str | None, sent: str, stubs: list,
     return out
 
 
+def _asked_skills(r: dict) -> list[str]:
+    """这一轮**取回了哪几个**本领的完整说明（去重、去空）。
+
+    取回率是 ADR-0014 阶段 0 的**主读数**（模型有没有真去取回）。只对索引臂可能非零，
+    其余臂恒空（它们没有那个口）⇒ 这一栏**只许在臂之间横着读**，不许当"质量"读。
+    """
+    got = {str((c.get("args") or {}).get("name") or "").strip()
+           for c in r["calls"] if str(c.get("name") or "") == DESCRIBE}
+    return sorted(x for x in got if x)
+
+
 def judge(r: dict, exp: set, must_not: set, kind: str, want_path: str | None) -> dict:
     """逐句读数（纯函数，自检里被反复喂合成输入——判据本身也要能红能绿）。"""
     tools = set(r["tools"])
@@ -460,11 +471,7 @@ def judge(r: dict, exp: set, must_not: set, kind: str, want_path: str | None) ->
         zero_ok = not acted
     elif kind == "refuse":
         zero_ok = not (tools & set(must_not or ()))
-    # 取回率（ADR-0014 阶段 0 的**主读数**）：模型有没有真去取回说明。只对索引臂非零，
-    # 其余臂恒 0（它们没有那个口）——所以这一栏**只许在臂之间横着读**，不许当"质量"读。
-    asked = sorted({str((c.get("args") or {}).get("name") or "").strip()
-                    for c in r["calls"] if str(c.get("name") or "") == DESCRIBE})
-    asked = [x for x in asked if x]
+    asked = _asked_skills(r)
     return {"called_any": acted,
             "hit": sorted(hit),
             "matched": (bool(hit) and not wrong) if kind == "act" else None,
@@ -479,6 +486,70 @@ def judge(r: dict, exp: set, must_not: set, kind: str, want_path: str | None) ->
 
 
 # ── 自检：烧 token 之前跑，任一格不对就退出码 1 ───────────────────────────────
+def _selfcheck_menus(role: str | None, ck) -> None:
+    """④ / ④b：各臂菜单的形状，以及取回口的判据。
+
+    **为什么单起一个函数**：`_selfcheck` 已经压在复杂度上限上，而这一族判据还在长
+    （每加一条臂就多几格）。拆出来的判据与原来逐字相同——`ck` 由调用方传进来，
+    这样"失败记进同一个 `bad` 列表"这件事不变。
+    """
+    print("\n④ 各臂的菜单非空、且动作名集合不相交（有交集则折算歧义）")
+    sk = {n for n, _d in _menu_lines(_arm_entries("skill", role))}
+    ix = {n for n, _d in _menu_lines(_arm_entries("index", role))}
+    nm = {n for n, _d in _menu_lines(_arm_entries("names", role))}
+    tl = {n for n, _d in _menu_lines(_arm_entries("tool", role))}
+    for tag, s in (("技能", sk), ("索引", ix), ("名字对照", nm), ("工具", tl)):
+        ck(f"{role!r} {tag}菜单非空（{len(s)} 个）", len(s) > 0)
+    ck("skill / index / tool 三臂的说明都非空（空说明 = 模型只看得见名字）",
+       all(d for _n, d in _menu_lines(_arm_entries("skill", role)))
+       and all(d for _n, d in _menu_lines(_arm_entries("index", role)))
+       and all(d for _n, d in _menu_lines(_arm_entries("tool", role))))
+    # `names` 臂的**全部意义**就是说明为空、且没有取回口 —— 这两条要是失效，
+    # 它就不再是对照臂，而 `index` 与它的差会被读成 0（看着像"索引没用"）。
+    ck("names 臂的说明**全空**（它是「只看得见名字」那条对照）",
+       not any(d for _n, d in _menu_lines(_arm_entries("names", role))))
+    ck(f"names 臂没有 {DESCRIBE}（没有取回口才叫对照）", DESCRIBE not in nm)
+    ck(f"index 臂有且只有一个 {DESCRIBE}、且排最后",
+       [e["function"]["name"] for e in _arm_entries("index", role)].count(DESCRIBE) == 1
+       and _arm_entries("index", role)[-1]["function"]["name"] == DESCRIBE)
+    ck("skill / index / names 三臂的**技能名集合相同**（只换说明，不换菜单本身；"
+       "索引臂多出来的那一格只能是取回口）",
+       sk == (ix - {DESCRIBE}) == nm,
+       str(sorted(sk ^ (ix - {DESCRIBE})) + sorted(sk ^ nm)))
+    # **动作名**不相交（三个伪函数两臂都有——它们是 harness 资产，见头注；
+    # 折算歧义只可能出在动作名上，所以这里比的是 `sk - PSEUDO` 与 `tl - PSEUDO`）。
+    ck("技能族与工具臂的**动作名**集合不相交（有交集则 `_WORKFLOW_TOOLS` 与真名分不开）",
+       not ((sk - PSEUDO) & (tl - PSEUDO)), str(sorted((sk - PSEUDO) & (tl - PSEUDO))))
+    ck("三个伪函数**技能族与工具臂都在**（照搬的跨切面槽位，见头注 ③）",
+       PSEUDO <= sk and PSEUDO <= tl, str(sorted(PSEUDO - sk | (PSEUDO - tl))))
+    ck("工具菜单里的名字**都是真工具或三个伪函数**", tl <= (TOOL_NAMES | PSEUDO),
+       str(sorted(tl - TOOL_NAMES - PSEUDO)))
+    ck("技能族菜单里的名字**都是真技能或申报过的那几个**",
+       sk <= ({w.name for w in WORKFLOWS} | PSEUDO | {DESCRIBE}),
+       str(sorted(sk - {w.name for w in WORKFLOWS} - PSEUDO - {DESCRIBE})))
+    # 索引臂的说明必须**真的是索引**（不是把整段描述原样搬过来）——否则这一臂与
+    # `skill` 臂逐字节相同，跑出来的"没差别"会被读成"索引不影响决策"。
+    idx_lines = _menu_lines(_arm_entries("index", role))
+    full_lines = dict(_menu_lines(_arm_entries("skill", role)))
+    shorter = [n for n, d in idx_lines if n in full_lines and len(d) < len(full_lines[n])]
+    ck("索引臂的说明**确实比现状短**（否则这一臂等于现状，跑出来的差恒 0）",
+       len(shorter) >= len(full_lines) - 5, f"变短 {len(shorter)}/{len(full_lines)}")
+
+    print("\n④b 取回口的判据（它坏了 ⇒ 取回率恒 0，读出来像「模型不需要索引」）")
+    ck("`describe_skill` **不算动手**（同 `chat`：它不改变站内任何东西）",
+       judge({"tools": set(), "calls": [{"name": DESCRIBE, "args": {"name": "navigate"}}]},
+             set(), NAV, "none", None)["called_any"] is False)
+    ck("`describe_skill` 调用被记成**取回**",
+       judge({"tools": set(), "calls": [{"name": DESCRIBE, "args": {"name": "navigate"}}]},
+             set(), NAV, "none", None)["retrieved"] is True)
+    ck("没取回 ⇒ `retrieved` 为假", judge({"tools": set(), "calls": []}, set(), NAV,
+                                          "none", None)["retrieved"] is False)
+    ck("取回桩回的是**真说明**（不是空串/不是假载荷）",
+       len(TI.describe_skill_text("navigate", role) or "") > 10)
+    ck("取回桩对**够不着的名字**明说没这个本领（不静默回空）",
+       "没有叫" in _describe_stub(role).func(name="no_such_skill_xyz"))
+
+
 def _selfcheck(role: str) -> list[str]:
     bad: list[str] = []
 
@@ -549,61 +620,7 @@ def _selfcheck(role: str) -> list[str]:
     ck("`want=None` ⇒ 不可判（None，不是 False——「没查过」与「错了」是两件事）",
        _nav_resolves("友链", None) is None)
 
-    print("\n④ 各臂的菜单非空、且动作名集合不相交（有交集则折算歧义）")
-    sk = {n for n, _d in _menu_lines(_arm_entries("skill", role))}
-    ix = {n for n, _d in _menu_lines(_arm_entries("index", role))}
-    nm = {n for n, _d in _menu_lines(_arm_entries("names", role))}
-    tl = {n for n, _d in _menu_lines(_arm_entries("tool", role))}
-    for tag, s in (("技能", sk), ("索引", ix), ("名字对照", nm), ("工具", tl)):
-        ck(f"{role!r} {tag}菜单非空（{len(s)} 个）", len(s) > 0)
-    ck("skill / index / tool 三臂的说明都非空（空说明 = 模型只看得见名字）",
-       all(d for _n, d in _menu_lines(_arm_entries("skill", role)))
-       and all(d for _n, d in _menu_lines(_arm_entries("index", role)))
-       and all(d for _n, d in _menu_lines(_arm_entries("tool", role))))
-    # `names` 臂的**全部意义**就是说明为空、且没有取回口 —— 这两条要是失效，
-    # 它就不再是对照臂，而 `index` 与它的差会被读成 0（看着像"索引没用"）。
-    ck("names 臂的说明**全空**（它是「只看得见名字」那条对照）",
-       not any(d for _n, d in _menu_lines(_arm_entries("names", role))))
-    ck(f"names 臂没有 {DESCRIBE}（没有取回口才叫对照）", DESCRIBE not in nm)
-    ck(f"index 臂有且只有一个 {DESCRIBE}、且排最后",
-       [e["function"]["name"] for e in _arm_entries("index", role)].count(DESCRIBE) == 1
-       and _arm_entries("index", role)[-1]["function"]["name"] == DESCRIBE)
-    ck("skill / index / names 三臂的**技能名集合相同**（只换说明，不换菜单本身；"
-       "索引臂多出来的那一格只能是取回口）",
-       sk == (ix - {DESCRIBE}) == nm,
-       str(sorted(sk ^ (ix - {DESCRIBE})) + sorted(sk ^ nm)))
-    # **动作名**不相交（三个伪函数两臂都有——它们是 harness 资产，见头注；
-    # 折算歧义只可能出在动作名上，所以这里比的是 `sk - PSEUDO` 与 `tl - PSEUDO`）。
-    ck("技能族与工具臂的**动作名**集合不相交（有交集则 `_WORKFLOW_TOOLS` 与真名分不开）",
-       not ((sk - PSEUDO) & (tl - PSEUDO)), str(sorted((sk - PSEUDO) & (tl - PSEUDO))))
-    ck("三个伪函数**技能族与工具臂都在**（照搬的跨切面槽位，见头注 ③）",
-       PSEUDO <= sk and PSEUDO <= tl, str(sorted(PSEUDO - sk | (PSEUDO - tl))))
-    ck("工具菜单里的名字**都是真工具或三个伪函数**", tl <= (TOOL_NAMES | PSEUDO),
-       str(sorted(tl - TOOL_NAMES - PSEUDO)))
-    ck("技能族菜单里的名字**都是真技能或申报过的那几个**",
-       sk <= ({w.name for w in WORKFLOWS} | PSEUDO | {DESCRIBE}),
-       str(sorted(sk - {w.name for w in WORKFLOWS} - PSEUDO - {DESCRIBE})))
-    # 索引臂的说明必须**真的是索引**（不是把整段描述原样搬过来）——否则这一臂与
-    # `skill` 臂逐字节相同，跑出来的"没差别"会被读成"索引不影响决策"。
-    idx_lines = _menu_lines(_arm_entries("index", role))
-    full_lines = dict(_menu_lines(_arm_entries("skill", role)))
-    shorter = [n for n, d in idx_lines if n in full_lines and len(d) < len(full_lines[n])]
-    ck("索引臂的说明**确实比现状短**（否则这一臂等于现状，跑出来的差恒 0）",
-       len(shorter) >= len(full_lines) - 5, f"变短 {len(shorter)}/{len(full_lines)}")
-
-    print("\n④b 取回口的判据（它坏了 ⇒ 取回率恒 0，读出来像「模型不需要索引」）")
-    ck("`describe_skill` **不算动手**（同 `chat`：它不改变站内任何东西）",
-       judge({"tools": set(), "calls": [{"name": DESCRIBE, "args": {"name": "navigate"}}]},
-             set(), NAV, "none", None)["called_any"] is False)
-    ck("`describe_skill` 调用被记成**取回**",
-       judge({"tools": set(), "calls": [{"name": DESCRIBE, "args": {"name": "navigate"}}]},
-             set(), NAV, "none", None)["retrieved"] is True)
-    ck("没取回 ⇒ `retrieved` 为假", judge({"tools": set(), "calls": []}, set(), NAV,
-                                          "none", None)["retrieved"] is False)
-    ck("取回桩回的是**真说明**（不是空串/不是假载荷）",
-       len(TI.describe_skill_text("navigate", role) or "") > 10)
-    ck("取回桩对**够不着的名字**明说没这个本领（不静默回空）",
-       "没有叫" in _describe_stub(role).func(name="no_such_skill_xyz"))
+    _selfcheck_menus(role, ck)
 
     print("\n⑤ 句子表自身的完备性")
     ck("每句的期望族与反向族都在真工具名里",
@@ -647,12 +664,30 @@ def _summarize(arm: str, rnd: int, recs: list, secs: float) -> dict:
     return row
 
 
+def _pick_sents(limit: int, only: str) -> list:
+    """这一轮跑哪几句（`--limit` 取前缀、`--only` 点名）。
+
+    `--only` 存在的理由：**真正吃紧的句子在表尾**（近义检索那 9 条），而 `--limit` 只能
+    取前缀——按前缀跑一遍等于只量了最好量的那一半。名字写错**响亮**（`SystemExit`），
+    不静默少跑几句：静默少跑会让"这轮只跑了 3 句"长得像"这轮全绿"。
+    """
+    if not only:
+        return SENTS[:limit] if limit else SENTS
+    want = {x for x in only.split(",") if x}
+    unknown = sorted(want - {i for i, *_ in SENTS})
+    if unknown:
+        raise SystemExit(f"--only 里有表上没有的 id：{unknown}")
+    return [s for s in SENTS if s[0] in want]
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--role", default="user", help="身份（决定两臂的菜单大小）")
     ap.add_argument("--rounds", type=int, default=3)
     ap.add_argument("--arms", default="skill,tool")
     ap.add_argument("--limit", type=int, default=0, help="只跑前 N 句（试跑用）")
+    ap.add_argument("--only", default="", help="只跑这几句（逗号分隔的 id；`--limit` 只能取前缀，"
+                                               "而真正吃紧的句子在表尾）")
     ap.add_argument("--dry-run", action="store_true", help="只跑自检，零 token")
     ap.add_argument("--out", default="/tmp/menu_shape_ab.json")
     a = ap.parse_args()
@@ -664,11 +699,13 @@ def main() -> int:
         for x in bad:
             print("   -", x)
         return 1
-    print("\n✅ 自检全过")
+    # 选句子放在 `--dry-run` **之前**：`--only` 写错名字要当场响亮，而不是等到烧 token
+    # 那一步才炸（也免得 `--dry-run` 里"自检全过"却选出了一批不存在的 id）。
+    sents = _pick_sents(a.limit, a.only)
+    print(f"\n✅ 自检全过（本次 {len(sents)} 句）")
     if a.dry_run:
         return 0
 
-    sents = SENTS[:a.limit] if a.limit else SENTS
     arms = [s for s in a.arms.split(",") if s]
     entries = {arm: _arm_entries(arm, a.role) for arm in arms}
     stubs = {arm: _arm_stubs(arm, a.role) for arm in arms}
