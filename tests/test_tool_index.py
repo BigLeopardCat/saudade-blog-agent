@@ -38,9 +38,16 @@ ROLES = (None, "user", "admin")
 
 
 def check(desc: str, cond: bool, detail: str = "") -> None:
+    """判 + 打印 + **红就抛**。
+
+    ⚠️ 末那一步不能省：只"打印 + 往 `FAILS` 里追加"的写法在 pytest 下**恒绿**（函数照样
+    返回 None）——本仓点过名的"看着在跑、其实没跑"。抛了之后两种跑法都真的会红：
+    `run_all.py` 取退出码（下面的 `__main__` 逐组捕获、接着跑下一组），pytest 收集函数。
+    """
     print(("  ✅ " if cond else "  ❌ ") + desc + (f"  [{detail}]" if detail else ""))
     if not cond:
         FAILS.append(desc)
+        raise AssertionError(desc + (f"  [{detail}]" if detail else ""))
 
 
 def _strip(node):
