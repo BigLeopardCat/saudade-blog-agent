@@ -67,11 +67,16 @@ class Manual(Exception):
     """认不出的形状 —— 不动它，交人工。理由写在消息里。"""
 
 
-def _fail_name(tree: ast.Module) -> str:
+def _fail_name(tree: ast.Module) -> str | None:
     """判据收集器往哪个模块级名字里 append（`FAILS` / `FAILED` 两种都有，现取）。
 
     收集器**不都叫 `check`**：`test_zako_role.py` 那个叫 `check_`。所以按**前缀**认
     （`check` / `check_` / `checker`…），认名字不认字面 —— 名字是习惯、append 目标才是契约。
+
+    没有收集器不算错：还有一族是**形态 A′** —— `def main() -> int` 自己攒 `bad` 列表、
+    返回退出码，收口在 `sys.exit(main())` 上（`test_complexity_budget` / `test_module_budget` /
+    `test_parent_repo_paths` / `test_judge_offline` 四个都是）。那种套件的收口写成
+    `assert main() == 0` 就是它的直译，返回 None 让 `transform` 走那条路。
     """
     found: set[str] = set()
     for n in tree.body:
@@ -81,7 +86,7 @@ def _fail_name(tree: ast.Module) -> str:
                         and isinstance(sub.value, ast.Name)):
                     found.add(sub.value.id)
     if not found:
-        raise Manual("找不到判据收集器（模块级 def check*）往哪个名字里 append")
+        return None
     if len(found) > 1:
         raise Manual(f"check() 同时往 {sorted(found)} 里 append，判不出收口用哪个")
     return found.pop()
@@ -108,7 +113,7 @@ def _exit_inner(node: ast.AST) -> ast.expr | None:
     return call.args[0]
 
 
-def _main_body(src: str, tree: ast.Module, node: ast.If) -> str:
+def _main_body(src: str, tree: ast.Module, node: ast.If, drop_entry: bool = False) -> str:
     """`if __name__ == "__main__":` 块的**正文**（去缩进前的原文）。
 
     **驱动函数体就是它**，所以这里要做的只有一件事：处理收尾。
@@ -130,7 +135,8 @@ def _main_body(src: str, tree: ast.Module, node: ast.If) -> str:
             inner = _exit_inner(st)
             if (isinstance(inner, ast.Call) and isinstance(inner.func, ast.Name)
                     and _zero_arg_fn(tree, inner.func.id)):
-                out.append(f"{inner.func.id}()")
+                if not drop_entry:            # 形态 A′ 由收口那句 `assert F() == 0` 调它
+                    out.append(f"{inner.func.id}()")
             continue
         out.append(_seg(src, st))
     # 这些语句在原文里带 4 空格缩进（`__main__` 块的体），去平了再交给统一的 +4 ——
@@ -513,6 +519,25 @@ def _rename_map(tree: ast.Module, stem: str) -> dict[str, str]:
             and n.name.startswith("test_") and n.name != stem}
 
 
+def _exit_code_tail(tree: ast.Module, main_node: ast.If | None) -> str:
+    """形态 A′ 的收口：`assert <入口>() == 0`。
+
+    认不出就抛 Manual —— 猜错了是**静默把红判成绿**（`assert` 写错成恒真，或者干脆漏掉
+    整个收口），那是这件事最贵的失效。
+    """
+    names: list[str] = []
+    for st in (main_node.body if main_node is not None else []):
+        inner = _exit_inner(st) if _is_exit(st) else (
+            st.value if isinstance(st, ast.Expr) and isinstance(st.value, ast.Call) else None)
+        if (isinstance(inner, ast.Call) and isinstance(inner.func, ast.Name)
+                and _zero_arg_fn(tree, inner.func.id)):
+            names.append(inner.func.id)
+    if len(names) != 1:
+        raise Manual(f"没有判据收集器，且认不出唯一的入口函数调用（{names}）—— 交人工")
+    return (f"    assert {names[0]}() == 0, "
+            f"f\"{names[0]}() 非零：上面那些 ❌ 就是原因\"")
+
+
 def _indent(text: str) -> str:
     """整块 +4 空格（空行不动），再补一个尾空行。"""
     if not text.strip():
@@ -551,14 +576,19 @@ def transform(path: pathlib.Path) -> str:
     # 顺序正是今天的执行顺序（模块级先跑，`__main__` 块最后）。
     moved = [_seg(src, n) for n in (tree.body[i] for i in move_idx) if not _is_exit(n)]
     if main_node is not None:
-        moved.append(_main_body(src, tree, main_node))
+        moved.append(_main_body(src, tree, main_node, drop_entry=fail_name is None))
     head = "\n".join(s for s in moved if s.strip())
-    if not head.strip():
+    # 形态 A′ 允许 head 为空（整个套件都在入口函数里，收口那句自己调它）。
+    if not head.strip() and (main_node is None or fail_name is not None):
         raise Manual("搬迁块 + __main__ 正文合起来是空的")
 
-    out.append(f"def {stem}():\n{_indent(head)}"
-               f"    assert not {fail_name}, (\n"
-               f"        f\"{{len({fail_name})}} 条未通过：\" + \"；\".join({fail_name}))")
+    if fail_name is None:
+        # 形态 A′：没有判据收集器，收口在入口函数返回的退出码上。
+        tail = _exit_code_tail(tree, main_node)
+    else:
+        tail = (f"    assert not {fail_name}, (\n"
+                f"        f\"{{len({fail_name})}} 条未通过：\" + \"；\".join({fail_name}))")
+    out.append(f"def {stem}():\n{_indent(head)}{tail}")
 
     text = "\n\n\n".join(out).rstrip() + "\n\n\n"
     text += f'if __name__ == "__main__":\n    {stem}()\n'
