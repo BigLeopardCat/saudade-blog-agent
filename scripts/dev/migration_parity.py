@@ -1,6 +1,10 @@
 # -*- coding: utf-8 -*-
 """迁移对拍工装（20261020 批 1）：**唯一放行口**。
 
+⚠️ **一次性工装**：20261020 那次迁移的放行口，今天 `tests/` 已是原生 pytest、旧 runner 已删。
+它仍然可用（`--base <迁移前的 ref>` 就是"拿现在的 tests/ 跟任意旧版比"），但**只有配上
+一个迁移前的 `--base` 才有意义** —— 拿 HEAD 当基线是自比、恒过。
+
 `scripts/dev/pytest_migrate.py` 只负责搬位置；"搬对了没有"由这里三层判：
 
   ① **AST 层** —— 迁移前后同一文件的 `check(` 调用**条数**与每条**常量参数字面量**逐字相同。
@@ -53,21 +57,25 @@ MUTANT = "__MIGRATION_PARITY_MUTANT__"
 
 
 def _pinned() -> dict[str, str]:
-    """从 `run_all.py` 现取出厂档钉子（ast 取字面量，**不 import** —— 见 PR #38 同款注）。"""
-    src = (TESTS / "run_all.py").read_text(encoding="utf-8")
+    """从 `conftest.py` 现取出厂档钉子（ast 取字面量，**不 import** —— 见 PR #38 同款注）。
+
+    20261020 前这份表住在 `tests/run_all.py`（自研 runner，当天删除）⇒ 那时这条读的是它。
+    读法没变：**ast 取字面量、不 import** —— import conftest 等于把整套环境摆一遍。
+    """
+    src = (TESTS / "conftest.py").read_text(encoding="utf-8")
     tree = ast.parse(src)
     for n in tree.body:
         if isinstance(n, ast.Assign) and any(
                 isinstance(t, ast.Name) and t.id == "_PINNED" for t in n.targets):
             return ast.literal_eval(n.value)
-    raise SystemExit("run_all.py 里找不到 _PINNED")
+    raise SystemExit("conftest.py 里找不到 _PINNED")
 
 
 _PINNED = _pinned()
 
 
 def _child_env() -> dict[str, str]:
-    """两条轨跑在**同一个 import 视野**下（`run_all.py` 的钉子 + `tests/` + 仓根）。
+    """两条轨跑在**同一个 import 视野**下（`conftest.py` 的钉子 + `tests/` + 仓根）。
 
     仓根这一项**不是可选的**：本仓 `.venv` 是产线 venv，editable `.pth` 指向**主树**。
     从 worktree 跑时，直跑轨会顺着 `.pth` 去 import 主树那份 `config` / `server`，
@@ -371,7 +379,7 @@ def main() -> int:
 
     results: dict[str, dict[str, list[str]]] = {}
     for p in paths:
-        if p.name.startswith("_") or p.name == "run_all.py":
+        if p.name.startswith("_") or p.name == "conftest.py":
             continue
         try:
             bad, soft = check_one(p, args.skip_layer2, args.base)

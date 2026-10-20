@@ -79,7 +79,7 @@
   接线由 `tests/test_packaging.py` ⑦ 盯着。此前这里写过的那个棘轮套件（**未建**、
   也**不需要**建）别照着找——判据就在闸自己身上。
 - ⚠️ 接线陷阱：CI 要调 `.githooks/commit-msg`，**不要**直接调那个套件文件——
-  `tests/test_ci_suite_list.py` 判的是「套件清单只有 `tests/run_all.py` 一处」。
+  `tests/test_ci_suite_list.py` 判的是「套件清单只有"pytest 按目录收集"一处」。
 - **穷举量那一层补上反方向（20261018，批 2 的补网）** ✅：`eval/wordlist_gate.py` 的
   穷举量棘轮此前**只判"变大"**——而只判变大的棘轮会留下一笔**永久免费额度**。实测抓到过：
   `tools/base.py` 账上写着 132、盘上其实早就是 125，那 7 条是历史上缩小之后没重切留下的
@@ -217,7 +217,7 @@
   要么全「未接」、要么全「已接」，混合就红，并点名是哪几处没跟上。
   **今天四处全「未接」（0/4）**，与生产行为逐字节相同。
   ⚠️ **这一条与预案原文的写法不同，理由记在这里**：预案写的是"三条全红，落地批翻绿"。
-  按字面写成"断言已接"的话，它在采纳批之前**一直红**——而 `tests/run_all.py` 按磁盘枚举、
+  按字面写成"断言已接"的话，它在采纳批之前**一直红**——而套件是按目录收集的、
   **没有"预期红"这个档**，一条红的套件进不了 CI，只能被人挪出清单（那就成了一份没人跑的
   判据）。所以改成"一致即绿"，把"能红"这件事交给 ④/⑤ 那两组反控：
   **四条反控各单独拨一处，实测全部翻红**；另有一份最小的"全已接"骨架作正控（证明探针
@@ -340,7 +340,7 @@ START 重启 ⇒ 下一轮走完自己回到空。**潜伏面** = 任何 `stream
 - `tests/test_checkpoint_setup_concurrent.py`（**20261018 停服之后补的第四份**）：真连一个库、
   4 个进程同时建表。**它才是抓得住那次停服的那一层**——前三份全在 `127.0.0.1:1` 这种必然
   失败的 DSN 上判。缺 `SAUDADE_CKPT_TEST_DSN` 时它报「未评估」并退 0（`SAUDADE_REQUIRE_CKPT_TEST=1`
-  把它变成失败），`tests/run_all.py` 的汇总里另有一行**每次运行都报**这一层量没量。
+  把它变成失败），那一条自己每次运行都会另打一行**每次运行都报**这一层量没量。
 
 **幂等账转「在跑」**：`agent/idem.py` 的 `active()` 是"挂没挂 checkpointer"，本批起挂上就
 自然打开（`tests/test_write_idempotency.py` 全绿）。**没挂时逐字节不变**。
@@ -491,7 +491,7 @@ saver 挂上之后历史注入被闸门关掉，而**没有任何"播种"路径*
 ### 批 8 — 权限从影子到强制（触发条件驱动，不硬排）
 
 `AUTHZ_ENFORCE=1` 的前置 = 批 5 的影子读数零分歧 + `tests/test_authz.py` 在钉住的取值下
-判 denied 必 BLOCK。新增的钉值要同时进 `tests/run_all.py` 的钉表与 `tests/test_ci_suite_list.py`
+判 denied 必 BLOCK。新增的钉值要同时进 `tests/conftest.py` 的钉表与 `tests/test_ci_suite_list.py`
 的档位检查。
 
 ⚠️ **"零分歧"要读对**（批 5 的读数给的口径）：20261018 的读数是"真分歧 0 条"，但分母只有
@@ -523,13 +523,13 @@ saver 挂上之后历史注入被闸门关掉，而**没有任何"播种"路径*
 
 ## 4. 判据与验证口径
 
-- **每批结束**：`SAUDADE_PARENT_REPO=/home/ubuntu/Saudade-Blog .venv/bin/python tests/run_all.py`
+- **每批结束**：`SAUDADE_PARENT_REPO=/home/ubuntu/Saudade-Blog .venv/bin/python -m pytest -q`
   （不设该变量，几条跨语言守卫找不到父仓）。
 - **静态**：改动的文件 `ruff check` 零 error；`eval/type_gate.py`。
 - **台账**：收紧一律**文本改那一个数**。
 - **文档**：新文档必须进 [docs/README.md](README.md) 索引；行为变更在
   [`changelog.d/`](../changelog.d/README.md) 加一个碎片（20261019 起，别直接改 `CHANGELOG.md`）。
-- **接线自查**（每个提交前问一遍）：套件清单是否只有 `tests/run_all.py` 一处？钉值是否同步？
+- **接线自查**（每个提交前问一遍）：套件清单是否只有"pytest 按目录收集"一处？钉值是否同步？
   ruff 版本是否与 `pyproject.toml` 的 dev 组一致？新增的运行期产物是否登记了保留期？
 
 ## 5. 本机约束

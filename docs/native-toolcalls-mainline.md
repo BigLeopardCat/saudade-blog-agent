@@ -592,7 +592,7 @@ submitted → running → succeeded / failed / cancelled
 - `eval/corpus_invariants.py` 的 **I6**（写端 vs 消费端对账：无 id 的登记 / 拿不到会话的
   登记 / 注入了却没人管 / 被纠偏次数）+ `tests/test_corpus_invariants.py`（这个脚本
   此前**一条测试都没有**）；
-- `tests/run_all.py` 起钉住出厂档（当时是 `PLANNER_ENGINE=text`、`AGENT_TASK_STATE=0`；
+- `tests/run_all.py`（已删）起钉住出厂档（当时是 `PLANNER_ENGINE=text`、`AGENT_TASK_STATE=0`；
   **20261004 起 `PLANNER_ENGINE` 这一项已删**——拨盘不存在了，只钉 `AGENT_TASK_STATE` 等三项）：
   离线判据不许跟着产线 `.env` 今天选了哪一档变（实测换档当天 4 个套件红，钉住后 47/47）。
   20260928 扩到**整份 `.env` 不读**（`SAUDADE_IGNORE_ENV_FILE=1`）：只钉两项挡不住
@@ -776,7 +776,7 @@ dotenv**（实测把 `AGENT_TASK_STATE=0` 塞进环境即以它为准）⇒ drop
 行、判据红得对，**不是闸门过火**）、一条是上面那个"清单只写了正要办的那件"（**本追记已修**）、
 一条是模型交了清单却一张卡都没弹（③ 那一族，与登记无关）。**①的当场收获**：有一跑的
 `raw_dropped` 是「给文章 103 添加标签「随笔」」——主人说的是「文章 23」+「Rust」，号与值**两个都
-是编的**；改前它会带着假号登记进台账、下一轮被当成主人原话读回来。离线 `tests/run_all.py`
+是编的**；改前它会带着假号登记进台账、下一轮被当成主人原话读回来。离线 `tests/run_all.py`（已删）
 110/110，两档各一遍红套件数 0。**成本上限**：golden 15/178 轮（8.4%）形态命中；生产 102 份 trace
 里 5 份、其中 3 份是确认令牌轮（不调 LLM）⇒ 约 2%。
 
@@ -805,7 +805,7 @@ dotenv**（实测把 `AGENT_TASK_STATE=0` 塞进环境即以它为准）⇒ drop
 
 **删的范围（机制面的三处，别的没动）**
 
-1. **档位名与字段**：`config/settings.py` 两个字段、`/health` 的 `dials` 那一格、`tests/run_all.py::_PINNED`
+1. **档位名与字段**：`config/settings.py` 两个字段、`/health` 的 `dials` 那一格、`tests/run_all.py::_PINNED`（已删）
    的两格、`.env.example` 两个键（留 ⚠️ 说明：**写进去现在是鬼键**）、`README.md` 那一行。
 2. **形参族**（这一半比档位名要紧）：`build_tool_schema` / `tool_calls_to_plan` / `bind_planner_tools`
    的 `task_state` 形参、`_short_reply_hint` 的同名形参、`_DecideCtx` 的 `_task_state` 字段。

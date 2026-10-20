@@ -6,7 +6,7 @@
 ## 为什么给 numpy 打桩
 
 建图侧那 470MB 的重依赖（umap/numba/scipy）**刻意不进生产 venv**（见
-`scripts/requirements-graph.txt` 头注），而本套件要在 `.venv/bin/python tests/run_all.py`
+`scripts/requirements-graph.txt` 头注），而本套件要在 `.venv/bin/python -m pytest -q`
 里跑 —— 直接 `import build_word_graph` 会 ModuleNotFoundError。脚本里 `import numpy as np`
 只在模块顶层出现这一次、且这两个被测函数一行都不碰它，所以先塞一个空壳模块进
 `sys.modules` 再 import。**这就是"能不能在离线套件里跑"的全部代价**；

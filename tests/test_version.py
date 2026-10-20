@@ -20,7 +20,7 @@ agent 侧只能靠读 `.env` 与提交历史去推。20261018 加 `/version`。
   ④ **密钥一个都不能出现**：注入哨兵值再断言它不在返回体里（比 grep 源码可靠，
      同 `tests/test_health_dials.py` ③ 的做法）。
 
-秒级、无网络、不跑 LLM；由 `tests/run_all.py` 按磁盘枚举自动收。
+秒级、无网络、不跑 LLM；由 pytest 按目录收集自动收。
 
 用法：.venv/bin/python tests/test_version.py
 """

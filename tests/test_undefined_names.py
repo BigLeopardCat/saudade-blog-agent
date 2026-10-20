@@ -1,9 +1,9 @@
-"""未定义名（ruff F821）**在本地也要有人跑**——CI 跑它，而 `tests/run_all.py` 不跑。
+"""未定义名（ruff F821）**在本地也要有人跑**——CI 有这一步，而整套离线套件不含它。
 
 现场（20261015，撤档那批）：`eval/task_state_probe.py` 的档位变量 `flag` 随撤档一起删了，
 而报告写入段里还留着一句 `f"- 档位：`AGENT_TASK_STATE={'1' if flag else '0'}`"`。**CI 当场红**
 （`ruff check --select F821` 那一 step），而本机全绿：`py_compile` 只编不解析名字、离线套件
-不跑 `eval/`（探针要网络与 API key，`tests/run_all.py` 只收 `tests/*.py`）。这正是本仓那条
+不跑 `eval/`（探针要网络与 API key，pytest 只收 `tests/` 下的文件）。这正是本仓那条
 纪律的第二次现形——**"本地全绿 ≠ CI 绿"**（第一次是 mypy 棘轮，为此有了 `eval/type_gate.py`）。
 
 **为什么不能只靠 `py_compile` / AST 扫描**：名字错在**运行不到的那条分支**上（报告写入在探针

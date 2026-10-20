@@ -13,7 +13,7 @@
 `active_llm_api_key` 只差一个词——把 `model` 写成 `api_key` 的代价是**外泄**，且这一行在
 review 里长得跟正确的那行几乎一样。所以用"注入哨兵值再断言它不出现"来判，比 grep 源码可靠。
 
-秒级、无网络、不跑 LLM；由 `tests/run_all.py` 按磁盘枚举自动收。
+秒级、无网络、不跑 LLM；由 pytest 按目录收集自动收。
 
 用法：.venv/bin/python tests/test_health_dials.py
 """
@@ -257,7 +257,7 @@ def test_health_dials():
     try:
         # **对照**（本节的要点）：这一格跟着配置走，而 `checkpoint_backend` 跟着**活体
         # 对象**走。拨配置**不动**那一格 ⇒ 两格量的确实是两件事。这里不写死"那一格是
-        # none"——它取的是本进程 `_agent` 的形态（`tests/run_all.py` 与单跑都可能不同），
+        # none"——它取的是本进程 `_agent` 的形态（整套跑与单跑都可能不同），
         # 写死会变成一条与本节无关的环境断言。
         _live_before = call()["dials"]["checkpoint_backend"]
         settings.checkpoint_dsn = "postgresql://u:p@h:5432/from_settings"

@@ -16,11 +16,11 @@
 一旦回到预算内就要销账；台账里找不到对应函数的条目是过期的。
 
 台账 = `eval/complexity_baseline.json`，`--update` 是唯一的放宽通道（reviewer 直接
-看那份 diff）。本套件由 `tests/run_all.py` 按磁盘枚举 ⇒ **CI 与夜间 04:00 自动到手**，
+看那份 diff）。本套件由 pytest 按目录收集 ⇒ **CI 与夜间 04:00 自动到手**，
 零 workflow 改动。
 
 用法（cd 仓根，用仓的 venv）：
-  .venv/bin/python tests/test_complexity_budget.py              # 检查（run_all.py 这样调）
+  .venv/bin/python tests/test_complexity_budget.py              # 检查（CI 这样调）
   .venv/bin/python tests/test_complexity_budget.py --update     # 重写台账
   .venv/bin/python tests/test_complexity_budget.py --c-max 10   # 临时换阈值（看它会不会红）
 退出码：0 全在预算内 / 1 有函数超预算、长大了，或台账过期。

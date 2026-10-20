@@ -30,7 +30,7 @@
 所以下面第 ④ 段把这件事钉住：base.py 的真实源码喂进来**必须报红**，且断言机械集合会
 藏掉 ≥60 个真名字（数字判据，不锁那五个字面名）。
 
-用法：.venv/bin/python tests/test_module_exports.py（或 tests/run_all.py 统一跑）
+用法：.venv/bin/python tests/test_module_exports.py（或 `.venv/bin/python -m pytest -q` 统一跑）
 """
 
 

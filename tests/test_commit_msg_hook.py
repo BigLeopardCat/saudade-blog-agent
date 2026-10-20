@@ -17,7 +17,7 @@
      **逐字相同**。两边各写一份的话，改一处忘另一处——闸门会开始拒绝一个合规的 type，
      或者放过一个自创的。这是本套件最值钱的一条，带反控。
   ④ **接线**：CI 里跑的是**钩子本身**（`.githooks/commit-msg`），不是这个测试文件
-     ——`tests/test_ci_suite_list.py` ① 判"套件清单只有 `tests/run_all.py` 一处"，
+     ——`tests/test_ci_suite_list.py` ① 判"套件清单只有「pytest 按目录收集」一处"，
      逐套件点名会当场红。
 
 **为什么"钩子在 CI 里跑"要单独判**：`core.hooksPath` 是 git 的**本地配置**
@@ -161,7 +161,7 @@ def test_commit_msg_hook():
     check("  eval.yml 里有一行**会执行**的 `.githooks/commit-msg`",
           ".githooks/commit-msg" in _eval_code,
           "" if ".githooks/commit-msg" in _eval_code else "只在注释里提一句不算接线")
-    check("  ⚠️ 没有点名 tests/test_commit_msg_hook.py（套件清单只许 run_all.py 一处）",
+    check("  ⚠️ 没有点名 tests/test_commit_msg_hook.py（套件清单只许「按目录收集」一处）",
           "tests/test_commit_msg_hook.py" not in _eval_code,
           "" if "tests/test_commit_msg_hook.py" not in _eval_code
           else "逐套件点名会让 test_ci_suite_list ① 红")

@@ -409,9 +409,13 @@ def _test_user_assertion():
         check("代码默认强制断言（默认安全；要回退得显式写 0）", dflt is True, dflt)
         # 出厂档必须同时进 `_PINNED`（同 `AGENT_FASTPATH` / `AGENT_EVIDENCE` 那条纪律：
         # 离线套件对档位是瞎的，谁在 shell 里 export 过 0，整套就按另一档判）。
-        _runner = (Path(__file__).resolve().parent.parent / "tests" / "run_all.py").read_text(
+        # 钉子表的持有者 20261020 从 `tests/run_all.py` 搬到 `tests/conftest.py`（自研
+        # runner 删了）。判据本身一字未动：**出厂档必须进那张表**，否则谁在 shell 里
+        # export 过 0，凡是经由 `server._resolve_principal` 的用例就按另一档判。
+        _runner = (Path(__file__).resolve().parent.parent / "tests" / "conftest.py").read_text(
             encoding="utf-8")
-        check("出厂档进了 `tests/run_all.py::_PINNED`", '"AGENT_REQUIRE_ASSERTION": "1"' in _runner)
+        check("出厂档进了 `tests/conftest.py::_PINNED`",
+              '"AGENT_REQUIRE_ASSERTION": "1"' in _runner)
     finally:
         settings.jwt_secret = orig_secret
 

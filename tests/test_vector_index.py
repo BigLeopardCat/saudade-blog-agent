@@ -1,7 +1,7 @@
 """向量索引 + RRF 融合（20261005）：离线、打桩、秒级。
 
 被测对象是 `rag/vector_index.py`。**唯一的网络出口 `_embed_texts` 被打桩**——本套件
-不碰任何端点、不开线程等真实响应，这是 run_all 的纪律（秒级、无网络、无 LLM）。
+不碰任何端点、不开线程等真实响应，这是离线套件的纪律（秒级、无网络、无 LLM）。
 
 这个套件存在的理由：混合检索与纯词法的**工具出口文本长得一模一样**，`search()` 的
 返回值形状也一样。也就是说，写错了几乎没有症状——它只是**静静地**少一路；或者更糟：
@@ -17,9 +17,9 @@
 **红基线**：§⑨ 把 `rrf_fuse` 打桩成「原样返回词法路」时，融合断言必须失效。那一条
 写成了自检（负控不红 = 断言在测一个恒真分支）。
 
-⚠️ 本套件**自己**把档位在进程内打开（`run_all` 钉的是 `RAG_HYBRID_ENABLED=0` 这一
+⚠️ 本套件**自己**把档位在进程内打开（出厂档钉的是 `RAG_HYBRID_ENABLED=0` 这一
 出厂档，要验的正是「打开之后」的行为）。所以它改的是 `settings` 单例的属性，而不是
-环境变量——`run_all` 给每个套件独立子进程，污染不出这个进程。§⑫ 把「钉子还在」
+环境变量——靠 `tests/conftest.py` 的跨套件还原层把这一格收回原值。§⑫ 把「钉子还在」
 这件事本身也挑明。
 """
 
@@ -118,7 +118,7 @@ sys.path.insert(0, str(ROOT / "tests"))
 
 from array import array as _array  # noqa: E402
 
-import run_all  # noqa: E402
+import conftest  # noqa: E402  （出厂档钉子表就在那里）
 
 import rag.search as SR  # noqa: E402
 
@@ -463,9 +463,9 @@ def test_vector_index():
     check("查询向量是 float32 数组（与索引行同类型才可比）",
           q1 is not None and q1.typecode == "f")
     print("\n⑫ 自证：钉子还在（否则这个套件跑在错误的档位上）")
-    check("run_all 把 RAG_HYBRID_ENABLED 钉成 0（产线 .env 开了也不许影响离线判据，"
+    check("出厂档把 RAG_HYBRID_ENABLED 钉成 0（产线 .env 开了也不许影响离线判据，"
       "否则离线套件会去打真 embedding 端点）",
-          run_all._PINNED.get("RAG_HYBRID_ENABLED") == "0", str(run_all._PINNED))
+          conftest._PINNED.get("RAG_HYBRID_ENABLED") == "0", str(conftest._PINNED))
     print("\n⑬ 检索层接线：两路都在场才融合，缺一路**逐字节**退回词法")
     _src_build = ((ROOT / "rag" / "search.py").read_text(encoding="utf-8")
                   .split("def build(", 1)[1].split("def _fetch_corpus",

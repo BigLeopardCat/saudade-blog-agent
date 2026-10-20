@@ -31,7 +31,7 @@
 逼你在同一个提交里把那一格改小——`--update` 出来的账**恰好等于**当时的实测，两边本来就该相等。
 
 用法（cd 仓根，用仓的 venv）：
-  .venv/bin/python tests/test_module_budget.py                  # 检查（run_all.py 这样调）
+  .venv/bin/python tests/test_module_budget.py                  # 检查（CI 这样调）
   .venv/bin/python tests/test_module_budget.py --update         # 重写台账
   .venv/bin/python tests/test_module_budget.py --lines-max 400 --defs-max 30  # 临时换阈值
 退出码：0 全在预算内 / 1 有模块超预算、长大了，或台账过期。

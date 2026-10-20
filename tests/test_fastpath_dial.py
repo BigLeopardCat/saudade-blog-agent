@@ -63,7 +63,7 @@ class _ScriptedLLM:
 class _Dial:
     """把 `AGENT_FASTPATH` 拨到指定档位（退出时**必须**还原）。
 
-    离线套件默认钉出厂档（`tests/run_all.py::_PINNED` 里 `AGENT_FASTPATH=1`），临时拨
+    离线套件默认钉出厂档（`tests/conftest.py::_PINNED` 里 `AGENT_FASTPATH=1`），临时拨
     只许在这一段里——泄漏给后面的用例会让它们按另一档判，且**红得毫无理由**。
     """
 
@@ -250,12 +250,14 @@ def _test_single_reader_and_pinned():
     check("  首轮快道那一段的守卫里带着 `fastpath_on`",
           "if rounds == 0 and not has_frames and fastpath_on:" in src)
 
-    runner = (ROOT / "tests" / "run_all.py").read_text(encoding="utf-8")
+    # 出厂档钉子的持有者 20261020 从 `tests/run_all.py` 搬到 `tests/conftest.py`（自研
+    # runner 删了）。**读法不变**：ast 取字面量、不 import（import 它等于把整套环境摆一遍）。
+    runner = (ROOT / "tests" / "conftest.py").read_text(encoding="utf-8")
     _pinned = {}
     for n in ast.walk(ast.parse(runner)):
         if isinstance(n, ast.Assign) and getattr(n.targets[0], "id", "") == "_PINNED":
             _pinned = ast.literal_eval(n.value)
-    check("  `tests/run_all.py::_PINNED` 钉住 `AGENT_FASTPATH=1`"
+    check("  `tests/conftest.py::_PINNED` 钉住 `AGENT_FASTPATH=1`"
           "（离线套件对档位是瞎的：不钉的话谁 export 过它，整套就按另一档判）",
           _pinned.get("AGENT_FASTPATH") == "1", str(_pinned.get("AGENT_FASTPATH")))
 

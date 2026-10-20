@@ -14,7 +14,7 @@ F1 把 meta 收成一个**信封**（`fact()` 一处构造）：`changed` 是那
 由它派生，不手写），`target` 是"动的是谁"（闭集 kind），`before/after` 只放状态词，
 `evidence` 是写后读回复核读到的那句。既有跨语言键**原样带着、一个都不改**。
 
-本套件锁四件事（秒级、无网络无 LLM；由 run_all.py 自动收）：
+本套件锁四件事（秒级、无网络无 LLM；由 pytest 自动收）：
 
   ① **判据本身**（纯函数）：`fact()` 只加不改 / `changed=False` ⇒ 自动补 `noop` /
      `changed` 是**必填 keyword-only**（漏填要当场 TypeError，不许静默 False）；
@@ -32,7 +32,7 @@ F1 把 meta 收成一个**信封**（`fact()` 一处构造）：`changed` 是那
      里（进去才需要同步 Rust：`src/routes/chat.rs::render_exec_row` 会开始读一个
      它没排版的键）。F1 刻意保持 Rust 零改动。
 
-用法：.venv/bin/python tests/test_write_facts.py（或 tests/run_all.py 统一跑）
+用法：.venv/bin/python tests/test_write_facts.py（或 `.venv/bin/python -m pytest -q` 统一跑）
 """
 
 from __future__ import annotations

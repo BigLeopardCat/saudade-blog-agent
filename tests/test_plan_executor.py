@@ -21,7 +21,7 @@
      判据只剩"台账里有没有现在能动手的一件"；本节反转成"不许把档位加回来"的锁
      （裸 `if resumed:` 守卫 + 单调用点 + 反向对照：台账在场但不是兑现轮 ⇒ 也不出卡）。
      **撤档前**这一节判的是"关档 ⇒ 这条路不存在"（`AGENT_TASK_PLAN_EXEC=0`，出厂档，
-     `run_all._PINNED` 钉住它）——那个对照臂随档位一起没了。
+     `conftest._PINNED` 钉住它）——那个对照臂随档位一起没了。
 
 用法：.venv/bin/python tests/test_plan_executor.py
 """

@@ -134,7 +134,7 @@
 
 | 层 | 内容 | 现状 |
 |---|---|---|
-| **L0** | `tests/` 下的离线套件 | **17 套**（`tests/run_all.py` 按磁盘 glob 枚举，不写名单），CI 逐个跑 + 一条 `ruff --select F821`。本轮 **17/17 全绿**、F821 全过 |
+| **L0** | `tests/` 下的离线套件 | **17 套**（`tests/run_all.py`（已删）按磁盘 glob 枚举，不写名单），CI 逐个跑 + 一条 `ruff --select F821`。本轮 **17/17 全绿**、F821 全过 |
 | **L1** | `eval/recall_eval.py`（检索基准） | 本轮：`recall@1=0.9231`、`recall@3=1.00`、`recall@5=1.00`、`MRR=0.9615`、噪声命中率 0.889、平均候选 3.36。**唯一没排第一的是那条已知 FAIL** `rag_arch_ports_real`（rank=2，词法表征局限，三类排序改法实测均无效）⇒ 除它以外 12/12 |
 | **L2** | `eval/golden/basic.jsonl` | 126 条；本机跑（CI 侧跨网链路不可用）。见 §5 |
 | **L3** | `eval/trace_reconcile.py` 跨源对账 | 夜间 04:14 那次：trace 77 条 ↔ `[stream] end` 77 行**全配对**，`trace_without_end` / `end_without_trace` / `dup_tid` / `mismatch` / `monitor_failure` / `orphan_card` **全空**，`has_anomaly=false`；`uid0=8`（golden 产物，按设计跳过并计数）；1 条窗口外 trace 记 `uncovered` 而不是缺失 |

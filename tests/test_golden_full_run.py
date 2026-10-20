@@ -20,7 +20,7 @@
    "0.86 达标"。档位不用在这里重抄一个数（那就是第二份判据），只锁两条关系：
    `ENTRY < TARGET`、且 `TARGET` 是主人定的 0.95。
 
-秒级、纯函数 + 纯文本，无网络无 LLM；由 `tests/run_all.py` 按磁盘枚举自动收。
+秒级、纯函数 + 纯文本，无网络无 LLM；由 pytest 按目录收集自动收。
 
 用法：.venv/bin/python tests/test_golden_full_run.py
 """

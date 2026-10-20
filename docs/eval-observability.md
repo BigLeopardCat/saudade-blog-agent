@@ -205,7 +205,7 @@
 
 ## 1. 定位与原则
 
-- **评测 = 离线质量门禁**（"做得好不好"）：L0 秒级套件（`tests/run_all.py` 全跑一遍，**套件数与用例数以该清单为准、这里不抄**——抄一次漂一次；CI 侧 `.github/workflows/eval.yml` 逐个 `uv run python tests/...` + 一条 `ruff --select F821`）在 CI 里跑（push 即拦截）；L2 全量 golden 在**本机**跑（20260920 起，CI 侧跨网链路不可用，见 §4 末注）。
+- **评测 = 离线质量门禁**（"做得好不好"）：L0 秒级套件（`.venv/bin/python -m pytest -q` 全跑一遍，**套件数与用例数不在这里抄**——抄一次漂一次，以 `pyproject.toml` 的 `testpaths` 收走的那份为准；CI 侧 `.github/workflows/eval.yml` 一条 `uv run --frozen pytest -q -n 4` + 一条 `ruff --select F821`）在 CI 里跑（push 即拦截）；L2 全量 golden 在**本机**跑（20260920 起，CI 侧跨网链路不可用，见 §4 末注）。
 - **可观测性 = 线上实时监控**（"现在跑得怎么样"）：trace/metrics/logs 三支柱。
 - **回放打通两者**：线上日志采样 → 离线评测 → 行为漂移检测。
 - **原则一：评测与语料解耦**。检索器质量、生成鲁棒性用开源数据集评测（与博客文章无关）；
@@ -533,7 +533,8 @@ FAIL 复审单把回归组红置顶（当天必修）。混跑的坏处正是这
 `eval/golden_full_run.py` 已提供进程隔离 + 单条 180s 超时（防悬挂污染），是本机的看门狗。
 CI 只留 L0 秒级套件。
 
-**L0 的覆盖率是"报告"不是"门禁"（20261013）**：`tests/run_all.py --coverage` 逐套件收集、
+**L0 的覆盖率是"报告"不是"门禁"（20261013；20261020 换入口后仍是同一件事）**：
+`bash scripts/dev/coverage.sh`（`pytest --cov`）逐进程收集、
 结尾合成一份报告（配置在 `pyproject.toml` 的 `[tool.coverage.*]`，`source` 只列生产包——
 `tests/` 与 `eval/` 是被测对象、不是被测代码）。**不设阈值、不进 CI**：只有形状判据配当门禁，
 百分比会把"该测的没测"与"测了但那一支没走到"混成一个数，拿它当闸门只会把人推去测 getter；
@@ -661,7 +662,7 @@ device-service）；每轮对话落一份 trace JSON（utils/trace.py → `logs/
 **20260925 补**：`eval/llm_judge.py`（LLM 评审员，判"回复有没有编材料"，**只出报告不进任何门禁**，
 **已接进夜间**（跑在 golden 之后、不置 `fail=1`），口径与四条纪律见 §2 末）+ trace 的工具返回上限可配（`TRACE_TOOL_RESULT_LIMIT`，golden 轮 40000，
 生产仍 200——评审员拿摘要当材料会误判，这条是它的前置条件）。**20261015 补**：快道的**定价装置**
-——档位 `AGENT_FASTPATH`（出厂开、唯一读口 `graph._fastpath_on()`、进 `run_all._PINNED`，
+——档位 `AGENT_FASTPATH`（出厂开、唯一读口 `graph._fastpath_on()`、进 `conftest._PINNED`，
 档位显式落 `planner.context` 的 `fastpath` 格）+ `eval/trace_alert.py` 的 **R5** 段（生产 trace
 的命中分布与每次的价钱）+ `eval/fastpath_pricing.py`（`map` 静态映射 / `run` 两臂交替读计数，
 `--ids/--tag` 供单条复采样）+ 锁 `tests/test_fastpath_dial.py`；读数与删除/收窄清单见

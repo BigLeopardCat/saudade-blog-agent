@@ -49,7 +49,7 @@ import agent.tasks as T  # noqa: E402
 sys.path.insert(0, str(ROOT / "tests"))
 
 
-import run_all  # noqa: E402  （③ 要断言它的钉子表里也没有那两个档位名）
+import conftest  # noqa: E402  （③ 要断言出厂档钉子表里也没有那两个档位名）
 
 FAILED: list[str] = []
 
@@ -232,8 +232,8 @@ def test_task_continuation():
     check("  两个名字在 `Settings` 的字段表里已经不存在",
           not (set(_NO_DIALS) & set(G.settings.model_fields)),
           str(sorted(set(_NO_DIALS) & set(G.settings.model_fields))))
-    check("  离线套件的钉子表里也没有它们（`tests/run_all.py::_PINNED`）",
-          not (set(_NO_DIALS) & set(run_all._PINNED)), str(sorted(run_all._PINNED)))
+    check("  离线套件的钉子表里也没有它们（`tests/conftest.py::_PINNED`）",
+          not (set(_NO_DIALS) & set(conftest._PINNED)), str(sorted(conftest._PINNED)))
     print("\n④ gate 的账乙网（接线点 3）：征询式收尾 ⇒ 回 planner")
     _IN = {"task_frames": [{"task_id": "at_1"}]}       # 本轮就在那件事的工作面上
     _SOLICIT = ("至于降级身份那一步——这次只执行了发通知，降级还没做。"

@@ -7,13 +7,14 @@
 
 **为什么必须开子进程**：`IOT_ENABLED` 是模块级常量（`tools/base.py` 顶部读 settings），
 NAV_MAP / FUZZY_NAV_RULES / 技能可见性 / 提示词文本全是 import 时定型的。同一个进程里
-改不了档——只能各起一个子进程，把 env 喂进去再读结果。这也正是 `run_all.py` 的做法。
+改不了档——只能各起一个子进程，把 env 喂进去再读结果。这也正是今天 `tests/conftest.py`
+在收集前把它们写进 `os.environ` 的做法。
 
 **两档各自的失法**（都不报错、只是说假话）：
   · 关了没收干净 ⇒ agent 指路到一个 404，还说「页面已跳转」（系统替不存在的页面背书）；
   · 开了被误收 ⇒ 装了平台的站上，agent 突然说"本站没有这个页面"。
 
-⚠️ 本套件**自己**跑在 run_all 钉的那一档（`IOT_ENABLED=1`）——那是"装了"的那档；
+⚠️ 本套件**自己**跑在出厂档钉的那一档（`IOT_ENABLED=1`）——那是"装了"的那档；
 "没装"那档由子进程验。最后一段有断言把这件事挑明（否则将来有人改了钉子，
 这个套件会在错误的档位上"通过"）。
 """
@@ -103,7 +104,7 @@ def probe(iot_on: bool) -> dict:
 sys.path.insert(0, str(ROOT / "tests"))
 
 
-import run_all  # noqa: E402
+import conftest  # noqa: E402  （出厂档钉子表就在那里）
 
 import tools.base as B  # noqa: E402
 
@@ -186,9 +187,9 @@ def test_iot_switch():
           list(on["services"]) == ["saudade-rust", "saudade-agent", "saudade-device"],
           str(on["services"]))
     print("\n③ 档位自证：本套件自己跑在哪一档")
-    check("run_all 把 IOT_ENABLED 钉成 1（不钉 ⇒ 几十条既有判据会按「没装」跑，集体红）",
-          run_all._PINNED.get("IOT_ENABLED") == "1", str(run_all._PINNED))
-    check("本进程实际生效档 = run_all 钉的那一档（两处不一致 ⇒ 本套件在自欺）",
+    check("出厂档把 IOT_ENABLED 钉成 1（不钉 ⇒ 几十条既有判据会按「没装」跑，集体红）",
+          conftest._PINNED.get("IOT_ENABLED") == "1", str(conftest._PINNED))
+    check("本进程实际生效档 = 出厂档钉的那一档（两处不一致 ⇒ 本套件在自欺）",
           B.IOT_ENABLED is True, f"进程内 IOT_ENABLED={B.IOT_ENABLED}")
     print()
     if FAILS:

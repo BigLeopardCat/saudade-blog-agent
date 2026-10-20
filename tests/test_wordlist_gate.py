@@ -19,7 +19,7 @@
      （没有它，"第二层在承重"与"第二层是装饰"长得一模一样）
   ⑦ **真数据反控**：从**真登记表**里撤掉一条 `open`、或把某条的 `size` 减一 ⇒ 当场红
   ⑧ **接线**：两层的判据都在闸门源码里（防"只留一层"被静默接受）＋
-     本套件必须由 `tests/run_all.py` **按磁盘枚举**收进 CI（写成手抄名单 ⇒ 静默掉队）
+     本套件必须被**按目录收集**收进 CI（写成手抄名单 ⇒ 静默掉队）
   ⑨ **换了量 ⇒ 退 3**：登记表的 `targets` 与扫描面不一致时不许当成"变好/变差"读
   ⑩ **样板新模块里零条目**：`provenance.py` / `textnorm.py` 是这一族的规范形状，自己不该长词表
   ⑪ **eval 侧那一份（判据的判据）也在闸门里**（20261015 批 4）：golden 的负正则/正反词表、
@@ -33,7 +33,9 @@
 本套件拦不住，也不打算拦（同 `eval/complexity_baseline.json` —— 基线类产物一律靠 reviewer
 读 diff）。闸门能拦的是**代码侧**：新表长出来、老表变大、`open` 不写出路。
 
-秒级、纯文本 + AST，无网络无 LLM；由 `tests/run_all.py` 按磁盘枚举 ⇒ CI 自动到手。
+秒级、纯文本 + AST，无网络无 LLM；由 pytest 按目录收集（`pyproject.toml` 的
+`testpaths`）⇒ CI 与夜间自动到手。20261020 前这一步由自研 runner `tests/run_all.py`
+的 `TESTS.glob("*.py")` 做，换入口后判据的意思一字未变：**靠被目录收走、不靠谁点名**。
 
 用法：.venv/bin/python tests/test_wordlist_gate.py
 """
@@ -286,11 +288,11 @@ def render(i: int) -> str:
         k in _src for k in ("未登记：", "只许变小", "category 还没填", "open 类没出路")))
     check("⑧b 穷举量与窄口径并存（`_file_metric` 与 `_matcher_names` 都被调用）",
           _src.count("_file_metric(") >= 2 and _src.count("_matcher_names(") >= 2)
-    check("⑧c 进套件靠**按磁盘枚举**不靠点名：run_all.py 有 glob、且一次都没提过本文件名"
+    _ci = (ROOT / ".github" / "workflows" / "eval.yml").read_text(encoding="utf-8")
+    _night = (ROOT / "scripts" / "nightly_regression.sh").read_text(encoding="utf-8")
+    check("⑧c 进套件靠**按目录收集**不靠点名：CI 与夜间一次都没提过本文件名"
       "（改成手抄名单 ⇒ 本套件静默掉队，CI 再也看不见闸门）",
-          'TESTS.glob("*.py")' in (ROOT / "tests" / "run_all.py").read_text(encoding="utf-8")
-          and "test_wordlist_gate" not in (ROOT / "tests"
-              / "run_all.py").read_text(encoding="utf-8"))
+          "test_wordlist_gate" not in _ci and "test_wordlist_gate" not in _night)
     print("\n⑨ 换了个量 ⇒ 退 3（不是「变好/变差」，是换了扫描面）")
     _shifted = {**_real, "targets": ["agent"]}
     _d4 = pathlib.Path(tempfile.mkdtemp(prefix="wlshift_"))

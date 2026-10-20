@@ -216,8 +216,8 @@
     "lines": 272
   },
   "tests/test_ci_suite_list.py::test_ci_suite_list": {
-    "c": 46,
-    "lines": 169
+    "c": 40,
+    "lines": 166
   },
   "tests/test_confirm.py::test_confirm": {
     "c": 208,
@@ -321,7 +321,7 @@
   },
   "tests/test_packaging.py::test_packaging": {
     "c": 124,
-    "lines": 315
+    "lines": 318
   },
   "tests/test_param_matrix_tokens.py::test_param_matrix_tokens": {
     "c": 32,
