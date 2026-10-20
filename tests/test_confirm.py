@@ -162,7 +162,7 @@ def _own_popup(workflow, spec, msg, ev):
 
 def test_confirm():
     _SAVED_SECRET = settings.jwt_secret
-    _STUB_SECRET = "test-secret-for-confirm-tokens"
+    _STUB_SECRET = "test-secret-for-confirm-tokens-not-a-real-secret"
     settings.jwt_secret = _STUB_SECRET
     SPECS = [{"tool": "create_tag", "args": {"title": "测试标签", "parent_id": None, "color": "#eb2f96"}}]
     print("① 令牌签发/验签")

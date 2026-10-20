@@ -99,7 +99,7 @@ def row(uid, name, role=ROLE_USER, status=0, muted=False, nickname=None):
 
 def test_account_roster():
     _SAVED_SECRET = settings.jwt_secret
-    settings.jwt_secret = "test-secret-for-confirm-tokens"
+    settings.jwt_secret = "test-secret-for-confirm-tokens-not-a-real-secret"
     DIR = [row(126, "guest5"), row(127, "guest6"), row(130, "frozen_one", status=1)]
     WRITE_WORKFLOWS = ("account_freeze", "account_unfreeze", "account_set_role", "mute_account",
                     "unmute_account", "notice_send", "quota_reset")

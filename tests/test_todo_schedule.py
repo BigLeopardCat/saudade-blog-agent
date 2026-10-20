@@ -359,7 +359,7 @@ def _cp_result(text):
 
 def test_todo_schedule():
     _SAVED_SECRET = settings.jwt_secret
-    settings.jwt_secret = "test-secret-for-confirm-tokens"
+    settings.jwt_secret = "test-secret-for-confirm-tokens-not-a-real-secret"
     _ENVELOPE_ONLY = {"changed", "target", "evidence", "noop"}
     A.datetime = _FrozenDatetime
     print("\n① 排期归一：认哪些写法、认不出来绝不猜")

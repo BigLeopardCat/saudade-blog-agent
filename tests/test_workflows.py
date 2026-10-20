@@ -5834,7 +5834,7 @@ def main():
 
 
 def test_workflows():
-    _settings.jwt_secret = "test-secret-for-workflows"
+    _settings.jwt_secret = "test-secret-for-workflows-not-a-real-secret"
     main()
 
     assert not FAILS, (
