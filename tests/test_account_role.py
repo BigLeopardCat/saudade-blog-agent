@@ -208,7 +208,7 @@ def _run_exec(msg, spec, grant=None):
 def test_account_role():
     import agent.adminops_confirm as _confirm  # noqa: E402
     _SAVED_SECRET = settings.jwt_secret
-    settings.jwt_secret = "test-secret-for-confirm-tokens"
+    settings.jwt_secret = "test-secret-for-confirm-tokens-not-a-real-secret"
     print("\n① 身份归一与显示：两份词表合一（主人说中文、后端收英文码）")
     check("中文 → 码：「杂鱼」→ zako、「普通用户」→ user、「管理员」→ admin",
           _account.normalize_role("杂鱼") == "zako"

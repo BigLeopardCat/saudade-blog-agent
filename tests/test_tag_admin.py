@@ -262,7 +262,7 @@ def _args_of(plan):
 def test_tag_admin():
     from config.settings import settings as _settings  # noqa: E402
     _SAVED_SECRET_TOP = _settings.jwt_secret
-    _settings.jwt_secret = "test-secret-for-confirm-tokens"
+    _settings.jwt_secret = "test-secret-for-confirm-tokens-not-a-real-secret"
     CIDX = _tags.build_category_index(CATS)
     print("① 名字通道：四种结局各说各的话（这是本轮所有写工具的共同地基）")
     hit, err = base._find_named_tag("编程", "unused") if False else (None, None)  # 占位，见下
@@ -1412,7 +1412,7 @@ def test_tag_admin():
     from config.settings import settings as _settings  # noqa: E402
     _saved_secret = _settings.jwt_secret
     # CI 里没有 .env（同 test_confirm 的桩）
-    _settings.jwt_secret = "test-secret-for-confirm-tokens"
+    _settings.jwt_secret = "test-secret-for-confirm-tokens-not-a-real-secret"
     try:
         with patch(_tag_index=lambda c: IDX_DOG):
             plan = _plan("tag_delete", {"name": "大笨狗"})

@@ -149,7 +149,7 @@ def _exec_round(specs, msg=_MSG_FAV):
 
 
 def test_idem_noop():
-    settings.jwt_secret = "test-secret-for-idem-noops"
+    settings.jwt_secret = "test-secret-for-idem-noops-not-a-real-secret"
     FAV_ONLY_19 = [{"noteId": 19, "title": "架构漫谈"}]
     NOTIF_ALL_READ = {3: {"id": 3, "isRead": True}, 5: {"id": 5, "isRead": True}}
     NOTIF_HAS_UNREAD = {3: {"id": 3, "isRead": False}, 5: {"id": 5, "isRead": True}}
