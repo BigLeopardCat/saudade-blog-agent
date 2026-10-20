@@ -62,6 +62,8 @@ API key，一轮烧几十万 token —— 按需手跑，别接进夜间。
 
     # 只跑自检（零 token、零网络）：
     PYTHONPATH=$PWD .venv/bin/python eval/experiments/menu_shape_ab.py --dry-run
+
+`--out` 不给就落在**本进程私有**的临时目录里（路径会打印出来）——理由见 `_default_out`。
 """
 from __future__ import annotations
 
@@ -69,6 +71,7 @@ import argparse
 import json
 import re
 import sys
+import tempfile
 import time
 from pathlib import Path
 
@@ -680,6 +683,17 @@ def _pick_sents(limit: int, only: str) -> list:
     return [s for s in SENTS if s[0] in want]
 
 
+def _default_out() -> Path:
+    """缺省读数落点：**本进程私有**的临时目录（惰性，只在真要写时调一次）。
+
+    **不写死 `/tmp/<固定名>`**（原先就是 `--out` 的默认值）：共享 `/tmp` 里那个名字可被
+    他人预先创建成目录或软链，写进去就不是"我自己的读数"了——bandit B108 报的正是它，
+    同 `eval/slot_stability.py::scratch` 那处（那里也是被同一条规则扫出来的）。
+    路径会打印出来，要固定落点就显式给 `--out`。
+    """
+    return Path(tempfile.mkdtemp(prefix="menu_shape_ab_")) / "menu_shape_ab.json"
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--role", default="user", help="身份（决定两臂的菜单大小）")
@@ -689,7 +703,7 @@ def main() -> int:
     ap.add_argument("--only", default="", help="只跑这几句（逗号分隔的 id；`--limit` 只能取前缀，"
                                                "而真正吃紧的句子在表尾）")
     ap.add_argument("--dry-run", action="store_true", help="只跑自检，零 token")
-    ap.add_argument("--out", default="/tmp/menu_shape_ab.json")
+    ap.add_argument("--out", default="", help="读数落点（缺省：本进程私有临时目录，路径会打印）")
     a = ap.parse_args()
 
     print(f"== 自检（role={a.role}）==")
@@ -706,6 +720,8 @@ def main() -> int:
     if a.dry_run:
         return 0
 
+    out_path = Path(a.out) if a.out else _default_out()
+    print(f"\n读数落点 {out_path}")
     arms = [s for s in a.arms.split(",") if s]
     entries = {arm: _arm_entries(arm, a.role) for arm in arms}
     stubs = {arm: _arm_stubs(arm, a.role) for arm in arms}
@@ -738,7 +754,7 @@ def main() -> int:
                       f"{' ERR:' + rr['error'][:40] if rr['error'] else ''}", flush=True)
             row["arms"][arm] = _summarize(arm, r, recs, time.time() - t0)
         R["rounds"].append(row)
-        Path(a.out).write_text(json.dumps(R, ensure_ascii=False, indent=1, default=str))
+        out_path.write_text(json.dumps(R, ensure_ascii=False, indent=1, default=str))
 
     print("\n=== 逐轮配对（round, arm, 命中, 反向, 折不出, 撞上限, 模型轮数, 用时s）===")
     for arm in arms:
