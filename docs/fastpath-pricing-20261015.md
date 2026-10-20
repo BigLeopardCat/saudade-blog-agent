@@ -26,7 +26,7 @@
 
 两处**已知的读数陷阱**（都写在了代码注释里，这里再抄一遍）：
 
-- **离线套件对档位是瞎的** ⇒ `AGENT_FASTPATH=1` 同时进 `tests/run_all.py::_PINNED`
+- **离线套件对档位是瞎的** ⇒ `AGENT_FASTPATH=1` 同时进 `tests/conftest.py::_PINNED`
   （不钉的话：谁 shell 里 export 过它，整套就按另一档判，而本机与 CI 结论会不同）。
 - **两臂跑完必须核手臂身份**（`_arm_identity`）：环境变量没生效时两臂读数一模一样，那会被读成
   "快道不承重"。核法是**直接从跑出来的 golden trace 里数** `planner.fastpath` 与档位格。

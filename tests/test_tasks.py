@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """会话级任务状态（`agent/tasks.py`）单测：离线、秒级、零网络零 LLM。
 
 **为什么单独一套**：这一层是"模型说的"与"系统认定的"的分界线——登记内容由模型给
@@ -36,38 +35,38 @@
     那一段；一段都够不着 ⇒ 这一件**不登记**。`sources` 是**必填**关键字；
   · 本模块**不许 import `agent.graph`**（graph 是消费方，反向会成环）。
 """
+
+
 import ast
 import json
 import sys
 from pathlib import Path
 
+from _judge import collector
+
 ROOT = Path(__file__).resolve().parent.parent  # 仓根（测试统一在 tests/）
+
+
 sys.path.insert(0, str(ROOT))
+
 
 from agent import tasks as T  # noqa: E402
 
 FAILS: list[str] = []
-
-
-def check(desc: str, cond: bool, detail: str = "") -> None:
-    print(("  ✅ " if cond else "  ❌ ") + desc + (f"  [{detail}]" if detail else ""))
-    if not cond:
-        FAILS.append(desc)
+check = collector(FAILS)
 
 
 DEF = {"goal": "带我过去后开启一个特效",
        "steps": [{"label": "开启特效", "tool": "toggle_effect"}]}
 
-# 主人那句话（出处对账的输入）。形参 `sources` **必填**——忘传 = 静默放弃对账，那正是
-# 本仓最恨的一类失败（"缺键当 0"），所以这一份在每个调用点都要显式给。
+
 SRC = ("解冻账号 probe_target_1，顺便把那条待办勾完成",)
-# 现场那句（逐字抄自 golden `mix2_two_writes_one_breath_card_only`）。第二件的号是
-# `23`，而真链路里模型写过 `文章 2` —— 出处对账治的就是这一个字。
+
+
 MIX2 = "想建个新分类叫「临江仙」，文章 23 的标签也想换成「Rust」"
 
 
-# ── ① 归一化：模型给的形状 → 系统认的声明 ────────────────────────────────
-def test_normalize_requires_goal():
+def _test_normalize_requires_goal():
     print("\n[归一] goal 必填（没有目标就没有这件事，也就没有可对齐的 id）")
     check("非 dict → None", T.normalize_declaration(None) is None)
     check("缺 goal → None", T.normalize_declaration({"steps": []}) is None)
@@ -79,7 +78,7 @@ def test_normalize_requires_goal():
           str(got and got["goal"]))
 
 
-def test_normalize_empty_steps_is_invalid():
+def _test_normalize_empty_steps_is_invalid():
     """**空步骤既不是登记、也不是撤下**（20260927 拆形状的回归锁）。
 
     老形状（空步骤 ⇒ cancelled）的现场：模型把最后一步做完后，又用同一个 goal、
@@ -97,7 +96,7 @@ def test_normalize_empty_steps_is_invalid():
           (T.normalize_declaration(DEF) or {}).get("state") == "running")
 
 
-def test_normalize_drop():
+def _test_normalize_drop():
     print("\n[撤下] task_drop 只认 goal，产出与登记**同构**的载荷")
     got = T.normalize_drop({"goal": "  带我过去后  开启一个特效 "})
     check("goal 必填（没有目标就撤不掉任何一行）", T.normalize_drop({}) is None
@@ -117,7 +116,7 @@ def test_normalize_drop():
           .get("steps") == [])
 
 
-def test_normalize_steps_shape():
+def _test_normalize_steps_shape():
     print("\n[归一] 步骤：上限 8、缺字段回退、空步不成步")
     many = [{"label": f"第{i}步", "tool": "list_tags"} for i in range(12)]
     got = T.normalize_declaration({"goal": "g", "steps": many})
@@ -138,7 +137,7 @@ def test_normalize_steps_shape():
     check("steps 不是 list → 当没有步骤（声明无效，不是撤下）", got is None, str(got))
 
 
-def test_normalize_truncates_to_column_width():
+def _test_normalize_truncates_to_column_width():
     print("\n[归一] 列宽是硬约束（超了 DB 报 1406）")
     got = T.normalize_declaration({
         "goal": "目" * 400, "pending_question": "问" * 400,
@@ -150,7 +149,7 @@ def test_normalize_truncates_to_column_width():
     check(f"tool 截到 {T.TOOL_MAX}", len(got["steps"][0]["tool"]) == T.TOOL_MAX)
 
 
-def test_normalize_state_follows_pending_question():
+def _test_normalize_state_follows_pending_question():
     print("\n[归一] 有要问的问题 ⇒ input_required，否则 running（撤下是第三个入口）")
     plain = T.normalize_declaration(DEF)
     check("没问题 → running", plain is not None and plain["state"] == "running", str(plain))
@@ -166,8 +165,7 @@ def test_normalize_state_follows_pending_question():
           and T.normalize_drop({"goal": "g"})["state"] == "cancelled")
 
 
-# ── ② 确定性 id：登记 / 结算 / 撤下必须对齐同一行 ────────────────────────
-def test_idempotency_key_ignores_steps():
+def _test_idempotency_key_ignores_steps():
     print("\n[幂等] 键只按目标（步骤不进键）")
     g = DEF["goal"]
     k1 = T.idempotency_key_for(7, g)
@@ -190,7 +188,7 @@ def test_idempotency_key_ignores_steps():
           and all(c in "0123456789abcdef" for c in k1[3:]), k1)
 
 
-def test_task_id_is_derived_not_random():
+def _test_task_id_is_derived_not_random():
     print("\n[幂等] 任务 id 是确定性派生（不是随机数、不是 DB 自增）")
     k = T.idempotency_key_for(7, DEF["goal"])
     a, b = T.task_id_for(k), T.task_id_for(k)
@@ -200,8 +198,7 @@ def test_task_id_is_derived_not_random():
     check("id 不是键的前缀截断（换了哈希，不是泄键）", not k.startswith(a[3:]))
 
 
-# ── ③ 帧载荷：跨语言契约 ────────────────────────────────────────────────
-def test_frame_payload_matches_columns():
+def _test_frame_payload_matches_columns():
     print("\n[帧] 载荷字段一一对应 agent_task 的列，且**不带身份**")
     decl = T.normalize_declaration(DEF)
     pl = T.frame_payload(decl, 42)
@@ -227,7 +224,6 @@ def test_frame_payload_matches_columns():
           set(cancel) == set(pl), str(sorted(set(cancel) ^ set(pl))))
 
 
-# ── ④ 结算：只认回执、连续推进、不看模型的话 ─────────────────────────────
 def _task(**kw):
     base = {"task_id": "at_deadbeef", "goal": DEF["goal"],
             "steps": [{"label": "跳过去", "tool": "navigate_to"},
@@ -237,7 +233,7 @@ def _task(**kw):
     return base
 
 
-def test_advance_requires_receipts():
+def _test_advance_requires_receipts():
     print("\n[结算] 零回执不动；回执是唯一判据")
     check("零回执 → None", T.advance_by_receipts(_task(), []) is None)
     check("回执里的工具不是这一步声明的工具 → None",
@@ -253,7 +249,7 @@ def test_advance_requires_receipts():
           str(sorted(got or ())))
 
 
-def test_advance_does_not_jump():
+def _test_advance_does_not_jump():
     print("\n[结算] 只从当前游标**连续**推进（前面那步没做就停在那儿）")
     check("只有第二步的工具在场 → 不动（不跳跃）",
           T.advance_by_receipts(_task(), [{"tool": "toggle_effect", "ts": 9}]) is None)
@@ -266,7 +262,7 @@ def test_advance_does_not_jump():
     check("已推进到 1 后再拿第一步的回执 → None（游标只前进不回头）", late is None)
 
 
-def test_advance_honors_declared_after():
+def _test_advance_honors_declared_after():
     print("\n[结算] declared_after 之前的回执不算数（登记当轮不结算）")
     r = [{"tool": "navigate_to", "ts": 10}, {"tool": "toggle_effect", "ts": 11}]
     check("同轮登记（declared_after=10.5）→ 只认 11 那条 ⇒ 第一步没做、不动",
@@ -278,7 +274,7 @@ def test_advance_honors_declared_after():
                                 declared_after=10) is None)
 
 
-def test_settle_rows_pair_by_row_not_by_id():
+def _test_settle_rows_pair_by_row_not_by_id():
     """结算范围的两类行**逐行配对**（20260927 探针实测抓出的缺陷的回归锁）。
 
     缺陷形状：早先按 `task_id` 查表给下限（`fresh = {task_id: t0}` 再 `.get(tid)`），
@@ -304,7 +300,7 @@ def test_settle_rows_pair_by_row_not_by_id():
           and len(T.rows_to_settle("", [])) == 0)
 
 
-def test_advance_refuses_unreadable_steps():
+def _test_advance_refuses_unreadable_steps():
     print("\n[结算] 步骤解不出来就不结算（绝不猜'就当它做完了'）")
     no_steps = _task()
     no_steps.pop("steps")
@@ -320,7 +316,7 @@ def test_advance_refuses_unreadable_steps():
                                           {"tool": "navigate_to", "ts": 9}]) is not None)
 
 
-def test_advance_total_steps_is_the_floor():
+def _test_advance_total_steps_is_the_floor():
     print("\n[结算] total_steps 是'到头'的判据；坏值不许把任务判成完成")
     got = T.advance_by_receipts(_task(total_steps=3),
                                 [{"tool": "navigate_to", "ts": 9},
@@ -338,8 +334,7 @@ def test_advance_total_steps_is_the_floor():
           got is not None and got["cursor"] == 1, str(got and got["cursor"]))
 
 
-# ── ④b 第二种完成证据：系统认定（20261015）─────────────────────────────
-def test_already_reached_is_the_second_evidence():
+def _test_already_reached_is_the_second_evidence():
     """一个不产生回执的出口，在"靠回执结账"的账上**永远结不掉**。
 
     现场 `at_c2a9c87d`「给用户 demo 重置额度」：20261013 被判成"额度本来就是满的"
@@ -398,7 +393,7 @@ def test_already_reached_is_the_second_evidence():
           and T.advance_by_tools(_task(), None, satisfied=None) is None)
 
 
-def test_settlement_entries_have_one_cursor_walk():
+def _test_settlement_entries_have_one_cursor_walk():
     """两个入口、一份游标逻辑——**这条锁的是"别长出第二套"**。"""
     print("\n[结算] 回执入口不带第二种证据的形参；游标推进只有一处实现")
     src = (ROOT / "agent" / "tasks.py").read_text(encoding="utf-8")
@@ -423,8 +418,7 @@ def test_settlement_entries_have_one_cursor_walk():
           "moved = cursor" in src)
 
 
-# ── ⑤ 读侧入口：形状容错 ────────────────────────────────────────────────
-def test_task_rows_tolerates_any_shape():
+def _test_task_rows_tolerates_any_shape():
     print("\n[读侧] 形状不对一律当没有（不阻断对话）")
     ok = {"task_id": "at_1", "goal": "g", "state": "running"}
     check("空串 → []", T.task_rows("") == [])
@@ -437,7 +431,7 @@ def test_task_rows_tolerates_any_shape():
     check("JSON 字符串（Rust 交回来的那条路）可用", T.task_rows(json.dumps([ok])) == [ok])
 
 
-def test_settled_by_receipts():
+def _test_settled_by_receipts():
     print("\n[完成>撤下] 这一行是不是已经按回执做完了（与流尾结算同源）")
     check("两步都做完 ⇒ True",
           T.settled_by_receipts(_task(), [{"tool": "navigate_to", "ts": 9},
@@ -454,7 +448,7 @@ def test_settled_by_receipts():
           T.settled_by_receipts(_task(cursor=1), [{"tool": "toggle_effect", "ts": 10}]))
 
 
-def test_drop_is_completion():
+def _test_drop_is_completion():
     print("\n[完成>撤下] task_drop 的确定性闸：做完了就不许撤下")
     goal = DEF["goal"]
     conv = 20260927
@@ -490,7 +484,7 @@ def test_drop_is_completion():
     check("说清'系统会自己结算'（免得模型回头又去清理一次）", "结算" in note)
 
 
-def test_render_open_tasks():
+def _test_render_open_tasks():
     print("\n[注入] 只渲染未完结态 + 抹掉能破坏框架的字符")
     check("没有行 → 空串（调用方据此不注入）", T.render_open_tasks("") == "")
     check("全是终态 → 空串", T.render_open_tasks(json.dumps(
@@ -526,8 +520,7 @@ def test_render_open_tasks():
     check("limit=0 至少渲染一条（不产出只有抬头的空块）", "at_1" in out5)
 
 
-# ── ⑥ 交给 narrator 的两段文本 ──────────────────────────────────────────
-def test_declaration_note_is_single_line():
+def _test_declaration_note_is_single_line():
     print("\n[注记] 单行（会被写进计划契约的 NOTE: 行）")
     running = T.normalize_declaration(DEF)
     for frames in (True, False):
@@ -545,7 +538,7 @@ def test_declaration_note_is_single_line():
     check("撤下轮不出现'还没做完'（它不是未完结）", "还没做完" not in out)
 
 
-def test_declaration_nudge_offers_both_paths():
+def _test_declaration_nudge_offers_both_paths():
     print("\n[纠偏] '只登记、既没做也没问' → 摊开事实、两条路自己选")
     out = T.declaration_nudge(T.normalize_declaration(DEF))
     check("无换行", "\n" not in out)
@@ -559,11 +552,7 @@ def test_declaration_nudge_offers_both_paths():
           "task_drop" in T.TASK_HOLD_DESC and "自动结算" in T.TASK_DROP_DESC)
 
 
-# ── ⑦ 意图清单 → 自动登记（20261008 批 ②）────────────────────────────────
-# 这一段的判据对着的是**同一个洞的两半**：判据侧（`eval/run_golden.py` 的
-# `require_task_goal_per_intent`）判"没上卡的每一件都要有登记"，机制侧就得"没上卡的
-# 每一件都登记"——所以下面每一条排除规则都要在**两侧**找得到，单看一侧不算数。
-def test_normalize_intents_drops_items_not_whole_list():
+def _test_normalize_intents_drops_items_not_whole_list():
     print("\n[意图] 逐项归一：坏的单项丢掉，好的照收（枚举的价值在别漏）")
     got = T.normalize_intents({"intents": [
         {"goal": "  解冻账号 probe_target_1 ", "workflow": "account_unfreeze"},
@@ -585,7 +574,7 @@ def test_normalize_intents_drops_items_not_whole_list():
           and T.TASK_MAX_INTENTS == 6)
 
 
-def test_intents_to_declarations_excludes_what_this_round_already_did():
+def _test_intents_to_declarations_excludes_what_this_round_already_did():
     print("\n[意图] 三条排除规则：办了的不登记、刚做完的不登记、已显式登记的不登记")
     ints = [{"goal": "解冻账号 probe_target_1", "workflow": "account_unfreeze"},
             {"goal": "把那条待办勾完成", "workflow": "dashboard_todo_done"}]
@@ -623,7 +612,7 @@ def test_intents_to_declarations_excludes_what_this_round_already_did():
               sources=SRC) != [])
 
 
-def test_intent_frames_is_the_single_entry():
+def _test_intent_frames_is_the_single_entry():
     print("\n[意图] intent_frames = ② 的唯一入口（取会话 id 这一步在它里面判）")
     ints = [{"goal": "把那条待办勾完成", "workflow": "dashboard_todo_done"}]
     frames = T.intent_frames(ints, role="admin", conversation_id=7, sources=SRC)
@@ -648,8 +637,7 @@ def test_intent_frames_is_the_single_entry():
           "宁可直接炸）", missing_src)
 
 
-# ── ⑨ goal 的出处对账（20261009）────────────────────────────────────────
-def test_reconcile_goal_requires_provenance():
+def _test_reconcile_goal_requires_provenance():
     print("\n[对账] goal 里的数字必须有出处：对不上就退回主人原话里那一段")
     check("goal 里没有数字 ⇒ 原样放行（绝大多数 goal 没有可对账的东西）",
           T.reconcile_goal("把那条待办勾完成", (MIX2,)) == "把那条待办勾完成")
@@ -674,7 +662,7 @@ def test_reconcile_goal_requires_provenance():
           T.reconcile_goal("   ", (MIX2,)) is None)
 
 
-def test_intents_reconcile_wired_and_counted():
+def _test_intents_reconcile_wired_and_counted():
     print("\n[对账] 整条清单过一遍：改写的改写、丢的丢，读数只记**将要登记**的那几件")
     ints = [{"goal": "建个分类叫「临江仙」", "workflow": "category_create"},
             {"goal": "把文章 2 的标签换成「Rust」", "workflow": "article_tags"}]
@@ -708,8 +696,7 @@ def test_intents_reconcile_wired_and_counted():
           == ints[1]["goal"])
 
 
-# ── ⑧ 结构锁 ────────────────────────────────────────────────────────────
-def test_module_does_not_import_graph():
+def _test_module_does_not_import_graph():
     print("\n[结构] tasks 不许 import agent.graph（会成环）")
     tree = ast.parse((ROOT / "agent" / "tasks.py").read_text(encoding="utf-8"))
     hits = []
@@ -740,36 +727,42 @@ def test_module_does_not_import_graph():
           and "search_knowledge_base" not in T.step_tool_enum("admin"))
 
 
-if __name__ == "__main__":
-    for fn in (test_normalize_requires_goal,
-               test_normalize_steps_shape,
-               test_normalize_truncates_to_column_width,
-               test_normalize_empty_steps_is_invalid,
-               test_normalize_drop,
-               test_normalize_state_follows_pending_question,
-               test_idempotency_key_ignores_steps,
-               test_task_id_is_derived_not_random,
-               test_frame_payload_matches_columns,
-               test_advance_requires_receipts,
-               test_advance_does_not_jump,
-               test_advance_honors_declared_after,
-               test_already_reached_is_the_second_evidence,
-               test_settlement_entries_have_one_cursor_walk,
-               test_settle_rows_pair_by_row_not_by_id,
-               test_advance_refuses_unreadable_steps,
-               test_advance_total_steps_is_the_floor,
-               test_task_rows_tolerates_any_shape,
-               test_settled_by_receipts,
-               test_drop_is_completion,
-               test_render_open_tasks,
-               test_declaration_note_is_single_line,
-               test_declaration_nudge_offers_both_paths,
-               test_normalize_intents_drops_items_not_whole_list,
-               test_intents_to_declarations_excludes_what_this_round_already_did,
-               test_intent_frames_is_the_single_entry,
-               test_reconcile_goal_requires_provenance,
-               test_intents_reconcile_wired_and_counted,
-               test_module_does_not_import_graph):
+def test_tasks():
+    for fn in (_test_normalize_requires_goal,
+               _test_normalize_steps_shape,
+               _test_normalize_truncates_to_column_width,
+               _test_normalize_empty_steps_is_invalid,
+               _test_normalize_drop,
+               _test_normalize_state_follows_pending_question,
+               _test_idempotency_key_ignores_steps,
+               _test_task_id_is_derived_not_random,
+               _test_frame_payload_matches_columns,
+               _test_advance_requires_receipts,
+               _test_advance_does_not_jump,
+               _test_advance_honors_declared_after,
+               _test_already_reached_is_the_second_evidence,
+               _test_settlement_entries_have_one_cursor_walk,
+               _test_settle_rows_pair_by_row_not_by_id,
+               _test_advance_refuses_unreadable_steps,
+               _test_advance_total_steps_is_the_floor,
+               _test_task_rows_tolerates_any_shape,
+               _test_settled_by_receipts,
+               _test_drop_is_completion,
+               _test_render_open_tasks,
+               _test_declaration_note_is_single_line,
+               _test_declaration_nudge_offers_both_paths,
+               _test_normalize_intents_drops_items_not_whole_list,
+               _test_intents_to_declarations_excludes_what_this_round_already_did,
+               _test_intent_frames_is_the_single_entry,
+               _test_reconcile_goal_requires_provenance,
+               _test_intents_reconcile_wired_and_counted,
+               _test_module_does_not_import_graph):
         fn()
     print("\n" + ("全部通过 ✅" if not FAILS else f"失败 {len(FAILS)} 项 ❌: {FAILS}"))
-    sys.exit(1 if FAILS else 0)
+
+    assert not FAILS, (
+        f"{len(FAILS)} 条未通过：" + "；".join(FAILS))
+
+
+if __name__ == "__main__":
+    test_tasks()

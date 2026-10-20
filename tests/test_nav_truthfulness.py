@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """导航族的两条如实性修复（纯离线：假 LLM 整轮 + 假 config，零网络）。
 
 两条都来自 20260926 晚的生产 trace，**方向相反**：一条是"没做却说做了"，
@@ -37,42 +36,60 @@
    桥当场换路由、陈述与动作同一时刻）。第五、六组用例锁这两向，外加"回执里的 cmd
    一字不动"。
 """
+
+
 import re
 import sys
 from pathlib import Path
 
+from _judge import collector
+
 ROOT = Path(__file__).resolve().parent.parent  # 仓根（20260924：测试统一搬进 tests/）
+
+
 sys.path.insert(0, str(ROOT))
 
+
+from _planner_stub import bind_tools_stub, toolcall_reply  # noqa: E402
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage  # noqa: E402
 
 import agent.deterministic_plan as D  # noqa: E402
 import agent.graph as G  # noqa: E402
 from agent.graph import (  # noqa: E402
-    _FALLBACK_CMD_PREFIX, _FALLBACK_CMD_PREFIX_DONE, _FALLBACK_NAV_NO_FRAME,
-    _cmd_prefix_corroborated, _cmd_prefix_fallback_text, _cmd_wire, _cmd_wires,
-    _claim_issue, _live_page_path, gate_node, parse_plan, plan_encode, plan_state, planner_node,
+    _FALLBACK_CMD_PREFIX,
+    _FALLBACK_CMD_PREFIX_DONE,
+    _FALLBACK_NAV_NO_FRAME,
+    _claim_issue,
+    _cmd_prefix_corroborated,
+    _cmd_prefix_fallback_text,
+    _cmd_wire,
+    _cmd_wires,
+    _live_page_path,
+    gate_node,
+    parse_plan,
+    plan_encode,
+    plan_state,
+    planner_node,
 )
 from agent.principal import Principal  # noqa: E402
 from agent.workflow_plan import instantiate_plan  # noqa: E402
-from _planner_stub import bind_tools_stub, toolcall_reply  # noqa: E402
 
 FAILS: list[str] = []
+check = collector(FAILS)
 
 
-def check(desc: str, cond: bool, detail: str = "") -> None:
-    print(("  ✅ " if cond else "  ❌ ") + desc + (f"  [{detail}]" if detail else ""))
-    if not cond:
-        FAILS.append(desc)
-
-
-# ── D1 现场原文（trace 20260926T212945 的回复，逐字）────────────────────────
 D1_REPLY = ("主人，已经带你跳到《文章向量空间图谱项目文档》这篇文章啦喵～就是随便挑的"
             "第一篇 public 文章，标题是 **文章向量空间图谱项目文档**（noteKey=46）。"
             "如果想看别的，比如置顶的 IoT 指南或者 asyncio 那篇，跟我说一声就好～")
+
+
 D1_LIST_FRAME = ("1. 《文章向量空间图谱项目文档》 noteKey=46\n"
                  "2. 《Memory Blog 项目文件结构说明》 noteKey=45")
+
+
 D1_NAV_FRAME = "页面已跳转：https://saudade.site/article/46"
+
+
 D1_NAV_CMD = {"kind": "navigate", "url": "https://saudade.site/article/46", "mode": "direct"}
 
 
@@ -81,12 +98,9 @@ def _nav_receipt(cmd=D1_NAV_CMD):
     return {"workflow": "navigate", "tool": "navigate_to", "cmd": cmd}
 
 
-# ── D4 洞⑪ 现场（trace 20261002T020256，逐字）──────────────────────────────
-# 主人「猫咪带我去你的设计文档」（站内**没有**这个页面）→ planner 选 chat/answer_only
-# （零帧零回执）→ narrator 回下面这句 → gate 判 PASS。**真值就在同一轮**：page_ctx 的
-# `page=` 是首页（`https://saudade.site/`）。三张现成的网都在测词形（见 graph.py 洞⑪
-# 头注），没有一条去核它。
 D4_REPLY = "主人，物联网平台页面已经打开啦～你现在应该能看到设备控制台了喵！"
+
+
 D4_PAGE_CTX = ("user_id=1, page=https://saudade.site/, title=Saudade Blog; "
                "current_effects=none; current_darkmode=on")
 
@@ -124,7 +138,7 @@ class _ScriptedLLM:
         return toolcall_reply(self.replies.pop(0))
 
 
-def test_param_problem_corrected_in_round():
+def _test_param_problem_corrected_in_round():
     """① planner 侧：参数不齐 ⇒ 同轮纠偏一次；仍不齐 ⇒ 确定性收口（不给 narrator）。"""
     print("[param_problem] 参数不齐的同轮纠偏与确定性收口（D1 现场形状）")
     nav_bad = ("WORKFLOW=navigate\nPARAMS={}\n"
@@ -196,7 +210,7 @@ def test_param_problem_corrected_in_round():
         G.get_llm = _orig
 
 
-def test_gate_nav_arrival_without_nav_frame():
+def _test_gate_nav_arrival_without_nav_frame():
     """② gate 侧：navigate 计划 + 本轮无任何导航帧 + 到达声称 ⇒ fallback。"""
     print("[gate] 无导航帧的到达声称（有帧轮也不能漏判）")
     _plan = plan_encode(instantiate_plan("navigate", {}))   # 真形状：参数不齐的 navigate
@@ -247,24 +261,19 @@ def test_gate_nav_arrival_without_nav_frame():
     check("没有到达声称 → 放行", not o4.get("fallback_text"), str(o4)[:80])
 
 
-# ── ④ 指代型导航（20261007T232014）：目标住在**上一轮那句话**里 ────────────────
-# 主人上一轮拿到《…架构文档》的直达链接（`/article/19`），接着只说了三个字「带我过去」。
-# 计划落到 chat/answer_only（planner 两次零调用），narrator 于是写下
-# 「马上带你去我的设计文档那一篇…页面这就过去喵！」——本轮**一条导航命令都没有**。
-# 两处修：判据（承诺式，现家 `_nav_no_frame_clause`；原 5b2 写死 workflow==navigate
-# ⇒ 这一轮整条判据一次都没跑）与能力（指代型导航快道，零 LLM 把上一轮那条唯一
-# 站内链接做成 navigate 计划）。
 _PREV_WITH_LINK = ("找到啦妈妈～我的设计文档就是这一篇：\n"
                    "**《Saudade Blog AI Agent（泠月喵）架构文档》**，是置顶的公开文章。\n"
                    "直达链接在这儿，点标题就能过去："
                    "[Saudade Blog AI Agent（泠月喵）架构文档](https://saudade.site/article/19)\n"
                    "（站内搜“设计文档”没有命中——那几篇带“文档”字样的里，讲我这套 agent 的"
                    "就是上面这篇架构文档。）")
+
+
 _D3_LIE = ("好嘞妈妈～马上带你去我的设计文档那一篇（《Saudade Blog AI Agent（泠月喵）"
            "架构文档》，/article/19），页面这就过去喵！")
 
 
-def test_nav_promise_claim_without_nav_command():
+def _test_nav_promise_claim_without_nav_command():
     """④ 判据侧：这一轮压根没跳成，回复却承诺"马上带你过去" ⇒ fallback（技能无关）。"""
     print("[洞⑭] 承诺式导航声称 × 任何技能/任何计划")
     chat = plan_encode(instantiate_plan("chat", {}))
@@ -326,7 +335,7 @@ def test_nav_promise_claim_without_nav_command():
                             receipts=[])))
 
 
-def test_nav_exec_claim_with_unrelated_frames():
+def _test_nav_exec_claim_with_unrelated_frames():
     """④ 判据侧：**有帧 ≠ 那件事发生了**——帧是别的工具时，"系统执行了跳转"照样判
     （20261008 补的 ④支）。
 
@@ -370,7 +379,7 @@ def test_nav_exec_claim_with_unrelated_frames():
           r2 is None, str(r2 and r2[0]))
 
 
-def test_referent_nav_fast_path():
+def _test_referent_nav_fast_path():
     """④ 能力侧：无目标的移动祈使 + 上一轮唯一一条站内链接 ⇒ 零 LLM 实例化 navigate。"""
     print("[referent_nav] 指代型导航快道（零 LLM）")
     nav_pre = AIMessage(content=_PREV_WITH_LINK)
@@ -411,7 +420,7 @@ def test_referent_nav_fast_path():
         G.get_llm = _orig
 
 
-def test_referent_nav_lead_shell():
+def _test_referent_nav_lead_shell():
     """⑤ 指代型导航快道：「带我去」前面那些衬字（称呼 / 语气词）到底由谁剥。
 
     `_REFERENT_NAV_RE` 里**内联着一份衬字表**，而它上游的 `_bare` 已经先剥过一层
@@ -484,7 +493,7 @@ def test_referent_nav_lead_shell():
           hit("宝贝带我过去") == "/article/19")
 
 
-def test_cmd_prefix_fallback_truthful():
+def _test_cmd_prefix_fallback_truthful():
     """③ 做了却说没做：命令前缀的兜底文案按**回执**对账（D2 现场）。"""
     print("[cmd_prefix] 前缀被打回时的如实兜底（回执里真有那串命令）")
     d2_clause = ("主人，这一轮系统确实执行了跳转，回执里写着 navigate_to 把路径 "
@@ -540,7 +549,7 @@ def test_cmd_prefix_fallback_truthful():
           hit2 is not None and hit2[1] == _FALLBACK_CMD_PREFIX)
 
 
-def test_whole_page_target_not_claimed_as_done():
+def _test_whole_page_target_not_claimed_as_done():
     """③ **还没跳就别说跳完了**（trace 20261001T230706，主人报「声称转跳完成是在转跳前完成」）。
 
     现场：t≈3.226 执行 `navigate_to("/device-console/")`，t≈3.236 系统印出
@@ -585,7 +594,7 @@ def test_whole_page_target_not_claimed_as_done():
           "等主人确认" in str(r_cfm) and "已跳转" not in str(r_cfm), str(r_cfm))
 
 
-def test_nav_family_not_printed_into_fact_block():
+def _test_nav_family_not_printed_into_fact_block():
     """接线锁：**命令族不进用户可见事实块**（20261002 主人拍板）——跳转的交代归泠月自己说。
 
     主人原话：「不要显示〔系统〕 页面即将跳转：https://saudade.site/device-console/
@@ -600,7 +609,10 @@ def test_nav_family_not_printed_into_fact_block():
     """
     print("[whole-page] 命令族不进事实块（交代归 narrator）")
     from agent.factblock import (
-        action_facts, block_of, is_action_family, is_block_family,
+        action_facts,
+        block_of,
+        is_action_family,
+        is_block_family,
     )
     from tools.base import navigate_to
 
@@ -618,7 +630,7 @@ def test_nav_family_not_printed_into_fact_block():
           str(action_facts([receipt])))
 
 
-def test_gate_wiring_for_prefix_text():
+def _test_gate_wiring_for_prefix_text():
     """接线锁：gate 真的把回执传给了 `_claim_issue`（漏传是静默的）。"""
     print("[cmd_prefix] gate → _claim_issue 的回执接线（结构锁）")
     import inspect
@@ -631,7 +643,7 @@ def test_gate_wiring_for_prefix_text():
           "frames_text=" not in src)
 
 
-def test_cmd_frame_wiring():
+def _test_cmd_frame_wiring():
     """④ 批次 2 的**接线锁**：`__CMD__` 帧在四端各接了一次，漏一处全是静默坏路。
 
     这不是"能力测试"而是接线测试——本仓吃过亏：`graph.py` 顶部加一句
@@ -677,7 +689,7 @@ def test_cmd_frame_wiring():
           i_cmd > 0 and i_catch > i_cmd)
 
 
-def test_gate_nav_present_claim_verified_against_page_ctx():
+def _test_gate_nav_present_claim_verified_against_page_ctx():
     """④ 洞⑪（20261002 02:02）：零帧轮的「主人现在在 X 页」→ 与 page= **真值**核对。
 
     这一族与前三条的关系：①②③ 判的都是**词形**（"已经带你跳到"长什么样），本族判的是
@@ -926,18 +938,18 @@ def test_gate_nav_present_claim_verified_against_page_ctx():
 
 
 def main():
-    for fn in (test_param_problem_corrected_in_round,
-               test_gate_nav_arrival_without_nav_frame,
-               test_nav_promise_claim_without_nav_command,
-               test_nav_exec_claim_with_unrelated_frames,
-               test_referent_nav_fast_path,
-               test_referent_nav_lead_shell,
-               test_cmd_prefix_fallback_truthful,
-               test_whole_page_target_not_claimed_as_done,
-               test_nav_family_not_printed_into_fact_block,
-               test_gate_nav_present_claim_verified_against_page_ctx,
-               test_gate_wiring_for_prefix_text,
-               test_cmd_frame_wiring):
+    for fn in (_test_param_problem_corrected_in_round,
+               _test_gate_nav_arrival_without_nav_frame,
+               _test_nav_promise_claim_without_nav_command,
+               _test_nav_exec_claim_with_unrelated_frames,
+               _test_referent_nav_fast_path,
+               _test_referent_nav_lead_shell,
+               _test_cmd_prefix_fallback_truthful,
+               _test_whole_page_target_not_claimed_as_done,
+               _test_nav_family_not_printed_into_fact_block,
+               _test_gate_nav_present_claim_verified_against_page_ctx,
+               _test_gate_wiring_for_prefix_text,
+               _test_cmd_frame_wiring):
         fn()
     print()
     if FAILS:
@@ -949,5 +961,12 @@ def main():
     return 0
 
 
+def test_nav_truthfulness():
+    main()
+
+    assert not FAILS, (
+        f"{len(FAILS)} 条未通过：" + "；".join(FAILS))
+
+
 if __name__ == "__main__":
-    sys.exit(main())
+    test_nav_truthfulness()

@@ -16,7 +16,8 @@
 
 所以：**大部分有价值的贡献（判据、确定性决策、工具契约、文档）不需要跑起整套系统。**
 这也是本仓把整套判据做成"秒级、离线、无 LLM"的原因——判据必须能在任何一台机器上跑。
-（套件数量这里**不写死**：清单的唯一事实源是 `tests/run_all.py` 按磁盘枚举，写一个数就注定再漂一次。）
+（套件数量这里**不写死**：清单的唯一事实源是 pytest 按目录收集 `tests/`
+（`pyproject.toml` 的 `testpaths`），写一个数就注定再漂一次。）
 
 **L2 为什么"在自己的部署上也跑不起来"（20261006 补）**：`eval/golden/basic.jsonl` 的期望
 锚在**维护者那个站点**的文章上（术语表从正文派生、检索用例期望命中的就是那几篇）。对着
@@ -35,22 +36,27 @@ eval/fixtures/golden_smoke.jsonl`；**除你自己的 LLM key 之外不需要任
 git clone https://github.com/BigLeopardCat/saudade-blog-agent
 cd saudade-blog-agent
 uv sync                       # 依赖一律 == 钉死，uv.lock 是唯一事实源
-.venv/bin/python tests/run_all.py
+.venv/bin/python -m pytest -q
 ```
 
-`tests/run_all.py` 是**套件清单的唯一事实源**：它按**磁盘**枚举 `tests/*.py`
-（`_` 开头的辅助模块和它自己除外）。加一个套件**不用**改 CI、不用改夜间脚本、
+**套件清单的唯一事实源是"pytest 按目录收集 `tests/`"**（`pyproject.toml` 的
+`testpaths`；收集规则是默认的 `test_*.py`）。加一个套件**不用**改 CI、不用改夜间脚本、
 不用改任何文档——落一个 `tests/test_xxx.py` 上去，它下一轮就在跑。
+（20261020 之前这一步由自研 runner `tests/run_all.py` 做，那套 180 个裸脚本判据当天
+整体转成原生 pytest，runner 删除；逐批过程见 `changelog.d/20261020-pytest-migration-*.md`。）
 
-内部它会钉住出厂档并**整份不读 `.env`**（`SAUDADE_IGNORE_ENV_FILE=1`），
-为的是让判据不随运维取值漂移——"本机绿、CI 红，而两边看的都不是代码"是本仓
-最贵的一类事故，已经被抓到过好几次。
+`tests/conftest.py` 会在**收集之前**钉住出厂档并**整份不读 `.env`**
+（`SAUDADE_IGNORE_ENV_FILE=1`），为的是让判据不随运维取值漂移——"本机绿、CI 红，而两边
+看的都不是代码"是本仓最贵的一类事故，已经被抓到过好几次。它还负责跨套件的全局还原
+（autouse 的 `_process_isolation`）：多个套件共用一个进程之后，"谁改了全局没还原"会
+**打到别人身上**，那一层把差异逐条打出来。
 
 ## 2. 提交之前
 
 ```bash
-.venv/bin/python tests/run_all.py                              # 全部离线套件
+.venv/bin/python -m pytest -q                                  # 全部离线套件
 uvx ruff@0.14.4 check --select F821 --no-cache .               # 未定义名扫描
+bash scripts/dev/coverage.sh                                   # 顺带一份覆盖率报告（非门禁）
 ```
 
 第二条只用一条规则（F821）是刻意的：它是"名字只在另一个作用域存在"这类

@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """台账年龄标注单测（纯函数、零网络、零 LLM，秒级）。
 
 被测 = `server.annotate_exec_ages()`：给跨轮执行记忆每行的行首时间补一个**系统算好的**
@@ -16,35 +15,42 @@
   · 解析不了的时间戳原样留着（不猜、也不标"刚刚"）；
   · **只进注入**：gate 判据（洞⑦ 台账否认）读的 `_ledger_for_graph` 必须是原文。
 """
+
+
 import json
 import re
 import sys
 import types
-from pathlib import Path
 from datetime import datetime
+from pathlib import Path
+
+from _judge import collector
 
 ROOT = Path(__file__).resolve().parent.parent  # 仓根（20260924：测试统一搬进 tests/）
+
+
 sys.path.insert(0, str(ROOT))
+
+
 sys.path.insert(0, str(ROOT / "eval"))
 
-import server  # noqa: E402
+
 import run_golden as rg  # noqa: E402  （夹具占位符展开：expand_now / build_request）
+
 import agent.graph as G  # noqa: E402  （提示词正文本体；20261014 起住在 agent/prompts.py）
+import server  # noqa: E402
 
 FAILS: list[str] = []
-
-
-def check(desc: str, cond: bool, detail: str = "") -> None:
-    print(("  ✅ " if cond else "  ❌ ") + desc + (f"  [{detail}]" if detail else ""))
-    if not cond:
-        FAILS.append(desc)
+check = collector(FAILS)
 
 
 NOW = datetime(2026, 9, 25, 4, 2, 0)
+
+
 SERVER_LINE = "09-25 00:42 查看服务器状态 — 服务器状态: CPU 30.0%／负载 0.45／内存 60%／磁盘 / 69%"
 
 
-def test_annotation_semantics():
+def _test_annotation_semantics():
     print("[标注] 年龄与过期标记")
     check("3 小时 20 分前的记录标出年龄与过期",
           server.annotate_exec_ages(SERVER_LINE, NOW).startswith(
@@ -67,7 +73,7 @@ def test_annotation_semantics():
           server.EXEC_STALE_MINUTES == 10, str(server.EXEC_STALE_MINUTES))
 
 
-def test_edge_cases():
+def _test_edge_cases():
     print("[边界] 跨年 / 脏行 / 无时间戳")
     check("跨年：1 月 1 日看 12-31 23:50 记成 12 分钟前，不是十一个月后",
           "（12 分钟前·已过期）" in server.annotate_exec_ages(
@@ -89,7 +95,7 @@ def test_edge_cases():
           got)
 
 
-def test_raw_ledger_stays_raw():
+def _test_raw_ledger_stays_raw():
     print("[注入边界] 只有注入块带年龄，gate 判据读的原文不带")
     req = types.SimpleNamespace(executions="09-25 00:42 查看服务器状态 — CPU 30.0%／负载 0.45",
                                 pending_action="", execution_rows="")
@@ -110,7 +116,7 @@ def test_raw_ledger_stays_raw():
           "已过期" in block and "6c" in block and "刚才" in block)
 
 
-def test_prompt_wiring():
+def _test_prompt_wiring():
     print("[接线] 规划纪律 6c 与叙述纪律 22 都在，且与 6b 划清边界")
     # 20261014：这两串正文（planner 模板 / 叙述纪律）已从 `agent/graph.py` 搬到
     # `agent/prompts.py` ⇒ 断言改指**常量本体**（模型真正读到的那串）。判据形状与措辞
@@ -131,7 +137,7 @@ def test_prompt_wiring():
           and "『已执行』行行首时间" in (ROOT / "server.py").read_text(encoding="utf-8"))
 
 
-def test_fixture_intent():
+def _test_fixture_intent():
     """台账时间戳的**两态声明**（20261001）：写死的日期 = 判定随挂钟漂移。
 
     台账行首时间会按**运行时刻**算年龄，超 10 分钟标「·已过期」，而规划纪律 6c 又规定
@@ -185,8 +191,8 @@ def test_fixture_intent():
 
 
 def main():
-    for fn in (test_annotation_semantics, test_edge_cases,
-               test_raw_ledger_stays_raw, test_prompt_wiring, test_fixture_intent):
+    for fn in (_test_annotation_semantics, _test_edge_cases,
+               _test_raw_ledger_stays_raw, _test_prompt_wiring, _test_fixture_intent):
         fn()
     if FAILS:
         print(f"\n=== {len(FAILS)} 项失败 ===")
@@ -196,5 +202,12 @@ def main():
     print("\n=== 全部通过 ===")
 
 
-if __name__ == "__main__":
+def test_ledger_age():
     main()
+
+    assert not FAILS, (
+        f"{len(FAILS)} 条未通过：" + "；".join(FAILS))
+
+
+if __name__ == "__main__":
+    test_ledger_age()

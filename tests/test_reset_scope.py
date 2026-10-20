@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """`__RESET__` 的 scope 契约（20261001）：命令缓冲该不该跟着一起作废。
 
 ## 为什么这条判据存在
@@ -32,27 +31,30 @@
   · `run_golden` 的 `forbid_fallback` 判的是 scope 而不是 `resets` 计数（20261002 补，
     见 ④ 节——同一条键、同一个计数，两个 scope 的结论**相反**）。
 """
+
+
 import re
 import sys
 from pathlib import Path
 
+from _judge import collector
+
 ROOT = Path(__file__).resolve().parent.parent  # 仓根（测试统一在 tests/）
+
+
 sys.path.insert(0, str(ROOT))
+
+
 sys.path.insert(0, str(ROOT / "eval"))
+
 
 from run_golden import fallback_resets, parse_reset  # noqa: E402
 
 FAILS: list[str] = []
+check = collector(FAILS)
 
 
-def check(desc: str, cond: bool, detail: str = "") -> None:
-    print(("  ✅ " if cond else "  ❌ ") + desc + (f"  [{detail}]" if detail else ""))
-    if not cond:
-        FAILS.append(desc)
-
-
-# ── ① parse_reset：golden 读侧的唯一实现 ─────────────────────────────────────
-def test_parse_reset():
+def _test_parse_reset():
     print("\n[读侧] `__RESET__:<scope>:<理由>` 的解析")
     check("all + 理由", parse_reset("__RESET__:all:叙述缺少依据，正在重新查证")
           == ("all", "叙述缺少依据，正在重新查证"), str(parse_reset("__RESET__:all:x")))
@@ -77,8 +79,7 @@ def test_parse_reset():
           and parse_reset("__RESET__:fallback:x")[0] == "all")
 
 
-# ── ② server 侧：两个调用点各用各的 scope ────────────────────────────────────
-def test_server_call_sites():
+def _test_server_call_sites():
     print("\n[写侧] server.py 的两个分支发各自的 scope")
     src = (ROOT / "server.py").read_text(encoding="utf-8")
     check("帧形是 `__RESET__:{scope}:{reason}` 一处实现",
@@ -104,8 +105,7 @@ def test_server_call_sites():
           len(calls) == 2 and all("," in c for c in calls), str(calls))
 
 
-# ── ③ 前端读同一份字面（跨端守卫）────────────────────────────────────────────
-def test_frontend_reads_same_scope():
+def _test_frontend_reads_same_scope():
     print("\n[跨端] 前端解析的是同一份 scope 字面")
     # 读的是**本仓**这份（20261001 起 `frontend/` 随看板娘一起从博客仓搬进来、按 MIT 分发）。
     # 以前这里走 `_parent_repo.read(..., "frontend/public/live2d-widgets/chat-stream.js")`：
@@ -125,8 +125,7 @@ def test_frontend_reads_same_scope():
     check(f"除声明外清空命令缓冲只出现一次（实得 {clears}）", clears == 1, str(clears))
 
 
-# ── ④ golden 的 forbid_fallback：判 scope，不判计数（20261002）────────────────
-def test_forbid_fallback_reads_scope():
+def _test_forbid_fallback_reads_scope():
     """同一条键、同一个 `resets` 计数，两个 scope 的结论**相反**。
 
     旧口径（`if gold["forbid_fallback"] and result["resets"]`）把"打回重规划"与"终局
@@ -168,9 +167,15 @@ def test_forbid_fallback_reads_scope():
           '"reset_scopes": reset_scopes, "fallback_reasons": fallback_reasons,' in src)
 
 
-if __name__ == "__main__":
-    for fn in (test_parse_reset, test_server_call_sites, test_frontend_reads_same_scope,
-               test_forbid_fallback_reads_scope):
+def test_reset_scope():
+    for fn in (_test_parse_reset, _test_server_call_sites, _test_frontend_reads_same_scope,
+               _test_forbid_fallback_reads_scope):
         fn()
     print("\n" + ("全部通过 ✅" if not FAILS else f"失败 {len(FAILS)} 项 ❌: {FAILS}"))
-    sys.exit(1 if FAILS else 0)
+
+    assert not FAILS, (
+        f"{len(FAILS)} 条未通过：" + "；".join(FAILS))
+
+
+if __name__ == "__main__":
+    test_reset_scope()

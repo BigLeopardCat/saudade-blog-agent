@@ -38,7 +38,7 @@ steps:
                         path: _parent, sparse-checkout: src/routes, fetch-depth: 1,
                         persist-credentials: false）
   - 落位自检：test -f _parent/src/routes/chat.rs
-  - uv run python tests/run_all.py        # env: SAUDADE_PARENT_REPO=<ws>/_parent
+  - uv run --frozen pytest -q -n 4        # env: SAUDADE_PARENT_REPO=<ws>/_parent
                                           #      SAUDADE_REQUIRE_PARENT=1
 ```
 
@@ -103,6 +103,8 @@ steps:
 - **本机预演**（20260928）：把父仓按 CI 的同一形态拉一份（`--depth 1` + `sparse-checkout
   set src/routes`），然后
   `SAUDADE_PARENT_REPO=<那份> SAUDADE_REQUIRE_PARENT=1 .venv/bin/python tests/run_all.py`
+  （当时的入口；该 runner 已于 20261020 随测试转 pytest 删除，今天同一件事是
+  `.venv/bin/python -m pytest -q`）
   → **60/60 通过**；逐个跑七处守卫，`⏭ 跳过父仓断言` 命中数 **0/7**（= 都真判了）。
 - **CI 首跑**（20260928，run `36435335977`，提交 `335f8ca`）：**绿**。现场读数——父仓 checkout
   与落位自检两步通过；离线套件 `60/60`；日志里 `跳过父仓断言` 命中 **0**（= 七处守卫在 CI 里

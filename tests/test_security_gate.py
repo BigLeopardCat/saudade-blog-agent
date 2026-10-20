@@ -1,0 +1,313 @@
+# -*- coding: utf-8 -*-
+"""安全扫描棘轮（`eval/security_gate.py`）的**接线与账**判据。
+
+**为什么单起一套**：同 `tests/test_except_gate.py`——一道闸判的是"仓库里的 finding 有没有
+变多"，它自己**没有**判"账是不是还在量同一件事"。而它的失效方式全在那一边：
+
+| 坏法 | 会怎样 | 哪一条钉它 |
+|---|---|---|
+| `pyproject.toml` 里加一句 `[tool.bandit]` | bandit **自动发现**它 ⇒ 少报、闸报绿 | ③ |
+| 某个文件里加一行 `# nosec` | 那条 finding 不进 `results`、只进 `metrics.nosec` | ③ |
+| 换 bandit 跑在哪个解释器上 | 同一份源码 3.10 读 205 / 3.12 读 211 ⇒ 换了条目集 | ② |
+| 版本行只认一种启动器形状 | CI 走 `-m`、印 `__main__.py 1.9.4` ⇒ 闸恒退 3 | ⑥ |
+| 排除面交给 bandit 的 `--exclude` | target 是 `.` 时它**空转** ⇒ CI 把 `.venv` 扫进来 | ⑦ |
+| 键退回"光文件" | 同文件里 B105 换 B608 按文件数是"没变" | ②（`by_key` 的形状） |
+| CI 没接这一步 | 闸在本机绿、在 CI 从不运行 | ④ |
+| 闸自己坏了（JSON 解析、判据恒绿） | 全部绿 | ⑤（跑它自带的 `_self_check`） |
+
+用法：
+    uv run pytest tests/test_security_gate.py -v
+    uv run python tests/test_security_gate.py
+"""
+
+from __future__ import annotations
+
+import ast
+import fnmatch
+import importlib.util
+import json
+import pathlib
+import re
+import tomllib
+
+HERE = pathlib.Path(__file__).resolve().parent
+ROOT = HERE.parent
+
+_GATE = ROOT / "eval" / "security_gate.py"
+_BASE = ROOT / "eval" / "security_baseline.json"
+
+
+def _gate_module():
+    """加载闸本身（只跑模块体：常量 + 定义，无副作用）。"""
+    spec = importlib.util.spec_from_file_location("_security_gate_under_test", _GATE)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def _dev_group() -> list[str]:
+    data = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+    return data.get("dependency-groups", {}).get("dev", [])
+
+
+def _report(bad: list[str]) -> None:
+    assert not bad, f"{len(bad)} 条未通过：" + "；".join(bad)
+
+
+def _calls_in_main(name: str) -> int:
+    """`main()` 函数体里 `name(...)` 的调用处数。
+
+    **只数"整份源码里有没有这个名字"是不够的**：守卫的定义本身、别的助手里的调用都算，
+    于是把调用从 `main()` 里挪走（守卫变死代码）也照样绿。
+    """
+    return _calls_in("main", name)
+
+
+def _calls_in(func: str, name: str) -> int:
+    """`func()` 函数体里 `name(...)` 的调用处数（同族：AST 比行号靠得住）。"""
+    tree = ast.parse(_GATE.read_text(encoding="utf-8"))
+    fn = next(n for n in tree.body
+              if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)) and n.name == func)
+    return sum(1 for n in ast.walk(fn)
+               if isinstance(n, ast.Call) and isinstance(n.func, ast.Name) and n.func.id == name)
+
+
+def test_gate_and_baseline_in_place():
+    """① 闸与账在位、账自洽（逐键之和 == total）、且**本闸自己的文件是零条**。"""
+    bad: list[str] = []
+    print("① 闸与账在位")
+    for p in (_GATE, _BASE):
+        ok = p.is_file()
+        print(f"  {'✅' if ok else '❌'} {p.relative_to(ROOT)}")
+        if not ok:
+            bad.append(f"{p.relative_to(ROOT)} 不在位")
+    if not _BASE.is_file():
+        _report(bad)
+    base = json.loads(_BASE.read_text(encoding="utf-8"))
+    by_key = base.get("by_key") or {}
+    ok = isinstance(base.get("total"), int) and base["total"] > 0
+    print(f"  {'✅' if ok else '❌'} 账里有读数  [total={base.get('total')}]")
+    if not ok:
+        bad.append("账里的 total 不是正整数")
+    ok = sum(by_key.values()) == base.get("total")
+    print(f"  {'✅' if ok else '❌'} 逐键之和 == total  "
+          f"[和={sum(by_key.values())} total={base.get('total')}]")
+    if not ok:
+        bad.append("账自己不自洽")
+    # **纪律 1 的自证**：不跳 subprocess 那三项，本闸自己的 `subprocess.run` 就会进账，
+    # 而"新文件必须零条"这条纪律一出生就是死的。
+    mine = sorted(k for k in by_key if k.startswith("eval/security_gate.py::"))
+    print(f"  {'✅' if not mine else '❌'} 本闸自己的文件零条（否则纪律 1 是死的）  [{mine}]")
+    if mine:
+        bad.append(f"本闸自己带 finding：{mine}")
+    _report(bad)
+
+
+def test_baseline_quantities_are_single_sourced():
+    """② 四个量（bandit 版本 / 解释器 / 跳过集 / 扫描面）都与各自的事实源同源。
+
+    **解释器**那一条是这一族里最像 `eval/type_gate.py` 的 `--python-executable` 的洞：
+    实测同一份源码、同一个 bandit 版本，跑在 3.10 上读 205 条、跑在 3.12 上读 211 条。
+    """
+    bad: list[str] = []
+    print("② 四个量只有一处事实源")
+    gate = _gate_module()
+    base = json.loads(_BASE.read_text(encoding="utf-8"))
+    pin = next((d.split("==", 1)[1] for d in _dev_group()
+                if isinstance(d, str) and d.startswith("bandit==")), None)
+    print(f"  {'✅' if pin else '❌'} dev 分组钉了 bandit 版本  [{pin}]")
+    if not pin:
+        bad.append("dev 分组里没有 bandit（CI 会跑不起来）")
+    ok = base.get("bandit_version") == pin
+    print(f"  {'✅' if ok else '❌'} 账里的版本 == dev 分组钉的  "
+          f"[账={base.get('bandit_version')} dev={pin}]")
+    if not ok:
+        bad.append("bandit 版本对不上")
+    ok = base.get("skips") == gate.SKIPS
+    print(f"  {'✅' if ok else '❌'} 账里的跳过集 == 闸里那份  [账={base.get('skips')}]")
+    if not ok:
+        bad.append("跳过集对不上（缩小扫描面 = 换一个量）")
+    ok = base.get("exclude") == gate.EXCLUDE and base.get("targets") == gate.TARGETS
+    print(f"  {'✅' if ok else '❌'} 账里的扫描面 == 闸里那份")
+    if not ok:
+        bad.append("扫描面对不上")
+    # 反控：把账里的跳过集改一格，这条判据必须不通过（证明它真的在比）
+    fake = dict(base)
+    fake["skips"] = [*gate.SKIPS, "B608"]
+    print(f"  {'✅' if fake["skips"] != gate.SKIPS else '❌'} 反控：账里跳过集换成别的 ⇒ 会红")
+    if fake["skips"] == gate.SKIPS:
+        bad.append("反控没生效（这条判据是恒真的）")
+    # `B602`/`B609`（不安全的变体）**不许**在跳过集里 —— 否则这一族真要看的东西没了。
+    leaked = sorted(set(gate.SKIPS) & {"B602", "B609"})
+    print(f"  {'✅' if not leaked else '❌'} 不安全的变体没有被跳  [{leaked or '无'}]")
+    if leaked:
+        bad.append(f"跳过了不安全的变体：{leaked}")
+    _report(bad)
+
+
+def test_no_auto_discovered_config_and_no_nosec():
+    """③ 两个"悄悄关闸"的口子：自动发现的配置源、`# nosec` 行内豁免。"""
+    bad: list[str] = []
+    print("③ 两个关闸的口子")
+    gate = _gate_module()
+    found = gate._config_sources()
+    print(f"  {'✅' if not found else '❌'} 盘上没有 bandit 会**自动读**的配置  [{found or '无'}]")
+    if found:
+        bad.append(f"有自动发现的配置源：{found}")
+    base = json.loads(_BASE.read_text(encoding="utf-8"))
+    ok = base.get("nosec") == 0
+    print(f"  {'✅' if ok else '❌'} 账里的 `# nosec` 是 0（它只许变小 ⇒ 等于不许用）  "
+          f"[{base.get('nosec')}]")
+    if not ok:
+        bad.append("账里已经有 nosec（行内豁免能悄悄把 finding 变没）")
+    # `_config_sources` 必须**在 `main()` 里**被调用（只数"源码里有没有这个名字"会把
+    # 定义处之外随便一处的调用也算上；而这里的定义本身不是 Call，所以"≥1"其实就等于
+    # "有一个调用点"——但那不保证它在 `main` 里）。
+    calls = _calls_in_main("_config_sources")
+    print(f"  {'✅' if calls else '❌'} `main()` 里真的调用了它（不是死代码）  [{calls} 处]")
+    if not calls:
+        bad.append("`main()` 里没有 `_config_sources` 的调用点（守卫是死代码）")
+    # 反控：`judge()` 对 nosec 变多必须红（证明那一格不是摆设）
+    j = gate.judge({}, {}, 1, 0)
+    print(f"  {'✅' if j else '❌'} 反控：`nosec` 变多 ⇒ `judge()` 必须报红")
+    if not j:
+        bad.append("nosec 变多没红")
+    _report(bad)
+
+
+def test_gate_is_wired_into_ci():
+    """④ CI 有一步**会执行**它，且那一行不手写工具版本。"""
+    bad: list[str] = []
+    print("④ 接在 CI 上")
+    yml = (ROOT / ".github" / "workflows" / "eval.yml").read_text(encoding="utf-8")
+    code = "\n".join(ln for ln in yml.splitlines() if not ln.lstrip().startswith("#"))
+    hits = [ln for ln in code.splitlines() if "eval/security_gate.py" in ln]
+    print(f"  {'✅' if hits else '❌'} CI 里有一行会执行 `eval/security_gate.py`  [{len(hits)} 行]")
+    if not hits:
+        bad.append("CI 没接这道闸（本机绿、CI 从不运行）")
+    hard = [ln for ln in hits if re.search(r"bandit[@=]|==\d", ln)]
+    print(f"  {'✅' if not hard else '❌'} 那一行不手写工具版本（版本只从 dev 分组来）")
+    if hard:
+        bad.append("CI 那一行手写了版本")
+    _report(bad)
+
+
+# 两种启动器**真实印出来**的那两行（各跑一次逐字抄下来）。默认启动器是第二条。
+_VER_OUTPUTS = {
+    "console script（`bandit --version`，本机配方的形状）":
+        "bandit 1.9.4\n  python version = 3.12.3 (main, Jun 19 2026, 12:46:06) [GCC 13.3.0]",
+    "`python -m bandit --version`（**默认启动器**，CI 走这条）":
+        "__main__.py 1.9.4\n  python version = 3.12.3 (main, Jun 19 2026, 12:46:06) [GCC 13.3.0]",
+}
+
+
+def test_version_line_parses_both_launcher_shapes():
+    """⑥ 版本那一行**两种启动器都认得**。
+
+    **为什么单列一条**：默认启动器是 `sys.executable -m bandit`（CI 走它），而它印的是
+    `__main__.py 1.9.4` 不是 `bandit 1.9.4`。只认后一种 ⇒ 那道闸在 CI 里**恒退 3**
+    （"跑不起来"），而本机配方用的是 uvx 那条 ⇒ **本机永远看不见**。PR #39 的 CI 就是这么红的。
+    """
+    bad: list[str] = []
+    print("⑥ 版本行的两种形状")
+    gate = _gate_module()
+    for name, out in _VER_OUTPUTS.items():
+        vm, pm = gate._VER_RE.search(out), gate._PY_RE.search(out)
+        got = (vm.group("v") if vm else None, pm.group("v") if pm else None)
+        ok = got == ("1.9.4", "3.12")
+        print(f"  {'✅' if ok else '❌'} {name}  [版本={got[0]} 解释器={got[1]}]")
+        if not ok:
+            bad.append(f"{name} 认不出来：{got}")
+    # 反控：**认不出来的必须真的认不出**（否则上面两格可能是"随便什么都匹配"）
+    junk = "Traceback (most recent call last):\n  ModuleNotFoundError: No module named 'bandit'"
+    ok = gate._VER_RE.search(junk) is None and gate._PY_RE.search(junk) is None
+    print(f"  {'✅' if ok else '❌'} 反控：跑不起来的那种输出**不**被当成版本行")
+    if not ok:
+        bad.append("反控没生效（正则把什么输出都当版本行）")
+    # 上面第一格不是"以后可能用到"：默认启动器就是 `-m` 那条 ⇒ CI 每天走的是它。
+    ok = '"-m", "bandit"' in _GATE.read_text(encoding="utf-8")
+    print(f"  {'✅' if ok else '❌'} 默认启动器确实是 `-m bandit`（CI 走的就是这一格）")
+    if not ok:
+        bad.append("默认启动器换了形状 ⇒ 这条判据的样本要跟着换，别让它静默漂")
+    _report(bad)
+
+
+# CI 那趟真实扫出来的路径形状（逐字抄自 run 39447397092 的失败日志）。
+_CI_PATHS = [
+    ".venv/lib/python3.12/site-packages/rich/pretty.py",
+    "./.venv/lib/python3.12/site-packages/uvicorn/server.py",
+    ".git/objects/pack/x.py",
+    ".pytest_cache/v/cache/x.py",
+    "frontend/dist/assets/x.py",
+]
+
+
+def test_exclude_surface_is_judged_by_the_gate_itself():
+    """⑦ **排除面由闸自己判**，不靠 bandit 的 `--exclude`（那个开关在 target 是 `.` 时空转）。
+
+    实测（真 `.venv` 目录，三种写法）：`--exclude ".venv,.git"` ⇒ **一条都排不掉**；
+    `--exclude "./.venv,./.git"` 与 `--exclude "*/.venv/*,*/.git/*"` ⇒ 排得掉。
+    成因在 bandit 自己：`discover_files()` 对每个 `-x` 项做 `if os.path.isdir(path)` ⇒
+    把裸名改写成 `.venv/*`，而 `_is_file_included()` 拿 os.walk 走出来的 `./.venv/lib/x.py`
+    去比 ⇒ 既 fnmatch 不上、也不是它的子串。
+    **本机为什么看不见**：worktree 里的 `.venv` 是**软链**（指向产线 venv），
+    `os.walk` 默认不跟软链 ⇒ 那个目录根本没被走过；CI 里它是真目录 ⇒ 460 条。
+    """
+    bad: list[str] = []
+    print("⑦ 排除面")
+    gate = _gate_module()
+    for p in _CI_PATHS:
+        ok = gate._excluded(p)
+        print(f"  {'✅' if ok else '❌'} 排掉  {p}")
+        if not ok:
+            bad.append(f"{p} 没被排掉")
+    for p in ("agent/graph.py", "tests/test_security_gate.py", "frontend/src/main.ts"):
+        ok = not gate._excluded(p)
+        print(f"  {'✅' if ok else '❌'} 保留  {p}")
+        if not ok:
+            bad.append(f"{p} 被误排（这是「见谁都排」）")
+    # 反控：**裸目录名那种写法必须排不掉** —— 否则这一条判不出上面那个 bug
+    old = [".venv", ".git", "node_modules", "__pycache__", ".mypy_cache",
+           ".ruff_cache", ".pytest_cache", ".coverage-data", "frontend/dist"]
+    vacuous = all(fnmatch.fnmatch(f"./{e}/x.py", e) for e in old)
+    print(f"  {'✅' if not vacuous else '❌'} 反控：裸名写法**不**匹配 `./<名>/x.py`（旧写法空转）")
+    if vacuous:
+        bad.append("反控没生效（裸名竟然匹配得上 ⇒ 这一条判不出东西）")
+    # 交给 bandit 的那份 glob：对 bandit 真会走出来的两种深度都要成立
+    globs = gate._exclude_globs()
+    ok = all(fnmatch.fnmatch(f"./{e}/x.py", g) and fnmatch.fnmatch(f"./a/b/{e}/x.py", g)
+             for e, g in zip(gate.EXCLUDE, globs))
+    print(f"  {'✅' if ok else '❌'} 交给 bandit 的 glob 对 `./<名>/x.py` 与嵌套都成立"
+          f"  [{globs[:2]}…]")
+    if not ok:
+        bad.append("glob 形状不成立（排除会空转）")
+    # 接线：`_run_json` 真的用了这份 glob（不是留着两套、跑的是另一套）
+    calls = _calls_in("_run_json", "_exclude_globs")
+    print(f"  {'✅' if calls else '❌'} `_run_json()` 里用的是它  [{calls} 处]")
+    if not calls:
+        bad.append("`_run_json` 没用 `_exclude_globs()`（两套写法会分岔）")
+    _report(bad)
+
+
+def test_gate_self_check_passes():
+    """⑤ 跑闸自带的正控/反控（`_self_check`）—— 没有这一段，"闸其实是空的"没人看着。"""
+    print("⑤ 闸自带的正控/反控")
+    gate = _gate_module()
+    try:
+        gate._self_check()
+    except AssertionError as e:
+        print(f"  ❌ 闸自检没过：{e}")
+        raise
+    print("  ✅ `_self_check()` 通过（计数 / 路径归一化 / 四条判据 / nosec / 幽灵键 都在）")
+
+
+if __name__ == "__main__":
+    for _fn in (test_gate_and_baseline_in_place,
+                test_baseline_quantities_are_single_sourced,
+                test_no_auto_discovered_config_and_no_nosec,
+                test_gate_is_wired_into_ci,
+                test_exclude_surface_is_judged_by_the_gate_itself,
+                test_version_line_parses_both_launcher_shapes,
+                test_gate_self_check_passes):
+        _fn()
+    print("\n全部通过")

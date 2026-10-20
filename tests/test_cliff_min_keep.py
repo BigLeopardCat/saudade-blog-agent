@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """相对断崖的**保底 top-K**（`rag/search.py::_CLIFF_MIN_KEEP`）的离线自测。
 
 **为什么单起一套**：断崖（α=0.25）此前只有一张**经验证书**——20260920 那次实跑的注释
@@ -31,30 +30,30 @@
 
 用法：.venv/bin/python tests/test_cliff_min_keep.py
 """
+
+
 from __future__ import annotations
 
 import inspect
 import sys
 from pathlib import Path
 
+from _judge import collector
+
 ROOT = Path(__file__).resolve().parent.parent
+
+
 sys.path.insert(0, str(ROOT))
+
 
 import rag.search as rs  # noqa: E402
 
 FAILED: list[str] = []
+check = collector(FAILED)
 
 
-def check(name: str, ok: bool, extra: str = "") -> None:
-    print(f"  {'✅' if ok else '❌'} {name}" + (f"  [{extra}]" if extra else ""))
-    if not ok:
-        FAILED.append(name)
-
-
-# ── 夹具：一篇"强势文档" + 两篇真答案 + 三篇尾巴 ─────────────────────────
-# 强势文档把 query 的五个实词各命中 4 次 ⇒ 分数（≈7.6）远高于后面每篇（≈0.4–1.1），
-# `top1×0.25 ≈ 1.9` 那条线因此**卡在真答案头顶**——这正是 20261010 的形状。
 _QUERY = "架构 端口 后端 前端 技术栈 部署 链路"
+
 
 _FIXTURE = [
     {"type": "note", "id": 90, "title": "架构文档",
@@ -81,13 +80,6 @@ def _build_fixture_index() -> rs.RagIndex:
     return ix
 
 
-ix = _build_fixture_index()
-rs._index = ix  # get_index() 的进程级单例指向夹具
-
-CFG = rs.cliff_config()
-K = CFG["min_keep"]
-
-
 def _keys(rows: list[dict]) -> list[str]:
     return [f"{r['type']}:{r['id']}" for r in rows]
 
@@ -98,50 +90,55 @@ def _scores() -> tuple[list, list]:
             rs.search(_QUERY, top_k=5, apply_cliff=False))
 
 
-_ON_ROWS, _OFF_ROWS = _scores()
-_ON, _OFF = _keys(_ON_ROWS), _keys(_OFF_ROWS)
-# 旧形状（整列按 top1×α 过滤）在这批语料上的结果——**夹具成立性**的证据，见 ①
-_OLD = _keys([r for r in _OFF_ROWS
-              if r["score"] >= _OFF_ROWS[0]["score"] * CFG["ratio"]])
+def test_cliff_min_keep():
+    ix = _build_fixture_index()
+    rs._index = ix  # get_index() 的进程级单例指向夹具
+    CFG = rs.cliff_config()
+    K = CFG["min_keep"]
+    _ON_ROWS, _OFF_ROWS = _scores()
+    _ON, _OFF = _keys(_ON_ROWS), _keys(_OFF_ROWS)
+    _OLD = _keys([r for r in _OFF_ROWS
+                  if r["score"] >= _OFF_ROWS[0]["score"] * CFG["ratio"]])
+    print(f"① 夹具成立：旧形状（整列过滤）必须真的切掉真答案，否则下面几段是空断言")
+    print(f"     开臂 {[(k, r['score']) for k, r in zip(_ON, _ON_ROWS)]}")
+    print(f"     关臂 {[(k, r['score']) for k, r in zip(_OFF, _OFF_ROWS)]}")
+    print(f"     旧形状 would-be {_OLD}")
+    check("强势文档坐稳 top-1（断层真的存在）", _OFF[:1] == ["note:90"], f"top1={_OFF[:1]}")
+    check("旧形状把候选收成 1 条（『富者愈富』的现场）", len(_OLD) == 1, f"{len(_OLD)} 条")
+    check("旧形状切掉了排在第 2 名、**在保底区内**的真答案 note:92",
+          "note:92" not in _OLD and _OFF.index("note:92") + 1 == 2,
+          f"关臂 rank={_OFF.index('note:92') + 1}")
+    print(f"\n② 保底 top-{K}：前 {K} 名的候选与名次必须与关臂逐条一致")
+    check(f"前 {K} 名逐条相同", _ON[:K] == _OFF[:K], f"{_ON[:K]} vs {_OFF[:K]}")
+    check("第 2 名的真答案 note:92 在两臂里都在（旧形状会把它切掉）",
+          "note:92" in _ON and "note:92" in _OFF)
+    check("裁掉的候选全都落在保底之外",
+          all(k in _OFF[K:] for k in _OFF if k not in _ON),
+          f"被裁 {[k for k in _OFF if k not in _ON]}")
+    print("\n③ 尾巴确实被裁（断崖的产出），且不是把候选清空到只剩冠军")
+    check("开臂严格短于关臂", len(_ON) < len(_OFF), f"{len(_ON)} < {len(_OFF)}")
+    check("开臂不止一条", len(_ON) > 1, f"{len(_ON)} 条")
+    check("开臂以 top-1 开头（断崖只删不排）", _ON[:1] == _OFF[:1])
+    print("\n④ 开关契约：默认 == 线上形态")
+    check("不传 apply_cliff 时与显式 True 一致", _ON == _keys(rs.search(_QUERY, top_k=5)))
+    check("三处入口的 apply_cliff 默认都是 True",
+          all(inspect.signature(fn).parameters["apply_cliff"].default is True
+              for fn in (rs.RagIndex._lexical_ranked, rs.RagIndex.search, rs.search)))
+    print("\n⑤ 判据同源：cliff_config() 报的就是实现里那两个数")
+    check("ratio / min_keep 两个键都在且是真数", set(CFG) == {"ratio", "min_keep"}
+          and isinstance(CFG["ratio"], float) and isinstance(CFG["min_keep"], int))
+    check("min_keep ≥ 3（保底不许被调小到看不见）", CFG["min_keep"] >= 3, str(CFG["min_keep"]))
+    check("cliff_config 与模块常量同源", CFG["ratio"] == rs._CLIFF_RATIO
+          and CFG["min_keep"] == rs._CLIFF_MIN_KEEP)
+    print()
+    if FAILED:
+        print(f"❌ {len(FAILED)} 项未通过：" + "、".join(FAILED))
+        sys.exit(1)
+    print("✅ 全部通过")
 
-print(f"① 夹具成立：旧形状（整列过滤）必须真的切掉真答案，否则下面几段是空断言")
-print(f"     开臂 {[(k, r['score']) for k, r in zip(_ON, _ON_ROWS)]}")
-print(f"     关臂 {[(k, r['score']) for k, r in zip(_OFF, _OFF_ROWS)]}")
-print(f"     旧形状 would-be {_OLD}")
-check("强势文档坐稳 top-1（断层真的存在）", _OFF[:1] == ["note:90"], f"top1={_OFF[:1]}")
-check("旧形状把候选收成 1 条（『富者愈富』的现场）", len(_OLD) == 1, f"{len(_OLD)} 条")
-check("旧形状切掉了排在第 2 名、**在保底区内**的真答案 note:92",
-      "note:92" not in _OLD and _OFF.index("note:92") + 1 == 2,
-      f"关臂 rank={_OFF.index('note:92') + 1}")
+    assert not FAILED, (
+        f"{len(FAILED)} 条未通过：" + "；".join(FAILED))
 
-print(f"\n② 保底 top-{K}：前 {K} 名的候选与名次必须与关臂逐条一致")
-check(f"前 {K} 名逐条相同", _ON[:K] == _OFF[:K], f"{_ON[:K]} vs {_OFF[:K]}")
-check("第 2 名的真答案 note:92 在两臂里都在（旧形状会把它切掉）",
-      "note:92" in _ON and "note:92" in _OFF)
-check("裁掉的候选全都落在保底之外",
-      all(k in _OFF[K:] for k in _OFF if k not in _ON),
-      f"被裁 {[k for k in _OFF if k not in _ON]}")
 
-print("\n③ 尾巴确实被裁（断崖的产出），且不是把候选清空到只剩冠军")
-check("开臂严格短于关臂", len(_ON) < len(_OFF), f"{len(_ON)} < {len(_OFF)}")
-check("开臂不止一条", len(_ON) > 1, f"{len(_ON)} 条")
-check("开臂以 top-1 开头（断崖只删不排）", _ON[:1] == _OFF[:1])
-
-print("\n④ 开关契约：默认 == 线上形态")
-check("不传 apply_cliff 时与显式 True 一致", _ON == _keys(rs.search(_QUERY, top_k=5)))
-check("三处入口的 apply_cliff 默认都是 True",
-      all(inspect.signature(fn).parameters["apply_cliff"].default is True
-          for fn in (rs.RagIndex._lexical_ranked, rs.RagIndex.search, rs.search)))
-
-print("\n⑤ 判据同源：cliff_config() 报的就是实现里那两个数")
-check("ratio / min_keep 两个键都在且是真数", set(CFG) == {"ratio", "min_keep"}
-      and isinstance(CFG["ratio"], float) and isinstance(CFG["min_keep"], int))
-check("min_keep ≥ 3（保底不许被调小到看不见）", CFG["min_keep"] >= 3, str(CFG["min_keep"]))
-check("cliff_config 与模块常量同源", CFG["ratio"] == rs._CLIFF_RATIO
-      and CFG["min_keep"] == rs._CLIFF_MIN_KEEP)
-
-print()
-if FAILED:
-    print(f"❌ {len(FAILED)} 项未通过：" + "、".join(FAILED))
-    sys.exit(1)
-print("✅ 全部通过")
+if __name__ == "__main__":
+    test_cliff_min_keep()

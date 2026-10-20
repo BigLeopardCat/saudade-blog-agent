@@ -295,7 +295,7 @@ cd /home/ubuntu/Saudade-Blog/saudade-blog-agent
 .venv/bin/python tests/test_react_line.py
 
 # 推前三件
-.venv/bin/python tests/run_all.py
+.venv/bin/python -m pytest -q
 .venv/bin/python eval/type_gate.py
 .venv/bin/python -m ruff check --select F821 .
 

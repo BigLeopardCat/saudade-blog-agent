@@ -28,7 +28,7 @@
 | schema 面 | `agent/planner_llm.py` | 写作用域技能的 `evidence` 格（`[{"arg","quote"}]`）注入 `props`（不进 `required`）；从 `tool_calls_to_plan` 摘走 → `PlannerDecision.evidence` → `state`，**永不进 `spec.args`** |
 | 观测面 | `agent/graph.py` | `_evidence_fields()` 每轮算出"若收口，会被判成什么"，落两条事件：`planner.evidence_shadow`（逐格判决）与 `planner.evidence_scope`（今天**没有任何**出处判据的写格＝射程候选，**只记账**） |
 | 拒绝事件补结构化字段 | `agent/graph.py` | `write_target_unresolved` / `plan_obj["refusal"]` 带上被拒的 `arg` / `value`（此前值埋在散文里，R4 巡检结构上看不见） |
-| 新开关 | `config/settings.py` + `.env.example` | `AGENT_EVIDENCE`，默认 **False**，并进 `tests/run_all.py::_PINNED` 钉 `"0"` |
+| 新开关 | `config/settings.py` + `.env.example` | `AGENT_EVIDENCE`，默认 **False**，并进 `tests/conftest.py::_PINNED` 钉 `"0"` |
 | 新套件 | `tests/test_provenance.py`（新，9 节） | 纯脚本套件，含 ⑦「`evidence` 在 props 不在 required、越域不存在、被摘走、`evidence=False` 与无该格逐字节相同」与 ⑨「影子接线：`today` 与旧闸同源、关档零事件」 |
 | 巡检 | `eval/trace_alert.py` | 新增 **R4 出处闸误拒巡检**（启发式、非门禁）：取被拒的字面回主人原话里找，**找得到＝一条候选误拒** |
 
@@ -287,7 +287,7 @@ AGENT_EVIDENCE=0/1 各一遍全量（180 用例）；trace 落 golden_traces/ab_
 cd /home/ubuntu/Saudade-Blog/saudade-blog-agent
 
 # 套件（含新 test_provenance.py 的 9 节）
-.venv/bin/python tests/run_all.py
+.venv/bin/python -m pytest -q
 .venv/bin/python tests/test_provenance.py
 
 # 两臂全量（两臂交替、显式带身份档、先 df -h / 看盘）

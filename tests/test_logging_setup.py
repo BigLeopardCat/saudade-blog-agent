@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """日志初始化单测（秒级、零网络、零 LLM）。
 
 被测 = `utils.logging.setup_logging()`：它决定**本进程写进 `logs/agent/agent.log` 的
@@ -26,13 +25,20 @@ for/else 的 else 属于 for（不是 if），于是每次调用都无条件重�
   · 重复调用不叠加（①③：一行日志只出现一次）；
   · 噪声库级别 = `max(settings.log_level, WARNING)`（④）。
 """
+
+
 import io
 import logging
 import sys
 from pathlib import Path
 
+from _judge import collector
+
 ROOT = Path(__file__).resolve().parent.parent  # 仓根
+
+
 sys.path.insert(0, str(ROOT))
+
 
 from config.settings import settings  # noqa: E402
 from utils.logging import (  # noqa: E402
@@ -43,12 +49,7 @@ from utils.logging import (  # noqa: E402
 )
 
 FAILS: list[str] = []
-
-
-def check(desc: str, cond: bool, detail: str = "") -> None:
-    print(("  ✅ " if cond else "  ❌ ") + desc + (f"  [{detail}]" if detail else ""))
-    if not cond:
-        FAILS.append(desc)
+check = collector(FAILS)
 
 
 def _root() -> logging.Logger:
@@ -61,8 +62,8 @@ def _is_ours(h: logging.Handler) -> bool:
 
 
 PROBE = "probe.logging_setup"
-# 噪声库名单：与 utils/logging.py 里那个循环**必须同源**——这里只是断言对象（级别
-# 压到 max(level, WARNING) 这个决定），名单本身由实现负责，多一家少一家都在判据外。
+
+
 NOISY = ("httpx", "httpcore", "urllib3", "openai")
 
 
@@ -158,5 +159,12 @@ def _run() -> None:
           "、".join(f"{n}={logging.getLogger(n).level}" for n in NOISY))
 
 
+def test_logging_setup():
+    main()
+
+    assert not FAILS, (
+        f"{len(FAILS)} 条未通过：" + "；".join(FAILS))
+
+
 if __name__ == "__main__":
-    sys.exit(main())
+    test_logging_setup()

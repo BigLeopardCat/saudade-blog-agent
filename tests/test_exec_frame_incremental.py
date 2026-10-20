@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """`__EXEC__` 增量即发（20261001）：回执一产生就发，不再攒到流尾。
 
 ## 为什么这条测试存在
@@ -38,29 +37,29 @@
 无网络 / 无 LLM / 不起服务：`server._agent` 换成桩图，直接调**真的**
 `_run_agent_stream_to_queue`，收队列里的原始帧。
 """
+
+
 import asyncio
 import json
 import sys
 import threading
 from pathlib import Path
 
+from _judge import collector
+
 ROOT = Path(__file__).resolve().parent.parent  # 仓根（20260924：测试统一搬进 tests/）
+
+
 sys.path.insert(0, str(ROOT))
+
 
 from langchain_core.messages import AIMessageChunk, HumanMessage  # noqa: E402
 
-import server                                                     # noqa: E402
-from agent.graph import AgentCancelled                            # noqa: E402
+import server  # noqa: E402
+from agent.graph import AgentCancelled  # noqa: E402
 
 FAILS: list[str] = []
-
-
-def check(name, cond, detail=""):
-    if not cond:
-        FAILS.append(name)
-        print(f"  ✗ {name}" + (f"  → {detail}" if detail else ""))
-    else:
-        print(f"  ✓ {name}")
+check = collector(FAILS)
 
 
 def receipt(tool: str, result: str, args: dict | None = None, **extra) -> dict:
@@ -75,7 +74,11 @@ def receipt(tool: str, result: str, args: dict | None = None, **extra) -> dict:
 
 
 R23 = receipt("create_announcement", "公告「站点维护」已发布", {"title": "站点维护"})
+
+
 R24 = receipt("update_note_status", "文章《我，管理员！》已改为私密", {"noteId": 54})
+
+
 R25 = receipt("create_tag", "标签「音乐」已创建", {"tagName": "音乐"})
 
 
@@ -153,9 +156,7 @@ def exec_frames(items: list) -> list[list]:
     return got
 
 
-# ─────────────────────────── ① 拆分发 + ② 不重不漏
-
-def test_split_and_complete():
+def _test_split_and_complete():
     print("\n── ① 两轮 execute ⇒ 两帧，各是本轮新增 ──")
     items = drive([_exec(R23), _exec(R23, R24), _text("好，办好了。")])
     frames = exec_frames(items)
@@ -172,9 +173,7 @@ def test_split_and_complete():
               flat == ["create_announcement", "update_note_status"], str(flat))
 
 
-# ─────────────────────────── ③ 断连也发得出去（本套件存在的理由）
-
-def test_survives_disconnect():
+def _test_survives_disconnect():
     print("\n── ③ 图在 execute 之后被断连取消 ⇒ 回执已经在队列里了 ──")
     # 真路径：execute update 到达（工具已跑完、checker 已验收）→ 客户端断开 →
     # 图内节点抛 AgentCancelled → producer 走 except 分支直接收尾，**跳过整个流尾段**。
@@ -189,9 +188,7 @@ def test_survives_disconnect():
           repr(items[-1:]))
 
 
-# ─────────────────────────── ④ 幂等：重复到达不重发
-
-def test_repeat_update_is_idempotent():
+def _test_repeat_update_is_idempotent():
     print("\n── ④ 同一个 update 重复到达不重发 ──")
     # 累计语义下这不是假想：replan 会让 execute 再跑一轮并带上全部累计行。
     items = drive([_exec(R23, R24), _exec(R23, R24), _text("好了。")])
@@ -202,9 +199,7 @@ def test_repeat_update_is_idempotent():
               ["create_announcement", "update_note_status"], str([r["tool"] for r in frames[0]]))
 
 
-# ─────────────────────────── ⑤ 流尾不补发全量
-
-def test_tail_does_not_resend():
+def _test_tail_does_not_resend():
     print("\n── ⑤ 正常收尾：流尾不许再把全量重发一遍 ──")
     items = drive([_exec(R23), _exec(R23, R24, R25), _text("三件都办好了。")])
     frames = exec_frames(items)
@@ -215,9 +210,7 @@ def test_tail_does_not_resend():
           all(len(f) > 0 for f in frames), str([len(f) for f in frames]))
 
 
-# ─────────────────────────── ⑥ 事实先于叙述
-
-def test_exec_precedes_narration():
+def _test_exec_precedes_narration():
     print("\n── ⑥ `__EXEC__` 早于 narrator 的正文帧 ──")
     items = drive([_exec(R23), _text("办好了。")])
     ei = next((i for i, it in enumerate(items)
@@ -230,11 +223,11 @@ def test_exec_precedes_narration():
 
 def main():
     print("__EXEC__ 增量即发（20261001）")
-    test_split_and_complete()
-    test_survives_disconnect()
-    test_repeat_update_is_idempotent()
-    test_tail_does_not_resend()
-    test_exec_precedes_narration()
+    _test_split_and_complete()
+    _test_survives_disconnect()
+    _test_repeat_update_is_idempotent()
+    _test_tail_does_not_resend()
+    _test_exec_precedes_narration()
     print()
     if FAILS:
         print(f"✗ exec-frame-incremental：{len(FAILS)} 条红")
@@ -244,5 +237,12 @@ def main():
     print("✓ exec-frame-incremental：全部通过")
 
 
-if __name__ == "__main__":
+def test_exec_frame_incremental():
     main()
+
+    assert not FAILS, (
+        f"{len(FAILS)} 条未通过：" + "；".join(FAILS))
+
+
+if __name__ == "__main__":
+    test_exec_frame_incremental()
