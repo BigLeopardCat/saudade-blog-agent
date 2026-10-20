@@ -36,6 +36,8 @@ tasks 层的契约，与"不许 import agent.graph"同一条纪律。
 import sys
 from pathlib import Path
 
+from _judge import collector
+
 ROOT = Path(__file__).resolve().parent.parent  # 仓根（测试统一在 tests/）
 
 
@@ -49,12 +51,7 @@ import agent.graph as g  # noqa: E402
 from agent.workflow_defs import visible_workflows  # noqa: E402
 
 FAILS: list[str] = []
-
-
-def check(desc: str, cond: bool, detail: str = "") -> None:
-    print(("  ✅ " if cond else "  ❌ ") + desc + (f"  [{detail}]" if detail else ""))
-    if not cond:
-        FAILS.append(desc)
+check = collector(FAILS)
 
 
 _GRAPH_SRC = _ctx_src.graph_deprefixed()

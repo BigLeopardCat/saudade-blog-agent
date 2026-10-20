@@ -17,6 +17,8 @@
 import sys
 from pathlib import Path
 
+from _judge import collector
+
 ROOT = Path(__file__).resolve().parent.parent  # 仓根（20260924：测试统一搬进 tests/）
 
 
@@ -26,12 +28,7 @@ sys.path.insert(0, str(ROOT))
 from agent import moderator, summarizer  # noqa: E402
 
 FAILS: list[str] = []
-
-
-def check(desc: str, cond: bool, detail: str = "") -> None:
-    print(("  ✅ " if cond else "  ❌ ") + desc + (f"  [{detail}]" if detail else ""))
-    if not cond:
-        FAILS.append(desc)
+check = collector(FAILS)
 
 
 class FakeLLM:

@@ -41,6 +41,8 @@ import threading
 import time
 from pathlib import Path
 
+from _judge import collector
+
 ROOT = Path(__file__).resolve().parent.parent
 
 
@@ -59,12 +61,7 @@ FIX = EVAL / "fixtures"
 
 
 FAILS: list[str] = []
-
-
-def check(desc: str, cond: bool, detail: str = "") -> None:
-    print(("  ✅ " if cond else "  ❌ ") + desc + (f"  [{detail}]" if detail else ""))
-    if not cond:
-        FAILS.append(desc)
+check = collector(FAILS)
 
 
 def _norm(s: str) -> str:

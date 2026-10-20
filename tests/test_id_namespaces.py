@@ -25,6 +25,8 @@ import re
 import sys
 from pathlib import Path
 
+from _judge import collector
+
 ROOT = Path(__file__).resolve().parent.parent  # 仓根
 
 
@@ -38,12 +40,7 @@ from agent.entity_digest import receipt_digest  # noqa: E402
 from tools.base import _board_label  # noqa: E402
 
 FAILS: list[str] = []
-
-
-def check(desc: str, cond: bool, detail: str = "") -> None:
-    print(("  ✅ " if cond else "  ❌ ") + desc + (f"  [{detail}]" if detail else ""))
-    if not cond:
-        FAILS.append(desc)
+check = collector(FAILS)
 
 
 def _bare(text: str, n) -> bool:

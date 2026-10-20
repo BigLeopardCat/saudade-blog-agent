@@ -34,6 +34,8 @@ import re
 import sys
 from pathlib import Path
 
+from _judge import collector
+
 ROOT = Path(__file__).resolve().parent.parent  # 仓根（测试统一在 tests/）
 
 
@@ -44,18 +46,13 @@ import agent.prompt_context as C  # noqa: E402
 from agent.workflow_defs import visible_workflows  # noqa: E402
 
 FAILS: list[str] = []
+check = collector(FAILS)
 
 
 _CASE_ID = "admin_board_question_no_popup"
 
 
 _ROLES = (None, "user", "admin")
-
-
-def check(desc: str, cond: bool, detail: str = "") -> None:
-    print(("  ✅ " if cond else "  ❌ ") + desc + (f"  [{detail}]" if detail else ""))
-    if not cond:
-        FAILS.append(desc)
 
 
 def _load_case() -> dict:

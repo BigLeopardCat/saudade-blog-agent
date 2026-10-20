@@ -32,6 +32,7 @@ import json
 import sys
 from pathlib import Path
 
+from _judge import collector
 from langchain_core.messages import HumanMessage
 
 ROOT = Path(__file__).resolve().parent.parent  # 仓根
@@ -62,12 +63,7 @@ import _parent_repo  # noqa: E402
 from config.settings import settings  # noqa: E402
 
 FAILS: list[str] = []
-
-
-def check(desc: str, cond: bool, detail: str = "") -> None:
-    print(("  ✅ " if cond else "  ❌ ") + desc + (f"  [{detail}]" if detail else ""))
-    if not cond:
-        FAILS.append(desc)
+check = collector(FAILS)
 
 
 @contextlib.contextmanager

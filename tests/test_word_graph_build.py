@@ -26,6 +26,8 @@ import sys
 import types
 from pathlib import Path
 
+from _judge import collector
+
 ROOT = Path(__file__).resolve().parent.parent
 
 
@@ -38,12 +40,7 @@ sys.modules.setdefault("numpy", types.ModuleType("numpy"))
 import build_word_graph as bw  # noqa: E402
 
 FAILS: list[str] = []
-
-
-def check(desc: str, cond: bool, detail: str = "") -> None:
-    print(("  ✅ " if cond else "  ❌ ") + desc + (f"  [{detail}]" if detail else ""))
-    if not cond:
-        FAILS.append(desc)
+check = collector(FAILS)
 
 
 def raises(fn) -> bool:

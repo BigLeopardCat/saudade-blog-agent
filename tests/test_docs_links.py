@@ -31,15 +31,10 @@ import pathlib
 import re
 import sys
 
+from _judge import collector
+
 FAILS: list[str] = []
-
-
-def check(desc: str, cond: bool, detail: str = "") -> None:
-    if cond:
-        print(f"  ✅ {desc}")
-    else:
-        FAILS.append(f"{desc} —— {detail}")
-        print(f"  ❌ {desc} —— {detail}")
+check = collector(FAILS)
 
 
 def test_docs_links():

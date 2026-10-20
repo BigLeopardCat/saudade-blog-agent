@@ -33,6 +33,8 @@ import asyncio
 import sys
 from pathlib import Path
 
+from _judge import collector
+
 ROOT = Path(__file__).resolve().parent.parent
 
 
@@ -45,14 +47,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from agent import checkpoint as C  # noqa: E402
 
 FAILED: list[str] = []
-
-
-def check(desc: str, ok: bool, detail: str = "") -> None:
-    if ok:
-        print(f"  ✅ {desc}")
-    else:
-        FAILED.append(f"{desc} —— {detail}")
-        print(f"  ❌ {desc} —— {detail}")
+check = collector(FAILED)
 
 
 class FakeSaver:

@@ -27,6 +27,8 @@
 import sys
 from pathlib import Path
 
+from _judge import collector
+
 ROOT = Path(__file__).resolve().parent.parent  # 仓根（测试统一在 tests/）
 
 
@@ -37,12 +39,7 @@ from config import settings as S  # noqa: E402
 from models.llm import get_llm  # noqa: E402
 
 FAILS: list[str] = []
-
-
-def check(desc: str, cond: bool, detail: str = "") -> None:
-    print(("  ✅ " if cond else "  ❌ ") + desc + (f"  [{detail}]" if detail else ""))
-    if not cond:
-        FAILS.append(desc)
+check = collector(FAILS)
 
 
 _KW = {"api_key": "test-key"}          # 离线没有真 key，占位即可（不发出请求）

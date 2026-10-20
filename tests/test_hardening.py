@@ -24,6 +24,8 @@ import sys
 import time
 from pathlib import Path
 
+from _judge import collector
+
 ROOT = Path(__file__).resolve().parent.parent  # 仓根（20260924：测试统一搬进 tests/）
 
 
@@ -31,14 +33,7 @@ sys.path.insert(0, str(ROOT))
 
 
 FAILS: list[str] = []
-
-
-def check(name, cond, detail=""):
-    if not cond:
-        FAILS.append(f"{name}: {detail}")
-        print(f"  ✗ {name} {detail}")
-    else:
-        print(f"  ✓ {name}")
+check = collector(FAILS)
 
 
 def eq(got, exp, name):

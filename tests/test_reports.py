@@ -29,6 +29,8 @@ import time
 from datetime import datetime
 from pathlib import Path
 
+from _judge import collector
+
 ROOT = Path(__file__).resolve().parent.parent  # 仓根（20260924：测试统一搬进 tests/）
 
 
@@ -44,12 +46,7 @@ from agent.graph import _CMD_PREFIX_RE  # noqa: E402
 from config.settings import settings as _settings  # noqa: E402
 
 FAILS: list[str] = []
-
-
-def check(desc: str, cond: bool, detail: str = "") -> None:
-    print(("  ✅ " if cond else "  ❌ ") + desc + (f"  [{detail}]" if detail else ""))
-    if not cond:
-        FAILS.append(desc)
+check = collector(FAILS)
 
 
 def _row(i, approved, ai, body="内容", who="访客"):

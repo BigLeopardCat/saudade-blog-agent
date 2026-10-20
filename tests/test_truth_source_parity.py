@@ -25,6 +25,8 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
+from _judge import collector
+
 ROOT = Path(__file__).resolve().parent.parent
 
 
@@ -37,12 +39,7 @@ from tools.base import _as_bool, get_current_time  # noqa: E402
 from utils import clock  # noqa: E402
 
 FAILS: list[str] = []
-
-
-def check(desc: str, cond: bool, detail: str = "") -> None:
-    print(("  ✅ " if cond else "  ❌ ") + desc + (f"  [{detail}]" if detail else ""))
-    if not cond:
-        FAILS.append(f"{desc} —— {detail}")
+check = collector(FAILS)
 
 
 _FROZEN = datetime(2026, 10, 18, 5, 3)          # 星期日

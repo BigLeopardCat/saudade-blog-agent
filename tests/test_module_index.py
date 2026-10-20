@@ -39,18 +39,13 @@
 import pathlib
 import re
 
+from _judge import collector
+
 SCOPE = ("agent/", "tools/")
 
 
 FAILS: list[str] = []
-
-
-def check(desc: str, cond: bool, detail: str = "") -> None:
-    if cond:
-        print(f"  ✅ {desc}")
-    else:
-        FAILS.append(f"{desc} —— {detail}")
-        print(f"  ❌ {desc} —— {detail}")
+check = collector(FAILS)
 
 
 _GLYPH = re.compile(r"^(?P<ind>(?:│   |    )*)(?:├── |└── )(?P<tok>\S+)")

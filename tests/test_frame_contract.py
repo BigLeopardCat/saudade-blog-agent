@@ -71,6 +71,8 @@ import ast
 import sys
 from pathlib import Path
 
+from _judge import collector
+
 ROOT = Path(__file__).resolve().parent.parent
 
 
@@ -95,12 +97,7 @@ LINE = ROOT / "agent" / "react_line.py"
 
 
 FAILED: list = []
-
-
-def check(desc: str, ok: bool, detail: str = "") -> None:
-    print(("  ✅ " if ok else "  ❌ ") + desc + (f"  [{detail}]" if detail else ""))
-    if not ok:
-        FAILED.append(desc)
+check = collector(FAILED)
 
 
 def _funcs(tree) -> dict:

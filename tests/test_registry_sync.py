@@ -33,6 +33,8 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
+from _judge import collector
+
 ROOT = Path(__file__).resolve().parent.parent
 
 
@@ -44,12 +46,7 @@ from agent import graph as G  # noqa: E402
 from agent.workflow_defs import WORKFLOWS  # noqa: E402
 
 FAILS: list[str] = []
-
-
-def check(desc: str, cond: bool, detail: str = "") -> None:
-    print(("  ✅ " if cond else "  ❌ ") + desc + (f"  [{detail}]" if detail else ""))
-    if not cond:
-        FAILS.append(desc)
+check = collector(FAILS)
 
 
 def _planned_tools() -> dict[str, list[str]]:

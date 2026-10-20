@@ -34,6 +34,8 @@ import shutil
 import sys
 import tempfile
 
+from _judge import collector
+
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "scripts" / "dev"))
@@ -41,12 +43,7 @@ sys.path.insert(0, str(ROOT / "scripts" / "dev"))
 import changelog as C  # noqa: E402  （dev 工具，不是包；按路径取）
 
 FAILED: list[str] = []
-
-
-def check(name: str, ok: bool, extra: str = "") -> None:
-    print(f"  {'✅' if ok else '❌'} {name}" + (f"  [{extra}]" if extra else ""))
-    if not ok:
-        FAILED.append(name)
+check = collector(FAILED)
 
 
 # ── ① 机制在位（覆盖率自检）──────────────────────────────────────────────

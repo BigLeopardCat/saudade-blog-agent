@@ -27,6 +27,8 @@ import logging
 import sys
 from pathlib import Path
 
+from _judge import collector
+
 ROOT = Path(__file__).resolve().parent.parent  # 仓根（测试统一在 tests/）
 
 
@@ -40,12 +42,7 @@ from config.settings import KNOWN_LLM_PROVIDERS, PROVIDER_DEFAULTS, Settings  # 
 from eval import llm_judge as judge  # noqa: E402
 
 FAILS: list[str] = []
-
-
-def check(desc: str, cond: bool, detail: str = "") -> None:
-    print(("  ✅ " if cond else "  ❌ ") + desc + (f"  [{detail}]" if detail else ""))
-    if not cond:
-        FAILS.append(desc)
+check = collector(FAILS)
 
 
 class _Cap(logging.Handler):

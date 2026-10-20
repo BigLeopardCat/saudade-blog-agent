@@ -26,6 +26,8 @@ import tempfile
 import time
 from pathlib import Path
 
+from _judge import collector
+
 ROOT = Path(__file__).resolve().parent.parent  # 仓根
 
 
@@ -41,15 +43,10 @@ from utils import trace as trace_mod  # noqa: E402
 from utils import trace_files as tf  # noqa: E402
 
 FAILS: list[str] = []
+check = collector(FAILS)
 
 
 DAY = 86400.0
-
-
-def check(desc: str, cond: bool, detail: str = "") -> None:
-    print(("  ✅ " if cond else "  ❌ ") + desc + (f"  [{detail}]" if detail else ""))
-    if not cond:
-        FAILS.append(desc)
 
 
 def write(path: str, *, age_days: float = 0.0, body: dict | None = None) -> str:

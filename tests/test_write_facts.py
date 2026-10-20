@@ -42,6 +42,8 @@ import re
 import sys
 from pathlib import Path
 
+from _judge import collector
+
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
@@ -51,12 +53,7 @@ from agent.graph import _RCPT_META_KEYS  # noqa: E402
 from tools import get_all_tools  # noqa: E402
 
 FAILED: list[str] = []
-
-
-def check(name: str, ok: bool, extra: str = "") -> None:
-    print(f"  {'✅' if ok else '❌'} {name}" + (f"  [{extra}]" if extra else ""))
-    if not ok:
-        FAILED.append(name)
+check = collector(FAILED)
 
 
 # F1 只加的三个键 + 派生的 noop：它们**不进**跨语言白名单。

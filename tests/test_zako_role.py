@@ -19,6 +19,8 @@
 import sys
 from pathlib import Path
 
+from _judge import collector
+
 ROOT = Path(__file__).resolve().parent.parent  # 仓根
 
 
@@ -58,12 +60,7 @@ from agent.workflow_defs import visible_workflows  # noqa: E402
 from agent.workflow_menu import build_planner_context  # noqa: E402
 
 FAILS: list[str] = []
-
-
-def check_(desc: str, cond: bool, detail: str = "") -> None:
-    print(("  ✅ " if cond else "  ❌ ") + desc + (f"  [{detail}]" if detail else ""))
-    if not cond:
-        FAILS.append(desc)
+check_ = collector(FAILS)
 
 
 def _p(role, uid=42):
