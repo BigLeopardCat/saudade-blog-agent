@@ -44,7 +44,7 @@
 > 这份表**刻意不写"最后修订"日期**：手抄的日期没有判据看着（CI 是浅克隆，读不到逐文件的
 > 提交日期），注定漂。要看某份文档最近改了什么：`git log -1 --format=%ad -- docs/<文件>`。
 
-架构决策记录另有索引：[adr/README.md](adr/README.md)（14 份，记"当时为什么这样选、什么条件下重开"）。
+架构决策记录另有索引：[adr/README.md](adr/README.md)（15 份，记"当时为什么这样选、什么条件下重开"）。
 
 仓根还有几份不属于 `docs/`： [README.md](../README.md)（是什么、怎么跑）、
 [CONTRIBUTING.md](../CONTRIBUTING.md)（判据规矩、能/不能在本机跑什么）、
