@@ -126,15 +126,20 @@ def pseudo_menu_text(role: str | None) -> str:
 def build_tool_prompt(*, messages: list, role: str | None, principal: Any,
                       config: dict | None, user_msg: str,
                       ledger_frame: str = "", correction: str = "",
-                      exec_rows: list | None = None) -> str:
+                      exec_rows: list | None = None, capability: str = "") -> str:
     """工具臂的系统提示（**每请求只渲染一次**，缓存由 `react_arm._prompt_of` 负责）。
 
     与 `react_arm._system_prompt` 的差别**只有三处**：菜单块（技能表 → 工具表）、输出契约、
     收尾说明。其余每一块都取同一份资产/同一个 helper——背景信息两臂相同，差的只有
     "菜单是什么、怎么表达决定"，这正是 A/B 要拨的那一个自变量。
+
+    `capability`（20261021）：能力索引那条臂在**工具态**要的那一段（见
+    `capability_block_text`）。缺省 `""` ⇒ 渲染成空串，本臂提示词**逐字节不变**
+    （工具臂的读数已经归档，不该被后来的一笔悄悄换掉自变量）。
     """
     planner = _TOOL_PLANNER_PROMPT.format(
         tool_menu=tool_menu_text(role),
+        capability_block=capability_block_text(capability),
         page_ctx=_page_ctx(messages, role),
         round_info=round_info_text(0),
         user_msg=user_msg,
@@ -165,7 +170,7 @@ _TOOL_PLANNER_PROMPT = """\
 
 可调用工具（**唯一可选集合**，禁止自创工具名或自由发挥；参数一律以工具自己的 schema 为准）：
 {tool_menu}
-
+{capability_block}
 页面上下文：{page_ctx}
 本轮信息：{round_info}
 
@@ -222,6 +227,27 @@ _TOOL_PLANNER_PROMPT = """\
 
 用户消息：{user_msg}
 """
+
+
+def capability_block_text(brief: str) -> str:
+    """`{capability_block}` 那一格的取值。**空 brief ⇒ 空串**（工具臂逐字节不变）。
+
+    为什么这一段是"能力索引"那条臂的承重件（三族红里有两族落在这儿）：
+      · **B 族**（8 条多步用例）失败形态是 `checker 验收回执缺少工具 X`——裸工具表里
+        **没有"这条能力该调哪些工具"这个要求**。`brief` 里那行"由这些工具完成"就是它，
+        再加上下面那句"该调的都调上"，缺件从"模型不知道"变成"模型知道没做"。
+      · **C 族**（4 条检索用例）失败形态是回复正文缺关键词——`complete_when` /
+        `reply_contract` 在裸工具表上**没有家**，`brief` 把两格一起带进来。
+
+    那段话**不进 `_TOOL_PLANNER_PROMPT` 的规则段**（放规则段会改工具臂的提示词字节，
+    而那一臂的读数已经归档）：它只在这条臂的槽位里出现。
+    """
+    if not brief:
+        return ""
+    return ("本轮要完成的能力（系统按你的意图选定，**这一轮的可调用工具就是它那一批**）：\n"
+            f"{brief}\n"
+            "把这条能力**该调的工具都调上**（上面「由这些工具完成」那行列的就是全部）；"
+            "工具回执里已经写着结果的不要再调。信息够了就零调用收尾。\n")
 
 
 def round_info_text(rounds: int) -> str:
