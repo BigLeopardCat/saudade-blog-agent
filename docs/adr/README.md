@@ -79,6 +79,7 @@
 | [0011](adr-0011-graph-holds-context-checkpoint-memory.md) | 上下文由图自己持有（原生 checkpoint 取代手写注入）：代码面已采纳，**默认不生效**（DSN 空则不挂 saver） | 已采纳 |
 | [0012](adr-0012-write-idempotency-ledger.md) | 写操作的幂等账：先记账再动手，至多一次 | 已采纳 |
 | [0013](adr-0013-chat-image-persistence.md) | 聊天图片落库，但只做展示（模型仍只看 `[图片]` 标记） | 已采纳 |
+| [0014](adr-0014-planner-becomes-router-schema-on-demand.md) | planner 降成路由器，schema 索引化按需取（分四阶段，**部分取代 ADR-0001**） | **提议中** |
 
 ## 相关的、但不算 ADR 的文档
 
