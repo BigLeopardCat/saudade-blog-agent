@@ -417,6 +417,63 @@ def _classify(tree: ast.Module) -> tuple[set[int], list[int]]:
             move_idx.remove(i)
             seed_reads |= _read_names(tree.body[i])
 
+    # ③′ **反向规则**（③ 的对偶）：被搬走的代码读到的名字，如果它的绑定语句是"留模块级的
+    #     非定义语句"（import / 赋值），而**没有任何留模块级的 def/class 或 import-setup 读它**
+    #     ⇒ 那条绑定语句**也搬进驱动**。
+    #
+    #     驱动必须自己走一遍原文件那条时间线。留在模块级的绑定会在**驱动之前**跑完，驱动
+    #     只能看到**最后一次**绑定，而原文件里那些读可能夹在两次绑定中间：
+    #       · `import agent.adminops_confirm as _confirm`（27 行）→ 545 行用 → **711 行又
+    #         `from agent import confirm as _confirm`** ⇒ 迁移后 545 行那条判据读到
+    #         `agent.confirm`，报 `AttributeError: module 'agent.confirm' has no attribute
+    #         'render_confirm_question'`（test_account_freeze / test_account_role /
+    #         test_user_notice 实测）；
+    #       · `D = mkdirs(...)` → `r = tr.reconcile(D, ...)` → 判据读 `r`，然后 `D`/`r`
+    #         各重绑 10 次、判据夹在中间（test_reconcile_offline 实测）。
+    #
+    #     有 def/class 读它时**不能**搬下去（那是 ③ 要保的常量），交人工。
+    protected: set[str] = set()
+    for i in keep_idx:
+        n = tree.body[i]
+        if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            protected |= _module_deps(n)
+        elif _is_import_setup(n):
+            protected |= _read_names(n)
+    binders: dict[str, int] = {}
+    for i in keep_idx:
+        for b in _bound_names(tree.body[i]):
+            binders[b] = binders.get(b, 0) + 1
+
+    def _movable_down(i: int) -> bool:
+        n = tree.body[i]
+        if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            return False
+        if _is_import_setup(n):
+            return False
+        names = _bound_names(n)
+        if not names or set(names) & protected:
+            return False
+        if not all(b in moved_reads for b in names):
+            return False
+        if isinstance(n, (ast.Import, ast.ImportFrom)):
+            # import 只在**真的重绑**时才搬下去（同名有 ≥2 处留模块级的绑定）。
+            # 普通 import 留在原地 —— 全搬进函数会让每一份迁移 diff 都变味，而它没有
+            # 任何正确性收益（只绑一次的名字，模块级那份与驱动看到的是同一个值）。
+            return all(binders.get(b, 0) >= 2 for b in names)
+        return True
+
+    while True:
+        moved_reads = set()
+        for i in move_idx:
+            moved_reads |= _read_names(tree.body[i])
+        down = [i for i in keep_idx if _movable_down(i)]
+        if not down:
+            break
+        for i in down:
+            keep_idx.discard(i)
+            move_idx.append(i)
+        move_idx.sort()
+
     # 同名两处绑定 ⇒ 驱动函数里的那个会把模块级的**遮蔽**掉，原来读全局的语句变成
     # `UnboundLocalError`。认得出就救（模块级那处没人读时搬进驱动、只剩一个作用域），
     # 认不出就交人工 —— 猜错了是静默改语义。

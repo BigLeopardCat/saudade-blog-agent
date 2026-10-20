@@ -127,21 +127,30 @@ def _old_text(path: pathlib.Path, base: str) -> str | None:
 
 
 def _check_calls(src: str) -> list[str]:
-    """模块里每个 `check(...)` 的第一个实参（常量才有值，非常量记 `?`）—— 判据指纹。"""
-    out: list[str] = []
+    """模块里每个判据调用的第一个实参（常量才有值，非常量记 `?`）—— 判据指纹。
+
+    **比的是「集合 + 重数」，不比顺序** —— 迁移的**全部内容**就是搬位置，所以判据的
+    相对顺序必然变（模块级的判据进了函数尾，助手里的还在助手身上），而"哪几条判据、各几条"
+    必须逐字不变。两把错的尺子都试过：
+
+      · `ast.walk` 的产出顺序 —— 它是**广度优先**，判据从模块级搬进函数后嵌套深度
+        1→2，遍历序整体错位，`test_admin_write` 报了 123 处假红；
+      · 按源码位置排序 —— 好一点，但模块级判据挪到文件尾之后**仍然会变序**。
+
+    收集器**不都叫 `check`**（`test_zako_role.py` 那个叫 `check_`），按前缀认。
+    """
     try:
         tree = ast.parse(src)
     except SyntaxError:
         return ["<PARSE_FAIL>"]
+    out: list[str] = []
     for n in ast.walk(tree):
-        if (isinstance(n, ast.Call) and isinstance(n.func, ast.Name)
-                and n.func.id == "check"):
-            first = n.args[0] if n.args else None
-            if isinstance(first, ast.Constant):
-                out.append(repr(first.value))
-            else:
-                out.append("?")
-    return out
+        if not (isinstance(n, ast.Call) and isinstance(n.func, ast.Name)
+                and n.func.id.startswith("check")):
+            continue
+        first = n.args[0] if n.args else None
+        out.append(repr(first.value) if isinstance(first, ast.Constant) else "?")
+    return sorted(out)
 
 
 def _target_def(src: str, stem: str) -> ast.FunctionDef | None:
@@ -245,6 +254,17 @@ def main() -> int:
     paths = sorted(TESTS.glob("test_*.py")) if args.all else args.paths
     if not paths:
         ap.error("给路径，或 --all")
+
+    # 第 ③ 层是**就地改写再还原**，`finally` 兜不住 SIGKILL —— 中途被杀会把注入过变异体
+    # 的文件留在盘上（实测踩到一次）。进来先自检：认出来就**拒绝跑**，而不是拿一份被改过
+    # 的文件当基线接着跑（那种结果看着像"全绿"，其实测的是变异体）。
+    dirty = [p for p in paths if MUTANT in p.read_text(encoding="utf-8")]
+    if dirty:
+        print("✗ 这些文件里还留着上一次注入的变异体（工装被杀过？）：")
+        for p in dirty:
+            print(f"    {p.relative_to(ROOT)}")
+        print("  先 `git checkout -- tests/` 还原，再重跑。")
+        return 2
 
     results: dict[str, dict[str, list[str]]] = {}
     for p in paths:
