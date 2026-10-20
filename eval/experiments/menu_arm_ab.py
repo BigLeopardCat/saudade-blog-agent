@@ -146,7 +146,9 @@ def run_arm(arm: str, rep: int, ids: list[str], provider: str = "") -> dict:
                            cwd=MAIN, env=env, capture_output=True, text=True,
                            timeout=RUN_TIMEOUT)
         rc, tail = p.returncode, (p.stdout or "")[-1500:]
-    except subprocess.TimeoutExpired as e:
+    except subprocess.TimeoutExpired:
+        # 超时不记异常正文：`TimeoutExpired` 的 `str()` 里只有命令行与秒数，而 `p` 此刻
+        # 还没绑定 ⇒ 能拿到的读数一个不少（`rc=-1` + 那句 tail 已经说明是超时）。
         rc, tail = -1, f"超时（>{RUN_TIMEOUT}s）"
     elapsed = round(time.time() - t0, 1)
     new = sorted(set(glob.glob(os.path.join(rdir, "*.json"))) - before)
@@ -445,6 +447,23 @@ def _print_matrix(reports: dict, ids: list[str], arms: list[str], reps: int) -> 
     return m
 
 
+def _print_per_case(v: dict) -> None:
+    """逐条差集（`per_case_fell` / `per_case_rose`）。
+
+    ⚠️ **这两个数字是红率、不是通过率**（`ab_compare` 里 `e[tag][0] += 1` 数的是
+    `not _final_ok`）。所以 `↓`＝红率下降＝**变好**，`↑`＝红率上升＝**变坏**——与"通过率"
+    的直觉**正好反着**。第一次读这份日志的人（包括写它的人）会按通过率读，于是把
+    「工具臂在某条上从 0 红变 1 红」读成「工具臂赢了」。表头把这句写在数字旁边，因为
+    箭头本身没法自证。逐条与聚合**必须分开读**：聚合没退不等于没有单条变坏。
+    """
+    if not (v.get("per_case_fell") or v.get("per_case_rose")):
+        return
+    print("    逐条（数字 = **红率**；↓ 红率降＝变好，↑ 红率升＝变坏）")
+    for arrow, key in (("↓", "per_case_fell"), ("↑", "per_case_rose")):
+        for e in (v[key] or [])[:8]:
+            print(f"      {arrow} {e['id']:<44} {e['before_rate']} → {e['after_rate']}")
+
+
 def _print_pairs(reports: dict, arms: list[str], reps: int) -> dict:
     """② 三对读数。"""
     pairs = compare(reports, arms, reps)
@@ -459,10 +478,7 @@ def _print_pairs(reports: dict, arms: list[str], reps: int) -> dict:
         print(f"  判决 {v['verdict']}  before={v['before']['lower']} → "
               f"after={v['after']['lower']}（Δ={v['delta_lower']}）"
               f"  可比用例 {v['cases_compared']}")
-        for e in (v["per_case_fell"] or [])[:8]:
-            print(f"    ↓ {e['id']:<44} {e['before_rate']} → {e['after_rate']}")
-        for e in (v["per_case_rose"] or [])[:8]:
-            print(f"    ↑ {e['id']:<44} {e['before_rate']} → {e['after_rate']}")
+        _print_per_case(v)
     return pairs
 
 
@@ -518,10 +534,7 @@ def main(argv=None) -> int:
         print(f"  判决 {v['verdict']}  before={v['before']['lower']} → "
               f"after={v['after']['lower']}（Δ={v['delta_lower']}）"
               f"  可比用例 {v['cases_compared']}")
-        for e in (v["per_case_fell"] or [])[:8]:
-            print(f"    ↓ {e['id']:<44} {e['before_rate']} → {e['after_rate']}")
-        for e in (v["per_case_rose"] or [])[:8]:
-            print(f"    ↑ {e['id']:<44} {e['before_rate']} → {e['after_rate']}")
+        _print_per_case(v)
 
     cost = cost_of(reports, arms, args.reps)
     print("\n" + "=" * 96)
