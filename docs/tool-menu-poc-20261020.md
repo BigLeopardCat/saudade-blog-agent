@@ -84,8 +84,11 @@ graph  79 / 79 / 79          react  79 / 79 / 78          tools  60 / 58 / 56
 
 ### A 类：菜单太大 ⇒ 在近义工具里选错（**主导族，13 条用例 / 32 条红**）
 
-工具菜单把 `task_intents` / `task_hold` / `task_drop` 这族**任务台账接口**和 `navigate_to`
-平级摆出来，模型对"带我去首页"挑了 `task_intents`：
+**先纠一处归因**：`task_intents` / `task_hold` / `task_drop` **不是博客功能提供的工具**，
+它们是 agent 自己的**跨轮任务记账口**（伪函数，`agent/planner_llm.py` 那三个），
+被 `agent/tool_menu.py` 照搬进工具菜单（admin 73 件里有这 3 件）。所以这一族红
+**不是"博客工具太乱"**，是**工具臂把技能臂的"申报通道"搬进菜单时，让"申报"和"动作"
+在同一个平面上竞争**。模型对"带我去首页"挑了 `task_intents`：
 
 ```
 nav_home               红红红   calls=['task_intents','task_hold','task_intents','task_hold','task_intents']
@@ -93,13 +96,32 @@ nav_home               红红红   calls=['task_intents','task_hold','task_inten
    回复逐字：「…我这边只收到系统返回的『工具不在本轮可执行清单里』…需要我再试一次带你回首页吗？:委屈:」
 ```
 
+⚠️ **这个洞在开发期就撞到过，补丁没压住**——`agent/tool_prompt.py::pseudo_menu_text` 的头注
+逐字记着第一版把它们从菜单**文本**里整个滤掉，结果 `nav_home` 上"模型连着四轮只调
+`task_intents`、一次 `navigate_to` 都没调"，于是单列一段、第一句钉死"**它不代替动作**"。
+**全量 3 遍跑下来 `nav_home` 仍然 3/3 红、形态逐字相同** ⇒ 提示词层面的补丁对这条无效。
+
+⚠️ **还有一处两臂词汇串了**：`task_intents` 的 schema 描述至今写着"workflow（你打算用哪个
+**本领**办它，填上面那些**本领名**之一）"——而工具臂的提示词明写"**没有'技能'这一层**"。
+同一份上下文里两句话互相打脸，而模型的说明入口是 schema（提示词让它"用法见它们各自的
+schema"）。**这是一处具体的、可修的缺陷**，不是"模型不行"。
+
 同族还有 `nav_request_phrase` / `nav_direct_no_confirm_promise` / `nav_no_false_zero_tool_claim` /
 `nav_board_position_from_notice` / `nav_comment_position_from_notice` / `nav_param_anchor_about` /
 `nav_device_console` / `zako_nav_request_refused`（这条更重：**本来一个工具都不该调**，它调了
 `task_intents`）；`multi_step_effect_then_nav` / `mix5_cmd_nav_read_three_way` 是同一族的跨步版本。
 
-另一副面孔是**近义名**：`guestboard_talk_double_source` 该调 `list_talks`，调了 `list_guestbook`；
-`todo_multi_step_serial` 该调 `get_article_detail`，调了 `read_article`。
+**另一副面孔是"调了菜单里没有的名字"**（1.1%：455 次调用里 5 次）。`todo_multi_step_serial`
+该调 `get_article_detail`，调了 **`read_article`——那是技能名**（`agent/workflow_defs/public_read.py`），
+工具菜单里没有它。⇒ 模型手上仍有一份**技能名**词汇表（来源待查：`task_intents` 的
+"本领名"描述是嫌疑之一），而工具臂的菜单认不出它。
+近义名同族：`guestboard_talk_double_source` 该调 `list_talks`，调了 `list_guestbook`。
+
+**这一族里"工具描述不清"占多少？** 逐条读了描述：`list_guestbook` 写"留言板（河灯集）"、
+`list_talks` 写"说说（动态/碎语）"、`search_notes` 与 `rag_search` 各自写了分工——
+**描述是够的**。人看不懂那两条缺的是**"河灯集与说说在这个站上是两样东西"这个站点知识**，
+不是缺描述。⇒ **"工具重叠"这个说法要收窄**：它们不是重复实现（合并会丢能力），
+是**平铺且没有路由信号**。
 
 > 这一族**在技能臂上不存在**，因为技能名就是意图名（`navigate` / `content_query`），
 > 模板替模型做完了"意图 → 工具"的翻译。工具臂把这个翻译**还给了模型**，而模型在
@@ -175,9 +197,13 @@ graph 判据红：未调用任一检索工具 ['list_notes','search_notes']（�
 **它值两样东西，都不是"叙述纪律"**：
 
 1. **意图 → 工具的路由**（A 类，13/25 条用例）。技能名就是意图名，模板把这层翻译
-   **做在菜单里**；换成工具表，这层翻译**还给了模型**，而 67 个工具下它做不好。
-   ⇒ **可操作**：真要往工具级走，先做的是**把菜单按意图分组收窄**（"少而可组合"里的"少"），
-   而不是把 70 个平铺出去。**但这正是第二轮要证的**——分组本身也是手写。
+   **做在菜单里**；换成工具表，这层翻译**还给了模型**，而 70 件平铺下它做不好。
+   ⇒ **可操作，按代价从低到高**：
+   ① **先修 A 类那处词汇串线**（`task_intents` 的 schema 描述还说"填上面那些**本领名**"，
+   而工具臂的提示词写着"没有'技能'这一层"）——这是一处两句话互相打脸的文本缺陷，
+   不是模型能力问题，**也是唯一一处"改了肯定不亏"的**；
+   ② 再**把菜单按意图分组收窄**（"少而可组合"里的"少"）——**但这正是第二轮要证的**，
+   分组本身也是手写，别把它当成免费的。
 2. **多步任务的定序与"算不算完成"**（B + D 类，9/25 条用例）。工具没有"这件事要三步才算完"
    这个概念，checker 的验收回执因此缺件。
 
