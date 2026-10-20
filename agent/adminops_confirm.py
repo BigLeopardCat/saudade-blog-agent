@@ -613,7 +613,19 @@ def render_confirm_question(specs, index=None, cats=None, boards=None, notes=Non
         return (f"要处理这几个任务吗？\n\n{acts}\n\n"
                 f"点「全部处理」我就都处理；只想处理其中一个任务，"
                 f"点「只处理第 N 个」（N 就是上面的编号）。")
-    return f"要{acts}吗？点「确定」我就去处理。"
+    # 单件（20261020 修）：动作**独占一段**，不写成 `要{acts}吗？`。
+    # `acts` 是 `_bold()` 包的 `**…**`，而卡面问句走的是博客同款 unified 管线
+    # （CommonMark）：收尾那个 `**` 若**前面是标点、后面紧跟一个汉字**，它就不构成
+    # right-flanking，星号关不掉、**原样印在卡面上**。而单件的动作几乎总以「）」收尾
+    # （排期、后果说明都写成括号），后面又恒是「吗」——于是这条路上的星号**次次**漏出。
+    # 线上真管线实测（同一句话，只差一个括号）：
+    #   `要**X**吗？`      → `要<strong>X</strong>吗？`  ✅
+    #   `要**X（…）**吗？`  → `要**X（…）**吗？`           ❌ 星号原样留着
+    # 换成与多件那一支**同形**（问句 / 动作独占一段 / 按钮说明）既绕开这条规则，又让
+    # 两种卡面长得一样。**别为了"紧凑"把它改回一行**——改回去没有任何东西会红，
+    # 除非 frontend/tests/confirm-question-markdown.test.mjs 那条跑真管线的锁在。
+    return (f"要处理这个任务吗？\n\n{acts}\n\n"
+            f"点「确定」我就去处理；点「取消」就当没说过。")
 
 
 def render_confirm_text(specs, index=None, cats=None, boards=None, notes=None,

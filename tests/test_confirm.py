@@ -909,9 +909,12 @@ def test_confirm():
     _n3, _e3 = confirm.narrow(_pay, "")
     check("  空选择 = 全部处理（旧客户端不发 confirm_pick 时逐字兼容）",
           _n3 is not None and len(_n3["specs"]) == 2 and _e3 == "")
+    # 20261006：单件卡是**三枚**（「其他（我来说）」）；20261019 句尾换「处理」；
+    # 20261020 单件那支改成与多件**同形** ⇒ 句尾字面随之变；判据见 test_confirm_question_shape.py
     check("  单件三枚（确定 / 其他（我来说）/ 取消），句尾动词是「处理」",
           [o["label"] for o in _confirm.confirm_opts(1)] == ["确定", "其他（我来说）", "取消"]
-          and _confirm.render_confirm_question(_grant_specs[:1]).endswith("点「确定」我就去处理。"))
+          and _confirm.render_confirm_question(_grant_specs[:1]).endswith(
+              "点「确定」我就去处理；点「取消」就当没说过。"))
     _n4, _e4 = confirm.narrow(_pay, "other")
     check("  「其他」不是选择记号 ⇒ fail-closed（它永不该走确认请求）",
           _n4 is None and bool(_e4), _e4)
