@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """「主人这一轮说了什么」只剩下**一个**来源（20261012 批 C ①）。
 
 **病**：同一个轮次里住着两个答案——`_planner_preflight` 的 `user_msg`（给二十来处
@@ -20,38 +19,41 @@
 
 用法：.venv/bin/python tests/test_session_input_source.py
 """
+
+
 from __future__ import annotations
 
 import dataclasses
 import sys
 from pathlib import Path
 
+from _judge import collector
+
 ROOT = Path(__file__).resolve().parent.parent
+
+
 sys.path.insert(0, str(ROOT))
 
-import _ctx_src  # noqa: E402  （`_` 开头 ⇒ 不被 run_all 当套件收）
+
+import _ctx_src  # noqa: E402  （`_` 开头 ⇒ 不被 pytest 当套件收）
 from langchain_core.messages import AIMessage, HumanMessage  # noqa: E402
 
 import agent.graph as G  # noqa: E402
 from agent.workflow_plan import instantiate_plan  # noqa: E402
 
 FAILED: list[str] = []
-# 取值点跟着代码搬（20261019）：写参数落位与拒答那一族住进了
-# `agent/write_grounding.py` ⇒ 判据字面一个字没动，只把"读 graph.py 全文"
-# 换成"读这一族的全部文件"（`tests/_ctx_src.py::write_guard_src`）。
+check = collector(FAILED)
+
+
 SRC = _ctx_src.write_guard_src()
 
 
-def check(name: str, ok: bool, extra: str = "") -> None:
-    print(f"  {'✅' if ok else '❌'} {name}" + (f"  [{extra}]" if extra else ""))
-    if not ok:
-        FAILED.append(name)
-
-
-# 现场原话（`20261012T054330` 会话那一句的形状：一句话两件写，其中一件是待办）
 OWNER = "想给账号「agent_fixture_freeze_a」发一条通知；另外还想在后台待办里加一条「身份变更复核」"
-# 前端合成的那句（`frontend/public/live2d-widgets/chat-stream.js` 的确认回显形状）
+
+
 ECHO = "确认执行：就按刚才那张卡办"
+
+
 TEXT = "身份变更复核"
 
 
@@ -60,8 +62,7 @@ def _msgs():
             HumanMessage(content=ECHO)]
 
 
-# ══════════════════════════════════════════════════════════════════════════
-def test_one_name_one_source():
+def _test_one_name_one_source():
     print("\n① 名字只剩一个：`user_msg` 就是 `_intent_src`，别名 `intent_msg` 已删")
     check("源码锁：`user_msg = _intent_src(state)` 恰好一处（planner 的装配点）",
           SRC.count("user_msg = _intent_src(state)") == 2,
@@ -77,8 +78,7 @@ def test_one_name_one_source():
           and "user_msg=pre.user_msg, role=role," in SRC)
 
 
-# ══════════════════════════════════════════════════════════════════════════
-def test_no_grant_is_byte_identical():
+def _test_no_grant_is_byte_identical():
     print("\n② 无令牌的轮次**逐字不变**（影响面只有确认兑现轮这一格）")
     shapes = [
         [HumanMessage(content="你好")],
@@ -95,8 +95,7 @@ def test_no_grant_is_byte_identical():
           G._intent_src({"messages": _msgs(), "confirm_grant": {"specs": []}}) != ECHO)
 
 
-# ══════════════════════════════════════════════════════════════════════════
-def test_grant_reads_the_owner_words():
+def _test_grant_reads_the_owner_words():
     print("\n③ 确认兑现轮读的是**主人原话**，不是前端合成的卡面回显")
     got = G._intent_src({"messages": _msgs(), "confirm_grant": {"workflow": "x", "specs": []}})
     check("⭐ 回到上一条主人消息（他当初那句话）", got == OWNER, repr(got)[:40])
@@ -105,7 +104,6 @@ def test_grant_reads_the_owner_words():
           G._last_user_msg(_msgs()) == ECHO)
 
 
-# ══════════════════════════════════════════════════════════════════════════
 def _plan(text: str) -> dict:
     """planner 那一份计划体的形状（与 `tests/test_todo_schedule.py` 的夹具同源）。"""
     obj = instantiate_plan("dashboard_todo_add", {"text": text}, "admin")
@@ -113,7 +111,7 @@ def _plan(text: str) -> dict:
     return obj
 
 
-def test_the_gate_flips_with_the_source():
+def _test_the_gate_flips_with_the_source():
     print("\n④ 现场那一格：同一份实参，读错源被判『编造』、读对源放行")
     echo_ref = G._todo_text_fix(_plan(TEXT), ECHO, "admin")
     check("⭐ 拿卡面回显当主人的话 ⇒ **拒绝**（主人自己的话被系统判成捏造，"
@@ -129,9 +127,15 @@ def test_the_gate_flips_with_the_source():
           and "_name_arg_fix(c.plan_obj, c.user_msg" in SRC)
 
 
-if __name__ == "__main__":
-    for fn in (test_one_name_one_source, test_no_grant_is_byte_identical,
-               test_grant_reads_the_owner_words, test_the_gate_flips_with_the_source):
+def test_session_input_source():
+    for fn in (_test_one_name_one_source, _test_no_grant_is_byte_identical,
+               _test_grant_reads_the_owner_words, _test_the_gate_flips_with_the_source):
         fn()
     print("\n" + ("全部通过 ✅" if not FAILED else f"失败 {len(FAILED)} 项 ❌: {FAILED}"))
-    sys.exit(1 if FAILED else 0)
+
+    assert not FAILED, (
+        f"{len(FAILED)} 条未通过：" + "；".join(FAILED))
+
+
+if __name__ == "__main__":
+    test_session_input_source()

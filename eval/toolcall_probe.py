@@ -3,7 +3,7 @@
 """native tool calls 探针：**发的是将要上线的真 schema 与真 planner 提示词**。
 
 **只读实验**：只发 LLM 请求，不碰数据库、不写 trace、不改任何生产状态。需要网络与 API key，
-**因此不入 L0 套件、不进夜间**（`tests/run_all.py` 只收 tests/*.py，本文件在 eval/）。
+**因此不入 L0 套件、不进夜间**（pytest 只收 `tests/` 下的文件，本文件在 eval/）。
 
 ## ⚠️ 首版的两个偏差（20260927 修正，留着当教训）
 

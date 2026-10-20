@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """服务商注册表的机械闸门（20261012）。离线、秒级、零网络零 LLM。
 
 **为什么单独一套**：本轮审计盯的是一族**同一个形状**的 bug —— **"一家一译"的地方只有
@@ -22,26 +21,28 @@ assistant 消息回放时缺 `reasoning_content` ⇒ 严格服务商**整轮 400
     `calls[].args` / `steps[].{}` 是**自由形状**（键就是被调工具的形参名），在那儿加会
     把它关死；这条负控与正控一样重要（正控挡住了"忘了写"，负控挡住"顺手写多了"）。
 """
+
+
 import logging
 import sys
 from pathlib import Path
 
+from _judge import collector
+
 ROOT = Path(__file__).resolve().parent.parent  # 仓根（测试统一在 tests/）
+
+
 sys.path.insert(0, str(ROOT))
 
-from config import settings as S  # noqa: E402  （`config/__init__.py` 导出的是**实例**）
-from config.settings import PROVIDER_DEFAULTS, KNOWN_LLM_PROVIDERS, Settings  # noqa: E402
+
 import models.llm as llm_mod  # noqa: E402
 from agent.planner_llm import build_tool_schema  # noqa: E402
+from config import settings as S  # noqa: E402  （`config/__init__.py` 导出的是**实例**）
+from config.settings import KNOWN_LLM_PROVIDERS, PROVIDER_DEFAULTS, Settings  # noqa: E402
 from eval import llm_judge as judge  # noqa: E402
 
 FAILS: list[str] = []
-
-
-def check(desc: str, cond: bool, detail: str = "") -> None:
-    print(("  ✅ " if cond else "  ❌ ") + desc + (f"  [{detail}]" if detail else ""))
-    if not cond:
-        FAILS.append(desc)
+check = collector(FAILS)
 
 
 class _Cap(logging.Handler):
@@ -95,8 +96,7 @@ def _fn_by_name(role, **kw):
     return {t["function"]["name"]: t["function"] for t in build_tool_schema(role, **kw)}
 
 
-# ── ① 取值域与启动校验 ────────────────────────────────────────────────
-def test_known_providers_is_the_table_keys():
+def _test_known_providers_is_the_table_keys():
     check("取值域 = `PROVIDER_DEFAULTS` 的键（不是手抄的第二份名单）",
           KNOWN_LLM_PROVIDERS == frozenset(PROVIDER_DEFAULTS),
           str(sorted(KNOWN_LLM_PROVIDERS)))
@@ -104,7 +104,7 @@ def test_known_providers_is_the_table_keys():
           str(sorted(KNOWN_LLM_PROVIDERS)))
 
 
-def test_check_provider_accepts_and_normalizes():
+def _test_check_provider_accepts_and_normalizes():
     for prov in sorted(KNOWN_LLM_PROVIDERS):
         check(f"`{prov}` 过校验", Settings(llm_provider=prov).check_provider() == prov)
     # 手写 .env 的常见形态：大小写 + 首尾空白。归一化只在 `_provider_prefix` 一处做，
@@ -116,7 +116,7 @@ def test_check_provider_accepts_and_normalizes():
           s.active_llm_model == PROVIDER_DEFAULTS["deepseek"]["model"], s.active_llm_model)
 
 
-def test_check_provider_refuses_unknown():
+def _test_check_provider_refuses_unknown():
     for bad in ("gpt4", "", "qwen3", " deepseek2 "):
         try:
             Settings(llm_provider=bad).check_provider()
@@ -125,8 +125,7 @@ def test_check_provider_refuses_unknown():
             check(f"`{bad!r}` 拒绝启动", "拒绝启动" in str(e), str(e)[:60])
 
 
-# ── ② 思考开关的译法（缺省支必须存在）─────────────────────────────────
-def test_thinking_extra_translates_each_provider():
+def _test_thinking_extra_translates_each_provider():
     check("qwen → enable_thinking=True",
           llm_mod._thinking_extra("qwen", True) == {"enable_thinking": True})
     check("qwen → enable_thinking=False",
@@ -137,7 +136,7 @@ def test_thinking_extra_translates_each_provider():
           llm_mod._thinking_extra("deepseek", False) == {"thinking": {"type": "disabled"}})
 
 
-def test_thinking_extra_unknown_provider_speaks_up():
+def _test_thinking_extra_unknown_provider_speaks_up():
     llm_mod._WARNED_PROVIDERS.discard("brandnew")
     with _capture("models.llm") as cap:
         out1 = llm_mod._thinking_extra("brandnew", False)
@@ -155,7 +154,7 @@ def test_thinking_extra_unknown_provider_speaks_up():
     llm_mod._WARNED_PROVIDERS.discard("brandnew")
 
 
-def test_get_llm_merges_translation_into_extra_body():
+def _test_get_llm_merges_translation_into_extra_body():
     kw = dict(api_key="k", base_url="http://x", model="m", enable_thinking=False)
     with _provider("qwen"):
         check("端到端：qwen 的译法真的进了 extra_body",
@@ -184,8 +183,7 @@ def test_get_llm_merges_translation_into_extra_body():
               str(llm_mod.get_llm(**kw, extra_body={"foo": 1}).extra_body))
 
 
-# ── ③ 结构化输出的方言表（20261019 批 G7 起住 `models/llm.py`）──────────
-def test_dialect_table_covers_every_provider():
+def _test_dialect_table_covers_every_provider():
     """方言表从 `eval/llm_judge.py` 上移到 `models/llm.py`（批 G7）——**改的是指向，不是
     契约**：这一族仍然"每一家一行 + 认不出出声 + 覆盖 `KNOWN_LLM_PROVIDERS` 全集"。
     上移的理由是 `eval.*` 不能被生产引（wheel 边界），而复盘器要用同一套方言 ⇒
@@ -218,13 +216,12 @@ def test_dialect_table_covers_every_provider():
           and judge.response_format("qwen")["json_schema"]["name"] == "verdict")
 
 
-# ── ④ schema：`additionalProperties: False` 只长在顶层 ────────────────
 def _param_objects(tools):
     """(函数名, parameters) 列表。"""
     return [(t["function"]["name"], t["function"]["parameters"]) for t in tools]
 
 
-def test_additional_properties_on_function_params():
+def _test_additional_properties_on_function_params():
     for role in (None, "admin"):
         if role is None:
             tools = build_tool_schema(None)
@@ -235,7 +232,7 @@ def test_additional_properties_on_function_params():
               not bad, f"缺: {bad[:5]}（共 {len(tools)} 个函数）")
 
 
-def test_additional_properties_on_pseudo_tools():
+def _test_additional_properties_on_pseudo_tools():
     tools = build_tool_schema("admin")
     pseudo = [n for n, p in _param_objects(tools)
               if n in ("task_hold", "task_drop", "task_intents")]
@@ -246,7 +243,7 @@ def test_additional_properties_on_pseudo_tools():
     check("伪函数的 parameters 也声明了", not bad, str(bad))
 
 
-def test_additional_properties_NOT_on_inner_objects():
+def _test_additional_properties_NOT_on_inner_objects():
     """负控：内层对象是**自由形状**，在那儿加会把它关死。
 
     `calls[].args` 的键就是被调工具的形参名（`_CALLS_ITEMS`），`steps[].{}` 是登记的
@@ -267,8 +264,7 @@ def test_additional_properties_NOT_on_inner_objects():
           "additionalProperties" not in intents, str(sorted(intents)))
 
 
-# ── ⑤ 接线锁（能力有测试 ≠ 接线有测试）──────────────────────────────
-def test_wired_into_server_lifespan():
+def _test_wired_into_server_lifespan():
     src = (ROOT / "server.py").read_text(encoding="utf-8")
     check("server 的 lifespan 里真的调了 `check_provider()`",
           "check_provider()" in src, "")
@@ -277,7 +273,7 @@ def test_wired_into_server_lifespan():
           and src.index("check_provider()") < src.index("_agent, _arm = _build_arm()"), "")
 
 
-def test_wire_illegal_anchor_is_stable():
+def _test_wire_illegal_anchor_is_stable():
     """父仓 `scripts/healthcheck.sh` 第 7 项按 `wire_illegal` 这个 ASCII token 扫增量日志
     ——它是绊线唯一的**自动出口**。句子可以改，**锚点不许改名**（改了就是静默半死：
     探针照跑、永远扫不到）。"""
@@ -288,19 +284,25 @@ def test_wire_illegal_anchor_is_stable():
           'record("model", "wire_illegal"' in src, "")
 
 
-if __name__ == "__main__":
-    for fn in (test_known_providers_is_the_table_keys,
-               test_check_provider_accepts_and_normalizes,
-               test_check_provider_refuses_unknown,
-               test_thinking_extra_translates_each_provider,
-               test_thinking_extra_unknown_provider_speaks_up,
-               test_get_llm_merges_translation_into_extra_body,
-               test_dialect_table_covers_every_provider,
-               test_additional_properties_on_function_params,
-               test_additional_properties_on_pseudo_tools,
-               test_additional_properties_NOT_on_inner_objects,
-               test_wired_into_server_lifespan,
-               test_wire_illegal_anchor_is_stable):
+def test_llm_provider_registry():
+    for fn in (_test_known_providers_is_the_table_keys,
+               _test_check_provider_accepts_and_normalizes,
+               _test_check_provider_refuses_unknown,
+               _test_thinking_extra_translates_each_provider,
+               _test_thinking_extra_unknown_provider_speaks_up,
+               _test_get_llm_merges_translation_into_extra_body,
+               _test_dialect_table_covers_every_provider,
+               _test_additional_properties_on_function_params,
+               _test_additional_properties_on_pseudo_tools,
+               _test_additional_properties_NOT_on_inner_objects,
+               _test_wired_into_server_lifespan,
+               _test_wire_illegal_anchor_is_stable):
         fn()
     print("\n" + ("全部通过 ✅" if not FAILS else f"失败 {len(FAILS)} 项 ❌: {FAILS}"))
-    sys.exit(1 if FAILS else 0)
+
+    assert not FAILS, (
+        f"{len(FAILS)} 条未通过：" + "；".join(FAILS))
+
+
+if __name__ == "__main__":
+    test_llm_provider_registry()

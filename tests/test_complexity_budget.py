@@ -1,5 +1,3 @@
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
 """复杂度 / 函数长度**预算闸**（20261009）。
 
 要回答的问题：本仓有一批函数圈复杂度偏高、还有几个超过 300 行（**落地前实测**：
@@ -18,15 +16,17 @@
 一旦回到预算内就要销账；台账里找不到对应函数的条目是过期的。
 
 台账 = `eval/complexity_baseline.json`，`--update` 是唯一的放宽通道（reviewer 直接
-看那份 diff）。本套件由 `tests/run_all.py` 按磁盘枚举 ⇒ **CI 与夜间 04:00 自动到手**，
+看那份 diff）。本套件由 pytest 按目录收集 ⇒ **CI 与夜间 04:00 自动到手**，
 零 workflow 改动。
 
 用法（cd 仓根，用仓的 venv）：
-  .venv/bin/python tests/test_complexity_budget.py              # 检查（run_all.py 这样调）
+  .venv/bin/python tests/test_complexity_budget.py              # 检查（CI 这样调）
   .venv/bin/python tests/test_complexity_budget.py --update     # 重写台账
   .venv/bin/python tests/test_complexity_budget.py --c-max 10   # 临时换阈值（看它会不会红）
 退出码：0 全在预算内 / 1 有函数超预算、长大了，或台账过期。
 """
+
+
 import argparse
 import ast
 import json
@@ -34,25 +34,27 @@ import pathlib
 import sys
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
+
+
 LEDGER = ROOT / "eval" / "complexity_baseline.json"
 
+
 C_MAX = 30          # McCabe 上限：超过就进台账
+
+
 LINES_MAX = 300     # 函数行数上限：同上
 
-# 扫描面 = 全仓一级 `.py`（与 ruff 同口径），只排掉产物目录。
-# **含 `tests/`**：规矩是「任何地方新写的大函数都要红」，不给测试开后门。
+
 _SKIP_DIRS = {".venv", "__pycache__", ".git", "node_modules", "dist", ".mypy_cache"}
 
-# ── McCabe 计数器（自写，无依赖）─────────────────────────────────────────────
-# 判定点集合：`if`/`elif`（每个 If）、`for`/`async for`、`while`、**每个**
-# `except` 分支、`with`/`async with`、`assert`、三元（IfExp）、布尔算子
-# （`and`/`or` 的每个额外操作数）、推导式的每个 `for` 与 `if`。
-# ⚠️ 这**不是**逐条复刻某个现成实现（mccabe 与 radon 在布尔算子上就不一致），
-# 也**不需要**是：本闸判的是 ratchet（「它没变大」），常数只要稳定就有意义。
-# 改这个集合 = 全仓读数平移 ⇒ 必须同一次 `--update`，并在这里记一笔。
+
 _BRANCHES = (ast.If, ast.For, ast.AsyncFor, ast.While, ast.ExceptHandler,
              ast.With, ast.AsyncWith, ast.Assert, ast.IfExp)
+
+
 _COMPREHENSIONS = (ast.ListComp, ast.SetComp, ast.DictComp, ast.GeneratorExp)
+
+
 _NESTED = (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)
 
 
@@ -140,7 +142,6 @@ def judge(current: dict, ledger: dict, c_max: int, lines_max: int) -> list[str]:
     return bad
 
 
-# ── 自检：计数器 + 判据（没有这一段，「闸其实是空的」没人看着）──────────────────
 _SELF_SRC = '''
 def f0():
     pass
@@ -193,9 +194,8 @@ class C9:
         while x:
             x = x - 1
 '''
-# 手算值（逐条对着上面那段源码数出来的；改计数器就必须重数这一张表）。
-# 注意 `f8` 是 4 = 基数 1 + 两个 for 各 1 + 那个 if 1（`f2` 只有一个 for ⇒ 3）——
-# 这张表建好当天就抓出过一次手算错（把基数漏了），所以它是必须留的。
+
+
 _SELF_EXPECT = {"f0": 1, "f1": 2, "f2": 3, "f3": 3, "f4": 2, "f5": 3,
                 "f6": 3, "f7": 1, "f7.inner": 2, "f8": 4, "C9.m": 2}
 
@@ -324,5 +324,18 @@ def main() -> int:
     return 0
 
 
+def test_complexity_budget():
+
+
+    _argv = sys.argv
+    if "pytest" in sys.modules:      # 只在 pytest 轨收窄（直跑轨的 CLI 照旧可用）
+        sys.argv = _argv[:1]
+    try:
+        _rc = main()
+    finally:
+        sys.argv = _argv
+    assert _rc == 0, "main() 非零：上面那些 ❌ 就是原因"
+
+
 if __name__ == "__main__":
-    sys.exit(main())
+    test_complexity_budget()

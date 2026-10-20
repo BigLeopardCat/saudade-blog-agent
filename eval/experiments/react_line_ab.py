@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """ReAct 试验线的定点 A/B：**同一批句子、同一个模型、同一套解码参数**，只换架构。
 
-**这是离线实验资产，不是 CI 套件的一部分**（`tests/run_all.py` 只收 `tests/*.py`，
+**这是离线实验资产，不是 CI 套件的一部分**（pytest 只收 `tests/` 下的文件，
 本文件在 `eval/experiments/`）。它需要网络与 API key，且一轮要烧几十万 token ——
 **按需手跑，别接进夜间**。
 

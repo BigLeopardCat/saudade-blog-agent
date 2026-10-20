@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """checkpoint 采纳的**共现锁**（20261018 批 6）：四处要么一起动，要么都不动。
 
 **它判的不是"接了没有"，是"有没有半接"。**
@@ -22,8 +21,8 @@
   · 四处全「已接」⇒ **绿**（采纳批的目标形态）；
   · 混合 ⇒ **红**，并点名是哪几处没跟上。
 
-⚠️ **为什么不写成"断言已接"**：那样它在采纳批之前一直是红的，而 `tests/run_all.py`
-按磁盘枚举、**没有"预期红"这个档** ⇒ 一条红的套件进不了 CI，只能被人挪出清单（那就成了
+⚠️ **为什么不写成"断言已接"**：那样它在采纳批之前一直是红的，而套件是按目录收集的、
+**没有"预期红"这个档** ⇒ 一条红的套件进不了 CI，只能被人挪出清单（那就成了
 一份没人跑的判据）。本仓的纪律是"每条判据都要能红"——这里靠的是 ⑤ 那一组**反控**：
 把任意一处单独拨到「已接」，锁必须当场红；拨齐四处，锁必须变绿。
 
@@ -34,6 +33,8 @@
 
 用法：.venv/bin/python tests/test_checkpoint_adoption.py
 """
+
+
 from __future__ import annotations
 
 import ast
@@ -41,29 +42,27 @@ import sys
 import textwrap
 from pathlib import Path
 
+from _judge import collector
+
 ROOT = Path(__file__).resolve().parent.parent
 
-#: 生产侧那四个文件。**刻意是点名清单而不是 glob**：这条锁要判的是"生产路径"，
-#: 而 `agent/checkpoint_arm.py`（实验臂）本来就该挂 saver、本来就该给 sync 档——
-#: 把它扫进来，锁会在"实验臂已接、生产未接"这个**完全正常**的形态上报红。
-#: `agent/checkpoint.py` 是 20261018 批 7 加进来的：采纳之后**坐标本体住在那里**
-#: （`thread_id_for`），只看 `server.py` 会漏掉"改名不改义"那种半接（④b）。
+
 PROD_FILES = ("server.py", "agent/agent.py", "agent/graph.py", "agent/checkpoint.py")
 
+
 UNSET = "未接"
+
+
 SET = "已接"
+
+
 MIXED = "半接"
 
+
 FAILED: list[str] = []
+check = collector(FAILED)
 
 
-def check(desc: str, ok: bool, detail: str = "") -> None:
-    print(f"  {'✅' if ok else '❌'} {desc}" + (f"  [{detail}]" if detail else ""))
-    if not ok:
-        FAILED.append(desc)
-
-
-# ── 读源码（判据可注入，反控要用） ────────────────────────────────────────────
 def _src(rel: str, sources: dict | None = None) -> str:
     if sources is not None and rel in sources:
         return sources[rel]
@@ -83,7 +82,6 @@ def _callee(node: ast.expr) -> str | None:
     return None
 
 
-# ── 四处探针。每个返回 `(形态, 人话)` ────────────────────────────────────────
 def probe_saver(sources: dict | None = None) -> tuple[str, str]:
     """① 生产调用点把 saver 交给图了吗。
 
@@ -297,37 +295,7 @@ def consistent(states: dict[str, tuple[str, str]]) -> tuple[bool, str]:
     return True, f"全{vals.pop()}"
 
 
-# ── 真源码 ───────────────────────────────────────────────────────────────────
-print("① 真源码：四处形态必须一致（批 7 起 = 全「已接」）")
-_states = states_of()
-for _name, (_st, _why) in _states.items():
-    print(f"     {_st}  {_name} —— {_why}")
-_ok, _why = consistent(_states)
-check("四处形态一致（**半接就是本件要抓的那一件事**）", _ok, _why)
-if _ok and _why == f"全{SET}":
-    print("     · 4/4：采纳已落地。**这不等于生产在跑 checkpoint**——跑没跑看"
-          "`CHECKPOINT_DSN`（空 ⇒ `build_checkpointer()` 返回 None ⇒ 图不挂 saver，"
-          "四处一起退回「未接」的行为）。这一格的可读出口是 `/health` 的"
-          "`checkpoint_backend`，判据 `tests/test_health_dials.py` ⑤")
-
 _BASE = {rel: (ROOT / rel).read_text(encoding="utf-8") for rel in PROD_FILES}
-
-# 判据读的是 AST 不是文本：往**真源码**后面追加含那两个字面的注释行，四处结论必须
-# **逐个不变**。这两个字面真存在于生产源码里（`server.py` 那段解释注入的注释里写着
-# `req.history[-20:]`、`agent/checkpoint.py` 头注里写着 `durability="sync"`）——
-# 子串匹配的版本会被它们骗，AST 的版本不会。
-print()
-print("② 判据读 AST 不读文本：往真源码追加那两条字面的注释 ⇒ 结论逐个不变")
-_commented = {rel: _BASE[rel] + '\n# req.history[-20:]\n# durability="sync"\n'
-              for rel in PROD_FILES}
-_c2 = states_of(_commented)
-check("四处结论与不加注释时**逐个相同**",
-      [st for st, _ in _c2.values()] == [st for st, _ in _states.values()],
-      "；".join(f"{n}={st}" for n, (st, _) in _c2.items()))
-
-# ── 反控：每一处单独拨到「已接」都必须当场红 ─────────────────────────────────
-print()
-print("③ 反控：单独拨动任意一处 ⇒ 形态必须不一致（锁必须红）")
 
 
 def _one(rel: str, old: str, new: str, *, expect: int, count: int = 1) -> dict:
@@ -345,59 +313,71 @@ def _one(rel: str, old: str, new: str, *, expect: int, count: int = 1) -> dict:
     return out
 
 
-_THREAD_SITE = "thread_id = _thread_id_for(req)"
-_THREAD_RANDOM = 'thread_id = f"user_{req.user_id}_{uuid.uuid4().hex[:8]}"'
-_DUR_SITE = ", **_stream_kwargs(),"
-_MUTATIONS = {
-    "只把 saver 摘掉": _one(
-        "server.py", "return create_agent(checkpointer=checkpoint.build_checkpointer()), arm",
-        "return create_agent(), arm", expect=1),
-    "只把 thread_id 改一条（两条里的一条）": _one(
-        "server.py", _THREAD_SITE, _THREAD_RANDOM, expect=2, count=1),
-    "只把历史注入的闸门摘掉": _one(
-        "server.py", "if not _graph_holds_context():\n        hist = ",
-        "if True:\n        hist = ", expect=1),
-    "只把持久化档改一条（两个调用点里的一个）": _one(
-        "server.py", _DUR_SITE, "", expect=2, count=1),
-    "把那一格的值改成非同步档": _one(
-        "server.py", '{"durability": idem.REQUIRED_DURABILITY}',
-        '{"durability": "async"}', expect=1),
-}
-for _label, _srcs in _MUTATIONS.items():
-    _s = states_of(_srcs)
-    _o, _w = consistent(_s)
-    check(f"（反控）{_label} ⇒ 锁必须红", not _o,
-          "；".join(f"{n}={st}" for n, (st, _) in _s.items()))
-
-# 单列一条：**两条线程路径只改一条**是最危险的那种半接，`probe_thread` 自己就要判成
-# 「半接」并点名，而不是"三条已接、一条未接"——后者读起来像"还差一条"，前者才是真相。
-print()
-print("④ 反控（单独一类）：两条线程路径只改一条 ⇒ `probe_thread` 当场判「半接」")
-_st, _sw = probe_thread(_MUTATIONS["只把 thread_id 改一条（两条里的一条）"])
-check("只改一条 ⇒ 「半接」+ 点名是哪几条（不是含糊的'未接'）", _st == MIXED, _sw)
-_st2, _sw2 = probe_thread(_one("server.py", _THREAD_SITE, _THREAD_RANDOM,
-                               expect=2, count=2))
-check("（对照）两条都改 ⇒ 「未接」（上一条不是恒「半接」）", _st2 == UNSET, _sw2)
-
-# 另一类半接：**改名不改义**——`server.py` 一个字节不变，把坐标本体换掉。
-print()
-print("④b 反控：坐标本体（`agent/checkpoint.py::thread_id_for`）换成不产坐标的实现 ⇒ 红")
-_gap = _one("agent/checkpoint.py",
-            "        tid = conversation_thread(conversation_id)",
-            "        tid = f\"conv_x\"", expect=1)
-_st3, _sw3 = probe_thread(_gap)
-check("helper 名字还在、本体不产坐标 ⇒ 判「半接」并点名", _st3 == MIXED, _sw3)
-_o3, _w3 = consistent(states_of(_gap))
-check("⇒ 锁必须红（`server.py` 的形状一个字节都没变）", not _o3, _w3)
-
-# ── 正控：另一极（全「未接」）也必须判得出来 ─────────────────────────────────
-# 本仓纪律"正控不红不算数"的反面：上面那组反控只证明了"能红"，还要证明**另一极那个
-# 形态真的判得出来**——否则四条探针可能是一组恒「已接」的东西，而"一致"就成了空过。
-# 采纳前（20261018 之前）生产就是这个形态，所以它必须仍被判成"全未接且一致"。
-print()
-print("⑤ 正控：一份最小的「全未接」骨架 ⇒ 四处全「未接」且一致")
-_UNSET = {
-    "server.py": textwrap.dedent('''
+def test_checkpoint_adoption():
+    print("① 真源码：四处形态必须一致（批 7 起 = 全「已接」）")
+    _states = states_of()
+    for _name, (_st, _why) in _states.items():
+        print(f"     {_st}  {_name} —— {_why}")
+    _ok, _why = consistent(_states)
+    check("四处形态一致（**半接就是本件要抓的那一件事**）", _ok, _why)
+    if _ok and _why == f"全{SET}":
+        print("     · 4/4：采纳已落地。**这不等于生产在跑 checkpoint**——跑没跑看"
+          "`CHECKPOINT_DSN`（空 ⇒ `build_checkpointer()` 返回 None ⇒ 图不挂 saver，"
+          "四处一起退回「未接」的行为）。这一格的可读出口是 `/health` 的"
+          "`checkpoint_backend`，判据 `tests/test_health_dials.py` ⑤")
+    print()
+    print("② 判据读 AST 不读文本：往真源码追加那两条字面的注释 ⇒ 结论逐个不变")
+    _commented = {rel: _BASE[rel] + '\n# req.history[-20:]\n# durability="sync"\n'
+                  for rel in PROD_FILES}
+    _c2 = states_of(_commented)
+    check("四处结论与不加注释时**逐个相同**",
+          [st for st, _ in _c2.values()] == [st for st, _ in _states.values()],
+          "；".join(f"{n}={st}" for n, (st, _) in _c2.items()))
+    print()
+    print("③ 反控：单独拨动任意一处 ⇒ 形态必须不一致（锁必须红）")
+    _THREAD_SITE = "thread_id = _thread_id_for(req)"
+    _THREAD_RANDOM = 'thread_id = f"user_{req.user_id}_{uuid.uuid4().hex[:8]}"'
+    _DUR_SITE = ", **_stream_kwargs(),"
+    _MUTATIONS = {
+        "只把 saver 摘掉": _one(
+            "server.py", "return create_agent(checkpointer=checkpoint.build_checkpointer()), arm",
+            "return create_agent(), arm", expect=1),
+        "只把 thread_id 改一条（两条里的一条）": _one(
+            "server.py", _THREAD_SITE, _THREAD_RANDOM, expect=2, count=1),
+        "只把历史注入的闸门摘掉": _one(
+            "server.py", "if not _graph_holds_context():\n        hist = ",
+            "if True:\n        hist = ", expect=1),
+        "只把持久化档改一条（两个调用点里的一个）": _one(
+            "server.py", _DUR_SITE, "", expect=2, count=1),
+        "把那一格的值改成非同步档": _one(
+            "server.py", '{"durability": idem.REQUIRED_DURABILITY}',
+            '{"durability": "async"}', expect=1),
+    }
+    for _label, _srcs in _MUTATIONS.items():
+        _s = states_of(_srcs)
+        _o, _w = consistent(_s)
+        check(f"（反控）{_label} ⇒ 锁必须红", not _o,
+              "；".join(f"{n}={st}" for n, (st, _) in _s.items()))
+    print()
+    print("④ 反控（单独一类）：两条线程路径只改一条 ⇒ `probe_thread` 当场判「半接」")
+    _st, _sw = probe_thread(_MUTATIONS["只把 thread_id 改一条（两条里的一条）"])
+    check("只改一条 ⇒ 「半接」+ 点名是哪几条（不是含糊的'未接'）", _st == MIXED, _sw)
+    _st2, _sw2 = probe_thread(_one("server.py", _THREAD_SITE, _THREAD_RANDOM,
+                                   expect=2, count=2))
+    check("（对照）两条都改 ⇒ 「未接」（上一条不是恒「半接」）", _st2 == UNSET, _sw2)
+    print()
+    print("④b 反控：坐标本体（`agent/checkpoint.py::thread_id_for`）换成不产坐标的实现 ⇒ 红")
+    _gap = _one("agent/checkpoint.py",
+                "        tid = conversation_thread(conversation_id)",
+                "        tid = f\"conv_x\"", expect=1)
+    _st3, _sw3 = probe_thread(_gap)
+    check("helper 名字还在、本体不产坐标 ⇒ 判「半接」并点名", _st3 == MIXED, _sw3)
+    _o3, _w3 = consistent(states_of(_gap))
+    check("⇒ 锁必须红（`server.py` 的形状一个字节都没变）", not _o3, _w3)
+    print()
+    print("⑤ 正控：一份最小的「全未接」骨架 ⇒ 四处全「未接」且一致")
+    _UNSET = {
+        "server.py": textwrap.dedent('''
         def _build_messages(req, confirm_grant=None):
             hist = [(h.role, h.content) for h in req.history[-20:]]
             return hist
@@ -422,22 +402,28 @@ _UNSET = {
                                             **_stream_kwargs()):
                 pass
     '''),
-    "agent/checkpoint.py": "def thread_id_for(user_id, conversation_id, holds_context):\n"
+        "agent/checkpoint.py": "def thread_id_for(user_id, conversation_id, holds_context):\n"
                            "    return f\"user_{user_id}\"\n",
-    "agent/agent.py": "def create_agent(checkpointer=None):\n"
+        "agent/agent.py": "def create_agent(checkpointer=None):\n"
                       "    return build_graph(checkpointer=checkpointer)\n",
-    "agent/graph.py": "def build_graph(checkpointer=None):\n"
+        "agent/graph.py": "def build_graph(checkpointer=None):\n"
                       "    return g.compile(checkpointer=checkpointer)\n",
-}
-_us = states_of(_UNSET)
-_uo, _uw = consistent(_us)
-for _name, (_st, _why) in _us.items():
-    print(f"     {_st}  {_name} —— {_why}")
-check("骨架四处全「未接」且一致（探针不是一组恒「已接」的东西）", _uo and _uw == f"全{UNSET}",
-      _uw)
+    }
+    _us = states_of(_UNSET)
+    _uo, _uw = consistent(_us)
+    for _name, (_st, _why) in _us.items():
+        print(f"     {_st}  {_name} —— {_why}")
+    check("骨架四处全「未接」且一致（探针不是一组恒「已接」的东西）", _uo and _uw == f"全{UNSET}",
+          _uw)
+    print()
+    if FAILED:
+        print(f"失败 {len(FAILED)} 项：" + "；".join(FAILED))
+        sys.exit(1)
+    print("全部通过")
 
-print()
-if FAILED:
-    print(f"失败 {len(FAILED)} 项：" + "；".join(FAILED))
-    sys.exit(1)
-print("全部通过")
+    assert not FAILED, (
+        f"{len(FAILED)} 条未通过：" + "；".join(FAILED))
+
+
+if __name__ == "__main__":
+    test_checkpoint_adoption()

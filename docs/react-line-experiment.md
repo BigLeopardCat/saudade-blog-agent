@@ -190,7 +190,7 @@
 cd /home/ubuntu/Saudade-Blog/saudade-blog-agent        # 就是仓根，不是另一个 worktree
 .venv/bin/python tests/test_react_line.py              # 接线单测：秒级、零网络
 .venv/bin/python tests/test_react_arm.py               # 生产帧契约 + 闸门/narrator/选臂/并发
-.venv/bin/python tests/run_all.py                      # 全套（本文件所在仓的常规入口）
+.venv/bin/python -m pytest -q                          # 全套（本文件所在仓的常规入口）
 .venv/bin/python eval/experiments/react_line_ab.py \   # 定点 A/B：要网络、烧 token
     --rounds 3 --arms planner,react_assets,react_line --out /tmp/react_line_ab.json
 .venv/bin/python eval/arm_capability.py --arm react --probe   # 读数许可闸（§六），离线

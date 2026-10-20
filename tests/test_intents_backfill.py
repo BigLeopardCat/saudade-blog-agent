@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """意图清单的**反方向**补交（20261009）：点了技能却没交清单 ⇒ 催一次。
 
 **这一件治什么**：批 ②（ADR-0002 追记）让模型把"主人这句话里有几件事"一次列全，
@@ -32,41 +31,39 @@ tasks 层的契约，与"不许 import agent.graph"同一条纪律。
 用法：.venv/bin/python tests/test_intents_backfill.py
 （20261015 起没有"跑哪一档"这回事了：`AGENT_TASK_STATE` 档位已整族撤掉、任务状态常开。）
 """
+
+
 import sys
 from pathlib import Path
 
+from _judge import collector
+
 ROOT = Path(__file__).resolve().parent.parent  # 仓根（测试统一在 tests/）
+
+
 sys.path.insert(0, str(ROOT))
 
-import _ctx_src  # noqa: E402  （`_` 开头 ⇒ 不被 run_all 当套件收）
+
+import _ctx_src  # noqa: E402  （`_` 开头 ⇒ 不被 pytest 当套件收）
+from langchain_core.messages import AIMessage, HumanMessage  # noqa: E402
 
 import agent.graph as g  # noqa: E402
 from agent.workflow_defs import visible_workflows  # noqa: E402
-from langchain_core.messages import AIMessage, HumanMessage  # noqa: E402
 
 FAILS: list[str] = []
+check = collector(FAILS)
 
 
-def check(desc: str, cond: bool, detail: str = "") -> None:
-    print(("  ✅ " if cond else "  ❌ ") + desc + (f"  [{detail}]" if detail else ""))
-    if not cond:
-        FAILS.append(desc)
-
-
-# 刀 2（20261009）后 `_planner_decide` 拆成阶段函数、跨段量改从 ctx 上取
-# （`rounds` → `c.rounds`）⇒ 本文件的整文件文本锁先去掉那个前缀再看：
-# 判据文本与拆分之前**逐字相同**（前缀清单从 graph.py 的 AST 读，见 `_ctx_src`）。
 _GRAPH_SRC = _ctx_src.graph_deprefixed()
-# ④ 那一格的起点（源码锁用；只在这里算一次）
+
+
 _I_BRANCH = _GRAPH_SRC.index("_acted_no_intents = bool(")
 
-# 现场那两句（逐字抄自 golden `mix2_two_writes_one_breath_card_only` 与
-# `admin_write_intent_named_target_only` 的头注/用例，别改写——形态判据要判的正是它们）。
+
 MIX2 = "想建个新分类叫「临江仙」，文章 23 的标签也想换成「Rust」"
 
 
-# ── ① 形态判据 ──────────────────────────────────────────────────────────
-def test_multi_item_shape():
+def _test_multi_item_shape():
     print("\n[形态] `_multi_item_shape`：多子句 + 非首句的连接词（偏召回，代价只是一次调用）")
     cases = [
         (MIX2, True),
@@ -98,8 +95,7 @@ def test_multi_item_shape():
           not bad, str(bad))
 
 
-# ── ② 出处对账读哪几段主人话 ─────────────────────────────────────────────
-def test_task_goal_sources_picks_masters_words():
+def _test_task_goal_sources_picks_masters_words():
     print("\n[出处] `_task_goal_sources`：本轮那句在最前，`[System: …]` 注入不算主人说的话")
     state = {"messages": [
         HumanMessage("[System: current_time=2026-10-09 10:00; url=/article/100"),
@@ -122,8 +118,7 @@ def test_task_goal_sources_picks_masters_words():
           g._task_goal_sources({}) == [] and g._task_goal_sources({"messages": [None]}) == [])
 
 
-# ── ③ 纠偏语文本 ────────────────────────────────────────────────────────
-def test_backfill_nudge_text():
+def _test_backfill_nudge_text():
     print("\n[纠偏] `_INTENTS_BACKFILL_NUDGE`：不替模型选技能、且必须交代清单通道没了")
     check("不念任何技能名（念一遍等于替它做选择；与本仓另外几条纠偏语同一条纪律）",
           all(s.name not in g._INTENTS_BACKFILL_NUDGE
@@ -146,8 +141,7 @@ def test_backfill_nudge_text():
           all(ch == "\n" or ch.isprintable() for ch in g._INTENTS_BACKFILL_NUDGE))
 
 
-# ── ④ 接线 ──────────────────────────────────────────────────────────────
-def test_branch_wiring():
+def _test_branch_wiring():
     print("\n[接线] ④ 那一格：守卫齐备 + 摘伪函数 + 重绑 llm + 记账 + continue")
     i = _GRAPH_SRC.index("_acted_no_intents = bool(")
     blk = _GRAPH_SRC[i:i + 2200]
@@ -187,7 +181,6 @@ def test_branch_wiring():
           "sources=_task_goal_sources(state)" in _GRAPH_SRC[j:j + 2000])
 
 
-# ── ⑤ 「减完还剩几件」与真登记走同一条路 ───────────────────────────────────
 class _Decided:
     """`_planner_decide` 的决策对象里，这两个函数用到的那几格。"""
 
@@ -197,7 +190,7 @@ class _Decided:
         self.declare = declare
 
 
-def test_left_count_shares_the_registration_path():
+def _test_left_count_shares_the_registration_path():
     print("\n[共用] `_acted_workflows` / `_intents_left_count`：与真登记同一份现场事实")
     check("派下去的那个技能算「办了」（卡一次只装一个 ⇒ 它就是上卡的那件）",
           g._acted_workflows({"receipts": []}, _Decided(workflow="category_create"))
@@ -257,15 +250,22 @@ def test_left_count_shares_the_registration_path():
 
 
 def main() -> int:
-    for fn in (test_multi_item_shape,
-               test_task_goal_sources_picks_masters_words,
-               test_backfill_nudge_text,
-               test_branch_wiring,
-               test_left_count_shares_the_registration_path):
+    for fn in (_test_multi_item_shape,
+               _test_task_goal_sources_picks_masters_words,
+               _test_backfill_nudge_text,
+               _test_branch_wiring,
+               _test_left_count_shares_the_registration_path):
         fn()
     print("\n" + ("全部通过 ✅" if not FAILS else f"失败 {len(FAILS)} 项 ❌: {FAILS}"))
     return 1 if FAILS else 0
 
 
+def test_intents_backfill():
+    main()
+
+    assert not FAILS, (
+        f"{len(FAILS)} 条未通过：" + "；".join(FAILS))
+
+
 if __name__ == "__main__":
-    raise SystemExit(main())
+    test_intents_backfill()

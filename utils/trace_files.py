@@ -4,7 +4,7 @@
 **为什么单列一个模块**：枚举方式此前在四个读取端各写一遍（`trace_alert.py` /
 `trace_metrics.py` / `trace_reconcile.py` / `golden_draft.py`，逐字相同的两行 glob）。
 布局一变就是四处一起改、漏一处就变成"这个脚本少看了一半数据"——与
-`tests/run_all.py` 按磁盘枚举套件同一条理由：**让改动只有一个落点**。
+pytest 按目录收集套件同一条理由：**让改动只有一个落点**。
 
 **为什么住在 `utils/` 下**（20261019 从 `eval/` 搬来）：两个方向都要引它——**生产代码**
 （`agent/hostinfo.py::trace_stats`，运维报表数当日 trace）与 `eval/` 下四个离线读取端；

@@ -41,11 +41,14 @@
   根本没产出那个参数"从读数里删掉——那正是最该看见的一遍。
 """
 import argparse
+import atexit
 import collections
 import json
 import os
+import shutil
 import subprocess
 import sys
+import tempfile
 import time
 from pathlib import Path
 
@@ -58,7 +61,6 @@ import report_archive  # noqa: E402  （留档名的唯一事实源：毫秒戳 
 
 GOLDEN_FILE = ROOT / "eval" / "golden" / "basic.jsonl"
 RUNNER = ROOT / "eval" / "golden_case_runner.py"
-TMPDIR = Path("/tmp/slot_stability_cases")
 REPORTS_DIR = ROOT / "eval" / "report" / "slot_stability"
 TIMEOUT = 180          # 与 `golden_full_run.py` 同一个数
 MISSING = "(缺席)"     # 这一遍没产出那个参数（如实进分母，不跳过）
@@ -105,6 +107,23 @@ def extract_slot(result: dict, tool: str, field: str) -> str | None:
     return None
 
 
+_SCRATCH: Path | None = None
+
+
+def scratch() -> Path:
+    """本进程的私有暂存目录（惰性开一次，进程退出时收掉）。
+
+    **不写死 `/tmp/<固定名>`**（原先就是）：共享的 `/tmp` 里那个名字可被他人预先创建成
+    目录或软链（bandit B108 报的就是它），而这里要的只是"本次跑的一个私有目录"。
+    惰性：`--help` / 只读子命令不该在盘上留东西。
+    """
+    global _SCRATCH
+    if _SCRATCH is None:
+        _SCRATCH = Path(tempfile.mkdtemp(prefix="slot_stability_cases_"))
+        atexit.register(shutil.rmtree, _SCRATCH, ignore_errors=True)
+    return _SCRATCH
+
+
 def spawn(case: dict, rep: int, *, trace: bool, trace_run: str) -> dict:
     """跑一遍（独立子进程 + 本遍自己的线程坐标）。
 
@@ -114,8 +133,7 @@ def spawn(case: dict, rep: int, *, trace: bool, trace_run: str) -> dict:
     目录（`golden_full_run` 特意在父进程解析一次再经环境变量传下去，正是防这个）。
     要看某一遍为什么不一样时开 `--trace`，那时**整轮共用一个 run 目录**。
     """
-    TMPDIR.mkdir(parents=True, exist_ok=True)
-    casefile = TMPDIR / f"{case['id']}.json"
+    casefile = scratch() / f"{case['id']}.json"
     casefile.write_text(json.dumps(case, ensure_ascii=False), encoding="utf-8")
     env = dict(os.environ)
     env["GOLDEN_REP"] = str(rep)

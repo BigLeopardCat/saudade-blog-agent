@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """trace 语料不变量（`eval/corpus_invariants.py`）的离线自测：秒级、无网络、零 LLM。
 
 **为什么需要**：这个脚本是"全量语料里有多少条 X"的**唯一**口径（它的头注写着此前每问
@@ -20,23 +19,27 @@
 `planner.task_declare` / `planner.task_declare_noconv` / `planner.task_correct` /
 `producer.task_inject` / `producer.task_advance`。
 """
+
+
 import sys
 from collections import Counter, defaultdict
 from pathlib import Path
 
+from _judge import collector
+
 ROOT = Path(__file__).resolve().parent.parent  # 仓根（测试统一在 tests/）
+
+
 sys.path.insert(0, str(ROOT))
+
+
 sys.path.insert(0, str(ROOT / "eval"))
+
 
 import corpus_invariants as CI  # noqa: E402
 
 FAILS: list[str] = []
-
-
-def check(desc: str, cond: bool, detail: str = "") -> None:
-    print(("  ✅ " if cond else "  ❌ ") + desc + (f"  [{detail}]" if detail else ""))
-    if not cond:
-        FAILS.append(desc)
+check = collector(FAILS)
 
 
 def _ev(node: str, event: str, **kw) -> dict:
@@ -51,8 +54,7 @@ def _kinds(rows: list) -> list:
     return [r["kind"] for r in rows]
 
 
-# ── ① scan_one 的返回形状 ───────────────────────────────────────────────
-def test_scan_one_shape():
+def _test_scan_one_shape():
     print("\n[形状] scan_one 七个键一个不少（消费方按名取，少一个就是静默 None）")
     one = CI.scan_one(_trace())
     check("空 trace 也有七格", set(one) == {"i1", "i2", "i3", "i4", "i5", "i6", "i7"},
@@ -63,8 +65,7 @@ def test_scan_one_shape():
     check("全空时 I7 无命中", one["i7"] == [], str(one["i7"]))
 
 
-# ── ② I6：写端 vs 消费端对账（批 D） ─────────────────────────────────────
-def test_i6_declare_without_id():
+def _test_i6_declare_without_id():
     print("\n[I6] 登记没有 id ⇒ 下一轮读回来的一定不是它（登记等于没登记）")
     rows = CI._i6_rows(_trace(
         _ev("planner", "task_declare", task_id="", goal="带我过去后开启一个特效", round=0)))
@@ -75,14 +76,14 @@ def test_i6_declare_without_id():
     check("task_id 非空 → 不命中", ok == [], str(ok))
 
 
-def test_i6_declare_without_conversation():
+def _test_i6_declare_without_conversation():
     print("\n[I6] 拿不到会话 id ⇒ 声明只进 trace、没有任何读端")
     rows = CI._i6_rows(_trace(_ev("planner", "task_declare_noconv", goal="g", round=1)))
     check("命中 noconv", _kinds(rows) == ["noconv"], str(rows))
     check("带条数", rows[0]["n"] == 1)
 
 
-def test_i6_unadvanced_needs_injection():
+def _test_i6_unadvanced_needs_injection():
     print("\n[I6] `挂着没人管` 只在**注入过**的轮次上成立（分母非 0 才有含义）")
     check("没有注入过 → 不命中（哪怕什么都没做）",
           CI._i6_rows(_trace()) == [])
@@ -105,7 +106,7 @@ def test_i6_unadvanced_needs_injection():
           zero == [], str(zero))
 
 
-def test_i6_corrected_is_observational():
+def _test_i6_corrected_is_observational():
     print("\n[I6] `只登记不干活被纠偏` 是观察量（只计数、不进清单）")
     t = _trace(_ev("planner", "task_correct", goal="g", steps=1, round=0))
     rows = CI._i6_rows(t)
@@ -117,11 +118,10 @@ def test_i6_corrected_is_observational():
           "i6_corrected" not in hits, str(dict(hits)))
 
 
-# ── ②′ I7：废话轮（20261012 批） ─────────────────────────────────────
 _SOLICIT = "降级还没做。要现在继续给他降成「杂鱼」吗？你说一声我就去办。"
 
 
-def test_i7_needs_all_three_layers():
+def _test_i7_needs_all_three_layers():
     print("\n[I7] 三层与缺一层都不成立（这正是它不误伤正当建议的原因）")
     probe_ok = _ev("gate", "task_ledger_probe", rows=3, settled=["at_1"])
     inj = _ev("producer", "task_inject", n=3, ids=["at_1", "at_2", "at_3"])
@@ -154,7 +154,7 @@ def test_i7_needs_all_three_layers():
               reply=_SOLICIT))) == ["on_face", "waste"])
 
 
-def test_i7_accumulate_routing():
+def _test_i7_accumulate_routing():
     print("\n[I7] `on_face` 是分母（只计数、不进清单），waste/leftover 都进清单")
     inj = _ev("producer", "task_inject", n=2, ids=["at_1", "at_2"])
     probe_ok = _ev("gate", "task_ledger_probe", rows=2, settled=["at_1"])
@@ -173,8 +173,7 @@ def test_i7_accumulate_routing():
           f"{sorted(hits2)} {dict(counts2)}")
 
 
-# ── ③ _accumulate：键名与 hits 分流 ─────────────────────────────────────
-def test_accumulate_key_names_and_routing():
+def _test_accumulate_key_names_and_routing():
     print("\n[累加] 计数键名与 hits 分流（键名写错 = 那一栏恒 0，看起来像好消息）")
     t = _trace(_ev("planner", "task_declare", task_id="", goal="g", round=0),
                _ev("planner", "task_declare_noconv", goal="g"),
@@ -203,8 +202,7 @@ def test_accumulate_key_names_and_routing():
               for rows in hits.values() for x in rows))
 
 
-# ── ④ I1/I2/I4 最小样例（此前无测试，顺手钉住口径） ──────────────────────
-def test_i1_i2_i4_minimal():
+def _test_i1_i2_i4_minimal():
     print("\n[其余] I1/I2/I4 各一条最小样例")
     # 批 2 起命令住在 `cmd` 字段里（`result` 只剩无前缀的中文事实），所以"引用回执"
     # 的样子是：正文里的 `AUTO_NAVIGATE:/about` 与这一轮 `cmd` 重建出来的连线形相同。
@@ -229,7 +227,7 @@ def test_i1_i2_i4_minimal():
     check("I4 = gate fallback 条数", i4["i4"] == 1)
 
 
-def test_report_mentions_every_i6_kind():
+def _test_report_mentions_every_i6_kind():
     print("\n[报告] `_i6_rows` 产出的每一种 kind 都在 report() 里露面")
     # 两边都是字面量，改一处必须同改另一处：新的 kind 不加进报告 = 那格恒不显示，
     # 而显示不出来的判据等于没有（同"写了没人读"那族）。
@@ -250,7 +248,7 @@ def test_report_mentions_every_i6_kind():
     check("产出集合 ⊆ 报告认识的那几种", produced <= set(KINDS), str(sorted(produced)))
 
 
-def test_report_mentions_every_i7_kind():
+def _test_report_mentions_every_i7_kind():
     print("\n[报告] `_i7_rows` 产出的每一种 kind 都在 report() 里露面")
     import inspect
     src = inspect.getsource(CI.report)
@@ -266,18 +264,24 @@ def test_report_mentions_every_i7_kind():
           produced <= {"on_face", "leftover", "waste"}, str(sorted(produced)))
 
 
-if __name__ == "__main__":
-    for fn in (test_scan_one_shape,
-               test_i6_declare_without_id,
-               test_i6_declare_without_conversation,
-               test_i6_unadvanced_needs_injection,
-               test_i6_corrected_is_observational,
-               test_i7_needs_all_three_layers,
-               test_i7_accumulate_routing,
-               test_accumulate_key_names_and_routing,
-               test_i1_i2_i4_minimal,
-               test_report_mentions_every_i6_kind,
-               test_report_mentions_every_i7_kind):
+def test_corpus_invariants():
+    for fn in (_test_scan_one_shape,
+               _test_i6_declare_without_id,
+               _test_i6_declare_without_conversation,
+               _test_i6_unadvanced_needs_injection,
+               _test_i6_corrected_is_observational,
+               _test_i7_needs_all_three_layers,
+               _test_i7_accumulate_routing,
+               _test_accumulate_key_names_and_routing,
+               _test_i1_i2_i4_minimal,
+               _test_report_mentions_every_i6_kind,
+               _test_report_mentions_every_i7_kind):
         fn()
     print("\n" + ("全部通过 ✅" if not FAILS else f"失败 {len(FAILS)} 项 ❌: {FAILS}"))
-    sys.exit(1 if FAILS else 0)
+
+    assert not FAILS, (
+        f"{len(FAILS)} 条未通过：" + "；".join(FAILS))
+
+
+if __name__ == "__main__":
+    test_corpus_invariants()

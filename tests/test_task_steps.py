@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """步骤模型带实参（`agent/tasks.py::step_record` / `certify_steps` / `bound_steps`）。
 
 **为什么单独一套**（20261012 批 A）：这一步改的是**跨轮任务的形状本身**——台账里的
@@ -26,13 +25,20 @@
     （父仓读不到时按 `tests/_parent_repo.py` 的三分支处理：缺省跳过、设了
     `SAUDADE_REQUIRE_PARENT=1` 就是红）。
 """
+
+
 import json
 import re
 import sys
 from pathlib import Path
 
+from _judge import collector
+
 ROOT = Path(__file__).resolve().parent.parent  # 仓根（测试统一在 tests/）
+
+
 sys.path.insert(0, str(ROOT))
+
 
 from agent import tasks as T  # noqa: E402
 from agent.tool_specs import split_tool_spec  # noqa: E402
@@ -40,23 +46,16 @@ from agent.workflow_params import args_are_bound  # noqa: E402
 from agent.workflow_plan import instantiate_plan  # noqa: E402
 
 FAILS: list[str] = []
-
-
-def check(desc: str, cond: bool, detail: str = "") -> None:
-    print(("  ✅ " if cond else "  ❌ ") + desc + (f"  [{detail}]" if detail else ""))
-    if not cond:
-        FAILS.append(desc)
+check = collector(FAILS)
 
 
 ROLE = "superadmin"
-# 逐字抄自真展开（`instantiate_plan("tag_create", {"name": "临江仙"}, ROLE)`）：
-# 参数名还走了既有的一条通道——`name` 被 `_PARAM_ALIASES` 搬到了 `title`。这里不改写它，
-# 因为"步骤里的实参必须与**真执行那一次**逐字相同"正是本套件要钉的东西。
+
+
 BOUND_TAG = [{"workflow": "tag_create", "tool": "create_tag", "args": {"title": "临江仙"}}]
 
 
-# ── ① 步骤形状：加法的 ────────────────────────────────────────────────────
-def test_step_record_is_additive():
+def _test_step_record_is_additive():
     print("\n[形状] `step_record` 对老两格是**逐字**的，`workflow`/`args` 有才写")
     check("老两格进 ⇒ 老两格出（存量行、Rust 透传、渲染器全靠这一条）",
           T.step_record({"label": "开启特效", "tool": "toggle_effect"})
@@ -90,12 +89,11 @@ def test_step_record_is_additive():
           and len(T.step_record({"label": "x", "tool": "t" * 500})["tool"]) == T.TOOL_MAX)
 
 
-# ── ② 落库前自证：列宽 ────────────────────────────────────────────────────
 def _size(x) -> int:
     return len(json.dumps(x, ensure_ascii=False))
 
 
-def test_certify_steps_stays_legal_and_within_width():
+def _test_certify_steps_stays_legal_and_within_width():
     print("\n[列宽] `certify_steps` 保证「序列化后 ≤ 上限」且「仍是合法 JSON」")
     small = [{"label": "开启特效", "tool": "toggle_effect"}]
     check("不超上限 ⇒ 原样返回、零记录", T.certify_steps(small, 4000) == (small, []))
@@ -165,8 +163,7 @@ def test_certify_steps_stays_legal_and_within_width():
     check("降级**不改调用方手里那份**", "args" in keep[0] and keep[0]["args"] == {"t": "甲" * 90})
 
 
-# ── ③ 实参从哪来：与执行侧同一个展开器 ────────────────────────────────────
-def test_bound_steps_comes_from_the_same_expander():
+def _test_bound_steps_comes_from_the_same_expander():
     print("\n[绑定] `bound_steps` 的实参与**真执行那次**同源（`instantiate_plan`）")
     check("技能名 + 参数 ⇒ 已绑实参的步骤（含参数名归一那条既有通道）",
           T.bound_steps("tag_create", {"name": "临江仙"}, ROLE) == BOUND_TAG)
@@ -195,11 +192,10 @@ def test_bound_steps_comes_from_the_same_expander():
           T.bound_steps("tag_create", "临江仙", ROLE) == [])
 
 
-# ── ④ 两条登记通道都带上实参 ──────────────────────────────────────────────
 SRC = ("想建个新分类叫「临江仙」，文章 23 的标签也想换成「Rust」",)
 
 
-def test_intents_carry_params_end_to_end():
+def _test_intents_carry_params_end_to_end():
     print("\n[端到端] 意图清单的 `params` ⇒ 步骤带实参（无 params 时＝今天的行为）")
     base = [{"goal": "建个新分类叫「临江仙」", "workflow": "category_create"}]
     old = T.intents_to_declarations(base, role=ROLE, sources=SRC)
@@ -239,7 +235,7 @@ def test_intents_carry_params_end_to_end():
                     "params": {"path_name": "linjiangxian"}}], role=ROLE, sources=SRC)))
 
 
-def test_frame_payload_certifies_before_landing():
+def _test_frame_payload_certifies_before_landing():
     print("\n[发帧] `frame_payload` 是两条登记通道**唯一**的帧出口 ⇒ 闸设在这一处")
     decl = T.normalize_declaration({"goal": "带我过去后开启一个特效", "steps": BOUND_TAG})
     audit: dict = {}
@@ -265,8 +261,7 @@ def test_frame_payload_certifies_before_landing():
           pl2["total_steps"] == len(pl2["steps"]) == 3)
 
 
-# ── ⑤ 跨语言：列宽常量必须同值 ────────────────────────────────────────────
-def test_steps_col_max_mirrors_parent_repo():
+def _test_steps_col_max_mirrors_parent_repo():
     print("\n[跨语言] `tasks.TASK_STEPS_COL_MAX` 与父仓 `chat.rs` 那一格同值")
     import _parent_repo  # noqa: E402
 
@@ -288,7 +283,7 @@ def test_steps_col_max_mirrors_parent_repo():
               T.TASK_STEPS_COL_MAX * 4 < 65535)
 
 
-def test_module_does_not_import_graph():
+def _test_module_does_not_import_graph():
     print("\n[结构] tasks 不许 import agent.graph（会成环）")
     src = (ROOT / "agent" / "tasks.py").read_text(encoding="utf-8")
     hits = [ln for ln in src.splitlines()
@@ -296,14 +291,20 @@ def test_module_does_not_import_graph():
     check("没有 agent.graph 的 import", not hits, str(hits))
 
 
-if __name__ == "__main__":
-    for fn in (test_step_record_is_additive,
-               test_certify_steps_stays_legal_and_within_width,
-               test_bound_steps_comes_from_the_same_expander,
-               test_intents_carry_params_end_to_end,
-               test_frame_payload_certifies_before_landing,
-               test_steps_col_max_mirrors_parent_repo,
-               test_module_does_not_import_graph):
+def test_task_steps():
+    for fn in (_test_step_record_is_additive,
+               _test_certify_steps_stays_legal_and_within_width,
+               _test_bound_steps_comes_from_the_same_expander,
+               _test_intents_carry_params_end_to_end,
+               _test_frame_payload_certifies_before_landing,
+               _test_steps_col_max_mirrors_parent_repo,
+               _test_module_does_not_import_graph):
         fn()
     print("\n" + ("全部通过 ✅" if not FAILS else f"失败 {len(FAILS)} 项 ❌: {FAILS}"))
-    sys.exit(1 if FAILS else 0)
+
+    assert not FAILS, (
+        f"{len(FAILS)} 条未通过：" + "；".join(FAILS))
+
+
+if __name__ == "__main__":
+    test_task_steps()

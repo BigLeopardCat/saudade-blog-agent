@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """本轮窗口（`turn_msgs` / `turn_start` / `_turn`）：纯函数 + AST 审计锁。
 
 **为什么有这个套件**（20261015 实验分支批 1）：图内有一族读端假定 `state["messages"]`
@@ -32,27 +31,33 @@
      · C —— 本轮族的**函数体内**不许直接读整份（规则 A 只看调用点，看不见函数自己）；
      · D —— 反方向：本来就该看全表的读端**不许**被窗口化（那会静默吃掉历史）。
 """
+
+
 import ast
 import logging
 import sys
 from pathlib import Path
 
+from _judge import collector
+
 ROOT = Path(__file__).resolve().parent.parent  # 仓根
+
+
 sys.path.insert(0, str(ROOT))
 
-from langchain_core.messages import (AIMessage, HumanMessage,  # noqa: E402
-                                     SystemMessage, ToolMessage)
 
-from agent.prompt_context import freeze_turn_start, turn_window  # noqa: E402
+from langchain_core.messages import (  # noqa: E402
+    AIMessage,
+    HumanMessage,
+    SystemMessage,
+    ToolMessage,
+)
+
 from agent.graph import _turn  # noqa: E402
+from agent.prompt_context import freeze_turn_start, turn_window  # noqa: E402
 
 FAILS: list[str] = []
-
-
-def check(desc: str, cond: bool, detail: str = "") -> None:
-    print(("  ✅ " if cond else "  ❌ ") + desc + (f"  [{detail}]" if detail else ""))
-    if not cond:
-        FAILS.append(desc)
+check = collector(FAILS)
 
 
 def _fillings() -> list[tuple[str, list]]:
@@ -68,33 +73,6 @@ def _fillings() -> list[tuple[str, list]]:
     ]
 
 
-# ---------------------------------------------------------------------------
-# ① 负控：恒等
-# ---------------------------------------------------------------------------
-print("[1] 负控：没记边界 / 起点在表头 ⇒ 恒等（返回**同一个对象**，不是「长得一样」）")
-for label, msgs in _fillings():
-    check(f"turn_window({label}, -1) is 原表（没记边界：老调用点、迷你图）",
-          turn_window(msgs, -1) is msgs)
-    check(f"turn_window({label}, None) is 原表（缺键 ≠ 0）",
-          turn_window(msgs, None) is msgs)
-    check(f"turn_window({label}, 0) is 原表（起点在表头 = 整个列表，且**这是对的**）",
-          turn_window(msgs, 0) is msgs)
-
-print("[1b] 负控：不该动的东西一个字节都不动（内容与顺序）")
-_msgs = _fillings()[3][1]
-check("窗口化后内容逐条相同", list(turn_window(_msgs, 0)) == _msgs)
-
-# ---------------------------------------------------------------------------
-# ② 正控：真的收窄 + 越界响亮
-# ---------------------------------------------------------------------------
-print("[2] 正控：记了起点 ⇒ 真的收窄（`turn_window(msgs, k)` = 从下标 k 到表尾）")
-_a, _b, _c, _d = (HumanMessage(content=x) for x in "abcd")
-check("turn_window([a,b,c,d], 2) == [c,d]", turn_window([_a, _b, _c, _d], 2) == [_c, _d])
-check("turn_window([a,b,c,d], 3) == [d]", turn_window([_a, _b, _c, _d], 3) == [_d])
-check("收窄后的第一条就是窗口起点（同一个对象，不是复制）",
-      turn_window([_a, _b, _c, _d], 2)[0] is _c)
-
-print("[2b] 边界：起点比列表还长不许静默（记一行 warning）")
 _warn: list[logging.LogRecord] = []
 
 
@@ -103,71 +81,15 @@ class _Catcher(logging.Handler):
         _warn.append(rec)
 
 
-_log = logging.getLogger("agent.prompt_context")
-_h = _Catcher(level=logging.WARNING)
-_log.addHandler(_h)
-try:
-    _out = turn_window([_a, _b], 5)
-finally:
-    _log.removeHandler(_h)
-check("越界仍返回整个列表（不抛、不返回空）", list(_out) == [_a, _b])
-check("越界记了一行 WARNING（「边界记错了」与「本来就该看全表」不许长得一样）",
-      any(r.levelno == logging.WARNING for r in _warn),
-      f"捕获到 {len(_warn)} 条")
-
-# ---------------------------------------------------------------------------
-# ③ 取值口 `_turn(state)`
-# ---------------------------------------------------------------------------
-print("[3] `_turn(state)`：图内唯一的取值口")
-for label, msgs in _fillings():
-    check(f"_turn({{messages, turn_start=-1}}) is 原表（{label}）",
-          _turn({"messages": msgs, "turn_start": -1}) is msgs)
-    check(f"_turn({{messages, turn_start=0}}) is 原表（{label}）",
-          _turn({"messages": msgs, "turn_start": 0}) is msgs)
-check("老 fixture 不带新通道 ⇒ 原表（缺键 ≠ 0 条窗口）", _turn({"messages": _msgs}) is _msgs)
-check("state 里 messages 缺席 ⇒ 空表，不抛", _turn({}) == [])
-check("state 里 messages=None ⇒ 空表，不抛", _turn({"messages": None}) == [])
-check("turn_start=2 ⇒ 从第 2 条起", _turn({"messages": _msgs, "turn_start": 2}) == _msgs[2:])
-
-# ---------------------------------------------------------------------------
-# ④ 冻结器：条数 → 绝对起点
-# ---------------------------------------------------------------------------
-print("[4] `freeze_turn_start(messages, turn_msgs, turn_start)`")
-_P = [HumanMessage(content=f"上一轮第 {i} 条") for i in range(20)]      # 旧 state
-_I = [HumanMessage(content="[System: page=/about]"), HumanMessage(content="这轮的问题")]
-check("20 条旧 + 2 条注入 ⇒ 起点 20", freeze_turn_start(_P + _I, len(_I), -1) == 20)
-check("冻结后窗口的第一条就是本轮的注入块（同一个对象）",
-      turn_window(_P + _I, freeze_turn_start(_P + _I, len(_I), -1))[0] is _I[0])
-check("第一轮（表里只有注入的那几条）⇒ 起点 0（= 整个列表）",
-      freeze_turn_start(_I, len(_I), -1) == 0)
-check("已经冻过 ⇒ **原样返回**，不重算（重规划轮 / reflector 回环）",
-      freeze_turn_start(_P + _I, len(_I), 20) == 20)
-check("没记条数 ⇒ -1（不窗口化 = 老行为）", freeze_turn_start(_P + _I, 0, -1) == -1)
-check("条数比表还长（边界记错了）⇒ -1，不抛", freeze_turn_start(_I, 99, -1) == -1)
-
-print("[4b] 反向对照：**晚一步**再算就会偏——这正是不能用「末尾 N 条」的原因")
-_F = [ToolMessage(content="本轮第一帧", tool_call_id="execute_0", name="get_article_detail"),
-      AIMessage(content="本轮回复")]
-_all = _P + _I + _F
-_late = freeze_turn_start(_all, len(_I), -1)     # 追加之后再算
-check("追加 2 条后再算 ⇒ 起点从 20 变成 22（窗口会切掉前两条注入）",
-      _late == 22, f"算出来 {_late}（正确是 20）")
-check("正确窗口（起点 20）= 注入 2 条 + 追加 2 条", turn_window(_all, 20) == _I + _F)
-_tail_only = turn_window(_all, len(_all) - len(_I))   # 「末尾 N 条」= 旧的错误口径
-check("「末尾 2 条」只剩追加的那两条，**注入块被挤出去了**",
-      _tail_only == _F and _I[0] not in _tail_only,
-      "这就是「条数 ≠ 起点」的现场：窗口看起来还有内容，页面事实却没了")
-
-# ---------------------------------------------------------------------------
-# ⑤ AST 审计锁
-# ---------------------------------------------------------------------------
 SRC = ROOT / "agent" / "graph.py"
+
+
 _src_text = SRC.read_text(encoding="utf-8")
+
+
 _lines = _src_text.splitlines()
-_tree = ast.parse(_src_text)
-# `get_source_segment` 每次都从头数行 ⇒ 传整份字符串进去会被重算 N 遍（graph.py 一万
-# 四千行，这里要取几十次）。**拼一次**再用——这条套件被 `run_all.py` 每次带跑，56s 里
-# 大半是它。
+
+
 _src_full = "\n".join(_lines)
 
 
@@ -177,9 +99,6 @@ def _src(node: ast.AST) -> str:
 
 
 _PARENT: dict[ast.AST, ast.AST] = {}
-for _n in ast.walk(_tree):
-    for _c in ast.iter_child_nodes(_n):
-        _PARENT[_c] = _n
 
 
 def _func_of(node: ast.AST) -> str:
@@ -197,8 +116,6 @@ def _is_turn_call(node: ast.AST) -> bool:
             and node.func.id == "_turn")
 
 
-#: 收 `messages` 列表、且语义是"本轮"的读端。**加新成员要连规则一起想**：它是不是
-#: "只看本轮"？是 ⇒ 调用点必须走 `_turn`；不是 ⇒ 加进 `_ALLOWED_ARGS` 并写清理由。
 _WINDOWED = (
     "_page_ctx", "_has_frames", "_frame_texts", "_frame_chars", "_any_error_frame",
     "_candidate_detail_plan",
@@ -211,13 +128,10 @@ _WINDOWED = (
     "_has_exec_memory",
 )
 
-#: 允许出现在第一个实参位置的**非 `_turn` 表达式**（按源码首行逐字匹配）。
-#: **今天是空的**——那 20 个调用点一个不落全走 `_turn(...)`。将来真有"必须看整份"
-#: 的调用点，往这里加，并写清理由；不写理由的表达式一律判红。
+
 _ALLOWED_ARGS: dict[str, str] = {}
 
-#: gate_node 里显式拆了两个视野，本轮族的实参是局部名 `turn`（不是 `_turn(state)`
-#: 直呼）——它是 `turn = _turn(state)` 绑出来的，下面单点验证这一条。
+
 _ALLOWED_LOCALS = {"turn": "gate_node: turn = _turn(state)"}
 
 
@@ -243,38 +157,6 @@ def _audit_args(tree: ast.AST, src: str, lines: list[str]) -> tuple[list, list]:
         bad.append(f"{src}:{node.lineno} {fname}({asrc})")
     return calls, bad
 
-
-_calls_a, _bad_a = _audit_args(_tree, SRC.name, _lines)
-
-print(f"[5A] 规则 A：{len(_WINDOWED)} 个本轮族读端，源码现取到 {len(_calls_a)} 个调用点")
-check("每一个调用点的第一个实参都是 _turn(...)（或 gate 的 turn 局部）",
-      not _bad_a, "；".join(_bad_a))
-check("调用点确实被取到了（防止选择器写错 ⇒ 判据恒绿）", len(_calls_a) >= 18,
-      f"取到 {len(_calls_a)}")
-
-# 差集方向：白名单里的东西必须**真的还在源码里**（白名单腐烂 = 判据安静地放宽）
-_present = {a for _, _, a in _calls_a}
-for key in _ALLOWED_ARGS:
-    check(f"白名单项 {key!r} 在源码里仍存在（白名单没腐烂）", key in _present)
-
-# `turn` 这个局部名必须真的是 `_turn(state)` 绑出来的——否则"实参是 turn"可以靠
-# 随便一个同名变量糊过去，规则 A 就被绕过了。
-check("gate_node 里的 `turn` 确实是 `turn = _turn(state)`",
-      any(isinstance(n, ast.Assign)
-          and any(isinstance(t, ast.Name) and t.id == "turn" for t in n.targets)
-          and _is_turn_call(n.value)
-          for n in ast.walk(_tree)))
-
-print("[5A-] 规则 A 的反向对照：合成片段必须被判红 / 判绿（判据不是恒绿）")
-_neg_src = ["def f(state):", "    return _page_ctx(state['messages'])"]
-_c, _b = _audit_args(ast.parse("\n".join(_neg_src)), "<合成:裸读>", _neg_src)
-check("裸读 `_page_ctx(state['messages'])` **判红**", len(_b) == 1, "；".join(_b))
-_pos_src = ["def f(state):", "    return _page_ctx(_turn(state))"]
-_c, _b = _audit_args(ast.parse("\n".join(_pos_src)), "<合成:窗口>", _pos_src)
-check("窗口读 `_page_ctx(_turn(state))` **判绿**", not _b, "；".join(_b))
-check("反向对照里调用点确实被取到", len(_c) == 1, f"取到 {len(_c)}")
-
-# --- 规则 B：graph.py 里所有 messages 通道读点，按所在函数登记 ----------------
 
 def _msgs_holder(v: ast.AST) -> bool:
     """承载 messages 通道的表达式：`state` 或 `X.state`（`c.state` 那种）。"""
@@ -304,121 +186,6 @@ def _is_msgs_read(node: ast.AST) -> bool:
     """
     return _reads_key(node, "messages")
 
-#: 允许直接读**整份** messages 的地方，按**所在函数名**登记（不按行号——行号会漂）。
-#: 理由分三类：
-#:   (b) 从后往前扫 ⇒ 天然自愈（累积之后"最后一条 HumanMessage"仍是本轮的）；
-#:   (c) 本来就该看全表（跨轮比对面 / 跨轮出处 / 出站配对）；
-#:   (d) 不是读端（探针计量 / 输入端 / 刻意整份的配对 id）。
-_ALLOWED_RAW: dict[str, str] = {
-    # (d) 取值口与输入端本身
-    "_turn": "(d) 取值口自己",
-    "_narrator_msgs": "(d) 取值口自己（narrator 的窗口：本轮 + 最近若干轮，"
-                      "历史段剥事实行/剪孤儿/丢工具帧——见 tests/test_narrator_window.py）",
-    # (b) 自愈族
-    "_intent_src": "(b) 只把它交给 _last_user_msg/_prev_user_msg（从后往前扫）",
-    "_planner_preflight": "(b) 尾部读（gate_note 取最后一条）+ (c) _doc_anchors/"
-                          "_recent_tail 的调用点 + (d) 探针计量",
-    "_planner_setup": "(b) 尾部读：末条 SystemMessage 才是本轮那条纠偏注记",
-    "_record_reply_kind": "(b) _last_user_msg",
-    "_decide_llm": "(c) _recent_tail + (b) _short_reply_hint",
-    "_decide_zero_tool_correct": "(b) _turn_has_image（从后往前找最后一条带图 HumanMessage）",
-    "_ledger_turn_families": "(b) 只交给 _last_user_msg/_last_assistant_utterance",
-    "_ledger_fact_note": "(b) _last_user_msg",
-    "_ledger_closing_note": "(b) 只交给 _last_user_msg 那一族",
-    # (c) 全表族
-    "_task_goal_sources": "(c) 跨轮出处：按来源逐个往前翻（顺序是契约）",
-    # (d) 刻意整份
-    "planner_node": "(d) 冻结 turn_start：`freeze_turn_start` 要的就是**还没人追加时**的"
-                    "整表长度（`len(messages) - turn_msgs`），窗口化它等于把要算的东西先切掉",
-    "execute_node": "(d) _frame_id 的基数：**刻意**用整份（唯一性靠帧只增不减）",
-    "model_node": "(c) with_tool_call_pairs 出站配对 + (d) 探针计量（`msgs=` 与 "
-                  "`narr_ident=` 那一格要的就是整表长度/整表身份，窗口化它就没得比了）",
-    "gate_node": "(d) 拆两个视野的地方：msgs 喂给 _recent_ai_replies/_url_trusted/"
-                 "_last_user_msg 那几个跨轮/自愈判据，本轮族走局部 `turn`",
-}
-
-_reads_b: list[tuple[int, str, str]] = []
-_unregistered: list[str] = []
-_seen_fns: set[str] = set()
-for node in ast.walk(_tree):
-    if not _is_msgs_read(node):
-        continue
-    seg = _src(node).splitlines()[0].strip()
-    fn = _func_of(node)
-    _reads_b.append((node.lineno, fn, seg))
-    _seen_fns.add(fn)
-    if fn not in _ALLOWED_RAW:
-        _unregistered.append(f"{SRC.name}:{node.lineno} {fn}: {seg[:90]}")
-
-print(f"[5B] 规则 B：源码现取到 {len(_reads_b)} 个 messages 通道读点，"
-      f"覆盖 {len(_seen_fns)} 个函数")
-check("每一个读点所在函数都已登记（新读点会当场红）",
-      not _unregistered, "；".join(_unregistered))
-check("读点确实被取到了（防止选择器写错 ⇒ 判据恒绿）", len(_seen_fns) >= 12,
-      f"取到 {len(_seen_fns)} 个函数")
-
-# 差集方向：登记的每一项都要**真的**还有读点，否则白名单在烂
-for fn in _ALLOWED_RAW:
-    check(f"登记项 {fn!r} 在 graph.py 里仍有读点（白名单没腐烂）", fn in _seen_fns)
-
-# --- 规则 C：本轮族的**函数体内**不许直接读整份 messages ----------------------
-# 规则 A 只看调用点；`_target_evidence` / `_ledger_frames_present` 是**函数自己**
-# 拿着 state 扫的，调用点看不见。
-print("[5C] 规则 C：本轮族的函数体内不许出现整份 messages 读")
-for fn in ("_target_evidence", "_ledger_frames_present"):
-    body = next((f for f in ast.walk(_tree)
-                 if isinstance(f, ast.FunctionDef) and f.name == fn), None)
-    check(f"{fn} 存在", body is not None)
-    if body is None:
-        continue
-    hits = [n for n in ast.walk(body) if _is_msgs_read(n)]
-    check(f"{fn} 体内无 state[\"messages\"] / state.get(\"messages\")",
-          not hits,
-          "；".join(f"L{n.lineno}: {_src(n).splitlines()[0].strip()[:70]}" for n in hits[:3]))
-
-# --- 规则 D：反方向——本来就该看全表的读端**不许**被窗口化 --------------------
-# 规则 A/B/C 只管"该收窄的没收窄"；反过来的错（把跨轮比对面/出站配对喂成本轮窗口）
-# 会**吃掉历史**，症状更隐蔽（不是读错一个值，是整整一族判据少看见几轮）。
-_FULL_VIEW = (
-    "_recent_tail", "_doc_anchors", "_task_goal_sources", "_recent_ai_replies",
-    "_url_trusted", "with_tool_call_pairs", "strict_wire_issues", "_repeat_reason",
-)
-
-_bad_d: list[str] = []
-_seen_d: set[str] = set()
-for node in ast.walk(_tree):
-    if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Name):
-        continue
-    if node.func.id not in _FULL_VIEW:
-        continue
-    _seen_d.add(node.func.id)
-    for arg in list(node.args) + [k.value for k in node.keywords]:
-        if _is_turn_call(arg) or (isinstance(arg, ast.Name) and arg.id == "turn"):
-            _bad_d.append(f"{SRC.name}:{node.lineno} {node.func.id}(… _turn …)")
-
-print(f"[5D] 规则 D：{len(_FULL_VIEW)} 个跨轮读端，源码里见到 {len(_seen_d)} 个")
-check("跨轮读端一个都没被窗口化（窗口化 = 静默吃掉历史）", not _bad_d, "；".join(_bad_d))
-check("跨轮读端确实被取到了（防止选择器写错 ⇒ 判据恒绿）", len(_seen_d) >= 6,
-      f"取到 {sorted(_seen_d)}")
-
-print("[5D-] 规则 D 的反向对照：窗口化一个跨轮读端必须判红")
-_neg_d = ast.parse("def f(state):\n    return _recent_tail(_turn(state))\n")
-_hit = [n for n in ast.walk(_neg_d)
-        if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)
-        and n.func.id in _FULL_VIEW
-        and any(_is_turn_call(a) for a in n.args)]
-check("`_recent_tail(_turn(state))` **判红**", len(_hit) == 1, f"命中 {len(_hit)}")
-
-# --- 规则 E：冻结点必须在 planner 的**入口**、单一注入点，且 planner 是唯一入口 ---
-# 这条锁的是"这一刀靠什么成立"：起点只在**还没人追加**的时候算得对 ⇒ 必须挂在
-# `START → planner` 这个入口上、且只有一个注入点（`planner_node` 是薄壳，理由同它
-# 已有的 `task_sink`）。哪天有人把入口改成别的节点、或让 `_planner_decide` 直接返回，
-# 窗口就会**悄悄**退回整份列表——那正是这一刀要修的东西。
-print("[5E] 规则 E：冻结点必须在 planner 的单一出口，且 planner 是唯一入口")
-_planner = next((f for f in ast.walk(_tree)
-                 if isinstance(f, ast.FunctionDef) and f.name == "planner_node"), None)
-check("planner_node 存在", _planner is not None)
-
 
 def _freeze_before_first_read(fn: ast.AST) -> tuple[bool, str]:
     """`freeze_turn_start(...)` 的**行号**必须小于 `_planner_decide(...)` 的行号。
@@ -442,130 +209,6 @@ def _freeze_before_first_read(fn: ast.AST) -> tuple[bool, str]:
     return min(frz) < min(dec), f"freeze@{min(frz)} < decide@{min(dec)}"
 
 
-if _planner is not None:
-    _ret = [n for n in ast.walk(_planner) if isinstance(n, ast.Return)]
-    check("planner_node 只有一个 return（薄壳）", len(_ret) == 1, f"{len(_ret)} 个")
-    _seg = ast.get_source_segment(_src_full, _planner) or ""
-    check("planner_node 体内冻结了 turn_start（freeze_turn_start 调用）",
-          "freeze_turn_start(" in _seg)
-    _ok_e, _det_e = _freeze_before_first_read(_planner)
-    check("⭐ 冻结在 `_planner_decide` **之前**（否则 planner 自己就是那个没被修好的读端）",
-          _ok_e, _det_e)
-    check("冻结之后把新值给了本节点的读端（`state = {**state, …}` 视图，不就地改）",
-          "turn_start\": turn_start}" in _seg or "turn_start\": turn_start }" in _seg
-          or "{**state" in _seg)
-
-print("[5E-] 规则 E 的反向对照：把冻结挪到 return 前必须判红（这是真踩过的那个错）")
-_late_src = ("def planner_node(state, config=None):\n"
-             "    sink = []\n"
-             "    upd = _planner_decide(state, config, task_sink=sink)\n"
-             "    upd['turn_start'] = freeze_turn_start(state['messages'], 0, -1)\n"
-             "    return upd\n")
-_ok_e, _det_e = _freeze_before_first_read(ast.parse(_late_src))
-check("冻结写在 `_planner_decide` 之后 ⇒ **判红**", not _ok_e, _det_e)
-_early_src = ("def planner_node(state, config=None):\n"
-              "    ts = freeze_turn_start(state['messages'], 0, -1)\n"
-              "    state = {**state, 'turn_start': ts}\n"
-              "    sink = []\n"
-              "    upd = _planner_decide(state, config, task_sink=sink)\n"
-              "    upd['turn_start'] = ts\n"
-              "    return upd\n")
-_ok_e, _det_e = _freeze_before_first_read(ast.parse(_early_src))
-check("冻结写在 `_planner_decide` 之前 ⇒ **判绿**", _ok_e, _det_e)
-
-check("`START → planner` 是唯一入口（冻结点必须在没人追加的时候跑）",
-      any(isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
-          and n.func.attr == "add_edge"
-          and len(n.args) >= 2
-          and _src(n.args[0]).strip() in ("START", "start")
-          and _src(n.args[1]).strip() == '"planner"'
-          for n in ast.walk(_tree)))
-check("`_planner_decide` 不自己写 turn_start（注入点只留一处）",
-      "turn_start" not in (ast.get_source_segment(
-          "\n".join(_lines),
-          next(f for f in ast.walk(_tree)
-               if isinstance(f, ast.FunctionDef) and f.name == "_planner_decide")) or ""))
-
-# --- 规则 F：narrator 那一侧的闸门**不许被摘掉**（批 3）-----------------------
-# 规则 A–E 管的是"该收窄的读端没收窄"；这一条管反过来的错：`model_node` 曾经直接
-# `with_tool_call_pairs(state["messages"])`（无截断），线程一复用提示词就随会话线性
-# 膨胀。摘掉 `_narrator_msgs` 这一层**不会有任何东西报错**——只是提示词慢慢变大
-# （`prompt_oversize` 是一条 warning，不是判据）。所以这里钉**结构**：narrator 的
-# 消息表必须经过那一个取值口，而那个取值口必须真的委托给 `prompt_context.narrator_messages`。
-print("[5F] 规则 F：narrator 的窗口闸门在场且没被绕过")
-
-# **20261016 合并之后这条链多了一环**：主线把"补形状"收进了 `_narrator_wire`
-# （前缀缓存要重排顺序，补形状与重排是同一趟），于是 `model_node` 里**不再直接**调
-# `with_tool_call_pairs`。判据跟着链路走，**锁关系不锁字面**（本仓为此付过代价：
-# `test_react_arm.py` ⑥d 钉了字面，把漂移永久化）：
-#
-#   model_node --(_narrator_wire(  ))--> _narrator_wire --(with_tool_call_pairs)--> 补形状
-#
-# 两环各判一次，中间那一环的入参必须是窗口化的产物。
-_model = next((f for f in ast.walk(_tree)
-               if isinstance(f, ast.FunctionDef) and f.name == "model_node"), None)
-check("model_node 存在", _model is not None)
-_wire = next((f for f in ast.walk(_tree)
-              if isinstance(f, ast.FunctionDef) and f.name == "_narrator_wire"), None)
-check("`_narrator_wire` 存在（补形状那一环）", _wire is not None)
-
-if _model is not None and _wire is not None:
-    # ── 第 2 环：补形状只许住在 `_narrator_wire` 里 ──────────────────────
-    _pair_all = [n for n in ast.walk(_tree)
-                 if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)
-                 and n.func.id == "with_tool_call_pairs"]
-    _pair_in_wire = [n for n in ast.walk(_wire)
-                     if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)
-                     and n.func.id == "with_tool_call_pairs"]
-    check("`_narrator_wire` 里 `with_tool_call_pairs` 恰好一处",
-          len(_pair_in_wire) == 1, f"{len(_pair_in_wire)} 处")
-    check("全文件里 `with_tool_call_pairs` 的调用也恰好一处（第二份补形状=第二条漂移源）",
-          len(_pair_all) == 1, f"{len(_pair_all)} 处")
-    # 补形状的入参是它**自己的形参**，不是 state —— 不然窗口在这一环就被绕开了。
-    check("`_narrator_wire` 里补形状的入参不是整份 messages 读",
-          not any(_reads_key(a, "messages") for n in _pair_in_wire for a in n.args))
-
-    # ── 第 1 环：`model_node` 必须把**窗口化的产物**交给它 ────────────────
-    _wire_calls = [n for n in ast.walk(_model)
-                   if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)
-                   and n.func.id == "_narrator_wire"]
-    check("model_node 里 `_narrator_wire` 恰好一处", len(_wire_calls) == 1,
-          f"{len(_wire_calls)} 处")
-    # 闸门变量：`X = _narrator_msgs(state)` 里的 X（本仓的写法是**先取再传**，
-    # 探针那一格要拿它比身份）。直接 `_narrator_wire(_narrator_msgs(state))` 也算过
-    # ——判的是"入参是不是窗口化的产物"，不是"写法长什么样"。
-    _gated_names = {t.id for n in ast.walk(_model) if isinstance(n, ast.Assign)
-                    and isinstance(n.value, ast.Call)
-                    and isinstance(n.value.func, ast.Name)
-                    and n.value.func.id == "_narrator_msgs"
-                    for t in n.targets if isinstance(t, ast.Name)}
-    _wire_args = _wire_calls[0].args if _wire_calls else []
-    _wire_ok = bool(_wire_args) and all(
-        (isinstance(a, ast.Call) and isinstance(a.func, ast.Name)
-         and a.func.id == "_narrator_msgs")
-        or (isinstance(a, ast.Name) and a.id in _gated_names)
-        for a in _wire_args)
-    check("⭐ 它的入参是 `_narrator_msgs(state)`（或它的产物）而不是整份 `state[\"messages\"]`",
-          _wire_ok,
-          "；".join(_src(a).strip()[:60] for a in _wire_args))
-    check("`_narrator_wire` 的入参**不是**整份 messages 读",
-          not any(_reads_key(a, "messages") for a in _wire_args))
-
-_narr = next((f for f in ast.walk(_tree)
-              if isinstance(f, ast.FunctionDef) and f.name == "_narrator_msgs"), None)
-check("`_narrator_msgs` 存在且委托给 `prompt_context.narrator_messages`",
-      _narr is not None and any(
-          isinstance(n, ast.Call) and isinstance(n.func, ast.Name)
-          and n.func.id == "narrator_messages" for n in ast.walk(_narr)))
-check("`_narrator_msgs` 把 `turn_start` 传下去了（不传 ⇒ 窗口恒不开火）",
-      _narr is not None and any(
-          isinstance(n, ast.Call) and isinstance(n.func, ast.Name)
-          and n.func.id == "narrator_messages"
-          and any(_reads_key(a, "turn_start") for a in n.args)
-          for n in ast.walk(_narr)))
-
-print("[5F-] 规则 F 的反向对照：绕开闸门必须判红")
-# 反向对照用**同一个分类器**（跟正判据一样的两环判法），不是另写一遍判据。
 def _wire_gate_verdict(tree: ast.AST) -> bool:
     """合成片段里：`_narrator_wire` 的入参是不是窗口化的产物。"""
     mn = next((f for f in ast.walk(tree)
@@ -585,30 +228,315 @@ def _wire_gate_verdict(tree: ast.AST) -> bool:
                or (isinstance(a, ast.Name) and a.id in names) for a in calls[0].args)
 
 
-check("`_narrator_wire(state[\"messages\"])` ⇒ **判红**",
-      not _wire_gate_verdict(ast.parse(
-          "def model_node(state):\n"
+def test_turn_window():
+    print("[1] 负控：没记边界 / 起点在表头 ⇒ 恒等（返回**同一个对象**，不是「长得一样」）")
+    for label, msgs in _fillings():
+        check(f"turn_window({label}, -1) is 原表（没记边界：老调用点、迷你图）",
+              turn_window(msgs, -1) is msgs)
+        check(f"turn_window({label}, None) is 原表（缺键 ≠ 0）",
+              turn_window(msgs, None) is msgs)
+        check(f"turn_window({label}, 0) is 原表（起点在表头 = 整个列表，且**这是对的**）",
+              turn_window(msgs, 0) is msgs)
+    print("[1b] 负控：不该动的东西一个字节都不动（内容与顺序）")
+    _msgs = _fillings()[3][1]
+    check("窗口化后内容逐条相同", list(turn_window(_msgs, 0)) == _msgs)
+    print("[2] 正控：记了起点 ⇒ 真的收窄（`turn_window(msgs, k)` = 从下标 k 到表尾）")
+    _a, _b, _c, _d = (HumanMessage(content=x) for x in "abcd")
+    check("turn_window([a,b,c,d], 2) == [c,d]", turn_window([_a, _b, _c, _d], 2) == [_c, _d])
+    check("turn_window([a,b,c,d], 3) == [d]", turn_window([_a, _b, _c, _d], 3) == [_d])
+    check("收窄后的第一条就是窗口起点（同一个对象，不是复制）",
+          turn_window([_a, _b, _c, _d], 2)[0] is _c)
+    print("[2b] 边界：起点比列表还长不许静默（记一行 warning）")
+    _log = logging.getLogger("agent.prompt_context")
+    _h = _Catcher(level=logging.WARNING)
+    _log.addHandler(_h)
+    try:
+        _out = turn_window([_a, _b], 5)
+    finally:
+        _log.removeHandler(_h)
+    check("越界仍返回整个列表（不抛、不返回空）", list(_out) == [_a, _b])
+    check("越界记了一行 WARNING（「边界记错了」与「本来就该看全表」不许长得一样）",
+          any(r.levelno == logging.WARNING for r in _warn),
+          f"捕获到 {len(_warn)} 条")
+    print("[3] `_turn(state)`：图内唯一的取值口")
+    for label, msgs in _fillings():
+        check(f"_turn({{messages, turn_start=-1}}) is 原表（{label}）",
+              _turn({"messages": msgs, "turn_start": -1}) is msgs)
+        check(f"_turn({{messages, turn_start=0}}) is 原表（{label}）",
+              _turn({"messages": msgs, "turn_start": 0}) is msgs)
+    check("老 fixture 不带新通道 ⇒ 原表（缺键 ≠ 0 条窗口）", _turn({"messages": _msgs}) is _msgs)
+    check("state 里 messages 缺席 ⇒ 空表，不抛", _turn({}) == [])
+    check("state 里 messages=None ⇒ 空表，不抛", _turn({"messages": None}) == [])
+    check("turn_start=2 ⇒ 从第 2 条起", _turn({"messages": _msgs, "turn_start": 2}) == _msgs[2:])
+    print("[4] `freeze_turn_start(messages, turn_msgs, turn_start)`")
+    _P = [HumanMessage(content=f"上一轮第 {i} 条") for i in range(20)]      # 旧 state
+    _I = [HumanMessage(content="[System: page=/about]"), HumanMessage(content="这轮的问题")]
+    check("20 条旧 + 2 条注入 ⇒ 起点 20", freeze_turn_start(_P + _I, len(_I), -1) == 20)
+    check("冻结后窗口的第一条就是本轮的注入块（同一个对象）",
+          turn_window(_P + _I, freeze_turn_start(_P + _I, len(_I), -1))[0] is _I[0])
+    check("第一轮（表里只有注入的那几条）⇒ 起点 0（= 整个列表）",
+          freeze_turn_start(_I, len(_I), -1) == 0)
+    check("已经冻过 ⇒ **原样返回**，不重算（重规划轮 / reflector 回环）",
+          freeze_turn_start(_P + _I, len(_I), 20) == 20)
+    check("没记条数 ⇒ -1（不窗口化 = 老行为）", freeze_turn_start(_P + _I, 0, -1) == -1)
+    check("条数比表还长（边界记错了）⇒ -1，不抛", freeze_turn_start(_I, 99, -1) == -1)
+    print("[4b] 反向对照：**晚一步**再算就会偏——这正是不能用「末尾 N 条」的原因")
+    _F = [ToolMessage(content="本轮第一帧", tool_call_id="execute_0", name="get_article_detail"),
+          AIMessage(content="本轮回复")]
+    _all = _P + _I + _F
+    _late = freeze_turn_start(_all, len(_I), -1)     # 追加之后再算
+    check("追加 2 条后再算 ⇒ 起点从 20 变成 22（窗口会切掉前两条注入）",
+          _late == 22, f"算出来 {_late}（正确是 20）")
+    check("正确窗口（起点 20）= 注入 2 条 + 追加 2 条", turn_window(_all, 20) == _I + _F)
+    _tail_only = turn_window(_all, len(_all) - len(_I))   # 「末尾 N 条」= 旧的错误口径
+    check("「末尾 2 条」只剩追加的那两条，**注入块被挤出去了**",
+          _tail_only == _F and _I[0] not in _tail_only,
+          "这就是「条数 ≠ 起点」的现场：窗口看起来还有内容，页面事实却没了")
+    _tree = ast.parse(_src_text)
+    for _n in ast.walk(_tree):
+        for _c in ast.iter_child_nodes(_n):
+            _PARENT[_c] = _n
+    _calls_a, _bad_a = _audit_args(_tree, SRC.name, _lines)
+    print(f"[5A] 规则 A：{len(_WINDOWED)} 个本轮族读端，源码现取到 {len(_calls_a)} 个调用点")
+    check("每一个调用点的第一个实参都是 _turn(...)（或 gate 的 turn 局部）",
+          not _bad_a, "；".join(_bad_a))
+    check("调用点确实被取到了（防止选择器写错 ⇒ 判据恒绿）", len(_calls_a) >= 18,
+          f"取到 {len(_calls_a)}")
+    _present = {a for _, _, a in _calls_a}
+    for key in _ALLOWED_ARGS:
+        check(f"白名单项 {key!r} 在源码里仍存在（白名单没腐烂）", key in _present)
+    check("gate_node 里的 `turn` 确实是 `turn = _turn(state)`",
+          any(isinstance(n, ast.Assign)
+              and any(isinstance(t, ast.Name) and t.id == "turn" for t in n.targets)
+              and _is_turn_call(n.value)
+              for n in ast.walk(_tree)))
+    print("[5A-] 规则 A 的反向对照：合成片段必须被判红 / 判绿（判据不是恒绿）")
+    _neg_src = ["def f(state):", "    return _page_ctx(state['messages'])"]
+    _c, _b = _audit_args(ast.parse("\n".join(_neg_src)), "<合成:裸读>", _neg_src)
+    check("裸读 `_page_ctx(state['messages'])` **判红**", len(_b) == 1, "；".join(_b))
+    _pos_src = ["def f(state):", "    return _page_ctx(_turn(state))"]
+    _c, _b = _audit_args(ast.parse("\n".join(_pos_src)), "<合成:窗口>", _pos_src)
+    check("窗口读 `_page_ctx(_turn(state))` **判绿**", not _b, "；".join(_b))
+    check("反向对照里调用点确实被取到", len(_c) == 1, f"取到 {len(_c)}")
+    _ALLOWED_RAW: dict[str, str] = {
+        # (d) 取值口与输入端本身
+        "_turn": "(d) 取值口自己",
+        "_narrator_msgs": "(d) 取值口自己（narrator 的窗口：本轮 + 最近若干轮，"
+                      "历史段剥事实行/剪孤儿/丢工具帧——见 tests/test_narrator_window.py）",
+        # (b) 自愈族
+        "_intent_src": "(b) 只把它交给 _last_user_msg/_prev_user_msg（从后往前扫）",
+        "_planner_preflight": "(b) 尾部读（gate_note 取最后一条）+ (c) _doc_anchors/"
+                          "_recent_tail 的调用点 + (d) 探针计量",
+        "_planner_setup": "(b) 尾部读：末条 SystemMessage 才是本轮那条纠偏注记",
+        "_record_reply_kind": "(b) _last_user_msg",
+        "_decide_llm": "(c) _recent_tail + (b) _short_reply_hint",
+        "_decide_zero_tool_correct": "(b) _turn_has_image（从后往前找最后一条带图 HumanMessage）",
+        "_ledger_turn_families": "(b) 只交给 _last_user_msg/_last_assistant_utterance",
+        "_ledger_fact_note": "(b) _last_user_msg",
+        "_ledger_closing_note": "(b) 只交给 _last_user_msg 那一族",
+        # (c) 全表族
+        "_task_goal_sources": "(c) 跨轮出处：按来源逐个往前翻（顺序是契约）",
+        # (d) 刻意整份
+        "planner_node": "(d) 冻结 turn_start：`freeze_turn_start` 要的就是**还没人追加时**的"
+                    "整表长度（`len(messages) - turn_msgs`），窗口化它等于把要算的东西先切掉",
+        "execute_node": "(d) _frame_id 的基数：**刻意**用整份（唯一性靠帧只增不减）",
+        "model_node": "(c) with_tool_call_pairs 出站配对 + (d) 探针计量（`msgs=` 与 "
+                  "`narr_ident=` 那一格要的就是整表长度/整表身份，窗口化它就没得比了）",
+        "gate_node": "(d) 拆两个视野的地方：msgs 喂给 _recent_ai_replies/_url_trusted/"
+                 "_last_user_msg 那几个跨轮/自愈判据，本轮族走局部 `turn`",
+    }
+    _reads_b: list[tuple[int, str, str]] = []
+    _unregistered: list[str] = []
+    _seen_fns: set[str] = set()
+    for node in ast.walk(_tree):
+        if not _is_msgs_read(node):
+            continue
+        seg = _src(node).splitlines()[0].strip()
+        fn = _func_of(node)
+        _reads_b.append((node.lineno, fn, seg))
+        _seen_fns.add(fn)
+        if fn not in _ALLOWED_RAW:
+            _unregistered.append(f"{SRC.name}:{node.lineno} {fn}: {seg[:90]}")
+    print(f"[5B] 规则 B：源码现取到 {len(_reads_b)} 个 messages 通道读点，"
+      f"覆盖 {len(_seen_fns)} 个函数")
+    check("每一个读点所在函数都已登记（新读点会当场红）",
+          not _unregistered, "；".join(_unregistered))
+    check("读点确实被取到了（防止选择器写错 ⇒ 判据恒绿）", len(_seen_fns) >= 12,
+          f"取到 {len(_seen_fns)} 个函数")
+    for fn in _ALLOWED_RAW:
+        check(f"登记项 {fn!r} 在 graph.py 里仍有读点（白名单没腐烂）", fn in _seen_fns)
+    print("[5C] 规则 C：本轮族的函数体内不许出现整份 messages 读")
+    for fn in ("_target_evidence", "_ledger_frames_present"):
+        body = next((f for f in ast.walk(_tree)
+                     if isinstance(f, ast.FunctionDef) and f.name == fn), None)
+        check(f"{fn} 存在", body is not None)
+        if body is None:
+            continue
+        hits = [n for n in ast.walk(body) if _is_msgs_read(n)]
+        check(f"{fn} 体内无 state[\"messages\"] / state.get(\"messages\")",
+              not hits,
+              "；".join(f"L{n.lineno}: {_src(n).splitlines()[0].strip()[:70]}" for n in hits[:3]))
+    _FULL_VIEW = (
+        "_recent_tail", "_doc_anchors", "_task_goal_sources", "_recent_ai_replies",
+        "_url_trusted", "with_tool_call_pairs", "strict_wire_issues", "_repeat_reason",
+    )
+    _bad_d: list[str] = []
+    _seen_d: set[str] = set()
+    for node in ast.walk(_tree):
+        if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Name):
+            continue
+        if node.func.id not in _FULL_VIEW:
+            continue
+        _seen_d.add(node.func.id)
+        for arg in list(node.args) + [k.value for k in node.keywords]:
+            if _is_turn_call(arg) or (isinstance(arg, ast.Name) and arg.id == "turn"):
+                _bad_d.append(f"{SRC.name}:{node.lineno} {node.func.id}(… _turn …)")
+    print(f"[5D] 规则 D：{len(_FULL_VIEW)} 个跨轮读端，源码里见到 {len(_seen_d)} 个")
+    check("跨轮读端一个都没被窗口化（窗口化 = 静默吃掉历史）", not _bad_d, "；".join(_bad_d))
+    check("跨轮读端确实被取到了（防止选择器写错 ⇒ 判据恒绿）", len(_seen_d) >= 6,
+          f"取到 {sorted(_seen_d)}")
+    print("[5D-] 规则 D 的反向对照：窗口化一个跨轮读端必须判红")
+    _neg_d = ast.parse("def f(state):\n    return _recent_tail(_turn(state))\n")
+    _hit = [n for n in ast.walk(_neg_d)
+            if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)
+            and n.func.id in _FULL_VIEW
+            and any(_is_turn_call(a) for a in n.args)]
+    check("`_recent_tail(_turn(state))` **判红**", len(_hit) == 1, f"命中 {len(_hit)}")
+    print("[5E] 规则 E：冻结点必须在 planner 的单一出口，且 planner 是唯一入口")
+    _planner = next((f for f in ast.walk(_tree)
+                     if isinstance(f, ast.FunctionDef) and f.name == "planner_node"), None)
+    check("planner_node 存在", _planner is not None)
+    if _planner is not None:
+        _ret = [n for n in ast.walk(_planner) if isinstance(n, ast.Return)]
+        check("planner_node 只有一个 return（薄壳）", len(_ret) == 1, f"{len(_ret)} 个")
+        _seg = ast.get_source_segment(_src_full, _planner) or ""
+        check("planner_node 体内冻结了 turn_start（freeze_turn_start 调用）",
+              "freeze_turn_start(" in _seg)
+        _ok_e, _det_e = _freeze_before_first_read(_planner)
+        check("⭐ 冻结在 `_planner_decide` **之前**（否则 planner 自己就是那个没被修好的读端）",
+              _ok_e, _det_e)
+        check("冻结之后把新值给了本节点的读端（`state = {**state, …}` 视图，不就地改）",
+              "turn_start\": turn_start}" in _seg or "turn_start\": turn_start }" in _seg
+              or "{**state" in _seg)
+    print("[5E-] 规则 E 的反向对照：把冻结挪到 return 前必须判红（这是真踩过的那个错）")
+    _late_src = ("def planner_node(state, config=None):\n"
+             "    sink = []\n"
+             "    upd = _planner_decide(state, config, task_sink=sink)\n"
+             "    upd['turn_start'] = freeze_turn_start(state['messages'], 0, -1)\n"
+             "    return upd\n")
+    _ok_e, _det_e = _freeze_before_first_read(ast.parse(_late_src))
+    check("冻结写在 `_planner_decide` 之后 ⇒ **判红**", not _ok_e, _det_e)
+    _early_src = ("def planner_node(state, config=None):\n"
+              "    ts = freeze_turn_start(state['messages'], 0, -1)\n"
+              "    state = {**state, 'turn_start': ts}\n"
+              "    sink = []\n"
+              "    upd = _planner_decide(state, config, task_sink=sink)\n"
+              "    upd['turn_start'] = ts\n"
+              "    return upd\n")
+    _ok_e, _det_e = _freeze_before_first_read(ast.parse(_early_src))
+    check("冻结写在 `_planner_decide` 之前 ⇒ **判绿**", _ok_e, _det_e)
+    check("`START → planner` 是唯一入口（冻结点必须在没人追加的时候跑）",
+          any(isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
+              and n.func.attr == "add_edge"
+              and len(n.args) >= 2
+              and _src(n.args[0]).strip() in ("START", "start")
+              and _src(n.args[1]).strip() == '"planner"'
+              for n in ast.walk(_tree)))
+    check("`_planner_decide` 不自己写 turn_start（注入点只留一处）",
+          "turn_start" not in (ast.get_source_segment(
+              "\n".join(_lines),
+              next(f for f in ast.walk(_tree)
+                   if isinstance(f, ast.FunctionDef) and f.name == "_planner_decide")) or ""))
+    print("[5F] 规则 F：narrator 的窗口闸门在场且没被绕过")
+    _model = next((f for f in ast.walk(_tree)
+                   if isinstance(f, ast.FunctionDef) and f.name == "model_node"), None)
+    check("model_node 存在", _model is not None)
+    _wire = next((f for f in ast.walk(_tree)
+                  if isinstance(f, ast.FunctionDef) and f.name == "_narrator_wire"), None)
+    check("`_narrator_wire` 存在（补形状那一环）", _wire is not None)
+    if _model is not None and _wire is not None:
+        # ── 第 2 环：补形状只许住在 `_narrator_wire` 里 ──────────────────────
+        _pair_all = [n for n in ast.walk(_tree)
+                     if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)
+                     and n.func.id == "with_tool_call_pairs"]
+        _pair_in_wire = [n for n in ast.walk(_wire)
+                         if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)
+                         and n.func.id == "with_tool_call_pairs"]
+        check("`_narrator_wire` 里 `with_tool_call_pairs` 恰好一处",
+              len(_pair_in_wire) == 1, f"{len(_pair_in_wire)} 处")
+        check("全文件里 `with_tool_call_pairs` 的调用也恰好一处（第二份补形状=第二条漂移源）",
+              len(_pair_all) == 1, f"{len(_pair_all)} 处")
+        # 补形状的入参是它**自己的形参**，不是 state —— 不然窗口在这一环就被绕开了。
+        check("`_narrator_wire` 里补形状的入参不是整份 messages 读",
+              not any(_reads_key(a, "messages") for n in _pair_in_wire for a in n.args))
+
+        # ── 第 1 环：`model_node` 必须把**窗口化的产物**交给它 ────────────────
+        _wire_calls = [n for n in ast.walk(_model)
+                       if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)
+                       and n.func.id == "_narrator_wire"]
+        check("model_node 里 `_narrator_wire` 恰好一处", len(_wire_calls) == 1,
+              f"{len(_wire_calls)} 处")
+        # 闸门变量：`X = _narrator_msgs(state)` 里的 X（本仓的写法是**先取再传**，
+        # 探针那一格要拿它比身份）。直接 `_narrator_wire(_narrator_msgs(state))` 也算过
+        # ——判的是"入参是不是窗口化的产物"，不是"写法长什么样"。
+        _gated_names = {t.id for n in ast.walk(_model) if isinstance(n, ast.Assign)
+                        and isinstance(n.value, ast.Call)
+                        and isinstance(n.value.func, ast.Name)
+                        and n.value.func.id == "_narrator_msgs"
+                        for t in n.targets if isinstance(t, ast.Name)}
+        _wire_args = _wire_calls[0].args if _wire_calls else []
+        _wire_ok = bool(_wire_args) and all(
+            (isinstance(a, ast.Call) and isinstance(a.func, ast.Name)
+             and a.func.id == "_narrator_msgs")
+            or (isinstance(a, ast.Name) and a.id in _gated_names)
+            for a in _wire_args)
+        check("⭐ 它的入参是 `_narrator_msgs(state)`（或它的产物）而不是整份 `state[\"messages\"]`",
+              _wire_ok,
+              "；".join(_src(a).strip()[:60] for a in _wire_args))
+        check("`_narrator_wire` 的入参**不是**整份 messages 读",
+              not any(_reads_key(a, "messages") for a in _wire_args))
+    _narr = next((f for f in ast.walk(_tree)
+                  if isinstance(f, ast.FunctionDef) and f.name == "_narrator_msgs"), None)
+    check("`_narrator_msgs` 存在且委托给 `prompt_context.narrator_messages`",
+          _narr is not None and any(
+              isinstance(n, ast.Call) and isinstance(n.func, ast.Name)
+              and n.func.id == "narrator_messages" for n in ast.walk(_narr)))
+    check("`_narrator_msgs` 把 `turn_start` 传下去了（不传 ⇒ 窗口恒不开火）",
+          _narr is not None and any(
+              isinstance(n, ast.Call) and isinstance(n.func, ast.Name)
+              and n.func.id == "narrator_messages"
+              and any(_reads_key(a, "turn_start") for a in n.args)
+              for n in ast.walk(_narr)))
+    print("[5F-] 规则 F 的反向对照：绕开闸门必须判红")
+    check("`_narrator_wire(state[\"messages\"])` ⇒ **判红**",
+          not _wire_gate_verdict(ast.parse(
+              "def model_node(state):\n"
           "    return [_head] + _narrator_wire(state['messages']) + [_tail]\n")))
-check("`_narrator_wire(_narrator_msgs(state))` ⇒ **判绿**",
-      _wire_gate_verdict(ast.parse(
-          "def model_node(state):\n"
+    check("`_narrator_wire(_narrator_msgs(state))` ⇒ **判绿**",
+          _wire_gate_verdict(ast.parse(
+              "def model_node(state):\n"
           "    return [_head] + _narrator_wire(_narrator_msgs(state)) + [_tail]\n")))
-check("先取再传（`_m = _narrator_msgs(state)` 再 `_narrator_wire(_m)`）⇒ **判绿**",
-      _wire_gate_verdict(ast.parse(
-          "def model_node(state):\n"
+    check("先取再传（`_m = _narrator_msgs(state)` 再 `_narrator_wire(_m)`）⇒ **判绿**",
+          _wire_gate_verdict(ast.parse(
+              "def model_node(state):\n"
           "    _m = _narrator_msgs(state)\n"
           "    return [_head] + _narrator_wire(_m) + [_tail]\n")))
-check("同名局部名不是从 `_narrator_msgs` 绑的（`_m = state['messages']`）⇒ **判红**",
-      not _wire_gate_verdict(ast.parse(
-          "def model_node(state):\n"
+    check("同名局部名不是从 `_narrator_msgs` 绑的（`_m = state['messages']`）⇒ **判红**",
+          not _wire_gate_verdict(ast.parse(
+              "def model_node(state):\n"
           "    _m = state['messages']\n"
           "    return [_head] + _narrator_wire(_m) + [_tail]\n")))
+    print()
+    if FAILS:
+        print(f"❌ {len(FAILS)} 条判据未过：")
+        for f in FAILS:
+            print("   -", f)
+        sys.exit(1)
+    print("✅ 全部通过")
 
-# ---------------------------------------------------------------------------
-print()
-if FAILS:
-    print(f"❌ {len(FAILS)} 条判据未过：")
-    for f in FAILS:
-        print("   -", f)
-    sys.exit(1)
-print("✅ 全部通过")
+    assert not FAILS, (
+        f"{len(FAILS)} 条未通过：" + "；".join(FAILS))
+
+
+if __name__ == "__main__":
+    test_turn_window()
