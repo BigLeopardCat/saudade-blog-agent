@@ -32,16 +32,13 @@ from __future__ import annotations
 from typing import Any
 
 from agent.narrator_discipline import NARRATOR_DISCIPLINE_LOOP
-from agent.prompts import BLOG_ASSISTANT_PROMPT
 from agent.react_arm import (
-    STICKER_GUIDE,
     _doc_anchors,
     _frame_texts,
     _intent_hints,
     _page_ctx,
     _recent_tail,
     _short_reply_hint,
-    audience_block,
     ref_hints,
 )
 from agent.tasks import TASK_DROP, TASK_HOLD, TASK_INTENTS
@@ -70,14 +67,13 @@ _TOOL_OUTPUT_CONTRACT = f"""\
 5. 信息够了就停止调用，别反复调同一个工具。"""
 
 _TOOL_CLOSING_RULES = """\
-循环机制（你既是决策者也是回复者）：
+循环机制（你是决策者；正文由系统另派的零工具叙述者写）：
 1. 要做事就**直接调用工具**（下面那张表就是你的全部本领）；系统会立刻执行并把真实结果
    作为一条工具消息还给你。
-2. 信息已经够回答主人了 ⇒ **不要再调用任何工具**——那一轮就到此为止，收尾正文由系统另派
-   一位零工具的叙述者按工具回执写（所以你说的每一件站内事实都必须能在工具结果、页面上下文
-   或执行回执里找到出处；找不到就如实说没查到）。
+2. 信息已经够回答主人了 ⇒ **不要再调用任何工具**——那一轮就到此为止。
 3. 同一件事不要重复做：工具回执里写着"未生效"就换参数或换工具，别原样重试。
-4. 复核：说出口的每一件站内事实，都要能在下面的工具结果、页面上下文或执行回执里找到出处。"""
+4. 你自己写的那几个字**不是交付**：说出口的每一件站内事实都要能在工具结果、页面上下文
+   或执行回执里找到出处；找不到就如实说没查到。"""
 
 
 def tool_menu_text(role: str | None, names: set[str] | None = None) -> str:
@@ -182,22 +178,14 @@ def build_tool_prompt(*, messages: list, role: str | None, principal: Any,
         correction=correction or "（本决策轮无纠偏提示）",
         output_contract=_TOOL_OUTPUT_CONTRACT)
     # ⚠️ **静态块在前、契约在后**（20261021）——顺序是**承重的**，别顺手改回去。
-    #
     # 契约（`_TOOL_PLANNER_PROMPT` 的产物）里有十四格注入值，其中**逐轮在变**的那几格
-    # （`page_ctx` / `intent_hints` / `doc_anchors` / `recent_context` / `short_reply_hint`
-    # / `pending_ledger` / `correction` / `user_msg`）连成一片。那六块叙述资产
-    # （人设 / 角色能力 / 立场改写 / 叙述纪律 / 贴纸表 / 收尾规则，合计 11297 字）
-    # **一个字节都不随请求变**：拼在契约**后面** ⇒ 整段落在断点之后，一次都进不了
-    # 公共前缀。离线实测（两个只差 `user_msg` 的相邻用例）：本臂 SystemMessage 的公共
-    # 前缀 **51%**；把静态块挪到前面之后升到 **≈90%**（同一手法、同一实测口径见
-    # `react_arm._system_prompt` 与提交 `8bbe3f0`）。
+    # 连成一片；静态块拼在它**后面**就整段落在断点之后，一次都进不了公共前缀。
     #
-    # 两块都是静态的，谁在前谁在后对**内容**没有影响，只影响"哪一段能被前缀缓存吃到"。
-    # ⚠️ 这与 `agent/tool_prompt.py` 的契约内部顺序是**两件事**：契约里那几段静态规则
-    # （判定规则 / 记账口 / 输出契约）也挪到了易变槽位之前，见 `_TOOL_PLANNER_PROMPT`。
-    return "\n\n".join([BLOG_ASSISTANT_PROMPT or "", audience_block(role),
-                        NARRATOR_DISCIPLINE_LOOP, STICKER_GUIDE,
-                        _TOOL_CLOSING_RULES, planner])
+    # ⚠️ 20261021 起**人设 / 受众 / 贴纸表三块从这里退场**（主人令：planner 只做意图
+    # 识别与执行路由，人设是叙述层的事）。三块没有丢——narrator 那一份
+    # （`_narrator_prompt` 走 `_EXECUTOR_PROMPT`）里三格都在，留在这里只是每请求再付
+    # 一遍。留下的两块都是**约束"能不能这么说"**（叙述纪律 / 什么时候停）。
+    return "\n\n".join([NARRATOR_DISCIPLINE_LOOP, _TOOL_CLOSING_RULES, planner])
 
 
 # 提示词正文。槽位与生产那份**同名同义**（渲染点只换数据、不换代码），正文为工具菜单

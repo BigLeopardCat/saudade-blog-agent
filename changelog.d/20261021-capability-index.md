@@ -141,3 +141,22 @@
   ⚠️ **弹卡判不了**：离线现场 `settings.jwt_secret` 为空 ⇒ `_confirm_popup` 不签发令牌、
   直接不弹（`graph.py` 那一支有 20260922 的 CI 实测记录）。所以这里判**路由**
   （`pending_confirm ⇒ END`，纯函数），卡面归 `tests/test_confirm*.py`。
+  ⑭ **人设 / 受众 / 贴纸表三块从 planner 侧退场**（同一道令：人设是**叙述层**的事）。
+  `react_arm._system_prompt` 与 `tool_prompt.build_tool_prompt` 各去掉三块（3,261 字符
+  / 每请求），**没有丢**——`_narrator_prompt` 走生产 `_EXECUTOR_PROMPT`，`persona` /
+  `audience` / `sticker_guide` 三格都在。判据 `tests/test_react_prompt_layout.py` ④
+  **同时**钉"planner 侧没有"与"叙述层有"（否则"搬走了"与"删掉了"同形）。
+  ⚠️ **一处如实记的取舍**：`NARRATOR_DISCIPLINE_LOOP`（按条裁过的那份，4,658 字符）
+  **留着没搬**。理由：它约束的是"能不能这么说"而不是"说得好不好听"，而 planner 的正文
+  是 narrator 失败时的**兜底草稿**——一句会编造的兜底比一句平淡的兜底坏得多；搬走它
+  还会让 `agent/narrator_discipline.py` 整份变成无消费方的死代码（那份模块连同它的两张
+  理由表是 471c52f 的产物）。要不要连它一起搬，是**待裁**，不是本轮结论。
+  **离线实测**（`admin`，同一套字符→token 换算：散文 0.546 / schema 0.476）：
+  索引轮 prompt 28,199 + schema 13,637 ≈ **15.4k tok**（改前 31,540 + 43,383 ≈ 37.9k）；
+  填参轮 ≈ **4.0k**；工具态 ≈ **4.1k**。相邻两例（只差 `user_msg`）公共前缀 **95.3%**
+  （静态前缀 26,862 字符，剩下的 1,337 是页面上下文那几格易变槽位）。
+  ⚠️ **索引轮离主人要的 5K 还差得远，而剩下的钱不在这一批里**：它的 28,199 字符里
+  23,234 是**生产 planner 那一份提示词**（技能注册表 9,962 + 判定规则/输出契约 13,030），
+  而那份规则是照**旧架构**写的（`PARAMS.calls` / `TOOLS 行` / planner 自己挑工具）。
+  真要进 5K，得给本臂写**它自己那一份** planner 提示词（生产 `graph` 仍在用
+  `agent/prompts._PLANNER_PROMPT`，不能就地改），那是下一刀。
