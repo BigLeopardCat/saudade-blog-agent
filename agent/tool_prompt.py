@@ -136,7 +136,9 @@ def build_tool_prompt(*, messages: list, role: str | None, principal: Any,
                       config: dict | None, user_msg: str,
                       ledger_frame: str = "", correction: str = "",
                       exec_rows: list | None = None, capability: str = "",
-                      tool_names: set[str] | None = None) -> str:
+                      tool_names: set[str] | None = None,
+                      menu_text: str | None = None,
+                      capability_block: str = "") -> str:
     """工具臂的系统提示（**每请求只渲染一次**，缓存由 `react_arm._prompt_of` 负责）。
 
     与 `react_arm._system_prompt` 的差别**只有三处**：菜单块（技能表 → 工具表）、输出契约、
@@ -151,11 +153,19 @@ def build_tool_prompt(*, messages: list, role: str | None, principal: Any,
     同样只有能力索引臂传它，理由见 `tool_menu_text`——那一臂绑的 schema 是**那条能力的
     工具面**，提示词印全表就是两份自相矛盾的清单。缺省 `None` ⇒ 工具臂逐字节不变。
 
+    `menu_text` / `capability_block`（20261021，能力索引臂的**填参轮**）：两格都是
+    "把槽位内容交出去"的接缝——`menu_text` 非 `None` 时整格换掉（那一轮绑给模型的不是
+    工具面，是**一条确定性能力**，`tool_menu_text` 读的 `build_tool_menu` 里没有它）；
+    `capability_block` 非空时逐字用作那一段（`capability_block_text` 的抬头写着"这一轮的
+    可调用工具就是它那一批"，而填参轮那批工具**一件都没绑**）。两格缺省都让本函数与
+    改动之前**逐字节相同**（工具臂的读数已归档，不该被后来的一笔悄悄换掉自变量）。
+
     ⚠️ **装配顺序是承重的**（见函数末尾那段注）：静态块在前、契约在后。
     """
     planner = _TOOL_PLANNER_PROMPT.format(
-        tool_menu=tool_menu_text(role, tool_names),
-        capability_block=capability_block_text(capability),
+        tool_menu=tool_menu_text(role, tool_names) if menu_text is None else menu_text,
+        capability_block=(capability_block if capability_block
+                          else capability_block_text(capability)),
         page_ctx=_page_ctx(messages, role),
         round_info=round_info_text(0),
         user_msg=user_msg,
@@ -278,6 +288,31 @@ def capability_block_text(brief: str) -> str:
             f"{brief}\n"
             "把这条能力**该调的工具都调上**（上面「由这些工具完成」那行列的就是全部）；"
             "工具回执里已经写着结果的不要再调。信息够了就零调用收尾。\n")
+
+
+def route_block_text(brief: str) -> str:
+    """`{capability_block}` 那一格在**填参轮**（`kind=workflow` 的确定性快道）的取值。
+
+    与 `capability_block_text` 的差别**只有"这一轮要模型做什么"**：那一份说"这一轮的
+    可调用工具就是它那一批、该调的都调上"，而快道这一轮**只填参数**——那条能力的工具由
+    系统按它自己的确定性计划（`instantiate_plan`）展开，**一件都没绑给模型**。照抄那句
+    等于让模型去点一个结构上点不到的名字，正是 POC 里 A 族（13 条路由红）的形态。
+
+    `brief` 用 `capability_index.route_brief`（`capability_brief` 去掉工具面那一句），
+    本函数只负责"这一轮怎么说话"。空 `brief` ⇒ 空串（同 `capability_block_text`）。
+
+    最后那句"信息不够就零调用"是主人要的那条**克制的回问通道**：意图模糊到填不出参数时，
+    交给叙述层问一句，而不是瞎填一个 id（敏感操作另有弹卡兜底，所以这里不设别的保险）。
+    """
+    if not brief:
+        return ""
+    return ("本轮要完成的能力（系统按你的意图选定，**这一轮只做它一件事**）：\n"
+            f"{brief}\n"
+            "**这一轮只做一件事**：把这个能力的参数填好并调用它（参数一律以它的 schema "
+            "为准）。系统会按它自己的确定性计划展开执行，不需要你挑工具、也不要在这一轮"
+            "调别的函数。\n"
+            "参数填不出来（主人没交代、页面上下文里也没有）⇒ **零调用收尾**，系统会另派"
+            "叙述者去问主人，不要猜一个填进去。\n")
 
 
 def round_info_text(rounds: int) -> str:

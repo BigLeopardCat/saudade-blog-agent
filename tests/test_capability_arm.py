@@ -6,18 +6,22 @@
 剩下的点不到）、提示词没跟着换（菜单是工具表、提示词还在讲技能表 ⇒ 自相矛盾的提示词）。
 这三种都不让别的套件红，而读数会掉得像是"模型变笨了"。
 
-判据分五组：
+判据分六组：
 
-  ① **两态菜单**：`ctx["caps"]` 空 ⇒ 索引态（名字集合 == 可见技能 + 三个记账口）；
-     非空 ⇒ 工具态（名字集合 == 那条能力的工具面 ∩ authz 可见 + 三个记账口）。
-  ② **只换 `description`**：索引态 schema 剥掉描述后与 `build_tool_schema(role)` 剥掉后
-     **逐字节相同**（函数名 / 参数 / `required` / `enum` 一个字符不动）。
+  ① **三态菜单**：`ctx["route"]` 有值 ⇒ 填参态（那一条确定性能力的 schema）；否则
+     `ctx["caps"]` 空 ⇒ 索引态（名字集合 == 可见技能 + 三个记账口）；非空 ⇒ 工具态
+     （名字集合 == 那条能力的工具面 ∩ authz 可见 + 三个记账口）。
+  ② **索引态只留「名字 + 一行」**：能力项**零参数 schema**、描述 == 一行索引；记账口的
+     参数**一个都不许被连带摘掉**。
   ③ **端到端跑一轮**（`test_arm_seams` 那套脚本化假模型）：第 0 轮点能力 ⇒ 零工具、
      `plan["workflow"]` 是能力名；第 1 轮绑的是那条能力的工具面；工具真被调、帧发出来。
   ④ **提示词成对换**：索引态 == `react_arm._system_prompt` 那一份；工具态含能力简报的
      三格（工具面 / 完成判定 / 回复契约）。
   ⑤ **不扩权 + 不重写 harness**：工具态菜单 ⊆ authz 可见工具；够不着的 `caps` 名被丢掉；
      源码里不出现权限闸/同意闸/引用解析的第二份实现（只许调 `run_specs`）。
+  ⑥ **路由轮只路由**（20261021）：`kind=workflow` 的能力点中当轮**零调用**、记
+     `ctx["route"]`；下一轮菜单是它自己的 schema（含参数）、提示词是填参那份；填完参数
+     才产出 `calls` 进 `execute`。`chat` 零调用且下一站是**叙述层**（不占执行轮）。
 """
 
 from __future__ import annotations
@@ -180,67 +184,65 @@ def test_menu_two_phases():
           != {t.name for t in CA.capability_menu("admin", {"caps": ["navigate"]})})
 
 
-# ── ② 只换 description（＋摘掉两个没人读的槽位） ──────────────────────────
-def test_index_menu_only_swaps_description():
-    """索引态相对生产 schema 的差别**只有两处**，两处都要钉住：
+# ── ② 索引态只留「名字 + 一行」：零参数 schema ────────────────────────────
+def test_index_menu_is_thin():
+    """路由轮的菜单相对生产 schema 的差别是**两处**，两处都是"路由轮不需要"：
 
-      · `description` 那一格换成 `index_entry`（阶段 1 的自变量就是它）；
-      · **两个跨切面槽位被摘掉**（`slots=False`）——本臂折算计划时走
-        `tool_menu.strip_slots`，`intents` / `reply_kind` **填了就扔**，而它们单份
-        799 字符 × 49 条能力 = 索引菜单的 59%。摘槽位**不是**"顺手瘦身"：填了没人读
-        等于骗模型以为申报过了。三个伪函数不受影响（`task_intents` 自带 `intents`）。
+      · `description` → **一行索引**（`Capability.line`，不是完整索引项——工具面与完成
+        判定归工具态/填参轮的简报）；
+      · 能力项的 `parameters` → **整片摘掉**。33 条模板能力的参数在路由轮一条都用不上，
+        实测 12,996 字符，而路由轮**每请求都要过一遍**。
+      · 两个跨切面槽位（`intents` / `reply_kind`）也不挂（`slots=False`）：本臂折算计划
+        时走 `tool_menu.strip_slots`，填了就扔。
 
-    ⚠️ 判据要**同时**钉"该摘的摘了"与"不该动的没动"：只判前者，把整个 `properties`
-    清空也过。
+    ⚠️ 判据要**同时**钉"该摘的摘了"与"不该动的没动"：只判前者，把 `description` 也
+    清空、或把记账口的参数一起摘了，都会过。
     """
+    from agent.capability_index import capability_of
     from agent.planner_llm import build_tool_schema
     from agent.prompt_context import REPLY_KIND_ARG
     from agent.tasks import INTENTS_ARG
 
-    def strip(node: Any) -> Any:
-        if isinstance(node, dict):
-            return {k: strip(v) for k, v in node.items() if k != "description"}
-        if isinstance(node, list):
-            return [strip(x) for x in node]
-        return node
-
     for role in (None, "user", "admin"):
-        prod = {t["function"]["name"]: strip(t["function"])
-                for t in build_tool_schema(role, slots=False)}
+        prod = {t["function"]["name"]: t["function"] for t in build_tool_schema(role, slots=False)}
         for tool in CA.capability_menu(role, {}):
-            schema = tool.args_schema if isinstance(tool.args_schema, dict) else {}
-            got = strip({"name": tool.name, "parameters": schema})
-            check(f"索引态只换描述、结构一字节不动：{tool.name}（role={role}）",
-                  tool.name in prod and got == strip(prod[tool.name]),
-                  f"{str(got)[:60]} vs {str(prod.get(tool.name))[:60]}")
-
-    # 反控 ①：槽位**真的被摘掉了**（否则上面那条判的是"摘了等于没摘"）
-    for role in ("admin",):
-        for tool in CA.capability_menu(role, {}):
-            props = (tool.args_schema or {}).get("properties") or {}
-            if tool.name in PSEUDO_NAMES:
+            cap = capability_of(tool.name, role)
+            if cap is None:
                 continue
-            check(f"反控：索引菜单里没有槽位 `{tool.name}`",
-                  INTENTS_ARG not in props and REPLY_KIND_ARG not in props,
-                  str(sorted(props))[:60])
-    # 反控 ②：`slots=True`（生产那条路）**照旧挂着**——摘的只是本臂这一份
+            props = (tool.args_schema or {}).get("properties") or {}
+            check(f"索引态能力项零参数 schema：{tool.name}（role={role}）",
+                  props == {}, str(sorted(props))[:60])
+            check(f"索引态能力项描述 == 一行索引：{tool.name}（role={role}）",
+                  tool.description == cap.line, tool.description[:60])
+            check(f"索引态没有那两个没人读的槽位：{tool.name}（role={role}）",
+                  INTENTS_ARG not in props and REPLY_KIND_ARG not in props)
+            check(f"函数名没被顺手改掉：{tool.name}（role={role}）",
+                  tool.name in prod, tool.name)
+    # 反控 ①：**参数确实被摘掉了**（否则上面那条判的是"本来就空"）
     on = {t["function"]["name"]: t["function"] for t in build_tool_schema("admin")}
+    check("反控：生产 schema 里 `navigate` 的参数非空（索引态那一片不是「本来就没有」）",
+          bool((on["navigate"]["parameters"].get("properties") or {})),
+          str(sorted(on["navigate"]["parameters"].get("properties") or {}))[:60])
+    # 反控 ②：`slots=True`（生产那条路）两个槽位照旧挂着——摘的只是本臂这一份
     check("反控：生产 schema（slots=True）两个槽位照旧在（没顺手把生产也摘了）",
           INTENTS_ARG in on["navigate"]["parameters"]["properties"]
           and REPLY_KIND_ARG in on["navigate"]["parameters"]["properties"])
-    # 反控 ③：`task_intents` 自带的 `intents` **不许**被 `slots=False` 连带摘掉
-    # （它才是 `tasks.normalize_intents` 真读的那个出口）
+    # 反控 ③：**记账口的参数不许被连带摘掉**——`task_intents` 的 `intents` 是
+    # `tasks.normalize_intents` 真读的那一格（`slots=False` 都特意留着它）。
+    # 这条是"该摘的摘、不该动的没动"里那个**没动**。
     pseudo = {t.name: (t.args_schema or {}) for t in CA.capability_menu("admin", {})}
     check("反控：`task_intents` 自己的 `intents` 参数没被连带摘掉",
           INTENTS_ARG in ((pseudo.get("task_intents") or {}).get("properties") or {}),
           str(sorted(((pseudo.get("task_intents") or {}).get("properties") or {}))))
-
-    # 反控：索引态的描述**确实被换过**（否则上面那条判的是"没换"）
-    from agent.capability_index import capability_of, index_entry
-    nav = [t for t in CA.capability_menu("admin", {}) if t.name == "navigate"][0]
-    want = index_entry(capability_of("navigate", "admin"))
-    check("反控：索引态描述 == `index_entry`（不是原散文）", nav.description == want,
-          nav.description[:60])
+    # 反控 ④：`_thin` 是"只动能力项"的**判据级**反证——手工拿一条能力项过一遍，
+    # 参数必须当场变空；同一份数据里的记账口必须原样。
+    raw = [t for t in build_tool_schema("admin", slots=False)
+           if t["function"]["name"] in ("navigate", "task_intents")]
+    thin = {i["function"]["name"]: i["function"]["parameters"] for i in CA._thin(raw)}
+    check("反控：`_thin` 只清能力项的参数（记账口原样）",
+          thin["navigate"] == {"type": "object", "properties": {}}
+          and bool((thin["task_intents"].get("properties") or {})),
+          f"{thin['navigate']} / {sorted((thin['task_intents'].get('properties') or {}))}")
 
 
 # ── ③ 端到端跑一轮 ────────────────────────────────────────────────────────
@@ -358,14 +360,136 @@ def test_no_privilege_growth_and_no_rewrite():
           str(sorted(CA.CapabilityArm.ctx_hooks)))
 
 
+# ── ⑥ 路由轮只路由（`kind=workflow` 的确定性快道） ────────────────────────
+def test_route_round_only_routes():
+    """20261021：`kind=workflow` 的能力**两段式**——路由轮只记，填参轮才执行。
+
+    判据取**行为**（`plan_obj` 里有没有调用、菜单绑的是谁、下一站是哪），不取实现：
+      · 路由轮：零调用 + `ctx["route"]` 记下 + 下一站 `planner`（**不回 execute**）；
+      · 填参轮：菜单换成**那一条**的 schema（参数回来了）+ `calls` 产出 + 下一站 `execute`；
+      · `chat`：零调用 + 下一站 `model`（闲聊不该占一个执行轮）；
+      · ReAct 能力 / 裸工具名：与改动之前**逐字同形**（这一拨没有动它们）。
+    """
+    from agent.capability_index import capability_of
+    from agent.tool_prompt import route_block_text
+
+    WF, SKILL = "dashboard_todo_add", "navigate"
+
+    # ① 路由轮：零调用、记 route、下一站 planner
+    ctx: dict = {}
+    obj = CA.plan_of([{"name": WF, "args": {}, "id": "a"}], "admin", ctx)
+    check("路由轮**零调用**（写族不再当轮执行）", obj.get("calls") == [], str(obj.get("calls")))
+    check("路由轮把能力名记进 `ctx[\"route\"]`", ctx.get("route") == WF, str(ctx.get("route")))
+    check("路由轮**作废菜单**（下一轮才绑得上它的 schema）", ctx.get("menu", "未清") is None)
+    check("路由轮的下一站是 `planner`（等填参数），不是 `execute`",
+          obj.get("route_to") == "planner", str(obj.get("route_to")))
+    check("`plan_obj['workflow']` 仍是**模型自己选的能力名**（gate 按它分族）",
+          obj.get("workflow") == WF, str(obj.get("workflow")))
+
+    # ② 填参轮：菜单换成那一条（参数回来了）、产出调用、下一站 execute
+    fill = {t.name: t for t in CA.capability_menu("admin", ctx)}
+    check("填参轮菜单 == 那一条能力 + 三个记账口",
+          set(fill) == {WF} | set(PSEUDO_NAMES), str(sorted(fill)))
+    props = (fill[WF].args_schema or {}).get("properties") or {}
+    check("填参轮**参数回来了**（路由轮摘掉的那一片）", bool(props), str(sorted(props)))
+    check("  反控：索引轮那一条的参数是空的（两态确实不同形）",
+          not (({t.name: t for t in CA.capability_menu("admin", {})}[WF].args_schema
+                or {}).get("properties") or {}))
+    obj2 = CA.plan_of([{"name": WF, "args": {"text": "买菜"}, "id": "b"}], "admin", ctx)
+    check("填参轮产出调用（执行层按名字走 `instantiate_plan` 那条链）",
+          [c.get("workflow") for c in obj2.get("calls") or []] == [WF], str(obj2.get("calls")))
+    check("填参轮完成后**路由作废**（下一轮回索引，多意图里剩下的才点得到）",
+          not ctx.get("route"), str(ctx.get("route")))
+    check("填参轮的下一站是 `execute`", obj2.get("route_to") == "execute",
+          str(obj2.get("route_to")))
+
+    # ③ 提示词成对换：填参那份说的是"只填参数"，**不是**"该调的工具都调上"
+    from agent.capability_index import route_brief
+    prompt = CA.capability_prompt({"messages": []}, {"role": "admin", "route": WF,
+                                                     "user_msg": "记一下买菜"})
+    check("填参轮提示词含那一条能力的简报",
+          route_brief(capability_of(WF, "admin")).split("\n")[0] in prompt)
+    check("填参轮提示词说的是「只做它一件事」", "这一轮只做一件事" in prompt, prompt[:0])
+    check("**反控**：填参轮提示词里没有「该调的工具都调上」"
+          "（那批工具由系统展开、一件都没绑，说了就是让模型点一个点不到的名字）",
+          "该调的工具都调上" not in prompt)
+    check("填参轮提示词里那一段 == `route_block_text`（不是 `capability_block_text`）",
+          route_block_text(route_brief(capability_of(WF, "admin"))) in prompt)
+
+    # ④ `chat`：零调用 + 下一站**叙述层**（不占执行轮）
+    cctx: dict = {}
+    cobj = CA.plan_of([{"name": "chat", "args": {}, "id": "c"}], "admin", cctx)
+    check("`chat` 零调用", cobj.get("calls") == [], str(cobj.get("calls")))
+    check("`chat` 的下一站是 `model`（正文归叙述者）", cobj.get("route_to") == "model",
+          str(cobj.get("route_to")))
+    check("`chat` 不占路由格（下一轮不该去给它填参数）", not cctx.get("route"),
+          str(cctx.get("route")))
+
+    # ⑤ 没有动的那两档：ReAct 能力照旧进 `caps`、裸工具名照旧产出调用
+    rctx: dict = {}
+    robj = CA.plan_of([{"name": SKILL, "args": {"target": "首页"}, "id": "d"}], "admin", rctx)
+    check("ReAct 能力照旧进 `ctx[\"caps\"]` 且零调用",
+          rctx.get("caps") == [SKILL] and robj.get("calls") == [],
+          f"{rctx.get('caps')} / {robj.get('calls')}")
+    check("  ReAct 那一轮的下一站也是 `planner`（下一轮绑它那一批工具）",
+          robj.get("route_to") == "planner", str(robj.get("route_to")))
+    bctx: dict = {}
+    bobj = CA.plan_of([{"name": "list_notes", "args": {}, "id": "e"}], "admin", bctx)
+    check("裸工具名照旧产出调用（执行层按名字分派、BLOCK 由它判）",
+          [c.get("workflow") for c in bobj.get("calls") or []] == ["list_notes"],
+          str(bobj.get("calls")))
+
+    # ⑥ 端到端（真图）：路由轮之后**没有 execute 帧**，填参轮之后才有。
+    # ⚠️ 身份必须带 `write.console`（`Principal(uid=9, role="admin")` 没有）——那一档下
+    # 写 spec 会被**硬权限闸**拦下（`authz.check` 不许 + `must_enforce`）⇒ 既不上卡也不
+    # 执行，判据会红在"没弹卡"上，而那不是本组要判的事。
+    frames = _run([_call(WF), _call(WF, text="买菜"), AIMessage(content="记下了")],
+                  tools={"create_dashboard_todo": lambda **kw: _Res("已记下：买菜")},
+                  msg="帮我记一下买菜", principal=Principal(uid=1, role="superadmin"))
+    plans = _plans(frames)
+    ex = [d["execute"] for mode, d in frames
+          if mode == "updates" and isinstance(d, dict) and d.get("execute")]
+    check("端到端：跑了至少两轮 planner", len(plans) >= 2, str(len(plans)))
+    if len(plans) >= 2:
+        check("端到端：**路由轮的 `calls` 是空的**（零执行）",
+              (plans[0].get("plan_obj") or {}).get("calls") == [],
+              str((plans[0].get("plan_obj") or {}).get("calls")))
+        check("端到端：填参轮的 `calls` 非空",
+              bool((plans[1].get("plan_obj") or {}).get("calls")),
+              str((plans[1].get("plan_obj") or {}).get("calls")))
+    check("端到端：绑过两次菜单，第一次是索引态、第二次是那一条能力",
+          len(BOUND) >= 2 and WF in BOUND[1] and set(BOUND[1]) == {WF} | set(PSEUDO_NAMES),
+          str([b[:3] for b in BOUND]))
+    check("端到端：填参轮之后图真的走到了 `execute`（不是又回 planner）",
+          bool(ex), str(len(ex)))
+
+    # 快道接的是**生产那条展开链**：能力名 → `instantiate_plan` → 真工具 spec → 同意闸。
+    # 这里判到"真工具 spec 进了 `pending`"为止——再往下是写通道，归 `tests/test_confirm*.py`。
+    from agent.react_line import RunLedger as _RL
+    _led = _RL()
+    CA.CapabilityExecutor({"create_dashboard_todo": lambda **kw: _Res("已记下")}, _led,
+                          role="superadmin",
+                          principal=Principal(uid=1, role="superadmin")).run(WF, {"text": "买菜"})
+    check("快道把能力名展开成它计划里的**真工具**（`instantiate_plan` 那条链）",
+          [p.get("tool") for p in _led.pending] == ["create_dashboard_todo"],
+          str([p.get("tool") for p in _led.pending]))
+    # 弹卡那一轮的形状：`pending_confirm` ⇒ END（纯函数，不依赖现场）。
+    # ⚠️ 离线现场**弹不出卡**：`_confirm_popup` 在 `settings.jwt_secret` 为空时不签发
+    # 令牌、直接不弹（`graph.py` 那一支有 20260922 的 CI 实测记录），而本套件钉着
+    # `SAUDADE_IGNORE_ENV_FILE=1`。所以卡面本身归 `tests/test_confirm*.py` 判。
+    check("弹卡那一轮到此为止（`pending_confirm` ⇒ END，不叫 narrator）",
+          R.route_after_execute({"pending_confirm": {"q": "?"}}, None) == "end")
+
+
 def test_capability_arm():
     """收集器入口（`tests/test_tests_dir_shape.py` 要一个顶层 `def test_*`）。"""
     FAILED.clear()
     test_menu_two_phases()
-    test_index_menu_only_swaps_description()
+    test_index_menu_is_thin()
     test_end_to_end_turn()
     test_prompt_follows_menu()
     test_no_privilege_growth_and_no_rewrite()
+    test_route_round_only_routes()
     assert not FAILED, f"{len(FAILED)} 条未过：" + "；".join(FAILED)
 
 
