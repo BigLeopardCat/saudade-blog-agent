@@ -376,7 +376,7 @@ class WorkflowExecutor:
         各自的对照方（模型的原始 `tool_calls`）同源。空串 = 这一批不登记（工具臂逐条
         调用时，登记由调用方按条做）。
         """
-        from agent.arg_refs import resolve_args
+        from agent.arg_refs import resolve_args, structured_of
 
         # ── 同意闸（P3，20261005）：写操作**整批先判、一件都不执行** ──────────────
         # 生产这边的分工是两道、都在 `graph.execute_node`：① `_confirm_popup` 在**逐
@@ -415,6 +415,7 @@ class WorkflowExecutor:
             name = _tool_name(spec)
             args, args_ok = _tool_args(spec)
             text, kind, meta, data = "", "ok", {}, None
+            res: object = None
             if args_ok:
                 args, ref_err = resolve_args(args, tool_data)
                 if ref_err:
@@ -444,7 +445,15 @@ class WorkflowExecutor:
                 except Exception as e:  # noqa: BLE001 —— 异常必须变成数据（见文件头注）
                     text = f"__ERROR__ {type(e).__name__}: {e}"
                     logger.info("[react_line] 工具 %s 抛错：%s", name, e)
-            tool_data.append({"tool": name, "result": text[:2000]})
+            # `data` 是 `$tool[i].field` 引用与 `ref_hints` 的**唯一**取值源
+            # （`arg_refs.resolve_one` / `ref_hints` 都读这一格）。
+            # ⚠️ 20261021 修：此前这里写的是 `"result": text[:2000]`，而两个读端读的都是
+            # `"data"` ⇒ **在本线的每条臂上 `$tool` 引用恒判 `ref_unparsed`（BLOCK）、
+            # ref_hints 恒回"本轮还没有可引用的工具返回"**——"引用解析"看着在跑，一次
+            # 都没成功过。取值口径与生产 `graph.execute_node` 同源：`structured_of(out)`
+            # （有本体给本体，没有就回落 `parse_data(str(out))`）。
+            tool_data.append({"tool": name,
+                              "data": structured_of(res if res is not None else text)})
             outs.append(f"[{name}] {text}")
             line, verdict = _verdict_of(name, args, args_ok, text, workflow, kind, meta,
                                         self.ledger, data)
