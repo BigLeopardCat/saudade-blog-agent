@@ -49,8 +49,8 @@ from agent import tool_menu as TM  # noqa: E402
 from agent import tool_prompt as TP  # noqa: E402
 from agent import workflow_defs as W  # noqa: E402
 from agent.capability_index import capabilities_for  # noqa: E402
+from agent.narrator_discipline import NARRATOR_DISCIPLINE_LOOP  # noqa: E402
 from agent.principal import Principal  # noqa: E402
-from agent.prompts import BLOG_ASSISTANT_PROMPT  # noqa: E402
 from agent.tool_prompt import PSEUDO_NAMES  # noqa: E402
 
 FAILED: list[str] = []
@@ -317,10 +317,12 @@ def test_prompt_follows_menu():
     # 装配顺序：静态块在契约**之前**（前缀缓存的承重件，同提交 `8bbe3f0` 的手法）。
     # 判据读**真发出去那一份**、且用**资产自己的第一行**当地标（不手抄一句提示词正文：
     # 抄一句就多一个漂移源，资产改了这个判据会静默失效）。
-    head = next(ln for ln in (BLOG_ASSISTANT_PROMPT or "").splitlines() if ln.strip())
+    # 20261021 起地标换成叙述纪律那一块——人设/受众/贴纸三块已从 planner 侧退场
+    # （见 `react_arm._system_prompt` 的注），而纪律块是**留下的那块**里最靠前的一块。
+    head = next(ln for ln in NARRATOR_DISCIPLINE_LOOP.splitlines() if ln.strip())
     check("工具态提示词是「静态资产在前、契约在后」（前缀缓存的承重件）",
           0 <= second.find(head) < second.find("可调用工具（"),
-          f"人设首行 @{second.find(head)}，菜单抬头 @{second.find('可调用工具（')}")
+          f"纪律首行 @{second.find(head)}，菜单抬头 @{second.find('可调用工具（')}")
     # 契约**内部**同理：静态的判定规则要在易变的「页面上下文」之前
     check("契约内部也是「静态规则在前、易变数据在后」",
           0 <= second.find("判定规则：") < second.find("页面上下文："),

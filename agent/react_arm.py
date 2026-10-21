@@ -1207,21 +1207,15 @@ def ledger_frame_for(messages: list, principal: Any, config: dict | None,
 def _system_prompt(messages: list, role: str | None, principal: Any,
                    config: dict | None, user_msg: str,
                    fast_frames: list | None = None, exec_rows: list | None = None) -> str:
-    """系统提示 = 人设 + 叙述纪律 + 贴纸 + 循环说明 + 判断器提示词（生产唯一渲染入口）。
+    """系统提示 = 叙述纪律 + 循环说明 + 判断器提示词（**planner 侧**）。
 
-    **为什么拼这几块**：本线的决策模型（`planner` 节点）还兼任"决定够了没有"，而叙述
-    纪律那几块是给**说人话**的那一半用的（narrator 节点的提示词是另一份资产）。
-    · `BLOG_ASSISTANT_PROMPT`（人设 + 叙述边界 + 诚实底线，narrator 用的同一份
-      资产）。没有它，收尾正文是"规划器口吻"的、且没有任何反幻觉纪律；
-    · `NARRATOR_DISCIPLINE_LOOP`——**按条裁过的**叙述纪律（20261021，见
-      `agent/narrator_discipline.py` 头注）。此前是"整份照搬 + 前面挂一段
-      `_DISCIPLINE_STANCE` 逐条作废"，于是一条调用里同时出现「你没有工具」和「你有工具」
-      两句相反的话、靠第三段裁定。一条都不接的代价实测可数：`own_*` 族整族慢性红；
-    · `STICKER_GUIDE`（情绪贴纸的**唯一**名字表）。不接它，`:害羞:` 这些记号结构上
-      产不出来（`sticker_*` 用例整族恒红），而语料只认这 12 个名字；
-    · 循环机制（怎么终止），只有三五句；
-    · 最后才是 planner 逐字那份（`_render_planner_prompt`，"唯一入口"）——技能表、规则、
-      输出契约全在里面，**照着抄第二份就是抄一个漂移源**（排最后是缓存布局的要求）。
+    ⚠️ **20261021 起人设 / 受众 / 贴纸表三块从这里退场**（主人令：planner 只做意图识别
+    与执行路由，人设是**叙述层**的事）。三块**没有丢**——它们本来就在 narrator 那一份
+    资产里（`_narrator_prompt` 走 `_EXECUTOR_PROMPT`，`persona` / `audience` /
+    `sticker_guide` 三格都在），留在这里只是同一批字**每请求再付一遍**（3,261 字符）。
+    留下的三块都是**约束"能不能这么说"**而不是"说得好不好听"：叙述纪律（按条裁过的那
+    一份）、循环说明（什么时候停）、planner 逐字那份（`_render_planner_prompt`，
+    "唯一入口"，技能表 / 规则 / 输出契约全在里面，**照着抄第二份就是抄一个漂移源**）。
 
     `fast_frames`：**本线恒传 `None`**（保留形参只为签名兼容）——快道那一次的帧已经在
     `state["messages"]` 里、由 `_window` 交给模型（生产是渲染进 `tool_results`
@@ -1246,10 +1240,9 @@ def _system_prompt(messages: list, role: str | None, principal: Any,
         reflector_feedback="（本决策轮无复盘建议）",
         correction="（本决策轮无纠偏提示）")
     # ⚠️ **块序 = 缓存布局，不是可读性**（20261021，配方同 `8bbe3f0`）：`planner` 里那几格
-    # 每轮都在变，这五块排在它**之后**就落在首个易变字节之后、一次都进不了公共前缀
-    # （实测 73.6% → 100%）。判据 `tests/test_react_prompt_layout.py`。
-    return "\n\n".join([BLOG_ASSISTANT_PROMPT or "", audience_block(role),
-                        NARRATOR_DISCIPLINE_LOOP, STICKER_GUIDE, _CLOSING_RULES, planner])
+    # 每轮都在变，静态块排在它**之后**就落在首个易变字节之后、一次都进不了公共前缀。
+    # 判据 `tests/test_react_prompt_layout.py`。
+    return "\n\n".join([NARRATOR_DISCIPLINE_LOOP, _CLOSING_RULES, planner])
 
 
 def _crash_text(ledger: RunLedger, err: Exception) -> str:
@@ -1273,19 +1266,18 @@ def _crash_text(ledger: RunLedger, err: Exception) -> str:
 # ⚠️ 别请回来：那条路留下的形状是"一条调用里同时出现「你没有工具」和「你有工具」，靠第三段裁定"。
 
 
-# 收尾说明：把"这个循环里你怎么结束"讲清楚。**不写叙述纪律**（归 `NARRATOR_DISCIPLINE_LOOP`）。
+# 收尾说明：把"这个循环里你怎么结束"讲清楚。**不写叙述纪律**——人设与叙述纪律四块
+# 20261021 起只住在 narrator 那一份（见 `_system_prompt` 的注），这里只讲机制。
 _CLOSING_RULES = """\
-循环机制（你既是决策者也是回复者）：
+循环机制（你是决策者；正文由系统另派的零工具叙述者写）：
 1. 要做事就**直接调用技能工具**（下面那张表就是你的全部本领）；系统会立刻执行并把
    真实结果作为一条工具消息还给你。
-2. 信息已经够回答主人了 ⇒ **不要再调用任何工具**——那一轮就到此为止，收尾正文由系统
-   另派一位零工具的叙述者按工具回执写（所以你说的每一件站内事实都必须能在工具结果、
-   页面上下文或执行回执里找到出处；找不到就如实说没查到）。
-3. 调用 `chat` 技能是**闲聊兜底**（把答复文本填进 reply），它不产生任何执行事实；能用
-   一句正常的最终答复说清的事，就别绕它。
+2. 信息已经够回答主人了 ⇒ **不要再调用任何工具**——那一轮就到此为止。
+3. 调用 `chat` 技能是**闲聊兜底**，它不产生任何执行事实；能用一句正常的最终答复说清的
+   事，就别绕它。
 4. 同一件事不要重复做：工具回执里写着"未生效"就换参数或换工具，别原样重试。
-5. 复核：说出口的每一件站内事实，都要能在下面的工具结果、页面上下文或执行回执里找到
-   出处；找不到就如实说没查到。"""
+5. 你自己写的那几个字**不是交付**：说出口的每一件站内事实都要能在下面的工具结果、
+   页面上下文或执行回执里找到出处；找不到就如实说没查到。"""
 
 
 # ── plan_obj / blocked 行 ────────────────────────────────────────────

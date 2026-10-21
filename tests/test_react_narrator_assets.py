@@ -17,7 +17,7 @@
      的 `no_tool_calls` 跟着红）。
 
 判据分四段：① 拆分逐字节（生产提示词一个字节都没变）② 纪律块本体完好
-③ 接线（三件真的进了臂的 system prompt，且立场改写在纪律**之前**）④ 多模态透传的边界。
+③ 接线（纪律进的是**臂的 planner 侧**；贴纸表住**叙述层**，20261021 起）④ 多模态透传的边界。
 
 **这一节不测智能**——"接上之后 `own_*` 是不是真绿了"归 golden A/B（多遍读计数）。
 """
@@ -81,10 +81,16 @@ def test_react_narrator_assets():
     print("\n③ 接线：能力在常量里 ≠ 接上了（`test_source_attribution` ②的同一条道理）")
     R._pending_ledger_frame = lambda *a, **k: ("", {})  # 离线：不读台账
     _sp = R._system_prompt([HumanMessage(content="我有哪些未读通知？")], "admin", UNKNOWN, {}, "")
-    check("**叙述纪律（按条裁过的那一份）进了臂的系统提示**（不是只在 graph 里躺着）",
-          NARRATOR_DISCIPLINE_LOOP in _sp)
-    check("**贴纸名字表进了臂的系统提示**（不接 ⇒ `sticker_*` 结构上产不出）",
-          R.STICKER_GUIDE in _sp and "害羞" in _sp and "每轮最多一个" in _sp)
+    check("**叙述纪律（按条裁过的那一份）进了臂的 planner 侧提示词**"
+          "（不是只在 graph 里躺着）", NARRATOR_DISCIPLINE_LOOP in _sp)
+    # ⚠️ 20261021：贴纸表与那两块**从 planner 侧退场**（主人令：人设是叙述层的事）。
+    # 它们住 `_narrator_prompt` 那一份（走生产 `_EXECUTOR_PROMPT` 的 `sticker_guide` 格）
+    # ——判据要**同时**钉"planner 侧没有"与"叙述层有"，否则"搬走了"与"删掉了"同形。
+    _np = R._narrator_prompt({"messages": [], "plan_obj": {}}, [], set(), {"role": "admin"})
+    check("**贴纸名字表住在叙述层**（不接 ⇒ `sticker_*` 结构上产不出）",
+          R.STICKER_GUIDE in _np and "害羞" in _np and "每轮最多一个" in _np)
+    check("  反控：planner 侧**不再**背它（这一批搬的就是这一格）",
+          R.STICKER_GUIDE not in _sp)
     check("`R.STICKER_GUIDE is graph 用的那一份`（同一个对象，不是抄的第二份）",
           R.STICKER_GUIDE is G.STICKER_GUIDE)
     check("臂接的是**按条裁过的**那一份（`NARRATOR_DISCIPLINE_LOOP`，20261021）",
@@ -94,7 +100,7 @@ def test_react_narrator_assets():
     # ⚠️ 只在**纪律那一块**里找条号：整份提示词里还有别的编号表（planner 的判定规则
     # 1–6、收尾说明 1–5），不圈定范围这条判的是它们、而不是纪律。
     _disc = _sp[_sp.index(NARRATOR_DISCIPLINE_LOOP):
-                _sp.index(R.STICKER_GUIDE)]
+                _sp.index(R._CLOSING_RULES)]
     check("前提为假的那些条**根本不在提示词里**（不是「进来了再声明作废」）",
           all(f"\n{n}. " not in _disc for n in (1, 9, 10, 12, 13, 23, 24)),
           str([n for n in (1, 9, 10, 12, 13, 23, 24) if f"\n{n}. " in _disc]))
