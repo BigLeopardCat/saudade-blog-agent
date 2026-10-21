@@ -53,6 +53,7 @@ __all__ = [
     "Capability",
     "capabilities_for",
     "capability_brief",
+    "capability_kind",
     "capability_of",
     "index_entry",
     "react_scoped",
@@ -79,6 +80,9 @@ class Capability:
     dynamic: bool
     #: 本阶段走执行层 ReAct（见模块头注《射程》）
     react: bool
+    #: **执行方式**（见 `capability_kind`）：`workflow` = 确定性快道；`skill` = ReAct；
+    #: `tool` = 裸工具（今天没有这种条目，见 `capability_kind` 的注）
+    kind: str
     complete_when: str
     reply_contract: str
     capability: str
@@ -129,6 +133,37 @@ def react_scoped(name: str) -> bool:
     return workflow.name not in WRITE_WORKFLOW_NAMES
 
 
+def capability_kind(name: str) -> str:
+    """一条能力的**执行方式**——planner 路由到它之后，执行层该怎么跑它。
+
+    三个取值，只有前两个今天有实例：
+
+      · `workflow`：**确定性快道**。这条能力的 `plan` 是固定工具序列、参数由 planner
+        填完就能展开（写族 + `chat`）⇒ 路由到它之后**不跑 ReAct**，直接
+        `instantiate_plan` → `execute`。判据就是 `react_scoped` 的否命题，**不另立一张
+        写名单**（`WRITE_WORKFLOW_NAMES` 是派生值，抄第二份必然漂）。
+      · `skill`：**ReAct**。这条能力交给执行层一批工具，由它自己选（只读 / 导航 /
+        检索族，见模块头注《射程》）。
+      · `tool`：**裸工具**。没有技能包裹、planner 直接点它。⚠️ **今天一条都没有**，
+        而且是**事实如此、不是没实现**：注册表里 70 件工具、49 件被技能的 `plan` 覆盖，
+        剩下 21 件（`list_notes` / `rag_search` / `get_weather` …）全是
+        `content_query` 那条 `dynamic` 能力的工具面——它们**已经有家**，就是
+        `content_query`。把它们提成独立条目 = 换掉 `content_query` 的路由面，而工具级
+        菜单 POC 量到的正是那一族红（A 族 13 条，`docs/tool-menu-poc-20261020.md`）。
+        所以这一格**留着不用**：等真有"没有技能包裹的裸工具"时它自动有实例，
+        判据（`tests/test_capability_index.py`）锁的是**派生关系**，不是"今天有几条"。
+
+    ⚠️ **名字不在注册表里 ⇒ 响亮抛，不回落成 `tool`**：回落会把"技能名打错一个字"
+    静默变成"这是一件裸工具"，而那种漂移没有判据看得见（本仓点名的失效模式）。
+    裸工具那一条路**不走这个函数**——它的 `kind` 由裸工具索引自己给。
+    """
+    key = str(name or "").strip()
+    workflow = WORKFLOW_MAP.get(key)
+    if workflow is None:
+        raise KeyError(f"{key!r} 不在技能注册表里——裸工具不走 capability_kind")
+    return "skill" if react_scoped(workflow.name) else "workflow"
+
+
 def capability_of(name: str, role: str | None) -> Capability | None:
     """一条技能名 → 索引项；**不在可见菜单里的一律 None**（不猜、不兜）。
 
@@ -157,6 +192,7 @@ def _of(workflow: Workflow, role: str | None) -> Capability:
         tools=tools_of(workflow.name, role),
         dynamic=not workflow.plan and not workflow.chat,
         react=react_scoped(workflow.name),
+        kind=capability_kind(workflow.name),
         complete_when=workflow.complete_when,
         reply_contract=workflow.reply_contract,
         capability=workflow.capability,
