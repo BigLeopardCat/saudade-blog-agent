@@ -1,19 +1,29 @@
 # -*- coding: utf-8 -*-
 """能力索引臂（`AGENT_ARM=capability`）：**planner 选能力，索引把工具面交给执行层**。
 
-## 一条回合里的两态
+## 一条回合里的三态（20261021 起）
 
 ```
-第 0 轮   菜单 = 能力索引（49 条，每条带「由这些工具完成」与「完成判定」）
-          模型点一条能力（带参数）           ⇒ 只**选定**，不执行
-第 1..n 轮 菜单 = 那条能力的工具面（多数 1–3 件，经 authz 过滤）
-          模型点真工具                      ⇒ 执行层逐条真调（同一张图的 execute 节点）
-零调用轮   模型自己宣布收尾                  ⇒ 零工具 narrator 照旧写正文
+第 0 轮   菜单 = 能力索引（49 条，**只有名字 + 一行触发条件**，零参数 schema）
+          模型点一条能力                     ⇒ 只**选定**，零调用
+          ├ kind=workflow（写族）  ⇒ ctx["route"]，下一轮**填参轮**
+          ├ kind=skill（只读/导航/检索）⇒ ctx["caps"]，下一轮**工具态**
+          └ chat                    ⇒ 下一站**叙述层**（闲聊不占执行轮）
+填参轮    菜单 = **那一条**能力的 schema（参数回来了）+ 多意图里那批工具
+          模型填完参数调用它                  ⇒ 走生产那条 `instantiate_plan` 链
+工具态    菜单 = 那条能力的工具面（多数 1–3 件，经 authz 过滤）
+          模型点真工具                        ⇒ 执行层逐条真调（同一张图的 execute 节点）
+零调用轮   模型自己宣布收尾                    ⇒ 零工具 narrator 照旧写正文
 ```
 
-两态的**判据是同一格**：`ctx["caps"]`（这一轮选了哪条能力）。它在 `plan_of` 里被写，
-`menu_builder` / `prompt_builder` 读它。菜单变了就把 `ctx["menu"]` 清掉（见
-`react_arm._bound_llm` 的三格注）——**作废由建菜单的那条臂自己负责**。
+三态的**判据是 `ctx` 上那两格**：`ctx["route"]`（待填参数的确定性能力）与 `ctx["caps"]`
+（选中的 ReAct 能力）。两者都在 `plan_of` 里被写，`menu_builder` / `prompt_builder` 读它们。
+菜单变了就把 `ctx["menu"]` 清掉（见 `react_arm._bound_llm` 的三格注）——**作废由建菜单的
+那条臂自己负责**。
+
+**为什么路由轮不带参数 schema**：第 0 轮**每请求都过一遍**，而 33 条模板能力的参数在
+"选哪件事"这一步一条都用不上（实测能力项 schema 21,118 字符描述 + 12,996 字符参数 →
+2,708 + 0）。参数到**填参轮**才放回来，那时上下文里只有选中那一条。
 
 ## 为什么是这个形状（POC 的三族红，逐族对上）
 
@@ -40,13 +50,16 @@
 ## 射程与**如实记下的边界**
 
   · 走 ReAct 的是 `capability_index.react_scoped` 为真的那些（只读 + 导航 + 特效 + 夜间 +
-    设备 + 检索）；**写族 30 条与 `chat` 继续走模板**——索引态点到它们时，`plan_of` 直接
-    产出技能级 `calls`，执行层走 `WorkflowExecutor.run`（`instantiate_plan` 展开），
-    与生产**逐字同一条路**。所以本臂不是"把生产换掉"，是"给只读族换一条执行方式"。
+    设备 + 检索）；**写族 30 条走"填参轮"快道**——索引态点到它们时 `plan_of` 只记
+    `ctx["route"]`，下一轮模型在那一条的 schema 上填完参数，执行层才走
+    `WorkflowExecutor.run`（`instantiate_plan` 展开），与生产**逐字同一条路**。
+    所以本臂不是"把生产换掉"，是"给只读族换一条执行方式、给写族把参数挪到第二轮"。
   · **模板那一半仍然承重**：写族的 9 个参数校正器、`_confirm_grant_plan`、变更集展开
-    全部原样；本臂只让它们**晚一轮**（索引态先选、下一轮工具态才可能点到写工具）。
-    ⚠️ 实际上写族**不会**走到工具态：`react_scoped(favorite_add) is False` ⇒ 索引态那一轮
-    就直接执行完了，菜单不会切。这是有意的（写族不进射程）。
+    全部原样；本臂只让它们**晚一轮**（先选、下一轮才填参数）。
+  · **`chat` 不进执行**（20261021）：它是"这一轮没有业务"的表达，`plan_of` 零调用 +
+    `route_to="model"` ⇒ 正文归叙述者。⚠️ 代价如实记：`WorkflowExecutor.run` 里那条
+    "纯应答技能留痕 `ledger.replies`"在本臂上**不再发生**（`ledger.replies` 全仓无消费方，
+    是只写列；`tests/test_react_line.py` ③c 仍逐字判着那条路本身没被删）。
   · **`plan["workflow"]` 是模型自己选的能力名**（不是 `tools_arm` 那种从工具名倒推的粗标签）
     ⇒ gate 的能力否认族（`CAPABILITY_DENIAL_OBJECTS` 按技能名索引）在本臂上**照常开火**，
     而 `tools_arm` 那一臂上是个静默洞（见该模块头注最后一段）。
@@ -59,12 +72,23 @@ from typing import Any
 from langchain_core.tools import StructuredTool
 
 from agent import react_arm
-from agent.capability_index import Capability, capability_brief, capability_of, index_entry
+from agent.capability_index import (
+    Capability,
+    capability_brief,
+    capability_of,
+    route_brief,
+)
 from agent.frame_contract import spec_text
 from agent.planner_llm import build_tool_schema
 from agent.react_line import RunLedger, WorkflowExecutor
 from agent.tool_menu import build_tool_menu, strip_slots
-from agent.tool_prompt import PSEUDO_NAMES, build_tool_prompt
+from agent.tool_prompt import (
+    PSEUDO_NAMES,
+    build_tool_prompt,
+    capability_block_text,
+    route_block_text,
+    tool_menu_text,
+)
 from agent.tools_arm import ToolExecutor
 from agent.workflow_defs import WORKFLOW_MAP
 
@@ -110,12 +134,49 @@ def _wrap(items: list[dict], describe: Any) -> list[StructuredTool]:
     return out
 
 
-def _index_menu(role: str | None) -> list[StructuredTool]:
-    """索引态菜单：**与生产 planner 同一份 schema**，只把 `description` 那一格换成索引项。
+def _thin(items: list[dict]) -> list[dict]:
+    """把**能力项**的参数 schema 整片摘掉（函数名与描述留着）。
 
-    函数名 / 参数 / `required` / `enum` 一个字符不动（`build_tool_schema` 出什么就是什么）
-    ——ADR-0015 阶段 1 就是"路由收窄"这一件事，改 schema 结构会把这个自变量弄脏。
-    伪函数（`task_hold` / `task_drop` / `task_intents`）不在索引里 ⇒ 说明原样保留。
+    **为什么摘**（20261021）：路由轮只回答"这一轮是哪件事"，参数一个都用不上——而 33 条
+    模板能力（写族）的参数是路由轮里最贵的一块（实测 12,996 字符，占能力项 schema 的
+    三分之一），**每请求都要付一遍**。参数到**填参轮**（`_fill_menu`）才放回来，那时
+    上下文里只有选中那一条。
+
+    ⚠️ **三个记账口不清**：`task_intents` 的 `intents` 是 `tasks.normalize_intents` 真读
+    的那一格（`slots=False` 都特意留着它），清掉等于把这个申报口做废——那正是"槽位填了
+    没人读"的反面：这一格**有人读**。
+    """
+    out: list[dict] = []
+    for item in items:
+        fn = dict(item.get("function") or {})
+        if _menu_name(item) not in PSEUDO_NAMES:
+            fn["parameters"] = dict(_EMPTY_SCHEMA)
+        out.append({"type": "function", "function": fn})
+    return out
+
+
+def _index_desc(role: str | None):
+    """索引态那一格 `description`：**只留一行触发条件**（`Capability.line`）。
+
+    完整索引项（工具面 + 完成判定）**不在路由轮**：那是"这一轮怎么把这件事做完"的交代，
+    归工具态/填参轮的能力简报（`capability_brief` / `route_brief`）。路由轮要模型回答的
+    只有"哪一条"，多给的字每请求都付一遍（实测：能力项描述 21,118 → 2,708 字符）。
+    """
+    def describe(fn: dict) -> str:
+        cap = capability_of(_menu_name(fn), role)
+        return cap.line if cap is not None else str(fn.get("description") or "")
+    return describe
+
+
+def _index_menu(role: str | None) -> list[StructuredTool]:
+    """索引态菜单：**只留名字 + 一行触发条件，不带任何参数 schema**。
+
+    与生产 planner 那份 schema 的差别是**两处**，两处都是"路由轮不需要"：
+      · `description` → 一行索引（`_index_desc`）；
+      · **能力项的 `parameters` 整片摘掉**（`_thin`）。ADR-0015 阶段 1 曾经要求"函数名 /
+        参数 / `required` / `enum` 一个字符不动"，那是**当时**的自变量（菜单从 70 件裸工具
+        换成 50 条技能，只该动描述）；现在要拨的自变量是"路由轮该不该看见参数"，摘掉参数
+        就是这一拨本身。记账口不清（理由见 `_thin`）。
 
     **`slots=False`（20261021）**：不挂 `intents` / `reply_kind` 那两个跨切面槽位。本臂
     折算计划时走 `tool_menu.strip_slots`——**填了就扔**；而它们单份 799 字符 × 49 条能力
@@ -124,11 +185,23 @@ def _index_menu(role: str | None) -> list[StructuredTool]:
     申报口，填了没人读等于**骗模型以为申报过了**；摘掉之后意图那条路只剩 `task_intents`
     一个真被读的出口（它自带 `intents`，不受本参数影响）。
     """
-    def describe(fn: dict) -> str:
-        cap = capability_of(str(fn.get("name") or ""), role)
-        return index_entry(cap) if cap is not None else str(fn.get("description") or "")
+    return _wrap(_thin(build_tool_schema(role, slots=False)), _index_desc(role))
 
-    return _wrap(build_tool_schema(role, slots=False), describe)
+
+def _fill_menu(role: str | None, cap: Capability,
+               caps: list[Capability]) -> list[StructuredTool]:
+    """填参轮菜单：**选中那一条能力的 schema 原样**（含参数）+ 多意图里那几条 ReAct 能力的
+    工具面 + 三个记账口。
+
+    与索引轮的差别**只有一处**：参数放回来了，而且**只有这一条**的。多意图（路由轮同时
+    点了一条确定性能力和一条 ReAct 能力）时两批都在——那一轮本来就是两件事都要动。
+
+    ⚠️ 菜单里**只有这一条确定性能力**（不像索引轮列全表）⇒ 模型在填参轮**改不了主意**
+    （改主意要回索引轮）。这是有意的：给全表就是让它再选一遍，而它上一轮已经选过了；
+    填不出参数时那条"零调用收尾"的出口交给叙述层回问主人（见 `tool_prompt.route_block_text`）。
+    """
+    items = [i for i in build_tool_schema(role, slots=False) if _menu_name(i) == cap.name]
+    return _wrap(items, _index_desc(role)) + _tools_menu(role, caps)
 
 
 def _tools_menu(role: str | None, caps: list[Capability]) -> list[StructuredTool]:
@@ -137,7 +210,8 @@ def _tools_menu(role: str | None, caps: list[Capability]) -> list[StructuredTool
     "越权可见"，能力面这道防"菜单里出现这一轮不该有的工具"）。
 
     三个记账口（`task_hold` / `task_drop` / `task_intents`）**恒在**：它们是跨切面槽位，
-    与这一轮做哪条能力无关（同 `build_tool_menu` 末尾那两行）。
+    与这一轮做哪条能力无关（同 `build_tool_menu` 末尾那两行）。`caps` 为空时这一批只剩
+    记账口——填参轮就是这么用的。
 
     **`slots=False`**：同 `_index_menu`——`intents` / `reply_kind` 在本臂**填了就扔**，
     每一件工具白背 799 字符。
@@ -173,9 +247,33 @@ def _caps_of(ctx: dict | None, role: str | None) -> list[Capability]:
     return [c for c in (capability_of(n, role) for n in names) if c is not None]
 
 
+def _route_cap(ctx: dict | None, role: str | None) -> Capability | None:
+    """`ctx["route"]`（路由轮选中的那条**确定性能力**名）→ 索引项。
+
+    取不到、或取到的是 ReAct / 闲聊那两档 ⇒ `None`（**fail-closed**：不认识的 route
+    名退回索引态，绝不因此把某条能力的参数绑上）。`chat` 排除在外是因为它**没有填参轮**
+    ——路由到它就是"这一轮没有业务"，直接交叙述层（见 `plan_of`）。
+    """
+    cap = capability_of(str((ctx or {}).get("route") or ""), role)
+    if cap is None or cap.react or cap.chat:
+        return None
+    return cap
+
+
 def capability_menu(role: str | None, ctx: dict | None = None) -> list[StructuredTool]:
-    """接缝①：**按轮变**的菜单。`ctx["caps"]` 空 ⇒ 索引态；非空 ⇒ 工具态。"""
+    """接缝①：**按轮变**的菜单，三态。
+
+      · `ctx["route"]` 有值 ⇒ **填参轮**（那一条确定性能力的 schema + 多意图的工具面）；
+      · 否则 `ctx["caps"]` 非空 ⇒ **工具态**（ReAct 那一批工具）；
+      · 否则 ⇒ **索引态**（名字 + 一行，零参数 schema）。
+
+    填参轮排在工具态**之前**：多意图时两批都在（`_fill_menu` 自己带上 `caps` 的工具面），
+    而只有 `route` 的那一轮不该掉进"工具态"（那样它一条能力也点不到）。
+    """
     caps = _caps_of(ctx, role)
+    route = _route_cap(ctx, role)
+    if route is not None:
+        return _fill_menu(role, route, caps)
     return _tools_menu(role, caps) if caps else _index_menu(role)
 
 
@@ -190,72 +288,148 @@ def capability_prompt(state: dict, ctx: dict) -> str:
         而绑给模型的 schema 只有这一批（多数 1–3 件）——两份自相矛盾的清单，且抬头上
         写着"**唯一可选集合**"。POC 的 A 族（13 条路由红）红在"近义工具里选错"，
         这一格是把那件事从 schema 侧治好之后又在文本侧放回去。
+      · **填参轮**（`ctx["route"]` 有值）：菜单是**一条确定性能力**，而 `tool_menu_text`
+        读的 `build_tool_menu` 里没有它 ⇒ 那一格走 `menu_text` 逐字交出去；简报走
+        `route_brief`（`capability_brief` **去掉工具面那一句**——那批工具由系统自己展开、
+        一件都没绑，说"该调的都调上"就是让模型去点一个结构上点不到的名字）。
     """
     caps = _caps_of(ctx, ctx.get("role"))
+    route = _route_cap(ctx, ctx.get("role"))
     messages = list(state.get("messages") or [])
-    if not caps:
+    if route is None and not caps:
         return react_arm._system_prompt(
             messages, ctx.get("role"), ctx.get("principal"),
             ctx.get("config"), ctx.get("user_msg") or "",
             exec_rows=(state.get("ledger") or {}).get("exec_rows"))
     user_msg = str(ctx.get("user_msg") or "")
-    return build_tool_prompt(
+    common = dict(
         messages=messages, role=ctx.get("role"), principal=ctx.get("principal"),
         config=ctx.get("config"), user_msg=user_msg,
         ledger_frame=react_arm.ledger_frame_for(
             messages, ctx.get("principal"), ctx.get("config"), user_msg),
         correction=str(ctx.get("correction") or ""),
-        exec_rows=(state.get("ledger") or {}).get("exec_rows"),
-        capability="\n\n".join(capability_brief(c) for c in caps),
-        tool_names=_face_names(ctx.get("role"), caps))
+        exec_rows=(state.get("ledger") or {}).get("exec_rows"))
+    if route is None:
+        return build_tool_prompt(
+            **common,
+            capability="\n\n".join(capability_brief(c) for c in caps),
+            tool_names=_face_names(ctx.get("role"), caps))
+    # 填参轮：菜单那一段逐字给（`_fill_menu` 绑的就是这两批），简报也逐字给。
+    menus = [f"· {route.name} — {route.line}"]
+    blocks = [route_block_text(route_brief(route))]
+    if caps:
+        menus.append(tool_menu_text(ctx.get("role"), _face_names(ctx.get("role"), caps)))
+        blocks.append(capability_block_text(
+            "\n\n".join(capability_brief(c) for c in caps)))
+    return build_tool_prompt(**common, menu_text="\n".join(menus),
+                             capability_block="\n\n".join(blocks))
+
+
+def _classify(name: str, role: str | None, route: str) -> tuple[str, str]:
+    """模型点的一个名字落到哪一路，返回 `(路, 值)`：
+
+      · `("skill", 名字)` —— ReAct 那一档（`kind=skill`）：并进 `ctx["caps"]`，零调用；
+      · `("chat", "")` —— 闲聊：零调用，下一站**叙述层**；
+      · `("call", "")` —— 这一条**现在就执行**：填参轮那条确定性能力（`route == name`）、
+        或认不出的名字/真工具名（执行层按名字分派，BLOCK 由它判）；
+      · `("route", 名字)` —— 确定性能力（`kind=workflow`）的路由：只记下来，
+        下一轮才给它填参数。
+
+    **`chat` 单列一路**（而不是并进 `workflow`）：它没有填参轮——路由到它就是"这一轮没有
+    业务"，给闲聊排一个执行轮等于让最常见的那条路多花一次 LLM 调用。
+    """
+    cap = capability_of(name, role)
+    if cap is None:
+        return ("call", "")
+    if cap.react:
+        return ("skill", name)
+    if cap.chat:
+        return ("chat", "")
+    return ("call", "") if route == name else ("route", name)
+
+
+def _next_hop(*, calls: list, caps_changed: bool, route: str, chat: bool) -> str:
+    """下一站。**顺序是有意的**：真有调用就执行；选了 ReAct 能力或确定性能力 ⇒ 回
+    `planner`（等它那一轮）；只剩闲聊 ⇒ 叙述层；都不沾（空计划）⇒ 照旧 `execute`
+    （零调用那一轮，与改动之前同形）。"""
+    if calls:
+        return "execute"
+    if route or caps_changed:
+        return "planner"
+    return "model" if chat else "execute"
 
 
 def plan_of(tool_calls: list, role: str | None, ctx: dict | None = None) -> dict:
-    """接缝③：模型的 `tool_calls` → `plan_obj`。**两态由"点的是能力还是工具"分**。
+    """接缝③：模型的 `tool_calls` → `plan_obj`。**路由轮只路由，不执行**（20261021）。
 
-      · 点的是**射程内的能力** ⇒ 记进 `ctx["caps"]`、**不产出调用**。零调用是设计，
-        不是空计划：下一轮菜单换成它那一批工具，由执行层做事。同一轮点了多条能力
-        （多意图）⇒ 并起来，下一轮菜单是它们工具面的并集。
-      · 其余（写族能力 / `chat` / 真工具名）⇒ 照常产出 `calls`，执行层按名字分派。
+    点到的名字分四路，只有最后一路产出 `calls`：
+
+      · **射程内的能力**（`kind=skill`）⇒ 记进 `ctx["caps"]`。零调用是设计，不是空计划：
+        下一轮菜单换成它那一批工具，由执行层做事。同一轮点了几条（多意图）⇒ 并起来。
+      · **`kind=workflow` 的能力**（写族）⇒ **两段式**：路由轮只记 `ctx["route"]`（那一轮
+        的菜单里它**没有参数 schema**，模型也填不出参数），下一轮菜单换成它自己的 schema
+        （`_fill_menu`），模型填完参数才产出 `calls`。今天之前它是**当轮就执行**的，
+        代价是第 0 轮要为 33 条模板能力背 12,996 字符参数——路由轮一条都用不上。
+      · **`chat`** ⇒ 零调用，且下一站是**叙述层**（`route_to="model"`）。这正是主人说的
+        "planner 路由到 chat"：闲聊 = 这一轮没有业务，正文归叙述者。它**不占执行轮**
+        （给 chat 排一个填参轮等于让最常见的闲聊多花一次 LLM 调用）。
+      · **认不出的名字 / 真工具名** ⇒ 照常产出 `calls`，执行层按名字分派（BLOCK 由它判）。
+
+    **下一站由本函数指定**（`route_to`）：缺省臂的 `_plan_of` 从不写这一格 ⇒ `planner_node`
+    走原来那条 `execute`，逐字节不变。这一格存在的理由：路由轮零调用，但下一站不是
+    `execute`（等填参数的必须回 `planner`，闲聊的直接去 `model`），而"选了哪条能力"
+    只有折算这一处看得见（`planner_node` 不往 `messages` 里写东西）。
     """
     ctx = ctx if ctx is not None else {}
     before = list(ctx.get("caps") or [])
     caps = list(before)
+    route = str(ctx.get("route") or "")
     # 这一轮点到过的**全部**能力名（含写族与 `chat`）。它只用来定 `workflow` 那一格，
-    # 不进 `ctx["caps"]`——写族与 `chat` 这一轮就执行完了，菜单**不该**切到它们的工具面
+    # 不进 `ctx["caps"]`——写族与 `chat` 的菜单**不该**切到它们的工具面
     # （切了下一轮模型就看不见能力表，多意图里剩下的那几件再也点不到）。
     named: list[str] = []
     tools: list[str] = []
     calls: list[dict] = []
+    new_route = ""
+    chat = False
     for c in tool_calls or []:
         name = str((c or {}).get("name") or "")
         if not name:
             continue
         args = strip_slots((c or {}).get("args") or {})
-        cap = capability_of(name, role)
-        if cap is not None:
-            if name not in named:
-                named.append(name)
-            if cap.react:
-                if name not in caps:
-                    caps.append(name)
-                continue
-        tools.append(spec_text(name, args))
-        calls.append({"workflow": name, "params": args})
+        kind, val = _classify(name, role, route)
+        if name not in named:
+            named.append(name)
+        if kind == "skill":
+            if name not in caps:
+                caps.append(name)
+        elif kind == "chat":
+            chat = True
+        elif kind == "route":
+            # 路由轮（或填参轮改了主意）：只记**第一条**，下一轮才给它填参数
+            new_route = new_route or val
+        else:
+            tools.append(spec_text(name, args))
+            calls.append({"workflow": name, "params": args})
     if not named and not calls:
         return {}
     ctx["caps"] = caps
-    if caps != before:
-        # 能力面变了 ⇒ **菜单作废**（下一轮 `_bound_llm` 重建）。提示词跟着走：
-        # `_prompt_of` 的缓存键就是菜单身份。
+    # 路由格：填参轮成功了 ⇒ 作废（下一轮回索引，多意图里剩下的才点得到）；模型在填参轮
+    # 改点了别的确定性能力 ⇒ 换成它，接着填。**只在真的变了的时候清菜单**——`ctx["menu"]
+    # 是"菜单按轮变"唯一的作废口（见 `react_arm._bound_llm`），多清一次就多重绑一次。
+    next_route = new_route if (calls or new_route) else route
+    if caps != before or next_route != route:
         ctx["menu"] = None
+    ctx["route"] = next_route
     # `workflow` 取**第一条能力名**而不是 `|` 连起来：`plan_codec.normalize_plan` 会把
     # 不在 `WORKFLOW_MAP` 里的取值改成 `chat`（`a|b` 不在），而 gate 按它分族、
     # `CAPABILITY_DENIAL_OBJECTS` 按技能名索引——落成 `chat` 等于把那一族关掉。
-    # 兜底顺序：这一轮选的 ReAct 能力 → 这一轮点到的任意能力（写族/`chat`）→ `chat`。
+    # 兜底顺序：这一轮选的 ReAct 能力 → 这一轮点到的任意能力（确定性/`chat`）→ `chat`。
     label = (caps or named or [""])[0]
     return {"workflow": label or "chat", "tools": tools, "note": "",
-            "reply": "", "status": "", "calls": calls}
+            "reply": "", "status": "", "calls": calls,
+            "route_to": _next_hop(calls=calls, caps_changed=caps != before,
+                                  route=next_route, chat=chat)}
 
 
 class CapabilityExecutor(ToolExecutor):

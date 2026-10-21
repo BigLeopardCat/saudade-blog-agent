@@ -600,7 +600,11 @@ def planner_node(state: AgentState, config: RunnableConfig | None = None) -> dic
     # 加的：能力索引那条路要在折算计划时**记下这一轮选了哪条能力**（菜单下一轮按它换），
     # 而"选了什么"只有折算这一处看得见（`planner_node` 不往 `messages` 里写东西）。
     build_plan = ctx.get("plan_builder") or _plan_of
-    return _plan_update(build_plan(resp.tool_calls, ctx.get("role"), ctx), rounds)
+    plan = build_plan(resp.tool_calls, ctx.get("role"), ctx)
+    # 折算器可**指定下一站**（`plan_obj["route_to"]`，见 `capability_arm.plan_of`）：路由轮
+    # 零调用但要回 `planner` 等填参数、闲聊直接去 `model`。缺省 `_plan_of` 从不写它。
+    ctx["decided"] = str(plan.get("route_to") or ctx["decided"])
+    return _plan_update(plan, rounds)
 
 
 def route_after_planner(state: AgentState, config: RunnableConfig | None = None) -> str:
@@ -1212,17 +1216,15 @@ def _system_prompt(messages: list, role: str | None, principal: Any,
     · `NARRATOR_DISCIPLINE_LOOP`——**按条裁过的**叙述纪律（20261021，见
       `agent/narrator_discipline.py` 头注）。此前是"整份照搬 + 前面挂一段
       `_DISCIPLINE_STANCE` 逐条作废"，于是一条调用里同时出现「你没有工具」和「你有工具」
-      两句相反的话、靠第三段裁定。此前一条都不接的代价实测可数：`own_*` 族整族慢性红
-      ——模型如实说了"读不到"，却**又多派了一句"你先去登录"**，而纪律 20 明令禁止；
+      两句相反的话、靠第三段裁定。一条都不接的代价实测可数：`own_*` 族整族慢性红；
     · `STICKER_GUIDE`（情绪贴纸的**唯一**名字表）。不接它，`:害羞:` 这些记号结构上
       产不出来（`sticker_*` 用例整族恒红），而语料只认这 12 个名字；
     · 循环机制（怎么终止），只有三五句；
-    · 最后才是 planner 逐字那份（`_render_planner_prompt`，"唯一入口"）——技能表、
-      规则、输出契约全在里面，**照着抄第二份就是抄一个漂移源**（它排最后是缓存布局的
-      要求，见下面 join 处的注）。
+    · 最后才是 planner 逐字那份（`_render_planner_prompt`，"唯一入口"）——技能表、规则、
+      输出契约全在里面，**照着抄第二份就是抄一个漂移源**（排最后是缓存布局的要求）。
 
-    `fast_frames`：**本线恒传 `None`**（保留形参只为签名兼容）。快道那一次读取的工具帧
-    已经在 `state["messages"]` 里、会由 `_window` 交给模型（生产是渲染进 `tool_results`
+    `fast_frames`：**本线恒传 `None`**（保留形参只为签名兼容）——快道那一次的帧已经在
+    `state["messages"]` 里、由 `_window` 交给模型（生产是渲染进 `tool_results`
     那一格）——两处都给就是同一份事实发两遍。
     """
     ledger_frame = ledger_frame_for(messages, principal, config, user_msg)
@@ -1244,9 +1246,8 @@ def _system_prompt(messages: list, role: str | None, principal: Any,
         reflector_feedback="（本决策轮无复盘建议）",
         correction="（本决策轮无纠偏提示）")
     # ⚠️ **块序 = 缓存布局，不是可读性**（20261021，配方同 `8bbe3f0`）：`planner` 里那几格
-    # （`page_ctx` / `round_info` / `user_msg`…）每轮都在变，它内部已把静态规则排在易变槽位之前。
-    # 这五块排在它**之后**就落在首个易变字节之后、一次都进不了公共前缀（实测 73.6% → 100%）。
-    # 判据 `tests/test_react_prompt_layout.py`；方位词（"上面的技能表/工具结果" → "下面"）跟着改了。
+    # 每轮都在变，这五块排在它**之后**就落在首个易变字节之后、一次都进不了公共前缀
+    # （实测 73.6% → 100%）。判据 `tests/test_react_prompt_layout.py`。
     return "\n\n".join([BLOG_ASSISTANT_PROMPT or "", audience_block(role),
                         NARRATOR_DISCIPLINE_LOOP, STICKER_GUIDE, _CLOSING_RULES, planner])
 
@@ -1272,8 +1273,7 @@ def _crash_text(ledger: RunLedger, err: Exception) -> str:
 # ⚠️ 别请回来：那条路留下的形状是"一条调用里同时出现「你没有工具」和「你有工具」，靠第三段裁定"。
 
 
-# 收尾说明（模块私有，三五句）：把"这个循环里你怎么结束"讲清楚。**不写叙述纪律**
-# ——那件事由 `NARRATOR_DISCIPLINE_LOOP` 负责，这里只讲机制。
+# 收尾说明：把"这个循环里你怎么结束"讲清楚。**不写叙述纪律**（归 `NARRATOR_DISCIPLINE_LOOP`）。
 _CLOSING_RULES = """\
 循环机制（你既是决策者也是回复者）：
 1. 要做事就**直接调用技能工具**（下面那张表就是你的全部本领）；系统会立刻执行并把

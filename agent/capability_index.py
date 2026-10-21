@@ -57,6 +57,7 @@ __all__ = [
     "capability_of",
     "index_entry",
     "react_scoped",
+    "route_brief",
     "tools_of",
 ]
 
@@ -124,8 +125,9 @@ def react_scoped(name: str) -> bool:
     `write.device`（动的是主人的浏览器、不是站内数据），不写名单、也不弹卡，
     与"只读 + 导航 + 检索"那句射程一致。
 
-    `chat` 走模板：它零工具，`WorkflowExecutor.run` 那条"纯应答技能"分支要把
-    `reply_contract` 记进 `ledger.replies`，ReAct 那条路上没有这个落点。
+    `chat` 也判 False，但**它连填参轮都不走**（20261021）：它是"这一轮没有业务"的表达，
+    路由到它就等于把正文交给叙述层（`capability_arm.plan_of` 的 `route_to="model"`）——
+    给闲聊排一个执行轮等于让最常见的那条路多花一次 LLM 调用。
     """
     workflow = WORKFLOW_MAP.get(str(name or ""))
     if workflow is None or workflow.chat:
@@ -224,6 +226,26 @@ def index_entry(cap: Capability) -> str:
     return "\n".join(rows)
 
 
+def _brief(cap: Capability, *, tools_clause: bool) -> str:
+    """两种执行方式**共用的**那几格；差别只有"要不要说工具面"。
+
+    `tools_clause=True`（ReAct 那一档）：那批工具**绑给了模型**，说它是交代动作空间；
+    `tools_clause=False`（快道那一档）：那批工具由系统按 `plan` 展开、**一件都没绑**
+    ——说了就是让模型去点一个结构上点不到的名字（POC 的 A 族形态）。
+    """
+    rows = [f"这一轮要完成的能力：{cap.name}"]
+    if cap.capability:
+        rows.append(f"它管的是：{cap.capability}")
+    rows.append(cap.line)
+    if tools_clause:
+        rows.append(_tools_clause(cap))
+    if cap.complete_when:
+        rows.append(f"完成判定：{cap.complete_when}")
+    if cap.reply_contract:
+        rows.append(f"回复契约：{cap.reply_contract}")
+    return "\n".join(rows)
+
+
 def capability_brief(cap: Capability) -> str:
     """索引项进**执行层提示词**的那段（ReAct 那一轮告诉模型"你现在在完成哪件事"）。
 
@@ -231,13 +253,13 @@ def capability_brief(cap: Capability) -> str:
     `reply_contract`（回复该怎么组织）。C 族的失败形态正是"回复正文缺关键词"——
     这两格在工具臂上没有家，在这里有。
     """
-    rows = [f"这一轮要完成的能力：{cap.name}"]
-    if cap.capability:
-        rows.append(f"它管的是：{cap.capability}")
-    rows.append(cap.line)
-    rows.append(_tools_clause(cap))
-    if cap.complete_when:
-        rows.append(f"完成判定：{cap.complete_when}")
-    if cap.reply_contract:
-        rows.append(f"回复契约：{cap.reply_contract}")
-    return "\n".join(rows)
+    return _brief(cap, tools_clause=True)
+
+
+def route_brief(cap: Capability) -> str:
+    """`kind=workflow` 那一条进**填参轮**提示词的那段（`capability_brief` 的姊妹）。
+
+    差别**只有工具面那一句**（见 `_brief`）：快道那一轮要的是"把这个能力的参数填好"，
+    工具由系统自己展开。
+    """
+    return _brief(cap, tools_clause=False)
