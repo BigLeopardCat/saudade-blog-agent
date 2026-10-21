@@ -302,6 +302,18 @@ CLASSES = [
         rule=None,
     ),
     dict(
+        key="ci-test-report",
+        label="CI pytest JUnit 报告",
+        root=DEFAULT_REPORT_ROOT,
+        patterns=["ci/**"],
+        status="managed",
+        owner="GitHub Actions artifact retention",
+        owner_ref=".github/workflows/eval.yml",
+        retention="GitHub artifact 保留 14 天；runner 销毁时清理工作目录，本机同路径覆盖",
+        why="保留失败用例与耗时供复核，不进入 golden 基线或 trace 保留判断。",
+        rule=None,
+    ),
+    dict(
         key="manual-eval-evidence",
         label="手工故障取证与临时冒烟报告",
         root=DEFAULT_REPORT_ROOT,

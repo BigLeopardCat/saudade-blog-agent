@@ -1,25 +1,4 @@
-"""自动化入口的**接线契约**：套件清单只有一处事实源，跨语言守卫不许静默跳过。
-
-**为什么单起一套**（20260928 架构规范化 ①）：审计实测——磁盘上 50+ 个 `tests/*.py`，
-而 `.github/workflows/eval.yml` 是**手工维护**的 26 个 step、`scripts/nightly_regression.sh`
-另抄一份、README 正文再抄一份 ⇒ **一半以上的判据从不在任何自动化里跑**，其中就有
-`test_prompt_prefix`（提示词前缀缓存稳定性的唯一哨兵）与 `test_slim_workflows`。
-加一个套件要改三处名单，漏一处就变成"看着在跑、其实没跑"——**这种失效没有任何东西会
-告诉你**：CI 绿、夜间绿、README 看着齐全。
-
-同批的第二件事：几处跨语言守卫（断言 Rust 侧真有那个臂/那个键）此前各写一遍
-`if (父仓/chat.rs).exists(): 断言 else: print("⏭ 跳过")`。而 CI 只 checkout agent 仓
-（父仓私有）⇒ **那几处最需要它的地方恒跳过**。现在统一走 `tests/_parent_repo.py` 的三态：
-本机 / 夜间 / CI **跑不到就红**（`SAUDADE_REQUIRE_PARENT=1`；CI 侧父仓以只读凭据稀疏
-checkout 到 `_parent/`，接线与凭据轮换见 `docs/adr/adr-0004-cross-language-guard-in-ci.md`）。
-**凭据由人配、接线由 ⑥ 判**——配置错了要红在"接线"上，而不是让六处守卫各自红一遍。
-
-这一套锁的就是上面两条——**它自己不判任何业务语义**，只判"入口有没有抄名单 / 接线对不对"。
-判据刻意用**源码文本 + 磁盘枚举**两级，而不是"名单里有这几行"：后者的失效方式正是
-"列表对了、代码不在跑"。
-
-用法：.venv/bin/python tests/test_ci_suite_list.py
-"""
+"""自动化入口契约：完整收集、跨仓读取与环境隔离。"""
 
 
 from __future__ import annotations
@@ -29,6 +8,7 @@ import pathlib
 import re
 import sys
 
+import pytest
 from _judge import collector
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
@@ -47,23 +27,11 @@ _SUITE_CALL_RE = re.compile(r"tests/([A-Za-z0-9_]+\.py)")
 
 
 def _called_suites(text: str) -> set[str]:
-    """入口脚本里**真的会执行**的套件文件。
-
-    先抹掉整行注释（YAML 与 shell 都是 `#`）：注释里提一句"这收敛到 pytest"
-    不是一次调用，判据不该被自己的说明文字绊倒。抹的是**整行**注释——行尾 `#` 不做处理
-    （`run: x  # 注释` 里的调用仍然算数，宁可严一点）。
-
-    今天入口是 `pytest`（按目录收集），所以这个集合**应该恒为空**：出现任何
-    `tests/<name>.py` 都意味着有人又开始逐套件点名了。
-    """
+    """入口脚本里**真的会执行**的套件文件。"""
     code = "\n".join(ln for ln in text.splitlines() if not ln.lstrip().startswith("#"))
     return {m for m in _SUITE_CALL_RE.findall(code) if m not in {"_parent_repo.py"}}
 
 
-# 收窄**收集面**的 pytest 选项。原来只判一个口（`run_all.py -k`）——那个入口只有这一个
-# 收窄口；换成 pytest 之后它是一族（`-k` 挑名字、`--deselect` 摘用例、`--ignore` 摘目录、
-# `--lf` 只跑上次红的那几条），而它们的失效形状是同一条：**静默地只跑子集，汇总表上还是
-# 一片绿**。按**词**匹配（前后不许接 `\w` 或 `-`），免得 `--keep-*` 这类被误判。
 _NARROWING = ("-k", "--deselect", "--ignore", "--ignore-glob",
               "--last-failed", "--failed-first", "-x", "--exitfirst")
 
@@ -94,16 +62,7 @@ _TAKE = ("import json,sys;sys.path.insert(0,%r);"
 
 
 def _mismatch(ignore: bool) -> list[str] | None:
-    """子进程里 settings 与**声明的默认值**不同的字段名；子进程没跑成就 None。
-
-    ⚠️ 入口自己钉住的键（`conftest._PINNED`）**先从探测 env 里摘掉**（20261002）：
-    入口对子进程是无条件覆盖（原 `run_all.py` 是 `env.update(_PINNED)`，今天
-    `conftest.py` 在收集前写 `os.environ`，子进程自然继承），所以"这台机器上设没设它"
-    对套件毫无影响——留在 env 里只会让下面那条判据把**入口自己声明的档位**误报成
-    机器泄漏（`IOT_ENABLED=1` 与出厂默认 `False` 不同，正是这么撞上的）。
-    入口那几档有没有真的生效，由紧接着的第二支探针单独验：两件事分开验，各自的
-    失法才认得出——一个是"机器漏进来了"，另一个是"钉了却没生效"。
-    """
+    """子进程里 settings 与**声明的默认值**不同的字段名；子进程没跑成就 None。"""
     env = dict(os.environ)
     env.pop("SAUDADE_IGNORE_ENV_FILE", None)
     for k in conftest._PINNED:
@@ -118,13 +77,7 @@ def _mismatch(ignore: bool) -> list[str] | None:
 
 
 def _pinned_effective() -> dict | None:
-    """把入口那份 env 原样喂给子进程，回报那几个档位的**实际生效值**。
-
-    与 `_mismatch` 是互补的两半：那支把钉子摘掉验"机器没漏进来"，这支把钉子装上
-    验"钉了真的生效"。后者的失法是**静默**的——字段名拼错、被 .env 盖掉、pydantic
-    的前缀/别名配置一改，套件就以为自己在 A 档跑、其实在 B 档跑，判据照样全绿
-    （同族教训见 `langgraph-future-annotations-config-injection`）。
-    """
+    """把入口那份 env 原样喂给子进程，回报那几个档位的**实际生效值**。"""
     env = dict(os.environ)
     env.update(conftest._PINNED)
     out = subprocess.run([sys.executable, "-c", _TAKE % str(ROOT)],
@@ -144,13 +97,7 @@ import _parent_repo  # noqa: E402
 
 
 def _cone_patterns(txt: str) -> list[str]:
-    """把 `sparse-checkout` 的值读成**逐条模式**，两种合法写法都认（20261001）。
-
-    `actions/checkout` 这个输入收两种：单行 `sparse-checkout: a,b`，和 YAML 块标量
-    `sparse-checkout: |` + 缩进行（README 的示例就是后者）。此前只认 `\\S+` ⇒ 块标量被
-    读成字面 `|`、锥变空、这条守卫对**合法配置**判红——而那种红长得像"守卫该删"，
-    正是本文件要防的那种失效。判据自己也要有判据：下面有一条对两种写法的实例断言。
-    """
+    """把 `sparse-checkout` 的值读成**逐条模式**，两种合法写法都认（20261001）。"""
     m = re.search(r"^([ \t]*)sparse-checkout:[ \t]*(.*)$", txt, re.M)
     if not m:
         return []
@@ -168,10 +115,7 @@ def _cone_patterns(txt: str) -> list[str]:
 
 
 def _cone_dirs(cone: str) -> set[str]:
-    """cone 模式实际会落盘哪些目录：锥 + 它的各级祖先 + 仓根（祖先目录的**直系文件**也在）。
-
-    文件落没落盘 = 它所在的目录在不在这个集合里。空锥 ⇒ 只有仓根 ⇒ 什么都拉不到。
-    """
+    """cone 模式实际会落盘哪些目录：锥 + 它的各级祖先 + 仓根（祖先目录的**直系文件**也在）。"""
     parts = cone.split("/") if cone else []
     return {"/".join(parts[:i]) for i in range(len(parts) + 1)}
 
@@ -183,36 +127,28 @@ _GUARD = "steps.parent.outputs.available == '1'"
 
 
 def _pr_gate_problems(txt: str) -> list[str]:
-    """`eval.yml` 里 PR 门禁接线的问题清单；空 = 接线完整。
-
-    **只问"某一步设了什么"**，不问"整个文件里有没有那个字符串"——后者会被另一处无关的
-    写法蒙过去（本仓踩过：注释里提一句也算接线）。所以先按 step 切块再判。
-    """
+    """`eval.yml` 里 PR 门禁接线的问题清单；空 = 接线完整。"""
     bad: list[str] = []
     if not re.search(r"^  pull_request:\s*$", txt, re.M):
         bad.append("on: 里没有 pull_request 触发")
     guarded = len(re.findall(re.escape("if: " + _GUARD), txt))
-    if guarded < 3:
+    if guarded < 2:
         bad.append(f"挂 `if: {_GUARD}` 的步骤只有 {guarded} 个"
-                   "（父仓 checkout / 落位自检 / 完整套件 都该挂）")
-    deg = [s for s in _STEP_SPLIT_RE.split(txt) if "available != '1'" in s]
-    if len(deg) != 1:
-        bad.append(f"挂在 `available != '1'` 上的步骤有 {len(deg)} 个（应恰好 1 个：降级套件）")
+                   "（父仓 checkout / 落位自检 都该挂）")
+    suites = [s for s in _STEP_SPLIT_RE.split(txt) if "run: uv run --frozen pytest" in s]
+    if len(suites) != 1:
+        bad.append("完整套件应只有一个执行入口")
     else:
-        d = deg[0]
-        if "pytest" not in d:
-            bad.append("降级支跑的不是 pytest（同一份清单是这条接线的要点）")
-        if "SAUDADE_REQUIRE_PARENT" in d:
-            bad.append("降级步骤设了 SAUDADE_REQUIRE_PARENT ⇒ 降级路径自己红")
+        suite = suites[0]
+        if "if:" in suite:
+            bad.append("完整套件不应依赖父仓凭据才运行")
+        if "SAUDADE_REQUIRE_PARENT: ${{ " + _GUARD + " && '1' || '0' }}" not in suite:
+            bad.append("完整套件必须按凭据可用性设置父仓要求")
     if "GITHUB_STEP_SUMMARY" not in txt:
         bad.append("凭据缺失时没写 job summary ⇒ 这次降级是**静默**的")
     return bad
 
 
-# 这一格原来判「`run_all.suites()` 的枚举 == 磁盘」。枚举规则今天归 pytest 自己，那条判据
-# 搬到 `tests/test_tests_dir_shape.py` ④（读 `pyproject.toml` 的收集配置 + 逐文件 AST 查
-# 「这个文件收得到用例吗」）——**不是删掉**，是换了持有者：两处同源的东西不许各判一半。
-# 这里只留"出厂档钉子"与"入口只剩一个"。
 def test_ci_suite_list():
     EVAL_YML = ROOT / ".github" / "workflows" / "eval.yml"
     NIGHTLY = ROOT / "scripts" / "nightly_regression.sh"
@@ -237,8 +173,6 @@ def test_ci_suite_list():
           _m is not None, _m.group(1) if _m else "dependency-groups 里没有钉死的 ruff==")
     if _m:
         _pin = _m.group(1)
-        # 本机命令散在文档里写的是 `uvx ruff@X`（隔离环境，不碰产线 venv）：**必须同版**。
-        # 这条是"改一处忘另一处"唯一能被机械抓住的形状（升版只改 pyproject 忘了改文档）。
         _bad = []
         for p in [ROOT / "README.md", ROOT / "CLAUDE.md"] + sorted((ROOT / "docs").glob("*.md")):
             if not p.exists():
@@ -303,7 +237,6 @@ def test_ci_suite_list():
             check("设了要求 ⇒ 跑不到就 SystemExit(1)", False, "没有退出")
         except SystemExit as e:
             check("设了要求 ⇒ 跑不到就 SystemExit(1)", e.code == 1, f"code={e.code}")
-        # 指错位置必须是"找不到"，不是"绕过检查"：env 只用来指位置。
         check("env 指着不存在的目录 ⇒ 等同找不到（不许因为设了 env 就当通过）",
               _parent_repo.parent_root() is None)
     finally:
@@ -326,7 +259,7 @@ def test_ci_suite_list():
     check("CI 给套件设了 SAUDADE_PARENT_REPO（指到 checkout 落点）",
           re.search(r"^\s*SAUDADE_PARENT_REPO:\s*\S+", _eval_txt, re.M) is not None)
     check("CI 给套件设了 SAUDADE_REQUIRE_PARENT=1（**跑不到就红**，与夜间同一条纪律）",
-          re.search(r'^\s*SAUDADE_REQUIRE_PARENT:\s*"?1"?\s*$', _eval_txt, re.M) is not None)
+          "SAUDADE_REQUIRE_PARENT: ${{ " + _GUARD + " && '1' || '0' }}" in _eval_txt)
     check("CI 自检落位锚（锥配错/空目录会让守卫**假绿**）",
           "test -f _parent/src/routes/chat.rs" in _eval_txt)
     check("CI 不把凭据展开进日志（echo/printf 里不许出现变量展开）",
@@ -366,8 +299,8 @@ def test_ci_suite_list():
     for _desc, _mut in (
         ("去掉 pull_request 触发", _eval_txt.replace("  pull_request:", "  # pull_request:")),
         ("依赖父仓的步骤不挂 if", _eval_txt.replace("if: " + _GUARD, "if: true")),
-        ("降级支也设 SAUDADE_REQUIRE_PARENT",
-         _eval_txt.replace("available != '1'", "available == '1'")),
+        ("缺凭据仍要求父仓",
+         _eval_txt.replace("&& '1' || '0'", "&& '1' || '1'")),
         ("降级不写 job summary", _eval_txt.replace("$GITHUB_STEP_SUMMARY", "$SUMMARY_OFF")),
     ):
         check(f"  正控：{_desc} ⇒ 判据必须报红", _pr_gate_problems(_mut) != [])
@@ -379,6 +312,39 @@ def test_ci_suite_list():
 
     assert not FAILED, (
         f"{len(FAILED)} 条未通过：" + "；".join(FAILED))
+
+
+@pytest.mark.parametrize("event,fork,actor,token,expected", [
+    ("push", "false", "maintainer", "", 1),
+    ("workflow_dispatch", "false", "maintainer", "", 1),
+    ("pull_request", "false", "maintainer", "", 1),
+    ("pull_request", "true", "contributor", "", 0),
+    ("pull_request", "false", "dependabot[bot]", "", 0),
+    ("push", "false", "dependabot[bot]", "", 1),
+    ("pull_request", "false", "maintainer", "synthetic-read-token", 0),
+])
+def test_parent_credentials(event, fork, actor, token, expected, tmp_path):
+    """运行工作流里的真实 shell，验证缺凭据不能把普通 PR 误判为降级。"""
+    workflow = (ROOT / ".github/workflows/eval.yml").read_text(encoding="utf-8")
+    step = next(s for s in _STEP_SPLIT_RE.split(workflow) if "id: parent" in s)
+    shell = step.split("        run: |\n", 1)[1]
+    output = tmp_path / "output"
+    summary = tmp_path / "summary"
+    env = {**os.environ, "EVENT_NAME": event, "IS_FORK": fork, "ACTOR": actor,
+           "PARENT_REPO_TOKEN": token, "GITHUB_OUTPUT": str(output),
+           "GITHUB_STEP_SUMMARY": str(summary)}
+    result = subprocess.run(["bash", "-eu", "-c", shell], env=env,
+                            capture_output=True, text=True, timeout=10)
+    assert result.returncode == expected, result.stdout + result.stderr
+    assert not token or token not in result.stdout + result.stderr
+    if expected:
+        assert not output.exists()
+    elif token:
+        assert output.read_text() == "available=1\n"
+        assert not summary.exists()
+    else:
+        assert output.read_text() == "available=0\n"
+        assert "未运行" in summary.read_text()
 
 
 if __name__ == "__main__":

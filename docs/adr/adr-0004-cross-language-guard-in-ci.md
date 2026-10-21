@@ -29,18 +29,15 @@ agent 侧有七处守卫断言「Rust 那半真有这个臂 / 读这个键 / 渲
 
 CI 里把父仓**拉下来真判**，凭据用**一枚只读 PAT**：
 
-```yaml
-env:                                      # job 级：step 的 `if:` 里读不了 secrets
-  PARENT_REPO_TOKEN: ${{ secrets.PARENT_REPO_TOKEN }}
-steps:
-  - 凭据自检：空 ⇒ `::error::` + exit 1   # 配置问题红在**一处**，不要让七处守卫各自红一遍
-  - actions/checkout@v4（repository: BigLeopardCat/Saudade-Blog, token: secrets.PARENT_REPO_TOKEN,
-                        path: _parent, sparse-checkout: src/routes, fetch-depth: 1,
-                        persist-credentials: false）
-  - 落位自检：test -f _parent/src/routes/chat.rs
-  - uv run --frozen pytest -q -n 4        # env: SAUDADE_PARENT_REPO=<ws>/_parent
-                                          #      SAUDADE_REQUIRE_PARENT=1
-```
+当前接线以 `.github/workflows/eval.yml` 为准：
+
+- 凭据仅进入自检步骤、父仓 checkout 与只读 pin 比对步骤。
+- 有凭据时稀疏检出父仓到 `_parent/`，自检锚文件后设置
+  `SAUDADE_PARENT_REPO` 与 `SAUDADE_REQUIRE_PARENT=1`。
+- 无凭据时，只有 fork / Dependabot PR 可以降级，并写明未运行的检查；
+  普通同仓 PR、push 和手动运行失败。
+- 两种模式共用一个完整 pytest 入口；降级模式的 `SAUDADE_REQUIRE_PARENT=0`。
+
 
 四条纪律，各自对应一种失效：
 
@@ -91,8 +88,8 @@ steps:
 1. **比的是父仓默认分支的 HEAD**：Rust 的改动还没并进默认分支时，CI 会红而本机（工作区带着
    那份改动）是绿的。这是**可见的**红，不是静默的绿——按纪律，改 Rust 那一侧要先把改动并进
    默认分支，再看 agent 侧 CI。
-2. **fork 里没有这个 secret** ⇒ fork 自己的 CI 会红在凭据自检那一步。对这个 public 仓而言
-   这是可接受的：它明确说了「这道闸要配置才能跑」，而不是假装跑过了。
+2. **fork / Dependabot PR 没有普通 Actions secret**：跨语言检查显式缺席，其余检查照常运行；
+   合并后的 `main` push 必须带凭据完成全量检查。fork 自己的 push 仍需配置凭据。
 3. **凭据范围比需要的大**（整个父仓的只读，不能只授 `src/routes`），用设置过期与
    「只勾这一个仓」来收。
 4. **锥与守卫的对应关系是判出来的**：新守卫读新路径要一起改 `sparse-checkout`（⑥ 会红着
