@@ -95,7 +95,7 @@ class HybridArm:
             cfg = (config or {}).get("configurable") or {}
             if "idem_resuming" in cfg:
                 from agent.checkpoint import thread_is_resuming
-                config = {**config, "configurable": {
+                config = {**(config or {}), "configurable": {
                     **cfg, "idem_resuming": thread_is_resuming(self.legacy, cfg.get("thread_id"))}}
             yield from self._stream(state, config, stream_mode=stream_mode, **kwargs)
 

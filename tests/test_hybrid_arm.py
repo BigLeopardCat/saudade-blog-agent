@@ -36,6 +36,31 @@ class _Legacy:
         yield "updates", {"legacy": True}
 
 
+@pytest.mark.parametrize("error", [ValueError, RuntimeError])
+def test_read_input_error_is_recoverable_but_programming_error_propagates(monkeypatch, error):
+    class ReadTool:
+        name = "rag_search"
+
+        def invoke(self, args, config=None):
+            raise error("synthetic failure")
+
+    model = _Model([AIMessage(content="", tool_calls=[
+        {"name": "rag_search", "args": {}, "id": "read_1"}]),
+        AIMessage(content="这次未能读取文章。")])
+    monkeypatch.setattr("agent.hybrid_arm.get_llm", lambda **_: model)
+    legacy = _Legacy()
+    arm = HybridArm(legacy, read_tools={"rag_search": ReadTool()})
+    if error is RuntimeError:
+        with pytest.raises(RuntimeError, match="synthetic failure"):
+            list(arm.stream(_state(), _config()))
+        assert len(model.calls) == 1
+    else:
+        list(arm.stream(_state(), _config()))
+        assert len(model.calls) == 2
+        assert "调用失败（ValueError）" in model.calls[-1][-1].content
+    assert not legacy.calls
+
+
 def _state(*history):
     return {"messages": [HumanMessage(content="[System: user_id=7; page=/]")]
             + list(history) + [HumanMessage(content="[当前问题]: 你好呀")]}

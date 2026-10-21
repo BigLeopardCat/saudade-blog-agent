@@ -63,13 +63,6 @@ def _ledger(saver):
     return idem_pg.PostgresLedger(saver.conn)
 
 
-def _invoke(tool, args, config):
-    try:
-        return tool.invoke(args, config=config)
-    except Exception as exc:
-        return unavailable(f"收藏工具调用失败（{type(exc).__name__}），请查询实际状态")
-
-
 def operation_key(grant, name, args):
     identity = [grant["uid"], grant["conv"], grant["jti"], name, args]
     return hashlib.sha256(json.dumps(identity, sort_keys=True).encode()).hexdigest()
@@ -84,7 +77,9 @@ def _execute(grant, name, args, config, ledger, tools):
     if state != "new":
         return idem.unknown_frame(name)
     check_cancelled(config)
-    out = _invoke(tools[name], args, config)
+    # An exception may happen after sending the write. Preserve the intent;
+    # a retry must report uncertainty instead of invoking the tool again.
+    out = tools[name].invoke(args, config=config)
     # Once the tool has run, finish the ledger even if the caller has stopped.
     # A lost result must not cause a later request to repeat an external write.
     ledger.finish(key, out)
