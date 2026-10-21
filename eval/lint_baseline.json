@@ -8,7 +8,7 @@
     "I",
     "W"
   ],
-  "total": 619,
+  "total": 618,
   "by_file": {
     "agent/action_text.py": 2,
     "agent/authz.py": 5,
@@ -113,7 +113,6 @@
     "tests/test_reports.py": 32,
     "tests/test_sections.py": 2,
     "tests/test_session_input_source.py": 1,
-    "tests/test_settings_surface.py": 1,
     "tests/test_side_tasks.py": 1,
     "tests/test_slim_workflows.py": 1,
     "tests/test_status_judgements.py": 1,

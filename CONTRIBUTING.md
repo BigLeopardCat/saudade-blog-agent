@@ -64,15 +64,29 @@ bash scripts/dev/coverage.sh                                   # 顺带一份覆
 版本号只有一处事实源（`pyproject.toml` 的 `[dependency-groups] dev`），
 `tests/test_ci_suite_list.py` 会核对文档里写的版本和它是否同版。
 
-CI 跑的就是这两条（`.github/workflows/eval.yml`）。两点要知道：
+### CI 与测试分层
 
-- **CI 在 push 到 `main` 与 PR（同仓分支）上都会跑**（20261019 起）。此前只在 push 到
-  `main` 时才跑 ⇒ 一个 PR 从推上去到合并之间**没有任何自动检查**，"没有红灯"其实是
-  "什么都没跑"；
-- CI 里有一条**跨语言守卫**需要一枚本仓的只读凭据去读一个**私有**父仓。
-  **fork 的 PR 从结构上拿不到这枚凭据** ⇒ 那一条在你这边必然缺席。这不是静默跳过：
-  workflow 会打 `::warning::` 并在 job summary 里写明"哪些判据本次没跑、合并后会补跑"，
-  其余判据照常跑。
+`.github/workflows/eval.yml` 在 `main` 的 push、PR 和手动触发时运行：
+
+1. `uv sync --locked` 校验锁文件并安装依赖，uv 下载缓存按 `uv.lock` 复用。
+2. 提交格式、未定义名、类型、lint、异常与安全扫描先执行，再运行完整 pytest。
+3. 测试按 `tests/` 收集、四进程运行；JUnit 报告包含用例结果与耗时，成功和失败均可下载，保留 14 天。
+4. 同一分支的新运行取消过期 CI；主任务限时 20 分钟。CI 不发布生产服务。
+
+父仓跨语言检查使用 `PARENT_REPO_TOKEN` 只读凭据，仅传给需要它的步骤。
+普通同仓 PR、push 和手动运行缺凭据直接失败；fork 和 Dependabot PR 无凭据时
+明确记录未运行的检查，其余测试照常执行。配置与轮换见
+[ADR-0004](docs/adr/adr-0004-cross-language-guard-in-ci.md)。
+
+离线回归验证授权、参数、状态、重试和 SSE 协议；新增运行时测试优先断言用户可见结果与
+工具调用效果，避免绑定旧 planner 的内部节点或提示词原文。真实模型的请求级对照独立运行，
+比较完成率、事实性、token 和延迟；不混入每次 PR 的确定性测试。生产 PostgreSQL 调试
+按授权使用独立会话标识并清理自身记录，具体入口见
+[迁移验收说明](docs/hybrid-runtime-migration.md#生产-postgresql-接续验证)。
+
+本仓尚无 agent 服务的自动发布链路。后续 CD 应以通过 CI 的确定提交为发布版本，
+串行发布并核对 `/version`、`/ready`，失败恢复上一版本。父仓博客的发布流程不能视为
+agent 服务已具备自动部署；发布流程也不能套用 CI 的中途取消策略。
 
 **改动落在哪个文件**：本仓用「预算 + 台账、只许缩小」的棘轮管体量，一共三道——
 函数级（`tests/test_complexity_budget.py`）、类型级（`eval/type_gate.py`）、

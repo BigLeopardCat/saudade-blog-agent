@@ -1,88 +1,100 @@
-# Eval Gate —— push 跑秒级单测（L0）。
-#
-# **golden 全量评测集不进 CI（20260920 撤下）**，改为本机按需手动跑。
-# 撤下的实测依据（run 35499800723 / 35506176321）：
-#   - 北美 runner 调北美阿里云端点这条 LLM 腿**每次调用先吊住 ~120 秒**再走重试
-#     （ChatOpenAI timeout=120s × langchain max_retries=2 ⇒ 单次调用最坏 6 分钟）；
-#   - 3 条本机合计 39 秒的用例，在 CI 里跑 21 分钟仍未结束；期间生产机 access log
-#     显示：18:50:37 语料热身（12 个请求）之后再无一个工具请求 ⇒ 卡在 LLM 腿，
-#     与"回国调站点"那一腿无关（那一段实测健康，服务端 0-3ms）；
-#   - 一次 120 分钟上限的全量跑被杀，且**零产出**（报告只在结尾写 + 非 TTY 块缓冲，
-#     日志与 artifact 双双为空）。
-#
-# 全量 golden 在本机跑（本机即生产服务器，链路真实，约 127 条 / 25 分钟）：
-#   cd saudade-blog-agent
-#   .venv/bin/python eval/run_golden.py                     # 全量；--limit N / --only a,b / --min-pass-rate
-#   .venv/bin/python eval/golden_full_run.py                # 进程隔离版：逐条独立进程 + 180s 超时，防悬挂
-#   夜间 04:00 有 scripts/nightly_regression.sh（crontab）跑 pytest + 全量 golden + trace 巡检，
-#   **但那个 cron 默认不装**（一次全量 ≈10M tok / ¥2.4；开关 scripts/enable_nightly.sh）——
-#   所以上面那句"CI 只跑 L0"在默认部署下是全部，别把没跑的夜间当成跑过且绿。
-#
-# 仓库 Secrets QUALITY_GATE_API_KEY / QUALITY_GATE_BASE_URL 与 Variables
-# GOLDEN_MIN_PASS_RATE / QWEN_MODEL 已无引用，可留可删（留下不影响任何运行）。
-#
-# **这个 workflow 需要一枚只读凭据**：`secrets.PARENT_REPO_TOKEN`（父仓私有 ⇒ 跨语言守卫
-# 在 CI 里要读它的源码才能真判）。缺了就红——配置问题的正确表现是红，不是静默跳过。
-# 生成/授权/轮换步骤见 docs/adr/adr-0004-cross-language-guard-in-ci.md。
 name: Eval Gate
 
 on:
   push:
     branches: [main]
-  # PR 上也跑（20261019）。为什么非加不可：此前只在 push 到 main 时才跑 ⇒ 一个 PR 从推上去
-  # 到合并之间**没有任何自动检查**，红是"合进 main 那一刻"才发现的（20261017 实测：PR #8
-  # 合流当场带出两条红，支上从没人跑过闸；PR #19/#20 那两条红同理，见 ROADMAP.md 待办）。
-  # 同仓分支的 PR 拿得到 secret ⇒ 走完整门禁，与 push 到 main 那一趟判据逐条相同。
-  #
-  # ⚠️ **fork 的 PR 拿不到 `secrets.PARENT_REPO_TOKEN`**（GitHub 不向 fork 传 secret）⇒
-  # 跨语言守卫在那种 PR 上跑不了。本仓对"静默跳过"的容忍度是零，所以那一步走的是**显式
-  # 降级**：日志 `::warning::` + job summary 写明"哪些判据本次没跑、合并后会补跑"，其余
-  # 判据照常跑。三条路的取舍（跳过并记下 / 拆独立 job / 干脆不跑）见 ROADMAP.md 待办第一条。
   pull_request:
     branches: [main]
-  # 手动重跑秒级套件（无入参）；全量 golden 请按上面注释在本机跑
   workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   eval:
     runs-on: ubuntu-latest
-    # 父仓只读凭据放 **job 级 env**：step 的 `if:` 里读不了 `secrets`（GitHub 表达式不允许
-    # `secrets` 出现在 `if` 中）⇒ 只能先落成环境变量，再用 `env.X` 判。
-    env:
-      PARENT_REPO_TOKEN: ${{ secrets.PARENT_REPO_TOKEN }}
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
         with:
-          # 提交信息闸门要跑 `git log BEFORE..SHA`（比本次 push 带来的那个区间），
-          # 而默认的 `fetch-depth: 1` 只有一条提交 ⇒ 每一步都会落进"取不到基线 ⇒ 跳过"，
-          # **闸门看着在跑、其实一次都没判**（本仓最贵的那类失效）。
+          # Commit validation needs the base object and the complete commit range.
           fetch-depth: 0
+          persist-credentials: false
 
-      # 跨语言守卫（断言 Rust 侧真有那个臂/那个键/那个字面）此前在 CI 里**恒跳过**：CI 只
-      # checkout agent 仓，而父仓私有 ⇒ 最需要它的地方从不运行，本机绿、CI 也绿，两侧谁都没
-      # 真比过（20260928 审计实测）。现在父仓以**只读凭据**拉进来真判。取舍与轮换步骤见
-      # docs/adr/adr-0004-cross-language-guard-in-ci.md。
+      - name: Setup uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.12"
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+
+      - name: Install dependencies
+        run: uv sync --locked
+
+      - name: 提交信息闸门（与本地同一份 .githooks/commit-msg）
+        env:
+          BEFORE: ${{ github.event.before || github.event.pull_request.base.sha }}
+          SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          if ! git cat-file -e "${BEFORE}^{commit}" 2>/dev/null; then
+            echo "取不到 base 提交 ${BEFORE} ⇒ 本次跳过提交信息校验（**不是**通过）"
+            exit 0
+          fi
+          fail=0
+          MSGFILE="$(mktemp)"
+          trap 'rm -f "$MSGFILE"' EXIT
+          while read -r sha; do
+            [ -n "$sha" ] || continue
+            git log -1 --format=%B "$sha" > "$MSGFILE"
+            if ! bash .githooks/commit-msg "$MSGFILE"; then
+              echo "::error::提交 ${sha:0:9} 的信息不合规（见上面的说明）"
+              fail=1
+            fi
+          done < <(git log --no-merges --format=%H "${BEFORE}..${SHA}")
+          exit "$fail"
+
+      - name: 未定义名静态扫描（ruff F821，秒级）
+        run: uv run --frozen ruff check --select F821 --no-cache .
+
+      - name: 类型检查棘轮（mypy 错误数只许变小）
+        run: uv run --frozen python eval/type_gate.py
+
+      - name: 静态检查棘轮（ruff E/F/I/W 只许变小）
+        run: uv run --frozen python eval/lint_gate.py
+
+      - name: 盲捕获棘轮（BLE001 只许变小）
+        run: uv run --frozen python eval/except_gate.py
+
+      - name: 安全扫描棘轮（bandit 只许变小）
+        run: uv run --frozen python eval/security_gate.py
+
       - name: 跨语言守卫的凭据自检（缺了就直接红；fork PR 走显式降级）
         id: parent
         env:
+          PARENT_REPO_TOKEN: ${{ secrets.PARENT_REPO_TOKEN }}
           EVENT_NAME: ${{ github.event_name }}
+          IS_FORK: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository }}
+          ACTOR: ${{ github.actor }}
         run: |
+          set -euo pipefail
           if [ -n "${PARENT_REPO_TOKEN:-}" ]; then
             echo "available=1" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          # fork 的 PR 上拿不到凭据是**预期**，不是配置错 —— 但降级必须被**记下来**：
-          # "条件不满足就当没这回事"正是这套守卫最怕的那种失效（本仓最贵的一类）。
-          # 判据是事件类型而不是"谁 fork 的"：同仓分支的 PR 有 secret，走上面那一支。
-          if [ "${EVENT_NAME}" = "pull_request" ]; then
+          if [ "${EVENT_NAME}" = "pull_request" ] && { [ "${IS_FORK}" = "true" ] || [ "${ACTOR}" = "dependabot[bot]" ]; }; then
             echo "available=0" >> "$GITHUB_OUTPUT"
-            echo "::warning::本 PR 拿不到父仓只读凭据（fork 的 PR 不传 secret）⇒ 跨语言守卫本次**未运行**，合并到 main 后会补跑。详见 job summary。"
+            echo "::warning::fork/Dependabot PR 无父仓凭据，跨语言守卫未运行。详见 job summary。"
             {
               echo "### ⚠️ 跨语言守卫本次**未运行**（这不是通过）"
               echo ""
-              echo "本 workflow 的跨语言守卫需要一枚只读凭据去读**私有**父仓，而 **GitHub 不向 fork 的 PR 传 secret**。"
+              echo "fork 和 Dependabot PR 不能使用普通 Actions secrets。"
               echo ""
-              echo "**本次没有运行**：所有读父仓源码的跨语言守卫（六处）。"
+              echo "**本次没有运行**：所有读父仓源码的跨语言守卫。"
               echo ""
               echo "**照常运行**：其余全部离线套件、未定义名扫描、类型棘轮、静态检查棘轮、提交信息闸门。"
               echo ""
@@ -100,20 +112,6 @@ jobs:
           repository: BigLeopardCat/Saudade-Blog
           token: ${{ secrets.PARENT_REPO_TOKEN }}
           path: _parent
-          # 守卫读的全是 `src/routes/*.rs`。锥里曾有过 `frontend/public/live2d-widgets`
-          # （`__RESET__:<scope>` 那条帧约定三端认同一份字面，前端那一端在
-          # `tests/test_reset_scope.py` 里读）——20261001 看板娘前端随 MIT 分发搬进了
-          # **本仓** `frontend/`，那条守卫改成读本仓，父仓这一条锥模式随之作废。
-          # 稀疏锥只为把面收小、把时间省掉；**锥够不够**由 `tests/test_ci_suite_list.py` ⑥
-          # 机械核对——它扫所有 `_parent_repo.read("…")` 的路径逐个判是否落在锥里，
-          # 加了读别处的守卫而忘了改这里会红，而不是"那一条在 CI 上悄悄不判"。
-          # 20261002 加 `frontend/src/utils`：`tests/test_sticker_repair.py` 要拿父仓那份
-          # 贴纸清单（`stickers.ts::STICKERS`）与 agent 侧 `agent/stickers.py::STICKER_NAMES`
-          # 逐字核对——"名字清单三处同步"是这套契约里唯一能机器化的那一处。
-          # 20261013 加 `frontend/src/components/NoteTagSelect`：`tests/test_tag_color_tables.py`
-          # 要核对站内 8 色板的**第三处**（用户手建标签时前端自己按名字取色），以及两侧
-          # 哈希算子（Python `_utf16_units` ↔ JS `charCodeAt`）同源。⚠️ 这一处**不在**
-          # `frontend/src/utils` 里，只加 utils 那个锥会让它读不到。
           sparse-checkout: |
             src/routes
             frontend/src/utils
@@ -123,232 +121,42 @@ jobs:
 
       - name: 父仓落位自检（锚 + 每一条锥模式都真拉到）
         if: steps.parent.outputs.available == '1'
-        # 凭据权限不对时上一步就失败了；这一条兜的是"拉下来了但稀疏锥配错"——空目录/错目录会
-        # 让守卫**假绿**（`tests/_parent_repo.py` 头注里那两条边界之一）。**锥里每一条模式都要
-        # 探一次**：`_parent_repo.read` 遇到"文件不在"是按三态走的（本机单跑会打 ⏭ 继续），
-        # 锥漏掉一条模式的表现因此是"那条守卫悄悄不判"，只有在这里才看得见。
         run: |
           set -e
           test -f _parent/src/routes/chat.rs
           test -f _parent/frontend/src/utils/stickers.ts
           test -f _parent/frontend/src/components/NoteTagSelect/index.tsx
-          # 这一条**不是**锥模式，是锥的**语义**：cone 模式会连同"锥目录的各级祖先目录里的
-          # 直系文件"一起拉下来（`.git/info/sparse-checkout` 里那几行 `!/src/*/` 就是干这个的）
-          # ⇒ `src/*.rs`（authz.rs / quota.rs …）本来就在。20261013 批 3b 探过这一条：
-          # 顺手加一条 `src/authz` 进锥**会让 checkout 直接失败**（它不是一个目录）。
           test -f _parent/src/authz.rs
 
-      # ⚠️ 20260928 首跑带出两条**信息性**注解（不影响本次绿）：`actions/checkout@v4` 与
-      # `astral-sh/setup-uv@v5` 是针对 Node 20 的，runner 已强制它们跑在 Node 24 上。等上游
-      # 退役 Node 20 支持时这两步会失效——升到 v5 / v6 是**另一件事**（要连带核对 checkout 在
-      # 父仓那一处用的 `sparse-checkout` 输入是否改名），别混进无关的提交里。
-      - name: Setup uv
-        uses: astral-sh/setup-uv@v5
+      # Both credential modes use the same complete pytest collection.
+      - name: 全部离线套件
+        env:
+          SAUDADE_PARENT_REPO: ${{ steps.parent.outputs.available == '1' && format('{0}/_parent', github.workspace) || '' }}
+          SAUDADE_REQUIRE_PARENT: ${{ steps.parent.outputs.available == '1' && '1' || '0' }}
+        run: uv run --frozen pytest -q -n 4 --durations=15 --junitxml=eval/report/ci/pytest.xml
+
+      - name: 保存测试报告（含失败用例和耗时）
+        if: ${{ !cancelled() && hashFiles('eval/report/ci/pytest.xml') != '' }}
+        uses: actions/upload-artifact@v4
         with:
-          # 与 `requires-python` / `.python-version` 同一个值（`tests/test_packaging.py`
-          # ⑥ 判着——CI 装 3.10 而声明 3.12 是"CI 绿但产线跑不了"那种假绿的反面：
-          # 声明 3.12 而 CI 只验 3.10，等于**升版这件事根本没被任何东西验过**）。
-          python-version: "3.12"
+          name: pytest-${{ github.run_id }}-${{ github.run_attempt }}
+          path: eval/report/ci/pytest.xml
+          if-no-files-found: error
+          retention-days: 14
 
-      - name: Install dependencies
-        run: uv sync --frozen
-
-      # 提交信息闸门（20261018）。规则的正文**只写在** `CONTRIBUTING.md` 的《3. 提交约定》，
-      # 这里跑的就是那份钩子脚本本身（`.githooks/commit-msg`）——**一份实现两处共用**。
-      # 为什么 CI 也要跑一遍：`core.hooksPath` 是 git 的本地配置（`.git/config`，不入库），
-      # 不会被 clone 带走 ⇒ 只挂本机钩子等于"闸门只对配过 `scripts/dev/install-hooks.sh`
-      # 的人生效"。这一层不依赖任何人的本地配置，它才是闸门。
-      # ⚠️ 这里**必须**直接调 `.githooks/commit-msg`，不许改调 `tests/test_commit_msg_hook.py`：
-      # `tests/test_ci_suite_list.py` ① 判的是"套件清单只有 `pytest` 按目录收集一处"，
-      # 逐套件点名会让那一条当场红。那个套件自己（钩子在不在、坏消息会不会被拒、
-      # type 白名单与 CONTRIBUTING 是否逐字同源）走下面的 `pytest` 那一步。
-      # 本仓没有 `.github/dependabot.yml`（`tests/test_packaging.py` ③ 判着），所以这里
-      # **不做**父仓那份 dependabot 豁免。真启用机器人时它会在这里红——那是一次可见的、
-      # 需要人加一行豁免的红，而不是一个"首行长度不由人控制"的慢性假红。
-      - name: 提交信息闸门（与本地同一份 .githooks/commit-msg）
-        env:
-          # PR 上没有 `github.event.before`（那不是 push 事件）⇒ 退回 `base.sha`（PR 的
-          # 目标分支顶端）。`github.sha` 在 PR 上是那个 merge commit，所以 `base..merge`
-          # 正好是本 PR 带来的那几条提交，与 push 那一趟的区间语义相同。
-          # ⚠️ 取不到基线时**整段跳过并响亮地说出来**（下面那个 `exit 0` 分支）——
-          # "跳过"不是"通过"。
-          BEFORE: ${{ github.event.before || github.event.pull_request.base.sha }}
-          SHA: ${{ github.sha }}
-        run: |
-          set -euo pipefail
-          if ! git cat-file -e "${BEFORE}^{commit}" 2>/dev/null; then
-            # 首推/强推/新建分支时 before 是全 0 或已被回收 —— 取不到基线就整段跳过。
-            # 宁可漏一次也别在这里造一个假红（它没有可对照的范围）。**响亮地**说出来：
-            # "跳过"不是"通过"。
-            echo "取不到 base 提交 ${BEFORE} ⇒ 本次跳过提交信息校验（**不是**通过）"
-            exit 0
-          fi
-          fail=0
-          MSGFILE="$(mktemp)"
-          while read -r sha; do
-            [ -n "$sha" ] || continue
-            git log -1 --format=%B "$sha" > "$MSGFILE"
-            if ! bash .githooks/commit-msg "$MSGFILE"; then
-              echo "::error::提交 ${sha:0:9} 的信息不合规（见上面的说明）"
-              fail=1
-            fi
-          done < <(git log --no-merges --format=%H "${BEFORE}..${SHA}")
-          exit "$fail"
-
-      # 套件清单**只有一处事实源**：pytest 按**目录**收集 `tests/`（`pyproject.toml` 的
-      # `testpaths = ["tests"]`，收集规则用默认的 `test_*.py`），谁都不抄名单。此前这里是
-      # **手工维护**的名单（一个套件一个 step），而审计实测（20260928）：磁盘上 50+ 个套件、
-      # 这份名单只引用了 26 个 ⇒ **一半以上的判据在 CI 里从不运行**——其中就有
-      # `test_prompt_prefix`（提示词前缀缓存稳定性的唯一哨兵）与 `test_slim_workflows`。
-      # 加了新套件忘了来这里加一行，表现是"看着在跑、其实没跑"，而这种失效没有任何东西会
-      # 告诉你。收敛成一条 step 之后，**加套件不用改 CI**。
-      # 那条收敛 20260928 先落在自研 runner pytest 上；20261020 这 180 个
-      # 裸脚本套件**整体转成原生 pytest**（过程与逐批读数见
-      # changelog.d/20261020-pytest-migration-*.md），入口从 pytest 换成 `pytest` 本身、
-      # pytest 随之删除。回归锁 `tests/test_ci_suite_list.py` 原样跟着改判：
-      # 断言这里跑的是 pytest，断言这里与夜间脚本都**不许**再出现逐套件的 `tests/test_*.py`
-      # 调用，也不许出现收窄收集面的选项（`-k` / `--deselect` / `--ignore` / `--lf`——
-      # 它们的失效形状是同一条：静默地只跑子集，汇总表上还是一片绿）。
-      # 全套秒级、无网络、无 LLM；出厂档钉子在 `tests/conftest.py` 的 `_PINNED`
-      # （AGENT_EVIDENCE=0 / AGENT_FASTPATH=1 / RAG_HYBRID_ENABLED=0 / IOT_ENABLED=1 /
-      # AGENT_REQUIRE_ASSERTION=1 / SAUDADE_IGNORE_ENV_FILE=1——20261004 删掉了
-      # `PLANNER_ENGINE` 那一钉：接口层只剩 native 一条，没有第二个取值可钉；20261015 又
-      # 删掉了 `AGENT_TASK_STATE` / `AGENT_TASK_PLAN_EXEC` 两钉：任务状态整族撤档、常开。
-      # 钉子表没被清空，理由见 `tests/conftest.py` 那段 ⚠️），conftest 在**收集之前**把它们
-      # 写进 `os.environ`（子进程自然继承；原来是 pytest 对每个套件子进程 `env.update`，
-      # 换了持有者、没换语义），其中 `SAUDADE_IGNORE_ENV_FILE=1` 是**整份 .env 不读**
-      # ⇒ 判据不随仓库/运维环境的取值漂移。20260928 加后半句的实测理由：CI 没有 .env、
-      # 本机有产线那份 ⇒ 同一片判据在这里红、在本机绿，而两边都没在看代码。
-      # 跨语言守卫**跑不到就算红**（`tests/_parent_repo.py` 的三态），与夜间同一条纪律：
-      # `SAUDADE_REQUIRE_PARENT=1` 让"找不到父仓"变成一行 ❌ + 退出码 1，而不是一行谁也不会
-      # 读的 ⏭。父仓这次**真在**（上面两步），所以这一档在 CI 里判的是真东西。
-      # 注意它比较的是父仓**默认分支**的 HEAD：Rust 那边的改动还没并进默认分支时，这里会红
-      # 而本机（工作区里带着那份改动）是绿的——这是**可见的**红，不是静默的绿（取舍见 ADR-0004）。
-      # `-n 4`（20261019 起是 `pytest -j 4`，20261020 换成 pytest-xdist 的 `-n 4`）：
-      # 这一步是这套 CI 里最长的一段，而它长是因为**脚本多**（179 个套件各自的导入），
-      # 不是因为谁在等网络。这些套件彼此独立（没有绑端口的、没有往仓内固定路径写的），
-      # 所以按 4 路并行跑，配 `ubuntu-latest` 的 4 核。
-      # 并行只改**谁在哪个进程里跑**，不改判据与环境：每个 worker 各自加载同一份
-      # `tests/conftest.py`（同一套 `_PINNED`）、同一个 300s 单测超时（`pyproject.toml` 的
-      # `timeout`）。跨套件全局的还原层（conftest 的 autouse `_process_isolation`）在
-      # 每个 worker 里都生效——它本来就是为"多个套件共用一个进程"写的。
-      # **夜间那份脚本不加**：它在本机跑、没人等它，而本机内存比 runner 紧。
-      - name: 全部离线套件（按目录收集，秒级、无网络、无 LLM）
-        if: steps.parent.outputs.available == '1'
-        env:
-          SAUDADE_PARENT_REPO: ${{ github.workspace }}/_parent
-          SAUDADE_REQUIRE_PARENT: "1"
-        run: uv run --frozen pytest -q -n 4
-
-      # fork PR 的降级跑法：**同一份清单、同一套判据**，只是父仓不在场。
-      # 不设 `SAUDADE_PARENT_REPO`：父仓根本没 checkout（上面那一步被 `if` 掉了），
-      # 指一个不存在的目录只会多一句误导人的输出。不设 `SAUDADE_REQUIRE_PARENT` ⇒
-      # 读父仓的那六处守卫落进"找不到 + 没设要求"那一档：**打一行响亮的说明再返回 None**，
-      # 不是静默（那一档的语义写在 tests/_parent_repo.py 头注）。哪些没跑已在 job summary 里记下。
-      # `-n 4` 的理由同上一步。
-      - name: 全部离线套件（降级：本 PR 拿不到父仓凭据 ⇒ 跨语言守卫本次不运行）
-        if: steps.parent.outputs.available != '1'
-        run: uv run --frozen pytest -q -n 4
-
-      # 未定义名静态扫描（20260924 补）。Python 没有编译期拦截：一个只在**另一个作用域**
-      # 存在的名字（server.py 的 `req` 写进了 `_run_agent_stream_to_queue`）要到运行到那一行
-      # 才炸，而线上位置恰在图启动前 ⇒ 表现成"整轮零帧"，看着像模型没回复。那次事故挂了
-      # 40 分钟、离线套件与夜间 golden 全都碰不到（见 docs/问题记录.md 1.43）。
-      # 只开 F821 这一条规则是刻意的：其余 F/E 类（未使用导入等）不应拦住一次修复性推送。
-      # **ruff 的版本从 `pyproject.toml` 的 `[dependency-groups] dev` 来**（上面
-      # `uv sync --frozen` 已经把它按 uv.lock 装进项目环境），不再在这里手写
-      # `uvx ruff@0.14.4`——同一件事写两处就是"改一处忘另一处"的形状（本轮 20260928 收敛）。
-      # 本机跑同一条判据用隔离的 `uvx ruff@0.14.4 check --select F821 --no-cache .`
-      # （**不许**在本机 `uv sync`：`.venv` 就是产线那个 venv）；版本若升，两处一起改，
-      # `tests/test_ci_suite_list.py` ①b 会盯着它们是否同版。
-      - name: 未定义名静态扫描（ruff F821，秒级）
-        run: uv run --frozen ruff check --select F821 --no-cache .
-
-      # 类型检查棘轮（20261013 补）。`[tool.mypy]` 那段配置（`pyproject.toml` 末尾）
-      # 在此之前**从不执行**——mypy 不在依赖、不在 `uv.lock`、CI 没有这一步，而函数签名已
-      # 注释约 78% ⇒ 写了从不校验。配上以来第一次真跑：`212 errors in 21 files (checked 46)`。
-      # **不是一次性门禁而是棘轮**：一上来要求全绿会让 CI 恒红，人人学会无视它；改记基线、
-      # 只许变小（照 `eval/complexity_baseline.json` 同款）。判据两条：总数变大、或**某个文件**
-      # 变大（防"这边修三个、那边坏两个"在总数上互相抵消）。
-      # ⚠️ mypy 的版本从 `pyproject.toml` 的 dev 组来（上面 `uv sync --frozen` 已按 uv.lock 装好），
-      # 而 `eval/mypy_baseline.json` 里记着出基线时的版本——**两者对不上直接退 3**：换了 mypy
-      # 版本就换了一套错误集，棘轮不再是同一个量，这时要跑 `--update` 重出基线（升级 PR 里做）。
-      # 本机（产线 venv，**不许** `uv sync`）跑同一条判据用隔离的
-      # `python eval/type_gate.py --mypy "uvx mypy@2.4.0"`（与 dev 组同版）。
-      - name: 类型检查棘轮（mypy 错误数只许变小）
-        run: uv run --frozen python eval/type_gate.py
-
-      # 静态检查棘轮（20261018 补，审计 A3）。`[tool.ruff.lint] select = ["E","F","I","W"]`
-      # 从 20260927 起就写在 `pyproject.toml` 里，而 CI 至今只跑上面那条 `--select F821`
-      # ——剩下那一大片（会烂的那一类）的唯一约束是 `docs/lint-baseline.md` 里的散文纪律。
-      # 同族的第三道棘轮（`eval/type_gate.py`）同款：记基线、只许变小、`--update` 是唯一
-      # 放宽通道。判据三条：总数变大 / **某个文件**变大 / **基线里没有的文件**带 error
-      # （新文件按纪律 1 必须零 error，它的基线是 0）。
-      # ⚠️ **三个量任一换掉就退 3**（ruff 版本、`line-length`、`select`）——它们都会改变
-      # 条目集，换了就不是同一个量；三个的真值都只有 `pyproject.toml` 一处。
-      # 本机（产线 venv，**不许** `uv sync`）跑同一条判据：`python eval/lint_gate.py`
-      # （venv 的 dev 组里就有同版 ruff；隔离跑法见该脚本头注）。
-      - name: 静态检查棘轮（ruff E/F/I/W 只许变小）
-        run: uv run --frozen python eval/lint_gate.py
-
-      # 盲捕获棘轮（20261020 补，审计意见 §异常精细化）。`except Exception:` 全仓 117 条，
-      # 而其中**大多是故意的降级路径**（工具层返回 `unavailable` 让模型换条路、图里"这一帧
-      # 取不到就少一帧"）——一上来当门禁只会逼人把降级改成崩溃。所以同族第五道棘轮：
-      # 记基线、只许变小、`--update` 是唯一放宽通道。**只记账、不批量改**。
-      # ⚠️ 它**刻意不把 `BLE001` 写进 `pyproject.toml` 的 `select`**：那条路会让上面那道
-      # `lint_gate` 的账换量（622 条当场变成 700 多，两件事混进一个数）。select 的落点
-      # 就在 `eval/except_gate.py` 自己。
-      # ⚠️ **三个量任一换掉就退 3**（ruff 版本 / 本闸的 select / pyproject 的 lint `ignore`）。
-      # 第三条是真的洞：`--select BLE001` 仍然服从 `ignore` 表，谁往里加一句 `"BLE001"`，
-      # 这个闸会静默读到 0 条然后报绿 —— 基线里记着出账时那份表，对不上就退 3。
-      - name: 盲捕获棘轮（BLE001 只许变小）
-        run: uv run --frozen python eval/except_gate.py
-
-      # 安全扫描棘轮（20261020 补，审计意见 §安全扫描）。bandit 全仓 142 条，而**没有一条
-      # 是真的可利用漏洞**（大头是 B105 字典键误报、B608 拼模块级常量表名、B108 写 /tmp）——
-      # 同族第六道棘轮：记基线、只许变小、`--update` 是唯一放宽通道。
-      # ⚠️ **跳过集是四条**（`B101` assert / `B404`+`B603`+`B607` subprocess 记账三项）：
-      # 本仓的既定形态就是 shell 出去调 git/systemctl/psql，这三项每调一次都报。不安全的
-      # 变体 `B602`(`shell=True`) / `B609`(通配符注入)**没有跳**，那才是要看的（当前 0 条）。
-      # ⚠️ **四个量任一换掉就退 3**：bandit 版本 / **它跑在哪个解释器上** / 跳过集 / 扫描面。
-      # 解释器那一条是实测出来的：同一份源码，`uvx bandit`（自带 3.10）读到 205、
-      # `uvx --python 3.12 bandit` 读到 211（同 `eval/type_gate.py` 的
-      # `--python-executable` 那个洞）。本机跑法见该脚本头注。
-      # ⚠️ 还有两个"悄悄关闸"的口子也堵了：bandit **自动发现**的配置源
-      # （`.bandit` / `setup.cfg` / **`pyproject.toml` 的 `[tool.bandit]`**）在场就退 3；
-      # `# nosec` 行内豁免进账且**只许变小**（现在 0 ⇒ 等于不许用）。
-      - name: 安全扫描棘轮（bandit 只许变小）
-        run: uv run --frozen python eval/security_gate.py
-
-  # ═ 看板娘 pin 漂移提示（20261002）════════════════════════════════════════
-  # **独立 job、只警告、恒绿**。上面那个 eval job 是门禁，这一条不是：它回答的是
-  # "这次改了看板娘前端，父仓那个 pin 跟上了没有"。
-  #
-  # 为什么值得一条守卫：本仓 `frontend/public/live2d-widgets/` 是源码，线上跑的是父仓
-  # `frontend/widget.lock.json` 里钉住的 sha 稀疏检出的**副本**。改了不 bump pin ⇒
-  # 改动永远不上线，而**没有任何东西会变红**（本地绿、CI 绿、线上照旧）。纪律在父仓
-  # lock 头注 / README / CONTRIBUTING 写了三处，但文档挡不住忘记，故补机械的。
-  #
-  # 为什么单独一个 job：它要 `fetch-depth: 0`（比 before..sha 的区间）和一枚 PAT，
-  # 两样都不该塞进门禁 job 里去拖累它；独立 job 也保证它**无论怎样都不会把主干判红**。
-  # 逻辑在 `scripts/widget_pin_drift.sh`（含"读不到父仓就明说再跳过"的三态处理）。
-  #
-  # 20261019 起也在 `pull_request` 上跑：这条提示最有用的时刻恰恰是 PR 里（"改了看板娘
-  # 但没回父仓 bump pin"正是 PR 级的疏漏），而此前它只在 push 到 main 时才跑 ⇒ 漂移要等
-  # 合并后才被说出来。PR 上用 `base.sha..merge` 这个区间，与 push 那一趟语义相同。
-  # ⚠️ fork 的 PR 同样拿不到 PAT ⇒ 脚本走它既有的"读不到父仓就**明说**再跳过"那一档
-  # （`::notice::`，不是静默），这个 job 本来就恒退 0，不影响任何 PR 的结论。
   widget-pin-drift:
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     env:
-      PARENT_REPO_TOKEN: ${{ secrets.PARENT_REPO_TOKEN }}
       EVENT_NAME: ${{ github.event_name }}
-      # PR 上没有 `github.event.before` ⇒ 退回目标分支顶端（同上，与 commit-msg 那一步同源）
       BEFORE: ${{ github.event.before || github.event.pull_request.base.sha }}
       SHA: ${{ github.sha }}
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 0        # 要比 before..sha 的改动区间
+          fetch-depth: 0
+          persist-credentials: false
       - name: 与父仓 pin 比对（漂移则 ::warning::，恒退 0）
+        env:
+          PARENT_REPO_TOKEN: ${{ secrets.PARENT_REPO_TOKEN }}
         run: bash scripts/widget_pin_drift.sh
