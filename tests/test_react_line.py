@@ -277,6 +277,45 @@ def main() -> int:  # noqa: C901
           "没有任何一件办成" in wrap_up_text(RunLedger(), "budget")
           and "稍后" not in _np)
 
+    # ── ⑧ `tool_data` 的取值格：`data` 不是 `result` ───────────────────────
+    print("\n⑧ 工具结果入 `tool_data`：`$tool[i].field` 引用必须**真的解得开**")
+    # 两个读端（`arg_refs.resolve_one` / `ref_hints`）读的都是 `entry["data"]`，而
+    # 20261021 之前这里写的是 `"result": text[:2000]` ⇒ 本线每条臂上引用**恒判
+    # `ref_unparsed`（BLOCK）**、"引用解析"看着在跑其实一次都没成功过。判据取**行为**
+    # （第二条 spec 的实参是不是真拿到了第一条的返回值），不取键名——键名是手段。
+    from agent.arg_refs import ref_hints as _rh
+    from tools.result import ToolResult
+    _seen: list[dict] = []
+
+    def _list_notes(**kw) -> ToolResult:            # noqa: ARG001
+        return ToolResult("共 1 篇", data=[{"noteId": 7, "title": "标题"}])
+
+    def _detail(article_id) -> str:                 # noqa: ANN001
+        _seen.append({"article_id": article_id})
+        return f"文章 {article_id} 的正文"
+
+    _l8 = RunLedger()
+    _txt8, _n8 = WorkflowExecutor({"list_notes": _list_notes, "get_article_detail": _detail},
+                                  _l8, role="admin").run_specs(
+        ['list_notes({})', 'get_article_detail({"article_id": "$list_notes[0].noteId"})'],
+        workflow="content_query")
+    check("两条都真执行了（引用没把它拦成 BLOCK）", _n8 == 2, str(_n8))
+    check("**引用真的解开了**：第二条拿到的是第一条返回里的 noteId=7",
+          _seen == [{"article_id": 7}], str(_seen))
+    check("  帧文本里也是解开后的值，不是 `ref_unparsed`",
+          "文章 7" in _txt8 and "ref_unparsed" not in _txt8, _txt8[:120])
+    # 反控：把 `data` 换成 `result`（就是修之前那个形状）⇒ 引用当场解不开。
+    # 判据必须能红，否则上面两条只是"恰好通过"。
+    _bad_td = [{"tool": "list_notes", "result": [{"noteId": 7, "title": "标题"}]}]
+    from agent.arg_refs import resolve_args as _ra
+    _got, _err = _ra({"article_id": "$list_notes[0].noteId"}, _bad_td)
+    check("反控：键名退回 `result` ⇒ 引用立刻解不开（报 `ref_unparsed`）",
+          _got is None and str(_err).startswith("ref_unparsed"), f"{_got} / {_err}")
+    check("`ref_hints` 也读同一格 ⇒ 现在能列出可引用字段（此前恒回「无从引用」）",
+          "list_notes" in _rh([{"tool": "list_notes", "data": [{"noteId": 7}]}]))
+    check("  反控：同一份退回 `result` ⇒ `ref_hints` 什么都列不出来",
+          "list_notes" not in _rh(_bad_td))
+
     print(f"\n{'=' * 60}")
     if FAILS:
         print(f"❌ {len(FAILS)} 项未过：")
