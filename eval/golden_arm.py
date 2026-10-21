@@ -70,15 +70,12 @@ ARM_CHECKPOINT_DELTA = "checkpoint_delta"
 # 它与 `react` 臂**共用同一张真图**（`react_arm.build_graph`），只换四个可选接缝
 # ⇒ `react↔tools` 这一对是"菜单形状"最干净的对照（`graph↔tools` 那一对还掺着循环形状差）。
 ARM_TOOLS = "tools"
-# `capability`（20261021）：**菜单按轮变**——第 0 轮是能力索引（49 条，每条带「由这些工具
-# 完成」与「完成判定」），模型点一条能力；之后菜单换成那条能力的工具面，模型点真工具。
-# 与 `tools` 臂的差别只有一处、但正是 POC 指出的那一处：`tools` 臂把 **70 件工具**一次
-# 摊开（A 族 13 条路由红），本臂收窄到**一条能力那一批**（多数 1–3 件），并把 B 族要的
-# 「该调哪些工具」与 C 族要的 `complete_when` / `reply_contract` 一起交给执行层。
-# 实现见 `agent/capability_arm.py` 头注；与 `react` / `tools` **共用同一张真图**。
+# capability 按能力索引加载工具；hybrid 使用有界的小上下文执行路径。
 ARM_CAPABILITY = "capability"
+ARM_HYBRID = "hybrid"
 KNOWN_ARMS = (ARM_GRAPH, ARM_REACT, ARM_TOOLS, ARM_CAPABILITY, ARM_MATRIX,
-              ARM_CHECKPOINT, ARM_CHECKPOINT_RANDOM, ARM_CHECKPOINT_DELTA)
+              ARM_CHECKPOINT, ARM_CHECKPOINT_RANDOM, ARM_CHECKPOINT_DELTA,
+              ARM_HYBRID)
 ENV_ARM = "GOLDEN_ARM"
 
 # 接口层（报告里 `engine` 那一格的地基，20260927 批 A）：20261004 起只剩 native tool calls

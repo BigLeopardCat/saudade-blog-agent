@@ -165,6 +165,11 @@ flowchart TB
 │   ├── tool_menu.py           # 工具级菜单（POC）：70 个工具按 authz 的 scope 表过滤成 OpenAI tools 数组
 │   ├── tool_prompt.py         # 工具臂的系统提示：菜单是工具不是技能，正文为工具菜单重写
 │   ├── tools_arm.py           # golden 工具臂（GOLDEN_ARM=tools，POC）：复用 react 那张图，只换四个接缝
+│   ├── hybrid_arm.py          # 迁移臂：普通对话单次调用，按需加载只读域，未迁移操作交回旧图
+│   ├── hybrid_read.py         # 公开文章、站点资料和个人只读域白名单；个人数据需验签与权限检查
+│   ├── hybrid_session.py      # 按需工具加载与单请求有界循环
+│   ├── turns.py               # 会话串行化、等待取消和公共取消信号
+│   ├── favorite_transactions.py # 已确认收藏操作的权限复核、幂等执行与事实回执
 │   ├── checkpoint.py          # checkpointer 的**接线点**与级联清理（空 DSN 恒返回 None，见 §4.6）
 │   ├── checkpoint_arm.py      # golden 第三条臂（GOLDEN_ARM=checkpoint）
 │   ├── checkpoint_delta_arm.py # golden 第四条臂（GOLDEN_ARM=checkpoint_delta，臂 C）

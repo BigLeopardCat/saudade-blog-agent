@@ -395,22 +395,10 @@ def _idem_resuming(thread_id: str) -> bool:
 
 
 def _build_arm():
-    """按 `AGENT_ARM` 选臂（20261012 批 4）。`graph` ⇒ **逐字节就是原来那一行**。
+    """按名字选择兼容同步/SSE 接口的运行路径；未知名字拒绝启动。
 
-    这一层只做一件事：**按名字取一个实现了 `.stream(state, config, stream_mode)` 的对象**
-    ——`_run_agent_sync` 与 `_run_agent_stream_to_queue` 两处调用点一个字都不用改（臂那边
-    收下 `stream_mode` 只是为了签名对得上，它恒产 `messages`/`updates` 两路，见
-    `agent/react_arm.ReactGoldenArm.stream` 的 docstring）。
-
-    **不 import `eval/golden_arm.py`**：那是评测侧的选臂壳（它还管留档目录、基线臂、
-    `GOLDEN_ARM` 的名字空间），生产依赖 eval 侧就是把"跑哪条臂"与"读数往哪个目录写"
-    绑成一件——而那两件事的失效方式完全不同（前者改行为，后者只改文件位置）。这里
-    只认名字。
-
-    名字不认识 ⇒ **响亮失败拒绝启动**，不回退 `graph`：与 `eval/golden_arm.build_agent`
-    同一条理由（静默回退会得到一份"看起来是第二条臂、其实是第一条"的假读数），而放在
-    这里后果更重——生产在跑实验臂、日志里却写着一切正常。同理 `AGENT_ARM=react` 时把
-    臂名打进启动日志：**"这一轮是谁在跑"必须是日志里读得到的事实**。
+    默认 graph 保持生产行为；react、capability 与 hybrid 延迟 import。评测臂的留档逻辑
+    不进入服务端，返回臂名供启动日志与健康检查报告实际运行路径。
     """
     from config.settings import settings
     arm = (settings.agent_arm or "graph").strip().lower()
@@ -425,13 +413,13 @@ def _build_arm():
         from agent.react_arm import build as build_react_arm
         return build_react_arm(), arm
     if arm == "capability":
-        # 能力索引臂（20261021）：planner 选能力、索引把那条能力的工具面交给执行层。
-        # 与 `react` 同一条延迟 import 的理由；它 import 的比 `react` 还多一层
-        # （`capability_index` + `tool_menu` + `tool_prompt`）。
         from agent.capability_arm import build as build_capability_arm
         return build_capability_arm(), arm
+    if arm == "hybrid":
+        from agent.hybrid_arm import build as build_hybrid_arm
+        return build_hybrid_arm(), arm
     raise RuntimeError(
-        f"AGENT_ARM={arm!r} 不是已知的臂（只有 `graph` / `react` / `capability`）——拒绝启动。"
+        f"AGENT_ARM={arm!r} 不是已知的臂（graph/react/capability/hybrid）——拒绝启动。"
         "不回退 graph：静默回退会把'这一轮到底是谁在跑'从日志里抹掉。")
 
 

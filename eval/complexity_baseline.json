@@ -212,8 +212,8 @@
     "lines": 636
   },
   "tests/test_checkpoint_factory.py::test_checkpoint_factory": {
-    "c": 40,
-    "lines": 272
+    "c": 39,
+    "lines": 271
   },
   "tests/test_ci_suite_list.py::test_ci_suite_list": {
     "c": 40,

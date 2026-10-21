@@ -1,0 +1,4 @@
+- `GOLDEN_ARM=hybrid` 单独归档；新增六条请求级样本，区分通用知识回答与明确站内检索。
+- 新路径的只读工具结果进入现有 trace 材料契约，可供 golden 断言和 groundedness 判官读取。
+- 工具循环改用非流式模型响应，修复当前网关多轮回放时偶发的 `reasoning_content` 400。
+- 配置 checkpoint 时，直接答复先同步写回旧图状态再发送；内存 saver 接续已验证，PostgreSQL saver 集成验证待做。

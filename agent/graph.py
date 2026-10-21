@@ -116,6 +116,7 @@ from agent.entity_digest import receipt_digest
 from agent.factblock import (action_facts, is_action_family, is_block_family,
                              render_fact_block)
 from agent.llm_usage import usage_fields
+from agent.turns import AgentCancelled, stopped as _stopped  # noqa: F401
 from agent.planner_llm import (bind_planner_tools, finish_reason, invoke_reflector,
                                parse_reflector_output, tool_call_names,
                                tool_calls_to_plan)
@@ -347,22 +348,6 @@ if TYPE_CHECKING:   # 只为下面 `_principal_of` 的**字符串**注解能被�
     from agent.principal import Principal
 
 logger = logging.getLogger(__name__)
-
-# 客户端断开（stop_event 置位）→ 图内节点主动终止执行。
-# 场景（20260827 实测）：浏览器连接中断后 event_stream 无法及时感知（卡在
-# queue.get），agent 线程无感知继续执行 ReAct 循环——曾见断连后仍执行
-# device_oled_display 写操作。server.py 侧 2s 轮询断连 → set stop_event →
-# 图内各节点在"下一次执行前"检查并抛此异常终止，写操作绝不发生在用户已离开
-# 之后。由 server.py 捕获（静默收尾，客户端已断无帧可发）。
-class AgentCancelled(Exception):
-    pass
-
-
-def _stopped(config: RunnableConfig | None) -> bool:
-    """节点级中断检查：stop_event（threading.Event）由 server.py 经 config 注入。"""
-    ev = (config or {}).get("configurable", {}).get("stop_event")
-    return ev is not None and ev.is_set()
-
 
 def _principal_of(config: RunnableConfig | None) -> "Principal":
     """本轮调用者身份（server.py 经 config 注入，见 agent/principal.py）。

@@ -1,87 +1,17 @@
-"""写操作幂等账（批 2）——给"重放"这道保险丝。
+"""Durable at-most-once ledger for external writes.
 
-## 为什么需要它
+Record intent before calling a tool and store its result afterward. An unfinished
+intent has an unknown outcome and must not be retried automatically. Ledger
+failure blocks new writes; it cannot undo a write already sent to a remote API.
 
-LangGraph 的 checkpoint **提交粒度是 superstep，不是语句**（实测见
-`native-checkpoint-verdict-20261015.md` §2.6：一个节点里连做两件写，进程死在中间、
-从上一个 checkpoint 恢复 ⇒ **两件写各执行了两遍**）。今天这件事炸不了，因为生产
-**没有 saver**（`agent/agent.py` 调 `build_graph(checkpointer=None)`，见 `agent/graph.py`
-的 `return g.compile(checkpointer=checkpointer)`——缝留着，生产不传）；但**接上 saver 那天
-重放路径第一次通电，而它一行判据都没有**。
-本模块就是那道保险丝：把"这一件写做没做过"从 state 里搬出来，落到**节点之外**的一本账上。
+Legacy graph calls derive an operation key from the conversation, tool and
+argument fingerprint. Their attempt identity distinguishes replay from a new
+request; the caller supplies whether the previous turn was unfinished.
+Confirmed hybrid transactions instead use the signed operation ID directly.
 
-**为什么不能是 state 里的一个字段**：节点内的 state 更新要等节点**返回**才落盘
-（verdict 文档 §10.6）——崩溃重放时读到的是**上一个** checkpoint 的 state，"我做过没有"
-这个问题的答案恰好不在里面。
-
-## 幂等键是什么（实测，不是读文档）
-
-节点内 `config["configurable"]["checkpoint_ns"] == f"{节点名}:{task_id}"`，而
-`task_id = _xxhash_str(...)`（`langgraph/pregel/_algo.py`，`_xxhash_str` 同文件）是**纯函数**。
-三条实测结论：
-
-- 崩溃 + 恢复的两次运行里该值**逐字节相同** ⇒ 重放认得出是同一件；
-- 同一 thread 的 3 轮**互不相同** ⇒ 不会把两轮的写合成一次；
-- **没挂 saver 时是随机 uuid4** ⇒ `active()` 为假，本模块**天然惰性**、今天一行账都不记。
-
-⚠️ **上面第一条的前提是「续跑」，而生产不走那条路**（20261019 实测，**这条更正很重要**）。
-
-那三条是在 **`stream(None, config)`**（= "接着跑没跑完的任务"）那条路径上量的。
-而 `server.py` 每轮传的是 **dict 输入**（`graph_input(...)`），langgraph 于是
-**丢弃**上一份 checkpoint 的未完成任务、**从 START 重启**
-（`langgraph/pregel/_loop.py:977-979`，原话 `# discard any unfinished tasks from previous
-checkpoint`；`_first` 的 `is_resuming` 判据见同文件 861-867）。重启 ⇒ 全新的 checkpoint
-血缘 ⇒ `checkpoint_ns` **逐字变了** ⇒ 键变 ⇒ **账认不出同一件写**。
-
-真机读数（`eval/experiments/checkpoint_probe.py --crash-resume --guard [--prod-shape]`，
-同一份夹具、只差"恢复那一次传什么"）：
-
-| 恢复那一次传什么 | 两遍的 `checkpoint_ns` | 同一件写执行了几次 |
-|---|---|---|
-| `None`（续跑，判据与探针走的那条） | **逐字相同** | 1（账压住了） |
-| **dict**（= 生产每轮的形状） | **逐字变了** | **2（账没压住）** ← 批 F 起是 **1** |
-
-⇒ 那时**本模块在生产那条路上恒不命中**。这不是"写了两遍的 bug"，而是"这道保险丝只对着
-一条生产不走的路径通电"——**读本模块时别把它的绿当成生产受保护**。（下面这一节是修法。）
-
-## 修法（20261019）：键降成「会话」，另存「哪一轮的哪一次」
-
-`checkpoint_ns` 既然逐轮重编，它就不该当**键**的身份——降一级，拆成两格：
-
-- **键**（`key_for`）= `sha256([thread_id, 工具名, 参数指纹])`：`thread_id` 是
-  `conv_<会话 id>`（`checkpoint.thread_id_for`），**跨重启逐字不变** ⇒ 账认得出同一件写；
-- **这一次尝试**（`attempt_for`）= `sha256([checkpoint_ns, 参数指纹])`：同一 superstep
-  的重放逐字相同、换一轮（或同一轮的下一个 superstep）就变 ⇒ 分得出重放与"又要了一次"。
-
-跨轮命中时靠一格 `idem_resuming`（服务端算好塞进 config：**上一轮跑没跑完** =
-`get_state().next` 非空）分流：
-
-- **上一轮没跑完** ⇒ 这一行就是那一轮的尝试 ⇒ `done` 重放、`intent` 判结果未知；
-- **上一轮跑完了** ⇒ 主人是**明确再要一次** ⇒ 原子地把那行改回 `intent` 并换 attempt，照常执行。
-
-缺省 `True`（读不到那一格就按"没跑完"办）：失效姿态是**多拦一次**（主人看得见那条帧），
-不是**静默放过一次重做**——所以"服务端忘了设"是响的，不是哑的。
-
-真机读数与两条候选的取舍见 `docs/adr/adr-0012` 的《口径更正（20261019）》与《修法（20261019）》。
-
-## 两档存储（20261017）
-
-账本本体有**两档**，由 `_shared(config)` 按 saver 自己选：挂 PG saver ⇒ 落**同一个池、
-同一个库**（`agent/idem_pg.py`，psycopg 只住那边）；否则 ⇒ 本文件的 `Ledger`（agent 自持的
-SQLite 文件，`settings.idem_db`）。选 PG 那一档是为了**保留期同源**：账与 checkpoint 必须
-一起裁，分开清会把本批要堵的洞重新打开。采纳那天账自动变 PG，没有第二个开关可忘。
-
-## 协议：先记账再动手 ⇒ 至多一次（at-most-once）
-
-`intent` 行在**远端调用之前**提交，调用返回（或抛异常）后改 `done`。留在 `intent` 只有
-一种成因：进程死在"已经发出、还没拿到返回"这段中间 ⇒ **结果未知**。
-
-**为什么取至多一次而不是至少一次**：重复写是**外部可见且不可撤销**的（多发一条站内通知、
-多建一个标签、多改一次文章状态），漏掉一次写是**可恢复且可如实告知**的。代价不对称。
-
-**失效姿态**：账本不可用 ⇒ **拒绝这次写**（`tools.base.unavailable` ⇒ checker 判 BLOCK），
-不"降级成不记账"——那等于把保险丝拆了还假装它在。唯一例外：写**已经发生**之后收尾记账
-失败，那时照常返回结果（已经发生的事取消不了，也不能让一条成功的写看起来像失败）。
+PostgreSQL savers use the same database for the ledger and checkpoints. Other
+legacy contexts use SQLite. Keep ledger retention aligned with checkpoints so a
+retained checkpoint cannot replay a write after its deduplication record expires.
 """
 
 import hashlib
@@ -284,6 +214,10 @@ def _rehydrate(row) -> str:
 # `_split_row` 剥掉。两个后端各写一遍列清单是它们各自方言决定的（`?` / `%s`），但**列序
 # 与列数必须是同一份**——否则 `_split_row` 的下标会在一档上错位。
 _SELECT_COLS = "status, fp, text, kind, meta"
+
+
+# Shared decoder for persisted tool results.
+replay_result = _rehydrate
 
 
 def _split_row(row) -> tuple[str, tuple | None]:

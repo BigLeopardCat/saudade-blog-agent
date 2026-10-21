@@ -1,50 +1,7 @@
-"""checkpointer 接线点的判据（20261017；20261018 批 7 随采纳改过 ④ 与 ⑧、新增 ⑨）。
+"""Check checkpoint backend selection, startup failures and nonblocking setup locks.
 
-**这一件为什么存在**：`agent/checkpoint.py` 此前是个**返回错对象**的存根
-（`get_checkpointer()` → `MemorySaver()`：进程内、每 worker 一份），而它的英文 docstring
-写着 "maintain context across multiple turns in a session"，与 `docs/agent-architecture.md`
-§4.6 明说的"它从未积累过任何状态"正相反。重写之后必须证明两件事：**不配就一次都不碰**
-（惰性），以及**任何"半成品接法"都炸得响**（不静默降级）。
-
-九条探针，每条都配了会红的那一半：
-  · ① **惰性**：不给 DSN ⇒ 返回 `None`，且**一次 import 都不发**——不是"import 完才发现
-    没配再返回 None"，那已经晚了一步；
-  · ② **反控**：给了合法 DSN ⇒ **绝不返回 None**。没有这一条，①可能只是恒真
-    （本仓纪律：正控不红不算数）；
-  · ③ **认不出来就响亮**：`memory://` 这类 ⇒ `RuntimeError`，且消息里**点名"故意不支持
-    内存档"**——内存 saver 恰好长得像能用，这是本件的重点；
-  · ④ **缺依赖就响亮**：合法 scheme 但后端没装 ⇒ `RuntimeError`，消息里有包名与 pip 命令。
-    **20261018 批 7 改成打桩 import 而不是看本机装没装**：采纳之后本机与 CI 都装了 PG
-    后端，照"装没装"分叉的话这一条在最需要它的两个环境里**永远不执行**。
-  · ④b **连不上就响亮**（批 7 新增）：后端装了但 DSN 连不上 ⇒ `RuntimeError`，
-    **绝不返回一个坏 saver**（坏 saver 的失效时刻是"第一轮对话的第一次 checkpoint"，
-    那时已经没有任何东西指向配置了）；异常文本里的口令必须已脱敏（它会进 `agent.log`）；
-  · ⑤ **接线锁**：`agent/graph.py` 那一处 `.compile()` **只许把调用方给的 `checkpointer`
-    原样传下去**（`g.compile(checkpointer=checkpointer)`），且 `build_graph` 自己的
-    `checkpointer` 缺省 `None`。**20261017 改过判据**：这条锁原先是"末尾仍是**裸的**
-    `g.compile()`"，上游 `48da74f` 正是照它要的方式接了线 ⇒ 锁跟着钉**新**不变量。
-    现在禁的不是"传参"，是**在编译点造 saver**——那几种会让生产**突然开始持久化**，
-    而别的判据一条都不会因此变红。裸 `g.compile()` 同样算违规，理由不同：实验臂
-    （`agent/checkpoint_arm.py`）传进来的 saver 会被**静默忽略**，于是"没挂 saver"
-    伪装成"checkpoint 没区别"，正是本件要防的那种失效；
-  · ⑥ **旧陷阱不许回来**：`agent/*.py` 的生产代码里再出现 `MemorySaver` 就红；
-  · ⑦ **DSN 的来源只有一处**：`build_checkpointer()` 不给参数时读
-    `settings.checkpoint_dsn`。把那一格临时拨成 DSN ⇒ **不给参数**的调用必须**响亮抛**
-    （没读到的话它会拿空串直接返回 `None`，那是**静默**）；拨回空 ⇒ 返回 `None`。
-    没有这一条，那一格就是个"填了不生效、也不报错"的幽灵旋钮（本仓在配置面上栽过五次）；
-  · ⑧ **会话坐标与脱敏**（批 7 新增）：`conversation_thread` 在缺席的六种形态上必须
-    回 `None`——拼成 `conv_None` 会让所有"没有会话身份"的请求共用一条线程，也就是
-    **跨用户串台**（安全判据，不是洁癖）；`thread_id_for` 三支各判一次；`redact` 不许
-    把口令带进异常文本、也不许把整条 DSN 吃掉；
-  · ⑨ **抢锁是轮询式、有预算、且池必须 autocommit**（20261018 停服之后新增）：
-    阻塞式 `pg_advisory_lock` 会让"等锁"变成一条没结束的事务，与 `setup()` 里那句
-    `CREATE INDEX CONCURRENTLY` 互相等 ⇒ 四个 worker 无限期卡死。这一节判四件事：
-    抢到就往下走、**一直抢不到要响亮抛（不是无限等）**、`autocommit` 关了要响亮拒、
-    以及**全仓只有那两条 `advisory_lock` 的 SQL 字面**（源码锁，反控证明它抓得住阻塞版）。
-    ⚠️ 这一节全是**离线**的（假连接）——真连一个库、4 个进程同时来的那一条在
-    `tests/test_checkpoint_setup_concurrent.py`，**那才是抓得住这个 bug 的那一层**。
-
-用法：.venv/bin/python tests/test_checkpoint_factory.py
+Uses fake connections and independent positive/negative controls; SQL checks do
+not depend on historical commentary in the production module.
 """
 
 
@@ -532,10 +489,9 @@ def test_checkpoint_factory():
     check("（反控）把 `try` 换回阻塞版 ⇒ 字面集合变了（锁抓得住它）",
           _bad != _ckpt_src and not any("pg_try_advisory_lock" in s for s in _bad_lits),
           str(_bad_lits))
-    check("（反控）源码文本里**确实**出现过阻塞版的名字（在头注里）而字面集合里没有 ⇒ "
-      "上面那条不是被说明文字骗绿的",
-          "pg_advisory_lock" in _ckpt_src and len(_lits) == 2,
-          f"源码文本 {_ckpt_src.count('pg_advisory_lock')} 次，字面只有 {len(_lits)} 条")
+    _commented = _ckpt_src + "\n# SELECT pg_advisory_lock(%s)\n"
+    check("（反控）注释提到阻塞锁，不影响实际 SQL 字面检查",
+          _advisory_literals(_commented) == _lits)
     print("\n⑩ 指错库：`db_name` 的取值 + `CHECKPOINT_FORBID_DB` 硬闸（20261019 批 B）")
     check("URL 形 ⇒ 库名", C.db_name("postgresql://u:p@h:5432/ckpt") == "ckpt")
     check("带 `?params` 的照切（query 不是库名的一部分）",

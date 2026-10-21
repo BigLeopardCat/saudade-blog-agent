@@ -22,6 +22,7 @@
 | 文档 | 一句话 | 类型 |
 |---|---|---|
 | [agent-architecture.md](agent-architecture.md) | 系统现在是什么：节点拓扑、跨语言契约、目录与机制 | 现状型 |
+| [hybrid-runtime-migration.md](hybrid-runtime-migration.md) | 工具型 Agent 迁移边界、已实现的直接对话路径和下一批验收门槛 | 方向型（含现状） |
 | [问题记录.md](问题记录.md) | 事故取证，按日期：现象 → 根因 → 修复 → 回归锁（**§2.1 例外**，见下） | 记录型（+ §2.1 跨仓契约） |
 | [eval-observability.md](eval-observability.md) | 评测与可观测性的 L0–L3 分层口径（判据该长什么样） | 现状型 |
 | [lint-baseline.md](lint-baseline.md) | 静态检查（ruff）基线与"新代码要干净"的参照点 | 现状型 |

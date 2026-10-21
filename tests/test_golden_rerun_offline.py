@@ -199,6 +199,20 @@ def _frozen_open(dirpath, *, ext=".json", now=None):
 os.environ.pop("GOLDEN_ALLOW_REAL_WRITE", None)   # 这一节测的就是"没放行"这一态
 
 
+def test_custom_corpus_does_not_replace_default_baseline(tmp_path):
+    case = mkcase("custom_chat", ["chat"])
+    corpus = tmp_path / "custom.jsonl"
+    corpus.write_text(json.dumps(case, ensure_ascii=False) + "\n", encoding="utf-8")
+
+    result = drive([case], {"custom_chat": [True]}, argv_extra=["--golden", str(corpus)])
+
+    assert result["code"] == 0
+    assert result["report"] is None
+    assert result["archived_doc"]["total"] == 1
+    assert result["archived_doc"]["full_run"] is False
+    assert result["archived_doc"]["golden_file"] == str(corpus)
+
+
 def test_golden_rerun_offline():
     RED, GREEN = False, True
     print("① 首跑红、复跑仍红 → 真 FAIL（照旧硬判，退出码 1）")

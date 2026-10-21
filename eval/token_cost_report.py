@@ -7,7 +7,7 @@
 的量。生产 trace 从 20260927 起在 `llm_done` 事件里带 `input/output/cache_read`
 （见 `agent/llm_usage.py`），这个脚本就是把它读成人话的那一端：
 
-  · 按 **节点 × 引擎** 切：planner / model / execute（屏幕文案）/ reflector；
+  · 按 **节点 × 引擎** 切：旧图节点和迁移档的 hybrid 调用都会按事件中的节点名归集；
   · **命中率** `cache_read/input` 是按"报了缓存字段的那些调用"算的，分**分母**单列
     ——`cache_read` 缺席 ≠ 0（端点没回这个字段时量不到，不是没命中，见
     `agent/llm_usage.py` 的字段契约）。把两件事混起来算，会得出"缓存完全没命中"
@@ -63,9 +63,9 @@ def _stamp_of(path: str) -> str:
 def collect(paths: list[str]) -> dict:
     """扫一遍 trace，把每条 `llm_done` 的用量按 (天, 节点, 引擎) 归集。
 
-    判据是**事件里有没有 `input` 键**——不按事件名认死（`llm_done` 在四个节点各发一次，
-    而"哪条事件带用量"是记账侧的契约，会演进）。没有 `input` 键的 llm_done 记为
-    "未量到"，单列一栏：那是"这条调用没记账"，不是"用量为 0"。
+    判据是**事件里有没有 `input` 键**，不按节点名过滤；旧图与 hybrid 共用
+    `agent.llm_usage` 的字段契约。没有 `input` 的事件不进入聚合，不能解释成零用量；
+    表格中的"未量到"专指有输入用量、但没有缓存命中字段的调用。
     """
     agg = defaultdict(lambda: {"calls": 0, "unnamed": 0, "in": 0, "out": 0,
                                "cache_seen": 0, "cache": 0})
