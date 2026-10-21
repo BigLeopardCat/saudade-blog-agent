@@ -1,32 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""提交信息闸门：钩子真的会拒、且它的 type 白名单与 CONTRIBUTING.md 同源（20261018）。
-
-**要回答的问题**：`CONTRIBUTING.md` 的《3. 提交约定》写死了首行 ≤60 字符、type 八选一、
-首行与正文之间空一行、不许署名尾注——而在 `.githooks/commit-msg` 之前，这四条**只活在
-散文里**，没有任何东西看着它们。父仓 20261003 已经吃过这个亏（那份钩子的头注写着
-"只挂本机钩子等于闸门只对配过 `install-hooks.sh` 的人生效"）。
-
-判据分四层，缺一层这闸就可能是空的：
-
-  ① **在不在、能不能跑**：`.githooks/commit-msg` 与 `scripts/dev/install-hooks.sh` 在位，
-     且钩子**可执行**（`core.hooksPath` 模式下 git 直接 exec 它，权限位错了就是静默不跑）；
-  ② **行为**：七种坏形状各拒一遍、合规的放行、豁免词真豁免、**中文按字符数不按字节数**
-     （数字节会把 33 字的中文摘要误判成 72 字节 ⇒ 拒掉一条合规消息）；
-  ③ **⭐ 单一事实源**：钩子里那份 type 白名单与 `CONTRIBUTING.md` 的《3. 提交约定》
-     **逐字相同**。两边各写一份的话，改一处忘另一处——闸门会开始拒绝一个合规的 type，
-     或者放过一个自创的。这是本套件最值钱的一条，带反控。
-  ④ **接线**：CI 里跑的是**钩子本身**（`.githooks/commit-msg`），不是这个测试文件
-     ——`tests/test_ci_suite_list.py` ① 判"套件清单只有「pytest 按目录收集」一处"，
-     逐套件点名会当场红。
-
-**为什么"钩子在 CI 里跑"要单独判**：`core.hooksPath` 是 git 的**本地配置**
-（`.git/config`，不入库），不会被 clone 带走。只挂本机钩子 = 新克隆 / 别人机器上
-**一次都不会跑**，而本机全绿 ⇒ 这正是本仓最贵的那类失效（"看着在跑、其实没跑"）。
-
-用法：.venv/bin/python tests/test_commit_msg_hook.py
-退出码：0 全绿 / 1 有不合规。
-"""
+"""Validate commit prefixes, spacing, Unicode length and CI hook wiring."""
 
 from __future__ import annotations
 
@@ -109,6 +83,11 @@ def test_commit_msg_hook():
         ("首行没有 type 前缀", "修一个 bug\n"),
         ("冒号后没空格", "fix(agent):修一个 bug\n"),
         ("冒号后没描述", "fix(agent):\n"),
+        ("描述只有空白", "fix:    \n"),
+        ("scope 没闭合", "fix(agent: 修复\n"),
+        ("scope 为空", "fix(): 修复\n"),
+        ("scope 有空格", "fix(agent runtime): 修复\n"),
+        ("scope 后有多余字符", "fix(agent)junk: 修复\n"),
         ("首行与正文之间没空行", "fix(agent): 修一个 bug\n- 为什么：…\n"),
         ("署名尾注", "fix(agent): 修一个 bug\n\n- 为什么：…\n\nCo-Authored-By: X <x@y.z>\n"),
     ]
@@ -117,6 +96,10 @@ def test_commit_msg_hook():
         check(f"  拒：{_name}", _rc != 0, "" if _rc != 0 else "rc=0（放行了）")
     _rc, _out = run_hook(_GOOD)
     check("  收：一条合规的消息", _rc == 0, "" if _rc == 0 else f"rc={_rc} {_out.strip()[:100]}")
+    for _msg in ("docs: 澄清说明\n", "feat(runtime)!: 更新会话契约\n\n需要迁移已有配置。\n",
+                 "refactor!: 删除废弃配置\n", "fix(tools/own): 核对回执\n"):
+        _rc, _out = run_hook(_msg)
+        check(f"  收：{_msg.splitlines()[0]}", _rc == 0, _out)
     # 字符数而不是字节数：`fix(agent): ` 是 12 个 ASCII，再加 20 个中文字 = **32 字符 / 72 字节**。
     # 数字节的实现会把这条合规消息判死（而它是本仓最常见的摘要形状）。
     _rc, _out = run_hook("fix(agent): " + "中文描述" * 5 + "\n")

@@ -1,26 +1,5 @@
 #!/usr/bin/env bash
-# 提交信息闸门（20261018）。规范本体**只写在** CONTRIBUTING.md 的《3. 提交约定》一节；
-# 这里只放几条**机器判得了**的，判不了的（比如"为什么"该写进正文）留给人工。
-#
-# 两种用法，共用这一份实现：
-#   · 本机：跑一次 `bash scripts/dev/install-hooks.sh`（= `git config core.hooksPath .githooks`），
-#     此后每次 `git commit` 自动跑，git 会把消息文件路径当参数传进来；
-#   · CI：`.github/workflows/eval.yml` 对本次 push 带来的每一条提交跑**同一个文件**
-#     （`bash .githooks/commit-msg <临时文件>`）。**必须在 CI 里也跑一遍**：`core.hooksPath`
-#     是 git 的本地配置（`.git/config`，不入库），不会被 clone 带走 ⇒ 只挂本机钩子等于
-#     "闸门只对配过 install-hooks.sh 的人生效"，而那正是本仓最贵的那类失效
-#     （"看着在跑、其实没跑"）。
-#
-# 实现从父仓 `Saudade-Blog/.githooks/commit-msg`（20261003 那份）移植，**规则文本不另抄**；
-# 唯一按本仓改的是 type 白名单——本仓是八个（父仓十个，多 `style` / `build`），
-# 而"八个"这件事的真值在 CONTRIBUTING.md，`tests/test_commit_msg_hook.py` 会**逐字对撞**两边。
-#
-# 判据（逐条对着 CONTRIBUTING.md 那一节）：
-#   ① 首行 ≤ 60 字符（**中文按 1 个字算**，不是字节数）；
-#   ② 首行 `type: 描述`，type 在白名单里、冒号后有空格；
-#   ③ 有正文时，首行与正文之间必须空一行；
-#   ④ 不许出现 `Co-Authored-By` / 共同作者署名这类 trailer。
-# 豁免：`Merge` / `Revert` / `fixup!` / `squash!` 打头的首行（都不是人写的正文）。
+# Validate CONTRIBUTING.md section 3; used by both local Git and CI.
 set -euo pipefail
 
 MSG_FILE="${1:-}"
@@ -59,17 +38,16 @@ fail() {
   echo "" >&2
   echo "✗ 提交信息不合规：$1" >&2
   echo "  首行：$SUBJECT" >&2
-  echo "  规范：CONTRIBUTING.md 的《3. 提交约定》一节（首行 ≤60 字符 + type 白名单 + 空行 + 正文 '-' 列表）" >&2
+  echo "  规范：CONTRIBUTING.md 的《3. 提交约定》一节（首行 ≤60 字符 + type[(scope)][!]: 描述 + 空行）" >&2
   exit 1
 }
 
 [ "$N" -le 60 ] || fail "首行 $N 字符，超过 60"
 
-# type 白名单。允许 `type(scope): …` 这种带范围括号的写法（本仓没在用，但别让人
-# 为了过闸门而删掉一个合理的范围标注）。冒号后必须有空格：`fix:xxx` 在 `--oneline` 里
-# 读起来是黏在一起的。
+# Conventional Commits 前缀；scope 与破坏性变更标记可选。
 PREFIX="${SUBJECT%%:*}"
 TYPE="${PREFIX%%(*}"
+TYPE="${TYPE%!}"
 if [ "$PREFIX" = "$SUBJECT" ]; then
   fail "首行没有 'type: ' 前缀"
 fi
@@ -77,9 +55,11 @@ case "$TYPE" in
   feat|fix|refactor|docs|test|chore|perf|ci) ;;
   *) fail "type『$TYPE』不在白名单（feat/fix/refactor/docs/test/chore/perf/ci）" ;;
 esac
+[[ "$PREFIX" =~ ^[a-z]+(\([a-z0-9][a-z0-9._/-]*\))?!?$ ]] \
+  || fail "前缀应为 type[(scope)][!]，scope 须为小写模块名"
 REST="${SUBJECT#*: }"
 [ "$REST" != "$SUBJECT" ] || fail "冒号后要有一个空格（写成 '$TYPE: 描述'）"
-[ -n "$REST" ] || fail "冒号后面没有描述"
+[[ "$REST" =~ [^[:space:]] ]] || fail "冒号后面没有描述"
 
 # 有正文时，首行与正文之间必须空一行。只看"第二行在不在"：只有一行的提交信息是合法的。
 SECOND="$(printf '%s\n' "$MSG" | sed -n '2p')"
