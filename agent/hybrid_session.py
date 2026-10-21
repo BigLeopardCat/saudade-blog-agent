@@ -7,6 +7,7 @@ legacy handoff remain in HybridArm; the model still chooses each tool and reply.
 import time
 
 from langchain_core.messages import ToolMessage
+from langchain_core.tools import ToolException
 
 from agent.authz import check
 from agent.llm_usage import usage_fields
@@ -91,7 +92,8 @@ class ReadSession:
                 return None
         try:
             return str(self.tools[name].invoke(args, config=self.config))
-        except Exception as exc:
+        except (ToolException, ValueError) as exc:
+            record("hybrid", "read_error", name=name, error=type(exc).__name__)
             return f"{name} 调用失败（{type(exc).__name__}），请如实说明。"
 
     def _append_result(self, call, prompt, round_index):

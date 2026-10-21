@@ -116,6 +116,33 @@ def test_success_text_without_a_fact_receipt_does_not_report_completion(tmp_path
     assert "无法确认" in result["reply"]
 
 
+@pytest.mark.parametrize("failure", ["tool", "ledger"])
+def test_exception_after_write_keeps_intent_and_prevents_retry(failure, monkeypatch, tmp_path):
+    ledger = idem.Ledger(str(tmp_path / "uncertain.sqlite3"))
+
+    class UncertainFavorite(Favorite):
+        def invoke(self, args, config=None):
+            result = super().invoke(args, config=config)
+            if failure == "tool":
+                raise RuntimeError("failed after sending the write")
+            return result
+
+    def fail_finish(*args):
+        raise OSError("receipt storage unavailable")
+
+    if failure == "ledger":
+        monkeypatch.setattr(ledger, "finish", fail_finish)
+    tool = UncertainFavorite()
+    first = transactions.execute(_grant(), _config(), None,
+                                 tools={tool.name: tool}, ledger=ledger)
+    second = transactions.execute(_grant(), _config(), None,
+                                  tools={tool.name: tool}, ledger=ledger)
+    assert tool.calls == 1
+    assert not first["receipts"] and first["blocked"]
+    assert not second["receipts"] and second["blocked"]
+    assert "无法确认" in first["reply"] and "结果未知" in second["reply"]
+
+
 def test_hybrid_executes_confirmed_favorite_without_model_or_legacy(monkeypatch, tmp_path):
     tool = Favorite()
     monkeypatch.setattr(transactions, "get_all_tools", lambda: [tool])
