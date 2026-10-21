@@ -6,7 +6,7 @@
 （B 族的 `checker 验收回执缺少工具 X` 就是从这儿来的）、射程把写族圈了进去
 （写族要过 9 个参数校正器，圈进来等于绕过它们）。这三种都不会让别的套件红。
 
-判据分五组：
+判据分六组：
   ① **派生**：索引里出现的名字集合 == `visible_workflows(role)` 的名字集合（**逐字**，
      顺序也要对）；工具面 == `plan` ∪ `extra_plan_tools`（与写名单派生**同一条算法**）。
   ② **只切不写**：索引行是原文的**前缀**、非空、≤ 80 显示列。
@@ -14,6 +14,8 @@
      `complete_when` 与 `reply_contract`（C 族）。
   ④ **射程**：`react_scoped` 与 `WRITE_WORKFLOW_NAMES` 互补；`chat` 恒 False。
   ⑤ **不扩权**：够不着的能力名一律 `None`。
+  ⑥ **执行方式**：`kind` 与 `react_scoped` **同源**（`skill` ⟺ ReAct），注册表外的
+     名字响亮抛、不回落成 `tool`。
 
 **反控写在套件里**：① 的工具面判据同时验"单工具能力**不**含别的工具"（否则一句
 常量 `""` 也能过）；⑤ 拿 `read_article`（系统专用，不在任何角色菜单里）当反控。
@@ -22,6 +24,7 @@
 from __future__ import annotations
 
 import sys
+from dataclasses import replace
 from pathlib import Path
 
 from _judge import collector
@@ -148,6 +151,49 @@ def test_no_privilege_growth():
           CI.capability_of("read_article", "admin") is None)
 
 
+# ── ⑥ 执行方式（`kind`）────────────────────────────────────────────────────
+def test_kind_matches_execution_mode():
+    """`kind` 决定"路由到它之后执行层怎么跑它"，所以它必须**与射程判据同源**。
+
+    判据取**派生关系**，不取"今天有几条"：条数是会变的，关系不该变。
+    三条：
+      · `kind == "skill"` ⟺ `react_scoped`（ReAct 那一档）；
+      · `kind == "workflow"` ⟺ **不是** `react_scoped`（确定性快道那一档）；
+      · 注册表里**没有**任何条目落在 `tool`——那不是"没实现"，是事实：70 件工具里
+        没有技能包裹的 21 件全是 `content_query` 那条 `dynamic` 能力的工具面，
+        它们已经有家。反控：拿一个注册表外的名字调 `capability_kind` ⇒ **响亮抛**，
+        不许回落成 `tool`（回落会把"技能名打错一个字"静默变成"这是件裸工具"）。
+    """
+    print("\n⑥ 执行方式 `kind`：与射程判据同源")
+    seen: set[str] = set()
+    for role in ROLES:
+        for cap in CI.capabilities_for(role):
+            seen.add(cap.kind)
+            check(f"`kind` 与 `react_scoped` 一致：{cap.name}（role={role}）",
+                  (cap.kind == "skill") is cap.react, f"{cap.kind} / react={cap.react}")
+    check("三档取值里 `workflow` 与 `skill` 都有实例（否则判的是空气）",
+          {"workflow", "skill"} <= seen, str(sorted(seen)))
+    check("`tool` 今天一条都没有——裸工具已有家（`content_query` 的 dynamic 面）",
+          "tool" not in seen, str(sorted(seen)))
+    for junk in ("", "  ", "no_such_skill", "list_notes"):
+        try:
+            got = CI.capability_kind(junk)
+        except KeyError:
+            got = "<抛>"
+        check(f"反控：注册表外的名字 {junk!r} 响亮抛，不回落成 `tool`",
+              got == "<抛>", str(got))
+
+    # 反控二：把一条技能的 `kind` 手工翻面 ⇒ 上面那条等价式**必须**判红。
+    # （真的把那个表达式再算一遍——不是"看着像能红"。）
+    _nav = CI.capability_of("navigate", "admin")
+    check("反控的前提：navigate 在索引里（否则下面那条判的是空气）", _nav is not None)
+    if _nav is not None:
+        _flip = replace(_nav, kind="workflow")
+        _flipped_ok = bool((_flip.kind == "skill") is _flip.react)
+        check("反控：手工翻面后等价式判红（判据不是恒真）", not _flipped_ok,
+              f"{_flip.kind} / react={_flip.react}")
+
+
 def test_capability_index():
     """收集器入口（`tests/test_tests_dir_shape.py` 要一个顶层 `def test_*`）。"""
     FAILED.clear()
@@ -156,6 +202,7 @@ def test_capability_index():
     test_carrying_fields_present()
     test_scope()
     test_no_privilege_growth()
+    test_kind_matches_execution_mode()
     assert not FAILED, f"{len(FAILED)} 条未过：" + "；".join(FAILED)
 
 
