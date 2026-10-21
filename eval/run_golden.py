@@ -495,16 +495,14 @@ def run_one(req: ChatRequest, principal: "Principal | None" = None,
         ).result()
     t.join()
     loop.close()
-    # 台账帧的**帧事实**（20260930）：`planner.ledger_frame` 事件是"这一轮系统到底把
-    # 待审队列摆上桌没有、摆的是哪几条"的唯一权威记录——planner 的输入消息**不进
-    # trace**（只记首轮 context 且各字段截断），所以离开这个事件，"台账真的进了帧"
-    # 在评测与生产上都无法复核。必须在 `finish_case` **之前**取：那一步会
-    # `_ACTIVE.pop`（`utils.trace.events_of` 读的就是那个注册表）。
+    # 台账与 hybrid 工具事实只能在 finish_case 移除 recorder 前读取。
+    # planner 输入不落 trace，ledger_frame 是待审队列是否入帧的唯一证据。
     ledger_frames: list[dict] = []
     if trace_id:
         from utils import trace as _trace
         ledger_frames = [dict(e) for e in _trace.events_of(trace_id)
                          if e.get("node") == "planner" and e.get("event") == "ledger_frame"]
+    hybrid_names, hybrid_rounds = golden_trace.hybrid_read_stats(trace_id)
     # trace 收尾（生产侧这一步在 event_stream 的 finally 里；golden 没有那层壳）
     trace_path = golden_trace.finish_case(trace_id, time.monotonic() - t_trace0,
                                           len(frames))
@@ -618,6 +616,8 @@ def run_one(req: ChatRequest, principal: "Principal | None" = None,
             # 其余控制帧（今天只有 __CONFIRM__:）——没有专门分支的走这里收原文，
             # 否则新帧类型在 golden 里静默不可见（"断言写不出来"= 回归测不到）。
             control_frames.append(item)
+    tool_calls.extend(hybrid_names)
+    tool_rounds += hybrid_rounds
     # 确认令牌（20260925 双轮）：从 `__CONFIRM__` 控制帧里取**原文**——帧体是
     # server 发出来的权威形态（`token` 字段，见 server.py 的 `__CONFIRM__` 帧体），
     # 评测侧**不自己拼 base64、也不自己造令牌**：造得出来就说明它在被测链路之外，
@@ -2755,7 +2755,7 @@ def by_tag_stats(results: list, tags_map: dict) -> dict:
 
 
 def is_full_run(*, only: str, limit: int, skip_ids_arg: str, skipped_ids: list,
-                design_skipped_ids: list) -> bool:
+                design_skipped_ids: list, golden_file: str | None = None) -> bool:
     """这一轮是不是**全量**（= `last_run.json` 该不该被它覆盖）。
 
     **为什么把它从 `main()` 里那一行布尔式提出来**：20260924 写下这条判据时是内联的
@@ -2778,6 +2778,8 @@ def is_full_run(*, only: str, limit: int, skip_ids_arg: str, skipped_ids: list,
     `total` 与 `skipped_real_write_ids` 两栏足以让读的人看出来；而那种跑法按文档只配
     `--only <真写那条>`（`--only` 一在场就不是全量）。
     """
+    if golden_file is not None and os.path.realpath(golden_file) != os.path.realpath(GOLDEN_FILE):
+        return False
     if only or limit or skip_ids_arg:
         return False
     return not [s for s in skipped_ids if s not in design_skipped_ids]
@@ -3264,9 +3266,9 @@ def main():
     _is_full_run = is_full_run(only=args.only, limit=args.limit,
                                skip_ids_arg=args.skip_ids,
                                skipped_ids=skip_ids,
-                               design_skipped_ids=_write_skipped)
+                               design_skipped_ids=_write_skipped, golden_file=args.golden)
     report = {
-        "ts": time.strftime("%Y-%m-%d %H:%M:%S"),
+        "ts": time.strftime("%Y-%m-%d %H:%M:%S"), "golden_file": args.golden,
         # 语料快照（变更点基线）：语料/期望集变化 → expected_hash 变化，数字与
         # 旧基线不可比是预期（变更即新基线），快照字段用于对账变更内容
         "corpus": corpus,

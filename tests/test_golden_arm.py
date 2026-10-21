@@ -91,6 +91,8 @@ def test_golden_arm():
         check("取值照读", ga.arm_name() == ga.ARM_REACT)
         os.environ[ga.ENV_ARM] = "  REACT  "
         check("大小写/空白归一（日志里粘过来的值也能用）", ga.arm_name() == ga.ARM_REACT)
+        os.environ[ga.ENV_ARM] = "hybrid"
+        check("迁移臂可选", ga.arm_name() == ga.ARM_HYBRID)
         os.environ[ga.ENV_ARM] = "reakt"          # 拼错一个字母
         try:
             ga.arm_name()
@@ -112,6 +114,9 @@ def test_golden_arm():
     check("graph 臂的留档目录 = 历史那个（一个旧档都不挪）",
           ga.reports_dir(ga.ARM_GRAPH) == "eval/report/runs")
     check("试验臂另开目录", ga.reports_dir(ga.ARM_REACT) == "eval/report/runs_react")
+    check("hybrid 单独留档且不能覆盖 graph 基线",
+          ga.reports_dir(ga.ARM_HYBRID) == "eval/report/runs_hybrid"
+          and not ga.is_baseline_arm(ga.ARM_HYBRID))
     check("**臂名只进目录、不进文件名**（文件名序 = 时间序是全仓不变量，见 report_archive）",
           ga.ARM_REACT not in os.path.basename(ga.reports_dir(ga.ARM_REACT))
           or ga.reports_dir(ga.ARM_REACT) != ga.reports_dir(ga.ARM_GRAPH))

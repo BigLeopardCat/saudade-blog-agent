@@ -1,42 +1,11 @@
 # -*- coding: utf-8 -*-
-"""产物保留登记表：**落到盘上的每一类产物，必须在这里登记**。
+"""Artifact ownership and retention policies for files and PostgreSQL stores.
 
-## 为什么要有这张表（20260925 盘点的结论）
-
-同一族坑这个仓踩了四次，每次症状都一样——**保留/清理策略「写了」，但没有任何东西在执行它**：
-
-  1. R2 的保留数（`prune_r2.py` 之前只有注释里写着「只留最近 3 个」）；
-  2. logrotate 的 traces 块（`rotate 14` 对「文件名唯一」的一次性产物结构上无效，
-     实测最老文件 26 天、`.2.gz`/`.3.gz` 各 0 个）；
-  3. `logs/archive/`（手工归档后 12M 里最老的到 2026-06-10，全仓零引用、没有任何机制认领）；
-  4. `eval/report/runs/`（576 份 / 9.8M，零策略；而且它是 golden_traces 删除判据的证据源）。
-
-前两次是「配置是装饰性的」，后两次是**连装饰都没有**——目录就那么长着，没人知道归谁。
-所以这里换一个判据：**不问「有没有写保留策略」，问「这一类产物有没有登记」**。
-登记只要求两件事：说清楚谁负责、以及为什么是这个处置；`managed` 必须有执行者，
-`frozen`/`open` 必须写明为什么不动它。**没登记的产物 = 缺口**，由 `audit()` 报出来。
-
-## 这张表管什么、不管什么
-
-- 管：**盘的形状**——哪些类产物该存在、由谁清、留多久、谁碰不得。
-- 不管：**内容是否正确**（那是测试的事）。审计器只回答「这个路径登记过吗」。
-- 判据是**路径**，不是文件内容，也不看大小 ⇒ 对空目录同样有效
-  （空 ≠ 不存在，空目录也得有主人；这条判据当初就是被一个 0 文件的空目录逼出来的）。
-- 匹配**按 CLASSES 顺序取第一个命中**（`owner_of`）⇒ 更具体的类必须排在更宽的前面
-  （`archive-sql-backup` 是 `archive/**` 的子集，所以必须排在 `archive` 之上）。
-  排在前面的那个是**归属的答案**——`archive/` 下的
-  `*.sql` 被判给 `archive-sql-backup`（永久保留），而不是判给 `archive`（90 天）——
-  后者会让人读成「这个文件会被 retain 掉」，而事实正好相反。
-
-## 与执行者的关系
-
-`managed` 且带 `rule` 的类由 `eval/artifact_retention.py` 按这份表执行（表是唯一事实源，
-脚本不再自己写一遍路径与天数）。`rule=None` 表示「有执行者，但在别的脚本里」
-（trace 走 `eval/trace_retention.py`、golden trace 走 `eval/golden_trace.py::prune`）。
-**改保留期只改这里的常量**，不去改夜间的命令行。
-
-只 import os/re（与 `utils/trace_files.py` 同一条理由：读取端与离线测试要能引它，
-不能连带拉起 pydantic-settings 与 `.env`）。
+Filesystem ownership uses the first matching class; specific exceptions must
+precede broad patterns. Managed classes require a cleanup implementation.
+Open classes retain evidence until their cleanup and trace references are handled
+together. Frozen classes are intentionally preserved. PostgreSQL stores use
+DSN/table metadata instead of filesystem patterns.
 """
 
 import os
@@ -323,59 +292,23 @@ CLASSES = [
         rule=None,
     ),
     dict(
-        key="golden-run-archive-react",
-        label="第二条臂（`GOLDEN_ARM=react`）每轮 golden 跑的留档",
+        key="golden-experiment-archive",
+        label="非默认 agent 路径的 golden 对照留档",
         root=DEFAULT_REPORT_ROOT,
-        patterns=["runs_react/**"],
-        status="open",
-        owner=None,
-        owner_ref=None,
-        retention="未接管（与 golden-traces 必须一起设计——与 `runs/` 同一条理由）",
-        why="20261004 起第二条臂的留档落在这里（`eval/golden_arm.py::reports_dir`）。"
-            "**为什么不并进 `runs/`**：文件名不许带臂名（那会破坏「文件名顺序 = 时间顺序」"
-            "这条全仓不变量），两臂混在一个目录里就只能靠读 JSON 分辨谁是谁，而"
-            "`golden_trace.prune` 反查「那一晚红没红」时是按目录扫的。"
-            "**为什么与 `runs/` 同处置**：它同样是 `golden_trace.prune` 的判据源"
-            "（每条留档都带 `trace` 路径），单独清同样会让窗口外的 trace 变成「证据不足」"
-            "永久保留。明确登记为未接管，免得盘点时被当成「刚冒出来的空目录」顺手清掉。",
+        patterns=["runs_*/**"],
+        status="open", owner=None, owner_ref=None,
+        retention="与关联 trace 一起处理，暂不自动清理",
+        why="不同路径按目录隔离；报告是 trace 保留判断的证据，不能单独删除。",
         rule=None,
     ),
     dict(
-        key="golden-run-archive-tools",
-        label="工具菜单臂（`GOLDEN_ARM=tools`）每轮 golden 跑的留档",
+        key="manual-eval-evidence",
+        label="手工故障取证与临时冒烟报告",
         root=DEFAULT_REPORT_ROOT,
-        patterns=["runs_tools/**"],
-        status="open",
-        owner=None,
-        owner_ref=None,
-        retention="未接管（与 golden-traces 必须一起设计——与 `runs/` 同一条理由）",
-        why="20261020 起工具级菜单 POC 那条臂的留档落在这里"
-            "（`eval/golden_arm.py::ARM_TOOLS` + `reports_dir`）。"
-            "**为什么与 `runs/` 同处置**：它同样是 `golden_trace.prune` 的判据源"
-            "（每条留档都带 `trace` 路径），单独清同样会让窗口外的 trace 变成"
-            "「证据不足」永久保留。POC 的三臂读数引用见 `docs/tool-menu-poc-20261020.md`。",
-        rule=None,
-    ),
-    dict(
-        key="golden-run-archive-matrix",
-        label="`GOLDEN_ARM=matrix` 臂（`eval/param_matrix.py` 的调参跑）每轮留档",
-        root=DEFAULT_REPORT_ROOT,
-        patterns=["runs_matrix/**"],
-        status="open",
-        owner=None,
-        owner_ref=None,
-        retention="未接管（与 golden-traces 必须一起设计——与 `runs/` 同一条理由）",
-        why="20261006 起调参档的留档落在这里（`eval/golden_arm.py::ARM_MATRIX`）。"
-            "**在此之前它落进 `runs/`**：`param_matrix` 不设 `GOLDEN_ARM` ⇒ 臂名恒 `graph` "
-            "⇒ 目录恒 `runs/`、写 `last_run.json` 的资格也开着（而它的头注写着"
-            "「不写 last_run.json」）。**实测的后果是前半截**：`landing_gate` 的 readiness / "
-            "慢性红榜按目录整扫，把温度臂、deepseek 臂的读数当成生产档的夜间读数混进窗口"
-            "（含两份 `ds-chat`，下界 0.643 / 0.635）。**后半截没发生**：那 9 份留档的 "
-            "`full_run` 全是 `False`（有 env 跳过）⇒ 写基线那道闸虽然开着、一次都没响，"
-            "`last_run.json` 仍是生产档上一次全量跑写的。别把「没响」记成「设计对了」。"
-            "**为什么与 `runs/` 同处置**："
-            "它同样是 `golden_trace.prune` 的判据源（每条留档都带 `trace` 路径），"
-            "单独清同样会让窗口外的 trace 变成「证据不足」永久保留。",
+        patterns=["_outage_*/**", "_smoke_*/**"],
+        status="open", owner=None, owner_ref=None,
+        retention="暂不自动清理，复核后由维护者处理",
+        why="人工保留的诊断证据，不参与默认基线统计。",
         rule=None,
     ),
     dict(

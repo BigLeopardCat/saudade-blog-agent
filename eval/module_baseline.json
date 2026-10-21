@@ -16,8 +16,8 @@
     "top_defs": 31
   },
   "agent/graph.py": {
-    "lines": 9469,
-    "top_defs": 143
+    "lines": 9454,
+    "top_defs": 141
   },
   "agent/prompt_context.py": {
     "lines": 1728,
@@ -52,7 +52,7 @@
     "top_defs": 37
   },
   "eval/run_golden.py": {
-    "lines": 3689,
+    "lines": 3691,
     "top_defs": 51
   },
   "scripts/build_word_graph.py": {
@@ -64,7 +64,7 @@
     "top_defs": 36
   },
   "server.py": {
-    "lines": 2835,
+    "lines": 2823,
     "top_defs": 61
   },
   "tests/test_admin_write.py": {
