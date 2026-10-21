@@ -1,26 +1,7 @@
-"""仓库形态的四条纪律（秒级、零网络、零 LLM、只读）。
+"""Check text formatting, changelog coverage and a single version source.
 
-**为什么值得有这一套**：这四样都属于"不会因为谁做坏事而出错、只会因为没人执行而慢慢烂掉"
-的东西——它们的失效**没有任何东西会报**：
-
-  ① **编码与换行**：本仓正文全是中文。一处 GBK 字节、一处 CRLF，就足以让 diff 显示成整文件
-     重写、让按行处理的脚本读到乱码（`.gz` 语料那一族的教训同型：报表照样出、只是小一号）。
-  ② **`.editorconfig` 是声明不是执行者**：声明与判据分家（文件里写 LF、测试查 CRLF）正是审计
-     里"改一处必须同步另一处"那 94 处的形状 ⇒ 这里把声明**解析出来**与判据常量同源比对。
-  ③ **CHANGELOG 的价值全在"能信"**：日期倒序、每条有正文、最新记录日期不晚于最后一笔提交。
-     最后一条是**强制决定**：那一天"没有值得记的行为变更"也是一个决定，写成一行
-     `- （这天只有文档/排版与测试补件，无行为变更）` 即可——不许默默不写。
-     （**20261019 起 CHANGELOG 由 `changelog.d/` 的碎片汇总而成** ⇒ "记了没有"要看**两处**：
-     CHANGELOG 那一节的最新日期，与 `changelog.d/` 里最新碎片的日期，取较晚的那个。
-     碎片**先落、汇总后跑**是正常状态——汇总由人在合并/发布时跑，不是每笔提交都跑。）
-     "今天"一律取**本仓钟面**（+08:00，见 `_today_cn`）：判据读机器本地钟的后果是
-     本机与 CI 看的不是同一件事（20260929 实测：CI 恒红）。
-  ④ **版本号只有一个来源**（`pyproject.toml`）：另立 `VERSION` 文件或 `__version__` 常量
-     就是第二份名单，迟早对不上（同族教训：`rotate 14` 与实际最老 26 天、R2 的 `--keep 3`
-     写了没人执行）。
-
-用法：.venv/bin/python tests/test_style_hygiene.py
-"""
+Dates use Asia/Shanghai. Pending changelog fragments may be newer than HEAD,
+but cannot be in the future. Generated artifacts are excluded from text checks."""
 
 
 import os
@@ -105,18 +86,20 @@ def _parse_editorconfig(text: str) -> tuple[dict, dict]:
     return top, sections
 
 
+def _record_covers_head(record: str, head: str, today: str) -> bool:
+    return head <= record <= today
+
+
+def test_changelog_allows_pending_current_fragments():
+    assert _record_covers_head("20261022", "20261021", "20261022")
+    assert _record_covers_head("20261021", "20261021", "20261022")
+    assert not _record_covers_head("20261020", "20261021", "20261022")
+    assert not _record_covers_head("20261023", "20261021", "20261022")
+
+
 def _check_changelog() -> None:
-    """③ CHANGELOG：日期倒序、每条有正文、最新记录日期不晚于最后一笔提交。
-
-    **20261019 起要两处合起来看**（`CHANGELOG.md` 那一节 + `changelog.d/` 里的碎片）：
-    碎片是"记了、还没汇总"，只盯着 CHANGELOG.md 会把它判成"忘了记"。读碎片不合法
-    （`FragmentError` 是 `ValueError`）时**不当"没有碎片"**：那是另一条闸的活，这里必须
-    报出来，否则一条写坏的碎片会让本套件静默放行。
-
-    单独一个函数（不是 `main` 里的一段）：这一段自带一个**反面锁**——换时区再跑一遍整个
-    套件。留在 `main` 里会让它一路长大顶破函数级复杂度台账（`tests/test_complexity_budget.py`）。
-    """
-    print("\n③ CHANGELOG：日期倒序、每条有正文、最新日期不晚于最后一笔提交")
+    """Validate dated entries and pending fragments on the repository timezone."""
+    print("\n③ CHANGELOG：日期倒序、每条有正文、记录覆盖 HEAD 且不是未来")
     cl = ROOT / "CHANGELOG.md"
     check("CHANGELOG.md 在位", cl.is_file())
     if not cl.is_file():
@@ -152,7 +135,8 @@ def _check_changelog() -> None:
                           env={**os.environ, "TZ": "Asia/Shanghai"})
     latest = head.stdout.strip().replace("-", "")
     if len(latest) == 8 and latest.isdigit():
-        check(f"最新记录日期 == 最后一笔提交日期（{latest}）", newest_record == latest,
+        check(f"记录覆盖最后一笔提交且不是未来（{latest}）",
+              _record_covers_head(newest_record, latest, _today_cn()),
               f"CHANGELOG={dates[0] if dates else None} 碎片={_frag_dates}")
     else:
         check("取到最后一笔提交的日期（取不到就不算通过）", False, repr(latest))
