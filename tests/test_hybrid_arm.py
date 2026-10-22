@@ -206,13 +206,15 @@ def test_own_domain_requires_verified_identity_and_checks_before_read(monkeypatc
 
 
 def test_unverified_identity_never_sees_own_loader(monkeypatch):
-    model = _Model(AIMessage(content="", tool_calls=[
-        {"name": "load_favorites_info_tools", "args": {}, "id": "own_1"}]))
+    model = _Model([AIMessage(content="", tool_calls=[
+        {"name": "load_favorites_info_tools", "args": {}, "id": "own_1"}]),
+        AIMessage(content="当前无法读取私人数据。")])
     monkeypatch.setattr("agent.runtime.hybrid.get_llm", lambda **_: model)
     legacy = _Legacy()
 
-    assert list(HybridArm(legacy, {}, {}, {}).stream(_state(), _config())) == [
-        ("updates", {"legacy": True})]
+    list(HybridArm(legacy, {}, {}, {}).stream(_state(), _config()))
+    assert not legacy.calls
+    assert model.calls[1][-1].status == "error"
     assert "load_favorites_info_tools" not in {
         tool["function"]["name"] for tool in model.menus[0]
         if isinstance(tool, dict)}
