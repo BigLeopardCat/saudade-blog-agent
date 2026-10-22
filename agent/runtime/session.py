@@ -38,6 +38,8 @@ _DOMAIN_DESCRIPTIONS = {
     "site": "按需加载博客作者信息、社交链接和站点功能结构的公开读取工具。",
     "own": "按需加载当前登录用户自己的收藏、通知和站内信只读工具。",
     "favorites": "用户请求收藏、取消收藏，或修改、放弃待确认收藏时加载工具；不会直接写入收藏。",
+    "notifications": "用户明确要求将本人通知标记已读时加载工具，核对范围并准备确认卡。",
+    "pending": "用户要求放弃当前待确认操作时加载取消工具。修改目标则加载对应领域工具。",
 }
 
 
@@ -51,7 +53,7 @@ def _loader(domain: str) -> dict:
 
 
 class ToolSession:
-    def __init__(self, model, config, tools, domains, own_tool_names):
+    def __init__(self, model, config, tools, domains, own_tool_names, outcome_adapter=None):
         self.model = model
         self.config = config
         self.principal = ((config or {}).get("configurable") or {}).get("principal")
@@ -63,6 +65,7 @@ class ToolSession:
         self.calls_used = 0
         self.result_chars = 0
         self.outcome: TurnResult | None = None
+        self.outcome_adapter = outcome_adapter
         self.llm = self._bind_menu()
 
     def _bind_menu(self):
@@ -117,7 +120,7 @@ class ToolSession:
         body = self._read(name, args)
         if isinstance(body, TurnResult):
             # Confirmation tokens stay in the terminal outcome, never in the model prompt or trace.
-            self.outcome = body
+            self.outcome = self.outcome_adapter(body) if self.outcome_adapter else body
             return True
         if body is None:
             prompt.append(ToolMessage(content="无权读取此数据。", tool_call_id=call["id"]))

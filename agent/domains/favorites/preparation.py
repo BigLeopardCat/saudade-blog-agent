@@ -6,13 +6,13 @@ from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import tool
 from pydantic import Field, StrictInt
 
-from agent import adminops_confirm, authz, confirm
+from agent import adminops_confirm, authz
 from agent.adminops_target import normalize_target_id
-from agent.domains.favorites.transactions import bound_context
+from agent.runtime.confirmation import proposal
 from agent.runtime.results import TurnResult
 from agent.runtime.turns import check_cancelled
+from agent.runtime.writes import bound_context
 from tools import base
-from utils.trace import record
 
 
 def available(config) -> bool:
@@ -40,27 +40,11 @@ def _target(article_id, favorite):
 
 def _confirmation(principal, cid, workflow, spec, target):
     specs, notes = [spec], {spec["args"]["article_id"]: target}
-    token = confirm.sign(principal.uid, cid, workflow, specs, executor="favorites")
-    if not token:
-        record("hybrid", "confirmation_unavailable", workflow=workflow)
-        return base.unavailable("确认服务暂不可用，本次未生成确认卡，也未执行改动。")
     question = adminops_confirm.render_confirm_question(specs, notes=notes)
     reply = adminops_confirm.render_confirm_text(specs, notes=notes)
-    options = adminops_confirm.confirm_opts(1)
-    expiry, jti = confirm.token_expiry(token), confirm.token_jti(token)
-    execution = {
-        "pending_confirm": {"q": question, "opts": options, "token": token,
-                            "specs": specs, "workflow": workflow, "exp": expiry},
-        "pending_action": {"task_id": f"pa_{jti}", "skill": workflow, "specs": specs,
-                           "target": adminops_confirm.render_action_lines(specs, notes=notes),
-                           "requested_by": "user", "source_event": "confirm_popup",
-                           "question": question, "options": options, "token": token,
-                           "jti": jti, "expires_at": expiry},
-        "confirm_text": reply, "receipts": [],
-    }
-    record("hybrid", "confirmation_prepared", workflow=workflow,
-           article_id=spec["args"]["article_id"])
-    return TurnResult(reply, execution)
+    return proposal(principal, cid, workflow, spec, executor="favorites",
+                    question=question, reply=reply,
+                    target=adminops_confirm.render_action_lines(specs, notes=notes))
 
 
 @tool(return_direct=True)

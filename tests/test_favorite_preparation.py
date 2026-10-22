@@ -4,16 +4,17 @@ import asyncio
 import json
 
 import pytest
-from _favorite_support import config
+from _own_support import config
 from langchain_core.messages import AIMessage, AIMessageChunk, HumanMessage
 from langgraph.checkpoint.memory import InMemorySaver
 from pydantic import ValidationError
 
 from agent import confirm, idem
 from agent.agent import create_agent
-from agent.domains.favorites import preparation, transactions
+from agent.domains.favorites import preparation
 from agent.graph import graph_input
 from agent.principal import Principal
+from agent.runtime import writes
 from agent.runtime.hybrid import HybridArm
 from agent.runtime.results import TurnResult
 
@@ -76,7 +77,7 @@ def test_preparation_checkpoints_then_executes_once(site, monkeypatch, tmp_path,
     assert site["favorites"] == initial
 
     ledger = idem.Ledger(str(tmp_path / "writes.sqlite3"))
-    monkeypatch.setattr(transactions, "_ledger", lambda saver: ledger)
+    monkeypatch.setattr(writes, "ledger_for", lambda saver: ledger)
     grant = confirm.verify(popup["token"], 7, 42)
     for _ in range(2):
         done = list(arm.stream(graph_input([HumanMessage(content="确认")], confirm_grant=grant),

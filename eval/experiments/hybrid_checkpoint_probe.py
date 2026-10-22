@@ -25,10 +25,9 @@ from psycopg import sql
 
 from agent import checkpoint, confirm, idem_pg
 from agent.agent import create_agent
-from agent.domains.favorites import transactions as favorite_transactions
 from agent.graph import AgentState, graph_input
 from agent.principal import SOURCE_ASSERTION, Principal
-from agent.runtime import turns
+from agent.runtime import turns, writes
 from agent.runtime.hybrid import HybridArm
 from tools.result import fact, ok, tgt
 
@@ -178,7 +177,7 @@ def _confirmed_favorite(saver):
     token = confirm.sign(7, cid, "favorite_add", specs)
     grant = confirm.verify(token, 7, cid)
     assert grant is not None, "configured confirmation signing is unavailable"
-    key = favorite_transactions.operation_key(grant, "add_favorite", {"article_id": 19})
+    key = writes.operation_key(grant, "add_favorite", {"article_id": 19})
 
     class Favorite:
         name = "add_favorite"

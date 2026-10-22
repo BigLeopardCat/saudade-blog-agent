@@ -4,14 +4,15 @@ import asyncio
 import json
 
 import pytest
-from _favorite_support import config
+from _own_support import config
 from langchain_core.messages import AIMessage, AIMessageChunk, HumanMessage
 from langgraph.checkpoint.memory import InMemorySaver
 
 from agent import confirm, idem
 from agent.agent import create_agent
-from agent.domains.favorites import pending, preparation, transactions
+from agent.domains.favorites import preparation, transactions
 from agent.graph import graph_input
+from agent.runtime import pending, writes
 from agent.runtime.confirmation import confirmed_runtime
 from agent.runtime.hybrid import HybridArm
 from agent.runtime.results import TurnResult
@@ -27,7 +28,8 @@ class Model:
     def __init__(self, name=None, args=None):
         self.prompts = []
         self.responses = ([AIMessage(content="", tool_calls=[{
-            "name": "load_favorites_info_tools", "args": {}, "id": "load"}]),
+            "name": ("load_pending_info_tools" if name == "cancel_pending_operation"
+                     else "load_favorites_info_tools"), "args": {}, "id": "load"}]),
             AIMessage(content="", tool_calls=[{
                 "name": name, "args": args or {}, "id": "pending"}])]
             if name else [AIMessage(content="你好，有什么想聊的？")])
@@ -43,7 +45,7 @@ class Model:
 @pytest.fixture
 def waiting(site, monkeypatch, tmp_path):
     ledger = idem.Ledger(str(tmp_path / "pending.sqlite3"))
-    monkeypatch.setattr(transactions, "_ledger", lambda saver: ledger)
+    monkeypatch.setattr(writes, "ledger_for", lambda saver: ledger)
     graph = create_agent(checkpointer=InMemorySaver())
     proposal = preparation.prepare_favorite_change.invoke(
         {"action": "add", "article_id": 19}, config=config())
@@ -63,7 +65,7 @@ def run(graph, model, monkeypatch, text="取消刚才的操作"):
 def test_cancellation_is_durable_before_reply_and_old_grant_cannot_write(
         waiting, site, monkeypatch):
     graph, proposal, _ = waiting
-    model = Model("cancel_pending_favorite")
+    model = Model("cancel_pending_operation")
     monkeypatch.setattr("agent.runtime.hybrid.get_llm", lambda **_: model)
     events = HybridArm(graph).stream(graph_input([HumanMessage(content="先别收藏了")]), config())
     first = next(events)
@@ -122,12 +124,12 @@ def test_replacement_to_satisfied_state_clears_old_proposal(waiting, monkeypatch
 def test_failed_target_read_does_not_revoke_old_proposal(waiting):
     graph, proposal, ledger = waiting
     active = pending.restore(graph.get_state(config()).values, config())
-    result = active.tools(HybridArm(graph).own_read_tools, graph.checkpointer)[
-        "prepare_favorite_change"].invoke({"action": "add", "article_id": 999}, config=config())
+    result = preparation.prepare_favorite_change.invoke(
+        {"action": "add", "article_id": 999}, config=config())
     assert not isinstance(result, TurnResult)
     grant = active.grant
-    name, args = transactions._bound_spec(grant, config())
-    state, _ = ledger.claim(transactions.operation_key(grant, name, args), name, grant["jti"])
+    name, args = transactions.validate(grant, config())
+    state, _ = ledger.claim(writes.operation_key(grant, name, args), name, grant["jti"])
     assert state == "new"
     expected = proposal.execution["pending_confirm"]
     assert graph.get_state(config()).values["pending_confirm"] == expected
@@ -137,13 +139,12 @@ def test_failed_target_read_does_not_revoke_old_proposal(waiting):
 def test_cannot_cancel_a_started_or_completed_write(waiting, status):
     graph, _, ledger = waiting
     active = pending.restore(graph.get_state(config()).values, config())
-    name, args = transactions._bound_spec(active.grant, config())
-    key = transactions.operation_key(active.grant, name, args)
+    name, args = transactions.validate(active.grant, config())
+    key = writes.operation_key(active.grant, name, args)
     ledger.claim(key, name, active.grant["jti"])
     if status == "done":
         ledger.finish(key, base.ToolResult("已收藏", "ok", {}))
-    result = active.tools(HybridArm(graph).own_read_tools, graph.checkpointer)[
-        "cancel_pending_favorite"].invoke({}, config=config())
+    result = active.cancel_tool(graph.checkpointer).invoke({}, config=config())
     assert result.execution is None and "不能" in result.reply
 
 
@@ -168,7 +169,7 @@ def test_storage_failure_emits_no_cancellation_and_old_card_still_cannot_write(
     else:
         monkeypatch.setattr(graph, "update_state", failed)
     monkeypatch.setattr("agent.runtime.hybrid.get_llm",
-                        lambda **_: Model("cancel_pending_favorite"))
+                        lambda **_: Model("cancel_pending_operation"))
     stream = HybridArm(graph).stream(graph_input([HumanMessage(content="取消待办")]), config())
     with pytest.raises(RuntimeError, match="storage unavailable"):
         next(stream)
@@ -186,7 +187,7 @@ def test_stream_cancels_host_pending_and_routes_revoked_card_after_runtime_switc
 
     graph, proposal, ledger = waiting
     monkeypatch.setattr("agent.runtime.hybrid.get_llm",
-                        lambda **_: Model("cancel_pending_favorite"))
+                        lambda **_: Model("cancel_pending_operation"))
 
     async def collect(runtime, grant=None):
         monkeypatch.setattr(server, "_agent", runtime)
@@ -213,7 +214,7 @@ def test_stream_cancels_host_pending_and_routes_revoked_card_after_runtime_switc
             with closing(idem.Ledger(ledger.path)) as connection:
                 return connection.finish(*args)
 
-    monkeypatch.setattr(transactions, "_ledger", lambda saver: Store())
+    monkeypatch.setattr(writes, "ledger_for", lambda saver: Store())
     frames = asyncio.run(collect(HybridArm(graph)))
     controls = [json.loads(frame.removeprefix("__PENDING__:")) for frame in frames
                 if isinstance(frame, str) and frame.startswith("__PENDING__:")]

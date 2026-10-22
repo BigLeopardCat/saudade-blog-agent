@@ -11,7 +11,7 @@ import os
 import pathlib
 import sys
 
-pytest_plugins = ["_favorite_support"]
+pytest_plugins = ["_own_support"]
 
 # ① 出厂档钉子（**唯一事实源**；`tests/test_ci_suite_list.py` ④b 判「钉了真的生效」）
 _PINNED = {"AGENT_EVIDENCE": "0",

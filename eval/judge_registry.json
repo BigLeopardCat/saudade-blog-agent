@@ -103,6 +103,22 @@
         0,
         0
       ],
+      "agent/domains/notifications/__init__.py": [
+        0,
+        0
+      ],
+      "agent/domains/notifications/preparation.py": [
+        0,
+        0
+      ],
+      "agent/domains/notifications/transactions.py": [
+        0,
+        0
+      ],
+      "agent/domains/registry.py": [
+        0,
+        0
+      ],
       "agent/entity_digest.py": [
         9,
         17
@@ -183,7 +199,15 @@
         0,
         0
       ],
+      "agent/runtime/confirmation.py": [
+        0,
+        0
+      ],
       "agent/runtime/hybrid.py": [
+        0,
+        0
+      ],
+      "agent/runtime/pending.py": [
         0,
         0
       ],
@@ -196,10 +220,14 @@
         0
       ],
       "agent/runtime/session.py": [
-        4,
+        6,
         0
       ],
       "agent/runtime/turns.py": [
+        0,
+        0
+      ],
+      "agent/runtime/writes.py": [
         0,
         0
       ],
@@ -369,7 +397,7 @@
       ]
     },
     "total": [
-      1152,
+      1154,
       4848
     ]
   },
