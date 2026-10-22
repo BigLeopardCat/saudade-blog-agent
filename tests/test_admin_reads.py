@@ -59,6 +59,7 @@ def test_admin_menu_visibility_follows_verified_authority(role, source, uid, vis
     domains = HybridArm(Legacy())._domains(config(role, source, uid), False, None)
     assert ("admin_reports" in domains) is visible
     assert ("admin_moderation" in domains) is visible
+    assert ("admin_work_queue" in domains) is visible
     if visible:
         assert set(domains["admin_moderation"]) == MODERATION_READ_TOOLS
         assert set(domains["admin_reports"]) == ADMIN_READ_TOOLS

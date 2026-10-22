@@ -38,6 +38,8 @@ _DELEGATE = {
     },
 }
 _DOMAIN_DESCRIPTIONS = {
+    "admin_work_queue": "分页读取额度重置申请、当前管理员在后台首页记录的个人待办和日程。"
+                        "仅管理员可用，只读。",
     "admin_moderation": "读取河灯集（河灯留言）与文章评论的审核计数、分页记录和指定编号内容。"
                         "仅管理员可用，所有工具均为只读。",
     "admin_reports": "Load administrator-only server health, user statistics and article traffic "

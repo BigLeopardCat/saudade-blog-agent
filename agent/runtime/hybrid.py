@@ -32,6 +32,7 @@ from agent.runtime.read_tools import (
     own_domains,
     own_reads_enabled,
     own_tools,
+    queue_tools,
     scoped_reads_enabled,
     site_tools,
 )
@@ -105,7 +106,8 @@ class HybridArm:
                  site_read_tools: dict | None = None,
                  own_read_tools: dict | None = None,
                  admin_read_tools: dict | None = None,
-                 moderation_read_tools: dict | None = None) -> None:
+                 moderation_read_tools: dict | None = None,
+                 queue_read_tools: dict | None = None) -> None:
         self.legacy = legacy
         self.read_tools = article_tools() if read_tools is None else read_tools
         self.site_read_tools = site_tools() if site_read_tools is None else site_read_tools
@@ -113,6 +115,7 @@ class HybridArm:
         self.admin_read_tools = admin_tools() if admin_read_tools is None else admin_read_tools
         self.moderation_read_tools = (moderation_tools() if moderation_read_tools is None
                                       else moderation_read_tools)
+        self.queue_read_tools = queue_tools() if queue_read_tools is None else queue_read_tools
         # Runtime probes inspect .graph for the existing checkpointer.
         self.graph = legacy
 
@@ -220,6 +223,7 @@ class HybridArm:
         if scoped_reads_enabled(cfg.get("principal"), SCOPE_ADMIN_CONSOLE, cfg.get("user_id")):
             domains["admin_reports"] = self.admin_read_tools
             domains["admin_moderation"] = self.moderation_read_tools
+            domains["admin_work_queue"] = self.queue_read_tools
         if own_reads_enabled(cfg.get("principal")):
             domains.update(own_domains(self.own_read_tools))
         if can_bridge and favorite_preparation.available(config):
