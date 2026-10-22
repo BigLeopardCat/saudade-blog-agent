@@ -84,7 +84,15 @@ class ToolSession:
         record("hybrid", "legacy_handoff", reason=reason, **data)
         return None
 
+    def _budget_stop(self, reason, **data):
+        record("hybrid", "budget_stop", reason=reason, **data)
+        self.outcome = TurnResult("本轮查询已达到读取或上下文上限，已停止继续查询。"
+                                  "请缩小查询范围后再试。")
+        return self.outcome
+
     def _accept_calls(self, calls, round_index):
+        if round_index >= _MAX_READ_ROUNDS:
+            return "call_budget"
         for call in calls:
             if (not isinstance(call, dict) or not isinstance(call.get("name"), str)
                     or not call.get("name") or not isinstance(call.get("id"), str)
@@ -96,7 +104,7 @@ class ToolSession:
                                   for call in calls):
             return "parallel_terminal_calls"
         reads = sum(call.get("name") in self.tools for call in calls)
-        if round_index >= _MAX_READ_ROUNDS or self.calls_used + reads > _MAX_READ_CALLS:
+        if self.calls_used + reads > _MAX_READ_CALLS:
             return "call_budget"
         return None
 
@@ -142,6 +150,12 @@ class ToolSession:
             return True
         if name not in self.tools:
             return self._tool_error(call, prompt, "unknown_tool")
+        if self.calls_used >= _MAX_READ_CALLS:
+            self._budget_stop("call_budget", read_calls=self.calls_used)
+            return False
+        if self.result_chars >= _MAX_TOTAL_RESULT_CHARS:
+            self._budget_stop("result_budget")
+            return False
         args = call["args"]
         body = self._read(name, args)
         if isinstance(body, TurnResult):
@@ -159,9 +173,6 @@ class ToolSession:
         kind = getattr(body, "kind", "unknown")
         body = str(body)
         remaining = _MAX_TOTAL_RESULT_CHARS - self.result_chars
-        if remaining <= 0:
-            self._handoff("result_budget")
-            return False
         limit = min(_MAX_RESULT_CHARS, remaining)
         if len(body) > limit:
             marker = "\n[结果截断，请缩小检索范围]"
@@ -179,7 +190,7 @@ class ToolSession:
             check_cancelled(self.config)
             prompt_chars = sum(len(str(message.content)) for message in prompt)
             if prompt_chars > MAX_PROMPT_CHARS:
-                return self._handoff("prompt_budget", prompt_chars=prompt_chars)
+                return self._budget_stop("prompt_budget", prompt_chars=prompt_chars)
             started = time.monotonic()
             record("hybrid", "llm_start", round=round_index, engine="native",
                    prompt_chars=prompt_chars)
@@ -195,12 +206,14 @@ class ToolSession:
                     "empty", read_calls=self.calls_used)
             reason = self._accept_calls(calls, round_index)
             if reason:
+                if reason == "call_budget":
+                    return self._budget_stop(reason, read_calls=self.calls_used)
                 return self._handoff(reason, read_calls=self.calls_used)
             prompt.append(response)
             for call in calls:
                 check_cancelled(self.config)
                 if not self._append_result(call, prompt, round_index):
-                    return None
+                    return self.outcome
                 if self.outcome is not None:
                     return self.outcome
         return self._handoff("empty", read_calls=self.calls_used)

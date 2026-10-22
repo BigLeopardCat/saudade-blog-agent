@@ -50,6 +50,8 @@ def summary(doc):
             "started_calls": sum(e.get("event") == "llm_start" for e in events),
             "handoff_reasons": [_label(e.get("reason")) for e in events
                                 if e.get("event") == "legacy_handoff"],
+            "budget_stop_reasons": [_label(e.get("reason")) for e in events
+                                    if e.get("event") == "budget_stop"],
             **usage.totals(events)}
 
 
@@ -76,6 +78,9 @@ def collect(paths):
                        "started_calls": sum(r["started_calls"] for r in rows),
                        "handoff_reasons": dict(Counter(reason for r in rows
                                                         for reason in r["handoff_reasons"])),
+                       "budget_stops": sum(bool(r["budget_stop_reasons"]) for r in rows),
+                       "budget_stop_reasons": dict(Counter(
+                           reason for r in rows for reason in r["budget_stop_reasons"])),
                        "duration_samples": len(times), "p50_s": median(times) if times else None,
                        "p95_s": quantiles(times, n=100, method="inclusive")[94]
                        if len(times) >= 20 else None,

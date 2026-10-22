@@ -76,6 +76,18 @@ def test_handoff_and_bad_trace_fields(tmp_path):
     assert request_metrics.collect([bad])["unreadable"] == 1
 
 
+def test_budget_stops_remain_visible_even_when_the_request_has_a_reply(tmp_path):
+    meta = {"source": "production", "runtime": {"arm": "hybrid"}}
+    paths = [_trace(tmp_path, "stopped", input=meta, reply="已停止",
+                    events=[{"node": "hybrid", "event": "budget_stop", "reason": "result_budget"}]),
+             _trace(tmp_path, "normal", input=meta, reply="结果", events=[])]
+    group = request_metrics.collect(paths)["groups"][0]
+    assert group["requests"] == group["with_reply"] == 2
+    assert group["budget_stops"] == 1
+    assert group["budget_stop_reasons"] == {"result_budget": 1}
+    assert group["handoff_reasons"] == {}
+
+
 def test_small_sample_percentiles_are_not_reported_as_p95(tmp_path):
     paths = [_trace(tmp_path, str(i), duration_s=i, events=[]) for i in range(20)]
     row = request_metrics.collect(paths)["groups"][0]
