@@ -3,7 +3,7 @@
 
 > **状态（20261012 复核）**：不再是"分支 `exp/react-native-line`"那种形态——那条分支是
 > `main` 的**祖先**（落后 196 个提交、无一条独有提交，是**陈旧的指针**），早已作废；
-> 两条实现（`agent/react_line.py` 的循环与 `agent/react_arm.py` 的生产帧契约适配器）
+> 两条实现（[agent/react_line.py](https://github.com/BigLeopardCat/saudade-blog-agent/blob/563c8a5/agent/react_line.py) 的循环与 [agent/react_arm.py](https://github.com/BigLeopardCat/saudade-blog-agent/blob/563c8a5/agent/react_arm.py) 的生产帧契约适配器）
 > 都**在 `main` 上**，本轮的适配在 `feat/react-arm-adapt`。
 > **出厂仍不在生产路径上**：`AGENT_ARM` 的真值源是 `.env`、默认 `graph` ⇒ 线上跑的还是
 > 原来那条手写图、**逐字节不变**；`react` 那一档 20261012 才接进 `server.py`（拨它要重启
@@ -19,12 +19,12 @@
 > 的祖先**（落后 262/249/56，零独有提交），`main` 上那份最新。裁决两件：**臂留在主线当
 > 开关**（不拆仓），以及**帧契约收成 `agent/frames.py` + 机械锁
 > `tests/test_frame_contract.py`**。同时修掉一条真分歧：`react_line._consent_missing` 停在
-> 生产 20261012 **收窄之前**的 `not self.grant`，而 `tests/test_react_arm.py` ⑥d 把那行
+> 生产 20261012 **收窄之前**的 `not self.grant`，而 [tests/test_react_arm.py](https://github.com/BigLeopardCat/saudade-blog-agent/blob/563c8a5/tests/test_react_arm.py) ⑥d 把那行
 > 字符串钉住了 ⇒ 漂移被永久化；现在直调生产的 `_grant_covers`，并把 `executed` 那一格
 > 补上（此前**根本没喂**，那条判据在臂上是恒不生效的）。详见 ADR-0008 与下表末行。
 >
 > **20261016 追加（适配器消失，`docs/adr/adr-0009-*.md`）**：批 1 之后紧接着的第二刀——
-> `agent/react_arm.py` 那 900 行的外层适配器**整体退场**，臂改成一棵**真的 `StateGraph`**
+> [agent/react_arm.py](https://github.com/BigLeopardCat/saudade-blog-agent/blob/563c8a5/agent/react_arm.py) 那 900 行的外层适配器**整体退场**，臂改成一棵**真的 `StateGraph`**
 > （`planner` / `execute` / `model` / `gate` 四个**真节点** + 四条条件边），
 > `create_agent` / `ConvergenceMiddleware` / `wrap_tools_with_receipts` / 三份塑形器 /
 > 五个帧构造器一起删掉。**三样东西从此在结构上不可能存在**：手搓的 `("updates", …)`
@@ -136,7 +136,7 @@
    A/B 的结论一致：命中率由**资产**决定，不由循环形状决定。
 3. **代价仍在**：D 的模型轮数是现网的 ~2.8×、耗时 ~2×。它换来的只有"零异常收尾"
    与一份 74 条的工具台账（48 次里 0 条 BLOCK——桩工具几乎全 PASS，所以这次跑**没有
-   真正考验**回执的 BLOCK 分支；那条路只有 `tests/test_react_line.py` 的 ⑩b/⑩d 覆盖）。
+   真正考验**回执的 BLOCK 分支；那条路只有 [tests/test_react_line.py](https://github.com/BigLeopardCat/saudade-blog-agent/blob/563c8a5/tests/test_react_line.py) 的 ⑩b/⑩d 覆盖）。
 4. 三句指代不明**仍然 0**（「把它号封吧」「给他驳回请求」三臂全 0；「两个都通过吧」
    C′ 3/3、D 2/3、A 0/3——那句的差别在采样，不在结构）。**指代解析不在这条线的射程内。**
 
@@ -167,18 +167,18 @@
 
 | # | 现状 | 依据 |
 |---|---|---|
-| 1 | **闭合**。台账与内层 agent 都是 `stream()` 的局部量 ⇒ 每请求隔离，同一个臂对象可同时服务两轮 | 适配器提交 `37e05ef`（第二条臂按生产帧契约产帧）；判据 `tests/test_react_arm.py` ⑪ 两项流水交替推进、两本账互不可见。⚠️ 那条"必须换 `run_id` 分桶"的纪律**仍然成立**，但它管的是**将来把 `build_agent` 提成常驻单例**那一版，不是今天这一版（`agent/react_line.py` 的 `RunLedger` 注已改写） |
-| 2 | **闭合**（含 `_HARD_SCOPES` 硬拦，判据字面与 `graph.execute_node` 逐字相同） | `37e05ef`「试验线接权限闸」；判据 `tests/test_react_arm.py` ③ |
+| 1 | **闭合**。台账与内层 agent 都是 `stream()` 的局部量 ⇒ 每请求隔离，同一个臂对象可同时服务两轮 | 适配器提交 `37e05ef`（第二条臂按生产帧契约产帧）；判据 [tests/test_react_arm.py](https://github.com/BigLeopardCat/saudade-blog-agent/blob/563c8a5/tests/test_react_arm.py) ⑪ 两项流水交替推进、两本账互不可见。⚠️ 那条"必须换 `run_id` 分桶"的纪律**仍然成立**，但它管的是**将来把 `build_agent` 提成常驻单例**那一版，不是今天这一版（[agent/react_line.py](https://github.com/BigLeopardCat/saudade-blog-agent/blob/563c8a5/agent/react_line.py) 的 `RunLedger` 注已改写） |
+| 2 | **闭合**（含 `_HARD_SCOPES` 硬拦，判据字面与 `graph.execute_node` 逐字相同） | `37e05ef`「试验线接权限闸」；判据 [tests/test_react_arm.py](https://github.com/BigLeopardCat/saudade-blog-agent/blob/563c8a5/tests/test_react_arm.py) ③ |
 | 3 | **闭合**（同意闸 + 写确认卡） | `da7af0f`（同意闸与写确认卡） |
 | 4 | **闭合**。20261011 直调 `graph.gate_node`（判据一条都没抄第二份）；20261012 把**判的对象**也对齐了 | `86125dd`（接闸门谓词）、`c5376b0`（P6） |
 | 5 | **大半闭合，`task_frames` 一件仍欠**。跨轮执行记忆与 `open_tasks` 已经读到（`[System: …]` 块 ⇒ `_page_ctx` ⇒ 提示词那一格，与生产 planner/model 同一通道）；narrator 20261012 拆成独立节点；事实块这一格的差**已经不是差**（`agent/factblock.py` 的 `BLOCK_FAMILIES` 是空集 ⇒ 生产两臂都停止代印，两边口径自动一致）；流式帧（`__EXEC__` / `__CMD__` / gate 帧）在 `37e05ef` 的适配器里就位。**只剩 `task_frames`（task_state 族）不发**——能力台账里这一族只有 1 条断言、且它的兄弟判据由生产那半的确定性结算满足 ⇒ 它**没有**变成 `comparable = False` 的来源，故排后 | `c5376b0`（P6 独立 narrator + 逐条核验 P5 两件不是缺口） |
 | 6 | **不变**（仍不在射程内） | — |
 | ＋ | **清单外补的一条**：收尾丢意图纠偏环（零工具收尾但主人那句话里还有一次都没规划过的动作 ⇒ 纠偏重决策一次） | `19b1601`。这是原清单没列、但生产那一侧早就有的判据 |
-| ＋ | **清单外补的第二条**：离线定点探针的三处**测量偏差**（工具名折算扫子串、族级口径把方向相反的工具算成命中、两条 ReAct 臂逐字共用 planner 的提示词） | `d9d45ad`（20261011）。探针不进 CI，所以它那三处偏差由门禁里的 `tests/test_react_arm.py` ⑨ 看着 |
-| ＋ | **清单外补的第三条（20261012 全量双臂实测抓出）**：本线的 **trace 词汇表**与生产不同源——`graph` 那个 run 目录每轮记 `planner.llm_done`/`native_decision`/`decision`/`execute.call`/`execute.check`，本线的 run 目录里**只有 `producer.*` 与 `gate.*`**（平均 7.4 帧/轮 vs 51.4）⇒ L3 跨源对账对本线近乎无料可读。**判据后果只兑现了一处、已修**：`planner.ledger_frame` 缺席让三条 `require_ledger_*` 断言**恒假**（假红 1 条，见 §六）⇒ `_system_prompt` 照生产记同款事件；其余节点事件的补记仍未做（今天不改变任何读数） | `tests/test_react_arm.py` ⑬（含负控） |
+| ＋ | **清单外补的第二条**：离线定点探针的三处**测量偏差**（工具名折算扫子串、族级口径把方向相反的工具算成命中、两条 ReAct 臂逐字共用 planner 的提示词） | `d9d45ad`（20261011）。探针不进 CI，所以它那三处偏差由门禁里的 [tests/test_react_arm.py](https://github.com/BigLeopardCat/saudade-blog-agent/blob/563c8a5/tests/test_react_arm.py) ⑨ 看着 |
+| ＋ | **清单外补的第三条（20261012 全量双臂实测抓出）**：本线的 **trace 词汇表**与生产不同源——`graph` 那个 run 目录每轮记 `planner.llm_done`/`native_decision`/`decision`/`execute.call`/`execute.check`，本线的 run 目录里**只有 `producer.*` 与 `gate.*`**（平均 7.4 帧/轮 vs 51.4）⇒ L3 跨源对账对本线近乎无料可读。**判据后果只兑现了一处、已修**：`planner.ledger_frame` 缺席让三条 `require_ledger_*` 断言**恒假**（假红 1 条，见 §六）⇒ `_system_prompt` 照生产记同款事件；其余节点事件的补记仍未做（今天不改变任何读数） | [tests/test_react_arm.py](https://github.com/BigLeopardCat/saudade-blog-agent/blob/563c8a5/tests/test_react_arm.py) ⑬（含负控） |
 | ＋ | **清单外补的第四条（20261016）**：**帧契约此前只活在约定里**。`gate_node` 读哪些 state 键是 grep 数出来手抄的 ⇒ 实测少一格（`task_frames`，`_ledger_in_scope` 析取里那条腿）；`_popup_state` 那张四格的表少**七格**，其中 `executed` 是 `_grant_covers` "令牌用在那一件上就作废"那一格 ⇒ 臂的弹卡路径上**恒不生效**。`_popup_state` 的 docstring 自称"只读四个键"，实测**十一格**。⇒ 契约收进 `agent/frames.py`，由 `tests/test_frame_contract.py` 从 `graph.py`/`server.py` **现取**双向比对（多一个红、少一个红 + 四条反向对照） | `agent/frames.py`、`tests/test_frame_contract.py`、ADR-0008 |
-| ＋ | **清单外补的第五条（20261016）**：第 3 条那条同意闸**与生产分家了**——`react_line._consent_missing` 停在 `not self.grant`（生产 20261012 收窄之前那版），而 `tests/test_react_arm.py` ⑥d 把那行**字符串**钉住了 ⇒ 锁越绿、臂离生产越远。现改为直调 `graph._grant_covers`，`WorkflowExecutor` 多收一个 `state`（`executed` 现算自 `executor.calls`）；⑥d 的落点改成"用的是生产那一份判据"，行为面由 ⑥b/⑥b′/⑥b″ 与 `test_frame_contract.py` ⑨e–⑨j 锁住。**语料没走到那条路**：20261016 拿 4 条 confirm 用例跑 react 臂（`--only`），逐字与 20261012 那份全量留档比对，**判定与正文全同**（1 红仍是既有那条 `mix2_two_writes_one_breath_card_only`，红的是 `__TASK__` 缺口，理由逐字相同），而**没有一条**走到"`executed` 非空时判弹卡"那一格（唯一贴近的 `board_audit_from_ledger_exec` 因真写默认关而 SKIP）⇒ 那条分歧靠 ⑥b″ 这个**定向用例**守着：摘掉 `popup_state` 的 `executed`，它当场红，其余 100+ 条断言不动 | `agent/react_line.py`、`tests/test_react_arm.py` ⑥b/⑥b′/⑥b″/⑥d |
-| ＋ | **清单外补的第六条（20261016，批 2）**：**适配器本身**。批 1 把契约收成了产物，但"喂合成 state"这件事还在——而**塑形就是手抄键集表的产地**（第 5 条那条漂移的根因）。本批把 `agent/react_arm.py` 改成一棵真的 `StateGraph`：`planner`/`execute`/`model`/`gate` 是编译进图的**真节点**，`gate_node` 与 `_confirm_popup` 拿到**真 `AgentState`**，分片由 LLM 流给（`langgraph_node` 由 langgraph 盖）⇒ 三份塑形器、五个帧构造器、`create_agent` / `ConvergenceMiddleware` / `wrap_tools_with_receipts` 一起退场。收敛判据搬成纯函数 `convergence_verdict`（`planner` 节点调它）。判据换成**结构锁**：图里真有那四个节点名、两张键集表全是 `AgentState` 的声明键、臂源码 AST 里手搓 `("updates", …)` / `langgraph_node` 字面量 / `*_frame` 构造器**一个都不许有**。⚠️ **第一版漏了"内层循环白送的那样东西"**：拆掉 `create_agent` 之后，决策模型看不到自己上一轮那条真 `AIMessage` 的**参数**，于是认不出"这件事我刚做过"、反复重问、把轮次预算烧穿（全量 183 条里 19 条因此变红、rag 族 26/26 → 13/26）。根因、修法与那张前后对照表见**本文件末尾《批 2 的前后对照》**与 `docs/adr/adr-0009-*.md` | `docs/adr/adr-0009-*.md`、`tests/test_frame_contract.py` ③④⑤、`tests/test_react_arm.py` ① |
+| ＋ | **清单外补的第五条（20261016）**：第 3 条那条同意闸**与生产分家了**——`react_line._consent_missing` 停在 `not self.grant`（生产 20261012 收窄之前那版），而 [tests/test_react_arm.py](https://github.com/BigLeopardCat/saudade-blog-agent/blob/563c8a5/tests/test_react_arm.py) ⑥d 把那行**字符串**钉住了 ⇒ 锁越绿、臂离生产越远。现改为直调 `graph._grant_covers`，`WorkflowExecutor` 多收一个 `state`（`executed` 现算自 `executor.calls`）；⑥d 的落点改成"用的是生产那一份判据"，行为面由 ⑥b/⑥b′/⑥b″ 与 `test_frame_contract.py` ⑨e–⑨j 锁住。**语料没走到那条路**：20261016 拿 4 条 confirm 用例跑 react 臂（`--only`），逐字与 20261012 那份全量留档比对，**判定与正文全同**（1 红仍是既有那条 `mix2_two_writes_one_breath_card_only`，红的是 `__TASK__` 缺口，理由逐字相同），而**没有一条**走到"`executed` 非空时判弹卡"那一格（唯一贴近的 `board_audit_from_ledger_exec` 因真写默认关而 SKIP）⇒ 那条分歧靠 ⑥b″ 这个**定向用例**守着：摘掉 `popup_state` 的 `executed`，它当场红，其余 100+ 条断言不动 | [agent/react_line.py](https://github.com/BigLeopardCat/saudade-blog-agent/blob/563c8a5/agent/react_line.py)、[tests/test_react_arm.py](https://github.com/BigLeopardCat/saudade-blog-agent/blob/563c8a5/tests/test_react_arm.py) ⑥b/⑥b′/⑥b″/⑥d |
+| ＋ | **清单外补的第六条（20261016，批 2）**：**适配器本身**。批 1 把契约收成了产物，但"喂合成 state"这件事还在——而**塑形就是手抄键集表的产地**（第 5 条那条漂移的根因）。本批把 [agent/react_arm.py](https://github.com/BigLeopardCat/saudade-blog-agent/blob/563c8a5/agent/react_arm.py) 改成一棵真的 `StateGraph`：`planner`/`execute`/`model`/`gate` 是编译进图的**真节点**，`gate_node` 与 `_confirm_popup` 拿到**真 `AgentState`**，分片由 LLM 流给（`langgraph_node` 由 langgraph 盖）⇒ 三份塑形器、五个帧构造器、`create_agent` / `ConvergenceMiddleware` / `wrap_tools_with_receipts` 一起退场。收敛判据搬成纯函数 `convergence_verdict`（`planner` 节点调它）。判据换成**结构锁**：图里真有那四个节点名、两张键集表全是 `AgentState` 的声明键、臂源码 AST 里手搓 `("updates", …)` / `langgraph_node` 字面量 / `*_frame` 构造器**一个都不许有**。⚠️ **第一版漏了"内层循环白送的那样东西"**：拆掉 `create_agent` 之后，决策模型看不到自己上一轮那条真 `AIMessage` 的**参数**，于是认不出"这件事我刚做过"、反复重问、把轮次预算烧穿（全量 183 条里 19 条因此变红、rag 族 26/26 → 13/26）。根因、修法与那张前后对照表见**本文件末尾《批 2 的前后对照》**与 `docs/adr/adr-0009-*.md` | `docs/adr/adr-0009-*.md`、`tests/test_frame_contract.py` ③④⑤、[tests/test_react_arm.py](https://github.com/BigLeopardCat/saudade-blog-agent/blob/563c8a5/tests/test_react_arm.py) ① |
 
 **这六件之外还有一件事必须单列**：即便清单全绿，这份读数也只在 §六 那道闸（`arm_capability`
 的 `comparable`）为真的时候才配被引用——20261011 之前它一直是 `False`，而那次全量读数
@@ -269,7 +269,7 @@ cd /home/ubuntu/Saudade-Blog/saudade-blog-agent        # 就是仓根，不是�
 planner.ledger_frame 事件 —— 待办台账**没摆上桌**」，而两臂那一轮的行为**逐字相同**
 （回复正文一字不差、确认卡载荷的 `workflow`/`tool`/`args` 三项全同）——红的是证据通道，
 不是行为。**修法是把通道补上**（`_system_prompt` 照 `graph.py` 的 planner 那一处记同款
-事件；判据 `tests/test_react_arm.py` ⑬，含"空帧不记"的负控），**不是**再加一层闸——
+事件；判据 [tests/test_react_arm.py](https://github.com/BigLeopardCat/saudade-blog-agent/blob/563c8a5/tests/test_react_arm.py) ⑬，含"空帧不记"的负控），**不是**再加一层闸——
 闸管的是"读数配不配被读"，而这条的根因是臂没说话，不是语料设了个它够不着的门槛。
 留一条纪律给下一次：**这道闸给出的 `comparable = True` 不等于"语料里的每条断言都判得动"**，
 它只覆盖"纯否定族会不会白送"。

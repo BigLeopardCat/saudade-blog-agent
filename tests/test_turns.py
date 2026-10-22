@@ -9,10 +9,11 @@ import pytest
 from langchain_core.messages import AIMessage, HumanMessage
 from langgraph.checkpoint.memory import InMemorySaver
 
-from agent import checkpoint, turns
+from agent import checkpoint
 from agent.agent import create_agent
 from agent.graph import AgentCancelled, graph_input
-from agent.hybrid_arm import HybridArm
+from agent.runtime import turns
+from agent.runtime.hybrid import HybridArm
 
 
 def _config(thread_id="conv_overlap", stop_event=None):
@@ -39,7 +40,7 @@ def test_turn_serializes_history_and_lifecycle(monkeypatch, operation):
             assert "第一轮回复" in prompts[1]
             return AIMessage(content="第二轮回复")
 
-    monkeypatch.setattr("agent.hybrid_arm.get_llm", lambda **_: Model())
+    monkeypatch.setattr("agent.runtime.hybrid.get_llm", lambda **_: Model())
 
     def turn(text):
         return list(arm.stream(graph_input([HumanMessage(content=text)]), _config()))

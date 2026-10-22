@@ -74,7 +74,6 @@ from langgraph.graph.message import add_messages
 from config import settings
 from models import get_llm
 from tools import get_all_tools
-from agent import _ckpt_probe
 from agent import action_text
 from agent import adminops_confirm as _confirm
 from agent import adminops_noop as _noop
@@ -116,7 +115,7 @@ from agent.entity_digest import receipt_digest
 from agent.factblock import (action_facts, is_action_family, is_block_family,
                              render_fact_block)
 from agent.llm_usage import usage_fields
-from agent.turns import AgentCancelled, stopped as _stopped  # noqa: F401
+from agent.runtime.turns import AgentCancelled, stopped as _stopped  # noqa: F401
 from agent.planner_llm import (bind_planner_tools, finish_reason, invoke_reflector,
                                parse_reflector_output, tool_call_names,
                                tool_calls_to_plan)
@@ -4431,19 +4430,6 @@ def _planner_preflight(state: AgentState, config: RunnableConfig | None = None) 
     has_frames = _has_frames(_turn(state))
     doc_anchors = _doc_anchors(state["messages"],   # 跨轮读取走结构（与本轮注入同源）
                                exec_rows=(state.get("ledger") or {}).get("exec_rows"))
-    # 实验读数（20261015，见 agent/_ckpt_probe.py）：`msgs` 是本轮 planner 看到的
-    # 消息条数（线程复用后会带上历史），`has_frames` 决定首轮五条确定性快道开不开
-    # ——上一轮的 ToolMessage 会让它恒 True。未设 `CHECKPOINT_PROBE_OUT` 时是空操作。
-    _ckpt_probe.dump("planner", msgs=len(state["messages"]), has_frames=has_frames,
-                     rounds=rounds, page_ctx=page_ctx[:160],
-                     # 本轮窗口（20261015 批 1）：`win` 是 `_turn` 收窄之后的条数，
-                     # `ident` 是"窗口**就是**整表那个对象"。臂 A（无 saver）下
-                     # `ident` 必须**恒 True**——这一刀对臂 A 是逐字节零变化，而
-                     # 这条读数把"零变化"从读代码的结论变成真链路上量到的事实。
-                     # `start` 只会是 0（第一轮，表头）或 -1（没记边界）。
-                     turn_start=state.get("turn_start", -1),
-                     turn_msgs=state.get("turn_msgs"), win=len(_turn(state)),
-                     ident=_turn(state) is state["messages"])
     # 快道档（20261015 定价档）**读一次、两处用同一个值**：① 首轮那一段开不开；
     # ② 下面的 `planner.context` 事件里记一笔。记这一笔是必须的——命中会落
     # `fastpath` 事件，但"没有那条事件"本身证明不了任何事（本仓纪要：trace 指纹
@@ -8603,9 +8589,6 @@ def model_node(state: AgentState, config: RunnableConfig | None = None) -> dict:
     # `_narrator_system_pair`。
     _sys_head, _sys_tail = _narrator_system_pair(
         state, config, role, _receipts, _block, _drop, _has_action)
-    # 抽成局部只为实验读数能看见它（同一函数、同一取值，见下方 `_ckpt_probe.dump`）。
-    # 批 3：取值源与 `_narrator_system_pair` 里那两处**同一个**（`_turn`，不是全表）。
-    _probe_page = _page_ctx(_turn(state), role)
     _t0 = time.monotonic()
     logger.info("[model] LLM 调用开始（narrator）")
     record("model", "llm_start")
@@ -8641,14 +8624,6 @@ def model_node(state: AgentState, config: RunnableConfig | None = None) -> dict:
     # 改成对**整个出站序列**求和。口径不变（`_msg_text` 对 SystemMessage 就是取 content），
     # 但**不再假设"系统提示词只有一条"**——那正是这次改掉的东西。
     _prompt_chars = sum(len(_msg_text(m) or "") for m in _msgs)
-    # 实验读数（20261015）：narrator 那一刻的**真实**提示词规模 —— `_prompt_chars`
-    # 就是发出去那一坨的字符数，`frames` 是带进提示词的帧条数（线程复用后包含历史
-    # 轮次的 ToolMessage，见 prompt_context._frame_texts），`msgs` 是 state 里的消息总数。
-    # 这一格是 §4.6"上下文无限膨胀"那半句唯一的直接读数。
-    _ckpt_probe.dump("model", msgs=len(state["messages"]), frames=len(_msgs) - 2,
-                     prompt_chars=_prompt_chars, page_ctx=_probe_page[:160],
-                     # 批 3：窗口**没动手** ⇒ 臂 A 恒 True、臂 B/C 第 2 轮起恒 False
-                     narr_ident=_narr_msgs is state["messages"])
     if _prompt_chars > _PROMPT_OVERSIZE_CHARS:
         logger.warning("[model] 提示词过大：%d 字符（稳定头 %d + 变化段 %d，帧 %d 条）",
                        _prompt_chars, len(_sys_head.content or ""),

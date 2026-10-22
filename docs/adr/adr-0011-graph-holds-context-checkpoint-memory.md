@@ -15,7 +15,7 @@
 - **影响范围**：**本 ADR 写在一支实验分支上**（`exp/native-checkpoint`），
   `agent/context.py`（新增 `narrator_messages` 及其四个内部件；修 `_prev_user_msg`）、
   `agent/graph.py`（新增 `_narrator_msgs`、`model_node` 改调它、探针加一格 `narr_ident`）、
-  `agent/checkpoint_delta_arm.py`（**新增**：臂 C）、`eval/golden_arm.py`、
+  [agent/checkpoint_delta_arm.py](https://github.com/BigLeopardCat/saudade-blog-agent/blob/563c8a5/agent/checkpoint_delta_arm.py)（**新增**：臂 C）、`eval/golden_arm.py`、
   `eval/run_golden.py`（`GOLDEN_PROD_HISTORY`）、`eval/experiments/*`、
   `tests/test_narrator_window.py`（**新增**）、`tests/test_turn_window.py`、
   `tests/test_golden_prod_history.py`（**新增**）；文档面 = 本 ADR、

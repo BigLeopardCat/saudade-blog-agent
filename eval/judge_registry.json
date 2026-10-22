@@ -11,10 +11,6 @@
         0,
         0
       ],
-      "agent/_ckpt_probe.py": [
-        0,
-        0
-      ],
       "agent/absence_claims.py": [
         0,
         429
@@ -79,18 +75,6 @@
         0,
         0
       ],
-      "agent/checkpoint_arm.py": [
-        0,
-        0
-      ],
-      "agent/checkpoint_delta_arm.py": [
-        0,
-        0
-      ],
-      "agent/checkpoint_random_arm.py": [
-        0,
-        0
-      ],
       "agent/claims.py": [
         12,
         2083
@@ -102,6 +86,22 @@
       "agent/deterministic_plan.py": [
         38,
         325
+      ],
+      "agent/domains/__init__.py": [
+        0,
+        0
+      ],
+      "agent/domains/favorites/__init__.py": [
+        0,
+        0
+      ],
+      "agent/domains/favorites/preparation.py": [
+        0,
+        0
+      ],
+      "agent/domains/favorites/transactions.py": [
+        0,
+        0
       ],
       "agent/entity_digest.py": [
         9,
@@ -121,10 +121,6 @@
       ],
       "agent/hostinfo.py": [
         0,
-        0
-      ],
-      "agent/hybrid_session.py": [
-        3,
         0
       ],
       "agent/idem.py": [
@@ -175,20 +171,36 @@
         0,
         0
       ],
-      "agent/react_arm.py": [
-        0,
-        0
-      ],
-      "agent/react_line.py": [
-        0,
-        0
-      ],
       "agent/repeat_guard.py": [
         0,
         45
       ],
       "agent/reports.py": [
         19,
+        0
+      ],
+      "agent/runtime/__init__.py": [
+        0,
+        0
+      ],
+      "agent/runtime/hybrid.py": [
+        0,
+        0
+      ],
+      "agent/runtime/read_tools.py": [
+        0,
+        0
+      ],
+      "agent/runtime/results.py": [
+        0,
+        0
+      ],
+      "agent/runtime/session.py": [
+        4,
+        0
+      ],
+      "agent/runtime/turns.py": [
+        0,
         0
       ],
       "agent/runtime_probe.py": [
@@ -209,10 +221,6 @@
       ],
       "agent/textnorm.py": [
         0,
-        0
-      ],
-      "agent/tool_index.py": [
-        2,
         0
       ],
       "agent/tool_specs.py": [
@@ -361,7 +369,7 @@
       ]
     },
     "total": [
-      1153,
+      1152,
       4848
     ]
   },

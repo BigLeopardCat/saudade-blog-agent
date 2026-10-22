@@ -207,7 +207,7 @@ def test_task_continuation():
           G.route_after_execute({"confirm_grant": True, "blocked": [{"tool": "x"}],
                                  "messages": []}, _cfg([_row()])) == "planner")
     print("\n③ 撤档锁（20261015）：两个档位名不许再长回代码里")
-    _SCANNED = [ROOT / "agent" / "graph.py", ROOT / "agent" / "react_arm.py",
+    _SCANNED = [ROOT / "agent" / "graph.py", ROOT / "agent/runtime/hybrid.py",
                 ROOT / "config" / "settings.py", ROOT / "server.py"]
     _PROBE = ("def _ledger_next(state, config):\n"
           "    if not settings.agent_task_state:\n        return None\n"
@@ -224,7 +224,7 @@ def test_task_continuation():
     _hits: list[str] = []
     for _f in _SCANNED:
         _hits += [f"{_f.name}:{h}" for h in _dial_reads(_f.read_text(encoding="utf-8"))]
-    check("四个消费面（graph / react_arm / settings / server）一处档位取值都没有",
+    check("四个消费面（graph / hybrid / settings / server）一处档位取值都没有",
           not _hits, "、".join(_hits))
     check("  两个名字在 `Settings` 的字段表里已经不存在",
           not (set(_NO_DIALS) & set(G.settings.model_fields)),

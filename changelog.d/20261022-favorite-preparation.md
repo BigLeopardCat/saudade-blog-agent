@@ -1,0 +1,4 @@
+- hybrid 对已验签且有稳定会话的用户按需提供收藏确认准备工具：模型选择目标，代码读取文章与本人状态，复用签名及确认卡协议；准备阶段不写业务数据，状态已达成时无卡、无写入。
+- 本轮浏览器页面信息通过结构化消息元数据提供，确认标题取自真实 API；令牌不进入模型上下文或工具 trace。准备结果持久化后再发控制帧，确认后的执行继续复用幂等事务。
+- 将执行循环、工具加载与会话生命周期归入 agent/runtime，收藏准备与执行归入 agent/domains/favorites，并同步导入、验收探针与当前文档；保持生产默认 graph。
+- Python 导入路径随包归类迁移；根包 agent 不再重导出工厂，改从 agent.agent 导入 create_agent、从 agent.checkpoint 导入 build_checkpointer。

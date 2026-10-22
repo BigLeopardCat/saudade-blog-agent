@@ -1,50 +1,5 @@
 # -*- coding: utf-8 -*-
-"""帧契约：第二条臂（`agent/react_arm.py`）与生产（`graph.py` / `server.py`）之间的唯一事实源。
-
-**为什么有这个模块**（20261016，`docs/adr/adr-0008-*`）。`agent/react_arm.py` 是**第二份
-实现**：它产出**与生产逐字相同的帧**。两套实现共享一份契约，而契约此前**只活在约定里**
-——三处症状，全都在这个仓里付过代价：
-
-  ① **消费面靠 grep 数出来**。`gate_node` 从 state 读哪些键，是用 `awk` 切出函数体逐行
-     grep 数的，抄成一张七格的表贴在 `_round_state` 的 docstring 里，另外三格（它调用的
-     **辅助函数**读的）靠人补记。**抄漏不报错**——`.get("X", [])` 把"本线没喂"与"本轮
-     确实没有"读成同一件事，闸门只是**少开火**。20261016 用 AST 走完整传递闭包实测：
-     那张表少了一格（`task_frames`），`_popup_state` 那张四格的表少了**七格**。
-  ② **判据分家且被锁死**。`react_line._consent_missing` 停在 `not self.grant`，而生产
-     20261012 已按 `_grant_covers(state, spec)` 收窄两档（那两档各有一次生产实证：
-     一次点头授权了两件写、同一件写静默落库三份）。更坏的是
-     `tests/test_react_arm.py` ⑥d **把那一行字符串钉住了**——锁的意图是对的（"别另立
-     一套判据"），锁的落点错了（钉了字面而非判据），于是漂移被**永久化**。
-  ③ **同一件事各写一份**：`spec` 串的构造、`blocked` 行、收尾正文的措辞，散在两侧。
-
-本模块把这一层**写下来并交给机械锁**（`tests/test_frame_contract.py`）：键集从 `graph.py`
-现取、与这里的声明算**双向**差集（多一个红、少一个红），并带反向对照。规矩与本仓既有的
-`tests/test_state_keys.py` 同族——**手抄的表必须由机器守，且守的必须是取值本身**。
-
-**批 2（20261016）之后本模块瘦了一圈，判据反而更强**：臂不再手搓 `updates` 二元组、不再
-给分片冒充 `langgraph_node`、不再合成 state —— 它是一张真的 `StateGraph`
-（`docs/adr/adr-0009-*`），`planner`/`execute`/`model`/`gate` 是编译进图里的**真节点**，
-那两个生产资产拿到的是**真 state**。于是本模块从"手搓时该填什么"的说明书，变成
-**"结构上必须成立什么"**的判据来源：
-
-  · `NODE_FRAMES` —— 编译出来的图的节点集必须 ⊇ 这四个名字（producer 按名取键，
-    多一个名字无害、少一个是那一格**静默丢掉**）；
-  · `VISIBLE_NODE` —— 用户可见正文挂的节点名（`run_golden` 只把这一格拼进 `text`）；
-  · `GATE_STATE_KEYS` / `POPUP_STATE_KEYS` —— 那两个资产的**读侧闭包**必须全是
-    `AgentState` 的**声明键**（未声明的键被 langgraph 静默丢掉）；
-  · `spec_text` / `blocked_row` / `tool_frame` / `plan_for_gate` —— 唯一构造点。
-
-**契约的三层，本模块只管中间那一层**：
-  · `AgentState` 的声明键（`graph.py`）—— 图内部的账，`tests/test_state_keys.py` 守；
-  · **producer 读的 `updates` 键**（`model`/`planner`/`execute`/`gate`）与**它读那些节点
-    返回的哪些键** —— 这就是本模块（`NODE_FRAMES` / `*_STATE_KEYS`）；
-  · 连线前缀（`__CMD__` / `__CONFIRM__` / `__PENDING__` / …）—— 那是 `server.py` 的事，
-    臂**不产连线帧**（它产 `updates`，producer 翻译），所以不在本模块射程内。
-
-**一条纪律**：本模块的函数**只做形状**，不做判断。任何"这一轮该不该弹卡""这句话算不算
-声称"的判据都必须留在 `graph.py` 里由两边**直调**（`_confirm_popup` / `gate_node` 就是这么
-接的）——抄第二份判据就是抄一条漂移源，而"人工同步 94 处"正是本仓架构审计的头号结论。
-"""
+"""共享帧协议：生产图的状态键、服务端事件名称与工具调用事实。"""
 from __future__ import annotations
 
 import logging

@@ -1,7 +1,7 @@
 # 参数调优实验：不同模型 / 不同旋钮（20261006）
 
 > 这份报告回答一件事：**把 planner 的旋钮拨到别处，agent 会变好吗**。
-> 载体是 `eval/param_matrix.py`（本批新建）；读数落在 `eval/report/param_matrix.jsonl`
+> 载体是 [eval/param_matrix.py](https://github.com/BigLeopardCat/saudade-blog-agent/blob/563c8a5/eval/param_matrix.py)（本批新建）；读数落在 `eval/report/param_matrix.jsonl`
 > （append-only，每跑完一遍追加一行）。
 >
 > ⚠️ **本文的所有结论都受本仓那两条纪律约束**，不满足就别引：
@@ -11,7 +11,7 @@
 
 ## 一、载体与它刻意不做的事
 
-`eval/param_matrix.py` 与既有的 `eval/golden_arm.py` 是**两回事**，别混：
+[eval/param_matrix.py](https://github.com/BigLeopardCat/saudade-blog-agent/blob/563c8a5/eval/param_matrix.py) 与既有的 `eval/golden_arm.py` 是**两回事**，别混：
 
 | | `GOLDEN_ARM` | `param_matrix` |
 |---|---|---|
@@ -337,7 +337,7 @@ p50 / p95。**换模型那一格最该看的两件东西**里，token 与缓存�
 > 全 `None`；没人报缓存字段时**连 `cache_hit_tok` 也是 `None`**）；② 命中率**只有一个实现**
 > （`totals` 里那一个式子，与它 `main()` 打的合计行同式），`param_matrix` 不许自己再除一遍；
 > ③ 上线前写的老行**在读取端按 `trace_run` 补**（那些 trace 还在盘上），改 jsonl 一个字都不改。
-> 离线锁 `tests/test_param_matrix_tokens.py`（含"拆掉接线必须红"的正控）。
+> 离线锁 [tests/test_param_matrix_tokens.py](https://github.com/BigLeopardCat/saudade-blog-agent/blob/563c8a5/tests/test_param_matrix_tokens.py)（含"拆掉接线必须红"的正控）。
 
 **不要做**：别把 token / 成本做成 golden 的通过判据。本仓的 `efficiency` 字段是**代理指标、
 不是门禁**（`docs/eval-observability.md` §4/§7）；成本进判据会把"模型变贵"读成"行为变差"。

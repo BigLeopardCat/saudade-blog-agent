@@ -134,9 +134,6 @@ flowchart TB
 │   ├── prompt_context.py      # 注入 planner/model 的**提示词文本**组装（纯函数叶子层，零 LLM / 零 LangGraph）：消息文本提取（多模态兼容）/ page_ctx / 页面操作指南 / 工具帧摘要 / checker 回执摘要
 │   ├── prompts.py             # ★ 全部模型可见正文的唯一落点：人设 + 叙述纪律 + planner / reflector 模板 + 输出契约（渲染点与全部逻辑仍在 graph.py）
 │   ├── planner_llm.py         # ★ 技能表 ↔ API tools/tool_calls 的接线层（20261004 起**唯一**接口层；20261017 前名 native_plan.py）
-│   ├── tool_index.py          # 技能索引档（ADR-0015 阶段 0，**出厂关**）：描述压成一行索引 + describe_skill 按需取回原文；结构一字节不动
-│   ├── capability_index.py    # 能力索引（ADR-0015 阶段 2）：每条技能 → 索引行 + 工具面 + 完成判定/回复契约，供 planner 选能力、执行层拿工具面跑 ReAct；全部从注册表派生
-│   ├── capability_arm.py      # 能力索引臂（AGENT_ARM=capability）：菜单按轮变（第 0 轮能力表 → 之后那条能力的工具面），只换 react_arm 的四个接缝；写族与 chat 仍走模板
 │   ├── deterministic_plan.py           # ★ 确定性决策层（零 LLM）：快道（当前文章读取 / 特效切换 / 导航 / 屏幕显示）+ 动作意图扫描 + 检索候选裁决 + 终局计划
 │   ├── arg_refs.py                # ★ `$<工具>[<序号>].<字段>` 参数引用：把上一步的真实返回值绑进下一步的参数（五个错误码，解不出必须响亮）
 │   │
@@ -160,28 +157,22 @@ flowchart TB
 │   │
 │   ├── 【实验臂族】（只被 eval 与 `GOLDEN_ARM` 动态加载，生产链路不 import ⇒ **模块名是协议值，不许改名**）
 │   ├── frame_contract.py              # 帧契约：第二条臂与生产（graph.py / server.py）之间的唯一事实源
-│   ├── react_arm.py           # golden 第二条臂（GOLDEN_ARM=react）
-│   ├── react_line.py          # ReAct 试验线：把现网攒下的收敛判据 / 工具级回执装到第二条臂上
-│   ├── tool_menu.py           # 工具级菜单（POC）：70 个工具按 authz 的 scope 表过滤成 OpenAI tools 数组
-│   ├── tool_prompt.py         # 工具臂的系统提示：菜单是工具不是技能，正文为工具菜单重写
-│   ├── tools_arm.py           # golden 工具臂（GOLDEN_ARM=tools，POC）：复用 react 那张图，只换四个接缝
-│   ├── hybrid_arm.py          # 迁移臂：普通对话单次调用，按需加载只读域，未迁移操作交回旧图
-│   ├── hybrid_read.py         # 公开文章、站点资料和个人只读域白名单；个人数据需验签与权限检查
-│   ├── hybrid_session.py      # 按需工具加载与单请求有界循环
-│   ├── turns.py               # 会话串行化、等待取消和公共取消信号
-│   ├── favorite_transactions.py # 已确认收藏操作的权限复核、幂等执行与事实回执
+│   ├── runtime/               # 迁移运行时、工具循环和会话生命周期
+│   │   ├── __init__.py        # 空包入口，不隐式加载运行时
+│   │   ├── hybrid.py          # 会话准入、持久化、协议输出和旧图交接
+│   │   ├── session.py         # 按需工具加载、有界调用及领域终结结果
+│   │   ├── read_tools.py      # 公开与本人只读工具的注册和权限边界
+│   │   ├── results.py         # 终结答复与已有执行协议的结果类型
+│   │   └── turns.py           # 会话串行化、等待取消和公共取消信号
+│   ├── domains/
+│   │   ├── __init__.py        # 领域包入口，不隐式注册全部业务
+│   │   └── favorites/
+│   │       ├── __init__.py    # 收藏领域包入口
+│   │       ├── preparation.py # 真实目标、当前状态与签名确认卡；不写业务数据
+│   │       └── transactions.py # 已确认操作的鉴权复核、幂等执行和事实回执
 │   ├── checkpoint.py          # checkpointer 的**接线点**与级联清理（空 DSN 恒返回 None，见 §4.6）
-│   ├── checkpoint_arm.py      # golden 第三条臂（GOLDEN_ARM=checkpoint）
-│   ├── checkpoint_delta_arm.py # golden 第四条臂（GOLDEN_ARM=checkpoint_delta，臂 C）
-│   ├── checkpoint_random_arm.py # **反控 D**（GOLDEN_ARM=checkpoint_random）：同一个 saver，线程照旧每请求随机
-│   ├── _ckpt_probe.py         # 实验分支专用读数钩子：把"图看见的上下文有多大"落成一行 JSONL（不是功能）
-│   └── __init__.py            # 包门面：只做 re-export（逻辑不进这里）
+│   └── __init__.py            # 空包入口；从具体模块显式导入
 │
-│   ⚠️ **合并被否的六条**（逐条查过，别再问一遍）：`checkpoint_delta_arm` + `checkpoint_random_arm` 不能并
-│      （臂名是 `GOLDEN_ARM` 协议值，并了要么改协议值、要么留转发壳）；`adminops_board`(88) 并进
-│      `adminops_tags`(763) 会 851 行破 800 预算；`agent.py` 不并进 `__init__.py`（包门面只做 re-export）；
-│      `moderator` + `summarizer` 不并（两者失败取向相反）；`stickers` 不并进 `textnorm`
-│      （`tests/test_wordlist_gate.py` ⑩ 要求那边零词表条目）；`idem_pg` 不并进 `idem`（依赖面锁：psycopg 只住那边）。
 ├── rag/                       # ★ RAG 检索管线（20260830）：词法 2/3-gram BM25 内存倒排 + 10 分钟懒刷新，
 │   │                          #   语料=线上可见文章（20260901 净化：说说/留言/公告移出检索池，走数据工具直查）；
 │   │                          #   检索只定位（候选 type/id/标题/分），解读走 get_article_detail 全文
@@ -670,7 +661,7 @@ args 取指纹，那个工具每次指纹都不同 ⇒ 幂等判据对它**恒�
 **今天零行为变更**：闸关着（没有 saver）⇒ 账本惰性、连 `logs/agent/idem.sqlite3` 都不会被
 创建。判据 `tests/test_write_idempotency.py` 用真 `StateGraph` + `MemorySaver` 在进程内复现
 "崩溃 + 恢复"，并配了会红的反控（`NullLedger` ⇒ 同一场景写发生两次）。真机读数（要真 PG、
-不在 CI）在 `eval/experiments/checkpoint_probe.py`：`--crash-resume --guard` **1 次** /
+不在 CI）在 [eval/experiments/checkpoint_probe.py](https://github.com/BigLeopardCat/saudade-blog-agent/blob/563c8a5/eval/experiments/checkpoint_probe.py)：`--crash-resume --guard` **1 次** /
 `--guard-unsafe` **2 次**、`--concurrency 4 --guard` **1 次** / `--guard-unsafe` **4 次**、
 `--backend-parity` 两档 9 步读数**逐字相等**。决策全文见
 [adr/adr-0012](adr/adr-0012-write-idempotency-ledger.md)。

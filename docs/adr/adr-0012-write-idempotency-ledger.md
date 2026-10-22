@@ -282,7 +282,7 @@ checkpoint 的未完成任务、**从 START 重启**（`langgraph/pregel/_loop.p
 ### 复测（20261019，批 F 落地之后）
 
 上面两张真机读数表量的都是**修法之前**。批 F 落地后按同一份夹具重跑了五格
-（`eval/experiments/checkpoint_probe.py`；真 PG，实验库 `agent_checkpoint`，账与 saver
+（[eval/experiments/checkpoint_probe.py](https://github.com/BigLeopardCat/saudade-blog-agent/blob/563c8a5/eval/experiments/checkpoint_probe.py)；真 PG，实验库 `agent_checkpoint`，账与 saver
 同库同表。跑的是批 G 那个工作树——批 G 不碰 `idem` / `checkpoint_arm` 任何一行）：
 
 | 探针 | 读数 | 反控 |

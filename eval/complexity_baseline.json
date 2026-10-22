@@ -5,7 +5,7 @@
   },
   "agent/adminops_confirm.py::_confirm_one": {
     "c": 155,
-    "lines": 376
+    "lines": 353
   },
   "agent/adminops_noop.py::_reached_one": {
     "c": 173,
@@ -111,10 +111,6 @@
     "c": 32,
     "lines": 54
   },
-  "eval/param_matrix.py::report": {
-    "c": 50,
-    "lines": 84
-  },
   "eval/run_golden.py::check_gold": {
     "c": 242,
     "lines": 601
@@ -217,7 +213,7 @@
   },
   "tests/test_ci_suite_list.py::test_ci_suite_list": {
     "c": 40,
-    "lines": 166
+    "lines": 163
   },
   "tests/test_confirm.py::test_confirm": {
     "c": 208,
@@ -323,10 +319,6 @@
     "c": 124,
     "lines": 318
   },
-  "tests/test_param_matrix_tokens.py::test_param_matrix_tokens": {
-    "c": 32,
-    "lines": 158
-  },
   "tests/test_pending_ledger.py::test_pending_ledger": {
     "c": 59,
     "lines": 452
@@ -350,10 +342,6 @@
   "tests/test_query_expansion.py::test_query_expansion": {
     "c": 34,
     "lines": 86
-  },
-  "tests/test_react_arm.py::test_react_arm": {
-    "c": 202,
-    "lines": 628
   },
   "tests/test_reconcile_offline.py::test_reconcile_offline": {
     "c": 57,
@@ -385,7 +373,7 @@
   },
   "tests/test_settings_surface.py::test_settings_surface": {
     "c": 37,
-    "lines": 141
+    "lines": 132
   },
   "tests/test_status_judgements.py::test_status_judgements": {
     "c": 40,
@@ -421,7 +409,7 @@
   },
   "tests/test_turn_window.py::test_turn_window": {
     "c": 116,
-    "lines": 308
+    "lines": 306
   },
   "tests/test_user_notice.py::test_user_notice": {
     "c": 105,

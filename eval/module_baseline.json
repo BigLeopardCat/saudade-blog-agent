@@ -16,7 +16,7 @@
     "top_defs": 31
   },
   "agent/graph.py": {
-    "lines": 9454,
+    "lines": 9429,
     "top_defs": 141
   },
   "agent/prompt_context.py": {
@@ -26,10 +26,6 @@
   "agent/prompts.py": {
     "lines": 856,
     "top_defs": 1
-  },
-  "agent/react_arm.py": {
-    "lines": 1369,
-    "top_defs": 42
   },
   "agent/tasks.py": {
     "lines": 1658,
@@ -47,10 +43,6 @@
     "lines": 901,
     "top_defs": 30
   },
-  "eval/experiments/checkpoint_probe.py": {
-    "lines": 1713,
-    "top_defs": 37
-  },
   "eval/run_golden.py": {
     "lines": 3691,
     "top_defs": 51
@@ -64,7 +56,7 @@
     "top_defs": 36
   },
   "server.py": {
-    "lines": 2823,
+    "lines": 2813,
     "top_defs": 61
   },
   "tests/test_admin_write.py": {
@@ -90,10 +82,6 @@
   "tests/test_nav_truthfulness.py": {
     "lines": 972,
     "top_defs": 19
-  },
-  "tests/test_react_arm.py": {
-    "lines": 1041,
-    "top_defs": 22
   },
   "tests/test_reports.py": {
     "lines": 856,

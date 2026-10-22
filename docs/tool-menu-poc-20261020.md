@@ -17,14 +17,14 @@
 ② **每加一个能力就要写一条模板——而这份成本不随模型变强而下降**，与"工具要少而可组合"相反。
 所以问：**把菜单换成按角色过滤的真工具表、让模型自己组合调用，整条 harness 撑不撑得住？**
 
-**跑法**（`eval/experiments/menu_arm_ab.py`，三臂交错）：
+**跑法**（[eval/experiments/menu_arm_ab.py](https://github.com/BigLeopardCat/saudade-blog-agent/blob/563c8a5/eval/experiments/menu_arm_ab.py)，三臂交错）：
 
 ```
 .venv/bin/python eval/experiments/menu_arm_ab.py --reps 3 --arms graph,react,tools \
     --provider deepseek --retry-outage 2 --tag poc_menu_ds_r3b
 ```
 
-- **射程 = 只读 + 导航 + 检索族**（81 条预注册 id，`eval/experiments/poc_menu_ids.txt`，
+- **射程 = 只读 + 导航 + 检索族**（81 条预注册 id，[eval/experiments/poc_menu_ids.txt](https://github.com/BigLeopardCat/saudade-blog-agent/blob/563c8a5/eval/experiments/poc_menu_ids.txt)，
   跑前提交、跑后没改）。写族 30 条不在第一轮；**菜单本身没有按射程收窄**（70 个工具并成
   "几个可组合的"本身就是另一种手写分组，那是第二轮）。
 - **模型 = DeepSeek**。qwen 在启动当天中途 `403 AccessDenied.Unpurchased` 污染了 5 遍，
@@ -86,7 +86,7 @@ graph  79 / 79 / 79          react  79 / 79 / 78          tools  60 / 58 / 56
 
 **先纠一处归因**：`task_intents` / `task_hold` / `task_drop` **不是博客功能提供的工具**，
 它们是 agent 自己的**跨轮任务记账口**（伪函数，`agent/planner_llm.py` 那三个），
-被 `agent/tool_menu.py` 照搬进工具菜单（admin 73 件里有这 3 件）。所以这一族红
+被 [agent/tool_menu.py](https://github.com/BigLeopardCat/saudade-blog-agent/blob/563c8a5/agent/tool_menu.py) 照搬进工具菜单（admin 73 件里有这 3 件）。所以这一族红
 **不是"博客工具太乱"**，是**工具臂把技能臂的"申报通道"搬进菜单时，让"申报"和"动作"
 在同一个平面上竞争**。模型对"带我去首页"挑了 `task_intents`：
 
@@ -253,7 +253,7 @@ A 类（近义工具选错）在只读射程里就已经让 pass_rate 掉 31 个
 （`.env` 是相对路径）、`PYTHONPATH` 指向 worktree、身份通道显式导出
 （`GOLDEN_ADMIN_UID=756 GOLDEN_USER_UID=722`）。驱动已把这三件写死在 `run_arm` 里。
 
-**POC 代码**：`agent/tools_arm.py`（工具臂）、`agent/tool_prompt.py`（工具臂系统提示）、
-`agent/react_arm.py` 的四个接缝（`prompt_builder` / `menu_builder` / `plan_builder` /
+**POC 代码**：[agent/tools_arm.py](https://github.com/BigLeopardCat/saudade-blog-agent/blob/563c8a5/agent/tools_arm.py)（工具臂）、[agent/tool_prompt.py](https://github.com/BigLeopardCat/saudade-blog-agent/blob/563c8a5/agent/tool_prompt.py)（工具臂系统提示）、
+[agent/react_arm.py](https://github.com/BigLeopardCat/saudade-blog-agent/blob/563c8a5/agent/react_arm.py) 的四个接缝（`prompt_builder` / `menu_builder` / `plan_builder` /
 `executor_factory`，缺省全 `None` ⇒ 逐字节回落）、`agent/react_line.py::WorkflowExecutor.run_specs`。
 变更记录见 `changelog.d/20261020-tools-arm-seams.md`。

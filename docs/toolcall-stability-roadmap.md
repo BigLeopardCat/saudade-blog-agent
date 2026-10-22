@@ -776,5 +776,5 @@ qwen 端点容忍 ⇒ 生产用 qwen，生产绿。**
 `execute_0`/`execute_1`。写这种判据要**两侧各数各的**（一个 id 本来就该出现两次：assistant
 声明一次 + 帧自己一次），加起来数会把每一对合法配对读成重复 ⇒ **恒红**。
 
-**同族核过、不受影响**：`agent/react_arm.py` 的 `react_{i}` / `popup_{i}` 不喂给任何服务商
+**同族核过、不受影响**：[agent/react_arm.py](https://github.com/BigLeopardCat/saudade-blog-agent/blob/563c8a5/agent/react_arm.py) 的 `react_{i}` / `popup_{i}` 不喂给任何服务商
 （只供报告读 `name`/`content`）。

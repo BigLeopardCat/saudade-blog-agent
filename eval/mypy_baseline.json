@@ -11,7 +11,7 @@
     "utils",
     "server.py"
   ],
-  "total": 190,
+  "total": 188,
   "files_checked": 101,
   "by_file": {
     "agent/action_text.py": 1,
@@ -25,7 +25,6 @@
     "agent/hostinfo.py": 2,
     "agent/planner_llm.py": 7,
     "agent/prompt_context.py": 2,
-    "agent/react_line.py": 2,
     "agent/reports.py": 1,
     "agent/tasks.py": 3,
     "agent/write_grounding.py": 17,
