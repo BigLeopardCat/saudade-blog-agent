@@ -117,3 +117,31 @@ def own_domains(tools: dict) -> dict:
     if activity:
         domains["own_activity"] = activity
     return domains
+
+
+def public_domains() -> dict:
+    from agent.domains import public_activity, public_catalog, utilities
+
+    groups = {"public_catalog": (public_catalog.list_notes, public_catalog.get_top_notes,
+                                  public_catalog.list_categories, public_catalog.list_tags),
+              "public_activity": (public_activity.get_announcements, public_activity.list_guestbook,
+                                   public_activity.list_talks),
+              "utilities": (utilities.get_current_time, utilities.get_weather)}
+    domains = {}
+    for domain, tools in groups.items():
+        names = frozenset(tool.name for tool in tools)
+        _tools_with_scope(names, SCOPE_READ_PUBLIC)
+        domains[domain] = {tool.name: tool for tool in tools}
+    return domains
+
+
+def device_domain(config) -> dict:
+    from agent.domains import device_reads
+
+    cfg = (config or {}).get("configurable") or {}
+    if (not device_reads.enabled() or type(cfg.get("user_id")) is not int
+            or not scoped_reads_enabled(
+            cfg.get("principal"), SCOPE_READ_OWN, cfg.get("user_id"))):
+        return {}
+    _tools_with_scope(frozenset({"list_devices"}), SCOPE_READ_OWN)
+    return {"devices": {"list_devices": device_reads.list_devices}}

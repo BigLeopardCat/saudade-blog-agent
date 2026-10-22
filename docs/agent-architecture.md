@@ -1,68 +1,32 @@
 # Saudade Blog AI Agent（泠月喵）架构文档
 
-> 面向维护者的全链路技术文档。覆盖看板娘对话系统的每一个环节：组件拓扑、一次对话的完整时序、
-> 记忆机制（记录 / 压缩 / 存储 / 读取 / 回滚）、工具系统、防幻觉与可靠性加固、超时体系、配置与部署。
->
-> **本文只写「现在是什么」** —— 每一节的陈述都是当前生产拓扑下的形态。历史上有过、现已废除的
-> 机制就地标注「<日期> 前形态」并写明**现在由谁承担**，那是为了让接手的人看懂代码里为什么没有它，
-> 不是本文的推荐读法。逐次修订的时间线在文末《§11 附录：文档修订记录》；线上故障的现象 / 根因 /
-> 修复 / 回归锁见 [问题记录.md](问题记录.md)。
-
----
+当前迁移状态与生产验收见 [工具型 Agent 迁移路线](hybrid-runtime-migration.md)。
+本文的目录索引覆盖当前模块；第3节起保留旧图的接口说明，随对应能力退役逐步删除。
 
 ## 1. 系统总览
 
-博客的 AI 能力由 三个独立进程 协作完成，用户看到的"看板娘"是它们加一个前端脚本的合体：
+- 浏览器负责对话界面、SSE 消费及页面命令执行。
+- Rust 博客后端负责账号鉴权、业务 API、聊天记录和 SSE 转发。
+- Python Agent 负责 LLM 调用、70 个工具。按需领域工具与有界模型循环由共享运行时承载，代码管理权限、确认、取消、幂等和事实回执。
+- PostgreSQL 保存博客业务记录、Agent checkpoint 与幂等账。跨请求连续性由稳定会话绑定与持久化提供。
+- IoT 是可关闭的临时演示适配，复用现有设备服务，不作为平台扩建。
 
-- React 前端（浏览器）：看板娘 Live2D 形象 + 对话框 UI + SSE 消费 + 命令执行器。
-- Rust 后端（axum，端口 3000）：鉴权、记忆落库、对话编排、SSE 转发、中断清理。**记忆的唯一权威来源**。
-- Python Agent（FastAPI，端口 8010）：LangGraph 图执行（20260903 拓扑 planner ⇄ execute → model → gate，§6.5）、LLM 调用、70 个工具。无状态，记忆全靠请求体注入。
-- MySQL：`chat_history`（消息流水）、`chat_summary`（每用户压缩摘要）。
-- device-service（端口 3100，独立服务）：IoT 设备（ESP32 OLED）指令下发，agent 以对话用户身份代签 JWT 调用。
+生产显式使用 `hybrid`：模型自主选择原生工具，已迁移写入进入共享确认生命周期。
+未迁移能力继续交接 `graph`。项目默认值尚为 `graph`；两者不是同时运行的规划层。
+普通对话可一次模型调用完成；读取按领域加载并受调用、上下文与结果预算限制。
+回复目前完整生成后发送，尚无 token 级流式输出。
 
 ```mermaid
-flowchart TB
-    subgraph Browser[浏览器]
-        UI[React SPA<br/>Live2D 看板娘 + 对话框]
-        AJS[boot.js + chat-*.js<br/>SSE 消费/命令执行/本地历史]
-    end
-
-    subgraph Server[生产服务器 3.7GB 内存]
-        NGX[nginx :443/:80]
-        RUST[Rust 后端 axum :3000<br/>鉴权·记忆·编排·SSE 转发]
-        AGT[Python Agent FastAPI :8010<br/>LangGraph 图<br/>planner⇄execute→model→gate · 70 工具 · 4 workers]
-        MYSQL[(MySQL<br/>chat_history / chat_summary)]
-        DEV[device-service :3100<br/>ESP32 OLED 指令下发]
-    end
-
-    LLM[LLM API<br/>opencode · deepseek-v4.1-flash（生产）<br/>thinking 默认开<br/>图内调用均显式关]
-
-    UI <-->|"POST /api/chat/stream ⇄ SSE 帧（X-Accel-Buffering:no）"| NGX
-    NGX <-->|"反代 ⇄ 帧转发"| RUST
-    RUST <-->|"转发请求体 ⇄ 流式 SSE 帧<br/>（工具回灌走 HTTPS api/public）"| AGT
-    AJS -->|"直连同源 API · 写 localStorage chat_history_*"| UI
-    RUST <-->|sea-orm| MYSQL
-    AGT -->|工具调用| LLM
-    AGT -->|代签 JWT 调 device-service| DEV
+flowchart LR
+    UI[浏览器] --> BLOG[Rust 博客 API]
+    BLOG --> AGENT[Python Agent<br/>70 工具 · 4 workers]
+    AGENT --> MODEL[LLM]
+    AGENT --> TOOLS[按需领域工具]
+    TOOLS --> BLOG
+    BLOG --> DB[(PostgreSQL)]
+    AGENT --> DB
+    TOOLS --> DEVICE[可选设备演示服务]
 ```
-
-核心设计原则：Python Agent **不持有任何对话状态**（每请求独立 thread_id、进程内 MemorySaver 形同虚设），
-一切连续性由 Rust 从 MySQL 读取后注入请求体实现。这是刻意的架构取舍——曾经 MemorySaver 线程累积导致
-长对话上下文与 worker 内存无限膨胀，最终被整体抛弃（详见 §4.6）。
-
-关键设计决策速览（每一条都是线上事故定位后的取舍；现象 / 根因 / 修复 / 回归锁见 docs/问题记录.md）：
-
-| 决策 | 取舍 | 当初的问题（详见对应章节） |
-|---|---|---|
-| 记忆权威在 DB，agent 无状态 | 每请求独立 thread_id + 请求体注入 20 条历史 + 滚动摘要 | MemorySaver 线程累积 → 上下文/worker 内存无限膨胀（§4.6） |
-| SSE 帧 JSON 编码 + `\n\n` 分隔 | 文本内换行不破坏帧边界；帧协议三端同步 | 曾按行分隔被文本换行破坏（§3.2⑤） |
-| 摘要独立任务调用（模型对记忆无写权限） | 摘要由后端独立调用生成（与回复解耦），模型永不输出 SUMMARY 行 | 曾把摘要生成指令注入对话消息流 → 模型在回复里编造"成功调用工具"污染记忆（§4.3） |
-| 决策-执行分离（20260903 planner 全权；曾用强制路由/模型自主调用） | planner 唯一决策（选技能/填参/给调用清单）→ execute 确定性执行 → model 零工具叙述 → gate 确定性检查收尾；前端命令白名单兜底保留 | 执行器自由度（自选工具/自拟参数/跳过检索直接答）是幻觉事故族根因——补检查无效，直接收走自由度（§6.5）；导航/显示强制路由历史见 §6.3 |
-| 命令走"工具返回 → 独立帧 → 前端执行" | 模型只负责调工具，命令由前端按显式意图执行 | 模型"表演调用"把命令写进正文（§6.2） |
-| 分层超时体系 | LLM 120s + 空闲 120s + 总时长 300s + recursion_limit 30 + 16 线程 | LLM 挂起占满线程池 → 全体对话排队卡死（§6.4） |
-| 空回复/中断兜底 | 后端补发人设内恢复语 + Rust 空回复不存库 + 中断 Drop 清理 | qwen 偶发空内容 / 客户端中断 → 前端"卡死"表象（§3.2⑤⑦ §4.4） |
-
----
 
 ## 2. 组件与目录
 
@@ -72,7 +36,7 @@ flowchart TB
 ```
 本仓库（saudade-blog-agent）    # ★ Python Agent（独立 git 仓库，推送即 CI 评测门禁 + 部署；线上改动重启 systemd 服务生效）
 ├── server.py                  # FastAPI 入口：/chat、/chat/stream、/health；trace_id 中间件；流式编排
-├── agent/                     # ★ 对话 Agent 本体（66 个模块，前缀成族，不建子包；**完整地图就是这一节**）
+├── agent/                     # 对话 Agent、运行时与领域模块；完整模块索引
 │   │                          #   族标题行不含 .py —— `tests/test_module_index.py` 按"树里每个文件一行"判双向一致
 │   ├── graph.py               # ★ 图本体：手写 LangGraph——State/契约/声称闸 + planner(唯一决策) ⇄ execute(确定性执行) → (reflector) → model(零工具叙述) → gate(确定性检查) + 条件边路由
 │   ├── claims.py              # ★ 叙述文本的**声称判据族**（20261020 从 graph.py 切出，那边按原名 re-export）：导航到达/特效状态/幻影工具/命令前缀/写完成/能力否认/台账缺席等纯文本判据 + 脚下正则词表；不读 AgentState（工具名派生的三件留 graph）
@@ -176,6 +140,17 @@ flowchart TB
 │   │   ├── moderation.py     # 审核聚合、分页记录及按编号读取内容
 │   │   ├── admin_pages.py    # 管理员读取共用的权限、分页和结果边界
 │   │   ├── catalog.py        # 后台文章元数据与账号名录
+│   │   ├── article_metadata.py # 公开与后台共用的文章元数据投影
+│   │   ├── public_pages.py   # 公共读取的分页、总数与字段边界
+│   │   ├── public_catalog.py # 公开文章、置顶、分类及分层标签读取
+│   │   ├── public_activity.py # 公告与已审核河灯、说说读取
+│   │   ├── utilities.py      # 当前时间与有界天气读取
+│   │   ├── device_reads.py   # 可关闭的设备演示清单，只读
+│   │   ├── todos/
+│   │   │   ├── __init__.py   # 后台个人待办写领域入口
+│   │   │   ├── targets.py    # 稳定待办编号、版本和本人快照核对
+│   │   │   ├── preparation.py # 具体操作的签名确认准备，零业务写入
+│   │   │   └── transactions.py # 条件写入、结果复核与幂等执行
 │   │   ├── work_queue.py     # 有界读取额度申请与个人待办
 │   │   ├── read_state.py     # 固定编号已读范围、完整性、归属及逐项回执核验
 │   │   ├── messages/

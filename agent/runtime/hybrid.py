@@ -21,6 +21,7 @@ from agent.domains.favorites import preparation as favorite_preparation
 from agent.domains.messages import preparation as message_preparation
 from agent.domains.notifications import preparation as notification_preparation
 from agent.domains.registry import confirmed_domain
+from agent.domains.todos import preparation as todo_preparation
 from agent.principal import ADMIN_ROLES, CHAT_ONLY_ROLES
 from agent.prompts import BLOG_PERSONA_PROMPT
 from agent.runtime.context import conversation_context
@@ -29,10 +30,12 @@ from agent.runtime.read_tools import (
     admin_tools,
     article_tools,
     catalog_tools,
+    device_domain,
     moderation_tools,
     own_domains,
     own_reads_enabled,
     own_tools,
+    public_domains,
     queue_tools,
     scoped_reads_enabled,
     site_tools,
@@ -221,7 +224,7 @@ class HybridArm:
 
     def _domains(self, config, can_bridge, pending):
         cfg = (config or {}).get("configurable") or {}
-        domains = {"site": self.site_read_tools}
+        domains = {"site": self.site_read_tools, **public_domains(), **device_domain(config)}
         if scoped_reads_enabled(cfg.get("principal"), SCOPE_ADMIN_CONSOLE, cfg.get("user_id")):
             domains["admin_reports"] = self.admin_read_tools
             domains["admin_moderation"] = self.moderation_read_tools
@@ -233,6 +236,9 @@ class HybridArm:
             domains["favorites"] = favorite_preparation.tools(self.own_read_tools)
             domains["notifications"] = notification_preparation.tools(self.own_read_tools)
             domains["messages"] = message_preparation.tools(self.own_read_tools)
+        if can_bridge and todo_preparation.available(config):
+            domains["admin_work_queue"] = {**self.queue_read_tools,
+                                            **todo_preparation.tools(self.queue_read_tools)}
         if pending:
             cancel = pending.cancel_tool(self.legacy.checkpointer)
             domains["pending"] = {cancel.name: cancel}

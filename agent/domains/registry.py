@@ -3,8 +3,10 @@
 from agent.domains.favorites import transactions as favorites
 from agent.domains.messages import transactions as messages
 from agent.domains.notifications import transactions as notifications
+from agent.domains.todos import transactions as todos
 
-_DOMAINS = {"favorites": favorites, "notifications": notifications, "messages": messages}
+_DOMAINS = {"favorites": favorites, "notifications": notifications,
+            "messages": messages, "todos": todos}
 
 
 def native_domain(grant):

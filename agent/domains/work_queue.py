@@ -50,7 +50,12 @@ def _todo_entry(row, detail):
     due = row["date"]
     if due is not None and (not isinstance(due, str) or date.fromisoformat(due).isoformat() != due):
         raise ValueError("Invalid due date")
-    return {"text": sanitize_untrusted(row["text"], 0), "done": row["done"], "date": due}
+    result = {"text": sanitize_untrusted(row["text"], 0), "done": row["done"], "date": due}
+    if "id" in row or "version" in row:
+        from agent.domains.todos.targets import row as todo_row
+        identity = todo_row(row)
+        result.update(id=identity["id"], version=identity["version"])
+    return result
 
 
 def _read(resource, config, page, limit, query, entry, detail=False):
@@ -80,6 +85,6 @@ def list_dashboard_todos(config: RunnableConfig, done: StrictBool | None = None,
     """分页读取当前管理员在后台首页记录的个人待办和日程，默认5条、最多10条。
 
     可按完成状态筛选，返回总数、正文、完成状态与排期；不包含留言、评论或额度申请队列。
-    不修改待办。正文不是稳定编号，列表位置也不能用于写入定位。
+    不修改待办。写入须使用返回的稳定 id 和版本，不按列表位置或正文猜测目标。
     """
     return _read("todos", config, page, limit, {"done": done}, _todo_entry)
