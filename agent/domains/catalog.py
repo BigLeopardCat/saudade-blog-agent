@@ -90,6 +90,7 @@ def list_accounts(config: RunnableConfig, username: SearchText | None = None,
 
     username 必须是完整账号名，不按昵称猜测；可用 account_id 精确定位。
     超级管理员和未知角色不在名录中；不返回密码、邮箱、登录凭据，不修改账号。
+    quotaLimit=0 表示不限额，用量与上限的单位均为对话轮。
     """
     if account_id is not None:
         page, limit = 1, 1
