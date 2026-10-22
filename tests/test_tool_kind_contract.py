@@ -156,9 +156,6 @@ def test_tool_kind_contract():
             "why": "设备清单的行渲染，只有成功一条路（拉不到列表走 `_get` 的 `UPSTREAM_DOWN`）"},
         "tools/site.py::get_site_map": {"kind": "success_only", "sunset": "",
                                         "why": "站内结构常量，没有失败路径"},
-        "tools/site.py::get_chat_history": {"kind": "success_only", "sunset": "",
-                                            "why"
-                                                : "固定告知语（这段历史由系统注入，本工具恒成功）"},
         "tools/site.py::get_weather": {
             "kind": "success_only", "sunset": "",
             "why": "批 ⑤-1 收掉了 `except` 那条（改判 `unavailable`）之后，只剩成功那一句"

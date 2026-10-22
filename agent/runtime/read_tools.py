@@ -12,7 +12,8 @@ from tools.base import get_all_tools
 ARTICLE_READ_TOOLS = frozenset({"rag_search", "search_notes", "get_article_detail"})
 SITE_READ_TOOLS = frozenset({"get_blog_info", "get_social_links", "get_site_map"})
 OWN_READ_TOOLS = frozenset({"list_my_favorites", "get_unread_summary",
-                            "list_notifications", "list_my_messages"})
+                            "list_notifications", "list_my_messages",
+                            "list_my_board", "get_chat_history"})
 ADMIN_READ_TOOLS = frozenset({"get_server_status", "get_service_health", "get_user_stats",
                               "get_note_stats", "get_note_periods"})
 MODERATION_READ_TOOLS = frozenset({"get_moderation_status", "list_admin_board",
@@ -98,15 +99,21 @@ def queue_tools() -> dict:
 
 
 def own_tools() -> dict:
-    from agent.domains import own_reads
+    from agent.domains import own_activity, own_reads
 
     selected = _tools_with_scope(OWN_READ_TOOLS, SCOPE_READ_OWN)
     selected.update({tool.name: tool for tool in (
-        own_reads.get_unread_summary, own_reads.list_my_messages)})
+        own_reads.get_unread_summary, own_reads.list_my_messages,
+        own_activity.list_my_board, own_activity.get_chat_history)})
     return selected
 
 
 def own_domains(tools: dict) -> dict:
     names = {"favorites": "list_my_favorites", "notifications": "list_notifications",
              "messages": "list_my_messages"}
-    return {domain: {name: tools[name]} for domain, name in names.items() if name in tools}
+    domains = {domain: {name: tools[name]} for domain, name in names.items() if name in tools}
+    activity = {name: tools[name] for name in ("list_my_board", "get_chat_history")
+                if name in tools}
+    if activity:
+        domains["own_activity"] = activity
+    return domains

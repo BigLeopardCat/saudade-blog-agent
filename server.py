@@ -898,18 +898,12 @@ def _build_messages(req: ChatRequest, confirm_grant: dict | None = None) -> list
 def _run_agent_sync(messages: list, thread_id: str, user_id: int = 0,
                     principal: Principal | None = None,
                     ledger: dict | None = None,
-                    recent_tools: list[str] | None = None) -> tuple[str, str, list]:
+                    recent_tools: list[str] | None = None,
+                    conversation_id: int | None = None) -> tuple[str, str, list]:
     """Run agent synchronously in a thread. Returns (reply, nav_line, exec_rows)."""
-    # user_id 注入 configurable：设备类工具（list_devices/device_oled_display）
-    # 经 RunnableConfig 读取并以用户身份签发 JWT 调用 device-service
-    # principal 一并注入：execute 的权限判据读它（agent/authz.py；缺省 = 身份不明）
-    # ledger 一并注入：gate 的台账否认判据（洞⑦）读它，见 _ledger_for_graph
-    # recent_tools 一并注入：授权式审核快道的**结构化准入判据**（20260929 批 F1'，
-    #   与流式那半同源同义，见 `_run_agent_stream_to_queue` 的同名参数注）
-    # idem_resuming 一并注入：写幂等账的**分流判据**（批 F）——这一轮开始时上一轮跑没
-    #   跑完。与流式那半同源同义，见 `_run_agent_stream_to_queue` 的同名参数注。
-    # recursion_limit 覆盖默认 9999（等效无界）：幻觉重试循环有界
+    # Bind actor and conversation to tool configuration.
     config = {"configurable": {"thread_id": thread_id, "user_id": user_id,
+                               "conversation_id": conversation_id,
                                "principal": principal or Principal(uid=user_id),
                                "recent_tools": list(recent_tools or []),
                                "idem_resuming": _idem_resuming(thread_id)},
@@ -1027,7 +1021,7 @@ async def chat(req: ChatRequest, request: Request):
             )
         reply, nav_line, exec_rows = await _submit_with_context(
             loop, _run_agent_sync, messages, thread_id, req.user_id, principal,
-            _ledger_for_graph(req), req.recent_tools)
+            _ledger_for_graph(req), req.recent_tools, req.conversation_id)
         new_summary = None
         if summary_task is not None:
             new_summary = (await summary_task).strip() or None
