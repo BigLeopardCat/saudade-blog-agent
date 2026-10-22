@@ -5,7 +5,7 @@ read directly. Private reads require verified identity and a runtime scope
 check. Writes use separate domain confirmation tools; browser commands remain in the legacy path.
 """
 
-from agent.authz import SCOPE_READ_OWN, SCOPE_READ_PUBLIC, TOOL_SCOPE, holds
+from agent.authz import SCOPE_ADMIN_CONSOLE, SCOPE_READ_OWN, SCOPE_READ_PUBLIC, TOOL_SCOPE, holds
 from agent.principal import SOURCE_ASSERTION
 from tools.base import get_all_tools
 
@@ -13,19 +13,35 @@ ARTICLE_READ_TOOLS = frozenset({"rag_search", "search_notes", "get_article_detai
 SITE_READ_TOOLS = frozenset({"get_blog_info", "get_social_links", "get_site_map"})
 OWN_READ_TOOLS = frozenset({"list_my_favorites", "get_unread_summary",
                             "list_notifications", "list_my_messages"})
+ADMIN_READ_TOOLS = frozenset({"get_server_status", "get_service_health", "get_user_stats",
+                              "get_note_stats", "get_note_periods"})
+
+_ADMIN_DESCRIPTIONS = {
+    "get_server_status": "Read server CPU, load, memory, disk usage and uptime. Admin only.",
+    "get_service_health": "Read service health, restarts and recent diagnostic counts. Admin only.",
+    "get_user_stats": "Read total users, role distribution and recent activity. Admin only.",
+    "get_note_stats": "Read visible articles' aggregate traffic, rankings and trend. Admin only.",
+    "get_note_periods": "Read article traffic by week, month or year, including partial periods. "
+                        "Choose kind from the user's requested period. Admin only.",
+}
+
+
+def scoped_reads_enabled(principal, scope: str, user_id=None) -> bool:
+    return (getattr(principal, "source", None) == SOURCE_ASSERTION
+            and type(getattr(principal, "uid", None)) is int
+            and principal.uid > 0 and holds(principal, scope)
+            and (user_id is None or (type(user_id) is int and user_id == principal.uid)))
 
 
 def own_reads_enabled(principal) -> bool:
-    return (getattr(principal, "source", None) == SOURCE_ASSERTION
-            and type(getattr(principal, "uid", None)) is int
-            and principal.uid > 0 and holds(principal, SCOPE_READ_OWN))
+    return scoped_reads_enabled(principal, SCOPE_READ_OWN)
 
 
 def _tools_with_scope(names: frozenset[str], scope: str) -> dict:
     wrong_scope = {name: TOOL_SCOPE.get(name) for name in names
                    if TOOL_SCOPE.get(name) != scope}
     if wrong_scope:
-        label = "public" if scope == SCOPE_READ_PUBLIC else "own"
+        label = scope.removeprefix("read.")
         raise RuntimeError(f"Hybrid tools must remain {label} reads: {wrong_scope}")
     selected = {tool.name: tool for tool in get_all_tools()
                 if tool.name in names}
@@ -41,6 +57,12 @@ def article_tools() -> dict:
 
 def site_tools() -> dict:
     return _tools_with_scope(SITE_READ_TOOLS, SCOPE_READ_PUBLIC)
+
+
+def admin_tools() -> dict:
+    selected = _tools_with_scope(ADMIN_READ_TOOLS, SCOPE_ADMIN_CONSOLE)
+    return {name: tool.model_copy(update={"description": _ADMIN_DESCRIPTIONS[name]})
+            for name, tool in selected.items()}
 
 
 def own_tools() -> dict:
