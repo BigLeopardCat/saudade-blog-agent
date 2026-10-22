@@ -173,6 +173,8 @@ flowchart TB
 │   │   ├── registry.py        # 已迁移确认领域的显式注册
 │   │   ├── own_reads.py      # 仅计数聚合、有界信件摘要与按编号读取正文
 │   │   ├── moderation.py     # 审核聚合、分页记录及按编号读取内容
+│   │   ├── admin_pages.py    # 管理员读取共用的权限、分页和结果边界
+│   │   ├── catalog.py        # 后台文章元数据与账号名录
 │   │   ├── work_queue.py     # 有界读取额度申请与个人待办
 │   │   ├── read_state.py     # 固定编号已读范围、完整性、归属及逐项回执核验
 │   │   ├── messages/

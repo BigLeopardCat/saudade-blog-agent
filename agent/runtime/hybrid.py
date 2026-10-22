@@ -28,6 +28,7 @@ from agent.runtime.pending import restore as restore_pending
 from agent.runtime.read_tools import (
     admin_tools,
     article_tools,
+    catalog_tools,
     moderation_tools,
     own_domains,
     own_reads_enabled,
@@ -115,6 +116,7 @@ class HybridArm:
         self.admin_read_tools = admin_tools() if admin_read_tools is None else admin_read_tools
         self.moderation_read_tools = (moderation_tools() if moderation_read_tools is None
                                       else moderation_read_tools)
+        self.catalog_read_tools = catalog_tools()
         self.queue_read_tools = queue_tools() if queue_read_tools is None else queue_read_tools
         # Runtime probes inspect .graph for the existing checkpointer.
         self.graph = legacy
@@ -223,6 +225,7 @@ class HybridArm:
         if scoped_reads_enabled(cfg.get("principal"), SCOPE_ADMIN_CONSOLE, cfg.get("user_id")):
             domains["admin_reports"] = self.admin_read_tools
             domains["admin_moderation"] = self.moderation_read_tools
+            domains["admin_catalog"] = self.catalog_read_tools
             domains["admin_work_queue"] = self.queue_read_tools
         if own_reads_enabled(cfg.get("principal")):
             domains.update(own_domains(self.own_read_tools))
