@@ -15,6 +15,8 @@ OWN_READ_TOOLS = frozenset({"list_my_favorites", "get_unread_summary",
                             "list_notifications", "list_my_messages"})
 ADMIN_READ_TOOLS = frozenset({"get_server_status", "get_service_health", "get_user_stats",
                               "get_note_stats", "get_note_periods"})
+MODERATION_READ_TOOLS = frozenset({"get_moderation_status", "list_admin_board",
+                                   "list_admin_comments"})
 
 _ADMIN_DESCRIPTIONS = {
     "get_server_status": "Read server CPU, load, memory, disk usage and uptime. Admin only.",
@@ -63,6 +65,15 @@ def admin_tools() -> dict:
     selected = _tools_with_scope(ADMIN_READ_TOOLS, SCOPE_ADMIN_CONSOLE)
     return {name: tool.model_copy(update={"description": _ADMIN_DESCRIPTIONS[name]})
             for name, tool in selected.items()}
+
+
+def moderation_tools() -> dict:
+    from agent.domains import moderation
+
+    selected = _tools_with_scope(MODERATION_READ_TOOLS, SCOPE_ADMIN_CONSOLE)
+    selected.update({tool.name: tool for tool in (moderation.get_moderation_status,
+                    moderation.list_admin_board, moderation.list_admin_comments)})
+    return selected
 
 
 def own_tools() -> dict:
