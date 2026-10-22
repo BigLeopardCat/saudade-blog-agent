@@ -111,3 +111,19 @@ def test_runtime_loads_public_tools_without_identity_or_legacy(backend, monkeypa
         {"messages": [HumanMessage(content="读取公开资料")]}, {}))
     assert events[1][1]["model"]["messages"][0].content == "已读取公开资料。"
     assert len(backend["requests"]) == 1
+
+
+
+def test_transport_rejects_oversized_raw_page_before_model_projection(backend):
+    backend["override"] = {"code": 200, "total": 1, "data": [{
+        **backend["articles"][0], "tags": [
+            {"id": i + 1, "level": 1, "name": "x" * 80} for i in range(2000)]}]}
+    assert public_catalog.list_notes.invoke({}).kind == "unavailable"
+
+
+def test_database_tag_limit_propagates_truncation_and_rejects_fake_flag(backend):
+    backend["articles"][0]["tagsTruncated"] = True
+    result = public_catalog.list_notes.invoke({})
+    assert json.loads(str(result))["items"][0]["tagsTruncated"] is True
+    backend["articles"][0]["tagsTruncated"] = "false"
+    assert public_catalog.list_notes.invoke({}).kind == "unavailable"
