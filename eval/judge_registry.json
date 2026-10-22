@@ -236,7 +236,7 @@
         0
       ],
       "agent/runtime/session.py": [
-        8,
+        9,
         0
       ],
       "agent/runtime/turns.py": [
@@ -414,10 +414,18 @@
       "agent/domains/work_queue.py": [
         0,
         0
+      ],
+      "agent/domains/admin_pages.py": [
+        0,
+        0
+      ],
+      "agent/domains/catalog.py": [
+        0,
+        0
       ]
     },
     "total": [
-      1156,
+      1157,
       4848
     ]
   },

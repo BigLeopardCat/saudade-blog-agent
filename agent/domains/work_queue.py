@@ -1,22 +1,16 @@
 """Bounded administrator quota requests and personal dashboard todos."""
 
-import json
 from datetime import date
-from typing import Annotated, Literal
-from urllib.parse import urlencode
+from functools import partial
+from typing import Literal
 
 from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import tool
-from pydantic import Field, StrictBool, StrictInt
+from pydantic import StrictBool
 
-from agent.authz import SCOPE_ADMIN_CONSOLE
+from agent.domains.admin_pages import Identifier, Limit, Page, read_page
 from agent.reports import sanitize_untrusted
-from agent.runtime.read_tools import scoped_reads_enabled
-from tools import base
 
-Page = Annotated[StrictInt, Field(ge=1, le=10000)]
-Limit = Annotated[StrictInt, Field(ge=1, le=10)]
-Identifier = Annotated[StrictInt, Field(gt=0)]
 Status = Literal["pending", "approved", "rejected", "all"]
 
 
@@ -48,7 +42,7 @@ def _quota_entry(row, detail):
     return entry
 
 
-def _todo_entry(row, _detail):
+def _todo_entry(row, detail):
     if (not isinstance(row, dict) or not isinstance(row.get("text"), str)
             or not row["text"].strip() or len(row["text"]) > 200
             or type(row.get("done")) is not bool or "date" not in row):
@@ -60,35 +54,9 @@ def _todo_entry(row, _detail):
 
 
 def _read(resource, config, page, limit, query, entry, detail=False):
-    cfg = (config or {}).get("configurable") or {}
-    if not scoped_reads_enabled(cfg.get("principal"), SCOPE_ADMIN_CONSOLE, cfg.get("user_id")):
-        return base.unavailable("需要已验签且一致的管理员身份。")
-    params = {"page": page, "page_size": limit, **query}
-    params = {key: str(value).lower() if type(value) is bool else value
-              for key, value in params.items() if value is not None}
-    data = base._admin_get("/api/protected/" + resource + "?" + urlencode(params),
-                           config, paginated=True)
-    if isinstance(data, base.ToolResult):
-        return data
-    if not isinstance(data, dict):
-        return base.unavailable("列表返回格式无法核对。")
-    rows, total = data.get("items"), data.get("total")
-    offset = (page - 1) * limit
-    if (not isinstance(rows, list) or len(rows) > limit or type(total) is not int or total < 0
-            or len(rows) != min(limit, max(0, total - offset))):
-        return base.unavailable("列表缺少可靠总数或分页范围不一致。")
-    try:
-        entries = [entry(row, detail) for row in rows]
-    except (ValueError, TypeError):
-        return base.unavailable("记录字段无法核对。")
     expected = {key: value for key, value in query.items()
                 if value is not None and not (key == "status" and value == "all")}
-    if any(any(row.get(key) != value for key, value in expected.items()) for row in entries):
-        return base.unavailable("返回记录与请求范围不一致。")
-    result = {"resource": resource, "filters": query, "items": entries,
-              "total": total,
-              "page": page, "pageSize": limit, "hasMore": offset + len(entries) < total}
-    return base.ok(json.dumps(result, ensure_ascii=False, separators=(",", ":")))
+    return read_page(resource, config, page, limit, query, partial(entry, detail=detail), expected)
 
 
 @tool
