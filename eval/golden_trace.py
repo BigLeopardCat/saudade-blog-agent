@@ -116,7 +116,7 @@ def case_dir(run_id: str) -> str:
 
 
 def start_case(run_id: str, case_id: str, message: str = "", role: str | None = None,
-               thread: str = "golden_thread") -> str | None:
+               thread: str = "golden_thread", runtime: dict | None = None) -> str | None:
     """建 recorder 并返回 trace_id（关掉时返回 None）。
 
     调用点必须在 `ex.submit` 之前（见模块头注：晚一步就是空壳 trace）。
@@ -145,7 +145,8 @@ def start_case(run_id: str, case_id: str, message: str = "", role: str | None = 
     except ValueError:
         _lim = trace_mod.TOOL_RESULT_LIMIT_DEFAULT
     start_trace(tid, 0, thread,
-                {"golden": True, "run": run_id, "case": case_id, "role": role,
+                {"source": "evaluation", "runtime": runtime or {},
+                 "golden": True, "run": run_id, "case": case_id, "role": role,
                  "message": (message or "")[:200], "tool_result_limit": _lim},
                 dir=case_dir(run_id), name=case_id,
                 # 生产 trace 20260925 起按天分目录，**golden 不分**：`<run_id>/` 已经是

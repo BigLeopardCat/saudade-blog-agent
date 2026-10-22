@@ -75,6 +75,8 @@ import subprocess
 import sys
 import time
 
+from eval import usage as usage_metrics
+
 sys.path.insert(0, "eval")
 
 from baseline_group import aggregate          # noqa: E402,I001  （逐条计数只有一处实现）
@@ -264,15 +266,9 @@ def trace_metrics(run_dir: str) -> dict:
             continue        # 读不到、或不是 trace（合法 JSON 但不是对象）——都不算语料
         files += 1
         for e in t.get("events") or []:
-            if e.get("event") == "llm_done" and "input" in e:
-                u = usage.setdefault(e.get("node") or "?", {"calls": 0, "in": 0, "out": 0,
-                                                             "cache": 0, "cache_seen": 0})
-                u["calls"] += 1
-                u["in"] += int(e.get("input") or 0)
-                u["out"] += int(e.get("output") or 0)
-                if "cache_read" in e:
-                    u["cache_seen"] += 1
-                    u["cache"] += int(e.get("cache_read") or 0)
+            if e.get("event") == "llm_done":
+                u = usage.setdefault(e.get("node") or "?", usage_metrics.empty())
+                usage_metrics.add(u, e)
             if e.get("node") != "planner":
                 continue
             ev = e.get("event")
@@ -324,7 +320,7 @@ def token_stats(nmetrics: list) -> dict:
     for m in nmetrics:
         for node, u in (m.get("usage") or {}).items():
             t = merged.setdefault(node, {"calls": 0, "in": 0, "out": 0, "cache": 0,
-                                         "cache_seen": 0})
+                                         "cache_seen": 0, "cache_in": 0})
             for k in t:
                 t[k] += u.get(k, 0)
     out = {}
@@ -335,8 +331,9 @@ def token_stats(nmetrics: list) -> dict:
             "in_per_call": round(t["in"] / n), "out_per_call": round(t["out"] / n),
             "in_total": t["in"], "out_total": t["out"],
             "cache_seen": t["cache_seen"], "cache_total": t["cache"],
-            "hit_rate": (round(t["cache"] / t["in"], 4)
-                         if t["cache_seen"] and t["in"] else None),
+            "cache_input_total": t["cache_in"],
+            "hit_rate": (round(t["cache"] / t["cache_in"], 4)
+                         if t["cache_seen"] and t["cache_in"] else None),
         }
     return out
 

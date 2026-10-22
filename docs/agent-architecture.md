@@ -240,7 +240,7 @@ flowchart TB
 ├── docs/                      # 本文档（现状：系统是什么）
 │   ├── 问题记录.md            #   事故：现象 → 根因 → 修复 → 回归锁
 │   ├── adr/                   #   决策记录：当时的取舍，含"决定不做某事"
-│   ├── eval-observability.md  #   评测与可观测性（L0–L3 分层）
+│   ├── eval-observability.md  #   评测与可观测性（指标口径与结果验收）
 │   ├── rag-design.md          #   检索设计
 │   ├── native-toolcalls-mainline.md / toolcall-stability-roadmap.md  # 接口层与稳定性主线
 │   └── identity-and-permissions.md + 其余专题（分节 / 多模态 / 参数调优 / 零调用残余 / lint 基线）
@@ -1494,7 +1494,7 @@ flowchart TB
 ## 9. 部署与运维
 
 - Agent 仓库独立部署：push 即触发 CI（`.github/workflows/eval.yml`：L0 秒级套件门禁；
-  L2 全量 golden 20260920 起撤出 CI，改本机按需跑，见 [eval-observability.md](eval-observability.md) §4 末注），
+  L2 全量 golden 20260920 起撤出 CI，改本机按需跑，见 [eval-observability.md](eval-observability.md)），
   但 push ≠ 上线——运行时加载的是常驻进程里的代码，改动要重启该服务才生效。
   本地轻量验证：`.venv/bin/python -m py_compile server.py agent/prompts.py`（仅语法，秒级）；
   重启后用健康检查确认真起来了（看 `agent_ready: true`）。不要再手动 nohup 裸跑——

@@ -8,7 +8,7 @@
     "I",
     "W"
   ],
-  "total": 596,
+  "total": 595,
   "by_file": {
     "agent/action_text.py": 2,
     "agent/authz.py": 5,
@@ -29,7 +29,6 @@
     "eval/corpus_invariants.py": 3,
     "eval/corpus_terms.py": 6,
     "eval/d4_structured_output_poc.py": 5,
-    "eval/daily_metrics.py": 1,
     "eval/frame_budget.py": 2,
     "eval/golden_case_runner.py": 4,
     "eval/golden_draft.py": 4,

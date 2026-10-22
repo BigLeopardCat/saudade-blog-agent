@@ -13,6 +13,7 @@ from agent.authz import check
 from agent.llm_usage import usage_fields
 from agent.runtime.results import TurnResult
 from agent.runtime.turns import check_cancelled
+from tools.base import unavailable
 from utils import trace as trace_mod
 from utils.trace import record
 
@@ -79,20 +80,22 @@ class ToolSession:
         return None
 
     def _accept_calls(self, calls, round_index):
+        if any(call.get("name") == "delegate_to_site_agent" for call in calls):
+            return "model_delegate"
         if len(calls) > 1 and any(getattr(self.tools.get(call.get("name")), "return_direct", False)
                                   for call in calls):
-            return False
+            return "parallel_terminal_calls"
         reads = sum(call.get("name") in self.tools for call in calls)
         if round_index >= _MAX_READ_ROUNDS or self.calls_used + reads > _MAX_READ_CALLS:
-            return False
+            return "call_budget"
         for call in calls:
             name = call.get("name")
             if not call.get("id") or not isinstance(call.get("args"), dict):
-                return False
+                return "invalid_tool_call"
             if name not in self.tools:
                 if name not in self.loaders or self.loaders[name] in self.loaded:
-                    return False
-        return True
+                    return "unknown_or_reloaded_tool"
+        return None
 
     def _read(self, name, args):
         if name in self.own_tool_names:
@@ -103,7 +106,7 @@ class ToolSession:
             return self.tools[name].invoke(args, config=self.config)
         except (ToolException, ValueError) as exc:
             record("hybrid", "read_error", name=name, error=type(exc).__name__)
-            return f"{name} 调用失败（{type(exc).__name__}），请如实说明。"
+            return unavailable(f"{name} 调用失败（{type(exc).__name__}），请如实说明。")
 
     def _append_result(self, call, prompt, round_index):
         name = call["name"]
@@ -121,10 +124,16 @@ class ToolSession:
         if isinstance(body, TurnResult):
             # Confirmation tokens stay in the terminal outcome, never in the model prompt or trace.
             self.outcome = self.outcome_adapter(body) if self.outcome_adapter else body
+            execution = self.outcome.execution or {}
+            kind = ("prepared" if execution.get("pending_confirm") else
+                    "noop" if execution.get("noop_note") else
+                    "cancelled" if execution.get("pending_event") else "terminal")
+            record("hybrid", "call", name=name, round=round_index, kind=kind)
             return True
         if body is None:
             prompt.append(ToolMessage(content="无权读取此数据。", tool_call_id=call["id"]))
             return True
+        kind = getattr(body, "kind", "unknown")
         body = str(body)
         remaining = _MAX_TOTAL_RESULT_CHARS - self.result_chars
         if remaining <= 0:
@@ -138,7 +147,7 @@ class ToolSession:
         self.result_chars += len(body)
         self.calls_used += 1
         record("hybrid", "call", name=name, args=args, round=round_index,
-               result=trace_mod.tool_result_text(body, name))
+               kind=kind, result=trace_mod.tool_result_text(body, name))
         record("hybrid", "read_tool", name=name, result_chars=len(body))
         return True
 
@@ -149,6 +158,8 @@ class ToolSession:
             if prompt_chars > MAX_PROMPT_CHARS:
                 return self._handoff("prompt_budget", prompt_chars=prompt_chars)
             started = time.monotonic()
+            record("hybrid", "llm_start", round=round_index, engine="native",
+                   prompt_chars=prompt_chars)
             response = self.llm.invoke(prompt)
             record("hybrid", "llm_done", round=round_index, engine="native",
                    duration_s=round(time.monotonic() - started, 2),
@@ -159,8 +170,9 @@ class ToolSession:
                 reply = str(getattr(response, "content", "") or "").strip()
                 return TurnResult(reply) if reply else self._handoff(
                     "empty", read_calls=self.calls_used)
-            if not self._accept_calls(calls, round_index):
-                return self._handoff("delegate_or_budget", read_calls=self.calls_used)
+            reason = self._accept_calls(calls, round_index)
+            if reason:
+                return self._handoff(reason, read_calls=self.calls_used)
             prompt.append(response)
             for call in calls:
                 check_cancelled(self.config)

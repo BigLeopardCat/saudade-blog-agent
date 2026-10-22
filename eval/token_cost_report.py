@@ -1,37 +1,12 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""token 用量与**前缀缓存命中率**的按天聚合（20260927）。
+"""按天、节点和引擎聚合已观测用量；缺失字段不作为零值。
 
-**为什么存在**：本 agent 的输入侧占成本 ~99%，能省的只有"落在缓存里的那部分"——
-前缀缓存按渲染后字符串的**连续前缀**命中，所以"模板里哪一段算稳定前缀"是个可测量
-的量。生产 trace 从 20260927 起在 `llm_done` 事件里带 `input/output/cache_read`
-（见 `agent/llm_usage.py`），这个脚本就是把它读成人话的那一端：
-
-  · 按 **节点 × 引擎** 切：旧图节点和迁移档的 hybrid 调用都会按事件中的节点名归集；
-  · **命中率** `cache_read/input` 是按"报了缓存字段的那些调用"算的，分**分母**单列
-    ——`cache_read` 缺席 ≠ 0（端点没回这个字段时量不到，不是没命中，见
-    `agent/llm_usage.py` 的字段契约）。把两件事混起来算，会得出"缓存完全没命中"
-    这种**没数据支撑的结论**。
-  · 按天一行：同一档模板改动的效果，看的是"改前那几天 vs 改后那几天"的命中率差。
-
-**钱数只能由调用方给**：网关不回任何计价字段（已核），单价是商务数字、随时会变
-⇒ 脚本里**不写价格常量**。要金额就显式传 `--price-in/--price-out/--price-cache`
-（元/百万 token），不传就只打 token 数。
-
-用法（cd saudade-blog-agent）：
-  .venv/bin/python eval/token_cost_report.py                    # 生产 trace，近 7 天
-  .venv/bin/python eval/token_cost_report.py --from 20260927    # 自该日起
-  .venv/bin/python eval/token_cost_report.py --days 1           # 只看最近 24 小时
-  .venv/bin/python eval/token_cost_report.py --dir <golden run 目录>
-        # golden 一次跑完的 trace 目录：**同一次 run 里所有用例共用同一份技能菜单/
-        #  规则正文** ⇒ 它就是"模板重排到底有没有把前缀抬起来"的离线判据
-        #  （不用等生产流量；调用足够密集时缓存会真的命中）。
-  .venv/bin/python eval/token_cost_report.py --price-in 12 --price-out 36 --price-cache 1.2
-
-**不是门禁**：恒退出 0（同 `eval/llm_judge.py`）——它出的是报表，判据在别处
-（`tests/test_llm_usage.py` 钉住记账接线，`tests/test_prompt_prefix.py` 钉住前缀长度）。
+价格由调用方完整提供，单位为元/百万 token；用量不完整时不估算费用。
+请求来源、运行版本与执行路径的分组报告见 daily_metrics --json。
 """
 import argparse
+import math
 import os
 import sys
 from collections import defaultdict
@@ -39,9 +14,7 @@ from collections import defaultdict
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 # 生产 trace 根 = 应用配置那一处（`settings.trace_dir`），不手抄第二份路径。
 from config import settings  # noqa: E402
-
-# 枚举与读取各自只有一个实现（20260925/20260926）：布局或压缩形态一变，
-# 四处读取端不会各看一半语料。
+from eval import usage
 from utils.trace_files import iter_trace_files, parse_trace_name  # noqa: E402
 from utils.trace_io import load_trace  # noqa: E402
 
@@ -61,41 +34,25 @@ def _stamp_of(path: str) -> str:
 
 
 def collect(paths: list[str]) -> dict:
-    """扫一遍 trace，把每条 `llm_done` 的用量按 (天, 节点, 引擎) 归集。
-
-    判据是**事件里有没有 `input` 键**，不按节点名过滤；旧图与 hybrid 共用
-    `agent.llm_usage` 的字段契约。没有 `input` 的事件不进入聚合，不能解释成零用量；
-    表格中的"未量到"专指有输入用量、但没有缓存命中字段的调用。
-    """
-    agg = defaultdict(lambda: {"calls": 0, "unnamed": 0, "in": 0, "out": 0,
-                               "cache_seen": 0, "cache": 0})
+    """Group completed inference events and their measured usage by day/node/engine."""
+    agg = defaultdict(usage.empty)
     traces = 0
     for p in paths:
         doc = load_trace(p)
-        if not doc:
+        if not isinstance(doc, dict):
             continue
         traces += 1
         day = _stamp_of(p)
         for ev in doc.get("events") or []:
-            if not isinstance(ev, dict) or "input" not in ev:
+            if not isinstance(ev, dict) or ev.get("event") != "llm_done":
                 continue
-            node = ev.get("node") or "?"
-            engine = ev.get("engine") or "-"
-            row = agg[(day, node, engine)]
-            row["calls"] += 1
-            row["in"] += int(ev.get("input") or 0)
-            row["out"] += int(ev.get("output") or 0)
-            if "cache_read" not in ev:
-                # 端点没回缓存字段：这一栏是"量不到"，不许并进命中率的分母
-                row["unnamed"] = row.get("unnamed", 0) + 1
-                continue
-            row["cache_seen"] += 1
-            row["cache"] += int(ev.get("cache_read") or 0)
+            key = (day, ev.get("node") or "?", ev.get("engine") or "-")
+            usage.add(agg[key], ev)
     return {"traces": traces, "rows": agg}
 
 
 def _sum(agg: dict, keys: list) -> dict:
-    out = {"calls": 0, "unnamed": 0, "in": 0, "out": 0, "cache_seen": 0, "cache": 0}
+    out = usage.empty()
     for k in keys:
         for f in out:
             out[f] += agg[k][f]
@@ -103,37 +60,26 @@ def _sum(agg: dict, keys: list) -> dict:
 
 
 def totals(paths: list[str]) -> dict:
-    """一遍扫完的**合计行**（给别的报告端复用：扫描这件事只有这一份实现）。
-
-    返回 `collect` 的 `traces` + 合计（`calls/unnamed/in/out/cache_seen/cache`）+
-    算好的 `hit_rate`。口径**与本模块 `main()` 打的那行合计逐字同式**（`cache/in`），
-    不许在别处另算一份。两件事**分开带出去、不许在这里合并**：
-
-      · `hit_rate` 的分母是**输入 tok 总数**（`in`），**不是**调用数；`cache_seen`
-        （报了缓存字段的调用数）只当**闸**用——它是 0 就说明这次压根没人报，率是
-        **`None`** 而不是 `0.0`。"量不到"与"命中 0 次"是两件事，写成后者会得出
-        "缓存完全没命中"这种没数据支撑的结论（`cache_read` 缺席的语义见
-        `agent/llm_usage.py`）。
-      · **有调用没报缓存字段时**（`cache_seen < calls`），分子**少算了**那一部分——
-        所以调用端要把 `calls` 与 `cache_seen` 并列摆出来，不要只报一个率。
-    """
+    """Aggregate all measured input; cache ratio only uses cache-covered input."""
     got = collect(paths)
     tot = _sum(got["rows"], list(got["rows"]))
     tot["traces"] = got["traces"]
-    tot["hit_rate"] = (tot["cache"] / tot["in"]) if (tot["cache_seen"] and tot["in"]) else None
+    tot["hit_rate"] = usage.hit_rate(tot)
     return tot
 
 
 def _row(label: str, r: dict, price: tuple | None) -> str:
-    hit = (f"{r['cache'] / (r['in'] or 1) * 100:.1f}%"
-           if r["cache_seen"] else "n/a")
+    ratio = usage.hit_rate(r)
+    hit = f"{ratio * 100:.1f}%" if ratio is not None else "n/a"
     tail = ""
-    if price and r["cache_seen"]:
+    if price and usage.complete(r):
         p_in, p_out, p_cache = price
         miss = r["in"] - r["cache"]
         yuan = (miss * p_in + r["cache"] * p_cache + r["out"] * p_out) / 1e6
         no_cache = (r["in"] * p_in + r["out"] * p_out) / 1e6
         tail = f" | ¥{yuan:.2f}（不命中则 ¥{no_cache:.2f}）"
+    elif price:
+        tail = " | 费用未知（用量不完整）"
     return (f"{label:<28} {r['calls']:>5} {r['in']:>10} {r['out']:>7} "
             f"{r['cache']:>10} {hit:>7} {r['calls'] - r['cache_seen']:>5}{tail}")
 
@@ -143,9 +89,12 @@ _HEAD = (f"{'分组':<28} {'调用':>5} {'输入tok':>10} {'输出tok':>7} "
 
 
 def _parse_price(a) -> tuple | None:
-    if a.price_in is None and a.price_out is None:
+    values = (a.price_in, a.price_out, a.price_cache)
+    if all(v is None for v in values):
         return None
-    return (a.price_in or 0.0, a.price_out or 0.0, a.price_cache or 0.0)
+    if any(v is None or not math.isfinite(v) or v < 0 for v in values):
+        raise ValueError("请完整提供三个有限且非负的单价")
+    return values
 
 
 def main() -> int:
@@ -158,7 +107,10 @@ def main() -> int:
     ap.add_argument("--price-out", type=float, default=None, help="元/百万 token")
     ap.add_argument("--price-cache", type=float, default=None, help="元/百万 token")
     a = ap.parse_args()
-    price = _parse_price(a)
+    try:
+        price = _parse_price(a)
+    except ValueError as exc:
+        ap.error(str(exc))
 
     paths = iter_trace_files(a.dir)
     keep = []
@@ -180,9 +132,7 @@ def main() -> int:
     print(f"语料：{got['traces']} 份 trace"
           + (f"（{a.frm or '不限'} ~ {a.to or '不限'}）" if a.frm or a.to else ""))
     if not agg:
-        print("\n没有带用量的 llm_done 事件。两种可能，别混为一谈：")
-        print("  · 这份语料早于 20260927（记账上线日）⇒ 老 trace 里本来就没有这一格；")
-        print("  · 记账没接上 ⇒ 去 tests/test_llm_usage.py 看那条接线判据。")
+        print("\n没有完成的模型调用事件；不代表请求成功或零消耗。")
         return 0
 
     print("\n## 按天 × 节点 × 引擎")
@@ -199,6 +149,10 @@ def main() -> int:
     for eng in sorted({k[2] for k in agg}):
         print(_row(f"  引擎 {eng}", _sum(agg, [k for k in agg if k[2] == eng]), price))
 
+    print(f"\n字段覆盖：输入 {tot['measured']}/{tot['calls']}，"
+          f"输出 {tot['output_seen']}/{tot['calls']}，"
+          f"缓存 {tot['cache_seen']}/{tot['calls']}，"
+          f"思考 {tot['reasoning_seen']}/{tot['calls']}")
     if tot["cache_seen"]:
         print(f"\n命中率 = 命中 tok / 输入 tok（只算**报了**缓存字段的 "
               f"{tot['cache_seen']} 次调用；未量到 {tot['calls'] - tot['cache_seen']} 次"

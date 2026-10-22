@@ -2128,20 +2128,11 @@ async def chat_stream(req: ChatRequest, request: Request):
         # 经 _submit_with_context 的 copy_context 继承，图节点内 record 命中；
         # 收尾由 event_stream finally 统一 finish_trace（见其注释，超时场景也要落盘）
         start_trace(get_trace_id(), req.user_id, thread_id, {
+            "source": "production", "runtime": runtime_probe.request_context(_agent),
             "message": (req.message or "")[:200], "has_image": bool(req.image),
             "needs_summary": bool(req.needs_summary), "history_len": len(req.history),
-            # 会话 id（20260924 补）：trace 里此前只有每请求随机的 thread_id，**没有
-            # 会话身份**——跨源对账与事故复盘都缺这个最基本的锚点（20260924 复盘
-            # "哪几张确认卡片属于同一个会话"时，只能靠 rust.log 的 chat POST 反推，
-            # 而隐藏确认请求的轮次在 rust.log 里也认不出来）。会话 id 是系统事实、
-            # 不含凭据（令牌/口令绝不进 trace，见下方 has_confirm 只记布尔）。
             "conversation_id": req.conversation_id,
-            # 本轮是否带跨轮执行回执（gate 的"回执豁免"就靠这个事实，判据复扫时
-            # 没有它就只能反推——20260921 补记，见 _state_action_claim 注释）
-            "has_exec": bool(req.executions),
-            # 本轮是不是"确认框点确定"的隐藏请求（20260921）。**只记布尔**——
-            # 令牌本身是唯一凭据，绝不进 trace/日志（见 agent/confirm.py 头注）。
-            "has_confirm": bool(req.confirm_token),
+            "has_exec": bool(req.executions), "has_confirm": bool(req.confirm_token),
         })
     except Exception:
         _release_slot()

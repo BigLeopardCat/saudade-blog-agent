@@ -64,6 +64,13 @@ def arm_name(agent):
     return "graph" if isinstance(agent, CompiledStateGraph) else "unknown"
 
 
+def request_context(agent):
+    from config import settings
+
+    return {"arm": arm_name(agent), "build_sha": BUILD_IDENTITY[0],
+            "provider": settings.llm_provider, "model": settings.active_llm_model}
+
+
 def version_payload(app_version: str) -> dict:
     """`/version` 的返回体。**只放静态构建身份，不回显活体档位**。
 

@@ -125,7 +125,7 @@
   },
   "eval/run_golden.py::run_one": {
     "c": 58,
-    "lines": 262
+    "lines": 242
   },
   "eval/toolcall_probe.py::main": {
     "c": 46,
@@ -157,7 +157,7 @@
   },
   "server.py::chat_stream": {
     "c": 14,
-    "lines": 360
+    "lines": 351
   },
   "server.py::chat_stream.event_stream": {
     "c": 43,

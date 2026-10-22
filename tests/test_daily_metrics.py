@@ -94,7 +94,7 @@ def main() -> int:
     line = dm.render([], 7)
     check("空语料照样出得了一行", bool(line) and "traces=0" in line, line)
     check("  缓存那一格写「量不到」而不是 0%（同 `token_cost_report` 的口径）",
-          "planner缓存=量不到" in line, line)
+          "模型缓存=量不到" in line, line)
 
     print("\n③ 「异常技能」只在**成片**时报（单条是噪声）")
     with tempfile.TemporaryDirectory() as tmp:

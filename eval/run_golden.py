@@ -389,33 +389,12 @@ def run_one(req: ChatRequest, principal: "Principal | None" = None,
             trace_ctx: dict | None = None, *,
             confirm_token: str = "", confirm_pick: str = "",
             thread: str = golden_thread.LEGACY) -> dict:
-    """跑一轮真实对话（内部链路），从帧流提取最终文本 / 命令帧 / 事件。
+    """Run the production producer and extract visible frames for one request.
 
-    `trace_ctx`（20260922）：`{"run": <run_id>}` 时给这一轮落一份 trace（见
-    eval/golden_trace.py，落 golden_traces/<run_id>/<case_id>.json）。**start 必须在
-    这里、在把活儿提交给线程池之前**——recorder 靠 contextvar + copy_context 传进
-    producer 线程，晚一步落下来的就是空壳。
-
-    `confirm_token`（20260925）：非空即"这一轮是点了确定那一跳"——照 `/chat/stream`
-    的接线原样走：**验签在这里**（`confirm.verify`，令牌是唯一凭据）→ 验不过就
-    **零执行**、连图都不进（否则会照着 message 文本重新规划，那正是要避免的"再走
-    一轮对话"）→ 验过了才把 payload 传给 `_build_messages` 与图。
-
-    `thread`（批 6）：这一轮传给图的 `thread_id`，缺省是历史常量 `LEGACY`（不改变直接调
-    本函数的探针），理由与坐标见 `eval/golden_thread.py`。
-    `confirm_pick`（20261010）：卡上点的是**第 i 格**而不是「全部办」时的记号
-    （`pick:<i>`，0 基，`ChatRequest.confirm_pick` 一路透传）。**收窄的时机与生产逐字
-    对齐**（`server.chat_stream`）：验签之后、任何消费之前——`_build_messages` /
-    `_ledger_for_graph` / 图内 planner 读到的都必须是收窄后的那一份，否则就是
-    "卡上问一件、实际执行一批"。收窄本身只有一份实现（`confirm.narrow`，含单元分组
-    与越界/坏记号的 fail-closed）；这里只按生产的**顺序**调它。
-
-    两个出口的形态**刻意不同**：令牌验不过 = 用例自己不自洽（写错了 uid/会话/令牌），
-    所以要响亮（`error` 非空 ⇒ `check_case` 直接判红）；而"记号读不懂"是**被测行为**
-    ——生产照 `server._invalid_pick_stream()` 回一句"一件都没有办"就结束（零执行零
-    LLM），评测侧照同一句正文回一个**同形的空轮**（`error` 留空、`text` 那句），
-    判据才断言得到主人看到的是哪句话。这一支此前在 golden 里**跑不到**：收窄只住在
-    `server.chat_stream` 里，评测侧只验签。（正文只有一处字面：`server.INVALID_PICK_TEXT`。）
+    Start tracing before copying context to the worker. Verify confirmation first,
+    then narrow a selected item before constructing messages or the ledger.
+    Invalid tokens are evaluation errors; invalid picks return the production
+    zero-execution response. Tokens in the returned result stay in memory only.
     """
     confirm_grant = None
     if confirm_token:
@@ -446,7 +425,8 @@ def run_one(req: ChatRequest, principal: "Principal | None" = None,
     if trace_ctx:
         trace_id = golden_trace.start_case(
             trace_ctx["run"], trace_ctx.get("case", ""), req.message or "",
-            (principal.role if principal is not None else None), thread=thread)
+            (principal.role if principal is not None else None), thread=thread,
+            runtime=server.runtime_probe.request_context(server._agent))
     loop = asyncio.new_event_loop()
     queue = asyncio.Queue()
     frames = []

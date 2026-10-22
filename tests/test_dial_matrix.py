@@ -236,17 +236,20 @@ def test_dial_matrix():
         check("吃到按 id 合并的 cases（dict）⇒ 抛，不许安静数出 0",
               "cases" in str(e), str(e))
     print("\n⑦ token：逐节点、每次均值、命中率的分母")
-    NM = [nmet({"planner": {"calls": 2, "in": 20000, "out": 100, "cache": 16000, "cache_seen": 2},
+    NM = [nmet({"planner": {"calls": 2, "in": 20000, "out": 100, "cache": 16000,
+                            "cache_seen": 2, "cache_in": 20000},
                 # 端点**说了**没命中（字段在、值是 0）：这是 0%，要能与"量不到"分开
-                "model": {"calls": 1, "in": 5000, "out": 200, "cache": 0, "cache_seen": 1}}),
-          nmet({"planner": {"calls": 2, "in": 10000, "out": 20, "cache": 8000, "cache_seen": 1}})]
+                "model": {"calls": 1, "in": 5000, "out": 200, "cache": 0,
+                          "cache_seen": 1, "cache_in": 5000}}),
+          nmet({"planner": {"calls": 2, "in": 10000, "out": 20, "cache": 4000,
+                          "cache_seen": 1, "cache_in": 5000}})]
     TS = dm.token_stats(NM)
     check("两次 run 的调用数/总量相加", TS["planner"]["calls"] == 4
           and TS["planner"]["in_total"] == 30000, str(TS["planner"]))
     check("每次输入/输出取均值（30000/4=7500、120/4=30）",
           (TS["planner"]["in_per_call"], TS["planner"]["out_per_call"]) == (7500, 30),
           str(TS["planner"]))
-    check("命中率 = cache/input，只算**报了缓存字段**的那些调用（24000/30000）",
+    check("命中率 = cache/input，只算**报了缓存字段**的那些调用（20000/25000；另有5000未测缓存）",
           TS["planner"]["hit_rate"] == 0.8, str(TS["planner"]))
     check("cache_seen 与 calls 一起给出：分母被缩小这件事要能看出来",
           TS["planner"]["cache_seen"] == 3 and TS["planner"]["calls"] == 4, str(TS["planner"]))
