@@ -13,16 +13,27 @@ Limit = Annotated[StrictInt, Field(ge=1, le=10)]
 Identifier = Annotated[StrictInt, Field(gt=0)]
 
 
+
+def _response(resource, params):
+    with base._client.stream("GET", base.API_BASE.rstrip("/") + "/" + resource,
+                             params=params) as response:
+        response.raise_for_status()
+        if response.status_code != 200:
+            raise ValueError("Unexpected public response status")
+        chunks, size = [], 0
+        for chunk in response.iter_bytes():
+            size += len(chunk)
+            if size > 131072:
+                raise ValueError("Public response exceeds byte limit")
+            chunks.append(chunk)
+    return json.loads(b"".join(chunks))
+
 def read_page(resource, page, limit, filters, project, expected=None, identity=None):
     params = {"page": page, "page_size": limit, **filters}
     params = {key: str(value).lower() if type(value) is bool else value
               for key, value in params.items() if value is not None}
     try:
-        response = base._client.get(base.API_BASE.rstrip("/") + "/" + resource,
-                                    params=params)
-        if response.status_code != 200:
-            return base.unavailable("公开资料暂时不可用。")
-        data = response.json()
+        data = _response(resource, params)
     except (httpx.HTTPError, ValueError):
         return base.unavailable("公开资料读取失败。")
     if (not isinstance(data, dict) or type(data.get("code")) is not int

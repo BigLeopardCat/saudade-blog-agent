@@ -17,6 +17,13 @@ def _nullable(row, key, check):
     return key in row and (row[key] is None or check(row[key]))
 
 
+def _tags_truncated(row):
+    value = row.get("tagsTruncated", False)
+    if type(value) is not bool:
+        raise ValueError("Invalid tag truncation flag")
+    return value or len(row["tags"]) > 20
+
+
 def article(row):
     if (not isinstance(row, dict) or not positive(row.get("id"))
             or not isinstance(row.get("title"), str)
@@ -27,7 +34,7 @@ def article(row):
             or "categoryName" not in row or not isinstance(row.get("tags"), list)):
         raise ValueError("Invalid article metadata")
     tags = []
-    for tag in row["tags"]:
+    for tag in row["tags"][:20]:
         if (not isinstance(tag, dict) or not positive(tag.get("id"))
                 or type(tag.get("level")) is not int or tag["level"] not in (1, 2)):
             raise ValueError("Invalid tag reference")
@@ -38,7 +45,7 @@ def article(row):
               "categoryId": row["categoryId"],
               "categoryName": (text(row["categoryName"], 100)
                                if row["categoryName"] is not None else None),
-              "tags": tags[:20], "tagsTruncated": len(tags) > 20,
+              "tags": tags, "tagsTruncated": _tags_truncated(row),
               "createdAt": row.get("createdAt"), "updatedAt": row.get("updatedAt")}
     result["titleTruncated"] = len(row["title"]) > 255
     return result
