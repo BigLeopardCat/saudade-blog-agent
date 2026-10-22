@@ -38,11 +38,11 @@ from pydantic import BaseModel, Field, field_validator
 from agent import (
     checkpoint,  # 采纳（批 7）：造 saver + 会话坐标 + 级联清理
     confirm,  # 待办令牌：签发在 graph 弹窗侧，验签在这里（见 /chat/stream）
-    create_agent,
     idem,  # 持久化档的唯一常量（REQUIRED_DURABILITY，见 agent/idem.py）
     runtime_probe,  # /version 与 /ready 的判定逻辑（纯函数，见该模块头注）
 )
 from agent.action_text import tool_action_text
+from agent.agent import create_agent
 from agent.factblock import (  # 动作事实块（D3）
     action_facts,
     compose,
@@ -397,7 +397,7 @@ def _idem_resuming(thread_id: str) -> bool:
 def _build_arm():
     """按名字选择兼容同步/SSE 接口的运行路径；未知名字拒绝启动。
 
-    默认 graph 保持生产行为；react、capability 与 hybrid 延迟 import。评测臂的留档逻辑
+    默认 graph 保持生产行为；hybrid 延迟 import。评测臂的留档逻辑
     不进入服务端，返回臂名供启动日志与健康检查报告实际运行路径。
     """
     from config.settings import settings
@@ -406,20 +406,11 @@ def _build_arm():
         # 采纳（批 7 之③）：DSN 空 ⇒ `None` ⇒ 与 20260903 以来**逐字节相同**；非空 ⇒
         # 在这里开池建表（只在启动期调一次），连不上就**响亮抛**、进程起不来。
         return create_agent(checkpointer=checkpoint.build_checkpointer()), arm
-    if arm == "react":
-        # 延迟 import：臂不在选它的时候不该被加载（`agent.react_arm` 拉进整份技能表与
-        # 工具注册表）。反过来也不能"启动时都建一份挑着用"——那会让 graph 档多付一次
-        # 实验代码的 import 成本，且给"两条臂同时在进程里"留出误用的口子。
-        from agent.react_arm import build as build_react_arm
-        return build_react_arm(), arm
-    if arm == "capability":
-        from agent.capability_arm import build as build_capability_arm
-        return build_capability_arm(), arm
     if arm == "hybrid":
-        from agent.hybrid_arm import build as build_hybrid_arm
+        from agent.runtime.hybrid import build as build_hybrid_arm
         return build_hybrid_arm(), arm
     raise RuntimeError(
-        f"AGENT_ARM={arm!r} 不是已知的臂（graph/react/capability/hybrid）——拒绝启动。"
+        f"AGENT_ARM={arm!r} 不是已知的臂（graph/hybrid）——拒绝启动。"
         "不回退 graph：静默回退会把'这一轮到底是谁在跑'从日志里抹掉。")
 
 
@@ -835,7 +826,8 @@ def _build_messages(req: ChatRequest, confirm_grant: dict | None = None) -> list
                 "不重复举例/收尾句），并追问一句新意图；本轮工具查证带回新事实才按新"
                 "事实完整叙述")
     ctx = f"[System: {'; '.join(ctx_parts)}]"
-    messages.append(HumanMessage(content=ctx))
+    messages.append(HumanMessage(content=ctx, additional_kwargs={
+        "page_context": {"url": req.current_url, "title": req.page_title}}))
 
     # 消费 Rust 转发的全部 20 条历史（20260828 对齐：此前 Rust 传 20、这里取 12，
     # 8 条白传且两个魔数散落两处易失同步；Rust 侧已排除当前消息，history 是纯历史）
@@ -1035,8 +1027,6 @@ async def chat(req: ChatRequest, request: Request):
             )
         reply, nav_line, exec_rows = await _submit_with_context(
             loop, _run_agent_sync, messages, thread_id, req.user_id, principal,
-            # `_submit_with_context` 只收 `*args`（没有 kwargs 通道，见它的签名）
-            # ⇒ recent_tools 按**位置**传（`_run_agent_sync` 的第 6 个形参）
             _ledger_for_graph(req), req.recent_tools)
         new_summary = None
         if summary_task is not None:

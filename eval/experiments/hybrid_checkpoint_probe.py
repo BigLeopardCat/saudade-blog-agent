@@ -23,11 +23,13 @@ from langchain_core.messages import AIMessage, HumanMessage
 from langgraph.graph import END, START, StateGraph
 from psycopg import sql
 
-from agent import checkpoint, confirm, favorite_transactions, idem_pg, turns
+from agent import checkpoint, confirm, idem_pg
 from agent.agent import create_agent
+from agent.domains.favorites import transactions as favorite_transactions
 from agent.graph import AgentState, graph_input
-from agent.hybrid_arm import HybridArm
 from agent.principal import SOURCE_ASSERTION, Principal
+from agent.runtime import turns
+from agent.runtime.hybrid import HybridArm
 from tools.result import fact, ok, tgt
 
 _TABLES = ("checkpoints", "checkpoint_blobs", "checkpoint_writes")
@@ -74,7 +76,7 @@ def _turn(conversation_id, resume):
     arm = HybridArm(create_agent(checkpointer=saver), {}, {}, {})
     config = _config(conversation_id)
     model = ProbeModel(conversation_id, resume)
-    with patch("agent.hybrid_arm.get_llm", return_value=model):
+    with patch("agent.runtime.hybrid.get_llm", return_value=model):
         events = list(arm.stream(_input("刚才的标记是什么？" if resume else conversation_id),
                                  config, stream_mode=["messages", "updates"]))
     expected = ("回忆：" if resume else "记住：") + conversation_id
@@ -133,8 +135,8 @@ def _overlap_worker(cid, first, entered, release, waiting, results):
         waiting.set()
         return original_wait(config, deadline)
 
-    with patch("agent.hybrid_arm.get_llm", return_value=Model()), \
-            patch("agent.turns._wait", side_effect=observe_wait):
+    with patch("agent.runtime.hybrid.get_llm", return_value=Model()), \
+            patch("agent.runtime.turns._wait", side_effect=observe_wait):
         list(arm.stream(_input("first" if first else "second"), _config(cid)))
     results.put({"pid": os.getpid(), "first": first})
 
@@ -189,8 +191,8 @@ def _confirmed_favorite(saver):
 
     tool = Favorite()
     try:
-        with patch("agent.favorite_transactions.get_all_tools", return_value=[tool]), \
-                patch("agent.hybrid_arm.get_llm", side_effect=AssertionError("unexpected LLM")):
+        with patch("agent.domains.favorites.transactions.get_all_tools", return_value=[tool]), \
+                patch("agent.runtime.hybrid.get_llm", side_effect=AssertionError("unexpected LLM")):
             for _ in range(2):
                 arm = HybridArm(create_agent(checkpointer=saver), {}, {}, {})
                 state = graph_input([HumanMessage(content="确认收藏")], confirm_grant=grant)
@@ -244,7 +246,7 @@ def run():
 
         state = _input("继续旧图")
         state["confirm_grant"] = {"specs": []}
-        with patch("agent.hybrid_arm.get_llm", side_effect=AssertionError("unexpected LLM")):
+        with patch("agent.runtime.hybrid.get_llm", side_effect=AssertionError("unexpected LLM")):
             list(arm.stream(state, config, stream_mode=["updates"], durability="sync"))
         assert f"记住：{cid}" in seen
         assert "[当前问题]: 继续旧图" in seen

@@ -9,13 +9,13 @@
   形状与能力台账）、[adr-0008-second-arm-stays-in-mainline-frame-contract-locked.md](adr-0008-second-arm-stays-in-mainline-frame-contract-locked.md)
   （上一批：帧契约收成有锁的产物——本 ADR 是它的直接续篇）、
   [../问题记录.md](../问题记录.md) §1.59（`_grant_covers` 两次收窄的现场）。
-- **影响范围**：`agent/react_arm.py`（900 行 `stream()` 生成器 → 四个节点函数 + 三条路由
-  + 三行委托）、`agent/react_line.py`（删 `ConvergenceMiddleware` / `build_agent` /
+- **影响范围**：[agent/react_arm.py](https://github.com/BigLeopardCat/saudade-blog-agent/blob/563c8a5/agent/react_arm.py)（900 行 `stream()` 生成器 → 四个节点函数 + 三条路由
+  + 三行委托）、[agent/react_line.py](https://github.com/BigLeopardCat/saudade-blog-agent/blob/563c8a5/agent/react_line.py)（删 `ConvergenceMiddleware` / `build_agent` /
   `wrap_tools_with_receipts` / `ReactLineState`，三条收敛判据抽成纯函数
   `convergence_verdict`；`SkillExecutor` / `RunLedger` / `wrap_up_text` 原样留）、
   `agent/frames.py`（删三份塑形器与五个帧构造器）、`tests/test_frame_contract.py`
-  （③④ 从"喂没喂"改写成**结构锁**）、`tests/test_react_arm.py` 与
-  `tests/test_react_line.py`（约 20 处源码锁跟着改落点）、
+  （③④ 从"喂没喂"改写成**结构锁**）、[tests/test_react_arm.py](https://github.com/BigLeopardCat/saudade-blog-agent/blob/563c8a5/tests/test_react_arm.py) 与
+  [tests/test_react_line.py](https://github.com/BigLeopardCat/saudade-blog-agent/blob/563c8a5/tests/test_react_line.py)（约 20 处源码锁跟着改落点）、
   `eval/complexity_baseline.json` 与 `eval/mypy_baseline.json`（各销两条账）。
   **`agent/graph.py` 与 `server.py` 一个字节都没动** —— 生产路径逐字节不变，
   所以本批的 A/B **不需要复跑 graph 臂**（这是本批唯一能把验证成本砍半的那一刀，
@@ -27,7 +27,7 @@
   声明键**且都在 `graph_input` 初值里、④a–④c 臂源码 AST 里**一个手搓的 `("updates", …)`
   二元组、一个 `langgraph_node` 字面量、一个 `*_frame` 构造器都不许有**（这三样是适配器的
   本体，回来一个就等于适配器回来一半）。反向对照 ⑥a–⑥h 照旧：改坏任何一种都必须当场红、
-  且只红那几条。行为面另由 `tests/test_react_arm.py` ①（四类帧）②（三条铁律）
+  且只红那几条。行为面另由 [tests/test_react_arm.py](https://github.com/BigLeopardCat/saudade-blog-agent/blob/563c8a5/tests/test_react_arm.py) ①（四类帧）②（三条铁律）
   ⑤⑥⑦⑧⑩⑪⑬ 锁住——**这些行为锁本批一条都没改**（改的只有"钉字面"的那几处落点）。
 - **触发条件**：不适用（已采纳）。
 
@@ -35,7 +35,7 @@
 
 批 1（ADR-0008）把**帧契约**从口头约定收成了一件有锁的产物（`agent/frames.py` +
 `tests/test_frame_contract.py`），并修掉一条真分歧（`_consent_missing` 改调生产
-`_grant_covers`）。但 `agent/react_arm.py` 那 900 行的**外层适配器**原样留着。它是一个
+`_grant_covers`）。但 [agent/react_arm.py](https://github.com/BigLeopardCat/saudade-blog-agent/blob/563c8a5/agent/react_arm.py) 那 900 行的**外层适配器**原样留着。它是一个
 `stream()` 生成器，做四件事：
 
 1. **手搓 `("updates", {...})` 二元组**——图语义里 `updates` 是节点跑完由 langgraph 产的，
@@ -158,7 +158,7 @@ START → planner ─┬─(有技能调用)──→ execute ─┬─(弹卡/�
 `open_tasks` 放那儿**同源**。`make_ctx()` 是唯一构造点（`ReactGoldenArm.stream` 与离线
 探针共用），离线探针自带 `react_ctx` 时就整份用它——否则调用方手上那本账永远是空的。
 
-**保留这个类名是硬要求**：`tests/test_react_arm.py` ⑫ 断言装在 `server._agent` 上的对象
+**保留这个类名是硬要求**：[tests/test_react_arm.py](https://github.com/BigLeopardCat/saudade-blog-agent/blob/563c8a5/tests/test_react_arm.py) ⑫ 断言装在 `server._agent` 上的对象
 类型名，`eval/arm_capability.py` 的 `_ForcedGate` 也按 `.stream(state, config,
 stream_mode)` 包装。
 
@@ -211,7 +211,7 @@ stream_mode)` 包装。
   路径、也会把 `12/25 号` 里的 `/25` 当成主人点名的路径）并把 `ledger.record` 的两条硬
   要求搬出函数体 ⇒ **C 33 → 27、124 → 112 行**，两项都回到预算内 ⇒
   `eval/complexity_baseline.json` 里那条**销账**。这是棘轮按设计工作，不是放松。
-- **mypy**：图改造让 `agent/react_arm.py` 的错误从基线 10 涨到 **23**（全是类型注解口径，
+- **mypy**：图改造让 [agent/react_arm.py](https://github.com/BigLeopardCat/saudade-blog-agent/blob/563c8a5/agent/react_arm.py) 的错误从基线 10 涨到 **23**（全是类型注解口径，
   无运行时缺陷）。处置是把注解改**准**而不是记账：langgraph 交给节点的一切都是
   `RunnableConfig | None`、节点体是 `AgentState`、路由表必须是 `dict[Hashable, str]`
   （`add_conditional_edges` 的形参就是它，而 dict 的键**不变** ⇒ `dict[str, str]` 传不

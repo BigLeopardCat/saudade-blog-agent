@@ -1,8 +1,5 @@
 # -*- coding: utf-8 -*-
-"""写操作确认卡：问句、卡面与回执行。
-
-批 3a 从 `agent/adminops.py` 按域拆出（原文逐字节保留）。这一族文本会直接进
-确认框的问题行与那一轮的对话气泡，所以**能算的都不交给 LLM**。"""
+"""写操作确认卡、待确认正文和动作摘要的确定性渲染。"""
 
 from __future__ import annotations
 
@@ -48,38 +45,15 @@ from agent.adminops_todo import (
 
 def _confirm_one(spec: dict, index=None, cats=None, boards=None, notes=None,
                  users=None, todos=None, quota_requests=None, comments=None) -> str:
-    """单条写 spec → 「做什么」的人话（与 server._tool_action_text 同口径）。
+    """将具体操作与已读取的目标快照渲染为可核对的确认文案。
 
-    `index` = 可选的标签字典（`{id: TagInfo}`，见 build_tag_index）：给得起就
-    **把父标签的名字写进问句**，给不起退回 id。写二级标签时只写「新建二级标签
-    「Rust」」等于让用户盲签——他看不到这个 Rust 会挂到哪个爸爸底下，而"挂错
-    父标签"正是本轮要修的参数对调事故（20260921）。名字比 id 可靠：id 是系统
-    内部编号，用户点确定时没法核对。
-
-    `cats` = 可选的分类字典（`{id: CategoryInfo}`）：删分类要报"有多少篇文章会
-    变成没有分类"，只有它能给。**给不起就不说篇数**（不写 0）。
-
-    20260921 第四轮起，**标签/分类一律按名字**（planner 写名字、工具确定性解析
-    成 id）：问句里出现的名字就是用户说的那个名字，不再有"id 对不上名字"的
-    中间层。
-
-    `notes` = 可选的后台文章清单快照（`{id: 行}`，见 tools.base._note_index）：
-    文章写操作的问句**此前只有内部 id**（全写面唯一的盲签），给得起快照就把
-    `《标题》（现在：状态、置顶）` 写进去。给不起（读到 None）→ 退回只写 id。
-
-    `quota_requests` = 可选的**待处理额度申请**快照（`{uid: 行}`，见
-    tools.base._quota_pending_index）：额度三件的卡面靠它印出**申请理由**与
-    「他有没有待处理的申请」。给不起（读到 None）→ 少说一句，**不因此不弹窗**。
-
-    `comments` = 可选的**后台评论名册**快照（`{commentId: 行}`，见
-    tools.base._comment_index）：评论两件的卡面靠它印出**正文、作者与所属文章**。
-    与 `boards` 并列但**不是同一份**（两张表、两个后台页）——拿留言快照去渲染评论
-    的卡面，`#37` 会指到一条**留言**上（看着像核对过了）。给不起 → 退回只写编号。
+    留言、评论、文章和用户使用各自的编号空间；快照缺席时不冒充已核对。
     """
     tool = str(spec.get("tool") or "")
     a = spec.get("args") or {}
     index = index or {}
-    where_article = article_where(notes, a.get("article_id"))
+    where_article = article_where(notes, a.get("article_id"),
+                                  include_status=tool not in ("add_favorite", "remove_favorite"))
     if tool == "create_tag":
         title = str(a.get("title") or "").strip() or "（未命名）"
         pname = str(a.get("parent_tag") or "").strip()

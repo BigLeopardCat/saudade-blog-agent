@@ -8,12 +8,12 @@ import pytest
 from langchain_core.messages import HumanMessage
 from langgraph.checkpoint.memory import InMemorySaver
 
-from agent import favorite_transactions as transactions
 from agent import idem
 from agent.agent import create_agent
+from agent.domains.favorites import transactions
 from agent.graph import graph_input
-from agent.hybrid_arm import HybridArm
 from agent.principal import SOURCE_ASSERTION, Principal
+from agent.runtime.hybrid import HybridArm
 from tools.result import fact, ok, tgt
 
 
@@ -148,7 +148,7 @@ def test_hybrid_executes_confirmed_favorite_without_model_or_legacy(monkeypatch,
     monkeypatch.setattr(transactions, "get_all_tools", lambda: [tool])
     monkeypatch.setattr(transactions, "_ledger",
                         lambda saver: idem.Ledger(str(tmp_path / "runtime.sqlite3")))
-    monkeypatch.setattr("agent.hybrid_arm.get_llm", lambda **_: 1 / 0)
+    monkeypatch.setattr("agent.runtime.hybrid.get_llm", lambda **_: 1 / 0)
     graph = create_agent(checkpointer=InMemorySaver())
     monkeypatch.setattr(graph, "stream", lambda *a, **kw: 1 / 0)
     arm = HybridArm(graph)
@@ -172,7 +172,7 @@ def test_stream_producer_emits_existing_execution_receipt(monkeypatch, tmp_path)
     monkeypatch.setattr(transactions, "get_all_tools", lambda: [tool])
     monkeypatch.setattr(transactions, "_ledger",
                         lambda saver: idem.Ledger(str(tmp_path / "stream.sqlite3")))
-    monkeypatch.setattr("agent.hybrid_arm.get_llm", lambda **_: 1 / 0)
+    monkeypatch.setattr("agent.runtime.hybrid.get_llm", lambda **_: 1 / 0)
     monkeypatch.setattr(server, "_agent",
                         HybridArm(create_agent(checkpointer=InMemorySaver())))
 

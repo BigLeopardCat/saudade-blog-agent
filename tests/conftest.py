@@ -87,7 +87,7 @@ import pytest  # noqa: E402
 _WATCHED_MODULES = (
     # 被打桩最密的几处（`agent.graph.get_llm` 90 处、`tools.base._client` 161 处、
     # `server._agent` 36 处 —— 三条都在十几个套件里出现）
-    "agent.graph", "agent.react_arm", "agent.react_line",
+    "agent.graph",
     "agent.adminops_todo", "agent.adminops_confirm", "agent.confirm",
     "tools.base", "tools.device", "tools.notes", "server",
     "agent.workflow_tools", "agent.prompts",
@@ -101,7 +101,7 @@ _WATCHED_MODULES = (
     "rag.graph_build", "rag.search", "rag.vector_index", "rag.wordgraph",
     "utils.clock", "utils.trace",
     "build_word_graph", "corpus_provenance", "dial_matrix", "golden_fixture",
-    "golden_fixture_todo", "golden_trace", "param_matrix", "report_archive",
+    "golden_fixture_todo", "golden_trace", "report_archive",
     "run_golden",
 )
 

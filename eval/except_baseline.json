@@ -5,7 +5,7 @@
     "BLE001"
   ],
   "project_lint_ignore": null,
-  "total": 116,
+  "total": 114,
   "by_file": {
     "agent/arg_refs.py": 1,
     "agent/authz.py": 1,
@@ -28,7 +28,6 @@
     "eval/fastpath_pricing.py": 1,
     "eval/fixtures/serve.py": 1,
     "eval/identity_preflight.py": 2,
-    "eval/param_matrix.py": 2,
     "eval/recall_eval.py": 1,
     "eval/recall_vector_poc.py": 2,
     "eval/run_golden.py": 6,

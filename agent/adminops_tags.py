@@ -616,18 +616,10 @@ def clip(text: str, limit: int = 60) -> str:
 # 多少篇文章、会不会连带删掉别的标签。数字全部来自标签/分类字典，**读不到就一个字
 # 都不说**（绝不写 0——那是"删了没损失"的错误结论，见 count_phrase）。
 
-def article_where(notes: dict[int, dict] | None, article_id) -> str:
-    """文章在问句里的**可核对指称**：`《标题》（现在：草稿、未置顶）`。
+def article_where(notes: dict[int, dict] | None, article_id, *, include_status: bool = True) -> str:
+    """用已读取的文章标题展示目标；公开状态只在相关操作中展示。
 
-    20260922 第七轮：这之前文章写操作的问句**只有内部编号**（「修改文章 46」），是
-    整套写面里唯一的盲签——标签/分类/公告/留言都写了名字，只有文章让主人在看不到
-    标题、看不到现状的情况下点「确定」。而"确认框点一下"正是文章这类写操作**唯一**
-    的人类兜底（评估意见："有证据 ≠ 目标唯一"），所以这一句必须能让主人自己认出来
-    "是不是我说的那篇"。
-
-    `notes is None`（这次没读到清单）→ **空串**：退回原来的「修改文章 46」，
-    **绝不因此不弹窗**（那会退回"判成分歧就追问"的死路形态）。id 不在清单里
-    （编辑修改稿行/已删除）→ 如实写出来，主人一眼能看出系统没对上一篇真实的文章。
+    没有快照时返回空串；快照缺少目标时明确说明，避免生成无法核对的指称。
     """
     if notes is None:
         return ""
@@ -639,6 +631,8 @@ def article_where(notes: dict[int, dict] | None, article_id) -> str:
     if row is None:
         return "（后台清单里没有这一篇）"
     title = clip(str(row.get("noteTitle") or "").strip() or "（无标题）", 36)
+    if not include_status:
+        return f"《{title}》"
     marks = [status_cn(row.get("status"))]
     if normalize_top(row.get("isTop")) is not None:
         marks.append(top_cn(row.get("isTop")))

@@ -340,8 +340,6 @@ def test_turn_window():
         "planner_node": "(d) 冻结 turn_start：`freeze_turn_start` 要的就是**还没人追加时**的"
                     "整表长度（`len(messages) - turn_msgs`），窗口化它等于把要算的东西先切掉",
         "execute_node": "(d) _frame_id 的基数：**刻意**用整份（唯一性靠帧只增不减）",
-        "model_node": "(c) with_tool_call_pairs 出站配对 + (d) 探针计量（`msgs=` 与 "
-                  "`narr_ident=` 那一格要的就是整表长度/整表身份，窗口化它就没得比了）",
         "gate_node": "(d) 拆两个视野的地方：msgs 喂给 _recent_ai_replies/_url_trusted/"
                  "_last_user_msg 那几个跨轮/自愈判据，本轮族走局部 `turn`",
     }

@@ -278,7 +278,7 @@
 - **`durability` 是 `stream()` 的参数，不是 `compile()` 的参数**（langgraph 1.2.7 实测），
   且**有 saver 才给**：没 saver 时给了会招一条 UserWarning，而 `ReactGoldenArm.stream()`
   压根没有这个形参 ⇒ `TypeError` 炸在生产者里、整条端到端判据**静默变成"零帧"**
-  （实测被 `tests/test_react_arm.py` 抓住）。`ReactGoldenArm` 收到非 None 的档会
+  （实测被 [tests/test_react_arm.py](https://github.com/BigLeopardCat/saudade-blog-agent/blob/563c8a5/tests/test_react_arm.py) 抓住）。`ReactGoldenArm` 收到非 None 的档会
   **响亮拒绝**——它不挂 checkpointer，静默收下等于把"没有持久化"伪装成"有持久化但没区别"。
 
 **建表加了一把咨询锁**（`agent/checkpoint.py::_setup_under_lock`）：`saver.setup()` 幂等但
@@ -352,8 +352,8 @@ START 重启 ⇒ 下一轮走完自己回到空。**潜伏面** = 任何 `stream
 | 台账 | 条目 | 变化 | 为什么不能再拆 |
 |---|---|---|---|
 | 模块行数 | `server.py` | 2595 → **2657**，顶层定义 52 → **56** | 四个薄壳（`_graph_holds_context` / `_thread_id_for` / `_stream_kwargs` / `checkpoint_delete`）各是"判据 + 路由"，本体已搬走 |
-| 模块行数 | `agent/react_arm.py` | 1243 → **1248** | 只加了一段注释：说明**本臂刻意不收 `durability`**（它不挂 checkpointer；收了会静默吞掉同步档） |
-| 模块行数 | `tests/test_react_arm.py` | 1210 → **1214** | ⑫ 那条源码锁跟着钉**新**不变量（`graph` 档只多一个 `checkpointer=`） |
+| 模块行数 | [agent/react_arm.py](https://github.com/BigLeopardCat/saudade-blog-agent/blob/563c8a5/agent/react_arm.py) | 1243 → **1248** | 只加了一段注释：说明**本臂刻意不收 `durability`**（它不挂 checkpointer；收了会静默吞掉同步档） |
+| 模块行数 | [tests/test_react_arm.py](https://github.com/BigLeopardCat/saudade-blog-agent/blob/563c8a5/tests/test_react_arm.py) | 1210 → **1214** | ⑫ 那条源码锁跟着钉**新**不变量（`graph` 档只多一个 `checkpointer=`） |
 
 ⚠️ **复杂度与函数行数那一本最后没动**：第一版把持久化档写成**无条件**的
 `durability=(X if 闸门 else None)`，那给 `_run_agent_stream_to_queue` 加了 1 个分支、2 行，
@@ -364,7 +364,7 @@ START 重启 ⇒ 下一轮走完自己回到空。**潜伏面** = 任何 `stream
 **两本账一格都不用放宽**。记在这里是因为"改完发现不用放宽"和"一开始就该那么写"
 是两件事，下一个遇到同类形状的人值得知道试错方向。
 
-`agent/checkpoint.py`、`agent/checkpoint_arm.py`、`agent/checkpoint_delta_arm.py` 不在模块
+`agent/checkpoint.py`、[agent/checkpoint_arm.py](https://github.com/BigLeopardCat/saudade-blog-agent/blob/563c8a5/agent/checkpoint_arm.py)、[agent/checkpoint_delta_arm.py](https://github.com/BigLeopardCat/saudade-blog-agent/blob/563c8a5/agent/checkpoint_delta_arm.py) 不在模块
 台账里（都不足 800 行）。
 
 **还没做（不在本批）**：真机读数三条（长会话 K=10 正向收缩、崩溃重放对产线等效 saver、

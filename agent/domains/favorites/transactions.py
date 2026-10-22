@@ -11,8 +11,8 @@ import json
 import time
 
 from agent import action_text, authz, checkpoint, idem
-from agent.hybrid_read import own_reads_enabled
-from agent.turns import check_cancelled
+from agent.runtime.read_tools import own_reads_enabled
+from agent.runtime.turns import check_cancelled
 from tools.base import ToolResult, get_all_tools, unavailable
 from utils.trace import record
 
@@ -23,17 +23,25 @@ def handles(grant) -> bool:
     return isinstance(grant, dict) and grant.get("workflow") in _WORKFLOWS
 
 
-def _bound_spec(grant, config):
+def bound_context(config):
+    """Verified identity and stable conversation shared by preparation and execution."""
     cfg = (config or {}).get("configurable") or {}
     principal = cfg.get("principal")
     if not own_reads_enabled(principal):
         raise ValueError("需要已验签的当前用户身份")
-    if grant.get("uid") != principal.uid or grant.get("conv") != cfg.get("conversation_id"):
-        raise ValueError("确认凭据与当前用户或会话不一致")
+    if "user_id" in cfg and (type(cfg["user_id"]) is not int or cfg["user_id"] != principal.uid):
+        raise ValueError("工具调用身份与已验签身份不一致")
     cid = cfg.get("conversation_id")
     if (type(cid) is not int or cid <= 0
             or cfg.get("thread_id") != checkpoint.conversation_thread(cid)):
         raise ValueError("缺少稳定的会话标识")
+    return principal, cid
+
+
+def _bound_spec(grant, config):
+    principal, cid = bound_context(config)
+    if grant.get("uid") != principal.uid or grant.get("conv") != cid:
+        raise ValueError("确认凭据与当前用户或会话不一致")
     if type(grant.get("exp")) is not int or grant["exp"] < time.time():
         raise ValueError("确认凭据已过期")
     operation = grant.get("jti")
@@ -121,7 +129,7 @@ def execute(grant, config, saver, *, tools=None, ledger=None):
         store = _ledger(saver) if ledger is None else ledger
         result = _execute(grant, name, args, config, store, selected)
     except Exception as exc:
-        from agent.turns import AgentCancelled
+        from agent.runtime.turns import AgentCancelled
         if isinstance(exc, AgentCancelled):
             raise
         record("hybrid", "write_error", name=name, error=type(exc).__name__)

@@ -255,7 +255,7 @@ PY
 真 planner 是靠对话历史定的，而词法检索器读不出历史里的指代。
 `recent_tail` 加进去反而更差（k=3 从 18.9% 掉到 11.3%），因为节选里混进了别的话题的词。
 
-⇒ **要判 §4④ 成不成立，只能跑模型探针**（`eval/experiments/menu_shape_ab.py` 那条路，
+⇒ **要判 §4④ 成不成立，只能跑模型探针**（[eval/experiments/menu_shape_ab.py](https://github.com/BigLeopardCat/saudade-blog-agent/blob/563c8a5/eval/experiments/menu_shape_ab.py) 那条路，
 50 条索引 × 若干用例），**离线词法代理做不到**。这也是本篇第二次"估高了"：
 两次都是**把某个量算进了它不在的地方**（第一次把 `items` 结构算进可省、这次把
 "能不能找到"算成词法问题）。

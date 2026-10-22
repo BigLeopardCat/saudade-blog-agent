@@ -1,30 +1,27 @@
 # ADR-0015：planner 降成路由器，schema 索引化按需取
 
-- **状态**：提议中（20261020；**阶段 0 已于 20261021 按判据停**）——阶段 0 代码面落地、出厂关，
-  但**判据已触发**（见《复验》第一行：`index` 与 `names` 打平、取回 0/27）；阶段 1–3 落地且
-  判据在跑之后转 `已采纳`（**阶段 0 不计入**）。阶段 0 的产物**不删**——它出厂关着、零行为
-  变更，留着是"这个想法试过、为什么不行"的物证
+- **状态**：已退役（2026-10-22）。索引开关与专属实现已删除，源码见 [归档说明](../retired-experiments.md)；当前设计以 hybrid 迁移路线为准。
 - **背景文档**：[../react-architecture-plan-20261020.md](../react-architecture-plan-20261020.md)（方案全文，含分阶段判据）、
   [../tool-menu-poc-20261020.md](../tool-menu-poc-20261020.md)（三臂读数）、
   [../prefix-cache-audit-20261020.md](../prefix-cache-audit-20261020.md)（成本审计）、
   [adr-0001-native-toolcalls-skill-level-seam.md](adr-0001-native-toolcalls-skill-level-seam.md)（**本 ADR 部分取代它**）、
   [adr-0009-react-arm-becomes-a-real-graph.md](adr-0009-react-arm-becomes-a-real-graph.md)（第二条臂已是真图）
 - **影响范围**：
-  · **阶段 0（已落地 20261020，出厂关）**：新增 `agent/tool_index.py`（索引行 / 取回口 /
+  · **阶段 0（已落地 20261020，出厂关）**：新增 [agent/tool_index.py](https://github.com/BigLeopardCat/saudade-blog-agent/blob/563c8a5/agent/tool_index.py)（索引行 / 取回口 /
     原文单一来源）、`agent/planner_llm.py::build_tool_schema` 多一格 `index: bool = False`、
-    新增 `tests/test_tool_index.py`。**不碰技能层、`instantiate_plan`、gate、写族。**
+    新增 [tests/test_tool_index.py](https://github.com/BigLeopardCat/saudade-blog-agent/blob/563c8a5/tests/test_tool_index.py)。**不碰技能层、`instantiate_plan`、gate、写族。**
     **`agent/prompts.py` 的规划规则块还没动**（那是阶段 1 的事，见下表）。
-  · **阶段 1**：`agent/react_arm.py` 的 `menu_builder` 接缝（已在，缺省档逐字节不变）。
-  · **阶段 2**：`agent/tools_arm.py`（POC 已建）、`agent/tool_menu.py`、`workflow_defs/nav_map.py`
+  · **阶段 1**：[agent/react_arm.py](https://github.com/BigLeopardCat/saudade-blog-agent/blob/563c8a5/agent/react_arm.py) 的 `menu_builder` 接缝（已在，缺省档逐字节不变）。
+  · **阶段 2**：[agent/tools_arm.py](https://github.com/BigLeopardCat/saudade-blog-agent/blob/563c8a5/agent/tools_arm.py)（POC 已建）、[agent/tool_menu.py](https://github.com/BigLeopardCat/saudade-blog-agent/blob/563c8a5/agent/tool_menu.py)、`workflow_defs/nav_map.py`
     （`NAV_MAP` 下沉到工具层，见《取舍》第 2 条）。**射程只有只读 + 导航 + 检索。**
   · **阶段 3**：`agent/write_grounding.py`（9 个写参数校正器）、同意闸次序。
   · **`agent/graph.py` 与 `server.py` 在阶段 0/1 一个字节都不动** ⇒ 那两阶段的 A/B
     **不需要复跑 graph 臂**（依据是 `git diff --stat`，不是"应该没变"）。
 - **判据**：阶段 0/1 `tests/test_prompt_prefix.py`（渲染前缀锁）+
-  `tests/test_react_arm.py`（四类帧 / 三条铁律 / 缺省档逐字节）；
+  [tests/test_react_arm.py](https://github.com/BigLeopardCat/saudade-blog-agent/blob/563c8a5/tests/test_react_arm.py)（四类帧 / 三条铁律 / 缺省档逐字节）；
   阶段 2 另加 `eval/arm_capability.py --arm <新臂> --probe` 必须 `comparable=True`
   （否则**退出码 3、`pass_rate` 不许引用**）+ 19 条 regression 硬层不许空过。
-  **本 ADR 被违反时红的是**：`tests/test_react_arm.py` 里"缺省档逐字节等于改动之前"那几条
+  **本 ADR 被违反时红的是**：[tests/test_react_arm.py](https://github.com/BigLeopardCat/saudade-blog-agent/blob/563c8a5/tests/test_react_arm.py) 里"缺省档逐字节等于改动之前"那几条
   （接缝被改成非可选覆盖），以及 `tests/test_prompt_prefix.py`（稳定前缀被动过）。
 
 ## 背景
@@ -78,7 +75,7 @@ checker、同意闸、`reply_contract` 都已经把这些**显式写下来了** 
 | 2 | 执行层改 ReAct（**只对只读 + 导航 + 检索**） | 写族继续走模板；narrator 零工具 | POC 的 B 族（8 条定序漏步）**不许掉** |
 | 3 | 写族 | — | 同 2 |
 
-**红线：narrator 必须仍是零工具节点。** `agent/react_arm.py` 的 `_narrate` 写死了理由——
+**红线：narrator 必须仍是零工具节点。** [agent/react_arm.py](https://github.com/BigLeopardCat/saudade-blog-agent/blob/563c8a5/agent/react_arm.py) 的 `_narrate` 写死了理由——
 闸门判的是"叙述的**声称**与执行事实对不对得上"，而那个判据成立的前提是 narrator
 **结构上不可能动手**（"我调用了 X"从它嘴里出来必然是声称）。**给它装工具 = 拆判据的地基。**
 本 ADR 全程不动这一条，四个阶段都不动。
@@ -128,7 +125,7 @@ checker、同意闸、`reply_contract` 都已经把这些**显式写下来了** 
 
 1. **取回率低 ⇒ 退化成"描述全删"**，而那个代价已量过（`contract_position_ab` 臂③ = 73/84）。
    ⇒ **必须有 `names-only` 对照臂**，index 与它的差**才是取回的价值**；打平 ⇒ 阶段 0 不成立。
-2. **探针语料是 user 角色设计的**（`eval/experiments/menu_shape_ab.py` 的 25 条，
+2. **探针语料是 user 角色设计的**（[eval/experiments/menu_shape_ab.py](https://github.com/BigLeopardCat/saudade-blog-agent/blob/563c8a5/eval/experiments/menu_shape_ab.py) 的 25 条，
    无 admin 专属句）⇒ 跑 `--role admin` 前要先补，否则量的是"schema 本来就不大"那一档。
 3. **"缓存命中率会很高"只在路由那一次成立**——今天 schema 是**恒定**的（跨会话可共享）；
    索引化后**执行层按路由变** ⇒ 跨会话不再共享。**总量大幅下降是真的，别把"命中率高"当结论。**

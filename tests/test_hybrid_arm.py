@@ -5,9 +5,9 @@ import asyncio
 import pytest
 from langchain_core.messages import AIMessage, AIMessageChunk, HumanMessage, ToolMessage
 
-from agent.hybrid_arm import HybridArm
-from agent.hybrid_read import article_tools, own_tools, site_tools
 from agent.principal import SOURCE_ASSERTION, Principal
+from agent.runtime.hybrid import HybridArm
+from agent.runtime.read_tools import article_tools, own_tools, site_tools
 
 
 class _Model:
@@ -47,7 +47,7 @@ def test_read_input_error_is_recoverable_but_programming_error_propagates(monkey
     model = _Model([AIMessage(content="", tool_calls=[
         {"name": "rag_search", "args": {}, "id": "read_1"}]),
         AIMessage(content="这次未能读取文章。")])
-    monkeypatch.setattr("agent.hybrid_arm.get_llm", lambda **_: model)
+    monkeypatch.setattr("agent.runtime.hybrid.get_llm", lambda **_: model)
     legacy = _Legacy()
     arm = HybridArm(legacy, read_tools={"rag_search": ReadTool()})
     if error is RuntimeError:
@@ -73,7 +73,7 @@ def _config(**extra):
 def test_chat_uses_one_small_call_and_no_legacy(monkeypatch):
     model = _Model(AIMessage(content="你好呀，今天想聊什么？"))
     model_args = []
-    monkeypatch.setattr("agent.hybrid_arm.get_llm",
+    monkeypatch.setattr("agent.runtime.hybrid.get_llm",
                         lambda **kwargs: (model_args.append(kwargs), model)[1])
     legacy = _Legacy()
     state = _state(*[HumanMessage(content=f"old-{i}" + "x" * 2000)
@@ -97,7 +97,7 @@ def test_chat_uses_one_small_call_and_no_legacy(monkeypatch):
 def test_site_handoff_preserves_original_state_and_config(monkeypatch):
     model = _Model(AIMessage(content="", tool_calls=[
         {"name": "delegate_to_site_agent", "args": {}, "id": "call_1"}]))
-    monkeypatch.setattr("agent.hybrid_arm.get_llm", lambda **_: model)
+    monkeypatch.setattr("agent.runtime.hybrid.get_llm", lambda **_: model)
     legacy = _Legacy()
     state, config = _state(), _config()
 
@@ -125,7 +125,7 @@ def test_article_read_runs_in_small_tool_loop(monkeypatch):
             {"name": "rag_search", "args": {"query": "装饰器"}, "id": "read_1"}]),
         AIMessage(content="博客文章 19 讨论了 Python 装饰器。"),
     ])
-    monkeypatch.setattr("agent.hybrid_arm.get_llm", lambda **_: model)
+    monkeypatch.setattr("agent.runtime.hybrid.get_llm", lambda **_: model)
     legacy = _Legacy()
     config = _config()
 
@@ -153,7 +153,7 @@ def test_site_domain_loads_tools_only_on_demand(monkeypatch):
             {"name": "get_blog_info", "args": {}, "id": "read_1"}]),
         AIMessage(content="作者是小明。"),
     ])
-    monkeypatch.setattr("agent.hybrid_arm.get_llm", lambda **_: model)
+    monkeypatch.setattr("agent.runtime.hybrid.get_llm", lambda **_: model)
     legacy = _Legacy()
 
     events = list(HybridArm(legacy, {}, {"get_blog_info": ReadTool()}).stream(
@@ -187,7 +187,7 @@ def test_own_domain_requires_verified_identity_and_checks_before_read(monkeypatc
             {"name": "list_my_favorites", "args": {}, "id": "read_own"}]),
         AIMessage(content="你收藏了文章 19。"),
     ])
-    monkeypatch.setattr("agent.hybrid_arm.get_llm", lambda **_: model)
+    monkeypatch.setattr("agent.runtime.hybrid.get_llm", lambda **_: model)
     legacy = _Legacy()
     config = {"configurable": {"principal": Principal(
         uid=7, role="user", source=SOURCE_ASSERTION)}}
@@ -208,7 +208,7 @@ def test_own_domain_requires_verified_identity_and_checks_before_read(monkeypatc
 def test_unverified_identity_never_sees_own_loader(monkeypatch):
     model = _Model(AIMessage(content="", tool_calls=[
         {"name": "load_own_info_tools", "args": {}, "id": "own_1"}]))
-    monkeypatch.setattr("agent.hybrid_arm.get_llm", lambda **_: model)
+    monkeypatch.setattr("agent.runtime.hybrid.get_llm", lambda **_: model)
     legacy = _Legacy()
 
     assert list(HybridArm(legacy, {}, {}, {}).stream(_state(), _config())) == [
@@ -220,7 +220,7 @@ def test_unverified_identity_never_sees_own_loader(monkeypatch):
 
 def test_boolean_uid_does_not_unlock_private_reads(monkeypatch):
     model = _Model(AIMessage(content="你好"))
-    monkeypatch.setattr("agent.hybrid_arm.get_llm", lambda **_: model)
+    monkeypatch.setattr("agent.runtime.hybrid.get_llm", lambda **_: model)
     config = {"configurable": {"principal": Principal(
         uid=True, role="user", source=SOURCE_ASSERTION)}}
 
@@ -247,8 +247,8 @@ def test_own_read_rechecks_authorization_before_invoke(monkeypatch):
             {"name": "list_my_favorites", "args": {}, "id": "read_own"}]),
         AIMessage(content="无法读取。"),
     ])
-    monkeypatch.setattr("agent.hybrid_arm.get_llm", lambda **_: model)
-    monkeypatch.setattr("agent.hybrid_session.check",
+    monkeypatch.setattr("agent.runtime.hybrid.get_llm", lambda **_: model)
+    monkeypatch.setattr("agent.runtime.session.check",
                         lambda principal, name: Decision(False, "denied", "read.own", name))
     config = {"configurable": {"principal": Principal(
         uid=7, role="user", source=SOURCE_ASSERTION)}}
@@ -260,7 +260,7 @@ def test_own_read_rechecks_authorization_before_invoke(monkeypatch):
 
 
 def test_long_request_hands_off_before_model_call(monkeypatch):
-    monkeypatch.setattr("agent.hybrid_arm.get_llm", lambda **_: 1 / 0)
+    monkeypatch.setattr("agent.runtime.hybrid.get_llm", lambda **_: 1 / 0)
     legacy = _Legacy()
     state = {"messages": [HumanMessage(content="x" * 30000)]}
 
@@ -279,7 +279,7 @@ def test_read_result_budget_caps_next_model_input(monkeypatch):
             {"name": "rag_search", "args": {"query": "x"}, "id": "read_1"}]),
         AIMessage(content="已读取。"),
     ])
-    monkeypatch.setattr("agent.hybrid_arm.get_llm", lambda **_: model)
+    monkeypatch.setattr("agent.runtime.hybrid.get_llm", lambda **_: model)
 
     list(HybridArm(_Legacy(), {"rag_search": ReadTool()}).stream(_state(), _config()))
 
@@ -296,8 +296,8 @@ def test_hybrid_usage_event_uses_cost_report_fields(monkeypatch):
         "input_tokens": 812, "output_tokens": 9, "total_tokens": 821,
         "input_token_details": {"cache_read": 512}})
     events = []
-    monkeypatch.setattr("agent.hybrid_arm.get_llm", lambda **_: _Model(response))
-    monkeypatch.setattr("agent.hybrid_session.record",
+    monkeypatch.setattr("agent.runtime.hybrid.get_llm", lambda **_: _Model(response))
+    monkeypatch.setattr("agent.runtime.session.record",
                         lambda node, event, **data: events.append((node, event, data)))
 
     list(HybridArm(_Legacy(), {}).stream(_state(), _config()))
@@ -338,7 +338,7 @@ def test_golden_reads_hybrid_tool_evidence_without_sse_frames(monkeypatch):
 
 
 def test_confirmed_write_skips_model(monkeypatch):
-    monkeypatch.setattr("agent.hybrid_arm.get_llm", lambda **_: 1 / 0)
+    monkeypatch.setattr("agent.runtime.hybrid.get_llm", lambda **_: 1 / 0)
     legacy = _Legacy()
     state = {**_state(), "confirm_grant": {"specs": []}}
 
@@ -348,7 +348,7 @@ def test_confirmed_write_skips_model(monkeypatch):
 
 
 def test_unsupported_checkpoint_adapter_stays_in_legacy(monkeypatch):
-    monkeypatch.setattr("agent.hybrid_arm.get_llm", lambda **_: 1 / 0)
+    monkeypatch.setattr("agent.runtime.hybrid.get_llm", lambda **_: 1 / 0)
     legacy = _Legacy()
     legacy.checkpointer = object()
     arm = HybridArm(legacy)
@@ -365,7 +365,7 @@ def test_direct_turns_persist_and_reuse_checkpoint_dialogue(monkeypatch):
 
     model = _Model([AIMessage(content="我说了你好。"),
                     AIMessage(content="刚才我说了你好。")])
-    monkeypatch.setattr("agent.hybrid_arm.get_llm", lambda **_: model)
+    monkeypatch.setattr("agent.runtime.hybrid.get_llm", lambda **_: model)
     legacy = create_agent(checkpointer=InMemorySaver())
     arm = HybridArm(legacy, {}, {}, {})
     config = _config(thread_id="hybrid-checkpoint-dialogue")
@@ -405,7 +405,7 @@ def test_legacy_graph_can_resume_after_direct_checkpoint_turn(monkeypatch):
     graph.add_edge("planner", END)
     graph.add_edge("gate", END)
     legacy = graph.compile(checkpointer=InMemorySaver())
-    monkeypatch.setattr("agent.hybrid_arm.get_llm",
+    monkeypatch.setattr("agent.runtime.hybrid.get_llm",
                         lambda **_: _Model(AIMessage(content="直接回复")))
     arm = HybridArm(legacy, {}, {}, {})
     config = _config(thread_id="hybrid-to-legacy-resume")
@@ -425,7 +425,7 @@ def test_direct_checkpoint_supports_resume_probe_and_discard(monkeypatch):
     from agent.agent import create_agent
     from agent.checkpoint import drop_last_user_turn, thread_is_resuming
 
-    monkeypatch.setattr("agent.hybrid_arm.get_llm",
+    monkeypatch.setattr("agent.runtime.hybrid.get_llm",
                         lambda **_: _Model(AIMessage(content="直接回复")))
     arm = HybridArm(create_agent(checkpointer=InMemorySaver()), {}, {}, {})
     conversation_id = "hybrid-discard"
@@ -443,7 +443,7 @@ def test_direct_checkpoint_supports_resume_probe_and_discard(monkeypatch):
 def test_pending_checkpoint_state_stays_in_legacy(monkeypatch):
     from types import SimpleNamespace
 
-    monkeypatch.setattr("agent.hybrid_arm.get_llm", lambda **_: 1 / 0)
+    monkeypatch.setattr("agent.runtime.hybrid.get_llm", lambda **_: 1 / 0)
 
     class PersistentLegacy(_Legacy):
         checkpointer = object()
@@ -473,7 +473,7 @@ def test_checkpoint_write_failure_does_not_emit_unpersisted_reply(monkeypatch):
         def update_state(self, config, values, *, as_node):
             raise RuntimeError("checkpoint unavailable")
 
-    monkeypatch.setattr("agent.hybrid_arm.get_llm",
+    monkeypatch.setattr("agent.runtime.hybrid.get_llm",
                         lambda **_: _Model(AIMessage(content="你好")))
     frames = []
 
@@ -513,7 +513,7 @@ def test_cancelled_turn_stops_without_saving_or_emitting(monkeypatch, when):
         return response
 
     model.invoke = invoke
-    monkeypatch.setattr("agent.hybrid_arm.get_llm", lambda **_: model)
+    monkeypatch.setattr("agent.runtime.hybrid.get_llm", lambda **_: model)
     arm = HybridArm(create_agent(checkpointer=InMemorySaver()),
                     {"rag_search": ReadTool()}, {}, {})
     config = _config(thread_id=f"hybrid-cancel-{when}", stop_event=stop)
@@ -531,7 +531,7 @@ def test_cancelled_turn_stops_without_saving_or_emitting(monkeypatch, when):
 
 def test_empty_task_array_does_not_disable_chat(monkeypatch):
     model = _Model(AIMessage(content="你好呀"))
-    monkeypatch.setattr("agent.hybrid_arm.get_llm", lambda **_: model)
+    monkeypatch.setattr("agent.runtime.hybrid.get_llm", lambda **_: model)
     legacy = _Legacy()
 
     list(HybridArm(legacy, {}).stream(_state(), _config(open_tasks="[]")))
@@ -541,7 +541,7 @@ def test_empty_task_array_does_not_disable_chat(monkeypatch):
 
 
 def test_pending_action_stays_in_legacy_graph(monkeypatch):
-    monkeypatch.setattr("agent.hybrid_arm.get_llm", lambda **_: 1 / 0)
+    monkeypatch.setattr("agent.runtime.hybrid.get_llm", lambda **_: 1 / 0)
     legacy = _Legacy()
     state = {**_state(), "ledger": {"pending": "待确认的文章操作"}}
 
@@ -553,7 +553,7 @@ def test_existing_sync_producer_accepts_direct_reply(monkeypatch):
     import server
 
     model = _Model(AIMessage(content="你好呀，今天想聊什么？"))
-    monkeypatch.setattr("agent.hybrid_arm.get_llm", lambda **_: model)
+    monkeypatch.setattr("agent.runtime.hybrid.get_llm", lambda **_: model)
     monkeypatch.setattr(server, "_agent", HybridArm(_Legacy()))
 
     result = server._run_agent_sync(
@@ -566,7 +566,7 @@ def test_existing_stream_producer_emits_direct_reply(monkeypatch):
     import server
 
     model = _Model(AIMessage(content="你好呀，今天想聊什么？"))
-    monkeypatch.setattr("agent.hybrid_arm.get_llm", lambda **_: model)
+    monkeypatch.setattr("agent.runtime.hybrid.get_llm", lambda **_: model)
     monkeypatch.setattr(server, "_agent", HybridArm(_Legacy()))
 
     async def collect():
@@ -596,7 +596,7 @@ def test_server_can_select_hybrid_arm(monkeypatch):
 
     arm = object()
     monkeypatch.setattr(settings, "agent_arm", "hybrid")
-    monkeypatch.setattr("agent.hybrid_arm.build", lambda: arm)
+    monkeypatch.setattr("agent.runtime.hybrid.build", lambda: arm)
 
     assert server._build_arm() == (arm, "hybrid")
 

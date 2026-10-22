@@ -4,19 +4,19 @@
 > ⚠️ 20261017 起 `skill` 已改名为 **`workflow`**（`agent/skills.py` → `agent/workflow_defs/__init__.py`——20261017 先改名为 `agent/workflows.py`，20261018 批 2 收尾刀又把那个中转层整块删掉（**已删**）；`tests/test_skills.py` → `tests/test_workflows.py`、`tests/test_slim_skills.py` → `tests/test_slim_workflows.py`；计划 IR `SKILL=` → `WORKFLOW=`）。本文档保留**当时的名字**，不回溯改写；读它时把 skill 读作 workflow 即可。
 > ⚠️ 20261018 又一批模块已改名（**记录型文档一律保留当时的名字，不回溯改写**）：`agent/absence.py` → `agent/absence_claims.py`、`agent/frames.py` → `agent/frame_contract.py`、`agent/probe.py` → `agent/runtime_probe.py`、`agent/decisions.py` → `agent/deterministic_plan.py`、`agent/entities.py` → `agent/entity_digest.py`、`agent/refs.py` → `agent/arg_refs.py`、`agent/workflow_defs/nav.py` → `agent/workflow_defs/nav_map.py`、`agent/workflow_defs/navigation.py` → `agent/workflow_defs/nav_skills.py`、`agent/workflow_defs/reports.py` → `agent/workflow_defs/report_skills.py`、`agent/context.py` → `agent/prompt_context.py`。**现状地图（每个模块一行）**见 `docs/agent-architecture.md` §2。
 
-- **状态**：已采纳（20261016）
+- **状态**：已被 [实验退役决策](../retired-experiments.md) 替代（2026-10-22）；共享帧协议继续保留。
 - **背景文档**：[../react-line-experiment.md](../react-line-experiment.md)（这条实验线本身的
   形状与能力台账）、[../问题记录.md](../问题记录.md) §1.59（`_grant_covers` 两次收窄的现场）。
 - **影响范围**：新增 `agent/frames.py` 与 `tests/test_frame_contract.py`；
-  `agent/react_arm.py`（改为 import 帧构造器，删除本地那六份重复定义）、
-  `agent/react_line.py`（`_consent_missing` 改调生产判据、`SkillExecutor` 多收一个
-  `state`）、`tests/test_react_arm.py`（三条源码锁跟着结构改）。
+  [agent/react_arm.py](https://github.com/BigLeopardCat/saudade-blog-agent/blob/563c8a5/agent/react_arm.py)（改为 import 帧构造器，删除本地那六份重复定义）、
+  [agent/react_line.py](https://github.com/BigLeopardCat/saudade-blog-agent/blob/563c8a5/agent/react_line.py)（`_consent_missing` 改调生产判据、`SkillExecutor` 多收一个
+  `state`）、[tests/test_react_arm.py](https://github.com/BigLeopardCat/saudade-blog-agent/blob/563c8a5/tests/test_react_arm.py)（三条源码锁跟着结构改）。
   **`agent/graph.py` 与 `server.py` 一个字节都没动** —— 生产路径逐字节不变。
 - **判据**：`tests/test_frame_contract.py`（新增，秒级、零网络零 LLM）。它从 `graph.py` /
   `server.py` **现取**键集与帧名，与 `agent/frames.py` 的声明算**双向**差集，并带四条
   反向对照。违反这个决定的形态有三种，各有一条会红：臂少喂一格 ⇒ ①b；声明与源码漂了
   ⇒ ①a/②a；有人在臂里手搓 `updates` 字典 ⇒ ⑥c。行为面另由
-  `tests/test_react_arm.py` ⑥b/⑥b′/⑥b″ 锁住（令牌覆盖这一件才放行、换一件就弹卡、
+  [tests/test_react_arm.py](https://github.com/BigLeopardCat/saudade-blog-agent/blob/563c8a5/tests/test_react_arm.py) ⑥b/⑥b′/⑥b″ 锁住（令牌覆盖这一件才放行、换一件就弹卡、
   **同一件做过一次就作废**）。⑥b″ 是专为「补上的那七格」造的**定向用例**：把
   `popup_state` 里的 `executed` 摘掉，它当场变红（其余 100+ 条断言不受影响）——
   也就是说这一格**不是**靠语料偶然覆盖的。
@@ -25,7 +25,7 @@
 
 ## 背景
 
-`agent/react_arm.py` 是**第二份实现**：它用另一套循环（`create_agent` + 收敛判据 + 回执
+[agent/react_arm.py](https://github.com/BigLeopardCat/saudade-blog-agent/blob/563c8a5/agent/react_arm.py) 是**第二份实现**：它用另一套循环（`create_agent` + 收敛判据 + 回执
 台账）产出与生产（`graph.py` 手写图）**逐字相同**的帧，好让 `eval/run_golden.py` 能用同一
 份语料、同一套断言给两条臂打分（`GOLDEN_ARM=graph|react`）。
 
@@ -60,7 +60,7 @@
 2. **判据分家，而且被测试钉死了。** `react_line._consent_missing` 停在
    `not self.grant`，而生产 20261012 已按 `_grant_covers(state, spec)` 收窄两档——两档各有
    一次生产实证（`logs/agent/traces/20261012/091103`：一次点头授权了两件写；
-   `20261012T195727`：同一件写静默落库三份）。更坏的是 `tests/test_react_arm.py` ⑥d
+   `20261012T195727`：同一件写静默落库三份）。更坏的是 [tests/test_react_arm.py](https://github.com/BigLeopardCat/saudade-blog-agent/blob/563c8a5/tests/test_react_arm.py) ⑥d
    **把那一行字符串钉住了**（`"not self.grant" in _line_src2`）：锁的意图是对的（"别另立
    一套判据"），落点错了（钉了字面而非判据），于是漂移被**永久化**——那条锁越绿，臂离
    生产越远。同一条 docstring 一边自称"逐字同款"、一边把生产那处指到了 `graph.py:8717`

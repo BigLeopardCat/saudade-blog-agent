@@ -316,7 +316,7 @@ trace 与 golden trace 的保留各有其执行者（`eval/trace_retention.py`�
 | `PLANNER_TEMPERATURE` | `0.0` | 规划温度（调优实验可逐臂拨）。**"它能治路由抖动"已被 A/B 证伪**，别拿它当调参理由 |
 | `PLANNER_NATIVE_THINKING` / `_MAX_TOKENS` / `_TIMEOUT` / `_SLOW_S` | `true` / `1200` / `60` / `30` | 接口层的四个旋钮，各自的取舍见 `settings.py` 的注 |
 | ~~`AGENT_TASK_STATE`~~、~~`AGENT_TASK_PLAN_EXEC`~~ | **已删（20261015）** | 会话级未完成意图的登记/注入**常开**，没有开关了（任务状态是业界默认必备的，不该有开关把它变成摆设）。**写进 `.env` 现在是鬼键**；理由与判据见 docs/问题记录.md §1.63 |
-| `AGENT_ARM` | `graph` | `graph` 是生产路径；`react` 是旧试验线；`hybrid` 是迁移路径，普通对话用单次小上下文调用，文章、站点资料和已验签用户的个人数据可按需读取，已确认的单件收藏进入事务执行，其余任务交回旧图。`hybrid` 尚需完整评测，默认不启用。拨档后需重启服务；未知名字拒绝启动。 |
+| `AGENT_ARM` | `graph` | `graph` 是生产路径；`hybrid` 是迁移路径，普通对话用单次小上下文调用，文章、站点资料和已验签用户的个人数据可按需读取，收藏目标核对、确认准备与已确认的单件执行走独立领域模块，其余任务交回旧图。`hybrid` 尚需完整评测，默认不启用。拨档后需重启服务；未知名字拒绝启动。 |
 | `RAG_HYBRID_ENABLED`、`EMBEDDING_*`、`RRF_K` | 不设（= 纯词法） | 向量 + RRF 混合检索，可选件。⚠️ **`EMBEDDING_*` 不只管检索**：首页那件「文章向量空间图谱」的建图（`scripts/build_word_graph.py`）与检索（`rag/wordgraph.py`）也用它——配了走它，没配回落 `QWEN_*` + `qwen3.7-text-embedding`（两端共用 `rag/embed_space.py` 一条规则）。**换模型/端点后要重建一次图谱**（后台「站点设置 → 向量图谱」），否则检索侧以 `space_mismatch` 明着降级 |
 | `AGENT_RECURSION_LIMIT` / `AGENT_MAX_BODY_BYTES` / `AGENT_MAX_CONCURRENT` / `AGENT_MAX_REVIEW` / `AGENT_STREAM_IDLE_TIMEOUT` / `AGENT_STREAM_TOTAL_TIMEOUT` | `30` / `12 MiB` / `8` / `4` / `120` / `300` | 服务限额与超时（20261020 双轨收敛入 Settings：**写 `.env` 就生效**，键名与 systemd `Environment=` 时代逐个一致，老部署零改动；两个 STREAM 超时是收敛时**新开的 env 通道**，此前只能改码）。用途与理由注释在 `server.py` 各常量旁；判据 `tests/test_settings_surface.py` ⑥ |
 

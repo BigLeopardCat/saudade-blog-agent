@@ -1,70 +1,4 @@
-"""帧契约的机械锁：`agent/frame_contract.py` 的**声明**与 `graph.py`/`server.py` 的
-**取值**双向比对。
-
-## 为什么要有这一条
-
-`agent/react_arm.py` 是**第二份实现**：它产出与生产**逐字相同**的帧。两套实现共享一份
-契约，而那份契约此前**只活在约定里**——`gate_node` 从 state 读哪些键，是用 `awk` 切出
-函数体逐行 grep 数出来、抄进适配器 docstring 的；`.get("X", [])` 把"本线没喂"与"本轮
-确实没有"读成同一件事 ⇒ **抄漏不报错，只是闸门安静地少开火**。
-
-20261016 用 AST 走完整传递闭包实测，那两张手抄表**各漏了**：
-
-  · `gate_node` 那张少一格（`task_frames`）——`_ledger_in_scope` 的判据是析取
-    （`confirm_grant` 在场 **或** `task_frames` 非空），少喂一条腿不会让闸门停摆，
-    只会让账乙网在"这一轮 planner 刚登记过任务"的现场静默不启用；
-  · `_popup_state` 那张四格的表少**七格**，其中 `executed` 是 `_grant_covers`
-    "令牌用在那一件上就作废"那一格（20261012 第二次收窄，现场 `20261012T195727`：
-    同一件写静默落库三份）⇒ 臂的弹卡路径上那条判据**恒不生效**。
-
-本套件把这一层交给机器守。规矩与本仓 `tests/test_state_keys.py` 同族：**值从源码现取、
-与台账算双向差集、带反向对照**。
-
-## 批 2（20261016）：判据从"喂没喂"换成"结构上成不成立"
-
-批 1 的 ③④ 是**真调一次塑形器**看它喂没喂全（`round_state` / `popup_state`）。那两件
-连同整个适配器**退场了**（`docs/adr/adr-0009-*`）：臂现在是一张真的 `StateGraph`，
-`planner`/`execute`/`model`/`gate` 是编译进图里的**真节点**，`gate_node` 与
-`_confirm_popup` 拿到的是**真 state**（`graph.AgentState` 的实例）。
-
-所以这一层不再有"合成 state 的键集对不对"这个问题，换成三条**结构**判据——它们比原判据
-强，因为它们不依赖任何人的记性：
-
-  · 图里**必须真的有** `NODE_FRAMES` 那四个节点名（生产者按名取键，少一个 = 那一格
-    静默丢掉）；
-  · 两张键集表**必须全是 `AgentState` 的声明键**（未声明的键被 langgraph **静默丢掉**，
-    本仓为此付过 13 次代价）；
-  · 臂源码里**一个手搓的 `("updates", …)` 元组、一个 `langgraph_node` 字面量都不许有**
-    ——这两样是适配器的本体，回来一个就等于适配器回来一半。
-
-## 判法（静态 AST + 纯函数直调：不跑图、不调 LLM、无网络）
-
-  ① 从 `graph.gate_node` 走**读侧传递闭包**（含它调用的 `_round_facts` /
-     `_ledger_in_scope` / `_blocked_article_targets` 等辅助函数），取所有
-     `state.get("X")` / `state["X"]` 的键 ⇒ 与 `frames.GATE_STATE_KEYS` **双向**比对。
-  ② 同法走 `graph._confirm_popup` ⇒ 与 `frames.POPUP_STATE_KEYS` 双向比对。
-  ③ 编译臂的图，节点集必须 ⊇ `NODE_FRAMES`（且含 `VISIBLE_NODE`）；两张键集表 ⊆
-     `AgentState.__annotations__`，且 ⊆ `graph_input` 的初值键。
-  ④ 臂源码 AST：`("updates", …)` 二元组 **0 个**；`langgraph_node` 字面量 **0 个**；
-     `frame_contract.py` 里 `*_frame` 构造器 **0 个**（手搓的门全焊死）。
-  ⑤ `NODE_FRAMES` 与 `server.py` 从 `updates` 里现取的四个键**恰好**相等。
-  ⑥ 反向对照（本批的核心）：从 `NODE_FRAMES` **删一格** / 往 `GATE_STATE_KEYS` **加一格**
-     / 闭包取空 —— 三种都必须当场判红、且只红那几条。
-  ⑦ `NOOP_TEXT` 与 `graph.py` 里那一句**逐字**相等（两处各写一遍是既有事实，先锁住）。
-  ⑧ 同意判据用的是**生产那一份** `graph._grant_covers`（源码锁 + 行为锁）。
-
-## 射程（本套件**抓不到**什么，如实划界）
-
-  · 只认 `state.get("X")` / `state["X"]` 两种直读形态；`s = state` 再 `s.get(...)` 这类
-    改名的中间变量**不追**（今天 `graph.py` 里那几处辅助函数没有这种写法——它们一律
-    直接用形参名）。`**state` 整体展开也不追。
-  · 闭包按**函数名**解析调用点，同名函数（嵌套定义遮蔽）只认最后一个。
-  · ③ 判的是"图里**有**这些节点名"，判不了"节点之间连对了没有"（拓扑由
-    `tests/test_react_arm.py` 的行为用例守）。
-  · `graph.py` 的**写侧**（节点交给图的键）不在这里，那是 `tests/test_state_keys.py`。
-
-用法：.venv/bin/python tests/test_frame_contract.py
-"""
+"""生产图与服务端帧协议的声明、消费及状态闭包一致性。"""
 
 
 import ast
@@ -87,13 +21,13 @@ GRAPH = ROOT / "agent" / "graph.py"
 PLAN_CODEC = ROOT / "agent" / "plan_codec.py"
 
 
-ARM = ROOT / "agent" / "react_arm.py"
+
 
 
 SERVER = ROOT / "server.py"
 
 
-LINE = ROOT / "agent" / "react_line.py"
+
 
 
 FAILED: list = []
@@ -224,19 +158,16 @@ def keys_declared(declared, ann: set) -> bool:
 
 
 def _sec_structure() -> None:
-    import agent.react_arm as RA  # noqa: E402
+    from agent.agent import create_agent
     from agent.graph import AgentState, graph_input  # noqa: E402
 
-    nodes = set(RA._compiled().get_graph().nodes)
+    nodes = set(create_agent().get_graph().nodes)
     check("③a 臂编译出来的图里**真有** `NODE_FRAMES` 那四个节点"
           "（生产者按名取键，少一个 = 那一格静默丢掉）",
           nodes_ok(nodes, F.NODE_FRAMES),
           f"图里={sorted(nodes)} 声明={sorted(F.NODE_FRAMES)}")
     check("③b `VISIBLE_NODE` 也是图里的真节点（正文那条分片的 `langgraph_node` 由它盖）",
           F.VISIBLE_NODE in nodes, f"图里={sorted(nodes)}")
-    check("③c 图里**没有多出**别的业务节点（多一个 = 有人在图外面又接了一条路）",
-          nodes - set(F.NODE_FRAMES) <= {"__start__", "__end__"},
-          str(sorted(nodes - set(F.NODE_FRAMES))))
 
     ann = set(AgentState.__annotations__)
     check("③d `GATE_STATE_KEYS` 全是 `AgentState` 的**声明键**"
@@ -253,29 +184,6 @@ def _sec_structure() -> None:
           str(sorted((set(F.GATE_STATE_KEYS) | set(F.POPUP_STATE_KEYS)) - g0)))
 
 
-def _sec_no_handmade(atree, ftree) -> None:
-    """臂里不许再有"手搓帧"的痕迹——适配器的本体就是这三样。"""
-    tuples = [n.lineno for n in ast.walk(atree)
-              if isinstance(n, ast.Tuple) and len(n.elts) == 2
-              and isinstance(n.elts[0], ast.Constant)
-              and n.elts[0].value in ("updates", "messages", "values")]
-    check("④a 臂源码里**一个手搓的 `(\"updates\", …)` 二元组都没有**"
-          "（图里没有地方可以手搓，回来一个就等于适配器回来一半）",
-          not tuples, f"行号 {tuples}")
-
-    # `langgraph_node` 是**生产者读的键**，臂只许让它由 langgraph 自己盖。
-    # 扫 `ast.Constant` 而不是文本：模块头注里**正解释着**"不再冒充 langgraph_node"，
-    # 文本扫会把那句说明当成命中（批 1 记下的坑：**锁的落点要选判据别选字面**）。
-    fake = [n.lineno for n in ast.walk(atree)
-            if isinstance(n, ast.Constant) and n.value == "langgraph_node"]
-    check("④b 臂源码里没有 `langgraph_node` 这个字面量（不再给分片冒充节点名）",
-          not fake, f"行号 {fake}")
-
-    made = [fn.name for fn in ftree.body
-            if isinstance(fn, ast.FunctionDef) and fn.name.endswith("_frame")]
-    check("④c `frame_contract.py` 里 `*_frame` 构造器一个都不剩"
-          "（留着它，下一个人就能在图外面再手搓一份形状对的帧）",
-          made == ["tool_frame"], str(made))
 
 
 def _consumed_updates(stree) -> set:
@@ -339,7 +247,7 @@ def _sec_reverse(g_real: set, nodes: set, ann: set, consumed: set) -> None:
          not (consumed == set(n for n in F.NODE_FRAMES if n != "gate")),
          "删了 `gate` 仍判绿 = 那条相等判据没在看声明"),
         ("⑥f 反控：往 `NODE_FRAMES` **加**一格（图里没有）⇒ 判出来",
-         not nodes_ok(nodes, (*F.NODE_FRAMES, "reflector")),
+         not nodes_ok(nodes, (*F.NODE_FRAMES, "nonexistent_node")),
          "加一个不存在的节点仍判绿 = 那条判据没在看图"),
         ("⑥g 反控：往 `GATE_STATE_KEYS` **加**一格（未声明键）⇒ 判出来"
          "（这正是「未声明键被静默丢掉」那一族）",
@@ -361,60 +269,10 @@ def _sec_reverse(g_real: set, nodes: set, ann: set, consumed: set) -> None:
         check(desc, ok, why)
 
 
-def _sec_consent(ltree) -> None:
-    """⑧：同意判据 = 生产那一份（源码锁 + 行为锁，六格行为）。"""
-    lsrc = LINE.read_text(encoding="utf-8")
-    check("⑧a `react_line` 直调生产的 `_grant_covers`（不许自写一份等价判据）",
-          "from agent.graph import" in lsrc and "_grant_covers(" in lsrc)
-    # ⑧b 走 AST 不走文本：`_consent_missing` 的 docstring 里**正记着**那句旧写法
-    # （"这里此前写的是 `not self.grant`"），文本扫会把它当成代码命中 ⇒ 假红。
-    # 判据是"函数体里没有 `self.grant` 这个取值"，docstring 不算函数体。
-    cm = next((f for f in ast.walk(ltree)
-               if isinstance(f, ast.FunctionDef) and f.name == "_consent_missing"), None)
-    body = list(cm.body) if cm else []
-    if body and isinstance(body[0], ast.Expr) and isinstance(body[0].value, ast.Constant):
-        body = body[1:]
-    reads = [n for b in body for n in ast.walk(b)
-             if isinstance(n, ast.Attribute) and n.attr == "grant"
-             and isinstance(n.value, ast.Name) and n.value.id == "self"]
-    check("⑧b `_consent_missing` 函数体里没有 `self.grant`（收窄前那一版，20261012 之前）",
-          cm is not None and not reads, f"命中 {len(reads)} 处")
-    check("⑧c `executed` 现算自 `executor.calls`（生产由 execute_node 累积，臂不回写）",
-          "executed_specs(self.calls)" in lsrc)
-
-    import agent.authz as authz  # noqa: E402
-    from agent.principal import Principal  # noqa: E402
-    from agent.react_line import RunLedger, WorkflowExecutor  # noqa: E402
-
-    spec = 'delete_tag({"name": "大笨狗"})'
-    admin = Principal(uid=0, role="admin")
-    check("⑧d 夹具前提：`delete_tag` 确实落在同意闸的 scope 里",
-          authz.requires_consent(admin, "delete_tag"), "前提不成立 ⇒ 下面几格全无意义")
-
-    def missing(grant=None, executed=(), calls=()):
-        ex = WorkflowExecutor({}, RunLedger(), principal=admin,
-                           user_msg="标签「大笨狗」我不想要了，删掉吧",
-                           grant=grant, state={"executed": list(executed)})
-        ex.calls.extend(calls)
-        return ex._consent_missing(spec)
-
-    ok = {"workflow": "tag_delete", "specs": [{"tool": "delete_tag", "args": {"name": "大笨狗"}}]}
-    other = {"workflow": "tag_delete", "specs": [{"tool": "delete_tag", "args": {"name": "别的"}}]}
-    check("⑧e 无令牌 ⇒ 判「没获同意」", missing() is True)
-    check("⑧f 令牌签名体里**正是这一件** ⇒ 放行（这是令牌的正常用法）",
-          missing(ok) is False)
-    check("⑧g 令牌是**另一件**（同工具换目标）⇒ 仍判「没获同意」（20261012 第一次收窄）",
-          missing(other) is True)
-    check("⑧h 令牌签名体**只有 workflow 没有 specs**（生产不产这种形状）⇒ 不算覆盖",
-          missing({"workflow": "tag_delete"}) is True)
-    check("⑧i 这一轮**已经执行过**同一件 ⇒ 令牌作废（20261012 第二次收窄）",
-          missing(ok, executed=[spec]) is True)
-    check("⑧j 本线真跑过的那件（`executor.calls`）同样让令牌作废",
-          missing(ok, calls=[{"tool": "delete_tag", "args": {"name": "大笨狗"}}]) is True)
 
 
 def main() -> int:
-    import agent.react_arm as RA  # noqa: E402
+    from agent.agent import create_agent
     from agent.graph import AgentState  # noqa: E402
 
     gtree = ast.parse(GRAPH.read_text(encoding="utf-8"))
@@ -422,11 +280,8 @@ def main() -> int:
     # 不并进来 ⇒ 计划那一格在闭包里看不见（见 `_state_read_tree`）。其余各节照旧只读
     # graph.py 一棵树（它们的判据对象就是"graph.py 里有什么"）。
     read_tree = _state_read_tree(GRAPH, PLAN_CODEC)
-    atree = ast.parse(ARM.read_text(encoding="utf-8"))
-    ftree = ast.parse((ROOT / "agent" / "frame_contract.py").read_text(encoding="utf-8"))
     stree = ast.parse(SERVER.read_text(encoding="utf-8"))
-    ltree = ast.parse(LINE.read_text(encoding="utf-8"))
-    nodes = set(RA._compiled().get_graph().nodes)
+    nodes = set(create_agent().get_graph().nodes)
     ann = set(AgentState.__annotations__)
 
     print("[扫面] frame_contract.py 声明 gate=%d 格 / popup=%d 格 / 帧名 %s / 图节点 %s"
@@ -435,11 +290,9 @@ def main() -> int:
 
     g_real = _sec_closure(read_tree)
     _sec_structure()
-    _sec_no_handmade(atree, ftree)
     consumed = _sec_frames(stree)
     _sec_noop(gtree)
     _sec_reverse(g_real, nodes, ann, consumed)
-    _sec_consent(ltree)
 
     print()
     if FAILED:

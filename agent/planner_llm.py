@@ -74,8 +74,8 @@ from agent.tasks import (
     normalize_intents,
     pseudo_tool_schemas,
 )
-from agent.tool_index import describe_skill_schema, index_line, skill_description
 from agent.workflow_defs import WORKFLOW_MAP, visible_workflows
+from agent.workflow_menu import render_tool_marks
 from agent.workflow_model import ParamSpec
 from agent.workflow_params import tool_arg_schemas, workflow_param_specs
 from agent.workflow_tools import callable_query_tools, explicit_tools
@@ -291,65 +291,11 @@ def _has_write_tool(workflow) -> bool:
 
 def build_tool_schema(role: str | None, *, evidence: bool = False,
                       deny: frozenset[str] | set[str] | None = None,
-                      deny_pseudo: frozenset[str] | set[str] | None = None,
-                      index: bool = False) -> list[dict]:
-    """本轮这个身份能选的技能 → OpenAI `tools` 数组。
+                      deny_pseudo: frozenset[str] | set[str] | None = None) -> list[dict]:
+    """从身份可见技能与参数声明生成工具 schema。
 
-    **来源只有一处**：`visible_workflows(role)` × `workflow_param_specs(workflow)`——与渲染
-    planner 菜单（`build_planner_context`）用的是同一张表。因此"模型能选的"恒等于
-    "今天这个身份本来就能选的"：管理员技能在 `role != "admin"` 时结构上选不出来，
-    不需要在这里再判一次角色。
-
-    **`deny` 是"这一轮不许再选"的技能名集合**（20261007，1d）——来源是上一轮的受阻项里
-    "改参数重试无效"那一族（`block_reasons.denied_workflows`）。它**不扩权**（只会更小），
-    也不是第二份可见性名单：它只在"上一轮同一个技能刚失败过"时才非空，无阻碍轮**传空集
-    ⇒ schema 逐字节不变**。语义上是"模型没有可再点的东西"，不是"提示它别点"——同一条
-    禁令写进提示词的那两版都被 A/B 否掉了（见 `docs/问题记录.md` §1.55 的 1b）。
-    `chat` 永不进这个集合（见 `block_reasons._NEVER_DENY`），调用方那一侧保证。
-
-    `complete_when` 拼进 description：它在文本档里本来就只进提示词、**没有强制点**
-    （没有任何代码读它），搬进 description 是等价的，且比原来离决策更近。
-
-    **三个伪函数恒在**（`agent/tasks.py`：`task_hold` 登记"还没做完的事"、`task_drop`
-    撤下一件已登记的事——为什么是两条而不是"空步骤"，见 `tasks.TASK_DROP` 的注；
-    `task_intents` 交意图清单）。**20261015 撤档前它们挂在一个 `task_state` 开关下**
-    （出厂关、产线开）：现在没有开关了——任务状态是默认必备的能力，不该有开关把它变成
-    摆设（主人裁决，理由与判据见 `docs/问题记录.md` §1.63）。它们不进 `visible_workflows`
-    那条集合断言的口径里——断言写的是"技能名集合 + 申报过的伪函数"（见
-    `tests/test_planner_llm.py` ①）。**这不是扩权**：它们不是技能、不执行任何工具、
-    也没有第二个消费方，只是让模型能把"剩下的步骤"说出来、把"不做了"说清楚；
-    能不能真做，仍然由技能通道与下游全部防线决定。
-
-    **每个技能函数还多一格可选参数 `intents`**（意图清单的第二个出口，见
-    `agent/tasks.py::intents_prop_schema`）：`parallel_tool_calls=False` 让"单独交清单"
-    与"点技能"在**同一轮**里互斥，挂在动作调用上的一格让两者一次说完。它**不进
-    `required`**、也不改 `params`（`tool_calls_to_plan` 摘走它再归一化），所以
-    "模型不填"这条路径与本参数不存在时**逐字节相同**。
-
-    `evidence=True`（20261014 第一批，**出厂关**）时，**会产出写工具的技能**再多一格
-    可选参数 `evidence`（出处引文，见 `agent/provenance.py` 头注）。三个"同 `intents`"：
-    不进 `required`、不进 `params`（`tool_calls_to_plan` 摘走）、不填时逐字节相同。
-    两处不同：① 只挂在**射程内**的技能上（`_has_write_tool`，射程是派生的）；
-    ② 这一批**只是影子**——摘出来的引文没人拿它拦任何事，只落 trace。
-
-    **`deny_pseudo` 是同一个 `deny` 的伪函数版**（20261008 批 ②，见 `graph.py` 里
-    "只交意图清单"那一格）：语义、代价、空集不变性**逐条同 `deny`**，只有一处不同——
-    它的来源不是"上一轮失败过"，而是"**这一轮回的正是它**"。实测依据（两条 golden
-    真链路）：生产模型在 `parallel_tool_calls=False` 下**一条轮次只发得出一条调用**，
-    所以"交清单"与"点技能"在同一轮里互斥——模型交了清单那一轮就零动作，而 `deepseek`
-    那一次（`20261008_213818` 的 `mix2_two_writes_one_breath_card_only`）：纠偏重决策
-    后的输出与上一版**逐字节相同**（`planner.llm_done` 的 `input` 29048→29130、
-    `output` 75→75，`native_decision.calls` 两次都是孤零零的 `task_intents`）。
-    纯话术纠不动一个它本来就想交的答案，所以这一格也走 1d 那条
-    验证过的路：**把选项从 schema 里摘掉**，而不是再劝一次（同 §1.55 的 1b 结论）。
-    `task_hold` / `task_drop` 同理可摘，只是今天没有触发它们的现场。
-
-    **`index=True`（20261020，ADR-0015 阶段 0，出厂关）**：每个技能的 `description` 从
-    整段散文压成**一行索引**，并追加一个 `describe_skill(name)` 让模型按需取回原文。
-    **结构与散文的边界是**：函数名 / type / enum / required / 嵌套 schema 一个字符不动
-    （`enum` 是带参清单的拦截点），只换 `description` 那一格的内容。
-    缺省 `False` ⇒ **本参数不存在时这条路径逐字节相同**（`tests/test_prompt_prefix.py`
-    钉住），理由、实测依据与"为什么是外置不是删除"见 `agent/tool_index.py` 头注。
+    deny / deny_pseudo 只缩小本轮菜单；intents、reply_kind 与可选 evidence 不进入必填参数。
+    描述展开角色相关标记并保留完成判定，保证当前生产默认 schema 内容不变。
     """
     tools: list[dict] = []
     for workflow in visible_workflows(role):
@@ -362,64 +308,22 @@ def build_tool_schema(role: str | None, *, evidence: bool = False,
             props[name] = _override_for(role, workflow.name, name) or _param_schema(sp)
             if sp.required:
                 required.append(name)
-        # 意图清单的**第二个出口**（20261008，见 `tasks.intents_prop_schema`）：每个
-        # 技能函数多带一格**可选**的 `intents`。**不进 `required`**——它是"一句话里
-        # 有两件以上时才填"，填不填都不影响这一轮的动作决策（模型不填 = 今天的行为）。
-        # 挂在每一个技能上而不是只挂写技能：要办的两件可以都不是写（"查一下 X 再顺手
-        # 把它置顶"），而"哪几件"这件事与技能是不是写无关。
         props[INTENTS_ARG] = intents_prop_schema(INTENTS_FIELD_DESC)
-        # 短应答的自我申报（20261015 批 3，`prompt_context.REPLY_KIND_FIELD_DESC`）：**挂在每个
-        # 技能上、没有任何档位**。与 `intents` 一样**不进 `required`、不进 `params`**
-        # （`tool_calls_to_plan` 摘走），所以"模型不填"这条路径与本参数不存在时逐字节相同。
-        # 拷 `tasks.py` 那份体例的两处不同见 `prompt_context.REPLY_KIND_ARG` 的注；这里只补一条
-        # 为什么**不**像 `evidence` 那样按技能射程收窄：短应答的三种出口各自落到哪个技能
-        # 是不定的（同意多半落在读、授权多半落在写），而"模型读成了哪一类"这件事与技能
-        # 无关——按射程收窄会让大部分轮次没有申报口，读数就断了。
         props[REPLY_KIND_ARG] = reply_kind_prop_schema(REPLY_KIND_FIELD_DESC)
-        # 出处引文（20261014 第一批，`evidence` 那一格）：**只挂在会产出写工具的
-        # 技能上**。射程由 `agent/provenance.write_scope_tools` 派生（= authz 里声明
-        # 为写 ∧ 不在"一律弹窗"族），不是第二份手抄名单——挂多了是给模型白送一格
-        # 没人读的自我说明，挂少了影子数据会缺一整族。
-        # 与 `intents` 一样：**不进 `required`、不进 `params`**（`tool_calls_to_plan`
-        # 摘走），所以"模型不填"与本参数不存在时逐字节相同。
         if evidence and _has_write_tool(workflow):
             props[EVIDENCE_ARG] = evidence_prop_schema(EVIDENCE_FIELD_DESC)
-        # 描述里的工具枚举标记**必须在这里展开**（20260927 修）：技能描述里写着
-        # `__无参只读工具清单__` 这类占位（见 workflow_model.py 的 `_EXPLICIT_TOOLS_MARK`），
-        # 角色相关的展开此前只发生在文本菜单那一路（`workflow_menu.py` 的
-        # `render_tool_marks`）⇒ 接口层把**未展开的标记原样**发给了模型（实测 admin/None
-        # 各 1 处）。两处渲染同一份
-        # 描述文本，展开器只能有一个（同"手抄第二份名单"的教训）。
-        # 20261020：展开那两行搬进 `tool_index.skill_description`——索引档要取回**同一份**
-        # 文本（`describe_skill` 的返回），写两处就会悄悄分叉，而分叉没有判据看得见。
-        desc = skill_description(workflow, role)
-        if index:
-            desc = index_line(desc)
+        desc = render_tool_marks(workflow.description, role)
+        if workflow.complete_when:
+            desc = f"{desc}\n完成判定：{workflow.complete_when}"
         fn: dict[str, Any] = {"name": workflow.name, "description": desc,
                               "parameters": {"type": "object", "properties": props,
                                              "additionalProperties": False}}
-        # 无必填就**不写** `required` 键：写空数组与不写语义相同，但少一个字段就少
-        # 一处网关差异（有些网关对空 required 的处理不一致）。**`additionalProperties:
-        # False` 不受这条取舍影响**：它是"这份函数的参数就这几格"的**声明**，与空
-        # `required` 那种"写不写都一样"不同——它把"这一格是关闭的"这件事写成了事实，
-        # 而不是留给"没写=随便"去解释。**只加在这一层**（函数参数的顶层）：`calls[].args`
-        # 那类内层对象是**自由形状**（键就是被调工具的形参名），在那儿加会把它关死。
         if required:
             fn["parameters"]["required"] = required
         tools.append({"type": "function", "function": fn})
-    # 名字从 schema 自己身上读（`s["function"]["name"]`），不另立一份伪函数名表：
-    # 摘的是同一批对象，"名单"与"形状"必须是同一处事实源（同 `pseudo_tool_schemas`
-    # 头注那条）。
     tools.extend(s for s in pseudo_tool_schemas(role)
                  if not (deny_pseudo and s["function"]["name"] in deny_pseudo))
-    # 索引档才有的取回口（ADR-0015 阶段 0）。**不并进 `pseudo_tool_schemas`**：那三个伪函数
-    # 是"任务状态"这一族（有开关史、有集合断言），而 `describe_skill` 是**读自己菜单**的
-    # 纯只读口——它无副作用、不进 `_split_pseudo_calls`、缺省档一次都不出现。
-    # 放在**最后**：它是对上面那份菜单的注释，不是菜单里的一项。
-    if index:
-        tools.append(describe_skill_schema())
     return tools
-
 
 def finish_reason(resp: object) -> str:
     """响应里的 `finish_reason`（取不到 → 空串）。

@@ -107,7 +107,7 @@ class Settings(BaseSettings):
     llm_seed: int = 0
 
     # ── Agent ───────────────────────────────────────────────────────
-    # graph 是生产默认档；react 和 capability 是按技能/能力加载菜单的试验档。
+    # graph 是生产默认档；hybrid 是按领域迁移的目标运行时。
     # hybrid 用小上下文处理对话、按需读取和已确认收藏事务，其余任务交给 graph。
     # 各档须按请求级结果比较后再决定默认档，不以内部节点通过率互比。
     # 真值源与 `AGENT_REQUIRE_ASSERTION` 同族 = `.env`；**这里只声明**，
@@ -388,9 +388,6 @@ class Settings(BaseSettings):
     # 而它建的表与业务表不重名、**不会报错**。完整理由与"旧数据不迁"见
     # `agent/checkpoint.py` 头注《DSN 指向哪个库》；`/health` 的 `dials.checkpoint_db`
     # 是它的可读出口（只回库名）。
-    # 实验那份 DSN 刻意在**仓外**（`/home/ubuntu/exp/ckpt.env` 的 `CHECKPOINT_PG_DSN`，
-    # 由 `agent/checkpoint_arm.py` 读**进程环境**）：golden 的 cwd 是主仓，
-    # `env_file=".env"` 会读到产线配置，两件事必须分开。
     # 依赖（`langgraph-checkpoint-postgres` / `psycopg[binary]` / `psycopg-pool`）已在
     # `pyproject.toml` 里声明并进了 `uv.lock`。
     checkpoint_dsn: str = ""               # CHECKPOINT_DSN

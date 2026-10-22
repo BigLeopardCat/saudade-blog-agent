@@ -257,7 +257,7 @@ def delete_thread(saver, conversation_id: object) -> bool:
     tid = conversation_thread(conversation_id)
     if tid is None:
         return False
-    from agent.turns import conversation_turn
+    from agent.runtime.turns import conversation_turn
     config = {"configurable": {"thread_id": tid}}
     with conversation_turn(saver, config):
         saver.delete_thread(tid)

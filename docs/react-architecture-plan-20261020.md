@@ -1,12 +1,8 @@
 # 主流 ReAct + 按需 schema：架构改造方案
 
-- **档**：方向型（§6 每阶段都有触发条件与预注册判据）
-- **状态**：**阶段 0 代码面已落地**（20261020，出厂关；`agent/tool_index.py` +
-  `build_tool_schema(..., index=False)` + `tests/test_tool_index.py`）。
-  **阶段 0 已于 20261021 按判据停**：生产网关（`opencode` + `deepseek-v4.1-flash`）上
-  9 条歧义检索句 × 2 臂 × 3 遍，`index` 命中 8/7/6、`names` 命中 7/7/7（均值同为 7.0），
-  且 `index` 三遍**取回全是 0/9（共 0 次）** ⇒ 见 §6 阶段 0 的读数表与 §7 第一行。
-  代码**不删**（出厂关、零行为变更，留着是物证）。**阶段 1–3 不受影响，未开工。**
+- **档**：历史设计记录。
+- **状态**：对应索引与实验运行时已退役；源码与结论见 [归档说明](retired-experiments.md)。
+  当前实现与后续工作以 [hybrid 迁移路线](hybrid-runtime-migration.md) 为准。
 - **前身**：`docs/tool-menu-poc-20261020.md`（工具级菜单 POC）、
   `docs/prefix-cache-audit-20261020.md`（成本审计）
 
@@ -196,11 +192,11 @@ planner 看到：      50 条技能各一行索引（实测 2,633 字符 ≈ 1,2
 | `landing_gate.ab_compare(graph, index)` | 无回归（Wilson 下界差不超 `AB_TOL=0.005`） |
 | 19 条 regression 硬层 | 全绿，**不许空过** |
 | 取回率（模型调 `describe_skill` 的比例） | **这是主读数**——太低说明索引没在起作用 |
-| 离线锁 | `tests/test_tool_index.py`（缺省档逐字节 / 只换 description / 取回原文逐字相等 / 索引是原文前缀 / 体积棘轮） |
+| 离线锁 | [tests/test_tool_index.py](https://github.com/BigLeopardCat/saudade-blog-agent/blob/563c8a5/tests/test_tool_index.py)（缺省档逐字节 / 只换 description / 取回原文逐字相等 / 索引是原文前缀 / 体积棘轮） |
 
-**已落地（20261020，代码面）**：`agent/tool_index.py`（新）+ `build_tool_schema(..., index=False)`
-（**缺省关**，出厂档一个字节没动）+ `tests/test_tool_index.py` + 探针的 `index` / `names` 两臂
-（`eval/experiments/menu_shape_ab.py`，自检零 token 全过）。
+**已落地（20261020，代码面）**：[agent/tool_index.py](https://github.com/BigLeopardCat/saudade-blog-agent/blob/563c8a5/agent/tool_index.py)（新）+ `build_tool_schema(..., index=False)`
+（**缺省关**，出厂档一个字节没动）+ [tests/test_tool_index.py](https://github.com/BigLeopardCat/saudade-blog-agent/blob/563c8a5/tests/test_tool_index.py) + 探针的 `index` / `names` 两臂
+（[eval/experiments/menu_shape_ab.py](https://github.com/BigLeopardCat/saudade-blog-agent/blob/563c8a5/eval/experiments/menu_shape_ab.py)，自检零 token 全过）。
 
 **模型读数（20261021，生产网关 `opencode` + `deepseek-v4.1-flash`）**——主读数就是取回率，
 跑法 `menu_shape_ab.py --role user --arms index,names --rounds 3 --only <9 条歧义检索句>`：
