@@ -466,10 +466,66 @@
       "agent/domains/todos/transactions.py": [
         3,
         0
+      ],
+      "agent/domains/admin_writes.py": [
+        0,
+        0
+      ],
+      "agent/runtime/admin_domains.py": [
+        0,
+        0
+      ],
+      "agent/domains/article_actions/__init__.py": [
+        0,
+        0
+      ],
+      "agent/domains/article_actions/targets.py": [
+        3,
+        0
+      ],
+      "agent/domains/article_actions/preparation.py": [
+        0,
+        0
+      ],
+      "agent/domains/article_actions/transactions.py": [
+        0,
+        0
+      ],
+      "agent/domains/moderation_actions/__init__.py": [
+        0,
+        0
+      ],
+      "agent/domains/moderation_actions/targets.py": [
+        0,
+        0
+      ],
+      "agent/domains/moderation_actions/preparation.py": [
+        3,
+        0
+      ],
+      "agent/domains/moderation_actions/transactions.py": [
+        1,
+        0
+      ],
+      "agent/domains/quota_actions/__init__.py": [
+        0,
+        0
+      ],
+      "agent/domains/quota_actions/targets.py": [
+        0,
+        0
+      ],
+      "agent/domains/quota_actions/preparation.py": [
+        0,
+        0
+      ],
+      "agent/domains/quota_actions/transactions.py": [
+        0,
+        0
       ]
     },
     "total": [
-      1168,
+      1175,
       4848
     ]
   },

@@ -46,11 +46,11 @@ _DOMAIN_DESCRIPTIONS = {
     "own_activity": "读取本人河灯留言的状态、理由与分页内容，以及当前会话的真实聊天文本。"
                     "不读取其他账号数据或其他会话，不加载图片，只读。",
     "admin_catalog": "分页读取后台文章清单（含草稿、私密文章的元数据）与账号名录。"
-                     "可按分类、关键词、账号名或编号筛选，仅管理员可用，只读。",
+                     "可按分类、关键词、账号名或编号筛选；可准备文章状态或置顶变更确认，仅管理员可用。",
     "admin_work_queue": "分页读取额度重置申请、当前管理员在后台首页记录的个人待办和日程。"
-                        "仅管理员可用；可准备个人待办变更确认，准备不写入。",
+                        "仅管理员可用；可准备个人待办及额度审批或重置确认，准备不写入。",
     "admin_moderation": "读取河灯集（河灯留言）与文章评论的审核计数、分页记录和指定编号内容。"
-                        "仅管理员可用，所有工具均为只读。",
+                        "仅管理员可用；可准备指定留言或评论的通过、驳回、删除确认，准备不写入。",
     "admin_reports": "Load administrator-only server health, user statistics and article traffic "
                      "reports. Read-only; does not change site data or service state.",
     "site": "按需加载博客作者信息、社交链接和站点功能结构的公开读取工具。",

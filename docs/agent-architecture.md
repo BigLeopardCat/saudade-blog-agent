@@ -127,6 +127,7 @@ flowchart LR
 │   │   ├── pending.py         # 跨领域已签名待办的撤销与更换
 │   │   ├── writes.py          # 身份绑定、持久化执行与回放
 │   │   ├── hybrid.py          # 会话准入、持久化、协议输出和旧图交接
+│   │   ├── admin_domains.py   # 管理员读取与确认准备工具的授权组装
 │   │   ├── context.py         # 从验签身份、权限表和渲染清单派生会话能力事实
 │   │   ├── session.py         # 按需工具加载、有界调用及领域终结结果
 │   │   ├── read_tools.py      # 公开与本人只读工具的注册和权限边界
@@ -135,6 +136,22 @@ flowchart LR
 │   ├── domains/
 │   │   ├── __init__.py        # 领域包入口，不隐式注册全部业务
 │   │   ├── registry.py        # 已迁移确认领域的显式注册
+│   │   ├── admin_writes.py   # 管理员确认准备共用的身份与会话准入
+│   │   ├── article_actions/
+│   │   │   ├── __init__.py   # 文章状态写领域入口
+│   │   │   ├── targets.py    # 有界文章目标、内容版本及状态核对
+│   │   │   ├── preparation.py # 文章状态与置顶确认准备
+│   │   │   └── transactions.py # 文章条件写入、回读与幂等回执
+│   │   ├── quota_actions/
+│   │   │   ├── __init__.py   # 额度写领域入口
+│   │   │   ├── targets.py    # 具体申请与账号额度快照核对
+│   │   │   ├── preparation.py # 审批与主动重置的签名确认
+│   │   │   └── transactions.py # 额度原子操作、结果核对与幂等执行
+│   │   ├── moderation_actions/
+│   │   │   ├── __init__.py   # 留言与评论审核写领域入口
+│   │   │   ├── targets.py    # 审核目标版本、归属与删除影响核对
+│   │   │   ├── preparation.py # 审核与删除的签名确认
+│   │   │   └── transactions.py # 原子审核、通知及删除结果核验
 │   │   ├── own_activity.py   # 本人留言分页与当前会话历史文本
 │   │   ├── own_reads.py      # 仅计数聚合、有界信件摘要与按编号读取正文
 │   │   ├── moderation.py     # 审核聚合、分页记录及按编号读取内容

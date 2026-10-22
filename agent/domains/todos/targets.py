@@ -2,20 +2,11 @@
 
 from datetime import date, datetime
 
-from agent import authz
-from agent.runtime import writes
+from agent.domains.admin_writes import available as available
 from tools import base
 
 PATH = "/api/protected/todos"
 MAX_ROWS = 200
-
-
-def available(config):
-    try:
-        principal, _ = writes.bound_context(config)
-    except ValueError:
-        return False
-    return authz.holds(principal, authz.SCOPE_WRITE_CONSOLE)
 
 
 def due_date(value):

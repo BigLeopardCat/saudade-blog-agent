@@ -114,10 +114,29 @@ def _cone_patterns(txt: str) -> list[str]:
     return body
 
 
-def _cone_dirs(cone: str) -> set[str]:
-    """cone 模式实际会落盘哪些目录：锥 + 它的各级祖先 + 仓根（祖先目录的**直系文件**也在）。"""
-    parts = cone.split("/") if cone else []
-    return {"/".join(parts[:i]) for i in range(len(parts) + 1)}
+def _cone_covers(rel: str, patterns: list[str]) -> bool:
+    """锥内递归包含文件；锥的祖先只包含直属文件。"""
+    parent = str(pathlib.PurePosixPath(rel).parent)
+    if parent == ".":
+        return True
+    for pattern in patterns:
+        cone = pathlib.PurePosixPath(pattern)
+        if rel.startswith(str(cone) + "/") or parent in {str(p) for p in cone.parents}:
+            return True
+    return False
+
+
+@pytest.mark.parametrize(("rel", "covered"), [
+    ("src/routes/quota_actions/service.rs", True),
+    ("src/routes/quota.rs", True),
+    ("src/authz.rs", True),
+    ("Cargo.toml", True),
+    ("src/entity/user.rs", False),
+    ("src/routes_extra/mod.rs", False),
+    ("frontend/src/router/index.tsx", False),
+])
+def test_sparse_cone_file_coverage(rel: str, covered: bool) -> None:
+    assert _cone_covers(rel, ["src/routes"]) is covered
 
 
 _STEP_SPLIT_RE = re.compile(r"\n(?=[ \t]*- (?:name|uses):)")
@@ -274,18 +293,17 @@ def test_ci_suite_list():
     for _p in sorted((ROOT / "tests").glob("*.py")):
         for _rel in re.findall(r'_parent_repo\.read\(\s*"([^"]+)"', _p.read_text(encoding="utf-8")):
             _reads.setdefault(_rel, []).append(_p.name)
-    _covered = set().union(*(_cone_dirs(p) for p in _patterns)) if _patterns else _cone_dirs("")
     _outside = sorted(f"{rel}（{'+'.join(who)}）" for rel, who in _reads.items()
-                      if "/".join(rel.split("/")[:-1]) not in _covered)
+                      if not _cone_covers(rel, _patterns))
     check("锥里真含父仓锚（`_SENTINEL`）——锥配窄了连「父仓在哪」都认不出来",
-          "/".join(_parent_repo._SENTINEL.split("/")[:-1]) in _covered)
+          _cone_covers(_parent_repo._SENTINEL, _patterns))
     check(f"守卫读的每一个父仓文件都落在 CI 拉的锥里（锥={_cone or '未声明'}）[{len(_reads)} 处]",
           not _outside, "锥外的：" + "、".join(_outside))
     check("锥的判据是**扫源码得出**的，不是这里手抄一份名单（扫不到路径=判据失效）",
           len(_reads) >= 2, f"扫到 {len(_reads)} 处")
     _other = sorted(rel for rel in _reads
-                    if "/".join(rel.split("/")[:-1]) not in _cone_dirs("frontend/src"))
-    check("锥判据真的咬：换成另一处锥（frontend/src）重算，扫到的路径全被判成锥外",
+                    if not _cone_covers(rel, ["docs"]))
+    check("锥判据真的咬：换成无关目录锥（docs）重算，扫到的路径全被判成锥外",
           len(_other) == len(_reads) and len(_reads) > 0, f"锥外：{_other}")
     check(f"ADR 里写了同一个秘密名（{_ADR_NAME}）",
           _ADR.is_file() and "PARENT_REPO_TOKEN" in _ADR.read_text(encoding="utf-8"),

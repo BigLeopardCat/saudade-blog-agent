@@ -68,7 +68,7 @@
     "top_defs": 2
   },
   "tests/test_chat_quota.py": {
-    "lines": 953,
+    "lines": 924,
     "top_defs": 20
   },
   "tests/test_confirm.py": {
