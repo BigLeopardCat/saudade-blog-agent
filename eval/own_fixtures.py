@@ -84,3 +84,48 @@ def notification_backend():
             patch.object(base, "_client", client), \
             patch.object(confirm.settings, "jwt_secret", SECRET):
         yield state
+
+
+@contextmanager
+def message_backend():
+    """A received mailbox with a separate, unwritable outbox."""
+    state = {"items": [{"id": 201, "toUserId": 7, "title": "欢迎来信", "isRead": False},
+                       {"id": 202, "toUserId": 7, "title": "回访来信", "isRead": False},
+                       {"id": 203, "toUserId": 7, "title": "旧来信", "isRead": True}],
+             "outbox": [{"id": 301, "toUserId": 8, "title": "发出的信", "isRead": False}],
+             "requests": [], "unavailable": False, "ignore": set(), "new_on_write": False}
+
+    def handle(request):
+        state["requests"].append(request)
+        assert request.headers.get("Authorization", "").startswith("Bearer ")
+        if state["unavailable"]:
+            return httpx.Response(503)
+        if request.method == "GET" and request.url.path.endswith("/messages"):
+            selected = request.url.params.get("ids")
+            rows = state["items"]
+            if selected:
+                ids = {int(key) for key in selected.split(",")}
+                rows = [row for row in rows if row["id"] in ids]
+            elif request.url.params.get("unreadOnly") == "true":
+                rows = [row for row in rows if not row["isRead"]]
+            data = {"inbox": rows[:100], "inboxComplete": len(rows) <= 100,
+                    "outbox": state["outbox"],
+                    "unread": sum(not row["isRead"] for row in state["items"])}
+        elif request.method == "POST" and request.url.path.endswith("/messages/read"):
+            payload = json.loads(request.content)
+            assert payload["all"] is False and payload["ids"]
+            for row in state["items"]:
+                if row["id"] in payload["ids"] and row["id"] not in state["ignore"]:
+                    row["isRead"] = True
+            if state["new_on_write"]:
+                state["items"].append({"id": 204, "toUserId": 7,
+                                       "title": "新到来信", "isRead": False})
+            data = None
+        else:
+            return httpx.Response(404)
+        return httpx.Response(200, json={"code": 200, "data": data})
+
+    with httpx.Client(transport=httpx.MockTransport(handle)) as client, \
+            patch.object(base, "_client", client), \
+            patch.object(confirm.settings, "jwt_secret", SECRET):
+        yield state

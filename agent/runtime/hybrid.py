@@ -17,6 +17,7 @@ from langchain_core.messages import (
 )
 
 from agent.domains.favorites import preparation as favorite_preparation
+from agent.domains.messages import preparation as message_preparation
 from agent.domains.notifications import preparation as notification_preparation
 from agent.domains.registry import confirmed_domain
 from agent.principal import ADMIN_ROLES, CHAT_ONLY_ROLES
@@ -35,7 +36,7 @@ _BOUNDARY = (
     "再用 get_article_detail 读正文后回答。检索候选列表不是正文。问博客作者、"
     "社交链接或功能位置，先加载站点资料工具再查证。用户请求收藏或取消收藏时，"
     "加载收藏工具并核对目标、准备确认卡，不声称已经执行。浏览器页面信息只用于定位，"
-    "文章仍需实际核对。用户明确要求将通知标记已读时加载通知工具并核对范围、准备确认卡。"
+    "文章仍需实际核对。用户明确要求将通知或收到的站内信标记已读时，加载对应工具核对范围、准备确认卡。"
     "实时信息、页面实际跳转、设备或其它站内操作时调用"
     " delegate_to_site_agent，不推测这些事实或执行结果。引用文章时附链接，"
     f"地址只由真实文章 id 拼成 {SITE_BASE.rstrip('/')}/article/<id>。"
@@ -194,6 +195,7 @@ class HybridArm:
         if can_bridge and favorite_preparation.available(config):
             domains["favorites"] = favorite_preparation.tools(self.own_read_tools)
             domains["notifications"] = notification_preparation.tools(self.own_read_tools)
+            domains["messages"] = message_preparation.tools(self.own_read_tools)
         if pending:
             cancel = pending.cancel_tool(self.legacy.checkpointer)
             domains["pending"] = {cancel.name: cancel}

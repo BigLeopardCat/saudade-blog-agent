@@ -170,6 +170,11 @@ flowchart TB
 │   ├── domains/
 │   │   ├── __init__.py        # 领域包入口，不隐式注册全部业务
 │   │   ├── registry.py        # 已迁移确认领域的显式注册
+│   │   ├── read_state.py     # 固定编号已读范围、完整性、归属及逐项回执核验
+│   │   ├── messages/
+│   │   │   ├── __init__.py    # 本人收件箱已读领域入口
+│   │   │   ├── preparation.py # 收件箱范围与签名确认卡
+│   │   │   └── transactions.py # 已确认收信的固定编号执行
 │   │   ├── notifications/
 │   │   │   ├── __init__.py    # 本人通知领域入口
 │   │   │   ├── preparation.py # 固定通知编号、状态核对与确认卡

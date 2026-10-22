@@ -27,7 +27,9 @@ def proposal(principal, cid, workflow, spec, *, executor, question, target, repl
 
 
 def confirmed_runtime(runtime, grant):
-    if (grant or {}).get("executor") not in {"favorites", "notifications"}:
+    from agent.domains.registry import native_domain
+
+    if native_domain(grant) is None:
         return runtime
     from agent.runtime.hybrid import HybridArm
     # Changing the default runtime cannot bypass revocation or replay checks.

@@ -21,7 +21,7 @@ from agent.agent import create_agent
 from agent.runtime import writes
 from agent.runtime.hybrid import HybridArm
 from eval import request_metrics
-from eval.own_fixtures import SECRET, favorite_backend, notification_backend
+from eval.own_fixtures import SECRET, favorite_backend, message_backend, notification_backend
 from utils.trace_io import load_trace
 
 # run_golden's existing helpers still use imports relative to its script directory.
@@ -96,21 +96,37 @@ def _favorite_cancel(turn, state):
              .values.get("pending_action") is None, "pending card was not cleared")
 
 
-def _notifications(turn, state):
-    prepared = turn("请把我的全部未读通知标记为已读。")
-    token, grant = _card(prepared, "notifications")
-    args = {"ids": [101, 102], "all": False}
-    _require(grant["specs"] == [{"tool": "read_notifications", "args": args}],
-             "notification scope was not fixed")
+def _read_replay(turn, state, message, executor, tool, ids, arrival):
+    prepared = turn(message)
+    token, grant = _card(prepared, executor)
+    args = {"ids": ids, "all": False}
+    _require(grant["specs"] == [{"tool": tool, "args": args}], "read scope was not fixed")
     _require(not _posts(state), "preparation wrote business data")
-    state["items"].append({"id": 104, "title": "新到通知", "isRead": False})
+    state["items"].append(arrival)
     executed = turn("", token)
     replay = turn("", token)
     _require(executed["exec_rows"] and replay["exec_rows"], "missing factual receipt")
     _require(len(_posts(state)) == 1 and json.loads(_posts(state)[0].content) == args,
              "confirmation or replay wrote unexpected data")
-    _require(all(row["isRead"] == (row["id"] != 104) for row in state["items"]),
-             "read state or exclusion of new notifications is incorrect")
+    _require(all(row["isRead"] == (row["id"] != arrival["id"]) for row in state["items"]),
+             "read state or exclusion of new arrivals is incorrect")
+
+
+def _notifications(turn, state):
+    _read_replay(turn, state, "请把我的全部未读通知标记为已读。",
+                 "notifications", "read_notifications", [101, 102],
+                 {"id": 104, "title": "新到通知", "isRead": False})
+
+
+def _messages(turn, state):
+    viewed = turn("我的收件箱里有哪些站内信？只看看，不要标记已读。")
+    _require("欢迎来信" in viewed["text"] and not viewed["confirm_tokens"],
+             "mailbox view did not return actual received-message facts")
+    _require(not _posts(state), "viewing the mailbox changed read state")
+    _read_replay(turn, state, "请把我收到的全部未读站内信标记为已读。",
+                 "messages", "read_messages", [201, 202],
+                 {"id": 204, "toUserId": 7, "title": "新到来信", "isRead": False})
+    _require(not any(row["isRead"] for row in state["outbox"]), "outbox state changed")
 
 
 def run():
@@ -119,7 +135,8 @@ def run():
     paths, results = [], []
     cases = [("chat", favorite_backend, _chat),
              ("favorite_cancel", favorite_backend, _favorite_cancel),
-             ("notification_replay", notification_backend, _notifications)]
+             ("notification_replay", notification_backend, _notifications),
+             ("message_read_replay", message_backend, _messages)]
     for name, backend, contract in cases:
         with backend() as state, TemporaryDirectory(prefix="agent-native-eval-") as temp:
             graph = create_agent(checkpointer=InMemorySaver())
