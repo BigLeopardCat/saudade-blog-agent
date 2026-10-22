@@ -160,6 +160,8 @@ flowchart TB
 │   ├── runtime/               # 迁移运行时、工具循环和会话生命周期
 │   │   ├── __init__.py        # 空包入口，不隐式加载运行时
 │   │   ├── confirmation.py    # 签名执行入口绑定及确认/撤销事件编码
+│   │   ├── pending.py         # 跨领域已签名待办的撤销与更换
+│   │   ├── writes.py          # 身份绑定、持久化执行与回放
 │   │   ├── hybrid.py          # 会话准入、持久化、协议输出和旧图交接
 │   │   ├── session.py         # 按需工具加载、有界调用及领域终结结果
 │   │   ├── read_tools.py      # 公开与本人只读工具的注册和权限边界
@@ -167,9 +169,13 @@ flowchart TB
 │   │   └── turns.py           # 会话串行化、等待取消和公共取消信号
 │   ├── domains/
 │   │   ├── __init__.py        # 领域包入口，不隐式注册全部业务
+│   │   ├── registry.py        # 已迁移确认领域的显式注册
+│   │   ├── notifications/
+│   │   │   ├── __init__.py    # 本人通知领域入口
+│   │   │   ├── preparation.py # 固定通知编号、状态核对与确认卡
+│   │   │   └── transactions.py # 按签名范围写入、逐项核验与事实回执
 │   │   └── favorites/
 │   │       ├── __init__.py    # 收藏领域包入口
-│   │       ├── pending.py     # 待确认收藏的撤销、更换与旧卡失效
 │   │       ├── preparation.py # 真实目标、当前状态与签名确认卡；不写业务数据
 │   │       └── transactions.py # 已确认操作的鉴权复核、幂等执行和事实回执
 │   ├── checkpoint.py          # checkpointer 的**接线点**与级联清理（空 DSN 恒返回 None，见 §4.6）

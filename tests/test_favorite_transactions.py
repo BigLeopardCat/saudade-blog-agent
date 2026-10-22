@@ -13,6 +13,7 @@ from agent.agent import create_agent
 from agent.domains.favorites import transactions
 from agent.graph import graph_input
 from agent.principal import SOURCE_ASSERTION, Principal
+from agent.runtime import writes
 from agent.runtime.hybrid import HybridArm
 from tools.result import fact, ok, tgt
 
@@ -146,7 +147,7 @@ def test_exception_after_write_keeps_intent_and_prevents_retry(failure, monkeypa
 def test_hybrid_executes_confirmed_favorite_without_model_or_legacy(monkeypatch, tmp_path):
     tool = Favorite()
     monkeypatch.setattr(transactions, "get_all_tools", lambda: [tool])
-    monkeypatch.setattr(transactions, "_ledger",
+    monkeypatch.setattr(writes, "ledger_for",
                         lambda saver: idem.Ledger(str(tmp_path / "runtime.sqlite3")))
     monkeypatch.setattr("agent.runtime.hybrid.get_llm", lambda **_: 1 / 0)
     graph = create_agent(checkpointer=InMemorySaver())
@@ -170,7 +171,7 @@ def test_stream_producer_emits_existing_execution_receipt(monkeypatch, tmp_path)
 
     tool = Favorite()
     monkeypatch.setattr(transactions, "get_all_tools", lambda: [tool])
-    monkeypatch.setattr(transactions, "_ledger",
+    monkeypatch.setattr(writes, "ledger_for",
                         lambda saver: idem.Ledger(str(tmp_path / "stream.sqlite3")))
     monkeypatch.setattr("agent.runtime.hybrid.get_llm", lambda **_: 1 / 0)
     monkeypatch.setattr(server, "_agent",

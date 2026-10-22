@@ -6,7 +6,7 @@
 | --- | --- |
 | `server.py` | HTTP、身份入口、请求与 SSE 协议适配 |
 | `agent/runtime/` | 请求执行循环、工具加载、会话生命周期与输出协议适配 |
-| `agent/domains/favorites/` | 收藏目标核对、确认准备、待办修改/取消与已确认操作执行 |
+| `agent/domains/favorites/`、`notifications/` | 各自目标、权限、确认范围与真实执行结果 |
 | `agent/checkpoint.py`、`agent/idem*.py` | 既有持久化与幂等基础组件，供运行路径复用 |
 | `tools/` | 站点 API 与设备等外部 I/O 适配，不负责模型规划 |
 | `models/`、`rag/`、`config/` | 模型访问、检索和配置 |
@@ -18,10 +18,10 @@
 
 - `agent/runtime/hybrid.py` 负责准入、持久化与协议适配；模型和工具循环在 `session.py`。
 - 收藏业务不进入通用循环。`preparation.py` 只读取目标与本人状态，再返回确认结果；
-  `pending.py` 管理已签名待办的撤销和替换；`transactions.py` 只执行已核验的具体操作，复用签名、权限、幂等与回执机制。
+  `runtime/pending.py` 管理跨领域已签名待办的撤销和替换；`transactions.py` 只执行已核验的具体操作，复用签名、权限、幂等与回执机制。
 - `runtime/confirmation.py` 适配签名执行入口和确认控制帧，SSE 入口不承担领域生命周期。
 - 领域终结结果使用 `runtime/results.py` 的小型结果类型。确认令牌只进入持久化与控制帧，
-  不回送模型，也不写入工具 trace。
+  不回送模型，也不写入工具 trace。`runtime/writes.py` 共用持久化执行和重放。
 - 包初始化文件不导入运行时或注册全部领域，避免隐藏的启动副作用。
 
 ## 后续收敛
