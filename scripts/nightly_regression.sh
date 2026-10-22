@@ -1,49 +1,8 @@
 #!/usr/bin/env bash
-# Nightly regression: pytest（全部离线套件，按目录收集） + 检索基准 + golden set（语料 149 条，夜间实跑 146
-# ——唯一的例外是那 3 条会真写生产库的用例，它们按设计不由任何无人看着的跑法触发）+ 巡检
-# ⚠️ **本仓默认不装任何 cron（出厂关）**（20261017）：这是公开仓库，而这个脚本一次全量要真调
-# LLM 跑 golden（≈10M tok / ¥2.4，维护者实测的量级），跑的还是**维护者那台机器上的**博客语料
-# 与夹具 —— 克隆的人不该在不知情下开始每天烧自己的额度。`deploy/install.sh` 只装心跳探针那一行。
-# 要天天跑（通常是想改 agent 行为、需要一条稳定回归基线的人）：`bash scripts/enable_nightly.sh`
-# （默认干跑，`--apply` 才写 crontab，`--off` 摘掉）。**本机**（维护者的生产服务器）自 20261017
-# 起是开着的，那一档的来龙去脉记在 crontab 自己的注释里。
-# 手跑一次（不装 cron）看同样的读数：`bash scripts/nightly_regression.sh`。
-# 结果追加到 ~/agent_regression.log；任一门禁项失败会在 ~/agent_regression.failed
-# 留下标记（存在 = 上次运行失败）。**没装 cron ⇒ 这个标记恒不存在 ⇒ 心跳探针那一项恒静默**，
-# 静默不等于绿（见父仓 scripts/healthcheck.sh 第 6 项）。
-# golden 有 FAIL 时导出复审单 eval/report/review_<ts>.md（判据 vs 模型实际输出）——
-# 复审规则（20260912）：假失败当轮修判据，真 FAIL 才允许挂着（否则门禁失去区分度）。
-# 20260921 起 golden 分两层判：**回归组（tags 含 regression）硬判 100%**，能力题按门禁
-# ——两类红的严重度不同，不许被平均数吸收。
-# 20261001 补：能力题那层**换口径**——从点估计换成 Wilson 95% 下界对地板/档位/目标三个数
-# （判据在 `eval/landing_gate.py`，地板 0.78）。下面那一行现在**不带任何参数**（不传
-# --min-pass-rate 才会走新口径）。来处与"为什么绝对目标不能当门禁"见那一行上方的长注。
-# 20260924 起回归组红**先复跑一次再定论**（判据脆弱/采样波动不再直接废掉整夜门禁）：
-# 复跑仍红=真 FAIL；复跑绿=按方差放行，但名单进报告 regression.flaked_ids 与复审单
-# 置顶，日志里也单列——放行不等于静默宽恕。
-# 同日补：trace_alert 抓到的现场回灌成 golden 草稿（eval/golden_draft.py，只产草稿
-# 到 eval/report/ 供人审，不自动入库、非门禁）。
-# 20260925 补：回复出处评审（eval/llm_judge.py，非门禁）——紧跟 golden 之后跑，评的正是刚那
-# 一轮的 trace（不传 --traces 时它取最新一轮）；只出报告 eval/report/judge_<ts>.md，可疑**不是**
-# 失败（它挑可疑样本、不是判分器，见模块头注纪律 1），故不置 fail=1、也不写 health.log。
-# 20260925 补：语料漂移哨兵（eval/corpus_terms.py --drift，非门禁）——见下方该节的注释。
-# 同日补：真写夹具残留哨兵（eval/golden_fixture.py --verify，非门禁，只读公开接口）——
-# 见下方该节的注释。**真写用例本身不在夜间跑**（needs_real_write 默认关，见 run_golden.py）。
-# 20260924 补：跨源对账（eval/trace_reconcile.py，把 trace ↔ agent.log ↔ monitor.log
-# 三个源对起来看，非门禁）——单源规则扫描看不见"两个源之间"的错（轮次自洽、前端只见
-# 报错那类），报告进 eval/report/reconcile_<ts>.md，异常时另写一条 WARN 到
-# logs/health.log（与一分钟心跳探针同一条通道）。
-# 20260925 补：产物保留登记表 + 执行者（eval/retention_manifest.py + artifact_retention.py，
-# 末尾一节）——先统一回答"盘上每一类产物归谁清"，再让它真的清。同族坑第四次
-# （R2 --keep 3 / logrotate rotate 14 / logs/archive / eval/report/runs）。
-# 20260926 补：①令牌收回/冻结**真链路探针**每日跑（scripts/probe_token_revoke.py，门禁；
-# 写生产库但只建删自己的一次性靶子账号 probe_revoke_*）——这一整套判据（冻结即作废令牌、
-# 改密码作废旧代次、向量图谱/河灯两处旁路收口）的失效方式都是**静默**的，只有真打一遍
-# 才分辨得出；位置在 golden 之前，坏掉时先出现的是一行 ❌ 语义断言而不是十几条像"模型退化"
-# 的 golden 红。②golden 的**身份前置在位检查**（eval/identity_preflight.py）——`GOLDEN_ADMIN_UID`
-# 被冻结/改密码/角色不符时，十几条真身份用例会集体变红且长相与模型退化同形；现在配了 uid
-# 就先只读探一次，明确不可用 ⇒ 这批**未评估** + **退出码 3**（"没评"不是"通过率"），
-# 读不到 ⇒ 只警告照跑（"不知道"不等于"不可用"）。
+# Existing opt-in nightly job: deterministic tests, legacy golden, hybrid outcomes
+# and diagnostic reports. Does not install a schedule; see enable_nightly.sh.
+# Results append to ~/agent_regression.log. Any required check failure writes
+# ~/agent_regression.failed; diagnostic/judge reports do not relax required checks.
 set -u
 # 20261017：路径从脚本自己的位置推，不再写死维护者的家目录 —— 写死的 `cd` 在别人机器上
 # 会当场失败，而失败的样子是一个每晚静默退出的 cron（`>/dev/null 2>&1` 把话全吃了）。
@@ -263,7 +222,7 @@ fi
 # FAIL 逐条照旧打印、复审单照旧导出（与退出码无关；单子上每条红现在还印着**历史红率**，
 # "慢性红还是首次"一眼可读）。退出码 3（前提不可用）与退出码 2（空分母）**不在任何放宽
 # 之列**——"没评"永远不是"通过"。
-$PY eval/run_golden.py >> "$LOG" 2>&1 || { fail=1; echo "[$TS] golden set FAILED (复审单 eval/report/review_*.md；回归组红 = 当天必修；采样层下界 < 地板 0.78 = 事故；未到档位不置红、只记；用户可见兜底轮次 ≥ 5% = 事故；退出码 3 = 前提不可用，不是通过率；企业落地三条见 landing_gate.py --readiness)" >> "$LOG"; }
+GOLDEN_ARM=graph $PY eval/run_golden.py >> "$LOG" 2>&1 || { fail=1; echo "[$TS] golden set FAILED (复审单 eval/report/review_*.md；回归组红 = 当天必修；采样层下界 < 地板 0.78 = 事故；未到档位不置红、只记；用户可见兜底轮次 ≥ 5% = 事故；退出码 3 = 前提不可用，不是通过率；企业落地三条见 landing_gate.py --readiness)" >> "$LOG"; }
 # 20260925 起：回复出处评审（LLM-as-judge，非门禁）。确定性判据判"该出现的东西在不在"，
 # 判不了"回复里有没有编出材料之外的事实"（工具只回了 3 条、回复写"共 5 条"）——这一格由它补。
 # **刻意不进门禁**：同源模型评自己不构成 ground truth，"可疑"不等于"错了"（模块头注纪律 1），
@@ -277,6 +236,15 @@ echo "--- 回复出处评审 (LLM-as-judge, 约 10 分钟, 非门禁) ---" >> "$
 # 这一步要跑十分钟，块缓冲的表现是"日志里什么都没有、报告却已经写完"——中途想看一眼进度
 # 只能看到空文件（实测过一次，误判成"跑了 0 字节"）。加它只影响缓冲、不改判据。
 PYTHONUNBUFFERED=1 $PY eval/llm_judge.py >> "$LOG" 2>&1 || echo "[$TS] llm_judge 运行异常（非门禁，看 eval/report/judge_*.md）" >> "$LOG"
+# Hybrid outcomes use real model calls and fake business APIs, separate from legacy scores.
+echo "--- hybrid task outcomes (synthetic business API) ---" >> "$LOG"
+$PY -m eval.native_contracts >> "$LOG" 2>&1 || {
+  fail=1
+  echo "[$TS] hybrid task outcomes FAILED; inspect _smoke_native_contracts reports" >> "$LOG"
+}
+$PY -m eval.daily_metrics --days 7 --json >> "$LOG" 2>&1 || \
+  echo "[$TS] request metrics unavailable (diagnostic only)" >> "$LOG"
+
 # 20260912 起：语义告警巡检（非门禁——只记录不置失败标记，避免与 golden 门禁混同）
 echo "--- trace 语义告警 (近 7 天真实对话, 巡检非门禁) ---" >> "$LOG"
 $PY eval/trace_alert.py --days 7 >> "$LOG" 2>&1 || echo "[$TS] trace_alert 运行异常（不影响门禁）" >> "$LOG"
