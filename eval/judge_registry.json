@@ -236,7 +236,7 @@
         0
       ],
       "agent/runtime/session.py": [
-        9,
+        10,
         0
       ],
       "agent/runtime/turns.py": [
@@ -422,10 +422,14 @@
       "agent/domains/catalog.py": [
         0,
         0
+      ],
+      "agent/domains/own_activity.py": [
+        0,
+        0
       ]
     },
     "total": [
-      1157,
+      1158,
       4848
     ]
   },

@@ -171,6 +171,7 @@ flowchart TB
 │   ├── domains/
 │   │   ├── __init__.py        # 领域包入口，不隐式注册全部业务
 │   │   ├── registry.py        # 已迁移确认领域的显式注册
+│   │   ├── own_activity.py   # 本人留言分页与当前会话历史文本
 │   │   ├── own_reads.py      # 仅计数聚合、有界信件摘要与按编号读取正文
 │   │   ├── moderation.py     # 审核聚合、分页记录及按编号读取内容
 │   │   ├── admin_pages.py    # 管理员读取共用的权限、分页和结果边界

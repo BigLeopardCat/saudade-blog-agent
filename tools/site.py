@@ -1,41 +1,10 @@
 # -*- coding: utf-8 -*-
-"""站点与页面那一族：功能结构图 / 导航表与路径校验 / 三条页面命令 / 地址形态 / 只读四件
-（20261018 拆 `tools/base.py`）。
-
-**为什么单独成模块**：`tools/base.py` 拆分前 4282 行 / 101 个模块级定义，本模块收的是
-**连续的一大段**——从「导航 / 引导工具」到「站内"停在**某一条**内容上"的全部形态」。
-⚠️ 这一族**跨三个 scope**（`agent/authz.py` 的登记）：`get_site_map` /
-`search_knowledge_base` / `get_current_time` / `get_weather` 是 `read.public`，
-`get_chat_history` 是 `read.own`，`navigate_to` / `toggle_effect` / `toggle_dark_mode`
-是 `write.page`。所以本模块的粘合剂**不是** scope，而是**它们说的都是"这个站点长什么样、
-怎么把访客带过去"**——导航白名单、地址形态表、页面命令、以及四件问站点/问环境的只读。
-（同族前两刀 `tools/own_data.py` / `tools/notes.py` 是按 scope 合的，这一刀不是；
-scope 的单一事实源始终是 `agent/authz.py`，与代码住在哪个文件无关。）
-
-**搬家方式**（与 `tools/result.py` / `tools/device.py` / `tools/own_data.py` /
-`tools/notes.py` 四刀同源）：`tools/base.py` 在**原来那一节的位置**按**原名** re-export
-本模块全部顶层名（`# noqa: E402,F401`），所以全仓 `from tools.base import …` 与
-`base.<名>` 一处不改。⚠️ 这一刀**能**放在原位置（与 `tools/notes.py` 那一刀不同）：
-本模块只按名取 `API_BASE`（base 第 73 行）与 `SITE_BASE`（第 86 行），两者都定义在
-第 142 行之前，不存在"半初始化模块"的时序问题。
-
-⚠️ **`_client` 一律写成 `_base._client.get(...)`，不许按名 import**：它是被套件直接打桩的
-`tools.base` 属性之一（全仓实测 159 处；完整名单见 `tools/notes.py` 头注那 11 个）。
-函数对象取 globals 取的是**它自己所在模块**的 `__dict__` ⇒ 按名 import 会拿到**打桩前**的
-旧对象，桩静默失效、测试真去发网络请求，而症状只是"断言换了个理由红"（本仓最贵的失效：
-看着在跑、其实没跑）。这一族只有 2 个调用点（`search_knowledge_base` 与 `get_weather`），
-行又都不长 ⇒ 不加转发壳，直接写 `_base.` 前缀（与 `tools/notes.py` 里
-`_public_tag_index` 同一档；那两个加壳的是调用点多、行贴着 100 列）。
-
-⚠️ **别丢注释**：导航白名单为什么是一张表（`_NAV_EXACT_PATHS` 是路径字面量的唯一来源，
-`agent/workflow_defs/nav_map.py` 的 `NAV_MAP` 从它同源取名）、"停在某一条"为什么是表而不是
-句子（四份知识各自只知道一个子集，20261008 事故）、以及 `IOT_ENABLED` 为什么必须住在
-模块顶部（`_NAV_EXACT_PATHS` 要按开关收口）——这三段都是这一族存在的理由，别当排版删掉。
-"""
+"""Site information, page commands and legacy tool entry points."""
 
 import re
 from typing import Annotated, Literal
 
+from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import tool
 
 from config import settings as _settings
@@ -102,11 +71,12 @@ def get_site_map() -> str:
 
 @tool
 def get_chat_history(
-    limit: Annotated[int, "Number of recent messages to fetch"] = 10,
-) -> str:
-    """Get recent chat history for the current user."""
-    return ("对话历史已由系统自动注入到当前请求的上下文中（最近 20 条消息 + 滚动摘要），"
-            "无需额外查询，直接依据系统上下文作答即可。")
+    config: RunnableConfig,
+    limit: Annotated[int, "Number of recent messages, from 1 to 10"] = 5,
+) -> object:
+    """Read actual text history within the current verified conversation."""
+    from agent.domains.own_activity import get_chat_history as read_history
+    return read_history.invoke({"limit": limit}, config=config)
 
 # ---------------------------------------------------------------------------
 # 知识库工具

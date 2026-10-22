@@ -239,7 +239,7 @@ def test_read_domains_are_separate_and_do_not_require_write_persistence():
     domains = arm._domains(config, can_bridge=False, pending=None)
     expected = {"favorites": "list_my_favorites", "notifications": "list_notifications",
                 "messages": "list_my_messages"}
-    assert set(domains) == {"site", *expected}
+    assert set(domains) == {"site", "own_activity", *expected}
     for domain, tool in expected.items():
         assert set(domains[domain]) == {tool}
         assert not any(getattr(item, "return_direct", False)
