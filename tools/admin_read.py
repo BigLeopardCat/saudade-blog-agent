@@ -1,47 +1,9 @@
 # -*- coding: utf-8 -*-
-"""管理助手报表工具（只读七件）：服务器状态 / 服务健康 / 审核状况 / 后台留言名册 /
-用户报表 / 文章流量报表 / 分期报表（20261018 拆 `tools/base.py`）。
+"""Read-only administrator reports.
 
-**为什么单独成模块**：`tools/base.py` 是全仓第二大体量文件，而这一族是**连续的 197 行、
-7 个 `@tool` 函数**，且有一个干净的共同点——**scope 全是 `admin.console`**
-（`agent/authz.py`），即"只有管理员用得动的那几张纸"。
-
-**为什么它们是一族，而不是"都是读"这么粗**：它们读的东西分两条通道，
-但**出口是同一个**——给人看的、渲染好的中文报表：
-  · 本机读数（服务器状态 / 服务健康）：agent 与生产服务同机，直接读 /proc、systemctl、
-    日志，**不经后台门**、不消耗发起人的身份；
-  · 后台读（审核状况 / 留言名册 / 用户 / 流量 / 分期）：走「以发起人身份代调」——
-    `_sign_local_jwt` 现签 60 秒 JWT 打本机 Rust，`auth_guard` 照旧按 `claims.sub` 查库判角色。
-    **Rust 侧零改动**，agent 自己不留任何后台凭据。
-
-**三道闸由粗到细**（只有本机读数那两件不受后两道管）：
-  ① 结构性：不进 planner 的两个点名白名单（`workflows._EXPLICIT_TOOLS` /
-     `_CALLABLE_QUERY_TOOLS`）⇒ planner 无法经 PARAMS.calls/tools 点到它们，
-     只能由 ops_report / moderation_report / user_report 三个技能模板展开；
-  ② 身份：会话角色不是 admin 时 planner 上下文里**根本看不到**这三个技能
-     （`workflows.build_planner_context(role)`）；
-  ③ 判据：execute 调用前的 `authz.check()`。`admin.console` **不吃 shadow 开关**
-     （`authz._HARD_SCOPES`）——它是纯新增的能力，没有"观测既有流量"可谈，shadow 期也硬拦。
-
-**为什么这几个工具返回"渲染好的中文报表"而不是 `_shape(data)`**（绕过既有惯例）：
-见 `agent/reports.py` 的模块头注——LLM 数数是幻觉高发区，报表的价值全在数字可信。
-
-## 搬家时守的两条
-⚠️ **`_admin_get` 一律写成 `_base._admin_get(...)`，不许按名 import**：它是被套件直接
-打桩的 11 个模块全局之一（实测 6 处）。函数对象取 globals 取的是**它自己所在模块**的
-`__dict__` ⇒ 按名 import 会把打桩前的旧对象钉死在这里，桩静默失效、代码真去发网络请求，
-而症状只是"断言换了个理由红"（本仓最贵的失效：看着在跑、其实没跑）。
-`_base` 这个属性查找发生在**调用那一刻**，桩才生得效。
-⚠️ **本模块一个名字都不按名从 `tools.base` 取**——连 `BOARD_STATUS_FILTERS`（定义在
-base 第 ~1905 行、`agent/action_text.py` 也在用）也写成 `_base.BOARD_STATUS_FILTERS`。
-两个理由，都不是风格偏好：
-  · **时序**：本模块在 `tools/base.py` 的**原位置**就被 import（re-export 那一行），
-    那时 base 还只定义到第 ~365 行，`from tools.base import BOARD_STATUS_FILTERS`
-    会当场 ImportError（半初始化模块）；
-  · **mypy**：模块级写一句 `from tools.base import …` 会让 mypy 在这个环上**判不出
-    这七个名字的类型** ⇒ base 的 `_TOOL_REGISTRY` 当场多出 7 条 `Cannot determine type`
-    （20261018 实测 `tools/base.py` 13→16 条，`eval/type_gate.py` 直接红）。
-属性查找发生在**调用那一刻**，两个问题都不存在。
+Host metrics read local system state. Site reports call the Blog API with the
+requesting user's identity; the backend checks current administrator privileges.
+Native menus use compact descriptions while legacy callers keep these schemas.
 """
 
 import logging
@@ -232,7 +194,12 @@ def get_user_stats(config: RunnableConfig) -> str:
     if isinstance(data, ToolResult):
         return data
     if not data:
-        return empty("后台没有返回用户统计数据")
+        return unavailable("后台没有返回用户统计数据，本次无法核对报表。")
+    counts = ("totalUsers", "totalConversations", "totalMessages", "totalExecutions",
+              "activeUsers7d", "activeUsers30d")
+    if not isinstance(data, dict) or any(type(data.get(key)) is not int or data[key] < 0
+                                         for key in counts):
+        return unavailable("用户统计缺少有效聚合值，本次无法核对报表。")
     try:
         return ok(R.render_user_stats(data), data=data)
     except Exception as exc:

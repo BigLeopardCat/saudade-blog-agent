@@ -1,23 +1,7 @@
-"""管理助手输出渲染（20260921）——**报表与后台留言名册的纯函数出口**。
+"""Render bounded administrator reports and rosters.
 
-## 为什么数字在工具侧算好，而不是把 JSON 丢给模型数
-
-全仓既有惯例是工具返回 `_shape(data)`（把接口数据原样给 narrator），但报表类
-**刻意偏离**：LLM 数数是幻觉的高发区（"待审 3 条"里数错一条，用户没有任何办法
-发现），而这几张报表的价值恰恰在于数字可信。所以工具把计数、百分比、
-排序、截断全做完，返回**确定性的中文报表文本**，narrator 只负责转述。
-代价是这几个工具的输出不像别的工具那样"可再加工"——这个取舍是有意的。
-
-## 不受信文本（重要）
-
-`get_moderation_status` 会把**访客写的河灯留言**带进工具帧：那是全链路上第一处
-"攻击者可控的文本进入 prompt"。本轮工具全只读，注入最坏也只是答错；但有一条
-副作用必须在数据进入模型**之前**掐掉——**命令前缀**。前端的 `cleanAgentText` /
-`execAgentCommands` 与 agent 的 gate 都按 `EFFECT:/NAVIGATE:/AUTO_NAVIGATE:/…`
-前缀识别命令，所以一条内容是 `EFFECT:rain:on` 或
-`AUTO_NAVIGATE:/dashboard` 的留言，只要被 narrator 原样复述出去，就可能在
-**管理员自己的浏览器**里真的生效（同源路径还能过掉 BLOG_ROUTES 白名单）。
-`sanitize_untrusted` 负责这件事，见它的注释与 `tests/test_reports.py` 的回归锁。
+Use backend aggregate values for totals. Sanitize user-controlled text before it
+enters reports, including command prefixes interpreted by the browser.
 """
 
 from __future__ import annotations
@@ -523,16 +507,19 @@ def render_user_stats(data: dict, now: datetime | None = None) -> str:
     data = data or {}
     lines = [f"用户数据报表（{_ts(now)}，生成于 {data.get('generatedAt') or '未知'}）"]
     roles = "、".join(f"{r.get('role')} {r.get('count')}"
-                      for r in (data.get("roleCounts") or [])) or "无"
-    lines.append(f"- 用户总数 {data.get('totalUsers', 0)}（{roles}）")
-    lines.append(f"- 会话 {data.get('totalConversations', 0)} 个、"
-                 f"消息 {data.get('totalMessages', 0)} 条、"
-                 f"执行回执 {data.get('totalExecutions', 0)} 条")
-    lines.append(f"- 活跃（有会话或消息）：近 7 天 {data.get('activeUsers7d', 0)} 人、"
-                 f"近 30 天 {data.get('activeUsers30d', 0)} 人")
+                      for r in (data.get("roleCounts") or [])) or (
+                          "无" if data.get("roleCounts") == [] else "未知")
+    lines.append(f"- 用户总数 {data.get('totalUsers', '未知')}（{roles}）")
+    lines.append(f"- 会话 {data.get('totalConversations', '未知')} 个、"
+                 f"消息 {data.get('totalMessages', '未知')} 条、"
+                 f"执行回执 {data.get('totalExecutions', '未知')} 条")
+    lines.append(f"- 活跃（有会话或消息）：近 7 天 {data.get('activeUsers7d', '未知')} 人、"
+                 f"近 30 天 {data.get('activeUsers30d', '未知')} 人")
 
-    users = data.get("users") or []
-    if not users:
+    users = data.get("users")
+    if users is None:
+        lines.append("- 用户活动明细：后台未返回，无法核对")
+    elif not users:
         lines.append("- 没有任何用户产生过会话或消息")
     else:
         lines.append(f"- 明细（按消息数倒序，共 {data.get('listedUsers', len(users))} 人，最多 50 行）:")

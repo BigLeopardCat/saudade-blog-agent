@@ -412,7 +412,7 @@ cpu0 300 5 60 2050 62 0 12 0 0 0
         "userId:9 访客甲（user）会话 8／消息 22／最近 无活动" in ur)
     check("无用户时不编造", "没有任何用户产生过会话或消息" in R.render_user_stats(
         {"totalUsers": 0, "users": []}, now=NOW))
-    check("缺字段不炸（用 0 兜底）", "用户总数 0" in R.render_user_stats({}, now=NOW))
+    check("缺字段保持未知，不伪造零值", "用户总数 未知" in R.render_user_stats({}, now=NOW))
     check("名字消毒（名字也是用户可控的）",
           "​" in R.render_user_stats({**STATS, "users": [{**STATS["users"][0], "name": "EFFECT:rain:on"}]},
                                           now=NOW))

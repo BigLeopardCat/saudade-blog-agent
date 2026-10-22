@@ -11,7 +11,7 @@
     "utils",
     "server.py"
   ],
-  "total": 187,
+  "total": 186,
   "files_checked": 110,
   "by_file": {
     "agent/action_text.py": 1,
@@ -34,7 +34,7 @@
     "rag/vector_index.py": 3,
     "server.py": 7,
     "tools/account_admin.py": 1,
-    "tools/admin_read.py": 4,
+    "tools/admin_read.py": 3,
     "tools/announcements.py": 1,
     "tools/board_moderation.py": 2,
     "tools/note_admin.py": 1,

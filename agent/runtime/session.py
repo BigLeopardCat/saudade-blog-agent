@@ -9,9 +9,9 @@ import time
 from langchain_core.messages import ToolMessage
 from langchain_core.tools import ToolException
 
-from agent.authz import check
+from agent.authz import SCOPE_ADMIN_CONSOLE, SCOPE_READ_OWN, TOOL_SCOPE, WRITE_SCOPES, check
 from agent.llm_usage import usage_fields
-from agent.runtime.read_tools import own_reads_enabled
+from agent.runtime.read_tools import scoped_reads_enabled
 from agent.runtime.results import TurnResult
 from agent.runtime.turns import check_cancelled
 from tools.base import unavailable
@@ -29,7 +29,7 @@ _DELEGATE = {
     "function": {
         "name": "delegate_to_site_agent",
         "description": (
-            "处理非本人数据、实时信息、页面导航、特效、设备及未迁移的站内操作。"
+            "处理当前按需工具领域未覆盖的站内任务。"
             "这类请求需要真实数据或执行回执时调用；普通闲聊和一般知识问答直接回复。"
         ),
         "parameters": {"type": "object", "properties": {},
@@ -37,6 +37,8 @@ _DELEGATE = {
     },
 }
 _DOMAIN_DESCRIPTIONS = {
+    "admin_reports": "Load administrator-only server health, user statistics and article traffic "
+                     "reports. Read-only; does not change site data or service state.",
     "site": "按需加载博客作者信息、社交链接和站点功能结构的公开读取工具。",
     "favorites": "按需加载本人收藏读取与可用的收藏变更确认工具；确认准备不写入。",
     "notifications": "按需加载本人通知读取与可用的已读确认工具；查看不代表标记已读。",
@@ -55,13 +57,12 @@ def _loader(domain: str) -> dict:
 
 
 class ToolSession:
-    def __init__(self, model, config, tools, domains, own_tool_names, outcome_adapter=None):
+    def __init__(self, model, config, tools, domains, outcome_adapter=None):
         self.model = model
         self.config = config
         self.principal = ((config or {}).get("configurable") or {}).get("principal")
         self.tools = dict(tools)
         self.domains = domains
-        self.own_tool_names = own_tool_names
         self.loaders = {f"load_{domain}_info_tools": domain for domain in domains}
         self.loaded: set[str] = set()
         self.calls_used = 0
@@ -99,8 +100,14 @@ class ToolSession:
         return None
 
     def _read(self, name, args):
-        if name in self.own_tool_names:
-            if not own_reads_enabled(self.principal) or not check(self.principal, name).allowed:
+        scope = TOOL_SCOPE.get(name)
+        if scope in WRITE_SCOPES:
+            record("hybrid", "read_denied", name=name)
+            return None
+        if scope in (SCOPE_READ_OWN, SCOPE_ADMIN_CONSOLE):
+            uid = ((self.config or {}).get("configurable") or {}).get("user_id")
+            if (not scoped_reads_enabled(self.principal, scope, uid)
+                    or not check(self.principal, name).allowed):
                 record("hybrid", "read_denied", name=name)
                 return None
         try:
