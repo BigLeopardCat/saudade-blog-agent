@@ -182,7 +182,7 @@ def test_own_domain_requires_verified_identity_and_checks_before_read(monkeypatc
     read = ReadTool()
     model = _Model([
         AIMessage(content="", tool_calls=[
-            {"name": "load_own_info_tools", "args": {}, "id": "load_own"}]),
+            {"name": "load_favorites_info_tools", "args": {}, "id": "load_own"}]),
         AIMessage(content="", tool_calls=[
             {"name": "list_my_favorites", "args": {}, "id": "read_own"}]),
         AIMessage(content="你收藏了文章 19。"),
@@ -196,7 +196,7 @@ def test_own_domain_requires_verified_identity_and_checks_before_read(monkeypatc
         _state(), config))
 
     assert read.calls == [config]
-    assert "load_own_info_tools" in {
+    assert "load_favorites_info_tools" in {
         tool["function"]["name"] for tool in model.menus[0]
         if isinstance(tool, dict)}
     assert "list_my_favorites" in {
@@ -207,13 +207,13 @@ def test_own_domain_requires_verified_identity_and_checks_before_read(monkeypatc
 
 def test_unverified_identity_never_sees_own_loader(monkeypatch):
     model = _Model(AIMessage(content="", tool_calls=[
-        {"name": "load_own_info_tools", "args": {}, "id": "own_1"}]))
+        {"name": "load_favorites_info_tools", "args": {}, "id": "own_1"}]))
     monkeypatch.setattr("agent.runtime.hybrid.get_llm", lambda **_: model)
     legacy = _Legacy()
 
     assert list(HybridArm(legacy, {}, {}, {}).stream(_state(), _config())) == [
         ("updates", {"legacy": True})]
-    assert "load_own_info_tools" not in {
+    assert "load_favorites_info_tools" not in {
         tool["function"]["name"] for tool in model.menus[0]
         if isinstance(tool, dict)}
 
@@ -226,9 +226,24 @@ def test_boolean_uid_does_not_unlock_private_reads(monkeypatch):
 
     list(HybridArm(_Legacy(), {}, {}, {}).stream(_state(), config))
 
-    assert "load_own_info_tools" not in {
+    assert "load_favorites_info_tools" not in {
         tool["function"]["name"] for tool in model.menus[0]
         if isinstance(tool, dict)}
+
+
+def test_read_domains_are_separate_and_do_not_require_write_persistence():
+    config = {"configurable": {"principal": Principal(7, "user", SOURCE_ASSERTION)}}
+    arm = HybridArm(_Legacy())
+    domains = arm._domains(config, can_bridge=False, pending=None)
+    expected = {"favorites": "list_my_favorites", "notifications": "list_notifications",
+                "messages": "list_my_messages"}
+    assert set(domains) == {"site", *expected}
+    for domain, tool in expected.items():
+        assert set(domains[domain]) == {tool}
+        assert not any(getattr(item, "return_direct", False)
+                       for item in domains[domain].values())
+    assert "get_unread_summary" in arm._initial_tools(True)
+    assert "get_unread_summary" not in arm._initial_tools(False)
 
 
 def test_own_read_rechecks_authorization_before_invoke(monkeypatch):
@@ -242,7 +257,7 @@ def test_own_read_rechecks_authorization_before_invoke(monkeypatch):
 
     model = _Model([
         AIMessage(content="", tool_calls=[
-            {"name": "load_own_info_tools", "args": {}, "id": "load_own"}]),
+            {"name": "load_favorites_info_tools", "args": {}, "id": "load_own"}]),
         AIMessage(content="", tool_calls=[
             {"name": "list_my_favorites", "args": {}, "id": "read_own"}]),
         AIMessage(content="无法读取。"),

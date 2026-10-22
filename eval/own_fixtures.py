@@ -86,13 +86,49 @@ def notification_backend():
         yield state
 
 
+def _mailbox_get(request, state):
+    if request.url.path.endswith("/notifications/summary"):
+        unread = sum(not row["isRead"] for row in state["items"])
+        data = {"notifications": 2, "messages": unread, "total": 2 + unread}
+    elif request.url.path.endswith("/messages/recent"):
+        folder = request.url.params.get("folder", "inbox")
+        limit = int(request.url.params.get("limit", "5"))
+        source = state["items"] if folder == "inbox" else state["outbox"]
+        fields = ("id", "fromUserId", "toUserId", "peerName", "title", "isRead", "createdAt")
+        data = {"folder": folder,
+                "items": [{key: row[key] for key in fields if key in row}
+                          for row in source[:limit]], "hasMore": len(source) > limit}
+    elif "/messages/" in request.url.path:
+        key = int(request.url.path.rsplit("/", 1)[1])
+        source = state["items"] + state["outbox"]
+        data = next((dict(row) for row in source if row["id"] == key), None)
+        if data is None:
+            return httpx.Response(404)
+        data.setdefault("content", "仅单封正文")
+    elif request.url.path.endswith("/messages"):
+        selected = request.url.params.get("ids")
+        rows = state["items"]
+        if selected:
+            ids = {int(key) for key in selected.split(",")}
+            rows = [row for row in rows if row["id"] in ids]
+        elif request.url.params.get("unreadOnly") == "true":
+            rows = [row for row in rows if not row["isRead"]]
+        data = {"inbox": rows[:100], "inboxComplete": len(rows) <= 100,
+                "outbox": state["outbox"],
+                "unread": sum(not row["isRead"] for row in state["items"])}
+    else:
+        return httpx.Response(404)
+    return httpx.Response(200, json={"code": 200, "data": data})
+
+
 @contextmanager
 def message_backend():
     """A received mailbox with a separate, unwritable outbox."""
     state = {"items": [{"id": 201, "toUserId": 7, "title": "欢迎来信", "isRead": False},
                        {"id": 202, "toUserId": 7, "title": "回访来信", "isRead": False},
                        {"id": 203, "toUserId": 7, "title": "旧来信", "isRead": True}],
-             "outbox": [{"id": 301, "toUserId": 8, "title": "发出的信", "isRead": False}],
+             "outbox": [{"id": 301, "fromUserId": 7, "toUserId": 8,
+                         "title": "发出的信", "isRead": False}],
              "requests": [], "unavailable": False, "ignore": set(), "new_on_write": False}
 
     def handle(request):
@@ -100,17 +136,8 @@ def message_backend():
         assert request.headers.get("Authorization", "").startswith("Bearer ")
         if state["unavailable"]:
             return httpx.Response(503)
-        if request.method == "GET" and request.url.path.endswith("/messages"):
-            selected = request.url.params.get("ids")
-            rows = state["items"]
-            if selected:
-                ids = {int(key) for key in selected.split(",")}
-                rows = [row for row in rows if row["id"] in ids]
-            elif request.url.params.get("unreadOnly") == "true":
-                rows = [row for row in rows if not row["isRead"]]
-            data = {"inbox": rows[:100], "inboxComplete": len(rows) <= 100,
-                    "outbox": state["outbox"],
-                    "unread": sum(not row["isRead"] for row in state["items"])}
+        if request.method == "GET":
+            return _mailbox_get(request, state)
         elif request.method == "POST" and request.url.path.endswith("/messages/read"):
             payload = json.loads(request.content)
             assert payload["all"] is False and payload["ids"]

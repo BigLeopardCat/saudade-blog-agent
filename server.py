@@ -2102,33 +2102,24 @@ async def chat_stream(req: ChatRequest, request: Request):
                     headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
             logger.info("[confirm] 确认收窄：%d 件 → 1 件（%s）", before,
                         (grant.get("specs") or [{}])[0].get("tool"))
-    # 额度硬拦（20260929，契约 C3）：Rust 那个原子 UPDATE 没抢到额度 ⇒ 这一轮**零
-    # LLM、零工具、零计数**，只如实回一句并点明下一步（C7）。
-    # **位置在 `_try_acquire_slot()` 之前**：被拦的人狂点发送不该占住 LLM 并发槽。
-    # 注意这里**不看** `req.chat_quota.remaining == 0`——真假由 Rust 显式给
-    # （管理员在访客说话中途清零时 remaining 也是 0，而那一轮该正常回答）。
+    # Rust 的额度裁决先于并发准入；remaining=0 不能代替 quota_blocked。
     if req.quota_blocked:
         _limit = req.chat_quota.limit if req.chat_quota is not None else 0
         logger.info("[quota] 额度用尽，本轮零执行（uid=%s limit=%s）", req.user_id, _limit)
         return StreamingResponse(
             _quota_blocked_stream(_limit), media_type="text/event-stream",
             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
-    # 并发闸（20260916 加固）：LLM 流是最贵的资源（单次最长 180s），无闸时并发涌进来
-    # 只会一起排队到超时。**只加在生产路径 /chat/stream 上**——`/chat` 是非流式直连
-    # 入口（评测脚本/golden 用，线上 rust.log 实测零访问），不占这条预算。
-    # 释放一律由 event_stream 的 finally 负责（正常收尾/断连取消/超时/异常都走到）；
-    # 下面这段 try 只兜"响应还没交出去就抛了"这种极小窗口，免得漏一个槽位把闸卡死。
+    # 流式请求受并发限制；响应交出后由 event_stream.finally 释放槽位。
     if not await _try_acquire_slot():
         raise HTTPException(503, "Agent busy（并发已满），请稍后重试")
     try:
         messages = _build_messages(req, confirm_grant=grant)
         # 每请求独立线程；挂了 saver ⇒ 会话坐标（两条路共用同一个函数，理由见 /chat 注释）
         thread_id = _thread_id_for(req)
-        # trace 落盘（roadmap 步骤 2）：请求级 recorder 挂 contextvar——producer
-        # 经 _submit_with_context 的 copy_context 继承，图节点内 record 命中；
-        # 收尾由 event_stream finally 统一 finish_trace（见其注释，超时场景也要落盘）
+        # producer 继承请求 trace 上下文，event_stream.finally 负责落盘。
         start_trace(get_trace_id(), req.user_id, thread_id, {
             "source": "production", "runtime": runtime_probe.request_context(_agent),
+            "principal_role": principal.known_role, "principal_source": principal.source,
             "message": (req.message or "")[:200], "has_image": bool(req.image),
             "needs_summary": bool(req.needs_summary), "history_len": len(req.history),
             "conversation_id": req.conversation_id,

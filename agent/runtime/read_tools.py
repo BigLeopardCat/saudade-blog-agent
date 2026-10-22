@@ -44,4 +44,15 @@ def site_tools() -> dict:
 
 
 def own_tools() -> dict:
-    return _tools_with_scope(OWN_READ_TOOLS, SCOPE_READ_OWN)
+    from agent.domains import own_reads
+
+    selected = _tools_with_scope(OWN_READ_TOOLS, SCOPE_READ_OWN)
+    selected.update({tool.name: tool for tool in (
+        own_reads.get_unread_summary, own_reads.list_my_messages)})
+    return selected
+
+
+def own_domains(tools: dict) -> dict:
+    names = {"favorites": "list_my_favorites", "notifications": "list_notifications",
+             "messages": "list_my_messages"}
+    return {domain: {name: tools[name]} for domain, name in names.items() if name in tools}
