@@ -4,6 +4,7 @@ This session owns tool discovery and result budgets. Conversation persistence an
 legacy handoff remain in HybridArm; the model still chooses each tool and reply.
 """
 
+import json
 import time
 
 from langchain_core.messages import ToolMessage
@@ -82,6 +83,11 @@ class ToolSession:
         return None
 
     def _accept_calls(self, calls, round_index):
+        for call in calls:
+            if (not isinstance(call, dict) or not isinstance(call.get("name"), str)
+                    or not call.get("name") or not isinstance(call.get("id"), str)
+                    or not call.get("id") or not isinstance(call.get("args"), dict)):
+                return "invalid_tool_call"
         if any(call.get("name") == "delegate_to_site_agent" for call in calls):
             return "model_delegate"
         if len(calls) > 1 and any(getattr(self.tools.get(call.get("name")), "return_direct", False)
@@ -90,14 +96,16 @@ class ToolSession:
         reads = sum(call.get("name") in self.tools for call in calls)
         if round_index >= _MAX_READ_ROUNDS or self.calls_used + reads > _MAX_READ_CALLS:
             return "call_budget"
-        for call in calls:
-            name = call.get("name")
-            if not call.get("id") or not isinstance(call.get("args"), dict):
-                return "invalid_tool_call"
-            if name not in self.tools:
-                if name not in self.loaders or self.loaders[name] in self.loaded:
-                    return "unknown_or_reloaded_tool"
         return None
+
+    def _tool_error(self, call, prompt, reason):
+        available = sorted({*self.tools, "delegate_to_site_agent", *(name for name, domain
+                            in self.loaders.items() if domain not in self.loaded)})
+        body = json.dumps({"error": reason, "available_tools": available})
+        prompt.append(ToolMessage(content=body,
+                                  tool_call_id=call["id"], status="error"))
+        record("hybrid", "tool_error", name=call["name"], reason=reason)
+        return True
 
     def _read(self, name, args):
         scope = TOOL_SCOPE.get(name)
@@ -118,8 +126,11 @@ class ToolSession:
 
     def _append_result(self, call, prompt, round_index):
         name = call["name"]
+        record("hybrid", "tool_requested", name=name)
         if name in self.loaders:
             domain = self.loaders[name]
+            if domain in self.loaded:
+                return self._tool_error(call, prompt, "domain_already_loaded")
             self.tools.update(self.domains[domain])
             self.loaded.add(domain)
             prompt.append(ToolMessage(content=f"{domain} 工具已加载。",
@@ -127,6 +138,8 @@ class ToolSession:
             record("hybrid", "load_domain", domain=domain)
             self.llm = self._bind_menu()
             return True
+        if name not in self.tools:
+            return self._tool_error(call, prompt, "unknown_tool")
         args = call["args"]
         body = self._read(name, args)
         if isinstance(body, TurnResult):
