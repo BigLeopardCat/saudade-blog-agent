@@ -155,8 +155,12 @@ def _restore(snap: dict) -> list[str]:
 
 
 @pytest.fixture(autouse=True)
-def _process_isolation(request):
+def _process_isolation(request, monkeypatch):
     """每条用例前后把跨套件全局还原（差异逐条打印，见上面那段头注）。"""
+    from rag import search
+
+    # Offline tests use explicit corpus fixtures; stale-title lookup must not start network IO.
+    monkeypatch.setattr(search, "warm_async", lambda: None)
     snap = _snapshot()
     yield
     drift = _restore(snap)

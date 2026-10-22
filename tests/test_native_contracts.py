@@ -19,8 +19,11 @@ def test_native_outcome_suite_uses_verified_identity_and_redacts_tokens(monkeypa
         call("load_pending_info_tools", {}), call("cancel_pending_operation", {}),
         call("load_notifications_info_tools", {}),
         call("prepare_notification_read", {"scope": "all_unread"}),
-        call("load_own_info_tools", {}), call("list_my_messages", {}),
+        call("get_unread_summary", {}), AIMessage(content="通知2条，站内信2封，合计4条。"),
+        call("load_messages_info_tools", {}), call("list_my_messages", {}),
         AIMessage(content="收件箱里有《欢迎来信》和《回访来信》。"),
+        call("load_messages_info_tools", {}), call("list_my_messages", {"message_id": 201}),
+        AIMessage(content="这封信的内容是：仅单封正文。"),
         call("load_messages_info_tools", {}),
         call("prepare_message_read", {"scope": "all_unread"}),
     ])
@@ -37,7 +40,7 @@ def test_native_outcome_suite_uses_verified_identity_and_redacts_tokens(monkeypa
     monkeypatch.delenv(golden_trace.ENV_OFF, raising=False)
     report = native_contracts.run()
     assert all(case["passed"] for case in report["cases"]), report["cases"]
-    assert sum(case["requests"] for case in report["cases"]) == 11
+    assert sum(case["requests"] for case in report["cases"]) == 13
     assert all(g["source"] == "evaluation" and g["path"] == "hybrid"
                for g in report["metrics"]["groups"])
     documents = [json.loads(path.read_text()) for path in tmp_path.rglob("*.json")]

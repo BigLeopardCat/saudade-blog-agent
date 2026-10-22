@@ -22,8 +22,15 @@ from agent.domains.notifications import preparation as notification_preparation
 from agent.domains.registry import confirmed_domain
 from agent.principal import ADMIN_ROLES, CHAT_ONLY_ROLES
 from agent.prompts import BLOG_PERSONA_PROMPT
+from agent.runtime.context import conversation_context
 from agent.runtime.pending import restore as restore_pending
-from agent.runtime.read_tools import article_tools, own_reads_enabled, own_tools, site_tools
+from agent.runtime.read_tools import (
+    article_tools,
+    own_domains,
+    own_reads_enabled,
+    own_tools,
+    site_tools,
+)
 from agent.runtime.session import MAX_PROMPT_CHARS, ToolSession
 from agent.runtime.turns import check_cancelled, conversation_turn
 from agent.tasks import task_rows
@@ -60,14 +67,17 @@ def _unfinished(snapshot, pending):
         pending is None and (prior.get("pending_action") or prior.get("pending_confirm"))))
 
 
-def _input(messages: list, role: str | None, own_enabled: bool = False, pending=None) -> list:
+def _input(messages: list, principal, own_enabled: bool = False, pending=None) -> list:
     """Keep at most two recent exchanges; the original input stays intact for handoff."""
+    context = conversation_context(principal)
+    role = context["identity"]["role"]
     audience = ("当前对话者是博客作者。" if role in ADMIN_ROLES else
                 "当前对话者是博客访客。")
-    own_boundary = ("查看自己的收藏、通知或站内信，先加载个人只读工具；不得查询他人数据。"
+    own_boundary = ("本人读取工具仅访问当前账号数据；其他已授权操作交给 delegate_to_site_agent。"
                     if own_enabled else "用户私有数据交给 delegate_to_site_agent。")
-    system = SystemMessage(content=BLOG_PERSONA_PROMPT + "\n" + audience
-                           + _BOUNDARY + own_boundary)
+    system = SystemMessage(content=BLOG_PERSONA_PROMPT + "\n" + _BOUNDARY + own_boundary
+                           + "\n" + audience + "\n运行时能力（可信数据）："
+                           + json.dumps(context, ensure_ascii=False, separators=(",", ":")))
     pages = [m.additional_kwargs.get("page_context") for m in messages
              if isinstance(m, HumanMessage) and str(m.content).startswith("[System: ")]
     if pages and isinstance(pages[-1], dict):
@@ -163,7 +173,8 @@ class HybridArm:
         domains = self._domains(config, can_bridge, pending)
 
         history = _dialogue(prior.get("messages") or [])[-4:]
-        prompt = _input([*history, *(state.get("messages") or [])], role, own_enabled, pending)
+        prompt = _input([*history, *(state.get("messages") or [])],
+                        principal, own_enabled, pending)
         initial_chars = sum(len(str(message.content)) for message in prompt)
         if initial_chars > MAX_PROMPT_CHARS:
             record("hybrid", "legacy_handoff", reason="prompt_budget",
@@ -175,13 +186,20 @@ class HybridArm:
         # provider-specific assistant metadata needed when replaying tool calls.
         model = get_llm(enable_thinking=False, streaming=False, max_tokens=768)
         adapt = partial(pending.transition, config=config, saver=saver) if pending else None
-        session = ToolSession(model, config, self.read_tools, domains, self.own_read_tools, adapt)
+        session = ToolSession(model, config, self._initial_tools(own_enabled), domains,
+                              self.own_read_tools, adapt)
         outcome = session.run(prompt)
         if outcome is None:
             yield from self.legacy.stream(state, config, stream_mode=stream_mode, **kwargs)
             return
         retained = self._retained(prior) if pending else None
         yield from self._finish(state, config, outcome.reply, outcome.execution, retained)
+
+    def _initial_tools(self, own_enabled):
+        tools = dict(self.read_tools)
+        if own_enabled and "get_unread_summary" in self.own_read_tools:
+            tools["get_unread_summary"] = self.own_read_tools["get_unread_summary"]
+        return tools
 
     @staticmethod
     def _retained(prior):
@@ -191,7 +209,7 @@ class HybridArm:
         cfg = (config or {}).get("configurable") or {}
         domains = {"site": self.site_read_tools}
         if own_reads_enabled(cfg.get("principal")):
-            domains["own"] = self.own_read_tools
+            domains.update(own_domains(self.own_read_tools))
         if can_bridge and favorite_preparation.available(config):
             domains["favorites"] = favorite_preparation.tools(self.own_read_tools)
             domains["notifications"] = notification_preparation.tools(self.own_read_tools)

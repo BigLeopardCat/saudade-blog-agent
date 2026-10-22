@@ -11,6 +11,7 @@ from langchain_core.tools import ToolException
 
 from agent.authz import check
 from agent.llm_usage import usage_fields
+from agent.runtime.read_tools import own_reads_enabled
 from agent.runtime.results import TurnResult
 from agent.runtime.turns import check_cancelled
 from tools.base import unavailable
@@ -37,10 +38,9 @@ _DELEGATE = {
 }
 _DOMAIN_DESCRIPTIONS = {
     "site": "按需加载博客作者信息、社交链接和站点功能结构的公开读取工具。",
-    "own": "按需加载当前登录用户自己的收藏、通知和站内信只读工具。",
-    "favorites": "用户请求收藏、取消收藏，或修改、放弃待确认收藏时加载工具；不会直接写入收藏。",
-    "notifications": "用户明确要求将本人通知标记已读时加载工具，核对范围并准备确认卡。",
-    "messages": "用户明确要求将本人收到的站内信标记已读时加载工具，核对收件箱范围并准备确认卡。",
+    "favorites": "按需加载本人收藏读取与可用的收藏变更确认工具；确认准备不写入。",
+    "notifications": "按需加载本人通知读取与可用的已读确认工具；查看不代表标记已读。",
+    "messages": "按需加载本人信件摘要、单封正文与可用的收件箱已读确认工具；查看不标记已读。",
     "pending": "用户要求放弃当前待确认操作时加载取消工具。修改目标则加载对应领域工具。",
 }
 
@@ -100,7 +100,7 @@ class ToolSession:
 
     def _read(self, name, args):
         if name in self.own_tool_names:
-            if "own" not in self.domains or not check(self.principal, name).allowed:
+            if not own_reads_enabled(self.principal) or not check(self.principal, name).allowed:
                 record("hybrid", "read_denied", name=name)
                 return None
         try:

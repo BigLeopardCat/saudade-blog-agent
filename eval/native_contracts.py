@@ -118,11 +118,25 @@ def _notifications(turn, state):
                  {"id": 104, "title": "新到通知", "isRead": False})
 
 
+def _unread_counts(turn, state):
+    result = turn("请告诉我未读通知数、站内信数与合计。只查计数，不查内容。")
+    _require(result["text"].strip() and not result["confirm_tokens"], "no count reply")
+    _require(len(state["requests"]) == 1 and
+             state["requests"][0].url.path.endswith("/notifications/summary"),
+             "count query fetched message or notification contents")
+    trace = load_trace(result["trace"])
+    _require(trace and request_metrics.summary(trace)["calls"] <= 2,
+             "count query required an extra discovery round")
+
+
 def _messages(turn, state):
     viewed = turn("我的收件箱里有哪些站内信？只看看，不要标记已读。")
     _require("欢迎来信" in viewed["text"] and not viewed["confirm_tokens"],
              "mailbox view did not return actual received-message facts")
     _require(not _posts(state), "viewing the mailbox changed read state")
+    detail = turn("请读取收件箱里编号201那封信的正文，不要标记已读。")
+    _require("仅单封正文" in detail["text"], "single-message content was not retrieved")
+    _require(not _posts(state), "reading a message changed read state")
     _read_replay(turn, state, "请把我收到的全部未读站内信标记为已读。",
                  "messages", "read_messages", [201, 202],
                  {"id": 204, "toUserId": 7, "title": "新到来信", "isRead": False})
@@ -136,6 +150,7 @@ def run():
     cases = [("chat", favorite_backend, _chat),
              ("favorite_cancel", favorite_backend, _favorite_cancel),
              ("notification_replay", notification_backend, _notifications),
+             ("unread_counts", message_backend, _unread_counts),
              ("message_read_replay", message_backend, _messages)]
     for name, backend, contract in cases:
         with backend() as state, TemporaryDirectory(prefix="agent-native-eval-") as temp:
