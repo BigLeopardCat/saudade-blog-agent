@@ -8,6 +8,7 @@ import logging
 import uuid
 
 from langchain_openai import ChatOpenAI
+
 from config import settings
 
 logger = logging.getLogger(__name__)
@@ -19,30 +20,17 @@ logger = logging.getLogger(__name__)
 _WARNED_PROVIDERS: set[str] = set()
 
 
-def _thinking_extra(provider: str, thinking: bool) -> dict:
-    """思考开关 → 该服务商的 `extra_body` 键。**缺省那一支必须有**。
+def _thinking_extra(provider: str, thinking: bool, model: str = "") -> dict:
+    """Translate per-call control using the provider and model's accepted dialect.
 
-    这里此前是 `if qwen / elif deepseek` 而**没有 else**（20261012 第二版）：认不出的
-    provider 会让图内四个调用点写下的 `enable_thinking=False` **静默蒸发**，而
-    `deepseek-flash` 默认思考是开的 ⇒ 多轮累积里那条带思考的 assistant 消息回放时缺
-    `reasoning_content` ⇒ 整轮空回复。"没分支"与"有分支但没人读"是同一个 bug 的两种写法
-    （同 `config/settings.py` 里那段注），所以缺省支做的是**把这件事说出来**，不是什么都不做。
-
-    新增服务商：先确认它有没有思考开关、字段叫什么，再在这里加一支并同步
-    `tests/test_llm_provider_registry.py`。**不许**把"认不出就算了"当成正确行为。
+    The opencode DeepSeek endpoint accepts thinking.type. Its MiniMax endpoint
+    rejects that field, so other gateway model families keep provider defaults.
     """
     if provider == "qwen":
         return {"enable_thinking": bool(thinking)}
-    if provider == "deepseek":
+    if provider == "deepseek" or (provider == "opencode" and model.startswith("deepseek-")):
         return {"thinking": {"type": "enabled" if thinking else "disabled"}}
     if provider == "opencode":
-        # **刻意一个键都不发**（20261020 实测）：① 这个网关不强制
-        # `reasoning_content` 回传 —— 回放一条缺它的 assistant 消息照样 200
-        # （DeepSeek 官方会 400，那正是 deepseek 那一支必须译的理由）；② 它的
-        # `minimax-m3.1-flash-free` 对 `thinking` 键**回 400**，而这是免费档里唯一
-        # 又快又稳的（3.5s / 工具 4/4），`longcat-2.5-preview-free` 慢一倍（8.5s）
-        # 但两种都收。⇒ 不发的代价是零，发的代价是换模型就炸。
-        # 换模型/换端点前先重探这两格（`thinking` 键 + 多轮回放）。
         return {}
     if provider not in _WARNED_PROVIDERS:
         _WARNED_PROVIDERS.add(provider)
@@ -170,7 +158,7 @@ def get_llm(**kwargs) -> ChatOpenAI:
     _extra = dict(params.get("extra_body") or {})
     # 译法表在 `_thinking_extra`（缺省支会出声，见该函数头注）；provider 的归一化
     # 只认 `settings._provider_prefix` 那一处，别在这里再 strip/lower 一遍。
-    _extra.update(_thinking_extra(settings._provider_prefix, thinking))
+    _extra.update(_thinking_extra(settings._provider_prefix, thinking, params["model"]))
     if _extra:
         params["extra_body"] = _extra
     # 自定义请求头同理：合并而不是覆盖（调用方自己传了 default_headers 时不许抹掉）。
