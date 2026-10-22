@@ -38,8 +38,8 @@ _DELEGATE = {
     },
 }
 _DOMAIN_DESCRIPTIONS = {
-    "admin_moderation": "Load administrator-only board review counts and paginated board/comment "
-                        "records. Supports filters and individual record content; no writes.",
+    "admin_moderation": "读取河灯集（河灯留言）与文章评论的审核计数、分页记录和指定编号内容。"
+                        "仅管理员可用，所有工具均为只读。",
     "admin_reports": "Load administrator-only server health, user statistics and article traffic "
                      "reports. Read-only; does not change site data or service state.",
     "site": "按需加载博客作者信息、社交链接和站点功能结构的公开读取工具。",
