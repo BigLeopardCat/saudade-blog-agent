@@ -1,28 +1,4 @@
-"""用户对话额度（agent 侧）单测：纯函数 + 假 httpx + 假工具，零网络、零 LLM。
-
-被测六块：
-  · `server.py`         —— C1/C2 注入行（**整个键缺席 ≠ 剩 0 轮**）、C7 拒答的**帧形状**
-                           与"零 LLM、不占并发槽"这两条硬事实（断言成**行为**，不是 grep）；
-  · `tools/base.py`     —— 三个写工具的五段式 + `_admin_quota_post` 的**非 200 按族分流**；
-  · `agent/workflow_expand.py`   —— 三个技能的展开（名字通道、纯数字拒绝、驳回理由必填/占位符）；
-  · `agent/authz.py`    —— scope、一律弹窗族、三条后果句互不同形；
-  · `agent/adminops.py` —— 卡面 / 回执行 / "状态已达成 ⇒ 不弹卡"的判据；
-  · 接线锁              —— 台账 meta 白名单、词表分岔、只读通道里没有写工具。
-
-为什么主断言落在 **kind / 帧形状 / 发过几次 POST / 生产者调用过几次** 上而不是文本：
-这一族的失败面不是"答得不好"，而是**一个活人的额度被清掉了却没有任何人眼复核**、
-**被额度拦住的访客拿到了一次真回答**、或者**额度读不到时对着正在说话的人说"剩 0 轮"**。
-断"文本里有没有「不能」"是假绿——换一句措辞就过。
-
-`_parent_repo.py` 的跨语言守卫（Rust 源码里真有 `"chat_quota"` / `"quota_blocked"`、
-真有 `WHERE status=0` 的原子认领、`temp_user.rs` 仍回裸 `Vec`）在**末节 ⑫**：它随交付
-顺序 ③（Rust + 前端那一笔）落地后补上——在那之前挂上去只会是一条结构性假红，而那个
-窗口里没有任何 Rust 代码可漂移。**末节的存在意义**是这一条：本文件的主断言全在
-Python 侧，而额度这个功能的失败面有一半住在 Rust 的**形状**里（键名、闸门位置、
-原子认领），错了以后运行时是静默的。
-
-用法：.venv/bin/python tests/test_chat_quota.py
-"""
+"""额度注入、确认、执行与前后端契约验证；使用本地替身，不访问网络。"""
 
 
 import asyncio
@@ -847,6 +823,9 @@ def test_chat_quota():
     _rust_quota = _parent_repo.read(
         "src/routes/quota.rs",
         why="原子认领（`WHERE id=? AND status=0`）是「重复点通过 ⇒ 清零两次 + 两条通知」的唯一防线")
+    _rust_quota_service = _parent_repo.read(
+        "src/routes/quota_actions/service.rs",
+        why="审批与主动重置共用的事务内核必须先认领申请，再清零额度")
     _rust_temp = _parent_repo.read(
         "src/routes/temp_user.rs",
         why="`GET /api/temp-users` 是裸数组（`_user_directory` 按顶层 list 认），且它带着额度字段")
@@ -873,17 +852,9 @@ def test_chat_quota():
         check("⭐ 确认轮那一支**整段跳过**（不读、不扣、不判角色）",
               "(None, false)" in _gseg and "quota::" not in _gseg,
               "确认分支里出现了额度动作：" + _gseg[:70].replace("\n", " "))
-    if _rust_quota:
-        _c0 = _rust_quota.find("let claimed = ")
-        _cseg = _rust_quota[_c0:_rust_quota.find(".await", _c0)] if _c0 >= 0 else ""
-        check("审核的 UPDATE 自己带「还是待处理」这个条件（并发下只有一个能匹配到行）",
-              "quota_request::Column::Status.eq(STATUS_PENDING)" in _cseg,
-              _cseg[:90].replace("\n", " "))
-        _i_zero = _rust_quota.find('return Json(ApiResponse::error("这条申请已经处理过了"))')
-        _i_wipe = _rust_quota.find("user::Column::ChatQuotaUsed, Expr::value(0)")
-        check("⭐ 认领不到就 return（**清零在认领之后**；顺序反了 = 并发下同一个人的额度被清两次、"
-          "两条通知都发出去）",
-              _i_zero >= 0 and _i_wipe > _i_zero, f"认领={_i_zero} 清零={_i_wipe}")
+    from _quota_contracts import check_review_transaction
+
+    check_review_transaction(check, _rust_quota, _rust_quota_service)
     if _rust_lib:
         check("扣减是**一条**语句：`+1` 与 `WHERE chat_quota_used < limit` 同句"
           "（先查后写会留下越过上限的窗口）",
@@ -910,7 +881,7 @@ def test_chat_quota():
           "——改一侧不会报错，只会让用量一直读到 0",
               'row.get("chatQuotaUsed")' in _adm, "agent 侧读的键名不是 chatQuotaUsed")
     if _rust_quota and _rust_temp:
-        _rust_all = _rust_chat + _rust_quota + _rust_temp
+        _rust_all = _rust_chat + _rust_quota + _rust_temp + _rust_quota_service
         check("agent 认作政策类的两句后端措辞，Rust 侧真的会说（认不出 ⇒ 落到 unavailable，"
           "主人收到一句「没确认」而不是「已经处理过了」）",
               "这条申请已经处理过了" in _rust_all

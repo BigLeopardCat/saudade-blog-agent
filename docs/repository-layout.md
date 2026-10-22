@@ -7,6 +7,7 @@
 | `server.py` | HTTP、身份入口、请求与 SSE 协议适配 |
 | `agent/runtime/` | 请求执行循环、工具加载、会话生命周期与输出协议适配 |
 | `agent/domains/favorites/`、`notifications/`、`messages/`、`todos/` | 各自目标、权限、确认范围与真实执行结果 |
+| `agent/runtime/admin_domains.py`、`agent/domains/admin_writes.py` | 管理员领域组装及稳定会话准入，业务判断留在各领域 |
 | `agent/domains/public_*.py`、`article_metadata.py` | 公共读取的分页边界、领域投影及共享文章元数据 |
 | `agent/checkpoint.py`、`agent/idem*.py` | 既有持久化与幂等基础组件，供运行路径复用 |
 | `tools/` | 站点 API 与设备等外部 I/O 适配，不负责模型规划 |
