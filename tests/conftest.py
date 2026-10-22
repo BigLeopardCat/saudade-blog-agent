@@ -1,34 +1,17 @@
 # -*- coding: utf-8 -*-
-"""pytest 的测试现场（20261020 起：`tests/` 就是一套原生 pytest 套件）。
+"""Deterministic pytest environment, shared fixtures and global-state isolation.
 
-**这一层只做两件事**（顺序敏感，逐条说明）：
-
-① **出厂档环境钉子**（必须在任何 `config.settings` 的 import 之前设置——conftest
-   在收集前加载，早于一切测试模块，这个顺序由 pytest 保证）。`_PINNED` 是**唯一事实源**：
-   离线判据必须钉在**代码的形状**上，不能跟着本机 `.env`（产线那份）或 shell 里恰好
-   export 过的档位走——那正是 20260928 实测到的「本机恒绿、CI 恒红」形状。改这张表
-   等于改全部套件的跑法，`tests/test_ci_suite_list.py` ④b 判着「钉了真的生效」。
-
-② **tests/ 进 sys.path**：`_ctx_src` / `_planner_stub` / `_rust_src` 这批 `_*` 助手
-   按脚本态的 import 方式（`import _ctx_src`）工作，pytest 的 rootdir 导入模式不会
-   自动把 tests/ 放进 path——不补这一行，三个拼接视图套件当场 ModuleNotFoundError。
-
-③ **跨套件全局还原层**（`_process_isolation`，见文件末尾那一段）。
-
-**这套体系怎么来的**（留档，不是现状）：这 179 个套件此前是「自研 runner
-（`tests/run_all.py`）+ 裸脚本判据」——判据长在**模块级**（import 即执行）、报红靠
-`sys.exit(1)`。转 pytest 不是换条命令跑：**收集即 import** 会把裸脚本的判据当场执行掉。
-所以迁移分两批走、期间两个 runner 并行跑同一批文件、红绿必须逐字一致（对拍判据
-`tests/test_pytest_parity.py`），末批把 `run_all.py` / 台账 / `collect_ignore` 一并删掉。
-对拍不是形式：转写时把判据改弱（FAILED 少 append 一条）、两处 `_PINNED` 漂移、同进程
-收集带来的属性污染——这三种「看着迁移了、其实判据变了」只有对拍抓得住。
-逐批的过程与读数见 `changelog.d/20261020-pytest-migration-*.md`。
+Pin settings before importing application modules. Keep test helpers importable
+and restore process globals after each test so suites can share pytest workers.
 """
+
 from __future__ import annotations
 
 import os
 import pathlib
 import sys
+
+pytest_plugins = ["_favorite_support"]
 
 # ① 出厂档钉子（**唯一事实源**；`tests/test_ci_suite_list.py` ④b 判「钉了真的生效」）
 _PINNED = {"AGENT_EVIDENCE": "0",

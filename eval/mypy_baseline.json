@@ -11,8 +11,8 @@
     "utils",
     "server.py"
   ],
-  "total": 188,
-  "files_checked": 101,
+  "total": 187,
+  "files_checked": 110,
   "by_file": {
     "agent/action_text.py": 1,
     "agent/adminops_confirm.py": 6,
@@ -32,7 +32,7 @@
     "rag/graph_build.py": 3,
     "rag/search.py": 4,
     "rag/vector_index.py": 3,
-    "server.py": 8,
+    "server.py": 7,
     "tools/account_admin.py": 1,
     "tools/admin_read.py": 4,
     "tools/announcements.py": 1,

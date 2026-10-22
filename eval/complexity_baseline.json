@@ -152,8 +152,8 @@
     "lines": 235
   },
   "server.py::_run_agent_stream_to_queue": {
-    "c": 80,
-    "lines": 604
+    "c": 77,
+    "lines": 585
   },
   "server.py::chat_stream": {
     "c": 14,

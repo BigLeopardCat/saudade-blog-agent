@@ -40,7 +40,7 @@ def _target(article_id, favorite):
 
 def _confirmation(principal, cid, workflow, spec, target):
     specs, notes = [spec], {spec["args"]["article_id"]: target}
-    token = confirm.sign(principal.uid, cid, workflow, specs)
+    token = confirm.sign(principal.uid, cid, workflow, specs, executor="favorites")
     if not token:
         record("hybrid", "confirmation_unavailable", workflow=workflow)
         return base.unavailable("确认服务暂不可用，本次未生成确认卡，也未执行改动。")

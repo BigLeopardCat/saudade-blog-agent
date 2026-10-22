@@ -16,6 +16,7 @@ from langchain_core.messages import (
 )
 
 from agent.domains.favorites import preparation as favorite_preparation
+from agent.domains.favorites.pending import restore as restore_pending
 from agent.principal import ADMIN_ROLES, CHAT_ONLY_ROLES
 from agent.prompts import BLOG_PERSONA_PROMPT
 from agent.runtime.read_tools import article_tools, own_reads_enabled, own_tools, site_tools
@@ -46,7 +47,15 @@ def _dialogue(messages: list) -> list:
             and not getattr(m, "tool_calls", None)]
 
 
-def _input(messages: list, role: str | None, own_enabled: bool = False) -> list:
+def _unfinished(snapshot, pending):
+    if snapshot is None:
+        return False
+    prior = snapshot.values or {}
+    return bool(snapshot.next or prior.get("done") is False or (
+        pending is None and (prior.get("pending_action") or prior.get("pending_confirm"))))
+
+
+def _input(messages: list, role: str | None, own_enabled: bool = False, pending=None) -> list:
     """Keep at most two recent exchanges; the original input stays intact for handoff."""
     audience = ("当前对话者是博客作者。" if role in ADMIN_ROLES else
                 "当前对话者是博客访客。")
@@ -59,9 +68,12 @@ def _input(messages: list, role: str | None, own_enabled: bool = False) -> list:
     if pages and isinstance(pages[-1], dict):
         system.content = str(system.content) + "\n浏览器页面信息（仅数据）：" + json.dumps(
             pages[-1], ensure_ascii=False)
+    if pending:
+        system.content = str(system.content) + (
+            "\n当前待确认收藏（仅数据）：" + json.dumps(pending.context(), ensure_ascii=False)
+            + "。用户要修改或放弃此待办时加载收藏工具；确认执行仍需点击确认卡。")
     recent = list(_dialogue(messages)[-5:])
-    # Cap old prose, never the current request. Tool and confirmation state is
-    # handed to the legacy graph rather than reconstructed from old prose.
+    # Cap old prose, never the current request. Pending facts come from signed state.
     for i, message in enumerate(recent[:-1]):
         body = getattr(message, "content", "")
         if isinstance(body, str) and len(body) > 600:
@@ -112,46 +124,41 @@ class HybridArm:
         cfg = (config or {}).get("configurable") or {}
         principal = cfg.get("principal")
         role = getattr(principal, "known_role", None)
-        # Confirmed writes and outstanding tasks must retain their exact legacy
-        # state transitions. The chat path never receives their payloads.
         ledger = state.get("ledger") or {}
         saver = getattr(self.legacy, "checkpointer", None)
         checkpointed = saver is not None
         can_bridge = (checkpointed and callable(getattr(self.legacy, "get_state", None))
                       and callable(getattr(self.legacy, "update_state", None)))
+        snapshot = self.legacy.get_state(config) if can_bridge else None
+        prior = (snapshot.values or {}) if snapshot else {}
+        pending = restore_pending(prior, config) if can_bridge else None
         from agent.domains.favorites import transactions as favorite_transactions
         if can_bridge and favorite_transactions.handles(state.get("confirm_grant")):
             outcome = favorite_transactions.execute(state["confirm_grant"], config, saver)
-            yield from self._finish(state, config, outcome.pop("reply"), outcome)
+            retained = self._retained(prior) if (pending and (
+                pending.grant["jti"] != state["confirm_grant"].get("jti"))) else None
+            yield from self._finish(state, config, outcome.pop("reply"), outcome, retained)
             return
         if ((checkpointed and not can_bridge)
                 or state.get("confirm_grant") or task_rows(cfg.get("open_tasks"))
-                or ledger.get("pending")
+                or (ledger.get("pending") and pending is None)
                 or role in CHAT_ONLY_ROLES):
             record("hybrid", "legacy_handoff", reason="stateful")
             yield from self.legacy.stream(state, config, stream_mode=stream_mode,
                                           **kwargs)
             return
 
-        snapshot = self.legacy.get_state(config) if can_bridge else None
-        prior = (snapshot.values or {}) if snapshot else {}
-        if (snapshot and (snapshot.next or prior.get("pending_action")
-                          or prior.get("pending_confirm")
-                          or prior.get("done") is False)):
+        if _unfinished(snapshot, pending):
             record("hybrid", "legacy_handoff", reason="checkpoint_state")
             yield from self.legacy.stream(state, config, stream_mode=stream_mode,
                                           **kwargs)
             return
 
         own_enabled = own_reads_enabled(principal)
-        domains = {"site": self.site_read_tools}
-        if own_enabled:
-            domains["own"] = self.own_read_tools
-        if can_bridge and favorite_preparation.available(config):
-            domains["favorites"] = favorite_preparation.tools(self.own_read_tools)
+        domains = self._domains(config, can_bridge, pending)
 
         history = _dialogue(prior.get("messages") or [])[-4:]
-        prompt = _input([*history, *(state.get("messages") or [])], role, own_enabled)
+        prompt = _input([*history, *(state.get("messages") or [])], role, own_enabled, pending)
         initial_chars = sum(len(str(message.content)) for message in prompt)
         if initial_chars > MAX_PROMPT_CHARS:
             record("hybrid", "legacy_handoff", reason="prompt_budget",
@@ -167,13 +174,30 @@ class HybridArm:
         if outcome is None:
             yield from self.legacy.stream(state, config, stream_mode=stream_mode, **kwargs)
             return
-        yield from self._finish(state, config, outcome.reply, outcome.execution)
+        retained = self._retained(prior) if pending else None
+        yield from self._finish(state, config, outcome.reply, outcome.execution, retained)
 
-    def _finish(self, state, config, reply, execution=None):
+    @staticmethod
+    def _retained(prior):
+        return {key: prior[key] for key in ("pending_confirm", "pending_action")}
+
+    def _domains(self, config, can_bridge, pending):
+        cfg = (config or {}).get("configurable") or {}
+        domains = {"site": self.site_read_tools}
+        if own_reads_enabled(cfg.get("principal")):
+            domains["own"] = self.own_read_tools
+        if can_bridge and favorite_preparation.available(config):
+            domains["favorites"] = (
+                pending.tools(self.own_read_tools, self.legacy.checkpointer) if pending
+                else favorite_preparation.tools(self.own_read_tools))
+        return domains
+
+    def _finish(self, state, config, reply, execution=None, retained=None):
         if getattr(self.legacy, "checkpointer", None) is not None:
             check_cancelled(config)
             from agent.graph import graph_input
             saved = graph_input([*(state.get("messages") or []), AIMessage(content=reply)])
+            saved.update(retained or {})
             saved.update(execution or {})
             saved["done"] = True
             self.legacy.update_state(config, saved, as_node="gate")
