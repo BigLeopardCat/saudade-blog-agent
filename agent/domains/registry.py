@@ -1,11 +1,19 @@
 """The migrated confirmation domains; no model intent matching belongs here."""
 
 from agent.domains.favorites import transactions as favorites
+from agent.domains.messages import transactions as messages
 from agent.domains.notifications import transactions as notifications
+
+_DOMAINS = {"favorites": favorites, "notifications": notifications, "messages": messages}
+
+
+def native_domain(grant):
+    executor = grant.get("executor") if isinstance(grant, dict) else None
+    return _DOMAINS.get(executor) if isinstance(executor, str) else None
 
 
 def confirmed_domain(grant):
-    for domain in (favorites, notifications):
+    for domain in _DOMAINS.values():
         if domain.handles(grant):
             return domain
     return None

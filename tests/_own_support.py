@@ -22,3 +22,10 @@ def site():
 def notifications():
     with notification_backend() as state:
         yield state
+
+
+@pytest.fixture
+def mailbox():
+    from eval.own_fixtures import message_backend
+    with message_backend() as state:
+        yield state

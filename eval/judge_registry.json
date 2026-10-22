@@ -103,6 +103,18 @@
         0,
         0
       ],
+      "agent/domains/messages/__init__.py": [
+        0,
+        0
+      ],
+      "agent/domains/messages/preparation.py": [
+        0,
+        0
+      ],
+      "agent/domains/messages/transactions.py": [
+        0,
+        0
+      ],
       "agent/domains/notifications/__init__.py": [
         0,
         0
@@ -112,6 +124,10 @@
         0
       ],
       "agent/domains/notifications/transactions.py": [
+        0,
+        0
+      ],
+      "agent/domains/read_state.py": [
         0,
         0
       ],
@@ -220,7 +236,7 @@
         0
       ],
       "agent/runtime/session.py": [
-        6,
+        7,
         0
       ],
       "agent/runtime/turns.py": [
@@ -397,7 +413,7 @@
       ]
     },
     "total": [
-      1154,
+      1155,
       4848
     ]
   },
