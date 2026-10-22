@@ -18,6 +18,8 @@ ADMIN_READ_TOOLS = frozenset({"get_server_status", "get_service_health", "get_us
 MODERATION_READ_TOOLS = frozenset({"get_moderation_status", "list_admin_board",
                                    "list_admin_comments"})
 
+QUEUE_READ_TOOLS = frozenset({"list_quota_requests", "list_dashboard_todos"})
+
 _ADMIN_DESCRIPTIONS = {
     "get_server_status": "Read server CPU, load, memory, disk usage and uptime. Admin only.",
     "get_service_health": "Read service health, restarts and recent diagnostic counts. Admin only.",
@@ -73,6 +75,15 @@ def moderation_tools() -> dict:
     selected = _tools_with_scope(MODERATION_READ_TOOLS, SCOPE_ADMIN_CONSOLE)
     selected.update({tool.name: tool for tool in (moderation.get_moderation_status,
                     moderation.list_admin_board, moderation.list_admin_comments)})
+    return selected
+
+
+def queue_tools() -> dict:
+    from agent.domains import work_queue
+
+    selected = _tools_with_scope(QUEUE_READ_TOOLS, SCOPE_ADMIN_CONSOLE)
+    selected.update({tool.name: tool for tool in (work_queue.list_quota_requests,
+                                                 work_queue.list_dashboard_todos)})
     return selected
 
 
