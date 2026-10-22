@@ -56,7 +56,7 @@ def test_repeated_invalid_requests_exhaust_the_existing_round_budget():
     model = Model([call("invented") for _ in range(5)])
     read = Read()
     session = ToolSession(model, {}, {read.name: read}, {})
-    assert session.run([HumanMessage(content="查询作者")]) is None
+    assert "已停止继续查询" in session.run([HumanMessage(content="查询作者")]).reply
     assert len(model.prompts) == 5 and read.calls == 0
 
 
@@ -64,3 +64,41 @@ def test_repeated_invalid_requests_exhaust_the_existing_round_budget():
 def test_invalid_wire_values_are_rejected_before_menu_lookup(bad):
     session = ToolSession(Model([]), {}, {}, {})
     assert session._accept_calls([bad], 0) == "invalid_tool_call"
+
+
+def test_loading_and_reading_in_one_batch_cannot_bypass_the_read_limit():
+    read = Read()
+    calls = [{"name": "load_site_info_tools", "args": {}, "id": "load"}]
+    calls += [{"name": read.name, "args": {}, "id": f"read_{i}"} for i in range(5)]
+    model = Model([AIMessage(content="", tool_calls=calls)])
+    session = ToolSession(model, {}, {}, {"site": {read.name: read}})
+    assert "已停止继续查询" in session.run([HumanMessage(content="查询作者")]).reply
+    assert read.calls == 4
+
+
+def test_exhausted_result_budget_stops_before_another_read():
+    class LargeRead(Read):
+        def invoke(self, args, config=None):
+            self.calls += 1
+            return "x" * 10000
+
+    read = LargeRead()
+    calls = [{"name": read.name, "args": {}, "id": f"read_{i}"} for i in range(3)]
+    model = Model([AIMessage(content="", tool_calls=calls)])
+    session = ToolSession(model, {}, {read.name: read}, {})
+    assert "已停止继续查询" in session.run([HumanMessage(content="查询作者")]).reply
+    assert read.calls == 2
+
+
+def test_budget_stop_never_restarts_the_request_in_the_legacy_planner(monkeypatch):
+    from agent.runtime.hybrid import HybridArm
+
+    class Legacy:
+        def stream(self, *args, **kwargs):
+            raise AssertionError("Budget exhaustion entered the legacy planner")
+
+    model = Model([call("invented") for _ in range(5)])
+    monkeypatch.setattr("agent.runtime.hybrid.get_llm", lambda **kwargs: model)
+    events = list(HybridArm(Legacy()).stream({"messages": [HumanMessage(content="查询作者")]}, {}))
+    assert "已停止继续查询" in events[1][1]["model"]["messages"][0].content
+    assert len(model.prompts) == 5
