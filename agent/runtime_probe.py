@@ -1,28 +1,9 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""运行时可观测判定的**纯逻辑**：构建身份（`/version`）、就绪（`/ready`，20261018 批 3）、
-以及 `/health` 那格 checkpoint 后端（20261018 批 6）。
+"""Runtime identity, readiness and persistence diagnostics.
 
-**为什么是单独一个模块而不是写在 `server.py` 里**：`server.py` 已经 2549 行、
-超文件预算 3 倍，而 `tests/test_module_budget.py` 的规矩是"长文件不许再长，真需要变大
-就在同一个提交里 `--update` 并说明为什么"。这两个判定**不需要**住在 app 模块里——它们
-是纯函数（输入 `agent` 与 `settings`，输出返回体），住的理由只有"路由函数顺手"。
-路由留在 `server.py`（它必须在那儿，`app` 与 `_agent` 都在那儿），逻辑搬到这里。
-同族的先例：`agent/factblock.py`、`agent/action_text.py`、`agent/entity_digest.py`。
-
-**三个判定的分工**（别把它们读成一件事）：
-  · `/version` 回答"**这是哪一版**"——静态构建身份，进程一生不变；
-  · `/ready`   回答"**能不能接活**"——活体判定，随配置与启动阶段变；
-  · `/health`（仍在 `server.py`）回答"**进程活没活**"，并且**刻意**对配置错误
-    fail-open。三者不是彼此的子集：`/health` 绿而 `/ready` 红正是本模块要买的那个组合。
-  · `/health` 的 `dials.checkpoint_backend`（`checkpoint_backend`）：这一格**只**回答
-    "这个进程挂没挂 saver"，它与前两个都不同族——`/ready` 的三条硬依赖里没有它
-    （没挂 saver 的进程完全能接活），所以它不是"就绪"的一部分，是**采纳进度**的可读出口。
-  · `/health` 的 `dials.checkpoint_db`（`checkpoint_db`，20261019）：**这一块里唯一
-    一格读配置的**——它回的是 `CHECKPOINT_DSN` 指到哪个库（只回库名）。它与上面那格
-    合起来才读得通："配了 DSN 指到 A 库、而图没挂上 saver"正是
-    `checkpoint_db=A` + `checkpoint_backend=none`。存在的理由只有一个：
-    把"指错库"变成一眼可见（理由见 `agent/checkpoint.py` 头注《DSN 指向哪个库》）。
+Build identity is captured when the process imports this module. Health checks
+inspect the live runtime; a later git update must not change the reported build.
 """
 
 from __future__ import annotations
@@ -70,6 +51,19 @@ def build_sha(env: dict | None = None, git_dir: Path | None = None) -> tuple[str
     return "unknown", "unknown"
 
 
+BUILD_IDENTITY = build_sha()
+
+
+def arm_name(agent):
+    from langgraph.graph.state import CompiledStateGraph
+
+    from agent.runtime.hybrid import HybridArm
+
+    if isinstance(agent, HybridArm):
+        return "hybrid"
+    return "graph" if isinstance(agent, CompiledStateGraph) else "unknown"
+
+
 def version_payload(app_version: str) -> dict:
     """`/version` 的返回体。**只放静态构建身份，不回显活体档位**。
 
@@ -81,7 +75,7 @@ def version_payload(app_version: str) -> dict:
     的内存取值**），这里再回一份就是第二个真源——本仓最贵的那类失效。想知道"现在跑
     哪一档"读 `/health`；想知道"这是哪一版"读这里。
     """
-    sha, src = build_sha()
+    sha, src = BUILD_IDENTITY
     return {"version": app_version, "sha": sha, "sha_source": src,
             "started_at": STARTED_AT, "python": platform.python_version()}
 

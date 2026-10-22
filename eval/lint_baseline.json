@@ -8,7 +8,7 @@
     "I",
     "W"
   ],
-  "total": 597,
+  "total": 596,
   "by_file": {
     "agent/action_text.py": 2,
     "agent/authz.py": 5,
@@ -52,7 +52,6 @@
     "eval/trace_metrics.py": 2,
     "eval/trace_reconcile.py": 6,
     "eval/wordlist_gate.py": 6,
-    "models/llm.py": 1,
     "rag/search.py": 1,
     "rag/sections.py": 1,
     "scripts/agent_metrics.py": 3,

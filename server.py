@@ -2659,9 +2659,7 @@ async def health():
         "agent_ready": _agent is not None,
         # 这一进程真正生效的档位（回的是**内存里的取值**，不是 env 原文）。
         "dials": {
-            # `planner_engine` 这一格 20261004 删掉：接口层只剩工具调用一条
-            # （见 config/settings.py 那段注），没有第二个取值可拨。dials 5 → 4，
-            # `tests/test_health_dials.py` 同步。
+            "agent_arm": runtime_probe.arm_name(_agent),
             "planner_native_thinking": bool(getattr(settings, "planner_native_thinking", False)),
             # `agent_fastpath`（20261015 快道定价档）：**两档都有意义**（开/关是两条真链路），
             # 而它正是本仓吃过亏的那种"两个真值源"——`.env` 与 systemd drop-in 各能设一次，

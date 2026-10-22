@@ -81,7 +81,7 @@ def _db(dsn: str) -> str:
 
 
 def test_health_dials():
-    DIAL_KEYS = {"planner_native_thinking", "agent_fastpath",
+    DIAL_KEYS = {"agent_arm", "planner_native_thinking", "agent_fastpath",
                  "llm_provider", "llm_model",
                  "rag_hybrid_enabled", "rag_hybrid_active", "rag_state", "vector_missing",
                  "checkpoint_backend", "checkpoint_db"}
