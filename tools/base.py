@@ -313,26 +313,12 @@ def _sign_local_jwt(uid: int, role: str | None) -> str:
 
 def _principal_get(path: str, config: RunnableConfig, *,
                    uid_msg: str, deny_msg: str,
-                   payload: dict | None = None) -> dict | list | ToolResult:
-    """以发起人身份读一个"需要身份"的接口（`/api/protected/*`），返回其 data 字段。
+                   payload: dict | None = None,
+                   paginated: bool = False) -> dict | list | ToolResult:
+    """Read an authenticated API using the requesting actor's short-lived token.
 
-    fail-closed 与 `_get` 同族：异常 / 非 200 / 业务码非 200 一律 unavailable，
-    **绝不返回空**——"读不到"被当成"就是空的"是这批工具最坏的失败形态
-    （报表会言之凿凿地说"没有待审留言"，而实际是一条都没读到）。
-    401/403 单独给一句如实的话：那是**身份**问题不是故障，agent 要能据此说出
-    "只有管理员能看"，而不是"系统出错了"。
-
-    20260923 从 `_admin_get` 抽出本体：请求形状完全一样（同一把 JWT_SECRET 代签、
-    同一条 `/api/protected` 前缀、同一套判据），差别只在**读不到时该说的话**——
-    所以两句话由调用方给（`uid_msg` = 拿不到身份，`deny_msg` = 401/403）。措辞必须
-    分开：收藏/通知读不到时对访客说"仅管理员可用"是错的（那是**他自己**的数据），
-    反过来把后台报表说成"你没携带身份"更糟（两条通道的 uid_msg 都不是"没登录"——
-    见 `_NO_IDENTITY_READ` 的头注：和 agent 对话本身就要求登录，uid<=0 只能是身份没传进来）。
-
-    `payload` 给了就改发 **POST**（筛选条件住在请求体里的那几个读接口，如后台
-    文章检索）。读接口走 POST 是上游的形状，不是这里能选的；但**不要**因此改用
-    `_admin_post`——那条是写通道的措辞（失败时说"本次改动未确认生效"），拿它读
-    报表会在读失败时对主人说一句"没改动成功"，两句话说的不是一回事。
+    API failures remain unavailable. POST is used only for body-based read filters.
+    Paginated reads preserve total counts instead of discarding envelope metadata.
     """
     uid = _device_get_user_id(config)
     if uid <= 0:
@@ -356,16 +342,24 @@ def _principal_get(path: str, config: RunnableConfig, *,
         body = resp.json()
     except Exception:
         return unavailable("接口返回的不是 JSON")
+    if not isinstance(body, dict):
+        return unavailable("接口返回的不是有效响应信封")
     if body.get("code") != 200:
         logger.warning("principal API error: %s", body.get("message"))
         return unavailable(f"接口报错: {body.get('message')}")
-    return body.get("data")
+    data = body.get("data")
+    if not isinstance(data, (dict, list)):
+        return unavailable("接口未返回有效的可读取数据")
+    if paginated:
+        return {"items": data, "total": body.get("total")}
+    return data
 
 
-def _admin_get(path: str, config: RunnableConfig) -> dict | list | ToolResult:
+def _admin_get(path: str, config: RunnableConfig, *,
+               paginated: bool = False) -> dict | list | ToolResult:
     """后台接口（管理员读）。scope = admin.console。"""
     return _principal_get(
-        path, config,
+        path, config, paginated=paginated,
         uid_msg="无法获取当前用户身份，后台数据不可用",
         deny_msg="当前身份无权访问后台数据（该功能仅管理员可用）")
 

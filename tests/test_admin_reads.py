@@ -10,7 +10,7 @@ from langchain_core.messages import AIMessage, HumanMessage
 from agent import authz
 from agent.principal import SOURCE_ASSERTION, SOURCE_BODY, Principal
 from agent.runtime.hybrid import HybridArm
-from agent.runtime.read_tools import ADMIN_READ_TOOLS, admin_tools
+from agent.runtime.read_tools import ADMIN_READ_TOOLS, MODERATION_READ_TOOLS, admin_tools
 from agent.runtime.session import ToolSession
 from tools import base
 
@@ -58,7 +58,9 @@ def config(role="superadmin", source=SOURCE_ASSERTION, uid=7, **extra):
 def test_admin_menu_visibility_follows_verified_authority(role, source, uid, visible):
     domains = HybridArm(Legacy())._domains(config(role, source, uid), False, None)
     assert ("admin_reports" in domains) is visible
+    assert ("admin_moderation" in domains) is visible
     if visible:
+        assert set(domains["admin_moderation"]) == MODERATION_READ_TOOLS
         assert set(domains["admin_reports"]) == ADMIN_READ_TOOLS
 
 
