@@ -1553,7 +1553,10 @@ def _run_agent_stream_to_queue(messages: list, thread_id: str, queue: asyncio.Qu
             record("producer", "fact_block", n=len(fresh), total=len(fact_sent))
             emit_text(render_fact_block(fresh) + "\n\n")
 
-        for mode, data in _agent.stream(
+        from agent.runtime.confirmation import confirmed_runtime
+        from agent.runtime.confirmation import frames as confirmation_frames
+        runtime = confirmed_runtime(_agent, confirm_grant)
+        for mode, data in runtime.stream(
             graph_input(messages, confirm_grant=confirm_grant,
                         ledger=ledger),
             config,
@@ -1687,37 +1690,15 @@ def _run_agent_stream_to_queue(messages: list, thread_id: str, queue: asyncio.Qu
                 # execute update 的 receipts 都是请求内全部 PASS 行，末批即全量
                 ex_upd = data.get("execute")
                 if ex_upd:
+                    for frame in confirmation_frames(ex_upd):
+                        asyncio.run_coroutine_threadsafe(queue.put(frame), loop).result()
                     # 「系统认定已达标」的那批 spec（20261015），同轮可能多次 update ⇒
                     # 累加（形状过滤与"为什么不产生回执"见 `_task_satisfied_specs`）。
                     satisfied_specs.extend(_task_satisfied_specs(ex_upd))
                     _consent_asks(ex_upd, consent_asks)   # 「同意闸挡下 / 弹了卡」那几件
-                    # 写操作确认弹窗（20260921）：execute 在同意闸上把"有意向但没判成
-                    # 命令"的写 spec 收成一次确认（见 graph._confirm_popup），本轮
-                    # **零执行、零 LLM**——图直接路由到 END（route_after_execute），
-                    # narrator 结构上不会跑，也就不可能出现"已经建好啦"这类叙述。
-                    # 回复正文由 adminops 确定性给出（confirm_text），走 AI 帧是为了
-                    # 让 Rust 照常落库（前端切会话回头还能看见这段问句）。
+                    # Confirmation text is persisted as an assistant reply by the host.
                     if ex_upd.get("pending_confirm"):
-                        popup = ex_upd["pending_confirm"]
                         emit_process("✋ 等待主人确认…", key="confirm_popup")
-                        asyncio.run_coroutine_threadsafe(
-                            queue.put("__CONFIRM__:" + json.dumps(
-                                {"id": uuid.uuid4().hex[:8], "q": popup.get("q", ""),
-                                 "opts": popup.get("opts") or [], "token": popup.get("token", ""),
-                                 # 令牌失效时刻（20260924）：前端据此起倒计时、到点把
-                                 # 卡片结算成"已过期，未执行"，不让它永远停在"已确认"。
-                                 # 服务端仍以验签为唯一凭据——这个数只驱动展示。
-                                 "exp": popup.get("exp") or 0},
-                                ensure_ascii=False)),
-                            loop).result()
-                        # 跨轮待办（20260923）：同一件事的**结构化形态**落库（Rust 侧
-                        # 收到即写、不转发前端）。与弹窗同轮发出是刻意的——主人可能
-                        # 点完就切走/关页面，晚发等于没发；下一轮 planner 靠它认人。
-                        pa = ex_upd.get("pending_action") or {}
-                        if pa:
-                            asyncio.run_coroutine_threadsafe(
-                                queue.put("__PENDING__:" + json.dumps(pa, ensure_ascii=False)),
-                                loop).result()
                         text = str(ex_upd.get("confirm_text") or "")
                         if text:
                             final_reply = text

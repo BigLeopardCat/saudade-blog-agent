@@ -688,11 +688,11 @@ def test_confirm():
               > _src.index("if grant is None:"))
     check("接线：正常轮的 trace input 带 conversation_id",
           '"conversation_id": req.conversation_id' in _src)
-    check("接线：__CONFIRM__ 帧体带 exp（前端靠它起倒计时/到期结算）",
-          '"exp": popup.get("exp") or 0' in _src)
+    from agent.runtime.confirmation import frames as confirmation_frames
+    frame = next(confirmation_frames({"pending_confirm": {"exp": 123}}))
+    check("确认帧携带到期时间供前端倒计时", json.loads(frame.split(":", 1)[1])["exp"] == 123)
     settings.jwt_secret = _SAVED_SECRET   # 还原（⑥ 与本节各自立桩，改完归还原值）
-    print()
-    print("⑧ 令牌的一次性编号 jti（20260924）：同一张令牌不许兑现两次")
+    print("\n⑧ 令牌的一次性编号 jti：同一张令牌不许兑现两次")
     settings.jwt_secret = _STUB_SECRET
     _t1 = confirm.sign(7, 42, "tag_create", [{"tool": "create_tag_one", "args": {"name": "X"}}])
     _t2 = confirm.sign(7, 42, "tag_create", [{"tool": "create_tag_one", "args": {"name": "X"}}])

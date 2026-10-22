@@ -1,41 +1,13 @@
 # -*- coding: utf-8 -*-
-"""写操作确认令牌（20260921，隐藏确认请求）。
+"""Signed, expiring confirmation tokens bound to a user and conversation.
 
-## 这个文件解决什么
+Tokens carry concrete authorized arguments and a random operation ID. They must
+never enter prompts, traces, receipts or logs. Missing secrets, invalid signatures,
+expired tokens and unresolved argument references fail closed.
 
-写操作的三道门是"授权 / 确认 / 目标有据"。确认原本只有一条通道：**用户再发一条
-消息说"确认"**——那烧掉一整轮 planner+narrator，而且在前端呈现为一条新的用户请求
-（用户原话：「会被认为是再次请求」）。现在的通道是：agent 随回复下发一个**待办令牌**，
-前端弹一个"确定/取消"的窗，点确定就带令牌发一条**隐藏请求**（不进历史、不起气泡），
-agent 跳过 planner 直接执行。
-
-## 为什么是签名令牌，而不是"待办表"
-
-uvicorn 跑 **2 个 worker**：进程内的一张 pending 表在另一个 worker 上根本不存在
-（用户点了确定、请求落到另一个 worker = 查不到 = 确认永远失败，还是间歇性的，
-最难查的那种）；落库则要一次迁移。签名令牌把状态放在**令牌自身**（服务端零状态），
-谁受理都能验。
-
-## 安全语义（本文件存在的全部理由，改任何一条都要重新想清楚）
-
-  · 令牌 = **一次已授权的写的等价物**：不落 trace、不进日志、不进回执、不进 prompt。
-  · **"一次"是字面意思（20260924）**：令牌自带随机 `jti`，落库侧认领（HTTP 端
-    `pending_action.jti`）。同一张令牌重放第二次会被如实拒绝——在此之前它是可
-    重放的，"确定"卡片点两下就写两次（写操作不幂等，这是真的会改数据）。认领
-    是**尽力而为**：认领表里没有这张令牌（老客户端/无状态路径/落库失败）时照常
-    放行，验签仍是唯一凭据，本机制只负责"同一张令牌不兑现两次"。
-  · 绑定 `uid` + `conversation_id` + 签发时刻，TTL `TTL_SECONDS`（10 分钟）。
-  · 密钥空缺（配置没读到）时**既不签也不验**——绝不降级成"无签名令牌"。
-  · 验签失败一律 `None`（签名不符 / 过期 / 换人 / 换会话 / 格式坏 / 版本不符），
-    调用方据此**零执行**。
-  · **specs 里不允许残留 `$ref`**（`agent/arg_refs.py` 的 `$tool[N].field`）：引用依赖
-    的是"签发那一轮的工具帧"，而执行发生在下一轮，帧早已不在——留着引用等于执行
-    时参数解析失败（最好的情况）或解析成别的东西（最坏的情况）。检出即**不签发**，
-    退回"如实追问"，见 `has_refs`。
-
-## 纯函数、无网络、无 LLM
-
-`tests/test_confirm.py` 全部秒级复跑。
+The optional signed executor pins migrated operations to their durable execution
+path, including revocation and replay checks. Legacy tokens retain their existing
+execution path and the host's best-effort one-time claim.
 """
 
 from __future__ import annotations
@@ -250,11 +222,14 @@ def _units_of(payload: dict, n: int) -> "list | None":
     return units if sorted(flat) == list(range(n)) else None
 
 
-def sign(uid: int, conv_id, workflow: str, specs: list, units: "list | None" = None) -> str:
+def sign(uid: int, conv_id, workflow: str, specs: list, units: "list | None" = None,
+         *, executor: str | None = None) -> str:
     """签发待办令牌。密钥空缺 / 参数不全 → **空串**（调用方据此不弹窗）。
 
     `specs` = `[{"tool": 工具名, "args": {...}}]`，参数必须是**已实例化的具体值**
     （见 `has_refs`）。`workflow` 是技能名，执行轮据此拼计划——**不靠模型回忆**。
+
+    `executor` 固定执行入口，使更换默认运行时后仍核对撤销账。
 
     `units` = `adminops.linked_units(specs)` 的结果：卡面编号与「只办第 N 件」的
     按钮都按它数（见 `narrow`）。不传 ⇒ 载荷里不带这个键，读侧按逐条一单元处理。
@@ -281,6 +256,8 @@ def sign(uid: int, conv_id, workflow: str, specs: list, units: "list | None" = N
     }
     if units:
         payload["units"] = [list(u) for u in units]
+    if executor:
+        payload["executor"] = executor
     try:
         body = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode()
     except (TypeError, ValueError):
