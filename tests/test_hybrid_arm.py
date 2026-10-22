@@ -83,9 +83,11 @@ def test_chat_uses_one_small_call_and_no_legacy(monkeypatch):
 
     assert len(model.calls) == 1
     assert model_args[0]["streaming"] is False
-    assert {t.name for t in model.tools[:-2]} == {
+    assert {t.name for t in model.tools if not isinstance(t, dict)} == {
         "rag_search", "search_notes", "get_article_detail"}
-    assert model.tools[-2]["function"]["name"] == "load_site_info_tools"
+    assert {t["function"]["name"] for t in model.tools if isinstance(t, dict)} == {
+        "load_site_info_tools", "load_public_catalog_info_tools", "load_public_activity_info_tools",
+        "load_utilities_info_tools", "delegate_to_site_agent"}
     assert len(model.calls[0]) <= 6
     assert sum(len(str(m.content)) for m in model.calls[0]) < 4000
     assert not legacy.calls
@@ -239,7 +241,8 @@ def test_read_domains_are_separate_and_do_not_require_write_persistence():
     domains = arm._domains(config, can_bridge=False, pending=None)
     expected = {"favorites": "list_my_favorites", "notifications": "list_notifications",
                 "messages": "list_my_messages"}
-    assert set(domains) == {"site", "own_activity", *expected}
+    assert set(domains) == {"site", "own_activity", "public_catalog", "public_activity",
+                            "utilities", *expected}
     for domain, tool in expected.items():
         assert set(domains[domain]) == {tool}
         assert not any(getattr(item, "return_direct", False)

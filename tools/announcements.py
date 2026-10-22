@@ -1,43 +1,5 @@
 # -*- coding: utf-8 -*-
-"""管理助手写工具：站内公告（代发 / 改 / 删）—— 20261018 拆 `tools/base.py`。
-
-**为什么单独成模块**：`tools/base.py` 是全仓第二大体量文件，而这一族是**连续的 233 行、
-8 个模块级名字**（两个上限常量 + 四个帮手 + 三个 `@tool`），scope 全是 `write.console`，
-目标全是**公告标题**。族内自洽、出边只有三个共享帮手，切得干净。
-
-## 为什么是这三件，以及实现为什么长这样
-与标签/分类同一套纪律（名字通道 + fail-closed + 读回复核），三处**公告独有**的
-事实决定了实现的形状：
-  ① 公告**没有唯一约束、没有"已发布/草稿"字段**（`src/entity/announcement.rs` 只有
-     id/title/content/时间戳），所以目标只能按**标题**认，且重名一律拒绝——按名字
-     挑一条出来改/删，选错就是改了别人的公告；
-  ② 新建端点**不回 id**（返回字符串 "Created"）⇒ 复核只能靠"读回清单、按标题+
-     正文认出新增的那条"，与 `create_category` 同族（那条也是按名字回头认）；
-  ③ 改端点要求 title 与 content **都发**（Rust 侧 `UpsertAnnouncement` 两个字段
-     都必填）⇒ 只改正文时必须把现有标题原样带上，不能发空标题把公告改成没名字。
-删除是 `ON DELETE` 真删（公告没有外键），所以**读不回就等于没删掉**，不猜。
-
-## 搬家时守的两条
-⚠️ **四个帮手一律写成 `_base.<名>(...)`，不许按名 import**：`_announcement_index`
-与 `_admin_request` 都被套件**直接打桩**（`tests/test_tag_admin.py` 的 `patch()`
-就是 `setattr(tools.base, 名, 桩)`，实测 6 处 `_announcement_index` / 3 处
-`_admin_request`）。函数对象取 globals 取的是**它自己所在模块**的 `__dict__`
-⇒ 按名 import 会把打桩前的旧对象钉死在这里，桩静默失效、代码真去发网络请求，
-而症状只是"断言换了个理由红"（本仓最贵的失效：看着在跑、其实没跑）。
-`_base` 这个属性查找发生在**调用那一刻**，桩才生得效。
-⚠️ **本模块一个名字都不按名从 `tools.base` 取**（连 `_near_miss_names` 也走属性查找）：
-模块级 `from tools.base import …` 会让 mypy 在这个环上判不出被 re-export 的名字的
-类型，`tools/base.py` 的 `_TOOL_REGISTRY` 会当场多出一批 `Cannot determine type`
-（20261018 在 `tools/admin_read.py` 那一刀实测 7 条、`tools/base.py` 13→16）。
-属性查找同时解决了"本模块在 base 的原位置就被 import"的时序问题。
-
-## `__all__`
-按社区惯例 = 本模块**所有不以 `_` 开头**的模块级名字，不留例外（两个上限常量虽只在
-外面被注释提到，但它们是本模块的公开词汇，收进 `__all__` 才不会让"什么算公开"变成
-逐模块的裁量）。`_announcement_index` / `_find_named_announcement` / `_announce_change`
-是**下划线名**，按惯例不进 `__all__`，由 `tools/base.py` 按原名显式 re-export 供给
-（显式 import 不受 `__all__` 约束）。
-"""
+"""Confirmed administrator announcement writes and name resolution helpers."""
 
 from typing import Annotated
 

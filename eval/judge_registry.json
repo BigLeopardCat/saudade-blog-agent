@@ -236,7 +236,7 @@
         0
       ],
       "agent/runtime/session.py": [
-        10,
+        14,
         0
       ],
       "agent/runtime/turns.py": [
@@ -426,10 +426,50 @@
       "agent/domains/own_activity.py": [
         0,
         0
+      ],
+      "agent/domains/article_metadata.py": [
+        0,
+        0
+      ],
+      "agent/domains/public_pages.py": [
+        0,
+        0
+      ],
+      "agent/domains/public_catalog.py": [
+        0,
+        0
+      ],
+      "agent/domains/public_activity.py": [
+        0,
+        0
+      ],
+      "agent/domains/utilities.py": [
+        0,
+        0
+      ],
+      "agent/domains/device_reads.py": [
+        0,
+        0
+      ],
+      "agent/domains/todos/__init__.py": [
+        0,
+        0
+      ],
+      "agent/domains/todos/targets.py": [
+        0,
+        0
+      ],
+      "agent/domains/todos/preparation.py": [
+        3,
+        0
+      ],
+      "agent/domains/todos/transactions.py": [
+        3,
+        0
       ]
     },
     "total": [
-      1158,
+      1168,
       4848
     ]
   },
