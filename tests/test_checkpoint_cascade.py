@@ -1,30 +1,4 @@
-"""级联清理的判据（20261018 批 7）：零 LLM、零网络、零真库。
-
-**这一件为什么存在**：挂了 saver 之后，一个会话的对话正文会**多出一份**住在
-checkpoint 库里（`conv_<id>` 线程）。删会话时不清它 ⇒ 那份正文**没有任何读取路径**，
-也**没有任何东西会红**——同族的先例在父仓 `src/routes/conversation.rs` 的头注里写着：
-`execution_log` / `pending_action` / `agent_task` 都栽过同一件事（"会话没了，行还在，
-没人读、也没人报"）。
-
-**本件判三件事**：
-  · ① **机制**（`agent/checkpoint.py::delete_thread`）：删得掉，且返回值是**"删完读回来
-    确认"**而不是"没抛异常"——一个恒不生效的删除与真删除**长得一模一样**，这是本件
-    唯一真正难判的地方，所以它有一条专门的反控（no-op saver ⇒ 必须返回 False）；
-  · ② **端点**（`server.checkpoint_delete`）：三条分支各判一次（没挂 saver / 会话 id
-    非法 / 正常），外加"端点不许把没删掉报成删掉了"的反控；
-  · ③ **跨仓契约**：删除动作在父仓，本仓只出钩子。⚠️ **这一条判的不是"父仓接了吗"**
-    ——写成"断言已接"就会在父仓未落地时一直红，而 套件是按目录收集的、
-    **没有"预期红"这个档**（同 `tests/test_checkpoint_adoption.py` 头注记的那次）。
-    判的是**父仓那两条删会话数据的路的一致**：会话臂 `delete_conversation` 与账号臂
-    `delete_temp_user`，钩子**要么两臂都调、要么两臂都不调**。
-    这不是编出来的判据——父仓自己在那份头注里写着，它上一版正是**两处各写一遍、
-    写的不是同一份**（`delete_conversation` 删五张、`delete_temp_user` 只删三张），
-    漏掉的三张表因此变成孤儿。**半接就是那个 bug 的形状。**
-    （20261019 批 D 父仓接上了；同一批把锚点从"清单函数那两个 match 臂"挪到"两个调用点的
-    函数体"，理由写在 `parent_halves` 的 docstring 里。）
-
-用法：`SAUDADE_PARENT_REPO=<父仓> .venv/bin/python tests/test_checkpoint_cascade.py`
-"""
+"""Verify checkpoint deletion, truthful receipts and authenticated host delivery."""
 
 
 from __future__ import annotations
@@ -116,18 +90,7 @@ HOOK = "checkpoint_cleanup::dispatch(&"
 
 
 def parent_halves(conv_src: str, temp_src: str) -> tuple[str, str]:
-    """`(形态, 人话)`。形态三档：`两臂都接` / `两臂都没接` / `半接`（只有一臂）。
-
-    两臂 = 父仓那两条会删掉会话数据的路：
-      · **会话臂** `delete_conversation`（`conversation.rs`，删一个会话）；
-      · **账号臂** `delete_temp_user`（`temp_user.rs`，删账号时级联清它名下全部会话）。
-
-    ⚠️ 20261019 批 D **换了锚点**（从"清单函数那两个 match 臂"改成"这两个调用点的函数体"）：
-    接线那一刻落定了一个更靠外的约束——**HTTP 钩子不能进 DB 事务**（`delete_conversation`
-    要把它放在 `commit()` 之后）。于是钩子由两个调用点各自发，id 仍由那份清单**返回**给它们
-    （清单只有一份这条性质没动，`_conv_ids_from_one_place` 判它）。老锚点在新形状下会
-    恒判「两臂都没接」——**一条恒绿的判据**，比没有更坏。
-    """
+    """Locate durable cleanup delivery in both host deletion paths."""
     purge = _fn_body(conv_src, "async fn purge_conversation_data")
     if purge is None:
         return "锚点没了", "父仓里找不到 `purge_conversation_data`（判据的前提没了）"
@@ -149,23 +112,7 @@ def parent_halves(conv_src: str, temp_src: str) -> tuple[str, str]:
 
 
 def hook_identity(conv_src: str, delivery_src: str | None = None) -> tuple[str, str]:
-    """父仓那两个钩子**带不带身份断言**。三档：`都带` / `都不带` / `半带`。
-
-    为什么判的是**一致性**而不是"已带"：父仓是另一个仓、CI 里的父仓取自它默认分支的
-    当前状态（`eval.yml` 那一处 checkout 没写 `ref:`）⇒ 写成"断言已带"，在父仓那一行
-    落地之前就是一条**恒红**的判据，而红的套件进不了 CI（同 `parent_halves` 头注记的
-    那次）。三档里**只有「半带」是缺陷形状**：两个钩子住在同一个文件、同一套调用约定，
-    一个带一个不带，说明有人只改了一半。
-
-    为什么必须有它：agent 侧这两处现在**要求**断言（`_resolve_principal`，SAU-006）
-    ⇒ 父仓不带 = 这两条钩子 401 = "删了会话、checkpoint 还躺在库里"，而钩子是
-    **best-effort**（失败只 warn）⇒ 这条契约断了**不会响**。
-
-    ⚠️ **认的是头名 `X-Agent-Assertion`，不是 `create_agent_assertion`**：反控实测过
-    ——把 `.header("X-Agent-Assertion", &assertion)` 那一行删掉、只留签名那一句，
-    判据照样判「都带」。**"签了但没带上"正是这条契约最可能的失效形状**（签名与发送
-    隔了十几行），所以字面落在"头发出去"这一端。（父仓另外四处也是这个字面。）
-    """
+    """Check service identity headers at both actual HTTP request sites."""
     marks = []
     for source, key in ((delivery_src or conv_src, "async fn request"),
                         (conv_src, "async fn drop_checkpoint_turn")):
