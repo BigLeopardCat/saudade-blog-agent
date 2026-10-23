@@ -62,7 +62,8 @@ def test_read_input_error_is_recoverable_but_programming_error_propagates(monkey
 
 
 def _state(*history):
-    return {"messages": [HumanMessage(content="[System: user_id=7; page=/]")]
+    return {"messages": [HumanMessage(content="[System: user_id=7; page=/]",
+                                       additional_kwargs={"memory_context": True})]
             + list(history) + [HumanMessage(content="[当前问题]: 你好呀")]}
 
 
@@ -400,7 +401,8 @@ def test_direct_turns_persist_and_reuse_checkpoint_dialogue(monkeypatch):
 
     first = list(arm.stream(_state(), config))
     second_state = {"messages": [
-        HumanMessage(content="[System: user_id=7; page=/]"),
+        HumanMessage(content="[System: user_id=7; page=/]",
+                                       additional_kwargs={"memory_context": True}),
         HumanMessage(content="[当前问题]: 刚才你说了什么？"),
     ]}
     second = list(arm.stream(second_state, config))

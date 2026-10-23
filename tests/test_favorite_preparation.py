@@ -160,9 +160,11 @@ def test_stream_emits_one_card_and_one_reply_from_current_page(site, monkeypatch
     assert "真实文章标题" in cards[0]["q"]
     assert "不可信页面标题" not in cards[0]["q"]
     replies = [str(frame.content) for frame in frames if isinstance(frame, AIMessageChunk)]
-    assert sum("点「确定」我就去处理" in frame for frame in replies) == 1
+    assert sum("确认后执行" in frame for frame in replies) == 1
     assert any(frame.startswith("__PENDING__:") for frame in frames if isinstance(frame, str))
     assert all(not frame.startswith("__EXEC__:") for frame in frames if isinstance(frame, str))
-    assert "/article/19" in model.calls[0][0].content
+    assert "/article/19" not in model.calls[0][0].content
+    assert any(isinstance(message, HumanMessage) and "/article/19" in str(message.content)
+               for message in model.calls[0][1:])
     assert cards[0]["token"] not in repr(model.calls)
     assert not site["favorites"]

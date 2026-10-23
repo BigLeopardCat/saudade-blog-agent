@@ -24,10 +24,8 @@ _tokens = partial(count_tokens_approximately, chars_per_token=1.5)
 
 
 def is_context(message):
-    return isinstance(message, HumanMessage) and (
-        str(message.content).startswith("[System: ")
-        or message.additional_kwargs.get("memory_context") is True
-    )
+    return (isinstance(message, HumanMessage)
+            and message.additional_kwargs.get("memory_context") is True)
 
 
 def summary_message(messages):

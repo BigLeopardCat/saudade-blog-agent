@@ -746,19 +746,7 @@ def _ledger_for_graph(req: ChatRequest, confirmed: bool = False) -> dict:
 
 
 def _ctx_field(s, limit: int = 500) -> str:
-    """系统上下文里的**客户端字段**：剥掉会破坏 `key=value; key=value` 结构的字符
-    （20260925 审计）。
-
-    这些值由**浏览器**给（`current_url`/`page_title` 直接来自页面 JS，`current_effects`/
-    `current_darkmode` 来自访客本机的 localStorage），Rust 原样转发，而它们拼进的是
-    `[System: …]` 那一段——**可信通道里不许有不可信文本**。不清洗的后果是：访客能在自己
-    的字段里塞 `;`、`[System:` 之类，让系统上下文里长出第二段（例如伪造
-    `current_darkmode=on` 覆盖真实状态）。
-
-    今天它只是"自注入"（效果不比直接在对话框里打字更多，`page_title` 的来源
-    `document.title` 全前端无人改写，第三方内容进不来）——但哪天 `page_title` 改成跟着
-    文章标题/留言标题走（很容易发生），同一处代码会立刻从"低"变成"跨用户注入"。
-    """
+    """Bound page fields used by the legacy context serialization."""
     return _CTX_UNSAFE_RE.sub(" ", str(s or ""))[:limit]
 
 
@@ -802,6 +790,7 @@ def _build_messages(req: ChatRequest, confirm_grant: dict | None = None) -> list
                 "事实完整叙述")
     ctx = f"[System: {'; '.join(ctx_parts)}]"
     messages.append(HumanMessage(content=ctx, additional_kwargs={
+        "memory_context": True,
         "page_context": {"url": req.current_url, "title": req.page_title},
         "conversation_summary": req.summary}))
 
