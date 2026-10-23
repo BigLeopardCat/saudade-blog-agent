@@ -16,7 +16,9 @@ class Model:
         self.replies = iter(replies)
         self.prompts = []
 
-    def bind_tools(self, *args, **kwargs):
+    def bind_tools(self, tools, **kwargs):
+        from _budget_model import schemas
+        self.kwargs = {"tools": schemas(tools)}
         return self
 
     def invoke(self, prompt):
@@ -36,7 +38,7 @@ def call(name, args, ident):
     return AIMessage(content="", tool_calls=[{"name": name, "args": args, "id": ident}])
 
 
-def test_candidate_only_answer_hands_off_instead_of_asserting_article_contents():
+def test_candidate_only_answer_stops_without_restarting_or_asserting_article_contents():
     model = Model(
         [
             call("rag_search", {"query": "topic"}, "s"),
@@ -45,7 +47,7 @@ def test_candidate_only_answer_hands_off_instead_of_asserting_article_contents()
     )
     tool = Tool("rag_search", ok("1. type=note id=1 score=1 title=Topic"))
     result = ToolSession(model, {}, {"rag_search": tool}, {}).run([HumanMessage(content="问文章")])
-    assert result is None
+    assert result is not None and "无法核实文章正文" in result.reply
 
 
 def test_empty_and_unavailable_searches_have_different_truthful_outcomes():

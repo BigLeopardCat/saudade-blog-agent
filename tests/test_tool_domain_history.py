@@ -49,3 +49,19 @@ def test_text_errors_and_no_longer_authorized_domains_cannot_restore_tools():
         [ToolMessage(content="old private source", name="observed_read", tool_call_id="2")]
     )
     assert not session.loaded and "observed_read" not in model.menus[-1]
+
+
+def test_small_browser_actions_are_visible_without_loading_the_read_domain():
+    from agent.domains import browser
+    from agent.principal import SOURCE_ASSERTION, Principal
+
+    config = {"configurable": {"user_id": 7, "principal": Principal(7, "user", SOURCE_ASSERTION)}}
+    model = Model()
+    session = ToolSession(model, config, {}, {"site": {
+        "observed_read": observed_read, **browser.tools(config)}})
+    assert {"navigate_page", "set_page_appearance"} <= model.menus[0]
+    assert "observed_read" not in model.menus[0]
+    session._restore_domains([
+        ToolMessage(content="command queued", name="navigate_page", tool_call_id="page")])
+    assert not session.loaded and len(model.menus) == 1
+    assert list(session.tools) == ["navigate_page", "set_page_appearance"]

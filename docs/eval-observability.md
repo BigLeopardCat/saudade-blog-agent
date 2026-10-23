@@ -62,6 +62,9 @@
 # 真实模型 + 假业务 HTTP + 内存 checkpoint + 临时 SQLite 幂等账
 .venv/bin/python -m eval.native_contracts
 
+# 独立采样，每次均从空会话开始；失败不被后续成功覆盖
+.venv/bin/python -m eval.native_contracts --case navigation_combined --repeat 3
+
 # 聊天与公开读取；真实模型及站点只读数据
 GOLDEN_ARM=hybrid CHECKPOINT_DSN= .venv/bin/python eval/run_golden.py \
   --golden eval/golden/hybrid_requests.jsonl --min-pass-rate 1
@@ -75,15 +78,24 @@ GOLDEN_ARM=hybrid CHECKPOINT_DSN= .venv/bin/python eval/run_golden.py \
 3. 通知准备固定未读编号；确认只写一次，重放不重复写入，新到通知保持未读。
 4. 最近收件摘要不含正文；点名读取单封不改已读状态，确认与重放只处理签名编号，新信和发件箱保持不变。
 5. 未读聚合只请求一次计数接口，最多两次模型调用，不额外读取信件或通知内容。
+6. 仅推荐不跳转；追问、推荐并打开和直接打开产生一条指向正确文章的页面命令，
+   可逆页面操作不生成确认卡。推荐链接必须来自夹具文章，并有成功读取的来源。
 
 每项使用独立会话状态，所有业务请求被假接口接管；意外交接旧图直接判失败。
 报告保留首跑结果，不通过复跑把失败改成通过。确认令牌只留在评测进程内存中。
+`--case` 可多次指定；`--repeat` 对每个选中任务独立采样。报告逐次保留回复、命令、
+确认数量、错误、模型和工具次数、预算计量及 trace。汇总列出采样、已评估与通过数量，
+夹具缺失读取明确标为未评估；未评估和失败都返回非零退出码。每轮进入生产 RequestControl，
+使用共享预算和截止时间。导航夹具使用真实本地词法检索和合成正文，不调用外部 embedding；
+业务搜索虽使用 POST，仍属读取，不计业务写入。
 已接入既有夜间脚本作为独立必过项；没有新增计划任务。旧 golden 显式运行 graph，
 其后另跑混合任务验收，两个结果分别记录。
 报告位于 `eval/report/_smoke_native_contracts_<run>/report.json`，追踪通过既有
 `golden_traces/<run>/` 机制隔离；手工报告按现有保留登记保留，避免被当作冻结基线。
 
 这组验收不证明生产 HTTP 入口、数据库持久化、真实业务 API 或所有措辞均可靠。
+导航通过只证明页面命令与目标正确，不证明浏览器已到达，也不自动判定整段叙述事实准确。
+当前 `elapsed_s` 是进程内请求耗时，尚无首个可见事件时间；不足 20 个时延样本不报告 P95。
 PostgreSQL 验证继续使用
 `eval/experiments/hybrid_checkpoint_probe.py`，生产版本与就绪状态看 `/version`、`/health`。
 

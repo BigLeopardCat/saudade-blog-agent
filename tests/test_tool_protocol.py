@@ -5,6 +5,7 @@ import json
 import pytest
 from langchain_core.messages import AIMessage, HumanMessage
 
+from agent.runtime.budget import BudgetLimits, RequestBudget, budget_scope
 from agent.runtime.session import ToolSession
 
 
@@ -17,7 +18,9 @@ class Model:
         self.responses = iter(responses)
         self.prompts = []
 
-    def bind_tools(self, *args, **kwargs):
+    def bind_tools(self, tools, **kwargs):
+        from _budget_model import schemas
+        self.kwargs = {"tools": schemas(tools)}
         return self
 
     def invoke(self, prompt):
@@ -52,10 +55,11 @@ def test_tool_error_provides_current_menu_without_repeating_io(invalid, reason):
     assert data["available_tools"] == ["delegate_to_site_agent", read.name]
 
 
-def test_repeated_invalid_requests_exhaust_the_existing_round_budget():
+def test_repeated_invalid_requests_exhaust_the_configured_model_budget():
     model = Model([call("invented") for _ in range(5)])
     read = Read()
     session = ToolSession(model, {}, {read.name: read}, {})
+    session.budget = RequestBudget(BudgetLimits(model_calls=5))
     assert "已停止继续处理" in session.run([HumanMessage(content="查询作者")]).reply
     assert len(model.prompts) == 5 and read.calls == 0
 
@@ -72,8 +76,9 @@ def test_loading_and_reading_in_one_batch_cannot_bypass_the_read_limit():
     calls += [{"name": read.name, "args": {}, "id": f"read_{i}"} for i in range(5)]
     model = Model([AIMessage(content="", tool_calls=calls)])
     session = ToolSession(model, {}, {}, {"site": {read.name: read}})
+    session.budget = RequestBudget(BudgetLimits(tool_calls=5))
     assert "已停止继续处理" in session.run([HumanMessage(content="查询作者")]).reply
-    assert read.calls == 4
+    assert read.calls == 0
 
 
 def test_exhausted_result_budget_stops_before_another_read():
@@ -99,6 +104,8 @@ def test_budget_stop_never_restarts_the_request_in_the_legacy_planner(monkeypatc
 
     model = Model([call("invented") for _ in range(5)])
     monkeypatch.setattr("agent.runtime.hybrid.get_llm", lambda **kwargs: model)
-    events = list(HybridArm(Legacy()).stream({"messages": [HumanMessage(content="查询作者")]}, {}))
+    with budget_scope(RequestBudget(BudgetLimits(model_calls=5))):
+        events = list(HybridArm(Legacy()).stream(
+            {"messages": [HumanMessage(content="查询作者")]}, {}))
     assert "已停止继续处理" in events[1][1]["model"]["messages"][0].content
     assert len(model.prompts) == 5

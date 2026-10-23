@@ -145,6 +145,16 @@ def get_llm(**kwargs) -> ChatOpenAI:
     if deadline_options:
         params.update(deadline_options)
         params["max_retries"] = 0
+    from agent.runtime.budget import current_budget
+    from agent.runtime.model_budget import ModelBudgetHandler
+
+    budget = current_budget()
+    if budget is not None:
+        from langchain_core.callbacks.manager import CallbackManager
+
+        params["callbacks"] = CallbackManager.configure(
+            params.get("callbacks"), [ModelBudgetHandler(budget)])
+        params["max_retries"] = 0
     # enable_thinking 是各家自有参数，须走 extra_body（model_kwargs 只接受标准
     # OpenAI 参数）。总开关默认开（settings.llm_enable_thinking，可 LLM_ENABLE_THINKING
     # 覆盖），但图内四个调用均 per-call 显式关闭（见上方注）——关闭是 per-call
