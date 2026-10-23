@@ -358,7 +358,7 @@ def test_golden_reads_hybrid_tool_evidence_without_sse_frames(monkeypatch):
         {"node": "hybrid", "event": "call", "name": "search_notes", "round": 0},
         {"node": "hybrid", "event": "call", "name": "rag_search", "round": 0},
         {"node": "hybrid", "event": "call", "name": "get_article_detail", "round": 1},
-        {"node": "hybrid", "event": "read_tool", "name": "rag_search"},
+        {"node": "hybrid", "event": "tool_result", "name": "rag_search"},
     ])
 
     assert hybrid_read_stats("trace-1") == (

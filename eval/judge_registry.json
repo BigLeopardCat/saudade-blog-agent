@@ -526,10 +526,14 @@
       "agent/approval_api.py": [
         0,
         0
+      ],
+      "agent/domains/browser.py": [
+        3,
+        0
       ]
     },
     "total": [
-      1177,
+      1180,
       4848
     ]
   },

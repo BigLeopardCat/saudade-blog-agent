@@ -121,7 +121,7 @@ flowchart LR
 │   ├── summarizer.py          # 侧任务·摘要：**fail-empty**（与上一行取向相反，刻意不并成一个模块）
 │   ├── reports.py             # 管理助手输出渲染：报表与后台留言名册的纯函数出口（数字在工具侧算好，不让 LLM 数数）
 │   │
-│   ├── 【实验臂族】（只被 eval 与 `GOLDEN_ARM` 动态加载，生产链路不 import ⇒ **模块名是协议值，不许改名**）
+│   ├── 【运行时与领域】（生产混合入口与迁移中的兼容协议）
 │   ├── frame_contract.py              # 帧契约：第二条臂与生产（graph.py / server.py）之间的唯一事实源
 │   ├── runtime/               # 迁移运行时、工具循环和会话生命周期
 │   │   ├── __init__.py        # 空包入口，不隐式加载运行时
@@ -140,6 +140,7 @@ flowchart LR
 │   ├── domains/
 │   │   ├── __init__.py        # 领域包入口，不隐式注册全部业务
 │   │   ├── registry.py        # 已迁移确认领域的显式注册
+│   │   ├── browser.py         # 可逆页面指令、标准工具 artifact 及权限复核
 │   │   ├── admin_writes.py   # 管理员确认准备共用的身份与会话准入
 │   │   ├── article_actions/
 │   │   │   ├── __init__.py   # 文章状态写领域入口

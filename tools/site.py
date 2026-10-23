@@ -3,6 +3,7 @@
 
 import re
 from typing import Annotated, Literal
+from urllib.parse import unquote, urlsplit
 
 from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import tool
@@ -149,22 +150,7 @@ def get_weather(
 # 导航工具
 # ---------------------------------------------------------------------------
 
-# 导航目标白名单（工具层硬校验——本常量是单一事实来源，`agent/workflow_defs/nav_map.py` 的
-# NAV_VALID_PATHS 从这里同源导入，规划侧约束 = NAV_MAP 别名映射 + instantiate_plan
-# 校验 + planner 提示词规则）：模型不可信，工具必须自证。
-# 教训：模型曾把"友链板块"猜成 /links 直接发出去（真实页是 /guestbook）。
-# 后台子页（20260926：转跳要能定位到后台各板块）在这里**逐个列出**，对应
-# `agent/workflow_defs/nav_map.py` 的 DASHBOARD_PANELS（面板名与路径的第二处，
-# 由 tests/test_workflows.py 的两侧覆盖断言锁住同源）。**不放开 `/dashboard/`
-# 前缀**：前缀放行等于让模型自己拼子路径，而前端 /dashboard 下没有通配子路由
-# ——猜出来的路径渲染的是一片空白（不是 NotFound 页），比"拒绝并回真实清单"糟得多。
-# 物联网控制台是**可选件**（`IOT_ENABLED`，见 config/settings.py 与博客仓 `iot/`
-# 目录）。关掉时那个页面在部署侧就不存在了（nginx 不 include、Rust sitemap 不列），
-# 白名单必须同步收口：**放行一个 404 的后果不是"跳过去发现没有"，而是 navigate_to
-# 照常回一句「页面已跳转」——系统替一个不存在的页面背书**，而访客看到的是 SPA
-# 兜底渲染出来的空白页。
-# 路径字面量只此一处：`agent/workflow_defs/nav_map.py` 的 NAV_MAP 从这里的
-# `_NAV_EXACT_PATHS` 同源取名，别在别处再写一遍 `/device-console/`。
+# Exact routes and dynamic route shapes are shared by native and compatibility tools.
 IOT_ENABLED: bool = _settings.iot_enabled
 IOT_NAV_PATH = "/device-console/"
 
@@ -177,44 +163,36 @@ _NAV_EXACT_PATHS = {
 }
 _NAV_PREFIX_PATHS = ("/category/", "/article/")
 
-# **整页目标**：不在 React 路由表里、由 nginx 直服的那几个静态页。前端的站内跳转优先
-# 交给 SPA 桥（`window.__spaNavigate`，路由换页），桥**不接管**的只剩这一类 ⇒ 只能整页
-# 装载，而整页装载会掐断本轮 SSE（Rust 在终止帧才落库、断连的残缺回复被 Drop guard
-# 清掉）⇒ 它们**必须等本条回复说完**才能跳（前端 `chat-stream.js::applyCmd` 的
-# `allowDeferred` 那一格）。事实文本因此必须说"即将跳转"：说"已跳转"就是系统在说它
-# 还没做的事。生产实证 `20261001T230706`——t≈3.2s 印出「页面已跳转：…」、t≈9.4s 页面
-# 才真的动，主人报「声称转跳完成是在转跳前完成…等了一会出现转跳完成文本才转跳」。
-# **判定同源在前端**（以桥的返回值为准），这里是它在服务端这一侧的唯一孪生；改前端
-# SPA 路由表（`src/router/spaNavigate.ts`）时对一眼，当前整站只有这一个。
+# Full-page navigation must wait until the reply has finished streaming.
 _NAV_WHOLE_PAGE_PATHS = {IOT_NAV_PATH} if IOT_ENABLED else set()
 
 
 def nav_pure_path(p: str) -> str:
-    """导航目标 → **页面路径**部分（丢掉 `?…` 与 `#…`）。
-
-    站内"停在某一条内容上"用的是**同一个页面 + 定位参数**（全部形态见下面
-    `_ITEM_POSITION_FORMS`；事实句 `agent.prompt_context._item_link_fact()` 从它渲染）。
-    前端那条链本来就这么认——SPA 桥按 `pathname+search+hash` 换路由，
-    `chat-stream.js` 的 `BLOG_ROUTES` 只拿 `new URL(url).pathname` 比对。
-    """
+    """Extract the path without query or fragment."""
     return str(p or "").split("?", 1)[0].split("#", 1)[0]
 
 
 def nav_path_valid(p: str) -> bool:
-    """这个导航目标是不是站内真实页面。**白名单的单一事实来源就在这个函数里**
-    （`_NAV_EXACT_PATHS` / `_NAV_PREFIX_PATHS` 是它的两个输入）。
-
-    校验只看**路径**（`nav_pure_path`）。此前两处都拿**整串**比对，于是刚写进说明书的
-    两个位置形态里有一个当场被自己的白名单拒掉：`/article/<id>?cid=<cid>` 靠前缀那支
-    侥幸放行，而 `/guestbook?lid=<talkId>` 两头都不沾（`/guestbook` 是**精确**路径，
-    带上 query 后 `p in 表` 为假）⇒ 系统一边教模型填那个形态、一边回它"导航路径无效"。
-    这是"说明书 / 实现 / 执行器三份口径"的老路，两处各写一遍同一个条件就会再走一遍。
-
-    调用方两处（别再加第三处）：`navigate_to`（工具层）、`instantiate_plan`（展开层）。
-    """
-    pure = nav_pure_path(p)
-    return (pure in _NAV_EXACT_PATHS
-            or (pure.startswith(_NAV_PREFIX_PATHS) and pure.count("/") >= 2))
+    """Accept local routes with one dynamic segment; reject URL normalization tricks."""
+    if (not isinstance(p, str) or len(p) > 512 or not p.startswith("/") or p.startswith("//")
+            or any(ord(char) < 33 or char == "\\" for char in p)):
+        return False
+    try:
+        parsed = urlsplit(p)
+        pure = unquote(parsed.path, errors="strict")
+    except ValueError:
+        return False
+    if (parsed.scheme or parsed.netloc
+            or any(ord(char) < 32 or char == "\\" for char in pure)):
+        return False
+    if parsed.path in _NAV_EXACT_PATHS:
+        return True
+    parts = pure.split("/")
+    if len(parts) != 3 or parts[0] or not parts[2] or parts[2] in (".", ".."):
+        return False
+    if parts[1] == "article":
+        return parts[2].isascii() and parts[2].isdigit() and int(parts[2]) > 0
+    return parts[1] == "category"
 
 
 # ---------------------------------------------------------------------------
@@ -254,35 +232,12 @@ def navigate_to(
     confirm: Annotated[bool, "Whether user confirmation is needed. "
                               "false=direct nav, true=ask user"] = True,
 ) -> str:
-    """导航到博客页面。页面跳转只能通过调用本工具生效：系统按本工具的执行回执直接驱动
-    浏览器跳转，**正文里写任何命令文本都不会生效**（写了会被判成假装发命令、整段被替换）。
-    返回文本是给人看的事实（"页面已跳转：<url>"；整页目标如 /device-console/ 是"页面即将
-    跳转：<url>（本条回复说完再跳）"——那类要等本条回复说完才生效），不含任何命令标签。"""
+    """Send a validated navigation command in the execution receipt."""
     p = path.strip()
-    # 白名单校验（`nav_path_valid`：只看路径，`?…` 定位参数随页面一起放行；
-    # /category/*、/article/* 要求至少带一个 id 段，裸前缀不算有效页面）
     if not nav_path_valid(p):
-        # 拒绝时把真实约束回给模型，让它用有效路径重新调用（而不是返回错误命令让前端执行）
-        return (
-            f"导航路径无效: {p!r}。博客真实存在的页面: /（首页）、/about、/guestbook、/talk、"
-            f"/times、/login、/category/*、/article/*、/device-console/、以及后台各面板："
-            f"/dashboard（后台主页）、/dashboard/notes（后台笔记）、"
-            f"/dashboard/comments（后台说说）、/dashboard/albums（后台图库）、"
-            f"/dashboard/announcement（后台公告）、/dashboard/users（后台用户管理）、"
-            f"/dashboard/analytics（后台数据板）、/dashboard/usercontrol（后台站点设置）。"
-            f"请用有效路径重新调用 navigate_to。"
-        )
-    full_url = f"{SITE_BASE}{p}"
-    # 命令与事实分离（20260926）：**连线命令搬进回执**（`meta["cmd"]` → 回执行
-    # `rcpt["cmd"]` → server 发 `__CMD__` 帧 → 前端执行），返回文本只剩**给人看的
-    # 事实**。为什么必须搬：同一根字符串此前既是发给浏览器的命令、又是模型唯一看得见的
-    # "这件事发生过"的凭据，于是"引用回执"与"假装发命令"在字面上是同一个动作——
-    # 模型照抄回执就会被 gate 判成假装发命令（trace 20260926T215115 实证：真跳了、
-    # 却被告知"已经被我拦下啦"）。
-    # 事实文本要**留住人类可读的 URL**（rule 6 的取值锚点），并按 mode 与目标种类区分：
-    # confirm 式**还没跳**（前端等用户点确认），说成"已跳转"就是另一头失真；
-    # 整页目标（见 `_NAV_WHOLE_PAGE_PATHS`）同样还没跳，要等本条回复说完——站内页
-    # 由 SPA 桥当场换路由、陈述与动作同一时刻，这两类的字因此不能共用一套。
+        return (f"导航路径无效: {p!r}。可用页面: {', '.join(sorted(_NAV_EXACT_PATHS))}，"
+                "以及 /article/<正整数编号>、/category/<分类名>；请从站点资料或真实链接核对。")
+    full_url = f"{SITE_BASE.rstrip('/')}{p}"
     mode = "confirm" if confirm else "direct"
     if confirm:
         return ok(f"导航已发起，等主人确认后才会跳转：{full_url}",
