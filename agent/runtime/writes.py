@@ -5,6 +5,7 @@ import json
 import time
 
 from agent import checkpoint, idem
+from agent.runtime import checkpoint_store
 from agent.runtime.read_tools import own_reads_enabled
 from agent.runtime.turns import check_cancelled
 from tools.base import ToolResult, unavailable
@@ -40,9 +41,8 @@ def validate_binding(grant, config):
 def ledger_for(saver):
     from agent import idem_pg
 
-    if not type(saver).__module__.startswith("langgraph.checkpoint.postgres"):
+    if not checkpoint_store.postgres(saver):
         raise RuntimeError("确认操作需要持久化的 PostgreSQL 幂等账")
-    idem_pg.setup(saver.conn)
     return idem_pg.PostgresLedger(saver.conn)
 
 

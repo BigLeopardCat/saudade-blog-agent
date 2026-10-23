@@ -102,8 +102,7 @@ def conversation_turn(saver, config, *, timeout=60):
         yield
         return
     deadline = time.monotonic() + timeout
-    is_postgres = type(saver).__module__.startswith("langgraph.checkpoint.postgres")
-    guard = _postgres_turn if is_postgres else _local_turn
+    guard = _postgres_turn if checkpoint_store.postgres(saver) else _local_turn
     with guard(saver, thread_id, config, deadline):
         if not ((config or {}).get("configurable") or {}).get("allow_deleted_thread"):
             checkpoint_store.require_active(saver, thread_id)

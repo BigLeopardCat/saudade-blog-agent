@@ -376,18 +376,21 @@ _shared_ledger = None
 
 
 def _pg_pool(config):
-    """这一轮的 saver 是不是 PG 的：是 ⇒ 返回它的连接池，不是 ⇒ `None`。
+    """Read the legacy graph's saver and require the configured PostgreSQL pool."""
+    from agent.runtime.checkpoint_store import backend, postgres
 
-    `PostgresSaver` 把池挂在 `.conn` 上；`InMemorySaver` / `MemorySaver` **没有**这个
-    属性（已核实）。判据取"有 `.connection` 方法"而不是"有 `.conn`"——后者对任何
-    恰好叫这个名字的属性都成立，而我们要的是"能借出连接的东西"。
-    """
     try:
         saver = ((config or {}).get("configurable") or {}).get("__pregel_checkpointer")
     except AttributeError:
         return None
-    pool = getattr(saver, "conn", None)
-    return pool if hasattr(pool, "connection") else None
+    if saver is None or backend(saver) == "memory":
+        return None
+    if not postgres(saver):
+        raise RuntimeError("不支持的持久化后端；不能回落到本地账本。")
+    pool = saver.conn
+    if not callable(getattr(pool, "connection", None)):
+        raise RuntimeError("PostgreSQL 幂等账要求连接池；不能回落到本地账本。")
+    return pool
 
 
 def _shared(config=None):
@@ -411,12 +414,6 @@ def _shared(config=None):
     pool = _pg_pool(config)
     if pool is not None:
         from agent import idem_pg     # psycopg 只住那边（依赖面锁：块⑪）
-        # 幂等建表（`CREATE TABLE IF NOT EXISTS`，与 `saver.setup()` 同办 ⇒ 不需要迁移
-        # 脚本）。**每次写都问一遍**是刻意的：多花的是一次目录查询，换来的是"表在不在"
-        # 这件事每次都当场被确认——真被人删了，这次写会被 `unavailable` 拒掉（响亮），
-        # 而不是等 `claim` 抛一个别名的错。缓存它要多一把按池索引的锁/弱集，为一个
-        # 微秒级的开销引入一个新的失效面，不划算。
-        idem_pg.setup(pool)
         return idem_pg.PostgresLedger(pool)
     global _shared_ledger
     with _shared_lock:
