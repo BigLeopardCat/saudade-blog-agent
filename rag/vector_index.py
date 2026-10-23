@@ -235,6 +235,7 @@ def _embed_texts(texts: list[str], space: Space) -> list[list[float] | None]:
                     logger.warning("embedding 单条失败（%s）", one)
                     got.append(None)
         out.extend(got)
+        logger.debug("Embedding progress %d/%d", i + len(batch), len(texts))
     return out
 
 
@@ -271,11 +272,12 @@ def _materialize(pending, values, old_dim: int, requested_dim: int):
     failed: list[str] = []
     adopted = old_dim
     for (key, _), value in zip(pending, values):
-        if not value or not all(math.isfinite(x) for x in value):
+        if not value or not all(math.isfinite(x) for x in value) or not any(value):
             failed.append(key)
             continue
         row = array("f", value)
-        if not all(math.isfinite(x) for x in row) or (requested_dim and len(row) != requested_dim):
+        if (not any(row) or not all(math.isfinite(x) for x in row)
+                or (requested_dim and len(row) != requested_dim)):
             failed.append(key)
             continue
         if adopted and len(row) != adopted:
@@ -476,14 +478,19 @@ class VectorStore:
                         "reused": len(set(keys)), "api_calls": 0}
             return self._update_locked(texts, keys, space, fp)
 
+    def _cache_for_space(self, space, manifest, reset):
+        if reset or Space.from_dict(manifest.get("space") or {}) != space:
+            return {}, 0, {}
+        return self._read_cache()
+
     def _update_locked(self, texts, keys, space, fp, reset=False) -> dict:
         """已经在 flock 里：算差集 → 只嵌缺的 → 原子落盘。
 
         `gen` 是**单调代数**（旧的最大代数 +1），**不是时间戳**：`PRUNE_KEEP_GENS`
         说的是"给最近 N 代留窗"，只有整数代数讲得通。
         """
-        old_keys, old_dim, old_rows = ({}, 0, {}) if reset else self._read_cache()
         m0 = _read_json(self.manifest_path) or {}
+        old_keys, old_dim, old_rows = self._cache_for_space(space, m0, reset)
         retry = set(m0.get("missing") or [])   # 上一轮嵌失败的键：占着零向量行，要重试
         gen = max([int(m0.get("gen") or 0)] + [int(g) for g in old_keys.values()] + [0]) + 1
 
@@ -698,7 +705,8 @@ def embed_query(query: str) -> array | None:
     key = (space, q)
     with _query_lock:
         hit = _query_cache.get(key)
-        if hit is not None and (not dim or len(hit) == dim):
+        if (hit is not None and (not dim or len(hit) == dim)
+                and (not space.dim or len(hit) == space.dim)):
             _query_order.remove(key)
             _query_order.append(key)
             return hit
@@ -707,10 +715,11 @@ def embed_query(query: str) -> array | None:
     except (ValueError, TypeError, IndexError, OverflowError):
         logger.warning("Query embedding failed", exc_info=True)
         return None
-    if not got or not all(math.isfinite(x) for x in got) or (dim and len(got) != dim):
+    if (not got or not any(got) or not all(math.isfinite(x) for x in got)
+            or (dim and len(got) != dim) or (space.dim and len(got) != space.dim)):
         return None
     vec = array("f", got)
-    if not all(math.isfinite(x) for x in vec):
+    if not any(vec) or not all(math.isfinite(x) for x in vec):
         return None
     cap = max(1, int(_settings.embedding_query_cache or 256))
     with _query_lock:

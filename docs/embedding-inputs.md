@@ -110,3 +110,8 @@ API 密钥从 `EMBEDDING_API_KEY` 读取；未设置时只使用临时本地占�
 数为 512/512/416/129，全部成功、missing=0，查询/文档均为 1024 维。
 相同内容第二次更新 embedded=0、API 调用=0。这是功能验证，不能作为检索质量成绩
 或另一台 4 核 4GB 服务器的性能验收。模型服务在验证后停止。
+
+本地 Qwen profile 显式设置 `unicode_normalization="NFC"`，实际 embedding 请求在
+前缀拼接后用标准 Unicode NFC 规范化，保持与官方 tokenizer 一致。原文和源范围保留。
+该字段参与空间签名；默认 `none` 保持已有 profile namespace。
+服务端 token ID 预检与部署说明见 [生产调试手册](rag-production-debug.md)。

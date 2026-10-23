@@ -84,6 +84,7 @@
 | [0016](adr-0016-skill-registry-becomes-config-files.md) | 技能注册表从 Python 字面量改成一条技能一个 TOML 配置（试点域已落地） | 已采纳 |
 | [0017](adr-0017-versioned-rag-evidence.md) | 版本化公开语料、不可变向量代与正文证据约束 | 已采纳 |
 | [0018](adr-0018-embedding-input-budgets.md) | 固定 tokenizer 的完整 embedding 输入预算与空间签名 | 提议中 |
+| [0019](adr-0019-local-embedding-runtime.md) | 本地 embedding 共用成熟运行时、固定资产并保留 API | 提议中 |
 
 ## 相关的、但不算 ADR 的文档
 
