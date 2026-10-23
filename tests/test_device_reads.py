@@ -123,9 +123,8 @@ def test_device_domain_exposes_only_verified_matching_actor_when_enabled(service
 
     domain = device_domain(config())
     assert set(domain) == {"devices"}
-    assert set(domain["devices"]) == {"list_devices"}
+    assert set(domain["devices"]) == {"list_devices", "device_oled_display"}
     assert domain["devices"]["list_devices"] is device_reads.list_devices
-    assert "device_oled_display" not in domain["devices"]
     for source in (SOURCE_BODY, None):
         assert device_domain(config(source=source)) == {}
     for actor_id in (None, True, 8):

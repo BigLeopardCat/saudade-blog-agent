@@ -226,7 +226,6 @@ def _test_tool_result_kinds():
     try:
         out = base._get("/notes")
         via_tool = base.list_notes.invoke({"page": 1, "page_size": 1})
-        via_kb = base.search_knowledge_base.invoke({"query": "x"})
     finally:
         base._client.get = orig_get
 
@@ -270,8 +269,6 @@ def _test_tool_result_kinds():
           "审核通过" in str(absent) and "不是文章 id" in str(absent), str(absent))
     check("工具 .invoke() 透传 kind（LangChain 不吞标记）",
           getattr(via_tool, "kind", None) == "unavailable", getattr(via_tool, "kind", None))
-    check("知识库工具失败也走 unavailable", getattr(via_kb, "kind", None) == "unavailable",
-          getattr(via_kb, "kind", None))
     # ── 批 ⑤-1（20261019）：**失败路径裸返回** ⇒ kind 缺省成 ok ⇒ PASS ⇒ 假回执 ──
     # `execute_node` 那一行是 `getattr(out, "kind", "ok")`：**"没声明"与"声明了 ok"逐字
     # 相同**。于是 `device_oled_display` 的 8 条硬失败此前全判 PASS，回执「屏幕显示「…」」

@@ -41,14 +41,8 @@ __all__ = ["callable_query_tools", "explicit_tools", "param_tools"]
 # PARAMS.tools 点名，instantiate_plan 白名单校验后展开进 TOOLS 行由 execute
 # 确定性执行。仅限无参只读工具（带参检索走下方 _CALLABLE_QUERY_TOOLS 的
 # PARAMS.calls 通道）。
-# 20260913 补齐站点信息/列表类（get_blog_info/get_social_links/get_site_map/
-# get_top_notes/list_categories/list_tags）：此前 22 个注册工具里 9 个 planner
-# 结构上够不到，"作者社交链接/ICP 备案号"这类问题没有数据工具可点名——planner
-# 只能拿 rag_search/search_notes 去绕，而检索索引只有文章正文、对站点元数据零
-# 命中，绕完如实答"站内没有"（20260913 15:51 trace 实证：数据一直在 /social、
-# /user）。刻意不收：search_knowledge_base（/knowledge 端点返回空）、
-# get_chat_history（占位实现，历史由系统注入）——工具本身不可用，进白名单只会
-# 把"查不到"变成默认结局。
+# Public metadata is explicitly available to the compatibility planner; current
+# conversation history is supplied by the native verified read domain.
 # 顺序 = planner 菜单展示顺序（graph._tools_desc 与下方技能描述枚举同源生成）。
 _EXPLICIT_TOOLS_ORDER: list[str] = [
     "list_guestbook", "list_talks", "get_announcements", "get_current_time",

@@ -1,10 +1,10 @@
 {
   "agent/action_text.py": {
-    "lines": 844,
+    "lines": 842,
     "top_defs": 14
   },
   "agent/authz.py": {
-    "lines": 1868,
+    "lines": 1867,
     "top_defs": 38
   },
   "agent/claims.py": {
@@ -100,11 +100,11 @@
     "top_defs": 12
   },
   "tests/test_workflows.py": {
-    "lines": 5830,
+    "lines": 5802,
     "top_defs": 72
   },
   "tools/base.py": {
-    "lines": 1285,
+    "lines": 1283,
     "top_defs": 21
   }
 }

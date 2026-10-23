@@ -238,7 +238,6 @@ from tools.site import (  # noqa: E402,F401
     nav_path_valid,
     nav_pure_path,
     navigate_to,
-    search_knowledge_base,
     toggle_dark_mode,
     toggle_effect,
 )
@@ -1168,7 +1167,6 @@ _TOOL_REGISTRY = [
     get_social_links,
     get_site_map,
     get_chat_history,
-    search_knowledge_base,
     get_current_time,
     get_weather,
     navigate_to,
