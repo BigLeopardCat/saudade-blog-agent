@@ -66,6 +66,7 @@ from datetime import datetime, timedelta, timezone
 # 与 `eval/trace_retention.py::KEEP_DAYS_DEFAULT` 同量级，且**远大于**崩溃恢复窗口
 # （那个窗口是秒级：账行的意义只到"同一个 superstep 的恢复"为止）。
 KEEP_DAYS_DEFAULT = 30
+FENCE_KEEP_DAYS = 30
 
 # 一次最多裁多少条线程（**必须有上限**：第一次跑可能面对几万条陈线程，
 # 一条 DELETE 全干完会把库锁住很久，而这是夜间任务、不需要一口气做完）。
@@ -82,6 +83,7 @@ THREAD_TABLES = ("checkpoints", "checkpoint_blobs", "checkpoint_writes")
 # 幂等账（`agent/idem_pg.py` 的 DDL）。时间列叫 `ts`（`timestamptz NOT NULL DEFAULT now()`）。
 LEDGER_TABLE = "agent_write_idem"
 LEDGER_TS = "ts"
+FENCE_TABLE = "agent_deleted_threads"
 
 # `checkpoint->>'ts'` 的形态：langgraph 写的是 ISO 8601 带时区。**先按形态筛一遍再 cast**：
 # 一条形态不对的行会让 `::timestamptz` 当场报错、把整次盘点打掉；筛过之后它落进
@@ -166,7 +168,19 @@ def scan(conn, cutoff: datetime, max_threads: int = MAX_THREADS_DEFAULT) -> dict
     pl["threads_total"] = len(rows)
     pl["cutoff"] = cutoff
     pl["ledger"] = _ledger_due(conn, cutoff)
+    pl["fence_cutoff"] = min(cutoff, datetime.now(timezone.utc) - timedelta(days=FENCE_KEEP_DAYS))
+    pl["deletion_fences"] = _fences_due(conn, pl["fence_cutoff"])
     return pl
+
+
+def _fences_due(conn, cutoff):
+    if not table_exists(conn, FENCE_TABLE):
+        return {"exists": False, "due": 0}
+    row = conn.execute(
+        "SELECT count(*) FROM agent_deleted_threads WHERE deleted_at < %s", (cutoff,)
+    ).fetchone()
+    count = row[0] if not isinstance(row, dict) else next(iter(row.values()))
+    return {"exists": True, "due": int(count or 0)}
 
 
 def _ledger_due(conn, cutoff: datetime) -> dict:
@@ -190,7 +204,7 @@ def apply_plan(conn, pl: dict) -> dict:
     threads = [r["thread_id"] for r in pl["prune"]]
     cutoff = pl["cutoff"]
     out = {"threads": len(threads), "rows": {}, "ledger": 0, "errors": []}
-    if not threads and not pl["ledger"]["due"]:
+    if not threads and not pl["ledger"]["due"] and not pl.get("deletion_fences", {}).get("due"):
         return out
 
     with conn.transaction():
@@ -202,6 +216,13 @@ def apply_plan(conn, pl: dict) -> dict:
             out["ledger"] = _exec_count(
                 conn, f"DELETE FROM {LEDGER_TABLE} WHERE {LEDGER_TS} < %s", (cutoff,))
         _assert_clean(conn, threads, cutoff, pl["ledger"]["exists"])
+        if pl.get("deletion_fences", {}).get("due"):
+            out["deletion_fences"] = _exec_count(
+                conn, "DELETE FROM agent_deleted_threads WHERE deleted_at < %s",
+                (pl["fence_cutoff"],))
+            if _scalar(conn, "SELECT count(*) FROM agent_deleted_threads WHERE deleted_at < %s",
+                       (pl["fence_cutoff"],)):
+                raise RuntimeError("过期会话删除屏障未清理，事务回滚")
     return out
 
 
@@ -266,6 +287,8 @@ def report(pl: dict, res: dict | None, dsn_shown: str) -> str:
     else:
         lines.append(f"— `{LEDGER_TABLE}` 在这个库里**不存在**（图从没在挂 saver 的进程里"
                      "做过写操作）⇒ 账这一路本轮无事可做")
+    if pl.get("deletion_fences", {}).get("exists"):
+        lines.append(f"{'已裁' if res else '将裁'}过期删除屏障 {pl['deletion_fences']['due']} 行")
     if pl["prune"]:
         lines.append(f"{'已裁' if res else '将裁'}线程（从老到新，最多列 10 条）：")
         for r in pl["prune"][:10]:

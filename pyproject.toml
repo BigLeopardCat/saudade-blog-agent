@@ -61,21 +61,8 @@ dependencies = [
     "langchain-core==1.4.8",
     "langchain-openai==1.3.3",
     "langgraph==1.2.7",
-    # checkpoint 后端（ADR-0011，20261018 采纳落地）。**不给 `CHECKPOINT_DSN` 时一次
-    # 都不会被 import**：`agent/checkpoint.py` 只在真给 DSN 时才 `importlib` 探一下模块
-    # 在不在 ⇒ 没配的环境里装上它们不改变任何行为。配了就真走这条路
-    # （`server._build_arm()` 的 `create_agent(checkpointer=…)`，见 `agent/checkpoint.py`
-    # 头注的"三处一起动"）。
-    # 归**运行时**而不是 dev 组，判据与上面那句"名单 = 代码里真的 import 了什么"同源：
-    # `agent/idem_pg.py` 与 `agent/checkpoint_arm.py` 都是 `agent/` 包里的模块、都**顶层**
-    # import 它们（`psycopg` / `langgraph.checkpoint.postgres`）。dev 组的先例（`langchain`）
-    # 是"只有实验线与它的单测用得到"，这里不是。
-    # `psycopg[binary]`：装自带 libpq 的那一档（本机 `ldconfig` 里有 `libpq.so.5`，但自建
-    # 部署的机器未必有，而"缺 libpq"要到真连库那一刻才炸）——与 `/home/ubuntu/exp/pydeps`
-    # 里那套**对着真 PG 跑过**的组合同版（实测跑过的是这一套，不是纯 Python 那档）。
-    # ⚠️ `langgraph-checkpoint-postgres` 要求 `langgraph-checkpoint>=4.1.0`，lock 里已经
-    # 正好是 4.1.1、`orjson` 也在 ⇒ 这三行**不牵动任何既有版本**，lock 的 diff 只有新增。
-    "langgraph-checkpoint-postgres==3.1.0",
+    # 原生 checkpoint 持久化与恢复安全的快照裁剪。
+    "langgraph-checkpoint-postgres==3.2.0",
     "openai==2.44.0",
     "psycopg[binary]==3.3.6",
     "psycopg-pool==3.3.3",

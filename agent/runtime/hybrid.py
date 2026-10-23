@@ -22,7 +22,7 @@ from agent.domains.notifications import preparation as notification_preparation
 from agent.domains.registry import confirmed_domain
 from agent.principal import ADMIN_ROLES, CHAT_ONLY_ROLES
 from agent.prompts import BLOG_PERSONA_PROMPT
-from agent.runtime import memory
+from agent.runtime import checkpoint_store, memory
 from agent.runtime.admin_domains import domains as admin_domains
 from agent.runtime.context import conversation_context
 from agent.runtime.pending import restore as restore_pending
@@ -137,7 +137,13 @@ class HybridArm:
                 from agent.checkpoint import thread_is_resuming
                 config = {**(config or {}), "configurable": {
                     **cfg, "idem_resuming": thread_is_resuming(self.legacy, cfg.get("thread_id"))}}
-            yield from self._stream(state, config, stream_mode=stream_mode, **kwargs)
+            try:
+                yield from self._stream(state, config, stream_mode=stream_mode, **kwargs)
+            finally:
+                saver = getattr(self.legacy, "checkpointer", None)
+                thread_id = ((config or {}).get("configurable") or {}).get("thread_id")
+                if saver is not None and thread_id:
+                    checkpoint_store.prune(saver, thread_id)
 
     def _stream(self, state, config, *, stream_mode=None, **kwargs):
         check_cancelled(config)
@@ -236,13 +242,15 @@ class HybridArm:
             check_cancelled(config)
             from agent.graph import graph_input
             principal = ((config or {}).get("configurable") or {}).get("principal")
-            saved = graph_input(memory.turn_messages(
-                state.get("messages") or [], observations, reply, principal))
+            previous = self.legacy.get_state(config).values or {}
+            current = memory.turn_messages(
+                state.get("messages") or [], observations, reply, principal)
+            saved = graph_input(memory.checkpoint_messages(previous.get("messages") or [], current))
             saved.update(retained or {})
             saved.update(execution or {})
             saved["done"] = True
             self.legacy.update_state(config, saved, as_node="gate")
-            record("hybrid", "checkpoint_write", messages=len(saved["messages"]))
+            record("hybrid", "checkpoint_write", messages=len(saved["messages"]) - 1)
         if execution is not None:
             yield "updates", {"execute": execution}
         record("hybrid", "direct_reply", chars=len(reply))
