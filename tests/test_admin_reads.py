@@ -74,7 +74,7 @@ def test_private_tool_cannot_run_even_if_accidentally_included_in_menu(cfg, monk
     monkeypatch.setattr(settings, "authz_enforce", False)
     tool = LocalTool()
     session = ToolSession(Model(), cfg, {tool.name: tool}, {})
-    assert session._read(tool.name, {}) is None
+    assert session._invoke_tool(tool.name, {}) is None
     assert not tool.calls
 
 
@@ -83,7 +83,7 @@ def test_permission_is_checked_again_after_domain_discovery(monkeypatch):
     session = ToolSession(Model(), config(), {tool.name: tool}, {})
     monkeypatch.setattr("agent.runtime.session.check", lambda *args: authz.Decision(
         False, "denied", authz.SCOPE_ADMIN_CONSOLE, tool.name))
-    assert session._read(tool.name, {}) is None
+    assert session._invoke_tool(tool.name, {}) is None
     assert not tool.calls
 
 
@@ -91,7 +91,7 @@ def test_read_loop_never_executes_a_registered_write_tool():
     tool = LocalTool()
     tool.name = "set_article_status"
     session = ToolSession(Model(), config(), {tool.name: tool}, {})
-    assert session._read(tool.name, {"note_id": 19, "status": 0}) is None
+    assert session._invoke_tool(tool.name, {"note_id": 19, "status": 0}) is None
     assert not tool.calls
 
 
@@ -149,7 +149,7 @@ def test_real_statistics_tool_uses_actor_identity_and_preserves_api_failure(monk
     with httpx.Client(transport=httpx.MockTransport(handle)) as client:
         monkeypatch.setattr(base, "_client", client)
         session = ToolSession(Model(), config(user_id=7), admin_tools(), {})
-        result = session._read("get_user_stats", {})
+        result = session._invoke_tool("get_user_stats", {})
     assert len(requests) == 1
     assert result.kind == ("ok" if status == 200 else "unavailable")
     if status == 200:

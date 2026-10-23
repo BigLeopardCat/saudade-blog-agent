@@ -1,55 +1,7 @@
-"""「带我去某条评论/某条留言的位置」：**事实供给**、**参数通道**、**取值通道**三样必须成对。
-
-**病**（主人报的原文：「意图明显是去对应评论位置，第一次带到了留言板。还不能转跳评论
-对应位置了，是给的URL不对吗，但是我记得以前是可以带过去的」，次日又一条：
-「带我去看看我已经通过的留言」）。同一条会话连着两天七步全落空
-（trace `20261008T023344 / 023427 / 023503 / 023532 / 024742`）：
-
-  ① 「带我去评论那里看一下」⇒ 跳 `/guestbook`（**留言板**）。「评论」在 `NAV_MAP` 里
-     没有任何别名，模型自己挑了个最像的页面；
-  ② 「你这不对啊…」⇒ `get_site_map` → chat，如实承认"站内没有独立的评论页"、反问是哪篇；
-  ③ 「我就是说的带我去回复我评论的位置」⇒ 只跳 `/article/54`（**到了文章、没到位置**）；
-  ④ 「定位到对应评论位置啊」⇒ `navigate_to({"path": "/article/54#comment"})`，**位置是
-     编的**，而正文宣称「打开就直接停在评论位置」——`#comment` 站内从来不存在；
-  ⑤ 次日「带我去看看我已经通过的留言」⇒ `list_guestbook` **连点两次** → 数据重复拦截
-     → 收尾轮 narrator 编出"已经带你过去了"（gate 的到达声称核验拦下）。
-
-**取值一直都在**：③ 之前那一轮 `get_unread_summary` 的原样返回里就躺着
-`'link': '/article/54?cid=9'`（站内通知的「查看」链接，`src/routes/comments.rs:286` 生成，
-前端 `CommentSection` 读 `?cid=` → 滚到 `#c-<cid>` 并加高亮）。所以缺的不是取值，
-是**"那条 link 就是位置"这条知识**（同族：`saudade-agent-referent-nav-channel` 的
-「看得见 ≠ 有入口」）。而 ⑤ 缺的是另一半——**读通道**：公开池恒 `Approved=1`，
-"我自己放的全部（含待审/未通过）"在那边读不出来，且公开池每行的 `mine` 结构上恒假。
-
-三半，缺一不可：
-
-  ① **供给**（`agent/prompt_context.py::_item_link_fact()`，经 `site_guide()`）：评论没有
-     独立页面、评论长在文章正文下方、站内定到**某一条**内容有哪几个形态（**从
-     `tools.base._ITEM_POSITION_FORMS` 渲染**：评论 `?cid=` / 河灯留言 `?lid=` /
-     说说 `?tk=`）、文章页上的 `#…` 是**阅读进度锚点**不是评论位置。它进的是 planner 与
-     narrator **共用**的那份页面上下文（`_attach_page_guide`），且**无条件**（不按 URL
-     分档——实测出问题那几轮里有一轮就在首页）。
-  ② **参数通道**（`agent/workflow_defs/` 的 `navigate.inputs["target"]`）：这一格能填**字面路径**，
-     要停在某一条内容上就填上面那两个形态。只写不放行 = 空承诺；只放行不写 = 让模型猜。
-     **20261008 抓到的那一处**：`navigate_to` 的白名单拿**整串**比对
-     （`p in _NAV_EXACT_PATHS`），`/guestbook?lid=…` 带上 query 后精确表里就没有它了
-     ⇒ 系统一边教模型填这个形态、一边回它「导航路径无效」。现在两处共用
-     `tools/base.py::nav_path_valid`（校验只看路径，`?…` 定位参数随页面一起放行），
-     §④ 后半锁的就是这条"单一事实来源"。
-  ③ **取值通道**（`tools/base.py::list_my_board` + `entities._my_board_digest`）：
-     「我哪条留言通过了」读得出来，且那一行里的 `talkId` 就是 `?lid=` 要填的值
-     （`_FRAME_ID_KEYS` 把上游的 `talkKey` 改名为 `talkId`，`_shape()` 是唯一出口）。
-
-第 ⑤节是**反向锁**：不许把「评论」加进 `NAV_MAP` 当别名——评论不是独立页面，给它一个
-别名等于把"带去留言板"写进系统数据（那正是第 ① 步的成因）。
-
-第 ⑥节是**单一事实来源锁**：形态表逐行白名单自检 + 事实句必须是渲染来的（不许再手写
-条数——「站内只有两个形态」正是一句可抄的错句）。
-
-秒级、纯离线、无网络无 LLM；由 pytest 按目录收集自动纳入（push 时 eval.yml 跑）。
-"""
+"""Verify source-backed item links, parameter binding and actual navigation routes."""
 
 
+import re
 import sys
 from pathlib import Path
 
@@ -73,7 +25,6 @@ from tools.base import (  # noqa: E402
     _NAV_EXACT_PATHS,
     _NAV_PREFIX_PATHS,
     get_all_tools,
-    list_my_board,
     nav_path_valid,
     nav_pure_path,
     navigate_to,
@@ -221,7 +172,7 @@ def _test_lid_value_has_a_read_channel():
         {"talkId": 108, "content": "还没过审的那条", "cat": "忆", "approved": 0},
         {"talkId": 107, "content": "被驳回的那条", "cat": "愿", "approved": 2},
     ])
-    check(f"摘要带着 talkId（下一轮零工具取值）", "109" in digest and "talkId" in digest, digest)
+    check("摘要带着 talkId（下一轮零工具取值）", "109" in digest and "talkId" in digest, digest)
     for word in ("通过", "待审", "未通过"):
         check(f"摘要里逐字带着「{word}」（三种审核态各一个词，不合并）", word in digest)
     check("三态不塌成一个词（「未通过」不许被读成「待审」）",
@@ -250,8 +201,11 @@ def _test_forms_table_is_the_single_source():
           len(FORMS) >= 3 and all(len(r) == 3 for r in FORMS), f"{len(FORMS)} 行")
     seen: set[str] = set()
     for what, form, src in FORMS:
-        check(f"[{what}] ★ 教给模型的形态串**真的**过白名单（教一个跳不动的形态 = 空承诺）",
-              nav_path_valid(form), form)
+        example = re.sub(r"<[^>]+>", "1", form)
+        check(f"[{what}] 形态代入真实编号后可导航",
+              nav_path_valid(example), example)
+        check(f"[{what}] 未绑定参数的模板不能当成真实导航目标",
+              not nav_path_valid(form), form)
         check(f"[{what}] 形态带查询参数（定位形态必须有 `?`）", "?" in form, form)
         check(f"[{what}] 形态串逐字进了事实句（渲染，不是另写一份）", form in fact)
         check(f"[{what}] 取值来源那句也进了事实句", src in fact)
@@ -264,7 +218,7 @@ def _test_forms_table_is_the_single_source():
     # 每一类都得在白名单里有一个**页面**落脚（定位参数挂在真页面上）
     for what, form, _ in FORMS:
         check(f"[{what}] 形态的页面在导航白名单里（不是凭空造的页面）",
-              nav_path_valid(nav_pure_path(form)))
+              nav_path_valid(nav_pure_path(re.sub(r"<[^>]+>", "1", form))))
 
 
 def main() -> int:

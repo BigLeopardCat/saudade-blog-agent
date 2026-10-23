@@ -56,7 +56,7 @@ def test_repeated_invalid_requests_exhaust_the_existing_round_budget():
     model = Model([call("invented") for _ in range(5)])
     read = Read()
     session = ToolSession(model, {}, {read.name: read}, {})
-    assert "已停止继续查询" in session.run([HumanMessage(content="查询作者")]).reply
+    assert "已停止继续处理" in session.run([HumanMessage(content="查询作者")]).reply
     assert len(model.prompts) == 5 and read.calls == 0
 
 
@@ -72,7 +72,7 @@ def test_loading_and_reading_in_one_batch_cannot_bypass_the_read_limit():
     calls += [{"name": read.name, "args": {}, "id": f"read_{i}"} for i in range(5)]
     model = Model([AIMessage(content="", tool_calls=calls)])
     session = ToolSession(model, {}, {}, {"site": {read.name: read}})
-    assert "已停止继续查询" in session.run([HumanMessage(content="查询作者")]).reply
+    assert "已停止继续处理" in session.run([HumanMessage(content="查询作者")]).reply
     assert read.calls == 4
 
 
@@ -86,7 +86,7 @@ def test_exhausted_result_budget_stops_before_another_read():
     calls = [{"name": read.name, "args": {}, "id": f"read_{i}"} for i in range(3)]
     model = Model([AIMessage(content="", tool_calls=calls)])
     session = ToolSession(model, {}, {read.name: read}, {})
-    assert "已停止继续查询" in session.run([HumanMessage(content="查询作者")]).reply
+    assert "已停止继续处理" in session.run([HumanMessage(content="查询作者")]).reply
     assert read.calls == 2
 
 
@@ -100,5 +100,5 @@ def test_budget_stop_never_restarts_the_request_in_the_legacy_planner(monkeypatc
     model = Model([call("invented") for _ in range(5)])
     monkeypatch.setattr("agent.runtime.hybrid.get_llm", lambda **kwargs: model)
     events = list(HybridArm(Legacy()).stream({"messages": [HumanMessage(content="查询作者")]}, {}))
-    assert "已停止继续查询" in events[1][1]["model"]["messages"][0].content
+    assert "已停止继续处理" in events[1][1]["model"]["messages"][0].content
     assert len(model.prompts) == 5

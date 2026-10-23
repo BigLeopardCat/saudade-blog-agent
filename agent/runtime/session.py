@@ -12,6 +12,7 @@ from langchain_core.tools import ToolException
 
 from agent.article_evidence import ArticleEvidence
 from agent.authz import SCOPE_ADMIN_CONSOLE, SCOPE_READ_OWN, TOOL_SCOPE, WRITE_SCOPES, check
+from agent.domains import browser
 from agent.llm_usage import usage_fields
 from agent.runtime import memory
 from agent.runtime.read_tools import scoped_reads_enabled
@@ -22,8 +23,8 @@ from utils import trace as trace_mod
 from utils.trace import record
 
 MAX_PROMPT_CHARS = 24000
-_MAX_READ_CALLS = 4
-_MAX_READ_ROUNDS = 4
+_MAX_TOOL_CALLS = 4
+_MAX_TOOL_ROUNDS = 4
 _MAX_RESULT_CHARS = 8000
 _MAX_TOTAL_RESULT_CHARS = 16000
 
@@ -55,7 +56,7 @@ _DOMAIN_DESCRIPTIONS = {
                         "仅管理员可用；可准备指定留言或评论的通过、驳回、删除确认，准备不写入。",
     "admin_reports": "Load administrator-only server health, user statistics and article traffic "
                      "reports. Read-only; does not change site data or service state.",
-    "site": "按需加载博客作者信息、社交链接和站点功能结构的公开读取工具。",
+    "site": "读取博客作者信息、社交链接和站点功能结构；身份获授权时还可跳转页面、设置主题和特效。",
     "favorites": "按需加载本人收藏读取与可用的收藏变更确认工具；确认准备不写入。",
     "notifications": "按需加载本人通知读取与可用的已读确认工具；查看不代表标记已读。",
     "messages": "按需加载本人信件摘要、单封正文与可用的收件箱已读确认工具；查看不标记已读。",
@@ -86,6 +87,7 @@ class ToolSession:
         self.outcome: TurnResult | None = None
         self.outcome_adapter = outcome_adapter
         self.observations = []
+        self.receipts = []
         self.article_evidence = ArticleEvidence()
         self.llm = self._bind_menu()
 
@@ -96,17 +98,30 @@ class ToolSession:
                                      parallel_tool_calls=False)
 
     def _handoff(self, reason, **data):
+        if self.receipts:
+            record("hybrid", "handoff_stopped", reason=reason, **data)
+            return self._result("页面指令已发送；其余请求尚未完成，请继续指定要处理的事项。")
         record("hybrid", "legacy_handoff", reason=reason, **data)
         return None
 
+    def _result(self, reply):
+        return self._with_receipts(TurnResult(reply))
+
+    def _with_receipts(self, result):
+        if not self.receipts:
+            return result
+        execution = result.execution or {}
+        return TurnResult(result.reply, {**execution, "receipts": [
+            *self.receipts, *(execution.get("receipts") or [])]})
+
     def _budget_stop(self, reason, **data):
         record("hybrid", "budget_stop", reason=reason, **data)
-        self.outcome = TurnResult("本轮查询已达到读取或上下文上限，已停止继续查询。"
-                                  "请缩小查询范围后再试。")
+        self.outcome = self._result("本轮操作已达到调用或上下文上限，已停止继续处理。"
+                                    "请缩小请求范围后再试。")
         return self.outcome
 
     def _accept_calls(self, calls, round_index):
-        if round_index >= _MAX_READ_ROUNDS:
+        if round_index >= _MAX_TOOL_ROUNDS:
             return "call_budget"
         for call in calls:
             if (not isinstance(call, dict) or not isinstance(call.get("name"), str)
@@ -118,8 +133,8 @@ class ToolSession:
         if len(calls) > 1 and any(getattr(self.tools.get(call.get("name")), "return_direct", False)
                                   for call in calls):
             return "parallel_terminal_calls"
-        reads = sum(call.get("name") in self.tools for call in calls)
-        if self.calls_used + reads > _MAX_READ_CALLS:
+        tool_count = sum(call.get("name") in self.tools for call in calls)
+        if self.calls_used + tool_count > _MAX_TOOL_CALLS:
             return "call_budget"
         return None
 
@@ -132,21 +147,23 @@ class ToolSession:
         record("hybrid", "tool_error", name=call["name"], reason=reason)
         return True
 
-    def _read(self, name, args):
+    def _invoke_tool(self, name, args, call=None):
         scope = TOOL_SCOPE.get(name)
         if scope in WRITE_SCOPES:
-            record("hybrid", "read_denied", name=name)
+            record("hybrid", "tool_denied", name=name)
             return None
         if scope in (SCOPE_READ_OWN, SCOPE_ADMIN_CONSOLE):
             uid = ((self.config or {}).get("configurable") or {}).get("user_id")
             if (not scoped_reads_enabled(self.principal, scope, uid)
                     or not check(self.principal, name).allowed):
-                record("hybrid", "read_denied", name=name)
+                record("hybrid", "tool_denied", name=name)
                 return None
         try:
+            if getattr(self.tools[name], "response_format", None) == "content_and_artifact":
+                return self.tools[name].invoke({**call, "type": "tool_call"}, config=self.config)
             return self.tools[name].invoke(args, config=self.config)
         except (ToolException, ValueError) as exc:
-            record("hybrid", "read_error", name=name, error=type(exc).__name__)
+            record("hybrid", "tool_failed", name=name, error=type(exc).__name__)
             return unavailable(f"{name} 调用失败（{type(exc).__name__}），请如实说明。")
 
     def _append_result(self, call, prompt, round_index):
@@ -165,17 +182,18 @@ class ToolSession:
             return True
         if name not in self.tools:
             return self._tool_error(call, prompt, "unknown_tool")
-        if self.calls_used >= _MAX_READ_CALLS:
-            self._budget_stop("call_budget", read_calls=self.calls_used)
+        if self.calls_used >= _MAX_TOOL_CALLS:
+            self._budget_stop("call_budget", tool_calls=self.calls_used)
             return False
         if self.result_chars >= _MAX_TOTAL_RESULT_CHARS:
             self._budget_stop("result_budget")
             return False
         args = call["args"]
-        body = self._read(name, args)
+        body = self._invoke_tool(name, args, call)
         if isinstance(body, TurnResult):
             # Confirmation tokens stay in the terminal outcome, never in the model prompt or trace.
-            self.outcome = self.outcome_adapter(body) if self.outcome_adapter else body
+            adapted = self.outcome_adapter(body) if self.outcome_adapter else body
+            self.outcome = self._with_receipts(adapted)
             execution = self.outcome.execution or {}
             kind = ("prepared" if execution.get("pending_confirm") else
                     "noop" if execution.get("noop_note") else
@@ -185,10 +203,16 @@ class ToolSession:
         if body is None:
             prompt.append(ToolMessage(content="无权读取此数据。", tool_call_id=call["id"]))
             return True
-        kind = getattr(body, "kind", "unknown")
+        message = body if isinstance(body, ToolMessage) else None
+        artifact = message.artifact if message and isinstance(message.artifact, dict) else {}
+        if artifact.get("receipts"):
+            if not browser.authorized(self.config, name):
+                raise RuntimeError("Only authorized browser tools may issue page receipts")
+            self.receipts.extend(artifact["receipts"])
+        kind = artifact.get("kind", "unknown") if message else getattr(body, "kind", "unknown")
         self.observations.extend(memory.observation(call, body))
         evidence_value = body
-        body = str(body)
+        body = str(message.content) if message else str(body)
         remaining = _MAX_TOTAL_RESULT_CHARS - self.result_chars
         limit = min(_MAX_RESULT_CHARS, remaining)
         if name == "get_article_detail":
@@ -200,12 +224,13 @@ class ToolSession:
             marker = "\n[结果截断，请缩小检索范围]"
             body = body[:max(0, limit - len(marker))] + marker
         self.article_evidence.observe(name, args, evidence_value)
-        prompt.append(ToolMessage(content=body, tool_call_id=call["id"]))
+        prompt.append(message.model_copy(update={"content": body}) if message else
+                      ToolMessage(content=body, tool_call_id=call["id"]))
         self.result_chars += len(body)
         self.calls_used += 1
         record("hybrid", "call", name=name, args=args, round=round_index,
                kind=kind, result=trace_mod.tool_result_text(body, name))
-        record("hybrid", "read_tool", name=name, result_chars=len(body))
+        record("hybrid", "tool_result", name=name, result_chars=len(body))
         return True
 
     def _restore_domains(self, prompt):
@@ -222,7 +247,7 @@ class ToolSession:
 
     def run(self, prompt):
         self._restore_domains(prompt)
-        for round_index in range(_MAX_READ_ROUNDS + 1):
+        for round_index in range(_MAX_TOOL_ROUNDS + 1):
             check_cancelled(self.config)
             prompt_chars = sum(len(str(message.content)) for message in prompt)
             if prompt_chars > MAX_PROMPT_CHARS:
@@ -241,20 +266,20 @@ class ToolSession:
                 from tools.base import SITE_BASE
                 issue = self.article_evidence.issue(reply, SITE_BASE)
                 if issue:
-                    return self._handoff(issue, read_calls=self.calls_used)
+                    return self._handoff(issue, tool_calls=self.calls_used)
                 if self.article_evidence.searched and not self.article_evidence.documents:
                     if self.article_evidence.failed and not self.article_evidence.found:
-                        return TurnResult("文章检索暂时不可用，当前无法核实文章内容。")
+                        return self._result("文章检索暂时不可用，当前无法核实文章内容。")
                     if self.article_evidence.empty and not self.article_evidence.found:
-                        return TurnResult("暂未从公开文章中检索到相关资料。")
+                        return self._result("暂未从公开文章中检索到相关资料。")
                 reply = self.article_evidence.sources(reply, SITE_BASE)
-                return TurnResult(reply) if reply else self._handoff(
-                    "empty", read_calls=self.calls_used)
+                return self._result(reply) if reply else self._handoff(
+                    "empty", tool_calls=self.calls_used)
             reason = self._accept_calls(calls, round_index)
             if reason:
                 if reason == "call_budget":
-                    return self._budget_stop(reason, read_calls=self.calls_used)
-                return self._handoff(reason, read_calls=self.calls_used)
+                    return self._budget_stop(reason, tool_calls=self.calls_used)
+                return self._handoff(reason, tool_calls=self.calls_used)
             prompt.append(response)
             for call in calls:
                 check_cancelled(self.config)
@@ -262,4 +287,4 @@ class ToolSession:
                     return self.outcome
                 if self.outcome is not None:
                     return self.outcome
-        return self._handoff("empty", read_calls=self.calls_used)
+        return self._handoff("empty", tool_calls=self.calls_used)

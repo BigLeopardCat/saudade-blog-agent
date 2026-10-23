@@ -2,7 +2,7 @@
 
 This is a capability boundary: adding a tool here changes what the model can
 read directly. Private reads require verified identity and a runtime scope
-check. Writes use separate domain confirmation tools; browser commands remain in the legacy path.
+check. Writes use separate domain confirmation tools; browser commands have their own scope checks.
 """
 
 from agent.authz import SCOPE_ADMIN_CONSOLE, SCOPE_READ_OWN, SCOPE_READ_PUBLIC, TOOL_SCOPE, holds

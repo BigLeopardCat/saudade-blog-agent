@@ -14,6 +14,7 @@ from langchain_core.messages.utils import count_tokens_approximately
 from langgraph.graph.message import REMOVE_ALL_MESSAGES
 
 from agent.authz import SCOPE_ADMIN_CONSOLE, SCOPE_READ_OWN, TOOL_SCOPE, check, holds
+from agent.domains import browser
 from agent.principal import ADMIN_ROLES, SOURCE_ASSERTION
 
 HISTORY_TOKENS = 1800
@@ -55,6 +56,8 @@ def _allowed(turn, principal):
             if actor.get("role") in ADMIN_ROLES and not holds(principal, SCOPE_ADMIN_CONSOLE):
                 return False
         if isinstance(message, ToolMessage):
+            if browser.history_allowed(principal, message.name):
+                continue
             if (TOOL_SCOPE.get(message.name or "") in (SCOPE_ADMIN_CONSOLE, SCOPE_READ_OWN)
                     and getattr(principal, "source", None) != SOURCE_ASSERTION):
                 return False
@@ -103,6 +106,13 @@ def checkpoint_messages(previous, current):
 
 def observation(call, result):
     """Keep the source tool call paired with a bounded historical excerpt."""
+    if isinstance(result, ToolMessage):
+        artifact = result.artifact if isinstance(result.artifact, dict) else {}
+        if result.status != "success" or artifact.get("kind") != "ok":
+            return []
+        body = str(result.content)[:OBSERVATION_CHARS]
+        return [AIMessage(content="", tool_calls=[call]), result.model_copy(update={
+            "content": body, "artifact": {"kind": "ok"}})]
     if getattr(result, "kind", None) not in ("ok", "empty", "not_found"):
         return []
     body = str(result)

@@ -16,6 +16,7 @@ from langchain_core.messages import (
     SystemMessage,
 )
 
+from agent.domains import browser
 from agent.domains.favorites import preparation as favorite_preparation
 from agent.domains.messages import preparation as message_preparation
 from agent.domains.notifications import preparation as notification_preparation
@@ -222,7 +223,8 @@ class HybridArm:
 
     def _domains(self, config, can_bridge, pending):
         cfg = (config or {}).get("configurable") or {}
-        domains = {"site": self.site_read_tools, **public_domains(), **device_domain(config)}
+        domains = {"site": {**self.site_read_tools, **browser.tools(config)},
+                   **public_domains(), **device_domain(config)}
         domains.update(admin_domains(config, can_bridge, {
             "admin_reports": self.admin_read_tools,
             "admin_moderation": self.moderation_read_tools,
