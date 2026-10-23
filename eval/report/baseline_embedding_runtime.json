@@ -1,0 +1,70 @@
+{
+  "runtime_tag": "b11829",
+  "runtime_commit": "184f6536024668e8908ab8c86033d56708e62b40",
+  "hardware_scope": "development VM: 2 vCPU, 2468 MiB RAM, no AVX2; not target 4-core 4GB",
+  "measurements": {
+    "bge-q8": {
+      "rss_kib": 63648,
+      "pss_kib": 59579,
+      "scope": "one post-build process snapshot, not peak",
+      "oversize_513_tokens_http_status": 500,
+      "tokenizer_parity": [
+        true,
+        true,
+        true,
+        true,
+        true
+      ]
+    },
+    "bge-f16": {
+      "rss_kib": 80732,
+      "pss_kib": 76301,
+      "scope": "one post-build process snapshot, not peak",
+      "probe": {
+        "ok": true,
+        "model": "bge-small-zh-v1.5-f16",
+        "expected_dimensions": 512,
+        "returned_dimensions": [
+          512,
+          512
+        ],
+        "input_tokens": [
+          30,
+          22
+        ],
+        "tokenizer_parity": [
+          true,
+          true,
+          true,
+          true,
+          true
+        ]
+      }
+    },
+    "qwen-q8": {
+      "rss_kib": 593520,
+      "pss_kib": 585672,
+      "scope": "one during-build process snapshot, not peak",
+      "probe": {
+        "ok": true,
+        "model": "qwen3-embedding-0.6b-q8_0",
+        "expected_dimensions": 1024,
+        "returned_dimensions": [
+          1024,
+          1024
+        ],
+        "input_tokens": [
+          27,
+          16
+        ],
+        "tokenizer_parity": [
+          true,
+          true,
+          true,
+          true,
+          true
+        ]
+      }
+    }
+  }
+}
