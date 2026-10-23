@@ -25,6 +25,13 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Widget Markdown security regression
+        run: node --test frontend/tests/*.test.mjs
+
       - name: Setup uv
         uses: astral-sh/setup-uv@v5
         with:

@@ -2,9 +2,8 @@
 
 ## 为什么这条测试存在
 
-贴纸的渲染契约是**两个冒号**：两个渲染器（看板娘 fallback
-`frontend/public/live2d-widgets/chat-render.js`、站内 markdown 插件
-父仓 `frontend/src/utils/stickers.ts`）都用同一条正则 `/:([^:\\s]{1,12}):/g`，未命中就按
+贴纸的渲染契约是**两个冒号**：看板娘复用站内安全 markdown 渲染器，
+名字清单位于父仓 `frontend/src/utils/stickers.ts`，使用正则 `/:([^:\\s]{1,12}):/g`，未命中就按
 "原样保留成文本"处理。模型偶尔写残——实测 `logs/agent/traces/20261002/`：
 `20261002T211008_5_r97d4db1.json`「…麻烦呢～ :头疼\n\n虽然…」、
 `20261002T212117_5_r8eb7dfd.json`「…耐心吗～ :生气\n\n我现在…」（同一会话上一轮
@@ -18,7 +17,7 @@
      ——一个字都不许动（这几条是"宁漏勿误伤"的具体形状，放宽任何一条都会把正文改坏）；
   ③ **接线**：`model_node` 返回给下游的那条 AIMessage 已经是补好的（gate 与流式读的都是
      它），且只在真补过时才留 trace 事件；
-  ④ **三处同步**：名字清单在 agent 侧一份、前端两处各一份，逐处核对（这是"人工同步"那类
+  ④ **两处同步**：名字清单在 agent 侧一份、宿主前端一份，逐处核对（这是"人工同步"那类
      缺陷里为数不多能机器化的地方——清单就在两个文件的字面量里）。
 
 无网络 / 无 LLM：`get_llm` 换成脚本假 LLM，直接调**真的** `model_node`。
@@ -146,17 +145,7 @@ def _test_model_node_wiring():
 
 
 def _test_name_list_sync():
-    print("\n④ 名字清单三处同步（agent 一份 + 前端两处字面量）")
-    js = (ROOT / "frontend" / "public" / "live2d-widgets" / "chat-render.js")
-    if js.is_file():
-        src = js.read_text(encoding="utf-8")
-        block = src.split("const STICKERS = {", 1)
-        names = set(re.findall(r"([一-鿿]{1,4}):\s*'/stickers/",
-                               block[1].split("};", 1)[0])) if len(block) > 1 else set()
-        check("看板娘 fallback 渲染器（本仓）的清单与 STICKER_NAMES 一致",
-              names == set(STICKER_NAMES), f"{sorted(names)} vs {list(STICKER_NAMES)}")
-    else:
-        check("看板娘 fallback 渲染器在位（名字清单的第二个落点）", False, str(js))
+    print("\n④ 名字清单同步（agent 与宿主安全渲染器）")
     ts = _parent_repo.read(
         "frontend/src/utils/stickers.ts",
         why="本契约的**第一份**清单：站内 markdown 插件按它渲染全文（文章/对话共用），"
