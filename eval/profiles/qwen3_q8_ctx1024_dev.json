@@ -1,0 +1,19 @@
+{
+  "name": "Qwen3-Embedding-0.6B Q8_0 / llama.cpp b11829",
+  "revision": "370f27d7550e0def9b39c1f16d3fbaa13aa67728",
+  "config": {
+    "weights_sha256": "06507c7b42688469c4e7298b0a1e16deff06caf291cf0a5b278c308249c3e439",
+    "quantization": "Q8_0",
+    "runtime_commit": "184f6536024668e8908ab8c86033d56708e62b40",
+    "context": 1024,
+    "batch": 1024,
+    "ubatch": 1024,
+    "parallel": 1,
+    "threads": 2,
+    "pooling": "last",
+    "normalization": "L2",
+    "dimensions": 1024,
+    "input": "exact eval/fixtures/embedding_probe.jsonl; query instruction only; no truncation; synthetic repeated documents for load measurement",
+    "hardware": "2 vCPU Xeon E5-2695 v2, AVX without AVX2; 2468 MiB RAM; development server"
+  }
+}
