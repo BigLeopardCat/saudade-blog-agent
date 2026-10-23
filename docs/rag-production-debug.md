@@ -1,11 +1,39 @@
 # RAG 本地 embedding 与生产机调试
 
-类型：现状型（工具和操作步骤）；末节的资源与质量门槛是待目标机验证的验收条件。
+类型：§0–§5 为现状与操作步骤；§6–§8 为待目标机验证的门槛、引擎候选与验收记录。
 
 本文适用于另一台 **4 核、4GB、Linux x86_64** 服务器，Python 3.12、systemd ≥249。
 本轮只在开发机验证；生产机部署与业务灰度尚未执行。先部署到隔离发布目录，保留当前服务版本。
 评测结果和来源见 [中文模型对照](../eval/t2-chinese-baseline.md)，输入预算见
 [embedding-inputs.md](embedding-inputs.md)。
+
+## 0. 两台机器的配置与验证边界
+
+开发机实测为 **2 vCPU、Xeon E5-2695 v2 @ 2.40GHz、约 2,468MiB RAM**，
+Ubuntu 24.04.3 / Linux 6.8.0-147-generic、Python 3.12.3、systemd 255；有 AVX，
+未暴露 AVX2/AVX-512。开发环境有约 3,327MiB swap，不能将其计入模型的常驻 RAM 预算。
+
+用户提供的目标机为 **4 vCPU、Xeon Platinum 8255C @ 2.50GHz、KVM、单 NUMA 节点**，
+暴露 AVX2、AVX-512、VNNI，未暴露 AVX512_BF16 / AMX；内存按此前的 4GB 规划。
+操作系统、systemd、实际可用内存与磁盘尚未采集。完整对照和盘点来源见
+[评测环境表](../eval/t2-chinese-baseline.md#环境补充与目标机差异2026-10-23asiashanghai)
+及 [环境 JSON](../eval/report/baseline_embedding_environments.json)。
+这些指令集允许评估不同的 CPU 后端，但不构成速度或内存验收结果。
+
+在目标机部署前记录以下输出；命令不打印环境变量、凭据或进程启动参数：
+
+```bash
+TZ=Asia/Shanghai date --iso-8601=seconds
+lscpu
+free -m
+uname -srmo
+systemd --version
+df -h .
+.venv/bin/python --version
+```
+
+核对 cgroup 资源控制是否生效，并记录现有业务负载；记录单位须分清 GB/GiB/MiB。
+公开报告只摘录与评测有关的字段，不附主机名、网络地址或服务的完整 Environment。
 
 ## 1. 维度和存储
 
@@ -169,3 +197,97 @@ API key 应按提供商的账号权限和配额管理；本轮没有使用用户
 每次记录代码提交、模型/runtime/权重 SHA、profile 签名、实际维度、语料 revision、
 新建/复用数、三路指标、延迟/内存、降级和恢复结果。公开语料评测不能替代站点自身验收。
 未经这些检查，不把“服务能返回向量”标记为业务上线成功。
+
+## 7. 引擎候选与缓存边界
+
+本节记录 2026-10-23 的讨论与后续验证方案，**不表示 TEI/vLLM 已接入或测过**。
+当前资产脚本、unit、`--llama-tokenize` 预检均针对 llama.cpp；本次文档更新不更换引擎。
+
+| 方案 | 本项目状态 | 目标机验证顺序 |
+|---|---|---|
+| llama.cpp + GGUF | 已在开发机验证；固定 b11829 | 首先复测，作为回退和资源基线 |
+| TEI CPU + 官方 BGE 权重 | 未安装/未评测 | 优先新增对照，先 FP32 参考，再讨论量化 |
+| ONNX Runtime / OpenVINO INT8 | 未安装/未评测 | 当延迟或资源不达标时评估 VNNI 优化；使用成熟导出工具 |
+| vLLM CPU pooling | 未安装/未评测 | 可选实验，证明相对收益后再决定部署 |
+| 远程 embedding API | 保留显式配置通道 | 按提供商模型/预算独立预检；不隐式付费回退 |
+
+llama.cpp 有 [Hugging Face 托管部署路径](https://huggingface.co/docs/inference-endpoints/engines/llama_cpp)，
+不能只凭引擎名称判断生产适配。TEI 提供 [CPU 镜像和支持模型说明](https://huggingface.co/docs/text-embeddings-inference/en/supported_models)，
+并有 [OpenAI 兼容 embedding 接口](https://huggingface.co/docs/text-embeddings-inference/en/quick_tour)。
+vLLM 有 [CPU 后端](https://docs.vllm.ai/en/latest/getting_started/installation/cpu/)，
+但其 [pooling 文档](https://docs.vllm.ai/en/latest/models/pooling_models/) 明确不保证比
+Transformers/Sentence Transformers 更快。上述均为文档能力，具体版本与模型必须实测。
+ONNX/OpenVINO 的导出与量化可用 [Sentence Transformers 的成熟工具](https://sbert.net/docs/sentence_transformer/usage/efficiency.html)，
+不自行实现 tokenizer、pooling 或推理网关。引用的在线文档会更新，实施时固定镜像 digest /
+依赖版本、官方权重 revision 与 SHA，记录对应文档版本；不要直接部署浮动 latest。
+
+缓存须分别验收：
+
+| 缓存 | 当前行为 | 目标机检查 |
+|---|---|---|
+| 查询向量 LRU | 每 Agent 进程默认 256 条，空间 + 规范化后的输入精确命中，无跨进程共享，重启丢失 | 相同查询首次请求、重复命中、重启后重新请求分别记录 |
+| 文档向量缓存 | 本地持久化、内容与空间寻址；只补新输入，删除后更新活跃集合 | 不变语料重跑零请求，改一篇只补变化，删除后不命中 |
+| KV / prefix cache | 模板 `--cache-ram 0` 关闭 llama.cpp 额外 prompt 缓存，不等于内部完全无 K/V 状态 | 不把 prompt 缓存与查询向量缓存混称；记录引擎实际参数 |
+
+查询容量见 `EMBEDDING_QUERY_CACHE`；不要把 0 当作当前实现的“完全禁用”选项。
+BGE 是双向编码器，embedding 没有自回归逐 token 生成阶段，生成模型的 KV 复用不是
+当前首要优化点。Qwen 的可复用因果前缀也需运行时支持和收益测试，不能仅开启开关就计收益。
+当前不引入 Redis；按结果缓存、增量计算、批次与 CPU 线程配置依次优化。
+
+如果评测 TEI/vLLM，按以下步骤准备隔离实例：
+
+1. 从官方 BGE-small-zh-v1.5 权重与 tokenizer 建立 FP32 参考，llama.cpp F16/Q8 单独标精度。
+   同模型不代表相同数值；把后端差异与量化差异分别归档，维度仍为原生 512。
+2. 初始推理线程预算 2、并发 1、少量 tokenizer workers，给博客留资源。
+   CPUQuota=200% 是约 2 核算力预算，不等于固定绑在两个核上。
+   vLLM 使用固定版本 CPU 构建与 pooling runner，先测小 BGE。
+   Qwen 0.6B 的 FP32 权重按参数量粗算约 2.4GB，框架、激活和业务进程另计，不能只看权重能否装入。
+3. 对齐 `/v1/embeddings`、认证、服务 model 名、输入预算、CLS/last、L2 与查询指令（只添加一次）。
+   继续用独立 profile 与向量目录，模型文件换格式后不沿用旧 GGUF profile。
+4. 明确拒绝超限输入，禁止静默截断。TEI 的在线 [参数说明](https://huggingface.co/docs/text-embeddings-inference/en/cli_arguments)
+   默认启用自动截断，需按固定版本显式关闭；同时核对模型声明长度和批次 token 限额，防止配置不一致拒绝启动。
+5. 通用 `rag.manage probe --expected-dim 512` 可以复用；`--llama-tokenize` 不能直接测试其他服务。
+   为候选补充其 tokenizer 一致性预检，覆盖混合大小写、重音、特殊 token 和长度边界，不能跳过后宣称通过。
+6. 在同一台目标机、同一语料/查询/qrels、相同分片策略下跑质量与资源对照。
+   先一组模型服务结束再启另一组，记录缓存状态；检查建库、部分失败重试、降级与恢复。
+   vLLM 的生成式 KV 默认值/预算不要套用到 pooling：按固定版本验证，legacy
+   `VLLM_CPU_KVCACHE_SPACE=0` 也不能泛解为“所有 KV 已关闭”。
+7. 使用 §8 表格留档，满足 §6 门槛再切换 Agent 配置，保留 llama.cpp 与原模型目录用于回退。
+   目前没有 TEI/vLLM 发布模板；候选实例的启动、认证、限流、指标与资源约束均需单独验收。
+
+## 8. 生产验证记录与交接
+
+复制本表到本次发布的私有运行记录，所有空项初始均为“未执行”，不得用开发机结果代填。
+
+| 验证项 | 要记录的证据 / 口径 | 目标机结果 |
+|---|---|---|
+| 环境 | 本机采集时间（含时区）、CPU flags、MemTotal/Available、swap、OS/kernel/systemd、磁盘 | 未执行 |
+| 发布来源 | Agent 提交、引擎版本与镜像 digest、权重/tokenizer SHA、profile 签名、精度 | 未执行 |
+| 输入契约 | 原生维度、pooling、范数、指令只加一次、NFC/大小写、完整输入边界与超限拒绝 | 未执行 |
+| 认证和资源控制 | 无 key 拒绝；仅 loopback；CPU/内存/cgroup 限额实际生效；启动峰值 | 未执行 |
+| 第一次建库 | 语料 revision、文档/片段/唯一输入数、新建/复用/缺失数、请求数、耗时 | 未执行 |
+| 增量与恢复 | 不变语料零新增、改一篇/删一篇、失败重试、停模型词法降级与恢复 | 未执行 |
+| 检索质量 | 固定短文桶、BGE 不限长桶、自有中文/混合/跨篇/无答案；nDCG/Recall/证据覆盖 | 未执行 |
+| 冷启动 | 服务启动到可用的耗时、峰值内存；与预热后查询延迟分开 | 未执行 |
+| 延迟 | embedding HTTP P50/P95、RAG 查询 P50/P95 分开；样本数、长度分布、并发和缓存状态 | 未执行 |
+| 资源与业务影响 | RSS/PSS/VmHWM/VmSwap、cgroup MemoryCurrent/Peak、MemAvailable、si/so、业务 P95 | 未执行 |
+| 发布决定 | 对照基线、达标/不达标、选用引擎与精度、回退版本及验证记录 | 未执行 |
+
+每个引擎的预热后 embedding HTTP 延迟至少采样 100 次。命中/未命中查询向量缓存分开计；
+检验模型推理时直接请求 embedding 服务，避免把 Agent LRU 命中当成引擎性能。
+现有 `eval/model_retrieval_run.py` 的 `query_seconds` 包含向量读取与排序，不能改名为纯推理延迟；
+24 查询公开桶用于质量回归，不能代替独立的 100 次延迟采样。文档向量首次新建与缓存复用
+重跑也分别报告，不能拿 `api_calls=0` 的耗时充当首次建库速度。
+
+模型运行时可用以下命令采样；不要公开完整进程命令行或环境：
+
+```bash
+systemctl show saudade-embedding@bge-q8 \
+  --property=MainPID,MemoryCurrent,MemoryPeak,CPUUsageNSec,MemoryHigh,MemoryMax,MemorySwapMax,CPUQuotaPerSecUSec,Result,NRestarts
+vmstat 1 10
+```
+
+用 MainPID 在 `/proc/<PID>/status` 读取 VmRSS/VmHWM/VmSwap，在 `smaps_rollup` 读取 Rss/Pss。
+系统不支持 MemoryPeak 时记录该项“不可用”，补充进程 VmHWM，明确它是进程 RSS 峰值，
+不能替代 cgroup 全组峰值；采样也不能保证捕获瞬时峰值。si/so 为换页活动，Swap 占用量只作上下文。
+当前 §6 资源门槛是拟定验收值；本报告没有任何目标机“通过”结论。

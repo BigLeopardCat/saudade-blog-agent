@@ -35,3 +35,15 @@ GGUF 转换可能与原始 PyTorch/ONNX 存在数值差异，当前成绩只属�
 `tests/test_rag_assets.py` 验证资产校验和不可变 runtime。
 真实 tokenizer/模型对照见 [中文评测](../../eval/t2-chinese-baseline.md)，
 目标机资源、认证与故障恢复按 [调试手册](../rag-production-debug.md) 验收。
+
+## 20261023 补充：生产 CPU 确认后的候选顺序
+
+用户提供的生产机为 4 vCPU Xeon Platinum 8255C，暴露 AVX2、AVX-512/VNNI，
+与无 AVX2 的 2 vCPU 开发机不同。两台机器的来源与配置附于
+[评测报告](../../eval/t2-chinese-baseline.md)，生产 OS、实际内存和运行负载尚待采集。
+
+保留已测 llama.cpp 基线和 API，下一组优先比较 TEI CPU + 官方 BGE 权重；
+vLLM CPU pooling 是可选对照，不因框架名称直接替换默认引擎。
+ONNX/OpenVINO INT8 在目标机延迟或资源不达标时重开，使用成熟导出与推理工具。
+候选在本项目均未部署/评测，此补充不改变已有运行资产和默认开关。
+后续以输入一致性、冻结质量集、目标机 P95/内存/业务影响及回退结果决定是否改选。
