@@ -39,7 +39,7 @@ def confirmed_runtime(runtime, grant):
     from agent.runtime.hybrid import HybridArm
     # Changing the default runtime cannot bypass revocation or replay checks.
     selected = runtime if isinstance(runtime, HybridArm) else HybridArm(runtime)
-    if getattr(selected.legacy, "checkpointer", None) is None:
+    if selected.store.saver is None:
         raise RuntimeError("操作确认需要持久化服务，本次未执行。")
     return selected
 
@@ -47,22 +47,17 @@ def confirmed_runtime(runtime, grant):
 def cancel(runtime, grant, config):
     """Revoke the signed operation under the same lock used for execution."""
     from agent.domains.registry import native_domain
-    from agent.runtime import checkpoint_store
     from agent.runtime.pending import PendingOperation
     if native_domain(grant) is None:
         raise ValueError("这张旧确认卡尚不支持按钮撤销，请勿批准并等待其过期。")
     selected = confirmed_runtime(runtime, grant)
     action = {"task_id": f"pa_{grant['jti']}", "jti": grant["jti"]}
-    saver = selected.legacy.checkpointer
+    saver = selected.store.saver
     with selected.conversation_guard(config):
         result = PendingOperation(grant, action).cancel(config, saver)
         if not result.execution:
             return {"cancelled": False, "reply": result.reply}
-        prior = selected.legacy.get_state(config).values or {}
-        if (prior.get("pending_action") or {}).get("jti") == grant["jti"]:
-            selected.legacy.update_state(config, {
-                "pending_confirm": None, "pending_action": None}, as_node="gate")
-            checkpoint_store.prune(saver, config["configurable"]["thread_id"])
+        selected.store.clear_pending(config, grant["jti"])
         return {"cancelled": True, "event": result.execution["pending_event"],
                 "reply": result.reply}
 
