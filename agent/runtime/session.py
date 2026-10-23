@@ -208,7 +208,20 @@ class ToolSession:
         record("hybrid", "read_tool", name=name, result_chars=len(body))
         return True
 
+    def _restore_domains(self, prompt):
+        observed = {message.name for message in prompt
+                    if isinstance(message, ToolMessage) and message.status != "error"}
+        restored = [domain for domain, tools in self.domains.items()
+                    if domain not in self.loaded and observed.intersection(tools)]
+        for domain in restored:
+            self.tools.update(self.domains[domain])
+            self.loaded.add(domain)
+        if restored:
+            self.llm = self._bind_menu()
+            record("hybrid", "restore_domains", domains=restored)
+
     def run(self, prompt):
+        self._restore_domains(prompt)
         for round_index in range(_MAX_READ_ROUNDS + 1):
             check_cancelled(self.config)
             prompt_chars = sum(len(str(message.content)) for message in prompt)
