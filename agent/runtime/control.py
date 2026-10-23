@@ -3,8 +3,10 @@
 import time
 from contextlib import contextmanager
 from contextvars import ContextVar
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from threading import Event
+
+from agent.runtime.budget import RequestBudget, budget_scope
 
 
 class AgentCancelled(Exception):
@@ -15,6 +17,7 @@ class AgentCancelled(Exception):
 class RequestControl:
     stop_event: Event
     deadline: float
+    budget: RequestBudget = field(default_factory=RequestBudget)
 
     def check(self):
         if self.stop_event.is_set():
@@ -31,7 +34,8 @@ def request_scope(control):
     token = _current.set(control)
     try:
         control.check()
-        yield
+        with budget_scope(control.budget):
+            yield
     finally:
         _current.reset(token)
 

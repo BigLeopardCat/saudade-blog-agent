@@ -59,9 +59,12 @@ def _outcome(reply, receipts):
 
 @tool(response_format="content_and_artifact")
 def navigate_page(path: Path, config: RunnableConfig) -> object:
-    """Open a site path explicitly requested by the user. Use get_site_map for pages,
-    list_categories for category names, or a verified article link. Recommendations
-    should be links in the reply. Sends a browser command; no confirmation card.
+    """Open a verified site path when the user asks to go there, including an article
+    chosen from a recommendation or resolved from conversation context. If asked
+    to recommend and open, choose a source then navigate; recommending alone does
+    not navigate. Use get_site_map for pages, list_categories for category names,
+    or a source article link. Returns a queued browser command, not a browser
+    completion acknowledgement. No confirmation card.
     """
     if not authorized(config, "navigate_page"):
         return "当前身份无权操作页面。", {"kind": "unavailable"}
