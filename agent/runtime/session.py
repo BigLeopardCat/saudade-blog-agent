@@ -53,6 +53,10 @@ _DOMAIN_DESCRIPTIONS = {
     "admin_tags": "管理标签字典：准备新建、改名、改色、换父级、一级二级互转和删除确认；"
                   "核对层级身份、子标签与文章引用。"
                   "给文章挂标签请用后台文章领域，仅管理员可用。",
+    "admin_account_actions": "Prepare account freeze, unfreeze, role change, mute or unmute "
+                             "by exact username or ID. Show before/after state, deadlines, "
+                             "session revocation and notification effects; administrator only, "
+                             "preparation never writes.",
     "admin_announcements": "管理站内公告：准备发布、修改、删除确认，"
                            "展示完整正文及关联个人通知范围；"
                            "准备不写入，仅管理员可用。",
