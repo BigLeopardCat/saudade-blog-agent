@@ -112,7 +112,7 @@ def _fn_body(src: str, key: str) -> str | None:
     return None
 
 
-HOOK = "drop_checkpoint_threads(&"
+HOOK = "checkpoint_cleanup::dispatch(&"
 
 
 def parent_halves(conv_src: str, temp_src: str) -> tuple[str, str]:
@@ -148,7 +148,7 @@ def parent_halves(conv_src: str, temp_src: str) -> tuple[str, str]:
                   "这正是父仓自己记过的那个 bug 的形状（清单两处各写一遍、写的不是同一份）")
 
 
-def hook_identity(conv_src: str) -> tuple[str, str]:
+def hook_identity(conv_src: str, delivery_src: str | None = None) -> tuple[str, str]:
     """父仓那两个钩子**带不带身份断言**。三档：`都带` / `都不带` / `半带`。
 
     为什么判的是**一致性**而不是"已带"：父仓是另一个仓、CI 里的父仓取自它默认分支的
@@ -167,8 +167,9 @@ def hook_identity(conv_src: str) -> tuple[str, str]:
     隔了十几行），所以字面落在"头发出去"这一端。（父仓另外四处也是这个字面。）
     """
     marks = []
-    for key in ("async fn drop_checkpoint_threads", "async fn drop_checkpoint_turn"):
-        body = _fn_body(conv_src, key)
+    for source, key in ((delivery_src or conv_src, "async fn request"),
+                        (conv_src, "async fn drop_checkpoint_turn")):
+        body = _fn_body(source, key)
         if body is None:
             return "锚点没了", f"父仓里找不到 `{key}`（判据的前提没了）"
         marks.append("X-Agent-Assertion" in body)
@@ -266,7 +267,7 @@ async fn delete_temp_user() {
     %s
 }
 """
-    _CALL = "drop_checkpoint_threads(&threads).await;"
+    _CALL = "checkpoint_cleanup::dispatch(&db, &threads).await;"
     check("（反控）两臂都没接 ⇒ 判「两臂都没接」（不是含糊的'未接'）",
           parent_halves(_CONV_FAKE % "", _TEMP_FAKE % "")[0] == "两臂都没接")
     check("（反控）**只有一臂接了** ⇒ 当场判「半接」",
@@ -284,7 +285,7 @@ async fn delete_temp_user() {
     check("（正控）调用点之一没了也要报（不许当成'没接'——那会变成一条恒绿的判据）",
           parent_halves(_CONV_FAKE % _CALL, "fn other() {}")[0] == "锚点没了")
     _HOOKS_FAKE = """
-pub(crate) async fn drop_checkpoint_threads(ids: &[i32], uid: i32) {
+async fn request(client: &Client, base: &str, job: &Job, assertion: &str) {
     %s
 }
 pub(crate) async fn drop_checkpoint_turn(conversation_id: i32, text: &str, uid: i32) {
@@ -309,7 +310,8 @@ pub(crate) async fn drop_checkpoint_turn(conversation_id: i32, text: &str, uid: 
         "src/routes/temp_user.rs",
         "同上，**账号那一臂**（删账号时级联清它名下全部会话）也必须调那个钩子——"
     "只有一臂接了就是父仓自己记过的那个 bug 的形状")
-    if _rs is None or _ts is None:
+    _ds = _parent_repo.read("src/checkpoint_cleanup.rs", "删除交付必须携带服务身份并验证结果")
+    if _rs is None or _ts is None or _ds is None:
         # `_parent_repo` 已经打过那行响亮的说明了（父仓不在场 / SAUDADE_REQUIRE_PARENT=1
         # 时它直接退 1）。这里**如实记成"没验"**，不记成通过——同族：
         # 父仓 `scripts/healthcheck.sh` 第 8 项在判据脚本不在场时写的是"这一项没验"。
@@ -317,8 +319,9 @@ pub(crate) async fn drop_checkpoint_turn(conversation_id: i32, text: &str, uid: 
     else:
         _st, _why = parent_halves(_rs, _ts)
         print(f"     父仓：{_st} —— {_why}")
-        check("父仓那两臂形态一致（**半接就是本件要抓的那一件事**）",
-              _st != "半接", _why)
+        check("父仓两条删除路径都交付持久清理任务", _st == "两臂都接", _why)
+        check("级联清单在业务删除前登记清理任务",
+              "checkpoint_cleanup::enqueue(db, row.id, row.user_id)" in _rs)
         # 「清单只有一份」这条性质本身也要判：钩子挪到调用点之后，两个调用点**各自再查一遍**
         # 会话 id 是最容易滑回去的写法（那正是 20261018 那个 bug 的形状）。判据 = 那份清单
         # **把 id 返回给调用方**（签名里有 `Vec<i32>`）。
@@ -327,10 +330,9 @@ pub(crate) async fn drop_checkpoint_turn(conversation_id: i32, text: &str, uid: 
         # 身份那一档（20261020 安全审计 SAU-006）：本仓这两处现在**要求**断言 ⇒ 父仓不带
         # 就是 401，而钩子 best-effort（失败只 warn）⇒ 断了不会响。判**一致性**、不判"已带"
         # 的理由写在 `hook_identity` 的 docstring 里。
-        _ist, _iwhy = hook_identity(_rs)
+        _ist, _iwhy = hook_identity(_rs, _ds)
         print(f"     父仓钩子的身份：{_ist} —— {_iwhy}")
-        check("父仓两个钩子带不带身份断言**一致**（半带＝只改了一半）",
-              _ist != "半带", _iwhy)
+        check("父仓两个清理请求都携带身份断言", _ist == "都带", _iwhy)
         if _ist == "都不带":
             print("     · 父仓那一半**还没带断言**：agent 侧已要求（SAU-006）⇒ 这两条钩子今天"
               "会 401，而它们 best-effort、失败只 warn。这是已知缺口（跨仓同批推进），"

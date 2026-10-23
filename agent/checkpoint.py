@@ -52,7 +52,7 @@ def backend_for(dsn: str) -> tuple[str, str]:
     scheme = head.split("+", 1)[0]      # `postgresql+psycopg://` 这种带驱动的也认
     if scheme not in _BACKENDS:
         raise RuntimeError(
-            f"checkpoint DSN 的 scheme 认不出来：{head or dsn!r}。只认 {_KNOWN}。"
+            f"checkpoint DSN 的 scheme 不受支持。只认 {_KNOWN}。"
             "**故意不支持内存档**：它在多 worker 下每 worker 各记各的，且不报错。")
     return _BACKENDS[scheme]
 
@@ -190,6 +190,8 @@ def _setup_under_lock(saver, pool=None, *, now=time.monotonic, sleep=time.sleep,
         try:
             drop_invalid_indexes(conn)
             saver.setup()
+            from agent.runtime import checkpoint_store
+            checkpoint_store.setup(conn)
         finally:
             # `autocommit=True` 下 `pg_try_advisory_lock` 是**会话级**的，必须显式解锁
             # （池会复用连接，不解锁等于把这把锁带进下一个请求）。
@@ -258,8 +260,10 @@ def delete_thread(saver, conversation_id: object) -> bool:
     if tid is None:
         return False
     from agent.runtime.turns import conversation_turn
-    config = {"configurable": {"thread_id": tid}}
+    config = {"configurable": {"thread_id": tid, "allow_deleted_thread": True}}
     with conversation_turn(saver, config):
+        from agent.runtime import checkpoint_store
+        checkpoint_store.mark_deleted(saver, tid)
         saver.delete_thread(tid)
         return saver.get_tuple(config) is None
 
@@ -373,4 +377,7 @@ async def _drop_last_user_turn(agent, conversation_id: object, text: str = "") -
     after = await getter(cfg)
     left = list((getattr(after, "values", None) or {}).get("messages") or [])
     gone = not any(getattr(m, "id", None) == getattr(target, "id", None) for m in left)
+    if gone:
+        from agent.runtime import checkpoint_store
+        checkpoint_store.prune(saver, tid)
     return {"dropped": gone, "why": "" if gone else "still_present"}

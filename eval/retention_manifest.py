@@ -154,7 +154,8 @@ CLASSES = [
             "⚠️ 库坐标**不写在这张表里**（本仓是公开仓）：DSN 由 `dsn_env` 指的那个环境变量给。",
         rule=None,
         dsn_env="CHECKPOINT_DSN",
-        tables=["checkpoints", "checkpoint_blobs", "checkpoint_writes", "agent_write_idem"],
+        tables=["checkpoints", "checkpoint_blobs", "checkpoint_writes", "agent_write_idem",
+                "agent_deleted_threads"],
     ),
     dict(
         key="golden-traces",

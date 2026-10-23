@@ -3,13 +3,21 @@
 import json
 from functools import partial
 
-from langchain_core.messages import AIMessage, HumanMessage, ToolMessage, trim_messages
+from langchain_core.messages import (
+    AIMessage,
+    HumanMessage,
+    RemoveMessage,
+    ToolMessage,
+    trim_messages,
+)
 from langchain_core.messages.utils import count_tokens_approximately
+from langgraph.graph.message import REMOVE_ALL_MESSAGES
 
 from agent.authz import SCOPE_ADMIN_CONSOLE, SCOPE_READ_OWN, TOOL_SCOPE, check, holds
 from agent.principal import ADMIN_ROLES, SOURCE_ASSERTION
 
 HISTORY_TOKENS = 1800
+CHECKPOINT_TOKENS = 5400
 OBSERVATION_CHARS = 1400
 SUMMARY_CHARS = 1600
 _tokens = partial(count_tokens_approximately, chars_per_token=1.5)
@@ -83,6 +91,16 @@ def prompt_dialogue(messages, principal):
         return []
     current = visible[-1]
     return [*history(visible[:-1], principal), current]
+
+
+def checkpoint_messages(previous, current):
+    """Replace the message channel with recent complete turns, keeping the current turn."""
+    messages = [message for turn in _turns([*previous, *current]) for message in turn]
+    retained = trim_messages(
+        messages, max_tokens=max(CHECKPOINT_TOKENS, _tokens(current)),
+        token_counter=_tokens, strategy="last", start_on="human", allow_partial=False,
+    )
+    return [RemoveMessage(id=REMOVE_ALL_MESSAGES), *retained]
 
 
 def observation(call, result):
