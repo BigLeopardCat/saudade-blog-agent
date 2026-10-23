@@ -18,7 +18,7 @@ def _label(value):
 
 def _event_duration(events, name):
     for event in events:
-        if event.get("event") != name:
+        if event.get("node") != "producer" or event.get("event") != name:
             continue
         value = event.get("duration_s")
         if type(value) in (int, float) and math.isfinite(value) and value >= 0:
