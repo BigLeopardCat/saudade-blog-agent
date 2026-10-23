@@ -66,6 +66,7 @@ def test_docs_facts():
     README = (ROOT / "README.md").read_text(encoding="utf-8")
     ARCH = (ROOT / "docs/agent-architecture.md").read_text(encoding="utf-8")
     RAG_DESIGN = (ROOT / "docs/rag-design.md").read_text(encoding="utf-8")
+    from rag.vector_index import SCHEMA as VECTOR_SCHEMA
     MULTIMODAL = (ROOT / "docs/multimodal-retrieval.md").read_text(encoding="utf-8")
     DOCS_INDEX = (ROOT / "docs/README.md").read_text(encoding="utf-8")
     FIXTURES = (ROOT / "eval/fixtures/README.md").read_text(encoding="utf-8")
@@ -90,10 +91,8 @@ def test_docs_facts():
         # 两个本文件从没读过的文档里** ⇒ 加依赖那天三行一起漂，没有任何东西会红。
         ("multimodal-retrieval.md", MULTIMODAL, "§3 表格：pyproject 的依赖条数",
          r"pyproject\.toml` 的 (\d+) 个依赖", N_DEPS),
-        ("rag-design.md", RAG_DESIGN, "§9 索引与增量：生产 venv 的包数",
-         r"生产 venv 仍是那 (\d+) 个钉死的包", N_DEPS),
-        ("rag-design.md", RAG_DESIGN, "§10.5 边界：生产 venv 的包数",
-         r"生产 venv 钉死 (\d+) 个包", N_DEPS),
+        ("rag-design.md", RAG_DESIGN, "向量持久化格式版本",
+         r"持久化 schema (\d+)", VECTOR_SCHEMA),
         # 第六、七处（20261018 审计 A2 补锁）：都是"同一个量、另一个文件里也手抄了一份，
         # 而那个文件**从来没被本文件读过**"——与第四、五处同形，也是同一个失效模式：
         # 锁的射程没盖到的那一份，漂了没人喊。

@@ -10,6 +10,7 @@ _fetch_corpus`）在没有任何外部依赖的情况下跑得通**。
 
 它不是"重新实现一遍博客后端"，只是**最小**的公开读接口：
 
+  `GET  <base>/rag/corpus?limit=&after=&revision=` → 版本化公开语料快照
   `GET  <base>/notes?page=&page_size=`   → `{"code":200,"data":[行, …]}`（分页）
   `GET  <base>/notes/<id>`               → `{"code":200,"data":{…含 noteContent}}`；
                                            库里没有这个 id ⇒ **HTTP 404**（真接口就是这么回的，
@@ -36,6 +37,7 @@ _fetch_corpus`）在没有任何外部依赖的情况下跑得通**。
 不是任何真实站点的文章。
 """
 import argparse
+import hashlib
 import json
 import re
 import sys
@@ -79,8 +81,7 @@ def load_corpus(corpus_dir: "str | Path | None" = None) -> list[dict]:
 def _row(doc: dict, *, with_content: bool = False) -> dict:
     """一篇文章 → 列表/详情行的形态（字段名照抄真实接口的 `NoteDto`）。
 
-    **列表不挂正文**（真实接口如此，`_fetch_corpus` 也因此逐篇再拉一次详情）——
-    这是刻意的：夹具要跑的就是那条两步路径。
+    列表不挂正文；索引改用 /rag/corpus 完整导出，详情读取仍走独立公开端点。
     """
     return {
         "noteKey": doc["id"],
@@ -120,6 +121,13 @@ def make_handler(docs: list[dict], base: str):
     _list_path = base + "/notes"
     _search_path = base + "/notes/search"
     by_id = {d["id"]: d for d in docs}
+    corpus_docs = [{"id": d["id"], "title": d["title"], "content": d["content"],
+                    "revision": hashlib.sha256(json.dumps(
+                        [d["title"], d["content"]], ensure_ascii=False,
+                        separators=(",", ":")).encode()).hexdigest()}
+                   for d in sorted(docs, key=lambda d: d["id"])]
+    corpus_revision = hashlib.sha256(json.dumps(corpus_docs, ensure_ascii=False,
+                                separators=(",", ":")).encode()).hexdigest()
 
     class _Handler(BaseHTTPRequestHandler):
         server_version = "saudade-fixture/1"
@@ -146,6 +154,20 @@ def make_handler(docs: list[dict], base: str):
         def do_GET(self):                          # noqa: N802 —— 基类签名
             u = urlparse(self.path)
             path = u.path.rstrip("/") or "/"
+            if path == base + "/rag/corpus":
+                query = parse_qs(u.query)
+                after = int(query.get("after", [0])[0])
+                limit = int(query.get("limit", [50])[0])
+                if after and query.get("revision", [""])[0] != corpus_revision:
+                    self._send({"code": 409, "message": "corpus_revision_changed"}, 409)
+                    return
+                remaining = [d for d in corpus_docs if d["id"] > after]
+                page = remaining[:limit]
+                self._send({"code": 200, "data": {
+                    "schema_version": 1, "revision": corpus_revision,
+                    "total": len(corpus_docs), "documents": page,
+                    "next_cursor": page[-1]["id"] if len(remaining) > limit else None}})
+                return
             m = _stats_re.fullmatch(path)
             if m:
                 doc = by_id.get(int(m.group(1)))

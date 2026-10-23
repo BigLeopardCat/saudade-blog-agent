@@ -102,6 +102,7 @@ from agent.prompt_context import (SITE_GUIDE,  # noqa: F401
 # 洞④ 的判据族（八张表 + `_absence_span`）20261017 搬去 `agent/absence_claims.py`；
 # 20261020 声称判据族整刀搬进 `agent/claims.py` 后，这几个中间名在 graph 内已无消费方
 # （消费方随函数住 claims），import 行随之删去——门牌由 claims 自己持有。
+from agent.article_evidence import completion_read_plan
 from agent.deterministic_plan import (MAX_PLAN_ROUNDS,
                              _any_error_frame, _article_fast_path,
                              _candidate_detail_plan, _display_fast_path, _doc_title,
@@ -110,7 +111,7 @@ from agent.deterministic_plan import (MAX_PLAN_ROUNDS,
                              _scan_action_intents, _search_terms,
                              _terminal_plan, _tool_name, _wrap_up_plan)
 # _title_relevant 是 re-export 门牌（tests 经 agent.graph import）；graph 内无消费方（20261020）。
-from agent.deterministic_plan import _title_relevant  # noqa: F401
+from agent.deterministic_plan import _literal_navigation_plan, _title_relevant  # noqa: F401
 from agent.entity_digest import receipt_digest
 from agent.factblock import (action_facts, is_action_family, is_block_family,
                              render_fact_block)
@@ -5734,18 +5735,11 @@ def _finalize_dedupe(plan_obj: dict, state: AgentState, user_msg: str,
     `update=None`，`plan_obj` 是**可能已被就地修正**的那一份（字面路径修正会重建它），
     交 `_finalize_wrap` 收尾。20261009 从 `_planner_decide` 原地抽出，行为不变。
     """
-    # 字面路径防推断兜底（确定性修正，保留自旧架构）：用户消息里出现 / 开头的
-    # 路径且 planner 选了 navigate 时，target 必须原样用该路径——qwen 曾把
-    # "/iot" 推断成"物联网平台"（语义替身）→ 计划变成跳转 /device-console/
-    # （golden nav_nonexistent 实证）。白名单外的路径经 instantiate_plan 预校验 →
-    # 零工具 + "不存在"注记 → 如实告知（与"路径是否有效由系统校验"的设计一致）。
-    lit = re.search(r"/[A-Za-z0-9_\-./]+", user_msg)
-    if (plan_obj["workflow"] == "navigate" and lit
-            and plan_obj["params"].get("target") != lit.group(0)):
-        logger.info("[planner] 字面路径修正：用户消息含 %s，planner 目标 %r → 强制 %s",
-                    lit.group(0), plan_obj["params"].get("target"), lit.group(0))
-        plan_obj = instantiate_plan("navigate", {"target": lit.group(0)})
-        plan_obj["params"] = {"target": lit.group(0)}
+    read_plan = completion_read_plan(plan_obj, _turn(state), state.get("executed") or [])
+    if read_plan is not None:
+        return read_plan, _plan_update(read_plan, rounds)
+
+    plan_obj = _literal_navigation_plan(plan_obj, user_msg)
 
     # （这里曾是 TODO 剩余步骤声明的提取点：`_parse_todo(raw)` → `plan_obj["todo"]`
     #   → `record("planner","todo")`。20261016 整行退休，取证与理由见 `plan_encode`
@@ -5819,18 +5813,7 @@ def _finalize_dedupe(plan_obj: dict, state: AgentState, user_msg: str,
                       "若还有没改的，说清楚哪一件没做。")
             return plan_obj, _plan_update(plan_obj, rounds)
 
-    # 检索重复清单拦截（20260903 golden 实证：rag_arch_ports planner 把同一
-    # rag_search 原句连发 3 轮直到轮次上限——候选 id=19 已命中却从不读全文。
-    # content_query 允许"换词再搜"，但原句重发无新信息；候选命中不读全文 =
-    # 假收敛）。确定性改判：计划含已执行过的同款 spec → 改读候选行里第一个
-    # 未读文档全文（经验记录类标题延后，机制文档优先，见 _candidate_detail_plan）；
-    # 无未读候选 → 直接收尾，不浪费剩余轮次。__ERROR__ 帧存在时跳过
-    # （错误修正重试合法）。
-    # 20260905 变体打转拦截：spec 级判据防"原句连发"，防不住换词变体（231301/
-    # 231934 实证 planner 连 4 轮 rag_search 变体，BM25 变体 query 秒回同批文档）。
-    # 放宽到工具级计数——判定抽成纯函数 _search_retry_kind（retry_loop/rag_loop），
-    # 命中同样确定性转读未读候选全文（planner 已实证靠搜索收敛不了，读全文才有
-    # 据收尾）或直接收尾。__ERROR__ 帧存在时整块跳过（错误修正重试合法）。
+    # Repeated discovery searches must progress to a bounded unread candidate.
     if (plan_obj["workflow"] == "content_query" and plan_obj["tools"]
             and not _any_error_frame(_turn(state))):
         executed = state.get("executed") or []
