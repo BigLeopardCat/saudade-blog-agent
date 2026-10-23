@@ -95,6 +95,11 @@ def _order(chunks):
 _real_write = V._write_atomic
 
 
+def cache_file(root, kind):
+    manifest = json.loads((root / "manifest.json").read_text())
+    return root / manifest["cache_files"][kind]
+
+
 def _boom(path, data):
     if pathlib.Path(path).name == V.MANIFEST:
         raise OSError("模拟：写 manifest 时断电")
@@ -265,7 +270,7 @@ def test_vector_index():
         st.update(CH3, space())
     mf3 = json.loads((TMP / "keys" / "manifest.json").read_text(encoding="utf-8"))
     ents = dict(tuple(e) for e in
-                json.loads((TMP / "keys" / "cache.json").read_text(encoding="utf-8"))["entries"])
+                json.loads(cache_file(TMP / "keys", "json").read_text(encoding="utf-8"))["entries"])
     check("孤儿向量按代数剪枝（被删那篇 3 代后不再留，缓存不无限长大）",
           orphan not in ents, f"缓存 {len(ents)} 行 / 活跃 {len(mf3['keys'])} 行")
     check("活跃的那些键一个都不许被剪掉", all(k in ents for k in mf3["keys"]))
@@ -285,8 +290,8 @@ def test_vector_index():
     st3 = fresh("broken")
     st3.update(CH, space())
     good_fp = fp(CH)
-    raw = (TMP / "broken" / "cache.f32").read_bytes()
-    (TMP / "broken" / "cache.f32").write_bytes(raw[:len(raw) - 4 * DIM])   # 截掉一行
+    raw = cache_file(TMP / "broken", "f32").read_bytes()
+    cache_file(TMP / "broken", "f32").write_bytes(raw[:len(raw) - 4 * DIM])   # 截掉一行
     fresh_reader = V.VectorStore(TMP / "broken")
     check("cache.f32 被截断 ⇒ 新的读者拒载（不变式②）", fresh_reader.load() is False)
     check("拒载的后果是「没有向量」而不是「用错向量」",
@@ -324,9 +329,9 @@ def test_vector_index():
     st5.load()
     check("断电后：旧 manifest 仍读得出来", st5.view_for(old_fp) is not None)
     check("断电后：新语料看不到（没提交就是没提交）", st5.view_for(new_fp) is None)
-    cj = json.loads((TMP / "atomic" / "cache.json").read_text(encoding="utf-8"))
+    cj = json.loads(cache_file(TMP / "atomic", "json").read_text(encoding="utf-8"))
     check("断电后：cache 文件本身仍是完好的（半成品不会被当成好的）",
-          len((TMP / "atomic" / "cache.f32").read_bytes()) == len(cj["entries"]) * cj["dim"] * 4)
+          len(cache_file(TMP / "atomic", "f32").read_bytes()) == len(cj["entries"]) * cj["dim"] * 4)
     print("\n⑥ f32 往返与维度锁")
     st6 = fresh("f32")
     st6.update(CH, space())
@@ -422,8 +427,8 @@ def test_vector_index():
           plan is not None and '"article_id": 12' in " ".join(plan.get("tools") or []),
           str(plan and plan.get("tools"))[:80])
     plan2 = D2._candidate_detail_plan(msgs, ['get_article_detail({"article_id": 12})'], set())
-    check("已读过最高分那篇 ⇒ 其余不高分的全跳过（闸按融合分单调比较）",
-          plan2 is None, str(plan2))
+    check("已读榜首但证据不足时仍能探索剩余候选",
+          plan2 is not None, str(plan2))
     plan3 = D2._candidate_detail_plan(msgs, ['get_article_detail({"article_id": 14})'], set())
     check("已读过最低分那篇 ⇒ 高分候选照读（闸不是「一律清空」）",
           plan3 is not None and '"article_id": 12' in " ".join(plan3.get("tools") or []),

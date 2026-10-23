@@ -74,6 +74,16 @@ from agent.prompt_context import (  # noqa: E402
 from tools.base import _UNREAD_CONTENT_MAX, _UNREAD_ITEMS_MAX  # noqa: E402
 
 
+def _check_index_chunks(title, content, section_names):
+    print("① 索引切片保留标题路径、来源范围并限制大小")
+    indexed = chunk_note(title, content)
+    check("每片有范围与小节 id，并保持大小限制",
+          all(c["section_id"] and c["end"] > c["start"] and len(c["text"]) <= 1800
+              for c in indexed))
+    check("短文正文完整保留", chunk_note(title, "短正文")[0]["text"] == "短正文")
+    check("长文的小节均可被索引定位", set(section_names) <= {c["section"] for c in indexed})
+
+
 def test_sections():
     TITLE = "Saudade Blog AI Agent（泠月喵）架构文档"
     SEC_NAMES = ["1. 系统总览", "2. 组件与目录", "3. 一次对话的完整链路", "4. 记忆机制",
@@ -101,20 +111,13 @@ def test_sections():
     OUTLINE_MIX = (TITLE + "\n\n" + _FIRST + "甲" * _FILL
                    + "\n\n## 2. 真空节\n\n## 3. 第三节\n" + "乙" * 300
                    + "\n\n### 3.1 子节\n" + "丙" * 300)
-    print("① 切分：与索引同源（chunk_note 只是转发）")
-    check("chunk_note 输出 == sections.split 的 section/text 投影",
-          chunk_note(TITLE, LONG) == [{"section": c["section"], "text": c["text"]}
-                                      for c in sections.split(LONG, TITLE)])
-    check("短文（<2000）不切，整篇一节且节名=文章标题",
-          chunk_note(TITLE, "短正文") == [{"section": TITLE, "text": "短正文"}])
-    check("长文按节切出 11 节（开头段 + 10 节）",
-          len(chunk_note(TITLE, LONG)) == 11, str(len(chunk_note(TITLE, LONG))))
+    _check_index_chunks(TITLE, LONG, SEC_NAMES)
     check("小节名不含 `##`（与索引既有行为一致）",
           all(not c["section"].startswith("#") for c in chunk_note(TITLE, LONG)))
-    check("只认 1-3 级：`####` 不是节边界",
-          len(sections.split("#### 四级\n正文", shortcut=False)) == 1)
-    check("4 级标题落在正文里（不算节）",
-          "#### 四级" in sections.split("#### 四级\n正文", shortcut=False)[0]["text"])
+    check("识别 Markdown 1-6 级标题",
+          sections.split("#### 四级\n正文", shortcut=False)[0]["level"] == 4)
+    check("4 级标题有独立且可读取的小节名",
+          sections.split("#### 四级\n正文", shortcut=False)[0]["section"] == "四级")
     check("headings 只列真正的小节（不含开头段）",
           sections.headings(LONG) == SEC_NAMES)
     check("level 记录标题级别（## → 2）",
@@ -274,8 +277,8 @@ def test_sections():
     check("重复键不进帧头（否则又白占 200 字预算）", "'content'" not in cut)
     check("非 dict 帧退回文本路径（转义还原 + 有标注）",
           "原文共" in sections.frame_excerpt("x" * 30000, CAP))
-    check("小节名重复不误判（pick 取第一个匹配）",
-          sections.pick(LONG + "\n\n## 9. 部署与运维\n重复节", "9", TITLE) is not None)
+    check("小节名重复时要求消歧，不取第一个匹配",
+          sections.pick(LONG + "\n\n## 9. 部署与运维\n重复节", "9", TITLE) is None)
     print("④b slim_frame：造帧那一刻去掉同文本的重复正文键（20260925）")
     slim = sections.slim_frame(frame)
     check("帧体积接近减半（省 ≥45%）", len(slim) < len(frame) * 0.55,
@@ -329,7 +332,7 @@ def test_sections():
     check("返回可 literal_eval（refs 的 $tool[N].field 靠它取值）",
           isinstance(ast.literal_eval(str(sec)), dict))
     check("返回带 noteKey（清单让模型照抄 id 再读一次）",
-          ast.literal_eval(str(sec))["noteKey"] == 19)
+          ast.literal_eval(str(sec))["noteId"] == 19)
     check("按节返回仍是 ok（不是空）——读了就是读了", getattr(sec, "kind", "ok") == "ok")
     miss = _read_section({"noteKey": 19, "noteTitle": TITLE, "noteContent": LONG}, 19, "不存在的节")
     d = ast.literal_eval(str(miss))
@@ -402,7 +405,7 @@ def test_sections():
     check("get_article_detail 有 section 参数（str 注解 + 描述都在）",
           "section: Annotated[" in src and '"只读该文章的某一小节' in src)
     check("section 只对 note 生效（talk/board/announcement 走原路）",
-          src.index("if not section or not isinstance(data, dict)") < src.index('"talk": ("/talk"'))
+          src.index("article_page(data, article_id, section,") < src.index('"talk": ("/talk"'))
     ctx_src = (ROOT / "agent" / "prompt_context.py").read_text(encoding="utf-8")
     check("渲染侧用 frame_excerpt", "sections.frame_excerpt(text, _DETAIL_FRAME_PER)" in ctx_src)
     check("旧的无声硬截断已移除", "原文过长仅示前" not in ctx_src)
@@ -418,7 +421,7 @@ def test_sections():
     check("trace 记录帧体量 frames_chars", "frames_chars=len(frames_txt)" in g_src)
     rag_src = (ROOT / "rag" / "search.py").read_text(encoding="utf-8")
     check("索引切分只是转发（不再各写一份）",
-          "from rag.sections import split" in rag_src and "def chunk_note" in rag_src)
+          "from rag.chunks import split" in rag_src and "def chunk_note" in rag_src)
     print("⑧ 列表帧的紧凑渲染（20260921：一行一条 + 整行取舍 + 共几条）")
     _rows10 = "[" + ", ".join(
         "{'noteKey': %d, 'noteTitle': '第%d篇', 'noteContent': '%s', 'status': 'public',"

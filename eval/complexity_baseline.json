@@ -12,8 +12,8 @@
     "lines": 340
   },
   "agent/deterministic_plan.py::_candidate_detail_plan": {
-    "c": 51,
-    "lines": 99
+    "c": 42,
+    "lines": 86
   },
   "agent/graph.py::_claim_issue": {
     "c": 37,
@@ -32,8 +32,8 @@
     "lines": 193
   },
   "agent/graph.py::_finalize_dedupe": {
-    "c": 48,
-    "lines": 196
+    "c": 47,
+    "lines": 178
   },
   "agent/graph.py::execute_node": {
     "c": 73,
@@ -144,8 +144,8 @@
     "lines": 102
   },
   "rag/vector_index.py::VectorStore._update_locked": {
-    "c": 38,
-    "lines": 113
+    "c": 33,
+    "lines": 94
   },
   "scripts/build_word_graph.py::main": {
     "c": 39,
@@ -157,7 +157,7 @@
   },
   "server.py::chat_stream": {
     "c": 14,
-    "lines": 351
+    "lines": 342
   },
   "server.py::chat_stream.event_stream": {
     "c": 43,
@@ -204,16 +204,16 @@
     "lines": 312
   },
   "tests/test_chat_quota.py::test_chat_quota": {
-    "c": 163,
-    "lines": 636
+    "c": 160,
+    "lines": 631
   },
   "tests/test_checkpoint_factory.py::test_checkpoint_factory": {
     "c": 39,
     "lines": 271
   },
   "tests/test_ci_suite_list.py::test_ci_suite_list": {
-    "c": 40,
-    "lines": 163
+    "c": 38,
+    "lines": 162
   },
   "tests/test_confirm.py::test_confirm": {
     "c": 208,
@@ -248,7 +248,7 @@
     "lines": 454
   },
   "tests/test_golden_fixture_corpus.py::test_golden_fixture_corpus": {
-    "c": 58,
+    "c": 57,
     "lines": 156
   },
   "tests/test_golden_keys.py::test_golden_keys": {
@@ -368,8 +368,8 @@
     "lines": 163
   },
   "tests/test_sections.py::test_sections": {
-    "c": 91,
-    "lines": 459
+    "c": 90,
+    "lines": 452
   },
   "tests/test_settings_surface.py::test_settings_surface": {
     "c": 37,

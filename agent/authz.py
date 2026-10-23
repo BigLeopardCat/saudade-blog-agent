@@ -1336,8 +1336,8 @@ def is_own_write_command(msg: str) -> bool:
 #      零工具才是对的（去检索反而绕远）。golden `followup_entity_slot_category` /
 #      `_ambiguous` 正是这一条：它们与"真的要检索"字面完全同形（top1 都是 10.33），
 #      少了这道守卫就直接打红一条现在绿的用例；
-#   ⑥ 站内指称 + 必须成问（含量词型打听）+ 语料确有候选（`rag.search` 的 BM25 命中，
-#      `_CLIFF_RATIO` 已在内）。
+#   ⑥ 站内指称 + 必须成问（含量词型打听）。20261023 起不在判据中检索；
+#      是否命中、服务是否可用都由后续真实工具调用报告。
 #
 # 射程（**落码时先后量过两遍**）：
 #   · 判据词面（落码前，全量 1110 份 trace 回放）：uid>0 的零帧放行轮 300 轮里命中 **1**；
@@ -1375,8 +1375,7 @@ def is_site_corpus_question(msg: str) -> bool:
 
     只回答"这是不是一个**该去检索一次**的问句"，不回答"该检索什么"——落到哪个技能由 planner
     定（同 `is_own_read_question` 与 `_replan_note` 的纪律：这一层只给路径、不给结论）。
-    空消息 → False。语料候选由 `rag.search` 判（**惰性导入**：别让 authz 的模块加载
-    去背语料索引的构建代价，也被测试挡在门外时仍可单独用）。
+    空消息 → False。本判据不进行 I/O；是否有相关内容由后续真实检索返回决定。
     """
     text = strip_user_shell(msg)
     if not text:
@@ -1393,11 +1392,9 @@ def is_site_corpus_question(msg: str) -> bool:
         return False
     if not _SITE_DEIXIS_RE.search(text):                      # ⑥b 站内指称
         return False
-    from rag.search import search as _rag_search              # ⑥c 语料确有候选
-    try:
-        return bool(_rag_search(msg))
-    except Exception:                                         # 索引没热起来/坏了 → fail-closed
-        return False
+    # Discovery is an operation, not an authorization predicate. A source outage
+    # or no-match must still lead to a real tool result, never permit a guessed answer.
+    return True
 
 
 def scopes_for(role: str | None) -> frozenset[str]:

@@ -3796,9 +3796,9 @@ def _test_candidate_relevance_pick():
     check("rag 池按分数降序 → 首读最高分 19",
           p1 is not None and 'article_id": 19' in p1["tools"][0],
           str(p1 and p1["tools"][0])[:60])
-    check("已读最高分 19 → 不再读低分候选（00:55 现场：不读 16/46）",
+    check("已读榜首但答案不足时仍探索剩余候选",
           _candidate_detail_plan(rmsgs, ['get_article_detail({"article_id": 19})'],
-                                 rterms) is None)
+                                 rterms) is not None)
     p2 = _candidate_detail_plan(rmsgs, ['get_article_detail({"article_id": 16})'], rterms)
     check("已读低分 16 → 仍可以去读更高的 19（只允许越读越高分）",
           p2 is not None and 'article_id": 19' in p2["tools"][0],
@@ -3811,9 +3811,9 @@ def _test_candidate_relevance_pick():
                 "2. type=note id=16 score=3.10 title=Git从入门到入土\n"
                 "3. type=note id=19 score=6.00 title=Saudade Blog AI Agent（泠月喵）架构文档",
         name="rag_search", tool_call_id="t5")
-    check("同一 id 重复行取最高分（19 的 6.00 顶掉 0.42）→ 已读后无候选可读",
+    check("多轮重复候选去重后仍可探索尚未读过的其他文章",
           _candidate_detail_plan([HumanMessage(content="x"), dupe_frame],
-                                 ['get_article_detail({"article_id": 19})'], []) is None)
+                                 ['get_article_detail({"article_id": 19})'], []) is not None)
 
 
 def _test_scan_action_intents():

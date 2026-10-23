@@ -537,6 +537,17 @@ _EXPERIENCE_TITLE_RE = re.compile(
 _RAG_ROW_RE = re.compile(
     r"^\s*\d+\.\s*type=(\w+)\s+id=(\d+)\s+score=([\d.]+)\s+title=(.*)$", re.M)
 
+_RAG_READ_RE = re.compile(
+    r"section=(s\d+)\s+offset=(\d+)\s+revision=([a-f0-9]{64})(?:\s|$)")
+
+
+def _candidate_read_args(title: str) -> dict:
+    match = _RAG_READ_RE.search(title)
+    if match is None:
+        return {}
+    return {"section": match[1], "offset": int(match[2]), "revision": match[3]}
+
+
 # 候选相关性判定（20260912，检索重复拦截的位置规则加固）
 # 关键词检索（search_notes）的候选行序：**20260912 起 = 后端相关度降序**（Rust
 # notes.rs 补了 search_score：标题 +100 / 标签 +30 / 正文次数 ≤10），在此之前
@@ -588,28 +599,18 @@ def _title_relevant(title: str, terms: set[str]) -> bool:
 # 一条正则在 spec 文本里搜 `article_id`：写法一变就搜不到，而后果不是报错，是**同一篇
 # 被当成没读过再读一遍**。只认整数值——正则那一版同样只认"后面直接跟数字"。
 def _candidate_detail_plan(messages: list, executed: list, terms: set[str]) -> dict | None:
-    """重复拦截的确定性出路：从最近检索帧候选行里挑"能对上号"的未读文档读全文。
+    """Read bounded, unread candidates from the newest ranked search frames.
 
-    20260912 位置规则加固——候选行按来源分流处置（两者顺序语义完全不同）：
-      * search_notes（关键词命中）：行序 = **相关度降序**（20260912 起后端按
-        标题+100/标签+30/正文次数打分排序，`notes.rs::search_score`；此前确为主键序、
-        无相关度含义，本节旧注释与 9/8 事故同源），但仍必须标题与检索实词有词元
-        重叠才可自动读——排序只保证"更好的在前"，不保证第一条就对得上号；
-      * rag_search（本地 BM25）：行序 = 相关度序 → 关键词候选全不匹配时兜底
-        （语义检索的价值正是"标题不含查询词也能命中"，不该被标题过滤否定）。
-    经验记录类标题在存在机制文档时延后（20260903 rag_ota_http 实证：只命中
-    《问题与解决记录》踩坑史）。候选全已读 / 无一能对上号 → None：调用方如实
-    收尾并列出候选——**诚实优于硬读**（读错一篇的代价是整轮跑题 + 跨轮锚点污染）。
-
-    20260920 加**相关度闸**（"只允许越读越高分"）：rag 候选按分数取最高分去重、
-    池内按分降序，且分数不高于"已读候选最高分"的一律不读——读全文的收益只来自
-    最好的那份证据，低分候选是小语料 top_k 的填充物（见函数内注释的实证数据）。
+    Keyword candidates require title/term overlap. RAG candidates retain their
+    supplied within-query order, section, range and content revision. Read ids
+    include document type; unrelated namespaces cannot suppress an article read.
     """
-    done_ids = {str(aid) for s in executed
-                for aid in [_tool_args(s)[0].get("article_id")] if isinstance(aid, int)}
+    done_ids = {(str(args["article_id"]), args.get("doc_type", "note"))
+                for spec in executed for args in [_tool_args(spec)[0]]
+                if type(args.get("article_id")) is int}
     frames = [m for m in messages if isinstance(m, ToolMessage)]
     # (id, doc_type, title, src, score)——score 只有 rag 行有（BM25 分），kw 行 None
-    rows: list[tuple[str, str, str, str, float | None]] = []
+    rows: list[tuple[str, str, str, str, float | None, dict]] = []
     for m in reversed(frames):
         name = getattr(m, "name", "") or ""
         text = _msg_text(m)
@@ -627,49 +628,28 @@ def _candidate_detail_plan(messages: list, executed: list, terms: set[str]) -> d
                                 else r.get("noteKey")
                         if nid is not None:
                             rows.append((str(nid), "note",
-                                         str(r.get("noteTitle") or ""), "kw", None))
+                                         str(r.get("noteTitle") or ""), "kw", None, {}))
             elif name == "rag_search":
                 for typ, rid, score, title in _RAG_ROW_RE.findall(text):
                     dt = ("talk" if typ == "talk" else "board" if typ == "board"
                           else "note")
                     rows.append((rid, dt, title.split(" 命中节=")[0], "rag",
-                                 float(score)))
+                                 float(score), _candidate_read_args(title)))
         except Exception:
             continue
-    # 同一篇在多轮检索里出现 → 取**最高分**（相关度 = 它拿到过的最好成绩）；行序按首次
-    # 出现（_EXPERIENCE_TITLE_RE 的经验记录延后仍按原始序生效）。
-    best: dict[str, tuple] = {}
-    order: list[str] = []
-    for r in rows:
-        if r[0] not in best:
-            best[r[0]] = r
-            order.append(r[0])
-        elif r[4] is not None and (best[r[0]][4] is None or r[4] > best[r[0]][4]):
-            best[r[0]] = r
-    ordered = [best[i] for i in order]
-    unread = [r for r in ordered if r[0] not in done_ids]
+    # Preserve the newest query's supplied rank. BM25/RRF raw scores must not
+    # reorder candidates from different queries; document namespaces remain distinct.
+    best: dict[tuple, tuple] = {}
+    for row in rows:
+        best.setdefault((row[0], row[1]), row)
+    unread = [row for identity, row in best.items() if identity not in done_ids]
     if not unread:
         return None
-    # 相关度闸（20260920）：**只允许越读越高分**——已读候选里的最高分即"手头最好的
-    # 证据"，再读不高分候选是纯噪声。事故（真实 trace 20260920 00:55:28）：问"有没有
-    # 你的设计文档"，rag 候选 7.54 / 2.76(Git 教程) / 1.53 / 1.45 / 1.41，改读却连着
-    # 读了 19→16→46 三篇全文（40.7s），后两篇对回答零贡献。语料只有 10 篇而 top_k=5，
-    # 每次检索固定倒回半个语料库，低分行不是"漏网的语义命中"而是 top_k 的填充物——
-    # 全库 88 次 rag_search 里 id=19 出现 83 次、id=16 出现 79 次即是证据。kw 行不受
-    # 此闸约束（无分数，相关性由 _title_relevant 的标题词元重叠保证）。
-    read_scores = [r[4] for r in ordered if r[0] in done_ids and r[4] is not None]
-    if read_scores:
-        read_max = max(read_scores)
-        kept = [r for r in unread if r[3] == "kw" or (r[4] or 0) > read_max]
-        if len(kept) < len(unread):
-            logger.info("[planner] 候选改读闸：已读最高分 %.4f，跳过 %d 条不高分候选",
-                        read_max, len(unread) - len(kept))
-        unread = kept
-    if not unread:
-        return None
+    # Scores order candidates within a query; they are not evidence-quality
+    # thresholds across queries. Keep bounded exploration of unread candidates.
+    unread = unread[:3]
     kw_hit = [r for r in unread if r[3] == "kw" and _title_relevant(r[2], terms)]
-    rag_pool = sorted((r for r in unread if r[3] == "rag"),
-                      key=lambda r: r[4] or 0.0, reverse=True)
+    rag_pool = [r for r in unread if r[3] == "rag"]
     pick_pool = kw_hit or rag_pool
     if not pick_pool:
         logger.info("[planner] 候选无一与检索实词（%s）对得上号 → 不硬读，如实收尾",
@@ -677,12 +657,10 @@ def _candidate_detail_plan(messages: list, executed: list, terms: set[str]) -> d
         return None
     mech = [r for r in pick_pool if not _EXPERIENCE_TITLE_RE.search(r[2])]
     pick = (mech or pick_pool)[0]
-    plan_obj = instantiate_plan("content_query", {"calls": [
-        {"tool": "get_article_detail",
-         "args": {"article_id": int(pick[0]), "doc_type": pick[1]}}]})
-    plan_obj["params"] = {"calls": [{"tool": "get_article_detail",
-                                     "args": {"article_id": int(pick[0]),
-                                              "doc_type": pick[1]}}]}
+    args = {"article_id": int(pick[0]), "doc_type": pick[1], **pick[5]}
+    calls = [{"tool": "get_article_detail", "args": args}]
+    plan_obj = instantiate_plan("content_query", {"calls": calls})
+    plan_obj["params"] = {"calls": calls}
     plan_obj["note"] = ((plan_obj.get("note") or "")
                         + f"（确定性改读候选《{pick[2][:24]}》全文）")
     return plan_obj
@@ -794,3 +772,16 @@ def _wrap_up_plan(has_frames: bool, reason: str = "", note: str = "") -> dict:
     return _terminal_plan(has_frames,
                           reason or f"已达规划轮次上限（{MAX_PLAN_ROUNDS}）",
                           note=note)
+
+
+def _literal_navigation_plan(plan_obj: dict, user_msg: str) -> dict:
+    """Preserve explicit browser paths rather than inferring another destination."""
+    lit = re.search(r"/[A-Za-z0-9_\-./]+", user_msg)
+    if (plan_obj["workflow"] == "navigate" and lit
+            and plan_obj["params"].get("target") != lit.group(0)):
+        logger.info("[planner] 字面路径修正：用户消息含 %s，planner 目标 %r → 强制 %s",
+                    lit.group(0), plan_obj["params"].get("target"), lit.group(0))
+        plan_obj = instantiate_plan("navigate", {"target": lit.group(0)})
+        plan_obj["params"] = {"target": lit.group(0)}
+
+    return plan_obj

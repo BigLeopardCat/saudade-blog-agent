@@ -1,71 +1,15 @@
-"""向量索引：混合检索（BM25 + 向量 + RRF）的向量那一路。
+"""Optional vector retrieval with content-addressed immutable cache generations.
 
-20261005 用户第 1 条。词法路在 `rag/search.py`（自研 BM25，恒在）；本模块只管
-"把 chunk 嵌成向量、存好、按需重建"，以及融合用的 `rrf_fuse` / `cos_sim` 纯函数。
-**融合编排在 `rag/search.py::RagIndex.search()`**，不在这里——这里不 import
-`rag.search`（它是本模块的调用方，反向 import 就是环）。
-
-## 为什么是"自研 f32 文件"而不是向量库
-
-生产 venv 只有 11 个依赖、`==` 钉死，且**本机 `.venv` 就是产线 venv**（不许
-`uv sync`）。语料是几十~几百篇、chunk 数百条 × 1024 维 ⇒ 单查询全库点积毫秒级，
-纯 Python 就够（`rag/wordgraph.py` 的 `_cosines` 是同一处境下的同一个选择）。
-为此在这里引一个编译型依赖（numpy/faiss/chroma/sqlite-vec），代价远大于收益。
-**什么时候该换**：chunk 数上万、或单查询点积超过 ~50ms。那时换的是本模块的
-`VectorView.similar`，出口契约（`rrf_fuse` 的入参）不变。
-
-## 增量：增量在哪、全量在哪（别把它读成"整库增量"）
-
-| 环节 | 增量? | 说明 |
-|---|---|---|
-| HTTP 拉语料 / BM25 重建 | **全量** | 本来就 <100ms，且评测依赖它的确定性 |
-| **embedding API 调用** | **增量** | 唯一花钱、唯一慢的一环 |
-| cache / manifest 落盘 | **全量重写** | 数百 KB 的本地 I/O，行级 patch 不值 |
-| 每 worker 的内存视图 | 每次刷新重建 | 读盘 ~ms |
-
-"内容是否有变"的判据是**内容寻址**：`chunk_key = md5(模型 + 端点 + 维度 + 文本)`。
-所以——
-
-  · 改一节 ⇒ 只有那一节（以及被 markdown 重切挤动的相邻节）换 key ⇒ 只嵌它们；
-  · 改标题 ⇒ **该篇全部 chunk 重嵌**（`title` 进 embedding 文本，这是刻意的：
-    把 title 从 key 里拿掉能省一次重嵌，代价是静默复用"旧标题"的向量）；
-  · 删文章 / 删章节 ⇒ 新 keys 里没有它 ⇒ **0 次 API**，只是 manifest 不再引用它，
-    `update()` 顺手按代数把孤儿剪掉（**没有单独的维护命令**：一个没人执行的入口
-    等于不存在——R2 那次的 `--keep 3` 就是写了没人跑）；
-  · 换模型 / 换端点 / 换维度 ⇒ key 里三个字段都变 ⇒ 天然全部 miss（**"同一模型名
-    在不同平台不是同一个向量空间"**：所以 `base_url` 也进 key）。
-
-**没有 `--force` 重嵌**：缓存键已经含模型/端点/维度，换模型本来就全部 miss；
-"强制重嵌"只会在同一个向量空间里重复花钱买一模一样的向量。
-
-## 不变式（逐条校验，任一不过就当作"没有可用向量"，绝不返回错向量）
-
-① `manifest.space` 与当前配置的**请求空间**逐字段相等（模型/端点/请求维度）。
-   在**装载时**与**每次取用**（`view_for`/`view`）各核一次：装载是一次性的，而进程
-   活得比配置久（settings 是模块级单例，改它不必重启进程）。
-② `count == len(keys)`，每个 key 都在 cache 里、行号在 `cache.f32` 范围内；
-③ `manifest.cache_dim == cache.dim`（**实际维度**只有一处事实源：cache 文件头）。
-
-维度分两个概念，别混：`space.dim` = **请求维度**（0 = 不向 API 传 `dimensions`，
-不同供应商支持度不一，传了可能 400），进缓存键；`cache.dim` = **实际拿到几维**，
-只有一处事实源。嵌入返回的长度与 `cache.dim` 不一致时**宁可丢弃**（记 `missing`），
-也绝不把两个维度的向量混进同一个文件——`zip` 会静默截断，那是"看不出来的错"。
-
-## 原子写（唯一顺序，别改）
-
-    cache.f32 → cache.json → **最后** manifest.json
-
-manifest 是唯一的提交点；前两个文件只被追加/整体重写。崩在任何一步，读者见到的
-都是"旧 manifest + 旧 cache（或超集）"，恒自洽。**绝不原地覆盖一个还被活跃
-manifest 引用的二进制**——那是半成品的来源（旧 manifest 指向被覆盖过的新字节）。
+The writer fsyncs generation files before atomically replacing manifest.json.
+Readers verify file hashes and corpus/space alignment. Schema 1 caches are not
+trusted or imported: the first schema 2 update rebuilds embeddings once.
 """
 from __future__ import annotations
 
-import fcntl
 import hashlib
 import json
 import logging
-import os
+import math
 import threading
 import time
 from array import array
@@ -74,10 +18,19 @@ from operator import mul
 from pathlib import Path
 
 from config import settings as _settings
+from rag.vector_files import (
+    _Flock,
+    _read_json,
+    _write_atomic,
+    generation_history,
+    prune_generations,
+    read_generation,
+    write_generation,
+)
 
 logger = logging.getLogger(__name__)
 
-SCHEMA = 1
+SCHEMA = 2
 SEP = "\x1f"          # 键的分隔符：不可能出现在文本里（\x1f = US，控制字符）
 PRUNE_KEEP_GENS = 2   # 孤儿向量保留几代（给"误删后马上改回来 / 分页抖动"留缓冲）
 
@@ -120,13 +73,13 @@ def chunk_text(title: str, text: str) -> str:
     """chunk 的 embedding 文本。**与向量路建库时用的必须是同一个函数产出的同一个
     字符串**——两处各写一次 f-string，哪天一边改了分隔符，缓存就整片 miss（慢而
     不报错）或者更糟：复用到另一个字符串的向量。"""
-    return f"{title}\n{text}"
+    return f"{title[:400]}\n{text}"
 
 
 def chunk_key(space: Space, text: str) -> str:
     """内容寻址键：同一份文本在同一空间里恒得同一个键，换空间必得不同键。"""
     raw = f"{space.model}{SEP}{space.base_url}{SEP}{space.dim}{SEP}{text}"
-    return hashlib.md5(raw.encode("utf-8")).hexdigest()
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
 
 def corpus_fingerprint(space: Space, chunks: list[dict]) -> str:
@@ -139,7 +92,7 @@ def corpus_fingerprint(space: Space, chunks: list[dict]) -> str:
     parts = [f"{c.get('type','')}{SEP}{c.get('id','')}{SEP}{c.get('section','')}"
              f"{SEP}{chunk_key(space, chunk_text(c.get('title',''), c.get('text','')))}"
              for c in chunks]
-    return hashlib.sha1("\n".join(parts).encode("utf-8")).hexdigest()
+    return hashlib.sha256("\n".join(parts).encode("utf-8")).hexdigest()
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -148,6 +101,8 @@ def corpus_fingerprint(space: Space, chunks: list[dict]) -> str:
 
 def cos_sim(a, b) -> float:
     """余弦。**不假设 provider 返回单位向量**（wordgraph 敢用点积是因为它自己归一化了）。"""
+    if len(a) != len(b):
+        raise ValueError("Embedding dimension mismatch")
     dot = sum(map(mul, a, b))
     na = sum(x * x for x in a) ** 0.5
     nb = sum(x * x for x in b) ** 0.5
@@ -175,16 +130,17 @@ def rrf_fuse(lex: list[dict], vec: list[dict], k: int, top_k: int) -> list[dict]
             scores[key] = scores.get(key, 0.0) + 1.0 / (k + rank)
             agg = info.get(key)
             if agg is None:
-                info[key] = {"type": d["type"], "id": d["id"], "title": d["title"],
-                             "sections": list(d.get("sections") or [])}
-            else:
-                for s in (d.get("sections") or []):
-                    if s not in agg["sections"]:
-                        agg["sections"].append(s)
+                agg = info[key] = {**d, "sections": [], "section_ids": [], "matches": []}
+            for field in ("sections", "section_ids", "matches"):
+                for value in d.get(field) or []:
+                    if value not in agg[field]:
+                        agg[field].append(value)
     out = [dict(info[key], score=round(scores[key], 4))
            for key in sorted(scores, key=lambda x: -scores[x])]
     for r in out:
         r["sections"] = r["sections"][:2]
+        r["section_ids"] = r["section_ids"][:3]
+        r["matches"] = r["matches"][:3]
     return out[:max(1, top_k)]
 
 
@@ -224,7 +180,10 @@ def _embed_raw(texts: list[str], space: Space) -> list[list[float]]:
     if space.dim > 0:
         kwargs["dimensions"] = space.dim
     resp = client.embeddings.create(**kwargs)
-    got = [v.embedding for v in sorted(resp.data, key=lambda v: v.index)]
+    ordered = sorted(resp.data, key=lambda v: v.index)
+    if [v.index for v in ordered] != list(range(len(texts))):
+        raise ValueError("Invalid embedding response indexes")
+    got = [v.embedding for v in ordered]
     if len(got) != len(texts):
         # 实测（PoC 注释）：批次里会静默丢数据 —— 不许当成"只是少了点"
         raise ValueError(f"期望 {len(texts)} 条，API 返回 {len(got)} 条")
@@ -249,7 +208,7 @@ def _embed_texts(texts: list[str], space: Space) -> list[list[float] | None]:
     for i in range(0, len(texts), size):
         batch = texts[i:i + size]
         try:
-            got = _embed_raw(batch, space)
+            got: list[list[float] | None] = [*_embed_raw(batch, space)]
         except Exception as exc:                     # noqa: BLE001
             logger.warning("embedding 批量 %d 条失败（%s），降级逐条调用",
                            len(batch), exc)
@@ -288,24 +247,30 @@ class VectorView:
         return [cos_sim(q, v) for v in self.vectors]
 
 
-def _write_atomic(path: Path, data: bytes) -> None:
-    """同目录 tmp + fsync + os.replace。同目录是必须的（跨设备 rename 不原子）。"""
-    tmp = path.with_name(f"{path.name}.tmp.{os.getpid()}")
-    with open(tmp, "wb") as f:
-        f.write(data)
-        f.flush()
-        os.fsync(f.fileno())
-    os.replace(tmp, path)
+class DimensionChanged(ValueError):
+    """The provider changed dimensions; all active rows need re-embedding."""
 
 
-def _read_json(path: Path) -> dict | None:
-    try:
-        return json.loads(path.read_text(encoding="utf-8"))
-    except FileNotFoundError:
-        return None
-    except Exception as exc:                          # noqa: BLE001
-        logger.warning("读 %s 失败（%s）——按没有向量处理", path.name, exc)
-        return None
+def _materialize(pending, values, old_dim: int, requested_dim: int):
+    embedded: list[tuple[str, array]] = []
+    failed: list[str] = []
+    adopted = old_dim
+    for (key, _), value in zip(pending, values):
+        if not value or not all(math.isfinite(x) for x in value):
+            failed.append(key)
+            continue
+        row = array("f", value)
+        if not all(math.isfinite(x) for x in row) or (requested_dim and len(row) != requested_dim):
+            failed.append(key)
+            continue
+        if adopted and len(row) != adopted:
+            if old_dim and not embedded:
+                raise DimensionChanged()
+            failed.append(key)
+            continue
+        adopted = adopted or len(row)
+        embedded.append((key, row))
+    return embedded, failed
 
 
 class VectorStore:
@@ -380,7 +345,7 @@ class VectorStore:
         keys = list(m.get("keys") or [])
         if len(keys) != int(m.get("count", -1)):      # ②
             raise ValueError("count 与 keys 长度不符")
-        cj = _read_json(self.root / CACHE_JSON)
+        cj, raw = read_generation(self.root, m)
         if cj is None or int(cj.get("schema", 0)) != SCHEMA:
             raise ValueError("cache.json 缺失或 schema 不符")
         dim = int(cj.get("dim", 0) or 0)
@@ -389,7 +354,6 @@ class VectorStore:
         if int(m.get("cache_dim", 0)) != dim:         # ③
             raise ValueError(f"cache_dim 不符：manifest={m.get('cache_dim')} cache={dim}")
         entries = list(cj.get("entries") or [])
-        raw = (self.root / CACHE_F32).read_bytes()
         if len(raw) != len(entries) * dim * 4:        # 截断/半成品必须被拒
             raise ValueError(f"cache.f32 长度 {len(raw)} != {len(entries)}×{dim}×4")
         row_of = {str(k): i for i, (k, _g) in enumerate(entries)}
@@ -490,13 +454,13 @@ class VectorStore:
                         "reused": len(set(keys)), "api_calls": 0}
             return self._update_locked(texts, keys, space, fp)
 
-    def _update_locked(self, texts, keys, space, fp) -> dict:
+    def _update_locked(self, texts, keys, space, fp, reset=False) -> dict:
         """已经在 flock 里：算差集 → 只嵌缺的 → 原子落盘。
 
         `gen` 是**单调代数**（旧的最大代数 +1），**不是时间戳**：`PRUNE_KEEP_GENS`
         说的是"给最近 N 代留窗"，只有整数代数讲得通。
         """
-        old_keys, old_dim, old_rows = self._read_cache()
+        old_keys, old_dim, old_rows = ({}, 0, {}) if reset else self._read_cache()
         m0 = _read_json(self.manifest_path) or {}
         retry = set(m0.get("missing") or [])   # 上一轮嵌失败的键：占着零向量行，要重试
         gen = max([int(m0.get("gen") or 0)] + [int(g) for g in old_keys.values()] + [0]) + 1
@@ -524,30 +488,10 @@ class VectorStore:
         failed: list[str] = []
         if pending:
             vecs = _embed_texts([t for _, t in pending], space)
-            adopted = old_dim
-            for (key, _t), v in zip(pending, vecs):
-                if not v:
-                    failed.append(key)
-                    continue
-                row = array("f", v)
-                if adopted and len(row) != adopted:
-                    if not embedded and old_dim:
-                        # 供应商把输出维度改了 ⇒ 新行与旧行不能同处一个文件（`zip` 会
-                        # 静默截断成"看着对的错分数"）。整库作废，本批按新维度重建。
-                        logger.error("embedding 维度从 %d 变成 %d —— 旧库整库作废重建",
-                                     old_dim, len(row))
-                        self._last_error = "dim_changed"
-                        self._wipe_cache()
-                        old_keys, old_rows, old_dim = {}, {}, 0
-                        adopted = len(row)
-                    else:
-                        logger.warning("向量长度 %d 与已采用的 %d 不符，丢弃该条",
-                                       len(row), adopted)
-                        failed.append(key)
-                        continue
-                elif not adopted:
-                    adopted = len(row)
-                embedded.append((key, row))
+            try:
+                embedded, failed = _materialize(pending, vecs, old_dim, space.dim)
+            except DimensionChanged:
+                return self._update_locked(texts, keys, space, fp, reset=True)
 
         dim = old_dim or (len(embedded[0][1]) if embedded else 0)
         if dim <= 0:
@@ -563,7 +507,7 @@ class VectorStore:
         for key in seen:
             row = old_rows.get(key)
             if row is not None:
-                keep[key] = (row, int(old_keys.get(key, 0)))
+                keep[key] = (row, gen)
         for key, row in embedded:
             keep[key] = (row, gen)
         zeros: array | None = None
@@ -579,14 +523,14 @@ class VectorStore:
                 keep[key] = (old_rows[key], int(g))
 
         order = [(k, g) for k, (_r, g) in keep.items()]
-        _write_atomic(self.root / CACHE_F32,
-                      b"".join(r.tobytes() for _k, (r, _g) in keep.items()))
-        _write_atomic(self.root / CACHE_JSON, json.dumps(
-            {"schema": SCHEMA, "dim": dim, "entries": order},
-            ensure_ascii=False).encode("utf-8"))
+        cache_files = write_generation(self.root,
+            b"".join(r.tobytes() for _k, (r, _g) in keep.items()),
+            {"schema": SCHEMA, "dim": dim, "entries": order}, _write_atomic)
         active_keys = [k for k in keys if k in keep]
         manifest = {
             "schema": SCHEMA, "gen": gen, "space": space.as_dict(),
+            "cache_files": cache_files,
+            "previous_caches": generation_history(m0),
             "fingerprint": fp, "count": len(active_keys), "keys": active_keys,
             "cache_dim": dim, "missing": failed,
             "built_at": time.strftime("%Y-%m-%d %H:%M:%S"),
@@ -596,6 +540,7 @@ class VectorStore:
         }
         _write_atomic(self.manifest_path,
                       json.dumps(manifest, ensure_ascii=False).encode("utf-8"))
+        prune_generations(self.root, manifest)
         self._last_error = None
         logger.info("向量索引已更新：新嵌 %d / 复用 %d / API %d 批 / 维度 %d / 缺 %d",
                     len(embedded), reused, _batches(len(pending)), dim, len(failed))
@@ -608,18 +553,17 @@ class VectorStore:
 
     def _read_cache(self) -> tuple[dict[str, int], int, dict[str, array]]:
         """读整套缓存（键→代数、维度、键→向量）。坏文件一律按空缓存处理。"""
-        cj = _read_json(self.root / CACHE_JSON)
-        if not cj or int(cj.get("schema", 0)) != SCHEMA:
+        m = _read_json(self.manifest_path)
+        if not m or m.get("schema") != SCHEMA:
             return {}, 0, {}
-        dim = int(cj.get("dim", 0) or 0)
-        entries = list(cj.get("entries") or [])
         try:
-            raw = (self.root / CACHE_F32).read_bytes()
-        except FileNotFoundError:
-            return {}, 0, {}
-        if dim <= 0 or len(raw) != len(entries) * dim * 4:
-            logger.warning("向量缓存长度不符（%d != %d×%d×4），按空缓存重建",
-                           len(raw), len(entries), dim)
+            cj, raw = read_generation(self.root, m)
+            dim = int(cj["dim"])
+            entries = cj["entries"]
+            if dim <= 0 or len(raw) != len(entries) * dim * 4:
+                raise ValueError("invalid vector cache size")
+        except (OSError, ValueError, KeyError, TypeError):
+            logger.warning("Invalid vector generation; rebuilding from source")
             return {}, 0, {}
         gens: dict[str, int] = {}
         rows: dict[str, array] = {}
@@ -638,34 +582,6 @@ class VectorStore:
                 pass
 
 
-class _Flock:
-    """跨进程互斥（LOCK_EX|LOCK_NB）。拿不到就返回 False——**不等待**：等一个几百
-    KB 的重建毫无意义，而它正是 4 个 worker 同时启动时的常态。"""
-
-    def __init__(self, path: Path) -> None:
-        self.path = path
-        self.fd: int | None = None
-
-    def __enter__(self) -> bool:
-        try:
-            self.fd = os.open(self.path, os.O_CREAT | os.O_RDWR, 0o644)
-            fcntl.flock(self.fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-            return True
-        except OSError:
-            if self.fd is not None:
-                os.close(self.fd)
-                self.fd = None
-            return False
-
-    def __exit__(self, *exc) -> None:
-        if self.fd is not None:
-            try:
-                fcntl.flock(self.fd, fcntl.LOCK_UN)
-            finally:
-                os.close(self.fd)
-                self.fd = None
-
-
 # ══════════════════════════════════════════════════════════════════════════
 #  进程级单例 + 查询侧
 # ══════════════════════════════════════════════════════════════════════════
@@ -673,8 +589,8 @@ class _Flock:
 _store: VectorStore | None = None
 _store_lock = threading.Lock()
 _warm_lock = threading.Lock()
-_query_cache: "dict[str, array]" = {}
-_query_order: list[str] = []
+_query_cache: dict[tuple[Space, str], array] = {}
+_query_order: list[tuple[Space, str]] = []
 _query_lock = threading.Lock()
 
 
@@ -741,35 +657,37 @@ def route_status() -> dict:
 
 
 def embed_query(query: str) -> array | None:
-    """查询向量：内存 LRU + 超时。失败返回 None（调用方退回纯词法）。
-
-    查询串**截断**（同 `wordgraph` 的做法）：访客可控的无界输入没有理由整段送出去。
-    """
+    """Bounded LRU, keyed by both embedding space and normalized query."""
     q = (query or "").strip()[:512]
     if not q:
         return None
-    with _query_lock:
-        hit = _query_cache.get(q)
-    if hit is not None:
-        return hit
     space = space_from_settings()
+    st = get_store()
+    view = st.view()
+    dim = view.dim if view is not None else 0
+    key = (space, q)
+    with _query_lock:
+        hit = _query_cache.get(key)
+        if hit is not None and (not dim or len(hit) == dim):
+            _query_order.remove(key)
+            _query_order.append(key)
+            return hit
     try:
         got = _embed_texts([q], space)[0]
-    except Exception as exc:                          # noqa: BLE001
-        logger.warning("查询向量嵌入失败（%s）——本轮退回纯词法", exc)
+    except (ValueError, TypeError, IndexError, OverflowError):
+        logger.warning("Query embedding failed", exc_info=True)
         return None
-    if not got:
+    if not got or not all(math.isfinite(x) for x in got) or (dim and len(got) != dim):
         return None
     vec = array("f", got)
-    st = get_store()
-    dim = (st.view().dim if st.view() is not None else 0)
-    if dim and len(vec) != dim:
-        logger.warning("查询向量维度 %d 与索引 %d 不符——本轮退回纯词法", len(vec), dim)
+    if not all(math.isfinite(x) for x in vec):
         return None
     cap = max(1, int(_settings.embedding_query_cache or 256))
     with _query_lock:
-        _query_cache[q] = vec
-        _query_order.append(q)
+        if key in _query_order:
+            _query_order.remove(key)
+        _query_cache[key] = vec
+        _query_order.append(key)
         while len(_query_order) > cap:
             _query_cache.pop(_query_order.pop(0), None)
     return vec
@@ -778,8 +696,7 @@ def embed_query(query: str) -> array | None:
 def warm_async(chunks: list[dict]) -> None:
     """后台把向量索引补到"这批 chunks"。并发调用只起一个线程；不阻塞调用方。
 
-    在 `RagIndex.build()` 之后被踢一脚（build 本身**不联网**——它的"快且确定"是
-    L1 评测依赖的性质，把网络调用塞进去会让 600s 懒刷新变成偶发 600s 卡顿）。
+    在 `RagIndex.build()` 之后触发；语料拉取与词法计算不等待远端 embedding。
     """
     if not is_enabled():
         return
