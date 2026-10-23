@@ -12,7 +12,7 @@ from langchain_core.messages import (
     message_to_dict,
     messages_from_dict,
 )
-from langchain_core.tools import tool
+from langchain_core.tools import ToolException, tool
 from langgraph.checkpoint.memory import InMemorySaver
 from pydantic import ValidationError
 
@@ -137,7 +137,7 @@ def test_read_artifacts_cannot_issue_executable_page_commands():
 @pytest.mark.parametrize(
     "args,error",
     [
-        ({}, ValueError),
+        ({}, ToolException),
         ({"rain": "toggle"}, ValidationError),
         ({"dark_mode": True}, ValidationError),
     ],
@@ -169,7 +169,7 @@ def test_empty_or_invalid_appearance_does_not_create_commands(args, error):
 )
 def test_invalid_navigation_has_no_receipt_in_either_runtime(path):
     assert not site.nav_path_valid(path)
-    with pytest.raises(ValueError):
+    with pytest.raises((ToolException, ValidationError)):
         browser.navigate_page.invoke(_call("navigate_page", {"path": path}), config=_config())
     assert not hasattr(site.navigate_to.invoke({"path": path, "confirm": False}), "meta")
 
@@ -300,3 +300,30 @@ def test_stream_producer_emits_commands_and_receipts_without_confirmation(monkey
     assert [frame.content for frame in frames if isinstance(frame, AIMessageChunk)] == [
         "设置指令已发送。"
     ]
+
+
+def test_invalid_path_returns_recoverable_error_and_keeps_prior_page_commands(monkeypatch):
+    arm, model = _arm(
+        monkeypatch,
+        [
+            _response("load_site_info_tools"),
+            _response("set_page_appearance", {"snow": "on"}),
+            _response("navigate_page", {"path": "/board"}),
+            _response("navigate_page", {"path": "/guestbook"}),
+            AIMessage(content="雪花设置和打开河灯集的指令已发送。"),
+        ],
+    )
+    events = list(arm.stream(graph_input([HumanMessage(content="开雪花，再去留言板")]), _config()))
+    error = model.calls[-2][-1]
+    assert isinstance(error, ToolMessage) and error.status == "error"
+    assert "/guestbook" in error.content and "get_site_map" in error.content
+    execution = next(event[1]["execute"] for event in events if "execute" in event[1])
+    assert [row["tool"] for row in execution["receipts"]] == ["toggle_effect", "navigate_to"]
+
+
+def test_page_schema_errors_are_standard_error_messages():
+    command = browser.tools(_config())["set_page_appearance"]
+    result = command.invoke(_call("set_page_appearance", {"snow": "flip"}), config=_config())
+    assert isinstance(result, ToolMessage) and result.status == "error"
+    assert "snow" in result.content and "on" in result.content and "off" in result.content
+    assert result.artifact is None

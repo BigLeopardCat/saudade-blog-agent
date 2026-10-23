@@ -210,6 +210,8 @@ class ToolSession:
                 raise RuntimeError("Only authorized browser tools may issue page receipts")
             self.receipts.extend(artifact["receipts"])
         kind = artifact.get("kind", "unknown") if message else getattr(body, "kind", "unknown")
+        if message and message.status == "error":
+            kind = "error"
         self.observations.extend(memory.observation(call, body))
         evidence_value = body
         body = str(message.content) if message else str(body)
