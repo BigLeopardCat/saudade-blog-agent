@@ -402,7 +402,8 @@ def test_direct_turns_persist_and_reuse_checkpoint_dialogue(monkeypatch):
     assert second[1][1]["model"]["messages"][0].content == "刚才我说了你好。"
     assert any(m.content == "我说了你好。" for m in model.calls[1])
     assert not any(str(m.content).startswith("[System: ") for m in model.calls[1])
-    assert len(snapshot.values["messages"]) == 6
+    assert len(snapshot.values["messages"]) == 4
+    assert not any(str(m.content).startswith("[System: ") for m in snapshot.values["messages"])
     assert snapshot.next == ()
 
 
