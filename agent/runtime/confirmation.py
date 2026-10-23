@@ -4,8 +4,8 @@ import json
 import uuid
 
 
-def proposal(principal, cid, workflow, spec, *, executor, question, target, reply):
-    from agent import adminops_confirm, confirm
+def proposal(principal, cid, workflow, spec, *, executor, question, target):
+    from agent import confirm
     from agent.runtime.results import TurnResult
     from tools.base import unavailable
 
@@ -14,10 +14,13 @@ def proposal(principal, cid, workflow, spec, *, executor, question, target, repl
     if not token:
         return unavailable("确认服务暂不可用，本次未生成确认卡，也未执行改动。")
     expiry, jti = confirm.token_expiry(token), confirm.token_jti(token)
-    options = adminops_confirm.confirm_opts(1)
+    options = [{"label": "确认执行", "value": "yes", "kind": "primary"},
+               {"label": "取消操作", "value": "no", "kind": "default"}]
+    reply = question + "\n确认后执行；修改需求直接在聊天里说。"
     return TurnResult(reply, {
         "pending_confirm": {"q": question, "opts": options, "token": token,
-                            "specs": specs, "workflow": workflow, "exp": expiry},
+                            "specs": specs, "workflow": workflow, "exp": expiry,
+                            "replay_safe": True},
         "pending_action": {"task_id": f"pa_{jti}", "skill": workflow, "specs": specs,
                            "target": target, "requested_by": "user",
                            "source_event": "confirm_popup", "question": question,
@@ -29,6 +32,8 @@ def proposal(principal, cid, workflow, spec, *, executor, question, target, repl
 def confirmed_runtime(runtime, grant):
     from agent.domains.registry import native_domain
 
+    if isinstance(grant, dict) and grant.get("executor") and native_domain(grant) is None:
+        raise ValueError("无法识别确认操作的执行入口，本次未执行。")
     if native_domain(grant) is None:
         return runtime
     from agent.runtime.hybrid import HybridArm
@@ -37,6 +42,29 @@ def confirmed_runtime(runtime, grant):
     if getattr(selected.legacy, "checkpointer", None) is None:
         raise RuntimeError("操作确认需要持久化服务，本次未执行。")
     return selected
+
+
+def cancel(runtime, grant, config):
+    """Revoke the signed operation under the same lock used for execution."""
+    from agent.domains.registry import native_domain
+    from agent.runtime import checkpoint_store
+    from agent.runtime.pending import PendingOperation
+    if native_domain(grant) is None:
+        raise ValueError("这张旧确认卡尚不支持按钮撤销，请勿批准并等待其过期。")
+    selected = confirmed_runtime(runtime, grant)
+    action = {"task_id": f"pa_{grant['jti']}", "jti": grant["jti"]}
+    saver = selected.legacy.checkpointer
+    with selected.conversation_guard(config):
+        result = PendingOperation(grant, action).cancel(config, saver)
+        if not result.execution:
+            return {"cancelled": False, "reply": result.reply}
+        prior = selected.legacy.get_state(config).values or {}
+        if (prior.get("pending_action") or {}).get("jti") == grant["jti"]:
+            selected.legacy.update_state(config, {
+                "pending_confirm": None, "pending_action": None}, as_node="gate")
+            checkpoint_store.prune(saver, config["configurable"]["thread_id"])
+        return {"cancelled": True, "event": result.execution["pending_event"],
+                "reply": result.reply}
 
 
 def frames(execution):
@@ -50,7 +78,8 @@ def frames(execution):
     yield "__CONFIRM__:" + json.dumps({
         "id": uuid.uuid4().hex[:8], "q": popup.get("q", ""),
         "opts": popup.get("opts") or [], "token": popup.get("token", ""),
-        "exp": popup.get("exp") or 0}, ensure_ascii=False)
+        "exp": popup.get("exp") or 0,
+        "replay_safe": popup.get("replay_safe") is True}, ensure_ascii=False)
     action = execution.get("pending_action")
     if action:
         yield "__PENDING__:" + json.dumps(action, ensure_ascii=False)

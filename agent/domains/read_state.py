@@ -97,8 +97,7 @@ class ReadState:
         check_cancelled(config)
         return proposal(principal, cid, self.workflow, {
             "tool": self.tool, "args": {"ids": unread, "all": False}},
-            executor=self.executor, question=question, target=target,
-            reply=question + "\n点「确定」后才会处理，也可以告诉我修改或取消。")
+            executor=self.executor, question=question, target=target)
 
     def validate(self, grant, config):
         principal = writes.validate_binding(grant, config)

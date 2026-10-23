@@ -51,13 +51,16 @@ class PendingOperation:
         @tool(return_direct=True)
         def cancel_pending_operation(config: RunnableConfig) -> object:
             """用户明确要求放弃当前待确认操作时调用；撤销旧确认卡，不执行业务改动。"""
-            event = self._revoke(config, saver)
-            if isinstance(event, ToolResult):
-                return TurnResult(str(event))
-            return TurnResult("已取消这项待确认操作，没有执行改动。", {
-                "pending_confirm": None, "pending_action": None,
-                "pending_event": event, "receipts": []})
+            return self.cancel(config, saver)
         return cancel_pending_operation
+
+    def cancel(self, config, saver):
+        event = self._revoke(config, saver)
+        if isinstance(event, ToolResult):
+            return TurnResult(str(event))
+        return TurnResult("已取消这项待确认操作，没有执行改动。", {
+            "pending_confirm": None, "pending_action": None,
+            "pending_event": event, "receipts": []})
 
 
 def restore(prior, config):

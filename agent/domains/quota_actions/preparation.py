@@ -65,8 +65,7 @@ def _prepare(action, request_id, account_id, reason, config):
     principal, cid = bound_context(config)
     check_cancelled(config)
     return proposal(principal, cid, workflow, {"tool": name, "args": args},
-                    executor="quota_actions", target=target, question=target + "？",
-                    reply=target + "。确认后执行。")
+                    executor="quota_actions", target=target, question=target + "？")
 
 
 @tool(return_direct=True)

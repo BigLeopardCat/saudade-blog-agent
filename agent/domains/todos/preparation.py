@@ -82,7 +82,6 @@ def _prepare(action, text, item_id, date, config):
         executor="todos",
         target=target,
         question=target + "？",
-        reply=target + "。确认后才会执行。",
     )
 
 
