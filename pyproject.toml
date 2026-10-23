@@ -137,7 +137,11 @@ dev = [
     "pytest-timeout==2.4.0",
     "pytest-xdist==3.8.0",
     "ruff==0.14.4",
+    "tokenizers==0.22.2",
 ]
+
+[project.optional-dependencies]
+embedding-tokenizer = ["tokenizers==0.22.2"]
 
 [project.urls]
 Homepage = "https://github.com/BigLeopardCat/saudade-blog-agent"
