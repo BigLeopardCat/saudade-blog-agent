@@ -133,6 +133,9 @@ flowchart LR
 │   │   ├── conversation_store.py # 会话快照与完成轮次的薄存储协议
 │   │   ├── graph_store.py     # 现有图 checkpoint、恢复及维护 API 兼容适配
 │   │   ├── admin_domains.py   # 管理员读取与确认准备工具的授权组装
+│   │   ├── catalog.py         # 从已授权目录中前置轻量页面操作
+│   │   ├── budget.py          # 完整请求估算、调用次数及实际用量的共享预算
+│   │   ├── model_budget.py    # 标准回调约束旧图、原生模型及工具调用
 │   │   ├── control.py         # 请求级停止信号与单调时钟截止时间
 │   │   ├── jobs.py            # 后台任务完成后归还运行许可及收尾观测
 │   │   ├── context.py         # 从验签身份、权限表和渲染清单派生会话能力事实
