@@ -19,6 +19,8 @@
 ## 已建立的边界
 
 - `agent/runtime/hybrid.py` 负责准入、持久化与协议适配；模型和工具循环在 `session.py`。
+- `agent/runtime/prompt.py` 组装原生指令、可信身份与有界上下文；工具能力由 schema 描述，
+  不在编排层叠加各领域的操作提示。`conversation_store.py` 定义完成轮次的存储边界。
 - 收藏业务不进入通用循环。`preparation.py` 只读取目标与本人状态，再返回确认结果；
   `runtime/pending.py` 管理跨领域已签名待办的撤销和替换；`transactions.py` 只执行已核验的具体操作，复用签名、权限、幂等与回执机制。
 - `runtime/confirmation.py` 适配签名执行入口和确认控制帧，SSE 入口不承担领域生命周期。

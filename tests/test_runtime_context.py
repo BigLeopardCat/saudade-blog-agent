@@ -40,3 +40,13 @@ def test_user_claims_and_history_trimming_do_not_replace_runtime_identity():
     assert context["rendering"]["stickers"] == [f":{name}:" for name in STICKER_NAMES]
     assert _tokens(prompt[1:-1]) <= HISTORY_TOKENS
     assert str(prompt[-1].content) == str(messages[-1].content)
+
+
+@pytest.mark.parametrize("role", ["admin", "superadmin"])
+def test_administrator_authority_is_not_proof_of_blog_authorship(role):
+    prompt = _input([HumanMessage(content="你好")], Principal(7, role, SOURCE_ASSERTION), True)
+    system = str(prompt[0].content)
+    context = json.loads(system.split("运行时能力（可信数据）：", 1)[1])
+    assert context["identity"]["role"] == role
+    assert context["permissions"] == sorted(scopes_for(role))
+    assert "当前对话者是博客作者" not in system
