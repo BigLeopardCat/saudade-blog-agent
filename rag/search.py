@@ -12,6 +12,7 @@ import math
 import re
 import threading
 import time
+from collections.abc import Callable
 
 from config.settings import settings
 from rag.chunks import split as split_chunks
@@ -191,7 +192,14 @@ def _rrf_k() -> int:
 class RagIndex:
     """内存倒排索引 + 懒刷新。全量重建幂等，线程安全（重建后原子替换）。"""
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        *,
+        corpus_loader: Callable[[], list[dict]] | None = None,
+        vector_warmer: Callable[[list[dict]], None] | None = None,
+    ) -> None:
+        self._corpus_loader = corpus_loader
+        self._vector_warmer = vector_warmer
         self._lock = threading.Lock()
         self._build_lock = threading.Lock()
         self._last_attempt = 0.0
@@ -225,7 +233,7 @@ class RagIndex:
 
     def _build(self) -> None:
         invalidations = self._invalidations
-        docs = self._fetch_corpus()
+        docs = self._corpus_loader() if self._corpus_loader else self._fetch_corpus()
         chunks: list[dict] = []
         for d in docs:
             for c in chunk_note(d["title"], d["content"]):
@@ -261,7 +269,10 @@ class RagIndex:
         # 向量侧**不进 build()**：这是懒刷新的热路径（TTL 一到就被评测/对话触发），
         # 本方法只同步拉取语料、计算词法索引，不等待远端 embedding。
         # 向量预热走后台；开关关着时不发 embedding 请求。
-        warm_vectors(chunks)
+        if self._vector_warmer is None:
+            warm_vectors(chunks)
+        else:
+            self._vector_warmer(chunks)
 
     def _fetch_corpus(self) -> list[dict]:
         from tools.base import _get
