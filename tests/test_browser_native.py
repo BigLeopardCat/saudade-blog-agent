@@ -21,6 +21,7 @@ from agent.domains import browser
 from agent.graph import graph_input
 from agent.principal import SOURCE_ASSERTION, Principal
 from agent.runtime import memory
+from agent.runtime.budget import BudgetLimits, RequestBudget, budget_scope
 from agent.runtime.hybrid import HybridArm
 from agent.runtime.session import ToolSession
 from tools import site
@@ -220,7 +221,8 @@ def test_one_turn_combines_appearance_and_navigation_and_retains_source_history(
     assert all(item.artifact == {"kind": "ok"} for item in source)
     list(arm.stream(graph_input([HumanMessage(content="刚才设置了什么")]), config))
     assert "set_page_appearance" in model.menus[-1]
-    assert "load_site_info_tools" not in model.menus[-1]
+    assert "load_site_info_tools" in model.menus[-1]
+    assert "get_site_map" not in model.menus[-1]
     downgraded = Principal(uid=7, role="zako", source=SOURCE_ASSERTION)
     assert not any(
         isinstance(item, ToolMessage)
@@ -239,7 +241,8 @@ def test_queued_commands_survive_stop_without_replaying_the_legacy_graph(monkeyp
     else:
         responses.append(_response(last))
     arm, _ = _arm(monkeypatch, responses)
-    events = list(arm.stream(graph_input([HumanMessage(content="开雪花然后继续")]), _config()))
+    with budget_scope(RequestBudget(BudgetLimits(model_calls=4))):
+        events = list(arm.stream(graph_input([HumanMessage(content="开雪花然后继续")]), _config()))
     execution = next(event[1]["execute"] for event in events if "execute" in event[1])
     assert len(execution["receipts"]) == (3 if last == "budget" else 1)
 

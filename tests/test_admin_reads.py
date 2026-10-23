@@ -21,6 +21,8 @@ class Model:
         self.menus = []
 
     def bind_tools(self, tools, **kwargs):
+        from _budget_model import schemas
+        self.kwargs = {"tools": schemas(tools)}
         self.menus.append(list(tools))
         return self
 

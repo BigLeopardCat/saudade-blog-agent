@@ -54,6 +54,7 @@ from agent.graph import AgentCancelled, _cmd_wire, _tool_args, _tool_name, graph
 from agent.principal import Principal
 from agent.runtime.control import RequestControl
 from agent.runtime.jobs import RequestJobs
+from agent.runtime.model_budget import tool_callbacks
 from agent.summarizer import summarize
 
 # `NAV_MAP` 的 import 随渲染一起搬走了（20260928）：路径→中文别名的反查只服务于
@@ -839,6 +840,7 @@ def _run_agent_sync(messages: list, thread_id: str, user_id: int = 0,
                                "recent_tools": list(recent_tools or []),
                                "idem_resuming": _idem_resuming(thread_id)},
               "recursion_limit": RECURSION_LIMIT}
+    config["callbacks"] = tool_callbacks()
     full_reply = ""
     nav_line = ""
     exec_rows: list = []  # 跨轮执行记忆（20260904 C3）：checker 验收回执，累计语义末批即全量
@@ -1293,22 +1295,6 @@ def _run_agent_stream_to_queue(messages: list, thread_id: str, queue: asyncio.Qu
                                open_tasks: str = "",
                                recent_tools: list[str] | None = None):
     """Run agent in a thread, push each chunk into an asyncio.Queue."""
-    # user_id 注入 configurable（设备类工具经 RunnableConfig 读取，见 _run_agent_sync 注释）；
-    # stop_event 一并注入——图内 model/tools 节点检查它实现断连中断（见 graph.AgentCancelled）
-    # principal 一并注入（权限判据的输入，见 _run_agent_sync 注释）
-    # conversation_id 一并注入（20260921）：**确认令牌的签发维度**——弹窗侧
-    #   confirm.sign 把它签进令牌，验签侧要求一致（令牌换个会话就作废）
-    # recursion_limit 覆盖默认 9999（等效无界，见 _run_agent_sync 注释）
-    # confirm_grant：已验签的确认令牌 payload（**验签在 /chat/stream，不在图内**）
-    #   ——非空即"用户在确认框上点了确定"这一轮，见 graph.graph_input
-    # ledger：本请求注入给模型的两块台账原文（**由调用方算好传进来**）。图内的台账
-    #   否认判据看的是"系统给模型看过什么"，而 `req` 只活在 /chat/stream 的处理器里、
-    #   这里只有 messages ⇒ 台账必须由调用方（拿得到 req 的地方）传进来，与
-    #   `_run_agent_sync` 的第 5 个参数同源同义（20260924：这行曾按 req/grant 直写，
-    #   两个名字在本函数里都不存在 ⇒ 流式路径每次请求 NameError、零帧退出）。
-    # open_tasks：本会话未完结任务（Rust 读回的 `req.agent_tasks` 原文，JSON 数组串，
-    #   20260927 批 D）——流尾按回执做**确定性结算**要用它（见下面的结算段）。
-    #   **同一条理由必须由调用方传**（req 不在这里），别再犯上面那个 NameError。
     config = {"configurable": {"thread_id": thread_id, "user_id": user_id, "stop_event": stop_event,
                                "principal": principal or Principal(uid=user_id),
                                "conversation_id": conversation_id,
@@ -1332,6 +1318,7 @@ def _run_agent_stream_to_queue(messages: list, thread_id: str, queue: asyncio.Qu
                                # `resuming`）读得到、又不必动 AgentState。见 `_idem_resuming`。
                                "idem_resuming": _idem_resuming(thread_id)},
               "recursion_limit": RECURSION_LIMIT}
+    config["callbacks"] = tool_callbacks()
     try:
         # 双 stream_mode：
         #   "messages" —— token 级文本/工具结果帧（原逻辑不变）

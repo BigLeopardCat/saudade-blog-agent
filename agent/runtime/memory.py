@@ -88,10 +88,24 @@ def _turns(messages):
 
 def history(messages, principal):
     turns = [turn for turn in _turns(messages) if _allowed(turn, principal)]
-    return trim_messages(
-        [message for turn in turns for message in turn], max_tokens=HISTORY_TOKENS,
-        token_counter=_tokens, strategy="last", start_on="human", allow_partial=False,
+    dialogue = trim_messages(
+        [message for turn in turns for message in turn
+         if isinstance(message, HumanMessage)
+         or isinstance(message, AIMessage) and not message.tool_calls],
+        max_tokens=HISTORY_TOKENS, token_counter=_tokens,
+        strategy="last", start_on="human", allow_partial=False,
     )
+    kept = {id(message) for message in dialogue}
+    visible = [turn for turn in turns if id(turn[0]) in kept]
+    evidence = trim_messages(
+        [message for turn in visible for message in turn
+         if isinstance(message, ToolMessage)
+         or isinstance(message, AIMessage) and message.tool_calls],
+        max_tokens=max(0, HISTORY_TOKENS - _tokens(dialogue)), token_counter=_tokens,
+        strategy="last", start_on="ai", end_on="tool", allow_partial=False,
+    )
+    kept.update(id(message) for message in evidence)
+    return [message for turn in visible for message in turn if id(message) in kept]
 
 
 def prompt_dialogue(messages, principal):

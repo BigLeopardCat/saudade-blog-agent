@@ -81,6 +81,8 @@ def test_real_native_loop_persists_source_observations_across_followup_and_reloa
             self.prompts = []
 
         def bind_tools(self, tools, **kwargs):
+            from _budget_model import schemas
+            self.kwargs = {"tools": schemas(tools)}
             return self
 
         def invoke(self, prompt):
@@ -129,3 +131,25 @@ def test_browser_content_stays_outside_the_system_instruction_channel():
     assert isinstance(page, HumanMessage) and memory.is_context(page)
     assert not any("UNTRUSTED_PAGE_CANARY" in str(m.content)
                    for m in memory.turn_messages(incoming, [], "收到。", actor()))
+
+
+def test_large_tool_turn_does_not_erase_the_recommendation_before_followup():
+    principal = actor()
+    observations = []
+    for name, size in (("get_top_notes", 1154), ("list_notes", 1421)):
+        observations.extend(memory.observation(
+            {"name": name, "args": {}, "id": name}, base.ok("x" * size)))
+    saved = memory.turn_messages(
+        [HumanMessage(content="推荐一篇文章带我过去")], observations,
+        "推荐架构文档 https://example.test/article/19。" + "说明" * 100, principal)
+    assert memory._tokens(saved) > memory.HISTORY_TOKENS
+    prompt = _input([*saved, HumanMessage(content="带我过去呀")], principal)
+    history = prompt[1:-1]
+    assert any("article/19" in str(message.content) for message in history)
+    assert any(message.content == "推荐一篇文章带我过去" for message in history)
+    assert memory._tokens(history) <= memory.HISTORY_TOKENS
+    calls = {call["id"] for message in history if isinstance(message, AIMessage)
+             for call in message.tool_calls}
+    results = {message.tool_call_id for message in history if isinstance(message, ToolMessage)}
+    assert calls == results
+    assert memory.history(saved, actor("user")) == []
