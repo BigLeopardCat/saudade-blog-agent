@@ -1,0 +1,145 @@
+{
+  "scope": "real authenticated llama-server BGE Q8 + repository public corpus fixture; not target production server",
+  "unauthenticated_http_status": 401,
+  "steps": [
+    {
+      "command": [
+        "probe",
+        "--expected-dim",
+        "512",
+        "--llama-tokenize"
+      ],
+      "exit_code": 0,
+      "ok": true,
+      "new_or_retry_inputs": null,
+      "update": null,
+      "route": null,
+      "tokenizer_parity": [
+        true,
+        true,
+        true,
+        true,
+        true
+      ]
+    },
+    {
+      "command": [
+        "prepare"
+      ],
+      "exit_code": 0,
+      "ok": true,
+      "new_or_retry_inputs": 11,
+      "update": null,
+      "route": null,
+      "tokenizer_parity": null
+    },
+    {
+      "command": [
+        "prepare",
+        "--execute",
+        "--max-new",
+        "100"
+      ],
+      "exit_code": 0,
+      "ok": true,
+      "new_or_retry_inputs": 11,
+      "update": {
+        "fingerprint": "58a6f02847ab0988a49fd1d5ea22e0599bf6935b37b49f5e0738f93aa3694056",
+        "embedded": 11,
+        "reused": 0,
+        "api_calls": 11,
+        "missing": 0,
+        "dim": 512,
+        "ok": true
+      },
+      "route": null,
+      "tokenizer_parity": null
+    },
+    {
+      "command": [
+        "prepare",
+        "--execute",
+        "--max-new",
+        "0"
+      ],
+      "exit_code": 0,
+      "ok": true,
+      "new_or_retry_inputs": 0,
+      "update": {
+        "skipped": "aligned",
+        "fingerprint": "58a6f02847ab0988a49fd1d5ea22e0599bf6935b37b49f5e0738f93aa3694056",
+        "embedded": 0,
+        "reused": 11,
+        "api_calls": 0
+      },
+      "route": null,
+      "tokenizer_parity": null
+    },
+    {
+      "command": [
+        "status",
+        "--require-vectors"
+      ],
+      "exit_code": 0,
+      "ok": true,
+      "new_or_retry_inputs": null,
+      "update": null,
+      "route": {
+        "enabled": true,
+        "active": true,
+        "state": "active",
+        "reason": null,
+        "vectors": 11,
+        "missing": 0
+      },
+      "tokenizer_parity": null
+    },
+    {
+      "command": [
+        "query",
+        "夜跑怎么安排",
+        "--require-hybrid"
+      ],
+      "exit_code": 0,
+      "ok": true,
+      "new_or_retry_inputs": null,
+      "update": null,
+      "route": {
+        "mode": "hybrid",
+        "reason": null,
+        "vectors": 3,
+        "missing": 0
+      },
+      "tokenizer_parity": null
+    }
+  ],
+  "model_stopped_fallback": [
+    {
+      "strict": false,
+      "exit_code": 0,
+      "route": {
+        "mode": "degraded",
+        "reason": "query_embed_failed",
+        "vectors": 0,
+        "missing": 0
+      },
+      "returned_lexical_hits": true
+    },
+    {
+      "strict": true,
+      "exit_code": 1,
+      "route": {
+        "mode": "degraded",
+        "reason": "query_embed_failed",
+        "vectors": 0,
+        "missing": 0
+      },
+      "returned_lexical_hits": true
+    }
+  ],
+  "recovery_after_model_restart": {
+    "probe_ok": true,
+    "zero_new_inputs_execute_ok": true,
+    "strict_hybrid_query_ok": true
+  }
+}

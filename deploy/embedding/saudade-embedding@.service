@@ -1,0 +1,31 @@
+[Unit]
+Description=Saudade local embedding (%i)
+After=network.target
+StartLimitIntervalSec=120
+StartLimitBurst=5
+ConditionArchitecture=x86-64
+
+[Service]
+Type=simple
+DynamicUser=yes
+EnvironmentFile=/etc/saudade/embedding-%i.env
+LoadCredential=embedding-key:/etc/saudade/embedding-api-key
+ExecStart=/opt/saudade-embedding/runtime/llama-b11829/llama-server --model ${MODEL_FILE} --alias ${MODEL_ALIAS} --override-kv ${TOKENIZER_OVERRIDES} --embedding --pooling ${POOLING} --embd-normalize 2 --ctx-size 512 --batch-size 512 --ubatch-size 512 --parallel 1 --threads 2 --threads-batch 2 --host 127.0.0.1 --port 18081 --no-webui --cache-ram 0 --api-key-file ${CREDENTIALS_DIRECTORY}/embedding-key
+Restart=on-failure
+RestartSec=5
+TimeoutStartSec=180
+TimeoutStopSec=30
+MemoryHigh=1G
+MemoryMax=1280M
+MemorySwapMax=0
+CPUQuota=200%
+TasksMax=64
+UMask=0077
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+
+[Install]
+WantedBy=multi-user.target

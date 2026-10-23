@@ -1,0 +1,106 @@
+{
+  "schema_version": 1,
+  "recorded_at": "2026-10-23T22:40:35+08:00",
+  "implementation_commit": "ad62a5ebfe1aed95fe81d153d2253b12192f0437",
+  "scope": "Post-benchmark inventory. Dynamic memory/disk values are this snapshot, not original benchmark measurements. No production access or engine migration was performed.",
+  "development": {
+    "provenance": "Observed locally using lscpu -J, /proc/meminfo, os-release and installed package metadata.",
+    "architecture": "x86_64",
+    "cpu_model": "Intel(R) Xeon(R) CPU E5-2695 v2 @ 2.40GHz",
+    "vcpus": 2,
+    "guest_topology": {
+      "sockets": 2,
+      "cores_per_socket": 1,
+      "threads_per_core": 1
+    },
+    "virtualization": "KVM",
+    "numa_nodes": 1,
+    "exposed_cpu_features": {
+      "avx": true,
+      "avx2": false,
+      "avx512f": false,
+      "avx512dq": false,
+      "avx512bw": false,
+      "avx512vl": false,
+      "avx512_vnni": false,
+      "avx512_bf16": false,
+      "amx_bf16": false,
+      "amx_int8": false
+    },
+    "guest_reported_caches": {
+      "L1d cache": "64 KiB (2 instances)",
+      "L1i cache": "64 KiB (2 instances)",
+      "L2 cache": "8 MiB (2 instances)",
+      "L3 cache": "32 MiB (2 instances)"
+    },
+    "memory_kib": {
+      "MemTotal": 2527872,
+      "MemAvailable": 1513964,
+      "SwapTotal": 3407864,
+      "SwapFree": 2607980
+    },
+    "filesystem_bytes": {
+      "total": 46141501440,
+      "used": 34349174784,
+      "free": 9426948096
+    },
+    "os": "Ubuntu 24.04.3 LTS",
+    "kernel": "6.8.0-147-generic",
+    "python": "3.12.3",
+    "systemd": "systemd 255 (255.4-1ubuntu8.18)",
+    "uv": "uv 0.9.18",
+    "packages": {
+      "tokenizers": "0.22.2",
+      "openai": "2.44.0",
+      "ir-measures": "0.4.3",
+      "pyarrow": "26.0.0"
+    },
+    "execution_scope": "CPU embeddings; concurrent development load was not isolated; temporary inference services were stopped after validation."
+  },
+  "production": {
+    "provenance": "CPU inventory supplied by user; 4 GB RAM from prior planning, not remotely measured.",
+    "architecture": "x86_64",
+    "cpu_model": "Intel(R) Xeon(R) Platinum 8255C CPU @ 2.50GHz",
+    "vcpus": 4,
+    "guest_topology": {
+      "sockets": 1,
+      "cores_per_socket": 4,
+      "threads_per_core": 1
+    },
+    "virtualization": "KVM",
+    "numa_nodes": 1,
+    "exposed_cpu_features": {
+      "avx": true,
+      "avx2": true,
+      "avx512f": true,
+      "avx512dq": true,
+      "avx512bw": true,
+      "avx512vl": true,
+      "avx512_vnni": true,
+      "avx512_bf16": false,
+      "amx_bf16": false,
+      "amx_int8": false
+    },
+    "guest_reported_caches": {
+      "L1d cache": "128 KiB (4 instances)",
+      "L1i cache": "128 KiB (4 instances)",
+      "L2 cache": "16 MiB (4 instances)",
+      "L3 cache": "35.8 MiB (1 instance)"
+    },
+    "planned_memory_gb": 4,
+    "measured_memtotal_kib": null,
+    "os": null,
+    "kernel": null,
+    "systemd": null,
+    "python": null,
+    "disk_free_bytes": null,
+    "gpu": "Not provided; CPU-only assumed for this plan.",
+    "validation_status": "not_run"
+  },
+  "interpretation": [
+    "CPU feature booleans describe flags exposed to the guest; false does not establish host silicon capabilities.",
+    "Guest cache and socket reports do not establish dedicated host physical resources.",
+    "Allocated swap does not increase the service RAM budget; occupied swap alone does not establish active swapping.",
+    "TEI CPU, ONNX/OpenVINO and vLLM CPU are candidates, not benchmarked production deployments."
+  ]
+}
