@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import pathlib
 import re
@@ -42,7 +43,6 @@ def _narrowing(text: str) -> set[str]:
             if re.search(r"(?<![\w-])" + re.escape(o) + r"(?![\w-])", text)}
 
 
-import json  # noqa: E402
 import subprocess  # noqa: E402
 
 from config.settings import Settings  # noqa: E402  （默认值从声明取，不手抄一份）
@@ -142,30 +142,42 @@ def test_sparse_cone_file_coverage(rel: str, covered: bool) -> None:
 _STEP_SPLIT_RE = re.compile(r"\n(?=[ \t]*- (?:name|uses):)")
 
 
-_GUARD = "steps.parent.outputs.available == '1'"
-
-
 def _pr_gate_problems(txt: str) -> list[str]:
-    """`eval.yml` 里 PR 门禁接线的问题清单；空 = 接线完整。"""
-    bad: list[str] = []
+    """Required checks are identical and credential-free for every PR source."""
+    bad = []
     if not re.search(r"^  pull_request:\s*$", txt, re.M):
-        bad.append("on: 里没有 pull_request 触发")
-    guarded = len(re.findall(re.escape("if: " + _GUARD), txt))
-    if guarded < 2:
-        bad.append(f"挂 `if: {_GUARD}` 的步骤只有 {guarded} 个"
-                   "（父仓 checkout / 落位自检 都该挂）")
-    suites = [s for s in _STEP_SPLIT_RE.split(txt) if "run: uv run --frozen pytest" in s]
-    if len(suites) != 1:
-        bad.append("完整套件应只有一个执行入口")
-    else:
-        suite = suites[0]
-        if "if:" in suite:
-            bad.append("完整套件不应依赖父仓凭据才运行")
-        if "SAUDADE_REQUIRE_PARENT: ${{ " + _GUARD + " && '1' || '0' }}" not in suite:
-            bad.append("完整套件必须按凭据可用性设置父仓要求")
-    if "GITHUB_STEP_SUMMARY" not in txt:
-        bad.append("凭据缺失时没写 job summary ⇒ 这次降级是**静默**的")
+        bad.append("missing PR trigger")
+    if "pull_request_target:" in txt or "secrets." in txt:
+        bad.append("untrusted checks must not receive repository secrets")
+    parent = [step for step in _STEP_SPLIT_RE.split(txt)
+              if "name: Checkout public host contract" in step]
+    if len(parent) != 1 or "if:" in parent[0]:
+        bad.append("host contracts must run for all PRs")
+    if "ref: ${{ steps.parent.outputs.revision }}" not in txt:
+        bad.append("host contract revision must be pinned")
+    suites = [step for step in _STEP_SPLIT_RE.split(txt)
+              if "run: uv run --frozen pytest" in step]
+    if len(suites) != 1 or "if:" in suites[0]:
+        bad.append("complete suite must run unconditionally once")
+    elif 'SAUDADE_REQUIRE_PARENT: "1"' not in suites[0]:
+        bad.append("host assertions must be required")
     return bad
+
+
+def _check_public_host_source(_eval_txt):
+    lock = json.loads((ROOT / ".github/host-contract.json").read_text())
+    check("跨仓检查固定公开源码版本，不需要私人凭据",
+          lock["repository"] == "BigLeopardCat/Saudade-Blog"
+          and re.fullmatch(r"[0-9a-f]{40}", lock["revision"]) is not None
+          and "ref: ${{ steps.parent.outputs.revision }}" in _eval_txt
+          and "secrets." not in _eval_txt)
+    check("公开源码只读、稀疏、浅检出，校验真实提交",
+          "sparse-checkout:" in _eval_txt and "persist-credentials: false" in _eval_txt
+          and 'git -C _parent rev-parse HEAD' in _eval_txt)
+    check("CI 必须运行父仓断言，源码缺失不能跳过",
+          'SAUDADE_REQUIRE_PARENT: "1"' in _eval_txt
+          and "SAUDADE_PARENT_REPO: ${{ github.workspace }}/_parent" in _eval_txt)
+    check("CI 自检落位锚，防止空目录假绿", "test -f _parent/src/routes/chat.rs" in _eval_txt)
 
 
 def test_ci_suite_list():
@@ -268,21 +280,7 @@ def test_ci_suite_list():
     _ADR = ROOT / "docs" / "adr" / "adr-0004-cross-language-guard-in-ci.md"
     _ADR_NAME = _ADR.name
     _eval_txt = EVAL_YML.read_text(encoding="utf-8")        # 含注释：接线信息有一半写在注释里
-    check("CI 里 checkout 了父仓（只读凭据 + 稀疏锥 + 浅克隆）",
-          "repository: BigLeopardCat/Saudade-Blog" in _eval_txt
-          and "secrets.PARENT_REPO_TOKEN" in _eval_txt
-          and "sparse-checkout:" in _eval_txt
-          and "persist-credentials: false" in _eval_txt, "eval.yml")
-    check("父仓 checkout 的 token 是仓库秘密，不是写在 yml 里的字面凭据",
-          re.search(r"token:\s*\$\{\{\s*secrets\.", _eval_txt) is not None)
-    check("CI 给套件设了 SAUDADE_PARENT_REPO（指到 checkout 落点）",
-          re.search(r"^\s*SAUDADE_PARENT_REPO:\s*\S+", _eval_txt, re.M) is not None)
-    check("CI 给套件设了 SAUDADE_REQUIRE_PARENT=1（**跑不到就红**，与夜间同一条纪律）",
-          "SAUDADE_REQUIRE_PARENT: ${{ " + _GUARD + " && '1' || '0' }}" in _eval_txt)
-    check("CI 自检落位锚（锥配错/空目录会让守卫**假绿**）",
-          "test -f _parent/src/routes/chat.rs" in _eval_txt)
-    check("CI 不把凭据展开进日志（echo/printf 里不许出现变量展开）",
-          re.search(r"(echo|printf)[^\n]*\$\{?PARENT_REPO_TOKEN", _eval_txt) is None)
+    _check_public_host_source(_eval_txt)
     _CONE_FIXTURES = ("sparse-checkout: a,b", "sparse-checkout: |\n  a\n  b\nnext: 1\n")
     check("锥的读法两种写法都认（单行逗号 / YAML 块标量；块标量读到缩进收回为止）",
           all(_cone_patterns(t) == ["a", "b"] for t in _CONE_FIXTURES),
@@ -305,21 +303,25 @@ def test_ci_suite_list():
                     if not _cone_covers(rel, ["docs"]))
     check("锥判据真的咬：换成无关目录锥（docs）重算，扫到的路径全被判成锥外",
           len(_other) == len(_reads) and len(_reads) > 0, f"锥外：{_other}")
-    check(f"ADR 里写了同一个秘密名（{_ADR_NAME}）",
-          _ADR.is_file() and "PARENT_REPO_TOKEN" in _ADR.read_text(encoding="utf-8"),
+    check(f"ADR 记录公开契约锁（{_ADR_NAME}）",
+          _ADR.is_file() and ".github/host-contract.json" in _ADR.read_text(encoding="utf-8"),
           _ADR_NAME)
     check("eval.yml 指着那份 ADR（接线与轮换只有一处说明）",
           _ADR_NAME in _eval_txt)
     print("\n⑦ PR 上也跑门禁的接线（20261019）：不许静默地退回「PR 上什么都不跑」")
     _bad_gate = _pr_gate_problems(_eval_txt)
-    check("PR 门禁接线完整（触发 / 父仓步骤挂 if / 降级支 / summary 记录）",
+    check("PR 门禁接线完整（触发 / 无秘密 / 固定源码 / 完整断言）",
           _bad_gate == [], "；".join(_bad_gate))
     for _desc, _mut in (
         ("去掉 pull_request 触发", _eval_txt.replace("  pull_request:", "  # pull_request:")),
-        ("依赖父仓的步骤不挂 if", _eval_txt.replace("if: " + _GUARD, "if: true")),
-        ("缺凭据仍要求父仓",
-         _eval_txt.replace("&& '1' || '0'", "&& '1' || '1'")),
-        ("降级不写 job summary", _eval_txt.replace("$GITHUB_STEP_SUMMARY", "$SUMMARY_OFF")),
+        ("公开契约被跳过", _eval_txt.replace(
+            "name: Checkout public host contract",
+            "name: Checkout public host contract\n        if: false")),
+        ("父仓断言变为可跳过", _eval_txt.replace(
+            'SAUDADE_REQUIRE_PARENT: "1"', 'SAUDADE_REQUIRE_PARENT: "0"')),
+        ("契约随远程主线漂移", _eval_txt.replace(
+            "ref: ${{ steps.parent.outputs.revision }}", "ref: main")),
+        ("引入私人凭据", _eval_txt + "\n# secrets.PRIVATE_TOKEN"),
     ):
         check(f"  正控：{_desc} ⇒ 判据必须报红", _pr_gate_problems(_mut) != [])
     print()
@@ -332,37 +334,54 @@ def test_ci_suite_list():
         f"{len(FAILED)} 条未通过：" + "；".join(FAILED))
 
 
-@pytest.mark.parametrize("event,fork,actor,token,expected", [
-    ("push", "false", "maintainer", "", 1),
-    ("workflow_dispatch", "false", "maintainer", "", 1),
-    ("pull_request", "false", "maintainer", "", 1),
-    ("pull_request", "true", "contributor", "", 0),
-    ("pull_request", "false", "dependabot[bot]", "", 0),
-    ("push", "false", "dependabot[bot]", "", 1),
-    ("pull_request", "false", "maintainer", "synthetic-read-token", 0),
+@pytest.mark.parametrize("event,actor", [
+    ("push", "maintainer"), ("pull_request", "contributor"),
+    ("pull_request", "dependabot[bot]"), ("workflow_dispatch", "maintainer"),
 ])
-def test_parent_credentials(event, fork, actor, token, expected, tmp_path):
-    """运行工作流里的真实 shell，验证缺凭据不能把普通 PR 误判为降级。"""
-    workflow = (ROOT / ".github/workflows/eval.yml").read_text(encoding="utf-8")
+def test_public_contract_without_secrets(event, actor, tmp_path):
+    workflow = (ROOT / ".github/workflows/eval.yml").read_text()
     step = next(s for s in _STEP_SPLIT_RE.split(workflow) if "id: parent" in s)
-    shell = step.split("        run: |\n", 1)[1]
+    import textwrap
+    shell = textwrap.dedent(step.split("        run: |\n", 1)[1])
+    (tmp_path / ".github").mkdir()
+    lock = (ROOT / ".github/host-contract.json").read_text()
+    (tmp_path / ".github/host-contract.json").write_text(lock)
     output = tmp_path / "output"
-    summary = tmp_path / "summary"
-    env = {**os.environ, "EVENT_NAME": event, "IS_FORK": fork, "ACTOR": actor,
-           "PARENT_REPO_TOKEN": token, "GITHUB_OUTPUT": str(output),
-           "GITHUB_STEP_SUMMARY": str(summary)}
-    result = subprocess.run(["bash", "-eu", "-c", shell], env=env,
+    env = {"PATH": os.environ["PATH"], "EVENT_NAME": event, "ACTOR": actor,
+           "GITHUB_OUTPUT": str(output)}
+    result = subprocess.run(["bash", "-eu", "-c", shell], cwd=tmp_path, env=env,
                             capture_output=True, text=True, timeout=10)
-    assert result.returncode == expected, result.stdout + result.stderr
-    assert not token or token not in result.stdout + result.stderr
-    if expected:
-        assert not output.exists()
-    elif token:
-        assert output.read_text() == "available=1\n"
-        assert not summary.exists()
-    else:
-        assert output.read_text() == "available=0\n"
-        assert "未运行" in summary.read_text()
+    assert result.returncode == 0, result.stderr
+    expected = json.loads(lock)
+    assert output.read_text() == (f"repository={expected['repository']}\n"
+                                  f"revision={expected['revision']}\n")
+
+
+@pytest.mark.parametrize("change", [{"revision": "main"}, {"revision": "a" * 39},
+                                   {"repository": "other/private"}])
+def test_public_contract_rejects_unpinned_or_other_source(change, tmp_path):
+    import textwrap
+    workflow = (ROOT / ".github/workflows/eval.yml").read_text()
+    step = next(s for s in _STEP_SPLIT_RE.split(workflow) if "id: parent" in s)
+    shell = textwrap.dedent(step.split("        run: |\n", 1)[1])
+    (tmp_path / ".github").mkdir()
+    lock = json.loads((ROOT / ".github/host-contract.json").read_text())
+    (tmp_path / ".github/host-contract.json").write_text(json.dumps({**lock, **change}))
+    output = tmp_path / "output"
+    result = subprocess.run(["bash", "-eu", "-c", shell], cwd=tmp_path,
+                            env={"PATH": os.environ["PATH"], "GITHUB_OUTPUT": str(output)},
+                            capture_output=True, text=True, timeout=10)
+    assert result.returncode != 0 and not output.exists()
+
+
+def test_offline_suite_blocks_network_sockets():
+    import socket
+
+    from pytest_socket import SocketBlockedError
+
+    with pytest.raises(SocketBlockedError):
+        with socket.socket():
+            pytest.fail("offline tests must not create network sockets")
 
 
 if __name__ == "__main__":

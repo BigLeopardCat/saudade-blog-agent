@@ -138,9 +138,9 @@ def test_widget_pin_drift():
 
         print("\n③ 读不到父仓：明说一句再跳过，不许静默")
         r = run_script(repo, "ok", SAME, before=first, sha=touched, token=None)
-        check(r.returncode == 0 and "::warning::" not in r.stdout,
-              "缺凭据：退 0 且不警告")
-        check("PARENT_REPO_TOKEN" in r.stdout, "缺凭据：说得出是缺了哪样（不是静默）")
+        check(r.returncode == 0 and "::warning::" in r.stdout,
+              "没有私人凭据仍读取公开 pin 并发现漂移")
+        check("PARENT_REPO_TOKEN" not in r.stdout, "公开读取不要求配置私人凭据")
 
         r = run_script(repo, "fail", SAME, before=first, sha=touched)
         check(r.returncode == 0 and "::warning::" not in r.stdout,
@@ -160,7 +160,7 @@ def test_widget_pin_drift():
         ev = (ROOT / ".github" / "workflows" / "eval.yml").read_text(encoding="utf-8")
         check("widget-pin-drift:" in ev and "scripts/widget_pin_drift.sh" in ev,
               "eval.yml 里有这个 job 且在跑这个脚本")
-        check(ev.count("PARENT_REPO_TOKEN") >= 2, "这个 job 也拿到了那枚只读凭据")
+        check("secrets." not in ev, "公开读取不使用仓库私人凭据")
     print()
     if FAILED:
         print(f"失败 {len(FAILED)} 项：" + "；".join(FAILED))

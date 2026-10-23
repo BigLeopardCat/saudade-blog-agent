@@ -12,8 +12,8 @@
     "lines": 340
   },
   "agent/deterministic_plan.py::_candidate_detail_plan": {
-    "c": 42,
-    "lines": 86
+    "c": 36,
+    "lines": 66
   },
   "agent/graph.py::_claim_issue": {
     "c": 37,
@@ -212,8 +212,8 @@
     "lines": 271
   },
   "tests/test_ci_suite_list.py::test_ci_suite_list": {
-    "c": 38,
-    "lines": 162
+    "c": 35,
+    "lines": 152
   },
   "tests/test_confirm.py::test_confirm": {
     "c": 208,

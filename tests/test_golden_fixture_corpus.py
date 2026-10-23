@@ -1,32 +1,6 @@
-"""自包含夹具自洽性（`eval/fixtures/`，20261006）：**离线、秒级、无网络、无 LLM**。
+"""自包含语料、评测用例、出处声明及 HTTP 夹具契约。
 
-夹具存在的理由是"别人 clone 下来能跑一次端到端"（见 `eval/fixtures/README.md`）：语料、
-桩服务、用例、出处声明四件东西**必须互相对得上**。四件里的任何一件改了、其余没跟上，
-症状都不是报错——是**看起来在跑**：
-
-  · 桩的字段名漂了（`noteTitle` 写成 `title`）⇒ `_fetch_corpus` 拿到空标题空正文，
-    语料**静默变空**，检索全空、模型照常答"站内没写过"；
-  · 用例期望的词不在夹具语料里 ⇒ 那条用例**恒红**，而红得像是模型不行；
-  · 期望的词**就在提问里** ⇒ 那条用例**恒绿**（照抄问题即可），看着在判、其实没判；
-  · 出处声明的锚点与语料标题对不上 ⇒ 出处闸把这一整套判成 foreign、全部未评估——
-    闸的行为是对的，但它拦下来的时候人得知道"是我改了标题没改声明"。
-
-所以本套件做四件事（②③ 是"恒红/恒绿"两侧，缺一侧就是半个判据）：
-
-  ① **夹具自己自洽**：`corpus/*.md` 解析得出标题与正文，id = 文件序，标题不重复；
-  ② **桩真的供得出这些文章**：**起真桩、走真读路径**（`tools/base._get` →
-     `rag/search._fetch_corpus`）拿回语料，与 `serve.load_corpus()` 逐篇比标题与正文。
-     这不是"再拼一份 json"——桩那一侧的字段名只有真实读路径才能验；
-  ③ **出处闸分得开两块地**：同一份夹具语料，配**夹具自己的声明**判 `ok`，
-     配**维护者那份声明**判 `foreign`（若后者也 ok，说明这条闸恒绿、什么都没在判）；
-  ④ **用例的期望锚在夹具语料上**：带 `corpus` 标签的用例，`text_contains` 的词必须
-     在语料里出现、且**不在提问里**；`require_doc_terms` 申报的文档必须在语料里、
-     且真能派生出 `min_terms` 个术语。
-
-gold 键的拼写分类（`_note` 少个下划线那类）不在这里，由 `tests/test_golden_keys.py`
-连同 basic.jsonl 一起扫——**同一套规则扫两份用例文件**，别在这里再写一份。
-
-用法：.venv/bin/python tests/test_golden_fixture_corpus.py
+测试只启动自己的临时回环服务，不使用生产站点或模型。
 """
 
 
@@ -41,6 +15,7 @@ import threading
 import time
 from pathlib import Path
 
+import pytest
 from _judge import collector
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -130,6 +105,8 @@ def _stub_lines(proc, want: str, timeout: float = 20.0) -> list[str]:
             return out
     return out
 
+
+@pytest.mark.allow_hosts(["127.0.0.1"])
 
 def test_golden_fixture_corpus():
     import urllib.error

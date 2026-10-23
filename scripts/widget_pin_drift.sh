@@ -17,9 +17,7 @@
 # （比如后面又推了个只动 Python 的提交）。树 sha 一次抓三件事：pin 挪了、稀疏锥配错了、
 # 这棵树被改写过。
 #
-# 读父仓那份 lock 走 GitHub API（父仓私有 ⇒ 用已有的只读 PAT）。**刻意不改** eval.yml
-# 里那个稀疏锥：那个锥（`src/routes`）是为跨语言守卫服务的，为了读一个 1KB 的 json
-# 把父仓整个 `frontend/`（9MB / 334 文件）拉下来不值当。
+# The host repository is public. This advisory check needs no personal token.
 set -uo pipefail
 
 PARENT="BigLeopardCat/Saudade-Blog"
@@ -64,16 +62,10 @@ if [ -z "$LOCAL_TREE" ]; then
 fi
 
 # ③ 读父仓 pin。读不到就**说一声**再跳过 —— 静默跳过正是这条守卫要防的那种失效
-if [ -z "${PARENT_REPO_TOKEN:-}" ]; then
-  note "没有 PARENT_REPO_TOKEN，读不到父仓 pin，这次跳过（不是失败）。配置见 docs/adr/adr-0004-cross-language-guard-in-ci.md"
-  exit 0
-fi
-PIN_JSON="$(curl -fsSL \
-  -H "Authorization: Bearer ${PARENT_REPO_TOKEN}" \
-  -H "Accept: application/vnd.github.raw" \
-  "https://api.github.com/repos/${PARENT}/contents/${LOCK_PATH}" 2>/dev/null)" || PIN_JSON=""
+PIN_JSON="$(curl -fsSL --connect-timeout 5 --max-time 10 \
+  "https://raw.githubusercontent.com/${PARENT}/HEAD/${LOCK_PATH}" 2>/dev/null)" || PIN_JSON=""
 if [ -z "$PIN_JSON" ]; then
-  note "读父仓 ${LOCK_PATH} 失败（凭据权限或网络），这次跳过（不是失败）。"
+  note "读父仓 ${LOCK_PATH} 失败（网络或公开资源暂不可用），这次跳过（不是失败）。"
   exit 0
 fi
 PIN_TREE="$(printf '%s' "$PIN_JSON" | python3 -c '

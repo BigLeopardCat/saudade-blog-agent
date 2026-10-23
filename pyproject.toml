@@ -134,6 +134,7 @@ dev = [
     "mypy==2.4.0",
     "pytest==9.1.1",
     "pytest-cov==7.1.0",
+    "pytest-socket==0.8.1",
     "pytest-timeout==2.4.0",
     "pytest-xdist==3.8.0",
     "ruff==0.14.4",
@@ -164,6 +165,7 @@ packages = ["agent", "config", "models", "rag", "tools", "utils"]
 # 下面两项都**刻意不写 `python_files`**：默认的 `test_*.py` 就是这套的收集规则，写出来
 # 等于多一处可以漂的事实源（tests/test_tests_dir_shape.py ④ 判着「没被改掉」）。
 testpaths = ["tests"]
+addopts = "--disable-socket --allow-unix-socket"
 # 单测试超时 300s（对齐原 run_all 的套件档）。并行（`-n 4`）由 CI 显式传、这里不写死——
 # 串行是默认（本机与夜间都串行），与 run_all「串行是默认、CI 显式 -j 4」同一条纪律。
 timeout = 300

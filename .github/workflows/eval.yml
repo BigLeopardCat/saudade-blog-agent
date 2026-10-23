@@ -80,44 +80,25 @@ jobs:
       - name: 安全扫描棘轮（bandit 只许变小）
         run: uv run --frozen python eval/security_gate.py
 
-      - name: 跨语言守卫的凭据自检（缺了就直接红；fork PR 走显式降级）
+      # Public, immutable contract source; see docs/adr/adr-0004-cross-language-guard-in-ci.md.
+      - name: Read host contract revision
         id: parent
-        env:
-          PARENT_REPO_TOKEN: ${{ secrets.PARENT_REPO_TOKEN }}
-          EVENT_NAME: ${{ github.event_name }}
-          IS_FORK: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository }}
-          ACTOR: ${{ github.actor }}
         run: |
-          set -euo pipefail
-          if [ -n "${PARENT_REPO_TOKEN:-}" ]; then
-            echo "available=1" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          if [ "${EVENT_NAME}" = "pull_request" ] && { [ "${IS_FORK}" = "true" ] || [ "${ACTOR}" = "dependabot[bot]" ]; }; then
-            echo "available=0" >> "$GITHUB_OUTPUT"
-            echo "::warning::fork/Dependabot PR 无父仓凭据，跨语言守卫未运行。详见 job summary。"
-            {
-              echo "### ⚠️ 跨语言守卫本次**未运行**（这不是通过）"
-              echo ""
-              echo "fork 和 Dependabot PR 不能使用普通 Actions secrets。"
-              echo ""
-              echo "**本次没有运行**：所有读父仓源码的跨语言守卫。"
-              echo ""
-              echo "**照常运行**：其余全部离线套件、未定义名扫描、类型棘轮、静态检查棘轮、提交信息闸门。"
-              echo ""
-              echo "合并到 \`main\` 后那次 \`push\` 会带凭据重跑，届时这些守卫才真判。"
-            } >> "$GITHUB_STEP_SUMMARY"
-            exit 0
-          fi
-          echo "::error::缺 secrets.PARENT_REPO_TOKEN。跨语言守卫（断言 Rust 侧真有那个臂/那个键）在 CI 里**必须真跑**——凭据缺失是配置问题，配置问题的正确表现是红，不是静默跳过。配置步骤见 docs/adr/adr-0004-cross-language-guard-in-ci.md"
-          exit 1
+          python3 - <<'PYCODE'
+          import json, os, re
+          from pathlib import Path
+          lock = json.loads(Path('.github/host-contract.json').read_text())
+          if lock['repository'] != 'BigLeopardCat/Saudade-Blog' or not re.fullmatch(r'[0-9a-f]{40}', lock['revision']):
+              raise SystemExit('Invalid public host contract lock')
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
+              output.write(f"repository={lock['repository']}\nrevision={lock['revision']}\n")
+          PYCODE
 
-      - name: 取父仓源码（只读、浅、稀疏）
-        if: steps.parent.outputs.available == '1'
+      - name: Checkout public host contract
         uses: actions/checkout@v4
         with:
-          repository: BigLeopardCat/Saudade-Blog
-          token: ${{ secrets.PARENT_REPO_TOKEN }}
+          repository: ${{ steps.parent.outputs.repository }}
+          ref: ${{ steps.parent.outputs.revision }}
           path: _parent
           sparse-checkout: |
             src/routes
@@ -127,19 +108,19 @@ jobs:
           persist-credentials: false
 
       - name: 父仓落位自检（锚 + 每一条锥模式都真拉到）
-        if: steps.parent.outputs.available == '1'
         run: |
           set -e
+          test "$(git -C _parent rev-parse HEAD)" = "${{ steps.parent.outputs.revision }}"
           test -f _parent/src/routes/chat.rs
           test -f _parent/frontend/src/utils/stickers.ts
           test -f _parent/frontend/src/components/NoteTagSelect/index.tsx
           test -f _parent/src/authz.rs
 
-      # Both credential modes use the same complete pytest collection.
+      # Identical required suites for forks, bots and maintainer branches.
       - name: 全部离线套件
         env:
-          SAUDADE_PARENT_REPO: ${{ steps.parent.outputs.available == '1' && format('{0}/_parent', github.workspace) || '' }}
-          SAUDADE_REQUIRE_PARENT: ${{ steps.parent.outputs.available == '1' && '1' || '0' }}
+          SAUDADE_PARENT_REPO: ${{ github.workspace }}/_parent
+          SAUDADE_REQUIRE_PARENT: "1"
         run: uv run --frozen pytest -q -n 4 --durations=15 --junitxml=eval/report/ci/pytest.xml
 
       - name: 保存测试报告（含失败用例和耗时）
@@ -164,6 +145,4 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
       - name: 与父仓 pin 比对（漂移则 ::warning::，恒退 0）
-        env:
-          PARENT_REPO_TOKEN: ${{ secrets.PARENT_REPO_TOKEN }}
         run: bash scripts/widget_pin_drift.sh

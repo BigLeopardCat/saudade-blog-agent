@@ -1,22 +1,7 @@
-"""确认令牌（agent/confirm.py）+ 确认弹窗链路（graph._confirm_popup / _confirm_grant_plan）。
+"""确认令牌、旧图弹窗与跨语言执行边界的离线回归。
 
-秒级、纯函数、无网络无 LLM；由 eval.yml 在 push 时跑。
-
-覆盖四块：
-  ① 令牌本身：签发→验签往返；签名篡改 / 过期 / 换 uid / 换会话 / 空密钥 / 格式坏
-     → **一律 None**（fail-closed），且不抛异常。
-  ② 令牌的边界：`$ref` 残留不签发；密钥空缺不签也不验（不降级）。
-  ③ 弹窗从哪来（_confirm_popup）：该弹的弹、不该弹的不弹（提问/假设、已判成命令、
-     无权限、目标无据、参数没解析出来）。
-  ④ 点确定之后：_confirm_grant_plan 照签名拼计划（技能对不上→空清单）；
-     execute 放行同意闸与目标有据两门，但**权限不放行**。
-  ⑤ 授权式短应答（P2）：台账唯一待审 ⇒ 目标由系统定，但**仍要主人点一下**。
-  ⑥ 跨轮待办的结构化形态（P4）：弹窗那一轮同时产出 pending_action，
-     且字段/同源关系/MISS 语义与 Rust 侧的读取契约一致。
-  ⑦ 被拒的确认请求留痕（20260924）：元数据里**有**会话 id 与令牌长度、
-     **没有**令牌本身；并断言两个调用点在 server.py 里真的接上了。
-
-用法：.venv/bin/python tests/test_confirm.py
+覆盖签名与身份绑定、具体参数、确认清单收窄、待办字段及无效请求零执行。
+新确认领域的持久撤销和回放由 test_pending_favorite.py 等领域套件验证。
 """
 
 
@@ -159,6 +144,8 @@ def _own_popup(workflow, spec, msg, ev):
     return _confirm_popup(st, obj["tools"],
                           Principal(uid=7, role="admin"), msg, CFG)
 
+
+_HOST_CLAIM_MARKERS = ("ClaimedAt", "rows_affected == 1", "if agent_owned(token)", "return None")
 
 def test_confirm():
     _SAVED_SECRET = settings.jwt_secret
@@ -995,7 +982,6 @@ def test_confirm():
           and "INVALID_PICK_TEXT = (" in _src
           and "json.dumps(INVALID_PICK_TEXT" in _src
           and "server.INVALID_PICK_TEXT" in _rg_src)
-    print("\n  · 跨语言守卫：Rust 那半得真的接上（本机父仓在兄弟目录，找不到会响亮跳过）")
     _rs = _parent_repo.read(
         "src/routes/chat.rs",
         why="「只办其中一件」的凭据是 `confirm_pick` 纯透传 —— Rust 那半若不转发它，"
@@ -1007,9 +993,10 @@ def test_confirm():
               '"confirm_pick":' in _rs or '"confirm_pick" :' in _rs)
         check("「上一轮执行过哪些工具」（结构化事实）也在 body 里",
               "recent_tools" in _rs and '"recent_tools"' in _rs)
-        check("  jti 认领仍是**单条** UPDATE（不改幂等语义：N 件共用一枚令牌，"
-          "重放判据仍是那一条 CAS）",
-              "ClaimedAt" in _rs and "rows_affected == 1" in _rs)
+        _approval = _parent_repo.read("src/routes/chat/approval.rs")
+        check("旧卡单次认领保留 CAS，原生卡转交持久执行账",
+              all(marker in _approval for marker in _HOST_CLAIM_MARKERS))
+
     print()
     if FAILED:
         print(f"失败 {len(FAILED)} 项：" + "；".join(FAILED))
