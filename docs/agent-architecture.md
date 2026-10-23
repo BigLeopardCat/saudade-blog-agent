@@ -142,6 +142,11 @@ flowchart LR
 │   │   ├── registry.py        # 已迁移确认领域的显式注册
 │   │   ├── browser.py         # 可逆页面指令、标准工具 artifact 及权限复核
 │   │   ├── admin_writes.py   # 管理员确认准备共用的身份与会话准入
+│   │   ├── categories/
+│   │   │   ├── __init__.py   # 分类管理领域入口
+│   │   │   ├── targets.py    # 分类参数、目标与冻结影响范围核对
+│   │   │   ├── preparation.py # 分类新增、修改、删除的只读确认准备
+│   │   │   └── transactions.py # 原子分类写入、结果核验与幂等执行
 │   │   ├── article_actions/
 │   │   │   ├── __init__.py   # 文章状态写领域入口
 │   │   │   ├── targets.py    # 有界文章目标、内容版本及状态核对

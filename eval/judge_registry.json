@@ -236,7 +236,7 @@
         0
       ],
       "agent/runtime/session.py": [
-        14,
+        15,
         0
       ],
       "agent/runtime/turns.py": [
@@ -530,10 +530,26 @@
       "agent/domains/browser.py": [
         3,
         0
+      ],
+      "agent/domains/categories/__init__.py": [
+        0,
+        0
+      ],
+      "agent/domains/categories/preparation.py": [
+        5,
+        0
+      ],
+      "agent/domains/categories/targets.py": [
+        0,
+        0
+      ],
+      "agent/domains/categories/transactions.py": [
+        0,
+        0
       ]
     },
     "total": [
-      1180,
+      1186,
       4848
     ]
   },
@@ -2318,6 +2334,16 @@
       "category": "parser",
       "q": "[A-Za-z一-龥 ,.'\\-]{1,40}",
       "why": "从参数里截出地名（字符类，不是词表）"
+    },
+    {
+      "id": "agent/domains/categories/preparation.py::LABELS",
+      "file": "agent/domains/categories/preparation.py",
+      "kind": "collection",
+      "name": "LABELS",
+      "size": 5,
+      "category": "system_data",
+      "q": "确认卡与执行回执的内部分类字段显示名称",
+      "why": "只渲染名字、路径、简介、图标与颜色，不匹配用户输入或决定操作"
     }
   ],
   "eval_vocab": {
