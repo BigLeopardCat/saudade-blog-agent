@@ -13,7 +13,8 @@ flowchart TD
     JOBS --> CONTROL[RequestControl：停止信号与绝对截止时间]
     CONTROL --> ARM[HybridArm：会话准入、确认分发与协议适配]
     ARM --> TURN[ToolSession：单轮模型与按需工具循环]
-    ARM --> STORE[旧图 checkpoint：历史与待确认状态]
+    ARM --> STORE[ConversationStore：历史与待确认状态]
+    STORE --> ADAPTER[GraphConversationStore：现有 checkpoint 适配]
     TURN --> MEMORY[memory：有界历史与带来源的观察]
     ARM --> LEGACY[仍保留的旧图交接]
 ```
@@ -44,6 +45,18 @@ flowchart TD
 尚未改为真正可取消的异步模型请求。许可是每 worker 的请求工作组限额，不是跨进程全局连接池。
 普通读取仍按整轮保存，不承诺每个只读步骤都可从崩溃点恢复；业务写入依靠独立执行账恢复。
 
+## 会话存储接缝（本分支）
+
+原生轮次通过 `ConversationStore` 读取历史、待确认与恢复标志，保存完成轮次。
+`GraphConversationStore` 兼容现有 PostgreSQL/InMemorySaver，独占原生保存所需的
+`graph_input` 与 `as_node="gate"`；按钮取消也通过接口清除匹配卡片。
+串行锁、删除屏障、历史身份过滤与裁剪沿用既有模块，签名及执行账没有改变。
+
+完成轮次先保存再输出；普通读取中断后可重新读取，不承诺每个读取步骤恢复。
+默认构建仍创建旧图，仍有旧图回退及维护 API，不能把此次接口提取描述成整个运行时
+已脱离 LangGraph 或可任意更换存储后端。接口、验证与兼容依赖见
+[ADR-0020](adr/adr-0020-conversation-store.md)。
+
 ## 仍需完成
 
 | 项目 | 已核对的现状 | 下一步 |
@@ -53,7 +66,7 @@ flowchart TD
 | 身份语义 | `_input` 把所有管理员都称为博客作者；授权角色并不能证明作者身份 | 从站点事实区分作者与管理员，角色仅用于授权 |
 | 工具集合生命周期 | 历史来源会恢复整个领域，集合随历史变化 | 明确恢复与卸载策略，保留合法调用/结果配对，并测量菜单规模与缓存 |
 | 循环预算 | 固定 4 轮，领域加载也消耗一轮 | 区分模型调用、工具尝试与时间预算，验证多领域任务，保留安全上限 |
-| 会话存储 | `_finish` 仍用 graph_input 和 as_node=gate | 提取薄 ConversationStore，逐步移除旧图状态协议 |
+| 会话存储 | 原生轮次已通过 ConversationStore；图状态初始化与节点选择封装在适配器 | 旧图构建、回退及原始维护 API 仍需随旧编排退役 |
 | 输出事件 | 最终回复生成完才包装为一个 chunk | 先统一结构化阶段事件，再实现最终回复流式 |
 | 验收与默认值 | 确认链路已有生产验收，模型意图与成本未系统比较；默认仍 graph | 固定请求级真实模型评测，再切默认并删除旧模板与纠偏 |
 
