@@ -104,95 +104,72 @@
       return '<p>' + escaped.replace(/\r\n?|\n/g, '<br>') + '</p>';
     };
 
-    // ── Chat Panel 模板（engine.initChat 注入）──
+    // Existing IDs connect presentation to session, streaming and confirmation handlers.
     const chatHTML = `
-    <div id="waifu-chat">
-      <div class="chat-drag-bar-t"></div>
-      <div class="chat-drag-bar-l"></div>
-      <div class="chat-inner-border"></div>
-      <div class="chat-close" id="chat-close">×</div>
-      <!-- 20260903 会话化：当前会话标题（20260903b 起覆在顶部拖拽条内居中显示，
-          不占消息区空间；文本由 chat-session.js renderHeader 写入，非空才可见）。
-          20261001 批 D：真容器是里面那张和纸小签（.chat-conv-title-tag）——外壳
-          只管定位/居中（几何一字未动），签负责长相；:empty 隐藏随之落到签上
-          （外壳永不为空 ⇒ 恒 display:flex，但它透明且 pointer-events:none，无副作用）。
-          文本写入目标因此从 #chat-conv-title 改成 #chat-conv-title-tag。 -->
-      <div id="chat-conv-title" class="chat-conv-title"><span class="chat-conv-title-tag" id="chat-conv-title-tag"></span></div>
-      <div class="chat-messages" id="chat-messages">
-        <!-- 写操作确认卡片（20260921d）：从输入区上方的常驻条搬进**对话流**里。
-             用户的动线是"读问句 → 点按钮 → 看结果"，卡片夹在问句气泡与结果气泡
-             之间才是同一轮对话该有的样子（旧位置在输入框上方，与回复不在一个
-             视线上，点完还得自己去找结果）。问题文本与按钮由 chat-stream.js 填，
-             这里只出壳；容器被清空（切会话/拉历史）后 syncAsk 会把它接回末位。
-             ⚠️ chat-keep 是必需类（20260923），不是装饰：chat-engine 的 reconcileDOM
-             会清掉消息流里所有"无 data-mid 且非在途气泡"的节点，而本卡片恰恰没有
-             mid——少了这个类，弹卡之后**任何一次** reconcile（例如别的窗口写了会话
-             缓存 ⇒ 本轮收尾补拉历史）都会在几十毫秒内把它删掉，用户看到的是
-             "agent 说要确认、然后什么都没有"（库里回复正常、待办令牌也在内存里）。 -->
-        <div class="chat-nav-confirm chat-ask chat-keep" id="chat-ask">
-          <div class="nav-question" id="chat-ask-text"></div>
-          <div class="chat-nav-btns" id="chat-ask-btns"></div>
-          <!-- 改口输入行（20261006，配合卡上的「其他（我来说）」）：点了那枚按钮就地
-               露出这一行，主人打完字回车，那一轮按**普通新轮**重新规划——此前要改口
-               得先点「取消」再在下面重述一遍。默认 display:none，靠 .active 类
-               显形（**刻意不用 hidden 属性**：.chat-ask-other{display:flex} 是作者
-               样式，会盖过浏览器默认表的 [hidden]{display:none}，届时输入行恒可见
-               而状态位却是"藏着"——同族静默失效本仓记过多次）。
-               注：本段住在 JS 模板串里，注释正文里不能出现反引号。 -->
+    <section id="waifu-chat" role="region" aria-label="与泠月喵对话">
+      <div class="chat-drag-bar-t"></div><div class="chat-drag-bar-l"></div><div class="chat-inner-border"></div>
+      <header class="chat-header">
+        <div class="chat-heading"><div class="chat-kicker">泠月喵 · 博客助手</div>
+          <div id="chat-conv-title" class="chat-conv-title"><span class="chat-conv-title-tag" id="chat-conv-title-tag"></span></div>
+        </div>
+        <button type="button" class="chat-close" id="chat-close" aria-label="关闭对话" title="关闭对话">×</button>
+      </header>
+      <div class="chat-messages" id="chat-messages" role="region" aria-label="聊天记录" tabindex="0">
+        <div id="chat-empty" class="chat-empty-state chat-keep">
+          <h2>今天想聊点什么？</h2><p>找文章、聊技术，也可以一起读懂当前页面。</p>
+          <div class="chat-starters">
+            <button type="button" class="chat-starter" data-chat-prompt="介绍一下这个博客">认识这个博客</button>
+            <button type="button" class="chat-starter" data-chat-prompt="帮我找一篇关于……的文章">查找文章</button>
+            <button type="button" class="chat-starter" data-chat-prompt="这篇文章主要讲了什么？">一起读文章</button>
+          </div>
+        </div>
+        <!-- chat-keep preserves the confirmation shell during history reconciliation. -->
+        <div class="chat-nav-confirm chat-ask chat-keep" id="chat-ask" role="group" aria-labelledby="chat-ask-text">
+          <div class="chat-card-heading">需要你的确认</div>
+          <div class="nav-question" id="chat-ask-text"></div><div class="chat-nav-btns" id="chat-ask-btns"></div>
           <div class="chat-ask-other" id="chat-ask-other">
-            <input class="chat-ask-other-input" id="chat-ask-other-input" type="text"
-                   placeholder="改成什么？直接说就行" autocomplete="off">
+            <input class="chat-ask-other-input" id="chat-ask-other-input" type="text" aria-label="修改操作要求" placeholder="改成什么？直接说就行" autocomplete="off">
             <button class="chat-nav-btn yes" id="chat-ask-other-send" type="button">就这样说</button>
           </div>
         </div>
       </div>
-      <div class="chat-new-msg-note" id="chat-new-msg-note"><span>↓ 有新消息</span></div>
+      <button type="button" class="chat-new-msg-note" id="chat-new-msg-note" aria-label="滚动到最新消息">↓ 有新消息</button>
       <div class="chat-input-area">
-        <!-- 已选图片缩放图标（20260828 修正 + 20260828s 多图）：输入栏顶部常驻留白
-             （输入栏加高的落点，缩略图 ≈ 按钮图标大小），选图后 JS 动态填充缩略图
-             容器（每张一个 .chat-img-preview-item，右上角 × 逐个移除，最多 6 张） -->
-        <div class="chat-img-preview" id="chat-img-preview"></div>
+        <div class="chat-img-preview" id="chat-img-preview" aria-label="待发送图片"></div>
         <div class="chat-input-row">
-          <textarea class="chat-input" id="chat-input" placeholder="和泠月喵对话..." rows="1"></textarea>
-          <button class="chat-send" id="chat-send">发送</button>
+          <textarea class="chat-input" id="chat-input" aria-label="消息" aria-describedby="chat-keyboard-hint" placeholder="发消息，或粘贴图片…" rows="1"></textarea>
+          <div class="chat-composer-tools">
+            <button type="button" id="chat-img-btn" class="chat-img-btn" title="添加图片（最多 6 张）" aria-label="添加图片">
+              <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="4"/><circle cx="8" cy="8" r="1.5"/><path d="m3 17 5-5 4 4 4-6 5 7"/></svg>
+            </button>
+            <button type="button" class="chat-send" id="chat-send" aria-label="发送消息">发送</button>
+          </div>
+        </div>
+        <div class="chat-composer-meta">
+          <span id="chat-status" class="chat-status" role="status" aria-live="polite" aria-atomic="true"></span>
+          <span id="chat-keyboard-hint" class="chat-keyboard-hint">Enter 发送 · Shift + Enter 换行</span>
         </div>
         <input type="file" id="chat-img-file" accept="image/*" hidden>
       </div>
-      <!-- 图片按钮放左侧拖拽栏内（20260828 修正）：absolute 定位不挤占内容宽度，
-           事件不经过拖拽条（兄弟元素）→ 点击不与拖拽冲突 -->
-      <button id="chat-img-btn" class="chat-img-btn" title="选择图片">
-        <svg viewBox="0 0 1024 1024" version="1.1" xmlns="http://www.w3.org/2000/svg" p-id="5075"><path d="M853.161077 892.549156 362.595248 892.549156l-209.432916-0.413416c-0.605797-0.001023-1.210571-0.031722-1.813299-0.092098-24.848944-2.484587-47.825238-14.060227-64.696488-32.594349-16.990976-18.665105-26.349111-42.85504-26.349111-68.112284L60.303434 264.62596c0-55.80805 45.403073-101.211123 101.211123-101.211123l691.645496 0c55.80805 0 101.2101 45.403073 101.2101 101.211123l0 225.51315c0 0.275269-0.00614 0.551562-0.01842 0.825808-0.021489 0.494257-1.971911 51.723012 15.481599 85.46244 4.716418 9.118682 1.14815 20.335141-7.970532 25.052582-9.116635 4.714372-20.335141 1.149173-25.052582-7.970532-21.300119-41.176818-19.844977-97.642854-19.618826-103.738689L917.191392 264.62596c0-35.307134-28.724205-64.031339-64.031339-64.031339L161.51558 200.594621c-35.307134 0-64.031339 28.724205-64.031339 64.031339l0 526.71105c0 32.755008 24.320918 59.957557 56.717769 63.61997l208.4311 0.412392 490.528989 0c35.307134 0 64.031339-28.725228 64.031339-64.032362l-0.382717-93.676519c-0.104377-1.749854-1.587148-19.548218-19.549242-42.499953-0.050142-0.063445-0.098237-0.125867-0.147356-0.190335L875.401614 626.481358 758.174726 471.362464c-0.415462-0.550539-38.995129-50.852178-86.271876-45.534056-38.335097 4.314259-75.954903 45.163619-108.789729 118.131491-17.615193 39.141462-34.650171 68.26885-52.082192 89.046059-17.607006 20.985964-35.679617 33.519418-55.251372 38.316677-43.422975 10.638291-81.049944-18.99461-120.886231-50.372248l-5.057179-3.980661c-46.555315-36.57808-68.750827-28.223808-158.330028 59.60247-7.330966 7.187703-19.101033 7.071046-26.288736-0.25992-7.187703-7.330966-7.071046-19.101033 0.25992-26.287713 46.658669-45.74588 77.544097-72.726372 107.085924-84.282568 33.357735-13.048177 64.274886-6.266727 100.242052 21.99392l5.092995 4.00829c33.9226 26.719548 63.219857 49.795103 89.028663 43.466977 25.618471-6.279007 53.30095-42.114167 82.279958-106.508779 39.139415-86.97591 85.837994-134.027529 138.79716-139.849118 68.454068-7.515161 117.823476 57.404408 119.891578 60.171428l117.122511 154.980747 21.599947 28.343535c26.276457 33.630958 27.333532 61.638849 27.367301 64.72514 0.001023 0.042979 0.001023 0.084934 0.001023 0.127913l0.38374 94.059236C954.371176 847.146083 908.969127 892.549156 853.161077 892.549156z" fill="#203042" p-id="5076"></path><path d="M312.328401 446.967868c-42.324968 0-76.759221-34.434254-76.759221-76.759221s34.434254-76.759221 76.759221-76.759221 76.759221 34.434254 76.759221 76.759221S354.654392 446.967868 312.328401 446.967868zM312.328401 330.628186c-21.824051 0-39.579437 17.755386-39.579437 39.579437s17.755386 39.579437 39.579437 39.579437 39.579437-17.755386 39.579437-39.579437S334.153476 330.628186 312.328401 330.628186z" fill="#203042" p-id="5077"></path></svg>
-      </button>
-      <div class="chat-nav-confirm" id="chat-nav-confirm">
-        <div class="nav-question" id="nav-question-text"></div>
-        <div class="chat-nav-btns">
-          <button class="chat-nav-btn yes" id="nav-yes">确定</button>
-          <button class="chat-nav-btn no" id="nav-no">取消</button>
+      <div class="chat-nav-confirm" id="chat-nav-confirm" role="group" aria-labelledby="nav-question-text">
+        <div class="nav-question" id="nav-question-text"></div><div class="chat-nav-btns">
+          <button type="button" class="chat-nav-btn yes" id="nav-yes">确定</button>
+          <button type="button" class="chat-nav-btn no" id="nav-no">取消</button>
         </div>
       </div>
-      <!-- 通用询问卡片见上方 .chat-messages 内的 #chat-ask（20260921d 搬进对话流） -->
-      <!-- 20260903 会话化：左侧窄图标栏（absolute 覆在左拖拽条上，兄弟元素定位法
-           同 chat-img-btn——点击不经过拖拽条不触发拖动）。20260903b：顶部 = 侧边栏
-           （列表开合），底部组（靠图片按钮往上堆叠）= 新对话 + 历史会话；SVG 图标
-           由 chat-session.js 注入（文字为注入前的兜底） -->
-      <div class="chat-rail" id="chat-rail">
-        <button type="button" class="chat-rail-btn" id="conv-toggle-btn" title="侧边栏">☰</button>
+      <nav class="chat-rail" id="chat-rail" aria-label="会话管理">
+        <button type="button" class="chat-rail-btn" id="conv-toggle-btn" title="会话列表" aria-label="会话列表" aria-controls="waifu-conv-panel" aria-expanded="false">☰</button>
         <div class="chat-rail-bot">
-          <button type="button" class="chat-rail-btn" id="conv-new-btn" title="新对话">＋</button>
-          <button type="button" class="chat-rail-btn" id="conv-history-btn" title="历史会话">历</button>
+          <button type="button" class="chat-rail-btn" id="conv-new-btn" title="新对话" aria-label="新对话">＋</button>
+          <button type="button" class="chat-rail-btn" id="conv-history-btn" title="搜索历史会话" aria-label="搜索历史会话">历</button>
         </div>
+      </nav>
+      <div id="waifu-conv-panel" class="waifu-conv-panel" role="region" aria-label="会话历史">
+        <div class="conv-list-head"><span class="conv-list-title">会话历史</span>
+          <input type="search" class="conv-search" id="conv-search" aria-label="搜索会话" placeholder="搜索会话" autocomplete="off">
+        </div><div class="conv-list-body" id="conv-list"></div>
       </div>
-      <!-- 会话历史面板：默认 display:none；#waifu-chat.conv-open 时由 chat-session.js
-           按自适应方向显示（conv-out 面板左扩、侧边栏真窗格 / conv-in 面板内覆盖），
-           方向选择在 session.js openList，本面板行/列表动态渲染 -->
-      <div id="waifu-conv-panel" class="waifu-conv-panel">
-        <div class="conv-list-head">
-          <span class="conv-list-title">会话历史</span>
-          <input type="text" class="conv-search" id="conv-search" placeholder="搜索会话" autocomplete="off">
-        </div>
-        <div class="conv-list-body" id="conv-list"></div>
-      </div>
-    </div>
+    </section>
 `;
 
     ctx.render = { COMMAND_RE, stripCommandPrefix, renderAgentContent, cleanAgentText, applyMsg, renderMarkdown, chatHTML };

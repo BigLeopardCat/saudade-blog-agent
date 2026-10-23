@@ -292,6 +292,7 @@
         if (save && val && val !== orig) apiPatch(c.id, { title: val }); // 空/未改 → 还原
       };
       inp.addEventListener('keydown', (ev) => {
+        if (ev.isComposing || ev.keyCode === 229) return;
         if (ev.key === 'Enter') { ev.preventDefault(); finish(true); }
         else if (ev.key === 'Escape') { ev.stopPropagation(); finish(false); }
       });

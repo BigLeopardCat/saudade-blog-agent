@@ -94,23 +94,8 @@
   // ★ 版本号：nginx 对 live2d-widgets 目录 immutable 缓存 1 年，子模块变更只 bump
   // 这里一处（所有子模块 URL 统一拼 ?v=VER；Live2dAgent/index.tsx 的 boot.js 引用
   // 也需同步 bump——否则浏览器不会重新请求本入口）
-  // 20261011a = 「看板娘默认位置回退」那一轮（widget.css：#waifu 的 `left` 145px → 15px、
-  // `transform` translateY(-5px) → -15px，即撤销 20261003 那两次位移）。文件在
-  // live2d-widgets 下 ⇒ 必须 bump；不 bump 访客吃 1 年缓存，看板娘还停在右移后的位置。
-  // 20261015a = 「欢迎语里填进去的值先转义」那一轮（renderer.js 的 subst：`$1` 会被
-  // 填进 `#waifu-tips` 的 innerHTML，值来自 document.title / referrer hostname）。
-  // 同上 ⇒ 必须 bump，否则一年内访客拿到的还是"值当标记解析"的那一版。
-  // 20261018a = 「聊天图片落库」那一轮（chat-core.js 新增 `dbRowToItem`、
-  // chat-engine.js 的 `mapDbItems` 改调它——DB 行的 `images` 以前被一个手写白名单吃掉）。
-  // 同上 ⇒ 必须 bump；这一版尤其不能漏：不 bump 的话**图在库里、界面还是占位块**，
-  // 且没有任何东西会红（前端拿的还是旧 chat-engine.js）。
-  // 20261023a = 「确认卡按钮换行」那一轮（widget.css：`.chat-nav-btns` 补
-  // `flex-wrap: wrap`、`.chat-nav-btn` 补 `white-space: nowrap` + `max-width`）。
-  // 多件卡是五枚按钮，nowrap 下 flex 会把它们压窄，而按钮的 `min-width: auto` 在中文上
-  // 等于"一个字一列" ⇒ 标签被压成 2–5 行的竖排字堆。文件在 live2d-widgets 下 ⇒ 必须
-  // bump；不 bump 的话访客一年内看到的还是压成竖排的那一版。
-  // 五个同步点见 frontend/README.md。
-  const VER = '20261023a';
+  // 缓存同步点见 frontend/README.md；每次静态资源变化均更新。
+  const VER = '20261024b';
 
   function loadExternalResource(url, type) {
     return new Promise((resolve, reject) => {
@@ -156,6 +141,7 @@
     ['chat-render', '__waifuRender'],
     ['chat-engine', '__waifuEngine'],
     ['chat-stream', '__waifuStream'],
+    ['chat-ui', '__waifuChatUI'],
     ['chat-session', '__waifuSession'], // 20260903 会话化 UI 壳（会话管理列表/双栏）
     ['renderer', '__waifuRenderer'],    // 看板娘渲染层（20261001 自研，替换上游 GPL-3.0 实现）
   ];
@@ -213,6 +199,7 @@
   });
 
   await loadExternalResource(live2d_path + 'widget.css?v=' + VER, 'css');
+  await loadExternalResource(live2d_path + 'chat-ui.css?v=' + VER, 'css');
 
   // 看板娘初始化：建 DOM 骨架 + 起渲染（模型异步加载，不阻塞下面的聊天面板）
   renderer.init();
@@ -225,6 +212,7 @@
   engine.init();
   const stream = window.__waifuStream(ctx, engine);
   stream.init();
+  window.__waifuChatUI.init(ctx, engine);
   // 会话管理 UI 层（20260903 会话化）：依赖 engine 已注入 chatHTML 且会话态就绪
   // （engine.init 的 boot 拉取可能仍在途，chat-session 自身有 500ms 重试兜底）。
   // 失败只降级会话列表功能，对话不受影响

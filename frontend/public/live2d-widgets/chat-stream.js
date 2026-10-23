@@ -167,7 +167,10 @@
       el.className = 'chat-ask-note';
       el.textContent = note;
       askBtns.appendChild(el);
-      if (askBox) askBox.dataset.askState = state || 'settled';
+      if (askBox) {
+        askBox.dataset.askState = state || 'settled';
+        askBox.dataset.result = result || '';
+      }
       // 结算这一跳是整条链的**落点**：它与 click/sent 是同一次点击的收尾。result 由
       // 调用点给（ok/unknown/expired/cancel），调用点没说就不报——宁可少报一条，
       // 也不推断一个结论出来（推断出来的"正常"正是这一族最难查的假象）。
@@ -377,6 +380,7 @@
       // 会在弹卡后的第一次 reconcile 里被当成孤儿删掉（20260923 事故本体）。
       messages.appendChild(askBox);
       askBox.classList.add('active');
+      delete askBox.dataset.result;
       askBox.dataset.askState = 'live';   // 可点（见 askSettle/askRollback 的状态语义）
       // 卡片**真的挂上去了**才埋点（上面那条幂等提前返回不报，否则每次 DOM 重建
       // 都刷一条，"卡片就位"这个事实会被刷成噪声）。**必须排在 askArmTimer 前面**：
@@ -871,6 +875,7 @@
         const sentAt = Date.now(); // 本轮用户消息时间（user 帧与条目共用同一值）
         // 20260903 补 convId：停止生成/3s 保险的 discard 定向删本轮所属会话
         ctx.state.activeRound = { roundId, userItemId, msg, convId: roundConvId, silent };
+        if (ctx.ui.beginReply) ctx.ui.beginReply();
         if (!silent) {
           input.value = '';
           // 程序清空不会触发 input 事件：主动重置高度，避免空输入框残留多行高度
@@ -923,7 +928,7 @@
         // 发送按钮切换为"停止生成"（主流对话 UI 形态），点击即中止输出
         sendBtn.disabled = false;
         sendBtn.title = '停止生成';
-        sendBtn.innerHTML = '<span class="chat-stop-icon"></span>';
+        sendBtn.innerHTML = '<span class="chat-stop-icon" aria-hidden="true"></span><span>停止</span>';
         sendBtn.classList.add('stop-mode');
         input.disabled = true;
         // 打字指示器（静默反馈）：流进行中 >1.2s 无帧（LLM 首 token/工具执行间隙）
@@ -1609,7 +1614,7 @@
           sendBtn.innerHTML = '发送';
           sendBtn.classList.remove('stop-mode');
           input.disabled = false;
-          input.focus();
+          if (ctx.ui.restoreInputFocus) ctx.ui.restoreInputFocus();
           // 20260901：跨窗 idle 广播 + 清除 busy 标记（与 sending 成对）——
           // 其他窗口恢复发送按钮（正常收尾/异常中断/停止生成统一走 finally）
           broadcast({ t: 'idle', roundId, from: engine.windowId });
@@ -2113,20 +2118,8 @@
         }
         sendMessage();
       });
-      // 输入框自适应高度：先置 auto 再按内容高度回填，内容为空时回到 min-height
-      const resizeInput = () => {
-        input.style.height = 'auto';
-        input.style.height = Math.min(input.scrollHeight, 80) + 'px';
-      };
-      input.addEventListener('input', resizeInput);
-      // IME 输入法合成结束（含取消合成）后兜底重算，防止残留的组合文本高度
-      input.addEventListener('compositionend', resizeInput);
-      input.addEventListener('keydown', (e) => {
-        if (e.key === 'Enter' && !e.shiftKey) {
-          e.preventDefault();
-          sendMessage();
-        }
-      });
+      // Programmatic draft changes use the same composer sizing/feedback as typing.
+      const resizeInput = () => { if (ctx.ui.resizeInput) ctx.ui.resizeInput(); };
 
       // ── 图片输入（多模态 20260828，20260828s 多图）：按钮选图 / 粘贴图片 → 压缩 →
       // 预览（最多 6 张，每图右上角 × 逐个移除）→ 随消息发送 ──
@@ -2147,7 +2140,9 @@
           im.alt = '已选择图片 ' + (i + 1);
           const rm = document.createElement('button');
           rm.className = 'chat-img-preview-remove';
+          rm.type = 'button';
           rm.title = '移除第 ' + (i + 1) + ' 张图片';
+          rm.setAttribute('aria-label', rm.title);
           rm.textContent = '×';
           rm.addEventListener('click', () => {
             ctx.state.pendingImages = ctx.state.pendingImages.filter((_, j) => j !== i);
@@ -2161,7 +2156,7 @@
       };
       const addPendingImage = (dataUrl) => {
         if ((ctx.state.pendingImages || []).length >= 6) {
-          console.warn('[chat] 最多支持 6 张图片');
+          if (ctx.ui.notify) ctx.ui.notify('最多添加 6 张图片，请先移除一张', 'error');
           return;
         }
         ctx.state.pendingImages = (ctx.state.pendingImages || []).concat(dataUrl);
@@ -2187,13 +2182,19 @@
               canvas.getContext('2d').drawImage(imgEl, 0, 0, canvas.width, canvas.height);
               let out = canvas.toDataURL('image/jpeg', 0.85);
               if (out.length > 900 * 1024) out = canvas.toDataURL('image/jpeg', 0.7);
-              if (out.length > 1024 * 1024) { console.warn('[chat] 图片压缩后仍超限，已放弃'); return; }
+              if (out.length > 1024 * 1024) {
+                if (ctx.ui.notify) ctx.ui.notify('图片过大，请缩小后重新添加', 'error');
+                return;
+              }
               addPendingImage(out);
-            } catch(e) { console.warn('[chat] 图片压缩失败', e); }
+            } catch(e) {
+              if (ctx.ui.notify) ctx.ui.notify('图片处理失败，请尝试其他图片', 'error');
+            }
           };
-          imgEl.onerror = () => console.warn('[chat] 图片解码失败');
+          imgEl.onerror = () => { if (ctx.ui.notify) ctx.ui.notify('无法读取这张图片，请尝试其他图片', 'error'); };
           imgEl.src = dataUrl;
         };
+        reader.onerror = () => { if (ctx.ui.notify) ctx.ui.notify('图片读取失败，请重试', 'error'); };
         reader.readAsDataURL(file);
       };
       // 20260829a：本地缩略图——最长边 180px（匹配气泡 180px 网格展示尺寸，
