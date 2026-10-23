@@ -1455,43 +1455,15 @@ def _test_phantom_tool_claim():
     for want, why, text, executed, mem in cases:
         got = P(text, executed, mem)
         check(f"phantom[{why}] → {want or 'pass'}", got == want, f"got={got}")
-    # 工具名名单派生自注册表（不手写——手写名单正是 15:51 事故的漏项来源）。
-    # 数字写死是**故意的**：工具增减时必须有人来看一眼这条判据（26 → 30 是
-    # 20260921 第二轮加的四个后台工具：list_admin_notes + 三个写；30 → 35 是
-    # 20260921 晚第三轮加的后台写五件：update_tag/delete_tag + category 三件；
-    # 35 → 38 是 20260922 第五轮加的站内公告三件；38 → 40 是 20260922 第六轮加的
-    # 河灯留言人工复核两件：audit_board_comment / delete_board_comment；
-    # 40 → 43 是 20260923 加的用户自己的数据三件：list_my_favorites /
-    # get_unread_summary / list_notifications；43 → 46 是同一批的写三件：
-    # add_favorite / remove_favorite / read_notifications；46 → 48 是 20260923
-    # 批 8 的站内信两件：list_my_messages / read_messages；48 → 50 是 20260926
-    # 的后台待办两件：list_dashboard_todos / create_dashboard_todo；50 → 52 是同一天
-    # 的账号冻结/解冻两件：freeze_account / unfreeze_account；52 → 53 是同一天第十轮
-    # 的待办勾完成一件：complete_dashboard_todo；53 → 54 是同一天第十一轮的给单个
-    # 用户发通知一件：send_user_notice）；54 → 58 是 20260929 的对话额度四件：
-    # list_quota_requests + 批准/驳回/重置三件；58 → 59 是同一天批 G 的待办改排期一件：
-    # reschedule_dashboard_todo；59 → 60 是 20260930 的文章流量报表一件：
-    # get_note_stats；60 → 61 是 20261001 的后台留言名册一件：list_admin_board
-    # （读 `GET /api/protect/board`，逐条带发表账号——公开的 list_guestbook 看不到）；
-    # 61 → 62 是同一天的文章分期报表一件：get_note_periods（读
-    # `GET /api/protected/stats/notes/periods`，与 get_note_stats 是两个端点两张纸）；
-    # 62 → 63 是 20261002 批 J 的变更账号身份一件：set_account_role（与冻结族同门——
-    # 读同一份后台账号名录、按名字指认，但后果是**换档**而非关掉）；63 → 65 是
-    # 20261004 内容风控下放的禁言/解禁两件：account_mute / account_unmute
-    # （名字是 Rust 路由注释里先定死的契约，**不是** mute_account 那种语序）；
-    # 65 → 66 是 20261006 的后台账号名录一件：list_accounts（读
-    # `GET /api/temp-users`——那一族账号**写**技能的参数契约都写着"账号名必须能在
-    # 后台账号列表里看到"，而这件是那句话的唯一读入口）。
-    # 66 → 67 是 20261008 的我自己的河灯一件：list_my_board（读
-    # `GET /api/protect/board/mine`——公开池恒 Approved=1，且那几行的 `mine`
-    # 结构上恒假，"我哪条留言通过了"只有这件读得出来）。
-    # 67 → 70 是 20261019 的**文章评论**三件：list_admin_comments（后台评论名册）+
-    # audit_comment / delete_comment（复核与删除）。评论与留言是**两张表**
-    # （`note_comment` / `talk`）、两个后台页签，此前 agent 只有留言那一侧 ⇒
-    # 主人说"评论"时它只有留言可读，读出来的东西对不上他点进去看到的页面。
-    check("工具名名单覆盖注册表全量",
-          len(_TOOL_MAP) == 70 and all(n in _TOOL_NAMES_ALT for n in _TOOL_MAP),
+    # The compatibility claim matcher must recognize every currently registered name.
+    # A retired tool does not remain registered merely to hold a fixed count.
+    from tools.base import get_all_tools
+    registered = [tool.name for tool in get_all_tools()]
+    check("工具名名单覆盖注册表全量且没有重复",
+          len(registered) == len(set(registered)) and set(_TOOL_MAP) == set(registered)
+          and all(n in _TOOL_NAMES_ALT for n in registered),
           f"names={len(_TOOL_MAP)}")
+
 
 
 def _test_phantom_claim_clause_and_echo_exempt():

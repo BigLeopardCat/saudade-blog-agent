@@ -168,7 +168,6 @@ TOOL_SCOPE: dict[str, str] = {
     "get_blog_info": SCOPE_READ_PUBLIC,
     "get_social_links": SCOPE_READ_PUBLIC,
     "get_site_map": SCOPE_READ_PUBLIC,
-    "search_knowledge_base": SCOPE_READ_PUBLIC,
     "get_current_time": SCOPE_READ_PUBLIC,
     "get_weather": SCOPE_READ_PUBLIC,
     # 自己的私有数据（服务端按 uid 过滤，见 tools/base.py）

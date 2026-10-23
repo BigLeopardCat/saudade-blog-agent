@@ -326,9 +326,9 @@ def test_action_text():
             if "「」" in _txt or _txt.endswith("：") or "  " in _txt:
                 _bad.append(f"{_tag}:{_n} → {_txt!r}")
     check("★ 54 件工具 × 两档：没有空「」、没有空冒号、没有双空格", not _bad, "; ".join(_bad))
-    _DEAD = {"get_chat_history", "search_knowledge_base"}   # tools/base.py 里的两件死工具
+    _DEAD = {"get_chat_history"}   # 原生历史读取不产生旧执行器动作行
     _unarmed = {n for n in _NAMES if receipt_action(n, {}, {}) == ""}
-    check("★ 无臂集合恰好是那两件死工具（其余 52 件都已收敛到 Python 这一侧）",
+    check("未提供旧动作行的注册工具恰好是当前会话历史读取",
           _unarmed == _DEAD, str(sorted(_unarmed ^ _DEAD)))
     check("无臂工具的 preview 档是显式的兜底行（不是空串——过程行总得有字）",
           all(_pre(n) == f"执行 {n}" for n in _DEAD))
@@ -340,11 +340,11 @@ def test_action_text():
             _dead_reachable.append(f"{_n}:点名白名单")
         if any(_n == _t for _s in WORKFLOWS for _t, _ in (_s.plan or ())):
             _dead_reachable.append(f"{_n}:技能模板")
-    check("★ 两件死工具在哪条点名/模板通道里都够不到（够不到 ⇒ 「死」字成立）",
+    check("原生历史读取不通过旧规划器的点名或模板通道",
           not _dead_reachable, "、".join(_dead_reachable))
-    check("★ ……但它们**仍留在注册表里**：gate 的具名工具声称核对词汇是从注册表派生的，"
-      "删了这两行，模型声称「我调用了 get_chat_history 查了记录」就再没有判据可对",
-          all(n in {t.name for t in _TOOL_REGISTRY} for n in _DEAD))
+    check("退役的知识库占位工具没有留在注册表中",
+          "search_knowledge_base" not in _NAMES)
+
     print("\n④ 接线锁：Python 只对有臂的写 action；Rust 必须优先读它，且老表只减不增")
     _g = (ROOT / "agent" / "graph.py").read_text(encoding="utf-8")
     check("graph.py 的 execute_node 写了 `rcpt[\"action\"]`",

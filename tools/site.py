@@ -10,12 +10,12 @@ from langchain_core.tools import tool
 
 from config import settings as _settings
 from tools import base as _base
-from tools.base import API_BASE, SITE_BASE
-from tools.result import empty, fact, ok, tgt, unavailable
+from tools.base import SITE_BASE
+from tools.result import fact, ok, tgt, unavailable
 
 # `__all__` = 本模块**所有不以 `_` 开头**的模块级名字（社区惯例，不留例外；
 # `tests/test_module_exports.py` 按这条规则机械判着，漂了就红）。
-__all__ = ["get_site_map", "get_chat_history", "search_knowledge_base", "get_current_time",
+__all__ = ["get_site_map", "get_chat_history", "get_current_time",
            "get_weather", "IOT_ENABLED", "IOT_NAV_PATH", "nav_pure_path", "nav_path_valid",
            "navigate_to", "toggle_effect", "toggle_dark_mode"]
 
@@ -45,30 +45,7 @@ def get_site_map() -> str:
 - 后台管理 (/dashboard) — 登录后可管理文章、分类、标签、公告等{iot_line}
 """
 
-# ---------------------------------------------------------------------------
-# 两件**只住在注册表里**的工具（20260928 定性）
-#
-# `get_chat_history` / `search_knowledge_base`：既不在 planner 菜单，也不在
-# `_EXPLICIT_TOOLS` / `_CALLABLE_QUERY_TOOLS` 点名白名单，更不在任何技能模板的工具
-# 序列里 ⇒ **没有任何通道能把它们执行起来**（`agent/workflow_tools.py` 里那两行"刻意不收"的注释
-# 解释了为什么当初就没接：一个端点恒返回空、一个是占位）。判据在
-# `tests/test_action_text.py` ③ 末尾三条——"死工具"三个字是**锁出来的**，不是形容词。
-#
-# 那为什么不删，留着这几十行？三个理由，前两个是**删了会掉判据**：
-#   ① gate 的具名工具声称核对（`agent/graph.py::_phantom_tool_claim_span` /
-#      `_CALLED_TOOL_CLAIM_RE`）的工具名词汇是从**注册表派生**的（手写名单是漏项来源，
-#      20260913 事故：旧名单只认 7 个名字，新数据工具全漏）。删掉注册表里这两行，
-#      模型声称"我调用了 get_chat_history 查了记录"就再没有判据可对——而这两件恰好是
-#      **最容易被幻觉出来的名字**（通用 RAG 助手的常见工具名）。
-#   ② `agent/action_text.py` 的"无臂集合**恰好**是这两件"是那条收敛判据的负例。删了
-#      两件，断言还在、例子没了。
-#   ③ 它们**不构成能力面**：够不到就等于不存在，留着不扩权（越权清单在技能白名单
-#      那一步就被剥，压根到不了 execute）。
-# 真要删：得同时给 ① 的词汇找一份不依赖注册表的来源、给 ② 换一个负例——别只删
-# 注册表那一行（那样两条判据会**静默**变松，没有任何东西会告诉你）。
-# ---------------------------------------------------------------------------
-# 聊天历史工具
-# ---------------------------------------------------------------------------
+# Current conversation history is backed by the verified native read adapter.
 
 @tool
 def get_chat_history(
@@ -78,37 +55,6 @@ def get_chat_history(
     """Read actual text history within the current verified conversation."""
     from agent.domains.own_activity import get_chat_history as read_history
     return read_history.invoke({"limit": limit}, config=config)
-
-# ---------------------------------------------------------------------------
-# 知识库工具
-# ---------------------------------------------------------------------------
-
-@tool
-def search_knowledge_base(
-    query: Annotated[str, "Search keywords for knowledge base"],
-) -> str:
-    """Search knowledge base for documents matching the query."""
-
-    try:
-        resp = _base._client.get(f"{API_BASE}/knowledge")
-        if resp.status_code != 200:
-            return unavailable(f"知识库查询失败: HTTP {resp.status_code}")
-        items = resp.json()
-        if not items:
-            return empty("知识库中暂无内容")
-        results = []
-        q = query.lower()
-        for item in items:
-            title = item.get("title", "")
-            content = item.get("content", "")
-            category = item.get("category", "")
-            if q in title.lower() or q in content.lower() or q in category.lower():
-                results.append(f"[{category}] {title}\n{content[:500]}")
-        if results:
-            return "\n---\n".join(results[:5])
-        return empty(f"知识库中未找到与「{query}」相关的内容")
-    except Exception as e:
-        return unavailable(f"知识库查询失败: {e}")
 
 # ---------------------------------------------------------------------------
 # 时间 / 天气工具

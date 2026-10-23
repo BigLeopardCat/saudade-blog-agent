@@ -12,7 +12,7 @@ from langchain_core.tools import ToolException
 
 from agent.article_evidence import ArticleEvidence
 from agent.authz import SCOPE_ADMIN_CONSOLE, SCOPE_READ_OWN, TOOL_SCOPE, WRITE_SCOPES, check
-from agent.domains import browser
+from agent.domains import browser, device_actions
 from agent.llm_usage import usage_fields
 from agent.runtime import memory
 from agent.runtime.read_tools import scoped_reads_enabled
@@ -44,12 +44,15 @@ _DOMAIN_DESCRIPTIONS = {
     "public_activity": "分页读取公开公告、已通过审核的河灯留言和说说；"
                        "可按编号读取内容，不含待审或驳回记录。",
     "utilities": "读取当前时间或指定城市的实时天气；天气附来源和观测时间。",
-    "devices": "读取当前账号可访问的设备，包含共享演示设备；不下发指令。",
+    "devices": "读取当前账号可访问的设备（含共享演示设备），或按请求显示OLED文字；"
+               "仅已授权身份可下发，区分下发与设备确认，不管理物联网平台。",
     "public_catalog": "分页读取公开文章清单、置顶文章、分类和分层标签及公开文章计数；不读取正文。",
     "own_activity": "读取本人河灯留言的状态、理由与分页内容，以及当前会话的真实聊天文本。"
                     "不读取其他账号数据或其他会话，不加载图片，只读。",
     "admin_catalog": "分页读取后台文章清单（含草稿、私密文章的元数据）与账号名录。"
                      "可按分类、关键词、账号名或编号筛选；可准备文章状态、置顶或标签增删替换确认；标签缺失时可同卡创建并挂载，仅管理员可用。",
+    "admin_notices": "给单个后台账号发送个人通知：按编号或完整账号名准备确认，"
+                     "核对收件人及完整标题正文；准备不写入，仅管理员可用。",
     "admin_tags": "管理标签字典：准备新建、改名、改色、换父级、一级二级互转和删除确认；"
                   "核对层级身份、子标签与文章引用。"
                   "给文章挂标签请用后台文章领域，仅管理员可用。",
@@ -108,7 +111,7 @@ class ToolSession:
     def _handoff(self, reason, **data):
         if self.receipts:
             record("hybrid", "handoff_stopped", reason=reason, **data)
-            return self._result("页面指令已发送；其余请求尚未完成，请继续指定要处理的事项。")
+            return self._result("工具操作结果已保留；其余请求尚未完成，请继续指定要处理的事项。")
         record("hybrid", "legacy_handoff", reason=reason, **data)
         return None
 
@@ -157,7 +160,7 @@ class ToolSession:
 
     def _invoke_tool(self, name, args, call=None):
         scope = TOOL_SCOPE.get(name)
-        if scope in WRITE_SCOPES:
+        if scope in WRITE_SCOPES and not device_actions.authorized(self.config, name):
             record("hybrid", "tool_denied", name=name)
             return None
         if scope in (SCOPE_READ_OWN, SCOPE_ADMIN_CONSOLE):
@@ -214,8 +217,12 @@ class ToolSession:
         message = body if isinstance(body, ToolMessage) else None
         artifact = message.artifact if message and isinstance(message.artifact, dict) else {}
         if artifact.get("receipts"):
-            if not browser.authorized(self.config, name):
-                raise RuntimeError("Only authorized browser tools may issue page receipts")
+            if not (browser.authorized(self.config, name)
+                    or device_actions.authorized(self.config, name)):
+                raise RuntimeError("Only authorized browser tools or device tools "
+                                   "may issue receipts")
+            if name == device_actions.NAME and any("cmd" in row for row in artifact["receipts"]):
+                raise RuntimeError("Device tools cannot issue browser commands")
             self.receipts.extend(artifact["receipts"])
         kind = artifact.get("kind", "unknown") if message else getattr(body, "kind", "unknown")
         if message and message.status == "error":
