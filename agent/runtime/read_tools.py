@@ -136,7 +136,7 @@ def public_domains() -> dict:
 
 
 def device_domain(config) -> dict:
-    from agent.domains import device_reads
+    from agent.domains import device_actions, device_reads
 
     cfg = (config or {}).get("configurable") or {}
     if (not device_reads.enabled() or type(cfg.get("user_id")) is not int
@@ -144,4 +144,4 @@ def device_domain(config) -> dict:
             cfg.get("principal"), SCOPE_READ_OWN, cfg.get("user_id"))):
         return {}
     _tools_with_scope(frozenset({"list_devices"}), SCOPE_READ_OWN)
-    return {"devices": {"list_devices": device_reads.list_devices}}
+    return {"devices": {"list_devices": device_reads.list_devices, **device_actions.tools(config)}}

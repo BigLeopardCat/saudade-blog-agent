@@ -8,6 +8,7 @@ from agent.domains.article_actions import preparation as articles
 from agent.domains.article_tags import preparation as article_tags
 from agent.domains.categories import preparation as categories
 from agent.domains.moderation_actions import preparation as moderation
+from agent.domains.notices import preparation as notices
 from agent.domains.quota_actions import preparation as quotas
 from agent.domains.tags import preparation as tags
 from agent.domains.todos import preparation as todos
@@ -20,6 +21,7 @@ _PREPARATIONS = (
     ("admin_categories", categories),
     ("admin_tags", tags),
     ("admin_announcements", announcements),
+    ("admin_notices", notices),
     ("admin_moderation", moderation),
     ("admin_work_queue", todos),
     ("admin_work_queue", quotas),

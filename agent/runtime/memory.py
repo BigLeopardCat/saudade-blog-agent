@@ -13,7 +13,14 @@ from langchain_core.messages import (
 from langchain_core.messages.utils import count_tokens_approximately
 from langgraph.graph.message import REMOVE_ALL_MESSAGES
 
-from agent.authz import SCOPE_ADMIN_CONSOLE, SCOPE_READ_OWN, TOOL_SCOPE, check, holds
+from agent.authz import (
+    SCOPE_ADMIN_CONSOLE,
+    SCOPE_READ_OWN,
+    SCOPE_WRITE_DEVICE,
+    TOOL_SCOPE,
+    check,
+    holds,
+)
 from agent.domains import browser
 from agent.principal import ADMIN_ROLES, SOURCE_ASSERTION
 
@@ -58,7 +65,8 @@ def _allowed(turn, principal):
         if isinstance(message, ToolMessage):
             if browser.history_allowed(principal, message.name):
                 continue
-            if (TOOL_SCOPE.get(message.name or "") in (SCOPE_ADMIN_CONSOLE, SCOPE_READ_OWN)
+            if (TOOL_SCOPE.get(message.name or "") in
+                    (SCOPE_ADMIN_CONSOLE, SCOPE_READ_OWN, SCOPE_WRITE_DEVICE)
                     and getattr(principal, "source", None) != SOURCE_ASSERTION):
                 return False
             if not check(principal, message.name or "").allowed:

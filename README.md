@@ -127,7 +127,7 @@ saudade-blog-agent/
 │   ├── moderator.py       留言 AI 审核侧任务
 │   ├── summarizer.py      对话摘要侧任务
 │   └── …                  其余 40 余个模块见 docs/agent-architecture.md §2（完整地图，逐条列）
-├── tools/base.py          70 个工具的注册表（`_TOOL_REGISTRY`；工具本体 20261018 起
+├── tools/base.py          69 个工具的注册表（`_TOOL_REGISTRY`；工具本体 20261018 起
 │                          按域拆在 tools/ 各模块里，这里按原名 re-export）+ 共享 HTTP 通道
 ├── rag/search.py          BM25 内存倒排检索
 ├── rag/sections.py        超长文章分节（索引 / 帧 / 按节取回三处共用；纯函数）
@@ -205,8 +205,8 @@ BLOG_API_BASE=http://127.0.0.1:8099/api/public \
 - L0 适合 CI（秒级、无外部依赖），push 即拦截；L2 依赖真实模型和外部服务，不进普通 push 门禁——它由 `scripts/nightly_regression.sh` 在夜间跑，联动 L1 与 L3，任一门禁项失败会在磁盘上留一个标记文件由心跳探针带出来。**这个夜间任务默认是关的**（出厂不装任何 cron；一次全量约 10M tok / ¥2.4，跑的是维护者那台机器上的语料与夹具）——想天天跑就用 `bash scripts/enable_nightly.sh` 打开（默认干跑，`--apply` 才写 crontab），只想看一次读数就直接手跑那个脚本。**没开的时候 `~/agent_regression.failed` 恒不存在 ⇒ 心跳探针那一项恒静默，静默不等于绿。**
 - golden 分两类判：带 `regression` 标签的回归组硬判 100%，能力题按通过率。平均数会把两类红混在一起，严重度不同，所以分开。
 - 有几条用例需要“真实身份”（要以某个 uid 真调上游），由环境变量给出（见下一节）；未设时它们**响亮地跳过并计入报告**，不静默豁免。
-- 有意不覆盖三处（不是缺口，别照着“补上”）：`search_knowledge_base`（`/knowledge` 端点返回空）、
-  `get_chat_history`（占位实现）、`device_oled_display`（真硬件副作用，不适合进自动化）。
+- 设备真实屏显不进入自动化评测；离线验证授权和下发回执。会话历史已有原生读取，
+  空置且不可达的知识库占位工具已退役；站内内容继续使用文章检索。
 
 ### 产物保留（谁负责清）
 
