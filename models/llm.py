@@ -139,6 +139,12 @@ def get_llm(**kwargs) -> ChatOpenAI:
         "timeout": kwargs.pop("timeout", settings.llm_timeout),
         **kwargs,
     }
+    from agent.runtime.control import model_options
+
+    deadline_options = model_options(params["timeout"])
+    if deadline_options:
+        params.update(deadline_options)
+        params["max_retries"] = 0
     # enable_thinking 是各家自有参数，须走 extra_body（model_kwargs 只接受标准
     # OpenAI 参数）。总开关默认开（settings.llm_enable_thinking，可 LLM_ENABLE_THINKING
     # 覆盖），但图内四个调用均 per-call 显式关闭（见上方注）——关闭是 per-call

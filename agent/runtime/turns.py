@@ -12,17 +12,15 @@ import time
 from contextlib import contextmanager
 
 from agent.runtime import checkpoint_store
+from agent.runtime.control import AgentCancelled, check_active
 
 _registry_lock = threading.Lock()
 _local_locks: dict[tuple, tuple] = {}
 _POLL_SECONDS = 0.05
 
 
-class AgentCancelled(Exception):
-    """The caller stopped this turn; producers finish without emitting a reply."""
-
-
 def stopped(config):
+    check_active()
     event = ((config or {}).get("configurable") or {}).get("stop_event")
     return event is not None and event.is_set()
 

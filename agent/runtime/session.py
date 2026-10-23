@@ -15,9 +15,11 @@ from agent.authz import SCOPE_ADMIN_CONSOLE, SCOPE_READ_OWN, TOOL_SCOPE, WRITE_S
 from agent.domains import browser, device_actions
 from agent.llm_usage import usage_fields
 from agent.runtime import memory
+from agent.runtime.control import model_options
 from agent.runtime.read_tools import scoped_reads_enabled
 from agent.runtime.results import TurnResult
 from agent.runtime.turns import check_cancelled
+from config.settings import settings
 from tools.base import unavailable
 from utils import trace as trace_mod
 from utils.trace import record
@@ -276,7 +278,7 @@ class ToolSession:
             started = time.monotonic()
             record("hybrid", "llm_start", round=round_index, engine="native",
                    prompt_chars=prompt_chars)
-            response = self.llm.invoke(prompt)
+            response = self.llm.invoke(prompt, **model_options(settings.llm_timeout))
             record("hybrid", "llm_done", round=round_index, engine="native",
                    duration_s=round(time.monotonic() - started, 2),
                    prompt_chars=prompt_chars, **usage_fields(response))

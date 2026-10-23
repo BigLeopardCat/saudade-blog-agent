@@ -23,7 +23,8 @@
 |---|---|---|
 | [agent-architecture.md](agent-architecture.md) | 系统现在是什么：节点拓扑、跨语言契约、目录与机制 | 现状型 |
 | [agent-architecture-audit-20261023.md](agent-architecture-audit-20261023.md) | 架构、IR、记忆、确认恢复与单任务成本审计，含整改顺序 | 记录型 |
-| [native-account-actions.md](native-account-actions.md) | 原生账号管理接口、权限语义、迁移与隔离验证 | 现状型（本分支，待集成） |
+| [native-account-actions.md](native-account-actions.md) | 原生账号管理接口、权限语义、迁移与隔离验证 | 现状型（已生产验收） |
+| [session-runtime-review-20261024.md](session-runtime-review-20261024.md) | 会话职责、独立报告核对、后台准入修复及剩余预算/存储工作 | 现状型 |
 | [hybrid-runtime-migration.md](hybrid-runtime-migration.md) | 工具型 Agent 迁移边界、已实现的直接对话路径和下一批验收门槛 | 方向型（含现状） |
 | [repository-layout.md](repository-layout.md) | 目录职责、依赖边界与按领域迁移的归属规则 | 现状型（含迁移方向） |
 | [retired-experiments.md](retired-experiments.md) | 已退役实验臂、归档位置与保留结论 | 记录型 |
