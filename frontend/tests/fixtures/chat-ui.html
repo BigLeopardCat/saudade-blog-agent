@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="zh-CN">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>对话面板离线浏览器验收</title>
+<link rel="stylesheet" href="/live2d-widgets/widget.css">
+<link rel="stylesheet" href="/live2d-widgets/chat-ui.css">
+<style>
+  body { margin: 0; min-height: 100vh; background: #f4f3ef; font-family: system-ui, sans-serif; }
+  .fixture-page { max-width: 720px; margin: 60px auto; padding: 24px; color: #61616b; }
+</style>
+<main class="fixture-page"><h1>Saudade Blog</h1><p>本页面仅使用本地测试接口，不加载 Live2D 运行时。</p>
+  <label>页面搜索 <input id="page-search" type="search"></label>
+</main>
+<div id="waifu" class="waifu-active"></div>
+<script src="/live2d-widgets/chat-core.js"></script>
+<script src="/live2d-widgets/chat-render.js"></script>
+<script src="/live2d-widgets/chat-engine.js"></script>
+<script src="/live2d-widgets/chat-stream.js"></script>
+<script src="/live2d-widgets/chat-session.js"></script>
+<script src="/live2d-widgets/chat-ui.js"></script>
+<script>
+  localStorage.setItem('tokenKey', 'offline-fixture-token');
+  localStorage.setItem('username', '离线测试用户');
+  // A controlled host-renderer fixture, not a second Markdown implementation.
+  // It supplies real rich-text elements to the production rendering/layout code.
+  const longUrl = 'https://example.test/' + 'unbroken'.repeat(70);
+  const codeLine = 'const embeddingDimensions = [' + '1024, '.repeat(90) + '];';
+  const richText = '向量检索部署对照\n\n' + longUrl + '\n\n' + codeLine;
+  window.__chatFixtureRichText = richText;
+  window.__chatRenderMarkdown = text => text === richText
+    ? '<h3>向量检索部署对照</h3><p>长文本、专业术语和多篇参考资料应保持可读。</p>'
+      + '<p><a href="' + longUrl + '">' + longUrl + '</a></p>'
+      + '<pre><code>' + codeLine + '</code></pre>'
+      + '<table><thead><tr><th>模型</th><th>维度</th><th>部署</th><th>资源预算</th><th>检索场景</th><th>版本校验</th></tr></thead>'
+      + '<tbody><tr><td>BGE-small-zh-v1.5</td><td>512</td><td>CPU-local</td><td>4cores-4GiB-memory</td><td>Chinese-English-technical-terminology</td><td>Incremental-version-20261024</td></tr></tbody></table>'
+      + '<p>' + 'English terminology: PostgreSQL, embedding, incremental indexing. '.repeat(15) + '</p>'
+    : undefined;
+  const ctx = { core: window.__waifuChatCore, render: {}, dom: {}, state: {}, ui: {} };
+  window.__waifuRender(ctx);
+  const engine = window.__waifuEngine(ctx);
+  engine.init();
+  const stream = window.__waifuStream(ctx, engine);
+  stream.init();
+  window.__waifuSession(ctx, engine).init();
+  window.__waifuChatUI.init(ctx, engine);
+  ctx.dom.chatPanel.classList.add('active');
+  window.__chatTest = { ctx, engine, stream };
+</script>
+</html>
