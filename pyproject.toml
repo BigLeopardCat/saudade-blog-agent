@@ -1,27 +1,11 @@
 [project]
 name = "saudade-agent"
 version = "0.2.0"
-description = "泠月喵看板娘 AI 对话 Agent：LangGraph 技能注册表 + 模板质检 + 评测驱动的对话系统"
+description = "博客工具助手：按需工具调用、持久会话与服务端授权"
 readme = "README.md"
-# Python 3.12（20261013 从 3.10 升上来）。**解释器版本是一个有五处写法的量**
-# ——这一行、`.python-version`、`[tool.ruff].target-version`、`[tool.mypy].python_version`、
-# CI 的 `python-version`，加上棘轮基线里的 `python_target`——此前**一处不对就没人知道**。
-# 从今天起 `tests/test_packaging.py` ⑥ 把它们钉成同一个值：只改一处当场红。
-# 升版的连带项（改一处忘另一处就会以"配了但和事实两套"的形式烂在那里）：
-#   · 产线 `.venv` 要重建（**主人的活**，停机窗口里做）；
-#   · `uv lock` 要重跑（lock 里也记着 requires-python）；
-#   · `eval/type_gate.py --update` 要重出 baseline——**换解释器目标 = 换了一套 mypy
-#     错误集**，棘轮的"变差"判据认不出来，所以基线里现在也记着 `python_target`。
+# Runtime, tooling and CI target Python 3.12.
 requires-python = ">=3.12"
 license = "MIT"
-# 包元数据（20261018 批 5 补 `authors` / `keywords` / `classifiers` 三样）。口径：
-#   · 版权持有者取 `LICENSE` 里那个名字（`Copyright (c) 2026 BigLeopardCat`），邮箱取
-#     GitHub 的 noreply 地址——包元数据是**要发出去**的，别把私人邮箱写进去；
-#   · **刻意不写 `License :: OSI Approved :: MIT License` 这条 classifier**：`license`
-#     已经是 SPDX 表达式（PEP 639），两者同时在场是同一件事写两处，新一点的打包工具会
-#     为那条 classifier 报弃用；
-#   · `Development Status :: 4 - Beta` 是**如实**：产线在跑，但版本还是 0.2.0、结构仍在动；
-#   · **不写 `Typing :: Typed`**：本仓没有 `py.typed`、签名注释也没铺满 ⇒ 那句话会说成假的。
 authors = [{ name = "BigLeopardCat", email = "132721665+BigLeopardCat@users.noreply.github.com" }]
 keywords = ["llm", "agent", "langgraph", "rag", "chatbot", "fastapi"]
 classifiers = [
@@ -34,26 +18,7 @@ classifiers = [
     "Topic :: Internet :: WWW/HTTP",
     "Topic :: Scientific/Engineering :: Artificial Intelligence",
 ]
-# 依赖一律 `==` 钉死（20260928）：这里声明的版本 = 生产 `.venv` 里实际在跑的版本。
-# 之前全是 `>=`，`uv.lock` 与声明的下限可以差出好几十个版本都"合法"（lock 停在 8 月，
-# 而 pyproject 只说"不早于"），装机的人拿到什么版本全看当天 PyPI——判据钉在运维取值上
-# 就长这样。改版本的正确姿势：改这里 + `uv lock` + 看 lock 的 diff（`uv sync`
-# **绝不在本机跑**：`.venv` 就是产线那个 venv，sync 会按 lock 修剪/升降级产线依赖）。
-#
-# 名单的判据 = **代码里真的 import 了什么**（`python -c` 扫全仓 top-level import 得出），
-# 不是"装了什么"。三处曾经的缺口与处理：
-#   · `langgraph` / `langchain-core` / `pydantic` —— 直接被 import（planner 图、消息类型、
-#     请求体校验），却只作传递依赖存在：上游哪天换实现，本仓会以"运行时 ImportError"
-#     的方式知道，而不是装依赖时就知道。
-#   · `langchain` —— 20260928 按"全仓零 import"删过一次（当时的实测是真的）；20261004
-#     第二条臂（`agent/react_line.py`）在顶层把它 import 回来了（`langchain.agents.
-#     middleware` 是 langchain 1.x 的 create_agent 家族，langchain-core 里没有），而这行
-#     没跟着回来 ⇒ 见下面 dev 组那一组的注释。
-#   · `starlette` —— 生产代码不 import 它，但它**是**断连中断机制的行为依赖：
-#     `StreamingResponse` 的 task_group / `listen_for_disconnect` / `asyncio.CancelledError`
-#     传播这套语义直接决定"用户离开后 agent 还执不执行"，而这一族语义跨大版本会变
-#     （见 docs/问题记录.md 与 CLAUDE.md「断连中断机制」）。声明它是一种"我知道我在依赖它"
-#     的记号，不是多余的：只有一个测试文件 import 它，删掉那行import 就没人记得这层关系。
+# Direct runtime dependencies; uv.lock pins reproducible installations.
 dependencies = [
     "edge-tts==7.2.8",
     "fastapi==0.141.1",
@@ -68,69 +33,18 @@ dependencies = [
     "psycopg-pool==3.3.3",
     "pydantic==2.13.4",
     "pydantic-settings==2.14.2",
-    # JWT 验签与签发（20261020，ADR-0014）。**归运行时而不是 dev 组**：三条路径都在
-    # 生产请求链路上（`server._verify_assertion_claims` 验 Rust 的身份断言、
-    # `tools/base._sign_local_jwt` 与 `tools/device._sign_user_jwt` 签代调令牌）。
-    # 此前这三处都是手写的 base64 + HMAC —— 验签侧自己盯不住 `alg` 混淆 / 空签名 /
-    # 边界时钟，而标准库不会替你看（20261019 安全审计 §1.1）。
-    # ⚠️ **版本必须是 2.15.1（最新）**：审计文档写的 `==3.0.0` 不存在。
-    # ⚠️ 它本来就在 `.venv` 里（某条传递依赖带的）⇒ **"import 得到"不代表"声明了"**，
-    # 而 CI 的 `uv sync --frozen` 只装 lock 里的东西。这一行是补声明。
+    # JWT authentication uses the installed PyJWT implementation.
     "PyJWT==2.15.1",
     "starlette==1.6.0",
     "uvicorn==0.52.4",
 ]
 
-# 开发工具单独一组：`uv sync` 默认会装它，但**不进运行时依赖**（部署包/产线 venv 只需要
-# 上面那 14 个）。两件：
-#   · `ruff` —— 本仓的静态扫描就是它那一条 F821（见 .github/workflows/eval.yml），
-#     版本放这里 = CI 的扫描版本跟着 `uv.lock` 走，不再在 workflow 里手写 `uvx ruff@0.14.4`
-#     （那正是"同一件事写两处、改一处忘另一处"的形状）。
-#   · `langchain` —— 第二条臂（`agent/react_line.py`）的**顶层** import，只有实验线与它的
-#     单测用得到，生产链路一个字都不碰 ⇒ 归 dev 组而不是运行时依赖。**这行是补票**：
-#     20260928 按"全仓零 import"删过它（当时的实测是真的），20261004 那条臂又 import 回来，
-#     而 CI 的 `uv sync --frozen` 只装 `uv.lock` 里有的东西 ⇒ `test_react_arm` /
-#     `test_react_line` / `test_react_narrator_assets` 在 CI 里从那天起**恒红**，
-#     本机却一直是绿的（产线 venv 里还留着删依赖之前的那份 1.3.11）。版本钉在产线
-#     实际在跑的那个上，`uv.lock` 才是"CI 装什么"的唯一事实源。
-#   · `mypy` —— **20261013 补**：`[tool.mypy]` 那段配置（见本文件末尾）在此之前**从不执行**
-#     （不在依赖、不在 lock、CI 没有这一步），而函数签名已注释约 78% ⇒ 写了从不校验。
-#     首次真跑：`220 errors in 21 files (checked 46)`（`agent/graph.py` 99、`tools/base.py` 28）。
-#     数量不大 ⇒ 走**棘轮**而不是一次清零：`eval/mypy_baseline.json` 记当前读数，
-#     `eval/type_gate.py` 只许它变小（照 `tests/test_complexity_budget.py` +
-#     `eval/complexity_baseline.json` 同款）。**版本必须与 baseline 同源**——换了 mypy
-#     版本，报出来的错误集会变，棘轮就不再是同一个量；升版 ⇒ 重新出 baseline（CI 会红着逼你）。
-#     ⚠️ 本机不进 dev 组的安装流程（见上一段：本机不许 `uv sync`）⇒ 本机跑它用隔离的
-#     `uvx mypy@2.4.0 …`（与这里同版），CI 里才由 `uv sync --frozen` 装。
-#     ⚠️⚠️ **本机跑还要求"用哪个解释器启动"**：mypy 靠 `--python-executable` 决定去谁的
-#     site-packages 里找 langgraph/openai/fastapi，不传就认自己所在的环境 ⇒ 隔离的 `uvx`
-#     那份**看不到三方库**、把 import 全退化成 Any，同一条命令会少报 8 个（212 vs 220）。
-#     `type_gate.py` 现在恒带这个参数并把值钉成启动器的解释器，所以本机**必须**
-#     用那个已装好依赖的解释器去启动脚本，再让它去跑隔离的 mypy（细节见该文件 docstring）。
-#   · `coverage[toml]` —— **20261013 补**：`scripts/dev/coverage.sh` 用它出那份
-#     **非门禁**的覆盖率报告（`pytest --cov`；20261020 前是 `tests/run_all.py --coverage`，
-#     逐套件 `coverage run` + 结尾 `combine`，入口随自研 runner 一起删了）。为什么**不设阈值**：
-#     只有形状判据配当门禁，百分比会把"该测的没测"与"测了但那一支没走到"混成一个数，拿它
-#     当闸门只会把人推去测 getter；它回答的是"这轮动得多不多、哪些文件一直没人碰"。
-#     配置在文件末尾的 `[tool.coverage.*]`（`source` 只列生产包）。
-#     ⚠️ 这个 `[toml]` extra **留着**，但理由在 20261013 升到 3.12 之后**变了一半**：
-#     当时它是**必需**的（Python 3.10 没有标准库 TOML ⇒ 没它 coverage 连
-#     `pyproject.toml` 都打不开，而且不是"忽略配置继续跑"、是构造时就退 1，表现是
-#     "每个套件都红"）；3.12 起 `tomllib` 进了标准库，coverage 自己就能读，它成了
-#     **多余但无害**的声明。留着的理由只有一个：**判据不该依赖"当前解释器恰好带了
-#     TOML"**——写下来的是一个"配置必须读得进来"的形状，不是"这一版正好不用装东西"。
-#     它带 `tomli` 的 marker 是 `python_full_version <= '3.11'` ⇒ 在 3.12 上不装任何东西。
-#     ⚠️ **20261020 起本机不再需要"临时挂一份"**：那份 `uv venv /tmp/cov` + `PYTHONPATH`
-#     指的配方是围着"产线 venv 里没有 coverage"写的，而它现在就在下面这个 dev 分组里
-#     （同 pytest / pytest-cov），一次 `uv sync` 就有。
-# ⚠️ 本机 `.venv` 是**产线 venv**，不许 `uv sync` ⇒ 本机跑静态扫描仍用隔离的
-# `uvx ruff@0.14.4 check …`（与这里同版；升版 = 改这一行 + `uv lock`，本机命令一起改）。
+# Test, analysis and optional offline evaluation tools.
 [dependency-groups]
 dev = [
     "bandit==1.9.4",
     "coverage[toml]==7.16.2",
     "ir-measures==0.4.3",
-    "langchain==1.3.11",
     "mypy==2.4.0",
     "pytest==9.1.1",
     "pytest-cov==7.1.0",
@@ -157,13 +71,7 @@ build-backend = "hatchling.build"
 packages = ["agent", "config", "models", "rag", "tools", "utils"]
 
 [tool.pytest.ini_options]
-# 20261020 起 `tests/` 就是一套**原生 pytest 套件**（179 个套件整体从「自研 runner
-# tests/run_all.py + 裸脚本判据」迁过来，逐批读数见 changelog.d/20261020-pytest-migration-*.md）。
-# 双轨期那一版这里写的是「只收集 _MIGRATED 台账里登记的文件」（未迁移的裸脚本判据长在
-# 模块级，收集即 import 会把它们当场执行掉），台账随末批一起删了。
-#
-# 下面两项都**刻意不写 `python_files`**：默认的 `test_*.py` 就是这套的收集规则，写出来
-# 等于多一处可以漂的事实源（tests/test_tests_dir_shape.py ④ 判着「没被改掉」）。
+# Offline tests use mocks or their own temporary loopback service.
 testpaths = ["tests"]
 addopts = "--disable-socket --allow-unix-socket"
 # 单测试超时 300s（对齐原 run_all 的套件档）。并行（`-n 4`）由 CI 显式传、这里不写死——
