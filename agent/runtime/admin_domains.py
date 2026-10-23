@@ -1,6 +1,7 @@
 """Assemble authorized administrator reads and confirmation preparation tools."""
 
 from agent.authz import SCOPE_ADMIN_CONSOLE
+from agent.domains.account_actions import preparation as accounts
 from agent.domains.admin_writes import available
 from agent.domains.announcements import preparation as announcements
 from agent.domains.article_actions import preparation as articles
@@ -13,6 +14,7 @@ from agent.domains.todos import preparation as todos
 from agent.runtime.read_tools import scoped_reads_enabled
 
 _PREPARATIONS = (
+    ("admin_account_actions", accounts),
     ("admin_catalog", articles),
     ("admin_catalog", article_tags),
     ("admin_categories", categories),

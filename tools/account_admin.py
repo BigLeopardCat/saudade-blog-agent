@@ -1,43 +1,11 @@
 # -*- coding: utf-8 -*-
-"""管理助手写工具：账号管理（冻结 / 解冻 / 禁言 / 解禁 / 变更身份 / 发通知）。
+"""Legacy account tools retained for the explicit graph compatibility entry.
 
-20261018 拆 `tools/base.py`。
-
-**为什么单独成模块**：这一族是 `tools/base.py` 里**连续的 693 行、21 个模块级名字**
-（后台名录 + 按名字解析 + 三条最小写通道 + 七件工具），scope 全是 `write.console`。
-它自己就是一个完整的**名字通道闭环**——读后台名录 → 按账号名解析唯一目标 → 走最小写
-通道 → 读回复核；而这一族独占的两条通道（`_user_directory` 那个**不回信封的裸数组接口**、
-`_policy_post` 那条**政策拒绝**通道）在别族都没有对应物。
-
-## 这一族独有的事实（实现为什么长这样）
-  ① 账号名录 `GET /api/temp-users` 是全站唯一**不回 `ApiResponse` 信封**的
-     `/api/protected` 接口（裸数组）⇒ 不能复用 `_admin_get`，只能自己造一个
-     （见 `_user_directory`）。
-  ② **只按名字指认，没有编号通道**：后台名录不列超管行这道防线（Rust
-     `authz::is_listable_role`）只在"定位必须经过名录"时才成立——开一扇编号门等于把
-     "冻一个看不见的超管"从第二扇门重新打开。名字重名就直接拒绝（选错就是冻了另一个活人）。
-  ③ **方向必须写进工具名**（冻结/解冻、禁言/解禁各一对），不许做成
-     `set_account_status(frozen=…)`：单工具的方向由 planner 填，而 `_confirm_grant_plan`
-     的"工具 ⊆ 技能 plan"判据**看不见**这次翻转（工具名没变）⇒ 卡上写「冻结」、实际
-     执行解冻，且无人可见（先例：`add_favorite` / `remove_favorite` 也是这样一对）。
-  ④ **拒绝的形态是后端的政策**，不是"目标不存在"⇒ 走 `policy_frame`（`__ERROR__` +
-     原因码族），见 `_policy_post`。**这一条对变更身份格外要紧**：能改谁、能改成什么，
-     agent 侧一个字都不判（用户拍板：政策只有一份实现）。
-  ⑤ **发通知**（`send_user_notice`）只在 ①② 上与冻结族同族（它也走名录、也只按名字）；
-     它的方向在**参数取值**里（不是一次翻转）⇒ 另外补了一条：卡面必须印出**正文全文**
-     由主人核对。
-
-## 搬家时守的一条
-⚠️ **所有共享帮手一律写成 `_base.<名>(...)`**：`_find_named_user`（套件打桩 3 处）、
-`_user_directory`（2 处）、`_device_get_user_id`（2 处）、`_sign_local_jwt`（2 处）、
-`_client`（全仓 159 处）都是**被套件直接打桩**的模块全局（`patch()` 就是
-`setattr(tools.base, 名, 桩)`）；`_policy_post` / `_pre_read_fail` / `_near_miss_names` /
-`_admin_notice_post` / `ADMIN_BASE` / `logger` 虽然没人打桩，但本模块**一个名字都不按名
-从 `tools.base` 取**——模块级写 `from tools.base import <名>` 会让 mypy 在这个环上判不出
-被 re-export 的那些名字的类型（20261018 在 `tools/admin_read.py` 那一刀实测 7 条，
-`tools/base.py` 13→16）。属性查找同时解决了"本模块在 base 的原位置就被 import"的时序问题。
-`logger` 走 `_base.logger` 而**不是**自己 `getLogger(__name__)`：这一族的告警行名必须与
-搬家前逐字相同（换个名字 = 日志面上一次没人要求的变更）。
+Native account changes use agent.domains.account_actions and the versioned backend
+transaction service. This legacy adapter resolves full usernames through the old
+account directory. Backend policy applies independently to both names and IDs;
+directory visibility is not an authorization boundary. Shared helpers stay on
+_base so existing compatibility callers and mocked transports use the same state.
 """
 
 from typing import Annotated
@@ -54,34 +22,6 @@ from tools.result import ToolResult, empty, fact, not_found, ok, tgt, unavailabl
 __all__ = ["account_mute", "account_unmute", "freeze_account", "list_accounts",
            "send_user_notice", "set_account_role", "unfreeze_account"]
 
-
-# ---------------------------------------------------------------------------
-# 管理助手写工具：账号管理（冻结 / 解冻 / 变更身份 / 发通知）（20260926，20261002 加第三件）
-# ---------------------------------------------------------------------------
-# 四件共用"目标 = 后台账号列表里的**账号名**"这条唯一通道（`_user_directory` /
-# `_find_named_user`），差别在**动的是什么**：冻结族动的是对方的登录能力、变更身份动的是
-# "他在哪一档"、发通知动的是"发给对方的一段话"。下面四条是冻结族独有的事实，发通知那件
-# 只在 ①② 上同族（它也走名录、也只按名字），③④ 是它自己的（见 `_send_user_notice` 头注）。
-# 变更身份与冻结族同族但**只在 ①②④ 上**：③ 那条"方向写进工具名"对它不成立（它的方向
-# 是**参数取值**，不是一次翻转——工具名 `set_account_role` 一个，身份由 `role` 定），
-# 所以它另外补了一条：卡面必须印出"从什么身份 → 什么身份"（见 adminops 的 `_ROLE_*`）。
-#
-# 与标签/分类/公告/留言同一套纪律（名字通道 + fail-closed + 读回复核），四件**这一族
-# 独有**的事实决定了实现的形状：
-#   ① 账号名录 `GET /api/temp-users` 是全站唯一**不回 `ApiResponse` 信封**的
-#      `/api/protected` 接口（裸数组）⇒ 不能复用 `_admin_get`，见 `_user_directory`；
-#   ② **只按名字**指认，没有编号通道（`user_id` 参数）：后台名录不列超管行这道防线
-#      （Rust `authz::is_listable_role`），只在"定位必须经过名录"时才成立——开一扇
-#      编号门等于把"冻一个看不见的超管"从第二扇门重新打开。名字重名就直接拒绝
-#      （选错就是冻了另一个活人）；
-#   ③ **两个工具而不是一个带布尔参数的**：方向必须写进**工具名**。单工具
-#      `set_account_status(frozen=…)` 的方向由 planner 填，而 `_confirm_grant_plan`
-#      的"工具 ⊆ 技能 plan"判据**看不见**这次翻转（工具名没变）⇒ 卡上写「冻结」、
-#      实际执行解冻，且无人可见（先例：add_favorite / remove_favorite 也是这样一对）；
-#   ④ 拒绝的形态是**后端的政策**，不是"目标不存在"⇒ 走 `policy_frame`
-#      （`__ERROR__` + 原因码族），见 `_policy_post` 与 agent/adminops.py。
-#      **这一条对变更身份格外要紧**：能改谁、能改成什么，agent 侧一个字都不判
-#      （用户拍板：政策只有一份实现），理由写在 `_set_account_role` 头注里。
 
 def _user_directory(config: RunnableConfig) -> dict[int, dict] | ToolResult:
     """读后台**账号名录** → `{uid: 行}`；读不到 → `ToolResult`（失败，不是 None）。
@@ -323,7 +263,7 @@ _ACCOUNT_DONE = {
 
 
 def _set_account_frozen(name, frozen: bool, config: RunnableConfig) -> ToolResult:
-    """冻结/解冻的公共实现（两个 @tool 只是方向不同的薄壳，见本节头注③）。
+    """旧图冻结/解冻兼容实现，两个工具分别表达操作方向。
 
     照 `delete_tag` 的五段式：① 读名录 → ② 解析出唯一一行 → ③ 写 → ④ 写后重读
     **同一份名录**复核 → ⑤ 出口只有 `ok` / `not_found` / `policy_frame` /
@@ -349,9 +289,8 @@ def _set_account_frozen(name, frozen: bool, config: RunnableConfig) -> ToolResul
     username = str(row.get("username") or want)
     was_frozen = _account_frozen(row)
 
-    # ③ 写。**幂等不短路**：目标已经是目标状态时照样发请求（后端那一支是真 no-op），
-    #    结论由下面的复核给——短路成 ok 会让回执把一次"没发生的事"读成一个动作
-    #    （"刚冻结的"与"本来就是冻结的"对主人是两句不同的话）。
+    # ③ 兼容入口仍发送明确方向：冻结会撤销旧登录，即使可见状态已经冻结。
+    # 下面的旧回执仅比较可见状态；完整副作用由原生 account_actions 计划与回执核验。
     data = _base._policy_post(f"/api/temp-users/{target_id}/status",
                               {"frozen": frozen}, config)
     if isinstance(data, ToolResult):
@@ -424,7 +363,7 @@ def unfreeze_account(
 
 
 def _set_account_muted(name, muted: bool, hours, config: RunnableConfig) -> ToolResult:
-    """禁言/解除禁言的公共实现（两个 @tool 只是方向不同的薄壳，见本节头注③）。
+    """旧图禁言/解除禁言兼容实现，两个工具分别表达操作方向。
 
     照 `_set_account_frozen` 的五段式：① 读名录 → ② 解析出唯一一行 → ③ 写 →
     ④ 写后重读**同一份名录**复核 → ⑤ 出口只有 `ok` / `not_found` / `policy_frame` /
