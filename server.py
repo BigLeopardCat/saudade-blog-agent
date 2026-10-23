@@ -55,7 +55,7 @@ from agent.principal import Principal
 from agent.runtime.control import RequestControl
 from agent.runtime.jobs import RequestJobs
 from agent.runtime.model_budget import tool_callbacks
-from agent.runtime.progress import ProgressEmitter
+from agent.runtime.progress import ProgressEmitter, StreamProgress
 from agent.summarizer import summarize
 
 # `NAV_MAP` 的 import 随渲染一起搬走了（20260928）：路径→中文别名的反查只服务于
@@ -2061,18 +2061,8 @@ async def chat_stream(req: ChatRequest, request: Request):
     async def event_stream():
         queue: asyncio.Queue = asyncio.Queue()
         loop = asyncio.get_running_loop()  # 同上（event_stream 也是协程）
-        started = loop.time()
-
-        def enqueue_progress(text: str):
-            # Never make the model/tool thread wait for the HTTP consumer.
-            if stop_event.is_set() or loop.is_closed():
-                return
-            try:
-                loop.call_soon_threadsafe(queue.put_nowait, f"__PROCESS__:{text}")
-            except RuntimeError:
-                return
-
-        progress_emitter = ProgressEmitter(enqueue_progress)
+        progress = StreamProgress(loop, queue, jobs.control)
+        started = progress.started
 
         # 摘要独立化：needs_summary 轮与流式生成并行做后端总结（输入为原始历史，
         # 不依赖模型回复），流结束时随 __SUMMARY__ 帧返回（Rust 解析入库）
@@ -2087,15 +2077,10 @@ async def chat_stream(req: ChatRequest, request: Request):
         _submit_with_context(
             loop, _run_agent_stream_to_queue, messages, thread_id, queue, loop, req.user_id, stop_event,
             principal, grant, req.conversation_id,
-            # 台账事实（洞⑦ 判据）：与 _build_messages 注入的同源，**在这里算**
-            # ——req 只在这个作用域里（20260924 的线上事故就是把它写进了被调函数）
+            # Pass request-owned execution facts into the worker.
             _ledger_for_graph(req, confirmed=bool(grant)),
-            # 未完结任务原文（20260927 批 D）：流尾按回执结算要用，**同一条理由**
-            # 必须由这里传（req 不在被调函数里）
             req.agent_tasks,
-            # 上一轮执行过的工具名（20260929 批 F1'）：**同一条理由**必须由这里传
-            # （req 不在被调函数里），见 `_run_agent_stream_to_queue` 的同名参数注
-            req.recent_tools, progress_emitter, jobs=jobs,
+            req.recent_tools, progress.emitter, jobs=jobs,
         )
 
         # 可观测性：请求生命周期账本（帧数/退出原因，finally 汇总）
@@ -2110,18 +2095,6 @@ async def chat_stream(req: ChatRequest, request: Request):
         pending_nl = False
         had_output = False
         last_frame = started
-        first_visible = False
-        first_reply = False
-
-        def mark_visible(kind: str):
-            nonlocal first_visible, first_reply
-            if not first_visible:
-                first_visible = True
-                record("producer", "first_visible_event", kind=kind,
-                       duration_s=loop.time() - started)
-            if kind == "reply" and not first_reply:
-                first_reply = True
-                record("producer", "first_reply", duration_s=loop.time() - started)
         try:
             while True:
                 try:
@@ -2136,23 +2109,20 @@ async def chat_stream(req: ChatRequest, request: Request):
                     if elapsed >= STREAM_TOTAL_TIMEOUT:
                         end_reason = "total_timeout"
                         logger.error("Chat stream total timeout (%.0fs) reached, aborting", elapsed)
+                        progress.mark("error")
                         yield f"data: __ERROR__:{json.dumps('生成时间过长，请稍后重试', ensure_ascii=False)}\n\n"
                         return
                     if loop.time() - last_frame >= STREAM_IDLE_TIMEOUT:
                         end_reason = "idle_timeout"
                         logger.error("Chat stream idle timeout (%.0fs), aborting", elapsed)
+                        progress.mark("error")
                         yield f"data: __ERROR__:{json.dumps('服务响应超时，请稍后重试', ensure_ascii=False)}\n\n"
                         return
                     continue
                 last_frame = loop.time()
                 if chunk is None:
                     end_reason = "producer_done"
-                    # 终止帧必须是最后一帧（20260923）：哨兵由生产者在 finally 里投出
-                    # （它在所有帧之后），**哨兵之后再入队的帧永远不会被本循环取走**
-                    # （循环已 break）——那就是"悄悄丢了内容"。而三端对"终止帧之后还能
-                    # 不能有帧"的语义各不相同：Rust 见 __END__ 即 break 停止转发，前端
-                    # 却是 continue 继续读到连接关闭，此前没有一端把它写成断言。这里只查
-                    # 不改：残留照旧丢弃（不留不确定性），但必须响亮。
+                    # No payload may follow the producer sentinel.
                     residue = queue.qsize()
                     if residue:
                         logger.error("[stream] 终止帧之后生产者又投了 %d 个帧（协议违约："
@@ -2160,20 +2130,11 @@ async def chat_stream(req: ChatRequest, request: Request):
                     break
                 if isinstance(chunk, Exception):
                     end_reason = "producer_error"
-                    # 这里**不能**用 logger.exception：异常是在生产者线程里捕获后
-                    # 经队列送过来的，本协程没有"正在处理中"的异常，exc_info 取到
-                    # (None,None,None)，日志只剩一行 "NoneType: None" ——真正的
-                    # traceback 全丢了（20260921 22:37 排障就是被这个坑住的：只
-                    # 知道流炸了、不知道炸在哪）。把异常对象本身交给 exc_info，
-                    # logging 会用它自带的 __traceback__ 渲染。
+                    # Preserve the worker exception traceback in server logs.
                     logger.error("Agent streaming failed: %s: %s",
                                  type(chunk).__name__, chunk, exc_info=chunk)
-                    # 载荷是**给访客的话术**（模块常量），不是 `str(异常)`：
-                    # 异常名/内部路径只进日志与 trace，不进气泡（见常量处的注）。
-                    # 仍然 `json.dumps`——帧形态契约不变（`data: __ERROR__:<JSON
-                    # 字符串>`），前端按 JSON 解，且将来若这一格再带回变量也照样不劈帧。
-                    # 保持**单行**且 `json.dumps(` 紧跟在 `__ERROR__:` 之后：
-                    # `tests/test_error_frame.py` ④ 是源码级接线锁，按这个形状扫全文。
+                    # Emit only the safe public message as a JSON payload.
+                    progress.mark("error")
                     yield f"data: __ERROR__:{json.dumps(PRODUCER_ERROR_TEXT, ensure_ascii=False)}\n\n"
                     return
                 # 过程展示/质检重置控制帧（__PROCESS__:<步骤> / __RESET__:<原因>）：
@@ -2185,9 +2146,10 @@ async def chat_stream(req: ChatRequest, request: Request):
                 if isinstance(chunk, str) and (chunk.startswith("__PROCESS__")
                                                or chunk.startswith("__RESET__")
                                                or chunk.startswith("__CONFIRM__")):
-                    had_output = True
+                    had_output |= chunk.startswith("__CONFIRM__")
                     frames += 1
-                    mark_visible("progress")
+                    if chunk.startswith("__PROCESS__"):
+                        progress.mark("progress")
                     yield f"data: {json.dumps(chunk, ensure_ascii=False)}\n\n"
                     continue
                 if isinstance(chunk, str) and chunk.startswith("__PENDING__:"):
@@ -2210,7 +2172,6 @@ async def chat_stream(req: ChatRequest, request: Request):
                     #      不置的话前端不知道这一轮有导航、收尾不执行命令。
                     had_output = True
                     frames += 1
-                    mark_visible("command")
                     nav_line = chunk
                     pending_nl = True
                     yield f"data: {chunk}\n\n"
@@ -2231,10 +2192,9 @@ async def chat_stream(req: ChatRequest, request: Request):
                     yield f"data: {chunk}\n\n"
                     continue
                 if isinstance(chunk, AIMessageChunk) and chunk.content:
-                    had_output = True
-                    frames += 1
-                    mark_visible("reply")
                     text = str(chunk.content)
+                    had_output |= progress.reply(text)
+                    frames += 1
                     # 命令帧独占一行契约：命令帧后第一个叙述帧前插换行（若 LLM
                     # 没自带头部换行）——叙述 delta 任意切分，只在此处加一次，
                     # 后续 delta 内联，绝不能逐帧加换行
@@ -2250,7 +2210,6 @@ async def chat_stream(req: ChatRequest, request: Request):
                         nav_line = text
                         had_output = True
                         frames += 1
-                        mark_visible("command")
                         # 连发命令帧也要各自独占一行（无叙述间隔时前插换行）
                         if pending_nl and not text.startswith("\n"):
                             text = "\n" + text
@@ -2260,7 +2219,6 @@ async def chat_stream(req: ChatRequest, request: Request):
                         nav_line = text
                         had_output = True
                         frames += 1
-                        mark_visible("command")
                         if pending_nl and not text.startswith("\n"):
                             text = "\n" + text
                         pending_nl = True
@@ -2271,7 +2229,7 @@ async def chat_stream(req: ChatRequest, request: Request):
             if not had_output:
                 logger.warning("Chat stream ended with no output (agent produced no text/no command)")
                 frames += 1
-                mark_visible("reply")
+                progress.mark("reply")
                 yield f"data: {json.dumps(_RECOVERY_SENTENCE, ensure_ascii=False)}\n\n"
 
             # 独立摘要结果帧（必须在 __END__ 之前：Rust 收到 __END__ 即终止解析）

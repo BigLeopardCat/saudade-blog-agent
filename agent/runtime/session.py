@@ -209,7 +209,7 @@ class ToolSession:
                 return self._tool_error(call, prompt, "domain_already_loaded")
             self.tools.update(self.domains[domain])
             self.loaded.add(domain)
-            emit_progress(self.config, "正在加载相关资料…", key=f"domain:{domain}")
+            emit_progress(self.config, "正在加载可用工具…", key=f"domain:{domain}")
             prompt.append(ToolMessage(content=f"{domain} 工具已加载。",
                                       tool_call_id=call["id"]))
             record("hybrid", "load_domain", domain=domain)
@@ -222,7 +222,7 @@ class ToolSession:
             return False
         args = call["args"]
         self.calls_used += 1
-        emit_progress(self.config, "正在查询相关资料…", key=f"tool:{name}")
+        emit_progress(self.config, "正在处理工具请求…", key=f"tool:{name}")
         with native_tool(self.budget):
             body = self._invoke_tool(name, args, call)
         if isinstance(body, TurnResult):
@@ -295,7 +295,7 @@ class ToolSession:
             if prompt_chars > MAX_PROMPT_CHARS:
                 return self._budget_stop("prompt_budget", prompt_chars=prompt_chars)
             started = time.monotonic()
-            emit_progress(self.config, "正在整理查询结果…", key=f"model:{round_index}")
+            emit_progress(self.config, "正在处理请求…", key=f"model:{round_index}")
             record("hybrid", "llm_start", round=round_index, engine="native",
                    prompt_chars=prompt_chars)
             try:
