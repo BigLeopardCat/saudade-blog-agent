@@ -4,7 +4,7 @@ import time
 from typing import Annotated, Literal
 
 from langchain_core.runnables import RunnableConfig
-from langchain_core.tools import tool
+from langchain_core.tools import ToolException, tool
 from pydantic import Field, StrictStr
 
 from agent import action_text, authz
@@ -66,7 +66,12 @@ def navigate_page(path: Path, config: RunnableConfig) -> object:
     if not authorized(config, "navigate_page"):
         return "当前身份无权操作页面。", {"kind": "unavailable"}
     if not site.nav_path_valid(path):
-        raise ValueError("Invalid site path; read get_site_map or the source link first")
+        allowed = ", ".join(sorted(site._NAV_EXACT_PATHS))
+        raise ToolException(
+            f"Invalid site path. Exact paths: {allowed}. Dynamic paths: "
+            "/article/<positive integer>, /category/<name>. "
+            "Read get_site_map for page names or copy a source link."
+        )
     url = site.SITE_BASE.rstrip("/") + path
     command = {"kind": "navigate", "url": url, "mode": "direct"}
     receipt = _receipt("navigate", "navigate_to", {"path": path, "confirm": False}, command)
@@ -96,7 +101,9 @@ def set_page_appearance(
     if not authorized(config, "set_page_appearance"):
         return "当前身份无权操作页面。", {"kind": "unavailable"}
     if dark_mode is None and not effects:
-        raise ValueError("Specify at least one requested page setting")
+        raise ToolException(
+            "Specify at least one requested page setting: dark_mode/sakura/rain/snow"
+        )
     receipts = []
     if dark_mode is not None:
         receipts.append(
@@ -124,4 +131,9 @@ def set_page_appearance(
 def tools(config):
     if not available(config):
         return {}
-    return {item.name: item for item in (navigate_page, set_page_appearance)}
+    return {
+        item.name: item.model_copy(
+            update={"handle_tool_error": True, "handle_validation_error": str}
+        )
+        for item in (navigate_page, set_page_appearance)
+    }
