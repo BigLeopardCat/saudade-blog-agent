@@ -1,0 +1,3 @@
+{"_id": "cursor", "title": "Snapshot pagination", "text": "## cursor\nSnapshots use a revision cursor for consistent pagination."}
+{"_id": "hash", "title": "Content identity", "text": "## digest\nContent identity uses SHA256 hashes to detect document changes."}
+{"_id": "noise", "title": "Cooking", "text": "Recipes for baking bread and cakes."}

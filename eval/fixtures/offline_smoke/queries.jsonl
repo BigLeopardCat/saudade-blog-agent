@@ -1,0 +1,3 @@
+{"_id": "single", "text": "revision cursor", "category": "single"}
+{"_id": "multi", "text": "cursor SHA256", "category": "multi", "evidence_groups": [["cursor"], ["hash"]]}
+{"_id": "absent", "text": "quantum teleportation", "category": "unanswerable", "answerable": false}
