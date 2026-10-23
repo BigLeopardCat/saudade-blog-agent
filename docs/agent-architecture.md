@@ -147,6 +147,11 @@ flowchart LR
 │   │   │   ├── targets.py    # 精确目标、请求与业务快照核对
 │   │   │   ├── preparation.py # 新建、修改、删除的只读确认准备
 │   │   │   └── transactions.py # 原子写入、回执核验与幂等执行
+│   │   ├── account_actions/
+│   │   │   ├── __init__.py   # 原生账号管理领域入口
+│   │   │   ├── targets.py    # 精确账号、严格计划及非敏感状态核对
+│   │   │   ├── preparation.py # 冻结、身份和禁言的只读签名确认
+│   │   │   └── transactions.py # 版本校验、原子执行与幂等回执核验
 │   │   ├── notices/
 │   │   │   ├── __init__.py   # 单收件人个人通知领域入口
 │   │   │   ├── targets.py    # 精确收件人、完整通知文本及版本核对
