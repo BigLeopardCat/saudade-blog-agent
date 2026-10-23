@@ -113,7 +113,15 @@ async def _drive(producer) -> list[str]:
     from config.settings import settings
     old_req_assert = settings.agent_require_assertion
     server._agent = object()             # 非 None 即可（503 分支要避开）
-    server._run_agent_stream_to_queue = producer
+    producer_done = asyncio.Event()
+
+    def tracked(*args):
+        try:
+            return producer(*args)
+        finally:
+            args[3].call_soon_threadsafe(producer_done.set)
+
+    server._run_agent_stream_to_queue = tracked
     # 身份断言：本机 .env 把它开着（生产语义），而**错误帧的产生与调用者身份无关**——
     # 这里要的是"能进到流里"，不是"验签"。所以**显式拨回 0**（20261019 起这已**不是**
     # 默认值了，默认是 1），让这条假请求走 body 身份进来即可；这条路径上的身份没有
@@ -122,7 +130,10 @@ async def _drive(producer) -> list[str]:
     try:
         req = server.ChatRequest(message="测试用消息")
         resp = await server.chat_stream(req, _FakeRequest())
-        return [c async for c in resp.body_iterator]
+        chunks = [c async for c in resp.body_iterator]
+        await asyncio.wait_for(producer_done.wait(), timeout=5)
+        await asyncio.sleep(0)
+        return chunks
     finally:
         server._run_agent_stream_to_queue = old_prod
         server._agent = old_agent

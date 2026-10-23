@@ -52,6 +52,8 @@ from agent.factblock import (  # 动作事实块（D3）
 )
 from agent.graph import AgentCancelled, _cmd_wire, _tool_args, _tool_name, graph_input
 from agent.principal import Principal
+from agent.runtime.control import RequestControl
+from agent.runtime.jobs import RequestJobs
 from agent.summarizer import summarize
 
 # `NAV_MAP` 的 import 随渲染一起搬走了（20260928）：路径→中文别名的反查只服务于
@@ -94,20 +96,14 @@ from utils.trace import finish_trace, record, start_trace
 
 logger = logging.getLogger(__name__)
 
-# Shared thread pool for blocking agent calls
-# 8 → 16：LLM 挂起期间任务占用线程直至超时释放（120s），短时间多次对话会占满 8 线程
-# 导致后续对话排队卡死；扩容 16 显著降低并发窗口内的排队概率
+# Admission follows executor completion, including jobs whose HTTP consumer disconnected.
 _executor = ThreadPoolExecutor(max_workers=16)
 
 
-def _submit_with_context(loop, func, *args):
-    """把阻塞调用提交到线程池，并显式传播调用方 context。
-
-    run_in_executor 不拷贝 contextvars（只有 asyncio.to_thread 自动做）——直接提交
-    的话，worker 线程里 _trace_id.get() 读回默认值 "-"，agent 图节点日志（planner/
-    model/tools/reflector）的 tid 全部丢失。提交前用 copy_context() 快照当前 context
-    （含 middleware 设置的 trace_id），线程内经 ctx.run 恢复后再执行目标函数。
-    """
+def _submit_with_context(loop, func, *args, jobs=None):
+    """Propagate request context and optionally track the actual executor future."""
+    if jobs is not None:
+        return jobs.submit(_executor, func, *args)
     ctx = contextvars.copy_context()
     return loop.run_in_executor(_executor, ctx.run, functools.partial(func, *args))
 
@@ -177,7 +173,7 @@ STREAM_QUEUE_WAIT = 3.0         # 秒；排队超过这个时间就如实 503，
 
 # 并发闸（每 worker 一个；uvicorn --workers 2 ⇒ 全局 2×MAX_CONCURRENT_STREAMS）。
 # Python 3.10+ 起 asyncio.Semaphore() 不在构造时绑事件循环，模块级创建是安全的。
-_stream_slots = asyncio.Semaphore(MAX_CONCURRENT_STREAMS)
+_stream_slots = asyncio.BoundedSemaphore(MAX_CONCURRENT_STREAMS)
 
 # /review 的**独立**小闸（20260925 审计）：它是"外部文本 → 一次 LLM 裁决"，此前不占任何
 # 闸 ⇒ 任何能连到 8010 的进程都能免费烧模型额度。刻意不共用对话那 8 个槽位：留言审核是
@@ -928,10 +924,7 @@ async def chat(req: ChatRequest, request: Request):
     principal = _resolve_principal(request, req.user_id)   # 身份以签名为准（见 _resolve_principal）
     req.user_id = principal.uid
 
-    # 额度硬拦（20260929，契约 C3）：与流式路径同一条判据、同一句话术。非流式这条路
-    # 只有评测/golden 直连在走（线上 rust.log 实测零访问），所以这里不占并发槽、
-    # 也没有"提前返回省一次 LLM"的额外收益——但**形状必须与流式一致**，否则哪天
-    # 有人把非流式接回主链，两条路就是两种行为。
+    # Host quota decisions precede admission and any model work.
     if req.quota_blocked:
         _limit = req.chat_quota.limit if req.chat_quota is not None else 0
         logger.info("[quota] 额度用尽，本轮零执行（uid=%s limit=%s）", req.user_id, _limit)
@@ -944,6 +937,11 @@ async def chat(req: ChatRequest, request: Request):
     # 挂了 saver ⇒ 会话坐标（见 `_thread_id_for`），那正是"图自持上下文"的实现方式。
     thread_id = _thread_id_for(req)
 
+    if not await _try_acquire_slot():
+        raise HTTPException(503, "Agent busy（并发已满），请稍后重试")
+    loop = asyncio.get_running_loop()
+    jobs = RequestJobs(loop, _release_slot, control=RequestControl(
+        threading.Event(), time.monotonic() + STREAM_TOTAL_TIMEOUT))
     try:
         loop = asyncio.get_running_loop()  # 非 get_event_loop()：后者 3.10 起已废弃
         # 摘要独立化（needs_summary 轮）：与 agent 图并行做后端总结——输入是原始
@@ -952,11 +950,12 @@ async def chat(req: ChatRequest, request: Request):
         summary_task = None
         if req.needs_summary:
             summary_task = _submit_with_context(
-                loop, _summarize_dialogue, req.message, req.history, req.summary
+                loop, _summarize_dialogue, req.message, req.history, req.summary,
+                jobs=jobs
             )
         reply, nav_line, exec_rows = await _submit_with_context(
             loop, _run_agent_sync, messages, thread_id, req.user_id, principal,
-            _ledger_for_graph(req), req.recent_tools, req.conversation_id)
+            _ledger_for_graph(req), req.recent_tools, req.conversation_id, jobs=jobs)
         new_summary = None
         if summary_task is not None:
             new_summary = (await summary_task).strip() or None
@@ -986,6 +985,9 @@ async def chat(req: ChatRequest, request: Request):
         logger.exception("Agent invocation failed")
         return ChatResponse(reply=PRODUCER_ERROR_TEXT, success=False,
                             error=PRODUCER_ERROR_TEXT)
+
+    finally:
+        jobs.close()
 
 
 # ---------------------------------------------------------------------------
@@ -2038,7 +2040,7 @@ async def chat_stream(req: ChatRequest, request: Request):
         return StreamingResponse(
             _quota_blocked_stream(_limit), media_type="text/event-stream",
             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
-    # 流式请求受并发限制；响应交出后由 event_stream.finally 释放槽位。
+    # The permit covers preparation and every worker job until actual completion.
     if not await _try_acquire_slot():
         raise HTTPException(503, "Agent busy（并发已满），请稍后重试")
     try:
@@ -2058,6 +2060,14 @@ async def chat_stream(req: ChatRequest, request: Request):
         _release_slot()
         raise
 
+    stop_event = threading.Event()
+    trace_id = get_trace_id()
+    jobs = RequestJobs(asyncio.get_running_loop(), _release_slot,
+                       control=RequestControl(
+                           stop_event, time.monotonic() + STREAM_TOTAL_TIMEOUT),
+                       on_complete=functools.partial(
+                           finish_trace, trace_id, "client_closed", 0.0, 0))
+
     async def event_stream():
         queue: asyncio.Queue = asyncio.Queue()
         loop = asyncio.get_running_loop()  # 同上（event_stream 也是协程）
@@ -2067,37 +2077,12 @@ async def chat_stream(req: ChatRequest, request: Request):
         summary_task = None
         if req.needs_summary:
             summary_task = _submit_with_context(
-                loop, _summarize_dialogue, req.message, req.history, req.summary
+                loop, _summarize_dialogue, req.message, req.history, req.summary,
+                jobs=jobs
             )
 
-        # 断连中断机制（20260827c 终版）：stop_event 经 config 注入 agent 图，
-        # event_stream 感知客户端断开即置位——agent 线程（producer）下次迭代/
-        # 图内节点（model/tools）检查后立即停止，不再发起新的 LLM 调用或工具
-        # 执行。原实现只在 yield 时感知断连：卡在 queue.get() 期间断连完全无感知，
-        # agent 无察觉地继续执行 ReAct 循环——实测曾见断连后仍执行
-        # device_oled_display 写操作（用户只问了在线设备）。
-        #
-        # 断连感知实现（20260827c 结论，两轮实测后确认）：
-        #   ✗ request.is_disconnected()：starlette 1.3.1 非阻塞检查（内部
-        #     anyio.CancelScope 在 await 前立即取消），仅在 http.disconnect 已躺在
-        #     receive 通道里时返回 True——uvicorn 通道被动读取，流式空闲期恒 False。
-        #   ✗ 自建 request.receive() 后台任务：与 starlette StreamingResponse 的
-        #     listen_for_disconnect 抢同一个 receive 通道（双消费者竞态）。
-        #   ✓ 真实机制（starlette 1.3.1 × uvicorn 0.51 spec_version 2.3 老路径）：
-        #     StreamingResponse.__call__ 的 task_group 里 listen_for_disconnect 挂起
-        #     在 receive() 上，TCP 断开（FIN/RST）→ uvicorn connection_lost 投递
-        #     http.disconnect → listen_for_disconnect 返回 → cancel_scope.cancel()
-        #     → 迭代本生成器的 stream_response 任务被取消 → 当前 await/yield 点抛
-        #     asyncio.CancelledError（毫秒级，比 2s 轮询快）。下方
-        #     except asyncio.CancelledError 将其标记为 client_disconnect 留痕，
-        #     finally 置位 stop_event——agent 停止。20260827 版正是靠这条链
-        #     （CancelledError → finally → stop_event）在工作，is_disconnected 轮询
-        #     实际从未触发。
-        stop_event = threading.Event()
-
-        # 并发启动生产者（不要 await 完成！否则所有 chunk 会在队列里攒到
-        # 生成结束才一次性下发，等于没有流式）——边生成边推送
-        producer_task = _submit_with_context(
+        # The shared stop signal fences subsequent operations in both engines.
+        _submit_with_context(
             loop, _run_agent_stream_to_queue, messages, thread_id, queue, loop, req.user_id, stop_event,
             principal, grant, req.conversation_id,
             # 台账事实（洞⑦ 判据）：与 _build_messages 注入的同源，**在这里算**
@@ -2108,7 +2093,7 @@ async def chat_stream(req: ChatRequest, request: Request):
             req.agent_tasks,
             # 上一轮执行过的工具名（20260929 批 F1'）：**同一条理由**必须由这里传
             # （req 不在被调函数里），见 `_run_agent_stream_to_queue` 的同名参数注
-            req.recent_tools,
+            req.recent_tools, jobs=jobs,
         )
 
         # 可观测性：请求生命周期账本（帧数/退出原因，finally 汇总）
@@ -2300,24 +2285,23 @@ async def chat_stream(req: ChatRequest, request: Request):
                 end_reason = "client_closed"
             logger.info("[stream] end reason=%s duration=%.1fs frames=%d",
                         end_reason, loop.time() - started, frames)
-            # 并发槽位归还：**所有退出路径都经过这里**（正常收尾/断连取消/空闲与总超时/
-            # 异常/客户端提前关闭），与 chat_stream 开头的 _try_acquire_slot 成对。
-            _release_slot()
-            # trace 落盘：所有退出路径统一收尾（超时场景 producer 还挂着，
-            # 落中途 trace——事件序列最后一条即挂点，如 model llm_start 后无
-            # llm_done 就是 LLM API 侧慢；dumped 后线程晚到的事件丢弃不补写）
-            finish_trace(get_trace_id(), end_reason, loop.time() - started, frames)
-            # 任何退出路径（断连/超时/正常收尾）都通知生产者停止：
-            # 图内节点检查 stop_event 后终止，避免 agent 在无人接收时继续消耗
+            jobs.on_complete = functools.partial(
+                finish_trace, trace_id, end_reason, loop.time() - started, frames)
+
+    async def managed_stream():
+        body = event_stream()
+        try:
+            async for frame in body:
+                yield frame
+        finally:
             stop_event.set()
-            # 客户端提前断开时，取消尚未完成的生产者任务
-            # （线程池任务 cancel 无效，真正的中断由 stop_event 驱动，
-            #   见 _run_agent_stream_to_queue/图内节点）
-            if not producer_task.done():
-                producer_task.cancel()
+            try:
+                await body.aclose()
+            finally:
+                jobs.close()
 
     return StreamingResponse(
-        event_stream(),
+        managed_stream(),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",
