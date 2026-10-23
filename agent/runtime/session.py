@@ -12,6 +12,7 @@ from langchain_core.tools import ToolException
 
 from agent.authz import SCOPE_ADMIN_CONSOLE, SCOPE_READ_OWN, TOOL_SCOPE, WRITE_SCOPES, check
 from agent.llm_usage import usage_fields
+from agent.runtime import memory
 from agent.runtime.read_tools import scoped_reads_enabled
 from agent.runtime.results import TurnResult
 from agent.runtime.turns import check_cancelled
@@ -83,6 +84,7 @@ class ToolSession:
         self.result_chars = 0
         self.outcome: TurnResult | None = None
         self.outcome_adapter = outcome_adapter
+        self.observations = []
         self.llm = self._bind_menu()
 
     def _bind_menu(self):
@@ -182,6 +184,7 @@ class ToolSession:
             prompt.append(ToolMessage(content="无权读取此数据。", tool_call_id=call["id"]))
             return True
         kind = getattr(body, "kind", "unknown")
+        self.observations.extend(memory.observation(call, body))
         body = str(body)
         remaining = _MAX_TOTAL_RESULT_CHARS - self.result_chars
         limit = min(_MAX_RESULT_CHARS, remaining)

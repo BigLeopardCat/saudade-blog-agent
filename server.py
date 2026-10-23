@@ -762,33 +762,15 @@ _CTX_UNSAFE_RE = re.compile(r"[\r\n\[\];=]")
 
 
 def _build_messages(req: ChatRequest, confirm_grant: dict | None = None) -> list:
-    """Build the message list from the request (sync, no blocking).
-
-    `confirm_grant`：已验签的确认令牌 payload（见 /chat/stream）。只用于**台账定性**
-    （这一轮是"用户刚点了确定"那一跳，见 `_ledger_block`）——授权判据不看它，
-    令牌验签的唯一权威在调用方。非流式 `/chat`（golden/评测直连）不传 = 普通轮。
-    """
+    """Assemble current context and history; confirm_grant only labels the ledger."""
     messages = []
     ctx_parts = [f"user_id={req.user_id}, page={_ctx_field(req.current_url)}, "
                  f"title={_ctx_field(req.page_title)}"]
     ctx_parts.append(f"current_effects={_ctx_field(req.current_effects, 200) or 'none'}")
     ctx_parts.append(f"current_darkmode={_ctx_field(req.current_darkmode, 20) or 'off'}")
-    # 20260902 时间锚（幻觉事故 13:34 实证）：会话断点续接/问候语场景模型会锚定
-    # 历史里的旧时间戳编造"现在"（05:29 会话 13:34 续接 → 编"现在 05:34"）。
-    # 当前时刻必须作为系统事实注入（与 current_effects/darkmode 同语义，格式与
-    # get_current_time 工具一致），模型不得自行推算；executor 规则同源约束。
-    # 格式与星期表**不在这里**：唯一实现是 `utils/clock.py`，`get_current_time` 工具走同一个函数。
+    # 与时间工具共用格式，避免从历史时间推算当前时间。
     ctx_parts.append(f"current_time={format_local_now()}")
-    # 对话额度（20260929，跨语言契约 C2）：访客的终身额度现状。**只放事实、不放行为
-    # 指令**——"快用完了该提醒他"那类属于提示词（它管说什么），不属于系统上下文
-    # （它管是什么）。缺席时**整行不注入**（见 ChatRequest.chat_quota 的注释：缺席是
-    # "不知道"，编一个 0 会让 agent 对着正常聊天的访客说"你没额度了"）。
-    #
-    # **口径 = 余额**（20260929 用户要求："500 开始减少而不是 0 开始计数"）。此前这一行
-    # 给的是 `used/limit`，与前端同一处口径问题：`137/500` 要心算一步才知道还剩多少，
-    # 而且模型转述时很容易说成"你已经用了 137 轮"——主人问的从来不是这个。三个数仍然
-    # 都在 C1 里（Rust 照发，前端后台按 `used` 显示），**这一行只挑余额说**；`used` 由
-    # `limit - remaining` 反推得出来，不必再写一遍。判据见 `tests/test_chat_quota.py`。
+    # 额度只注入已知余额；缺席表示未知。
     if req.chat_quota is not None:
         if req.chat_quota.unlimited:
             ctx_parts.append("chat_quota=unlimited")
@@ -798,24 +780,13 @@ def _build_messages(req: ChatRequest, confirm_grant: dict | None = None) -> list
         ctx_parts.append(f"conversation_summary: {req.summary}")
     if req.executions or req.pending_action:
         ctx_parts.append(_ledger_block(req, confirmed=bool(confirm_grant)))
-    # 会话级任务状态（20260927 批 D）：未完结的任务（"还没做完的事"）——与 executions
-    # （已发生的事实）构成对偶，缺了它多步目标只走得完第一步。渲染在 tasks 模块里
-    # （形状是 Python 产的结构，Rust 只透传）；空串 = 没有未完结的任务，**不注入占位行**
-    # （与 recent_executions 那格不同：那格有"（本会话暂无记录）"的显式占位，因为
-    # narrator 需要知道"系统查过了、确实没有"；这里没有这种语义——没有任务就是没有，
-    # 占位行只会让 planner 每轮都读一句废话）。
-    # （`settings` 在本文件是**函数内导入**的既有形态，见 `_resolve_principal`——
-    #  这里照旧，不改成模块级导入。）
+    # 开放任务只注入非空状态。
     from config.settings import settings
     _open_tasks = render_open_tasks(req.agent_tasks,
                                     limit=int(getattr(settings, "agent_task_inject_max", 3) or 3))
     if _open_tasks:
         ctx_parts.append("open_tasks:\n" + _open_tasks)
-    # 20260905 重复提问注入（18:17:36/18:18:52 实证：同句重发时 narrator 逐字
-    # 复读上轮回复，两条一字不差的回复并排出现在会话里——qwen 对同句重问的
-    # 最优策略判断是原样复读，prompt 软约束压不住，需确定性旁路）。
-    # 检测：当前消息与历史最近一条 user 消息字面相同（去首尾空白）。宁精确勿
-    # 误伤——仅原句重发才点破，近似新问法不触发（不打断正常追问）。
+    # 仅原句重发标注重复，近似表述仍作为新问题。
     if req.message.strip():
         prev_user = next((h.content for h in reversed(req.history)
                           if h.role == "user"), None)
@@ -827,28 +798,10 @@ def _build_messages(req: ChatRequest, confirm_grant: dict | None = None) -> list
                 "事实完整叙述")
     ctx = f"[System: {'; '.join(ctx_parts)}]"
     messages.append(HumanMessage(content=ctx, additional_kwargs={
-        "page_context": {"url": req.current_url, "title": req.page_title}}))
+        "page_context": {"url": req.current_url, "title": req.page_title},
+        "conversation_summary": req.summary}))
 
-    # 消费 Rust 转发的全部 20 条历史（20260828 对齐：此前 Rust 传 20、这里取 12，
-    # 8 条白传且两个魔数散落两处易失同步；Rust 侧已排除当前消息，history 是纯历史）
-    # 孤儿 user 裁剪（20260901）：中断/并发窗口的轮次只入库 user 无 assistant 回复
-    # （该轮回复未完成即断流），注入后模型把孤儿当待答问题（trace 实证：历史遗留
-    # "谈谈你对穹妹的看法"未完成，模型整篇回复穹妹）。正常轮次严格成对
-    # （user→assistant），user 后非 assistant 即孤儿，整条跳过不注入。
-    # 事实行剥离（20261002，`agent/factblock.strip_fact_lines`）：气泡最前面那块
-    # 「〔系统〕 …」是**系统**印的，却随回复一起落库 ⇒ 下一轮作为 assistant 历史回到
-    # 模型眼前时就变成了"它自己说过的话"（判据是**行首标记**，与族无关；族的射程
-    # 20261002 收窄到写族，见 `agent/factblock.py` 的 `BLOCK_FAMILIES`）。生产实证
-    # （trace `20261001T230954`）：那一轮只跑了 OLED 显示、一次导航都没有，narrator 却
-    # 把上一轮那句「页面已跳转：…/device-console/」原样抄在本轮回复开头（主人报的
-    # "显示两行已经转跳"）。
-    # 抹完为空的轮次**整轮不注入**（它的 assistant 侧一个字都不是模型说的）：留一条空
-    # 的 assistant 会让模型把上一轮的用户问题当成待答问题——正是上面那条"孤儿 user"
-    # 注释里的坑，方向相反而已。
-    #
-    # 采纳（批 7 之①）：**图自持上下文时这一整块要停**——不停就是同一段历史进图两份
-    # （一份在这儿、一份在图的 checkpoint 里），症状是"模型开始复述上一轮的计划"。
-    # 没挂 saver 时这块一字不变。
+    # 无 checkpoint 时回放后端历史；去掉事实帧及未完成的用户轮次。
     if not _graph_holds_context():
         hist = [(h.role, h.content) for h in req.history[-20:]]
         cleaned: list = []
@@ -865,15 +818,9 @@ def _build_messages(req: ChatRequest, confirm_grant: dict | None = None) -> list
                     continue  # 孤儿 user（该轮回复未入库/整轮只剩事实行），不注入
                 messages.append(HumanMessage(content=content))
             else:
-                # 恢复 assistant 角色（曾全部包成 HumanMessage + [assistant]: 前缀——
-                # 模型会把历史当"用户说的"，多轮上下文质量打折；角色语义对齐后
-                # 模型对"谁说过什么"的区分不再依赖前缀文本）
                 messages.append(AIMessage(content=content))
 
-    # 多模态（20260828 单图 → 20260828s 多图）：图片 + 文字转 OpenAI content 数组
-    # （qwen 实测支持，100x100 红图识别正确）。多图循环拼 content 数组，每张一个
-    # image_url 块（视觉 token 注入消息序列尾部，前缀零污染，缓存命中不受影响）。
-    # 图片本体不进历史（Rust 侧落库加 "[图片]"/"[图片×N]" 标记）。
+    # 图片保留在本轮消息，文本历史只携带图片占位。
     if req.image:
         content: list = []
         if isinstance(req.image, str):
@@ -885,12 +832,7 @@ def _build_messages(req: ChatRequest, confirm_grant: dict | None = None) -> list
         content.append({"type": "text", "text": f"[当前问题]: {req.message or '请描述这些图片'}"})
         messages.append(HumanMessage(content=content))
     else:
-        # 20260901：当前消息加 [当前问题] 锚点——历史 user 消息与当前消息都是裸
-        # HumanMessage，多窗口并发时当前请求的历史可能含另一窗口的孤儿用户消息
-        # （该窗口回复未完成入库），两条 user 相邻无 assistant 回复隔离时模型把
-        # 旧问题当当前问题回答（trace 实证：输入"椎名真白"整篇回复穹妹）。
-        # 前端 sending/idle 跨窗同步只能缩小竞态窗口不能消除（收尾瞬间仍可发送），
-        # 锚点让模型明确最后一条才是当前问题，历史只是背景。
+        # 明确区分当前请求与历史问题。
         messages.append(HumanMessage(content=f"[当前问题]: {req.message}"))
     return messages
 
