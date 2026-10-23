@@ -33,7 +33,7 @@ def split(title: str, content: str) -> list[dict]:
             continue
         # Metadata retains full paths; a bounded prefix keeps adversarially long
         # headings from consuming an entire embedding request.
-        path = " > ".join(section["path"])[:600]
+        path = " > ".join(section["path"])[:min(600, MAX_CHARS // 3)]
         prefix = (path + "\n") if path else ""
         for start, end, body in _windows(section["text"], MAX_CHARS - len(prefix)):
             text = prefix + body

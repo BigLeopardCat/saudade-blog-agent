@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import unicodedata
 from dataclasses import dataclass, field
 from functools import lru_cache
 from importlib.metadata import version
@@ -33,6 +34,7 @@ class ProfileSpec(BaseModel):
     document_prefix: str = ""
     pooling: str = Field(min_length=1)
     normalization: str = Field(min_length=1)
+    unicode_normalization: Literal["none", "NFC"] = "none"
 
 
 @dataclass(frozen=True)
@@ -43,6 +45,11 @@ class InputProfile:
 
     def count(self, text: str) -> int:
         return len(self.tokenizer.encode(text, add_special_tokens=self.spec.add_special_tokens).ids)
+
+    def normalize(self, text: str) -> str:
+        return (
+            unicodedata.normalize("NFC", text) if self.spec.unicode_normalization == "NFC" else text
+        )
 
     def validate(self, text: str) -> str:
         if self.count(text) > self.spec.max_tokens:
@@ -68,6 +75,8 @@ def load_profile(filename: str) -> InputProfile:
         tokenizer.no_truncation()
         tokenizer.no_padding()
         identity = spec.model_dump(exclude={"tokenizer_file"})
+        if spec.unicode_normalization == "none":
+            identity.pop("unicode_normalization")  # Preserve existing profile namespaces.
         identity.update(tokenizers_version=version("tokenizers"), splitter="source-char-window-v1")
         signature = hashlib.sha256(json.dumps(identity, sort_keys=True).encode()).hexdigest()
         return InputProfile(spec, signature, tokenizer)
@@ -82,12 +91,12 @@ def active_profile() -> InputProfile | None:
 
 def document_text(title: str, text: str, profile: InputProfile | None) -> str:
     value = f"{title[:400]}\n{text}"
-    return profile.spec.document_prefix + value if profile else value
+    return profile.normalize(profile.spec.document_prefix + value) if profile else value
 
 
 def query_text(query: str, profile: InputProfile | None) -> str:
     value = profile.spec.query_prefix + query if profile else query
-    return profile.validate(value) if profile else value
+    return profile.validate(profile.normalize(value)) if profile else value
 
 
 def validate_inputs(texts: list[str], signature: str) -> None:

@@ -272,6 +272,9 @@ class RagIndex:
         # 向量侧**不进 build()**：这是懒刷新的热路径（TTL 一到就被评测/对话触发），
         # 本方法只同步拉取语料、计算词法索引，不等待远端 embedding。
         # 向量预热走后台；开关关着时不发 embedding 请求。
+        self._warm_vectors(chunks)
+
+    def _warm_vectors(self, chunks: list[dict]) -> None:
         if self._vector_warmer is None:
             warm_vectors(chunks)
         else:
@@ -439,7 +442,7 @@ class RagIndex:
                             # 就是"别的 worker 刚更新过 ⇒ 这里换视图"的那一步。
         view = store.view_for(corpus_fingerprint(space, chunks))
         if view is None:
-            warm_vectors(chunks)          # 后台补建/补齐；本轮不阻塞、不等它
+            self._warm_vectors(chunks)    # 后台补建/补齐；本轮不阻塞、不等它
             return [], degraded_reason() or "no_vectors", len(store.missing())
         if len(view) != len(chunks):    # 不变式②在装载时已验，这里防"指纹撞上别的语料"
             logger.warning("向量视图 %d 行 != 语料 %d chunk——本轮退回纯词法",

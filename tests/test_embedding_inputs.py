@@ -254,3 +254,38 @@ def test_api_without_profile_retains_full_query_and_needs_no_tokenizer(monkeypat
     query = "API query " * 70 + "TAIL"
     assert vectors.embed_query(query) is not None and sent == [query]
     assert vectors.space_from_settings().profile == ""
+
+
+def test_explicit_nfc_normalizes_embedding_only_and_partitions_space(profile, monkeypatch):
+    original = inputs.active_profile()
+    decomposed = "Cafe\u0301"
+    assert inputs.document_text("Title", decomposed, original).endswith(decomposed)
+    change_profile(profile, monkeypatch, unicode_normalization="NFC")
+    canonical = inputs.active_profile()
+    assert canonical.signature != original.signature
+    assert inputs.document_text("Title", decomposed, canonical).endswith("Café")
+    assert inputs.query_text(decomposed, canonical).endswith("Café")
+    source = [{"type": "note", "id": 1, "title": "Title", "section": "s", "text": decomposed}]
+    assert inputs.vector_chunks(source)[0]["text"] == decomposed
+
+
+@pytest.mark.parametrize("mismatch", [False, True])
+def test_local_probe_normalizes_then_rejects_tokenizer_drift(profile, monkeypatch, mismatch):
+    from rag import manage
+
+    change_profile(profile, monkeypatch, unicode_normalization="NFC")
+    policy = inputs.active_profile()
+    seen = []
+
+    def respond(request):
+        value = json.loads(request.content)["content"]
+        seen.append(value)
+        ids = policy.tokenizer.encode(value).ids
+        return httpx.Response(200, json={"tokens": [999] if mismatch else ids})
+
+    client = httpx.Client(transport=httpx.MockTransport(respond))
+    monkeypatch.setattr(manage.httpx, "Client", lambda **kw: client)
+    monkeypatch.setattr(vectors, "_embed_texts", lambda texts, _: [[1, 0] for _ in texts])
+    assert manage.probe(2, True)["ok"] is (not mismatch)
+    assert any("é" in text for text in seen)
+    assert all("e\u0301" not in text for text in seen)
