@@ -347,6 +347,7 @@ class Settings(BaseSettings):
     embedding_dim: int = 0                 # EMBEDDING_DIM
     embedding_batch_size: int = 10         # EMBEDDING_BATCH_SIZE（聚合平台单请求上限）
     embedding_timeout: float = 15.0        # EMBEDDING_TIMEOUT（查询向量在热路径上，别设大）
+    embedding_profile: str = ""            # EMBEDDING_PROFILE（可选、固定 tokenizer 的 JSON 路径）
     # 查询向量的内存 LRU。**只进内存不落盘**：查询串是访客可控的无界输入，落盘会长成
     # 一个没人清理的文件。语料侧的缓存是另一回事（内容寻址、落 data/rag_vectors/）。
     embedding_query_cache: int = 256       # EMBEDDING_QUERY_CACHE

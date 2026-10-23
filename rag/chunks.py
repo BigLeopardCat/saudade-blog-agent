@@ -44,6 +44,7 @@ def split(title: str, content: str) -> list[dict]:
                     "section_id": section["section_id"],
                     "section_path": section["path"],
                     "text": text,
+                    "prefix_chars": len(prefix),
                     "start": start,
                     "end": end,
                     "chunk_id": hashlib.sha256(identity.encode()).hexdigest()[:24],

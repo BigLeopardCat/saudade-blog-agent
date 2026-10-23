@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "model_revision": "GGUF:370f27d7550e0def9b39c1f16d3fbaa13aa67728/Q8_0/06507c7b42688469c4e7298b0a1e16deff06caf291cf0a5b278c308249c3e439",
+  "tokenizer_file": "qwen3-tokenizer.json",
+  "tokenizer_sha256": "def76fb086971c7867b829c23a26261e38d9d74e02139253b38aeb9df8b4b50a",
+  "max_tokens": 512,
+  "add_special_tokens": true,
+  "query_prefix": "Instruct: Given a web search query, retrieve relevant passages that answer the query\nQuery: ",
+  "document_prefix": "",
+  "pooling": "last",
+  "normalization": "L2"
+}
