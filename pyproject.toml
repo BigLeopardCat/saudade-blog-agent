@@ -28,7 +28,7 @@ dependencies = [
     "langgraph==1.2.7",
     # 原生 checkpoint 持久化与恢复安全的快照裁剪。
     "langgraph-checkpoint-postgres==3.2.0",
-    "openai==2.44.0",
+    "openai==3.35.1",
     "psycopg[binary]==3.3.6",
     "psycopg-pool==3.3.3",
     "pydantic==2.13.4",
