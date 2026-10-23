@@ -104,13 +104,13 @@
   // chat-engine.js 的 `mapDbItems` 改调它——DB 行的 `images` 以前被一个手写白名单吃掉）。
   // 同上 ⇒ 必须 bump；这一版尤其不能漏：不 bump 的话**图在库里、界面还是占位块**，
   // 且没有任何东西会红（前端拿的还是旧 chat-engine.js）。
-  // 20261020a = 「确认卡按钮换行」那一轮（widget.css：`.chat-nav-btns` 补
+  // 20261023a = 「确认卡按钮换行」那一轮（widget.css：`.chat-nav-btns` 补
   // `flex-wrap: wrap`、`.chat-nav-btn` 补 `white-space: nowrap` + `max-width`）。
   // 多件卡是五枚按钮，nowrap 下 flex 会把它们压窄，而按钮的 `min-width: auto` 在中文上
   // 等于"一个字一列" ⇒ 标签被压成 2–5 行的竖排字堆。文件在 live2d-widgets 下 ⇒ 必须
   // bump；不 bump 的话访客一年内看到的还是压成竖排的那一版。
   // 五个同步点见 frontend/README.md。
-  const VER = '20261020a';
+  const VER = '20261023a';
 
   function loadExternalResource(url, type) {
     return new Promise((resolve, reject) => {

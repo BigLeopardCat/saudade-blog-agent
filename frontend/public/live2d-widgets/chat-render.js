@@ -89,77 +89,19 @@
     // ── Markdown 渲染 ──
     // 优先复用博客文章同款渲染器（由前端 src/utils/chatMarkdown.ts 注册的全局，
     // 与 bytemd Viewer 同一套 unified 管线，gfm 删除线/任务列表/表格等全部支持）；
-    // 页面未加载时回退自包含迷你实现（先转义保证安全），若加载了 marked 也支持。
+    // 宿主渲染器未就绪或失败时只展示纯文本，不启用第二套 HTML/Markdown 解析器。
     const renderMarkdown = (text) => {
       if (!text) return '';
       try {
-        if (window.__chatRenderMarkdown && typeof window.__chatRenderMarkdown === 'function') {
-          return window.__chatRenderMarkdown(text);
-        }
-        if (window.marked && typeof window.marked.parse === 'function') {
-          return window.marked.parse(text, { breaks: true });
+        if (typeof window.__chatRenderMarkdown === 'function') {
+          const html = window.__chatRenderMarkdown(text);
+          if (typeof html === 'string') return html;
         }
       } catch(e) {}
-      const esc = (s) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-      // 内置表情包清单（20260903：与 src/utils/stickers.ts 的 STICKERS 同步，增删两处改；
-      // 20261008 追加四枚）。仅命中才替换，未知 :名字: 保留原样。
-      const STICKERS = {
-        头疼: '/stickers/touteng.png', 委屈: '/stickers/weiqu.png', 害羞: '/stickers/haixiu.png',
-        比耶: '/stickers/biye.png', 犯错: '/stickers/fancuo.png', 生气: '/stickers/shengqi.png',
-        贴贴: '/stickers/tietie.png', 震惊: '/stickers/zhenjing.png',
-        困困: '/stickers/kunkun.png', 躺平: '/stickers/tangping.png',
-        嫌弃: '/stickers/xianqi.png', 比心: '/stickers/bixin.png',
-      };
-      const escInline = (s) => {
-        s = esc(s);
-        s = s.replace(/`([^`]+)`/g, '<code>$1</code>');
-        // 表情替换须在 code 包裹之后：行内代码已变成 <code>…</code>，内部 :xx: 不再被匹配
-        s = s.replace(/:([^:\s]{1,12}):/g, (all, n) => STICKERS[n]
-          ? '<img class="sticker" src="' + STICKERS[n] + '" alt="' + n + '" />' : all);
-        // 图片必须优先于链接匹配
-        s = s.replace(/!\[([^\]]*)\]\((https?:\/\/[^\s)]+)\)/g, '<img src="$2" alt="$1" loading="lazy" />');
-        s = s.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
-        s = s.replace(/__([^_]+)__/g, '<strong>$1</strong>');
-        s = s.replace(/\*([^*]+)\*/g, '<em>$1</em>');
-        s = s.replace(/_([^_]+)_/g, '<em>$1</em>');
-        s = s.replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
-        return s;
-      };
-      let html = '';
-      const blocks = text.split(/```/);
-      blocks.forEach((block, i) => {
-        if (i % 2 === 1) {
-          // 代码块：去掉语言标记行
-          html += '<pre><code>' + esc(block.replace(/^[^\n]*\n/, '')) + '</code></pre>';
-          return;
-        }
-        block.split(/\n{2,}/).forEach((para) => {
-          para = para.trim();
-          if (!para) return;
-          let m = para.match(/^(#{1,6})\s+(.*)$/);
-          if (m) { html += '<h' + m[1].length + '>' + escInline(m[2]) + '</h' + m[1].length + '>'; return; }
-          // 表格：首行表头 + 分隔行（|---|）+ 数据行
-          const tLines = para.split('\n');
-          if (tLines.length >= 2 && /^\s*\|.*\|\s*$/.test(tLines[0]) && /^\s*\|[\s:|-]+\|\s*$/.test(tLines[1])) {
-            const rows = tLines.map(l => l.trim().replace(/^\||\|$/g, '').split('|').map(c => c.trim()));
-            let t = '<table><thead><tr>' + rows[0].map(c => '<th>' + escInline(c) + '</th>').join('') + '</tr></thead><tbody>';
-            rows.slice(2).forEach(r => { t += '<tr>' + r.map(c => '<td>' + escInline(c) + '</td>').join('') + '</tr>'; });
-            html += t + '</tbody></table>';
-            return;
-          }
-          if (para.startsWith('> ')) { html += '<blockquote>' + escInline(para.slice(2).replace(/\n/g, '<br>')) + '</blockquote>'; return; }
-          if (/^[-*]\s+/.test(para)) {
-            html += '<ul>' + para.split('\n').map(li => '<li>' + escInline(li.replace(/^[-*]\s+/, '')) + '</li>').join('') + '</ul>';
-            return;
-          }
-          if (/^\d+\.\s+/.test(para)) {
-            html += '<ol>' + para.split('\n').map(li => '<li>' + escInline(li.replace(/^\d+\.\s+/, '')) + '</li>').join('') + '</ol>';
-            return;
-          }
-          html += '<p>' + escInline(para).replace(/\n/g, '<br>') + '</p>';
-        });
-      });
-      return html;
+      const escaped = String(text).replace(/[&<>"']/g, c => ({
+        '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+      }[c]));
+      return '<p>' + escaped.replace(/\r\n?|\n/g, '<br>') + '</p>';
     };
 
     // ── Chat Panel 模板（engine.initChat 注入）──
