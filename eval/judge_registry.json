@@ -236,7 +236,7 @@
         0
       ],
       "agent/runtime/session.py": [
-        15,
+        17,
         0
       ],
       "agent/runtime/turns.py": [
@@ -546,10 +546,42 @@
       "agent/domains/categories/transactions.py": [
         0,
         0
+      ],
+      "agent/domains/tags/preparation.py": [
+        0,
+        0
+      ],
+      "agent/domains/tags/transactions.py": [
+        0,
+        0
+      ],
+      "agent/domains/tags/targets.py": [
+        0,
+        0
+      ],
+      "agent/domains/tags/__init__.py": [
+        0,
+        0
+      ],
+      "agent/domains/announcements/preparation.py": [
+        2,
+        0
+      ],
+      "agent/domains/announcements/transactions.py": [
+        3,
+        0
+      ],
+      "agent/domains/announcements/targets.py": [
+        0,
+        0
+      ],
+      "agent/domains/announcements/__init__.py": [
+        0,
+        0
       ]
     },
     "total": [
-      1186,
+      1193,
       4848
     ]
   },
