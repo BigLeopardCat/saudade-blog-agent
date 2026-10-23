@@ -129,7 +129,9 @@ flowchart LR
 │   │   ├── confirmation.py    # 签名执行入口绑定及确认/撤销事件编码
 │   │   ├── pending.py         # 跨领域已签名待办的撤销与更换
 │   │   ├── writes.py          # 身份绑定、持久化执行与回放
-│   │   ├── hybrid.py          # 会话准入、持久化、协议输出和旧图交接
+│   │   ├── hybrid.py          # 会话准入、存储接口接线、协议输出和旧图交接
+│   │   ├── conversation_store.py # 会话快照与完成轮次的薄存储协议
+│   │   ├── graph_store.py     # 现有图 checkpoint、恢复及维护 API 兼容适配
 │   │   ├── admin_domains.py   # 管理员读取与确认准备工具的授权组装
 │   │   ├── catalog.py         # 从已授权目录中前置轻量页面操作
 │   │   ├── budget.py          # 完整请求估算、调用次数及实际用量的共享预算
