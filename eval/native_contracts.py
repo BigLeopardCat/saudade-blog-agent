@@ -4,12 +4,14 @@ Run with .venv/bin/python -m eval.native_contracts. No business database is used
 This checks model routing and confirmation outcomes, not PostgreSQL durability.
 """
 
+import argparse
 import json
 import sys
 import time
 from contextlib import closing
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from threading import Event
 from unittest.mock import patch
 
 import jwt
@@ -19,8 +21,9 @@ from starlette.requests import Request
 from agent import confirm, idem
 from agent.agent import create_agent
 from agent.runtime import writes
+from agent.runtime.control import RequestControl, request_scope
 from agent.runtime.hybrid import HybridArm
-from eval import request_metrics
+from eval import navigation_contracts, request_metrics
 from eval.own_fixtures import SECRET, favorite_backend, message_backend, notification_backend
 from utils.trace_io import load_trace
 
@@ -68,7 +71,8 @@ def _card(result, executor):
 
 
 def _posts(state):
-    return [r for r in state["requests"] if r.method in {"POST", "DELETE", "PUT", "PATCH"}]
+    return [r for r in state["requests"] if r.method in {"POST", "DELETE", "PUT", "PATCH"}
+            and not (r.method == "POST" and r.url.path.endswith("/notes/search"))]
 
 
 def _chat(turn, state):
@@ -143,54 +147,99 @@ def _messages(turn, state):
     _require(not any(row["isRead"] for row in state["outbox"]), "outbox state changed")
 
 
-def run():
+CASES = [("chat", favorite_backend, _chat),
+         ("favorite_cancel", favorite_backend, _favorite_cancel),
+         ("notification_replay", notification_backend, _notifications),
+         ("unread_counts", message_backend, _unread_counts),
+         ("message_read_replay", message_backend, _messages),
+         *navigation_contracts.CASES]
+
+
+def _sample(name, backend, contract, run_id, sample):
+    paths, rounds = [], []
+    with backend() as state, TemporaryDirectory(prefix="agent-native-eval-") as temp:
+        graph = create_agent(checkpointer=InMemorySaver())
+        arm = HybridArm(graph)
+        store = _Store(str(Path(temp) / "ledger.sqlite3"))
+        principal = _principal()
+
+        def turn(message, token=None):
+            control = RequestControl(Event(), time.monotonic() + 90)
+            started = time.monotonic()
+            with request_scope(control):
+                result = run_one(ChatRequest(message=message, user_id=7, conversation_id=42),
+                                 principal, {"run": run_id,
+                                             "case": f"native_{name}_{sample}_{len(rounds)}"},
+                                 thread="conv_42", confirm_token=token or "")
+            # Persist observable outcomes, never signed confirmation credentials.
+            rounds.append({"text": result["text"], "commands": result["commands"],
+                           "confirmation_count": len(result["confirm_tokens"]),
+                           "error": result["error"], "trace": result["trace"],
+                           "elapsed_s": round(time.monotonic() - started, 3),
+                           "model_calls": control.budget.model_calls,
+                           "tool_attempts": control.budget.tool_calls,
+                           "charged_tokens": control.budget.tokens})
+            if result["trace"]:
+                paths.append(result["trace"])
+            _require(not result["error"], "runtime error; inspect the case trace")
+            return result
+
+        outcome = {"case": name, "sample": sample, "evaluated": True,
+                   "passed": False, "rounds": rounds}
+        with patch.object(server, "_agent", arm), \
+                patch.object(writes, "ledger_for", lambda _: store), \
+                patch.object(graph, "stream",
+                             side_effect=RuntimeError("unexpected legacy handoff")):
+            try:
+                contract(turn, state)
+                if name.startswith("navigation_"):
+                    _require(not _posts(state), "navigation wrote business data")
+                outcome["passed"] = True
+            except (ValueError, RuntimeError) as exc:
+                outcome["reason"] = str(exc)
+        outcome["requests"] = len(rounds)
+        outcome["business_writes"] = len(_posts(state))
+        if state.get("unsupported_reads"):
+            outcome.update(evaluated=False, passed=False, reason="unsupported fixture read",
+                           unsupported_reads=state["unsupported_reads"])
+    return outcome, paths
+
+
+def run(case_names=None, repeat=1):
     _require(golden_trace.enabled(), "native contracts require evaluation tracing")
+    _require(type(repeat) is int and 1 <= repeat <= 50, "repeat must be between 1 and 50")
+    selected = set(case_names) if case_names is not None else {case[0] for case in CASES}
+    _require(selected and selected <= {case[0] for case in CASES},
+             "unknown or empty case selection")
     run_id = golden_trace.resolve_run_id()
     paths, results = [], []
-    cases = [("chat", favorite_backend, _chat),
-             ("favorite_cancel", favorite_backend, _favorite_cancel),
-             ("notification_replay", notification_backend, _notifications),
-             ("unread_counts", message_backend, _unread_counts),
-             ("message_read_replay", message_backend, _messages)]
-    for name, backend, contract in cases:
-        with backend() as state, TemporaryDirectory(prefix="agent-native-eval-") as temp:
-            graph = create_agent(checkpointer=InMemorySaver())
-            arm = HybridArm(graph)
-            store = _Store(str(Path(temp) / "ledger.sqlite3"))
-            principal = _principal()
-            rounds = []
-
-            def turn(message, token=None):
-                result = run_one(ChatRequest(message=message, user_id=7, conversation_id=42),
-                                 principal, {"run": run_id, "case": f"native_{name}_{len(rounds)}"},
-                                 thread="conv_42", confirm_token=token or "")
-                rounds.append(result)
-                if result["trace"]:
-                    paths.append(result["trace"])
-                _require(not result["error"], "runtime error; inspect the case trace")
-                return result
-
-            with patch.object(server, "_agent", arm), \
-                    patch.object(writes, "ledger_for", lambda _: store), \
-                    patch.object(graph, "stream",
-                                 side_effect=RuntimeError("unexpected legacy handoff")):
-                try:
-                    contract(turn, state)
-                    results.append({"case": name, "passed": True, "requests": len(rounds)})
-                except (ValueError, RuntimeError) as exc:
-                    results.append({"case": name, "passed": False, "reason": str(exc),
-                                    "requests": len(rounds)})
+    for sample in range(1, repeat + 1):
+        for name, backend, contract in CASES:
+            if name not in selected:
+                continue
+            result, traces = _sample(name, backend, contract, run_id, sample)
+            results.append(result)
+            paths.extend(traces)
+    scores = [{"case": name, "samples": repeat,
+               "evaluated": sum(row["evaluated"] for row in results if row["case"] == name),
+               "passed": sum(row["passed"] for row in results if row["case"] == name)}
+              for name, _, _ in CASES if name in selected]
     return {"trace_run": run_id, "business_api": "synthetic", "checkpoint": "memory",
-            "ledger": "temporary_sqlite", "cases": results,
+            "navigation_retrieval": "synthetic_lexical",
+            "ledger": "temporary_sqlite", "repeat": repeat, "scores": scores, "cases": results,
             "metrics": request_metrics.collect(paths)}
 
 
-def main():
-    report = run()
+def main(argv=None):
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--case", action="append", choices=[case[0] for case in CASES])
+    parser.add_argument("--repeat", type=int, choices=range(1, 51), default=1)
+    args = parser.parse_args(argv)
+    report = run(args.case, args.repeat)
     path = Path("eval/report") / f"_smoke_native_contracts_{report['trace_run']}" / "report.json"
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(report, ensure_ascii=False, indent=2))
-    print(json.dumps({"report": str(path), "cases": report["cases"]}, ensure_ascii=False))
+    print(json.dumps({"report": str(path), "scores": report["scores"]}, ensure_ascii=False))
     return 0 if all(case["passed"] for case in report["cases"]) else 1
 
 
