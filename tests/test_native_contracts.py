@@ -112,10 +112,13 @@ def test_navigation_fixture_supports_alternative_article_reads():
 
     with native_contracts.navigation_contracts.backend() as state:
         catalog = public_catalog.get_top_notes.invoke({})
+        categories = public_catalog.list_categories.invoke({})
         searched = notes.search_notes.invoke({"keyword": "Git"})
         retrieved = notes.rag_search.invoke({"query": "Git"})
         detail = notes.get_article_detail.invoke({"article_id": 719})
-        assert all(result.kind == "ok" for result in (catalog, searched, retrieved, detail))
+        assert all(result.kind == "ok" for result in (
+            catalog, categories, searched, retrieved, detail))
+        assert json.loads(str(categories))["items"][0]["id"] == 11
         assert "719" in str(searched) and "id=719" in str(retrieved)
         assert "Git 分支实践" in str(detail)
         assert not native_contracts._posts(state)

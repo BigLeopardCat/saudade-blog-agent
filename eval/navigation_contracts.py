@@ -37,6 +37,10 @@ def backend():
             rows = state["articles"]
             return httpx.Response(200, json={"code": 200, "total": len(rows),
                                             "data": rows[(page - 1)*size:page*size]})
+        if request.method == "GET" and request.url.path.endswith("/categories"):
+            return httpx.Response(200, json={"code": 200, "total": 1, "data": [
+                {"id": 11, "name": "编程", "publicArticleCount": 2,
+                 "color": None, "icon": None, "pathName": "编程"}]})
         if request.method == "POST" and request.url.path.endswith("/notes/search"):
             keyword = json.loads(request.content).get("keyword", "").casefold()
             rows = [{"noteKey": doc["id"], "noteTitle": doc["title"], "status": "public",
