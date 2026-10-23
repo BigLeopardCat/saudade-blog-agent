@@ -1,0 +1,8 @@
+{
+  "schema_version": 1,
+  "name": "synthetic-offline-smoke",
+  "source": "repository-authored synthetic fixture",
+  "revision": "1",
+  "license": "MIT",
+  "scope": "smoke only; not an open benchmark result"
+}
