@@ -410,7 +410,7 @@ flowchart LR
 | 优先级 | 位置 | 问题与退出条件 |
 | --- | --- | --- |
 | P1 | graph.py、workflow_*、plan_codec.py | 旧图仍有约 9412 行、141 个顶层定义；文本计划 DSL、模板展开和纠偏构成另一套执行系统。文章标签原子操作已迁入原生领域；继续迁移标签字典管理等剩余能力；迁完一个领域就删除对应旧规划入口，完成后移除整套旧图 |
-| P1 | workflow_model.ToolCall、tools.result.ToolResult | str 子类附带结构属性，序列化后属性可能丢失，再依赖多处解析。目标是标准 tool call 字典、ToolMessage 内容与 artifact；不能通过再加一套恢复解析器长期维持 |
+| P1 | workflow_model.ToolCall、tools.result.ToolResult | str 子类附带结构属性，序列化后属性可能丢失，再依赖多处解析。浏览器领域已使用标准 tool call 字典、ToolMessage 内容与 artifact；其余工具继续迁移，不能通过再加一套恢复解析器长期维持 |
 | P1 | HybridArm 的 legacy handoff | 原生观察结果和预算没有成为两条执行路径的共同约束。应收敛为一个模型工具循环；不能把整轮回旧 planner 当作永久工具适配方式 |
 | P1 | idem.py 的 `__pregel_*` 配置读取 | 旧图依赖框架内部键表达恢复与执行身份。保留现有写入保护，随着旧图退役改为显式运行时依赖；不再扩展私有键协议 |
 | P2 | server.py、chat.rs、chat-stream.js | 字符串前缀、JSON 字符串及普通文本混合作为事件协议。后续统一有类型的 SSE 事件及单一载荷格式，双方一次升级；不再增加新的魔法前缀 |
