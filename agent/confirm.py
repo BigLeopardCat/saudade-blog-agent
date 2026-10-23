@@ -22,21 +22,11 @@ import time
 
 from config import settings
 
-# 域分隔前缀：同一个 `jwt_secret` 在别处也用于签 JWT（`X-Agent-Assertion`），
-# 加前缀避免"拿一个 JWT 当确认令牌用"这类跨用途混淆——两边即使撞上同一个密钥，
-# 摘要值也不会撞。
+# Domain separation prevents reuse of signatures from other JWT-secret consumers.
 _DOMAIN = b"saudade-confirm-v1"
-
-# 令牌有效期（秒）。10 分钟：够用户读完回复、想一下再点；短到"昨天那个框还在屏幕上"
-# 时已经失效。取消不发请求，令牌自然过期——这是"取消"零副作用的实现方式。
-MAX_TOKEN_CHARS = 4000
-
+# Includes a 2,000-character announcement with four-byte Unicode, plus metadata.
+MAX_TOKEN_CHARS = 16384
 TTL_SECONDS = 600
-
-# 令牌版本（将来改 payload 结构时 +1，旧版本一律验不过，而不是"尽力解析"）
-# 20260924：1 → 2（payload 加 `jti`，见 `token_jti`）。**版本号就是这次改动的
-# 兼容策略**——加字段就必须 +1：留着 1 的旧令牌验签时会被 `payload["v"] != _VERSION`
-# 挡住（而不是"少一个字段也照发"，见 verify 末段）。
 _VERSION = 2
 
 
@@ -68,14 +58,14 @@ def invalid_trace_meta(uid: int, conv_id, token_len: int) -> dict:
     本身不是凭据。`uid` 只用来做 trace 的归属，不参与内容。
     """
     return {
-        "message": "",                      # 隐藏请求的合成文本不是主人说的话
+        "message": "",  # 隐藏请求的合成文本不是主人说的话
         "has_image": False,
         "needs_summary": False,
         "history_len": 0,
         "has_exec": False,
-        "has_confirm": True,                # 是"点确定"那一跳
+        "has_confirm": True,  # 是"点确定"那一跳
         "conversation_id": conv_id,
-        "confirm_rejected": True,           # 验签没过 ⇒ 零执行
+        "confirm_rejected": True,  # 验签没过 ⇒ 零执行
         "confirm_token_len": int(token_len),
     }
 
@@ -140,6 +130,7 @@ def has_refs(specs) -> bool:
     是因为调用方读的是本模块的语义（"令牌能不能签"），而不是引用模块的语法。
     """
     from agent.arg_refs import has_refs as _has_refs  # 局部导入：避免模块级循环
+
     return _has_refs(specs)
 
 
@@ -165,7 +156,7 @@ def narrow(payload: dict, pick: str) -> tuple[dict | None, str]:
     """
     raw = (pick or "").strip()
     if not raw:
-        return payload, ""          # 空 = 没有选择 = 全部办（与旧前端逐字兼容）
+        return payload, ""  # 空 = 没有选择 = 全部办（与旧前端逐字兼容）
     if not isinstance(payload, dict):
         return None, "payload 不是对象"
     specs = payload.get("specs")
@@ -227,8 +218,15 @@ def _units_of(payload: dict, n: int) -> "list | None":
     return units if sorted(flat) == list(range(n)) else None
 
 
-def sign(uid: int, conv_id, workflow: str, specs: list, units: "list | None" = None,
-         *, executor: str | None = None) -> str:
+def sign(
+    uid: int,
+    conv_id,
+    workflow: str,
+    specs: list,
+    units: "list | None" = None,
+    *,
+    executor: str | None = None,
+) -> str:
     """签发待办令牌。密钥空缺 / 参数不全 → **空串**（调用方据此不弹窗）。
 
     `specs` = `[{"tool": 工具名, "args": {...}}]`，参数必须是**已实例化的具体值**
@@ -268,7 +266,8 @@ def sign(uid: int, conv_id, workflow: str, specs: list, units: "list | None" = N
     except (TypeError, ValueError):
         return ""  # 参数里有不可序列化的东西（不该发生）→ 不签发
     sig = hmac.new(secret, _DOMAIN + body, hashlib.sha256).digest()
-    return _b64e(body) + "." + _b64e(sig)
+    token = _b64e(body) + "." + _b64e(sig)
+    return token if len(token) <= MAX_TOKEN_CHARS else ""
 
 
 def verify(token: str, uid: int, conv_id) -> dict | None:
@@ -280,7 +279,7 @@ def verify(token: str, uid: int, conv_id) -> dict | None:
     无会话请求里生效。
     """
     secret = _secret()
-    if not secret or not token or not isinstance(token, str):
+    if not secret or not isinstance(token, str) or not token or len(token) > MAX_TOKEN_CHARS:
         return None
     parts = token.split(".")
     if len(parts) != 2:
