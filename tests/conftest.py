@@ -24,7 +24,9 @@ _PINNED = {"AGENT_EVIDENCE": "0",
            # 要验回退档的用例在同一进程里临时拨 `settings.agent_require_assertion`。
            "AGENT_REQUIRE_ASSERTION": "1",
            "SAUDADE_IGNORE_ENV_FILE": "1",
-           "IOT_ENABLED": "1"}
+           "IOT_ENABLED": "1",
+           "NO_PROXY": "127.0.0.1,localhost,::1",
+           "no_proxy": "127.0.0.1,localhost,::1"}
 for _k, _v in _PINNED.items():
     os.environ[_k] = _v
 
