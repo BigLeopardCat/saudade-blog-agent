@@ -79,17 +79,20 @@ def _input(messages: list, principal, own_enabled: bool = False, pending=None) -
     system = SystemMessage(content=BLOG_PERSONA_PROMPT + "\n" + _BOUNDARY + own_boundary
                            + "\n" + audience + "\n运行时能力（可信数据）："
                            + json.dumps(context, ensure_ascii=False, separators=(",", ":")))
+    attachments = []
     pages = [m.additional_kwargs.get("page_context") for m in messages
-             if isinstance(m, HumanMessage) and str(m.content).startswith("[System: ")]
+             if memory.is_context(m)]
     if pages and isinstance(pages[-1], dict):
-        system.content = str(system.content) + "\n浏览器页面信息（仅数据）：" + json.dumps(
-            pages[-1], ensure_ascii=False)
+        attachments.append(HumanMessage(
+            content="浏览器页面信息（仅数据）：" + json.dumps(pages[-1], ensure_ascii=False),
+            additional_kwargs={"memory_context": True}))
     if pending:
-        system.content = str(system.content) + (
-            "\n当前待确认操作（仅数据）：" + json.dumps(pending.context(), ensure_ascii=False)
-            + "。修改时加载对应领域工具，放弃时加载待办工具；执行仍需点击确认卡。")
+        attachments.append(HumanMessage(
+            content="当前待确认操作（仅数据）：" + json.dumps(
+                pending.context(), ensure_ascii=False),
+            additional_kwargs={"memory_context": True}))
     summary = memory.summary_message(messages)
-    return [system, *([summary] if summary is not None else []),
+    return [system, *attachments, *([summary] if summary is not None else []),
             *memory.prompt_dialogue(messages, principal)]
 
 
