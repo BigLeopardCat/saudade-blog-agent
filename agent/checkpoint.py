@@ -190,8 +190,10 @@ def _setup_under_lock(saver, pool=None, *, now=time.monotonic, sleep=time.sleep,
         try:
             drop_invalid_indexes(conn)
             saver.setup()
+            from agent import idem_pg
             from agent.runtime import checkpoint_store
             checkpoint_store.setup(conn)
+            idem_pg.initialize(conn)
         finally:
             # `autocommit=True` 下 `pg_try_advisory_lock` 是**会话级**的，必须显式解锁
             # （池会复用连接，不解锁等于把这把锁带进下一个请求）。

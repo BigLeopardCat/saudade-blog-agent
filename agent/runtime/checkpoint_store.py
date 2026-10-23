@@ -10,7 +10,21 @@ class ConversationDeleted(Exception):
 
 
 def postgres(saver):
-    return type(saver).__module__.startswith("langgraph.checkpoint.postgres")
+    from langgraph.checkpoint.postgres import PostgresSaver
+
+    return isinstance(saver, PostgresSaver)
+
+
+def backend(saver):
+    """Classify installed backends by their public framework base classes."""
+    from langgraph.checkpoint.memory import InMemorySaver
+    from langgraph.checkpoint.postgres.base import BasePostgresSaver
+
+    if isinstance(saver, BasePostgresSaver):
+        return "postgres"
+    if isinstance(saver, InMemorySaver):
+        return "memory"
+    return type(saver).__module__
 
 
 def setup(conn):

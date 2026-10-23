@@ -53,9 +53,13 @@ def wire(r: dict) -> str:
 
 
 def _saver(module: str):
-    """造一个**类住在这个模块名下**的假 saver。不 import 真后端：产线 `.venv` 里
-    一个都没装（`agent/checkpoint.py` 的《可验证面》），为了造个假对象去装它就把判据
-    变成了环境依赖。"""
+    """Real framework types for supported backends; a named fake for unknown ones."""
+    if module.startswith("langgraph.checkpoint.postgres"):
+        from langgraph.checkpoint.postgres.base import BasePostgresSaver
+        return BasePostgresSaver()
+    if module == "langgraph.checkpoint.memory":
+        from langgraph.checkpoint.memory import InMemorySaver
+        return InMemorySaver()
     cls = type("FakeSaver", (), {})
     cls.__module__ = module
     return cls()
@@ -204,8 +208,8 @@ def test_health_dials():
               == "memory")
     check("外壳把图套在 `.graph` 里 ⇒ 也读得到（只往里钻一层）",
           runtime_probe.checkpoint_backend(_Shell(None,
-              _Graph(_saver("langgraph.checkpoint.sqlite"))))
-          == "sqlite")
+              _Graph(_saver("langgraph.checkpoint.memory"))))
+          == "memory")
     check("图还没建（`_agent is None`）⇒ unknown，**不许**报成 none",
           runtime_probe.checkpoint_backend(None) == "unknown")
     check("认不出的对象（三个属性一个都没有）⇒ unknown，**不许**报成 none",

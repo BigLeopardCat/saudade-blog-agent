@@ -87,17 +87,6 @@ def version_payload(app_version: str) -> dict:
             "started_at": STARTED_AT, "python": platform.python_version()}
 
 
-#: saver 的类住在哪个模块 → 后端短名。**只看模块路径，不 import 那些包**：产线 `.venv`
-#: 今天一个 checkpoint 后端都没装（见 `agent/checkpoint.py` 的《可验证面》），为了回一个
-#: 名字去 import 它，会把"没装"变成"读不出来"——而这两种要修的东西不一样。
-#: 前缀匹配（不是相等）：异步档住在 `langgraph.checkpoint.postgres.aio` 这种子模块里。
-_CHECKPOINT_BACKENDS = (
-    ("langgraph.checkpoint.postgres", "postgres"),
-    ("langgraph.checkpoint.sqlite", "sqlite"),
-    ("langgraph.checkpoint.memory", "memory"),
-)
-
-
 def _saver_of(agent) -> tuple[bool, object]:
     """从活体对象上找 saver，返回 `(读得出来吗, saver)`。
 
@@ -156,25 +145,7 @@ def holds_context(agent) -> bool:
 
 
 def checkpoint_backend(agent) -> str:
-    """`/health` 的 `checkpoint_backend` 那一格：**这个进程到底挂没挂 saver**。
-
-    **为什么必须从活体对象读、不许从 `.env` 推**：`CHECKPOINT_DSN` 填了**不等于**
-    图挂上了 saver——采纳（20261018 批 7）之后 `build_checkpointer()` 才第一次有调用方，
-    而它返回 `None` 的路径有两条（没配 DSN、以及将来任何一处"配了但没接上"）。
-    任何"读配置再回一个档位名"的实现，都会把"配了 DSN"报成"挂上了 saver"，
-    而那正是本仓最贵的一类失效（看着在跑、其实没跑）。这里读的是 `server._agent`
-    这个对象本身，所以它回的是**事实**。
-
-    取值五档（前四档是"读得出来"，第五档是"读不出来"）：
-      · `"none"`      —— 对象在、但它没挂 saver（`CHECKPOINT_DSN` 空时的形态）；
-      · `"postgres"` / `"sqlite"` / `"memory"` —— 挂了，回后端短名。`memory` 这一档
-        在 4 个 uvicorn worker 下**每 worker 各记各的且不报错**，所以它出现在这里不是
-        噪声：它是"这个进程挂了 saver 但挂了错的那种"唯一的出口；
-      · `"unknown"`   —— **读不出来**（图还没建起来 / 认不出这个对象）。刻意**不**退回
-        `"none"`：把"取不到"报成"没挂"就是上面那条 `readable` 的同形错误。
-      · 认不出的 saver 类 ⇒ 回它的**模块路径原文**（不编一个已知名字顶上——现场要读的
-        恰恰是"你到底挂的是什么"）。
-    """
+    """Report the live saver backend through official framework types."""
     if agent is None:
         return "unknown"
     found, saver = _saver_of(agent)
@@ -182,11 +153,9 @@ def checkpoint_backend(agent) -> str:
         return "unknown"
     if saver is None:
         return "none"
-    mod = type(saver).__module__
-    for prefix, name in _CHECKPOINT_BACKENDS:
-        if mod == prefix or mod.startswith(prefix + "."):
-            return name
-    return mod
+    from agent.runtime.checkpoint_store import backend
+
+    return backend(saver)
 
 
 def checkpoint_db(dsn: str) -> str:
