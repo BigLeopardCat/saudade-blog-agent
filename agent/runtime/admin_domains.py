@@ -3,6 +3,7 @@
 from agent.authz import SCOPE_ADMIN_CONSOLE
 from agent.domains.admin_writes import available
 from agent.domains.article_actions import preparation as articles
+from agent.domains.article_tags import preparation as article_tags
 from agent.domains.moderation_actions import preparation as moderation
 from agent.domains.quota_actions import preparation as quotas
 from agent.domains.todos import preparation as todos
@@ -10,6 +11,7 @@ from agent.runtime.read_tools import scoped_reads_enabled
 
 _PREPARATIONS = (
     ("admin_catalog", articles),
+    ("admin_catalog", article_tags),
     ("admin_moderation", moderation),
     ("admin_work_queue", todos),
     ("admin_work_queue", quotas),

@@ -146,6 +146,11 @@ flowchart LR
 │   │   │   ├── targets.py    # 有界文章目标、内容版本及状态核对
 │   │   │   ├── preparation.py # 文章状态与置顶确认准备
 │   │   │   └── transactions.py # 文章条件写入、回读与幂等回执
+│   │   ├── article_tags/
+│   │   │   ├── __init__.py   # 文章标签原子操作领域入口
+│   │   │   ├── targets.py    # 有界标签参数与服务端冻结计划
+│   │   │   ├── preparation.py # 标签变更及缺失标签创建的统一确认
+│   │   │   └── transactions.py # 原子写入、计划回执核对与幂等执行
 │   │   ├── quota_actions/
 │   │   │   ├── __init__.py   # 额度写领域入口
 │   │   │   ├── targets.py    # 具体申请与账号额度快照核对
