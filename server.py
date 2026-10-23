@@ -247,12 +247,10 @@ class ChatRequest(BaseModel):
     history: list[HistoryItem] = Field(default_factory=list, max_length=MAX_HISTORY_ITEMS)
     summary: str = Field(default="", max_length=MAX_TEXT_FIELD_CHARS)
     needs_summary: bool = False
-    # 前端上报的页面特效实时状态（如 "sakura,rain" 或 ""），供 agent 感知真实开关状态
+    # 浏览器上报的显示状态仅作上下文数据。
     current_effects: str = Field(default="", max_length=MAX_SHORT_FIELD_CHARS)
-    # 前端上报的夜间模式实时状态（"on"/"off"），供 agent 感知真实开关状态（与特效同理）
     current_darkmode: str = Field(default="", max_length=MAX_SHORT_FIELD_CHARS)
-    # 多模态图片输入：前端压缩后的 dataURL 数组（20260828 单图 → 20260828s 多图，
-    # 最多 6 张、每张 ≤1MB；qwen3.8-flash 原生支持图像）。兼容旧版单串（golden 直连）
+    # 前端压缩的 dataURL 数组；兼容单串输入。
     image: str | list[str] = ""
     # 跨轮执行记忆（20260904 C3）：本会话最近执行的 checker 验收回执渲染文本
     # （Rust 侧从 execution_log 读最近 8 条渲染成 "· 屏幕显示「…」" 式行）——
@@ -791,7 +789,9 @@ def _build_messages(req: ChatRequest, confirm_grant: dict | None = None) -> list
     ctx = f"[System: {'; '.join(ctx_parts)}]"
     messages.append(HumanMessage(content=ctx, additional_kwargs={
         "memory_context": True,
-        "page_context": {"url": req.current_url, "title": req.page_title},
+        "page_context": {"url": req.current_url, "title": req.page_title,
+                         "current_effects": req.current_effects,
+                         "current_darkmode": req.current_darkmode},
         "conversation_summary": req.summary}))
 
     # 无 checkpoint 时回放后端历史；去掉事实帧及未完成的用户轮次。
