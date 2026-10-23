@@ -55,6 +55,7 @@ from agent.principal import Principal
 from agent.runtime.control import RequestControl
 from agent.runtime.jobs import RequestJobs
 from agent.runtime.model_budget import tool_callbacks
+from agent.runtime.progress import ProgressEmitter
 from agent.summarizer import summarize
 
 # `NAV_MAP` 的 import 随渲染一起搬走了（20260928）：路径→中文别名的反查只服务于
@@ -1293,7 +1294,8 @@ def _run_agent_stream_to_queue(messages: list, thread_id: str, queue: asyncio.Qu
                                conversation_id: int | None = None,
                                ledger: dict | None = None,
                                open_tasks: str = "",
-                               recent_tools: list[str] | None = None):
+                               recent_tools: list[str] | None = None,
+                               progress_emitter: ProgressEmitter | None = None):
     """Run agent in a thread, push each chunk into an asyncio.Queue."""
     config = {"configurable": {"thread_id": thread_id, "user_id": user_id, "stop_event": stop_event,
                                "principal": principal or Principal(uid=user_id),
@@ -1316,7 +1318,8 @@ def _run_agent_stream_to_queue(messages: list, thread_id: str, queue: asyncio.Qu
                                # 写幂等账的分流判据（批 F）：这一轮开始时上一轮跑没跑完。
                                # 走 configurable 与上面几格同一条路——图里（`idem.py` 的
                                # `resuming`）读得到、又不必动 AgentState。见 `_idem_resuming`。
-                               "idem_resuming": _idem_resuming(thread_id)},
+                               "idem_resuming": _idem_resuming(thread_id),
+                               "progress_emitter": progress_emitter},
               "recursion_limit": RECURSION_LIMIT}
     config["callbacks"] = tool_callbacks()
     try:
@@ -2058,6 +2061,18 @@ async def chat_stream(req: ChatRequest, request: Request):
     async def event_stream():
         queue: asyncio.Queue = asyncio.Queue()
         loop = asyncio.get_running_loop()  # 同上（event_stream 也是协程）
+        started = loop.time()
+
+        def enqueue_progress(text: str):
+            # Never make the model/tool thread wait for the HTTP consumer.
+            if stop_event.is_set() or loop.is_closed():
+                return
+            try:
+                loop.call_soon_threadsafe(queue.put_nowait, f"__PROCESS__:{text}")
+            except RuntimeError:
+                return
+
+        progress_emitter = ProgressEmitter(enqueue_progress)
 
         # 摘要独立化：needs_summary 轮与流式生成并行做后端总结（输入为原始历史，
         # 不依赖模型回复），流结束时随 __SUMMARY__ 帧返回（Rust 解析入库）
@@ -2080,7 +2095,7 @@ async def chat_stream(req: ChatRequest, request: Request):
             req.agent_tasks,
             # 上一轮执行过的工具名（20260929 批 F1'）：**同一条理由**必须由这里传
             # （req 不在被调函数里），见 `_run_agent_stream_to_queue` 的同名参数注
-            req.recent_tools, jobs=jobs,
+            req.recent_tools, progress_emitter, jobs=jobs,
         )
 
         # 可观测性：请求生命周期账本（帧数/退出原因，finally 汇总）
@@ -2094,8 +2109,19 @@ async def chat_stream(req: ChatRequest, request: Request):
         # （叙述首帧或连发的命令帧）前插换行，保证命令各自独占一行
         pending_nl = False
         had_output = False
-        started = loop.time()
         last_frame = started
+        first_visible = False
+        first_reply = False
+
+        def mark_visible(kind: str):
+            nonlocal first_visible, first_reply
+            if not first_visible:
+                first_visible = True
+                record("producer", "first_visible_event", kind=kind,
+                       duration_s=loop.time() - started)
+            if kind == "reply" and not first_reply:
+                first_reply = True
+                record("producer", "first_reply", duration_s=loop.time() - started)
         try:
             while True:
                 try:
@@ -2161,6 +2187,7 @@ async def chat_stream(req: ChatRequest, request: Request):
                                                or chunk.startswith("__CONFIRM__")):
                     had_output = True
                     frames += 1
+                    mark_visible("progress")
                     yield f"data: {json.dumps(chunk, ensure_ascii=False)}\n\n"
                     continue
                 if isinstance(chunk, str) and chunk.startswith("__PENDING__:"):
@@ -2183,6 +2210,7 @@ async def chat_stream(req: ChatRequest, request: Request):
                     #      不置的话前端不知道这一轮有导航、收尾不执行命令。
                     had_output = True
                     frames += 1
+                    mark_visible("command")
                     nav_line = chunk
                     pending_nl = True
                     yield f"data: {chunk}\n\n"
@@ -2205,6 +2233,7 @@ async def chat_stream(req: ChatRequest, request: Request):
                 if isinstance(chunk, AIMessageChunk) and chunk.content:
                     had_output = True
                     frames += 1
+                    mark_visible("reply")
                     text = str(chunk.content)
                     # 命令帧独占一行契约：命令帧后第一个叙述帧前插换行（若 LLM
                     # 没自带头部换行）——叙述 delta 任意切分，只在此处加一次，
@@ -2221,6 +2250,7 @@ async def chat_stream(req: ChatRequest, request: Request):
                         nav_line = text
                         had_output = True
                         frames += 1
+                        mark_visible("command")
                         # 连发命令帧也要各自独占一行（无叙述间隔时前插换行）
                         if pending_nl and not text.startswith("\n"):
                             text = "\n" + text
@@ -2230,6 +2260,7 @@ async def chat_stream(req: ChatRequest, request: Request):
                         nav_line = text
                         had_output = True
                         frames += 1
+                        mark_visible("command")
                         if pending_nl and not text.startswith("\n"):
                             text = "\n" + text
                         pending_nl = True
@@ -2240,6 +2271,7 @@ async def chat_stream(req: ChatRequest, request: Request):
             if not had_output:
                 logger.warning("Chat stream ended with no output (agent produced no text/no command)")
                 frames += 1
+                mark_visible("reply")
                 yield f"data: {json.dumps(_RECOVERY_SENTENCE, ensure_ascii=False)}\n\n"
 
             # 独立摘要结果帧（必须在 __END__ 之前：Rust 收到 __END__ 即终止解析）
