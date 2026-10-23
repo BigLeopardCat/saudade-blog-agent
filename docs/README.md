@@ -30,6 +30,7 @@
 | [eval-observability.md](eval-observability.md) | 混合运行时指标、结果验收、旧评测边界与执行入口 | 现状型 |
 | [lint-baseline.md](lint-baseline.md) | 静态检查（ruff）基线与"新代码要干净"的参照点 | 现状型 |
 | [rag-design.md](rag-design.md) | 检索设计与实现总结，§8 是触发条件驱动的升级预案 | 现状型 |
+| [embedding-inputs.md](embedding-inputs.md) | 可选 tokenizer 的完整输入预算、空间签名与验证方式 | 现状型（末节含验证记录） |
 | [native-toolcalls-mainline.md](native-toolcalls-mainline.md) | 换主线的**交接件**：为什么换、冻结了什么、边界在哪 | 记录型 |
 | [toolcall-stability-roadmap.md](toolcall-stability-roadmap.md) | 工具调用稳定性的长期路线图，含明确"不做"清单 | 方向型（§3–§7）+ 记录型（§0–§2、附一–附七） |
 | [react-line-experiment.md](react-line-experiment.md) | ReAct 试验线的实测：原生 tool calls 当骨架行不行；**§六 = 这条臂的读数许可闸**（`comparable`） | 记录型（**§四 现状表 / §六** 是现状型） |
@@ -48,7 +49,7 @@
 > 这份表**刻意不写"最后修订"日期**：手抄的日期没有判据看着（CI 是浅克隆，读不到逐文件的
 > 提交日期），注定漂。要看某份文档最近改了什么：`git log -1 --format=%ad -- docs/<文件>`。
 
-架构决策记录另有索引：[adr/README.md](adr/README.md)（17 份，记"当时为什么这样选、什么条件下重开"）。
+架构决策记录另有索引：[adr/README.md](adr/README.md)（18 份，记"当时为什么这样选、什么条件下重开"）。
 
 仓根还有几份不属于 `docs/`： [README.md](../README.md)（是什么、怎么跑）、
 [CONTRIBUTING.md](../CONTRIBUTING.md)（判据规矩、能/不能在本机跑什么）、

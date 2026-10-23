@@ -18,6 +18,14 @@ from operator import mul
 from pathlib import Path
 
 from config import settings as _settings
+from rag.embedding_inputs import (
+    InputProfileError,
+    active_profile,
+    document_text,
+    query_text,
+    validate_inputs,
+    vector_chunks,
+)
 from rag.vector_files import (
     _Flock,
     _read_json,
@@ -51,34 +59,39 @@ class Space:
     model: str
     base_url: str   # 进键：同一模型名在不同平台不是同一个向量空间
     dim: int        # **请求**维度；0 = 不传 dimensions，以返回长度为准
+    profile: str = ""  # 固定 tokenizer / 指令 / 预算 / 模型版本的签名
 
     def as_dict(self) -> dict:
-        return {"model": self.model, "base_url": self.base_url, "dim": self.dim}
+        return {"model": self.model, "base_url": self.base_url, "dim": self.dim,
+                "profile": self.profile}
 
     @staticmethod
     def from_dict(d: dict) -> "Space":
         return Space(str(d.get("model", "")), str(d.get("base_url", "")),
-                     int(d.get("dim", 0) or 0))
+                     int(d.get("dim", 0) or 0), str(d.get("profile", "")))
 
 
 def space_from_settings() -> Space:
     """当前配置出来的请求空间。**只读 `settings`，别处不许再读环境变量**。"""
     dim = int(getattr(_settings, "embedding_dim", 0) or 0)
+    profile = active_profile()
     return Space(model=_settings.embedding_model.strip(),
                  base_url=_settings.embedding_base_url.strip(),
-                 dim=dim if dim > 0 else 0)
+                 dim=dim if dim > 0 else 0, profile=profile.signature if profile else "")
 
 
 def chunk_text(title: str, text: str) -> str:
     """chunk 的 embedding 文本。**与向量路建库时用的必须是同一个函数产出的同一个
     字符串**——两处各写一次 f-string，哪天一边改了分隔符，缓存就整片 miss（慢而
     不报错）或者更糟：复用到另一个字符串的向量。"""
-    return f"{title[:400]}\n{text}"
+    return document_text(title, text, None)
 
 
 def chunk_key(space: Space, text: str) -> str:
     """内容寻址键：同一份文本在同一空间里恒得同一个键，换空间必得不同键。"""
     raw = f"{space.model}{SEP}{space.base_url}{SEP}{space.dim}{SEP}{text}"
+    if space.profile:
+        raw = f"{space.profile}{SEP}{raw}"
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
 
@@ -89,8 +102,9 @@ def corpus_fingerprint(space: Space, chunks: list[dict]) -> str:
     （见 `VectorStore.view_for`）。顺序变而内容没变（服务端分页抖动）指纹会变——
     于是这一轮退词法、后台重排一次内存视图，**不会**重新调 API（key 没变）。
     """
+    profile = active_profile()
     parts = [f"{c.get('type','')}{SEP}{c.get('id','')}{SEP}{c.get('section','')}"
-             f"{SEP}{chunk_key(space, chunk_text(c.get('title',''), c.get('text','')))}"
+             f"{SEP}{chunk_key(space, document_text(c.get('title',''), c.get('text',''), profile))}"
              for c in chunks]
     return hashlib.sha256("\n".join(parts).encode("utf-8")).hexdigest()
 
@@ -203,6 +217,7 @@ def _embed_texts(texts: list[str], space: Space) -> list[list[float] | None]:
     那条记 None（**部分成功**），由调用方写进 `missing` 而不是把整次更新丢掉——
     语料那么大、为一条坏文本放弃其余几十条，是拿小事故换大事故。
     """
+    validate_inputs(texts, space.profile)
     out: list[list[float] | None] = []
     size = max(1, int(_settings.embedding_batch_size or 10))
     for i in range(0, len(texts), size):
@@ -383,7 +398,7 @@ class VectorStore:
         with self._lock:
             if self._view is None or self._view_fp != fingerprint:
                 return None
-            if self._view_space != space_from_settings():
+            if not self._space_matches():
                 return None
             return self._view
 
@@ -396,9 +411,15 @@ class VectorStore:
         或者拿它去融合，都是静默错误。
         """
         with self._lock:
-            if self._view is None or self._view_space != space_from_settings():
+            if self._view is None or not self._space_matches():
                 return None
             return self._view
+
+    def _space_matches(self) -> bool:
+        try:
+            return self._view_space == space_from_settings()
+        except InputProfileError:
+            return False
 
     def missing(self) -> list[str]:
         with self._lock:
@@ -417,7 +438,8 @@ class VectorStore:
         本来容忍一个刷新周期，抢着重嵌只是双份账单。
         """
         self.root.mkdir(parents=True, exist_ok=True)
-        texts = [chunk_text(c.get("title", ""), c.get("text", "")) for c in chunks]
+        profile = active_profile()
+        texts = [document_text(c.get("title", ""), c.get("text", ""), profile) for c in chunks]
         keys = [chunk_key(space, t) for t in texts]
         fp = corpus_fingerprint(space, chunks)
 
@@ -617,6 +639,10 @@ def degraded_reason() -> str | None:
         return None                     # 关着是设定，不是降级
     if not _settings.embedding_configured:
         return "missing_credentials"
+    try:
+        active_profile()
+    except InputProfileError:
+        return "embedding_profile_error"
     st = get_store()
     st.load()       # 读一次盘（几百字节，签名没变就早退）：不读的话，"盘上有一份好
                     # 索引、只是这个进程还没查过"会被报成 "warming"，与"真的还在建"
@@ -658,10 +684,14 @@ def route_status() -> dict:
 
 def embed_query(query: str) -> array | None:
     """Bounded LRU, keyed by both embedding space and normalized query."""
-    q = (query or "").strip()[:512]
-    if not q:
+    q = (query or "").strip()
+    if not q or len(q) > 32768:
         return None
-    space = space_from_settings()
+    try:
+        space = space_from_settings()
+        q = query_text(q, active_profile())
+    except InputProfileError:
+        return None
     st = get_store()
     view = st.view()
     dim = view.dim if view is not None else 0
@@ -705,7 +735,7 @@ def warm_async(chunks: list[dict]) -> None:
 
     def _run() -> None:
         try:
-            get_store().update(chunks, space_from_settings())
+            get_store().update(vector_chunks(chunks), space_from_settings())
         except Exception:                             # noqa: BLE001
             logger.warning("向量索引后台更新失败（下一轮刷新重试）", exc_info=True)
         finally:

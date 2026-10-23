@@ -82,8 +82,8 @@
 | [0014](adr-0014-assertion-verify-via-pyjwt.md) | 身份断言的验签与签发改用 PyJWT（`verify_sub` 那枚地雷写在最前面） | 已采纳 |
 | [0015](adr-0015-planner-becomes-router-schema-on-demand.md) | planner 降成路由器，schema 索引化按需取（分四阶段，**部分取代 ADR-0001**；**阶段 0 已按判据停**） | **提议中** |
 | [0016](adr-0016-skill-registry-becomes-config-files.md) | 技能注册表从 Python 字面量改成一条技能一个 TOML 配置（试点域已落地） | 已采纳 |
-
 | [0017](adr-0017-versioned-rag-evidence.md) | 版本化公开语料、不可变向量代与正文证据约束 | 已采纳 |
+| [0018](adr-0018-embedding-input-budgets.md) | 固定 tokenizer 的完整 embedding 输入预算与空间签名 | 提议中 |
 
 ## 相关的、但不算 ADR 的文档
 
