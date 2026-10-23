@@ -15,6 +15,10 @@ python eval/offline_rag_eval.py eval/fixtures/offline_smoke --output /tmp/rag-sm
 运行不下载数据、不读取部署 .env、不访问博客、不调用 embedding 或创建向量目录。
 生产 RagIndex 的数据加载和向量预热增加可选注入点，原调用方保持既有行为。
 
+真实公开语料的准备命令、首轮 BM25 成绩与本地模型探测见
+[SciFact 与 Qwen 首轮验证](scifact-local-baseline.md)。数据下载必须显式选择，
+不进入普通 pytest/PR CI。
+
 ## 数据契约
 
 采用 BEIR 通用文件格式，直接支持按其格式准备的开源语料：
@@ -52,8 +56,9 @@ API 与本地模型走相同评分入口；没有 run 记录的查询按空结�
 未知查询/文档、重复结果、NaN/Infinity 失败。以 score 排序；同分按文档 ID 升序，
 标准指标与证据覆盖使用同一确定顺序。原始 run 分数保存在报告内。
 
-当前入口只内置生产 BM25。模型服务、API embedding、向量检索生成 run 是后续阶段，
-不应把导入模型 run 的能力说成已部署模型。
+当前检索入口只内置生产 BM25；向量检索生成 run 是后续阶段。
+`probe_embeddings.py` 可使用同一 OpenAI SDK 探测 API 或本地服务的延迟、维度及失败，
+不产生检索质量成绩，也不表示模型已接入生产。
 
 ## 指标和报告
 
