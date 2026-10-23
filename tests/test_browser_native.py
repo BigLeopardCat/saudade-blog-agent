@@ -327,3 +327,21 @@ def test_page_schema_errors_are_standard_error_messages():
     assert isinstance(result, ToolMessage) and result.status == "error"
     assert "snow" in result.content and "on" in result.content and "off" in result.content
     assert result.artifact is None
+
+
+def test_current_display_state_reaches_native_context_as_page_data():
+    import server
+    from agent.runtime.hybrid import _input
+
+    request = server.ChatRequest(
+        message="切换夜间模式", current_url="/", current_effects="rain", current_darkmode="on"
+    )
+    prompt = _input(server._build_messages(request), _config()["configurable"]["principal"])
+    page = next(
+        item
+        for item in prompt
+        if isinstance(item, HumanMessage) and item.content.startswith("浏览器页面信息（仅数据）：")
+    )
+    fields = json.loads(page.content.split("：", 1)[1])
+    assert fields["current_effects"] == "rain" and fields["current_darkmode"] == "on"
+    assert "current_darkmode" not in prompt[0].content
