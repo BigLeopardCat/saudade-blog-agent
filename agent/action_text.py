@@ -42,11 +42,9 @@ legacy 表——存量行的渲染一个字节都没变，这是本批的收敛�
 - 空实参：Rust 会渲染出 `新建一级标签「」`（空书名号）这类退化，本模块一律给出不带
   空书名号的兜底（`test_action_text.py` 的通用不变量锁住"两档都不许出现空「」/空冒号"）。
 
-## 未覆盖的工具
+## 无独立动作行的读取
 
-`get_chat_history` / `search_knowledge_base`（`tools/base.py` 里那两件死工具，既不在
-planner 菜单也不在任何技能模板里）没有臂：`receipt_action` 对它们返回空串 ⇒ 不写
-`action` ⇒ Rust 的 legacy 表照旧。**没臂的工具绝不写这个键**。
+`get_chat_history` 在原生读取领域提供历史文本，不产生写回执；旧执行器不提供其动作行。
 """
 import re
 

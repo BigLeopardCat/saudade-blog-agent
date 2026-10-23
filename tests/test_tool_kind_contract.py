@@ -160,9 +160,7 @@ def test_tool_kind_contract():
             "kind": "success_only", "sunset": "",
             "why": "批 ⑤-1 收掉了 `except` 那条（改判 `unavailable`）之后，只剩成功那一句"
                "`f\"{loc}天气: …\"`；三条失败路径现在全走信封"},
-        "tools/site.py::search_knowledge_base": {
-            "kind": "success_only", "sunset": "",
-            "why": "命中拼接那一支；空结果与故障各走 `empty` / `unavailable`（同一函数里已包）"},
+
     }
     print("① 非真空：真的扫到了工具（扫不到 ⇒ 下面每条都是空判据）")
     check("从 `tools/*.py` 取到的 `@tool` 函数数 ≥ 60", _N_TOOLS >= 60, f"{_N_TOOLS} 件")

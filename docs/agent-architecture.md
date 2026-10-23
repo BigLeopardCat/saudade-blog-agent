@@ -7,7 +7,7 @@
 
 - 浏览器负责对话界面、SSE 消费及页面命令执行。
 - Rust 博客后端负责账号鉴权、业务 API、聊天记录和 SSE 转发。
-- Python Agent 负责 LLM 调用、70 个工具。按需领域工具与有界模型循环由共享运行时承载，代码管理权限、确认、取消、幂等和事实回执。
+- Python Agent 负责 LLM 调用、69 个工具。按需领域工具与有界模型循环由共享运行时承载，代码管理权限、确认、取消、幂等和事实回执。
 - PostgreSQL 保存博客业务记录、Agent checkpoint 与幂等账。跨请求连续性由稳定会话绑定与持久化提供。
 - IoT 是可关闭的临时演示适配，复用现有设备服务，不作为平台扩建。
 
@@ -19,7 +19,7 @@
 ```mermaid
 flowchart LR
     UI[浏览器] --> BLOG[Rust 博客 API]
-    BLOG --> AGENT[Python Agent<br/>70 工具 · 4 workers]
+    BLOG --> AGENT[Python Agent<br/>69 工具 · 4 workers]
     AGENT --> MODEL[LLM]
     AGENT --> TOOLS[按需领域工具]
     TOOLS --> BLOG
@@ -152,6 +152,11 @@ flowchart LR
 │   │   │   ├── targets.py    # 精确账号、严格计划及非敏感状态核对
 │   │   │   ├── preparation.py # 冻结、身份和禁言的只读签名确认
 │   │   │   └── transactions.py # 版本校验、原子执行与幂等回执核验
+│   │   ├── notices/
+│   │   │   ├── __init__.py   # 单收件人个人通知领域入口
+│   │   │   ├── targets.py    # 精确收件人、完整通知文本及版本核对
+│   │   │   ├── preparation.py # 只读全文确认准备
+│   │   │   └── transactions.py # 原子发送、回执核验及持久幂等
 │   │   ├── announcements/
 │   │   │   ├── __init__.py   # 站内公告领域入口
 │   │   │   ├── targets.py    # 精确目标、请求与业务快照核对
@@ -192,6 +197,7 @@ flowchart LR
 │   │   ├── public_catalog.py # 公开文章、置顶、分类及分层标签读取
 │   │   ├── public_activity.py # 公告与已审核河灯、说说读取
 │   │   ├── utilities.py      # 当前时间与有界天气读取
+│   │   ├── device_actions.py # OLED演示薄适配、身份复核和标准执行回执
 │   │   ├── device_reads.py   # 可关闭的设备演示清单，只读
 │   │   ├── todos/
 │   │   │   ├── __init__.py   # 后台个人待办写领域入口
@@ -229,7 +235,7 @@ flowchart LR
 │   ├── vector_files.py        # 不可变代文件、摘要与原子提交
 │   └── search.py              # RagIndex + search()；recall_eval 直接测本实现（评测即线上行为）
 ├── tools/                     # ★ 工具层：15 个域模块 + base 的共享地基（20261018 批 3 收尾后 base 停在 1255 行 / 21 个定义）
-│   ├── base.py                # 工具注册表 `_TOOL_REGISTRY`——全仓 70 个 @tool 工具的唯一入口（**20261018 起本文件里一个 @tool 都没有了**：工具本体全部按域拆进下面几个模块，按原名 re-export）+ 共享 HTTP 通道（`_get`/`_client`/`_admin_*`…）+ 跨族共享原语（`_as_article_id`/`_near_miss_names`）
+│   ├── base.py                # 工具注册表 `_TOOL_REGISTRY`——全仓 69 个 @tool 工具的唯一入口（**20261018 起本文件里一个 @tool 都没有了**：工具本体全部按域拆进下面几个模块，按原名 re-export）+ 共享 HTTP 通道（`_get`/`_client`/`_admin_*`…）+ 跨族共享原语（`_as_article_id`/`_near_miss_names`）
 │   ├── result.py              # 工具结果的**形状**：`ToolResult`、信封构造器、列表帧塑形件（20261017 拆出）
 │   │
 │   ├── 【公开读族】
@@ -769,7 +775,7 @@ narrator 提示词随会话线性膨胀（当时那一行是 `with_tool_call_pai
 
 ---
 
-## 5. 工具系统（70 个）
+## 5. 工具系统（69 个）
 
 | 分类 | 工具 | 行为 |
 |---|---|---|
@@ -780,9 +786,8 @@ narrator 提示词随会话线性膨胀（当时那一行是 `with_tool_call_pai
 | 留言板 | `list_guestbook` | 读 `/api/public/board`（河灯留言；写侧见 §5.5） |
 | 说说 | `list_talks` | 读 `/api/public/talk` |
 | 站点信息 | `get_blog_info`、`get_social_links`、`get_site_map` | 作者信息/社交链/功能地图（静态） |
-| 知识库 | `search_knowledge_base` | **不可达**（只住在注册表里：不在菜单/点名白名单/技能模板）——端点恒返回空，见 `tools/site.py` 的定性块 |
 | 时间/天气 | `get_current_time`、`get_weather` | 本地时间；wttr.in |
-| 聊天历史 | `get_chat_history` | **不可达**（只住在注册表里）占位实现：提示"历史已自动注入上下文"（防模型以为要自己查）；留在注册表是为 gate 的具名工具声称核对保住这个名字 |
+| 聊天历史 | `get_chat_history` | 按已验签身份读取当前会话实际文本；原生历史读取领域按需加载 |
 | 导航 | `navigate_to(path, confirm)` | 返回 `NAVIGATE:https://…`（confirm=true）或 `AUTO_NAVIGATE:https://…`（confirm=false） |
 | 特效 | `toggle_effect(effect, action)` | 返回 `EFFECT:{effect}:{action}`，前端按显式意图执行 |
 | 夜间模式 | `toggle_dark_mode(mode)` | 返回 `DARKMODE:{mode}` |
@@ -1685,7 +1690,7 @@ agent 是这台机器上最大的常驻服务，也是最不需要 CPU 的那个
 > ⑤写操作的事前同意（秘书前置需求 ③ 的 agent 侧）——权限之后再加一道确定性判据：
 > 需确认的 scope（`CONSENT_SCOPES = {write.content}`）未获用户本轮消息明确确认 →
 > 产 `__ERROR__: 待确认[consent_required]` 帧、不调用工具；用错误帧形态是为了让 gate
-> 5a（错误帧 + 完成式声称 → fallback）自动生效，叙述侧说不成"已发布"。当前 70 个工具里
+> 5a（错误帧 + 完成式声称 → fallback）自动生效，叙述侧说不成"已发布"。当前 69 个工具里
 > 没有一个是 `write.content`，所以这条闸空转（等第一个写工具，声明表驱动、不用改代码）。
 > 本轮排查出一个**静默安全事故**并已修：`graph.py` 顶部一旦写 `from __future__ import
 > annotations`，注解变字符串 ⇒ langgraph 的 config 参数注入失效 ⇒ 节点内的断连/写操作检查
