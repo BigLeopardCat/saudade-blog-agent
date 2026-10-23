@@ -29,13 +29,11 @@ agent 包"来把它藏起来。`rag` 是三处里最低的一层（`agent/determ
 **纯函数**：只吃字符串、只吐字符串/字典，不碰 IO、不碰模型（tests/test_sections.py 据此
 秒级断言，含 note 19 的真实形状）。
 
-切分规则与 20260901 起的索引完全一致：只认 `#`/`##`/`###`（1-3 级），标题行本身
-不进 `text`；首个标题之前的内容归到 `section=文章标题`（`level=0`）。**不要把
-`#{1,3}` 放宽到 4-6 级**：索引侧的 chunk 边界一变，检索分数与 golden 全部跟着漂。
+切分支持围栏外的 1–6 级 Markdown 标题，标题行不进正文；首个标题之前
+的内容归到文章标题。索引用 outline 保留父标题路径、重复标题与空父节；旧渲染
+入口 split 继续提供节选兼容层。边界改变会影响排序，需重建索引并重跑标注集。
 
-**20261017：围栏代码块里的行不当标题**（见 `_fenced_flags`）。这一条改的**只是"哪一行
-算标题"**，上面那个 1-3 级口径一个字没动。为什么非改不可：`.gitignore` / shell / diff 的
-**示例内容整段住在 ``` 里**，而 `.gitignore` 的注释行就是 `# …`——与一级标题逐字同形。
+围栏代码块中的 `#` 注释不当标题；所有消费者共用 `_fenced_flags`。
 不认围栏时线上 note:16（Git 教程）被切成 11 个**全空**的节，节名是 gitignore 的注释
 （`# ========== 依赖管理 ==========`）；全语料代价是 **330 chunk 里 48 个空正文、
 长度中位数 69 字、`avgdl` 被压到 103** ⇒ BM25 的长度归一**系统性偏爱短碎片**，
@@ -61,8 +59,8 @@ from __future__ import annotations
 
 import re
 
-# 只认 1-3 级（与索引一致，见模块头注）
-_HEADING_RE = re.compile(r"^#{1,3}\s+(.+)$")
+# 围栏外的 1–6 级标题；索引与读取共用。
+_HEADING_RE = re.compile(r"^#{1,6}\s+(.+)$")
 
 # 围栏代码块（``` / ~~~，三个起；开栏行后面可以跟信息串，如 ```gitignore）
 _FENCE_OPEN_RE = re.compile(r"^[ \t]{0,3}(`{3,}|~{3,})")
@@ -112,7 +110,7 @@ def _fenced_flags(lines: list[str]) -> list[bool]:
 
 
 def _heading_hits(lines: list[str], fenced: list[bool]) -> list[tuple[int, re.Match]]:
-    """`(行号, 匹配)` 列表 —— 只认**围栏外**的 1-3 级标题。
+    """`(行号, 匹配)` 列表 —— 只认**围栏外**的 1–6 级标题。
 
     `split` 与 `_is_lossy` **共用这一把尺子**：两处各判一次的话，"正文里有几个标题行"
     与"切出几个 chunk"就按两套口径算，`_is_lossy` 会开始报假有损（或漏报真损）。
@@ -124,13 +122,12 @@ def _heading_hits(lines: list[str], fenced: list[bool]) -> list[tuple[int, re.Ma
 def split(content: str, title: str = "", shortcut: bool = True) -> list[dict]:
     """按 markdown 标题切节 → `[{"section", "text", "level"}]`。
 
-    shortcut=True（默认，= 索引侧既有行为）：正文 < 2000 字不切，整篇算一节
+    shortcut=True（兼容旧渲染调用）：正文 < 2000 字不切，整篇算一节
     （小节名取文章标题）——短文的标题结构没有检索价值，切开只会把同一篇拆成
     多个低分 chunk。**渲染侧与取回侧要 shortcut=False**：那两处关心的是"哪一段
     属于哪一节"，与文章长短无关。
 
-    **围栏代码块里的行不当标题**（20261017，见 `_fenced_flags`）：改的只是"哪一行算
-    标题"，`#{1,3}` 这个级别口径一个字没动（4-6 级仍不是节边界）。
+    围栏代码块里的行不当标题；索引侧使用保留路径与空父节的 outline。
     """
     text = content or ""
     if shortcut and len(text) < 2000:
@@ -155,6 +152,42 @@ def split(content: str, title: str = "", shortcut: bool = True) -> list[dict]:
         chunks.append({"section": cur_section, "text": "\n".join(cur),
                        "level": cur_level})
     return chunks
+
+
+def outline(content: str, title: str = "") -> list[dict]:
+    """Lossless section records, including empty parents and duplicate headings.
+
+    IDs are scoped to this document revision. All consumers use the same fenced
+    Markdown boundaries; paths preserve the context of otherwise empty parents.
+    """
+    lines = (content or "").split("\n")
+    heads = dict(_heading_hits(lines, _fenced_flags(lines)))
+    records: list[dict] = []
+    stack: list[tuple[int, str]] = []
+    body: list[str] = []
+    section, level = title, 0
+    path: list[str] = []
+
+    def append() -> None:
+        records.append({"section": section, "text": "\n".join(body), "level": level,
+                        "path": list(path), "section_id": f"s{len(records) + 1}"})
+
+    for i, line in enumerate(lines):
+        if i not in heads:
+            body.append(line)
+            continue
+        if body or level:
+            append()
+        section = heads[i].group(1)
+        level = len(line.strip()) - len(line.strip().lstrip("#"))
+        while stack and stack[-1][0] >= level:
+            stack.pop()
+        stack.append((level, section))
+        path = [name for _, name in stack]
+        body = []
+    if body or level:
+        append()
+    return records
 
 
 def headings(content: str) -> list[str]:
@@ -282,12 +315,13 @@ def pick(content: str, want: str, title: str = "") -> dict | None:
     chunks = [c for c in all_chunks if c["level"]]
     if not chunks:
         return None
-    for i, c in enumerate(chunks):        # ① 全称
-        if _norm(c["section"]) == w:
-            return _with_children(chunks, i, lossy)
-    for i, c in enumerate(chunks):        # ② 编号：want 是"9"或"9."都认
-        if _lead_num(c["section"]) and _lead_num(c["section"]) == _lead_num(w):
-            return _with_children(chunks, i, lossy)
+    for matches in (
+        [i for i, c in enumerate(chunks) if _norm(c["section"]) == w],
+        [i for i, c in enumerate(chunks) if _lead_num(w)
+         and _lead_num(c["section"]) == _lead_num(w)],
+    ):
+        if matches:
+            return _with_children(chunks, matches[0], lossy) if len(matches) == 1 else None
     hits = [i for i, c in enumerate(chunks) if w in _norm(c["section"])]
     return _with_children(chunks, hits[0], lossy) if len(hits) == 1 else None
 

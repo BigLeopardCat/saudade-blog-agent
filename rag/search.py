@@ -1,67 +1,9 @@
-"""RAG 检索管线（路线 B：检索只定位，解读走 get_article_detail 全文）。
+"""Article retrieval over complete, versioned public corpus snapshots.
 
-20260830 修复：get_article_detail 泛化 doc_type（note/talk/board/announcement 均可读全文），
-talk/board/announcement 无单条端点，从列表接口按 key 过滤（列表已带全文）——见 tools/base.py。
-
-设计（2026-08-30 边界定论）：
-- 检索粒度 = 小段落 chunk（markdown 标题切分，>2000 字才切）；读取粒度 = 全文。
-- 语料 = 线上可见文章（is_public=1 AND status!='draft'）——20260901 起检索池
-  只收文章（说说/留言/公告移除：碎碎念与混杂内容无语义判别力，混入放大幻觉，
-  见"最新留言"事故；它们走 list_talks/list_guestbook/get_announcements 数据工具）。
-  与前台可见性严格一致——agent 不应答出访客看不到的内容。
-- 词法 2/3-gram 子串匹配（recall_eval 实证：14 条 recall 用例 recall@3=1.00，
-  词法基线已打满当前语料）。**20261005 起词法仍是底座**：向量路（`rag/vector_index.py`）
-  是可选的第二路，由 `RAG_HYBRID_ENABLED` 拨；两路都在场才 RRF 融合，否则整条退回词法，
-  形状与分数语义与从前逐字节一致（见 `search()` 的三条硬规则）。
-- 存储 = 内存倒排（全量重建 <100ms，不做增量）；懒刷新（10 分钟 TTL）。**语料篇数不写在这里**
-  ——它是"会漂的量"（每发一篇文章就变），报数请读 `eval/recall_eval.py` 报告里的语料快照。
-- 返回候选 (type, id, title, section, score) 列表，不返回全文（路线 B 契约）。
-- **候选截断 = 相对断崖（20260920 批次 d 供给端）**：文档分口径不变（仍取「该文档最高
-  chunk 分」，见下），排名后丢弃 score < top1×α 的候选（α=`_CLIFF_RATIO`）。动机：
-  语料仅十来篇而工具默认 top_k=8 ⇒ 每次检索几乎倒回整个语料库，planner 实测很少读第 3 条
-  以后（62 次候选驱动读里 28 次是浪费）。**尺度无关是硬要求**：绝对噪声下限已实证无可用
-  阈值（20260916d/e 弃权闸三组探针分布重叠，任何绝对阈值都会误杀），故只做相对截断。
-  标定（22 query：13 正 + 9 噪声，20260920 实跑 recall_eval）：α≤0.25 时 recall@1/@3
-  与截断前**完全一致**（0.92/1.00，噪声 top-1 也一条不动），平均候选 5.45→3.50（top_k=8）、
-  4.50→3.36（top_k=5）；**α=0.35 起开始丢多答文档**（rag_ota_* 的 note:12/14/22 被裁掉
-  ⇒ recall@3 掉到 0.92）。取 0.25。
-- **断崖保底 top-K（20261011，在 α 之上再加一条结构性约束）**：断崖**只裁第 `_CLIFF_MIN_KEEP`
-  名之后的尾巴**，前 K 名（默认 3）任何情况都不动。为什么必须保底：旧形状是"整列按 top1×α
-  过滤"，它把「α 调好了」变成了对**语料当下形态**的依赖——一旦语料里出现一篇与某 query
-  同主题的强势文档，top1 抬高、floor 跟着抬高，**排在第 2/3 名的真答案被自己的断层切掉**，
-  而它和那条 query 一个字都没改。这不是假设：20261010 语料 12→13 篇（新增 note:62，
-  项目介绍文，正是这类强势文档）后，`rag_eval_system` 的 gold（note:19）在**断崖前**排第 2，
-  断崖后**整条从候选里消失**（hits 由 `['note:62','note:19','note:46']` 收成 `['note:62']`）
-  ——一条本可作答的 query 变成"检索不到"，而**没有任何判据会指认凶手是断崖**（当时是作者
-  手工比对两轮报告才定位的）。
-  20261011 同语料（13 篇）、同批 query 两形状实测：
-
-  | | 旧形状（整列过滤） | 保底 top-3 | 不截断 |
-  |---|---|---|---|
-  | recall@1 | 0.7692 | 0.7692 | 0.7692 |
-  | recall@3 / @5 | 0.9231 | **1.0000** | 1.0000 |
-  | MRR | 0.8333 | 0.8718 | — |
-  | 平均候选（top_k=5） | 3.45 | 3.77 | 4.50 |
-
-  **@1 那一格两形状相同**，别读错：丢 rank1 的那两条 query 是**语料长大带来的排序变化**
-  （note:62 在**断崖前**就排在 gold 前面），不是断崖干的——把两件事混成一件会去调 α，
-  而调 α 治不了排序。断崖**唯一**的破坏面是"把 gold 整条删掉"，保底正是冲它去的。
-  ⇒ 保底之后「断崖改变 recall@1/@3」在**结构上不可能**，20260920 那张"α≤0.25 与不截断
-  逐条一致"的**经验证书变成不变量**；锁它的地方两处：离线 `tests/test_cliff_min_keep.py`
-  （合成语料，CI 里跑）与夜间 `eval/cliff_probe.py`（真语料，有/无断崖两臂实测）。
-  ⚠️ **@1 从 0.9231 掉到 0.7692 这件事本文不解释也不假装已修**——它要动的是排序
-  （同上面"已知局限"那条，属检索表征问题），与截断无关。
-- **已知局限：短语巧合 × 长度归一（本批未修，勿重复尝试同方向）**：上述 α 调不动榜首——
-  query「博客架构 前后端端口 技术栈」的 top-1 仍是《Git从入门到入土》。真因是词法检索
-  本身：`.gitignore` 小节标题「主流技术栈」贡献 技术栈/技术/术栈 三个 n-gram，而这三个
-  在 10 篇语料里 df=1 ⇒ idf 最高；《架构文档》在 架构/后端/端口 上 tf 全面占优，却被
-  BM25 的长度归一压住。**20260920 实测三类改法均无效**（文档级 BM25 主分、覆盖率加权、
-  查询 span 归一——各自跑完 recall_eval 榜首不变，文档级还把噪声 top-1 整体改了位），
-  故本批**只做截断不改排序**，把这条作为已知 FAIL 留在 eval（`rag_arch_ports_real`）：
-  修它要动的是检索表征（语义检索 L1 或结构感知索引：代码块/标题行不计入证据），
-  不是打分参数。
-
-eval/recall_eval.py 直接 import 本模块的 search()——评测即线上实现。
+Index text preserves heading paths, chunks have bounded source ranges, and BM25
+uses total token counts consistently. Optional vector retrieval uses the same text.
+Failures retain the last complete snapshot for a bounded grace period and expose
+staleness; a failed page is never interpreted as an empty or complete corpus.
 """
 from __future__ import annotations
 
@@ -72,8 +14,12 @@ import threading
 import time
 
 from config.settings import settings
-from rag.sections import split as split_sections
+from rag.chunks import split as split_chunks
+from rag.corpus import corpus_revision
+from rag.corpus import fetch as fetch_corpus
+from rag.ranking import documents as rank_documents
 from rag.vector_index import (
+    chunk_text,
     corpus_fingerprint,
     degraded_reason,
     embed_query,
@@ -87,12 +33,14 @@ from rag.vector_index import (
 # 同名会把它盖掉——而那个是被 `resolve_title()` 调的（标题→id 锚点），盖掉的后果是它变成
 # 一个要参数的函数、一调就 TypeError。两件事都叫"预热"，但一个是重建词法索引、一个是补向量。
 from rag.vector_index import warm_async as warm_vectors
-from tools.base import _client
 
 logger = logging.getLogger(__name__)
 
 CJK = re.compile(r"[一-鿿]")
 GRAM = re.compile(r"[一-鿿]+|[a-zA-Z0-9_\.]+")
+
+BM25_K1 = 1.2
+BM25_B = 0.75
 
 REFRESH_TTL = 600.0  # 10 分钟懒刷新
 
@@ -100,12 +48,7 @@ REFRESH_TTL = 600.0  # 10 分钟懒刷新
 _CLIFF_RATIO = 0.25   # 相对断崖：第 _CLIFF_MIN_KEEP 名之后、低于 top1×0.25 的候选丢弃
 _CLIFF_MIN_KEEP = 3   # 保底：前 3 名永不参与断崖（20261011，理由见模块头注释"断崖保底"）
 
-# 语料拉取的翻页参数。见 _fetch_corpus 的说明：不传 page_size 会吃服务端默认 6 篇。
-CORPUS_PAGE_SIZE = 50
-CORPUS_PAGE_MAX = 40  # 兜底上限（50×40 = 2000 篇），防服务端异常时无限翻页
-
-# 语料源：Rust 公开接口（与前台可见性严格一致，agent 保持无 DB 依赖架构）
-#  - notes:    is_public=1 AND status!='draft'（前台可读的文章）
+# 语料由版本化公开接口提供；服务端复用前台详情的可见性谓词。
 # 20260901 语料净化：检索池只收文章——说说（碎碎念）语义判别力低、留言混杂，
 # 混入检索池只会放大无关候选 → 幻觉空间（"最新留言"事故实证：rag_search 返回
 # 混合候选，模型在 talk 候选上硬编 talkKey 31）。说说/留言/公告是"数据读取"
@@ -204,16 +147,8 @@ def tokenize(text: str) -> list[str]:
 
 
 def chunk_note(title: str, content: str) -> list[dict]:
-    """markdown 标题切 chunk；短文（<2000 字符）不切。返回 [{section, text}]。
-
-    20260920 起**只是 rag/sections.py 的转发**（多出的 `level` 键被下面的
-    `{**d, "section":…, "text":…}` 展开丢弃，索引行为逐字不变）：索引切片、候选里
-    的 `sections`、按节取回（get_article_detail(section=…)）必须是**同一套边界**，
-    各写一份的下场是"改了一边忘了另一边"——同一篇文章在检索里是 §9、在取回时
-    找不到 §9。切分规则与短文短路语义全部保留（含 <2000 不切、只认 1-3 级）。
-    """
-    return [{"section": c["section"], "text": c["text"]}
-            for c in split_sections(content, title, shortcut=True)]
+    """Bounded, heading-aware chunks; source ranges support selective reads."""
+    return split_chunks(title, content)
 
 
 # ── 本轮实际走了哪条路（20261005）────────────────────────────────────
@@ -258,6 +193,13 @@ class RagIndex:
 
     def __init__(self) -> None:
         self._lock = threading.Lock()
+        self._build_lock = threading.Lock()
+        self._last_attempt = 0.0
+        self._last_error: str | None = None
+        self._revision = ""
+        self._dirty = False
+        self._invalidations = 0
+        self._lengths: list[int] = []
         self._docs: list[dict] = []
         self._chunks: list[dict] = []      # {doc_idx, type, id, title, section, text}
         self._postings: dict[str, list[int]] = {}  # gram -> [chunk_idx]
@@ -268,25 +210,41 @@ class RagIndex:
 
     # ── 构建 ──────────────────────────────────────────────────────
 
-    def build(self) -> None:
+    def build(self) -> bool:
+        if not self._build_lock.acquire(blocking=False):
+            return False
+        self._last_attempt = time.time()
+        try:
+            self._build()
+            return True
+        except Exception as exc:
+            self._last_error = type(exc).__name__
+            raise
+        finally:
+            self._build_lock.release()
+
+    def _build(self) -> None:
+        invalidations = self._invalidations
         docs = self._fetch_corpus()
         chunks: list[dict] = []
         for d in docs:
             for c in chunk_note(d["title"], d["content"]):
-                chunks.append({**d, "section": c["section"], "text": c["text"]})
+                chunks.append({**d, **c})
 
         doc_tf: list[dict[str, int]] = []
         postings: dict[str, list[int]] = {}
         for ci, c in enumerate(chunks):
             tf: dict[str, int] = {}
-            for t in tokenize(c["title"] + "\n" + c["text"]):
+            for t in tokenize(chunk_text(c["title"], c["text"])):
                 tf[t] = tf.get(t, 0) + 1
             doc_tf.append(tf)
             for t in tf:
                 postings.setdefault(t, []).append(ci)
 
         n = len(chunks)
-        avgdl = sum(len(t) for t in doc_tf) / max(n, 1)
+        lengths = [sum(t.values()) for t in doc_tf]
+        avgdl = sum(lengths) / max(n, 1)
+        revision = corpus_revision(docs)
         df = {t: len(v) for t, v in postings.items()}
         idf = {t: math.log(1 + (n - f + 0.5) / (f + 0.5)) for t, f in df.items()}
 
@@ -294,46 +252,26 @@ class RagIndex:
             self._docs, self._chunks = docs, chunks
             self._doc_tf, self._postings = doc_tf, postings
             self._avgdl, self._idf = avgdl, idf
+            self._lengths, self._revision = lengths, revision
+            self._last_error = None
+            self._dirty = self._invalidations != invalidations
+            if self._dirty:
+                self._last_attempt = 0.0
             self._last_build = time.time()
         # 向量侧**不进 build()**：这是懒刷新的热路径（TTL 一到就被评测/对话触发），
-        # 而"快、不联网"是它必须保住的性质（eval 依赖它的确定性；联网会让 600s 刷新
-        # 变成偶发卡顿）。这里只踢一脚后台线程——开关关着时它立刻返回，一次网络都不发。
+        # 本方法只同步拉取语料、计算词法索引，不等待远端 embedding。
+        # 向量预热走后台；开关关着时不发 embedding 请求。
         warm_vectors(chunks)
 
     def _fetch_corpus(self) -> list[dict]:
-        from tools.base import _get  # _get 已含 API_BASE 前缀 + code==200 校验
+        from tools.base import _get
+        return fetch_corpus(_get)
 
-        docs: list[dict] = []
-        # 列表接口不返回正文（noteContent 为空），须逐篇拉全文。
-        # ⚠️ 必须显式翻页：`/notes` 不传 page_size 时吃服务端默认 6
-        # （src/routes/notes.rs `page_size.unwrap_or(6)`，page 默认 1）。20260830 起语料
-        # 实际只覆盖 6 篇——收了垃圾文 `13 TEST8`，却漏掉真文章
-        # `12 ESP32-S3 OTA 问题与解决记录`（同为公开文章，建图脚本走 pageSize=1000 不受影响）。
-        # 不硬编一个大 page_size：服务端 clamp(1,1000)，文章数早晚会越过它；
-        # 翻到"不足一页"为止，顺带用 seen 去重（防服务端排序抖动导致跨页重复）。
-        page = 1
-        seen: set = set()
-        while page <= CORPUS_PAGE_MAX:
-            batch = _get(f"/notes?page={page}&page_size={CORPUS_PAGE_SIZE}")
-            if not isinstance(batch, list) or not batch:
-                break
-            for it in batch:
-                key = it.get("noteKey")
-                if key is None or key in seen:
-                    continue
-                seen.add(key)
-                detail = _get(f"/notes/{key}") or {}
-                docs.append({"type": "note", "id": key,
-                             "title": it.get("noteTitle") or "",
-                             "content": detail.get("noteContent") or ""})
-            if len(batch) < CORPUS_PAGE_SIZE:
-                break
-            page += 1
-        if len(seen) >= CORPUS_PAGE_SIZE * CORPUS_PAGE_MAX:
-            logger.warning("语料翻页到达上限 %d 页，可能仍有未收录文章", CORPUS_PAGE_MAX)
-        logger.info("语料构建：%d 篇（翻页 %d 页）", len(docs), page)
-        # 20260901：语料只收文章（说说/留言/公告移除——检索池净化，见头部注释）
-        return docs
+    def status(self) -> dict:
+        with self._lock:
+            return {"revision": self._revision, "documents": len(self._docs),
+                    "stale": bool(self._last_error) or self.is_stale(),
+                    "error": self._last_error, "last_success": self._last_build}
 
     def docs_snapshot(self) -> list[dict]:
         """语料快照（[{type,id,title,content}]，浅拷贝列表）。索引没建好时为空列表。"""
@@ -342,7 +280,7 @@ class RagIndex:
 
     def is_stale(self) -> bool:
         """没建过、或超过 REFRESH_TTL 未重建。"""
-        return not self._docs or time.time() - self._last_build > REFRESH_TTL
+        return self._dirty or not self._last_build or time.time() - self._last_build > REFRESH_TTL
 
     # ── 查询 ──────────────────────────────────────────────────────
 
@@ -357,24 +295,25 @@ class RagIndex:
         （默认 True 就是唯一的线上形态）。
 
         20260917：此前两种失败都返回 []，工具层只能一律包成 empty(「检索无结果」)——
-        语料拉取失败会被 checker 记成「检索过、确实没有」的**事实**（外部审计指出）。
-        注意**不能**用「事先问一句 ready()」来判：索引是懒建的，冷启动时 chunks 为空
-        但完全可用，那样会误伤第一次检索。所以判据放在这里：建完之后还是空的才算不可用。
+        语料拉取失败会被 checker 记成「检索过、确实没有」的**事实**。
+        完整快照为空是正常结果；尚未成功构建、或旧快照超过宽限期才算不可用。
         """
-        if time.time() - self._last_build > REFRESH_TTL:
+        if self.is_stale() and time.time() - self._last_attempt > 30:
             try:
                 self.build()
             except Exception:
-                pass  # 重建失败用旧索引（语料拉取失败不该让检索崩溃）
+                logger.warning("Corpus refresh failed; retaining the last complete snapshot")
         with self._lock:
-            if not self._chunks:
-                # 建过（或刚试过）但语料仍为空 ⇒ 索引不可用，不是「没命中」
+            if not self._last_build or time.time() - self._last_build > REFRESH_TTL * 2:
                 return None
+            if not self._chunks:
+                return []
             chunks, doc_tf, postings, idf, avgdl = (
                 self._chunks, self._doc_tf, self._postings, self._idf, self._avgdl)
+            lengths, revision = self._lengths, self._revision
         # 疑问词先剔除（句法功能词非内容；不做会稀释实词权重，实证见 _QUERY_STOPWORDS），
         # 同义扩展后仍经同一剔除路径（否则 怎么 会经替换串溜回，见 20260905 模拟）
-        q_toks = [t for t in tokenize(_clean_query(query)) if t in postings]
+        q_toks = list(dict.fromkeys(t for t in tokenize(_clean_query(query)) if t in postings))
         # 扩展只加「语料里真有的 gram」（`t in postings`）——val 若是个语料里不存在的词，
         # 这一对就是空操作（判据里用负控钉住：换一个空词进来，结果必须与关臂一致）。
         if _EXPANSION_ENABLED:
@@ -383,6 +322,7 @@ class RagIndex:
                     q_toks += [
                         t for t in tokenize(_clean_query(query.replace(_pair["key"], _pair["val"])))
                         if t not in q_toks and t in postings]
+        q_toks = list(dict.fromkeys(q_toks))
         if not q_toks:
             return []
         # chunk 级 BM25 打分
@@ -390,26 +330,13 @@ class RagIndex:
         for t in q_toks:
             w = idf[t]
             for ci in postings[t]:
-                dl = sum(doc_tf[ci].values())
+                dl = lengths[ci]
                 tf = doc_tf[ci].get(t, 0)
-                scores[ci] = scores.get(ci, 0.0) + w * (tf * 1.2) / (
-                    tf + 1.2 * (1 - 0.75 + 0.75 * dl / max(avgdl, 1)))
-        # 文档级聚合：候选 = 文档（路线 B 契约：解读走 get_article_detail 全文），
+                scores[ci] = scores.get(ci, 0.0) + w * (tf * (BM25_K1 + 1)) / (
+                    tf + BM25_K1 * (1 - BM25_B + BM25_B * dl / max(avgdl, 1)))
+        # 文档级聚合：候选 = 文档（路线 B 契约：解读走 get_article_detail 正文范围），
         # 分数取该文档命中 chunk 的最高分，sections 汇总命中小节供定位
-        by_doc: dict[tuple[str, int], dict] = {}
-        for ci, score in sorted(scores.items(), key=lambda x: -x[1]):
-            c = chunks[ci]
-            key = (c["type"], c["id"])
-            agg = by_doc.get(key)
-            if agg is None:
-                by_doc[key] = {"type": c["type"], "id": c["id"],
-                               "title": c["title"], "score": score,
-                               "sections": [c["section"]]}
-            elif score > agg["score"]:
-                agg["score"], agg["sections"] = score, [c["section"]]
-            elif c["section"] not in agg["sections"]:
-                agg["sections"].append(c["section"])
-        ranked = sorted(by_doc.values(), key=lambda x: -x["score"])
+        ranked = rank_documents(chunks, scores, revision)
         # 相对断崖（20260920 批次 d，标定见模块头注释）：**第 _CLIFF_MIN_KEEP 名之后**、
         # 低于 top1×α 的候选丢弃。尺度无关是硬要求——绝对噪声下限已实证无可用阈值
         # （20260916d/e 弃权闸），勿复引入。
@@ -439,8 +366,8 @@ class RagIndex:
         三条硬规则（都不是风格问题，各自对应一种静默的错法）：
 
         1. **只有两路都在场才融合**。单路 RRF 与 BM25 不是同一套分数语义（≈0.016 vs
-           个位数）；混着回给下游，`deterministic_plan.py` 那条「只允许越读越高分」的闸会跨轮比
-           两套量级。所以降级必须**是同一个形状**：关开关 ≡ 向量不可用 ≡ 融合前，
+           个位数），跨查询或跨模式不能直接比较原始分数。降级保持词法结果的形状：
+           关开关 ≡ 向量不可用 ≡ 融合前，
            逐字节同今天（含 BM25 原分、原断崖、原候选数）。
         2. **不在 RRF 分数空间里再造断崖**。每路各自剪枝（词法路保留 `_CLIFF_RATIO`），
            RRF 只对并集重排序；把 0.25 照搬到量级 ≈0.016 的融合分上等于把候选清空。
@@ -457,6 +384,9 @@ class RagIndex:
             # 三件事在下游眼里必须分得开，否则"开关拨了但一次都没生效"永远看不见。
             _record(_mode_for(reason), reason, missing=miss)
             return lex
+        if lex and lex[0].get("corpus_revision") != vec[0].get("corpus_revision"):
+            _record("degraded", "corpus_changed", missing=miss)
+            return lex
         _record("hybrid", None, len(vec), miss)
         return rrf_fuse(lex, vec, _rrf_k(), top_k) or lex
 
@@ -472,6 +402,7 @@ class RagIndex:
             return [], (degraded_reason() if settings.rag_hybrid_enabled else None), 0
         with self._lock:
             chunks = list(self._chunks)
+            revision = self._revision
         store = get_store()
         store.load()        # 读一次 manifest（几百字节，签名没变就早退）：不读的话，本进程
                             # **第一次**检索必然报"还没有向量"——盘上明明是好的。读它顺带也
@@ -488,23 +419,8 @@ class RagIndex:
         if qv is None:
             return [], "query_embed_failed", len(store.missing())
         sims = view.similar(qv)
-        by_doc: dict[tuple[str, int], dict] = {}
-        for ci, score in sorted(enumerate(sims), key=lambda x: -x[1]):
-            if score <= 0.0:
-                # 余弦没有"弱相关"这一档：零向量（空 chunk / 嵌失败那条）与正交向量都是
-                # 0，而 RRF 会给任何上榜者 1/(k+rank)。已按降序排，第一个 ≤0 就是全部。
-                break
-            c = chunks[ci]
-            key = (c["type"], c["id"])
-            agg = by_doc.get(key)
-            if agg is None:
-                by_doc[key] = {"type": c["type"], "id": c["id"], "title": c["title"],
-                               "score": score, "sections": [c["section"]]}
-            elif score > agg["score"]:
-                agg["score"], agg["sections"] = score, [c["section"]]
-            elif c["section"] not in agg["sections"]:
-                agg["sections"].append(c["section"])
-        ranked = sorted(by_doc.values(), key=lambda x: -x["score"])[:max(1, top_k)]
+        ranked = rank_documents(chunks, {i:s for i, s in enumerate(sims) if s > 0},
+                                revision)[:max(1, top_k)]
         for r in ranked:
             r["score"] = round(r["score"], 4)
             r["sections"] = r["sections"][:2]
@@ -512,16 +428,30 @@ class RagIndex:
 
 
 _index: RagIndex | None = None
+_index_lock = threading.Lock()
 
 
 def get_index() -> RagIndex:
     global _index
-    if _index is None:
-        _index = RagIndex()
-    return _index
+    with _index_lock:
+        if _index is None:
+            _index = RagIndex()
+        return _index
 
 
-def search(query: str, top_k: int = 8, apply_cliff: bool = True) -> list[dict]:
+def invalidate_document(article_id: int, revision: str) -> None:
+    """An authoritative revision mismatch invalidates only a matching cached article."""
+    idx = get_index()
+    with idx._lock:
+        if not any(d["id"] == article_id and d.get("revision") == revision for d in idx._docs):
+            return
+        idx._dirty = True
+        idx._invalidations += 1
+        idx._last_attempt = 0.0
+    warm_async()
+
+
+def search(query: str, top_k: int = 8, apply_cliff: bool = True) -> list[dict] | None:
     """检索入口：返回候选列表 [{type, id, title, section, score}]，不含全文。
 
     `apply_cliff=False` 关掉词法路的相对断崖（`eval/cliff_probe.py` 的两臂用），**线上恒默认**。
@@ -591,8 +521,7 @@ def resolve_title(title: str) -> DocId | None:
 def warm() -> bool:
     """同步建好语料索引（启动预热、评测夹具、单测用）。失败返回 False 不抛。"""
     try:
-        get_index().build()
-        return True
+        return get_index().build()
     except Exception:
         logger.warning("语料预热失败：检索与锚点标题解析都会降级到旧/空索引",
                        exc_info=True)

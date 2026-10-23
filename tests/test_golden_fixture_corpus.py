@@ -274,8 +274,8 @@ def test_golden_fixture_corpus():
                 _SRV.kill()
             _err = (_SRV.stderr.read() or "") if _SRV.stderr else ""
             # 桩的访问日志是"这两步真的走了网络"的旁证（不是从内存里变出来的）
-            check("桩的访问日志里有列表请求与逐篇详情请求（两步路径真的走了）",
-                  "GET /api/public/notes?" in _err and "GET /api/public/notes/1" in _err,
+            check("桩的访问日志里有版本化语料请求（真实 HTTP 路径）",
+                  "GET /api/public/rag/corpus?" in _err,
                   f"日志 {len(_err)} 字节")
     print()
     if FAILS:

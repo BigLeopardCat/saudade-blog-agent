@@ -111,33 +111,41 @@ def test_site_handoff_preserves_original_state_and_config(monkeypatch):
 
 
 def test_article_read_runs_in_small_tool_loop(monkeypatch):
+    from tools.result import ok
+
     class ReadTool:
         name = "rag_search"
-
         def __init__(self):
             self.calls = []
-
         def invoke(self, args, config=None):
             self.calls.append((args, config))
-            return "文章 19：讨论 Python 装饰器"
+            return ok("1. type=note id=19 score=1 title=装饰器")
+
+    class DetailTool:
+        name = "get_article_detail"
+        def invoke(self, args, config=None):
+            data = {"noteId":19, "noteTitle":"装饰器", "noteContent":"函数包装示例正文"}
+            return ok(str(data), data=data)
 
     read = ReadTool()
     model = _Model([
         AIMessage(content="", tool_calls=[
-            {"name": "rag_search", "args": {"query": "装饰器"}, "id": "read_1"}]),
+            {"name":"rag_search", "args":{"query":"装饰器"}, "id":"read_1"}]),
+        AIMessage(content="", tool_calls=[
+            {"name":"get_article_detail", "args":{"article_id":19}, "id":"read_2"}]),
         AIMessage(content="博客文章 19 讨论了 Python 装饰器。"),
     ])
     monkeypatch.setattr("agent.runtime.hybrid.get_llm", lambda **_: model)
     legacy = _Legacy()
     config = _config()
-
-    events = list(HybridArm(legacy, {"rag_search": read}).stream(_state(), config))
-
-    assert len(model.calls) == 2
-    assert read.calls == [({"query": "装饰器"}, config)]
-    assert any(isinstance(m, ToolMessage) and "文章 19" in m.content
-               for m in model.calls[1])
-    assert events[1][1]["model"]["messages"][0].content.startswith("博客文章")
+    events = list(HybridArm(legacy, {"rag_search":read, "get_article_detail":DetailTool()})
+                  .stream(_state(), config))
+    assert len(model.calls) == 3
+    assert read.calls == [({"query":"装饰器"}, config)]
+    assert any(isinstance(m, ToolMessage) and "包装示例" in str(m.content)
+               for m in model.calls[2])
+    reply = next(e[1]["model"]["messages"][0].content for e in events if "model" in e[1])
+    assert reply.startswith("博客文章") and "/article/19" in reply
     assert not legacy.calls
 
 
