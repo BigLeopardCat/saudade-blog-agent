@@ -1,0 +1,48 @@
+{
+  "scope": "functional regression only; no retrieval-quality/performance score",
+  "model": "qwen3-embedding-0.6b-q8_0",
+  "profile": {
+    "schema_version": 1,
+    "model_revision": "GGUF:370f27d7550e0def9b39c1f16d3fbaa13aa67728/Q8_0/06507c7b42688469c4e7298b0a1e16deff06caf291cf0a5b278c308249c3e439",
+    "tokenizer_file": "qwen3-tokenizer.json",
+    "tokenizer_sha256": "def76fb086971c7867b829c23a26261e38d9d74e02139253b38aeb9df8b4b50a",
+    "max_tokens": 512,
+    "add_special_tokens": true,
+    "query_prefix": "Instruct: Given a web search query, retrieve relevant passages that answer the query\nQuery: ",
+    "document_prefix": "",
+    "pooling": "last",
+    "normalization": "L2"
+  },
+  "profile_signature": "048a1015c06be2eab6c25679b1d7be339df86a3f2b4d6be558c321142228fe30",
+  "source_sha256": "08c7711623bc9138c4c72d3b1826e538df21d49fa00fb10d569896bbd64b2886",
+  "source_characters": 1804,
+  "source_tokens_without_metadata": 1190,
+  "lexical_chunks": 2,
+  "vector_chunks": 4,
+  "embedding_input_tokens": [
+    512,
+    512,
+    416,
+    129
+  ],
+  "complete_source_coverage": true,
+  "tail_preserved": true,
+  "first_update": {
+    "fingerprint": "4b649b6d44d037668d44fe9deeff1261502759344ae93d31df900712133d434b",
+    "embedded": 4,
+    "reused": 0,
+    "api_calls": 4,
+    "missing": 0,
+    "dim": 1024,
+    "ok": true
+  },
+  "second_update": {
+    "skipped": "aligned",
+    "fingerprint": "4b649b6d44d037668d44fe9deeff1261502759344ae93d31df900712133d434b",
+    "embedded": 0,
+    "reused": 4,
+    "api_calls": 0
+  },
+  "query_dimension": 1024,
+  "code_sha256": "8b9217a91088b0114c0b2e0c8ef09e79c576ed02b6e59becff0a35a240e70b2f"
+}

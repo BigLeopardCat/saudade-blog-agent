@@ -18,6 +18,7 @@ from config.settings import settings
 from rag.chunks import split as split_chunks
 from rag.corpus import corpus_revision
 from rag.corpus import fetch as fetch_corpus
+from rag.embedding_inputs import InputProfileError, vector_chunks
 from rag.ranking import documents as rank_documents
 from rag.vector_index import (
     chunk_text,
@@ -210,6 +211,7 @@ class RagIndex:
         self._lengths: list[int] = []
         self._docs: list[dict] = []
         self._chunks: list[dict] = []      # {doc_idx, type, id, title, section, text}
+        self._vector_chunk_cache: tuple | None = None
         self._postings: dict[str, list[int]] = {}  # gram -> [chunk_idx]
         self._doc_tf: list[dict[str, int]] = []    # per-chunk term freq
         self._avgdl = 0.0
@@ -258,6 +260,7 @@ class RagIndex:
 
         with self._lock:
             self._docs, self._chunks = docs, chunks
+            self._vector_chunk_cache = None
             self._doc_tf, self._postings = doc_tf, postings
             self._avgdl, self._idf = avgdl, idf
             self._lengths, self._revision = lengths, revision
@@ -401,6 +404,17 @@ class RagIndex:
         _record("hybrid", None, len(vec), miss)
         return rrf_fuse(lex, vec, _rrf_k(), top_k) or lex
 
+    def _vector_chunks_for(self, chunks: list[dict], space) -> list[dict]:
+        with self._lock:
+            cached = self._vector_chunk_cache
+        if cached is not None and cached[0] is chunks and cached[1] == space:
+            return cached[2]
+        refined = vector_chunks(chunks)
+        with self._lock:
+            if self._chunks is chunks:
+                self._vector_chunk_cache = (chunks, space, refined)
+        return refined
+
     def _vector_ranked(self, query: str, top_k: int) -> tuple[list[dict], str | None, int]:
         """向量路候选（文档级取最高分，与词法路同构）。返回 (rows, 没融合的原因, 缺几条)。
 
@@ -412,13 +426,18 @@ class RagIndex:
             # 开关关着、或凭据没配全（`degraded_reason()` 分得清这两件事，见它自己的注）
             return [], (degraded_reason() if settings.rag_hybrid_enabled else None), 0
         with self._lock:
-            chunks = list(self._chunks)
+            chunks = self._chunks
             revision = self._revision
+        try:
+            space = space_from_settings()
+            chunks = self._vector_chunks_for(chunks, space)
+        except InputProfileError:
+            return [], "embedding_profile_error", 0
         store = get_store()
         store.load()        # 读一次 manifest（几百字节，签名没变就早退）：不读的话，本进程
                             # **第一次**检索必然报"还没有向量"——盘上明明是好的。读它顺带也
                             # 就是"别的 worker 刚更新过 ⇒ 这里换视图"的那一步。
-        view = store.view_for(corpus_fingerprint(space_from_settings(), chunks))
+        view = store.view_for(corpus_fingerprint(space, chunks))
         if view is None:
             warm_vectors(chunks)          # 后台补建/补齐；本轮不阻塞、不等它
             return [], degraded_reason() or "no_vectors", len(store.missing())
