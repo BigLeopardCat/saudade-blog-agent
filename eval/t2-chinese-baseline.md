@@ -3,6 +3,41 @@
 2026-10-23 的记录。本轮评测固定中文公开语料、真实模型和生产检索代码，不修改线上配置。
 这是开发回归与部署可行性验证，目标 4 核 4GB 服务器尚未测试。
 
+## 环境补充与目标机差异（2026-10-23，Asia/Shanghai）
+
+下表的开发机信息来自本机只读采集；生产机 CPU 来自用户提供的 `lscpu`，4GB 内存
+来自此前部署规划。生产机尚未远程探测，操作系统、实际可用内存、磁盘和运行负载待填。
+完整数值、采集时间和来源见 [环境记录](report/baseline_embedding_environments.json)。
+这是评测后的环境盘点，不能把当前内存/磁盘快照当作原始实验运行时的资源曲线。
+
+| 项目 | 开发验证机（本地采集） | 目标生产机（用户提供 / 待核验） |
+|---|---|---|
+| 架构 / 虚拟化 | x86_64 / KVM | x86_64 / KVM |
+| CPU 型号 | Xeon E5-2695 v2 @ 2.40GHz | Xeon Platinum 8255C @ 2.50GHz |
+| vCPU / NUMA | 2 / 1 节点 | 4 / 1 节点 |
+| 来宾 CPU 拓扑 | 2 socket × 1 core × 1 thread | 1 socket × 4 core × 1 thread |
+| 相关指令集 | AVX；未暴露 AVX2、AVX-512、VNNI | AVX2、AVX512F/DQ/BW/VL、AVX512_VNNI |
+| BF16 / AMX 指令 | 未暴露 | 提供的 flags 未暴露 AVX512_BF16 / AMX |
+| L1d / L1i（汇总） | 各 64 KiB | 各 128 KiB |
+| L2 / L3（汇总） | 8 MiB / 32 MiB | 16 MiB / 35.8 MiB |
+| 内存 | `free -m` 口径约 2,468 MiB | 规划 4GB，实际 MemTotal / MemAvailable 待采集 |
+| Swap | 约 3,327 MiB，盘点时存在占用 | 是否配置及是否发生换页待测 |
+| 系统 / 内核 | Ubuntu 24.04.3 LTS / 6.8.0-147-generic | 未提供 |
+| Python / systemd / uv | 3.12.3 / 255 / 0.9.18 | 待采集；按部署手册核对最低要求 |
+| 相关依赖 | tokenizers 0.22.2、openai 2.44.0、ir-measures 0.4.3、pyarrow 26.0.0 | 以锁文件安装；生产推理不需要 rag-data extra |
+| 文件系统 | 约 43GiB，总体剩余约 8.8GiB，仅盘点快照 | 剩余空间与模型/索引缓存目录待采集 |
+| 推理范围 / 负载 | CPU embedding，开发负载未隔离 | 按 CPU embedding 规划；GPU 信息未提供，需测与业务共存 |
+
+socket/cache 数值均为虚拟机上报，不能推定底层独占物理资源。生产机暴露更丰富的 SIMD
+能力，值得测 AVX-512/VNNI 后端；不能按 vCPU 或 GHz 比例推算延迟，也不能假设 BF16
+一定比 FP32 快。Swap 占用不等于当前正在换页，目标机需记录 `vmstat` 的 si/so。
+
+本轮实际引擎仅为 llama.cpp b11829。**TEI CPU、vLLM CPU、ONNX/OpenVINO 均未在这两台
+机器上完成本项目的模型对照**，不能把候选方案写成已经部署或性能达标。
+后续保留 llama.cpp 基线，优先用官方 BGE 权重评测 TEI CPU；vLLM 为可选 CPU pooling
+对照，API 保留。选型依据、缓存区别、迁移步骤及可填写的验收表见
+[生产调试手册 §7–§8](../docs/rag-production-debug.md#7-引擎候选与缓存边界)。
+
 ## 数据来源与抽样
 
 来源 [MTEB T2Retrieval](https://huggingface.co/datasets/mteb/T2Retrieval)，固定 revision
@@ -69,7 +104,7 @@ BGE GGUF 的 tokenizer 默认大小写/重音设置需按部署模板覆盖，�
 | BGE F16 + BM25 RRF | 0.9434 | 0.9343 |
 | BGE Q8 + BM25 RRF | 0.9438 | 0.9343 |
 
-Qwen 在当前旧 CPU 处理长输入耗时过高，未完成不限长桶；没有伪造该模型的长文成绩。
+Qwen 在当前旧 CPU 处理长输入耗时过高，未完成不限长桶，因此不列其长文成绩。
 不根据 24 查询中约 0.03 的 nDCG 差断言 Qwen 显著优于 BGE；F16/Q8 的小差异也不能
 当作量化提升质量。RRF 两桶均弱于纯向量，说明“融合必然更好”在本实验不成立。
 这轮不调 RRF 权重，不把 dev 成绩当测试集优化；默认 hybrid 开关继续关闭，生产只做可回退调试。
