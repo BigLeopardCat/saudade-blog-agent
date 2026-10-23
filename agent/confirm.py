@@ -51,7 +51,10 @@ def _b64e(raw: bytes) -> str:
 
 def _b64d(text: str) -> bytes:
     pad = "=" * (-len(text) % 4)
-    return base64.urlsafe_b64decode(text + pad)
+    raw = base64.b64decode(text + pad, altchars=b"-_", validate=True)
+    if _b64e(raw) != text:
+        raise ValueError("Non-canonical confirmation encoding")
+    return raw
 
 
 def invalid_trace_meta(uid: int, conv_id, token_len: int) -> dict:
