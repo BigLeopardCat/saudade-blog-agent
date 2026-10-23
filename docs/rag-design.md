@@ -114,6 +114,8 @@ readOffset、nextOffset、totalChars、readComplete、source 和小节 ID。
 宿主包含 rag_corpus 单元测试和 TEST_PG_URL 指向的一次性 PG 集成测试。
 真实回答质量与 embedding 收益需要真实模型凭据，不能用桩结果冒充。
 
+固定离线检索评测及外部模型对照入口见 [固定语料评测](../eval/offline-rag.md)。
+
 ## 9. 设计依据
 
 - [Lucene BM25Similarity](https://lucene.apache.org/core/9_9_0/core/org/apache/lucene/search/similarities/BM25Similarity.html)：平均长度采用总词频/文档数。
