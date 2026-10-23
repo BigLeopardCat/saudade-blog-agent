@@ -228,3 +228,95 @@ def test_stream_cancels_host_pending_and_routes_revoked_card_after_runtime_switc
                if isinstance(frame, AIMessageChunk))
     assert not any(str(frame).startswith("__EXEC__:") for frame in replay)
     assert all(request.method == "GET" for request in site["requests"])
+
+
+def test_button_cancel_is_idempotent_and_rejects_later_approval(waiting, site):
+    from agent.runtime.confirmation import cancel
+
+    graph, proposal, _ = waiting
+    token = proposal.execution["pending_confirm"]["token"]
+    grant = confirm.verify(token, 7, 42)
+    result = cancel(graph, grant, config())
+    assert result["cancelled"] is True
+    assert cancel(graph, grant, config()) == result
+    assert graph.get_state(config()).values["pending_action"] is None
+    replay = transactions.execute(grant, config(), graph.checkpointer)
+    assert replay["receipts"] == [] and "撤销" in replay["reply"]
+    assert all(request.method == "GET" for request in site["requests"])
+    assert [op["value"] for op in proposal.execution["pending_confirm"]["opts"]] == ["yes", "no"]
+
+
+@pytest.mark.parametrize("status", ["intent", "done"])
+def test_button_cancel_cannot_claim_a_started_write_was_cancelled(waiting, status):
+    from agent.runtime.confirmation import cancel
+
+    graph, proposal, ledger = waiting
+    grant = confirm.verify(proposal.execution["pending_confirm"]["token"], 7, 42)
+    name, args = transactions.validate(grant, config())
+    key = writes.operation_key(grant, name, args)
+    ledger.claim(key, name, grant["jti"])
+    if status == "done":
+        ledger.finish(key, base.ToolResult("已收藏", "ok", {}))
+    assert cancel(HybridArm(graph), grant, config())["cancelled"] is False
+    assert graph.get_state(config()).values["pending_confirm"] is not None
+
+
+def test_stale_button_cancel_preserves_replacement(waiting, monkeypatch, site):
+    from agent.runtime.confirmation import cancel
+
+    graph, proposal, _ = waiting
+    grant = confirm.verify(proposal.execution["pending_confirm"]["token"], 7, 42)
+    original = base._get
+    monkeypatch.setattr(base, "_get", lambda path, **kw: (
+        {"noteId": 20, "noteTitle": "另一篇真实文章"} if path == "/notes/20"
+        else original(path, **kw)))
+    list(run(graph, Model("prepare_favorite_change", {"action": "add", "article_id": 20}),
+             monkeypatch, "换成20"))
+    expected = graph.get_state(config()).values["pending_confirm"]
+    assert cancel(graph, grant, config())["cancelled"] is True
+    assert graph.get_state(config()).values["pending_confirm"] == expected
+
+
+def test_cancellation_api_checks_signed_identity_and_never_calls_a_model(waiting, monkeypatch):
+    from contextlib import closing
+
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    import server
+    from agent.approval_api import router
+
+    graph, proposal, ledger = waiting
+    token = proposal.execution["pending_confirm"]["token"]
+    monkeypatch.setattr(server, "_agent", graph)
+    monkeypatch.setattr(server.settings, "agent_require_assertion", True)
+    monkeypatch.setattr(server, "_verify_assertion_claims", lambda tok: (
+        {"uid": 7, "role": "user"} if tok == "fixture" else None))
+
+    class Store:
+        def claim(self, *args, **kwargs):
+            with closing(idem.Ledger(ledger.path)) as connection:
+                return connection.claim(*args, **kwargs)
+
+        def finish(self, *args):
+            with closing(idem.Ledger(ledger.path)) as connection:
+                return connection.finish(*args)
+
+    monkeypatch.setattr(writes, "ledger_for", lambda saver: Store())
+    app = FastAPI()
+    app.include_router(router(lambda: server._agent, server._resolve_principal))
+    with TestClient(app) as client:
+        body = {"user_id": 7, "conversation_id": 42, "token": token}
+        assert client.post("/confirmation/cancel", json=body).status_code == 401
+        headers = {"X-Agent-Assertion": "fixture"}
+        for change in ({"conversation_id": 43}, {"token": token + "x"}):
+            assert client.post("/confirmation/cancel", json={**body, **change},
+                               headers=headers).status_code == 403
+        for _ in range(2):
+            response = client.post("/confirmation/cancel", json=body, headers=headers)
+            assert response.status_code == 200 and response.json()["cancelled"] is True
+
+
+def test_unknown_executor_cannot_enter_legacy_planner():
+    with pytest.raises(ValueError, match="执行入口"):
+        confirmed_runtime(create_agent(), {"executor": "unknown"})

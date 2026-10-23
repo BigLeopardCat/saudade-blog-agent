@@ -41,9 +41,8 @@ def _target(article_id, favorite):
 def _confirmation(principal, cid, workflow, spec, target):
     specs, notes = [spec], {spec["args"]["article_id"]: target}
     question = adminops_confirm.render_confirm_question(specs, notes=notes)
-    reply = adminops_confirm.render_confirm_text(specs, notes=notes)
     return proposal(principal, cid, workflow, spec, executor="favorites",
-                    question=question, reply=reply,
+                    question=question,
                     target=adminops_confirm.render_action_lines(specs, notes=notes))
 
 

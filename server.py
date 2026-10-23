@@ -43,6 +43,7 @@ from agent import (
 )
 from agent.action_text import tool_action_text
 from agent.agent import create_agent
+from agent.approval_api import router as approval_router
 from agent.factblock import (  # 动作事实块（D3）
     action_facts,
     compose,
@@ -162,7 +163,7 @@ MAX_SHORT_FIELD_CHARS = 500     # current_url / page_title
 # 确认令牌：base64url(json) + 签名，签名体里带**已实例化的全部参数**（标签名/标签
 # 数组都在里面）——500 字在"建二级标签 + 长名字"时会被顶到。给足额度（令牌本身
 # 只是 HMAC 材料，不进 prompt、不落库），形状校验交给 confirm.verify（fail-closed）。
-MAX_CONFIRM_TOKEN_CHARS = 4000
+MAX_CONFIRM_TOKEN_CHARS = confirm.MAX_TOKEN_CHARS
 # 上一轮执行过的工具名（20260929 批 F1'）：只是**判定输入**（"上一轮读过审核队列吗"），
 # 不进 prompt。Rust 侧从本会话最近 8 条回执去重后给出，上限取 40 是给"旧 Rust 忘了
 # 去重"留余量——超出即截断，最坏结果是那一条结构化判据落空、退回散文判据（fail-open）。
@@ -588,6 +589,9 @@ def _resolve_principal(request: Request, body_uid: int) -> Principal:
     if token:
         logger.warning("[auth] 身份断言验签失败，回退信任 body.user_id=%s", body_uid)
     return Principal(uid=body_uid, role=None, source=SOURCE_BODY)
+
+
+app.include_router(approval_router(lambda: _agent, _resolve_principal))
 
 
 def _resolve_user_id(request: Request, body_uid: int) -> int:
@@ -2609,24 +2613,7 @@ async def health():
 
 @app.delete("/checkpoint/{conversation_id}")
 async def checkpoint_delete(conversation_id: str, request: Request, uid: int = 0):
-    """删会话时清掉那个会话的 checkpoint（**级联清理**，批 7 的跨仓契约之一半）。
-
-    ⚠️ **另一半在父仓** `src/routes/conversation.rs` 的 `DELETE /api/chat/conversations/:id`
-    ——本仓没有"会话被删了"这个事件源，只能出钩子。父仓没接上时这个端点**永远不会被
-    调到**，症状是"删了会话、checkpoint 还躺在库里"（`tests/test_checkpoint_cascade.py`
-    有一条父仓守卫盯它，`SAUDADE_REQUIRE_PARENT=1` 时父仓不在场就红）。
-
-    **身份（20261020 安全审计 SAU-006）**：这一族此前**一格鉴权都没有**——同文件里
-    `/chat`、`/review`、`/graph/rebuild*` 全都有，只有它裸着，而它做的是**不可逆**的
-    上下文丢失（删掉的那份正文没有任何读取路径）。调用方只有父仓 Rust 一处、它持有
-    `JWT_SECRET` ⇒ 复用现成的服务间断言，不新开一套鉴权（`uid` 是调用方自报的
-    发起人，**身份以签名为准**，见 `_resolve_principal`）。
-
-    `deleted` 恒是**"删完读回来确认"**的结果，不是"没抛异常"；`false` 时 `why` 点名是
-    哪一条（`no_saver` / `bad_conversation_id` / `still_readable`）。理由见
-    `agent/checkpoint.py::delete_thread`——一个恒不生效的删除与真删除**长得一模一样**，
-    所以这一格必须是可读的事实。
-    """
+    """Delete checkpoint state under the authenticated host cleanup protocol."""
     principal = _resolve_principal(request, uid)
     saver = checkpoint.live_saver(_agent)
     if saver is None:

@@ -113,6 +113,7 @@ flowchart LR
 │   ├── principal.py           # ★ 调用者身份：Principal(uid, role, source)——身份的唯一构造点（docs/identity-and-permissions.md）
 │   ├── authz.py               # ★ 权限模型：scope 词汇表 + 工具→scope 声明表 + 角色→授予表 + 唯一判据 check()；默认 shadow 只记不拦
 │   ├── confirm.py             # ★ 写操作确认令牌：无状态 HMAC（TTL 600s，多 worker 安全）；不落库、不落用户消息
+│   ├── approval_api.py        # 验签后的确认撤销 API，不创建聊天轮或调用模型
 │   ├── runtime_probe.py               # 运行时可观测判定的**纯逻辑**：/version 构建身份、/ready 就绪、/health 那格 checkpoint 后端
 │   │
 │   ├── 【侧任务】

@@ -52,26 +52,8 @@
             askOther, askOtherInput, askOtherSend } = ctx.dom;
     const scrollToBottom = engine.scrollToBottom;
     const broadcast = engine.broadcast;
-    // ── 通用询问卡片（20260921，写操作确认）────────────────────────────────
-    // agent 在"需要用户授权/二次确认"时随回复发一条 __CONFIRM__ 帧：问题文本 +
-    // N 个选项 + 一个待办令牌。卡片渲染在**对话流里**（#chat-ask 是 .chat-messages
-    // 的末位子节点，夹在问句气泡与结果气泡之间）。用户点「确定」→ 发一条**隐藏请求**
-    // （sendMessage 的 silent 模式：不起用户气泡、不进历史——它代表一次点击而不是
-    // 一条发言；用户原话"会被认为是再次请求"就是这个毛病）；点「取消」→ 纯前端收起，
-    // **不发任何请求**（什么都没发生，令牌自然过期）。
-    // 卡片只在发起该轮的那个标签页出现（帧是连接私有的）。
-    //
-    // ⚠️ 点按钮的实际处置（handleAskChoice）**必须定义在 init 里**、不能放在这一层：
-    //    它要调 sendMessage，而 sendMessage 是 init 的局部 const——放在这一层会
-    //    `ReferenceError: sendMessage is not defined`（前端错误上报 20260921 18:37 抓到），
-    //    点击回调里抛错 ⇒ 请求没发出、界面也没任何提示，用户看到的就是"点了确定，
-    //    轮次像被截断"。这类作用域错误只有真点一次才暴露，离线测试与探针都碰不到。
-    // 确认卡片链路的静默失败上报（20260923）：这一族的失败形态全都是"屏幕上看不
-    // 出来"——帧到了但卡片没了、点了没反应、待办被时序吞掉。它们此前一律静默
-    // return，只能靠用户截图 + 逐跳取证（20260923 那次查了四跳：agent 帧齐 → Rust
-    // 真转发 → 真前端模块能把真帧渲染成卡片 → 被 reconcileDOM 的孤儿清理删掉）。
-    // 走看板娘既有的上报链（window.__reportError → POST /api/monitor/log）。
-    // **绝不把令牌写进上报**（它是一次同意的唯一凭据）。
+    // Cards carry signed operations. Approval, revocation and replay are settled
+    // by the server; tokens must never enter logs or monitoring payloads.
     const reportConfirm = (why) => {
       try {
         if (typeof window.__reportError === 'function') {
@@ -154,7 +136,7 @@
       try {
         localStorage.setItem(k, JSON.stringify({
           id: ask.id || '', q: ask.q || '', opts: ask.opts || [],
-          token: ask.token || '', exp: ask.exp || 0,
+          token: ask.token || '', exp: ask.exp || 0, replay_safe: ask.replay_safe === true,
         }));
       } catch (e) {/* 存不下（隐私模式/配额满）：这一轮照常弹，只是刷新后不回来 */}
     };
@@ -240,7 +222,15 @@
       syncAsk();
       setAskQuestion(ask.q, '（上一次没发出去：' + why + '，可以再点一次）');
     };
-    const askUnknown = (why) => {
+    const askUnknown = (why, ask) => {
+      if (ask && ask.replay_safe === true) {
+        ctx.state.pendingAsk = ask;
+        askBox.dataset.askState = '';
+        syncAsk();
+        saveAsk(ask);
+        setAskQuestion(ask.q, '未收到执行结果。可再次确定以重取原操作结果；不会重复执行。');
+        return;
+      }
       if (!askBox || !askBox.classList.contains('active')) return;
       ctx.state.pendingAsk = null;    // 不重新放行：请求发出去过，不能再签一次字
       reportConfirm('点了确定之后本轮以失败收尾（' + why + '）——卡片按"不确定"结算，不再放行重试');
@@ -249,7 +239,7 @@
     const hideAsk = () => {                // 未点击的收场（用户改口打字说了别的）
       const shown = askBox && askBox.classList.contains('active');
       ctx.state.pendingAsk = null;
-      if (shown) askSettle('已取消', undefined, 'cancel');
+      if (shown) askSettle('已收起卡片；这不会撤销操作。', undefined, 'dismiss');
       else if (askBtns) askBtns.innerHTML = '';
     };
     // ── 改口（20261006）：卡上那枚「其他（我来说）」────────────────────────
@@ -805,7 +795,8 @@
           if (silent && typeof opts.onDropped === 'function') opts.onDropped('此刻有轮次在跑');
           return;
         }
-        // 用户选择"直接说话"而不是点按钮：挂起的确认作废（否则它日后突然生效）
+        // A new chat message dismisses the UI; only the server can revoke an operation.
+        if (ctx.state.approvalBusy) return;
         if (!silent && ctx.state.pendingAsk) hideAsk();
 
         // 上一次被主人打断的那条：他既没重发也没编辑，直接说了下一句 ⇒ **到这里才丢**
@@ -1635,7 +1626,7 @@
           if (ctx.state.confirmRound) {
             const cr = ctx.state.confirmRound;
             ctx.state.confirmRound = null;
-            if (cr.failed) askUnknown(cr.failed);
+            if (cr.failed) askUnknown(cr.failed, cr.ask);
             else askSettle('已确认，结果见下方回复', undefined, 'ok');
           }
           // 流式中被推迟的 DB 拉取在此补拉（storage 事件可能在流中到达）
@@ -2354,48 +2345,55 @@
         resizeInput();
         sendMessage();
       };
-      // ── 通用询问卡片（20260921）：agent 需要用户输入（写操作授权/二次确认）时弹 ──
-      // 按钮按帧里的 opts 动态生成（本轮固定 确定/取消；将来接别的用途不用改协议）。
-      // 事件用委托——按钮是动态建的。处置函数定义在此处（init 内层）而不是模块
-      // 工厂层：它要调 sendMessage，而 sendMessage 是 init 的局部 const。
+      const cancelAsk = async (ask) => {
+        const conv = ctx.state.conv;
+        ctx.state.approvalBusy = true;
+        ctx.state.pendingAsk = null;
+        askSettle('撤销中…', 'pending', 'cancelling');
+        saveAsk(ask);
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), 12000);
+        let failureNote = '未能确认撤销结果，请重试；当前不能视为已取消。';
+        try {
+          const response = await fetch('/api/chat/confirmation/cancel', {
+            method: 'POST', signal: controller.signal,
+            headers: { 'Content-Type': 'application/json',
+              'Authorization': 'Bearer ' + localStorage.getItem('tokenKey') },
+            body: JSON.stringify({ conversation_id: conv, token: ask.token }),
+          });
+          const body = await response.json();
+          if (!response.ok || body.cancelled !== true) {
+            failureNote = typeof body.detail === 'string' ? body.detail
+              : (typeof body.reply === 'string' ? body.reply : failureNote);
+            throw new Error('revocation_unverified');
+          }
+          dropAsk(conv);
+          if (ctx.state.conv === conv && askBox.dataset.askToken === ask.token) {
+            askSettle('已撤销，未执行改动', undefined, 'cancel');
+          }
+        } catch (error) {
+          if (ctx.state.conv === conv && askBox.dataset.askToken === ask.token) {
+            ctx.state.pendingAsk = ask;
+            askBox.dataset.askState = '';
+            syncAsk();
+            setAskQuestion(ask.q, failureNote);
+          }
+        } finally {
+          clearTimeout(timer);
+          ctx.state.approvalBusy = false;
+        }
+      };
       const handleAskChoice = (value) => {
         const ask = ctx.state.pendingAsk;
-        if (!ask) return;
-        // **卡片内改口（20261006）**：不结算、不发任何请求，只把输入行露出来，卡片
-        // 保持 live（主人还能改主意去点确定或取消）。必须排在下面那两个出口**之前**
-        // ——`other` 既不是 `'no'` 也不是 `yes`/`pick:<i>`，漏下去就会被当成一次确认：
-        // 服务端 `confirm.narrow` 对认不出的取值 fail-closed（零执行），而卡片已经
-        // 写成「确认中…」⇒ 屏幕上看不出异常、系统里一个字节都没动。
-        // **这一支刻意不报 click**：点开输入框不是"对这张卡做了结论"，真正的点击是
-        // 提交那一刻（submitAskOther 里报）。这里报一条会变成 click=2/settle=1，
-        // 而对账把"点了却没有任何结论"读成线索（eval/trace_reconcile.py）——一条
-        // 由正常操作造出来的假线索，比不报更难查。
-        if (value === 'other') {
-          revealAskOther();
-          return;
-        }
-        // 链路第三跳：用户**真的点了**（此前只有被忙守卫挡下才留痕，"点了但什么都没
-        // 发生"与"压根没点"在日志里分不开）。放在最前面：这一次点击本身就是事实。
+        if (!ask || ctx.state.approvalBusy) return;
+        if (value === 'other') { revealAskOther(); return; }
         reportAskStage('click', { id: String(ask.id || ''), value });
-        // 忙判据与 sendMessage 的两条守卫**同源**（20260924）：此前这里只挡
-        // isSending，跨窗远端轮（remoteRounds 非空）漏在外面——那种时刻点确定，
-        // sendMessage 会把它静默丢掉，而卡片已经写上了"已确认"。宁可在这里挡住
-        // 并留痕（卡片保持可点，收尾后用户自己再点一次），也不要一次假确认。
         if (ctx.state.isSending || Object.keys(ctx.state.remoteRounds || {}).length) {
-          reportConfirm('点了确定，但此刻有轮次在跑（本窗发送中/别的窗口回复中）——卡片保留，待收尾后再点');
+          reportConfirm('当前仍有请求在处理，卡片保留，待收尾后再操作');
           return;
         }
-        ctx.state.pendingAsk = null;       // 一次点击只兑现一次
-        // **只有「取消」是取消**（20260929 批 F）：旧判据是「不等于 yes 就算取消」。一次点头
-        // 办 N 件之后卡上多了「只办第 i 件」，那些按钮的值是 `pick:<i>`——沿用旧判据会把
-        // 每一次挑选都当成取消（点「只办 1」⇒ 卡片写「已取消」、系统一件都不办，而主人
-        // 以为自己办了一件）。判据因此改到"认得出是取消"这一侧：取消值只有 `'no'`，
-        // 其余值（yes / pick:<i>）一律进隐藏请求；认不出的值由服务端 `confirm.narrow`
-        // fail-closed 拒掉（越界/读不懂 ⇒ 零执行 + 如实告知），前端不替它做半套解释。
-        if (value === 'no') {              // 取消：零请求零副作用
-          askSettle('已取消', undefined, 'cancel');
-          return;
-        }
+        if (value === 'no') { cancelAsk(ask); return; }
+        ctx.state.pendingAsk = null;
         // 令牌已经过期（帧里带了 exp）⇒ 本地上账、**不发这一跳**。到期定时器在
         // 后台标签页里会被浏览器节流（几十秒到几分钟才跑一次），所以"按钮还在"
         // 不等于"令牌还有效"；不挡这一下，服务端验签必拒、回一句失效文案，而卡片
@@ -2408,6 +2406,7 @@
         // 是点击那一刻的乐观文本、没有任何回滚（20260924 事故：卡片说已确认，系统里
         // 零执行）。真实结论由轮次收尾给出，另有到期定时器兜底。
         askSettle('确认中…', 'pending');
+        if (ask.replay_safe === true) saveAsk(ask);
         // 隐藏确认请求：不进历史、不起气泡。令牌是唯一凭据（agent 侧验签），
         // 合成 message 只作为"当前这条用户输入"喂给叙述层（服务端不落库）。
         // onDropped = 这一跳根本没发出去（忙守卫/建会话失败）⇒ 回滚成可重试。

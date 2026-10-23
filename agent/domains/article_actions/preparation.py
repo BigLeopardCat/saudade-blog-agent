@@ -61,7 +61,6 @@ def prepare_article_state(
         executor="article_state",
         question=target + "？",
         target=target,
-        reply=target + "。确认后才会执行。",
     )
 
 

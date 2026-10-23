@@ -107,7 +107,6 @@ def prepare_moderation_change(
         executor="moderation",
         question=question,
         target=question,
-        reply=question,
     )
 
 
