@@ -41,12 +41,6 @@ import httpx
 from langchain_core.runnables.config import RunnableConfig
 from langchain_core.tools import tool
 
-# 文章分节（20261005 从 `agent/sections.py` 搬到 `rag/`，见该模块头注）：纯函数、只 import `re`，
-# 三处共用（本模块的按节取回 / `rag/search.py` 的索引切片 / `agent/prompt_context.py` 的帧节选）。
-# **提到模块顶部**——它原先住在 `agent` 包里，只能写成函数内惰性导入（"别让 tools 层启动即拉
-# agent 包"），而那个包一导就是 langgraph 全家（实测冷启动 1.69s）。
-# 20261018：这一行连同那段理由从 `tools/base.py` 搬过来（那边现在一个调用点都没有）。
-from rag import sections as _text_sections
 from tools import base as _base
 from tools.base import API_BASE, _own_get
 from tools.result import (
@@ -224,56 +218,9 @@ def search_notes(keyword: Annotated[str, "搜索关键词"]) -> str:
         logger.error("Search failed: %s", exc)
         return unavailable(f"搜索服务暂时不可用（{type(exc).__name__}），请稍后再试")
 
-def _read_section(data: dict, article_id, want: str) -> ToolResult:
-    """按小节取回文章片段（get_article_detail 的 section 分支，20260920）。
-
-    返回仍是 **Python repr 的 dict**（与全文分支同形），两个键不能少：
-      - `noteTitle`：`agent/deterministic_plan.py::_doc_title` 从 repr 里正则抠它做跨轮
-        指代锚点（"读取文章 19《架构文档》"），换掉键名会让执行记忆只剩 id；
-      - `noteId`/`sectionText`：planner 的"未展开小节"清单要照抄这个 id 再读一次。
-    取不到小节时**不返回空**：把候选小节名列出来才是可行动的（模型改一次指称即可），
-    说"没找到"而不给候选，等于让它再赌一次。
-
-    **读到了说读到了、没读到说没读到**（20261009）：判据是 `sectionText` 空不空，
-    不是 `pick` 返没返 None。`pick` 对"父标题自身没有正文"的节会把子节并进来
-    （线上语料 10 篇 317 节里有 47 节正文为空，其中 19 节的正文住在子节里），
-    `note` 里点名并入了哪些子节；
-    **真空节**（连子节都没有——例如代码块里的 `# 注释` 行被当成标题、下一条注释行
-    又把它截断）走"这一节没有正文"那一条支。此前两种共用一个 note：模型收到空帧却
-    被告知"本节为节选读取"，只能如实说读不到，再试一次落到同一格（无路可走）。
-    """
-    content = data.get("noteContent") or data.get("content") or ""
-    title = data.get("noteTitle") or data.get("title") or ""
-    hit = _text_sections.pick(content, want, title)
-    body = (hit["text"] if hit else "") or ""
-    if hit is not None and body.strip():
-        subs = hit.get("subsections") or []
-        return ok(str({
-            "noteKey": article_id, "noteTitle": title, "readSection": hit["section"],
-            "sectionText": hit["text"],
-            "note": (f"本节为节选读取（只含《{hit['section']}》及其子节 "
-                     + " / ".join(f"§{s}" for s in subs) + "，不含文章其他部分）。")
-                    if subs else
-                    f"本节为节选读取（只含《{hit['section']}》这一小节，不含文章其他部分）。",
-        }))
-    if hit is None:
-        # 指称对不上：候选按指称过滤（最接近的那些），模型改一次名字就能再来
-        cands = _text_sections.candidates(content, want, title)[:40]
-        note = ("该文章没有标题匹配此指称的小节（本节未读到任何内容）；"
-                "可用小节见 availableSections，请照其中的名字或编号重试。")
-    else:
-        # 指称对上了，但那一节里一个字都没有：候选换成**真读得出内容**的那些
-        # （按指称过滤只会把这一个死节名还给它，等于让它原地再赌一次）
-        cands = _text_sections.readable_sections(content, title)[:40]
-        note = (f"《{hit['section']}》这一节没有正文内容（它只是一个分组标题，其下也"
-                "没有可读的内容）；请改读别的小节——availableSections 里是这篇文章"
-                "真取出得到正文的那些。")
-    return ok(str({
-        "noteKey": article_id, "noteTitle": title, "readSection": str(want),
-        "sectionText": "",
-        "availableSections": cands,
-        "note": note,
-    }))
+def _read_section(data: dict, article_id, want: str) -> str:
+    from rag.reading import article_page
+    return _shape(article_page(data, article_id, section=want))
 
 
 def _note_row_with_tag_names(row):
@@ -333,6 +280,11 @@ DOC_TYPE_CN = {
 }
 
 
+_ARTICLE_OFFSET_DESC = "正文范围起点；用返回中的 nextOffset 继续读取"
+_ARTICLE_LIMIT_DESC = "本次最多读取字符数，1..12000，默认 6000"
+_ARTICLE_REVISION_DESC = "继续读取时照抄 contentRevision，防止跨版本拼接"
+
+
 @tool
 def get_article_detail(
     article_id: Annotated[
@@ -345,16 +297,19 @@ def get_article_detail(
     ] = "note",
     section: Annotated[
         str,
-        "只读该文章的某一小节（标题全称/编号/唯一子串，如 \"9\" 或 \"9. 部署与运维\"）；留空读全文",
+        "只读该文章的某一小节：优先用检索的 section id 并带 revision；支持唯一标题/编号",
     ] = "",
+    offset: Annotated[int, _ARTICLE_OFFSET_DESC] = 0,
+    max_chars: Annotated[int, _ARTICLE_LIMIT_DESC] = 6000,
+    revision: Annotated[str, _ARTICLE_REVISION_DESC] = "",
 ) -> str:
-    """获取指定文档的内容（路线 B 契约的解读段：检索只定位、解读读全文）。
+    """获取指定文档的正文证据；文章按字符预算返回，并提供版本绑定的续读位置。
     note 走 /notes/:id；talk/board/announcement 无单条详情端点，从列表接口按 key
     过滤（列表已带全文，量小，全量扫描可接受）。
 
-    `section`：文章过长时全文帧只带得回部分小节（帧尾会列出未展开的小节名），
-    用本参数按小节名取回被略去的那一节（20260920 超长文章修复的读取侧）。只对
-    note 生效——说说/留言/公告本来就是短文本。
+    `section`：读取唯一标题/编号或检索返回的小节 id；按 id 或 offset 续读时
+    必须带同一 contentRevision。nextOffset 为后续位置，readComplete 表示本范围读完。
+    只对 note 生效；说说/留言/公告仍返回完整短文本。
 
     标签：返回里的 `tags` 是**中文标签名**（如「编程 / Python」，含层级）；`noteTags`
     是内部 id 串，**回答"这篇有什么标签"要用 `tags`**，别把 id 念给访客。
@@ -381,10 +336,18 @@ def get_article_detail(
             counts = _note_public_counts(article_id)
             if counts:
                 data = {**data, **counts}
-        if not section or not isinstance(data, dict):
-            # 故障（unavailable）与查无此篇（not_found）原样透出，都不伪装成空
+        if not isinstance(data, dict):
             return _shape(data)
-        return _read_section(data, article_id, section)
+        from rag.reading import RevisionChanged, article_page
+        from tools.result import invalid_args
+        try:
+            return _shape(article_page(data, article_id, section, offset, max_chars, revision))
+        except RevisionChanged as exc:
+            from rag.search import invalidate_document
+            invalidate_document(article_id, revision)
+            return unavailable(str(exc))
+        except ValueError as exc:
+            return invalid_args(str(exc))
     # 这张表就是 `doc_type` 的闭集（类型上的 `Literal` 与它逐字相同）；查表仍可能
     # KeyError——那是**直接调用方**（本文件以外、不走参数校验层）传了表外取值，
     # 走 __ERROR__ 帧如实暴露，不算静默失败。
@@ -423,7 +386,7 @@ def rag_search(
 ) -> str:
     """按相关性检索博客文章（语料仅限线上可见文章），返回候选文档列表（标题+类型+分数+命中节），不返回全文。
 
-    用于定位候选：拿到候选后调用 get_article_detail 读取相关文档全文
+    用于定位候选：拿到候选后调用 get_article_detail 读取相关文档的正文范围
     （doc_type 取候选的 type）再回答。
     仅适用于"文章内容知识型问题"（想知道某篇文章写了什么、博客里是否写过某话题）。
     注意：说说/留言/公告不在检索语料内——询问"最新留言/说说/公告内容"时直接用
@@ -445,15 +408,23 @@ def rag_search(
         # 误判"读了不存在的文档"，见问题记录 1.26）
         text = "\n".join(
             f"{i + 1}. type={h['type']} id={h['id']} score={h['score']} "
-            f"title={h['title'][:24]}"
-            + (f" 命中节={h['sections'][0][:12]}" if h["sections"] else "")
+            f"title={h['title'][:24].replace(chr(10), ' ').replace(chr(13), ' ')}"
+            + (f" 命中节={h['sections'][0][:24]}" if h["sections"] else "")
+            + (f" section={h['section_ids'][0]} offset={h['matches'][0]['offset']} "
+               f"revision={h['document_revision']}"
+               if h.get("section_ids") and h.get("document_revision") else "")
             for i, h in enumerate(hits)
         )
         # 走了哪条路**只进 meta**（20261005）：混合与纯词法的出口文本长得一模一样，
         # 这是"开关拨了却一次没融合"唯一能被看见的地方。文本逐字不变——下游的
         # `_RAG_ROW_RE` 与 gate 只认那串行，meta 不进提示词、也不影响判决。
         route = last_route()
-        return ok(text, meta={"rag_mode": route["mode"],          # hybrid | lexical | degraded
+        from rag.search import get_index
+        corpus = get_index().status()
+        if corpus["stale"]:
+            text += ("\n注：语料刷新未完成，本次候选使用最近一次完整索引；"
+                     "正文读取仍核对当前公开版本。")
+        return ok(text, data=hits, meta={"corpus": corpus, "rag_mode": route["mode"],
                               "rag_reason": route["reason"],      # degraded 时的原因码
                               "vector_hits": route["vectors"],    # 向量路贡献了几条候选
                               "vector_missing": route["missing"]})

@@ -83,6 +83,7 @@ flowchart LR
 │   │
 │   ├── 【判据族】（gate 的确定性判据，多为出边为零的纯函数）
 │   ├── repeat_guard.py        # ★ 逐字复读判据（gate 1b，20261017 第三刀）：_repeat_reason 两档 + _recent_ai_replies 比对面 + _REDO_REQUEST_RE 放行档
+│   ├── article_evidence.py    # 候选与正文证据分离：补读计划、可选运行时证据登记与来源校验
 │   ├── absence_claims.py             # gate 洞④：站内"没有"结论无依据（八张表 + 纯函数 _absence_span）
 │   ├── provenance.py          # 写参数的**出处**：逐字引文核对 + 站内实体解析（20261014 换表征）
 │   ├── block_reasons.py       # 受阻原因码的**类型表**：把 checker 手里那个字符串变成可判读的类型
@@ -193,6 +194,12 @@ flowchart LR
 │   ├── sections.py            # ★ 超长文章分节（20260920；20261005 从 agent/ 搬来）：索引切片 / 帧按整节取舍
 │   │                          #   / `section=` 按节取回，三处共用一套节边界。**纯函数（只 import re）**——
 │   │                          #   住这里是为了让下面两层的消费者导入它时不必拉起 langgraph
+│   ├── corpus.py              # 版本化公开语料分页与摘要校验
+│   ├── chunks.py              # 保留标题路径、大小上限和来源范围的切片
+│   ├── ranking.py             # 两路共用的文档聚合和命中位置
+│   ├── reading.py             # 版本绑定的范围/小节读取与预算渲染
+│   ├── vector_index.py        # 可选 embedding、空间隔离与 RRF
+│   ├── vector_files.py        # 不可变代文件、摘要与原子提交
 │   └── search.py              # RagIndex + search()；recall_eval 直接测本实现（评测即线上行为）
 ├── tools/                     # ★ 工具层：15 个域模块 + base 的共享地基（20261018 批 3 收尾后 base 停在 1255 行 / 21 个定义）
 │   ├── base.py                # 工具注册表 `_TOOL_REGISTRY`——全仓 70 个 @tool 工具的唯一入口（**20261018 起本文件里一个 @tool 都没有了**：工具本体全部按域拆进下面几个模块，按原名 re-export）+ 共享 HTTP 通道（`_get`/`_client`/`_admin_*`…）+ 跨族共享原语（`_as_article_id`/`_near_miss_names`）
@@ -785,7 +792,7 @@ narrator 提示词随会话线性膨胀（当时那一行是 `with_tool_call_pai
 
 | 消费方 | 用途 |
 |---|---|
-| `rag/search.py::chunk_note` | BM25 索引切片（只是转发，只认 1-3 级、短文 <2000 不切都保持原样） |
+| `rag/search.py::chunk_note` | 结构切片（使用共享 outline，保留标题路径与有界范围） |
 | `agent/prompt_context.py::_frame_texts` | 超限帧按整节取舍：装得下的整节保留，装不下的整节列在文末 |
 | `tools/base.get_article_detail(section=…)` | 按节取回被略去的那一节（三级指称：标题全称 / 编号"9" / 唯一子串；不唯一 → 返回候选清单而不是赌一个） |
 

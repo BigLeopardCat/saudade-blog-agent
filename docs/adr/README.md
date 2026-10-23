@@ -83,11 +83,13 @@
 | [0015](adr-0015-planner-becomes-router-schema-on-demand.md) | planner 降成路由器，schema 索引化按需取（分四阶段，**部分取代 ADR-0001**；**阶段 0 已按判据停**） | **提议中** |
 | [0016](adr-0016-skill-registry-becomes-config-files.md) | 技能注册表从 Python 字面量改成一条技能一个 TOML 配置（试点域已落地） | 已采纳 |
 
+| [0017](adr-0017-versioned-rag-evidence.md) | 版本化公开语料、不可变向量代与正文证据约束 | 已采纳 |
+
 ## 相关的、但不算 ADR 的文档
 
 - [../toolcall-stability-roadmap.md](../toolcall-stability-roadmap.md)：工具调用稳定性的
   长期路线图，含明确"不做"的清单；
-- [../rag-design.md](../rag-design.md)：检索设计，§8 是**触发条件驱动**的升级预案表；
+- [../rag-design.md](../rag-design.md)：当前语料协议、检索、读取证据与评测设计；
 - [../multimodal-retrieval.md](../multimodal-retrieval.md)：多模态检索的分阶段方案
   （ADR-0005 的展开）；
 - [../问题记录.md](../问题记录.md)：事故级取证，按日期。

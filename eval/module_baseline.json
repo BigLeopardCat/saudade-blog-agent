@@ -4,7 +4,7 @@
     "top_defs": 14
   },
   "agent/authz.py": {
-    "lines": 1871,
+    "lines": 1868,
     "top_defs": 38
   },
   "agent/claims.py": {
@@ -16,7 +16,7 @@
     "top_defs": 31
   },
   "agent/graph.py": {
-    "lines": 9429,
+    "lines": 9412,
     "top_defs": 141
   },
   "agent/prompt_context.py": {

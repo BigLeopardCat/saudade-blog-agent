@@ -10,6 +10,7 @@ import time
 from langchain_core.messages import ToolMessage
 from langchain_core.tools import ToolException
 
+from agent.article_evidence import ArticleEvidence
 from agent.authz import SCOPE_ADMIN_CONSOLE, SCOPE_READ_OWN, TOOL_SCOPE, WRITE_SCOPES, check
 from agent.llm_usage import usage_fields
 from agent.runtime import memory
@@ -85,6 +86,7 @@ class ToolSession:
         self.outcome: TurnResult | None = None
         self.outcome_adapter = outcome_adapter
         self.observations = []
+        self.article_evidence = ArticleEvidence()
         self.llm = self._bind_menu()
 
     def _bind_menu(self):
@@ -185,12 +187,19 @@ class ToolSession:
             return True
         kind = getattr(body, "kind", "unknown")
         self.observations.extend(memory.observation(call, body))
+        evidence_value = body
         body = str(body)
         remaining = _MAX_TOTAL_RESULT_CHARS - self.result_chars
         limit = min(_MAX_RESULT_CHARS, remaining)
-        if len(body) > limit:
+        if name == "get_article_detail":
+            from rag.reading import render_article_result
+            from tools.result import ToolResult
+            body, visible = render_article_result(evidence_value, limit)
+            evidence_value = ToolResult(body, kind=kind, data=visible)
+        elif len(body) > limit:
             marker = "\n[结果截断，请缩小检索范围]"
             body = body[:max(0, limit - len(marker))] + marker
+        self.article_evidence.observe(name, args, evidence_value)
         prompt.append(ToolMessage(content=body, tool_call_id=call["id"]))
         self.result_chars += len(body)
         self.calls_used += 1
@@ -216,6 +225,16 @@ class ToolSession:
             calls = getattr(response, "tool_calls", None) or []
             if not calls:
                 reply = str(getattr(response, "content", "") or "").strip()
+                from tools.base import SITE_BASE
+                issue = self.article_evidence.issue(reply, SITE_BASE)
+                if issue:
+                    return self._handoff(issue, read_calls=self.calls_used)
+                if self.article_evidence.searched and not self.article_evidence.documents:
+                    if self.article_evidence.failed and not self.article_evidence.found:
+                        return TurnResult("文章检索暂时不可用，当前无法核实文章内容。")
+                    if self.article_evidence.empty and not self.article_evidence.found:
+                        return TurnResult("暂未从公开文章中检索到相关资料。")
+                reply = self.article_evidence.sources(reply, SITE_BASE)
                 return TurnResult(reply) if reply else self._handoff(
                     "empty", read_calls=self.calls_used)
             reason = self._accept_calls(calls, round_index)
