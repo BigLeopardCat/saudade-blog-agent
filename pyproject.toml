@@ -55,19 +55,19 @@ classifiers = [
 #     （见 docs/问题记录.md 与 CLAUDE.md「断连中断机制」）。声明它是一种"我知道我在依赖它"
 #     的记号，不是多余的：只有一个测试文件 import 它，删掉那行import 就没人记得这层关系。
 dependencies = [
-    "edge-tts==7.2.8",
-    "fastapi==0.141.1",
+    "edge-tts==7.3.1",
+    "fastapi==0.151.0",
     "httpx==0.28.1",
-    "langchain-core==1.4.8",
-    "langchain-openai==1.3.3",
-    "langgraph==1.2.7",
+    "langchain-core==1.6.12",
+    "langchain-openai==1.7.2",
+    "langgraph==1.2.16",
     # 原生 checkpoint 持久化与恢复安全的快照裁剪。
     "langgraph-checkpoint-postgres==3.2.0",
     "openai==2.44.0",
     "psycopg[binary]==3.3.6",
     "psycopg-pool==3.3.3",
-    "pydantic==2.13.4",
-    "pydantic-settings==2.14.2",
+    "pydantic==2.14.1",
+    "pydantic-settings==2.16.0",
     # JWT 验签与签发（20261020，ADR-0014）。**归运行时而不是 dev 组**：三条路径都在
     # 生产请求链路上（`server._verify_assertion_claims` 验 Rust 的身份断言、
     # `tools/base._sign_local_jwt` 与 `tools/device._sign_user_jwt` 签代调令牌）。
@@ -77,8 +77,8 @@ dependencies = [
     # ⚠️ 它本来就在 `.venv` 里（某条传递依赖带的）⇒ **"import 得到"不代表"声明了"**，
     # 而 CI 的 `uv sync --frozen` 只装 lock 里的东西。这一行是补声明。
     "PyJWT==2.15.1",
-    "starlette==1.6.0",
-    "uvicorn==0.52.4",
+    "starlette==1.9.0",
+    "uvicorn==0.54.0",
 ]
 
 # 开发工具单独一组：`uv sync` 默认会装它，但**不进运行时依赖**（部署包/产线 venv 只需要
@@ -130,14 +130,14 @@ dev = [
     "bandit==1.9.4",
     "coverage[toml]==7.16.2",
     "ir-measures==0.4.3",
-    "langchain==1.3.11",
+    "langchain==1.4.6",
     "mypy==2.4.0",
     "pytest==9.1.1",
     "pytest-cov==7.1.0",
     "pytest-socket==0.8.1",
     "pytest-timeout==2.4.0",
     "pytest-xdist==3.8.0",
-    "ruff==0.14.4",
+    "ruff==0.17.1",
 ]
 
 [project.urls]
