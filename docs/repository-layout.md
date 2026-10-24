@@ -1,57 +1,62 @@
-# 目录职责与迁移边界
+# 项目结构与依赖边界
 
-本轮已将混合运行时和收藏领域收拢到独立 Python 包。其余旧实现仍随能力迁移逐步拆除。
+## 当前结构
+
+服务采用 Python flat layout。`server.py` 是现有 ASGI 入口，启动命令为
+`uvicorn server:app`；入口文件的名字不决定模块是否合理。
 
 | 位置 | 职责 |
 | --- | --- |
-| `server.py` | HTTP、身份入口、请求与 SSE 协议适配 |
-| `agent/runtime/` | 请求执行循环、工具加载、会话生命周期与输出协议适配 |
-| `agent/domains/favorites/`、`notifications/`、`messages/`、`todos/` | 各自目标、权限、确认范围与真实执行结果 |
-| `agent/runtime/admin_domains.py`、`agent/domains/admin_writes.py` | 管理员领域组装及稳定会话准入，业务判断留在各领域 |
-| `agent/domains/public_*.py`、`article_metadata.py` | 公共读取的分页边界、领域投影及共享文章元数据 |
-| `agent/checkpoint.py`、`agent/idem*.py` | 既有持久化与幂等基础组件，供运行路径复用 |
-| `tools/` | 站点 API 与设备等外部 I/O 适配，不负责模型规划 |
-| `models/`、`rag/`、`config/` | 模型访问、检索和配置 |
-| `tests/` | 确定性回归，完整目录收集 |
-| `eval/` | 请求级质量与成本验收、运行诊断与报告读取 |
-| `docs/` | 当前设计、迁移边界及保留的实验结论 |
+| `server.py` | 应用生命周期、HTTP 路由、中间件、SSE 和运行资源接线；继续按边界拆分 |
+| `agent/api/schemas.py` | 聊天请求、响应和字段限额，与宿主 HTTP 契约对应 |
+| `agent/api/context.py` | HTTP 请求到标准消息的适配，处理宿主历史回放和图片 |
+| `agent/api/host_context.py` | 有界的时间、额度、历史动作和开放任务数据投影 |
+| `agent/runtime/` | 原生模型工具循环、请求预算、取消、会话存储和流式事件 |
+| `agent/domains/` | 按业务归属组织读取、目标解析、确认准备和事务执行 |
+| `agent/principal.py`、`agent/authz.py` | 身份与工具权限；旧自然语言判定仍待清理 |
+| `agent/checkpoint.py`、`agent/idem.py`、`agent/idem_pg.py` | 会话与幂等基础设施 |
+| `tools/` | 博客 API、设备等外部 I/O 适配；遗留反向依赖随领域收口移除 |
+| `models/`、`rag/`、`config/` | 模型客户端、检索与配置 |
+| `tests/` | 不依赖真实模型的行为回归和跨仓契约检查 |
+| `eval/` | 真实请求评测、成本统计及质量门禁 |
+| `frontend/`、`deploy/`、`scripts/`、`docs/` | 前端、部署资源、运维命令和设计文档 |
 
-## 已建立的边界
+## 依赖规则
 
-旧图兼容边界的完整契约见 [legacy-compatibility-boundary.md](legacy-compatibility-boundary.md)。
-本文件只记录目录职责；迁移 PR 必须同时遵守那份依赖方向和退役条件。
+- API 层适配传输和调用应用服务；运行时、领域和工具不导入 API 层或 `server`。
+- 运行时处理模型循环与生命周期，业务目标、确认范围和参数校验留在领域内。
+- 工具适配外部服务。共享业务值归属对应领域，通用 I/O 原语归属适配层，避免工具反向导入编排模块。
+- `schemas.py` 只描述 HTTP 契约，不堆入运行时状态、数据库模型或模型规划 IR。
+- 包初始化文件不注册领域、不创建客户端、不隐式加载应用。
+- 页面和宿主摘要、历史记录都是数据；身份、权限和确认凭据由独立的可信通道提供。
 
-- `agent/runtime/native.py` 负责准入、持久化与协议适配；模型和工具循环在 `session.py`，原生模型答案通过标准 `AIMessageChunk` 流出并在工具调用前完成聚合。
-- 原生 runtime 如仍需读取旧图 checkpoint 形状，只能通过 `runtime/legacy_bridge.py`；迁移完成后删除这一处桥接即可收口依赖。
-- `agent/runtime/prompt.py` 组装原生指令、可信身份与有界上下文；工具能力由 schema 描述，
-  不在编排层叠加各领域的操作提示。`conversation_store.py` 定义完成轮次的存储边界。
-- 收藏业务不进入通用循环。`preparation.py` 只读取目标与本人状态，再返回确认结果；
-  `runtime/pending.py` 管理跨领域已签名待办的撤销和替换；`transactions.py` 只执行已核验的具体操作，复用签名、权限、幂等与回执机制。
-- `runtime/confirmation.py` 适配签名执行入口和确认控制帧，SSE 入口不承担领域生命周期。
-- 领域终结结果使用 `runtime/results.py` 的小型结果类型。确认令牌只进入持久化与控制帧，
-  不回送模型，也不写入工具 trace。`runtime/writes.py` 共用持久化执行和重放。
-- 包初始化文件不导入运行时或注册全部领域，避免隐藏的启动副作用。
+## 拆分顺序与目标
 
-## 后续收敛
+1. 先修复和固定请求上下文契约，提取请求模型与适配，保持 HTTP 和宿主契约稳定。
+2. 提取独立的运维、检索管理和审核路由，再提取聊天路由及其运行资源依赖。
+   使用 FastAPI `APIRouter`、生命周期和依赖注入；不增加自制路由或服务定位框架。
+3. 当路由不再依赖入口模块的全局变量时，建立薄的 `agent/main.py` 应用装配入口（待建）。
+   同一批更新部署命令、开发说明和安装后启动验证，再移除旧入口。
+4. 清理不可达语义匹配与旧适配，按领域拆分共享大模块；每批删除原实现，不长期保留两份逻辑。
 
-目前 `agent/graph.py`、`agent/authz.py`、`agent/runtime/prompt.py` 与 `tools/base.py`
-仍是较大的旧模块。新增领域先确定业务归属、外部 I/O 和验收方式；迁完一项就删除旧入口。
-不会继续向旧图添加新领域。共享组件只在出现真实复用时提取，不为未来假设建立通用框架。
+目标归属如下，标注“待建”的文件尚未接入：
 
-现有测试仍以平铺目录为主；目录拆分需要同步完整收集与跨套件隔离机制。生产模块和测试的
-归类应随已验收的领域一起迁移，避免留下两套长期并行实现。
-
-## Python 导入迁移
-
-根包 `agent` 不再隐式加载图或重导出工厂。调用方使用明确入口：
-
-```python
-from agent.agent import create_agent
-from agent.checkpoint import build_checkpointer
-from agent.runtime.hybrid import HybridArm
-from agent.runtime.turns import conversation_turn
-from agent.domains.favorites import preparation, transactions
+```text
+agent/
+├── main.py                 # 待建：应用创建、生命周期和路由装配
+├── api/
+│   ├── schemas.py          # HTTP 模型和字段限额
+│   ├── context.py          # 请求到消息的适配
+│   ├── host_context.py     # 当前请求的宿主数据投影
+│   └── routes/             # 待建：按接口领域拆分的 APIRouter
+├── runtime/                # 单一原生模型工具循环
+└── domains/                # 业务能力与确认事务
+tests/                      # 确定性回归
+eval/                       # 请求级真实模型评测与工程门禁
 ```
 
-旧 `agent.hybrid_*`、`agent.turns` 与 `agent.favorite_transactions` 路径已随归类迁移，
-仓内调用方与探针已同步更新。
+当前先完成职责拆分和依赖收敛。若后续采用 `src/` 与单一发行命名空间，单独迁移包路径、
+安装配置和部署入口，并验证离开仓库目录后的安装运行，避免目录调整掩盖行为变化。
+
+结构选择参考 [PyPA 的 flat/src layout 说明](https://packaging.python.org/en/latest/discussions/src-layout-vs-flat-layout/)
+与 [FastAPI 多文件应用文档](https://fastapi.tiangolo.com/tutorial/bigger-applications/)。

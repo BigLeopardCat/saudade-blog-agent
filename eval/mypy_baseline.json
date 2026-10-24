@@ -11,8 +11,8 @@
     "utils",
     "server.py"
   ],
-  "total": 54,
-  "files_checked": 164,
+  "total": 50,
+  "files_checked": 167,
   "by_file": {
     "agent/action_text.py": 1,
     "agent/adminops_quota.py": 2,
@@ -24,7 +24,7 @@
     "rag/embed_space.py": 1,
     "rag/graph_build.py": 3,
     "rag/search.py": 1,
-    "server.py": 6,
+    "server.py": 2,
     "tools/account_admin.py": 1,
     "tools/admin_read.py": 3,
     "tools/announcements.py": 1,

@@ -1,72 +1,49 @@
-"""FastAPI server wrapping the LangChain agent for production deployment.
-
-Run with:
-    cd /home/ubuntu/Saudade-Blog/saudade-blog-agent
-    .venv/bin/uvicorn server:app --host 127.0.0.1 --port 8010 --workers 2
-"""
+"""HTTP service entry point: uvicorn server:app --host 127.0.0.1 --port 8010."""
 
 import asyncio
 import contextvars
 import functools
 import json
 import logging
-import re
 import threading
 import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
-from datetime import datetime
 from importlib.metadata import PackageNotFoundError
 from importlib.metadata import version as _pkg_version
-from typing import Literal
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 
 # 断言验签（20261020，ADR-0014）。`InvalidTokenError` 是 PyJWT 全部验签失败的基类。
 from jwt import InvalidTokenError
-from langchain_core.messages import (
-    AIMessage,
-    AIMessageChunk,
-    HumanMessage,
-    SystemMessage,
-)
-from pydantic import BaseModel, Field, field_validator
+from langchain_core.messages import AIMessageChunk
+from pydantic import BaseModel, Field
 
 from agent import (
     checkpoint,  # 采纳（批 7）：造 saver + 会话坐标 + 级联清理
     confirm,  # 待办令牌：确认准备与执行共用签名验签（见 /chat/stream）
     runtime_probe,  # /version 与 /ready 的判定逻辑（纯函数，见该模块头注）
 )
+from agent.api.context import build_messages
+from agent.api.schemas import ChatRequest, ChatResponse, HistoryItem
+from agent.api.schemas import QuotaInfo as QuotaInfo
 from agent.approval_api import router as approval_router
 from agent.block_reasons import REASONS as _BLOCK_REASONS
-from agent.factblock import strip_fact_lines
 from agent.principal import Principal
 from agent.runtime.budget import current_budget
 from agent.runtime.control import AgentCancelled, RequestControl
 from agent.runtime.jobs import RequestJobs
 from agent.runtime.progress import ProgressEmitter, StreamProgress
 from agent.summarizer import summarize
-from agent.runtime.task_context import TS_MMDD_HHMM_RE, age_minutes, render_open_tasks
 from agent.transport import collect_turn, emit_to_queue
 
 # The block-reason map remains a shared compatibility surface for existing
 # authorization and receipt tests; transport does not render model planning text.
-# 六个服务限额/超时常量（STREAM_* / RECURSION_LIMIT / MAX_BODY_BYTES /
-# MAX_CONCURRENT_STREAMS / REVIEW_CONCURRENCY）的真值源：20261020 双轨收敛后
-# 唯一从这里取值（env 键保持 AGENT_* 老名，写 .env 就生效；判据
-# tests/test_settings_surface.py ⑥）。此前那四个 AGENT_* 在本文件直读进程环境
-# ——.env 管不到它们，README 曾把这事当坑记。
 from config.settings import settings
-
-# 写工具参数的归一（20260923 批 7）原在本文件 import：`_tool_action_text` 用它把
-# "预告帧"与"计划文本"对同一个参数值的理解对齐。**20260928 渲染搬进
-# `agent/action_text.py` 后这里不再需要**（那两件仍从同一处 import，纪律不变：
-# 两侧不许各写一份归一）。
 from rag import search as rag_search
 from rag import wordgraph
-from utils.clock import format_local_now
 from utils.logging import get_trace_id, set_trace_id, setup_logging
 from utils.trace import finish_trace, record, start_trace
 
@@ -99,27 +76,10 @@ STREAM_IDLE_TIMEOUT = settings.stream_idle_timeout
 # 空闲超时不会触发（帧流动会重置），需用总时长兜底保证流必会终止
 STREAM_TOTAL_TIMEOUT = settings.stream_total_timeout
 
-# agent 图递归上界（防模型幻觉重试循环烧满 STREAM_TOTAL_TIMEOUT）：
-# langchain 1.3 create_agent 默认硬编码 recursion_limit=9999（等效无界），
-# 工具幻觉循环（同一意图反复"表演"调用而不真正调用）会打满总时长上限才断开，
-# 前端表现为 5 分钟"卡死"。压到 30（每轮循环约 2 图步 = 约 15 次模型-工具往返，
-# 正常流程 5 次以内），超限走既有 __ERROR__ 异常路径，卡死窗口缩到 60-90s。
-# （env 键 AGENT_RECURSION_LIMIT，20261020 起读 Settings——写 .env 就生效。）
+# Deprecated compatibility export. NativeRuntime bounds work with RequestBudget.
 RECURSION_LIMIT = settings.recursion_limit
 
-# 生产者异常时 `__ERROR__` 帧里给**访客**看的那句话（20260927 拍板，原为"待拍板"）。
-# 此前这一格发的是 `str(异常)` 原文——上线实测的代价：异常名与内部路径顺着它出到
-# 气泡里，20260927 07:29 主人看到的是一句「网络错误: 'pending_confirm'」
-# （`native runtime` 的 KeyError；既不是网络问题，也不是一句看得懂的话）。
-# **原文不丢**：它照旧进 `logger.exception`（带 traceback）与 trace 的 `end_reason`，
-# 排障读日志，访客读这一句。这里是**模块级常量**而不是内联字面量：测试要能替换它
-# 去验"帧不会被劈开"（见 `tests/test_error_frame.py` ②）——写成内联字面量后，
-# 载荷里再无变量，那条判据就会变成永远为真的空判据。
-#
-# 20260927 起**两条通道共用这一句**：流式的 `__ERROR__` 帧与非流式 `/chat` 的
-# `reply`/`error`（见下面 `chat()` 的 except 支）。共用是刻意的——两处说的是同一件事
-# （这一轮没生成出回复），而"同一个事实只有一句话术"正是这类补丁最容易长歪的地方：
-# 各写一句，下一个人改了其中一处，主人从两条路径读到的就是两种说法。
+# Shared public error text; detailed exceptions belong in logs and traces.
 PRODUCER_ERROR_TEXT = "服务这边出了点问题，这一轮没能生成回复，请再说一次。"
 
 # 空回复恢复语：agent 流正常收尾但无任何输出（qwen 偶发空内容）时补发的人设内
@@ -127,30 +87,8 @@ PRODUCER_ERROR_TEXT = "服务这边出了点问题，这一轮没能生成回复
 _RECOVERY_SENTENCE = "喵呜……主人抱歉，泠月喵刚才脑袋卡壳了，没有生成出回复，请主人再问一遍喵～ 🐾"
 
 # ── 输入限额与并发闸（20260916 加固）──
-# 输入全部来自 Rust 转发（只绑回环，见 docs/security-boundary.md），所以限额防的不是
-# 陌生人，而是"前端出 bug / 被塞畸形请求 / 本机进程乱调"把 agent 拖垮：
-#   · starlette **默认不限制 body 大小**，直接读进内存——畸形大包先吃满 3.7GB 机器；
-#   · 超长字段会灌进 prompt，白烧 token，还可能撑爆 LLM 侧上下文；
-#   · LLM 调用是最贵的资源（单次最长 180s），无闸时并发涌进来只会一起排队到超时。
+# HTTP body and worker admission limits. Field limits live with the API schemas.
 MAX_BODY_BYTES = settings.max_body_bytes
-MAX_MESSAGE_CHARS = 4000
-MAX_HISTORY_ITEMS = 60
-MAX_IMAGES = 6
-MAX_IMAGE_CHARS = 1_600_000     # ≈1.17MB 二进制（前端压缩后单图 ≤1MB，留余量）
-MAX_TEXT_FIELD_CHARS = 8000     # summary / executions
-MAX_SHORT_FIELD_CHARS = 500     # current_url / page_title
-# 确认令牌：base64url(json) + 签名，签名体里带**已实例化的全部参数**（标签名/标签
-# 数组都在里面）——500 字在"建二级标签 + 长名字"时会被顶到。给足额度（令牌本身
-# 只是 HMAC 材料，不进 prompt、不落库），形状校验交给 confirm.verify（fail-closed）。
-MAX_CONFIRM_TOKEN_CHARS = confirm.MAX_TOKEN_CHARS
-# 上一轮执行过的工具名（20260929 批 F1'）：只是**判定输入**（"上一轮读过审核队列吗"），
-# 不进 prompt。Rust 侧从本会话最近 8 条回执去重后给出，上限取 40 是给"旧 Rust 忘了
-# 去重"留余量——超出即截断，最坏结果是那一条结构化判据落空、退回散文判据（fail-open）。
-MAX_RECENT_TOOLS = 40
-# 跨轮执行记忆的**结构那份**（20261020）：与 Rust `chat.rs::EXEC_ROWS_MAX_CHARS` **同值**。
-# 它由 Rust 按预算裁过再发，这里的 max_length 只是防线：**多一个字符就是每轮 422**，
-# 所以两边不许各填一个数——改这里必须同步改那边（`tests/test_exec_rows_anchors.py` 锁着）。
-EXEC_ROWS_MAX_CHARS = 8000
 MAX_CONCURRENT_STREAMS = settings.max_concurrent_streams
 STREAM_QUEUE_WAIT = 3.0         # 秒；排队超过这个时间就如实 503，不让请求无声堆着
 
@@ -183,149 +121,6 @@ def _release_slot() -> None:
         _stream_slots.release()
     except ValueError:      # 多还一次（理论上不会）：记日志别把收尾炸掉
         logger.warning("并发槽位重复释放（计数错乱）")
-
-class HistoryItem(BaseModel):
-    """一条历史消息。**结构化而不是 dict**（20260917 外部审计指出）：此前是
-    `list[dict]`，`_build_messages` 直接 `h["role"]`/`h["content"]` 取键——畸形项
-    会 KeyError → 500（`/chat/stream` 那条路还只是在释放并发槽后才炸）。
-    role 限定 user/assistant（DB 里只有这两种，实测 `SELECT DISTINCT role`）。
-    content **不设长度上限**：历史里的助手长回复（实测最长 3773 字符，公式推导类
-    还会更长）截断会改变注入语义，且 12MB 的整体 body 上限已经兜住了总量。
-    Rust 侧的 history 只发 role/content 两个字段，与此一一对应。"""
-    role: Literal["user", "assistant"]
-    content: str
-
-
-class QuotaInfo(BaseModel):
-    """对话额度的**机器事实**（Rust → agent，跨语言契约 C1）。
-
-    形状由本模型定义，Rust 侧 `src/quota.rs::forward_json` 按同一份逐字段产——
-    两侧各写一份同措辞注释，改一侧必须改另一侧（`tests/test_chat_quota.py` 有守卫）。
-
-    **刻意与 `agent_tasks` 不同**：那个字段交的是 JSON **串**，这个交的是 JSON
-    **对象**。原因不是疏忽——`agent_tasks` 的内容是 Python 产的结构（Rust 只透传，
-    读端有 `task_rows` 判形状），而这一份的形状由 Rust 拥有且极简（四个标量），
-    pydantic 的类型约束让"注入系统上下文"这件事**结构性不可能**：`used` 是 int、
-    `unlimited` 是 bool，拼进 `[System: …]` 的只能是数字与那个词，不需要 `_ctx_field`
-    清洗。**下一个人不要来"统一"这两处**，它们的不一致是设计。
-    """
-    used: int = 0
-    limit: int = 0
-    # remaining 由 **Rust 算好**（`max(0, limit - used)`）——agent 永不自算，
-    # 免得两个实现各自饱和、各自有一位偏差时说不清是谁的错。
-    remaining: int = 0
-    # 管理员档：True 时 used/limit/remaining 恒 0，注入行只写 `chat_quota=unlimited`。
-    unlimited: bool = False
-
-
-class ChatRequest(BaseModel):
-    message: str = Field(max_length=MAX_MESSAGE_CHARS)
-    current_url: str = Field(default="", max_length=MAX_SHORT_FIELD_CHARS)
-    page_title: str = Field(default="", max_length=MAX_SHORT_FIELD_CHARS)
-    user_id: int = 0
-    history: list[HistoryItem] = Field(default_factory=list, max_length=MAX_HISTORY_ITEMS)
-    summary: str = Field(default="", max_length=MAX_TEXT_FIELD_CHARS)
-    needs_summary: bool = False
-    # 浏览器上报的显示状态仅作上下文数据。
-    current_effects: str = Field(default="", max_length=MAX_SHORT_FIELD_CHARS)
-    current_darkmode: str = Field(default="", max_length=MAX_SHORT_FIELD_CHARS)
-    # 前端压缩的 dataURL 数组；兼容单串输入。
-    image: str | list[str] = ""
-    # 跨轮执行记忆（20260904 C3）：本会话最近执行的 checker 验收回执渲染文本
-    # （Rust 侧从 execution_log 读最近 8 条渲染成 "· 屏幕显示「…」" 式行）——
-    # 下轮质疑"你刚才屏上写了什么"时据实回答，不重发不编造
-    executions: str = Field(default="", max_length=MAX_TEXT_FIELD_CHARS)
-    # 跨轮待办（20260923）：本会话"已提出、还没被确认"的写操作（Rust 侧从
-    # pending_action 表读最新一条仍 pending 的行渲染成一行）。与 executions 同
-    # 语义的系统事实注入——短应答/授权式轮次据此定"那件事"，而不是回历史里挑
-    # 一句自然语言当目标（13:19 事故）。空串 = 没有待办。
-    pending_action: str = Field(default="", max_length=MAX_TEXT_FIELD_CHARS)
-    # 会话级任务状态（20260927 批 D）：本会话**未完结的任务**（Rust 侧从 agent_task
-    # 表读终态之外的最近 3 条，交回的是 **JSON 数组串**——刻意不像 executions /
-    # pending_action 那样交一行渲染好的文本，理由见 chat.rs `load_agent_tasks` 的注）。
-    # 渲染进 system 上下文由本文件 `_build_messages` 调运行时任务投影
-    # 完成；流尾的确定性结算（按回执推进 cursor）用的是同一份原文。
-    # 形状不对一律当"没有任务"（`task_rows` 判）——这**不是**静默失效：JSON 解不出来
-    # 意味着 Rust 侧或表结构坏了，而它坏掉的症状是"未完结的事又忘了"，正是本表要治的病。
-    agent_tasks: str = Field(default="", max_length=MAX_TEXT_FIELD_CHARS)
-    # 上一轮执行过的**工具名**（20260929 批 F1'，Rust 侧从最近 8 条回执去重得出）。
-    # 用途只有一个：让"上一轮读过审核队列吗"成为一个**结构化事实**，而不是对
-    # narrator 散文做正则——批 H 之前它是那条授权式审核快道的准入判据（快道已整族
-    # 删除），现在只喂原生运行时台账的第三条触发器（上一轮真读过那份
-    # 队列 ⇒ 这一轮接着把它的待办摆上桌）。
-    # 三条纪律：
-    #   · **空列表不是"键缺席"**：这里给的是 `[]` 而不是 None，因为"上一轮什么都没
-    #     执行"是一个**确定的事实**（与 `chat_quota` 那条"读不到 ⇒ 整个键缺席"恰好
-    #     相反：那一族的缺席说的是"不知道"，这一族的空说的是"知道，是空的"）。
-    #     用 `default_factory=list` 也照顾了直接构造 ChatRequest 的评测夹具。
-    #   · **绝不进 prompt**：它不注入 system 上下文、不进任何提示词——一旦进提示词，
-    #     模型就会开始复述"我上一轮调用过 X"（同 `meta` 那条不进提示词的纪律）。
-    #   · 旧 Rust 端没有这个字段 ⇒ `[]` ⇒ 第三条触发器不成立 ⇒ 那一轮少摆一次台账
-    #     （少摆就不读，方向安全：模型手里的信息少一点，不会凭空多出一次写）。
-    recent_tools: list[str] = Field(default_factory=list, max_length=MAX_RECENT_TOOLS)
-    # 跨轮执行记忆的**结构那份**（20261020）：`[{at,n,payload}]` 数组串，与上面
-    # `executions` 同一批行、同一顺序。那是给人（模型）看的渲染，这是给**判据**用的
-    # 结构（`prompt_context._doc_anchors` 取 tool/args/title 造锚点，不再对渲染文本
-    # 跑正则——`search_notes` 与「读取留言/说说/公告」两格已经因措辞演进静默断过）。
-    # · 空串 = 本会话没有执行记录；解不出来 ⇒ `None`（"读不到" ≠ "没有"）。
-    # · `payload` 为 null（20260927 之前的存量行）⇒ 不进锚点，不留第二条抠文本的路。
-    # · 上限与 Rust `EXEC_ROWS_MAX_CHARS` 同值：那边按预算裁过，超了就是每轮 422。
-    execution_rows: str = Field(default="", max_length=EXEC_ROWS_MAX_CHARS)
-
-    # ── 对话额度（20260929，跨语言契约 C1/C3）──────────────────────────
-    # chat_quota：访客的终身额度现状（C1）。**读不到时整个键缺席**（Rust 侧 DB 故障
-    # ⇒ fail-open，放行且不计数）——缺席 ≠ 0：那时 `_build_messages` **什么都不注入**，
-    # 而不是编一句"剩 0 轮"给正在聊天的访客听。这与 `agent_tasks` 用空串表示"没有"
-    # 同一族纪律：把"不知道"说成"没有"是这一族最贵的错法。
-    chat_quota: QuotaInfo | None = None
-    # quota_blocked：本轮是**被额度硬拦的那一轮**（C3）。只在拦截轮出现，其余时候
-    # 键缺席。**不许由 `remaining == 0` 反推**——管理员在访客说话中途清零时 remaining
-    # 也是 0，而那一轮该正常回答。真假只有 Rust 知道（它是那个原子 UPDATE 的结果），
-    # 所以由它显式给；本字段默认 False 只是"旧 Rust / golden 直连"的容忍形状。
-    quota_blocked: bool = False
-
-    # ── 写操作确认（20260921）────────────────────────────────────────
-    # conversation_id：确认令牌的绑定维度之一（令牌只在这个会话里有效）。
-    # Rust 侧显式转发 body 白名单里的字段，缺了它 conv 恒为 None ⇒ 令牌验不过。
-    conversation_id: int | None = None
-    # confirm_token：**隐藏确认请求**的凭据（前端点了确认框上的「确定」）。
-    # 这是唯一凭据，绑定 uid + 会话 + 10 分钟，服务端零状态（uvicorn 2 workers
-    # ⇒ 内存 pending 表在另一个 worker 上不存在）。Rust 侧对带此字段的请求
-    # **跳过用户消息入库**——所以它不会在历史里留下一条空用户消息。
-    confirm_token: str = Field(default="", max_length=MAX_CONFIRM_TOKEN_CHARS)
-    # confirm_pick：确认卡上点了**某一件**（而不是「全部办」）时，前端带回来的选择
-    # 记号（20260929 批 F，形态 `pick:<下标>`；`""` = 全部办）。它**不是凭据**——
-    # 凭据仍然只有 confirm_token（签名、绑 uid+会话、一次性）。本字段只用来把
-    # 已签名的那批 specs **收窄成它的子集**（见 /chat/stream 里 `_narrow_grant`）：
-    # 收窄是安全的（放行范围只可能变小），越界/读不懂一律收窄成空集 ⇒ 零执行 +
-    # 如实告知。不验签、不落库、不进 prompt。
-    confirm_pick: str = Field(default="", max_length=MAX_SHORT_FIELD_CHARS)
-
-    @field_validator("image")
-    @classmethod
-    def _check_images(cls, v):
-        """图片限额：**条数**与**单张体积**。dataURL 是 base64，直接进 prompt，
-        没有上限时一张几十 MB 的图能把请求体和上下文一起撑爆（20260916 加固）。
-        形状（单串 / 数组）保持原样不动——兼容 golden 直连的旧单串写法。"""
-        items = [v] if isinstance(v, str) else list(v)
-        items = [x for x in items if x]
-        if len(items) > MAX_IMAGES:
-            raise ValueError(f"最多 {MAX_IMAGES} 张图片")
-        for x in items:
-            if len(x) > MAX_IMAGE_CHARS:
-                raise ValueError(f"单张图片过大（{len(x)} > {MAX_IMAGE_CHARS} 字符）")
-        return v
-
-
-class ChatResponse(BaseModel):
-    reply: str
-    success: bool
-    error: str | None = None
-    new_summary: str | None = None
-    # 跨轮执行记忆（20260904 C3，同步路径）：本次请求 checker 验收回执原始行
-    # （{workflow,tool,args,result,ts}）——Rust 同步响应手读 data["executions"] 落库
-    executions: list = []
-
 
 _agent = None
 
@@ -535,179 +330,9 @@ def _resolve_user_id(request: Request, body_uid: int) -> int:
     return _resolve_principal(request, body_uid).uid
 
 
-# 台账记录的"现时"有效期（分钟，20260925）：超过它的记录只能说明"当时是那样"，
-# 不能拿来回答"现在怎样"。10 分钟 = 服务器状态这类指标够用的新鲜度（再短会让
-# "再问一句现状"每次都多跑一次查询，再长就把三小时前的读数当成现场）。
-# 只管**现时状态类询问**；取值指代（规则 6b，"第二条写的什么""那个分类下有几篇文章"）
-# 不受此限——但它**不是**"照抄永远是对的"：分类文章数、留言条数这类量会随时间变，
-# 照抄的是**那一次读到的值**（20261001 把旧的说法改掉：那句话把一个会变的量说成了
-# 历史事实，而它只是"这次不必重查"）。分界写在 6b 首条（20261001 从 6c 尾巴上移到
-# 判据所在的位置），措辞那一半长在叙述侧纪律 22。
-EXEC_STALE_MINUTES = 10
-
-# 台账行行首的时间戳（Rust 侧渲染时补的 `MM-DD HH:MM`，见 chat.rs render_exec_row）。
-# **形状与解析规则都不在这里**——20261015 起与台账终态那一族共用 `tasks.TS_MMDD_HHMM_RE`
-# / `tasks.age_minutes`（同一个钟面、同一套"超前 6 小时退一年"规则）。此前这两份是
-# 各写各的，而"两份会漂的解析规则"正是本仓反复吃的亏：改了这里忘了那里，两边对同一行
-# 时间给出不同年龄，且**没有任何东西会红**。看不懂的一律不标——标注宁缺勿错，标错了
-# 是凭空给模型一个假事实（终态那一侧同一条纪律，只是那边是"记一笔 undecidable"）。
-
-
-def _age_phrase(minutes: int) -> str:
-    if minutes <= 0:
-        return "刚刚"
-    if minutes < 60:
-        return f"{minutes} 分钟前"
-    if minutes < 60 * 24:
-        h, m = divmod(minutes, 60)
-        return f"{h} 小时前" if not m else f"{h} 小时 {m} 分前"
-    return f"{minutes // (60 * 24)} 天前"
-
-
-def annotate_exec_ages(exec_txt: str, now: "datetime | None" = None) -> str:
-    """给台账每行的行首时间补一个**系统算出来的相对年龄**：`09-25 00:42（3 小时前·已过期）`。
-
-    动机（20260925 生产实证，trace 20260925T035331）：访客问"现在服务器怎么了"，
-    台账里最近一条是 3 小时 11 分前的服务器状态，模型零工具照抄摘要、narrator
-    又写成"刚才查到的"——数据过期 + 措辞不实，两头都错。年龄是**事实**（系统算的），
-    要不要据此重查由原生模型循环决定——所以这里只标注、不拦截。
-
-    行首时间戳由 Rust 渲染（`MM-DD HH:MM`，只有月日没有年）：跨年时"12-31 23:50"
-    在 1 月 1 日按当年解析会变成"十一个月后的未来"，故超前 6 小时以上一律退一年。
-    解析不了的时间戳（脏行/别的格式）**原样留着**——不猜、也不因为看不懂就标"刚刚"。
-    """
-    now = now or datetime.now()
-
-    def _rep(m: "re.Match[str]") -> str:
-        minutes = age_minutes(m.group(0), now)
-        if minutes is None:              # 看不懂 ⇒ 原样留着，不猜（见 `age_minutes`）
-            return m.group(0)
-        mark = "·已过期" if minutes > EXEC_STALE_MINUTES else ""
-        return f"{m.group(0)}（{_age_phrase(minutes)}{mark}）"
-
-    return TS_MMDD_HHMM_RE.sub(_rep, exec_txt)
-
-
-def _ledger_block(req: ChatRequest, confirmed: bool = False) -> str:
-    """确认与执行事实（系统台账）——两块合一注入（20260924）。
-
-    此前是两条独立的 ctx_parts（`recent_executions` / `pending_action`），各自的定性
-    括号都是事后补的补丁。合一之后"真做过的"与"还没做的"在同一个块里**互斥对照**，
-    模型没有机会把一半读成另一半；两块都空时整块不注入（不占上下文）。
-
-    `confirmed`（本轮是"点确定"那一跳，令牌已验签）：待办那一半**正被本轮执行**，
-    不能再照旧说"等主人点头、尚未执行"——那句话是 20260923 洞⑥ 那族假话的样板文本，
-    原样摆在上下文里等于给 narrator 递台词（20260922 两跑的"把办好的说成待确认"
-    正是抄了它）。此时改写成执行中的定性，其余原样。
-    """
-    head = ("确认与执行事实（系统台账——泠月自己的动作记录，不是访客的浏览痕迹；"
-            "两半互斥：『已执行』是真做过、系统验收过的，『待主人点头』是**还没做**的。"
-            "这两块都是系统事实：不许否认它们存在，也不许把一半说成另一半。"
-            "『已执行』行行首时间后面那个「（…前）」是系统按当前时间算好的年龄，"
-            f"带「·已过期」的=超过 {EXEC_STALE_MINUTES} 分钟——只能说明「当时是那样」，"
-            "不要拿它回答「现在怎样」，见规划纪律 6c；叙述里也不许把这种记录说成「刚才」）")
-    # 年龄标注放在 [:1500] 截断**之后**：截断的额度留给台账原文本身，
-    # 标注是系统补的事实，不该挤掉主人的执行记录。
-    exec_txt = annotate_exec_ages(req.executions.strip()[:1500]) or "（本会话暂无记录）"
-    if confirmed:
-        # 待办那一半**整行改写、不回引 Rust 渲染的行**：那行尾巴写死了
-        # "状态 awaiting（等主人点头，尚未执行）"，正是 20260923 洞⑥ 那族假话的
-        # 样板文本（20260922 两跑的"把办好的说成待确认"就是抄了它）——本轮它已经被
-        # 主人的那一下确定消费掉，再摆出来等于给 narrator 递台词。目标/参数不丢：
-        # 本轮的执行回执（工具帧）本来就有，叙述以回执为准。
-        return (head + "\n· 已执行（系统验收过）: " + exec_txt
-                + "\n· 待办: 主人**刚刚点了「确定」**，本轮正在执行它——**不是**尚未执行，"
-                  "也不是没生成过确认；办到哪一步一律以本轮执行回执为准")
-    return (head + "\n· 已执行（系统验收过）: " + exec_txt
-            + "\n· 待主人点头（还没做）: "
-            + (req.pending_action.strip()[:800] or "（本会话暂无记录）"))
-
-
-def _ctx_field(s, limit: int = 500) -> str:
-    """Bound page fields before placing them in the native system context."""
-    return _CTX_UNSAFE_RE.sub(" ", str(s or ""))[:limit]
-
-
-_CTX_UNSAFE_RE = re.compile(r"[\r\n\[\];=]")
-
-
 def _build_messages(req: ChatRequest, confirm_grant: dict | None = None) -> list:
-    """Assemble current context and history; confirm_grant only labels the ledger."""
-    messages = []
-    ctx_parts = [f"user_id={req.user_id}, page={_ctx_field(req.current_url)}, "
-                 f"title={_ctx_field(req.page_title)}"]
-    ctx_parts.append(f"current_effects={_ctx_field(req.current_effects, 200) or 'none'}")
-    ctx_parts.append(f"current_darkmode={_ctx_field(req.current_darkmode, 20) or 'off'}")
-    # 与时间工具共用格式，避免从历史时间推算当前时间。
-    ctx_parts.append(f"current_time={format_local_now()}")
-    # 额度只注入已知余额；缺席表示未知。
-    if req.chat_quota is not None:
-        if req.chat_quota.unlimited:
-            ctx_parts.append("chat_quota=unlimited")
-        else:
-            ctx_parts.append(f"chat_quota=剩{req.chat_quota.remaining}/{req.chat_quota.limit}轮")
-    if req.summary:
-        ctx_parts.append(f"conversation_summary: {req.summary}")
-    if req.executions or req.pending_action:
-        ctx_parts.append(_ledger_block(req, confirmed=bool(confirm_grant)))
-    # 开放任务只注入非空状态。
-    from config.settings import settings
-    _open_tasks = render_open_tasks(req.agent_tasks,
-                                    limit=int(getattr(settings, "agent_task_inject_max", 3) or 3))
-    if _open_tasks:
-        ctx_parts.append("open_tasks:\n" + _open_tasks)
-    # 仅原句重发标注重复，近似表述仍作为新问题。
-    if req.message.strip():
-        prev_user = next((h.content for h in reversed(req.history)
-                          if h.role == "user"), None)
-        if isinstance(prev_user, str) and req.message.strip() == prev_user.strip():
-            ctx_parts.append(
-                "repeat_ask_note: 访客原句重发了刚才的问题——若上轮已答过：先点破"
-                "（'这个问题你刚才问过啦'），再压缩成两三句要点重述（不复读原文全文、"
-                "不重复举例/收尾句），并追问一句新意图；本轮工具查证带回新事实才按新"
-                "事实完整叙述")
-    ctx = f"[System: {'; '.join(ctx_parts)}]"
-    messages.append(HumanMessage(content=ctx, additional_kwargs={
-        "memory_context": True,
-        "page_context": {"url": req.current_url, "title": req.page_title,
-                         "current_effects": req.current_effects,
-                         "current_darkmode": req.current_darkmode},
-        "conversation_summary": req.summary}))
-
-    # 无 checkpoint 时回放后端历史；去掉事实帧及未完成的用户轮次。
-    if not _runtime_holds_context():
-        hist = [(h.role, h.content) for h in req.history[-20:]]
-        cleaned: list = []
-        for role, content in hist:
-            if role != "assistant":
-                cleaned.append((role, content))
-                continue
-            body = strip_fact_lines(content)
-            if body:
-                cleaned.append((role, body))
-        for i, (role, content) in enumerate(cleaned):
-            if role == "user":
-                if i + 1 >= len(cleaned) or cleaned[i + 1][0] != "assistant":
-                    continue  # 孤儿 user（该轮回复未入库/整轮只剩事实行），不注入
-                messages.append(HumanMessage(content=content))
-            else:
-                messages.append(AIMessage(content=content))
-
-    # 图片保留在本轮消息，文本历史只携带图片占位。
-    if req.image:
-        content: list = []
-        if isinstance(req.image, str):
-            imgs = [req.image]
-        else:
-            imgs = req.image
-        for url in imgs:
-            content.append({"type": "image_url", "image_url": {"url": url}})
-        content.append({"type": "text", "text": f"[当前问题]: {req.message or '请描述这些图片'}"})
-        messages.append(HumanMessage(content=content))
-    else:
-        # 明确区分当前请求与历史问题。
-        messages.append(HumanMessage(content=f"[当前问题]: {req.message}"))
-    return messages
+    """Adapt the request using the active runtime's history ownership."""
+    return build_messages(req, holds_context=_runtime_holds_context())
 
 
 def _runtime_events(messages: list, *, thread_id: str, user_id: int,
