@@ -324,32 +324,6 @@ def _test_deadline_invariant_mirrors_parent_repo():
               m2.group(1).strip() if m2 else "没找到 TASK_OPEN_STATES")
 
 
-def _test_producer_wiring():
-    print("\n[接线] producer 里结算与收口都在、顺序是**先结算后收口**")
-    src = (ROOT / "server.py").read_text(encoding="utf-8")
-    i_settle = src.find("advs = _task_advance_rows(")
-    i_expire = src.find("_emit_task_frames(_task_expire_rows(")
-    check("两处都在", i_settle > 0 and i_expire > 0, f"{i_settle} / {i_expire}")
-    check("★ 结算在收口**之前**（反了就是「刚办完就被判过期」）",
-          0 < i_settle < i_expire, f"{i_settle} < {i_expire}")
-    check("结算过的 task_id 真的传给了收口（`settled` 不是摆设）",
-          "settled = [str(a.get(\"task_id\") or \"\") for a in advs]" in src[i_settle:i_expire]
-          and "settled, record), queue, loop)" in src[i_expire:i_expire + 200],
-          "settled")
-    check("两件事都住在 producer **外面**（`_run_agent_stream_to_queue` 已贴复杂度"
-          "台账的行数上限，只许缩小）",
-          "def _task_settle_and_expire(" in src)
-    check("同意闸那一族在 execute update 里累计（`_consent_asks` 被调用）",
-          "_consent_asks(ex_upd, consent_asks)" in src)
-    check("两条路各自 try/except、失败只记一行（辅助事实绝不阻断对话）",
-          src.count("任务结算失败（不影响本轮回复）") == 1
-          and src.count("任务收口失败（不影响本轮回复）") == 1)
-    check("`__TASK__` 帧只有两处出口：登记那条（收到即发）+ `_emit_task_frames`"
-          "（结算与收口共用）——结算/收口各写一遍就是同一个形状漂两次",
-          src.count('queue.put("__TASK__:" + json.dumps(') == 2,
-          str(src.count('queue.put("__TASK__:" + json.dumps(')))
-
-
 def _test_reverse_controls():
     print("\n[反控] 把真源头改坏 ⇒ 对应判据当场红（不是恒绿的装饰）")
     soft, hard = T.TASK_STALE_SOFT_HOURS, T.TASK_STALE_HARD_HOURS
@@ -392,7 +366,6 @@ def test_task_expiry():
                _test_system_ask_cleared_on_advance,
                _test_transition_frames_match_settlement_shape,
                _test_deadline_invariant_mirrors_parent_repo,
-               _test_producer_wiring,
                _test_reverse_controls):
         fn()
     print("\n" + ("全部通过 ✅" if not FAILS else f"失败 {len(FAILS)} 项 ❌: {FAILS}"))

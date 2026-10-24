@@ -144,24 +144,16 @@
     "lines": 102
   },
   "rag/vector_index.py::VectorStore._update_locked": {
-    "c": 33,
+    "c": 32,
     "lines": 94
   },
   "scripts/build_word_graph.py::main": {
     "c": 39,
     "lines": 235
   },
-  "server.py::_run_agent_stream_to_queue": {
-    "c": 77,
-    "lines": 585
-  },
-  "server.py::chat_stream": {
-    "c": 14,
-    "lines": 342
-  },
   "server.py::chat_stream.event_stream": {
-    "c": 43,
-    "lines": 257
+    "c": 33,
+    "lines": 186
   },
   "tests/test_account_freeze.py::test_account_freeze": {
     "c": 143,
@@ -180,7 +172,7 @@
     "lines": 177
   },
   "tests/test_action_text.py::test_action_text": {
-    "c": 48,
+    "c": 46,
     "lines": 370
   },
   "tests/test_admin_write.py::test_admin_write": {
@@ -280,8 +272,8 @@
     "lines": 211
   },
   "tests/test_idem_noop.py::test_idem_noop": {
-    "c": 171,
-    "lines": 484
+    "c": 129,
+    "lines": 445
   },
   "tests/test_judge_offline.py::main": {
     "c": 75,
@@ -329,7 +321,7 @@
   },
   "tests/test_plan_channel.py::test_plan_channel": {
     "c": 58,
-    "lines": 194
+    "lines": 191
   },
   "tests/test_planner_llm_error.py::test_planner_llm_error": {
     "c": 88,
@@ -352,7 +344,7 @@
     "lines": 73
   },
   "tests/test_reports.py::test_reports": {
-    "c": 154,
+    "c": 153,
     "lines": 742
   },
   "tests/test_retention_manifest.py::main": {
@@ -416,7 +408,7 @@
     "lines": 481
   },
   "tests/test_userdata.py::test_userdata": {
-    "c": 207,
+    "c": 205,
     "lines": 961
   },
   "tests/test_vector_index.py::test_vector_index": {
@@ -441,7 +433,7 @@
   },
   "tests/test_write_idempotency.py::test_write_idempotency": {
     "c": 60,
-    "lines": 299
+    "lines": 297
   },
   "tests/test_write_param_words.py::test_write_param_words": {
     "c": 33,

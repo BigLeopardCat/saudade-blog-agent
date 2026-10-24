@@ -249,8 +249,10 @@ def test_queued_commands_survive_stop_without_replaying_the_legacy_graph(monkeyp
 
 def test_stream_producer_emits_commands_and_receipts_without_confirmation(monkeypatch):
     import server
+    from agent.runtime.native import NativeRuntime
+    from agent.runtime.native_store import NativeConversationStore
 
-    arm, _ = _arm(
+    arm, model = _arm(
         monkeypatch,
         [
             _response("load_site_info_tools"),
@@ -258,7 +260,8 @@ def test_stream_producer_emits_commands_and_receipts_without_confirmation(monkey
             AIMessage(content="设置指令已发送。"),
         ],
     )
-    monkeypatch.setattr(server, "_agent", arm)
+    monkeypatch.setattr(server, "_agent", NativeRuntime(
+        NativeConversationStore(None), catalog=arm.catalog, model_factory=lambda **_: model))
 
     async def collect():
         loop = asyncio.get_running_loop()

@@ -662,11 +662,15 @@ def _test_cmd_frame_wiring():
     srv = (root / "server.py").read_text(encoding="utf-8")
     gold = (root / "eval" / "run_golden.py").read_text(encoding="utf-8")
 
-    i_put = srv.find('queue.put("__CMD__:"')
-    i_stream = srv.find("async def event_stream")
-    check("producer 发 `__CMD__`（golden 直接 drain 的就是它的队列）", i_put > 0)
-    check("  且它在 event_stream **之前**（不是只有消费端接了）",
-          i_put > 0 and i_stream > i_put)
+    from agent.runtime.results import TurnResult
+    from agent.transport import collect_turn, command_wire, iter_transport_events
+    command = {"kind": "navigate", "url": "https://saudade.site/about"}
+    result = TurnResult("页面指令已发送。", {"receipts": [{"cmd": command}]})
+    frames = list(iter_transport_events([result]))
+    check("原生生产者派发结构化命令",
+          any(isinstance(item, str) and item.startswith("__CMD__:") for item in frames))
+    check("同步路径共用相同命令编码",
+          collect_turn([result]).navigation == command_wire(command))
 
     i_cons = srv.find('chunk.startswith("__CMD__:")')
     seg = srv[i_cons:i_cons + 1200] if i_cons > 0 else ""
@@ -677,10 +681,6 @@ def _test_cmd_frame_wiring():
           "nav_line = chunk" in seg)
     check("  置 pending_nl（命令帧独占一行，否则行级过滤把整行剥空）",
           "pending_nl" in seg)
-    check("非流式用同一个 `_cmd_wire` 重建（不是各写一份）",
-          '_cmd_wire(r.get("cmd"))' in srv and "from agent.graph import" in srv
-          and "_cmd_wire" in srv.split("from agent.graph import")[1].split("\n")[0])
-
     i_cmd = gold.find('item.startswith("__CMD__:")')
     i_catch = gold.find('elif isinstance(item, str) and item.startswith("__")')
     check("golden 把 __CMD__ 重建成连线形进 commands（既有 114 条断言零编辑的前提）",

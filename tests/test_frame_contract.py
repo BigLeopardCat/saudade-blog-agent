@@ -186,32 +186,6 @@ def _sec_structure() -> None:
 
 
 
-def _consumed_updates(stree) -> set:
-    """`server.py` 从 `updates` 那一格里**按名字现取**的键（`data.get("model")` 那一族）。"""
-    out = set()
-    for node in ast.walk(stree):
-        if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)):
-            continue
-        if not (isinstance(node.func.value, ast.Name)
-                and node.func.value.id == "data" and node.func.attr == "get"):
-            continue
-        if node.args and isinstance(node.args[0], ast.Constant):
-            if isinstance(node.args[0].value, str):
-                out.add(node.args[0].value)
-    return out
-
-
-def _sec_frames(stree) -> set:
-    """⑤：帧名三处同源——声明 = 生产者现取 = 图里的节点。→ 生产者现取的键集（⑥e 要用）。"""
-    consumed = _consumed_updates(stree)
-    check("⑤a `server.py` 确实按名消费 updates（扫面没被改窄）",
-          len(consumed) >= 4, f"取到 {sorted(consumed)}")
-    check("⑤b `NODE_FRAMES` 与 `server.py` 现取的键集**恰好**相等",
-          consumed == set(F.NODE_FRAMES),
-          f"server={sorted(consumed)} frames={sorted(F.NODE_FRAMES)}")
-    return consumed
-
-
 def _sec_noop(gtree) -> None:
     """⑦：逐字抄的那句中文，命名了才锁得住。"""
     hits = [n.value for n in ast.walk(gtree)
@@ -221,7 +195,7 @@ def _sec_noop(gtree) -> None:
           len(hits) == 1, f"graph.py 里命中 {len(hits)} 处")
 
 
-def _sec_reverse(g_real: set, nodes: set, ann: set, consumed: set) -> None:
+def _sec_reverse(g_real: set, nodes: set, ann: set) -> None:
     """⑥：正控不红不算数 —— 每一种"改坏"都必须当场判红。
 
     ⚠️ 有一条**故意不在这里**：「从 `NODE_FRAMES` 删一格」。③a 是 ⊇ 判据，
@@ -242,10 +216,6 @@ def _sec_reverse(g_real: set, nodes: set, ann: set, consumed: set) -> None:
          not audit(set(), declared, floor=8), "取空仍判绿 = 扫面坏了不响"),
         ("⑥d 反控：闭包只取到零星几格（低于 floor）⇒ 判出来",
          not audit(thin, declared, floor=8), "扫面被改窄到 3 格仍判绿"),
-        ("⑥e 反控：从 `NODE_FRAMES` **删**一格 ⇒ 判出来（抓它的是 ⑤b 的**相等**判据，"
-         "不是 ③a 的 ⊇——少要一个名字只会让 ⊇ 更松）",
-         not (consumed == set(n for n in F.NODE_FRAMES if n != "gate")),
-         "删了 `gate` 仍判绿 = 那条相等判据没在看声明"),
         ("⑥f 反控：往 `NODE_FRAMES` **加**一格（图里没有）⇒ 判出来",
          not nodes_ok(nodes, (*F.NODE_FRAMES, "nonexistent_node")),
          "加一个不存在的节点仍判绿 = 那条判据没在看图"),
@@ -280,7 +250,6 @@ def main() -> int:
     # 不并进来 ⇒ 计划那一格在闭包里看不见（见 `_state_read_tree`）。其余各节照旧只读
     # graph.py 一棵树（它们的判据对象就是"graph.py 里有什么"）。
     read_tree = _state_read_tree(GRAPH, PLAN_CODEC)
-    stree = ast.parse(SERVER.read_text(encoding="utf-8"))
     nodes = set(create_agent().get_graph().nodes)
     ann = set(AgentState.__annotations__)
 
@@ -290,9 +259,8 @@ def main() -> int:
 
     g_real = _sec_closure(read_tree)
     _sec_structure()
-    consumed = _sec_frames(stree)
     _sec_noop(gtree)
-    _sec_reverse(g_real, nodes, ann, consumed)
+    _sec_reverse(g_real, nodes, ann)
 
     print()
     if FAILED:

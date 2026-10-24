@@ -584,10 +584,13 @@ def test_pending_action_stays_in_legacy_graph(monkeypatch):
 
 def test_existing_sync_producer_accepts_direct_reply(monkeypatch):
     import server
+    from agent.runtime.native import NativeRuntime
+    from agent.runtime.native_store import NativeConversationStore
 
     model = _Model(AIMessage(content="你好呀，今天想聊什么？"))
     monkeypatch.setattr("agent.runtime.hybrid.get_llm", lambda **_: model)
-    monkeypatch.setattr(server, "_agent", HybridArm(_Legacy()))
+    monkeypatch.setattr(server, "_agent", NativeRuntime(
+        NativeConversationStore(None), model_factory=lambda **_: model))
 
     result = server._run_agent_sync(
         _state()["messages"], "hybrid-test", principal=Principal(uid=7, role="user"))
@@ -597,10 +600,13 @@ def test_existing_sync_producer_accepts_direct_reply(monkeypatch):
 
 def test_existing_stream_producer_emits_direct_reply(monkeypatch):
     import server
+    from agent.runtime.native import NativeRuntime
+    from agent.runtime.native_store import NativeConversationStore
 
     model = _Model(AIMessage(content="你好呀，今天想聊什么？"))
     monkeypatch.setattr("agent.runtime.hybrid.get_llm", lambda **_: model)
-    monkeypatch.setattr(server, "_agent", HybridArm(_Legacy()))
+    monkeypatch.setattr(server, "_agent", NativeRuntime(
+        NativeConversationStore(None), model_factory=lambda **_: model))
 
     async def collect():
         loop = asyncio.get_running_loop()
@@ -623,15 +629,13 @@ def test_existing_stream_producer_emits_direct_reply(monkeypatch):
     assert not any(isinstance(f, Exception) for f in frames)
 
 
-def test_server_can_select_hybrid_arm(monkeypatch):
+def test_server_rejects_retired_hybrid_selection(monkeypatch):
     import server
     from config.settings import settings
 
-    arm = object()
     monkeypatch.setattr(settings, "agent_arm", "hybrid")
-    monkeypatch.setattr("agent.runtime.hybrid.build", lambda: arm)
-
-    assert server._build_arm() == (arm, "hybrid")
+    with pytest.raises(RuntimeError, match="AGENT_ARM=native"):
+        server._build_arm()
 
 
 def test_article_menu_rejects_nonpublic_scope(monkeypatch):

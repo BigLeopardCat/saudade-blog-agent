@@ -153,7 +153,8 @@ def test_sync_entry_binds_current_conversation_to_native_history(backend, monkey
     from langchain_core.messages import AIMessage, HumanMessage
 
     import server
-    from agent.runtime.hybrid import HybridArm
+    from agent.runtime.native import NativeRuntime
+    from agent.runtime.native_store import NativeConversationStore
 
     def call(name):
         return AIMessage(content="", tool_calls=[{"id": name, "name": name, "args": {}}])
@@ -168,12 +169,8 @@ def test_sync_entry_binds_current_conversation_to_native_history(backend, monkey
         def invoke(self, prompt):
             return next(responses)
 
-    class Legacy:
-        def stream(self, *args, **kwargs):
-            raise AssertionError("History unexpectedly delegated")
-
-    monkeypatch.setattr("agent.runtime.hybrid.get_llm", lambda **kwargs: Model())
-    monkeypatch.setattr(server, "_agent", HybridArm(Legacy()))
+    monkeypatch.setattr(server, "_agent", NativeRuntime(
+        NativeConversationStore(None), model_factory=lambda **_: Model()))
     result = server._run_agent_sync([HumanMessage(content="查查之前的聊天")], "activity-test",
                                     user_id=7, principal=Principal(7, "user", SOURCE_ASSERTION),
                                     conversation_id=9)

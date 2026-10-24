@@ -1,0 +1,1 @@
+- 新增原生 Runtime 事件传输适配层：正文增量、结构化回执、确认/取消、命令、错误和结束帧共用同一职责边界；终态正文只补流式后缀，避免重复展示。服务端执行适配器改为依赖 `stream_events`，不再解析旧 planner/execute/gate 节点更新。此分支依赖 `codex/native-runtime-core` 提供 Runtime 接口，未部署生产。
