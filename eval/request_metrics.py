@@ -16,6 +16,16 @@ def _label(value):
     return value if isinstance(value, str) and value else "unknown"
 
 
+def _event_duration(events, name):
+    for event in events:
+        if event.get("node") != "producer" or event.get("event") != name:
+            continue
+        value = event.get("duration_s")
+        if type(value) in (int, float) and math.isfinite(value) and value >= 0:
+            return value
+    return None
+
+
 def events_of(doc):
     events = doc.get("events")
     return [e for e in events if isinstance(e, dict)] if isinstance(events, list) else []
@@ -45,6 +55,8 @@ def summary(doc):
             "build": _label(runtime.get("build_sha")),
             "model": _label(runtime.get("model")), "path": path_of(doc),
             "duration_s": duration if valid_duration else None,
+            "first_visible_event_s": _event_duration(events, "first_visible_event"),
+            "first_reply_s": _event_duration(events, "first_reply"),
             "has_reply": isinstance(doc.get("reply"), str) and bool(doc["reply"].strip()),
             "end_reason": _label(doc.get("end_reason")),
             "started_calls": sum(e.get("event") == "llm_start" for e in events),
@@ -68,6 +80,10 @@ def collect(paths):
     output = []
     for key, rows in sorted(groups.items()):
         times = [row["duration_s"] for row in rows if row["duration_s"] is not None]
+        first_visible = [row["first_visible_event_s"] for row in rows
+                         if row["first_visible_event_s"] is not None]
+        first_reply = [row["first_reply_s"] for row in rows
+                       if row["first_reply_s"] is not None]
         totals = usage.empty()
         for row in rows:
             for field in totals:
@@ -84,5 +100,9 @@ def collect(paths):
                        "duration_samples": len(times), "p50_s": median(times) if times else None,
                        "p95_s": quantiles(times, n=100, method="inclusive")[94]
                        if len(times) >= 20 else None,
+                       "first_visible_samples": len(first_visible),
+                       "first_visible_p50_s": median(first_visible) if first_visible else None,
+                       "first_reply_samples": len(first_reply),
+                       "first_reply_p50_s": median(first_reply) if first_reply else None,
                        "cache_hit_rate": usage.hit_rate(totals), **totals})
     return {"unreadable": unreadable, "groups": output}
