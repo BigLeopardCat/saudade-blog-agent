@@ -115,11 +115,13 @@ def test_budget_exhaustion_finishes_without_constructing_another_engine():
 
 def test_obsolete_delegate_request_cannot_fall_back():
     model = Model(AIMessage(content="", tool_calls=[
-        {"name": "delegate_to_site_agent", "args": {}, "id": "old"}]))
+        {"name": "delegate_to_site_agent", "args": {}, "id": "old"}]),
+        AIMessage(content="当前请求未能完成。"))
     selected = runtime(model)
     events = run(selected)
-    assert isinstance(events[-1], TurnResult) and "未能完成" in events[-1].reply
-    assert len(model.prompts) == 1
+    assert events[-1] == TurnResult("当前请求未能完成。")
+    assert len(model.prompts) == 2
+    assert "delegate_to_site_agent" not in str(model.menus)
 
 
 @pytest.mark.parametrize("grant", [

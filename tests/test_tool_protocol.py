@@ -39,9 +39,11 @@ class Read:
         return "作者资料"
 
 
-def test_tool_error_provides_current_menu_without_repeating_io():
+@pytest.mark.parametrize("invalid,reason", [("invented", "unknown_tool"),
+                                          ("load_site_info_tools", "domain_already_loaded")])
+def test_tool_error_provides_current_menu_without_repeating_io(invalid, reason):
     read = Read()
-    model = Model([call("load_site_info_tools"), call("invented"), call(read.name),
+    model = Model([call("load_site_info_tools"), call(invalid), call(read.name),
                    AIMessage(content="作者资料")])
     session = ToolSession(model, {}, {}, {"site": {read.name: read}})
     result = session.run([HumanMessage(content="查询作者")])
@@ -49,22 +51,8 @@ def test_tool_error_provides_current_menu_without_repeating_io():
     error = model.prompts[2][-1]
     assert error.status == "error"
     data = json.loads(error.content)
-    assert data["error"] == "unknown_tool"
-    assert data["available_tools"] == ["delegate_to_site_agent", read.name,
-                                        "load_site_info_tools"]
-    assert set(data["available_tools"]) == {
-        item["function"]["name"] for item in model.kwargs["tools"]}
-
-
-def test_repeated_domain_loading_still_exhausts_the_tool_budget_without_business_io():
-    read = Read()
-    model = Model([call("load_site_info_tools") for _ in range(3)])
-    session = ToolSession(model, {}, {}, {"site": {read.name: read}})
-    session.budget = RequestBudget(BudgetLimits(tool_calls=2))
-    assert "已停止继续处理" in session.run([HumanMessage(content="查询作者")]).reply
-    assert len(model.prompts) == 3 and read.calls == 0
-    assert session.budget.tool_calls == 2
-    assert all(prompt[-1].status == "success" for prompt in model.prompts[1:])
+    assert data["error"] == reason
+    assert data["available_tools"] == [read.name]
 
 
 def test_repeated_invalid_requests_exhaust_the_configured_model_budget():
@@ -107,17 +95,10 @@ def test_exhausted_result_budget_stops_before_another_read():
     assert read.calls == 2
 
 
-def test_budget_stop_never_restarts_the_request_in_the_legacy_planner(monkeypatch):
-    from agent.runtime.hybrid import HybridArm
-
-    class Legacy:
-        def stream(self, *args, **kwargs):
-            raise AssertionError("Budget exhaustion entered the legacy planner")
-
+def test_budget_stop_does_not_restart_another_runtime():
     model = Model([call("invented") for _ in range(5)])
-    monkeypatch.setattr("agent.runtime.hybrid.get_llm", lambda **kwargs: model)
+    session = ToolSession(model, {}, {}, {})
     with budget_scope(RequestBudget(BudgetLimits(model_calls=5))):
-        events = list(HybridArm(Legacy()).stream(
-            {"messages": [HumanMessage(content="查询作者")]}, {}))
-    assert "已停止继续处理" in events[1][1]["model"]["messages"][0].content
+        result = session.run([HumanMessage(content="查询作者")])
+    assert "已停止继续处理" in result.reply
     assert len(model.prompts) == 5

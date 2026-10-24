@@ -5,9 +5,10 @@ from types import SimpleNamespace
 import pytest
 
 from agent import runtime_probe
-from agent.agent import create_agent
 from agent.llm_usage import usage_fields
-from agent.runtime.hybrid import HybridArm
+from agent.runtime.native import NativeRuntime
+from agent.runtime.native_store import NativeConversationStore
+from langgraph.checkpoint.memory import InMemorySaver
 from models import llm
 
 
@@ -18,9 +19,8 @@ def test_version_stays_with_loaded_process_after_working_tree_changes(monkeypatc
 
 
 def test_health_reports_actual_runtime_type():
-    graph = create_agent()
-    assert runtime_probe.arm_name(graph) == "graph"
-    assert runtime_probe.arm_name(HybridArm(graph)) == "hybrid"
+    runtime = NativeRuntime(NativeConversationStore(InMemorySaver()))
+    assert runtime_probe.arm_name(runtime) == "native"
     assert runtime_probe.arm_name(None) == "unknown"
 
 
