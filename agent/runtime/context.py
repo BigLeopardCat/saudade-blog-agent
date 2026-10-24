@@ -1,13 +1,12 @@
 """Trusted conversation facts derived from authorization and renderer contracts."""
 
 from agent.authz import scopes_for
-from agent.principal import SOURCE_ASSERTION
+from agent.principal import is_verified_identity
 from agent.stickers import STICKER_NAMES
 
 
 def conversation_context(principal) -> dict:
-    verified = (getattr(principal, "source", None) == SOURCE_ASSERTION
-                and type(getattr(principal, "uid", None)) is int and principal.uid > 0)
+    verified = is_verified_identity(principal)
     role = getattr(principal, "known_role", None) if verified else None
     return {
         "identity": {"verified": verified, "role": role},

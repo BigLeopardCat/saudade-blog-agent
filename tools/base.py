@@ -1069,23 +1069,9 @@ from tools.notes import (  # noqa: E402,F401
     rag_search,
     search_notes,
 )
+from tools.notifications import list_notifications  # noqa: E402,F401
 
-# ---------------------------------------------------------------------------
-# 用户自己的数据 / 站内信 —— 20261018 搬进 tools/own_data.py
-# ---------------------------------------------------------------------------
-# 这两节（`read.own` / `write.own` 那一族：收藏 / 未读汇总 / 站内通知 / 站内信）同属
-# "登录者自己那一份"，且共用同一批原语（`_as_ids` / `_as_bool` / `_as_article_id` /
-# `_own_get` / `_own_write_guard` / `_pre_read_fail`）⇒ **合成一个模块而不是切两刀**，
-# 切开只会让这批原语在两边各留一份。选刀依据与折行说明见 `tools/own_data.py` 头注。
-#
-# 按**原名** re-export ⇒ 全仓 `from tools.base import …` 一处不改。**实测**外面伸手的
-# 是这五处（`grep -rn "from tools.base import" | grep <本块名>` 数出来的，不是估的）：
-#   · `agent/graph.py` 取 `_favorites_snapshot` / `_notifications_snapshot` /
-#     `_mailbox_snapshot`（三处**函数内**惰性 import，拨卡那一轮读快照用）；
-#   · `agent/adminops_noop.py` 取 `_as_ids` / `_as_bool` / `_mailbox_inbox`；
-#   · `agent/workflow_expand.py` 与 `tests/test_truth_source_parity.py` 各取 `_as_bool`；
-#   · `tests/test_sections.py` 取 `_UNREAD_CONTENT_MAX` / `_UNREAD_ITEMS_MAX`。
-# 下面 `_TOOL_REGISTRY` 也照旧。⚠️ 改这一族去 `tools/own_data.py`，不是这里。
+# Current-user adapters and read-state mutations share the HTTP primitives above.
 from tools.own_data import (  # noqa: E402,F401
     _UNREAD_CONTENT_MAX,
     _UNREAD_ITEM_KEYS,
@@ -1107,7 +1093,6 @@ from tools.own_data import (  # noqa: E402,F401
     get_unread_summary,
     list_my_favorites,
     list_my_messages,
-    list_notifications,
     read_messages,
     read_notifications,
     remove_favorite,
