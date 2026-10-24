@@ -1,7 +1,7 @@
 """Bounded model/tool loop with on-demand domains and terminal tool outcomes.
 
 This session owns tool discovery and result budgets. Conversation persistence and
-legacy handoff remain in HybridArm; the model still chooses each tool and reply.
+runtime selection remain outside this loop; the model chooses each tool and reply.
 """
 
 import json
@@ -101,7 +101,9 @@ def _loader(domain: str) -> dict:
 
 
 class ToolSession:
-    def __init__(self, model, config, tools, domains, outcome_adapter=None):
+    def __init__(self, model, config, tools, domains, outcome_adapter=None, *,
+                 allow_legacy_handoff=True):
+        self.allow_legacy_handoff = allow_legacy_handoff
         self.budget = current_budget() or RequestBudget()
         self.output_limit = getattr(model, "max_tokens", None) or NATIVE_OUTPUT_TOKENS
         self.model = model
@@ -125,7 +127,9 @@ class ToolSession:
     def _bind_menu(self):
         menu = [*self.tools.values(), *(_loader(domain) for domain in self.domains
                                        if domain not in self.loaded)]
-        self.menu = [*menu, _DELEGATE]
+        self.menu = [*menu, *([_DELEGATE] if self.allow_legacy_handoff else [])]
+        if not self.menu:
+            return self.model
         bound = self.model.bind_tools(self.menu, tool_choice="auto", parallel_tool_calls=False)
         wire = getattr(bound, "kwargs", {})
         if isinstance(wire, dict) and isinstance(wire.get("tools"), list):
@@ -142,8 +146,11 @@ class ToolSession:
                 return self._result("暂时无法核实文章正文，不能据此回答文章内容。"
                                     "请重新指定要阅读的文章。")
             return self._result("本轮查询已停止，暂时没能完成请求。请明确下一步要处理的事项。")
-        record("hybrid", "legacy_handoff", reason=reason, **data)
-        return None
+        if self.allow_legacy_handoff:
+            record("hybrid", "legacy_handoff", reason=reason, **data)
+            return None
+        record("native", "task_stopped", reason=reason, **data)
+        return self._result("本轮未能完成请求，没有执行未核实的操作。请补充目标或稍后重试。")
 
     def _result(self, reply):
         return self._with_receipts(TurnResult(reply))
@@ -175,7 +182,8 @@ class ToolSession:
         return None
 
     def _tool_error(self, call, prompt, reason):
-        available = sorted({*self.tools, "delegate_to_site_agent", *(name for name, domain
+        available = sorted({*self.tools, *(["delegate_to_site_agent"]
+                            if self.allow_legacy_handoff else []), *(name for name, domain
                             in self.loaders.items() if domain not in self.loaded)})
         body = json.dumps({"error": reason, "available_tools": available})
         prompt.append(ToolMessage(content=body,

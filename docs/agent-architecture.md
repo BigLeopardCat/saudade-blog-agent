@@ -131,6 +131,9 @@ flowchart LR
 │   │   ├── writes.py          # 身份绑定、持久化执行与回放
 │   │   ├── hybrid.py          # 会话准入、存储接口接线、协议输出和旧图交接
 │   │   ├── conversation_store.py # 会话快照与完成轮次的薄存储协议
+│   │   ├── native_store.py     # 原生会话 checkpoint：公开框架 API、消息裁剪和删除屏障
+│   │   ├── native.py           # 原生运行入口：标准文本块及完整轮次结果，无旧图回退
+│   │   ├── capabilities.py     # 原生工具目录组装，复用身份权限与确认能力边界
 │   │   ├── legacy_bridge.py  # 旧图 checkpoint 输入的临时兼容边界
 │   │   ├── graph_store.py     # 现有图 checkpoint、恢复及维护 API 兼容适配
 │   │   ├── admin_domains.py   # 管理员读取与确认准备工具的授权组装
