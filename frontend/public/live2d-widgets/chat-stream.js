@@ -22,7 +22,7 @@
      *  `textContent` 纯文本 + `.msg-streaming` 的 pre-line，收尾才走 markdown），
      *  再把提示作为一个独立节点追加在后面。
      *  ⚠️ 提示**只进 DOM**：存进 items/DB 的仍旧是 agent 说过的话本身（下方 partialItem
-     *  用的还是 cmdText + displayText），否则错误文案会污染历史与记忆注入。 */
+     *  用的还是 displayText），否则错误文案会污染历史与记忆注入。 */
     const renderFailed = (span, errMsg, partial) => {
       if (!span) return;
       try {
@@ -935,45 +935,13 @@
         // → 气泡内三点跳动；收到任意帧 → 隐藏并重新计时。声明在 try 外，
         // catch/正常收尾都能安全清理（try 内 const 是块级作用域，catch 访问不到）
         let typingEl = null, typingTimer = null;
-        // 命令行/展示文本累积变量提升到 try 外：catch 异常路径（流中断/__ERROR__）也要
-        // 能访问已收到的命令帧——实测反射质检挂起 → 流中断 → catch 分支不解析导航，
-        // AUTO_NAVIGATE 命令白发、用户"卡死"且不跳转（20260827g 修复）
-        let cmdText = '', displayText = '';
-        // 程序命令缓冲（20260926 批 2）：`__CMD__:<json>` 帧是**唯一**的执行来源——
-        // 命令从"工具返回的字符串"搬到了执行回执的 `cmd`（见 agent/graph.py 的
-        // _cmd_wire 与 execute_node），agent 侧单独发这一族帧。
-        // 与 cmdText 分开是刻意的：cmdText 装的是**模型正文里写的**命令行（幻觉/元讨论
-        // 的产物，只用来解析导航意图、绝不无条件执行），programCmds 装的是**系统程序帧**。
-        // 混在一起就退回"正文里打的命令也会执行"的老路（20260926 用户已拍板废除）。
+        let displayText = '';
+        // Only named command events can execute browser actions.
         let programCmds = [];
         // 过程行累积也提升到 try 外：catch 异常路径保存回复时要带过程行（20260827g）
         let steps = [];
-        // 命令执行（导航/特效/夜间模式）：正常收尾与异常中断共用（20260827g）。
-        //
-        // **20260926 批 2 重写：只吃程序帧（`__CMD__`），不再扫正文。**
-        // 旧版有两个来源：① 正文里的行首命令帧（cmdText）；② 一段很长的"正文兜底"扫描
-        // ——markdown 链接、中文动词（"转跳/打开/前往"）、伪工具调用签名。② 已整体删除
-        // （用户拍板「废除，只认程序帧」）：模型打在正文里的命令**执行不执行**取决于
-        // 它自己的措辞，一条幻觉出来的相对路径就能把页面带走，而"它到底想干什么"在
-        // 正文里根本无法与"它在举例讲机制"区分开。现在命令只有一个来源：系统执行过
-        // 什么，就有 `cmd` 回执（checker PASS 才算），前端照单执行。
-        // 正文里的命令文本仍然**照旧隐藏不显示**（COMMAND_RE 分流进 cmdText），
-        // 只是不再被执行——这是"看得见但不生效"，比"看起来没发生其实发生了"安全。
-        // BLOG_ROUTES 白名单 + 同源校验保留（纵深防御：帧里也可能带出一个幻觉 URL，
-        // 而 agent 侧的 navigate 技能模板只解析 NAV_MAP，理论上到不了这里）。
-        // contentSpan 为 null 时（catch 异常路径，错误气泡已提示）跳过注记插入。
-        //
-        // **20261002 重写：命令到达即执行**（此前一律攒到流尾）。
-        // 现场（主人报）：系统 t≈3.2s 就印出"页面已跳转：…"，而页面在流结束
-        // （t≈9.4s）才真的动——主人读到"跳好了"之后还要再等几秒。根因不是跳转慢，
-        // 是**陈述与动作分了家**：事实行走 `emit_facts`（execute 收尾即发），命令却
-        // 攒在 `programCmds` 里等流尾。所以把两者合到同一时刻——能当场跳的当场跳。
-        // 唯一跳不了的是**整页目标**（`/device-console/`、跨域 /api）：它们会掐断
-        // SSE，回复随之丢失（Rust 在终止帧才落库）⇒ 只有这一类仍旧等流尾。
-        // 特效/夜间模式改的是当前页面的状态、不掐流，同样当场执行。
-        //
-        // 本轮已经带主人去过的地址（同一条只跳一次：多轮里 round0/round1 可能选出
-        // 同一个目标，此前靠"取最后一条"压住，现在按到达顺序执行，得显式去重）。
+        // SPA navigation and effects run on arrival. Full-page navigation waits
+        // for persisted terminal output, since it closes the current connection.
         let jumpedUrl = null;
         // 处置**单条**命令。返回 true = 已处置（跳了/开合了/按白名单取消了）；
         // 返回 false = 只能等流尾（整页跳转，见上）。
@@ -1100,7 +1068,8 @@
           totalTimer = setTimeout(() => { ctx.state.timedOut = true; ctrl.abort(); }, 300000);
           const resp = await fetch('/api/chat/stream', {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token },
+            headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token,
+                       'X-Agent-Stream-Version': '2' },
             body: JSON.stringify({
               message: msg,
               // 20260903 会话化：显式会话定向写入；roundConvId=null（auto 未决议）
@@ -1245,40 +1214,10 @@
             scrollToBottom(messages);
             broadcast({t: 'process', text, cls, roundId});  // 多标签实时同步（roundId 定位气泡）
           };
-          const archiveRejected = (reason, rejectedText) => {
-            const box = ensureProcessBox();
-            const body = box.querySelector('.agent-process-body');
-            // 若最后一步是刚由 __PROCESS__ 帧打出的同原因"✗ 质检打回"行，升级为可展开
-            // 归档项（被打回轮次的完整文本放进去），避免同一原因重复出现
-            const last = steps[steps.length - 1];
-            if (last && last.cls === 'step' && reason && last.text.indexOf(reason) >= 0) {
-              body.removeChild(body.lastChild);
-              steps.pop();
-            }
-            const item = document.createElement('details');
-            item.className = 'agent-process-reject';
-            const sum = document.createElement('summary');
-            sum.textContent = '✗ 质检打回：' + reason;
-            const rejectedBody = document.createElement('div');
-            rejectedBody.className = 'agent-process-reject-body';
-            rejectedBody.textContent = rejectedText;
-            item.appendChild(sum);
-            item.appendChild(rejectedBody);
-            body.appendChild(item);
-            steps.push({ cls: 'reject', text: reason });
-            refreshCount();
-            scrollToBottom(messages);
-          };
-
-          // 消费 SSE：帧 = "data: <payload>\n\n"，payload 为 JSON 编码文本或终端标记
+          // Decode named SSE events; model text stays opaque.
           const reader = resp.body.getReader();
           const decoder = new TextDecoder();
-          let buf = '';
-          // 终止帧到过没有（20260923）：终止帧**必须是最后一帧**，到过之后又收到帧
-          // 就要上报（三端里 Rust 收 __END__ 即 break 停止转发，前端这里是 continue
-          // 继续读到连接关闭——同一帧两种语义，真出现"END 之后还有帧"时其中一端
-          // 必然看不见，而它此前完全无声）
-          let sawEnd = false;
+
           let mouthOpen = false;
           let lastMouthFlip = 0;
           const tickMouth = () => {
@@ -1291,145 +1230,42 @@
             }
           };
 
+          const protocol = window.__waifuChatProtocol.createStream(({ type, data }) => {
+            kickTyping();
+            if (type === 'error') {
+              const err = new Error(data);
+              err.userText = data;
+              throw err;
+            }
+            if (type === 'done') return;
+            if (type === 'progress') { addStep('step', data); return; }
+            if (type === 'confirmation') {
+              ctx.state.pendingAsk = Object.assign({}, data, { convId: roundConvId });
+              askConvId = roundConvId;
+              saveAsk(ctx.state.pendingAsk);
+              reportAskStage('frame', { id: String(data.id || ''), opts: data.opts.length,
+                                       exp: data.exp ? 'yes' : 'no', q: data.q.slice(0, 40) });
+              return;
+            }
+            if (type === 'command') {
+              programCmds.push(data);
+              applyCmd(data, contentSpan, false);
+              return;
+            }
+            displayText += data;
+            contentSpan.textContent = displayText;
+            tickMouth();
+            scrollToBottom(messages);
+            broadcast({t: 'token', text: data, roundId});
+          });
           while (true) {
             const { done, value } = await reader.read();
             if (done) break;
             armIdle();
-            buf += decoder.decode(value, { stream: true });
-            let sep;
-            while ((sep = buf.indexOf('\n\n')) >= 0) {
-              const frame = buf.slice(0, sep);
-              buf = buf.slice(sep + 2);
-              let payload = frame;
-              if (payload.startsWith('data: ')) payload = payload.slice(6);
-              if (!payload) continue;
-              // 有帧即"在工作"：隐藏打字指示器并重新计时（任何帧类型都算）
-              kickTyping();
-              if (payload.startsWith('__ERROR__:')) {
-                let detail = payload.slice(10);
-                try { detail = JSON.parse(detail); } catch(e) {}
-                // userText（20260927）：这个帧是**服务端自己写的那句话**（三种终止帧
-                // 之一），不是网络故障 ⇒ 原样展示，不套「网络错误: 」前缀——同 409
-                // 令牌那条的先例（见下方 resp.status===409 分支的 usedErr）。
-                // 事故依据：20260927 07:29 服务端发的是 `'pending_confirm'`（一个内部
-                // KeyError 的名字），前端照旧套前缀，主人读到的是「网络错误: 'pending_confirm'」
-                // ——名字错（不是网络问题）、内容也看不懂。服务端那一半已改成中文话术
-                // （server.PRODUCER_ERROR_TEXT）；这一半保证即使将来载荷再变回难懂的
-                // 字符串，也至少不会被**错误地**读成一次连接故障。
-                const errFrame = new Error(detail);
-                errFrame.userText = String(detail);
-                throw errFrame;
-              }
-              if (payload === '__END__' || payload === '__NAV_END__') { sawEnd = true; continue; }
-              // 终止帧之后还有帧：行为不变（照常处理，不吞），但要响亮——这正是
-              // "一端以为结束了、另一端还在写"的那类协议漂移，静默下去就是丢内容
-              if (sawEnd) {
-                reportConfirm('终止帧之后又收到一帧：' + String(payload).slice(0, 24));
-              }
-              let text = payload;
-              try { text = JSON.parse(payload); } catch(e) {}
-              if (!text) continue;
-              // 过程步骤帧：追加到灰色过程行（不参与展示文本/命令累积）
-              if (text.startsWith('__PROCESS__:')) {
-                addStep('step', text.slice('__PROCESS__:'.length));
-                continue;
-              }
-              // 确认弹窗帧（20260921）：存下来，**等流收尾再弹**——此刻 isSending
-              // 还是 true，马上弹会让用户点下去撞上 sendMessage 的忙守卫（点了没反应）
-              if (text.startsWith('__CONFIRM__:')) {
-                let ask = null;
-                try { ask = JSON.parse(text.slice('__CONFIRM__:'.length)); } catch (e) {}
-                if (ask && ask.q && ask.token) {
-                  ctx.state.pendingAsk = Object.assign({}, ask, { convId: roundConvId });
-                  // 落一份存档（20260924）：刷新/断流之后，这张卡片靠它回来
-                  // （见"卡片跨刷新存活"一节）。存在"帧可用"这一支里——缺字段的帧
-                  // 连卡片都挂不上，存档只会让刷新后冒出一张点不动的卡。
-                  askConvId = roundConvId;
-                  saveAsk(ctx.state.pendingAsk);
-                  // 链路第一跳（20260924）：确认帧到手且可用。后面还有没有 card/click/
-                  // settle 是**另一回事**——此前只有"帧不可用"才留痕，于是"帧到了、
-                  // 卡片却没挂上/挂了却没结算"在日志里长得跟"压根没弹过窗"一样。
-                  reportAskStage('frame', { id: String(ask.id || ''),
-                                            opts: (ask.opts || []).length,
-                                            exp: ask.exp ? 'yes' : 'no',
-                                            q: String(ask.q || '').slice(0, 40) });
-                } else {
-                  // 20260923：这一支此前静默丢弃——agent 那边确认帧已经签发（待办
-                  // 在内存/库里），前端只是不再提，用户看到的是"agent 说要确认，
-                  // 然后什么都没有"。缺 q 或 token 的帧一律上报（只记缺哪个字段，
-                  // **不记令牌内容**）
-                  reportConfirm('__CONFIRM__ 帧不可用（'
-                    + (ask ? '缺字段：' + ['q', 'token'].filter((k) => !ask[k]).join('/') : 'JSON 解析失败')
-                    + '）');
-                }
-                continue;
-              }
-              // REVISE 轮次重置：上一轮的文本/命令已被质检判定作废（reflector 打回），
-              // 清空累积重新渲染——最终用户只看到最后一轮的完整回复，
-              // 也不会把废轮次的导航命令误当最终意图；被打回的内容归档进过程行
-              if (text === '__RESET__' || text.startsWith('__RESET__:')) {
-                // 帧形 `__RESET__:<scope>:<理由>`（20261001）。scope 是**机器判据**：
-                //   · `text` —— 只作废叙述，命令照旧执行（终局 fallback：execute 跑过、
-                //     checker PASS 过，命令是已发生的事实，被否定的只有措辞）；
-                //   · `all`  —— 连本轮 `__CMD__` 缓冲一起作废（gate 打回重规划：
-                //     决策被推翻，重下的命令才算数）。
-                // 旧帧没有 scope 段 ⇒ 按 `all`（= 旧行为）。三端约定必须一致，
-                // 缺省取 `all` 是因为它更保守：版本错配时退化成"命令被吞"，
-                // 而不是"道歉了但还是跳了"。
-                const rest = text === '__RESET__' ? '' : text.slice('__RESET__:'.length);
-                const mScope = /^(all|text):/.exec(rest);
-                const scope = mScope ? mScope[1] : 'all';
-                const reason = (mScope ? rest.slice(mScope[0].length) : rest) || '质检未通过';
-                const rejected = (cmdText + displayText).trim();
-                if (rejected) {
-                  archiveRejected(reason, rejected);
-                } else {
-                  addStep('reject-empty', '✗ 质检打回：' + reason);
-                }
-                cmdText = '';
-                displayText = '';
-                // 20261002 边界（命令到达即执行之后才有这一格）：`scope=all` 清的是
-                // **还没跑的命令**。已经当场跑掉的那些（SPA 跳转/特效/夜间）撤不回来
-                // ——页面已经换了、樱花已经落了。如实记在这里，别再指望它兜"道歉了
-                // 但还是跳了"：那一格的防线现在在服务端（`emit_reset` 的 scope 选择）
-                // 与 planner 的重新决策上，前端只保证"不重复跑第二次"。
-                // 只有决策被推翻时才清命令缓冲（20261001 改口，此前无条件清）。
-                // 旧写法把"gate 否定了整轮"与"这一轮没做过任何事"当成同一件事，
-                // 而终局 fallback 里 execute 已经跑过、checker 已 PASS —— 命令被吞掉
-                // 之后，气泡最前面那块系统印的事实（"页面已跳转：…"）就成了**系统
-                // 说它没做的事**（20261001 夜间 `nav_article_target` 实证）。
-                if (scope !== 'text') programCmds = [];
-                contentSpan.textContent = '';
-                broadcast({t: 'reset', reason, roundId});  // 多标签同步：清空废轮次文本
-                continue;
-              }
-              // 程序命令帧（20260926 批 2）：命令的**唯一**合法来源。分支必须放在
-              // 下面 COMMAND_RE 分流**之前**——`__CMD__:{…}` 落进 displayText 会被
-              // 当正文渲染出一坨 JSON；落进 cmdText 则等于"正文里的命令也执行"。
-              // 只进 programCmds，不进任何展示文本。
-              if (text.startsWith('__CMD__:')) {
-                let cmd = null;
-                try { cmd = JSON.parse(text.slice('__CMD__:'.length)); } catch (e) {}
-                if (cmd && typeof cmd === 'object') {
-                  programCmds.push(cmd);
-                  // 到达即执行（20261002，见 applyCmd 头注）：能当场做的（SPA 跳转、
-                  // 特效、夜间）立刻做掉；整页目标返回 false、留在缓冲里等流尾。
-                  try { applyCmd(cmd, contentSpan, false); } catch (e) { /* 流尾那一趟还会再试 */ }
-                }
-                continue;
-              }
-              // 命令行与展示文本分流：命令行不渲染（含模型幻觉输出的变形命令如 SNOW_EFFECT:）
-              if (ctx.core.COMMAND_RE.test(text)) {
-                cmdText += text + '\n';
-              } else {
-                displayText += text;
-                contentSpan.textContent = displayText;
-                tickMouth();
-                scrollToBottom(messages);
-                broadcast({t: 'token', text, roundId});  // 多标签实时同步（roundId 定位气泡）
-              }
-            }
+            protocol.feed(decoder.decode(value, { stream: true }));
           }
+          protocol.feed(decoder.decode());
+          protocol.finish();
           clearTimeout(idleTimer);
           clearTimeout(totalTimer);
           // 流结束：移除打字指示器（正常收尾路径）
@@ -1438,10 +1274,7 @@
           // 口型归位，关闭 override 让模型恢复默认驱动
           resetMouth();
           contentSpan.classList.remove('msg-streaming'); // 渲染完成后恢复 normal，与博客一致
-          // 完整文本（命令行前置，导航/特效解析沿用原格式）
-          const fullText = cmdText + displayText;
-          // 最终展示：剔除命令行与 SUMMARY 摘要行后渲染 markdown；
-          // 纯命令回复（模型未输出文案）由 renderAgentContent 兜底为灰色注记
+          const fullText = displayText;
           renderAgentContent(contentSpan, fullText);
           // 20260905h：流式逐字滚动发生在纯文本高度上（textContent 直写），最终
           // markdown 整段重渲染会重排气泡高度（贴纸 img/代码块/标题边距）——重渲染
@@ -1530,9 +1363,9 @@
               broadcast({t: 'error', msg: errMsg, roundId});
               // 异常中断也保存已收到的回复（20260827g）：断流不代表内容无效——
               // 先转正保存再跳转，新页面 DB/缓存恢复完整
-              if ((cmdText + displayText).trim()) {
+              if ((displayText).trim()) {
                 const partialItem = __chatCore.migrateItem({
-                  id: roundId, type: 'agent', text: cmdText + displayText, time: Date.now(),
+                  id: roundId, type: 'agent', text: displayText, time: Date.now(),
                   process: steps.map(s => ({cls: s.cls, text: s.text})),
                 });
                 ctx.state.items = __chatCore.mergeItems(ctx.state.items, [partialItem]);
@@ -1572,9 +1405,9 @@
             renderFailed(contentSpan, errMsg, displayText);
             broadcast({t: 'error', msg: errMsg, roundId});
             // 同上：__ERROR__ 帧/网络错误也保存已收到的回复，再执行命令帧
-            if ((cmdText + displayText).trim()) {
+            if ((displayText).trim()) {
               const partialItem = __chatCore.migrateItem({
-                id: roundId, type: 'agent', text: cmdText + displayText, time: Date.now(),
+                id: roundId, type: 'agent', text: displayText, time: Date.now(),
                 process: steps.map(s => ({cls: s.cls, text: s.text})),
               });
               ctx.state.items = __chatCore.mergeItems(ctx.state.items, [partialItem]);

@@ -287,40 +287,40 @@ def stream_rust(msg: str, uid: int, role: str, conv_id: int,
     req = urllib.request.Request(
         f"{BASE}/api/chat/stream", data=json.dumps(body).encode(), method="POST",
         headers={"Content-Type": "application/json",
-                 "Authorization": "Bearer " + login_jwt(uid, role)})
+                 "Authorization": "Bearer " + login_jwt(uid, role),
+                 "X-Agent-Stream-Version": "2"})
     t0 = time.time()
     frames: list[str] = []
     errors: list[str] = []
     text = ""
-    ended = False            # 见过终止帧（__END__/__NAV_END__）
+    ended = False
+    kind = ""
+    names = {"progress": "__PROCESS__:", "confirmation": "__CONFIRM__:", "command": "__CMD__:"}
     with urllib.request.urlopen(req, timeout=timeout) as r:
-        # 逐行读到**连接关闭**（不是读到 __END__ 就收手）：20260921 实测，收到
-        # __END__ 即断开会让 Rust 流尾部的落库步骤不执行（真浏览器读到连接关闭，
-        # 不受影响；探针照抄"早断"就会漏掉尾部的执行记录）。
         for raw in r:
-            line = raw.decode("utf-8", "replace").strip()
+            line = raw.decode("utf-8").rstrip("\r\n")
+            if line.startswith("event: "):
+                kind = line[7:]
+                continue
             if not line.startswith("data: "):
                 continue
-            payload = line[6:]
-            if not payload:
-                continue
-            if payload in ("__END__", "__NAV_END__"):
+            if ended or errors:
+                errors.append("Unexpected event after terminal")
+                break
+            payload = json.loads(line[6:])
+            if kind == "text" and isinstance(payload, str):
+                text += payload
+            elif kind == "done" and payload == {}:
                 ended = True
-                continue
-            if payload.startswith("__ERROR__:"):
-                frames.append(payload)
+            elif kind == "error" and isinstance(payload, str):
                 errors.append(payload)
-                continue
-            try:
-                payload = json.loads(payload)
-            except Exception:  # noqa: BLE001
-                pass
-            if not isinstance(payload, str):
-                continue
-            if payload.startswith("__"):
-                frames.append(payload)   # 控制帧：只登记，不进文本
-                continue
-            text += payload
+            elif kind in names:
+                # Historical report labels are diagnostics, never executable text.
+                value = payload if kind == "progress" else json.dumps(payload, ensure_ascii=False)
+                frames.append(names[kind] + value)
+            else:
+                errors.append("Unsupported SSE event")
+                break
     return {"reply": text, "frames": frames, "errors": errors, "ended": ended,
             "_secs": round(time.time() - t0, 1)}
 

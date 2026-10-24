@@ -10,7 +10,7 @@
       return null;
     }
     const __chatCore = ctx.core;
-    const { COMMAND_RE, renderAgentContent, stripCommandPrefix, applyMsg, chatHTML } = ctx.render;
+    const { renderAgentContent, applyMsg, chatHTML } = ctx.render;
 
     const api = {};
     const init = () => {
@@ -636,16 +636,7 @@
               // 20260828b 防御：远端不做命令分流，token 到达时按行剥离命令行
               // （旧版窗口广播原始 token / REVISE 拼接残留会带 AUTO_NAVIGATE 等，
               // 不剥离会显示在气泡里）；碎片命令由 done 帧含命令检测强制重渲染兜底
-              const cleanToken = (m.text || '').split('\n')
-                .map(l => {
-                  if (!COMMAND_RE.test(l.trim())) return l;
-                  const rest = stripCommandPrefix(l).trim();
-                  return rest ? rest : null;
-                })
-                .filter(l => l !== null)
-                .join('\n');
-              if (!cleanToken) return;
-              h.contentSpan.textContent += cleanToken;
+              h.contentSpan.textContent += m.text || '';
               scrollToBottom(messages);
             } else if (m.t === 'process') {
               if (h.finished) return;
@@ -685,7 +676,7 @@
               const cs = h.contentSpan;
               if (cs.classList.contains('msg-streaming')
                   || (!cs.textContent && !cs.querySelector('.nav-skip-note'))
-                  || COMMAND_RE.test(cs.textContent.trim())) {
+) {
                 cs.classList.remove('msg-streaming');
                 renderAgentContent(cs, m.fullText);
               }

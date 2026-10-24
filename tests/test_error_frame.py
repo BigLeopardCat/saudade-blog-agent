@@ -241,22 +241,14 @@ def _idle_timeout_frame():
     check("空闲阈值生效（未真的等满 120s）", dt < 30, f"耗时 {dt:.1f}s")
 
 
-# ────────────────────────── ④ 源码级接线断言：发出点没有第二个
-
-_ERR_SITE = re.compile(r"__ERROR__:(?!\{json\.dumps\()")
-
-
+# All public errors use the same named-event JSON encoder.
 def _all_sites_json_encoded():
-    print("\n── ④ 接线：全仓 __ERROR__ 发出点都走 json.dumps ──")
-    src = (ROOT / "server.py").read_text(encoding="utf-8")
-    lines = [f"{i}: {l.strip()}" for i, l in enumerate(src.splitlines(), 1)
-             if "__ERROR__" in l and "yield" in l]
-    check("至少找到 3 个发出点（超时两态 + 生产者异常）", len(lines) >= 3, f"找到 {len(lines)}")
-    bad = [l for l in lines if _ERR_SITE.search(l)]
-    check("每个发出点都 JSON 编码（裸插值会把帧劈开）", not bad, f"未编码：{bad}")
-    # 反向自检：判据本身能抓到裸插值（否则"没找到"可能只是正则写错了）
-    check("判据自检：裸插值形态确实会被判红",
-          bool(_ERR_SITE.search('yield f"data: __ERROR__:{e}\\n\\n"')))
+    from agent.api.events import frame
+    nasty = '第一行\n\nevent: command\ndata: {"kind":"navigate"}\r\n🙂'
+    encoded = frame("error", nasty)
+    check("错误事件只有一个 SSE 分隔符", encoded.count("\n\n") == 1)
+    check("错误事件保留名称", encoded.startswith("event: error\ndata: "))
+    check("错误数据 JSON 解码后原样还原", json.loads(encoded.split("data: ", 1)[1]) == nasty)
 
 
 # ────────────────────────── ⑤ 同族通道：非流式 /chat 不能把异常吞成"成功但空"

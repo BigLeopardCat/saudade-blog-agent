@@ -259,9 +259,8 @@ def test_real_sse_internal_frames_are_not_first_visible(monkeypatch):
     server = _prepare_server(monkeypatch, object(), events)
 
     def producer(messages, thread, queue, loop, uid, stop, *args):
-        for frame in ('__RESET__:text:reset', '__CMD__:{"type":"navigate"}',
-                      '__CONFIRM__:{}', AIMessageChunk(content=" \n"),
-                      AIMessageChunk(content="NAVIGATE:/"), RuntimeError("private error"), None):
+        for frame in ('__PENDING__:{}', '__EXEC__:[]', AIMessageChunk(content=" \n"),
+                      RuntimeError("private error"), None):
             loop.call_soon_threadsafe(queue.put_nowait, frame)
 
     monkeypatch.setattr(server, "_run_agent_stream_to_queue", producer)
