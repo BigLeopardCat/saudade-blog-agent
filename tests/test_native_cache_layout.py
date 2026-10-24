@@ -67,13 +67,14 @@ def test_domain_loading_extends_wire_schemas_and_repeated_loading_is_idempotent(
                                       config()["configurable"]["principal"]))
     assert result == TurnResult("完成。") and calls == ["read"]
     menus = [request["tools"] for request in model.requests]
-    for current in menus:
+    for previous, current in zip(menus, menus[1:]):
+        assert current[:len(previous)] == previous
         names = [item["function"]["name"] for item in current]
         assert len(names) == len(set(names))
     repeated = [message for message in model.requests[-1]["messages"]
                 if message.get("tool_call_id") == "load-again"]
-    assert len(repeated) == 1 and repeated[0]["status"] == "error"
-    assert "domain_already_loaded" in repeated[0]["content"]
+    assert len(repeated) == 1 and repeated[0]["status"] == "success"
+    assert "error" not in repeated[0]["content"]
     assert menus[2] == menus[3] == menus[4]
     assert session.budget.tool_calls == 4
     assert "delegate_to_site_agent" not in str(menus)

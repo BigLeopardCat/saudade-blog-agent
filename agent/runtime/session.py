@@ -111,9 +111,10 @@ class ToolSession:
         self.llm = self._bind_menu()
 
     def _bind_menu(self):
-        menu = [*self.tools.values(), *(_loader(domain) for domain in self.domains
-                                       if domain not in self.loaded)]
-        self.menu = menu
+        # Keep discovery schemas in place; domain tools extend the request prefix.
+        initial = [tool for name, tool in self.tools.items() if name in self.initial_names]
+        loaded = [tool for name, tool in self.tools.items() if name not in self.initial_names]
+        self.menu = [*initial, *(_loader(domain) for domain in self.domains), *loaded]
         if not self.menu:
             return self.model
         bound = self.model.bind_tools(self.menu, tool_choice="auto", parallel_tool_calls=False)
@@ -163,8 +164,7 @@ class ToolSession:
         return None
 
     def _tool_error(self, call, prompt, reason):
-        available = sorted({*self.tools, *(name for name, domain
-                            in self.loaders.items() if domain not in self.loaded)})
+        available = sorted({*self.tools, *self.loaders})
         body = json.dumps({"error": reason, "available_tools": available})
         prompt.append(ToolMessage(content=body,
                                   tool_call_id=call["id"], status="error"))
@@ -195,15 +195,14 @@ class ToolSession:
         record("native", "tool_requested", name=name)
         if name in self.loaders:
             domain = self.loaders[name]
-            if domain in self.loaded:
-                return self._tool_error(call, prompt, "domain_already_loaded")
-            self.tools.update(self.domains[domain])
-            self.loaded.add(domain)
-            emit_progress(self.config, "正在加载可用工具…", key=f"domain:{domain}")
+            if domain not in self.loaded:
+                self.tools.update(self.domains[domain])
+                self.loaded.add(domain)
+                emit_progress(self.config, "正在加载可用工具…", key=f"domain:{domain}")
+                record("native", "load_domain", domain=domain)
+                self.llm = self._bind_menu()
             prompt.append(ToolMessage(content=f"{domain} 工具已加载。",
                                       tool_call_id=call["id"]))
-            record("native", "load_domain", domain=domain)
-            self.llm = self._bind_menu()
             return True
         if name not in self.tools:
             return self._tool_error(call, prompt, "unknown_tool")
