@@ -18,7 +18,7 @@
 ## 架构
 
 服务入口使用 `AGENT_ARM=native`：模型使用原生工具调用，确定性代码负责授权、确认、
-幂等与会话存储。升级部署需将旧 graph/hybrid 配置改为 native；旧规划库的物理退役仍在收敛。
+幂等与会话存储。升级部署需将旧 graph/hybrid 配置改为 native；旧规划运行时已从生产依赖中移除。
 当前迁移范围和审计结果见 [架构审计](docs/agent-architecture-audit-20261023.md)
 与 [迁移验收](docs/hybrid-runtime-migration.md)。
 
@@ -41,8 +41,8 @@ flowchart LR
 模型通过标准 tool calls 选择工具并根据工具结果继续完成任务，领域工具按需加载。
 工具层负责权限、参数、目标版本和真实业务调用。已确认操作由服务端直接执行，确认轮不再调用模型解释意图。
 
-服务执行路径不再交接旧规划器。旧库及其专用评测仍在退役，共享数据和渲染依赖
-需要继续收敛；新增能力进入领域工具层。
+服务执行路径使用单一原生循环；新增能力进入领域工具层。历史评测解码和少量工具结果
+兼容结构仍需继续收敛。
 
 ### 2. 工具结果与回复
 
@@ -75,33 +75,34 @@ flowchart LR
 幂等表与会话存储在启动时初始化，普通写请求不执行建表操作。
 
 小规模单业务应用保留必要的业务授权、幂等和审批逻辑，复用框架公开类型、标准编码库和
-既有数据库。剩余文本计划、字符串 IR、自定义 SSE 前缀与旧事实判定规则按迁移顺序收敛。
+既有数据库。遗留工具结果结构与旧事实判定规则继续按领域收敛。
 
-### 6. SSE 帧协议（Python / Rust / 前端三端契约）
+### 6. SSE 帧协议
 
-帧分隔 `\n\n`，带载荷的帧其载荷一律 JSON 编码（防换行破坏帧）。改协议必须三端同步：
+`POST /chat/stream/v2` 使用标准具名 SSE 事件和 JSON 载荷：正文 `text`、进度
+`progress`、确认卡 `confirmation`、浏览器动作 `command`、内部状态 `pending`、
+回执 `receipts`、摘要 `summary`，以及终止事件 `done` / `error`。
+正文保持不透明；确认凭据和浏览器命令仅从受信任结构化事件处理。
+完整三端契约与发布要求见 [流式协议](docs/chat-stream-protocol.md)。
 
-| 帧 | 载荷形态 | Rust 侧行为 |
-|---|---|---|
-| 普通文本 | `data: <json 字符串>` | 转发前端，并累积进本轮 `reply` |
-| `__PROCESS__:<步骤>` / `__RESET__:<scope>:<理由>` / `__CONFIRM__:<json>` | **整帧再 JSON 编码** | 按前缀判定；`__PROCESS__` 只转发不入历史；`__RESET__` 清空已累积的 `reply`（被否定的整轮连同标记都不入库）——Rust 侧**只认前缀、不解析 scope**（scope 是 Python↔前端的事：`all`=决策被推翻、命令缓冲一并作废，`text`=只否掉措辞，命令照旧执行）；`__CONFIRM__` 只转发、不落库 |
-| `__PENDING__:<json>` / `__EXEC__:<json>` | 裸帧，但**必须带 `data: ` 前缀** | 收到即落库，绝不转发前端（前端无此帧协议）。`__EXEC__` 自 20261001 起**逐批发**（每个 execute update 一帧、载荷是本次请求内尚未发出的回执），与 `__CMD__`/`__PENDING__`/`__TASK__` 同纪律——攒到流尾的写法在客户端提前断开时会整批丢，那次真丢出过"两条同名公告" |
-| `__SUMMARY__:<json>` | 裸帧 | 独立摘要结果，必须在 `__END__` 之前到达 |
-| `__END__` / `__NAV_END__` / `__ERROR__:<json>` | 终止帧 | 见终止帧即停止解析并收尾 |
+## 启动
 
-两条护栏，各由一次真实故障定位得出——写在这里，是因为它们**不报错**：
+```bash
+uv sync --locked
+uv run --frozen uvicorn agent.main:app --host 127.0.0.1 --port 8010
+```
 
-- **`__PENDING__` / `__EXEC__` 的 `data: ` 前缀不能省**。Rust 的 SSE 解析是 `strip_prefix(b"data: ")`，裸 yield 的帧 payload 是空的、会被静默丢弃——`__EXEC__` 上线首轮就因此从未到达落库分支，而链路两端都以为对方有问题。
-- **落库帧要先于终止帧发出**。Rust 见到 `__END__` 就停止解析循环，排在它后面的帧一律读不到。断连同样如此：客户端一见 `__END__` 就断开，所以回复的落库是从生成器生命周期里摘出来单独跑的。
-
-另外，`__CONFIRM__` / `__PENDING__` 的帧体带确认令牌，所以 Rust 在遇到无法解析的帧时那条 WARN 只截前 24 个字符——整帧落进日志文件等于把令牌记在了盘上。
+`agent.main.create_app()` 装配路由，生命周期负责运行时和后台工作资源。
+导入模块不会连接 checkpoint 或开始预热。已有 `server:app` 命令导出同一个应用，
+根目录文件仅保留该 ASGI 导出；路由和评测不再依赖它的内部变量。
 
 ## 目录导览
 
 ```text
 saudade-blog-agent/
-├── server.py              FastAPI 入口、SSE、并发和取消
+├── server.py              同应用 ASGI 导出，兼容已有启动命令
 ├── agent/
+│   ├── main.py            应用工厂与 ASGI 入口
 │   ├── api/               HTTP 模型、字段限额和请求上下文适配
 │   ├── runtime/           NativeRuntime、会话存储、预算、确认与传输
 │   ├── domains/           按需领域工具与业务操作准备
@@ -222,7 +223,7 @@ trace 与 golden trace 的保留各有其执行者（`eval/trace_retention.py`�
 | ~~`AGENT_TASK_STATE`~~、~~`AGENT_TASK_PLAN_EXEC`~~ | **已删（20261015）** | 会话级未完成意图的登记/注入**常开**，没有开关了（任务状态是业界默认必备的，不该有开关把它变成摆设）。**写进 `.env` 现在是鬼键**；理由与判据见 docs/问题记录.md §1.63 |
 | `AGENT_ARM` | `native` | 原生工具运行时。旧 graph/hybrid 服务配置拒绝启动；修改后须重启服务。 |
 | `RAG_HYBRID_ENABLED`、`EMBEDDING_*`、`RRF_K` | 不设（= 纯词法） | 向量 + RRF 混合检索，可选件。⚠️ **`EMBEDDING_*` 不只管检索**：首页那件「文章向量空间图谱」的建图（`scripts/build_word_graph.py`）与检索（`rag/wordgraph.py`）也用它——配了走它，没配回落 `QWEN_*` + `qwen3.7-text-embedding`（两端共用 `rag/embed_space.py` 一条规则）。**换模型/端点后要重建一次图谱**（后台「站点设置 → 向量图谱」），否则检索侧以 `space_mismatch` 明着降级 |
-| `AGENT_RECURSION_LIMIT` / `AGENT_MAX_BODY_BYTES` / `AGENT_MAX_CONCURRENT` / `AGENT_MAX_REVIEW` / `AGENT_STREAM_IDLE_TIMEOUT` / `AGENT_STREAM_TOTAL_TIMEOUT` | `30` / `12 MiB` / `8` / `4` / `120` / `300` | 服务限额与超时（20261020 双轨收敛入 Settings：**写 `.env` 就生效**，键名与 systemd `Environment=` 时代逐个一致，老部署零改动；两个 STREAM 超时是收敛时**新开的 env 通道**，此前只能改码）。用途与理由注释在 `server.py` 各常量旁；判据 `tests/test_settings_surface.py` ⑥ |
+| `AGENT_RECURSION_LIMIT` / `AGENT_MAX_BODY_BYTES` / `AGENT_MAX_CONCURRENT` / `AGENT_MAX_REVIEW` / `AGENT_STREAM_IDLE_TIMEOUT` / `AGENT_STREAM_TOTAL_TIMEOUT` | `30` / `12 MiB` / `8` / `4` / `120` / `300` | 服务限额与超时（20261020 双轨收敛入 Settings：**写 `.env` 就生效**，键名与 systemd `Environment=` 时代逐个一致，老部署零改动；两个 STREAM 超时是收敛时**新开的 env 通道**，此前只能改码）。用途见 `agent/api/` 的生命周期、中间件与聊天路由；判据 `tests/test_settings_surface.py` ⑥ |
 
 （20261020 之前这里还有一张 B 表——"`server.py` 直读进程环境的四个常量，`.env` 管不到"。双轨收敛后那张表删了：那四个键连同两个此前改不了的流式超时，都成了上面 A 表的成员，`.env` / systemd `Environment=` / 代码缺省三轨同值。历史见 CHANGELOG 20261020。）
 

@@ -36,7 +36,7 @@ sys.path.insert(0, str(pathlib.Path(__file__).parent))
 # ── 跨套件全局的**保存 / 还原**（20261020 批 N+1）────────────────────────────
 #
 # 为什么必须有这一层：这 179 个套件此前是「**一个套件一个进程**」跑的（`run_all.py`
-# 一个套件起一个子进程）⇒ 谁改了 `settings.jwt_secret`、谁把 `server._agent` 换成了
+# 一个套件起一个子进程）⇒ 谁改了 `settings.jwt_secret`、谁把 `app.state.runtime` 换成了
 # 桩、谁 `sys.modules.pop("agent")`，**都不会影响别人**，所以没人写过还原。
 # 全量进**一个** pytest 进程之后，这些全变成跨套件的隐式耦合：实测 179 个里 22 个
 # 跑完没还原，其中 6 个当场把**别的**套件打成红（受害者看着像自己的判据坏了）。
@@ -70,9 +70,11 @@ import pytest  # noqa: E402
 # 该由那个套件自己收口，不归这一层。
 _WATCHED_MODULES = (
     # 被打桩最密的几处（`agent.graph.get_llm` 90 处、`tools.base._client` 161 处、
-    # `server._agent` 36 处 —— 三条都在十几个套件里出现）
+    # `app.state.runtime` 36 处 —— 三条都在十几个套件里出现）
     "agent.adminops_todo", "agent.confirm",
-    "tools.base", "tools.device", "tools.notes", "server",
+    "tools.base", "tools.device", "tools.notes",
+    "agent.api.routes.chat", "agent.api.routes.conversations", "agent.api.routes.operations",
+    "agent.api.lifecycle", "agent.api.turns",
     # 同一轮普查里出现的其余落点：检索侧（`rag.search._index` 就是
     # `test_cliff_min_keep` 把进程级单例换成 6 篇夹具索引、`test_gate_replan`
     # 因此看不见真语料的那一处）、上下文/授权/计划侧、以及 eval/ 下的共用助手
@@ -169,11 +171,15 @@ def _process_isolation(request, monkeypatch):
 @pytest.fixture
 def service_workers(monkeypatch):
     """Own the executor for adapter unit tests that intentionally skip ASGI lifespan."""
-    import server
+    import asyncio
+
+    from agent.main import app
     from agent.runtime.workers import RequestWorkers
 
     workers = RequestWorkers()
-    monkeypatch.setattr(server.app.state, "workers", workers)
+    monkeypatch.setattr(app.state, "runtime", None)
+    monkeypatch.setattr(app.state, "workers", workers)
+    monkeypatch.setattr(app.state, "chat_slots", asyncio.BoundedSemaphore(8))
     yield workers
     workers.stop()
     workers.executor.shutdown(wait=True, cancel_futures=True)

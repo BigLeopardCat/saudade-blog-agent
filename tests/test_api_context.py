@@ -1,5 +1,6 @@
 """HTTP facts must reach the model as transient data, preserving history and authority."""
 
+
 import json
 from copy import deepcopy
 from types import SimpleNamespace
@@ -9,9 +10,9 @@ from langchain_core.messages import AIMessageChunk
 from langgraph.checkpoint.memory import InMemorySaver
 from pydantic import ValidationError
 
-import server
 from agent.api import host_context
 from agent.api.context import build_messages
+from agent.api.routes import chat as server
 from agent.api.schemas import ChatRequest
 from agent.principal import SOURCE_ASSERTION, Principal
 from agent.runtime.native import NativeRuntime
@@ -39,7 +40,7 @@ def test_http_request_facts_reach_native_prompt_without_credentials(monkeypatch)
         confirm_token=canary, execution_rows="PRIVATE_PAYLOAD_CANARY",
         recent_tools=["INTERNAL_TOOL_CANARY"],
     )
-    prompt = build_prompt(server._build_messages(request), ACTOR, True)
+    prompt = build_prompt(server.build_messages(request), ACTOR, True)
     current = facts(prompt)
     assert current["current_time"] == "2026-10-25 12:00"
     assert current["chat_quota"]["remaining"] == 3

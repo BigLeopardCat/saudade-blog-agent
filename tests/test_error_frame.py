@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 """Named SSE error termination, safe public messages and lossless JSON framing."""
+
 import asyncio
 import json
 import re
@@ -11,6 +12,9 @@ from pathlib import Path
 
 import pytest
 from _judge import collector
+from _service import app, service_request
+
+from agent.api.schemas import ChatRequest, ChatResponse
 
 ROOT = Path(__file__).resolve().parent.parent  # 仓根（20260924：测试统一搬进 tests/）
 sys.path.insert(0, str(ROOT))
@@ -18,7 +22,7 @@ sys.path.insert(0, str(ROOT / "tests"))          # 同目录的 `_` 辅助模块
 
 import _parent_repo  # noqa: E402
 
-import server  # noqa: E402
+from agent.api.routes import chat as server  # noqa: E402
 from utils import trace as trace_mod  # noqa: E402
 from utils.logging import set_trace_id  # noqa: E402
 
@@ -27,14 +31,9 @@ check = collector(FAILS)
 
 
 class _FakeRequest:
-    """`_resolve_principal` 只看 `headers`（断言头）；其余字段本测试用不到。
-
-    断言头缺席 ⇒ 走"SERVICE_ASSERTION 未强制"的回退分支，principal 是 uid=0/role=None
-    ——**这正是我们要的形态**：错误帧的产生与调用者身份无关。
-    """
-
-    def __init__(self):
-        self.headers: dict[str, str] = {}
+    def __init__(self, headers=None):
+        self.headers = headers or {}
+        self.app = app
 
 
 def _frames(chunks: list[str]) -> list[str]:
@@ -56,8 +55,8 @@ def _producer(exc: BaseException | None = None, hold: threading.Event | None = N
     def run(*_args, **_kwargs):
         if hold is not None:
             hold.wait(5.0)
-        loop = _args[3]          # (messages, thread_id, queue, loop, ...) 见 server 调用点
-        queue = _args[2]
+        loop = _args[4]          # (messages, thread_id, queue, loop, ...) 见 server 调用点
+        queue = _args[3]
         if exc is not None:
             loop.call_soon_threadsafe(queue.put_nowait, exc)
         loop.call_soon_threadsafe(queue.put_nowait, None)
@@ -67,35 +66,35 @@ def _producer(exc: BaseException | None = None, hold: threading.Event | None = N
 
 async def _drive(producer) -> list[str]:
     """把生产者换成桩，真跑一遍 `chat_stream` → `event_stream`，收全部帧。"""
-    old_agent = server._agent
-    old_prod = server._run_agent_stream_to_queue
+    old_agent = app.state.runtime
+    old_prod = server.stream_to_queue
     from config.settings import settings
     old_req_assert = settings.agent_require_assertion
-    server._agent = object()             # 非 None 即可（503 分支要避开）
+    app.state.runtime = object()             # 非 None 即可（503 分支要避开）
     producer_done = asyncio.Event()
 
     def tracked(*args):
         try:
             return producer(*args)
         finally:
-            args[3].call_soon_threadsafe(producer_done.set)
+            args[4].call_soon_threadsafe(producer_done.set)
 
-    server._run_agent_stream_to_queue = tracked
+    server.stream_to_queue = tracked
     # 身份断言：本机 .env 把它开着（生产语义），而**错误帧的产生与调用者身份无关**——
     # 这里要的是"能进到流里"，不是"验签"。所以**显式拨回 0**（20261019 起这已**不是**
     # 默认值了，默认是 1），让这条假请求走 body 身份进来即可；这条路径上的身份没有
     # 工具能力（`authz.must_enforce`），而本节点本来也不碰工具。
     settings.agent_require_assertion = False
     try:
-        req = server.ChatRequest(message="测试用消息")
+        req = ChatRequest(message="测试用消息")
         resp = await server.chat_stream(req, _FakeRequest())
         chunks = [c async for c in resp.body_iterator]
         await asyncio.wait_for(producer_done.wait(), timeout=5)
         await asyncio.sleep(0)
         return chunks
     finally:
-        server._run_agent_stream_to_queue = old_prod
-        server._agent = old_agent
+        server.stream_to_queue = old_prod
+        app.state.runtime = old_agent
         settings.agent_require_assertion = old_req_assert
 
 
@@ -221,25 +220,24 @@ def _sync_chat_failure_shape():
     # 这里直接调 `chat()`（FastAPI 装饰器返回原函数），把五个协作者换成桩，让
     # `_run_agent_sync` 这一路真炸 —— 判据是"炸了之后返回体长什么样"。
     boom = "pending_confirm-internal-path"
-    names = ("_agent", "_resolve_principal", "_build_messages",
-             "_submit_with_context")
+    names = ("_resolve_principal", "build_messages", "run_turn")
     saved = {n: getattr(server, n) for n in names}
 
-    async def _explode(*_a, **_k):
+    def _explode(*_a, **_k):
         raise KeyError(boom)
 
-    server._agent = object()
+    app.state.runtime = object()
     server._resolve_principal = lambda request, uid: type("P", (), {"uid": 1})()
-    server._build_messages = lambda req: []
-    server._submit_with_context = _explode
+    server.build_messages = lambda req, **kwargs: []
+    server.run_turn = _explode
     try:
-        resp = asyncio.run(server.chat(server.ChatRequest(message="你好"), None))
+        resp = asyncio.run(server.chat(ChatRequest(message="你好"), service_request()))
     finally:
         for n, v in saved.items():
             setattr(server, n, v)
 
     check("返回体是 ChatResponse（HTTP 仍 200 ⇒ 判据只能落在 success 上）",
-          isinstance(resp, server.ChatResponse), repr(resp))
+          isinstance(resp, ChatResponse), repr(resp))
     check("success=False（调用方按这个字段判，不再「状态码 200 即成功」）",
           resp.success is False, repr(resp.success))
     check("reply 是那句给人看的话术（即便不读 success 也不会拿到空白）",
@@ -262,9 +260,9 @@ def _sync_chat_failure_shape():
 
 def _sync_chat_source_shape():
     print("\n── ⑤b 接线：非流式那半没有第二个出口形状 ──")
-    src = (ROOT / "server.py").read_text(encoding="utf-8")
+    src = (ROOT / "agent/api/routes/chat.py").read_text(encoding="utf-8")
     body = src.split("async def chat(req: ChatRequest, request: Request):", 1)[1]
-    body = body.split('@app.post("/chat/stream"', 1)[0]
+    body = body.split('@router.post("/chat/stream"', 1)[0]
     check("except 分支把话术填进 reply 且 success=False",
           "PRODUCER_ERROR_TEXT" in body and "success=False" in body)
     # 只扫**代码行**：那段注释里逐字写着旧形状（`error=str(e)`）——那是病史，

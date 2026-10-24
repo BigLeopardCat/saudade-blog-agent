@@ -1,9 +1,11 @@
 """Page commands remain authorized, serializable and inside the native loop."""
 
+
 import asyncio
 import json
 
 import pytest
+from _service import app
 from langchain_core.messages import (
     AIMessage,
     AIMessageChunk,
@@ -16,6 +18,7 @@ from langchain_core.tools import ToolException, tool
 from langgraph.checkpoint.memory import InMemorySaver
 from pydantic import ValidationError
 
+from agent.api.schemas import ChatRequest
 from agent.domains import browser
 from agent.principal import SOURCE_ASSERTION, Principal
 from agent.runtime import memory
@@ -247,7 +250,7 @@ def test_queued_commands_survive_stop_without_replaying_legacy_runtime(monkeypat
 
 
 def test_stream_producer_emits_commands_and_receipts_without_confirmation(monkeypatch):
-    import server
+    from agent.api.routes import chat as server
     from agent.runtime.native import NativeRuntime
     from agent.runtime.native_store import NativeConversationStore
 
@@ -259,7 +262,7 @@ def test_stream_producer_emits_commands_and_receipts_without_confirmation(monkey
             AIMessage(content="设置指令已发送。"),
         ],
     )
-    monkeypatch.setattr(server, "_agent", NativeRuntime(
+    monkeypatch.setattr(app.state, "runtime", NativeRuntime(
         NativeConversationStore(None), catalog=arm.catalog, model_factory=lambda **_: model))
 
     async def collect():
@@ -267,7 +270,7 @@ def test_stream_producer_emits_commands_and_receipts_without_confirmation(monkey
         queue = asyncio.Queue()
         task = asyncio.create_task(
             asyncio.to_thread(
-                server._run_agent_stream_to_queue,
+                server.stream_to_queue, app.state.runtime,
                 [HumanMessage(content="开夜间，关雨开雪")],
                 "browser-native-stream",
                 queue,
@@ -336,13 +339,13 @@ def test_page_schema_errors_are_standard_error_messages():
 
 
 def test_current_display_state_reaches_native_context_as_page_data():
-    import server
+    from agent.api.routes import chat as server
     from agent.runtime.prompt import build_prompt as _input
 
-    request = server.ChatRequest(
+    request = ChatRequest(
         message="切换夜间模式", current_url="/", current_effects="rain", current_darkmode="on"
     )
-    prompt = _input(server._build_messages(request), _config()["configurable"]["principal"])
+    prompt = _input(server.build_messages(request), _config()["configurable"]["principal"])
     page = next(
         item
         for item in prompt

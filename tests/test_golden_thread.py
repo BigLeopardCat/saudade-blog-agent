@@ -146,7 +146,7 @@ def test_golden_thread():
           len(_submits) == 1 and len(_sent) == 1, "；".join(_sent) or "（没找到）")
     _stream_pos = [ast.unparse(a) for n in _submits for a in n.args]
     check("传给图的线程是**形参** `thread`（位置：messages 之后、queue 之前），不是字面",
-          len(_stream_pos) >= 5 and _stream_pos[3] == "thread", "；".join(_stream_pos))
+          len(_stream_pos) >= 6 and _stream_pos[4] == "thread", "；".join(_stream_pos))
     check("文件里**不再**出现 `\"golden_thread\"` 这个字面常量（常量退场 = 本件的落点）",
           not [n for n in ast.walk(_tree)
                if isinstance(n, ast.Constant) and n.value == gt.LEGACY])

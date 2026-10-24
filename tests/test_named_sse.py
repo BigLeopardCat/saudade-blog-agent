@@ -1,5 +1,6 @@
 """Exercise real v2 server frames and the browser's decoder without model calls."""
 
+
 import asyncio
 import json
 import secrets
@@ -7,11 +8,13 @@ import subprocess
 
 import httpx
 import pytest
+from _service import app
 from fastapi import Request
 from langchain_core.messages import AIMessageChunk
 
-import server
 from agent.api.events import frame
+from agent.api.routes import chat as server
+from agent.api.schemas import ChatRequest
 from agent.principal import Principal
 from agent.runtime.results import TurnResult
 
@@ -21,22 +24,22 @@ def prepare(monkeypatch, events):
         def stream_events(self, state, config):
             yield from events
 
-    monkeypatch.setattr(server, "_agent", Runtime())
-    monkeypatch.setattr(server, "_stream_slots", asyncio.BoundedSemaphore(1))
+    monkeypatch.setattr(app.state, "runtime", Runtime())
+    monkeypatch.setattr(app.state, "chat_slots", asyncio.BoundedSemaphore(1))
     monkeypatch.setattr(server, "_resolve_principal", lambda request, uid: Principal(uid=uid))
     monkeypatch.setattr(server, "start_trace", lambda *args, **kwargs: None)
 
 
 async def consume(**kwargs):
-    request = Request({"type": "http", "method": "POST", "path": "/chat/stream/v2",
+    request = Request({"app": app, "type": "http", "method": "POST", "path": "/chat/stream/v2",
                        "headers": [], "query_string": b""})
-    req = server.ChatRequest(message="测试", user_id=7, **kwargs)
+    req = ChatRequest(message="测试", user_id=7, **kwargs)
     response = await server.chat_stream(req, request)
     assert response.headers["x-agent-stream-version"] == "2"
     wire = "".join([item async for item in response.body_iterator])
     # Wait for the actual worker's permit release before closing this test loop.
-    await asyncio.wait_for(server._stream_slots.acquire(), timeout=2)
-    server._stream_slots.release()
+    await asyncio.wait_for(app.state.chat_slots.acquire(), timeout=2)
+    app.state.chat_slots.release()
     return wire
 
 
@@ -117,7 +120,7 @@ def test_retired_endpoint_cannot_enter_authorization_or_runtime(monkeypatch):
                         lambda *args: pytest.fail("retired route reached authorization"))
 
     async def exercise():
-        transport = httpx.ASGITransport(app=server.app)
+        transport = httpx.ASGITransport(app=app)
         async with httpx.AsyncClient(transport=transport, base_url="http://unit.invalid") as client:
             response = await client.post("/chat/stream", json={"message": "旧协议请求"})
             assert response.status_code == 404

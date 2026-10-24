@@ -6,6 +6,8 @@ from __future__ import annotations
 import pathlib
 import sys
 
+from agent.api.schemas import ChatRequest
+
 HERE = pathlib.Path(__file__).resolve().parent
 ROOT = HERE.parent
 sys.path.insert(0, str(ROOT))
@@ -57,9 +59,9 @@ def test_client_fields_remain_data_in_the_actual_native_prompt():
 
     from langchain_core.messages import HumanMessage, SystemMessage
 
+    from agent.api.context import build_messages as _build_messages
     from agent.principal import SOURCE_ASSERTION, Principal
     from agent.runtime.prompt import build_prompt
-    from server import ChatRequest, _build_messages
 
     principal = Principal(7, "user", SOURCE_ASSERTION)
     baseline = build_prompt(_build_messages(ChatRequest(message="hello")), principal)
