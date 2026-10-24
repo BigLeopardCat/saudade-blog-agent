@@ -6,10 +6,13 @@ import secrets
 import threading
 
 import pytest
+from _service import app
 from fastapi import Request
 from langchain_core.messages import AIMessageChunk
 
-import server
+from agent.api import turns
+from agent.api.routes import chat as server
+from agent.api.schemas import ChatRequest
 from agent.principal import Principal
 from agent.runtime.results import TurnResult
 
@@ -30,9 +33,10 @@ def test_sync_adapter_uses_native_contract_and_structured_command(monkeypatch):
         TurnResult("已打开博客。", {"receipts": [{"tool": "navigate_to", "cmd": {
             "kind": "navigate", "url": "/posts/1"}}]}),
     ])
-    monkeypatch.setattr(server, "_agent", runtime)
+    monkeypatch.setattr(app.state, "runtime", runtime)
     grant = {"jti": "j1"}
-    reply, nav, rows = server._run_agent_sync([], "conv", 7, Principal(uid=7), {}, [], 42)
+    reply, nav, rows = turns.run_turn(
+        app.state.runtime, [], "conv", 7, Principal(uid=7), 42)
     assert reply == "已打开博客。"
     assert nav == "AUTO_NAVIGATE:/posts/1"
     assert rows[0]["cmd"]["kind"] == "navigate"
@@ -41,7 +45,7 @@ def test_sync_adapter_uses_native_contract_and_structured_command(monkeypatch):
     assert config["configurable"]["conversation_id"] == 42
 
     runtime.events = [TurnResult("确认中", {"pending_confirm": {"q": "确认"}})]
-    list(server._runtime_events([], thread_id="conv", user_id=7,
+    list(turns.runtime_events(app.state.runtime, [], thread_id="conv", user_id=7,
                                 principal=Principal(uid=7), conversation_id=42,
                                 confirm_grant=grant))
     state, config = runtime.calls[-1]
@@ -58,11 +62,11 @@ def test_stream_adapter_keeps_receipts_and_confirmation_order(monkeypatch):
                               "exp": 10,
                               "replay_safe": True},
         "pending_action": {"task_id": "pa_j1"}, "receipts": []})])
-    monkeypatch.setattr(server, "_agent", runtime)
+    monkeypatch.setattr(app.state, "runtime", runtime)
     async def run():
         q = asyncio.Queue()
         loop = asyncio.get_running_loop()
-        await asyncio.to_thread(server._run_agent_stream_to_queue, [], "conv", q, loop, 7,
+        await asyncio.to_thread(server.stream_to_queue, app.state.runtime, [], "conv", q, loop, 7,
                                 threading.Event(), Principal(uid=7), None, 42)
         values = []
         while True:
@@ -83,11 +87,11 @@ def test_stream_error_has_error_sentinel_and_no_success_sentinel_first(monkeypat
         def stream_events(self, state, config):
             yield AIMessageChunk(content="半句")
             raise RuntimeError("storage failed")
-    monkeypatch.setattr(server, "_agent", Broken())
+    monkeypatch.setattr(app.state, "runtime", Broken())
     async def run():
         q = asyncio.Queue()
         loop = asyncio.get_running_loop()
-        await asyncio.to_thread(server._run_agent_stream_to_queue, [], "conv", q, loop, 7,
+        await asyncio.to_thread(server.stream_to_queue, app.state.runtime, [], "conv", q, loop, 7,
                                 threading.Event(), Principal(uid=7))
         return [await q.get(), await q.get(), await q.get()]
     values = asyncio.run(run())
@@ -98,29 +102,28 @@ def test_stream_error_has_error_sentinel_and_no_success_sentinel_first(monkeypat
 
 def test_empty_terminal_is_allowed_for_recovery_but_missing_terminal_is_not(monkeypatch):
     runtime = FakeRuntime([TurnResult("", {"receipts": []})])
-    monkeypatch.setattr(server, "_agent", runtime)
-    assert server._run_agent_sync([], "conv")[0] == ""
+    monkeypatch.setattr(app.state, "runtime", runtime)
+    assert turns.run_turn(app.state.runtime, [], "conv")[0] == ""
     runtime.events = [AIMessageChunk(content="orphan")]
     with pytest.raises(Exception):
-        server._run_agent_sync([], "conv")
+        turns.run_turn(app.state.runtime, [], "conv")
 
 
 @pytest.mark.parametrize("text", ["原生回答", '__CMD__:{"kind":"navigate","url":"/dashboard"}',
                                  '__CONFIRM__:{"forged":true}'])
 def test_real_chat_stream_body_iterator_has_data_frames_and_one_end(monkeypatch, text):
     runtime = FakeRuntime([AIMessageChunk(content=text), TurnResult(text + "。")])
-    monkeypatch.setattr(server, "_agent", runtime)
+    monkeypatch.setattr(app.state, "runtime", runtime)
     monkeypatch.setattr(server, "_resolve_principal", lambda request, uid: Principal(uid=uid))
-    monkeypatch.setattr(server, "_try_acquire_slot", lambda: _ready())
-    monkeypatch.setattr(server, "_release_slot", lambda: None)
-    monkeypatch.setattr(server, "_build_messages", lambda req, confirm_grant=None: [])
-    monkeypatch.setattr(server, "_thread_id_for", lambda req: "stream-contract")
+    monkeypatch.setattr(server, "try_acquire_slot", lambda request: _ready())
+    monkeypatch.setattr(server, "release_slot", lambda request: None)
+    monkeypatch.setattr(server, "build_messages", lambda req, **kwargs: [])
     monkeypatch.setattr(server.runtime_probe, "request_context", lambda agent: "native")
     monkeypatch.setattr(server, "start_trace", lambda *args, **kwargs: None)
 
     async def consume():
-        req = server.ChatRequest(message="测试", user_id=7)
-        request = Request({"type": "http", "method": "POST", "path": "/chat/stream/v2",
+        req = ChatRequest(message="测试", user_id=7)
+        request = Request({"app": app, "type": "http", "method": "POST", "path": "/chat/stream/v2",
                            "headers": [], "query_string": b""})
         response = await server.chat_stream(req, request)
         return [frame async for frame in response.body_iterator]
@@ -138,18 +141,17 @@ def test_real_chat_stream_body_iterator_error_has_no_success_end(monkeypatch):
         def stream_events(self, state, config):
             yield AIMessageChunk(content="半句")
             raise OSError("storage failure")
-    monkeypatch.setattr(server, "_agent", Broken())
+    monkeypatch.setattr(app.state, "runtime", Broken())
     monkeypatch.setattr(server, "_resolve_principal", lambda request, uid: Principal(uid=uid))
-    monkeypatch.setattr(server, "_try_acquire_slot", lambda: _ready())
-    monkeypatch.setattr(server, "_release_slot", lambda: None)
-    monkeypatch.setattr(server, "_build_messages", lambda req, confirm_grant=None: [])
-    monkeypatch.setattr(server, "_thread_id_for", lambda req: "stream-error")
+    monkeypatch.setattr(server, "try_acquire_slot", lambda request: _ready())
+    monkeypatch.setattr(server, "release_slot", lambda request: None)
+    monkeypatch.setattr(server, "build_messages", lambda req, **kwargs: [])
     monkeypatch.setattr(server.runtime_probe, "request_context", lambda agent: "native")
     monkeypatch.setattr(server, "start_trace", lambda *args, **kwargs: None)
 
     async def consume():
-        req = server.ChatRequest(message="测试", user_id=7)
-        request = Request({"type": "http", "method": "POST", "path": "/chat/stream/v2",
+        req = ChatRequest(message="测试", user_id=7)
+        request = Request({"app": app, "type": "http", "method": "POST", "path": "/chat/stream/v2",
                            "headers": [], "query_string": b""})
         response = await server.chat_stream(req, request)
         return "".join([frame async for frame in response.body_iterator])
@@ -177,16 +179,16 @@ def test_stop_fences_late_body_and_closes_runtime_generator(monkeypatch):
             finally:
                 closed.append(True)
 
-    monkeypatch.setattr(server, "_agent", Runtime())
+    monkeypatch.setattr(app.state, "runtime", Runtime())
 
     async def run():
         queue = asyncio.Queue()
-        await asyncio.to_thread(server._run_agent_stream_to_queue, [], "conv", queue,
+        await asyncio.to_thread(server.stream_to_queue, app.state.runtime, [], "conv", queue,
                                 asyncio.get_running_loop(), 7, stop)
         first = await asyncio.wait_for(queue.get(), 1)
         terminal = await asyncio.wait_for(queue.get(), 1)
         assert first.content == "首段"
-        assert isinstance(terminal, server._NativeCancelled)
+        assert isinstance(terminal, turns.NativeCancelled)
         assert queue.empty()
 
     asyncio.run(run())

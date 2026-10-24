@@ -29,7 +29,8 @@ from utils.trace_io import load_trace
 
 # run_golden's existing helpers still use imports relative to its script directory.
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-import server  # noqa: E402
+from agent.api.authentication import resolve_principal  # noqa: E402
+from eval import run_golden  # noqa: E402
 from eval.run_golden import ChatRequest, golden_trace, run_one  # noqa: E402
 
 
@@ -51,7 +52,7 @@ def _principal():
                         "exp": int(time.time()) + 600}, SECRET, algorithm="HS256")
     request = Request({"type": "http", "headers": [
         (b"x-agent-assertion", token.encode())]})
-    principal = server._resolve_principal(request, 7)
+    principal = resolve_principal(request, 7)
     if principal.source != "assertion":
         raise RuntimeError("synthetic identity did not pass production verification")
     return principal
@@ -96,7 +97,7 @@ def _favorite_cancel(turn, state):
     _require(not cancelled["confirm_tokens"], "cancellation created another card")
     stale = turn("", token)
     _require(not stale["exec_rows"] and not _posts(state), "cancelled card executed")
-    _require(server._agent.get_state({"configurable": {"thread_id": "conv_42"}})
+    _require(run_golden.ensure_agent().get_state({"configurable": {"thread_id": "conv_42"}})
              .values.get("pending_action") is None, "pending card was not cleared")
 
 
@@ -185,7 +186,7 @@ def _sample(name, backend, contract, run_id, sample):
 
         outcome = {"case": name, "sample": sample, "evaluated": True,
                    "passed": False, "rounds": rounds}
-        with patch.object(server, "_agent", arm), \
+        with patch.object(run_golden, "_runtime", arm), \
                 patch.object(writes, "ledger_for", lambda _: store):
             try:
                 contract(turn, state)

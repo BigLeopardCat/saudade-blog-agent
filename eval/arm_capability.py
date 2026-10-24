@@ -321,11 +321,10 @@ def probe_forced_fallback(arm: str, *, uid: int = 1) -> dict:
     from agent.principal import Principal
 
     import run_golden
-    import server
 
     os.environ["GOLDEN_ARM"] = arm
     run_golden.ensure_agent()
-    base = server._agent
+    base = run_golden._runtime
     forced = "抱歉，这句我核不实，先如实回你：这一轮我没有能确认的结论。"
     fake_llm = False
     mod = sys.modules.get(f"agent.{arm}_arm")
@@ -350,7 +349,7 @@ def probe_forced_fallback(arm: str, *, uid: int = 1) -> dict:
         def __getattr__(self, k):  # 生产者今天只调 .stream；其余属性原样透传
             return getattr(base, k)
 
-    server._agent = _ForcedGate()
+    run_golden._runtime = _ForcedGate()
     try:
         case = {"id": "_probe_forced_fallback", "user_input": "谢谢你",
                 "context": {}, "gold": {"forbid_fallback": True}}
@@ -358,7 +357,7 @@ def probe_forced_fallback(arm: str, *, uid: int = 1) -> dict:
                                  Principal(uid=uid, role="superadmin"))
         fails = run_golden.check_gold({"forbid_fallback": True}, res)
     finally:
-        server._agent = base
+        run_golden._runtime = base
 
     scopes = list(res.get("reset_scopes") or [])
     replaced = str(res.get("text") or "").strip() == forced

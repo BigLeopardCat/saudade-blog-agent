@@ -24,7 +24,7 @@ def _host_history(req: ChatRequest) -> list:
     return messages
 
 
-def build_messages(req: ChatRequest, *, holds_context: bool) -> list:
+def build_messages(req: ChatRequest, *, holds_context: bool = False) -> list:
     """Keep current attachments transient; only replay host history without a session store."""
     context = HumanMessage(content="", additional_kwargs={
         "memory_context": True,

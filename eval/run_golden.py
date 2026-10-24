@@ -34,15 +34,21 @@ from landing_gate import (  # noqa: F401 —— 再导出（唯一实现在 land
 )
 from langchain_core.messages import AIMessageChunk, ToolMessage
 
+from agent import (
+    confirm,  # 双轮（20260925）：验签 + 只读解载荷，见 run_one/run_case
+    runtime_probe,
+)
+from agent.api.context import build_messages as _build_messages
+
 # 复用 server 内部链路（不走 HTTP，与 test_fallback_replay.py 同模式）
-import server
-from agent import confirm  # 双轮（20260925）：验签 + 只读解载荷，见 run_one/run_case
+from agent.api.routes import chat as chat_routes
+from agent.api.schemas import ChatRequest, HistoryItem
+from agent.api.turns import stream_to_queue as _run_agent_stream_to_queue
 from agent.principal import Principal  # 管理助手用例的调用者身份（20260921）
 
 # `agent.create_agent` 的引用搬去了 eval/golden_arm.py（选臂那一层）：本文件不再直接建图，
 # 只调 `ensure_agent()` —— 建哪条臂是可拨的，直接 import 会把"只有一条臂"写死在调用点。
 from agent.transport import command_wire
-from server import ChatRequest, HistoryItem, _build_messages, _run_agent_stream_to_queue
 
 # uid=0 哨兵的**真值源**（`DENIAL_FAMILY` 第 ⑦ 支由它派生，见那一支的头注）——
 # 不抄字面进判据：哨兵改文案时，判据跟着改，不会静默退化成一条谁也命中不了的死正则。
@@ -109,13 +115,18 @@ def _cmd_matches(pre: str, c: str) -> bool:
     return any(c.startswith(x) for x in fam)
 
 
-def ensure_agent() -> None:
-    if server._agent is None:
+_runtime = None
+
+
+def ensure_agent():
+    global _runtime
+    if _runtime is None:
         t0 = time.time()
         # Evaluation uses the same native runtime factory as the service.
         _arm = golden_arm.arm_name()
-        server._agent = golden_arm.build_agent(_arm)
-        print(f"[init] 编译图构建完成（arm={_arm}）：{time.time() - t0:.1f}s")
+        _runtime = golden_arm.build_agent(_arm)
+        print(f"[init] Native runtime ready (arm={_arm}): {time.time() - t0:.1f}s")
+    return _runtime
 
 
 def iter_rounds(case: dict) -> list[dict]:
@@ -335,10 +346,7 @@ def run_one(req: ChatRequest, principal: "Principal | None" = None,
         if confirm_grant is not None and (confirm_pick or "").strip():
             confirm_grant, pick_err = confirm.narrow(confirm_grant, confirm_pick)
             if pick_err:
-                # 生产在这一支**连图都不进**（见 run_one 的 docstring）：这一轮没有任何
-                # 工具、没有命令、没有控制帧，只有那一句话。`resets` 也不动它——它压根
-                # 没走到 gate 那一步。
-                return {"text": server.INVALID_PICK_TEXT, "commands": [], "tool_calls": [],
+                return {"text": chat_routes.INVALID_PICK_TEXT, "commands": [], "tool_calls": [],
                         "frames": [], "exec_rows": [], "exec_tools": [], "tool_rounds": 0,
                         "trace": None, "resets": 0, "resets_reasons": [],
                         "reset_scopes": [], "fallback_reasons": [],
@@ -358,7 +366,7 @@ def run_one(req: ChatRequest, principal: "Principal | None" = None,
         trace_id = golden_trace.start_case(
             trace_ctx["run"], trace_ctx.get("case", ""), req.message or "",
             (principal.role if principal is not None else None), thread=thread,
-            runtime=server.runtime_probe.request_context(server._agent))
+            runtime=runtime_probe.request_context(_runtime))
     loop = asyncio.new_event_loop()
     queue = asyncio.Queue()
     frames = []
@@ -370,48 +378,26 @@ def run_one(req: ChatRequest, principal: "Principal | None" = None,
                 break
             frames.append(item)
             if isinstance(item, BaseException):
-                # producer 异常入队后（server 侧已补 None 哨兵）仍尽早终止——
-                # 错误帧不参与正常帧处理，run_one 后处理会把 BaseException
-                # 落进 result["error"]（20260905：缺此 break 曾整进程挂死）
                 break
 
     t = threading.Thread(target=drain)
     t.start()
-    # **contextvar 要显式传给线程池**（20260922）：`ThreadPoolExecutor.submit` 不拷贝
-    # contextvars（只有 asyncio.to_thread 自动做）——照生产 `server._submit_with_context`
-    # 的办法，提交前 `copy_context()` 快照、线程内 `ctx.run` 恢复。不这么做的话
-    # trace recorder 进不了 producer 线程：落下来的是一份只有元数据的**空壳 trace**，
-    # 而"评测有 trace 了"看起来完全正常（实测踩到，靠 golden_trace 的空事件警告抓出）。
     ctx = contextvars.copy_context()
-    # 传给原生 runtime 的参数与 `/chat/stream` 对齐。旧 planner 台账帧不再是
-    # producer 输入；待确认事实由 ConversationStore 与 TurnResult.execution 提供。
-    _ledger = None
     with ThreadPoolExecutor(max_workers=1) as ex:
         ex.submit(
-            ctx.run, _run_agent_stream_to_queue,
-            _build_messages(req, confirm_grant=confirm_grant), thread, queue,
+            ctx.run, _run_agent_stream_to_queue, _runtime,
+            _build_messages(req, holds_context=runtime_probe.holds_context(_runtime)),
+            thread, queue,
             loop, req.user_id, None, principal, confirm_grant, req.conversation_id,
-            _ledger,
-            # 未完结任务原文（20260927 批 D）：**与生产 `/chat/stream` 的调用点逐字对齐**。
-            # 漏传的后果是**静默的、而且只在半条链路上**：注入侧照样把「本会话未做完的事」
-            # 渲染进 system 上下文（那一步读的是 `req`，在 `_build_messages` 里），
-            # 而流尾的确定性结算拿到的是空串 ⇒ 永远发不出 `__TASK__` 回写帧、
-            # `producer.task_inject` 恒 `n=0`——探针此前报"注入了却没人推进"就是这个
-            # （实测：模型明明认下了那件事并把它做了，游标却纹丝不动）。
-            # 同族前例见 `build_request` 的注（20260920 漏 `executions` 让 3 条用例
-            # 在隔离跑法下必然假失败）——**同一份调用表有两处，就会有两处漂移**。
-            req.agent_tasks, req.recent_tools,   # 第 12 格：漏传 ⇒ forbid_fallback 假红
         ).result()
     t.join()
     loop.close()
-    # 原生工具事实只能在 finish_case 移除 recorder 前读取。
     ledger_frames: list[dict] = []
     if trace_id:
         from utils import trace as _trace
         ledger_frames = [dict(e) for e in _trace.events_of(trace_id)
                          if e.get("node") == "planner" and e.get("event") == "ledger_frame"]
     hybrid_names, hybrid_rounds = golden_trace.hybrid_read_stats(trace_id)
-    # trace 收尾（生产侧这一步在 event_stream 的 finally 里；golden 没有那层壳）
     trace_path = golden_trace.finish_case(trace_id, time.monotonic() - t_trace0,
                                           len(frames))
 
@@ -421,38 +407,16 @@ def run_one(req: ChatRequest, principal: "Principal | None" = None,
     exec_rows: list = []  # 20260904：checker 验收回执（__EXEC__ 帧，系统确认事实）
     resets = 0
     resets_reasons: list[str] = []
-    # 每条 `__RESET__` 的 scope（`all` 打回重规划 / `text` 终局兜底，见 `parse_reset`）。
-    # **计数与形状分开留**：`resets` 说"被打回过几次"（效率口径也用它），`reset_scopes`
-    # 说"用户最终看到的那段文本是不是模型写的"——后者才是 `forbid_fallback` 的判据
-    # （见 `fallback_resets`：只看计数会把"打回后重答对了"误判成"收到道歉"）。
     reset_scopes: list[str] = []
-    # 只收 scope=text 那几条的理由（逐条对齐，理由可能为空串）——`fallback_resets`
-    # 报的就是它。混进 `resets_reasons` 里读的话，"一次打回 + 一次兜底"那轮会把打回的
-    # 理由也当成兜底的理由印进 FAIL 文案（两个列表只有在下标对齐时才同源，而
-    # `resets_reasons` 按"理由非空"决定收不收 ⇒ 对齐本来就不成立）。
     fallback_reasons: list[str] = []
     tool_rounds = 0   # 效率基线：planner 发出 TOOLS 清单的轮数（🛠 过程帧计数）
     error = None
-    # 控制帧原文（20260921）：__PROCESS__ / __RESET__ / __EXEC__ / __CONFIRM__ …
-    # ——写操作确认弹窗是**帧级**行为（golden 点不了按钮），只能在帧上断言：
-    # "该弹窗时弹了窗、且什么都没写"。刻意收原文而不是布尔：断言侧自己取前缀，
-    # 判据与 server/Rust/前端三端的帧契约对得上。
     control_frames: list[str] = []
-    # 任务状态帧（20260927 批 D）：`__TASK__:<json>` 是**系统写回的权威终态**
-    # （登记 `running` / 撤下 `cancelled` / 按回执结算 `succeeded`），Rust 收帧落库、
-    # 下一轮读回来注入——所以它既是"这一轮系统认定了什么"的唯一判据，也是跨轮用例
-    # 唯一的断言对象。**解包后留 dict**（不像 `__CMD__` 那样重建回连线形）：这里要断言
-    # 的就是载荷里的 `state`/`cursor`，重建一层只会再多一份会漂移的形状。
     task_frames: list[dict] = []
     for item in frames:
         if isinstance(item, str) and item.startswith("__RESET__"):
             final_text = ""  # 作废轮 → 清空（与前端最终显示一致）
             tool_calls.clear()  # 被作废轮的工具调用不算数（断言的是最终采纳轮的执行）
-            # 帧形 `__RESET__:<scope>:<理由>`（20261001，见 `parse_reset` 头注）。
-            # `text`（终局 fallback）**不清 commands**：命令是 checker PASS 的已发生
-            # 事实，gate 否定的只有措辞。此前无条件清 —— 后果是 `require_cmd_*` 断言
-            # 转红、而 `forbid_cmd_*` 那一族**空转变绿**（同下面 `__CMD__` 分支头注里
-            # 描述的那种"不报错的失效"）。
             _scope, _reason = parse_reset(item)
             if _scope != "text":
                 commands.clear()
@@ -463,8 +427,6 @@ def run_one(req: ChatRequest, principal: "Principal | None" = None,
             if _reason:
                 resets_reasons.append(_reason)
         elif isinstance(item, str) and item.startswith("__EXEC__:"):
-            # 20260904 C3：跨轮执行记忆帧（__RESET__ 不清——回执是已发生事实，
-            # gate fallback 只否定叙述文本不否定执行）
             try:
                 rows = json.loads(item[len("__EXEC__:"):])
                 if isinstance(rows, list):
@@ -472,17 +434,6 @@ def run_one(req: ChatRequest, principal: "Principal | None" = None,
             except Exception:
                 pass
         elif isinstance(item, str) and item.startswith("__CMD__:"):
-            # 连线命令帧（20260926 批 2）：命令从工具返回文本搬到了回执行的 `cmd`
-            # （见 server.py producer 那段"为什么从 producer 发"）。这里把它**重建回连线形**
-            # 再进 `commands` —— 既有那 114 条 `require_cmd_*`/`forbid_cmd_*` 断言因此
-            # **零编辑**仍然有效。
-            # ⚠️ 不重建的后果是双重的、而且都不报错：`require_cmd_prefixes` ×13 与
-            # `require_cmd_all` ×3 **转红**，而 `forbid_cmd_prefixes` ×110 与
-            # `forbid_cmd_contains` ×6 **空转变绿**——整族"模型不许假装发命令"的护栏
-            # 从此不再测任何东西；同时下面 `elif item.startswith("__")` 的兜底会把
-            # `__CMD__:` 无声吞进 `control_frames`，看都看不出来。
-            # `__RESET__` 那一支按 `scope` 决定清不清 `commands`（见上：`all` 清、
-            # `text` 不清——终局 fallback 里命令是已发生的事实）。
             try:
                 _cmd = json.loads(item[len("__CMD__:"):])
                 _wire = command_wire(_cmd) if isinstance(_cmd, dict) else ""
@@ -491,9 +442,6 @@ def run_one(req: ChatRequest, principal: "Principal | None" = None,
             if _wire:
                 commands.append(_wire)
         elif isinstance(item, str) and item.startswith("__TASK__:"):
-            # 不与 `__CMD__` 那样重建连线形（见上面 `task_frames` 的声明）：断言读的是
-            # 载荷里的 `state`/`cursor`。`__RESET__` 那一支**不清**它——与 `__EXEC__` 同理：
-            # gate fallback 只否定叙述文本，任务登记/结算是已发生的系统事实。
             try:
                 _tf = json.loads(item[len("__TASK__:"):])
             except Exception:
@@ -513,24 +461,12 @@ def run_one(req: ChatRequest, principal: "Principal | None" = None,
         elif isinstance(item, BaseException):
             error = str(item)
         elif isinstance(item, str) and item.startswith("__PROCESS__"):
-            # 效率基线（20260919 / 口径修正 20260919b）：planner 每发一次带 TOOLS
-            # 清单的决策就有一条"🧭 计划：<动作>"过程帧 → 其计数即"planner 规划
-            # 了几轮工具"。**不能用 "🛠 正在调用工具…"**：那条帧在 server.py 带
-            # key=tool_running 去重，每请求最多一条，计数器结构上不可能 >1（首版
-            # 口径错误，据此报的"多轮绕圈例 0"作废）。
             if "🧭 计划：" in item:
                 tool_rounds += 1
         elif isinstance(item, str) and item.startswith("__"):
-            # 其余控制帧（今天只有 __CONFIRM__:）——没有专门分支的走这里收原文，
-            # 否则新帧类型在 golden 里静默不可见（"断言写不出来"= 回归测不到）。
             control_frames.append(item)
     tool_calls.extend(hybrid_names)
     tool_rounds += hybrid_rounds
-    # 确认令牌（20260925 双轮）：从 `__CONFIRM__` 控制帧里取**原文**——帧体是
-    # server 发出来的权威形态（`token` 字段，见 server.py 的 `__CONFIRM__` 帧体），
-    # 评测侧**不自己拼 base64、也不自己造令牌**：造得出来就说明它在被测链路之外，
-    # 那测的就不是"系统弹的这张卡"。`inspect` 只解载荷（不验签，见其 docstring），
-    # 给 `require_confirm_payload` 断言用。
     confirm_tokens, confirm_payloads = [], []
     for f in control_frames:
         if not f.startswith("__CONFIRM__:"):

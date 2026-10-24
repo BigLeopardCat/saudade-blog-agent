@@ -5,7 +5,7 @@
     "BLE001"
   ],
   "project_lint_ignore": null,
-  "total": 81,
+  "total": 80,
   "by_file": {
     "agent/arg_refs.py": 1,
     "agent/checkpoint.py": 1,
@@ -29,7 +29,6 @@
     "rag/sections.py": 2,
     "scripts/build_word_graph.py": 2,
     "scripts/sticker_smoke.py": 1,
-    "server.py": 1,
     "tests/test_checkpoint_factory.py": 2,
     "tests/test_checkpoint_setup_concurrent.py": 1,
     "tests/test_packaging.py": 1,

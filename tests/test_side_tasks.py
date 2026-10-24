@@ -185,9 +185,9 @@ def test_side_tasks():
     check("模型异常 → 空串（fail-empty，不让失败变成一条摘要）",
           summarizer.summarize("x", [], "", llm=FakeLLM(exc=RuntimeError("boom"))) == "")
     # Mounted moderation behavior, usage and failure propagation: test_service_routers.py.
-    server_src = (ROOT / "server.py").read_text(encoding="utf-8")
+    server_src = (ROOT / "agent/api/routes/chat.py").read_text(encoding="utf-8")
     check("摘要转发到 agent.summarizer.summarize", "from agent.summarizer import summarize" in server_src
-          and "return summarize(user_msg, history, old_summary)" in server_src)
+          and "workers.executor, summarize, req.message, req.history, req.summary" in server_src)
     _ts = _parent_repo.read(
         "src/routes/talks.rs",
         why="上面那句措辞的**事实依据**在 Rust 侧（审核失败到底返回什么）——只改 agent 一侧的"

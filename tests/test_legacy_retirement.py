@@ -27,7 +27,7 @@ def test_retired_modules_have_no_importable_source():
 
 def test_native_service_process_does_not_load_retired_modules():
     script = """
-import server
+import agent.main
 from agent.runtime.native import NativeRuntime
 from agent.runtime.native_store import NativeConversationStore
 from langgraph.checkpoint.memory import InMemorySaver

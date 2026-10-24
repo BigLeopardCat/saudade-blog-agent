@@ -1,5 +1,6 @@
 """Conversation continuity must survive persistence without reusing authority."""
 
+
 import json
 
 import pytest
@@ -7,7 +8,8 @@ from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
 
-import server
+from agent.api.routes import chat as server
+from agent.api.schemas import ChatRequest
 from agent.principal import SOURCE_ASSERTION, SOURCE_BODY, Principal
 from agent.runtime import memory
 from agent.runtime.capabilities import ToolCatalog
@@ -22,15 +24,15 @@ def actor(role="superadmin", uid=7, source=SOURCE_ASSERTION):
 
 
 def test_summary_reaches_native_input_as_data_not_runtime_authority():
-    request = server.ChatRequest(message="继续", summary="用户希望中文答复；助手曾误称不能管理。")
-    prompt = _input(server._build_messages(request), actor())
+    request = ChatRequest(message="继续", summary="用户希望中文答复；助手曾误称不能管理。")
+    prompt = _input(server.build_messages(request), actor())
     trusted, _ = json.JSONDecoder().raw_decode(
         prompt[0].content.split("运行时能力（可信数据）：", 1)[1])
     assert trusted["identity"]["role"] == "superadmin"
     assert "曾误称不能管理" not in prompt[0].content
     assert any("用户希望中文答复" in str(m.content) for m in prompt[1:-1])
     assert prompt[-1].content == "[当前问题]: 继续"
-    empty = server._build_messages(server.ChatRequest(message="继续"))
+    empty = server.build_messages(ChatRequest(message="继续"))
     assert memory.summary_message(empty) is None
 
 
@@ -124,9 +126,9 @@ def test_user_text_cannot_masquerade_as_an_internal_context_message():
 
 
 def test_browser_content_stays_outside_the_system_instruction_channel():
-    request = server.ChatRequest(message="继续", page_title="UNTRUSTED_PAGE_CANARY",
+    request = ChatRequest(message="继续", page_title="UNTRUSTED_PAGE_CANARY",
                                  current_url="https://example.test/article/19")
-    incoming = server._build_messages(request)
+    incoming = server.build_messages(request)
     assert memory.is_context(incoming[0])
     prompt = _input(incoming, actor())
     assert "UNTRUSTED_PAGE_CANARY" not in prompt[0].content

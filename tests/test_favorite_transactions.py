@@ -1,10 +1,12 @@
 """Confirmed writes use durable operation identities and factual tool receipts."""
 
+
 import asyncio
 import json
 import time
 
 import pytest
+from _service import app
 from langchain_core.messages import HumanMessage
 from langgraph.checkpoint.memory import InMemorySaver
 
@@ -163,7 +165,7 @@ def test_native_executes_confirmed_favorite_without_model_or_legacy(monkeypatch,
 
 
 def test_stream_producer_emits_existing_execution_receipt(monkeypatch, tmp_path):
-    import server
+    from agent.api.routes import chat as server
     from agent.runtime.native import NativeRuntime
     from agent.runtime.native_store import NativeConversationStore
 
@@ -171,14 +173,14 @@ def test_stream_producer_emits_existing_execution_receipt(monkeypatch, tmp_path)
     monkeypatch.setattr(transactions, "get_all_tools", lambda: [tool])
     monkeypatch.setattr(writes, "ledger_for",
                         lambda saver: idem.Ledger(str(tmp_path / "stream.sqlite3")))
-    monkeypatch.setattr(server, "_agent",
+    monkeypatch.setattr(app.state, "runtime",
                         NativeRuntime(NativeConversationStore(InMemorySaver())))
 
     async def collect():
         queue = asyncio.Queue()
         loop = asyncio.get_running_loop()
         producer = asyncio.create_task(asyncio.to_thread(
-            server._run_agent_stream_to_queue, [HumanMessage(content="确认收藏")],
+            server.stream_to_queue, app.state.runtime, [HumanMessage(content="确认收藏")],
             "conv_42", queue, loop, user_id=7,
             principal=_config()["configurable"]["principal"],
             conversation_id=42, confirm_grant=_grant()))

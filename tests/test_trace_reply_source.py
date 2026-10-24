@@ -1,14 +1,17 @@
 """Production traces record the same body queued by native transport."""
 
+
 import asyncio
 import json
 import secrets
 from pathlib import Path
 
 import pytest
+from _service import app
 from langchain_core.messages import AIMessageChunk
 
-import server
+from agent.api import turns
+from agent.api.routes import chat as server
 from agent.runtime.results import TurnResult
 from utils import trace
 
@@ -20,7 +23,7 @@ def drive(events, monkeypatch, tmp_path, *, failure=None):
             if failure:
                 raise failure
 
-    monkeypatch.setattr(server, "_agent", Runtime())
+    monkeypatch.setattr(app.state, "runtime", Runtime())
     identifier = secrets.token_hex(8)
 
     async def run():
@@ -28,13 +31,13 @@ def drive(events, monkeypatch, tmp_path, *, failure=None):
                           name=identifier, by_day=False)
         queue = asyncio.Queue()
         task = asyncio.create_task(asyncio.to_thread(
-            server._run_agent_stream_to_queue, [], "conv_42", queue,
+            server.stream_to_queue, app.state.runtime, [], "conv_42", queue,
             asyncio.get_running_loop(), user_id=7))
         items = []
         while True:
             item = await asyncio.wait_for(queue.get(), 2)
             items.append(item)
-            if item is None or isinstance(item, server._NativeCancelled):
+            if item is None or isinstance(item, turns.NativeCancelled):
                 break
         await task
         return items

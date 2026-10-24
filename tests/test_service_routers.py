@@ -1,5 +1,6 @@
 """Exercise mounted service routes without starting models, databases or build jobs."""
 
+
 import asyncio
 import secrets
 import threading
@@ -8,9 +9,9 @@ from concurrent.futures import ThreadPoolExecutor
 
 import jwt
 import pytest
+from _service import app
 from fastapi.testclient import TestClient
 
-import server
 from agent.api.routes import knowledge_graph, moderation
 from config.settings import settings
 from utils.logging import get_trace_id
@@ -28,8 +29,8 @@ def client(monkeypatch):
     monkeypatch.setattr(settings, "jwt_secret", secrets.token_hex(32))
     monkeypatch.setattr(settings, "agent_require_assertion", True)
     # No lifespan: service endpoints must work independently of a chat runtime.
-    monkeypatch.setattr(server, "_agent", None)
-    result = TestClient(server.app, raise_server_exceptions=False)
+    monkeypatch.setattr(app.state, "runtime", None)
+    result = TestClient(app, raise_server_exceptions=False)
     yield result
     result.close()
 

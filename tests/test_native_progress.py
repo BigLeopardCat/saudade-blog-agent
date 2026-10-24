@@ -1,12 +1,16 @@
 """Native progress stays on the existing process-frame path."""
 
+
 import threading
 import time
 
 import pytest
+from _service import app, service_request
 from langchain_core.messages import AIMessage, HumanMessage
 from langchain_core.tools import StructuredTool
 
+from agent.api import dependencies
+from agent.api.schemas import ChatRequest
 from agent.runtime.progress import ProgressEmitter
 from agent.runtime.results import TurnResult
 from agent.runtime.session import ToolSession
@@ -108,14 +112,14 @@ def test_transport_rechecks_stop_and_deadline_after_scheduling():
 def _prepare_server(monkeypatch, runtime, events):
     import asyncio
 
-    import server
+    from agent.api.routes import chat as server
     from agent.principal import SOURCE_ASSERTION, Principal
 
-    monkeypatch.setattr(server, "_agent", runtime)
+    monkeypatch.setattr(app.state, "runtime", runtime)
     monkeypatch.setattr(server, "_resolve_principal",
                         lambda request, uid: Principal(7, "user", SOURCE_ASSERTION))
-    monkeypatch.setattr(server, "_stream_slots", asyncio.BoundedSemaphore(1))
-    monkeypatch.setattr(server, "STREAM_QUEUE_WAIT", .01)
+    monkeypatch.setattr(app.state, "chat_slots", asyncio.BoundedSemaphore(1))
+    monkeypatch.setattr(dependencies, "STREAM_QUEUE_WAIT", .01)
     monkeypatch.setattr(server, "start_trace", lambda *args, **kwargs: None)
     monkeypatch.setattr(server, "finish_trace", lambda *args: None)
     def capture(node, event, **data):
@@ -147,7 +151,7 @@ def test_real_sse_progress_precedes_blocked_tool_and_first_reply(monkeypatch):
     server = _prepare_server(monkeypatch, Runtime(), events)
 
     async def scenario():
-        response = await server.chat_stream(server.ChatRequest(message="read"), None)
+        response = await server.chat_stream(ChatRequest(message="read"), service_request())
         try:
             first = await asyncio.wait_for(anext(response.body_iterator), 2)
             assert first.startswith("event: progress\ndata: ")
@@ -207,7 +211,7 @@ def test_real_sse_native_answer_chunk_arrives_before_provider_stream_ends(monkey
     server = _prepare_server(monkeypatch, Runtime(), events)
 
     async def scenario():
-        response = await server.chat_stream(server.ChatRequest(message="回答"), None)
+        response = await server.chat_stream(ChatRequest(message="回答"), service_request())
         try:
             first = await asyncio.wait_for(anext(response.body_iterator), 2)
             assert first.startswith("event: progress\ndata: ")
@@ -234,15 +238,15 @@ def test_real_sse_progress_and_whitespace_do_not_hide_empty_reply(monkeypatch):
     events = []
     server = _prepare_server(monkeypatch, object(), events)
 
-    def producer(messages, thread, queue, loop, uid, stop, *args):
+    def producer(runtime, messages, thread, queue, loop, uid, stop, *args):
         args[-1].emit("working", key="work")
         loop.call_soon_threadsafe(queue.put_nowait, AIMessageChunk(content=" \n"))
         loop.call_soon_threadsafe(queue.put_nowait, None)
 
-    monkeypatch.setattr(server, "_run_agent_stream_to_queue", producer)
+    monkeypatch.setattr(server, "stream_to_queue", producer)
 
     async def scenario():
-        response = await server.chat_stream(server.ChatRequest(message="read"), None)
+        response = await server.chat_stream(ChatRequest(message="read"), service_request())
         body = "".join([frame async for frame in response.body_iterator])
         assert server._RECOVERY_SENTENCE in body
         assert len([e for e in events if e["event"] == "first_reply"]) == 1
@@ -258,15 +262,15 @@ def test_real_sse_internal_frames_are_not_first_visible(monkeypatch):
     events = []
     server = _prepare_server(monkeypatch, object(), events)
 
-    def producer(messages, thread, queue, loop, uid, stop, *args):
+    def producer(runtime, messages, thread, queue, loop, uid, stop, *args):
         for frame in ('__PENDING__:{}', '__EXEC__:[]', AIMessageChunk(content=" \n"),
                       RuntimeError("private error"), None):
             loop.call_soon_threadsafe(queue.put_nowait, frame)
 
-    monkeypatch.setattr(server, "_run_agent_stream_to_queue", producer)
+    monkeypatch.setattr(server, "stream_to_queue", producer)
 
     async def scenario():
-        response = await server.chat_stream(server.ChatRequest(message="read"), None)
+        response = await server.chat_stream(ChatRequest(message="read"), service_request())
         body = "".join([frame async for frame in response.body_iterator])
         assert "event: error" in body and "private error" not in body
         assert [e["kind"] for e in events if e["event"] == "first_visible_event"] == ["error"]
@@ -296,18 +300,18 @@ def test_real_stream_close_fences_emitter_until_worker_drains(monkeypatch):
     async def scenario():
         drained = asyncio.Event()
         monkeypatch.setattr(server, "finish_trace", lambda *args: drained.set())
-        response = await server.chat_stream(server.ChatRequest(message="read"), None)
+        response = await server.chat_stream(ChatRequest(message="read"), service_request())
         try:
             assert "event: progress" in await asyncio.wait_for(anext(response.body_iterator), 2)
             assert await asyncio.to_thread(entered.wait, 1)
             await response.body_iterator.aclose()
-            assert not await server._try_acquire_slot()
+            assert not await dependencies.try_acquire_slot(service_request())
         finally:
             release.set()
         await asyncio.wait_for(drained.wait(), 2)
         assert accepted == [False]
-        assert await server._try_acquire_slot()
-        server._release_slot()
+        assert await dependencies.try_acquire_slot(service_request())
+        dependencies.release_slot(service_request())
 
     asyncio.run(scenario())
 
@@ -357,7 +361,7 @@ def test_streamed_preface_and_terminal_confirmation_each_render_once(monkeypatch
         drained = asyncio.Event()
         monkeypatch.setattr(server, "finish_trace", lambda *args: drained.set())
         response = await server.chat_stream(
-            server.ChatRequest(message="prepare", conversation_id=42), None)
+            ChatRequest(message="prepare", conversation_id=42), service_request())
         text, cards = [], []
         async for frame in response.body_iterator:
             kind, payload = frame.split("\ndata: ", 1)
