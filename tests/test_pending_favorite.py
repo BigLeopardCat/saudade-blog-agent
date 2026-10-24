@@ -275,7 +275,8 @@ def test_stale_button_cancel_preserves_replacement(waiting, monkeypatch, site):
     assert runtime.get_state(config()).values["pending_confirm"] == expected
 
 
-def test_cancellation_api_checks_signed_identity_and_never_calls_a_model(waiting, monkeypatch):
+def test_cancellation_api_checks_signed_identity_and_never_calls_a_model(
+        waiting, monkeypatch, service_workers):
     from contextlib import closing
 
     from fastapi import FastAPI
@@ -303,6 +304,7 @@ def test_cancellation_api_checks_signed_identity_and_never_calls_a_model(waiting
 
     monkeypatch.setattr(writes, "ledger_for", lambda saver: Store())
     app = FastAPI()
+    app.state.workers = service_workers
     app.include_router(router(lambda: server._agent, server._resolve_principal))
     with TestClient(app) as client:
         body = {"user_id": 7, "conversation_id": 42, "token": token}

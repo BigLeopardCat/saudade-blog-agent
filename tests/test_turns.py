@@ -1,6 +1,5 @@
 """Overlapping turns must not overwrite history or race discard/delete."""
 
-import asyncio
 from concurrent.futures import ThreadPoolExecutor
 from concurrent.futures import TimeoutError as FutureTimeout
 from threading import Event
@@ -49,7 +48,7 @@ def test_turn_serializes_history_and_lifecycle(monkeypatch, operation):
         if operation == "turn":
             return turn("第二轮")
         if operation == "discard":
-            return asyncio.run(checkpoint.drop_last_user_turn(runtime, "overlap", "第一轮"))
+            return checkpoint.drop_last_user_turn(runtime, "overlap", "第一轮")
         return checkpoint.delete_thread(saver, "overlap")
 
     with ThreadPoolExecutor(max_workers=2) as pool:

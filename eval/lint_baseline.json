@@ -8,7 +8,7 @@
     "I",
     "W"
   ],
-  "total": 274,
+  "total": 273,
   "by_file": {
     "agent/action_text.py": 2,
     "agent/authz.py": 4,
@@ -58,7 +58,6 @@
     "tests/test_docs_links.py": 2,
     "tests/test_embed_space.py": 4,
     "tests/test_entities.py": 15,
-    "tests/test_error_frame.py": 1,
     "tests/test_factblock.py": 1,
     "tests/test_golden_family_policy.py": 3,
     "tests/test_golden_fixture.py": 4,

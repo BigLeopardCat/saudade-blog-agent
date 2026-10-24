@@ -191,3 +191,6 @@ def test_stop_fences_late_body_and_closes_runtime_generator(monkeypatch):
 
     asyncio.run(run())
     assert closed == [True]
+
+
+pytestmark = pytest.mark.usefixtures("service_workers")
