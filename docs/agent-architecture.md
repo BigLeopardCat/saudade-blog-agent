@@ -142,6 +142,7 @@ flowchart LR
 │   │   ├── context.py         # 从验签身份、权限表和渲染清单派生会话能力事实
 │   │   ├── memory.py          # 有预算的会话历史、摘要与带来源的标准工具消息
 │   │   ├── checkpoint_store.py # 会话删除屏障及框架原生快照裁剪
+│   │   ├── progress.py        # 有界原生进度、取消围栏和 SSE 输出耗时
 │   │   ├── session.py         # 按需工具加载、有界调用及领域终结结果
 │   │   ├── read_tools.py      # 公开与本人只读工具的注册和权限边界
 │   │   ├── results.py         # 终结答复与已有执行协议的结果类型
