@@ -17,8 +17,8 @@
 
 ## 架构
 
-生产部署目前使用 `AGENT_ARM=hybrid`：已迁移领域走原生工具循环，未迁移能力仍交给旧图。
-配置的出厂默认仍是 `graph`，不能将生产部署选择理解为旧实现已经删除。
+服务入口使用 `AGENT_ARM=native`：模型使用原生工具调用，确定性代码负责授权、确认、
+幂等与会话存储。升级部署需将旧 graph/hybrid 配置改为 native；旧规划库的物理退役仍在收敛。
 当前迁移范围和审计结果见 [架构审计](docs/agent-architecture-audit-20261023.md)
 与 [迁移验收](docs/hybrid-runtime-migration.md)。
 
@@ -32,7 +32,6 @@ flowchart LR
     HOST --> APPROVAL["确认、取消：服务端校验与幂等执行"]
     APPROVAL --> BLOG
     APPROVAL <--> PG
-    LOOP -. "尚未迁移的领域" .-> LEGACY["旧 planner / execute 图"]
 ```
 
 ## 关键设计
@@ -42,8 +41,8 @@ flowchart LR
 模型通过标准 tool calls 选择工具并根据工具结果继续完成任务，领域工具按需加载。
 工具层负责权限、参数、目标版本和真实业务调用。已确认操作由服务端直接执行，确认轮不再调用模型解释意图。
 
-旧兼容路径仍使用技能模板、文本计划和 checker；目前还存在整轮交接、独立预算与上下文的
-维护成本。新增能力优先进入领域工具层，迁移完成后删除对应旧入口，避免长期维护两套执行语义。
+服务执行路径不再交接旧规划器。旧库及其专用评测仍在退役，共享数据和渲染依赖
+需要继续收敛；新增能力进入领域工具层。
 
 ### 2. 工具结果与回复
 
@@ -243,7 +242,7 @@ trace 与 golden trace 的保留各有其执行者（`eval/trace_retention.py`�
 | `PLANNER_TEMPERATURE` | `0.0` | 规划温度（调优实验可逐臂拨）。**"它能治路由抖动"已被 A/B 证伪**，别拿它当调参理由 |
 | `PLANNER_NATIVE_THINKING` / `_MAX_TOKENS` / `_TIMEOUT` / `_SLOW_S` | `true` / `1200` / `60` / `30` | 接口层的四个旋钮，各自的取舍见 `settings.py` 的注 |
 | ~~`AGENT_TASK_STATE`~~、~~`AGENT_TASK_PLAN_EXEC`~~ | **已删（20261015）** | 会话级未完成意图的登记/注入**常开**，没有开关了（任务状态是业界默认必备的，不该有开关把它变成摆设）。**写进 `.env` 现在是鬼键**；理由与判据见 docs/问题记录.md §1.63 |
-| `AGENT_ARM` | `graph` | `graph` 是生产路径；`hybrid` 是迁移路径，普通对话用单次小上下文调用，文章、站点资料和已验签用户的个人数据可按需读取，收藏目标核对、确认准备与已确认的单件执行走独立领域模块，其余任务交回旧图。`hybrid` 尚需完整评测，默认不启用。拨档后需重启服务；未知名字拒绝启动。 |
+| `AGENT_ARM` | `native` | 原生工具运行时。旧 graph/hybrid 服务配置拒绝启动；修改后须重启服务。 |
 | `RAG_HYBRID_ENABLED`、`EMBEDDING_*`、`RRF_K` | 不设（= 纯词法） | 向量 + RRF 混合检索，可选件。⚠️ **`EMBEDDING_*` 不只管检索**：首页那件「文章向量空间图谱」的建图（`scripts/build_word_graph.py`）与检索（`rag/wordgraph.py`）也用它——配了走它，没配回落 `QWEN_*` + `qwen3.7-text-embedding`（两端共用 `rag/embed_space.py` 一条规则）。**换模型/端点后要重建一次图谱**（后台「站点设置 → 向量图谱」），否则检索侧以 `space_mismatch` 明着降级 |
 | `AGENT_RECURSION_LIMIT` / `AGENT_MAX_BODY_BYTES` / `AGENT_MAX_CONCURRENT` / `AGENT_MAX_REVIEW` / `AGENT_STREAM_IDLE_TIMEOUT` / `AGENT_STREAM_TOTAL_TIMEOUT` | `30` / `12 MiB` / `8` / `4` / `120` / `300` | 服务限额与超时（20261020 双轨收敛入 Settings：**写 `.env` 就生效**，键名与 systemd `Environment=` 时代逐个一致，老部署零改动；两个 STREAM 超时是收敛时**新开的 env 通道**，此前只能改码）。用途与理由注释在 `server.py` 各常量旁；判据 `tests/test_settings_surface.py` ⑥ |
 

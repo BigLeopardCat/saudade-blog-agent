@@ -37,22 +37,19 @@ from pydantic import BaseModel, Field, field_validator
 from agent import (
     checkpoint,  # 采纳（批 7）：造 saver + 会话坐标 + 级联清理
     confirm,  # 待办令牌：签发在 graph 弹窗侧，验签在这里（见 /chat/stream）
-    idem,  # 持久化档的唯一常量（REQUIRED_DURABILITY，见 agent/idem.py）
     runtime_probe,  # /version 与 /ready 的判定逻辑（纯函数，见该模块头注）
 )
-from agent.agent import create_agent
 from agent.approval_api import router as approval_router
-from agent.transport import collect_turn, emit_to_queue
-from agent.factblock import strip_fact_lines
 from agent.block_reasons import REASONS as _BLOCK_REASONS
+from agent.factblock import strip_fact_lines
 from agent.principal import Principal
+from agent.runtime.budget import current_budget
 from agent.runtime.control import AgentCancelled, RequestControl
 from agent.runtime.jobs import RequestJobs
-from agent.runtime.budget import current_budget
 from agent.runtime.progress import ProgressEmitter, StreamProgress
 from agent.summarizer import summarize
-
 from agent.tasks import TS_MMDD_HHMM_RE, age_minutes, render_open_tasks
+from agent.transport import collect_turn, emit_to_queue
 
 # The block-reason map remains a shared compatibility surface for existing
 # authorization and receipt tests; native transport does not render planner text.
@@ -334,65 +331,24 @@ _agent = None
 
 
 def _graph_holds_context() -> bool:
-    """图自不自持上下文 —— 采纳（批 7）那三处的唯一判据。判定与理由见
-    `agent/runtime_probe.py::holds_context`（它读 `_agent` 这个**活体对象**，不读配置，
-    所以挂了 saver 的实验臂会真的走到"不注入历史"那条路上）。"""
+    """Whether the live runtime owns persistent conversation history."""
     return runtime_probe.holds_context(_agent)
 
 
 def _thread_id_for(req) -> str:
-    """这一轮的 `thread_id`。**两条路（`/chat` 与 `/chat/stream`）共用它**是刻意的：
-    只改一条会让两种线程语义并存，而线上主路径是流式那条，单跑评测看不见它。
-    判定与理由见 `agent/checkpoint.py::thread_id_for`。"""
+    """Use the same conversation coordinate for HTTP and SSE."""
     return checkpoint.thread_id_for(req.user_id, req.conversation_id,
                                     _graph_holds_context())
 
 
-def _stream_kwargs() -> dict:
-    """给 `_agent.stream(...)` 的持久化档：**有 saver 才有这一格**（没 saver 时一个键都
-    不给，不是给 `None`）。② 是实测撞上的：**没挂 saver 的臂/桩根本没有这个形参**
-    （`ReactGoldenArm.stream()`），给了就是 `TypeError` 炸在生产者里 ⇒ 整条端到端判据
-    **静默变成"零帧"**，而那长得跟"臂没产出"一模一样。① langgraph 也会为"给了 durability
-    却没有 checkpointer"发一条 UserWarning。必须是同步档的理由见 checkpoint 头注。
-    """
-    return {"durability": idem.REQUIRED_DURABILITY} if _graph_holds_context() else {}
-
-
-def _idem_resuming(thread_id: str) -> bool:
-    """给写幂等账的那一格：**这一轮开始时，上一轮跑没跑完**（批 F）。
-
-    账本靠它分流"重放"与"主人又要了一次"——键现在是会话级的（跨重启稳定），
-    `checkpoint_ns` 降级成"这一次尝试"，于是"换了一轮"这件事必须由别处告诉账本，
-    否则**合法的重复会被吞**（"再显示一次"变成"已经显示过了"）。
-
-    判定与理由在 `agent/checkpoint.py::thread_is_resuming`（读图状态的 `next`；读不到
-    按保守侧 `True` 办）。**没挂 saver ⇒ `False`**：那种环境账本 `active()` 为假、
-    根本不查这一格，给 `False` 与"今天逐字相同"一致；而给它 `True` 会让"没挂 saver"
-    与"上一轮崩了"在日志里长得一样。
-
-    与 `_stream_kwargs` 同形：两条路（`/chat` 与 `/chat/stream`）共用，**只此一处**。
-    """
-    return checkpoint.thread_is_resuming(_agent, thread_id) if _graph_holds_context() else False
-
-
 def _build_arm():
-    """按名字选择兼容同步/SSE 接口的运行路径；未知名字拒绝启动。
+    """Build the native production runtime; retired selections fail at startup."""
+    from agent.runtime.native import build
 
-    默认 graph 保持生产行为；hybrid 延迟 import。评测臂的留档逻辑
-    不进入服务端，返回臂名供启动日志与健康检查报告实际运行路径。
-    """
-    from config.settings import settings
-    arm = (settings.agent_arm or "graph").strip().lower()
-    if arm == "graph":
-        # 采纳（批 7 之③）：DSN 空 ⇒ `None` ⇒ 与 20260903 以来**逐字节相同**；非空 ⇒
-        # 在这里开池建表（只在启动期调一次），连不上就**响亮抛**、进程起不来。
-        return create_agent(checkpointer=checkpoint.build_checkpointer()), arm
-    if arm == "hybrid":
-        from agent.runtime.hybrid import build as build_hybrid_arm
-        return build_hybrid_arm(), arm
-    raise RuntimeError(
-        f"AGENT_ARM={arm!r} 不是已知的臂（graph/hybrid）——拒绝启动。"
-        "不回退 graph：静默回退会把'这一轮到底是谁在跑'从日志里抹掉。")
+    arm = (settings.agent_arm or "native").strip().lower()
+    if arm != "native":
+        raise RuntimeError(f"AGENT_ARM={arm!r} 已退役，请配置 AGENT_ARM=native。")
+    return build(), "native"
 
 
 @asynccontextmanager
@@ -817,13 +773,7 @@ def _runtime_events(messages: list, *, thread_id: str, user_id: int,
                     confirm_grant: dict | None = None, ledger: dict | None = None,
                     recent_tools: list[str] | None = None, stop_event=None,
                     open_tasks: str = "", progress_emitter=None):
-    """Call the native Runtime event contract.
-
-    The transport boundary intentionally knows no planner nodes or graph state.
-    The native-runtime branch supplies ``stream_events``; until that branch is
-    integrated, requests fail explicitly instead of silently translating legacy
-    node updates back into a second event protocol.
-    """
+    """Bind verified request coordinates to the native Runtime event contract."""
     stream_events = getattr(_agent, "stream_events", None)
     if not callable(stream_events):
         raise RuntimeError("native Runtime stream_events is not available")
@@ -958,15 +908,25 @@ def _run_agent_stream_to_queue(messages: list, thread_id: str, queue: asyncio.Qu
     delivered before the terminal sentinel, so the HTTP adapter cannot emit a
     successful end frame after an error or cancellation.
     """
+    visible_parts = []
     def put(value):
         if loop.is_closed():
-            return
+            raise AgentCancelled()
+        if stop_event is not None and stop_event.is_set():
+            raise AgentCancelled()
         pending = queue.put(value)
         try:
-            asyncio.run_coroutine_threadsafe(pending, loop).result()
+            future = asyncio.run_coroutine_threadsafe(pending, loop)
         except RuntimeError:
             pending.close()
-            return
+            raise AgentCancelled() from None
+        try:
+            future.result(timeout=5)
+            if isinstance(value, AIMessageChunk):
+                visible_parts.append(str(value.content or ""))
+        except TimeoutError:
+            future.cancel()
+            raise AgentCancelled() from None
     try:
         events = _runtime_events(
             messages, thread_id=thread_id, user_id=user_id, principal=principal,
@@ -977,14 +937,17 @@ def _run_agent_stream_to_queue(messages: list, thread_id: str, queue: asyncio.Qu
         put(None)
     except AgentCancelled:
         logger.info("[stream] native runtime cancelled")
-        put(_NativeCancelled())
+        if not loop.is_closed():
+            loop.call_soon_threadsafe(queue.put_nowait, _NativeCancelled())
     except Exception as exc:
         logger.exception("[stream] native runtime producer failed: %s", exc)
         put(exc)
         try:
             put(None)
-        except Exception:
+        except (AgentCancelled, RuntimeError):
             logger.info("[stream] producer sentinel consumer already closed")
+    finally:
+        record("producer", "stream_end", reply="".join(visible_parts))
 
 
 def _record_invalid_confirm(trace_id: str, uid: int, conv_id, token_len: int,

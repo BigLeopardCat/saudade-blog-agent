@@ -1,6 +1,6 @@
 # ADR-0021：原生轮次与会话存储脱离旧编排图
 
-- **状态**：已采纳；核心实现独立可测，服务接线等待原生传输消费者合入。
+- **状态**：已采纳；核心与原生传输消费者已接线；服务配置采用 native。
 - **承接**：[ADR-0020](adr-0020-conversation-store.md)
 - **范围**：NativeRuntime、NativeConversationStore、共享工具目录及原生确认接线。
 
@@ -39,8 +39,8 @@ NativeConversationStore 用一个不可执行业务的 commit 节点，复用框
 
 ## 接入与退役边界
 
-本批不切换服务默认值。当前 server 的生产者仍解析旧节点协议，必须先合入独立原生传输消费者，
-再接入 NativeRuntime 并一起验证同步、SSE、确认与停止端点；不能仅改 AGENT_ARM 默认值上线。
+服务默认入口已接入原生传输消费者，同步与 SSE 都消费正文块和最终 TurnResult，
+不再解析旧节点更新。配置为 native；旧 graph/hybrid 配置在启动时明确拒绝，部署需同步更新。
 共享 ToolCatalog 供兼容入口和新 Runtime 复用，避免维护两份授权菜单。
 旧 graph/hybrid 及专用评测的物理删除另需完成调用方收敛；本批不宣称整个迁移完成。
 

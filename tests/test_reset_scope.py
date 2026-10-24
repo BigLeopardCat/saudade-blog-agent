@@ -79,32 +79,6 @@ def _test_parse_reset():
           and parse_reset("__RESET__:fallback:x")[0] == "all")
 
 
-def _test_server_call_sites():
-    print("\n[写侧] server.py 的两个分支发各自的 scope")
-    src = (ROOT / "server.py").read_text(encoding="utf-8")
-    check("帧形是 `__RESET__:{scope}:{reason}` 一处实现",
-          '__RESET__:{scope}:{reason}' in src)
-    i_replan = src.find('if upd.get("gate_replan"):')
-    i_all = src.find('emit_reset("all"')
-    i_fb = src.find('elif upd.get("fallback_text"):')
-    i_text = src.find('emit_reset("text"')
-    check("四个锚点都在（缺一个说明分支被改名/搬走了）",
-          -1 not in (i_replan, i_all, i_fb, i_text),
-          f"{i_replan},{i_all},{i_fb},{i_text}")
-    # 顺序断言：`all` 落在重规划那一支里、`text` 落在 fallback 那一支里。
-    # 不写成"就近取周围 N 字符"是因为两个分支本来就相邻，窗口一宽就两可。
-    check("重规划支发 all（决策被推翻 ⇒ 旧命令作废）", i_replan < i_all < i_fb,
-          f"{i_replan} < {i_all} < {i_fb}")
-    check("fallback 支发 text（决策没被推翻 ⇒ 只否掉措辞）", i_fb < i_text, f"{i_fb} < {i_text}")
-    # 反向锁：`emit_reset(` 的每个调用都必须带 scope。漏一个参数就是 TypeError
-    # （会红，不是静默），但**"两处传了 scope、第三处忘了"**这种红法出现得太晚——
-    # 发出那一刻才炸。这里数调用点，加分支时逼人回来核一次。
-    # （`(?<!def )` 把函数定义那一行排除掉——它当然也长得像一次调用）
-    calls = re.findall(r"(?<!def )emit_reset\(([^)]*)\)", src)
-    check(f"每个 emit_reset 调用都带 scope（实得 {len(calls)} 处：{calls}）",
-          len(calls) == 2 and all("," in c for c in calls), str(calls))
-
-
 def _test_frontend_reads_same_scope():
     print("\n[跨端] 前端解析的是同一份 scope 字面")
     # 读的是**本仓**这份（20261001 起 `frontend/` 随看板娘一起从博客仓搬进来、按 MIT 分发）。
@@ -168,7 +142,7 @@ def _test_forbid_fallback_reads_scope():
 
 
 def test_reset_scope():
-    for fn in (_test_parse_reset, _test_server_call_sites, _test_frontend_reads_same_scope,
+    for fn in (_test_parse_reset, _test_frontend_reads_same_scope,
                _test_forbid_fallback_reads_scope):
         fn()
     print("\n" + ("全部通过 ✅" if not FAILS else f"失败 {len(FAILS)} 项 ❌: {FAILS}"))

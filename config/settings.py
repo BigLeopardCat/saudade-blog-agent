@@ -107,13 +107,9 @@ class Settings(BaseSettings):
     llm_seed: int = 0
 
     # ── Agent ───────────────────────────────────────────────────────
-    # graph 是生产默认档；hybrid 是按领域迁移的目标运行时。
-    # hybrid 用小上下文处理对话、按需读取和已确认收藏事务，其余任务交给 graph。
-    # 各档须按请求级结果比较后再决定默认档，不以内部节点通过率互比。
-    # 真值源与 `AGENT_REQUIRE_ASSERTION` 同族 = `.env`；**这里只声明**，
-    # 选臂那一步在 `server._build_arm`（不 import `eval/golden_arm.py`——生产不该依赖
-    # 评测侧的壳）。拨它要重启服务才生效（`sudo systemctl restart saudade-agent`）。
-    agent_arm: str = "graph"
+    # Production uses the native model/tool runtime. Old graph selections fail
+    # explicitly at startup instead of silently changing execution semantics.
+    agent_arm: str = "native"
     # ⚠️ 20261007 删掉两个**从未被读到**的字段：`agent_max_iterations` 与
     # `agent_early_stopping_method`（原 `AGENT_MAX_ITERATIONS` / `AGENT_EARLY_STOPPING`）。
     # 它们是 LangGraph 旧 `AgentExecutor` 时代的旋钮；20260903 换成手写图 + planner 全权后

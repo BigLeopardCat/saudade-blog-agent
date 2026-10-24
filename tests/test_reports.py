@@ -536,7 +536,6 @@ cpu0 300 5 60 2050 62 0 12 0 0 0
           all(n in build_planner_context("admin") for n in _ADMIN_READ_WORKFLOWS))
     check("既有公开技能对非 admin 仍然可见（别把过滤写宽了）",
           all(n in build_planner_context("user") for n in ("chat", "content_query", "navigate")))
-    src = (ROOT / "server.py").read_text(encoding="utf-8")
     asrc = (ROOT / "agent" / "action_text.py").read_text(encoding="utf-8")
     check("过程行有中文动作词（否则显示『执行 get_server_status』）",
           all(f'"{n}":' in asrc for n in NEW))
@@ -705,8 +704,9 @@ cpu0 300 5 60 2050 62 0 12 0 0 0
               for n in ("admin_notes", "tag_create", "article_status", "article_tags")))
     check("过程行有中文动作词（否则显示『执行 create_tag』）",
           all(f'"{n}":' in asrc for n in W2))
+    from agent.block_reasons import REASONS
     check("reason 中文表里有 unknown_target（错误帧原因码要翻译给用户看）",
-          '"unknown_target"' in src and "目标未经确认" in src)
+          REASONS["unknown_target"][0] == "目标未经确认")
     print("\n⑬ 后台留言名册（20261001）：账号渲染 / 名册行 / list_admin_board 接线")
     check("account_text：三件齐 → 账号在最前，昵称/用户名都给",
           R.account_text({"userId": 5, "nickname": "小猫咪", "username": "sora"})

@@ -116,6 +116,7 @@ flowchart LR
 │   ├── confirm.py             # ★ 写操作确认令牌：无状态 HMAC（TTL 600s，多 worker 安全）；不落库、不落用户消息
 │   ├── approval_api.py        # 验签后的确认撤销 API，不创建聊天轮或调用模型
 │   ├── runtime_probe.py               # 运行时可观测判定的**纯逻辑**：/version 构建身份、/ready 就绪、/health 那格 checkpoint 后端
+│   ├── transport.py         # 原生正文、确认、命令和回执的 HTTP/SSE 协议适配
 │   │
 │   ├── 【侧任务】
 │   ├── moderator.py           # 侧任务·留言审核：不可信输入围栏 + 输出白名单 + **fail-open**

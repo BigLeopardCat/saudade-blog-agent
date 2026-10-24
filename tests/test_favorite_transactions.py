@@ -20,7 +20,7 @@ from tools.result import fact, ok, tgt
 
 def _grant():
     return {"uid": 7, "conv": 42, "jti": "a" * 32, "exp": int(time.time()) + 60,
-            "workflow": "favorite_add",
+            "workflow": "favorite_add", "executor": "favorites",
             "specs": [{"tool": "add_favorite", "args": {"article_id": 19}}]}
 
 
@@ -168,6 +168,8 @@ def test_hybrid_executes_confirmed_favorite_without_model_or_legacy(monkeypatch,
 
 def test_stream_producer_emits_existing_execution_receipt(monkeypatch, tmp_path):
     import server
+    from agent.runtime.native import NativeRuntime
+    from agent.runtime.native_store import NativeConversationStore
 
     tool = Favorite()
     monkeypatch.setattr(transactions, "get_all_tools", lambda: [tool])
@@ -175,7 +177,7 @@ def test_stream_producer_emits_existing_execution_receipt(monkeypatch, tmp_path)
                         lambda saver: idem.Ledger(str(tmp_path / "stream.sqlite3")))
     monkeypatch.setattr("agent.runtime.hybrid.get_llm", lambda **_: 1 / 0)
     monkeypatch.setattr(server, "_agent",
-                        HybridArm(create_agent(checkpointer=InMemorySaver())))
+                        NativeRuntime(NativeConversationStore(InMemorySaver())))
 
     async def collect():
         queue = asyncio.Queue()

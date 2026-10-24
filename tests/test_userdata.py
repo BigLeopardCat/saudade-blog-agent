@@ -1125,10 +1125,10 @@ def test_userdata():
     check("checker：kind=unavailable 仍是它自己的码（两族不许合并）",
           _G._check_spec("read_notifications", {}, True, "…", "notice_read",
                          kind="unavailable") == ("BLOCK", "unavailable"))
-    _s_src = (ROOT / "server.py").read_text(encoding="utf-8")
-    check("过程行有中文：target_not_found →「目标不存在」（不是「服务不可用」）",
-          '"target_not_found": "目标不存在"' in _s_src and '"unavailable": "服务不可用"' in _s_src,
-          str([l for l in _s_src.splitlines() if "target_not_found" in l]))
+    from agent.block_reasons import REASONS
+    check("目标不存在与服务不可用保持不同原因文案",
+          REASONS["target_not_found"][0] == "目标不存在"
+          and REASONS["unavailable"][0] == "服务不可用")
     _settings.jwt_secret = _saved_secret   # 收尾：还原成进来时的样子（见头部密钥桩）
     print("\n" + ("全部通过" if not FAILS else f"失败 {len(FAILS)} 项：" + "; ".join(FAILS)))
 

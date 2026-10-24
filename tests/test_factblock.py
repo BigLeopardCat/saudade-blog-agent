@@ -561,7 +561,7 @@ class _FakeAgent:
     def __init__(self, script: list):
         self.script = script
 
-    def stream(self, inp, cfg, stream_mode=None):
+    def stream_events(self, inp, cfg):
         for item in self.script:
             yield item
 
@@ -618,74 +618,18 @@ def _ai_chunks(items: list) -> list:
     return [str(i.content) for i in items if isinstance(i, AIMessageChunk)]
 
 
-def _test_producer_order_and_reset():
-    print("\n[真 producer] 射程空集：一行都不代印；RESET 与兜底替换照旧")
-    script = [
-        ("updates", {"execute": {"receipts": [_ROW]}}),
-        ("messages", (AIMessageChunk(content="已经帮你收藏好啦～"),
-                      {"langgraph_node": "model"})),
-        ("updates", {"model": {"messages": [AIMessage(content="已经帮你收藏好啦～")]}}),
-        ("updates", {"gate": {"done": True, "fallback_text": "这一轮什么都没办成。",
-                              "gate_replan": False}}),
-    ]
-    items = _drain(script)
-    chunks = _ai_chunks(items)
-    check("两段 AI 文本：narrator 正文 → 兜底替换文本；**前面没有块**",
-          chunks == ["已经帮你收藏好啦～", "这一轮什么都没办成。"], str(chunks))
-    check("**写族回执不再产生任何代印帧**（改前这里是 `〔系统〕 已收藏文章 46`）",
-          not any(isinstance(c, str) and FACT_MARK in c for c in _ai_chunks(
-              _drain([("updates", {"execute": {"receipts": [_ROW]}}),
-                      ("messages", (AIMessageChunk(content="包装"),
-                                    {"langgraph_node": "model"}))]))),
-          str(_ai_chunks(_drain([("updates", {"execute": {"receipts": [_ROW]}}),
-                                 ("messages", (AIMessageChunk(content="包装"),
-                                               {"langgraph_node": "model"}))]))))
-    check("__CMD__ 帧照发（机器读的那一半与印不印无关）",
-          any(isinstance(x, str) and x.startswith("__CMD__:") for x in _drain([
-              ("updates", {"execute": {"receipts": [_ROW_CMD]}}),
-              ("messages", (AIMessageChunk(content="这就带你过去～"),
-                            {"langgraph_node": "model"}))])),
-          str(_drain([("updates", {"execute": {"receipts": [_ROW_CMD]}})])))
-    _reset = next(i for i, x in enumerate(items) if isinstance(x, str)
-                  and x.startswith("__RESET__"))
-    _last_ai = max(i for i, x in enumerate(items) if isinstance(x, AIMessageChunk))
-    check("RESET 在兜底文本之前（前端先清空再重绘，否则被否定的叙述留在界面上）",
-          _reset < _last_ai, f"reset=#{_reset} last_ai=#{_last_ai}")
+def _test_native_producer_does_not_print_fact_blocks():
+    from agent.runtime.results import TurnResult
 
-
-def _test_producer_pass_round():
-    print("\n[真 producer] 通过的一轮：正文就是 narrator 那一句（没有块可拼）")
-    script = [
-        ("updates", {"execute": {"receipts": [_ROW]}}),
-        ("messages", (AIMessageChunk(content="想收别的随时说～"),
-                      {"langgraph_node": "model"})),
-        ("updates", {"model": {"messages": [AIMessage(content="想收别的随时说～")]}}),
-        ("updates", {"gate": {"done": True, "gate_replan": False}}),
-    ]
-    chunks = _ai_chunks(_drain(script))
-    check("只有一段正文（写族轮：改前这里前面还有一段事实块）",
-          chunks == ["想收别的随时说～"], str(chunks))
-    check("数据族回执同样不发块",
-          _ai_chunks(_drain([
-              ("updates", {"execute": {"receipts": [_RCPT_DATA]}}),
-              ("messages", (AIMessageChunk(content="查到 1 篇。"),
-                            {"langgraph_node": "model"})),
-              ("updates", {"gate": {"done": True, "gate_replan": False}}),
-          ])) == ["查到 1 篇。"])
-    check("命令族回执也不发块（效果主人当场看得见，那句话归泠月）",
-          _ai_chunks(_drain([
-              ("updates", {"execute": {"receipts": [_ROW_CMD]}}),
-              ("messages", (AIMessageChunk(content="这就带你过去～"),
-                            {"langgraph_node": "model"})),
-              ("updates", {"gate": {"done": True, "gate_replan": False}}),
-          ])) == ["这就带你过去～"])
-    check("  但命令帧照发（机器读的那一半不受印量影响）",
-          any(isinstance(i, str) and i.startswith("__CMD__:") for i in _drain([
-              ("updates", {"execute": {"receipts": [_ROW_CMD]}}),
-              ("messages", (AIMessageChunk(content="这就带你过去～"),
-                            {"langgraph_node": "model"})),
-              ("updates", {"gate": {"done": True, "gate_replan": False}}),
-          ])))
+    reply = "指令已发送。"
+    items = _drain([AIMessageChunk(content=reply),
+                    TurnResult(reply, {"receipts": [_ROW, _ROW_CMD]})])
+    check("原生正文不追加系统事实块", _ai_chunks(items) == [reply], str(_ai_chunks(items)))
+    check("结构化命令与回执各发一次",
+          sum(isinstance(x, str) and x.startswith("__CMD__:") for x in items) == 1
+          and sum(isinstance(x, str) and x.startswith("__EXEC__:") for x in items) == 1)
+    check("完成轮次不使用旧 RESET 纠偏协议",
+          not any(isinstance(x, str) and x.startswith("__RESET__") for x in items))
 
 
 def test_factblock():
@@ -698,7 +642,7 @@ def test_factblock():
                _test_graph_wiring, _test_graph_no_false_positive,
                _test_graph_zero_frame_no_authorization,
                _test_graph_data_round_untouched,
-               _test_producer_order_and_reset, _test_producer_pass_round):
+               _test_native_producer_does_not_print_fact_blocks):
         fn()
     print("\n" + ("全部通过 ✅" if not FAILS else f"失败 {len(FAILS)} 项 ❌: {FAILS}"))
 

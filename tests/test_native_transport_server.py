@@ -1,15 +1,16 @@
 from __future__ import annotations
 
 import asyncio
+import secrets
 import threading
 
 import pytest
-from langchain_core.messages import AIMessageChunk
 from fastapi import Request
+from langchain_core.messages import AIMessageChunk
 
 import server
-from agent.runtime.results import TurnResult
 from agent.principal import Principal
+from agent.runtime.results import TurnResult
 
 
 class FakeRuntime:
@@ -52,7 +53,8 @@ def test_sync_adapter_uses_native_contract_and_structured_command(monkeypatch):
 def test_stream_adapter_keeps_receipts_and_confirmation_order(monkeypatch):
     runtime = FakeRuntime([TurnResult(
         "请确认。", {"pending_event": {"event": "cancelled", "jti": "j1"},
-        "pending_confirm": {"q": "确认？", "opts": [], "token": "tok", "exp": 10,
+        "pending_confirm": {"q": "确认？", "opts": [], "token": secrets.token_urlsafe(16),
+                              "exp": 10,
                               "replay_safe": True},
         "pending_action": {"task_id": "pa_j1"}, "receipts": []})])
     monkeypatch.setattr(server, "_agent", runtime)
@@ -82,7 +84,8 @@ def test_stream_error_has_error_sentinel_and_no_success_sentinel_first(monkeypat
             raise RuntimeError("storage failed")
     monkeypatch.setattr(server, "_agent", Broken())
     async def run():
-        q = asyncio.Queue(); loop = asyncio.get_running_loop()
+        q = asyncio.Queue()
+        loop = asyncio.get_running_loop()
         await asyncio.to_thread(server._run_agent_stream_to_queue, [], "conv", q, loop, 7,
                                 threading.Event(), Principal(uid=7))
         return [await q.get(), await q.get(), await q.get()]
@@ -154,3 +157,33 @@ def test_real_chat_stream_body_iterator_error_has_no_success_end(monkeypatch):
 
 async def _ready():
     return True
+
+
+def test_stop_fences_late_body_and_closes_runtime_generator(monkeypatch):
+    stop = threading.Event()
+    closed = []
+
+    class Runtime:
+        def stream_events(self, state, config):
+            try:
+                yield AIMessageChunk(content="首段")
+                stop.set()
+                yield AIMessageChunk(content="迟到正文")
+                yield TurnResult("首段迟到正文")
+            finally:
+                closed.append(True)
+
+    monkeypatch.setattr(server, "_agent", Runtime())
+
+    async def run():
+        queue = asyncio.Queue()
+        await asyncio.to_thread(server._run_agent_stream_to_queue, [], "conv", queue,
+                                asyncio.get_running_loop(), 7, stop)
+        first = await asyncio.wait_for(queue.get(), 1)
+        terminal = await asyncio.wait_for(queue.get(), 1)
+        assert first.content == "首段"
+        assert isinstance(terminal, server._NativeCancelled)
+        assert queue.empty()
+
+    asyncio.run(run())
+    assert closed == [True]
