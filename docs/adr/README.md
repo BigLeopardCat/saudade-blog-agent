@@ -86,6 +86,7 @@
 | [0018](adr-0018-embedding-input-budgets.md) | 固定 tokenizer 的完整 embedding 输入预算与空间签名 | 提议中 |
 | [0019](adr-0019-local-embedding-runtime.md) | 本地 embedding 共用成熟运行时、固定资产并保留 API | 提议中 |
 | [0020](adr-0020-conversation-store.md) | 原生会话存储采用薄接口，旧图 checkpoint 细节留在兼容适配器 | 已采纳 |
+| [0021](adr-0021-native-runtime-core.md) | 原生轮次与会话存储脱离旧编排图，传输接入单独收敛 | 已采纳 |
 
 ## 相关的、但不算 ADR 的文档
 
