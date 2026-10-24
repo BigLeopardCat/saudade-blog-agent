@@ -5,6 +5,7 @@ import contextvars
 import logging
 import threading
 import time
+from contextlib import ExitStack
 
 from agent.runtime.control import request_scope
 from utils.trace import record
@@ -25,6 +26,7 @@ class RequestJobs:
         self._finished = False
         self._started = time.monotonic()
         self._closed_at = None
+        self._drained = asyncio.Event()
 
     def submit(self, executor, function, *args):
         context = contextvars.copy_context()
@@ -74,11 +76,15 @@ class RequestJobs:
             logger.exception("Request jobs drained after the event loop closed")
 
     def _finish(self):
-        now = time.monotonic()
-        record("runtime", "jobs_drained", duration_s=round(now - self._started, 3),
-               detached_s=round(now - self._closed_at, 3))
-        try:
+        with ExitStack() as cleanup:
+            cleanup.callback(self._drained.set)
+            cleanup.callback(self.release)
             if self.on_complete is not None:
-                self.on_complete()
-        finally:
-            self.release()
+                cleanup.callback(self.on_complete)
+            now = time.monotonic()
+            record("runtime", "jobs_drained", duration_s=round(now - self._started, 3),
+                   detached_s=round(now - self._closed_at, 3))
+
+    async def wait_closed(self):
+        """Wait until worker exit, trace finalization and permit release have completed."""
+        await self._drained.wait()

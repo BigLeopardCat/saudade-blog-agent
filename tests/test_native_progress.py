@@ -3,6 +3,7 @@
 import threading
 import time
 
+import pytest
 from langchain_core.messages import AIMessage, HumanMessage
 from langchain_core.tools import StructuredTool
 
@@ -372,3 +373,6 @@ def test_streamed_preface_and_terminal_confirmation_each_render_once(monkeypatch
         assert stored.values["messages"][-1].content == reply
 
     asyncio.run(scenario())
+
+
+pytestmark = pytest.mark.usefixtures("service_workers")

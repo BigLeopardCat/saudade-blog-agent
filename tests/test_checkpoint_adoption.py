@@ -77,3 +77,6 @@ def test_http_and_sse_share_history_without_duplicates(monkeypatch, persistent):
         assert runtime.get_state(config()).next == ()
     else:
         assert runtime.store.load(config()).messages == []
+
+
+pytestmark = pytest.mark.usefixtures("service_workers")

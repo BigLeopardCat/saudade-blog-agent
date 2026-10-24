@@ -1,6 +1,5 @@
 """Native storage adopts conversation data without loading the retired planner."""
 
-import asyncio
 import secrets
 from typing import Annotated, TypedDict
 
@@ -86,7 +85,7 @@ def test_discard_after_legacy_adoption_uses_commit_node_and_delete_rejects_late_
     legacy_checkpoint(saver)
     store = NativeConversationStore(saver)
     runtime = NativeRuntime(store)
-    result = asyncio.run(checkpoint.drop_last_user_turn(runtime, 42, "旧问题"))
+    result = checkpoint.drop_last_user_turn(runtime, 42, "旧问题")
     assert result == {"dropped": True, "why": ""}
     assert store.load(config()).messages == []
     store.save_turn(config(), [HumanMessage(content="另一轮")], "答复")

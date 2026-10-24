@@ -9,6 +9,7 @@ import threading
 import time
 from pathlib import Path
 
+import pytest
 from _judge import collector
 
 ROOT = Path(__file__).resolve().parent.parent  # 仓根（20260924：测试统一搬进 tests/）
@@ -276,7 +277,7 @@ def _sync_chat_source_shape():
     #（`r.status().is_success()` 对 HTTP 200 恒真 ⇒ 会把这一轮当成功并落一条空回复）。
     rsrc = _parent_repo.read(
         "src/routes/chat.rs",
-        why="agent 说「这一轮失败」只有 Rust 真读 success 才有意义（HTTP 200 恒真 ⇒ 会把这一轮当成功并落一条空回复）")
+        why="agent 失败只有 Rust 真读 success 才有意义；HTTP 200 恒真会误记成功")
     if rsrc:
         check("Rust 那半读 agent 的 success/error（`agent_reply_of`）",
               "agent_reply_of" in rsrc and 'data.get("success")' in rsrc, "chat.rs")
@@ -303,3 +304,6 @@ def test_error_frame():
 
 if __name__ == "__main__":
     test_error_frame()
+
+
+pytestmark = pytest.mark.usefixtures("service_workers")

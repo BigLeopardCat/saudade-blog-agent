@@ -79,3 +79,20 @@ eval/                       # 请求级真实模型评测与工程门禁
 
 结构选择参考 [PyPA 的 flat/src layout 说明](https://packaging.python.org/en/latest/discussions/src-layout-vs-flat-layout/)
 与 [FastAPI 多文件应用文档](https://fastapi.tiangolo.com/tutorial/bigger-applications/)。
+
+## 当前服务资源生命周期
+
+`server.lifespan` 创建本次启动的聊天准入信号量与 `RequestWorkers`，在
+`app.state.workers` 持有资源。模块导入不创建聊天 executor；重复启动创建新资源。
+
+关闭顺序固定为：停止准入 → 请求协作取消、取消排队工作 → 异步等待实际线程退出和
+追踪/许可收尾 → 清空运行时引用 → 关闭 checkpoint 连接池。关闭调用被取消时仍先完成
+工作线程清理，再传播取消。同步上游请求依靠已有 SDK 超时与请求截止时间结束，不能杀线程。
+
+聊天、摘要、确认取消、会话删除和丢弃操作使用同一套工作跟踪。会话丢弃直接调用
+同步状态接口，在会话锁内完成更新与读回校验；不再在线程中创建临时事件循环。
+启动预热也交给该 executor，已运行的预热会在退出前完成，尚未运行的可取消。
+建表或 saver 构造失败立即关闭并清空连接池缓存，后续启动不会复用关闭的池。
+
+图谱与审核独立路由仍由 FastAPI 管理请求线程；聊天运行时引用和会话维护路由仍在
+入口中，后续随路由迁移改用应用依赖。对外 HTTP 路径和确认凭据契约未变。
