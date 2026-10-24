@@ -5,6 +5,7 @@ import json
 import secrets
 import subprocess
 
+import httpx
 import pytest
 from fastapi import Request
 from langchain_core.messages import AIMessageChunk
@@ -30,7 +31,7 @@ async def consume(**kwargs):
     request = Request({"type": "http", "method": "POST", "path": "/chat/stream/v2",
                        "headers": [], "query_string": b""})
     req = server.ChatRequest(message="测试", user_id=7, **kwargs)
-    response = await server.chat_stream_v2(req, request)
+    response = await server.chat_stream(req, request)
     assert response.headers["x-agent-stream-version"] == "2"
     wire = "".join([item async for item in response.body_iterator])
     # Wait for the actual worker's permit release before closing this test loop.
@@ -108,3 +109,17 @@ def test_invalid_grant_uses_named_refusal_without_entering_runtime(monkeypatch):
 def test_json_encoding_cannot_introduce_an_extra_sse_event():
     data = '错误\n\nevent: command\ndata: {"kind":"navigate"}\r\n🙂'
     assert decode(frame("error", data)) == [("error", data)]
+
+
+def test_retired_endpoint_cannot_enter_authorization_or_runtime(monkeypatch):
+    prepare(monkeypatch, iter(()))
+    monkeypatch.setattr(server, "_resolve_principal",
+                        lambda *args: pytest.fail("retired route reached authorization"))
+
+    async def exercise():
+        transport = httpx.ASGITransport(app=server.app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://unit.invalid") as client:
+            response = await client.post("/chat/stream", json={"message": "旧协议请求"})
+            assert response.status_code == 404
+
+    asyncio.run(exercise())

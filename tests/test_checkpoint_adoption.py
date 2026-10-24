@@ -65,7 +65,7 @@ def test_http_and_sse_share_history_without_duplicates(monkeypatch, persistent):
             history=[server.HistoryItem(role="user", content="[当前问题]: 第一问"),
                      server.HistoryItem(role="assistant", content="答复1")]), request)
         body = "".join([frame async for frame in response.body_iterator])
-        assert "答复2" in body and "__END__" in body and "__ERROR__" not in body
+        assert "答复2" in body and "event: done" in body and "event: error" not in body
 
     asyncio.run(exercise())
     assert len(prompts) == 2

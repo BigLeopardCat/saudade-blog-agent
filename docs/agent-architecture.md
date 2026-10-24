@@ -39,7 +39,7 @@ flowchart LR
 │   ├── api/__init__.py                                  # HTTP 适配包，不执行应用初始化
 │   ├── api/context.py                                   # 请求到标准消息的适配与历史回放
 │   ├── api/host_context.py                              # 有界宿主事实与历史任务投影
-│   ├── api/events.py                                    # 具名 SSE 编码和发布衔接
+│   ├── api/events.py                                    # 具名 SSE 编码和响应头
 │   ├── api/schemas.py                                   # 聊天 HTTP 契约及字段限额
 │   ├── approval_api.py                                  # 当前生产代码模块
 │   ├── arg_refs.py                                      # 当前生产代码模块

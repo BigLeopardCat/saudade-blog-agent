@@ -127,7 +127,6 @@ def _prepare_server(monkeypatch, runtime, events):
 
 def test_real_sse_progress_precedes_blocked_tool_and_first_reply(monkeypatch):
     import asyncio
-    import json
 
     from langchain_core.messages import AIMessageChunk
 
@@ -150,7 +149,7 @@ def test_real_sse_progress_precedes_blocked_tool_and_first_reply(monkeypatch):
         response = await server.chat_stream(server.ChatRequest(message="read"), None)
         try:
             first = await asyncio.wait_for(anext(response.body_iterator), 2)
-            assert json.loads(first.removeprefix("data: ").strip()).startswith("__PROCESS__:")
+            assert first.startswith("event: progress\ndata: ")
             assert await asyncio.to_thread(entered.wait, 1)
             assert not release.is_set()
             visible = [e for e in events if e["event"] == "first_visible_event"]
@@ -158,7 +157,7 @@ def test_real_sse_progress_precedes_blocked_tool_and_first_reply(monkeypatch):
             assert not any(e["event"] == "first_reply" for e in events)
             release.set()
             rest = "".join([frame async for frame in response.body_iterator])
-            assert '"done"' in rest and "__END__" in rest
+            assert '"done"' in rest and "event: done" in rest
             assert len([e for e in events if e["event"] == "first_reply"]) == 1
         finally:
             release.set()
@@ -210,14 +209,14 @@ def test_real_sse_native_answer_chunk_arrives_before_provider_stream_ends(monkey
         response = await server.chat_stream(server.ChatRequest(message="回答"), None)
         try:
             first = await asyncio.wait_for(anext(response.body_iterator), 2)
-            assert json.loads(first.removeprefix("data: ").strip()).startswith("__PROCESS__:")
+            assert first.startswith("event: progress\ndata: ")
             second = await asyncio.wait_for(anext(response.body_iterator), 2)
-            assert json.loads(second.removeprefix("data: ").strip()) == "首段正文"
+            assert json.loads(second.split("data: ", 1)[1]) == "首段正文"
             assert await asyncio.to_thread(entered.wait, 1)
             assert not release.is_set()
             release.set()
             rest = "".join([frame async for frame in response.body_iterator])
-            assert '"后段正文"' in rest and "__END__" in rest
+            assert '"后段正文"' in rest and "event: done" in rest
             assert len([e for e in events if e["event"] == "first_reply"]) == 1
         finally:
             release.set()
@@ -268,7 +267,7 @@ def test_real_sse_internal_frames_are_not_first_visible(monkeypatch):
     async def scenario():
         response = await server.chat_stream(server.ChatRequest(message="read"), None)
         body = "".join([frame async for frame in response.body_iterator])
-        assert "__ERROR__" in body and "private error" not in body
+        assert "event: error" in body and "private error" not in body
         assert [e["kind"] for e in events if e["event"] == "first_visible_event"] == ["error"]
         assert not any(e["event"] == "first_reply" for e in events)
 
@@ -298,7 +297,7 @@ def test_real_stream_close_fences_emitter_until_worker_drains(monkeypatch):
         monkeypatch.setattr(server, "finish_trace", lambda *args: drained.set())
         response = await server.chat_stream(server.ChatRequest(message="read"), None)
         try:
-            assert "__PROCESS__" in await asyncio.wait_for(anext(response.body_iterator), 2)
+            assert "event: progress" in await asyncio.wait_for(anext(response.body_iterator), 2)
             assert await asyncio.to_thread(entered.wait, 1)
             await response.body_iterator.aclose()
             assert not await server._try_acquire_slot()
@@ -360,13 +359,11 @@ def test_streamed_preface_and_terminal_confirmation_each_render_once(monkeypatch
             server.ChatRequest(message="prepare", conversation_id=42), None)
         text, cards = [], []
         async for frame in response.body_iterator:
-            raw = frame.removeprefix("data: ").strip()
-            if raw.startswith('"'):
-                item = json.loads(raw)
-                if item.startswith("__CONFIRM__:"):
-                    cards.append(item)
-                elif not item.startswith("__"):
-                    text.append(item)
+            kind, payload = frame.split("\ndata: ", 1)
+            if kind == "event: confirmation":
+                cards.append(json.loads(payload))
+            elif kind == "event: text":
+                text.append(json.loads(payload))
         await asyncio.wait_for(drained.wait(), 2)
         reply = "".join(text)
         assert reply.count("准备好了。") == 1
