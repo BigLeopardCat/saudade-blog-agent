@@ -146,3 +146,42 @@ def test_stream_error_closes_iterator_and_does_not_emit_a_fake_answer():
     with pytest.raises(RuntimeError, match="private transport detail"):
         next(runner)
     assert closed.wait(1)
+
+
+@pytest.mark.parametrize("arguments,metadata", [
+    ('{"query":"weather"', {}),
+    ('{"query":', {}),
+    ('{"query":"weather"}', {"finish_reason": "length"}),
+])
+def test_repaired_or_truncated_tool_arguments_are_never_executed(arguments, metadata):
+    FIXTURE_CALLS.clear()
+    chunk = AIMessageChunk(content="", response_metadata=metadata, tool_call_chunks=[
+        {"name": "fixture_lookup", "args": arguments, "id": "partial", "index": 0}])
+    model = _StreamingModel([[chunk]])
+    result = ToolSession(model, {}, {"fixture_lookup": fixture_lookup}, {}).run([
+        HumanMessage(content="read")])
+    assert FIXTURE_CALLS == []
+    assert "未执行" in result.reply
+    assert len(model.calls) == 1
+
+
+def test_result_budget_stop_is_visible_after_a_streamed_preface():
+    FIXTURE_CALLS.clear()
+    model = _StreamingModel([[
+        AIMessageChunk(content="我先查一下。"),
+        AIMessageChunk(content="", tool_calls=[
+            {"name": "fixture_lookup", "args": {"query": "weather"}, "id": "read"}]),
+    ]])
+    session = ToolSession(model, {}, {"fixture_lookup": fixture_lookup}, {})
+    session.result_chars = 16000
+    stream = session.stream([HumanMessage(content="read")])
+    shown = []
+    while True:
+        try:
+            shown.append(next(stream).content)
+        except StopIteration as stop:
+            result = stop.value
+            break
+    assert FIXTURE_CALLS == []
+    assert "上限" in "".join(shown)
+    assert result.reply == "".join(shown)
