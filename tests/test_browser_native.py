@@ -227,15 +227,15 @@ def test_one_turn_combines_appearance_and_navigation_and_retains_source_history(
     )
 
 
-@pytest.mark.parametrize("last", ["delegate_to_site_agent", "budget"])
-def test_queued_commands_survive_stop_without_replaying_the_legacy_graph(monkeypatch, last):
+@pytest.mark.parametrize("last", ["budget"])
+def test_queued_commands_survive_stop_without_replaying_legacy_runtime(monkeypatch, last):
     responses = [
         _response("load_site_info_tools"),
         _response("set_page_appearance", {"snow": "on"}),
     ]
     if last == "budget":
         responses.extend(_response("set_page_appearance", {"snow": "on"}) for _ in range(3))
-    else:
+    else:  # pragma: no cover - kept for future native stop reasons
         responses.append(_response(last))
     arm, _ = _arm(monkeypatch, responses)
     with budget_scope(RequestBudget(BudgetLimits(model_calls=4))):

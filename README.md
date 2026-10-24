@@ -100,60 +100,37 @@ flowchart LR
 
 ```text
 saudade-blog-agent/
-# 下面这张是**缩略图**：只挑读者最常找的几个模块。agent/ 与 tools/ 的**完整地图**
-# （每个模块一行、按族分组）在 docs/agent-architecture.md 的 §2，由 tests/test_module_index.py 双向钉着。
 ├── server.py              FastAPI 入口、SSE 编排、输入限制、并发和取消
 ├── agent/
-│   ├── runtime/           原生工具循环、会话存储、审批与幂等执行
+│   ├── runtime/           NativeRuntime、会话存储、预算、确认与传输
 │   ├── domains/           按需领域工具与业务操作准备
-│   ├── graph.py           旧兼容图：planner、execute、声称闸与回执循环
-│   ├── deterministic_plan.py  零 LLM 确定性决策和快道
-│   ├── prompt_context.py  注入 planner 的提示词文本组装（页面/能力/工具帧/回执）
-│   ├── plan_codec.py      计划文本契约的编解码（plan_encode / plan_state / parse_plan）
-│   ├── tool_specs.py      执行清单条目的解析与去重裁剪（_tool_args / _trim_done_reads 等）
-│   ├── repeat_guard.py    逐字复读判据（_repeat_reason / _recent_ai_replies 等，gate 1b）
-│   ├── workflow_defs/     技能注册表：47 条静态定义按域拆分 + NAV_MAP 导航映射
-│   ├── planner_llm.py     技能表 ↔ API tools/tool_calls 的接线层
-│   ├── authz.py           scope 权限模型
-│   ├── principal.py       调用者身份（uid/role/source）的唯一构造点
-│   ├── confirm.py         无状态 HMAC 确认令牌
-│   ├── adminops_tags.py   后台标签/分类/文章状态的确定性层（同族另有 7 个按域拆出的模块）
-│   ├── arg_refs.py        结构化参数引用
-│   ├── entity_digest.py   执行回执实体摘要
-│   ├── tasks.py           跨轮任务状态
-│   ├── hostinfo.py        本机运维读数（只读 /proc、systemctl、日志）
-│   ├── prompts.py         ★ 全部模型可见正文（人设 / 叙述纪律 / planner 与 reflector 模板 / 输出契约）
-│   ├── moderator.py       留言 AI 审核侧任务
-│   ├── summarizer.py      对话摘要侧任务
-│   └── …                  其余 40 余个模块见 docs/agent-architecture.md §2（完整地图，逐条列）
-├── tools/base.py          69 个工具的注册表（`_TOOL_REGISTRY`；工具本体 20261018 起
-│                          按域拆在 tools/ 各模块里，这里按原名 re-export）+ 共享 HTTP 通道
-├── rag/search.py          BM25 内存倒排检索
-├── rag/sections.py        超长文章分节（索引 / 帧 / 按节取回三处共用；纯函数）
-├── eval/                  检索评测、golden 评测、trace 分析与跨源对账
-├── tests/                 秒级离线回归测试（按磁盘枚举，加套件不用改 CI）
-├── docs/                  14 份专题文档（架构/问题记录/评测/规划/身份与权限/检索…），索引见 docs/README.md
-│   └── adr/               架构决策记录：当时的取舍，含"决定不做某事"
-├── CONTRIBUTING.md        参与方式、本仓的判据规矩、能/不能在本机跑什么
-├── ROADMAP.md             现在做什么 / 什么在等触发条件 / 什么明确不做
-└── SECURITY.md            安全问题走私密通道（本仓是 public 仓库）
+│   ├── authz.py           principal 权限模型与工具 scope
+│   ├── principal.py       验证后的调用者身份
+│   ├── confirm.py         HMAC 确认令牌
+│   ├── transport.py       正文、确认、命令和 receipt 协议
+│   └── …                  其余模块见 docs/agent-architecture.md §2
+├── tools/                 业务工具注册与共享结果协议
+├── rag/                   检索与向量索引
+├── eval/                  离线检索评测与契约检查
+├── tests/                 离线回归测试
+└── docs/                  架构、评测、身份与迁移文档
 ```
 
-旧兼容路径的技能注册表当前有 50 个技能，覆盖：导航、页面特效、夜间模式、设备显示与查询、内容检索、文章读取、运维和审核报表、后台文章/标签/分类/公告/留言管理、收藏和通知处理、闲聊等。
+原生按需领域覆盖导航、页面特效、设备显示与查询、内容检索、文章读取、运维和审核报表、后台文章/标签/分类/公告/留言管理、收藏和通知处理、账号管理与闲聊等能力。
 
 ## 可靠性边界
 
 系统已经具备以下生产防线：
 
-- planner 轮次上限和 LangGraph `recursion_limit`；
+- NativeRuntime 有界模型循环和请求预算；
 - LLM 调用超时、流式空闲超时、总时长上限；
 - 线程池和流式并发闸；
 - 请求体、字段、历史条数和图片大小限制；
 - 客户端断连后的循环级、节点级和逐工具调用检查；
 - 服务间身份断言和短时效 JWT；
 - 工具返回 `ok / empty / not_found / unavailable` 四态；
-- 结构化 trace：节点事件、分段耗时、回执、受阻原因和结束原因；
-- L0 离线单测、L1 检索评测、L2 golden 任务评测、L3 跨源对账和夜间自动化。
+- 结构化 trace：运行时事件、分段耗时、回执、受阻原因和结束原因；
+- L0 离线单测、L1 检索评测、L2 原生行为契约、L3 跨源对账和夜间自动化。
 
 ## 评测
 
@@ -165,7 +142,7 @@ uv sync
 # L0 离线、秒级、无 LLM、无网络——整个套件（pytest 按目录收集 tests/）
 .venv/bin/python -m pytest -q
 
-# L0 局部（-k 按用例名筛选；改技能注册表/计划契约后至少跑 workflows + authz + confirm）
+# L0 局部（-k 按用例名筛选；修改领域或确认路径后至少跑 native + authz + confirm）
 .venv/bin/python -m pytest -q -k workflows
 # 套件清单**只有"pytest 按目录收集"一处**（`pyproject.toml` 的 `testpaths`）：
 # 加套件不用改 CI、不用改夜间脚本、不用改本文——落一个 `tests/test_xxx.py` 上去，下一轮就在跑。
@@ -179,7 +156,7 @@ bash scripts/dev/coverage.sh
 # L1 检索基准（recall@k / MRR，直接测线上 rag/search.py，秒级、无网）
 .venv/bin/python eval/recall_eval.py
 
-# L2 真实 LLM 任务评测：193 条 golden（其中 5 条会真写生产库，默认不跑、需显式放行），约 25 分钟，按需运行
+# L2 原生行为评测：使用离线桩验证工具、确认、取消、回执和存储契约
 .venv/bin/python eval/run_golden.py
 .venv/bin/python eval/run_golden.py --only <id>,<id>   # 只跑指定用例
 .venv/bin/python eval/golden_full_run.py               # 全量跑（与 run_golden 共用判据）

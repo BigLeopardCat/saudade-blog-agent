@@ -352,15 +352,7 @@ def test_checkpoint_factory():
     check("反控：锚点没了要**报**出来，不许空过",
           bool(_wire_lock("x = 1\n", "build_graph", "compile")),
           str(_wire_lock("x = 1\n", "build_graph", "compile")))
-    _graph_src = (ROOT / "agent" / "graph.py").read_text(encoding="utf-8")
-    _agent_src = (ROOT / "agent" / "agent.py").read_text(encoding="utf-8")
-    check("生产图 `agent/graph.py::build_graph` 合规",
-          not _wire_lock(_graph_src, "build_graph", "compile"),
-          "；".join(_wire_lock(_graph_src, "build_graph", "compile")))
-    check("`agent/agent.py::create_agent` 同样只传不造（缺省 None + 原样传给 build_graph）",
-          not _wire_lock(_agent_src, "create_agent", "build_graph"),
-          "；".join(_wire_lock(_agent_src, "create_agent", "build_graph")))
-    print("\n⑥ 旧陷阱不许回来：`agent/` 的生产代码里没有 MemorySaver")
+    print("\n⑥ 旧陷阱不许回来：生产代码不直接构造 MemorySaver")
     check("红基线：检测器抓得住 `from langgraph.checkpoint.memory import MemorySaver`",
           bool(_scan("from langgraph.checkpoint.memory import MemorySaver\n")))
     check("红基线：抓得住 `MemorySaver()` 这种直接用",

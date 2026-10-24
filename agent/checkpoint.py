@@ -291,7 +291,7 @@ def thread_is_resuming(agent, thread_id: object) -> bool:
 
 # ── 「丢弃那一轮」要同步到图自己的 state（批 E）──────────────────────────
 # 现状（20261019 之前）：Rust 从 `chat_history` 删掉那一轮的 user 消息与残缺回复，而
-# **图自持的 state 里那条还在**——历史注入已关（`_graph_holds_context()`），DB 不再是
+# **运行时持久化的 state 里那条还在**——历史注入已关（`_graph_holds_context()`），DB 不再是
 # 上下文来源 ⇒ 「丢弃」这个动作**对 agent 不再生效**：主人点了"停止生成"，agent 下一轮
 # 照样记得那句被丢掉的话。本组函数是那一半。
 _CUR_Q = "[当前问题]: "
@@ -367,7 +367,7 @@ async def _drop_last_user_turn(agent, conversation_id: object, text: str = "") -
     if not removes:
         return {"dropped": False, "why": "still_present"}
     # **不传 `as_node`**：`aupdate_state` 会从 `versions_seen` 推"最后是谁写的"，
-    # 生产形状的图（planner/execute/model/gate）推得出来（实测）。推不出来时它抛
+    # 生产形状的图（model/execute/model/gate）推得出来（实测）。推不出来时它抛
     # `InvalidUpdateError`（"Ambiguous update"）——**如实收成一支回执**，别让它变成父仓
     # discard 路上的一个 500（那边只看 `dropped`，`why` 进日志）。
     try:

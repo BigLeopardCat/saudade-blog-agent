@@ -113,7 +113,6 @@ def flaky(texts, sp):
 
 from langchain_core.messages import ToolMessage  # noqa: E402
 
-import agent.deterministic_plan as D2  # noqa: E402
 
 sys.path.insert(0, str(ROOT / "tests"))
 
@@ -413,26 +412,6 @@ def test_vector_index():
     check("红基线：融合被打桩成「只回声词法路」时向量独有的那篇不在结果里"
       "（否则 §⑨ 是在测一个恒真分支）",
           14 not in {h["id"] for h in stub_out} and 14 in by)
-    print("\n⑩ 融合结果喂给下游：score 契约与「只允许越读越高分」闸")
-    text = "\n".join(f"{i + 1}. type={h['type']} id={h['id']} score={h['score']} "
-                 f"title={h['title'][:24]}" for i, h in enumerate(fused))
-    check("融合行能被 _RAG_ROW_RE 解析（RRF 分数是 0.0x，regex 吃不吃得下）",
-          len(D2._RAG_ROW_RE.findall(text)) == len(fused), text.split("\n")[0])
-    check("解析出来的分数就是融合分",
-          [float(s) for _t, _i, s, _ti in D2._RAG_ROW_RE
-              .findall(text)] == [h["score"] for h in fused])
-    msgs = [ToolMessage(content=text, name="rag_search", tool_call_id="t1")]
-    plan = D2._candidate_detail_plan(msgs, [], set())
-    check("无已读 ⇒ 挑融合分最高的那篇读全文",
-          plan is not None and '"article_id": 12' in " ".join(plan.get("tools") or []),
-          str(plan and plan.get("tools"))[:80])
-    plan2 = D2._candidate_detail_plan(msgs, ['get_article_detail({"article_id": 12})'], set())
-    check("已读榜首但证据不足时仍能探索剩余候选",
-          plan2 is not None, str(plan2))
-    plan3 = D2._candidate_detail_plan(msgs, ['get_article_detail({"article_id": 14})'], set())
-    check("已读过最低分那篇 ⇒ 高分候选照读（闸不是「一律清空」）",
-          plan3 is not None and '"article_id": 12' in " ".join(plan3.get("tools") or []),
-          str(plan3 and plan3.get("tools"))[:60])
     print("\n⑪ 开关关掉时：一次网络都不许出去")
     S.rag_hybrid_enabled = False
     n = len(SENT)

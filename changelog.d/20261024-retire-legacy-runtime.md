@@ -1,0 +1,3 @@
+- **原生运行时收尾**：三阶段移除旧 graph、文本 planner、workflow DSL、纠偏模块和 hybrid/legacy checkpoint 适配层。生产入口只构建 `NativeRuntime`，模型直接选择标准工具；确认、取消、幂等、会话锁、删除屏障和 SSE 回执契约保持不变。
+- 原生领域渲染与回执事实归入小型共享模块，历史 planner 专用测试、实验脚本和棘轮条目随实现退役；`NativeConversationStore` 继续使用公开 saver 接口，不新增表或迁移。
+- 离线验证覆盖原生取消、确认、工具回执、旧模块负向导入、文档模块索引和完整 pytest；真实 PostgreSQL、模型与线上 golden 仍需主账号单独验收。

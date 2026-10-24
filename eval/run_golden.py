@@ -95,7 +95,7 @@ from server import (ChatRequest, HistoryItem, _build_messages,
                     _run_agent_stream_to_queue)
 # `agent.create_agent` 的引用搬去了 eval/golden_arm.py（选臂那一层）：本文件不再直接建图，
 # 只调 `ensure_agent()` —— 建哪条臂是可拨的，直接 import 会把"只有一条臂"写死在调用点。
-from agent.graph import _cmd_wire  # 连线命令帧 → 连线形（见 __CMD__ 分支的长注）
+from agent.transport import command_wire
 from agent import confirm  # 双轮（20260925）：验签 + 只读解载荷，见 run_one/run_case
 from agent.principal import Principal  # 管理助手用例的调用者身份（20260921）
 # uid=0 哨兵的**真值源**（`DENIAL_FAMILY` 第 ⑦ 支由它派生，见那一支的头注）——
@@ -557,7 +557,7 @@ def run_one(req: ChatRequest, principal: "Principal | None" = None,
             # `text` 不清——终局 fallback 里命令是已发生的事实）。
             try:
                 _cmd = json.loads(item[len("__CMD__:"):])
-                _wire = _cmd_wire(_cmd) if isinstance(_cmd, dict) else ""
+                _wire = command_wire(_cmd) if isinstance(_cmd, dict) else ""
             except Exception:
                 _wire = ""
             if _wire:
@@ -1706,9 +1706,8 @@ def expand_forbid_tokens(cases: list) -> list:
 # 现在给事实前提补上同一条出口，判据只有一句：
 #   **"这件事实拿不到" ⟺ 供给它的那些工具，对这个角色一条都到不了。**
 # 前半句（谁供给它）由用例作者落笔声明（`premise_absent.suppliers`，机器猜不出来）；
-# 后半句（到不到得了）由这里算——用 `agent.tasks.step_tool_enum(role)`，那是既有的
-# "**这个身份真能执行到的工具名**"（可见技能模板 ∪ 数据工具点名白名单），不是为评测
-# 新造的第二份判据。任一供给工具变得可达 ⇒ 前提已变 ⇒ 该用例**未评估**（摘用例 +
+# 后半句（到不到得了）由当前授权清单和原生工具域计算，即
+# "**这个身份真能执行到的工具名**"，不是为评测新造的意图路由。任一供给工具变得可达 ⇒ 前提已变 ⇒ 该用例**未评估**（摘用例 +
 # 退出码 3），而不是拿一条过期的期望去判模型胡说。
 #
 # **方向的代价写在明处**：声明少了 ⇒ 漏（与今天一样），声明多了 ⇒ 假"未评估"。
@@ -1719,14 +1718,12 @@ PREMISE_ROLES: tuple[str, ...] = ("visitor", "user", "admin", "superadmin")
 
 
 def reachable_tools(role: str | None) -> set:
-    """这个身份**事实上取得到**的工具名（唯一来源 = `agent.tasks.step_tool_enum`）。
-
-    `role=None` = 匿名访客。它取得到公开读面——这是产品上的事实（影子模式下访客
-    天天在调公开读工具），**不是**权限模型的判据：`authz.check()` 对未知角色一律
-    拒绝，那是"该不该给"，这里问的是"取不取得到"，两者在匿名访客这一格上并不重合。
-    """
-    from agent.tasks import step_tool_enum
-    return set(step_tool_enum(role))
+    """Return tools reachable by the role under the native scope policy."""
+    from agent.authz import SCOPE_READ_PUBLIC, TOOL_SCOPE, check
+    if role is None:
+        return {name for name, scope in TOOL_SCOPE.items() if scope == SCOPE_READ_PUBLIC}
+    principal = Principal(uid=1, role=role, source="golden")
+    return {name for name in TOOL_SCOPE if check(principal, name).allowed}
 
 
 def premise_role(pa: dict) -> str | None:
@@ -2501,12 +2498,12 @@ def check_gold(gold: dict, result: dict, *, docs=None, user_input: str = "",
                          "——本键要求帧里至少印出一个编号（要有待办行才判得动）")
     if gold.get("require_card_targets_from_ledger") and not _lf_off:
         from agent.adminops_target import normalize_target_id  # 编号解析的唯一实现
-        from agent.graph import _LEDGER_FIELD_FAMILY, _LEDGER_TAG_FAMILY, _LEDGER_TARGET_FIELDS
+        from native_receipt_contract import FIELD_FAMILY, TAG_FAMILY, TARGET_FIELDS
         _byfam: dict = {}
         for _e in _lf_events:
             for _raw in (_e.get("ids") or []):
                 _s = str(_raw)
-                _fam = _LEDGER_TAG_FAMILY.get(_s.partition(":")[0])
+                _fam = TAG_FAMILY.get(_s.partition(":")[0])
                 _tid = normalize_target_id(_s)
                 if _fam and _tid is not None:
                     _byfam.setdefault(_fam, set()).add(int(_tid))
@@ -2514,13 +2511,13 @@ def check_gold(gold: dict, result: dict, *, docs=None, user_input: str = "",
         for _p in (result.get("confirm_payloads") or []):
             for _sp in (_p or {}).get("specs") or []:
                 _tool = str((_sp or {}).get("tool") or "")
-                _field = _LEDGER_TARGET_FIELDS.get(_tool)
+                _field = TARGET_FIELDS.get(_tool)
                 if not _field:
                     continue
                 _seen += 1
                 _val = ((_sp or {}).get("args") or {}).get(_field)
                 _tid = normalize_target_id(_val)
-                _fam = _LEDGER_FIELD_FAMILY.get(_field, "")
+                _fam = FIELD_FAMILY.get(_field, "")
                 if _tid is None or int(_tid) not in _byfam.get(_fam, set()):
                     _bad.append(f"{_tool}.{_field}={_val!r}")
         if not _seen:
