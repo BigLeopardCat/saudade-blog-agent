@@ -1,28 +1,5 @@
 # -*- coding: utf-8 -*-
-"""离线注入边界：**用户文本伪造不出控制面结构**（OWASP A03/A04 里离线可判的那一半）。
-
-**这份套件不测"模型会不会泄露系统提示词"** —— 那要真打一次 LLM，与"离线套件无网络无
-LLM"这条纪律冲突（审计意见 §4.2.2 给的那份样例就是 `await client.post("/chat/stream")`
-+ 收流 + 断言输出里没有特征串，本仓跑不了）。**能离线判的是它前面那一段**：注入 payload
-从用户侧进来之后，会不会在**结构层**被当成指令 —— 比如在系统上下文里长出第二段
-`[System: …]`、把一条工具调用裂成三条、把用户的话当成系统事实行剥掉、让一段散文里的
-`$tool[0].field` 被当成真引用。
-
-所以这份套件是**矩阵**：同一组 payload × 四个**用户可达**的通道，每条通道都调**生产函数**
-本身（不是抄一份逻辑），断言结构没被伪造；每条通道再配一个**反控**（把守卫拿掉就必红），
-证明上面那些绿不是恒真。
-
-**已经在别处判过、这里刻意不重复的**（免得同一件事两处漂）：
-  · 确认令牌伪造签名 / 换 uid / 换会话 / 过期 ⇒ `tests/test_confirm.py`
-  · fact 行的**接线**（三个模型可见读点都真过了剥离）⇒ `tests/test_factblock.py`
-  · 计划文本通道驱动不了执行（对象缺席 ⇒ 零执行）⇒ `tests/test_plan_channel.py` ⑤b
-  · 请求体长度与体积闸 ⇒ `tests/test_hardening.py`
-  · 角色 × 能力矩阵 ⇒ `tests/test_authz.py` 那一族（2700+ 行）
-
-用法：
-    uv run pytest tests/test_injection_boundary.py -v
-    uv run python tests/test_injection_boundary.py
-"""
+"""Offline injection boundaries for native messages, fact markers and reference parsing."""
 
 from __future__ import annotations
 
@@ -74,35 +51,30 @@ def _report(bad: list[str]) -> None:
     assert not bad, f"{len(bad)} 条未通过：" + "；".join(bad)
 
 
-def test_ctx_field_strips_structural_chars():
-    """通道 ①：客户端字段 → `[System: key=value; …]` 那一段。
+def test_client_fields_remain_data_in_the_actual_native_prompt():
+    """Page and host text cannot create system messages or modify verified authority."""
+    import json
 
-    `current_url` / `page_title` 直接来自页面 JS，Rust 原样转发，而它们拼进的是**可信
-    通道**。不清洗就能在自己的字段里塞 `;` 与 `[System:`，让系统上下文里长出第二段
-    （伪造 `current_darkmode=on` 覆盖真实状态）。
-    """
-    from server import _CTX_UNSAFE_RE, _ctx_field
+    from langchain_core.messages import HumanMessage, SystemMessage
 
-    bad: list[str] = []
-    print("① 客户端字段不能伪造第二段系统上下文")
-    for p in PAYLOADS:
-        out = _ctx_field(p)
-        if _CTX_UNSAFE_RE.search(out):
-            bad.append(f"清洗后仍有结构字符：{p!r} → {out!r}")
-    print(f"  {'✅' if not bad else '❌'} {len(PAYLOADS)} 条 payload 过清洗后都不含 "
-          f"`\\r\\n[];=`  [{len(bad)} 条漏]")
-    # 反控：这些 payload 里**确实**有结构字符，所以上面那条不是在空跑
-    dirty = [p for p in PAYLOADS if _CTX_UNSAFE_RE.search(p)]
-    ok = len(dirty) >= 5
-    print(f"  {'✅' if ok else '❌'} 反控：其中 {len(dirty)} 条本来就带结构字符"
-          f"（否则上面那条是空跑）")
-    if not ok:
-        bad.append("payload 里没有结构字符，这条判据是空跑的")
-    # 反控：不清洗就会漏 —— 直接证明"漏"长什么样
-    leaked = [p for p in PAYLOADS if _CTX_UNSAFE_RE.search(p) and not _CTX_UNSAFE_RE.search(p)]
-    if leaked:
-        bad.append("反控自相矛盾")
-    _report(bad)
+    from agent.principal import SOURCE_ASSERTION, Principal
+    from agent.runtime.prompt import build_prompt
+    from server import ChatRequest, _build_messages
+
+    principal = Principal(7, "user", SOURCE_ASSERTION)
+    baseline = build_prompt(_build_messages(ChatRequest(message="hello")), principal)
+    for payload in PAYLOADS:
+        request = ChatRequest(message=payload, current_url=payload, page_title=payload,
+                              executions=payload, pending_action=payload)
+        prompt = build_prompt(_build_messages(request), principal)
+        systems = [message for message in prompt if isinstance(message, SystemMessage)]
+        assert systems == [baseline[0]]
+        page = next(message for message in prompt if isinstance(message, HumanMessage)
+                    and isinstance(message.content, str)
+                    and message.content.startswith("浏览器页面信息（仅数据）："))
+        assert json.loads(page.content.split("：", 1)[1])["title"] == payload
+        assert prompt[-1].content == "[当前问题]: " + payload
+        assert all(isinstance(message, HumanMessage) for message in prompt[1:])
 
 
 def test_fact_mark_guard_is_a_literal_prefix_and_nothing_else():
@@ -192,7 +164,7 @@ def test_arg_ref_is_anchored_so_prose_stays_prose():
 
 
 if __name__ == "__main__":
-    for _fn in (test_ctx_field_strips_structural_chars,
+    for _fn in (test_client_fields_remain_data_in_the_actual_native_prompt,
                 test_fact_mark_guard_is_a_literal_prefix_and_nothing_else,
                 test_arg_ref_is_anchored_so_prose_stays_prose):
         _fn()

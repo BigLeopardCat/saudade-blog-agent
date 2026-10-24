@@ -36,6 +36,10 @@ flowchart LR
 │   ├── adminops_tags.py                                 # 当前生产代码模块
 │   ├── adminops_target.py                               # 当前生产代码模块
 │   ├── adminops_todo.py                                 # 当前生产代码模块
+│   ├── api/__init__.py                                  # HTTP 适配包，不执行应用初始化
+│   ├── api/context.py                                   # 请求到标准消息的适配与历史回放
+│   ├── api/host_context.py                              # 有界宿主事实与历史任务投影
+│   ├── api/schemas.py                                   # 聊天 HTTP 契约及字段限额
 │   ├── approval_api.py                                  # 当前生产代码模块
 │   ├── arg_refs.py                                      # 当前生产代码模块
 │   ├── article_evidence.py                              # 当前生产代码模块
@@ -141,7 +145,6 @@ flowchart LR
 │   ├── runtime/read_tools.py                            # 当前生产代码模块
 │   ├── runtime/results.py                               # 当前生产代码模块
 │   ├── runtime/session.py                               # 当前生产代码模块
-│   ├── runtime/task_context.py                          # 当前生产代码模块
 │   ├── runtime/turns.py                                 # 当前生产代码模块
 │   ├── runtime/writes.py                                # 当前生产代码模块
 │   ├── runtime_probe.py                                 # 当前生产代码模块
