@@ -37,8 +37,9 @@ def confirmed_runtime(runtime, grant):
     if native_domain(grant) is None:
         return runtime
     from agent.runtime.hybrid import HybridArm
+    from agent.runtime.native import NativeRuntime
     # Changing the default runtime cannot bypass revocation or replay checks.
-    selected = runtime if isinstance(runtime, HybridArm) else HybridArm(runtime)
+    selected = runtime if isinstance(runtime, (HybridArm, NativeRuntime)) else HybridArm(runtime)
     if selected.store.saver is None:
         raise RuntimeError("操作确认需要持久化服务，本次未执行。")
     return selected
