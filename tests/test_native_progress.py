@@ -241,7 +241,7 @@ def test_real_stream_close_fences_emitter_until_worker_drains(monkeypatch):
         response = await server.chat_stream(server.ChatRequest(message="read"), None)
         try:
             assert "__PROCESS__" in await asyncio.wait_for(anext(response.body_iterator), 2)
-            assert entered.is_set()
+            assert await asyncio.to_thread(entered.wait, 1)
             await response.body_iterator.aclose()
             assert not await server._try_acquire_slot()
         finally:
