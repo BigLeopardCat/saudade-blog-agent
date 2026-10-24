@@ -18,7 +18,7 @@
 
 ## 已建立的边界
 
-- `agent/runtime/hybrid.py` 负责准入、持久化与协议适配；模型和工具循环在 `session.py`。
+- `agent/runtime/hybrid.py` 负责准入、持久化与协议适配；模型和工具循环在 `session.py`，原生模型答案通过标准 `AIMessageChunk` 流出并在工具调用前完成聚合。
 - `agent/runtime/prompt.py` 组装原生指令、可信身份与有界上下文；工具能力由 schema 描述，
   不在编排层叠加各领域的操作提示。`conversation_store.py` 定义完成轮次的存储边界。
 - 收藏业务不进入通用循环。`preparation.py` 只读取目标与本人状态，再返回确认结果；
