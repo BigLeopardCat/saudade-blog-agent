@@ -1,7 +1,8 @@
 # Native runtime progress events
 
-HybridArm keeps the native ToolSession's final answer buffered so tool-call and
-confirmation semantics remain deterministic. During that work, ToolSession emits
+HybridArm keeps the native ToolSession's completed aggregate buffered for
+tool-call and confirmation decisions while exposing safe output chunks. During
+that work, ToolSession emits
 short, static progress labels through the existing `RunnableConfig` configurable
 map. The server adapts those labels to the existing `__PROCESS__` SSE frame;
 there is no second event protocol.
@@ -26,4 +27,16 @@ Internal control frames, command-only text and confirmation payloads (which the
 widget defers until stream completion) do not start the metric. Progress and
 whitespace alone do not suppress the empty-answer recovery message. Missing or
 invalid observations are not treated as zero; only producer observations count.
-Final reply text is still buffered; native token streaming is separate work.
+Native model replies use the locked LangChain streaming iterator. Plain chat
+text and tool-call prefaces can reach SSE before the model finishes. Article
+answers that need source validation remain buffered until the checks finish.
+Chunks are aggregated with the framework message conversion; complete original
+JSON arguments are required before any tool executes. Consumer close propagates
+to nested iterators and provider responses. Streaming usage is explicitly
+requested for compatible endpoints; absent observations remain unknown.
+
+The complete visible text is saved through `ConversationStore`. Confirmation
+and no-op text is emitted once through the existing structured execution path,
+including any separator after a streamed preface. Browser commands and business
+receipts keep their existing protocol. The legacy graph keeps its existing
+output path.
