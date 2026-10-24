@@ -39,18 +39,6 @@ MAX_PROMPT_CHARS = 24000
 _MAX_RESULT_CHARS = 8000
 _MAX_TOTAL_RESULT_CHARS = 16000
 
-_DELEGATE = {
-    "type": "function",
-    "function": {
-        "name": "delegate_to_site_agent",
-        "description": (
-            "处理当前按需工具领域未覆盖的站内任务。"
-            "这类请求需要真实数据或执行回执时调用；普通闲聊和一般知识问答直接回复。"
-        ),
-        "parameters": {"type": "object", "properties": {},
-                       "additionalProperties": False},
-    },
-}
 _DOMAIN_DESCRIPTIONS = {
     "public_activity": "分页读取公开公告、已通过审核的河灯留言和说说；"
                        "可按编号读取内容，不含待审或驳回记录。",
@@ -101,9 +89,7 @@ def _loader(domain: str) -> dict:
 
 
 class ToolSession:
-    def __init__(self, model, config, tools, domains, outcome_adapter=None, *,
-                 allow_legacy_handoff=True):
-        self.allow_legacy_handoff = allow_legacy_handoff
+    def __init__(self, model, config, tools, domains, outcome_adapter=None):
         self.budget = current_budget() or RequestBudget()
         self.output_limit = getattr(model, "max_tokens", None) or NATIVE_OUTPUT_TOKENS
         self.model = model
@@ -125,11 +111,9 @@ class ToolSession:
         self.llm = self._bind_menu()
 
     def _bind_menu(self):
-        # Keep discovery schemas in place; domain tools extend the request prefix.
-        initial = [tool for name, tool in self.tools.items() if name in self.initial_names]
-        loaded = [tool for name, tool in self.tools.items() if name not in self.initial_names]
-        self.menu = [*initial, *(_loader(domain) for domain in self.domains),
-                     *([_DELEGATE] if self.allow_legacy_handoff else []), *loaded]
+        menu = [*self.tools.values(), *(_loader(domain) for domain in self.domains
+                                       if domain not in self.loaded)]
+        self.menu = menu
         if not self.menu:
             return self.model
         bound = self.model.bind_tools(self.menu, tool_choice="auto", parallel_tool_calls=False)
@@ -140,17 +124,14 @@ class ToolSession:
 
     def _handoff(self, reason, **data):
         if self.receipts:
-            record("hybrid", "handoff_stopped", reason=reason, **data)
+            record("native", "handoff_stopped", reason=reason, **data)
             return self._result("工具操作结果已保留；其余请求尚未完成，请继续指定要处理的事项。")
         if self.calls_used:
-            record("hybrid", "handoff_stopped", reason=reason, **data)
+            record("native", "handoff_stopped", reason=reason, **data)
             if reason in ("article_body_missing", "unread_article_reference"):
                 return self._result("暂时无法核实文章正文，不能据此回答文章内容。"
                                     "请重新指定要阅读的文章。")
             return self._result("本轮查询已停止，暂时没能完成请求。请明确下一步要处理的事项。")
-        if self.allow_legacy_handoff:
-            record("hybrid", "legacy_handoff", reason=reason, **data)
-            return None
         record("native", "task_stopped", reason=reason, **data)
         return self._result("本轮未能完成请求，没有执行未核实的操作。请补充目标或稍后重试。")
 
@@ -165,7 +146,7 @@ class ToolSession:
             *self.receipts, *(execution.get("receipts") or [])]})
 
     def _budget_stop(self, reason, **data):
-        record("hybrid", "budget_stop", reason=reason, **data)
+        record("native", "budget_stop", reason=reason, **data)
         self.outcome = self._result("本轮操作已达到调用或上下文上限，已停止继续处理。"
                                     "请缩小请求范围后再试。")
         return self.outcome
@@ -176,54 +157,53 @@ class ToolSession:
                     or not call.get("name") or not isinstance(call.get("id"), str)
                     or not call.get("id") or not isinstance(call.get("args"), dict)):
                 return "invalid_tool_call"
-        if any(call.get("name") == "delegate_to_site_agent" for call in calls):
-            return "model_delegate"
         if len(calls) > 1 and any(getattr(self.tools.get(call.get("name")), "return_direct", False)
                                   for call in calls):
             return "parallel_terminal_calls"
         return None
 
     def _tool_error(self, call, prompt, reason):
-        available = sorted({*self.tools, *(["delegate_to_site_agent"]
-                            if self.allow_legacy_handoff else []), *self.loaders})
+        available = sorted({*self.tools, *(name for name, domain
+                            in self.loaders.items() if domain not in self.loaded)})
         body = json.dumps({"error": reason, "available_tools": available})
         prompt.append(ToolMessage(content=body,
                                   tool_call_id=call["id"], status="error"))
-        record("hybrid", "tool_error", name=call["name"], reason=reason)
+        record("native", "tool_error", name=call["name"], reason=reason)
         return True
 
     def _invoke_tool(self, name, args, call=None):
         scope = TOOL_SCOPE.get(name)
         if scope in WRITE_SCOPES and not device_actions.authorized(self.config, name):
-            record("hybrid", "tool_denied", name=name)
+            record("native", "tool_denied", name=name)
             return None
         if scope in (SCOPE_READ_OWN, SCOPE_ADMIN_CONSOLE):
             uid = ((self.config or {}).get("configurable") or {}).get("user_id")
             if (not scoped_reads_enabled(self.principal, scope, uid)
                     or not check(self.principal, name).allowed):
-                record("hybrid", "tool_denied", name=name)
+                record("native", "tool_denied", name=name)
                 return None
         try:
             if getattr(self.tools[name], "response_format", None) == "content_and_artifact":
                 return self.tools[name].invoke({**call, "type": "tool_call"}, config=self.config)
             return self.tools[name].invoke(args, config=self.config)
         except (ToolException, ValueError) as exc:
-            record("hybrid", "tool_failed", name=name, error=type(exc).__name__)
+            record("native", "tool_failed", name=name, error=type(exc).__name__)
             return unavailable(f"{name} 调用失败（{type(exc).__name__}），请如实说明。")
 
     def _append_result(self, call, prompt, round_index):
         name = call["name"]
-        record("hybrid", "tool_requested", name=name)
+        record("native", "tool_requested", name=name)
         if name in self.loaders:
             domain = self.loaders[name]
-            if domain not in self.loaded:
-                self.tools.update(self.domains[domain])
-                self.loaded.add(domain)
-                emit_progress(self.config, "正在加载可用工具…", key=f"domain:{domain}")
-                record("hybrid", "load_domain", domain=domain)
-                self.llm = self._bind_menu()
+            if domain in self.loaded:
+                return self._tool_error(call, prompt, "domain_already_loaded")
+            self.tools.update(self.domains[domain])
+            self.loaded.add(domain)
+            emit_progress(self.config, "正在加载可用工具…", key=f"domain:{domain}")
             prompt.append(ToolMessage(content=f"{domain} 工具已加载。",
                                       tool_call_id=call["id"]))
+            record("native", "load_domain", domain=domain)
+            self.llm = self._bind_menu()
             return True
         if name not in self.tools:
             return self._tool_error(call, prompt, "unknown_tool")
@@ -243,7 +223,7 @@ class ToolSession:
             kind = ("prepared" if execution.get("pending_confirm") else
                     "noop" if execution.get("noop_note") else
                     "cancelled" if execution.get("pending_event") else "terminal")
-            record("hybrid", "call", name=name, round=round_index, kind=kind)
+            record("native", "call", name=name, round=round_index, kind=kind)
             return True
         if body is None:
             prompt.append(ToolMessage(content="无权读取此数据。", tool_call_id=call["id"]))
@@ -278,9 +258,9 @@ class ToolSession:
         prompt.append(message.model_copy(update={"content": body}) if message else
                       ToolMessage(content=body, tool_call_id=call["id"]))
         self.result_chars += len(body)
-        record("hybrid", "call", name=name, args=args, round=round_index,
+        record("native", "call", name=name, args=args, round=round_index,
                kind=kind, result=trace_mod.tool_result_text(body, name))
-        record("hybrid", "tool_result", name=name, result_chars=len(body))
+        record("native", "tool_result", name=name, result_chars=len(body))
         return True
 
     def _restore_domains(self, prompt):
@@ -294,7 +274,7 @@ class ToolSession:
             self.loaded.add(domain)
         if restored:
             self.llm = self._bind_menu()
-            record("hybrid", "restore_domains", domains=restored)
+            record("native", "restore_domains", domains=restored)
 
     @staticmethod
     def _message_from_chunk(chunk):
@@ -327,7 +307,7 @@ class ToolSession:
         started = time.monotonic()
         failed = False
         emit_progress(self.config, "正在处理请求…", key=f"model:{self._round_index}")
-        record("hybrid", "llm_start", round=self._round_index, engine="native",
+        record("native", "llm_start", round=self._round_index, engine="native",
                prompt_chars=sum(len(str(message.content)) for message in prompt),
                streaming=True)
         try:
@@ -378,8 +358,8 @@ class ToolSession:
                 try:
                     close()
                 except Exception as exc:  # noqa: BLE001 - closing is best effort
-                    record("hybrid", "llm_close_error", error=type(exc).__name__)
-            record("hybrid", "llm_error" if failed else "llm_done",
+                    record("native", "llm_close_error", error=type(exc).__name__)
+            record("native", "llm_error" if failed else "llm_done",
                    round=self._round_index, engine="native",
                    duration_s=round(time.monotonic() - started, 2),
                    streaming=True, **usage_fields(aggregate))
@@ -415,7 +395,7 @@ class ToolSession:
     def _handle_response(self, response, buffered_chunks, visible_parts):
         """Validate one completed response and either finish or return calls."""
         if getattr(response, "invalid_tool_calls", None):
-            record("hybrid", "invalid_tool_call",
+            record("native", "invalid_tool_call",
                    count=len(response.invalid_tool_calls))
             result = self._result("本轮工具请求未完整，未执行操作。")
             result = yield from self._stream_terminal(result, visible_parts)

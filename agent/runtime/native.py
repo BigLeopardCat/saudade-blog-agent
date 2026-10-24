@@ -78,11 +78,11 @@ class NativeRuntime:
         domains = {} if chat_only else self.catalog.domains(
             config, can_prepare, pending, self.saver)
         prompt = build_prompt([*snapshot.messages, *(state.get("messages") or [])],
-                              principal, own_enabled, pending, allow_legacy_handoff=False)
+                              principal, own_enabled, pending)
         model = (self.model_factory or get_llm)(
             enable_thinking=False, streaming=True, stream_usage=True, max_tokens=768)
         adapt = partial(pending.transition, config=config, saver=self.saver) if pending else None
-        session = ToolSession(model, config, tools, domains, adapt, allow_legacy_handoff=False)
+        session = ToolSession(model, config, tools, domains, adapt)
         runner = session.stream(prompt)
         try:
             while True:

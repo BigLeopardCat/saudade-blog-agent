@@ -443,14 +443,14 @@ checkpoint，顺序各跑一遍。报告分别为 `eval/report/runs/20261022_034
 `checkpoint_writes` 三张表没有探针残留。不创建测试库，不清空现有表。
 
 ```bash
-.venv/bin/python -m eval.experiments.hybrid_checkpoint_probe \
+.venv/bin/python -m eval.experiments.native_checkpoint_probe \
   --report eval/report/hybrid_checkpoint_postgres_20261022.json
 ```
 
-探针用真实 saver、生产状态与 reducer，模型替身只提供确定性回复：四个会话分别写入，
-由全新进程接续，核对历史与会话隔离；再验证丢弃末轮、交回旧图和删除清理。它不验证
+探针用真实 saver、NativeConversationStore 的公开接口与确定性模型替身：两个会话分别写入，
+由重建的 NativeRuntime 接续，核对历史与会话隔离和删除清理。它不验证
 模型质量。探针还验证两个独立进程对同一会话排队，后续轮能读到前一轮回复。
-确认收藏使用真实签名和 PostgreSQL 账本，重复两遍只调用一次合成写工具；不调用站点写 API。
+线上运行时不调用站点写 API；离线原生测试覆盖确认签名和 PostgreSQL 账本语义。
 
 另经生产同步入口、真实模型和生产 PostgreSQL 跑了两轮暗号问答：两轮之间重建 agent，
 第二轮准确返回上一轮暗号，checkpoint 有 6 条消息且没有待执行节点；共 2 次模型调用、

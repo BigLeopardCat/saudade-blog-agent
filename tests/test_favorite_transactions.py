@@ -9,12 +9,9 @@ from langchain_core.messages import HumanMessage
 from langgraph.checkpoint.memory import InMemorySaver
 
 from agent import idem
-from agent.agent import create_agent
 from agent.domains.favorites import transactions
-from agent.graph import graph_input
 from agent.principal import SOURCE_ASSERTION, Principal
 from agent.runtime import writes
-from agent.runtime.hybrid import HybridArm
 from tools.result import fact, ok, tgt
 
 
@@ -144,24 +141,23 @@ def test_exception_after_write_keeps_intent_and_prevents_retry(failure, monkeypa
     assert "无法确认" in first["reply"] and "结果未知" in second["reply"]
 
 
-def test_hybrid_executes_confirmed_favorite_without_model_or_legacy(monkeypatch, tmp_path):
+def test_native_executes_confirmed_favorite_without_model_or_legacy(monkeypatch, tmp_path):
     tool = Favorite()
     monkeypatch.setattr(transactions, "get_all_tools", lambda: [tool])
     monkeypatch.setattr(writes, "ledger_for",
                         lambda saver: idem.Ledger(str(tmp_path / "runtime.sqlite3")))
-    monkeypatch.setattr("agent.runtime.hybrid.get_llm", lambda **_: 1 / 0)
-    graph = create_agent(checkpointer=InMemorySaver())
-    monkeypatch.setattr(graph, "stream", lambda *a, **kw: 1 / 0)
-    arm = HybridArm(graph)
-    state = graph_input([HumanMessage(content="确认收藏")], confirm_grant=_grant())
+    from agent.runtime.native import NativeRuntime
+    from agent.runtime.native_store import NativeConversationStore
+    runtime = NativeRuntime(NativeConversationStore(InMemorySaver()))
+    state = {"messages": [HumanMessage(content="确认收藏")], "confirm_grant": _grant()}
 
-    first = list(arm.stream(state, _config()))
-    second = list(arm.stream(state, _config()))
+    first = list(runtime.stream_events(state, _config()))
+    second = list(runtime.stream_events(state, _config()))
 
-    assert first[0][1]["execute"]["receipts"][0]["tool"] == "add_favorite"
-    assert second[0][1]["execute"]["receipts"][0]["tool"] == "add_favorite"
+    assert first[-1].execution["receipts"][0]["tool"] == "add_favorite"
+    assert second[-1].execution["receipts"][0]["tool"] == "add_favorite"
     assert tool.calls == 1
-    snapshot = arm.get_state(_config())
+    snapshot = runtime.get_state(_config())
     assert snapshot.next == ()
     assert snapshot.values["pending_action"] is None
 
