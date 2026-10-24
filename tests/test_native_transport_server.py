@@ -120,17 +120,17 @@ def test_real_chat_stream_body_iterator_has_data_frames_and_one_end(monkeypatch,
 
     async def consume():
         req = server.ChatRequest(message="测试", user_id=7)
-        request = Request({"type": "http", "method": "POST", "path": "/chat/stream",
+        request = Request({"type": "http", "method": "POST", "path": "/chat/stream/v2",
                            "headers": [], "query_string": b""})
         response = await server.chat_stream(req, request)
         return [frame async for frame in response.body_iterator]
 
     frames = asyncio.run(consume())
     body = "".join(frames)
-    assert body.count("data: __END__") == 1
+    assert body.count("event: done\ndata: {}") == 1
     assert "data: " + json.dumps(text, ensure_ascii=False) in body
-    assert not any(frame.startswith(("data: __CMD__:", "data: __CONFIRM__:")) for frame in frames)
-    assert all(frame.startswith("data: ") for frame in frames)
+    assert not any(frame.startswith(("event: command", "event: confirmation")) for frame in frames)
+    assert all(frame.startswith("event: ") for frame in frames)
 
 
 def test_real_chat_stream_body_iterator_error_has_no_success_end(monkeypatch):
@@ -149,14 +149,14 @@ def test_real_chat_stream_body_iterator_error_has_no_success_end(monkeypatch):
 
     async def consume():
         req = server.ChatRequest(message="测试", user_id=7)
-        request = Request({"type": "http", "method": "POST", "path": "/chat/stream",
+        request = Request({"type": "http", "method": "POST", "path": "/chat/stream/v2",
                            "headers": [], "query_string": b""})
         response = await server.chat_stream(req, request)
         return "".join([frame async for frame in response.body_iterator])
 
     body = asyncio.run(consume())
-    assert "__ERROR__" in body
-    assert "__END__" not in body and "__NAV_END__" not in body
+    assert "event: error" in body
+    assert "event: done" not in body
 
 
 async def _ready():
