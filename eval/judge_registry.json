@@ -43,6 +43,22 @@
         14,
         0
       ],
+      "agent/api/__init__.py": [
+        0,
+        0
+      ],
+      "agent/api/context.py": [
+        0,
+        0
+      ],
+      "agent/api/host_context.py": [
+        0,
+        0
+      ],
+      "agent/api/schemas.py": [
+        0,
+        0
+      ],
       "agent/approval_api.py": [
         0,
         0
@@ -461,10 +477,6 @@
       ],
       "agent/runtime/session.py": [
         17,
-        0
-      ],
-      "agent/runtime/task_context.py": [
-        0,
         0
       ],
       "agent/runtime/turns.py": [
