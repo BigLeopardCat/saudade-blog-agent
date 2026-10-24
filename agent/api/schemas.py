@@ -1,0 +1,76 @@
+"""Public chat payloads and input limits shared by HTTP entry points."""
+
+from typing import Literal
+
+from pydantic import BaseModel, Field, field_validator
+
+from agent.confirm import MAX_TOKEN_CHARS
+
+MAX_MESSAGE_CHARS = 4000
+MAX_HISTORY_ITEMS = 60
+MAX_IMAGES = 6
+MAX_IMAGE_CHARS = 1_600_000
+MAX_TEXT_FIELD_CHARS = 8000
+MAX_SHORT_FIELD_CHARS = 500
+MAX_RECENT_TOOLS = 40
+# The host's chat.rs uses the same execution_rows forwarding budget.
+EXEC_ROWS_MAX_CHARS = 8000
+
+
+class HistoryItem(BaseModel):
+    role: Literal["user", "assistant"]
+    content: str
+
+
+class QuotaInfo(BaseModel):
+    """Host-computed quota values; an absent object means the quota is unknown."""
+
+    used: int = 0
+    limit: int = 0
+    remaining: int = 0
+    unlimited: bool = False
+
+
+class ChatRequest(BaseModel):
+    message: str = Field(max_length=MAX_MESSAGE_CHARS)
+    current_url: str = Field(default="", max_length=MAX_SHORT_FIELD_CHARS)
+    page_title: str = Field(default="", max_length=MAX_SHORT_FIELD_CHARS)
+    user_id: int = 0
+    history: list[HistoryItem] = Field(default_factory=list, max_length=MAX_HISTORY_ITEMS)
+    summary: str = Field(default="", max_length=MAX_TEXT_FIELD_CHARS)
+    needs_summary: bool = False
+    current_effects: str = Field(default="", max_length=MAX_SHORT_FIELD_CHARS)
+    current_darkmode: str = Field(default="", max_length=MAX_SHORT_FIELD_CHARS)
+    image: str | list[str] = ""
+    executions: str = Field(default="", max_length=MAX_TEXT_FIELD_CHARS)
+    pending_action: str = Field(default="", max_length=MAX_TEXT_FIELD_CHARS)
+    agent_tasks: str = Field(default="", max_length=MAX_TEXT_FIELD_CHARS)
+    # Retained host wire fields. Neither grants authority nor enters the model prompt.
+    recent_tools: list[str] = Field(default_factory=list, max_length=MAX_RECENT_TOOLS)
+    execution_rows: str = Field(default="", max_length=EXEC_ROWS_MAX_CHARS)
+    chat_quota: QuotaInfo | None = None
+    quota_blocked: bool = False
+    conversation_id: int | None = None
+    confirm_token: str = Field(default="", max_length=MAX_TOKEN_CHARS)
+    confirm_pick: str = Field(default="", max_length=MAX_SHORT_FIELD_CHARS)
+
+    @field_validator("image")
+    @classmethod
+    def _check_images(cls, value):
+        """Bound inline image count and size, preserving string/list wire compatibility."""
+        items = [value] if isinstance(value, str) else list(value)
+        items = [item for item in items if item]
+        if len(items) > MAX_IMAGES:
+            raise ValueError(f"最多 {MAX_IMAGES} 张图片")
+        for item in items:
+            if len(item) > MAX_IMAGE_CHARS:
+                raise ValueError(f"单张图片过大（{len(item)} > {MAX_IMAGE_CHARS} 字符）")
+        return value
+
+
+class ChatResponse(BaseModel):
+    reply: str
+    success: bool
+    error: str | None = None
+    new_summary: str | None = None
+    executions: list = Field(default_factory=list)

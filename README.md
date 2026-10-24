@@ -100,8 +100,9 @@ flowchart LR
 
 ```text
 saudade-blog-agent/
-├── server.py              FastAPI 入口、SSE 编排、输入限制、并发和取消
+├── server.py              FastAPI 入口、SSE、并发和取消
 ├── agent/
+│   ├── api/               HTTP 模型、字段限额和请求上下文适配
 │   ├── runtime/           NativeRuntime、会话存储、预算、确认与传输
 │   ├── domains/           按需领域工具与业务操作准备
 │   ├── authz.py           principal 权限模型与工具 scope
