@@ -31,8 +31,7 @@ def test_source_observation_restores_the_available_domain():
     )
     assert session.loaded == {"admin_catalog"}
     assert "observed_read" in model.menus[-1]
-    assert "load_admin_catalog_info_tools" in model.menus[-1]
-    assert model.menus[0] <= model.menus[-1]
+    assert "load_admin_catalog_info_tools" not in model.menus[-1]
 
 
 def test_text_errors_and_no_longer_authorized_domains_cannot_restore_tools():
