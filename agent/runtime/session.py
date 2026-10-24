@@ -8,6 +8,7 @@ import json
 import time
 
 from langchain_core.messages import AIMessage, AIMessageChunk, ToolMessage
+from langchain_core.messages.utils import message_chunk_to_message
 from langchain_core.tools import ToolException
 
 from agent.article_evidence import ArticleEvidence
@@ -289,19 +290,22 @@ class ToolSession:
 
     @staticmethod
     def _message_from_chunk(chunk):
-        """Turn the completed public chunk aggregate into a replayable AIMessage."""
-        if isinstance(chunk, AIMessage):
-            return chunk
-        return AIMessage(
-            content=chunk.content,
-            additional_kwargs=dict(chunk.additional_kwargs or {}),
-            response_metadata=dict(chunk.response_metadata or {}),
-            name=chunk.name,
-            id=chunk.id,
-            tool_calls=list(chunk.tool_calls or []),
-            invalid_tool_calls=list(chunk.invalid_tool_calls or []),
-            usage_metadata=chunk.usage_metadata,
-        )
+        """Use the framework conversion without losing provider replay metadata."""
+        return message_chunk_to_message(chunk) if isinstance(chunk, AIMessageChunk) else chunk
+
+    @staticmethod
+    def _complete_tool_arguments(response):
+        # LangChain deliberately repairs partial JSON for streaming previews.
+        # An executable call requires the complete original JSON object.
+        for call in getattr(response, "tool_call_chunks", ()):
+            try:
+                args = json.loads(call.get("args", ""))
+            except (ValueError, TypeError):
+                return False
+            if not isinstance(args, dict):
+                return False
+        calls = getattr(response, "tool_calls", ()) or getattr(response, "invalid_tool_calls", ())
+        return not calls or response.response_metadata.get("finish_reason") != "length"
 
     def _model_stream(self, prompt):
         """Yield provider chunks and return one complete, replayable response.
@@ -348,7 +352,13 @@ class ToolSession:
                         yield chunk
                 if aggregate is None:
                     aggregate = AIMessage(content="")
+                complete = self._complete_tool_arguments(aggregate)
                 response = self._message_from_chunk(aggregate)
+                if not complete:
+                    response = response.model_copy(update={
+                        "tool_calls": [], "invalid_tool_calls": [{
+                            "name": None, "args": "", "id": None,
+                            "error": "incomplete_tool_arguments", "type": "invalid_tool_call"}]})
                 self.budget.settle(ticket, response)
             return response
         except BaseException:
@@ -491,7 +501,7 @@ class ToolSession:
             for call in calls:
                 check_cancelled(self.config)
                 if not self._append_result(call, prompt, self._round_index):
-                    return self.outcome
+                    return (yield from self._stream_terminal(self.outcome, visible_parts))
                 if self.outcome is not None:
                     return (yield from self._stream_terminal(self.outcome, visible_parts))
             self._round_index += 1
