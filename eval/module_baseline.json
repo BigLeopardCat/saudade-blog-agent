@@ -56,8 +56,8 @@
     "top_defs": 36
   },
   "server.py": {
-    "lines": 2647,
-    "top_defs": 61
+    "lines": 1753,
+    "top_defs": 55
   },
   "tests/test_admin_write.py": {
     "lines": 1765,

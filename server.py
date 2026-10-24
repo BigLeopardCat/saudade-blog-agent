@@ -31,7 +31,6 @@ from langchain_core.messages import (
     AIMessageChunk,
     HumanMessage,
     SystemMessage,
-    ToolMessage,
 )
 from pydantic import BaseModel, Field, field_validator
 
@@ -41,44 +40,22 @@ from agent import (
     idem,  # 持久化档的唯一常量（REQUIRED_DURABILITY，见 agent/idem.py）
     runtime_probe,  # /version 与 /ready 的判定逻辑（纯函数，见该模块头注）
 )
-from agent.action_text import tool_action_text
 from agent.agent import create_agent
 from agent.approval_api import router as approval_router
-from agent.factblock import (  # 动作事实块（D3）
-    action_facts,
-    compose,
-    render_fact_block,
-    strip_fact_lines,
-)
-from agent.graph import AgentCancelled, _cmd_wire, _tool_args, _tool_name, graph_input
+from agent.transport import collect_turn, emit_to_queue
+from agent.factblock import strip_fact_lines
+from agent.block_reasons import REASONS as _BLOCK_REASONS
 from agent.principal import Principal
-from agent.runtime.control import RequestControl
+from agent.runtime.control import AgentCancelled, RequestControl
 from agent.runtime.jobs import RequestJobs
-from agent.runtime.model_budget import tool_callbacks
+from agent.runtime.budget import current_budget
 from agent.runtime.progress import ProgressEmitter, StreamProgress
 from agent.summarizer import summarize
 
-# `NAV_MAP` 的 import 随渲染一起搬走了（20260928）：路径→中文别名的反查只服务于
-# 过程行，现在在 `agent/action_text.py` 里。
-# 会话级任务状态（20260927 批 D）：登记帧的发出与流尾的**确定性结算**都在 producer
-# （这里拿得到 req 与流内全部回执——两样东西凑齐的地方只有这一处，见 _run_agent_stream_to_queue）
-from agent.tasks import (
-    TASK_CONSENT_ASK,
-    TS_MMDD_HHMM_RE,
-    advance_by_tools,
-    age_minutes,
-    done_tools,
-    expire_transitions,
-    render_open_tasks,
-    rows_to_settle,
-    task_rows,
-    transition_frames,
-)
+from agent.tasks import TS_MMDD_HHMM_RE, age_minutes, render_open_tasks
 
-# 过程行/台账行的中文措辞（20260928）：唯一实现在 `agent/action_text.py`（与本文件
-# 之外的 Rust `render_exec_row` 那一份**合并成了一份**，见该模块头注）。这里只保留
-# "什么时候发哪条过程行"，以及受阻原因码的中文（`_REASON_CN`，它贴的是 BLOCK 原因码、
-# 不属于动作措辞）。
+# The block-reason map remains a shared compatibility surface for existing
+# authorization and receipt tests; native transport does not render planner text.
 # 六个服务限额/超时常量（STREAM_* / RECURSION_LIMIT / MAX_BODY_BYTES /
 # MAX_CONCURRENT_STREAMS / REVIEW_CONCURRENCY）的真值源：20261020 双轨收敛后
 # 唯一从这里取值（env 键保持 AGENT_* 老名，写 .env 就生效；判据
@@ -98,6 +75,13 @@ from utils.trace import finish_trace, record, start_trace
 
 logger = logging.getLogger(__name__)
 
+# Shared error text remains part of the authorization/receipt contract; the
+# transport no longer renders planner blocked updates itself.
+_REASON_CN = {key: value[0] for key, value in _BLOCK_REASONS.items()}
+
+
+class _NativeCancelled:
+    """Worker cancellation sentinel; it must not become a successful END frame."""
 # Admission follows executor completion, including jobs whose HTTP consumer disconnected.
 _executor = ThreadPoolExecutor(max_workers=16)
 
@@ -828,82 +812,45 @@ def _build_messages(req: ChatRequest, confirm_grant: dict | None = None) -> list
     return messages
 
 
+def _runtime_events(messages: list, *, thread_id: str, user_id: int,
+                    principal: Principal | None, conversation_id: int | None,
+                    confirm_grant: dict | None = None, ledger: dict | None = None,
+                    recent_tools: list[str] | None = None, stop_event=None,
+                    open_tasks: str = "", progress_emitter=None):
+    """Call the native Runtime event contract.
+
+    The transport boundary intentionally knows no planner nodes or graph state.
+    The native-runtime branch supplies ``stream_events``; until that branch is
+    integrated, requests fail explicitly instead of silently translating legacy
+    node updates back into a second event protocol.
+    """
+    stream_events = getattr(_agent, "stream_events", None)
+    if not callable(stream_events):
+        raise RuntimeError("native Runtime stream_events is not available")
+    config = {"configurable": {
+        "thread_id": thread_id, "user_id": user_id,
+        "conversation_id": conversation_id,
+        "principal": principal or Principal(uid=user_id),
+        "stop_event": stop_event,
+        "progress_emitter": progress_emitter,
+        "budget": current_budget(),
+    }}
+    state = {"messages": messages}
+    if confirm_grant is not None:
+        state["confirm_grant"] = confirm_grant
+    return stream_events(state, config)
+
+
 def _run_agent_sync(messages: list, thread_id: str, user_id: int = 0,
                     principal: Principal | None = None,
                     ledger: dict | None = None,
                     recent_tools: list[str] | None = None,
                     conversation_id: int | None = None) -> tuple[str, str, list]:
-    """Run agent synchronously in a thread. Returns (reply, nav_line, exec_rows)."""
-    # Bind actor and conversation to tool configuration.
-    config = {"configurable": {"thread_id": thread_id, "user_id": user_id,
-                               "conversation_id": conversation_id,
-                               "principal": principal or Principal(uid=user_id),
-                               "recent_tools": list(recent_tools or []),
-                               "idem_resuming": _idem_resuming(thread_id)},
-              "recursion_limit": RECURSION_LIMIT}
-    config["callbacks"] = tool_callbacks()
-    full_reply = ""
-    nav_line = ""
-    exec_rows: list = []  # 跨轮执行记忆（20260904 C3）：checker 验收回执，累计语义末批即全量
-    # 动作事实块（20260927 D3）：系统代印事实那一批**已整体歇业**（20261005；射程
-    # `BLOCK_FAMILIES` 空集 ⇒ `action_facts` 恒空 ⇒ 这里恒为空串、`compose` 恒等）。
-    # 接线原样留着：与流式那半同源同序（`agent/factblock.py`），恢复只需改那一个常量；
-    # 回执是累计语义、末批即全量，所以真要恢复也是每次覆盖成最新全量即可。
-    fact_block = ""
-    for mode, data in _agent.stream(
-        graph_input(messages, ledger=ledger or {}),
-        config,
-        stream_mode=["messages", "updates"], **_stream_kwargs(),
-    ):
-        # 手写图里有多个 LLM 节点（planner 产出计划文本、model 产出回复），
-        # 只有 model 节点的 AIMessageChunk 是给访客看的回复——其余按 node 过滤掉，
-        # 否则计划会漏进对话（create_agent 时代只有一个 model 节点，无需过滤）
-        if mode == "updates":
-            ex_upd = data.get("execute")
-            if ex_upd and ex_upd.get("receipts"):
-                exec_rows = ex_upd["receipts"]
-                fact_block = render_fact_block(action_facts(exec_rows))
-                # 命令重建（20260926 批 2）：三个命令工具的返回文本不再带
-                # `AUTO_NAVIGATE:` 前缀，命令搬到了回执行的 `cmd` 字段。非流式
-                # 消费方（Rust `/chat` 响应体）读的仍是**连线形**，所以在这里
-                # 重建回原前缀行 ⇒ Rust 非流式那半零改动（流式那半走新 `__CMD__` 帧）。
-                # 取**最后一条**与旧语义一致：每个 ToolMessage 命令帧依次覆盖 nav_line。
-                _wires = [_cmd_wire(r.get("cmd")) for r in exec_rows
-                          if isinstance(r, dict)]
-                _wires = [w for w in _wires if w]
-                if _wires:
-                    nav_line = _wires[-1]
-            # gate 打回重规划（20260926，见 graph.route_after_gate）：那条被否定的
-            # 叙述已经累进 full_reply 了，不清零的话**最终回复 = 无依据那段 + 重查
-            # 之后的真话**，两段一起入库、一起给访客看——比原来的兜底更糟。流式那
-            # 半靠 `__RESET__` 帧达到同一效果（前端清已展示文本、Rust 清已累积
-            # reply），本函数没有前端可清，只能自己把缓冲区复位。
-            g_upd = data.get("gate")
-            if g_upd and g_upd.get("gate_replan"):
-                full_reply = ""
-            continue
-        chunk, meta = data
-        if (isinstance(chunk, SystemMessage) and chunk.content
-                and str(chunk.content).startswith("[Fallback 决定]")):
-            # gate fallback（20260903，validate→fallback 无重考轮）：gate 是终节点，
-            # 其后无新一轮 model 文本——最终回复直接替换为 fallback 正文（去前缀）。
-            # nav_line 不清：工具帧是系统真实执行的命令（与叙述文本解耦），照常下发。
-            _fb = str(chunk.content).split(":", 1)
-            full_reply = _fb[1].strip() if len(_fb) > 1 else ""
-        elif isinstance(chunk, AIMessageChunk) and chunk.content and meta.get("langgraph_node") == "model":
-            full_reply += str(chunk.content)
-        elif isinstance(chunk, ToolMessage) and chunk.content:
-            text = str(chunk.content)
-            if text.startswith("NAVIGATE:") or text.startswith("AUTO_NAVIGATE:"):
-                nav_line = text
-            elif text.startswith("EFFECT:") or text.startswith("DARKMODE:"):
-                nav_line = text
-    # 动作族事实在前、narrator 正文在后（D3，与流式那半同序）。`fact_block` 在
-    # 重规划分支不清零：被否掉的是**措辞**，那些动作是真做过的（同流式那半的重印）。
-    reply = compose(fact_block, full_reply)
-    # 不再在这里拼入 nav/effect 命令行——由调用方在摘要剥离之后追加，
-    # 避免回复末尾的 SUMMARY: 截断把 EFFECT:/NAVIGATE: 命令一起吞掉
-    return reply, nav_line, exec_rows
+    """Run one native turn and return the legacy non-streaming response shape."""
+    turn = collect_turn(_runtime_events(
+        messages, thread_id=thread_id, user_id=user_id, principal=principal,
+        conversation_id=conversation_id, ledger=ledger, recent_tools=recent_tools))
+    return turn.reply, turn.navigation, turn.execution
 
 
 def _summarize_dialogue(user_msg: str, history: list[HistoryItem], old_summary: str) -> str:
@@ -958,7 +905,7 @@ async def chat(req: ChatRequest, request: Request):
             )
         reply, nav_line, exec_rows = await _submit_with_context(
             loop, _run_agent_sync, messages, thread_id, req.user_id, principal,
-            _ledger_for_graph(req), req.recent_tools, req.conversation_id, jobs=jobs)
+            None, None, req.conversation_id, jobs=jobs)
         new_summary = None
         if summary_task is not None:
             new_summary = (await summary_task).strip() or None
@@ -996,297 +943,6 @@ async def chat(req: ChatRequest, request: Request):
 # ---------------------------------------------------------------------------
 # /chat/stream — SSE 流式（供前端 Live2D 调用）
 # ---------------------------------------------------------------------------
-# ── 过程行文本人话化（20260905 issue5：执行过程显示与真实执行对齐）──
-# 旧实现病灶：
-#   ① 计划行直接贴 plan 机器契约原文（WORKFLOW=/PARAMS= JSON），[:60] 截断成残句，
-#     用户看到的是半截内部格式而非动作描述；
-#   ② 「✅ 工具执行完成」由 ToolMessage 分支固定模板发出，不查 checker 验收——
-#     受阻执行（空结果/错误帧，verdict BLOCK）同样显示"完成"；且任何完成帧都
-#     不带实际内容（跳去哪/显示什么/检索什么全无），与用户可见的事实对不上；
-#   ③ 命令类完成帧（"🛠 调用工具：页面跳转 navigate_to"）没有目标细节。
-# 修复：计划行解析 TOOLS spec 成中文动作预告；完成/受阻行改由 execute update
-#   的 receipts（checker PASS 回执）与 blocked（受阻清单）驱动——验收通过才发
-#   ✅，受阻发 ✗；预告与完成共用同一份渲染，展示前后一致。
-#   注：gate 打回/通过的「✗ 质检打回」「✓ 质检通过」行不受影响（见 gate 分支）。
-#
-# **20260928 渲染本身搬走了**：那份"过程行 + 跨轮执行台账行"的词表原住在本文件
-# （`_tool_action_text`），与 Rust `src/routes/chat.rs::render_exec_row` 是**两份互不
-# 相干的实现**，靠注释互相提醒——逐行对照实测 54 条取样只有 31 条逐字相同。现在唯一
-# 实现在 `agent/action_text.py`（一份实现两档：`tool_action_text` 过程行 /
-# `receipt_action` 台账行），本文件只剩"什么时候发这条过程行"的编排。改措辞去改那里，
-# 且**两侧的期望值都锁在** `tests/test_action_text.py`。
-
-_REASON_CN = {"unknown_tool": "未知工具", "args_parse": "参数解析失败",
-              "invalid_args": "参数不合法", "empty_result": "结果为空",
-              "error_frame": "执行出错", "cmd_shape": "返回格式异常",
-              # 参数引用失败（agent/arg_refs.py 的原因码，20260919）
-              "ref_unknown_tool": "引用的工具尚未执行",
-              "ref_unparsed": "引用的返回不是结构化数据",
-              "ref_index_range": "引用的序号越界",
-              "ref_path_missing": "引用的字段不存在",
-              "ref_not_scalar": "引用取到的不是单个值",
-              # 写操作目标无据（graph.execute 的目标校验，20260921 第二轮）
-              "unknown_target": "目标未经确认",
-              # 上游服务不可用（_check_spec 的 kind=unavailable 分支，20260916 就有；
-              # 20260921 补中文——此前会原样打出英文原因码，用户看到 "unavailable"）
-              "unavailable": "服务不可用",
-              # 目标不存在（20260923 三轮，kind=not_found）：与上一条分开。此前
-              # planner 拿错 id（把「共 3 条」的 3 当 id）时，工具报的是 unavailable
-              # ⇒ 过程行显示「服务不可用」，用户读成"系统挂了"，而真问题是"你要标的
-              # 那条不存在"（trace `20260923T130033_9` 用户原话："显示服务不可用"）
-              "target_not_found": "目标不存在",
-              # 目标与主人点名的不是同一篇（adminops.target_error_reason 的第二条，
-              # 20260921 第三轮）——漏了同样会原样打英文码。
-              "target_mismatch": "目标与主人点名的不是同一篇",
-              # 待确认（authz.REASON_CONSENT，写操作没获本轮确认）
-              "consent_required": "未获主人确认",
-              # 授权拒绝三码（authz 的 Decision.reason，20261007 补）：**此前没有中文**，
-              # 过程行会把 `denied` / `no_manifest` / `unknown_role` 原样打给访客——
-              # 与 20260921 之前 `unavailable` 那次的形态一模一样。20261007 加这张表的
-              # 判据（tests/test_block_reasons.py 要求两侧键集合相等）时一并补上。
-              "denied": "身份权限不足",
-              "no_manifest": "工具未声明权限范围",
-              "unknown_role": "身份不明",
-              # 后台规则拒绝（账号冻结/解冻，20260926）：后端那三条策略（不能冻自己 /
-              # 不能冻超管 / 管理员之间不可互冻）与 agent 侧预检都走这个码。
-              # 漏了这行不会静默——它会原样打出英文码 `policy_refused` 给访客看。
-              # 与"服务不可用"刻意分开：那个的下一步是稍后重试，这个重试一万次也一样
-              # （要换的是目标或身份，见 graph 规则里那条"不要改参重试"）。
-              "policy_refused": "后台规则拒绝",
-              # 与主人这句话要的动作相反（authz.action_conflict_frame，20261016，
-              # §1.57 候选改法①）：主人说「收藏」、planner 排的是「取消收藏」。
-              # 中文与 `agent/block_reasons.REASONS` 的那一格**必须同话术**（两侧
-              # 键集合相等 + 逐值相等，判据在 tests/test_block_reasons.py）。
-              "action_conflict": "与主人这句话要的动作相反",
-              # 写操作结果未知（agent/idem.py::REASON_OUTCOME_UNKNOWN，20261016）：
-              # 上一次已经发出、进程在拿到返回之前中断 ⇒ 可能生效也可能没有。与"服务
-              # 不可用"分开：那个是"没做成、稍后再试"，这个是"**不知道成没成**"——
-              # 过程行必须说成未知，不能含糊；planner 也不许改参重试，先读一次确认。
-              "write_outcome_unknown": "写操作结果未知"}
-
-
-def _spec_one(spec: str):
-    """一条 TOOLS spec（`<工具名>(<json 参数>)`）→ `(工具名, 参数 dict|None)`。
-
-    参数解析失败/空参给 None——过程行只出动作词，不硬猜参数。
-    「（无）」与空串 → None（不是一条动作）。**20261019 批 G6 起走生产的
-    `graph._tool_name` / `_tool_args`**（spec 是 `ToolCall` 时直接取 `.name`/`.args`，
-    只有落到这里的文本才解析）——此前这里自己写了一条 `^[^(]+\\((.+)\\)\\s*$` 的正则，
-    是同一形状的**第六份**解析器；同一份 spec 在 `plan_obj["tools"]` 那一侧已经解析过
-    一次了。
-    """
-    spec = (spec or "").strip()
-    if not spec or spec in ("（无）",):
-        return None
-    args, ok = _tool_args(spec)
-    return (_tool_name(spec), args if (ok and args) else None)
-
-
-def _specs_from_tools(tools) -> list:
-    """`plan_obj["tools"]`（spec 字符串列表）→ `[(工具名, 参数|None)]`。
-
-    20260928 批 C：此前这里吃的是 plan **契约文本**，自己正则切 TOOLS 行再按 `;`
-    拆（与 `graph.parse_plan` 的切分是两份拷贝）。改成直取结构化字段后，切分这件事
-    **不存在了**——顺带修掉一个文本腔的析构错误：spec 里的 JSON 字符串**可以含 `;`**
-    （标题/正文里带分号），按文本切开会把一条动作劈成两条残片（过程行会显示成
-    「计划：删除标签、b"})…」这种）。结构化读法没有这个面，见
-    `tests/test_plan_channel.py` ③ 末尾那条正例。
-    """
-    out = []
-    for spec in tools or []:
-        one = _spec_one(spec)
-        if one:
-            out.append(one)
-    return out
-
-
-def _task_satisfied_specs(ex_upd: dict) -> list:
-    """`execute` 的**零改动出口**报上来的"系统读到现状、目标已达标"那批 spec（20261015）。
-
-    形状过滤就在这里做：非 dict、或工具名为空的一律丢掉（下游判据按 `tool` 配对，空名
-    进来只会白跑一圈）。它**不产生回执**——这一轮确实什么都没执行，回执那格保持原样；
-    只有流尾结算把它当台账那一步的**第二种完成证据**（见 `_task_advance_rows`）。
-    """
-    return [s for s in (ex_upd.get("task_satisfied") or [])
-            if isinstance(s, dict) and str(s.get("tool") or "")]
-
-
-def _task_advance_rows(open_tasks: str, declared_tasks: list, exec_rows: list,
-                       satisfied_specs: list, record) -> list[dict]:
-    """流尾任务结算：算出这一轮该发哪几帧 `__TASK__`（**发帧留在 producer 里**）。
-
-    为什么"算"与"发"要分开：任务由**系统按证据结算**（模型说了不算，同 execution_log
-    的纪律），而这段游标推进自带一串判据（两种证据并用、`via` 归类、证据原样落 trace）
-    ——把它埋在流式编排里，那个函数每加一条结算判据就再长一截（复杂度闸已贴预算）。
-
-    结算范围 = Rust 读回来的行（上一轮起就挂着）+ 本轮新登记的行；两类的 ts 下限不同
-    （读回来的行 0、新登记的行用登记时刻），**逐行配对**的理由与那个"两行同 id"的陷阱
-    见 `tasks.rows_to_settle` 的 docstring。`open_tasks` 是**原文串**（`req.agent_tasks`
-    的 JSON 文本，`tasks.rows_to_settle` 里才解析），注解别"顺手"改回 `list`——改成
-    `list` 会让 mypy 棘轮当场多一格（20261015 实测），而它读的确实是串。
-
-    两种证据**在同一次游标推进**里并用（不是先试回执、推不动再试系统认定）：分两次的
-    话，回执推动到一半就返回，系统认定那半不会再补上，那一行照样停在中途、下一轮继续
-    被催。第一种 = 某一步声明的工具这一轮真的 PASS 执行过（`tasks.done_tools`）；
-    第二种 = 系统读到现状、目标本来就成立（`satisfied_specs`，判据见
-    `tasks._settled_by_already`）。
-
-    `via` 记的是这一轮**在场的**是哪几种证据（不是"这一步靠哪一种"——游标推进只认
-    "这一步有没有证据"，分不出单步归属）。`via` 与 `satisfied` 都只进 trace、
-    **不进帧**：`__TASK__` 的载荷键集与 Rust 的列一一对应，多一个键要同步另一侧。
-    证据本身也原样记（`{tool, args}`）：判据是"工具 ∧ 共同键相等"，只记工具名的话事后
-    分不出"这一行为什么结掉了"——而"靶对不对得上"正是那条判据的射程所在（trace 是
-    JSON，原样落得下，不另写一份 `工具名({json})` 的拼装——那串字面全仓已有十余处）。
-    """
-    out: list[dict] = []
-    for task, after in rows_to_settle(open_tasks, declared_tasks):
-        rcpt = done_tools(exec_rows, declared_after=after)
-        adv = advance_by_tools(task, rcpt, satisfied=satisfied_specs)
-        if not adv:
-            continue
-        record("producer", "task_advance", task_id=str(task.get("task_id") or ""),
-               cursor=adv.get("cursor"), total=adv.get("total_steps"),
-               state=adv.get("state"),
-               via="+".join([x for x in (("receipts" if rcpt else ""),
-                                         ("satisfied" if satisfied_specs else "")) if x])
-               or "none",
-               **({"satisfied": satisfied_specs} if satisfied_specs else {}))
-        out.append(adv)
-    return out
-
-
-def _consent_asks(ex_upd: dict, into: dict) -> None:
-    """本轮"同意闸挡下 / 弹了卡"的那几件 → `{工具名: 同意闸问句}`（20261015）。
-
-    `into` 是**累计**字典（同轮可能多次 execute update），就地更新。两个来源、**同一个
-    问句**（`tasks.TASK_CONSENT_ASK`）：
-
-      · **弹了卡**（`pending_confirm`）⇒ 从 `specs` 里取**工具名**（`[(idx, {"tool": …,
-        "args": …})]`，过流后 tuple 变 list）。⚠️ 这里**刻意不逐字回填卡面问句 `q`**：
-        卡面那句结尾是「点「确定」我就去办」，它**指着一张卡**；而 `pending_question`
-        要到下一轮（乃至 12 小时后）才印给主人看，那时令牌已过期、卡也不在了。
-      · **只被同意闸挡下**（`blocked` 里 `reason == consent_required`）⇒ 没有卡，直接取
-        工具名。这条路的问句同样不能用 `authz.consent_frame`——那是给**模型**看的一整段
-        （带 `__ERROR__:` 前缀与 uid/role），印到主人眼前是另一回事。
-
-    ⚠️ 两句问句都必须是**固定常量**（不许按行拼个性化文本）：`tasks.advance_by_tools`
-    靠"这句话是不是系统写的那两句之一"来决定游标推进后要不要清掉它——按行拼出来的
-    句子它认不出，于是那一行会被一句过期问句永久挡住（详见那里的注释）。
-
-    这个映射的唯一消费点是 `_task_expire_rows`：台账里那一步的工具名在里面 ⇒ 那一行
-    当场转 `input_required` + 这句问句（"在等你点头"才是它的实情）。
-    """
-    popup = ex_upd.get("pending_confirm")
-    if isinstance(popup, dict):
-        for item in popup.get("specs") or []:
-            if not (isinstance(item, (list, tuple)) and len(item) == 2):
-                continue
-            one = item[1]
-            name = str(one.get("tool") or "") if isinstance(one, dict) else ""
-            if name:
-                into.setdefault(name, TASK_CONSENT_ASK)
-    for b in ex_upd.get("blocked") or []:
-        if not isinstance(b, dict) or str(b.get("reason") or "") != "consent_required":
-            continue
-        name = str(b.get("tool") or "")
-        if name:
-            into.setdefault(name, TASK_CONSENT_ASK)
-
-
-def _emit_task_frames(frames: list, queue, loop) -> None:
-    """把算好的 `__TASK__` 载荷逐帧发出去（**登记那条不走这里**——它是"收到即发"）。
-
-    单起一个函数只为一件事：复杂度闸按函数计，而 producer 那个函数已经贴着台账
-    （`_run_agent_stream_to_queue` 只许缩小）——两条路各写一遍那个三行的 `queue.put`
-    正是它长大的方式之一。行为与内联逐字相同。
-    """
-    for one in frames:
-        asyncio.run_coroutine_threadsafe(
-            queue.put("__TASK__:" + json.dumps(one, ensure_ascii=False)),
-            loop).result()
-
-
-def _task_settle_and_expire(open_tasks, declared_tasks, exec_rows, satisfied_specs,
-                            consent_asks, record, queue, loop) -> None:
-    """流尾与台账有关的两件事：**先结算、后收口**（20261015 起是两件；判据分别在
-    `_task_advance_rows` 与 `_task_expire_rows`）。
-
-    结算那一半的口径（20260927 批 D 定下）：**由系统按证据结算，模型说了不算**（同
-    execution_log 的纪律），推进一步发一帧 `__TASK__` 回写 cursor/state，全部推进完
-    ⇒ `succeeded` ⇒ 下一轮不再注入（Rust 的终态过滤在 SQL 里）。
-
-    收口那一半补的是"结不掉的账"：同意闸拒/未答、以及"改用别的工具办掉了"两条出口
-    **在代码里任何一处都不会改 state**，于是那些行只能等 72h 读侧时效把它们从**注入**
-    里抹掉——**行永久留在表里、状态永远撒谎说"还开着"**。行业做法是审批/动作类待办
-    必须有终态（超时/放弃/失败），判据见 `tasks.expire_transitions`。
-
-    ⚠️ **"先结算"不是顺序洁癖**：这一轮真被回执办完的行必须先结掉，否则收口那一半会
-    在同一次流尾把**刚办完**的那一行判成过期、当场写成 `cancelled`（先结账再催账）。
-
-    两条路各自 try/except、失败只记一行：它们是**辅助事实**，绝不阻断对话
-    （与 `__EXEC__`/`__PENDING__` 同口径）。两件事都住在 producer 外面，是为了让
-    `_run_agent_stream_to_queue` 别再长——它已贴着复杂度台账的**行数**上限。
-    """
-    settled: list[str] = []
-    try:
-        advs = _task_advance_rows(open_tasks, declared_tasks, exec_rows,
-                                  satisfied_specs, record)
-        settled = [str(a.get("task_id") or "") for a in advs]
-        _emit_task_frames(advs, queue, loop)
-    except Exception as e:                      # noqa: BLE001 —— 结算失败不影响本轮
-        logger.warning("[producer] 任务结算失败（不影响本轮回复）：%s", e)
-    try:
-        _emit_task_frames(_task_expire_rows(open_tasks, declared_tasks, consent_asks,
-                                            settled, record), queue, loop)
-    except Exception as e:                      # noqa: BLE001 —— 收口失败不影响本轮
-        logger.warning("[producer] 任务收口失败（不影响本轮回复）：%s", e)
-
-
-def _task_expire_rows(open_tasks: str, declared_tasks: list, consent_asks: dict,
-                      settled_ids: list, record) -> list[dict]:
-    """流尾任务**收口**：算这一轮该发哪几帧"终态/催办" `__TASK__`（20261015）。
-
-    `_task_advance_rows` 的**同级**函数，判据全在 `tasks.expire_transitions`（纯函数，
-    含软/硬期限、同意闸那一支、"只问一次"与"同值不产出"三条）——这里只做三件编排的事：
-
-      · **先结账、后催账**：把这一轮已经结算过的 task_id 当 `settled` 传下去，否则
-        "刚被回执结掉的那一行"会在同一次流尾被判过期、当场写成 `cancelled`
-        （`drop_is_completion` 治过的就是这同一个病）；
-      · **本轮刚登记的行也要看**：同意闸挡下这件事**就发生在登记的同一轮**（planner
-        登记 → execute 撞上同意闸 → 弹卡/受阻 → 图直接 END），那一行此刻**还不在**
-        Rust 读回来的那串里。不看它，"当场说在等你点头"就退化成"12 小时后才问"
-        ——而这正是 D1.2 要的那一格。所以把 `declared_tasks` 的载荷并进来，
-        并把"只在本轮登记里出现"的 id 当 `fresh_ids` 传下去（判据与为什么不混进
-        `undecidable` 见 `expire_transitions`）。
-      · **认不出要响亮**：`undecidable`（`created_at` 读不出来、因此没判的行）记一条
-        `task_expire_undecidable`——不记的话，这一格就退化成"静默少判了一行"，
-        而本仓对"没给"与"给了但解析不出"共用一个返回值的教训已经吃过四次。
-    """
-    read_rows = task_rows(open_tasks)
-    decl_rows = [f for f, _ in declared_tasks if isinstance(f, dict) and f.get("task_id")]
-    read_ids = {str(r.get("task_id") or "") for r in read_rows}
-    fresh_ids = [str(r.get("task_id") or "") for r in decl_rows
-                 if str(r.get("task_id") or "") not in read_ids]
-    transitions, undecidable = expire_transitions(
-        read_rows + decl_rows, consent_asks=consent_asks, settled=settled_ids,
-        fresh_ids=fresh_ids)
-    if undecidable:
-        record("producer", "task_expire_undecidable", ids=undecidable)
-    frames = transition_frames(read_rows + decl_rows, transitions)
-    if frames:
-        # `via` **逐条**取自转换本身（`expire_transitions` 每格带一格 `via`），不从
-        # "这一轮有没有 consent_asks" 反推：本轮可能既有同意闸挡下的行、又有单纯到期的行，
-        # 反推出来的那个 `via` 会把两类混成一个词，而事后要分的正是"这一行为什么被收口"。
-        # `transition_frames` 会把 `via` 丢掉（帧是 8 键契约，多一格要同步 Rust），
-        # 所以这里按 `task_id` 对回转换那一格——两边的 `task_id` 同源、一一对应。
-        via = {str(t.get("task_id") or ""): str(t.get("via") or "") for t in transitions}
-        record("producer", "task_expire",
-               ids=[str(f.get("task_id") or "") for f in frames],
-               states=[str(f.get("state") or "") for f in frames],
-               via=[via.get(str(f.get("task_id") or ""), "") for f in frames])
-    return frames
-
-
 def _run_agent_stream_to_queue(messages: list, thread_id: str, queue: asyncio.Queue, loop, user_id: int = 0,
                                stop_event: threading.Event | None = None,
                                principal: Principal | None = None,
@@ -1296,569 +952,39 @@ def _run_agent_stream_to_queue(messages: list, thread_id: str, queue: asyncio.Qu
                                open_tasks: str = "",
                                recent_tools: list[str] | None = None,
                                progress_emitter: ProgressEmitter | None = None):
-    """Run agent in a thread, push each chunk into an asyncio.Queue."""
-    config = {"configurable": {"thread_id": thread_id, "user_id": user_id, "stop_event": stop_event,
-                               "principal": principal or Principal(uid=user_id),
-                               "conversation_id": conversation_id,
-                               # 未完结任务原文（20260927 批 D）：planner 侧判"这一次
-                               # `task_drop` 是不是其实是'我做完了'"要用它（回执已覆盖
-                               # 该行剩余步骤 ⇒ 撤下不成立，见 tasks.drop_is_completion）。
-                               # 走 configurable 与 conversation_id 同一条路：图里读得到、
-                               # 又不必动 AgentState（多一个 state 字段就要多一处初值，
-                               # 而这条只是**只读的判定输入**，没有回写需求）。
-                               "open_tasks": open_tasks,
-                               # 上一轮执行过的工具名（20260929 批 F1'）：授权式审核
-                               # 快道的**结构化准入判据**（"上一轮读过审核队列吗"）。
-                               # 走 configurable 与 conversation_id / open_tasks 同一条
-                               # 路：图里读得到、又不必动 AgentState（只是只读的判定
-                               # 输入，没有回写需求）。传 `[]` 而不是缺键——"上一轮什么
-                               # 都没执行"是一个确定的事实（与 chat_quota 的"读不到 ⇒
-                               # 整个键缺席"恰好相反，见 ChatRequest 那条注）。
-                               "recent_tools": list(recent_tools or []),
-                               # 写幂等账的分流判据（批 F）：这一轮开始时上一轮跑没跑完。
-                               # 走 configurable 与上面几格同一条路——图里（`idem.py` 的
-                               # `resuming`）读得到、又不必动 AgentState。见 `_idem_resuming`。
-                               "idem_resuming": _idem_resuming(thread_id),
-                               "progress_emitter": progress_emitter},
-              "recursion_limit": RECURSION_LIMIT}
-    config["callbacks"] = tool_callbacks()
-    try:
-        # 双 stream_mode：
-        #   "messages" —— token 级文本/工具结果帧（原逻辑不变）
-        #   "updates"  —— 节点级状态更新：planner 的规划占位帧 / model 的最终回复
-        #                 收集 / gate 的检查判定。gate fallback 时向前端发
-        #                 __RESET__ 清空重绘 + 注入 fallback 文本作为最终回复
-        #                 （叙述校验不过的轮次文本已作废，不重置会累积显示错误内容）
-        # 过程帧记账：
-        #   process_emitted —— 本次请求已发过过程步骤（决定收尾是否补"质检通过"）
-        #   emitted —— 已发过程步骤的 key 集合（同一占位/完成帧同轮只发一次）
-        #   is_chat_workflow —— WORKFLOW=chat：无执行可查，收尾不发"✓ 质检通过"，
-        #     避免对闲聊展示虚假的质检过程
-        # 最终回复正文（trace 落盘用）：updates 的 model 帧里取最后一条
-        # AIMessage；gate fallback 时覆盖为 fallback 文本
-        final_reply = ""
-        # 帧流口径的正文（20261002）：这一轮**真正推给前端**的叙述增量，按入队顺序。
-        # 为什么要两份：正文在这里原本只有一个来路（`updates` 重建），而主人真正读到
-        # 的是另一个来路（`messages` 通道那些 AIMessageChunk）。两个来路只要有一天不
-        # 一致，trace 就会**如实写下一个主人从没读过的正文**——20261002 那轮现场
-        # （`logs/agent/traces/20261002/20261002T065409_1_r7abb37e.json`）正是如此：
-        # `gate/pass` 说最后一条 AIMessage 内容非空、`frames=15` 里至少 8 个是叙述帧
-        # （主人读到过正文），而 `stream_end` 的 reply 是空串。
-        # 治法与"两处口径"这个家族一贯的做法一致：**留一份证据、让分歧响**——
-        # `streamed_parts` 是帧流那一份，收尾时与重建那一份对照（见流尾 reply_mismatch）。
-        streamed_parts: list = []
-        # 这一轮的 `messages` 通道里，model 节点的正文帧**到过这里吗**。它决定收尾时
-        # 拿哪一份当准（见流尾）：到过 ⇒ 帧流那份就是主人读到的；从没到过 ⇒ 帧流那份
-        # 是残缺的（`settings.llm_streaming` 关掉时 model 不走 chunk，正文只在
-        # `updates` 里），此时以重建那份为准，且**不报**分歧（那是这一档的正常形状）。
-        saw_model_chunk = False
-        # `updates` 通道里见过 `model` 那一项吗。与 `saw_model_chunk` 配成一对判据：
-        # **正文帧到了、重建却没见着**才是异常（H2 那一支）；而"没有 model 帧"本身
-        # 不是——弹卡轮与幂等轮（`pending_confirm` / `noop_note`）由 execute 直接
-        # 路由到 END，narrator 结构上就不跑，正文由系统给（`confirm_text`）。两者
-        # 混为一谈就会让这些轮次的 trace 里多一条恒假的告警。
-        saw_model_update = False
-        process_emitted = False
-        emitted: set = set()
-        is_chat_workflow = False
-        # 跨轮执行记忆（20260904 C3）：checker 验收回执累计（execute update 是
-        # 累计语义——末批即本次请求全量）
-        exec_rows: list = []
-        # 完成帧 diff 起点（20260905 issue5）：receipts 全量累计，已发条数起点
-        # 之后为新增回执（同一 update 内顺序与执行顺序一致）
-        receipt_sent = 0
-        # __EXEC__ 已发条数（20261001，见流尾那条注释）：与 receipt_sent 同源同值，
-        # 但**刻意分开记**——前者管过程行、后者管落库帧，将来谁改了自己的去重口径
-        # 都不会把另一个带偏（"一处实现两处用，改一处忘一处"正是本仓的老形状）。
-        exec_sent = 0
-        # 动作事实块（20260927 D3，`agent/factblock.py`）：命令族/写族的事实**由系统
-        # 印**——在 narrator 产文本之前就把那几行发给主人（用户可见正文 = 系统事实块
-        # + 模型包装）。`fact_sent` 是已印出的行（增量去重，跨 replan 重发要用），
-        # `prelude` 是它们渲染成的整块（trace 正文与 fallback 替换要用）。
-        fact_sent: list = []
-        prelude = ""
-        # 本次请求内新登记的任务（20260927 批 D）：[(载荷, 登记时刻)]——流尾结算时要用
-        # 它们的 `declared_after`（同轮新登记的行走 ts 过滤，见 tasks.advance_by_receipts
-        # 的注：不这么做，"先导航再登记"那半步会被自己刚执行的回执立刻算完成）。
-        declared_tasks: list = []
-        # 本次请求里"系统读到现状、认出目标已达标"的那批 spec（20261015）。**与回执
-        # 分开一份**是刻意的：回执是"真执行过"（进 execution_log、进跨轮记忆、进
-        # narrator 的事实），这一份只是"不需要执行也已经达标"——合流会把没做的事说成
-        # 做了。唯一消费点是流尾结算（`_task_advance_rows`），带 `args` 而非只带工具名
-        # 的理由见 `tasks._settled_by_already`。
-        satisfied_specs: list = []
-        # 本轮"同意闸挡下 / 弹了卡"的那几件 → `{工具名: 同意闸问句}`（累计，见 `_consent_asks`）
-        consent_asks: dict = {}
-        # 注入端记账（20260927 批 D）：本会话**读回来了几条**未完结任务、都是谁。
-        # 为什么值得一条 trace 事件：`eval/corpus_invariants.py` 的 I6 要判"挂着的任务
-        # 有没有人管"，而"这一轮系统给 planner 看过什么"只有 trace 知道——不记这一格，
-        # 那条不变量就只能看登记端，看不到读端有没有接上（**有写无读**那族的判据必须
-        # 两头都有出处）。条数为 0 时也记：那正是"读侧断了"与"本来就没有"的分界。
-        _injected = task_rows(open_tasks)
-        record("producer", "task_inject", n=len(_injected),
-               ids=[str(r.get("task_id") or "") for r in _injected])
+    """Run native events in the worker and enqueue protocol-safe values.
 
-        def emit_process(text: str, key: str = ""):
-            nonlocal process_emitted
-            if key:
-                if key in emitted:
-                    return
-                emitted.add(key)
-            process_emitted = True
-            asyncio.run_coroutine_threadsafe(queue.put(f"__PROCESS__:{text}"), loop).result()
-
-        def emit_reset(scope: str, reason: str):
-            """发一条 `__RESET__:<scope>:<理由>`。
-
-            `scope` 是三端（前端 / Rust / golden）的**机器判据**，不是措辞：
-
-              · `all`  —— 连本轮已下发的 `__CMD__` 缓冲一起作废。用在**决策被推翻**
-                的那一格（gate 打回 ⇒ planner 重规划）：新的一轮会重新决定做什么，
-                留着旧命令就是"道歉了但还是跳了"。
-              · `text` —— **只**作废叙述，命令照旧执行。用在终局 fallback：execute
-                已经跑过、checker 已 PASS，命令是**已发生的事实**，gate 否定的只是
-                narrator 的措辞（与 `__EXEC__`/`__TASK__` 同一条取向：回执是事实）。
-
-            `text` 这一档是 20261001 补的。此前只有一种 RESET，命令**无条件**跟着作废，
-            而事实块（`render_fact_block`）在 fallback 之后照旧重印"页面已跳转：…"
-            ⇒ 主人读到一句已经发生、实际却没有发生的事。代价不止于此：gate 的两条
-            声称判据（5g/5h）当时都因为"判死就等于把已生效的命令吞掉"而降级成只记不判
-            ——修掉这里，那两条的前提才重新成立（见 gate 5g/5h 的注释）。
-
-            旧帧（没有 `scope` 段）在三端都按 `all` 解析 = 今天的行为 ⇒ 前后端版本
-            错配时退化成"命令被吞"，不会退化成"道歉了还是跳了"。
-
-            帧流正文的账**在这一格清**（20261002）：三端收 `__RESET__` 都会丢掉已展示
-            的正文（前端清 displayText、Rust 清累积 reply），`streamed_parts` 是"主人
-            读到了什么"的账，它必须跟着一起清。清在函数里而不是各调用点（三个调用点、
-            将来还会有第四个）：`emitted` 那组 key 也在调用点清，可它漏清的**症状当场
-            看得见**（该重发的过程行被去重吞掉，像卡住）；这一处漏清只会让 trace 里
-            多出一段已被作废的话——**看不见**，所以不能指望调用点记得。
-            """
-            streamed_parts.clear()
-            asyncio.run_coroutine_threadsafe(
-                queue.put(f"__RESET__:{scope}:{reason}"), loop).result()
-
-        def emit_text(text: str):
-            """用户可见正文的**唯一出口**（20261002）：发帧 + 记帧流账。
-
-            本函数之前，"正文入队"散在四处（事实块 / 确认问句 / 幂等说明 / fallback
-            替换），记账要写在四处才不漏——而"一处实现两处用，改一处忘一处"正是本仓
-            的老形状。现在发起者是它一个，账也只在这里记（`messages` 通道那些 model
-            增量帧不经它：那是 token 级流，只补记一份，见那里的注释）。
-            """
-            streamed_parts.append(text)
-            asyncio.run_coroutine_threadsafe(
-                queue.put(AIMessageChunk(content=text)), loop).result()
-
-        def emit_facts(rows: list):
-            """事实块（D3）：把**还没印过**的事实行发给主人（增量、按文本去重）。
-
-            发在 execute update 里是刻意的：那一刻 execute 节点已收尾、narrator 的
-            model 节点还没跑（同段代码里 `__CMD__` 帧的注释讲的是同一条时序）⇒
-            主人读到的顺序恒为"事实 → 包装"。块尾留一个空行（markdown 里单换行会被
-            并进同一段，"跳转：…好，我带你过去了"会连成一句）。
-
-            **射程 20261005 起为空**（`agent/factblock.py` 的 `BLOCK_FAMILIES`：命令族
-            20261002 退出、写族 20261005 退出）⇒ `action_facts` 恒返回空表、这里
-            **一行都不发**（`fresh` 为空直接返回，正文从 narrator 开始），`prelude`
-            恒为空串、下游 `compose` 恒为恒等。这段接线**原样留着**：它是那次回退的
-            唯一开关（改 `BLOCK_FAMILIES` 一个常量就恢复），而删掉它意味着"系统还会不会
-            代印"这件事在代码里再也看不见。"""
-            nonlocal prelude
-            fresh = [x for x in action_facts(rows) if x not in fact_sent]
-            if not fresh:
-                return
-            fact_sent.extend(fresh)
-            prelude = render_fact_block(fact_sent)
-            record("producer", "fact_block", n=len(fresh), total=len(fact_sent))
-            emit_text(render_fact_block(fresh) + "\n\n")
-
-        from agent.runtime.confirmation import confirmed_runtime
-        from agent.runtime.confirmation import frames as confirmation_frames
-        runtime = confirmed_runtime(_agent, confirm_grant)
-        for mode, data in runtime.stream(
-            graph_input(messages, confirm_grant=confirm_grant,
-                        ledger=ledger),
-            config,
-            stream_mode=["messages", "updates"], **_stream_kwargs(),
-        ):
-            # 客户端断开检查：停止驱动图（不再发起新的 LLM 调用/工具执行）。
-            # 节点级检查（model/tools raise AgentCancelled）兜住"正在节点内"的窗口；
-            # 此处兜住"节点间迭代"的窗口（断连→感知最多 2s，见 event_stream 轮询）
-            if stop_event is not None and stop_event.is_set():
-                logger.info("[stream] cancelled by client disconnect (loop check)")
-                break
-            if mode == "messages":
-                chunk, meta = data
-                # 入队前过滤（同 _run_agent_sync）：只有 model 节点的回复文本帧、
-                # 以及工具结果帧进队列；planner 的内部输出不发给前端（gate 无文本）
-                if isinstance(chunk, AIMessageChunk):
-                    if chunk.content and meta.get("langgraph_node") == "model":
-                        # 20260903：model 零工具（不 bind_tools），不再有 tool_calls
-                        # 占位帧；"🛠 正在调用工具…"占位改由 planner updates 分支
-                        # 在计划含执行清单时发（execute 执行期间几秒静默，防"卡死"）
-                        # 帧流账（20261002）：这一条正是主人读到的正文，逐 delta 记。
-                        # 不变量：**只给真入队的那些记**——过滤条件改了而记账没跟着改，
-                        # 这一份就变成"我们以为主人读到的"，与它要防的错同形。
-                        saw_model_chunk = True
-                        streamed_parts.append(str(chunk.content))
-                        asyncio.run_coroutine_threadsafe(queue.put(chunk), loop).result()
-                elif isinstance(chunk, ToolMessage) and chunk.content:
-                    # 工具结果帧转发前端展示（命令帧解析/正文展示）。过程行不在
-                    # 此发——旧"✅ 工具执行完成"固定模板不查 checker 验收：受阻
-                    # 执行（空结果/错误帧）同样显示"完成"，且完成帧不带实际内容。
-                    # 20260905 issue5 起完成/受阻行由 execute update 的
-                    # receipts/blocked 驱动（见下方 execute 分支），此处只转发
-                    asyncio.run_coroutine_threadsafe(queue.put(chunk), loop).result()
-            elif mode == "updates":
-                # 最终回复正文收集（trace 落盘）：model 节点的完整 AIMessage
-                # （20260903 拓扑：model 只走一次收尾叙述轮，天然是最终轮）
-                model_upd = data.get("model")
-                if model_upd is not None:
-                    # 见过 model 帧（决定收尾是否报"正文帧到了、重建却没见着"那一格，
-                    # 见流尾 `reply_update_missing`）。
-                    saw_model_update = True
-                    _msgs = model_upd.get("messages") or []
-                    _m = _msgs[-1] if _msgs else None
-                    if isinstance(_m, AIMessage) and _m.content:
-                        # 20261002：**去掉了 `not _m.tool_calls` 这条一票否决**。
-                        # 它是从"narrator 零工具、结构上发不出 tool_calls"这条不变量
-                        # 顺手写下的，但那条不变量保证的是**我们没给它工具**，不等于
-                        # 服务端不会回一个 tool_call；而那一票否决的代价是：内容被丢掉
-                        # 之后没有任何一处会喊——gate 照旧 PASS（它只看内容非空），
-                        # 主人照旧读到了那段正文（帧流照发），只有 trace 悄悄写成空。
-                        # 正文是不是主人读到的，与"这条消息还带了什么"无关 ⇒ 只认内容。
-                        final_reply = str(_m.content)
-                        if getattr(_m, "tool_calls", None):
-                            # 零工具节点收到 tool_calls = 不变量被打破（服务端回了个我们
-                            # 没声明的东西）。正文照收，但必须留痕：它还会被
-                            # `with_tool_call_pairs` 当成"声明过的调用"写进下一轮的对话
-                            # （严格的服务端会因此 400），值得下一次现场自己说话。
-                            logger.warning("[stream] narrator 回了 tool_calls（零工具节点不该有）"
-                                           " n=%d tool_calls=%s",
-                                           len(_m.tool_calls),
-                                           [c.get("name") for c in _m.tool_calls])
-                            record("producer", "narrator_tool_calls",
-                                   n=len(_m.tool_calls),
-                                   names=[str(c.get("name") or "") for c in _m.tool_calls])
-                    else:
-                        # 接住了 model 帧、却没接住正文：把**形状**记下来（是 AI 消息吗、
-                        # 带没带工具调用、内容多长）。下一份空 reply 的 trace 因此能直接
-                        # 读出是哪一种，不必再靠逐帧数数反推。
-                        record("producer", "reply_capture_skipped",
-                               is_ai=isinstance(_m, AIMessage),
-                               tool_calls=len(getattr(_m, "tool_calls", None) or []),
-                               content_len=len(str(getattr(_m, "content", "") or "")),
-                               n_msgs=len(_msgs))
-                # 计划（planner 是 invoke 非流式——messages 通道不会有其 chunk，
-                # 规划占位帧在此发：所有技能都有"规划中"第一阶段反馈）
-                planner_upd = data.get("planner")
-                if planner_upd:
-                    # 20260928 批 C：这里曾用三段文本嗅探认 plan（`startswith("WORKFLOW=")`
-                    # 判"是不是一份真计划"、`startswith("WORKFLOW=chat")` 判闲聊、
-                    # `"\nTOOLS: " in plan` 判有没有执行清单）——三处都是"改 `plan_encode`
-                    # 的排版就要同步改这里"的人工约定。现在直取 `plan_obj`
-                    # （`graph.plan_state` 与文本一次写入），排版不再是判据的一部分。
-                    # 缺 `plan_obj`（缺省 `{}`）= 本轮没有计划，与"计划是 chat"分得开。
-                    pobj = planner_upd.get("plan_obj") or {}
-                    if pobj:
-                        emit_process("🧭 规划中…", key="planning")
-                        if str(pobj.get("workflow") or "") == "chat":
-                            # chat 快道：只发占位帧，不发计划明细（避免每条闲聊都有过程行）
-                            is_chat_workflow = True
-                        else:
-                            # 本标志跟**最新一轮**的计划走（20260926）：gate 打回重规划
-                            # 之后可能由 chat 换成检索类技能，不回落的话收尾那句
-                            # "✓ 质检通过"会被这一轮的 chat 身份吃掉（判据是当前计划，
-                            # 不是"历史上出现过 chat"）。
-                            is_chat_workflow = False
-                            # 计划行人话化（20260905 issue5）：不再贴 plan 机器
-                            # 契约原文（WORKFLOW=/PARAMS= 截断成残句），改发 TOOLS
-                            # spec 的中文动作摘要——与回执完成帧共用渲染、前后一致。
-                            # 收尾轮（TOOLS 空/（无），execute 后叙事轮）不发——
-                            # 无动作可预告，避免"计划:执行规划动作"式空行
-                            acts = [tool_action_text(nm, ar)
-                                    for nm, ar in _specs_from_tools(pobj.get("tools"))]
-                            if acts:
-                                hint = "、".join(acts)
-                                if len(hint) > 100:
-                                    hint = hint[:100].rstrip() + "…"
-                                emit_process("🧭 计划：" + hint)
-                        # 计划含执行清单 → execute 将确定性执行（期间几秒静默，
-                        # 无此占位帧前端会像"卡死"）；完成/受阻帧由 execute
-                        # update 的 receipts/blocked 驱动（见下方 execute 分支）
-                        if pobj.get("tools"):
-                            emit_process("🛠 正在调用工具…", key="tool_running")
-                    # 任务登记帧（20260927 批 D）：planner 认定"这一轮做不完"时随本轮
-                    # 一起给出登记载荷（`agent/tasks.py::frame_payload`）。与弹窗那支的
-                    # `__PENDING__` 同一条纪律：**收到即发、不攒到收尾**——主人可能看完
-                    # 这一轮就切走/关页面，晚发等于没发（下一轮 planner 靠它认人）。
-                    # 空列表是常态（绝大多数轮次没有登记），循环天然跳过。
-                    # **20261008 批 ② 起是一帧一帧地发**：同一轮可以有多条（显式登记
-                    # 那条 + 意图清单里"没上卡的每一件"各一条，见
-                    # `agent/graph.py::_auto_task_frames`）。同一个 task_id 在同一请求里
-                    # 出现两次是幂等 upsert（`rows_to_settle` 按行配对，不按 id 查表
-                    # ⇒ 两行同 id 是它明确支持过的常态）。
-                    for tframe in (planner_upd.get("task_frames") or []):
-                        if isinstance(tframe, dict) and tframe.get("task_id"):
-                            asyncio.run_coroutine_threadsafe(
-                                queue.put("__TASK__:" + json.dumps(tframe,
-                                                                   ensure_ascii=False)),
-                                loop).result()
-                            declared_tasks.append((tframe, time.time()))
-                # execute 的 checker 验收回执（20260904 C3）：累计语义——每次
-                # execute update 的 receipts 都是请求内全部 PASS 行，末批即全量
-                ex_upd = data.get("execute")
-                if ex_upd:
-                    for frame in confirmation_frames(ex_upd):
-                        asyncio.run_coroutine_threadsafe(queue.put(frame), loop).result()
-                    # 「系统认定已达标」的那批 spec（20261015），同轮可能多次 update ⇒
-                    # 累加（形状过滤与"为什么不产生回执"见 `_task_satisfied_specs`）。
-                    satisfied_specs.extend(_task_satisfied_specs(ex_upd))
-                    _consent_asks(ex_upd, consent_asks)   # 「同意闸挡下 / 弹了卡」那几件
-                    # Confirmation text is persisted as an assistant reply by the host.
-                    if ex_upd.get("pending_confirm"):
-                        emit_process("✋ 等待主人确认…", key="confirm_popup")
-                        text = str(ex_upd.get("confirm_text") or "")
-                        if text:
-                            final_reply = text
-                            emit_text(text)
-                    # 状态已达成 ⇒ 不弹卡那一支（20260926）：execute 判出"这一批里没有
-                    # 一件需要动"（目标现在就已经是它要的样子）时写 `noop_note`，图直接
-                    # 路由到 END（route_after_execute，与上面 pending_confirm 同款出口）
-                    # ——narrator 结构上不会跑，所以不可能出现"我已经帮你办好啦"。
-                    # 与 pending_confirm **互斥**：那一支的 `picks` 非空（有东西要问），
-                    # 这一支恰恰是"滤完一件不剩"。
-                    if ex_upd.get("noop_note"):
-                        # 过程行用「⏭」而不是「✅」：这一轮**零执行**，✅ 会被读成
-                        # "办好了"（同 `_tool_action_text` 那条预告/回执分工的纪律——
-                        # 过程行只说这一轮发生了什么）。
-                        emit_process("⏭ 状态已是这个值，本轮零改动", key="idem_noop")
-                        text = str(ex_upd.get("noop_text") or "")
-                        if text:
-                            # 走 AI 帧的理由与 confirm_text 逐字相同：Rust 照常落库，
-                            # 主人切走再回来还看得见这段如实的话（它不是过程行）。
-                            final_reply = text
-                            emit_text(text)
-                    # 过程行以 checker 验收为准（20260905 issue5）：✅ 完成帧只对
-                    # 新增 PASS 回执发（receipts 累计，diff 起点后为新增，带实际
-                    # 内容）；BLOCK 受阻项发 ✗ 行——真实执行失败不再显示"完成"
-                    if ex_upd.get("receipts"):
-                        rows = ex_upd["receipts"]
-                        exec_rows = rows              # 全量累计（末批即本次请求全量）
-                        new_rows = rows[exec_sent:]   # 本次请求内**还没发过**的回执
-                        for i in range(receipt_sent, len(rows)):
-                            r = rows[i]
-                            # 完成行仍走**过程行那档**（默认 preview=True）：主人看到的
-                            # 那一行此前逐字如此，这次收敛不动它。回执里的 `action` 是
-                            # **台账档**（多带了《标题》/「公开 → 私密」这类 meta 派生
-                            # 细节），它是给跨轮执行记忆用的，不在这儿显示——两档分工见
-                            # `agent/action_text.py` 头注。
-                            emit_process("✅ " + tool_action_text(
-                                str(r.get("tool") or ""), r.get("args")),
-                                key=f"receipt_{i}")
-                            # 连线命令帧（20260926 批 2）：命令搬上了回执行的
-                            # `cmd`（Python 写 / Rust 读的既有跨语言契约），这里按
-                            # 新增回执逐条发 `__CMD__:<json>`。
-                            # ★ **必须从 producer 发**（不在 event_stream）：golden
-                            # 直接 drain 的就是本函数的队列（`run_golden.py::run_one`），
-                            # 只在 event_stream 发的话 golden 的 `commands` 恒为空，
-                            # 而且**在 golden 侧无法补救**（114 条 require_cmd_* 断言
-                            # 会一起失真）。放这里同时保住时序：execute 的 update 到达
-                            # = execute 节点收尾，早于 narrator 的 model 节点产文本。
-                            cmd = r.get("cmd")
-                            if isinstance(cmd, dict):
-                                asyncio.run_coroutine_threadsafe(
-                                    queue.put("__CMD__:" + json.dumps(cmd, ensure_ascii=False)),
-                                    loop).result()
-                        receipt_sent = len(rows)
-                        # ★ __EXEC__ **增量即发**（20261001）。此前它攒到流尾、与
-                        # `__CMD__`/`__PENDING__`/`__TASK__` 三条"收到即发"的兄弟帧
-                        # 不同纪律，代价是一次真实事故：确认轮 `create_announcement`
-                        # 真跑（公告 id=23 落库）后客户端断开 ⇒ 收尾那行 `__EXEC__`
-                        # 永远发不出去 ⇒ Rust 的 `execution_log` 没写、`close_pending
-                        # _actions` 没跑 ⇒ 待办**仍挂在 pending** ⇒ 下一轮 planner 看到
-                        # "系统账上还等着点头" ⇒ 重新弹卡 ⇒ 02:47 又写一次（id=24）。
-                        # 两个用户可见后果（两条同名公告、模型重复弹卡）是同一件事。
-                        # 时机上这一刻是安全的：execute update 到达 = 该轮工具**已经
-                        # 跑完**且 checker 已验收（receipts 只收 PASS），发出去的就是
-                        # 已发生事实；Rust 侧本就是"收到即落库"（`chat.rs` 在 JSON 解析
-                        # 之前拦帧 + `tokio::spawn` 摘出生成器生命周期），**天生支持
-                        # 增量帧**——从 20260920 起它就在等这一天，是 Python 侧没跟上。
-                        if new_rows:
-                            exec_sent = len(rows)
-                            asyncio.run_coroutine_threadsafe(
-                                queue.put("__EXEC__:" + json.dumps(new_rows, ensure_ascii=False)),
-                                loop).result()
-                        # 事实块（D3）：紧随 `__CMD__` 之后发，仍早于 narrator 的任何
-                        # 文本。**命令族不发**（效果主人看得见，那句话归泠月）——
-                        # 只有写族会真有内容，纯导航轮这里是个空操作。
-                        emit_facts(rows)
-                    for b in ex_upd.get("blocked") or []:
-                        # ✗ 行在前、✅ 行在后（本轮两列表分开到达，不混排）；
-                        # 同 spec 跨轮重复受阻只提示首次（key 按 spec 去重）
-                        spec = str(b.get("spec") or "")
-                        reason = _REASON_CN.get(str(b.get("reason") or ""),
-                                                str(b.get("reason") or "执行受阻"))
-                        # 逐条解析（20260928 批 C）：此前借 `_specs_from_plan("TOOLS: " + spec)`
-                        # 复用文本切分，现在直接解析这一条 spec（`_spec_one`）
-                        bnm, bargs = _spec_one(spec) or ("", None)
-                        emit_process("✗ " + tool_action_text(bnm or str(b.get("tool") or ""),
-                                                             bargs) + f"未成功（{reason}）",
-                                     key=f"blocked_{spec}")
-                # gate 检查判定（20260903：reflector/REVISE/LLM-QC 已废除——gate
-                # 是终节点只收尾不重考：pass → done 收尾；fail → fallback 文本
-                # 直接替换最终回复，见 graph.gate_node 注释）
-                upd = data.get("gate")
-                if not upd:
-                    continue
-                if upd.get("gate_replan"):
-                    # 打回重规划（20260926）：gate 把"该查而没查"这一族交回 planner
-                    # 重决策一次（见 graph.route_after_gate），**本轮不结束**——所以
-                    # 这里既不发 fallback 文本、也不发"✓ 质检通过"：
-                    #   · 前端 RESET：把已经流出去的那段无依据叙述清掉（用户看不到它）；
-                    #   · emitted 清空：新的一轮 planner/model 会重新发"🧭 规划中…"与
-                    #     "🛠 正在调用工具…"，否则被同 key 去重吞掉、看起来像卡住；
-                    #   · final_reply 清空——重规划后的 model 轮会重新赋值它。此前
-                    #     这里靠"下一轮会覆盖"，20261002 起改成主动清：被否定的那段
-                    #     三端都已作废（前端 displayText / Rust 累积 reply / 帧流账），
-                    #     重建这份不跟着清的话，恰恰是**它**会在下一轮没被接住时
-                    #     变成 trace 里那段"主人从没读到的话"。
-                    reason = "叙述缺少依据，正在重新查证"
-                    emit_process("✗ 质检打回：" + reason, key="gate_replan")
-                    # 被否定的那段正文作废（20261002）：三端都清（前端 displayText、
-                    # Rust 累积 reply、这里 `emit_reset` 里的帧流账），重建的那份也
-                    # 必须跟着清——重规划后的 model 轮会重新赋值。不清的话，一旦那一轮
-                    # 没被接住，trace 会把**一段已被作废的正文**记成主人读到的。
-                    final_reply = ""
-                    # scope="all"：这一轮**决策被推翻**，重规划后重下的命令才是对的
-                    # ——旧命令必须一起作废（"道歉了但还是跳了"就是这一格的反面）。
-                    emit_reset("all", reason)
-                    emitted.clear()
-                    # 事实块跟着被 RESET 清掉了（前端清 displayText、Rust 清累积 reply）
-                    # ——但那些动作**是真做过的**，重规划不改变这一点 ⇒ 立刻重印一遍：
-                    # 否则主人只会看到重查之后的正文，而"页面已经跳过去了"这件事
-                    # 从气泡里消失了（丢的是事实，不是措辞）。清空 `fact_sent` 是
-                    # 重印的前提（下一轮 execute update 会照常增量补发新事实）。
-                    if prelude:
-                        fact_sent.clear()
-                        emit_facts(exec_rows)
-                    # 具体判据（issue/子句）由 graph 侧记 trace 并打 WARNING，
-                    # 这里只记"发生过一次重规划"——两边重复记会把同一条读两遍。
-                    logger.info("[stream] gate 打回 → planner 重规划（本轮不结束）")
-                elif upd.get("fallback_text"):
-                    # fallback：叙述校验不过 → 前端 RESET 清空已展示文本重绘，
-                    # 注入 fallback 文本（人设内如实回复）作为最终回复
-                    reason = "叙述校验未通过，已替换为如实回复"
-                    emit_process("✗ 质检打回：" + reason, key="gate_fallback")
-                    # scope="text"：这是**终局**，planner 的决策没有被推翻——execute
-                    # 跑过、checker PASS 过，命令是已发生的事实，被否定的只有措辞。
-                    # 不这么做，事实块那句"页面已跳转：…"就是系统在说它没做的事。
-                    emit_reset("text", reason)
-                    final_reply = upd["fallback_text"]
-                    emitted.clear()
-                    # RESET 把已经发出去的事实块也清了 ⇒ 重新拼上（D3）：块是真话、
-                    # 且是这一轮唯一有系统背书的正文。`compose` 幂等，重复拼不上。
-                    # 与 `scope="text"` 配套之后这一段才成立：否则重印的是"跳了"、
-                    # 而命令已经没了——那正是 20261001 修掉的那个矛盾。
-                    final_reply = compose(prelude, final_reply)
-                    emit_text(final_reply)
-                else:
-                    # 检查通过收尾（gate 恒 done=True）；chat 快道无执行可查，
-                    # 不发（见 is_chat_workflow）
-                    if process_emitted and not is_chat_workflow:
-                        emit_process("✓ 质检通过")
-        else:
-            # for 自然耗尽（无 break）= graph 完整跑完，未被断连打断
-            logger.info("[stream] graph complete (uninterrupted)")
-        # trace 落盘：最终回复随 producer 收尾记录（finish_trace 落盘时并入）。
-        # **含事实块**（D3）：trace 的 reply 是"主人读到了什么"，而这一批起主人读到
-        # 的第一段是系统印的那几行（gate fallback 那支在上面已经拼过了，compose 幂等）。
-        # 反面：不加这块，trace 里就查不出"这一轮主人到底看到了什么事实"。
-        #
-        # 两份正文对照（20261002）：`emitted` 是帧流那份（真正发给前端的），
-        # `recorded` 是 `updates` 重建那份（此前唯一落 trace 的）。两者本该逐字相同，
-        # 而 20261002 那轮现场证明它们可以不同、且**谁都没喊**——主人读到正文、
-        # 而 trace 写空。两条处置：
-        #   ① 取值：model 正文帧到过（`saw_model_chunk`）⇒ 以**帧流那份**为准（那是
-        #      主人读到的定义）；没到过（`settings.llm_streaming` 关掉那一档，正文
-        #      只在重建里）⇒ 退回重建那份。两份都空 ⇒ 空（同旧行为）。
-        #   ② 分歧要响：只要正文帧到过、帧流那份非空、而两份的**空白归一化**后不同，
-        #      记一条 `reply_mismatch` + WARNING（归一化是为了躲开帧边界带来的换行
-        #      ——`event_stream` 会给命令帧后的第一个叙述帧前插一个 `\n`，那不叫分歧）。
-        #      归一化比较是判"内容"不是判"排版"，同 20260928 起的既有取向。
-        emitted_reply = compose(prelude, "".join(streamed_parts))
-        recorded_reply = compose(prelude, final_reply)
-        # 已知并**刻意留着**的一处不在账内：`event_stream` 的空输出兜底
-        # `_RECOVERY_SENTENCE`（整轮一个帧都没发时消费端补发的那句）。它发生在队列
-        # 耗尽之后——producer 走到这一行时它还没发出，且它的**前提**是"整轮零帧"，
-        # 那一刻 reply 为空恰是实情（模型确实什么都没说）。要把它并进账就得让消费端
-        # 回写 producer 的账，代价大于收益；等真出现过"主人读到兜底句、而 trace 空"
-        # 的现场再动（本批的两份对照已经把同类分歧变成可见事件，这一处若发生也查得到）。
-
-        if saw_model_chunk and not saw_model_update:
-            # H2 那一支：正文帧推给主人了，重建那条来路却**整项没到**（不是"到了但没
-            # 接住"——那是 `reply_capture_skipped`）。落盘仍取帧流那份（下面那条），
-            # 这一格负责让下一次现场自己说出"是这一支"，不必再靠逐帧数数反推。
-            record("producer", "reply_update_missing", parts=len(streamed_parts))
-
-        def _flat(x: str) -> str:
-            return " ".join((x or "").split())
-
-        if saw_model_chunk and _flat(emitted_reply) and _flat(emitted_reply) != _flat(recorded_reply):
-            logger.warning("[stream] trace 正文与帧流不一致：帧流 %d 字 / 重建 %d 字"
-                           "（落盘取帧流那份）emitted=%r recorded=%r",
-                           len(emitted_reply), len(recorded_reply),
-                           emitted_reply[:80], recorded_reply[:80])
-            record("producer", "reply_mismatch",
-                   emitted_len=len(emitted_reply), recorded_len=len(recorded_reply),
-                   emitted_head=emitted_reply[:80], recorded_head=recorded_reply[:80])
-        record("producer", "stream_end", reply=emitted_reply if saw_model_chunk
-               else (recorded_reply or emitted_reply))
-        # 任务结算 + 收口（20260927 批 D / 20261015）：判据、两种证据、"为什么放在
-        # 流尾"（执行的完整回执到这一刻才齐，早发会把"还没做"记成"做了"）与**顺序**
-        # （先结算、后收口）见 `_task_settle_and_expire`。
-        _task_settle_and_expire(open_tasks, declared_tasks, exec_rows, satisfied_specs,
-                                consent_asks, record, queue, loop)
-        # 跨轮执行记忆帧（20260904 C3）：checker 验收回执发 Rust 落库 execution_log
-        # （读取侧限最近 8 条）。
-        # ⚠️ 20261001 起回执**在 execute update 里就已经增量发完**（见上），这里
-        # 正常恒为空——留着这一行是兜"回执到了、本循环却没走到那段"的残余：那一刻
-        # 断连就再也没有第二个发帧点，而**执行是已发生事实**，宁可多发一次空数组
-        # 也不赌。判据用 `exec_sent`（已发条数）而不是 `exec_rows`（累计），
-        # 否则每轮都会把发过的重发一遍、execution_log 里同一件事落两行。
-        if exec_sent < len(exec_rows):
-            asyncio.run_coroutine_threadsafe(
-                queue.put("__EXEC__:" + json.dumps(exec_rows[exec_sent:], ensure_ascii=False)),
-                loop).result()
-        asyncio.run_coroutine_threadsafe(queue.put(None), loop).result()
-    except AgentCancelled:
-        # 图内节点检测到断连 → 静默收尾（客户端已断开，无帧可发；不放异常
-        # 避免 event_stream 误发 __ERROR__ 到已断开的连接）
-        logger.info("[stream] graph cancelled by client disconnect")
-        asyncio.run_coroutine_threadsafe(queue.put(None), loop).result()
-    except Exception as e:
-        # 20260927：**异常必须留痕**。此前这一支只把异常对象塞进队列、不记日志——
-        # 进程内消费者（`eval/run_golden.py` 的 drain）见异常即 break，异常就再也
-        # 没有第二个读者，trace 也不会收尾（`finish_case` 在 run_one 里、永不执行），
-        # 于是"某一轮挂了"在语料里表现为**一条空 trace 都没有**、只有一个进程被
-        # timeout 杀掉。排障时只能靠猜（本批实测：探针整进程挂死，靠 faulthandler
-        # 才定位到这一行）。
-        logger.exception("[stream] producer 异常（已入队，event_stream 据此发 __ERROR__）：%s", e)
-        asyncio.run_coroutine_threadsafe(queue.put(e), loop).result()
-        # 20260905 哨兵补发：异常入队后仍须收尾 None——event_stream 遇异常对象
-        # 即发 __ERROR__ 返回（不会读到 None），但 run_one/golden 等进程内消费者
-        # 的 drain 线程只认 None 终止，缺哨兵会让调用方 t.join() 永久挂起
-        # （实测：LLM client 未初始化时整进程挂到被 timeout 杀，exit 124/144）
-        # 20260927：**带超时**。进程内消费者见异常即 break，`loop.run_until_complete`
-        # 的驱动也随之停摆 ⇒ 此刻 `.result()` 再也没有人来跑这个协程，**永久**挂住
-        # 整个调用方（实测：探针进程挂到被 timeout 杀，faulthandler 栈落在本行）。
-        # 哨兵是给"还在听的消费者"的礼貌：没人听就放过，不许把调用方拖死。
+    Queue insertion is the only async boundary here. Runtime exceptions are
+    delivered before the terminal sentinel, so the HTTP adapter cannot emit a
+    successful end frame after an error or cancellation.
+    """
+    def put(value):
+        if loop.is_closed():
+            return
+        pending = queue.put(value)
         try:
-            asyncio.run_coroutine_threadsafe(queue.put(None), loop).result(timeout=5)
-        except Exception:                           # noqa: BLE001 —— 消费者已离场
-            logger.info("[stream] 收尾哨兵无人接收（消费者已退出），producer 提前结束")
+            asyncio.run_coroutine_threadsafe(pending, loop).result()
+        except RuntimeError:
+            pending.close()
+            return
+    try:
+        events = _runtime_events(
+            messages, thread_id=thread_id, user_id=user_id, principal=principal,
+            conversation_id=conversation_id, confirm_grant=confirm_grant,
+            ledger=ledger, recent_tools=recent_tools, stop_event=stop_event,
+            open_tasks=open_tasks, progress_emitter=progress_emitter)
+        emit_to_queue(events, put)
+        put(None)
+    except AgentCancelled:
+        logger.info("[stream] native runtime cancelled")
+        put(_NativeCancelled())
+    except Exception as exc:
+        logger.exception("[stream] native runtime producer failed: %s", exc)
+        put(exc)
+        try:
+            put(None)
+        except Exception:
+            logger.info("[stream] producer sentinel consumer already closed")
 
 
 def _record_invalid_confirm(trace_id: str, uid: int, conv_id, token_len: int,
@@ -2077,10 +1203,7 @@ async def chat_stream(req: ChatRequest, request: Request):
         _submit_with_context(
             loop, _run_agent_stream_to_queue, messages, thread_id, queue, loop, req.user_id, stop_event,
             principal, grant, req.conversation_id,
-            # Pass request-owned execution facts into the worker.
-            _ledger_for_graph(req, confirmed=bool(grant)),
-            req.agent_tasks,
-            req.recent_tools, progress.emitter, jobs=jobs,
+            None, "", None, progress.emitter, jobs=jobs,
         )
 
         # 可观测性：请求生命周期账本（帧数/退出原因，finally 汇总）
@@ -2128,6 +1251,9 @@ async def chat_stream(req: ChatRequest, request: Request):
                         logger.error("[stream] 终止帧之后生产者又投了 %d 个帧（协议违约："
                                      "这些帧不会下发，检查 queue.put 是否晚于哨兵 None）", residue)
                     break
+                if isinstance(chunk, _NativeCancelled):
+                    end_reason = "cancelled"
+                    return
                 if isinstance(chunk, Exception):
                     end_reason = "producer_error"
                     # Preserve the worker exception traceback in server logs.
@@ -2137,14 +1263,13 @@ async def chat_stream(req: ChatRequest, request: Request):
                     progress.mark("error")
                     yield f"data: __ERROR__:{json.dumps(PRODUCER_ERROR_TEXT, ensure_ascii=False)}\n\n"
                     return
-                # 过程展示/质检重置控制帧（__PROCESS__:<步骤> / __RESET__:<原因>）：
-                # JSON 编码原样转发，前端归档到灰色可折叠过程行
+                # Native progress/confirmation control frames are already
+                # protocol-safe strings; they are never planner/node events.
                 # __CONFIRM__（20260921）走同一族：**必须 JSON 编码**（帧体是
                 # `__CONFIRM__:<json>`，裸帧在 Rust 的 JSON 解析分支之前拦才行，
                 # 那种做法漏一次就把整坨 JSON 累积进回复并落库）。Rust 侧同族处理
                 # ——只转发、不累积、不落库。
                 if isinstance(chunk, str) and (chunk.startswith("__PROCESS__")
-                                               or chunk.startswith("__RESET__")
                                                or chunk.startswith("__CONFIRM__")):
                     had_output |= chunk.startswith("__CONFIRM__")
                     frames += 1
@@ -2204,25 +1329,6 @@ async def chat_stream(req: ChatRequest, request: Request):
                         pending_nl = False
                     # JSON 编码避免文本内的 \n\n 破坏 SSE 帧边界
                     yield f"data: {json.dumps(text, ensure_ascii=False)}\n\n"
-                elif isinstance(chunk, ToolMessage) and chunk.content:
-                    text = str(chunk.content)
-                    if text.startswith("NAVIGATE:") or text.startswith("AUTO_NAVIGATE:"):
-                        nav_line = text
-                        had_output = True
-                        frames += 1
-                        # 连发命令帧也要各自独占一行（无叙述间隔时前插换行）
-                        if pending_nl and not text.startswith("\n"):
-                            text = "\n" + text
-                        pending_nl = True
-                        yield f"data: {json.dumps(text, ensure_ascii=False)}\n\n"
-                    elif text.startswith("EFFECT:") or text.startswith("DARKMODE:"):
-                        nav_line = text
-                        had_output = True
-                        frames += 1
-                        if pending_nl and not text.startswith("\n"):
-                            text = "\n" + text
-                        pending_nl = True
-                        yield f"data: {json.dumps(text, ensure_ascii=False)}\n\n"
 
             # 空输出兜底：整轮无任何帧（qwen 偶发空内容）→ 补发人设内恢复语，
             # 前端不会静默无感知（Rust 空回复不存历史、UI 无任何反馈即"卡死"）
