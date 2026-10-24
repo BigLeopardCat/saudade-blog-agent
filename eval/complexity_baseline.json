@@ -168,8 +168,8 @@
     "lines": 359
   },
   "tests/test_settings_surface.py::test_settings_surface": {
-    "c": 37,
-    "lines": 132
+    "c": 31,
+    "lines": 128
   },
   "tests/test_tag_color_tables.py::test_tag_color_tables": {
     "c": 59,

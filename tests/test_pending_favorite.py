@@ -288,7 +288,8 @@ def test_cancellation_api_checks_signed_identity_and_never_calls_a_model(waiting
     token = proposal.execution["pending_confirm"]["token"]
     monkeypatch.setattr(server, "_agent", runtime)
     monkeypatch.setattr(server.settings, "agent_require_assertion", True)
-    monkeypatch.setattr(server, "_verify_assertion_claims", lambda tok: (
+    from agent.api import authentication
+    monkeypatch.setattr(authentication, "verify_assertion_claims", lambda tok: (
         {"uid": 7, "role": "user"} if tok == "fixture" else None))
 
     class Store:

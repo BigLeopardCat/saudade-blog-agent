@@ -184,15 +184,10 @@ def test_side_tasks():
           summarizer.summarize("x", [], "", llm=FakeLLM("")) == "")
     check("模型异常 → 空串（fail-empty，不让失败变成一条摘要）",
           summarizer.summarize("x", [], "", llm=FakeLLM(exc=RuntimeError("boom"))) == "")
-    print("⑦ 接线：server.py 真的在用这两个模块（不是又抄了一份）")
+    # Mounted moderation behavior, usage and failure propagation: test_service_routers.py.
     server_src = (ROOT / "server.py").read_text(encoding="utf-8")
-    check("review_message 转发到 moderator.review，且把用量那一路接上了",
-          "moderator.review(" in server_src and "on_usage=" in server_src)
     check("摘要转发到 agent.summarizer.summarize", "from agent.summarizer import summarize" in server_src
           and "return summarize(user_msg, history, old_summary)" in server_src)
-    check("旧的裸插值 `留言内容：` 已从 server.py 移除", "留言内容：" not in server_src)
-    check("server 仍保留失败日志（异常不静默）",
-          "[review] LLM 调用失败（Rust 侧将转人工待审）" in server_src)
     _ts = _parent_repo.read(
         "src/routes/talks.rs",
         why="上面那句措辞的**事实依据**在 Rust 侧（审核失败到底返回什么）——只改 agent 一侧的"
