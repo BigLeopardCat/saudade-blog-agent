@@ -3,7 +3,6 @@
 import asyncio
 import contextvars
 import functools
-import json
 import logging
 import threading
 import time
@@ -15,21 +14,21 @@ from importlib.metadata import version as _pkg_version
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
-
-# 断言验签（20261020，ADR-0014）。`InvalidTokenError` 是 PyJWT 全部验签失败的基类。
-from jwt import InvalidTokenError
 from langchain_core.messages import AIMessageChunk
 from pydantic import BaseModel, Field
 
 from agent import (
-    checkpoint,  # 采纳（批 7）：造 saver + 会话坐标 + 级联清理
-    confirm,  # 待办令牌：确认准备与执行共用签名验签（见 /chat/stream）
-    runtime_probe,  # /version 与 /ready 的判定逻辑（纯函数，见该模块头注）
+    checkpoint,
+    confirm,
+    runtime_probe,
 )
+from agent.api.authentication import resolve_principal as _resolve_principal
 from agent.api.context import build_messages
 from agent.api.events import control_event, text_stream
 from agent.api.events import frame as sse_frame
 from agent.api.events import response as stream_response
+from agent.api.routes.knowledge_graph import router as knowledge_graph_router
+from agent.api.routes.moderation import router as moderation_router
 from agent.api.schemas import ChatRequest, ChatResponse, HistoryItem
 from agent.api.schemas import QuotaInfo as QuotaInfo
 from agent.approval_api import router as approval_router
@@ -99,15 +98,6 @@ STREAM_QUEUE_WAIT = 3.0         # 秒；排队超过这个时间就如实 503，
 # Python 3.10+ 起 asyncio.Semaphore() 不在构造时绑事件循环，模块级创建是安全的。
 _stream_slots = asyncio.BoundedSemaphore(MAX_CONCURRENT_STREAMS)
 
-# /review 的**独立**小闸（20260925 审计）：它是"外部文本 → 一次 LLM 裁决"，此前不占任何
-# 闸 ⇒ 任何能连到 8010 的进程都能免费烧模型额度。刻意不共用对话那 8 个槽位：留言审核是
-# 同步短任务（上限 25s），与访客对话抢槽位会让留言高峰把对话打成 503。
-# 用 threading 版（`/review` 是 sync def，FastAPI 放线程池里跑，不占事件循环）。
-REVIEW_CONCURRENCY = settings.review_concurrency
-REVIEW_QUEUE_WAIT = 3.0
-_review_slots = threading.BoundedSemaphore(REVIEW_CONCURRENCY)
-
-
 async def _try_acquire_slot() -> bool:
     """拿并发槽位；排队超过 STREAM_QUEUE_WAIT 秒返回 False（调用方回 503，别无声排队）。"""
     try:
@@ -151,51 +141,29 @@ def _build_arm():
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    """Build the runtime after validating settings, then warm optional retrieval services."""
     global _agent
     setup_logging()
     logger.info("Initialising LangChain agent ...")
-    # `LLM_PROVIDER` 的启动校验（20261012）：认不出的服务商名**拒绝启动**，与下面
-    # `_build_arm` 对 `AGENT_ARM` 的处置同款（理由见 `Settings.check_provider` 的注）。
-    # **顺序在这里是有意的**：先校验 provider 再建臂——否则一条臂会先被建起来、再被
-    # 这个错误丢掉，日志里留下一段"看着像建好了"的痕迹。
     from config.settings import settings
     _provider = settings.check_provider()
     logger.info("LLM provider ready (provider=%s)", _provider)
+    # Missing credentials keep liveness available; readiness reports the failure.
     if not settings.is_api_key_configured:
-        # **不拒绝启动**（20261018 批 3）：拒了就是把"配置缺"报成"服务起不来"，而心跳
-        # 探针读的是 `/health` ⇒ 它会把这件事报成"agent 挂了"——又是指错方向。
-        # 正确的形状是：进程活着（`/health` 200）、**明确不可接活**（`/ready` 503）、
-        # 并且在启动日志里就喊一声，而不是等第一条请求 401 才发现。现场依据是 20260927
-        # 那次：`.env` 里换了 key 之后四个端点一律 401，而 `/health` 全程
-        # `agent_ready: true`（故障与探针之间没有交集）。
         logger.warning(
             "LLM 凭据缺失：provider=%s 的 api_key 为空 —— 进程会照常启动，"
             "但每一条对话都会失败（/ready 现在报 missing_credentials）。", _provider)
     _agent, _arm = _build_arm()
     logger.info("Agent ready (arm=%s)", _arm)
-    # 后台预热图谱查询的 embedding 客户端（首次 TLS 建连约 3s，不预热的话
-    # 重启后第一个查询会被上游超时掐掉→静默降级）。不阻塞启动，失败也不影响
+    # Optional warmups do not block startup.
     threading.Thread(target=wordgraph.warm, name="wordgraph-warm", daemon=True).start()
-    # 后台预热 RAG 语料索引：一是首个检索不再吃冷启动延迟，二是文档锚点
-    # 要靠语料把《标题》解析成 id（20260920 方案①）。不阻塞启动，失败只降级。
     rag_search.warm_async()
     yield
     logger.info("Agent shutting down")
 
 
 def _app_version() -> str:
-    """本应用的版本号——**只有 `pyproject.toml` 的 `[project].version` 一个来源**。
-
-    此前这里写死 `version="1.0.0"`，而 `pyproject.toml` 是 `0.2.0`：`/openapi.json`
-    与 `/docs` 上挂着哪个，全看读的是哪一份，而**没有任何东西会发现**。本仓的规矩
-    写在 `tests/test_style_hygiene.py`③——"要用版本就从 pyproject 读"。
-
-    `importlib.metadata` 读的就是安装时从 `pyproject.toml` 写进 dist-info 的那个值，
-    而环境只有 `uv sync` 一个构建入口（改了版本号它会重装）。读不到（裸源码跑、这台
-    机器上没装过这个包）时**如实说 `0.0.0+source`**，不编一个看起来像真的版本号——
-    假版本号比没有版本号更坏，它会让人以为两份对上了。判据：`tests/test_packaging.py`
-    断言它与 `pyproject.toml` 逐字相等。
-    """
+    """Read the installed project version; identify bare source checkouts explicitly."""
     try:
         return _pkg_version("saudade-agent")
     except PackageNotFoundError:
@@ -237,100 +205,9 @@ async def body_limit_middleware(request: Request, call_next):
     return await call_next(request)
 
 
-# ── 服务间身份断言（20260917，外部审计的"高"项）──
-# 问题：agent 的 user_id 直接来自请求体，而 IoT 工具用它签用户 JWT（能操作那个人的
-# 设备）。当前靠"只听回环"兜着——一旦 systemd 改 0.0.0.0 / nginx 误反代 / 本机进程
-# 被攻破，就能伪造任意 user_id。
-# 修法：Rust 用同一个 JWT_SECRET 签一条**短时效的身份断言**（aud=agent，60s）放在
-# `X-Agent-Assertion` 头里，agent 验签通过后**用它覆盖请求体里的 user_id**。
-# 这样边界从"回环"升级成"签名"——直连 agent 的人也伪造不出别人的身份。
-# 滚动上线：`AGENT_REQUIRE_ASSERTION=0`（**显式拨回**才有这一档；20261019 起代码默认已是
-# 1，见 settings 那段注）时缺头只记 WARNING、行为不变；Rust 部署完再打开它，避免把在途请求打成 401。
-_ASSERTION_HEADER = "X-Agent-Assertion"
-_ASSERTION_AUD = "agent"
-
-
-def _verify_user_assertion(token: str) -> int | None:
-    """验 Rust 签的身份断言，返回其中的用户 id；任何一步不成立返回 None。"""
-    claims = _verify_assertion_claims(token)
-    return claims["uid"] if claims else None
-
-
-def _verify_assertion_claims(token: str) -> dict | None:
-    """验签并返回断言的声明（uid + role）；任何一步不成立返回 None。
-
-    role 是 20260920 加的（身份与权限地基：agent 侧要知道"我代表的是谁、他能
-    让我做什么"）。**Rust 还没部署带 role 的断言时这里是 None**，由调用方按
-    "身份不明"处理（agent/authz.py：零权限 + shadow 只记不拦），不做任何默认授予。
-
-    **20261020 起验签交给 PyJWT**（此前是手写 HMAC + base64 + json 拼的）。判据一字
-    未改（签名 / `aud` / `exp` / `sub` 正整数），但手写验签要自己盯住 `alg` 混淆、空签名、
-    边界时钟，而标准库不会替你看 —— 完整的来龙去脉、三处收紧、以及为什么不是审计文档
-    写的 `==3.0.0`，见 `docs/adr/adr-0014-assertion-verify-via-pyjwt.md`。
-
-    ⚠️ **`verify_sub` 必须关掉，这是这次改动唯一的地雷**：Rust
-    `auth_jwt::AssertionClaims.sub` 是 **`i32`**（JSON 数字），PyJWT 的 `decode` 默认
-    `verify_sub=True` ⇒ `InvalidSubjectError`；生产 `AGENT_REQUIRE_ASSERTION=1` ⇒
-    **每一条断言都被拒 ⇒ 全站对话 401**。已有的 `test_hardening.sign_assertion` 签的是
-    **字符串** `sub`、两种设置下都过 ⇒ **抓不到它**；`tests/test_assertion_contract.py`
-    拿 Rust 同形状（数字 sub）的令牌锁住这一条，并带"拨回默认就必须红"的反控。
-    """
-    try:
-        import jwt as _pyjwt
-        secret = settings.jwt_secret or ""
-        if not secret:
-            return None
-        claims = _pyjwt.decode(
-            token, secret, algorithms=["HS256"], audience=_ASSERTION_AUD,
-            # `require`：这三条**必须在场**。旧手写实现里 `exp` 缺席会被
-            # `float(payload.get("exp") or 0) < time.time()` 判成过期（fail-closed），
-            # 这里用 `require` 把同一件事写成显式的。
-            options={"require": ["exp", "sub", "aud"], "verify_sub": False},
-        )
-        uid = int(claims.get("sub") or 0)
-        if uid <= 0:
-            return None
-        role = claims.get("role")
-        return {"uid": uid, "role": str(role) if role else None}
-    except (InvalidTokenError, ValueError, TypeError):
-        # 收窄到这三族（20261019 审计 §1.2 的"异常精细化"，**只在新写的这一处**做，
-        # 不回头批量改存量）：`InvalidTokenError` 是 PyJWT 全部验签失败的基类
-        # （过期 / 错 aud / 缺声明 / 坏签名 / alg 不在白名单），`ValueError`/`TypeError`
-        # 兜 `int(sub)` 与"token 不是 str"这两条。
-        return None
-
-
-def _resolve_principal(request: Request, body_uid: int) -> Principal:
-    """以签名为准解析调用者身份（uid + role），返回显式 principal（见上面注释）。
-
-    身份与权限的地基：把"谁在说话、他能让我做什么"从到达图之前就固定下来。
-    role 只认签名里的（Rust 从 DB 查、不信登录 token 里的旧角色，与
-    middleware.rs 同一条纪律）——**回退信任 body 的分支里 role 恒为 None**，
-    绝不因为"读不到角色"就默认授予任何权限。
-    """
-    from agent.principal import SOURCE_ASSERTION, SOURCE_BODY, Principal
-    from config.settings import settings
-    token = request.headers.get(_ASSERTION_HEADER) or ""
-    claims = _verify_assertion_claims(token) if token else None
-    if claims:
-        if claims["uid"] != body_uid:
-            logger.warning("[auth] 断言覆盖 body.user_id：%s → %s（body 不可信）",
-                           body_uid, claims["uid"])
-        return Principal(uid=claims["uid"], role=claims["role"], source=SOURCE_ASSERTION)
-    if settings.agent_require_assertion:
-        logger.warning("[auth] 缺少/无效身份断言（%s）→ 401", "无头" if not token else "验签失败")
-        raise HTTPException(401, "缺少有效的服务间身份断言")
-    if token:
-        logger.warning("[auth] 身份断言验签失败，回退信任 body.user_id=%s", body_uid)
-    return Principal(uid=body_uid, role=None, source=SOURCE_BODY)
-
-
 app.include_router(approval_router(lambda: _agent, _resolve_principal))
-
-
-def _resolve_user_id(request: Request, body_uid: int) -> int:
-    """uid 版（保留给只关心 uid 的调用方/测试）；语义与 _resolve_principal 一致。"""
-    return _resolve_principal(request, body_uid).uid
+app.include_router(moderation_router)
+app.include_router(knowledge_graph_router)
 
 
 def _build_messages(req: ChatRequest, confirm_grant: dict | None = None) -> list:
@@ -374,12 +251,7 @@ def _run_agent_sync(messages: list, thread_id: str, user_id: int = 0,
 
 
 def _summarize_dialogue(user_msg: str, history: list[HistoryItem], old_summary: str) -> str:
-    """needs_summary 轮的独立对话摘要（与 agent 回复解耦，随图并行执行）。
-
-    实现已收进 `agent/summarizer.py`（20260920）：那里有不信任输入的围栏、输出清洗
-    与 fail-empty 取向，以及 tests/test_side_tasks.py 的回归锁。这里只留一句转发——
-    历史背景（为什么不用"回复末尾顺带输出 SUMMARY"）见该模块头注。
-    """
+    """Generate independent memory from dialogue data; failures preserve the old summary."""
     return summarize(user_msg, history, old_summary)
 
 
@@ -437,7 +309,7 @@ async def chat(req: ChatRequest, request: Request):
 
         # 摘要剥离之后再把导航/特效命令行追加回去，确保命令不被 SUMMARY 截断吞掉
         final_nav = nav_line
-        if final_nav and not final_reply.startswith("NAVIGATE:") and not final_reply.startswith("AUTO_NAVIGATE:"):
+        if final_nav and not final_reply.startswith(("NAVIGATE:", "AUTO_NAVIGATE:")):
             if final_nav.startswith("EFFECT:"):
                 final_reply = final_reply + "\n" + final_nav
             else:
@@ -463,7 +335,8 @@ async def chat(req: ChatRequest, request: Request):
 # ---------------------------------------------------------------------------
 # /chat/stream — SSE 流式（供前端 Live2D 调用）
 # ---------------------------------------------------------------------------
-def _run_agent_stream_to_queue(messages: list, thread_id: str, queue: asyncio.Queue, loop, user_id: int = 0,
+def _run_agent_stream_to_queue(messages: list, thread_id: str, queue: asyncio.Queue, loop,
+                               user_id: int = 0,
                                stop_event: threading.Event | None = None,
                                principal: Principal | None = None,
                                confirm_grant: dict | None = None,
@@ -676,7 +549,8 @@ async def chat_stream(req: ChatRequest, request: Request):
 
         # The shared stop signal fences subsequent operations.
         _submit_with_context(
-            loop, _run_agent_stream_to_queue, messages, thread_id, queue, loop, req.user_id, stop_event,
+            loop, _run_agent_stream_to_queue, messages, thread_id, queue, loop,
+            req.user_id, stop_event,
             principal, grant, req.conversation_id,
             None, "", None, progress.emitter, jobs=jobs,
         )
@@ -754,7 +628,8 @@ async def chat_stream(req: ChatRequest, request: Request):
             # 空输出兜底：整轮无任何帧（qwen 偶发空内容）→ 补发人设内恢复语，
             # 前端不会静默无感知（Rust 空回复不存历史、UI 无任何反馈即"卡死"）
             if not had_output:
-                logger.warning("Chat stream ended with no output (agent produced no text/no command)")
+                logger.warning("Chat stream ended with no output "
+                               "(agent produced no text/no command)")
                 frames += 1
                 progress.mark("reply")
                 yield sse_frame("text", _RECOVERY_SENTENCE)
@@ -807,237 +682,15 @@ async def chat_stream(req: ChatRequest, request: Request):
     return stream_response(managed_stream())
 
 
-# ---------------------------------------------------------------------------
-# /review — 留言 AI 审核（20260905：博客留言板「河灯集」入库前同步调用）
-# ---------------------------------------------------------------------------
-
-
-class ReviewRequest(BaseModel):
-    """AI 审核请求。content = 待审留言文本。
-
-    20260917 加限额（外部审计指出）：此前 `content: str` 无上限——/review 由 Rust
-    的 AI 审核同步调用，一次请求可以顶着 12MB 的整体 body 上限灌进来（模型只取前
-    500 字符，但解析/strip/日志前都要先在内存里过一遍）。留言本身有 2000 字上限，
-    这里给 4000 留一倍余量。（审计说"日志会记录完整 text"不准确：实际是
-    `content=%.60s`，只打 60 字符。）"""
-    content: str = Field(max_length=4000)
-    author: str = Field(default="", max_length=100)
-    # 发起人 uid（20260925 审计 A5 起由 Rust 带上）：只用于身份断言核对与日志留痕。
-    # 缺省 0 = 老调用方（那时只能靠断言本身，或用不了断言时退回"身份不明"）。
-    uid: int = Field(default=0, ge=0)
-
-
-@app.post("/review")
-def review_message(request: Request, req: ReviewRequest):
-    """对一条留言做 pass/flag 一次裁决（qwen 低随机、无思考链、同步、25s 上限）。
-
-    语义：pass = 内容可公开展示；flag = 拦下进待审（是否还需人工放行由 Rust 按
-    manualReviewEnabled 开关决定——本端点只给裁决，不知道站点开关组合）。模型/
-    网络异常直接抛 500（调用方 Rust 侧超时 / 非 200 / 解析失败一律**转人工待审**，
-    不是放行——`talks.rs::board_approved` 的三个失败分支都返回 `(0, None, None)`，
-    即"宁可多一次人工，绝不放行未经审核的内容"。兜底决策在调用方，此处不吞异常，
-    保证 Rust 日志可见性）。
-
-    20260925 审计两处加固：
-    · **身份**：此前这个端点没有任何身份断言，严重度完全押在"8010 只听回环"这一个
-      部署事实上（谁连得上就能免费烧模型额度）。现在与 `/chat` 同款走
-      `_resolve_principal`（同一个开关 `AGENT_REQUIRE_ASSERTION`）。
-      **部署顺序是硬要求**：该开关在生产 .env 里**已经是 1**（不是"以后再打开"）⇒
-      必须先部署 Rust 的 `talks.rs`（它开始随请求发 `X-Agent-Assertion`），
-      再部署这半；顺序反了这条端点会成片 401，每一条留言都转人工待审。
-    · **并发**：`REVIEW_CONCURRENCY` 槽位（默认 4），排队超 3s 如实 503 —— 调用方
-      对这个端点的失败处理是"转人工待审"，不会漏审。
-    """
-    principal = _resolve_principal(request, req.uid)
-    if not _review_slots.acquire(timeout=REVIEW_QUEUE_WAIT):
-        logger.warning("[review] 并发闸已满（%d 槽），排队 %.1fs 未拿到 → 503",
-                       REVIEW_CONCURRENCY, REVIEW_QUEUE_WAIT)
-        raise HTTPException(503, "审核队列已满，请稍后重试")
-    try:
-        from agent import moderator
-        text = (req.content or "").strip()
-        # 实现收进 agent/moderator.py（20260920）：不信任输入（访客正文进围栏）、
-        # 输出白名单、fail-open 取向，以及 tests/test_side_tasks.py 的回归锁。
-        try:
-            # 用量只进日志、**不进响应体**（理由见 `moderator.review` 的 docstring）：
-            # 这条调用没有 trace 上下文，日志是它唯一的出口。此前它一分钱都不记。
-            result = moderator.review(
-                text, on_usage=lambda u: logger.info("[review] 用量 %s", u or {}))
-        except Exception:
-            logger.exception("[review] LLM 调用失败（Rust 侧将转人工待审）")
-            raise
-    finally:
-        _review_slots.release()
-    logger.info("[review] verdict=%s reason=%.60s uid=%s content=%.60s",
-                result["verdict"], result["reason"], principal.uid, text)
-    return result
-
-
-class GraphQueryRequest(BaseModel):
-    """图谱向量检索请求。q = 访客在展示柜里输入的查询串。"""
-    # 前端本来就截到 64 字符（locate.ts QUERY_MAX），这里留一倍余量做上限——
-    # 超长串会白烧一次 embedding 调用（20260916 加固）。
-    q: str = Field(default="", max_length=128)
-    # 发起人 uid（身份断言核对与日志留痕用，与 `/review` 同款）
-    uid: int = Field(default=0, ge=0)
-
-
-@app.post("/graph/query")
-async def graph_query(req: GraphQueryRequest, request: Request):
-    """首页展示柜「文章向量空间」的向量检索：查询串 → 图谱里最近的若干词。
-
-    **可降级端点**：任何失败都返回 HTTP 200 + ok=false（前端据此退回本地关键词
-    匹配），绝不抛 4xx/5xx——这不是 CRUD 资源，404 之类的语义在这里只会让调用方
-    的降级分支更难写。**唯一的例外是身份**：缺断言时 401（见下），调用方
-    `src/routes/graph.rs::graph_query` 对非 2xx 走的就是那条降级分支。
-
-    鉴权（20261020 安全审计 SAU-018）：此前这里写着"鉴权在 Rust 那一层"——
-    那条推理只挡得住浏览器，**挡不住本机进程**（8010 上谁连得上就能白嫖 embedding
-    调用，费用面）。而本仓整套身份断言防的正是这个威胁模型。现在与 `/chat` 同款走
-    `_resolve_principal`（同一个开关 `AGENT_REQUIRE_ASSERTION`）。
-    ⚠️ **部署顺序是硬要求**（同 `/review`）：开关在生产 .env 里已经是 1 ⇒ 父仓的
-    `graph_query` 必须先开始随请求发 `X-Agent-Assertion`，顺序反了展示柜会**静默降级**
-    成关键词匹配（不报错，只是没向量了）。
-
-    跑在线程池里（纯 Python 点积 + 一次阻塞的 HTTP embedding 调用），并显式传播
-    context 以便日志带上 tid。
-    """
-    # 返回值这里用不到（本端点只判"是不是可信的内部调用"，不做权限判定），
-    # 但**必须调用**——它才是那道闸；缺断言时它抛 401。
-    _resolve_principal(request, req.uid)
-    loop = asyncio.get_running_loop()
-    return await _submit_with_context(loop, wordgraph.query_words,
-                                      req.q, wordgraph.TOP_K_DEFAULT)
-
-
-# ---------------------------------------------------------------------------
-# /graph/rebuild* — 向量图谱重建任务（20261003 用户第 2 条）
-# ---------------------------------------------------------------------------
-#
-# 三个端点：起任务 / 查状态 / 取消。**身份走既有的身份断言，权限走 authz 的
-# `admin.console`**（与后台报表族同一道门）。`admin.console` 在 `_HARD_SCOPES` 里
-# ⇒ `enforcing()` 对它恒 True，不吃 shadow 开关：这道闸不是灰度中的新能力，而是
-# "只有管理员能重建整站图谱"这一条结论。
-#
-# 为什么判据是 `authz.holds` 而不是 `check(principal, tool)`：见 `holds` 的 docstring
-# （工具表必须与工具注册表一一对应，端点级能力不往里塞假工具名）。
-
-
-class GraphRebuildRequest(BaseModel):
-    """重建参数。字段名与 `rag/graph_build.py::resolve_params` 的白名单一一对应
-    ——**多传的字段会被忽略、不该存在的东西由那边的白名单挡**（表单是外部输入，
-    不直接拼 argv）。
-
-    `exclude_ids` 的三态是有意的：`None` = 没填 ⇒ 用脚本自己的默认排除；
-    `""` = 明确"一个都不排除"；`"9,10"` = 点名排除。三者的语义在
-    `resolve_exclude_ids` 里各有一条回归锁（20261003 修的静默 bug 就在这）。
-    """
-
-    mode: str = Field(default="rebuild")          # rebuild | precheck
-    api_base: str = Field(default="", max_length=200)
-    # 产物归属站点：后台页面传**浏览器自己的 origin**（缺省时前端会填），
-    # 见 rag/graph_build.py 头注——从 api_base 推会推出 127.0.0.1。
-    site: str = Field(default="", max_length=200)
-    max_nodes: int | None = None
-    min_chars: int | None = None
-    exclude_ids: str | None = None
-    layout: str = Field(default="")
-    refresh: bool = False
-    force: bool = False
-    dry_run: bool = False
-    # 发起人 uid（身份断言核对与日志留痕用，与 /review 同款）
-    uid: int = Field(default=0, ge=0)
-
-
-def _require_console(request: Request, uid: int) -> Principal:
-    """后台端点共用的一道门：身份由断言定，权限由 `admin.console` 定。
-
-    403（不是 200+ok=false）：权限失败与"忙/内存不够"是两类事——前者是这个人不行，
-    后者是这台机器此刻不行。混成同一个返回体，前端就只能靠 reason 字符串猜，而
-    上游 Rust 日志里也看不出"有人在试探后台接口"。
-    """
-    from agent import authz
-    principal = _resolve_principal(request, uid)
-    if not authz.holds(principal, authz.SCOPE_ADMIN_CONSOLE):
-        logger.warning("[graph] 拒绝后台建图请求：%s（需要 %s）",
-                       principal, authz.SCOPE_ADMIN_CONSOLE)
-        raise HTTPException(403, "需要管理员权限")
-    return principal
-
-
-@app.post("/graph/rebuild")
-async def graph_rebuild(request: Request, req: GraphRebuildRequest):
-    """起一次重建 / 环境预检。**非阻塞**：起完立刻返回，进度靠 `/graph/rebuild/status` 轮。
-
-    返回体 `{ok, reason?, error?, run_id?, state?}`——
-    `ok=false` 的三种拒因（busy / low_memory / uv_missing）各自要不同的处置建议，
-    所以 reason 是给页面分支用的、error 是给人看的原话。
-    """
-    from rag import graph_build
-    _require_console(request, req.uid)
-    params = req.model_dump(exclude={"uid", "mode"})
-    loop = asyncio.get_running_loop()
-    res = await _submit_with_context(loop, graph_build.start, params, req.mode)
-    if not res.get("ok"):
-        logger.info("[graph] 起任务被拒：mode=%s reason=%s", req.mode, res.get("reason"))
-    return res
-
-
-@app.get("/graph/rebuild/status")
-async def graph_rebuild_status(request: Request, uid: int = 0):
-    """当前任务状态（含日志尾部与最后一次成功的摘要）。pages 每 ~1.5s 轮一次。"""
-    from rag import graph_build
-    _require_console(request, uid)
-    loop = asyncio.get_running_loop()
-    return await _submit_with_context(loop, graph_build.status)
-
-
-@app.post("/graph/rebuild/cancel")
-async def graph_rebuild_cancel(request: Request, req: GraphRebuildRequest):
-    """取消当前任务（SIGTERM 整个进程组 → 宽限期后 SIGKILL）。
-
-    **取消可能落在另一个 worker 上**（起任务的是 A、点取消的请求被 nginx 派给 B），
-    所以它一切从盘上的 state/lock 取，不看内存——见 `rag/graph_build.cancel`。
-    """
-    from rag import graph_build
-    _require_console(request, req.uid)
-    loop = asyncio.get_running_loop()
-    return await _submit_with_context(loop, graph_build.cancel)
-
-
 @app.get("/health")
 async def health():
-    """存活探针 + **这一进程实际在跑的档位**（20260929 补 dials）。
-
-    为什么要多这一块：`/health` 此前只回 `agent_ready`，于是"线上到底跑的哪一档"
-    这件事**只能靠读 `.env` 去推**。而这个仓库吃过两次亏，形状一模一样——
-      · 20260927 那次 provider 中断：`.env` 里换 key/端点之后**新键四个端点一律 401**，
-        而 `/health` 照旧 `agent_ready: true`、一开口就错（故障与探针之间没有交集）；
-      · `agent_task_state` 这类开关：判据（离线套件）跑的是**钉住的够档**，而线上读的是
-        `.env`；「能力有测试 ≠ 接线有测试」——接线有测试也 ≠ **这个进程真的加载了它**。
-    这两件事的解药是同一个：把**这个进程的内存取值**暴露出来，而不是让下一个人去读文件
-    再假设它被加载了。所以这块是**回显本进程的 settings**，不是重新解析 `.env`。
-
-    只回**档位名**（引擎/模型名/布尔），**绝不回任何 key、URL 或密钥**——本端口只绑
-    127.0.0.1（见文件末尾 uvicorn.run），nginx 也不反代它，故不构成对外信息面。
-    父仓 `scripts/healthcheck.sh` 按 `"agent_ready":true` 子串判活，多这几个键不影响它。
-    """
+    """Report liveness and in-process configuration without credentials or service URLs."""
     from config.settings import settings
-    # 模型名走**派生属性**（已按 provider 解析过），但**不许让认不出的 provider 把本接口
-    # 打成 500**：/health 是存活权威（心跳探针每分钟读它、部署落地后的存活探测也读它），
-    # 一个 `LLM_PROVIDER` 的拼写错误会让探针报"agent 挂了"——那是**指错方向**的告警
-    # （真故障是配置写错，不是进程死了）。所以这里降级成一句自证的字符串，照旧 200。
-    # 余下几项是普通字段，取不到就是空串/False（同 fail-open 取向）。
+    # Diagnostics must stay available when configuration or the index is unavailable.
     try:
         _model = settings.active_llm_model
     except Exception:                               # noqa: BLE001
         _model = f"<认不出 provider={getattr(settings, 'llm_provider', '')!r}>"
-    # 向量路的四格（20261005）：**开关开着 ≠ 真的在融合**——它还要凭据齐、盘上有索引、
-    # 且索引与这批语料对齐。这几件事各自会在别的 worker、别的时间变，只有回**本进程
-    # 实际取到的状态**才算数（同这一块的立项理由）。取不到就不猜：按"没在跑"报，
-    # 但开关那一格照 settings 回，免得把一个坏掉的盘点成"开关没开"。
-    # `rag_state` 是给前两格兜底的一句话：`enabled=true / active=false / missing=0`
-    # 这个组合（开关已开、首建还在跑）自己读不出病因——现场实证见 route_status 的注。
     try:
         from rag.vector_index import route_status
         _rag = route_status()
@@ -1048,26 +701,17 @@ async def health():
     return {
         "status": "ok",
         "agent_ready": _agent is not None,
-        # 这一进程真正生效的档位（回的是**内存里的取值**，不是 env 原文）。
         "dials": {
             "agent_arm": runtime_probe.arm_name(_agent),
             "planner_native_thinking": False,
-            # Legacy health keys remain for clients; neither feature runs in NativeRuntime.
             "agent_fastpath": False,
             "llm_provider": getattr(settings, "llm_provider", ""),
             "llm_model": _model,
-            # 只回档位名与计数，**不回 model/key/URL**（这一块的纪律见上面那段注）。
             "rag_hybrid_enabled": bool(_rag["enabled"]),
             "rag_hybrid_active": bool(_rag["active"]),
             "rag_state": str(_rag.get("state") or "unknown"),
             "vector_missing": int(_rag["missing"]),
-            # 这个进程挂没挂 saver（五档取值与理由见 `agent/runtime_probe.checkpoint_backend`）。
-            # **读的是 `_agent` 这个活体对象，不是 `CHECKPOINT_DSN`**——配了 DSN 而图没挂
-            # 上 saver 时读配置会报成"挂了"，那是本仓最贵的一类失效。
             "checkpoint_backend": runtime_probe.checkpoint_backend(_agent),
-            # `CHECKPOINT_DSN` 指到哪个库（**只回库名**）。本块**唯一一格读配置的**，
-            # 与上面那格合起来才读得通；存在理由 = 把"指错库"变成一眼可见
-            # （理由与硬闸见 `agent/runtime_probe.checkpoint_db`）。
             "checkpoint_db": runtime_probe.checkpoint_db(settings.checkpoint_dsn),
         },
     }
@@ -1091,32 +735,14 @@ async def checkpoint_delete(conversation_id: str, request: Request, uid: int = 0
 
 
 class DropTurnReq(BaseModel):
-    """`text` = 被丢弃那一轮的**原文**（父仓手里有那一行的 content，一律会带上）。
-
-    空串不算填：没有原文就没法确认"state 里最后那条 user 是不是被丢弃的那一轮"，
-    而摘错的代价不可逆 ⇒ 不动手、`why` 回 `no_text`（理由与匹配规则见
-    `agent/checkpoint.py::drop_last_user_turn`）。
-
-    `uid` = 发起人（**身份断言核对与日志留痕用**，与 `/graph/rebuild` 同款）：
-    身份以签名为准，这一格只是"调用方说他是谁"，对不上会在 `_resolve_principal`
-    里记一条 WARNING。
-    """
+    """Original discarded user text and untrusted caller ID; empty text never deletes a turn."""
     text: str = ""
     uid: int = Field(default=0, ge=0)
 
 
 @app.post("/checkpoint/{conversation_id}/drop_turn")
 async def checkpoint_drop_turn(conversation_id: str, req: DropTurnReq, request: Request):
-    """把**丢弃那一轮**同步到图自己的 state（批 E 的跨仓契约之一半）。
-
-    父仓 `POST /api/chat/discard` 删的是 `chat_history` 里那一轮，而 20261018 之后 agent
-    的上下文**由图自持**（历史注入已关）⇒ DB 不再是上下文来源，「丢弃」对 agent 不再生效。
-    **另一半在父仓** `src/routes/chat.rs::discard_handler`（删除成功之后调它）。
-
-    `dropped` 恒是**读回来确认**的结果；`false` 时 `why` 点名是哪一条（`no_text` /
-    `mismatch` 都**不是错误**——它们是"没动手"的如实回执）。三支照 `checkpoint_delete`
-    （含身份那一格：同一次审计的 SAU-006）。
-    """
+    """Remove only the matching last user turn and verify the resulting checkpoint."""
     principal = _resolve_principal(request, req.uid)
     out = await checkpoint.drop_last_user_turn(_agent, conversation_id, req.text)
     logger.info("[checkpoint] 丢弃那一轮 conv=%s dropped=%s why=%s by=%s",
@@ -1126,27 +752,13 @@ async def checkpoint_drop_turn(conversation_id: str, req: DropTurnReq, request: 
 
 @app.get("/version")
 async def version():
-    """**构建身份**：这是哪一版、什么时候起的、跑在哪个解释器上（20261018 批 3）。
-
-    本仓与父仓的部署纪律是「**push ≠ 部署、生效须 restart**」，而"线上跑的是哪一版"
-    在 agent 侧此前**没有任何出口**——父仓写 `frontend/dist/build-info.json`
-    （`curl /build-info.json` 即知线上跑的是哪个提交），agent 侧只能靠读 `.env` 与提交
-    历史去推。**只放静态构建身份、不回显活体档位**（理由与取值三档见
-    `agent/runtime_probe.version_payload`）。判据：`tests/test_version.py`。
-    """
+    """Report immutable build identity separately from live configuration."""
     return runtime_probe.version_payload(_app_version())
 
 
 @app.get("/ready")
 async def ready():
-    """就绪探针：**能不能真的接一轮对话**——与 `/health` 的"进程活没活"是两件事。
-
-    三条硬依赖与词表见 `agent/runtime_probe.ready_payload`；这里只做接线（取 `_agent` 与
-    `settings`）。⚠️ **它现在是建议性的**：没有任何探针在读它（父仓
-    `scripts/healthcheck.sh` 读的是 `/health`），把它接进探针是父仓那侧的活。
-    判据：`tests/test_ready.py`——三种缺失各判一遍，每一遍都配一条"同一条件下
-    `/health` 仍然 200"（两者同时红同时绿就说明这个端点是装饰）。
-    """
+    """Report runtime and credential readiness without making a model request."""
     from config.settings import settings
     code, body = runtime_probe.ready_payload(_agent, settings)
     return JSONResponse(body, status_code=code)

@@ -125,14 +125,14 @@ def test_rust_shaped_numeric_sub_is_accepted():
     """
     import jwt as pyjwt
 
-    import server
+    from agent.api import authentication
 
     bad: list[str] = []
     print("① Rust 同形状（数字 sub）必须通过")
     orig = _stub()
     try:
         tok = rust_assertion(sub=7, role="admin")
-        claims = server._verify_assertion_claims(tok)
+        claims = authentication.verify_assertion_claims(tok)
         ok = claims == {"uid": 7, "role": "admin"}
         print(f"  {'✅' if ok else '❌'} 数字 sub + role ⇒ 收下  [{claims}]")
         if not ok:
@@ -210,7 +210,7 @@ _EXP_BOUNDARY_NOTE = "exp 恰好等于 now 这一格实测不可观测（见上�
 
 def test_new_and_old_agree_case_by_case():
     """② 逐例同判：新实现与旧手写实现结论一致（除了 `_TIGHTENED` 里那两格）。"""
-    import server
+    from agent.api import authentication
 
     bad: list[str] = []
     print("② 新旧逐例同判")
@@ -218,7 +218,7 @@ def test_new_and_old_agree_case_by_case():
     try:
         for name, make, want in _CASES:
             tok = make(FIXTURE_KEY)
-            new = server._verify_assertion_claims(tok)
+            new = authentication.verify_assertion_claims(tok)
             old = _old_verify(tok)
             new_uid = new["uid"] if new else None
             old_uid = old["uid"] if old else None
@@ -229,7 +229,7 @@ def test_new_and_old_agree_case_by_case():
         # 空密钥：两边都必须 fail-closed（这一格不放进表里，因为它要换密钥而不是换令牌）
         _stub(EMPTY_KEY)
         tok = rust_assertion()
-        new, old = server._verify_assertion_claims(tok), _old_verify(tok, secret=EMPTY_KEY)
+        new, old = authentication.verify_assertion_claims(tok), _old_verify(tok, secret=EMPTY_KEY)
         ok = new is None and old is None
         print(f"  {'✅' if ok else '❌'} 空密钥 ⇒ 两边都 fail-closed  [新={new} 旧={old}]")
         if not ok:
@@ -247,7 +247,7 @@ def test_tightenings_are_deliberate():
     判据的形状：新实现**拒**、旧实现**放**。哪天有人把 PyJWT 的选项放宽到把它们也放行，
     这一条会红 —— 那时要么承认收紧没了，要么改这里并说清为什么。
     """
-    import server
+    from agent.api import authentication
 
     bad: list[str] = []
     print("③ 两处收紧：新拒 / 旧放")
@@ -260,7 +260,7 @@ def test_tightenings_are_deliberate():
                          header={"alg": "none", "typ": "JWT"})
         for name, tok in (("头部 RS256 + 合法 HS256 签名", rs256),
                           ("头部 alg:none + 合法 HS256 签名", none_hdr)):
-            new = server._verify_assertion_claims(tok)
+            new = authentication.verify_assertion_claims(tok)
             old = _old_verify(tok)
             ok = new is None and old is not None
             print(f"  {'✅' if ok else '❌'} {name}：新={'拒' if new is None else '放'} / "

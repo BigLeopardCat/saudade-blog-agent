@@ -269,23 +269,7 @@ def test_graph_build():
     check("真有新增时取最后一行（多轮重跑只报最新那次）",
           gb._embed_stats(["embedding 新增 5 条（缓存命中 1 条）",
                            "embedding 新增 3 条（缓存命中 9 条）"]) == (3, 9))
-    print("\n⑤ 端点：三件都挂在 admin.console 那道门上")
-    src = (ROOT / "server.py").read_text(encoding="utf-8")
-    routes = [l.strip() for l in src.splitlines()
-              if l.strip().startswith('@app.post("/graph/rebuild')
-              or l.strip().startswith('@app.get("/graph/rebuild')]
-    check("起任务 / 查状态 / 取消三个端点都在（多一个少一个都会静默）",
-          routes == ['@app.post("/graph/rebuild")', '@app.get("/graph/rebuild/status")',
-                     '@app.post("/graph/rebuild/cancel")'], routes)
-    check("权限判据是 authz.holds + admin.console（不是自己写 role == 'admin'）",
-          "authz.holds(principal, authz.SCOPE_ADMIN_CONSOLE)" in src)
-    check("身份走既有的身份断言（_resolve_principal），不新开一套鉴权",
-          "principal = _resolve_principal(request, uid)" in src)
-    check("拒绝是 403，不是 200+ok=false（权限失败与『忙/内存不够』必须分得开）",
-          'raise HTTPException(403, "需要管理员权限")' in src)
-    check("端点把活交给线程池（起任务/取消都是阻塞调用，不能占事件循环）",
-          src.count("_submit_with_context(loop, graph_build.") == 3,
-          src.count("_submit_with_context(loop, graph_build."))
+    # Endpoint authentication, permissions and worker dispatch: test_service_routers.py.
     gbsrc = (ROOT / "rag" / "graph_build.py").read_text(encoding="utf-8")
     check("四个 worker 之间靠文件锁（O_CREAT|O_EXCL），不靠内存里那把锁",
           "os.O_CREAT | os.O_EXCL" in gbsrc)
