@@ -84,6 +84,16 @@ def _consumer_index(fields: list[str], root: pathlib.Path = ROOT) -> dict[str, l
     return hits
 
 
+def _constant_assignments(*sources: str) -> dict[str, ast.expr]:
+    assignments = {}
+    for source in sources:
+        for node in ast.parse(source).body:
+            if (isinstance(node, ast.Assign) and len(node.targets) == 1
+                    and isinstance(node.targets[0], ast.Name)):
+                assignments[node.targets[0].id] = node.value
+    return assignments
+
+
 def test_settings_surface():
     src = SETTINGS.read_text(encoding="utf-8")
     fields = sorted(set(_FIELD_RE.findall(src)))
@@ -159,12 +169,8 @@ def test_settings_surface():
     }
 
     server_src = (ROOT / "server.py").read_text(encoding="utf-8")
-    _assigns: dict[str, ast.expr] = {}
-    for n in ast.parse(server_src).body:
-        if (isinstance(n, ast.Assign) and len(n.targets) == 1
-                and isinstance(n.targets[0], ast.Name) and n.targets[0].id in _SIX):
-            _assigns[n.targets[0].id] = n.value
-
+    moderation_src = (ROOT / "agent/api/routes/moderation.py").read_text(encoding="utf-8")
+    _assigns = _constant_assignments(server_src, moderation_src)
 
     def _wired_to_settings(node: ast.expr, field: str) -> bool:
         return (isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name)
@@ -173,9 +179,9 @@ def test_settings_surface():
 
     _unwired = [c for c, f in _SIX.items()
                 if not _wired_to_settings(_assigns.get(c, ast.Pass()), f)]
-    check("六个常量都在 server.py 模块级赋值，右值逐个是 settings.<同名字段>",
-          len(_assigns) == 6 and not _unwired,
-          f"{len(_assigns)}/6 赋值；未单轨：{'、'.join(_unwired) or '无'}")
+    check("六个常量在所属 HTTP 模块从 settings.<同名字段> 取值",
+          not _unwired,
+          f"未单轨：{'、'.join(_unwired) or '无'}")
     check("server.py 里 os.environ 清零（直读进程环境就是第二轨长回来的地方；"
           "将来真有正当用途时再来改这条判据——红着比悄悄漏掉好）",
           "os.environ" not in server_src)

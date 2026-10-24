@@ -37,6 +37,10 @@ flowchart LR
 │   ├── adminops_target.py                               # 当前生产代码模块
 │   ├── adminops_todo.py                                 # 当前生产代码模块
 │   ├── api/__init__.py                                  # HTTP 适配包，不执行应用初始化
+│   ├── api/authentication.py                            # 宿主身份断言与端点权限
+│   ├── api/routes/__init__.py                           # HTTP 路由包
+│   ├── api/routes/moderation.py                         # 独立审核准入与接口
+│   ├── api/routes/knowledge_graph.py                    # 图谱查询及后台建图接口
 │   ├── api/context.py                                   # 请求到标准消息的适配与历史回放
 │   ├── api/host_context.py                              # 有界宿主事实与历史任务投影
 │   ├── api/events.py                                    # 具名 SSE 编码和响应头
