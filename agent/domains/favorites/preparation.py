@@ -6,7 +6,7 @@ from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import tool
 from pydantic import Field, StrictInt
 
-from agent import adminops_confirm, authz
+from agent import authz
 from agent.adminops_target import normalize_target_id
 from agent.runtime.confirmation import proposal
 from agent.runtime.results import TurnResult
@@ -39,8 +39,11 @@ def _target(article_id, favorite):
 
 
 def _confirmation(principal, cid, workflow, spec, target):
-    specs, notes = [spec], {spec["args"]["article_id"]: target}
-    action = adminops_confirm.render_action_lines(specs, notes=notes)
+    article_id = spec["args"]["article_id"]
+    title = str(target.get("noteTitle") or "").strip()
+    where = f"《{title[:36]}》" if title else ""
+    action = ("收藏文章" if spec["tool"] == "add_favorite" else "取消收藏文章")
+    action += f" {article_id}{where}"
     return proposal(principal, cid, workflow, spec, executor="favorites",
                     question=f"要{action}吗？", target=action)
 
