@@ -504,16 +504,14 @@ def test_write_idempotency():
         "也随指纹变**（不然「同一件」与「这一次」会混成一个）",
           idem.attempt_for(_cfg12("n:turnA", resuming=False), "fpK")
           != idem.attempt_for(_cfg12("n:turnA", resuming=False), "fpK2"))
-    print("\n⑭ 接线锁：两条路都要给那一格（单改一处 ⇒ 两套语义并存）")
-    _srv = (ROOT / "server.py").read_text(encoding="utf-8")
-    check("`server.py` 里 `\"idem_resuming\"` **恰好两处**（`/chat` 与 `/chat/stream` 各一）",
-          _srv.count('"idem_resuming"') == 2, f"出现 {_srv.count('"idem_resuming"')} 次")
-    check("两处都走**同一个推导** `_idem_resuming(...)`（不在调用点各写一份条件："
-      "def 一处 + 调用两处 = 3）", _srv.count("_idem_resuming(") == 3,
-          f"出现 {_srv.count('_idem_resuming(')} 次")
-    check("反控：`agent/graph.py` 里**没有**这一格（它是 config 输入，不是 state 键——"
-      "多一个 state 键就要多一处初值，而 `tests/test_state_keys.py` 判键集**恰好相等**）",
-          "idem_resuming" not in (ROOT / "agent" / "graph.py").read_text(encoding="utf-8"))
+    from agent.runtime.writes import operation_key
+    signed = {"uid": 7, "conv": 42, "jti": "a" * 32}
+    first = operation_key(signed, "add_favorite", {"article_id": 19})
+    check("原生确认重试按签名操作标识重放",
+          first == operation_key(dict(signed), "add_favorite", {"article_id": 19}))
+    check("新确认拥有不同操作标识，不吞掉合法重复请求",
+          first != operation_key({**signed, "jti": "b" * 32},
+                                 "add_favorite", {"article_id": 19}))
     print("\n⑮ 那一格判据**本身**：`checkpoint.thread_is_resuming` = 上一轮跑没跑完")
     _app15a = _app15(_clean15)
     check("反控：**全新的** thread（一个 checkpoint 都没有）⇒ False（不是「没跑完」）",

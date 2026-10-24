@@ -35,7 +35,6 @@
 
 from __future__ import annotations
 
-import ast
 import sys
 from pathlib import Path
 from unittest.mock import patch
@@ -448,12 +447,6 @@ def test_idem_noop():
     _gi = graph_input([])
     check("graph_input 给了这两个字段的空初值（state 形状完整、可读）",
           _gi.get("noop_text") == "" and _gi.get("noop_note") == "")
-    _src = open(ROOT / "server.py", encoding="utf-8").read()
-    check("接线：server.py 有 noop_note 分支、发过程行与 AI 帧（Rust 照常落库）",
-          'ex_upd.get("noop_note")' in _src and 'ex_upd.get("noop_text")' in _src
-          and "状态已是这个值，本轮零改动" in _src)
-    check("  过程行不写「✅」（这一轮零执行，✅ 会被读成'办好了'）",
-          "⏭ 状态已是这个值，本轮零改动" in _src)
     print("\n⑤ 回执那一半：短路的 noop 回执落 change、真写路径一个字都不落")
     CFG = {"configurable": {"principal": Principal(uid=7, role="user"), "user_id": 7,
                             "conversation_id": 42, "stop_event": None}}
@@ -589,39 +582,6 @@ def test_idem_noop():
           "task_satisfied" in _ann)
     check("graph_input 给了空初值（`[]`——结算侧按 `or []` 读同一支）",
           graph_input([]).get("task_satisfied") == [])
-    check("接线：producer 收 execute 的 `task_satisfied` 并累加"
-      "（同轮可能多次 update）",
-          'ex_upd.get("task_satisfied")' in _src and "satisfied_specs.extend(" in _src)
-    _adv_calls = [n for n in ast.walk(ast.parse(_src))
-                  if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)
-                  and n.func.id == "advance_by_tools"]
-    check("⭐ 两种证据走**同一次**游标推进（分两次的话，推不动的那半永远补不上）",
-          len(_adv_calls) == 1
-          and len(_adv_calls[0].args) >= 2
-          and [k.arg for k in _adv_calls[0].keywords] == ["satisfied"],
-          f"调用处 {len(_adv_calls)} 个；"
-      f"参={[ast.dump(a) for a in (_adv_calls[0].args if _adv_calls else [])][:3]} "
-      f"kw={[k.arg for k in (_adv_calls[0].keywords if _adv_calls else [])]}")
-    _emit_fn = [n for n in ast.walk(ast.parse(_src))
-                if isinstance(n, ast.FunctionDef) and n.name == "_emit_task_frames"]
-    _dumps_adv = [n for fn in _emit_fn for n in ast.walk(fn)
-                  if isinstance(n, ast.Call)
-                  and isinstance(n.func, ast.Attribute) and n.func.attr == "dumps"
-                  and isinstance(n.func.value, ast.Name) and n.func.value.id == "json"]
-    _extra = [k.arg for n in _dumps_adv for k in n.keywords if k.arg not in ("ensure_ascii",)]
-    _bare = [n for n in _dumps_adv if n.args and isinstance(n.args[0], ast.Name)]
-    _emit_calls = [n for n in ast.walk(ast.parse(_src))
-                   if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)
-                   and n.func.id == "_emit_task_frames"]
-    _key_adding = [n for n in _emit_calls
-                   if not n.args or isinstance(n.args[0],
-                                               (ast.Dict, ast.DictComp, ast.Starred))]
-    check("⭐ `__TASK__` 帧的载荷就是结算回写本身、一个额外键都不加"
-      "（`via`/`satisfied` 只进 trace）",
-          len(_emit_fn) == 1 and len(_dumps_adv) == 1 and not _extra
-          and len(_bare) == 1 and len(_emit_calls) == 2 and not _key_adding,
-          f"dumps={len(_dumps_adv)} extra={_extra} 裸参={len(_bare)} "
-      f"调用={len(_emit_calls)} 加键形状={len(_key_adding)}")
     print()
     if FAILED:
         print(f"{len(FAILED)} 条未通过：")

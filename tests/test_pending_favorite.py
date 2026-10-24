@@ -184,6 +184,8 @@ def test_storage_failure_emits_no_cancellation_and_old_card_still_cannot_write(
 def test_stream_cancels_host_pending_and_routes_revoked_card_after_runtime_switch(
         waiting, monkeypatch, site):
     import server
+    from agent.runtime.native import NativeRuntime
+    from agent.runtime.native_store import NativeConversationStore
 
     graph, proposal, ledger = waiting
     monkeypatch.setattr("agent.runtime.hybrid.get_llm",
@@ -215,7 +217,9 @@ def test_stream_cancels_host_pending_and_routes_revoked_card_after_runtime_switc
                 return connection.finish(*args)
 
     monkeypatch.setattr(writes, "ledger_for", lambda saver: Store())
-    frames = asyncio.run(collect(HybridArm(graph)))
+    frames = asyncio.run(collect(NativeRuntime(
+        NativeConversationStore(graph.checkpointer),
+        model_factory=lambda **_: Model("cancel_pending_operation"))))
     controls = [json.loads(frame.removeprefix("__PENDING__:")) for frame in frames
                 if isinstance(frame, str) and frame.startswith("__PENDING__:")]
     assert controls == [{"event": "cancelled", "task_id": proposal.execution[
@@ -223,7 +227,8 @@ def test_stream_cancels_host_pending_and_routes_revoked_card_after_runtime_switc
     grant = confirm.verify(proposal.execution["pending_confirm"]["token"], 7, 42)
     assert grant["executor"] == "favorites"
     # The raw graph's stream deliberately fails; the signed executor must take over.
-    replay = asyncio.run(collect(graph, grant))
+    replay = asyncio.run(collect(NativeRuntime(
+        NativeConversationStore(graph.checkpointer)), grant))
     assert any("撤销" in str(frame.content) for frame in replay
                if isinstance(frame, AIMessageChunk))
     assert not any(str(frame).startswith("__EXEC__:") for frame in replay)
