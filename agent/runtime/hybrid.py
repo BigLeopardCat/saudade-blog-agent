@@ -144,19 +144,34 @@ class HybridArm:
             yield from self.legacy.stream(state, config, stream_mode=stream_mode,
                                           **kwargs)
             return
-        # This arm buffers the final answer. Nonstreaming responses preserve
-        # provider-specific assistant metadata needed when replaying tool calls.
-        model = get_llm(enable_thinking=False, streaming=False, max_tokens=768)
+        yield from self._native_stream(
+            state, config, prompt, own_enabled, domains, pending, snapshot, saver,
+            stream_mode=stream_mode, **kwargs)
+
+    def _native_stream(self, state, config, prompt, own_enabled, domains, pending, snapshot, saver,
+                       *, stream_mode=None, **kwargs):
+        """Stream native model chunks, then persist one completed visible reply."""
+        model = get_llm(enable_thinking=False, streaming=True, max_tokens=768)
         adapt = partial(pending.transition, config=config, saver=saver) if pending else None
-        session = ToolSession(model, config, self._initial_tools(own_enabled), domains,
-                              adapt)
-        outcome = session.run(prompt)
+        session = ToolSession(model, config, self._initial_tools(own_enabled), domains, adapt)
+        streamed_reply = False
+        native_stream = session.stream(prompt)
+        while True:
+            try:
+                chunk = next(native_stream)
+            except StopIteration as stop:
+                outcome = stop.value
+                break
+            if session.used_stream_api:
+                streamed_reply |= bool(str(getattr(chunk, "content", "") or "").strip())
+            if session.used_stream_api and getattr(chunk, "content", None):
+                yield "messages", (chunk, {"langgraph_node": "model"})
         if outcome is None:
             yield from self.legacy.stream(state, config, stream_mode=stream_mode, **kwargs)
             return
         retained = snapshot.pending if pending else None
         yield from self._finish(state, config, outcome.reply, outcome.execution, retained,
-                                session.observations)
+                                session.observations, streamed_reply=streamed_reply)
 
     def _initial_tools(self, own_enabled):
         tools = dict(self.read_tools)
@@ -185,13 +200,16 @@ class HybridArm:
             domains["pending"] = {cancel.name: cancel}
         return domains
 
-    def _finish(self, state, config, reply, execution=None, retained=None, observations=()):
+    def _finish(self, state, config, reply, execution=None, retained=None, observations=(),
+                *, streamed_reply=False):
         self.store.save_turn(config, state.get("messages") or [], reply,
                              observations=observations, execution=execution, pending=retained)
         if execution is not None:
             yield "updates", {"execute": execution}
         record("hybrid", "direct_reply", chars=len(reply))
-        if not execution or not (execution.get("pending_confirm") or execution.get("noop_note")):
+        terminal_card = execution and (execution.get("pending_confirm") or
+                                       execution.get("noop_note"))
+        if not streamed_reply and not terminal_card:
             yield "messages", (AIMessageChunk(content=reply), {"langgraph_node": "model"})
         yield "updates", {"model": {"messages": [AIMessage(content=reply)]}}
         yield "updates", {"gate": {"done": True}}

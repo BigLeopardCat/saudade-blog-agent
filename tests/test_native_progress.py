@@ -166,6 +166,65 @@ def test_real_sse_progress_precedes_blocked_tool_and_first_reply(monkeypatch):
     asyncio.run(scenario())
 
 
+def test_real_sse_native_answer_chunk_arrives_before_provider_stream_ends(monkeypatch):
+    import asyncio
+    import json
+
+    from langchain_core.messages import AIMessage, AIMessageChunk
+
+    entered, release = threading.Event(), threading.Event()
+    events = []
+
+    class StreamingModel:
+        max_tokens = 64
+
+        def bind_tools(self, tools, **kwargs):
+            return self
+
+        def stream(self, prompt, **kwargs):
+            yield AIMessageChunk(content="首段正文")
+            entered.set()
+            assert release.wait(2)
+            yield AIMessageChunk(content="后段正文")
+
+    class Runtime:
+        def stream(self, state, config, **kwargs):
+            session = ToolSession(StreamingModel(), config, {}, {})
+            runner = session.stream([HumanMessage(content="回答")])
+            chunks = []
+            while True:
+                try:
+                    chunk = next(runner)
+                except StopIteration as stop:
+                    outcome = stop.value
+                    break
+                chunks.append(chunk)
+                if chunk.content:
+                    yield "messages", (chunk, {"langgraph_node": "model"})
+            yield "updates", {"model": {"messages": [AIMessage(content=outcome.reply)]}}
+
+    server = _prepare_server(monkeypatch, Runtime(), events)
+
+    async def scenario():
+        response = await server.chat_stream(server.ChatRequest(message="回答"), None)
+        try:
+            first = await asyncio.wait_for(anext(response.body_iterator), 2)
+            assert json.loads(first.removeprefix("data: ").strip()).startswith("__PROCESS__:")
+            second = await asyncio.wait_for(anext(response.body_iterator), 2)
+            assert json.loads(second.removeprefix("data: ").strip()) == "首段正文"
+            assert await asyncio.to_thread(entered.wait, 1)
+            assert not release.is_set()
+            release.set()
+            rest = "".join([frame async for frame in response.body_iterator])
+            assert '"后段正文"' in rest and "__END__" in rest
+            assert len([e for e in events if e["event"] == "first_reply"]) == 1
+        finally:
+            release.set()
+            await response.body_iterator.aclose()
+
+    asyncio.run(scenario())
+
+
 def test_real_sse_progress_and_whitespace_do_not_hide_empty_reply(monkeypatch):
     import asyncio
 
