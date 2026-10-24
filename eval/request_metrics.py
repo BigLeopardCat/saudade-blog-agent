@@ -36,7 +36,7 @@ def path_of(doc):
     runtime = _mapping(_mapping(doc.get("input")).get("runtime"))
     if any(e.get("event") == "legacy_handoff" for e in events):
         return "hybrid_to_graph"
-    if runtime.get("arm") in ("graph", "hybrid"):
+    if runtime.get("arm") in ("graph", "hybrid", "native"):
         return runtime["arm"]
     nodes = [_label(e.get("node")) for e in events]
     if "hybrid" in nodes:

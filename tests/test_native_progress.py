@@ -7,6 +7,7 @@ from langchain_core.messages import AIMessage, HumanMessage
 from langchain_core.tools import StructuredTool
 
 from agent.runtime.progress import ProgressEmitter
+from agent.runtime.results import TurnResult
 from agent.runtime.session import ToolSession
 
 
@@ -134,14 +135,14 @@ def test_real_sse_progress_precedes_blocked_tool_and_first_reply(monkeypatch):
     events = []
 
     class Runtime:
-        def stream(self, state, config, **kwargs):
+        def stream_events(self, state, config):
             session = ToolSession(
                 _Model([_call(), AIMessage(content="done")]), config,
                 {"fixture_read": _BlockingTool(entered, release).tool}, {},
             )
             result = session.run([HumanMessage(content="read")])
-            yield "messages", (AIMessageChunk(content=result.reply), {"langgraph_node": "model"})
-            yield "updates", {"model": {"messages": [AIMessage(content=result.reply)]}}
+            yield AIMessageChunk(content=result.reply)
+            yield result
 
     server = _prepare_server(monkeypatch, Runtime(), events)
 
@@ -170,7 +171,7 @@ def test_real_sse_native_answer_chunk_arrives_before_provider_stream_ends(monkey
     import asyncio
     import json
 
-    from langchain_core.messages import AIMessage, AIMessageChunk
+    from langchain_core.messages import AIMessageChunk
 
     entered, release = threading.Event(), threading.Event()
     events = []
@@ -188,7 +189,7 @@ def test_real_sse_native_answer_chunk_arrives_before_provider_stream_ends(monkey
             yield AIMessageChunk(content="后段正文")
 
     class Runtime:
-        def stream(self, state, config, **kwargs):
+        def stream_events(self, state, config):
             session = ToolSession(StreamingModel(), config, {}, {})
             runner = session.stream([HumanMessage(content="回答")])
             chunks = []
@@ -200,8 +201,8 @@ def test_real_sse_native_answer_chunk_arrives_before_provider_stream_ends(monkey
                     break
                 chunks.append(chunk)
                 if chunk.content:
-                    yield "messages", (chunk, {"langgraph_node": "model"})
-            yield "updates", {"model": {"messages": [AIMessage(content=outcome.reply)]}}
+                    yield chunk
+            yield outcome
 
     server = _prepare_server(monkeypatch, Runtime(), events)
 
@@ -283,14 +284,13 @@ def test_real_stream_close_fences_emitter_until_worker_drains(monkeypatch):
     events = []
 
     class Runtime:
-        def stream(self, state, config, **kwargs):
+        def stream_events(self, state, config):
             emitter = config["configurable"]["progress_emitter"]
             emitter.emit("working", key="first")
             entered.set()
             assert release.wait(3)
             accepted.append(emitter.emit("late", key="late"))
-            return
-            yield
+            yield TurnResult("")
 
     server = _prepare_server(monkeypatch, Runtime(), events)
 
@@ -322,8 +322,9 @@ def test_streamed_preface_and_terminal_confirmation_each_render_once(monkeypatch
     from langchain_core.tools import tool
     from langgraph.checkpoint.memory import InMemorySaver
 
-    from agent.agent import create_agent
-    from agent.runtime.hybrid import HybridArm
+    from agent.runtime.capabilities import ToolCatalog
+    from agent.runtime.native import NativeRuntime
+    from agent.runtime.native_store import NativeConversationStore
     from agent.runtime.results import TurnResult
 
     question = "确认本次测试操作。"
@@ -346,12 +347,12 @@ def test_streamed_preface_and_terminal_confirmation_each_render_once(monkeypatch
             yield AIMessageChunk(content="", tool_calls=[
                 {"name": "fixture_prepare", "args": {}, "id": "prepare"}])
 
-    graph = create_agent(checkpointer=InMemorySaver())
-    runtime = HybridArm(graph, read_tools={"fixture_prepare": fixture_prepare},
-                        site_read_tools={})
+    store = NativeConversationStore(InMemorySaver())
+    runtime = NativeRuntime(store, model_factory=lambda **_: Model(),
+                            catalog=ToolCatalog(read_tools={"fixture_prepare": fixture_prepare},
+                                                site_read_tools={}))
     events = []
     server = _prepare_server(monkeypatch, runtime, events)
-    monkeypatch.setattr("agent.runtime.hybrid.get_llm", lambda **kwargs: Model())
 
     async def scenario():
         drained = asyncio.Event()
@@ -371,7 +372,7 @@ def test_streamed_preface_and_terminal_confirmation_each_render_once(monkeypatch
         reply = "".join(text)
         assert reply.count("准备好了。") == 1
         assert reply.count(question) == 1 and len(cards) == 1
-        stored = graph.get_state({"configurable": {"thread_id": "conv_42"}})
+        stored = runtime.get_state({"configurable": {"thread_id": "conv_42"}})
         assert stored.values["messages"][-1].content == reply
 
     asyncio.run(scenario())

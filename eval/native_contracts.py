@@ -1,4 +1,4 @@
-"""Repeatable hybrid task outcomes: real model, synthetic business API and storage.
+"""Repeatable native task outcomes: real model, synthetic business API and storage.
 
 Run with .venv/bin/python -m eval.native_contracts. No business database is used.
 This checks model routing and confirmation outcomes, not PostgreSQL durability.
@@ -19,10 +19,10 @@ from langgraph.checkpoint.memory import InMemorySaver
 from starlette.requests import Request
 
 from agent import confirm, idem
-from agent.agent import create_agent
 from agent.runtime import writes
 from agent.runtime.control import RequestControl, request_scope
-from agent.runtime.hybrid import HybridArm
+from agent.runtime.native import NativeRuntime
+from agent.runtime.native_store import NativeConversationStore
 from eval import navigation_contracts, request_metrics
 from eval.own_fixtures import SECRET, favorite_backend, message_backend, notification_backend
 from utils.trace_io import load_trace
@@ -158,8 +158,7 @@ CASES = [("chat", favorite_backend, _chat),
 def _sample(name, backend, contract, run_id, sample):
     paths, rounds = [], []
     with backend() as state, TemporaryDirectory(prefix="agent-native-eval-") as temp:
-        graph = create_agent(checkpointer=InMemorySaver())
-        arm = HybridArm(graph)
+        arm = NativeRuntime(NativeConversationStore(InMemorySaver()))
         store = _Store(str(Path(temp) / "ledger.sqlite3"))
         principal = _principal()
 
@@ -187,9 +186,7 @@ def _sample(name, backend, contract, run_id, sample):
         outcome = {"case": name, "sample": sample, "evaluated": True,
                    "passed": False, "rounds": rounds}
         with patch.object(server, "_agent", arm), \
-                patch.object(writes, "ledger_for", lambda _: store), \
-                patch.object(graph, "stream",
-                             side_effect=RuntimeError("unexpected legacy handoff")):
+                patch.object(writes, "ledger_for", lambda _: store):
             try:
                 contract(turn, state)
                 if name.startswith("navigation_"):

@@ -58,7 +58,6 @@ sys.path.insert(0, str(ROOT))
 
 import _ctx_src  # noqa: E402  （`_` 开头 ⇒ 不被 pytest 当套件收）
 
-import server as SRV  # noqa: E402  （③ 读它的新读法：`_spec_one`/`_specs_from_tools`）
 from agent import deterministic_plan as D  # noqa: E402  （② 取样 `_terminal_plan`/`_wrap_up_plan`）
 from agent import graph as G  # noqa: E402
 from agent.plan_codec import (  # noqa: E402  （④ 的写端转义：20261017 起住这里）
@@ -275,9 +274,6 @@ def test_plan_channel():
                         "note": "", "reply": "r"})
     check("值里含 `;` 时三段嗅探的判定两边仍然一致（差的是预览列表，不是闸）",
           _old_verdict(_st["plan"]) == _new_verdict(_st["plan_obj"]))
-    check("  新读法（直取对象）照旧一条、参数完整",
-          SRV._specs_from_tools([_spec]) == [("tag_delete", {"name": "a;b"})],
-          str(SRV._specs_from_tools([_spec])))
     print("④ 分隔符不进值：TOOLS 行的裸 `;` 只许是分隔符，不许长在参数值里")
     check("_esc_spec 只动 ASCII 分号：全角 `；`、`(`/`)`/`,`/反斜杠一律原样",
           _esc_spec("；") == "；" and _esc_spec("a(b),c\\d") == "a(b),c\\d")

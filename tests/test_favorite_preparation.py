@@ -134,10 +134,13 @@ def test_read_failure_never_becomes_an_empty_favorite_state(site):
 
 def test_stream_emits_one_card_and_one_reply_from_current_page(site, monkeypatch):
     import server
+    from agent.runtime.native import NativeRuntime
+    from agent.runtime.native_store import NativeConversationStore
 
     model = Model()
     monkeypatch.setattr("agent.runtime.hybrid.get_llm", lambda **_: model)
-    monkeypatch.setattr(server, "_agent", HybridArm(create_agent(checkpointer=InMemorySaver())))
+    monkeypatch.setattr(server, "_agent", NativeRuntime(
+        NativeConversationStore(InMemorySaver()), model_factory=lambda **_: model))
     req = server.ChatRequest(message="收藏当前这篇", user_id=7, conversation_id=42,
                              current_url="/article/19", page_title="不可信页面标题")
 

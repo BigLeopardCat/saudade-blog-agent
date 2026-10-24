@@ -35,14 +35,14 @@ def test_native_outcome_suite_uses_verified_identity_and_redacts_tokens(monkeypa
         def invoke(self, prompt, **kwargs):
             return next(responses)
 
-    monkeypatch.setattr("agent.runtime.hybrid.get_llm", lambda **_: Model())
+    monkeypatch.setattr("agent.runtime.native.get_llm", lambda **_: Model())
     monkeypatch.setattr(golden_trace, "trace_root", lambda: str(tmp_path / "traces"))
     monkeypatch.delenv(golden_trace.ENV_OFF, raising=False)
     report = native_contracts.run(["chat", "favorite_cancel", "notification_replay",
                                    "unread_counts", "message_read_replay"])
     assert all(case["passed"] for case in report["cases"]), report["cases"]
     assert sum(case["requests"] for case in report["cases"]) == 13
-    assert all(g["source"] == "evaluation" and g["path"] == "hybrid"
+    assert all(g["source"] == "evaluation" and g["path"] == "native"
                for g in report["metrics"]["groups"])
     documents = [json.loads(path.read_text()) for path in tmp_path.rglob("*.json")]
     terminal = [event for doc in documents for event in doc["events"]
@@ -88,7 +88,7 @@ def test_navigation_samples_keep_failed_attempts_and_real_effects(monkeypatch, t
             return next(responses).model_copy(update={"usage_metadata": {
                 "input_tokens": 100, "output_tokens": 10, "total_tokens": 110}})
 
-    monkeypatch.setattr("agent.runtime.hybrid.get_llm", lambda **_: Model())
+    monkeypatch.setattr("agent.runtime.native.get_llm", lambda **_: Model())
     monkeypatch.setattr(golden_trace, "trace_root", lambda: str(tmp_path / "traces"))
     monkeypatch.delenv(golden_trace.ENV_OFF, raising=False)
     report = native_contracts.run([case[0] for case in native_contracts.navigation_contracts.CASES],
@@ -142,7 +142,7 @@ def test_unsupported_fixture_read_is_not_a_model_quality_score(monkeypatch, tmp_
         def invoke(self, prompt, **kwargs):
             return next(responses)
 
-    monkeypatch.setattr("agent.runtime.hybrid.get_llm", lambda **_: Model())
+    monkeypatch.setattr("agent.runtime.native.get_llm", lambda **_: Model())
     monkeypatch.setattr(golden_trace, "trace_root", lambda: str(tmp_path / "traces"))
     monkeypatch.delenv(golden_trace.ENV_OFF, raising=False)
     report = native_contracts.run(["navigation_direct"])

@@ -8,12 +8,12 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
-from typing import Callable, Iterable, Iterator
+from typing import Callable, Generator, Iterable, Iterator
 
 from langchain_core.messages import AIMessageChunk
 
-from agent.runtime.results import TurnResult
 from agent.runtime.confirmation import frames as confirmation_frames
+from agent.runtime.results import TurnResult
 
 
 class TransportProtocolError(RuntimeError):
@@ -62,6 +62,7 @@ def _execution_frames(execution: dict | None) -> Iterator[str]:
     receipts = execution.get("receipts") or []
     if not isinstance(receipts, list):
         raise TransportProtocolError("execution.receipts must be a list")
+    commands = []
     for receipt in receipts:
         if not isinstance(receipt, dict):
             raise TransportProtocolError("execution receipt must be an object")
@@ -70,7 +71,8 @@ def _execution_frames(execution: dict | None) -> Iterator[str]:
             if not isinstance(command, dict):
                 raise TransportProtocolError("execution receipt cmd is invalid")
             command_wire(command)
-            yield _json_frame("__CMD__:", command)
+            commands.append(_json_frame("__CMD__:", command))
+    yield from commands
     if receipts:
         yield _json_frame("__EXEC__:", receipts)
     # Confirmation framing owns its field allow-list and cancellation ordering.
@@ -95,14 +97,26 @@ def _terminal_delta(visible: str, reply: str) -> str:
     raise TransportProtocolError("terminal reply is inconsistent with visible chunks")
 
 
-def iter_transport_events(events: Iterable[AIMessageChunk | TurnResult]) -> Iterator[str | AIMessageChunk]:
+def iter_transport_events(
+    events: Iterable[AIMessageChunk | TurnResult],
+) -> Generator[str | AIMessageChunk, None, None]:
     """Yield visible chunks and protocol frames, exactly once per event.
 
     The final ``TurnResult.reply`` is used only to fill a missing suffix. It is
     never emitted as a second copy of the streamed body.
     """
+    source = iter(events)
+    try:
+        yield from _stream_body(source)
+    finally:
+        close = getattr(source, "close", None)
+        if close is not None:
+            close()
+
+
+def _stream_body(events):
     visible = ""
-    terminal: TurnResult | None = None
+    terminal = None
     for event in events:
         if terminal is not None:
             raise TransportProtocolError("runtime yielded events after TurnResult")
@@ -129,37 +143,26 @@ def iter_transport_events(events: Iterable[AIMessageChunk | TurnResult]) -> Iter
 
 def collect_turn(events: Iterable[AIMessageChunk | TurnResult]) -> CollectedTurn:
     """Collect a native turn for the non-streaming HTTP response."""
-    visible = ""
-    terminal: TurnResult | None = None
-    for event in events:
-        if terminal is not None:
-            raise TransportProtocolError("runtime yielded events after TurnResult")
-        if isinstance(event, AIMessageChunk):
-            visible += str(event.content or "")
-        elif isinstance(event, TurnResult):
-            if terminal is not None:
-                raise TransportProtocolError("runtime yielded more than one TurnResult")
-            terminal = event
-        else:
-            raise TransportProtocolError(f"unsupported runtime event: {type(event).__name__}")
-    if terminal is None:
-        raise TransportProtocolError("runtime ended without TurnResult")
-    reply = str(terminal.reply or "")
-    _terminal_delta(visible, reply)
-    execution = _execution_payload(terminal.execution)
-    list(_execution_frames(execution))
+    reply = ""
     navigation = ""
-    for receipt in execution.get("receipts", []):
-        command = receipt.get("cmd") if isinstance(receipt, dict) else None
-        if isinstance(command, dict):
-            wire = command_wire(command)
-            if wire:
-                navigation = wire
-    return CollectedTurn(reply=reply, navigation=navigation,
-                         execution=list(execution.get("receipts") or []))
-
-
-def emit_to_queue(events: Iterable[AIMessageChunk | TurnResult], put: Callable[[str | AIMessageChunk], None]) -> None:
-    """Adapt runtime events to a thread-safe queue callback."""
+    receipts = []
     for event in iter_transport_events(events):
-        put(event)
+        if isinstance(event, AIMessageChunk):
+            reply += str(event.content or "")
+        elif event.startswith("__CMD__:"):
+            navigation = command_wire(json.loads(event[len("__CMD__:"):]))
+        elif event.startswith("__EXEC__:"):
+            receipts.extend(json.loads(event[len("__EXEC__:"):]))
+    return CollectedTurn(reply=reply, navigation=navigation, execution=receipts)
+
+
+def emit_to_queue(
+    events: Iterable[AIMessageChunk | TurnResult], put: Callable[[str | AIMessageChunk], None],
+) -> None:
+    """Adapt runtime events to a thread-safe queue callback."""
+    stream = iter_transport_events(events)
+    try:
+        for event in stream:
+            put(event)
+    finally:
+        stream.close()
