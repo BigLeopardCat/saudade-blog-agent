@@ -151,14 +151,6 @@
     "c": 39,
     "lines": 235
   },
-  "server.py::_run_agent_stream_to_queue": {
-    "c": 77,
-    "lines": 585
-  },
-  "server.py::chat_stream": {
-    "c": 14,
-    "lines": 342
-  },
   "server.py::chat_stream.event_stream": {
     "c": 43,
     "lines": 257

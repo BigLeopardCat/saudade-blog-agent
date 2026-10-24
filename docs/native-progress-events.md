@@ -1,16 +1,19 @@
 # Native runtime progress events
 
-HybridArm keeps the native ToolSession's completed aggregate buffered for
-tool-call and confirmation decisions while exposing safe output chunks. During
+The native Runtime exposes one transport-neutral iterator:
+`runtime.stream_events(state, config) -> Iterator[AIMessageChunk | TurnResult]`.
+The server transport keeps the native ToolSession's completed aggregate buffered
+for tool-call and confirmation decisions while exposing safe output chunks. During
 that work, ToolSession emits
 short, static progress labels through the existing `RunnableConfig` configurable
 map. The server adapts those labels to the existing `__PROCESS__` SSE frame;
 there is no second event protocol.
 
-The adapter deduplicates by operation key and caps one request at 24 labels. It
+The transport adapter deduplicates by operation key and caps one request at 24 labels. It
 never includes tool arguments, results, prompts, confirmation material, or
-exception text. The server schedules queue insertion with the event loop rather
-than waiting in the model/tool worker. The existing stop event fences late
+exception text. The server performs queue insertion through an event-loop-safe
+handoff; `RequestJobs` keeps the admission permit until the worker and queue
+drain. The existing stop event fences late
 labels after cancellation.
 
 Trace events `first_visible_event` and `first_reply` record elapsed seconds at
@@ -35,8 +38,12 @@ JSON arguments are required before any tool executes. Consumer close propagates
 to nested iterators and provider responses. Streaming usage is explicitly
 requested for compatible endpoints; absent observations remain unknown.
 
-The complete visible text is saved through `ConversationStore`. Confirmation
-and no-op text is emitted once through the existing structured execution path,
-including any separator after a streamed preface. Browser commands and business
-receipts keep their existing protocol. The legacy graph keeps its existing
-output path.
+The complete visible text is saved through `ConversationStore`. The transport
+emits only the suffix missing from `TurnResult.reply` after streamed chunks;
+it never sends the terminal aggregate as a second answer. Confirmation,
+cancellation and no-op text are emitted once through the structured execution
+path. `agent.runtime.confirmation.frames` owns the allow-list and ordering of
+pending/confirmation frames. Browser commands and business receipts keep their
+existing protocol. The transport does not inspect planner, execute or gate
+updates and does not translate legacy graph events. Until the native runtime
+branch is integrated, the server fails explicitly when `stream_events` is absent.
