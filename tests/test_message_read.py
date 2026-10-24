@@ -9,11 +9,10 @@ from langgraph.checkpoint.memory import InMemorySaver
 from pydantic import ValidationError
 
 from agent import confirm, idem
-from agent.agent import create_agent
 from agent.domains.messages import preparation, transactions
-from agent.graph import graph_input
 from agent.runtime import writes
-from agent.runtime.hybrid import HybridArm
+from agent.runtime.native import NativeRuntime
+from agent.runtime.native_store import NativeConversationStore
 from agent.runtime.results import TurnResult
 
 
@@ -97,8 +96,7 @@ def test_partial_write_has_no_receipt_and_cannot_repeat(mailbox, tmp_path):
 def test_replacing_and_cancelling_message_cards_revokes_old_grants(mailbox, monkeypatch, tmp_path):
     store = idem.Ledger(str(tmp_path / "cancel.sqlite3"))
     monkeypatch.setattr(writes, "ledger_for", lambda _: store)
-    graph = create_agent(checkpointer=InMemorySaver())
-    arm = HybridArm(graph)
+    runtime = NativeRuntime(NativeConversationStore(InMemorySaver()))
 
     class Model:
         def __init__(self, domain, tool, args):
@@ -115,25 +113,24 @@ def test_replacing_and_cancelling_message_cards_revokes_old_grants(mailbox, monk
 
     def turn(domain, tool, args):
         model = Model(domain, tool, args)
-        monkeypatch.setattr("agent.runtime.hybrid.get_llm", lambda **_: model)
-        list(arm.stream(graph_input([HumanMessage(content="synthetic request")]), config()))
+        runtime.model_factory = lambda **_: model
+        list(runtime.stream_events({"messages": [HumanMessage(content="synthetic request")]}, config()))
 
     try:
         turn("messages", "prepare_message_read", {"scope": "all_unread"})
-        old = graph.get_state(config()).values["pending_confirm"]
+        old = runtime.get_state(config()).values["pending_confirm"]
         turn("messages", "prepare_message_read", {"scope": "selected", "ids": [202]})
-        new = graph.get_state(config()).values["pending_confirm"]
+        new = runtime.get_state(config()).values["pending_confirm"]
         assert old != new
-        list(arm.stream(graph_input([], confirm_grant=confirm.verify(old["token"], 7, 42)),
-                        config()))
-        assert graph.get_state(config()).values["pending_confirm"] == new
+        list(runtime.stream_events(
+            {"messages": [], "confirm_grant": confirm.verify(old["token"], 7, 42)}, config()))
+        assert runtime.get_state(config()).values["pending_confirm"] == new
         turn("pending", "cancel_pending_operation", {})
-        # Even a raw graph selected after cancellation must route the signed executor.
         from agent.runtime.confirmation import confirmed_runtime
-        runtime = confirmed_runtime(graph, confirm.verify(new["token"], 7, 42))
-        list(runtime.stream(graph_input([], confirm_grant=confirm.verify(new["token"], 7, 42)),
-                            config()))
-        assert graph.get_state(config()).values["pending_action"] is None
+        selected = confirmed_runtime(runtime, confirm.verify(new["token"], 7, 42))
+        list(selected.stream_events(
+            {"messages": [], "confirm_grant": confirm.verify(new["token"], 7, 42)}, config()))
+        assert runtime.get_state(config()).values["pending_action"] is None
         assert not any(r.method == "POST" for r in mailbox["requests"])
     finally:
         store.close()

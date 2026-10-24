@@ -10,10 +10,10 @@ from langchain_core.messages import AIMessage, HumanMessage
 from langgraph.checkpoint.memory import InMemorySaver
 
 from agent import checkpoint
-from agent.agent import create_agent
-from agent.graph import AgentCancelled, graph_input
+from agent.runtime.control import AgentCancelled
 from agent.runtime import turns
-from agent.runtime.hybrid import HybridArm
+from agent.runtime.native import NativeRuntime
+from agent.runtime.native_store import NativeConversationStore
 
 
 def _config(thread_id="conv_overlap", stop_event=None):
@@ -23,7 +23,6 @@ def _config(thread_id="conv_overlap", stop_event=None):
 @pytest.mark.parametrize("operation", ["turn", "discard", "delete"])
 def test_turn_serializes_history_and_lifecycle(monkeypatch, operation):
     saver = InMemorySaver()
-    arm = HybridArm(create_agent(checkpointer=saver), {}, {}, {})
     entered, release, attempted = Event(), Event(), Event()
     prompts = []
 
@@ -40,17 +39,17 @@ def test_turn_serializes_history_and_lifecycle(monkeypatch, operation):
             assert "第一轮回复" in prompts[1]
             return AIMessage(content="第二轮回复")
 
-    monkeypatch.setattr("agent.runtime.hybrid.get_llm", lambda **_: Model())
+    runtime = NativeRuntime(NativeConversationStore(saver), model_factory=lambda **_: Model())
 
     def turn(text):
-        return list(arm.stream(graph_input([HumanMessage(content=text)]), _config()))
+        return list(runtime.stream_events({"messages": [HumanMessage(content=text)]}, _config()))
 
     def overlap():
         attempted.set()
         if operation == "turn":
             return turn("第二轮")
         if operation == "discard":
-            return asyncio.run(checkpoint.drop_last_user_turn(arm, "overlap", "第一轮"))
+            return asyncio.run(checkpoint.drop_last_user_turn(runtime, "overlap", "第一轮"))
         return checkpoint.delete_thread(saver, "overlap")
 
     with ThreadPoolExecutor(max_workers=2) as pool:
@@ -66,7 +65,7 @@ def test_turn_serializes_history_and_lifecycle(monkeypatch, operation):
         first.result(timeout=5)
         result = second.result(timeout=5)
 
-    snapshot = arm.get_state(_config())
+    snapshot = runtime.get_state(_config())
     if operation == "turn":
         assert [m.content for m in snapshot.values["messages"]] == [
             "第一轮", "第一轮回复", "第二轮", "第二轮回复"]

@@ -304,9 +304,8 @@ def test_hybrid_prepares_and_executes_without_legacy_or_followup_model(
     from langchain_core.messages import AIMessage, HumanMessage
     from langgraph.checkpoint.memory import InMemorySaver
 
-    from agent.agent import create_agent
-    from agent.graph import graph_input
-    from agent.runtime.hybrid import HybridArm
+    from agent.runtime.native import NativeRuntime
+    from agent.runtime.native_store import NativeConversationStore
 
     class Model:
         def __init__(self):
@@ -338,31 +337,26 @@ def test_hybrid_prepares_and_executes_without_legacy_or_followup_model(
             return self.responses.pop(0)
 
     model = Model()
-    monkeypatch.setattr("agent.runtime.hybrid.get_llm", lambda **kwargs: model)
-    graph = create_agent(checkpointer=InMemorySaver())
-    monkeypatch.setattr(graph, "stream", lambda *a, **kw: pytest.fail("legacy planner invoked"))
     ledger = idem.Ledger(str(tmp_path / "hybrid.sqlite3"))
     monkeypatch.setattr(writes, "ledger_for", lambda saver: ledger)
-    arm = HybridArm(graph)
-    prepared = list(
-        arm.stream(graph_input([HumanMessage(content="按要求改个人待办")]), admin_config())
-    )
-    execution = next(event[1]["execute"] for event in prepared if "execute" in event[1])
+    runtime = NativeRuntime(NativeConversationStore(InMemorySaver()),
+                            model_factory=lambda **_: model)
+    prepared = list(runtime.stream_events(
+        {"messages": [HumanMessage(content="按要求改个人待办")]}, admin_config()))
+    execution = prepared[-1].execution
     assert todos["writes"] == 0 and len(model.calls) == 2
     token = execution["pending_confirm"]["token"]
     assert token not in repr(model.calls)
     signed = confirm.verify(token, 7, 42)
-    assert arm.get_state(admin_config()).values["pending_confirm"]["token"] == token
+    assert runtime.get_state(admin_config()).values["pending_confirm"]["token"] == token
     for _ in range(2):
-        completed = list(
-            arm.stream(
-                graph_input([HumanMessage(content="确认")], confirm_grant=signed), admin_config()
-            )
-        )
-        result = next(event[1]["execute"] for event in completed if "execute" in event[1])
+        completed = list(runtime.stream_events(
+            {"messages": [HumanMessage(content="确认")], "confirm_grant": signed},
+            admin_config()))
+        result = completed[-1].execution
         assert result["receipts"][0]["tool"] == signed["specs"][0]["tool"]
     assert todos["writes"] == 1 and len(model.calls) == 2
-    assert arm.get_state(admin_config()).values["pending_action"] is None
+    assert runtime.get_state(admin_config()).values["pending_action"] is None
 
 
 @pytest.mark.parametrize(

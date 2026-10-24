@@ -171,7 +171,6 @@ def test_stream_producer_emits_existing_execution_receipt(monkeypatch, tmp_path)
     monkeypatch.setattr(transactions, "get_all_tools", lambda: [tool])
     monkeypatch.setattr(writes, "ledger_for",
                         lambda saver: idem.Ledger(str(tmp_path / "stream.sqlite3")))
-    monkeypatch.setattr("agent.runtime.hybrid.get_llm", lambda **_: 1 / 0)
     monkeypatch.setattr(server, "_agent",
                         NativeRuntime(NativeConversationStore(InMemorySaver())))
 

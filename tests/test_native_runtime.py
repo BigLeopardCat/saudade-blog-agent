@@ -137,17 +137,12 @@ def test_unknown_confirmation_executor_is_rejected_without_model_or_state_change
     assert not model.prompts and not selected.store.load(config()).messages
 
 
-@pytest.fixture(params=["native", "legacy"])
+@pytest.fixture
 def waiting(site, monkeypatch, tmp_path, request):
     ledger = idem.Ledger(str(tmp_path / "native.sqlite3"))
     monkeypatch.setattr(writes, "ledger_for", lambda saver: ledger)
     saver = InMemorySaver()
-    if request.param == "legacy":
-        from agent.agent import create_agent
-        from agent.runtime.graph_store import GraphConversationStore
-        seed = GraphConversationStore(create_agent(checkpointer=saver))
-    else:
-        seed = NativeConversationStore(saver)
+    seed = NativeConversationStore(saver)
     proposal = preparation.prepare_favorite_change.invoke(
         {"action": "add", "article_id": 19}, config=config())
     seed.save_turn(config(), [HumanMessage(content="收藏文章19")], proposal.reply,
