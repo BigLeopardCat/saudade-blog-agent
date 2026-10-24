@@ -17,7 +17,7 @@ from tools.result import fact, ok, tgt, unavailable
 # `tests/test_module_exports.py` 按这条规则机械判着，漂了就红）。
 __all__ = ["get_site_map", "get_chat_history", "get_current_time",
            "get_weather", "IOT_ENABLED", "IOT_NAV_PATH", "nav_pure_path", "nav_path_valid",
-           "navigate_to", "toggle_effect", "toggle_dark_mode"]
+           "navigate_to", "toggle_effect", "toggle_dark_mode", "nav_label"]
 
 # ---------------------------------------------------------------------------
 # 导航 / 引导工具
@@ -111,6 +111,30 @@ _NAV_PREFIX_PATHS = ("/category/", "/article/")
 
 # Full-page navigation must wait until the reply has finished streaming.
 _NAV_WHOLE_PAGE_PATHS = {IOT_NAV_PATH} if IOT_ENABLED else set()
+
+_NAV_LABELS = {
+    "/": "首页",
+    "/about": "关于我",
+    "/guestbook": "留言板",
+    "/talk": "说说",
+    "/times": "时间轴",
+    "/login": "登录",
+    "/dashboard": "后台",
+    "/dashboard/notes": "笔记",
+    "/dashboard/comments": "后台说说",
+    "/dashboard/albums": "图库",
+    "/dashboard/announcement": "公告",
+    "/dashboard/users": "用户管理",
+    "/dashboard/analytics": "数据板",
+    "/dashboard/usercontrol": "站点设置",
+}
+if IOT_ENABLED:
+    _NAV_LABELS[IOT_NAV_PATH] = "物联网平台"
+
+
+def nav_label(path: str) -> str:
+    """Return a stable human label for a validated route, or the route itself."""
+    return _NAV_LABELS.get(str(path or ""), str(path or ""))
 
 
 def nav_pure_path(p: str) -> str:
