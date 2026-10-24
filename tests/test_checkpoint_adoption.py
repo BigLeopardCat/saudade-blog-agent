@@ -1,15 +1,19 @@
 """The service factory and HTTP/SSE routes use one native conversation store."""
 
+
 import asyncio
 
 import pytest
 from _own_support import config
+from _service import app
 from fastapi import Request
 from langchain_core.messages import AIMessageChunk
 from langgraph.checkpoint.memory import InMemorySaver
 
-import server
 from agent import checkpoint
+from agent.api import lifecycle
+from agent.api.routes import chat as server
+from agent.api.schemas import ChatRequest, HistoryItem
 from agent.runtime.native import NativeRuntime
 from agent.runtime.native_store import NativeConversationStore
 from config.settings import settings
@@ -19,7 +23,7 @@ from config.settings import settings
 def test_default_factory_attaches_the_selected_saver(monkeypatch, saver):
     monkeypatch.setattr(checkpoint, "build_checkpointer", lambda: saver)
     monkeypatch.setattr(settings, "agent_arm", "native")
-    runtime, name = server._build_arm()
+    runtime, name = lifecycle.build_runtime()
     assert name == "native" and isinstance(runtime, NativeRuntime)
     assert checkpoint.live_saver(runtime) is saver
     assert runtime.store.available is (saver is not None)
@@ -30,7 +34,7 @@ def test_default_factory_attaches_the_selected_saver(monkeypatch, saver):
 def test_retired_factories_cannot_enter_the_native_transport(monkeypatch, name):
     monkeypatch.setattr(settings, "agent_arm", name)
     with pytest.raises(RuntimeError, match="AGENT_ARM=native"):
-        server._build_arm()
+        lifecycle.build_runtime()
 
 
 @pytest.mark.parametrize("persistent", [False, True])
@@ -49,21 +53,21 @@ def test_http_and_sse_share_history_without_duplicates(monkeypatch, persistent):
 
     runtime = NativeRuntime(NativeConversationStore(InMemorySaver() if persistent else None),
                             model_factory=lambda **_: Model())
-    monkeypatch.setattr(server, "_agent", runtime)
+    monkeypatch.setattr(app.state, "runtime", runtime)
     monkeypatch.setattr(server, "_resolve_principal", lambda request, uid: config()[
         "configurable"]["principal"])
     monkeypatch.setattr(server, "start_trace", lambda *a, **k: None)
-    request = Request({"type": "http", "method": "POST", "path": "/chat",
+    request = Request({"app": app, "type": "http", "method": "POST", "path": "/chat",
                        "headers": [], "query_string": b""})
 
     async def exercise():
-        first = await server.chat(server.ChatRequest(
+        first = await server.chat(ChatRequest(
             message="第一问", user_id=7, conversation_id=42), request)
         assert first.success and first.reply == "答复1"
-        response = await server.chat_stream(server.ChatRequest(
+        response = await server.chat_stream(ChatRequest(
             message="接着问", user_id=7, conversation_id=42,
-            history=[server.HistoryItem(role="user", content="[当前问题]: 第一问"),
-                     server.HistoryItem(role="assistant", content="答复1")]), request)
+            history=[HistoryItem(role="user", content="[当前问题]: 第一问"),
+                     HistoryItem(role="assistant", content="答复1")]), request)
         body = "".join([frame async for frame in response.body_iterator])
         assert "答复2" in body and "event: done" in body and "event: error" not in body
 

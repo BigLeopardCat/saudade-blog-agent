@@ -94,6 +94,11 @@ def _constant_assignments(*sources: str) -> dict[str, ast.expr]:
     return assignments
 
 
+def _http_source() -> str:
+    paths = ("agent/api/lifecycle.py", "agent/api/middleware.py", "agent/api/routes/chat.py")
+    return "\n".join((ROOT / path).read_text(encoding="utf-8") for path in paths)
+
+
 def test_settings_surface():
     src = SETTINGS.read_text(encoding="utf-8")
     fields = sorted(set(_FIELD_RE.findall(src)))
@@ -168,7 +173,7 @@ def test_settings_surface():
         "AGENT_MAX_REVIEW": "review_concurrency",
     }
 
-    server_src = (ROOT / "server.py").read_text(encoding="utf-8")
+    server_src = _http_source()
     moderation_src = (ROOT / "agent/api/routes/moderation.py").read_text(encoding="utf-8")
     _assigns = _constant_assignments(server_src, moderation_src)
 

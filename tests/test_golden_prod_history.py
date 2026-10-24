@@ -2,7 +2,7 @@
 
 ## 这个文件是为什么写的
 
-批 3 要量的那一刀是「图自持上下文 ⇒ `server._build_messages` 停止注入 `req.history[-20:]`」。
+批 3 要量的那一刀是「图自持上下文 ⇒ `server.build_messages` 停止注入 `req.history[-20:]`」。
 可**语料测不出它**：`eval/golden/basic.jsonl` 里 11 条多轮用例**一条都不注入 `history`**
 （Rust 每轮真会发，golden 是进程内驱动所以省了）。于是加了 `GOLDEN_PROD_HISTORY=1`：
 多轮用例第 i>1 轮的 `history` = 第 1..i−1 轮**真发出去的那两句**，与 Rust `history[-20:]`
@@ -36,12 +36,15 @@
 """
 
 
+
 import json
 import os
 import sys
 from pathlib import Path
 
 from _judge import collector
+
+from agent.api.schemas import HistoryItem
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -54,7 +57,7 @@ sys.path.insert(0, str(ROOT / "eval"))
 
 import run_golden as rg  # noqa: E402
 
-from server import HistoryItem, _build_messages  # noqa: E402
+from agent.api.context import build_messages as _build_messages  # noqa: E402
 
 FAILS: list[str] = []
 check = collector(FAILS)

@@ -1,15 +1,18 @@
 """Favorite preparation, confirmation and execution through actual tool boundaries."""
 
+
 import asyncio
 import json
 
 import pytest
 from _own_support import config
+from _service import app
 from langchain_core.messages import AIMessage, AIMessageChunk, HumanMessage
 from langgraph.checkpoint.memory import InMemorySaver
 from pydantic import ValidationError
 
 from agent import confirm, idem
+from agent.api.schemas import ChatRequest
 from agent.domains.favorites import preparation
 from agent.principal import Principal
 from agent.runtime import writes
@@ -129,20 +132,20 @@ def test_read_failure_never_becomes_an_empty_favorite_state(site):
 
 
 def test_stream_emits_one_card_and_one_reply_from_current_page(site, monkeypatch):
-    import server
+    from agent.api.routes import chat as server
     from agent.runtime.native import NativeRuntime
     from agent.runtime.native_store import NativeConversationStore
 
     model = Model()
-    monkeypatch.setattr(server, "_agent", NativeRuntime(
+    monkeypatch.setattr(app.state, "runtime", NativeRuntime(
         NativeConversationStore(InMemorySaver()), model_factory=lambda **_: model))
-    req = server.ChatRequest(message="收藏当前这篇", user_id=7, conversation_id=42,
+    req = ChatRequest(message="收藏当前这篇", user_id=7, conversation_id=42,
                              current_url="/article/19", page_title="不可信页面标题")
 
     async def collect():
         queue = asyncio.Queue()
         producer = asyncio.create_task(asyncio.to_thread(
-            server._run_agent_stream_to_queue, server._build_messages(req), "conv_42", queue,
+            server.stream_to_queue, app.state.runtime, server.build_messages(req), "conv_42", queue,
             asyncio.get_running_loop(), user_id=7,
             principal=config()["configurable"]["principal"], conversation_id=42))
         frames = []

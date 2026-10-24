@@ -41,11 +41,18 @@ flowchart LR
 │   ├── api/routes/__init__.py                           # HTTP 路由包
 │   ├── api/routes/moderation.py                         # 独立审核准入与接口
 │   ├── api/routes/knowledge_graph.py                    # 图谱查询及后台建图接口
+│   ├── main.py                                         # ASGI 应用工厂与路由装配
+│   ├── api/dependencies.py                             # 应用资源解析及请求准入
+│   ├── api/lifecycle.py                                # 启动与退出资源管理
+│   ├── api/middleware.py                               # 请求体积与追踪上下文
+│   ├── api/turns.py                                    # 显式运行时的调用和队列适配
+│   ├── api/routes/chat.py                              # 聊天与 SSE 路由
+│   ├── api/routes/conversations.py                     # 会话维护及确认取消
+│   ├── api/routes/operations.py                        # 健康、就绪与版本
 │   ├── api/context.py                                   # 请求到标准消息的适配与历史回放
 │   ├── api/host_context.py                              # 有界宿主事实与历史任务投影
 │   ├── api/events.py                                    # 具名 SSE 编码和响应头
 │   ├── api/schemas.py                                   # 聊天 HTTP 契约及字段限额
-│   ├── approval_api.py                                  # 当前生产代码模块
 │   ├── arg_refs.py                                      # 当前生产代码模块
 │   ├── article_evidence.py                              # 当前生产代码模块
 │   ├── authz.py                                         # 当前生产代码模块
@@ -182,7 +189,8 @@ flowchart LR
 
 ## 3. 一次对话的完整链路
 
-1. `server.py` 从已验证的 principal、会话坐标和预算构造运行配置。
+1. `agent/main.py` 装配应用；聊天路由从请求所属应用获取运行时和资源，
+   `agent/api/turns.py` 将已验证的 principal、会话坐标和预算绑定到原生调用。
 2. `NativeRuntime.stream_events` 从 `ConversationStore` 恢复消息与待确认状态，并交给 `ToolSession`。
 3. 会话先发送按需领域目录；模型直接返回标准 LangChain tool call，代码检查权限、参数、确认和业务版本。
 4. 只读工具直接产生受边界约束的结果；写工具先返回确认卡，确认后的下一轮由签名执行入口调用领域事务。

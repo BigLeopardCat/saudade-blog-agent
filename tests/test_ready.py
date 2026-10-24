@@ -35,11 +35,12 @@ import sys
 from pathlib import Path
 
 from _judge import collector
+from _service import app, service_request
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-import server  # noqa: E402
+from agent.api.routes import operations as server  # noqa: E402
 from config.settings import settings  # noqa: E402
 
 FAILED: list[str] = []
@@ -48,20 +49,20 @@ check = collector(FAILED)
 
 def call() -> tuple[int, dict]:
     """`(状态码, 返回体)`。路由恒返回 `JSONResponse`，所以状态码能直接读。"""
-    resp = asyncio.run(server.ready())
+    resp = asyncio.run(server.ready(service_request()))
     return resp.status_code, json.loads(resp.body)
 
 
 def health_ok() -> bool:
     """同一条件下 `/health` 的读数（只取它活着的那一面）。"""
-    return asyncio.run(server.health()).get("status") == "ok"
+    return asyncio.run(server.health(service_request())).get("status") == "ok"
 
 
 READY_KEYS = {"ready", "reasons", "provider"}
 
 def test_ready():
     print("① 正常态：就绪，且与 /health 一致（都在说'活着且能干活'）")
-    _agent_saved = server._agent
+    _agent_saved = app.state.runtime
     # ⚠️ **凭据由本判据自己摆，不许继承运维取值**：离线套件跑在
     # `SAUDADE_IGNORE_ENV_FILE=1` 下（见 `tests/conftest.py::_PINNED`），`.env` **根本不读**
     # ⇒ `*_api_key` 全是空的。直接断言"凭据在位 ⇒ 200"会**单跑绿、进套件红**（实测撞上过
@@ -74,7 +75,7 @@ def test_ready():
     try:
         for _k in _KEY_FIELDS:
             setattr(settings, _k, _FAKE_KEY)
-        server._agent = object()                    # 假装图已经建好
+        app.state.runtime = object()                    # 假装图已经建好
         _code, _body = call()
         check("顶层键恰好 ready / reasons / provider", set(_body) == READY_KEYS, sorted(_body))
         check("图建好了、provider 认得出、凭据在位 ⇒ 200 + ready=true",
@@ -84,13 +85,13 @@ def test_ready():
         check("  provider 回的是归一化后的名字（不是 env 原文）",
               _body["provider"] == settings.check_provider(), _body["provider"])
     finally:
-        server._agent = _agent_saved
+        app.state.runtime = _agent_saved
         for _k, _v in _keys_saved.items():
             setattr(settings, _k, _v)
 
     print("\n② 图没建好 ⇒ 503，而 /health 仍然 200（这一条是'/ready 不是装饰'的第一面）")
     try:
-        server._agent = None
+        app.state.runtime = None
         _code, _body = call()
         check("503", _code == 503, str(_code))
         check("reasons 点名 agent_not_built",
@@ -98,12 +99,12 @@ def test_ready():
         check("  ⭐ 同一条件下 /health 仍然 200（两者同时红就说明 /ready 只是复制品）",
               health_ok(), "" if health_ok() else "health 也红了 ⇒ /ready 只是它的复制品")
     finally:
-        server._agent = _agent_saved
+        app.state.runtime = _agent_saved
 
     print("\n③ provider 认不出 ⇒ 503 + unknown_provider，而 /health 仍然 200")
     _prov_saved = settings.llm_provider
     try:
-        server._agent = object()
+        app.state.runtime = object()
         settings.llm_provider = "SENTINEL_PROVIDER"
         _code, _body = call()
         check("503", _code == 503, str(_code))
@@ -117,20 +118,20 @@ def test_ready():
               _body["provider"] == "SENTINEL_PROVIDER", repr(_body["provider"]))
     finally:
         settings.llm_provider = _prov_saved
-        server._agent = _agent_saved
+        app.state.runtime = _agent_saved
 
     print("\n④ 凭据缺 ⇒ 503 + missing_credentials（20260927 那次的形状）")
     _key_saved = {k: getattr(settings, k)
                   for k in ("qwen_api_key", "deepseek_api_key", "openai_api_key")}
     try:
-        server._agent = object()
+        app.state.runtime = object()
         settings.llm_provider = "qwen"
         settings.qwen_api_key = ""                  # 名字认得、key 没有 ⇒ 每一条请求都会 401
         _code, _body = call()
         check("503", _code == 503, str(_code))
         check("reasons 点名 missing_credentials（与向量路同一套词）",
               "missing_credentials" in _body["reasons"], str(_body["reasons"]))
-        _h = asyncio.run(server.health())
+        _h = asyncio.run(server.health(service_request()))
         check("  ⭐ 同一条件下 /health 仍然 200 且 agent_ready=true —— 这正是它治的那件事",
               _h.get("status") == "ok" and _h.get("agent_ready") is True,
               "" if _h.get("agent_ready") is True
@@ -139,7 +140,7 @@ def test_ready():
     finally:
         for k, v in _key_saved.items():
             setattr(settings, k, v)
-        server._agent = _agent_saved
+        app.state.runtime = _agent_saved
 
     print("\n⑤ 不回显密钥（注入哨兵值再判），且 reasons 恒是短字符串列表")
     SENTINEL = "sk-SENTINEL-MUST-NOT-LEAK-0123456789"
