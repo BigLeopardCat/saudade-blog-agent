@@ -158,7 +158,8 @@ def test_oversized_legacy_detail_reports_truncation(backend):
 def test_runtime_loads_queue_and_reads_without_legacy(backend, monkeypatch, name):
     from langchain_core.messages import AIMessage, HumanMessage
 
-    from agent.runtime.hybrid import HybridArm
+    from agent.runtime.native import NativeRuntime
+    from agent.runtime.native_store import NativeConversationStore
 
     def call(tool_name):
         return AIMessage(content="", tool_calls=[{"name": tool_name, "args": {}, "id": tool_name}])
@@ -173,12 +174,8 @@ def test_runtime_loads_queue_and_reads_without_legacy(backend, monkeypatch, name
         def invoke(self, prompt):
             return next(responses)
 
-    class Legacy:
-        def stream(self, *args, **kwargs):
-            raise AssertionError("Queue read entered legacy planner")
-
-    monkeypatch.setattr("agent.runtime.hybrid.get_llm", lambda **kwargs: Model())
-    events = list(HybridArm(Legacy()).stream({"messages": [HumanMessage(content="读取后台记录")]},
-                                            config()))
-    assert events[1][1]["model"]["messages"][0].content.startswith("已读到")
+    runtime = NativeRuntime(NativeConversationStore(None), model_factory=lambda **_: Model())
+    events = list(runtime.stream_events(
+        {"messages": [HumanMessage(content="读取后台记录")]}, config()))
+    assert events[-1].reply.startswith("已读到")
     assert len(backend["requests"]) == 1

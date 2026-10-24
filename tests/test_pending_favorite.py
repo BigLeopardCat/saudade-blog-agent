@@ -9,19 +9,18 @@ from langchain_core.messages import AIMessage, AIMessageChunk, HumanMessage
 from langgraph.checkpoint.memory import InMemorySaver
 
 from agent import confirm, idem
-from agent.agent import create_agent
 from agent.domains.favorites import preparation, transactions
-from agent.graph import graph_input
 from agent.runtime import pending, writes
 from agent.runtime.confirmation import confirmed_runtime
-from agent.runtime.hybrid import HybridArm
+from agent.runtime.native import NativeRuntime
+from agent.runtime.native_store import NativeConversationStore
 from agent.runtime.results import TurnResult
 from tools import base
 
 
 def test_pinned_executor_cannot_fall_back_when_persistence_is_disabled():
     with pytest.raises(RuntimeError, match="需要持久化"):
-        confirmed_runtime(create_agent(), {"executor": "favorites"})
+        confirmed_runtime(NativeRuntime(NativeConversationStore(None)), {"executor": "favorites"})
 
 
 class Model:
@@ -46,34 +45,30 @@ class Model:
 def waiting(site, monkeypatch, tmp_path):
     ledger = idem.Ledger(str(tmp_path / "pending.sqlite3"))
     monkeypatch.setattr(writes, "ledger_for", lambda saver: ledger)
-    graph = create_agent(checkpointer=InMemorySaver())
+    runtime = NativeRuntime(NativeConversationStore(InMemorySaver()))
     proposal = preparation.prepare_favorite_change.invoke(
         {"action": "add", "article_id": 19}, config=config())
-    graph.update_state(config(), {**graph_input([HumanMessage(content="收藏文章19")]),
-                                 **proposal.execution, "done": True}, as_node="gate")
-    monkeypatch.setattr(graph, "stream", lambda *a, **kw: pytest.fail("legacy planner invoked"))
-    yield graph, proposal, ledger
+    runtime.store.save_turn(config(), [HumanMessage(content="收藏文章19")], proposal.reply,
+                            execution=proposal.execution, pending=proposal.execution)
+    yield runtime, proposal, ledger
     ledger.close()
 
 
-def run(graph, model, monkeypatch, text="取消刚才的操作"):
-    monkeypatch.setattr("agent.runtime.hybrid.get_llm", lambda **_: model)
-    return list(HybridArm(graph).stream(graph_input([HumanMessage(content=text)],
-                ledger={"pending": "待确认收藏文章19"}), config()))
+def run(runtime, model, text="取消刚才的操作"):
+    runtime.model_factory = lambda **_: model
+    return list(runtime.stream_events({"messages": [HumanMessage(content=text)]}, config()))
 
 
 def test_cancellation_is_durable_before_reply_and_old_grant_cannot_write(
         waiting, site, monkeypatch):
-    graph, proposal, _ = waiting
+    runtime, proposal, _ = waiting
     model = Model("cancel_pending_operation")
-    monkeypatch.setattr("agent.runtime.hybrid.get_llm", lambda **_: model)
-    events = HybridArm(graph).stream(graph_input([HumanMessage(content="先别收藏了")]), config())
-    first = next(events)
-    assert first[1]["execute"]["pending_event"]["event"] == "cancelled"
-    assert graph.get_state(config()).values["pending_action"] is None
-    list(events)
+    runtime.model_factory = lambda **_: model
+    events = list(runtime.stream_events({"messages": [HumanMessage(content="先别收藏了")]}, config()))
+    assert events[-1].execution["pending_event"]["event"] == "cancelled"
+    assert runtime.get_state(config()).values["pending_action"] is None
     grant = confirm.verify(proposal.execution["pending_confirm"]["token"], 7, 42)
-    result = transactions.execute(grant, config(), graph.checkpointer)
+    result = transactions.execute(grant, config(), runtime.saver)
     assert result["receipts"] == [] and "撤销" in result["reply"]
     assert all(request.method == "GET" for request in site["requests"])
     token = proposal.execution["pending_confirm"]["token"]
@@ -82,48 +77,48 @@ def test_cancellation_is_durable_before_reply_and_old_grant_cannot_write(
 
 
 def test_chat_preserves_pending_without_emitting_another_card(waiting, monkeypatch):
-    graph, proposal, _ = waiting
-    events = run(graph, Model(), monkeypatch, "你好")
+    runtime, proposal, _ = waiting
+    events = run(runtime, Model(), "你好")
     expected = proposal.execution["pending_confirm"]
-    assert graph.get_state(config()).values["pending_confirm"] == expected
-    assert not any("execute" in event[1] for event in events if event[0] == "updates")
+    assert runtime.get_state(config()).values["pending_confirm"] == expected
+    assert not any(getattr(event, "execution", None) for event in events[:-1])
 
 
 def test_replacement_revokes_old_card_and_stale_click_preserves_new_card(
         waiting, site, monkeypatch):
-    graph, proposal, _ = waiting
+    runtime, proposal, _ = waiting
     original = base._get
     monkeypatch.setattr(base, "_get", lambda path, **kw: (
         {"noteId": 20, "noteTitle": "另一篇真实文章"} if path == "/notes/20"
         else original(path, **kw)))
     model = Model("prepare_favorite_change", {"action": "add", "article_id": 20})
-    events = run(graph, model, monkeypatch, "改成收藏文章20")
-    execution = next(value["execute"] for mode, value in events
-                     if mode == "updates" and "execute" in value)
+    events = run(runtime, model, "改成收藏文章20")
+    execution = next(event.execution for event in events
+                     if getattr(event, "execution", None) and "pending_confirm" in event.execution)
     old = proposal.execution["pending_confirm"]
     new = execution["pending_confirm"]
     assert old["token"] != new["token"] and "另一篇真实文章" in new["q"]
     assert execution["pending_event"]["jti"] == confirm.token_jti(old["token"])
-    stale = graph_input([], confirm_grant=confirm.verify(old["token"], 7, 42))
-    list(HybridArm(graph).stream(stale, config()))
-    assert graph.get_state(config()).values["pending_confirm"] == new
+    stale = {"messages": [], "confirm_grant": confirm.verify(old["token"], 7, 42)}
+    list(runtime.stream_events(stale, config()))
+    assert runtime.get_state(config()).values["pending_confirm"] == new
     assert all(request.method == "GET" for request in site["requests"])
 
 
 def test_replacement_to_satisfied_state_clears_old_proposal(waiting, monkeypatch, site):
-    graph, _, _ = waiting
-    events = run(graph, Model("prepare_favorite_change", {
-        "action": "remove", "article_id": 19}), monkeypatch, "改成取消收藏19")
-    assert graph.get_state(config()).values["pending_action"] is None
-    execution = next(value["execute"] for mode, value in events
-                     if mode == "updates" and "execute" in value)
+    runtime, _, _ = waiting
+    events = run(runtime, Model("prepare_favorite_change", {
+        "action": "remove", "article_id": 19}), "改成取消收藏19")
+    assert runtime.get_state(config()).values["pending_action"] is None
+    execution = next(event.execution for event in events
+                     if getattr(event, "execution", None) and "noop_note" in event.execution)
     assert execution["noop_note"] and execution["pending_event"]
     assert all(request.method == "GET" for request in site["requests"])
 
 
 def test_failed_target_read_does_not_revoke_old_proposal(waiting):
-    graph, proposal, ledger = waiting
-    active = pending.restore(graph.get_state(config()).values, config())
+    runtime, proposal, ledger = waiting
+    active = pending.restore(runtime.get_state(config()).values, config())
     result = preparation.prepare_favorite_change.invoke(
         {"action": "add", "article_id": 999}, config=config())
     assert not isinstance(result, TurnResult)
@@ -132,25 +127,25 @@ def test_failed_target_read_does_not_revoke_old_proposal(waiting):
     state, _ = ledger.claim(writes.operation_key(grant, name, args), name, grant["jti"])
     assert state == "new"
     expected = proposal.execution["pending_confirm"]
-    assert graph.get_state(config()).values["pending_confirm"] == expected
+    assert runtime.get_state(config()).values["pending_confirm"] == expected
 
 
 @pytest.mark.parametrize("status", ["intent", "done"])
 def test_cannot_cancel_a_started_or_completed_write(waiting, status):
-    graph, _, ledger = waiting
-    active = pending.restore(graph.get_state(config()).values, config())
+    runtime, _, ledger = waiting
+    active = pending.restore(runtime.get_state(config()).values, config())
     name, args = transactions.validate(active.grant, config())
     key = writes.operation_key(active.grant, name, args)
     ledger.claim(key, name, active.grant["jti"])
     if status == "done":
         ledger.finish(key, base.ToolResult("已收藏", "ok", {}))
-    result = active.cancel_tool(graph.checkpointer).invoke({}, config=config())
+    result = active.cancel_tool(runtime.saver).invoke({}, config=config())
     assert result.execution is None and "不能" in result.reply
 
 
 def test_restore_rejects_cross_identity_and_mismatched_card(waiting):
-    graph, _, _ = waiting
-    prior = graph.get_state(config()).values
+    runtime, _, _ = waiting
+    prior = runtime.get_state(config()).values
     assert pending.restore(prior, config(user_id=8)) is None
     prior["pending_action"] = {**prior["pending_action"], "jti": "f" * 32}
     assert pending.restore(prior, config()) is None
@@ -159,7 +154,7 @@ def test_restore_rejects_cross_identity_and_mismatched_card(waiting):
 @pytest.mark.parametrize("fault", ["ledger", "checkpoint"])
 def test_storage_failure_emits_no_cancellation_and_old_card_still_cannot_write(
         waiting, monkeypatch, site, fault):
-    graph, proposal, ledger = waiting
+    runtime, proposal, ledger = waiting
 
     def failed(*args, **kwargs):
         raise RuntimeError("storage unavailable")
@@ -167,16 +162,15 @@ def test_storage_failure_emits_no_cancellation_and_old_card_still_cannot_write(
     if fault == "ledger":
         monkeypatch.setattr(ledger, "finish", failed)
     else:
-        monkeypatch.setattr(graph, "update_state", failed)
-    monkeypatch.setattr("agent.runtime.hybrid.get_llm",
-                        lambda **_: Model("cancel_pending_operation"))
-    stream = HybridArm(graph).stream(graph_input([HumanMessage(content="取消待办")]), config())
+        monkeypatch.setattr(runtime.store, "update_state", failed)
+    runtime.model_factory = lambda **_: Model("cancel_pending_operation")
+    stream = runtime.stream_events({"messages": [HumanMessage(content="取消待办")]}, config())
     with pytest.raises(RuntimeError, match="storage unavailable"):
-        next(stream)
-    assert graph.get_state(config()).values["pending_confirm"] == proposal.execution[
+        list(stream)
+    assert runtime.get_state(config()).values["pending_confirm"] == proposal.execution[
         "pending_confirm"]
     grant = confirm.verify(proposal.execution["pending_confirm"]["token"], 7, 42)
-    result = transactions.execute(grant, config(), graph.checkpointer)
+    result = transactions.execute(grant, config(), runtime.saver)
     assert result["blocked"] and result["receipts"] == []
     assert all(request.method == "GET" for request in site["requests"])
 
@@ -187,9 +181,7 @@ def test_stream_cancels_host_pending_and_routes_revoked_card_after_runtime_switc
     from agent.runtime.native import NativeRuntime
     from agent.runtime.native_store import NativeConversationStore
 
-    graph, proposal, ledger = waiting
-    monkeypatch.setattr("agent.runtime.hybrid.get_llm",
-                        lambda **_: Model("cancel_pending_operation"))
+    runtime, proposal, ledger = waiting
 
     async def collect(runtime, grant=None):
         monkeypatch.setattr(server, "_agent", runtime)
@@ -218,7 +210,7 @@ def test_stream_cancels_host_pending_and_routes_revoked_card_after_runtime_switc
 
     monkeypatch.setattr(writes, "ledger_for", lambda saver: Store())
     frames = asyncio.run(collect(NativeRuntime(
-        NativeConversationStore(graph.checkpointer),
+        NativeConversationStore(runtime.saver),
         model_factory=lambda **_: Model("cancel_pending_operation"))))
     controls = [json.loads(frame.removeprefix("__PENDING__:")) for frame in frames
                 if isinstance(frame, str) and frame.startswith("__PENDING__:")]
@@ -226,9 +218,9 @@ def test_stream_cancels_host_pending_and_routes_revoked_card_after_runtime_switc
         "pending_action"]["task_id"], "jti": proposal.execution["pending_action"]["jti"]}]
     grant = confirm.verify(proposal.execution["pending_confirm"]["token"], 7, 42)
     assert grant["executor"] == "favorites"
-    # The raw graph's stream deliberately fails; the signed executor must take over.
+    # The raw runtime's stream is bypassed; the signed executor takes over.
     replay = asyncio.run(collect(NativeRuntime(
-        NativeConversationStore(graph.checkpointer)), grant))
+        NativeConversationStore(runtime.saver)), grant))
     assert any("撤销" in str(frame.content) for frame in replay
                if isinstance(frame, AIMessageChunk))
     assert not any(str(frame).startswith("__EXEC__:") for frame in replay)
@@ -238,14 +230,14 @@ def test_stream_cancels_host_pending_and_routes_revoked_card_after_runtime_switc
 def test_button_cancel_is_idempotent_and_rejects_later_approval(waiting, site):
     from agent.runtime.confirmation import cancel
 
-    graph, proposal, _ = waiting
+    runtime, proposal, _ = waiting
     token = proposal.execution["pending_confirm"]["token"]
     grant = confirm.verify(token, 7, 42)
-    result = cancel(graph, grant, config())
+    result = cancel(runtime, grant, config())
     assert result["cancelled"] is True
-    assert cancel(graph, grant, config()) == result
-    assert graph.get_state(config()).values["pending_action"] is None
-    replay = transactions.execute(grant, config(), graph.checkpointer)
+    assert cancel(runtime, grant, config()) == result
+    assert runtime.get_state(config()).values["pending_action"] is None
+    replay = transactions.execute(grant, config(), runtime.saver)
     assert replay["receipts"] == [] and "撤销" in replay["reply"]
     assert all(request.method == "GET" for request in site["requests"])
     assert [op["value"] for op in proposal.execution["pending_confirm"]["opts"]] == ["yes", "no"]
@@ -255,31 +247,30 @@ def test_button_cancel_is_idempotent_and_rejects_later_approval(waiting, site):
 def test_button_cancel_cannot_claim_a_started_write_was_cancelled(waiting, status):
     from agent.runtime.confirmation import cancel
 
-    graph, proposal, ledger = waiting
+    runtime, proposal, ledger = waiting
     grant = confirm.verify(proposal.execution["pending_confirm"]["token"], 7, 42)
     name, args = transactions.validate(grant, config())
     key = writes.operation_key(grant, name, args)
     ledger.claim(key, name, grant["jti"])
     if status == "done":
         ledger.finish(key, base.ToolResult("已收藏", "ok", {}))
-    assert cancel(HybridArm(graph), grant, config())["cancelled"] is False
-    assert graph.get_state(config()).values["pending_confirm"] is not None
+    assert cancel(runtime, grant, config())["cancelled"] is False
+    assert runtime.get_state(config()).values["pending_confirm"] is not None
 
 
 def test_stale_button_cancel_preserves_replacement(waiting, monkeypatch, site):
     from agent.runtime.confirmation import cancel
 
-    graph, proposal, _ = waiting
+    runtime, proposal, _ = waiting
     grant = confirm.verify(proposal.execution["pending_confirm"]["token"], 7, 42)
     original = base._get
     monkeypatch.setattr(base, "_get", lambda path, **kw: (
         {"noteId": 20, "noteTitle": "另一篇真实文章"} if path == "/notes/20"
         else original(path, **kw)))
-    list(run(graph, Model("prepare_favorite_change", {"action": "add", "article_id": 20}),
-             monkeypatch, "换成20"))
-    expected = graph.get_state(config()).values["pending_confirm"]
-    assert cancel(graph, grant, config())["cancelled"] is True
-    assert graph.get_state(config()).values["pending_confirm"] == expected
+    list(run(runtime, Model("prepare_favorite_change", {"action": "add", "article_id": 20}), "换成20"))
+    expected = runtime.get_state(config()).values["pending_confirm"]
+    assert cancel(runtime, grant, config())["cancelled"] is True
+    assert runtime.get_state(config()).values["pending_confirm"] == expected
 
 
 def test_cancellation_api_checks_signed_identity_and_never_calls_a_model(waiting, monkeypatch):
@@ -291,9 +282,9 @@ def test_cancellation_api_checks_signed_identity_and_never_calls_a_model(waiting
     import server
     from agent.approval_api import router
 
-    graph, proposal, ledger = waiting
+    runtime, proposal, ledger = waiting
     token = proposal.execution["pending_confirm"]["token"]
-    monkeypatch.setattr(server, "_agent", graph)
+    monkeypatch.setattr(server, "_agent", runtime)
     monkeypatch.setattr(server.settings, "agent_require_assertion", True)
     monkeypatch.setattr(server, "_verify_assertion_claims", lambda tok: (
         {"uid": 7, "role": "user"} if tok == "fixture" else None))
@@ -324,4 +315,4 @@ def test_cancellation_api_checks_signed_identity_and_never_calls_a_model(waiting
 
 def test_unknown_executor_cannot_enter_legacy_planner():
     with pytest.raises(ValueError, match="执行入口"):
-        confirmed_runtime(create_agent(), {"executor": "unknown"})
+        confirmed_runtime(NativeRuntime(NativeConversationStore(None)), {"executor": "unknown"})

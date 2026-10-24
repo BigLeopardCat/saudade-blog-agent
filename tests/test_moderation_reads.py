@@ -185,7 +185,8 @@ def test_real_empty_page_remains_a_valid_zero_result(backend):
 def test_runtime_discovers_native_summary_without_loading_record_bodies(backend, monkeypatch):
     from langchain_core.messages import AIMessage, HumanMessage
 
-    from agent.runtime.hybrid import HybridArm
+    from agent.runtime.native import NativeRuntime
+    from agent.runtime.native_store import NativeConversationStore
 
     def call(name):
         return AIMessage(content="", tool_calls=[{"name": name, "args": {}, "id": name}])
@@ -200,13 +201,9 @@ def test_runtime_discovers_native_summary_without_loading_record_bodies(backend,
         def invoke(self, prompt):
             return next(responses)
 
-    class Legacy:
-        def stream(self, *args, **kwargs):
-            raise AssertionError("Review summary entered legacy planner")
-
-    monkeypatch.setattr("agent.runtime.hybrid.get_llm", lambda **kwargs: Model())
-    events = list(HybridArm(Legacy()).stream({"messages": [HumanMessage(content="审核情况如何？")]},
-                                            config()))
-    assert events[1][1]["model"]["messages"][0].content.startswith("待审2条")
+    runtime = NativeRuntime(NativeConversationStore(None), model_factory=lambda **_: Model())
+    events = list(runtime.stream_events(
+        {"messages": [HumanMessage(content="审核情况如何？")]}, config()))
+    assert events[-1].reply.startswith("待审2条")
     assert len(backend["requests"]) == 1
     assert backend["requests"][0].url.path.endswith("/moderation/summary")

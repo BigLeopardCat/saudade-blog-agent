@@ -48,7 +48,7 @@ from agent.runtime.control import AgentCancelled, RequestControl
 from agent.runtime.jobs import RequestJobs
 from agent.runtime.progress import ProgressEmitter, StreamProgress
 from agent.summarizer import summarize
-from agent.tasks import TS_MMDD_HHMM_RE, age_minutes, render_open_tasks
+from agent.runtime.task_context import TS_MMDD_HHMM_RE, age_minutes, render_open_tasks
 from agent.transport import collect_turn, emit_to_queue
 
 # The block-reason map remains a shared compatibility surface for existing
