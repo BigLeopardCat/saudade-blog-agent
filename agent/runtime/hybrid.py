@@ -12,30 +12,14 @@ from langchain_core.messages import (
     AIMessageChunk,
 )
 
-from agent.domains import browser
-from agent.domains.favorites import preparation as favorite_preparation
-from agent.domains.messages import preparation as message_preparation
-from agent.domains.notifications import preparation as notification_preparation
 from agent.domains.registry import confirmed_domain
 from agent.principal import CHAT_ONLY_ROLES
-from agent.runtime.admin_domains import domains as admin_domains
+from agent.runtime.capabilities import ToolCatalog
 from agent.runtime.conversation_store import ConversationStore
 from agent.runtime.graph_store import GraphConversationStore
 from agent.runtime.pending import restore as restore_pending
 from agent.runtime.prompt import build_prompt as _input
-from agent.runtime.read_tools import (
-    admin_tools,
-    article_tools,
-    catalog_tools,
-    device_domain,
-    moderation_tools,
-    own_domains,
-    own_reads_enabled,
-    own_tools,
-    public_domains,
-    queue_tools,
-    site_tools,
-)
+from agent.runtime.read_tools import own_reads_enabled
 from agent.runtime.session import MAX_PROMPT_CHARS, ToolSession
 from agent.runtime.turns import check_cancelled
 from agent.tasks import task_rows
@@ -54,14 +38,8 @@ class HybridArm:
         self.legacy = legacy
         self._checkpoint_api = GraphConversationStore(legacy)
         self.store = self._checkpoint_api if store is None else store
-        self.read_tools = article_tools() if read_tools is None else read_tools
-        self.site_read_tools = site_tools() if site_read_tools is None else site_read_tools
-        self.own_read_tools = own_tools() if own_read_tools is None else own_read_tools
-        self.admin_read_tools = admin_tools() if admin_read_tools is None else admin_read_tools
-        self.moderation_read_tools = (moderation_tools() if moderation_read_tools is None
-                                      else moderation_read_tools)
-        self.catalog_read_tools = catalog_tools()
-        self.queue_read_tools = queue_tools() if queue_read_tools is None else queue_read_tools
+        self.catalog = ToolCatalog(read_tools, site_read_tools, own_read_tools,
+                                   admin_read_tools, moderation_read_tools, queue_read_tools)
         # Keep the graph alias for existing compatibility probes and maintenance callers.
         self.graph = legacy
 
@@ -177,31 +155,10 @@ class HybridArm:
                                 session.observations, streamed_reply=streamed_reply)
 
     def _initial_tools(self, own_enabled):
-        tools = dict(self.read_tools)
-        if own_enabled and "get_unread_summary" in self.own_read_tools:
-            tools["get_unread_summary"] = self.own_read_tools["get_unread_summary"]
-        return tools
+        return self.catalog.initial_tools(own_enabled)
 
     def _domains(self, config, can_bridge, pending):
-        cfg = (config or {}).get("configurable") or {}
-        domains = {"site": {**self.site_read_tools, **browser.tools(config)},
-                   **public_domains(), **device_domain(config)}
-        domains.update(admin_domains(config, can_bridge, {
-            "admin_reports": self.admin_read_tools,
-            "admin_moderation": self.moderation_read_tools,
-            "admin_catalog": self.catalog_read_tools,
-            "admin_work_queue": self.queue_read_tools,
-        }))
-        if own_reads_enabled(cfg.get("principal")):
-            domains.update(own_domains(self.own_read_tools))
-        if can_bridge and favorite_preparation.available(config):
-            domains["favorites"] = favorite_preparation.tools(self.own_read_tools)
-            domains["notifications"] = notification_preparation.tools(self.own_read_tools)
-            domains["messages"] = message_preparation.tools(self.own_read_tools)
-        if pending:
-            cancel = pending.cancel_tool(self.store.saver)
-            domains["pending"] = {cancel.name: cancel}
-        return domains
+        return self.catalog.domains(config, can_bridge, pending, self.store.saver)
 
     def _finish(self, state, config, reply, execution=None, retained=None, observations=(),
                 *, streamed_reply=False):
