@@ -12,9 +12,9 @@ from pydantic import ValidationError
 from agent import confirm, idem
 from agent.domains.favorites import preparation
 from agent.principal import Principal
+from agent.runtime import writes
 from agent.runtime.native import NativeRuntime
 from agent.runtime.native_store import NativeConversationStore
-from agent.runtime import writes
 from agent.runtime.results import TurnResult
 
 

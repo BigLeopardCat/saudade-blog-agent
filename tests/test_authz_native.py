@@ -2,8 +2,15 @@
 
 from agent import authz
 from agent.principal import (
-    ADMIN_ROLES, KNOWN_ROLES, ROLE_ADMIN, ROLE_SUPERADMIN, ROLE_USER, ROLE_ZAKO,
-    SOURCE_ASSERTION, UNKNOWN, Principal,
+    ADMIN_ROLES,
+    KNOWN_ROLES,
+    ROLE_ADMIN,
+    ROLE_SUPERADMIN,
+    ROLE_USER,
+    ROLE_ZAKO,
+    SOURCE_ASSERTION,
+    UNKNOWN,
+    Principal,
 )
 from tools.base import _TOOL_REGISTRY
 

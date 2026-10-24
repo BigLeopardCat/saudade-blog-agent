@@ -24,14 +24,12 @@ sys.path.insert(0, str(ROOT))
 
 from agent import authz
 from agent.principal import (  # noqa: E402
-    ADMIN_ROLES,
     KNOWN_ROLES,
     ROLE_ADMIN,
     ROLE_SUPERADMIN,
     ROLE_USER,
     ROLE_ZAKO,
     SOURCE_ASSERTION,
-    SOURCE_BODY,
     UNKNOWN,
     Principal,
 )

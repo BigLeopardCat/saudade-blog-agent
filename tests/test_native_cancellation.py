@@ -7,12 +7,11 @@ from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from langchain_core.tools import StructuredTool
 from langgraph.checkpoint.memory import InMemorySaver
 
-from agent.principal import Principal, SOURCE_ASSERTION
+from agent.principal import SOURCE_ASSERTION, Principal
 from agent.runtime.capabilities import ToolCatalog
 from agent.runtime.native import NativeRuntime
 from agent.runtime.native_store import NativeConversationStore
 from agent.runtime.turns import AgentCancelled
-from tools.base import ok
 
 
 def config(stop_event):

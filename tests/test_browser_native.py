@@ -203,7 +203,8 @@ def test_one_turn_combines_appearance_and_navigation_and_retains_source_history(
         ],
     )
     config = _config()
-    events = list(arm.stream_events({"messages": [HumanMessage(content="关雨开雪，再去这条河灯")]}, config))
+    events = list(arm.stream_events(
+        {"messages": [HumanMessage(content="关雨开雪，再去这条河灯")]}, config))
     execution = events[-1].execution
     assert len(execution["receipts"]) == 3 and not execution.get("pending_confirm")
     assert len(model.calls) == 4
@@ -239,7 +240,8 @@ def test_queued_commands_survive_stop_without_replaying_legacy_runtime(monkeypat
         responses.append(_response(last))
     arm, _ = _arm(monkeypatch, responses)
     with budget_scope(RequestBudget(BudgetLimits(model_calls=4))):
-        events = list(arm.stream_events({"messages": [HumanMessage(content="开雪花然后继续")]}, _config()))
+        events = list(arm.stream_events(
+            {"messages": [HumanMessage(content="开雪花然后继续")]}, _config()))
     execution = events[-1].execution
     assert len(execution["receipts"]) == (3 if last == "budget" else 1)
 
@@ -316,7 +318,8 @@ def test_invalid_path_returns_recoverable_error_and_keeps_prior_page_commands(mo
             AIMessage(content="雪花设置和打开河灯集的指令已发送。"),
         ],
     )
-    events = list(arm.stream_events({"messages": [HumanMessage(content="开雪花，再去留言板")]}, _config()))
+    events = list(arm.stream_events(
+        {"messages": [HumanMessage(content="开雪花，再去留言板")]}, _config()))
     error = model.calls[-2][-1]
     assert isinstance(error, ToolMessage) and error.status == "error"
     assert "/guestbook" in error.content and "get_site_map" in error.content

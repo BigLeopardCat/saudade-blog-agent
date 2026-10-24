@@ -33,8 +33,6 @@
 """
 
 
-import ast
-import logging
 import sys
 from pathlib import Path
 
@@ -47,10 +45,10 @@ sys.path.insert(0, str(ROOT))
 
 
 from langchain_core.messages import AIMessage, HumanMessage, RemoveMessage  # noqa: E402
+
 from agent.principal import SOURCE_ASSERTION, Principal  # noqa: E402
 from agent.runtime import memory  # noqa: E402
 from tools import base  # noqa: E402
-
 
 FAILS: list[str] = []
 check = collector(FAILS)

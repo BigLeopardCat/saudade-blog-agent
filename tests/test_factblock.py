@@ -26,13 +26,11 @@
 
 from __future__ import annotations
 
-import asyncio
 import sys
-import threading
 from pathlib import Path
 
 from _judge import collector
-from langchain_core.messages import AIMessage, AIMessageChunk, HumanMessage, SystemMessage
+from langchain_core.messages import AIMessage, AIMessageChunk
 
 ROOT = Path(__file__).resolve().parent.parent  # 仓根（测试统一在 tests/）
 
@@ -55,7 +53,6 @@ from agent.factblock import (  # noqa: E402
     render_fact_block,
     strip_fact_lines,
 )
-from tools import base as _base  # noqa: E402
 
 FAILS: list[str] = []
 check = collector(FAILS)

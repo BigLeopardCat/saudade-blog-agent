@@ -3,12 +3,12 @@
 from types import SimpleNamespace
 
 import pytest
+from langgraph.checkpoint.memory import InMemorySaver
 
 from agent import runtime_probe
 from agent.llm_usage import usage_fields
 from agent.runtime.native import NativeRuntime
 from agent.runtime.native_store import NativeConversationStore
-from langgraph.checkpoint.memory import InMemorySaver
 from models import llm
 
 

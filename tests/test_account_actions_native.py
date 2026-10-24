@@ -297,9 +297,9 @@ def test_cancel_is_durable_and_prevents_later_confirmation(accounts, tmp_path, m
     monkeypatch.setattr(writes, "ledger_for", lambda saver: ledger)
     from langgraph.checkpoint.memory import InMemorySaver
 
+    from agent.runtime.confirmation import cancel
     from agent.runtime.native import NativeRuntime
     from agent.runtime.native_store import NativeConversationStore
-    from agent.runtime.confirmation import cancel
 
     runtime = NativeRuntime(NativeConversationStore(InMemorySaver()))
     runtime.store.update_state(admin_config(), {

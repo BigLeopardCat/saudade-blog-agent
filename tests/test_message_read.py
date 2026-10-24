@@ -114,7 +114,8 @@ def test_replacing_and_cancelling_message_cards_revokes_old_grants(mailbox, monk
     def turn(domain, tool, args):
         model = Model(domain, tool, args)
         runtime.model_factory = lambda **_: model
-        list(runtime.stream_events({"messages": [HumanMessage(content="synthetic request")]}, config()))
+        state = {"messages": [HumanMessage(content="synthetic request")]}
+        list(runtime.stream_events(state, config()))
 
     try:
         turn("messages", "prepare_message_read", {"scope": "all_unread"})

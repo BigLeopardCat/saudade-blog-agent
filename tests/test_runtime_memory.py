@@ -10,9 +10,9 @@ from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
 import server
 from agent.principal import SOURCE_ASSERTION, SOURCE_BODY, Principal
 from agent.runtime import memory
+from agent.runtime.capabilities import ToolCatalog
 from agent.runtime.native import NativeRuntime
 from agent.runtime.native_store import NativeConversationStore
-from agent.runtime.capabilities import ToolCatalog
 from agent.runtime.prompt import build_prompt as _input
 from tools import base
 

@@ -65,7 +65,7 @@
   },
   "eval/run_golden.py::run_one": {
     "c": 58,
-    "lines": 242
+    "lines": 238
   },
   "eval/trace_reconcile.py::reconcile": {
     "c": 72,
@@ -110,10 +110,6 @@
   "tests/test_corpus_terms.py::test_corpus_terms": {
     "c": 54,
     "lines": 176
-  },
-  "tests/test_docs_links.py::test_docs_links": {
-    "c": 44,
-    "lines": 102
   },
   "tests/test_golden_corpus_provenance.py::test_golden_corpus_provenance": {
     "c": 36,
@@ -186,6 +182,10 @@
   "tests/test_vector_index.py::test_vector_index": {
     "c": 68,
     "lines": 352
+  },
+  "tests/test_wordlist_gate.py::test_wordlist_gate": {
+    "c": 60,
+    "lines": 272
   },
   "tests/test_write_param_words.py::test_write_param_words": {
     "c": 33,

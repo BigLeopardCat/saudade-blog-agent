@@ -64,7 +64,8 @@ def test_cancellation_is_durable_before_reply_and_old_grant_cannot_write(
     runtime, proposal, _ = waiting
     model = Model("cancel_pending_operation")
     runtime.model_factory = lambda **_: model
-    events = list(runtime.stream_events({"messages": [HumanMessage(content="先别收藏了")]}, config()))
+    events = list(runtime.stream_events(
+        {"messages": [HumanMessage(content="先别收藏了")]}, config()))
     assert events[-1].execution["pending_event"]["event"] == "cancelled"
     assert runtime.get_state(config()).values["pending_action"] is None
     grant = confirm.verify(proposal.execution["pending_confirm"]["token"], 7, 42)
@@ -267,7 +268,8 @@ def test_stale_button_cancel_preserves_replacement(waiting, monkeypatch, site):
     monkeypatch.setattr(base, "_get", lambda path, **kw: (
         {"noteId": 20, "noteTitle": "另一篇真实文章"} if path == "/notes/20"
         else original(path, **kw)))
-    list(run(runtime, Model("prepare_favorite_change", {"action": "add", "article_id": 20}), "换成20"))
+    list(run(runtime, Model("prepare_favorite_change", {
+        "action": "add", "article_id": 20}), "换成20"))
     expected = runtime.get_state(config()).values["pending_confirm"]
     assert cancel(runtime, grant, config())["cancelled"] is True
     assert runtime.get_state(config()).values["pending_confirm"] == expected

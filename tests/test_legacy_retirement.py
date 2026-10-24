@@ -5,7 +5,6 @@ import subprocess
 import sys
 from pathlib import Path
 
-
 ROOT = Path(__file__).resolve().parents[1]
 RETIRED = (
     "agent.agent",
@@ -32,25 +31,44 @@ import server
 from agent.runtime.native import NativeRuntime
 from agent.runtime.native_store import NativeConversationStore
 from langgraph.checkpoint.memory import InMemorySaver
-from langchain_core.messages import AIMessage
+from langchain_core.messages import AIMessage, HumanMessage
 from agent.principal import Principal, SOURCE_ASSERTION
+from eval.own_fixtures import favorite_backend
+from agent import confirm
+
+def call(name, args):
+    return AIMessage(content='', tool_calls=[{'name':name, 'args':args, 'id':name}])
 
 class Model:
+    def __init__(self):
+        self.responses = iter([
+            call('navigate_page', {'path':'/about'}),
+            call('load_favorites_info_tools', {}),
+            call('list_my_favorites', {}),
+            call('prepare_favorite_change', {'action':'add', 'article_id':19}),
+        ])
     def bind_tools(self, tools, **kwargs):
         return self
     def invoke(self, messages):
-        return AIMessage(content='原生响应')
+        return next(self.responses)
 
 runtime = NativeRuntime(NativeConversationStore(InMemorySaver()),
                         model_factory=lambda **_: Model())
 config = {'configurable': {'thread_id': 'conv_1', 'conversation_id': 1,
                            'user_id': 1,
                            'principal': Principal(1, 'user', SOURCE_ASSERTION)}}
-list(runtime.stream_events({'messages': []}, config))
+with favorite_backend() as backend:
+    state = {'messages': [HumanMessage(content='收藏文章19')]}
+    result = list(runtime.stream_events(state, config))[-1]
+    assert result.execution['receipts'][0]['cmd']['url'].endswith('/about')
+    token = result.execution['pending_confirm']['token']
+    assert confirm.verify(token, 1, 1)['executor'] == 'favorites'
+    assert backend['requests'] and all(request.method == 'GET' for request in backend['requests'])
 assert not any(name in __import__('sys').modules for name in %r)
 """ % (RETIRED,)
     result = subprocess.run(
-        [sys.executable, "-c", script], cwd=ROOT, env={"PYTHONPATH": str(ROOT)},
-        capture_output=True, text=True,
+        [sys.executable, "-c", script], cwd=ROOT,
+        env={"PYTHONPATH": str(ROOT), "SAUDADE_IGNORE_ENV_FILE": "1", "CHECKPOINT_DSN": ""},
+        capture_output=True, text=True, timeout=20,
     )
     assert result.returncode == 0, result.stderr

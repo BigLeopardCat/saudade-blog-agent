@@ -11,7 +11,7 @@
     "utils",
     "server.py"
   ],
-  "total": 56,
+  "total": 54,
   "files_checked": 164,
   "by_file": {
     "agent/action_text.py": 1,
@@ -21,7 +21,6 @@
     "agent/hostinfo.py": 2,
     "agent/receipt_digest.py": 1,
     "agent/reports.py": 1,
-    "agent/runtime/task_context.py": 2,
     "rag/embed_space.py": 1,
     "rag/graph_build.py": 3,
     "rag/search.py": 1,

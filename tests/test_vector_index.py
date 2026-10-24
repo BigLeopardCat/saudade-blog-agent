@@ -111,7 +111,6 @@ def flaky(texts, sp):
     return [None if x.startswith("标题二") else _vec(x) for x in texts]
 
 
-from langchain_core.messages import ToolMessage  # noqa: E402
 
 
 sys.path.insert(0, str(ROOT / "tests"))

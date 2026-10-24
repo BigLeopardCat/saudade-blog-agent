@@ -2,7 +2,7 @@
 
 import ast
 
-from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
+from langchain_core.messages import AIMessage, HumanMessage
 
 from agent.article_evidence import ArticleEvidence
 from agent.runtime.session import ToolSession

@@ -115,8 +115,8 @@ def test_health_dials():
         for k, v in _marks.items():
             setattr(settings, k, v)
         d = call()["dials"]
-        check("改了内存里的 settings，/health 立刻跟着变（读的是 settings 不是文件）",
-              all(d[k] == v for k, v in _marks.items()), json.dumps(d, ensure_ascii=False))
+        check("已退役的 planner 配置不能冒充原生运行时行为",
+              all(d[k] is False for k in _marks), json.dumps(d, ensure_ascii=False))
         check("llm_model 回的是**按 provider 解析后**的名字（不是某一个 provider 的字段）",
               d["llm_model"] == settings.active_llm_model, d["llm_model"])
         # 认不出的 provider：**不许把 /health 打成 500**——它是存活权威，一个拼写错误

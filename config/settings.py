@@ -170,9 +170,7 @@ class Settings(BaseSettings):
     # 滚动上线纪律（先观测、后收口）。打开后拒绝走既有 blocked 链路。
     authz_enforce: bool = False
 
-    # ── 原生模型运行时 ───────────────────────────────────────────────
-    # 保留单一可观测的思考开关；模型工具循环、输出预算和超时由 runtime/model_budget.py
-    # 与请求级 settings 统一管理，不再暴露旧 planner 的多组调优旋钮。
+    # Deprecated compatibility input; NativeRuntime explicitly disables thinking.
     planner_native_thinking: bool = True
 
     # ── 会话级任务状态（20260927 批 D；**20261015 起无档位、常开**）─────────
@@ -194,21 +192,7 @@ class Settings(BaseSettings):
     agent_task_inject_max: int = 3
 
 
-    # ── 确定性快道（定价档，20261015）───────────────────────────────
-    # `agent/deterministic_plan.py` 那五条快道（导航 / 指代型导航 / 显示 / 读当前文章 /
-    # 特效切换）都是"中文动词表 + 位置窗口"，**命中即拿走 planner 的决策权**：
-    # 整轮不调 planner LLM，直接实例化一张计划交 execute。它们各有真实事故依据
-    # （最有名的一条：planner 对「不要樱花了改成下雨」十轮里八轮只做半边），
-    # 所以**不能纸面推定删**——删/收窄一条要有读数。
-    #
-    # 这一档就是那个读数装置：**默认开 = 与从前逐字节相同**（唯一读口
-    # `agent/graph.py::_fastpath_on()`）；关掉则首轮那一段整块不跑，全部交给
-    # planner LLM。两臂交替跑，读的是**命中计数与轮数**（不读通过率）——两臂
-    # 都绿不说明什么，命中数才是价钱。
-    #
-    # ⚠️ 必须同时进 `tests/conftest.py::_PINNED`（本仓教训：离线套件对档位是瞎的，
-    # 判据跟着 shell 档位走会让本机与 CI 结论不同）。定价读数出自生产 trace 的
-    # `fastpath` 事件 + golden 两臂，见 `eval/fastpath_pricing.py`。
+    # Deprecated compatibility input; NativeRuntime does not use the old fast paths.
     agent_fastpath: bool = True
 
     # ── IoT 设备服务（ESP32 OLED 显示等）─────────────────────────────

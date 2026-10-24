@@ -4,12 +4,12 @@ import pytest
 from langchain_core.messages import AIMessage, HumanMessage
 from langgraph.checkpoint.memory import InMemorySaver
 
-from agent.principal import SOURCE_ASSERTION, Principal
 from agent import checkpoint
+from agent.principal import SOURCE_ASSERTION, Principal
+from agent.runtime.checkpoint_store import ConversationDeleted
 from agent.runtime.native import NativeRuntime
 from agent.runtime.native_store import NativeConversationStore
 from agent.runtime.results import TurnResult
-from agent.runtime.checkpoint_store import ConversationDeleted
 
 
 def config():
