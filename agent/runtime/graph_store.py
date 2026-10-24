@@ -7,6 +7,7 @@ are deliberately absent from the ConversationStore protocol.
 
 from agent.runtime import checkpoint_store, memory
 from agent.runtime.conversation_store import ConversationSnapshot
+from agent.runtime.legacy_bridge import graph_input
 from agent.runtime.turns import check_cancelled, conversation_turn
 from utils.trace import record
 
@@ -63,8 +64,6 @@ class GraphConversationStore:
         previous = self.load(config)
         principal = ((config or {}).get("configurable") or {}).get("principal")
         current = memory.turn_messages(messages, observations, reply, principal)
-        from agent.graph import graph_input
-
         saved = graph_input(memory.checkpoint_messages(previous.messages, current))
         saved.update(pending or {})
         saved.update(execution or {})
