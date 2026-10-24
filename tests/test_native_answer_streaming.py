@@ -212,3 +212,47 @@ def test_closing_consumer_closes_provider_even_when_generator_is_retained():
     assert next(consumer).content == "first"
     consumer.close()
     assert retained and closed.is_set()
+
+
+def test_sdk_stream_requests_usage_and_settles_provider_totals(monkeypatch):
+    import json
+
+    import httpx
+
+    from models.llm import get_llm
+
+    events = []
+
+    def record(node, event, **values):
+        events.append({"event": event, **values})
+
+    monkeypatch.setattr("agent.runtime.session.record", record)
+
+    def handle(request):
+        payload = json.loads(request.content)
+        assert payload["stream"] is True
+        assert payload["stream_options"] == {"include_usage": True}
+        base = {"id": "fixture", "object": "chat.completion.chunk", "created": 0,
+                "model": "fixture"}
+        chunks = [
+            {**base, "choices": [{"index": 0, "delta": {"content": "hello"},
+                                  "finish_reason": None}]},
+            {**base, "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}]},
+            {**base, "choices": [], "usage": {
+                "prompt_tokens": 18, "completion_tokens": 3, "total_tokens": 21,
+                "prompt_tokens_details": {"cached_tokens": 12},
+                "completion_tokens_details": {"reasoning_tokens": 0}}},
+        ]
+        body = "".join("data: " + json.dumps(chunk) + "\n\n" for chunk in chunks)
+        return httpx.Response(200, headers={"Content-Type": "text/event-stream"},
+                              content=(body + "data: [DONE]\n\n").encode())
+
+    budget = RequestBudget(BudgetLimits(model_calls=1))
+    with httpx.Client(transport=httpx.MockTransport(handle)) as client, budget_scope(budget):
+        model = get_llm(base_url="https://fixture.invalid/v1", api_key="fixture-only",
+                        http_client=client, streaming=True, stream_usage=True, max_tokens=64)
+        result = ToolSession(model, {}, {}, {}).run([HumanMessage(content="hello")])
+    assert result.reply == "hello"
+    assert budget.model_calls == 1 and budget.tokens == 21
+    done = next(event for event in events if event["event"] == "llm_done")
+    assert (done["input"], done["output"], done["cache_read"]) == (18, 3, 12)

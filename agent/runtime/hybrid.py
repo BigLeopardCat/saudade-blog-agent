@@ -151,7 +151,7 @@ class HybridArm:
     def _native_stream(self, state, config, prompt, own_enabled, domains, pending, snapshot, saver,
                        *, stream_mode=None, **kwargs):
         """Stream native model chunks, then persist one completed visible reply."""
-        model = get_llm(enable_thinking=False, streaming=True, max_tokens=768)
+        model = get_llm(enable_thinking=False, streaming=True, stream_usage=True, max_tokens=768)
         adapt = partial(pending.transition, config=config, saver=saver) if pending else None
         session = ToolSession(model, config, self._initial_tools(own_enabled), domains, adapt)
         streamed_reply = False
