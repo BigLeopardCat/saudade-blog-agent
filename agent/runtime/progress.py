@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import re
 import time
 from collections.abc import Callable
 
@@ -11,14 +10,8 @@ from agent.runtime.control import AgentCancelled, RequestControl
 from utils.trace import record
 
 _MAX_EVENTS = 24
-# Match the frontend's hidden command prefixes, not user intent.
-_HIDDEN_PREFIX = re.compile(
-    r"^\s*(?:[A-Za-z0-9_]*EFFECT|DARKMODE|NAVIGATE|AUTO_NAVIGATE|SUMMARY|\[?System)\]?\s*:"
-)
-
-
 def visible_reply(text: str) -> bool:
-    return bool(text.strip()) and not _HIDDEN_PREFIX.match(text)
+    return bool(text.strip())
 
 
 class ProgressEmitter:

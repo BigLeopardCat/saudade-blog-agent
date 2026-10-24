@@ -95,7 +95,7 @@
   // 这里一处（所有子模块 URL 统一拼 ?v=VER；Live2dAgent/index.tsx 的 boot.js 引用
   // 也需同步 bump——否则浏览器不会重新请求本入口）
   // 缓存同步点见 frontend/README.md；每次静态资源变化均更新。
-  const VER = '20261024b';
+  const VER = '20261025a';
 
   function loadExternalResource(url, type) {
     return new Promise((resolve, reject) => {
@@ -116,10 +116,11 @@
       }
     });
   }
-  // 子模块用常规 script（IIFE + window 挂载，非 module 语法）
-  function loadScript(url) {
+  // The protocol uses ES modules; other modules register global factories.
+  function loadScript(url, module = false) {
     return new Promise((resolve, reject) => {
       const s = document.createElement('script');
+      if (module) s.type = 'module';
       s.src = url;
       s.onload = () => resolve(url);
       s.onerror = () => reject(url);
@@ -135,11 +136,12 @@
   };
   window.Image.prototype = OriginalImage.prototype;
 
-  // ── 子模块加载（20260828o 拆分；纯定义，无 DOM 依赖，可并行）──
+  // Load chat modules in dependency order.
   const MODS = [
     ['chat-core', '__waifuChatCore'],
     ['chat-render', '__waifuRender'],
     ['chat-engine', '__waifuEngine'],
+    ['chat-protocol', '__waifuChatProtocol'],
     ['chat-stream', '__waifuStream'],
     ['chat-ui', '__waifuChatUI'],
     ['chat-session', '__waifuSession'], // 20260903 会话化 UI 壳（会话管理列表/双栏）
@@ -147,7 +149,7 @@
   ];
   for (const [name, globalKey] of MODS) {
     try {
-      await loadScript(live2d_path + name + '.js?v=' + VER);
+      await loadScript(live2d_path + name + '.js?v=' + VER, name === 'chat-protocol');
     } catch (err) {
       console.error('[agent-chat] 子模块加载失败: ' + name + '.js（' + err + '），聊天功能不可用');
       // 20260830：显式上报（loadScript 内部 catch 了错误，不会走 window error 监听）
