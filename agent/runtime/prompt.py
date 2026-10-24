@@ -48,5 +48,6 @@ def build_prompt(messages: list, principal, own_enabled: bool = False, pending=N
                 pending.context(), ensure_ascii=False),
             additional_kwargs={"memory_context": True}))
     summary = memory.summary_message(messages)
-    return [system, *attachments, *([summary] if summary is not None else []),
-            *memory.prompt_dialogue(messages, principal)]
+    dialogue = memory.prompt_dialogue(messages, principal)
+    return [system, *dialogue[:-1], *attachments,
+            *([summary] if summary is not None else []), *dialogue[-1:]]

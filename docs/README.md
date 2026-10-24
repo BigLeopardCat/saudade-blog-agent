@@ -32,6 +32,7 @@
 | [问题记录.md](问题记录.md) | 事故取证，按日期：现象 → 根因 → 修复 → 回归锁（**§2.1 例外**，见下） | 记录型（+ §2.1 跨仓契约） |
 | [native-progress-events.md](native-progress-events.md) | 原生进度事件、答案流、取消围栏与服务端输出计量 | 现状型 |
 | [native-event-transport.md](native-event-transport.md) | Runtime 原生事件到聊天/SSE 协议的薄传输边界与终态规则 | 现状型 |
+| [native-context-cache.md](native-context-cache.md) | 原生工具目录、动态上下文顺序及缓存用量的验证口径 | 现状型 |
 | [legacy-compatibility-boundary.md](legacy-compatibility-boundary.md) | 原生运行时、旧图兼容层及退役条件 | 现状型（含迁移边界） |
 | [eval-observability.md](eval-observability.md) | 混合运行时指标、结果验收、旧评测边界与执行入口 | 现状型 |
 | [lint-baseline.md](lint-baseline.md) | 静态检查（ruff）基线与"新代码要干净"的参照点 | 现状型 |
