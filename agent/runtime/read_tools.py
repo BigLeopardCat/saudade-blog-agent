@@ -6,7 +6,7 @@ check. Writes use separate domain confirmation tools; browser commands have thei
 """
 
 from agent.authz import SCOPE_ADMIN_CONSOLE, SCOPE_READ_OWN, SCOPE_READ_PUBLIC, TOOL_SCOPE, holds
-from agent.principal import SOURCE_ASSERTION
+from agent.principal import is_verified_identity
 from tools.base import get_all_tools
 
 ARTICLE_READ_TOOLS = frozenset({"rag_search", "search_notes", "get_article_detail"})
@@ -34,9 +34,7 @@ _ADMIN_DESCRIPTIONS = {
 
 
 def scoped_reads_enabled(principal, scope: str, user_id=None) -> bool:
-    return (getattr(principal, "source", None) == SOURCE_ASSERTION
-            and type(getattr(principal, "uid", None)) is int
-            and principal.uid > 0 and holds(principal, scope)
+    return (is_verified_identity(principal) and holds(principal, scope)
             and (user_id is None or (type(user_id) is int and user_id == principal.uid)))
 
 
@@ -49,12 +47,12 @@ def _tools_with_scope(names: frozenset[str], scope: str) -> dict:
                    if TOOL_SCOPE.get(name) != scope}
     if wrong_scope:
         label = scope.removeprefix("read.")
-        raise RuntimeError(f"Hybrid tools must remain {label} reads: {wrong_scope}")
+        raise RuntimeError(f"Native tools must remain {label} reads: {wrong_scope}")
     selected = {tool.name: tool for tool in get_all_tools()
                 if tool.name in names}
     missing = names - selected.keys()
     if missing:
-        raise RuntimeError(f"Hybrid tools missing from registry: {sorted(missing)}")
+        raise RuntimeError(f"Native tools missing from registry: {sorted(missing)}")
     return selected
 
 

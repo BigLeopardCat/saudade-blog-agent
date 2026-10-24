@@ -1,36 +1,5 @@
 # -*- coding: utf-8 -*-
-"""用户**自己那一份**数据：收藏 / 未读汇总 / 站内通知 / 站内信（20261018 拆 `tools/base.py`）。
-
-**为什么单独成模块**：`tools/base.py` 是全仓第二大体量文件（5351 行 / 141 个模块级定义），
-本模块收的是其中**相邻的两节**——「用户自己的数据工具」（20260923）与「站内信（私信）」
-（20260923 批 8）。它们本来就是一件事的两面：scope 同属 `read.own` / `write.own`
-（见 `agent/authz.py` 的登记），读写的是**登录者自己那一份**，与公开池（`list_notes` /
-`search_notes` 那一族，`read.public`）在语义上就是两套视图。合并成一个模块而不是切两刀，
-理由是它们共用同一批原语（`_as_ids` / `_as_bool` / `_as_article_id` / `_own_get` /
-`_own_write_guard` / `_pre_read_fail`）——切开只会让这批原语在两边各留一份。
-
-**搬家方式**（与 `tools/device.py` 20261017 那一刀逐字同源）：`tools/base.py` 在自己
-那一节原来的位置按**原名** re-export 本模块全部顶层名（`# noqa: E402,F401`）。为什么不
-逐个改 import 方——本仓有套件**直接给 `tools.base` 的模块属性打桩**（实测：`_client` 159
-处、`_get` 10 处、`_admin_get` 4 处、`_find_named_user` 3 处），而"补丁打在哪个模块对象上"
-决定它生不生效：桩写在 `tools.base` 上，就得有人**从 `tools.base` 的名字空间里**去读它。
-
-⚠️ **本模块取 `tools.base` 的东西一律走模块级 `from tools.base import …`（取函数对象），
-今天这么写是安全的——本模块一个都不用那三个被套件打桩的名字（`_get` / `_admin_get` /
-`_find_named_user`）。将来谁要在本模块里调它们，必须写成 `from tools import base as _base`
-再 `_base._admin_get(...)`**：按名 import 会拿到**打桩前**的旧函数对象，桩静默失效、
-测试真去发网络请求（同 `tools/result.py` 头注那条：看着在跑、其实没跑）。
-
-⚠️ **别丢注释**：两节的节头注（`read.own` 为什么不能取 `read.public`、站内信为什么**不是**
-河灯留言）连同正文一起搬过来了——那些话解释的是"为什么是这个 scope"，删掉它下一个人就会
-"顺手统一"成公开面。折行说明见下。
-
-⚠️ **一处折行**：`read_notifications` 里那句 `meta=fact("notice_read", …)` 在
-`tools/base.py` 里是**126 列的历史长行**（那边的 E501 是存量豁免）。本文件按
-`docs/lint-baseline.md` 纪律 1「新增文件零 ruff error」折了行 ⇒ 该函数**行数 111→113**，
-`eval/complexity_baseline.json` 里那一条随之重登记为 113（**`c` 仍是 35，一个字没动**；
-字面与逻辑均逐字不变，多出来的只是排版）。
-"""
+"""Authenticated favorites, mailbox access and read-state mutations."""
 
 from typing import Annotated
 
@@ -49,7 +18,7 @@ from tools.result import ToolResult, _shape, fact, not_found, ok, tgt, unavailab
 
 # `__all__` = 本模块**所有不以 `_` 开头**的模块级名字（社区惯例，不留例外；
 # `tests/test_module_exports.py` 按这条规则机械判着，漂了就红）。
-__all__ = ["list_my_favorites", "get_unread_summary", "list_notifications", "add_favorite",
+__all__ = ["list_my_favorites", "get_unread_summary", "add_favorite",
            "remove_favorite", "read_notifications", "list_my_messages", "read_messages"]
 
 # ---------------------------------------------------------------------------
@@ -157,18 +126,6 @@ def get_unread_summary(config: RunnableConfig) -> str:
         out["unread_items_note"] = (f"只带回 {len(slim)} 条"
                                     f"（未读通知共 {total_unread} 条）")
     return _shape(out)
-
-
-@tool
-def list_notifications(config: RunnableConfig) -> str:
-    """列出**当前登录用户自己**的站内通知（返回 unread 与 items：id / type / title /
-    content / link / isRead / createdAt，按时间倒序，最多 100 条）。
-    type=announcement 的是站内公告（发布时按用户展开），其余是系统通知（如留言审核
-    结果）。访客问"有什么未读的公告/通知""最新的一条通知说了什么"时用。
-    没携带身份时如实告知读不到；**这条不含私信**（私信未读只在 get_unread_summary 的
-    messages 里计数，本站没有"读自己的私信列表"的 agent 工具）。"""
-    data = _own_get("/api/protected/notifications", config)
-    return _shape(data)
 
 
 # ── 写那一半（20260923 批 7）：收藏 / 取消收藏 / 标记已读 ────────────────────
