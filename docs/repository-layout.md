@@ -18,6 +18,9 @@
 
 ## 已建立的边界
 
+旧图兼容边界的完整契约见 [legacy-compatibility-boundary.md](legacy-compatibility-boundary.md)。
+本文件只记录目录职责；迁移 PR 必须同时遵守那份依赖方向和退役条件。
+
 - `agent/runtime/hybrid.py` 负责准入、持久化与协议适配；模型和工具循环在 `session.py`。
 - `agent/runtime/prompt.py` 组装原生指令、可信身份与有界上下文；工具能力由 schema 描述，
   不在编排层叠加各领域的操作提示。`conversation_store.py` 定义完成轮次的存储边界。
