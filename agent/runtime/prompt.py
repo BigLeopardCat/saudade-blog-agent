@@ -4,9 +4,9 @@ import json
 
 from langchain_core.messages import HumanMessage, SystemMessage
 
-from agent.runtime.persona import BLOG_PERSONA_PROMPT
 from agent.runtime import memory
 from agent.runtime.context import conversation_context
+from agent.runtime.persona import BLOG_PERSONA_PROMPT
 from tools.base import SITE_BASE
 
 _BOUNDARY = (

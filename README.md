@@ -143,7 +143,7 @@ uv sync
 .venv/bin/python -m pytest -q
 
 # L0 局部（-k 按用例名筛选；修改领域或确认路径后至少跑 native + authz + confirm）
-.venv/bin/python -m pytest -q -k workflows
+.venv/bin/python -m pytest -q -k 'native or authz or confirm'
 # 套件清单**只有"pytest 按目录收集"一处**（`pyproject.toml` 的 `testpaths`）：
 # 加套件不用改 CI、不用改夜间脚本、不用改本文——落一个 `tests/test_xxx.py` 上去，下一轮就在跑。
 
@@ -156,7 +156,7 @@ bash scripts/dev/coverage.sh
 # L1 检索基准（recall@k / MRR，直接测线上 rag/search.py，秒级、无网）
 .venv/bin/python eval/recall_eval.py
 
-# L2 原生行为评测：使用离线桩验证工具、确认、取消、回执和存储契约
+# L2 真实模型任务评测：需要站点语料、后端和模型凭据；当前暂停线上基线
 .venv/bin/python eval/run_golden.py
 .venv/bin/python eval/run_golden.py --only <id>,<id>   # 只跑指定用例
 .venv/bin/python eval/golden_full_run.py               # 全量跑（与 run_golden 共用判据）

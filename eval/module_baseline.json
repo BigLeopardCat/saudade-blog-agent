@@ -20,7 +20,7 @@
     "top_defs": 30
   },
   "eval/run_golden.py": {
-    "lines": 3664,
+    "lines": 3611,
     "top_defs": 51
   },
   "scripts/build_word_graph.py": {
@@ -32,11 +32,11 @@
     "top_defs": 36
   },
   "server.py": {
-    "lines": 1658,
+    "lines": 1651,
     "top_defs": 50
   },
   "tests/test_authz.py": {
-    "lines": 883,
+    "lines": 881,
     "top_defs": 2
   },
   "tests/test_judge_offline.py": {

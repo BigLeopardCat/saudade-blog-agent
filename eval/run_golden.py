@@ -1,80 +1,11 @@
 # -*- coding: utf-8 -*-
-"""L2 golden set 最小版运行器：真实 agent 端到端（真实 LLM + 真实工具）。
+"""Run real-model request evaluations against a configured blog.
 
-每条 golden 样本断言"行为"而非"实现"：
-  - 动作通道：命令帧（EFFECT:/NAVIGATE:/AUTO_NAVIGATE:/DARKMODE:）是否如期望产生/禁止
-  - 文本关键词 / 非空
-  - 文本语义断言的两种兜底（20260912，防"判据脆弱→红斑常态化"）：
-      text_any_regex           正断言的正则族，与 text_contains 为 OR（近义表述任一命中）
-      not_contains_exempt_quote 负断言的否认豁免（opt-in）：模型撤回上一轮谎称时必然
-                               引述那句话，邻域含撤回标记（「之前说…是错的」）不算违规；
-                               同理紧贴否定词的「没成功显示」是诚实否认，也不算（9/16）
-    两项均由夜间假失败实证引入（见 ~/agent_regression.log 9/10、9/11、9/16 与 eval/report/review_*.md）
-  - 参数族断言：require_arg_from_result（消费者参数取自生产者回执的结构化字段）
-                require_exec_args（执行回执里某工具某参数**等于**期望值——没有
-                producer 可挂时用，如 20260920 确定性文档锚点解析出的 id）
-
-**用例的顶层开关**（不在 `gold` 里，也不是断言——它们决定"这条用例今天跑不跑"）：
-  needs_admin_uid / needs_user_uid   需要真身份：uid 由环境变量给（用例里刻意不写 uid，
-                                     仓库是公开的）——GOLDEN_ADMIN_UID / GOLDEN_USER_UID
-  needs_real_write（20260925）       这条用例会**真写生产库**（本机即生产）⇒ 只有
-                                     GOLDEN_ALLOW_REAL_WRITE=1 时才跑，默认**关**
-  requires_fixture（20260925）       它要动的那个夹具（`agent_fixture_` 前缀族）——
-                                     不在位就响亮跳过，见 eval/golden_fixture.py
-  requires_fixture_kind（20260926）  夹具属于哪一族：`category`（默认，公开分类列表里
-                                     读得到）/ `account`（后台账号名录里读得到，见
-                                     eval/golden_fixture_account.py）。拼错的 kind 会
-                                     响亮报错，不会悄悄按分类族去查
-  三者未满足都**响亮 SKIP 并计入 skipped_ids**（不静默豁免：跳过关乎通过率分母）。
-  20260926 起两条身份通道**不再"设了就用"**：设了也要先做一次**只读在位检查**
-  （eval/identity_preflight.py，拿与 agent 代调同源的令牌打一次管理员域只读接口）。
-  明确不可用（401 被冻结/收回、403 角色不符）⇒ 那批用例**未评估** + **退出码 3**；
-  读不到（网络/重启）⇒ 只警告照跑（"不知道"不等于"不可用"，别改成对称的）。
-
-用法（cd saudade-blog-agent）：
-  .venv/bin/python eval/run_golden.py               # 全量（本机=生产链路，耗时基线有效）
-  .venv/bin/python eval/run_golden.py --limit 3     # 前 3 条（调试）
-  .venv/bin/python eval/run_golden.py --only nav_friends_down
-  .venv/bin/python eval/run_golden.py --only rag_python_is,rag_arch_components  # 多选（链路诊断）
-  .venv/bin/python eval/run_golden.py --min-pass-rate 0.9 --skip-ids device_query  # 显式点估计口径
-  # 真写用例（夹具先在位，见 scripts/migration/golden_write_fixture_20260925.sql）：
-  GOLDEN_ADMIN_UID=756 GOLDEN_ALLOW_REAL_WRITE=1 \
-    .venv/bin/python eval/run_golden.py --only golden_write_category_delete_exec
-退出码：0=两层门禁都过（硬层 0 红 + 采样层 Wilson 95% 下界 ≥ 档位）
-        1=硬层红（回归组）或采样层下界低于档位
-        2=一条用例都没剩下（空分母："没评"不是"通过"）
-        3=身份/事实/禁卡/无 trace 前提不可用（这四类用例**未评估**——同样"没评"，不受
-          任何档位放宽；四类各自的原因都逐条打出来，别混成一句。**无 trace** 那一类
-          = `--no-trace` 关掉了 `require_ledger_*` 唯一的证据链，见 `check_trace_premises`）
-
-**落地指标**（20261001 起；判据住在 `eval/landing_gate.py`，这里只接线）：
-  **硬层** = 离线套件 / 真链路探针 / 回归组 / 前提与身份前置 ⇒ **0 红**，不给百分比
-  （这一层的红没有频率含义：它说的是"存在一条能走通的路"）。**采样层** = 其余能力题 ⇒
-  **Wilson 95% 下界 ≥ 档位**（当前 0.90、目标 0.95、连三夜达档抬 0.05）。为什么点估计
-  不算数、为什么确定性层不设 99%，见 `landing_gate` 头注（附 27 次全量历史算出的分布）。
-
-**`--min-pass-rate` 的确切语义**（20260924 写清四层；20261001 起它退成**显式覆盖**）：
-  1. **不传**（默认）⇒ 走上面的两层门禁（Wilson 口径）。夜间那条路不传它。
-  2. **显式传** ⇒ 按**点估计**判（老口径），给 `--only` 的小样本调试跑与 A/B 用——那种
-     场合成不了统计（n=4 时 Wilson 下界只有 0.51，判它没有意义）。**两种口径不会同时生效**。
-  3. 它管的是**本轮实际跑了的那些用例**的通过率，不是全语料的。`--only` / `--limit` /
-     `--skip-ids` / 未设 uid 而跳过的用例**都改变分母**——所以"通过率达标"在非全量跑里
-     读起来要打折扣（报告里的 `full_run` 字段就是给这件事用的）。
-  4. **回归组（tags 含 regression）任何时候都另按硬判 100%**，不受它放宽——先判回归组，
-     红了直接退出码 1，与通过率高低无关。
-20260924 起判据以**首跑红后复跑一次**的终判为准，复跑绿的那批记进 regression.flaked_ids
-并单列打印（放行但必须有人看——首跑红/复跑绿两条都在报告与复审单里，不许静默宽恕）。
-⚠ 复跑只对**回归组**做（能力题本来就按比率放宽），所以 flake 统计是**单向**的：只重跑
-首跑红的，不重跑首跑绿的 ⇒ `flaked_ids` 系统性低估（一条"首跑绿、其实 30% 概率红"的用例
-在这里永远不可见）。别把它当成稳定性的上界。
-⚠ **放行 ≠ 通过**（20261001 补记，带量化）：一条首跑红率为 p 的用例，要让夜间**硬红**得
-两跑都红 ⇒ 被看见的概率只有约 p²（两跑可当独立采样）；p=0.5 时**一半的夜晚它长得像绿的**。
-实测：`followup_entity_slot_category` 首跑红率 ~60%，连续三遍都被复跑救回，报告里只剩
-`rerun.ok=true` 与复审单里一行"已按方差放行"。⇒ **`flaked_ids` 里的每一条都要当待修的
-缺陷读，不是"偶发"**；这个机制只负责"不因一次采样波动拦门禁"，**不负责定性**。
-⚠ 通过率 vs 全过：本机（生产链路）默认全过；CI 在北美 runner 上跨网调用 LLM/站点，
-  单条超时类波动与"环境不可达"用例不该让整轮门禁变红——门禁按**通过率**判，
-  失败清单仍逐条打印、报告随 artifact 上传（见 .github/workflows/eval.yml）。
+The runner checks corpus provenance, uses the service producer, and validates
+replies, commands, confirmations and receipts against declared JSONL assertions.
+It requires backend access and model credentials; offline pytest tests its
+contracts with fixtures. Production writes require explicit opt-in.
+Historical reports remain readable; the executable runtime is native.
 """
 import argparse
 import asyncio
@@ -89,29 +20,33 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 
+import corpus_terms  # 同目录：语料术语派生（require_doc_terms 判据用）
+import golden_arm  # 同目录：选臂/建臂/分栏（graph 与试验线跑同一套语料，20261004）
+import golden_fixture  # 同目录：真写用例的夹具在位检查（20260925）
+import golden_thread  # 同目录：传给图的线程坐标（批 6，见该模块头注）
+import golden_trace  # 同目录（eval/ 在 sys.path 上，同 corpus_check 的用法）
+import identity_preflight  # 同目录：真身份通道的前置在位检查（20260926）
+import landing_gate  # 同目录：落地判定（两层门禁 / 慢性红榜，20261001）
+import report_archive  # 同目录：留档文件名（秒级 ts 同秒撞车 → 见模块头注）
+from landing_gate import (  # noqa: F401 —— 再导出（唯一实现在 landing_gate）
+    fallback_resets,
+    wilson_ci,
+)
+from langchain_core.messages import AIMessageChunk, ToolMessage
+
 # 复用 server 内部链路（不走 HTTP，与 test_fallback_replay.py 同模式）
 import server
-from server import (ChatRequest, HistoryItem, _build_messages,
-                    _run_agent_stream_to_queue)
+from agent import confirm  # 双轮（20260925）：验签 + 只读解载荷，见 run_one/run_case
+from agent.principal import Principal  # 管理助手用例的调用者身份（20260921）
+
 # `agent.create_agent` 的引用搬去了 eval/golden_arm.py（选臂那一层）：本文件不再直接建图，
 # 只调 `ensure_agent()` —— 建哪条臂是可拨的，直接 import 会把"只有一条臂"写死在调用点。
 from agent.transport import command_wire
-from agent import confirm  # 双轮（20260925）：验签 + 只读解载荷，见 run_one/run_case
-from agent.principal import Principal  # 管理助手用例的调用者身份（20260921）
+from server import ChatRequest, HistoryItem, _build_messages, _run_agent_stream_to_queue
+
 # uid=0 哨兵的**真值源**（`DENIAL_FAMILY` 第 ⑦ 支由它派生，见那一支的头注）——
 # 不抄字面进判据：哨兵改文案时，判据跟着改，不会静默退化成一条谁也命中不了的死正则。
-from tools.base import _NO_IDENTITY_READ, _NO_IDENTITY_WRITE  # noqa: E402
-from langchain_core.messages import AIMessageChunk, ToolMessage
-
-import corpus_terms  # 同目录：语料术语派生（require_doc_terms 判据用）
-import report_archive  # 同目录：留档文件名（秒级 ts 同秒撞车 → 见模块头注）
-import golden_arm  # 同目录：选臂/建臂/分栏（graph 与试验线跑同一套语料，20261004）
-import golden_fixture  # 同目录：真写用例的夹具在位检查（20260925）
-import identity_preflight  # 同目录：真身份通道的前置在位检查（20260926）
-import landing_gate  # 同目录：落地判定（两层门禁 / 慢性红榜，20261001）
-from landing_gate import fallback_resets, wilson_ci  # noqa: F401 —— 再导出（唯一实现在 landing_gate）
-import golden_trace  # 同目录（eval/ 在 sys.path 上，同 corpus_check 的用法）
-import golden_thread  # 同目录：传给图的线程坐标（批 6，见该模块头注）
+from tools.base import _NO_IDENTITY_WRITE  # noqa: E402
 from utils import trace as trace_mod  # trace 工具返回留多长（run_case 里放开，见其注释）
 
 CMD_PREFIXES = ("EFFECT:", "NAVIGATE:", "AUTO_NAVIGATE:", "DARKMODE:")
@@ -121,6 +56,7 @@ CMD_PREFIXES = ("EFFECT:", "NAVIGATE:", "AUTO_NAVIGATE:", "DARKMODE:")
 # `eval/golden_arm.py`**（那一格现在按臂派生：graph 逐字 `native`，试验臂 `native+<臂>`）
 # ——这里只做**再导出**，值仍只有一份；`engine_for` 是唯一的派生实现。
 from golden_arm import INTERFACE_LAYER  # noqa: E402,F401  （再导出，见上）
+
 # 导航命令帧族：AUTO_NAVIGATE 与 NAVIGATE 同属"导航已执行"，断言时视为一族
 # （golden 里 require/forbid "NAVIGATE:" 时 AUTO_NAVIGATE 帧同样计入/计入禁止）
 CMD_FAMILIES = {
@@ -176,11 +112,7 @@ def _cmd_matches(pre: str, c: str) -> bool:
 def ensure_agent() -> None:
     if server._agent is None:
         t0 = time.time()
-        # 装哪条臂由 `GOLDEN_ARM` 定（缺省 graph，见 eval/golden_arm.py）：graph 走的仍是
-        # `agent.create_agent()`（逐字不变），但试验臂得**先有个入口**才能被打分——
-        # 「ReAct 能不能到 95%」此前**没有读数**，缺的就是这一行。
-        # **`server.py:309` 的 lifespan 不经过这里**（那是生产，恒 create_agent），
-        # 所以选臂只影响评测，不影响线上。
+        # Evaluation uses the same native runtime factory as the service.
         _arm = golden_arm.arm_name()
         server._agent = golden_arm.build_agent(_arm)
         print(f"[init] 编译图构建完成（arm={_arm}）：{time.time() - t0:.1f}s")
@@ -1905,13 +1837,24 @@ def check_trace_premises(cases: list) -> tuple:
 #     （全摘光 ⇒ `not cases`）：那里把退出码置 3 并说清原因。别在末尾再加一条够不着的分支；
 #   · 它排在四条前提**之后**：四条各自的具体诊断先出，这条全局结论收尾。
 from corpus_provenance import (  # noqa: E402,F401 —— 再导出（唯一实现在 corpus_provenance）
-    CORPUS_PROV_FOREIGN, CORPUS_PROV_OK, CORPUS_PROV_UNKNOWN, CORPUS_PROVENANCE_FILE,
-    ENTITY_KINDS, ENTITY_WHY_MIN, check_corpus_premises, check_entity_premises,
+    CORPUS_PROV_FOREIGN,
+    CORPUS_PROV_OK,
+    CORPUS_PROV_UNKNOWN,
+    CORPUS_PROVENANCE_FILE,
+    ENTITY_KINDS,
+    ENTITY_WHY_MIN,
+    check_corpus_premises,
+    check_entity_premises,
     entity_report_lines,
-    load_corpus_provenance, provenance_path_for,
-    report_lines as corpus_report_lines, snapshot_docs as corpus_snapshot_docs,
+    load_corpus_provenance,
+    provenance_path_for,
 )
-
+from corpus_provenance import (
+    report_lines as corpus_report_lines,
+)
+from corpus_provenance import (
+    snapshot_docs as corpus_snapshot_docs,
+)
 
 # ── golden 键的三张表（20260924）─────────────────────────────────────────────
 # 键名写错是一个**静默 no-op**：gold 是 dict，把 require_cmd_all 敲成 require_cmdall 时
@@ -2084,7 +2027,6 @@ def _exec_claim_fails(gold: dict, result: dict) -> list[str]:
 def check_gold(gold: dict, result: dict, *, docs=None, user_input: str = "",
                pending_src: str = "") -> list[str]:
     """逐项断言 golden 期望，返回失败原因列表（空 = 通过）。
-
     `docs`：语料快照（含正文的文档列表），只有 `require_doc_terms` 用得上。跑法在
     **启动时取一次**逐例传入；`None` ⇒ 带该键的用例判「未评估」（**不是通过**）。
 
@@ -2493,8 +2435,9 @@ def check_gold(gold: dict, result: dict, *, docs=None, user_input: str = "",
             fails.append(f"台账摆了但一条待办都没有（事件：{_lf_events}）"
                          "——本键要求帧里至少印出一个编号（要有待办行才判得动）")
     if gold.get("require_card_targets_from_ledger") and not _lf_off:
-        from agent.adminops_target import normalize_target_id  # 编号解析的唯一实现
         from native_receipt_contract import FIELD_FAMILY, TAG_FAMILY, TARGET_FIELDS
+
+        from agent.adminops_target import normalize_target_id  # 编号解析的唯一实现
         _byfam: dict = {}
         for _e in _lf_events:
             for _raw in (_e.get("ids") or []):
