@@ -167,6 +167,10 @@
     "c": 31,
     "lines": 167
   },
+  "tests/test_sections.py::test_sections": {
+    "c": 43,
+    "lines": 358
+  },
   "tests/test_settings_surface.py::test_settings_surface": {
     "c": 37,
     "lines": 132
