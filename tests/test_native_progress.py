@@ -311,3 +311,66 @@ def test_real_stream_close_fences_emitter_until_worker_drains(monkeypatch):
         server._release_slot()
 
     asyncio.run(scenario())
+
+
+def test_streamed_preface_and_terminal_confirmation_each_render_once(monkeypatch):
+    import asyncio
+    import json
+
+    from langchain_core.messages import AIMessageChunk
+    from langchain_core.tools import tool
+    from langgraph.checkpoint.memory import InMemorySaver
+
+    from agent.agent import create_agent
+    from agent.runtime.hybrid import HybridArm
+    from agent.runtime.results import TurnResult
+
+    question = "确认本次测试操作。"
+
+    @tool(return_direct=True)
+    def fixture_prepare() -> object:
+        """Prepare a fixture confirmation without executing business operations."""
+        return TurnResult(question, {"pending_confirm": {
+            "q": question, "token": "fixture-only", "opts": [], "exp": 0},
+            "confirm_text": question, "receipts": []})
+
+    class Model:
+        max_tokens = 64
+
+        def bind_tools(self, tools, **kwargs):
+            return self
+
+        def stream(self, prompt, **kwargs):
+            yield AIMessageChunk(content="准备好了。")
+            yield AIMessageChunk(content="", tool_calls=[
+                {"name": "fixture_prepare", "args": {}, "id": "prepare"}])
+
+    graph = create_agent(checkpointer=InMemorySaver())
+    runtime = HybridArm(graph, read_tools={"fixture_prepare": fixture_prepare},
+                        site_read_tools={})
+    events = []
+    server = _prepare_server(monkeypatch, runtime, events)
+    monkeypatch.setattr("agent.runtime.hybrid.get_llm", lambda **kwargs: Model())
+
+    async def scenario():
+        drained = asyncio.Event()
+        monkeypatch.setattr(server, "finish_trace", lambda *args: drained.set())
+        response = await server.chat_stream(
+            server.ChatRequest(message="prepare", conversation_id=42), None)
+        text, cards = [], []
+        async for frame in response.body_iterator:
+            raw = frame.removeprefix("data: ").strip()
+            if raw.startswith('"'):
+                item = json.loads(raw)
+                if item.startswith("__CONFIRM__:"):
+                    cards.append(item)
+                elif not item.startswith("__"):
+                    text.append(item)
+        await asyncio.wait_for(drained.wait(), 2)
+        reply = "".join(text)
+        assert reply.count("准备好了。") == 1
+        assert reply.count(question) == 1 and len(cards) == 1
+        stored = graph.get_state({"configurable": {"thread_id": "conv_42"}})
+        assert stored.values["messages"][-1].content == reply
+
+    asyncio.run(scenario())

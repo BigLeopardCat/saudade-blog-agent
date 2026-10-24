@@ -393,10 +393,16 @@ class ToolSession:
             missing = ("\n" if not displayed.endswith("\n") else "") + reply
         else:
             missing = reply
+        execution = result.execution
+        terminal_key = ("confirm_text" if execution and execution.get("pending_confirm") else
+                        "noop_text" if execution and execution.get("noop_note") else None)
+        if terminal_key:
+            execution = {**execution, terminal_key: missing}
         if missing:
             visible_parts.append(missing)
-            yield AIMessageChunk(content=missing)
-        return TurnResult("".join(visible_parts), result.execution)
+            if terminal_key is None:
+                yield AIMessageChunk(content=missing)
+        return TurnResult("".join(visible_parts), execution)
 
     def _handle_response(self, response, buffered_chunks, visible_parts):
         """Validate one completed response and either finish or return calls."""
