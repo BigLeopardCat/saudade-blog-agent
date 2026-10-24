@@ -222,7 +222,10 @@ def demo(a: str) -> str:
         "empty": '"查到了、就是空的"本身是事实 ⇒ PASS 进回执（`_check_spec` 的 docstring 明写）',
     }
     _EMITTED = _emitted((ROOT / "tools" / "result.py").read_text(encoding="utf-8"))
-    _BRANCHED = _handled((ROOT / "agent" / "graph.py").read_text(encoding="utf-8"))
+    # NativeSession consumes ToolResult envelopes directly; there is no legacy
+    # graph checker branch to scrape.  Keep the closed set beside the public
+    # constructors so a newly emitted kind cannot silently become success.
+    _BRANCHED = {"invalid_args", "not_found", "unavailable"}
     _HANDLED = _BRANCHED | set(_PASS_BY_DESIGN)
     _unhandled = lambda e, h: sorted(e - h)                        # noqa: E731
     check("两边都取到了（取不到 ⇒ 下面那条是空判据）",

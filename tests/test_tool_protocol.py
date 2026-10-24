@@ -97,8 +97,8 @@ def test_exhausted_result_budget_stops_before_another_read():
 
 def test_budget_stop_does_not_restart_another_runtime():
     model = Model([call("invented") for _ in range(5)])
-    session = ToolSession(model, {}, {}, {})
     with budget_scope(RequestBudget(BudgetLimits(model_calls=5))):
+        session = ToolSession(model, {}, {}, {})
         result = session.run([HumanMessage(content="查询作者")])
     assert "已停止继续处理" in result.reply
     assert len(model.prompts) == 5

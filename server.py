@@ -36,7 +36,7 @@ from pydantic import BaseModel, Field, field_validator
 
 from agent import (
     checkpoint,  # 采纳（批 7）：造 saver + 会话坐标 + 级联清理
-    confirm,  # 待办令牌：签发在 graph 弹窗侧，验签在这里（见 /chat/stream）
+    confirm,  # 待办令牌：确认准备与执行共用签名验签（见 /chat/stream）
     runtime_probe,  # /version 与 /ready 的判定逻辑（纯函数，见该模块头注）
 )
 from agent.approval_api import router as approval_router
@@ -52,7 +52,7 @@ from agent.runtime.task_context import TS_MMDD_HHMM_RE, age_minutes, render_open
 from agent.transport import collect_turn, emit_to_queue
 
 # The block-reason map remains a shared compatibility surface for existing
-# authorization and receipt tests; native transport does not render planner text.
+# authorization and receipt tests; transport does not render model planning text.
 # 六个服务限额/超时常量（STREAM_* / RECURSION_LIMIT / MAX_BODY_BYTES /
 # MAX_CONCURRENT_STREAMS / REVIEW_CONCURRENCY）的真值源：20261020 双轨收敛后
 # 唯一从这里取值（env 键保持 AGENT_* 老名，写 .env 就生效；判据
@@ -73,7 +73,7 @@ from utils.trace import finish_trace, record, start_trace
 logger = logging.getLogger(__name__)
 
 # Shared error text remains part of the authorization/receipt contract; the
-# transport no longer renders planner blocked updates itself.
+# transport no longer renders model-loop blocked updates itself.
 _REASON_CN = {key: value[0] for key, value in _BLOCK_REASONS.items()}
 
 
@@ -110,7 +110,7 @@ RECURSION_LIMIT = settings.recursion_limit
 # 生产者异常时 `__ERROR__` 帧里给**访客**看的那句话（20260927 拍板，原为"待拍板"）。
 # 此前这一格发的是 `str(异常)` 原文——上线实测的代价：异常名与内部路径顺着它出到
 # 气泡里，20260927 07:29 主人看到的是一句「网络错误: 'pending_confirm'」
-# （`graph.execute_node` 的 KeyError；既不是网络问题，也不是一句看得懂的话）。
+# （`native runtime` 的 KeyError；既不是网络问题，也不是一句看得懂的话）。
 # **原文不丢**：它照旧进 `logger.exception`（带 traceback）与 trace 的 `end_reason`，
 # 排障读日志，访客读这一句。这里是**模块级常量**而不是内联字面量：测试要能替换它
 # 去验"帧不会被劈开"（见 `tests/test_error_frame.py` ②）——写成内联字面量后，
@@ -243,7 +243,7 @@ class ChatRequest(BaseModel):
     # 会话级任务状态（20260927 批 D）：本会话**未完结的任务**（Rust 侧从 agent_task
     # 表读终态之外的最近 3 条，交回的是 **JSON 数组串**——刻意不像 executions /
     # pending_action 那样交一行渲染好的文本，理由见 chat.rs `load_agent_tasks` 的注）。
-    # 渲染进 system 上下文由本文件 `_build_messages` 调 `agent/tasks.py::render_open_tasks`
+    # 渲染进 system 上下文由本文件 `_build_messages` 调运行时任务投影
     # 完成；流尾的确定性结算（按回执推进 cursor）用的是同一份原文。
     # 形状不对一律当"没有任务"（`task_rows` 判）——这**不是**静默失效：JSON 解不出来
     # 意味着 Rust 侧或表结构坏了，而它坏掉的症状是"未完结的事又忘了"，正是本表要治的病。
@@ -251,7 +251,7 @@ class ChatRequest(BaseModel):
     # 上一轮执行过的**工具名**（20260929 批 F1'，Rust 侧从最近 8 条回执去重得出）。
     # 用途只有一个：让"上一轮读过审核队列吗"成为一个**结构化事实**，而不是对
     # narrator 散文做正则——批 H 之前它是那条授权式审核快道的准入判据（快道已整族
-    # 删除），现在只喂 `graph._ledger_due_families` 的第三条触发器（上一轮真读过那份
+    # 删除），现在只喂原生运行时台账的第三条触发器（上一轮真读过那份
     # 队列 ⇒ 这一轮接着把它的待办摆上桌）。
     # 三条纪律：
     #   · **空列表不是"键缺席"**：这里给的是 `[]` 而不是 None，因为"上一轮什么都没
@@ -330,7 +330,7 @@ class ChatResponse(BaseModel):
 _agent = None
 
 
-def _graph_holds_context() -> bool:
+def _runtime_holds_context() -> bool:
     """Whether the live runtime owns persistent conversation history."""
     return runtime_probe.holds_context(_agent)
 
@@ -338,7 +338,7 @@ def _graph_holds_context() -> bool:
 def _thread_id_for(req) -> str:
     """Use the same conversation coordinate for HTTP and SSE."""
     return checkpoint.thread_id_for(req.user_id, req.conversation_id,
-                                    _graph_holds_context())
+                                    _runtime_holds_context())
 
 
 def _build_arm():
@@ -375,10 +375,10 @@ async def lifespan(app: FastAPI):
             "但每一条对话都会失败（/ready 现在报 missing_credentials）。", _provider)
     _agent, _arm = _build_arm()
     logger.info("Agent ready (arm=%s)", _arm)
-    # 后台预热图谱查询的 embedding 客户端（首次 TLS 建连 ~3s，不预热的话
+    # 后台预热图谱查询的 embedding 客户端（首次 TLS 建连约 3s，不预热的话
     # 重启后第一个查询会被上游超时掐掉→静默降级）。不阻塞启动，失败也不影响
     threading.Thread(target=wordgraph.warm, name="wordgraph-warm", daemon=True).start()
-    # 后台预热 RAG 语料索引：一是首个检索不再吃冷启动延迟，二是 planner 的文档锚点
+    # 后台预热 RAG 语料索引：一是首个检索不再吃冷启动延迟，二是文档锚点
     # 要靠语料把《标题》解析成 id（20260920 方案①）。不阻塞启动，失败只降级。
     rag_search.warm_async()
     yield
@@ -568,9 +568,9 @@ def annotate_exec_ages(exec_txt: str, now: "datetime | None" = None) -> str:
     """给台账每行的行首时间补一个**系统算出来的相对年龄**：`09-25 00:42（3 小时前·已过期）`。
 
     动机（20260925 生产实证，trace 20260925T035331）：访客问"现在服务器怎么了"，
-    台账里最近一条是 3 小时 11 分前的服务器状态，planner 零工具照抄摘要、narrator
+    台账里最近一条是 3 小时 11 分前的服务器状态，模型零工具照抄摘要、narrator
     又写成"刚才查到的"——数据过期 + 措辞不实，两头都错。年龄是**事实**（系统算的），
-    要不要据此重查是**决策**（planner 的规则 6c）——所以这里只标注、不拦截。
+    要不要据此重查由原生模型循环决定——所以这里只标注、不拦截。
 
     行首时间戳由 Rust 渲染（`MM-DD HH:MM`，只有月日没有年）：跨年时"12-31 23:50"
     在 1 月 1 日按当年解析会变成"十一个月后的未来"，故超前 6 小时以上一律退一年。
@@ -623,66 +623,8 @@ def _ledger_block(req: ChatRequest, confirmed: bool = False) -> str:
             + (req.pending_action.strip()[:800] or "（本会话暂无记录）"))
 
 
-def _parse_exec_rows(raw: str) -> list | None:
-    """`execution_rows` → 行列表；**解不出来返回 `None`**（"读不到" ≠ "这一轮没有记录"）。
-
-    形状判得很死（`list[dict]`）：它是 Rust 拼的 wire 结构，形状不对只说明两侧契约
-    漂了——那时锚点照旧为空，但 `_ledger_for_graph` 会为它记一条 WARNING，不让
-    "这一轮的锚点突然空了"无声发生。
-    """
-    s = (raw or "").strip()
-    if not s:
-        return []
-    try:
-        rows = json.loads(s)
-    except (TypeError, ValueError):
-        return None
-    if not isinstance(rows, list) or not all(isinstance(r, dict) for r in rows):
-        return None
-    return rows
-
-
-# "`executions` 非空、结构那份读不到"的发声闸（每个进程只报一次，同 `_WARNED_*` 口径）。
-_WARNED_EXEC_ROWS = False
-
-
-def _warn_exec_rows(raw: str, exec_text: str) -> None:
-    """`executions` 非空而结构那份读不到 ⇒ **每个进程只报一次**。
-
-    两种情形都落这里、都必须看得见：旧 Rust 还没发这个键（部署顺序反了/灰度中）、
-    或发了但拼的不是合法 JSON（两侧契约漂了）。"两个都空"**不在**这里——那是
-    "本会话没有执行记录"，确定的事实，不是故障（同 `chat_quota` 的"缺席 ≠ 零值"）。
-    """
-    global _WARNED_EXEC_ROWS
-    if _WARNED_EXEC_ROWS or not (exec_text or "").strip():
-        return
-    _WARNED_EXEC_ROWS = True
-    logger.warning("[ledger] execution_rows 缺席或不可解析（%d 字节）而 executions 非空 ⇒ "
-                   "本轮文档锚点不含跨轮读取行（Rust 那一侧还没上？见 chat.rs::exec_rows_json）",
-                   len(raw or ""))
-
-
-def _ledger_for_graph(req: ChatRequest, confirmed: bool = False) -> dict:
-    """给图内判据（洞⑦ 台账否认）的台账事实——**与 `_ledger_block` 注入的同源**。
-
-    判据要看的就是"系统给模型看过什么"：注入说待办还没办，判据就得认这一半非空；
-    注入改写成了"正在执行"（confirmed），判据就不能再把否认当假话（那时候说
-    "系统里已经没有待确认的了"是真话）。两个来源各算各的必然对不上。
-
-    `exec_rows`（20261020）不是给洞⑦ 的：它是同一批行的**结构**，只喂文档锚点
-    （`prompt_context._doc_anchors`）。放在同一本账里，因为它就是"这一轮给模型看过
-    的那批执行记录"的另一半——两个来源分开取必然对不上。
-    """
-    exec_rows = _parse_exec_rows(req.execution_rows)
-    if exec_rows is None or (not req.execution_rows.strip() and req.executions.strip()):
-        _warn_exec_rows(req.execution_rows, req.executions)
-    return {"executions": req.executions.strip(),
-            "pending": "" if confirmed else req.pending_action.strip(),
-            "exec_rows": exec_rows}
-
-
 def _ctx_field(s, limit: int = 500) -> str:
-    """Bound page fields used by the legacy context serialization."""
+    """Bound page fields before placing them in the native system context."""
     return _CTX_UNSAFE_RE.sub(" ", str(s or ""))[:limit]
 
 
@@ -733,7 +675,7 @@ def _build_messages(req: ChatRequest, confirm_grant: dict | None = None) -> list
         "conversation_summary": req.summary}))
 
     # 无 checkpoint 时回放后端历史；去掉事实帧及未完成的用户轮次。
-    if not _graph_holds_context():
+    if not _runtime_holds_context():
         hist = [(h.role, h.content) for h in req.history[-20:]]
         cleaned: list = []
         for role, content in hist:
@@ -1078,7 +1020,7 @@ async def chat_stream(req: ChatRequest, request: Request):
     # 这条记录）；授权（scope）之后仍照常判，但"用户同意过"这件事只由这张令牌
     # 证明（签名 / 10 分钟 / uid / 会话四重绑定，见 agent/confirm.py）。
     # 验不过 = **零执行**：连图都不进——进图会照着 message 文本重新规划，那正是
-    # 要避免的"再走一轮对话"。只如实回一句，不调 planner、不调工具。
+    # 要避免的"再走一轮对话"。只如实回一句，不调模型、不调工具。
     grant = None
     if req.confirm_token.strip():
         grant = confirm.verify(req.confirm_token, principal.uid, req.conversation_id)
@@ -1092,7 +1034,7 @@ async def chat_stream(req: ChatRequest, request: Request):
                 headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
         # 只办其中一件（20260929 批 F）：卡片列了 N 件时主人可以点「只办 1」——
         # 前端带回来的只是一个**下标**，收窄在**验签之后、任何消费之前**做
-        # （`_build_messages` / `_ledger_for_graph` / 图内 planner 读到的都必须是
+        # （`_build_messages` 与原生运行时读到的都必须是
         # 收窄后的那一份，否则会出现"卡上问一件、实际执行一批"）。收窄只可能让
         # 放行范围**变小**；记号读不懂/越界一律零执行（fail-closed），
         # 绝不"读不懂就当全部办"——那正是这一层唯一能出的重伤。
@@ -1227,7 +1169,7 @@ async def chat_stream(req: ChatRequest, request: Request):
                     yield f"data: __ERROR__:{json.dumps(PRODUCER_ERROR_TEXT, ensure_ascii=False)}\n\n"
                     return
                 # Native progress/confirmation control frames are already
-                # protocol-safe strings; they are never planner/node events.
+                # protocol-safe strings; they are never model/node events.
                 # __CONFIRM__（20260921）走同一族：**必须 JSON 编码**（帧体是
                 # `__CONFIRM__:<json>`，裸帧在 Rust 的 JSON 解析分支之前拦才行，
                 # 那种做法漏一次就把整坨 JSON 累积进回复并落库）。Rust 侧同族处理
@@ -1609,7 +1551,7 @@ async def health():
             "agent_fastpath": bool(getattr(settings, "agent_fastpath", False)),
             # `agent_task_state` 这一格 20261015 删掉：任务状态撤档**常开**
             # （主人裁决：业界默认必备，不该有个开关把它变成摆设）⇒ 一格恒定真值
-            # 的"档位"是噪声，与 20261004 删 `planner_engine` 同一条理由。
+            # 的"档位"是唯一可观测的思考开关；旧 planner_engine 选项已退役。
             # `tests/test_health_dials.py` 的 `DIAL_KEYS` 同步。
             "llm_provider": getattr(settings, "llm_provider", ""),
             "llm_model": _model,

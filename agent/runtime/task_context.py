@@ -1,6 +1,6 @@
 """Host-provided open task facts and execution timestamp rendering.
 
-This module preserves the existing host field projection without importing the retired planner.
+This module preserves the existing host field projection without importing the retired model.
 """
 
 import json
@@ -13,7 +13,7 @@ TASK_OPEN_STATES = ("submitted", "running", "input_required")
 def task_rows(raw: Any) -> list[dict]:
     """Rust 交回来的 `agent_tasks` → 行列表。**任何形状不对都当没有**（不阻断对话）。
 
-    两个消费方（planner 上下文的渲染、producer 流尾的结算）读同一个入口——形状判据
+    两个消费方（model 上下文的渲染、producer 流尾的结算）读同一个入口——形状判据
     只此一处，别在任一消费点再判一次（`render_open_tasks` 的"时效不在这里判"那条注
     是同一个理由的另一面）。
     """
@@ -97,7 +97,7 @@ def _step_line(i: int, s: Any) -> str:
     return f"{i + 1}. {label}" + (f"（{tool}）" if tool and tool != label else "")
 
 def render_open_tasks(raw: Any, limit: int = 3, with_guide: bool = True) -> str:
-    """未完结任务 → planner 上下文里的一段文本；没有 → 空串（调用方据此不注入）。
+    """未完结任务 → model 上下文里的一段文本；没有 → 空串（调用方据此不注入）。
 
     只渲染 `TASK_OPEN_STATES` 里的行：终态过滤的主判据在 Rust 的 SQL 里（限额是
     "最新 3 条"，先取再筛会让已完结的行把窗口吃掉），这里是读到脏数据时的第二道。

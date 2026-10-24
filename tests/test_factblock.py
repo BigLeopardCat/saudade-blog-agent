@@ -40,9 +40,7 @@ ROOT = Path(__file__).resolve().parent.parent  # 仓根（测试统一在 tests/
 sys.path.insert(0, str(ROOT))
 
 
-from _planner_stub import bind_tools_stub, toolcall_reply  # noqa: E402
 
-import agent.graph as g  # noqa: E402
 from agent.factblock import (  # noqa: E402
     FACT_MARK,
     FAMILY_CMD,
@@ -57,8 +55,6 @@ from agent.factblock import (  # noqa: E402
     render_fact_block,
     strip_fact_lines,
 )
-from agent.graph import build_graph, graph_input  # noqa: E402
-from agent.principal import SOURCE_ASSERTION, Principal  # noqa: E402
 from tools import base as _base  # noqa: E402
 
 FAILS: list[str] = []
@@ -188,45 +184,16 @@ def _test_strip_fact_lines():
 
 
 def _test_injection_points():
-    """接线：三处模型可见的读点都真的过了一遍剥离（能力有测试 ≠ 接线有测试）。"""
-    print("\n[接线] 历史注入点与 planner 读点都剥离（生产实证 20261001T230954）")
+    """Server history injection strips system fact lines before NativeRuntime input."""
+    print("\n[接线] server history injection strips fact lines")
+    import server
     block = render_fact_block(["页面已跳转：https://saudade.site/device-console/"])
-    from agent.prompt_context import _last_assistant_utterance, _recent_tail
-
-    tail = _recent_tail([HumanMessage(content="猫咪我们去物联网平台"),
-                         AIMessage(content=block + "\n\n控制台就在眼前啦～")])
-    check("_recent_tail 的「泠月：」那半不带事实行（节选是范文，抄过去的就是这行）",
-          "页面已跳转" not in tail and "控制台就在眼前啦" in tail, tail[-80:])
-    tail2 = _recent_tail([HumanMessage(content="在物联网设备上对我说些什么"),
-                          AIMessage(content=block)])
-    check("  整条回复只有事实行 ⇒ 该轮「泠月：」是（未及回复），不是那行事实",
-          "页面已跳转" not in tail2, tail2[-80:])
-    check("_last_assistant_utterance 同样的剥离",
-          _last_assistant_utterance([HumanMessage(content="嗯"),
-                                     AIMessage(content=block + "\n\n还要做什么？")])
-          == "还要做什么？")
-    check("  最近一条**只有**事实行 ⇒ 给空、**不往前捞**一条更早的发言当上一句"
-          "（20260923 事故的形状：拿历史里的旧事项当此刻的应答对象）",
-          _last_assistant_utterance([HumanMessage(content="甲"),
-                                     AIMessage(content="要我把 OTA 章节读一遍吗？"),
-                                     HumanMessage(content="嗯"),
-                                     AIMessage(content=block)]) == "")
-
-    import server  # 只在用到时 import（server import 会拉起 FastAPI 应用）
-    hist = [server.HistoryItem(role="user", content="猫咪我们去物联网平台"),
-            server.HistoryItem(role="assistant", content=block + "\n\n控制台就在眼前啦～"),
-            server.HistoryItem(role="user", content="在物联网设备上对我说些什么"),
-            server.HistoryItem(role="assistant", content=block)]
-    msgs = server._build_messages(server.ChatRequest(message="现在呢", history=hist))
-    ai = [str(m.content) for m in msgs if isinstance(m, AIMessage)]
-    check("_build_messages 注入的 assistant 历史里没有事实行",
-          ai and all("页面已跳转" not in a for a in ai), str(ai))
-    check("  只有事实行的那一轮**整轮不注入**（留一条空的 assistant 会让模型"
-          "把上一轮的用户问题当待答问题——孤儿 user 的镜像）",
-          len(ai) == 1 and "控制台就在眼前啦" in ai[0], str(ai))
-    check("  它的 user 侧也一起不注入（成对，不留孤儿）",
-          all("在物联网设备上对我说些什么" not in str(m.content) for m in msgs if isinstance(m, HumanMessage)),
-          str([str(m.content)[:20] for m in msgs if isinstance(m, HumanMessage)]))
+    history = [server.HistoryItem(role="user", content="猫咪去物联网平台"),
+               server.HistoryItem(role="assistant", content=block + "\n控制台在眼前啦～")]
+    messages = server._build_messages(server.ChatRequest(message="现在呢", history=history))
+    assistant = [str(message.content) for message in messages if isinstance(message, AIMessage)]
+    check("历史 assistant 不再携带系统事实行", assistant and all(FACT_MARK not in text for text in assistant))
+    check("事实行被剥离后保留模型包装", assistant and "控制台在眼前啦" in assistant[0])
 
 
 def _test_share_one_classifier():
@@ -240,6 +207,16 @@ def _test_share_one_classifier():
     check("族常量同源（报告里的分档与射程同集合）",
           {fb.FAMILY_CMD, fb.FAMILY_WRITE, fb.FAMILY_DATA}
           == {nfs.FAMILY_CMD, nfs.FAMILY_WRITE, nfs.FAMILY_DATA})
+
+
+_FACT_LINE = "特效 樱花(sakura) 已打开"
+_FACT_WRITE_LINE = "已收藏文章 46"
+_ROW = {"workflow": "favorite_add", "tool": "add_favorite",
+        "args": {"article_id": 46}, "result": _FACT_WRITE_LINE, "ts": 0}
+_ROW_CMD = {"workflow": "effect", "tool": "toggle_effect",
+            "args": {"effect": "sakura", "action": "on"},
+            "result": _FACT_LINE, "ts": 0,
+            "cmd": {"kind": "effect", "effect": "sakura", "action": "on"}}
 
 
 _RESTATE_HITS = [
@@ -263,368 +240,15 @@ _RESTATE_PASS = [
 ]
 
 
-def _test_action_restate_regex():
-    print("\n[判据] 完成式复述抓得住；状态陈述/提议/假设放行")
-    for s in _RESTATE_HITS:
-        check("拦：%s" % s,
-              bool(g._clause_hit(s, g._ACTION_RESTATE_RE, g._STATE_ACTION_EXEMPT_RE)))
-    for s in _RESTATE_PASS:
-        check("放：%s" % s,
-              g._clause_hit(s, g._ACTION_RESTATE_RE, g._STATE_ACTION_EXEMPT_RE) is None)
-
-
-class _ScriptedLLM:
-    """按入参形态分流 planner / model（同 `test_gate_replan.py` 的理由）。
-
-    planner 那一支走 `_planner_stub.toolcall_reply`：夹具里的 `WORKFLOW=/PARAMS=` 文本被翻成
-    native tool_calls（20261004 接口层单通道），判据仍在 `agent/planner_llm.py` 里。
-    """
-
-    bind_tools = bind_tools_stub        # `bind_planner_tools` 要用（见 _planner_stub）
-
-    def __init__(self, plans: list, narrations: list):
-        self.plans, self.narrations = list(plans), list(narrations)
-        self.model_prompts: list = []
-        self.exhausted: list = []
-
-    def invoke(self, prompt):
-        if isinstance(prompt, list):
-            self.model_prompts.append(prompt)
-            if not self.narrations:
-                self.exhausted.append("model")
-                return AIMessage(content="（脚本用尽）")
-            return AIMessage(content=self.narrations.pop(0))
-        if not self.plans:
-            self.exhausted.append("planner")
-            return toolcall_reply("WORKFLOW: chat\nPARAMS: {}")
-        return toolcall_reply(self.plans.pop(0))
-
-
-class _FakeTool:
-    def __init__(self, result, name="toggle_effect"):
-        self.name = name
-        self.result = result
-        self.calls: list = []
-
-    def invoke(self, args):
-        self.calls.append(args)
-        return self.result
-
-
-_PLAN_EFFECT = 'WORKFLOW: effect\nPARAMS: {"effect": "sakura", "action": "on"}'
-
-
-_PLAN_CHAT = "WORKFLOW: chat\nPARAMS: {}"
-
-
-_FACT_LINE = "特效 樱花(sakura) 已打开"          # 命令族：**不印**（20261002）
-
-
-_PLAN_FAV = 'WORKFLOW: favorite_add\nPARAMS: {"article_id": 46}'
-
-
-_FAV_MSG = "把文章 46 收藏一下"
-
-
-_FACT_WRITE_LINE = "已收藏文章 46"
-
-
-def _run_graph(plans, narrations, result=None, tool_name="toggle_effect",
-               message="把樱花打开", role="user"):
-    """跑一轮**真图**（不是假 producer）。两个夹具形态由 `tool_name` 决定：
-
-    · `toggle_effect`（命令族）——验"不印但帧还在"（20261002 的新契约）；
-    · `add_favorite`（写族）——验"印了、且族内帧从两个记录段摘掉"。
-    """
-    llm = _ScriptedLLM(plans, narrations)
-    if tool_name == "toggle_effect":
-        default = _base.ok(
-            _FACT_LINE, {"cmd": {"kind": "effect", "effect": "sakura", "action": "on"}})
-    else:
-        default = _base.ok(_FACT_WRITE_LINE)
-    tool = _FakeTool(result or default, name=tool_name)
-    events: list = []
-    orig_llm, orig_record, orig_tool = g.get_llm, g.record, g._TOOL_MAP.get(tool_name)
-    g.get_llm = lambda **kw: llm
-    g.record = lambda node, event, **data: events.append((node, event, data))
-    g._TOOL_MAP[tool_name] = tool
-    try:
-        # 身份**显式给全**（20261019）：本文件测的是事实块的印/摘，与身份无关，而
-        # `source` 现在是拦截判据的输入之一——默认来源（"body"）在私有面/写面上不进
-        # 灰度（`authz.must_enforce`），用它构造的 principal 会让下面所有"工具真的
-        # 执行了一次"静默变红。这里给一个生产形状的身份：role 只来自 Rust 的签名断言。
-        cfg = {"configurable": {"thread_id": "t-factblock", "user_id": 5,
-                                "principal": Principal(uid=5, role=role,
-                                                       source=SOURCE_ASSERTION),
-                                "conversation_id": 1, "stop_event": None}}
-        out = build_graph().invoke(graph_input([HumanMessage(content=message)]), cfg)
-    finally:
-        g.get_llm, g.record = orig_llm, orig_record
-        if orig_tool is None:
-            g._TOOL_MAP.pop(tool_name, None)
-        else:
-            g._TOOL_MAP[tool_name] = orig_tool
-    return out, llm, tool, events
-
-
-def _system_prompt(llm: "_ScriptedLLM") -> str:
-    """最后一轮 narrator 的 system 提示词——**按出站顺序拼接全部 SystemMessage**。
-
-    20261016 起 narrator 把系统提示词拆成**两条** SystemMessage（稳定头在最前、
-    变化段在对话历史之后，见 `agent/graph.py::_narrator_wire` 与
-    `tests/test_narrator_cache_layout.py`）。本文件判的是"那段文字在不在提示词里"，
-    与它落在哪一条消息无关；拼接后的文本与拆分前逐字节相同（头 + 变化段 = 原来那
-    一整段，`tests/test_react_narrator_assets.py` 用 sha256 钉着）。
-    """
-    return "".join(str(m.content) for m in llm.model_prompts[-1]
-                   if isinstance(m, SystemMessage))
-
-
-def _test_graph_command_round_not_printed():
-    """**命令族不印**（20261002 立、20261005 扩到全体）：一轮真跳了页/开了特效的对话——
-
-    ① 系统**不印**那一行（气泡里只有泠月的话）；② 但工具帧与回执**一个字都不摘**
-    （`_drop` 由 `is_block_family` 算，射程空集 ⇒ 一个字都不摘）：那是 narrator 唯一的
-    依据，它得自己把这件事说出来；③ 那一格是**占位文本**而不是"本轮没有动作族执行"
-    ——后者在一轮真的执行过的对话里是句假话，会把 narrator 引到"什么都没干"；
-    ④ 5g（复述式声称）**不再命中任何族**：系统不印了，"那句话"就该由泠月说，
-    再罚它就是罚它去做被要求的事。
-    """
-    print("\n[真图·命令族] 不印、但帧照给；那句话归 narrator 自己说")
-    out, llm, tool, events = _run_graph([_PLAN_EFFECT, _PLAN_CHAT], ["已经帮你打开啦～"])
-    check("脚本足够跑完这一轮（没有靠「脚本用尽」混过去）",
-          llm.exhausted == [], str(llm.exhausted))
-    check("动作工具真的执行了一次", len(tool.calls) == 1, str(tool.calls))
-    sys_p = _system_prompt(llm)
-    check("**没有** model/fact_block 事件（命令族不进印出射程）",
-          ("model", "fact_block") not in [(n, e) for n, e, _ in events],
-          str([(n, e) for n, e, _ in events]))
-    check("  印出那一格是**占位**，且占位写的是「没有代印」不是「没有执行」",
-          "本轮没有系统代印的事实" in sys_p
-          and "本轮没有动作族执行" not in sys_p)
-    check("  占位里点名了「那件事由你自己说」（否则模型以为系统还会说一遍）",
-          "那几件事全由你自己说" in sys_p)
-    check("工具帧**照给**（没被摘掉：它是 narrator 唯一的依据）",
-          _FACT_LINE in sys_p and "本轮这些工具返回已由系统印给主人" not in sys_p,
-          str([ln for ln in sys_p.splitlines() if _FACT_LINE in ln]))
-    check("  回执段的兜底句也没被触发（回执原样在提示词里）",
-          "本轮已验收的执行都已由系统印给主人" not in sys_p)
-    check("5g 不再对命令族记事件（系统不印了，那句话本就该泠月说）",
-          ("gate", "action_restate") not in [(n, e) for n, e, _ in events],
-          str([(n, e) for n, e, _ in events]))
-    check("最终回复就是 narrator 那句（没被替换）",
-          str(out["messages"][-1].content).strip() == "已经帮你打开啦～",
-          repr(str(out["messages"][-1].content)[:40]))
-
-
-def _test_graph_wiring():
-    """**写族退出印出**（20261005，主人拍板）——这一节是那次改动的**主锁**。
-
-    改前：写族的帧与回执**被摘掉**（`_drop` 非空）而系统替它印 —— 那套的前提是
-    "主人已经读到了"。改后：系统一个字都不印 ⇒ **一个字都不许摘**，否则 narrator
-    既读不到、主人也读不到，那件事**没有任何作者**。所以本节的四条判据是：
-    ① 没有任何 `fact_block` 事件；② 写族的工具帧与回执**原样在提示词里**；
-    ③ 两段"已由系统印给主人"的兜底句**不许出现**（它们是"摘光了"的标记）；
-    ④ 复述不再记 `action_restate`（现在它说的就是本该它说的那句）。
-    """
-    print("\n[真图·写族] 系统不再代印 ⇒ 帧与回执一个字都不摘（那是它唯一的依据）")
-    out, llm, tool, events = _run_graph(
-        [_PLAN_FAV, _PLAN_CHAT], ["已经帮你收藏啦～"],
-        tool_name="add_favorite", message=_FAV_MSG)
-    check("脚本足够跑完这一轮（没有靠「脚本用尽」混过去）",
-          llm.exhausted == [], str(llm.exhausted))
-    check("写工具真的执行了一次（真回执，不是弹窗截停）",
-          len(tool.calls) == 1 and [r.get("tool") for r in out.get("receipts") or []]
-          == ["add_favorite"], str(tool.calls))
-    sys_p = _system_prompt(llm)
-    check("**没有** model/fact_block 事件（写族也不代印了）",
-          ("model", "fact_block") not in [(n, e) for n, e, _ in events],
-          str([(n, e) for n, e, _ in events]))
-    check("那一格是占位、且**点名了写操作也归它交代**（不提它就会以为系统替它说了）",
-          "[本轮系统代印的事实]" in sys_p
-          and "本轮没有系统代印的事实" in sys_p
-          and "写操作" in sys_p)
-    check("**写族的工具帧原样在提示词里**（改前这里是被摘掉的那一格）",
-          _FACT_WRITE_LINE in sys_p
-          and "本轮这些工具返回已由系统印给主人" not in sys_p,
-          str([ln for ln in sys_p.splitlines() if _FACT_WRITE_LINE in ln]))
-    check("**写族的回执原样在提示词里**（两段兜底句都不许出现）",
-          "本轮已验收的执行都已由系统印给主人" not in sys_p)
-    check("  回执段里能看到那个写工具名（narrator 靠它交代「改了哪一件」）",
-          "add_favorite" in sys_p)
-    check("纪律 23 在场且写明「不限长度，只限内容」",
-          "不限长度，只限内容" in sys_p)
-    check("复述不再记 gate.action_restate（它说的就是本该它说的那句话）",
-          ("gate", "action_restate") not in [(n, e) for n, e, _ in events],
-          str([(n, e) for n, e, _ in events]))
-    # **这一节是 20260927 实测改口的锁**：这条网原先是 fallback，跑动作族 golden 时
-    # 三条被它命中、三条都因为 RESET 连命令一起清而"页面没跳却说已跳"。所以断言从
-    # "兜底文本是事实块"改成"正文一个字都不许动"——想改回 fallback 的人，先看
-    # gate 5g 那段注释里的三条 trace。
-    # ⚠️ 那个**代价**（RESET 吞命令）20261001 起不成立了（RESET 带 scope，见
-    # `tests/test_reset_scope.py`），但这条断言**照旧**：剩下的理由是"罚得不对"，
-    # 而要不要升回 fallback 动的是闸门严重度，判据只能靠多遍 A/B——别把"前提没了"
-    # 读成"这条锁该拆"。
-    check("  正文**一字未动**（不是 fallback：拿文案去换命令是这一批最贵的错）",
-          not out.get("fallback_text")
-          and str(out["messages"][-1].content).strip() == "已经帮你收藏啦～",
-          repr(str(out["messages"][-1].content)[:40]))
-    check("  不进 _REPLAN_ISSUES（重规划会把副作用工具再跑一遍）", "action_restate" not in g._REPLAN_ISSUES)
-    check("  没走重规划（gate_replan 未被置真）", not out.get("gate_replan"))
-
-
-def _test_graph_no_false_positive():
-    print("\n[真图] 非完成式包装照常通过（零回归：这条网不是「一律兜底」）")
-    wrapper = "这次的动作用的是页面特效那一档，想换别的风格随时说～"
-    out, llm, tool, events = _run_graph([_PLAN_EFFECT, _PLAN_CHAT], [wrapper])
-    check("脚本足够跑完这一轮", llm.exhausted == [])
-    check("执行了一次", len(tool.calls) == 1)
-    check("没有 action_restate（它没说完成式）",
-          ("gate", "action_restate") not in [(n, e) for n, e, _ in events])
-    check("最终回复就是那段包装（没被替换）",
-          str(out["messages"][-1].content).strip() == wrapper,
-          repr(str(out["messages"][-1].content)[:40]))
-    check("同时没有走兜底", not out.get("fallback_text"))
-
-
-def _test_graph_zero_frame_no_authorization():
-    """**20261002 二改的锁**：零命令轮的占位**不发授权、不点族名**（02:02 实证）。
-
-    现场（trace 20261002T020256）：主人「猫咪带我去你的设计文档」（站内无此页），
-    planner 判 `chat`/`answer_only`（零帧零回执），narrator 编出「物联网平台页面已经
-    打开啦～你现在应该能看到设备控制台了」——而同一轮 `page_ctx` 的 `current_url` 是
-    首页。占位文本当时写着"跳转/特效/夜间那几种的效果……**那几句话由你自己说**"，
-    那是系统在**没有那一族回执**的轮次里发的一张空授权：模型拿着它去认领了一件根本
-    没发生的事。所以占位必须分岔（有命令族回执才点名那一族、才授权；没有就只报
-    "没有代印"）——这条锁与 `test_graph_command_round_not_printed` 是**方向相反的两半**，
-    缺一半都会退回"占位是常量、写死一句话"。
-    """
-    print("\n[真图·零命令轮] 占位不点族名、不发「由你自己说」的授权")
-    _out, llm, tool, _events = _run_graph([_PLAN_CHAT], ["站内没有这个页面呀～"])
-    check("这一轮零工具（chat 不执行任何东西）", len(tool.calls) == 0, str(tool.calls))
-    sys_p = _system_prompt(llm)
-    # 族名只许在**那一格**里查：叙述纪律第 1 条本身就写着"站内查询、跳转、特效/夜间
-    # 切换"，全提示词 grep 会恒真（那才是这条断言最容易写成哑判据的地方）。取
-    # **最后一次**出现：纪律 23 正文里也引用了这个槽名，split 第一次会切到纪律那段。
-    _slot = sys_p.rsplit("[本轮系统代印的事实]", 1)[1].split("当前页面上下文")[0]
-    check("那一格是占位（不是空字段）", "本轮没有系统代印的事实" in _slot)
-    check("  **一个族名都不提**（提了就是邀请它去认领一件没发生的事）",
-          all(w not in _slot for w in ("跳转", "特效", "夜间")), repr(_slot[:80]))
-    check("  **不发**「由你自己说」这条授权（那一轮没有该由它说的事）",
-          "由你自己说" not in _slot, repr(_slot[:80]))
-
-
-def _test_graph_data_round_untouched():
-    print("\n[真图] 数据族轮次不产生事实块（讲 JSON 人话是模型的活）")
-    plan = ('WORKFLOW: content_query\nPARAMS: {"calls": [{"tool": "search_notes", '
-            '"args": {"keyword": "架构"}}]}')
-    llm = _ScriptedLLM([plan], ["站内检索到 1 篇讲架构的文章。"])
-    tool = _FakeTool(_base.ok('[{"id": 46, "title": "架构"}]'))
-    tool.name = "search_notes"
-    events: list = []
-    orig_llm, orig_record = g.get_llm, g.record
-    orig_tool = g._TOOL_MAP.get("search_notes")
-    g.get_llm, g.record = lambda **kw: llm, lambda node, event, **data: events.append((node, event, data))
-    g._TOOL_MAP["search_notes"] = tool
-    try:
-        cfg = {"configurable": {"thread_id": "t-factblock-data", "user_id": 5,
-                                "principal": Principal(uid=5),
-                                "conversation_id": 1, "stop_event": None}}
-        out = build_graph().invoke(graph_input([HumanMessage(content="有讲架构的文章吗")]), cfg)
-    finally:
-        g.get_llm, g.record = orig_llm, orig_record
-        if orig_tool is None:
-            g._TOOL_MAP.pop("search_notes", None)
-        else:
-            g._TOOL_MAP["search_notes"] = orig_tool
-    sys_p = _system_prompt(llm)
-    check("提示词那一格是占位文本（不是空字段）",
-          "本轮没有系统代印的事实" in sys_p)
-    # 同一条分岔的另一半（20261002 二改、20261005 判据扩到动作族）：这一轮有**数据族**帧、
-    # 没有任何动作族回执 ⇒ 占位**不许**点名跳转/特效/夜间/写操作、也不许发"由你自己说"的授权。
-    check("  数据轮同样不发授权、不点族名",
-          all(w not in sys_p.rsplit("[本轮系统代印的事实]", 1)[1]
-                  .split("当前页面上下文")[0]
-              for w in ("跳转", "特效", "夜间", "写操作", "由你自己说")))
-    check("  数据帧**没有**被摘掉（记录段照常给模型）",
-          "本轮这些工具返回已由系统印给主人" not in sys_p)
-    check("没有 model/fact_block 事件", ("model", "fact_block") not in [(n, e) for n, e, _ in events])
-    check("叙述照常通过（没有 action_restate）",
-          ("gate", "action_restate") not in [(n, e) for n, e, _ in events]
-          and not out.get("fallback_text"))
-    check("最终回复就是那条叙述", str(out["messages"][-1].content).strip() == "站内检索到 1 篇讲架构的文章。")
-
-
-class _FakeAgent:
-    """假 `_agent`：按脚本产出 (mode, data)，让 producer 的时序完全可测。"""
-
-    def __init__(self, script: list):
-        self.script = script
-
-    def stream_events(self, inp, cfg):
-        for item in self.script:
-            yield item
-
-
-_ROW = {"workflow": "favorite_add", "tool": "add_favorite",
-        "args": {"article_id": 46},
-        "result": _FACT_WRITE_LINE, "ts": 0}
-
-
-_ROW_CMD = {"workflow": "effect", "tool": "toggle_effect",
-            "args": {"effect": "sakura", "action": "on"},
-            "result": _FACT_LINE, "ts": 0,
-            "cmd": {"kind": "effect", "effect": "sakura", "action": "on"}}
-
-
-def _drain(script: list) -> list:
-    import server  # 只在用到时 import（server import 会拉起 FastAPI 应用）
-    orig = server._agent
-    server._agent = _FakeAgent(script)
-    try:
-        async def run():
-            q: asyncio.Queue = asyncio.Queue()
-            loop = asyncio.get_running_loop()
-            t = threading.Thread(
-                target=server._run_agent_stream_to_queue,
-                args=([], "t-producer", q, loop, 1),
-                kwargs={"principal": Principal(uid=1)},
-                daemon=True)
-            t.start()
-            out = []
-            while True:
-                item = await asyncio.wait_for(q.get(), timeout=10)
-                if item is None:
-                    break
-                out.append(item)
-            # ⚠️ 别在协程里直接 `t.join()`（20261015）：生产者的收尾是
-            # `run_coroutine_threadsafe(queue.put(None), loop).result()`——哨兵已进队列，但那个
-            # future 要等循环再跑一批 done 回调才置位；`t.join()` 把唯一的事件循环堵住
-            # ⇒ 生产者等循环、循环等生产者，每次白等满 timeout（本套件是 5s，别的套件 30/60s）。
-            # **让出循环**轮询等它自己收尾（刻意不写 `t.join()`——病根是"阻塞"不是"等"）。
-            # 形状锁见 `tests/test_async_blocking_join.py`；机理见
-            # `tests/test_trace_reply_source.py::drive` 的注。
-            for _ in range(100):
-                if not t.is_alive():
-                    break
-                await asyncio.sleep(0.01)
-            return out
-        return asyncio.run(run())
-    finally:
-        server._agent = orig
-
-
-def _ai_chunks(items: list) -> list:
-    return [str(i.content) for i in items if isinstance(i, AIMessageChunk)]
-
-
 def _test_native_producer_does_not_print_fact_blocks():
     from agent.runtime.results import TurnResult
+    from agent.transport import iter_transport_events
 
     reply = "指令已发送。"
-    items = _drain([AIMessageChunk(content=reply),
-                    TurnResult(reply, {"receipts": [_ROW, _ROW_CMD]})])
-    check("原生正文不追加系统事实块", _ai_chunks(items) == [reply], str(_ai_chunks(items)))
+    items = list(iter_transport_events([AIMessageChunk(content=reply),
+                                        TurnResult(reply, {"receipts": [_ROW, _ROW_CMD]})]))
+    chunks = [str(item.content) for item in items if isinstance(item, AIMessageChunk)]
+    check("原生正文不追加系统事实块", chunks == [reply], str(chunks))
     check("结构化命令与回执各发一次",
           sum(isinstance(x, str) and x.startswith("__CMD__:") for x in items) == 1
           and sum(isinstance(x, str) and x.startswith("__EXEC__:") for x in items) == 1)
@@ -637,11 +261,7 @@ def test_factblock():
     _FACT_WRITE_BLOCK = FACT_MARK + _FACT_WRITE_LINE
     for fn in (_test_family_of, _test_action_facts, _test_render_and_compose,
                _test_strip_fact_lines, _test_injection_points,
-               _test_share_one_classifier, _test_action_restate_regex,
-               _test_graph_command_round_not_printed,
-               _test_graph_wiring, _test_graph_no_false_positive,
-               _test_graph_zero_frame_no_authorization,
-               _test_graph_data_round_untouched,
+               _test_share_one_classifier,
                _test_native_producer_does_not_print_fact_blocks):
         fn()
     print("\n" + ("全部通过 ✅" if not FAILS else f"失败 {len(FAILS)} 项 ❌: {FAILS}"))
