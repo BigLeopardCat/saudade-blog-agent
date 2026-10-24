@@ -39,11 +39,9 @@ class Read:
         return "作者资料"
 
 
-@pytest.mark.parametrize("invalid,reason", [("invented", "unknown_tool"),
-                                          ("load_site_info_tools", "domain_already_loaded")])
-def test_tool_error_provides_current_menu_without_repeating_io(invalid, reason):
+def test_tool_error_provides_current_menu_without_repeating_io():
     read = Read()
-    model = Model([call("load_site_info_tools"), call(invalid), call(read.name),
+    model = Model([call("load_site_info_tools"), call("invented"), call(read.name),
                    AIMessage(content="作者资料")])
     session = ToolSession(model, {}, {}, {"site": {read.name: read}})
     result = session.run([HumanMessage(content="查询作者")])
@@ -51,8 +49,21 @@ def test_tool_error_provides_current_menu_without_repeating_io(invalid, reason):
     error = model.prompts[2][-1]
     assert error.status == "error"
     data = json.loads(error.content)
-    assert data["error"] == reason
-    assert data["available_tools"] == [read.name]
+    assert data["error"] == "unknown_tool"
+    assert data["available_tools"] == [read.name, "load_site_info_tools"]
+    assert set(data["available_tools"]) == {
+        item["function"]["name"] for item in model.kwargs["tools"]}
+
+
+def test_repeated_domain_loading_still_exhausts_the_tool_budget_without_business_io():
+    read = Read()
+    model = Model([call("load_site_info_tools") for _ in range(3)])
+    session = ToolSession(model, {}, {}, {"site": {read.name: read}})
+    session.budget = RequestBudget(BudgetLimits(tool_calls=2))
+    assert "已停止继续处理" in session.run([HumanMessage(content="查询作者")]).reply
+    assert len(model.prompts) == 3 and read.calls == 0
+    assert session.budget.tool_calls == 2
+    assert all(prompt[-1].status == "success" for prompt in model.prompts[1:])
 
 
 def test_repeated_invalid_requests_exhaust_the_configured_model_budget():
