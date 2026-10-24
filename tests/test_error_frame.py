@@ -271,7 +271,7 @@ def _sync_chat_failure_shape():
     # `_run_agent_sync` 这一路真炸 —— 判据是"炸了之后返回体长什么样"。
     boom = "pending_confirm-internal-path"
     names = ("_agent", "_resolve_principal", "_build_messages",
-             "_ledger_for_graph", "_submit_with_context")
+             "_submit_with_context")
     saved = {n: getattr(server, n) for n in names}
 
     async def _explode(*_a, **_k):
@@ -280,7 +280,6 @@ def _sync_chat_failure_shape():
     server._agent = object()
     server._resolve_principal = lambda request, uid: type("P", (), {"uid": 1})()
     server._build_messages = lambda req: []
-    server._ledger_for_graph = lambda req, confirmed=False: {}
     server._submit_with_context = _explode
     try:
         resp = asyncio.run(server.chat(server.ChatRequest(message="你好"), None))
