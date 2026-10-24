@@ -123,3 +123,6 @@ def test_retired_endpoint_cannot_enter_authorization_or_runtime(monkeypatch):
             assert response.status_code == 404
 
     asyncio.run(exercise())
+
+
+pytestmark = pytest.mark.usefixtures("service_workers")

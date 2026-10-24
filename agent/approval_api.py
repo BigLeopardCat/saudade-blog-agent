@@ -1,7 +1,5 @@
 """Authenticated approval lifecycle endpoints; no model or chat turn is created."""
 
-import asyncio
-
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 
@@ -26,14 +24,15 @@ def router(get_runtime, resolve_principal):
         if grant is None:
             raise HTTPException(403, "确认凭据无效或已过期")
         runtime = get_runtime()
-        if runtime is None:
+        workers = getattr(request.app.state, "workers", None)
+        if runtime is None or workers is None or workers.closing:
             raise HTTPException(503, "Agent not initialised")
         config = {"configurable": {
             "principal": principal, "user_id": principal.uid,
             "conversation_id": req.conversation_id,
             "thread_id": checkpoint.conversation_thread(req.conversation_id)}}
         try:
-            result = await asyncio.to_thread(confirmation.cancel, runtime, grant, config)
+            result = await workers.run(confirmation.cancel, runtime, grant, config)
         except (ValueError, ConversationDeleted) as exc:
             raise HTTPException(409, str(exc)) from exc
         return result

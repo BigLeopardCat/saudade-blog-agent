@@ -1,30 +1,7 @@
-"""「丢弃那一轮」同步到图自己的 state（20261019 批 E）：**真图 + MemorySaver**，零网络零真库。
+"""Discard behavior across committed and interrupted conversation state.
 
-**这一件为什么存在**：20261018 起 agent 的上下文**由图自持**（`server._graph_holds_context()`
-把 `req.history[-20:]` 那条注入关了）⇒ `chat_history` 不再是上下文来源。于是父仓
-`POST /api/chat/discard`（主人点"停止生成"）删掉那一轮之后，**agent 下一轮照样记得它**——
-主人明确说"不想要这条进记忆"，而记忆里还有。这条缺口此前**没有任何东西会红**。
-
-**本件判四件事**：
-
-  · ① **机制**（`agent/checkpoint.py::drop_last_user_turn`）：摘得掉，且返回值是**"摘完读回来
-    确认"**而不是"没抛异常"（同 `delete_thread` 那条纪律：恒不生效的摘除与真摘除**长得
-    一模一样**）——所以它有一条专门的反控（`aupdate_state` 打桩成 no-op ⇒ 必须回 False）。
-    摘的范围是**那条 user 及其之后的一切**（父仓删的是 `id >= u.id`；只摘 user 会把半截 AI
-    留在 state 里，下一轮 narrator 会把它当"我方已经说过的话"）。
-  · ② **不敢动手的那些支**：`text` 对不上（`mismatch`）、`text` 空（`no_text`）⇒ **一个字都
-    不动**。摘错的代价不可逆（删掉主人还想留着的话），所以判据缺失时不动手。
-  · ③ **端点**（`server.checkpoint_drop_turn`）三支各判一次 + "不许把没摘掉报成摘掉了"的反控。
-  · ④ **跨仓契约**：调用方在父仓 `chat.rs::discard_handler`。⚠️ 与 `test_checkpoint_cascade.py`
-    ③ 同一条纪律——**判的不是"父仓接了吗"**（那会一直红，而 套件是按目录收集的、
-    **没有"预期红"这个档**），父仓没接时只**打一行字说明**，不置红。
-
-**本件还如实记一条现状**（第 ⑤ 节）：被打断在节点中途的线程，`get_state().next` **非空**，
-而 `aupdate_state` 保留它。这不是本函数引入的（中断那一刻就已经非空），今天生产每轮传 dict
-输入 ⇒ langgraph 丢弃未完成任务、从 START 重启 ⇒ 下一轮走完自己回到空。**潜伏面**是任何
-`stream(None)` 的续跑会去跑那个 pending 节点。判据把它记下来，没有假装它是干净的。
-
-用法：`.venv/bin/python tests/test_checkpoint_drop_turn.py`
+Verify only the matching last user turn is removed, no-op updates are detected,
+other turns survive, and the authenticated host cleanup endpoint stays connected.
 """
 
 
@@ -35,6 +12,7 @@ import sys
 from pathlib import Path
 from typing import Annotated, TypedDict
 
+import pytest
 from _judge import collector
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -89,7 +67,7 @@ async def _seed(app, cfg, msgs: list) -> list:
 
 
 class _NoopUpdate:
-    """反控用：`aupdate_state` 是 no-op（= 一个**恒不生效**的摘除）。
+    """反控用：`update_state` 是 no-op（= 一个**恒不生效**的摘除）。
 
     只看"没抛"的话，恒不生效的摘除与真摘除**长得一模一样**（同 `delete_thread` 那条）。
     """
@@ -98,10 +76,10 @@ class _NoopUpdate:
         self.graph = g
         self.checkpointer = g.checkpointer
 
-    async def aget_state(self, cfg):
-        return await self.graph.aget_state(cfg)
+    def get_state(self, cfg):
+        return self.graph.get_state(cfg)
 
-    async def aupdate_state(self, cfg, values, **kw):
+    def update_state(self, cfg, values, **kw):
         return None
 
 
@@ -126,7 +104,7 @@ async def _case_main() -> None:
           and st.values["messages"][2].content == "[当前问题]: 第二句",
           str(_texts(st.values["messages"])))
 
-    out = await C.drop_last_user_turn(_app, 7, "第二句")
+    out = await asyncio.to_thread(C.drop_last_user_turn, _app, 7, "第二句")
     check("摘得掉 ⇒ `dropped=true` 且 `why` 为空", out == {"dropped": True, "why": ""}, str(out))
     left = _texts((await _app.aget_state(_c)).values["messages"])
     check("**那条 user 没了**", "[当前问题]: 第二句" not in left, str(left))
@@ -141,23 +119,23 @@ async def _case_main() -> None:
     check("（反控）不调它 ⇒ 那条 user 当然还在",
           "[当前问题]: 第三句" in _texts((await _app2.aget_state(_c)).values["messages"]))
 
-    # 反控：读回来确认。把 `aupdate_state` 打桩成 no-op（= 一个恒不生效的摘除），
+    # 反控：读回来确认。把 `update_state` 打桩成 no-op（= 一个恒不生效的摘除），
     # **必须**回 False —— 否则这条判据只会恒真，等于没判。
     _app3 = _graph()
     await _seed(_app3, _c, [HumanMessage(content="[当前问题]: 第四句")])
-    out3 = await C.drop_last_user_turn(_NoopUpdate(_app3), 7, "第四句")
+    out3 = await asyncio.to_thread(C.drop_last_user_turn, _NoopUpdate(_app3), 7, "第四句")
     check("（反控）摘了没生效 ⇒ **必须回 `dropped=false` / `still_readable`**",
           out3 == {"dropped": False, "why": "still_present"}, str(out3))
 
     # ② 不敢动手的那些支
     _app4 = _graph()
     await _seed(_app4, _c, [HumanMessage(content="[当前问题]: 第五句")])
-    out4 = await C.drop_last_user_turn(_app4, 7, "别的一句话")
+    out4 = await asyncio.to_thread(C.drop_last_user_turn, _app4, 7, "别的一句话")
     check("原文对不上 ⇒ `mismatch`，**一个字都不动**",
           out4 == {"dropped": False, "why": "mismatch"}
           and "[当前问题]: 第五句" in _texts((await _app4.aget_state(_c)).values["messages"]),
           str(out4))
-    out5 = await C.drop_last_user_turn(_app4, 7, "")
+    out5 = await asyncio.to_thread(C.drop_last_user_turn, _app4, 7, "")
     check("原文为空 ⇒ `no_text`，同样不动手（没有原文就没法确认摘的是哪一轮）",
           out5 == {"dropped": False, "why": "no_text"}, str(out5))
 
@@ -167,16 +145,17 @@ async def _case_main() -> None:
         {"type": "image_url", "image_url": {"url": "data:image/png;base64,AAA"}},
         {"type": "text", "text": "[当前问题]: 这张图"}]),
         AIMessage(content="半截")])
-    out6 = await C.drop_last_user_turn(_app6, 7, "这张图\n[图片1]")
+    out6 = await asyncio.to_thread(C.drop_last_user_turn, _app6, 7, "这张图\n[图片1]")
     check("带图轮：从块数组里取出原话、认得出父仓那种 `原文\\n[图片…]` 的 content",
           out6["dropped"] is True, str(out6))
 
     # 没挂 saver / 坐标非法 / 图没有 state 接口
     check("没挂 saver ⇒ `no_saver`（不假装摘了）",
-          await C.drop_last_user_turn(None, 7, "x") == {"dropped": False, "why": "no_saver"})
+          await asyncio.to_thread(C.drop_last_user_turn, None, 7, "x")
+          == {"dropped": False, "why": "no_saver"})
     for _bad in (None, "", "   ", 0, "0", "None"):
         check(f"会话 id={_bad!r} ⇒ `bad_conversation_id`",
-              await C.drop_last_user_turn(_app, _bad, "x")
+              await asyncio.to_thread(C.drop_last_user_turn, _app, _bad, "x")
               == {"dropped": False, "why": "bad_conversation_id"})
 
     # ⑤ 现状记录：打断在节点中途 ⇒ `next` 非空，而摘除**保留**它
@@ -223,7 +202,7 @@ async def _case_interrupted() -> None:
     check("（前提）打断在 `slow` 中途 ⇒ `next` 是 `('slow',)`",
           app.get_state(cfg).next == ("slow",), str(app.get_state(cfg).next))
 
-    out = await C.drop_last_user_turn(app, 9, "被打断的那句")
+    out = await asyncio.to_thread(C.drop_last_user_turn, app, 9, "被打断的那句")
     st = app.get_state(cfg)
     check("被打断的线程上照样摘得掉（那条 user 没了）",
           out["dropped"] is True
@@ -260,11 +239,11 @@ class _Shell:
         self.graph = app
         self.checkpointer = app.checkpointer
 
-    async def aget_state(self, cfg):
-        return await self.graph.aget_state(cfg)
+    def get_state(self, cfg):
+        return self.graph.get_state(cfg)
 
-    async def aupdate_state(self, cfg, values, **kw):
-        return await self.graph.aupdate_state(cfg, values, **kw)
+    def update_state(self, cfg, values, **kw):
+        return self.graph.update_state(cfg, values, **kw)
 
 
 import _parent_repo  # noqa: E402
@@ -359,3 +338,6 @@ def test_checkpoint_drop_turn():
 
 if __name__ == "__main__":
     test_checkpoint_drop_turn()
+
+
+pytestmark = pytest.mark.usefixtures("service_workers")
