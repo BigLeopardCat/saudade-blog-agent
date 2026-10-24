@@ -316,6 +316,7 @@ def test_real_stream_close_fences_emitter_until_worker_drains(monkeypatch):
 def test_streamed_preface_and_terminal_confirmation_each_render_once(monkeypatch):
     import asyncio
     import json
+    import uuid
 
     from langchain_core.messages import AIMessageChunk
     from langchain_core.tools import tool
@@ -331,7 +332,7 @@ def test_streamed_preface_and_terminal_confirmation_each_render_once(monkeypatch
     def fixture_prepare() -> object:
         """Prepare a fixture confirmation without executing business operations."""
         return TurnResult(question, {"pending_confirm": {
-            "q": question, "token": "fixture-only", "opts": [], "exp": 0},
+            "q": question, "token": uuid.uuid4().hex, "opts": [], "exp": 0},
             "confirm_text": question, "receipts": []})
 
     class Model:
