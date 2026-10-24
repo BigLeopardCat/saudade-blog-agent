@@ -27,10 +27,16 @@ Internal control frames, command-only text and confirmation payloads (which the
 widget defers until stream completion) do not start the metric. Progress and
 whitespace alone do not suppress the empty-answer recovery message. Missing or
 invalid observations are not treated as zero; only producer observations count.
-Native model replies now use the locked LangChain streaming iterator. Every
-`AIMessageChunk` is forwarded as renderable model text while the iterator is
-open, while the same chunks are aggregated into one `AIMessage` before any
-tool call is accepted. Partial tool arguments are therefore never executed.
-The completed visible text is the value saved by `ConversationStore`; terminal
-confirmation, command, and receipt handling remains deterministic and
-structured. The legacy graph and its final-answer path remain buffered.
+Native model replies use the locked LangChain streaming iterator. Plain chat
+text and tool-call prefaces can reach SSE before the model finishes. Article
+answers that need source validation remain buffered until the checks finish.
+Chunks are aggregated with the framework message conversion; complete original
+JSON arguments are required before any tool executes. Consumer close propagates
+to nested iterators and provider responses. Streaming usage is explicitly
+requested for compatible endpoints; absent observations remain unknown.
+
+The complete visible text is saved through `ConversationStore`. Confirmation
+and no-op text is emitted once through the existing structured execution path,
+including any separator after a streamed preface. Browser commands and business
+receipts keep their existing protocol. The legacy graph keeps its existing
+output path.
