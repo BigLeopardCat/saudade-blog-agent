@@ -490,6 +490,8 @@ class ToolSession:
             except BudgetExceeded as exc:
                 result = self._budget_stop(exc.reason, tool_calls=self.calls_used)
                 return (yield from self._stream_terminal(result, visible_parts))
+            finally:
+                model_iterator.close()
             check_cancelled(self.config)
             calls, result = yield from self._handle_response(
                 response, buffered_chunks, visible_parts)
