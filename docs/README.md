@@ -31,6 +31,7 @@
 | [retired-experiments.md](retired-experiments.md) | 已退役实验臂、归档位置与保留结论 | 记录型 |
 | [问题记录.md](问题记录.md) | 事故取证，按日期：现象 → 根因 → 修复 → 回归锁（**§2.1 例外**，见下） | 记录型（+ §2.1 跨仓契约） |
 | [native-progress-events.md](native-progress-events.md) | 原生进度事件、取消围栏与服务端输出计量 | 现状型 |
+| [legacy-compatibility-boundary.md](legacy-compatibility-boundary.md) | 原生运行时、旧图兼容层及退役条件 | 现状型（含迁移边界） |
 | [eval-observability.md](eval-observability.md) | 混合运行时指标、结果验收、旧评测边界与执行入口 | 现状型 |
 | [lint-baseline.md](lint-baseline.md) | 静态检查（ruff）基线与"新代码要干净"的参照点 | 现状型 |
 | [rag-design.md](rag-design.md) | 检索设计与实现总结，§8 是触发条件驱动的升级预案 | 现状型 |
