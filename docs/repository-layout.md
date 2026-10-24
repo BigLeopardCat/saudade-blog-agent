@@ -8,6 +8,8 @@
 | 位置 | 职责 |
 | --- | --- |
 | `server.py` | 应用生命周期、HTTP 路由、中间件、SSE 和运行资源接线；继续按边界拆分 |
+| `agent/api/authentication.py` | 宿主断言验签、身份解析及管理员端点权限 |
+| `agent/api/routes/` | 已拆分审核及知识图谱接口；同步阻塞工作由 FastAPI 线程池执行 |
 | `agent/api/events.py` | 具名 SSE 事件、正文编码和响应头 |
 | `agent/api/schemas.py` | 聊天请求、响应和字段限额，与宿主 HTTP 契约对应 |
 | `agent/api/context.py` | HTTP 请求到标准消息的适配，处理宿主历史回放和图片 |
@@ -52,6 +54,10 @@
    同一批更新部署命令、开发说明和安装后启动验证，再移除旧入口。
 4. 清理不可达语义匹配与旧适配，按领域拆分共享大模块；每批删除原实现，不长期保留两份逻辑。
 
+审核及知识图谱路由不导入入口模块，也不依赖聊天运行时。审核保留每 worker 独立的
+并发准入；知识图谱通过标准同步路由调用服务，不占用聊天专用 executor。
+身份校验共享 `agent/api/authentication.py`，请求体不能授予角色。
+
 目标归属如下，标注“待建”的文件尚未接入：
 
 ```text
@@ -61,7 +67,7 @@ agent/
 │   ├── schemas.py          # HTTP 模型和字段限额
 │   ├── context.py          # 请求到消息的适配
 │   ├── host_context.py     # 当前请求的宿主数据投影
-│   └── routes/             # 待建：按接口领域拆分的 APIRouter
+│   └── routes/             # 已接入审核和知识图谱，聊天与运维接口待迁移
 ├── runtime/                # 单一原生模型工具循环
 └── domains/                # 业务能力与确认事务
 tests/                      # 确定性回归
