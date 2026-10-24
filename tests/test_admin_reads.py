@@ -9,7 +9,9 @@ from langchain_core.messages import AIMessage, HumanMessage
 
 from agent import authz
 from agent.principal import SOURCE_ASSERTION, SOURCE_BODY, Principal
-from agent.runtime.hybrid import HybridArm
+from agent.runtime.capabilities import ToolCatalog
+from agent.runtime.native import NativeRuntime
+from agent.runtime.native_store import NativeConversationStore
 from agent.runtime.read_tools import ADMIN_READ_TOOLS, MODERATION_READ_TOOLS, admin_tools
 from agent.runtime.session import ToolSession
 from tools import base
@@ -28,11 +30,6 @@ class Model:
 
     def invoke(self, prompt):
         return next(self.replies)
-
-
-class Legacy:
-    def stream(self, *args, **kwargs):
-        raise AssertionError("Administrator read unexpectedly entered the legacy planner")
 
 
 class LocalTool:
@@ -58,7 +55,7 @@ def config(role="superadmin", source=SOURCE_ASSERTION, uid=7, **extra):
     ("admin", SOURCE_ASSERTION, 0, False),
 ])
 def test_admin_menu_visibility_follows_verified_authority(role, source, uid, visible):
-    domains = HybridArm(Legacy())._domains(config(role, source, uid), False, None)
+    domains = ToolCatalog().domains(config(role, source, uid), False, None, None)
     assert ("admin_reports" in domains) is visible
     assert ("admin_moderation" in domains) is visible
     assert ("admin_work_queue" in domains) is visible
@@ -103,15 +100,19 @@ def test_native_admin_read_loads_only_requested_domain_and_never_calls_legacy(mo
 
     model = Model([call("load_admin_reports_info_tools"), call("get_server_status"),
                    AIMessage(content="CPU 17%，内存 36%。")])
-    monkeypatch.setattr("agent.runtime.hybrid.get_llm", lambda **kwargs: model)
     tool = LocalTool()
     cfg = config(user_id=7)
-    arm = HybridArm(Legacy(), admin_read_tools={tool.name: tool})
-    events = list(arm.stream({"messages": [HumanMessage(content="查看服务器状态")]}, cfg))
+    runtime = NativeRuntime(
+        NativeConversationStore(None),
+        catalog=ToolCatalog(admin_read_tools={tool.name: tool}),
+        model_factory=lambda **_: model,
+    )
+    events = list(runtime.stream_events(
+        {"messages": [HumanMessage(content="查看服务器状态")]}, cfg))
     assert tool.calls == [cfg]
     assert tool not in model.menus[0] and tool in model.menus[1]
     assert not any(getattr(item, "name", "").startswith("prepare_") for item in model.menus[1])
-    assert events[1][1]["model"]["messages"][0].content == "CPU 17%，内存 36%。"
+    assert events[-1].reply == "CPU 17%，内存 36%。"
 
 
 def test_admin_menu_rejects_write_scope_and_preserves_legacy_descriptions(monkeypatch):

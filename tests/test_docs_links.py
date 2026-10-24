@@ -1,4 +1,4 @@
-"""手写文档的**索引 / 链接 / 跨界锚点**（离线、秒级）。
+r"""手写文档的**索引 / 链接 / 跨界锚点**（离线、秒级）。
 
 要回答的问题：这一仓 12,000 行手写文档此前**没有任何机制**看着它们——链接指向不存在的
 文件、`docs/` 新加一份却没人进索引、把父仓按编号引用的章节改名，三种都会**静默**发生
@@ -29,12 +29,61 @@
 
 import pathlib
 import re
-import sys
 
 from _judge import collector
 
 FAILS: list[str] = []
 check = collector(FAILS)
+
+
+def _historical_documents(root):
+    index = (root / "docs/README.md").read_text(encoding="utf-8")
+    return {root / "docs" / name for name in re.findall(
+        r"^\| \[([^]]+\.md)\].*\| 记录型[^|]*\|", index, re.M)}
+
+
+def _historical_source(path, historical, root):
+    return path in historical or path.parent == root / "docs/adr"
+
+
+def _check_source_paths(root, handwritten, skip_parts):
+    print("\n④ docs/ 里点名的仓内 .py 路径存在（历史叙述除外）")
+    _TOPS = {d.name for d in root.iterdir()
+             if d.is_dir() and d.name not in skip_parts and not d.name.startswith(".")}
+    _MARKERS = ("已删", "删除", "待建", "未建", "占位", "xxx")
+    _PY_RE = re.compile(r"`([A-Za-z0-9_./\-]+/[A-Za-z0-9_./\-]+\.py)`")
+    _RENAME_RE = re.compile(r"`([A-Za-z0-9_./\-]+\.py)`\s*→\s*`([A-Za-z0-9_./\-]+\.py)`")
+    # Recorded audits and ADRs cite their historical source snapshots. All other
+    # documents remain checked, including newly added current documentation.
+    historical = _historical_documents(root)
+    _RENAMED: dict[str, str] = {}
+    for p in handwritten:
+        if _historical_source(p, historical, root):
+            continue
+        for line in p.read_text(encoding="utf-8").splitlines():
+            if "已改名" not in line:
+                continue
+            for old, new in _RENAME_RE.findall(line):
+                _RENAMED[old] = new
+    check("改名表里的新路径都在盘上（自说自话的改名表不许洗白幽灵路径）",
+          all((root / v).exists() for v in _RENAMED.values()) and bool(_RENAMED),
+          f"表={_RENAMED}")
+    _ghost: list[str] = []
+    for p in handwritten:
+        if _historical_source(p, historical, root):
+            continue
+        if p.parent == root and p.name != "README.md":
+            continue                          # 仓根只查 README（见文件头注：CHANGELOG 是记录型）
+        for i, line in enumerate(p.read_text(encoding="utf-8").splitlines(), 1):
+            for m in _PY_RE.finditer(line):
+                t = m.group(1)
+                if t.startswith("/") or ".." in t or t.split("/")[0] not in _TOPS:
+                    continue                  # 库内路径（langgraph/…）与父仓路径不归本套件管
+                if (root / t).exists() or t in _RENAMED or any(k in line for k in _MARKERS):
+                    continue
+                _ghost.append(f"{p.relative_to(root)}:{i} → {t}")
+    check("没有指向不存在文件的仓内 .py 路径（除已标已删/待建/未建的）",
+          not _ghost, "；".join(_ghost))
 
 
 def test_docs_links():
@@ -84,36 +133,7 @@ def test_docs_links():
     for rel, pat, why in _ANCHORS:
         txt = (ROOT / rel).read_text(encoding="utf-8")
         check(f"{rel} 仍有 {why}", bool(re.search(pat, txt, re.M)), f"找不到 /{pat}/m")
-    print("\n④ docs/ 里点名的仓内 .py 路径存在（历史叙述除外）")
-    _TOPS = {d.name for d in ROOT.iterdir()
-             if d.is_dir() and d.name not in SKIP_PARTS and not d.name.startswith(".")}
-    _MARKERS = ("已删", "删除", "待建", "未建", "占位", "xxx")
-    _PY_RE = re.compile(r"`([A-Za-z0-9_./\-]+/[A-Za-z0-9_./\-]+\.py)`")
-    _RENAME_RE = re.compile(r"`([A-Za-z0-9_./\-]+\.py)`\s*→\s*`([A-Za-z0-9_./\-]+\.py)`")
-    _RENAMED: dict[str, str] = {}
-    for p in HANDWRITTEN:
-        for line in p.read_text(encoding="utf-8").splitlines():
-            if "已改名" not in line:
-                continue
-            for old, new in _RENAME_RE.findall(line):
-                _RENAMED[old] = new
-    check("改名表里的新路径都在盘上（自说自话的改名表不许洗白幽灵路径）",
-          all((ROOT / v).exists() for v in _RENAMED.values()) and bool(_RENAMED),
-          f"表={_RENAMED}")
-    _ghost: list[str] = []
-    for p in HANDWRITTEN:
-        if p.parent == ROOT and p.name != "README.md":
-            continue                          # 仓根只查 README（见文件头注：CHANGELOG 是记录型）
-        for i, line in enumerate(p.read_text(encoding="utf-8").splitlines(), 1):
-            for m in _PY_RE.finditer(line):
-                t = m.group(1)
-                if t.startswith("/") or ".." in t or t.split("/")[0] not in _TOPS:
-                    continue                  # 库内路径（langgraph/…）与父仓路径不归本套件管
-                if (ROOT / t).exists() or t in _RENAMED or any(k in line for k in _MARKERS):
-                    continue
-                _ghost.append(f"{p.relative_to(ROOT)}:{i} → {t}")
-    check("没有指向不存在文件的仓内 .py 路径（除已标已删/待建/未建的）",
-          not _ghost, "；".join(_ghost))
+    _check_source_paths(ROOT, HANDWRITTEN, SKIP_PARTS)
     print()
     if FAILS:
         print(f"FAILS({len(FAILS)}):")

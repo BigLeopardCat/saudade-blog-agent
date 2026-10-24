@@ -1,25 +1,4 @@
-"""报表摘要读**结构**、不读我们自己渲染的中文（20261019 批 G5）。
-
-**这一件为什么存在**：七件报表工具（`tools/admin_read.py` 六件 + `tools/note_admin.py`
-的 `list_admin_notes`）与 `read_notifications` 的跨轮实体摘要，此前一律对着**自己刚
-渲染出来的中文报表**跑正则抠数字（`agent/entity_digest.py::_TEXT_DIGESTERS`）。那等于
-把已经算好的数重新猜一遍：`render_*` 改一句措辞，摘要就**静默变空**——不报错、不留痕，
-下一轮"刚才磁盘占用多少"只能重跑工具；而"标好了"与"没标"在跨轮记忆里长得一样。
-
-批 G5 让这些工具把结构一并交出（`ToolResult.data`），摘要改从结构取值。被测四块：
-
-  · ① 两张表**键集合相等**——同一个工具两条通道（有结构走 `_REPORT_DIGESTERS`、只有
-    文本回落 `_TEXT_DIGESTERS`）。只改一侧 ⇒ 那条通道静默失效，所以这条要机械判。
-  · ② 同一份夹具上**两条通道逐字相同**（真渲染器渲染出来的文本 vs 真结构）。这是
-    "换通道不改行为"的正控：少了它，下面 ③ 的"不变"可以靠"两边都空"骗过去。
-  · ③ 反控：把渲染文案**整段打乱**（CJK 全换掉）⇒ 文本那一支当场退化，结构那一支
-    **一个字都不变**。这一条才是本批要买的东西（今天它会一起变空）。
-  · ④ 接线（**行为级**）：真调那七件工具（桩只打在 httpx 边界与 `agent.hostinfo`
-    的读口），断言返回的 `ToolResult.data` 非空、且两条通道仍然逐字相同。源码里写了
-    `data=` 而没接上线，是这一族最常见的假绿。
-
-用法：.venv/bin/python tests/test_report_digest_structure.py
-"""
+"""Report receipts prefer structured facts and tolerate rendering changes."""
 
 
 from __future__ import annotations
@@ -42,12 +21,12 @@ import tools.own_data as own  # noqa: E402
 from agent import adminops_tags as _tags  # noqa: E402
 from agent import hostinfo as H  # noqa: E402
 from agent import reports as R  # noqa: E402
-from agent.entity_digest import (  # noqa: E402
+from agent.principal import Principal  # noqa: E402
+from agent.receipt_digest import (  # noqa: E402
     _REPORT_DIGESTERS,
     _TEXT_DIGESTERS,
     receipt_digest,
 )
-from agent.principal import Principal  # noqa: E402
 
 FAILS: list[str] = []
 check = collector(FAILS)

@@ -2,9 +2,9 @@
 
 import ast
 
-from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
+from langchain_core.messages import AIMessage, HumanMessage
 
-from agent.article_evidence import ArticleEvidence, completion_read_plan
+from agent.article_evidence import ArticleEvidence
 from agent.runtime.session import ToolSession
 from rag.reading import article_page, render_article_result
 from tools.base import SITE_BASE, get_article_detail
@@ -78,19 +78,6 @@ def test_successful_body_read_adds_real_source_and_rejects_unread_articles():
     assert evidence.issue("来源 [伪造](/article/99)", SITE_BASE)
 
 
-def test_graph_completion_redirects_candidate_only_finish_to_real_detail_read():
-    frame = ToolMessage(
-        content="1. type=note id=19 score=1 title=Article", name="rag_search", tool_call_id="s"
-    )
-    result = completion_read_plan({"workflow": "content_query", "tools": []}, [frame], [])
-    assert result and '"article_id": 19' in " ".join(result["tools"])
-    data = {"noteId": 19, "noteContent": "actual body"}
-    body = ToolMessage(content=str(data), name="get_article_detail", tool_call_id="d")
-    assert (
-        completion_read_plan({"workflow": "content_query", "tools": []}, [frame, body], []) is None
-    )
-
-
 def test_render_budget_keeps_valid_data_and_cursor_at_visible_end():
     body = ("'\n\\" * 4000) + "TAIL"
     raw = article_page({"noteTitle": "T", "noteContent": body}, 1, max_chars=12000)
@@ -131,32 +118,3 @@ def test_site_question_classification_never_performs_retrieval(monkeypatch):
     monkeypatch.setattr(search, "search", unexpected)
     assert is_site_corpus_question("博客有哪些文章呢")
     assert not is_site_corpus_question("你用哪些工具读文章")
-
-
-def test_graph_reads_the_actual_matching_range_not_the_start_of_a_long_article():
-    from agent.deterministic_plan import _candidate_detail_plan
-    from rag.corpus import content_revision
-
-    content = "## Long\n" + "x" * 30000 + "ANSWER"
-    revision = content_revision("T", content)
-    frame = ToolMessage(
-        name="rag_search",
-        tool_call_id="s",
-        content=(
-            "1. type=note id=1 score=1 title=T 命中节=Long "
-            f"section=s1 offset=29000 revision={revision}"
-        ),
-    )
-    plan = _candidate_detail_plan([frame], [], set())
-    args = plan["params"]["calls"][0]["args"]
-    assert args["section"] == "s1" and args["offset"] == 29000
-    result = article_page(
-        {"noteTitle": "T", "noteContent": content},
-        **{
-            "article_id": args["article_id"],
-            "section": args["section"],
-            "offset": args["offset"],
-            "revision": args["revision"],
-        },
-    )
-    assert "ANSWER" in result["sectionText"]

@@ -8,8 +8,8 @@ from langchain_core.messages import HumanMessage
 from agent.authz import scopes_for
 from agent.principal import SOURCE_ASSERTION, SOURCE_BODY, Principal
 from agent.runtime.context import conversation_context
-from agent.runtime.hybrid import _input
 from agent.runtime.memory import HISTORY_TOKENS, _tokens
+from agent.runtime.prompt import build_prompt as _input
 from agent.stickers import STICKER_NAMES
 
 

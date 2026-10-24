@@ -39,13 +39,6 @@ sys.path.insert(0, str(ROOT / "tests"))
 import _parent_repo  # noqa: E402
 
 from agent.action_text import receipt_action, tool_action_text  # noqa: E402
-from agent.workflow_defs import (
-    WORKFLOWS,  # noqa: E402  （③ 末尾那条：死工具的可达性只认这两条通道）
-)
-from agent.workflow_tools import (  # noqa: E402  （③ 末尾那条：死工具的可达性只认这两条通道）
-    _CALLABLE_QUERY_TOOLS,
-    _EXPLICIT_TOOLS,
-)
 from tools.base import _TOOL_REGISTRY  # noqa: E402
 
 FAILS: list[str] = []
@@ -334,48 +327,12 @@ def test_action_text():
           all(_pre(n) == f"执行 {n}" for n in _DEAD))
     check("有臂工具的 full 档非空（空串=不写 action=悄悄退回老表，那条路只留给无臂的）",
           all(receipt_action(n, {}, {}) for n in _NAMES if n not in _DEAD))
-    _dead_reachable = []
-    for _n in sorted(_DEAD):
-        if _n in _EXPLICIT_TOOLS or _n in _CALLABLE_QUERY_TOOLS:
-            _dead_reachable.append(f"{_n}:点名白名单")
-        if any(_n == _t for _s in WORKFLOWS for _t, _ in (_s.plan or ())):
-            _dead_reachable.append(f"{_n}:技能模板")
-    check("原生历史读取不通过旧规划器的点名或模板通道",
-          not _dead_reachable, "、".join(_dead_reachable))
+    check("会话历史读取通过原生 own_activity 域提供",
+          "get_chat_history" in _NAMES)
     check("退役的知识库占位工具没有留在注册表中",
           "search_knowledge_base" not in _NAMES)
 
-    print("\n④ 接线锁：Python 只对有臂的写 action；Rust 必须优先读它，且老表只减不增")
-    _g = (ROOT / "agent" / "graph.py").read_text(encoding="utf-8")
-    check("graph.py 的 execute_node 写了 `rcpt[\"action\"]`",
-          'rcpt["action"]' in _g)
-    check("  且只在**有臂**时才写（无臂不写 ⇒ 那份回执仍由 Rust 老表渲染）",
-          re.search(r'act\s*=\s*\w*action_text\.receipt_action\(', _g) is not None
-          and 'if act:\n                rcpt["action"] = act' in _g)
-    check("  且写在回执行 append 之前（写在后面＝这一行压根没落库）",
-          'rcpt["action"] = act' in _g
-          and _g.index('rcpt["action"] = act') < _g.index("receipts.append(rcpt)"))
-    _NO_LEGACY_ARM = _DEAD | {
-        "reschedule_dashboard_todo",   # 20260929 批 G：冻结之后新增的第一件
-        "approve_quota_request", "reject_quota_request", "reset_user_quota",
-        "list_quota_requests",         # 额度四件（20260926）：从来没进过老表
-        "get_note_stats",              # 20260930 文章流量报表：冻结之后新增，动作词只在 Python 侧
-        "list_admin_board",            # 20261001 后台留言名册：同上（读 GET /api/protect/board）
-        "get_note_periods",            # 20261001 文章分期报表：同上（读 stats/notes/periods）
-        "set_account_role",
-            # 20261002 批 J 变更账号身份：冻结之后新增，动作词只在 Python 侧
-        "account_mute", "account_unmute",  # 20261002 内容风控下放：同上，动作词只在 Python 侧
-        "list_accounts",               # 20261006 后台账号名录：同上（账号写族那句"账号名必须
-                                       # 能在后台账号列表里看到"的读入口，读 GET /api/temp-users）
-        "list_my_board",
-            # 20261008 我自己的河灯：同上（读 GET /api/protect/board/mine；
-                                       # 措辞刻意与公开池的"查看留言板"分开，
-                                       # 见 action_text 里那条注）
-        # 文章评论的三件（20261019）：冻结之后新增，动作词只在 Python 侧。三件**都要列**——
-        # 漏一件就是"新工具进了注册表却没在这里现形"，而那正是本判据存在的全部理由。
-        "list_admin_comments",         # 读 GET /api/protect/comments（后台评论名册）
-        "audit_comment", "delete_comment",  # 复核 / 删除一条文章评论（同留言那两件，另一张表）
-    }
+    print("\n④ 接线锁：Python 回执提供 action，Rust 只读顶层字段")
     _rs = _parent_repo.read(
         "src/routes/chat.rs",
         why="进程行/台账行的渲染**已经搬到 Python**（`agent/action_text.py`）：Rust 那半若"
@@ -404,19 +361,6 @@ def test_action_text():
           "已落库的行不走它，`execution_log.detail` 存的就是渲染后的字）",
               '"create_tag" =>' in _legacy and '"device_oled_display" =>' in _legacy)
 
-        # 臂的取值解析要认**或臂**（`"a" | "b" =>`）——只认单名会漏掉一半，而漏掉的那些
-        # 恰好会被读成"没有臂"⇒ 有人给它们加一条单名臂时判据反而不响。
-        _legacy_tools: set[str] = set()
-        for _m in re.finditer(r'((?:"[a-z_0-9]+"\s*\|\s*)*"[a-z_0-9]+")\s*=>', _legacy):
-            _legacy_tools |= set(re.findall(r'"([a-z_0-9]+)"', _m.group(1)))
-        # 臂里还有嵌套 match 的取值（`doc_type` 的 board/talk/announcement），不是工具名。
-        _legacy_tools &= set(_NAMES)
-        _no_arm = set(_NAMES) - _legacy_tools
-        check("★ 老表**只减不增**：注册表里没有臂的工具恰好是那份冻结声明"
-          "（新工具的动作词只加 Python 那侧——加臂是死代码，且让对账显得比实际更严）",
-              _no_arm == _NO_LEGACY_ARM,
-              f"声明说没有却有了臂={sorted(_NO_LEGACY_ARM - _no_arm)}；"
-          f"没有臂却不在声明里={sorted(_no_arm - _NO_LEGACY_ARM)}")
         check("  排版三件仍留在 Rust 侧（方括号归一 / 实体摘要拼接 / 列宽截断）",
               'replace(\'[\', "「")' in _body and 'row["digest"]' in _body
               and ".take(120)" in _body and ".take(300)" in _body)

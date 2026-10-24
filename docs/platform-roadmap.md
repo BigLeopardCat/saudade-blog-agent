@@ -1,5 +1,5 @@
 # 平台面建设与整体规范化路线图
-> ⚠️ 20261018 又一批模块已改名（**记录型文档一律保留当时的名字，不回溯改写**）：`agent/absence.py` → `agent/absence_claims.py`、`agent/frames.py` → `agent/frame_contract.py`、`agent/probe.py` → `agent/runtime_probe.py`、`agent/decisions.py` → `agent/deterministic_plan.py`、`agent/entities.py` → `agent/entity_digest.py`、`agent/refs.py` → `agent/arg_refs.py`、`agent/workflow_defs/nav.py` → `agent/workflow_defs/nav_map.py`、`agent/workflow_defs/navigation.py` → `agent/workflow_defs/nav_skills.py`、`agent/workflow_defs/reports.py` → `agent/workflow_defs/report_skills.py`、`agent/context.py` → `agent/prompt_context.py`。**现状地图（每个模块一行）**见 `docs/agent-architecture.md` §2。
+> ⚠️ 20261018 又一批模块历史路径映射（旧规划相关实现已删除）（**记录型文档一律保留当时的名字，不回溯改写**）：`agent/absence.py` → `agent/absence_claims.py`、`agent/frames.py` → `agent/frame_contract.py`、`agent/runtime_probe.py` → `agent/runtime_probe.py`、`agent/decisions.py` → `agent/deterministic_plan.py`、`agent/entities.py` → `agent/entity_digest.py`、`agent/arg_refs.py` → `agent/arg_refs.py`、`agent/workflow_defs/nav.py` → `agent/workflow_defs/nav_map.py`、`agent/workflow_defs/navigation.py` → `agent/workflow_defs/nav_skills.py`、`agent/workflow_defs/reports.py` → `agent/workflow_defs/report_skills.py`、`agent/context.py` → `agent/prompt_context.py`。**现状地图（每个模块一行）**见 `docs/agent-architecture.md` §2。
 
 **类型：方向型**（还没做的分批预案）。状态与触发条件的**总入口**仍是仓根
 [ROADMAP.md](../ROADMAP.md)——这份文档是它在「平台面 / 规范化」这一支上的展开，
@@ -30,14 +30,14 @@
 |---|---|---|
 | 断点恢复 | 建账时**无**：生产不挂 saver；`agent/checkpoint.py` 的 `build_checkpointer()` 是响亮桩、零生产调用方；`thread_id` 每请求随机。**"挂没挂"现在看得见了**（**已补**：批 6a，`/health` 的 `checkpoint_backend`；半接会被 `tests/test_checkpoint_adoption.py` 判红）。**接线已落地**（**已补**：批 7，"三处一起动"共用同一个判据），且 **20261018 起生产真的在跑**（`/health` 回 `postgres`）。⚠️ **但它现在指在业务库上**——20261019 批 B 反转了"指哪个库"的口径（**必须独立库**）、加了 `dials.checkpoint_db` 与 `CHECKPOINT_FORBID_DB` 硬闸，**挪库那一步归主人**（顺序见批 7 的运维交接） | `agent/checkpoint.py`、`server.py` |
 | 幂等账 | **已建成但惰性**：`agent/idem.py` 的 `active()` 要求 checkpointer 在场 ⇒ 恒 False | `agent/idem.py` |
-| 版本可见性 | **无** `/version`、无 build-info；`/health` 只回声 dials （**已补**：批 3，`agent/probe.version_payload`） | `server.py`、`agent/probe.py` |
-| 错误码 | BLOCK 原因码**已有闭集**（`agent/block_reasons.py` + `tests/test_block_reasons.py`）；**发射侧**没有对应闭集 | 同上 |
+| 版本可见性 | **无** `/version`、无 build-info；`/health` 只回声 dials （**已补**：批 3，`agent/probe.version_payload`） | `server.py`、`agent/runtime_probe.py` |
+| 错误码 | BLOCK 原因码**已有闭集**（`agent/block_reasons.py` + `tests/test_block_reasons_native.py`）；**发射侧**没有对应闭集 | 同上 |
 | 重试 | **已有**但**散在**：重试码集、重试异常集、`_llm_retriable()`、planner 里的一次性重试各住一处 | `agent/graph.py` |
 | 用量计量 | 主链路计；**侧任务（moderator / summarizer）不计** | `agent/llm_usage.py` 头注自认 |
 | 权限 | scope 表与同意闸齐备，但 `AUTHZ_ENFORCE` 默认 **0（影子）**；影子读数**已建成**（批 5） | `agent/authz.py`、`eval/authz_shadow_divergence.py` |
 | 静态检查闸 | **文档自称「待建」**：ruff 基线还只是快照，没有执行者 （**已补**：批 2，`eval/lint_gate.py` + CI 一步） | [lint-baseline.md](lint-baseline.md) |
 | 提交闸 | **本仓没有** commit-msg hook，规则只写在 [CONTRIBUTING.md](../CONTRIBUTING.md) §3 （**已补**：批 2，`.githooks/commit-msg` + CI 一步） | 实测 `.githooks/` 不存在 |
-| 文档计数 | [docs/README.md](README.md) 里手抄的 ADR 份数漂了（写 7、实际 12），且这条计数没有闸 （**已补**：批 1，进 `tests/test_docs_facts.py` 同源判） | 实测 `docs/adr/` |
+| 文档计数 | [docs/README.md](README.md) 里手抄的 ADR 份数漂了（写 7、实际 12），且这条计数没有闸 （**已补**：批 1，进 `tests/test_docs_links.py` 同源判） | 实测 `docs/adr/` |
 | 台账幽灵键 | 已删模块的键还留在类型棘轮台账里（**已补**：批 1/2，两处棘轮各加一条幽灵键守卫） | `eval/mypy_baseline.json`、`eval/lint_gate.py` |
 
 ---
@@ -62,7 +62,7 @@
    - `tests/test_module_budget.py` 现在只在「实测 > 台账」时红，**台账比实测松是静默容忍的**；
    - `eval/type_gate.py` 只遍历报出来的文件，**幽灵键不可见**。
    两处各加一条判据，各带一条反控（把台账改高 / 留着幽灵键 ⇒ 必须红）。
-4. **文档漂移收口**：ADR 份数进 `tests/test_docs_facts.py`（与工具数/技能数/用例数同族）；
+4. **文档漂移收口**：ADR 份数进 `tests/test_docs_links.py`（与工具数/技能数/用例数同族）；
    指向**不在本仓**的路径逐条标注。
 5. 清掉已删模块残留的字节码缓存（运维动作，不进提交）。
 
@@ -131,16 +131,16 @@
   这条正控——那才是生产的形状。**原先那条判据没抓住它，因为夹具只铺平铺布局**：
   判据在一个**已经不存在的形状**上保持绿（同族：`test_ready.py` 那条"判据的前提要自己
   摆出来，而且摆的必须是今天的那个前提"）。
-- 落点：判定逻辑住在 `agent/probe.py`（纯函数），`server.py` 只留两个薄路由——
+- 落点：判定逻辑住在 `agent/runtime_probe.py`（纯函数），`server.py` 只留两个薄路由——
   `server.py` 已超文件预算 3 倍，加 118 行会被 `tests/test_module_budget.py` 判「长文件又长了」，
   而这两件事**不需要**住在 app 模块里。台账那一格随之 +40 行（2589/52），是这次唯一的放宽。
 
 ### 批 4 — 错误与用量：可归因 ✅ 已落地（其中两项实测**早已做完**）
 
 - **发射侧错误码收敛** ✅：**没有新增第三张表**。实测清点：生产侧能发出的码一共
-  **20 个**（`agent/refs.py` 的字面返回 + `authz` / `adminops_target` / `idem` /
+  **20 个**（`agent/arg_refs.py` 的字面返回 + `authz` / `adminops_target` / `idem` /
   `graph` 的 `REASON_*` 具名常量），**20/20 都已在表里**——没有"裸码"要并。
-  真正缺的是**看着这件事的判据**：`tests/test_block_reasons.py` ③ 判的是**取回侧**
+  真正缺的是**看着这件事的判据**：`tests/test_block_reasons_native.py` ③ 判的是**取回侧**
   （`_check_spec` 认哪几个字面、六个取回通道还接不接着），看不见生产侧。新增一节 ⑥：
   从源码现取生产侧的码（AST，不手抄名单）断言 ⊆ `REASONS`，带正控（扫不到就空过）
   与两条反控（合成一个未登记的新码 ⇒ 必须红；`return None, "人话"` 那种不许被当成码）。
@@ -148,7 +148,7 @@
   豁免只有一条且**点名**（`REASON_OK = "ok"` 是裁决常量、不是受阻码），并配一条
   "这条豁免仍然必要"的判据。
 - **重试策略归一** ✅ **早已做完**：三处常量本来就住在一起（`agent/graph.py` 的
-  `_RETRY_HTTP` / `_RETRY_EXC` / `_llm_retriable`），判据 `tests/test_planner_llm_error.py`
+  `_RETRY_HTTP` / `_RETRY_EXC` / `_llm_retriable`），判据 `tests/test_native_answer_streaming.py`
   已逐码判（4xx 只有 408/409/425/429、5xx 全可重试、**400 不重试**、**超时不重试**）
   且带源码级共现锁。**没有 langchain `max_retries` 可"归一"**——全仓一处都没设。
 - **侧任务计费** ✅：两条侧任务**走不同的路**（这是本批唯一需要判断的地方）：
@@ -248,7 +248,7 @@
   判据 `tests/test_golden_thread.py`：三条不变式 + 归一化 + **拿真语料量撞名**
   （192 条用例的线程名两两不同——归一化会把 `a.b` 与 `a-b` 折成同一个 slug，那是真实存在
   的失效面，所以这条不靠"应该不会撞"的直觉）+ 两条 AST 接线锁。
-  ⚠️ **`run_one` 的 `thread` 缺省仍是老常量**：`eval/zero_call_residual_probe.py` /
+  ⚠️ **`run_one` 的 `thread` 缺省仍是老常量**：`eval/native_contracts.py` /
   `eval/arm_capability.py` 等探针直接调 `run_one` 并各传各的线程名，缺省不许动它们。
 - **依赖进 `pyproject.toml` 与锁文件** ✅ **已做**（`langgraph-checkpoint-postgres==3.1.0` /
   `psycopg[binary]==3.3.6` / `psycopg-pool==3.3.3`，`uv.lock` 里有对应条目；本机不跑同步，
@@ -264,7 +264,7 @@
 ### 批 7 — 断点恢复落地（一次原子提交，不拆）✅ 已落地（代码面；**生产是否在跑看 DSN**）
 
 **三处一起动**（`agent/checkpoint.py` 头注）已落地，且**共用同一个判据**
-`server._graph_holds_context()`——它读**活体对象上有没有 saver**（`agent/probe.py`，与
+`server._graph_holds_context()`——它读**活体对象上有没有 saver**（`agent/runtime_probe.py`，与
 `/health` 的 `checkpoint_backend` 同一个取值实现），不读 `CHECKPOINT_DSN`。于是"配了 DSN
 但没挂上"与"没配 DSN"是同一个源码形态，**半接在结构上不可能**。
 
@@ -343,10 +343,10 @@ START 重启 ⇒ 下一轮走完自己回到空。**潜伏面** = 任何 `stream
   把它变成失败），那一条自己每次运行都会另打一行**每次运行都报**这一层量没量。
 
 **幂等账转「在跑」**：`agent/idem.py` 的 `active()` 是"挂没挂 checkpointer"，本批起挂上就
-自然打开（`tests/test_write_idempotency.py` 全绿）。**没挂时逐字节不变**。
+自然打开（`tests/test_favorite_transactions.py` 全绿）。**没挂时逐字节不变**。
 
 **三处台账的放宽（全是文本外科改那一个数，没跑 `--update`）**——都因为"批 7 的接线真的
-落在这几个文件里"，且都**先试过按主题拆**（判定本体已搬到 `agent/probe.py` 与
+落在这几个文件里"，且都**先试过按主题拆**（判定本体已搬到 `agent/runtime_probe.py` 与
 `agent/checkpoint.py`，`server.py` 只剩三个薄壳）：
 
 | 台账 | 条目 | 变化 | 为什么不能再拆 |

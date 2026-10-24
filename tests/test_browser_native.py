@@ -16,13 +16,12 @@ from langchain_core.tools import ToolException, tool
 from langgraph.checkpoint.memory import InMemorySaver
 from pydantic import ValidationError
 
-from agent.agent import create_agent
 from agent.domains import browser
-from agent.graph import graph_input
 from agent.principal import SOURCE_ASSERTION, Principal
 from agent.runtime import memory
 from agent.runtime.budget import BudgetLimits, RequestBudget, budget_scope
-from agent.runtime.hybrid import HybridArm
+from agent.runtime.native import NativeRuntime
+from agent.runtime.native_store import NativeConversationStore
 from agent.runtime.session import ToolSession
 from tools import site
 
@@ -65,10 +64,8 @@ class Model:
 
 def _arm(monkeypatch, responses):
     model = Model(responses)
-    monkeypatch.setattr("agent.runtime.hybrid.get_llm", lambda **kwargs: model)
-    graph = create_agent(checkpointer=InMemorySaver())
-    monkeypatch.setattr(graph, "stream", lambda *a, **kw: pytest.fail("legacy planner invoked"))
-    return HybridArm(graph), model
+    return NativeRuntime(NativeConversationStore(InMemorySaver()),
+                         model_factory=lambda **_: model), model
 
 
 @pytest.mark.parametrize(
@@ -206,8 +203,9 @@ def test_one_turn_combines_appearance_and_navigation_and_retains_source_history(
         ],
     )
     config = _config()
-    events = list(arm.stream(graph_input([HumanMessage(content="关雨开雪，再去这条河灯")]), config))
-    execution = next(event[1]["execute"] for event in events if "execute" in event[1])
+    events = list(arm.stream_events(
+        {"messages": [HumanMessage(content="关雨开雪，再去这条河灯")]}, config))
+    execution = events[-1].execution
     assert len(execution["receipts"]) == 3 and not execution.get("pending_confirm")
     assert len(model.calls) == 4
     results = [item for item in model.calls[-1] if isinstance(item, ToolMessage) and item.artifact]
@@ -219,7 +217,7 @@ def test_one_turn_combines_appearance_and_navigation_and_retains_source_history(
     source = [item for item in history if isinstance(item, ToolMessage)]
     assert [item.name for item in source] == ["set_page_appearance", "navigate_page"]
     assert all(item.artifact == {"kind": "ok"} for item in source)
-    list(arm.stream(graph_input([HumanMessage(content="刚才设置了什么")]), config))
+    list(arm.stream_events({"messages": [HumanMessage(content="刚才设置了什么")]}, config))
     assert "set_page_appearance" in model.menus[-1]
     assert "load_site_info_tools" in model.menus[-1]
     assert "get_site_map" not in model.menus[-1]
@@ -230,20 +228,21 @@ def test_one_turn_combines_appearance_and_navigation_and_retains_source_history(
     )
 
 
-@pytest.mark.parametrize("last", ["delegate_to_site_agent", "budget"])
-def test_queued_commands_survive_stop_without_replaying_the_legacy_graph(monkeypatch, last):
+@pytest.mark.parametrize("last", ["budget"])
+def test_queued_commands_survive_stop_without_replaying_legacy_runtime(monkeypatch, last):
     responses = [
         _response("load_site_info_tools"),
         _response("set_page_appearance", {"snow": "on"}),
     ]
     if last == "budget":
         responses.extend(_response("set_page_appearance", {"snow": "on"}) for _ in range(3))
-    else:
+    else:  # pragma: no cover - kept for future native stop reasons
         responses.append(_response(last))
     arm, _ = _arm(monkeypatch, responses)
     with budget_scope(RequestBudget(BudgetLimits(model_calls=4))):
-        events = list(arm.stream(graph_input([HumanMessage(content="开雪花然后继续")]), _config()))
-    execution = next(event[1]["execute"] for event in events if "execute" in event[1])
+        events = list(arm.stream_events(
+            {"messages": [HumanMessage(content="开雪花然后继续")]}, _config()))
+    execution = events[-1].execution
     assert len(execution["receipts"]) == (3 if last == "budget" else 1)
 
 
@@ -319,11 +318,12 @@ def test_invalid_path_returns_recoverable_error_and_keeps_prior_page_commands(mo
             AIMessage(content="雪花设置和打开河灯集的指令已发送。"),
         ],
     )
-    events = list(arm.stream(graph_input([HumanMessage(content="开雪花，再去留言板")]), _config()))
+    events = list(arm.stream_events(
+        {"messages": [HumanMessage(content="开雪花，再去留言板")]}, _config()))
     error = model.calls[-2][-1]
     assert isinstance(error, ToolMessage) and error.status == "error"
     assert "/guestbook" in error.content and "get_site_map" in error.content
-    execution = next(event[1]["execute"] for event in events if "execute" in event[1])
+    execution = events[-1].execution
     assert [row["tool"] for row in execution["receipts"]] == ["toggle_effect", "navigate_to"]
 
 
@@ -337,7 +337,7 @@ def test_page_schema_errors_are_standard_error_messages():
 
 def test_current_display_state_reaches_native_context_as_page_data():
     import server
-    from agent.runtime.hybrid import _input
+    from agent.runtime.prompt import build_prompt as _input
 
     request = server.ChatRequest(
         message="切换夜间模式", current_url="/", current_effects="rain", current_darkmode="on"

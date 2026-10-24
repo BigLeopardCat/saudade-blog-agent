@@ -181,6 +181,7 @@ def test_native_loop_keeps_device_receipt_and_blocks_whole_turn_legacy_replay(se
                     content="",
                     tool_calls=[{"name": "delegate_to_site_agent", "args": {}, "id": "delegate"}],
                 ),
+                AIMessage(content="设备回执已保留。"),
             ]
         )
 

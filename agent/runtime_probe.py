@@ -55,16 +55,9 @@ BUILD_IDENTITY = build_sha()
 
 
 def arm_name(agent):
-    from langgraph.graph.state import CompiledStateGraph
-
-    from agent.runtime.hybrid import HybridArm
     from agent.runtime.native import NativeRuntime
 
-    if isinstance(agent, NativeRuntime):
-        return "native"
-    if isinstance(agent, HybridArm):
-        return "hybrid"
-    return "graph" if isinstance(agent, CompiledStateGraph) else "unknown"
+    return "native" if isinstance(agent, NativeRuntime) else "unknown"
 
 
 def request_context(agent):

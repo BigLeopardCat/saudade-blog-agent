@@ -4,9 +4,9 @@ import json
 
 from langchain_core.messages import HumanMessage, SystemMessage
 
-from agent.prompts import BLOG_PERSONA_PROMPT
 from agent.runtime import memory
 from agent.runtime.context import conversation_context
+from agent.runtime.persona import BLOG_PERSONA_PROMPT
 from tools.base import SITE_BASE
 
 _BOUNDARY = (
@@ -23,15 +23,12 @@ _BOUNDARY = (
 )
 
 
-def build_prompt(messages: list, principal, own_enabled: bool = False, pending=None, *,
-                 allow_legacy_handoff=True) -> list:
+def build_prompt(messages: list, principal, own_enabled: bool = False, pending=None) -> list:
     """Compose current authority, historical data, and bounded source observations."""
-    context = conversation_context(principal, allow_legacy_handoff=allow_legacy_handoff)
+    context = conversation_context(principal)
     own_boundary = "本人读取工具仅访问当前账号数据。" if own_enabled else ""
-    delegation = ("仅未覆盖的站内任务交给 delegate_to_site_agent。"
-                  if allow_legacy_handoff else "")
     system = SystemMessage(content=BLOG_PERSONA_PROMPT + "\n" + _BOUNDARY
-                           + own_boundary + delegation
+                           + own_boundary
                            + "\n账号身份以可信 identity 为准；管理员权限不证明作者身份。"
                            + "\n运行时能力（可信数据）："
                            + json.dumps(context, ensure_ascii=False, separators=(",", ":")))

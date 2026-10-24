@@ -78,8 +78,6 @@ def _test_nonzero_seed_is_a_first_class_field():
 
 def _test_settings_defaults_are_the_determinism_arm():
     print("\n[默认] 两个因子的出厂值 = 确定性那一档")
-    check("planner_temperature 默认 0.0（路由确定性，20261006）",
-          S.planner_temperature == 0.0, str(S.planner_temperature))
     check("llm_seed 默认 0 = 不设（未经验证的采样通路不做默认）",
           S.llm_seed == 0, str(S.llm_seed))
 

@@ -14,8 +14,7 @@ import sys
 pytest_plugins = ["_own_support"]
 
 # ① 出厂档钉子（**唯一事实源**；`tests/test_ci_suite_list.py` ④b 判「钉了真的生效」）
-_PINNED = {"AGENT_EVIDENCE": "0",
-           "AGENT_FASTPATH": "1",
+_PINNED = {"AGENT_FASTPATH": "1",
            "RAG_HYBRID_ENABLED": "0",
            "CHECKPOINT_DSN": "",
            # `AGENT_REQUIRE_ASSERTION`（20261019 安全审计 SAU-005，随并进 main 同步）：
@@ -72,17 +71,13 @@ import pytest  # noqa: E402
 _WATCHED_MODULES = (
     # 被打桩最密的几处（`agent.graph.get_llm` 90 处、`tools.base._client` 161 处、
     # `server._agent` 36 处 —— 三条都在十几个套件里出现）
-    "agent.graph",
-    "agent.adminops_todo", "agent.adminops_confirm", "agent.confirm",
+    "agent.adminops_todo", "agent.confirm",
     "tools.base", "tools.device", "tools.notes", "server",
-    "agent.workflow_tools", "agent.prompts",
     # 同一轮普查里出现的其余落点：检索侧（`rag.search._index` 就是
     # `test_cliff_min_keep` 把进程级单例换成 6 篇夹具索引、`test_gate_replan`
     # 因此看不见真语料的那一处）、上下文/授权/计划侧、以及 eval/ 下的共用助手
     # （助手模块同样进 sys.modules，被 A 套件打桩后 B 套件读到的是桩）。
-    "agent.authz", "agent.checkpoint", "agent.deterministic_plan",
-    "agent.hostinfo", "agent.planner_llm", "agent.prompt_context",
-    "agent.tasks", "agent.workflow_plan", "config.settings",
+    "agent.authz", "agent.checkpoint", "agent.hostinfo", "config.settings",
     "rag.graph_build", "rag.search", "rag.vector_index", "rag.wordgraph",
     "utils.clock", "utils.trace",
     "build_word_graph", "corpus_provenance", "dial_matrix", "golden_fixture",
@@ -145,7 +140,7 @@ def _restore(snap: dict) -> list[str]:
     # 工具的 `args_schema` 打桩、顺手调了一次 `_tools_desc_cached`，缓存里就留着一份
     # **降级后的菜单**（实测：`search_notes(keyword:str*)` 变成 `search_notes()`），
     # 后面的套件"现算 vs 缓存"对不上。清掉即可 —— 缓存是纯函数，重算没有代价。
-    for name in (*_WATCHED_MODULES, "agent.graph"):
+    for name in _WATCHED_MODULES:
         mod = sys.modules.get(name)
         if mod is None:
             continue

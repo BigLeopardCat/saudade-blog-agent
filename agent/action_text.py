@@ -49,14 +49,14 @@ legacy 表——存量行的渲染一个字节都没变，这是本批的收敛�
 import re
 
 from agent import adminops_tags as _tags  # 标签颜色/状态的既有中文词表（写工具问句共用）
-from agent.workflow_defs.nav_map import NAV_MAP
-from agent.workflow_expand import _norm_id_list, _norm_true
 # 分期报表的粒度词（周报/月报/年报）：**唯一一份**在 `agent/reports.py`（帧头与
 # 动作行必须同一套字），这里只取用、不另抄。
 from agent.reports import _KIND_CN
 # 四个数据源的中文名词（note/talk/board/announcement）；留言的**状态词与筛选键**也
 # 取同一处（`tools/base.py` 是唯一实现，写路径、名册、动作行共用一份，别在这里再抄）。
 from tools.base import BOARD_APPROVED_CN, BOARD_STATUS_FILTERS, DOC_TYPE_CN
+from tools.base import _as_bool, _as_ids
+from tools.site import nav_label
 
 _EFFECT_CN = {"sakura": "樱花", "rain": "大雨", "snow": "雪花"}
 
@@ -318,7 +318,7 @@ def _py_int_list(raw) -> list[str]:
 
 def _ids_arg(a: dict) -> list[str]:
     """实参里的 id 列表 → 字符串编号列表（原始 list 与落盘后的 repr 都认）。"""
-    ids = _norm_id_list(a.get("ids"))
+    ids = _as_ids(a.get("ids"))
     if ids:
         return [str(i) for i in ids]
     return _py_int_list(a.get("ids"))
@@ -559,7 +559,7 @@ def _arm_text(name: str, a: dict, m: dict, preview: bool):
         # 路径经 NAV_MAP 反查中文别名（反查失败展示路径本身——路径是 execute 实际
         # 下发的真实值，不硬凑）。别名对下一轮也有用：主人说"带我去了哪"，台账行
         # 里的中文名与他的原话对得上号，而 `/device-console/` 得靠模型自己映射。
-        label = next((k for k, v in NAV_MAP.items() if v == path), path)
+        label = nav_label(path)
         return f"页面跳转「{label[:20] if preview else label}」"
     if name == "toggle_dark_mode":
         on = _raw(a.get("mode") or a.get("action")).lower() in _ON_WORDS
@@ -765,7 +765,7 @@ def _arm_text(name: str, a: dict, m: dict, preview: bool):
         change = _m(m, "change")
         if change:
             return f"{who}{change}（未改动）"
-        if _norm_true(a.get("all")):
+        if _as_bool(a.get("all")) is True:
             return f"标记{who}已读（全部未读）"
         ids = _ids_arg(a)
         if ids:

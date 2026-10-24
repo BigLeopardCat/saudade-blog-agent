@@ -41,8 +41,7 @@ def call(name, identifier):
         {"name": name, "id": identifier, "args": {}}])
 
 
-@pytest.mark.parametrize("allow_handoff", [False, True])
-def test_domain_loading_extends_wire_schemas_and_repeated_loading_is_idempotent(allow_handoff):
+def test_domain_loading_extends_wire_schemas_and_repeated_loading_is_idempotent():
     calls = []
 
     @tool
@@ -63,10 +62,9 @@ def test_domain_loading_extends_wire_schemas_and_repeated_loading_is_idempotent(
     session = ToolSession(model, config(), {}, {
         "public_activity": {"fixture_read": fixture_read},
         "public_catalog": {"fixture_catalog": fixture_catalog},
-    }, allow_legacy_handoff=allow_handoff)
+    })
     result = session.run(build_prompt([HumanMessage(content="查看内容")],
-                                      config()["configurable"]["principal"],
-                                      allow_legacy_handoff=allow_handoff))
+                                      config()["configurable"]["principal"]))
     assert result == TurnResult("完成。") and calls == ["read"]
     menus = [request["tools"] for request in model.requests]
     for previous, current in zip(menus, menus[1:]):
@@ -79,7 +77,7 @@ def test_domain_loading_extends_wire_schemas_and_repeated_loading_is_idempotent(
     assert "error" not in repeated[0]["content"]
     assert menus[2] == menus[3] == menus[4]
     assert session.budget.tool_calls == 4
-    assert ("delegate_to_site_agent" in str(menus)) is allow_handoff
+    assert "delegate_to_site_agent" not in str(menus)
 
 
 def context(title, summary):
@@ -103,12 +101,11 @@ def test_changing_current_data_preserves_the_authorized_history_prefix(changed):
                AIMessage(content="Earlier answer " * 30)]
     current = HumanMessage(content="继续")
     before = build_prompt([*history, context("page A", "summary A"), current],
-                          principal, pending=Pending("target A"), allow_legacy_handoff=False)
+                          principal, pending=Pending("target A"))
     after = build_prompt([*history, context("page B" if changed == "page" else "page A",
                                            "summary B" if changed == "summary" else "summary A"),
                           current], principal,
-                         pending=Pending("target B" if changed == "pending" else "target A"),
-                         allow_legacy_handoff=False)
+                         pending=Pending("target B" if changed == "pending" else "target A"))
     assert before[:3] == after[:3] == [before[0], *history]
     assert before[-1] is after[-1] is current
     assert before != after
@@ -146,6 +143,6 @@ def test_private_history_still_disappears_when_authority_changes():
         {"name": "list_admin_notes", "args": {}, "id": "private"},
         base.ok("PRIVATE_CANARY")), "PRIVATE_CANARY", principal)
     prompt = build_prompt([*saved, context("page", ""), HumanMessage(content="继续")],
-                          Principal(7, "user", SOURCE_ASSERTION), allow_legacy_handoff=False)
+                          Principal(7, "user", SOURCE_ASSERTION))
     assert "PRIVATE_CANARY" not in str(prompt)
     assert not any(isinstance(message, ToolMessage) for message in prompt)

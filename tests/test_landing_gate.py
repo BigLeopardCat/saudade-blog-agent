@@ -395,14 +395,11 @@ def _test_wiring():
     check("**只有 collapse 退出码 1**；below_entry 不置红（档位不是门禁）",
           'if _s["state"] == "collapse":' in src
           and '_s["state"] == "below_entry":' not in src)
+    import run_golden
     check("Wilson 只有一份实现：run_golden 从 landing_gate 再导出",
-          "from landing_gate import wilson_ci" in src
-          and "def wilson_ci" not in src)
-    check("`fallback_resets` 同样只有一份实现（伤害判据的口径不许分叉）",
-          "from landing_gate import fallback_resets" in src
-          and "def fallback_resets" not in src
-          and "def fallback_resets" in (ROOT / "eval" / "landing_gate.py").read_text(
-              encoding="utf-8"))
+          run_golden.wilson_ci is lg.wilson_ci)
+    check("`fallback_resets` 沿用共享实现，不依赖 import 的排版",
+          run_golden.fallback_resets is lg.fallback_resets)
     check("用户可见兜底事故在夜里能当事故闸（退出码 1），且判的是 scope=text 那条路",
           '_h["state"] == "incident"' in src and '_landing["harm"]' in src)
     check("报告里 `fallback_reasons` **只装 text 那几条**（伤害口径的上游形状，"

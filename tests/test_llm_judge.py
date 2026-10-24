@@ -1,26 +1,4 @@
-"""评测侧 LLM 评审员（`eval/llm_judge.py`）的离线自测：**不联网、不调 LLM、秒级**。
-
-判官本身要调模型（同源、非 ground truth），但"它看到什么材料""它的回答怎么被解读"
-"它坏了会怎样"这三件事**全是纯函数**，必须在这里锁死——因为这三件里的任何一件悄悄变宽，
-都会把一份"挑可疑样本"的报告变成"洗白机"：
-
-  ① **材料必须完整且带盲区声明**：trace 里 `call` 事件的名字/参数/返回原文进材料；
-     零工具轮如实写成"一条都没有"（那正是最该盯的一类）；`BLIND_SPOTS`（时间/页面/
-     人设/历史…）**必须写进材料**——20260925 实测：不写，判官会把"现在是凌晨三点"
-     （来自系统注入的语境）和"我是泠月喵"（人设）判成编造，整份报告就没人看了。
-  ② **材料被截断必须被认出来**：trace 里的工具返回会被截（20260925 起生产**按工具分档**：
-     正文 8000、其余 4000；golden 轮 env 放开到 40000），拿它当材料 = 拿摘要当真相当证据。
-     判据**首选截断标记**（`utils.trace.is_truncated`——分档之后"上限是哪个数"不再是一个
-     常量，只有标记可靠）；老 trace（20260925 之前的无标记 `text[:200]`）退化为"长度恰等于
-     当轮声明的上限"或"≥200"的宽判。**宁可多报**——多报只是让人重跑一轮。
-  ③ **判官答坏了不许被洗成「没问题」**：非法 JSON / 缺字段 / verdict 非法一律抛；
-     `unsupported` 列了东西却判 `ok`（或反之）**以列表为准**；判官调用失败（端点不认
-     结构化输出）降级重问一次并**留下 degraded 标记**，而不是静默换一种问法。
-  ④ **它永远进不了门禁**：`main()` 恒返回 0（可疑不是失败），且源码里不出现 sys.exit(1)
-     之类的判分接口——这条是纪律，写在模块头注里，也在这里锁住。
-
-用法：.venv/bin/python tests/test_llm_judge.py
-"""
+"""Offline judge parsing, trace completeness and report contracts."""
 
 
 import json
@@ -344,11 +322,11 @@ def _test_golden_runs_raise_the_trace_limit():
     check("run_golden.run_case 里设了上限（三个跑法都走它）",
           "trace_mod.TOOL_RESULT_LIMIT_ENV" in src_run
           and "os.environ.setdefault(trace_mod.TOOL_RESULT_LIMIT_ENV" in src_run)
-    src_graph = (ROOT / "agent" / "graph.py").read_text(encoding="utf-8")
+    src_graph = (ROOT / "agent/runtime/session.py").read_text(encoding="utf-8")
     # 落盘的文本是 `frame_text`（模型看到的那份帧，20260925 批 D——判官的材料就是它），
     # 截断策略仍是同一处（不是 graph 自己再写一个 200/8000）。
-    check("graph 的 call 事件用同一处策略（不再自己写 200）",
-          "trace_mod.tool_result_text(frame_text, name)" in src_graph)
+    check("原生 call 事件沿用共享的工具结果截断策略",
+          "trace_mod.tool_result_text(body, name)" in src_graph)
     check("golden trace 的 input 里落了本轮上限（读的人知道自己手里是不是全文）",
           '"tool_result_limit": _lim' in (ROOT / "eval" / "golden_trace.py").read_text(
               encoding="utf-8"))

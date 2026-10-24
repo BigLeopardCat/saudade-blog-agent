@@ -16,7 +16,7 @@
 模型实例 ⇒ 只有类级补丁能同时盖住"决策那份"和"叙述那份"两个工厂。
 
 用法（**cwd 必须是主仓**，`.env` 是相对路径）：
-    GOLDEN_ARM=tools PYTHONPATH=<worktree> <main>/.venv/bin/python \
+    GOLDEN_ARM=native PYTHONPATH=<worktree> <main>/.venv/bin/python \
         <worktree>/eval/experiments/usage_probe.py --only <id,id,...>
 """
 from __future__ import annotations
@@ -101,7 +101,7 @@ def main() -> int:
     except SystemExit as e:      # `main` 内部有直接 `sys.exit(1)` 的收尾分支
         rc = e.code or 0
     out = report()
-    out["arm"] = os.environ.get("GOLDEN_ARM") or "graph"
+    out["arm"] = os.environ.get("GOLDEN_ARM") or "native"
     print("\n[usage] " + json.dumps(out, ensure_ascii=False))
     return rc or 0
 
