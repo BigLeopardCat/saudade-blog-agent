@@ -1,47 +1,5 @@
 # -*- coding: utf-8 -*-
-"""SSE 终止帧 `__ERROR__` 的契约测试（20260924）。
-
-**为什么这条测试存在**：`__ERROR__` 是三种终止帧之一（另两种是 `__END__` / `__NAV_END__`），
-但它**只有超时与异常路径可达**——正常对话永远碰不到它。于是它是全链路里最没人看的一段：
-golden 锁不住（无法确定性触发），手动测不到（要真等 120s 或真把生产者搞炸），
-工具级的错误帧（`tools/base.py` 那些）另有测试、**与这个不是一回事**（那个是工具返回内容，
-这个是流级终止帧）。所以它归 L0：这里用**真的 `event_stream`**（不是复刻一份发帧逻辑）
-把生产者换成桩，把三条产生它的路径各走一遍。
-
-锁住的契约四条：
-
-  ① **形态** = `data: __ERROR__:<JSON 编码的字符串>`。JSON 编码不是装饰：异常消息里带换行
-     （traceback、上游返回的多行错误体）时，裸插值会把一帧劈成两帧，前端读到半截。
-  ② **终止性** = `__ERROR__` 之后**没有 `__END__`**。Rust 见终止帧即停止解析并收尾，
-     再补一个 `__END__` 会让"这轮失败了"被读成"正常结束"（且 `__END__` 之后的帧一律读不到）。
-  ③ **超时两态可区分**：空闲超时与总时长超时给的是**两句不同的话**（各自能对回自己的
-     `end_reason`），不然排障时"卡住了"和"生成太长"分不开。
-  ④ **发出点没有第二个**（源码级接线断言）：全仓 `__ERROR__` 的每个 yield 点都必须走
-     `json.dumps`。静态扫一遍是为了拦住"新加一条错误路径、顺手裸插值"——那种错误在
-     正常流量下根本不出现，只在出问题时把帧撕坏，正是最难查的一类。
-
-**20260927 已拍板的一条（原为"待拍板"）**：`producer_error` 路径**不再把原始异常文本
-发给访客**。原文（`json.dumps(str(chunk))`）的代价是上线实测出来的：20260927 07:29
-主人看到的是「网络错误: 'pending_confirm'」——`graph.execute_node` 的一个 KeyError，
-既不是网络问题、也不是一句看得懂的话。现在帧里发的是模块常量
-`server.PRODUCER_ERROR_TEXT`（一句中文话术），**原文一个字不丢**：照旧进
-`logger.exception`（带 traceback）与 trace。这里的三条断言锁新策略：
-
-  ① 载荷是那句常量，**且不含**异常原文/异常类名（回归"别把内部错误名递出去"）；
-  ② 载荷里**没有**任何内部标识（`KeyError`/`pending_confirm`/文件路径/`Traceback`）；
-  ③ 常量在**模块级**（不是内联字面量）——测试要能替换它验②的"帧不被劈开"，
-     否则载荷再无变量、那条判据会退化成永远为真的空判据。
-
-**20260927 同批第五条（⑤/⑤b）**：上面这条事故有**第二个入口**——非流式 `/chat`。
-它此前是 `reply=""` + `error=str(e)` 且 HTTP 仍 200：调用方（Rust `chat_handler`）
-只看 `status().is_success()` ⇒ 把这一轮当成功、落一条空的 assistant 行进历史；异常名
-与内部路径顺着 `error` 递出去，而那一格当时一个读取方都没有。现在两条通道共用同一句
-`PRODUCER_ERROR_TEXT`、都置 `success=False`。⑤ 用桩让 `_run_agent_sync` 真炸（直接调
-`chat()`，不起服务），断言失败返回体的四个性质；⑤b 是源码锁（非流式那半没有第二个出口
-形状）+ 跨语言锁（Rust 那半真读 `success`——不然 agent 说"失败"没人听得见）。
-
-无网络 / 无 LLM / 不起服务（直接调 `chat_stream` / `chat`，把生产者与协作者换成桩）。
-"""
+"""Named SSE error termination, safe public messages and lossless JSON framing."""
 import asyncio
 import json
 import re
@@ -87,8 +45,8 @@ def _frames(chunks: list[str]) -> list[str]:
 def _payload(frame: str) -> str:
     """取 `data: __ERROR__:` 后面的载荷并 JSON 解码。"""
     raw = frame.strip()
-    assert raw.startswith("data: __ERROR__:"), raw
-    return json.loads(raw[len("data: __ERROR__:"):])
+    assert raw.startswith("event: error\ndata: "), raw
+    return json.loads(raw[len("event: error\ndata: "):])
 
 
 def _producer(exc: BaseException | None = None, hold: threading.Event | None = None):
@@ -148,7 +106,7 @@ def _producer_error_frame():
     fr = _frames(chunks)
 
     check("异常路径只产出 __ERROR__ 一帧",
-          len(fr) == 1 and fr[0].startswith("data: __ERROR__:"),
+          len(fr) == 1 and fr[0].startswith("event: error\ndata: "),
           f"实际 {len(fr)} 帧：{fr[:3]}")
     if not fr:
         return
@@ -160,7 +118,7 @@ def _producer_error_frame():
           "boom" not in payload, f"载荷={payload!r}")
     # 终止性：__ERROR__ 之后不许再补 __END__（Rust 见终止帧即收尾，补了会把失败读成正常结束）
     check("终止性：无 __END__ / __NAV_END__ 尾随",
-          not any("__END__" in f or "__NAV_END__" in f for f in fr),
+          not any(f.startswith("event: done") for f in fr),
           f"帧={fr}")
 
 
@@ -187,7 +145,7 @@ def _payload_escaping():
               repr(_payload(fr[0])))
     # 判据自检（否则上面那条可能只是"换了个不含换行的常量、其实什么都没测"）：
     # 把同一个 nasty 按**裸插值**拼一帧，确认它真的会被劈成多帧。
-    _naive = _frames([f"data: __ERROR__:{nasty}\n\n"])
+    _naive = _frames([f"event: error\ndata: {nasty}\n\n"])
     check("判据自检：裸插值拼同一条载荷确实被劈开（上面'只有一帧'有牙）",
           len(_naive) > 1, f"裸插值产出 {len(_naive)} 帧")
 
@@ -231,13 +189,13 @@ def _idle_timeout_frame():
 
     fr = _frames(chunks)
     check("空闲超时产出 __ERROR__ 帧",
-          len(fr) == 1 and fr[0].startswith("data: __ERROR__:"), f"帧={fr[:3]}")
+          len(fr) == 1 and fr[0].startswith("event: error\ndata: "), f"帧={fr[:3]}")
     if fr:
         payload = _payload(fr[0])
         check("空闲超时的话术是「服务响应超时」",
               "响应超时" in payload, f"载荷={payload!r}")
         check("终止性：无 __END__ 尾随",
-              not any("__END__" in f for f in fr), f"帧={fr}")
+              not any(f.startswith("event: done") for f in fr), f"帧={fr}")
     check("空闲阈值生效（未真的等满 120s）", dt < 30, f"耗时 {dt:.1f}s")
 
 

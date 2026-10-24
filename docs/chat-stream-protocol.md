@@ -21,7 +21,7 @@ Python 入口为 `POST /chat/stream/v2`，使用标准 SSE `event:` 与 JSON `da
 
 ## 发布衔接
 
-先部署 Python v2 入口，再发布博客及固定版本的 widget，最后移除 Python 旧入口适配。
+Python 与博客都使用 v2；旧 `/chat/stream` 入口及其编码适配已退役。
 博客请求仍为 `POST /api/chat/stream`，widget 必须发送 `X-Agent-Stream-Version: 2`。
 旧缓存客户端在消息创建、确认消费之前收到 409 与刷新提示；不尝试猜测协议。
 

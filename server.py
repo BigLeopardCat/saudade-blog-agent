@@ -581,22 +581,11 @@ def _quota_blocked_text(limit: int) -> str:
 
 
 
-
-
 @app.post("/chat/stream/v2")
-async def chat_stream_v2(req: ChatRequest, request: Request):
-    return await _chat_stream(req, request, typed=True)
-
-
-@app.post("/chat/stream")
 async def chat_stream(req: ChatRequest, request: Request):
-    return await _chat_stream(req, request, typed=False)
-
-
-async def _chat_stream(req: ChatRequest, request: Request, *, typed: bool):
     # request: FastAPI 注入的原始请求对象（req 是 body 模型）——断连感知用，
     # 见 event_stream 的 receive 监听任务（20260827b 断连中断修复）
-    logger.info("POST /chat/stream user=%s msg=%r needs_summary=%s",
+    logger.info("POST /chat/stream/v2 user=%s msg=%r needs_summary=%s",
                 req.user_id, (req.message or "")[:40], req.needs_summary)
     if _agent is None:
         raise HTTPException(503, "Agent not initialised")
@@ -616,7 +605,7 @@ async def _chat_stream(req: ChatRequest, request: Request, *, typed: bool):
                            principal.uid, req.conversation_id, len(req.confirm_token))
             _record_invalid_confirm(get_trace_id(), principal.uid,
                                     req.conversation_id, len(req.confirm_token))
-            return stream_response(text_stream(INVALID_CONFIRM_TEXT), typed=typed)
+            return stream_response(text_stream(INVALID_CONFIRM_TEXT))
         # 只办其中一件（20260929 批 F）：卡片列了 N 件时主人可以点「只办 1」——
         # 前端带回来的只是一个**下标**，收窄在**验签之后、任何消费之前**做
         # （`_build_messages` 与原生运行时读到的都必须是
@@ -634,14 +623,14 @@ async def _chat_stream(req: ChatRequest, request: Request, *, typed: bool):
                                         req.conversation_id, len(req.confirm_token),
                                         reason="invalid_pick", detail=pick_err,
                                         exit_reason="invalid_confirm_pick")
-                return stream_response(text_stream(INVALID_PICK_TEXT), typed=typed)
+                return stream_response(text_stream(INVALID_PICK_TEXT))
             logger.info("[confirm] 确认收窄：%d 件 → 1 件（%s）", before,
                         (grant.get("specs") or [{}])[0].get("tool"))
     # Rust 的额度裁决先于并发准入；remaining=0 不能代替 quota_blocked。
     if req.quota_blocked:
         _limit = req.chat_quota.limit if req.chat_quota is not None else 0
         logger.info("[quota] 额度用尽，本轮零执行（uid=%s limit=%s）", req.user_id, _limit)
-        return stream_response(text_stream(_quota_blocked_text(_limit)), typed=typed)
+        return stream_response(text_stream(_quota_blocked_text(_limit)))
     # The permit covers preparation and every worker job until actual completion.
     if not await _try_acquire_slot():
         raise HTTPException(503, "Agent busy（并发已满），请稍后重试")
@@ -685,7 +674,7 @@ async def _chat_stream(req: ChatRequest, request: Request, *, typed: bool):
                 jobs=jobs
             )
 
-        # The shared stop signal fences subsequent operations in both engines.
+        # The shared stop signal fences subsequent operations.
         _submit_with_context(
             loop, _run_agent_stream_to_queue, messages, thread_id, queue, loop, req.user_id, stop_event,
             principal, grant, req.conversation_id,
@@ -770,7 +759,7 @@ async def _chat_stream(req: ChatRequest, request: Request, *, typed: bool):
                 progress.mark("reply")
                 yield sse_frame("text", _RECOVERY_SENTENCE)
 
-            # 独立摘要结果帧（必须在 __END__ 之前：Rust 收到 __END__ 即终止解析）
+            # Send the independent summary before the terminal event.
             if summary_task is not None:
                 new_summary = (await summary_task).strip()
                 if new_summary:
@@ -815,7 +804,7 @@ async def _chat_stream(req: ChatRequest, request: Request, *, typed: bool):
             finally:
                 jobs.close()
 
-    return stream_response(managed_stream(), typed=typed)
+    return stream_response(managed_stream())
 
 
 # ---------------------------------------------------------------------------
