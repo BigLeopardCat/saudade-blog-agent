@@ -3,49 +3,15 @@
 // mergeItems 规则：同 id 严格替换；id 不同但 type|text 内容碰撞 → 原位收养
 // （条目换成 incoming 的 id/time，position 不动——根治旧 type|time 去重误判）；
 // 都不匹配 → 按 time 排序插入。
-// ── 命令正则权威定义（20260828o 收敛）──
-// 原 boot.js 三份拷贝（__chatCore.COMMAND_RE / initChat.COMMAND_LINE_RE /
-// stripCommandPrefix 内 RE）合并于此：COMMAND_LINE_RE 与 stripCommandPrefix RE
-// 文本等价，且 test 语义与 COMMAND_RE 完全等价（参数组可选 → 前缀匹配即整体匹配；
-// 所有 COMMAND_LINE_RE 调用处都先 trim，COMMAND_RE 的 ^\s* 是超集容忍，无用例可区分）。
-// 现唯一权威 COMMAND_RE：行内任意位置剥段（matchText/stripCommandPrefix）与
-// 行级命令判断（cleanAgentText/SSE 分流/广播剥离）统一引用，改一处即全同步。
 (function (g) {
   'use strict';
   const __chatCore = (() => {
-    // 20260828e：内容匹配统一走 matchText——缓存条目 text（收尾时
-    // cmdText+displayText 拼接）与 DB content（原始流式文本）的构造差异：
-    // ① 命令帧拼接带 '\n'（空白差异）；② 命令与正文分帧时 '\n' 插在无分隔的
-    // 命令/正文之间（"…/12" + '\n' + "喵呜～" vs 原文 "…/12喵呜～"，纯空白
-    // 折叠仍不等）。逐字匹配使 lookupProcess 富化/mergeItems 收养/收养渲染
-    // 全失配（"转跳后执行过程丢失"根因）。解法：逐行剥行首命令段（保留同行
-    // 正文，与 stripCommandPrefix 同语义）+ 空白归一后比较。
-    const COMMAND_RE = /^\s*(?:[A-Za-z0-9_]*EFFECT|DARKMODE|NAVIGATE|AUTO_NAVIGATE|SUMMARY|\[?System)\]?\s*:(?:((?:https?:)?\/\/[^\s一-鿿　-〿＀-￯]+)|(\/[\w\-._~/]*)|(\s*\S+))?/;
-    const stripCommand = (s) => {
-      let rest = s, m;
-      while ((m = rest.match(COMMAND_RE))) rest = rest.slice(m[0].length);
-      return rest;
-    };
     const normText = (s) => (s || '').replace(/\s+/g, ' ').trim();
-    // 20260920：**提及剥离**——引号/内联代码（含 ``` 围栏）里的命令前缀是"举例说明"
-    // （模型讲机制时会写 `EFFECT:sakura:on`），不是要执行的动作。不剥的话，模型在
-    // 回复里"谈论"命令这一行为本身就会把页面真的切了特效/夜间模式/跳转。
-    // 与 agent 侧 gate 的元讨论豁免是同一条口径（agent/graph.py `_cmd_prefix_directive`）：
-    // 那边放行"提及"，这边就必须不执行它，否则放行 = 新增一个"说说就生效"的洞。
-    // 真实命令不在此路：Python 的命令帧行首锚定进 cmdText（COMMAND_RE），无引号/反引号。
-    // 替换成空格而非空串：防剥完把相邻片段粘出一个新的假命令（"EFFE`x`CT:"）。
-    const MENTION_SPAN_RE = /`[^`]*`|“[^”]*”|「[^」]*」|『[^』]*』|"[^"]*"/g;
-    const stripMentionSpans = (s) => (s || '').replace(MENTION_SPAN_RE, ' ');
     // 图片轮文本标记剥离（20260828s）：Rust 入库在原文后拼 "\n[图片]"/"\n[图片×N]"
     // 标记，DB 拉回的文本与前端 items 原文不同——匹配前先剥标记再归一。
     // 纯图轮（原文为空）剥后为空串，靠时间窗口 + 同类型锚定（见 replaceWithIncoming）
     const stripImgMark = (s) => normText((s || '').replace(/\n?\s*\[图片(?:×\d+)?\]\s*$/g, ''));
-    // 注意：COMMAND_RE 为全模块唯一权威（20260828o 起），stripCommandPrefix 与
-    // 各处行级命令判断（cleanAgentText/SSE 分流/广播剥离）均引用本正则
-    const matchText = (a, b) => {
-      const stripAll = (s) => (s || '').split('\n').map(stripCommand).join('\n');
-      return normText(stripAll(a)) === normText(stripAll(b));
-    };
+    const matchText = (a, b) => normText(a) === normText(b);
     const genId = () => 'l' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 7);
     // 旧 localStorage 条目无 id（20260828 前格式）→ 迁移补 id
     const migrateItem = (it) => ({
@@ -128,20 +94,8 @@
     // 'l' 轮追加尾部（DB 提交延迟窗口，防"刚发完被 pull 一闪而过"）；内容已被
     // incoming 收录的 'l' 不追加（用 'd' 版即可）。time 最新，追加尾部顺序正确。
     // 内容等价判据（20260905 修 phantom）：'l' 保留窗口与 mergeItems/reconcileDOM
-    // 收养判据三处语义必须一致。历史演进：① stripImgMark 只剥图片标记不剥命令段
-    // → 命令轮（darkmode/特效/导航）fullText = cmdText+displayText 含命令前缀
-    // （如 "DARKMODE:on\n…"），DB content 是纯叙述（命令帧 Rust/前端分流不累积）
-    // → 判据恒失配 → 'l' 残留每次 pull 被追加 → 双气泡 phantom（20260904 实测：
-    // darkmode 轮回复双显、纯聊天轮无——cmdText 空判据命中）。② matchText 逐行剥
-    // 命令但不剥图片标记（图片轮差 "[图片×N]" 后缀标记）。合并语义：剥命令段 +
-    // 剥图片标记 + 空白归一，作为三处统一的内容等价比较
-    const contentEq = (a, b) => {
-      const clean = (s) => (s || '').split('\n')
-        .map(stripCommand)
-        .map(l => l.replace(/\n?\s*\[图片(?:×\d+)?\]\s*$/g, ''))
-        .join('\n');
-      return normText(clean(a)) === normText(clean(b));
-    };
+    // Match visible text while accounting for the host's image-only marker.
+    const contentEq = (a, b) => stripImgMark(a) === stripImgMark(b);
     const replaceWithIncoming = (local, incoming, now) => {
       const out = incoming.slice();
       const t = (now === undefined ? Date.now() : now);
@@ -216,9 +170,6 @@
       }
       for (const it of (local || [])) {
         // 60s 'l' 保留窗口：内容已被 incoming 收录的 'l' 不追加（用 'd' 版即可）。
-        // 20260905：判据改用 contentEq（剥命令段+剥图片标记+空白归一）——旧判据
-        // stripImgMark 不剥命令段，命令轮 fullText 含 cmdText 前缀与 DB 纯叙述
-        // 恒失配 → 'l' 每次 pull 被追加 → 双气泡 phantom（见 contentEq 注释）
         if (it.id && it.id.startsWith('l')
             && (it.time || 0) >= t - 60000
             && !incoming.some(inc => inc.type === it.type
@@ -251,7 +202,7 @@
       && (!prev || !validTime(prev.time) || (cur.time - prev.time > TIME_GAP_MS));
     return { genId, migrateItem, mapDbItems, dbRowToItem, mergeItems, replaceWithIncoming, capItems,
              normText, stripImgMark, matchText,
-             stripMentionSpans, COMMAND_RE, TIME_GAP_MS, formatTimeLabel, shouldShowTime };
+             TIME_GAP_MS, formatTimeLabel, shouldShowTime };
   })();
 
   g.__waifuChatCore = __chatCore;

@@ -32,8 +32,8 @@
     "top_defs": 36
   },
   "server.py": {
-    "lines": 1276,
-    "top_defs": 42
+    "lines": 1170,
+    "top_defs": 41
   },
   "tests/test_authz.py": {
     "lines": 881,
