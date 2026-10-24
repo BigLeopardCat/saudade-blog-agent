@@ -3,13 +3,14 @@
 import ast
 import re
 
+from _judge import collector
+
 from agent.arg_refs import parse_data
 from rag import sections
 from rag.search import chunk_note
 
-
-def check(label, passed, detail=""):
-    assert passed, f"{label}: {detail}"
+FAILS: list[str] = []
+check = collector(FAILS)
 
 
 def body_of(sec: str) -> str:
@@ -391,3 +392,4 @@ def test_sections():
         "原始字符串里 `content` 还在（`_shape` 没被动过 ⇒ $tool[N].content 不受影响）",
         "'content'" in ref_row and "content" in parse_data(ref_row),
     )
+    assert not FAILS, "；".join(FAILS)
