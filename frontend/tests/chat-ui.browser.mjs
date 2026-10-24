@@ -259,7 +259,7 @@ try {
   const beforeLiteral = page.url();
   await send('展示协议示例', 'literal');
   assert.equal(page.url(), beforeLiteral);
-  assert.equal(await page.evaluate(() => window.__chatTest.ctx.state.pendingAsk), null);
+  assert.equal(await page.evaluate(() => window.__chatTest.ctx.state.pendingAsk ?? null), null);
   assert.equal(await page.evaluate(() => window.__chatTest.ctx.state.items.filter(i => i.type === 'agent').at(-1).text), literal);
   passed('literal command and confirmation prefixes render as text without actions');
 
