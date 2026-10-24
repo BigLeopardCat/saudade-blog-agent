@@ -451,12 +451,9 @@ def run_one(req: ChatRequest, principal: "Principal | None" = None,
     # trace recorder 进不了 producer 线程：落下来的是一份只有元数据的**空壳 trace**，
     # 而"评测有 trace 了"看起来完全正常（实测踩到，靠 golden_trace 的空事件警告抓出）。
     ctx = contextvars.copy_context()
-    # 传给图的后四个参数照 `/chat/stream`（server.py 的 producer 调用）逐字对齐：
-    # grant（已验签 payload）/ conversation_id（令牌的签发维度）/ ledger（台账事实，
-    # **必须在这里算**——`req` 只活在这个作用域里，写进被调函数就是 20260924 那次
-    # 流式路径 NameError 的形状）。golden 与生产的接线只该有这一处差异：生产拿 req
-    # 从 HTTP 来，golden 拿 req 从用例来。
-    _ledger = server._ledger_for_graph(req, confirmed=bool(confirm_grant))
+    # 传给原生 runtime 的参数与 `/chat/stream` 对齐。旧 planner 台账帧不再是
+    # producer 输入；待确认事实由 ConversationStore 与 TurnResult.execution 提供。
+    _ledger = None
     with ThreadPoolExecutor(max_workers=1) as ex:
         ex.submit(
             ctx.run, _run_agent_stream_to_queue,
@@ -475,8 +472,7 @@ def run_one(req: ChatRequest, principal: "Principal | None" = None,
         ).result()
     t.join()
     loop.close()
-    # 台账与 hybrid 工具事实只能在 finish_case 移除 recorder 前读取。
-    # planner 输入不落 trace，ledger_frame 是待审队列是否入帧的唯一证据。
+    # 原生工具事实只能在 finish_case 移除 recorder 前读取。
     ledger_frames: list[dict] = []
     if trace_id:
         from utils import trace as _trace
