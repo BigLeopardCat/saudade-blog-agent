@@ -7,7 +7,8 @@ legacy handoff remain in HybridArm; the model still chooses each tool and reply.
 import json
 import time
 
-from langchain_core.messages import ToolMessage
+from langchain_core.messages import AIMessage, AIMessageChunk, ToolMessage
+from langchain_core.messages.utils import message_chunk_to_message
 from langchain_core.tools import ToolException
 
 from agent.article_evidence import ArticleEvidence
@@ -118,6 +119,7 @@ class ToolSession:
         self.observations = []
         self.receipts = []
         self.article_evidence = ArticleEvidence()
+        self.used_stream_api = False
         self.llm = self._bind_menu()
 
     def _bind_menu(self):
@@ -286,56 +288,236 @@ class ToolSession:
             self.llm = self._bind_menu()
             record("hybrid", "restore_domains", domains=restored)
 
-    def run(self, prompt):
+    @staticmethod
+    def _message_from_chunk(chunk):
+        """Use the framework conversion without losing provider replay metadata."""
+        return message_chunk_to_message(chunk) if isinstance(chunk, AIMessageChunk) else chunk
+
+    @staticmethod
+    def _complete_tool_arguments(response):
+        # LangChain deliberately repairs partial JSON for streaming previews.
+        # An executable call requires the complete original JSON object.
+        for call in getattr(response, "tool_call_chunks", ()):
+            try:
+                args = json.loads(call.get("args", ""))
+            except (ValueError, TypeError):
+                return False
+            if not isinstance(args, dict):
+                return False
+        calls = getattr(response, "tool_calls", ()) or getattr(response, "invalid_tool_calls", ())
+        return not calls or response.response_metadata.get("finish_reason") != "length"
+
+    def _model_stream(self, prompt):
+        """Yield provider chunks and return one complete, replayable response.
+
+        The budget context surrounds iterator consumption, so a request reserves
+        and settles exactly once even when usage arrives only on the final chunk.
+        The iterator is closed on cancellation and transport errors.
+        """
+        iterator = None
+        aggregate = None
+        started = time.monotonic()
+        failed = False
+        emit_progress(self.config, "正在处理请求…", key=f"model:{self._round_index}")
+        record("hybrid", "llm_start", round=self._round_index, engine="native",
+               prompt_chars=sum(len(str(message.content)) for message in prompt),
+               streaming=True)
+        try:
+            with native_call(self.budget, prompt, self.menu,
+                             output_limit=self.output_limit) as ticket:
+                if not callable(getattr(self.llm, "stream", None)):
+                    check_cancelled(self.config)
+                    response = self.llm.invoke(prompt, **model_options(settings.llm_timeout))
+                    aggregate = response
+                    yield AIMessageChunk(content=str(getattr(response, "content", "") or ""))
+                else:
+                    self.used_stream_api = True
+                    iterator = self.llm.stream(
+                        prompt, **model_options(settings.llm_timeout))
+                    for chunk in iterator:
+                        check_cancelled(self.config)
+                        if isinstance(chunk, AIMessage) and not isinstance(chunk, AIMessageChunk):
+                            chunk = AIMessageChunk(
+                                content=chunk.content,
+                                additional_kwargs=chunk.additional_kwargs,
+                                response_metadata=chunk.response_metadata,
+                                name=chunk.name, id=chunk.id,
+                                tool_calls=chunk.tool_calls,
+                                invalid_tool_calls=chunk.invalid_tool_calls,
+                                usage_metadata=chunk.usage_metadata,
+                            )
+                        if not isinstance(chunk, AIMessageChunk):
+                            continue
+                        aggregate = chunk if aggregate is None else aggregate + chunk
+                        yield chunk
+                if aggregate is None:
+                    aggregate = AIMessage(content="")
+                complete = self._complete_tool_arguments(aggregate)
+                response = self._message_from_chunk(aggregate)
+                if not complete:
+                    response = response.model_copy(update={
+                        "tool_calls": [], "invalid_tool_calls": [{
+                            "name": None, "args": "", "id": None,
+                            "error": "incomplete_tool_arguments", "type": "invalid_tool_call"}]})
+                self.budget.settle(ticket, response)
+            return response
+        except BaseException:
+            failed = True
+            raise
+        finally:
+            close = getattr(iterator, "close", None)
+            if callable(close):
+                try:
+                    close()
+                except Exception as exc:  # noqa: BLE001 - closing is best effort
+                    record("hybrid", "llm_close_error", error=type(exc).__name__)
+            record("hybrid", "llm_error" if failed else "llm_done",
+                   round=self._round_index, engine="native",
+                   duration_s=round(time.monotonic() - started, 2),
+                   streaming=True, **usage_fields(aggregate))
+
+    def _stream_terminal(self, result, visible_parts, fallback_text=None,
+                         current_text=""):
+        """Append any deterministic terminal text and return persisted output."""
+        displayed = "".join(visible_parts)
+        reply = str(result.reply or "")
+        if fallback_text is not None and reply == fallback_text:
+            missing = reply
+        elif current_text and reply.startswith(current_text) and displayed.endswith(current_text):
+            missing = reply[len(current_text):]
+        elif displayed and reply.startswith(displayed):
+            missing = reply[len(displayed):]
+        elif displayed and reply and displayed.endswith(reply):
+            missing = ""
+        elif displayed and reply:
+            missing = ("\n" if not displayed.endswith("\n") else "") + reply
+        else:
+            missing = reply
+        execution = result.execution
+        terminal_key = ("confirm_text" if execution and execution.get("pending_confirm") else
+                        "noop_text" if execution and execution.get("noop_note") else None)
+        if terminal_key:
+            execution = {**execution, terminal_key: missing}
+        if missing:
+            visible_parts.append(missing)
+            if terminal_key is None:
+                yield AIMessageChunk(content=missing)
+        return TurnResult("".join(visible_parts), execution)
+
+    def _handle_response(self, response, buffered_chunks, visible_parts):
+        """Validate one completed response and either finish or return calls."""
+        if getattr(response, "invalid_tool_calls", None):
+            record("hybrid", "invalid_tool_call",
+                   count=len(response.invalid_tool_calls))
+            result = self._result("本轮工具请求未完整，未执行操作。")
+            result = yield from self._stream_terminal(result, visible_parts)
+            return None, result
+        calls = getattr(response, "tool_calls", None) or []
+        if not calls:
+            reply = str(getattr(response, "content", "") or "").strip()
+            from tools.base import SITE_BASE
+            issue = self.article_evidence.issue(reply, SITE_BASE)
+            if issue:
+                result = self._handoff(issue, tool_calls=self.calls_used)
+                if result is None:
+                    result = self._result("".join(visible_parts)) if visible_parts else None
+                if result is None:
+                    return None, None
+                result = yield from self._stream_terminal(
+                    result, visible_parts, current_text=reply)
+                return None, result
+            if self.article_evidence.searched and not self.article_evidence.documents:
+                if self.article_evidence.failed and not self.article_evidence.found:
+                    result = self._result("文章检索暂时不可用，当前无法核实文章内容。")
+                elif self.article_evidence.empty and not self.article_evidence.found:
+                    result = self._result("暂未从公开文章中检索到相关资料。")
+                else:
+                    result = self._result(reply)
+                result = yield from self._stream_terminal(
+                    result, visible_parts, current_text=reply)
+                return None, result
+            for chunk in buffered_chunks:
+                visible_parts.append(str(chunk.content))
+                yield chunk
+            raw_reply = reply
+            reply = self.article_evidence.sources(raw_reply, SITE_BASE)
+            result = self._result(reply) if reply else self._handoff(
+                "empty", tool_calls=self.calls_used)
+            if result is None:
+                return None, None
+            result = yield from self._stream_terminal(
+                result, visible_parts, current_text=raw_reply)
+            return None, result
+        reason = self._accept_calls(calls, self._round_index)
+        if reason:
+            result = self._handoff(reason, tool_calls=self.calls_used)
+            if result is None:
+                return None, None
+            result = yield from self._stream_terminal(result, visible_parts)
+            return None, result
+        try:
+            self.budget.attempt_tools(len(calls))
+        except BudgetExceeded as exc:
+            result = self._budget_stop(exc.reason, tool_calls=self.calls_used)
+            result = yield from self._stream_terminal(result, visible_parts)
+            return None, result
+        for chunk in buffered_chunks:
+            visible_parts.append(str(chunk.content))
+            yield chunk
+        return calls, None
+
+    def stream(self, prompt):
+        """Run native rounds while yielding model text chunks as they arrive."""
         self._restore_domains(prompt)
-        round_index = 0
+        visible_parts = []
+        self._round_index = 0
         while True:
             check_cancelled(self.config)
             prompt_chars = sum(len(str(message.content)) for message in prompt)
             if prompt_chars > MAX_PROMPT_CHARS:
-                return self._budget_stop("prompt_budget", prompt_chars=prompt_chars)
-            started = time.monotonic()
-            emit_progress(self.config, "正在处理请求…", key=f"model:{round_index}")
-            record("hybrid", "llm_start", round=round_index, engine="native",
-                   prompt_chars=prompt_chars)
+                result = self._budget_stop("prompt_budget", prompt_chars=prompt_chars)
+                return (yield from self._stream_terminal(result, visible_parts))
             try:
-                with native_call(self.budget, prompt, self.menu,
-                                 output_limit=self.output_limit) as ticket:
-                    response = self.llm.invoke(prompt, **model_options(settings.llm_timeout))
-                self.budget.settle(ticket, response)
+                model_iterator = self._model_stream(prompt)
+                buffered_chunks = []
+                stream_visible = not self.article_evidence.searched
+                while True:
+                    try:
+                        chunk = next(model_iterator)
+                    except StopIteration as stop:
+                        response = stop.value
+                        break
+                    if isinstance(chunk, AIMessageChunk) and chunk.content:
+                        if stream_visible:
+                            visible_parts.append(str(chunk.content))
+                            yield chunk
+                        else:
+                            buffered_chunks.append(chunk)
             except BudgetExceeded as exc:
-                return self._budget_stop(exc.reason, tool_calls=self.calls_used)
-            record("hybrid", "llm_done", round=round_index, engine="native",
-                   duration_s=round(time.monotonic() - started, 2),
-                   prompt_chars=prompt_chars, **usage_fields(response))
+                result = self._budget_stop(exc.reason, tool_calls=self.calls_used)
+                return (yield from self._stream_terminal(result, visible_parts))
+            finally:
+                model_iterator.close()
             check_cancelled(self.config)
-            calls = getattr(response, "tool_calls", None) or []
-            if not calls:
-                reply = str(getattr(response, "content", "") or "").strip()
-                from tools.base import SITE_BASE
-                issue = self.article_evidence.issue(reply, SITE_BASE)
-                if issue:
-                    return self._handoff(issue, tool_calls=self.calls_used)
-                if self.article_evidence.searched and not self.article_evidence.documents:
-                    if self.article_evidence.failed and not self.article_evidence.found:
-                        return self._result("文章检索暂时不可用，当前无法核实文章内容。")
-                    if self.article_evidence.empty and not self.article_evidence.found:
-                        return self._result("暂未从公开文章中检索到相关资料。")
-                reply = self.article_evidence.sources(reply, SITE_BASE)
-                return self._result(reply) if reply else self._handoff(
-                    "empty", tool_calls=self.calls_used)
-            reason = self._accept_calls(calls, round_index)
-            if reason:
-                return self._handoff(reason, tool_calls=self.calls_used)
-            try:
-                self.budget.attempt_tools(len(calls))
-            except BudgetExceeded as exc:
-                return self._budget_stop(exc.reason, tool_calls=self.calls_used)
+            calls, result = yield from self._handle_response(
+                response, buffered_chunks, visible_parts)
+            if result is not None:
+                return result
+            if calls is None:
+                return None
             prompt.append(response)
             for call in calls:
                 check_cancelled(self.config)
-                if not self._append_result(call, prompt, round_index):
-                    return self.outcome
+                if not self._append_result(call, prompt, self._round_index):
+                    return (yield from self._stream_terminal(self.outcome, visible_parts))
                 if self.outcome is not None:
-                    return self.outcome
-            round_index += 1
+                    return (yield from self._stream_terminal(self.outcome, visible_parts))
+            self._round_index += 1
+
+    def run(self, prompt):
+        runner = self.stream(prompt)
+        while True:
+            try:
+                next(runner)
+            except StopIteration as stop:
+                return stop.value

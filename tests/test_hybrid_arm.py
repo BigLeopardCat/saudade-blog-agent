@@ -85,7 +85,7 @@ def test_chat_uses_one_small_call_and_no_legacy(monkeypatch):
     events = list(HybridArm(legacy).stream(state, _config(), stream_mode=["messages", "updates"]))
 
     assert len(model.calls) == 1
-    assert model_args[0]["streaming"] is False
+    assert model_args[0]["streaming"] is True
     assert {t.name for t in model.tools if not isinstance(t, dict)} == {
         "rag_search", "search_notes", "get_article_detail"}
     assert {t["function"]["name"] for t in model.tools if isinstance(t, dict)} == {

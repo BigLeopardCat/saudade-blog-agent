@@ -166,6 +166,65 @@ def test_real_sse_progress_precedes_blocked_tool_and_first_reply(monkeypatch):
     asyncio.run(scenario())
 
 
+def test_real_sse_native_answer_chunk_arrives_before_provider_stream_ends(monkeypatch):
+    import asyncio
+    import json
+
+    from langchain_core.messages import AIMessage, AIMessageChunk
+
+    entered, release = threading.Event(), threading.Event()
+    events = []
+
+    class StreamingModel:
+        max_tokens = 64
+
+        def bind_tools(self, tools, **kwargs):
+            return self
+
+        def stream(self, prompt, **kwargs):
+            yield AIMessageChunk(content="首段正文")
+            entered.set()
+            assert release.wait(2)
+            yield AIMessageChunk(content="后段正文")
+
+    class Runtime:
+        def stream(self, state, config, **kwargs):
+            session = ToolSession(StreamingModel(), config, {}, {})
+            runner = session.stream([HumanMessage(content="回答")])
+            chunks = []
+            while True:
+                try:
+                    chunk = next(runner)
+                except StopIteration as stop:
+                    outcome = stop.value
+                    break
+                chunks.append(chunk)
+                if chunk.content:
+                    yield "messages", (chunk, {"langgraph_node": "model"})
+            yield "updates", {"model": {"messages": [AIMessage(content=outcome.reply)]}}
+
+    server = _prepare_server(monkeypatch, Runtime(), events)
+
+    async def scenario():
+        response = await server.chat_stream(server.ChatRequest(message="回答"), None)
+        try:
+            first = await asyncio.wait_for(anext(response.body_iterator), 2)
+            assert json.loads(first.removeprefix("data: ").strip()).startswith("__PROCESS__:")
+            second = await asyncio.wait_for(anext(response.body_iterator), 2)
+            assert json.loads(second.removeprefix("data: ").strip()) == "首段正文"
+            assert await asyncio.to_thread(entered.wait, 1)
+            assert not release.is_set()
+            release.set()
+            rest = "".join([frame async for frame in response.body_iterator])
+            assert '"后段正文"' in rest and "__END__" in rest
+            assert len([e for e in events if e["event"] == "first_reply"]) == 1
+        finally:
+            release.set()
+            await response.body_iterator.aclose()
+
+    asyncio.run(scenario())
+
+
 def test_real_sse_progress_and_whitespace_do_not_hide_empty_reply(monkeypatch):
     import asyncio
 
@@ -250,5 +309,69 @@ def test_real_stream_close_fences_emitter_until_worker_drains(monkeypatch):
         assert accepted == [False]
         assert await server._try_acquire_slot()
         server._release_slot()
+
+    asyncio.run(scenario())
+
+
+def test_streamed_preface_and_terminal_confirmation_each_render_once(monkeypatch):
+    import asyncio
+    import json
+    import uuid
+
+    from langchain_core.messages import AIMessageChunk
+    from langchain_core.tools import tool
+    from langgraph.checkpoint.memory import InMemorySaver
+
+    from agent.agent import create_agent
+    from agent.runtime.hybrid import HybridArm
+    from agent.runtime.results import TurnResult
+
+    question = "确认本次测试操作。"
+
+    @tool(return_direct=True)
+    def fixture_prepare() -> object:
+        """Prepare a fixture confirmation without executing business operations."""
+        return TurnResult(question, {"pending_confirm": {
+            "q": question, "token": uuid.uuid4().hex, "opts": [], "exp": 0},
+            "confirm_text": question, "receipts": []})
+
+    class Model:
+        max_tokens = 64
+
+        def bind_tools(self, tools, **kwargs):
+            return self
+
+        def stream(self, prompt, **kwargs):
+            yield AIMessageChunk(content="准备好了。")
+            yield AIMessageChunk(content="", tool_calls=[
+                {"name": "fixture_prepare", "args": {}, "id": "prepare"}])
+
+    graph = create_agent(checkpointer=InMemorySaver())
+    runtime = HybridArm(graph, read_tools={"fixture_prepare": fixture_prepare},
+                        site_read_tools={})
+    events = []
+    server = _prepare_server(monkeypatch, runtime, events)
+    monkeypatch.setattr("agent.runtime.hybrid.get_llm", lambda **kwargs: Model())
+
+    async def scenario():
+        drained = asyncio.Event()
+        monkeypatch.setattr(server, "finish_trace", lambda *args: drained.set())
+        response = await server.chat_stream(
+            server.ChatRequest(message="prepare", conversation_id=42), None)
+        text, cards = [], []
+        async for frame in response.body_iterator:
+            raw = frame.removeprefix("data: ").strip()
+            if raw.startswith('"'):
+                item = json.loads(raw)
+                if item.startswith("__CONFIRM__:"):
+                    cards.append(item)
+                elif not item.startswith("__"):
+                    text.append(item)
+        await asyncio.wait_for(drained.wait(), 2)
+        reply = "".join(text)
+        assert reply.count("准备好了。") == 1
+        assert reply.count(question) == 1 and len(cards) == 1
+        stored = graph.get_state({"configurable": {"thread_id": "conv_42"}})
+        assert stored.values["messages"][-1].content == reply
 
     asyncio.run(scenario())
