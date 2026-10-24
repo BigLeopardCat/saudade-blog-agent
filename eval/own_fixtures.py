@@ -53,6 +53,9 @@ def notification_backend():
                        {"id": 103, "title": "已读通知", "isRead": True}],
              "requests": [], "unavailable": False, "ignore": set(),
              "new_on_write": False, "hidden_unread": 0}
+    for row in state["items"]:
+        row.update(type="system", content="通知正文", link=None,
+                   createdAt="2026-10-25 12:00:00")
 
     def handle(request):
         state["requests"].append(request)
