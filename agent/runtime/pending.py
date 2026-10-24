@@ -1,5 +1,6 @@
 """Lifecycle of one signed proposal, shared across migrated domains."""
 
+import time
 from dataclasses import dataclass
 
 from langchain_core.runnables import RunnableConfig
@@ -80,3 +81,14 @@ def restore(prior, config):
     except ValueError:
         return None
     return PendingOperation(grant, action)
+
+
+def expired(prior):
+    """Drop obsolete card data, without granting or executing any operation.
+
+    The token expiry is only a cleanup hint. Every later confirmation still
+    requires full signature, identity, expiry and durable ledger validation.
+    """
+    popup = prior.get("pending_confirm")
+    expiry = confirm.token_expiry(popup.get("token")) if isinstance(popup, dict) else 0
+    return expiry > 0 and expiry < int(time.time())
