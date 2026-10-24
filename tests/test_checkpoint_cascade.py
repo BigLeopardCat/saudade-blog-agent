@@ -7,6 +7,7 @@ import asyncio
 import sys
 from pathlib import Path
 
+import pytest
 from _judge import collector
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -301,3 +302,6 @@ pub(crate) async fn drop_checkpoint_turn(conversation_id: i32, text: &str, uid: 
 
 if __name__ == "__main__":
     test_checkpoint_cascade()
+
+
+pytestmark = pytest.mark.usefixtures("service_workers")

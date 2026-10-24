@@ -15,6 +15,7 @@ import importlib
 import logging
 import time
 import uuid
+from contextlib import ExitStack, nullcontext
 
 from config import settings
 
@@ -118,11 +119,18 @@ def _pool_for(dsn: str):
     """Reuse the process pool; close and replace it when the DSN changes."""
     global _pool, _pool_dsn
     if _pool is None or _pool_dsn != dsn:
-        if _pool is not None:
-            _pool.close()
+        close_pool()
         _pool = _make_pool(dsn)
         _pool_dsn = dsn
     return _pool
+
+
+def close_pool() -> None:
+    """Release the process saver pool after all users exit; allow a later clean startup."""
+    global _pool, _pool_dsn
+    pool, _pool, _pool_dsn = _pool, None, None
+    if pool is not None:
+        pool.close()
 
 
 def _try_setup_lock(conn) -> bool:
@@ -244,8 +252,11 @@ def build_checkpointer(dsn: str | None = None) -> object | None:
     # "设置里那一格"不一致时，`_pool_for` 会因为 DSN 变了而**把上一个池关掉再建一个**
     # ——关掉的正是 saver 手里那个。显式传参把这两件事钉成一件。
     pool = _pool_for(dsn)
-    saver = mod.PostgresSaver(pool)
-    _setup_under_lock(saver, pool=pool)
+    with ExitStack() as startup:
+        startup.callback(close_pool)
+        saver = mod.PostgresSaver(pool)
+        _setup_under_lock(saver, pool=pool)
+        startup.pop_all()
     logger.info("[checkpoint] saver 就绪：backend=postgres dsn=%s", redact(dsn))
     return saver
 
@@ -318,22 +329,15 @@ def _same_turn(state_text: str, given: str) -> bool:
     return rest == "" or rest.startswith("\n[图片")
 
 
-async def drop_last_user_turn(agent, conversation_id: object, text: str = "") -> dict:
-    """Discard atomically with respect to turns when the runtime exposes a guard."""
+def drop_last_user_turn(agent, conversation_id: object, text: str = "") -> dict:
+    """Discard under the conversation lock using the runtime's synchronous state API."""
     guard = getattr(agent, "conversation_guard", None)
-    if guard is None:
-        return await _drop_last_user_turn(agent, conversation_id, text)
-    import asyncio
-
-    def discard():
-        config = {"configurable": {"thread_id": conversation_thread(conversation_id)}}
-        with guard(config):
-            return asyncio.run(_drop_last_user_turn(agent, conversation_id, text))
-
-    return await asyncio.to_thread(discard)
+    config = {"configurable": {"thread_id": conversation_thread(conversation_id)}}
+    with guard(config) if guard is not None else nullcontext():
+        return _drop_last_user_turn(agent, conversation_id, text)
 
 
-async def _drop_last_user_turn(agent, conversation_id: object, text: str = "") -> dict:
+def _drop_last_user_turn(agent, conversation_id: object, text: str = "") -> dict:
     """Remove the last matching user message and all following messages, then verify.
 
     An empty or mismatched source text does not modify state. Existing pending
@@ -344,15 +348,15 @@ async def _drop_last_user_turn(agent, conversation_id: object, text: str = "") -
     tid = conversation_thread(conversation_id)
     if tid is None:
         return {"dropped": False, "why": "bad_conversation_id"}
-    getter = getattr(agent, "aget_state", None)
-    setter = getattr(agent, "aupdate_state", None)
+    getter = getattr(agent, "get_state", None)
+    setter = getattr(agent, "update_state", None)
     if getter is None or setter is None:
         return {"dropped": False, "why": "no_graph_state"}
 
     from langchain_core.messages import HumanMessage, RemoveMessage
 
     cfg = {"configurable": {"thread_id": tid}}
-    snap = await getter(cfg)
+    snap = getter(cfg)
     msgs = list((getattr(snap, "values", None) or {}).get("messages") or [])
     idx = next((i for i in range(len(msgs) - 1, -1, -1)
                 if isinstance(msgs[i], HumanMessage)), None)
@@ -366,17 +370,14 @@ async def _drop_last_user_turn(agent, conversation_id: object, text: str = "") -
     removes = [RemoveMessage(id=m.id) for m in msgs[idx:] if getattr(m, "id", None)]
     if not removes:
         return {"dropped": False, "why": "still_present"}
-    # **不传 `as_node`**：`aupdate_state` 会从 `versions_seen` 推"最后是谁写的"，
-    # 生产形状的图（model/execute/model/gate）推得出来（实测）。推不出来时它抛
-    # `InvalidUpdateError`（"Ambiguous update"）——**如实收成一支回执**，别让它变成父仓
-    # discard 路上的一个 500（那边只看 `dropped`，`why` 进日志）。
+    # The store chooses its commit node; verify state after the update.
     try:
-        await setter(cfg, {"messages": removes})
+        setter(cfg, {"messages": removes})
     except Exception as e:                                  # noqa: BLE001
         logger.warning("[checkpoint] 丢弃那一轮写不进去（%s: %s）conv=%s",
                        type(e).__name__, e, tid)
         return {"dropped": False, "why": "ambiguous_update"}
-    after = await getter(cfg)
+    after = getter(cfg)
     left = list((getattr(after, "values", None) or {}).get("messages") or [])
     gone = not any(getattr(m, "id", None) == getattr(target, "id", None) for m in left)
     if gone:

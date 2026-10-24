@@ -185,3 +185,6 @@ def test_model_factory_uses_remaining_sdk_timeout_without_transport_retries(monk
     assert options["timeout"] == 8.0 and options["max_retries"] == 0
     normal = llm.get_llm(timeout=120, api_key="test-only", base_url="https://example.test")
     assert normal["timeout"] == 120 and "max_retries" not in normal
+
+
+pytestmark = pytest.mark.usefixtures("service_workers")

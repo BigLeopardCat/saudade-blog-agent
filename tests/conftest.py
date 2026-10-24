@@ -164,3 +164,16 @@ def _process_isolation(request, monkeypatch):
     if drift:
         print(f"\n[跨套件全局] {request.node.nodeid} 改了没还原："
               + "、".join(dict.fromkeys(drift)))
+
+
+@pytest.fixture
+def service_workers(monkeypatch):
+    """Own the executor for adapter unit tests that intentionally skip ASGI lifespan."""
+    import server
+    from agent.runtime.workers import RequestWorkers
+
+    workers = RequestWorkers()
+    monkeypatch.setattr(server.app.state, "workers", workers)
+    yield workers
+    workers.stop()
+    workers.executor.shutdown(wait=True, cancel_futures=True)

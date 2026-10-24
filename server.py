@@ -1,13 +1,11 @@
 """HTTP service entry point: uvicorn server:app --host 127.0.0.1 --port 8010."""
 
 import asyncio
-import contextvars
 import functools
 import logging
 import threading
 import time
 import uuid
-from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
 from importlib.metadata import PackageNotFoundError
 from importlib.metadata import version as _pkg_version
@@ -36,8 +34,8 @@ from agent.block_reasons import REASONS as _BLOCK_REASONS
 from agent.principal import Principal
 from agent.runtime.budget import current_budget
 from agent.runtime.control import AgentCancelled, RequestControl
-from agent.runtime.jobs import RequestJobs
 from agent.runtime.progress import ProgressEmitter, StreamProgress
+from agent.runtime.workers import RequestWorkers
 from agent.summarizer import summarize
 from agent.transport import collect_turn, emit_to_queue
 
@@ -58,16 +56,9 @@ _REASON_CN = {key: value[0] for key, value in _BLOCK_REASONS.items()}
 
 class _NativeCancelled:
     """Worker cancellation sentinel; it must not become a successful END frame."""
-# Admission follows executor completion, including jobs whose HTTP consumer disconnected.
-_executor = ThreadPoolExecutor(max_workers=16)
-
-
-def _submit_with_context(loop, func, *args, jobs=None):
-    """Propagate request context and optionally track the actual executor future."""
-    if jobs is not None:
-        return jobs.submit(_executor, func, *args)
-    ctx = contextvars.copy_context()
-    return loop.run_in_executor(_executor, ctx.run, functools.partial(func, *args))
+def _submit_with_context(loop, func, *args, jobs):
+    """Submit only tracked work to the lifespan-owned executor."""
+    return jobs.submit(app.state.workers.executor, func, *args)
 
 # 流式输出兜底超时（秒）：与前端 120s 空闲超时对齐。
 # LLM/线程池异常挂起时主动终止流，避免对话无限等待（见 event_stream 的 wait_for）
@@ -100,8 +91,14 @@ _stream_slots = asyncio.BoundedSemaphore(MAX_CONCURRENT_STREAMS)
 
 async def _try_acquire_slot() -> bool:
     """拿并发槽位；排队超过 STREAM_QUEUE_WAIT 秒返回 False（调用方回 503，别无声排队）。"""
+    workers = app.state.workers
+    if workers is None or workers.closing:
+        return False
     try:
         await asyncio.wait_for(_stream_slots.acquire(), timeout=STREAM_QUEUE_WAIT)
+        if workers.closing:
+            _stream_slots.release()
+            return False
         return True
     except asyncio.TimeoutError:
         logger.warning("并发闸已满（%d 槽），排队 %.1fs 未拿到 → 503",
@@ -142,24 +139,36 @@ def _build_arm():
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Build the runtime after validating settings, then warm optional retrieval services."""
-    global _agent
+    global _agent, _stream_slots
     setup_logging()
     logger.info("Initialising LangChain agent ...")
     from config.settings import settings
-    _provider = settings.check_provider()
-    logger.info("LLM provider ready (provider=%s)", _provider)
-    # Missing credentials keep liveness available; readiness reports the failure.
-    if not settings.is_api_key_configured:
-        logger.warning(
-            "LLM 凭据缺失：provider=%s 的 api_key 为空 —— 进程会照常启动，"
-            "但每一条对话都会失败（/ready 现在报 missing_credentials）。", _provider)
-    _agent, _arm = _build_arm()
-    logger.info("Agent ready (arm=%s)", _arm)
-    # Optional warmups do not block startup.
-    threading.Thread(target=wordgraph.warm, name="wordgraph-warm", daemon=True).start()
-    rag_search.warm_async()
-    yield
-    logger.info("Agent shutting down")
+    _stream_slots = asyncio.BoundedSemaphore(MAX_CONCURRENT_STREAMS)
+    workers = RequestWorkers(request_timeout=STREAM_TOTAL_TIMEOUT)
+    app.state.workers = workers
+    try:
+        _provider = settings.check_provider()
+        logger.info("LLM provider ready (provider=%s)", _provider)
+        # Missing credentials keep liveness available; readiness reports the failure.
+        if not settings.is_api_key_configured:
+            logger.warning(
+                "LLM 凭据缺失：provider=%s 的 api_key 为空 —— 进程会照常启动，"
+                "但每一条对话都会失败（/ready 现在报 missing_credentials）。", _provider)
+        _agent, _arm = _build_arm()
+        logger.info("Agent ready (arm=%s)", _arm)
+        # Optional warmups do not block startup.
+        workers.warm_up(wordgraph.warm)
+        workers.warm_up(rag_search.warm)
+        yield
+    finally:
+        workers.stop()
+        try:
+            await workers.aclose()
+        finally:
+            _agent = None
+            app.state.workers = None
+            await asyncio.to_thread(checkpoint.close_pool)
+        logger.info("Agent stopped; request workers and checkpoint pool closed")
 
 
 def _app_version() -> str:
@@ -171,6 +180,7 @@ def _app_version() -> str:
 
 
 app = FastAPI(title="Saudade Blog Agent", version=_app_version(), lifespan=lifespan)
+app.state.workers = None
 
 
 # ── 链路追踪（可观测最小集）──
@@ -282,7 +292,7 @@ async def chat(req: ChatRequest, request: Request):
     if not await _try_acquire_slot():
         raise HTTPException(503, "Agent busy（并发已满），请稍后重试")
     loop = asyncio.get_running_loop()
-    jobs = RequestJobs(loop, _release_slot, control=RequestControl(
+    jobs = app.state.workers.request(loop, _release_slot, control=RequestControl(
         threading.Event(), time.monotonic() + STREAM_TOTAL_TIMEOUT))
     try:
         loop = asyncio.get_running_loop()  # 非 get_event_loop()：后者 3.10 起已废弃
@@ -526,7 +536,7 @@ async def chat_stream(req: ChatRequest, request: Request):
 
     stop_event = threading.Event()
     trace_id = get_trace_id()
-    jobs = RequestJobs(asyncio.get_running_loop(), _release_slot,
+    jobs = app.state.workers.request(asyncio.get_running_loop(), _release_slot,
                        control=RequestControl(
                            stop_event, time.monotonic() + STREAM_TOTAL_TIMEOUT),
                        on_complete=functools.partial(
@@ -728,7 +738,7 @@ async def checkpoint_delete(conversation_id: str, request: Request, uid: int = 0
     if checkpoint.conversation_thread(conversation_id) is None:
         logger.warning("[checkpoint] 级联删除拒绝：会话 id 非法（%r）", conversation_id)
         return {"deleted": False, "why": "bad_conversation_id"}
-    gone = await asyncio.to_thread(checkpoint.delete_thread, saver, conversation_id)
+    gone = await app.state.workers.run(checkpoint.delete_thread, saver, conversation_id)
     logger.info("[checkpoint] 级联删除 conv=%s deleted=%s by=%s",
                 conversation_id, gone, principal.uid)
     return {"deleted": gone, "why": "" if gone else "still_readable"}
@@ -744,7 +754,8 @@ class DropTurnReq(BaseModel):
 async def checkpoint_drop_turn(conversation_id: str, req: DropTurnReq, request: Request):
     """Remove only the matching last user turn and verify the resulting checkpoint."""
     principal = _resolve_principal(request, req.uid)
-    out = await checkpoint.drop_last_user_turn(_agent, conversation_id, req.text)
+    out = await app.state.workers.run(
+        checkpoint.drop_last_user_turn, _agent, conversation_id, req.text)
     logger.info("[checkpoint] 丢弃那一轮 conv=%s dropped=%s why=%s by=%s",
                 conversation_id, out.get("dropped"), out.get("why"), principal.uid)
     return out
@@ -761,6 +772,9 @@ async def ready():
     """Report runtime and credential readiness without making a model request."""
     from config.settings import settings
     code, body = runtime_probe.ready_payload(_agent, settings)
+    if app.state.workers is not None and app.state.workers.closing:
+        code, body["ready"] = 503, False
+        body["reasons"].append("shutting_down")
     return JSONResponse(body, status_code=code)
 
 
