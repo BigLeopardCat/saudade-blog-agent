@@ -130,7 +130,8 @@ def test_private_catalog_rejects_unverified_or_unbound_actor(backend, cfg, tool)
 def test_runtime_discovers_catalog_without_legacy(backend, monkeypatch, name):
     from langchain_core.messages import AIMessage, HumanMessage
 
-    from agent.runtime.hybrid import HybridArm
+    from agent.runtime.native import NativeRuntime
+    from agent.runtime.native_store import NativeConversationStore
 
     def call(tool_name):
         return AIMessage(content="", tool_calls=[{"name": tool_name, "args": {}, "id": tool_name}])
@@ -145,14 +146,10 @@ def test_runtime_discovers_catalog_without_legacy(backend, monkeypatch, name):
         def invoke(self, prompt):
             return next(responses)
 
-    class Legacy:
-        def stream(self, *args, **kwargs):
-            raise AssertionError("Catalog entered legacy planner")
-
-    monkeypatch.setattr("agent.runtime.hybrid.get_llm", lambda **kwargs: Model())
-    events = list(HybridArm(Legacy()).stream({"messages": [HumanMessage(content="读取后台清单")]},
-                                            config()))
-    assert events[1][1]["model"]["messages"][0].content.startswith("已读取")
+    runtime = NativeRuntime(NativeConversationStore(None), model_factory=lambda **_: Model())
+    events = list(runtime.stream_events(
+        {"messages": [HumanMessage(content="读取后台清单")]}, config()))
+    assert events[-1].reply.startswith("已读取")
     assert len(backend["requests"]) == 1
 
 

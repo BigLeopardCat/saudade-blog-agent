@@ -170,47 +170,8 @@ class Settings(BaseSettings):
     # 滚动上线纪律（先观测、后收口）。打开后拒绝走既有 blocked 链路。
     authz_enforce: bool = False
 
-    # ── planner 接口层（20260927 新主线第一批）───────────────────────
-    # **接口只有一种：工具调用**（API 的 `tools` 字段 + `tool_calls` 返回，见
-    # agent/planner_llm.py）。20261004 把"文本契约"那一档连同它的解析器整族删掉
-    # ——全量 384 份 trace 里那条兜底路径 `native_fallback` 命中 **0** 次，即删掉它
-    # 不改变任何一轮生产对话的形状；留着一个从不被走到的分支只会让"模型没做出决策"
-    # 与"响应不可解析"混成同一个归宿。所以**没有** `planner_engine` 这个拨盘了：
-    # 别再加快关回来，多一档就是多一条没人验证的通路。
-    #
-    # ⚠️ **下面四个字段名里的 `native` 是冻结 token，别顺手改名**：它们同时是 `.env`
-    # 的键（`PLANNER_NATIVE_*`），而 pydantic-settings 读不到键时**不报错**，直接回落
-    # 成本文件里的缺省值 ⇒ 只改字段名不改 `.env`，会在下一次重启时把这一档**静默**
-    # 拨回缺省。真要改，字段名、`.env`、重启必须在同一个窗口里完成。
-    # planner 是否开思考。**单独一个开关是刻意的**：它是三个待拍板项之一
-    # （"开思考的预算"），要能单独开关才产得出对照数据。
+    # Deprecated compatibility input; NativeRuntime explicitly disables thinking.
     planner_native_thinking: bool = True
-    # 接口层的预算。**不能沿用文本契约时代的 400**：模型开思考时思考链先吃掉额度，
-    # tool_call 的 arguments 会被截断在中途（finish_reason=length，JSON 都不完整）。
-    # 值取自 eval/d4 与探针的实测上界，见 docs/native-toolcalls-mainline.md。
-    planner_native_max_tokens: int = 1200
-    # 同理，文本契约时代的 30s 正压思考档的 p50 6.4s / max 28.5s（实测）⇒ 留出余量。
-    planner_native_timeout: float = 60.0
-    # 慢轮告警阈值（秒）：超了就记 WARNING。**参数化是为了"不许只放宽不监控"**
-    # ——放宽 timeout 而不看这个数，等于把超时问题藏起来。
-    planner_native_slow_s: float = 30.0
-    # 规划温度。**20261006 由写死的 0.2 改为 0.0**，理由是"决策是分类不是创作"。
-    # **但"这枚旋钮能治路由抖动"这个假设，随后的 A/B 没有证实**（两臂交替各两遍
-    # 全量，见 docs/param-tuning-20261006.md）：
-    #   · 技能级成对分歧（round 0 落到哪个技能）：基线 13.2% → 0.0 档 12.5%、
-    #     0.2 档 13.2%；形态级 18.9% / 21.1% / 18.4%——两个口径方向相反 ⇒ 落噪声里。
-    #   · 采样层红数：基线 8 跑均值 5.9（σ≈3.3），0.0 档 7/4、0.2 档 4/6。四遍的
-    #     红集交集**只有 1 条**（`admin_tag_move_question_no_popup`，4/4），其余每条
-    #     都只出现在 1–2 遍里：**红数在晃、红的身份每遍都不一样**。
-    # 所以**这枚旋钮在这个服务商上是中性的**：既没提升也没退化。按事先说好的
-    # 口径（"没提升也没下降就这样吧"）保留 0.0，但**不要**再引用"温度能治抖动"
-    # 这个归因——它没被证据支持，残留抖动的来源另找（一个未验证的候选：`page_ctx`
-    # 里的台账年龄字符串「N 小时 M 分前」逐分钟在变，当初那版"输入逐字相同"的
-    # 比对只归一化了 `current_time=`，没盖住它）。
-    # **可环境变量覆盖（PLANNER_TEMPERATURE）**：调优实验要能逐臂拨它——改代码跑
-    # 矩阵等于每臂一次提交，不可比。回退：PLANNER_TEMPERATURE=0.2 即逐字节回到
-    # 20261006 之前的行为。
-    planner_temperature: float = 0.0
 
     # ── 会话级任务状态（20260927 批 D；**20261015 起无档位、常开**）─────────
     # 未完成的意图（"带我过去后开启一个特效"的第二步）跨轮的载体，与 execution_log
@@ -230,39 +191,8 @@ class Settings(BaseSettings):
     # 时效的单执行者是 Rust 读侧（`TASK_READ_TTL_HOURS`，见迁移头注）。
     agent_task_inject_max: int = 3
 
-    # ── 写参数的出处：引文核对（20261014 第一批，**影子**）──────────────
-    # 写通道上那层"值有没有出处"的判据正在换表征：从**约 40 张手抄中文词表 +
-    # 位置窗口**换成**模型给逐字引文、系统只做逐字核对**（citations /
-    # quote-then-verify）。理由与失效现场见 `agent/provenance.py` 头注。
-    #
-    # ⚠️ **这一档同时管两件事，且两件事必须同档**：
-    #   · 关（出厂）：schema 里**没有** `evidence` 那一格（模型发不出来），
-    #     影子核验整段不跑 —— 线上行为与改造前逐字节相同；
-    #   · 开：schema 里多一格可选参数、`planner.evidence_shadow` 落 trace，
-    #     **但一个写都拦不住**（第一批只算不拦）。
-    # 为什么必须同档：只开 schema 不开核验 = 白送模型一段没人读的自我说明；
-    # 只开核验不开 schema = 模型发不出 `evidence`，影子记到的**全是 `no_quote`**
-    # （那是一条读不出任何信息的曲线，会被误读成"引文通道根本没通过"）。
-    #
-    # 本仓那条既有纪律：默认关、先影子、离线 A/B 与生产 trace 对齐之后再翻权威
-    # （第二批：`refusal_source` 加 `evidence` 支 + 整族删表）。
-    agent_evidence: bool = False
 
-    # ── 确定性快道（定价档，20261015）───────────────────────────────
-    # `agent/deterministic_plan.py` 那五条快道（导航 / 指代型导航 / 显示 / 读当前文章 /
-    # 特效切换）都是"中文动词表 + 位置窗口"，**命中即拿走 planner 的决策权**：
-    # 整轮不调 planner LLM，直接实例化一张计划交 execute。它们各有真实事故依据
-    # （最有名的一条：planner 对「不要樱花了改成下雨」十轮里八轮只做半边），
-    # 所以**不能纸面推定删**——删/收窄一条要有读数。
-    #
-    # 这一档就是那个读数装置：**默认开 = 与从前逐字节相同**（唯一读口
-    # `agent/graph.py::_fastpath_on()`）；关掉则首轮那一段整块不跑，全部交给
-    # planner LLM。两臂交替跑，读的是**命中计数与轮数**（不读通过率）——两臂
-    # 都绿不说明什么，命中数才是价钱。
-    #
-    # ⚠️ 必须同时进 `tests/conftest.py::_PINNED`（本仓教训：离线套件对档位是瞎的，
-    # 判据跟着 shell 档位走会让本机与 CI 结论不同）。定价读数出自生产 trace 的
-    # `fastpath` 事件 + golden 两臂，见 `eval/fastpath_pricing.py`。
+    # Deprecated compatibility input; NativeRuntime does not use the old fast paths.
     agent_fastpath: bool = True
 
     # ── IoT 设备服务（ESP32 OLED 显示等）─────────────────────────────

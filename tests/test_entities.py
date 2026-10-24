@@ -26,15 +26,13 @@ ROOT = Path(__file__).resolve().parent.parent  # 仓根（20260924：测试统�
 sys.path.insert(0, str(ROOT))
 
 
-from agent.entity_digest import receipt_digest  # noqa: E402
+from agent.receipt_digest import receipt_digest  # noqa: E402
 
 FAILS: list[str] = []
 check = collector(FAILS)
 
 
 from agent.adminops_tags import render_admin_notes  # noqa: E402
-from agent.graph import _PLANNER_PROMPT as _TPL  # noqa: E402
-from agent.graph import NARRATOR_DISCIPLINE as _DISC  # noqa: E402
 
 
 def _an(i: int, status: str, title: str, tags: str = "5") -> dict:
@@ -115,26 +113,6 @@ def test_entities():
     check("超长输入摘要 ≤150 字", 0 < len(lg) <= 150, f"{len(lg)} 字")
     check("截断发生在条目边界（不留半条）", lg.rstrip('」').count("「") == lg.count("」"), lg[:60])
     check("None/非字符串不炸", receipt_digest("list_guestbook", None) == "")
-    print("⑥ planner 契约在位（规则 6b + 回执字段名与 Rust 侧一致）")
-    _CODE = (ROOT / "agent" / "graph.py").read_text(encoding="utf-8")
-    check("planner 提示词含规则 6b", "6b. 指代取值优先于重查" in _TPL)
-    check("规则 6b 点了 recent_executions 实体摘要", "实体摘要" in _TPL)
-    check("回执写入 digest 字段（Rust render_exec_row 读同名键）",
-        'rcpt["digest"] = digest' in _CODE)
-    check("planner 规则 6b 点名「不唯一 → 追问澄清」", "指代对象在摘要里本身就**不唯一**" in _TPL)
-    _6b = _TPL.index("6b. 指代取值优先于重查")
-    _6c = _TPL.index("6c. 现时状态类询问")
-    check("6b/6c 的分界句长在 6b 里（不在 6c 的尾巴上）",
-          _6b < _TPL.index("第一步先分清问的是哪一件事", _6b) < _6c, f"6b@{_6b} 6c@{_6c}")
-    check("分界句把量词明确算进 6b（「有几篇文章」不是现时状态）",
-          "量词不改变归属" in _TPL[_6b:_6c])
-    check("旧版绝对化的那句已删净（graph.py 与提示词都不许有）",
-          "照抄摘要永远是对的" not in _CODE and "照抄摘要永远是对的" not in _TPL)
-    check("旧版绝对化的那句已删净（server.py）",
-          "照抄摘要永远是对的" not in (ROOT / "server.py").read_text(encoding="utf-8"))
-    check("narrator 叙述纪律 15（指代不唯一先追问）在位", "15. 指代不唯一时先追问" in _DISC)
-    check("纪律 15 要求点名候选（不是笼统反问）", "追问要**点名候选**" in _DISC)
-    check("纪律 15 含反面（带序号/已点名 → 直接答，不反问）", "就是多此一举" in _DISC)
     print("⑦ 后台文章清单也有摘要了（20261007：跨轮取值通道缺的那一格）")
     _NOTES = [_an(54, "public", "我，管理员！"),
               _an(46, "public", "文章向量空间图谱项目文档", ""),
@@ -157,16 +135,6 @@ def test_entities():
           "共 1 篇" in _ud and "（公开" not in _ud, _ud)
     check("头行读不出来时照旧空摘要（退化为只有动作行，绝不猜）",
           receipt_digest("list_admin_notes", "这是一段没有头行的话") == "")
-    print("⑦b 叙述纪律：『本轮没查』不等于『撤回上一轮』（同一现场的另一半）")
-    _psrc = (ROOT / "agent/prompts.py").read_text(encoding="utf-8")
-    check("来源清单把『上一轮自己照帧说出口的读数』算作有据",
-          "上一轮你自己照帧说出口的那些读数" in _psrc)
-    check("明写『本轮没有工具返回、不构成撤回上一轮那句话的理由』",
-          "不构成撤回上一轮那句话的理由" in _psrc)
-    check("明写不许主动翻旧账（没被问到不动自己的旧账）",
-          "不要主动去复盘或修正自己的旧账" in _psrc)
-    check("被问到/被质疑时照旧核对（这条纪律没把真相询问吃掉）",
-          "被问到或被质疑时照旧逐条核对" in _psrc)
     print("\n" + ("全部通过" if not FAILS else f"失败 {len(FAILS)} 项：" + "; ".join(FAILS)))
 
     assert not FAILS, (

@@ -96,8 +96,8 @@ GOLDEN_ARM=hybrid CHECKPOINT_DSN= .venv/bin/python eval/run_golden.py \
 这组验收不证明生产 HTTP 入口、数据库持久化、真实业务 API 或所有措辞均可靠。
 导航通过只证明页面命令与目标正确，不证明浏览器已到达，也不自动判定整段叙述事实准确。
 当前 `elapsed_s` 是进程内请求耗时，尚无首个可见事件时间；不足 20 个时延样本不报告 P95。
-PostgreSQL 验证继续使用
-`eval/experiments/hybrid_checkpoint_probe.py`，生产版本与就绪状态看 `/version`、`/health`。
+PostgreSQL 验证使用 `eval/experiments/native_checkpoint_probe.py`，生产版本与就绪状态看
+`/version`、`/health`。
 
 ## 4. 旧 golden 与辅助判官
 

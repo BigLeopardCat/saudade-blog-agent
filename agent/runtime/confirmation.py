@@ -31,15 +31,15 @@ def proposal(principal, cid, workflow, spec, *, executor, question, target):
 
 def confirmed_runtime(runtime, grant):
     from agent.domains.registry import native_domain
+    from agent.runtime.native import NativeRuntime
 
     if isinstance(grant, dict) and grant.get("executor") and native_domain(grant) is None:
         raise ValueError("无法识别确认操作的执行入口，本次未执行。")
     if native_domain(grant) is None:
         return runtime
-    from agent.runtime.hybrid import HybridArm
-    from agent.runtime.native import NativeRuntime
-    # Changing the default runtime cannot bypass revocation or replay checks.
-    selected = runtime if isinstance(runtime, (HybridArm, NativeRuntime)) else HybridArm(runtime)
+    if not isinstance(runtime, NativeRuntime):
+        raise ValueError("确认执行需要 NativeRuntime，本次未执行。")
+    selected = runtime
     if selected.store.saver is None:
         raise RuntimeError("操作确认需要持久化服务，本次未执行。")
     return selected

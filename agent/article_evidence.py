@@ -1,12 +1,10 @@
-"""Article-body evidence shared by native sessions and graph completion checks."""
+"""Article-body evidence collected by native tool sessions."""
 
 from __future__ import annotations
 
 import ast
 import re
 from urllib.parse import urlsplit
-
-from langchain_core.messages import ToolMessage
 
 SEARCH_TOOLS = frozenset({"rag_search"})
 
@@ -76,34 +74,3 @@ class ArticleEvidence:
             label = re.sub(r"[\[\]\r\n]", "", title)[:80]
             refs.append(f"[{label}]({site.rstrip('/')}/article/{article_id})")
         return reply + "\n\n来源：" + "、".join(refs)
-
-
-def needs_article_body(messages: list) -> bool:
-    """Graph completion must not treat candidate rows as article body evidence."""
-    found = False
-    for message in messages:
-        if not isinstance(message, ToolMessage):
-            continue
-        name = getattr(message, "name", "")
-        value = str(message.content)
-        if name == "rag_search" and re.search(r"^\s*\d+\.\s*type=note\s+id=", value, re.M):
-            found = True
-        if name == "get_article_detail":
-            data = payload(value)
-            if data and (data.get("noteId") or data.get("noteKey")) and body_text(data).strip():
-                return False
-    return found
-
-
-def completion_issue(plan: dict, messages: list) -> str | None:
-    if plan.get("workflow") in ("content_query", "read_article") and needs_article_body(messages):
-        return "article_body_missing"
-    return None
-
-
-def completion_read_plan(plan: dict, messages: list, executed: list):
-    if plan.get("tools") or not completion_issue(plan, messages):
-        return None
-    from agent.deterministic_plan import _candidate_detail_plan
-
-    return _candidate_detail_plan(messages, executed, set())

@@ -1,43 +1,4 @@
-# -*- coding: utf-8 -*-
-"""手抄表的机器锁 · 第六站：**河灯留言的一条 DTO，两侧各写一份它的键**（20261013，收口批 3g）。
-
-**契约**：留言板两条通道（公开池 `list_guestbook`、我自己的 `list_my_board`）拿回来的
-都是后端 `TalkDto`（父仓 `src/routes/talks.rs`）那一个 JSON。agent 侧有两处**按名字**读它：
-
-  · `agent/entity_digest.py` 的两个摘要器（`_entry_digest` / `_my_board_digest`）——跨轮执行
-    记忆就靠它们；
-  · `tools/base.py::_shape` 出口的**改名表**（`_FRAME_ID_KEYS`：`talkKey` → `talkId`）
-    与 `_board_text_keys`（`author` → `留名`）——帧里给模型看的那一列。
-
-**为什么值得上锁**（改键名**不报错**，而且症状是"少了半句"）：
-
-  · Rust 把 `#[serde(rename = "talkTitle")]` 改掉（或换字段名）而 agent 没改 ⇒
-    `r.get("cat")` / `r.get("talkTitle")` 恒 None ⇒ 那一行的〔分类〕**整段消失**；
-    再狠一点（`content` 改名）⇒ `if not body: continue` 把整行**跳过** ⇒ 模型看到
-    "最近 5 条"却只有 2 条——**不报错、不告警**，只是记忆里少了几条。
-  · 审核态取值域（`approved`）多一档或改一档 ⇒ 把待审说成通过、或把通过的写成
-    "状态未知"，而这正是 `list_my_board` 这条通道存在的**全部理由**。
-
-**两侧的关系不止"相等"**，有三条要分开说：
-  ① 上游键名：Rust `TalkDto` 发的键 == agent 按名字读的那些（**去掉改名表的映射之后**）；
-  ② 审核态取值域：`_BOARD_STATE_WORD` 的键 == Rust `review_notice_text_for` 的 match 臂
-     （两侧都不认就拒，兜底**刻意不同**，见下）；
-  ③ 位置形态：`/guestbook?lid=<talkId>` 的取值来自 `talkKey`，而 agent 只在
-     `isinstance(tid, int)` 时才印它——Rust 那个字段是 `i32`（**非** Option）⇒ 恒成立。
-
-判据一律**从源码现取值**（Rust 走 `tests/_rust_src.fn_body` + 结构体切片，Python 走 AST），
-**绝不抄常量**；台账双向（漏一条红、过期也红）。
-
-**本套件不管什么**（写下来免得起假安心）：
-  · **中文状态词本身**：agent 的「通过/待审/未通过」是**卡面**用语（`_my_board_digest`
-    印给模型看），Rust 那三句是**站内通知标题**（「留言已通过审核」）。两款说的是同一组
-    取值，但**语域不同**（同 `ROLE_CN` 与 `role_label` 的关系），刻意不逐字比；
-  · `rejectReason` / `nickname` / `avatar` / `createTime` 这些键：Rust 发、agent 的
-    摘要器**不读**（读它们的地方在别处，各自有各自的锁）；本套件只判"读到的都在"；
-  · 帧里的**值**（谁写的、写了什么）：那是 DTO 内容，不是键。
-
-用法：.venv/bin/python tests/test_board_dto_keys.py
-"""
+"""Board DTO names and receipt IDs match the public host contract."""
 
 from __future__ import annotations
 
@@ -53,7 +14,7 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 from agent import adminops_quota as _quota  # noqa: E402
-from agent import entity_digest as E  # noqa: E402
+from agent import receipt_digest as E  # noqa: E402
 from tests import _parent_repo, _rust_src  # noqa: E402
 from tools import base as B  # noqa: E402
 
@@ -109,7 +70,7 @@ def test_board_dto_keys():
     _RUST_KEYS = _dto_keys(_RUST_TALKS)
 
     # ══ 取值：agent 读的键（AST 取 `X.get("字面量")`，只在那两个摘要器里）══════════
-    _ENTS = (ROOT / "agent/entity_digest.py").read_text(encoding="utf-8")
+    _ENTS = (ROOT / "agent/receipt_digest.py").read_text(encoding="utf-8")
 
 
     def _get_keys(func: str) -> dict[str, str]:

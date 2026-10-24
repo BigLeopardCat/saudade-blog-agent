@@ -10,12 +10,11 @@ from langgraph.checkpoint.memory import InMemorySaver
 from pydantic import ValidationError
 
 from agent import confirm, idem
-from agent.agent import create_agent
 from agent.domains.favorites import preparation
-from agent.graph import graph_input
 from agent.principal import Principal
 from agent.runtime import writes
-from agent.runtime.hybrid import HybridArm
+from agent.runtime.native import NativeRuntime
+from agent.runtime.native_store import NativeConversationStore
 from agent.runtime.results import TurnResult
 
 
@@ -61,17 +60,14 @@ def test_preparation_checkpoints_then_executes_once(site, monkeypatch, tmp_path,
     initial = ([{"noteId": 19, "title": "真实文章标题"}] if action == "remove" else [])
     site["favorites"] = initial
     model = Model(action)
-    monkeypatch.setattr("agent.runtime.hybrid.get_llm", lambda **_: model)
-    graph = create_agent(checkpointer=InMemorySaver())
-    monkeypatch.setattr(graph, "stream", lambda *a, **kw: pytest.fail("legacy planner invoked"))
-    arm = HybridArm(graph)
-    events = arm.stream(graph_input([HumanMessage(content="收藏文章 19")]), config())
-    first = next(events)
-    popup = first[1]["execute"]["pending_confirm"]
+    runtime = NativeRuntime(NativeConversationStore(InMemorySaver()),
+                            model_factory=lambda **_: model)
+    first = list(runtime.stream_events(
+        {"messages": [HumanMessage(content="收藏文章 19")]}, config()))[-1]
+    popup = first.execution["pending_confirm"]
     assert "未知状态" not in popup["q"]
-    assert arm.get_state(config()).values["pending_confirm"]["token"] == popup["token"]
-    assert arm.get_state(config()).next == ()
-    assert not any(mode == "messages" for mode, _ in events)
+    assert runtime.get_state(config()).values["pending_confirm"]["token"] == popup["token"]
+    assert runtime.get_state(config()).next == ()
     assert len(model.calls) == 2
     assert popup["token"] not in repr(model.calls)
     assert site["favorites"] == initial
@@ -80,14 +76,14 @@ def test_preparation_checkpoints_then_executes_once(site, monkeypatch, tmp_path,
     monkeypatch.setattr(writes, "ledger_for", lambda saver: ledger)
     grant = confirm.verify(popup["token"], 7, 42)
     for _ in range(2):
-        done = list(arm.stream(graph_input([HumanMessage(content="确认")], confirm_grant=grant),
-                               config()))
+        done = list(runtime.stream_events(
+            {"messages": [HumanMessage(content="确认")], "confirm_grant": grant}, config()))
         expected = "add_favorite" if action == "add" else "remove_favorite"
-        assert done[0][1]["execute"]["receipts"][0]["tool"] == expected
+        assert done[-1].execution["receipts"][0]["tool"] == expected
     method = "POST" if action == "add" else "DELETE"
     assert sum(request.method == method for request in site["requests"]) == 1
     assert len(model.calls) == 2
-    assert arm.get_state(config()).values["pending_action"] is None
+    assert runtime.get_state(config()).values["pending_action"] is None
 
 
 @pytest.mark.parametrize("action,favorites", [
@@ -138,7 +134,6 @@ def test_stream_emits_one_card_and_one_reply_from_current_page(site, monkeypatch
     from agent.runtime.native_store import NativeConversationStore
 
     model = Model()
-    monkeypatch.setattr("agent.runtime.hybrid.get_llm", lambda **_: model)
     monkeypatch.setattr(server, "_agent", NativeRuntime(
         NativeConversationStore(InMemorySaver()), model_factory=lambda **_: model))
     req = server.ChatRequest(message="收藏当前这篇", user_id=7, conversation_id=42,

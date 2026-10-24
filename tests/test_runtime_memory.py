@@ -8,10 +8,12 @@ from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
 
 import server
-from agent.agent import create_agent
 from agent.principal import SOURCE_ASSERTION, SOURCE_BODY, Principal
 from agent.runtime import memory
-from agent.runtime.hybrid import HybridArm, _input
+from agent.runtime.capabilities import ToolCatalog
+from agent.runtime.native import NativeRuntime
+from agent.runtime.native_store import NativeConversationStore
+from agent.runtime.prompt import build_prompt as _input
 from tools import base
 
 
@@ -90,24 +92,25 @@ def test_real_native_loop_persists_source_observations_across_followup_and_reloa
             return next(self.responses)
 
     model = Model()
-    monkeypatch.setattr("agent.runtime.hybrid.get_llm", lambda **_: model)
     saver = InMemorySaver()
-    graph = create_agent(checkpointer=saver)
-    monkeypatch.setattr(graph, "stream", lambda *a, **k: pytest.fail("legacy planner invoked"))
     config = {"configurable": {"thread_id": "memory-followup", "conversation_id": 8,
                                "user_id": 7, "principal": actor()}}
-    arm = HybridArm(graph, {"search_notes": Search()}, {}, {})
+    catalog = ToolCatalog(read_tools={"search_notes": Search()})
+    runtime = NativeRuntime(NativeConversationStore(saver), catalog=catalog,
+                            model_factory=lambda **_: model)
     for message in ("找一下架构文档", "好的"):
-        list(arm.stream({"messages": [HumanMessage(content=message)]}, config))
-    reloaded = HybridArm(graph, {"search_notes": Search()}, {}, {})
-    list(reloaded.stream({"messages": [HumanMessage(content="刚才那篇编号是多少？")]}, config))
+        list(runtime.stream_events({"messages": [HumanMessage(content=message)]}, config))
+    reloaded = NativeRuntime(NativeConversationStore(saver), catalog=catalog,
+                             model_factory=lambda **_: model)
+    list(reloaded.stream_events(
+        {"messages": [HumanMessage(content="刚才那篇编号是多少？")]}, config))
     tools = [m for m in model.prompts[-1] if isinstance(m, ToolMessage)]
     assert len(tools) == 1 and tools[0].name == "search_notes"
     assert json.loads(tools[0].content)["items"][0]["id"] == 19
     assert tools[0].tool_call_id == "source"
     assert any(m.tool_calls[0]["id"] == "source" for m in model.prompts[-1]
                if isinstance(m, AIMessage) and m.tool_calls)
-    assert not graph.get_state(config).next
+    assert not reloaded.get_state(config).next
 
 
 def test_user_text_cannot_masquerade_as_an_internal_context_message():

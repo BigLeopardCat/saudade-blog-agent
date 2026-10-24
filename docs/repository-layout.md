@@ -21,7 +21,7 @@
 旧图兼容边界的完整契约见 [legacy-compatibility-boundary.md](legacy-compatibility-boundary.md)。
 本文件只记录目录职责；迁移 PR 必须同时遵守那份依赖方向和退役条件。
 
-- `agent/runtime/hybrid.py` 负责准入、持久化与协议适配；模型和工具循环在 `session.py`，原生模型答案通过标准 `AIMessageChunk` 流出并在工具调用前完成聚合。
+- `agent/runtime/native.py` 负责准入、持久化与协议适配；模型和工具循环在 `session.py`，原生模型答案通过标准 `AIMessageChunk` 流出并在工具调用前完成聚合。
 - 原生 runtime 如仍需读取旧图 checkpoint 形状，只能通过 `runtime/legacy_bridge.py`；迁移完成后删除这一处桥接即可收口依赖。
 - `agent/runtime/prompt.py` 组装原生指令、可信身份与有界上下文；工具能力由 schema 描述，
   不在编排层叠加各领域的操作提示。`conversation_store.py` 定义完成轮次的存储边界。
@@ -34,7 +34,7 @@
 
 ## 后续收敛
 
-目前 `agent/graph.py`、`agent/authz.py`、`agent/prompt_context.py` 与 `tools/base.py`
+目前 `agent/graph.py`、`agent/authz.py`、`agent/runtime/prompt.py` 与 `tools/base.py`
 仍是较大的旧模块。新增领域先确定业务归属、外部 I/O 和验收方式；迁完一项就删除旧入口。
 不会继续向旧图添加新领域。共享组件只在出现真实复用时提取，不为未来假设建立通用框架。
 

@@ -189,11 +189,9 @@ def test_wordlist_gate():
     _OPAQUE_SRC = '''# -*- coding: utf-8 -*-
 _LABELS = ("甲", "乙")
 
-
 def render(i: int) -> str:
     return _LABELS[i]
 '''
-    print("① 真值：闸门在真仓上退 0（登记表与代码同步）")
     print("① 真值：闸门在真仓上退 0（登记表与代码同步）")
     _g = load_gate()
     _rc0, _out0 = run(_g, ROOT, REGISTRY)
@@ -325,12 +323,13 @@ def render(i: int) -> str:
     check("⑪a 反控前提：原状是绿的（eval 侧如实行过登记）",
           run(_g, _d5, _reg5, targets=["agent"])[0] == 0)
     check("⑪b 镜像锁：多轮用例只读 `rounds` 里的 gold，顶层那份不读（同 `iter_rounds`）",
-          _snap5["eval_vocab"]["keys"]["text_not_contains"]["patterns"] == ["已经办好了", "轮里的才该被读"],
+          _snap5["eval_vocab"]["keys"]["text_not_contains"]["patterns"] == [
+              "已经办好了", "轮里的才该被读"],
           str(_snap5["eval_vocab"]["keys"]["text_not_contains"]["patterns"]))
     _golden_write([_EVAL_GOLDEN_SRC.replace("|已)办好了",
         "|已)办妥了")])   # 换掉一个模式（数量不变）
     _rc, _out = run(_g, _d5, _reg5, targets=["agent"])
-    _n_red_lines = sum(1 for l in _out.splitlines() if l.startswith("  ❌"))
+    _n_red_lines = sum(1 for line in _out.splitlines() if line.startswith("  ❌"))
     check("⑪c **换掉**一个模式（格/项/数量都不变）⇒ 只可能由「新模式」那一条判红",
           _rc == 1 and _n_red_lines == 1 and "多了 1 个模式" in _out and "办妥了" in _out,
           f"rc={_rc} / 红 {_n_red_lines} 条")
@@ -366,7 +365,8 @@ def render(i: int) -> str:
           _rc == 1 and "同数量改写" in _out, f"rc={_rc}")
     _j.write_text(_EVAL_JUDGE_SRC, encoding="utf-8")
     print("\n⑪g 变异锁：两条判据各挖一次 ⇒ 对应的那次改动不再红（证明是它们在承重）")
-    _cut_pat = ('newpat = [p for p in got.get("patterns", []) if p not in set(want.get("patterns") or [])]',
+    _cut_pat = ('newpat = [p for p in got.get("patterns", []) '
+                'if p not in set(want.get("patterns") or [])]',
                 "newpat = []")
     _gm_pat = _mutant(*_cut_pat, "pat")
     check("⑪g₁ 锚点「新模式」恰好命中 1 处（源码一漂就停，别静默不生效）", _gm_pat is not None)

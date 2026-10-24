@@ -55,7 +55,7 @@ def execute_once(grant, name, args, config, ledger, tools):
     key = operation_key(grant, name, args)
     state, row = ledger.claim(key, name, grant["jti"], resuming=True)
     if state == "done":
-        record("hybrid", "write_replay_hit", name=name, key=key)
+        record("native", "write_replay_hit", name=name, key=key)
         return idem.replay_result(row)
     if state != "new":
         return idem.unknown_frame(name)
@@ -66,7 +66,7 @@ def execute_once(grant, name, args, config, ledger, tools):
     # Once the tool has run, finish the ledger even if the caller has stopped.
     # A lost result must not cause a later request to repeat an external write.
     ledger.finish(key, out)
-    record("hybrid", "write_done", name=name, key=key)
+    record("native", "write_done", name=name, key=key)
     return out
 
 
@@ -84,7 +84,7 @@ def execute_confirmed(grant, config, saver, *, validate, receipt, tool_factory, 
         from agent.runtime.turns import AgentCancelled
         if isinstance(exc, AgentCancelled):
             raise
-        record("hybrid", "write_error", name=name, error=type(exc).__name__)
+        record("native", "write_error", name=name, error=type(exc).__name__)
         result = unavailable("无法确认本次操作的执行结果，请先查询实际状态，不要重复执行。")
     evidence = receipt(grant, name, args, result)
     if evidence is None:

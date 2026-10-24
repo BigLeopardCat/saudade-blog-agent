@@ -148,8 +148,8 @@ def test_module_index():
     check("§2 的树行数与解析器记下的条目数一致", _raw == len(_A["entries"]),
           f"原始文本数到 {_raw} 条，解析器记下 {len(_A['entries'])} 条")
     check("解析器在真输入上确实认出了已知存在的模块",
-          "agent/graph.py" in {p for p, _, _ in _A["scoped"]},
-          "agent/graph.py 都没认出来 ⇒ 解析器坏了，不是树对了")
+          "agent/runtime/native.py" in {p for p, _, _ in _A["scoped"]},
+          "agent/runtime/native.py 都没认出来 ⇒ 解析器坏了，不是树对了")
     check("两处 fence 都取到了（标题或围栏改了会让上面全部空过）",
           bool(_arch_fence) and bool(_readme_fence),
           f"§2 fence {len(_arch_fence)} 行 / README fence {len(_readme_fence)} 行")

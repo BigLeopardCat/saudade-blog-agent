@@ -2,39 +2,38 @@
 
 import os
 
-ARM_GRAPH = "graph"
-ARM_HYBRID = "hybrid"
-KNOWN_ARMS = (ARM_GRAPH, ARM_HYBRID)
+ARM_NATIVE = "native"
+KNOWN_ARMS = (ARM_NATIVE,)
 ENV_ARM = "GOLDEN_ARM"
 INTERFACE_LAYER = "native"
 
 
 def arm_name() -> str:
-    name = (os.environ.get(ENV_ARM) or "").strip().lower() or ARM_GRAPH
+    name = (os.environ.get(ENV_ARM) or "").strip().lower() or ARM_NATIVE
     if name not in KNOWN_ARMS:
-        raise RuntimeError(f"{ENV_ARM}={name!r} 不支持；当前仅 graph/hybrid，旧实验见归档分支。")
+        raise RuntimeError(f"{ENV_ARM}={name!r} 不支持；当前仅 native。")
     return name
 
 
 def engine_for(arm: str) -> str:
-    return INTERFACE_LAYER if arm == ARM_GRAPH else f"{INTERFACE_LAYER}+{arm}"
+    if arm != ARM_NATIVE:
+        raise RuntimeError(f"不支持已退役运行时：{arm}")
+    return INTERFACE_LAYER
 
 
 def reports_dir(arm: str) -> str:
-    # Historical report names remain readable; only build_agent controls executable runtimes.
-    return "eval/report/runs" if arm == ARM_GRAPH else f"eval/report/runs_{arm}"
+    if arm != ARM_NATIVE:
+        raise RuntimeError(f"不支持已退役运行时：{arm}")
+    return "eval/report/runs"
 
 
 def is_baseline_arm(arm: str) -> bool:
-    return arm == ARM_GRAPH
+    return arm == ARM_NATIVE
 
 
 def build_agent(arm: str | None = None):
     arm = arm or arm_name()
-    if arm == ARM_GRAPH:
-        from agent.agent import create_agent
-        return create_agent()
-    if arm == ARM_HYBRID:
-        from agent.runtime.hybrid import build
+    if arm == ARM_NATIVE:
+        from agent.runtime.native import build
         return build()
-    raise RuntimeError(f"{ENV_ARM}={arm!r} 不支持；当前仅 graph/hybrid，旧实验见归档分支。")
+    raise RuntimeError(f"{ENV_ARM}={arm!r} 不支持；当前仅 native。")

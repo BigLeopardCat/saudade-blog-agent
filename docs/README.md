@@ -35,17 +35,17 @@
 | [native-context-cache.md](native-context-cache.md) | 原生工具目录、动态上下文顺序及缓存用量的验证口径 | 现状型 |
 | [legacy-compatibility-boundary.md](legacy-compatibility-boundary.md) | 原生运行时、旧图兼容层及退役条件 | 现状型（含迁移边界） |
 | [eval-observability.md](eval-observability.md) | 混合运行时指标、结果验收、旧评测边界与执行入口 | 现状型 |
-| [lint-baseline.md](lint-baseline.md) | 静态检查（ruff）基线与"新代码要干净"的参照点 | 现状型 |
+| [lint-baseline.md](lint-baseline.md) | 历史人工扫描快照；当前扫描以 eval 下的机器台账与 CI 为准 | 记录型 |
 | [rag-design.md](rag-design.md) | 检索设计与实现总结，§8 是触发条件驱动的升级预案 | 现状型 |
 | [rag-production-debug.md](rag-production-debug.md) | 两机配置、缓存与引擎候选、增量建库、回退和生产验收记录 | 现状型（§6–§8 为待验收方案） |
 | [embedding-inputs.md](embedding-inputs.md) | 可选 tokenizer 的完整输入预算、空间签名与验证方式 | 现状型（末节含验证记录） |
 | [native-toolcalls-mainline.md](native-toolcalls-mainline.md) | 换主线的**交接件**：为什么换、冻结了什么、边界在哪 | 记录型 |
-| [toolcall-stability-roadmap.md](toolcall-stability-roadmap.md) | 工具调用稳定性的长期路线图，含明确"不做"清单 | 方向型（§3–§7）+ 记录型（§0–§2、附一–附七） |
+| [toolcall-stability-roadmap.md](toolcall-stability-roadmap.md) | 旧规划引擎的稳定性治理记录，保留 D1–D6 跨仓引用锚点 | 记录型 |
 | [react-line-experiment.md](react-line-experiment.md) | ReAct 试验线的实测：原生 tool calls 当骨架行不行；**§六 = 这条臂的读数许可闸**（`comparable`） | 记录型（**§四 现状表 / §六** 是现状型） |
 | [zero-call-residual.md](zero-call-residual.md) | 「零调用/声称」一次没有效果的实测与残余落点 | 记录型 |
 | [param-tuning-20261006.md](param-tuning-20261006.md) | 旋钮 A/B 实验报告（温度 / 思考 / 跨模型 + 两臂成本） | 记录型 |
 | [agent-eval-report-20260924.md](agent-eval-report-20260924.md) | 2026-09-24 的评估报告与当时列的行为清单 | 记录型 |
-| [identity-and-permissions.md](identity-and-permissions.md) | 身份与权限：Principal / scope manifest / 同意闸 / 管理助手（原名 secretary.md） | 现状型 |
+| [identity-and-permissions.md](identity-and-permissions.md) | 身份与权限落地记录及跨仓引用锚点；原生边界见当前架构说明 | 记录型 |
 | [multimodal-retrieval.md](multimodal-retrieval.md) | 多模态检索分阶段方案（ADR-0005 的展开，**已搁置**） | 方向型 |
 | [write-provenance-shadow-20261014.md](write-provenance-shadow-20261014.md) | 写参数出处改造第一批（影子）的两臂读数与分歧报告，**§6 是第二批决策输入** | 记录型（**§6** 方向型） |
 | [fastpath-pricing-20261015.md](fastpath-pricing-20261015.md) | 五条确定性快道的定价读数（生产命中分布 + 语料两臂），**§5 是删除/收窄清单** | 记录型（**§5** 方向型） |
@@ -73,9 +73,9 @@
 | 本仓的锚点 | 父仓引用它的地方 |
 |---|---|
 | [问题记录.md](问题记录.md) **§2.1** | `docs/iot-device-integration.md`（两处）、`iot/firmware/固件开发指南.md` |
-| [identity-and-permissions.md](identity-and-permissions.md) **§3.4 / §3.6 / §5.2 / §5.3** | `docs/security-boundary.md`（五处）、`scripts/migration/zako_role_20261002.sql` |
+| [identity-and-permissions.md](identity-and-permissions.md) | 身份与权限落地记录及跨仓引用锚点；原生边界见当前架构说明 | 记录型 |
 | [agent-architecture.md](agent-architecture.md) 的标题 **《3. 一次对话的完整链路》** | 父仓 `README.md`（按标题引） |
-| [toolcall-stability-roadmap.md](toolcall-stability-roadmap.md) 的 **D1–D6** | `scripts/migration/execution_log_struct_20260927.sql`（引 `§D2`） |
+| [toolcall-stability-roadmap.md](toolcall-stability-roadmap.md) | 旧规划引擎的稳定性治理记录，保留 D1–D6 跨仓引用锚点 | 记录型 |
 
 `tests/test_docs_links.py` 会核对这四组锚点仍在（改了就红，提醒你先去父仓同步）。
 

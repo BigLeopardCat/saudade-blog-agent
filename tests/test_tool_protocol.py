@@ -50,8 +50,7 @@ def test_tool_error_provides_current_menu_without_repeating_io():
     assert error.status == "error"
     data = json.loads(error.content)
     assert data["error"] == "unknown_tool"
-    assert data["available_tools"] == ["delegate_to_site_agent", read.name,
-                                        "load_site_info_tools"]
+    assert data["available_tools"] == [read.name, "load_site_info_tools"]
     assert set(data["available_tools"]) == {
         item["function"]["name"] for item in model.kwargs["tools"]}
 
@@ -107,17 +106,10 @@ def test_exhausted_result_budget_stops_before_another_read():
     assert read.calls == 2
 
 
-def test_budget_stop_never_restarts_the_request_in_the_legacy_planner(monkeypatch):
-    from agent.runtime.hybrid import HybridArm
-
-    class Legacy:
-        def stream(self, *args, **kwargs):
-            raise AssertionError("Budget exhaustion entered the legacy planner")
-
+def test_budget_stop_does_not_restart_another_runtime():
     model = Model([call("invented") for _ in range(5)])
-    monkeypatch.setattr("agent.runtime.hybrid.get_llm", lambda **kwargs: model)
     with budget_scope(RequestBudget(BudgetLimits(model_calls=5))):
-        events = list(HybridArm(Legacy()).stream(
-            {"messages": [HumanMessage(content="查询作者")]}, {}))
-    assert "已停止继续处理" in events[1][1]["model"]["messages"][0].content
+        session = ToolSession(model, {}, {}, {})
+        result = session.run([HumanMessage(content="查询作者")])
+    assert "已停止继续处理" in result.reply
     assert len(model.prompts) == 5

@@ -1,37 +1,4 @@
-"""公开面闸：`__all__` 必须与「模块级非下划线名字」**逐名相等**（20261018 批 4）。
-
-**为什么要有它**：批 2/批 3 把 `agent/workflows.py`（4737/52）与 `tools/base.py`（5348/141）
-拆成一批**新的公开模块**。主人对「新公开模块要写 `__all__`」这件事的裁决是**社区惯例照收**
-（口径：「以本仓既有规矩为准，**同时按社区惯例收紧**」）。但只写一句散文就等于**又多一份
-手抄名单**——本仓在这一点上栽过太多次（`eval/wordlist_gate.py` 的①那一段整段就在讲这件事）：
-名单只要是人抄的，就会漂；而漂了没有任何东西会红。
-
-所以这里把那条惯例变成**机械判据**：`__all__` 的**集合**必须等于该模块里所有不以 `_` 开头的
-模块级名字（def / class / 赋值 / 注解赋值）。少一个 ⇒ 红（新加的工具没登记）；多一个 ⇒ 红
-（登记了一个不存在的名字——ruff F822 也抓，但这条判据要能独立成立，不许把判据挂在别人身上）。
-**比的是集合不是列表**：`__all__` 的**次序**是排版选择（本仓有几张表按 ruff 那套"常量优先 +
-不区分大小写"排过），判据不锁它，锁的是**成员**。
-
-## 覆盖面：**只覆盖这一批改造产出的模块族**
-  · `tools/**.py`（`__init__.py` 除外）——批 3 按域拆出来的 13 个模块 + 更早的 6 个；
-  · `agent/workflow_*.py` 与 `agent/workflow_defs/*.py`（`__init__.py` 除外）——批 2 拆出来的。
-
-`agent/graph.py` / `agent/authz.py` / `agent/provenance.py` 这些**存量**模块不在本轮范围
-（给全仓每个模块补 `__all__` 不是这次改造的交付，是一次没人要求的大改动）。别顺手扩面：
-扩面之前先问「谁要求了」。
-
-## 唯一的豁免：`tools/base.py`（**具名，附理由，且有反控**）
-机械规则在它身上会**撒谎**：它今天的模块级公开名只剩个位数（`logger` / `API_BASE` /
-`SITE_BASE` / `ADMIN_BASE` / `get_all_tools`），而它真正对外的面是**按原名 re-export 的
-67 件工具**（`from tools.base import ok, tgt, …` 一处没改）。真按机械规则写
-`__all__ = [那几个]`，`from tools.base import *` 会**当场少掉 60 多个名字**——判据亲手制造出
-"看着在跑、其实没跑"。给它手抄一份 67 名的名单又是本仓点名的反模式（「手抄第二份名单」）。
-⇒ 它**不写** `__all__`。这不是"判据够不着就算了"，而是**判据在这里会给出错误答案**，
-所以下面第 ④ 段把这件事钉住：base.py 的真实源码喂进来**必须报红**，且断言机械集合会
-藏掉 ≥60 个真名字（数字判据，不锁那五个字面名）。
-
-用法：.venv/bin/python tests/test_module_exports.py（或 `.venv/bin/python -m pytest -q` 统一跑）
-"""
+"""Public tool exports reject stale or missing names."""
 
 
 from __future__ import annotations
@@ -111,9 +78,6 @@ EXEMPT = {"tools/base.py"}      # 具名豁免，理由见模块头注；第 ④
 
 def scoped_files() -> list[Path]:
     files = [p for p in sorted((ROOT / "tools").glob("*.py")) if p.name != "__init__.py"]
-    files += sorted((ROOT / "agent").glob("workflow_*.py"))
-    files += [p for p in sorted((ROOT / "agent" / "workflow_defs").glob("*.py"))
-              if p.name != "__init__.py"]
     return [p for p in files if str(p.relative_to(ROOT)) not in EXEMPT]
 
 
@@ -148,10 +112,9 @@ _X = 1
     print("\n② 覆盖面：查的文件确实是这一批产出的模块族（scope 写错会**空转**）")
     FILES = scoped_files()
     REL = [str(p.relative_to(ROOT)) for p in FILES]
-    check("范围内文件数 ≥ 20（不是空转）", len(FILES) >= 20, f"{len(FILES)} 个")
-    check("  确实收进了批 3 的 tools 模块与批 2 的 workflow 模块（glob 没写歪）",
-          all(n in REL for n in ("tools/notes.py", "tools/tag_admin.py", "tools/result.py",
-                                 "agent/workflow_menu.py", "agent/workflow_defs/nav_map.py")),
+    check("工具模块扫描不是空转", bool(FILES), f"{len(FILES)} 个")
+    check("  工具注册、标签管理和结果模块均在检查范围内",
+          all(n in REL for n in ("tools/notes.py", "tools/tag_admin.py", "tools/result.py")),
           f"{len(REL)} 个")
     print("\n③ 逐个文件：`__all__` 集合 == 机械集合")
     bad: list[str] = []

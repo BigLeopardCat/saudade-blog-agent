@@ -157,8 +157,8 @@ def test_legacy_tools_share_attempt_budget_and_native_tools_count_only_once():
 def test_read_progress_is_retained_in_native_result_instead_of_restarted_in_legacy():
     class Model:
         replies = iter([AIMessage(content="", tool_calls=[
-            {"name": "fixture_read", "args": {}, "id": "read"}]), AIMessage(content="", tool_calls=[
-                {"name": "delegate_to_site_agent", "args": {}, "id": "delegate"}])])
+            {"name": "fixture_read", "args": {}, "id": "read"}]),
+            AIMessage(content="继续处理已读取的结果。")])
 
         def bind_tools(self, tools, **kwargs):
             return self

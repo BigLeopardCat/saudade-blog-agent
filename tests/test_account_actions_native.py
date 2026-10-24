@@ -297,22 +297,15 @@ def test_cancel_is_durable_and_prevents_later_confirmation(accounts, tmp_path, m
     monkeypatch.setattr(writes, "ledger_for", lambda saver: ledger)
     from langgraph.checkpoint.memory import InMemorySaver
 
-    from agent.agent import create_agent
     from agent.runtime.confirmation import cancel
+    from agent.runtime.native import NativeRuntime
+    from agent.runtime.native_store import NativeConversationStore
 
-    monkeypatch.setattr(
-        "agent.runtime.hybrid.get_llm", lambda **kwargs: pytest.fail("cancel called a model")
-    )
-    runtime = create_agent(checkpointer=InMemorySaver())
-    monkeypatch.setattr(runtime, "stream", lambda *a, **kw: pytest.fail("legacy planner invoked"))
-    runtime.update_state(
-        admin_config(),
-        {
-            "pending_action": prepared.execution["pending_action"],
-            "pending_confirm": prepared.execution["pending_confirm"],
-        },
-        as_node="gate",
-    )
+    runtime = NativeRuntime(NativeConversationStore(InMemorySaver()))
+    runtime.store.update_state(admin_config(), {
+        "pending_action": prepared.execution["pending_action"],
+        "pending_confirm": prepared.execution["pending_confirm"],
+    })
     for _ in range(2):
         result = cancel(runtime, signed, admin_config())
         assert result["cancelled"] and result["event"]["event"] == "cancelled"

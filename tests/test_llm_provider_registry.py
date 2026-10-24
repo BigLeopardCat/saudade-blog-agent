@@ -1,26 +1,4 @@
-"""服务商注册表的机械闸门（20261012）。离线、秒级、零网络零 LLM。
-
-**为什么单独一套**：本轮审计盯的是一族**同一个形状**的 bug —— **"一家一译"的地方只有
-`if/elif`、没有缺省支**。实测炸过的那一次是 `models/llm.py` 的思考开关：缺省支不存在 ⇒
-图内四个调用点写下的 `enable_thinking=False` 被**静默丢掉** ⇒ 多轮累积里那条开着思考的
-assistant 消息回放时缺 `reasoning_content` ⇒ 严格服务商**整轮 400**（生产那几天是 qwen，
-它容忍，于是"什么时候坏的"没人知道）。同一个形状在本仓至少还有两处（启动校验、评审员方言
-表），所以判据钉成"**加一个服务商时哪几格会静默失效**"，而不是只钉那一个函数。
-
-钉住的契约（这里红 = 某条判据被改掉了，改动要同步改这里）：
-
-  · `_thinking_extra`：qwen → `enable_thinking`、deepseek → `thinking.type`；**认不出的
-    provider 返回空 dict 并出声**（一条 WARNING，本进程只报一次），**绝不替它塞别家的键**
-    ——替它猜一个字段名就是把"静默丢"换成"静默错"，两种都是本仓最忌的失效；
-  · `Settings.check_provider()`：认不出 ⇒ raise（**拒绝启动**）；归一化只有 `_provider_prefix`
-    一处，所以 `" DEEPSEEK "` 这种手写 `.env` 的常见形态既过校验也取得到值；
-  · `models/llm.py::DIALECT_PROVIDERS` **覆盖 `KNOWN_LLM_PROVIDERS` 全集**（加服务商却忘了
-    登记方言 ⇒ 这里红；那条路的静默降级是"整份输出作废而没人知道"）。表 20261019 批 G7
-    从 `eval/llm_judge.py` 上移到这里（`eval.*` 不能被生产引，而复盘器要用同一套方言）；
-  · schema 的 `additionalProperties: False` **只长在函数参数的顶层**——内层
-    `calls[].args` / `steps[].{}` 是**自由形状**（键就是被调工具的形参名），在那儿加会
-    把它关死；这条负控与正控一样重要（正控挡住了"忘了写"，负控挡住"顺手写多了"）。
-"""
+"""Provider validation and thinking dialects independent of a planner."""
 
 
 import logging
@@ -36,7 +14,6 @@ sys.path.insert(0, str(ROOT))
 
 
 import models.llm as llm_mod  # noqa: E402
-from agent.planner_llm import build_tool_schema  # noqa: E402
 from config import settings as S  # noqa: E402  （`config/__init__.py` 导出的是**实例**）
 from config.settings import KNOWN_LLM_PROVIDERS, PROVIDER_DEFAULTS, Settings  # noqa: E402
 from eval import llm_judge as judge  # noqa: E402
@@ -92,8 +69,6 @@ class _provider:
         S.llm_provider = self._old
 
 
-def _fn_by_name(role, **kw):
-    return {t["function"]["name"]: t["function"] for t in build_tool_schema(role, **kw)}
 
 
 def _test_known_providers_is_the_table_keys():
@@ -216,52 +191,12 @@ def _test_dialect_table_covers_every_provider():
           and judge.response_format("qwen")["json_schema"]["name"] == "verdict")
 
 
-def _param_objects(tools):
-    """(函数名, parameters) 列表。"""
-    return [(t["function"]["name"], t["function"]["parameters"]) for t in tools]
 
 
-def _test_additional_properties_on_function_params():
-    for role in (None, "admin"):
-        if role is None:
-            tools = build_tool_schema(None)
-        else:
-            tools = build_tool_schema("admin")
-        bad = [n for n, p in _param_objects(tools) if p.get("additionalProperties") is not False]
-        check(f"role={role}：每个技能函数的 parameters 都声明 additionalProperties=False",
-              not bad, f"缺: {bad[:5]}（共 {len(tools)} 个函数）")
 
 
-def _test_additional_properties_on_pseudo_tools():
-    tools = build_tool_schema("admin")
-    pseudo = [n for n, p in _param_objects(tools)
-              if n in ("task_hold", "task_drop", "task_intents")]
-    check("三个伪函数都在（判据的对象存在）", len(pseudo) == 3, str(pseudo))
-    bad = [n for n, p in _param_objects(tools)
-           if n in ("task_hold", "task_drop", "task_intents")
-           and p.get("additionalProperties") is not False]
-    check("伪函数的 parameters 也声明了", not bad, str(bad))
 
 
-def _test_additional_properties_NOT_on_inner_objects():
-    """负控：内层对象是**自由形状**，在那儿加会把它关死。
-
-    `calls[].args` 的键就是被调工具的形参名（`_CALLS_ITEMS`），`steps[].{}` 是登记的
-    步骤；把它们关成 `additionalProperties: False` = 把"任何工具的任何参数"判成非法。
-    正控挡住"忘了写"，这条挡住"顺手写多了"。
-    """
-    fns = _fn_by_name("admin")
-    cq = fns["content_query"]["parameters"]["properties"]["calls"]
-    check("content_query.calls 的 items 上没有 additionalProperties",
-          "additionalProperties" not in cq["items"], str(sorted(cq["items"])))
-    check("  calls[].args 仍是自由对象（没有 properties 白名单）",
-          "additionalProperties" not in cq["items"]["properties"]["args"], "")
-    hold = fns["task_hold"]["parameters"]["properties"]["steps"]["items"]
-    check("task_hold.steps 的 items 上没有 additionalProperties",
-          "additionalProperties" not in hold, str(sorted(hold)))
-    intents = fns["task_intents"]["parameters"]["properties"]["intents"]["items"]
-    check("task_intents.intents 的 items 上没有 additionalProperties",
-          "additionalProperties" not in intents, str(sorted(intents)))
 
 
 def _test_wired_into_server_lifespan():
@@ -273,15 +208,6 @@ def _test_wired_into_server_lifespan():
           and src.index("check_provider()") < src.index("_agent, _arm = _build_arm()"), "")
 
 
-def _test_wire_illegal_anchor_is_stable():
-    """父仓 `scripts/healthcheck.sh` 第 7 项按 `wire_illegal` 这个 ASCII token 扫增量日志
-    ——它是绊线唯一的**自动出口**。句子可以改，**锚点不许改名**（改了就是静默半死：
-    探针照跑、永远扫不到）。"""
-    src = (ROOT / "agent" / "graph.py").read_text(encoding="utf-8")
-    check("graph.py 的 ERROR 行里带着 `wire_illegal` 锚点",
-          'logger.error("[model] wire_illegal' in src, "")
-    check("  同一个 token 也是 trace 事件名（一个事实一个名字）",
-          'record("model", "wire_illegal"' in src, "")
 
 
 def test_llm_provider_registry():
@@ -292,11 +218,7 @@ def test_llm_provider_registry():
                _test_thinking_extra_unknown_provider_speaks_up,
                _test_get_llm_merges_translation_into_extra_body,
                _test_dialect_table_covers_every_provider,
-               _test_additional_properties_on_function_params,
-               _test_additional_properties_on_pseudo_tools,
-               _test_additional_properties_NOT_on_inner_objects,
-               _test_wired_into_server_lifespan,
-               _test_wire_illegal_anchor_is_stable):
+               _test_wired_into_server_lifespan):
         fn()
     print("\n" + ("全部通过 ✅" if not FAILS else f"失败 {len(FAILS)} 项 ❌: {FAILS}"))
 

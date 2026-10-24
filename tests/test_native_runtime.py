@@ -115,11 +115,13 @@ def test_budget_exhaustion_finishes_without_constructing_another_engine():
 
 def test_obsolete_delegate_request_cannot_fall_back():
     model = Model(AIMessage(content="", tool_calls=[
-        {"name": "delegate_to_site_agent", "args": {}, "id": "old"}]))
+        {"name": "delegate_to_site_agent", "args": {}, "id": "old"}]),
+        AIMessage(content="当前请求未能完成。"))
     selected = runtime(model)
     events = run(selected)
-    assert isinstance(events[-1], TurnResult) and "未能完成" in events[-1].reply
-    assert len(model.prompts) == 1
+    assert events[-1] == TurnResult("当前请求未能完成。")
+    assert len(model.prompts) == 2
+    assert "delegate_to_site_agent" not in str(model.menus)
 
 
 @pytest.mark.parametrize("grant", [
@@ -135,17 +137,12 @@ def test_unknown_confirmation_executor_is_rejected_without_model_or_state_change
     assert not model.prompts and not selected.store.load(config()).messages
 
 
-@pytest.fixture(params=["native", "legacy"])
+@pytest.fixture
 def waiting(site, monkeypatch, tmp_path, request):
     ledger = idem.Ledger(str(tmp_path / "native.sqlite3"))
     monkeypatch.setattr(writes, "ledger_for", lambda saver: ledger)
     saver = InMemorySaver()
-    if request.param == "legacy":
-        from agent.agent import create_agent
-        from agent.runtime.graph_store import GraphConversationStore
-        seed = GraphConversationStore(create_agent(checkpointer=saver))
-    else:
-        seed = NativeConversationStore(saver)
+    seed = NativeConversationStore(saver)
     proposal = preparation.prepare_favorite_change.invoke(
         {"action": "add", "article_id": 19}, config=config())
     seed.save_turn(config(), [HumanMessage(content="收藏文章19")], proposal.reply,

@@ -105,40 +105,6 @@ def test_ctx_field_strips_structural_chars():
     _report(bad)
 
 
-def test_plan_separator_never_grows_the_call_list():
-    """通道 ②：工具参数值 → 计划文本的 `TOOLS:` 行（分隔符 `";"`）。
-
-    20260929 生产实证：模型给 `device_oled_draw` 的 `ops` 写了一串用 `;` 分隔的伪指令
-    ⇒ **一条调用裂成 13 条 spec**，真名那条被截断 ⇒ checker 判 BLOCK ⇒ 无回执 ⇒
-    "屏幕画了、台账没记一笔"。守卫是写端的 `_esc_spec`（`;` → `\\u003b`）。
-    """
-    from agent import plan_codec
-
-    bad: list[str] = []
-    print("② 值里的分号裂不出第二条调用")
-    for p in PAYLOADS:
-        spec = f'search_notes(q="{p}")'
-        raw = plan_codec.plan_encode({"workflow": "search_notes", "tools": [spec],
-                                      "chat": False, "reply": "好", "note": ""})
-        got = plan_codec.parse_plan(raw).get("tools") or []
-        if len(got) != 1:
-            bad.append(f"一条调用裂成 {len(got)} 条：{p!r}")
-    print(f"  {'✅' if not bad else '❌'} {len(PAYLOADS)} 条 payload 往返后都仍是 1 条调用"
-          f"  [{len(bad)} 条裂了]")
-    # 反控：把转义还原成裸分号 ⇒ **必须**裂（证明上面那条不是恒真，也证明这个守卫真的
-    # 是"转义"而不是"恰好这些 payload 里没有分号"）
-    spec = 'search_notes(q="a; b; c")'
-    raw = plan_codec.plan_encode({"workflow": "search_notes", "tools": [spec],
-                                  "chat": False, "reply": "好", "note": ""})
-    split = plan_codec.parse_plan(raw.replace("\\u003b", ";")).get("tools") or []
-    ok = len(split) > 1
-    print(f"  {'✅' if ok else '❌'} 反控：把 `\\u003b` 还原成裸 `;` ⇒ 一条裂成 "
-          f"{len(split)} 条（守卫真的是转义，不是碰巧）")
-    if not ok:
-        bad.append("反控没裂 —— 这条判据证明不了什么")
-    _report(bad)
-
-
 def test_fact_mark_guard_is_a_literal_prefix_and_nothing_else():
     """通道 ③：fact 行标记 `〔系统〕 ` —— 判据是**行首字面前缀**，多一个字都不认。
 
@@ -227,7 +193,6 @@ def test_arg_ref_is_anchored_so_prose_stays_prose():
 
 if __name__ == "__main__":
     for _fn in (test_ctx_field_strips_structural_chars,
-                test_plan_separator_never_grows_the_call_list,
                 test_fact_mark_guard_is_a_literal_prefix_and_nothing_else,
                 test_arg_ref_is_anchored_so_prose_stays_prose):
         _fn()
