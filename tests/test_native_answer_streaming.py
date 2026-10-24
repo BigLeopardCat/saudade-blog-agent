@@ -185,3 +185,30 @@ def test_result_budget_stop_is_visible_after_a_streamed_preface():
     assert FIXTURE_CALLS == []
     assert "上限" in "".join(shown)
     assert result.reply == "".join(shown)
+
+
+def test_closing_consumer_closes_provider_even_when_generator_is_retained():
+    closed = threading.Event()
+
+    class IteratorModel(_StreamingModel):
+        def stream(self, prompt, **kwargs):
+            try:
+                yield AIMessageChunk(content="first")
+                yield AIMessageChunk(content="second")
+            finally:
+                closed.set()
+
+    session = ToolSession(IteratorModel([[]]), {}, {}, {})
+    provider = session._model_stream
+    retained = []
+
+    def capture(prompt):
+        iterator = provider(prompt)
+        retained.append(iterator)
+        return iterator
+
+    session._model_stream = capture
+    consumer = session.stream([HumanMessage(content="read")])
+    assert next(consumer).content == "first"
+    consumer.close()
+    assert retained and closed.is_set()

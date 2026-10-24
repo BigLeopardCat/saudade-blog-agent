@@ -156,16 +156,19 @@ class HybridArm:
         session = ToolSession(model, config, self._initial_tools(own_enabled), domains, adapt)
         streamed_reply = False
         native_stream = session.stream(prompt)
-        while True:
-            try:
-                chunk = next(native_stream)
-            except StopIteration as stop:
-                outcome = stop.value
-                break
-            if session.used_stream_api:
-                streamed_reply |= bool(str(getattr(chunk, "content", "") or "").strip())
-            if session.used_stream_api and getattr(chunk, "content", None):
-                yield "messages", (chunk, {"langgraph_node": "model"})
+        try:
+            while True:
+                try:
+                    chunk = next(native_stream)
+                except StopIteration as stop:
+                    outcome = stop.value
+                    break
+                if session.used_stream_api:
+                    streamed_reply |= bool(str(getattr(chunk, "content", "") or "").strip())
+                if session.used_stream_api and getattr(chunk, "content", None):
+                    yield "messages", (chunk, {"langgraph_node": "model"})
+        finally:
+            native_stream.close()
         if outcome is None:
             yield from self.legacy.stream(state, config, stream_mode=stream_mode, **kwargs)
             return
