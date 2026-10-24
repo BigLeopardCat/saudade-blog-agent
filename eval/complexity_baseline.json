@@ -83,10 +83,6 @@
     "c": 39,
     "lines": 235
   },
-  "server.py::chat_stream.event_stream": {
-    "c": 33,
-    "lines": 186
-  },
   "tests/test_action_text.py::test_action_text": {
     "c": 36,
     "lines": 321

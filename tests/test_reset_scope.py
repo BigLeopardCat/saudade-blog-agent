@@ -1,39 +1,6 @@
-"""`__RESET__` 的 scope 契约（20261001）：命令缓冲该不该跟着一起作废。
-
-## 为什么这条判据存在
-
-`__CMD__` 帧是 checker PASS 之后下发的**已发生事实**（execute 真跑过）。
-而 `__RESET__` 此前只有一种含义：连它一起作废。两个方向都实测过，都有害：
-
-  · **无条件清** ⇒ 终局 fallback 之后，气泡最前面那块**系统自己印的**事实块写着
-    「页面已跳转：…」，而命令已经被清掉、页面根本没跳——**系统说了它没做的事**
-    （20261001 夜间 `nav_article_target` 实证：首跑 narrator 空内容 ⇒ 打回 ⇒ 主人
-    读到"已跳转"、页面纹丝不动）。代价还有第二层：gate 的两条声称判据（5g/5h）
-    当时都因为"判死就等于把已生效的命令吞掉"而**降级成只记不判**——一条真实的
-    幻觉也就跟着漏过去了。
-  · **无条件不清** ⇒ gate 打回重规划那一格：决策已经被推翻、新一轮要重新决定做什么，
-    旧命令却照旧执行，主人看到的是"它道歉了但还是跳了"。
-
-所以这不是取舍，是**两个不同的格**：帧形改成 `__RESET__:<scope>:<理由>`——
-`all`（决策被推翻）清、`text`（决策没被推翻、只否掉措辞）不清。
-
-## 缺省值为什么必须是 `all`
-
-三端（Python / Rust / 前端）版本错配时按哪个走，是要选一侧的：缺省取 `all`，
-错配退化成"命令被吞"（少跳一次、主人看得见事实块会去问），而不是"道歉了还是跳了"
-（静默地把一个被否定的动作执行掉）。**这一侧不许改**。
-
-## 判据落在哪
-
-  · `parse_reset` 的行为（golden 读侧的唯一实现，纯函数）；
-  · `server.py` 两个调用点的 scope 各归各（源码锚定 + 顺序断言）；
-  · 前端读的是**同一份字面**（跨端守卫，20261001 起读本仓 `frontend/` 下那份）；
-  · `run_golden` 的 `forbid_fallback` 判的是 scope 而不是 `resets` 计数（20261002 补，
-    见 ④ 节——同一条键、同一个计数，两个 scope 的结论**相反**）。
-"""
+"""Read reset scopes in archived evaluation reports; live SSE has typed events."""
 
 
-import re
 import sys
 from pathlib import Path
 
@@ -80,23 +47,12 @@ def _test_parse_reset():
 
 
 def _test_frontend_reads_same_scope():
-    print("\n[跨端] 前端解析的是同一份 scope 字面")
-    # 读的是**本仓**这份（20261001 起 `frontend/` 随看板娘一起从博客仓搬进来、按 MIT 分发）。
-    # 以前这里走 `_parent_repo.read(..., "frontend/public/live2d-widgets/chat-stream.js")`：
-    # 搬完之后父仓已经没有那个文件了，而 `_parent_repo.parent_root()` 在本机会回落到兄弟
-    # 目录、CI 上则落了空 ⇒ **本机绿、CI 红**（正是这条守卫要防的那种失效，见文件头注）。
+    # Archived evaluation reports still have reset scopes. Live streams have no
+    # reset command: model text cannot erase replies or previously queued actions.
     src = (ROOT / "frontend/public/live2d-widgets/chat-stream.js").read_text(encoding="utf-8")
-    check("前端只认 all / text 两个取值", bool(re.search(r"\(all\|text\)", src)),
-          repr(re.findall(r"\([a-z|]+\):", src)[:5]))
-    check("缺 scope 段时默认 all（与 Python 侧同一侧）",
-          "const scope = mScope ? mScope[1] : 'all';" in src)
-    check("只有 scope=all 才清命令缓冲",
-          "if (scope !== 'text') programCmds = [];" in src)
-    # 反向锁：除声明（`let programCmds = []`）之外，全文件清空这个缓冲只许出现一次
-    # （就是上面那条带 scope 的）。多出来的一处必然是"又写了个无条件清"——
-    # 而它长得完全正常，上面那三条正则一条都抓不住。
-    clears = len(re.findall(r"(?<!let )programCmds = \[\]", src))
-    check(f"除声明外清空命令缓冲只出现一次（实得 {clears}）", clears == 1, str(clears))
+    check("运行时消费具名事件", "__waifuChatProtocol.createStream" in src)
+    check("正文不再识别重置控制前缀", "text === '__RESET__'" not in src)
+    check("命令缓冲只初始化一次", src.count("programCmds = []") == 1)
 
 
 def _test_forbid_fallback_reads_scope():

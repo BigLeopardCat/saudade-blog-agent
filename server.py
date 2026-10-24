@@ -14,7 +14,7 @@ from importlib.metadata import PackageNotFoundError
 from importlib.metadata import version as _pkg_version
 
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.responses import JSONResponse
 
 # 断言验签（20261020，ADR-0014）。`InvalidTokenError` 是 PyJWT 全部验签失败的基类。
 from jwt import InvalidTokenError
@@ -27,6 +27,9 @@ from agent import (
     runtime_probe,  # /version 与 /ready 的判定逻辑（纯函数，见该模块头注）
 )
 from agent.api.context import build_messages
+from agent.api.events import control_event, text_stream
+from agent.api.events import frame as sse_frame
+from agent.api.events import response as stream_response
 from agent.api.schemas import ChatRequest, ChatResponse, HistoryItem
 from agent.api.schemas import QuotaInfo as QuotaInfo
 from agent.approval_api import router as approval_router
@@ -388,7 +391,7 @@ def _summarize_dialogue(user_msg: str, history: list[HistoryItem], old_summary: 
 async def chat(req: ChatRequest, request: Request):
     if _agent is None:
         raise HTTPException(503, "Agent not initialised")
-    principal = _resolve_principal(request, req.user_id)   # 身份以签名为准（见 _resolve_principal）
+    principal = _resolve_principal(request, req.user_id)
     req.user_id = principal.uid
 
     # Host quota decisions precede admission and any model work.
@@ -549,48 +552,18 @@ def _record_invalid_confirm(trace_id: str, uid: int, conv_id, token_len: int,
         logger.exception("invalid confirm trace dump failed")
 
 
-async def _invalid_confirm_stream():
-    """确认令牌验不过时的最小 SSE 流：**一句话 + 结束帧，零执行零 LLM**。
+INVALID_CONFIRM_TEXT = (
+    "这次确认已经失效了（超过 10 分钟、或者不是在同一个会话里点的），我没有执行任何改动。"
+    "需要的话跟我说一遍要做什么，我再问一次。"
+)
 
-    刻意复用正常帧协议（AI 文本帧 + `__END__`）而不是直接抛 4xx：前端这条隐藏
-    请求走的是同一个 `sendMessage` 流循环，返 HTTP 错误会落进"发送失败"兜底、
-    弹一条重试按钮（隐藏轮不该出现任何用户可见的重试控件）。走正常帧则：
-    Rust 照常落库（主人回头能看见"确认已失效，没有执行任何改动"这句），
-    前端照常渲染成一条 assistant 消息。
-
-    正文里点明两种失效原因（超时 / 不同会话）：令牌是四重绑定的，主人看到的
-    "我明明点了"多数是其中一种，说清楚才知道下一步该做什么。
-    """
-    text = "这次确认已经失效了（超过 10 分钟、或者不是在同一个会话里点的），我没有执行任何改动。需要的话跟我说一遍要做什么，我再问一次。"
-    yield f"data: {json.dumps(text, ensure_ascii=False)}\n\n"
-    yield "data: __END__\n\n"
-
-
-# 「挑选记号读不懂」那一轮的正文（20261010 从下面的生成器里提出来——**同一句话**同时是
-# 生产回复与评测断言的对象，抄第二份就是两处会各漂各的措辞）。评测侧 `eval/run_golden.py`
-# 的这一支不进图（与生产同形：零执行零 LLM），它要断言"主人看到的是这一句"，只能读这里。
 INVALID_PICK_TEXT = ("我没看清你要处理的是哪一个（这张卡上的选择记号读不出来），"
                      "所以这次**一个任务都没有处理**。要处理的话跟我说一遍，我再问一次。")
 
 
-async def _invalid_pick_stream():
-    """「只办其中一件」那个记号读不懂时的最小 SSE 流（20260929 批 F）：一句话 + 结束帧。
-
-    形状逐字照抄上面的 `_invalid_confirm_stream`（走正常帧协议而不是 4xx，理由见
-    它那段论证），**换的只有正文**：这里令牌本身是好的、失效的不是"确认"而是"选的是
-    哪一件"。两句话必须分开说——把它们混成同一句，主人下次还是不知道该重点一次卡
-    还是该说一遍要求；而这两条路的下一步动作确实不同。
-
-    正文住在上面的 `INVALID_PICK_TEXT`（只有一处字面）；本生成器只负责把它包成帧。
-    """
-    yield f"data: {json.dumps(INVALID_PICK_TEXT, ensure_ascii=False)}\n\n"
-    yield "data: __END__\n\n"
 
 
-# 额度用尽的那句话（跨语言契约 C7）。**只有这一处**——Rust 侧不合成任何帧
-# （它为什么不该合成，见 `_quota_blocked_stream` 的 docstring），前端不兜底这句话。
-# 两句结构：① 说清是什么（终身额度用完，不是故障、不是"我不会"）；② 点明下一步
-# 做什么（去个人中心申请重置）。缺了第二句，访客只会以为助手坏了、反复重发。
+
 QUOTA_BLOCKED_TEXT = (
     "额度用完啦（{limit} 轮终身额度，已经全部用掉了）……主人可以去个人中心的"
     "「对话额度」提交一份重置申请，管理员批准之后额度就会清零；在那之前我没法再"
@@ -599,8 +572,7 @@ QUOTA_BLOCKED_TEXT = (
 
 
 def _quota_blocked_text(limit: int) -> str:
-    """按额度上限渲染 C7。`limit<=0`（旧 Rust 没带 chat_quota 却被判拦截）时
-    退化成一句不报数字的话——**宁可不说数字，也不能说错数字**。"""
+    """Return a deterministic refusal without tools or model calls."""
     if limit > 0:
         return QUOTA_BLOCKED_TEXT.format(limit=limit)
     return ("额度用完啦（终身额度已经全部用掉了）……主人可以去个人中心的"
@@ -608,30 +580,20 @@ def _quota_blocked_text(limit: int) -> str:
             "我没法再回答新的问题了呢，抱歉喵 🐾")
 
 
-async def _quota_blocked_stream(limit: int):
-    """额度用尽时的最小 SSE 流：**一句话 + 结束帧，零 LLM、零工具、零计数**。
 
-    形状照抄上面的 `_invalid_confirm_stream`（这是仓内对"确定性拒答"已经裁过一次的
-    形态），两条论证逐条复用：
 
-    ① **走正常帧协议而不是 4xx**。前端 `chat-stream.js` 的 `if (!resp.ok)` 是这条
-       链路**唯一**的错误分支：返 4xx/5xx 会落进"发送失败"兜底弹重试按钮，而这不是
-       发送失败。更要紧的是反过来的那一半——`prepare_chat` 的早期出口是
-       **HTTP 200 + JSON body**，`resp.ok` 成立 ⇒ 前端一路进 SSE 解析 ⇒ 而
-       `serde_json` 把 body 里的换行转义了，**一个 `\n\n` 都不产生** ⇒ 零帧 ⇒
-       气泡被当空回复移除 ⇒ **主人什么都看不到**。拒答必须骑着帧协议出门。
-    ② **照常落库**：Rust 侧这一轮的用户消息与这句拒答都正常入库（用户拍板：
-       额度管"能不能用"，记录管"发生过什么"；拦截轮**只少一件事——计数器不动**）。
 
-    **调用点在 `_try_acquire_slot()` 之前**（见 chat_stream）：被拦的人连点发送
-    不该占住 LLM 的并发槽——他没有在用 LLM。
-    """
-    yield f"data: {json.dumps(_quota_blocked_text(limit), ensure_ascii=False)}\n\n"
-    yield "data: __END__\n\n"
+@app.post("/chat/stream/v2")
+async def chat_stream_v2(req: ChatRequest, request: Request):
+    return await _chat_stream(req, request, typed=True)
 
 
 @app.post("/chat/stream")
 async def chat_stream(req: ChatRequest, request: Request):
+    return await _chat_stream(req, request, typed=False)
+
+
+async def _chat_stream(req: ChatRequest, request: Request, *, typed: bool):
     # request: FastAPI 注入的原始请求对象（req 是 body 模型）——断连感知用，
     # 见 event_stream 的 receive 监听任务（20260827b 断连中断修复）
     logger.info("POST /chat/stream user=%s msg=%r needs_summary=%s",
@@ -654,9 +616,7 @@ async def chat_stream(req: ChatRequest, request: Request):
                            principal.uid, req.conversation_id, len(req.confirm_token))
             _record_invalid_confirm(get_trace_id(), principal.uid,
                                     req.conversation_id, len(req.confirm_token))
-            return StreamingResponse(
-                _invalid_confirm_stream(), media_type="text/event-stream",
-                headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+            return stream_response(text_stream(INVALID_CONFIRM_TEXT), typed=typed)
         # 只办其中一件（20260929 批 F）：卡片列了 N 件时主人可以点「只办 1」——
         # 前端带回来的只是一个**下标**，收窄在**验签之后、任何消费之前**做
         # （`_build_messages` 与原生运行时读到的都必须是
@@ -674,18 +634,14 @@ async def chat_stream(req: ChatRequest, request: Request):
                                         req.conversation_id, len(req.confirm_token),
                                         reason="invalid_pick", detail=pick_err,
                                         exit_reason="invalid_confirm_pick")
-                return StreamingResponse(
-                    _invalid_pick_stream(), media_type="text/event-stream",
-                    headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+                return stream_response(text_stream(INVALID_PICK_TEXT), typed=typed)
             logger.info("[confirm] 确认收窄：%d 件 → 1 件（%s）", before,
                         (grant.get("specs") or [{}])[0].get("tool"))
     # Rust 的额度裁决先于并发准入；remaining=0 不能代替 quota_blocked。
     if req.quota_blocked:
         _limit = req.chat_quota.limit if req.chat_quota is not None else 0
         logger.info("[quota] 额度用尽，本轮零执行（uid=%s limit=%s）", req.user_id, _limit)
-        return StreamingResponse(
-            _quota_blocked_stream(_limit), media_type="text/event-stream",
-            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+        return stream_response(text_stream(_quota_blocked_text(_limit)), typed=typed)
     # The permit covers preparation and every worker job until actual completion.
     if not await _try_acquire_slot():
         raise HTTPException(503, "Agent busy（并发已满），请稍后重试")
@@ -739,13 +695,6 @@ async def chat_stream(req: ChatRequest, request: Request):
         # 可观测性：请求生命周期账本（帧数/退出原因，finally 汇总）
         frames = 0
         end_reason = "unknown"
-        nav_line = ""
-        # 命令帧独占一行契约（20260903 实证）：execute 的命令帧先于 narrator
-        # 叙述帧到达，Rust 存库（strip_command_lines）与前端（cleanAgentText）
-        # 都是行级过滤——命令与正文无换行拼接成单行时整行被剥空（chat_history
-        # 3465 空行 → 转跳后回复丢失）。yield 出命令帧后置位；下一个文本帧
-        # （叙述首帧或连发的命令帧）前插换行，保证命令各自独占一行
-        pending_nl = False
         had_output = False
         last_frame = started
         try:
@@ -763,13 +712,13 @@ async def chat_stream(req: ChatRequest, request: Request):
                         end_reason = "total_timeout"
                         logger.error("Chat stream total timeout (%.0fs) reached, aborting", elapsed)
                         progress.mark("error")
-                        yield f"data: __ERROR__:{json.dumps('生成时间过长，请稍后重试', ensure_ascii=False)}\n\n"
+                        yield sse_frame("error", "生成时间过长，请稍后重试")
                         return
                     if loop.time() - last_frame >= STREAM_IDLE_TIMEOUT:
                         end_reason = "idle_timeout"
                         logger.error("Chat stream idle timeout (%.0fs), aborting", elapsed)
                         progress.mark("error")
-                        yield f"data: __ERROR__:{json.dumps('服务响应超时，请稍后重试', ensure_ascii=False)}\n\n"
+                        yield sse_frame("error", "服务响应超时，请稍后重试")
                         return
                     continue
                 last_frame = loop.time()
@@ -791,74 +740,27 @@ async def chat_stream(req: ChatRequest, request: Request):
                                  type(chunk).__name__, chunk, exc_info=chunk)
                     # Emit only the safe public message as a JSON payload.
                     progress.mark("error")
-                    yield f"data: __ERROR__:{json.dumps(PRODUCER_ERROR_TEXT, ensure_ascii=False)}\n\n"
+                    yield sse_frame("error", PRODUCER_ERROR_TEXT)
                     return
-                # Native progress/confirmation control frames are already
-                # protocol-safe strings; they are never model/node events.
-                # __CONFIRM__（20260921）走同一族：**必须 JSON 编码**（帧体是
-                # `__CONFIRM__:<json>`，裸帧在 Rust 的 JSON 解析分支之前拦才行，
-                # 那种做法漏一次就把整坨 JSON 累积进回复并落库）。Rust 侧同族处理
-                # ——只转发、不累积、不落库。
-                if isinstance(chunk, str) and (chunk.startswith("__PROCESS__")
-                                               or chunk.startswith("__CONFIRM__")):
-                    had_output |= chunk.startswith("__CONFIRM__")
+                if isinstance(chunk, str):
+                    try:
+                        kind, payload = control_event(chunk)
+                    except ValueError:
+                        end_reason = "producer_protocol_error"
+                        progress.mark("error")
+                        yield sse_frame("error", PRODUCER_ERROR_TEXT)
+                        return
+                    had_output |= kind in ("confirmation", "command")
                     frames += 1
-                    if chunk.startswith("__PROCESS__"):
+                    if kind == "progress":
                         progress.mark("progress")
-                    yield f"data: {json.dumps(chunk, ensure_ascii=False)}\n\n"
-                    continue
-                if isinstance(chunk, str) and chunk.startswith("__PENDING__:"):
-                    # 跨轮待办帧（20260923）：与 __EXEC__ 同族——同样**必须带
-                    # "data: " 前缀**（Rust 的 SSE 解析是 strip_prefix(b"data: ")，
-                    # 裸 yield 到不了落库分支），Rust 落库后吞掉、不转发前端
-                    # （前端无此帧协议，透传会被当正文渲染）。
-                    yield f"data: {chunk}\n\n"
-                    continue
-                if isinstance(chunk, str) and chunk.startswith("__CMD__:"):
-                    # 连线命令帧（20260926 批 2）：命令从"工具返回的字符串"搬到回执行的
-                    # `cmd`，由 producer 逐条发结构化 JSON（见那里"为什么从 producer 发"）。
-                    # 三件事必须都做，漏任一件都是静默坏路：
-                    #   ① 带 "data: " 前缀转发——Rust 的 SSE 解析是 `strip_prefix(b"data: ")`，
-                    #      裸 yield 到不了它的分支（20260904 `__EXEC__` 上线首轮就这样翻过车）；
-                    #   ② 置 `pending_nl`——命令帧必须**独占一行**（20260903 实证：命令与叙述
-                    #      无换行拼接成单行时，Rust 存库的 `strip_command_lines` 与前端
-                    #      `cleanAgentText` 都是行级过滤，会把整行剥空 ⇒ 转跳后回复丢失）；
-                    #   ③ 置 `nav_line`——决定收尾发 `__NAV_END__` 还是 `__END__`，
-                    #      不置的话前端不知道这一轮有导航、收尾不执行命令。
-                    had_output = True
-                    frames += 1
-                    nav_line = chunk
-                    pending_nl = True
-                    yield f"data: {chunk}\n\n"
-                    continue
-                if isinstance(chunk, str) and chunk.startswith("__EXEC__:"):
-                    # 跨轮执行记忆帧（20260904 C3）：Rust 收帧解析落库 execution_log，
-                    # 不转发前端（前端无此帧兜底，Rust 吞掉不 yield）。
-                    # ★ 必须带 "data: " 前缀（20260904 上线首轮 E2E 抓出）：Rust 的
-                    # SSE 帧解析 strip_prefix(b"data: ") 无前缀即空 payload 丢弃——
-                    # 裸 yield 的 __EXEC__ 从未到达 Rust 落库分支。golden 内部链路
-                    # 不经 SSE 文本协议（queue 直收 str）故测不到，只有线上 E2E 能暴露
-                    yield f"data: {chunk}\n\n"
-                    continue
-                if isinstance(chunk, str) and chunk.startswith("__TASK__:"):
-                    # 任务登记帧（20260927 批 D）：与 __PENDING__ 同族同规矩——
-                    # **必须带 "data: " 前缀**（Rust 的 SSE 解析是 strip_prefix(b"data: ")，
-                    # 裸 yield 到不了它的落库分支），Rust 收到即写 agent_task、不转发前端。
-                    yield f"data: {chunk}\n\n"
+                    yield sse_frame(kind, payload)
                     continue
                 if isinstance(chunk, AIMessageChunk) and chunk.content:
                     text = str(chunk.content)
                     had_output |= progress.reply(text)
                     frames += 1
-                    # 命令帧独占一行契约：命令帧后第一个叙述帧前插换行（若 LLM
-                    # 没自带头部换行）——叙述 delta 任意切分，只在此处加一次，
-                    # 后续 delta 内联，绝不能逐帧加换行
-                    if pending_nl:
-                        if not text.startswith("\n"):
-                            text = "\n" + text
-                        pending_nl = False
-                    # JSON 编码避免文本内的 \n\n 破坏 SSE 帧边界
-                    yield f"data: {json.dumps(text, ensure_ascii=False)}\n\n"
+                    yield sse_frame("text", text)
 
             # 空输出兜底：整轮无任何帧（qwen 偶发空内容）→ 补发人设内恢复语，
             # 前端不会静默无感知（Rust 空回复不存历史、UI 无任何反馈即"卡死"）
@@ -866,15 +768,15 @@ async def chat_stream(req: ChatRequest, request: Request):
                 logger.warning("Chat stream ended with no output (agent produced no text/no command)")
                 frames += 1
                 progress.mark("reply")
-                yield f"data: {json.dumps(_RECOVERY_SENTENCE, ensure_ascii=False)}\n\n"
+                yield sse_frame("text", _RECOVERY_SENTENCE)
 
             # 独立摘要结果帧（必须在 __END__ 之前：Rust 收到 __END__ 即终止解析）
             if summary_task is not None:
                 new_summary = (await summary_task).strip()
                 if new_summary:
-                    yield f"data: __SUMMARY__:{json.dumps(new_summary, ensure_ascii=False)}\n\n"
+                    yield sse_frame("summary", new_summary)
 
-            yield f"data: __{'NAV_END' if nav_line else 'END'}__\n\n"
+            yield sse_frame("done", {})
         except asyncio.CancelledError:
             # 客户端断开 → starlette listen_for_disconnect → cancel_scope.cancel()
             # → 本生成器抛 CancelledError（见上方机制注释）。标记断连并重抛——
@@ -913,15 +815,7 @@ async def chat_stream(req: ChatRequest, request: Request):
             finally:
                 jobs.close()
 
-    return StreamingResponse(
-        managed_stream(),
-        media_type="text/event-stream",
-        headers={
-            "Cache-Control": "no-cache",
-            "Connection": "keep-alive",
-            "X-Accel-Buffering": "no",
-        },
-    )
+    return stream_response(managed_stream(), typed=typed)
 
 
 # ---------------------------------------------------------------------------

@@ -8,6 +8,7 @@
 | 位置 | 职责 |
 | --- | --- |
 | `server.py` | 应用生命周期、HTTP 路由、中间件、SSE 和运行资源接线；继续按边界拆分 |
+| `agent/api/events.py` | 具名 SSE 事件、正文编码和响应头 |
 | `agent/api/schemas.py` | 聊天请求、响应和字段限额，与宿主 HTTP 契约对应 |
 | `agent/api/context.py` | HTTP 请求到标准消息的适配，处理宿主历史回放和图片 |
 | `agent/api/host_context.py` | 有界的时间、额度、历史动作和开放任务数据投影 |

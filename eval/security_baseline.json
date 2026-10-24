@@ -22,7 +22,7 @@
   "targets": [
     "."
   ],
-  "total": 80,
+  "total": 79,
   "nosec": 0,
   "by_key": {
     "agent/adminops_tags.py::B105": 5,
@@ -32,7 +32,6 @@
     "agent/reports.py::B105": 2,
     "eval/admin_report_probe.py::B310": 1,
     "eval/admin_write_probe.py::B105": 2,
-    "eval/admin_write_probe.py::B110": 1,
     "eval/admin_write_probe.py::B112": 1,
     "eval/admin_write_probe.py::B310": 3,
     "eval/arm_capability.py::B112": 1,
