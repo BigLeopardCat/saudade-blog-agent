@@ -31,8 +31,7 @@ from utils.trace import record
 
 logger = logging.getLogger(__name__)
 
-# 原因码：**三处同批改**（本文件的帧与取回、`agent/block_reasons.py` 的 REASONS、
-# `server.py` 的 `_REASON_CN`）。前两处只改一处会当场红（既有判据对着比这两张表）。
+# 原因码与 agent/block_reasons.py 的共享展示表保持一致。
 REASON_OUTCOME_UNKNOWN = "write_outcome_unknown"
 
 # 账本在场时**必须**的 checkpoint 档位。理由与实测对照见 `require_sync_durability`。

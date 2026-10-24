@@ -352,7 +352,7 @@ def ref_error_frame(reason: str) -> ToolResult:
 
     `reason` 是 `"<原因码>:<引用原文>"`（见 `resolve_args`），所以**两格取的不是
     同一段**：帧文里带全（planner 要照着那串引用去改参数），`meta["reason"]` 只放
-    冒号前的原因码（`_check_spec` 拿它当 blocked 的码，`server._REASON_CN` 按它取
+    冒号前的原因码（`_check_spec` 拿它当 blocked 的码，`agent.block_reasons` 按它取
     中文；把 `:ref` 一起塞进去会得到一个查不到中文的码）。
     """
     return error_frame(

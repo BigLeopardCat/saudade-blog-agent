@@ -1,10 +1,12 @@
 """Pending favorite changes survive chat; cancellation invalidates old grants."""
 
+
 import asyncio
 import json
 
 import pytest
 from _own_support import config
+from _service import app
 from langchain_core.messages import AIMessage, AIMessageChunk, HumanMessage
 from langgraph.checkpoint.memory import InMemorySaver
 
@@ -178,17 +180,17 @@ def test_storage_failure_emits_no_cancellation_and_old_card_still_cannot_write(
 
 def test_stream_cancels_host_pending_and_routes_revoked_card_after_runtime_switch(
         waiting, monkeypatch, site):
-    import server
+    from agent.api.routes import chat as server
     from agent.runtime.native import NativeRuntime
     from agent.runtime.native_store import NativeConversationStore
 
     runtime, proposal, ledger = waiting
 
     async def collect(runtime, grant=None):
-        monkeypatch.setattr(server, "_agent", runtime)
+        monkeypatch.setattr(app.state, "runtime", runtime)
         queue = asyncio.Queue()
         producer = asyncio.create_task(asyncio.to_thread(
-            server._run_agent_stream_to_queue, [HumanMessage(content="取消待办")],
+            server.stream_to_queue, app.state.runtime, [HumanMessage(content="取消待办")],
             "conv_42", queue, asyncio.get_running_loop(), user_id=7,
             principal=config()["configurable"]["principal"], conversation_id=42,
             confirm_grant=grant))
@@ -282,12 +284,12 @@ def test_cancellation_api_checks_signed_identity_and_never_calls_a_model(
     from fastapi import FastAPI
     from fastapi.testclient import TestClient
 
-    import server
-    from agent.approval_api import router
+    from agent.api.routes import chat as server
+    from agent.api.routes.conversations import router
 
     runtime, proposal, ledger = waiting
     token = proposal.execution["pending_confirm"]["token"]
-    monkeypatch.setattr(server, "_agent", runtime)
+    monkeypatch.setattr(app.state, "runtime", runtime)
     monkeypatch.setattr(server.settings, "agent_require_assertion", True)
     from agent.api import authentication
     monkeypatch.setattr(authentication, "verify_assertion_claims", lambda tok: (
@@ -303,10 +305,11 @@ def test_cancellation_api_checks_signed_identity_and_never_calls_a_model(
                 return connection.finish(*args)
 
     monkeypatch.setattr(writes, "ledger_for", lambda saver: Store())
-    app = FastAPI()
-    app.state.workers = service_workers
-    app.include_router(router(lambda: server._agent, server._resolve_principal))
-    with TestClient(app) as client:
+    isolated = FastAPI()
+    isolated.state.workers = service_workers
+    isolated.state.runtime = runtime
+    isolated.include_router(router)
+    with TestClient(isolated) as client:
         body = {"user_id": 7, "conversation_id": 42, "token": token}
         assert client.post("/confirmation/cancel", json=body).status_code == 401
         headers = {"X-Agent-Assertion": "fixture"}

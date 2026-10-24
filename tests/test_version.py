@@ -37,6 +37,7 @@ from datetime import datetime
 from pathlib import Path
 
 from _judge import collector
+from _service import service_request
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -44,8 +45,8 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 
-import server  # noqa: E402
 from agent import runtime_probe  # noqa: E402
+from agent.api.routes import operations as server  # noqa: E402
 from config.settings import settings  # noqa: E402
 
 FAILED: list[str] = []
@@ -53,7 +54,7 @@ check = collector(FAILED)
 
 
 def call() -> dict:
-    return asyncio.run(server.version())
+    return asyncio.run(server.version(service_request()))
 
 
 def test_version():

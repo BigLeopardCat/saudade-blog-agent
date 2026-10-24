@@ -1,5 +1,6 @@
 """Actual service shutdown ordering with blocked workers and fake persistence."""
 
+
 import asyncio
 import secrets
 import threading
@@ -8,9 +9,13 @@ from types import SimpleNamespace
 
 import httpx
 import pytest
+from _service import app, service_request
 
-import server
 from agent import checkpoint
+from agent.api import dependencies
+from agent.api import lifecycle as app_lifecycle
+from agent.api.routes import chat as server
+from agent.api.routes import operations
 from agent.runtime import confirmation
 from agent.runtime.control import RequestControl
 from agent.runtime.workers import RequestWorkers
@@ -25,10 +30,10 @@ def control():
 def startup(monkeypatch):
     events = []
     monkeypatch.setattr(settings, "llm_provider", "qwen")
-    monkeypatch.setattr(server, "setup_logging", lambda: None)
-    monkeypatch.setattr(server, "_build_arm", lambda: (object(), "native"))
-    monkeypatch.setattr(server.wordgraph, "warm", lambda: events.append("wordgraph"))
-    monkeypatch.setattr(server.rag_search, "warm", lambda: events.append("rag"))
+    monkeypatch.setattr(app_lifecycle, "setup_logging", lambda: None)
+    monkeypatch.setattr(app_lifecycle, "build_runtime", lambda: (object(), "native"))
+    monkeypatch.setattr(app_lifecycle.wordgraph, "warm", lambda: events.append("wordgraph"))
+    monkeypatch.setattr(app_lifecycle.rag_search, "warm", lambda: events.append("rag"))
     monkeypatch.setattr(checkpoint, "close_pool", lambda: events.append("pool_closed"))
     return events
 
@@ -38,24 +43,24 @@ def test_partial_startup_failure_closes_resources(startup, monkeypatch, fail_at)
     seen = []
 
     def fail():
-        seen.append(server.app.state.workers)
+        seen.append(app.state.workers)
         raise ValueError("startup fixture failed")
 
     if fail_at == "provider":
         monkeypatch.setattr(type(settings), "check_provider", lambda self: fail())
     elif fail_at == "runtime":
-        monkeypatch.setattr(server, "_build_arm", fail)
+        monkeypatch.setattr(app_lifecycle, "build_runtime", fail)
     else:
         monkeypatch.setattr(RequestWorkers, "warm_up", lambda self, function: fail())
 
     async def run():
         with pytest.raises(ValueError, match="startup fixture failed"):
-            async with server.lifespan(server.app):
+            async with app_lifecycle.lifespan(app):
                 pytest.fail("failed startup yielded an application")
 
     asyncio.run(run())
     assert startup == ["pool_closed"]
-    assert server._agent is None and server.app.state.workers is None
+    assert app.state.runtime is None and app.state.workers is None
     with pytest.raises(RuntimeError, match="shutdown"):
         seen[0].executor.submit(lambda: None)
 
@@ -65,14 +70,14 @@ def test_lifespan_can_restart_with_fresh_executor_and_admission(startup):
 
     async def run():
         for _ in range(2):
-            async with server.lifespan(server.app):
-                workers = server.app.state.workers
+            async with app_lifecycle.lifespan(app):
+                workers = app.state.workers
                 owners.append(workers)
-                permits.append(server._stream_slots)
-                assert server._agent is not None
-                assert await server._try_acquire_slot()
-                server._release_slot()
-            assert server._agent is None and server.app.state.workers is None
+                permits.append(app.state.chat_slots)
+                assert app.state.runtime is not None
+                assert await dependencies.try_acquire_slot(service_request())
+                dependencies.release_slot(service_request())
+            assert app.state.runtime is None and app.state.workers is None
             with pytest.raises(RuntimeError, match="shutdown"):
                 workers.executor.submit(lambda: None)
 
@@ -93,9 +98,9 @@ def test_shutdown_drains_workers_and_trace_before_closing_pool(startup, monkeypa
         startup.append("worker_exit")
 
     async def run():
-        lifecycle = server.lifespan(server.app)
+        lifecycle = app_lifecycle.lifespan(app)
         await lifecycle.__aenter__()
-        workers = server.app.state.workers
+        workers = app.state.workers
         loop = asyncio.get_running_loop()
         jobs = workers.request(loop, lambda: startup.append("released"), control=control(),
                                on_complete=lambda: startup.append("trace_closed"))
@@ -106,8 +111,8 @@ def test_shutdown_drains_workers_and_trace_before_closing_pool(startup, monkeypa
             await asyncio.sleep(.02)
             assert workers.closing and jobs.control.stop_event.is_set()
             assert not ending.done() and "pool_closed" not in startup
-            assert not await server._try_acquire_slot()
-            readiness = await server.ready()
+            assert not await dependencies.try_acquire_slot(service_request())
+            readiness = await operations.ready(service_request())
             assert readiness.status_code == 503 and b"shutting_down" in readiness.body
             with pytest.raises(RuntimeError, match="shutting down"):
                 workers.request(loop, lambda: None, control=control())
@@ -213,10 +218,10 @@ def test_optional_warmups_are_joined_and_failures_are_logged(startup, monkeypatc
         assert unblock.wait(5)
         raise ValueError("optional warmup fixture")
 
-    monkeypatch.setattr(server.wordgraph, "warm", warm)
+    monkeypatch.setattr(app_lifecycle.wordgraph, "warm", warm)
 
     async def run():
-        lifecycle = server.lifespan(server.app)
+        lifecycle = app_lifecycle.lifespan(app)
         await lifecycle.__aenter__()
         assert await asyncio.to_thread(entered.wait, 2)
         ending = asyncio.create_task(lifecycle.__aexit__(None, None, None))
@@ -318,9 +323,9 @@ def test_disconnected_maintenance_operations_drain_before_pool_close(
         monkeypatch.setattr(confirmation, "cancel", operation)
 
     async def run():
-        lifecycle = server.lifespan(server.app)
+        lifecycle = app_lifecycle.lifespan(app)
         await lifecycle.__aenter__()
-        transport = httpx.ASGITransport(app=server.app)
+        transport = httpx.ASGITransport(app=app)
         async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
             payload = {**body, "token": secrets.token_urlsafe()}
             pending = asyncio.create_task(client.request(method, path, json=payload))

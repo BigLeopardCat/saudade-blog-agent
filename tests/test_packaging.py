@@ -135,7 +135,7 @@ def test_packaging():
     _LOCAL_DIRS = {p.name for p in ROOT.iterdir()
                    if p.is_dir() and not p.name.startswith(".")
                    and not p.name.startswith("__")}
-    _RUNTIME_SRC = [ROOT / "server.py"]
+    _RUNTIME_SRC = [ROOT / "agent/main.py"]
     for _d in ("agent", "config", "models", "rag", "tools", "utils"):
         _RUNTIME_SRC += sorted((ROOT / _d).rglob("*.py"))
     _IMPORT_RE = re.compile(r"^\s*(?:from|import)\s+([A-Za-z_][A-Za-z0-9_]*)", re.M)
@@ -152,7 +152,7 @@ def test_packaging():
           str(PROJECT_VERSION))
     _imported = False
     try:
-        import server  # noqa: PLC0415  （判据就是"运行期真的报哪个版本"）
+        import agent.main as server  # noqa: PLC0415  （判据就是"运行期真的报哪个版本"）
         _imported = True
     except Exception as e:  # pragma: no cover - 依赖缺失也要把话说清楚
         check("server 能 import（版本判据的前提）", False, f"{type(e).__name__}: {e}")
@@ -161,11 +161,11 @@ def test_packaging():
               server.app.version == PROJECT_VERSION,
               f"运行期={server.app.version} pyproject={PROJECT_VERSION}")
         check("  `_app_version()` 与 app 上挂的是同一个值（不是两处各取一次）",
-              server._app_version() == server.app.version)
+              server.app_version() == server.app.version)
         check("  **装好的环境里不许**落进 `0.0.0+source` 那个兜底（落了说明这台机器的"
           "dist-info 与源码对不上）",
               server.app.version != "0.0.0+source")
-    _src = (ROOT / "server.py").read_text(encoding="utf-8")
+    _src = (ROOT / "agent/main.py").read_text(encoding="utf-8")
     _kw_version = [kw for node in ast.walk(ast.parse(_src)) if isinstance(node, ast.Call)
                    for kw in node.keywords if kw.arg == "version"]
     check("没有任何一处把版本号当**字面量**传给 version=（`version=\"1.0.0\"` 那种）",

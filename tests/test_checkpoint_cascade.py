@@ -9,6 +9,7 @@ from pathlib import Path
 
 import pytest
 from _judge import collector
+from _service import app
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -47,21 +48,14 @@ class FakeSaver:
         return self.rows.get(config["configurable"]["thread_id"])
 
 
-import server  # noqa: E402
+from agent.api.routes import conversations as server  # noqa: E402
 from config.settings import settings  # noqa: E402
 
 
 class _Req:
-    """`_resolve_principal` 只看 `headers`；断言头缺席 ⇒ 走"开关未强制"的回退分支。
-
-    **本节判的是机制**（删没删掉、读回来确认），与调用者是谁无关——身份那一格
-    （20261020 安全审计 SAU-006）在 `tests/test_hardening.py::test_internal_endpoint_identity`
-    里单独判（那里真签一条断言）。所以这里**把开关自己钉成 0**：`tests/conftest.py` 的
-    `_PINNED` 把出厂档钉成 1，不拨回来的话这一节会**全部 401**、红得看不出原因。
-    """
-
     def __init__(self, headers=None):
         self.headers = headers or {}
+        self.app = app
 
 
 def _call(conv_id):
@@ -160,22 +154,22 @@ def test_checkpoint_cascade():
           C.delete_thread(_s4, 1) is True and _s4.calls == ["conv_1"], str(_s4.calls))
     print()
     print("② 端点 `server.checkpoint_delete`：三条分支各判一次")
-    _old_agent = server._agent
+    _old_agent = app.state.runtime
     _old_flag = settings.agent_require_assertion
     try:
         settings.agent_require_assertion = False   # 见 `_Req` 的注（测试自己钉，不读环境）
-        server._agent = None                     # 没挂 saver（= 今天生产）
+        app.state.runtime = None                     # 没挂 saver（= 今天生产）
         _r = _call("42")
         check("没挂 saver ⇒ `deleted=false` 且点名 `no_saver`（不假装成功）",
               _r.get("deleted") is False and _r.get("why") == "no_saver", str(_r))
 
-        server._agent = FakeSaver()              # 挂上（`probe.saver_of` 认 `saver` 属性）
-        server._agent.saver = server._agent
+        app.state.runtime = FakeSaver()              # 挂上（`probe.saver_of` 认 `saver` 属性）
+        app.state.runtime.saver = app.state.runtime
         _r = _call("0")
         check("会话 id 非法 ⇒ `bad_conversation_id`", _r.get("why") == "bad_conversation_id",
               str(_r))
 
-        server._agent.rows["conv_9"] = {"checkpoint": "x"}
+        app.state.runtime.rows["conv_9"] = {"checkpoint": "x"}
         _r = _call("9")
         check("正常 ⇒ `deleted=true`", _r.get("deleted") is True, str(_r))
 
@@ -183,12 +177,12 @@ def test_checkpoint_cascade():
         _n = FakeSaver(noop=True)
         _n.saver = _n
         _n.rows["conv_9"] = {"checkpoint": "还在"}
-        server._agent = _n
+        app.state.runtime = _n
         _r = _call("9")
         check("（反控）delete 没生效 ⇒ 端点必须回 `deleted=false` / `still_readable`",
               _r.get("deleted") is False and _r.get("why") == "still_readable", str(_r))
     finally:
-        server._agent = _old_agent
+        app.state.runtime = _old_agent
         settings.agent_require_assertion = _old_flag
     print()
     print("③ 跨仓契约：父仓那两条删会话数据的路**要么都调钩子、要么都不调**")

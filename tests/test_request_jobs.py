@@ -1,13 +1,17 @@
 """Admission follows worker completion, including cancellation and queued jobs."""
 
+
 import asyncio
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 
 import pytest
+from _service import app, service_request
 from fastapi import HTTPException
 
+from agent.api import dependencies
+from agent.api.schemas import ChatRequest
 from agent.principal import SOURCE_ASSERTION, Principal
 from agent.runtime.control import (
     AgentCancelled,
@@ -127,19 +131,19 @@ def test_deadline_and_stop_are_shared_across_worker_jobs_and_scope_resets(monkey
 
 
 def test_sse_close_keeps_admission_and_trace_until_real_producer_exit(monkeypatch):
-    import server
+    from agent.api.routes import chat as server
 
     entered, unblock, stopped = threading.Event(), threading.Event(), []
     finalized = []
-    monkeypatch.setattr(server, "_agent", object())
+    monkeypatch.setattr(app.state, "runtime", object())
     monkeypatch.setattr(server, "_resolve_principal",
                         lambda request, uid: Principal(7, "user", SOURCE_ASSERTION))
-    monkeypatch.setattr(server, "_stream_slots", asyncio.BoundedSemaphore(1))
-    monkeypatch.setattr(server, "STREAM_QUEUE_WAIT", .01)
+    monkeypatch.setattr(app.state, "chat_slots", asyncio.BoundedSemaphore(1))
+    monkeypatch.setattr(dependencies, "STREAM_QUEUE_WAIT", .01)
     monkeypatch.setattr(server, "start_trace", lambda *args, **kwargs: None)
     monkeypatch.setattr(server, "finish_trace", lambda *args: finalized.append(args))
 
-    def producer(messages, thread, queue, loop, uid, stop, *args):
+    def producer(runtime, messages, thread, queue, loop, uid, stop, *args):
         entered.set()
         from langchain_core.messages import AIMessageChunk
 
@@ -147,27 +151,27 @@ def test_sse_close_keeps_admission_and_trace_until_real_producer_exit(monkeypatc
         assert unblock.wait(3)
         stopped.append(stop.is_set())
 
-    monkeypatch.setattr(server, "_run_agent_stream_to_queue", producer)
+    monkeypatch.setattr(server, "stream_to_queue", producer)
 
     async def scenario():
         drained = asyncio.Event()
         monkeypatch.setattr(server, "finish_trace",
                             lambda *args: (finalized.append(args), drained.set()))
-        response = await server.chat_stream(server.ChatRequest(message="hello"), None)
+        response = await server.chat_stream(ChatRequest(message="hello"), service_request())
         try:
             assert "hello" in await asyncio.wait_for(anext(response.body_iterator), 2)
             assert entered.is_set()
             await response.body_iterator.aclose()
-            assert not finalized and not await server._try_acquire_slot()
+            assert not finalized and not await dependencies.try_acquire_slot(service_request())
             # Nonstreaming requests share admission with detached streaming work.
             with pytest.raises(HTTPException) as refused:
-                await server.chat(server.ChatRequest(message="new"), None)
+                await server.chat(ChatRequest(message="new"), service_request())
             assert refused.value.status_code == 503
         finally:
             unblock.set()
         await asyncio.wait_for(drained.wait(), 2)
-        assert await server._try_acquire_slot()
-        server._release_slot()
+        assert await dependencies.try_acquire_slot(service_request())
+        dependencies.release_slot(service_request())
         assert len(finalized) == 1 and stopped == [True]
 
     asyncio.run(scenario())

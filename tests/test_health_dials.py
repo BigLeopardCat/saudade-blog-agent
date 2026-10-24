@@ -27,6 +27,7 @@ import sys
 from pathlib import Path
 
 from _judge import collector
+from _service import app, service_request
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -34,8 +35,8 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 
-import server  # noqa: E402
 from agent import runtime_probe  # noqa: E402
+from agent.api.routes import operations as server  # noqa: E402
 from config.settings import settings  # noqa: E402
 
 FAILED: list[str] = []
@@ -43,7 +44,7 @@ check = collector(FAILED)
 
 
 def call() -> dict:
-    return asyncio.run(server.health())
+    return asyncio.run(server.health(service_request()))
 
 
 def wire(r: dict) -> str:
@@ -90,8 +91,8 @@ def test_health_dials():
                  "rag_hybrid_enabled", "rag_hybrid_active", "rag_state", "vector_missing",
                  "checkpoint_backend", "checkpoint_db"}
     print("① 存活探针那半**逐字不变**（scripts/healthcheck.sh 按子串判活）")
-    _old_agent = server._agent
-    server._agent = object()                       # 假装图已经建好
+    _old_agent = app.state.runtime
+    app.state.runtime = object()                       # 假装图已经建好
     try:
         r = call()
         body = wire(r)
@@ -103,7 +104,7 @@ def test_health_dials():
               isinstance(r["dials"], dict) and set(r["dials"]) == DIAL_KEYS,
               sorted(r.get("dials") or []))
     finally:
-        server._agent = _old_agent
+        app.state.runtime = _old_agent
     check("图没建好时 agent_ready 仍是 false（不是恒 true）",
           call()["agent_ready"] is False)
     print()
@@ -135,7 +136,7 @@ def test_health_dials():
             setattr(settings, k, v)
         settings.llm_provider = _saved_prov
     _src = Path(server.__file__).read_text(encoding="utf-8")
-    _health_src = _src.split('@app.get("/health")', 1)[1].split("\n@app.", 1)[0]
+    _health_src = _src.split('@router.get("/health")', 1)[1].split("\n@router.", 1)[0]
     check("这一块里不出现 os.environ / load_dotenv / dotenv（出现即又回到'读文件再假设'）",
           not any(t in _health_src for t in ("os.environ", "load_dotenv", "dotenv")),
           "、".join(t for t in ("os.environ", "load_dotenv", "dotenv") if t in _health_src))
@@ -216,14 +217,14 @@ def test_health_dials():
           runtime_probe.checkpoint_backend(object()) == "unknown")
     check("认不出的 saver 类 ⇒ 回模块路径原文（不编一个已知名字顶上）",
           runtime_probe.checkpoint_backend(_Graph(_saver("my.custom.saver"))) == "my.custom.saver")
-    _old_agent = server._agent
+    _old_agent = app.state.runtime
     _saved_dsn = settings.checkpoint_dsn
     try:
         # 走真路由：`/health` 读的必须是 `_agent` 这个活体对象。
-        server._agent = _Graph(_saver("langgraph.checkpoint.postgres"))
+        app.state.runtime = _Graph(_saver("langgraph.checkpoint.postgres"))
         check("`/health` 的 checkpoint_backend 取自 `_agent`（换成挂了 saver 的图，它当场变）",
               call()["dials"]["checkpoint_backend"] == "postgres")
-        server._agent = _Graph(None)
+        app.state.runtime = _Graph(None)
         # **反控**（本节的要点）：把 `CHECKPOINT_DSN` 拨成一个合法 DSN，那一格**必须不变**。
         # 变了就说明这一格是从配置推的，而"配了 DSN"与"这个进程挂上了 saver"是两件事
         # （拨的是**已经起好的那个进程**的配置，图那个对象一个字节没变）⇒ 从配置推会把
@@ -236,7 +237,7 @@ def test_health_dials():
         check("（反控的对照）DSN 拨回去，这一格还是 none（上面那条不是碰巧）",
               call()["dials"]["checkpoint_backend"] == "none")
     finally:
-        server._agent = _old_agent
+        app.state.runtime = _old_agent
         settings.checkpoint_dsn = _saved_dsn
     print()
     print("⑥ checkpoint_db：**配置指到哪个库**（只回库名），与上面那格**不是一回事**")
