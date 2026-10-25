@@ -14,7 +14,7 @@ from models.llm import get_llm
 @pytest.mark.parametrize("finish", ["stop", "length"])
 def test_real_sdk_stream_preserves_finish_reason_and_marks_incomplete_answers(monkeypatch, finish):
     events = []
-    monkeypatch.setattr("agent.runtime.session.record",
+    monkeypatch.setattr("agent.runtime.middleware.record",
                         lambda node, event, **data: events.append({"event": event, **data}))
 
     def handle(request):

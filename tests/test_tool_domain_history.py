@@ -23,16 +23,21 @@ class Model:
         return self
 
 
+def menu(session):
+    return {item["function"]["name"] for item in session.menu}
+
+
 def test_source_observation_restores_the_available_domain():
     model = Model()
     session = ToolSession(model, {}, {}, {"admin_catalog": {"observed_read": observed_read}})
+    initial = menu(session)
     session._restore_domains(
         [ToolMessage(content="source", name="observed_read", tool_call_id="1")]
     )
     assert session.loaded == ["admin_catalog"]
-    assert "observed_read" in model.menus[-1]
-    assert "load_admin_catalog_info_tools" in model.menus[-1]
-    assert model.menus[0] <= model.menus[-1]
+    assert "observed_read" in menu(session)
+    assert "load_admin_catalog_info_tools" in menu(session)
+    assert initial <= menu(session)
 
 
 def test_text_errors_and_no_longer_authorized_domains_cannot_restore_tools():
@@ -44,12 +49,12 @@ def test_text_errors_and_no_longer_authorized_domains_cannot_restore_tools():
             ToolMessage(content="failed", name="observed_read", status="error", tool_call_id="1"),
         ]
     )
-    assert not session.loaded and "observed_read" not in model.menus[-1]
+    assert not session.loaded and "observed_read" not in menu(session)
     session = ToolSession(model, {}, {}, {})
     session._restore_domains(
         [ToolMessage(content="old private source", name="observed_read", tool_call_id="2")]
     )
-    assert not session.loaded and "observed_read" not in model.menus[-1]
+    assert not session.loaded and "observed_read" not in menu(session)
 
 
 def test_small_browser_actions_are_visible_without_loading_the_read_domain():
@@ -60,9 +65,10 @@ def test_small_browser_actions_are_visible_without_loading_the_read_domain():
     model = Model()
     session = ToolSession(model, config, {}, {"site": {
         "observed_read": observed_read, **browser.tools(config)}})
-    assert {"navigate_page", "set_page_appearance"} <= model.menus[0]
-    assert "observed_read" not in model.menus[0]
+    initial = menu(session)
+    assert {"navigate_page", "set_page_appearance"} <= initial
+    assert "observed_read" not in initial
     session._restore_domains([
         ToolMessage(content="command queued", name="navigate_page", tool_call_id="page")])
-    assert not session.loaded and len(model.menus) == 1
+    assert not session.loaded and menu(session) == initial
     assert list(session.tools) == ["navigate_page", "set_page_appearance"]

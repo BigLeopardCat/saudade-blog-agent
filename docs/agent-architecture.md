@@ -1,9 +1,12 @@
 # Saudade Blog AI Agent 架构
 
-本文描述当前主线实现。服务入口使用 `NativeRuntime`，原生工具循环直接由模型选择工具；旧 graph、planner、workflow DSL 与 hybrid 适配层已从生产依赖中删除，历史实现只存在于 Git 历史。
+本文描述当前主线实现。`NativeRuntime` 适配服务与会话协议，`ToolSession` 调用 LangChain
+`create_agent` 执行模型—工具循环；业务工具由模型选择。旧 planner、workflow DSL 与 hybrid
+适配层已从生产依赖中删除，历史实现保留在 Git 历史。
 
 长期执行内核与领域扩展方向见 [ADR-0024](adr/adr-0024-framework-kernel-and-domain-extensions.md)。
-当前生产仍为下述自建工具循环，通用执行机制尚未迁回框架，跨领域插件化也尚未验收。
+当前模型调用、标准消息聚合和轮次调度由框架负责，公开 middleware 接入预算、取消、
+工具授权与业务结果规则。签名确认及其接续游标仍在役，持久暂停恢复和跨领域插件化继续迁移。
 
 ## 1. 系统总览
 
@@ -16,7 +19,7 @@
 ```mermaid
 flowchart LR
     UI[浏览器] --> BLOG[Rust 博客 API]
-    BLOG --> AGENT[Python NativeRuntime]
+    BLOG --> AGENT[Python 服务适配与 LangChain Agent]
     AGENT --> MODEL[LLM]
     AGENT --> TOOLS[按需领域工具]
     TOOLS --> BLOG
@@ -159,6 +162,7 @@ flowchart LR
 │   ├── runtime/prompt_budget.py                         # 当前请求与工具 schema 预留后的历史预算
 │   ├── runtime/memory.py                                # 当前生产代码模块
 │   ├── runtime/model_budget.py                          # 当前生产代码模块
+│   ├── runtime/middleware.py                            # 标准 Agent 的预算、权限与业务结果适配
 │   ├── runtime/narration.py                              # 已确认执行后的有界只读叙述
 │   ├── runtime/native.py                                # 当前生产代码模块
 │   ├── runtime/native_store.py                          # 当前生产代码模块

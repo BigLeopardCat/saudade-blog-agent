@@ -1,10 +1,11 @@
 # Saudade Blog AI Agent
 
-博客看板娘“泠月喵”的生产型对话 Agent。项目使用 FastAPI、LangChain 基础组件与 LangGraph checkpoint，负责站内内容问答、检索、页面动作、IoT 设备交互、后台管理助手和留言 AI 审核。
+博客看板娘“泠月喵”的对话 Agent。项目使用 FastAPI、LangChain `create_agent` 与 LangGraph checkpoint，负责站内内容问答、检索、页面动作、IoT 设备交互、后台管理助手和留言 AI 审核。
 
 当前服务博客业务，提供确定性执行、权限控制、流式输出和运行时可观测能力。
 长期采用成熟执行内核、精简业务 harness 和领域能力包，支持跨领域复用；
-当前框架内核收敛与插件化尚未完成，见 [ADR-0024](docs/adr/adr-0024-framework-kernel-and-domain-extensions.md)。
+模型—工具循环已由标准 Agent 承接；现有确认游标仍用于接续兼容，持久暂停恢复与跨领域插件化
+继续按 [ADR-0024](docs/adr/adr-0024-framework-kernel-and-domain-extensions.md) 迁移。
 
 ## 项目定位
 
@@ -27,7 +28,7 @@
 ```mermaid
 flowchart LR
     FE["浏览器对话面板"] --> HOST["Rust 宿主：鉴权、对话记录、SSE"]
-    HOST --> LOOP["原生模型工具循环"]
+    HOST --> LOOP["LangChain Agent：模型与工具循环"]
     LOOP <--> TOOLS["按需领域工具：查询、准备操作"]
     TOOLS --> BLOG["博客 API / 检索 / 设备演示"]
     LOOP <--> PG["PostgreSQL：会话 checkpoint、操作账本"]

@@ -3,8 +3,8 @@
 This probe is intentionally separate from production startup and real model
 calls.  It uses a deterministic model and the public NativeConversationStore
 surface to verify process reconstruction, conversation isolation and cleanup.
-Run only with an explicitly configured probe database; the offline CI suite
-uses the equivalent InMemorySaver tests instead.
+Use an explicitly configured PostgreSQL saver; only random probe conversations
+are touched and cleaned up. Offline CI uses equivalent InMemorySaver tests.
 """
 
 from __future__ import annotations
@@ -16,7 +16,9 @@ from contextlib import ExitStack
 from datetime import datetime, timezone
 from pathlib import Path
 
+from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import AIMessage, HumanMessage
+from langchain_core.outputs import ChatGeneration, ChatResult
 
 from agent import checkpoint
 from agent.principal import SOURCE_ASSERTION, Principal
@@ -24,22 +26,25 @@ from agent.runtime.native import NativeRuntime
 from agent.runtime.native_store import NativeConversationStore
 
 
-class ProbeModel:
-    max_tokens = 128
+class ProbeModel(BaseChatModel):
+    marker: str
+    resume: bool
+    max_tokens: int = 128
 
-    def __init__(self, marker: str, resume: bool):
-        self.marker = marker
-        self.resume = resume
+    @property
+    def _llm_type(self):
+        return "checkpoint-probe"
 
     def bind_tools(self, tools, **kwargs):
         return self
 
-    def stream(self, messages, **kwargs):
+    def _generate(self, messages, stop=None, run_manager=None, **kwargs):
         bodies = [str(message.content) for message in messages]
         if self.resume:
             assert f"记住：{self.marker}" in bodies
             assert f"[当前问题]: {self.marker}" in bodies
-        yield AIMessage(content=("回忆：" if self.resume else "记住：") + self.marker)
+        message = AIMessage(content=("回忆：" if self.resume else "记住：") + self.marker)
+        return ChatResult(generations=[ChatGeneration(message=message)])
 
 
 def _config(conversation_id: str):
@@ -55,7 +60,7 @@ def _turn(saver, conversation_id: str, resume: bool):
     marker = conversation_id
     runtime = NativeRuntime(
         NativeConversationStore(saver),
-        model_factory=lambda **_: ProbeModel(marker, resume),
+        model_factory=lambda **_: ProbeModel(marker=marker, resume=resume),
     )
     text = f"[当前问题]: {marker}" if not resume else "[当前问题]: 刚才的标记是什么？"
     events = list(runtime.stream_events(
