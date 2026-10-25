@@ -60,9 +60,11 @@ def test_admin_menu_visibility_follows_verified_authority(role, source, uid, vis
     assert ("admin_moderation" in domains) is visible
     assert ("admin_work_queue" in domains) is visible
     assert ("admin_catalog" in domains) is visible
+    assert ("admin_account_actions" in domains) is visible
     if visible:
         assert set(domains["admin_moderation"]) == MODERATION_READ_TOOLS
         assert set(domains["admin_reports"]) == ADMIN_READ_TOOLS
+        assert set(domains["admin_account_actions"]) == {"list_accounts"}
 
 
 @pytest.mark.parametrize("cfg", [config("user"), config(source=SOURCE_BODY),

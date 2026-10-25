@@ -136,7 +136,8 @@ def test_runtime_discovers_catalog_without_legacy(backend, monkeypatch, name):
     def call(tool_name):
         return AIMessage(content="", tool_calls=[{"name": tool_name, "args": {}, "id": tool_name}])
 
-    responses = iter([call("load_admin_catalog_info_tools"), call(name),
+    domain = "admin_account_actions" if name == "list_accounts" else "admin_catalog"
+    responses = iter([call(f"load_{domain}_info_tools"), call(name),
                       AIMessage(content="已读取当前页面，尚有后续记录。")])
 
     class Model:
@@ -151,6 +152,51 @@ def test_runtime_discovers_catalog_without_legacy(backend, monkeypatch, name):
         {"messages": [HumanMessage(content="读取后台清单")]}, config()))
     assert events[-1].reply.startswith("已读取")
     assert len(backend["requests"]) == 1
+
+
+def test_account_lookup_and_history_restore_do_not_load_article_preparations(backend):
+    from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
+    from langchain_core.utils.function_calling import convert_to_openai_tool
+    from langgraph.checkpoint.memory import InMemorySaver
+
+    from agent.runtime.native import NativeRuntime
+    from agent.runtime.native_store import NativeConversationStore
+
+    responses = iter([
+        AIMessage(content="", tool_calls=[{
+            "name": "load_admin_account_actions_info_tools", "args": {}, "id": "load"}]),
+        AIMessage(content="", tool_calls=[{
+            "name": "list_accounts", "args": {"username": "account_1"}, "id": "read"}]),
+        AIMessage(content="账号已找到，当前是普通用户。"), AIMessage(content="我记得这个账号。"),
+    ])
+
+    class Model:
+        def __init__(self):
+            self.menus, self.used_menus, self.prompts = [], [], []
+
+        def bind_tools(self, tools, **kwargs):
+            self.menus.append({convert_to_openai_tool(t)["function"]["name"] for t in tools})
+            return self
+
+        def invoke(self, prompt):
+            self.prompts.append(list(prompt))
+            self.used_menus.append(self.menus[-1])
+            return next(responses)
+
+    cfg = {"configurable": {**config()["configurable"],
+                            "conversation_id": 42, "thread_id": "conv_42"}}
+    model = Model()
+    runtime = NativeRuntime(NativeConversationStore(InMemorySaver()),
+                            model_factory=lambda **_: model)
+    for message in ("查一下account_1，核对身份。", "还记得刚才的账号吗？"):
+        list(runtime.stream_events({"messages": [HumanMessage(content=message)]}, cfg))
+    assert len(backend["requests"]) == 1
+    assert "list_accounts" not in model.used_menus[0]
+    assert all({"list_accounts", "prepare_account_role"} <= menu for menu in model.used_menus[1:])
+    assert all(not {"list_admin_notes", "prepare_article_state", "prepare_article_tags"} & menu
+               for menu in model.menus)
+    fact = next(message for message in model.prompts[-1] if isinstance(message, ToolMessage))
+    assert json.loads(fact.content)["items"][0]["username"] == "account_1"
 
 
 def test_empty_draft_title_is_preserved_instead_of_losing_the_page(backend):
