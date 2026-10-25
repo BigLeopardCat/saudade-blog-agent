@@ -157,9 +157,9 @@ def test_mounted_summary_and_body_limits_use_the_new_routes(identity, monkeypatc
                     "/chat",
                     json={"message": "remember", "summary": "old summary", "needs_summary": True},
                 )
-                assert reply.json()["new_summary"] == "new summary"
-                # No verified source scope: an opaque old summary must not reach a model.
-                assert seen == [("remember", [], "")]
+                assert reply.json()["new_summary"] is None
+                # No source scope: do not pay for a summary the next request cannot accept.
+                assert seen == []
                 monkeypatch.setattr(middleware, "MAX_BODY_BYTES", 20)
                 assert (await client.post("/chat", json={"message": "x" * 40})).status_code == 413
                 assert len(application.state.runtime.calls) == 1
