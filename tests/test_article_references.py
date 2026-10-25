@@ -57,8 +57,13 @@ def test_missing_read_sources_are_appended_even_if_reply_already_links_a_differe
     assert evidence.sources(rendered, SITE_BASE) == rendered
 
 
-@pytest.mark.parametrize("reference,allowed", [("/article/2", True), ("/article/99", False)])
-def test_direct_article_answer_is_validated_before_its_chunks_become_visible(reference, allowed):
+@pytest.mark.parametrize("reference,allowed,finish", [
+    ("/article/2", True, "stop"), ("/article/99", False, "stop"),
+    ("/article/2", False, "length"),
+])
+def test_direct_article_answer_is_validated_before_its_chunks_become_visible(
+    reference, allowed, finish
+):
     @tool
     def get_article_detail(article_id: int) -> object:
         """Read a fixture article."""
@@ -80,7 +85,8 @@ def test_direct_article_answer_is_validated_before_its_chunks_become_visible(ref
                 yield AIMessageChunk(content="", tool_calls=[{
                     "name": "get_article_detail", "args": {"article_id": 1}, "id": "read"}])
             else:
-                yield AIMessageChunk(content=f"已读文章引用 [Related]({reference})。")
+                yield AIMessageChunk(content=f"已读文章引用 [Related]({reference})。",
+                                     response_metadata={"finish_reason": finish})
                 assert visible == [], "article answer leaked before source validation"
 
     visible = []
@@ -95,5 +101,7 @@ def test_direct_article_answer_is_validated_before_its_chunks_become_visible(ref
     assert "".join(visible) == result.reply
     if allowed:
         assert reference in result.reply and "/article/1" in result.reply
+    elif finish == "length":
+        assert reference not in result.reply and "尚未完整生成" in result.reply
     else:
         assert reference not in result.reply and "无法核实" in result.reply

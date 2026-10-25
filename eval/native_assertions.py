@@ -42,6 +42,13 @@ def _answer_value(wanted, result, calls):
     return bool(values and match and match.group(1) in values)
 
 
+def _runtime_stops(events):
+    return [e.get("event") for e in events
+            if e.get("event") in {"budget_stop", "task_stopped", "handoff_stopped",
+                                  "legacy_handoff", "answer_truncated", "invalid_tool_call"}
+            or e.get("event") == "llm_done" and e.get("finish_reason") == "length"]
+
+
 def check(gold, result):
     keys = {"require_observations", "require_confirm_specs", "forbid_runtime_stop",
             "forbid_business_write", "require_answer_value"}
@@ -66,9 +73,7 @@ def check(gold, result):
         if not _answer_value(wanted, result, calls):
             failures.append(f"回答值不来自本轮实际读取结果：{wanted}")
     if gold.get("forbid_runtime_stop"):
-        stops = [e.get("event") for e in events
-                 if e.get("event") in {"budget_stop", "task_stopped", "handoff_stopped",
-                                       "legacy_handoff"}]
+        stops = _runtime_stops(events)
         if stops:
             failures.append(f"运行时提前终止：{stops}")
     if gold.get("forbid_business_write"):
