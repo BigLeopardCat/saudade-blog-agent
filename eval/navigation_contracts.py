@@ -15,7 +15,7 @@ from utils.trace_io import load_trace
 
 
 @contextmanager
-def backend():
+def backend(articles=None):
     state = {"requests": [], "unsupported_reads": [], "articles": [
         {"id": 719, "title": "Git 分支实践", "status": "public", "isPublic": True,
          "isTop": 1, "categoryId": 11, "categoryName": "编程", "tags": []},
@@ -23,6 +23,8 @@ def backend():
          "isTop": 1, "categoryId": 11, "categoryName": "编程", "tags": []},
     ]}
 
+    if articles is not None:
+        state["articles"] = articles
     docs = [{"type": "note", "id": row["id"], "title": row["title"],
              "content": "这是一篇编程实践文章，介绍 " + row["title"] + "。"}
             for row in state["articles"]]
