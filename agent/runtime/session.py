@@ -11,9 +11,11 @@ from langchain_core.messages import AIMessage, AIMessageChunk, ToolMessage
 from langchain_core.messages.utils import message_chunk_to_message
 from langchain_core.tools import ToolException
 
+from agent.adminops_account import role_cn
 from agent.article_evidence import ArticleEvidence
 from agent.authz import SCOPE_ADMIN_CONSOLE, SCOPE_READ_OWN, TOOL_SCOPE, WRITE_SCOPES, check
 from agent.domains import browser, device_actions
+from agent.domains.account_actions.targets import Role
 from agent.llm_usage import usage_fields
 from agent.runtime import memory
 from agent.runtime.budget import (
@@ -26,6 +28,7 @@ from agent.runtime.budget import (
 )
 from agent.runtime.catalog import initial_tools
 from agent.runtime.control import model_options
+from agent.runtime.finalization import final_prompt
 from agent.runtime.memory_media import tool_messages
 from agent.runtime.message_content import text_content
 from agent.runtime.progress import emit as emit_progress
@@ -62,7 +65,9 @@ _DOMAIN_DESCRIPTIONS = {
     "admin_account_actions": "Prepare account freeze, unfreeze, role change, mute or unmute "
                              "by exact username or ID. Show before/after state, deadlines, "
                              "session revocation and notification effects; administrator only, "
-                             "preparation never writes.",
+                             "preparation never writes. Assignable roles: "
+                             + ", ".join(f"{role.value}={role_cn(role.value)}" for role in Role)
+                             + ".",
     "admin_announcements": "管理站内公告：准备发布、修改、删除确认，"
                            "展示完整正文及关联个人通知范围；"
                            "准备不写入，仅管理员可用。",
@@ -113,6 +118,7 @@ class ToolSession:
         self.receipts = []
         self.article_evidence = ArticleEvidence()
         self.used_stream_api = False
+        self.finalizing = False
         self.llm = self._bind_menu()
 
     def _bind_menu(self):
@@ -312,7 +318,8 @@ class ToolSession:
         aggregate = None
         started = time.monotonic()
         failed = False
-        emit_progress(self.config, "正在处理请求…", key=f"model:{self._round_index}")
+        label = "正在整理已取得的结果…" if self.finalizing else "正在处理请求…"
+        emit_progress(self.config, label, key=f"model:{self._round_index}")
         record("native", "llm_start", round=self._round_index, engine="native",
                prompt_chars=sum(len(text_content(message.content)) for message in prompt),
                streaming=True)
@@ -442,6 +449,10 @@ class ToolSession:
             result = yield from self._stream_terminal(
                 result, visible_parts, current_text=raw_reply)
             return None, result
+        if self.finalizing:
+            result = self._budget_stop("finalization_tool_call", tool_calls=self.calls_used)
+            result = yield from self._stream_terminal(result, visible_parts)
+            return None, result
         reason = self._accept_calls(calls, self._round_index)
         if reason:
             result = self._handoff(reason, tool_calls=self.calls_used)
@@ -469,6 +480,14 @@ class ToolSession:
         self._round_index = 0
         while True:
             check_cancelled(self.config)
+            final = final_prompt(self.budget, prompt, self.menu, self.output_limit,
+                                 results_full=self.result_chars >= _MAX_TOTAL_RESULT_CHARS)
+            if final:
+                prompt, reason, output = final
+                self.llm = (self.model.bind(max_tokens=output)
+                            if output < self.output_limit else self.model)
+                self.menu, self.finalizing, self.output_limit = [], True, output
+                record("native", "finalizing", reason=reason, output_limit=output)
             prompt_chars = sum(len(text_content(message.content)) for message in prompt)
             if prompt_chars > MAX_PROMPT_CHARS:
                 result = self._budget_stop("prompt_budget", prompt_chars=prompt_chars)

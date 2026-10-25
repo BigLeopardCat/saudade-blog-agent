@@ -35,6 +35,13 @@ class Reservation:
     settled: bool = False
 
 
+def _estimate(messages, tools, output_limit):
+    if type(output_limit) is not int or output_limit <= 0:
+        raise ValueError("A positive model output limit is required")
+    # CJK dialogue needs a more conservative ratio than mostly ASCII JSON schemas.
+    return estimate_tokens(messages), count_tokens_approximately([], tools=list(tools))
+
+
 class RequestBudget:
     def __init__(self, limits=None):
         self.limits = limits or BudgetLimits()
@@ -51,21 +58,12 @@ class RequestBudget:
         raise BudgetExceeded(reason)
 
     def reserve(self, messages, tools=(), *, output_limit=NATIVE_OUTPUT_TOKENS):
-        # CJK dialogue needs a more conservative ratio than mostly ASCII JSON schemas.
-        message_tokens = estimate_tokens(messages)
-        schema_tokens = count_tokens_approximately([], tools=list(tools))
+        message_tokens, schema_tokens = _estimate(messages, tools, output_limit)
         estimated = message_tokens + schema_tokens
-        if type(output_limit) is not int or output_limit <= 0:
-            raise ValueError("A positive model output limit is required")
         with self._lock:
-            if self.reason:
-                raise BudgetExceeded(self.reason)
-            if estimated + output_limit > self.limits.context_tokens:
-                self._reject("context_tokens")
-            if self.model_calls >= self.limits.model_calls:
-                self._reject("model_calls")
-            if self.tokens + estimated + output_limit > self.limits.request_tokens:
-                self._reject("request_tokens")
+            reason = self._call_block_reason(estimated, output_limit)
+            if reason:
+                self._reject(reason)
             self.tokens += estimated + output_limit
             self.model_calls += 1
             ticket = Reservation(estimated, output_limit)
@@ -74,6 +72,32 @@ class RequestBudget:
                schema_tokens=schema_tokens, output_limit=output_limit,
                model_calls=calls, reserved_tokens=reserved)
         return ticket
+
+    def _call_block_reason(self, estimated, output_limit):
+        if self.reason:
+            return self.reason
+        if estimated + output_limit > self.limits.context_tokens:
+            return "context_tokens"
+        if self.model_calls >= self.limits.model_calls:
+            return "model_calls"
+        if self.tokens + estimated + output_limit > self.limits.request_tokens:
+            return "request_tokens"
+        return None
+
+    def call_block_reason(self, messages, tools=(), *, output_limit=NATIVE_OUTPUT_TOKENS):
+        """Inspect capacity without consuming a call or poisoning future reservations."""
+        estimated = sum(_estimate(messages, tools, output_limit))
+        with self._lock:
+            return self._call_block_reason(estimated, output_limit)
+
+    def output_capacity(self, messages, tools=()):
+        """Remaining output room after the complete input, without reserving a call."""
+        estimated = sum(_estimate(messages, tools, 1))
+        with self._lock:
+            if self.reason or self.model_calls >= self.limits.model_calls:
+                return 0
+            return max(0, min(self.limits.context_tokens - estimated,
+                              self.limits.request_tokens - self.tokens - estimated))
 
     def settle(self, ticket, response):
         usage = usage_fields(response)

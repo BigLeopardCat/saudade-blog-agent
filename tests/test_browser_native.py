@@ -231,22 +231,24 @@ def test_one_turn_combines_appearance_and_navigation_and_retains_source_history(
     )
 
 
-@pytest.mark.parametrize("last", ["budget"])
-def test_queued_commands_survive_stop_without_replaying_legacy_runtime(monkeypatch, last):
+def test_queued_commands_survive_budget_finalization_without_replay(monkeypatch):
     responses = [
         _response("load_site_info_tools"),
         _response("set_page_appearance", {"snow": "on"}),
+        _response("set_page_appearance", {"snow": "on"}),
+        AIMessage(content="雪花设置已发送，浏览器执行结果尚未确认。"),
     ]
-    if last == "budget":
-        responses.extend(_response("set_page_appearance", {"snow": "on"}) for _ in range(3))
-    else:  # pragma: no cover - kept for future native stop reasons
-        responses.append(_response(last))
-    arm, _ = _arm(monkeypatch, responses)
-    with budget_scope(RequestBudget(BudgetLimits(model_calls=4))):
+    arm, model = _arm(monkeypatch, responses)
+    budget = RequestBudget(BudgetLimits(model_calls=4))
+    with budget_scope(budget):
         events = list(arm.stream_events(
             {"messages": [HumanMessage(content="开雪花然后继续")]}, _config()))
     execution = events[-1].execution
-    assert len(execution["receipts"]) == (3 if last == "budget" else 1)
+    assert len(execution["receipts"]) == 2
+    assert events[-1].reply == responses[-1].content
+    assert len(model.calls) == budget.model_calls == 4
+    assert budget.tool_calls == 3 and budget.reason is None
+    assert arm.get_state(_config()).values["messages"][-1].content == events[-1].reply
 
 
 def test_stream_producer_emits_commands_and_receipts_without_confirmation(monkeypatch):
