@@ -1,6 +1,6 @@
 """Conversation data and the storage boundary used by the native runtime.
 
-Completed turns and a private confirmation cursor are saved. Interrupted reads
+Completed turns and framework approval bindings are saved. Interrupted reads
 may run again; business writes remain owned by the independent execution ledger.
 """
 
@@ -14,7 +14,7 @@ class ConversationSnapshot:
     messages: list = field(default_factory=list)
     pending_confirm: dict | None = None
     pending_action: dict | None = None
-    continuation: dict | None = None
+    approval: dict | None = None
     unfinished: bool = False
     initialized: bool = False
 
@@ -42,7 +42,7 @@ class ConversationStore(Protocol):
 
     def save_turn(
         self, config, messages, reply, *, observations=(), execution=None, pending=None,
-        continuation=None,
+        approval=None,
     ) -> None:
         """Save the completed turn while the caller holds guard(config)."""
         ...

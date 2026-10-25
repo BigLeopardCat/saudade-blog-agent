@@ -93,7 +93,8 @@ def test_preparation_checkpoints_then_executes_once(site, monkeypatch, tmp_path,
     popup = first.execution["pending_confirm"]
     assert "未知状态" not in popup["q"]
     assert runtime.get_state(config()).values["pending_confirm"]["token"] == popup["token"]
-    assert runtime.get_state(config()).next == ()
+    assert runtime.get_state(config()).next == ("approval",)
+    assert runtime.get_state(config()).interrupts
     assert len(model.calls) == 2
     assert popup["token"] not in repr(model.calls)
     assert site["favorites"] == initial

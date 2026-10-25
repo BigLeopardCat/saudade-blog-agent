@@ -6,11 +6,9 @@ capabilities, evidence, budgets and the existing signed confirmation protocol.
 
 import json
 
-from langchain.agents import create_agent
-from langchain_core.messages import AIMessageChunk, SystemMessage, ToolMessage
+from langchain_core.messages import AIMessageChunk, ToolMessage
 from langchain_core.tools import ToolException
 from langchain_core.utils.function_calling import convert_to_openai_tool
-from langgraph.checkpoint.memory import InMemorySaver
 
 from agent.article_evidence import ArticleEvidence
 from agent.authz import SCOPE_ADMIN_CONSOLE, SCOPE_READ_OWN, TOOL_SCOPE, WRITE_SCOPES, check
@@ -23,13 +21,11 @@ from agent.runtime.budget import (
     native_tool,
 )
 from agent.runtime.catalog import initial_tools, loader
-from agent.runtime.continuation import restore_evidence
 from agent.runtime.finalization import incomplete_response
 from agent.runtime.memory_media import tool_messages
 from agent.runtime.message_content import text_content
-from agent.runtime.middleware import SessionMiddleware, StreamGuard
+from agent.runtime.middleware import StreamGuard
 from agent.runtime.progress import emit as emit_progress
-from agent.runtime.prompt_budget import fit_history
 from agent.runtime.read_tools import scoped_reads_enabled
 from agent.runtime.results import TurnResult
 from agent.runtime.turns import check_cancelled
@@ -44,7 +40,8 @@ _MAX_TOTAL_RESULT_CHARS = 16000
 
 
 class ToolSession:
-    def __init__(self, model, config, tools, domains, outcome_adapter=None):
+    def __init__(self, model, config, tools, domains, outcome_adapter=None, *,
+                 store=None, isolated=False):
         self.budget = current_budget() or RequestBudget()
         self.output_limit = getattr(model, "max_tokens", None) or settings.agent_output_tokens
         self.model = model
@@ -60,7 +57,11 @@ class ToolSession:
         self.result_limit = _MAX_TOTAL_RESULT_CHARS
         self.outcome: TurnResult | None = None
         self.outcome_adapter = outcome_adapter
-        self.continuation = None
+        self.store, self.isolated = store, isolated
+        self.approval = None
+        self.awaiting_call = None
+        self.framework_state = None
+        self.transient = {}
         self.effects = {}
         self.observations = []
         self.receipts = []
@@ -323,50 +324,14 @@ class ToolSession:
             return None, self._budget_stop(exc.reason, tool_calls=self.calls_used)
         return calls, None
 
-    def stream(self, prompt, *, continuation=None):
-        """Adapt framework message events to the current transport result contract."""
+    def stream(self, prompt, *, resume=None, approval_input=()):
+        """Adapt framework events to the current transport result contract."""
+        from agent.runtime.execution import FrameworkExecution
+
         self._round_index = 0
         self.stream_guard = StreamGuard(self)
-        middleware = SessionMiddleware(self)
-        if continuation is not None:
-            for domain in continuation.loaded:
-                if domain in self.domains:
-                    self.tools.update(self.domains[domain])
-                    self.loaded.append(domain)
-            self.llm = self._bind_menu()
-            self.article_evidence = restore_evidence(continuation.evidence)
-            self.result_chars = continuation.result_chars
-            try:
-                self.budget.attempt_tools(len(continuation.remaining))
-            except BudgetExceeded as exc:
-                self._budget_stop(exc.reason, tool_calls=self.calls_used)
-                return (yield from self._stream_terminal(self.outcome, []))
-        else:
-            self._restore_domains(prompt)
-            prompt = fit_history(prompt, self.principal, self.menu, self.budget.limits,
-                                 self.output_limit)
-        # Message streaming uses a framework waiter in addition to the node worker.
-        config = {**(self.config or {}), "max_concurrency": 2,
-                  "recursion_limit": self.budget.limits.model_calls * 6 + 12,
-                  "callbacks": [*((self.config or {}).get("callbacks") or []), self.stream_guard]}
-        saver = InMemorySaver() if continuation is not None else None
-        system = prompt[0] if prompt and isinstance(prompt[0], SystemMessage) else None
-        messages = prompt[1:] if system is not None else prompt
-        middleware.system_message = system
-        graph = create_agent(self.model, tools=[], system_prompt=system,
-                             middleware=[middleware], checkpointer=saver)
-        inputs = {"messages": messages}
-        if continuation is not None:
-            config["configurable"] = {"thread_id": "confirmation-resume",
-                                      **config.get("configurable", {})}
-            # The outer store still owns the old signed cursor during this first
-            # migration stage. Standard graph routing dispatches its unanswered calls.
-            middleware.exchange = list(prompt)
-            middleware.calls = list(continuation.remaining)
-            middleware.attachments = list(continuation.attachments)
-            graph.update_state(config, inputs, as_node="SessionMiddleware.after_model")
-            inputs = None
-        stream = graph.stream(inputs, config, stream_mode=["messages", "updates"])
+        execution = FrameworkExecution(self, prompt)
+        stream = execution.stream(resume=resume, approval_input=approval_input)
         visible = []
         self.used_stream_api = True
         try:
@@ -388,6 +353,7 @@ class ToolSession:
         finally:
             self.stream_guard.closed = True
             stream.close()
+        execution.promote()
         if self.outcome is None:
             raise RuntimeError("Framework Agent ended without a terminal result")
         return (yield from self._stream_terminal(self.outcome, visible))

@@ -42,7 +42,7 @@ def confirmed_roundtrip(monkeypatch, tmp_path, config, domain, prepare_name, arg
                 facts = prompt[-1]
                 assert isinstance(facts, ToolMessage) and facts.tool_call_id == "prepare"
                 assert json.loads(facts.content)["status"] == "executed"
-                assert runtime.store.load(config).continuation is None
+                assert runtime.store.load(config).approval is None
             return next(self.responses)
 
     model = Model()
