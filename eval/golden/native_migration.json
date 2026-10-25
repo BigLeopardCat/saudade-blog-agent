@@ -1,0 +1,400 @@
+{
+  "legacy_sha256": "5c532e6e2efe3e9445ea830ec9eb34325d902df868c5812e3a79fd64cfd8c4e9",
+  "current_sha256": "a50c3d8ac9631aeebdd39c7bc7ff1e6884cd2c5c2d71a951562036cc8178a86b",
+  "equivalence": "scenario families only; pass rates across suites are not comparable",
+  "legacy_cases": 193,
+  "current_cases": 125,
+  "counts": {
+    "family_replaced": 159,
+    "deferred": 19,
+    "separate_contract": 5,
+    "retired_premise": 10
+  },
+  "family_replacements": {
+    "nav_missing": [
+      "nav_friends_down",
+      "nav_nonexistent",
+      "challenge_claim_phantom_nav"
+    ],
+    "nav_device": [
+      "nav_device_console",
+      "nav_request_phrase"
+    ],
+    "nav_home": [
+      "nav_home"
+    ],
+    "effect_on": [
+      "eff_on_sakura",
+      "multi_turn_no_contamination"
+    ],
+    "effect_state": [
+      "eff_state_consistent",
+      "multi_turn_effect_state"
+    ],
+    "effect_off": [
+      "eff_off_sakura",
+      "multi_turn_correction"
+    ],
+    "dark_on": [
+      "dark_on"
+    ],
+    "attack_command_text": [
+      "attack_embed_command"
+    ],
+    "attack_prompt": [
+      "attack_prompt_leak"
+    ],
+    "persona_intro": [
+      "summary_round",
+      "casual_intro"
+    ],
+    "chat_user": [
+      "casual_hello",
+      "thinking_leak_sentinel",
+      "repeat_ask_no_verbatim"
+    ],
+    "memory_effect_change": [
+      "multi_turn_redirect"
+    ],
+    "memory_reference_nav": [
+      "multi_turn_reference",
+      "followup_short_yes_executes",
+      "followup_short_no_declines",
+      "multi_step_referent_nav_effect"
+    ],
+    "device_list": [
+      "device_query",
+      "data_devices_online"
+    ],
+    "nav_board": [
+      "nav_question_not_nav",
+      "nav_direct_no_confirm_promise",
+      "nav_no_false_zero_tool_claim"
+    ],
+    "vision_red": [
+      "image_color_red"
+    ],
+    "vision_two": [
+      "image_two_colors"
+    ],
+    "knowledge_git": [
+      "rag_git_branch",
+      "rag_git_svn",
+      "rag_git_snapshot"
+    ],
+    "search_read": [
+      "rag_ota_partition",
+      "rag_ota_http",
+      "rag_fingerprint_pin",
+      "rag_fingerprint_crc",
+      "after_offer_then_look_up",
+      "dep_search_read_ota",
+      "dep_search_read_graph",
+      "search_multiword_keyword",
+      "multi_step_search_then_read_top"
+    ],
+    "article_architecture": [
+      "rag_arch_ports",
+      "rag_arch_components",
+      "rag_arch_memory",
+      "rag_arch_check",
+      "rag_project_files",
+      "rag_deep_recursion",
+      "rag_deep_timeout",
+      "cq_no_bare_claim_techdoc"
+    ],
+    "knowledge_python": [
+      "rag_python_copy",
+      "rag_python_is",
+      "rag_noise_mysql"
+    ],
+    "guestbook": [
+      "rag_talk_rag",
+      "guestboard_talk_double_source"
+    ],
+    "search_missing": [
+      "rag_noise_docker",
+      "rag_noise_rust",
+      "rag_noise_cake"
+    ],
+    "article_current": [
+      "article_read_current_eval"
+    ],
+    "page_state": [
+      "article_read_current_what",
+      "nav_page_state_consistent"
+    ],
+    "article_discovery": [
+      "cq_query_embedded_articles",
+      "cq_query_agent_articles"
+    ],
+    "nav_about": [
+      "nav_param_anchor_about"
+    ],
+    "nav_article": [
+      "nav_article_target"
+    ],
+    "multi_browser": [
+      "todo_multi_step_serial",
+      "multi_step_effect_then_nav",
+      "task_state_resume_settle"
+    ],
+    "multi_appearance": [
+      "multi_intent_two_effects"
+    ],
+    "persona_praise": [
+      "sticker_praise_shy"
+    ],
+    "memory_read_recall": [
+      "followup_named_doc_no_search",
+      "followup_named_doc_reread",
+      "followup_named_doc_title_only_id",
+      "followup_entity_slot_guestbook",
+      "followup_entity_slot_category",
+      "admin_near_miss_source_honest",
+      "mt2_ledger_recall_two_actions",
+      "mt3_detour_then_return_ledger_value"
+    ],
+    "admin_ops": [
+      "ops_report_admin",
+      "prod_ops_digest_three_angles"
+    ],
+    "admin_denial": [
+      "ops_report_denied_visitor"
+    ],
+    "admin_moderation": [
+      "moderation_report_admin"
+    ],
+    "admin_users_report": [
+      "user_report_admin"
+    ],
+    "admin_articles": [
+      "admin_notes_console_list"
+    ],
+    "article_private": [
+      "admin_write_natural_confirm_popup",
+      "status_stale_ledger_requery"
+    ],
+    "article_state_question": [
+      "admin_write_question_no_exec",
+      "admin_announcement_question_no_popup",
+      "admin_board_question_no_popup"
+    ],
+    "write_denial": [
+      "admin_write_denied_user"
+    ],
+    "tags_remove": [
+      "admin_write_intent_tag_remove_popup",
+      "mix2_conditional_write_reads_first"
+    ],
+    "tags_missing_target": [
+      "admin_write_intent_named_target_only",
+      "account_freeze_grounding_refusal",
+      "multi_step_missing_param_asks"
+    ],
+    "tag_child_create": [
+      "admin_tag_move_popup",
+      "admin_tag_create_two_names_one_card"
+    ],
+    "category_create": [
+      "admin_category_create_popup"
+    ],
+    "tag_question": [
+      "admin_tag_move_question_no_popup"
+    ],
+    "tags_unknown_article": [
+      "admin_tag_move_unresolved_target_honest",
+      "admin_board_unresolved_target_honest",
+      "admin_announcement_unresolved_target_honest"
+    ],
+    "announcement_create": [
+      "admin_announcement_create_popup",
+      "announcement_update_zero_write",
+      "admin_announcement_create_popup_prose"
+    ],
+    "board_delete_prepare": [
+      "admin_board_delete_popup"
+    ],
+    "tag_create": [
+      "admin_tag_create_invented_name_popup",
+      "admin_tag_create_generic_name_popup"
+    ],
+    "tag_missing_name": [
+      "admin_tag_create_ambiguous_target_no_write"
+    ],
+    "top_articles": [
+      "data_top_notes"
+    ],
+    "categories": [
+      "data_categories"
+    ],
+    "tags": [
+      "data_tags"
+    ],
+    "announcements": [
+      "data_announcements"
+    ],
+    "site_info": [
+      "data_blog_info"
+    ],
+    "social_links": [
+      "data_social_links"
+    ],
+    "site_map": [
+      "data_site_map"
+    ],
+    "weather": [
+      "data_weather"
+    ],
+    "current_time": [
+      "time_anchor_no_invented_year"
+    ],
+    "category_update": [
+      "category_update_zero_write"
+    ],
+    "capabilities_user": [
+      "capability_list_user_no_admin_leak"
+    ],
+    "capabilities_admin": [
+      "capability_list_admin_sees_admin_ops"
+    ],
+    "dark_off": [
+      "dark_off"
+    ],
+    "article_compare": [
+      "aggregate_two_docs_compare"
+    ],
+    "todo_create": [
+      "admin_todo_add_popup"
+    ],
+    "account_freeze": [
+      "account_freeze_popup"
+    ],
+    "mixed_two_preparations": [
+      "followup_short_all_two_picks",
+      "mix2_two_writes_one_breath_card_only"
+    ],
+    "capability_absent": [
+      "admin_capability_absent_honest",
+      "capability_absent_after_card_in_history"
+    ],
+    "notice_create": [
+      "admin_notice_user_popup"
+    ],
+    "accounts_denial": [
+      "admin_user_list_denied_visitor"
+    ],
+    "admin_todos": [
+      "admin_todo_list_includes_pending_review"
+    ],
+    "admin_traffic": [
+      "note_traffic_denied_visitor"
+    ],
+    "dark_state": [
+      "dark_state_consistent"
+    ],
+    "own_unread": [
+      "own_unread_logged_in"
+    ],
+    "pending_cancel": [
+      "mt2_card_then_cancel_no_write"
+    ],
+    "pending_short_yes": [
+      "mt2_short_yes_resubmits_card"
+    ],
+    "three_sources": [
+      "mix3_three_source_query",
+      "mix5_cmd_nav_read_three_way"
+    ],
+    "admin_accounts": [
+      "prod_account_roster_read_admin",
+      "admin_board_identity_from_roster"
+    ],
+    "chat_zako": [
+      "zako_hello_zero_tool"
+    ],
+    "nav_zako": [
+      "zako_nav_request_refused"
+    ],
+    "effect_zako": [
+      "zako_effect_request_refused"
+    ],
+    "zako_admin_denial": [
+      "zako_admin_write_request_refused"
+    ],
+    "nav_article_comments": [
+      "nav_comment_target_not_guestbook"
+    ],
+    "count_only": [
+      "format_count_number_only"
+    ],
+    "own_favorites": [
+      "own_favorites_logged_in"
+    ],
+    "own_board": [
+      "own_board_mine_logged_in"
+    ],
+    "account_role": [
+      "admin_account_set_role_popup"
+    ],
+    "quota_reset": [
+      "admin_quota_reset_popup"
+    ],
+    "account_unknown": [
+      "admin_account_role_unknown_target"
+    ],
+    "tags_add_new": [
+      "admin_two_tags_case_variant_card",
+      "admin_tag_attach_new_name_one_card"
+    ],
+    "mixed_browser_write": [
+      "mix4_cmd_and_write_one_breath"
+    ],
+    "mixed_read_write": [
+      "mix4_read_then_write_card"
+    ],
+    "todo_after_chat": [
+      "admin_todo_add_short_command"
+    ]
+  },
+  "deferred": {
+    "multi_turn_summary_restore": "长对话自动压缩后的真实恢复尚未纳入此首轮HTTP集；不能用短会话记忆代替。",
+    "rag_test4_cover": "文章封面读图需要真实图像证据链夹具；直接图片问答不是等价覆盖。",
+    "concurrent_orphan_history": "跨连接并发和孤儿消息恢复需专项；短会话隔离不能证明并发语义。",
+    "followup_entity_slot_ambiguous": "多候选分类消歧需真实列表续轮；本轮缺该专项。",
+    "concurrent_orphan_no_leak": "并发孤儿消息隔离需专项；当前仅覆盖独立会话暗号不串线。",
+    "admin_tag_delete_popup": "标签删除需无引用标签夹具；新建准备不是等价覆盖。",
+    "admin_announcement_delete_popup": "公告删除需专属公告与通知关联夹具。",
+    "admin_board_audit_reviewed_refusal": "已处理审核目标的幂等拒绝需要固定审核夹具；旧ledger帧断言退役不等于功能通过。",
+    "favorite_remove_zero_write": "需要已收藏的专属文章夹具；本轮不把新增收藏准备当成取消收藏覆盖。",
+    "account_mute_popup": "禁言目标、时长及通知副作用需要专属状态夹具。",
+    "account_unmute_popup": "需要已禁言账号状态夹具；不将冻结准备当作等价覆盖。",
+    "account_unfreeze_popup": "需要已冻结账号状态夹具；不将冻结准备当作等价覆盖。",
+    "admin_todo_done_popup": "需要稳定的未完成待办夹具；本轮只覆盖新增准备与列表读取。",
+    "long_hist_value_no_requery": "长上下文压力与压缩恢复需专项；本轮不注入伪历史。",
+    "nav_comment_position_from_notice": "需要真实通知与评论锚点夹具；本轮只有文章评论区导航。",
+    "nav_board_position_from_notice": "需要真实通知与河灯锚点夹具；本轮只有留言板导航。",
+    "admin_todo_reschedule_popup": "需要稳定待办与日历时区夹具；本轮不算已覆盖。",
+    "admin_tag_attach_stale_pick_out_of_range": "非法选择和幂等拒绝仍有离线契约；本轮HTTP准备集不声称覆盖。",
+    "mt3_two_writes_second_card_next_round": "确认后自动继续第二项尚缺真实模型任务验收；只弹第一张卡不能证明完成两项。"
+  },
+  "separate_contract": {
+    "device_display_request": "OLED实际工具调用已在native_contracts OLED隔离服务夹具验收；线上不额外驱动物理设备。",
+    "device_display_negative": "OLED撤销语义由独立工具契约覆盖；本轮不驱动物理设备。",
+    "golden_write_category_delete_exec": "分类删除真实执行由categories契约验证；本轮HTTP不批准业务写入。",
+    "account_unfreeze_exec": "解冻执行/回放由account_actions契约验证；本轮HTTP不批准业务写入。",
+    "board_audit_from_ledger_exec": "审核执行由moderation_actions契约验证；伪ledger不是授权来源。"
+  },
+  "retired_premise": {
+    "exec_memory_display_quote": "客户端传入旧执行台账不再是执行事实；改为真实HTTP续轮与独立执行账契约。",
+    "exec_memory_none_honest": "不再用伪历史模拟执行回执；fake receipt攻击另有用例。",
+    "admin_write_no_identity_honest": "管理写入需要真实已验签管理员；不保留无身份管理员能准备确认卡的前提。",
+    "own_favorite_add_not_logged_in": "博客对话入口要求已登录；不保留uid=0仍须调用本人写工具的无效前提。",
+    "own_unread_not_logged_in": "同上；未登录HTTP鉴权由离线服务测试覆盖。",
+    "own_mark_read_not_logged_in": "同上；本人通知准备改用真实已验签账号。",
+    "own_messages_not_logged_in": "同上；本人信箱读取改用真实已验签账号。",
+    "own_message_read_not_logged_in": "同上；本人信件已读准备改用真实已验签账号。",
+    "own_mark_read_incident_phrase_not_logged_in": "同上；未登录时强制工具哨兵不是产品要求。",
+    "own_favorite_add_vocative_not_logged_in": "同上；正常用户当前文章收藏已覆盖。"
+  }
+}

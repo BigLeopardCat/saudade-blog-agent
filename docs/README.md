@@ -23,6 +23,8 @@
 |---|---|---|
 | [agent-architecture.md](agent-architecture.md) | 系统现在是什么：节点拓扑、跨语言契约、目录与机制 | 现状型 |
 | [chat-stream-protocol.md](chat-stream-protocol.md) | 具名 SSE 事件、正文隔离、持久化边界与发布衔接 | 现状型 |
+| [evaluation-native-baseline.md](evaluation-native-baseline.md) | 原生 HTTP 测试集、首跑基线、真实身份与覆盖边界 | 现状型 |
+| [native-baseline-20261025.md](native-baseline-20261025.md) | 125 场景线上首跑、成本缓存、误报复核与功能缺陷 | 记录型 |
 | [agent-architecture-audit-20261023.md](agent-architecture-audit-20261023.md) | 架构、IR、记忆、确认恢复与单任务成本审计，含整改顺序 | 记录型 |
 | [native-account-actions.md](native-account-actions.md) | 原生账号管理接口、权限语义、迁移与隔离验证 | 现状型（已生产验收） |
 | [session-runtime-review-20261024.md](session-runtime-review-20261024.md) | 会话职责、独立报告核对、后台准入修复及剩余预算/存储工作 | 现状型 |
