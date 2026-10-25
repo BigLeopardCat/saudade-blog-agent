@@ -366,7 +366,7 @@ def run_one(req: ChatRequest, principal: "Principal | None" = None,
         from utils import trace as _trace
         ledger_frames = [dict(e) for e in _trace.events_of(trace_id)
                          if e.get("node") == "planner" and e.get("event") == "ledger_frame"]
-    hybrid_names, hybrid_rounds = golden_trace.hybrid_read_stats(trace_id)
+    native_names, native_rounds = golden_trace.tool_call_stats(trace_id)
     trace_path = golden_trace.finish_case(trace_id, time.monotonic() - t_trace0,
                                           len(frames))
 
@@ -434,8 +434,8 @@ def run_one(req: ChatRequest, principal: "Principal | None" = None,
                 tool_rounds += 1
         elif isinstance(item, str) and item.startswith("__"):
             control_frames.append(item)
-    tool_calls.extend(hybrid_names)
-    tool_rounds += hybrid_rounds
+    tool_calls.extend(native_names)
+    tool_rounds += native_rounds
     confirm_tokens, confirm_payloads = [], []
     for f in control_frames:
         if not f.startswith("__CONFIRM__:"):
