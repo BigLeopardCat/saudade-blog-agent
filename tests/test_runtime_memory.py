@@ -170,3 +170,21 @@ def test_large_tool_turn_does_not_erase_the_recommendation_before_followup():
     results = {message.tool_call_id for message in history if isinstance(message, ToolMessage)}
     assert calls == results
     assert memory.history(saved, actor("user")) == []
+
+
+def test_long_assistant_reply_cannot_crowd_out_the_recent_tool_fact():
+    principal = actor("user")
+    call = {"name": "get_unread_summary", "args": {}, "id": "count"}
+    saved = memory.turn_messages(
+        [HumanMessage(content="我的未读合计多少？")],
+        memory.observation(call, base.ok('{"total":12}')),
+        "未读合计13条。" + "说明" * 1300, principal)
+    followup = [*saved, HumanMessage(content="刚才工具实际返回多少？")]
+    prompt = _input(followup, principal)
+    history = [message for message in prompt[1:-1] if not memory.is_context(message)]
+    sources = [message for message in history if isinstance(message, ToolMessage)]
+    assert len(sources) == 1 and json.loads(sources[0].content)["total"] == 12
+    assert sources[0].tool_call_id == "count"
+    assert memory._tokens(history) <= memory.HISTORY_TOKENS
+    assert len(str(history[-1].content)) < len(str(saved[-1].content))
+    assert memory.history(saved, actor(uid=8)) == []
