@@ -79,3 +79,17 @@ def frames(execution):
     action = execution.get("pending_action")
     if action:
         yield "__PENDING__:" + json.dumps(action, ensure_ascii=False)
+
+
+def pause_notice(result):
+    from agent.runtime.results import TurnResult
+
+    notice = "完成后继续剩余请求；取消将停止后续处理。"
+    execution = result.execution
+    popup = execution["pending_confirm"]
+    action = execution["pending_action"]
+    return TurnResult(result.reply + "\n" + notice, {
+        **execution, "confirm_text": execution.get("confirm_text", result.reply) + "\n" + notice,
+        "pending_confirm": {**popup, "q": popup["q"] + "\n" + notice},
+        "pending_action": {**action, "question": action["question"] + "\n" + notice},
+    })

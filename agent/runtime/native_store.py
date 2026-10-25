@@ -1,40 +1,20 @@
 """Conversation checkpoints through the framework's public state API.
 
-The single commit node supplies message reducers and checkpoint versioning. It is
-never invoked as an agent and cannot execute nodes from an older checkpoint.
+The maintenance graph shares the approval schema and reducers with execution.
+Only explicit signed confirmations resume Agent work.
 """
 
-from typing import Annotated, TypedDict
-
-from langgraph.graph import END, START, StateGraph
-from langgraph.graph.message import add_messages
-
 from agent.runtime import checkpoint_store, memory
+from agent.runtime.approval import graph
 from agent.runtime.conversation_store import ConversationSnapshot
 from agent.runtime.turns import check_cancelled, conversation_turn
 from utils.trace import record
 
 
-class ConversationState(TypedDict, total=False):
-    messages: Annotated[list, add_messages]
-    pending_confirm: dict | None
-    pending_action: dict | None
-    continuation: dict | None
-    receipts: list
-
-
-def _commit(state):
-    return {}
-
-
 class NativeConversationStore:
     def __init__(self, saver):
         self.saver = saver
-        graph = StateGraph(ConversationState)
-        graph.add_node("commit", _commit)
-        graph.add_edge(START, "commit")
-        graph.add_edge("commit", END)
-        self._state = graph.compile(checkpointer=saver)
+        self._state = graph(saver)
 
     @property
     def available(self) -> bool:
@@ -50,7 +30,11 @@ class NativeConversationStore:
             checkpoint_store.require_active(self.saver, thread_id)
         # Maintenance writes also use this node; inference from a legacy writer
         # would otherwise try to resume an old planner or fail as ambiguous.
-        return self._state.update_state(config, values, as_node="commit", **kwargs)
+        node = "commit"
+        if set(values) == {"messages"} and self.load(config).approval:
+            # History maintenance must preserve the outstanding approval edge.
+            node = "agent"
+        return self._state.update_state(config, values, as_node=node, **kwargs)
 
     def load(self, config) -> ConversationSnapshot:
         if not self.available:
@@ -61,13 +45,13 @@ class NativeConversationStore:
             messages=list(values.get("messages") or []),
             pending_confirm=values.get("pending_confirm"),
             pending_action=values.get("pending_action"),
-            continuation=values.get("continuation"),
+            approval=values.get("approval"),
             initialized=snapshot.created_at is not None,
         )
 
     def save_turn(
         self, config, messages, reply, *, observations=(), execution=None, pending=None,
-        continuation=None,
+        approval=None,
     ) -> None:
         if not self.available:
             return
@@ -76,16 +60,25 @@ class NativeConversationStore:
         current = memory.turn_messages(messages, observations, reply, principal)
         saved = {"messages": memory.checkpoint_messages(previous.messages, current),
                  "pending_confirm": None, "pending_action": None,
-                 "continuation": continuation}
+                 "approval": approval, "continuation": None}
         for values in (pending or {}, execution or {}):
             saved.update({key: values[key] for key in
                           ("pending_confirm", "pending_action", "receipts") if key in values})
-        self.update_state(config, saved)
+        active = self.get_state(config)
+        if approval and active.values.get("approval") == approval and active.next:
+            # Advance a completed application boundary, then recreate its interrupt.
+            # Repeated state-only Commands would accumulate writes in one superstep.
+            check_cancelled(config)
+            self._state.update_state(config, saved, as_node="agent")
+            self._state.invoke(None, config, durability="sync")
+        else:
+            self.update_state(config, saved)
         record("native", "checkpoint_write", messages=len(current))
 
     def clear_pending(self, config, jti: str) -> None:
         if (self.load(config).pending_action or {}).get("jti") == jti:
             self.update_state(config, {"pending_confirm": None, "pending_action": None,
+                                       "approval": None, "approved_result": None,
                                        "continuation": None})
             self.prune(config)
 

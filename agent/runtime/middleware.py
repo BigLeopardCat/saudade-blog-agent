@@ -1,19 +1,22 @@
 """Application policy on the standard LangChain model and tool execution hooks."""
 
+import json
 import time
 from threading import Condition
 
 from langchain.agents.middleware import AgentMiddleware, hook_config
 from langchain_core.callbacks import BaseCallbackHandler
-from langchain_core.messages import AIMessageChunk, ToolMessage
+from langchain_core.messages import AIMessage, AIMessageChunk, RemoveMessage, ToolMessage
 from langgraph.types import Command
 
 from agent.llm_usage import usage_fields
 from agent.runtime import trace_context
 from agent.runtime.budget import native_call
-from agent.runtime.continuation import ToolContinuation, evidence_state, pause_notice
+from agent.runtime.confirmation import pause_notice
 from agent.runtime.control import AgentCancelled, model_options
+from agent.runtime.execution_state import capture, restore
 from agent.runtime.finalization import final_prompt
+from agent.runtime.memory_media import hydrate, stage
 from agent.runtime.message_content import text_content
 from agent.runtime.progress import emit
 from agent.runtime.turns import check_cancelled
@@ -60,15 +63,60 @@ class SessionMiddleware(AgentMiddleware):
         self._next = 0
         self.system_message = None
         self._failed = False
+        self.cached = {}
 
-    @hook_config(can_jump_to=["end"])
+    @hook_config(can_jump_to=["end", "tools"])
     def before_model(self, state, runtime):
-        check_cancelled(self.session.config)
-        return {"jump_to": "end"} if self.session.outcome is not None else None
+        session = self.session
+        check_cancelled(session.config)
+        if state.get("resume"):
+            return self._resume(state)
+        saved = capture(session)
+        if session.outcome is not None:
+            saved["jump_to"] = "end"
+        return saved
+
+    def _resume(self, state):
+        session = self.session
+        facts = state["resume"]
+        restore(session, state)
+        proposal = (session.outcome.execution or {}) if session.outcome else {}
+        if facts["jti"] != proposal.get("pending_action", {}).get("jti"):
+            raise ValueError("执行回执与 Agent 待确认操作不一致")
+        messages = list(state["messages"])
+        index = next(i for i in range(len(messages) - 1, -1, -1)
+                     if isinstance(messages[i], AIMessage) and messages[i].tool_calls)
+        self.calls = messages[index].tool_calls
+        answered = {message.tool_call_id: message for message in messages[index + 1:]
+                    if isinstance(message, ToolMessage)}
+        awaiting = answered[session.awaiting_call]
+        visible = {"status": "executed", "result": facts["reply"], "receipts": [
+            {key: row[key] for key in ("tool", "args", "result", "action") if key in row}
+            for row in facts["execution"]["receipts"]]}
+        receipt = awaiting.model_copy(update={"content": json.dumps(visible, ensure_ascii=False),
+                                              "artifact": None})
+        deferred = [message for message in answered.values()
+                    if (message.artifact or {}).get("phase") == "deferred"]
+        self.cached = {ident: message for ident, message in answered.items()
+                       if message not in deferred}
+        self.cached[session.awaiting_call] = receipt
+        self.exchange = [*messages[:index + 1], *self.cached.values()]
+        session.outcome, session.awaiting_call = None, None
+        saved = {**capture(session), "resume": None,
+                 "messages": [receipt, *(RemoveMessage(id=m.id) for m in deferred)]}
+        if deferred:
+            self.attachments = [message for message in messages[index + 1:]
+                                if not isinstance(message, ToolMessage)]
+            saved["messages"].extend(RemoveMessage(id=m.id) for m in self.attachments)
+            session.budget.attempt_tools(len(deferred))
+            self._next = 0
+            saved["jump_to"] = "tools"
+        return saved
 
     def wrap_model_call(self, request, handler):
         session = self.session
-        prompt = [*([request.system_message] if request.system_message else []), *request.messages]
+        prompt = [*([request.system_message] if request.system_message else []),
+                  *hydrate(request.messages, session.transient)]
         final = final_prompt(session.budget, prompt, session.menu, session.output_limit,
                              results_full=session.result_chars >= session.result_limit)
         model = session.model
@@ -119,11 +167,12 @@ class SessionMiddleware(AgentMiddleware):
         self.exchange = [*system, *state["messages"]]
         self.calls, self.attachments = calls or [], []
         self._next = 0
+        self.cached = {}
         session._round_index += 1
         if outcome is not None:
             session.outcome = outcome
-            return {"jump_to": "end"}
-        return None
+            return {**capture(session), "jump_to": "end"}
+        return capture(session)
 
     def wrap_tool_call(self, request, handler):
         # Preparing a later operation must wait for the preceding result. The
@@ -148,30 +197,24 @@ class SessionMiddleware(AgentMiddleware):
     def _tool_result(self, call):
         session = self.session
         check_cancelled(session.config)
-        # A signed proposal ends this HTTP turn. The framework still completes
-        # siblings' message envelopes; their business tools must wait for approval.
-        if session.outcome is not None:
-            return ToolMessage(content="尚未执行，等待当前操作的确认。", tool_call_id=call["id"])
-        before = len(self.exchange)
-        session._append_result(call, self.exchange, session._round_index - 1, self.attachments)
-        if session.outcome is not None:
-            self._suspend(call)
-        message = (self.exchange[-1] if len(self.exchange) > before else ToolMessage(
-            content="操作已准备，等待用户决定。", name=call["name"], tool_call_id=call["id"]))
+        if call["id"] in self.cached:
+            message = self.cached[call["id"]]
+        elif session.outcome is not None:
+            message = ToolMessage(content="尚未执行，等待当前操作的确认。",
+                                  tool_call_id=call["id"], artifact={"phase": "deferred"})
+        else:
+            before = len(self.exchange)
+            session._append_result(call, self.exchange, max(0, session._round_index - 1),
+                                   self.attachments)
+            execution = (session.outcome.execution or {}) if session.outcome else {}
+            if execution.get("pending_confirm"):
+                session.awaiting_call = call["id"]
+                if call["id"] != self.calls[-1]["id"]:
+                    session.outcome = pause_notice(session.outcome)
+            message = (self.exchange[-1] if len(self.exchange) > before else ToolMessage(
+                content="操作已准备，等待用户决定。", name=call["name"], tool_call_id=call["id"],
+                artifact={"phase": "awaiting_approval"}))
         if self.calls and call["id"] == self.calls[-1]["id"] and self.attachments:
-            return Command(update={"messages": [message, *self.attachments]})
+            return Command(update={"messages": [message, *stage(self.attachments,
+                                                               session.transient)]})
         return message
-
-    def _suspend(self, call):
-        session = self.session
-        execution = session.outcome.execution or {}
-        if not execution.get("pending_confirm"):
-            return
-        index = next(i for i, item in enumerate(self.calls) if item["id"] == call["id"])
-        remaining = self.calls[index + 1:]
-        if remaining:
-            session.outcome = pause_notice(session.outcome)
-        cursor = ToolContinuation(self.exchange, call, remaining, self.attachments,
-                                  list(session.loaded), evidence_state(session.article_evidence),
-                                  session.result_chars)
-        session.continuation = cursor.checkpoint(session.config, execution["pending_action"]["jti"])
