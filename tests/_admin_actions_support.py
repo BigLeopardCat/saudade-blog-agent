@@ -2,10 +2,11 @@
 
 import json
 
+from _framework_ledger import Ledger
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from langgraph.checkpoint.memory import InMemorySaver
 
-from agent import confirm, idem
+from agent import confirm
 from agent.runtime import writes
 from agent.runtime.native import NativeRuntime
 from agent.runtime.native_store import NativeConversationStore
@@ -45,7 +46,7 @@ def confirmed_roundtrip(monkeypatch, tmp_path, config, domain, prepare_name, arg
             return next(self.responses)
 
     model = Model()
-    ledger = idem.Ledger(str(tmp_path / "native.sqlite3"))
+    ledger = Ledger(str(tmp_path / "native.sqlite3"))
     monkeypatch.setattr(writes, "ledger_for", lambda saver: ledger)
     runtime = NativeRuntime(NativeConversationStore(InMemorySaver()),
                             model_factory=lambda **_: model)

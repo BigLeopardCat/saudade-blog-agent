@@ -15,7 +15,8 @@
 存储失败、取消或关闭生成器不会产出成功结果，关闭会传递到模型迭代器。
 
 state 使用 messages 和可选的 confirm_grant；历史 plan、ledger、open_tasks 不成为执行依据。
-原生入口不构建 create_agent，不调用 legacy.stream，不输出 planner/model/gate 等伪造节点更新。
+模型—工具循环已按 ADR-0024 迁入 `create_agent`，原生服务门面保留现有传输契约。
+不调用 legacy.stream，不输出 planner/model/gate 等伪造节点更新。
 模型菜单和提示词不再提供 delegate_to_site_agent；超限不会借另一引擎重置预算。
 未知确认执行器拒绝执行。纯聊天角色不绑定任何工具 schema，授权仍由现有确定性代码复核。
 

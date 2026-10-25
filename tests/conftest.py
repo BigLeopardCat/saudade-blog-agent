@@ -182,3 +182,19 @@ def service_workers(monkeypatch):
     yield workers
     workers.stop()
     workers.executor.shutdown(wait=True, cancel_futures=True)
+
+
+@pytest.fixture(autouse=True)
+def _scripted_chat_transports(monkeypatch):
+    """Run old I/O spies through real framework scheduling and model callbacks."""
+    from _framework_model import adapt, tools
+
+    from agent.runtime.session import ToolSession
+
+    original = ToolSession.__init__
+
+    def initialize(session, model, config, initial, domains, *args, **kwargs):
+        original(session, adapt(model), config, tools(initial),
+                 {name: tools(domain) for name, domain in domains.items()}, *args, **kwargs)
+
+    monkeypatch.setattr(ToolSession, "__init__", initialize)

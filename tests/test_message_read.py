@@ -94,7 +94,9 @@ def test_partial_write_has_no_receipt_and_cannot_repeat(mailbox, tmp_path):
 
 
 def test_replacing_and_cancelling_message_cards_revokes_old_grants(mailbox, monkeypatch, tmp_path):
-    store = idem.Ledger(str(tmp_path / "cancel.sqlite3"))
+    from _framework_ledger import Ledger
+
+    store = Ledger(str(tmp_path / "cancel.sqlite3"))
     monkeypatch.setattr(writes, "ledger_for", lambda _: store)
     runtime = NativeRuntime(NativeConversationStore(InMemorySaver()))
 

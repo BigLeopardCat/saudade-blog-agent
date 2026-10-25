@@ -111,9 +111,10 @@ def test_native_admin_read_loads_only_requested_domain_and_never_calls_legacy(mo
     )
     events = list(runtime.stream_events(
         {"messages": [HumanMessage(content="查看服务器状态")]}, cfg))
-    assert tool.calls == [cfg]
-    assert tool not in model.menus[0] and tool in model.menus[1]
-    assert not any(getattr(item, "name", "").startswith("prepare_") for item in model.menus[1])
+    assert len(tool.calls) == 1 and tool.calls[0]["configurable"] == cfg["configurable"]
+    menus = [{item["function"]["name"] for item in menu} for menu in model.menus]
+    assert tool.name not in menus[0] and tool.name in menus[1]
+    assert not any(name.startswith("prepare_") for name in menus[1])
     assert events[-1].reply == "CPU 17%，内存 36%。"
 
 
