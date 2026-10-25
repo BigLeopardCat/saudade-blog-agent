@@ -21,6 +21,11 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import datetime, timedelta
+from pathlib import Path
+
+# Legacy file entry: resolve modules from this checkout rather than an installed sibling.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import corpus_terms  # 同目录：语料术语派生（require_doc_terms 判据用）
 import golden_fixture  # 同目录：真写用例的夹具在位检查（20260925）
@@ -2987,9 +2992,7 @@ def main():
     os.makedirs("eval/report", exist_ok=True)
     _REPORTS_DIR = golden_runtime.REPORTS_DIR
     os.makedirs(_REPORTS_DIR, exist_ok=True)
-    # 耗时基线（20260829，RAG 动工前置）：全量用例耗时分布 P50/P95——
-    # "RAG 拖慢"成为可检测回归的基准（对比 baseline_*.json 存档）。
-    # trace 落盘（logs/traces/）提供逐请求分段耗时，这里是评测集的整体基线。
+    # Request latency samples are separate from per-stage trace timings.
     latencies = sorted(r["elapsed"] for r in results)
     def _pct(lats: list, p: float) -> float:
         if not lats:
@@ -3155,15 +3158,11 @@ def main():
         "trace_dir": os.path.dirname(_first_trace) if _first_trace else None,
         "cases": results,
     }
-    # `last_run.json` **只在全量跑时写**（20260924）：它被当成"最近一次基线"读，
-    # 而一次 `--only <单条>` 的调试跑曾把它覆盖成 total=1（读的人会以为语料没了）。
-    # 非全量的那一轮仍然留档在 `runs/<ts>.json`——归档不缺，缺的是"别动基线"。
+    # Only a full run may replace the baseline; partial runs remain archived.
     if _is_full_run:
         with open(REPORT_FILE, "w", encoding="utf-8") as f:
             json.dump(report, f, ensure_ascii=False, indent=1)
-    # 留档名在**写的那一刻**取（`O_EXCL` 占位，见 report_archive 头注）：既不占着空文件
-    # 等，也没有"两个跑法都查过、都说这个名字没人用"的空档。复审单与留档同名成对。
-    # 目录按臂分（`_REPORTS_DIR`）——臂名不进文件名，见那里的注。
+    # Reserve a unique archive name atomically and pair it with the review report.
     with report_archive.open_archive(_REPORTS_DIR) as (archive, f):
         ts_str = os.path.splitext(os.path.basename(archive))[0]
         json.dump(report, f, ensure_ascii=False, indent=1)

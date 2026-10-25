@@ -22,9 +22,12 @@ import signal
 import subprocess
 import sys
 import time
+from pathlib import Path
 
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", line_buffering=True)
-sys.path.insert(0, "eval")
+# Legacy file entry: resolve modules from this checkout rather than an installed sibling.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 import corpus_provenance  # 同目录：语料出处闸（与 run_golden.py 共用同一个判据）
 import golden_trace  # 同目录：trace 开关 + 靠 trace 才判得动的 gold 键（见下面的闸）
 import report_archive  # 同目录：留档文件名（秒级 ts 同秒撞车 → 见模块头注）
