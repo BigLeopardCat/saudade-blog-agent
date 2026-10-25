@@ -222,8 +222,8 @@ def test_cancel_or_changed_reason_replacement_revokes_old_decision(
     quota, monkeypatch, tmp_path, cancel
 ):
     from agent.domains import registry
+    from agent.products.blog.pending import PendingOperation
     from agent.runtime import writes
-    from agent.runtime.pending import PendingOperation
 
     monkeypatch.setitem(registry._DOMAINS, "quota_actions", transactions)
     ledger = idem.Ledger(str(tmp_path / "revoke.sqlite3"))

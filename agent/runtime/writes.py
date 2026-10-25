@@ -6,7 +6,7 @@ import time
 
 from agent import checkpoint, idem
 from agent.runtime import checkpoint_store
-from agent.runtime.read_tools import own_reads_enabled
+from agent.runtime.access import own_reads_enabled
 from agent.runtime.turns import check_cancelled
 from tools.base import ToolResult, unavailable
 from utils.trace import record

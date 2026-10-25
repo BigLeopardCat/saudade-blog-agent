@@ -11,8 +11,8 @@ from pydantic import ValidationError
 from agent import confirm, idem
 from agent.domains.todos import preparation, transactions
 from agent.principal import SOURCE_ASSERTION, Principal
+from agent.products.blog.pending import PendingOperation
 from agent.runtime import writes
-from agent.runtime.pending import PendingOperation
 from agent.runtime.results import TurnResult
 from tools import base
 

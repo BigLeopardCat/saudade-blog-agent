@@ -11,7 +11,7 @@ from pydantic import Field, StrictStr
 
 from agent import authz
 from agent.domains import device_reads
-from agent.runtime.read_tools import scoped_reads_enabled
+from agent.products.blog.read_tools import scoped_reads_enabled
 from agent.runtime.turns import check_cancelled
 from tools import device
 

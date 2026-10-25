@@ -17,10 +17,10 @@ from langgraph.checkpoint.memory import InMemorySaver
 from agent import confirm
 from agent.domains.favorites import transactions
 from agent.principal import SOURCE_ASSERTION, Principal
+from agent.products.blog.capabilities import ToolCatalog
+from agent.products.blog.confirmation import cancel
 from agent.runtime import approval, writes
 from agent.runtime.budget import BudgetLimits, RequestBudget, budget_scope
-from agent.runtime.capabilities import ToolCatalog
-from agent.runtime.confirmation import cancel
 from agent.runtime.native import NativeRuntime
 from agent.runtime.native_store import NativeConversationStore
 from agent.runtime.results import TurnResult

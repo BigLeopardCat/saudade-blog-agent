@@ -11,9 +11,9 @@ from langchain_core.utils.function_calling import convert_to_openai_tool
 from langgraph.checkpoint.memory import InMemorySaver
 
 from agent.principal import SOURCE_ASSERTION, Principal
+from agent.products.blog.prompt import build_prompt
 from agent.runtime.native import NativeRuntime
 from agent.runtime.native_store import NativeConversationStore
-from agent.runtime.prompt import build_prompt
 from agent.runtime.results import TurnResult
 from agent.runtime.session import ToolSession
 from tools import base

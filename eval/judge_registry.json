@@ -63,10 +63,6 @@
         0,
         3
       ],
-      "agent/article_evidence.py": [
-        0,
-        0
-      ],
       "agent/authz.py": [
         80,
         441
@@ -160,6 +156,10 @@
         0
       ],
       "agent/domains/article_tags/transactions.py": [
+        0,
+        0
+      ],
+      "agent/domains/articles/evidence.py": [
         0,
         0
       ],
@@ -379,6 +379,42 @@
         0,
         0
       ],
+      "agent/products/blog/admin_domains.py": [
+        0,
+        0
+      ],
+      "agent/products/blog/capabilities.py": [
+        0,
+        0
+      ],
+      "agent/products/blog/catalog.py": [
+        16,
+        0
+      ],
+      "agent/products/blog/confirmation.py": [
+        2,
+        0
+      ],
+      "agent/products/blog/context.py": [
+        0,
+        0
+      ],
+      "agent/products/blog/pending.py": [
+        0,
+        0
+      ],
+      "agent/products/blog/persona.py": [
+        0,
+        0
+      ],
+      "agent/products/blog/prompt.py": [
+        0,
+        0
+      ],
+      "agent/products/blog/read_tools.py": [
+        0,
+        0
+      ],
       "agent/receipt_digest.py": [
         9,
         17
@@ -391,31 +427,15 @@
         0,
         0
       ],
-      "agent/runtime/admin_domains.py": [
-        0,
-        0
-      ],
       "agent/runtime/budget.py": [
         0,
         0
       ],
-      "agent/runtime/capabilities.py": [
-        0,
-        0
-      ],
       "agent/runtime/catalog.py": [
-        16,
+        0,
         0
       ],
       "agent/runtime/checkpoint_store.py": [
-        0,
-        0
-      ],
-      "agent/runtime/confirmation.py": [
-        2,
-        0
-      ],
-      "agent/runtime/context.py": [
         0,
         0
       ],
@@ -451,23 +471,7 @@
         0,
         0
       ],
-      "agent/runtime/pending.py": [
-        0,
-        0
-      ],
-      "agent/runtime/persona.py": [
-        0,
-        0
-      ],
       "agent/runtime/progress.py": [
-        0,
-        0
-      ],
-      "agent/runtime/prompt.py": [
-        0,
-        0
-      ],
-      "agent/runtime/read_tools.py": [
         0,
         0
       ],
@@ -500,6 +504,10 @@
         0
       ],
       "agent/transport.py": [
+        0,
+        0
+      ],
+      "server.py": [
         0,
         0
       ],
@@ -573,10 +581,6 @@
       ],
       "tools/tag_admin.py": [
         13,
-        0
-      ],
-      "server.py": [
-        0,
         0
       ]
     },

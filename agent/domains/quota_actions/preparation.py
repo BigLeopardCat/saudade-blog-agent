@@ -8,8 +8,8 @@ from pydantic import Field, StrictInt, StrictStr
 
 from agent import action_text
 from agent.domains.quota_actions import targets
+from agent.products.blog.confirmation import proposal
 from agent.reports import sanitize_untrusted
-from agent.runtime.confirmation import proposal
 from agent.runtime.results import TurnResult
 from agent.runtime.turns import check_cancelled
 from agent.runtime.writes import bound_context

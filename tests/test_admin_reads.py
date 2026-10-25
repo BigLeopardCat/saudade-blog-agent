@@ -1,6 +1,7 @@
 """Administrator reads require verified, bound identity before any local or HTTP I/O."""
 
 import secrets
+from types import SimpleNamespace
 
 import httpx
 import jwt
@@ -9,10 +10,11 @@ from langchain_core.messages import AIMessage, HumanMessage
 
 from agent import authz
 from agent.principal import SOURCE_ASSERTION, SOURCE_BODY, Principal
-from agent.runtime.capabilities import ToolCatalog
+from agent.products.blog.capabilities import ToolCatalog
+from agent.products.blog.read_tools import ADMIN_READ_TOOLS, MODERATION_READ_TOOLS, admin_tools
+from agent.products.blog.tool_policy import BlogToolMiddleware
 from agent.runtime.native import NativeRuntime
 from agent.runtime.native_store import NativeConversationStore
-from agent.runtime.read_tools import ADMIN_READ_TOOLS, MODERATION_READ_TOOLS, admin_tools
 from agent.runtime.session import ToolSession
 from tools import base
 
@@ -47,6 +49,13 @@ def config(role="superadmin", source=SOURCE_ASSERTION, uid=7, **extra):
     return {"configurable": {"principal": Principal(uid, role, source), **extra}}
 
 
+def invoke_authorized(session, name, args):
+    request = SimpleNamespace(tool_call={"name": name, "args": args, "id": "read"},
+                              state={"messages": []})
+    return BlogToolMiddleware(session).wrap_tool_call(
+        request, lambda current: session._invoke_tool(name, args, current.tool_call))
+
+
 @pytest.mark.parametrize("role,source,uid,visible", [
     ("admin", SOURCE_ASSERTION, 7, True), ("superadmin", SOURCE_ASSERTION, 7, True),
     ("user", SOURCE_ASSERTION, 7, False), ("zako", SOURCE_ASSERTION, 7, False),
@@ -75,16 +84,16 @@ def test_private_tool_cannot_run_even_if_accidentally_included_in_menu(cfg, monk
     monkeypatch.setattr(settings, "authz_enforce", False)
     tool = LocalTool()
     session = ToolSession(Model(), cfg, {tool.name: tool}, {})
-    assert session._invoke_tool(tool.name, {}) is None
+    assert invoke_authorized(session, tool.name, {}).status == "error"
     assert not tool.calls
 
 
 def test_permission_is_checked_again_after_domain_discovery(monkeypatch):
     tool = LocalTool()
     session = ToolSession(Model(), config(), {tool.name: tool}, {})
-    monkeypatch.setattr("agent.runtime.session.check", lambda *args: authz.Decision(
+    monkeypatch.setattr("agent.products.blog.tool_policy.check", lambda *args: authz.Decision(
         False, "denied", authz.SCOPE_ADMIN_CONSOLE, tool.name))
-    assert session._invoke_tool(tool.name, {}) is None
+    assert invoke_authorized(session, tool.name, {}).status == "error"
     assert not tool.calls
 
 
@@ -92,7 +101,7 @@ def test_read_loop_never_executes_a_registered_write_tool():
     tool = LocalTool()
     tool.name = "set_article_status"
     session = ToolSession(Model(), config(), {tool.name: tool}, {})
-    assert session._invoke_tool(tool.name, {"note_id": 19, "status": 0}) is None
+    assert invoke_authorized(session, tool.name, {"note_id": 19, "status": 0}).status == "error"
     assert not tool.calls
 
 
@@ -155,7 +164,7 @@ def test_real_statistics_tool_uses_actor_identity_and_preserves_api_failure(monk
     with httpx.Client(transport=httpx.MockTransport(handle)) as client:
         monkeypatch.setattr(base, "_client", client)
         session = ToolSession(Model(), config(user_id=7), admin_tools(), {})
-        result = session._invoke_tool("get_user_stats", {})
+        result = invoke_authorized(session, "get_user_stats", {})
     assert len(requests) == 1
     assert result.kind == ("ok" if status == 200 else "unavailable")
     if status == 200:

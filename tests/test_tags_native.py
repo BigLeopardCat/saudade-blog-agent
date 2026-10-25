@@ -205,7 +205,7 @@ def test_exact_names_reject_ambiguity_and_unauthorized_inputs_do_no_io(tags):
 
 
 def test_noop_and_cancel_do_not_write(tags, tmp_path, monkeypatch):
-    from agent.runtime.pending import PendingOperation
+    from agent.products.blog.pending import PendingOperation
 
     cfg = admin_config()
     result = preparation.prepare_tag_update.invoke(

@@ -5,9 +5,10 @@ import json
 from langchain_core.messages import HumanMessage, SystemMessage
 
 from agent.principal import is_verified_identity
+from agent.products.blog.context import conversation_context
+from agent.products.blog.history import tool_access
+from agent.products.blog.persona import BLOG_PERSONA_PROMPT
 from agent.runtime import memory
-from agent.runtime.context import conversation_context
-from agent.runtime.persona import BLOG_PERSONA_PROMPT
 from tools.base import SITE_BASE
 
 _BOUNDARY = (
@@ -67,6 +68,6 @@ def build_prompt(messages: list, principal, own_enabled: bool = False, pending=N
                 pending.context(), ensure_ascii=False),
             additional_kwargs={"memory_context": True}))
     summary = memory.summary_message(messages, principal)
-    dialogue = memory.prompt_dialogue(messages, principal)
+    dialogue = memory.prompt_dialogue(messages, principal, tool_access=tool_access)
     return [system, *dialogue[:-1], *attachments,
             *([summary] if summary is not None else []), *dialogue[-1:]]

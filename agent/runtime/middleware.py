@@ -12,13 +12,13 @@ from langgraph.types import Command
 from agent.llm_usage import usage_fields
 from agent.runtime import trace_context
 from agent.runtime.budget import native_call
-from agent.runtime.confirmation import pause_notice
 from agent.runtime.control import AgentCancelled, model_options
 from agent.runtime.execution_state import capture, restore
 from agent.runtime.finalization import final_prompt
 from agent.runtime.memory_media import hydrate, stage
 from agent.runtime.message_content import text_content
 from agent.runtime.progress import emit
+from agent.runtime.results import pause_notice
 from agent.runtime.turns import check_cancelled
 from config.settings import settings
 from utils.trace import record
@@ -175,24 +175,7 @@ class SessionMiddleware(AgentMiddleware):
         return capture(session)
 
     def wrap_tool_call(self, request, handler):
-        # Preparing a later operation must wait for the preceding result. The
-        # framework owns dispatch; this lock protects application policy state.
-        with self._order:
-            while (not self._failed
-                   and self.calls[self._next]["id"] != request.tool_call["id"]):
-                check_cancelled(self.session.config)
-                self._order.wait(0.05)
-            if self._failed:
-                return ToolMessage(content="前序调用失败，本项未执行。", status="error",
-                                   tool_call_id=request.tool_call["id"])
-            try:
-                return self._tool_result(request.tool_call)
-            except BaseException:
-                self._failed = True
-                raise
-            finally:
-                self._next += 1
-                self._order.notify_all()
+        return self._tool_result(request.tool_call)
 
     def _tool_result(self, call):
         session = self.session
@@ -218,3 +201,29 @@ class SessionMiddleware(AgentMiddleware):
             return Command(update={"messages": [message, *stage(self.attachments,
                                                                session.transient)]})
         return message
+
+
+class OrderedToolsMiddleware(AgentMiddleware):
+    """Serialize the complete policy chain for each model's ordered tool batch."""
+
+    def __init__(self, policy):
+        self.policy = policy
+
+    def wrap_tool_call(self, request, handler):
+        policy = self.policy
+        with policy._order:
+            while (not policy._failed
+                   and policy.calls[policy._next]["id"] != request.tool_call["id"]):
+                check_cancelled(policy.session.config)
+                policy._order.wait(0.05)
+            if policy._failed:
+                return ToolMessage(content="前序调用失败，本项未执行。", status="error",
+                                   tool_call_id=request.tool_call["id"])
+            try:
+                return handler(request)
+            except BaseException:
+                policy._failed = True
+                raise
+            finally:
+                policy._next += 1
+                policy._order.notify_all()

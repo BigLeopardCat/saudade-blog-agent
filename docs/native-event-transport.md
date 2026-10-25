@@ -21,7 +21,7 @@ Runtime 负责会话存储、授权、确认、取消、幂等和持久化；
 - `receipts[*].cmd` 编码 `__CMD__`，并同步给非流式响应使用的 `AUTO_NAVIGATE`、
   `NAVIGATE`、`EFFECT`、`DARKMODE` 连线格式；不从正文猜命令；
 - 回执整体编码 `__EXEC__`；
-- 确认、取消和替换卡由 `agent.runtime.confirmation.frames` 统一生成
+- 确认、取消和替换卡由 `agent.products.blog.confirmation.frames` 统一生成
   `__PENDING__` / `__CONFIRM__`，传输层不把令牌、规格等额外字段直接暴露；
 - no-op、空回复和保存失败分别由 Runtime 的终态、事件错误和 HTTP 现有兜底处理。
 

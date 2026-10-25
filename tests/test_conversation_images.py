@@ -235,7 +235,7 @@ def test_batch_tool_receipts_precede_all_image_attachments_on_the_sdk_wire(monke
     model = Capture(call("load_conversation_images_info_tools", "load"),
                     AIMessageChunk(content="", tool_calls=batch), AIMessageChunk(content="seen"))
     selected = runtime(InMemorySaver(), model)
-    selected.catalog = SimpleNamespace(
+    selected.application.catalog = SimpleNamespace(
         initial_tools=lambda _: {fixture_read.name: fixture_read}, domains=lambda *_: {})
     selected.store.save_turn(config(), [HumanMessage(content=[
         {"type": "image_url", "image_url": {"url": url}} for url in urls])], "initial analysis")

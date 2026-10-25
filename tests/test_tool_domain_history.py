@@ -60,11 +60,12 @@ def test_text_errors_and_no_longer_authorized_domains_cannot_restore_tools():
 def test_small_browser_actions_are_visible_without_loading_the_read_domain():
     from agent.domains import browser
     from agent.principal import SOURCE_ASSERTION, Principal
+    from agent.products.blog.catalog import initial_tools
 
     config = {"configurable": {"user_id": 7, "principal": Principal(7, "user", SOURCE_ASSERTION)}}
     model = Model()
-    session = ToolSession(model, config, {}, {"site": {
-        "observed_read": observed_read, **browser.tools(config)}})
+    domains = {"site": {"observed_read": observed_read, **browser.tools(config)}}
+    session = ToolSession(model, config, initial_tools({}, domains), domains)
     initial = menu(session)
     assert {"navigate_page", "set_page_appearance"} <= initial
     assert "observed_read" not in initial
