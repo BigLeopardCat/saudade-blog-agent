@@ -2,7 +2,7 @@
 
 from typing import Literal
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from agent.confirm import MAX_TOKEN_CHARS
 from agent.principal import KNOWN_ROLES
@@ -23,6 +23,34 @@ class HistoryItem(BaseModel):
     content: str
 
 
+class SummaryMessage(HistoryItem):
+    id: int = Field(gt=0, strict=True)
+
+
+class SummaryBatch(BaseModel):
+    """A complete ordered prefix of messages after the host's saved summary boundary."""
+
+    base_id: int = Field(ge=0, strict=True)
+    messages: list[SummaryMessage] = Field(min_length=1, max_length=MAX_HISTORY_ITEMS)
+
+    @model_validator(mode="after")
+    def ordered_messages(self):
+        ids = [message.id for message in self.messages]
+        if ids != sorted(set(ids)) or ids[0] <= self.base_id:
+            raise ValueError("Summary messages must advance the saved boundary in ID order")
+        return self
+
+    @property
+    def through_id(self):
+        return self.messages[-1].id
+
+
+class SummaryUpdate(BaseModel):
+    text: str
+    base_id: int
+    through_id: int
+
+
 class QuotaInfo(BaseModel):
     """Host-computed quota values; an absent object means the quota is unknown."""
 
@@ -40,6 +68,7 @@ class ChatRequest(BaseModel):
     history: list[HistoryItem] = Field(default_factory=list, max_length=MAX_HISTORY_ITEMS)
     summary: str = Field(default="", max_length=MAX_TEXT_FIELD_CHARS)
     needs_summary: bool = False
+    summary_batch: SummaryBatch | None = None
     # Host-persisted provenance; never stamp existing records with today's role.
     history_scope: dict | None = None
     summary_scope: dict | None = None
@@ -89,4 +118,5 @@ class ChatResponse(BaseModel):
     success: bool
     error: str | None = None
     new_summary: str | None = None
+    summary_coverage: dict[str, int] | None = None
     executions: list = Field(default_factory=list)
