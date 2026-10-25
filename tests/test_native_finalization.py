@@ -8,6 +8,7 @@ from langchain_core.messages import AIMessage, HumanMessage
 from langchain_core.tools import StructuredTool
 
 from agent.runtime.budget import BudgetLimits, RequestBudget, budget_scope
+from agent.runtime.progress import ProgressEmitter
 from agent.runtime.session import ToolSession
 from models.llm import get_llm
 from tools.result import ok
@@ -30,7 +31,7 @@ def tool_call(identifier="read"):
 @pytest.mark.parametrize("limit", ["request_tokens", "context_tokens", "model_calls",
                                    "tool_calls", "result_budget", "partial_output", "none"])
 def test_real_sdk_finishes_from_tool_facts_without_resetting_or_raising_budget(limit, monkeypatch):
-    requests, reads = [], []
+    requests, reads, progress = [], [], []
     if limit == "result_budget":
         monkeypatch.setattr("agent.runtime.session._MAX_TOTAL_RESULT_CHARS", 17)
 
@@ -70,7 +71,8 @@ def test_real_sdk_finishes_from_tool_facts_without_resetting_or_raising_budget(l
         model = get_llm(api_key="test-only", base_url="https://example.test/v1",
                         model="fixture-model", http_client=client, streaming=False,
                         max_tokens=768 if limit == "partial_output" else 64, enable_thinking=False)
-        session = ToolSession(model, {}, {reader.name: reader}, {})
+        config = {"configurable": {"progress_emitter": ProgressEmitter(progress.append)}}
+        session = ToolSession(model, config, {reader.name: reader}, {})
         result = session.run([HumanMessage(content="读取并回答")])
     assert result.reply == "查到的结果是 42。" and reads == ["read"]
     assert budget.tokens == (4040 if limit == "context_tokens" else
@@ -78,6 +80,7 @@ def test_real_sdk_finishes_from_tool_facts_without_resetting_or_raising_budget(l
     assert budget.reason is None
     assert budget.model_calls == 2 and budget.tool_calls == 1
     assert session.finalizing is (limit != "none")
+    assert progress[-1] == ("正在处理请求…" if limit == "none" else "正在整理已取得的结果…")
 
 
 def test_capacity_inspection_cannot_poison_a_smaller_call_or_consume_budget():

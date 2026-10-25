@@ -318,7 +318,8 @@ class ToolSession:
         aggregate = None
         started = time.monotonic()
         failed = False
-        emit_progress(self.config, "正在处理请求…", key=f"model:{self._round_index}")
+        label = "正在整理已取得的结果…" if self.finalizing else "正在处理请求…"
+        emit_progress(self.config, label, key=f"model:{self._round_index}")
         record("native", "llm_start", round=self._round_index, engine="native",
                prompt_chars=sum(len(text_content(message.content)) for message in prompt),
                streaming=True)
@@ -486,7 +487,6 @@ class ToolSession:
                 self.llm = (self.model.bind(max_tokens=output)
                             if output < self.output_limit else self.model)
                 self.menu, self.finalizing, self.output_limit = [], True, output
-                emit_progress(self.config, "正在整理已取得的结果…", key="finalization")
                 record("native", "finalizing", reason=reason, output_limit=output)
             prompt_chars = sum(len(text_content(message.content)) for message in prompt)
             if prompt_chars > MAX_PROMPT_CHARS:
