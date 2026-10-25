@@ -206,7 +206,7 @@ def _test_wired_into_server_lifespan():
     check("  且在 `_build_arm()` **之前**（否则臂会先被建起来再被这个错误丢掉）",
           "check_provider()" in src
           and src.index("check_provider()")
-          < src.index("app.state.runtime, _arm = build_runtime()"), "")
+          < src.index("app.state.runtime, _arm = build_runtime(resources)"), "")
 
 
 

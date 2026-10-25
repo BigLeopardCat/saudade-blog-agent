@@ -1,6 +1,7 @@
 """Native model/tool turns with conversation persistence and no planner fallback."""
 
 import asyncio
+from contextlib import ExitStack
 from dataclasses import replace
 from functools import partial
 
@@ -75,12 +76,15 @@ class NativeRuntime:
         can_prepare = self.store.available and (not snapshot.has_pending or pending is not None)
         chat_only = getattr(principal, "known_role", None) in CHAT_ONLY_ROLES
         tools = {} if chat_only else self.catalog.initial_tools(own_enabled)
-        domains = {} if chat_only else self.catalog.domains(
-            config, can_prepare, pending, self.saver)
-        prompt = build_prompt([*snapshot.messages, *(state.get("messages") or [])],
-                              principal, own_enabled, pending)
+        domains = (
+            {} if chat_only else self.catalog.domains(config, can_prepare, pending, self.saver)
+        )
+        prompt = build_prompt(
+            [*snapshot.messages, *(state.get("messages") or [])], principal, own_enabled, pending
+        )
         model = (self.model_factory or get_llm)(
-            enable_thinking=False, streaming=True, stream_usage=True, max_tokens=768)
+            enable_thinking=False, streaming=True, stream_usage=True, max_tokens=768
+        )
         adapt = partial(pending.transition, config=config, saver=self.saver) if pending else None
         session = ToolSession(model, config, tools, domains, adapt)
         runner = session.stream(prompt)
@@ -98,9 +102,14 @@ class NativeRuntime:
             runner.close()
         if not isinstance(outcome, TurnResult):
             raise RuntimeError("Native tool session ended without a terminal result")
-        self.store.save_turn(config, state.get("messages") or [], outcome.reply,
-                             observations=session.observations, execution=outcome.execution,
-                             pending=snapshot.pending)
+        self.store.save_turn(
+            config,
+            state.get("messages") or [],
+            outcome.reply,
+            observations=session.observations,
+            execution=outcome.execution,
+            pending=snapshot.pending,
+        )
         record("native", "turn_completed", chars=len(outcome.reply))
         yield outcome
 
@@ -115,15 +124,18 @@ class NativeRuntime:
         matching = (snapshot.pending_action or {}).get("jti") == grant.get("jti")
         retained = None if matching and execution.get("receipts") else snapshot.pending
         result = TurnResult(outcome["reply"], execution)
-        self.store.save_turn(config, state.get("messages") or [], result.reply,
-                             execution=execution, pending=retained)
+        self.store.save_turn(
+            config, state.get("messages") or [], result.reply, execution=execution, pending=retained
+        )
         if result.reply:
             yield AIMessageChunk(content=result.reply)
         yield result
 
 
-def build() -> NativeRuntime:
+def build(*, resources: ExitStack) -> NativeRuntime:
     from agent import checkpoint
     from agent.runtime.native_store import NativeConversationStore
 
-    return NativeRuntime(NativeConversationStore(checkpoint.build_checkpointer()))
+    return NativeRuntime(
+        NativeConversationStore(checkpoint.build_checkpointer(resources=resources))
+    )

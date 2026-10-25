@@ -186,7 +186,7 @@ def _sample(name, backend, contract, run_id, sample):
 
         outcome = {"case": name, "sample": sample, "evaluated": True,
                    "passed": False, "rounds": rounds}
-        with patch.object(run_golden, "_runtime", arm), \
+        with patch.object(run_golden, "ensure_agent", lambda: arm), \
                 patch.object(writes, "ledger_for", lambda _: store):
             try:
                 contract(turn, state)

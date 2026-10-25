@@ -20,8 +20,8 @@
     "top_defs": 30
   },
   "eval/run_golden.py": {
-    "lines": 3543,
-    "top_defs": 51
+    "lines": 3515,
+    "top_defs": 50
   },
   "scripts/build_word_graph.py": {
     "lines": 1183,

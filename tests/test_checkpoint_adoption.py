@@ -2,6 +2,7 @@
 
 
 import asyncio
+from contextlib import ExitStack
 
 import pytest
 from _own_support import config
@@ -21,9 +22,10 @@ from config.settings import settings
 
 @pytest.mark.parametrize("saver", [None, InMemorySaver()])
 def test_default_factory_attaches_the_selected_saver(monkeypatch, saver):
-    monkeypatch.setattr(checkpoint, "build_checkpointer", lambda: saver)
+    monkeypatch.setattr(checkpoint, "build_checkpointer", lambda **kwargs: saver)
     monkeypatch.setattr(settings, "agent_arm", "native")
-    runtime, name = lifecycle.build_runtime()
+    with ExitStack() as resources:
+        runtime, name = lifecycle.build_runtime(resources)
     assert name == "native" and isinstance(runtime, NativeRuntime)
     assert checkpoint.live_saver(runtime) is saver
     assert runtime.store.available is (saver is not None)
@@ -33,8 +35,8 @@ def test_default_factory_attaches_the_selected_saver(monkeypatch, saver):
 @pytest.mark.parametrize("name", ["graph", "hybrid", "react", "unknown"])
 def test_retired_factories_cannot_enter_the_native_transport(monkeypatch, name):
     monkeypatch.setattr(settings, "agent_arm", name)
-    with pytest.raises(RuntimeError, match="AGENT_ARM=native"):
-        lifecycle.build_runtime()
+    with ExitStack() as resources, pytest.raises(RuntimeError, match="AGENT_ARM=native"):
+        lifecycle.build_runtime(resources)
 
 
 @pytest.mark.parametrize("persistent", [False, True])

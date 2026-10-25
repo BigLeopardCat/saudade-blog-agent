@@ -5,7 +5,6 @@ import asyncio
 import secrets
 import threading
 import time
-from types import SimpleNamespace
 
 import httpx
 import pytest
@@ -31,10 +30,12 @@ def startup(monkeypatch):
     events = []
     monkeypatch.setattr(settings, "llm_provider", "qwen")
     monkeypatch.setattr(app_lifecycle, "setup_logging", lambda: None)
-    monkeypatch.setattr(app_lifecycle, "build_runtime", lambda: (object(), "native"))
+    def build(resources):
+        resources.callback(events.append, "pool_closed")
+        return object(), "native"
+    monkeypatch.setattr(app_lifecycle, "build_runtime", build)
     monkeypatch.setattr(app_lifecycle.wordgraph, "warm", lambda: events.append("wordgraph"))
     monkeypatch.setattr(app_lifecycle.rag_search, "warm", lambda: events.append("rag"))
-    monkeypatch.setattr(checkpoint, "close_pool", lambda: events.append("pool_closed"))
     return events
 
 
@@ -42,7 +43,7 @@ def startup(monkeypatch):
 def test_partial_startup_failure_closes_resources(startup, monkeypatch, fail_at):
     seen = []
 
-    def fail():
+    def fail(*args):
         seen.append(app.state.workers)
         raise ValueError("startup fixture failed")
 
@@ -59,7 +60,7 @@ def test_partial_startup_failure_closes_resources(startup, monkeypatch, fail_at)
                 pytest.fail("failed startup yielded an application")
 
     asyncio.run(run())
-    assert startup == ["pool_closed"]
+    assert startup == (["pool_closed"] if fail_at == "warmup_submission" else [])
     assert app.state.runtime is None and app.state.workers is None
     with pytest.raises(RuntimeError, match="shutdown"):
         seen[0].executor.submit(lambda: None)
@@ -235,66 +236,6 @@ def test_optional_warmups_are_joined_and_failures_are_logged(startup, monkeypatc
     asyncio.run(run())
     assert "optional warmup fixture" in caplog.text
     assert startup[-1] == "pool_closed"
-
-
-@pytest.mark.parametrize("failure", ["construct", "setup"])
-def test_saver_startup_failure_closes_pool_and_allows_retry(monkeypatch, failure):
-    pools = []
-
-    class Pool:
-        closed = False
-
-        def close(self):
-            assert not self.closed
-            self.closed = True
-
-    def make_pool(dsn):
-        pools.append(Pool())
-        return pools[-1]
-
-    def construct(pool):
-        if failure == "construct":
-            raise ValueError("constructor fixture")
-        return SimpleNamespace(pool=pool)
-
-    def setup(saver, *, pool):
-        raise ValueError("setup fixture")
-
-    monkeypatch.setattr(checkpoint, "_pool", None)
-    monkeypatch.setattr(checkpoint, "_pool_dsn", None)
-    monkeypatch.setattr(checkpoint, "_make_pool", make_pool)
-    monkeypatch.setattr(checkpoint.importlib, "import_module",
-                        lambda name: SimpleNamespace(PostgresSaver=construct))
-    monkeypatch.setattr(checkpoint, "_setup_under_lock", setup)
-    with pytest.raises(ValueError):
-        checkpoint.build_checkpointer("postgresql://localhost/fixture")
-    assert pools[0].closed and checkpoint._pool is None and checkpoint._pool_dsn is None
-    monkeypatch.setattr(checkpoint.importlib, "import_module",
-                        lambda name: SimpleNamespace(PostgresSaver=lambda pool: pool))
-    monkeypatch.setattr(checkpoint, "_setup_under_lock", lambda *args, **kwargs: None)
-    assert checkpoint.build_checkpointer("postgresql://localhost/fixture") is pools[1]
-    assert not pools[1].closed
-    checkpoint.close_pool()
-    checkpoint.close_pool()
-    assert pools[1].closed
-
-
-def test_failed_pool_replacement_cannot_reuse_a_closed_pool(monkeypatch):
-    closed = []
-    old = SimpleNamespace(close=lambda: closed.append(True))
-    monkeypatch.setattr(checkpoint, "_pool", old)
-    monkeypatch.setattr(checkpoint, "_pool_dsn", "old")
-
-    def fail(dsn):
-        raise ValueError("pool fixture")
-
-    monkeypatch.setattr(checkpoint, "_make_pool", fail)
-    with pytest.raises(ValueError):
-        checkpoint._pool_for("new")
-    assert closed == [True] and checkpoint._pool is None and checkpoint._pool_dsn is None
-    replacement = object()
-    monkeypatch.setattr(checkpoint, "_make_pool", lambda dsn: replacement)
-    assert checkpoint._pool_for("old") is replacement
 
 
 @pytest.mark.parametrize("method,path,body,target", [
