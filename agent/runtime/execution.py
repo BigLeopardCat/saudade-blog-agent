@@ -21,7 +21,8 @@ class FrameworkExecution:
                                      session.stream_guard]}
         session._restore_domains(prompt)
         prompt = fit_history(prompt, session.principal, session.menu, session.budget.limits,
-                             session.output_limit, tool_access=session.history_access)
+                             session.output_limit, tool_access=session.history_access,
+                             budget=session.budget)
         self.system = prompt[0] if prompt and isinstance(prompt[0], SystemMessage) else None
         messages = prompt[1:] if self.system is not None else prompt
         self.initial = {"messages": [RemoveMessage(id=REMOVE_ALL_MESSAGES),
