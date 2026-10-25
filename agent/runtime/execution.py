@@ -8,7 +8,7 @@ from langgraph.types import Command
 from agent.runtime import approval
 from agent.runtime.execution_state import ExecutionState, capture, seed
 from agent.runtime.memory_media import stage
-from agent.runtime.middleware import SessionMiddleware
+from agent.runtime.middleware import OrderedToolsMiddleware, SessionMiddleware
 from agent.runtime.prompt_budget import fit_history
 
 
@@ -21,7 +21,7 @@ class FrameworkExecution:
                                      session.stream_guard]}
         session._restore_domains(prompt)
         prompt = fit_history(prompt, session.principal, session.menu, session.budget.limits,
-                             session.output_limit)
+                             session.output_limit, tool_access=session.history_access)
         self.system = prompt[0] if prompt and isinstance(prompt[0], SystemMessage) else None
         messages = prompt[1:] if self.system is not None else prompt
         self.initial = {"messages": [RemoveMessage(id=REMOVE_ALL_MESSAGES),
@@ -35,7 +35,9 @@ class FrameworkExecution:
         middleware = SessionMiddleware(self.session)
         middleware.system_message = self.system
         return create_agent(self.session.model, tools=[], system_prompt=self.system,
-                            middleware=[middleware], state_schema=ExecutionState,
+                            middleware=[OrderedToolsMiddleware(middleware),
+                                        *self.session.middleware, middleware],
+                            state_schema=ExecutionState,
                             checkpointer=True if persistent else None)
 
     def _parent(self, child, promoted=None):

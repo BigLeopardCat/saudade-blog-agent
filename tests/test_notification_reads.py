@@ -11,9 +11,9 @@ from langgraph.checkpoint.memory import InMemorySaver
 from pydantic import ValidationError
 
 from agent.principal import SOURCE_ASSERTION, SOURCE_BODY, Principal
+from agent.products.blog.read_tools import own_tools
 from agent.runtime.native import NativeRuntime
 from agent.runtime.native_store import NativeConversationStore
-from agent.runtime.read_tools import own_tools
 from tools import base
 from tools import notifications as reads
 
@@ -155,7 +155,7 @@ def test_native_read_can_navigate_to_the_exact_notification_reply(notifications)
 def test_registry_import_order_resolves_to_one_tool(first):
     script = (f"import {first}\nfrom tools import base\n"
               "from tools.notifications import list_notifications\n"
-              "from agent.runtime.read_tools import own_tools\n"
+              "from agent.products.blog.read_tools import own_tools\n"
               "assert own_tools()['list_notifications'] is base.list_notifications "
               "is list_notifications\n")
     result = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True,

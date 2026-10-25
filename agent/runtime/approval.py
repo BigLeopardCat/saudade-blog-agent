@@ -7,8 +7,7 @@ from langgraph.graph.message import add_messages
 from langgraph.types import interrupt
 
 from agent.runtime import memory
-from agent.runtime.narration import receipt_observations
-from agent.runtime.results import TurnResult
+from agent.runtime.results import TurnResult, receipt_observations
 from agent.runtime.writes import bound_context
 
 

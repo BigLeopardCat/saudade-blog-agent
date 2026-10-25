@@ -7,9 +7,9 @@ from langchain_core.messages import HumanMessage
 
 from agent.authz import scopes_for
 from agent.principal import SOURCE_ASSERTION, SOURCE_BODY, Principal
-from agent.runtime.context import conversation_context
+from agent.products.blog.context import conversation_context
+from agent.products.blog.prompt import build_prompt as _input
 from agent.runtime.memory import CHECKPOINT_TOKENS, _tokens
-from agent.runtime.prompt import build_prompt as _input
 from agent.stickers import STICKER_NAMES
 
 

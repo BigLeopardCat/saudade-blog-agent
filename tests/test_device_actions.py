@@ -18,8 +18,9 @@ from langchain_core.tools import ToolException
 
 from agent.domains import device_actions, device_reads
 from agent.principal import SOURCE_ASSERTION, SOURCE_BODY, Principal
+from agent.products.blog.read_tools import device_domain
+from agent.products.blog.tool_policy import BlogToolMiddleware
 from agent.runtime import memory
-from agent.runtime.read_tools import device_domain
 from agent.runtime.session import ToolSession
 from tools import device
 
@@ -191,7 +192,8 @@ def test_native_loop_keeps_device_receipt_and_blocks_whole_turn_legacy_replay(se
         def invoke(self, prompt):
             return next(self.responses)
 
-    session = ToolSession(Model(), config(), device_actions.tools(config()), {})
+    session = ToolSession(Model(), config(), device_actions.tools(config()), {},
+                          middleware=(BlogToolMiddleware,))
     result = session.run([HumanMessage(content="显示hello，继续处理")])
     assert len(result.execution["receipts"]) == 1
     assert len([r for r in service["requests"] if r.method == "PUT"]) == 1

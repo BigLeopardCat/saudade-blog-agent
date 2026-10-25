@@ -9,8 +9,8 @@ from langchain_core.tools import tool
 from pydantic import Field, StrictInt
 
 from agent.authz import SCOPE_READ_OWN
+from agent.products.blog.read_tools import scoped_reads_enabled
 from agent.reports import sanitize_untrusted
-from agent.runtime.read_tools import scoped_reads_enabled
 from config import settings
 from tools import device
 from tools.result import ok, unavailable

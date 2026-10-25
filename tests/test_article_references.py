@@ -4,7 +4,8 @@ import pytest
 from langchain_core.messages import AIMessageChunk, HumanMessage
 from langchain_core.tools import tool
 
-from agent.article_evidence import ArticleEvidence
+from agent.domains.articles.evidence import ArticleEvidence
+from agent.products.blog.articles import ArticleMiddleware
 from agent.runtime.session import ToolSession
 from rag.reading import article_page, render_article_result
 from tools.base import SITE_BASE
@@ -90,7 +91,8 @@ def test_direct_article_answer_is_validated_before_its_chunks_become_visible(
                 assert visible == [], "article answer leaked before source validation"
 
     visible = []
-    session = ToolSession(Model(), {}, {get_article_detail.name: get_article_detail}, {})
+    session = ToolSession(Model(), {}, {get_article_detail.name: get_article_detail}, {},
+                          middleware=(ArticleMiddleware,))
     runner = session.stream([HumanMessage(content="概括文章")])
     while True:
         try:

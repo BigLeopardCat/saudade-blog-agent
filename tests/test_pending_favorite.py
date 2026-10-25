@@ -13,8 +13,9 @@ from langgraph.checkpoint.memory import InMemorySaver
 
 from agent import confirm, idem
 from agent.domains.favorites import preparation, transactions
-from agent.runtime import pending, writes
-from agent.runtime.confirmation import confirmed_runtime
+from agent.products.blog import pending
+from agent.products.blog.confirmation import confirmed_runtime
+from agent.runtime import writes
 from agent.runtime.native import NativeRuntime
 from agent.runtime.native_store import NativeConversationStore
 from agent.runtime.results import TurnResult
@@ -234,7 +235,7 @@ def test_stream_cancels_host_pending_and_routes_revoked_card_after_runtime_switc
 
 
 def test_button_cancel_is_idempotent_and_rejects_later_approval(waiting, site):
-    from agent.runtime.confirmation import cancel
+    from agent.products.blog.confirmation import cancel
 
     runtime, proposal, _ = waiting
     token = proposal.execution["pending_confirm"]["token"]
@@ -251,7 +252,7 @@ def test_button_cancel_is_idempotent_and_rejects_later_approval(waiting, site):
 
 @pytest.mark.parametrize("status", ["intent", "done"])
 def test_button_cancel_cannot_claim_a_started_write_was_cancelled(waiting, status):
-    from agent.runtime.confirmation import cancel
+    from agent.products.blog.confirmation import cancel
 
     runtime, proposal, ledger = waiting
     grant = confirm.verify(proposal.execution["pending_confirm"]["token"], 7, 42)
@@ -265,7 +266,7 @@ def test_button_cancel_cannot_claim_a_started_write_was_cancelled(waiting, statu
 
 
 def test_stale_button_cancel_preserves_replacement(waiting, monkeypatch, site):
-    from agent.runtime.confirmation import cancel
+    from agent.products.blog.confirmation import cancel
 
     runtime, proposal, _ = waiting
     grant = confirm.verify(proposal.execution["pending_confirm"]["token"], 7, 42)

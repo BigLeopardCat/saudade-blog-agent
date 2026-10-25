@@ -7,7 +7,7 @@ from langchain_core.tools import tool
 
 from agent.domains.admin_writes import available
 from agent.domains.notices import targets
-from agent.runtime.confirmation import proposal
+from agent.products.blog.confirmation import proposal
 from agent.runtime.turns import check_cancelled
 from agent.runtime.writes import bound_context
 from tools import base

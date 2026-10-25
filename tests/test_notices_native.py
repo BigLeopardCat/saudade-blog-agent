@@ -11,8 +11,8 @@ from _own_support import config
 from agent import confirm, idem
 from agent.domains.notices import preparation, targets, transactions
 from agent.principal import SOURCE_ASSERTION, SOURCE_BODY, Principal
+from agent.products.blog.pending import PendingOperation
 from agent.runtime import writes
-from agent.runtime.pending import PendingOperation
 from tools import base
 
 

@@ -2,20 +2,17 @@
 
 import json
 import time
-import uuid
 
 from langchain_core.messages import HumanMessage, SystemMessage
 from openai import OpenAIError
 
 from agent.llm_usage import usage_fields
+from agent.products.blog.context import conversation_context
+from agent.products.blog.persona import BLOG_PERSONA_PROMPT
 from agent.runtime.budget import RequestBudget, current_budget, native_call
-from agent.runtime.context import conversation_context
 from agent.runtime.control import model_options
-from agent.runtime.memory import observation
-from agent.runtime.persona import BLOG_PERSONA_PROMPT
 from agent.runtime.progress import emit
 from models.llm import get_llm
-from tools.result import ok
 from utils.trace import record
 
 _OUTPUT = 192
@@ -68,19 +65,3 @@ def narrate(result, config):
     except (OpenAIError, ValueError, RuntimeError, TypeError, TimeoutError) as error:
         record("narration", "fallback", reason=type(error).__name__)
         return fallback
-
-
-def receipt_observations(result):
-    """Keep verified facts in memory even when conversational wording is model-generated."""
-    messages = []
-    for row in (result.execution or {}).get("receipts", ()):
-        call = {
-            "name": row["tool"],
-            "args": row.get("args") or {},
-            "id": "executed_" + uuid.uuid4().hex,
-        }
-        fact = json.dumps(
-            {"result": row.get("result"), "action": row.get("action")}, ensure_ascii=False
-        )
-        messages.extend(observation(call, ok(fact)))
-    return messages

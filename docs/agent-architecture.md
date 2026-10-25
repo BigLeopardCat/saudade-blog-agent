@@ -7,7 +7,8 @@
 长期执行内核与领域扩展方向见 [ADR-0024](adr/adr-0024-framework-kernel-and-domain-extensions.md)。
 当前模型调用、标准消息聚合和轮次调度由框架负责，公开 middleware 接入预算、取消、
 工具授权与业务结果规则。LangGraph 的持久 Agent 子图及 interrupt/Command 接续签名确认，
-自建工具游标已删除；领域与产品解耦继续推进。
+自建工具游标已删除。博客工具、人设、文章证据和确认协议由 `products/blog` 显式装配，
+通过标准 middleware 接入；非博客库存示例复用同一运行时，见 [产品扩展](product-extensions.md)。
 
 ## 1. 系统总览
 
@@ -61,7 +62,8 @@ flowchart LR
 │   ├── api/events.py                                    # 具名 SSE 编码和响应头
 │   ├── api/schemas.py                                   # 聊天 HTTP 契约及字段限额
 │   ├── arg_refs.py                                      # 当前生产代码模块
-│   ├── article_evidence.py                              # 当前生产代码模块
+│   ├── domains/articles/__init__.py                    # 文章领域包
+│   ├── domains/articles/evidence.py                    # 候选、已读正文与文章来源证据
 │   ├── authz.py                                         # 当前生产代码模块
 │   ├── block_reasons.py                                 # 当前生产代码模块
 │   ├── checkpoint.py                                    # 当前生产代码模块
@@ -143,17 +145,30 @@ flowchart LR
 │   ├── principal.py                                     # 当前生产代码模块
 │   ├── receipt_digest.py                                # 当前生产代码模块
 │   ├── reports.py                                       # 当前生产代码模块
+│   ├── products/__init__.py                            # 产品装配包
+│   ├── products/blog/__init__.py                        # 博客产品包
+│   ├── products/blog/application.py                     # 博客工具、身份上下文与标准 middleware 装配
+│   ├── products/blog/articles.py                        # 文章结果渲染、来源校验与框架状态扩展
+│   ├── products/blog/admin_domains.py                   # 管理员读取与确认准备工具装配
+│   ├── products/blog/capabilities.py                    # 博客领域能力目录及按身份装配
+│   ├── products/blog/catalog.py                         # 博客领域说明与高频页面设备工具晋升
+│   ├── products/blog/confirmation.py                    # 博客签名卡执行路由、取消与传输适配
+│   ├── products/blog/context.py                         # 博客称呼、渲染能力与会话路由坐标
+│   ├── products/blog/history.py                         # 博客页面及图片观察的历史访问规则
+│   ├── products/blog/narration.py                       # 既有确认卡的有界事实叙述
+│   ├── products/blog/pending.py                         # 博客签名卡撤销、替换与恢复校验
+│   ├── products/blog/persona.py                         # 博客角色与表达风格
+│   ├── products/blog/prompt.py                          # 博客指令、可信身份与页面上下文装配
+│   ├── products/blog/read_tools.py                      # 博客读取工具集合与领域配置
+│   ├── products/blog/tool_policy.py                     # 调用前授权与浏览器、设备回执校验
+│   ├── runtime/access.py                              # 验签身份及 scope 守卫
 │   ├── runtime/__init__.py                              # 当前生产代码模块
-│   ├── runtime/admin_domains.py                         # 当前生产代码模块
 │   ├── runtime/approval.py                              # 框架持久审批中断与执行回执提交
 │   ├── runtime/execution.py                             # 标准 Agent 子图与会话审批图组合
 │   ├── runtime/execution_state.py                       # 工具领域、来源证据与待审批状态
 │   ├── runtime/budget.py                                # 当前生产代码模块
-│   ├── runtime/capabilities.py                          # 当前生产代码模块
 │   ├── runtime/catalog.py                               # 当前生产代码模块
 │   ├── runtime/checkpoint_store.py                      # 当前生产代码模块
-│   ├── runtime/confirmation.py                          # 当前生产代码模块
-│   ├── runtime/context.py                               # 当前生产代码模块
 │   ├── runtime/control.py                               # 当前生产代码模块
 │   ├── runtime/conversation_store.py                    # 当前生产代码模块
 │   ├── runtime/finalization.py                          # 同一请求预算内撤下工具并整理已有事实
@@ -166,14 +181,9 @@ flowchart LR
 │   ├── runtime/memory.py                                # 当前生产代码模块
 │   ├── runtime/model_budget.py                          # 当前生产代码模块
 │   ├── runtime/middleware.py                            # 标准 Agent 的预算、权限与业务结果适配
-│   ├── runtime/narration.py                              # 已确认执行后的有界只读叙述
 │   ├── runtime/native.py                                # 当前生产代码模块
 │   ├── runtime/native_store.py                          # 当前生产代码模块
-│   ├── runtime/pending.py                               # 当前生产代码模块
-│   ├── runtime/persona.py                               # 当前生产代码模块
 │   ├── runtime/progress.py                              # 当前生产代码模块
-│   ├── runtime/prompt.py                                # 当前生产代码模块
-│   ├── runtime/read_tools.py                            # 当前生产代码模块
 │   ├── runtime/results.py                               # 当前生产代码模块
 │   ├── runtime/session.py                               # 当前生产代码模块
 │   ├── runtime/trace_context.py                         # 记录实际工具契约、调用者与轮次状态

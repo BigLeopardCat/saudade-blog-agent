@@ -8,8 +8,8 @@ from urllib.parse import urlencode
 from pydantic import Field, StrictInt
 
 from agent import action_text, authz
+from agent.products.blog.confirmation import proposal
 from agent.runtime import writes
-from agent.runtime.confirmation import proposal
 from agent.runtime.results import TurnResult
 from agent.runtime.turns import check_cancelled
 from tools import base

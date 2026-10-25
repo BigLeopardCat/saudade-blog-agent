@@ -10,9 +10,6 @@ from langchain_core.messages import AIMessageChunk, ToolMessage
 from langchain_core.tools import ToolException
 from langchain_core.utils.function_calling import convert_to_openai_tool
 
-from agent.article_evidence import ArticleEvidence
-from agent.authz import SCOPE_ADMIN_CONSOLE, SCOPE_READ_OWN, TOOL_SCOPE, WRITE_SCOPES, check
-from agent.domains import browser, device_actions
 from agent.runtime import memory
 from agent.runtime.budget import (
     BudgetExceeded,
@@ -20,13 +17,12 @@ from agent.runtime.budget import (
     current_budget,
     native_tool,
 )
-from agent.runtime.catalog import initial_tools, loader
+from agent.runtime.catalog import loader
 from agent.runtime.finalization import incomplete_response
 from agent.runtime.memory_media import tool_messages
 from agent.runtime.message_content import text_content
 from agent.runtime.middleware import StreamGuard
 from agent.runtime.progress import emit as emit_progress
-from agent.runtime.read_tools import scoped_reads_enabled
 from agent.runtime.results import TurnResult
 from agent.runtime.turns import check_cancelled
 from config.settings import settings
@@ -41,13 +37,13 @@ _MAX_TOTAL_RESULT_CHARS = 16000
 
 class ToolSession:
     def __init__(self, model, config, tools, domains, outcome_adapter=None, *,
-                 store=None, isolated=False):
+                 store=None, isolated=False, descriptions=None, middleware=(), history_access=None):
         self.budget = current_budget() or RequestBudget()
         self.output_limit = getattr(model, "max_tokens", None) or settings.agent_output_tokens
         self.model = model
         self.config = config
         self.principal = ((config or {}).get("configurable") or {}).get("principal")
-        self.tools = initial_tools(tools, domains)
+        self.tools = dict(tools)
         self.initial_names = set(self.tools)
         self.domains = domains
         self.loaders = {f"load_{domain}_info_tools": domain for domain in domains}
@@ -65,7 +61,11 @@ class ToolSession:
         self.effects = {}
         self.observations = []
         self.receipts = []
-        self.article_evidence = ArticleEvidence()
+        self.suppress_output = False
+        self.descriptions = descriptions or {}
+        self.history_access = history_access
+        self.render_result = self._render_result
+        self.middleware = [factory(self) for factory in middleware]
         self.used_stream_api = False
         self.finalizing = False
         self.traced_contracts = set()
@@ -75,8 +75,8 @@ class ToolSession:
         # Keep discovery schemas in place; domain tools extend the request prefix.
         initial = [tool for name, tool in self.tools.items() if name in self.initial_names]
         loaded = [tool for name, tool in self.tools.items() if name not in self.initial_names]
-        self.menu = [convert_to_openai_tool(tool) for tool in
-                     [*initial, *(loader(domain) for domain in self.domains), *loaded]]
+        discovery = [loader(domain, self.descriptions.get(domain)) for domain in self.domains]
+        self.menu = [convert_to_openai_tool(tool) for tool in [*initial, *discovery, *loaded]]
         return self.model
 
     def _handoff(self, reason, **data):
@@ -85,11 +85,6 @@ class ToolSession:
             return self._result("工具操作结果已保留；其余请求尚未完成，请继续指定要处理的事项。")
         if self.calls_used:
             record("native", "handoff_stopped", reason=reason, **data)
-            if reason == "unread_article_reference":
-                return self._result("答复中的部分文章引用无法核实，本轮暂时无法提供可靠来源。")
-            if reason == "article_body_missing":
-                return self._result("暂时无法核实文章正文，不能据此回答文章内容。"
-                                    "请重新指定要阅读的文章。")
             return self._result("本轮查询已停止，暂时没能完成请求。请明确下一步要处理的事项。")
         record("native", "task_stopped", reason=reason, **data)
         return self._result("本轮未能完成请求，没有执行未核实的操作。请补充目标或稍后重试。")
@@ -129,16 +124,6 @@ class ToolSession:
         return True
 
     def _invoke_tool(self, name, args, call=None):
-        scope = TOOL_SCOPE.get(name)
-        if scope in WRITE_SCOPES and not device_actions.authorized(self.config, name):
-            record("native", "tool_denied", name=name)
-            return None
-        if scope in (SCOPE_READ_OWN, SCOPE_ADMIN_CONSOLE):
-            uid = ((self.config or {}).get("configurable") or {}).get("user_id")
-            if (not scoped_reads_enabled(self.principal, scope, uid)
-                    or not check(self.principal, name).allowed):
-                record("native", "tool_denied", name=name)
-                return None
         try:
             if getattr(self.tools[name], "response_format", None) == "content_and_artifact":
                 return self.tools[name].invoke({**call, "type": "tool_call"}, config=self.config)
@@ -180,31 +165,12 @@ class ToolSession:
             return True
         message = body if isinstance(body, ToolMessage) else None
         artifact = message.artifact if message and isinstance(message.artifact, dict) else {}
-        if artifact.get("receipts"):
-            if not (browser.authorized(self.config, name)
-                    or device_actions.authorized(self.config, name)):
-                raise RuntimeError("Only authorized browser tools or device tools "
-                                   "may issue receipts")
-            if name == device_actions.NAME and any("cmd" in row for row in artifact["receipts"]):
-                raise RuntimeError("Device tools cannot issue browser commands")
-            self.receipts.extend(artifact["receipts"])
         kind = artifact.get("kind", "unknown") if message else getattr(body, "kind", "unknown")
         if message and message.status == "error":
             kind = "error"
         self.observations.extend(memory.observation(call, body))
-        evidence_value = body
-        body = text_content(message.content) if message else str(body)
         remaining = _MAX_TOTAL_RESULT_CHARS - self.result_chars
-        limit = min(_MAX_RESULT_CHARS, remaining)
-        if name == "get_article_detail":
-            from rag.reading import render_article_result
-            from tools.result import ToolResult
-            body, visible = render_article_result(evidence_value, limit)
-            evidence_value = ToolResult(body, kind=kind, data=visible)
-        elif len(body) > limit:
-            marker = "\n[结果截断，请缩小检索范围]"
-            body = body[:max(0, limit - len(marker))] + marker
-        self.article_evidence.observe(name, args, evidence_value)
+        body = self.render_result(call, body, min(_MAX_RESULT_CHARS, remaining))
         messages = tool_messages(message, body, call["id"])
         prompt.append(messages[0])
         attachments.extend(messages[1:])
@@ -213,6 +179,14 @@ class ToolSession:
                kind=kind, result=trace_mod.tool_result_text(body, name))
         record("native", "tool_result", name=name, result_chars=len(body))
         return True
+
+    @staticmethod
+    def _render_result(call, value, limit):
+        body = text_content(value.content) if isinstance(value, ToolMessage) else str(value)
+        if len(body) > limit:
+            marker = "\n[结果截断，请缩小检索范围]"
+            body = body[:max(0, limit - len(marker))] + marker
+        return body
 
     def _prepared_result(self, body, call, prompt, round_index):
         # Confirmation tokens stay in the terminal outcome, never in the prompt or trace.
@@ -299,18 +273,6 @@ class ToolSession:
         calls = getattr(response, "tool_calls", None) or []
         if not calls:
             reply = text_content(response.content).strip()
-            from tools.base import SITE_BASE
-
-            issue = self.article_evidence.issue(reply, SITE_BASE)
-            if issue:
-                return None, self._handoff(issue, tool_calls=self.calls_used)
-            evidence = self.article_evidence
-            if evidence.searched and not evidence.documents:
-                if evidence.failed and not evidence.found:
-                    return None, self._result("文章检索暂时不可用，当前无法核实文章内容。")
-                if evidence.empty and not evidence.found:
-                    return None, self._result("暂未从公开文章中检索到相关资料。")
-            reply = evidence.sources(reply, SITE_BASE)
             return None, (self._result(reply) if reply else
                           self._handoff("empty", tool_calls=self.calls_used))
         if self.finalizing:
@@ -341,7 +303,7 @@ class ToolSession:
                     continue
                 chunk, metadata = data
                 if (metadata.get("langgraph_node") != "model"
-                        or self.article_evidence.searched or self.article_evidence.documents):
+                        or self.suppress_output):
                     continue
                 text = text_content(chunk.content)
                 if text:

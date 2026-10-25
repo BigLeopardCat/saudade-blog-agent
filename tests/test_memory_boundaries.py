@@ -12,6 +12,7 @@ from agent import checkpoint
 from agent.api.context import build_messages
 from agent.api.schemas import ChatRequest
 from agent.principal import SOURCE_ASSERTION, SOURCE_BODY, Principal
+from agent.products.blog.prompt import build_prompt
 from agent.runtime import memory
 from agent.runtime.budget import BudgetLimits, RequestBudget
 from agent.runtime.checkpoint_store import ConversationDeleted
@@ -20,7 +21,6 @@ from agent.runtime.memory_scope import safe_request
 from agent.runtime.message_content import estimate_tokens
 from agent.runtime.native import NativeRuntime
 from agent.runtime.native_store import NativeConversationStore
-from agent.runtime.prompt import build_prompt
 from agent.runtime.results import TurnResult
 from tools import base
 
@@ -120,8 +120,8 @@ def test_current_images_and_schemas_take_precedence_over_history():
     fixture_read = fixture_read.model_copy(update={"description": "fixture schema " * 120})
     model, saver = Capture(), InMemorySaver()
     selected = runtime(saver, model)
-    selected.catalog = SimpleNamespace(initial_tools=lambda _: {"fixture_read": fixture_read},
-                                       domains=lambda *_: {})
+    selected.application.catalog = SimpleNamespace(
+        initial_tools=lambda _: {"fixture_read": fixture_read}, domains=lambda *_: {})
     run(selected, ChatRequest(message="历史文本" * 500))
     req = ChatRequest(message="看图", image="data:image/png;base64,AA")
     fixed = build_prompt(build_messages(req), ACTOR)

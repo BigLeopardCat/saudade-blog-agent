@@ -8,7 +8,7 @@ from pydantic import Field, StrictInt
 
 from agent.domains.admin_writes import available
 from agent.domains.moderation_actions import targets, transactions
-from agent.runtime.confirmation import proposal
+from agent.products.blog.confirmation import proposal
 from agent.runtime.results import TurnResult
 from agent.runtime.turns import check_cancelled
 from agent.runtime.writes import bound_context

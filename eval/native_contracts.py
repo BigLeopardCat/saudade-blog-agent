@@ -19,9 +19,9 @@ from langgraph.checkpoint.memory import InMemorySaver
 from starlette.requests import Request
 
 from agent import confirm, idem
+from agent.products.blog.narration import narrate
 from agent.runtime import writes
 from agent.runtime.control import RequestControl, request_scope
-from agent.runtime.narration import narrate
 from agent.runtime.native import NativeRuntime
 from agent.runtime.native_store import NativeConversationStore
 from eval import admin_task_contracts, experience_contracts, navigation_contracts, request_metrics

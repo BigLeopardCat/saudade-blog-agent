@@ -12,7 +12,7 @@ from typing import Callable, Generator, Iterable, Iterator
 
 from langchain_core.messages import AIMessageChunk
 
-from agent.runtime.confirmation import frames as confirmation_frames
+from agent.products.blog.confirmation import frames as confirmation_frames
 from agent.runtime.results import TurnResult
 
 

@@ -61,7 +61,7 @@ def test_client_fields_remain_data_in_the_actual_native_prompt():
 
     from agent.api.context import build_messages as _build_messages
     from agent.principal import SOURCE_ASSERTION, Principal
-    from agent.runtime.prompt import build_prompt
+    from agent.products.blog.prompt import build_prompt
 
     principal = Principal(7, "user", SOURCE_ASSERTION)
     baseline = build_prompt(_build_messages(ChatRequest(message="hello")), principal)

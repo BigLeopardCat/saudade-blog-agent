@@ -7,7 +7,7 @@ from urllib.parse import urlencode
 from pydantic import Field, StrictInt
 
 from agent.authz import SCOPE_ADMIN_CONSOLE
-from agent.runtime.read_tools import scoped_reads_enabled
+from agent.products.blog.read_tools import scoped_reads_enabled
 from tools import base
 
 Page = Annotated[StrictInt, Field(ge=1, le=10000)]

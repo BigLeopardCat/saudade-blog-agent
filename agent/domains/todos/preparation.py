@@ -7,7 +7,7 @@ from langchain_core.tools import tool
 from pydantic import Field, StrictInt, StrictStr
 
 from agent.domains.todos import targets
-from agent.runtime.confirmation import proposal
+from agent.products.blog.confirmation import proposal
 from agent.runtime.results import TurnResult
 from agent.runtime.turns import check_cancelled
 from agent.runtime.writes import bound_context

@@ -4,7 +4,8 @@ import ast
 
 from langchain_core.messages import AIMessage, HumanMessage
 
-from agent.article_evidence import ArticleEvidence
+from agent.domains.articles.evidence import ArticleEvidence
+from agent.products.blog.articles import ArticleMiddleware
 from agent.runtime.session import ToolSession
 from rag.reading import article_page, render_article_result
 from tools.base import SITE_BASE, get_article_detail
@@ -46,7 +47,8 @@ def test_candidate_only_answer_stops_without_restarting_or_asserting_article_con
         ]
     )
     tool = Tool("rag_search", ok("1. type=note id=1 score=1 title=Topic"))
-    result = ToolSession(model, {}, {"rag_search": tool}, {}).run([HumanMessage(content="问文章")])
+    session = ToolSession(model, {}, {"rag_search": tool}, {}, middleware=(ArticleMiddleware,))
+    result = session.run([HumanMessage(content="问文章")])
     assert result is not None and "无法核实文章正文" in result.reply
 
 
@@ -55,7 +57,8 @@ def test_empty_and_unavailable_searches_have_different_truthful_outcomes():
         model = Model(
             [call("rag_search", {"query": "topic"}, "s"), AIMessage(content="不受支持的文章事实")]
         )
-        result = ToolSession(model, {}, {"rag_search": Tool("rag_search", value)}, {}).run([])
+        result = ToolSession(model, {}, {"rag_search": Tool("rag_search", value)}, {},
+                             middleware=(ArticleMiddleware,)).run([])
         assert expected in result.reply and "不受支持" not in result.reply
 
 
@@ -118,3 +121,24 @@ def test_site_question_classification_never_performs_retrieval(monkeypatch):
     monkeypatch.setattr(search, "search", unexpected)
     assert is_site_corpus_question("博客有哪些文章呢")
     assert not is_site_corpus_question("你用哪些工具读文章")
+
+
+def test_candidate_reference_validation_precedes_streamed_output():
+    model = Model([
+        call("search_notes", {"keyword": "topic"}, "search"),
+        AIMessage(content="来源：[不存在的文章](/article/999)"),
+    ])
+    value = ok("候选文章19", data=[{"noteId": 19, "noteTitle": "真实候选"}])
+    session = ToolSession(model, {}, {"search_notes": Tool("search_notes", value)}, {},
+                          middleware=(ArticleMiddleware,))
+    runner = session.stream([HumanMessage(content="找一篇文章")])
+    visible = []
+    while True:
+        try:
+            visible.append(next(runner).content)
+        except StopIteration as stop:
+            result = stop.value
+            break
+    assert "无法核实" in result.reply
+    assert "/article/999" not in "".join(visible) + result.reply
+    assert "".join(visible) == result.reply
