@@ -39,6 +39,10 @@ Chunks are aggregated with the framework message conversion; complete original
 JSON arguments are required before any tool executes. Consumer close propagates
 to nested iterators and provider responses. Streaming usage is explicitly
 requested for compatible endpoints; absent observations remain unknown.
+The native trace also records the provider's `finish_reason`. A length stop is
+an incomplete answer: buffered article fragments stay hidden, and any text
+already streamed in plain chat is followed by an explicit incomplete notice.
+Online task judgments reject these stops even when the response is nonempty.
 
 The complete visible text is saved through `ConversationStore`. The transport
 emits only the suffix missing from `TurnResult.reply` after streamed chunks;

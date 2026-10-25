@@ -28,7 +28,7 @@ from agent.runtime.budget import (
 )
 from agent.runtime.catalog import initial_tools
 from agent.runtime.control import model_options
-from agent.runtime.finalization import final_prompt
+from agent.runtime.finalization import final_prompt, incomplete_response
 from agent.runtime.memory_media import tool_messages
 from agent.runtime.message_content import text_content
 from agent.runtime.progress import emit as emit_progress
@@ -377,6 +377,8 @@ class ToolSession:
             record("native", "llm_error" if failed else "llm_done",
                    round=self._round_index, engine="native",
                    duration_s=round(time.monotonic() - started, 2),
+                   finish_reason=(getattr(aggregate, "response_metadata", {}) or {}).get(
+                       "finish_reason"),
                    streaming=True, **usage_fields(aggregate))
 
     def _stream_terminal(self, result, visible_parts, fallback_text=None,
@@ -409,10 +411,12 @@ class ToolSession:
 
     def _handle_response(self, response, buffered_chunks, visible_parts):
         """Validate one completed response and either finish or return calls."""
-        if getattr(response, "invalid_tool_calls", None):
-            record("native", "invalid_tool_call",
-                   count=len(response.invalid_tool_calls))
-            result = self._result("本轮工具请求未完整，未执行操作。")
+        incomplete = incomplete_response(response)
+        if incomplete:
+            event, reply = incomplete
+            record("native", event, round=self._round_index,
+                   count=len(getattr(response, "invalid_tool_calls", ()) or ()))
+            result = self._result(reply)
             result = yield from self._stream_terminal(result, visible_parts)
             return None, result
         calls = getattr(response, "tool_calls", None) or []
