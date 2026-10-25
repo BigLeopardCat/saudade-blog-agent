@@ -28,12 +28,12 @@ _PREPARATIONS = (
 )
 
 
-def domains(config, can_bridge, reads):
+def domains(config, can_prepare, reads):
     cfg = (config or {}).get("configurable") or {}
     if not scoped_reads_enabled(cfg.get("principal"), SCOPE_ADMIN_CONSOLE, cfg.get("user_id")):
         return {}
     selected = {name: dict(tools) for name, tools in reads.items()}
-    if can_bridge and available(config):
+    if can_prepare and available(config):
         for name, preparation in _PREPARATIONS:
             current = selected.setdefault(name, {})
             current.update(preparation.tools(current))

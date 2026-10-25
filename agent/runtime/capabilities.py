@@ -6,6 +6,7 @@ from agent.domains.messages import preparation as message_preparation
 from agent.domains.notifications import preparation as notification_preparation
 from agent.runtime.admin_domains import domains as admin_domains
 from agent.runtime.read_tools import (
+    account_tools,
     admin_tools,
     article_tools,
     catalog_tools,
@@ -22,7 +23,8 @@ from agent.runtime.read_tools import (
 
 class ToolCatalog:
     def __init__(self, read_tools=None, site_read_tools=None, own_read_tools=None,
-                 admin_read_tools=None, moderation_read_tools=None, queue_read_tools=None):
+                 admin_read_tools=None, moderation_read_tools=None, queue_read_tools=None,
+                 account_read_tools=None):
         self.read_tools = article_tools() if read_tools is None else read_tools
         self.site_read_tools = site_tools() if site_read_tools is None else site_read_tools
         self.own_read_tools = own_tools() if own_read_tools is None else own_read_tools
@@ -30,6 +32,8 @@ class ToolCatalog:
         self.moderation_read_tools = (moderation_tools() if moderation_read_tools is None
                                       else moderation_read_tools)
         self.catalog_read_tools = catalog_tools()
+        self.account_read_tools = (account_tools() if account_read_tools is None
+                                   else account_read_tools)
         self.queue_read_tools = queue_tools() if queue_read_tools is None else queue_read_tools
 
     def initial_tools(self, own_enabled):
@@ -46,6 +50,7 @@ class ToolCatalog:
             "admin_reports": self.admin_read_tools,
             "admin_moderation": self.moderation_read_tools,
             "admin_catalog": self.catalog_read_tools,
+            "admin_account_actions": self.account_read_tools,
             "admin_work_queue": self.queue_read_tools,
         }))
         if own_reads_enabled(cfg.get("principal")):

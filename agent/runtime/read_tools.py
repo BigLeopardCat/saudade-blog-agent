@@ -1,4 +1,4 @@
-"""Read domains exposed to the migration runtime.
+"""Authorized read domains used by the native tool loop.
 
 This is a capability boundary: adding a tool here changes what the model can
 read directly. Private reads require verified identity and a runtime scope
@@ -19,7 +19,8 @@ ADMIN_READ_TOOLS = frozenset({"get_server_status", "get_service_health", "get_us
 MODERATION_READ_TOOLS = frozenset({"get_moderation_status", "list_admin_board",
                                    "list_admin_comments"})
 
-CATALOG_READ_TOOLS = frozenset({"list_admin_notes", "list_accounts"})
+CATALOG_READ_TOOLS = frozenset({"list_admin_notes"})
+ACCOUNT_READ_TOOLS = frozenset({"list_accounts"})
 
 QUEUE_READ_TOOLS = frozenset({"list_quota_requests", "list_dashboard_todos"})
 
@@ -83,7 +84,15 @@ def catalog_tools() -> dict:
     from agent.domains import catalog
 
     selected = _tools_with_scope(CATALOG_READ_TOOLS, SCOPE_ADMIN_CONSOLE)
-    selected.update({tool.name: tool for tool in (catalog.list_admin_notes, catalog.list_accounts)})
+    selected[catalog.list_admin_notes.name] = catalog.list_admin_notes
+    return selected
+
+
+def account_tools() -> dict:
+    from agent.domains import catalog
+
+    selected = _tools_with_scope(ACCOUNT_READ_TOOLS, SCOPE_ADMIN_CONSOLE)
+    selected[catalog.list_accounts.name] = catalog.list_accounts
     return selected
 
 
