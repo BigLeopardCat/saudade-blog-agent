@@ -26,6 +26,19 @@ def body_text(data: dict | None) -> str:
     return str(data.get("sectionText") or data.get("noteContent") or data.get("content") or "")
 
 
+def _article_links(text):
+    urls = [*re.findall(r"\]\((/article/\d+[^)]*)\)", text),
+            *re.findall(r"https?://[^\s)<>]+", text)]
+    for url in urls:
+        try:
+            parsed = urlsplit(url.rstrip(".,，。"))
+        except ValueError:
+            continue
+        match = re.fullmatch(r"/article/(\d+)/?", parsed.path)
+        if match:
+            yield parsed.netloc.casefold(), int(match[1])
+
+
 class ArticleEvidence:
     def __init__(self) -> None:
         self.searched = False
@@ -34,6 +47,7 @@ class ArticleEvidence:
         self.failed = False
         self.documents: dict[int, str] = {}
         self.candidates: dict[int, str] = {}
+        self.references: set[tuple[str, int]] = set()
 
     def observe(self, name: str, args: dict, value) -> None:
         kind = getattr(value, "kind", "ok")
@@ -57,34 +71,30 @@ class ArticleEvidence:
             data = payload(value)
             if body_text(data).strip() and type(args.get("article_id")) is int:
                 self.documents[args["article_id"]] = str((data or {}).get("noteTitle") or "文章")
+                self.references.update(_article_links(body_text(data)))
 
     def issue(self, reply: str, site: str) -> str | None:
         if self.found and not self.documents and not self.candidates:
             return "article_body_missing"
         if not self.searched and not self.documents and not self.candidates:
             return None
-        relative = re.findall(r"\]\((/article/\d+)[^)]*\)", reply)
-        if any(
-            int(path.rsplit("/", 1)[-1]) not in {*self.documents, *self.candidates}
-            for path in relative
-        ):
-            return "unread_article_reference"
         origin = urlsplit(site).netloc.casefold()
-        for url in re.findall(r"https?://[^\s)<>]+", reply):
-            parsed = urlsplit(url.rstrip(".,，。"))
-            match = re.fullmatch(r"/article/(\d+)/?", parsed.path)
-            if match and (
-                int(match[1]) not in {*self.documents, *self.candidates}
-                or parsed.netloc.casefold() != origin
-            ):
+        referenced = {ident for host, ident in self.references if not host or host == origin}
+        available = {*self.documents, *self.candidates, *referenced}
+        for host, ident in _article_links(reply):
+            if ident not in available or host and host != origin:
                 return "unread_article_reference"
         return None
 
     def sources(self, reply: str, site: str) -> str:
-        if not self.documents or re.search(r"/article/\d+", reply):
+        origin = urlsplit(site).netloc.casefold()
+        cited = {ident for host, ident in _article_links(reply) if not host or host == origin}
+        if not self.documents or set(self.documents).issubset(cited):
             return reply
         refs = []
         for article_id, title in self.documents.items():
+            if article_id in cited:
+                continue
             label = re.sub(r"[\[\]\r\n]", "", title)[:80]
             refs.append(f"[{label}]({site.rstrip('/')}/article/{article_id})")
         return reply + "\n\n来源：" + "、".join(refs)
