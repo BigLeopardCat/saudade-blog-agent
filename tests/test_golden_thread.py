@@ -1,29 +1,7 @@
-"""golden 的线程坐标（20261018 批 6）：**每一条用例、每一遍、每一条臂各一条线程**。
+"""Evaluation coordinates isolate cases, repetitions and runtime variants.
 
-**它防的是什么**：`eval/run_golden.py` 此前给每一轮传的是**常量** `"golden_thread"`。
-今天没后果（两边都不挂 saver，`thread_id` 是死参数），但接上 saver 之后，常量线程意味着
-**所有用例共用同一条线程** ⇒ 用例 N+1 恢复用例 N 的 state，而症状是"模型退化了"。
-ADR-0011 把它写成「不复位就是假读数」，驱动侧已经照做——**但那个复位只活在驱动里**，
-不经驱动的跑法（夜间、手跑、`golden_case_runner`）没有这一层。本件钉的是：复位**不必需**，
-因为名字里本来就带着坐标。
-
-五节：
-  ① **三条不变式**：同坐标恒同名 / 不同用例恒不同名 / 臂·遍任一不同 ⇒ 名不同。
-     "不同用例恒不同名"是本件的本体，另两条保证复位与写入对得上。
-  ② **归一化**（`_slug`）：用例 id 里的 `.`/`-`/空格折成 `_`，空串折成 `x`。
-     名字会原样进 PG 的 `thread_id` 列，而复位是 `DELETE ... WHERE thread_id = %s`
-     ——**两处必须是同一个字符串**。
-  ③ **语料上没有撞名**：把 `eval/golden/basic.jsonl` 的**全部用例 id** 过一遍 `_slug`，
-     两两必须不同。归一化会把不同的 id 折成同一个 slug（`a.b` 与 `a-b` 都变成 `a_b`），
-     那是**真实存在**的失效面——所以这条判据不靠"应该不会撞"的直觉，而是拿真语料去量。
-     哪天有人加了一条 id 会撞的用例，这里当场红，而不是等到某晚读数漂了去查模型。
-  ④ **接线锁（AST）**：`eval/run_golden.py` 里 `run_one(` 必须带 `thread=` 且值是
-     `golden_thread.for_case(`；传给 `_run_agent_stream_to_queue` 的那个位置参数必须是
-     `thread` 这个名字；且该文件里**不再**出现 `"golden_thread"` 这个字面常量。
-  ⑤ **接线锁（AST）**：`eval/golden_trace.py` 落进 trace 的 `thread_id` 必须是**形参**，
-     不是字面——否则 trace 里那一格与图实际用的线程不一致，而"线程有没有复用"要读它。
-
-用法：.venv/bin/python tests/test_golden_thread.py
+Check the default and injected turn runners by behavior. Remaining transport
+checks ensure the chosen coordinate reaches the producer and trace recorder.
 """
 
 
@@ -33,6 +11,7 @@ import ast
 import json
 import sys
 from pathlib import Path
+from unittest.mock import patch
 
 from _judge import collector
 
@@ -68,6 +47,23 @@ def _no_rep(monkey: str = "") -> None:
 def _fn(tree: ast.Module, name: str) -> ast.FunctionDef | None:
     return next((n for n in tree.body
                  if isinstance(n, ast.FunctionDef) and n.name == name), None)
+
+
+def _check_turn_runner_coordinates():
+    import run_golden as rg
+    case = {"id": "coordinate_probe", "user_input": "hello", "gold": {}, "context": {}}
+    received = []
+
+    def turn(req, principal, **kwargs):
+        received.append(kwargs["thread"])
+        return {"text": "fixture", "confirm_tokens": []}
+
+    expected = gt.for_case(case["id"], arm=rg.golden_arm.arm_name(), suffix="__probe")
+    with patch.object(rg, "run_one", turn):
+        rg.run_case(case, suffix="__probe")
+        rg.run_case(case, suffix="__probe", turn_runner=turn)
+    check("缺省与注入运行器都收到正确的会话坐标", received == [expected, expected],
+          repr(received))
 
 
 def test_golden_thread():
@@ -124,19 +120,10 @@ def test_golden_thread():
           len({gt._slug("a.b"), gt._slug("a-b"), gt._slug("a b")}) == 1,
           f"{gt._slug('a.b')} / {gt._slug('a-b')} / {gt._slug('a b')}")
     print()
-    print("④ 接线锁：`eval/run_golden.py` 真的在用这个坐标（AST，不读文本）")
+    print("④ 运行器收到正确坐标，生产者继续传递该坐标")
     _rg = (ROOT / "eval" / "run_golden.py").read_text(encoding="utf-8")
     _tree = ast.parse(_rg)
-    _rc = _fn(_tree, "run_case")
-    check("找得到 `run_case`（判据的前提自己摆）", _rc is not None)
-    _thr_kw = [kw for n in ast.walk(_rc or ast.Module(body=[], type_ignores=[]))
-               if isinstance(n, ast.Call) and _call_name(n.func) == "run_one"
-               for kw in n.keywords if kw.arg == "thread"]
-    check("`run_case` 调 `run_one` 时显式传 `thread=`（不靠缺省）", len(_thr_kw) == 1)
-    check("…而且值来自 `golden_thread.for_case(`（不是又一个常量）",
-          bool(_thr_kw) and isinstance(_thr_kw[0].value, ast.Call)
-          and _call_name(_thr_kw[0].value.func) == "for_case",
-          ast.unparse(_thr_kw[0].value) if _thr_kw else "（没找到）")
+    _check_turn_runner_coordinates()
     _ro = _fn(_tree, "run_one")
     _submits = [n for n in ast.walk(_ro or ast.Module(body=[], type_ignores=[]))
                 if isinstance(n, ast.Call) and _call_name(n.func) == "submit"]

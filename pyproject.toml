@@ -44,6 +44,7 @@ dependencies = [
 dev = [
     "bandit==1.9.4",
     "coverage[toml]==7.16.2",
+    "httpx-sse==0.4.3",
     "ir-measures==0.4.3",
     "mypy==2.4.0",
     "pytest==9.1.1",

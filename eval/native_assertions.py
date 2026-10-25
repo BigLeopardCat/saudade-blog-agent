@@ -1,0 +1,80 @@
+"""Outcome checks over native observations, independent of planner node shape."""
+
+import json
+import re
+from urllib.parse import urljoin
+
+from tools.base import SITE_BASE
+
+
+def command_matches(expected, actual):
+    """Match navigation destinations by URL, preserving origin/query/fragment."""
+    kind, _, target = expected.partition(":")
+    actual_kind, _, actual_target = actual.partition(":")
+    navigation = {"NAVIGATE", "AUTO_NAVIGATE"}
+    if kind in navigation:
+        return actual_kind in navigation and (not target or
+            urljoin(SITE_BASE + "/", target) == urljoin(SITE_BASE + "/", actual_target))
+    return expected in actual
+
+
+def contains(actual, expected):
+    """Recursive subset for objects; declared lists preserve their exact meaning."""
+    if isinstance(expected, dict):
+        return isinstance(actual, dict) and all(
+            k in actual and contains(actual[k], v) for k, v in expected.items())
+    return actual == expected
+
+
+def _answer_value(wanted, result, calls):
+    values = []
+    for event in calls:
+        if event.get("name") not in wanted["tools"] or event.get("kind") != "ok":
+            continue
+        try:
+            value = json.loads(event.get("result", ""))
+            for key in wanted["path"]:
+                value = value[key]
+        except (ValueError, KeyError, TypeError):
+            continue
+        values.append(str(value))
+    match = re.search(wanted["pattern"], result.get("text", ""))
+    return bool(values and match and match.group(1) in values)
+
+
+def check(gold, result):
+    keys = {"require_observations", "require_confirm_specs", "forbid_runtime_stop",
+            "forbid_business_write", "require_answer_value"}
+    if not keys.intersection(gold):
+        return []
+    events = result.get("native_events")
+    if not isinstance(events, list):
+        return ["[未评估] 缺少原生运行时事件，不能验证任务结果"]
+    failures = []
+    calls = [e for e in events if e.get("node") == "native" and e.get("event") == "call"]
+    for wanted in gold.get("require_observations", []):
+        if not any(e.get("name") in wanted["tools"]
+                   and contains(e.get("args", {}), wanted.get("args", {}))
+                   and (not wanted.get("kinds") or e.get("kind") in wanted["kinds"])
+                   for e in calls):
+            failures.append(f"缺少实际工具观察：{wanted}")
+    for wanted in gold.get("require_confirm_specs", []):
+        specs = [s for p in result.get("confirm_payloads", []) for s in p.get("specs", [])]
+        if not any(contains(s, wanted) for s in specs):
+            failures.append(f"确认卡目标或参数不符：{wanted}")
+    for wanted in gold.get("require_answer_value", []):
+        if not _answer_value(wanted, result, calls):
+            failures.append(f"回答值不来自本轮实际读取结果：{wanted}")
+    if gold.get("forbid_runtime_stop"):
+        stops = [e.get("event") for e in events
+                 if e.get("event") in {"budget_stop", "task_stopped", "handoff_stopped",
+                                       "legacy_handoff"}]
+        if stops:
+            failures.append(f"运行时提前终止：{stops}")
+    if gold.get("forbid_business_write"):
+        writes = [e for e in events if e.get("event") in {"write_done", "write_error",
+                                                         "write_replay_hit"}]
+        rows = [r for r in result.get("exec_rows", []) if not r.get("cmd")]
+        if writes or rows:
+            failures.append("本轮不应执行后台写入")
+    return failures
