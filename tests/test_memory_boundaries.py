@@ -198,6 +198,16 @@ def test_scoped_summary_is_data_and_cannot_survive_role_or_identity_change():
         assert "PRIVATE_CANARY" not in str(build_prompt(build_messages(req), principal))
 
 
+@pytest.mark.parametrize("scope", [None, {**SCOPE, "user_id": 8},
+                                  {**SCOPE, "role": "superadmin"}, SCOPE])
+def test_summary_jobs_require_accepted_history_provenance(scope):
+    req = ChatRequest(message="继续", conversation_id=42, history_scope=scope,
+                      needs_summary=True, summary="unscoped summary")
+    cleaned = safe_request(req, ACTOR)
+    assert cleaned.needs_summary is (scope == SCOPE)
+    assert not cleaned.summary
+
+
 def test_private_tool_result_and_derived_answer_stay_hidden_on_downgrade_with_summary():
     admin = Principal(7, "superadmin", SOURCE_ASSERTION)
     saved = memory.turn_messages([HumanMessage(content="后台")], memory.observation(
