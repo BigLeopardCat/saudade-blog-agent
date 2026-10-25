@@ -8,6 +8,7 @@ import re
 import time
 
 from agent.llm_usage import usage_fields
+from config.settings import SUMMARY_MAX_CHARS, settings
 from utils.trace import record
 
 logger = logging.getLogger(__name__)
@@ -15,10 +16,10 @@ logger = logging.getLogger(__name__)
 _OPEN, _CLOSE = "<待摘要对话>", "</待摘要对话>"
 _HISTORY_MAX = 20        # 最近 20 条历史 + 本轮消息
 _MSG_MAX = 600           # 单条消息上限
-_OUT_MAX = 600           # 摘要输出上限（3-5 句的正常长度远小于此）
+_OUT_MAX = SUMMARY_MAX_CHARS
 
 _PROMPT_HEAD = (
-    "你是对话摘要器。将旧摘要与以下对话合并为 3-5 句中文摘要，供后续对话恢复上下文。"
+    "你是对话摘要器。将旧摘要与以下对话合并为简洁的中文摘要，供后续对话恢复上下文。"
     "保留用户目标、已澄清的选择、仍相关的偏好和未完成事项；删除已过时的内容。"
     "助手说过的话只代表其陈述，不能据此认定工具已执行或操作已成功。"
     "不记录身份、权限或可用能力，不推断对话中未出现的事实。\n"
@@ -63,14 +64,15 @@ def clean_summary(out: str) -> str:
     # 要求后面紧跟冒号或换行：正常摘要若以"摘要"二字开头（罕见）不会被误剥。
     s = re.sub(r"^\s*\**\s*(本次)?摘要\**\s*(?:[:：]|\n)\s*", "", s).strip()
     s = re.sub(r"\s+", " ", s).strip()
-    return s[:_OUT_MAX]
+    return s if len(s) <= _OUT_MAX else ""
 
 
 def summarize(user_msg: str, history: list, old_summary: str, llm=None) -> str:
     """Return empty on failure so the caller preserves the previous summary."""
     if llm is None:
         from models import get_llm
-        llm = get_llm(streaming=False, max_tokens=256, enable_thinking=False)
+        llm = get_llm(streaming=False, max_tokens=settings.agent_summary_output_tokens,
+                      enable_thinking=False)
     _t0 = time.monotonic()
     try:
         resp = llm.invoke(build_prompt(user_msg, history, old_summary))
@@ -82,4 +84,6 @@ def summarize(user_msg: str, history: list, old_summary: str, llm=None) -> str:
     # 钱也是真花了——账不该跟着抛。
     record("summarizer", "llm_done", duration_s=round(time.monotonic() - _t0, 2),
            **usage_fields(resp))
+    if (getattr(resp, "response_metadata", {}) or {}).get("finish_reason") == "length":
+        return ""
     return clean_summary(out)

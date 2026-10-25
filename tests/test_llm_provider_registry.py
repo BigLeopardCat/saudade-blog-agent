@@ -203,10 +203,10 @@ def _test_wired_into_server_lifespan():
     src = (ROOT / "agent/api/lifecycle.py").read_text(encoding="utf-8")
     check("server 的 lifespan 里真的调了 `check_provider()`",
           "check_provider()" in src, "")
-    check("  且在 `_build_arm()` **之前**（否则臂会先被建起来再被这个错误丢掉）",
+    check("  且在 `build_runtime()` **之前**（否则运行时会先被建起来再被这个错误丢掉）",
           "check_provider()" in src
           and src.index("check_provider()")
-          < src.index("app.state.runtime, _arm = build_runtime(resources)"), "")
+          < src.index("app.state.runtime = build_runtime(resources)"), "")
 
 
 

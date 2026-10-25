@@ -1,9 +1,13 @@
 """Own the native evaluation runtime and its checkpoint resources for one CLI process."""
 
+import os
 import time
 from contextlib import ExitStack
 
-from eval import golden_arm
+from config.settings import check_retired_runtime
+
+ENGINE = "native"
+REPORTS_DIR = "eval/report/runs"
 
 _runtime = None
 _resources = ExitStack()
@@ -15,14 +19,24 @@ def close_agent():
     _resources.close()
 
 
+def check_environment():
+    check_retired_runtime(os.environ.get("GOLDEN_ARM"), "GOLDEN_ARM")
+
+
+def build_agent(*, resources):
+    from agent.runtime.native import build
+
+    check_environment()
+    return build(resources=resources)
+
+
 def ensure_agent():
     global _runtime
     if _runtime is None:
         t0 = time.time()
         # Evaluation uses the same native runtime factory as the service.
-        _arm = golden_arm.arm_name()
         with ExitStack() as startup:
-            _runtime = golden_arm.build_agent(_arm, resources=startup)
+            _runtime = build_agent(resources=startup)
             _resources.enter_context(startup.pop_all())
-        print(f"[init] Native runtime ready (arm={_arm}): {time.time() - t0:.1f}s")
+        print(f"[init] Native runtime ready: {time.time() - t0:.1f}s")
     return _runtime

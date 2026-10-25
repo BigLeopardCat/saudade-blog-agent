@@ -249,7 +249,7 @@
   （192 条用例的线程名两两不同——归一化会把 `a.b` 与 `a-b` 折成同一个 slug，那是真实存在
   的失效面，所以这条不靠"应该不会撞"的直觉）+ 两条 AST 接线锁。
   ⚠️ **`run_one` 的 `thread` 缺省仍是老常量**：`eval/native_contracts.py` /
-  `eval/arm_capability.py` 等探针直接调 `run_one` 并各传各的线程名，缺省不许动它们。
+  已退役的能力探针曾直接调 `run_one` 并各传各的线程名，缺省不许动它们。
 - **依赖进 `pyproject.toml` 与锁文件** ✅ **已做**（`langgraph-checkpoint-postgres==3.1.0` /
   `psycopg[binary]==3.3.6` / `psycopg-pool==3.3.3`，`uv.lock` 里有对应条目；本机不跑同步，
   见 §5）。

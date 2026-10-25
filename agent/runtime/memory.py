@@ -24,11 +24,12 @@ from agent.runtime.memory_media import compact
 from agent.runtime.memory_scope import matches
 from agent.runtime.message_content import estimate_tokens as _tokens
 from agent.runtime.message_content import text_content
+from config.settings import SUMMARY_MAX_CHARS
 
 HISTORY_TOKENS = 1800
 CHECKPOINT_TOKENS = 5400
 OBSERVATION_CHARS = 1400
-SUMMARY_CHARS = 1600
+SUMMARY_CHARS = SUMMARY_MAX_CHARS
 
 
 def is_context(message):

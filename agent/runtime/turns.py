@@ -75,6 +75,7 @@ def _postgres_turn(saver, thread_id, config, deadline):
     conninfo = getattr(saver.conn, "conninfo", None)
     if not conninfo:
         raise RuntimeError("PostgreSQL 会话锁要求 saver 使用带 conninfo 的连接池")
+    # Persisted namespace: keep stable while old and new workers coexist.
     key = int.from_bytes(hashlib.blake2b(
         ("saudade.hybrid.turn:" + thread_id).encode(), digest_size=8).digest(),
         "big", signed=True)

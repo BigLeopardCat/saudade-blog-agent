@@ -99,3 +99,9 @@ def test_incomplete_or_invalid_prices_are_rejected(prices):
     with pytest.raises(ValueError):
         token_cost_report._parse_price(SimpleNamespace(
             price_in=prices[0], price_out=prices[1], price_cache=prices[2]))
+
+
+def test_current_runtime_label_and_archived_arm_labels_remain_readable():
+    current = {"input": {"runtime": {"name": "native"}}, "events": []}
+    archived = {"input": {"runtime": {"arm": "native"}}, "events": []}
+    assert request_metrics.path_of(current) == request_metrics.path_of(archived) == "native"

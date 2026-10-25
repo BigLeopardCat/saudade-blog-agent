@@ -216,7 +216,7 @@ flowchart LR
 - `NativeConversationStore` 只使用 LangGraph saver 的公开 `get_state`/`update_state` 接口保存会话历史、待确认状态和完成轮次；它不是业务图，也不提供每一步崩溃恢复。
 - 普通读取中断后可以重新读取；未知写入结果必须先查询已有回执，不能盲目重试。
 - 会话使用稳定 `thread_id`、串行锁和删除屏障；不同用户与会话的历史相互隔离。
-- 生产不识别 `AGENT_ARM=hybrid/graph`，未知执行器直接拒绝；旧模块不在新进程的导入闭包中。
+- 服务只有原生运行时；旧 `AGENT_ARM` 仅接受迁移值 `native`，其他值拒绝。旧模块不在导入闭包中。
 
 ## 5. 验证与评测
 

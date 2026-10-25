@@ -85,8 +85,21 @@ def _db(dsn: str) -> str:
     return runtime_probe.checkpoint_db(dsn)
 
 
+def _safe_diagnostics(dials):
+    budget = dials.get("budget")
+    expected = {"context_tokens", "request_tokens", "model_calls", "tool_calls",
+                "output_tokens", "summary_output_tokens"}
+    if not isinstance(budget, dict) or set(budget) != expected:
+        return False
+    if not all(type(value) is int and value > 0 for value in budget.values()):
+        return False
+    return all((isinstance(value, (str, bool)) or
+                (key == "vector_missing" and type(value) is int)) and len(str(value)) <= 64
+               for key, value in dials.items() if key != "budget")
+
+
 def test_health_dials():
-    DIAL_KEYS = {"agent_arm", "planner_native_thinking", "agent_fastpath",
+    DIAL_KEYS = {"runtime", "budget",
                  "llm_provider", "llm_model",
                  "rag_hybrid_enabled", "rag_hybrid_active", "rag_state", "vector_missing",
                  "checkpoint_backend", "checkpoint_db"}
@@ -109,15 +122,17 @@ def test_health_dials():
           call()["agent_ready"] is False)
     print()
     print("② 取自**本进程的内存单例**，不是重新解析 .env")
-    _marks = {"planner_native_thinking": True, "agent_fastpath": True}
+    _marks = {"agent_output_tokens": 2048}
     _saved = {k: getattr(settings, k) for k in _marks}
     _saved_prov = settings.llm_provider
     try:
         for k, v in _marks.items():
             setattr(settings, k, v)
         d = call()["dials"]
-        check("已退役的 planner 配置不能冒充原生运行时行为",
-              all(d[k] is False for k in _marks), json.dumps(d, ensure_ascii=False))
+        check("预算诊断取自实际生效配置且不返回退役档位",
+              d["budget"]["output_tokens"] == 2048
+              and not {"agent_arm", "planner_native_thinking", "agent_fastpath"}.intersection(d),
+              json.dumps(d, ensure_ascii=False))
         check("llm_model 回的是**按 provider 解析后**的名字（不是某一个 provider 的字段）",
               d["llm_model"] == settings.active_llm_model, d["llm_model"])
         # 认不出的 provider：**不许把 /health 打成 500**——它是存活权威，一个拼写错误
@@ -152,13 +167,9 @@ def test_health_dials():
         settings.llm_provider = "qwen"                 # 让 active_llm_* 打到那份被注入的 key 上
         _body = json.dumps(call(), ensure_ascii=False)
         check("返回体里不含任何密钥取值", SENTINEL not in _body)
-        # int 只放行 `vector_missing`（一个计数，20261005）：它是这一格里唯一的"数量"，
-        # 其余仍必须是 str/bool。放宽成"任何标量"会把"整个对象挂上去了"也放进来。
+        # The response must not expose arbitrary nested settings objects.
         _d = call()["dials"]
-        check("每个档位值都是短标量（str/bool；只有 vector_missing 是计数）——"
-          "长串意味着有人把整个对象挂上去了",
-              all((isinstance(v, (str, bool)) or (k == "vector_missing" and isinstance(v, int)))
-                  and len(str(v)) <= 64 for k, v in _d.items()),
+        check("诊断只返回短标量或明确的正整数预算", _safe_diagnostics(_d),
               json.dumps(_d, ensure_ascii=False))
     finally:
         for k, v in _saved_keys.items():
