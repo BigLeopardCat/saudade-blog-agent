@@ -68,6 +68,7 @@ def test_http_and_sse_share_history_without_duplicates(monkeypatch, persistent):
         assert first.success and first.reply == "答复1"
         response = await server.chat_stream(ChatRequest(
             message="接着问", user_id=7, conversation_id=42,
+            history_scope={"user_id": 7, "role": "user", "conversation_id": 42},
             history=[HistoryItem(role="user", content="[当前问题]: 第一问"),
                      HistoryItem(role="assistant", content="答复1")]), request)
         body = "".join([frame async for frame in response.body_iterator])

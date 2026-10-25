@@ -189,7 +189,9 @@ def _test_injection_points():
     block = render_fact_block(["页面已跳转：https://saudade.site/device-console/"])
     history = [HistoryItem(role="user", content="猫咪去物联网平台"),
                HistoryItem(role="assistant", content=block + "\n控制台在眼前啦～")]
-    messages = server.build_messages(ChatRequest(message="现在呢", history=history))
+    messages = server.build_messages(ChatRequest(
+        message="现在呢", history=history, conversation_id=42,
+        history_scope={"user_id": 7, "role": "user", "conversation_id": 42}))
     assistant = [str(message.content) for message in messages if isinstance(message, AIMessage)]
     check("历史 assistant 不再携带系统事实行", assistant and all(FACT_MARK not in text for text in assistant))
     check("事实行被剥离后保留模型包装", assistant and "控制台在眼前啦" in assistant[0])

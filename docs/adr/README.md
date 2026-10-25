@@ -78,7 +78,7 @@
 | [0010](adr-0010-state-accumulator-reducers-deferred.md) | state 累加器的合并语义：先立台账，暂不加 reducer | **已搁置** |
 | [0011](adr-0011-graph-holds-context-checkpoint-memory.md) | 上下文由图自己持有（原生 checkpoint 取代手写注入）：代码面已采纳，**默认不生效**（DSN 空则不挂 saver） | 已采纳 |
 | [0012](adr-0012-write-idempotency-ledger.md) | 写操作的幂等账：先记账再动手，至多一次 | 已采纳 |
-| [0013](adr-0013-chat-image-persistence.md) | 聊天图片落库，但只做展示（模型仍只看 `[图片]` 标记） | 已采纳 |
+| [0013](adr-0013-chat-image-persistence.md) | 聊天图片落库，但只做展示（模型仍只看 `[图片]` 标记） | 被 ADR-0022 取代 |
 | [0014](adr-0014-assertion-verify-via-pyjwt.md) | 身份断言的验签与签发改用 PyJWT（`verify_sub` 那枚地雷写在最前面） | 已采纳 |
 | [0015](adr-0015-planner-becomes-router-schema-on-demand.md) | planner 降成路由器，schema 索引化按需取（分四阶段，**部分取代 ADR-0001**；**阶段 0 已按判据停**） | **提议中** |
 | [0016](adr-0016-skill-registry-becomes-config-files.md) | 技能注册表从 Python 字面量改成一条技能一个 TOML 配置（试点域已落地） | 已采纳 |
@@ -87,6 +87,7 @@
 | [0019](adr-0019-local-embedding-runtime.md) | 本地 embedding 共用成熟运行时、固定资产并保留 API | 提议中 |
 | [0020](adr-0020-conversation-store.md) | 原生会话存储采用薄接口，旧图 checkpoint 细节留在兼容适配器 | 已采纳 |
 | [0021](adr-0021-native-runtime-core.md) | 原生轮次与会话存储脱离旧编排图，传输接入单独收敛 | 已采纳 |
+| [0022](adr-0022-conversation-memory-boundaries.md) | 会话历史按来源裁剪，图片按需回看 | 已采纳 |
 
 ## 相关的、但不算 ADR 的文档
 
