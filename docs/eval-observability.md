@@ -1,6 +1,6 @@
 # 评测与可观测性
 
-当前生产使用混合运行时。观测需要覆盖整个请求；旧规划器事件只用于旧图诊断。
+当前生产使用原生工具运行时。观测需要覆盖整个请求；旧规划器事件只用于历史记录诊断。
 维护目标是判断任务是否正确完成、消耗多少，以及失败发生在哪一层。
 
 ## 1. 观测口径
@@ -12,7 +12,7 @@
 
 请求指标按 **来源 × 代码版本 × 模型 × 执行路径** 分组：
 
-- 路径区分 `hybrid`、`graph`、`hybrid_to_graph` 和 `unknown`。
+- 当前路径为 `native`；历史报告中的 `hybrid`、`graph`、`hybrid_to_graph` 单独分组，不混入当前成绩。
 - 请求数、有回复数、结束原因、模型开始/完成事件数、交接原因分别计数。
 - `with_reply` 只表示存在正文，不代表任务成功。旧图并非所有模型节点都发开始事件，
   因此不能把开始数减完成数直接解释成失败数。
@@ -24,7 +24,7 @@
 - 费用只有在输入、输出、缓存用量完整且提供三个有效单价时才估算。
   当前网关没有可靠价格回执，不内置模型价格。
 
-混合路径记录 `llm_start/llm_done`、按需加载、工具结果种类、交接原因和持久化事件。
+原生路径记录 `llm_start/llm_done`、按需加载、工具结果种类、预算终止和持久化事件。
 确认准备与取消工具只记录工具名、轮次、结果种类；确认令牌及终止工具结果不进入
 模型上下文或 trace。事实回执、幂等命中与工具调用是不同事件，不拿调用数冒充完成数。
 
@@ -58,6 +58,27 @@
 
 ## 3. 当前可运行的任务验收
 
+### 全量前的小规模预检
+
+先检查评测接线，再以同一配置运行少量真实模型任务，不用复跑覆盖首跑失败：
+
+```bash
+.venv/bin/python -m eval.native_contracts --fail-fast \
+  --case chat --case unread_counts --case favorite_cancel --case favorite_confirm \
+  --case navigation_followup --case article_discovery --case oled_display --case admin_denial
+```
+
+这八项覆盖聊天、未读聚合、取消、确认与回放、执行后叙述、多轮跳转、主题文章发现、OLED 回执及普通用户越权拒绝。
+模型使用当前配置，业务 HTTP、会话存储和设备指令均用隔离夹具，不修改生产业务数据。
+确认路径启用生产叙述实现；回退文本仍可正常服务，但不能当作叙述已评估通过。
+`planned_samples`、实际采样、未评估与提前停止分别报告；未尝试任务不算通过。
+输入、输出、缓存和延迟通过既有 trace 汇总。首个可见事件尚未接入这个进程内驱动，字段保持缺失，不能当零。
+
+通过预检后，还需审查全量用例的身份来源、已退役路径断言、重复前提和缺失领域。
+旧 `basic.jsonl` 的总通过率不能直接作为迁移后基线；同一句话在不同身份或历史下是必要对照，不按文本相同就删除。
+
+### 已有验收入口
+
 ```bash
 # 真实模型 + 假业务 HTTP + 内存 checkpoint + 临时 SQLite 幂等账
 .venv/bin/python -m eval.native_contracts
@@ -66,7 +87,7 @@
 .venv/bin/python -m eval.native_contracts --case navigation_combined --repeat 3
 
 # 聊天与公开读取；真实模型及站点只读数据
-GOLDEN_ARM=hybrid CHECKPOINT_DSN= .venv/bin/python eval/run_golden.py \
+GOLDEN_ARM=native CHECKPOINT_DSN= .venv/bin/python eval/run_golden.py \
   --golden eval/golden/hybrid_requests.jsonl --min-pass-rate 1
 ```
 
@@ -88,8 +109,8 @@ GOLDEN_ARM=hybrid CHECKPOINT_DSN= .venv/bin/python eval/run_golden.py \
 夹具缺失读取明确标为未评估；未评估和失败都返回非零退出码。每轮进入生产 RequestControl，
 使用共享预算和截止时间。导航夹具使用真实本地词法检索和合成正文，不调用外部 embedding；
 业务搜索虽使用 POST，仍属读取，不计业务写入。
-已接入既有夜间脚本作为独立必过项；没有新增计划任务。旧 golden 显式运行 graph，
-其后另跑混合任务验收，两个结果分别记录。
+已接入既有夜间脚本作为独立必过项；没有新增计划任务。旧 golden 与原生任务验收分别记录，
+历史架构断言需迁移后才能解释为当前任务质量。
 报告位于 `eval/report/_smoke_native_contracts_<run>/report.json`，追踪通过既有
 `golden_traces/<run>/` 机制隔离；手工报告按现有保留登记保留，避免被当作冻结基线。
 

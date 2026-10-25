@@ -21,9 +21,10 @@ from starlette.requests import Request
 from agent import confirm, idem
 from agent.runtime import writes
 from agent.runtime.control import RequestControl, request_scope
+from agent.runtime.narration import narrate
 from agent.runtime.native import NativeRuntime
 from agent.runtime.native_store import NativeConversationStore
-from eval import navigation_contracts, request_metrics
+from eval import experience_contracts, navigation_contracts, request_metrics
 from eval.own_fixtures import SECRET, favorite_backend, message_backend, notification_backend
 from utils.trace_io import load_trace
 
@@ -101,6 +102,23 @@ def _favorite_cancel(turn, state):
              .values.get("pending_action") is None, "pending card was not cleared")
 
 
+def _favorite_confirm(turn, state):
+    prepared = turn("请收藏文章19。")
+    token, grant = _card(prepared, "favorites")
+    _require(grant["specs"] == [{"tool": "add_favorite", "args": {"article_id": 19}}],
+             "favorite target changed")
+    _require(not _posts(state), "preparation wrote business data")
+    for _ in range(2):
+        result = turn("", token)
+        _require(result["exec_rows"] and result["text"].strip(), "missing execution result")
+        trace = load_trace(result["trace"])
+        _require(trace and any(event.get("node") == "narration"
+                              and event.get("event") == "llm_done"
+                              for event in trace["events"]), "narration was not evaluated")
+    _require(len(_posts(state)) == 1 and state["favorites"][0]["noteId"] == 19,
+             "confirmation or replay wrote an unexpected favorite")
+
+
 def _read_replay(turn, state, message, executor, tool, ids, arrival):
     prepared = turn(message)
     token, grant = _card(prepared, executor)
@@ -150,16 +168,17 @@ def _messages(turn, state):
 
 CASES = [("chat", favorite_backend, _chat),
          ("favorite_cancel", favorite_backend, _favorite_cancel),
+         ("favorite_confirm", favorite_backend, _favorite_confirm),
          ("notification_replay", notification_backend, _notifications),
          ("unread_counts", message_backend, _unread_counts),
          ("message_read_replay", message_backend, _messages),
-         *navigation_contracts.CASES]
+         *navigation_contracts.CASES, *experience_contracts.CASES]
 
 
 def _sample(name, backend, contract, run_id, sample):
     paths, rounds = [], []
     with backend() as state, TemporaryDirectory(prefix="agent-native-eval-") as temp:
-        arm = NativeRuntime(NativeConversationStore(InMemorySaver()))
+        arm = NativeRuntime(NativeConversationStore(InMemorySaver()), narrator=narrate)
         store = _Store(str(Path(temp) / "ledger.sqlite3"))
         principal = _principal()
 
@@ -203,7 +222,7 @@ def _sample(name, backend, contract, run_id, sample):
     return outcome, paths
 
 
-def run(case_names=None, repeat=1):
+def run(case_names=None, repeat=1, *, fail_fast=False):
     _require(golden_trace.enabled(), "native contracts require evaluation tracing")
     _require(type(repeat) is int and 1 <= repeat <= 50, "repeat must be between 1 and 50")
     selected = set(case_names) if case_names is not None else {case[0] for case in CASES}
@@ -218,13 +237,21 @@ def run(case_names=None, repeat=1):
             result, traces = _sample(name, backend, contract, run_id, sample)
             results.append(result)
             paths.extend(traces)
-    scores = [{"case": name, "samples": repeat,
+            if fail_fast and not result["passed"]:
+                break
+        if fail_fast and results and not results[-1]["passed"]:
+            break
+    scores = [{"case": name,
+               "samples": sum(row["case"] == name for row in results),
                "evaluated": sum(row["evaluated"] for row in results if row["case"] == name),
                "passed": sum(row["passed"] for row in results if row["case"] == name)}
               for name, _, _ in CASES if name in selected]
     return {"trace_run": run_id, "business_api": "synthetic", "checkpoint": "memory",
             "navigation_retrieval": "synthetic_lexical",
-            "ledger": "temporary_sqlite", "repeat": repeat, "scores": scores, "cases": results,
+            "ledger": "temporary_sqlite", "repeat": repeat,
+            "planned_samples": len(selected) * repeat,
+            "stopped_early": len(results) < len(selected) * repeat,
+            "narration": "production", "scores": scores, "cases": results,
             "metrics": request_metrics.collect(paths)}
 
 
@@ -232,8 +259,9 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--case", action="append", choices=[case[0] for case in CASES])
     parser.add_argument("--repeat", type=int, choices=range(1, 51), default=1)
+    parser.add_argument("--fail-fast", action="store_true", help="首次失败后停止扩量")
     args = parser.parse_args(argv)
-    report = run(args.case, args.repeat)
+    report = run(args.case, args.repeat, fail_fast=args.fail_fast)
     path = Path("eval/report") / f"_smoke_native_contracts_{report['trace_run']}" / "report.json"
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(report, ensure_ascii=False, indent=2))
