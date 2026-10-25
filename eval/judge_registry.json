@@ -427,6 +427,10 @@
         0,
         0
       ],
+      "agent/runtime/finalization.py": [
+        2,
+        0
+      ],
       "agent/runtime/jobs.py": [
         0,
         0
@@ -577,7 +581,7 @@
       ]
     },
     "total": [
-      575,
+      579,
       496
     ]
   },
