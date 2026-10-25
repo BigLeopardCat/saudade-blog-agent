@@ -2,11 +2,10 @@
 
 import asyncio
 import logging
-from contextlib import asynccontextmanager
+from contextlib import ExitStack, asynccontextmanager
 
 from fastapi import FastAPI
 
-from agent import checkpoint
 from agent.runtime.workers import RequestWorkers
 from config.settings import settings
 from rag import search as rag_search
@@ -19,14 +18,14 @@ MAX_CONCURRENT_STREAMS = settings.max_concurrent_streams
 RECURSION_LIMIT = settings.recursion_limit
 
 
-def build_runtime():
+def build_runtime(resources: ExitStack):
     """Build the native production runtime; retired selections fail at startup."""
     from agent.runtime.native import build
 
     arm = (settings.agent_arm or "native").strip().lower()
     if arm != "native":
         raise RuntimeError(f"AGENT_ARM={arm!r} 已退役，请配置 AGENT_ARM=native。")
-    return build(), "native"
+    return build(resources=resources), "native"
 
 
 @asynccontextmanager
@@ -37,6 +36,7 @@ async def lifespan(app: FastAPI):
     from config.settings import settings
 
     app.state.chat_slots = asyncio.BoundedSemaphore(MAX_CONCURRENT_STREAMS)
+    resources = ExitStack()
     workers = RequestWorkers(request_timeout=settings.stream_total_timeout)
     app.state.workers = workers
     try:
@@ -49,7 +49,7 @@ async def lifespan(app: FastAPI):
                 "但每一条对话都会失败（/ready 现在报 missing_credentials）。",
                 _provider,
             )
-        app.state.runtime, _arm = build_runtime()
+        app.state.runtime, _arm = build_runtime(resources)
         logger.info("Agent ready (arm=%s)", _arm)
         # Optional warmups do not block startup.
         workers.warm_up(wordgraph.warm)
@@ -62,5 +62,5 @@ async def lifespan(app: FastAPI):
         finally:
             app.state.runtime = None
             app.state.workers = None
-            await asyncio.to_thread(checkpoint.close_pool)
+            await asyncio.to_thread(resources.close)
         logger.info("Agent stopped; request workers and checkpoint pool closed")

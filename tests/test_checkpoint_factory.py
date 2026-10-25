@@ -9,6 +9,7 @@ import ast
 import importlib.util
 import sys
 import time
+from contextlib import ExitStack
 from pathlib import Path
 
 from _judge import collector
@@ -25,6 +26,11 @@ FAILS: list[str] = []
 check = collector(FAILS)
 
 
+def _build_checkpointer(dsn=None):
+    with ExitStack() as resources:
+        return C.build_checkpointer(dsn, resources=resources)
+
+
 def _raises(fn, *a, **kw) -> str:
     """调用并返回异常文本；没抛就返回空串。"""
     try:
@@ -37,7 +43,7 @@ def _raises(fn, *a, **kw) -> str:
 def _not_none_or_raised(dsn: str) -> tuple[bool, str]:
     """给了 DSN 时的唯一合法结局：返回一个真 saver，或者抛。**静默返回 None 是错的。**"""
     try:
-        return C.build_checkpointer(dsn) is not None, "返回了 None"
+        return _build_checkpointer(dsn) is not None, "返回了 None"
     except Exception as e:
         return True, f"抛了（可以接受）：{type(e).__name__}"
 
@@ -279,8 +285,8 @@ def test_checkpoint_factory():
           _S.checkpoint_dsn == "", repr(_S.checkpoint_dsn))
     C.importlib.import_module = _spy
     try:
-        _none = C.build_checkpointer()
-        _blank = C.build_checkpointer("   ")
+        _none = _build_checkpointer()
+        _blank = _build_checkpointer("   ")
     finally:
         C.importlib.import_module = _real_import
     check("空 DSN 返回 None（= 今天的行为）", _none is None, repr(_none))
@@ -294,13 +300,13 @@ def test_checkpoint_factory():
         check(f"`{C.redact(_dsn)}` 不静默返回 None", _ok, _why)
     print("\n③ 认不出来的 scheme ⇒ 响亮，且点名「故意不支持内存档」")
     for _bad in ("memory://x", "memory", "mysql://root@127.0.0.1/blog", "redis://127.0.0.1"):
-        _m = _raises(C.build_checkpointer, _bad)
+        _m = _raises(_build_checkpointer, _bad)
         check(f"`{_bad}` ⇒ RuntimeError", _m.startswith("RuntimeError:"), _m[:90] or "（没抛）")
     _mem = _raises(C.backend_for, "memory://x")
     check("内存档的拒绝理由写清楚了（不然人会以为只是没实现）",
           "故意不支持内存档" in _mem, _mem[:160])
     print("\n③b sqlite 这一支**刻意不落地**（产线 4 worker 共用一个文件库，并发写没验过）")
-    _sq = _raises(C.build_checkpointer, "sqlite:////tmp/ckpt.sqlite3")
+    _sq = _raises(_build_checkpointer, "sqlite:////tmp/ckpt.sqlite3")
     check("抛 RuntimeError（不是静默去造一个没验过的 saver）",
           _sq.startswith("RuntimeError:"), _sq[:90] or "（没抛）")
     check("说清是「没有落地」而不是含糊的「还没实现」", "没有落地" in _sq, _sq[:200])
@@ -308,7 +314,7 @@ def test_checkpoint_factory():
     _pg_installed = importlib.util.find_spec("langgraph.checkpoint.postgres") is not None
     C.importlib.import_module = _no_module
     try:
-        _pg = _raises(C.build_checkpointer, _DEAD)
+        _pg = _raises(_build_checkpointer, _DEAD)
     finally:
         C.importlib.import_module = _real_import
     check("抛 RuntimeError", _pg.startswith("RuntimeError:"), _pg[:90] or "（没抛）")
@@ -319,7 +325,7 @@ def test_checkpoint_factory():
     if not _pg_installed:
         print("  ⏭ 本机没装 langgraph-checkpoint-postgres ⇒ **这一条没验**（不是通过）")
     else:
-        _down = _raises(C.build_checkpointer, _DEAD)
+        _down = _raises(_build_checkpointer, _DEAD)
         check("抛 RuntimeError（没抛 = 返回了一个连不上的 saver）",
               _down.startswith("RuntimeError:"), _down[:90] or "（没抛）")
         check("异常文本里的口令已脱敏", "s3cret" not in _down and "***@" in _down, _down[:200])
@@ -367,7 +373,7 @@ def test_checkpoint_factory():
     _old_dsn = _S.checkpoint_dsn
     try:
         _S.checkpoint_dsn = _DEAD
-        _loud = _raises(C.build_checkpointer)
+        _loud = _raises(_build_checkpointer)
         # 拨成一个连不上的 DSN ⇒ 必须**响亮抛**。这就证明了那一格被真的读到了：
         # 没读到的话 `build_checkpointer()` 会拿空串直接返回 `None`（**静默**）。
         # 刻意不用"能连上的 DSN + 断言返回了 saver"——那要求本机有个真库，
@@ -376,9 +382,9 @@ def test_checkpoint_factory():
               _loud.startswith("RuntimeError:"), _loud[:90] or "（没抛 = 这一格是死的）")
         _S.checkpoint_dsn = "   "
         check("拨成纯空白 ⇒ 与 `build_checkpointer('   ')` 同一把尺子：None",
-              C.build_checkpointer() is None)
+              _build_checkpointer() is None)
         _S.checkpoint_dsn = ""
-        check("拨回空 ⇒ None（= 没挂 saver 时的行为）", C.build_checkpointer() is None)
+        check("拨回空 ⇒ None（= 没挂 saver 时的行为）", _build_checkpointer() is None)
     finally:
         _S.checkpoint_dsn = _old_dsn
     print("\n⑧ 会话坐标与脱敏（批 7 新增的三个纯函数——**不连库，本机就能判**）")
@@ -498,7 +504,7 @@ def test_checkpoint_factory():
     _MYSQL = "mysql://u:s3cret@127.0.0.1:1/blog"
     try:
         _S.checkpoint_forbid_db = "blog"
-        _m10 = _raises(C.build_checkpointer, _MYSQL)
+        _m10 = _raises(_build_checkpointer, _MYSQL)
         check("填了库名 + DSN 指到它 ⇒ **响亮抛**（且不是被 scheme 那条盖住的）",
               "CHECKPOINT_FORBID_DB" in _m10, _m10[:100] or "（没抛 = 硬闸是空的）")
         check("消息点名了那个库，也说清了「为什么」（业务库的结构只许由编号迁移改）",
@@ -506,19 +512,19 @@ def test_checkpoint_factory():
         check("消息里**没有口令**（走 `redact`，同 `_make_pool` 那条）",
               "s3cret" not in _m10, _m10[:120])
         _S.checkpoint_forbid_db = "   "
-        _m10b = _raises(C.build_checkpointer, _MYSQL)
+        _m10b = _raises(_build_checkpointer, _MYSQL)
         check("（反控）只填空白 ⇒ 当没填，落回 scheme 那条（⇒ 上面那条只可能来自硬闸）",
               "CHECKPOINT_FORBID_DB" not in _m10b and _m10b.startswith("RuntimeError:"),
               _m10b[:90])
         _S.checkpoint_forbid_db = "another_db"
-        _m10c = _raises(C.build_checkpointer, _MYSQL)
+        _m10c = _raises(_build_checkpointer, _MYSQL)
         check("（反控）填的库名与 DSN 指的**不是**同一个 ⇒ 不拦（不是「见谁都拦」）",
               "CHECKPOINT_FORBID_DB" not in _m10c, _m10c[:90])
         _S.checkpoint_forbid_db = "blog"
         check("（反控）DSN 空 ⇒ 硬闸碰都不碰（返回 None，不是抛）",
-              C.build_checkpointer("") is None)
+              _build_checkpointer("") is None)
         _S.checkpoint_dsn = _MYSQL
-        _m10d = _raises(C.build_checkpointer)
+        _m10d = _raises(_build_checkpointer)
         check("不给参数 ⇒ 也拦（硬闸接在 `settings` 那条通路上，不是只认显式入参）",
               "CHECKPOINT_FORBID_DB" in _m10d, _m10d[:100] or "（没抛）")
     finally:

@@ -12,6 +12,7 @@ from __future__ import annotations
 import argparse
 import json
 import uuid
+from contextlib import ExitStack
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -64,7 +65,12 @@ def _turn(saver, conversation_id: str, resume: bool):
 
 
 def run():
-    saver = checkpoint.build_checkpointer()
+    with ExitStack() as resources:
+        return _run(resources)
+
+
+def _run(resources):
+    saver = checkpoint.build_checkpointer(resources=resources)
     if saver is None:
         raise RuntimeError("CHECKPOINT_DSN is required; no memory fallback")
     prefix = f"native_probe_{uuid.uuid4().hex}"

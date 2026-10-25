@@ -323,8 +323,8 @@ def probe_forced_fallback(arm: str, *, uid: int = 1) -> dict:
     import run_golden
 
     os.environ["GOLDEN_ARM"] = arm
-    run_golden.ensure_agent()
-    base = run_golden._runtime
+    ensure = run_golden.ensure_agent
+    base = ensure()
     forced = "抱歉，这句我核不实，先如实回你：这一轮我没有能确认的结论。"
     fake_llm = False
     mod = sys.modules.get(f"agent.{arm}_arm")
@@ -349,7 +349,8 @@ def probe_forced_fallback(arm: str, *, uid: int = 1) -> dict:
         def __getattr__(self, k):  # 生产者今天只调 .stream；其余属性原样透传
             return getattr(base, k)
 
-    run_golden._runtime = _ForcedGate()
+    forced_runtime = _ForcedGate()
+    run_golden.ensure_agent = lambda: forced_runtime
     try:
         case = {"id": "_probe_forced_fallback", "user_input": "谢谢你",
                 "context": {}, "gold": {"forbid_fallback": True}}
@@ -357,7 +358,7 @@ def probe_forced_fallback(arm: str, *, uid: int = 1) -> dict:
                                  Principal(uid=uid, role="superadmin"))
         fails = run_golden.check_gold({"forbid_fallback": True}, res)
     finally:
-        run_golden._runtime = base
+        run_golden.ensure_agent = ensure
 
     scopes = list(res.get("reset_scopes") or [])
     replaced = str(res.get("text") or "").strip() == forced
@@ -430,4 +431,9 @@ def exit_code(out: dict) -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    try:
+        sys.exit(main())
+    finally:
+        runner = sys.modules.get("run_golden")
+        if runner is not None:
+            runner.close_agent()
