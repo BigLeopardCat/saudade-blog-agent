@@ -6,7 +6,8 @@
 
 长期执行内核与领域扩展方向见 [ADR-0024](adr/adr-0024-framework-kernel-and-domain-extensions.md)。
 当前模型调用、标准消息聚合和轮次调度由框架负责，公开 middleware 接入预算、取消、
-工具授权与业务结果规则。签名确认及其接续游标仍在役，持久暂停恢复和跨领域插件化继续迁移。
+工具授权与业务结果规则。LangGraph 的持久 Agent 子图及 interrupt/Command 接续签名确认，
+自建工具游标已删除；领域与产品解耦继续推进。
 
 ## 1. 系统总览
 
@@ -144,12 +145,14 @@ flowchart LR
 │   ├── reports.py                                       # 当前生产代码模块
 │   ├── runtime/__init__.py                              # 当前生产代码模块
 │   ├── runtime/admin_domains.py                         # 当前生产代码模块
+│   ├── runtime/approval.py                              # 框架持久审批中断与执行回执提交
+│   ├── runtime/execution.py                             # 标准 Agent 子图与会话审批图组合
+│   ├── runtime/execution_state.py                       # 工具领域、来源证据与待审批状态
 │   ├── runtime/budget.py                                # 当前生产代码模块
 │   ├── runtime/capabilities.py                          # 当前生产代码模块
 │   ├── runtime/catalog.py                               # 当前生产代码模块
 │   ├── runtime/checkpoint_store.py                      # 当前生产代码模块
 │   ├── runtime/confirmation.py                          # 当前生产代码模块
-│   ├── runtime/continuation.py                          # 签名确认暂停的原生调用游标与来源事实
 │   ├── runtime/context.py                               # 当前生产代码模块
 │   ├── runtime/control.py                               # 当前生产代码模块
 │   ├── runtime/conversation_store.py                    # 当前生产代码模块
@@ -216,7 +219,7 @@ flowchart LR
 ## 4. 运行时边界
 
 - 过程事件展示实际加载的工具领域、工具调用名和已启动的会话摘要任务；不展示参数、凭据或模型内部推理。工具返回仅代表调用结束，业务成功仍以结构化回执为准。
-- 已确认写入先完成确定性执行和幂等账，再由原生循环消费暂停位置并继续剩余请求；没有暂停位置的既有卡片使用有界、无工具的自然语言叙述。两条路径均受当前请求预算约束，独立保存真实工具回执；模型措辞不构成执行或授权依据。故障与重放边界见 [ADR-0023](adr/adr-0023-confirmation-continuation.md)。
+- 已确认写入先完成确定性执行和幂等账，再由框架审批节点持久提交事实并恢复标准 Agent 子图；没有暂停位置的既有卡片使用有界、无工具的自然语言叙述。两条路径均受当前请求预算约束，独立保存真实工具回执；模型措辞不构成执行或授权依据。故障与重放边界见 [ADR-0023](adr/adr-0023-confirmation-continuation.md)。
 - 目标已有定位线索时先用工具核实，真实歧义才请用户选择；操作政策由业务服务核验，不由模型编造。提示词和工具可达性的回归分别验证，离线脚本不能证明真实模型始终遵守这些原则。
 - 文章发现依据真实候选提供标题与链接；正文总结与比较需读取正文。候选来源校验不强制所有检索都追加全文读取，也不替代回答语义评测。
 
