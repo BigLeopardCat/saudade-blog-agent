@@ -44,7 +44,7 @@ _MAX_TOTAL_RESULT_CHARS = 16000
 
 _DOMAIN_DESCRIPTIONS = {
     "public_activity": "分页读取公开公告、已通过审核的河灯留言和说说；"
-                       "可按编号读取内容，不含待审或驳回记录。",
+                       "可按编号读取内容与公开留名，不含发表账号、待审或驳回记录。",
     "utilities": "读取当前时间或指定城市的实时天气；天气附来源和观测时间。",
     "devices": "读取当前账号可访问的设备（含共享演示设备），或按请求显示OLED文字；"
                "仅已授权身份可下发，区分下发与设备确认，不管理物联网平台。",
@@ -71,6 +71,7 @@ _DOMAIN_DESCRIPTIONS = {
     "admin_work_queue": "分页读取额度重置申请、当前管理员在后台首页记录的个人待办和日程。"
                         "仅管理员可用；可准备个人待办及额度审批或重置确认，准备不写入。",
     "admin_moderation": "读取河灯集（河灯留言）与文章评论的审核计数、分页记录和指定编号内容。"
+                        "核实留言是谁发表时从这里读取真实账号，匿名留言也可查；公开留名不代表账号。"
                         "仅管理员可用；可准备指定留言或评论的通过、驳回、删除确认，准备不写入。",
     "admin_reports": "Load administrator-only server health, user statistics and article traffic "
                      "reports. Read-only; does not change site data or service state.",
