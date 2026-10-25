@@ -1,19 +1,28 @@
-"""Candidate framework contracts; the production runtime remains unchanged."""
+"""Framework and application contracts with isolated model and business transports."""
 
 import json
+from types import SimpleNamespace
 
 import pytest
 from _framework_fixture import call, model_replies, prepared_notice
+from _framework_ledger import Ledger
 from _own_support import config
 from langchain.agents import create_agent
 from langchain.agents.middleware import HumanInTheLoopMiddleware, wrap_model_call
+from langchain_core.messages import HumanMessage
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.types import Command
 
+from agent import confirm
 from agent.domains.catalog import list_accounts
+from agent.domains.notices.preparation import prepare_user_notice
 from agent.principal import SOURCE_ASSERTION, Principal
+from agent.runtime import writes
 from agent.runtime.budget import BudgetExceeded, BudgetLimits, RequestBudget
 from agent.runtime.model_budget import ModelBudgetHandler, ToolBudgetHandler
+from agent.runtime.native import NativeRuntime
+from agent.runtime.native_store import NativeConversationStore
+from agent.runtime.session import ToolSession
 from eval.admin_task_fixture import backend
 
 
@@ -25,8 +34,8 @@ def candidate(model, tools, saver, *, question="", middleware=()):
     hooks = [*middleware]
     if question:
         hooks.append(HumanInTheLoopMiddleware(interrupt_on={
-            "execute_prepared_notice": {"allowed_decisions": ["approve", "reject"],
-                                        "description": question}}))
+            tool.name: {"allowed_decisions": ["approve", "reject"], "description": question}
+            for tool in tools}, interrupt_mode="per_call"))
     return create_agent(model=model, tools=tools, checkpointer=saver, middleware=hooks)
 
 
@@ -34,8 +43,8 @@ def request(text):
     return {"messages": [{"role": "user", "content": text}]}
 
 
-def decision(kind):
-    return Command(resume={"decisions": [{"type": kind}]})
+def decision(kind, paused):
+    return Command(resume={paused["__interrupt__"][0].id: {"type": kind}})
 
 
 def test_framework_reuses_existing_account_tool_and_native_tool_exchange():
@@ -50,6 +59,52 @@ def test_framework_reuses_existing_account_tool_and_native_tool_exchange():
         assert len(observations) == 1 and "青叶" in observations[0].content
         assert observations[0].tool_call_id == "call-1"
         assert requests[1]["messages"][-1]["role"] == "tool"
+
+
+def test_application_session_uses_the_framework_with_the_real_model_transport():
+    with backend() as business, model_replies(
+            {"tool_calls": [call("list_accounts", username="青叶")]},
+            {"content": "查到了账号青叶。"}) as (model, requests):
+        session = ToolSession(model, admin_config(), {list_accounts.name: list_accounts}, {})
+        result = session.run([HumanMessage(content="查询账号青叶")])
+        assert result.reply == "查到了账号青叶。"
+        assert len(requests) == 2 and not business["writes"]
+        assert session.calls_used == session.budget.tool_calls == 1
+        assert session.budget.model_calls == 2 and session.budget.tokens == 30
+        assert session.observations and requests[0]["stream"] is True
+
+
+def test_existing_runtime_preserves_sequential_preparation_and_approval_on_the_sdk_wire(
+        tmp_path, monkeypatch):
+    cfg = admin_config()
+    ledger = Ledger(str(tmp_path / "ledger.sqlite3"))
+    monkeypatch.setattr(writes, "ledger_for", lambda _: ledger)
+    catalog = SimpleNamespace(initial_tools=lambda _: {}, domains=lambda *_: {
+        "admin_notices": {prepare_user_notice.name: prepare_user_notice}})
+    with backend() as business, model_replies(
+            {"tool_calls": [call("load_admin_notices_info_tools", "load")]},
+            {"tool_calls": [call(prepare_user_notice.name, "first",
+                                 username="青叶", content="第一条"),
+                            call(prepare_user_notice.name, "second",
+                                 username="青叶", content="第二条")]},
+            {"content": "两条通知都发好啦。"}) as (model, requests):
+        runtime = NativeRuntime(NativeConversationStore(InMemorySaver()), catalog=catalog,
+                                model_factory=lambda **_: model)
+        first = list(runtime.stream_events(
+            {"messages": [HumanMessage(content="给青叶分别发送两条通知。") ]}, cfg))[-1]
+        assert first.execution["pending_confirm"] and not business["writes"]
+        token = first.execution["pending_confirm"]["token"]
+        grant = confirm.verify(token, 7, 42)
+        second = list(runtime.stream_events({"confirm_grant": grant}, cfg))[-1]
+        assert second.execution["pending_confirm"] and business["writes"] == ["notice"]
+        assert len(requests) == 2
+        next_token = second.execution["pending_confirm"]["token"]
+        done = list(runtime.stream_events({
+            "confirm_grant": confirm.verify(next_token, 7, 42)}, cfg))[-1]
+        assert done.reply == "两条通知都发好啦。" and len(requests) == 3
+        assert business["writes"] == ["notice", "notice"]
+        assert [row["content"] for row in business["notices"]] == ["第一条", "第二条"]
+        assert token not in json.dumps(requests) and next_token not in json.dumps(requests)
 
 
 def test_framework_middleware_filters_the_actual_model_menu():
@@ -99,7 +154,7 @@ def test_framework_checkpoints_approval_and_resumes_existing_business_transactio
         # Reconstruct the framework with its actual saved state, not a hand-built cursor.
         with model_replies({"content": "本次操作已处理。"}) as (next_model, next_requests):
             rebuilt = candidate(next_model, [tool], saver, question=question)
-            result = rebuilt.invoke(decision(kind), cfg)
+            result = rebuilt.invoke(decision(kind, paused), cfg)
             assert not result.get("__interrupt__") and len(next_requests) == 1
             assert business["writes"] == (["notice"] if kind == "approve" else [])
             assert token not in str(result["messages"])
@@ -121,8 +176,9 @@ def test_framework_repeated_approval_still_uses_the_existing_idempotency_ledger(
                            {"content": "该操作已处理过。"}) as (model, requests):
             agent = candidate(model, [tool], saver, question=question)
             for _ in range(2):
-                assert agent.invoke(request("执行这项操作"), cfg).get("__interrupt__")
-                done = agent.invoke(decision("approve"), cfg)
+                paused = agent.invoke(request("执行这项操作"), cfg)
+                assert paused.get("__interrupt__")
+                done = agent.invoke(decision("approve", paused), cfg)
                 assert not done.get("__interrupt__")
             assert len(requests) == 4
             assert business["writes"] == ["notice"] and len(business["notices"]) == 1
@@ -135,24 +191,39 @@ def test_framework_approval_does_not_grant_business_permission(tmp_path):
         with model_replies({"tool_calls": [call(tool.name)]},
                            {"content": "没有执行权限。"}) as (model, requests):
             agent = candidate(model, [tool], saver, question=question)
-            assert agent.invoke(request("执行这项操作"), admin_config()).get("__interrupt__")
-            result = agent.invoke(decision("approve"), config())
+            paused = agent.invoke(request("执行这项操作"), admin_config())
+            assert paused.get("__interrupt__")
+            result = agent.invoke(decision("approve", paused), config())
             assert not business["writes"] and len(requests) == 2
             observations = [m for m in result["messages"] if m.type == "tool"]
             assert '"receipts": []' in observations[-1].content
 
 
-def test_candidate_version_rejects_partial_decisions_for_a_model_call_batch(tmp_path):
-    """Record a real migration gap: this version has batched approvals only."""
+@pytest.mark.parametrize("second_decision", ["approve", "reject"])
+def test_partial_approval_preserves_independent_decisions_and_business_versions(
+        tmp_path, second_decision):
     cfg = admin_config()
     with backend() as business:
         tool, question, _ = prepared_notice(cfg, str(tmp_path / "ledger.sqlite3"))
-        with model_replies({"tool_calls": [call(tool.name), call(tool.name, "call-2")]}) as (
-                model, requests):
-            agent = candidate(model, [tool], InMemorySaver(), question=question)
+        other, _, _ = prepared_notice(cfg, str(tmp_path / "ledger.sqlite3"),
+                                     content="第二条独立通知。", name="execute_another_notice")
+        with model_replies({"tool_calls": [call(tool.name), call(other.name, "call-2")]},
+                           {"content": "已处理本次决定。"}) as (model, requests):
+            agent = candidate(model, [tool, other], InMemorySaver(), question=question)
             paused = agent.invoke(request("执行这批操作"), cfg)
-            actions = paused["__interrupt__"][0].value["action_requests"]
-            assert len(actions) == 2 and not business["writes"]
-            with pytest.raises(ValueError, match="decisions"):
-                agent.invoke(decision("approve"), cfg)
-            assert not business["writes"] and len(requests) == 1
+            assert len(paused["__interrupt__"]) == 2 and not business["writes"]
+            first = next(item for item in paused["__interrupt__"]
+                         if item.value["name"] == tool.name)
+            partial = agent.invoke(Command(resume={first.id: {"type": "approve"}}), cfg)
+            assert business["writes"] == ["notice"] and len(requests) == 1
+            assert len(partial["__interrupt__"]) == 1
+            assert partial["__interrupt__"][0].value["name"] == other.name
+            done = agent.invoke(decision(second_decision, partial), cfg)
+            assert not done.get("__interrupt__") and len(requests) == 2
+            # The fixture advances the recipient revision after the first write.
+            # A framework approval must not bypass the second operation's stale version.
+            if second_decision == "approve":
+                results = [m for m in done["messages"] if m.type == "tool"]
+                blocked = json.loads(results[-1].content)
+                assert blocked["blocked"] and not blocked["receipts"]
+            assert [item["content"] for item in business["notices"]] == ["请查看新的站内通知。"]

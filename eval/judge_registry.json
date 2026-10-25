@@ -404,7 +404,7 @@
         0
       ],
       "agent/runtime/catalog.py": [
-        0,
+        16,
         0
       ],
       "agent/runtime/checkpoint_store.py": [
@@ -476,7 +476,7 @@
         0
       ],
       "agent/runtime/session.py": [
-        16,
+        0,
         0
       ],
       "agent/runtime/turns.py": [

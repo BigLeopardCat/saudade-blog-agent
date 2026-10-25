@@ -57,18 +57,19 @@ def model_replies(*messages):
         yield model, requests
 
 
-def prepared_notice(config, ledger_path):
+def prepared_notice(config, ledger_path, *, content="请查看新的站内通知。",
+                    name="execute_prepared_notice"):
     """Reuse signed preparation and transaction code, not a synthetic write shortcut.
 
     The candidate starts after preparation. Connecting proposals to the host card
     protocol is a separate acceptance item, not established by these tests.
     """
     proposal = preparation.prepare_user_notice.invoke(
-        {"content": "请查看新的站内通知。", "username": "青叶"}, config=config)
+        {"content": content, "username": "青叶"}, config=config)
     assert isinstance(proposal, TurnResult) and proposal.execution["pending_confirm"]
     token = proposal.execution["pending_confirm"]["token"]
 
-    @tool
+    @tool(name)
     def execute_prepared_notice(config: RunnableConfig) -> dict:
         """Execute the specific previously prepared and signed notice after approval."""
         actor = config["configurable"]["principal"]

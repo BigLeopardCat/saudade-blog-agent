@@ -35,7 +35,7 @@ def test_raw_gateway_usage_and_absent_responses():
 @pytest.mark.parametrize("cache", [None, 0, 64])
 def test_native_loop_records_measured_cache_usage_without_inventing_a_zero(monkeypatch, cache):
     events = []
-    monkeypatch.setattr("agent.runtime.session.record",
+    monkeypatch.setattr("agent.runtime.middleware.record",
                         lambda node, event, **data: events.append({"event": event, **data}))
     usage = {"input_tokens": 100, "output_tokens": 7, "total_tokens": 107}
     if cache is not None:
@@ -48,7 +48,7 @@ def test_native_loop_records_measured_cache_usage_without_inventing_a_zero(monke
     session = ToolSession(Model(), {}, {}, {})
     assert session.run([HumanMessage(content="你好")]).reply == "完成。"
     done = [event for event in events if event["event"] == "llm_done"]
-    assert len(done) == 1 and done[0]["engine"] == "native"
+    assert len(done) == 1 and done[0]["engine"] == "langchain"
     assert done[0]["input"] == 100 and done[0]["output"] == 7
     if cache is None:
         assert "cache_read" not in done[0]

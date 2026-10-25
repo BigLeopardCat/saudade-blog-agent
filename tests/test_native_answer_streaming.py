@@ -199,16 +199,8 @@ def test_closing_consumer_closes_provider_even_when_generator_is_retained():
                 closed.set()
 
     session = ToolSession(IteratorModel([[]]), {}, {}, {})
-    provider = session._model_stream
-    retained = []
-
-    def capture(prompt):
-        iterator = provider(prompt)
-        retained.append(iterator)
-        return iterator
-
-    session._model_stream = capture
     consumer = session.stream([HumanMessage(content="read")])
+    retained = [consumer]
     assert next(consumer).content == "first"
     consumer.close()
     assert retained and closed.is_set()
@@ -226,7 +218,7 @@ def test_sdk_stream_requests_usage_and_settles_provider_totals(monkeypatch):
     def record(node, event, **values):
         events.append({"event": event, **values})
 
-    monkeypatch.setattr("agent.runtime.session.record", record)
+    monkeypatch.setattr("agent.runtime.middleware.record", record)
 
     def handle(request):
         payload = json.loads(request.content)

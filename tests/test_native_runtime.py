@@ -6,11 +6,12 @@ import sys
 import threading
 
 import pytest
+from _framework_ledger import Ledger
 from _own_support import config
 from langchain_core.messages import AIMessage, AIMessageChunk, HumanMessage, ToolMessage
 from langgraph.checkpoint.memory import InMemorySaver
 
-from agent import confirm, idem
+from agent import confirm
 from agent.domains.favorites import preparation
 from agent.principal import SOURCE_ASSERTION, Principal
 from agent.runtime import writes
@@ -139,7 +140,7 @@ def test_unknown_confirmation_executor_is_rejected_without_model_or_state_change
 
 @pytest.fixture
 def waiting(site, monkeypatch, tmp_path, request):
-    ledger = idem.Ledger(str(tmp_path / "native.sqlite3"))
+    ledger = Ledger(str(tmp_path / "native.sqlite3"))
     monkeypatch.setattr(writes, "ledger_for", lambda saver: ledger)
     saver = InMemorySaver()
     seed = NativeConversationStore(saver)

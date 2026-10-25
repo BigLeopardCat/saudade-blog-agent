@@ -5,6 +5,7 @@ import asyncio
 import json
 
 import pytest
+from _framework_ledger import Ledger
 from _own_support import config
 from _service import app
 from langchain_core.messages import AIMessage, AIMessageChunk, HumanMessage
@@ -45,7 +46,7 @@ class Model:
 
 @pytest.fixture
 def waiting(site, monkeypatch, tmp_path):
-    ledger = idem.Ledger(str(tmp_path / "pending.sqlite3"))
+    ledger = Ledger(str(tmp_path / "pending.sqlite3"))
     monkeypatch.setattr(writes, "ledger_for", lambda saver: ledger)
     runtime = NativeRuntime(NativeConversationStore(InMemorySaver()))
     proposal = preparation.prepare_favorite_change.invoke(
