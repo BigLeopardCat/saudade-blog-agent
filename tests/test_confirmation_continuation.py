@@ -7,13 +7,14 @@ from copy import deepcopy
 
 import httpx
 import pytest
+from _framework_ledger import Ledger
 from _own_support import config
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from langchain_core.tools import StructuredTool
 from langchain_core.utils.function_calling import convert_to_openai_tool
 from langgraph.checkpoint.memory import InMemorySaver
 
-from agent import confirm, idem
+from agent import confirm
 from agent.domains.favorites import transactions
 from agent.principal import SOURCE_ASSERTION, Principal
 from agent.runtime import writes
@@ -95,7 +96,7 @@ def backend(monkeypatch, tmp_path):
     with httpx.Client(transport=httpx.MockTransport(handle)) as client:
         monkeypatch.setattr(base, "_client", client)
         monkeypatch.setattr(confirm.settings, "jwt_secret", secrets.token_urlsafe(32))
-        with closing(idem.Ledger(str(tmp_path / "execution.sqlite3"))) as ledger:
+        with closing(Ledger(str(tmp_path / "execution.sqlite3"))) as ledger:
             monkeypatch.setattr(writes, "ledger_for", lambda saver: ledger)
             yield state, ledger
 

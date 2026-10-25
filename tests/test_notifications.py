@@ -129,7 +129,9 @@ class Model:
 
 def test_native_pending_edit_cancel_and_stale_click_preserve_new_card(
         notifications, monkeypatch, tmp_path):
-    store = idem.Ledger(str(tmp_path / "native.sqlite3"))
+    from _framework_ledger import Ledger
+
+    store = Ledger(str(tmp_path / "native.sqlite3"))
     monkeypatch.setattr(writes, "ledger_for", lambda saver: store)
     runtime = NativeRuntime(NativeConversationStore(InMemorySaver()))
 
@@ -161,7 +163,9 @@ def test_native_pending_edit_cancel_and_stale_click_preserve_new_card(
 @pytest.mark.parametrize("first_domain", ["favorites", "notifications"])
 def test_replacement_across_domains_revokes_only_the_previous_card(
         notifications, monkeypatch, tmp_path, first_domain):
-    store = idem.Ledger(str(tmp_path / "cross-domain.sqlite3"))
+    from _framework_ledger import Ledger
+
+    store = Ledger(str(tmp_path / "cross-domain.sqlite3"))
     monkeypatch.setattr(writes, "ledger_for", lambda saver: store)
     runtime = NativeRuntime(NativeConversationStore(InMemorySaver()))
     models = {"favorites": lambda: Model("favorites", "prepare_favorite_change", {

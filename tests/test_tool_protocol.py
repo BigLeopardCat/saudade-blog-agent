@@ -115,3 +115,18 @@ def test_budget_stop_does_not_restart_another_runtime():
         result = session.run([HumanMessage(content="查询作者")])
     assert "已停止继续处理" in result.reply
     assert len(model.prompts) == 5
+
+
+def test_unexpected_tool_failure_stops_later_business_calls_in_the_same_batch():
+    class BrokenRead(Read):
+        def invoke(self, args, config=None):
+            self.calls += 1
+            raise RuntimeError("fixture failure")
+
+    read = BrokenRead()
+    calls = [{"name": read.name, "args": {}, "id": f"read-{index}"} for index in range(3)]
+    session = ToolSession(Model([AIMessage(content="", tool_calls=calls)]), {},
+                          {read.name: read}, {})
+    with pytest.raises(RuntimeError, match="fixture failure"):
+        session.run([HumanMessage(content="查询")])
+    assert read.calls == 1
