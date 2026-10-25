@@ -14,18 +14,13 @@ from utils.logging import setup_logging
 
 logger = logging.getLogger(__name__)
 MAX_CONCURRENT_STREAMS = settings.max_concurrent_streams
-# Retained configuration export; NativeRuntime uses RequestBudget instead.
-RECURSION_LIMIT = settings.recursion_limit
 
 
 def build_runtime(resources: ExitStack):
-    """Build the native production runtime; retired selections fail at startup."""
+    """Build the only supported conversation runtime."""
     from agent.runtime.native import build
 
-    arm = (settings.agent_arm or "native").strip().lower()
-    if arm != "native":
-        raise RuntimeError(f"AGENT_ARM={arm!r} 已退役，请配置 AGENT_ARM=native。")
-    return build(resources=resources), "native"
+    return build(resources=resources)
 
 
 @asynccontextmanager
@@ -49,8 +44,8 @@ async def lifespan(app: FastAPI):
                 "但每一条对话都会失败（/ready 现在报 missing_credentials）。",
                 _provider,
             )
-        app.state.runtime, _arm = build_runtime(resources)
-        logger.info("Agent ready (arm=%s)", _arm)
+        app.state.runtime = build_runtime(resources)
+        logger.info("Native agent ready")
         # Optional warmups do not block startup.
         workers.warm_up(wordgraph.warm)
         workers.warm_up(rag_search.warm)

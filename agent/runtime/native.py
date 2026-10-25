@@ -22,6 +22,7 @@ from agent.runtime.read_tools import own_reads_enabled
 from agent.runtime.results import TurnResult
 from agent.runtime.session import ToolSession
 from agent.runtime.turns import check_cancelled
+from config.settings import settings
 from models.llm import get_llm
 from models.session import session_scope
 from utils.trace import record
@@ -120,7 +121,8 @@ class NativeRuntime:
         if image_tools and not chat_only:
             domains = {**domains, "conversation_images": image_tools}
         model = (self.model_factory or get_llm)(
-            enable_thinking=False, streaming=True, stream_usage=True, max_tokens=768
+            enable_thinking=False, streaming=True, stream_usage=True,
+            max_tokens=settings.agent_output_tokens
         )
         adapt = partial(pending.transition, config=config, saver=self.saver) if pending else None
         return ToolSession(model, config, tools, domains, adapt)

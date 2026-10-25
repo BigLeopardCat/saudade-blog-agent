@@ -37,7 +37,7 @@ fail=0
 # `pytest` 本身、run_all.py 删除。**夜间与 CI 走同一个入口**（都是 `pytest`，只是 CI 多传
 # `-n 4`），所以夜间的绿与 CI 的绿是同一套环境下的绿。
 # 出厂档钉子随入口一起搬进 `tests/conftest.py` 的 `_PINNED`（`AGENT_EVIDENCE=0` /
-# `AGENT_FASTPATH=1` 等项 + **整份 .env 不读**的 `SAUDADE_IGNORE_ENV_FILE=1`）：本机 `.env`
+# 显式测试配置及 `SAUDADE_IGNORE_ENV_FILE=1`）：本机 `.env`
 # 是产线那份，不钉的话离线判据会跟着运维取值变。（`PLANNER_ENGINE` 那一项 20261004 删了
 # ——接口层只剩 native 一条，没有档可钉；`AGENT_TASK_STATE` / `AGENT_TASK_PLAN_EXEC` 两项
 # 20261015 删了——任务状态整族撤档、常开。）
@@ -222,7 +222,7 @@ fi
 # FAIL 逐条照旧打印、复审单照旧导出（与退出码无关；单子上每条红现在还印着**历史红率**，
 # "慢性红还是首次"一眼可读）。退出码 3（前提不可用）与退出码 2（空分母）**不在任何放宽
 # 之列**——"没评"永远不是"通过"。
-GOLDEN_ARM=native $PY eval/run_golden.py >> "$LOG" 2>&1 || { fail=1; echo "[$TS] golden set FAILED (复审单 eval/report/review_*.md；回归组红 = 当天必修；采样层下界 < 地板 0.78 = 事故；未到档位不置红、只记；用户可见兜底轮次 ≥ 5% = 事故；退出码 3 = 前提不可用，不是通过率；企业落地三条见 landing_gate.py --readiness)" >> "$LOG"; }
+$PY eval/run_golden.py >> "$LOG" 2>&1 || { fail=1; echo "[$TS] golden set FAILED (复审单 eval/report/review_*.md；回归组红 = 当天必修；采样层下界 < 地板 0.78 = 事故；未到档位不置红、只记；用户可见兜底轮次 ≥ 5% = 事故；退出码 3 = 前提不可用，不是通过率；企业落地三条见 landing_gate.py --readiness)" >> "$LOG"; }
 # 20260925 起：回复出处评审（LLM-as-judge，非门禁）。确定性判据判"该出现的东西在不在"，
 # 判不了"回复里有没有编出材料之外的事实"（工具只回了 3 条、回复写"共 5 条"）——这一格由它补。
 # **刻意不进门禁**：同源模型评自己不构成 ground truth，"可疑"不等于"错了"（模块头注纪律 1），

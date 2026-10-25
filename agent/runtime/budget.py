@@ -3,23 +3,22 @@
 import threading
 from contextlib import contextmanager
 from contextvars import ContextVar
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from langchain_core.messages.utils import count_tokens_approximately
 
 from agent.llm_usage import usage_fields
 from agent.runtime.message_content import estimate_tokens
+from config.settings import settings
 from utils.trace import record
-
-NATIVE_OUTPUT_TOKENS = 768
 
 
 @dataclass(frozen=True)
 class BudgetLimits:
-    context_tokens: int = 16384
-    request_tokens: int = 32768
-    model_calls: int = 8
-    tool_calls: int = 8
+    context_tokens: int = field(default_factory=lambda: settings.agent_context_tokens)
+    request_tokens: int = field(default_factory=lambda: settings.agent_request_tokens)
+    model_calls: int = field(default_factory=lambda: settings.agent_model_calls)
+    tool_calls: int = field(default_factory=lambda: settings.agent_tool_calls)
 
 
 class BudgetExceeded(RuntimeError):
@@ -57,7 +56,8 @@ class RequestBudget:
                tool_calls=self.tool_calls, request_tokens=self.tokens)
         raise BudgetExceeded(reason)
 
-    def reserve(self, messages, tools=(), *, output_limit=NATIVE_OUTPUT_TOKENS):
+    def reserve(self, messages, tools=(), *, output_limit=None):
+        output_limit = settings.agent_output_tokens if output_limit is None else output_limit
         message_tokens, schema_tokens = _estimate(messages, tools, output_limit)
         estimated = message_tokens + schema_tokens
         with self._lock:
@@ -84,8 +84,9 @@ class RequestBudget:
             return "request_tokens"
         return None
 
-    def call_block_reason(self, messages, tools=(), *, output_limit=NATIVE_OUTPUT_TOKENS):
+    def call_block_reason(self, messages, tools=(), *, output_limit=None):
         """Inspect capacity without consuming a call or poisoning future reservations."""
+        output_limit = settings.agent_output_tokens if output_limit is None else output_limit
         estimated = sum(_estimate(messages, tools, output_limit))
         with self._lock:
             return self._call_block_reason(estimated, output_limit)
@@ -145,7 +146,7 @@ def current_budget():
 
 
 @contextmanager
-def native_call(budget, messages, tools, *, output_limit=NATIVE_OUTPUT_TOKENS):
+def native_call(budget, messages, tools, *, output_limit=None):
     ticket = budget.reserve(messages, tools, output_limit=output_limit)
     token = _native.set(budget)
     try:
