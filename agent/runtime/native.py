@@ -11,7 +11,7 @@ from openai import OpenAIError
 from agent.domains import conversation_images
 from agent.domains.registry import confirmed_domain, native_domain
 from agent.principal import CHAT_ONLY_ROLES
-from agent.runtime import memory
+from agent.runtime import memory, trace_context
 from agent.runtime.capabilities import ToolCatalog
 from agent.runtime.context import conversation_session
 from agent.runtime.continuation import ToolContinuation
@@ -64,7 +64,11 @@ class NativeRuntime:
         with self.conversation_guard(config), session_scope(conversation_session(
                 cfg.get("principal"), cfg.get("conversation_id"))):
             try:
-                yield from self._turn(state, config)
+                trace_context.caller(cfg.get("principal"))
+                for event in self._turn(state, config):
+                    if isinstance(event, TurnResult):
+                        trace_context.outcome(event)
+                    yield event
             finally:
                 self.store.prune(config)
 

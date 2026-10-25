@@ -101,6 +101,9 @@ def history(messages, principal, *, max_tokens=None):
     target = min(CHECKPOINT_TOKENS, max(HISTORY_TOKENS, _tokens(last)))
     if max_tokens is not None:
         target = min(target, max(0, max_tokens))
+    source_turn = _source_first(turns[-1], last, target)
+    if source_turn is not None:
+        return source_turn
     dialogue = trim_messages(
         [message for turn in turns for message in turn
          if isinstance(message, HumanMessage)
@@ -121,6 +124,31 @@ def history(messages, principal, *, max_tokens=None):
     )
     kept.update(id(message) for message in evidence)
     return [message for turn in visible for message in turn if id(message) in kept]
+
+
+def _source_first(turn, dialogue, target):
+    evidence = [message for message in turn if isinstance(message, ToolMessage)
+                or isinstance(message, AIMessage) and message.tool_calls]
+    if not evidence or _tokens([*dialogue, *evidence]) <= target:
+        return None
+    # Preserve a recent source before spending the window on assistant prose.
+    # Framework trimming keeps the retained native call/result exchange whole.
+    evidence = trim_messages(
+        evidence, max_tokens=max(0, target - _tokens(dialogue[:1]) - 100),
+        token_counter=_tokens, strategy="last", start_on="ai", end_on="tool",
+        allow_partial=False,
+    )
+    if not evidence:
+        return None
+    room = max(0, target - _tokens([*dialogue[:1], *evidence]) - 100)
+    replies = trim_messages(
+        dialogue[1:], max_tokens=room, token_counter=_tokens, strategy="first",
+        allow_partial=True, text_splitter=list,
+    )
+    if replies and _tokens(replies) < _tokens(dialogue[1:]):
+        replies[-1] = replies[-1].model_copy(update={"content":
+            text_content(replies[-1].content) + "\n[历史助手回复节选]"})
+    return [*dialogue[:1], *evidence, *replies]
 
 
 def _excerpt(dialogue, target):
@@ -170,18 +198,22 @@ def observation(call, result):
         if result.status != "success" or artifact.get("kind") != "ok":
             return []
         result = compact(result)
-        body = str(result.content)[:OBSERVATION_CHARS]
+        body = _observation_excerpt(str(result.content))
         return [AIMessage(content="", tool_calls=[call]), result.model_copy(update={
             "content": body, "artifact": {"kind": "ok"}})]
     if getattr(result, "kind", None) not in ("ok", "empty", "not_found"):
         return []
-    body = str(result)
-    if len(body) > OBSERVATION_CHARS:
-        body = body[:OBSERVATION_CHARS] + "\n[历史工具结果节选，完整内容需重新读取]"
+    body = _observation_excerpt(str(result))
     return [AIMessage(content="", tool_calls=[call]), ToolMessage(
         content=body, name=call["name"], tool_call_id=call["id"],
         artifact={"kind": result.kind},
     )]
+
+
+def _observation_excerpt(body):
+    if len(body) > OBSERVATION_CHARS:
+        return body[:OBSERVATION_CHARS] + "\n[历史工具结果节选，完整内容需重新读取]"
+    return body
 
 
 def turn_messages(messages, observations, reply, principal):
