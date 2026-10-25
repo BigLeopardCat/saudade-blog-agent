@@ -116,7 +116,7 @@ def test_individual_body_is_read_without_any_write(backend):
 
 
 @pytest.mark.parametrize("display_name", ["", "a different account"])
-def test_anonymous_or_misleading_display_name_does_not_hide_the_real_publisher(backend, display_name):
+def test_anonymous_or_forged_name_preserves_the_real_publisher(backend, display_name):
     backend["board"][0]["author"] = display_name
     data = json.loads(str(board(item_id=1)))
     row = data["items"][0]

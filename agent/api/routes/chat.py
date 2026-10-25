@@ -19,8 +19,8 @@ from agent.api.events import frame as sse_frame
 from agent.api.events import response as stream_response
 from agent.api.schemas import ChatRequest, ChatResponse
 from agent.api.turns import NativeCancelled, run_turn, stream_to_queue
-from agent.runtime.control import RequestControl
 from agent.runtime.context import conversation_session
+from agent.runtime.control import RequestControl
 from agent.runtime.memory_scope import safe_request
 from agent.runtime.progress import StreamProgress
 from agent.summarizer import summarize
