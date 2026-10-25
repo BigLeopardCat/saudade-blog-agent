@@ -210,3 +210,65 @@ def test_image_tool_output_serializes_to_the_actual_chat_completions_wire(monkey
     wire = requests[0]["messages"]
     assert wire[2]["role"] == "tool" and isinstance(wire[2]["content"], str)
     assert wire[3]["role"] == "user" and image_urls(wire[3]["content"]) == [URL]
+
+
+@pytest.mark.parametrize("second", ["image", "text"])
+def test_batch_tool_receipts_precede_all_image_attachments_on_the_sdk_wire(monkeypatch, second):
+    import json
+    from types import SimpleNamespace
+
+    from langchain_core.tools import tool
+    from langchain_openai import ChatOpenAI
+
+    @tool
+    def fixture_read() -> str:
+        """Read a text fixture."""
+        return "fixture data"
+
+    other_url = "data:image/png;base64," + "B" * 100
+    urls = [URL, other_url]
+    batch = [{"name": "get_conversation_image", "id": "first",
+              "args": {"image_id": REF}},
+             {"name": "get_conversation_image" if second == "image" else "fixture_read",
+              "id": "second", "args": {"image_id": image_id(other_url)}
+              if second == "image" else {}}]
+    model = Capture(call("load_conversation_images_info_tools", "load"),
+                    AIMessageChunk(content="", tool_calls=batch), AIMessageChunk(content="seen"))
+    selected = runtime(InMemorySaver(), model)
+    selected.catalog = SimpleNamespace(
+        initial_tools=lambda _: {fixture_read.name: fixture_read}, domains=lambda *_: {})
+    selected.store.save_turn(config(), [HumanMessage(content=[
+        {"type": "image_url", "image_url": {"url": url}} for url in urls])], "initial analysis")
+    client = host(monkeypatch, lambda _: httpx.Response(200, json={
+        "conversation_id": 42, "items": [{"id": 10, "role": "user", "images": urls}]}))
+    try:
+        assert run(selected, ChatRequest(message="Read both sources"))[-1].reply == "seen"
+    finally:
+        client.close()
+    wires = []
+
+    def handle(request):
+        wire = json.loads(request.content)["messages"]
+        wires.append(wire)
+        pending = set()
+        for message in wire:
+            if message["role"] == "tool":
+                assert message["tool_call_id"] in pending
+                pending.remove(message["tool_call_id"])
+                assert isinstance(message["content"], str)
+            else:
+                assert not pending, "Non-tool message interrupted pending sibling receipts"
+                pending.update(item["id"] for item in message.get("tool_calls", []))
+        assert not pending
+        return httpx.Response(200, json={
+            "id": "test", "object": "chat.completion", "created": 0, "model": "fixture",
+            "choices": [{"index": 0, "message": {"role": "assistant", "content": "seen"},
+                         "finish_reason": "stop"}],
+        })
+
+    with httpx.Client(transport=httpx.MockTransport(handle)) as client:
+        ChatOpenAI(api_key="fixture", model="fixture", http_client=client).invoke(model.prompts[-1])
+    assert len(wires) == 1
+    assert sum(len(image_urls(message["content"])) for message in wires[0]
+               if message["role"] == "user") == (2 if second == "image" else 1)
+    assert all(url not in str(selected.store.load(config()).messages) for url in urls)

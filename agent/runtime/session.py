@@ -194,7 +194,7 @@ class ToolSession:
             record("native", "tool_failed", name=name, error=type(exc).__name__)
             return unavailable(f"{name} 调用失败（{type(exc).__name__}），请如实说明。")
 
-    def _append_result(self, call, prompt, round_index):
+    def _append_result(self, call, prompt, round_index, attachments):
         name = call["name"]
         record("native", "tool_requested", name=name)
         if name in self.loaders:
@@ -259,7 +259,9 @@ class ToolSession:
             marker = "\n[结果截断，请缩小检索范围]"
             body = body[:max(0, limit - len(marker))] + marker
         self.article_evidence.observe(name, args, evidence_value)
-        prompt.extend(tool_messages(message, body, call["id"]))
+        messages = tool_messages(message, body, call["id"])
+        prompt.append(messages[0])
+        attachments.extend(messages[1:])
         self.result_chars += len(body)
         record("native", "call", name=name, args=args, round=round_index,
                kind=kind, result=trace_mod.tool_result_text(body, name))
@@ -499,12 +501,15 @@ class ToolSession:
             if calls is None:
                 return None
             prompt.append(response)
+            attachments = []
             for call in calls:
                 check_cancelled(self.config)
-                if not self._append_result(call, prompt, self._round_index):
+                if not self._append_result(call, prompt, self._round_index, attachments):
                     return (yield from self._stream_terminal(self.outcome, visible_parts))
                 if self.outcome is not None:
                     return (yield from self._stream_terminal(self.outcome, visible_parts))
+            # All sibling tool responses must precede transient multimodal user data.
+            prompt.extend(attachments)
             self._round_index += 1
 
     def run(self, prompt):
