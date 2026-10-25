@@ -11,9 +11,11 @@ from langchain_core.messages import AIMessage, AIMessageChunk, ToolMessage
 from langchain_core.messages.utils import message_chunk_to_message
 from langchain_core.tools import ToolException
 
+from agent.adminops_account import role_cn
 from agent.article_evidence import ArticleEvidence
 from agent.authz import SCOPE_ADMIN_CONSOLE, SCOPE_READ_OWN, TOOL_SCOPE, WRITE_SCOPES, check
 from agent.domains import browser, device_actions
+from agent.domains.account_actions.targets import Role
 from agent.llm_usage import usage_fields
 from agent.runtime import memory
 from agent.runtime.budget import (
@@ -63,7 +65,9 @@ _DOMAIN_DESCRIPTIONS = {
     "admin_account_actions": "Prepare account freeze, unfreeze, role change, mute or unmute "
                              "by exact username or ID. Show before/after state, deadlines, "
                              "session revocation and notification effects; administrator only, "
-                             "preparation never writes.",
+                             "preparation never writes. Assignable roles: "
+                             + ", ".join(f"{role.value}={role_cn(role.value)}" for role in Role)
+                             + ".",
     "admin_announcements": "管理站内公告：准备发布、修改、删除确认，"
                            "展示完整正文及关联个人通知范围；"
                            "准备不写入，仅管理员可用。",
