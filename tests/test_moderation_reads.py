@@ -115,6 +115,18 @@ def test_individual_body_is_read_without_any_write(backend):
     assert all(request.method == "GET" for request in backend["requests"])
 
 
+@pytest.mark.parametrize("display_name", ["", "a different account"])
+def test_anonymous_or_misleading_display_name_does_not_hide_the_real_publisher(backend, display_name):
+    backend["board"][0]["author"] = display_name
+    data = json.loads(str(board(item_id=1)))
+    row = data["items"][0]
+    assert row["publisher"] == {"id": 7, "username": "actual_account", "nickname": "账号昵称"}
+    assert row["displayName"] == (display_name or None)
+    request = backend["requests"][0]
+    assert request.method == "GET" and request.url.path == "/api/protect/board"
+    assert request.url.params["id"] == "1"
+
+
 def test_comment_article_filter_and_deleted_flag_are_preserved(backend):
     backend["comments"][2]["isDeleted"] = 1
     data = json.loads(str(comments(article_id=19)))
