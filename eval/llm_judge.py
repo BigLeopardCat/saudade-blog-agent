@@ -1,42 +1,13 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""评测侧的 LLM 评审员（20260925）：**只找可疑样本给人看，不改任何判分**。
+"""评测侧 LLM 评审员，不是判分器，不参与业务授权。
 
-## 它补的是哪个空白
+旧 trace CLI 仅筛选可疑回复，不修改 golden 结果。当前线上报告（含待确认正文）
+使用 ``python -m eval.online_judge``，独立保存疑点和未评估项。
+材料保留来源与截断标记；默认与生产同源，结论须校准并供人工核对。
 
-golden 的判据全是确定性的（`text_contains` / 正则 / 形状键）——它们判的是"该出现的东西
-出现没出现"。**判不了**的是这一类：回复通顺、该出现的词都有，但**编了材料里没有的事实**
-（比如工具只回了 3 条留言，回复却写"翻了一遍，共 5 条"）。这类只能靠人读，而 116 条
-回复一条条读不现实。
-
-本脚本把每条用例的**材料**（提问 + 本轮真实的工具名/参数/返回原文）和**回复正文**一起
-交给一个 LLM，问三件确定的事：回复里哪些说法在材料里**找不到出处**、问题**答没答**、
-整体判 `ok` 还是 `suspect`。
-
-## 三条纪律（照本项目既有的哨兵族：corpus_terms --drift / trace_reconcile）
-
-1. **不是判分器**：输出**不进任何门禁**，也不改 golden 的 PASS/FAIL。verdict=suspect
-   只是"值得人看一眼"的候选，退出码与它无关（只有自身的运行错误才非零退出）。
-   理由：同源模型评自己**不构成 ground truth**（默认判官就是生产同一个模型，见 `--model`，
-   换成别的模型只能减弱、不能消除这一层相关性）。
-2. **材料必须是原文**：材料取自 golden trace 的 `call` 事件（工具返回**全文**，不是摘要），
-   由 `_material()` 拼装、逐条截断——判官只能看它看到的，不许让它"凭常识补全"。
-3. **不许把判官的话当真话转述**：报告里每条 suspect 都要**同时列材料原文**，让人自己能核。
-4. **它评的是"这一次采样的回复"，不是"这个用例"**：同一用例换一轮跑，回复重新采样，
-   结论可能就变了（20260925 实测：`summary_round` 首跑回复提到"站内检索功能"（材料里的
-   站点地图没有这一项）被判 suspect，复跑那次的回复没提，判 `ok`）。所以读这份报告要读成
-   **"这批回复里有没有可疑的说法"**，而不是"哪条用例有问题"。
-
-## 跑法
-
-    .venv/bin/python eval/llm_judge.py --traces logs/agent/golden_traces/<run>/   # 跑一整轮
-    .venv/bin/python eval/llm_judge.py --traces <dir> --only a,b --limit 5
-    .venv/bin/python eval/llm_judge.py --traces <dir> --dry-run                  # 不调模型，只印材料
-
-`--traces` 的默认值是 `logs/agent/golden_traces/` 下**最新**那个目录（相对仓根的上层
-`logs/`，与 trace 落盘位置一致）。报告写 `eval/report/judge_<ts>.md`。
-
-离线自测（不联网、秒级）：`tests/test_llm_judge.py`。
+旧接口：python -m eval.llm_judge --traces <目录> [--dry-run]
+离线验证：tests/test_llm_judge.py。
 """
 from __future__ import annotations
 
@@ -83,25 +54,11 @@ _JUDGE_SCHEMA = {
     "additionalProperties": False,
 }
 
-# 结构化输出：POC（20260925）在本项目生产端点上实测**被强制**——enum 与 required
-# 都拦得住，模型绕不过去。绑不上时降级为纯 prompt 约束（见 judge_one 的 degraded）。
-# **方言表本身不住这里了**（20261019 批 G7 上移 `models/llm.py::response_format`）：
-# `eval.*` 不能被生产引（wheel 边界），而复盘器要用同一套方言 ⇒ 表只能有一份，
-# 且必须住在生产侧。这里留的 `response_format` 只是**薄包装**（既有调用点与
-# `tests/test_llm_judge.py` 的签名都不用改）。
-#
-# **但字段契约仍住在这里**（`_JUDGE_SYS`，见 `test_output_contract_lives_in_the_prompt`）：
-# DeepSeek 只认 `json_object`（对 json_schema 直接 400），那一档下 schema 只是装饰，
-# 提示词才是所有路径的共同底座。同一条纪律对复盘器也成立（见 `agent/planner_llm.py`
-# 的 `REFLECT_SCHEMA` 与 `_REFLECTOR_PROMPT`）。
+# Provider-specific response formats are shared with production adapters.
 
 
 def response_format(provider: str = "") -> dict:
-    """当前服务商的结构化输出方言（**薄包装**，20261019 批 G7）。
-
-    空串 ⇒ 现读配置（测试可显式传，免得依赖当前档位）。
-    """
-    # 延后 import：本文件要能被离线套件直接引（同 `make_llm`）
+    """Use the configured provider dialect without duplicating its registry."""
     from config import settings
     from models.llm import response_format as _rf
     return _rf(provider or settings.llm_provider, _JUDGE_SCHEMA, name="verdict")
@@ -301,37 +258,47 @@ def _content(msg) -> str:
     return raw
 
 
-def judge_one(material_text: str, llm, *, structured: bool = True) -> tuple[dict, bool]:
-    """调一次判官 → `(裁决, 是否降级)`。
+def judge_one(material_text: str, llm, *, structured: bool = True,
+              instructions: str | None = None, allow_fallback: bool = True,
+              diagnostics: dict | None = None) -> tuple[dict, bool]:
+    """Review once with an optional rubric and record response diagnostics.
 
-    `llm` 是 langchain 的 ChatOpenAI（生产同一个模型，见模块头注纪律 1）。
-
-    **降级只发生在"这次调用本身没成功"**（端点不认 `response_format` 等）。判官答了但答坏了
-    （形状不对）**不降级、直接抛**——那必须如实记成 error，靠换一种问法把畸形答案洗成
-    「没问题」正是这份报告最该避免的事。方言按服务商取（见 `response_format`）。
+    The legacy caller permits a format fallback after a request failure. Frozen
+    online review disables fallback; invalid or truncated answers always raise.
     """
-    msgs = [{"role": "system", "content": _JUDGE_SYS},
+    msgs = [{"role": "system", "content": instructions or _JUDGE_SYS},
             {"role": "user", "content": material_text}]
+
+    def invoke(model):
+        msg = model.invoke(msgs)
+        metadata = getattr(msg, "response_metadata", {}) or {}
+        if diagnostics is not None:
+            diagnostics.update(usage=getattr(msg, "usage_metadata", None),
+                               finish_reason=metadata.get("finish_reason"),
+                               model=metadata.get("model_name"), raw_output=msg.content)
+        if metadata.get("finish_reason") == "length":
+            raise ValueError("judge response was truncated")
+        return _content(msg)
+
     raw, degraded = None, False
     if structured:
         try:
-            raw = _content(llm.bind(response_format=response_format()).invoke(msgs))
+            raw = invoke(llm.bind(response_format=response_format()))
         except Exception as e:  # noqa: BLE001 —— 端点不吃结构化输出 ⇒ 降级，但要让人知道
+            if not allow_fallback or isinstance(e, ValueError):
+                raise
             degraded = True
             print(f"    [structured] 结构化输出不可用，降级为纯 prompt 约束：{type(e).__name__}: {e}")
     if raw is None:
-        raw = _content(llm.invoke(msgs))
+        raw = invoke(llm)
     return parse_verdict(raw), degraded
 
 
-def make_llm():
-    """判官用的模型：**默认就是生产那个**（settings.active_llm_model）。
-
-    这不是随手取的：换成另一个模型只能减弱"自己评自己"的相关性，且本项目只有这一个
-    可用端点。所以纪律 1 写死了"它给的结论不是 ground truth"——报告只用来挑可疑样本。
-    """
+def make_llm(**kwargs):
+    """Default to the configured endpoint; overrides change the actual client."""
     from models.llm import get_llm
-    return get_llm(temperature=0.0, max_tokens=700, enable_thinking=False)
+    return get_llm(**{"temperature": 0.0, "max_tokens": 700,
+                      "enable_thinking": False, **kwargs})
 
 
 # ── 报告 ─────────────────────────────────────────────────────────────────────
@@ -418,8 +385,8 @@ def main() -> int:
             print(f"  {cid:42s} 材料 {len(m):5d} 字符 / 工具 {len(calls_of(tr))} 条{mark}")
         return 0
 
-    llm = make_llm()
-    model = args.model or getattr(llm, "model_name", "?")
+    llm = make_llm(**({"model": args.model} if args.model else {}))
+    model = getattr(llm, "model_name", "?")
     rows = []
     for cid, tr in traces:
         m = material(tr, result_limit=args.max_result_chars)
