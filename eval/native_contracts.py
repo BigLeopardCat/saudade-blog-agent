@@ -111,10 +111,11 @@ def _favorite_confirm(turn, state):
     for _ in range(2):
         result = turn("", token)
         _require(result["exec_rows"] and result["text"].strip(), "missing execution result")
+        _require(not result["confirm_tokens"], "confirmation introduced another operation")
         trace = load_trace(result["trace"])
-        _require(trace and any(event.get("node") == "narration"
+        _require(trace and any(event.get("node") in {"native", "narration"}
                               and event.get("event") == "llm_done"
-                              for event in trace["events"]), "narration was not evaluated")
+                              for event in trace["events"]), "result reply was not evaluated")
     _require(len(_posts(state)) == 1 and state["favorites"][0]["noteId"] == 19,
              "confirmation or replay wrote an unexpected favorite")
 

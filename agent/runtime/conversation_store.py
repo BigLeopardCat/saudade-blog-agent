@@ -1,7 +1,7 @@
 """Conversation data and the storage boundary used by the native runtime.
 
-Only completed turns are saved. Interrupted reads may run again; this interface
-neither journals tool steps nor owns business confirmations or execution ledgers.
+Completed turns and a private confirmation cursor are saved. Interrupted reads
+may run again; business writes remain owned by the independent execution ledger.
 """
 
 from contextlib import AbstractContextManager
@@ -14,6 +14,7 @@ class ConversationSnapshot:
     messages: list = field(default_factory=list)
     pending_confirm: dict | None = None
     pending_action: dict | None = None
+    continuation: dict | None = None
     unfinished: bool = False
     initialized: bool = False
 
@@ -40,7 +41,8 @@ class ConversationStore(Protocol):
     def load(self, config) -> ConversationSnapshot: ...
 
     def save_turn(
-        self, config, messages, reply, *, observations=(), execution=None, pending=None
+        self, config, messages, reply, *, observations=(), execution=None, pending=None,
+        continuation=None,
     ) -> None:
         """Save the completed turn while the caller holds guard(config)."""
         ...

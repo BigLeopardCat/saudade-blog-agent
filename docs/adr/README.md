@@ -88,6 +88,7 @@
 | [0020](adr-0020-conversation-store.md) | 原生会话存储采用薄接口，旧图 checkpoint 细节留在兼容适配器 | 已采纳 |
 | [0021](adr-0021-native-runtime-core.md) | 原生轮次与会话存储脱离旧编排图，传输接入单独收敛 | 已采纳 |
 | [0022](adr-0022-conversation-memory-boundaries.md) | 会话历史按来源裁剪，图片按需回看 | 已采纳 |
+| [0023](adr-0023-confirmation-continuation.md) | 签名确认暂停原生工具交换，取得回执后续行 | 已采纳 |
 
 ## 相关的、但不算 ADR 的文档
 
