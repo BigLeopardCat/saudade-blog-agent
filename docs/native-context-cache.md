@@ -45,3 +45,14 @@
 后续线上评测应使用 `llm_done` 的实际 `input`、`output`、`cache_read`，
 区分首轮与热请求；缺少 `cache_read` 表示未测得，不能补成零。
 请求级聚合沿用 `eval/request_metrics.py`，不新增另一套成本统计。
+
+## 网关会话路由
+
+OpenCode 的 `x-opencode-session` 按已验签账号、当前角色与会话编号生成稳定摘要，
+同一会话的主循环、摘要任务与执行结果叙述共用；跨账号、角色或会话分别生成。
+没有可信坐标的独立调用使用临时标识。该标识只提供路由亲和性，不承担权限或结果缓存。
+客户端使用自己的 User-Agent，避免通用 SDK 名称。
+
+这与 [OpenCode Go 的客户端契约](https://opencode.ai/docs/go/#where-can-i-use-it) 一致。
+稳定前缀和路由不保证缓存命中；网关可能调整上游，应根据真实 usage 验证收益。
+离线回归验证真实 SDK HTTP 请求头、跨轮重建及并发任务的上下文隔离。
