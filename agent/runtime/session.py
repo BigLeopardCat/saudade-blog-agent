@@ -27,6 +27,12 @@ from agent.runtime.budget import (
     native_tool,
 )
 from agent.runtime.catalog import initial_tools
+from agent.runtime.continuation import (
+    ToolContinuation,
+    evidence_state,
+    pause_notice,
+    restore_evidence,
+)
 from agent.runtime.control import model_options
 from agent.runtime.finalization import final_prompt, incomplete_response
 from agent.runtime.memory_media import tool_messages
@@ -109,11 +115,13 @@ class ToolSession:
         self.initial_names = set(self.tools)
         self.domains = domains
         self.loaders = {f"load_{domain}_info_tools": domain for domain in domains}
-        self.loaded: set[str] = set()
+        self.loaded: list[str] = []
         self.calls_used = 0
         self.result_chars = 0
         self.outcome: TurnResult | None = None
         self.outcome_adapter = outcome_adapter
+        self.continuation = None
+        self.effects = {}
         self.observations = []
         self.receipts = []
         self.article_evidence = ArticleEvidence()
@@ -153,9 +161,9 @@ class ToolSession:
         return self._with_receipts(TurnResult(reply))
 
     def _with_receipts(self, result):
-        if not self.receipts:
+        if not self.receipts and not self.effects:
             return result
-        execution = result.execution or {}
+        execution = {**self.effects, **(result.execution or {})}
         return TurnResult(result.reply, {**execution, "receipts": [
             *self.receipts, *(execution.get("receipts") or [])]})
 
@@ -171,9 +179,8 @@ class ToolSession:
                     or not call.get("name") or not isinstance(call.get("id"), str)
                     or not call.get("id") or not isinstance(call.get("args"), dict)):
                 return "invalid_tool_call"
-        if len(calls) > 1 and any(getattr(self.tools.get(call.get("name")), "return_direct", False)
-                                  for call in calls):
-            return "parallel_terminal_calls"
+        if len({call["id"] for call in calls}) != len(calls):
+            return "invalid_tool_call"
         return None
 
     def _tool_error(self, call, prompt, reason):
@@ -210,7 +217,7 @@ class ToolSession:
             domain = self.loaders[name]
             if domain not in self.loaded:
                 self.tools.update(self.domains[domain])
-                self.loaded.add(domain)
+                self.loaded.append(domain)
                 emit_progress(self.config, f"正在加载工具领域：{domain}", key=f"domain:{domain}")
                 record("native", "load_domain", domain=domain)
                 self.llm = self._bind_menu()
@@ -229,14 +236,7 @@ class ToolSession:
             body = self._invoke_tool(name, args, call)
         emit_progress(self.config, f"工具调用已返回：{name}", key=f"tool_done:{call['id']}")
         if isinstance(body, TurnResult):
-            # Confirmation tokens stay in the terminal outcome, never in the model prompt or trace.
-            adapted = self.outcome_adapter(body) if self.outcome_adapter else body
-            self.outcome = self._with_receipts(adapted)
-            execution = self.outcome.execution or {}
-            kind = ("prepared" if execution.get("pending_confirm") else
-                    "noop" if execution.get("noop_note") else
-                    "cancelled" if execution.get("pending_event") else "terminal")
-            record("native", "call", name=name, round=round_index, kind=kind)
+            self._prepared_result(body, call, prompt, round_index)
             return True
         if body is None:
             prompt.append(ToolMessage(content="无权读取此数据。", tool_call_id=call["id"]))
@@ -277,6 +277,23 @@ class ToolSession:
         record("native", "tool_result", name=name, result_chars=len(body))
         return True
 
+    def _prepared_result(self, body, call, prompt, round_index):
+        # Confirmation tokens stay in the terminal outcome, never in the prompt or trace.
+        adapted = self.outcome_adapter(body) if self.outcome_adapter else body
+        execution = adapted.execution or {}
+        if execution.get("pending_event"):
+            self.outcome_adapter = None
+        kind = ("prepared" if execution.get("pending_confirm") else
+                "noop" if execution.get("noop_note") else
+                "cancelled" if execution.get("pending_event") else "terminal")
+        record("native", "call", name=call["name"], round=round_index, kind=kind)
+        if kind == "noop":
+            self.effects.update(execution)
+            prompt.append(ToolMessage(content=adapted.reply, name=call["name"],
+                                      tool_call_id=call["id"]))
+        else:
+            self.outcome = self._with_receipts(adapted)
+
     def _restore_domains(self, prompt):
         observed = {message.name for message in prompt
                     if isinstance(message, ToolMessage) and message.status != "error"}
@@ -285,7 +302,7 @@ class ToolSession:
                     if domain not in self.loaded and observed.intersection(tools)]
         for domain in restored:
             self.tools.update(self.domains[domain])
-            self.loaded.add(domain)
+            self.loaded.append(domain)
         if restored:
             self.llm = self._bind_menu()
             record("native", "restore_domains", domains=restored)
@@ -414,6 +431,8 @@ class ToolSession:
         incomplete = incomplete_response(response)
         if incomplete:
             event, reply = incomplete
+            if event == "invalid_tool_call" and self.receipts:
+                reply = "已有操作回执已保留；后续工具请求未完整，未执行新的操作。"
             record("native", event, round=self._round_index,
                    count=len(getattr(response, "invalid_tool_calls", ()) or ()))
             result = self._result(reply)
@@ -477,13 +496,51 @@ class ToolSession:
             yield chunk
         return calls, None
 
-    def stream(self, prompt):
+    def _tool_batch(self, calls, prompt, attachments, *, reserve=False):
+        if reserve:
+            try:
+                self.budget.attempt_tools(len(calls))
+            except BudgetExceeded as exc:
+                self._budget_stop(exc.reason, tool_calls=self.calls_used)
+                return
+        for index, call in enumerate(calls):
+            check_cancelled(self.config)
+            if not self._append_result(call, prompt, self._round_index, attachments):
+                return
+            if self.outcome is not None:
+                execution = self.outcome.execution or {}
+                if execution.get("pending_confirm"):
+                    if index + 1 < len(calls):
+                        self.outcome = pause_notice(self.outcome)
+                    cursor = ToolContinuation(
+                        prompt, call, calls[index + 1:], attachments, list(self.loaded),
+                        evidence_state(self.article_evidence), self.result_chars,
+                    )
+                    self.continuation = cursor.checkpoint(
+                        self.config, execution["pending_action"]["jti"])
+                return
+        prompt.extend(attachments)
+
+    def stream(self, prompt, *, continuation=None):
         """Run native rounds while yielding model text chunks as they arrive."""
-        self._restore_domains(prompt)
-        prompt = fit_history(
-            prompt, self.principal, self.menu, self.budget.limits, self.output_limit)
         visible_parts = []
         self._round_index = 0
+        if continuation is not None:
+            for domain in continuation.loaded:
+                if domain in self.domains:
+                    self.tools.update(self.domains[domain])
+                    self.loaded.append(domain)
+            self.llm = self._bind_menu()
+            self.article_evidence = restore_evidence(continuation.evidence)
+            self.result_chars = continuation.result_chars
+            self._tool_batch(continuation.remaining, prompt, continuation.attachments,
+                             reserve=True)
+            if self.outcome is not None:
+                return (yield from self._stream_terminal(self.outcome, visible_parts))
+        else:
+            self._restore_domains(prompt)
+            prompt = fit_history(
+                prompt, self.principal, self.menu, self.budget.limits, self.output_limit)
         while True:
             check_cancelled(self.config)
             final = final_prompt(self.budget, prompt, self.menu, self.output_limit,
@@ -529,14 +586,9 @@ class ToolSession:
                 return None
             prompt.append(response)
             attachments = []
-            for call in calls:
-                check_cancelled(self.config)
-                if not self._append_result(call, prompt, self._round_index, attachments):
-                    return (yield from self._stream_terminal(self.outcome, visible_parts))
-                if self.outcome is not None:
-                    return (yield from self._stream_terminal(self.outcome, visible_parts))
-            # All sibling tool responses must precede transient multimodal user data.
-            prompt.extend(attachments)
+            self._tool_batch(calls, prompt, attachments)
+            if self.outcome is not None:
+                return (yield from self._stream_terminal(self.outcome, visible_parts))
             self._round_index += 1
 
     def run(self, prompt):

@@ -305,7 +305,7 @@ def test_cancelled_card_remains_revoked(todos, monkeypatch, tmp_path):
         ("reschedule", {"item_id": 11, "date": None}),
     ],
 )
-def test_hybrid_prepares_and_executes_without_legacy_or_followup_model(
+def test_native_prepares_executes_then_continues_without_repeating_write(
     todos, monkeypatch, tmp_path, action, args
 ):
     from langchain_core.messages import AIMessage, HumanMessage
@@ -334,6 +334,7 @@ def test_hybrid_prepares_and_executes_without_legacy_or_followup_model(
                         }
                     ],
                 ),
+                AIMessage(content="待办操作已完成。"),
             ]
 
         def bind_tools(self, tools, **kwargs):
@@ -362,7 +363,7 @@ def test_hybrid_prepares_and_executes_without_legacy_or_followup_model(
             admin_config()))
         result = completed[-1].execution
         assert result["receipts"][0]["tool"] == signed["specs"][0]["tool"]
-    assert todos["writes"] == 1 and len(model.calls) == 2
+    assert todos["writes"] == 1 and len(model.calls) == 3
     assert runtime.get_state(admin_config()).values["pending_action"] is None
 
 

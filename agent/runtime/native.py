@@ -6,6 +6,7 @@ from dataclasses import replace
 from functools import partial
 
 from langchain_core.messages import AIMessageChunk
+from openai import OpenAIError
 
 from agent.domains import conversation_images
 from agent.domains.registry import confirmed_domain, native_domain
@@ -13,6 +14,7 @@ from agent.principal import CHAT_ONLY_ROLES
 from agent.runtime import memory
 from agent.runtime.capabilities import ToolCatalog
 from agent.runtime.context import conversation_session
+from agent.runtime.continuation import ToolContinuation
 from agent.runtime.pending import expired
 from agent.runtime.pending import restore as restore_pending
 from agent.runtime.prompt import build_prompt
@@ -74,11 +76,32 @@ class NativeRuntime:
             yield from self._confirmed(state, config, snapshot, grant)
             return
         if expired(snapshot.pending):
-            snapshot = replace(snapshot, pending_confirm=None, pending_action=None)
+            snapshot = replace(snapshot, pending_confirm=None, pending_action=None,
+                               continuation=None)
         pending = restore_pending(snapshot.pending, config) if self.store.available else None
         principal = ((config or {}).get("configurable") or {}).get("principal")
         incoming = [*memory.bootstrap(snapshot, state.get("messages") or [], principal),
                     *(state.get("messages") or [])]
+        own_enabled = own_reads_enabled(principal)
+        prompt = build_prompt(
+            [*snapshot.messages, *incoming], principal, own_enabled, pending
+        )
+        session = self._session(config, snapshot, pending)
+        outcome = yield from self._run(session, prompt)
+        execution = outcome.execution or {}
+        continuation = session.continuation
+        if not (execution.get("pending_confirm") or execution.get("pending_event")
+                or execution.get("noop_note")):
+            continuation = snapshot.continuation
+        self.store.save_turn(
+            config, incoming, outcome.reply, observations=session.observations,
+            execution=outcome.execution, pending=snapshot.pending, continuation=continuation,
+        )
+        record("native", "turn_completed", chars=len(outcome.reply))
+        yield outcome
+
+    def _session(self, config, snapshot, pending=None):
+        principal = ((config or {}).get("configurable") or {}).get("principal")
         own_enabled = own_reads_enabled(principal)
         # Unrestorable old cards remain stored, but cannot authorize a write or
         # be silently replaced during a rolling migration.
@@ -92,15 +115,15 @@ class NativeRuntime:
             memory.history(snapshot.messages, principal), config)
         if image_tools and not chat_only:
             domains = {**domains, "conversation_images": image_tools}
-        prompt = build_prompt(
-            [*snapshot.messages, *incoming], principal, own_enabled, pending
-        )
         model = (self.model_factory or get_llm)(
             enable_thinking=False, streaming=True, stream_usage=True, max_tokens=768
         )
         adapt = partial(pending.transition, config=config, saver=self.saver) if pending else None
-        session = ToolSession(model, config, tools, domains, adapt)
-        runner = session.stream(prompt)
+        return ToolSession(model, config, tools, domains, adapt)
+
+    @staticmethod
+    def _run(session, prompt, *, continuation=None):
+        runner = session.stream(prompt, continuation=continuation)
         try:
             while True:
                 try:
@@ -115,16 +138,7 @@ class NativeRuntime:
             runner.close()
         if not isinstance(outcome, TurnResult):
             raise RuntimeError("Native tool session ended without a terminal result")
-        self.store.save_turn(
-            config,
-            incoming,
-            outcome.reply,
-            observations=session.observations,
-            execution=outcome.execution,
-            pending=snapshot.pending,
-        )
-        record("native", "turn_completed", chars=len(outcome.reply))
-        yield outcome
+        return outcome
 
     def _confirmed(self, state, config, snapshot, grant):
         domain = confirmed_domain(grant)
@@ -150,11 +164,18 @@ class NativeRuntime:
         retained = None if matching and execution.get("receipts") else snapshot.pending
         result = TurnResult(outcome["reply"], execution)
         observations = []
-        if self.narrator is not None and execution.get("receipts"):
+        continuation = None
+        if matching and execution.get("receipts"):
+            continuation = ToolContinuation.restore(snapshot.continuation, grant, config)
+        if execution.get("receipts"):
             from agent.runtime.narration import receipt_observations
 
             observations = receipt_observations(result)
-            result = TurnResult(self.narrator(result, config), execution)
+            if self.narrator is not None and continuation is None:
+                result = TurnResult(self.narrator(result, config), execution)
+        # Commit execution facts and consume this cursor before further dispatch.
+        # A stale approval can replay its receipt, but cannot advance a newer card
+        # or repeat resumed browser/device calls after a disconnect or crash.
         self.store.save_turn(
             config,
             state.get("messages") or [],
@@ -162,10 +183,47 @@ class NativeRuntime:
             execution=execution,
             pending=retained,
             observations=observations,
+            continuation=None if matching and execution.get("receipts")
+            else snapshot.continuation,
         )
+        if continuation is not None:
+            emit(config, "操作已完成，正在继续处理剩余请求…", key="confirmation_continuation")
+            record("native", "confirmation_resumed", remaining=len(continuation.remaining))
+            session = self._session(config, self.store.load(config))
+            session.receipts = list(execution["receipts"])
+            session.effects = {key: value for key, value in execution.items() if key != "receipts"}
+            result = yield from self._continue_session(session, continuation, result)
+            self.store.save_turn(
+                config, [], result.reply, observations=session.observations,
+                execution=result.execution, continuation=session.continuation,
+            )
+            yield result
+            return
         if result.reply:
             yield AIMessageChunk(content=result.reply)
         yield result
+
+    def _continue_session(self, session, continuation, executed):
+        runner = self._run(session, continuation.completed_prompt(executed),
+                           continuation=continuation)
+        visible = []
+        try:
+            while True:
+                try:
+                    chunk = next(runner)
+                except StopIteration as stop:
+                    return stop.value
+                visible.append(chunk.content)
+                yield chunk
+        except (OpenAIError, TimeoutError) as error:
+            record("native", "task_stopped", reason="continuation_failed",
+                   error=type(error).__name__)
+            suffix = (("\n" if visible else "") + executed.reply
+                      + "\n后续处理暂时中断，请继续指定要处理的事项。")
+            yield AIMessageChunk(content=suffix)
+            return TurnResult("".join(visible) + suffix, {"receipts": session.receipts})
+        finally:
+            runner.close()
 
 
 def build(*, resources: ExitStack) -> NativeRuntime:

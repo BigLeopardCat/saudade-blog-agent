@@ -19,6 +19,7 @@ class ConversationState(TypedDict, total=False):
     messages: Annotated[list, add_messages]
     pending_confirm: dict | None
     pending_action: dict | None
+    continuation: dict | None
     receipts: list
 
 
@@ -60,11 +61,13 @@ class NativeConversationStore:
             messages=list(values.get("messages") or []),
             pending_confirm=values.get("pending_confirm"),
             pending_action=values.get("pending_action"),
+            continuation=values.get("continuation"),
             initialized=snapshot.created_at is not None,
         )
 
     def save_turn(
-        self, config, messages, reply, *, observations=(), execution=None, pending=None
+        self, config, messages, reply, *, observations=(), execution=None, pending=None,
+        continuation=None,
     ) -> None:
         if not self.available:
             return
@@ -72,7 +75,8 @@ class NativeConversationStore:
         principal = ((config or {}).get("configurable") or {}).get("principal")
         current = memory.turn_messages(messages, observations, reply, principal)
         saved = {"messages": memory.checkpoint_messages(previous.messages, current),
-                 "pending_confirm": None, "pending_action": None}
+                 "pending_confirm": None, "pending_action": None,
+                 "continuation": continuation}
         for values in (pending or {}, execution or {}):
             saved.update({key: values[key] for key in
                           ("pending_confirm", "pending_action", "receipts") if key in values})
@@ -81,7 +85,8 @@ class NativeConversationStore:
 
     def clear_pending(self, config, jti: str) -> None:
         if (self.load(config).pending_action or {}).get("jti") == jti:
-            self.update_state(config, {"pending_confirm": None, "pending_action": None})
+            self.update_state(config, {"pending_confirm": None, "pending_action": None,
+                                       "continuation": None})
             self.prune(config)
 
     def guard(self, config):

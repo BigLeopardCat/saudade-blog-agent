@@ -368,6 +368,7 @@ def test_streamed_preface_and_terminal_confirmation_each_render_once(monkeypatch
         """Prepare a fixture confirmation without executing business operations."""
         return TurnResult(question, {"pending_confirm": {
             "q": question, "token": uuid.uuid4().hex, "opts": [], "exp": 0},
+            "pending_action": {"jti": uuid.uuid4().hex},
             "confirm_text": question, "receipts": []})
 
     class Model:
