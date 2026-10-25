@@ -30,6 +30,7 @@ class Model:
             AIMessage(content="", tool_calls=[{"name": "prepare_favorite_change",
                                               "args": {"action": action, "article_id": 19},
                                               "id": "prepare"}]),
+            AIMessage(content="收藏操作已完成。"),
         ]
 
     def bind_tools(self, tools, **kwargs):
@@ -107,7 +108,7 @@ def test_preparation_checkpoints_then_executes_once(site, monkeypatch, tmp_path,
         assert done[-1].execution["receipts"][0]["tool"] == expected
     method = "POST" if action == "add" else "DELETE"
     assert sum(request.method == method for request in site["requests"]) == 1
-    assert len(model.calls) == 2
+    assert len(model.calls) == 3
     assert runtime.get_state(config()).values["pending_action"] is None
 
 

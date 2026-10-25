@@ -110,12 +110,14 @@ def test_replacement_revokes_old_card_and_stale_click_preserves_new_card(
 
 def test_replacement_to_satisfied_state_clears_old_proposal(waiting, monkeypatch, site):
     runtime, _, _ = waiting
-    events = run(runtime, Model("prepare_favorite_change", {
-        "action": "remove", "article_id": 19}), "改成取消收藏19")
+    model = Model("prepare_favorite_change", {"action": "remove", "article_id": 19})
+    model.responses.append(AIMessage(content="原本就没收藏，无需改动。"))
+    events = run(runtime, model, "改成取消收藏19")
     assert runtime.get_state(config()).values["pending_action"] is None
     execution = next(event.execution for event in events
                      if getattr(event, "execution", None) and "noop_note" in event.execution)
     assert execution["noop_note"] and execution["pending_event"]
+    assert "无需改动" in events[-1].reply
     assert all(request.method == "GET" for request in site["requests"])
 
 

@@ -1,6 +1,8 @@
 """Exercise real NativeRuntime preparation, checkpointing and confirmed replay."""
 
-from langchain_core.messages import AIMessage, HumanMessage
+import json
+
+from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from langgraph.checkpoint.memory import InMemorySaver
 
 from agent import confirm, idem
@@ -26,6 +28,7 @@ def confirmed_roundtrip(monkeypatch, tmp_path, config, domain, prepare_name, arg
                         content="",
                         tool_calls=[{"name": prepare_name, "args": arguments, "id": "prepare"}],
                     ),
+                    AIMessage(content="操作完成。"),
                 ]
             )
 
@@ -34,6 +37,11 @@ def confirmed_roundtrip(monkeypatch, tmp_path, config, domain, prepare_name, arg
 
         def invoke(self, prompt):
             self.calls += 1
+            if self.calls == 3:
+                facts = prompt[-1]
+                assert isinstance(facts, ToolMessage) and facts.tool_call_id == "prepare"
+                assert json.loads(facts.content)["status"] == "executed"
+                assert runtime.store.load(config).continuation is None
             return next(self.responses)
 
     model = Model()
@@ -55,5 +63,5 @@ def confirmed_roundtrip(monkeypatch, tmp_path, config, domain, prepare_name, arg
         result = events[-1].execution
         assert len(result["receipts"]) == 1 and not result["blocked"]
         assert result["receipts"][0]["tool"] == signed["specs"][0]["tool"]
-    assert model.calls == 2
+    assert model.calls == 3
     assert runtime.get_state(config).values["pending_action"] is None

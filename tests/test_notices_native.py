@@ -167,7 +167,8 @@ def test_max_unicode_notice_is_signed_without_truncation(notices):
     assert len(prepared.execution["pending_confirm"]["token"]) <= confirm.MAX_TOKEN_CHARS
 
 
-def test_native_roundtrip_skips_legacy_and_model_on_confirmation(notices, tmp_path, monkeypatch):
+def test_native_roundtrip_continues_after_confirmation_and_replays_once(
+        notices, tmp_path, monkeypatch):
     from _admin_actions_support import confirmed_roundtrip
 
     confirmed_roundtrip(

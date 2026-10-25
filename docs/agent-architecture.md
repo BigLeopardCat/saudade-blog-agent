@@ -143,6 +143,7 @@ flowchart LR
 │   ├── runtime/catalog.py                               # 当前生产代码模块
 │   ├── runtime/checkpoint_store.py                      # 当前生产代码模块
 │   ├── runtime/confirmation.py                          # 当前生产代码模块
+│   ├── runtime/continuation.py                          # 签名确认暂停的原生调用游标与来源事实
 │   ├── runtime/context.py                               # 当前生产代码模块
 │   ├── runtime/control.py                               # 当前生产代码模块
 │   ├── runtime/conversation_store.py                    # 当前生产代码模块

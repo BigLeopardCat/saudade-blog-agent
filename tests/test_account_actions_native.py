@@ -324,7 +324,7 @@ def test_cancel_is_durable_and_prevents_later_confirmation(accounts, tmp_path, m
         ("prepare_account_unmute", {"account_id": 11}),
     ],
 )
-def test_native_roundtrip_never_uses_legacy_and_confirm_is_model_free(
+def test_native_roundtrip_continues_after_confirmation_and_replays_once(
     accounts, tmp_path, monkeypatch, tool, args
 ):
     from _admin_actions_support import confirmed_roundtrip

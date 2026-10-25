@@ -29,7 +29,7 @@ def test_source_observation_restores_the_available_domain():
     session._restore_domains(
         [ToolMessage(content="source", name="observed_read", tool_call_id="1")]
     )
-    assert session.loaded == {"admin_catalog"}
+    assert session.loaded == ["admin_catalog"]
     assert "observed_read" in model.menus[-1]
     assert "load_admin_catalog_info_tools" in model.menus[-1]
     assert model.menus[0] <= model.menus[-1]
