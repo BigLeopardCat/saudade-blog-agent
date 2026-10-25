@@ -1,7 +1,7 @@
 # 文档索引
 
 这里是本仓手写文档的**唯一入口**。根 [README.md](../README.md) 只讲"这是什么、怎么跑"，
-细节全在下面这十几份里——按"你现在想知道什么"挑一份，不要按文件名猜。
+细节见下表——按"你现在想知道什么"挑一份，不要按文件名猜。
 
 **三档类型**（判断一份文档该不该改写时按这个分）：
 
@@ -31,7 +31,7 @@
 | [native-account-actions.md](native-account-actions.md) | 原生账号管理接口、权限语义、迁移与隔离验证 | 现状型（已生产验收） |
 | [session-runtime-review-20261024.md](session-runtime-review-20261024.md) | 会话职责、独立报告核对、后台准入修复及剩余预算/存储工作 | 现状型 |
 | [request-budget-navigation-20261024.md](request-budget-navigation-20261024.md) | 共享模型预算、历史裁剪和跳转意图修复及真实回放范围 | 现状型 |
-| [hybrid-runtime-migration.md](hybrid-runtime-migration.md) | 工具型 Agent 迁移边界、已实现的直接对话路径和下一批验收门槛 | 方向型（含现状） |
+| [hybrid-runtime-migration.md](hybrid-runtime-migration.md) | 旧规划引擎退役后的在役实现、存储与故障边界 | 现状型 |
 | [repository-layout.md](repository-layout.md) | 目录职责、依赖边界与按领域迁移的归属规则 | 现状型（含迁移方向） |
 | [retired-experiments.md](retired-experiments.md) | 已退役实验臂、归档位置与保留结论 | 记录型 |
 | [问题记录.md](问题记录.md) | 事故取证，按日期：现象 → 根因 → 修复 → 回归锁（**§2.1 例外**，见下） | 记录型（+ §2.1 跨仓契约） |
@@ -62,7 +62,7 @@
 > 这份表**刻意不写"最后修订"日期**：手抄的日期没有判据看着（CI 是浅克隆，读不到逐文件的
 > 提交日期），注定漂。要看某份文档最近改了什么：`git log -1 --format=%ad -- docs/<文件>`。
 
-架构决策记录另有索引：[adr/README.md](adr/README.md)（21 份，记"当时为什么这样选、什么条件下重开"）。
+架构决策记录另有索引：[adr/README.md](adr/README.md)（记录取舍与实施边界，长期执行内核方向见 ADR-0024）。
 
 仓根还有几份不属于 `docs/`： [README.md](../README.md)（是什么、怎么跑）、
 [CONTRIBUTING.md](../CONTRIBUTING.md)（判据规矩、能/不能在本机跑什么）、
