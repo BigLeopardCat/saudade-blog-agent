@@ -33,9 +33,19 @@ class ArticleEvidence:
         self.empty = False
         self.failed = False
         self.documents: dict[int, str] = {}
+        self.candidates: dict[int, str] = {}
 
     def observe(self, name: str, args: dict, value) -> None:
         kind = getattr(value, "kind", "ok")
+        if name in SEARCH_TOOLS or name == "search_notes":
+            rows = getattr(value, "data", None)
+            if isinstance(rows, list) and kind == "ok":
+                for row in rows:
+                    if not isinstance(row, dict) or row.get("type", "note") != "note":
+                        continue
+                    ident = row.get("id", row.get("noteId", row.get("noteKey")))
+                    if type(ident) is int and ident > 0:
+                        self.candidates[ident] = str(row.get("title", row.get("noteTitle", "文章")))
         if name in SEARCH_TOOLS:
             self.searched = True
             self.empty |= kind == "empty"
@@ -49,19 +59,23 @@ class ArticleEvidence:
                 self.documents[args["article_id"]] = str((data or {}).get("noteTitle") or "文章")
 
     def issue(self, reply: str, site: str) -> str | None:
-        if self.found and not self.documents:
+        if self.found and not self.documents and not self.candidates:
             return "article_body_missing"
-        if not self.searched and not self.documents:
+        if not self.searched and not self.documents and not self.candidates:
             return None
         relative = re.findall(r"\]\((/article/\d+)[^)]*\)", reply)
-        if any(int(path.rsplit("/", 1)[-1]) not in self.documents for path in relative):
+        if any(
+            int(path.rsplit("/", 1)[-1]) not in {*self.documents, *self.candidates}
+            for path in relative
+        ):
             return "unread_article_reference"
         origin = urlsplit(site).netloc.casefold()
         for url in re.findall(r"https?://[^\s)<>]+", reply):
             parsed = urlsplit(url.rstrip(".,，。"))
             match = re.fullmatch(r"/article/(\d+)/?", parsed.path)
             if match and (
-                int(match[1]) not in self.documents or parsed.netloc.casefold() != origin
+                int(match[1]) not in {*self.documents, *self.candidates}
+                or parsed.netloc.casefold() != origin
             ):
                 return "unread_article_reference"
         return None

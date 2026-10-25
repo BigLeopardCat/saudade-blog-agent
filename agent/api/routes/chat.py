@@ -262,6 +262,7 @@ async def chat_stream(req: ChatRequest, request: Request):
 
         summary_task = None
         if req.needs_summary:
+            progress.emitter.emit("正在整理会话摘要…", key="summary_start")
             summary_task = jobs.submit(
                 workers.executor, summarize, req.message, req.history, req.summary
             )
@@ -360,6 +361,9 @@ async def chat_stream(req: ChatRequest, request: Request):
 
             if summary_task is not None:
                 new_summary = (await summary_task).strip()
+                yield sse_frame(
+                    "progress", "会话摘要已更新。" if new_summary else "本轮保留原有会话摘要。"
+                )
                 if new_summary:
                     yield sse_frame("summary", new_summary)
 

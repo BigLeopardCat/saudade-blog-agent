@@ -2177,3 +2177,7 @@
   .chat-send:hover,
   .chat-close:hover { transform: none; }
 }
+
+/* Settled approval status stays with its source reply. */
+.chat-approval-result { margin-top: .6rem; padding: .45rem .65rem; border-left: 2px solid currentColor; opacity: .75; font-size: .85em; }
+#chat-ask-text { white-space: pre-line; line-height: 1.65; }

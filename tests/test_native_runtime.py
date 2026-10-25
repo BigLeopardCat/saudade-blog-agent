@@ -7,7 +7,7 @@ import threading
 
 import pytest
 from _own_support import config
-from langchain_core.messages import AIMessage, AIMessageChunk, HumanMessage
+from langchain_core.messages import AIMessage, AIMessageChunk, HumanMessage, ToolMessage
 from langgraph.checkpoint.memory import InMemorySaver
 
 from agent import confirm, idem
@@ -169,6 +169,30 @@ def test_pending_survives_chat_restart_and_confirmation_replays_once(waiting, si
         assert "".join(m.content for m in events[:-1]) == events[-1].reply
     assert not store.load(config()).has_pending
     assert sum(request.method == "POST" for request in site["requests"]) == 1
+
+
+def test_confirmed_narration_follows_execution_and_keeps_independent_facts(waiting, site):
+    store, proposal, grant, _ = waiting
+    narrated = []
+
+    def narrator(result, config):
+        assert sum(request.method == "POST" for request in site["requests"]) == 1
+        assert result.execution["receipts"][0]["tool"] == "add_favorite"
+        narrated.append(result)
+        return "收藏好啦，之后可以在收藏夹找到它喵～"
+
+    selected = NativeRuntime(store, narrator=narrator)
+    for _ in range(2):
+        events = list(selected.stream_events({"confirm_grant": grant}, config()))
+        assert events[-1].reply == "收藏好啦，之后可以在收藏夹找到它喵～"
+        assert events[-1].execution == narrated[-1].execution
+    assert sum(request.method == "POST" for request in site["requests"]) == 1
+    saved = store.load(config()).messages
+    evidence = [message for message in saved if isinstance(message, ToolMessage)]
+    assert evidence and all(message.name == "add_favorite" for message in evidence)
+    assert "19" in evidence[-1].content
+    assert saved[-1].content == "收藏好啦，之后可以在收藏夹找到它喵～"
+    assert proposal.execution["pending_confirm"]["token"] not in str(saved)
 
 
 def test_unknown_write_result_is_not_retried_and_keeps_pending_card(waiting, site):

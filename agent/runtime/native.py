@@ -22,10 +22,11 @@ from utils.trace import record
 
 
 class NativeRuntime:
-    def __init__(self, store, *, catalog=None, model_factory=None):
+    def __init__(self, store, *, catalog=None, model_factory=None, narrator=None):
         self.store = store
         self.catalog = catalog if catalog is not None else ToolCatalog()
         self.model_factory = model_factory
+        self.narrator = narrator
 
     @property
     def saver(self):
@@ -119,13 +120,36 @@ class NativeRuntime:
             raise ValueError("这张确认卡不支持当前执行入口，请重新发起操作；本次未执行。")
         if not self.store.available:
             raise RuntimeError("操作确认需要持久化服务，本次未执行。")
+        from agent.runtime.progress import emit
+
+        emit(
+            config,
+            "正在执行已确认的工具："
+            + ", ".join(
+                spec["tool"]
+                for spec in grant.get("specs", ())
+                if isinstance(spec, dict) and isinstance(spec.get("tool"), str)
+            ),
+            key="confirmed_execution",
+        )
         outcome = domain.execute(grant, config, self.saver)
         execution = {key: value for key, value in outcome.items() if key != "reply"}
         matching = (snapshot.pending_action or {}).get("jti") == grant.get("jti")
         retained = None if matching and execution.get("receipts") else snapshot.pending
         result = TurnResult(outcome["reply"], execution)
+        observations = []
+        if self.narrator is not None and execution.get("receipts"):
+            from agent.runtime.narration import receipt_observations
+
+            observations = receipt_observations(result)
+            result = TurnResult(self.narrator(result, config), execution)
         self.store.save_turn(
-            config, state.get("messages") or [], result.reply, execution=execution, pending=retained
+            config,
+            state.get("messages") or [],
+            result.reply,
+            execution=execution,
+            pending=retained,
+            observations=observations,
         )
         if result.reply:
             yield AIMessageChunk(content=result.reply)
@@ -134,8 +158,10 @@ class NativeRuntime:
 
 def build(*, resources: ExitStack) -> NativeRuntime:
     from agent import checkpoint
+    from agent.runtime.narration import narrate
     from agent.runtime.native_store import NativeConversationStore
 
     return NativeRuntime(
-        NativeConversationStore(checkpoint.build_checkpointer(resources=resources))
+        NativeConversationStore(checkpoint.build_checkpointer(resources=resources)),
+        narrator=narrate,
     )

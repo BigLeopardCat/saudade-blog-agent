@@ -198,7 +198,7 @@ class ToolSession:
             if domain not in self.loaded:
                 self.tools.update(self.domains[domain])
                 self.loaded.add(domain)
-                emit_progress(self.config, "正在加载可用工具…", key=f"domain:{domain}")
+                emit_progress(self.config, f"正在加载工具领域：{domain}", key=f"domain:{domain}")
                 record("native", "load_domain", domain=domain)
                 self.llm = self._bind_menu()
             prompt.append(ToolMessage(content=f"{domain} 工具已加载。",
@@ -211,9 +211,10 @@ class ToolSession:
             return False
         args = call["args"]
         self.calls_used += 1
-        emit_progress(self.config, "正在处理工具请求…", key=f"tool:{name}")
+        emit_progress(self.config, f"正在调用工具：{name}", key=f"tool:{call['id']}")
         with native_tool(self.budget):
             body = self._invoke_tool(name, args, call)
+        emit_progress(self.config, f"工具调用已返回：{name}", key=f"tool_done:{call['id']}")
         if isinstance(body, TurnResult):
             # Confirmation tokens stay in the terminal outcome, never in the model prompt or trace.
             adapted = self.outcome_adapter(body) if self.outcome_adapter else body
