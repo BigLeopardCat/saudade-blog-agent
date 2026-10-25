@@ -65,9 +65,7 @@ frontend/public/live2d_model/
 
 ## 改这里的几条约定
 
-1. `?v=` 缓存版本号：nginx 对这几个路径设了 1 年 immutable，所以改了
-   `boot.js` / `widget.css` / `chat-*.css` / `chat-*.js` / `renderer.js` 之后**必须 bump** `boot.js` 里的
-   `VER` 常量（当前 `20261024b`），否则访客浏览器一年都不会更新。
+1. `?v=` 缓存版本：宿主使用 `widget.lock.json` 的提交号加载 `boot.js`，入口将同一版本传给全部子脚本和样式。更新组件时同步锁文件的提交与树哈希，无需手工维护日期版本；未带版本的独立开发入口使用 `dev`。
    同步点在消费端：博客仓 `Live2dAgent/index.tsx` 的 `?v=`、以及设备控制台页面
    （随博客仓的 `iot/` 一起收编，见那边 `frontend/README.md` 的五个同步点表）。
 2. **口型接口签名与净效果一字不能改**：`window.__setMouthOpen` / `__mouthOverride` /

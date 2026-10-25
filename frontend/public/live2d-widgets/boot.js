@@ -2,7 +2,7 @@
 // 职责收敛为：防重入 / 资源链加载 / 子模块（chat-core/render/engine/stream/
 // live2d-widget）按依赖序加载与组装 / 看板娘初始化时序 / 欢迎语注入。
 // 聊天逻辑分布：chat-core（纯函数）→ chat-render（渲染）→ chat-engine（数据层）→
-// chat-stream（交互层）。改聊天逻辑不用再动本文件，版本号只 bump 一处（VER）。
+// chat-stream（交互层）。静态资源版本由宿主入口 URL 传入。
 (async () => {
   // ═ 前端错误上报（20260830，监控补齐 B）══
   // 全局 JS 异常 / 未捕获 Promise / API 失败（fetch 包装）→ POST /api/monitor/log
@@ -91,11 +91,9 @@
   try { localStorage.removeItem('waifu-display'); } catch(e) {}
 
   const live2d_path = '/live2d-widgets/';
-  // ★ 版本号：nginx 对 live2d-widgets 目录 immutable 缓存 1 年，子模块变更只 bump
-  // 这里一处（所有子模块 URL 统一拼 ?v=VER；Live2dAgent/index.tsx 的 boot.js 引用
-  // 也需同步 bump——否则浏览器不会重新请求本入口）
-  // 缓存同步点见 frontend/README.md；每次静态资源变化均更新。
-  const VER = '20261025a';
+  // The host supplies its pinned revision; child resources inherit the same cache key.
+  const entry = new URL(document.currentScript?.src || live2d_path + 'boot.js', location.href);
+  const VER = encodeURIComponent(entry.searchParams.get('v') || 'dev');
 
   function loadExternalResource(url, type) {
     return new Promise((resolve, reject) => {
