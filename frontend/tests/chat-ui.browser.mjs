@@ -33,6 +33,8 @@ const server = createServer(async (req, res) => {
         nextMode = 'reply';
         res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache' });
         assert.equal(req.headers['x-agent-stream-version'], '2');
+        res.write(frame('progress', '正在调用工具：search_notes'));
+        res.write(frame('progress', '正在整理会话摘要…'));
         res.write(frame('text', mode === 'literal' ? literal : (mode === 'hold' ? '这是保留的部分回复。' : '离线测试回复：已收到你的消息。')));
         if (mode === 'hold') return;
         if (mode === 'confirmation') res.write(frame('confirmation', {
@@ -264,6 +266,10 @@ try {
   passed('literal command and confirmation prefixes render as text without actions');
 
   await send('测试确认卡', 'confirmation');
+  const progress = await page.locator('.agent-process').last().innerText();
+  assert.match(progress, /正在调用工具：search_notes/);
+  assert.match(progress, /正在整理会话摘要/);
+  passed('actual tool names and summary progress remain visible in the process panel');
   const approve = page.locator('#chat-ask-btns [data-ask-value="yes"]');
   await approve.waitFor({ state: 'visible' });
   nextMode = 'unknown';
@@ -282,7 +288,14 @@ try {
   await page.locator('#chat-ask-btns [data-ask-value="no"]').click();
   await page.waitForFunction(() => !window.__chatTest.ctx.state.approvalBusy);
   assert.match(await page.locator('#chat-ask').innerText(), /撤销|未执行/);
-  passed('confirmation cancel uses revocation endpoint');
+  assert.equal(await page.locator('#chat-ask').isVisible(), false);
+  const settled = page.locator('.chat-msg.agent .chat-approval-result').last();
+  await settled.waitFor({ state: 'visible' });
+  assert.match(await settled.innerText(), /撤销|未执行/);
+  await send('继续下一轮');
+  assert.equal(await page.locator('#chat-ask').isVisible(), false);
+  assert.equal(await page.locator('#chat-ask-btns [data-ask-value]').count(), 0);
+  passed('settled approval stays with source reply and cannot return below newer messages');
 
   await reset();
   const image = { name: 'one-pixel.png', mimeType: 'image/png', buffer: Buffer.from(

@@ -15,23 +15,30 @@ from tools.result import invalid_args
 
 
 def labels(tags):
-    parts = []
-    for tag in tags:
-        label = sanitize_untrusted(tag["name"], 40)
-        hierarchy = (
-            f"一级 #{tag['id']}"
-            if tag["level"] == 1
-            else f"二级 #{tag['id']}，父级 #{tag['parentId']}"
-        )
-        parts.append(
-            f"「{label}」（{hierarchy}）"
-            if tag["id"]
-            else f"「{label}」（新建{'一级' if tag['level'] == 1 else '二级'}"
-            + (f"，父级 #{tag['parentId']}" if tag["parentId"] else "")
-            + (f"，颜色 {tag['color']}" if tag["color"] else "")
-            + "）"
-        )
-    return "、".join(parts) or "无标签"
+    return "、".join(f"「{sanitize_untrusted(tag['name'], 40)}」" for tag in tags) or "无标签"
+
+
+def change_summary(plan, intent=None):
+    before, after = plan["before"], plan["after"]
+    old = {(tag["level"], tag["id"]): tag for tag in before}
+    new = {(tag["level"], tag["id"]): tag for tag in after if tag["id"] is not None}
+    added = [tag for tag in after if tag["id"] is None or (tag["level"], tag["id"]) not in old]
+    removed = [tag for tag in before if (tag["level"], tag["id"]) not in new]
+    lines = [f"文章：《{sanitize_untrusted(plan['title'], 255)}》"]
+    if added:
+        lines.append("添加标签：" + labels(added))
+    if removed:
+        lines.append("移除标签：" + labels(removed))
+    created = [tag for tag in added if tag["id"] is None]
+    for level, label in ((1, "一级"), (2, "二级")):
+        selected = [tag for tag in created if tag["level"] == level]
+        if selected:
+            lines.append(f"将新建{label}标签：" + labels(selected))
+    if intent and any(tag["level"] == 2 for tag in added) and intent.get("parent_tag"):
+        lines.append("所属一级标签：" + sanitize_untrusted(intent["parent_tag"], 40))
+    if intent and intent.get("color") and created:
+        lines.append("新标签颜色：" + intent["color"])
+    return "\n".join(lines)
 
 
 @tool(return_direct=True)
@@ -72,10 +79,7 @@ def prepare_article_tags(
         return current
     args = {"article_id": article_id, "version": current["version"], "intent": request}
     spec = {"tool": "set_article_tags", "args": args}
-    title = sanitize_untrusted(current["title"], 255)
-    target = (
-        f"文章 {article_id}《{title}》：{labels(current['before'])} → {labels(current['after'])}"
-    )
+    target = change_summary(current, request)
     if current["before"] == current["after"]:
         text = target + "，标签已达成，本次无需改动。"
         return TurnResult(
@@ -89,7 +93,7 @@ def prepare_article_tags(
         "article_tags",
         spec,
         executor="article_tags",
-        question=target + "？",
+        question="确认修改文章标签？\n" + target,
         target=target,
     )
 
