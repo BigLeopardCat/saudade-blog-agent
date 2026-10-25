@@ -75,6 +75,38 @@ def test_oled_fixture_runs_real_tool_and_never_uses_the_real_device_api():
         assert not state["unsupported_reads"]
 
 
+def test_article_discovery_counts_actual_native_tool_calls(monkeypatch, tmp_path):
+    responses = iter([
+        AIMessage(content="", tool_calls=[{"name": "search_notes",
+                   "args": {"keyword": "区块链"}, "id": "search"}]),
+        AIMessage(content="找到《区块链笔记》：https://saudade.site/article/23"),
+    ])
+
+    class Model:
+        def bind_tools(self, *args, **kwargs):
+            return self
+
+        def invoke(self, prompt, **kwargs):
+            return next(responses)
+
+    monkeypatch.setattr("agent.runtime.native.get_llm", lambda **_: Model())
+    monkeypatch.setattr(golden_trace, "trace_root", lambda: str(tmp_path / "traces"))
+    report = native_contracts.run(["article_discovery"])
+    assert report["cases"][0]["passed"], report["cases"]
+
+
+def test_tool_call_stats_excludes_requested_calls_and_other_nodes(monkeypatch):
+    events = [
+        {"node": "native", "event": "tool_requested", "name": "not_executed"},
+        {"node": "native", "event": "call", "name": "search_notes", "round": 0},
+        {"node": "native", "event": "call", "name": "get_article_detail", "round": 1},
+        {"node": "planner", "event": "call", "name": "legacy_plan", "round": 2},
+    ]
+    monkeypatch.setattr("utils.trace.events_of", lambda _: events)
+    assert golden_trace.tool_call_stats("fixture") == (["search_notes", "get_article_detail"], 2)
+    assert golden_trace.tool_call_stats(None) == ([], 0)
+
+
 def test_native_outcome_suite_uses_verified_identity_and_redacts_tokens(monkeypatch, tmp_path):
     def call(name, args):
         return AIMessage(content="", tool_calls=[{"name": name, "args": args, "id": name}])
