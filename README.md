@@ -1,8 +1,10 @@
 # Saudade Blog AI Agent
 
-博客看板娘“泠月喵”的生产型对话 Agent。项目运行在 FastAPI + LangGraph 上，负责站内内容问答、检索、页面动作、IoT 设备交互、后台管理助手和留言 AI 审核。
+博客看板娘“泠月喵”的生产型对话 Agent。项目使用 FastAPI、LangChain 基础组件与 LangGraph checkpoint，负责站内内容问答、检索、页面动作、IoT 设备交互、后台管理助手和留言 AI 审核。
 
-项目面向单一业务域，提供确定性执行、权限控制、流式输出和运行时可观测能力。
+当前服务博客业务，提供确定性执行、权限控制、流式输出和运行时可观测能力。
+长期采用成熟执行内核、精简业务 harness 和领域能力包，支持跨领域复用；
+当前框架内核收敛与插件化尚未完成，见 [ADR-0024](docs/adr/adr-0024-framework-kernel-and-domain-extensions.md)。
 
 ## 项目定位
 
@@ -18,7 +20,7 @@
 ## 架构
 
 服务使用唯一的原生工具运行时：模型使用原生工具调用，确定性代码负责授权、确认、
-幂等与会话存储。升级部署需将旧 graph/hybrid 配置改为 native；旧规划运行时已从生产依赖中移除。
+幂等与会话存储。部署应移除旧 `AGENT_ARM` 选项；旧规划运行时已从生产依赖中移除。
 当前迁移范围和审计结果见 [架构审计](docs/agent-architecture-audit-20261023.md)
 与 [迁移验收](docs/hybrid-runtime-migration.md)。
 

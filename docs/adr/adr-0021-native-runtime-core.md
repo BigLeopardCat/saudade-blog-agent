@@ -4,6 +4,9 @@
 - **承接**：[ADR-0020](adr-0020-conversation-store.md)
 - **范围**：NativeRuntime、NativeConversationStore、共享工具目录及原生确认接线。
 
+后续执行内核方向见 [ADR-0024](adr-0024-framework-kernel-and-domain-extensions.md)。
+本文描述在役自建运行时与旧图退役结果；框架替换需要保留以下业务安全和可见行为契约。
+
 ## 决策
 
 `NativeRuntime.stream_events(state, config)` 只产出标准 `AIMessageChunk` 与一个最终

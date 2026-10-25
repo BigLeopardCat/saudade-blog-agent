@@ -47,7 +47,7 @@
 | 状态 | 含义 | issue/标签 |
 |---|---|---|
 | `提议中` | 还没拍板，正在写 | 对应 issue 开着，`needs-triage` |
-| `已采纳` | 已落地，判据在跑 | 合了就关 issue |
+| `已采纳` | 已确认采用；正文区分已落地范围与待验证实现 | 合了就关对应决策 issue，实施状态写入路线图 |
 | `已搁置` | **方向认可，但条件没到**——同时写清触发条件 | 见 [../../ROADMAP.md](../../ROADMAP.md)，issue 带 `future` 标签且**保持开着** |
 | `已废弃` | 曾经采纳，后来不成立了——**写清为什么不成立** | 关 issue，`wontfix` |
 | `被 ADR-NNNN 取代` | 有更新的一份说了算，这一份只作历史 | 关 issue |
@@ -89,6 +89,7 @@
 | [0021](adr-0021-native-runtime-core.md) | 原生轮次与会话存储脱离旧编排图，传输接入单独收敛 | 已采纳 |
 | [0022](adr-0022-conversation-memory-boundaries.md) | 会话历史按来源裁剪，图片按需回看 | 已采纳 |
 | [0023](adr-0023-confirmation-continuation.md) | 签名确认暂停原生工具交换，取得回执后续行 | 已采纳 |
+| [0024](adr-0024-framework-kernel-and-domain-extensions.md) | 成熟执行内核、精简业务 harness 与领域能力包 | 已采纳（实现待验证） |
 
 ## 相关的、但不算 ADR 的文档
 

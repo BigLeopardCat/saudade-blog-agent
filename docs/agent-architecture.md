@@ -2,6 +2,9 @@
 
 本文描述当前主线实现。服务入口使用 `NativeRuntime`，原生工具循环直接由模型选择工具；旧 graph、planner、workflow DSL 与 hybrid 适配层已从生产依赖中删除，历史实现只存在于 Git 历史。
 
+长期执行内核与领域扩展方向见 [ADR-0024](adr/adr-0024-framework-kernel-and-domain-extensions.md)。
+当前生产仍为下述自建工具循环，通用执行机制尚未迁回框架，跨领域插件化也尚未验收。
+
 ## 1. 系统总览
 
 - 浏览器负责对话界面、SSE 消费及页面命令执行。

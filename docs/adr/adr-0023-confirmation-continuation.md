@@ -4,6 +4,9 @@
 - **影响范围**：原生工具循环、确认执行、会话 checkpoint 和结果叙述
 - **判据**：`tests/test_confirmation_continuation.py`、`tests/test_pending_favorite.py`
 
+长期暂停恢复方向见 [ADR-0024](adr-0024-framework-kernel-and-domain-extensions.md)。
+以下确认、回放和故障语义作为迁移保留项；自定义游标格式为当前实现，不要求长期保留。
+
 ## 背景
 
 准备工具原先直接结束整个工具循环。模型一次返回多个准备调用时，运行时拒绝整批；
