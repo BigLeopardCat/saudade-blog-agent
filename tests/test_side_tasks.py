@@ -140,7 +140,7 @@ def test_side_tasks():
     check("空正文不调模型（省一次调用）",
           moderator.review("   ", llm=llm_unused) == {"verdict": "pass", "reason": "空内容"}
           and not llm_unused.prompts)
-    print("⑤ 摘要：围栏覆盖历史 + 旧摘要 + 本轮消息")
+    print("⑤ 摘要：围栏覆盖完整批次 + 旧摘要")
     sp = summarizer.build_prompt("再显示一次",
                                 [H("user", "在吗"), H("assistant", "在的喵～")], "访客在看设备")
     check("历史与旧摘要都在围栏内",
@@ -155,13 +155,16 @@ def test_side_tasks():
           and spe.count(summarizer._CLOSE) == 1)
     long_hist = [H("user", f"m{i}") for i in range(30)]
     sph = summarizer.build_prompt("结尾", long_hist, "")
-    check("只取最近 20 条历史（m0..m29 取 m10..m29）",
-          "用户: m10" in sph and "用户: m9 " not in sph and "用户: m29" in sph)
+    check("摘要输入不静默丢弃更早的未覆盖消息",
+          all(f"用户: m{i}\n" in sph for i in range(30)))
     sph2 = summarizer.build_prompt("x" * 2000, [], "")
-    check("单条消息截断 600 字", "x" * 600 in sph2 and "x" * 601 not in sph2)
-    sph3 = summarizer.build_prompt("hi", [], "旧" * 2000)
-    check("旧摘要遵守共享大小上限",
-          "旧" * 1600 in sph3 and "旧" * 1601 not in sph3)
+    check("完整消息尾部进入摘要", "x" * 2000 in sph2)
+    try:
+        summarizer.build_prompt("hi", [], "旧" * 2000)
+        rejected = False
+    except ValueError:
+        rejected = True
+    check("旧摘要超出协议上限时拒绝，不能截断后推进覆盖水位", rejected)
     print("⑥ 摘要输出清洗与失败取向")
     clean_cases = [
         ("访客问了设备列表，系统查询后如实回答。", "访客问了设备列表，系统查询后如实回答。"),
@@ -187,9 +190,6 @@ def test_side_tasks():
     check("模型异常 → 空串（fail-empty，不让失败变成一条摘要）",
           summarizer.summarize("x", [], "", llm=FakeLLM(exc=RuntimeError("boom"))) == "")
     # Mounted moderation behavior, usage and failure propagation: test_service_routers.py.
-    server_src = (ROOT / "agent/api/routes/chat.py").read_text(encoding="utf-8")
-    check("摘要转发到 agent.summarizer.summarize", "from agent.summarizer import summarize" in server_src
-          and "workers.executor, summarize, req.message, req.history, req.summary" in server_src)
     _ts = _parent_repo.read(
         "src/routes/talks.rs",
         why="上面那句措辞的**事实依据**在 Rust 侧（审核失败到底返回什么）——只改 agent 一侧的"

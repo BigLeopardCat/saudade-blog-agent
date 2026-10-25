@@ -202,9 +202,11 @@ def test_scoped_summary_is_data_and_cannot_survive_role_or_identity_change():
                                   {**SCOPE, "role": "superadmin"}, SCOPE])
 def test_summary_jobs_require_accepted_history_provenance(scope):
     req = ChatRequest(message="继续", conversation_id=42, history_scope=scope,
-                      needs_summary=True, summary="unscoped summary")
+                      needs_summary=True, summary="unscoped summary",
+                      summary_batch={"base_id": 0, "messages": [
+                          {"id": 10, "role": "user", "content": "prior"}]})
     cleaned = safe_request(req, ACTOR)
-    assert cleaned.needs_summary is (scope == SCOPE)
+    assert not cleaned.needs_summary  # A nonempty base needs its own matching provenance.
     assert not cleaned.summary
 
 
