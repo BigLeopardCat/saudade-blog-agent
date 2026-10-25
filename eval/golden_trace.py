@@ -156,18 +156,18 @@ def start_case(run_id: str, case_id: str, message: str = "", role: str | None = 
     return tid
 
 
-def hybrid_read_stats(trace_id: str | None) -> tuple[list[str], int]:
-    """Read actual hybrid tool calls before finish_case removes the recorder.
+def tool_call_stats(trace_id: str | None) -> tuple[list[str], int]:
+    """Read actual native calls before finish_case removes the recorder.
 
-    Hybrid keeps ToolMessage inside its model loop, so only the trace carries
-    tool-use evidence for request-level gold; raw results stay off the SSE wire.
+    Raw tool messages stay inside the model loop. Historical hybrid records
+    remain readable, but planner events and requested calls are not executions.
     """
     if not trace_id:
         return [], 0
     from utils.trace import events_of
 
     calls = [e for e in events_of(trace_id)
-             if e.get("node") == "hybrid" and e.get("event") == "call"
+             if e.get("node") in ("native", "hybrid") and e.get("event") == "call"
              and e.get("name")]
     return [str(e["name"]) for e in calls], len({e.get("round") for e in calls})
 
