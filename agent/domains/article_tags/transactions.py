@@ -6,8 +6,7 @@ from pydantic import BaseModel, ConfigDict, Field, StrictStr
 
 from agent import authz
 from agent.domains.article_tags import targets
-from agent.domains.article_tags.preparation import labels
-from agent.reports import sanitize_untrusted
+from agent.domains.article_tags.preparation import change_summary
 from agent.runtime import writes
 from agent.runtime.turns import check_cancelled
 from tools import base
@@ -75,11 +74,7 @@ class Operation:
                 raise ValueError("标签回执与确认不一致")
         except (ValueError, TypeError, KeyError):
             return base.unavailable("标签请求已发出，但结果无法确认，请先查询状态，不要重复执行。")
-        title = sanitize_untrusted(actual["title"], 255)
-        text = (
-            f"文章 {args['article_id']}《{title}》标签："
-            f"{labels(actual['before'])} → {labels(actual['after'])}。"
-        )
+        text = "已更新文章标签。\n" + change_summary(actual, args["intent"])
         return ok(
             text,
             meta=fact(

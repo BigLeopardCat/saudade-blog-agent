@@ -190,13 +190,11 @@ def list_notes(
 
 @tool
 def search_notes(keyword: Annotated[str, "搜索关键词"]) -> str:
-    """站内关键词搜索：匹配**标题、正文、标签名**，返回文章列表（每篇给出 id、标题、
-    状态、是否置顶、标签名），按相关度排序（标题命中权重最高）。
+    """按关键词匹配文章标题、正文和标签，返回按相关度排序的文章元数据。
 
-    与 rag_search 的分工：本工具是"关键词命中"，**按标签或标题定位一批文章**时最有效
-    （标签名只有这里有）；想知道"某篇文章里写了什么、站内有没有写过某话题"用 rag_search
-    （它按词法给分节命中片段，能读到正文里的表述）。本工具只回元数据，要答案还得按 id
-    调 get_article_detail 读全文。两三个字的词、或中英混排都能搜（分词在服务端做）。"""
+    按标题或标签查找文章用本工具，按内容主题检索可用 rag_search。
+    候选标题和链接可直接用于推荐；解读、总结或比较正文时需用 get_article_detail 读取正文。
+    """
     try:
         resp = _client_post(
             f"{API_BASE}/notes/search",
@@ -206,10 +204,7 @@ def search_notes(keyword: Annotated[str, "搜索关键词"]) -> str:
         resp.raise_for_status()
         body = resp.json()
         data = body.get("data", [])
-        # 空列表 = "查到了，就是空的"（事实，checker PASS、进回执）——用 empty() 标 kind，
-        # 别写 str(data)（20260916 契约：str() 会退化成普通 str 丢 kind）。
-        # 20260920 之所以要这个标记：真实事故里 narrator 把 `返回: []` 读成了"本轮没有
-        # 执行任何工具"（_NO_EXEC_CLAIM_RE 是兜底，渲染侧已同步标注"已执行，结果为空"）。
+        # Successful empty results remain distinct from transport failures.
         if not data:
             return empty("[]")
         slim = _slim_note_rows(data)
@@ -386,9 +381,9 @@ def rag_search(
 ) -> str:
     """按相关性检索博客文章（语料仅限线上可见文章），返回候选文档列表（标题+类型+分数+命中节），不返回全文。
 
-    用于定位候选：拿到候选后调用 get_article_detail 读取相关文档的正文范围
-    （doc_type 取候选的 type）再回答。
-    仅适用于"文章内容知识型问题"（想知道某篇文章写了什么、博客里是否写过某话题）。
+    用于查找某主题的文章，可直接提供候选标题与链接。
+    解读、总结或比较正文时，调用 get_article_detail 读取相关正文范围
+    （doc_type 取候选的 type）；候选不支持正文结论。
     注意：说说/留言/公告不在检索语料内——询问"最新留言/说说/公告内容"时直接用
     list_guestbook / list_talks / get_announcements 数据工具，不要用本工具检索。
     """

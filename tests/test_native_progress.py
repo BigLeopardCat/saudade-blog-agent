@@ -69,10 +69,12 @@ def test_progress_arrives_while_native_tool_is_blocked():
     while len(visible) < 2 and time.monotonic() < deadline:
         time.sleep(0.01)
     assert visible
+    assert "正在调用工具：fixture_read" in visible
     assert all("private result" not in item for item in visible)
     release.set()
     worker.join(2)
     assert result and result[0].reply == "done"
+    assert "工具调用已返回：fixture_read" in visible
 
 
 def test_progress_is_bounded_and_deduplicated():
@@ -83,6 +85,33 @@ def test_progress_is_bounded_and_deduplicated():
     for i in range(50):
         emitter.emit(f"step {i}", key=f"step:{i}")
     assert len(visible) == 24
+
+
+@pytest.mark.parametrize("needs_summary", [False, True])
+def test_summary_progress_is_emitted_only_for_an_actual_summary_job(monkeypatch, needs_summary):
+    import asyncio
+
+    class Runtime:
+        def stream_events(self, state, config):
+            yield TurnResult("reply")
+
+    calls = []
+    server = _prepare_server(monkeypatch, Runtime(), [])
+    monkeypatch.setattr(
+        server, "summarize", lambda *args: calls.append(args) or "updated summary"
+    )
+
+    async def scenario():
+        response = await server.chat_stream(
+            ChatRequest(message="remember", needs_summary=needs_summary), service_request()
+        )
+        return "".join([frame async for frame in response.body_iterator])
+
+    frames = asyncio.run(scenario())
+    assert bool(calls) is needs_summary
+    assert ("正在整理会话摘要" in frames) is needs_summary
+    assert ("会话摘要已更新" in frames) is needs_summary
+    assert ("event: summary" in frames) is needs_summary
 
 
 def test_transport_rechecks_stop_and_deadline_after_scheduling():
