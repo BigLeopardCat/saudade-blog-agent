@@ -56,7 +56,10 @@ def prepare_favorite_change(
     article_id: Annotated[StrictInt, Field(gt=0)],
     config: RunnableConfig,
 ) -> object:
-    """仅在用户请求收藏或取消收藏时调用。核对具体文章及本人收藏状态，生成确认卡；不执行写入。"""
+    """用户请求收藏或取消收藏时直接提供文章编号，本工具自行读取文章与本人收藏状态并生成确认卡。
+
+    无需为收藏先读文章正文；本工具不执行写入。
+    """
     check_cancelled(config)
     try:
         principal, cid = bound_context(config)
