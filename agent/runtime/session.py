@@ -26,6 +26,7 @@ from agent.runtime.budget import (
 )
 from agent.runtime.catalog import initial_tools
 from agent.runtime.control import model_options
+from agent.runtime.finalization import final_prompt
 from agent.runtime.memory_media import tool_messages
 from agent.runtime.message_content import text_content
 from agent.runtime.progress import emit as emit_progress
@@ -113,6 +114,7 @@ class ToolSession:
         self.receipts = []
         self.article_evidence = ArticleEvidence()
         self.used_stream_api = False
+        self.finalizing = False
         self.llm = self._bind_menu()
 
     def _bind_menu(self):
@@ -442,6 +444,10 @@ class ToolSession:
             result = yield from self._stream_terminal(
                 result, visible_parts, current_text=raw_reply)
             return None, result
+        if self.finalizing:
+            result = self._budget_stop("finalization_tool_call", tool_calls=self.calls_used)
+            result = yield from self._stream_terminal(result, visible_parts)
+            return None, result
         reason = self._accept_calls(calls, self._round_index)
         if reason:
             result = self._handoff(reason, tool_calls=self.calls_used)
@@ -469,6 +475,15 @@ class ToolSession:
         self._round_index = 0
         while True:
             check_cancelled(self.config)
+            final = final_prompt(self.budget, prompt, self.menu, self.output_limit,
+                                 results_full=self.result_chars >= _MAX_TOTAL_RESULT_CHARS)
+            if final:
+                prompt, reason, output = final
+                self.llm = (self.model.bind(max_tokens=output)
+                            if output < self.output_limit else self.model)
+                self.menu, self.finalizing, self.output_limit = [], True, output
+                emit_progress(self.config, "正在整理已取得的结果…", key="finalization")
+                record("native", "finalizing", reason=reason, output_limit=output)
             prompt_chars = sum(len(text_content(message.content)) for message in prompt)
             if prompt_chars > MAX_PROMPT_CHARS:
                 result = self._budget_stop("prompt_budget", prompt_chars=prompt_chars)
