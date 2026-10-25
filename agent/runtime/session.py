@@ -61,16 +61,18 @@ _DOMAIN_DESCRIPTIONS = {
     "conversation_images": "Re-read a referenced conversation image when details are needed.",
     "own_activity": "读取本人河灯留言的状态、理由与分页内容，以及当前会话的真实聊天文本。"
                     "不读取其他账号数据或其他会话，不加载图片，只读。",
-    "admin_catalog": "分页读取后台文章清单（含草稿、私密文章的元数据）与账号名录。"
-                     "可按分类、关键词、账号名或编号筛选；可准备文章状态、置顶或标签增删替换确认；标签缺失时可同卡创建并挂载，仅管理员可用。",
+    "admin_catalog": "分页读取后台文章清单（含草稿、私密文章的元数据）。"
+                     "可按分类、关键词或文章编号筛选；可准备文章状态、置顶或标签增删替换确认；标签缺失时可同卡创建并挂载，仅管理员可用。",
     "admin_notices": "给单个后台账号发送个人通知：按编号或完整账号名准备确认，"
                      "核对收件人及完整标题正文；准备不写入，仅管理员可用。",
     "admin_tags": "管理标签字典：准备新建、改名、改色、换父级、一级二级互转和删除确认；"
                   "核对层级身份、子标签与文章引用。"
                   "给文章挂标签请用后台文章领域，仅管理员可用。",
-    "admin_account_actions": "Prepare account freeze, unfreeze, role change, mute or unmute "
-                             "by exact username or ID. Show before/after state, deadlines, "
-                             "session revocation and notification effects; administrator only, "
+    "admin_account_actions": "Read account roster by complete username or ID; prepare freeze, "
+                             "unfreeze, role change, mute or unmute. Preparation resolves the "
+                             "supplied username or ID and reads current state; the backend "
+                             "enforces operation policy. Show before/after state, deadlines, "
+                             "session revocation and notification effects. Administrator only; "
                              "preparation never writes. Assignable roles: "
                              + ", ".join(f"{role.value}={role_cn(role.value)}" for role in Role)
                              + ".",
