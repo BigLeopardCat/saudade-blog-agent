@@ -3,11 +3,11 @@
 import pytest
 from langchain_core.messages import AIMessage
 
-from agent.article_evidence import ArticleEvidence
 from agent.domains.article_tags.preparation import change_summary
-from agent.runtime import narration
+from agent.domains.articles.evidence import ArticleEvidence
+from agent.products.blog import narration
+from agent.products.blog.catalog import initial_tools
 from agent.runtime.budget import BudgetLimits, RequestBudget, budget_scope
-from agent.runtime.catalog import initial_tools
 from agent.runtime.results import TurnResult
 from tools.result import ok
 

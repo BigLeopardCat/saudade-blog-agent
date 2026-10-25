@@ -119,7 +119,7 @@ def test_invalid_page_does_not_contact_service(service, args):
 
 
 def test_device_domain_exposes_only_verified_matching_actor_when_enabled(service, monkeypatch):
-    from agent.runtime.read_tools import device_domain
+    from agent.products.blog.read_tools import device_domain
 
     domain = device_domain(config())
     assert set(domain) == {"devices"}

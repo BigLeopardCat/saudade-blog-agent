@@ -16,7 +16,7 @@ def narration_model(monkeypatch):
             return AIMessage(content="操作完成。", usage_metadata={
                 "input_tokens": 20, "output_tokens": 5, "total_tokens": 25})
 
-    monkeypatch.setattr("agent.runtime.narration.get_llm", lambda **_: Model())
+    monkeypatch.setattr("agent.products.blog.narration.get_llm", lambda **_: Model())
 
 
 def test_confirmed_write_evaluates_continuation_and_replay_without_another_write(

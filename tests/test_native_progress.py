@@ -356,7 +356,7 @@ def test_streamed_preface_and_terminal_confirmation_each_render_once(monkeypatch
     from langchain_core.tools import tool
     from langgraph.checkpoint.memory import InMemorySaver
 
-    from agent.runtime.capabilities import ToolCatalog
+    from agent.products.blog.capabilities import ToolCatalog
     from agent.runtime.native import NativeRuntime
     from agent.runtime.native_store import NativeConversationStore
     from agent.runtime.results import TurnResult

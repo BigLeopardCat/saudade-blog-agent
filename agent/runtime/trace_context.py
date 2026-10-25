@@ -3,12 +3,10 @@
 import hashlib
 import json
 
-from agent.runtime.context import conversation_context
 from utils.trace import record
 
 
-def caller(principal):
-    context = conversation_context(principal)
+def caller(context):
     record("native", "caller_context", caller=context["caller"],
            permissions=context["permissions"])
 

@@ -129,7 +129,7 @@ def test_replacing_and_cancelling_message_cards_revokes_old_grants(mailbox, monk
             {"messages": [], "confirm_grant": confirm.verify(old["token"], 7, 42)}, config()))
         assert runtime.get_state(config()).values["pending_confirm"] == new
         turn("pending", "cancel_pending_operation", {})
-        from agent.runtime.confirmation import confirmed_runtime
+        from agent.products.blog.confirmation import confirmed_runtime
         selected = confirmed_runtime(runtime, confirm.verify(new["token"], 7, 42))
         list(selected.stream_events(
             {"messages": [], "confirm_grant": confirm.verify(new["token"], 7, 42)}, config()))

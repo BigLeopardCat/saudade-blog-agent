@@ -14,9 +14,9 @@ from langgraph.checkpoint.memory import InMemorySaver
 from agent import confirm
 from agent.domains.favorites import preparation
 from agent.principal import SOURCE_ASSERTION, Principal
+from agent.products.blog.confirmation import cancel, confirmed_runtime
 from agent.runtime import writes
 from agent.runtime.budget import BudgetLimits, RequestBudget, budget_scope
-from agent.runtime.confirmation import cancel, confirmed_runtime
 from agent.runtime.native import NativeRuntime
 from agent.runtime.native_store import NativeConversationStore
 from agent.runtime.results import TurnResult

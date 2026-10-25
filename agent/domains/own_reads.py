@@ -8,7 +8,7 @@ from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import tool
 from pydantic import Field, StrictInt
 
-from agent.runtime.read_tools import own_reads_enabled
+from agent.products.blog.read_tools import own_reads_enabled
 from tools import base
 
 _FIELDS = ("id", "fromUserId", "toUserId", "peerName", "title", "isRead", "createdAt")

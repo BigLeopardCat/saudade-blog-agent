@@ -12,7 +12,7 @@ from agent.domains.notices import preparation as notices
 from agent.domains.quota_actions import preparation as quotas
 from agent.domains.tags import preparation as tags
 from agent.domains.todos import preparation as todos
-from agent.runtime.read_tools import scoped_reads_enabled
+from agent.products.blog.read_tools import scoped_reads_enabled
 
 _PREPARATIONS = (
     ("admin_account_actions", accounts),

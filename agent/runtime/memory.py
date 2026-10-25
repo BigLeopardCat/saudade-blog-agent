@@ -18,7 +18,6 @@ from agent.authz import (
     TOOL_SCOPE,
     check,
 )
-from agent.domains import browser, conversation_images
 from agent.principal import SOURCE_ASSERTION
 from agent.runtime.memory_media import compact
 from agent.runtime.memory_scope import matches
@@ -57,7 +56,7 @@ def summary_message(messages, principal=None):
     return None
 
 
-def _allowed(turn, principal):
+def _allowed(turn, principal, tool_access=None):
     for message in turn:
         actor = message.additional_kwargs.get("memory_actor")
         if isinstance(actor, dict):
@@ -67,14 +66,13 @@ def _allowed(turn, principal):
             if actor.get("role") != getattr(principal, "known_role", None):
                 return False
         if isinstance(message, ToolMessage):
-            if (browser.history_allowed(principal, message.name)
-                    or conversation_images.history_allowed(principal, message.name)):
-                continue
             if (TOOL_SCOPE.get(message.name or "") in
                     (SCOPE_ADMIN_CONSOLE, SCOPE_READ_OWN, SCOPE_WRITE_DEVICE)
                     and getattr(principal, "source", None) != SOURCE_ASSERTION):
                 return False
-            if not check(principal, message.name or "").allowed:
+            permitted = (tool_access(principal, message.name or "") if tool_access
+                         else check(principal, message.name or "").allowed)
+            if not permitted:
                 return False
     return True
 
@@ -91,9 +89,9 @@ def _turns(messages):
     return turns
 
 
-def history(messages, principal, *, max_tokens=None):
+def history(messages, principal, *, max_tokens=None, tool_access=None):
     turns = [[compact(message) for message in turn] for turn in _turns(messages)
-             if _allowed(turn, principal)]
+             if _allowed(turn, principal, tool_access)]
     if not turns:
         return []
     last = [message for message in turns[-1] if isinstance(message, HumanMessage)
@@ -164,22 +162,23 @@ def _excerpt(dialogue, target):
     return excerpt
 
 
-def bootstrap(snapshot, messages, principal):
+def bootstrap(snapshot, messages, principal, *, tool_access=None):
     """Import scoped host history once, after the conversation lock and delete fence."""
     if snapshot.initialized:
         return []
     for message in reversed(messages):
         if is_context(message):
-            return history(message.additional_kwargs.get("host_history") or [], principal)
+            return history(message.additional_kwargs.get("host_history") or [], principal,
+                           tool_access=tool_access)
     return []
 
 
-def prompt_dialogue(messages, principal):
+def prompt_dialogue(messages, principal, *, tool_access=None):
     visible = [message for message in messages if not is_context(message)]
     if not visible:
         return []
     current = visible[-1]
-    return [*history(visible[:-1], principal), current]
+    return [*history(visible[:-1], principal, tool_access=tool_access), current]
 
 
 def checkpoint_messages(previous, current):

@@ -12,7 +12,7 @@ from pydantic import Field, StrictBool, StrictInt
 from agent.adminops_account import role_cn
 from agent.domains.account_actions import targets
 from agent.domains.admin_writes import available
-from agent.runtime.confirmation import proposal
+from agent.products.blog.confirmation import proposal
 from agent.runtime.results import TurnResult
 from agent.runtime.turns import check_cancelled
 from agent.runtime.writes import bound_context

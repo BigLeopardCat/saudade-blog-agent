@@ -13,7 +13,7 @@ from langgraph.checkpoint.memory import InMemorySaver
 from test_memory_boundaries import ACTOR, config, run, runtime
 
 from agent.principal import SOURCE_ASSERTION, SOURCE_BODY, Principal
-from agent.runtime.context import conversation_session
+from agent.products.blog.context import conversation_session
 from agent.runtime.control import RequestControl
 from agent.runtime.workers import RequestWorkers
 from config.settings import settings

@@ -8,7 +8,7 @@ from pydantic import BaseModel, Field
 from agent import checkpoint, confirm
 from agent.api.authentication import resolve_principal as _resolve_principal
 from agent.api.dependencies import require_runtime, require_workers
-from agent.runtime import confirmation
+from agent.products.blog import confirmation
 from agent.runtime.checkpoint_store import ConversationDeleted
 
 logger = logging.getLogger(__name__)
