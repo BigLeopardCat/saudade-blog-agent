@@ -56,6 +56,25 @@ def test_http_error_event_is_preserved_as_runtime_failure(tmp_path, monkeypatch)
     assert "超时" in result["error"] and len(adapter.requests) == 1
 
 
+@pytest.mark.parametrize("field", ["confirm_token", "confirm_pick"])
+@pytest.mark.parametrize("host", [False, True])
+def test_online_transport_refuses_confirmation_credentials_before_any_http(
+    tmp_path, monkeypatch, field, host
+):
+    def unexpected(*args, **kwargs):
+        pytest.fail("confirmation must be refused before HTTP or authentication")
+
+    adapter = OnlineTransport(agent_url="http://agent", blog_url="http://blog",
+                              report_dir=tmp_path, host=host)
+    monkeypatch.setattr(adapter, "_headers", unexpected)
+    try:
+        with pytest.raises(EvaluationError, match="must not approve"):
+            adapter._consume({field: "fixture-credential"}, "request", 0)
+    finally:
+        adapter.client.close()
+    assert adapter.requests == []
+
+
 def test_report_redaction_removes_nested_and_wire_bearer_credentials():
     credential = token_urlsafe()
     frame = "__CONFIRM__:" + json.dumps({"token": credential, "q": "保留问题"})
@@ -96,6 +115,16 @@ def test_exact_card_target_checks_nested_intent_and_preserves_negative_control()
         "intent": {"add": ["测试"], "remove": [], "replace": None}}}]}]}
     assert not native_assertions.check(gold, result)
     result["confirm_payloads"][0]["specs"][0]["args"]["intent"]["add"] = ["加上测试当标签"]
+    assert native_assertions.check(gold, result)
+
+
+def test_unscheduled_todo_card_must_not_invent_a_due_date():
+    case = next(c for c in online_baseline.load_suite() if c["id"] == "todo_after_chat")
+    gold = case["rounds"][1]["gold"]
+    result = {"native_events": [], "confirm_payloads": [{"specs": [{
+        "tool": "create_dashboard_todo", "args": {"text": "亲亲泠月喵", "date": None}}]}]}
+    assert not native_assertions.check(gold, result)
+    result["confirm_payloads"][0]["specs"][0]["args"]["date"] = "2026-10-25"
     assert native_assertions.check(gold, result)
 
 

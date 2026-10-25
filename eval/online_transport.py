@@ -131,6 +131,8 @@ class OnlineTransport:
             time.sleep(0.05)
 
     def _consume(self, payload, request_id, started):
+        if payload.get("confirm_token") or payload.get("confirm_pick"):
+            raise EvaluationError("online regression must not approve business mutations")
         path = "/api/chat/stream" if self.host else "/chat/stream/v2"
         root = self.blog_url if self.host else self.agent_url
         events, done = [], False
