@@ -16,6 +16,7 @@ from agent.article_evidence import ArticleEvidence
 from agent.authz import SCOPE_ADMIN_CONSOLE, SCOPE_READ_OWN, TOOL_SCOPE, WRITE_SCOPES, check
 from agent.domains import browser, device_actions
 from agent.domains.account_actions.targets import Role
+from agent.domains.notices.targets import DEFAULT_TITLE
 from agent.llm_usage import usage_fields
 from agent.runtime import memory
 from agent.runtime.budget import (
@@ -64,7 +65,8 @@ _DOMAIN_DESCRIPTIONS = {
     "admin_catalog": "分页读取后台文章清单（含草稿、私密文章的元数据）。"
                      "可按分类、关键词或文章编号筛选；可准备文章状态、置顶或标签增删替换确认；标签缺失时可同卡创建并挂载，仅管理员可用。",
     "admin_notices": "给单个后台账号发送个人通知：按编号或完整账号名准备确认，"
-                     "核对收件人及完整标题正文；准备不写入，仅管理员可用。",
+                     f"需明确收件人和正文；标题可省略，默认为「{DEFAULT_TITLE}」。"
+                     "核对收件人及完整正文；准备不写入，仅管理员可用。",
     "admin_tags": "管理标签字典：准备新建、改名、改色、换父级、一级二级互转和删除确认；"
                   "核对层级身份、子标签与文章引用。"
                   "给文章挂标签请用后台文章领域，仅管理员可用。",
