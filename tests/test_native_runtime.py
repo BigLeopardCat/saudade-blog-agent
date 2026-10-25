@@ -213,8 +213,9 @@ def test_cancel_uses_native_store_and_prevents_later_write(waiting, site):
 
 
 def test_native_factory_does_not_import_or_construct_legacy_graph():
-    code = ("import sys; from agent.runtime.native import build; "
-            "runtime=build(); assert not runtime.store.available; "
+    code = ("import sys; from contextlib import ExitStack; from agent.runtime.native import build; "
+            "resources=ExitStack(); runtime=build(resources=resources); "
+            "assert not runtime.store.available; resources.close(); "
             "assert 'agent.graph' not in sys.modules; "
             "assert 'agent.agent' not in sys.modules")
     result = subprocess.run([sys.executable, "-c", code],

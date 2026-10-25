@@ -299,24 +299,9 @@ class Settings(BaseSettings):
     # 的《迁移到 PG》一节，是一条欠账。
     idem_db: str = "/home/ubuntu/Saudade-Blog/logs/agent/idem.sqlite3"
 
-    # ── checkpoint 存储（ADR-0011 的接线点，20261018 采纳落地）──────────
-    # **缺省空 = 从前的行为**：`agent/checkpoint.py::build_checkpointer()` 不给参数时读
-    # 这一格，空 ⇒ 返回 `None` ⇒ 图仍是裸的 `g.compile()`（生产逐字节不变）。
-    # 20261018 起**填上它就真开**——`build_checkpointer()` 的唯一生产调用方是
-    # `server._build_arm()` 的 `create_agent(checkpointer=…)`；"挂没挂"不靠读这一格
-    # 判断，靠 `server._graph_holds_context()` 读**活体对象上有没有 saver**
-    # （`/health` 的 `checkpoint_backend` 同一个实现）。别只填这一格就以为接上了——
-    # 接线是 `agent/checkpoint.py` 头注里那个"三处一起动"（只做第三处会**静默产生
-    # 双份上下文**），判据 `tests/test_checkpoint_adoption.py`。
-    # 取值域 `postgresql://` / `postgres://` / `sqlite://`，**故意不认内存档**（4 个
-    # uvicorn worker 下每 worker 各记各的，且不报错）。认不出来/依赖没装都**响亮抛**。
-    # ⚠️ **它指的必须是业务库之外的独立库**：saver 建表走 `PostgresSaver.setup()`，
-    # **没有编号迁移** ⇒ 指进业务库就是在业务库上开一条没人编号、不在 CI 里的 DDL 通道，
-    # 而它建的表与业务表不重名、**不会报错**。完整理由与"旧数据不迁"见
-    # `agent/checkpoint.py` 头注《DSN 指向哪个库》；`/health` 的 `dials.checkpoint_db`
-    # 是它的可读出口（只回库名）。
-    # 依赖（`langgraph-checkpoint-postgres` / `psycopg[binary]` / `psycopg-pool`）已在
-    # `pyproject.toml` 里声明并进了 `uv.lock`。
+    # Optional PostgreSQL conversation persistence. Empty disables persistence;
+    # invalid configuration aborts startup without an in-memory fallback.
+    # Use a separate database: framework setup manages its own schema.
     checkpoint_dsn: str = ""               # CHECKPOINT_DSN
     # 「指错库」的硬闸（20261019）：填一个**库名**，DSN 指到它 ⇒ 启动期当场抛。
     # **缺省空 = 不拦**——生产库名是运维坐标，**不写进本仓**（本仓是公开仓，
