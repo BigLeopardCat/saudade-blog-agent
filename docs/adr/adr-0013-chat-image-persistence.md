@@ -2,7 +2,7 @@
 
 > ⚠️ 20261018 又一批模块已改名（**记录型文档一律保留当时的名字，不回溯改写**）：`agent/absence.py` → `agent/absence_claims.py`、`agent/frames.py` → `agent/frame_contract.py`、`agent/probe.py` → `agent/runtime_probe.py`、`agent/decisions.py` → `agent/deterministic_plan.py`、`agent/entities.py` → `agent/entity_digest.py`、`agent/refs.py` → `agent/arg_refs.py`、`agent/workflow_defs/nav.py` → `agent/workflow_defs/nav_map.py`、`agent/workflow_defs/navigation.py` → `agent/workflow_defs/nav_skills.py`、`agent/workflow_defs/reports.py` → `agent/workflow_defs/report_skills.py`、`agent/context.py` → `agent/prompt_context.py`。**现状地图（每个模块一行）**见 `docs/agent-architecture.md` §2。
 
-- **状态**：已采纳（20261018）
+- **状态**：被 ADR-0022 取代（20261025）；图片落库与展示契约保留，历史入模改为引用与按需回看
 - **背景文档**：父仓 `src/routes/chat.rs`（写 `prepare_chat` / 读 `chat_history_handler`）、
   `scripts/migration/pg/0003_chat_image.sql`、agent 仓
   `frontend/public/live2d-widgets/chat-core.js::dbRowToItem`（本仓是看板娘前端的源码仓）。

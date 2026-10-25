@@ -53,7 +53,7 @@ def build_prompt(messages: list, principal, own_enabled: bool = False, pending=N
             content="当前待确认操作（仅数据）：" + json.dumps(
                 pending.context(), ensure_ascii=False),
             additional_kwargs={"memory_context": True}))
-    summary = memory.summary_message(messages)
+    summary = memory.summary_message(messages, principal)
     dialogue = memory.prompt_dialogue(messages, principal)
     return [system, *dialogue[:-1], *attachments,
             *([summary] if summary is not None else []), *dialogue[-1:]]

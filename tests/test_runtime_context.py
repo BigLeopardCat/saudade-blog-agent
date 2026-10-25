@@ -8,7 +8,7 @@ from langchain_core.messages import HumanMessage
 from agent.authz import scopes_for
 from agent.principal import SOURCE_ASSERTION, SOURCE_BODY, Principal
 from agent.runtime.context import conversation_context
-from agent.runtime.memory import HISTORY_TOKENS, _tokens
+from agent.runtime.memory import CHECKPOINT_TOKENS, _tokens
 from agent.runtime.prompt import build_prompt as _input
 from agent.stickers import STICKER_NAMES
 
@@ -38,7 +38,9 @@ def test_user_claims_and_history_trimming_do_not_replace_runtime_identity():
     assert context["identity"]["role"] == "user"
     assert context["permissions"] == sorted(scopes_for("user"))
     assert context["rendering"]["stickers"] == [f":{name}:" for name in STICKER_NAMES]
-    assert _tokens(prompt[1:-1]) <= HISTORY_TOKENS
+    assert _tokens(prompt[1:-1]) <= CHECKPOINT_TOKENS
+    # The most recent long input is retained intact instead of erasing the turn.
+    assert len(prompt[1:-1]) == 1 and prompt[1].content == messages[-2].content
     assert str(prompt[-1].content) == str(messages[-1].content)
 
 

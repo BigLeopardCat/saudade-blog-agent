@@ -20,6 +20,7 @@ from agent.api.events import response as stream_response
 from agent.api.schemas import ChatRequest, ChatResponse
 from agent.api.turns import NativeCancelled, run_turn, stream_to_queue
 from agent.runtime.control import RequestControl
+from agent.runtime.memory_scope import safe_request
 from agent.runtime.progress import StreamProgress
 from agent.summarizer import summarize
 from config.settings import settings
@@ -99,6 +100,7 @@ async def chat(req: ChatRequest, request: Request):
     workers = require_workers(request)
     principal = _resolve_principal(request, req.user_id)
     req.user_id = principal.uid
+    req = safe_request(req, principal)
 
     if req.quota_blocked:
         _limit = req.chat_quota.limit if req.chat_quota is not None else 0
@@ -172,6 +174,7 @@ async def chat_stream(req: ChatRequest, request: Request):
     workers = require_workers(request)
     principal = _resolve_principal(request, req.user_id)  # 身份以签名为准（见 _resolve_principal）
     req.user_id = principal.uid
+    req = safe_request(req, principal)
     grant = None
     if req.confirm_token.strip():
         grant = confirm.verify(req.confirm_token, principal.uid, req.conversation_id)

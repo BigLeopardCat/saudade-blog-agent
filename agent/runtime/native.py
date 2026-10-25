@@ -7,8 +7,10 @@ from functools import partial
 
 from langchain_core.messages import AIMessageChunk
 
+from agent.domains import conversation_images
 from agent.domains.registry import confirmed_domain, native_domain
 from agent.principal import CHAT_ONLY_ROLES
+from agent.runtime import memory
 from agent.runtime.capabilities import ToolCatalog
 from agent.runtime.pending import expired
 from agent.runtime.pending import restore as restore_pending
@@ -71,6 +73,8 @@ class NativeRuntime:
             snapshot = replace(snapshot, pending_confirm=None, pending_action=None)
         pending = restore_pending(snapshot.pending, config) if self.store.available else None
         principal = ((config or {}).get("configurable") or {}).get("principal")
+        incoming = [*memory.bootstrap(snapshot, state.get("messages") or [], principal),
+                    *(state.get("messages") or [])]
         own_enabled = own_reads_enabled(principal)
         # Unrestorable old cards remain stored, but cannot authorize a write or
         # be silently replaced during a rolling migration.
@@ -80,8 +84,12 @@ class NativeRuntime:
         domains = (
             {} if chat_only else self.catalog.domains(config, can_prepare, pending, self.saver)
         )
+        image_tools = conversation_images.tools(
+            memory.history(snapshot.messages, principal), config)
+        if image_tools and not chat_only:
+            domains = {**domains, "conversation_images": image_tools}
         prompt = build_prompt(
-            [*snapshot.messages, *(state.get("messages") or [])], principal, own_enabled, pending
+            [*snapshot.messages, *incoming], principal, own_enabled, pending
         )
         model = (self.model_factory or get_llm)(
             enable_thinking=False, streaming=True, stream_usage=True, max_tokens=768
@@ -105,7 +113,7 @@ class NativeRuntime:
             raise RuntimeError("Native tool session ended without a terminal result")
         self.store.save_turn(
             config,
-            state.get("messages") or [],
+            incoming,
             outcome.reply,
             observations=session.observations,
             execution=outcome.execution,
