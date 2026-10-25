@@ -133,7 +133,8 @@ def list_admin_board(config: RunnableConfig, status: Status | None = None,
                      page: Page = 1, limit: Limit = 5, item_id: Identifier | None = None) -> object:
     """分页查看河灯留言，默认5条、最多10条，返回总数与内容节选。
 
-    publisher 是发表账号，displayName 是用户自由填写的留名；两者不同。
+    查询某条留言或匿名留言是谁发的，用 item_id 读取 publisher 的账号编号、用户名及昵称。
+    displayName 是自由留名，可留空或与账号不同，不能用来认定发表账号。
     status 是最终审核状态，ai_result 是独立的AI判定。提供 item_id 单独读取内容。
     """
     return _page("board", config, status, keyword, page, limit, item_id, ai_result=ai_result)

@@ -7,6 +7,7 @@ from dataclasses import dataclass, field
 from threading import Event
 
 from agent.runtime.budget import RequestBudget, budget_scope
+from models.session import session_scope
 
 
 class AgentCancelled(Exception):
@@ -18,6 +19,7 @@ class RequestControl:
     stop_event: Event
     deadline: float
     budget: RequestBudget = field(default_factory=RequestBudget)
+    session_id: str | None = None
 
     def check(self):
         if self.stop_event.is_set():
@@ -34,7 +36,7 @@ def request_scope(control):
     token = _current.set(control)
     try:
         control.check()
-        with budget_scope(control.budget):
+        with budget_scope(control.budget), session_scope(control.session_id):
             yield
     finally:
         _current.reset(token)

@@ -14,9 +14,10 @@ def matches(scope, principal, conversation_id) -> bool:
 
 def safe_request(req, principal):
     """The host must persist source scopes, rather than relabel old data on read."""
+    history_allowed = matches(req.history_scope, principal, req.conversation_id)
     return req.model_copy(update={
-        "history": (req.history if matches(req.history_scope, principal, req.conversation_id)
-                    else []),
+        "history": req.history if history_allowed else [],
         "summary": (req.summary if matches(req.summary_scope, principal, req.conversation_id)
                     else ""),
+        "needs_summary": req.needs_summary and history_allowed,
     })

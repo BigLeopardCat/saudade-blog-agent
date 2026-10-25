@@ -10,6 +10,7 @@ import uuid
 from langchain_openai import ChatOpenAI
 
 from config import settings
+from models.session import current_session
 
 logger = logging.getLogger(__name__)
 
@@ -43,16 +44,10 @@ def _thinking_extra(provider: str, thinking: bool, model: str = "") -> dict:
 
 
 def _provider_headers(provider: str) -> dict:
-    """服务商要求的**自定义请求头**（走 `ChatOpenAI(default_headers=…)`）。
-
-    目前只有 opencode zen 一家：它按 `x-opencode-session` 路由，缺了直接回
-    `400 MissingSessionID`（20261020 实测；`ChatOpenAI` 只会发 `Authorization`，
-    与它「只认 `x-api-key`」的 Anthropic 那条路不是一回事——OpenAI 兼容路径上
-    `Bearer` 单独就能过）。每次调用给一个新 session id：这是**请求身份**，不是凭据，
-    没有复用价值，也不会进任何日志。
-    """
+    """OpenCode requires conversation affinity; unbound calls get an isolated identifier."""
     if (provider or "").strip().lower() == "opencode":
-        return {"x-opencode-session": uuid.uuid4().hex}
+        return {"x-opencode-session": current_session() or uuid.uuid4().hex,
+                "User-Agent": "saudade-blog-agent/1.0"}
     return {}
 
 

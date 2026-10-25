@@ -58,6 +58,28 @@ def test_preparation_signs_real_target_without_writing_or_exposing_token(site):
     assert confirm.verify(popup["token"], 7, 43) is None
 
 
+@pytest.mark.parametrize("identifiers", [{"noteKey": 19}, {"noteId": 19},
+                                       {"noteKey": 19, "noteId": 19}])
+def test_public_article_and_favorite_dtos_produce_the_same_signed_target(site, identifiers):
+    site["article"] = {**identifiers, "noteTitle": "真实文章标题"}
+    result = preparation.prepare_favorite_change.invoke(
+        {"action": "add", "article_id": 19}, config=config())
+    grant = confirm.verify(result.execution["pending_confirm"]["token"], 7, 42)
+    assert grant["specs"] == [{"tool": "add_favorite", "args": {"article_id": 19}}]
+    assert all(request.method == "GET" for request in site["requests"])
+
+
+@pytest.mark.parametrize("identifiers", [{}, {"noteKey": 20}, {"noteKey": True},
+                                       {"noteKey": 19, "noteId": 20},
+                                       {"noteKey": None, "noteId": 19}])
+def test_invalid_or_conflicting_article_identifiers_do_not_create_a_card(site, identifiers):
+    site["article"] = {**identifiers, "noteTitle": "真实文章标题"}
+    result = preparation.prepare_favorite_change.invoke(
+        {"action": "add", "article_id": 19}, config=config())
+    assert result.kind == "unavailable"
+    assert all(request.method == "GET" for request in site["requests"])
+
+
 @pytest.mark.parametrize("action", ["add", "remove"])
 def test_preparation_checkpoints_then_executes_once(site, monkeypatch, tmp_path, action):
     initial = ([{"noteId": 19, "title": "真实文章标题"}] if action == "remove" else [])

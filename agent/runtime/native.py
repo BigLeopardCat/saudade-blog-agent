@@ -12,6 +12,7 @@ from agent.domains.registry import confirmed_domain, native_domain
 from agent.principal import CHAT_ONLY_ROLES
 from agent.runtime import memory
 from agent.runtime.capabilities import ToolCatalog
+from agent.runtime.context import conversation_session
 from agent.runtime.pending import expired
 from agent.runtime.pending import restore as restore_pending
 from agent.runtime.prompt import build_prompt
@@ -20,6 +21,7 @@ from agent.runtime.results import TurnResult
 from agent.runtime.session import ToolSession
 from agent.runtime.turns import check_cancelled
 from models.llm import get_llm
+from models.session import session_scope
 from utils.trace import record
 
 
@@ -56,7 +58,9 @@ class NativeRuntime:
         existing execution fields; model reasoning and call arguments stay private.
         Cancellation, storage failure and generator close produce no final result.
         """
-        with self.conversation_guard(config):
+        cfg = ((config or {}).get("configurable") or {})
+        with self.conversation_guard(config), session_scope(conversation_session(
+                cfg.get("principal"), cfg.get("conversation_id"))):
             try:
                 yield from self._turn(state, config)
             finally:

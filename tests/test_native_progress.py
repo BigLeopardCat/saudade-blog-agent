@@ -103,7 +103,9 @@ def test_summary_progress_is_emitted_only_for_an_actual_summary_job(monkeypatch,
 
     async def scenario():
         response = await server.chat_stream(
-            ChatRequest(message="remember", needs_summary=needs_summary), service_request()
+            ChatRequest(message="remember", needs_summary=needs_summary, conversation_id=42,
+                        history_scope={"user_id": 7, "role": "user", "conversation_id": 42}),
+            service_request()
         )
         return "".join([frame async for frame in response.body_iterator])
 

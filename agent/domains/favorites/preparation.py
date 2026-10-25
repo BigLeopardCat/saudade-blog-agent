@@ -29,13 +29,15 @@ def _target(article_id, favorite):
         f"/notes/{article_id}", not_found_text="站内没有这篇文章，本次未准备收藏。")
     if isinstance(row, base.ToolResult):
         return row
-    if (not isinstance(row, dict)
-            or normalize_target_id(row.get("noteId")) != article_id):
+    # Public article DTOs use noteKey; favorite rows use noteId. Both must agree if present.
+    identifiers = ({normalize_target_id(row[key]) for key in ("noteId", "noteKey") if key in row}
+                   if isinstance(row, dict) else set())
+    if identifiers != {article_id}:
         return base.unavailable("未能核对文章标识，本次未生成确认卡。")
     title = row.get("noteTitle") or row.get("title")
     if not isinstance(title, str) or not title.strip():
         return base.unavailable("未读到可核对的文章标题，本次未生成确认卡。")
-    return {**row, "noteTitle": title}
+    return {**row, "noteId": article_id, "noteTitle": title}
 
 
 def _confirmation(principal, cid, workflow, spec, target):
