@@ -17,10 +17,10 @@ from agent.api.dependencies import release_slot, require_runtime, require_worker
 from agent.api.events import control_event, text_stream
 from agent.api.events import frame as sse_frame
 from agent.api.events import response as stream_response
-from agent.api.schemas import ChatRequest, ChatResponse
+from agent.api.schemas import ChatRequest, ChatResponse, SummaryUpdate
 from agent.api.turns import NativeCancelled, run_turn, stream_to_queue
 from agent.products.blog.context import conversation_session
-from agent.runtime.control import RequestControl
+from agent.runtime.control import AgentCancelled, RequestControl
 from agent.runtime.memory_scope import safe_request
 from agent.runtime.progress import StreamProgress
 from agent.summarizer import summarize
@@ -95,6 +95,24 @@ def _quota_blocked_text(limit: int) -> str:
     )
 
 
+async def _refresh_summary(req, jobs, workers):
+    """Maintain a derived cache only after the primary task has completed."""
+    if not req.needs_summary or req.summary_batch is None:
+        return None
+    try:
+        text = await jobs.submit(workers.executor, summarize, "",
+                                 req.summary_batch.messages, req.summary)
+    except (AgentCancelled, TimeoutError, RuntimeError) as error:
+        record("summarizer", "skipped", reason=type(error).__name__)
+        return None
+    if not text.strip():
+        return None
+    batch = req.summary_batch
+    record("summarizer", "coverage", base_id=batch.base_id, through_id=batch.through_id,
+           messages=len(batch.messages))
+    return SummaryUpdate(text=text.strip(), base_id=batch.base_id, through_id=batch.through_id)
+
+
 @router.post("/chat", response_model=ChatResponse)
 async def chat(req: ChatRequest, request: Request):
     runtime = require_runtime(request)
@@ -123,11 +141,6 @@ async def chat(req: ChatRequest, request: Request):
                                session_id=conversation_session(principal, req.conversation_id)),
     )
     try:
-        summary_task = None
-        if req.needs_summary:
-            summary_task = jobs.submit(
-                workers.executor, summarize, req.message, req.history, req.summary
-            )
         reply, nav_line, exec_rows = await jobs.submit(
             workers.executor,
             run_turn,
@@ -138,9 +151,7 @@ async def chat(req: ChatRequest, request: Request):
             principal,
             req.conversation_id,
         )
-        new_summary = None
-        if summary_task is not None:
-            new_summary = (await summary_task).strip() or None
+        update = await _refresh_summary(req, jobs, workers) if reply.strip() else None
 
         if not reply.strip():
             logger.warning("Agent returned empty reply for message=%r", req.message[:60])
@@ -154,7 +165,9 @@ async def chat(req: ChatRequest, request: Request):
                 final_reply = final_nav + "\n" + final_reply
 
         return ChatResponse(
-            reply=final_reply, success=True, new_summary=new_summary, executions=exec_rows
+            reply=final_reply, success=True, new_summary=update.text if update else None,
+            summary_coverage=({"base_id": update.base_id, "through_id": update.through_id}
+                              if update else None), executions=exec_rows
         )
     except Exception:
         logger.exception("Agent invocation failed")
@@ -266,13 +279,6 @@ async def chat_stream(req: ChatRequest, request: Request):
         progress = StreamProgress(loop, queue, jobs.control)
         started = progress.started
 
-        summary_task = None
-        if req.needs_summary:
-            progress.emitter.emit("正在整理会话摘要…", key="summary_start")
-            summary_task = jobs.submit(
-                workers.executor, summarize, req.message, req.history, req.summary
-            )
-
         jobs.submit(
             workers.executor,
             stream_to_queue,
@@ -365,13 +371,16 @@ async def chat_stream(req: ChatRequest, request: Request):
                 progress.mark("reply")
                 yield sse_frame("text", _RECOVERY_SENTENCE)
 
-            if summary_task is not None:
-                new_summary = (await summary_task).strip()
+            if had_output and req.needs_summary:
+                yield sse_frame("progress", "正在整理会话摘要…")
+            update = await _refresh_summary(req, jobs, workers) if had_output else None
+            if req.needs_summary:
                 yield sse_frame(
-                    "progress", "会话摘要已更新。" if new_summary else "本轮保留原有会话摘要。"
+                    "progress", "会话摘要已更新。" if update else "本轮保留原有会话摘要。"
                 )
-                if new_summary:
-                    yield sse_frame("summary", new_summary)
+            if update:
+                # Only coverage-aware hosts opt into this versioned summary payload.
+                yield sse_frame("summary", update.model_dump())
 
             yield sse_frame("done", {})
         except asyncio.CancelledError:
