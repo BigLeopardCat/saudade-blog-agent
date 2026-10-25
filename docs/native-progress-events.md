@@ -33,6 +33,8 @@ invalid observations are not treated as zero; only producer observations count.
 Native model replies use the locked LangChain streaming iterator. Plain chat
 text and tool-call prefaces can reach SSE before the model finishes. Article
 answers that need source validation remain buffered until the checks finish.
+This includes both retrieval and direct body reads. Visible references in a read
+body can supply links; they do not establish that the linked article was read.
 Chunks are aggregated with the framework message conversion; complete original
 JSON arguments are required before any tool executes. Consumer close propagates
 to nested iterators and provider responses. Streaming usage is explicitly
@@ -45,5 +47,5 @@ cancellation and no-op text are emitted once through the structured execution
 path. `agent.runtime.confirmation.frames` owns the allow-list and ordering of
 pending/confirmation frames. Browser commands and business receipts keep their
 existing protocol. The transport does not inspect planner, execute or gate
-updates and does not translate legacy graph events. Until the native runtime
-branch is integrated, the server fails explicitly when `stream_events` is absent.
+updates and does not translate legacy graph events. A runtime without
+`stream_events` is rejected explicitly.

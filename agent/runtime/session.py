@@ -140,7 +140,9 @@ class ToolSession:
             return self._result("工具操作结果已保留；其余请求尚未完成，请继续指定要处理的事项。")
         if self.calls_used:
             record("native", "handoff_stopped", reason=reason, **data)
-            if reason in ("article_body_missing", "unread_article_reference"):
+            if reason == "unread_article_reference":
+                return self._result("答复中的部分文章引用无法核实，本轮暂时无法提供可靠来源。")
+            if reason == "article_body_missing":
                 return self._result("暂时无法核实文章正文，不能据此回答文章内容。"
                                     "请重新指定要阅读的文章。")
             return self._result("本轮查询已停止，暂时没能完成请求。请明确下一步要处理的事项。")
@@ -495,7 +497,8 @@ class ToolSession:
             try:
                 model_iterator = self._model_stream(prompt)
                 buffered_chunks = []
-                stream_visible = not self.article_evidence.searched
+                stream_visible = not (self.article_evidence.searched
+                                      or self.article_evidence.documents)
                 while True:
                     try:
                         chunk = next(model_iterator)
