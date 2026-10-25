@@ -152,15 +152,11 @@
       askOther.classList.remove('active');
       if (askOtherInput) askOtherInput.value = '';
     };
-    const askSettle = (note, state, result) => {   // 按钮换成一行灰字（卡片留在流里当记录）
-      if (askTimer) { clearTimeout(askTimer); askTimer = null; }   // 有结论了就不再倒计时
-      // 有结论 = 这张卡到此为止 ⇒ 存档一并作废（见 dropAsk）。少了这一句，刷新之后
-      // 一张已经"已过期/已取消/已用过"的卡片会原样回来，而且又是可点的。
+    let askAnchor = null;
+    const askSettle = (note, state, result) => {
+      if (askTimer) { clearTimeout(askTimer); askTimer = null; }
+      // Settled cards must not be restored as actionable local drafts.
       dropAsk(askConvId);
-      // 改口输入行同时收起（20261006）：卡片一旦有结论，再留一个输入框就是"还在这儿
-      // 等你改口"的假象——而这一跳已经不作数了（该说的话请到下面输入框里说）。
-      // 收起**必须**和结算绑在一起、不能只靠调用点各自记得：结算有五个出口
-      // （ok/unknown/expired/cancel/amend），漏一处就留下一个能打字但不作数的框。
       hideAskOther();
       askBtns.innerHTML = '';
       const el = document.createElement('div');
@@ -171,10 +167,18 @@
         askBox.dataset.askState = state || 'settled';
         askBox.dataset.result = result || '';
       }
-      // 结算这一跳是整条链的**落点**：它与 click/sent 是同一次点击的收尾。result 由
-      // 调用点给（ok/unknown/expired/cancel），调用点没说就不报——宁可少报一条，
-      // 也不推断一个结论出来（推断出来的"正常"正是这一族最难查的假象）。
       if (result) reportAskStage('settle', { id: askIdOf(), result });
+      if ((state || 'settled') === 'settled') {
+        if (askAnchor && messages.contains(askAnchor)) {
+          const previous = askAnchor.querySelector('.chat-approval-result');
+          if (previous) previous.remove();
+          const record = document.createElement('div');
+          record.className = 'chat-approval-result';
+          record.textContent = note;
+          askAnchor.appendChild(record);
+        }
+        askBox.classList.remove('active');
+      }
     };
     // ── 卡片的结算态（20260924）──────────────────────────────────────────
     // 此前这张卡只有两种命：可点，或者"已确认"。而"已确认"是**点击那一刻**写下的
@@ -325,31 +329,14 @@
         return;
       }
       const token = String(ask.token || '');
-      // 已就位（同一枚令牌 + 在场 + 已激活 + **按钮还在** + **在末位**）⇒ 不动它。
-      // "按钮还在"这一条不能省：卡片被 hideAsk（用户改口打字）结算成"已取消"后仍是
-      // active 且令牌相同，此时若再来同一枚令牌的确认帧（反射重跑/重发），只看前三
-      // 条的判据会把它当成"已就位"而跳过重建 ⇒ 屏幕上是"已取消"的灰字，内存里却有
-      // 一个可点的待办（点了没反应）。已结算的卡片必然没有 data-ask-value 按钮。
-      // 20260924 补 askState：显式区分"可点/在途/已结算"，也让回滚能强制重建按钮
-      // （askRollback 把 askState 抹掉一格，下面的判据随即不成立）。
-      // ── 20261001 补"在末位"（用户报"卡片怎么飞上面去了"）────────────────────
-      // **待主人拍板期间，卡片必须是消息流的末位**：等主人决定这件事本身就意味着
-      // "最新的东西就是这张卡"。此前只校验 parentNode，卡片被挂上之后再渲染进来的
-      // 内容就落在它**下面**，屏幕上的顺序成了"用户消息 → 卡片 → 回复"。
-      // 生产实证（logs/frontend/monitor.log，20261001）：
-      //   02:40:45.922 stage=card id=d451cad4（挂在 / 的对话流末位）
-      //   02:40:46.937 stage=card id=d451cad4 restored=1（用户在 /dashboard/users 整页重开）
-      // 卡片由存档接回（restoreAsk）的那一刻，消息流里只有**已渲染的那部分**历史
-      // （本地缓存桶与 DB 那一趟拉取的先后差）；接回之后 DB 那一趟补齐的气泡经
-      // appendMsg 挂在末尾 = 卡片下面 —— 而 reconcileDOM 的"位置对齐"按 items 顺序
-      // 挪气泡，chat-keep 的卡片在它眼里是"空气"（contentRef 跳过它），于是这个错序
-      // 永远不会被自愈。判据只看"卡片后面还有没有真内容"，不猜是哪一路渲染迟到了。
+      // A live card follows the current round; settled status belongs to its source message.
       if (askBox.dataset.askToken === token
           && askBox.dataset.askState === 'live'
           && askBox.classList.contains('active')
           && askBox.parentNode === messages
           && !!askBtns.querySelector('button[data-ask-value]')
           && askAtEnd()) return;
+      if (askBox.dataset.askToken !== token) askAnchor = null;
       askBox.dataset.askToken = token;
       askBox.dataset.askId = String(ask.id || '');   // 埋点用（非凭据，见 askIdOf）
       setAskQuestion(ask.q);
@@ -372,12 +359,10 @@
         b.setAttribute('data-ask-value', op.value || 'yes');
         askBtns.appendChild(b);
       });
-      // 挂到消息流末位。切会话/拉历史会把 .chat-messages 清空（children 被整段
-      // 重建），而 #chat-ask 的节点引用还在 ctx.dom 里——appendChild 顺手把它接
-      // 回去（节点已脱离文档时 appendChild 就是"重新挂载"），这是它唯一的复活点。
-      // 另外它在消息流里必须带 chat-keep 类（chat-render.js 模板已带）：reconcileDOM
-      // 的孤儿清理会删掉一切"无 data-mid 且非在途气泡"的节点，没这个标记的卡片
-      // 会在弹卡后的第一次 reconcile 里被当成孤儿删掉（20260923 事故本体）。
+      const anchors = messages.querySelectorAll('.chat-msg.agent');
+      if (!askAnchor || !messages.contains(askAnchor)) {
+        askAnchor = anchors.length ? anchors[anchors.length - 1] : null;
+      }
       messages.appendChild(askBox);
       askBox.classList.add('active');
       delete askBox.dataset.result;
