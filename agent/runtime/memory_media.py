@@ -1,6 +1,7 @@
 """Keep recoverable image references in dialogue, never inline media payloads."""
 
 import hashlib
+import uuid
 
 from langchain_core.messages import HumanMessage, ToolMessage
 
@@ -61,3 +62,18 @@ def tool_messages(message, text, call_id):
         *({"type": "image_url", "image_url": {"url": url}} for url in urls),
     ], additional_kwargs={"memory_context": True})
     return [receipt, attachment]
+
+
+def stage(messages, transient):
+    """Checkpoint compact references; keep current vision input in request memory."""
+    staged = []
+    for message in messages:
+        if image_urls(message.content):
+            message = message.model_copy(update={"id": message.id or uuid.uuid4().hex})
+            transient[message.id] = message
+        staged.append(compact(message))
+    return staged
+
+
+def hydrate(messages, transient):
+    return [transient.get(message.id, message) for message in messages]

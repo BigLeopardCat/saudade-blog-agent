@@ -49,6 +49,19 @@ class ArticleEvidence:
         self.candidates: dict[int, str] = {}
         self.references: set[tuple[str, int]] = set()
 
+    def snapshot(self):
+        return {**vars(self), "references": sorted(self.references)}
+
+    @classmethod
+    def restore(cls, state):
+        evidence = cls()
+        for key in ("searched", "found", "empty", "failed"):
+            setattr(evidence, key, bool(state[key]))
+        for key in ("documents", "candidates"):
+            setattr(evidence, key, {int(ident): title for ident, title in state[key].items()})
+        evidence.references = {tuple(row) for row in state["references"]}
+        return evidence
+
     def observe(self, name: str, args: dict, value) -> None:
         kind = getattr(value, "kind", "ok")
         if name in SEARCH_TOOLS or name == "search_notes":

@@ -88,4 +88,6 @@ def test_cancel_during_model_call_is_seen_before_persistence():
     selected = runtime(BlockingModel([]), [])
     with pytest.raises(AgentCancelled):
         list(selected.stream_events({"messages": [HumanMessage(content="停止")]}, config(stop)))
-    assert selected.get_state(config(stop)).values == {}
+    saved = selected.get_state(config(stop)).values
+    assert not saved.get("messages") and not saved.get("pending_action")
+    assert not saved.get("receipts")

@@ -17,11 +17,10 @@ from langgraph.checkpoint.memory import InMemorySaver
 from agent import confirm
 from agent.domains.favorites import transactions
 from agent.principal import SOURCE_ASSERTION, Principal
-from agent.runtime import writes
+from agent.runtime import approval, writes
 from agent.runtime.budget import BudgetLimits, RequestBudget, budget_scope
 from agent.runtime.capabilities import ToolCatalog
 from agent.runtime.confirmation import cancel
-from agent.runtime.continuation import ToolContinuation
 from agent.runtime.native import NativeRuntime
 from agent.runtime.native_store import NativeConversationStore
 from agent.runtime.results import TurnResult
@@ -138,7 +137,7 @@ def test_mixed_preparations_wait_for_separate_approvals_and_preserve_native_exch
     state, _ = backend
     first = runtime(Model())
     proposal, grant, original = prepare(first)
-    cursor = first.store.load(config()).continuation
+    cursor = first.store.load(config()).approval
     assert cursor and not state["writes"] and not state["read"]
     assert "取消将停止后续处理" in proposal.execution["pending_confirm"]["q"]
     assert not any(path.endswith("/notifications") for _, path in state["requests"])
@@ -156,12 +155,12 @@ def test_mixed_preparations_wait_for_separate_approvals_and_preserve_native_exch
     replay = run(rebuilt, grant=grant)
     assert replay.execution["receipts"] and not replay.execution.get("pending_confirm")
     assert rebuilt.store.load(config()).pending == pending.pending
-    assert rebuilt.store.load(config()).continuation == pending.continuation
+    assert rebuilt.store.load(config()).approval == pending.approval
     done = run(rebuilt, grant=next_grant)
     assert done.reply == "已收藏文章，通知也标记为已读了。"
     assert len(state["writes"]) == 2 and state["read"]
     assert not rebuilt.store.load(config()).has_pending
-    assert rebuilt.store.load(config()).continuation is None
+    assert rebuilt.store.load(config()).approval is None
     assert_preserved_exchange(rebuilt_model.prompts[0], original.prompts[-1], next_token)
     assert rebuilt_model.menus[-1] == original.menus[-1]
     assert next_token not in str(rebuilt.store.load(config()).messages)
@@ -193,7 +192,7 @@ def test_cancel_stops_the_whole_suspended_task_and_stale_approval_cannot_write(b
             AIMessage(content="", tool_calls=[call("cancel_pending_operation", "cancel")]))
         selected.model_factory = lambda **_: model
         assert run(selected, "取消剩下的任务").execution["pending_event"]
-    assert selected.store.load(config()).continuation is None
+    assert selected.store.load(config()).approval is None
     selected.model_factory = lambda **_: pytest.fail("cancelled task resumed")
     assert not run(selected, grant=grant).execution["receipts"]
     assert not state["writes"] and not state["read"]
@@ -203,10 +202,10 @@ def test_chat_preserves_cursor_but_replacement_discards_older_remaining_calls(ba
     state, _ = backend
     selected = runtime(Model())
     _, grant, _ = prepare(selected)
-    cursor = selected.store.load(config()).continuation
+    cursor = selected.store.load(config()).approval
     selected.model_factory = lambda **_: Model(AIMessage(content="你好～"))
     run(selected, "先聊聊天")
-    assert selected.store.load(config()).continuation == cursor
+    assert selected.store.load(config()).approval == cursor
     replacement, replacement_grant, _ = prepare(selected, {**FAVORITE, "args": {
         "action": "add", "article_id": 20}})
     assert replacement.execution["pending_event"]["jti"] == grant["jti"]
@@ -227,7 +226,7 @@ def test_unknown_write_retains_cursor_without_advancing_or_retrying_business_io(
     selected.model_factory = lambda **_: pytest.fail("unknown write resumed task")
     for _ in range(2):
         assert not run(selected, grant=grant).execution["receipts"]
-    assert selected.store.load(config()).continuation == before.continuation
+    assert selected.store.load(config()).approval == before.approval
     assert selected.store.load(config()).pending == before.pending
     assert not state["writes"]
 
@@ -237,16 +236,16 @@ def test_execution_checkpoint_failure_recovers_from_ledger_without_duplicate_wri
     state, _ = backend
     selected = runtime(Model())
     _, grant, _ = prepare(selected)
-    original = selected.store.save_turn
+    original = approval.review
 
-    def fail(*args, **kwargs):
+    def fail(state, config):
         raise OSError("checkpoint unavailable")
 
-    monkeypatch.setattr(selected.store, "save_turn", fail)
+    monkeypatch.setattr(approval, "review", fail)
     with pytest.raises(OSError, match="checkpoint unavailable"):
         run(selected, grant=grant)
-    assert len(state["writes"]) == 1 and selected.store.load(config()).continuation
-    monkeypatch.setattr(selected.store, "save_turn", original)
+    assert len(state["writes"]) == 1 and selected.store.load(config()).approval
+    monkeypatch.setattr(approval, "review", original)
     next_card = run(selected, grant=grant)
     assert next_card.execution["pending_confirm"] and len(state["writes"]) == 1
 
@@ -268,7 +267,7 @@ def test_failure_after_resumed_dispatch_cannot_repeat_browser_or_business_action
     assert "后续处理暂时中断" in interrupted.reply
     assert sum("cmd" in row for row in interrupted.execution["receipts"]) == 1
     saved = selected.store.load(config())
-    assert saved.continuation is None and not saved.has_pending
+    assert saved.approval is None and not saved.has_pending
     assert any(message.name == "add_favorite" for message in saved.messages
                if isinstance(message, ToolMessage))
     selected.model_factory = lambda **_: pytest.fail("approval replay resumed dispatch")
@@ -304,14 +303,13 @@ def test_current_approval_budget_is_shared_by_resumed_tools(backend):
 def test_cursor_binding_rejects_changed_role_user_conversation_or_operation(backend):
     selected = runtime(Model())
     _, grant, _ = prepare(selected)
-    cursor = selected.store.load(config()).continuation
-    assert ToolContinuation.restore(cursor, grant, config())
+    cursor = selected.store.load(config()).approval
+    assert approval.matches(cursor, grant, config())
     for cfg in (config(principal=Principal(7, "superadmin", SOURCE_ASSERTION)),
                 config(user_id=8, principal=Principal(8, "user", SOURCE_ASSERTION)),
                 config(conversation_id=43, thread_id="conv_43")):
-        assert ToolContinuation.restore(cursor, grant, cfg) is None
-    assert ToolContinuation.restore(cursor, {**grant, "jti": "f" * 32}, config()) is None
-    assert ToolContinuation.restore({**cursor, "remaining": []}, grant, config()) is None
+        assert not approval.matches(cursor, grant, cfg)
+    assert not approval.matches(cursor, {**grant, "jti": "f" * 32}, config())
 
 
 def test_changed_role_can_execute_its_valid_grant_but_cannot_restore_old_context(backend):
@@ -322,7 +320,7 @@ def test_changed_role_can_execute_its_valid_grant_but_cannot_restore_old_context
     result = run(selected, grant=grant,
                  cfg=config(principal=Principal(7, "superadmin", SOURCE_ASSERTION)))
     assert result.execution["receipts"] and len(state["writes"]) == 1
-    assert selected.store.load(config()).continuation is None
+    assert selected.store.load(config()).approval is None
     assert not state["read"]
 
 
@@ -346,7 +344,7 @@ def test_article_evidence_and_read_progress_survive_confirmation_without_rereadi
     assert reads == [19] and "/article/19" in result.reply
 
 
-def test_inline_images_are_compacted_in_the_private_cursor_and_can_be_referenced(backend):
+def test_inline_images_are_compacted_in_all_framework_checkpoints_and_can_be_referenced(backend):
     raw = "data:image/png;base64,PRIVATE_INLINE_IMAGE"
     model = Model(LOAD, AIMessage(content="", tool_calls=[FAVORITE]))
     selected = runtime(model)
@@ -354,9 +352,13 @@ def test_inline_images_are_compacted_in_the_private_cursor_and_can_be_referenced
         {"type": "text", "text": "看完这张图后收藏文章19。"},
         {"type": "image_url", "image_url": {"url": raw}},
     ])]}, config()))
-    cursor = selected.store.load(config()).continuation
+    cursor = selected.store.load(config()).approval
     assert raw not in str(cursor) and raw not in str(selected.store.load(config()).messages)
-    assert "memory_images" in str(cursor) and "get_conversation_image" in str(cursor)
+    checkpoints = list(selected.saver.list(None))
+    assert checkpoints and all(raw not in str(item.checkpoint) for item in checkpoints)
+    assert any("memory_images" in str(item.checkpoint) for item in checkpoints)
+    assert any("get_conversation_image" in str(item.checkpoint) for item in checkpoints)
+    assert raw in str(model.prompts[0])
 
 
 def test_expired_card_clears_its_cursor_without_dispatching_queued_operations(backend, monkeypatch):
@@ -368,7 +370,7 @@ def test_expired_card_clears_its_cursor_without_dispatching_queued_operations(ba
     selected.model_factory = lambda **_: Model(AIMessage(content="你好。"))
     run(selected, "你好")
     saved = selected.store.load(config())
-    assert not saved.has_pending and saved.continuation is None
+    assert not saved.has_pending and saved.approval is None
     assert not state["writes"] and not state["read"]
 
 
@@ -406,7 +408,7 @@ def test_closing_confirmed_stream_preserves_write_facts_without_replaying_contin
     assert next(stream).content == "已经收藏好啦。"
     stream.close()
     saved = selected.store.load(config())
-    assert saved.continuation is None and not saved.has_pending
+    assert saved.approval is None and not saved.has_pending
     selected.model_factory = lambda **_: pytest.fail("closed continuation restarted")
     replay = run(selected, grant=grant)
     assert replay.execution["receipts"] and len(state["writes"]) == 1
@@ -421,3 +423,83 @@ def test_incomplete_later_tool_request_does_not_deny_the_completed_write(backend
     result = run(selected, grant=grant)
     assert "未执行新的操作" in result.reply and result.execution["receipts"]
     assert len(state["writes"]) == 1 and not state["read"]
+
+
+def test_repeated_interjections_preserve_the_saved_agent_exchange(backend):
+    state, _ = backend
+    selected = runtime(Model())
+    _, grant, _ = prepare(selected)
+    child_config = {"configurable": {"thread_id": "conv_42", "checkpoint_ns": "agent"}}
+    checkpoint_id = selected.saver.get_tuple(child_config).checkpoint["id"]
+    for _ in range(3):
+        selected.model_factory = lambda **_: Model(AIMessage(content="你好～"))
+        assert run(selected, "先聊一下").reply == "你好～"
+        assert selected.get_state(config()).next == ("approval",)
+        assert selected.saver.get_tuple(child_config).checkpoint["id"] == checkpoint_id
+    selected.model_factory = lambda **_: Model(AIMessage(content="完成。"))
+    next_card = run(selected, grant=grant)
+    assert next_card.execution["pending_confirm"] and len(state["writes"]) == 1
+
+
+def test_checkpoint_failure_after_durable_facts_does_not_repeat_dispatch(backend, monkeypatch):
+    state, _ = backend
+    selected = runtime(Model())
+    _, grant, _ = prepare(selected)
+    original = selected.saver.put
+
+    def fail(config, checkpoint, metadata, versions):
+        if checkpoint["channel_values"].get("approved_result"):
+            raise OSError("checkpoint unavailable")
+        return original(config, checkpoint, metadata, versions)
+
+    monkeypatch.setattr(selected.saver, "put", fail)
+    with pytest.raises(OSError, match="checkpoint unavailable"):
+        run(selected, grant=grant)
+    monkeypatch.setattr(selected.saver, "put", original)
+    assert not selected.store.load(config()).has_pending
+    assert len(state["writes"]) == 1 and not state["read"]
+    assert not any(path.endswith("/notifications") for _, path in state["requests"])
+    selected.model_factory = lambda **_: pytest.fail("consumed approval resumed dispatch")
+    replay = run(selected, grant=grant)
+    assert replay.execution["receipts"] and len(state["writes"]) == 1
+
+
+def test_tool_image_attachments_remain_recoverable_without_splitting_replayed_calls(backend):
+    raw = "data:image/png;base64,PRIVATE_TOOL_IMAGE"
+    reads = []
+
+    def inspect_diagram() -> tuple:
+        reads.append("diagram")
+        return ([{"type": "text", "text": "图中是三个节点"},
+                 {"type": "image_url", "image_url": {"url": raw}}], {"kind": "ok"})
+
+    tool = StructuredTool.from_function(inspect_diagram, description="Inspect diagram.",
+                                        response_format="content_and_artifact")
+    model = Model(LOAD, AIMessage(content="", tool_calls=[
+        call("inspect_diagram", "diagram"), FAVORITE, NOTICE]))
+    selected = runtime(model, catalog=ToolCatalog(read_tools={tool.name: tool}))
+    proposal = run(selected, "看图后收藏文章19，再标记通知已读")
+    grant = confirm.verify(proposal.execution["pending_confirm"]["token"], 7, 42)
+    checkpoints = list(selected.saver.list(None))
+    assert all(raw not in str(item.checkpoint) for item in checkpoints)
+    assert any("memory_images" in str(item.checkpoint) for item in checkpoints)
+    final_model = Model(AIMessage(content="看完图了，操作也都完成。"))
+    selected.model_factory = lambda **_: final_model
+    second = run(selected, grant=grant)
+    next_grant = confirm.verify(second.execution["pending_confirm"]["token"], 7, 42)
+    assert run(selected, grant=next_grant).reply == "看完图了，操作也都完成。"
+    assert reads == ["diagram"] and raw not in str(final_model.prompts)
+
+
+def test_discarding_an_interjection_preserves_the_original_approval(backend):
+    from agent import checkpoint
+
+    state, _ = backend
+    selected = runtime(Model())
+    _, grant, _ = prepare(selected, FAVORITE)
+    selected.model_factory = lambda **_: Model(AIMessage(content="你好～"))
+    run(selected, "先聊一下")
+    assert checkpoint.drop_last_user_turn(selected, 42, "先聊一下")["dropped"]
+    selected.model_factory = lambda **_: Model(AIMessage(content="收藏完成。"))
+    assert run(selected, grant=grant).reply == "收藏完成。"
+    assert len(state["writes"]) == 1
