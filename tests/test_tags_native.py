@@ -222,7 +222,8 @@ def test_noop_and_cancel_do_not_write(tags, tmp_path, monkeypatch):
     assert not result.get("receipts") and tags["writes"] == 0
 
 
-def test_native_roundtrip_does_not_invoke_legacy_or_model_on_confirm(tags, tmp_path, monkeypatch):
+def test_native_roundtrip_continues_after_confirmation_and_replays_once(
+        tags, tmp_path, monkeypatch):
     from _admin_actions_support import confirmed_roundtrip
 
     confirmed_roundtrip(

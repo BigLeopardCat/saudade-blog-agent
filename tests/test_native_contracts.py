@@ -19,7 +19,7 @@ def narration_model(monkeypatch):
     monkeypatch.setattr("agent.runtime.narration.get_llm", lambda **_: Model())
 
 
-def test_confirmed_write_evaluates_narration_and_replay_without_another_write(
+def test_confirmed_write_evaluates_continuation_and_replay_without_another_write(
     monkeypatch, tmp_path
 ):
     responses = iter([
@@ -27,6 +27,7 @@ def test_confirmed_write_evaluates_narration_and_replay_without_another_write(
                                           "args": {}, "id": "load"}]),
         AIMessage(content="", tool_calls=[{"name": "prepare_favorite_change",
                   "args": {"action": "add", "article_id": 19}, "id": "prepare"}]),
+        AIMessage(content="操作完成。"),
     ])
 
     class Model:
@@ -118,6 +119,7 @@ def test_native_outcome_suite_uses_verified_identity_and_redacts_tokens(monkeypa
         call("load_pending_info_tools", {}), call("cancel_pending_operation", {}),
         call("load_notifications_info_tools", {}),
         call("prepare_notification_read", {"scope": "all_unread"}),
+        AIMessage(content="已标记本次确认的通知为已读。"),
         call("get_unread_summary", {}), AIMessage(content="通知2条，站内信2封，合计4条。"),
         call("load_messages_info_tools", {}), call("list_my_messages", {}),
         AIMessage(content="收件箱里有《欢迎来信》和《回访来信》。"),
@@ -125,6 +127,7 @@ def test_native_outcome_suite_uses_verified_identity_and_redacts_tokens(monkeypa
         AIMessage(content="这封信的内容是：仅单封正文。"),
         call("load_messages_info_tools", {}),
         call("prepare_message_read", {"scope": "all_unread"}),
+        AIMessage(content="已标记本次确认的信件为已读。"),
     ])
 
     class Model:

@@ -409,7 +409,7 @@ def test_crash_after_write_leaves_unknown_intent_instead_of_repeating(
         ("comment", "delete"),
     ],
 )
-def test_hybrid_native_preparation_and_confirmation_use_no_legacy_or_later_model(
+def test_native_confirmation_continues_after_execution_and_replays_once(
     moderation, monkeypatch, tmp_path, resource, action
 ):
     from _admin_actions_support import confirmed_roundtrip

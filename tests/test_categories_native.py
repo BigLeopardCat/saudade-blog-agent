@@ -263,7 +263,7 @@ def test_maximum_create_keeps_confirmation_token_bounded(categories):
     assert "before" not in grant(result)["specs"][0]["args"]
 
 
-def test_native_roundtrip_never_enters_legacy_or_calls_a_model_on_confirm(
+def test_native_roundtrip_continues_after_confirmation_and_replays_once(
     categories, tmp_path, monkeypatch
 ):
     from _admin_actions_support import confirmed_roundtrip
