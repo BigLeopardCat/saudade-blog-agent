@@ -2,10 +2,109 @@
 
 import json
 
+import pytest
 from langchain_core.messages import AIMessage
 
 from eval import native_contracts
 from eval.native_contracts import golden_trace
+
+
+@pytest.fixture(autouse=True)
+def narration_model(monkeypatch):
+    class Model:
+        def invoke(self, prompt, **kwargs):
+            return AIMessage(content="操作完成。", usage_metadata={
+                "input_tokens": 20, "output_tokens": 5, "total_tokens": 25})
+
+    monkeypatch.setattr("agent.runtime.narration.get_llm", lambda **_: Model())
+
+
+def test_confirmed_write_evaluates_narration_and_replay_without_another_write(
+    monkeypatch, tmp_path
+):
+    responses = iter([
+        AIMessage(content="", tool_calls=[{"name": "load_favorites_info_tools",
+                                          "args": {}, "id": "load"}]),
+        AIMessage(content="", tool_calls=[{"name": "prepare_favorite_change",
+                  "args": {"action": "add", "article_id": 19}, "id": "prepare"}]),
+    ])
+
+    class Model:
+        def bind_tools(self, *args, **kwargs):
+            return self
+
+        def invoke(self, prompt, **kwargs):
+            return next(responses)
+
+    monkeypatch.setattr("agent.runtime.native.get_llm", lambda **_: Model())
+    monkeypatch.setattr(golden_trace, "trace_root", lambda: str(tmp_path / "traces"))
+    report = native_contracts.run(["favorite_confirm"])
+    row = report["cases"][0]
+    assert row["passed"] and row["business_writes"] == 1
+    assert [turn["model_calls"] for turn in row["rounds"]] == [2, 1, 1]
+    assert [turn["text"] for turn in row["rounds"]][1:] == ["操作完成。", "操作完成。"]
+
+
+def test_preflight_stops_at_first_failure_without_counting_unattempted_cases(monkeypatch):
+    calls = []
+
+    def sample(name, *args):
+        calls.append(name)
+        return {"case": name, "evaluated": True, "passed": False, "rounds": []}, []
+
+    monkeypatch.setattr(native_contracts, "_sample", sample)
+    report = native_contracts.run(["chat", "unread_counts"], fail_fast=True)
+    assert calls == ["chat"] and report["stopped_early"]
+    assert report["planned_samples"] == 2
+    assert report["scores"][-1] == {"case": "unread_counts", "samples": 0,
+                                    "evaluated": 0, "passed": 0}
+
+
+def test_oled_fixture_runs_real_tool_and_never_uses_the_real_device_api():
+    from agent.domains import device_actions
+    from eval.device_fixture import backend
+
+    with backend() as state:
+        result = device_actions.device_oled_display.invoke(
+            {"name": "device_oled_display", "args": {"text": "你好，世界"},
+             "id": "fixture-display", "type": "tool_call"},
+            config={"configurable": {"user_id": 7, "principal": native_contracts._principal()}},
+        )
+        assert result.artifact["receipts"][0]["device_status"] == "queued"
+        assert [request.method for request in state["requests"]] == ["PUT", "GET"]
+        assert not state["unsupported_reads"]
+
+
+def test_article_discovery_counts_actual_native_tool_calls(monkeypatch, tmp_path):
+    responses = iter([
+        AIMessage(content="", tool_calls=[{"name": "search_notes",
+                   "args": {"keyword": "区块链"}, "id": "search"}]),
+        AIMessage(content="找到《区块链笔记》：https://saudade.site/article/23"),
+    ])
+
+    class Model:
+        def bind_tools(self, *args, **kwargs):
+            return self
+
+        def invoke(self, prompt, **kwargs):
+            return next(responses)
+
+    monkeypatch.setattr("agent.runtime.native.get_llm", lambda **_: Model())
+    monkeypatch.setattr(golden_trace, "trace_root", lambda: str(tmp_path / "traces"))
+    report = native_contracts.run(["article_discovery"])
+    assert report["cases"][0]["passed"], report["cases"]
+
+
+def test_tool_call_stats_excludes_requested_calls_and_other_nodes(monkeypatch):
+    events = [
+        {"node": "native", "event": "tool_requested", "name": "not_executed"},
+        {"node": "native", "event": "call", "name": "search_notes", "round": 0},
+        {"node": "native", "event": "call", "name": "get_article_detail", "round": 1},
+        {"node": "planner", "event": "call", "name": "legacy_plan", "round": 2},
+    ]
+    monkeypatch.setattr("utils.trace.events_of", lambda _: events)
+    assert golden_trace.tool_call_stats("fixture") == (["search_notes", "get_article_detail"], 2)
+    assert golden_trace.tool_call_stats(None) == ([], 0)
 
 
 def test_native_outcome_suite_uses_verified_identity_and_redacts_tokens(monkeypatch, tmp_path):
