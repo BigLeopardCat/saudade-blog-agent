@@ -1,6 +1,9 @@
 """The evaluation factory shares native startup and closes its owned resources."""
 
+import subprocess
+import sys
 from contextlib import ExitStack
+from pathlib import Path
 
 import pytest
 
@@ -98,3 +101,12 @@ def test_runner_failed_build_releases_its_resources(monkeypatch):
         assert events == ["closed"] and run_golden._runtime is None
         run_golden.close_agent()
         assert events == ["closed"]
+
+
+@pytest.mark.parametrize("entry", ["run_golden.py", "golden_full_run.py"])
+def test_legacy_cli_uses_its_checkout_and_supports_help(entry, tmp_path):
+    root = Path(__file__).resolve().parent.parent
+    result = subprocess.run([sys.executable, str(root / "eval" / entry), "--help"],
+                            cwd=tmp_path, capture_output=True, text=True, timeout=30)
+    assert result.returncode == 0, result.stderr
+    assert "usage:" in result.stdout and "--help" in result.stdout
