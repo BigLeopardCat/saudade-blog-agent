@@ -1,11 +1,13 @@
 # -*- coding: utf-8 -*-
-"""Run real-model request evaluations against a configured blog.
+"""Shared golden request builders, multi-round driver and historical judgments.
 
 The runner checks corpus provenance, uses the service producer, and validates
 replies, commands, confirmations and receipts against declared JSONL assertions.
 It requires backend access and model credentials; offline pytest tests its
 contracts with fixtures. Production writes require explicit opt-in.
-Historical reports remain readable; the executable runtime is native.
+The production HTTP baseline is ``python -m eval.online_baseline``. The legacy
+CLI and basic.jsonl remain available for archived comparisons; their planner-era
+premises are not a calibrated native baseline.
 """
 import argparse
 import asyncio
@@ -47,6 +49,8 @@ from agent.api.turns import stream_to_queue as _run_agent_stream_to_queue
 from agent.principal import Principal  # 管理助手用例的调用者身份（20260921）
 from agent.transport import command_wire
 from eval.golden_runtime import close_agent, ensure_agent
+from eval.native_assertions import check as check_native
+from eval.native_assertions import command_matches
 
 # uid=0 哨兵的**真值源**（`DENIAL_FAMILY` 第 ⑦ 支由它派生，见那一支的头注）——
 # 不抄字面进判据：哨兵改文案时，判据跟着改，不会静默退化成一条谁也命中不了的死正则。
@@ -254,15 +258,10 @@ def build_request(case: dict, rnd: dict | None = None) -> ChatRequest:
 
 
 def build_principal(case: dict) -> "Principal":
-    """用例 dict → 本轮调用者身份（20260921 管理助手用例）。
+    """Historical direct-driver identity; it does not assert a verified caller.
 
-    **身份不走请求体**（与生产一致）：生产上 role 只来自 Rust 签的
-    `X-Agent-Assertion` 头，body 里的角色一律不信；golden 直调内部链路，
-    没有那层 HTTP，所以在这里显式构造——形状与 server 解析断言后的
-    `Principal` 完全一致（uid 取自 `context.user_id`）。
-
-    缺省（用例不写 `context.role`）= `role=None` = 零权限，**既有 78 条用例
-    行为不变**（它们的 context 里本来就没有 role 字段）。
+    Production HTTP evaluations derive identity from the signed request and
+    verify it in the service trace, independently of this legacy fixture.
     """
     ctx = case.get("context", {})
     return Principal(uid=ctx.get("user_id", 0), role=ctx.get("role"),
@@ -462,7 +461,7 @@ def run_one(req: ChatRequest, principal: "Principal | None" = None,
             "error": error}
 
 
-def run_case(case: dict, *, run_id: str = "", suffix: str = "") -> dict:
+def run_case(case: dict, *, run_id: str = "", suffix: str = "", turn_runner=None) -> dict:
     """跑完一条用例的**全部轮次**——**唯一的多轮驱动**（20260925）。
 
     20260925 之前，`run_one` 只发一轮，于是 11 条弹卡用例**全部只到"弹了卡 + 零写"**：
@@ -551,7 +550,7 @@ def run_case(case: dict, *, run_id: str = "", suffix: str = "") -> dict:
         if _prod_on and i > 0 and not (rnd["context"] or {}).get("history"):
             req.history = _prod_hist[-PROD_HISTORY_LIMIT:]
         t0 = time.time()
-        res = run_one(req, principal,
+        res = (turn_runner or run_one)(req, principal,
                       trace_ctx=({"run": run_id, "case": case["id"] + suffix} if run_id else None),
                       confirm_token=req.confirm_token, confirm_pick=req.confirm_pick,
                       # 线程坐标（批 6）：**每轮都按 (用例, 重复, 臂) 重算**，而三条臂读的是
@@ -1773,6 +1772,8 @@ from corpus_provenance import (
 # **加新断言键时这几张表要一起改**——这是刻意的摩擦：漏改会在 CI 上红，而不是静默失效。
 # 注意：本注释块里刻意**不写出取键的代码形态**（那会被 ① 的反射扫成"读了一个表外的键"）。
 GOLD_ASSERT_KEYS = frozenset({
+    "require_observations", "require_confirm_specs", "forbid_runtime_stop",
+    "forbid_business_write", "require_answer_value",
     # 回复文本
     "nonempty", "text_contains", "text_any_regex", "text_not_contains",
     "text_not_match_regex", "not_contains_exempt_quote",
@@ -1945,7 +1946,7 @@ def check_gold(gold: dict, result: dict, *, docs=None, user_input: str = "",
     """
     text = result["text"]
     commands = result["commands"]
-    fails: list[str] = []
+    fails: list[str] = check_native(gold, result)
 
     if gold.get("nonempty", True) and not text.strip():
         fails.append("回复为空")
@@ -1959,13 +1960,9 @@ def check_gold(gold: dict, result: dict, *, docs=None, user_input: str = "",
         ):
             fails.append(f"{pre} 命令内容不符（期望含 {gold['require_cmd_contains']}）")
 
-    # 20260924：**多条命令都要出现**（`require_cmd_contains` 是单串，一个用例只能锁
-    # 一条命令）。动机 = multi_turn_redirect 那条"把 X 换成 Y"只断了新开的 Y、
-    # 没断旧开的 X 关掉（`workflow_defs/` 明写"把X换成Y＝两条 spec 同轮"）——半截执行
-    # 与完整执行在那个断言下同分，于是"只开雨不关樱花"能长期绿。每个模式都必须
-    # 命中至少一条命令帧（是全称，不是任一）。
+    # Every requested action must appear; normalize equivalent navigation URLs.
     for pat in gold.get("require_cmd_all", []):
-        if not any(pat in c for c in commands):
+        if not any(command_matches(pat, c) for c in commands):
             fails.append(f"命令帧缺 {pat!r}（本轮命令：{commands}）")
 
     for pre in gold.get("forbid_cmd_prefixes", []):
