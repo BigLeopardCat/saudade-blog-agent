@@ -230,8 +230,7 @@ def _quiesce(tag: str) -> None:
 
 _BLOCKING = (
     "# 把建表那一步换回**阻塞版**（20261018 上线时的那个版本，逐字）\n"
-    "def _blocking(saver, pool=None):\n"
-    "    pool = C._pool_for(C.settings.checkpoint_dsn) if pool is None else pool\n"
+    "def _blocking(saver, *, pool):\n"
     "    with pool.connection() as conn:\n"
     "        conn.execute('SELECT pg_advisory_lock(%s)', (C._SETUP_LOCK,))\n"
     "        try:\n"
@@ -246,18 +245,24 @@ def _child_code(blocking: bool) -> str:
     """子进程源码。A/B 两臂**只差中间那一段 monkeypatch**，其余逐字相同。"""
     return (
         "import os, time\n"
+        "from contextlib import ExitStack\n"
         "import agent.checkpoint as C\n"
         # 预热：把最慢的几步（模块 import + 开池）都挪到同步点之前。`build_checkpointer`
         # 里那句 `importlib.import_module('langgraph.checkpoint.postgres')` 尤其重
         # ——不预热的话它的耗时差会盖过 CIC 那个窗口，红基线就又复现不出来了。
         "import langgraph.checkpoint.postgres\n"
-        "C._pool_for(C.settings.checkpoint_dsn)\n"
+        "pool = C._make_pool(C.settings.checkpoint_dsn)\n"
+        "resources = ExitStack()\n"
+        "C._make_pool = lambda dsn: pool\n"
         + (_BLOCKING if blocking else "")
         + "open(os.environ['CKPT_WARM'], 'w').write('1')\n"
         "while not os.path.exists(os.environ['CKPT_GO']):\n"
         "    time.sleep(0.005)\n"
-        "s = C.build_checkpointer()\n"
-        "print('OK' if s is not None else 'NONE')\n"
+        "try:\n"
+        "    s = C.build_checkpointer(resources=resources)\n"
+        "    print('OK' if s is not None else 'NONE')\n"
+        "finally:\n"
+        "    resources.close()\n"
     )
 
 

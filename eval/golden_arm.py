@@ -1,6 +1,7 @@
 """Select supported runtimes and isolate their request-level evaluation reports."""
 
 import os
+from contextlib import ExitStack
 
 ARM_NATIVE = "native"
 KNOWN_ARMS = (ARM_NATIVE,)
@@ -31,9 +32,9 @@ def is_baseline_arm(arm: str) -> bool:
     return arm == ARM_NATIVE
 
 
-def build_agent(arm: str | None = None):
+def build_agent(arm: str | None = None, *, resources: ExitStack):
     arm = arm or arm_name()
     if arm == ARM_NATIVE:
         from agent.runtime.native import build
-        return build()
+        return build(resources=resources)
     raise RuntimeError(f"{ENV_ARM}={arm!r} 不支持；当前仅 native。")

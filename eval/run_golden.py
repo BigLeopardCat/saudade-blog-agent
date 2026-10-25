@@ -40,15 +40,13 @@ from agent import (
 )
 from agent.api.context import build_messages as _build_messages
 
-# 复用 server 内部链路（不走 HTTP，与 test_fallback_replay.py 同模式）
+# Evaluation uses the production producer without HTTP.
 from agent.api.routes import chat as chat_routes
 from agent.api.schemas import ChatRequest, HistoryItem
 from agent.api.turns import stream_to_queue as _run_agent_stream_to_queue
 from agent.principal import Principal  # 管理助手用例的调用者身份（20260921）
-
-# `agent.create_agent` 的引用搬去了 eval/golden_arm.py（选臂那一层）：本文件不再直接建图，
-# 只调 `ensure_agent()` —— 建哪条臂是可拨的，直接 import 会把"只有一条臂"写死在调用点。
 from agent.transport import command_wire
+from eval.golden_runtime import close_agent, ensure_agent
 
 # uid=0 哨兵的**真值源**（`DENIAL_FAMILY` 第 ⑦ 支由它派生，见那一支的头注）——
 # 不抄字面进判据：哨兵改文案时，判据跟着改，不会静默退化成一条谁也命中不了的死正则。
@@ -57,10 +55,6 @@ from utils import trace as trace_mod  # trace 工具返回留多长（run_case �
 
 CMD_PREFIXES = ("EFFECT:", "NAVIGATE:", "AUTO_NAVIGATE:", "DARKMODE:")
 
-# 接口层（报告里的 `engine` 那一格，见 report 的注）：20261004 起只剩 native
-# tool calls 一条路（文本契约档连同 `PLANNER_ENGINE` 拨盘一起删了）。**字面量搬去
-# `eval/golden_arm.py`**（那一格现在按臂派生：graph 逐字 `native`，试验臂 `native+<臂>`）
-# ——这里只做**再导出**，值仍只有一份；`engine_for` 是唯一的派生实现。
 from golden_arm import INTERFACE_LAYER  # noqa: E402,F401  （再导出，见上）
 
 # 导航命令帧族：AUTO_NAVIGATE 与 NAVIGATE 同属"导航已执行"，断言时视为一族
@@ -74,19 +68,7 @@ CMD_FAMILIES = {
 GOLDEN_FILE = "eval/golden/basic.jsonl"
 REPORT_FILE = "eval/report/last_run.json"
 
-# ── 台账时间戳的两态表达（20261001）────────────────────────────────────────
-# 台账行首那个 `MM-DD HH:MM` 不是普通文本：`server.annotate_exec_ages` 会按**运行时刻**
-# 给它算年龄，超 10 分钟标「·已过期」；而规划纪律 6c 又规定过期读数不能拿来回答"现在
-# 怎样"。⇒ **写死在用例里的时间戳会让用例的判定随挂钟漂移**，而漂移方向恰好是把
-# "摘要有值就该零调用"（6b）那类用例推到 6c 的怀里。
-# 实测（20261001 聚焦子集 5 遍 A/B）：三条 `followup_entity_slot_*`（写于 20260920，
-# 早于 20260925 的年龄标注）的时间戳停在 09-20，被标成「11 天前·已过期」之后，planner
-# 对零调用契约的遵守率掉到 ~40%（同一条用例红绿两态并存），而它又被"复跑"按 flake 放行
-# ⇒ 用例的本意被一个与它无关的过期信号盖掉了。
-# ⇒ **意图是"新鲜"的夹具必须写相对占位符**（`{now}`／`{now-2m}`／`{now-3h}`／`{now-1d}`，
-#    单位 m/h/d），意图是"过期"的夹具才写死日期（那是有意的：`status_stale_ledger_requery`
-#    的 _note 写明"永远早于运行时刻"）。守卫在 tests/test_ledger_age.py——裸时间戳必须在
-#    _note 里声明这是刻意为之。
+# Relative fixture timestamps keep freshness assertions stable across runs.
 _NOW_RX = re.compile(r"\{now(?:(?P<sign>[+-])(?P<num>\d+)(?P<unit>[mhd]))?\}")
 
 
@@ -113,20 +95,6 @@ def _cmd_matches(pre: str, c: str) -> bool:
     """命令帧 c 是否属于前缀族 pre（导航族归一化）。"""
     fam = CMD_FAMILIES.get(pre, (pre,))
     return any(c.startswith(x) for x in fam)
-
-
-_runtime = None
-
-
-def ensure_agent():
-    global _runtime
-    if _runtime is None:
-        t0 = time.time()
-        # Evaluation uses the same native runtime factory as the service.
-        _arm = golden_arm.arm_name()
-        _runtime = golden_arm.build_agent(_arm)
-        print(f"[init] Native runtime ready (arm={_arm}): {time.time() - t0:.1f}s")
-    return _runtime
 
 
 def iter_rounds(case: dict) -> list[dict]:
@@ -360,13 +328,14 @@ def run_one(req: ChatRequest, principal: "Principal | None" = None,
                     "confirm_tokens": [], "confirm_payloads": [],
                     "task_frames": [], "ledger_frames": [],
                     "error": "确认令牌验签失败（零执行）—— 用例里的令牌/uid/会话不自洽"}
+    runtime = ensure_agent()
     trace_id = None
     t_trace0 = time.monotonic()
     if trace_ctx:
         trace_id = golden_trace.start_case(
             trace_ctx["run"], trace_ctx.get("case", ""), req.message or "",
             (principal.role if principal is not None else None), thread=thread,
-            runtime=runtime_probe.request_context(_runtime))
+            runtime=runtime_probe.request_context(runtime))
     loop = asyncio.new_event_loop()
     queue = asyncio.Queue()
     frames = []
@@ -385,8 +354,8 @@ def run_one(req: ChatRequest, principal: "Principal | None" = None,
     ctx = contextvars.copy_context()
     with ThreadPoolExecutor(max_workers=1) as ex:
         ex.submit(
-            ctx.run, _run_agent_stream_to_queue, _runtime,
-            _build_messages(req, holds_context=runtime_probe.holds_context(_runtime)),
+            ctx.run, _run_agent_stream_to_queue, runtime,
+            _build_messages(req, holds_context=runtime_probe.holds_context(runtime)),
             thread, queue,
             loop, req.user_id, None, principal, confirm_grant, req.conversation_id,
         ).result()
@@ -3540,4 +3509,7 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    finally:
+        close_agent()
