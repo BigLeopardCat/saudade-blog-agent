@@ -8,7 +8,7 @@ from langchain_core.tools import ToolException, tool
 from pydantic import Field, StrictStr
 
 from agent import action_text, authz
-from agent.runtime.read_tools import scoped_reads_enabled
+from agent.products.blog.read_tools import scoped_reads_enabled
 from tools import site
 
 Path = Annotated[StrictStr, Field(min_length=1, max_length=512)]

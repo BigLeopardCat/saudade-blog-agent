@@ -1,7 +1,7 @@
 # 原生请求的上下文与缓存前缀
 
 原生运行时使用上游模型提供的缓存统计，不在应用中缓存模型答案或工具结果。
-`agent/runtime/session.py` 和 `agent/runtime/prompt.py` 负责保持可复用输入的顺序。
+`agent/runtime/session.py` 和 `agent/products/blog/prompt.py` 负责保持可复用输入的顺序。
 
 ## 工具目录
 

@@ -15,7 +15,7 @@ from agent.api import dependencies
 from agent.api import lifecycle as app_lifecycle
 from agent.api.routes import chat as server
 from agent.api.routes import operations
-from agent.runtime import confirmation
+from agent.products.blog import confirmation
 from agent.runtime.control import RequestControl
 from agent.runtime.workers import RequestWorkers
 from config.settings import settings

@@ -1,11 +1,12 @@
-"""Build authorized native tool menus shared by runtime entry points."""
+"""Build the blog product's authorized tool menus."""
 
 from agent.domains import browser
 from agent.domains.favorites import preparation as favorite_preparation
 from agent.domains.messages import preparation as message_preparation
 from agent.domains.notifications import preparation as notification_preparation
-from agent.runtime.admin_domains import domains as admin_domains
-from agent.runtime.read_tools import (
+from agent.products.blog.admin_domains import domains as admin_domains
+from agent.products.blog.catalog import DOMAIN_DESCRIPTIONS, initial_tools
+from agent.products.blog.read_tools import (
     account_tools,
     admin_tools,
     article_tools,
@@ -22,6 +23,12 @@ from agent.runtime.read_tools import (
 
 
 class ToolCatalog:
+    descriptions = DOMAIN_DESCRIPTIONS
+
+    @staticmethod
+    def promote_tools(tools, domains):
+        return initial_tools(tools, domains)
+
     def __init__(self, read_tools=None, site_read_tools=None, own_read_tools=None,
                  admin_read_tools=None, moderation_read_tools=None, queue_read_tools=None,
                  account_read_tools=None):

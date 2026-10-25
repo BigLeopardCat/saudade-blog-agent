@@ -15,9 +15,9 @@ from agent.api.context import build_messages
 from agent.api.routes import chat as server
 from agent.api.schemas import ChatRequest
 from agent.principal import SOURCE_ASSERTION, Principal
+from agent.products.blog.prompt import build_prompt
 from agent.runtime.native import NativeRuntime
 from agent.runtime.native_store import NativeConversationStore
-from agent.runtime.prompt import build_prompt
 
 ACTOR = Principal(7, "user", SOURCE_ASSERTION)
 

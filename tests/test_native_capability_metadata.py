@@ -8,6 +8,7 @@ from langgraph.checkpoint.memory import InMemorySaver
 
 from agent.domains.notices.targets import DEFAULT_TITLE
 from agent.principal import SOURCE_ASSERTION, Principal
+from agent.products.blog.catalog import DOMAIN_DESCRIPTIONS
 from agent.runtime.catalog import loader
 from agent.runtime.native import NativeRuntime
 from agent.runtime.native_store import NativeConversationStore
@@ -43,5 +44,6 @@ def test_initial_request_exposes_assignable_role_names_only_to_administrators(ro
 
 
 def test_notice_discovery_uses_the_business_default_title():
-    description = loader("admin_notices")["function"]["description"]
+    tool = loader("admin_notices", DOMAIN_DESCRIPTIONS["admin_notices"])
+    description = tool["function"]["description"]
     assert DEFAULT_TITLE in description

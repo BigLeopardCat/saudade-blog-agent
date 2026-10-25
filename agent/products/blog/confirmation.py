@@ -48,7 +48,7 @@ def confirmed_runtime(runtime, grant):
 def cancel(runtime, grant, config):
     """Revoke the signed operation under the same lock used for execution."""
     from agent.domains.registry import native_domain
-    from agent.runtime.pending import PendingOperation
+    from agent.products.blog.pending import PendingOperation
     if native_domain(grant) is None:
         raise ValueError("这张旧确认卡尚不支持按钮撤销，请勿批准并等待其过期。")
     selected = confirmed_runtime(runtime, grant)
@@ -79,17 +79,3 @@ def frames(execution):
     action = execution.get("pending_action")
     if action:
         yield "__PENDING__:" + json.dumps(action, ensure_ascii=False)
-
-
-def pause_notice(result):
-    from agent.runtime.results import TurnResult
-
-    notice = "完成后继续剩余请求；取消将停止后续处理。"
-    execution = result.execution
-    popup = execution["pending_confirm"]
-    action = execution["pending_action"]
-    return TurnResult(result.reply + "\n" + notice, {
-        **execution, "confirm_text": execution.get("confirm_text", result.reply) + "\n" + notice,
-        "pending_confirm": {**popup, "q": popup["q"] + "\n" + notice},
-        "pending_action": {**action, "question": action["question"] + "\n" + notice},
-    })

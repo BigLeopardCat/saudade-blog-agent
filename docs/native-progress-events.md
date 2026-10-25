@@ -48,7 +48,7 @@ The complete visible text is saved through `ConversationStore`. The transport
 emits only the suffix missing from `TurnResult.reply` after streamed chunks;
 it never sends the terminal aggregate as a second answer. Confirmation,
 cancellation and no-op text are emitted once through the structured execution
-path. `agent.runtime.confirmation.frames` owns the allow-list and ordering of
+path. `agent.products.blog.confirmation.frames` owns the allow-list and ordering of
 pending/confirmation frames. Browser commands and business receipts keep their
 existing protocol. The transport does not inspect planner, execute or gate
 updates and does not translate legacy graph events. A runtime without

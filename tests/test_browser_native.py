@@ -21,6 +21,8 @@ from pydantic import ValidationError
 from agent.api.schemas import ChatRequest
 from agent.domains import browser
 from agent.principal import SOURCE_ASSERTION, Principal
+from agent.products.blog.history import tool_access
+from agent.products.blog.tool_policy import BlogToolMiddleware
 from agent.runtime import memory
 from agent.runtime.budget import BudgetLimits, RequestBudget, budget_scope
 from agent.runtime.native import NativeRuntime
@@ -129,7 +131,8 @@ def test_read_artifacts_cannot_issue_executable_page_commands():
         return "source", {"kind": "ok", "receipts": [{"cmd": {"kind": "darkmode", "mode": "on"}}]}
 
     model = Model([_response("get_blog_info")])
-    session = ToolSession(model, _config(), {"get_blog_info": get_blog_info}, {})
+    session = ToolSession(model, _config(), {"get_blog_info": get_blog_info}, {},
+                          middleware=(BlogToolMiddleware,))
     with pytest.raises(RuntimeError, match="authorized browser tools"):
         session.run([HumanMessage(content="介绍博客")])
     assert not session.receipts
@@ -215,7 +218,8 @@ def test_one_turn_combines_appearance_and_navigation_and_retains_source_history(
     assert [item.name for item in results] == ["set_page_appearance", "navigate_page"]
     assert "receipts" in results[0].artifact
     history = memory.history(
-        arm.get_state(config).values["messages"], config["configurable"]["principal"]
+        arm.get_state(config).values["messages"], config["configurable"]["principal"],
+        tool_access=tool_access
     )
     source = [item for item in history if isinstance(item, ToolMessage)]
     assert [item.name for item in source] == ["set_page_appearance", "navigate_page"]
@@ -227,7 +231,8 @@ def test_one_turn_combines_appearance_and_navigation_and_retains_source_history(
     downgraded = Principal(uid=7, role="zako", source=SOURCE_ASSERTION)
     assert not any(
         isinstance(item, ToolMessage)
-        for item in memory.history(arm.get_state(config).values["messages"], downgraded)
+        for item in memory.history(arm.get_state(config).values["messages"], downgraded,
+                                   tool_access=tool_access)
     )
 
 
@@ -265,7 +270,8 @@ def test_stream_producer_emits_commands_and_receipts_without_confirmation(monkey
         ],
     )
     monkeypatch.setattr(app.state, "runtime", NativeRuntime(
-        NativeConversationStore(None), catalog=arm.catalog, model_factory=lambda **_: model))
+        NativeConversationStore(None), application=arm.application,
+        model_factory=lambda **_: model))
 
     async def collect():
         loop = asyncio.get_running_loop()
@@ -342,7 +348,7 @@ def test_page_schema_errors_are_standard_error_messages():
 
 def test_current_display_state_reaches_native_context_as_page_data():
     from agent.api.routes import chat as server
-    from agent.runtime.prompt import build_prompt as _input
+    from agent.products.blog.prompt import build_prompt as _input
 
     request = ChatRequest(
         message="切换夜间模式", current_url="/", current_effects="rain", current_darkmode="on"

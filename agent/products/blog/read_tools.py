@@ -5,8 +5,9 @@ read directly. Private reads require verified identity and a runtime scope
 check. Writes use separate domain confirmation tools; browser commands have their own scope checks.
 """
 
-from agent.authz import SCOPE_ADMIN_CONSOLE, SCOPE_READ_OWN, SCOPE_READ_PUBLIC, TOOL_SCOPE, holds
-from agent.principal import is_verified_identity
+from agent.authz import SCOPE_ADMIN_CONSOLE, SCOPE_READ_OWN, SCOPE_READ_PUBLIC, TOOL_SCOPE
+from agent.runtime.access import own_reads_enabled as own_reads_enabled
+from agent.runtime.access import scoped_reads_enabled
 from tools.base import get_all_tools
 
 ARTICLE_READ_TOOLS = frozenset({"rag_search", "search_notes", "get_article_detail"})
@@ -32,15 +33,6 @@ _ADMIN_DESCRIPTIONS = {
     "get_note_periods": "Read article traffic by week, month or year, including partial periods. "
                         "Choose kind from the user's requested period. Admin only.",
 }
-
-
-def scoped_reads_enabled(principal, scope: str, user_id=None) -> bool:
-    return (is_verified_identity(principal) and holds(principal, scope)
-            and (user_id is None or (type(user_id) is int and user_id == principal.uid)))
-
-
-def own_reads_enabled(principal) -> bool:
-    return scoped_reads_enabled(principal, SCOPE_READ_OWN)
 
 
 def _tools_with_scope(names: frozenset[str], scope: str) -> dict:
