@@ -20,6 +20,7 @@ from agent.api.events import response as stream_response
 from agent.api.schemas import ChatRequest, ChatResponse
 from agent.api.turns import NativeCancelled, run_turn, stream_to_queue
 from agent.runtime.control import RequestControl
+from agent.runtime.context import conversation_session
 from agent.runtime.memory_scope import safe_request
 from agent.runtime.progress import StreamProgress
 from agent.summarizer import summarize
@@ -118,7 +119,8 @@ async def chat(req: ChatRequest, request: Request):
     jobs = workers.request(
         loop,
         functools.partial(release_slot, request),
-        control=RequestControl(threading.Event(), time.monotonic() + STREAM_TOTAL_TIMEOUT),
+        control=RequestControl(threading.Event(), time.monotonic() + STREAM_TOTAL_TIMEOUT,
+                               session_id=conversation_session(principal, req.conversation_id)),
     )
     try:
         summary_task = None
@@ -253,7 +255,8 @@ async def chat_stream(req: ChatRequest, request: Request):
     jobs = workers.request(
         asyncio.get_running_loop(),
         functools.partial(release_slot, request),
-        control=RequestControl(stop_event, time.monotonic() + STREAM_TOTAL_TIMEOUT),
+        control=RequestControl(stop_event, time.monotonic() + STREAM_TOTAL_TIMEOUT,
+                               session_id=conversation_session(principal, req.conversation_id)),
         on_complete=functools.partial(finish_trace, trace_id, "client_closed", 0.0, 0),
     )
 
