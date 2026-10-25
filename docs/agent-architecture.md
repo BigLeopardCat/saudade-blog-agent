@@ -146,6 +146,7 @@ flowchart LR
 │   ├── runtime/context.py                               # 当前生产代码模块
 │   ├── runtime/control.py                               # 当前生产代码模块
 │   ├── runtime/conversation_store.py                    # 当前生产代码模块
+│   ├── runtime/finalization.py                          # 同一请求预算内撤下工具并整理已有事实
 │   ├── runtime/workers.py                              # 请求线程与启动预热的服务生命周期
 │   ├── runtime/jobs.py                                  # 当前生产代码模块
 │   ├── runtime/memory_media.py                          # 多模态消息的历史引用与临时图片适配

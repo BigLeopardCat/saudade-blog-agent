@@ -3,7 +3,7 @@
 import json
 
 import pytest
-from langchain_core.messages import AIMessage, HumanMessage
+from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
 from agent.runtime.budget import BudgetLimits, RequestBudget, budget_scope
 from agent.runtime.session import ToolSession
@@ -63,7 +63,9 @@ def test_repeated_domain_loading_still_exhausts_the_tool_budget_without_business
     assert "已停止继续处理" in session.run([HumanMessage(content="查询作者")]).reply
     assert len(model.prompts) == 3 and read.calls == 0
     assert session.budget.tool_calls == 2
-    assert all(prompt[-1].status == "success" for prompt in model.prompts[1:])
+    replies = [next(item for item in reversed(prompt) if isinstance(item, ToolMessage))
+               for prompt in model.prompts[1:]]
+    assert all(reply.status == "success" for reply in replies)
 
 
 def test_repeated_invalid_requests_exhaust_the_configured_model_budget():
