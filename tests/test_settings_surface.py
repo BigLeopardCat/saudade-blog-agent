@@ -139,8 +139,8 @@ def test_settings_surface():
     print("\n④ 双轨收敛后的文档面：README 不许再教人走旧路（20261020 反转）")
 
     readme = README.read_text(encoding="utf-8")
-    check("README 点名 AGENT_RECURSION_LIMIT（六个里最常被想改的那个）",
-          "AGENT_RECURSION_LIMIT" in readme)
+    check("README 点名 AGENT_CONTEXT_TOKENS",
+          "AGENT_CONTEXT_TOKENS" in readme)
     check("README 不再说这几个键写 .env 不生效（收敛后那是假话——旧坑表留着就是撒谎）",
           re.search(r"写[进在]?\s*`?\.env`?\s*(一点作用|不生效|无效)", readme) is None)
     check(".env.example 的开头把单轨边界写下来了（仍只走进程环境的四个键，两份文档同调）",
@@ -154,12 +154,11 @@ def test_settings_surface():
           "saudade.site" not in env_text,
           f"出现 {env_text.count('saudade.site')} 次")
 
-    print("\n⑥ 单轨接线（20261020 收敛）：六个限额常量只从 settings 取值")
+    print("\n⑥ 单轨接线（20261020 收敛）：五个限额常量只从 settings 取值")
 
-    _SIX = {
+    _HTTP_LIMITS = {
         "STREAM_IDLE_TIMEOUT": "stream_idle_timeout",
         "STREAM_TOTAL_TIMEOUT": "stream_total_timeout",
-        "RECURSION_LIMIT": "recursion_limit",
         "MAX_BODY_BYTES": "max_body_bytes",
         "MAX_CONCURRENT_STREAMS": "max_concurrent_streams",
         "REVIEW_CONCURRENCY": "review_concurrency",
@@ -167,7 +166,6 @@ def test_settings_surface():
     _ENV_TO_FIELD = {
         "AGENT_STREAM_IDLE_TIMEOUT": "stream_idle_timeout",
         "AGENT_STREAM_TOTAL_TIMEOUT": "stream_total_timeout",
-        "AGENT_RECURSION_LIMIT": "recursion_limit",
         "AGENT_MAX_BODY_BYTES": "max_body_bytes",
         "AGENT_MAX_CONCURRENT": "max_concurrent_streams",
         "AGENT_MAX_REVIEW": "review_concurrency",
@@ -182,24 +180,24 @@ def test_settings_surface():
                 and node.value.id == "settings" and node.attr == field)
 
 
-    _unwired = [c for c, f in _SIX.items()
+    _unwired = [c for c, f in _HTTP_LIMITS.items()
                 if not _wired_to_settings(_assigns.get(c, ast.Pass()), f)]
-    check("六个常量在所属 HTTP 模块从 settings.<同名字段> 取值",
+    check("五个常量在所属 HTTP 模块从 settings.<同名字段> 取值",
           not _unwired,
           f"未单轨：{'、'.join(_unwired) or '无'}")
     check("server.py 里 os.environ 清零（直读进程环境就是第二轨长回来的地方；"
           "将来真有正当用途时再来改这条判据——红着比悄悄漏掉好）",
           "os.environ" not in server_src)
     check("判据内部两张表与 settings 的 alias 对得上（常量名/env 键/字段名三口对账）",
-          sorted(_env_name(f) for f in _SIX.values()) == sorted(_ENV_TO_FIELD))
+          sorted(_env_name(f) for f in _HTTP_LIMITS.values()) == sorted(_ENV_TO_FIELD))
 
     import os as _os  # noqa: E402
 
-    _ENV_WANT = {"AGENT_RECURSION_LIMIT": 77, "AGENT_MAX_BODY_BYTES": 1024,
+    _ENV_WANT = {"AGENT_MAX_BODY_BYTES": 1024,
                  "AGENT_MAX_CONCURRENT": 5, "AGENT_MAX_REVIEW": 2,
                  "AGENT_STREAM_IDLE_TIMEOUT": 9.5, "AGENT_STREAM_TOTAL_TIMEOUT": 42.0}
     _DEFAULTS = {"stream_idle_timeout": 120.0, "stream_total_timeout": 300.0,
-                 "recursion_limit": 30, "max_body_bytes": 12 * 1024 * 1024,
+                 "max_body_bytes": 12 * 1024 * 1024,
                  "max_concurrent_streams": 8, "review_concurrency": 4}
     _saved = {k: _os.environ.get(k) for k in list(_ENV_WANT) + ["SAUDADE_IGNORE_ENV_FILE"]}
     try:
@@ -209,14 +207,14 @@ def test_settings_surface():
         from config.settings import Settings as _Settings
         _drift = [f for f, v in _DEFAULTS.items()
                   if getattr(_Settings(), f) != v]
-        check("不设 env 时六个默认值与收敛前的字面量逐个相同（反控：收敛 = 零行为变化）",
-              not _drift, "、".join(_drift) or "6/6 同值")
+        check("不设 env 时五个默认值与收敛前的字面量逐个相同（反控：收敛 = 零行为变化）",
+              not _drift, "、".join(_drift) or "5/5 同值")
         for k in _ENV_WANT:
             _os.environ[k] = str(_ENV_WANT[k])
         _missed = [k for k, want in _ENV_WANT.items()
                    if getattr(_Settings(), _ENV_TO_FIELD[k]) != want]
         check("setenv 后重新构造即生效（漏写 validation_alias 时这条当场红）",
-              not _missed, "、".join(_missed) or "6/6 生效")
+              not _missed, "、".join(_missed) or "5/5 生效")
     finally:
         for k, v in _saved.items():
             if v is None:

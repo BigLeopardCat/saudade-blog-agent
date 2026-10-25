@@ -20,8 +20,10 @@ def test_version_stays_with_loaded_process_after_working_tree_changes(monkeypatc
 
 def test_health_reports_actual_runtime_type():
     runtime = NativeRuntime(NativeConversationStore(InMemorySaver()))
-    assert runtime_probe.arm_name(runtime) == "native"
-    assert runtime_probe.arm_name(None) == "unknown"
+    assert runtime_probe.runtime_name(runtime) == "native"
+    assert runtime_probe.runtime_name(None) == "unknown"
+    metadata = runtime_probe.request_context(runtime)
+    assert metadata["name"] == "native" and "arm" not in metadata
 
 
 @pytest.mark.parametrize("model,expected", [

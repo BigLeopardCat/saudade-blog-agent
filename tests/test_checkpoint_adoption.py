@@ -17,26 +17,17 @@ from agent.api.routes import chat as server
 from agent.api.schemas import ChatRequest, HistoryItem
 from agent.runtime.native import NativeRuntime
 from agent.runtime.native_store import NativeConversationStore
-from config.settings import settings
 
 
 @pytest.mark.parametrize("saver", [None, InMemorySaver()])
 def test_default_factory_attaches_the_selected_saver(monkeypatch, saver):
     monkeypatch.setattr(checkpoint, "build_checkpointer", lambda **kwargs: saver)
-    monkeypatch.setattr(settings, "agent_arm", "native")
     with ExitStack() as resources:
-        runtime, name = lifecycle.build_runtime(resources)
-    assert name == "native" and isinstance(runtime, NativeRuntime)
+        runtime = lifecycle.build_runtime(resources)
+    assert isinstance(runtime, NativeRuntime)
     assert checkpoint.live_saver(runtime) is saver
     assert runtime.store.available is (saver is not None)
     assert not runtime.store.is_resuming(config())
-
-
-@pytest.mark.parametrize("name", ["graph", "hybrid", "react", "unknown"])
-def test_retired_factories_cannot_enter_the_native_transport(monkeypatch, name):
-    monkeypatch.setattr(settings, "agent_arm", name)
-    with ExitStack() as resources, pytest.raises(RuntimeError, match="AGENT_ARM=native"):
-        lifecycle.build_runtime(resources)
 
 
 @pytest.mark.parametrize("persistent", [False, True])

@@ -21,9 +21,13 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import datetime, timedelta
+from pathlib import Path
+
+# Legacy file entry: resolve modules from this checkout rather than an installed sibling.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import corpus_terms  # 同目录：语料术语派生（require_doc_terms 判据用）
-import golden_arm  # 同目录：选臂/建臂/分栏（graph 与试验线跑同一套语料，20261004）
 import golden_fixture  # 同目录：真写用例的夹具在位检查（20260925）
 import golden_thread  # 同目录：传给图的线程坐标（批 6，见该模块头注）
 import golden_trace  # 同目录（eval/ 在 sys.path 上，同 corpus_check 的用法）
@@ -48,6 +52,7 @@ from agent.api.schemas import ChatRequest, HistoryItem
 from agent.api.turns import stream_to_queue as _run_agent_stream_to_queue
 from agent.principal import Principal  # 管理助手用例的调用者身份（20260921）
 from agent.transport import command_wire
+from eval import golden_runtime
 from eval.golden_runtime import close_agent, ensure_agent
 from eval.native_assertions import check as check_native
 from eval.native_assertions import command_matches
@@ -59,7 +64,6 @@ from utils import trace as trace_mod  # trace 工具返回留多长（run_case �
 
 CMD_PREFIXES = ("EFFECT:", "NAVIGATE:", "AUTO_NAVIGATE:", "DARKMODE:")
 
-from golden_arm import INTERFACE_LAYER  # noqa: E402,F401  （再导出，见上）
 
 # 导航命令帧族：AUTO_NAVIGATE 与 NAVIGATE 同属"导航已执行"，断言时视为一族
 # （golden 里 require/forbid "NAVIGATE:" 时 AUTO_NAVIGATE 帧同样计入/计入禁止）
@@ -534,11 +538,9 @@ def run_case(case: dict, *, run_id: str = "", suffix: str = "", turn_runner=None
         res = (turn_runner or run_one)(req, principal,
                       trace_ctx=({"run": run_id, "case": case["id"] + suffix} if run_id else None),
                       confirm_token=req.confirm_token, confirm_pick=req.confirm_pick,
-                      # 线程坐标（批 6）：**每轮都按 (用例, 重复, 臂) 重算**，而三条臂读的是
-                      # 同一个库 ⇒ 不复位就是假读数（ADR-0011）。臂名取自 `arm_name()` 那
-                      # 一处事实源，本处不再读一遍 `GOLDEN_ARM`。
+                      # Reuse one case coordinate across its conversation turns.
                       thread=golden_thread.for_case(
-                          case["id"], arm=golden_arm.arm_name(), suffix=suffix))
+                          case["id"], suffix=suffix))
         res["round"] = rnd["round"]
         res["elapsed"] = round(time.time() - t0, 1)
         res["fails"] = []
@@ -2614,9 +2616,7 @@ def main():
 
     if args.no_trace:
         os.environ[golden_trace.ENV_OFF] = "1"
-    # 这一轮跑哪条臂（20261004）：在**开跑之前**解析一次并响亮失败——臂名拼错要当轮炸掉，
-    # 不能跑完 18 分钟再发现报告落错了栏（`ensure_agent` 内部也调它，两处同源）。
-    _ARM = golden_arm.arm_name()
+    golden_runtime.check_environment()
     # trace run_id 在**开跑时**定（报告文件名仍是收尾时刻，两者语义不同：trace 目录要能
     # 被进程隔离跑法的父子进程共享，只能在开跑前定下来）
     run_id = golden_trace.resolve_run_id(args.trace_run_id or None)
@@ -2922,7 +2922,8 @@ def main():
                         # 任务状态帧（20261004）：`__TASK__` 在解析时被抽进 `task_frames`，
                         # **不进 `frames`**（实测 934 份归档里 `frames` 只有 __CONFIRM__/
                         # __PENDING__）⇒ 报告里原本读不到它。留档是为了"这条臂到底发不发得出
-                        # 任务帧"能被**实证**（`eval/arm_capability.py` 的见证者要它：
+                        # Preserve task frames in archived evaluation reports.
+                        # Historical reports use the same field:
                         # 没有这一格，那一族就只能靠正向兄弟武装，本臂永远无法自证）。
                         "task_frames": [{"id": f.get("id"), "state": f.get("state")}
                                         for f in (r.get("task_frames") or [])],
@@ -2989,14 +2990,9 @@ def main():
     # 留档名由 report_archive 在**写的那一刻**取（20261002）：原来那句注释写着"防覆盖丢
     # 历史"，而秒级 ts 让同一秒的两次跑同名互相覆盖——注释与行为恰好是反的（见模块头注）。
     os.makedirs("eval/report", exist_ok=True)
-    # 留档目录**按臂分**（20261004）：两条臂的报告混在一个目录里，"哪份是谁跑的"就只能靠
-    # 报告正文的 engine 反推，而 `ls | tail` 挑最新那份这种读法当场失效。臂名只进目录、
-    # **不进文件名**——文件名序 = 时间序是全仓不变量（见 eval/report_archive.py 头注）。
-    _REPORTS_DIR = golden_arm.reports_dir(_ARM)
+    _REPORTS_DIR = golden_runtime.REPORTS_DIR
     os.makedirs(_REPORTS_DIR, exist_ok=True)
-    # 耗时基线（20260829，RAG 动工前置）：全量用例耗时分布 P50/P95——
-    # "RAG 拖慢"成为可检测回归的基准（对比 baseline_*.json 存档）。
-    # trace 落盘（logs/traces/）提供逐请求分段耗时，这里是评测集的整体基线。
+    # Request latency samples are separate from per-stage trace timings.
     latencies = sorted(r["elapsed"] for r in results)
     def _pct(lats: list, p: float) -> float:
         if not lats:
@@ -3071,16 +3067,7 @@ def main():
         # 语料快照（变更点基线）：语料/期望集变化 → expected_hash 变化，数字与
         # 旧基线不可比是预期（变更即新基线），快照字段用于对账变更内容
         "corpus": corpus,
-        # 接口层（20260927 主线批 A）：planner 走 native tool calls——20261004 起
-        # **只剩这一条**（文本契约档连同 `PLANNER_ENGINE` 拨盘一起删了，见
-        # config/settings.py 那段注），所以这里记的是一个常量，不再去 settings 里问
-        # 一个没有第二个取值的键。**键必须保留**：`eval/baseline_group.py` 按它把
-        # 不同档的报告分开归档 ⇒ 存量 text 报告与新 native 报告因此自动分堆（那正是
-        # 换档的信号）。`golden_full_run.py` 引用同一个常量，防两处各写一遍。
-        # **20261004 起这一格还承载"哪条臂"**：graph 臂仍是逐字 `"native"`（历史基线与
-        # 它同档，见 eval/golden_arm.py 头注），试验臂是 `"native+<臂>"`。臂名不另开字段
-        # ——多一个"臂"字段就有了两处真值，而读的人一定会去比它和 engine 谁对。
-        "engine": golden_arm.engine_for(_ARM),
+        "engine": golden_runtime.ENGINE,
         "total": len(cases), "passed": len(cases) - failed, "failed": failed,
         # 首跑红数（20260924）：failed 是**复跑后的终判**，这个字段留着首跑口径 ——
         # 两者不等时差额就是"被复跑吸收掉的红斑"（不许静默：flaked_ids 逐条点名）
@@ -3171,17 +3158,11 @@ def main():
         "trace_dir": os.path.dirname(_first_trace) if _first_trace else None,
         "cases": results,
     }
-    # `last_run.json` **只在全量跑时写**（20260924）：它被当成"最近一次基线"读，
-    # 而一次 `--only <单条>` 的调试跑曾把它覆盖成 total=1（读的人会以为语料没了）。
-    # 非全量的那一轮仍然留档在 `runs/<ts>.json`——归档不缺，缺的是"别动基线"。
-    # **20261004 再加一条同源的判据**：只有 graph 臂能当基线（`is_baseline_arm`）——
-    # 试验臂的全量跑覆盖它 = 把基线悄悄换成另一套循环的读数，而报告长得一模一样。
-    if _is_full_run and golden_arm.is_baseline_arm(_ARM):
+    # Only a full run may replace the baseline; partial runs remain archived.
+    if _is_full_run:
         with open(REPORT_FILE, "w", encoding="utf-8") as f:
             json.dump(report, f, ensure_ascii=False, indent=1)
-    # 留档名在**写的那一刻**取（`O_EXCL` 占位，见 report_archive 头注）：既不占着空文件
-    # 等，也没有"两个跑法都查过、都说这个名字没人用"的空档。复审单与留档同名成对。
-    # 目录按臂分（`_REPORTS_DIR`）——臂名不进文件名，见那里的注。
+    # Reserve a unique archive name atomically and pair it with the review report.
     with report_archive.open_archive(_REPORTS_DIR) as (archive, f):
         ts_str = os.path.splitext(os.path.basename(archive))[0]
         json.dump(report, f, ensure_ascii=False, indent=1)
@@ -3320,10 +3301,8 @@ def main():
           + (f"  ⚠ 复跑才绿：{_reg_flaked}（首跑红，已按方差放行——逐条见复审单）"
              if _reg_flaked else "")
           + (f"  ⚠ 被跳过：{_reg_skipped}（组内分母随之变小）" if _reg_skipped else ""))
-    if _is_full_run and golden_arm.is_baseline_arm(_ARM):
+    if _is_full_run:
         print(f"报告: {REPORT_FILE}")
-    elif _is_full_run:
-        print(f"报告: （arm={_ARM} **不是基线臂**，未覆盖 {REPORT_FILE}——基线只由 graph 臂写）")
     else:
         print(f"报告: （**非全量跑**，未覆盖 {REPORT_FILE}）")
     print(f"留档: {archive}")

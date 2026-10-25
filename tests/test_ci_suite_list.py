@@ -56,7 +56,7 @@ _PROBE = ("import json,sys;sys.path.insert(0,%r);"
 
 _TAKE = ("import json,sys;sys.path.insert(0,%r);"
          "from config.settings import settings;"
-         "print(json.dumps({'agent_fastpath': bool(settings.agent_fastpath),"
+         "print(json.dumps({"
          " 'iot_enabled': bool(settings.iot_enabled)}))")
 
 
@@ -224,8 +224,8 @@ def test_ci_suite_list():
           re.search(r"^\s*export\s+SAUDADE_REQUIRE_PARENT=1\s*$", _night, re.M) is not None)
     print("\n④ 出厂档钉子（唯一事实源）与入口的唯一性")
     check("出厂档钉子还在（判据不跟运维取值走）",
-          conftest._PINNED.get("AGENT_FASTPATH") == "1"
-          and conftest._PINNED.get("IOT_ENABLED") == "1", str(conftest._PINNED))
+          conftest._PINNED.get("IOT_ENABLED") == "1"
+          and "AGENT_FASTPATH" not in conftest._PINNED, str(conftest._PINNED))
     check("接口层没有第二个档可钉（`PLANNER_ENGINE` 已删，20261004）",
           "PLANNER_ENGINE" not in conftest._PINNED
           and "planner_engine" not in Settings.model_fields,
@@ -248,7 +248,6 @@ def test_ci_suite_list():
     _eff = _pinned_effective()
     check("⭐⭐ 入口钉住的档位**真的生效**（钉了不生效 ⇒ 套件按另一档跑，且静默）",
           _eff is not None
-          and _eff["agent_fastpath"] == (conftest._PINNED["AGENT_FASTPATH"] == "1")
           and _eff["iot_enabled"] == (conftest._PINNED["IOT_ENABLED"] == "1"),
           f"实际生效={_eff}；声明={conftest._PINNED}")
     print("\n⑤ 三态守卫（tests/_parent_repo.py）本机行为")

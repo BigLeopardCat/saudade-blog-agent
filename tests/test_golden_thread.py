@@ -1,4 +1,4 @@
-"""Evaluation coordinates isolate cases, repetitions and runtime variants.
+"""Evaluation coordinates isolate cases, repetitions and reruns.
 
 Check the default and injected turn runners by behavior. Remaining transport
 checks ensure the chosen coordinate reaches the producer and trace recorder.
@@ -58,7 +58,7 @@ def _check_turn_runner_coordinates():
         received.append(kwargs["thread"])
         return {"text": "fixture", "confirm_tokens": []}
 
-    expected = gt.for_case(case["id"], arm=rg.golden_arm.arm_name(), suffix="__probe")
+    expected = gt.for_case(case["id"], suffix="__probe")
     with patch.object(rg, "run_one", turn):
         rg.run_case(case, suffix="__probe")
         rg.run_case(case, suffix="__probe", turn_runner=turn)
@@ -69,41 +69,35 @@ def _check_turn_runner_coordinates():
 def test_golden_thread():
     print("① 三条不变式")
     _no_rep()
-    _A = gt.for_case("case_a", arm="graph")
+    _A = gt.for_case("case_a")
     check("同一个坐标 ⇒ 恒同一个名字（复位与写入对得上）",
-          _A == gt.for_case("case_a", arm="graph"), _A)
+          _A == gt.for_case("case_a"), _A)
     check("**不同用例 ⇒ 不同名字**（本件的本体：跨用例不串）",
-          _A != gt.for_case("case_b", arm="graph"),
-          f"{_A} / {gt.for_case('case_b', arm='graph')}")
-    check("不同臂 ⇒ 不同名字（三条臂读同一个库，撞了就是两臂混一条线程）",
-          _A != gt.for_case("case_a", arm="react"),
-          f"{_A} / {gt.for_case('case_a', arm='react')}")
+          _A != gt.for_case("case_b"),
+          f"{_A} / {gt.for_case('case_b')}")
     check("不同 suffix（重跑那一轮）⇒ 不同名字",
-          _A != gt.for_case("case_a", arm="graph", suffix="__rerun"),
-          f"{_A} / {gt.for_case('case_a', arm='graph', suffix='__rerun')}")
+          _A != gt.for_case("case_a", suffix="__rerun"),
+          f"{_A} / {gt.for_case('case_a', suffix='__rerun')}")
     _no_rep("3")
     check("不同遍（`GOLDEN_REP`）⇒ 不同名字（逐遍跑不许在上一遍的 state 上接着跑）",
-          _A != gt.for_case("case_a", arm="graph"),
-          f"{_A} / {gt.for_case('case_a', arm='graph')}")
+          _A != gt.for_case("case_a"),
+          f"{_A} / {gt.for_case('case_a')}")
     check("（对照）同一遍 ⇒ 还是同一个名字（上一条不是「凡设了 rep 就变」）",
-          gt.for_case("case_a", arm="graph") == gt.for_case("case_a", arm="graph"))
+          gt.for_case("case_a") == gt.for_case("case_a"))
     _no_rep()
     check("（对照）`GOLDEN_REP` 不设 ⇒ 名字里没有 `r` 段（手跑不分遍）",
           "_r" not in _A and not _A.endswith("_r"), _A)
     print()
     print("② 归一化：名字会原样进 PG 的 `thread_id` 列，两处必须是同一个字符串")
     check("`.` / `-` / 空格一律折成 `_`",
-          gt.for_case("a.b-c d", arm="graph") == "golden_graph_a_b_c_d",
-          gt.for_case("a.b-c d", arm="graph"))
+          gt.for_case("a.b-c d") == "golden_native_a_b_c_d",
+          gt.for_case("a.b-c d"))
     check("空用例 id ⇒ `x`（不编一个像用例名的东西顶上）",
-          gt.for_case("", arm="graph") == "golden_graph_x",
-          gt.for_case("", arm="graph"))
-    check("臂名也归一化（`native+react` 那种带 `+` 的）",
-          gt.for_case("c", arm="native+react") == "golden_native_react_c",
-          gt.for_case("c", arm="native+react"))
+          gt.for_case("") == "golden_native_x",
+          gt.for_case(""))
     check("名字里只有 `[0-9A-Za-z_]`（`DELETE ... WHERE thread_id = %s` 的两侧同一个串）",
-          all(ch.isalnum() or ch == "_" for ch in gt.for_case("a.b-c d", arm="n+r")),
-          gt.for_case("a.b-c d", arm="n+r"))
+          all(ch.isalnum() or ch == "_" for ch in gt.for_case("a.b-c d")),
+          gt.for_case("a.b-c d"))
     print()
     print("③ 真语料上没有撞名（归一化会把不同的 id 折成同一个 slug，那是真实的失效面）")
     _cases = [json.loads(ln) for ln in
@@ -112,7 +106,7 @@ def test_golden_thread():
     _ids = [c["id"] for c in _cases]
     _names: dict[str, list[str]] = {}
     for _i in _ids:
-        _names.setdefault(gt.for_case(_i, arm="graph"), []).append(_i)
+        _names.setdefault(gt.for_case(_i), []).append(_i)
     _collide = {k: v for k, v in _names.items() if len(v) > 1}
     check(f"{len(_ids)} 条用例的线程名两两不同", not _collide,
         json.dumps(_collide, ensure_ascii=False))
