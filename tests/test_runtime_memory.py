@@ -30,7 +30,7 @@ def test_summary_reaches_native_input_as_data_not_runtime_authority():
     prompt = _input(server.build_messages(request), actor())
     trusted, _ = json.JSONDecoder().raw_decode(
         prompt[0].content.split("运行时能力（可信数据）：", 1)[1])
-    assert trusted["identity"]["role"] == "superadmin"
+    assert trusted["caller"]["role"] == "superadmin"
     assert "曾误称不能管理" not in prompt[0].content
     assert any("用户希望中文答复" in str(m.content) for m in prompt[1:-1])
     assert prompt[-1].content == "[当前问题]: 继续"
@@ -69,6 +69,16 @@ def test_observations_are_bounded_pairs_and_failures_are_not_remembered_as_facts
     restored = serializer.loads_typed(serializer.dumps_typed(pair))
     assert restored[0].tool_calls[0]["args"] == {"keyword": "架构"}
     assert restored[1].tool_call_id == "search"
+
+
+def test_framework_tool_message_excerpt_is_not_presented_as_a_complete_result():
+    call = {"name": "get_conversation_image", "args": {}, "id": "image", "type": "tool_call"}
+    result = ToolMessage(content="x" * 2000, name=call["name"], tool_call_id="image",
+                         artifact={"kind": "ok"})
+    pair = memory.observation(call, result)
+    assert pair[1].tool_call_id == "image" and pair[0].tool_calls == [call]
+    assert "历史工具结果节选" in pair[1].content
+    assert len(pair[1].content) < memory.OBSERVATION_CHARS + 100
 
 
 def test_real_native_loop_persists_source_observations_across_followup_and_reload(monkeypatch):
