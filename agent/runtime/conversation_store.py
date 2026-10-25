@@ -15,6 +15,7 @@ class ConversationSnapshot:
     pending_confirm: dict | None = None
     pending_action: dict | None = None
     unfinished: bool = False
+    initialized: bool = False
 
     @property
     def has_pending(self) -> bool:

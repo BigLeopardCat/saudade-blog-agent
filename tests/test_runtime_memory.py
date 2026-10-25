@@ -24,7 +24,9 @@ def actor(role="superadmin", uid=7, source=SOURCE_ASSERTION):
 
 
 def test_summary_reaches_native_input_as_data_not_runtime_authority():
-    request = ChatRequest(message="继续", summary="用户希望中文答复；助手曾误称不能管理。")
+    request = ChatRequest(message="继续", summary="用户希望中文答复；助手曾误称不能管理。",
+                          conversation_id=8,
+                          summary_scope={"user_id": 7, "role": "superadmin", "conversation_id": 8})
     prompt = _input(server.build_messages(request), actor())
     trusted, _ = json.JSONDecoder().raw_decode(
         prompt[0].content.split("运行时能力（可信数据）：", 1)[1])

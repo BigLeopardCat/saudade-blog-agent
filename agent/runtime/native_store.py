@@ -54,11 +54,13 @@ class NativeConversationStore:
     def load(self, config) -> ConversationSnapshot:
         if not self.available:
             return ConversationSnapshot()
-        values = self.get_state(config).values or {}
+        snapshot = self.get_state(config)
+        values = snapshot.values or {}
         return ConversationSnapshot(
             messages=list(values.get("messages") or []),
             pending_confirm=values.get("pending_confirm"),
             pending_action=values.get("pending_action"),
+            initialized=snapshot.created_at is not None,
         )
 
     def save_turn(
