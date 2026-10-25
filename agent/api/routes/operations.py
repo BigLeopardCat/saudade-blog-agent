@@ -1,11 +1,13 @@
 """Liveness, readiness and immutable build identity without model requests."""
 
 import logging
+from dataclasses import asdict
 
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 
 from agent import runtime_probe
+from agent.runtime.budget import BudgetLimits
 from config.settings import settings
 
 logger = logging.getLogger(__name__)
@@ -37,9 +39,10 @@ async def health(request: Request):
         "status": "ok",
         "agent_ready": runtime is not None,
         "dials": {
-            "agent_arm": runtime_probe.arm_name(runtime),
-            "planner_native_thinking": False,
-            "agent_fastpath": False,
+            "runtime": runtime_probe.runtime_name(runtime),
+            "budget": {**asdict(BudgetLimits()),
+                       "output_tokens": settings.agent_output_tokens,
+                       "summary_output_tokens": settings.agent_summary_output_tokens},
             "llm_provider": getattr(settings, "llm_provider", ""),
             "llm_model": _model,
             "rag_hybrid_enabled": bool(_rag["enabled"]),

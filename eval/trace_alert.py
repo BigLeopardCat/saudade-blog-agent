@@ -14,8 +14,7 @@ golden 只测 66 条固定用例、trace_metrics 只测过程指标（轮次/工
            （判据读事件的结构化 `values=`，不读拒绝文案——文案一改就瞎）
   R5  —    快道定价（20261015）：五条确定性快道各命中几次、每次的价钱（命中轮的工具数、
            命中后还问了 planner 几次、有没有 gate 打回、下一轮主人有没有质疑）。
-           这一节不是告警，是 `AGENT_FASTPATH` 那一档的**取数出口**——删/收窄一条
-           快道要拿它 + golden 两臂说话，不能纸面推定。
+           只用于读取历史 trace；当前原生运行时不再产生这些事件。
 
 巡检非门禁：不置失败标记（避免与 golden 门禁混同制造红斑）。局限：抓的是
 "用户有反应/agent 自知"的拉锯；无道歉词的静默跑题（9/8 第 2 轮「读正文」
@@ -290,9 +289,7 @@ def _next_turn_challenged(row: dict, seq: dict) -> bool:
 def _print_fastpath(rows: list, dials: dict, scanned: int, seq: dict) -> None:
     """R5 那一节（**20261015 快道定价档的取数出口**）。
 
-    这一节不定结论，只把"命中几次、每次的价钱"摊开。读的人要拿它与
-    `AGENT_FASTPATH=1/0` 两臂的 golden 对照（跑法见 `config/settings.py` 那条注）。
-    ⚠️ 窗口里若"关档轮次"不为 0，说明有人拨过档，这一节的读数是两档混着的。
+    仅解析历史快道事件；当前服务没有快道开关。
     """
     if not rows:
         print("R5 快道定价：窗口内无 `planner.fastpath` 命中（⚠️ 这不等于五条都没用——"

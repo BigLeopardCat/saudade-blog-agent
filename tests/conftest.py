@@ -14,8 +14,7 @@ import sys
 pytest_plugins = ["_own_support"]
 
 # ① 出厂档钉子（**唯一事实源**；`tests/test_ci_suite_list.py` ④b 判「钉了真的生效」）
-_PINNED = {"AGENT_FASTPATH": "1",
-           "RAG_HYBRID_ENABLED": "0",
+_PINNED = {"RAG_HYBRID_ENABLED": "0",
            "CHECKPOINT_DSN": "",
            # `AGENT_REQUIRE_ASSERTION`（20261019 安全审计 SAU-005，随并进 main 同步）：
            # 出厂档是 1（默认强制服务间身份断言）——不钉的话谁在 shell 里 export 过 0，
@@ -82,7 +81,7 @@ _WATCHED_MODULES = (
     "agent.authz", "agent.checkpoint", "agent.hostinfo", "config.settings",
     "rag.graph_build", "rag.search", "rag.vector_index", "rag.wordgraph",
     "utils.clock", "utils.trace",
-    "build_word_graph", "corpus_provenance", "dial_matrix", "golden_fixture",
+    "build_word_graph", "corpus_provenance", "golden_fixture",
     "golden_fixture_todo", "golden_trace", "report_archive",
     "run_golden",
 )

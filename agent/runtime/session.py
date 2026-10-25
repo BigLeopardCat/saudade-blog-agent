@@ -20,7 +20,6 @@ from agent.domains.notices.targets import DEFAULT_TITLE
 from agent.llm_usage import usage_fields
 from agent.runtime import memory, trace_context
 from agent.runtime.budget import (
-    NATIVE_OUTPUT_TOKENS,
     BudgetExceeded,
     RequestBudget,
     current_budget,
@@ -48,7 +47,6 @@ from tools.base import unavailable
 from utils import trace as trace_mod
 from utils.trace import record
 
-MAX_PROMPT_CHARS = 24000
 _MAX_RESULT_CHARS = 8000
 _MAX_TOTAL_RESULT_CHARS = 16000
 
@@ -111,7 +109,7 @@ def _loader(domain: str) -> dict:
 class ToolSession:
     def __init__(self, model, config, tools, domains, outcome_adapter=None):
         self.budget = current_budget() or RequestBudget()
-        self.output_limit = getattr(model, "max_tokens", None) or NATIVE_OUTPUT_TOKENS
+        self.output_limit = getattr(model, "max_tokens", None) or settings.agent_output_tokens
         self.model = model
         self.config = config
         self.principal = ((config or {}).get("configurable") or {}).get("principal")
@@ -557,10 +555,6 @@ class ToolSession:
                             if output < self.output_limit else self.model)
                 self.menu, self.finalizing, self.output_limit = [], True, output
                 record("native", "finalizing", reason=reason, output_limit=output)
-            prompt_chars = sum(len(text_content(message.content)) for message in prompt)
-            if prompt_chars > MAX_PROMPT_CHARS:
-                result = self._budget_stop("prompt_budget", prompt_chars=prompt_chars)
-                return (yield from self._stream_terminal(result, visible_parts))
             try:
                 model_iterator = self._model_stream(prompt)
                 buffered_chunks = []

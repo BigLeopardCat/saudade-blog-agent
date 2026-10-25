@@ -27,10 +27,6 @@
     "c": 40,
     "lines": 101
   },
-  "eval/arm_capability.py::analyze": {
-    "c": 42,
-    "lines": 85
-  },
   "eval/corpus_terms.py::derive": {
     "c": 31,
     "lines": 76
@@ -38,10 +34,6 @@
   "eval/corpus_terms.py::drift": {
     "c": 39,
     "lines": 92
-  },
-  "eval/dial_matrix.py::main": {
-    "c": 37,
-    "lines": 96
   },
   "eval/golden_draft.py::main": {
     "c": 42,

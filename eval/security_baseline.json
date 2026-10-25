@@ -22,7 +22,7 @@
   "targets": [
     "."
   ],
-  "total": 79,
+  "total": 71,
   "nosec": 0,
   "by_key": {
     "agent/adminops_tags.py::B105": 5,
@@ -34,7 +34,6 @@
     "eval/admin_write_probe.py::B105": 2,
     "eval/admin_write_probe.py::B112": 1,
     "eval/admin_write_probe.py::B310": 3,
-    "eval/arm_capability.py::B112": 1,
     "eval/authz_shadow_divergence.py::B105": 1,
     "eval/golden_fixture_account.py::B112": 1,
     "eval/golden_fixture_account.py::B310": 1,
@@ -53,14 +52,11 @@
     "eval/run_golden.py::B110": 1,
     "eval/trace_reconcile.py::B112": 1,
     "eval/wordlist_gate.py::B324": 1,
-    "scripts/agent_metrics.py::B105": 1,
-    "scripts/agent_metrics.py::B108": 1,
     "scripts/build_word_graph.py::B310": 1,
     "scripts/build_word_graph.py::B324": 2,
     "scripts/layout_ab.py::B108": 2,
     "scripts/sticker_smoke.py::B310": 1,
     "tests/test_confirm.py::B105": 2,
-    "tests/test_dial_matrix.py::B108": 5,
     "tests/test_golden_fixture_corpus.py::B310": 1,
     "tests/test_llm_judge.py::B108": 2,
     "tests/test_packaging.py::B108": 1,

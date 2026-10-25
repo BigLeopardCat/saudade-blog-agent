@@ -160,7 +160,8 @@ def test_side_tasks():
     sph2 = summarizer.build_prompt("x" * 2000, [], "")
     check("单条消息截断 600 字", "x" * 600 in sph2 and "x" * 601 not in sph2)
     sph3 = summarizer.build_prompt("hi", [], "旧" * 2000)
-    check("旧摘要也截断（防用旧摘要把 prompt 撑爆）", "旧" * 600 in sph3 and "旧" * 601 not in sph3)
+    check("旧摘要遵守共享大小上限",
+          "旧" * 1600 in sph3 and "旧" * 1601 not in sph3)
     print("⑥ 摘要输出清洗与失败取向")
     clean_cases = [
         ("访客问了设备列表，系统查询后如实回答。", "访客问了设备列表，系统查询后如实回答。"),
@@ -175,7 +176,8 @@ def test_side_tasks():
     for src, want in clean_cases:
         got = summarizer.clean_summary(src)
         check(f"清洗 {src[:20]!r} → {want[:14]!r}", got == want, got[:30])
-    check("输出截断到 600 字", len(summarizer.clean_summary("字" * 900)) == 600)
+    check("摘要序列化上限与注入端一致", len(summarizer.clean_summary("字" * 1600)) == 1600)
+    check("超长摘要不截断入库", summarizer.clean_summary("字" * 1601) == "")
     ok = FakeLLM("摘要：访客要求再显示一次屏幕，系统已执行。")
     check("假模型走全链路并清洗",
           summarizer.summarize("再显示一次", [H("user", "在吗")], "", llm=ok)

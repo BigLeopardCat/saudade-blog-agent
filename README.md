@@ -17,7 +17,7 @@
 
 ## 架构
 
-服务入口使用 `AGENT_ARM=native`：模型使用原生工具调用，确定性代码负责授权、确认、
+服务使用唯一的原生工具运行时：模型使用原生工具调用，确定性代码负责授权、确认、
 幂等与会话存储。升级部署需将旧 graph/hybrid 配置改为 native；旧规划运行时已从生产依赖中移除。
 当前迁移范围和审计结果见 [架构审计](docs/agent-architecture-audit-20261023.md)
 与 [迁移验收](docs/hybrid-runtime-migration.md)。
@@ -203,7 +203,7 @@ trace 与 golden trace 的保留各有其执行者（`eval/trace_retention.py`�
 
 ## 环境变量
 
-配置的取值源**只有一份**：`config/settings.py`（pydantic-settings，读 `.env`）。**你写进 `.env` 的都会生效。** 全部字段就列在 [.env.example](.env.example) 里（那个文件是这一份的镜像，两边的分节一一对应）。常用项：
+配置的取值源**只有一份**：`config/settings.py`（pydantic-settings，读 `.env`）。当前支持的字段列在 [.env.example](.env.example) 里（那个文件是这一份的镜像，两边的分节一一对应）。常用项：
 
 | 变量 | 默认 | 说明 |
 |---|---|---|
@@ -218,12 +218,12 @@ trace 与 golden trace 的保留各有其执行者（`eval/trace_retention.py`�
 | `TRACE_DIR` | 部署环境的绝对路径（**自建部署须覆盖**） | 对话 trace 落盘目录。**20260925 起写进 `<TRACE_DIR>/<YYYYMMDD>/`**：枚举由 `utils/trace_files.py` 单点负责（四种读取端共用），保留期由 `eval/trace_retention.py` 执行（>24h 压缩、>30 天删；默认只列不删，`--apply` 才动手） |
 | `AGENT_REQUIRE_ASSERTION` | `1` | 缺失/验签失败的身份断言 ⇒ **401**（20261019 起这是默认值，安全审计 SAU-005）。显式置 `0` 才回退信任请求体里的 `user_id`——那条路径上的身份没有角色，工具一件都调不动（`authz.must_enforce`），别留在生产配置里 |
 | `AUTHZ_ENFORCE` | `0` | 权限模型的强制开关 |
-| `PLANNER_TEMPERATURE` | `0.0` | 规划温度（调优实验可逐臂拨）。**"它能治路由抖动"已被 A/B 证伪**，别拿它当调参理由 |
-| `PLANNER_NATIVE_THINKING` / `_MAX_TOKENS` / `_TIMEOUT` / `_SLOW_S` | `true` / `1200` / `60` / `30` | 接口层的四个旋钮，各自的取舍见 `settings.py` 的注 |
-| ~~`AGENT_TASK_STATE`~~、~~`AGENT_TASK_PLAN_EXEC`~~ | **已删（20261015）** | 会话级未完成意图的登记/注入**常开**，没有开关了（任务状态是业界默认必备的，不该有开关把它变成摆设）。**写进 `.env` 现在是鬼键**；理由与判据见 docs/问题记录.md §1.63 |
-| `AGENT_ARM` | `native` | 原生工具运行时。旧 graph/hybrid 服务配置拒绝启动；修改后须重启服务。 |
 | `RAG_HYBRID_ENABLED`、`EMBEDDING_*`、`RRF_K` | 不设（= 纯词法） | 向量 + RRF 混合检索，可选件。⚠️ **`EMBEDDING_*` 不只管检索**：首页那件「文章向量空间图谱」的建图（`scripts/build_word_graph.py`）与检索（`rag/wordgraph.py`）也用它——配了走它，没配回落 `QWEN_*` + `qwen3.7-text-embedding`（两端共用 `rag/embed_space.py` 一条规则）。**换模型/端点后要重建一次图谱**（后台「站点设置 → 向量图谱」），否则检索侧以 `space_mismatch` 明着降级 |
-| `AGENT_RECURSION_LIMIT` / `AGENT_MAX_BODY_BYTES` / `AGENT_MAX_CONCURRENT` / `AGENT_MAX_REVIEW` / `AGENT_STREAM_IDLE_TIMEOUT` / `AGENT_STREAM_TOTAL_TIMEOUT` | `30` / `12 MiB` / `8` / `4` / `120` / `300` | 服务限额与超时（20261020 双轨收敛入 Settings：**写 `.env` 就生效**，键名与 systemd `Environment=` 时代逐个一致，老部署零改动；两个 STREAM 超时是收敛时**新开的 env 通道**，此前只能改码）。用途见 `agent/api/` 的生命周期、中间件与聊天路由；判据 `tests/test_settings_surface.py` ⑥ |
+| `AGENT_CONTEXT_TOKENS` / `AGENT_REQUEST_TOKENS` | `16384` / `32768` | 完整模型输入加输出预留的上下文上限、单次 HTTP 请求累计 token 上限；缓存 token 也计入。 |
+| `AGENT_MODEL_CALLS` / `AGENT_TOOL_CALLS` | `8` / `8` | 请求内的模型调用和工具尝试上限，领域加载也计为工具调用；摘要共用请求预算。 |
+| `AGENT_OUTPUT_TOKENS` / `AGENT_SUMMARY_OUTPUT_TOKENS` | `1536` / `512` | 对话和摘要输出上限；回执短叙述使用 192。 |
+| `AGENT_MAX_BODY_BYTES` / `AGENT_MAX_CONCURRENT` / `AGENT_MAX_REVIEW` | `12 MiB` / `8` / `4` | 请求体、每 worker 运行请求数、侧任务并发上限。 |
+| `AGENT_STREAM_IDLE_TIMEOUT` / `AGENT_STREAM_TOTAL_TIMEOUT` | `120` / `300` 秒 | 流式空闲与请求总截止时间。 |
 
 （20261020 之前这里还有一张 B 表——"`server.py` 直读进程环境的四个常量，`.env` 管不到"。双轨收敛后那张表删了：那四个键连同两个此前改不了的流式超时，都成了上面 A 表的成员，`.env` / systemd `Environment=` / 代码缺省三轨同值。历史见 CHANGELOG 20261020。）
 

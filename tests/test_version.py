@@ -59,7 +59,7 @@ def call() -> dict:
 
 def test_version():
     VERSION_KEYS = {"version", "sha", "sha_source", "started_at", "python"}
-    DIAL_NAMES = {"planner_native_thinking", "agent_fastpath", "llm_provider", "llm_model",
+    DIAL_NAMES = {"runtime", "budget", "llm_provider", "llm_model",
                   "rag_hybrid_enabled", "rag_hybrid_active", "rag_state", "vector_missing"}
     print("① sha 与 git 同源，且 `sha_source` 自证它是从哪来的")
     _r = call()
