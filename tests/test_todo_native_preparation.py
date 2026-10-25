@@ -87,6 +87,13 @@ def grant(result):
     return confirm.verify(result.execution["pending_confirm"]["token"], 7, 42)
 
 
+@pytest.mark.parametrize("date", [{}, {"date": None}, {"date": ""}])
+def test_unscheduled_create_binds_no_due_date_and_never_writes(todos, date):
+    result = prepare("create", text="准备面试", **date)
+    assert grant(result)["specs"][0]["args"]["date"] is None
+    assert not todos["writes"]
+
+
 @pytest.mark.parametrize(
     "action,args,workflow,name",
     [

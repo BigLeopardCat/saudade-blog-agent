@@ -91,12 +91,14 @@ def prepare_dashboard_todo(
     config: RunnableConfig,
     text: Annotated[StrictStr, Field(min_length=1, max_length=200)] | None = None,
     item_id: Annotated[StrictInt, Field(gt=0)] | None = None,
-    date: StrictStr | None = "",
+    date: Annotated[StrictStr | None, Field(description=(
+        "Due date explicitly requested by the user (YYYY-MM-DD); omit for an unscheduled "
+        "create, null clears a reschedule."))] = "",
 ) -> object:
     """按用户明确要求准备一项后台个人待办操作，不执行写入。
 
     create 提供原文 text；complete/reschedule 先读列表并提供 item_id，不传 text。
-    排期只接受 YYYY-MM-DD。create 未排期可省略 date。
+    排期只接受 YYYY-MM-DD。create 未指定排期时省略 date，不从聊天时间推断。
     reschedule 必须提供 date；清空排期显式传 null，省略或空串不清空。
     """
     return _prepare(action, text, item_id, date, config)
