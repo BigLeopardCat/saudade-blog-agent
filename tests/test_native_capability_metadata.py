@@ -6,9 +6,11 @@ from langchain_core.messages import AIMessageChunk, HumanMessage
 from langchain_core.utils.function_calling import convert_to_openai_tool
 from langgraph.checkpoint.memory import InMemorySaver
 
+from agent.domains.notices.targets import DEFAULT_TITLE
 from agent.principal import SOURCE_ASSERTION, Principal
 from agent.runtime.native import NativeRuntime
 from agent.runtime.native_store import NativeConversationStore
+from agent.runtime.session import _loader
 
 
 @pytest.mark.parametrize("role", ["superadmin", "admin", "user", "zako"])
@@ -38,3 +40,8 @@ def test_initial_request_exposes_assignable_role_names_only_to_administrators(ro
         assert not any(item["name"] == "prepare_account_role" for item in menus)
     else:
         assert not loaders
+
+
+def test_notice_discovery_uses_the_business_default_title():
+    description = _loader("admin_notices")["function"]["description"]
+    assert DEFAULT_TITLE in description

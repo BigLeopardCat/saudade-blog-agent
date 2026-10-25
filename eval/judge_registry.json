@@ -476,7 +476,7 @@
         0
       ],
       "agent/runtime/session.py": [
-        17,
+        16,
         0
       ],
       "agent/runtime/turns.py": [
@@ -581,7 +581,7 @@
       ]
     },
     "total": [
-      579,
+      578,
       496
     ]
   },
