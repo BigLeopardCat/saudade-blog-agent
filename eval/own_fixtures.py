@@ -15,14 +15,15 @@ SECRET = secrets.token_urlsafe(32)
 
 @contextmanager
 def favorite_backend():
-    state = {"favorites": [], "requests": [], "unavailable": False}
+    state = {"favorites": [], "requests": [], "unavailable": False,
+             "article": {"noteKey": 19, "noteTitle": "真实文章标题", "status": 1}}
 
     def handle(request):
         state["requests"].append(request)
         if state["unavailable"]:
             return httpx.Response(503)
         if request.url.path.endswith("/notes/19"):
-            data = {"noteId": 19, "noteTitle": "真实文章标题", "status": 1}
+            data = state["article"]
         elif request.url.path.endswith("/notes/search"):
             keyword = json.loads(request.content).get("keyword", "")
             data = ([{"noteId": 19, "noteTitle": "真实文章标题", "status": 1}]
