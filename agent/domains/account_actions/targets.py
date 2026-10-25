@@ -78,7 +78,7 @@ def intent(value):
         raise ValueError("需唯一账号编号或完整账号名；变更身份需新身份，禁言需明确到期时间或永久")
     if parsed.mutedUntil is not None:
         datetime.fromisoformat(parsed.mutedUntil)
-    return parsed.model_dump()
+    return parsed.model_dump(mode="json")
 
 
 def plan(value, request):

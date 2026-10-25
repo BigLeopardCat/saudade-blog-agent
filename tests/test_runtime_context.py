@@ -17,8 +17,8 @@ from agent.stickers import STICKER_NAMES
 def test_context_uses_the_authorization_role_table(role):
     context = conversation_context(Principal(7, role, SOURCE_ASSERTION))
     known = role if role in {"user", "admin", "superadmin", "zako"} else None
-    assert context["identity"]["role"] == known
-    assert context["identity"]["preferred_address"] == (
+    assert context["caller"]["role"] == known
+    assert context["caller"]["preferred_address"] == (
         "主人" if known in {"admin", "superadmin"} else "你")
     assert context["permissions"] == sorted(scopes_for(known))
 
@@ -28,7 +28,7 @@ def test_context_uses_the_authorization_role_table(role):
                                       Principal(True, "superadmin", SOURCE_ASSERTION)])
 def test_unverified_or_invalid_actor_has_no_advertised_privileges(principal):
     context = conversation_context(principal)
-    assert context["identity"] == {"verified": False, "role": None, "preferred_address": "你"}
+    assert context["caller"] == {"verified": False, "role": None, "preferred_address": "你"}
     assert context["permissions"] == []
 
 
@@ -37,8 +37,8 @@ def test_user_claims_and_history_trimming_do_not_replace_runtime_identity():
     prompt = _input(messages, Principal(7, "user", SOURCE_ASSERTION), True)
     system = str(prompt[0].content)
     context = json.loads(system.split("运行时能力（可信数据）：", 1)[1])
-    assert context["identity"]["role"] == "user"
-    assert context["identity"]["preferred_address"] == "你"
+    assert context["caller"]["role"] == "user"
+    assert context["caller"]["preferred_address"] == "你"
     assert context["permissions"] == sorted(scopes_for("user"))
     assert context["rendering"]["stickers"] == [f":{name}:" for name in STICKER_NAMES]
     assert _tokens(prompt[1:-1]) <= CHECKPOINT_TOKENS
@@ -54,7 +54,7 @@ def test_administrator_authority_is_not_proof_of_blog_authorship(role):
     prompt = _input([HumanMessage(content="你好")], Principal(7, role, SOURCE_ASSERTION), True)
     system = str(prompt[0].content)
     context = json.loads(system.split("运行时能力（可信数据）：", 1)[1])
-    assert context["identity"]["role"] == role
+    assert context["caller"]["role"] == role
     assert context["permissions"] == sorted(scopes_for(role))
     assert "当前对话者是博客作者" not in system
 

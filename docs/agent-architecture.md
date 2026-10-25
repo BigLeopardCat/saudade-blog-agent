@@ -166,6 +166,7 @@ flowchart LR
 │   ├── runtime/read_tools.py                            # 当前生产代码模块
 │   ├── runtime/results.py                               # 当前生产代码模块
 │   ├── runtime/session.py                               # 当前生产代码模块
+│   ├── runtime/trace_context.py                         # 记录实际工具契约、调用者与轮次状态
 │   ├── runtime/turns.py                                 # 当前生产代码模块
 │   ├── runtime/writes.py                                # 当前生产代码模块
 │   ├── runtime_probe.py                                 # 当前生产代码模块

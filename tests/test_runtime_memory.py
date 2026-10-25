@@ -30,7 +30,7 @@ def test_summary_reaches_native_input_as_data_not_runtime_authority():
     prompt = _input(server.build_messages(request), actor())
     trusted, _ = json.JSONDecoder().raw_decode(
         prompt[0].content.split("运行时能力（可信数据）：", 1)[1])
-    assert trusted["identity"]["role"] == "superadmin"
+    assert trusted["caller"]["role"] == "superadmin"
     assert "曾误称不能管理" not in prompt[0].content
     assert any("用户希望中文答复" in str(m.content) for m in prompt[1:-1])
     assert prompt[-1].content == "[当前问题]: 继续"
@@ -69,6 +69,16 @@ def test_observations_are_bounded_pairs_and_failures_are_not_remembered_as_facts
     restored = serializer.loads_typed(serializer.dumps_typed(pair))
     assert restored[0].tool_calls[0]["args"] == {"keyword": "架构"}
     assert restored[1].tool_call_id == "search"
+
+
+def test_framework_tool_message_excerpt_is_not_presented_as_a_complete_result():
+    call = {"name": "get_conversation_image", "args": {}, "id": "image", "type": "tool_call"}
+    result = ToolMessage(content="x" * 2000, name=call["name"], tool_call_id="image",
+                         artifact={"kind": "ok"})
+    pair = memory.observation(call, result)
+    assert pair[1].tool_call_id == "image" and pair[0].tool_calls == [call]
+    assert "历史工具结果节选" in pair[1].content
+    assert len(pair[1].content) < memory.OBSERVATION_CHARS + 100
 
 
 def test_real_native_loop_persists_source_observations_across_followup_and_reload(monkeypatch):
@@ -160,3 +170,21 @@ def test_large_tool_turn_does_not_erase_the_recommendation_before_followup():
     results = {message.tool_call_id for message in history if isinstance(message, ToolMessage)}
     assert calls == results
     assert memory.history(saved, actor("user")) == []
+
+
+def test_long_assistant_reply_cannot_crowd_out_the_recent_tool_fact():
+    principal = actor("user")
+    call = {"name": "get_unread_summary", "args": {}, "id": "count"}
+    saved = memory.turn_messages(
+        [HumanMessage(content="我的未读合计多少？")],
+        memory.observation(call, base.ok('{"total":12}')),
+        "未读合计13条。" + "说明" * 1300, principal)
+    followup = [*saved, HumanMessage(content="刚才工具实际返回多少？")]
+    prompt = _input(followup, principal)
+    history = [message for message in prompt[1:-1] if not memory.is_context(message)]
+    sources = [message for message in history if isinstance(message, ToolMessage)]
+    assert len(sources) == 1 and json.loads(sources[0].content)["total"] == 12
+    assert sources[0].tool_call_id == "count"
+    assert memory._tokens(history) <= memory.HISTORY_TOKENS
+    assert len(str(history[-1].content)) < len(str(saved[-1].content))
+    assert memory.history(saved, actor(uid=8)) == []

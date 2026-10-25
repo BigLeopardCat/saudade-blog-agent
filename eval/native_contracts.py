@@ -24,7 +24,7 @@ from agent.runtime.control import RequestControl, request_scope
 from agent.runtime.narration import narrate
 from agent.runtime.native import NativeRuntime
 from agent.runtime.native_store import NativeConversationStore
-from eval import experience_contracts, navigation_contracts, request_metrics
+from eval import admin_task_contracts, experience_contracts, navigation_contracts, request_metrics
 from eval.own_fixtures import SECRET, favorite_backend, message_backend, notification_backend
 from utils.trace_io import load_trace
 
@@ -48,8 +48,8 @@ class _Store:
             return store.finish(*args)
 
 
-def _principal():
-    token = jwt.encode({"sub": 7, "role": "user", "aud": "agent",
+def _principal(role="user"):
+    token = jwt.encode({"sub": 7, "role": role, "aud": "agent",
                         "exp": int(time.time()) + 600}, SECRET, algorithm="HS256")
     request = Request({"type": "http", "headers": [
         (b"x-agent-assertion", token.encode())]})
@@ -74,7 +74,7 @@ def _card(result, executor):
 
 def _posts(state):
     return [r for r in state["requests"] if r.method in {"POST", "DELETE", "PUT", "PATCH"}
-            and not (r.method == "POST" and r.url.path.endswith("/notes/search"))]
+            and not (r.method == "POST" and r.url.path.endswith(("/notes/search", "/prepare")))]
 
 
 def _chat(turn, state):
@@ -173,7 +173,7 @@ CASES = [("chat", favorite_backend, _chat),
          ("notification_replay", notification_backend, _notifications),
          ("unread_counts", message_backend, _unread_counts),
          ("message_read_replay", message_backend, _messages),
-         *navigation_contracts.CASES, *experience_contracts.CASES]
+         *navigation_contracts.CASES, *experience_contracts.CASES, *admin_task_contracts.CASES]
 
 
 def _sample(name, backend, contract, run_id, sample):
@@ -181,7 +181,7 @@ def _sample(name, backend, contract, run_id, sample):
     with backend() as state, TemporaryDirectory(prefix="agent-native-eval-") as temp:
         arm = NativeRuntime(NativeConversationStore(InMemorySaver()), narrator=narrate)
         store = _Store(str(Path(temp) / "ledger.sqlite3"))
-        principal = _principal()
+        principal = _principal(state.get("caller_role", "user"))
 
         def turn(message, token=None):
             control = RequestControl(Event(), time.monotonic() + 90)
@@ -192,7 +192,10 @@ def _sample(name, backend, contract, run_id, sample):
                                              "case": f"native_{name}_{sample}_{len(rounds)}"},
                                  thread="conv_42", confirm_token=token or "")
             # Persist observable outcomes, never signed confirmation credentials.
-            rounds.append({"text": result["text"], "commands": result["commands"],
+            rounds.append({"user_input": message, "text": result["text"],
+                           "commands": result["commands"],
+                           "confirm_payloads": result["confirm_payloads"],
+                           "exec_rows": result["exec_rows"],
                            "confirmation_count": len(result["confirm_tokens"]),
                            "error": result["error"], "trace": result["trace"],
                            "elapsed_s": round(time.monotonic() - started, 3),

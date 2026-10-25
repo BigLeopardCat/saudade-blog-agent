@@ -39,13 +39,13 @@ def build_prompt(messages: list, principal, own_enabled: bool = False, pending=N
     own_boundary = "本人读取工具仅访问当前账号数据。" if own_enabled else ""
     system = SystemMessage(content=BLOG_PERSONA_PROMPT + "\n" + _BOUNDARY
                            + own_boundary
-                           + "\n账号身份以可信 identity 为准；管理员权限不证明作者身份。"
+                           + "\ncaller 是当前调用者的账号，不是你的身份；其权限不证明博客作者身份。"
                            + "\n运行时能力（可信数据）："
                            + json.dumps(context, ensure_ascii=False, separators=(",", ":")))
     attachments = []
     if is_verified_identity(principal):
         attachments.append(HumanMessage(
-            content="当前调用账号（服务端验签数据，仅用于识别本人，权限仍以可信identity为准）："
+            content="当前调用账号（服务端验签数据，仅用于识别本人，权限仍以可信caller为准）："
             + json.dumps({"user_id": principal.uid}, separators=(",", ":")),
             additional_kwargs={"memory_context": True}))
     pages = [m.additional_kwargs.get("page_context") for m in messages

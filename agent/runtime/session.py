@@ -18,7 +18,7 @@ from agent.domains import browser, device_actions
 from agent.domains.account_actions.targets import Role
 from agent.domains.notices.targets import DEFAULT_TITLE
 from agent.llm_usage import usage_fields
-from agent.runtime import memory
+from agent.runtime import memory, trace_context
 from agent.runtime.budget import (
     NATIVE_OUTPUT_TOKENS,
     BudgetExceeded,
@@ -131,6 +131,7 @@ class ToolSession:
         self.article_evidence = ArticleEvidence()
         self.used_stream_api = False
         self.finalizing = False
+        self.traced_contracts = set()
         self.llm = self._bind_menu()
 
     def _bind_menu(self):
@@ -346,6 +347,7 @@ class ToolSession:
         record("native", "llm_start", round=self._round_index, engine="native",
                prompt_chars=sum(len(text_content(message.content)) for message in prompt),
                streaming=True)
+        trace_context.tools(self.menu, self.traced_contracts)
         try:
             with native_call(self.budget, prompt, self.menu,
                              output_limit=self.output_limit) as ticket:

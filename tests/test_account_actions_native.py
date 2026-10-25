@@ -21,6 +21,18 @@ def admin_config(**values):
     return config(principal=Principal(uid=7, role="admin", source=SOURCE_ASSERTION), **values)
 
 
+def test_role_intent_uses_json_primitives_at_the_checkpoint_boundary():
+    from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
+
+    from agent.domains.account_actions import targets
+
+    intent = targets.intent({"action": "set_role", "target": {"id": 11}, "role": "zako"})
+    assert type(intent["role"]) is str
+    serializer = JsonPlusSerializer(allowed_msgpack_modules=None)
+    restored = serializer.loads_typed(serializer.dumps_typed(intent))
+    assert restored == intent and type(restored["role"]) is str
+
+
 @pytest.fixture
 def accounts(monkeypatch):
     state = {
