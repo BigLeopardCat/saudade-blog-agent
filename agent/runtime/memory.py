@@ -170,18 +170,22 @@ def observation(call, result):
         if result.status != "success" or artifact.get("kind") != "ok":
             return []
         result = compact(result)
-        body = str(result.content)[:OBSERVATION_CHARS]
+        body = _observation_excerpt(str(result.content))
         return [AIMessage(content="", tool_calls=[call]), result.model_copy(update={
             "content": body, "artifact": {"kind": "ok"}})]
     if getattr(result, "kind", None) not in ("ok", "empty", "not_found"):
         return []
-    body = str(result)
-    if len(body) > OBSERVATION_CHARS:
-        body = body[:OBSERVATION_CHARS] + "\n[历史工具结果节选，完整内容需重新读取]"
+    body = _observation_excerpt(str(result))
     return [AIMessage(content="", tool_calls=[call]), ToolMessage(
         content=body, name=call["name"], tool_call_id=call["id"],
         artifact={"kind": result.kind},
     )]
+
+
+def _observation_excerpt(body):
+    if len(body) > OBSERVATION_CHARS:
+        return body[:OBSERVATION_CHARS] + "\n[历史工具结果节选，完整内容需重新读取]"
+    return body
 
 
 def turn_messages(messages, observations, reply, principal):

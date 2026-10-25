@@ -108,6 +108,57 @@ def test_tool_call_stats_excludes_requested_calls_and_other_nodes(monkeypatch):
     assert golden_trace.tool_call_stats(None) == ([], 0)
 
 
+@pytest.mark.parametrize("cancel", [False, True])
+def test_admin_compound_task_preserves_approval_stages_and_final_business_state(
+    monkeypatch, tmp_path, cancel
+):
+    from langchain_core.utils.function_calling import convert_to_openai_tool
+
+    from eval.admin_task_contracts import BODY
+
+    def call(name, **args):
+        return {"name": name, "args": args, "id": name, "type": "tool_call"}
+
+    responses = [
+        AIMessage(content="", tool_calls=[call("load_admin_account_actions_info_tools"),
+                                          call("load_admin_notices_info_tools")]),
+        AIMessage(content="", tool_calls=[call("list_accounts", username="青叶")]),
+        AIMessage(content="", tool_calls=[call("prepare_user_notice", user_id=20, content=BODY),
+                                          call("prepare_account_role", account_id=20,
+                                               role="zako")]),
+    ]
+    if cancel:
+        responses.extend([
+            AIMessage(content="", tool_calls=[call("load_pending_info_tools")]),
+            AIMessage(content="", tool_calls=[call("cancel_pending_operation")])])
+    else:
+        responses.append(AIMessage(content="通知已发送，账号身份已调整为杂鱼。"))
+    remaining = iter(responses)
+
+    class Model:
+        def bind_tools(self, tools, **kwargs):
+            self.kwargs = {"tools": [convert_to_openai_tool(tool) for tool in tools]}
+            return self
+
+        def invoke(self, prompt, **kwargs):
+            return next(remaining)
+
+    monkeypatch.setattr("agent.runtime.native.get_llm", lambda **_: Model())
+    monkeypatch.setattr(golden_trace, "trace_root", lambda: str(tmp_path / "traces"))
+    report = native_contracts.run(["notice_role_cancel" if cancel else "notice_then_role"])
+    row = report["cases"][0]
+    assert row["passed"] and row["evaluated"], row
+    documents = [json.loads(path.read_text()) for path in (tmp_path / "traces").rglob("*.json")]
+    phases = [event for doc in documents for event in doc["events"]
+              if event.get("event") == "turn_state"]
+    approvals = sum(event["phase"] == "awaiting_confirmation" for event in phases)
+    assert approvals == (1 if cancel else 2)
+    assert row["business_writes"] == (0 if cancel else 2)
+    assert all(event.get("caller", {}).get("role") == "admin" for doc in documents
+               for event in doc["events"] if event.get("event") == "caller_context")
+    assert "confirm_tokens" not in json.dumps(report)
+
+
 def test_native_outcome_suite_uses_verified_identity_and_redacts_tokens(monkeypatch, tmp_path):
     def call(name, args):
         return AIMessage(content="", tool_calls=[{"name": name, "args": args, "id": name}])

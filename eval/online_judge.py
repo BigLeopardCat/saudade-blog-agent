@@ -49,6 +49,28 @@ def digest(body: bytes) -> str:
     return hashlib.sha256(body).hexdigest()
 
 
+def runtime_context(events):
+    """Use captured runtime facts; never infer old capabilities from today's code."""
+    native = [event for event in events if event.get("node") == "native"]
+    callers = [event for event in native if event.get("event") == "caller_context"]
+    phases = [event for event in native if event.get("event") == "turn_state"]
+    used = {event.get("name") for event in native
+            if event.get("event") in {"tool_requested", "call"}}
+    contracts = [event["schema"]["function"] for event in native
+                 if event.get("event") == "tool_contract"]
+    return {
+        "caller": callers[-1].get("caller") if callers else None,
+        "permissions": callers[-1].get("permissions") if callers else None,
+        "turn_phase": phases[-1].get("phase") if phases else "not_recorded",
+        "receipt_count": phases[-1].get("receipt_count") if phases else None,
+        "available_tools": [{"name": item["name"], "description": item.get("description", "")}
+                            for item in contracts],
+        "used_tool_contracts": [item for item in contracts if item["name"] in used],
+        "missing": [name for name, present in (("caller", callers), ("phase", phases),
+                                               ("tool_contracts", contracts)) if not present],
+    }
+
+
 def material(case, results):
     """Include prior turns as attributed history, never as additional authority."""
     turns = []
@@ -67,6 +89,7 @@ def material(case, results):
         turns.append({
             "user_request": inp["message"],
             "caller_role": inp.get("principal_role"),
+            "runtime_context": runtime_context(trace.get("events", [])),
             "tool_observations": [{key: event[key] for key in
                                    ("name", "args", "kind", "result") if key in event}
                                   for event in calls if event.get("kind") != "prepared"],
@@ -76,7 +99,8 @@ def material(case, results):
             "assistant_reply_to_review": result["text"],
         })
     data = {"case": case["id"], "current_turn": len(turns), "turns": turns,
-            "evidence_limits": ["Tool schemas and hidden conversation summaries are not captured",
+            "evidence_limits": ["Missing runtime context stays unknown."
+                                " Hidden summaries and visual evidence are absent.",
                                 "No visual review or post-approval execution is implied"]}
     text = json.dumps(safe_result(data), ensure_ascii=False, indent=2)
     if len(text) > MAX_MATERIAL_CHARS:

@@ -34,7 +34,7 @@ def validate(grant, config):
         raise ValueError("确认凭据不是单项账号操作")
     if not isinstance(specs[0], dict):
         raise ValueError("账号确认明细无效")
-    args = Arguments.model_validate(specs[0].get("args")).model_dump()
+    args = Arguments.model_validate(specs[0].get("args")).model_dump(mode="json")
     request = targets.intent(args["intent"])
     name = TOOLS[request["action"]]
     if (
