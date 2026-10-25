@@ -80,6 +80,7 @@ flowchart LR
 │   ├── domains/article_tags/targets.py                  # 当前生产代码模块
 │   ├── domains/article_tags/transactions.py             # 当前生产代码模块
 │   ├── domains/browser.py                               # 当前生产代码模块
+│   ├── domains/conversation_images.py                   # 当前会话历史原图的鉴权回看
 │   ├── domains/catalog.py                               # 当前生产代码模块
 │   ├── domains/categories/__init__.py                   # 当前生产代码模块
 │   ├── domains/categories/preparation.py                # 当前生产代码模块
@@ -147,6 +148,10 @@ flowchart LR
 │   ├── runtime/conversation_store.py                    # 当前生产代码模块
 │   ├── runtime/workers.py                              # 请求线程与启动预热的服务生命周期
 │   ├── runtime/jobs.py                                  # 当前生产代码模块
+│   ├── runtime/memory_media.py                          # 多模态消息的历史引用与临时图片适配
+│   ├── runtime/memory_scope.py                          # 宿主历史与摘要的来源边界
+│   ├── runtime/message_content.py                       # 共用文本提取与框架 token 估算
+│   ├── runtime/prompt_budget.py                         # 当前请求与工具 schema 预留后的历史预算
 │   ├── runtime/memory.py                                # 当前生产代码模块
 │   ├── runtime/model_budget.py                          # 当前生产代码模块
 │   ├── runtime/narration.py                              # 已确认执行后的有界只读叙述
@@ -229,3 +234,7 @@ npm --prefix frontend test
 应用 lifespan 用标准库 `ExitStack` 管理本次创建的连接池，运行时工厂显式接收该资源作用域。
 任务与追踪收尾后才关闭所属连接池；启动失败只清理本次资源。没有按 DSN 缓存的进程级池，
 多个应用或评测作用域可以独立创建与关闭。会话锁、删除屏障和执行账仍使用对应 saver 的池。
+
+会话记忆采用近期消息、来源受限的摘要及有界工具证据；图片历史仅保留引用与已有分析，
+按需通过宿主鉴权接口回看。宿主冷启动历史接纳、权限来源和兼容影响见
+[会话记忆契约](conversation-memory.md)。

@@ -174,17 +174,8 @@ def redact_frames(frames: list) -> list:
     return out
 
 
-#: 生产形状的历史（20261016 批 3）。**为什么需要它**：Rust 每轮真的会发
-#: `history[-20:]`（`src/routes/chat.rs` 的 `history_items`，`{"role","content"}` 两条
-#: 一组的问答），而 golden 是**进程内驱动**的——多轮用例靠 `conversation_id` 把两轮串
-#: 起来，却**一条都不注入 `history`**（实测：11 条多轮用例的 `context` 里没有这个键）。
-#: 后果：**"停止注入历史"这一刀在今天的语料上测不出来**——臂 C（图自持上下文）与臂 B
-#: 的差集只出现在"线程非空 × 本轮仍注入 history"这一格，而这一格语料里不存在 ⇒
-#: 4 臂读数会显示 C ≡ B，很容易被读成"输入契约这一刀没用"。
-#:
-#: 开 `GOLDEN_PROD_HISTORY=1` 之后，多轮用例第 i>1 轮的 `history` = 第 1..i−1 轮**真实**
-#: 的（发出去的 user 文本，最终回复）——与 Rust 逐字同形（同样取末尾 20 条）。
-#: 三臂跑同一份驱动，对照仍同源。**缺省关**（既有读数逐字节不变）。
+# Optional host-shaped history from earlier completed rounds of the same case.
+# Disabled by default; enabled runs carry both bounded HistoryItem values and actor provenance.
 ENV_PROD_HISTORY = "GOLDEN_PROD_HISTORY"
 #: Rust 的 `history[-20:]`（`chat.rs` 的 `.take(20)`）。
 PROD_HISTORY_LIMIT = 20
@@ -504,16 +495,8 @@ def run_case(case: dict, *, run_id: str = "", suffix: str = "", turn_runner=None
     conv_id = (case.get("context") or {}).get("conversation_id")
     done: list[dict] = []
     prev_token = ""
-    # 生产形状的历史（见 `ENV_PROD_HISTORY`）：逐轮攒**真正发出去的那两句**，
-    # 第 i>1 轮把末尾 20 条注入回去。**缺省关** ⇒ 既有读数逐字节不变。
-    # ⚠️ **必须是 `HistoryItem` 实例，不能是 dict**：`ChatRequest.history` 是
-    # `list[HistoryItem]`，而 pydantic 只在**构造时**校验——`req.history = [dict, …]`
-    # 这种赋值**绕过校验**（`ChatRequest` 没开 `validate_assignment`），于是
-    # `_build_messages` 拿到裸 dict，`h.role` 当场 `AttributeError`
-    # （20261016 实测：异常在主线程抛出，但进程**不退出**——挂满 15 分钟才被
-    # `subprocess` 的超时杀掉，看起来像"服务商挂起"）。判据见
-    # `tests/test_golden_prod_history.py`：注入进 `req.history` 的每一项都必须能
-    # `.role` / `.content`。
+    # Assignment bypasses Pydantic conversion, so retain actual HistoryItem instances.
+    # The case's fixed actor is the source for these newly generated records.
     _prod_hist: list[HistoryItem] = []
     _prod_on = prod_history_on()
     for i, rnd in enumerate(rounds):
@@ -531,24 +514,22 @@ def run_case(case: dict, *, run_id: str = "", suffix: str = "", turn_runner=None
             break
         req = build_request(case, rnd)
         # 第 2 轮起：合成消息（生产上前端发的是「确认执行：<卡面摘要>」）+ 上一轮的令牌。
-        # **不重新规划**是令牌本身的性质（graph 见 grant 直接走执行轮），这里不额外判。
+        # Native confirmation consumes the signed grant without a model call.
         if i > 0 and is_confirm_round:
             req.message = rnd.get("confirm_message") or "确认执行"
             req.confirm_token = prev_token
             # 「只办第 i 件」那一格（20261010）：与令牌一起发给这一轮（生产上这两个
             # 字段本来就是同一张卡的两个部分——卡上点了哪一格 + 那张卡的令牌）。
             req.confirm_pick = rnd.get("confirm_pick") or ""
-        # **没有令牌的续轮不发令牌、也不改写消息**（20260927 批 D 的多轮用例：第 2 轮是
-        # 主人自己说的「继续吧」，走的是**普通请求**——planner 照常采样、靠注入的未完结
-        # 任务上下文决定做什么）。它不需要令牌：上面那条担心的"合成命令式文本借同轮命令
-        # 通道把写做掉"在这里不成立，这轮发的是用例自己写的自然语言 `user_input`。
-        # 反过来把令牌硬塞给它才是错的：令牌把技能与参数签在里面（agent/confirm.py），
-        # 那是"照这张卡执行"的授权，与"主人又说了一句话"不是一回事。
+        # Ordinary follow-ups keep their own user input and do not inherit a confirmation grant.
         # 生产形状的历史（`GOLDEN_PROD_HISTORY`）：注入的是**上一轮真的发出去的那两句**
         # ——确认轮发的是合成命令文本（生产上前端也这么存），所以取 `req.message` 而不是
         # `rnd["user_input"]`。用例自己写了 `history` 的不覆盖（那是有意的注入）。
         if _prod_on and i > 0 and not (rnd["context"] or {}).get("history"):
             req.history = _prod_hist[-PROD_HISTORY_LIMIT:]
+            # These entries were produced by this case's fixed actor, not imported legacy data.
+            req.history_scope = {"user_id": principal.uid, "role": principal.known_role,
+                                 "conversation_id": req.conversation_id}
         t0 = time.time()
         res = (turn_runner or run_one)(req, principal,
                       trace_ctx=({"run": run_id, "case": case["id"] + suffix} if run_id else None),

@@ -26,7 +26,10 @@ from agent.runtime.budget import (
 )
 from agent.runtime.catalog import initial_tools
 from agent.runtime.control import model_options
+from agent.runtime.memory_media import tool_messages
+from agent.runtime.message_content import text_content
 from agent.runtime.progress import emit as emit_progress
+from agent.runtime.prompt_budget import fit_history
 from agent.runtime.read_tools import scoped_reads_enabled
 from agent.runtime.results import TurnResult
 from agent.runtime.turns import check_cancelled
@@ -46,6 +49,7 @@ _DOMAIN_DESCRIPTIONS = {
     "devices": "读取当前账号可访问的设备（含共享演示设备），或按请求显示OLED文字；"
                "仅已授权身份可下发，区分下发与设备确认，不管理物联网平台。",
     "public_catalog": "分页读取公开文章清单、置顶文章、分类和分层标签及公开文章计数；不读取正文。",
+    "conversation_images": "Re-read a referenced conversation image when details are needed.",
     "own_activity": "读取本人河灯留言的状态、理由与分页内容，以及当前会话的真实聊天文本。"
                     "不读取其他账号数据或其他会话，不加载图片，只读。",
     "admin_catalog": "分页读取后台文章清单（含草稿、私密文章的元数据）与账号名录。"
@@ -190,7 +194,7 @@ class ToolSession:
             record("native", "tool_failed", name=name, error=type(exc).__name__)
             return unavailable(f"{name} 调用失败（{type(exc).__name__}），请如实说明。")
 
-    def _append_result(self, call, prompt, round_index):
+    def _append_result(self, call, prompt, round_index, attachments):
         name = call["name"]
         record("native", "tool_requested", name=name)
         if name in self.loaders:
@@ -243,7 +247,7 @@ class ToolSession:
             kind = "error"
         self.observations.extend(memory.observation(call, body))
         evidence_value = body
-        body = str(message.content) if message else str(body)
+        body = text_content(message.content) if message else str(body)
         remaining = _MAX_TOTAL_RESULT_CHARS - self.result_chars
         limit = min(_MAX_RESULT_CHARS, remaining)
         if name == "get_article_detail":
@@ -255,8 +259,9 @@ class ToolSession:
             marker = "\n[结果截断，请缩小检索范围]"
             body = body[:max(0, limit - len(marker))] + marker
         self.article_evidence.observe(name, args, evidence_value)
-        prompt.append(message.model_copy(update={"content": body}) if message else
-                      ToolMessage(content=body, tool_call_id=call["id"]))
+        messages = tool_messages(message, body, call["id"])
+        prompt.append(messages[0])
+        attachments.extend(messages[1:])
         self.result_chars += len(body)
         record("native", "call", name=name, args=args, round=round_index,
                kind=kind, result=trace_mod.tool_result_text(body, name))
@@ -308,7 +313,7 @@ class ToolSession:
         failed = False
         emit_progress(self.config, "正在处理请求…", key=f"model:{self._round_index}")
         record("native", "llm_start", round=self._round_index, engine="native",
-               prompt_chars=sum(len(str(message.content)) for message in prompt),
+               prompt_chars=sum(len(text_content(message.content)) for message in prompt),
                streaming=True)
         try:
             with native_call(self.budget, prompt, self.menu,
@@ -457,11 +462,13 @@ class ToolSession:
     def stream(self, prompt):
         """Run native rounds while yielding model text chunks as they arrive."""
         self._restore_domains(prompt)
+        prompt = fit_history(
+            prompt, self.principal, self.menu, self.budget.limits, self.output_limit)
         visible_parts = []
         self._round_index = 0
         while True:
             check_cancelled(self.config)
-            prompt_chars = sum(len(str(message.content)) for message in prompt)
+            prompt_chars = sum(len(text_content(message.content)) for message in prompt)
             if prompt_chars > MAX_PROMPT_CHARS:
                 result = self._budget_stop("prompt_budget", prompt_chars=prompt_chars)
                 return (yield from self._stream_terminal(result, visible_parts))
@@ -494,12 +501,15 @@ class ToolSession:
             if calls is None:
                 return None
             prompt.append(response)
+            attachments = []
             for call in calls:
                 check_cancelled(self.config)
-                if not self._append_result(call, prompt, self._round_index):
+                if not self._append_result(call, prompt, self._round_index, attachments):
                     return (yield from self._stream_terminal(self.outcome, visible_parts))
                 if self.outcome is not None:
                     return (yield from self._stream_terminal(self.outcome, visible_parts))
+            # All sibling tool responses must precede transient multimodal user data.
+            prompt.extend(attachments)
             self._round_index += 1
 
     def run(self, prompt):

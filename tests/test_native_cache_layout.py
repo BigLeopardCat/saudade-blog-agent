@@ -83,7 +83,8 @@ def test_domain_loading_extends_wire_schemas_and_repeated_loading_is_idempotent(
 def context(title, summary):
     return HumanMessage(content="legacy context is not a prompt instruction", additional_kwargs={
         "memory_context": True, "page_context": {"title": title, "url": "/article/19"},
-        "conversation_summary": summary})
+        "conversation_summary": summary, "conversation_id": 42,
+        "summary_scope": {"user_id": 7, "role": "user", "conversation_id": 42}})
 
 
 class Pending:

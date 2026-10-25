@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from langchain_core.messages.utils import count_tokens_approximately
 
 from agent.llm_usage import usage_fields
+from agent.runtime.message_content import estimate_tokens
 from utils.trace import record
 
 NATIVE_OUTPUT_TOKENS = 768
@@ -51,8 +52,7 @@ class RequestBudget:
 
     def reserve(self, messages, tools=(), *, output_limit=NATIVE_OUTPUT_TOKENS):
         # CJK dialogue needs a more conservative ratio than mostly ASCII JSON schemas.
-        message_tokens = count_tokens_approximately(
-            messages, chars_per_token=1.5, tokens_per_image=2048)
+        message_tokens = estimate_tokens(messages)
         schema_tokens = count_tokens_approximately([], tools=list(tools))
         estimated = message_tokens + schema_tokens
         if type(output_limit) is not int or output_limit <= 0:

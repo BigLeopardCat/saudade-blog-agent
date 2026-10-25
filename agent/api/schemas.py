@@ -5,6 +5,7 @@ from typing import Literal
 from pydantic import BaseModel, Field, field_validator
 
 from agent.confirm import MAX_TOKEN_CHARS
+from agent.principal import KNOWN_ROLES
 
 MAX_MESSAGE_CHARS = 4000
 MAX_HISTORY_ITEMS = 60
@@ -39,6 +40,9 @@ class ChatRequest(BaseModel):
     history: list[HistoryItem] = Field(default_factory=list, max_length=MAX_HISTORY_ITEMS)
     summary: str = Field(default="", max_length=MAX_TEXT_FIELD_CHARS)
     needs_summary: bool = False
+    # Host-persisted provenance; never stamp existing records with today's role.
+    history_scope: dict | None = None
+    summary_scope: dict | None = None
     current_effects: str = Field(default="", max_length=MAX_SHORT_FIELD_CHARS)
     current_darkmode: str = Field(default="", max_length=MAX_SHORT_FIELD_CHARS)
     image: str | list[str] = ""
@@ -53,6 +57,18 @@ class ChatRequest(BaseModel):
     conversation_id: int | None = None
     confirm_token: str = Field(default="", max_length=MAX_TOKEN_CHARS)
     confirm_pick: str = Field(default="", max_length=MAX_SHORT_FIELD_CHARS)
+
+    @field_validator("history_scope", "summary_scope")
+    @classmethod
+    def _check_memory_scope(cls, value):
+        if value is not None and (
+            set(value) != {"user_id", "role", "conversation_id"}
+            or type(value["user_id"]) is not int or value["user_id"] <= 0
+            or type(value["conversation_id"]) is not int or value["conversation_id"] <= 0
+            or not isinstance(value["role"], str) or value["role"] not in KNOWN_ROLES
+        ):
+            raise ValueError("历史来源需包含有效 user_id、role 和 conversation_id")
+        return value
 
     @field_validator("image")
     @classmethod
