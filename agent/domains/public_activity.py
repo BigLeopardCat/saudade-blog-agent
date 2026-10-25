@@ -57,7 +57,8 @@ def list_guestbook(page: Page = 1, limit: Limit = 5,
                     item_id: Identifier | None = None) -> object:
     """分页读取已通过审核的公开河灯留言，默认5条、最多10条。
 
-    displayName是自由留名，不是账号。返回公开范围总数；列表正文240字，
+    displayName是公开自由留名，不是发表账号；管理员查询发布者使用后台留言工具。
+    返回公开范围总数；列表正文240字，
     用item_id读取单条最多2000字，截断会标记。待审或驳回内容不在本视图。
     """
     return _read("guestbook", "board", page, limit, item_id)
