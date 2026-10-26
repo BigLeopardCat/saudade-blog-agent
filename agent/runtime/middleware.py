@@ -91,6 +91,13 @@ class SessionMiddleware(AgentMiddleware):
         saved = capture(session)
         if session.outcome is not None:
             saved["jump_to"] = "end"
+        elif session.isolated and session.effects.get("pending_event"):
+            # Finish the isolated graph before transferring its standard state.
+            saved["jump_to"] = "end"
+        elif session.recovering and any(call["id"] not in self.cached for call in self.calls):
+            # A lifecycle boundary can be saved halfway through a native batch.
+            session.budget.attempt_tools(sum(call["id"] not in self.cached for call in self.calls))
+            saved["jump_to"] = "tools"
         return saved
 
     def _resume(self, state):
@@ -245,7 +252,16 @@ class OrderedToolsMiddleware(AgentMiddleware):
                 return ToolMessage(content="前序调用失败，本项未执行。", status="error",
                                    tool_call_id=request.tool_call["id"])
             try:
-                return handler(request)
+                result = handler(request)
+                messages = (result.update.get("messages", ())
+                            if isinstance(result, Command) else [result])
+                for message in messages:
+                    if isinstance(message, ToolMessage):
+                        policy.cached[message.tool_call_id] = message
+                        policy.exchange = [message if isinstance(old, ToolMessage)
+                            and old.tool_call_id == message.tool_call_id else old
+                            for old in policy.exchange]
+                return result
             except BaseException:
                 policy._failed = True
                 raise

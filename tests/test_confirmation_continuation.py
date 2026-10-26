@@ -189,7 +189,8 @@ def test_cancel_stops_the_whole_suspended_task_and_stale_approval_cannot_write(b
     else:
         model = Model(
             AIMessage(content="", tool_calls=[call("load_pending_info_tools", "load")]),
-            AIMessage(content="", tool_calls=[call("cancel_pending_operation", "cancel")]))
+            AIMessage(content="", tool_calls=[call("cancel_pending_operation", "cancel")]),
+            AIMessage(content="已取消剩下的任务。"))
         selected.model_factory = lambda **_: model
         assert run(selected, "取消剩下的任务").execution["pending_event"]
     assert selected.store.load(config()).approval is None

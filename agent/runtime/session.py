@@ -25,7 +25,7 @@ from agent.runtime.message_content import text_content
 from agent.runtime.middleware import StreamGuard
 from agent.runtime.progress import emit as emit_progress
 from agent.runtime.results import TurnResult
-from agent.runtime.turns import check_cancelled
+from agent.runtime.turns import AgentCancelled, check_cancelled
 from config.settings import settings
 from tools.base import unavailable
 from utils import trace as trace_mod
@@ -207,10 +207,13 @@ class ToolSession:
         ).encode()).hexdigest()
         record("native", "call", name=call["name"], args_hash=args_hash,
                call_id=call["id"], round=round_index, kind=kind)
-        if kind == "noop":
+        if kind == "noop" or kind == "cancelled":
             self.effects.update(execution)
-            prompt.append(ToolMessage(content=adapted.reply, name=call["name"],
-                                      tool_call_id=call["id"]))
+            message = ToolMessage(content=adapted.reply, name=call["name"],
+                                  tool_call_id=call["id"], artifact={
+                                      "kind": "ok", "effects": dict(self.effects)})
+            prompt.append(message)
+            self.observations.extend(memory.observation(call, message))
         else:
             self.outcome = self._with_receipts(adapted)
 
@@ -322,6 +325,10 @@ class ToolSession:
                     yield chunk.model_copy(update={"content": text})
         except BudgetExceeded as exc:
             self._budget_stop(exc.reason, tool_calls=self.calls_used)
+        except (AgentCancelled, GeneratorExit, TimeoutError):
+            stream.close()
+            execution.preserve_lifecycle()
+            raise
         finally:
             self.stream_guard.closed = True
             stream.close()

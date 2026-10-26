@@ -102,10 +102,13 @@ def test_replacing_and_cancelling_message_cards_revokes_old_grants(mailbox, monk
 
     class Model:
         def __init__(self, domain, tool, args):
-            self.responses = iter([
+            responses = [
                 AIMessage(content="", tool_calls=[{"name": f"load_{domain}_info_tools",
                                                     "args": {}, "id": "load"}]),
-                AIMessage(content="", tool_calls=[{"name": tool, "args": args, "id": "call"}])])
+                AIMessage(content="", tool_calls=[{"name": tool, "args": args, "id": "call"}])]
+            if tool == "cancel_pending_operation":
+                responses.append(AIMessage(content="旧操作已取消。"))
+            self.responses = iter(responses)
 
         def bind_tools(self, *args, **kwargs):
             return self
