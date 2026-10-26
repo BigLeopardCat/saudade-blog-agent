@@ -1,23 +1,6 @@
-"""真连一个库、真删一次：`eval/pg_retention.py` 的**那一层**判据（20261019 批 C）。
+"""Explicit PostgreSQL integration test using SAUDADE_CKPT_TEST_DSN.
 
-**这一件为什么单独一层**：`tests/test_pg_retention.py` 判的是分类规则与语句形状，它跑在
-一个假连接上——而 20261018 那次停服的教训正是"**四层判据全在必然失败/必然成功的假前提上判，
-真连一个库那条路径从来没有被跑过**"（见 `tests/test_checkpoint_setup_concurrent.py` 头注）。
-保留治理这一件要判的三件事，**只有真库能回答**：
-
-  ① `checkpoint->>'ts'` 那个 cast 在**真的 JSONB** 上跑得通（形态正则与真数据对得上）；
-  ② 三张表**真的没有外键** ⇒ 只删主表会留下孤儿（这条是"实测"出来的，不是读文档）；
-  ③ 断言不成立时**真的回滚**（半裁的状态没有落库）。
-
-**它会真删**，所以只认一个**专门的测试库**：DSN 里出现产线库名 ⇒ 当场拒跑。
-它只碰自己造的线程（前缀 `pgret_`），跑完删干净，不动别人的数据。
-
-用法：
-  SAUDADE_CKPT_TEST_DSN='postgresql://…@127.0.0.1:5432/saudade_it' \\
-      .venv/bin/python tests/test_pg_retention_live.py
-
-**没有那个变量时这一件不报绿，它报「未评估」**（一整块大字），`SAUDADE_REQUIRE_CKPT_TEST=1`
-把"未评估"变成失败——本仓把"没量"与"量了是绿的"分得很开。
+Requires a dedicated disposable database; never uses the deployment DSN.
 """
 
 
@@ -31,7 +14,7 @@ from pathlib import Path
 
 from _judge import collector
 
-ROOT = Path(__file__).resolve().parent.parent
+ROOT = Path(__file__).resolve().parents[2]
 
 
 sys.path.insert(0, str(ROOT))
@@ -62,7 +45,7 @@ def _skip(why: str) -> None:
     print("     前两层（纯函数 + 假连接）结构上回答不了这三件事。")
     print("   跑法：")
     print("     SAUDADE_CKPT_TEST_DSN='postgresql://…@127.0.0.1:5432/saudade_it' \\")
-    print("         .venv/bin/python tests/test_pg_retention_live.py")
+    print("         .venv/bin/python tests/integration/test_pg_retention_live.py")
     print("=" * 78)
     if STRICT:
         print("SAUDADE_REQUIRE_CKPT_TEST=1 ⇒ 未评估算失败（本次退出码 1）")
@@ -76,6 +59,10 @@ def _skip(why: str) -> None:
         import pytest  # noqa: PLC0415
         pytest.skip(why, allow_module_level=True)
     raise SystemExit(0)
+
+
+if not DSN:
+    _skip("未设置 SAUDADE_CKPT_TEST_DSN；不连接本机或部署数据库")
 
 
 try:

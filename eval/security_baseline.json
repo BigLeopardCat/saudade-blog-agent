@@ -61,7 +61,7 @@
     "tests/test_llm_judge.py::B108": 2,
     "tests/test_packaging.py::B108": 1,
     "tests/test_pg_retention.py::B608": 1,
-    "tests/test_pg_retention_live.py::B608": 8,
+    "tests/integration/test_pg_retention_live.py::B608": 8,
     "tests/test_retention_manifest.py::B108": 4,
     "tests/test_trace_io.py::B108": 1
   }

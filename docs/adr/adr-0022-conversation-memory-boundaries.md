@@ -2,7 +2,7 @@
 
 - **状态**：已采纳（20261025）
 - **影响范围**：原生会话历史、宿主上下文、请求预算与历史图片读取
-- **判据**：`tests/test_memory_boundaries.py`、`tests/test_conversation_images.py`
+- **判据**：`tests/runtime/test_memory_boundaries.py`、`tests/test_conversation_images.py`
 
 ## 背景
 
