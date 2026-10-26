@@ -67,6 +67,13 @@ def snapshot(folder, cases):
     return hashes
 
 
+def build_identity(version):
+    """Workers may start at different times while serving the same build."""
+    if not isinstance(version, dict) or not version.get("sha"):
+        raise EvaluationError("service version has no build identity")
+    return version["sha"], version.get("version")
+
+
 def run(cases, transport, identities, report_dir, *, phase, suite_hash):
     folder = Path(report_dir)
     folder.mkdir(parents=True, exist_ok=False)
@@ -74,6 +81,7 @@ def run(cases, transport, identities, report_dir, *, phase, suite_hash):
     version = transport.client.get(transport.agent_url + "/version")
     version.raise_for_status()
     initial_version = version.json()
+    initial_build = build_identity(initial_version)
     required = {c["identity"] for c in cases}
     role_sets = {"admin": {"admin", "superadmin"}, "user": {"user"}, "zako": {"zako"}}
     profiles = {}
@@ -107,7 +115,7 @@ def run(cases, transport, identities, report_dir, *, phase, suite_hash):
     for case in cases:
         before = transport.client.get(transport.agent_url + "/version")
         before.raise_for_status()
-        if before.json() != initial_version:
+        if build_identity(before.json()) != initial_build:
             report["stopped_reason"] = "service version changed during baseline"
             save()
             break
