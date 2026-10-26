@@ -28,10 +28,10 @@
 
 | 面 | 现状 | 证据 |
 |---|---|---|
-| 断点恢复 | 建账时**无**：生产不挂 saver；`agent/checkpoint.py` 的 `build_checkpointer()` 是响亮桩、零生产调用方；`thread_id` 每请求随机。**"挂没挂"现在看得见了**（**已补**：批 6a，`/health` 的 `checkpoint_backend`；半接会被 `tests/test_checkpoint_adoption.py` 判红）。**接线已落地**（**已补**：批 7，"三处一起动"共用同一个判据），且 **20261018 起生产真的在跑**（`/health` 回 `postgres`）。⚠️ **但它现在指在业务库上**——20261019 批 B 反转了"指哪个库"的口径（**必须独立库**）、加了 `dials.checkpoint_db` 与 `CHECKPOINT_FORBID_DB` 硬闸，**挪库那一步归主人**（顺序见批 7 的运维交接） | `agent/checkpoint.py`、`server.py` |
+| 断点恢复 | 建账时**无**：生产不挂 saver；`agent/checkpoint.py` 的 `build_checkpointer()` 是响亮桩、零生产调用方；`thread_id` 每请求随机。**"挂没挂"现在看得见了**（**已补**：批 6a，`/health` 的 `checkpoint_backend`；半接会被 `tests/runtime/test_checkpoint_adoption.py` 判红）。**接线已落地**（**已补**：批 7，"三处一起动"共用同一个判据），且 **20261018 起生产真的在跑**（`/health` 回 `postgres`）。⚠️ **但它现在指在业务库上**——20261019 批 B 反转了"指哪个库"的口径（**必须独立库**）、加了 `dials.checkpoint_db` 与 `CHECKPOINT_FORBID_DB` 硬闸，**挪库那一步归主人**（顺序见批 7 的运维交接） | `agent/checkpoint.py`、`server.py` |
 | 幂等账 | **已建成但惰性**：`agent/idem.py` 的 `active()` 要求 checkpointer 在场 ⇒ 恒 False | `agent/idem.py` |
 | 版本可见性 | **无** `/version`、无 build-info；`/health` 只回声 dials （**已补**：批 3，`agent/probe.version_payload`） | `server.py`、`agent/runtime_probe.py` |
-| 错误码 | BLOCK 原因码**已有闭集**（`agent/block_reasons.py` + `tests/test_block_reasons_native.py`）；**发射侧**没有对应闭集 | 同上 |
+| 错误码 | BLOCK 原因码**已有闭集**（`agent/block_reasons.py` + `tests/domains/test_block_reasons_native.py`）；**发射侧**没有对应闭集 | 同上 |
 | 重试 | **已有**但**散在**：重试码集、重试异常集、`_llm_retriable()`、planner 里的一次性重试各住一处 | `agent/graph.py` |
 | 用量计量 | 主链路计；**侧任务（moderator / summarizer）不计** | `agent/llm_usage.py` 头注自认 |
 | 权限 | scope 表与同意闸齐备，但 `AUTHZ_ENFORCE` 默认 **0（影子）**；影子读数**已建成**（批 5） | `agent/authz.py`、`eval/authz_shadow_divergence.py` |
@@ -140,7 +140,7 @@
 - **发射侧错误码收敛** ✅：**没有新增第三张表**。实测清点：生产侧能发出的码一共
   **20 个**（`agent/arg_refs.py` 的字面返回 + `authz` / `adminops_target` / `idem` /
   `graph` 的 `REASON_*` 具名常量），**20/20 都已在表里**——没有"裸码"要并。
-  真正缺的是**看着这件事的判据**：`tests/test_block_reasons_native.py` ③ 判的是**取回侧**
+  真正缺的是**看着这件事的判据**：`tests/domains/test_block_reasons_native.py` ③ 判的是**取回侧**
   （`_check_spec` 认哪几个字面、六个取回通道还接不接着），看不见生产侧。新增一节 ⑥：
   从源码现取生产侧的码（AST，不手抄名单）断言 ⊆ `REASONS`，带正控（扫不到就空过）
   与两条反控（合成一个未登记的新码 ⇒ 必须红；`return None, "人话"` 那种不许被当成码）。
@@ -148,7 +148,7 @@
   豁免只有一条且**点名**（`REASON_OK = "ok"` 是裁决常量、不是受阻码），并配一条
   "这条豁免仍然必要"的判据。
 - **重试策略归一** ✅ **早已做完**：三处常量本来就住在一起（`agent/graph.py` 的
-  `_RETRY_HTTP` / `_RETRY_EXC` / `_llm_retriable`），判据 `tests/test_native_answer_streaming.py`
+  `_RETRY_HTTP` / `_RETRY_EXC` / `_llm_retriable`），判据 `tests/runtime/test_native_answer_streaming.py`
   已逐码判（4xx 只有 408/409/425/429、5xx 全可重试、**400 不重试**、**超时不重试**）
   且带源码级共现锁。**没有 langchain `max_retries` 可"归一"**——全仓一处都没设。
 - **侧任务计费** ✅：两条侧任务**走不同的路**（这是本批唯一需要判断的地方）：
@@ -212,7 +212,7 @@
   ——把 `CHECKPOINT_DSN` 拨成合法 DSN 而图没挂 saver ⇒ 这一格**必须不变**（变了就说明它是
   从配置推的）。`unknown` 与 `none` 刻意分开（"读不出来"不许报成"没挂"，
   同 `hostinfo.trace_stats` 那条 `readable`）。
-- **共现锁** ✅ `tests/test_checkpoint_adoption.py`：判的不是"接了没有"，是**"有没有半接"**。
+- **共现锁** ✅ `tests/runtime/test_checkpoint_adoption.py`：判的不是"接了没有"，是**"有没有半接"**。
   四处（① saver 交给图、② `thread_id` 是会话坐标、③ 历史注入已删、④ 持久化档是 sync）
   要么全「未接」、要么全「已接」，混合就红，并点名是哪几处没跟上。
   **今天四处全「未接」（0/4）**，与生产行为逐字节相同。
@@ -291,7 +291,7 @@
 [adr-0011](adr/adr-0011-graph-holds-context-checkpoint-memory.md) 的《20261018 追记（二）》。
 现在建表那一步是 **`pg_try_advisory_lock` 轮询 + 60s 预算**（超了响亮抛），建表前先删掉
 上一次被打断留下的**无效索引**（`CREATE INDEX CONCURRENTLY IF NOT EXISTS` 会永远跳过它）。
-**停服之后补上的那一层判据**是 `tests/test_checkpoint_setup_concurrent.py`——真连一个库、
+**停服之后补上的那一层判据**是 `tests/integration/test_checkpoint_setup_concurrent.py`——真连一个库、
 4 个进程同时建表，**红基线 = 换回阻塞版必须卡住**。
 
 **级联清理**：`agent/checkpoint.py::delete_thread`（返回值是**"删完读回来确认"**，不是
@@ -319,7 +319,7 @@ START 重启 ⇒ 下一轮走完自己回到空。**潜伏面** = 任何 `stream
 节点。判据 `tests/test_checkpoint_drop_turn.py` ⑤ 把这条现状记下来，没有假装它是干净的。
 
 **判据**（四份，全绿）：
-- `tests/test_checkpoint_adoption.py`：四处形态**一致即绿**。批 6 时是 0/4（全未接），
+- `tests/runtime/test_checkpoint_adoption.py`：四处形态**一致即绿**。批 6 时是 0/4（全未接），
   本批起 4/4（全已接）。**"能红"由反控证**：四条反控各拨一处全部翻红，外加 ④b
   ——**把坐标本体换成不产坐标的实现而 `server.py` 一个字节不动**（"改名不改义"），
   也必须红。正控是另一极（一份全「未接」骨架）⇒ 证明探针不是一组恒「已接」的东西。
@@ -337,7 +337,7 @@ START 重启 ⇒ 下一轮走完自己回到空。**潜伏面** = 任何 `stream
   钩子挪到调用点之后，两个调用点各自再查一遍 id 是最容易滑回去的写法）。这不是编出来的
   判据：父仓自己在那份头注里写着它上一版正是"清单两处各写一遍、写的不是同一份"，
   漏掉的三张表因此变成孤儿。
-- `tests/test_checkpoint_setup_concurrent.py`（**20261018 停服之后补的第四份**）：真连一个库、
+- `tests/integration/test_checkpoint_setup_concurrent.py`（**20261018 停服之后补的第四份**）：真连一个库、
   4 个进程同时建表。**它才是抓得住那次停服的那一层**——前三份全在 `127.0.0.1:1` 这种必然
   失败的 DSN 上判。缺 `SAUDADE_CKPT_TEST_DSN` 时它报「未评估」并退 0（`SAUDADE_REQUIRE_CKPT_TEST=1`
   把它变成失败），那一条自己每次运行都会另打一行**每次运行都报**这一层量没量。
@@ -386,7 +386,7 @@ saver 挂上之后历史注入被闸门关掉，而**没有任何"播种"路径*
    ```bash
    DSN=$(grep '^DATABASE_URL=' /home/ubuntu/Saudade-Blog/.env | cut -d= -f2- \
          | sed 's#/saudade_blog$#/saudade_it#')
-   SAUDADE_CKPT_TEST_DSN="$DSN" .venv/bin/python tests/test_checkpoint_setup_concurrent.py
+   SAUDADE_CKPT_TEST_DSN="$DSN" .venv/bin/python tests/integration/test_checkpoint_setup_concurrent.py
    ```
    要看到 `全部通过 ✅`（含**红基线卡住**那一半）。**它会 `DROP TABLE`**，所以只喂
    `saudade_it`——喂 `saudade_blog` 它当场拒跑。⚠️ 20261018 那次停服就是**跳过这一步**

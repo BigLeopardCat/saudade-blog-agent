@@ -139,11 +139,11 @@ SSE 的 `summary` 事件对新协议返回 `{text, base_id, through_id}` 对象�
 
 ## 验证边界
 
-`tests/test_memory_boundaries.py` 使用真实原生循环和 `InMemorySaver` 验证接续、角色隔离、
+`tests/runtime/test_memory_boundaries.py` 使用真实原生循环和 `InMemorySaver` 验证接续、角色隔离、
 长文本、图片计量、丢弃及删除；`tests/test_conversation_images.py` 使用可控 HTTP 和模型
 验证回看、越权拒绝、游标与下载上限、取消、正文和 trace 不含图片编码。
 完整离线套件强制使用 `.github/host-contract.json` 固定的公开宿主 checkout。
 离线回归使用可控模型验证数据能否到达、读取是否完整及预算边界，不代表真实模型会主动
 选择正确工具或始终依据事实作答。生产发布探活和这些结果不能代替真实任务质量验收。
-`tests/test_history_recovery.py` 使用真实框架运行时和目录，验证跨运行时重建后的长文尾部补读，
+`tests/runtime/test_history_recovery.py` 使用真实框架运行时和目录，验证跨运行时重建后的长文尾部补读，
 以及历史、本人留言、时间三来源读取中部分失败仍能保留其余结果。

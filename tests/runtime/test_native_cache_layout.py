@@ -147,3 +147,28 @@ def test_private_history_still_disappears_when_authority_changes():
                           Principal(7, "user", SOURCE_ASSERTION))
     assert "PRIVATE_CANARY" not in str(prompt)
     assert not any(isinstance(message, ToolMessage) for message in prompt)
+
+
+def test_static_renderer_prefix_is_shared_without_sharing_caller_authority():
+    from os.path import commonprefix
+
+    from agent.authz import scopes_for
+    from agent.stickers import STICKER_NAMES
+    from models.deepseek import DeepSeekChat
+
+    model = DeepSeekChat(api_key="synthetic", model="deepseek-v4.1-flash")
+    systems = []
+    for uid, role in [(7, "superadmin"), (8, "user"), (9, "zako")]:
+        principal = Principal(uid, role, SOURCE_ASSERTION)
+        prompt = build_prompt([HumanMessage(content="你好")], principal, own_enabled=role != "zako")
+        wire = model._get_request_payload(prompt)
+        system = wire["messages"][0]["content"]
+        facts = json.loads(system.split("运行时能力（可信数据）：", 1)[1])
+        assert facts["caller"]["role"] == role
+        assert facts["permissions"] == sorted(scopes_for(role))
+        assert str(uid) in wire["messages"][-2]["content"]
+        systems.append(system)
+    shared = commonprefix(systems)
+    assert all(f":{name}:" in shared for name in STICKER_NAMES)
+    assert "on_demand" in shared
+    assert "superadmin" not in shared

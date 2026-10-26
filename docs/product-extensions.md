@@ -47,5 +47,5 @@ runtime = NativeRuntime(
 内存 saver 适合示例。生产部署沿用持久化配置、可信身份以及业务后端授权。
 新增写入领域还须实现有效确认绑定、版本校验和幂等执行，不因接入框架而自动获得这些保证。
 
-验证：`tests/test_product_assembly.py` 覆盖非博客读取、多轮来源事实与共享预算；
+验证：`tests/runtime/test_product_assembly.py` 覆盖非博客读取、多轮来源事实与共享预算；
 博客相关 suites 继续覆盖权限、卡片、回放、文章证据、缓存前缀和多模态行为。
