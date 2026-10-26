@@ -395,8 +395,14 @@ def test_streamed_preface_and_terminal_confirmation_each_render_once(monkeypatch
     async def scenario():
         drained = asyncio.Event()
         monkeypatch.setattr(server, "finish_trace", lambda *args: drained.set())
+        monkeypatch.setattr(server, "summarize", lambda *args: pytest.fail(
+            "Preparing a confirmation must not wait for summary generation"))
         response = await server.chat_stream(
-            ChatRequest(message="prepare", conversation_id=42), service_request())
+            ChatRequest(message="prepare", conversation_id=42, needs_summary=True,
+                        history_scope={"user_id": 7, "role": "user", "conversation_id": 42},
+                        summary_batch={"base_id": 0, "messages": [
+                            {"id": 10, "role": "user", "content": "previous"}]}),
+            service_request())
         text, cards = [], []
         async for frame in response.body_iterator:
             kind, payload = frame.split("\ndata: ", 1)
@@ -407,7 +413,9 @@ def test_streamed_preface_and_terminal_confirmation_each_render_once(monkeypatch
         await asyncio.wait_for(drained.wait(), 2)
         reply = "".join(text)
         assert reply.count("准备好了。") == 1
-        assert reply.count(question) == 1 and len(cards) == 1
+        assert question not in reply and len(cards) == 1 and cards[0]["q"] == question
+        assert any(e["event"] == "deferred" and e.get("reason") == "awaiting_confirmation"
+                   for e in events)
         stored = runtime.get_state({"configurable": {"thread_id": "conv_42"}})
         assert stored.values["messages"][-1].content == reply
 

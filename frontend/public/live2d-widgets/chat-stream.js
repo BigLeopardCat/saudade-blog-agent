@@ -330,13 +330,17 @@
         return;
       }
       const token = String(ask.token || '');
+      const busy = ctx.state.isSending || Object.keys(ctx.state.remoteRounds || {}).length > 0;
       // A live card follows the current round; settled status belongs to its source message.
       if (askBox.dataset.askToken === token
           && askBox.dataset.askState === 'live'
           && askBox.classList.contains('active')
           && askBox.parentNode === messages
           && !!askBtns.querySelector('button[data-ask-value]')
-          && askAtEnd()) return;
+          && askAtEnd()) {
+        askBtns.querySelectorAll('button[data-ask-value]').forEach(button => { button.disabled = busy; });
+        return;
+      }
       if (askBox.dataset.askToken !== token) askAnchor = null;
       askBox.dataset.askToken = token;
       askBox.dataset.askId = String(ask.id || '');   // 埋点用（非凭据，见 askIdOf）
@@ -350,6 +354,7 @@
       (ask.opts || []).forEach((op) => {
         const b = document.createElement('button');
         b.type = 'button';
+        b.disabled = busy;
         // 复用导航确认框的按钮样式（.chat-nav-btn yes/no），观感与它完全一致。
         // 三档（20261006）：取消=no（灰）、其他（我来说）=other（按 no 那档的观感，
         // 它不是"同意"）、其余=yes（主色）。少了 other 这一档，「其他」会被画成
@@ -1259,6 +1264,7 @@
               saveAsk(ctx.state.pendingAsk);
               reportAskStage('frame', { id: String(data.id || ''), opts: data.opts.length,
                                        exp: data.exp ? 'yes' : 'no', q: data.q.slice(0, 40) });
+              syncAsk();
               return;
             }
             if (type === 'command') {
@@ -1487,18 +1493,9 @@
           // 20260903：本轮收尾——标题派生/updated_at touch 都发生在服务端该轮
           // 入库时，本地无从得知；通知 UI 重拉会话列表收敛（排序/标题/新建行）
           engine.notifyListDirty();
-          // 20260921 确认弹窗：帧循环只登记 pendingAsk（见 __CONFIRM__ 分支），
-          // 到收尾才真正弹出——运行中弹会被"刚发出的气泡+打字指示器"抢视线，
-          // 且用户可能还在读 narration。setTimeout(0) 让 finally 里刚复位的
-          // isSending/按钮态先生效（按钮回调据此判忙）。非 pendingAsk 轮顺手清
-          // 残留（上一轮的弹窗若在流中被 dismiss 过就不该再冒出来）
+          // Cards render on arrival; enable their controls after the stream has settled.
           setTimeout(() => {
             if (!ctx.state.pendingAsk) return;
-            // 仍在发（跨窗远端轮等）⇒ **保留待办**，等下一次收尾再弹。20260923 前
-            // 这里是 hideAsk()：把待办销毁并写"已取消"——一个纯时序的"此刻忙"被
-            // 当成"用户改口了"，卡片连同令牌一起丢，而 agent 那边确认帧早已签发，
-            // 用户唯一的一次同意机会就这么静默消失了（屏幕上连痕迹都没有）。
-            // 真正的销毁只有一处合法：用户改口打字（见 sendMessage 里的 hideAsk）。
             if (!ctx.state.isSending) syncAsk();
           }, 0);
           // 20260923：一轮对话收尾 → 广播给"看板娘可能改过的那些状态"。

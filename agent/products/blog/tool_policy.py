@@ -1,12 +1,16 @@
 """Blog authorization and browser/device receipt policy on standard Agent hooks."""
 
+from dataclasses import replace
+
 from langchain.agents.middleware import AgentMiddleware
 from langchain_core.messages import AIMessage, ToolMessage
 from langgraph.types import Command
 
 from agent.authz import SCOPE_ADMIN_CONSOLE, SCOPE_READ_OWN, TOOL_SCOPE, WRITE_SCOPES, check
 from agent.domains import browser, device_actions
+from agent.products.blog.confirmation import presentation
 from agent.products.blog.read_tools import scoped_reads_enabled
+from agent.runtime.execution_state import capture
 from utils.trace import record
 
 
@@ -23,6 +27,11 @@ class BlogToolMiddleware(AgentMiddleware):
             return ToolMessage(content="无权读取此数据。", status="error",
                                name=call["name"], tool_call_id=call["id"])
         result = handler(request)
+        if getattr(self.session, "outcome", None) is not None:
+            self.session.outcome = presentation(self.session.outcome)
+            if isinstance(result, Command) and isinstance(result.update, dict):
+                result = replace(result, update={**result.update,
+                    "proposal": capture(self.session)["proposal"]})
         messages = (result.update.get("messages", ()) if isinstance(result, Command)
                     and isinstance(result.update, dict) else (result,))
         for message in messages:
