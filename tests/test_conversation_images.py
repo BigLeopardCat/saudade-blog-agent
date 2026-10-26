@@ -272,3 +272,32 @@ def test_batch_tool_receipts_precede_all_image_attachments_on_the_sdk_wire(monke
     assert sum(len(image_urls(message["content"])) for message in wires[0]
                if message["role"] == "user") == (2 if second == "image" else 1)
     assert all(url not in str(selected.store.load(config()).messages) for url in urls)
+
+
+@pytest.mark.parametrize("count", [1, 2])
+@pytest.mark.parametrize("persistent", [False, True])
+def test_current_image_wire_keeps_question_before_original_attachments(count, persistent):
+    from types import SimpleNamespace
+
+    from _framework_fixture import model_replies
+
+    from agent.api.context import build_messages
+
+    urls = ["data:image/png;base64,RED_FIXTURE", "data:image/png;base64,BLUE_FIXTURE"][:count]
+    req = ChatRequest(message="这些图片是什么颜色", image=urls)
+    saver = InMemorySaver() if persistent else None
+    with model_replies({"content":"已看到图片。"}) as (model, requests):
+        selected = native.NativeRuntime(native_store.NativeConversationStore(saver),
+            catalog=SimpleNamespace(initial_tools=lambda _: {}, domains=lambda *_:{}),
+            model_factory=lambda **_:model)
+        events = list(selected.stream_events({"messages":build_messages(req)}, config()))
+        assert events[-1].reply == "已看到图片。"
+    assert len(requests) == 1
+    content = requests[0]["messages"][-1]["content"]
+    assert content[0] == {"type":"text", "text":"[当前问题]: 这些图片是什么颜色"}
+    assert [part["image_url"]["url"] for part in content[1:]] == urls
+    assert all(part["type"] == "image_url" for part in content[1:])
+    assert all(message["role"] == "user" for message in requests[0]["messages"]
+               if isinstance(message.get("content"),list))
+    if persistent:
+        assert not any(url in str(selected.store.load(config()).messages) for url in urls)
