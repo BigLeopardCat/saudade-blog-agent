@@ -1779,6 +1779,7 @@
         e.stopPropagation();
         e.preventDefault();
         isDragging = true;
+        chatPanel.dataset.detached = 'true';
         isResizing = false;
         // 固定当前宽度，防止移除 right:0 后宽度变化
         chatPanel.style.width = chatPanel.offsetWidth + 'px';
@@ -1795,13 +1796,6 @@
           chatPanel.style.top = (e.clientY - offsetY) + 'px';
           chatPanel.style.right = 'auto';
           chatPanel.style.bottom = 'auto';
-          // 20260905 特例钳制：会话抽屉右扩态(conv-out)下右缘出屏 → 左移回屏
-          // （对话框+列表全程可见）。仅此一态生效；其余自由拖动维持"不钳视口"
-          // ——负坐标/向上拖动锁死的教训见上方注释（CONV_GAP=4 同 chat-session）
-          if (chatPanel.classList.contains('conv-open') && chatPanel.classList.contains('conv-out')) {
-            const over = chatPanel.getBoundingClientRect().right - (window.innerWidth - 4);
-            if (over > 0) chatPanel.style.left = (parseFloat(chatPanel.style.left || '0') - over) + 'px';
-          }
         }
         if (isResizing) {
           // 四角缩放（20260905 泛化；原仅 tl 特判 + 其余按 br 处理）：
@@ -1822,16 +1816,11 @@
       });
       document.addEventListener('pointerup', () => {
         isDragging = false; isResizing = false;
-        // 20260905：拖动/缩放结束 → 让 chat-session 重估展开几何（conv-out
-        // 出屏回移 / conv-in 可升真列），见 chat-session.js refitOpen
-        try { window.__refitConvOpen && window.__refitConvOpen(); } catch(err) {/* ignore */}
       });
       // 缩放把手：四角纯隐形热区（20260905f 去视觉化——用户反馈橙色三角
       // 遮挡四角正常按钮功能）。热区 24×24 → 14×14 贴角：无任何图形内容、
       // 无 hover 显现，悬浮到角缘仅光标变缩放形状，按住即拖；触屏无 hover
       // 也无提示，四角缘直接按住拖即可。z7 高于外框 ::before 末端（20260901g）
-      // 20260903c：把手带标识类——chat-session onDocDown 据此豁免收起
-      // （conv-out 左扩期间拖动/缩放窗口不得触发几何还原，否则首帧跳 182px）
       const makeResizeHandle = (corner) => {
         const isT = corner[0] === 't';
         const isL = corner[1] === 'l';
@@ -1847,6 +1836,7 @@
           e.preventDefault();
           isDragging = false;
           isResizing = true;
+          chatPanel.dataset.detached = 'true';
           resizeCorner = corner;
           startX = e.clientX;
           startY = e.clientY;

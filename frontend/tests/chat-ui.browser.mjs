@@ -139,6 +139,23 @@ try {
     assert.ok(bounds.width >= 140 && Object.entries(bounds).every(([key, value]) => key === 'width' || value >= -1), JSON.stringify(bounds));
   };
 
+  const workspaceBounds = () => page.locator('#waifu-chat').evaluate(panel => {
+    const rect = el => { const r = el.getBoundingClientRect(); return { left: r.left, top: r.top, right: r.right, bottom: r.bottom, width: r.width, height: r.height }; };
+    return { panel: rect(panel), avatar: rect(document.getElementById('waifu')),
+      header: rect(panel.querySelector('.chat-header')), rail: rect(panel.querySelector('.chat-rail')),
+      messages: rect(panel.querySelector('.chat-messages')), composer: rect(panel.querySelector('.chat-input-area')),
+      history: rect(panel.querySelector('#waifu-conv-panel')) };
+  });
+  const sameWindow = (before, after) => {
+    for (const dimension of ['left', 'top', 'width', 'height'])
+      assert.ok(Math.abs(before.panel[dimension] - after.panel[dimension]) <= 1,
+        'History changed window ' + dimension + ': ' + JSON.stringify({ before, after }));
+  };
+  const splitInsideWindow = bounds => {
+    assert.ok(bounds.history.right <= bounds.messages.left + 1, JSON.stringify(bounds));
+    assert.ok(bounds.history.right <= bounds.composer.left + 1, JSON.stringify(bounds));
+    assert.ok(bounds.messages.width >= 150, JSON.stringify(bounds));
+  };
   await reset();
   assert.equal(await page.locator('#chat-send').isDisabled(), true);
   assert.equal(await page.locator('#chat-empty').isVisible(), true);
@@ -152,6 +169,11 @@ try {
   assert.equal(await page.locator('#chat-input').inputValue(), '保留已有草稿');
   await page.locator('#chat-input').fill('');
   await noOverflow();
+  const initialBounds = await workspaceBounds();
+  assert.ok(initialBounds.panel.bottom <= initialBounds.avatar.top - 8, JSON.stringify(initialBounds));
+  assert.ok(initialBounds.header.height <= 38 && initialBounds.rail.width <= 34, JSON.stringify(initialBounds));
+  assert.ok(initialBounds.composer.height <= 64, JSON.stringify(initialBounds));
+  assert.equal(await page.locator('.chat-kicker, .chat-keyboard-hint, .chat-composer-meta').count(), 0);
   await page.screenshot({ path: path.join(output, 'desktop-empty.png') });
   passed('desktop empty state and empty-send disabled; starters preserve drafts');
   await page.locator('#chat-close').click();
@@ -161,6 +183,20 @@ try {
   assert.equal(await page.locator('#waifu-chat').evaluate(el => el.classList.contains('conv-open')), true);
   await noOverflow();
   await drawerInsidePanel();
+  const openBounds = await workspaceBounds();
+  sameWindow(initialBounds, openBounds);
+  splitInsideWindow(openBounds);
+  const divider = await page.locator('.conv-sizer').boundingBox();
+  await page.mouse.move(divider.x + divider.width / 2, divider.y + divider.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(divider.x - 20, divider.y + divider.height / 2);
+  await page.mouse.up();
+  const resizedSplit = await workspaceBounds();
+  sameWindow(openBounds, resizedSplit);
+  splitInsideWindow(resizedSplit);
+  assert.ok(resizedSplit.history.width <= openBounds.history.width - 10, JSON.stringify({ openBounds, resizedSplit }));
+  await page.screenshot({ path: path.join(output, 'desktop-history.png') });
+  passed('bubble starts above avatar; compact chrome and resizable internal history keep outer bounds');
   await page.locator('.conv-more').click();
   await page.getByRole('button', { name: '重命名', exact: true }).click();
   const rename = page.locator('.conv-rename-input');
@@ -203,7 +239,7 @@ try {
   const copy = page.locator('.chat-copy-reply').last();
   await copy.click();
   await page.waitForFunction(() => [...document.querySelectorAll('.chat-copy-reply')]
-    .some(button => /已复制/.test(button.textContent)));
+    .some(button => /已复制/.test(button.getAttribute('aria-label'))));
   assert.equal(await page.evaluate(() => navigator.clipboard.readText()), '离线测试回复：已收到你的消息。');
   await page.evaluate(() => {
     navigator.clipboard.writeText = async () => { throw new Error('clipboard denied in fixture'); };
@@ -364,7 +400,8 @@ try {
   assert.equal(await page.locator('.msg-text table').count(), 1);
   assert.equal(await page.locator('.msg-text pre code').count(), 1);
   await page.locator('.chat-copy-reply').last().click();
-  await page.waitForFunction(() => [...document.querySelectorAll('.chat-copy-reply')].some(button => /已复制/.test(button.textContent)));
+  await page.waitForFunction(() => [...document.querySelectorAll('.chat-copy-reply')].some(button => /已复制/.test(button.getAttribute('aria-label'))));
+  assert.equal(await page.locator('.chat-copy-reply').last().textContent(), '', 'Copy action has no body-like label');
   const richClipboard = await page.evaluate(() => navigator.clipboard.readText());
   assert.match(richClipboard, /模型\t维度\t部署\t/);
   assert.ok(!richClipboard.includes('复制'));
@@ -390,18 +427,23 @@ try {
   await noOverflow();
   await page.screenshot({ path: path.join(output, 'mobile-empty.png') });
   const headerMetrics = () => page.evaluate(() => Object.fromEntries(
-    ['.chat-header', '.chat-heading', '.chat-kicker', '#chat-conv-title'].map(selector => {
+    ['.chat-header', '.chat-heading', '#chat-conv-title'].map(selector => {
       const element = document.querySelector(selector), rect = element.getBoundingClientRect(), style = getComputedStyle(element);
       return [selector, { left: rect.left, right: rect.right, width: rect.width, marginLeft: style.marginLeft,
         marginRight: style.marginRight, transform: style.transform }];
     })));
   const closedHeader = await headerMetrics();
+  const mobileClosed = await workspaceBounds();
+  assert.ok(mobileClosed.panel.bottom <= mobileClosed.avatar.top - 8, JSON.stringify(mobileClosed));
   await page.locator('#conv-history-btn').click();
   await noOverflow();
   await drawerInsidePanel();
   await page.screenshot({ path: path.join(output, 'mobile-history.png') });
   const openHeader = await headerMetrics();
-  for (const selector of ['.chat-heading', '.chat-kicker', '#chat-conv-title']) {
+  const mobileOpen = await workspaceBounds();
+  sameWindow(mobileClosed, mobileOpen);
+  splitInsideWindow(mobileOpen);
+  for (const selector of ['.chat-heading', '#chat-conv-title']) {
     assert.ok(Math.abs(openHeader[selector].left - closedHeader[selector].left) <= 1,
       selector + ' changed horizontal position when opening history: ' + JSON.stringify({ closedHeader, openHeader }));
   }

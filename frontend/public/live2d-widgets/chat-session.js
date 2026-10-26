@@ -1,24 +1,5 @@
-// ═ ChatSession：会话管理 UI 层（20260903 会话化一期；20260903b 布局重构）══
-// 纯渲染与事件壳——决策全部在 chat-engine（会话三态/决议/切换原语/删除恢复），
-// 本模块只做：列表拉取渲染、自适应抽屉开合、行内菜单（删除/置顶/重命名）、
-// 搜索过滤、rail 图标注入、当前会话标题（顶拖拽条内）。依赖 chat-engine 注入的
-// chatHTML 骨架（#chat-rail / #waifu-conv-panel / #conv-list / #chat-conv-title）。
-//
-// 20260903d 几何（用户第三轮实测拍板）：
-// - 抽屉宽 convWidth=182（widget.css --conv-w，收窄 30%）
-// - 左侧边栏形态 = 拖拽栏（rail 图标列）在复合窗口最外侧：rail 固定 x0..24
-//   原位不动；conv-out（右缘空间足够）面板右扩 182 → 列表列在 rail 右缘成为
-//   真列（x24..206，不覆盖消息区），消息区右移 182，形态 [拖拽栏|列表|消息]；
-//   conv-in（右缘贴边/移动端）：列表从 rail 右缘起覆盖消息区兜底。关闭/降级
-//   由当前宽度逆推 -182 还原（拖动/缩放中途不失真）
-// - 收起途径：仅 ☰ 侧边栏按钮（切换会话/点消息区/点面板外一律不收起；
-//   窗口 resize 只做 conv-out→conv-in 方向降级防右扩出屏，不收起）
-// - rail 按钮：☰ 顶部，＋/历 在其下方顺排（不再贴 rail 底向上堆）
-// - ⋯ 菜单默认向下展开（仅贴列表底翻上）；点非菜单区（含列表头/行间隙/
-//   消息区/外部）mousedown 自动收起（⋯ 自身除外——开/关 toggle 由 click 决定）
-// - 行菜单：删除 / 加入书签|删除书签（置顶切换）/ 重命名，均带用户 SVG 图标；
-//   置顶行标题前缀 = 书签 SVG（弃 📌）
-// 游客（无 token）无会话概念：rail 整条隐藏，界面零变化（旧行为零回归）。
+// Conversation list, search, row actions and title. Business state stays in chat-engine.
+// The list occupies a column inside the existing panel; opening never moves or widens it.
 (function (g) {
   'use strict';
   g.__waifuSession = function (ctx, engine) {
@@ -26,19 +7,13 @@
       console.error('[chat-session] 缺少 ctx/engine——chat-engine 未加载或加载顺序错误');
       return null;
     }
-    // 抽屉列宽（20260905 起可调）：默认 182（用户收窄 30%），拖动抽屉右缘
-    // .conv-sizer 调宽并记忆 localStorage chatConvW（150..380）；全部几何经
-    // --conv-w CSS 变量（抽屉宽 + 消息区 margin calc 同源），JS 只在 conv-out
-    // 时把面板宽同步 ±Δ
-    const CONV_DEF = 182, CONV_MIN = 150, CONV_MAX = 380;
+    const CONV_DEF = 168, CONV_MIN = 120, CONV_MAX = 300;
     let convWidth = (() => {
       try {
-        const v = parseInt(localStorage.getItem('chatConvW'), 10);
-        return (v >= CONV_MIN && v <= CONV_MAX) ? v : CONV_DEF;
-      } catch (e) { return CONV_DEF; }
+        const value = parseInt(localStorage.getItem('chatConvW'), 10);
+        return value >= CONV_MIN && value <= CONV_MAX ? value : CONV_DEF;
+      } catch (_) { return CONV_DEF; }
     })();
-    const CONV_GAP = 4; // 右扩可行判据：面板右扩 convWidth 后右缘距视口仍 ≥4px
-    // → rect.right + convWidth ≤ innerWidth - CONV_GAP 才置 conv-out，否则 conv-in 覆盖
     // 会话切换阻断：发送/流式中不切会话（收尾保存仍写原会话，见 chat-engine 注释）
     const switchBlocked = () => !!(ctx.state.isSending || ctx.state.streamCtrl
       || (ctx.state.remoteRounds && Object.keys(ctx.state.remoteRounds).length));
@@ -483,108 +458,25 @@
       try { ctx.dom.input && ctx.dom.input.focus(); } catch(e) {/* ignore */}
     };
 
-    // ── 抽屉开合（20260903d 用户拍板几何）：rail 永居最外缘 x0..24（CSS 侧 ──
-    //   左缘恒 0），列表 = rail 与消息区之间的真实列。conv-out（右缘空间足够）：
-    //   面板整体右扩 convWidth（仅改 style.width，style.left 恒不动）→ 列表列
-    //   位于 x24..206；conv-in（右缘贴边/移动端）：面板不加宽，列表从 rail 右缘
-    //   起覆盖消息区兜底。关闭还原用"当前几何逆推 -182"（close 时读数，不依赖
-    //   打开快照）——展开期间拖动/缩放窗口也不失真。
-    // #6 语义：收起唯一途径 = ☰（toggleList）；resize 只重排方向、绝不收起。
     const isOpen = () => !!(chatPanel && chatPanel.classList.contains('conv-open'));
-    const fitsRight = () => { // 右扩判据：面板右缘 + 182 ≤ 视口右缘 - 4
-      const rect = chatPanel.getBoundingClientRect();
-      return rect.right + convWidth <= window.innerWidth - CONV_GAP;
-    };
-    // 20260905：右缘空间不足时先把面板整体左移腾出 182（消息区全程可见，不盖
-    // 对话框）；左缘无余量（贴左缘/从未拖动走 CSS 默认位）/移动端才放弃 →
-    // 返回"左移后已满足右扩"与否。style.left 与 rect.left 同斜率平移，直接减
-    // 缺额即可（拖动写的是 local 坐标，平移量与视口一致）
-    const tryShiftToFit = () => {
-      const rect = chatPanel.getBoundingClientRect();
-      const need = rect.right + convWidth - (window.innerWidth - CONV_GAP);
-      if (need <= 0) return fitsRight();
-      const cur = parseFloat(chatPanel.style.left || '');
-      if (!isFinite(cur)) return false; // 从未拖动过（无 inline left）：不擅动面板
-      chatPanel.style.left = (cur - need) + 'px';
-      return fitsRight();
-    };
     const openList = () => {
       if (isOpen()) return;
-      // 20260905：先试左移腾位（右扩真列），失败才 conv-in 覆盖——展开不再
-      // 无条件盖住对话框（用户反馈：空间不够时"展开直接盖住对话框"不合理）
-      if (window.innerWidth > 768 && !fitsRight()) tryShiftToFit();
       chatPanel.classList.add('conv-open');
-      if (window.innerWidth > 768 && fitsRight()) {
-        chatPanel.style.width = (chatPanel.offsetWidth + convWidth) + 'px'; // 右扩（rail 不动）
-        chatPanel.classList.add('conv-out');
-      } else {
-        chatPanel.classList.add('conv-in'); // 覆盖式（右缘贴边/移动端）
-      }
       fetchList();
     };
     const closeList = () => {
       if (!isOpen()) return;
-      const wasOut = chatPanel.classList.contains('conv-out');
-      clearMenuAll(); // 收抽屉即清菜单/武装态（防重开时陈旧弹出层复活）
-      chatPanel.classList.remove('conv-open', 'conv-in', 'conv-out');
-      if (wasOut) { // 右扩还原：由当前几何逆推（期间拖动/缩放不丢位移）
-        chatPanel.style.width = (chatPanel.offsetWidth - convWidth) + 'px';
-      }
+      clearMenuAll();
+      chatPanel.classList.remove('conv-open');
     };
     const toggleList = () => (isOpen() ? closeList() : openList());
-    // 窗口改尺寸后旧方向可能失效（右扩出屏 / 空间恢复可回真列）→ 只重排
-    // conv-out↔conv-in 并同步 ±182 宽度，绝不收起（#6：收起途径仅 ☰）
-    const relayoutOpen = () => {
-      if (!isOpen()) return;
-      const wantOut = window.innerWidth > 768 && fitsRight();
-      const wasOut = chatPanel.classList.contains('conv-out');
-      if (wantOut === wasOut) return;
-      if (wantOut) { // conv-in → 空间恢复可回真列
-        chatPanel.style.width = (chatPanel.offsetWidth + convWidth) + 'px';
-        chatPanel.classList.remove('conv-in');
-        chatPanel.classList.add('conv-out');
-        return;
-      }
-      // conv-out 右扩失效（窗口变窄/面板右缘不足）：
-      // 20260905：桌面先左移腾位保持真列（不退回盖消息区的 conv-in）
-      if (window.innerWidth > 768 && tryShiftToFit()) return;
-      chatPanel.style.width = (chatPanel.offsetWidth - convWidth) + 'px';
-      chatPanel.classList.remove('conv-out');
-      chatPanel.classList.add('conv-in');
-    };
-    window.addEventListener('resize', relayoutOpen);
-    // 20260905：拖动/缩放面板后重估展开几何（chat-stream pointerup 调用）——
-    // conv-out 拖出/放大出右缘 → 左移回屏；conv-in 空间恢复 → 可升真列
-    const refitOpen = () => {
-      if (!isOpen()) return;
-      if (chatPanel.classList.contains('conv-out')) {
-        const rect = chatPanel.getBoundingClientRect();
-        const over = rect.right - (window.innerWidth - CONV_GAP);
-        if (over > 0) {
-          const cur = parseFloat(chatPanel.style.left || '');
-          if (isFinite(cur)) chatPanel.style.left = (cur - over) + 'px';
-        }
-        return;
-      }
-      relayoutOpen();
-    };
-    window.__refitConvOpen = refitOpen;
 
-    // ── rail 可见性评估（游客无会话概念 → 整条隐藏，零回归）──
     const evalAuth = () => {
       if (rail) rail.style.display = getToken() ? '' : 'none';
       if (!getToken() && isOpen()) closeList();
     };
     const evalTitleOnConvChange = () => { renderHeader(); highlight(); scheduleFetch(); };
 
-    // 点击非菜单区域自动收起 ⋯ 菜单（20260903d #5：列表头/搜索框/行间隙/面板
-    // 外/消息区一律 mousedown 即收，不再需二次点 ⋯）。#6：绝不在此收侧边栏 ──
-    // 收起唯一途径 = ☰（切换会话/点消息区/点面板外都保持打开，见上 toggleList）。
-    // 放行区（下一击=动作，mousedown 抢先清会毁掉它）：⋯ 触发器自身（click 才
-    // toggle，先清则 toggle 永远重开）、已开菜单内部（菜单项 click 需到达）、
-    // 删除确认条（click = 真删）、重命名输入（mousedown 定位光标）。会话行点击
-    // 自带守卫（menu-open/del-confirm/renaming 在行 click 判定清态或取消切换），
-    // 也不在此 mousedown 干预——否则点开菜单的行会被误当"切换"直接换会话。
     const onDocDown = (e) => {
       if (!chatPanel) return;
       const t = e.target;
@@ -605,8 +497,6 @@
       titleEl = document.getElementById('chat-conv-title-tag');
       rail = document.getElementById('chat-rail');
       searchEl = document.getElementById('conv-search');
-      // 恢复记忆的抽屉宽：--conv-w 驱动抽屉宽 + 消息区 margin（conv-out 下再
-      // 由 openList 右扩 convWidth，宽度变更只改变量 + CSS var，两处同源）
       chatPanel.style.setProperty('--conv-w', convWidth + 'px');
       // rail 图标注入（文字兜底在注入前瞬间可见，可忽略）
       const icons = { 'conv-toggle-btn': ICON_SIDEBAR, 'conv-new-btn': ICON_NEW, 'conv-history-btn': ICON_HISTORY };
@@ -621,10 +511,7 @@
       bind('conv-toggle-btn', toggleList);   // 侧边栏：展开/收起抽屉
       bind('conv-new-btn', startNew);        // ＋ 新对话
       bind('conv-history-btn', openList);    // 历史：打开抽屉
-      // 抽屉右缘拖拽调宽（20260905 #3）：.conv-sizer 为 7px 隐形热区（CSS 在
-      // 抽屉右缘 calc(drag+conv)，conv-open 且非移动端才显示，hover 有浅红提示）
-      // —— 拖动改 convWidth + --conv-w（抽屉与消息区 margin 同源变化），conv-out
-      // 下把面板宽同步 ±Δ（真列右侧随动），pointerup 记忆 + 重估展开几何
+      // Resize only the internal split; preserve the surrounding window's bounds.
       const sizer = document.createElement('div');
       sizer.className = 'conv-sizer';
       p.appendChild(sizer);
@@ -640,10 +527,9 @@
         const rect = p.getBoundingClientRect();
         const dragW = parseFloat(getComputedStyle(p).getPropertyValue('--drag-w')) || 24;
         const w = Math.round(e.clientX - rect.left - dragW);
-        const nw = Math.max(CONV_MIN, Math.min(CONV_MAX, w));
+        const max = Math.min(CONV_MAX, Math.floor(p.clientWidth * .42));
+        const nw = Math.max(CONV_MIN, Math.min(max, w));
         if (nw === convWidth) return;
-        const wasOut = chatPanel.classList.contains('conv-out');
-        if (wasOut) chatPanel.style.width = (chatPanel.offsetWidth + (nw - convWidth)) + 'px';
         convWidth = nw;
         chatPanel.style.setProperty('--conv-w', convWidth + 'px');
       });
@@ -652,7 +538,6 @@
         sizing = false;
         try { sizer.releasePointerCapture(e.pointerId); } catch (err) { /* ignore */ }
         try { localStorage.setItem('chatConvW', String(convWidth)); } catch (err) { /* ignore */ }
-        if (typeof window.__refitConvOpen === 'function') window.__refitConvOpen();
       };
       sizer.addEventListener('pointerup', sizerEnd);
       sizer.addEventListener('pointercancel', sizerEnd);
