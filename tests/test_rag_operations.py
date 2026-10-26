@@ -68,6 +68,27 @@ def test_plan_execute_repeat_and_query(operations, capsys):
     assert len(operations) == 2  # Only one additional query embedding.
 
 
+def test_trace_records_the_actual_retrieval_route_without_input_or_credentials(
+    operations, monkeypatch, capsys
+):
+    from utils import trace
+
+    assert manage.main(["prepare", "--execute", "--max-new", "1"]) == 0
+    capsys.readouterr()
+    events = []
+    monkeypatch.setattr(trace, "record", lambda node, event, **data:
+                        events.append({"node": node, "event": event, **data}))
+    assert manage.main(["query", "博客索引", "--require-hybrid"]) == 0
+    assert events[-1] == {"node": "rag", "event": "retrieval", "mode": "hybrid",
+                          "reason": None, "vectors": 1, "missing": 0}
+    monkeypatch.setattr(search, "embed_query", lambda *args: None)
+    assert manage.main(["query", "不同的问题"]) == 0
+    assert events[-1] == {"node": "rag", "event": "retrieval", "mode": "degraded",
+                          "reason": "query_embed_failed", "vectors": 0, "missing": 0}
+    assert "fixture-key" not in json.dumps(events)
+    assert "博客索引" not in json.dumps(events, ensure_ascii=False)
+
+
 def test_query_without_vectors_does_not_build_them(operations, capsys):
     assert manage.main(["query", "博客索引", "--require-hybrid"]) == 1
     assert json.loads(capsys.readouterr().out)["route"]["mode"] == "degraded"
