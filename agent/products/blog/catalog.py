@@ -7,7 +7,8 @@ from agent.domains.notices.targets import DEFAULT_TITLE
 DOMAIN_DESCRIPTIONS = {
     "public_activity": "分页读取公开公告、已通过审核的河灯留言和说说；"
                        "可按编号读取内容与公开留名，不含发表账号、待审或驳回记录。",
-    "utilities": "读取当前时间或指定城市的实时天气；天气附来源和观测时间。",
+    "utilities": "读取当前时间或指定城市的当前天气模型估算；"
+                 "天气附来源、有效时刻与地点，重名时核对候选。",
     "devices": "读取当前账号可访问的设备（含共享演示设备），或按请求显示OLED文字；"
                "仅已授权身份可下发，区分下发与设备确认，不管理物联网平台。",
     "public_catalog": "分页读取公开文章清单、置顶文章、分类和分层标签及公开文章计数；不读取正文。",

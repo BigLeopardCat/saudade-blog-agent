@@ -577,7 +577,7 @@
       ],
       "tools/site.py": [
         29,
-        2
+        0
       ],
       "tools/tag_admin.py": [
         13,
@@ -586,7 +586,7 @@
     },
     "total": [
       578,
-      496
+      494
     ]
   },
   "entries": [
@@ -1201,17 +1201,6 @@
       "category": "system_data",
       "q": "_QUOTA_POLICY_REFUSALS",
       "why": "对着 **Rust 侧产出**的拒绝文案"
-    },
-    {
-      "id": "tools/site.py::_WEATHER_LOC_RE",
-      "file": "tools/site.py",
-      "kind": "regex",
-      "name": "_WEATHER_LOC_RE",
-      "size": 2,
-      "sample": "[A-Za-z一-龥 ,.'\\-]{1,40}",
-      "category": "parser",
-      "q": "[A-Za-z一-龥 ,.'\\-]{1,40}",
-      "why": "从参数里截出地名（字符类，不是词表）"
     },
     {
       "id": "tools/site.py::_NAV_LABELS",
