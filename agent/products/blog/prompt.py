@@ -69,5 +69,18 @@ def build_prompt(messages: list, principal, own_enabled: bool = False, pending=N
             additional_kwargs={"memory_context": True}))
     summary = memory.summary_message(messages, principal)
     dialogue = memory.prompt_dialogue(messages, principal, tool_access=tool_access)
+    recovery = _history_recovery(dialogue, own_enabled)
+    if recovery is not None:
+        attachments.append(recovery)
     return [system, *dialogue[:-1], *attachments,
             *([summary] if summary is not None else []), *dialogue[-1:]]
+
+
+def _history_recovery(dialogue, own_enabled):
+    if not own_enabled or not any(message.additional_kwargs.get("memory_excerpt")
+                                  for message in dialogue):
+        return None
+    return HumanMessage(
+        content="历史上下文有节选。缺失原文可加载 own_activity 领域，用 get_chat_history 查询当前"
+                "会话中的消息编号，再用 content_offset 读取所需正文范围，包括长回答末尾。",
+        additional_kwargs={"memory_context": True})

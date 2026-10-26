@@ -139,8 +139,7 @@ class SessionMiddleware(AgentMiddleware):
                 result = handler(request.override(
                     model=model, messages=messages, tools=session.menu,
                     tool_choice="auto" if session.menu else None,
-                    model_settings={**({"parallel_tool_calls": False} if session.menu else {}),
-                                    **model_options(settings.llm_timeout)}))
+                    model_settings=model_options(settings.llm_timeout)))
                 response = result.result[-1]
                 session.budget.settle(ticket, response)
                 return result
