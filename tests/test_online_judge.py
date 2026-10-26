@@ -1,6 +1,7 @@
 """Semantic review preserves evidence boundaries and never converts errors to passes."""
 
 import json
+import secrets
 from pathlib import Path
 
 import httpx
@@ -75,8 +76,9 @@ def test_prepared_text_is_reviewed_as_output_not_used_as_supporting_fact(tmp_pat
 
 def test_visible_card_text_is_reviewed_even_when_absent_from_signed_intent(tmp_path):
     preview = "账号已经降级。\n确认发送？"
+    canary = secrets.token_urlsafe(24)
     case = recorded(tmp_path, text="请核对卡片", http_events=[
-        {"event": "confirmation", "data": {"q": preview, "token": "PRIVATE_CANARY"}},
+        {"event": "confirmation", "data": {"q": preview, "token": canary}},
         {"event": "progress", "data": {"q": "不能当作确认卡"}},
     ])
     model = Model({"unsupported": ["账号已经降级"], "answered": True,
@@ -86,7 +88,7 @@ def test_visible_card_text_is_reviewed_even_when_absent_from_signed_intent(tmp_p
     current = data["turns"][-1]
     assert current["confirmation_previews_to_review"] == [preview]
     assert current["execution_receipts"] == []
-    assert "PRIVATE_CANARY" not in str(model.messages)
+    assert canary not in str(model.messages)
     assert report["counts"] == {"suspect": 1}
 
 
