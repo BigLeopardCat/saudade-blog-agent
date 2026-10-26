@@ -64,10 +64,27 @@ class SessionMiddleware(AgentMiddleware):
         self.system_message = None
         self._failed = False
         self.cached = {}
+        self._recovered = False
+
+    def _recover(self, state):
+        if not self.session.recovering or self._recovered:
+            return
+        state = self.session.recovery_state or state
+        messages = list(state.get("messages") or [])
+        index = next((i for i in range(len(messages) - 1, -1, -1)
+                      if isinstance(messages[i], AIMessage) and messages[i].tool_calls), None)
+        self.exchange = [*([self.system_message] if self.system_message else []), *messages]
+        if index is not None:
+            self.calls = messages[index].tool_calls
+            self.cached = {m.tool_call_id: m for m in messages[index + 1:]
+                           if isinstance(m, ToolMessage)
+                           and (m.artifact or {}).get("phase") != "deferred"}
+        self._recovered = True
 
     @hook_config(can_jump_to=["end", "tools"])
     def before_model(self, state, runtime):
         session = self.session
+        self._recover(state)
         check_cancelled(session.config)
         if state.get("resume"):
             return self._resume(state)
@@ -153,6 +170,7 @@ class SessionMiddleware(AgentMiddleware):
     @hook_config(can_jump_to=["end"])
     def after_model(self, state, runtime):
         session = self.session
+        self._recover(state)
         response = state["messages"][-1]
         aggregate = session.stream_guard.aggregate
         if aggregate is not None and not session._complete_tool_arguments(aggregate):
@@ -174,6 +192,7 @@ class SessionMiddleware(AgentMiddleware):
         return capture(session)
 
     def wrap_tool_call(self, request, handler):
+        self._recover(request.state)
         return self._tool_result(request.tool_call)
 
     def _tool_result(self, call):
@@ -195,10 +214,11 @@ class SessionMiddleware(AgentMiddleware):
                     session.outcome = pause_notice(session.outcome)
             message = (self.exchange[-1] if len(self.exchange) > before else ToolMessage(
                 content="操作已准备，等待用户决定。", name=call["name"], tool_call_id=call["id"],
-                artifact={"phase": "awaiting_approval"}))
-        if self.calls and call["id"] == self.calls[-1]["id"] and self.attachments:
-            return Command(update={"messages": [message, *stage(self.attachments,
-                                                               session.transient)]})
+                artifact={"phase": "awaiting_approval", "proposal": capture(session)["proposal"]}))
+        message = message.model_copy(update={"name": call["name"]})
+        if self.calls and call["id"] == self.calls[-1]["id"]:
+            return Command(update={**capture(session), "messages": [
+                message, *stage(self.attachments, session.transient)]})
         return message
 
 
@@ -211,6 +231,12 @@ class OrderedToolsMiddleware(AgentMiddleware):
     def wrap_tool_call(self, request, handler):
         policy = self.policy
         with policy._order:
+            policy._recover(request.state)
+            while (policy._next < len(policy.calls)
+                   and policy.calls[policy._next]["id"] in policy.cached):
+                policy._next += 1
+            if request.tool_call["id"] in policy.cached:
+                return handler(request)
             while (not policy._failed
                    and policy.calls[policy._next]["id"] != request.tool_call["id"]):
                 check_cancelled(policy.session.config)

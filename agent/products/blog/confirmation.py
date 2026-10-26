@@ -72,9 +72,11 @@ def frames(execution):
     if not popup:
         return
     yield "__CONFIRM__:" + json.dumps({
-        "id": uuid.uuid4().hex[:8], "q": popup.get("q", ""),
+        "id": (execution.get("pending_action") or {}).get("task_id") or uuid.uuid4().hex[:8],
+        "q": popup.get("q", ""),
         "opts": popup.get("opts") or [], "token": popup.get("token", ""),
         "exp": popup.get("exp") or 0,
+        **({"task_id": execution["task_id"]} if execution.get("task_id") else {}),
         "replay_safe": popup.get("replay_safe") is True}, ensure_ascii=False)
     action = execution.get("pending_action")
     if action:

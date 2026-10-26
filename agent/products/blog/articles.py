@@ -3,6 +3,8 @@
 from dataclasses import replace
 
 from langchain.agents.middleware import AgentMiddleware, AgentState
+from langchain_core.messages import ToolMessage
+from langgraph.types import Command
 
 from agent.domains.articles.evidence import ArticleEvidence
 from agent.runtime.message_content import text_content
@@ -22,6 +24,7 @@ class ArticleMiddleware(AgentMiddleware):
     def __init__(self, session):
         self.session = session
         self.evidence = ArticleEvidence()
+        self.recovered = False
         self.render_default = session.render_result
         session.render_result = self.render_result
 
@@ -33,7 +36,40 @@ class ArticleMiddleware(AgentMiddleware):
         return {"evidence": self.evidence.snapshot()}
 
     def before_model(self, state, runtime):
+        self._recover(state)
         return {"evidence": self.evidence.snapshot()}
+
+    def _recover(self, state):
+        if not self.session.recovering or self.recovered:
+            return
+        state = self.session.recovery_state or state
+        saved = state.get("evidence")
+        for message in reversed(state.get("messages", ())):
+            if (isinstance(message, ToolMessage)
+                    and (message.artifact or {}).get("article_evidence")):
+                saved = message.artifact["article_evidence"]
+                break
+        if saved:
+            self.evidence = ArticleEvidence.restore(saved)
+        self.recovered = True
+        self._visibility()
+
+    def wrap_tool_call(self, request, handler):
+        self._recover(request.state)
+        result = handler(request)
+        if not (self.evidence.searched or self.evidence.documents or self.evidence.candidates):
+            return result
+
+        def attach(message):
+            if not isinstance(message, ToolMessage):
+                return message
+            return message.model_copy(update={"artifact": {
+                **(message.artifact or {}), "article_evidence": self.evidence.snapshot()}})
+
+        if isinstance(result, Command):
+            return replace(result, update={**result.update,
+                "messages": [attach(m) for m in result.update.get("messages", ())]})
+        return attach(result)
 
     def render_result(self, call, value, limit):
         if call["name"] == "get_article_detail":
@@ -50,6 +86,7 @@ class ArticleMiddleware(AgentMiddleware):
                                             or self.evidence.candidates)
 
     def wrap_model_call(self, request, handler):
+        self._recover(request.state)
         result = handler(request)
         response = result.result[-1]
         if response.tool_calls or response.invalid_tool_calls:
