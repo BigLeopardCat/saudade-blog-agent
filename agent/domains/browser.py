@@ -1,10 +1,12 @@
 """Native, reversible browser commands using the existing renderer protocol."""
 
+import hashlib
 import time
 from typing import Annotated, Literal
 
 from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import ToolException, tool
+from langgraph.types import interrupt
 from pydantic import Field, StrictStr
 
 from agent import action_text, authz
@@ -77,6 +79,27 @@ def navigate_page(path: Path, config: RunnableConfig) -> object:
         )
     url = site.SITE_BASE.rstrip("/") + path
     command = {"kind": "navigate", "url": url, "mode": "direct"}
+    cfg = (config or {}).get("configurable") or {}
+    if cfg.get("browser_feedback") and cfg.get("browser_task"):
+        task_id = cfg["browser_task"]
+        command_id = hashlib.sha256((task_id + path).encode()).hexdigest()[:24]
+        from agent.runtime.budget import current_budget
+        budget = current_budget()
+        spent = ({key: getattr(budget, key) for key in ("tokens", "model_calls", "tool_calls")}
+                 if budget is not None else {})
+        result = interrupt({"kind": "client_action", "spent": spent, "command": {
+            **command, "path": path, "task_id": task_id, "command_id": command_id,
+            "timeout_ms": 6000, "expires_at": time.time() + 60}})
+        if result.get("command_id") != command_id:
+            raise ToolException("Browser result does not match the pending navigation")
+        status = result.get("status")
+        completed = status == "completed" and result.get("path") == path
+        reply = ("浏览器已进入：" + url if completed else
+                 "页面跳转超时，未确认进入目标页面：" + url if status == "timeout" else
+                 "页面跳转未完成：" + url)
+        receipt = _receipt("navigate", "navigate_to", {"path": path, "confirm": False}, command)
+        receipt.update(result=reply, browser_status="completed" if completed else status)
+        return _outcome(reply, [receipt])
     receipt = _receipt("navigate", "navigate_to", {"path": path, "confirm": False}, command)
     reply = "已发送跳转指令：" + url + "；浏览器尚未回报完成。"
     if site.nav_pure_path(path) in site._NAV_WHOLE_PAGE_PATHS:
@@ -134,9 +157,16 @@ def set_page_appearance(
 def tools(config):
     if not available(config):
         return {}
+    pages = "; ".join(label + "=" + path for path, label in site._NAV_LABELS.items())
+    navigation = navigate_page.model_copy(update={"description":
+        "Open a site page immediately when requested. Known pages: " + pages
+        + ". Article: /article/<id>; category: /category/<name>. Use the source article link "
+        "for a chosen recommendation. No site-map lookup is needed for the known pages. "
+        "With browser feedback, execution pauses durably until the client reports completion "
+        "or timeout, then continues the same task. No confirmation card."})
     return {
         item.name: item.model_copy(
             update={"handle_tool_error": True, "handle_validation_error": str}
         )
-        for item in (navigate_page, set_page_appearance)
+        for item in (navigation, set_page_appearance)
     }

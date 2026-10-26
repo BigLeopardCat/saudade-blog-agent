@@ -21,6 +21,10 @@ class FrameworkExecution:
                        "recursion_limit": session.budget.limits.model_calls * 6 + 12,
                        "callbacks": [*((session.config or {}).get("callbacks") or []),
                                      session.stream_guard]}
+        self.config["configurable"] = {**self.config.get("configurable", {}),
+            "browser_task": session.task["id"] if session.task and session.store
+                            and session.store.available and not session.isolated else None}
+        session.config = self.config
         session._restore_domains(prompt)
         prompt = fit_history(prompt, session.principal, session.menu, session.budget.limits,
                              session.output_limit, tool_access=session.history_access,
@@ -71,14 +75,15 @@ class FrameworkExecution:
 
         return approval.graph(session.store.saver, execute)
 
-    def stream(self, *, resume=None, approval_input=(), recover=False):
+    def stream(self, *, resume=None, approval_input=(), recover=False, client_result=None):
         if self.parent is not None:
             if recover:
                 self._recover()
                 if (not self.resume_parent and self.recovery_state is not None
                         and not self.recovery_state.next):
                     return
-            inputs = (Command(resume={**resume, "input": stage(
+            inputs = (Command(resume=client_result) if client_result is not None else
+                Command(resume={**resume, "input": stage(
                 list(approval_input), self.session.transient)}) if resume is not None else
                 (None if self.resume_parent else {"run": self.session.task}) if recover else
                 {"approved_result": None, "run": self.session.task,

@@ -60,6 +60,12 @@ class QuotaInfo(BaseModel):
     unlimited: bool = False
 
 
+class BrowserResult(BaseModel):
+    command_id: str = Field(min_length=1, max_length=100, pattern=r"^[A-Za-z0-9_-]+$")
+    status: Literal["completed", "timeout", "failed"]
+    path: str = Field(max_length=512)
+
+
 class ChatRequest(BaseModel):
     message: str = Field(max_length=MAX_MESSAGE_CHARS)
     current_url: str = Field(default="", max_length=MAX_SHORT_FIELD_CHARS)
@@ -87,6 +93,8 @@ class ChatRequest(BaseModel):
     confirm_token: str = Field(default="", max_length=MAX_TOKEN_CHARS)
     confirm_pick: str = Field(default="", max_length=MAX_SHORT_FIELD_CHARS)
     task_id: str = Field(default="", max_length=100, pattern=r"^[A-Za-z0-9_-]*$")
+    browser_feedback: bool = False
+    browser_result: BrowserResult | None = None
     resume_task: str = Field(default="", max_length=100, pattern=r"^[A-Za-z0-9_-]*$")
 
     @model_validator(mode="after")
@@ -97,6 +105,8 @@ class ChatRequest(BaseModel):
             or self.confirm_token or self.confirm_pick
         ):
             raise ValueError("继续任务不能同时提交新消息、图片或确认凭据")
+        if self.browser_result is not None and not self.resume_task:
+            raise ValueError("浏览器回报只能接续原任务")
         return self
 
     @field_validator("history_scope", "summary_scope")

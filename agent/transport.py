@@ -59,6 +59,10 @@ def _execution_frames(execution: dict | None) -> Iterator[str]:
     execution = _execution_payload(execution)
     if not execution:
         return
+    client_action = execution.get("client_action")
+    if client_action:
+        command_wire(client_action)
+        yield _json_frame("__CMD__:", client_action)
     receipts = execution.get("receipts") or []
     if not isinstance(receipts, list):
         raise TransportProtocolError("execution.receipts must be a list")
@@ -71,7 +75,8 @@ def _execution_frames(execution: dict | None) -> Iterator[str]:
             if not isinstance(command, dict):
                 raise TransportProtocolError("execution receipt cmd is invalid")
             command_wire(command)
-            commands.append(_json_frame("__CMD__:", command))
+            if receipt.get("browser_status") not in {"completed", "failed", "timeout"}:
+                commands.append(_json_frame("__CMD__:", command))
     yield from commands
     if receipts:
         yield _json_frame("__EXEC__:", receipts)

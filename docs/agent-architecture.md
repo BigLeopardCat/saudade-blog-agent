@@ -165,6 +165,7 @@ flowchart LR
 │   ├── runtime/__init__.py                              # 当前生产代码模块
 │   ├── runtime/approval.py                              # 框架持久审批中断与执行回执提交
 │   ├── runtime/execution.py                             # 标准 Agent 子图与会话审批图组合
+│   ├── runtime/client_actions.py     # 浏览器回报的框架中断与绑定校验
 │   ├── runtime/execution_state.py                       # 工具领域、来源证据与待审批状态
 │   ├── runtime/recovery.py                              # 普通任务绑定与标准 checkpoint 续跑适配
 │   ├── runtime/budget.py                                # 当前生产代码模块
