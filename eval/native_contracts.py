@@ -28,6 +28,7 @@ from eval import (
     admin_task_contracts,
     experience_contracts,
     navigation_contracts,
+    quota_task_contracts,
     reading_task_contracts,
     request_metrics,
 )
@@ -180,7 +181,7 @@ CASES = [("chat", favorite_backend, _chat),
          ("unread_counts", message_backend, _unread_counts),
          ("message_read_replay", message_backend, _messages),
          *navigation_contracts.CASES, *experience_contracts.CASES, *admin_task_contracts.CASES,
-         *reading_task_contracts.CASES]
+         *reading_task_contracts.CASES, *quota_task_contracts.CASES]
 
 
 def _sample(name, backend, contract, run_id, sample):
