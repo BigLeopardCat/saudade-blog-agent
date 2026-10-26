@@ -96,6 +96,10 @@ class NativeRuntime:
         session.task = recovery.new_run(config, incoming, state.get("task_id"))
         outcome = yield from self._run(session, prompt)
         execution = outcome.execution or {}
+        if execution.get("client_action"):
+            record("native", "task_paused", task_id=session.task["id"], reason="browser")
+            yield outcome
+            return
         approval_state = session.approval
         if not (execution.get("pending_confirm") or execution.get("pending_event")
                 or execution.get("noop_note")):
@@ -132,7 +136,15 @@ class NativeRuntime:
         session.task = snapshot.run
         session.receipts = list(snapshot.receipts)
         record("native", "task_resumed", task_id=task_id, engine="langgraph")
-        outcome = yield from self._run(session, prompt, recover=True)
+        from agent.runtime.client_actions import resume_value
+        client = resume_value(self.get_state(config, subgraphs=True), task_id, config)
+        if isinstance(client, TurnResult):
+            yield client
+            return
+        outcome = yield from self._run(session, prompt, recover=True, client_result=client)
+        if (outcome.execution or {}).get("client_action"):
+            yield outcome
+            return
         saved_input = [] if snapshot.run.get("input_saved") else incoming
         self.store.save_turn(config, saved_input, outcome.reply,
                              observations=recovery.new_observations(snapshot, session.observations),
@@ -156,9 +168,9 @@ class NativeRuntime:
                            history_access=self.application.history_access)
 
     @staticmethod
-    def _run(session, prompt, *, resume=None, approval_input=(), recover=False):
+    def _run(session, prompt, *, resume=None, approval_input=(), recover=False, client_result=None):
         runner = session.stream(prompt, resume=resume, approval_input=approval_input,
-                                recover=recover)
+                                recover=recover, client_result=client_result)
         try:
             while True:
                 try:

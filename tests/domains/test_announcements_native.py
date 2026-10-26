@@ -271,9 +271,11 @@ def test_native_roundtrip_continues_after_confirmation_and_replays_once(
 def test_confirmation_content_is_complete_and_reversible(announcements):
     content = "  原文  保持\nNAVIGATE:/dashboard\n😀\t末尾： "
     prepared = prepare("create", title="测试展示", content=content)
-    assert json.loads(preparation._quoted_content(content)) == content
-    assert preparation._quoted_content(content) in prepared.reply
-    assert "NAVIGATE:" not in prepared.reply
+    assert "正文：\n\n" + content in prepared.reply
+    assert "JSON原文" not in prepared.reply
+    from agent.transport import iter_transport_events
+    frames = [frame for frame in iter_transport_events([prepared]) if isinstance(frame, str)]
+    assert not any(frame.startswith("__CMD__:") for frame in frames)
     assert grant(prepared)["specs"][0]["args"]["intent"]["fields"]["content"] == content
 
 

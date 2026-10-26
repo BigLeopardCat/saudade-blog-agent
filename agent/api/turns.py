@@ -33,6 +33,8 @@ def runtime_events(
     progress_emitter=None,
     task_id=None,
     resume_task=None,
+    browser_feedback=False,
+    browser_result=None,
 ):
     """Bind verified request coordinates to the native Runtime event contract."""
     stream_events = getattr(runtime, "stream_events", None)
@@ -49,6 +51,10 @@ def runtime_events(
             "budget": current_budget(),
         }
     }
+    if browser_feedback:
+        config["configurable"]["browser_feedback"] = True
+    if browser_result is not None:
+        config["configurable"]["browser_result"] = browser_result
     state: dict[str, object] = {"messages": messages}
     if confirm_grant is not None:
         state["confirm_grant"] = confirm_grant
@@ -68,6 +74,8 @@ def run_turn(
     conversation_id: int | None = None,
     task_id=None,
     resume_task=None,
+    browser_feedback=False,
+    browser_result=None,
 ) -> tuple[str, str, list]:
     """Run one native turn and return the legacy non-streaming response shape."""
     turn = collect_turn(
@@ -80,6 +88,8 @@ def run_turn(
             conversation_id=conversation_id,
             task_id=task_id,
             resume_task=resume_task,
+            browser_feedback=browser_feedback,
+            browser_result=browser_result,
         )
     )
     return turn.reply, turn.navigation, turn.execution
@@ -100,6 +110,8 @@ def stream_to_queue(
     *,
     task_id=None,
     resume_task=None,
+    browser_feedback=False,
+    browser_result=None,
 ):
     """Run native events in the worker and enqueue protocol-safe values.
 
@@ -141,6 +153,8 @@ def stream_to_queue(
             progress_emitter=progress_emitter,
             task_id=task_id,
             resume_task=resume_task,
+            browser_feedback=browser_feedback,
+            browser_result=browser_result,
         )
         emit_to_queue(events, put)
         put(None)

@@ -26,7 +26,9 @@
     };
     const resize = () => {
       input.style.height = 'auto';
-      input.style.height = Math.min(input.scrollHeight, 120) + 'px';
+      const height = Math.min(input.scrollHeight, 120);
+      input.style.height = height + 'px';
+      input.style.overflowY = input.scrollHeight > height + 1 ? 'auto' : 'hidden';
     };
     let inputWidth = 0;
     new ResizeObserver(entries => {

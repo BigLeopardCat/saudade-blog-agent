@@ -120,7 +120,9 @@ def test_native_admin_read_loads_only_requested_domain_and_never_calls_legacy(mo
     )
     events = list(runtime.stream_events(
         {"messages": [HumanMessage(content="查看服务器状态")]}, cfg))
-    assert len(tool.calls) == 1 and tool.calls[0]["configurable"] == cfg["configurable"]
+    assert len(tool.calls) == 1
+    assert all(tool.calls[0]["configurable"][key] == value
+               for key, value in cfg["configurable"].items())
     menus = [{item["function"]["name"] for item in menu} for menu in model.menus]
     assert tool.name not in menus[0] and tool.name in menus[1]
     assert not any(name.startswith("prepare_") for name in menus[1])

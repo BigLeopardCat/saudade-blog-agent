@@ -50,6 +50,14 @@ class RequestBudget:
         self.tool_calls = 0
         self.reason = None
 
+    def restore_spent(self, spent):
+        """Carry trusted checkpoint usage across an external-action suspension."""
+        with self._lock:
+            for key in ("tokens", "model_calls", "tool_calls"):
+                value = spent.get(key, 0)
+                if type(value) is int and value >= 0:
+                    setattr(self, key, max(getattr(self, key), value))
+
     def _reject(self, reason):
         self.reason = reason
         record("budget", "rejected", reason=reason, model_calls=self.model_calls,
