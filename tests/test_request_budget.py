@@ -170,3 +170,11 @@ def test_read_progress_is_retained_in_native_result_instead_of_restarted_in_lega
     result = session.run([HumanMessage(content="read and continue")])
     assert result is not None and session.observations
     assert session.calls_used == 1 and session.budget.model_calls == 2
+
+
+def test_provider_reasoning_replay_is_reserved_before_the_next_model_call():
+    message = AIMessage(content="short", additional_kwargs={"reasoning_content": "x" * 6000})
+    budget = RequestBudget(BudgetLimits(context_tokens=1000))
+    with pytest.raises(BudgetExceeded, match="context_tokens"):
+        budget.reserve([message], output_limit=32)
+    assert budget.model_calls == budget.tokens == 0
