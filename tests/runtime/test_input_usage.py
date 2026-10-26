@@ -13,9 +13,11 @@ from agent.runtime.session import ToolSession
 from models.llm import get_llm
 from tools.result import invalid_args, ok
 
+MODEL = object()
+
 
 def anchor(budget, messages, menu, *, usage=1000):
-    ticket = budget.reserve(messages, menu, output_limit=64, model_key=7)
+    ticket = budget.reserve(messages, menu, output_limit=64, model_key=MODEL)
     budget.settle(ticket, AIMessage(content="reply", usage_metadata={
         "input_tokens": usage, "output_tokens": 10, "total_tokens": usage + 10}))
     return ticket
@@ -30,7 +32,7 @@ def test_exact_prefix_uses_actual_input_and_estimates_only_appended_tool_exchang
         "name": "fixture", "args": {"text": "参数"}, "id": "tool"}],
         additional_kwargs={"reasoning_content": "reasoning replay"}),
         ToolMessage(content="字段无效，请修正", tool_call_id="tool")]
-    ticket = budget.reserve([*messages, *appended], menu, output_limit=64, model_key=7)
+    ticket = budget.reserve([*messages, *appended], menu, output_limit=64, model_key=MODEL)
     assert ticket.estimated_input == 1000 + estimate_tokens(appended)
     assert budget.tokens == 1010 + ticket.estimated_input + 64
 
@@ -48,10 +50,26 @@ def test_any_prefix_or_envelope_change_falls_back_to_complete_framework_estimate
         current[1] = HumanMessage(content="changed history")
     if change == "tools":
         menu = [*menu, {"type": "function", "function": {"name": "new", "description": "read"}}]
-    model = 8 if change == "model" else 7
+    model = object() if change == "model" else MODEL
     expected = fresh.reserve(current, menu, output_limit=64).estimated_input
     ticket = budget.reserve(current, menu, output_limit=64, model_key=model)
     assert ticket.estimated_input == expected
+
+
+def test_equal_models_still_need_the_same_instance_to_reuse_input_usage():
+    class EqualModel:
+        def __eq__(self, other):
+            return True
+
+    original, replacement = EqualModel(), EqualModel()
+    messages = [HumanMessage(content="上下文" * 400)]
+    budget = RequestBudget()
+    ticket = budget.reserve(messages, output_limit=64, model_key=original)
+    budget.settle(ticket, AIMessage(content="reply", usage_metadata={
+        "input_tokens": 100, "output_tokens": 10, "total_tokens": 110}))
+    expected = RequestBudget().reserve(messages, output_limit=64).estimated_input
+    assert budget.reserve(messages, output_limit=64,
+                          model_key=replacement).estimated_input == expected
 
 
 def test_real_sdk_can_correct_tool_arguments_without_premature_schema_removal():

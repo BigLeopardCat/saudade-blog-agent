@@ -14,7 +14,7 @@ def _fingerprint(value):
 
 @dataclass(frozen=True)
 class InputShape:
-    model_key: int
+    model_key: object
     tools: str
     messages: tuple[str, ...]
 
@@ -34,7 +34,7 @@ def estimate(anchor, current, messages):
         return None
     previous, tokens = anchor
     count = len(previous.messages)
-    if (current.model_key != previous.model_key or current.tools != previous.tools
+    if (current.model_key is not previous.model_key or current.tools != previous.tools
             or len(current.messages) < count or current.messages[:count] != previous.messages):
         return None
     # No tokenizer is recreated: only the appended messages use the framework estimate.
