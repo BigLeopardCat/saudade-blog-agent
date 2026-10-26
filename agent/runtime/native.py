@@ -8,7 +8,7 @@ from functools import partial
 from langchain_core.messages import AIMessageChunk
 from openai import OpenAIError
 
-from agent.runtime import approval, memory, trace_context
+from agent.runtime import approval, memory, recovery, trace_context
 from agent.runtime.results import TurnResult
 from agent.runtime.session import ToolSession
 from agent.runtime.turns import check_cancelled
@@ -75,6 +75,9 @@ class NativeRuntime:
         if grant is not None:
             yield from self._confirmed(state, config, snapshot, grant)
             return
+        if state.get("resume_task"):
+            yield from self._resume_task(snapshot, state["resume_task"], config)
+            return
         if self.application.expired(snapshot.pending):
             snapshot = replace(snapshot, pending_confirm=None, pending_action=None,
                                approval=None)
@@ -85,8 +88,12 @@ class NativeRuntime:
                         snapshot, state.get("messages") or [], principal,
                         tool_access=self.application.history_access),
                     *(state.get("messages") or [])]
+        if (snapshot.unfinished and not snapshot.run.get("input_saved")
+                and recovery.allowed(snapshot, snapshot.run["id"], config)):
+            incoming = [*snapshot.run["input"], *incoming]
         prompt = self.application.prompt([*snapshot.messages, *incoming], principal, pending)
         session = self._session(config, snapshot, pending)
+        session.task = recovery.new_run(config, incoming, state.get("task_id"))
         outcome = yield from self._run(session, prompt)
         execution = outcome.execution or {}
         approval_state = session.approval
@@ -98,6 +105,38 @@ class NativeRuntime:
             execution=outcome.execution, pending=snapshot.pending, approval=approval_state,
         )
         record("native", "turn_completed", chars=len(outcome.reply))
+        yield outcome
+
+    def _resume_task(self, snapshot, task_id, config):
+        if (snapshot.has_pending and recovery.allowed(replace(
+                snapshot, pending_confirm=None, pending_action=None), task_id, config)
+                and self.application.pending(snapshot.pending, config)):
+            result = TurnResult("当前操作仍等待你的确认。", {
+                **snapshot.pending, "task_id": task_id, "receipts": []})
+            if not snapshot.run.get("input_saved"):
+                self.store.save_turn(config, snapshot.run["input"], result.reply,
+                                     execution=result.execution, approval=snapshot.approval)
+            yield result
+            return
+        if not recovery.allowed(snapshot, task_id, config):
+            record("native", "task_resume_rejected", task_id=task_id)
+            yield TurnResult("当前任务正在等待确认，请先处理确认卡，没有恢复执行。"
+                             if snapshot.has_pending else
+                             "该任务已结束、被替换或当前身份已变化，没有恢复执行。",
+                             {"blocked": True})
+            return
+        incoming = snapshot.run["input"]
+        prompt = self.application.prompt([*snapshot.messages, *incoming],
+                                        config["configurable"]["principal"])
+        session = self._session(config, replace(snapshot, messages=[*snapshot.messages, *incoming]))
+        session.task = snapshot.run
+        session.receipts = list(snapshot.receipts)
+        record("native", "task_resumed", task_id=task_id, engine="langgraph")
+        outcome = yield from self._run(session, prompt, recover=True)
+        saved_input = [] if snapshot.run.get("input_saved") else incoming
+        self.store.save_turn(config, saved_input, outcome.reply,
+                             observations=recovery.new_observations(snapshot, session.observations),
+                             execution=outcome.execution, approval=session.approval)
         yield outcome
 
     def _session(self, config, snapshot, pending=None):
@@ -115,8 +154,9 @@ class NativeRuntime:
                            history_access=self.application.history_access)
 
     @staticmethod
-    def _run(session, prompt, *, resume=None, approval_input=()):
-        runner = session.stream(prompt, resume=resume, approval_input=approval_input)
+    def _run(session, prompt, *, resume=None, approval_input=(), recover=False):
+        runner = session.stream(prompt, resume=resume, approval_input=approval_input,
+                                recover=recover)
         try:
             while True:
                 try:
@@ -161,6 +201,7 @@ class NativeRuntime:
             record("native", "confirmation_resumed", engine="langgraph")
             clean = replace(snapshot, pending_confirm=None, pending_action=None, approval=None)
             session = self._session(config, clean)
+            session.task = snapshot.run
             session.receipts = list(execution["receipts"])
             session.effects = {key: value for key, value in execution.items() if key != "receipts"}
             prompt = self.application.prompt([], session.principal)

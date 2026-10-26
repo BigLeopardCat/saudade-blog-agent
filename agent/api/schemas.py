@@ -86,6 +86,18 @@ class ChatRequest(BaseModel):
     conversation_id: int | None = None
     confirm_token: str = Field(default="", max_length=MAX_TOKEN_CHARS)
     confirm_pick: str = Field(default="", max_length=MAX_SHORT_FIELD_CHARS)
+    task_id: str = Field(default="", max_length=100, pattern=r"^[A-Za-z0-9_-]*$")
+    resume_task: str = Field(default="", max_length=100, pattern=r"^[A-Za-z0-9_-]*$")
+
+    @model_validator(mode="after")
+    def continuation_is_control_only(self):
+        if self.resume_task and (
+            self.conversation_id is None or self.conversation_id <= 0
+            or self.task_id or self.message.strip() or self.image
+            or self.confirm_token or self.confirm_pick
+        ):
+            raise ValueError("继续任务不能同时提交新消息、图片或确认凭据")
+        return self
 
     @field_validator("history_scope", "summary_scope")
     @classmethod
