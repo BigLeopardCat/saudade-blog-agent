@@ -1,0 +1,1307 @@
+{
+  "schema_version": 1,
+  "scope": "bounded read-only Agent/PG/BGE pilot, not a capacity SLA or full quality regression",
+  "started_utc": "2026-10-26T17:56:20.338972+00:00",
+  "finished_utc": "2026-10-26T17:57:50.598332+00:00",
+  "service_version": {
+    "version": "0.2.0",
+    "sha": "2074dec07744e23daaf58c4f5912c2460b0dad79",
+    "sha_source": "git",
+    "started_at": "2026-10-27T01:02:47+08:00",
+    "python": "3.12.3"
+  },
+  "evaluator_checkout": "dc6bb89e3e53e62b1fb4ba0fb86c0d05e8ceb092",
+  "provider": "opencode",
+  "model": "deepseek-v4.1-flash",
+  "reasoning_effort": "low",
+  "configuration": {
+    "web_processes": 4,
+    "chat_permits_per_process": 8,
+    "executor_max_per_process": 16,
+    "checkpoint_pool_min_per_process": 1,
+    "checkpoint_pool_max_per_process": 4,
+    "bge_inference_threads": 1,
+    "bge_slots": 1,
+    "bge_cpu_quota_percent": 100
+  },
+  "automatic_retries": 0,
+  "business_write_approval": false,
+  "planned_agent_requests": 14,
+  "counts": {
+    "passed": 14
+  },
+  "cleaned_conversations": 14,
+  "measurement": {
+    "host_interval_s": 0.2,
+    "bge_interval_s": 0.5,
+    "database_interval_s": 0.25,
+    "resource_interval_s": 0.5,
+    "idle_baseline_s": 12,
+    "idle_after_s": 12,
+    "internal_pool_wait": "not exposed; PostgreSQL snapshots cannot measure client pool wait",
+    "task_statistics": "median and maximum only; not a task P95 or capacity SLA",
+    "bge_probe": "fixed short query, single probe at 2Hz; additional to real Agent RAG requests",
+    "background_traffic": "not blocked; same production host and one evaluator process"
+  },
+  "cases": [
+    {
+      "id": "git",
+      "identity": "user",
+      "tags": [
+        "read",
+        "retrieval"
+      ],
+      "context": {
+        "current_url": "/"
+      },
+      "user_input": "从站内文章正文检索：Git为什么创建分支很快？找到相关解释，读一下对应正文再简短回答并给出处。",
+      "gold": {
+        "nonempty": true,
+        "forbid_runtime_stop": true,
+        "forbid_business_write": true,
+        "require_observations": [
+          {
+            "tools": [
+              "rag_search"
+            ],
+            "kinds": [
+              "ok"
+            ]
+          },
+          {
+            "tools": [
+              "get_article_detail"
+            ],
+            "kinds": [
+              "ok"
+            ]
+          }
+        ],
+        "text_any_regex": [
+          "/article/16"
+        ]
+      }
+    },
+    {
+      "id": "asyncio",
+      "identity": "user",
+      "tags": [
+        "read",
+        "retrieval"
+      ],
+      "context": {
+        "current_url": "/"
+      },
+      "user_input": "从站内文章正文检索：Python协程、Task、事件循环是谁调度谁？读相关正文，给我简短解释和文章链接。",
+      "gold": {
+        "nonempty": true,
+        "forbid_runtime_stop": true,
+        "forbid_business_write": true,
+        "require_observations": [
+          {
+            "tools": [
+              "rag_search"
+            ],
+            "kinds": [
+              "ok"
+            ]
+          },
+          {
+            "tools": [
+              "get_article_detail"
+            ],
+            "kinds": [
+              "ok"
+            ]
+          }
+        ],
+        "text_any_regex": [
+          "/article/23"
+        ]
+      }
+    }
+  ],
+  "phases": {
+    "idle_before": {
+      "host": {
+        "n": 60,
+        "p50": 0.003688318422064185,
+        "p95": 0.004085860552731901,
+        "max": 0.010596920968964696,
+        "errors": {}
+      },
+      "bge": {
+        "n": 24,
+        "p50": 0.027466207859106362,
+        "p95": 0.03036895685363561,
+        "max": 0.03101482498459518,
+        "errors": {}
+      },
+      "task_times": {
+        "n": 0,
+        "p50": null,
+        "p95": null,
+        "max": null
+      },
+      "task_first_visible": {
+        "n": 0,
+        "p50": null,
+        "p95": null,
+        "max": null
+      },
+      "task_first_reply": {
+        "n": 0,
+        "p50": null,
+        "p95": null,
+        "max": null
+      },
+      "mem_available_min_mib": 2288.6640625,
+      "host_cpu_pct": {
+        "n": 22,
+        "p50": 3.007537688442211,
+        "p95": 4.4297176023021025,
+        "max": 4.5
+      },
+      "swap_in_pages": 2,
+      "swap_out_pages": 0,
+      "db_client_connections_min": 4,
+      "db_client_connections_max": 4,
+      "db_idle_in_tx_max": 0,
+      "db_lock_waiters_max": 0,
+      "db_advisory_held_max": 0,
+      "resource_errors": {},
+      "db_errors": {},
+      "services": {
+        "agent": {
+          "cgroup_mem_max_mib": 503.44921875,
+          "rss_sum_max_mib": 651.17578125,
+          "threads_max": 34,
+          "cpu_pct_one_core": {
+            "n": 22,
+            "p50": 0.6822296989586417,
+            "p95": 0.7300876144962163,
+            "max": 0.7337714058144162
+          },
+          "memory_events_delta": {
+            "low": 0,
+            "high": 0,
+            "max": 0,
+            "oom": 0,
+            "oom_kill": 0,
+            "oom_group_kill": 0
+          },
+          "throttled_usec_delta": 0
+        },
+        "bge": {
+          "cgroup_mem_max_mib": 12.6640625,
+          "rss_sum_max_mib": 54.5,
+          "threads_max": 10,
+          "cpu_pct_one_core": {
+            "n": 22,
+            "p50": 5.5203092063709445,
+            "p95": 5.992760406293567,
+            "max": 6.030067702110711
+          },
+          "memory_events_delta": {
+            "low": 0,
+            "high": 0,
+            "max": 0,
+            "oom": 0,
+            "oom_kill": 0,
+            "oom_group_kill": 0
+          },
+          "throttled_usec_delta": 0
+        },
+        "blog": {
+          "cgroup_mem_max_mib": 13.921875,
+          "rss_sum_max_mib": 25.03125,
+          "threads_max": 5,
+          "cpu_pct_one_core": {
+            "n": 22,
+            "p50": 0.5265724522292992,
+            "p95": 0.7055795210097671,
+            "max": 0.7136028679545907
+          },
+          "memory_events_delta": {
+            "low": 0,
+            "high": 0,
+            "max": 0,
+            "oom": 0,
+            "oom_kill": 0,
+            "oom_group_kill": 0
+          },
+          "throttled_usec_delta": 0
+        }
+      }
+    },
+    "c1": {
+      "host": {
+        "n": 85,
+        "p50": 0.0037965269293636084,
+        "p95": 0.005722492141649127,
+        "max": 0.01032582693733275,
+        "errors": {}
+      },
+      "bge": {
+        "n": 34,
+        "p50": 0.028209098614752293,
+        "p95": 0.03566287463763729,
+        "max": 0.040680161910131574,
+        "errors": {}
+      },
+      "task_times": {
+        "n": 2,
+        "p50": 8.392609417089261,
+        "p95": null,
+        "max": 9.145691246027127
+      },
+      "task_first_visible": {
+        "n": 2,
+        "p50": 0.37816891761031,
+        "p95": null,
+        "max": 0.6291640000417829
+      },
+      "task_first_reply": {
+        "n": 2,
+        "p50": 8.358510708552785,
+        "p95": null,
+        "max": 9.111252194037661
+      },
+      "mem_available_min_mib": 2238.98828125,
+      "host_cpu_pct": {
+        "n": 32,
+        "p50": 4.0,
+        "p95": 13.260929648241206,
+        "max": 20.895522388059703
+      },
+      "swap_in_pages": 1,
+      "swap_out_pages": 0,
+      "db_client_connections_min": 4,
+      "db_client_connections_max": 5,
+      "db_idle_in_tx_max": 0,
+      "db_lock_waiters_max": 0,
+      "db_advisory_held_max": 1,
+      "resource_errors": {},
+      "db_errors": {},
+      "services": {
+        "agent": {
+          "cgroup_mem_max_mib": 538.515625,
+          "rss_sum_max_mib": 686.31640625,
+          "threads_max": 39,
+          "cpu_pct_one_core": {
+            "n": 32,
+            "p50": 1.365955315227371,
+            "p95": 32.940394580399236,
+            "max": 35.820191158900826
+          },
+          "memory_events_delta": {
+            "low": 0,
+            "high": 0,
+            "max": 0,
+            "oom": 0,
+            "oom_kill": 0,
+            "oom_group_kill": 0
+          },
+          "throttled_usec_delta": 0
+        },
+        "bge": {
+          "cgroup_mem_max_mib": 12.68359375,
+          "rss_sum_max_mib": 54.5078125,
+          "threads_max": 10,
+          "cpu_pct_one_core": {
+            "n": 32,
+            "p50": 5.913191493562111,
+            "p95": 7.764147722167287,
+            "max": 10.63560334528076
+          },
+          "memory_events_delta": {
+            "low": 0,
+            "high": 0,
+            "max": 0,
+            "oom": 0,
+            "oom_kill": 0,
+            "oom_group_kill": 0
+          },
+          "throttled_usec_delta": 0
+        },
+        "blog": {
+          "cgroup_mem_max_mib": 14.1953125,
+          "rss_sum_max_mib": 25.03125,
+          "threads_max": 5,
+          "cpu_pct_one_core": {
+            "n": 32,
+            "p50": 0.6254875422905348,
+            "p95": 4.438176081902231,
+            "max": 5.520182938954062
+          },
+          "memory_events_delta": {
+            "low": 0,
+            "high": 0,
+            "max": 0,
+            "oom": 0,
+            "oom_kill": 0,
+            "oom_group_kill": 0
+          },
+          "throttled_usec_delta": 0
+        }
+      }
+    },
+    "c2": {
+      "host": {
+        "n": 130,
+        "p50": 0.0037544124061241746,
+        "p95": 0.0047592257964424785,
+        "max": 0.005818067118525505,
+        "errors": {}
+      },
+      "bge": {
+        "n": 52,
+        "p50": 0.0275428801542148,
+        "p95": 0.03646188004640862,
+        "max": 0.04154443391598761,
+        "errors": {}
+      },
+      "task_times": {
+        "n": 4,
+        "p50": 10.824766606441699,
+        "p95": null,
+        "max": 13.62359600304626
+      },
+      "task_first_visible": {
+        "n": 4,
+        "p50": 0.2077538704033941,
+        "p95": null,
+        "max": 0.2454985121730715
+      },
+      "task_first_reply": {
+        "n": 4,
+        "p50": 9.236336000962183,
+        "p95": null,
+        "max": 13.591662516118959
+      },
+      "mem_available_min_mib": 2187.17578125,
+      "host_cpu_pct": {
+        "n": 50,
+        "p50": 4.511306532663316,
+        "p95": 14.255031502691121,
+        "max": 46.231155778894475
+      },
+      "swap_in_pages": 5,
+      "swap_out_pages": 0,
+      "db_client_connections_min": 5,
+      "db_client_connections_max": 7,
+      "db_idle_in_tx_max": 0,
+      "db_lock_waiters_max": 0,
+      "db_advisory_held_max": 2,
+      "resource_errors": {},
+      "db_errors": {},
+      "services": {
+        "agent": {
+          "cgroup_mem_max_mib": 553.44140625,
+          "rss_sum_max_mib": 700.84375,
+          "threads_max": 43,
+          "cpu_pct_one_core": {
+            "n": 50,
+            "p50": 2.1800432214549477,
+            "p95": 21.609114614716987,
+            "max": 71.72197933227349
+          },
+          "memory_events_delta": {
+            "low": 0,
+            "high": 0,
+            "max": 0,
+            "oom": 0,
+            "oom_kill": 0,
+            "oom_group_kill": 0
+          },
+          "throttled_usec_delta": 0
+        },
+        "bge": {
+          "cgroup_mem_max_mib": 12.71484375,
+          "rss_sum_max_mib": 54.546875,
+          "threads_max": 10,
+          "cpu_pct_one_core": {
+            "n": 50,
+            "p50": 5.630671747587943,
+            "p95": 8.920737615277485,
+            "max": 18.401831939466277
+          },
+          "memory_events_delta": {
+            "low": 0,
+            "high": 0,
+            "max": 0,
+            "oom": 0,
+            "oom_kill": 0,
+            "oom_group_kill": 0
+          },
+          "throttled_usec_delta": 0
+        },
+        "blog": {
+          "cgroup_mem_max_mib": 14.23046875,
+          "rss_sum_max_mib": 25.03125,
+          "threads_max": 5,
+          "cpu_pct_one_core": {
+            "n": 50,
+            "p50": 0.6195266351895733,
+            "p95": 2.3627357572811034,
+            "max": 7.784181240063598
+          },
+          "memory_events_delta": {
+            "low": 0,
+            "high": 0,
+            "max": 0,
+            "oom": 0,
+            "oom_kill": 0,
+            "oom_group_kill": 0
+          },
+          "throttled_usec_delta": 0
+        }
+      }
+    },
+    "c4": {
+      "host": {
+        "n": 115,
+        "p50": 0.0037808080669492483,
+        "p95": 0.006007131491787732,
+        "max": 0.01140076108276844,
+        "errors": {}
+      },
+      "bge": {
+        "n": 46,
+        "p50": 0.027354177553206682,
+        "p95": 0.03675612126244232,
+        "max": 0.047168557066470385,
+        "errors": {}
+      },
+      "task_times": {
+        "n": 8,
+        "p50": 9.106714386492968,
+        "p95": null,
+        "max": 13.756803433876485
+      },
+      "task_first_visible": {
+        "n": 8,
+        "p50": 0.24737312749493867,
+        "p95": null,
+        "max": 0.6774940809700638
+      },
+      "task_first_reply": {
+        "n": 8,
+        "p50": 9.073529376531951,
+        "p95": null,
+        "max": 13.724367595976219
+      },
+      "mem_available_min_mib": 2138.2890625,
+      "host_cpu_pct": {
+        "n": 45,
+        "p50": 7.462686567164179,
+        "p95": 37.28121827411168,
+        "max": 54.5
+      },
+      "swap_in_pages": 39,
+      "swap_out_pages": 0,
+      "db_client_connections_min": 5,
+      "db_client_connections_max": 9,
+      "db_idle_in_tx_max": 0,
+      "db_lock_waiters_max": 0,
+      "db_advisory_held_max": 4,
+      "resource_errors": {},
+      "db_errors": {},
+      "services": {
+        "agent": {
+          "cgroup_mem_max_mib": 582.94140625,
+          "rss_sum_max_mib": 730.39453125,
+          "threads_max": 52,
+          "cpu_pct_one_core": {
+            "n": 45,
+            "p50": 10.875796178344071,
+            "p95": 59.03024382660529,
+            "max": 165.3072647876147
+          },
+          "memory_events_delta": {
+            "low": 0,
+            "high": 0,
+            "max": 0,
+            "oom": 0,
+            "oom_kill": 0,
+            "oom_group_kill": 0
+          },
+          "throttled_usec_delta": 0
+        },
+        "bge": {
+          "cgroup_mem_max_mib": 12.484375,
+          "rss_sum_max_mib": 54.55859375,
+          "threads_max": 10,
+          "cpu_pct_one_core": {
+            "n": 45,
+            "p50": 5.873832704152641,
+            "p95": 10.738086483117625,
+            "max": 14.815737051792967
+          },
+          "memory_events_delta": {
+            "low": 0,
+            "high": 0,
+            "max": 0,
+            "oom": 0,
+            "oom_kill": 0,
+            "oom_group_kill": 0
+          },
+          "throttled_usec_delta": 0
+        },
+        "blog": {
+          "cgroup_mem_max_mib": 14.31640625,
+          "rss_sum_max_mib": 25.05859375,
+          "threads_max": 5,
+          "cpu_pct_one_core": {
+            "n": 45,
+            "p50": 0.6756272401433665,
+            "p95": 4.712300957492514,
+            "max": 14.52199004975131
+          },
+          "memory_events_delta": {
+            "low": 0,
+            "high": 0,
+            "max": 0,
+            "oom": 0,
+            "oom_kill": 0,
+            "oom_group_kill": 0
+          },
+          "throttled_usec_delta": 0
+        }
+      }
+    },
+    "idle_after": {
+      "host": {
+        "n": 60,
+        "p50": 0.003723555593751371,
+        "p95": 0.004347718495409936,
+        "max": 0.004782780772075057,
+        "errors": {}
+      },
+      "bge": {
+        "n": 24,
+        "p50": 0.02739421941805631,
+        "p95": 0.031550399004481734,
+        "max": 0.032338691875338554,
+        "errors": {}
+      },
+      "task_times": {
+        "n": 0,
+        "p50": null,
+        "p95": null,
+        "max": null
+      },
+      "task_first_visible": {
+        "n": 0,
+        "p50": null,
+        "p95": null,
+        "max": null
+      },
+      "task_first_reply": {
+        "n": 0,
+        "p50": null,
+        "p95": null,
+        "max": null
+      },
+      "mem_available_min_mib": 2154.43359375,
+      "host_cpu_pct": {
+        "n": 23,
+        "p50": 3.0303030303030303,
+        "p95": 4.52035175879397,
+        "max": 6.532663316582915
+      },
+      "swap_in_pages": 4,
+      "swap_out_pages": 0,
+      "db_client_connections_min": 5,
+      "db_client_connections_max": 5,
+      "db_idle_in_tx_max": 0,
+      "db_lock_waiters_max": 0,
+      "db_advisory_held_max": 0,
+      "resource_errors": {},
+      "db_errors": {},
+      "services": {
+        "agent": {
+          "cgroup_mem_max_mib": 582.3203125,
+          "rss_sum_max_mib": 730.16015625,
+          "threads_max": 35,
+          "cpu_pct_one_core": {
+            "n": 23,
+            "p50": 0.6953405017921119,
+            "p95": 0.7439196108550914,
+            "max": 0.782530839633902
+          },
+          "memory_events_delta": {
+            "low": 0,
+            "high": 0,
+            "max": 0,
+            "oom": 0,
+            "oom_kill": 0,
+            "oom_group_kill": 0
+          },
+          "throttled_usec_delta": 0
+        },
+        "bge": {
+          "cgroup_mem_max_mib": 12.72265625,
+          "rss_sum_max_mib": 54.55859375,
+          "threads_max": 10,
+          "cpu_pct_one_core": {
+            "n": 23,
+            "p50": 5.411354581673357,
+            "p95": 5.815574586735725,
+            "max": 6.5022885572139595
+          },
+          "memory_events_delta": {
+            "low": 0,
+            "high": 0,
+            "max": 0,
+            "oom": 0,
+            "oom_kill": 0,
+            "oom_group_kill": 0
+          },
+          "throttled_usec_delta": 0
+        },
+        "blog": {
+          "cgroup_mem_max_mib": 14.3046875,
+          "rss_sum_max_mib": 25.05859375,
+          "threads_max": 5,
+          "cpu_pct_one_core": {
+            "n": 23,
+            "p50": 0.505952380952376,
+            "p95": 0.6882421557550953,
+            "max": 0.7018905472636848
+          },
+          "memory_events_delta": {
+            "low": 0,
+            "high": 0,
+            "max": 0,
+            "oom": 0,
+            "oom_kill": 0,
+            "oom_group_kill": 0
+          },
+          "throttled_usec_delta": 0
+        }
+      }
+    }
+  },
+  "tasks": [
+    {
+      "id": "c1-w0-0-git",
+      "status": "passed",
+      "http_s": 9.145691246027127,
+      "first_visible_s": 0.6291640000417829,
+      "first_reply_s": 9.111252194037661,
+      "observed_llm_s": 8.196,
+      "model_calls": 3,
+      "tools": [
+        "rag_search",
+        "search_notes",
+        "get_article_detail"
+      ],
+      "usage": {
+        "calls": 3,
+        "measured": 3,
+        "unnamed": 0,
+        "output_seen": 3,
+        "cache_seen": 3,
+        "cache_in": 14576,
+        "cache": 8832,
+        "reasoning_seen": 3,
+        "reasoning": 112,
+        "in": 14576,
+        "out": 432
+      },
+      "end_reason": "producer_done",
+      "rag_mode": "hybrid",
+      "rag_missing": 0,
+      "cleaned_conversations": 1
+    },
+    {
+      "id": "c1-w1-0-asyncio",
+      "status": "passed",
+      "http_s": 7.639527588151395,
+      "first_visible_s": 0.12717383517883718,
+      "first_reply_s": 7.6057692230679095,
+      "observed_llm_s": 7.265000000000001,
+      "model_calls": 3,
+      "tools": [
+        "search_notes",
+        "rag_search",
+        "get_article_detail"
+      ],
+      "usage": {
+        "calls": 3,
+        "measured": 3,
+        "unnamed": 0,
+        "output_seen": 3,
+        "cache_seen": 3,
+        "cache_in": 14234,
+        "cache": 9856,
+        "reasoning_seen": 3,
+        "reasoning": 22,
+        "in": 14234,
+        "out": 353
+      },
+      "end_reason": "producer_done",
+      "rag_mode": "hybrid",
+      "rag_missing": 0,
+      "cleaned_conversations": 1
+    },
+    {
+      "id": "c2-w0-1-asyncio",
+      "status": "passed",
+      "http_s": 9.010855820961297,
+      "first_visible_s": 0.17535087186843157,
+      "first_reply_s": 8.98046367499046,
+      "observed_llm_s": 8.577,
+      "model_calls": 3,
+      "tools": [
+        "rag_search",
+        "get_article_detail"
+      ],
+      "usage": {
+        "calls": 3,
+        "measured": 3,
+        "unnamed": 0,
+        "output_seen": 3,
+        "cache_seen": 3,
+        "cache_in": 14044,
+        "cache": 9728,
+        "reasoning_seen": 3,
+        "reasoning": 33,
+        "in": 14044,
+        "out": 409
+      },
+      "end_reason": "producer_done",
+      "rag_mode": "hybrid",
+      "rag_missing": 0,
+      "cleaned_conversations": 1
+    },
+    {
+      "id": "c2-w0-0-git",
+      "status": "passed",
+      "http_s": 12.12493490288034,
+      "first_visible_s": 0.1790520439390093,
+      "first_reply_s": 2.4614644839894027,
+      "observed_llm_s": 11.712,
+      "model_calls": 4,
+      "tools": [
+        "rag_search",
+        "get_article_detail",
+        "get_article_detail",
+        "get_article_detail"
+      ],
+      "usage": {
+        "calls": 4,
+        "measured": 4,
+        "unnamed": 0,
+        "output_seen": 4,
+        "cache_seen": 4,
+        "cache_in": 23804,
+        "cache": 14208,
+        "reasoning_seen": 4,
+        "reasoning": 96,
+        "in": 23804,
+        "out": 571
+      },
+      "end_reason": "producer_done",
+      "rag_mode": "hybrid",
+      "rag_missing": 0,
+      "cleaned_conversations": 1
+    },
+    {
+      "id": "c2-w1-1-git",
+      "status": "passed",
+      "http_s": 9.524598310003057,
+      "first_visible_s": 0.2364556968677789,
+      "first_reply_s": 9.492208326933905,
+      "observed_llm_s": 9.139000000000001,
+      "model_calls": 3,
+      "tools": [
+        "rag_search",
+        "get_article_detail"
+      ],
+      "usage": {
+        "calls": 3,
+        "measured": 3,
+        "unnamed": 0,
+        "output_seen": 3,
+        "cache_seen": 3,
+        "cache_in": 11687,
+        "cache": 8832,
+        "reasoning_seen": 3,
+        "reasoning": 4,
+        "in": 11687,
+        "out": 300
+      },
+      "end_reason": "producer_done",
+      "rag_mode": "hybrid",
+      "rag_missing": 0,
+      "cleaned_conversations": 1
+    },
+    {
+      "id": "c2-w1-0-asyncio",
+      "status": "passed",
+      "http_s": 13.62359600304626,
+      "first_visible_s": 0.2454985121730715,
+      "first_reply_s": 13.591662516118959,
+      "observed_llm_s": 13.225000000000001,
+      "model_calls": 3,
+      "tools": [
+        "rag_search",
+        "get_article_detail"
+      ],
+      "usage": {
+        "calls": 3,
+        "measured": 3,
+        "unnamed": 0,
+        "output_seen": 3,
+        "cache_seen": 3,
+        "cache_in": 13960,
+        "cache": 9728,
+        "reasoning_seen": 3,
+        "reasoning": 4,
+        "in": 13960,
+        "out": 336
+      },
+      "end_reason": "producer_done",
+      "rag_mode": "hybrid",
+      "rag_missing": 0,
+      "cleaned_conversations": 1
+    },
+    {
+      "id": "c4-w0-1-asyncio",
+      "status": "passed",
+      "http_s": 9.307850800920278,
+      "first_visible_s": 0.6774940809700638,
+      "first_reply_s": 9.272929216967896,
+      "observed_llm_s": 8.338000000000001,
+      "model_calls": 3,
+      "tools": [
+        "rag_search",
+        "get_article_detail"
+      ],
+      "usage": {
+        "calls": 3,
+        "measured": 3,
+        "unnamed": 0,
+        "output_seen": 3,
+        "cache_seen": 3,
+        "cache_in": 13989,
+        "cache": 6784,
+        "reasoning_seen": 3,
+        "reasoning": 47,
+        "in": 13989,
+        "out": 428
+      },
+      "end_reason": "producer_done",
+      "rag_mode": "hybrid",
+      "rag_missing": 0,
+      "cleaned_conversations": 1
+    },
+    {
+      "id": "c4-w0-0-git",
+      "status": "passed",
+      "http_s": 9.772431907942519,
+      "first_visible_s": 0.16066491091623902,
+      "first_reply_s": 9.73695004102774,
+      "observed_llm_s": 9.433,
+      "model_calls": 3,
+      "tools": [
+        "rag_search",
+        "search_notes",
+        "get_article_detail"
+      ],
+      "usage": {
+        "calls": 3,
+        "measured": 3,
+        "unnamed": 0,
+        "output_seen": 3,
+        "cache_seen": 3,
+        "cache_in": 14599,
+        "cache": 6784,
+        "reasoning_seen": 3,
+        "reasoning": 164,
+        "in": 14599,
+        "out": 488
+      },
+      "end_reason": "producer_done",
+      "rag_mode": "hybrid",
+      "rag_missing": 0,
+      "cleaned_conversations": 1
+    },
+    {
+      "id": "c4-w0-3-asyncio",
+      "status": "passed",
+      "http_s": 11.022573548136279,
+      "first_visible_s": 0.2504326880443841,
+      "first_reply_s": 10.99127457011491,
+      "observed_llm_s": 10.635000000000002,
+      "model_calls": 3,
+      "tools": [
+        "rag_search",
+        "get_article_detail"
+      ],
+      "usage": {
+        "calls": 3,
+        "measured": 3,
+        "unnamed": 0,
+        "output_seen": 3,
+        "cache_seen": 3,
+        "cache_in": 13948,
+        "cache": 6912,
+        "reasoning_seen": 3,
+        "reasoning": 14,
+        "in": 13948,
+        "out": 405
+      },
+      "end_reason": "producer_done",
+      "rag_mode": "hybrid",
+      "rag_missing": 0,
+      "cleaned_conversations": 1
+    },
+    {
+      "id": "c4-w0-2-git",
+      "status": "passed",
+      "http_s": 13.756803433876485,
+      "first_visible_s": 0.24431356694549322,
+      "first_reply_s": 13.724367595976219,
+      "observed_llm_s": 13.291,
+      "model_calls": 4,
+      "tools": [
+        "rag_search",
+        "search_notes",
+        "get_article_detail",
+        "get_article_detail"
+      ],
+      "usage": {
+        "calls": 4,
+        "measured": 4,
+        "unnamed": 0,
+        "output_seen": 4,
+        "cache_seen": 4,
+        "cache_in": 24087,
+        "cache": 9856,
+        "reasoning_seen": 4,
+        "reasoning": 217,
+        "in": 24087,
+        "out": 650
+      },
+      "end_reason": "producer_done",
+      "rag_mode": "hybrid",
+      "rag_missing": 0,
+      "cleaned_conversations": 1
+    },
+    {
+      "id": "c4-w1-0-asyncio",
+      "status": "passed",
+      "http_s": 6.252232960890979,
+      "first_visible_s": 0.38511163485236466,
+      "first_reply_s": 1.6098753979895264,
+      "observed_llm_s": 5.739,
+      "model_calls": 3,
+      "tools": [
+        "rag_search",
+        "get_article_detail"
+      ],
+      "usage": {
+        "calls": 3,
+        "measured": 3,
+        "unnamed": 0,
+        "output_seen": 3,
+        "cache_seen": 3,
+        "cache_in": 14000,
+        "cache": 9728,
+        "reasoning_seen": 3,
+        "reasoning": 15,
+        "in": 14000,
+        "out": 363
+      },
+      "end_reason": "producer_done",
+      "rag_mode": "hybrid",
+      "rag_missing": 0,
+      "cleaned_conversations": 1
+    },
+    {
+      "id": "c4-w1-3-git",
+      "status": "passed",
+      "http_s": 7.541986221913248,
+      "first_visible_s": 0.21176861296407878,
+      "first_reply_s": 7.508602168876678,
+      "observed_llm_s": 7.170999999999999,
+      "model_calls": 3,
+      "tools": [
+        "rag_search",
+        "get_article_detail"
+      ],
+      "usage": {
+        "calls": 3,
+        "measured": 3,
+        "unnamed": 0,
+        "output_seen": 3,
+        "cache_seen": 3,
+        "cache_in": 11687,
+        "cache": 8832,
+        "reasoning_seen": 3,
+        "reasoning": 4,
+        "in": 11687,
+        "out": 237
+      },
+      "end_reason": "producer_done",
+      "rag_mode": "hybrid",
+      "rag_missing": 0,
+      "cleaned_conversations": 1
+    },
+    {
+      "id": "c4-w1-1-git",
+      "status": "passed",
+      "http_s": 7.901509769959375,
+      "first_visible_s": 0.3578161939512938,
+      "first_reply_s": 7.8713359700050205,
+      "observed_llm_s": 7.343,
+      "model_calls": 3,
+      "tools": [
+        "search_notes",
+        "rag_search",
+        "get_article_detail"
+      ],
+      "usage": {
+        "calls": 3,
+        "measured": 3,
+        "unnamed": 0,
+        "output_seen": 3,
+        "cache_seen": 3,
+        "cache_in": 12386,
+        "cache": 10112,
+        "reasoning_seen": 3,
+        "reasoning": 15,
+        "in": 12386,
+        "out": 334
+      },
+      "end_reason": "producer_done",
+      "rag_mode": "hybrid",
+      "rag_missing": 0,
+      "cleaned_conversations": 1
+    },
+    {
+      "id": "c4-w1-2-asyncio",
+      "status": "passed",
+      "http_s": 8.905577972065657,
+      "first_visible_s": 0.1930944041814655,
+      "first_reply_s": 8.874129536096007,
+      "observed_llm_s": 8.555,
+      "model_calls": 3,
+      "tools": [
+        "rag_search",
+        "get_article_detail"
+      ],
+      "usage": {
+        "calls": 3,
+        "measured": 3,
+        "unnamed": 0,
+        "output_seen": 3,
+        "cache_seen": 3,
+        "cache_in": 14050,
+        "cache": 9856,
+        "reasoning_seen": 3,
+        "reasoning": 29,
+        "in": 14050,
+        "out": 407
+      },
+      "end_reason": "producer_done",
+      "rag_mode": "hybrid",
+      "rag_missing": 0,
+      "cleaned_conversations": 1
+    }
+  ],
+  "model_metrics": {
+    "unreadable": 0,
+    "groups": [
+      {
+        "source": "production",
+        "build": "2074dec07744e23daaf58c4f5912c2460b0dad79",
+        "model": "deepseek-v4.1-flash",
+        "path": "native",
+        "requests": 14,
+        "with_reply": 14,
+        "end_reasons": {
+          "producer_done": 14
+        },
+        "started_calls": 44,
+        "handoff_reasons": {},
+        "budget_stops": 0,
+        "budget_stop_reasons": {},
+        "duration_samples": 14,
+        "p50_s": 9.149999999999999,
+        "p95_s": null,
+        "first_visible_samples": 14,
+        "first_visible_p50_s": 0.18257662397809327,
+        "first_reply_samples": 14,
+        "first_reply_p50_s": 9.020602050470188,
+        "cache_hit_rate": 0.6161922947534009,
+        "calls": 44,
+        "measured": 44,
+        "unnamed": 0,
+        "output_seen": 44,
+        "cache_seen": 44,
+        "cache_in": 211051,
+        "cache": 130048,
+        "reasoning_seen": 44,
+        "reasoning": 776,
+        "in": 211051,
+        "out": 5713
+      }
+    ]
+  },
+  "observations": {
+    "journal_pool_timeout_lines": 0,
+    "journal_admission_full_lines": 0,
+    "journal_agent_error_lines": 0,
+    "rag_retrieval_events": 14,
+    "bge_journal_launches": 191,
+    "bge_successful_probes": 181,
+    "journal_scope": "joint Agent test only; model launches are not attributed to individual Agent requests"
+  },
+  "local_bge_bursts": {
+    "started_utc": "2026-10-26T18:01:58.534096+00:00",
+    "finished_utc": "2026-10-26T18:02:32.394522+00:00",
+    "concurrencies": [
+      1,
+      2,
+      4
+    ],
+    "bursts_per_level": 20,
+    "timeout_s": 3,
+    "planned_requests": 140,
+    "failures": 0,
+    "cache": "direct model HTTP; bypasses Agent query-vector LRU",
+    "host_interval_s": 0.1,
+    "between_bursts_s": 0.1,
+    "external_model_calls": 0,
+    "summary": {
+      "1": {
+        "embedding": {
+          "n": 20,
+          "p50_s": 0.12450951396021992,
+          "p95_s": 0.2231263703200966,
+          "max_s": 0.22315937792882323
+        },
+        "short": {
+          "n": 10,
+          "p50_s": 0.032011548057198524,
+          "p95_s": null,
+          "max_s": 0.03484784089960158
+        },
+        "long": {
+          "n": 10,
+          "p50_s": 0.22122606250923127,
+          "p95_s": null,
+          "max_s": 0.22315937792882323
+        },
+        "tokens": [
+          42,
+          364
+        ],
+        "host": {
+          "n": 45,
+          "p50_s": 0.003723244182765484,
+          "p95_s": 0.004219560837373138,
+          "max_s": 0.004504507873207331
+        }
+      },
+      "2": {
+        "embedding": {
+          "n": 40,
+          "p50_s": 0.24090585357043892,
+          "p95_s": 0.2602764072827995,
+          "max_s": 0.2794472991954535
+        },
+        "short": {
+          "n": 20,
+          "p50_s": 0.03542612201999873,
+          "p95_s": 0.25836786774452775,
+          "max_s": 0.2660905630327761
+        },
+        "long": {
+          "n": 20,
+          "p50_s": 0.24647560552693903,
+          "p95_s": 0.26094424409093336,
+          "max_s": 0.2794472991954535
+        },
+        "tokens": [
+          42,
+          364
+        ],
+        "host": {
+          "n": 71,
+          "p50_s": 0.003782485146075487,
+          "p95_s": 0.004579016473144293,
+          "max_s": 0.006238945992663503
+        }
+      },
+      "4": {
+        "embedding": {
+          "n": 80,
+          "p50_s": 0.2835757969878614,
+          "p95_s": 0.5125391522073187,
+          "max_s": 0.5442045708186924
+        },
+        "short": {
+          "n": 40,
+          "p50_s": 0.28301206848118454,
+          "p95_s": 0.5003084260737524,
+          "max_s": 0.5125064589083195
+        },
+        "long": {
+          "n": 40,
+          "p50_s": 0.3561618203530088,
+          "p95_s": 0.5184223905322142,
+          "max_s": 0.5442045708186924
+        },
+        "tokens": [
+          42,
+          364
+        ],
+        "host": {
+          "n": 122,
+          "p50_s": 0.0038048680871725082,
+          "p95_s": 0.004810049524530768,
+          "max_s": 0.007297200849279761
+        }
+      }
+    },
+    "host_baselines": {
+      "idle_before": {
+        "n": 50,
+        "p50_s": 0.003685475094243884,
+        "p95_s": 0.0047045402345247565,
+        "max_s": 0.008410010952502489
+      },
+      "idle_after": {
+        "n": 50,
+        "p50_s": 0.003659198875539005,
+        "p95_s": 0.004307581367902458,
+        "max_s": 0.004697812953963876
+      }
+    },
+    "host_errors": 0
+  },
+  "limits": [
+    "two repeated public tasks; not a semantic judge or full task-completion benchmark",
+    "internal client pool and executor queue wait not measured",
+    "maximum 4 concurrent Agent tasks; configured total 32 permits not capacity-validated",
+    "host relative p95 increase <=10% not established",
+    "query/prefix caches warm across repeated tasks; no cold-start or long-soak proof"
+  ],
+  "raw_sha256": {
+    "plan.json": "e5a89760b64834ea7ba7292f647ff175c6a703b1fc203c70c2e0b5b39f2ff193",
+    "report.json": "29298c0f227e0c0dc6b6a9d317d6bb5f0899eeade081bd39eb1ea58f5115803c",
+    "samples.json": "c3ff6e402113fff1d8e1ef6dcfcfd89402f82b228c73bbd6c1e521f28715806c",
+    "bge-burst-plan.json": "7cf47066cb3c62b218603f00c7a62b812b285f04c3084500bff5fae618a902d2",
+    "bge-burst.json": "fad346326fc4c7f259322fc566ae0f1781ada84324f0c82b1191f20f3a27c7da"
+  },
+  "script_sha256": {
+    "saudade-joint-capacity-20261027.py": "bce4a0ecb30f6d1048daa717818ef92c0493d9d1b44c6a603bf3b7e94ba39ee0",
+    "saudade-joint-capacity-summary-20261027.py": "88382b7db69a9392de5762747aea26d224132f93de2687bb008fa0d2568d8fc9",
+    "saudade-bge-burst-20261027.py": "ec1184a4d3bc8f13ea1185a36132ab2098d2b9ba04db32763b43cbdb92e33fd1"
+  }
+}
