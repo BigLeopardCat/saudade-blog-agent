@@ -86,14 +86,15 @@ def grant(prepared):
     return confirm.verify(prepared.execution["pending_confirm"]["token"], 7, 42)
 
 
-@pytest.mark.parametrize("target", [{"user_id": 11}, {"username": "测试账号"}])
+@pytest.mark.parametrize("target", [{"user_id": 11}, {"username": "测试账号"},
+                                     {"user_id": 11, "username": "测试账号"}])
 def test_full_text_readonly_preparation_and_exactly_one_send(notices, tmp_path, target):
     prepared = prepare(**target)
     signed = grant(prepared)
     assert signed and notices["writes"] == 0 and len(notices["requests"]) == 1
     assert set(signed["specs"][0]["args"]) == {"version", "intent"}
     question = prepared.execution["pending_confirm"]["q"]
-    assert preparation.quoted(" 原文\n保持😀\t ") in question
+    assert "正文：\n\n 原文\n保持😀\t " in question
     store = idem.Ledger(str(tmp_path / "notice.sqlite3"))
     for _ in range(2):
         result = transactions.execute(signed, admin_config(), None, ledger=store)
@@ -144,7 +145,7 @@ def test_unverified_or_unprivileged_actors_do_no_io(notices, principal):
     "args",
     [
         {},
-        {"user_id": 11, "username": "测试账号"},
+        {"user_id": 11, "username": " "},
         {"user_id": 11, "content": " "},
         {"user_id": 11, "content": "\0"},
     ],
@@ -157,6 +158,12 @@ def test_invalid_or_ambiguous_requests_do_no_io(notices, args):
 def test_service_cannot_change_text_or_recipient(notices):
     notices["wrong_plan"] = True
     assert isinstance(prepare(user_id=11), base.ToolResult)
+    assert not notices["writes"]
+
+
+def test_id_and_username_must_identify_the_same_notice_recipient(notices):
+    result = prepare(user_id=11, username="其他账号")
+    assert isinstance(result, base.ToolResult) and len(notices["requests"]) == 1
     assert not notices["writes"]
 
 

@@ -151,14 +151,17 @@ class SessionMiddleware(AgentMiddleware):
         prompt = [*([request.system_message] if request.system_message else []),
                   *hydrate(request.messages, session.transient)]
         final = final_prompt(session.budget, prompt, session.menu, session.output_limit,
-                             results_full=session.result_chars >= session.result_limit)
+                             results_full=session.result_chars >= session.result_limit,
+                             model_key=id(request.model))
         model = request.model
         selected_model = _model_name(model)
         if final:
-            prompt, reason, output = final
+            prompt, reason, output, keep_tools = final
             model = model.bind(max_tokens=output) if output < session.output_limit else model
-            session.menu, session.finalizing, session.output_limit = [], True, output
-            record("native", "finalizing", reason=reason, output_limit=output)
+            session.menu = session.menu if keep_tools else []
+            session.finalizing, session.output_limit = True, output
+            record("native", "finalizing", reason=reason, output_limit=output,
+                   tools_retained=keep_tools)
         label = "正在整理已取得的结果…" if session.finalizing else "正在处理请求…"
         emit(session.config, label, key="model_final" if session.finalizing else "model_start")
         record("native", "llm_start", round=session._round_index, engine="langchain",
@@ -166,13 +169,14 @@ class SessionMiddleware(AgentMiddleware):
                streaming=True, model=selected_model)
         trace_context.tools(session.menu, session.traced_contracts)
         started, response = time.monotonic(), None
+        tool_choice = ("none" if session.finalizing else "auto") if session.menu else None
         try:
-            with native_call(session.budget, prompt, session.menu,
+            with native_call(session.budget, prompt, session.menu, model_key=id(request.model),
                              output_limit=session.output_limit) as ticket:
                 messages = prompt[1:] if request.system_message else prompt
                 result = handler(request.override(
                     model=model, messages=messages, tools=session.menu,
-                    tool_choice="auto" if session.menu else None,
+                    tool_choice=tool_choice,
                     model_settings=model_options(settings.llm_timeout)))
                 response = result.result[-1]
                 session.budget.settle(ticket, response)

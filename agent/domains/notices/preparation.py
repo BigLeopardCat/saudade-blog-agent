@@ -36,8 +36,8 @@ def _prepare(target, title, content, config):
     recipient = plan["recipient"]
     target_text = f"发送个人通知给账号 #{recipient['id']} {quoted(recipient['username'])}"
     question = (
-        f"{target_text}\n标题：{quoted(plan['title'])}\n正文：{quoted(plan['content'])}"
-        "\n原文以引号展示，\\n表示换行；发送后没有撤回入口。确认发送？"
+        f"{target_text}\n标题：{quoted(plan['title'])}\n正文：\n\n{plan['content']}"
+        "\n\n发送后没有撤回入口。确认发送？"
     )
     principal, cid = bound_context(config)
     check_cancelled(config)
@@ -61,6 +61,7 @@ def prepare_user_notice(
     title: targets.Title | None = None,
 ) -> object:
     """准备给单个账号发送个人通知的确认，不写入。收件人以唯一编号或完整账号名定位。
+    同时提供user_id和username时必须指向同一个账号。
     正文最多1000字，完整展示后确认；标题可选，最多128字，省略为站内通知。
     正文可按用户意思整理，不添加未提供的事实或承诺；群体公开通知应使用公告工具。
     """

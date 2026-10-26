@@ -196,11 +196,19 @@ def test_cancelled_card_is_durable_and_cannot_write(announcements, tmp_path, mon
 
 
 @pytest.mark.parametrize(
-    "args", [{}, {"announcement_id": 11, "announcement_title": "测试"}, {"announcement_title": " "}]
+    "args", [{}, {"announcement_id": 11, "announcement_title": " "}, {"announcement_title": " "}]
 )
 def test_invalid_target_is_rejected_before_io(announcements, args):
     result = prepare("delete", **args)
     assert result.kind == "invalid_args" and not announcements["requests"]
+
+
+def test_target_pair_is_cross_checked_before_an_announcement_card(announcements):
+    assert prepare("delete", announcement_id=11,
+                   announcement_title="测试").execution["pending_confirm"]
+    assert prepare("delete", announcement_id=11,
+                   announcement_title="不匹配").kind == "unavailable"
+    assert not announcements["writes"]
 
 
 def test_unrequested_plan_change_cannot_issue_a_card(announcements):
