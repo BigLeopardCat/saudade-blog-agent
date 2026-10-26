@@ -49,6 +49,21 @@ def _runtime_stops(events):
             or e.get("event") == "llm_done" and e.get("finish_reason") == "length"]
 
 
+def observations(events):
+    """Apply defaults declared by the actual bound tool, never guessed defaults."""
+    defaults, calls = {}, []
+    for event in events:
+        if event.get("event") == "tool_contract":
+            function = (event.get("schema") or {}).get("function") or {}
+            properties = (function.get("parameters") or {}).get("properties") or {}
+            defaults[function.get("name")] = {k: v["default"] for k, v in properties.items()
+                                               if "default" in v}
+        elif event.get("node") == "native" and event.get("event") == "call":
+            calls.append({**event, "args": {**defaults.get(event.get("name"), {}),
+                                           **event.get("args", {})}})
+    return calls
+
+
 def check(gold, result):
     keys = {"require_observations", "require_confirm_specs", "forbid_runtime_stop",
             "forbid_business_write", "require_answer_value"}
@@ -58,10 +73,11 @@ def check(gold, result):
     if not isinstance(events, list):
         return ["[未评估] 缺少原生运行时事件，不能验证任务结果"]
     failures = []
-    calls = [e for e in events if e.get("node") == "native" and e.get("event") == "call"]
+    calls = observations(events)
     for wanted in gold.get("require_observations", []):
         if not any(e.get("name") in wanted["tools"]
-                   and contains(e.get("args", {}), wanted.get("args", {}))
+                   and contains(e.get("args", {}), (wanted.get("args_by_tool") or {}).get(
+                       e.get("name"), wanted.get("args", {})))
                    and (not wanted.get("kinds") or e.get("kind") in wanted["kinds"])
                    for e in calls):
             failures.append(f"缺少实际工具观察：{wanted}")
