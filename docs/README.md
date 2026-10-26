@@ -30,6 +30,7 @@
 | [model-evaluation-20261026.md](model-evaluation-20261026.md) | DeepSeek主线、Qwen部分运行与暂停、额度复验及剩余缺口 | 记录型 |
 | [deepseek-task-completion-20261026.md](deepseek-task-completion-20261026.md) | DeepSeek回放适配、推理档位对照、任务评测修订与视觉边界 | 记录型 |
 | [deepseek-regression-20261026.md](deepseek-regression-20261026.md) | 排除视觉的125项全量、性能用量、独立误报复评与验收边界 | 记录型 |
+| [deepseek-regression-cases-20261026.md](deepseek-regression-cases-20261026.md) | 125项场景的首判、复评、耗时、调用与token逐项记录 | 记录型 |
 | [enterprise-readiness-20261026.md](enterprise-readiness-20261026.md) | 企业试点指标建议、现有证据、尚缺指标与优先补齐顺序 | 方向型 |
 | [native-baseline-20261026.md](native-baseline-20261026.md) | 框架迁移后127场景首跑、缓存用量、失败复核与后续边界 | 记录型 |
 | [native-baseline-20261025.md](native-baseline-20261025.md) | 125 场景线上首跑、成本缓存、误报复核与功能缺陷 | 记录型 |
