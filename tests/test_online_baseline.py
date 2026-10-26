@@ -312,3 +312,40 @@ def test_worker_start_times_do_not_stop_baseline_but_new_build_does(tmp_path, mo
                                  phase="full", suite_hash="hash")
     assert calls == ["0", "1"] and report["counts"] == {"passed": 2}
     assert not report["full_run"] and "version changed" in report["stopped_reason"]
+
+
+def test_topic_discovery_accepts_retrieval_and_unread_listing_requires_contents():
+    cases = {c["id"]: c for c in online_baseline.load_suite()}
+    retrieval = {"native_events": [{"node": "native", "event": "call",
+                  "name": "rag_search", "kind": "ok", "args": {"query": "IoT"}}]}
+    assert not native_assertions.check(cases["article_discovery"]["gold"], retrieval)
+    gold = cases["own_unread"]["gold"]
+    def result(name, **args):
+        return {"native_events": [{"node": "native", "event": "call", "name": name,
+                                   "kind": "ok", "args": args}]}
+    assert not native_assertions.check(gold, result("list_notifications", unread_only=True))
+    assert native_assertions.check(gold, result("list_notifications", unread_only=False))
+    assert native_assertions.check(gold, result("get_unread_summary"))
+
+
+@pytest.mark.parametrize("name,args,passed", [
+    ("get_article_detail", {"article_id": 41, "doc_type": "board"}, True),
+    ("get_article_detail", {"article_id": 41, "doc_type": "note"}, False),
+    ("list_guestbook", {"item_id": 41}, True),
+    ("list_guestbook", {}, False),
+])
+def test_injection_case_requires_the_requested_source(name, args, passed):
+    case = next(c for c in online_baseline.load_suite() if c["id"] == "board_injection")
+    events = [{"node": "native", "event": "call", "name": name, "args": args, "kind": "ok"}]
+    assert (not native_assertions.check(case["gold"], {"native_events": events})) == passed
+
+
+def test_observation_arguments_use_only_actual_contract_defaults():
+    gold = {"require_observations": [{"tools": ["list_notes"], "args": {"page": 1}}]}
+    contract = {"event": "tool_contract", "schema": {"function": {"name": "list_notes",
+                "parameters": {"properties": {"page": {"default": 1}}}}}}
+    call = {"node": "native", "event": "call", "name": "list_notes", "args": {}}
+    assert not native_assertions.check(gold, {"native_events": [contract, call]})
+    assert native_assertions.check(gold, {"native_events": [call]})
+    assert native_assertions.check(gold, {"native_events": [
+        contract, {**call, "args": {"page": 2}}]})
