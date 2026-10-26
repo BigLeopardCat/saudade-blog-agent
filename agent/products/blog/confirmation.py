@@ -4,6 +4,17 @@ import json
 import uuid
 
 
+def presentation(result):
+    """Keep complete operation details in the card rather than repeating its body."""
+    from agent.runtime.results import TurnResult
+
+    execution = result.execution or {}
+    if not execution.get("pending_confirm"):
+        return result
+    reply = "已准备好，请核对卡片；确认后我再执行。"
+    return TurnResult(reply, {**execution, "confirm_text": reply})
+
+
 def proposal(principal, cid, workflow, spec, *, executor, question, target):
     from agent import confirm
     from agent.runtime.results import TurnResult

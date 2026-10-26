@@ -232,9 +232,11 @@
 #waifu-chat .chat-typing.typing-visible { display: flex; width: max-content; align-items: center; gap: 4px; }
 #waifu-chat .chat-typing i { position: static; display: block; flex: none; margin: 0; }
 #waifu-chat .chat-msg.user { color: var(--chat-ink); }
+#waifu-chat .chat-msg.user .msg-text { display: block; width: 100%; max-width: none; text-align: right; }
 #waifu-chat .msg-bubble,
 #waifu-chat.washiDark .msg-bubble {
   max-width: 88%;
+  width: fit-content;
   text-align: left;
   padding: 11px 15px;
   border: 1px solid var(--chat-line);

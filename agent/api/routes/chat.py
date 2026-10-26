@@ -179,6 +179,21 @@ async def chat(req: ChatRequest, request: Request):
         jobs.close()
 
 
+async def _summary_events(req, jobs, workers, had_output, awaiting_confirmation):
+    """A prepared card finishes promptly; derived memory can advance on a later turn."""
+    if awaiting_confirmation:
+        if req.needs_summary:
+            record("summary", "deferred", reason="awaiting_confirmation")
+        return
+    if had_output and req.needs_summary:
+        yield sse_frame("progress", "正在整理会话摘要…")
+    update = await _refresh_summary(req, jobs, workers) if had_output else None
+    if req.needs_summary:
+        yield sse_frame("progress", "会话摘要已更新。" if update else "本轮保留原有会话摘要。")
+    if update:
+        yield sse_frame("summary", update.model_dump())
+
+
 @router.post("/chat/stream/v2")
 async def chat_stream(req: ChatRequest, request: Request):
     logger.info(
@@ -307,6 +322,7 @@ async def chat_stream(req: ChatRequest, request: Request):
         frames = 0
         end_reason = "unknown"
         had_output = False
+        awaiting_confirmation = False
         last_frame = started
         try:
             while True:
@@ -361,6 +377,7 @@ async def chat_stream(req: ChatRequest, request: Request):
                         yield sse_frame("error", PRODUCER_ERROR_TEXT)
                         return
                     had_output |= kind in ("confirmation", "command")
+                    awaiting_confirmation |= kind == "confirmation"
                     frames += 1
                     if kind == "progress":
                         progress.mark("progress")
@@ -380,16 +397,9 @@ async def chat_stream(req: ChatRequest, request: Request):
                 progress.mark("reply")
                 yield sse_frame("text", _RECOVERY_SENTENCE)
 
-            if had_output and req.needs_summary:
-                yield sse_frame("progress", "正在整理会话摘要…")
-            update = await _refresh_summary(req, jobs, workers) if had_output else None
-            if req.needs_summary:
-                yield sse_frame(
-                    "progress", "会话摘要已更新。" if update else "本轮保留原有会话摘要。"
-                )
-            if update:
-                # Only coverage-aware hosts opt into this versioned summary payload.
-                yield sse_frame("summary", update.model_dump())
+            async for frame in _summary_events(req, jobs, workers, had_output,
+                                                awaiting_confirmation):
+                yield frame
 
             yield sse_frame("done", {})
         except asyncio.CancelledError:
