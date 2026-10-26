@@ -142,9 +142,11 @@ class NativeRuntime:
     def _session(self, config, snapshot, pending=None):
         tools, domains = self.application.tools(
             config, snapshot, pending, self.saver, self.store.available)
+        effort = settings.agent_reasoning_effort
+        options = {"reasoning_effort": effort} if effort != "none" else {}
         model = (self.model_factory or get_llm)(
-            enable_thinking=False, streaming=True, stream_usage=True,
-            max_tokens=settings.agent_output_tokens
+            enable_thinking=effort != "none", streaming=True, stream_usage=True,
+            max_tokens=settings.agent_output_tokens, **options
         )
         adapt = partial(pending.transition, config=config, saver=self.saver) if pending else None
         return ToolSession(model, config, tools, domains, adapt, store=self.store,

@@ -1,6 +1,6 @@
 """LLM initialization module.
 
-Factory function to create a LangChain ChatOpenAI-compatible LLM.
+Factory for LangChain model integrations and OpenAI-compatible providers.
 Reads the active provider's config from ``settings.active_llm_*``.
 """
 
@@ -8,8 +8,10 @@ import logging
 import uuid
 
 from langchain_openai import ChatOpenAI
+from langchain_openai.chat_models.base import BaseChatOpenAI
 
 from config import settings
+from models.deepseek import DeepSeekChat
 from models.session import current_session
 
 logger = logging.getLogger(__name__)
@@ -68,18 +70,18 @@ def response_format(provider: str, schema: dict, *, name: str = "result") -> dic
             "json_schema": {"name": name, "strict": True, "schema": schema}}
 
 
-def get_llm(**kwargs) -> ChatOpenAI:
+def get_llm(**kwargs) -> BaseChatOpenAI:
     """Create and return a configured LLM instance.
 
     The active provider is selected via the ``LLM_PROVIDER`` env var.
-    Each provider (deepseek / qwen / openai) keeps its own
+    Each provider keeps its own
     ``*_API_KEY``, ``*_BASE_URL`` and ``*_MODEL`` environment variables.
 
     Args:
         **kwargs: Override any default setting (model, base_url, etc.).
 
     Returns:
-        ChatOpenAI: A LangChain LLM connected to the configured API.
+        BaseChatOpenAI: A LangChain model connected to the configured API.
     """
     # Control thinking and seeds per call; zero means no seed parameter.
     thinking = kwargs.pop("enable_thinking", settings.llm_enable_thinking)
@@ -128,4 +130,6 @@ def get_llm(**kwargs) -> ChatOpenAI:
         params["default_headers"] = _hdrs
     if seed:
         params["seed"] = int(seed)
-    return ChatOpenAI(**params)
+    client = (DeepSeekChat if settings._provider_prefix in {"deepseek", "opencode"}
+              and params["model"].startswith("deepseek-") else ChatOpenAI)
+    return client(**params)
