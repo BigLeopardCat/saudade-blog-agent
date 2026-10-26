@@ -349,3 +349,45 @@ def test_observation_arguments_use_only_actual_contract_defaults():
     assert native_assertions.check(gold, {"native_events": [call]})
     assert native_assertions.check(gold, {"native_events": [
         contract, {**call, "args": {"page": 2}}]})
+
+
+@pytest.mark.parametrize("include_vision,expected", [(False, ["text"]),
+                                                    (True, ["text", "image"])])
+def test_known_vision_limitations_are_excluded_before_any_paid_request(
+    tmp_path, monkeypatch, include_vision, expected
+):
+    class Fake:
+        agent_url = "http://agent"
+        requests = []
+        cleaned_conversations = []
+        client = httpx.Client(transport=httpx.MockTransport(
+            lambda request: httpx.Response(200, json={"sha": "fixed"}, request=request)))
+
+        def profile(self, *_):
+            return "user"
+
+        @contextmanager
+        def conversation(self, *_):
+            yield 1
+
+    attempted = []
+
+    def drive(case, **kwargs):
+        attempted.append(case["id"])
+        return {"rounds": [{"error": None}]}
+
+    monkeypatch.setattr(online_baseline.golden, "run_case", drive)
+    monkeypatch.setattr(online_baseline.golden, "check_case", lambda *_: [])
+    cases = [{"id": "text", "identity": "user", "tags": ["chat"]},
+             {"id": "image", "identity": "user", "tags": ["vision"]}]
+    report = online_baseline.run(cases, Fake(), {"user": 7}, tmp_path / "report",
+                                 phase="full", suite_hash="source", include_vision=include_vision)
+    assert attempted == expected and report["planned"] == len(expected)
+    assert report["counts"] == {"passed": len(expected)}
+    assert [row["id"] for row in report["excluded_cases"]] == ([] if include_vision else ["image"])
+
+
+def test_empty_primary_scope_cannot_be_reported_as_a_success(tmp_path):
+    with pytest.raises(ValueError, match="no cases remain"):
+        online_baseline.run([{"id": "image", "tags": ["vision"]}], None, {}, tmp_path,
+                             phase="full", suite_hash="source")

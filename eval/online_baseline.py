@@ -74,7 +74,11 @@ def build_identity(version):
     return version["sha"], version.get("version")
 
 
-def run(cases, transport, identities, report_dir, *, phase, suite_hash):
+def run(cases, transport, identities, report_dir, *, phase, suite_hash, include_vision=False):
+    excluded = [case for case in cases if not include_vision and "vision" in case["tags"]]
+    cases = [case for case in cases if case not in excluded]
+    if not cases:
+        raise ValueError("no cases remain in the selected evaluation scope")
     folder = Path(report_dir)
     folder.mkdir(parents=True, exist_ok=False)
     evaluator_hashes = snapshot(folder, cases)
@@ -92,6 +96,9 @@ def run(cases, transport, identities, report_dir, *, phase, suite_hash):
         profiles[key] = transport.profile(uid, role_sets[key])
     report = {"phase": phase, "suite_sha256": suite_hash, "evaluator_sha256": evaluator_hashes,
               "service_version": initial_version,
+              "excluded_cases": [{"id": case["id"], "reason": "known model vision limitation"}
+                                 for case in excluded],
+              "include_vision": include_vision,
               "identities": profiles, "planned": len(cases), "cases": [], "requests": [],
               "automatic_retries": 0, "business_write_approval": False,
               "coverage_limits": ["不批准线上业务写入；实际执行、回放和未知结果由隔离契约评测覆盖",
@@ -154,6 +161,8 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--phase", choices=("poc", "full"), default="poc")
     parser.add_argument("--host", action="store_true", help="Blog HTTP with host persistence")
+    parser.add_argument("--include-vision", action="store_true",
+                        help="Explicitly include separate model vision diagnostics")
     parser.add_argument("--admin-uid", type=int, default=int(os.getenv("GOLDEN_ADMIN_UID", "0")))
     parser.add_argument("--user-uid", type=int, default=int(os.getenv("GOLDEN_USER_UID", "0")))
     parser.add_argument("--zako-uid", type=int, default=int(os.getenv("GOLDEN_ZAKO_UID", "0")))
@@ -171,7 +180,8 @@ def main():
         report = run(cases, transport,
                      {"admin": args.admin_uid, "user": args.user_uid, "zako": args.zako_uid},
                      args.report_dir, phase=args.phase,
-                     suite_hash=hashlib.sha256(SUITE.read_bytes()).hexdigest())
+                     suite_hash=hashlib.sha256(SUITE.read_bytes()).hexdigest(),
+                     include_vision=args.include_vision)
     finally:
         transport.client.close()
     complete = len(report["cases"]) == report["planned"]
