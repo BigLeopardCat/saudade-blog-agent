@@ -283,7 +283,7 @@ pub(crate) async fn drop_checkpoint_turn(conversation_id: i32, text: &str, uid: 
             print("     · 父仓那一半**还没接上**：本仓的钩子今天没有任何调用方。"
               "这是已知缺口（roadmap 批 7 记着），不是判据失败——本件判的是"
               "「父仓自己两臂一致」，因为「断言父仓已接」会一直红、"
-              "而红的套件进不了 CI（同 tests/test_checkpoint_adoption.py 头注）")
+              "而红的套件进不了 CI（同 tests/runtime/test_checkpoint_adoption.py 头注）")
     print()
     if FAILED:
         print(f"失败 {len(FAILED)} 项：" + "；".join(FAILED))

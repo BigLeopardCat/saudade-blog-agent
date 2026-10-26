@@ -1,100 +1,63 @@
 # 参与开发
 
-这是博客看板娘「泠月喵」的对话 Agent——FastAPI + LangGraph，生产运行在站点的
-`127.0.0.1:8010`，由宿主后端反代。**它不是能单独跑起来的应用**：对话入口是宿主后端
-（鉴权、对话落库、SSE 转发、身份断言），本仓只负责"决定做什么、执行工具、组织回复"。
-
-这一点决定了外部贡献者的现实边界，先讲清楚免得白折腾：
-
-| 你能做 | 需要什么 |
-|---|---|
-| 跑全部秒级离线套件（无网络、无 LLM） | 一个 `.venv` |
-| 跑静态扫描 | 同上 |
-| 读代码、改代码、写判据、提 PR | 同上 |
-| 跑 L1 检索评测、L2 golden 端到端 | **跑不起来**——它们真的打网络，需要一台部署好的博客后端 + LLM 凭据；L2 另有语料前置（见下） |
-| 跑跨语言守卫 | 需检出固定公开博客提交，设置 `SAUDADE_PARENT_REPO` 指向它；CI 自动完成 |
-
-所以：**大部分有价值的贡献（判据、确定性决策、工具契约、文档）不需要跑起整套系统。**
-这也是本仓把整套判据做成"秒级、离线、无 LLM"的原因——判据必须能在任何一台机器上跑。
-（套件数量这里**不写死**：清单的唯一事实源是 pytest 按目录收集 `tests/`
-（`pyproject.toml` 的 `testpaths`），写一个数就注定再漂一次。）
-
-**L2 为什么"在自己的部署上也跑不起来"（20261006 补）**：`eval/golden/basic.jsonl` 的期望
-锚在**维护者那个站点**的文章上（术语表从正文派生、检索用例期望命中的就是那几篇）。对着
-自己的博客跑，判据一定对不上——而**红的样子与"模型退化"一模一样**。所以 `run_golden.py`
-启动时会先过一条**语料出处闸**：语料有内容但锚点对不上 ⇒ 全部用例**未评估** + 退出码 3，
-并明说"这不是模型退化"（这正是 20261006 修的那件事：此前没有任何地方能区分这两者）。
-要在自己的部署上跑端到端，用 `eval/fixtures/` 的**自包含夹具**：它自带语料、桩服务与用例，
-三条命令跑完一整套（起桩 → 把 `BLOG_API_BASE` 指向它 → `--golden
-eval/fixtures/golden_smoke.jsonl`；**除你自己的 LLM key 之外不需要任何东西**，见那份 README）。
-换一批自己的文章做 golden 时，**出处声明要与 golden 文件放在同一个目录**（`provenance.json`）
-——闸按文件名找它，别把两者拆开。
+这是博客看板娘「泠月喵」的 Agent 服务，使用 FastAPI、LangChain 与 LangGraph。
+博客宿主提供账号身份、对话存储和浏览器交互；开发与默认离线测试不需要部署博客、
+启动数据库、配置模型密钥或复制维护者的 `.env`。
 
 ## 1. 起步
 
 ```bash
 git clone https://github.com/BigLeopardCat/saudade-blog-agent
 cd saudade-blog-agent
-uv sync                       # 依赖一律 == 钉死，uv.lock 是唯一事实源
-.venv/bin/python -m pytest -q
+uv sync --locked
+uv run --frozen pytest -q
 ```
 
-**套件清单的唯一事实源是"pytest 按目录收集 `tests/`"**（`pyproject.toml` 的
-`testpaths`；收集规则是默认的 `test_*.py`）。加一个套件**不用**改 CI、不用改夜间脚本、
-不用改任何文档——落一个 `tests/test_xxx.py` 上去，它下一轮就在跑。
-（20261020 之前这一步由自研 runner `tests/run_all.py` 做，那套 180 个裸脚本判据当天
-整体转成原生 pytest，runner 删除；逐批过程见 `changelog.d/20261020-pytest-migration-*.md`。）
+pytest 递归收集 `tests/`，新增测试无需修改 CI 或维护套件名单。新测试按职责放置：
 
-`tests/conftest.py` 会在**收集之前**钉住出厂档并**整份不读 `.env`**
-（`SAUDADE_IGNORE_ENV_FILE=1`），为的是让判据不随运维取值漂移——"本机绿、CI 红，而两边
-看的都不是代码"是本仓最贵的一类事故，已经被抓到过好几次。它还负责跨套件的全局还原
-（autouse 的 `_process_isolation`）：多个套件共用一个进程之后，"谁改了全局没还原"会
-**打到别人身上**，那一层把差异逐条打出来。
+- `tests/runtime/`：框架执行、会话、预算、记忆、流式与恢复。
+- `tests/domains/`：领域工具、权限、确认准备与业务契约。
+- `tests/providers/`：模型适配和服务商协议。
+- `tests/integration/`：需要显式外部依赖的集成测试。
+- 根目录保留共享夹具与尚待逐项整理的旧测试。
+
+`tests/conftest.py` 在导入应用前加载明确的测试配置，清除应用部署变量，忽略工作目录
+中的 `.env`；系统路径和工具环境仍保留。新增场景使用 `monkeypatch` 或专属夹具控制输入。
+旧测试的全局状态隔离层继续保留，避免用例之间相互污染。
+默认禁止网络 socket，HTTP 通过模拟传输验证。默认测试不会调用真实模型或连接本机数据库。
+
+跨语言检查使用公开博客源码契约，不读取相邻的部署目录。CI 自动检出
+`.github/host-contract.json` 固定的公开提交，并将缺失契约当作失败；本地没有该检出时，
+依赖它的测试会显式报告 skipped。需要完整运行时，检出该提交并设置：
+
+```bash
+SAUDADE_PARENT_REPO=/path/to/pinned-blog-checkout SAUDADE_REQUIRE_PARENT=1 uv run --frozen pytest -q
+```
+
+PostgreSQL 集成测试需要显式设置 `SAUDADE_CKPT_TEST_DSN`，使用可丢弃的专用数据库。
+它们会建表、删表或清理数据；不设置该变量就跳过，不尝试本机默认连接，也不使用部署 DSN。
+真实模型与线上评测独立运行，不加入普通 PR 测试。完整口径见
+[评测与可观测性](docs/eval-observability.md)。
 
 ## 2. 提交之前
 
 ```bash
-.venv/bin/python -m pytest -q                                  # 全部离线套件
-uvx ruff@0.14.4 check --select F821 --no-cache .               # 未定义名扫描
-bash scripts/dev/coverage.sh                                   # 顺带一份覆盖率报告（非门禁）
+uv run --frozen pytest -q
+uv run --frozen ruff check --select F821 --no-cache .
+uv run --frozen python eval/type_gate.py
+uv run --frozen python eval/lint_gate.py
 ```
 
-第二条只用一条规则（F821）是刻意的：它是"名字只在另一个作用域存在"这类
-**要到运行时才炸**的错误的唯一拦截，而其余 E/F 规则不该拦住一次修复性推送。
-版本号只有一处事实源（`pyproject.toml` 的 `[dependency-groups] dev`），
-`tests/test_ci_suite_list.py` 会核对文档里写的版本和它是否同版。
+`.github/workflows/eval.yml` 对公开 PR、fork、机器人和主线使用相同检查，无需生产密钥。
+依赖由 `uv.lock` 固定；测试使用四进程，JUnit 记录结果与耗时。CI 不发布生产服务。
+可选覆盖率报告使用 `bash scripts/dev/coverage.sh`，目前没有覆盖率百分比门槛。
 
-### CI 与测试分层
+测试优先保护用户结果、权限、确认、幂等、取消、恢复、预算及协议。
+源码检查应有明确的兼容或安全契约，不限制普通目录结构、类测试或实现细节。
+删除重复和退役检查时说明原有风险由什么覆盖，不以减少测试数量为目标。
 
-`.github/workflows/eval.yml` 在 `main` 的 push、PR 和手动触发时运行：
-
-1. `uv sync --locked` 校验锁文件并安装依赖，uv 下载缓存按 `uv.lock` 复用。
-2. 提交格式、未定义名、类型、lint、异常与安全扫描先执行，再运行完整 pytest。
-3. 测试按 `tests/` 收集、四进程运行；JUnit 报告包含用例结果与耗时，成功和失败均可下载，保留 14 天。
-4. 同一分支的新运行取消过期 CI；主任务限时 20 分钟。CI 不发布生产服务。
-
-跨语言检查从 `.github/host-contract.json` 固定的公开提交读取博客源码，
-PR、fork、机器人和主线使用相同检查；不需要私人仓库令牌、生产数据库或模型密钥。
-pytest 默认禁用网络 socket，业务 HTTP 使用模拟传输，避免本机恰好运行服务影响测试。
-契约变更需同时更新锁文件，具体见
-[ADR-0004](docs/adr/adr-0004-cross-language-guard-in-ci.md)。
-
-离线回归验证授权、参数、状态、重试和 SSE 协议；新增运行时测试优先断言用户可见结果与
-工具调用效果，避免绑定旧 planner 的内部节点或提示词原文。真实模型的请求级对照独立运行，
-比较完成率、事实性、token 和延迟；不混入每次 PR 的确定性测试。生产 PostgreSQL 调试
-按授权使用独立会话标识并清理自身记录，具体入口见
-[迁移验收说明](docs/hybrid-runtime-migration.md#生产-postgresql-接续验证)。
-
-本仓尚无 agent 服务的自动发布链路。后续 CD 应以通过 CI 的确定提交为发布版本，
-串行发布并核对 `/version`、`/ready`，失败恢复上一版本。父仓博客的发布流程不能视为
-agent 服务已具备自动部署；发布流程也不能套用 CI 的中途取消策略。
-
-**改动落在哪个文件**：本仓用「预算 + 台账、只许缩小」的棘轮管体量，一共三道——
-函数级（`tests/test_complexity_budget.py`）、类型级（`eval/type_gate.py`）、
-**文件级**（`tests/test_module_budget.py`）。文件级那道意味着**往一个已经超预算的模块里
-加东西会让 CI 红**（`agent/graph.py`、`tools/base.py`、`server.py` 等 26 个在台账里）。
-所以：**先找归属模块，找不到再新建，不要往最顺手的那个文件尾部追加**。真要拆就按主题拆；
-`--update` 不是常规通道，它是"这次确实该变大"的辩护记录，reviewer 会看那份 diff。
+修改代码先确认职责归属，体量约束见 `eval/module_baseline.json` 与复杂度台账。
+新需求优先放入对应模块；超预算模块按职责拆分，调整台账需要说明原因。
 
 ## 3. 提交约定
 

@@ -2,7 +2,7 @@
 
 - **状态**：已采纳，2026-10-26。
 - **承接**：[ADR-0024](adr-0024-framework-kernel-and-domain-extensions.md)。
-- **判据**：`tests/test_task_recovery.py`、审批续行与服务取消回归，以及浏览器停止/继续验收。
+- **判据**：`tests/runtime/test_task_recovery.py`、审批续行与服务取消回归，以及浏览器停止/继续验收。
 
 ## 决策
 

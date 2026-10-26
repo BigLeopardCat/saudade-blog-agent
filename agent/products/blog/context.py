@@ -21,9 +21,9 @@ def conversation_context(principal) -> dict:
     verified = is_verified_identity(principal)
     role = getattr(principal, "known_role", None) if verified else None
     return {
+        "rendering": {"stickers": [f":{name}:" for name in STICKER_NAMES]},
+        "tools": {"loading": "on_demand"},
         "caller": {"verified": verified, "role": role,
                      "preferred_address": "主人" if role in ADMIN_ROLES else "你"},
         "permissions": sorted(scopes_for(role)),
-        "tools": {"loading": "on_demand"},
-        "rendering": {"stickers": [f":{name}:" for name in STICKER_NAMES]},
     }
