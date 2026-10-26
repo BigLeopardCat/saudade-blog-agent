@@ -56,10 +56,10 @@ DIALECT_PROVIDERS = _JSON_OBJECT_PROVIDERS | _JSON_SCHEMA_PROVIDERS
 _WARNED_FORMAT_PROVIDERS: set[str] = set()
 
 
-def response_format(provider: str, schema: dict, *, name: str = "result") -> dict:
-    """Use the configured provider's supported structured-output dialect."""
+def response_format(provider: str, schema: dict, *, name: str = "result", model: str = "") -> dict:
+    """Select the provider and model's supported structured-output dialect."""
     key = (provider or "").strip().lower()
-    if key in _JSON_OBJECT_PROVIDERS:
+    if key in _JSON_OBJECT_PROVIDERS or (key == "opencode" and model.startswith("deepseek-")):
         return {"type": "json_object"}
     if key not in DIALECT_PROVIDERS and key not in _WARNED_FORMAT_PROVIDERS:
         _WARNED_FORMAT_PROVIDERS.add(key)

@@ -3,6 +3,7 @@
 import json
 from pathlib import Path
 
+import httpx
 import pytest
 from langchain_core.messages import AIMessage
 from openai import OpenAIError
@@ -70,6 +71,34 @@ def test_prepared_text_is_reviewed_as_output_not_used_as_supporting_fact(tmp_pat
     assert report["rows"][0]["status"] == "suspect"
     assert report["rows"][0]["diagnostics"]["usage"]["total_tokens"] == 100
     assert report["counts"] == {"suspect": 1}
+
+
+def test_visible_card_text_is_reviewed_even_when_absent_from_signed_intent(tmp_path):
+    preview = "账号已经降级。\n确认发送？"
+    case = recorded(tmp_path, text="请核对卡片", http_events=[
+        {"event": "confirmation", "data": {"q": preview, "token": "PRIVATE_CANARY"}},
+        {"event": "progress", "data": {"q": "不能当作确认卡"}},
+    ])
+    model = Model({"unsupported": ["账号已经降级"], "answered": True,
+                   "verdict": "suspect", "reason": "账号仍为普通用户，且没有执行回执"})
+    report = run(tmp_path, case, model)
+    data = json.loads(model.messages[0][1]["content"])
+    current = data["turns"][-1]
+    assert current["confirmation_previews_to_review"] == [preview]
+    assert current["execution_receipts"] == []
+    assert "PRIVATE_CANARY" not in str(model.messages)
+    assert report["counts"] == {"suspect": 1}
+
+
+def test_judge_cannot_quote_a_previous_turn_card_as_current_output(tmp_path):
+    case = recorded(tmp_path, http_events=[
+        {"event": "confirmation", "data": {"q": "先前卡片"}}])
+    first = case["result"]["rounds"][0]
+    case["result"]["rounds"].append({**first, "http_events": [
+        {"event": "confirmation", "data": {"q": "本轮卡片"}}]})
+    text = online_judge.material(case, case["result"]["rounds"])
+    with pytest.raises(ValueError, match="excerpts"):
+        online_judge.validate_excerpts({"unsupported": ["先前卡片"], "reason": "无回执"}, text)
 
 
 def test_unanswered_request_cannot_be_normalized_into_semantic_success(tmp_path):
@@ -142,3 +171,30 @@ def test_model_override_changes_the_actual_client_not_just_report_label(monkeypa
     monkeypatch.setattr(models.llm, "get_llm", lambda **kwargs: captured.update(kwargs))
     llm_judge.make_llm(model="independent-judge", max_retries=0)
     assert captured["model"] == "independent-judge" and captured["max_retries"] == 0
+
+
+@pytest.mark.parametrize("model,format_type", [("deepseek-v4.1-flash", "json_object"),
+                                               ("qwen3.8-flash", "json_schema")])
+def test_gateway_format_uses_the_actual_judge_model(monkeypatch, model, format_type):
+    from models.llm import get_llm
+
+    monkeypatch.setattr("config.settings.llm_provider", "opencode")
+    # An override must select its own dialect even if the configured default differs.
+    monkeypatch.setattr("config.settings.opencode_model", "other-default")
+    requests = []
+    verdict = {"unsupported": [], "answered": True, "verdict": "ok", "reason": "有依据"}
+
+    def provider(request):
+        body = json.loads(request.content)
+        requests.append(body)
+        assert body["model"] == model and body["response_format"]["type"] == format_type
+        return httpx.Response(200, json={"id": "fixture", "model": model,
+            "choices": [{"index": 0, "finish_reason": "stop", "message": {
+                "role": "assistant", "content": json.dumps(verdict)}}],
+            "usage": {"prompt_tokens": 100, "completion_tokens": 10, "total_tokens": 110}})
+
+    with httpx.Client(transport=httpx.MockTransport(provider)) as client:
+        llm = get_llm(model=model, api_key="test-only", base_url="https://model.test/v1",
+                      http_client=client, max_retries=0, streaming=False, enable_thinking=False)
+        actual, degraded = llm_judge.judge_one("合成材料", llm, allow_fallback=False)
+    assert actual == verdict and not degraded and len(requests) == 1
