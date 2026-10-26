@@ -204,11 +204,17 @@ def test_cancelled_card_is_durable_and_cannot_write(categories, tmp_path, monkey
 
 
 @pytest.mark.parametrize(
-    "args", [{}, {"category_id": 11, "category_name": "测试"}, {"category_name": " "}]
+    "args", [{}, {"category_id": 11, "category_name": " "}, {"category_name": " "}]
 )
 def test_invalid_target_is_rejected_before_io(categories, args):
     result = prepare("delete", **args)
     assert result.kind == "invalid_args" and not categories["requests"]
+
+
+def test_target_pair_is_cross_checked_before_a_category_card(categories):
+    assert prepare("delete", category_id=11, category_name="测试").execution["pending_confirm"]
+    assert prepare("delete", category_id=11, category_name="不匹配").kind == "unavailable"
+    assert not categories["writes"]
 
 
 def test_unrequested_plan_change_cannot_issue_a_card(categories):

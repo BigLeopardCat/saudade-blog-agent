@@ -177,6 +177,15 @@ def test_wrong_service_plan_cannot_authorize_extra_changes(tags):
     assert tags["writes"] == 0
 
 
+def test_target_pair_preserves_tag_namespace_and_rejects_conflicting_name(tags):
+    matched = preparation.prepare_tag_delete.invoke(
+        {"tag_id": 11, "level": 1, "tag_name": "测试"}, config=admin_config())
+    assert matched.execution["pending_confirm"] and not tags["writes"]
+    mismatch = preparation.prepare_tag_delete.invoke(
+        {"tag_id": 11, "level": 1, "tag_name": "子标签"}, config=admin_config())
+    assert isinstance(mismatch, base.ToolResult) and not tags["writes"]
+
+
 def test_exact_names_reject_ambiguity_and_unauthorized_inputs_do_no_io(tags):
     cfg = admin_config()
     tags["rows"][(2, 11)]["name"] = "测试"
@@ -187,7 +196,7 @@ def test_exact_names_reject_ambiguity_and_unauthorized_inputs_do_no_io(tags):
     for args in [
         {"tag_id": 11},
         {"tag_id": 11, "level": True},
-        {"tag_id": 11, "level": 1, "tag_name": "测试"},
+        {"tag_id": 11, "level": 1, "tag_name": " "},
     ]:
         if args.get("level") is True:
             with pytest.raises(ValueError):

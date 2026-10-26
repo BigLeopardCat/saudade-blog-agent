@@ -106,7 +106,7 @@ def prepare_category_update(
     icon: targets.Text | None = None,
     color: targets.Color | None = None,
 ) -> object:
-    """准备修改分类确认，不写入。category_id与category_name二选一，原名需完整精确匹配。
+    """准备修改分类确认，不写入。按category_id或完整category_name定位，同时提供时交叉核对。
     仅填写要改的字段；new_name是新名字。简介、图标和颜色可传空串清空；路径不能清空。
     名字/路径的变化会影响所有关联文章的分类展示，确认卡列出影响数量。
     """

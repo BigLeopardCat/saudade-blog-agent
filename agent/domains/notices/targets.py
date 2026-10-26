@@ -49,15 +49,19 @@ def intent(value):
     parsed = Intent.model_validate(value)
     target = parsed.target
     title = parsed.title
-    if (
-        (target.id is None) == (target.username is None)
-        or target.username is not None
-        and target.username != target.username.strip()
-        or not parsed.content.strip()
-        or any(category(c) == "Cc" and c not in "\n\r\t" for c in parsed.content)
-        or any(category(c) == "Cc" for c in (title or "") + (target.username or ""))
+    if target.id is None and target.username is None:
+        raise ValueError("缺少收件人：请填写user_id或完整username；同时填写时必须指向同一账号")
+    if target.username is not None and (
+        target.username != target.username.strip()
+        or any(category(c) == "Cc" for c in target.username)
     ):
-        raise ValueError("需唯一账号编号或完整账号名，以及非空正文；正文保留原文")
+        raise ValueError("username必须是完整账号名，不能包含首尾空格或控制字符")
+    if not parsed.content.strip():
+        raise ValueError("content正文不能为空或只有空白")
+    if any(category(c) == "Cc" and c not in "\n\r\t" for c in parsed.content):
+        raise ValueError("content正文不能包含换行、回车、制表之外的控制字符")
+    if any(category(c) == "Cc" for c in (title or "")):
+        raise ValueError("title标题不能包含控制字符")
     return parsed.model_dump()
 
 

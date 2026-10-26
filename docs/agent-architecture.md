@@ -169,11 +169,13 @@ flowchart LR
 │   ├── runtime/execution_state.py                       # 工具领域、来源证据与待审批状态
 │   ├── runtime/recovery.py                              # 普通任务绑定与标准 checkpoint 续跑适配
 │   ├── runtime/budget.py                                # 当前生产代码模块
+│   ├── runtime/input_usage.py                           # 相同模型及请求前缀复用服务商输入用量
+│   ├── runtime/tool_errors.py                           # 参数字段错误反馈，不回显原始输入
 │   ├── runtime/catalog.py                               # 当前生产代码模块
 │   ├── runtime/checkpoint_store.py                      # 当前生产代码模块
 │   ├── runtime/control.py                               # 当前生产代码模块
 │   ├── runtime/conversation_store.py                    # 当前生产代码模块
-│   ├── runtime/finalization.py                          # 同一请求预算内撤下工具并整理已有事实
+│   ├── runtime/finalization.py                          # 同一预算内整理事实，可保留工具定义并禁止调用
 │   ├── runtime/workers.py                              # 请求线程与启动预热的服务生命周期
 │   ├── runtime/jobs.py                                  # 当前生产代码模块
 │   ├── runtime/memory_media.py                          # 多模态消息的历史引用与临时图片适配

@@ -8,6 +8,7 @@ from dataclasses import dataclass, field
 from langchain_core.messages.utils import count_tokens_approximately
 
 from agent.llm_usage import usage_fields
+from agent.runtime import input_usage
 from agent.runtime.message_content import estimate_tokens
 from config.settings import settings
 from utils.trace import record
@@ -32,6 +33,7 @@ class Reservation:
     estimated_input: int
     output_limit: int
     settled: bool = False
+    input_shape: input_usage.InputShape | None = None
 
 
 def _estimate(messages, tools, output_limit):
@@ -49,6 +51,15 @@ class RequestBudget:
         self.model_calls = 0
         self.tool_calls = 0
         self.reason = None
+        self._input_anchor: tuple[input_usage.InputShape, int] | None = None
+
+    def _input_estimate(self, messages, tools, output_limit, model_key):
+        message_tokens, schema_tokens = _estimate(messages, tools, output_limit)
+        current = input_usage.shape(messages, tools, model_key)
+        anchored = input_usage.estimate(self._input_anchor, current, messages)
+        return (message_tokens + schema_tokens if anchored is None else anchored,
+                message_tokens, schema_tokens, current,
+                "framework" if anchored is None else "provider_prefix")
 
     def restore_spent(self, spent):
         """Carry trusted checkpoint usage across an external-action suspension."""
@@ -64,21 +75,21 @@ class RequestBudget:
                tool_calls=self.tool_calls, request_tokens=self.tokens)
         raise BudgetExceeded(reason)
 
-    def reserve(self, messages, tools=(), *, output_limit=None):
+    def reserve(self, messages, tools=(), *, output_limit=None, model_key=None):
         output_limit = settings.agent_output_tokens if output_limit is None else output_limit
-        message_tokens, schema_tokens = _estimate(messages, tools, output_limit)
-        estimated = message_tokens + schema_tokens
         with self._lock:
+            estimated, message_tokens, schema_tokens, current, basis = self._input_estimate(
+                messages, tools, output_limit, model_key)
             reason = self._call_block_reason(estimated, output_limit)
             if reason:
                 self._reject(reason)
             self.tokens += estimated + output_limit
             self.model_calls += 1
-            ticket = Reservation(estimated, output_limit)
+            ticket = Reservation(estimated, output_limit, input_shape=current)
             calls, reserved = self.model_calls, self.tokens
         record("budget", "reserved", estimated_input=estimated, message_tokens=message_tokens,
                schema_tokens=schema_tokens, output_limit=output_limit,
-               model_calls=calls, reserved_tokens=reserved)
+               model_calls=calls, reserved_tokens=reserved, estimate_basis=basis)
         return ticket
 
     def _call_block_reason(self, estimated, output_limit):
@@ -92,17 +103,17 @@ class RequestBudget:
             return "request_tokens"
         return None
 
-    def call_block_reason(self, messages, tools=(), *, output_limit=None):
+    def call_block_reason(self, messages, tools=(), *, output_limit=None, model_key=None):
         """Inspect capacity without consuming a call or poisoning future reservations."""
         output_limit = settings.agent_output_tokens if output_limit is None else output_limit
-        estimated = sum(_estimate(messages, tools, output_limit))
         with self._lock:
+            estimated = self._input_estimate(messages, tools, output_limit, model_key)[0]
             return self._call_block_reason(estimated, output_limit)
 
-    def output_capacity(self, messages, tools=()):
+    def output_capacity(self, messages, tools=(), *, model_key=None):
         """Remaining output room after the complete input, without reserving a call."""
-        estimated = sum(_estimate(messages, tools, 1))
         with self._lock:
+            estimated = self._input_estimate(messages, tools, 1, model_key)[0]
             if self.reason or self.model_calls >= self.limits.model_calls:
                 return 0
             return max(0, min(self.limits.context_tokens - estimated,
@@ -120,6 +131,8 @@ class RequestBudget:
                 return
             ticket.settled = True
             self.tokens += charged - ticket.estimated_input - ticket.output_limit
+            if ticket.input_shape is not None and actual_input is not None and actual_input > 0:
+                self._input_anchor = (ticket.input_shape, actual_input)
             if self.tokens > self.limits.request_tokens:
                 self.reason = "request_tokens"
             used = self.tokens
@@ -154,8 +167,8 @@ def current_budget():
 
 
 @contextmanager
-def native_call(budget, messages, tools, *, output_limit=None):
-    ticket = budget.reserve(messages, tools, output_limit=output_limit)
+def native_call(budget, messages, tools, *, output_limit=None, model_key=None):
+    ticket = budget.reserve(messages, tools, output_limit=output_limit, model_key=model_key)
     token = _native.set(budget)
     try:
         yield ticket
