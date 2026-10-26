@@ -28,6 +28,7 @@
 | [evaluation-native-baseline.md](evaluation-native-baseline.md) | 原生 HTTP 测试集、首跑基线、真实身份与覆盖边界 | 现状型 |
 | [cache-audit-20261026.md](cache-audit-20261026.md) | 首跑缓存分层、连续会话探针与固定任务模型对照 | 记录型 |
 | [model-evaluation-20261026.md](model-evaluation-20261026.md) | DeepSeek主线、Qwen部分运行与暂停、额度复验及剩余缺口 | 记录型 |
+| [deepseek-task-completion-20261026.md](deepseek-task-completion-20261026.md) | DeepSeek回放适配、推理档位对照、任务评测修订与视觉边界 | 记录型 |
 | [native-baseline-20261026.md](native-baseline-20261026.md) | 框架迁移后127场景首跑、缓存用量、失败复核与后续边界 | 记录型 |
 | [native-baseline-20261025.md](native-baseline-20261025.md) | 125 场景线上首跑、成本缓存、误报复核与功能缺陷 | 记录型 |
 | [native-regression-20261025.md](native-regression-20261025.md) | 17 场景定向线上回归、排期判据复核、成本与剩余缺陷 | 记录型 |
