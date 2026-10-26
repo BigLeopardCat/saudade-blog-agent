@@ -69,15 +69,25 @@ def _prepare(action, request_id, account_id, reason, config):
 
 
 @tool(return_direct=True)
-def prepare_quota_action(action: Literal["approve", "reject", "reset"], config: RunnableConfig,
-                         request_id: Annotated[StrictInt, Field(gt=0)] | None = None,
-                         account_id: Annotated[StrictInt, Field(gt=0)] | None = None,
-                         reason: Annotated[StrictStr, Field(min_length=1, max_length=255)]
-                         | None = None) -> object:
-    """准备单项额度确认，不执行写入。approve/reject指定申请编号，reset指定账号编号。
+def prepare_quota_action(
+    action: Annotated[Literal["approve", "reject", "reset"], Field(description=
+        "approve approves a pending application and restores quota; reject declines a pending "
+        "application; reset directly resets an account without an application or reason.")],
+    config: RunnableConfig,
+    request_id: Annotated[StrictInt, Field(gt=0, description=
+        "Required only for approve/reject: pending quota application ID, not an account ID. "
+        "Omit for reset.")] | None = None,
+    account_id: Annotated[StrictInt, Field(gt=0, description=
+        "Required only for reset: account ID, not an application ID. Omit for approve/reject.")]
+        | None = None,
+    reason: Annotated[StrictStr, Field(min_length=1, max_length=255, description=
+        "Required only for reject: the user's explicit rejection reason (1-255 characters), "
+        "sent to the applicant. Omit for approve/reset.")] | None = None,
+) -> object:
+    """准备单项额度确认，不执行写入。
 
-    reject必须提供用户明确指定的驳回理由，将原样通知申请人。批准会恢复申请人的对话额度；
-    reset无需申请，不能用来绕过已经处理的申请。额度单位为对话轮，0上限表示不限额。
+    reset按账号独立重置，无需申请或理由，也不修改历史申请。
+    额度单位为对话轮；不限额或已用轮数为零时无需重置。
     """
     return _prepare(action, request_id, account_id, reason, config)
 
