@@ -279,3 +279,36 @@ def test_failure_is_recorded_once_without_resampling(tmp_path, monkeypatch):
                                  phase="full", suite_hash="hash")
     assert calls == ["broken"] and report["counts"] == {"failed": 1}
     assert report["automatic_retries"] == 0 and report["full_run"]
+
+
+def test_worker_start_times_do_not_stop_baseline_but_new_build_does(tmp_path, monkeypatch):
+    versions = iter([{"sha": "first", "started_at": value} for value in ("a", "b", "c")]
+                    + [{"sha": "second", "started_at": "c"}])
+
+    class Fake:
+        agent_url = "http://agent"
+        requests = []
+        cleaned_conversations = []
+        client = httpx.Client(transport=httpx.MockTransport(
+            lambda request: httpx.Response(200, json=next(versions), request=request)))
+
+        def profile(self, *_):
+            return "user"
+
+        @contextmanager
+        def conversation(self, *_):
+            yield 1
+
+    calls = []
+
+    def drive(case, **_):
+        calls.append(case["id"])
+        return {"rounds": [{"error": None}]}
+
+    monkeypatch.setattr(online_baseline.golden, "run_case", drive)
+    monkeypatch.setattr(online_baseline.golden, "check_case", lambda *_: [])
+    cases = [{"id": str(i), "identity": "user", "tags": []} for i in range(3)]
+    report = online_baseline.run(cases, Fake(), {"user": 7}, tmp_path / "report",
+                                 phase="full", suite_hash="hash")
+    assert calls == ["0", "1"] and report["counts"] == {"passed": 2}
+    assert not report["full_run"] and "version changed" in report["stopped_reason"]
