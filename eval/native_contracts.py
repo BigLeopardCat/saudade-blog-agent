@@ -24,7 +24,13 @@ from agent.runtime import writes
 from agent.runtime.control import RequestControl, request_scope
 from agent.runtime.native import NativeRuntime
 from agent.runtime.native_store import NativeConversationStore
-from eval import admin_task_contracts, experience_contracts, navigation_contracts, request_metrics
+from eval import (
+    admin_task_contracts,
+    experience_contracts,
+    navigation_contracts,
+    reading_task_contracts,
+    request_metrics,
+)
 from eval.own_fixtures import SECRET, favorite_backend, message_backend, notification_backend
 from utils.trace_io import load_trace
 
@@ -173,7 +179,8 @@ CASES = [("chat", favorite_backend, _chat),
          ("notification_replay", notification_backend, _notifications),
          ("unread_counts", message_backend, _unread_counts),
          ("message_read_replay", message_backend, _messages),
-         *navigation_contracts.CASES, *experience_contracts.CASES, *admin_task_contracts.CASES]
+         *navigation_contracts.CASES, *experience_contracts.CASES, *admin_task_contracts.CASES,
+         *reading_task_contracts.CASES]
 
 
 def _sample(name, backend, contract, run_id, sample):
