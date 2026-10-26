@@ -5,12 +5,14 @@ from __future__ import annotations
 import os
 import pathlib
 import sys
+import tempfile
 from unittest.mock import patch
 
 import pytest
 
 pytest_plugins = ("_own_support", "pytester")
 
+_ARTIFACTS = tempfile.TemporaryDirectory(prefix="saudade-pytest-")
 _PINNED = {
     "RAG_HYBRID_ENABLED": "0",
     "CHECKPOINT_DSN": "",
@@ -19,6 +21,8 @@ _PINNED = {
     "IOT_ENABLED": "1",
     "NO_PROXY": "127.0.0.1,localhost,::1",
     "no_proxy": "127.0.0.1,localhost,::1",
+    "TRACE_DIR": str(pathlib.Path(_ARTIFACTS.name) / "traces"),
+    "IDEM_DB": str(pathlib.Path(_ARTIFACTS.name) / "idem.sqlite3"),
 }
 
 # Settings currently initializes a singleton on import. Bootstrap it with only
