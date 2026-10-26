@@ -58,6 +58,9 @@ class ToolSession:
         self.approval = None
         self.awaiting_call = None
         self.framework_state = None
+        self.task = None
+        self.recovering = False
+        self.recovery_state = None
         self.transient = {}
         self.effects = {}
         self.observations = []
@@ -145,7 +148,7 @@ class ToolSession:
                 record("native", "load_domain", domain=domain, call_id=call["id"])
                 self.llm = self._bind_menu()
             prompt.append(ToolMessage(content=f"{domain} 工具已加载。",
-                                      tool_call_id=call["id"]))
+                                      name=name, tool_call_id=call["id"]))
             return True
         if name not in self.tools:
             return self._tool_error(call, prompt, "unknown_tool")
@@ -173,7 +176,8 @@ class ToolSession:
         remaining = _MAX_TOTAL_RESULT_CHARS - self.result_chars
         body = self.render_result(call, body, min(_MAX_RESULT_CHARS, remaining))
         messages = tool_messages(message, body, call["id"])
-        prompt.append(messages[0])
+        prompt.append(messages[0].model_copy(update={"name": name, "artifact": {
+            **(messages[0].artifact or {}), "kind": kind}}))
         attachments.extend(messages[1:])
         self.result_chars += len(body)
         record("native", "call", name=name, args=args, call_id=call["id"], round=round_index,
@@ -215,7 +219,8 @@ class ToolSession:
                     if isinstance(message, ToolMessage) and message.status != "error"}
         observed.difference_update(self.initial_names)
         restored = [domain for domain, tools in self.domains.items()
-                    if domain not in self.loaded and observed.intersection(tools)]
+                    if domain not in self.loaded and (observed.intersection(tools)
+                    or f"load_{domain}_info_tools" in observed)]
         for domain in restored:
             self.tools.update(self.domains[domain])
             self.loaded.append(domain)
@@ -291,14 +296,14 @@ class ToolSession:
             return None, self._budget_stop(exc.reason, tool_calls=self.calls_used)
         return calls, None
 
-    def stream(self, prompt, *, resume=None, approval_input=()):
+    def stream(self, prompt, *, resume=None, approval_input=(), recover=False):
         """Adapt framework events to the current transport result contract."""
         from agent.runtime.execution import FrameworkExecution
 
         self._round_index = 0
         self.stream_guard = StreamGuard(self)
         execution = FrameworkExecution(self, prompt)
-        stream = execution.stream(resume=resume, approval_input=approval_input)
+        stream = execution.stream(resume=resume, approval_input=approval_input, recover=recover)
         visible = []
         self.used_stream_api = True
         try:

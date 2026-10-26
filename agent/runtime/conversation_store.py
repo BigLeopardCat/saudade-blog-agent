@@ -1,7 +1,8 @@
 """Conversation data and the storage boundary used by the native runtime.
 
-Completed turns and framework approval bindings are saved. Interrupted reads
-may run again; business writes remain owned by the independent execution ledger.
+Conversation turns, task identities and framework approval bindings are saved.
+Reads without a committed checkpoint may run again; business writes remain owned
+by the independent execution ledger.
 """
 
 from contextlib import AbstractContextManager
@@ -15,6 +16,8 @@ class ConversationSnapshot:
     pending_confirm: dict | None = None
     pending_action: dict | None = None
     approval: dict | None = None
+    run: dict | None = None
+    receipts: list = field(default_factory=list)
     unfinished: bool = False
     initialized: bool = False
 

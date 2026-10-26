@@ -137,6 +137,7 @@
         localStorage.setItem(k, JSON.stringify({
           id: ask.id || '', q: ask.q || '', opts: ask.opts || [],
           token: ask.token || '', exp: ask.exp || 0, replay_safe: ask.replay_safe === true,
+          task_id: ask.task_id || '',
         }));
       } catch (e) {/* 存不下（隐私模式/配额满）：这一轮照常弹，只是刷新后不回来 */}
     };
@@ -536,6 +537,31 @@
         wrap.appendChild(retryBtn);
         wrap.appendChild(editBtn);
         contentSpan.appendChild(wrap);
+        let stopped;
+        try {
+          stopped = JSON.parse(localStorage.getItem('saudade-chat-failed') || '[]')
+            .find(x => x.kind === 'stopped' && x.text === msg && x.task_id
+              && String(x.conv_id) === String(ctx.state.conv));
+        } catch (e) { /* Older failure records have no task identifier. */ }
+        if (stopped) {
+          const resumeBtn = document.createElement('button');
+          resumeBtn.type = 'button';
+          resumeBtn.className = 'chat-retry-btn chat-resume-btn';
+          resumeBtn.textContent = '继续任务';
+          wrap.prepend(resumeBtn);
+          resumeBtn.addEventListener('click', async () => {
+            if (lastUserText() !== msg) { showHint(STALE_HINT); return; }
+            resumeBtn.disabled = true;
+            const completed = await sendMessage({ silent: true, resumeTask: stopped.task_id,
+              resumeText: msg, convId: stopped.conv_id, onDropped: showHint });
+            if (completed) {
+              ctx.state.items = ctx.state.items.filter(x => x.id !== stopped.partial_id);
+              if (div && div.parentNode) div.parentNode.removeChild(div);
+              clearFailedRound(msg);
+              saveHistory();
+            } else resumeBtn.disabled = false;
+          });
+        }
         // 操作没办成时的**可见回答**（20260927）：点一下什么都不发生是本仓明令禁止的
         // 收尾形态（"点了没反应"与"点了报错"差着一次排查）。此前 discard 失败 =
         // 按钮闪一下复原，主人只能猜。文案来自后端那句回答的**分类**，不是自创状态。
@@ -628,7 +654,10 @@
       const persistFailedRound = (text, reason, kind) => {
         try {
           const cur = JSON.parse(localStorage.getItem(FAILED_KEY) || 'null');
-          const entry = { text, ts: Date.now(), reason: reason || '', kind: kind || 'failed' };
+          const active = ctx.state.activeRound || {};
+          const entry = { text, ts: Date.now(), reason: reason || '', kind: kind || 'failed',
+            ...(kind === 'stopped' ? { task_id: active.taskId, conv_id: active.convId ?? ctx.state.conv,
+              partial_id: active.roundId } : {}) };
           if (cur && Array.isArray(cur) && cur.length) {
             localStorage.setItem(FAILED_KEY, JSON.stringify([entry, ...cur].slice(0, 3)));
           } else {
@@ -645,16 +674,11 @@
           else localStorage.removeItem(FAILED_KEY);
         } catch (e) {/* ignore */}
       };
-      // 「主人按了停止 ⇒ 保留这一轮」的**唯一实现**（20261001）。两个调用点：
-      //   · sendMessage 收尾块（`stoppedTurn`，正常的 abort 路径）；
-      //   · 发送按钮的 3s 保险（浏览器对已开始读取的流 abort 不触发 AbortError 时，
-      //     catch/finally 全程不执行，只能由那条定时器手动补上）。
-      // 两处必须是**同一件事**：半截回复转正（否则下一次 reconcile 把它当孤儿摘掉）、
-      // 挂重发/编辑、记 `'stopped'` 标记、非 silent 轮广播 error。此前两份拷贝已经
-      // 漂了——收尾那份转正了半截回复，保险那份没转正（同样的操作，刷新前后看到的
-      // 东西不一样）。各调用点只留自己的部分：收尾那份补拉历史，保险那份复位按钮态
-      // 与广播 idle（abort 不触发时 finally 不执行，别的窗口的按钮靠它解锁）。
+      // Keep the stopped draft and task identity for explicit continuation.
       const retainStoppedTurn = (victim, roundId, msg, silent) => {
+        const active = ctx.state.activeRound || {};
+        const original = active.resumeText || msg;
+        if (!silent || active.resumeTask) persistFailedRound(original, '已停止生成', 'stopped');
         delete ctx.state.live[roundId];
         // 流式纯文本态才敢取 textContent（= 原文）；已 markdown 化的重渲染会二次解释记号
         const partial = victim && victim.contentSpan
@@ -673,29 +697,15 @@
           victim.el.dataset.mid = roundId;
           victim.el.dataset.finished = '1';
           saveHistory();
-          attachRetryActions(victim.contentSpan, victim.el, msg);
+          if (!silent || active.resumeTask) attachRetryActions(victim.contentSpan, victim.el, original);
         } else if (victim && victim.el && victim.el.parentNode) {
           // 一个 token 都还没收到：气泡里没有可留的东西，摘掉它——提示条与重发/编辑
           // 由失败轮那一套（持久化标记 + chat-engine 的渲染）在下一次 reconcile 补上
           victim.el.parentNode.removeChild(victim.el);
         }
         // silent 轮没有用户条目，也不给重发/编辑（隐藏确认请求重发会变成一次真发言）
-        if (!silent) persistFailedRound(msg, '已停止生成', 'stopped');
       };
-      // 「上一次被主人打断的那条」补删（20261001，用户拍板）：停止生成**不再当场丢弃**
-      // ——用户消息留在原处、可二次编辑/重发；直到主人**直接说下一句**这一刻才丢。
-      // 判据只有一条：**它仍是当前最后一条用户消息**（与 `attachRetryActions` 的双保险①
-      // 同一把尺）。不是它就不动——宁可不删，也不误删一条主人还在看着的消息。
-      // 顺序是硬要求：discard 必须**先于**新消息落库。Rust 侧按"最后一条 user 消息 +
-      // 原文校验"定位、删掉 `Id >= 那条` 的全部行（chat.rs discard_handler）——反过来
-      // 的话最后一条 user 已经是新消息，只要它与被打断的那条**同文**（主人重发同一句话
-      // 是最自然的动作），校验就会通过、删掉的是**刚发出去的这一条**。所以这个顺序
-      // 没有任何别的东西兜得住，只能写死在调用点上。
-      // 一轮被**明确丢弃**（重发/编辑/补删）之后，那一轮的半截回复也跟着走：它已经没有
-      // 归属了——留在屏幕上就是"用户消息旁边悬着一段没有对应提问的残句"，重发那条更糟
-      // （新回复出现在它下面，旧残句成了**上一条**的回答）。判据 = 最后一条 user 之后的
-      // agent 项：这三条路都已经把服务端那一轮删净，它们不可能来自 DB（'d' 项），只可能
-      // 是这一轮的残留（'l' 项 + 它在 DOM 里的气泡）。
+      // Explicit edit/regeneration discards their old draft; continuation keeps the request.
       const dropOrphanPartial = () => {
         const items = ctx.state.items;
         let lastUser = -1;
@@ -710,30 +720,11 @@
         ctx.state.items = items.filter(x => !ids.has(x.id));
         saveHistory();
       };
-      const releaseStoppedTurn = async () => {
-        let entry = null;
+      const clearStoppedMarker = () => {
         try {
-          const cur = JSON.parse(localStorage.getItem(FAILED_KEY) || 'null');
-          if (Array.isArray(cur) && cur.length && cur[0] && cur[0].kind === 'stopped') entry = cur[0];
-        } catch (e) { /* 标记读不出来 = 没有要补删的轮 */ }
-        if (!entry) return;
-        const last = [...ctx.state.items].reverse().find(i => i.type === 'user');
-        if (!last || last.text !== entry.text) return;
-        const res = await postDiscard(entry.text, ctx.state.conv);
-        // 删成功才收气泡：失败（连不上/后端说原文对不上）时服务端那行还在，
-        // 本地先抹掉就是让屏幕替服务端说谎——留着它，主人至少看得见这条还在。
-        if (!res.ok) return;
-        const el = messages.querySelector('[data-mtype="user"][data-mid="' + last.id + '"]');
-        if (el && el.parentNode) el.parentNode.removeChild(el);
-        // 提示条同去：它讲的是"这条被你停止了"，而这条已经不在了。留着它的后果是
-        // **下一条回复的整段时间里**屏幕上还挂着一句关于上一条的话（提示条是纯渲染物，
-        // 只在 reconcile 时按标记重算——而两次 reconcile 之间隔着新的一整轮）。
-        const note = messages.querySelector('.chat-msg-failed-note');
-        if (note && note.parentNode) note.parentNode.removeChild(note);
-        ctx.state.items = ctx.state.items.filter(x => x.id !== last.id);
-        dropOrphanPartial();   // 同上：被打断那一轮的半截回复此刻才真正没有归属
-        saveHistory();
-        clearFailedRound(entry.text);
+          const entries = JSON.parse(localStorage.getItem(FAILED_KEY) || '[]');
+          entries.filter(x => x && x.kind === 'stopped').forEach(x => clearFailedRound(x.text));
+        } catch (e) { /* No valid local marker. */ }
       };
       // 刷新后的失败轮同样能重发/编辑（20260927，用户报的覆盖缺口：此前刷新一次
       // 按钮就没了，只剩一句话）。历史渲染那一趟只画提示条 + 留一个空槽
@@ -779,7 +770,7 @@
         // 最难查的一类（20260924 事故：跨窗远端轮期间点确定，必现）。silent 轮把
         // 这个事实交回给卡片（onDropped → 回滚成可重试），普通发言维持原样（输入框
         // 还在、用户看得见没发出去）。
-        if ((!msg && !imgs.length) || ctx.state.isSending
+        if ((!msg && !imgs.length && !opts.resumeTask && !opts.confirmToken) || ctx.state.isSending
             || Object.keys(ctx.state.remoteRounds || {}).length) {
           if (silent && typeof opts.onDropped === 'function') opts.onDropped('此刻有轮次在跑');
           return;
@@ -788,11 +779,8 @@
         if (ctx.state.approvalBusy) return;
         if (!silent && ctx.state.pendingAsk) hideAsk();
 
-        // 上一次被主人打断的那条：他既没重发也没编辑，直接说了下一句 ⇒ **到这里才丢**
-        // （20261001，见 `releaseStoppedTurn`）。这里必须 **await**：discard 与"新消息
-        // 落库"的先后是有语义的（那张头注写了顺序反过来的后果），并发出去等于把顺序
-        // 交给运气。
-        if (!silent) await releaseStoppedTurn();
+        // A new instruction retains the stopped user request.
+        if (!silent) clearStoppedMarker();
 
         // 20260903 会话化：空白新对话态（convNeedCreate）发送前先 POST 建会话——
         // 惰性创建（服务端空会话不落实体，"新对话"按钮只清视图置位，见
@@ -817,8 +805,11 @@
         // 确认请求**真的开始了**才登记在途标记（结算权归本轮，见 finally 与
         // handleAskChoice）。放在忙守卫之后是刻意的：被守卫挡下的一律走 onDropped
         // 立即回滚，不留一个永远不会被结算的在途标记。
-        if (silent && opts.confirmToken) {
-          ctx.state.confirmRound = { ask: opts.confirmAsk || null, failed: '' };
+        const resumedAsk = opts.resumeTask && ctx.state.pendingAsk
+          && ctx.state.pendingAsk.task_id === opts.resumeTask ? ctx.state.pendingAsk : null;
+        if (silent && (opts.confirmToken || resumedAsk)) {
+          ctx.state.confirmRound = { ask: opts.confirmAsk || resumedAsk, failed: '',
+            continuation: !!resumedAsk };
           // 链路第四跳（20260924）：这一跳**真的出去了**（忙守卫/建会话失败都在上面
           // 回滚掉了，不走这里）。它与 click 成对出现才是"点了并且发出去了"。
           reportAskStage('sent', { id: String((opts.confirmAsk || {}).id || ''),
@@ -859,7 +850,11 @@
         const userItemId = silent ? null : __chatCore.genId();
         const sentAt = Date.now(); // 本轮用户消息时间（user 帧与条目共用同一值）
         // 20260903 补 convId：停止生成/3s 保险的 discard 定向删本轮所属会话
-        ctx.state.activeRound = { roundId, userItemId, msg, convId: roundConvId, silent };
+        ctx.state.activeRound = { roundId, userItemId, msg, convId: roundConvId, silent,
+          taskId: opts.resumeTask || (opts.confirmAsk || {}).task_id || roundId,
+          resumeTask: opts.resumeTask || (opts.confirmAsk || {}).task_id,
+          resumeText: opts.resumeText || (silent ? ([...ctx.state.items].reverse()
+            .find(x => x.type === 'user') || {}).text : '') };
         if (ctx.ui.beginReply) ctx.ui.beginReply();
         if (!silent) {
           input.value = '';
@@ -921,6 +916,7 @@
         // catch/正常收尾都能安全清理（try 内 const 是块级作用域，catch 访问不到）
         let typingEl = null, typingTimer = null;
         let displayText = '';
+        let completed = false;
         // Only named command events can execute browser actions.
         let programCmds = [];
         // 过程行累积也提升到 try 外：catch 异常路径保存回复时要带过程行（20260827g）
@@ -1057,6 +1053,8 @@
                        'X-Agent-Stream-Version': '2' },
             body: JSON.stringify({
               message: msg,
+              ...(!silent ? { task_id: roundId } : {}),
+              ...(opts.resumeTask ? { resume_task: opts.resumeTask } : {}),
               // 20260903 会话化：显式会话定向写入；roundConvId=null（auto 未决议）
               // 省略字段 = 服务端 None → 最新非空会话（单桶时代语义，旧客户端降级）
               ...(roundConvId !== null ? { conversation_id: roundConvId } : {}),
@@ -1225,6 +1223,8 @@
             if (type === 'done') return;
             if (type === 'progress') { addStep('step', data); return; }
             if (type === 'confirmation') {
+              const cr = ctx.state.confirmRound;
+              if (cr && cr.continuation && cr.ask.id === data.id) ctx.state.confirmRound = null;
               ctx.state.pendingAsk = Object.assign({}, data, { convId: roundConvId });
               askConvId = roundConvId;
               saveAsk(ctx.state.pendingAsk);
@@ -1251,6 +1251,7 @@
           }
           protocol.feed(decoder.decode());
           protocol.finish();
+          completed = true;
           clearTimeout(idleTimer);
           clearTimeout(totalTimer);
           // 流结束：移除打字指示器（正常收尾路径）
@@ -1437,20 +1438,17 @@
           // 其他窗口恢复发送按钮（正常收尾/异常中断/停止生成统一走 finally）
           broadcast({ t: 'idle', roundId, from: engine.windowId });
           try { localStorage.removeItem('saudade-chat-busy'); } catch (e) {}
-          // 确认请求的结算（20260924）：卡片那句「确认中…」必须由**本轮的真实结果**
-          // 落地——成功 → 「已确认，结果见下方回复」；失败 → 「不确定」（见 askUnknown：
-          // 请求发出去过就不再放行重试，重签一次字可能造成第二次执行）。
-          // 方向词与屏幕顺序是**绑死**的：卡在上、结果气泡在下（dd81fca 的定位 + 位置
-          // 对齐的"空气"集合，浏览器级判据见 confirm-card 沙箱 ⑩b/⑩c）。只改这个词而
-          // 不搬卡片，就是让卡片说一句与屏幕相反的话——20260926 被人单独改过一次，已回退。
-          // 放在 finally 是刻意的：正常收尾、异常、停止生成、会话已删四条路都汇聚
-          // 在此，且 isSending/按钮复位已在上面跑完。被忙守卫挡下的那一类不走这里
-          // （它们在 sendMessage 里就 onDropped 回滚了，压根没登记在途标记）。
+          // A completed continuation settles its original card; redisplay stays pending.
           if (ctx.state.confirmRound) {
             const cr = ctx.state.confirmRound;
             ctx.state.confirmRound = null;
             if (cr.failed) askUnknown(cr.failed, cr.ask);
-            else askSettle('已确认，结果见下方回复', undefined, 'ok');
+            else {
+              if (ctx.state.pendingAsk && cr.ask && ctx.state.pendingAsk.id === cr.ask.id)
+                ctx.state.pendingAsk = null;
+              askSettle('已确认，结果见下方回复', undefined, 'ok');
+              if (ctx.state.pendingAsk) saveAsk(ctx.state.pendingAsk);
+            }
           }
           // 流式中被推迟的 DB 拉取在此补拉（storage 事件可能在流中到达）
           if (ctx.state.pendingPull) { ctx.state.pendingPull = false; setTimeout(pullHistory, 0); }
@@ -1483,23 +1481,14 @@
           } catch (e) { /* ignore */ }
         }
         if (ctx.state.stoppedTurn) {
-          // 主人按了停止（20261001 改）：**这一轮不丢**。
-          // 旧行为是当场三件一起做——删 items/缓存、摘掉 live 气泡、发 apiDiscard 让
-          // Rust 把 DB 里的 user 消息与残缺回复一起删。于是"我手滑按错了/我想改个措辞"
-          // 时消息已经没了，只能重新打一遍。现在：用户消息**留在原处**、半截回复与
-          // "已停止生成"一起留在气泡里、挂上重发/编辑（与失败轮同一套交互）；真正的
-          // 丢弃推迟到**主人下一次发言**那一刻（`releaseStoppedTurn`，写在 sendMessage
-          // 入口）——那时他既没重发也没编辑，才说明这条是真的不要了。
-          // 所以这里**不发** apiDiscard、**不删** items、**不广播** discard：
-          // 三条都是"现在就把这条抹掉"的旧语义，与新规矩冲突。
-          // （DB 侧此刻只剩那条 user 消息：残缺回复由 Rust DiscardAbortedExchange
-          // 在断连时清掉，本来也不该留。）
+          // Preserve the draft; Continue reuses its task, while Regenerate is a new run.
           ctx.state.stoppedTurn = false;
           // 保留这一轮的全部动作收在 `retainStoppedTurn` 里（与 3s 保险那条路径共用
           // 一份实现——两处拷贝此前已经漂过，见那个函数的头注）
           retainStoppedTurn(ctx.state.live[roundId], roundId, msg, silent);
           setTimeout(pullHistory, 0); // DB 已是权威（残缺回复本就没落库），收敛一致
         }
+        return completed && !ctx.state.stoppedByUser;
       };
 
       // 将 waifu-tool-hitokoto 改为聊天面板开关
@@ -2235,7 +2224,7 @@
                       confirmPick: (value === 'yes' ? '' : String(value)),
                       confirmAsk: ask,
                       onDropped: (why) => askRollback(ask, why),
-                      message: ask.msg || ('确认执行：' + (ask.summary || ask.q || '')) });
+                      message: '' });
       };
       askBtns.addEventListener('click', (e) => {
         const btn = e.target && e.target.closest ? e.target.closest('button[data-ask-value]') : null;

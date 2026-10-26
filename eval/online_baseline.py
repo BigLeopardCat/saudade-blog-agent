@@ -88,7 +88,9 @@ def run(cases, transport, identities, report_dir, *, phase, suite_hash):
               "automatic_retries": 0, "business_write_approval": False,
               "coverage_limits": ["不批准线上业务写入；实际执行、回放和未知结果由隔离契约评测覆盖",
                                   "自动判据验证行为与部分内容；不等同于完整语义或视觉体验验收",
-                                  "Agent HTTP 全量；Blog HTTP 只跑独立小样本；没有模拟浏览器点击"],
+                                  ("Blog HTTP 包含宿主鉴权和聊天历史；没有模拟浏览器点击"
+                                   if getattr(transport, "host", False) else
+                                   "Agent HTTP 未建立宿主聊天历史；没有模拟浏览器点击")],
               "started_at": datetime.now().astimezone().isoformat()}
 
     def save():
@@ -143,7 +145,7 @@ def run(cases, transport, identities, report_dir, *, phase, suite_hash):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--phase", choices=("poc", "full"), default="poc")
-    parser.add_argument("--host", action="store_true", help="Blog HTTP small sample")
+    parser.add_argument("--host", action="store_true", help="Blog HTTP with host persistence")
     parser.add_argument("--admin-uid", type=int, default=int(os.getenv("GOLDEN_ADMIN_UID", "0")))
     parser.add_argument("--user-uid", type=int, default=int(os.getenv("GOLDEN_USER_UID", "0")))
     parser.add_argument("--zako-uid", type=int, default=int(os.getenv("GOLDEN_ZAKO_UID", "0")))
@@ -151,8 +153,6 @@ def main():
     parser.add_argument("--blog-url", default="http://127.0.0.1:3000")
     parser.add_argument("--report-dir", type=Path, required=True)
     args = parser.parse_args()
-    if args.host and args.phase == "full":
-        parser.error("full receipt judgments need Agent HTTP; use --host for the small sample")
     cases = load_suite()
     if args.phase == "poc":
         by_id = {c["id"]: c for c in cases}
