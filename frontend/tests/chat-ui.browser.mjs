@@ -57,7 +57,7 @@ const server = createServer(async (req, res) => {
         // Delay confirmation replies so the in-flight feedback can be observed.
         const timer = setTimeout(() => {
           res.end(mode === 'unknown' ? frame('error', '测试连接中断，操作结果未知') : frame('done', {}));
-        }, mode === 'slow' ? 750 : (body.confirm_token ? 350 : 150));
+        }, mode === 'confirmation-delayed' ? 1500 : (mode === 'slow' ? 750 : (body.confirm_token ? 350 : 150)));
         res.on('close', () => clearTimeout(timer));
         return;
       }
@@ -240,6 +240,15 @@ try {
   const narrowBubble = await bubbleWidth();
   await page.locator('#waifu-chat').evaluate(el => { el.style.width = '920px'; });
   assert.ok(await bubbleWidth() > narrowBubble * 1.8, 'Enlarged window must widen message bubbles');
+  await page.evaluate(() => window.__chatTest.engine.appendMsg({
+    id: 'short-wide-user', type: 'user', text: '猫咪有点干吧这个博客界面', time: Date.now(),
+  }));
+  const shortLine = await page.locator('.msg-bubble').last().evaluate(el => {
+    const paragraph = el.querySelector('p');
+    return { height: paragraph.getBoundingClientRect().height,
+      line: parseFloat(getComputedStyle(paragraph).lineHeight) };
+  });
+  assert.ok(shortLine.height <= shortLine.line * 1.1, 'Short text must use its natural width in an enlarged window');
   const style = await page.locator('#chat-input').evaluate(input => {
     input.focus();
     return { overflow: getComputedStyle(input).overflowY, outline: getComputedStyle(input).outlineStyle,
@@ -437,6 +446,17 @@ try {
   await page.waitForTimeout(600);
   assert.equal(streamCount(), count + 1, 'Unknown business result must not trigger automatic retry');
   passed('confirmation in-flight/unknown feedback; no automatic business retry');
+
+  await reset();
+  nextMode = 'confirmation-delayed';
+  await page.locator('#chat-input').fill('测试卡片先显示');
+  await page.locator('#chat-send').click();
+  await page.locator('#chat-ask.active').waitFor({ state: 'visible' });
+  assert.equal(await page.evaluate(() => window.__chatTest.ctx.state.isSending), true);
+  assert.equal(await page.locator('#chat-ask-btns [data-ask-value="yes"]').isDisabled(), true);
+  await idle();
+  assert.equal(await page.locator('#chat-ask-btns [data-ask-value="yes"]').isEnabled(), true);
+  passed('prepared cards appear before stream closure; controls wait until the round settles');
 
   await reset();
   await send('测试确认后继续', 'confirmation-resumable');
