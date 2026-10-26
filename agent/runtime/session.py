@@ -10,6 +10,7 @@ import json
 from langchain_core.messages import AIMessageChunk, ToolMessage
 from langchain_core.tools import ToolException
 from langchain_core.utils.function_calling import convert_to_openai_tool
+from pydantic import ValidationError
 
 from agent.runtime import memory
 from agent.runtime.budget import (
@@ -25,6 +26,7 @@ from agent.runtime.message_content import text_content
 from agent.runtime.middleware import StreamGuard
 from agent.runtime.progress import emit as emit_progress
 from agent.runtime.results import TurnResult
+from agent.runtime.tool_errors import validation_result
 from agent.runtime.turns import AgentCancelled, check_cancelled
 from config.settings import settings
 from tools.base import unavailable
@@ -133,7 +135,13 @@ class ToolSession:
                 return self.tools[name].invoke({**call, "type": "tool_call"},
                                                config=config or self.config)
             return self.tools[name].invoke(args, config=config or self.config)
-        except (ToolException, ValueError) as exc:
+        except ValidationError as exc:
+            record("native", "tool_failed", name=name, error="invalid_arguments")
+            return validation_result(exc)
+        except ToolException as exc:
+            from tools.result import invalid_args
+            return invalid_args(str(exc))
+        except ValueError as exc:
             record("native", "tool_failed", name=name, error=type(exc).__name__)
             return unavailable(f"{name} 调用失败（{type(exc).__name__}），请如实说明。")
 

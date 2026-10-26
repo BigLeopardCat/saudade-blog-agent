@@ -17,7 +17,7 @@ def test_outer_model_override_reaches_the_sdk_once_and_preserves_usage(monkeypat
                         events.append({"event": event, **fields}))
     if finalizing:
         monkeypatch.setattr(middleware, "final_prompt", lambda budget, prompt, *args, **kwargs:
-                            (prompt, "fixture_limit", 32))
+                            (prompt, "fixture_limit", 32, False))
 
     with model_replies({"content": "不应使用默认模型。"}) as (default, default_requests), \
             model_replies({"content": "使用已选模型。"}) as (chosen, chosen_requests):

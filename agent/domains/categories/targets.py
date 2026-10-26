@@ -58,7 +58,7 @@ class Plan(BaseModel):
 def intent(value):
     parsed = Intent.model_validate(value)
     target, fields = parsed.target, parsed.fields.model_dump(exclude_none=True)
-    valid_target = target and ((target.id is None) != (target.name is None))
+    valid_target = target and (target.id is not None or target.name is not None)
     if (
         parsed.action == "create"
         and (target is not None or not fields.get("name"))

@@ -19,11 +19,11 @@ def incomplete_response(response):
     return None
 
 
-def final_prompt(budget, prompt, menu, output_limit, *, results_full=False):
+def final_prompt(budget, prompt, menu, output_limit, *, results_full=False, model_key=None):
     """Return an affordable, tool-free final pass, or leave the normal loop alone."""
     if not menu or not budget.model_calls:
         return None
-    reason = budget.call_block_reason(prompt, menu, output_limit=output_limit)
+    reason = budget.call_block_reason(prompt, menu, output_limit=output_limit, model_key=model_key)
     if reason is None:
         if results_full:
             reason = "result_budget"
@@ -34,7 +34,11 @@ def final_prompt(budget, prompt, menu, output_limit, *, results_full=False):
         else:
             return None
     candidate = [*prompt, SystemMessage(content=_INSTRUCTION)]
-    output = min(output_limit, budget.output_capacity(candidate))
+    capacity = budget.output_capacity(candidate, menu, model_key=model_key)
+    keep_tools = capacity >= min(output_limit, 128)
+    if not keep_tools:
+        capacity = budget.output_capacity(candidate, model_key=model_key)
+    output = min(output_limit, capacity)
     if output < min(output_limit, 128):
         return None
-    return candidate, reason, output
+    return candidate, reason, output, keep_tools

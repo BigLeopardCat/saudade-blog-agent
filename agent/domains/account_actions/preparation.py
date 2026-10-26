@@ -148,6 +148,7 @@ def prepare_account_role(
     username: targets.Username | None = None,
 ) -> object:
     """准备变更账号身份确认，只读。新身份明确填写admin/user/zako；只改身份，保留冻结和禁言。
+    同时提供account_id和username时必须指向同一个账号。
     后端按当前操作者与目标身份核验政策；真实变更使旧登录状态失效。
     """
     return _prepare("set_role", {"id": account_id, "username": username}, role, None, config)

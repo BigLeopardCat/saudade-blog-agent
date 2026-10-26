@@ -68,14 +68,14 @@ def _username(value):
 def intent(value):
     parsed = Intent.model_validate(value)
     target = parsed.target
-    if (
-        (target.id is None) == (target.username is None)
-        or target.username is not None
-        and not _username(target.username)
-        or (parsed.action == "set_role") != (parsed.role is not None)
-        or (parsed.action == "mute") != (parsed.mutedUntil is not None)
-    ):
-        raise ValueError("需唯一账号编号或完整账号名；变更身份需新身份，禁言需明确到期时间或永久")
+    if target.id is None and target.username is None:
+        raise ValueError("缺少目标账号：请填写account_id或完整username；同时填写时必须指向同一账号")
+    if target.username is not None and not _username(target.username):
+        raise ValueError("username必须是完整账号名，不能包含首尾空格或控制字符")
+    if (parsed.action == "set_role") != (parsed.role is not None):
+        raise ValueError("只有变更身份操作必须填写role，合法值为admin/user/zako")
+    if (parsed.action == "mute") != (parsed.mutedUntil is not None):
+        raise ValueError("只有禁言操作必须填写到期时间mutedUntil或永久期限")
     if parsed.mutedUntil is not None:
         datetime.fromisoformat(parsed.mutedUntil)
     return parsed.model_dump(mode="json")
