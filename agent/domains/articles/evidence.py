@@ -91,13 +91,21 @@ class ArticleEvidence:
             return "article_body_missing"
         if not self.searched and not self.documents and not self.candidates:
             return None
+        if self.invalid_references(reply, site):
+            return "unread_article_reference"
+        return None
+
+    def invalid_references(self, reply: str, site: str) -> list[dict]:
+        """Explain rejected references without retaining URLs, credentials or answer text."""
         origin = urlsplit(site).netloc.casefold()
         referenced = {ident for host, ident in self.references if not host or host == origin}
         available = {*self.documents, *self.candidates, *referenced}
-        for host, ident in _article_links(reply):
-            if ident not in available or host and host != origin:
-                return "unread_article_reference"
-        return None
+        return [
+            {"article_id": ident, "same_site": not host or host == origin,
+             "known_id": ident in available}
+            for host, ident in _article_links(reply)
+            if ident not in available or host and host != origin
+        ]
 
     def sources(self, reply: str, site: str) -> str:
         origin = urlsplit(site).netloc.casefold()
