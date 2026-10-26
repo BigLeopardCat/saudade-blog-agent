@@ -26,6 +26,7 @@
 | [conversation-memory.md](conversation-memory.md) | 来源隔离、长文本接续、图片引用与按需回看，以及宿主兼容要求 | 现状型 |
 | [chat-stream-protocol.md](chat-stream-protocol.md) | 具名 SSE 事件、正文隔离、持久化边界与发布衔接 | 现状型 |
 | [evaluation-native-baseline.md](evaluation-native-baseline.md) | 原生 HTTP 测试集、首跑基线、真实身份与覆盖边界 | 现状型 |
+| [cache-audit-20261026.md](cache-audit-20261026.md) | 首跑缓存分层、连续会话探针与固定任务模型对照 | 记录型 |
 | [native-baseline-20261026.md](native-baseline-20261026.md) | 框架迁移后127场景首跑、缓存用量、失败复核与后续边界 | 记录型 |
 | [native-baseline-20261025.md](native-baseline-20261025.md) | 125 场景线上首跑、成本缓存、误报复核与功能缺陷 | 记录型 |
 | [native-regression-20261025.md](native-regression-20261025.md) | 17 场景定向线上回归、排期判据复核、成本与剩余缺陷 | 记录型 |
