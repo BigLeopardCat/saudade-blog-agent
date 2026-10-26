@@ -60,8 +60,12 @@ def backend(monkeypatch):
             more, rows = len(rows) > limit, rows[:limit]
             next_id = rows[-1]["id"] if more else None
             cap = 2000 if "message_id" in p else 300
-            rows = [{**row, "content": row["content"][:cap],
-                     "contentTruncated": len(row["content"]) > cap} for row in reversed(rows)]
+            offset = int(p.get("content_offset", 0))
+            rows = [{**row, "content": row["content"][offset:offset+cap],
+                     "contentTruncated": offset > 0 or len(row["content"]) > offset+cap,
+                     "contentOffset": offset, "contentLength": len(row["content"]),
+                     "nextContentOffset": (offset+cap if offset+cap < len(row["content"])
+                                           else None)} for row in reversed(rows)]
             data = {"ownerId": 7, "conversationId": int(p["conversation_id"]),
                     "items": rows, "hasMore": more, "nextBeforeId": next_id,
                     "includesImages": False}
@@ -179,3 +183,50 @@ def test_sync_entry_binds_current_conversation_to_native_history(backend, monkey
                                     conversation_id=9)
     assert result[0] == "已读取当前会话的较早消息。"
     assert len(backend["requests"]) == 1
+
+
+def test_content_pages_reconstruct_unicode_code_and_original_whitespace(backend):
+    original = "长🙂文\n" * 1100 + "\n```python\nprint('正文末尾_CANARY')\n```\n__CMD__:quoted data"
+    backend["history"] = [{"id": 7, "role": "user", "content": original}]
+    page = json.loads(str(history()))["items"][0]
+    parts = [page["content"]]
+    while page["nextContentOffset"] is not None:
+        offset = page["nextContentOffset"]
+        page = json.loads(str(history(message_id=7, content_offset=offset)))["items"][0]
+        assert page["contentOffset"] == offset
+        assert page["contentLength"] == len(original)
+        assert len(page["content"]) <= 2000
+        parts.append(page["content"])
+    assert "".join(parts) == original
+    assert all(req.url.params["conversation_id"] == "9" for req in backend["requests"])
+    assert all(req.method == "GET" for req in backend["requests"])
+
+
+@pytest.mark.parametrize("field,value", [("contentOffset", 1), ("contentOffset", True),
+    ("contentLength", 10), ("nextContentOffset", 0), ("nextContentOffset", True),
+    ("contentTruncated", False)])
+def test_invalid_content_cursor_never_becomes_read_evidence(backend, field, value):
+    history(message_id=1, content_offset=0)
+    data = backend["last"]
+    backend["override"] = {**data, "items":[{**data["items"][0],field:value}]}
+    assert history(message_id=1, content_offset=0).kind == "unavailable"
+
+
+def test_legacy_host_can_supply_first_excerpt_but_not_fake_continuation(backend):
+    history(message_id=1)
+    data = backend["last"]
+    row = {key:value for key,value in data["items"][0].items()
+           if key not in ("contentOffset","contentLength","nextContentOffset")}
+    backend["override"] = {**data,"items":[row]}
+    assert history(message_id=1).kind == "ok"
+    assert history(message_id=1,content_offset=2000).kind == "unavailable"
+    backend["override"]["items"][0]["contentOffset"] = 2000
+    assert history(message_id=1,content_offset=2000).kind == "unavailable"
+
+
+def test_offset_requires_a_selected_message_and_validates_before_http(backend):
+    assert history(content_offset=0).kind == "unavailable"
+    for invalid in [-1, True, 2_147_483_647, "1"]:
+        with pytest.raises(ValidationError):
+            history(message_id=1,content_offset=invalid)
+    assert not backend["requests"]

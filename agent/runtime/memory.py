@@ -97,7 +97,12 @@ def history(messages, principal, *, max_tokens=None, tool_access=None):
     last = [message for message in turns[-1] if isinstance(message, HumanMessage)
             or isinstance(message, AIMessage) and not message.tool_calls]
     # Keep the latest complete dialogue when it fits, spending fewer tokens on older turns.
-    target = min(CHECKPOINT_TOKENS, max(HISTORY_TOKENS, _tokens(last)))
+    last_tokens = _tokens(last)
+    target = min(CHECKPOINT_TOKENS, max(HISTORY_TOKENS, last_tokens))
+    if last_tokens > CHECKPOINT_TOKENS:
+        # A partial long reply is a locator for re-reading. Do not spend the
+        # expanded window on an excerpt in every following tool round.
+        target = min(target, max(HISTORY_TOKENS, _tokens(last[:1]) + 100))
     if max_tokens is not None:
         target = min(target, max(0, max_tokens))
     source_turn = _source_first(turns[-1], last, target)
@@ -145,8 +150,8 @@ def _source_first(turn, dialogue, target):
         allow_partial=True, text_splitter=list,
     )
     if replies and _tokens(replies) < _tokens(dialogue[1:]):
-        replies[-1] = replies[-1].model_copy(update={"content":
-            text_content(replies[-1].content) + "\n[历史助手回复节选]"})
+        replies[-1] = _marked_excerpt(
+            replies[-1], text_content(replies[-1].content) + "\n[历史助手回复节选]")
     return [*dialogue[:1], *evidence, *replies]
 
 
@@ -156,10 +161,18 @@ def _excerpt(dialogue, target):
         strategy="first", allow_partial=True, text_splitter=list,
     )
     if excerpt:
-        excerpt[0] = excerpt[0].model_copy(update={"content":
-            "[历史长文本节选；可尝试 get_chat_history 补读，仍截断时请重发所需段落。]\n"
-            + text_content(excerpt[0].content)})
+        excerpt[0] = _marked_excerpt(
+            excerpt[0], "[历史长文本节选]\n" + text_content(excerpt[0].content))
+        if isinstance(excerpt[-1], AIMessage):
+            excerpt[-1] = _marked_excerpt(
+                excerpt[-1], text_content(excerpt[-1].content) + "\n[历史助手回复节选]")
     return excerpt
+
+
+def _marked_excerpt(message, content):
+    return message.model_copy(update={"content": content, "additional_kwargs": {
+        **message.additional_kwargs, "memory_excerpt": True,
+    }})
 
 
 def bootstrap(snapshot, messages, principal, *, tool_access=None):
