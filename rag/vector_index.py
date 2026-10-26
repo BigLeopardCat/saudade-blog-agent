@@ -124,17 +124,11 @@ def cos_sim(a, b) -> float:
 
 
 def rrf_fuse(lex: list[dict], vec: list[dict], k: int, top_k: int) -> list[dict]:
-    """RRF 融合（Reciprocal Rank Fusion）：同文档两路排名各贡献 1/(k+rank)。
+    """Fuse document ranks by summing 1/(k+rank), then return top_k.
 
-    **只对有排名的两路做融合，不做任何截断**——每一路的剪枝在各自那一路里已经做完
-    （词法路的相对断崖在 `rag/search.py`，向量路取 top-N）。这里再按 RRF 分数截一刀
-    是错的：RRF 分数量级 ≈1/(k+1)≈0.016，照搬词法那个"低于 top1×0.25"的断崖等于
-    永不生效（k=60 时最小项 1/70≈0.0143 > 0.25×0.0328），只会让参数看着还在、其实
-    没接线。候选宽度由调用方的 `top_k` 收口，并用 `recall_eval` 的 `mean_candidates`
-    盯着（供给端变宽要量，不能凭感觉）。
-
-    同分不并列处理（分数是连续量、实际不会撞），排序稳定：等分时按"先出现在 lex，
-    再出现在 vec"的顺序 —— 词法路是既有通路，平手时照顾它不是坏取向。
+    Merge source locations from both lists. Equal scores are possible; stable
+    sorting preserves first occurrence in the lexical list, then the vector list.
+    Per-retriever cutoffs stay outside the fusion score space.
     """
     scores: dict[tuple, float] = {}
     info: dict[tuple, dict] = {}
