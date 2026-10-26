@@ -33,3 +33,12 @@ def test_public_and_admin_views_share_content_but_only_admin_reveals_publisher()
     with backend("user") as state:
         denied = moderation.list_admin_board.invoke({"item_id": 45}, config=config("user"))
         assert denied.kind == "unavailable" and not state["requests"]
+
+
+def test_legacy_public_detail_route_remains_an_authorized_alternative_in_the_fixture():
+    from tools.notes import get_article_detail
+
+    with backend("superadmin") as state:
+        result = get_article_detail.invoke({"article_id": 45, "doc_type": "board"})
+        assert result.kind == "ok" and "这个合成看板娘好笨啊" in result
+        assert "synthetic_author_20" not in result and not state["unsupported_reads"]

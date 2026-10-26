@@ -2,9 +2,11 @@
 
 import json
 import re
+from datetime import datetime, timedelta
 from urllib.parse import urljoin
 
 from tools.base import SITE_BASE
+from utils.trace_io import load_trace
 
 
 def command_matches(expected, actual):
@@ -64,8 +66,35 @@ def observations(events):
     return calls
 
 
+def _matches_observation(wanted, event):
+    args = (wanted.get("args_by_tool") or {}).get(event.get("name"), wanted.get("args", {}))
+    if (event.get("name") not in wanted["tools"] or not contains(event.get("args", {}), args)
+            or wanted.get("kinds") and event.get("kind") not in wanted["kinds"]):
+        return False
+    if "result" in wanted:
+        try:
+            return contains(json.loads(event.get("result", "")), wanted["result"])
+        except (ValueError, TypeError):
+            return False
+    return True
+
+
+def _scheduled_todo(wanted, result):
+    document = load_trace(result.get("trace")) if result.get("trace") else None
+    try:
+        due = (datetime.fromisoformat(document["started_at"]).date()
+               + timedelta(days=wanted["days"])).isoformat()
+    except (ValueError, TypeError, KeyError):
+        return False
+    return any(spec.get("tool") == "create_dashboard_todo"
+               and contains(spec.get("args"), {"text": wanted["text"], "date": due})
+               for payload in result.get("confirm_payloads", [])
+               for spec in payload.get("specs", []))
+
+
 def check(gold, result):
-    keys = {"require_observations", "require_confirm_specs", "forbid_runtime_stop",
+    keys = {"require_observations", "require_observations_any", "require_todo_schedule",
+            "require_confirm_specs", "forbid_runtime_stop",
             "forbid_business_write", "require_answer_value"}
     if not keys.intersection(gold):
         return []
@@ -75,12 +104,15 @@ def check(gold, result):
     failures = []
     calls = observations(events)
     for wanted in gold.get("require_observations", []):
-        if not any(e.get("name") in wanted["tools"]
-                   and contains(e.get("args", {}), (wanted.get("args_by_tool") or {}).get(
-                       e.get("name"), wanted.get("args", {})))
-                   and (not wanted.get("kinds") or e.get("kind") in wanted["kinds"])
-                   for e in calls):
+        if not any(_matches_observation(wanted, event) for event in calls):
             failures.append(f"缺少实际工具观察：{wanted}")
+    alternatives = gold.get("require_observations_any")
+    if alternatives and not any(_matches_observation(wanted, event)
+                                for wanted in alternatives for event in calls):
+        failures.append("缺少任一可验证的工具结果路径")
+    schedule = gold.get("require_todo_schedule")
+    if schedule and not _scheduled_todo(schedule, result):
+        failures.append("确认卡待办正文或相对排期不符，或缺少本轮时间证据")
     for wanted in gold.get("require_confirm_specs", []):
         specs = [s for p in result.get("confirm_payloads", []) for s in p.get("specs", [])]
         if not any(contains(s, wanted) for s in specs):
