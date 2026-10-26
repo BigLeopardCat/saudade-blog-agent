@@ -298,27 +298,12 @@ def get_article_detail(
     max_chars: Annotated[int, _ARTICLE_LIMIT_DESC] = 6000,
     revision: Annotated[str, _ARTICLE_REVISION_DESC] = "",
 ) -> str:
-    """获取指定文档的正文证据；文章按字符预算返回，并提供版本绑定的续读位置。
-    note 走 /notes/:id；talk/board/announcement 无单条详情端点，从列表接口按 key
-    过滤（列表已带全文，量小，全量扫描可接受）。
+    """读取指定文章、说说、留言或公告的正文证据。
 
-    `section`：读取唯一标题/编号或检索返回的小节 id；按 id 或 offset 续读时
-    必须带同一 contentRevision。nextOffset 为后续位置，readComplete 表示本范围读完。
-    只对 note 生效；说说/留言/公告仍返回完整短文本。
-
-    标签：返回里的 `tags` 是**中文标签名**（如「编程 / Python」，含层级）；`noteTags`
-    是内部 id 串，**回答"这篇有什么标签"要用 `tags`**，别把 id 念给访客。
-
-    读数（20260930）：note 的返回里会带 `views`/`likes`/`favorites` 三个计数
-    （阅读/点赞/收藏，与文章卡片上那一排同源）。**这三个键可能一个都不出现**——
-    那是"这次没读到数"（草稿文章在公开读数端点上就是查无此篇），不是"三个都是 0"；
-    键在、值是 0 才是真的 0。
-
-    **查无此篇不是故障**（20260924）：id 不存在时返回的是"站内没有这篇文章"这句
-    事实（kind=not_found），并且**点明 id 的来路**——通知/留言板里的 id 是留言 id，
-    与文章 id 不是同一套（trace `20260924T030031` 实证：planner 把通知链接里的留言
-    id 当文章 id 读了，拿到"服务暂时不可用"，于是一边重试一边准备说系统挂了）。
-    应对是换 id 或如实告知，不是"稍后再试"。
+    文章支持按小节或字符范围读取；续读须带返回的 contentRevision，使用 nextOffset
+    继续读取，readComplete 表示本范围读完。其他文档返回公开列表中的完整短文本。
+    tags 是可展示的标签名，noteTags 是内部编号。views/likes/favorites 缺失表示未取得，
+    不代表零。不同文档类型的编号不通用；not_found 表示本次未找到，不代表服务故障。
     """
     if doc_type == "note":
         data = _get(f"/notes/{article_id}", not_found_text=(
@@ -343,31 +328,18 @@ def get_article_detail(
             return unavailable(str(exc))
         except ValueError as exc:
             return invalid_args(str(exc))
-    # 这张表就是 `doc_type` 的闭集（类型上的 `Literal` 与它逐字相同）；查表仍可能
-    # KeyError——那是**直接调用方**（本文件以外、不走参数校验层）传了表外取值，
-    # 走 __ERROR__ 帧如实暴露，不算静默失败。
     endpoint, key_field = {
         "talk": ("/talk", "talkKey"),
         "board": ("/board", "talkKey"),
         "announcement": ("/announcements", "id"),
     }[doc_type]
     rows = _get(endpoint)
-    if not isinstance(rows, list):          # 上游故障：如实说服务不可用，别说"没找到"
+    if not isinstance(rows, list):
         return rows
     for it in rows:
         if str(it.get(key_field)) == str(article_id):
-            # **必须走 `_shape`，不许写 `str(it)`**（20260928）：出口级的改名
-            # （`_FRAME_ID_KEYS`）只挂在 `_shape` 上，这一支裸 str 出去 ⇒ 同一份
-            # 上下文里 article 族的键叫 `noteId`、留言族却仍是上游的 `talkKey`。
-            # 实证：trace `20260928T032301` 的读者回复里 `talkId 99`（来自审核状况
-            # 报表）与 `talkKey 100、97`（来自这里）混着出现——当时被判成"模型编了
-            # 个不存在的字段名"，其实是本行漏了出口。
             return _shape(it)
-    # 列表里没这一条：同样是"查无此物"（20260924 与上面 note 分支同办），但措辞必须
-    # 交代边界——这些列表接口可能只回最近的若干条，且河灯留言只放行**审核通过**的
-    # （`talks.rs::list_by_src` 恒过滤 approved=1），"不在列表里"与"真的不存在"
-    # 不是一回事（not_found 的语义，见它的定义）。此前这里给 empty："查到了、就是
-    # 空的"会 PASS 进回执，跨轮执行记忆里就多出一条"读取文章 N"的假事实。
+    # 公开列表有范围及审核过滤，缺席不能证明全站不存在。
     return not_found(
         f"公开列表里没有 {key_field}={article_id} 这一条（河灯留言只放行审核通过的，"
         "待审与被驳回的不在列表里；列表也可能只回最近若干条）。所以这是『我没找到』，"
@@ -389,18 +361,11 @@ def rag_search(
     """
     try:
         from rag.search import last_route, search
-        # 「索引不可用」与「没命中」必须分开（20260917 审计指出）：`search()` 两种情况
-        # 都返回 []，此前一律包成 empty("检索无结果") —— 语料拉取失败时会被 checker
-        # 记成"检索过、确实没有"的**事实**，正是我上轮给 HTTP 工具修掉的那类问题。
         hits = search(query, top_k=top_k)
         if hits is None:
             return unavailable("检索索引未就绪（语料为空或重建失败），暂时无法检索")
         if not hits:
             return empty("检索无结果")
-        # 行式结构化候选摘要（20260831）：精简为 type/id/score/title/首个命中节，
-        # 8 候选 ≈ 400-600 字——候选选择信息不丢失且体积可控，模型与反射器视野
-        # 一致（此前 JSON 全文被 _build_trace 截断 [:100]，反射器只见 top-1 候选，
-        # 误判"读了不存在的文档"，见问题记录 1.26）
         text = "\n".join(
             f"{i + 1}. type={h['type']} id={h['id']} score={h['score']} "
             f"title={h['title'][:24].replace(chr(10), ' ').replace(chr(13), ' ')}"
