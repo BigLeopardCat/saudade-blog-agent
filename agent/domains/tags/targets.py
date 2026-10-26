@@ -61,7 +61,7 @@ def valid_target(t):
     return bool(
         t
         and (
-            (t.id is not None and t.name is None and t.level is not None)
+            (t.id is not None and t.level is not None)
             or (t.id is None and t.name is not None)
         )
         and not (t.level == 1 and t.parentId is not None)

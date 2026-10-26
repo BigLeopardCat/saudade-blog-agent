@@ -71,6 +71,7 @@ def test_summary_reads_the_entire_uncovered_batch_and_long_message_tail():
         content="new summary", response_metadata={}))
     assert summarizer.summarize("", req.summary_batch.messages, "", llm=model) == "new summary"
     assert "EARLY_TAIL_CANARY" in seen[0] and "item-34" in seen[0]
+    assert "200字" in seen[0] and "不按轮次复述" in seen[0]
     assert "RECENT_ONLY" not in seen[0] and "current request" not in seen[0]
     assert req.summary_batch.through_id == 35
 

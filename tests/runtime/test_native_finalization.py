@@ -53,8 +53,9 @@ def test_real_sdk_finishes_from_tool_facts_without_resetting_or_raising_budget(l
         assert len(requests) == 2
         assert any(message["role"] == "tool" and "VERIFIED_FACT: 42" in message["content"]
                    for message in body["messages"])
-        if limit == "none":
+        if limit in {"none", "model_calls", "tool_calls", "result_budget"}:
             assert body["tools"]
+            assert body["tool_choice"] == ("auto" if limit == "none" else "none")
         else:
             assert "tools" not in body and "tool_choice" not in body
         if limit == "partial_output":

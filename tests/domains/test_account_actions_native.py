@@ -180,11 +180,18 @@ def test_prepare_is_read_only_and_replay_applies_exact_change_once(
 
 
 @pytest.mark.parametrize(
-    "args", [{}, {"account_id": 11, "username": "测试账号"}, {"username": " "}]
+    "args", [{}, {"account_id": 11, "username": " "}, {"username": " "}]
 )
 def test_invalid_target_never_reaches_service(accounts, args):
     result = prepare("freeze", **args)
     assert result.kind == "invalid_args" and not accounts["requests"]
+
+
+def test_role_preparation_cross_checks_id_and_username(accounts):
+    matched = prepare("role", account_id=11, username="测试账号", role="zako")
+    assert matched.execution["pending_confirm"] and not accounts["writes"]
+    mismatch = prepare("role", account_id=11, username="不存在的账号", role="zako")
+    assert isinstance(mismatch, base.ToolResult) and not accounts["writes"]
 
 
 def test_target_name_is_exact_and_ambiguous_names_require_id(accounts):

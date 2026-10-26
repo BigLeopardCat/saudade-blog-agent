@@ -22,7 +22,8 @@ _HISTORY_MAX = 60
 _OUT_MAX = SUMMARY_MAX_CHARS
 
 _PROMPT_HEAD = (
-    "你是对话摘要器。将旧摘要与以下对话合并为简洁的中文摘要，供后续对话恢复上下文。"
+    "你是对话摘要器。将旧摘要与以下对话合并为一段不超过200字的中文摘要，供后续对话恢复上下文。"
+    "只保留当前仍有用的信息，不按轮次复述、不保留过往措辞或完整工具结果。"
     "保留用户目标、已澄清的选择、仍相关的偏好和未完成事项；删除已过时的内容。"
     "助手说过的话只代表其陈述，不能据此认定工具已执行或操作已成功。"
     "不记录身份、权限或可用能力，不推断对话中未出现的事实。\n"
@@ -95,7 +96,8 @@ def summarize(user_msg: str, history: list, old_summary: str, llm=None) -> str:
         return ""
     # Record provider usage even when its output cannot replace the previous summary.
     record("summarizer", "llm_done", duration_s=round(time.monotonic() - _t0, 2),
-           **usage_fields(resp))
+           finish_reason=(getattr(resp, "response_metadata", {}) or {}).get("finish_reason"),
+           output_limit=settings.agent_summary_output_tokens, **usage_fields(resp))
     finish = (getattr(resp, "response_metadata", {}) or {}).get("finish_reason")
     refused = (getattr(resp, "additional_kwargs", {}) or {}).get("refusal")
     if (finish not in (None, "stop") or refused or getattr(resp, "tool_calls", None)
