@@ -141,9 +141,11 @@ async def chat(req: ChatRequest, request: Request):
                                session_id=conversation_session(principal, req.conversation_id)),
     )
     try:
+        turn = (functools.partial(run_turn, task_id=req.task_id, resume_task=req.resume_task)
+                if req.task_id or req.resume_task else run_turn)
         reply, nav_line, exec_rows = await jobs.submit(
             workers.executor,
-            run_turn,
+            turn,
             runtime,
             messages,
             thread_id,
@@ -237,7 +239,8 @@ async def chat_stream(req: ChatRequest, request: Request):
     if not await try_acquire_slot(request):
         raise HTTPException(503, "Agent busy（并发已满），请稍后重试")
     try:
-        messages = build_messages(req, holds_context=runtime_probe.holds_context(runtime))
+        messages = ([] if grant is not None or req.resume_task else
+                    build_messages(req, holds_context=runtime_probe.holds_context(runtime)))
         thread_id = checkpoint.thread_id_for(
             req.user_id, req.conversation_id, runtime_probe.holds_context(runtime)
         )
@@ -279,9 +282,12 @@ async def chat_stream(req: ChatRequest, request: Request):
         progress = StreamProgress(loop, queue, jobs.control)
         started = progress.started
 
+        producer = (functools.partial(stream_to_queue, task_id=req.task_id,
+                                      resume_task=req.resume_task)
+                    if req.task_id or req.resume_task else stream_to_queue)
         jobs.submit(
             workers.executor,
-            stream_to_queue,
+            producer,
             runtime,
             messages,
             thread_id,

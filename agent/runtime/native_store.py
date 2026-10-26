@@ -1,7 +1,7 @@
 """Conversation checkpoints through the framework's public state API.
 
 The maintenance graph shares the approval schema and reducers with execution.
-Only explicit signed confirmations resume Agent work.
+Explicit bound controls resume saved tasks; signed approval separately authorizes writes.
 """
 
 from agent.runtime import checkpoint_store, memory
@@ -46,6 +46,9 @@ class NativeConversationStore:
             pending_confirm=values.get("pending_confirm"),
             pending_action=values.get("pending_action"),
             approval=values.get("approval"),
+            run=values.get("run"),
+            receipts=list(values.get("receipts") or []),
+            unfinished=bool(values.get("run")),
             initialized=snapshot.created_at is not None,
         )
 
@@ -60,7 +63,9 @@ class NativeConversationStore:
         current = memory.turn_messages(messages, observations, reply, principal)
         saved = {"messages": memory.checkpoint_messages(previous.messages, current),
                  "pending_confirm": None, "pending_action": None,
-                 "approval": approval, "continuation": None}
+                 "approval": approval, "continuation": None,
+                 "run": ({**previous.run, "input_saved": True}
+                         if approval and previous.run else None)}
         for values in (pending or {}, execution or {}):
             saved.update({key: values[key] for key in
                           ("pending_confirm", "pending_action", "receipts") if key in values})
@@ -79,16 +84,15 @@ class NativeConversationStore:
         if (self.load(config).pending_action or {}).get("jti") == jti:
             self.update_state(config, {"pending_confirm": None, "pending_action": None,
                                        "approval": None, "approved_result": None,
-                                       "continuation": None})
+                                       "continuation": None, "run": None})
             self.prune(config)
 
     def guard(self, config):
         return conversation_turn(self.saver, config)
 
     def is_resuming(self, config) -> bool:
-        # Reads restart from the last complete turn. Confirmed writes use their
-        # independent durable execution ledger, never a graph continuation.
-        return False
+        # This is a state probe; execution still requires an explicit bound control.
+        return self.load(config).unfinished
 
     def prune(self, config) -> None:
         thread_id = ((config or {}).get("configurable") or {}).get("thread_id")

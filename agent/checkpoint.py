@@ -318,6 +318,10 @@ def _drop_last_user_turn(agent, conversation_id: object, text: str = "") -> dict
 
     cfg = {"configurable": {"thread_id": tid}}
     snap = getter(cfg)
+    from agent.runtime.recovery import discard_interrupted
+    interrupted = discard_interrupted(agent, cfg, getattr(snap, "values", None) or {}, text)
+    if interrupted is not None:
+        return interrupted
     msgs = list((getattr(snap, "values", None) or {}).get("messages") or [])
     idx = next((i for i in range(len(msgs) - 1, -1, -1)
                 if isinstance(msgs[i], HumanMessage)), None)

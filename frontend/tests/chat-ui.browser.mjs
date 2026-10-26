@@ -37,8 +37,8 @@ const server = createServer(async (req, res) => {
         res.write(frame('progress', '正在整理会话摘要…'));
         res.write(frame('text', mode === 'literal' ? literal : (mode === 'hold' ? '这是保留的部分回复。' : '离线测试回复：已收到你的消息。')));
         if (mode === 'hold') return;
-        if (mode === 'confirmation') res.write(frame('confirmation', {
-          id: 'offline-ask', q: '将测试文章加入收藏？这会新增一条收藏记录。',
+        if (mode.startsWith('confirmation')) res.write(frame('confirmation', {
+          id: 'offline-ask', task_id: body.task_id, replay_safe: mode === 'confirmation-resumable', q: '将测试文章加入收藏？这会新增一条收藏记录。',
           token: 'offline-synthetic-confirmation', exp: Math.floor(Date.now() / 1000) + 600,
           opts: [{ value: 'yes', label: '确认收藏' }, { value: 'no', label: '取消' }],
         }));
@@ -215,12 +215,25 @@ try {
 
   await reset();
   await send('测试停止生成', 'hold');
+  const originalTask = requests.filter(x => x.path === '/api/chat/stream').at(-1).body.task_id;
+  const beforeStop = requests.filter(x => x.path === '/api/chat/stream').length;
+  const beforeDiscard = requests.filter(x => x.path === '/api/chat/discard').length;
   assert.match(await page.locator('#chat-send').getAttribute('aria-label') || await page.locator('#chat-send').innerText(), /停止/);
   assert.match(await page.locator('#chat-status').innerText(), /生成|回复|处理/);
   await page.locator('#chat-send').click();
   await idle();
   assert.match(await page.locator('#chat-messages').innerText(), /这是保留的部分回复/);
+  assert.equal(requests.filter(x => x.path === '/api/chat/stream').length, beforeStop);
   passed('real streaming request can be stopped with partial reply retained');
+  await page.locator('.chat-resume-btn').click();
+  await idle();
+  const resumed = requests.filter(x => x.path === '/api/chat/stream').at(-1).body;
+  assert.equal(resumed.resume_task, originalTask);
+  assert.equal(resumed.message, '');
+  assert.equal(requests.filter(x => x.path === '/api/chat/discard').length, beforeDiscard);
+  assert.equal(await page.evaluate(() => window.__chatTest.ctx.state.items
+    .filter(x => x.type === 'user' && x.text === '测试停止生成').length), 1);
+  passed('continuation preserves the original request without discard or duplicate user text');
 
   await reset();
   nextMode = 'slow';
@@ -282,6 +295,23 @@ try {
   await page.waitForTimeout(600);
   assert.equal(streamCount(), count + 1, 'Unknown business result must not trigger automatic retry');
   passed('confirmation in-flight/unknown feedback; no automatic business retry');
+
+  await reset();
+  await send('测试确认后继续', 'confirmation-resumable');
+  await approve.waitFor({ state: 'visible' });
+  nextMode = 'hold';
+  await approve.click();
+  await page.waitForFunction(() => window.__chatTest.ctx.state.isSending);
+  await page.locator('#chat-send').click();
+  await idle();
+  await page.getByRole('button', { name: '继续任务', exact: true }).last().click();
+  await idle();
+  const continuation = requests.filter(x => x.path === '/api/chat/stream').at(-1).body;
+  assert.ok(continuation.resume_task);
+  assert.equal(continuation.message, '');
+  assert.ok(!continuation.confirm_token, 'Continue must not resend an approval');
+  assert.equal(await page.locator('#chat-ask.active').count(), 0);
+  passed('continuing a stopped confirmation settles its card without another approval');
 
   await reset();
   await send('测试取消确认卡', 'confirmation');

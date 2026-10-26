@@ -26,11 +26,11 @@
 UID 必须是环境中真实账号，先用博客 profile 接口核对角色，不能凭账号名称判断。
 
 ```bash
-python -m eval.online_baseline --phase poc \
+python -m eval.online_baseline --phase poc --host \
   --admin-uid "$GOLDEN_ADMIN_UID" --user-uid "$GOLDEN_USER_UID" \
   --report-dir eval/report/online-poc-<唯一批次>
 
-python -m eval.online_baseline --phase full \
+python -m eval.online_baseline --phase full --host \
   --admin-uid "$GOLDEN_ADMIN_UID" --user-uid "$GOLDEN_USER_UID" \
   --zako-uid "$GOLDEN_ZAKO_UID" \
   --report-dir eval/report/online-baseline-<唯一批次>
@@ -43,10 +43,10 @@ python -m eval.online_baseline --phase full \
 运行前冻结测试集及判据源码。额度重置准备要求真实目标有已用额度；前提不满足时单列
 评测错误并停止该条，不能把正确 no-op 误判成业务故障。
 
-默认全量直接访问 Agent `/chat/stream/v2`，验证服务鉴权、原生运行时、模型、工具、
-持久会话与传输。`--host --phase poc` 另走博客 `/api/chat/stream`，
-核对宿主身份转发及集成。宿主会私有保存回执等事件，因此不拿宿主过滤后的事件冒充全量回执证据。
-Agent HTTP 不验证博客额度扣减，也不模拟浏览器点击或视觉渲染。
+推荐小批量与全量都使用 `--host`，经过博客 `/api/chat/stream` 验证身份转发、
+额度和宿主历史持久化；工具与回执证据按请求 ID 从 Agent trace 读取。
+省略该选项时直接访问 Agent `/chat/stream/v2`，不建立博客聊天历史，涉及宿主历史的
+用例不能据此判定产品效果。两种模式均不模拟浏览器点击或视觉渲染。
 
 每条用例创建该账号拥有的临时会话，所有轮次使用同一 ID；通过博客删除接口清理，
 不会删除既有会话。确认凭据只留在内存，报告保留脱敏卡面及结构化参数。
