@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 
 from agent.runtime.control import AgentCancelled, RequestControl
 from utils.trace import record
@@ -92,7 +92,7 @@ class StreamProgress:
             record("producer", "first_reply", duration_s=elapsed)
 
 
-def current_emitter(config: dict | None) -> ProgressEmitter | None:
+def current_emitter(config: Mapping | None) -> ProgressEmitter | None:
     cfg = (config or {}).get("configurable") or {}
     current = cfg.get("progress_emitter")
     return current if isinstance(current, ProgressEmitter) else None

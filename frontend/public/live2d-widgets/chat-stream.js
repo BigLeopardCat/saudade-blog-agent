@@ -1163,8 +1163,9 @@
           scrollToBottom(messages);
 
           // 打字指示器：插在气泡内 label 与正文之间，静默时三点跳动
-          typingEl = document.createElement('span');
+          typingEl = document.createElement('div');
           typingEl.className = 'chat-typing';
+          typingEl.setAttribute('aria-hidden', 'true');
           typingEl.innerHTML = '<i></i><i></i><i></i>';
           div.insertBefore(typingEl, contentSpan);
           const kickTyping = () => {
@@ -1193,7 +1194,7 @@
           }
           ctx.state.activeRound.process = steps;
           if (processBox) {
-            div.insertBefore(processBox, contentSpan);
+            div.insertBefore(processBox, typingEl);
             const note = document.createElement('div');
             note.className = 'agent-process-line continuation';
             note.textContent = '从已保存的进度继续';
@@ -1207,7 +1208,7 @@
             processBox.addEventListener('toggle', () => {
               setCollapsePref(!processBox.open);
             });
-            div.insertBefore(processBox, contentSpan);
+            div.insertBefore(processBox, typingEl);
             return processBox;
           };
           const refreshCount = () => {

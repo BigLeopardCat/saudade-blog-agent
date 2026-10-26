@@ -228,6 +228,9 @@
 #waifu-chat .chat-msg :is(.msg-label) { display: block; margin: 0 0 7px; font-size: 11px; font-weight: 600; color: var(--chat-muted); }
 #waifu-chat .chat-msg.agent .msg-label { color: var(--chat-accent); }
 #waifu-chat .chat-msg.agent .msg-text { display: block; color: var(--chat-ink); font-size: 14px; line-height: 1.85; }
+#waifu-chat .chat-typing { position: static; min-height: 22px; box-sizing: border-box; margin: 2px 0 8px; padding: 6px 0; color: var(--chat-accent); }
+#waifu-chat .chat-typing.typing-visible { display: flex; width: max-content; align-items: center; gap: 4px; }
+#waifu-chat .chat-typing i { position: static; display: block; flex: none; margin: 0; }
 #waifu-chat .chat-msg.user { color: var(--chat-ink); }
 #waifu-chat .msg-bubble,
 #waifu-chat.washiDark .msg-bubble {
