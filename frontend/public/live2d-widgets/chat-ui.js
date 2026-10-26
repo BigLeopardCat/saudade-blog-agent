@@ -7,7 +7,7 @@
     if (isSending) return { phase: 'sending', disabled: false, label: '停止', status: '正在回复，可随时停止' };
     if (approvalBusy) return { phase: 'approval', disabled: true, label: '发送', status: '正在处理确认操作，请稍候' };
     if (remoteBusy) return { phase: 'remote', disabled: true, label: '发送', status: '另一窗口正在回复，请稍候' };
-    return { phase: 'ready', disabled: !hasContent, label: '发送', status: hasContent ? '准备好发送' : '随时开始一段对话' };
+    return { phase: 'ready', disabled: !hasContent, label: '发送', status: '' };
   };
   const init = (ctx, engine) => {
     if (!ctx.dom.chatPanel) { setTimeout(() => init(ctx, engine), 500); return; }
@@ -28,6 +28,13 @@
       input.style.height = 'auto';
       input.style.height = Math.min(input.scrollHeight, 120) + 'px';
     };
+    let inputWidth = 0;
+    new ResizeObserver(entries => {
+      const width = entries[0].contentRect.width;
+      if (Math.abs(width - inputWidth) < 1) return;
+      inputWidth = width;
+      resize();
+    }).observe(input);
     const notify = (text, tone = 'info') => {
       notice = text; noticeTone = tone; noticeUntil = Date.now() + 4000;
       refresh();
@@ -41,24 +48,33 @@
       clone.querySelectorAll('p, li, pre, h1, h2, h3, h4, blockquote, tr').forEach(el => el.append('\n'));
       return clone.textContent.trim();
     };
+    const copyIcon = '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h3"/></svg>';
+    const copiedIcon = '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="m5 12 4 4L19 6"/></svg>';
     const addCopyButtons = () => {
       messages.querySelectorAll('.chat-msg.agent[data-finished="1"]').forEach(message => {
         if (enhancedMessages.has(message)) return;
         const content = message.querySelector('.msg-text');
         if (!content || !content.textContent.trim() || message.querySelector('.chat-copy-reply')) return;
         const button = document.createElement('button');
-        button.type = 'button'; button.className = 'chat-copy-reply'; button.textContent = '复制';
-        button.setAttribute('aria-label', '复制这条回复');
+        button.type = 'button'; button.className = 'chat-copy-reply';
+        const resetCopy = () => {
+          button.innerHTML = copyIcon;
+          button.setAttribute('aria-label', '复制这条回复'); button.title = '复制回复';
+          delete button.dataset.copied;
+        };
+        resetCopy();
         button.addEventListener('click', async () => {
           button.disabled = true;
           try {
             await navigator.clipboard.writeText(copyText(content));
-            button.textContent = '已复制'; notify('回复已复制');
+            button.innerHTML = copiedIcon;
+            button.setAttribute('aria-label', '已复制回复'); button.title = '已复制';
+            button.dataset.copied = 'true';
           } catch (_) {
-            button.textContent = '复制失败'; notify('复制失败，请选中文本复制', 'error');
+            notify('复制失败，请选中文本复制', 'error');
           } finally {
             button.disabled = false;
-            setTimeout(() => { button.textContent = '复制'; }, 2000);
+            setTimeout(resetCopy, 2000);
           }
         });
         message.appendChild(button);
@@ -83,6 +99,7 @@
       const statusText = showNotice ? notice : state.status;
       if (status.textContent !== statusText) status.textContent = statusText;
       setAttr(status, 'data-phase', showNotice ? noticeTone : state.phase);
+      setAttr(status, 'data-visible', !!statusText && (showNotice || ['remote', 'approval'].includes(state.phase)));
       setAttr(listButton, 'aria-expanded', panel.classList.contains('conv-open'));
       if (empty) {
         if (!messages.contains(empty)) messages.prepend(empty);
