@@ -283,8 +283,11 @@ async def chat_stream(req: ChatRequest, request: Request):
         started = progress.started
 
         producer = (functools.partial(stream_to_queue, task_id=req.task_id,
-                                      resume_task=req.resume_task)
-                    if req.task_id or req.resume_task else stream_to_queue)
+                                      resume_task=req.resume_task,
+                                      browser_feedback=req.browser_feedback,
+                                      browser_result=(req.browser_result.model_dump()
+                                                      if req.browser_result else None))
+                    if req.task_id or req.resume_task or req.browser_feedback else stream_to_queue)
         jobs.submit(
             workers.executor,
             producer,

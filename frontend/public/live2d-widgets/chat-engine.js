@@ -188,7 +188,7 @@
         summary.className = 'agent-process-head';
         const label = document.createElement('span');
         label.className = 'agent-process-label';
-        label.textContent = '执行过程';
+        label.textContent = '任务进展';
         const count = document.createElement('span');
         count.className = 'agent-process-count';
         summary.appendChild(label);
@@ -649,7 +649,7 @@
               line.textContent = m.text;
               h.processBox.querySelector('.agent-process-body').appendChild(line);
               const cnt = h.processBox.querySelector('.agent-process-count');
-              if (cnt) cnt.textContent = '(' + h.processBox.querySelectorAll('.agent-process-line').length + ')';
+              if (cnt) cnt.textContent = '';
             } else if (m.t === 'reset') {
               if (h.finished) return;
               h.contentSpan.textContent = '';
@@ -1297,7 +1297,7 @@
               line.textContent = p.text;
               body.appendChild(line);
             });
-            if (cnt) cnt.textContent = '(' + item.process.length + ')';
+            if (cnt) cnt.textContent = '';
           }
         }
         div.appendChild(label);

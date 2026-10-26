@@ -1,7 +1,5 @@
 """Prepare complete announcement text and notification impact for approval."""
 
-import json
-
 from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import tool
 
@@ -23,10 +21,6 @@ TOOLS = {
 WORKFLOWS = {key: "announcement_" + key for key in TOOLS}
 
 
-def _quoted_content(value):
-    # A reversible JSON string keeps whitespace visible and cannot form a browser command frame.
-    return json.dumps(value, ensure_ascii=False).replace(":", r"\u003a").replace("：", r"\uff1a")
-
 
 def description(plan):
     before, after = plan["before"], plan["after"]
@@ -38,14 +32,15 @@ def description(plan):
         lines = []
         for field, label in (("title", "标题"), ("content", "正文")):
             if before is None or before[field] != after[field]:
-                render = (
-                    _quoted_content
-                    if field == "content"
-                    else lambda value: sanitize_untrusted(value, 80)
-                )
-                old = render(before[field]) + " → " if before else ""
-                suffix = "（JSON原文，\\n表示换行）" if field == "content" else ""
-                lines.append(label + suffix + "：" + old + render(after[field]))
+                if field == "content":
+                    if before:
+                        lines.append("原正文：\n\n" + before[field]
+                                     + "\n\n修改为：\n\n" + after[field])
+                    else:
+                        lines.append("正文：\n\n" + after[field])
+                else:
+                    old = sanitize_untrusted(before[field], 80) + " → " if before else ""
+                    lines.append(label + "：" + old + sanitize_untrusted(after[field], 80))
         details = "\n".join(lines) or "内容已达成，无需改动"
     scope = "创建" if before is None else "删除" if after is None else "同步更新"
     return f"{heading}：{details}\n{scope} {plan['notificationCount']} 条关联个人通知；公告公开可见"
