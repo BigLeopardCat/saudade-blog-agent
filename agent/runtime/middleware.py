@@ -24,6 +24,13 @@ from config.settings import settings
 from utils.trace import record
 
 
+def _model_name(model=None, response=None):
+    metadata = getattr(response, "response_metadata", {}) or {}
+    return next((value for value in (metadata.get("model_name"), metadata.get("model"),
+                getattr(model, "model_name", None), getattr(model, "model", None))
+                 if isinstance(value, str) and value), None)
+
+
 class StreamGuard(BaseCallbackHandler):
     """Observe standard model callbacks; cancellation also closes provider streaming."""
 
@@ -143,7 +150,8 @@ class SessionMiddleware(AgentMiddleware):
                   *hydrate(request.messages, session.transient)]
         final = final_prompt(session.budget, prompt, session.menu, session.output_limit,
                              results_full=session.result_chars >= session.result_limit)
-        model = session.model
+        model = request.model
+        selected_model = _model_name(model)
         if final:
             prompt, reason, output = final
             model = model.bind(max_tokens=output) if output < session.output_limit else model
@@ -153,7 +161,7 @@ class SessionMiddleware(AgentMiddleware):
         emit(session.config, label, key=f"model:{session._round_index}")
         record("native", "llm_start", round=session._round_index, engine="langchain",
                prompt_chars=sum(len(text_content(message.content)) for message in prompt),
-               streaming=True)
+               streaming=True, model=selected_model)
         trace_context.tools(session.menu, session.traced_contracts)
         started, response = time.monotonic(), None
         try:
@@ -168,9 +176,11 @@ class SessionMiddleware(AgentMiddleware):
                 session.budget.settle(ticket, response)
                 return result
         finally:
+            response_model = _model_name(response=response)
             record("native", "llm_done" if response is not None else "llm_error",
                    round=session._round_index, engine="langchain",
                    duration_s=round(time.monotonic() - started, 2), streaming=True,
+                   model=selected_model or response_model, response_model=response_model,
                    finish_reason=(getattr(response, "response_metadata", {}) or {}).get(
                        "finish_reason"), **usage_fields(response))
 
