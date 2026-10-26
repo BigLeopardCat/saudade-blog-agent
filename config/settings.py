@@ -26,7 +26,7 @@ PROVIDER_DEFAULTS = {
     },
     # OpenCode requires a session header; models.llm adds it to compatible requests.
     "opencode": {
-        "model": "longcat-2.5-preview-free",
+        "model": "deepseek-v4.1-flash",
         "base_url": "https://opencode.ai/zen/go/v1",
     },
 }
