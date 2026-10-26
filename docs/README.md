@@ -28,6 +28,7 @@
 | [evaluation-native-baseline.md](evaluation-native-baseline.md) | 原生 HTTP 测试集、首跑基线、真实身份与覆盖边界 | 现状型 |
 | [native-baseline-20261025.md](native-baseline-20261025.md) | 125 场景线上首跑、成本缓存、误报复核与功能缺陷 | 记录型 |
 | [native-regression-20261025.md](native-regression-20261025.md) | 17 场景定向线上回归、排期判据复核、成本与剩余缺陷 | 记录型 |
+| [dataflow-audit-20261026.md](dataflow-audit-20261026.md) | 真实找文、解读、写入准备和取消的节点数据检查，及隔离确认续行 | 记录型 |
 | [agent-architecture-audit-20261023.md](agent-architecture-audit-20261023.md) | 架构、IR、记忆、确认恢复与单任务成本审计，含整改顺序 | 记录型 |
 | [native-account-actions.md](native-account-actions.md) | 原生账号管理接口、权限语义、迁移与隔离验证 | 现状型（已生产验收） |
 | [session-runtime-review-20261024.md](session-runtime-review-20261024.md) | 会话职责、独立报告核对、后台准入修复及剩余预算/存储工作 | 现状型 |
