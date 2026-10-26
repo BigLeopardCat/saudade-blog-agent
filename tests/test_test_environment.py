@@ -19,13 +19,18 @@ def test_dirty_deployment_environment_cannot_change_offline_defaults(isolated_py
         "OPENCODE_API_KEY": "synthetic-secret",
         "CHECKPOINT_DSN": "postgresql://127.0.0.1:1/unused",
         "AGENT_STREAM_IDLE_TIMEOUT": "invalid",
+        "TRACE_DIR": "/nonexistent-deployment/traces",
+        "IDEM_DB": "/nonexistent-deployment/idem.sqlite3",
     }.items():
         monkeypatch.setenv(key, value)
     (isolated_pytest.path / ".env").write_text("AGENT_CONTEXT_TOKENS=invalid\n")
     isolated_pytest.makepyfile(
         test_environment="""
 import os
+import pathlib
+import tempfile
 from config.settings import Settings, settings
+from utils import trace
 
 def test_defaults():
     for field in ("llm_provider", "agent_context_tokens", "opencode_api_key", "checkpoint_dsn",
@@ -34,6 +39,13 @@ def test_defaults():
     assert "AGENT_ARM" not in os.environ
     assert "OPENCODE_API_KEY" not in os.environ
     assert settings.iot_enabled
+    for field in ("trace_dir", "idem_db"):
+        path = pathlib.Path(getattr(settings, field))
+        assert pathlib.Path(tempfile.gettempdir()) in path.parents
+        assert "saudade-pytest-" in str(path)
+    trace.start_trace("isolation-probe", 7, "fixture", {"source": "evaluation"})
+    saved = trace.finish_trace("isolation-probe", "producer_done", 0.01)
+    assert pathlib.Path(saved).is_relative_to(settings.trace_dir)
 """
     )
     isolated_pytest.runpytest_subprocess("-q", "-n", "0").assert_outcomes(passed=1)

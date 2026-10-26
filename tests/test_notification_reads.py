@@ -53,10 +53,52 @@ def test_page_size_one_can_reach_the_whole_window_and_unread_filter_is_local(not
     assert unread["matchedInWindow"] == 66 and unread["windowComplete"] is False
 
 
+def test_search_filters_the_complete_window_before_pagination(notifications):
+    notifications["items"] = [dict(row, title="公告", content="内容", type="notice")
+                              for row in rows(50)]
+    notifications["items"][40].update(title="有人回复了你的评论")
+    notifications["items"][45].update(content="另一条回复")
+    result = json.loads(str(read(query="回复", limit=1)))
+    assert result["items"][0]["id"] == 960
+    assert result["items"][0]["link"] == "/article/19?cid=960#reply"
+    assert result["matchedInWindow"] == 2 and result["hasMoreInWindow"] is True
+    assert result["windowCount"] == 50 and result["windowComplete"] is True
+    second = json.loads(str(read(query="回复", page=2, limit=1, unread_only=True)))
+    assert second["matchedInWindow"] == 1 and second["items"] == []
+    assert all(request.method == "GET" for request in notifications["requests"])
+
+
+@pytest.mark.parametrize("size", [50, 100])
+def test_empty_search_preserves_window_coverage_and_read_state(notifications, size):
+    notifications["items"] = rows(size)
+    before = [row["isRead"] for row in notifications["items"]]
+    result = json.loads(str(read(query="缺失片段")))
+    assert result["items"] == [] and result["matchedInWindow"] == 0
+    assert result["hasMoreInWindow"] is False
+    assert result["windowComplete"] is (size < 100)
+    assert result["unreadInWindow"] == sum(not value for value in before)
+    assert [row["isRead"] for row in notifications["items"]] == before
+
+
+def test_search_uses_full_content_and_normalizes_case_without_fuzzy_matching(notifications):
+    notifications["items"] = rows(2)
+    notifications["items"][1]["content"] += " UniqueSuffix"
+    found = json.loads(str(read(query=" uniquesuffix ")))
+    assert found["query"] == "uniquesuffix" and found["items"][0]["id"] == 999
+    assert found["items"][0]["contentTruncated"] is True
+    assert json.loads(str(read(query="unique suffix")))["items"] == []
+
+
+def test_blank_query_never_requests_backend(notifications):
+    assert read(query="  ").kind == "unavailable"
+    assert notifications["requests"] == []
+
+
 def test_single_id_read_ignores_list_filters_and_never_marks_read(notifications):
     notifications["items"] = rows(5)
     before = [row["isRead"] for row in notifications["items"]]
-    result = json.loads(str(read(notification_id=1000, unread_only=True, page=20)))
+    result = json.loads(str(read(notification_id=1000, unread_only=True, page=20,
+                                 query="not-a-match")))
     assert len(result["items"]) == 1 and result["items"][0]["id"] == 1000
     assert len(result["items"][0]["content"]) == 2000
     assert result["items"][0]["contentTruncated"] is True
@@ -74,7 +116,8 @@ def test_missing_id_reports_only_the_known_window(notifications, size):
 
 @pytest.mark.parametrize("args", [{"limit": 0}, {"limit": 11}, {"limit": True},
                                   {"page": 101}, {"page": "2"}, {"notification_id": False},
-                                  {"notification_id": -1}, {"unread_only": "false"}])
+                                  {"notification_id": -1}, {"unread_only": "false"},
+                                  {"query": ""}, {"query": "x" * 121}, {"query": True}])
 def test_invalid_bounds_fail_before_http(notifications, args):
     with pytest.raises(ValidationError):
         read(**args)
