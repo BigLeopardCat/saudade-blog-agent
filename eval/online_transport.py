@@ -168,9 +168,17 @@ class OnlineTransport:
         request_id = uuid.uuid4().hex
         started = time.monotonic()
         payload = req.model_dump()
+        if self.host and isinstance(payload["image"], str):
+            payload["image"] = [payload["image"]] if payload["image"] else []
         payload.update(user_id=self.uid, conversation_id=self.cid)
         events, errors, first_visible, first_reply = self._consume(payload, request_id, started)
-        trace_path, doc = self._trace(request_id)
+        try:
+            trace_path, doc = self._trace(request_id)
+        except EvaluationError as exc:
+            if errors:
+                raise EvaluationError(
+                    f"HTTP SSE error without completed Agent trace: {errors}") from exc
+            raise
         timing = {"request_id": request_id, "elapsed_s": time.monotonic() - started,
                   "first_visible_s": first_visible, "first_reply_s": first_reply,
                   "trace": str(trace_path), "transport": "blog_http" if self.host else "agent_http"}
