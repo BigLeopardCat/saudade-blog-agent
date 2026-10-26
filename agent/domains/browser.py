@@ -11,6 +11,7 @@ from pydantic import Field, StrictStr
 
 from agent import action_text, authz
 from agent.products.blog.read_tools import scoped_reads_enabled
+from agent.runtime.progress import current_emitter
 from tools import site
 
 Path = Annotated[StrictStr, Field(min_length=1, max_length=512)]
@@ -87,7 +88,9 @@ def navigate_page(path: Path, config: RunnableConfig) -> object:
         budget = current_budget()
         spent = ({key: getattr(budget, key) for key in ("tokens", "model_calls", "tool_calls")}
                  if budget is not None else {})
-        result = interrupt({"kind": "client_action", "spent": spent, "command": {
+        progress = current_emitter(config)
+        result = interrupt({"kind": "client_action", "spent": spent,
+            "progress_keys": progress.emitted_keys if progress is not None else [], "command": {
             **command, "path": path, "task_id": task_id, "command_id": command_id,
             "timeout_ms": 6000, "expires_at": time.time() + 60}})
         if result.get("command_id") != command_id:

@@ -15,7 +15,7 @@
       while (ctx.state.isSending && Date.now() < until) await new Promise(resolve => setTimeout(resolve, 25));
       if (ctx.state.isSending) { ctx.ui.notify?.('页面操作已结束，请稍后继续原任务', 'error'); return; }
       const ok = await send({ silent: true, resumeTask: pending.task_id, convId: pending.convId,
-        resumeText: pending.original || '', processFrom,
+        resumeText: pending.original || '', processFrom, previousProcess: pending.process || [],
         browserResult: { command_id: pending.command_id, status, path: path() } });
       if (ok && processFrom?.dataset.clientAction === 'pending') processFrom.remove();
       if (!ok) ctx.ui.notify?.('页面操作已结束，后续回复未完成，请继续原任务', 'error');
@@ -38,6 +38,8 @@
       if (url.origin !== location.origin || !command.command_id || !command.task_id) return false;
       if (active?.command_id === command.command_id) return true;
       const pending = { ...command, convId: context.convId, original: context.original,
+        process: [...(context.processFrom?.querySelectorAll('.agent-process-line') || [])]
+          .slice(-24).map(line => ({ cls: 'step', text: line.textContent })),
         path: url.pathname + url.search + url.hash,
         deadline: Date.now() + Math.min(6000, Math.max(1000, command.timeout_ms || 6000)) };
       active = pending;

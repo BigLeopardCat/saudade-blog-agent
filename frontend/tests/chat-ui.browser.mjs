@@ -302,6 +302,8 @@ try {
   assert.equal(fullRequests[1].body.resume_task, fullRequests[0].body.task_id);
   assert.equal(fullRequests[1].body.browser_result.path, '/guestbook');
   assert.equal(fullRequests[1].body.browser_result.status, 'completed');
+  const fullProgress = await fullPage.locator('.agent-process-line').allTextContents();
+  assert.deepEqual(fullProgress, ['正在调用工具：navigate_page', '从已保存的进度继续']);
   await fullContext.close();
   passed('full-page navigation restores the pending task and narrates from the new page');
   await reset();
