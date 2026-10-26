@@ -1,0 +1,86 @@
+{
+  "started_at": "2026-10-26T08:30:32.652635+08:00",
+  "finished_at": "2026-10-26T08:30:50.168581+08:00",
+  "suite_sha256": "3f2b3fb238038f2b8a0e9bf765a7770066babbb3861ec66c22433c4c50e9f87e",
+  "evaluator_sha256": {
+    "run_golden.py": "09226acc8e1e5699e5bca9628314b2ae19358bfc141bb44e8f43d5fe51030958",
+    "online_baseline.py": "5aac024ebdd47dbddec0b48218f3ae0b2174828486afa791b2cb5f71227b64c5",
+    "online_transport.py": "5d31e2ddb53b62bedf64676a66d952d5c9289898c0e383c58726047d43e9a923",
+    "native_assertions.py": "b58aeaa8c4322bb8f5d2edc5f51d8f6a31fee7bf57b2e93b4e8a0f9df04e6243",
+    "request_metrics.py": "6e4ea9a4df094eda56419016c600e0ff3a2f98eaa94e50acc5b34a328af1883e",
+    "usage.py": "d807577ac39e5a18320ac918eeb9d8919febb315ec492b79b9770eabd4a79e66"
+  },
+  "service_version": {
+    "version": "0.2.0",
+    "sha": "39352ee39c301115f40a37145bd7e91bd3190b61",
+    "sha_source": "git",
+    "started_at": "2026-10-26T08:30:03+08:00",
+    "python": "3.12.3"
+  },
+  "planned": 3,
+  "counts": {
+    "failed": 1,
+    "passed": 2
+  },
+  "full_run": false,
+  "scope": "targeted read-only three cases, not full baseline",
+  "business_write_approval": false,
+  "automatic_retries": 0,
+  "model": "deepseek-v4.1-flash",
+  "provider": "opencode",
+  "identity": "user",
+  "synthetic_fixtures": true,
+  "cleaned_conversations": 3,
+  "cases": [
+    {
+      "id": "vision_red",
+      "case_sha256": "178a47a516d83dfb13878bbe78a2ee7a25e417531618b4eb08e92c38cce5a95e",
+      "status": "failed",
+      "fails": [
+        "[第 1 轮] 文本缺少任一关键词 ['红'] 且未命中正则族 []"
+      ],
+      "elapsed_s": 3.423,
+      "reply": "这张图整体看起来是**白色**的喵～🕊️\n\n不过说实话，它几乎是一整片纯白，我看不出有什么图案或内容。如果是想让我辨认某个细节，可能图片没上传成功，或者内容本身就是空白的？你可以再确认一下喵 (´･ω･`)",
+      "model_calls": 1,
+      "input_tokens": 3563,
+      "output_tokens": 64,
+      "cache_read_tokens": 2048,
+      "reasoning_tokens": 0,
+      "business_writes": 0,
+      "tool_names": []
+    },
+    {
+      "id": "vision_two",
+      "case_sha256": "b988d6807bd484179e1ba3d7fcb46d8c2bd0944267ce507555a455d766bb8245",
+      "status": "passed",
+      "fails": [],
+      "elapsed_s": 2.933,
+      "reply": "第一张是红色，第二张是蓝色喵～ 🎨\n\n这两张都是纯色方块，看起来像是用来做颜色对照或测试的小图。需要我把它们和博客的配色、主题效果联系起来看看吗？",
+      "model_calls": 1,
+      "input_tokens": 3750,
+      "output_tokens": 47,
+      "cache_read_tokens": 2048,
+      "reasoning_tokens": 0,
+      "business_writes": 0,
+      "tool_names": []
+    },
+    {
+      "id": "weather",
+      "case_sha256": "74d48a83c13c57b9d8b3a5029b4e7c6cefc89db2803b47bb58bfa6d47a40cad5",
+      "status": "passed",
+      "fails": [],
+      "elapsed_s": 11.094,
+      "reply": "北京今天（10月26日 08:30）天气是阴天喵☁️\n\n- 气温：10.7℃（有点凉，记得添件外套喵）\n- 湿度：85%\n- 风：偏北风，约 7.7 km/h\n\n数据来自 Open-Meteo 天气模型估算，有效时刻为 08:30，不是气象站实测，仅供参考喵～",
+      "model_calls": 4,
+      "input_tokens": 15209,
+      "output_tokens": 209,
+      "cache_read_tokens": 9472,
+      "reasoning_tokens": 0,
+      "business_writes": 0,
+      "tool_names": [
+        "get_weather",
+        "get_weather"
+      ]
+    }
+  ]
+}
