@@ -80,7 +80,9 @@ def test_real_sdk_finishes_from_tool_facts_without_resetting_or_raising_budget(l
     assert budget.reason is None
     assert budget.model_calls == 2 and budget.tool_calls == 1
     assert session.finalizing is (limit != "none")
-    assert progress[-1] == ("正在处理请求…" if limit == "none" else "正在整理已取得的结果…")
+    assert progress.count("正在处理请求…") == 1
+    assert progress[-1] == ("正在调用工具：fixture_read" if limit == "none"
+                           else "正在整理已取得的结果…")
 
 
 def test_capacity_inspection_cannot_poison_a_smaller_call_or_consume_budget():

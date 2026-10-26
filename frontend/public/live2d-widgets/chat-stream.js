@@ -552,11 +552,14 @@
           resumeBtn.addEventListener('click', async () => {
             if (lastUserText() !== msg) { showHint(STALE_HINT); return; }
             resumeBtn.disabled = true;
+            const previous = [...messages.querySelectorAll('.chat-msg.agent')]
+              .find(item => item.dataset.mid === stopped.partial_id) || div;
             const completed = await sendMessage({ silent: true, resumeTask: stopped.task_id,
-              resumeText: msg, convId: stopped.conv_id, onDropped: showHint });
+              resumeText: msg, convId: stopped.conv_id, processFrom: previous,
+              previousProcess: stopped.process || [], onDropped: showHint });
             if (completed) {
               ctx.state.items = ctx.state.items.filter(x => x.id !== stopped.partial_id);
-              if (div && div.parentNode) div.parentNode.removeChild(div);
+              if (previous?.classList.contains('agent')) previous.remove();
               clearFailedRound(msg);
               saveHistory();
             } else resumeBtn.disabled = false;
@@ -657,7 +660,7 @@
           const active = ctx.state.activeRound || {};
           const entry = { text, ts: Date.now(), reason: reason || '', kind: kind || 'failed',
             ...(kind === 'stopped' ? { task_id: active.taskId, conv_id: active.convId ?? ctx.state.conv,
-              partial_id: active.roundId } : {}) };
+              partial_id: active.roundId, process: active.process || [] } : {}) };
           if (cur && Array.isArray(cur) && cur.length) {
             localStorage.setItem(FAILED_KEY, JSON.stringify([entry, ...cur].slice(0, 3)));
           } else {
@@ -692,6 +695,7 @@
           renderFailed(victim.contentSpan, '已停止生成', partial);
           const partialItem = __chatCore.migrateItem({
             id: roundId, type: 'agent', text: partial, time: Date.now(),
+            process: active.process || [],
           });
           ctx.state.items = __chatCore.mergeItems(ctx.state.items, [partialItem]);
           victim.el.dataset.mid = roundId;
@@ -929,6 +933,11 @@
         const applyCmd = (c, contentSpan, allowDeferred) => {
             if (!c || typeof c !== 'object' || c.__done) return true;
             if (c.kind === 'navigate' && c.url) {
+              if (c.task_id && navigation) {
+                c.__done = navigation.receive(c, { convId: roundConvId, original: msg,
+                                                   processFrom: div });
+                return c.__done;
+              }
               let navUrl = String(c.url).replace(/[，。,.?!；;]+$/, '');
               if (navUrl.startsWith('//')) navUrl = 'https:' + navUrl;       // 协议相对 → 补全 scheme
               // 相对路径 /talk → 站点根。**必须用 `location.origin`，不能写死域名**：
@@ -1054,7 +1063,9 @@
             body: JSON.stringify({
               message: msg,
               ...(!silent ? { task_id: roundId } : {}),
+              browser_feedback: !!navigation,
               ...(opts.resumeTask ? { resume_task: opts.resumeTask } : {}),
+              ...(opts.browserResult ? { browser_result: opts.browserResult } : {}),
               // 20260903 会话化：显式会话定向写入；roundConvId=null（auto 未决议）
               // 省略字段 = 服务端 None → 最新非空会话（单桶时代语义，旧客户端降级）
               ...(roundConvId !== null ? { conversation_id: roundConvId } : {}),
@@ -1166,12 +1177,29 @@
           };
           kickTyping();
 
-          // ── 执行过程行（类 Claude Code 灰色可折叠轨迹）──
-          // __PROCESS__:<text> 步骤帧 → 追加灰色步骤行；质检打回 __RESET__:<reason>
-          // → 把被打回轮次的文本归档进可展开子项再清空重绘：最终气泡只显示诚实输出，
-          //   中间过程（计划/工具调用/打回原因/被否定的回复）灰色折叠、可展开查看
-          steps = [];
-          let processBox = null;
+          // Keep completed progress visible across checkpoint continuation.
+          const previousProcess = opts.processFrom && opts.processFrom.querySelector('.agent-process');
+          steps = previousProcess ? [...previousProcess.querySelectorAll('.agent-process-line')]
+            .map(line => ({ cls: 'step', text: line.textContent })) : [...(opts.previousProcess || [])];
+          let processBox = previousProcess || null;
+          if (!processBox && steps.length) {
+            processBox = makeProcessBox(!getCollapsePref());
+            for (const step of steps) {
+              const line = document.createElement('div');
+              line.className = 'agent-process-line ' + (step.cls || 'step');
+              line.textContent = step.text;
+              processBox.querySelector('.agent-process-body').appendChild(line);
+            }
+          }
+          ctx.state.activeRound.process = steps;
+          if (processBox) {
+            div.insertBefore(processBox, contentSpan);
+            const note = document.createElement('div');
+            note.className = 'agent-process-line continuation';
+            note.textContent = '从已保存的进度继续';
+            processBox.querySelector('.agent-process-body').appendChild(note);
+            steps.push({ cls: 'continuation', text: note.textContent });
+          }
           const ensureProcessBox = () => {
             if (processBox) return processBox;
             processBox = makeProcessBox(!getCollapsePref());
@@ -1184,7 +1212,7 @@
           };
           const refreshCount = () => {
             const cnt = processBox && processBox.querySelector('.agent-process-count');
-            if (cnt) cnt.textContent = steps.length ? '(' + steps.length + ')' : '';
+            if (cnt) cnt.textContent = '';
           };
           const addStep = (cls, text) => {
             const body = ensureProcessBox().querySelector('.agent-process-body');
@@ -1288,6 +1316,9 @@
             // 20260902：成功收到回复 → 清除本轮的失败持久化标记（防止残留标记
             // 在下一次渲染时错误挂到已完成轮后面）
             clearFailedRound(msg);
+          } else if (programCmds.some(command => command.task_id)) {
+            div.dataset.clientAction = 'pending';
+            delete ctx.state.live[roundId];
           } else {
             console.warn('[agent-chat] 空回复，跳过历史保存');
             delete ctx.state.live[roundId];
@@ -1490,6 +1521,8 @@
         }
         return completed && !ctx.state.stoppedByUser;
       };
+
+      const navigation = g.__waifuNavigation ? g.__waifuNavigation(ctx, engine, sendMessage) : null;
 
       // 将 waifu-tool-hitokoto 改为聊天面板开关
       // （hitokoto 工具已从 tools 移除——A7 修复；按钮不存在时自建一个，复用原按钮位 id，保持开关可用）

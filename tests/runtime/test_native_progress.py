@@ -74,7 +74,8 @@ def test_progress_arrives_while_native_tool_is_blocked():
     release.set()
     worker.join(2)
     assert result and result[0].reply == "done"
-    assert "工具调用已返回：fixture_read" in visible
+    assert visible.count("正在调用工具：fixture_read") == 1
+    assert len(visible) == 2  # one request state and one actual tool, not start/end inflation
 
 
 def test_progress_is_bounded_and_deduplicated():

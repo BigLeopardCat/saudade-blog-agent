@@ -7,6 +7,7 @@ from threading import Condition
 from langchain.agents.middleware import AgentMiddleware, hook_config
 from langchain_core.callbacks import BaseCallbackHandler
 from langchain_core.messages import AIMessage, AIMessageChunk, RemoveMessage, ToolMessage
+from langgraph.errors import GraphInterrupt
 from langgraph.types import Command
 
 from agent.llm_usage import usage_fields
@@ -70,6 +71,7 @@ class SessionMiddleware(AgentMiddleware):
         self._next = 0
         self.system_message = None
         self._failed = False
+        self._paused = False
         self.cached = {}
         self._recovered = False
 
@@ -158,7 +160,7 @@ class SessionMiddleware(AgentMiddleware):
             session.menu, session.finalizing, session.output_limit = [], True, output
             record("native", "finalizing", reason=reason, output_limit=output)
         label = "正在整理已取得的结果…" if session.finalizing else "正在处理请求…"
-        emit(session.config, label, key=f"model:{session._round_index}")
+        emit(session.config, label, key="model_final" if session.finalizing else "model_start")
         record("native", "llm_start", round=session._round_index, engine="langchain",
                prompt_chars=sum(len(text_content(message.content)) for message in prompt),
                streaming=True, model=selected_model)
@@ -210,9 +212,9 @@ class SessionMiddleware(AgentMiddleware):
 
     def wrap_tool_call(self, request, handler):
         self._recover(request.state)
-        return self._tool_result(request.tool_call)
+        return self._tool_result(request.tool_call, request.runtime.config)
 
-    def _tool_result(self, call):
+    def _tool_result(self, call, config=None):
         session = self.session
         check_cancelled(session.config)
         if call["id"] in self.cached:
@@ -223,7 +225,7 @@ class SessionMiddleware(AgentMiddleware):
         else:
             before = len(self.exchange)
             session._append_result(call, self.exchange, max(0, session._round_index - 1),
-                                   self.attachments)
+                                   self.attachments, config=config)
             execution = (session.outcome.execution or {}) if session.outcome else {}
             if execution.get("pending_confirm"):
                 session.awaiting_call = call["id"]
@@ -259,7 +261,10 @@ class OrderedToolsMiddleware(AgentMiddleware):
                 check_cancelled(policy.session.config)
                 policy._order.wait(0.05)
             if policy._failed:
-                return ToolMessage(content="前序调用失败，本项未执行。", status="error",
+                return ToolMessage(content="前序操作等待接续，本项尚未执行。" if policy._paused
+                                   else "前序调用失败，本项未执行。",
+                                   status="success" if policy._paused else "error",
+                                   artifact={"phase": "deferred"} if policy._paused else None,
                                    tool_call_id=request.tool_call["id"])
             try:
                 result = handler(request)
@@ -272,6 +277,9 @@ class OrderedToolsMiddleware(AgentMiddleware):
                             and old.tool_call_id == message.tool_call_id else old
                             for old in policy.exchange]
                 return result
+            except GraphInterrupt:
+                policy._paused = policy._failed = True
+                raise
             except BaseException:
                 policy._failed = True
                 raise

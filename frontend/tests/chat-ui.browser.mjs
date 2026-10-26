@@ -33,6 +33,18 @@ const server = createServer(async (req, res) => {
         nextMode = 'reply';
         res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache' });
         assert.equal(req.headers['x-agent-stream-version'], '2');
+        if (body.browser_result) {
+          res.end(frame('text', body.browser_result.status === 'completed' ? '已经到留言板了。' : '页面跳转未完成，请点击链接重试。') + frame('done', {}));
+          return;
+        }
+        if (mode === 'navigate') {
+          res.end(frame('progress', '正在调用工具：navigate_page') + frame('command', {
+            kind: 'navigate', mode: 'direct', url: new URL('/guestbook', 'http://' + req.headers.host).href,
+            path: '/guestbook', task_id: body.task_id, command_id: 'offline-navigation', timeout_ms: 1000,
+            expires_at: Date.now() / 1000 + 60,
+          }) + frame('done', {}));
+          return;
+        }
         res.write(frame('progress', '正在调用工具：search_notes'));
         res.write(frame('progress', '正在整理会话摘要…'));
         res.write(frame('text', mode === 'literal' ? literal : (mode === 'hold' ? '这是保留的部分回复。' : '离线测试回复：已收到你的消息。')));
@@ -62,7 +74,7 @@ const server = createServer(async (req, res) => {
       if (url.pathname === '/api/chat/discard') return json(res, { ok: true });
       throw new Error('Unexpected fixture API: ' + url.pathname);
     }
-    const file = url.pathname === '/' ? path.join(frontend, 'tests/fixtures/chat-ui.html')
+    const file = ['/', '/guestbook'].includes(url.pathname) ? path.join(frontend, 'tests/fixtures/chat-ui.html')
       : path.join(frontend, 'public', decodeURIComponent(url.pathname));
     if (!file.startsWith(frontend + path.sep)) throw new Error('Invalid fixture path');
     const content = await readFile(file);
@@ -218,6 +230,81 @@ try {
   assert.equal(await page.evaluate(() => window.__chatTest.ctx.state.convNeedCreate), true);
   passed('close, history, and new conversation buttons');
 
+  await reset();
+  await page.evaluate(() => {
+    const { engine, ctx } = window.__chatTest;
+    engine.appendMsg({ id: 'wide-user', type: 'user', text: '测试可读气泡和宽屏布局。'.repeat(18), time: Date.now() });
+    ctx.dom.chatPanel.dataset.detached = 'true';
+  });
+  const bubbleWidth = () => page.locator('.msg-bubble').last().evaluate(el => el.getBoundingClientRect().width);
+  const narrowBubble = await bubbleWidth();
+  await page.locator('#waifu-chat').evaluate(el => { el.style.width = '920px'; });
+  assert.ok(await bubbleWidth() > narrowBubble * 1.8, 'Enlarged window must widen message bubbles');
+  const style = await page.locator('#chat-input').evaluate(input => {
+    input.focus();
+    return { overflow: getComputedStyle(input).overflowY, outline: getComputedStyle(input).outlineStyle,
+      divider: getComputedStyle(input.closest('.chat-input-area')).borderTopWidth };
+  });
+  assert.equal(style.overflow, 'hidden');
+  assert.equal(style.outline, 'none');
+  assert.equal(style.divider, '1px');
+  await page.locator('#chat-input').fill('需要滚动的长草稿。\n'.repeat(30));
+  assert.equal(await page.locator('#chat-input').evaluate(input => getComputedStyle(input).overflowY), 'auto');
+  for (const dark of [false, true]) {
+    await page.evaluate(value => window.dispatchEvent(new CustomEvent('darkmode-change', { detail: value })), dark);
+    const alpha = await page.locator('#waifu-chat').evaluate(panel => {
+      const color = getComputedStyle(panel).backgroundColor;
+      return color.startsWith('rgba') ? Number(color.slice(color.lastIndexOf(',') + 1, -1)) : 1;
+    });
+    assert.ok(alpha >= .75 && alpha < 1, 'Both themes retain translucency');
+  }
+  passed('readable translucent themes, wide responsive bubbles, one focus border and overflow-only draft scrollbars');
+
+  for (const outcome of ['success', 'timeout']) {
+    await reset();
+    await page.evaluate(mode => {
+      window.__spaNavigate = url => {
+        window.__spaNavigationComplete = new Promise(resolve => setTimeout(() => {
+          if (mode === 'success') history.pushState({}, '', url);
+          resolve();
+        }, 80));
+        return true;
+      };
+    }, outcome);
+    const previous = streamCount();
+    nextMode = 'navigate';
+    await page.locator('#chat-input').fill('去留言板');
+    await page.locator('#chat-send').click();
+    await page.waitForFunction(() => [...document.querySelectorAll('.chat-msg.agent .msg-text')].some(el => /已经到留言板|页面跳转未完成/.test(el.textContent)));
+    await idle();
+    const navRequests = requests.filter(r => r.path === '/api/chat/stream').slice(previous);
+    assert.equal(navRequests.length, 2);
+    assert.equal(navRequests[1].body.resume_task, navRequests[0].body.task_id);
+    assert.equal(navRequests[1].body.message, '');
+    assert.equal(navRequests[1].body.browser_result.status, outcome === 'success' ? 'completed' : 'timeout');
+    assert.equal(navRequests[0].body.browser_feedback, true);
+    assert.equal(navRequests.filter(r => r.body.message === '去留言板').length, 1);
+  }
+  passed('SPA navigation acknowledges actual completion or bounded timeout before narrating; no duplicate user request');
+
+  const fullContext = await browser.newContext({ viewport: { width: 1280, height: 900 }, reducedMotion: 'reduce' });
+  const fullPage = await fullContext.newPage();
+  await fullPage.goto(origin);
+  await fullPage.waitForFunction(() => !!window.__chatTest?.ctx.state.conv);
+  const fullBefore = streamCount();
+  nextMode = 'navigate';
+  await fullPage.locator('#chat-input').fill('去留言板');
+  await fullPage.locator('#chat-send').click();
+  await fullPage.waitForURL(origin + '/guestbook');
+  await fullPage.waitForFunction(() => [...document.querySelectorAll('.msg-text')].some(el => el.textContent.includes('已经到留言板')));
+  const fullRequests = requests.filter(r => r.path === '/api/chat/stream').slice(fullBefore);
+  assert.equal(fullRequests.length, 2);
+  assert.equal(fullRequests[1].body.resume_task, fullRequests[0].body.task_id);
+  assert.equal(fullRequests[1].body.browser_result.path, '/guestbook');
+  assert.equal(fullRequests[1].body.browser_result.status, 'completed');
+  await fullContext.close();
+  passed('full-page navigation restores the pending task and narrates from the new page');
+  await reset();
   const input = page.locator('#chat-input');
   await input.fill('输入法组合测试');
   count = streamCount();
@@ -261,6 +348,7 @@ try {
   assert.match(await page.locator('#chat-messages').innerText(), /这是保留的部分回复/);
   assert.equal(requests.filter(x => x.path === '/api/chat/stream').length, beforeStop);
   passed('real streaming request can be stopped with partial reply retained');
+  const stoppedProgress = await page.locator('.agent-process-line').allTextContents();
   await page.locator('.chat-resume-btn').click();
   await idle();
   const resumed = requests.filter(x => x.path === '/api/chat/stream').at(-1).body;
@@ -269,7 +357,10 @@ try {
   assert.equal(requests.filter(x => x.path === '/api/chat/discard').length, beforeDiscard);
   assert.equal(await page.evaluate(() => window.__chatTest.ctx.state.items
     .filter(x => x.type === 'user' && x.text === '测试停止生成').length), 1);
-  passed('continuation preserves the original request without discard or duplicate user text');
+  const continuedProgress = await page.locator('.agent-process-line').allTextContents();
+  assert.ok(continuedProgress.includes('从已保存的进度继续'));
+  assert.deepEqual(continuedProgress.slice(0, stoppedProgress.length), stoppedProgress);
+  passed('continuation preserves original progress, request and user text without a restart');
 
   await reset();
   nextMode = 'slow';

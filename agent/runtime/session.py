@@ -127,16 +127,17 @@ class ToolSession:
         record("native", "tool_error", name=call["name"], reason=reason)
         return True
 
-    def _invoke_tool(self, name, args, call=None):
+    def _invoke_tool(self, name, args, call=None, config=None):
         try:
             if getattr(self.tools[name], "response_format", None) == "content_and_artifact":
-                return self.tools[name].invoke({**call, "type": "tool_call"}, config=self.config)
-            return self.tools[name].invoke(args, config=self.config)
+                return self.tools[name].invoke({**call, "type": "tool_call"},
+                                               config=config or self.config)
+            return self.tools[name].invoke(args, config=config or self.config)
         except (ToolException, ValueError) as exc:
             record("native", "tool_failed", name=name, error=type(exc).__name__)
             return unavailable(f"{name} 调用失败（{type(exc).__name__}），请如实说明。")
 
-    def _append_result(self, call, prompt, round_index, attachments):
+    def _append_result(self, call, prompt, round_index, attachments, *, config=None):
         name = call["name"]
         record("native", "tool_requested", name=name, call_id=call["id"])
         if name in self.loaders:
@@ -159,8 +160,7 @@ class ToolSession:
         self.calls_used += 1
         emit_progress(self.config, f"正在调用工具：{name}", key=f"tool:{call['id']}")
         with native_tool(self.budget):
-            body = self._invoke_tool(name, args, call)
-        emit_progress(self.config, f"工具调用已返回：{name}", key=f"tool_done:{call['id']}")
+            body = self._invoke_tool(name, args, call, config=config)
         if isinstance(body, TurnResult):
             self._prepared_result(body, call, prompt, round_index)
             return True
@@ -299,19 +299,25 @@ class ToolSession:
             return None, self._budget_stop(exc.reason, tool_calls=self.calls_used)
         return calls, None
 
-    def stream(self, prompt, *, resume=None, approval_input=(), recover=False):
+    def stream(self, prompt, *, resume=None, approval_input=(), recover=False, client_result=None):
         """Adapt framework events to the current transport result contract."""
         from agent.runtime.execution import FrameworkExecution
 
         self._round_index = 0
         self.stream_guard = StreamGuard(self)
         execution = FrameworkExecution(self, prompt)
-        stream = execution.stream(resume=resume, approval_input=approval_input, recover=recover)
+        stream = execution.stream(resume=resume, approval_input=approval_input, recover=recover,
+                                  client_result=client_result)
         visible = []
         self.used_stream_api = True
         try:
             for mode, data in stream:
                 check_cancelled(self.config)
+                if mode == "updates" and isinstance(data, dict):
+                    from agent.runtime.client_actions import paused_result
+                    paused = paused_result(data)
+                    if paused is not None:
+                        self.outcome = paused
                 if mode != "messages":
                     continue
                 chunk, metadata = data
