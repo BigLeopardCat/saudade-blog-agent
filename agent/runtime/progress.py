@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 
 from agent.runtime.control import AgentCancelled, RequestControl
 from utils.trace import record
@@ -22,6 +22,15 @@ class ProgressEmitter:
         self._seen: set[str] = set()
         self._count = 0
         self._last_text = ""
+
+    @property
+    def emitted_keys(self) -> list[str]:
+        return sorted(self._seen)
+
+    def restore(self, keys: list[str]):
+        """Restore trusted checkpoint labels without emitting them a second time."""
+        self._seen.update(key for key in keys[:_MAX_EVENTS] if isinstance(key, str))
+        self._count = len(self._seen)
 
     def emit(self, text: str, *, key: str) -> bool:
         if not self.sink or not isinstance(text, str) or not text:
@@ -83,7 +92,12 @@ class StreamProgress:
             record("producer", "first_reply", duration_s=elapsed)
 
 
-def emit(config: dict | None, text: str, *, key: str) -> bool:
+def current_emitter(config: Mapping | None) -> ProgressEmitter | None:
     cfg = (config or {}).get("configurable") or {}
     current = cfg.get("progress_emitter")
-    return current.emit(text, key=key) if isinstance(current, ProgressEmitter) else False
+    return current if isinstance(current, ProgressEmitter) else None
+
+
+def emit(config: dict | None, text: str, *, key: str) -> bool:
+    current = current_emitter(config)
+    return current.emit(text, key=key) if current is not None else False

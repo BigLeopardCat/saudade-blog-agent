@@ -50,6 +50,24 @@ def acknowledge(config, command, status="completed", path="/guestbook"):
         "command_id": command["command_id"], "status": status, "path": path}}}
 
 
+def test_browser_continuation_keeps_progress_without_repeating_navigation():
+    from agent.runtime.progress import ProgressEmitter
+
+    model, visible = Model(), []
+    config = {"configurable": {"user_id": 7, "conversation_id": 42, "thread_id": "conv_42",
+        "principal": Principal(7, "user", SOURCE_ASSERTION), "browser_feedback": True,
+        "progress_emitter": ProgressEmitter(visible.append)}}
+    runtime = NativeRuntime(NativeConversationStore(InMemorySaver()),
+                            model_factory=lambda **_: model)
+    first = list(runtime.stream_events({"messages": [HumanMessage(content="去留言板")],
+                                        "task_id": "page-task"}, config))[-1]
+    resumed_config = acknowledge(config, first.execution["client_action"])
+    resumed_config["configurable"]["progress_emitter"] = ProgressEmitter(visible.append)
+    list(runtime.stream_events({"messages": [], "resume_task": "page-task"}, resumed_config))
+    assert visible == ["正在处理请求…", "正在调用工具：navigate_page", "页面已到达，正在整理回复…"]
+    assert len(model.calls) == 2
+
+
 def test_navigation_pauses_after_one_model_call_and_survives_reconstruction(navigation):
     runtime, model, config, result, command = navigation
     assert len(model.calls) == 1 and result.reply == ""

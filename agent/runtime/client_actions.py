@@ -2,6 +2,7 @@
 
 import time
 
+from agent.runtime.progress import current_emitter
 from agent.runtime.results import TurnResult
 from utils.trace import record
 
@@ -50,6 +51,11 @@ def resume_value(snapshot, task_id, config):
     budget = current_budget()
     if budget is not None:
         budget.restore_spent(pending.get("spent", {}))
+    progress = current_emitter(config)
+    if progress is not None:
+        progress.restore(pending.get("progress_keys", []))
+        progress.emit("页面已到达，正在整理回复…" if status == "completed" else
+                      "页面操作已结束，正在整理结果…", key="client_result:" + command["command_id"])
     record("native", "browser_result", status=status, command_id=command["command_id"])
     return {"command_id": command["command_id"], "status": status,
             "path": value.get("path", "")}
