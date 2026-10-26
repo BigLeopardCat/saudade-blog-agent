@@ -228,7 +228,6 @@ from tools.site import (  # noqa: E402,F401
     _NAV_EXACT_PATHS,
     _NAV_PREFIX_PATHS,
     _NAV_WHOLE_PAGE_PATHS,
-    _WEATHER_LOC_RE,
     IOT_ENABLED,
     IOT_NAV_PATH,
     get_chat_history,

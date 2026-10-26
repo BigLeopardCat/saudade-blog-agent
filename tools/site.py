@@ -1,7 +1,6 @@
 # -*- coding: utf-8 -*-
 """Site information, page commands and legacy tool entry points."""
 
-import re
 from typing import Annotated, Literal
 from urllib.parse import unquote, urlsplit
 
@@ -9,9 +8,8 @@ from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import tool
 
 from config import settings as _settings
-from tools import base as _base
 from tools.base import SITE_BASE
-from tools.result import fact, ok, tgt, unavailable
+from tools.result import fact, ok, tgt
 
 # `__all__` = 本模块**所有不以 `_` 开头**的模块级名字（社区惯例，不留例外；
 # `tests/test_module_exports.py` 按这条规则机械判着，漂了就红）。
@@ -66,31 +64,15 @@ def get_current_time() -> str:
     from utils.clock import format_local_now
     return format_local_now()
 
-# 城市名的形状闸（20260925 审计）：`location` 是 planner 从用户话里填的参数，直接拼进
-# URL 的路径段。host 固定 ⇒ 不是 SSRF；能改的只是 wttr.in 那一侧的 path/query（例如换
-# 返回格式）。这一闸不是"防注入"（响应正文本来就不可信、照常进 prompt），而是别让任意
-# 字符串进 URL——中英文 + 空格 + 少量标点是城市名的实际形态，其余一律拒（不猜、不默认）。
-_WEATHER_LOC_RE = re.compile(r"[A-Za-z一-龥 ,.'\-]{1,40}")
-
-
 @tool
 def get_weather(
-    location: Annotated[str, "City name"] = "Beijing",
-) -> str:
-    """Query weather for a city using wttr.in."""
-    from urllib.parse import quote
-    loc = str(location or "").strip()
-    if not _WEATHER_LOC_RE.fullmatch(loc):
-        return unavailable(f"城市名「{loc[:40]}」不合法（只接受中英文、空格与 , . ' -），未查询")
+    location: Annotated[str, "City, optionally country or province"],
+    location_id: Annotated[int | None, "Selected geocoding candidate"] = None,
+) -> object:
+    """Read current weather-model data through the shared native weather adapter."""
+    from agent.domains.utilities import get_weather as read_weather
 
-    try:
-        resp = _base._client.get(f"https://wttr.in/{quote(loc)}?format=%C+%t+%w+%h",
-                           timeout=10)
-        if resp.status_code == 200:
-            return f"{loc}天气: {resp.text.strip()}"
-        return unavailable(f"天气服务返回 HTTP {resp.status_code}")
-    except Exception as e:
-        return unavailable(f"天气服务查询失败: {e}")
+    return read_weather.invoke({"location": location, "location_id": location_id})
 
 # ---------------------------------------------------------------------------
 # 导航工具
