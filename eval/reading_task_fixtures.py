@@ -37,6 +37,9 @@ def backend(role):
             data = [{"id": 20, "username": "synthetic_author_20", "role": "user",
                      "mutedUntil": None, "frozen": False, "muted": False,
                      "quotaUsed": 0, "quotaLimit": 500}]
+        elif path == "/api/public/board":
+            data = [{"talkKey": 45, "approved": 1, "content": "这个合成看板娘好笨啊",
+                     "author": "", "createTime": "2026-10-26T12:00:00"}]
         elif path == "/api/public/activity/guestbook":
             data = [{"id": 45, "title": "", "titleTruncated": False,
                      "content": "这个合成看板娘好笨啊", "contentTruncated": False,

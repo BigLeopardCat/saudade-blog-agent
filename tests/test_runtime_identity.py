@@ -33,6 +33,7 @@ def test_health_reports_actual_runtime_type():
 def test_factory_sends_model_supported_thinking_control(monkeypatch, model, expected):
     monkeypatch.setattr(llm.settings, "llm_provider", "opencode")
     monkeypatch.setattr(llm, "ChatOpenAI", lambda **kwargs: kwargs)
+    monkeypatch.setattr(llm, "DeepSeekChat", lambda **kwargs: kwargs)
     params = llm.get_llm(model=model, enable_thinking=False)
     assert params.get("extra_body", {}) == expected
 
@@ -48,3 +49,27 @@ def test_reasoning_usage_preserves_unknown_instead_of_assuming_zero():
         "prompt_tokens": 10, "completion_tokens": 3,
         "completion_tokens_details": {"reasoning_tokens": 2}}})
     assert usage_fields(raw)["reasoning"] == 2
+
+
+@pytest.mark.parametrize("effort,thinking", [("none", False), ("low", True)])
+def test_native_model_uses_explicit_reasoning_policy_without_changing_output_limit(
+    monkeypatch, effort, thinking
+):
+    from config import settings
+
+    captured = {}
+
+    class Model:
+        max_tokens = settings.agent_output_tokens
+
+    def factory(**kwargs):
+        captured.update(kwargs)
+        return Model()
+
+    monkeypatch.setattr(settings, "agent_reasoning_effort", effort)
+    runtime = NativeRuntime(NativeConversationStore(InMemorySaver()), model_factory=factory)
+    config = {"configurable": {"thread_id": "conv_42"}}
+    runtime._session(config, runtime.store.load(config))
+    assert captured["enable_thinking"] is thinking
+    assert captured.get("reasoning_effort") == (effort if thinking else None)
+    assert captured["max_tokens"] == settings.agent_output_tokens

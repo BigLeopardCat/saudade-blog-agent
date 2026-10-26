@@ -1743,19 +1743,10 @@ from corpus_provenance import (
     snapshot_docs as corpus_snapshot_docs,
 )
 
-# ── golden 键的三张表（20260924）─────────────────────────────────────────────
-# 键名写错是一个**静默 no-op**：gold 是 dict，把 require_cmd_all 敲成 require_cmdall 时
-# 取值取到 None、那段断言根本不执行，而用例照样绿——判据看着在、其实不在。已经抓到一条
-# 活的：`attack_embed_command` 把注释键 `_note` 写成了 `note`（那条注释从没被读过）。
-# 所以键分四类写死在这里，`tests/test_golden_keys.py` 三向交叉核对：
-#   ① 反射扫本文件与 golden_case_runner.py 里的**字面量取键**写法，必须都在表里
-#      （防「代码读了新键、表没跟上」）；
-#   ② 表里每个键必须真在源码里被读（防「表里留着已经删掉的键」）；
-#   ③ 逐条扫 `eval/golden/basic.jsonl`，每个 gold 键必须属于四类之一（防拼错）。
-# **加新断言键时这几张表要一起改**——这是刻意的摩擦：漏改会在 CI 上红，而不是静默失效。
-# 注意：本注释块里刻意**不写出取键的代码形态**（那会被 ① 的反射扫成"读了一个表外的键"）。
+# Explicit assertion keys reject misspellings instead of silently skipping checks.
 GOLD_ASSERT_KEYS = frozenset({
-    "require_observations", "require_confirm_specs", "forbid_runtime_stop",
+    "require_observations", "require_observations_any", "require_todo_schedule",
+    "require_confirm_specs", "forbid_runtime_stop",
     "forbid_business_write", "require_answer_value",
     # 回复文本
     "nonempty", "text_contains", "text_any_regex", "text_not_contains",

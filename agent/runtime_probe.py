@@ -48,7 +48,8 @@ def request_context(agent):
     from config import settings
 
     return {"name": runtime_name(agent), "build_sha": BUILD_IDENTITY[0],
-            "provider": settings.llm_provider, "model": settings.active_llm_model}
+            "provider": settings.llm_provider, "model": settings.active_llm_model,
+            "reasoning_effort": settings.agent_reasoning_effort}
 
 
 def version_payload(app_version: str) -> dict:

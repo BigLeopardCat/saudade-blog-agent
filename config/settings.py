@@ -5,6 +5,7 @@ Set ``LLM_PROVIDER=deepseek|qwen|openai|opencode`` to choose the active one.
 """
 
 import os
+from typing import Literal
 
 from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -95,6 +96,7 @@ class Settings(BaseSettings):
     agent_request_tokens: int = Field(default=32768, gt=0)
     agent_model_calls: int = Field(default=8, ge=2)
     agent_tool_calls: int = Field(default=8, gt=0)
+    agent_reasoning_effort: Literal["none", "low", "high", "max"] = "none"
     agent_output_tokens: int = Field(default=1536, ge=128)
     agent_summary_output_tokens: int = Field(default=512, ge=128)
     agent_verbose: bool = True
