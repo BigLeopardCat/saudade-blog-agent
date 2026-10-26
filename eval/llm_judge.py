@@ -57,11 +57,12 @@ _JUDGE_SCHEMA = {
 # Provider-specific response formats are shared with production adapters.
 
 
-def response_format(provider: str = "") -> dict:
+def response_format(provider: str = "", *, model: str = "") -> dict:
     """Use the configured provider dialect without duplicating its registry."""
     from config import settings
     from models.llm import response_format as _rf
-    return _rf(provider or settings.llm_provider, _JUDGE_SCHEMA, name="verdict")
+    return _rf(provider or settings.llm_provider, _JUDGE_SCHEMA, name="verdict",
+               model=model or settings.active_llm_model)
 
 
 _JUDGE_SYS = """你是评测评审员，只做一件事：核对一条客服回复**有没有编材料**。
@@ -283,7 +284,8 @@ def judge_one(material_text: str, llm, *, structured: bool = True,
     raw, degraded = None, False
     if structured:
         try:
-            raw = invoke(llm.bind(response_format=response_format()))
+            raw = invoke(llm.bind(response_format=response_format(
+                model=getattr(llm, "model_name", ""))))
         except Exception as e:  # noqa: BLE001 —— 端点不吃结构化输出 ⇒ 降级，但要让人知道
             if not allow_fallback or isinstance(e, ValueError):
                 raise
