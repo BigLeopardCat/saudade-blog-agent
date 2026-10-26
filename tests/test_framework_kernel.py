@@ -72,6 +72,7 @@ def test_application_session_uses_the_framework_with_the_real_model_transport():
         assert session.calls_used == session.budget.tool_calls == 1
         assert session.budget.model_calls == 2 and session.budget.tokens == 30
         assert session.observations and requests[0]["stream"] is True
+        assert all(request.get("parallel_tool_calls") is not False for request in requests)
 
 
 def test_existing_runtime_preserves_sequential_preparation_and_approval_on_the_sdk_wire(

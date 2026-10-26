@@ -105,7 +105,8 @@ def test_oversized_turn_has_an_explicit_bounded_excerpt_instead_of_disappearing(
     saved = memory.turn_messages([HumanMessage(content=question)], [], reply, ACTOR)
     visible = memory.history(saved, ACTOR)
     assert visible and isinstance(visible[0], HumanMessage)
-    assert "节选" in visible[0].content and "get_chat_history" in visible[0].content
+    assert "节选" in visible[0].content
+    assert visible[0].additional_kwargs["memory_excerpt"] is True
     assert estimate_tokens(visible) <= memory.CHECKPOINT_TOKENS
 
 
@@ -228,3 +229,29 @@ def test_image_turn_can_be_discarded_using_the_original_host_text():
     run(selected, ChatRequest(message="看图", image="data:image/png;base64,AA"))
     result = checkpoint.drop_last_user_turn(selected, 42, "看图\n[图片]")
     assert result["dropped"] and selected.store.load(config()).messages == []
+
+
+def test_partial_long_reply_uses_normal_window_and_retains_the_original_user_request():
+    for question in ["读取长回答的末尾", "原始问题" * 850]:
+        saved = memory.turn_messages([HumanMessage(content=question)], [],
+                                     "历史长答复" * 12000, ACTOR)
+        visible = memory.history(saved, ACTOR)
+        assert question in str(visible)
+        assert "节选" in str(visible)
+        assert visible[0].additional_kwargs["memory_excerpt"] is True
+        bound = max(memory.HISTORY_TOKENS, estimate_tokens([HumanMessage(content=question)]) + 100)
+        assert estimate_tokens(visible) <= bound
+
+
+def test_blog_recovery_context_describes_available_history_without_changing_the_system_prefix():
+    saved = memory.turn_messages([HumanMessage(content="长回答")], [], "长答复" * 20000, ACTOR)
+    messages = [*saved, HumanMessage(content="最后一行呢")]
+    prompt = build_prompt(messages, ACTOR, own_enabled=True)
+    recovery = [message for message in prompt if memory.is_context(message)
+                and "get_chat_history" in str(message.content)]
+    assert len(recovery) == 1 and "content_offset" in recovery[0].content
+    assert "get_chat_history" not in prompt[0].content
+    assert not any(memory.is_context(message) and "get_chat_history" in str(message.content)
+                   for message in build_prompt(messages, ACTOR, own_enabled=False))
+    assert "get_chat_history" not in str(memory.history(saved, ACTOR)), (
+        "generic memory marks excerpts; the product supplies its recovery affordance")
