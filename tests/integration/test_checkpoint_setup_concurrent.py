@@ -1,58 +1,6 @@
-"""真连一个库、**4 个进程同时建表**（20261018 真停服之后新增的那一层判据）。
+"""Explicit PostgreSQL integration test using SAUDADE_CKPT_TEST_DSN.
 
-**这一件为什么存在**：`agent/checkpoint.py` 的建表锁第一版是**阻塞式**
-`pg_advisory_lock`。20261018 上线当天它造成了一次真停服——四个 worker 无限期卡死、
-8010 根本不监听、`systemctl restart` 也跟着卡住（旧 worker 在 PG 上无限期等待，要等满
-`TimeoutStopSec=120` 才被 SIGKILL）。而当时**四层判据全绿**，因为它们全都在
-`127.0.0.1:1` 这种**必然失败**的 DSN 上判："真连上一个库、真跑一次迁移、4 个进程真的
-同时来"这条路径**从来没有被跑过**。这一件就是那条路径。
-
-死锁的形状（`pg_stat_activity` 实测）：拿到锁的那个 worker 在跑
-`CREATE INDEX CONCURRENTLY`，而 CIC 必须**等所有并发事务收尾**；另外三个 worker 卡在
-`pg_advisory_lock` 上——**一条挂着的语句就是一条没结束的事务**。于是互相等，成环。
-
-## 同步点：为什么不是「同时 Popen 四个进程」
-
-第一版就是那样写的，**红基线复现不出来**（四个进程全绿）——四个 `python -c` 各自冷启动
-import，到达抢锁那一刻的散布有几百毫秒，比空库上那几句 CIC 还长，于是赢家早就建完了。
-生产上不是这样：四个 uvicorn worker 是**预热好的**（同一秒里都打出了
-`Initialising LangChain agent ...`）。
-
-所以这里的子进程**先各自把池开好**（最慢的那一步），报到之后再放一个 go 文件、
-四个同时往下走——到达抢锁那一刻的散布是亚毫秒级。**这个同步点只去掉脚手架的抖动，
-不改变锁的语义**：A/B 两臂用的是同一套脚手架，换的只有建表那一步。
-
-两件事，缺一不可：
-  · **红基线**：把建表那一步换回**阻塞版**，同一组输入 ⇒ **必须有进程卡住**
-    （本仓纪律：正控不红不算数——一条从没红过的判据不是判据）；
-  · **绿**：真实现 ⇒ 4/4 在预算内成功、迁移跑到底、**没有留下无效索引**。
-
-## 第二件实测撞出来的事：**杀掉客户端 ≠ PG 那边停了**
-
-红基线要把 4 个子进程 SIGKILL 掉，而它们的 PG 后端**不会跟着退出**——正在跑的
-`CREATE INDEX CONCURRENTLY` 继续跑、继续拿着表上的 `ShareUpdateExclusiveLock`；卡在
-`pg_advisory_lock` 上的那个会在持锁者会话终于消失之后**接着把迁移跑完**。第一版没清这些
-僵尸会话，于是**① 之后 ② 全卡住**（两个 CIC 后端互等表锁），红的像是真实现。
-
-所以每一相之间走 `_quiesce()`：把这类会话 `pg_terminate_backend` 掉，再等这个库真的静下来
-（没有别的会话 + 咨询锁已放开）才往下走。**这一条不是防御性编程**——它和本件要判的那个
-死锁是同一个机制的另一副面孔：进程死了，数据库那边的活还在。
-
-⚠️ 同一件事还有一个副作用：① 里偶发有子进程打完 `OK` 却仍然"卡住"（池的非守护线程拖着
-解释器不退出，不是建表没跑完）。所以红基线真正的硬判据是**迁移没跑到底**（`max(v) < N`），
-不是"卡住几个进程"。
-
-⚠️ **它会 `DROP TABLE`**（那正是"第一次启动"的前提）。所以它**只认一个专门的测试库**：
-DSN 指到产线库（`saudade_blog`）上**当场拒跑**。
-
-用法：
-  SAUDADE_CKPT_TEST_DSN='postgresql://…@127.0.0.1:5432/saudade_it' \\
-      .venv/bin/python tests/test_checkpoint_setup_concurrent.py
-
-**没有那个变量时这一件不报绿，它报「未评估」**（一整块大字），并且
-`SAUDADE_REQUIRE_CKPT_TEST=1` 会把"未评估"变成失败——本仓把"没量"与"量了是绿的"
-分得很开（同 `tests/_parent_repo.py` 那条：找不到父仓就响亮地说"没验"，不许静默算过）。
-那一条自己每次运行都另打一行**每次运行都报**这一层量没量。
+Requires a dedicated disposable database; never uses the deployment DSN.
 """
 
 
@@ -68,7 +16,7 @@ from pathlib import Path
 
 from _judge import collector
 
-ROOT = Path(__file__).resolve().parent.parent
+ROOT = Path(__file__).resolve().parents[2]
 
 
 sys.path.insert(0, str(ROOT))
@@ -99,7 +47,7 @@ def _skip(why: str) -> None:
     print("     正是死在这一层，而当时所有套件全绿 —— 别再让它无声地没量。")
     print("   跑法：")
     print("     SAUDADE_CKPT_TEST_DSN='postgresql://…@127.0.0.1:5432/saudade_it' \\")
-    print("         .venv/bin/python tests/test_checkpoint_setup_concurrent.py")
+    print("         .venv/bin/python tests/integration/test_checkpoint_setup_concurrent.py")
     print("=" * 78)
     if STRICT:
         print("SAUDADE_REQUIRE_CKPT_TEST=1 ⇒ 未评估算失败（本次退出码 1）")
@@ -113,6 +61,10 @@ def _skip(why: str) -> None:
         import pytest  # noqa: PLC0415
         pytest.skip(why, allow_module_level=True)
     raise SystemExit(0)
+
+
+if not DSN:
+    _skip("未设置 SAUDADE_CKPT_TEST_DSN；不连接本机或部署数据库")
 
 
 try:

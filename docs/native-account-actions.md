@@ -102,8 +102,8 @@ Agent 在发送写请求前占用持久执行账。提交后丢响应、进程�
 准备失败关闭，不能改用旧写入口绕过确认。当前共享源码固定在
 [宿主契约锁](../.github/host-contract.json)，测试不依赖本机生产配置。
 
-- `tests/test_account_actions_native.py` 验证五种操作、签名范围、权限、回放、取消及未知结果。
-- `tests/test_catalog_reads.py`、`tests/test_native_capability_metadata.py` 验证目录可见性、
+- `tests/domains/test_account_actions_native.py` 验证五种操作、签名范围、权限、回放、取消及未知结果。
+- `tests/test_catalog_reads.py`、`tests/runtime/test_native_capability_metadata.py` 验证目录可见性、
   初始身份枚举及账号读取，不依赖真实模型。
 - `tests/test_moderation_reads.py` 验证匿名和冒用自由留名仍返回实际发表账号，非管理员拒绝读取。
 - `tests/test_confirmation_continuation.py`、`tests/test_framework_kernel.py` 验证真实框架暂停、

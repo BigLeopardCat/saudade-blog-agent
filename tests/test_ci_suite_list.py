@@ -60,16 +60,16 @@ _TAKE = ("import json,sys;sys.path.insert(0,%r);"
          " 'iot_enabled': bool(settings.iot_enabled)}))")
 
 
-def _mismatch(ignore: bool) -> list[str] | None:
+def _mismatch(ignore: bool, directory: pathlib.Path) -> list[str] | None:
     """子进程里 settings 与**声明的默认值**不同的字段名；子进程没跑成就 None。"""
-    env = dict(os.environ)
+    env = {k: v for k, v in os.environ.items() if k.casefold() not in conftest._CONFIG_ENV}
     env.pop("SAUDADE_IGNORE_ENV_FILE", None)
     for k in conftest._PINNED:
         env.pop(k, None)
     if ignore:
         env["SAUDADE_IGNORE_ENV_FILE"] = "1"
     out = subprocess.run([sys.executable, "-c", _PROBE % (str(ROOT), json.dumps(_DEFAULTS))],
-                         cwd=str(ROOT), env=env, capture_output=True, text=True, timeout=120)
+                         cwd=directory, env=env, capture_output=True, text=True, timeout=120)
     if out.returncode != 0:
         return None
     return json.loads(out.stdout.strip().splitlines()[-1])
@@ -179,7 +179,7 @@ def _check_public_host_source(_eval_txt):
     check("CI 自检落位锚，防止空目录假绿", "test -f _parent/src/routes/chat.rs" in _eval_txt)
 
 
-def test_ci_suite_list():
+def test_ci_suite_list(tmp_path):
     EVAL_YML = ROOT / ".github" / "workflows" / "eval.yml"
     NIGHTLY = ROOT / "scripts" / "nightly_regression.sh"
     _ALLOWED: set[str] = set()  # 一个都不许：入口按目录收集，点名哪个都是抄名单
@@ -236,15 +236,13 @@ def test_ci_suite_list():
     print("\n④b 出厂环境：离线套件**不读 .env**（20260928）")
     check("入口设了 SAUDADE_IGNORE_ENV_FILE=1（环境由入口定义，不由这台机器定义）",
           conftest._PINNED.get("SAUDADE_IGNORE_ENV_FILE") == "1", str(conftest._PINNED))
-    _factory = _mismatch(ignore=True)
+    (tmp_path / ".env").write_text("LLM_TEMPERATURE=0.123\n")
+    _factory = _mismatch(ignore=True, directory=tmp_path)
     check("机制真的咬：带 SAUDADE_IGNORE_ENV_FILE=1 的子进程里，一个字段都不偏离默认值",
           _factory == [], f"偏离的字段={_factory}")
-    _ambient = _mismatch(ignore=False)
-    if (ROOT / ".env").exists():
-        check("对照（本机有 .env）：不带那个变量时**确实有偏离**（否则这一整套是装饰）",
-              bool(_ambient), f"本机偏离的字段={_ambient}")
-    else:
-        print("  ⏭  没有 .env（CI 就这样）⇒ 这一半无从对照；机制那半已在上一条验过")
+    _ambient = _mismatch(ignore=False, directory=tmp_path)
+    check("显式读取临时配置时只改变夹具字段，不依赖开发机的 .env",
+          _ambient == ["llm_temperature"], f"偏离的字段={_ambient}")
     _eff = _pinned_effective()
     check("⭐⭐ 入口钉住的档位**真的生效**（钉了不生效 ⇒ 套件按另一档跑，且静默）",
           _eff is not None
@@ -284,7 +282,7 @@ def test_ci_suite_list():
     _patterns = _cone_patterns(_eval_txt)
     _cone = ", ".join(_patterns)                       # 只给下面失败信息里的"锥=…"用
     _reads: dict[str, list[str]] = {}
-    for _p in sorted((ROOT / "tests").glob("*.py")):
+    for _p in sorted((ROOT / "tests").rglob("*.py")):
         for _rel in re.findall(r'_parent_repo\.read\(\s*"([^"]+)"', _p.read_text(encoding="utf-8")):
             _reads.setdefault(_rel, []).append(_p.name)
     _outside = sorted(f"{rel}（{'+'.join(who)}）" for rel, who in _reads.items()
@@ -378,7 +376,3 @@ def test_offline_suite_blocks_network_sockets():
     with pytest.raises(SocketBlockedError):
         with socket.socket():
             pytest.fail("offline tests must not create network sockets")
-
-
-if __name__ == "__main__":
-    test_ci_suite_list()

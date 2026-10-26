@@ -27,10 +27,6 @@
     "lines": 1183,
     "top_defs": 36
   },
-  "scripts/dev/pytest_migrate.py": {
-    "lines": 995,
-    "top_defs": 36
-  },
   "tests/test_authz.py": {
     "lines": 881,
     "top_defs": 2

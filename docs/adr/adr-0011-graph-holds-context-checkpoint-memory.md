@@ -352,7 +352,7 @@ saver、同会话并发两轮；外加 `pyproject.toml` / `uv.lock` 的依赖。
 ——它读的是**活体对象上有没有 saver**（`agent/probe.py`，与 `/health` 的
 `checkpoint_backend` 同一个取值实现），不是 `CHECKPOINT_DSN`。于是"配了 DSN 但没挂上"与
 "没配 DSN"在源码形状上是同一个形态，**半接在结构上不可能**；
-`tests/test_checkpoint_adoption.py` 判的就是"四处形态一致"，四条反控各拨一处全部翻红。
+`tests/runtime/test_checkpoint_adoption.py` 判的就是"四处形态一致"，四条反控各拨一处全部翻红。
 
 **建表加了一把咨询锁**：`saver.setup()` 幂等但**不并发安全**（每条迁移末尾
 `INSERT INTO checkpoint_migrations (v)`，**没有 `ON CONFLICT`**），而产线是 `--workers 4`
@@ -407,7 +407,7 @@ saver、同会话并发两轮；外加 `pyproject.toml` / `uv.lock` 的依赖。
 
 **为什么四层判据全绿**：前三层（含那两条"连不上要响亮抛"）**全在 `127.0.0.1:1` 这种必然
 失败的 DSN 上判**——"真连上一个库、真跑一次迁移、4 个进程真的同时来"这条路径**从来没有被
-跑过**。补的第四层是 `tests/test_checkpoint_setup_concurrent.py`（真连库、4 进程同时建表），
+跑过**。补的第四层是 `tests/integration/test_checkpoint_setup_concurrent.py`（真连库、4 进程同时建表），
 它的红基线是**把建表换回阻塞版**：同一套脚手架下必须卡住、且**迁移跑不完**（实测
 `max(v)=5 < 9`），真实现下 4/4 成功。**"前提不可用"与"前提不可用所以没量"是两件事**——
 这一层缺库时报「未评估」，`tests/run_all.py`（已删）的汇总里每次运行都另起一行说清这次量没量。
