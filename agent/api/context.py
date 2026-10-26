@@ -49,8 +49,9 @@ def build_messages(req: ChatRequest, *, holds_context: bool = False) -> list:
         messages.extend(_host_history(req))
     if req.image:
         images = [req.image] if isinstance(req.image, str) else req.image
-        content: list = [{"type": "image_url", "image_url": {"url": url}} for url in images]
-        content.append({"type": "text", "text": f"[当前问题]: {req.message or '请描述这些图片'}"})
+        content: list = [{"type": "text", "text":
+                          f"[当前问题]: {req.message or '请描述这些图片'}"},
+                         *({"type": "image_url", "image_url": {"url": url}} for url in images)]
         messages.append(HumanMessage(content=content))
     else:
         messages.append(HumanMessage(content=f"[当前问题]: {req.message}"))
