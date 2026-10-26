@@ -3,7 +3,8 @@
 类型：§0–§5 为现状与操作步骤；§6–§8 为待目标机验证的门槛、引擎候选与验收记录。
 
 本文适用于另一台 **4 核、4GB、Linux x86_64** 服务器，Python 3.12、systemd ≥249。
-本轮只在开发机验证；生产机部署与业务灰度尚未执行。先部署到隔离发布目录，保留当前服务版本。
+目标机的BGE Q8低流量试点已于20261027启用，结果及未完成指标见
+[部署记录](local-bge-production-20261027.md)。以下保留可复现的准备、预检与回退步骤。
 评测结果和来源见 [中文模型对照](../eval/t2-chinese-baseline.md)，输入预算见
 [embedding-inputs.md](embedding-inputs.md)。
 
@@ -95,19 +96,19 @@ sudo systemctl status saudade-embedding@bge-q8 --no-pager
 
 仅首次创建密钥；已有密钥轮换需同步 Agent 配置。不要将密钥放进命令行、提交或报告。
 模板只监听 `127.0.0.1:18081`，启用 API key、禁用 Web UI，以 systemd credential 传密钥。
-DynamicUser 只读资产；并发 1、2 个推理线程、512-token 完整输入上限。
-CPUQuota=200%，MemoryHigh=1G、MemoryMax=1280M、无服务 swap。
+DynamicUser 只读资产；并发1、单推理线程、512-token完整输入上限。
+CPUQuota=100%、CPUWeight=20、Nice=5，MemoryHigh=1G、MemoryMax=1280M、无服务swap。
 这些是资源约束，不是性能验收结果。目标机若架构、系统版本或 CPU 指令集不同，先验证
 官方二进制兼容性；启动失败时查 `journalctl -u saudade-embedding@bge-q8`。
 日志可能有内部路径，上传前脱敏。
 
-本轮未在目标机安装 unit。模板的系统级启动、cgroup 限额与重启恢复须在那里验收。
-首次调试用 `start`；通过整套验收后再决定是否 `enable` 开机启动。
+目标机已经安装unit并启用开机启动。其他部署首次调试先用`start`，完成自身验收后再`enable`。
 
 ## 4. Agent 配置和操作命令
 
 把下面字段写入 `/etc/saudade/agent-embedding.env`，仅实际 Agent 运行账号可读。
-`BLOG_API_BASE` 必须指向自己的宿主后端公开 API 根路径，不能沿用仓库示例站点。
+`BLOG_API_BASE`沿用主配置中自己的对外公开API根路径，不在embedding覆盖文件里重写。
+当前浏览器链接也从该地址派生，不能为模型内网通信将其改为loopback地址。
 宿主需具有版本化 `/api/public/rag/corpus` 接口（宿主 RAG 协议改动已合并）。
 
 ```dotenv
@@ -120,15 +121,15 @@ EMBEDDING_PROFILE=/opt/saudade-embedding/bge-q8.json
 EMBEDDING_BATCH_SIZE=1
 EMBEDDING_TIMEOUT=3
 RAG_VECTOR_DIR=/var/lib/saudade-agent/rag-bge-q8
-BLOG_API_BASE=http://127.0.0.1:8080/api/public
 ```
 
-`8080` 是示例端口，改成宿主实际端口。3 秒是初始故障等待上限，按目标机延迟验收调整。
+3秒是初始故障等待上限，按目标机延迟验收调整。
 用受保护的编辑器或脚本从密钥文件读取，禁止把密钥复制进 shell 命令或输出。
 创建向量目录并设为实际 Agent 用户所有，保证有足够空间保留新旧向量代。
-在现有 Agent systemd unit 的 drop-in 中增加
-`EnvironmentFile=/etc/saudade/agent-embedding.env`；在放行业务前先独立运行下列命令。
+在现有Agent systemd unit的drop-in中安装`deploy/embedding/agent-local-bge.conf`，
+通过弱依赖启动模型，模型故障不停止Agent。放行业务前先独立运行下列命令。
 CLI 以实际 Agent 用户、发布目录和同一虚拟环境执行，配置文件权限应允许该用户读取。
+运维shell若设置HTTP代理，应让localhost和127.0.0.1走`NO_PROXY`，避免本机模型请求经代理。
 
 ```bash
 .venv/bin/python -m rag.manage --env-file /etc/saudade/agent-embedding.env \

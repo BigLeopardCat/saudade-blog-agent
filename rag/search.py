@@ -161,8 +161,11 @@ _route = threading.local()
 
 
 def _record(mode: str, reason: str | None, vectors: int = 0, missing: int = 0) -> None:
+    from utils.trace import record
+
     _route.last = {"mode": mode, "reason": reason,
                    "vectors": vectors, "missing": missing}
+    record("rag", "retrieval", **_route.last)
 
 
 def last_route() -> dict:
