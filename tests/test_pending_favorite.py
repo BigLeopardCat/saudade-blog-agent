@@ -36,6 +36,8 @@ class Model:
             AIMessage(content="", tool_calls=[{
                 "name": name, "args": args or {}, "id": "pending"}])]
             if name else [AIMessage(content="你好，有什么想聊的？")])
+        if name == "cancel_pending_operation":
+            self.responses.append(AIMessage(content="好，刚才那项已取消。"))
 
     def bind_tools(self, tools, **kwargs):
         return self
@@ -169,7 +171,8 @@ def test_storage_failure_emits_no_cancellation_and_old_card_still_cannot_write(
     if fault == "ledger":
         monkeypatch.setattr(ledger, "finish", failed)
     else:
-        monkeypatch.setattr(runtime.store, "update_state", failed)
+        # The isolated Agent is transferred to a framework checkpoint at revocation.
+        monkeypatch.setattr(runtime.saver, "put", failed)
     runtime.model_factory = lambda **_: Model("cancel_pending_operation")
     stream = runtime.stream_events({"messages": [HumanMessage(content="取消待办")]}, config())
     with pytest.raises(RuntimeError, match="storage unavailable"):

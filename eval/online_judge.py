@@ -58,7 +58,9 @@ def runtime_context(events):
             if event.get("event") in {"tool_requested", "call"}}
     contracts = [event["schema"]["function"] for event in native
                  if event.get("event") == "tool_contract"]
+    product = [event for event in native if event.get("event") == "product_context"]
     return {
+        "product_facts": product[-1].get("facts") if product else None,
         "caller": callers[-1].get("caller") if callers else None,
         "permissions": callers[-1].get("permissions") if callers else None,
         "turn_phase": phases[-1].get("phase") if phases else "not_recorded",

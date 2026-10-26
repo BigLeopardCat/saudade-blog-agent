@@ -49,7 +49,7 @@ class PendingOperation:
                                         **execution, "pending_event": event})
 
     def cancel_tool(self, saver):
-        @tool(return_direct=True)
+        @tool
         def cancel_pending_operation(config: RunnableConfig) -> object:
             """用户明确要求放弃当前待确认操作时调用；撤销旧确认卡，不执行业务改动。"""
             return self.cancel(config, saver)

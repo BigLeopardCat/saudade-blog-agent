@@ -13,6 +13,7 @@ class ExecutionState(AgentState, total=False):
     resume: dict | None
     run_id: str | None
     terminal: dict | None
+    effects: dict
 
 
 def capture(session):
@@ -20,6 +21,7 @@ def capture(session):
     proposal = ({"reply": outcome.reply, "execution": outcome.execution}
                 if outcome and (outcome.execution or {}).get("pending_confirm") else None)
     return {"loaded": list(session.loaded),
+            "effects": dict(session.effects),
             "run_id": session.task.get("id") if session.task else None,
             "terminal": ({"reply": outcome.reply, "execution": outcome.execution}
                          if outcome and proposal is None else None),
@@ -28,6 +30,9 @@ def capture(session):
 
 
 def restore(session, state):
+    session.effects = {**(state.get("effects") or {}), **session.effects}
+    if session.effects.get("pending_event"):
+        session.outcome_adapter = None
     for domain in state.get("loaded") or []:
         if domain in session.domains and domain not in session.loaded:
             session.tools.update(session.domains[domain])
