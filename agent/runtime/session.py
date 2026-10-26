@@ -4,6 +4,7 @@ The framework schedules model and tool rounds. The application owns authorized
 capabilities, evidence, budgets and the existing signed confirmation protocol.
 """
 
+import hashlib
 import json
 
 from langchain_core.messages import AIMessageChunk, ToolMessage
@@ -134,14 +135,14 @@ class ToolSession:
 
     def _append_result(self, call, prompt, round_index, attachments):
         name = call["name"]
-        record("native", "tool_requested", name=name)
+        record("native", "tool_requested", name=name, call_id=call["id"])
         if name in self.loaders:
             domain = self.loaders[name]
             if domain not in self.loaded:
                 self.tools.update(self.domains[domain])
                 self.loaded.append(domain)
                 emit_progress(self.config, f"正在加载工具领域：{domain}", key=f"domain:{domain}")
-                record("native", "load_domain", domain=domain)
+                record("native", "load_domain", domain=domain, call_id=call["id"])
                 self.llm = self._bind_menu()
             prompt.append(ToolMessage(content=f"{domain} 工具已加载。",
                                       tool_call_id=call["id"]))
@@ -175,9 +176,9 @@ class ToolSession:
         prompt.append(messages[0])
         attachments.extend(messages[1:])
         self.result_chars += len(body)
-        record("native", "call", name=name, args=args, round=round_index,
+        record("native", "call", name=name, args=args, call_id=call["id"], round=round_index,
                kind=kind, result=trace_mod.tool_result_text(body, name))
-        record("native", "tool_result", name=name, result_chars=len(body))
+        record("native", "tool_result", name=name, call_id=call["id"], result_chars=len(body))
         return True
 
     @staticmethod
@@ -197,7 +198,11 @@ class ToolSession:
         kind = ("prepared" if execution.get("pending_confirm") else
                 "noop" if execution.get("noop_note") else
                 "cancelled" if execution.get("pending_event") else "terminal")
-        record("native", "call", name=call["name"], round=round_index, kind=kind)
+        args_hash = hashlib.sha256(json.dumps(
+            call["args"], sort_keys=True, ensure_ascii=False, separators=(",", ":")
+        ).encode()).hexdigest()
+        record("native", "call", name=call["name"], args_hash=args_hash,
+               call_id=call["id"], round=round_index, kind=kind)
         if kind == "noop":
             self.effects.update(execution)
             prompt.append(ToolMessage(content=adapted.reply, name=call["name"],
