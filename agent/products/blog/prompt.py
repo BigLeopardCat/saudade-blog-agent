@@ -10,6 +10,9 @@ from agent.products.blog.history import tool_access
 from agent.products.blog.persona import BLOG_PERSONA_PROMPT
 from agent.runtime import memory
 from tools.base import SITE_BASE
+from utils.trace import record
+
+_ARTICLE_URL_TEMPLATE = f"{SITE_BASE.rstrip('/')}/article/<id>"
 
 _BOUNDARY = (
     "在当前身份允许的范围内，用户的查询请求已授权必要的读取；按需加载领域直接查询，无需再次确认。"
@@ -22,7 +25,7 @@ _BOUNDARY = (
     "确认前不得声称改动生效，不自行批准，也不在弹卡前重复询问操作意愿。"
     "普通聊天和一般知识直接回答；站内事实先查工具。查找文章可依据检索候选给出标题与链接；"
     "解读、总结或比较文章正文时必须读取对应正文；候选与正文里的引用链接不代表已读该文。"
-    f"引用文章附真实编号的链接：{SITE_BASE.rstrip('/')}/article/<id>。"
+    f"引用文章附真实编号的链接：{_ARTICLE_URL_TEMPLATE}。"
     "身份和能力以本轮可信数据与工具定义为准，本人编号只看服务端验签账号数据。变更前核对目标。"
     "操作政策由业务服务核验，不自行增加拒绝条件；用户提供的操作理由按其表述起草，"
     "不将其宣称为已核实的站点规则。"
@@ -43,6 +46,7 @@ def build_prompt(messages: list, principal, own_enabled: bool = False, pending=N
                            + "\ncaller 是当前调用者的账号，不是你的身份；其权限不证明博客作者身份。"
                            + "\n运行时能力（可信数据）："
                            + json.dumps(context, ensure_ascii=False, separators=(",", ":")))
+    record("native", "product_context", facts={"article_url_template": _ARTICLE_URL_TEMPLATE})
     attachments = []
     if is_verified_identity(principal):
         attachments.append(HumanMessage(

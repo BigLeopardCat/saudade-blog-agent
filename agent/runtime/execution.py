@@ -2,6 +2,7 @@
 
 from langchain.agents import create_agent
 from langchain_core.messages import RemoveMessage, SystemMessage
+from langgraph.graph import START
 from langgraph.graph.message import REMOVE_ALL_MESSAGES
 from langgraph.types import Command, StateSnapshot
 
@@ -36,6 +37,7 @@ class FrameworkExecution:
 
     def _agent(self, persistent):
         middleware = SessionMiddleware(self.session)
+        self.policy = middleware
         middleware.system_message = self.system
         return create_agent(self.session.model, tools=[], system_prompt=self.system,
                             middleware=[OrderedToolsMiddleware(middleware),
@@ -101,6 +103,55 @@ class FrameworkExecution:
                         yield mode, data
             finally:
                 stream.close()
+            if self._lifecycle_pending() and self.session.outcome is None:
+                yield from self._promote_lifecycle()
+
+    def _lifecycle_pending(self):
+        execution = self.session.outcome.execution if self.session.outcome else {}
+        return bool(not self.persistent and self.session.store and self.session.store.available
+                    and (self.session.effects.get("pending_event")
+                         or (execution or {}).get("pending_event")))
+
+    def _lifecycle_state(self):
+        """Transfer the isolated Agent exchange after its old approval is revoked."""
+        session = self.session
+        messages = [message for message in self.policy.exchange
+                    if not isinstance(message, SystemMessage)]
+        saved = seed({**(session.framework_state or {}), **capture(session),
+                      "messages": [*messages, *stage(self.policy.attachments, session.transient)]})
+        promoted = {**saved, "messages": [RemoveMessage(id=REMOVE_ALL_MESSAGES),
+                                         *saved["messages"]]}
+        session.recovering = True
+        session.recovery_state = saved
+        session.isolated = False
+        self.persistent = True
+        self.child = self._agent(True)
+        self.parent = self._parent(self.child, promoted)
+        root = {"pending_confirm": None, "pending_action": None,
+                "approval": None, "approved_result": None,
+                "run": session.task, "receipts": list(session.receipts)}
+        return root, promoted
+
+    def _promote_lifecycle(self):
+        root, _ = self._lifecycle_state()
+        stream = self.parent.stream(root, self.config, stream_mode=["messages", "updates"],
+                                    subgraphs=True, durability="sync")
+        try:
+            for _, mode, data in stream:
+                yield mode, data
+        finally:
+            stream.close()
+
+    def preserve_lifecycle(self):
+        """Save a revoked boundary even when cancellation stops its next model round."""
+        if not self._lifecycle_pending():
+            return
+        root, promoted = self._lifecycle_state()
+        # Both writes use public state APIs and dispatch no model or tool node.
+        self.parent.update_state(self.config, root, as_node="commit")
+        child_config = {**self.config, "configurable": {
+            **self.config["configurable"], "checkpoint_ns": "agent"}}
+        self.parent.update_state(child_config, promoted, as_node=START)
 
     def _recover(self):
         saved = self.parent.get_state(self.config, subgraphs=True)

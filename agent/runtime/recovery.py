@@ -42,6 +42,7 @@ def restore_session(session, state):
             calls.update({call["id"]: call for call in message.tool_calls})
         elif isinstance(message, ToolMessage):
             artifact = message.artifact or {}
+            session.effects.update(artifact.get("effects") or {})
             if "kind" in artifact and not artifact.get("phase"):
                 result_chars += len(text_content(message.content))
             session.receipts.extend(artifact.get("receipts") or [])
@@ -52,6 +53,8 @@ def restore_session(session, state):
                 session.observations.extend(memory.observation(
                     calls[message.tool_call_id], message))
     session.result_chars = max(session.result_chars, result_chars)
+    if session.effects.get("pending_event"):
+        session.outcome_adapter = None
     # A completed child may precede the interrupted parent commit.
     last = messages[-1] if messages else None
     if session.outcome is None and isinstance(last, AIMessage) and not last.tool_calls:

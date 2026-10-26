@@ -130,7 +130,8 @@ def test_admin_compound_task_preserves_approval_stages_and_final_business_state(
     if cancel:
         responses.extend([
             AIMessage(content="", tool_calls=[call("load_pending_info_tools")]),
-            AIMessage(content="", tool_calls=[call("cancel_pending_operation")])])
+            AIMessage(content="", tool_calls=[call("cancel_pending_operation")]),
+            AIMessage(content="已取消剩下的任务。")])
     else:
         responses.append(AIMessage(content="通知已发送，账号身份已调整为杂鱼。"))
     remaining = iter(responses)
@@ -168,6 +169,7 @@ def test_native_outcome_suite_uses_verified_identity_and_redacts_tokens(monkeypa
         call("load_favorites_info_tools", {}),
         call("prepare_favorite_change", {"action": "add", "article_id": 19}),
         call("load_pending_info_tools", {}), call("cancel_pending_operation", {}),
+        AIMessage(content="旧操作已取消。"),
         call("load_notifications_info_tools", {}),
         call("prepare_notification_read", {"scope": "all_unread"}),
         AIMessage(content="已标记本次确认的通知为已读。"),
