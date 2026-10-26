@@ -152,7 +152,7 @@ class SessionMiddleware(AgentMiddleware):
                   *hydrate(request.messages, session.transient)]
         final = final_prompt(session.budget, prompt, session.menu, session.output_limit,
                              results_full=session.result_chars >= session.result_limit,
-                             model_key=id(request.model))
+                             model_key=request.model)
         model = request.model
         selected_model = _model_name(model)
         if final:
@@ -171,7 +171,7 @@ class SessionMiddleware(AgentMiddleware):
         started, response = time.monotonic(), None
         tool_choice = ("none" if session.finalizing else "auto") if session.menu else None
         try:
-            with native_call(session.budget, prompt, session.menu, model_key=id(request.model),
+            with native_call(session.budget, prompt, session.menu, model_key=request.model,
                              output_limit=session.output_limit) as ticket:
                 messages = prompt[1:] if request.system_message else prompt
                 result = handler(request.override(
