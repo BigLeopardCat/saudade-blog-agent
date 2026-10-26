@@ -302,6 +302,8 @@ try {
   assert.equal(fullRequests[1].body.resume_task, fullRequests[0].body.task_id);
   assert.equal(fullRequests[1].body.browser_result.path, '/guestbook');
   assert.equal(fullRequests[1].body.browser_result.status, 'completed');
+  const fullProgress = await fullPage.locator('.agent-process-line').allTextContents();
+  assert.deepEqual(fullProgress, ['正在调用工具：navigate_page', '从已保存的进度继续']);
   await fullContext.close();
   passed('full-page navigation restores the pending task and narrates from the new page');
   await reset();
@@ -338,6 +340,19 @@ try {
 
   await reset();
   await send('测试停止生成', 'hold');
+  await page.locator('.chat-typing.typing-visible').waitFor({ state: 'visible' });
+  const loadingLayout = await page.locator('.chat-typing.typing-visible').evaluate(spinner => {
+    const row = spinner.getBoundingClientRect();
+    const message = spinner.closest('.chat-msg');
+    const process = message.querySelector('.agent-process').getBoundingClientRect();
+    const text = message.querySelector('.msg-text').getBoundingClientRect();
+    return { before: process.bottom <= row.top, after: row.bottom <= text.top,
+      contained: [...spinner.children].every(dot => {
+        const r = dot.getBoundingClientRect();
+        return r.top >= row.top && r.bottom <= row.bottom;
+      }) };
+  });
+  assert.deepEqual(loadingLayout, { before: true, after: true, contained: true });
   const originalTask = requests.filter(x => x.path === '/api/chat/stream').at(-1).body.task_id;
   const beforeStop = requests.filter(x => x.path === '/api/chat/stream').length;
   const beforeDiscard = requests.filter(x => x.path === '/api/chat/discard').length;
