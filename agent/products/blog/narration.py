@@ -8,7 +8,7 @@ from openai import OpenAIError
 
 from agent.llm_usage import usage_fields
 from agent.products.blog.context import conversation_context
-from agent.products.blog.persona import BLOG_PERSONA_PROMPT
+from agent.products.blog.persona import BLOG_PERSONA_PROMPT, conversation_style
 from agent.runtime.budget import RequestBudget, current_budget, native_call
 from agent.runtime.control import model_options
 from agent.runtime.finalization import incomplete_response
@@ -23,7 +23,8 @@ def narrate(result, config):
     """Never change execution facts or turn a narration failure into a write retry."""
     fallback = result.reply
     principal = ((config or {}).get("configurable") or {}).get("principal")
-    caller = conversation_context(principal)["caller"]
+    caller = {**conversation_context(principal)["caller"],
+              "conversation_style": conversation_style(principal)}
     prompt = [
         SystemMessage(
             content=BLOG_PERSONA_PROMPT + "\n"
