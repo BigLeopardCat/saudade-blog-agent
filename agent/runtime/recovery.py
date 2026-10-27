@@ -4,7 +4,7 @@ import uuid
 
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
-from agent.runtime import approval, memory
+from agent.runtime import memory, task_scope
 from agent.runtime.execution_state import restore
 from agent.runtime.memory_media import compact
 from agent.runtime.message_content import text_content
@@ -12,7 +12,7 @@ from agent.runtime.message_content import text_content
 
 def new_run(config, messages, task_id=None):
     try:
-        scope = approval.binding(config)
+        scope = task_scope.binding(config)
     except ValueError:
         return None
     return {"id": task_id or uuid.uuid4().hex, "scope": scope,
@@ -23,7 +23,7 @@ def allowed(snapshot, task_id, config):
     run = snapshot.run
     try:
         return bool(snapshot.unfinished and not snapshot.has_pending and run
-                    and run["id"] == task_id and run["scope"] == approval.binding(config))
+                    and run["id"] == task_id and run["scope"] == task_scope.binding(config))
     except (KeyError, ValueError):
         return False
 
@@ -34,7 +34,8 @@ def restore_session(session, state):
     messages = state.get("messages") or []
     session._restore_domains(messages)
     start = max((i for i, message in enumerate(messages) if isinstance(message, HumanMessage)
-                 and not memory.is_context(message)), default=0)
+                 and not memory.is_context(message)
+                 and not message.additional_kwargs.get("task_input")), default=0)
     calls = {}
     result_chars = 0
     for message in messages[start:]:
@@ -71,6 +72,19 @@ def discard_interrupted(runtime, config, values, text):
 
     target = next((m for m in reversed(run["input"])
                    if isinstance(m, HumanMessage) and not memory.is_context(m)), None)
+    inbox = getattr(runtime, "inputs", None)
+    if inbox is not None:
+        from agent.runtime.task_inputs import InputConflict
+        from agent.runtime.task_inputs import messages as input_messages
+
+        try:
+            accepted = inbox.read(run["id"], run["scope"])["inputs"]
+        except InputConflict:
+            accepted = []
+        applied = input_messages([item for item in accepted if item["status"] == "applied"],
+                                 run["id"])
+        if applied:
+            target = applied[-1]
     if target is None or not _same_turn(_user_text_of(target), text):
         return {"dropped": False, "why": "mismatch"}
     runtime.update_state(config, {"run": None})

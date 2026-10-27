@@ -14,6 +14,7 @@ class ExecutionState(AgentState, total=False):
     run_id: str | None
     terminal: dict | None
     effects: dict
+    applied_inputs: list[str]
 
 
 def capture(session):
@@ -21,6 +22,7 @@ def capture(session):
     proposal = ({"reply": outcome.reply, "execution": outcome.execution}
                 if outcome and (outcome.execution or {}).get("pending_confirm") else None)
     return {"loaded": list(session.loaded),
+            "applied_inputs": sorted(session.applied_inputs),
             "effects": dict(session.effects),
             "run_id": session.task.get("id") if session.task else None,
             "terminal": ({"reply": outcome.reply, "execution": outcome.execution}
@@ -30,6 +32,7 @@ def capture(session):
 
 
 def restore(session, state):
+    session.applied_inputs.update(state.get("applied_inputs") or [])
     session.effects = {**(state.get("effects") or {}), **session.effects}
     if session.effects.get("pending_event"):
         session.outcome_adapter = None
