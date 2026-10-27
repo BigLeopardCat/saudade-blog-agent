@@ -116,9 +116,29 @@ def test_heading_paths_and_bounded_chunks_are_searchable(monkeypatch):
 
 
 def test_bm25_normalizes_using_total_token_length(monkeypatch):
-    ix = index(monkeypatch, [{"type": "note", **doc(1, "alpha " * 100, "t")}])
-    assert ix._avgdl == 101
-    assert ix._lengths == [101]
+    import bm25s
+
+    ix = index(monkeypatch, [{"type": "note", **doc(1, "alpha " * 100, "t")},
+                             {"type": "note", **doc(2, "alpha " + "beta " * 99, "t")}])
+    reference = bm25s.BM25(k1=retrieval.BM25_K1, b=retrieval.BM25_B,
+                           method="lucene", dtype="float64")
+    reference.index([["t", *(["alpha"] * 100)], ["t", "alpha", *(["beta"] * 99)]],
+                    show_progress=False)
+    expected = reference.get_scores(["alpha"])
+    actual = {row["id"]: row["score"] for row in ix._lexical_ranked("alpha", 10)}
+    assert actual == pytest.approx({1: expected[0], 2: expected[1]}, abs=5e-5)
+
+
+
+@pytest.mark.parametrize("rows,expected", [
+    ([doc(1, "!!!", "!!!")], []),
+    ([doc(1, "!!!", "!!!"), doc(2, "alpha", "Text")], [2]),
+])
+def test_lexical_index_handles_empty_token_documents(monkeypatch, rows, expected):
+    ix = index(monkeypatch, [{"type": "note", **row} for row in rows])
+    assert [row["id"] for row in ix._lexical_ranked("alpha", 10)] == expected
+    assert ix._lexical_ranked("unseenword", 10) == []
+    assert ix.status()["lexical_backend"]["name"] == "bm25s"
 
 
 def test_concurrent_build_has_only_one_source_fetch(monkeypatch):
