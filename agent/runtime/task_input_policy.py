@@ -49,3 +49,21 @@ def events(session, data, reported):
         if any(item["id"] not in reported for item in applied):
             reported.update(item["id"] for item in applied)
             yield TaskInputEvent({"task_id": task_id, "inputs": applied})
+
+
+def replace_unpublished_proposal(session, state):
+    execution = session.outcome.execution if session.outcome else {}
+    if not (execution or {}).get("pending_confirm"):
+        return []
+    extra = additions(session, state)
+    if not extra:
+        return []
+    replaced = [message.model_copy(update={
+        "content": "用户补充了要求，原操作未执行，将按新要求重新处理。",
+        "artifact": {"phase": "superseded"}})
+        for message in state.get("messages", []) if isinstance(message, ToolMessage)
+        and (message.artifact or {}).get("phase") in {"awaiting_approval", "deferred"}]
+    # No confirmation has left the runtime yet. The old proposal is never
+    # published or persisted as the conversation's authorized pending action.
+    session.outcome, session.awaiting_call, session.approval = None, None, None
+    return [*replaced, *extra]
