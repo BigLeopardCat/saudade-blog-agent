@@ -45,6 +45,15 @@ const server = createServer(async (req, res) => {
           }) + frame('done', {}));
           return;
         }
+        if (mode === 'progress') {
+          let step = 0;
+          const timer = setInterval(() => {
+            res.write(frame('progress', '正在调用工具：' + (step % 2 ? 'search_notes' : 'get_article_detail') + ' · ' + ++step));
+            if (step === 16) { clearInterval(timer); res.end(frame('text', '处理完成。') + frame('done', {})); }
+          }, 100);
+          res.on('close', () => clearInterval(timer));
+          return;
+        }
         res.write(frame('progress', '正在调用工具：search_notes'));
         res.write(frame('progress', '正在整理会话摘要…'));
         res.write(frame('text', mode === 'literal' ? literal : (mode === 'hold' ? '这是保留的部分回复。' : '离线测试回复：已收到你的消息。')));
@@ -184,7 +193,17 @@ try {
   const initialBounds = await workspaceBounds();
   assert.ok(initialBounds.panel.bottom <= initialBounds.avatar.top - 8, JSON.stringify(initialBounds));
   assert.ok(initialBounds.header.height <= 38 && initialBounds.rail.width <= 34, JSON.stringify(initialBounds));
-  assert.ok(initialBounds.composer.height <= 64, JSON.stringify(initialBounds));
+  assert.ok(initialBounds.composer.height < initialBounds.messages.height, JSON.stringify(initialBounds));
+  const composer = await page.locator('.chat-input-area').evaluate(area => {
+    const rect = selector => area.querySelector(selector).getBoundingClientRect();
+    return { inputBottom: rect('textarea').bottom, toolsTop: rect('.chat-composer-tools').top,
+      disclaimerBottom: rect('.chat-disclaimer').bottom, surfaceTop: rect('.chat-input-row').top,
+      alignment: getComputedStyle(area.querySelector('.chat-disclaimer')).textAlign,
+      textareaBorder: getComputedStyle(area.querySelector('textarea')).borderWidth };
+  });
+  assert.ok(composer.inputBottom <= composer.toolsTop && composer.surfaceTop - composer.disclaimerBottom <= 10, JSON.stringify(composer));
+  assert.equal(composer.alignment, 'center');
+  assert.equal(composer.textareaBorder, '0px');
   assert.equal(await page.locator('.chat-kicker, .chat-keyboard-hint, .chat-composer-meta').count(), 0);
   await page.screenshot({ path: path.join(output, 'desktop-empty.png') });
   passed('desktop empty state and empty-send disabled; starters preserve drafts');
@@ -249,10 +268,12 @@ try {
       line: parseFloat(getComputedStyle(paragraph).lineHeight) };
   });
   assert.ok(shortLine.height <= shortLine.line * 1.1, 'Short text must use its natural width in an enlarged window');
+  assert.equal(await page.locator('.msg-bubble').last().evaluate(el => getComputedStyle(el).color), 'rgb(255, 255, 255)');
+  await page.screenshot({ path: path.join(output, 'desktop-light-bubbles.png') });
   const style = await page.locator('#chat-input').evaluate(input => {
     input.focus();
     return { overflow: getComputedStyle(input).overflowY, outline: getComputedStyle(input).outlineStyle,
-      divider: getComputedStyle(input.closest('.chat-input-area')).borderTopWidth };
+      divider: getComputedStyle(input.closest('.chat-input-area').querySelector('.chat-disclaimer')).borderBottomWidth };
   });
   assert.equal(style.overflow, 'hidden');
   assert.equal(style.outline, 'none');
@@ -268,6 +289,26 @@ try {
     assert.ok(alpha >= .75 && alpha < 1, 'Both themes retain translucency');
   }
   passed('readable translucent themes, wide responsive bubbles, one focus border and overflow-only draft scrollbars');
+
+  await reset();
+  nextMode = 'progress';
+  await page.locator('#chat-input').fill('连续显示执行步骤');
+  await page.locator('#chat-send').click();
+  await page.waitForFunction(() => document.querySelectorAll('.agent-process-line').length >= 4);
+  const progressTop = await page.locator('.agent-process-head').last().evaluate(el => el.getBoundingClientRect().top);
+  await page.waitForFunction(() => document.querySelectorAll('.agent-process-line').length >= 12);
+  const progressPosition = await page.locator('.agent-process').last().evaluate(box => {
+    const body = box.querySelector('.agent-process-body');
+    return { top: box.querySelector('summary').getBoundingClientRect().top,
+      overflow: body.scrollHeight - body.clientHeight, distance: body.scrollHeight - body.scrollTop - body.clientHeight };
+  });
+  assert.ok(Math.abs(progressPosition.top - progressTop) <= 1, JSON.stringify({ progressTop, progressPosition }));
+  assert.ok(progressPosition.overflow > 0 && progressPosition.distance <= 2, JSON.stringify(progressPosition));
+  await page.locator('.agent-process-body').last().evaluate(body => { body.scrollTop = 0; });
+  await page.waitForFunction(() => document.querySelectorAll('.agent-process-line').length >= 14);
+  assert.equal(await page.locator('.agent-process-body').last().evaluate(body => body.scrollTop), 0);
+  await idle();
+  passed('progress records scroll internally without shifting their heading or pulling a reader off earlier steps');
 
   for (const outcome of ['success', 'timeout']) {
     await reset();

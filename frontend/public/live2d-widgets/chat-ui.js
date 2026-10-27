@@ -52,6 +52,8 @@
     };
     const copyIcon = '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h3"/></svg>';
     const copiedIcon = '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="m5 12 4 4L19 6"/></svg>';
+    const sendIcon = '<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M12 19V5m-6 6 6-6 6 6"/></svg>';
+    const stopIcon = '<svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor" aria-hidden="true"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>';
     const addCopyButtons = () => {
       messages.querySelectorAll('.chat-msg.agent[data-finished="1"]').forEach(message => {
         if (enhancedMessages.has(message)) return;
@@ -92,9 +94,9 @@
       setAttr(sendBtn, 'aria-label', state.phase === 'sending' ? '停止生成' : '发送消息');
       setAttr(sendBtn, 'title', state.phase === 'sending' ? '停止生成' : '发送消息');
       setAttr(input, 'aria-busy', !!ctx.state.isSending);
-      if (sendBtn.textContent.trim() !== state.label) {
-        if (state.phase === 'sending') sendBtn.innerHTML = '<span class="chat-stop-icon" aria-hidden="true"></span><span>停止</span>';
-        else sendBtn.textContent = state.label;
+      if (sendBtn.dataset.phase !== state.phase || !sendBtn.querySelector('svg')) {
+        sendBtn.innerHTML = state.phase === 'sending' ? stopIcon : sendIcon;
+        sendBtn.dataset.phase = state.phase;
       }
       imageButton.disabled = state.phase !== 'ready';
       const showNotice = state.phase === 'ready' && Date.now() < noticeUntil;
