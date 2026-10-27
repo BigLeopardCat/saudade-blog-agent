@@ -181,6 +181,7 @@ flowchart LR
 │   ├── runtime/memory_media.py                          # 多模态消息的历史引用与临时图片适配
 │   ├── runtime/memory_scope.py                          # 宿主历史与摘要的来源边界
 │   ├── runtime/message_content.py                       # 共用文本提取与框架 token 估算
+│   ├── runtime/visible_text.py                          # 流式正文控制包隔离，不将文本解析为动作
 │   ├── runtime/prompt_budget.py                         # 当前请求与工具 schema 预留后的历史预算
 │   ├── runtime/memory.py                                # 当前生产代码模块
 │   ├── runtime/model_budget.py                          # 当前生产代码模块

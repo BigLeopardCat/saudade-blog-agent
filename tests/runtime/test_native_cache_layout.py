@@ -10,6 +10,7 @@ from langchain_core.tools import tool
 from langchain_core.utils.function_calling import convert_to_openai_tool
 from langgraph.checkpoint.memory import InMemorySaver
 
+from agent.adminops_account import role_cn
 from agent.principal import SOURCE_ASSERTION, Principal
 from agent.products.blog.prompt import build_prompt
 from agent.runtime.native import NativeRuntime
@@ -164,11 +165,12 @@ def test_static_renderer_prefix_is_shared_without_sharing_caller_authority():
         wire = model._get_request_payload(prompt)
         system = wire["messages"][0]["content"]
         facts = json.loads(system.split("运行时能力（可信数据）：", 1)[1])
-        assert facts["caller"]["role"] == role
+        assert facts["caller"]["role"] == role_cn(role)
         assert facts["permissions"] == sorted(scopes_for(role))
+        assert facts["tools"]["loading"] == ("disabled" if role == "zako" else "on_demand")
         assert str(uid) in wire["messages"][-2]["content"]
         systems.append(system)
     shared = commonprefix(systems)
     assert all(f":{name}:" in shared for name in STICKER_NAMES)
-    assert "on_demand" in shared
+    assert '"loading"' in shared
     assert "superadmin" not in shared
