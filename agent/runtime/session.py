@@ -62,6 +62,10 @@ class ToolSession:
         self.awaiting_call = None
         self.framework_state = None
         self.task = None
+        self.input_inbox = None
+        self.inputs_active = False
+        self.input_messages = []
+        self.applied_inputs = set()
         self.recovering = False
         self.recovery_state = None
         self.transient = {}
@@ -77,6 +81,11 @@ class ToolSession:
         self.finalizing = False
         self.traced_contracts = set()
         self.llm = self._bind_menu()
+
+    @property
+    def applied_messages(self):
+        return [message for message in self.input_messages
+                if message.additional_kwargs["task_input"]["id"] in self.applied_inputs]
 
     def _bind_menu(self):
         # Keep discovery schemas in place; domain tools extend the request prefix.
@@ -320,10 +329,13 @@ class ToolSession:
         visible = []
         boundary, model_key = VisibleText(), None
         self.used_stream_api = True
+        reported_inputs = set()
         try:
             for mode, data in stream:
                 check_cancelled(self.config)
                 if mode == "updates" and isinstance(data, dict):
+                    from agent.runtime.task_input_policy import events as input_events
+                    yield from input_events(self, data, reported_inputs)
                     from agent.runtime.client_actions import paused_result
                     paused = paused_result(data)
                     if paused is not None:

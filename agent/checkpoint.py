@@ -171,6 +171,8 @@ def _setup_under_lock(saver, *, pool, now=time.monotonic, sleep=time.sleep,
             from agent import idem_pg
             from agent.runtime import checkpoint_store
             checkpoint_store.setup(conn)
+            from agent.runtime import task_input_store
+            task_input_store.setup(conn)
             idem_pg.initialize(conn)
         finally:
             # `autocommit=True` 下 `pg_try_advisory_lock` 是**会话级**的，必须显式解锁

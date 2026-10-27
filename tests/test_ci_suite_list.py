@@ -155,12 +155,23 @@ def _pr_gate_problems(txt: str) -> list[str]:
     if "ref: ${{ steps.parent.outputs.revision }}" not in txt:
         bad.append("host contract revision must be pinned")
     suites = [step for step in _STEP_SPLIT_RE.split(txt)
-              if "run: uv run --frozen pytest" in step]
-    if len(suites) != 1 or "if:" in suites[0]:
+              if "name: 全部离线套件" in step]
+    if (len(suites) != 1 or "if:" in suites[0]
+            or "run: uv run --frozen pytest" not in suites[0]
+            or re.search(r"(?:^|\s)tests(?:/|\s|$)", suites[0])):
         bad.append("complete suite must run unconditionally once")
     elif 'SAUDADE_REQUIRE_PARENT: "1"' not in suites[0]:
         bad.append("host assertions must be required")
     return bad
+
+
+def test_database_job_cannot_replace_the_complete_offline_suite():
+    workflow = (ROOT / ".github/workflows/eval.yml").read_text()
+    assert not _pr_gate_problems(workflow)
+    assert _pr_gate_problems(workflow.replace("name: 全部离线套件", "name: 缺失完整测试入口"))
+    assert _pr_gate_problems(workflow.replace(
+        "run: uv run --frozen pytest -q -n 4",
+        "run: uv run --frozen pytest tests/runtime/test_task_inputs.py -q -n 4"))
 
 
 def _check_public_host_source(_eval_txt):

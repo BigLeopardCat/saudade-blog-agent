@@ -1378,6 +1378,7 @@
       api.broadcast = broadcast;
       api.pullHistory = pullHistory;
       api.saveHistory = saveHistory;
+      api.refreshView = () => { if (!ctx.state.isSending) reconcileDOM(); };
       // 20260903 会话化原语导出（chat-session/chat-stream 调用）
       api.setConvState = setConvState;
       api.adoptConversation = adoptConversation;

@@ -469,6 +469,7 @@
       // 20260828o：面板元素由 engine.init 注入（#waifu 缺失时 engine 走 500ms
       // 重试，chatHTML 尚未挂载）——此处独立等待，避免对 null 绑定事件
       if (!chatPanel) { setTimeout(init, 500); return; }
+      const steering = g.__waifuSteering ? g.__waifuSteering(ctx, engine) : null;
       // 失败气泡重发/编辑（20260829h 重发机制）：网络波动/空闲超时的失败轮——
       // user 消息已入库（Rust 断连清理 DiscardAbortedExchange 只删残缺保留
       // user，见 chat.rs），不重发的话下次请求 agent 会"补答"旧轮。
@@ -791,7 +792,7 @@
         // 这个事实交回给卡片（onDropped → 回滚成可重试），普通发言维持原样（输入框
         // 还在、用户看得见没发出去）。
         if ((!msg && !imgs.length && !opts.resumeTask && !opts.confirmToken) || ctx.state.isSending
-            || Object.keys(ctx.state.remoteRounds || {}).length) {
+            || ctx.state.steeringSubmitting || Object.keys(ctx.state.remoteRounds || {}).length) {
           if (silent && typeof opts.onDropped === 'function') opts.onDropped('此刻有轮次在跑');
           return;
         }
@@ -875,6 +876,7 @@
           resumeTask: opts.resumeTask || (opts.confirmAsk || {}).task_id,
           resumeText: opts.resumeText || (silent ? ([...ctx.state.items].reverse()
             .find(x => x.type === 'user') || {}).text : '') };
+        steering?.begin();
         if (ctx.ui.beginReply) ctx.ui.beginReply();
         if (!silent) {
           input.value = '';
@@ -1077,6 +1079,7 @@
             headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token,
                        'X-Agent-Stream-Version': '2' },
             body: JSON.stringify({
+              task_inputs: !!steering && (!silent || !!opts.resumeTask),
               message: msg,
               ...(!silent ? { task_id: roundId } : {}),
               browser_feedback: !!navigation,
@@ -1266,6 +1269,7 @@
             }
             if (type === 'done') return;
             if (type === 'progress') { addStep('step', data); return; }
+            if (type === 'task_input') { steering?.receive(data); return; }
             if (type === 'confirmation') {
               const cr = ctx.state.confirmRound;
               if (cr && cr.continuation && cr.ask.id === data.id) ctx.state.confirmRound = null;
@@ -1474,6 +1478,7 @@
           // 未复位 isSending 会把对话框永久锁死（后续发送全部被拦，即"卡死"）
           ctx.state.isSending = false;
           ctx.state.streamCtrl = null;
+          steering?.end();
           // 20260901：远端窗口回复中（remoteRounds 非空）时保持按钮禁用——
           // 否则本窗收尾逻辑会把跨窗同步禁用错误解除
           sendBtn.disabled = Object.keys(ctx.state.remoteRounds || {}).length > 0;
@@ -1894,8 +1899,8 @@
       };
       ['br', 'tl', 'tr', 'bl'].forEach(makeResizeHandle);
 
-      sendBtn.addEventListener('click', () => {
-        if (ctx.state.isSending) {
+      const pauseTask = () => {
+        if (!ctx.state.isSending) return;
           // 输出中点击 = 停止生成
           ctx.state.stoppedByUser = true;
           ctx.ui.refreshComposer?.();
@@ -1946,6 +1951,12 @@
               }
             }
           }, 3000);
+      };
+      ctx.ui.pauseTask = pauseTask;
+      sendBtn.addEventListener('click', () => {
+        if (ctx.state.isSending) {
+          if (ctx.state.steeringReady && input.value.trim() && !ctx.state.stoppedByUser) void steering?.submit();
+          else pauseTask();
           return;
         }
         if (!input.value.trim() && !(ctx.state.pendingImages || []).length && pausedTask()) {
@@ -1991,6 +2002,10 @@
         });
       };
       const addPendingImage = (dataUrl) => {
+        if (ctx.state.isSending) {
+          ctx.ui.notify?.('执行中只接收文字补充，图片请在任务暂停或结束后发送');
+          return;
+        }
         if ((ctx.state.pendingImages || []).length >= 6) {
           if (ctx.ui.notify) ctx.ui.notify('最多添加 6 张图片，请先移除一张', 'error');
           return;
@@ -2286,7 +2301,7 @@
         engine.setConvUI({ onAskResync: () => { restoreAsk(); syncAsk(); },
                            // 失败轮提示条上的重发/编辑按钮（20260927）：每次 DOM 重建
                            // 后重挂——刷新/切会话回来那次历史渲染就是它存在的理由。
-                           onFailedResync: () => { attachHistoryFailedRetry(); } });
+                           onFailedResync: () => { attachHistoryFailedRetry(); steering?.restore(); } });
       }
 
       // 右上角关闭按钮：收起聊天面板

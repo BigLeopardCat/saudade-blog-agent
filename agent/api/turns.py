@@ -35,6 +35,7 @@ def runtime_events(
     resume_task=None,
     browser_feedback=False,
     browser_result=None,
+    task_inputs=False,
 ):
     """Bind verified request coordinates to the native Runtime event contract."""
     stream_events = getattr(runtime, "stream_events", None)
@@ -53,6 +54,8 @@ def runtime_events(
     }
     if browser_feedback:
         config["configurable"]["browser_feedback"] = True
+    if task_inputs:
+        config["configurable"]["task_inputs"] = True
     if browser_result is not None:
         config["configurable"]["browser_result"] = browser_result
     state: dict[str, object] = {"messages": messages}
@@ -112,6 +115,7 @@ def stream_to_queue(
     resume_task=None,
     browser_feedback=False,
     browser_result=None,
+    task_inputs=False,
 ):
     """Run native events in the worker and enqueue protocol-safe values.
 
@@ -155,6 +159,7 @@ def stream_to_queue(
             resume_task=resume_task,
             browser_feedback=browser_feedback,
             browser_result=browser_result,
+            task_inputs=task_inputs,
         )
         emit_to_queue(events, put)
         put(None)
