@@ -11,6 +11,7 @@ from openai import OpenAIError
 from agent.runtime import approval, memory, recovery, trace_context
 from agent.runtime.results import TurnResult
 from agent.runtime.session import ToolSession
+from agent.runtime.task_inputs import InputConflict, TaskInputEvent, for_saver
 from agent.runtime.turns import check_cancelled
 from config.settings import settings
 from models.llm import get_llm
@@ -21,6 +22,7 @@ from utils.trace import record
 class NativeRuntime:
     def __init__(self, store, *, catalog=None, model_factory=None, narrator=None, application=None):
         self.store = store
+        self.inputs = for_saver(store.saver)
         if application is None:
             from agent.products.blog.application import BlogApplication
             application = BlogApplication(catalog)
@@ -94,6 +96,14 @@ class NativeRuntime:
         prompt = self.application.prompt([*snapshot.messages, *incoming], principal, pending)
         session = self._session(config, snapshot, pending)
         session.task = recovery.new_run(config, incoming, state.get("task_id"))
+        if (self.inputs and snapshot.run and session.task
+                and snapshot.run["id"] != session.task["id"]):
+            try:
+                self.inputs.finish(snapshot.run, set())
+            except InputConflict as exc:
+                # Tasks predating input support have no inbox row.
+                if str(exc) != "task_not_available":
+                    raise
         outcome = yield from self._run(session, prompt)
         execution = outcome.execution or {}
         if execution.get("client_action"):
@@ -105,7 +115,8 @@ class NativeRuntime:
                 or execution.get("noop_note")):
             approval_state = snapshot.approval
         self.store.save_turn(
-            config, incoming, outcome.reply, observations=session.observations,
+            config, [*incoming, *session.applied_messages], outcome.reply,
+            observations=session.observations,
             execution=outcome.execution, pending=snapshot.pending, approval=approval_state,
         )
         record("native", "turn_completed", chars=len(outcome.reply))
@@ -145,7 +156,8 @@ class NativeRuntime:
         if (outcome.execution or {}).get("client_action"):
             yield outcome
             return
-        saved_input = [] if snapshot.run.get("input_saved") else incoming
+        saved_input = ([] if snapshot.run.get("input_saved") else incoming)
+        saved_input = [*saved_input, *session.applied_messages]
         self.store.save_turn(config, saved_input, outcome.reply,
                              observations=recovery.new_observations(snapshot, session.observations),
                              execution=outcome.execution, approval=session.approval)
@@ -161,16 +173,26 @@ class NativeRuntime:
             max_tokens=settings.agent_output_tokens, **options
         )
         adapt = partial(pending.transition, config=config, saver=self.saver) if pending else None
-        return ToolSession(model, config, tools, domains, adapt, store=self.store,
+        session = ToolSession(model, config, tools, domains, adapt, store=self.store,
                            isolated=snapshot.has_pending,
                            descriptions=self.application.descriptions,
                            middleware=self.application.middleware,
                            history_access=self.application.history_access)
+        session.input_inbox = self.inputs
+        return session
 
     @staticmethod
     def _run(session, prompt, *, resume=None, approval_input=(), recover=False, client_result=None):
+        inbox = session.input_inbox
+        session.inputs_active = bool(inbox and session.task and not session.isolated
+                                     and resume is None and ((session.config or {}).get(
+                                         "configurable") or {}).get("task_inputs"))
+        if session.inputs_active:
+            enabled = inbox.open(session.task, resume=recover)
+            yield TaskInputEvent({"task_id": session.task["id"], "ready": enabled})
         runner = session.stream(prompt, resume=resume, approval_input=approval_input,
                                 recover=recover, client_result=client_result)
+        outcome = None
         try:
             while True:
                 try:
@@ -180,9 +202,16 @@ class NativeRuntime:
                     break
                 # The transport gets body deltas only. Provider reasoning, tool
                 # argument fragments and usage metadata stay inside the session.
-                yield AIMessageChunk(content=chunk.content)
+                yield (chunk if isinstance(chunk, TaskInputEvent)
+                       else AIMessageChunk(content=chunk.content))
         finally:
             runner.close()
+            if session.inputs_active:
+                items = inbox.finish(session.task, session.applied_inputs,
+                    paused=outcome is None or bool((outcome.execution or {}).get("client_action")))
+        if session.inputs_active:
+            yield TaskInputEvent({"task_id": session.task["id"], "ready": False,
+                                  "inputs": items})
         if not isinstance(outcome, TurnResult):
             raise RuntimeError("Native tool session ended without a terminal result")
         return outcome

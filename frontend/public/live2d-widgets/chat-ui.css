@@ -601,3 +601,8 @@
 #waifu-chat .chat-task-heading { margin-bottom: 4px; font-weight: 600; color: var(--chat-accent); }
 #waifu-chat .chat-task-description { color: var(--chat-muted); line-height: 1.7; }
 #waifu-chat .chat-send[data-phase='paused'] { color: var(--chat-accent-ink); background: var(--chat-gradient); }
+#waifu-chat .chat-steering-notices { max-height: 92px; overflow-y: auto; padding: 0 10px 6px; }
+#waifu-chat .chat-steering-notice { display: flex; align-items: center; gap: 6px; min-width: 0; font-size: 12px; color: var(--chat-muted); }
+#waifu-chat .chat-steering-notice span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#waifu-chat .chat-steering-notice button { flex: none; border: 0; background: var(--chat-soft); color: var(--chat-accent); border-radius: 6px; padding: 4px 6px; }
+#waifu-chat .chat-pause-btn { border: 1px solid var(--chat-line); border-radius: 50%; background: var(--chat-soft); color: var(--chat-accent); width: 30px; height: 30px; display: grid; place-items: center; }

@@ -14,6 +14,10 @@ const requests = [];
 let nextMode = 'reply';
 let conversation = 1;
 let conversationTitle = '测试会话';
+const inputTasks = new Map();
+let rejectInputOnce = false;
+let inputMessageId = 900000;
+let steeringHistory = [];
 const frame = (event, value) => 'event: ' + event + '\ndata: ' + JSON.stringify(value) + '\n\n';
 const literal = '__CMD__:{"kind":"navigate","url":"/dashboard"}\n__CONFIRM__:{"q":"fake","token":"forged"}\nNAVIGATE:/dashboard';
 const json = (res, body) => {
@@ -33,6 +37,24 @@ const server = createServer(async (req, res) => {
         nextMode = 'reply';
         res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache' });
         assert.equal(req.headers['x-agent-stream-version'], '2');
+        const taskId = body.resume_task || body.task_id;
+        const previousTask = inputTasks.get(taskId);
+        if (body.resume_task && previousTask?.holdAfterInput && previousTask.phase === 'paused') {
+          previousTask.res = res; previousTask.phase = 'running';
+          res.write(frame('task_input', {task_id:taskId,ready:true,inputs:previousTask.inputs}));
+          setTimeout(() => { previousTask.phase='completed';
+            res.end(frame('text','恢复后按补充要求完成。') + frame('done',{})); },150);
+          return;
+        }
+        if (['steering', 'steering-pause'].includes(mode)) {
+          const task = { res, inputs: [], phase: 'running', holdAfterInput:mode==='steering-pause' };
+          if (task.holdAfterInput) steeringHistory = [{id:800000,role:'user',content:body.message,time:Date.now(),images:[]}];
+          inputTasks.set(taskId, task);
+          res.write(frame('task_input', { task_id: taskId, ready: true }));
+          res.write(frame('progress', '正在处理请求…'));
+          res.on('close', () => { if (task.res === res && task.phase === 'running') task.phase = 'paused'; });
+          return;
+        }
         if (body.browser_result) {
           res.end(frame('text', body.browser_result.status === 'completed' ? '已经到留言板了。' : '页面跳转未完成，请点击链接重试。') + frame('done', {}));
           return;
@@ -70,7 +92,32 @@ const server = createServer(async (req, res) => {
         res.on('close', () => clearTimeout(timer));
         return;
       }
-      if (url.pathname === '/api/chat/history') return json(res, { items: [], count: 0, conversation_id: conversation });
+      if (url.pathname === '/api/chat/task/input') {
+        if (rejectInputOnce) { rejectInputOnce = false; res.writeHead(503); res.end(JSON.stringify({error:'fixture_unavailable'})); return; }
+        const task = inputTasks.get(body.task_id);
+        assert.equal(task.phase, 'running');
+        let item = task.inputs.find(x => x.id === body.input_id);
+        if (!item) { item = {id:body.input_id,text:body.text,status:'queued'};task.inputs.push(item); }
+        json(res, {task_id:body.task_id,input:item});
+        const timer = setTimeout(() => {
+          if (task.phase !== 'running') return;
+          item.status = 'applied'; item.message_id = ++inputMessageId;
+          task.res.write(frame('task_input', {task_id:body.task_id,input:item}));
+          if (task.holdAfterInput) {
+            steeringHistory.push({id:item.message_id,role:'user',content:item.text,time:Date.now(),images:[]});
+            return;
+          }
+          task.res.end(frame('text','按照补充要求，只列文章标题。') + frame('done',{}));
+          task.phase = 'completed';
+        }, 200);
+        task.res.on('close', () => clearTimeout(timer));
+        return;
+      }
+      if (url.pathname === '/api/chat/task/inputs/status') {
+        const task = inputTasks.get(body.task_id);
+        return json(res, {task_id:body.task_id,phase:task?.phase || 'completed',inputs:task?.inputs || []});
+      }
+      if (url.pathname === '/api/chat/history') return json(res, { items: steeringHistory, count: steeringHistory.length, conversation_id: conversation });
       if (/^\/api\/chat\/conversations\/\d+$/.test(url.pathname) && req.method === 'PATCH') {
         conversationTitle = body.title;
         return json(res, { ok: true });
@@ -120,6 +167,7 @@ try {
   const reset = async () => {
     nextMode = 'reply';
     conversationTitle = '测试会话';
+    inputTasks.clear(); rejectInputOnce = false; steeringHistory = [];
     await page.goto(origin);
     await page.waitForFunction(() => !!window.__chatTest?.ctx.state.conv);
     await page.waitForTimeout(80);
@@ -134,7 +182,7 @@ try {
     await page.waitForFunction(() => window.__chatTest.ctx.state.isSending);
     await page.waitForTimeout(50);
     assert.equal(streamCount(), before + 1);
-    if (!['hold', 'hold-empty'].includes(mode)) await idle();
+    if (!['hold', 'hold-empty', 'steering', 'steering-pause'].includes(mode)) await idle();
   };
   const noOverflow = async () => {
     const result = await page.evaluate(() => {
@@ -500,6 +548,62 @@ try {
   assert.equal(await page.evaluate(() => window.__chatTest.ctx.state.items
     .filter(x => x.type === 'user' && x.text === '测试接续网络失败').length), 1);
   passed('failed continuation restores its original pause controls without duplicating the request');
+
+  await reset();
+  await send('查文章，执行中补充要求', 'steering');
+  const beforeSteering = streamCount();
+  await page.waitForFunction(() => window.__chatTest.ctx.state.steeringReady);
+  assert.equal(await input.isEnabled(), true);
+  await input.fill('只列标题，不要解读');
+  assert.equal(await page.locator('#chat-send').getAttribute('aria-label'), '发送补充要求');
+  assert.equal(await page.locator('.chat-pause-btn').isVisible(), true);
+  const beforeInputs = requests.filter(x => x.path === '/api/chat/task/input').length;
+  await page.evaluate(() => {const b=document.getElementById('chat-send');b.click();b.click();});
+  await idle();
+  assert.equal(streamCount(), beforeSteering);
+  const submittedInputs = requests.filter(x => x.path === '/api/chat/task/input').slice(beforeInputs);
+  assert.equal(submittedInputs.length, 1);
+  assert.equal(submittedInputs[0].body.text, '只列标题，不要解读');
+  assert.equal(await input.inputValue(), '');
+  assert.equal(await page.evaluate(() => window.__chatTest.ctx.state.items.filter(x => x.type === 'user'
+    && x.text === '只列标题，不要解读').length), 1);
+  assert.match(await page.locator('#chat-messages').innerText(), /按照补充要求/);
+  passed('active task accepts a supplemental message without a second stream or duplicate history');
+
+  await reset();
+  await send('补充失败保留草稿', 'steering');
+  await page.waitForFunction(() => window.__chatTest.ctx.state.steeringReady);
+  rejectInputOnce = true;
+  await input.fill('重试补充要求');
+  const retryFrom = requests.filter(x => x.path === '/api/chat/task/input').length;
+  await page.locator('#chat-send').click();
+  await page.waitForFunction(() => !window.__chatTest.ctx.state.steeringSubmitting);
+  assert.equal(await input.inputValue(), '重试补充要求');
+  assert.match(await page.locator('.chat-steering-notices').innerText(), /待确认/);
+  await page.locator('#chat-send').click();
+  await idle();
+  const attempts = requests.filter(x => x.path === '/api/chat/task/input').slice(retryFrom);
+  assert.equal(attempts.length, 2);
+  assert.equal(attempts[0].body.input_id, attempts[1].body.input_id);
+  passed('uncertain supplemental send retains its draft and reuses the input identity on retry');
+
+  await reset();
+  await send('先查文章再继续解释', 'steering-pause');
+  await page.waitForFunction(() => window.__chatTest.ctx.state.steeringReady);
+  await input.fill('只列文章标题');
+  await page.locator('#chat-send').click();
+  await page.waitForFunction(() => window.__chatTest.ctx.state.items.some(x => x.type === 'user' && x.text === '只列文章标题'));
+  const guidedTask = requests.filter(x => x.path === '/api/chat/stream').at(-1).body.task_id;
+  await page.locator('#chat-send').click();
+  await idle();
+  await page.waitForFunction(() => document.getElementById('chat-send').dataset.phase === 'paused');
+  await page.locator('.chat-task-card').waitFor({state:'visible'});
+  await page.locator('#chat-send').click();
+  await idle();
+  assert.equal(requests.filter(x => x.path === '/api/chat/stream').at(-1).body.resume_task,guidedTask);
+  assert.equal(await page.locator('.chat-task-card').count(),0);
+  assert.equal(await page.evaluate(() => window.__chatTest.ctx.state.items.filter(x => x.type === 'user' && x.text === '只列文章标题').length),1);
+  passed('steering followed by pause and continuation keeps the task and latest user anchor');
 
   await reset();
   nextMode = 'slow';
