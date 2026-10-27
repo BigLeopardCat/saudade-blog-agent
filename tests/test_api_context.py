@@ -6,7 +6,7 @@ from copy import deepcopy
 from types import SimpleNamespace
 
 import pytest
-from langchain_core.messages import AIMessageChunk
+from langchain_core.messages import AIMessage, AIMessageChunk, HumanMessage
 from langgraph.checkpoint.memory import InMemorySaver
 from pydantic import ValidationError
 
@@ -16,8 +16,10 @@ from agent.api.routes import chat as server
 from agent.api.schemas import ChatRequest
 from agent.principal import SOURCE_ASSERTION, Principal
 from agent.products.blog.prompt import build_prompt
+from agent.runtime.budget import BudgetLimits
 from agent.runtime.native import NativeRuntime
 from agent.runtime.native_store import NativeConversationStore
+from agent.runtime.prompt_budget import fit_history
 
 ACTOR = Principal(7, "user", SOURCE_ASSERTION)
 
@@ -81,7 +83,7 @@ def test_task_projection_is_bounded_and_does_not_forward_executable_payloads():
     assert "ARGS_CANARY" not in str(tasks) and "TOKEN_CANARY" not in str(tasks)
 
 
-def test_current_facts_follow_history_and_do_not_survive_checkpoint_reload(monkeypatch):
+def test_current_facts_preserve_latest_exchange_and_do_not_survive_checkpoint_reload(monkeypatch):
     requests = []
 
     class Model:
@@ -105,7 +107,21 @@ def test_current_facts_follow_history_and_do_not_survive_checkpoint_reload(monke
     assert "FIRST_TIME_CANARY" not in str(requests[1])
     assert facts(requests[1])["current_time"] == "SECOND_TIME_CANARY"
     assert requests[0][0] == requests[1][0]
-    assert [message.content for message in requests[1][1:3]] == ["[当前问题]: 继续", "收到。"]
+    assert [message.content for message in requests[1][-3:]] == [
+        "[当前问题]: 继续", "收到。", "[当前问题]: 继续"]
+
+
+def test_context_and_summary_do_not_split_an_offer_from_a_short_answer():
+    request = ChatRequest(message="嗯", conversation_id=42, summary="之前用户累了想睡觉。",
+        summary_scope={"user_id":7, "role":"user", "conversation_id":42})
+    previous = [HumanMessage(content="把第一条待办完成"),
+                AIMessage(content="第一条完成了。第二条也要完成吗？")]
+    prompt = build_prompt([*previous, *build_messages(request)], ACTOR)
+    prompt = fit_history(prompt, ACTOR, [], BudgetLimits(), 128)
+    assert [message.content for message in prompt[-3:]] == [
+        "把第一条待办完成", "第一条完成了。第二条也要完成吗？", "[当前问题]: 嗯"]
+    assert any("之前用户累了" in str(message.content) for message in prompt[:-3])
+    assert "current_time" in facts(prompt)
 
 
 @pytest.mark.parametrize("values", [

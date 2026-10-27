@@ -83,8 +83,8 @@ def build_prompt(messages: list, principal, own_enabled: bool = False, pending=N
     recovery = _history_recovery(dialogue, own_enabled)
     if recovery is not None:
         attachments.append(recovery)
-    return [system, *dialogue[:-1], *attachments,
-            *([summary] if summary is not None else []), *dialogue[-1:]]
+    return [system, *memory.with_context(dialogue, [*attachments,
+            *([summary] if summary is not None else [])])]
 
 
 def _history_recovery(dialogue, own_enabled):

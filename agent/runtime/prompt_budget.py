@@ -16,4 +16,4 @@ def fit_history(prompt, principal, menu, limits, output_limit, *, tool_access=No
     room = (budget or RequestBudget(limits)).output_capacity(fixed, menu) - output_limit
     previous = [message for message in prompt[1:-1] if not memory.is_context(message)]
     visible = memory.history(previous, principal, max_tokens=room, tool_access=tool_access)
-    return [*prompt[:1], *visible, *attachments, *current]
+    return [*prompt[:1], *memory.with_context([*visible, *current], attachments)]
