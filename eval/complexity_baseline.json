@@ -35,10 +35,6 @@
     "c": 39,
     "lines": 92
   },
-  "eval/golden_draft.py::main": {
-    "c": 42,
-    "lines": 157
-  },
   "eval/landing_gate.py::readiness": {
     "c": 32,
     "lines": 54

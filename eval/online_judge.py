@@ -15,7 +15,7 @@ from pathlib import Path
 
 from openai import OpenAIError
 
-from eval import llm_judge
+from eval import acceptance, llm_judge
 from eval.online_transport import safe_result
 from utils import trace as trace_mod
 
@@ -84,6 +84,8 @@ def material(case, results):
         inp = trace["input"]
         if inp.get("has_image"):
             raise ValueError("image evidence is not available to the text judge")
+        if inp.get("message_truncated"):
+            raise ValueError("user request was truncated in the source trace")
         if result.get("error"):
             raise ValueError("request failed; deterministic result remains authoritative")
         calls = [event for event in trace.get("events", [])
@@ -156,7 +158,7 @@ def review(report_path, folder, llm, *, only=()):
     folder.mkdir(parents=True, exist_ok=False)
     (folder / "source-report.json").write_bytes(source)
     hashes = {}
-    for module in (Path(__file__), Path(llm_judge.__file__)):
+    for module in (Path(__file__), Path(llm_judge.__file__), Path(acceptance.__file__)):
         body = module.read_bytes()
         (folder / module.name).write_bytes(body)
         hashes[module.name] = digest(body)
@@ -199,6 +201,11 @@ def review(report_path, folder, llm, *, only=()):
             save()
             print(json.dumps({key: row[key] for key in ("case", "round", "status")}), flush=True)
     report["finished_at"] = datetime.now().astimezone().isoformat()
+    # A subset review cannot silently certify the cases it did not review.
+    assessment = acceptance.assess(source, report)
+    (folder / "assessment.json").write_text(
+        json.dumps(assessment, ensure_ascii=False, indent=2) + "\n")
+    report["assessment_counts"] = assessment["counts"]
     save()
     return report
 
@@ -215,8 +222,11 @@ def main():
     report = review(args.report, args.out, llm,
                     only=[key for key in args.only.split(",") if key])
     print(json.dumps({"semantic_status": report["semantic_status"],
-                      "counts": report["counts"]}), flush=True)
-    return 2 if report["counts"].get("not_evaluated") else 0
+                      "counts": report["counts"],
+                      "assessment_counts": report["assessment_counts"]}), flush=True)
+    counts = report["assessment_counts"]
+    return (2 if counts.get("not_evaluated") else
+            1 if counts.get("failed") or counts.get("needs_review") else 0)
 
 
 if __name__ == "__main__":
