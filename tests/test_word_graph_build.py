@@ -1,29 +1,12 @@
-"""建图脚本的纯函数（`scripts/build_word_graph.py`）单测（20261003）。
+"""Offline regressions for graph selection, heat normalization and missing readings.
 
-离线、秒级、零网络、零 LLM：`http_json` 被换成一张**打好的表**，所以这里量的是
-"读数怎么算成热度"，不是"接口通不通"（那是真机复核的事）。
-
-## 为什么给 numpy 打桩
-
-建图侧那 470MB 的重依赖（umap/numba/scipy）**刻意不进生产 venv**（见
-`scripts/requirements-graph.txt` 头注），而本套件要在 `.venv/bin/python -m pytest -q`
-里跑 —— 直接 `import build_word_graph` 会 ModuleNotFoundError。脚本里 `import numpy as np`
-只在模块顶层出现这一次、且这两个被测函数一行都不碰它，所以先塞一个空壳模块进
-`sys.modules` 再 import。**这就是"能不能在离线套件里跑"的全部代价**；
-哪天模块顶层真的开始用 numpy 算常量（而不是 import），这里会立刻报错——那正是我们想要的信号。
-
-## 量的是三件事
-
-① **`--exclude-ids` 的三种取值语义**（20261003 修的静默 bug：以前 `--exclude-ids ""`
-   也照样排除默认那三个 id ⇒ 别人 clone 过去建图，同号文章被无声丢掉，日志只说"排除 3 篇"）；
-② **热度公式与归一化**（节点大小从此由它决定，算错了图还是能画出来，只是大小没意义）；
-③ **"取不到读数"与"读数真的是 0"不许混**（`liked` 那一族出过的问题：缺键被当成 0）。
+NumPy is a runtime dependency. These pure-function checks do not need the optional
+UMAP/Numba graph-building environment or any network/model call.
 """
 
 
 import math
 import sys
-import types
 from pathlib import Path
 
 from _judge import collector
@@ -32,9 +15,6 @@ ROOT = Path(__file__).resolve().parent.parent
 
 
 sys.path.insert(0, str(ROOT / "scripts"))
-
-
-sys.modules.setdefault("numpy", types.ModuleType("numpy"))
 
 
 import build_word_graph as bw  # noqa: E402
