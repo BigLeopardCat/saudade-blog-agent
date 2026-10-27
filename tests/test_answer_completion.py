@@ -49,6 +49,7 @@ def test_real_sdk_stream_preserves_finish_reason_and_marks_incomplete_answers(mo
 @pytest.mark.parametrize("event", [
     {"event": "llm_done", "finish_reason": "length"},
     {"event": "answer_truncated"},
+    {"event": "answer_blocked"},
     {"event": "invalid_tool_call"},
 ])
 def test_incomplete_response_cannot_pass_just_because_it_is_nonempty(event):

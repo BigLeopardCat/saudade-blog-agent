@@ -28,6 +28,7 @@ from agent.runtime.progress import emit as emit_progress
 from agent.runtime.results import TurnResult
 from agent.runtime.tool_errors import validation_result
 from agent.runtime.turns import AgentCancelled, check_cancelled
+from agent.runtime.visible_text import VisibleText
 from config.settings import settings
 from tools.base import unavailable
 from utils import trace as trace_mod
@@ -317,6 +318,7 @@ class ToolSession:
         stream = execution.stream(resume=resume, approval_input=approval_input, recover=recover,
                                   client_result=client_result)
         visible = []
+        boundary, model_key = VisibleText(), None
         self.used_stream_api = True
         try:
             for mode, data in stream:
@@ -332,7 +334,14 @@ class ToolSession:
                 if (metadata.get("langgraph_node") != "model"
                         or self.suppress_output):
                     continue
-                text = text_content(chunk.content)
+                key = (metadata.get("langgraph_step"), chunk.id)
+                if key != model_key:
+                    tail = boundary.finish()
+                    if tail:
+                        visible.append(tail)
+                        yield AIMessageChunk(content=tail)
+                    boundary, model_key = VisibleText(), key
+                text = boundary.feed(text_content(chunk.content))
                 if text:
                     visible.append(text)
                 if text or chunk.usage_metadata:
@@ -347,6 +356,10 @@ class ToolSession:
             self.stream_guard.closed = True
             stream.close()
         execution.promote()
+        tail = boundary.finish()
+        if tail:
+            visible.append(tail)
+            yield AIMessageChunk(content=tail)
         if self.outcome is None:
             raise RuntimeError("Framework Agent ended without a terminal result")
         return (yield from self._stream_terminal(self.outcome, visible))

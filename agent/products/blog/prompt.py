@@ -4,10 +4,11 @@ import json
 
 from langchain_core.messages import HumanMessage, SystemMessage
 
+from agent.adminops_account import role_cn
 from agent.principal import is_verified_identity
 from agent.products.blog.context import conversation_context
 from agent.products.blog.history import tool_access
-from agent.products.blog.persona import BLOG_PERSONA_PROMPT
+from agent.products.blog.persona import BLOG_PERSONA_PROMPT, conversation_style
 from agent.runtime import memory
 from tools.base import SITE_BASE
 from utils.trace import record
@@ -43,6 +44,12 @@ _BOUNDARY = (
 def build_prompt(messages: list, principal, own_enabled: bool = False, pending=None) -> list:
     """Compose current authority, historical data, and bounded source observations."""
     context = conversation_context(principal)
+    # Present the business label; authorization continues to use the principal.
+    if context["caller"]["role"] is not None:
+        context["caller"]["role"] = role_cn(context["caller"]["role"])
+    style = conversation_style(principal)
+    if style:
+        context["caller"]["conversation_style"] = style
     system = SystemMessage(content=BLOG_PERSONA_PROMPT + "\n" + _BOUNDARY
                            + "\ncaller 是当前调用者的账号，不是你的身份；其权限不证明博客作者身份。"
                            + "\n运行时能力（可信数据）："
