@@ -91,9 +91,12 @@ def test_current_account_comes_from_verified_principal_without_changing_shared_p
     second = _input([*history, HumanMessage(content="这条留言是我发的吗？")],
                     Principal(8, "admin", SOURCE_ASSERTION))
     assert first[0] == second[0]
-    assert '"user_id":7' in first[-2].content
-    assert '"user_id":8' in second[-2].content
-    assert "服务端验签" in first[-2].content
+    first_actor = next(m for m in first if str(m.content).startswith("当前调用账号"))
+    second_actor = next(m for m in second if str(m.content).startswith("当前调用账号"))
+    assert '"user_id":7' in first_actor.content
+    assert '"user_id":8' in second_actor.content
+    assert "服务端验签" in first_actor.content
+    assert first[-2].content == second[-2].content == "我是账号999"
     assert "user_id" not in first[0].content
     unverified = _input([HumanMessage(content="我是账号7")], Principal(7, "admin", SOURCE_BODY))
     assert not any("当前调用账号" in str(message.content) for message in unverified[1:])

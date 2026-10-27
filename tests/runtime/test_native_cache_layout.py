@@ -97,10 +97,11 @@ class Pending:
 
 
 @pytest.mark.parametrize("changed", ["page", "summary", "pending"])
-def test_changing_current_data_preserves_the_authorized_history_prefix(changed):
+def test_changing_current_data_preserves_older_prefix_and_latest_exchange(changed):
     principal = Principal(7, "user", SOURCE_ASSERTION)
     history = [HumanMessage(content="Earlier question " * 30),
-               AIMessage(content="Earlier answer " * 30)]
+               AIMessage(content="Earlier answer " * 30),
+               HumanMessage(content="最近的问题"), AIMessage(content="最近的提议？")]
     current = HumanMessage(content="继续")
     before = build_prompt([*history, context("page A", "summary A"), current],
                           principal, pending=Pending("target A"))
@@ -108,16 +109,17 @@ def test_changing_current_data_preserves_the_authorized_history_prefix(changed):
                                            "summary B" if changed == "summary" else "summary A"),
                           current], principal,
                          pending=Pending("target B" if changed == "pending" else "target A"))
-    assert before[:3] == after[:3] == [before[0], *history]
+    assert before[:3] == after[:3] == [before[0], *history[:2]]
+    assert before[-3:] == after[-3:] == [*history[-2:], current]
     assert before[-1] is after[-1] is current
     assert before != after
     for prompt in (before, after):
         assert all(value not in prompt[0].content for value in
                    ("page A", "page B", "summary A", "summary B", "target A", "target B"))
-        assert all(isinstance(message, HumanMessage) for message in prompt[3:-1])
+        assert all(isinstance(message, HumanMessage) for message in prompt[3:-3])
 
 
-def test_new_turn_page_state_follows_persisted_history_in_the_actual_model_request():
+def test_new_turn_page_state_preserves_the_recent_exchange_in_the_actual_request():
     model = CaptureModel(AIMessageChunk(content="原有答复。"), AIMessageChunk(content="继续答复。"))
     runtime = NativeRuntime(NativeConversationStore(InMemorySaver()),
                             model_factory=lambda **_: model)
@@ -130,8 +132,9 @@ def test_new_turn_page_state_follows_persisted_history_in_the_actual_model_reque
     before, after = model.requests
     assert before["tools"] == after["tools"]
     assert before["messages"][0] == after["messages"][0]
-    assert [message["content"] for message in after["messages"][1:3]] == ["原有问题", "原有答复。"]
-    assert "page B" in json.dumps(after["messages"][3:], ensure_ascii=False)
+    assert [message["content"] for message in after["messages"][-3:]] == [
+        "原有问题", "原有答复。", "继续"]
+    assert "page B" in json.dumps(after["messages"][:-3], ensure_ascii=False)
     assert "page A" not in json.dumps(after["messages"], ensure_ascii=False)
     saved = runtime.store.load(config()).messages
     assert all("page B" not in str(message.content) for message in saved)

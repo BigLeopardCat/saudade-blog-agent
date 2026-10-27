@@ -194,6 +194,14 @@ def prompt_dialogue(messages, principal, *, tool_access=None):
     return [*history(visible[:-1], principal, tool_access=tool_access), current]
 
 
+def with_context(dialogue, context):
+    """Keep the latest exchange contiguous, after transient contextual data."""
+    previous = dialogue[:-1]
+    start = max((i for i, message in enumerate(previous)
+                 if isinstance(message, HumanMessage)), default=len(previous))
+    return [*previous[:start], *context, *previous[start:], *dialogue[-1:]]
+
+
 def checkpoint_messages(previous, current):
     """Replace the message channel with recent complete turns, keeping the current turn."""
     messages = [compact(message) for turn in _turns([*previous, *current]) for message in turn]

@@ -83,7 +83,8 @@ def test_input_during_model_changes_next_round_and_supersedes_unexecuted_calls(p
             executor.shutdown(wait=True)
     assert not calls
     assert len(model.prompts) == 2
-    assert any(isinstance(m, HumanMessage) and m.content == queued["text"]
+    assert any(isinstance(m, HumanMessage)
+               and m.content == "用户补充的当前任务要求：\n" + queued["text"]
                for m in model.prompts[1])
     if propose_tool:
         assert any(isinstance(m, ToolMessage) and m.tool_call_id == "old"
@@ -143,7 +144,8 @@ def test_cancelled_model_keeps_queued_input_for_checkpoint_continuation(resume_c
     cfg["configurable"]["task_inputs"] = resume_capable
     events = list(restored.stream_events({"resume_task": "same-task"}, cfg))
     assert "按两句话继续完成" in events[-1].reply
-    assert sum(isinstance(m, HumanMessage) and m.content == "用两句话解释"
+    assert sum(isinstance(m, HumanMessage)
+               and m.content == "用户补充的当前任务要求：\n用两句话解释"
                for m in model.prompts[-1]) == 1
     if not resume_capable:
         assert not any(isinstance(event, TaskInputEvent) for event in events)

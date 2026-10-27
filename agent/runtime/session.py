@@ -346,7 +346,10 @@ class ToolSession:
                 if mode != "messages":
                     continue
                 chunk, metadata = data
-                if (metadata.get("langgraph_node") != "model"
+                # Message updates can include injected user input and a complete
+                # response already emitted by the SDK. Only AI deltas are text.
+                if (not isinstance(chunk, AIMessageChunk)
+                        or metadata.get("langgraph_node") != "model"
                         or self.suppress_output):
                     continue
                 key = (metadata.get("langgraph_step"), chunk.id)
