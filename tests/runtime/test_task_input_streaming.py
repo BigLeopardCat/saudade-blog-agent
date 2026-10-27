@@ -44,7 +44,8 @@ def test_resumed_sdk_stream_does_not_echo_injected_user_or_repeat_final_message(
     def handle(request):
         payload = json.loads(request.content)
         requests.append(payload)
-        assert payload["messages"][-1] == {"role": "user", "content": guide}
+        assert payload["messages"][-1] == {
+            "role": "user", "content": "用户补充的当前任务要求：\n" + guide}
         base = {"id": "resumed", "object": "chat.completion.chunk", "created": 0,
                 "model": "fixture"}
         chunks = [{**base, "choices": [{"index": 0, "delta": {"content": text},
@@ -67,3 +68,4 @@ def test_resumed_sdk_stream_does_not_echo_injected_user_or_repeat_final_message(
                    if isinstance(event, AIMessageChunk)) == "恢复完成。"
     saved = restored.store.load(cfg).messages
     assert [m.content for m in saved if isinstance(m, HumanMessage)].count(guide) == 1
+    assert not any("用户补充的当前任务要求" in str(m.content) for m in saved)
