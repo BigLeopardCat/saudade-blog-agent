@@ -8,7 +8,6 @@ staleness; a failed page is never interpreted as an empty or complete corpus.
 from __future__ import annotations
 
 import logging
-import math
 import re
 import threading
 import time
@@ -19,6 +18,7 @@ from rag.chunks import split as split_chunks
 from rag.corpus import corpus_revision
 from rag.corpus import fetch as fetch_corpus
 from rag.embedding_inputs import InputProfileError, vector_chunks
+from rag.lexical import LexicalIndex, backend_info
 from rag.ranking import documents as rank_documents
 from rag.vector_index import (
     chunk_text,
@@ -31,9 +31,7 @@ from rag.vector_index import (
     space_from_settings,
 )
 
-# 改个名再进来：本模块**自己**有一个 `warm_async()`（后台重建**语料/BM25** 索引，见文件末），
-# 同名会把它盖掉——而那个是被 `resolve_title()` 调的（标题→id 锚点），盖掉的后果是它变成
-# 一个要参数的函数、一调就 TypeError。两件事都叫"预热"，但一个是重建词法索引、一个是补向量。
+# Vector warming runs independently of corpus and lexical index refresh.
 from rag.vector_index import warm_async as warm_vectors
 
 logger = logging.getLogger(__name__)
@@ -46,23 +44,11 @@ BM25_B = 0.75
 
 REFRESH_TTL = 600.0  # 10 分钟懒刷新
 
-# ── 候选截断（20260920 批次 d 供给端，标定见模块头注释）──
-_CLIFF_RATIO = 0.25   # 相对断崖：第 _CLIFF_MIN_KEEP 名之后、低于 top1×0.25 的候选丢弃
-_CLIFF_MIN_KEEP = 3   # 保底：前 3 名永不参与断崖（20261011，理由见模块头注释"断崖保底"）
+# Keep the first three document candidates; prune only the low-scoring tail.
+_CLIFF_RATIO = 0.25
+_CLIFF_MIN_KEEP = 3
 
-# 语料由版本化公开接口提供；服务端复用前台详情的可见性谓词。
-# 20260901 语料净化：检索池只收文章——说说（碎碎念）语义判别力低、留言混杂，
-# 混入检索池只会放大无关候选 → 幻觉空间（"最新留言"事故实证：rag_search 返回
-# 混合候选，模型在 talk 候选上硬编 talkKey 31）。说说/留言/公告是"数据读取"
-# 场景，走各自数据工具（list_talks/list_guestbook/get_announcements），不进检索池。
-
-# ── 查询侧处理（只动查询串，索引零影响）──
-
-# 疑问/句法功能词剔除（20260905 处置 rag_eval_system）：中文疑问句的信息在
-# 实词上，「怎么/什么/哪些」等纯句法词 df 常极小（实测「怎么」df=2 → idf 4.633，
-# 一个无关短 chunk 单命中 2.18 就能压过真答案 1.49——Git 教程/固件文档双双登顶）。
-# 串级剔除（按长到短，防「怎么样/为什么」先被短词拆残）后实词照常打分；
-# 只在查询侧做，索引与语料词频统计不受影响。
+# Query-only function-word removal leaves corpus token statistics unchanged.
 _QUERY_STOPWORDS = ("有没有", "怎么样", "为什么", "怎样", "怎么", "什么", "如何",
                     "哪些", "哪个", "哪里", "哪儿", "多少", "为何", "干啥", "干嘛",
                     "是否", "咋", "啥")
@@ -74,23 +60,7 @@ def _clean_query(query: str) -> str:
     return query
 
 
-# 同义扩展（20260905 起，20261009 扩表并加闸门）：词法 2/3-gram 下，访客用的词与语料
-# 用的词可以零共享 gram。替换出同义变体的新 gram 并入 query token 集（与原文 gram
-# 去重后各自权重 1）。只收「替换后语义不变」的词对。
-#
-# 两类病因，机制是同一个：
-#   A **措辞漂移**——语料改写过，期望没跟着改（测评/评测，1.27 事故族）；
-#   B **站内根本没这个词**——访客说中文、语料写缩写或另一种叫法（令牌/JWT、断线/断连，
-#     两词的 df 都是 0）。B 类比 A 类更狠：查询有效 token 掉到 0 ⇒ **检索直接返回空**，
-#     不是排得不好，是一条候选都没有。
-#
-# **加词纪律 = 两道闸门，管的是不同问题，缺一不可**：
-#   ① 机械闸门 `tests/test_query_expansion.py`：这一对**对不对**——val 在语料里真有落点、
-#      且带去 key 到不了的 chunk（非空操作 + 有增量），并且**必须被标注集里的某条 query
-#      真的用到**。没人用过的一对词是"看起来在治病的注释"，不是能力。
-#   ② 经验闸门 `eval/recall_eval.py`：加了**到底好不好**——主集 22 条零回归、留出集有改善。
-#      **别拿 ① 当放行标准**：①只拦"明显错/没用"，判不出收益大小（空中升级→OTA 就是
-#      过了 ① 而收益只在 @3 上）。
+# Reviewed query variants contribute only tokens present in the current vocabulary.
 _QUERY_SYNONYMS: tuple[dict, ...] = (
     {"key": "测评", "val": "评测",
      "why": "措辞漂移：1.26 回流用例「RAG测评体系怎么建立」期望 note:19，而那篇的小节标题"
@@ -113,9 +83,7 @@ def synonyms() -> tuple[dict, ...]:
     return _QUERY_SYNONYMS
 
 
-# 扩展开关（**只给 A/B 与判据用，生产恒开**）。做成模块级而不是 `.env` 拨盘，是因为它
-# 唯一的消费方是"同一进程里跑两臂"的评测：离线套件按出厂档跑、结构上只会跑一档
-# （见 tests/conftest.py 里 `_PINNED` 上方那段说明），做成 .env 拨盘等于让判据永远看不见另一臂。
+# Evaluation may compare expansion on/off; production uses the enabled setting.
 _EXPANSION_ENABLED = True
 
 
@@ -153,10 +121,7 @@ def chunk_note(title: str, content: str) -> list[dict]:
     return split_chunks(title, content)
 
 
-# ── 本轮实际走了哪条路（20261005）────────────────────────────────────
-# 混合与纯词法的**出口文本一模一样**，事后从候选行里看不出来（RRF 分 ≈0.016、
-# BM25 分是个位数，混在两套量级里也读不出"这轮融合过没有"）。所以由检索端**记下
-# 事实**，工具出口把它当 meta 带出去（`tools/base.py::rag_search`）。
+# Record the actual retrieval route per worker thread, including degraded vector reads.
 _route = threading.local()
 
 
@@ -194,7 +159,7 @@ def _rrf_k() -> int:
 
 
 class RagIndex:
-    """内存倒排索引 + 懒刷新。全量重建幂等，线程安全（重建后原子替换）。"""
+    """刷新公开语料与 BM25S 快照；完整构建后原子替换，向量在后台预热。"""
 
     def __init__(
         self,
@@ -211,14 +176,10 @@ class RagIndex:
         self._revision = ""
         self._dirty = False
         self._invalidations = 0
-        self._lengths: list[int] = []
         self._docs: list[dict] = []
         self._chunks: list[dict] = []      # {doc_idx, type, id, title, section, text}
         self._vector_chunk_cache: tuple | None = None
-        self._postings: dict[str, list[int]] = {}  # gram -> [chunk_idx]
-        self._doc_tf: list[dict[str, int]] = []    # per-chunk term freq
-        self._avgdl = 0.0
-        self._idf: dict[str, float] = {}
+        self._lexical: LexicalIndex | None = None
         self._last_build = 0.0
 
     # ── 构建 ──────────────────────────────────────────────────────
@@ -244,37 +205,20 @@ class RagIndex:
             for c in chunk_note(d["title"], d["content"]):
                 chunks.append({**d, **c})
 
-        doc_tf: list[dict[str, int]] = []
-        postings: dict[str, list[int]] = {}
-        for ci, c in enumerate(chunks):
-            tf: dict[str, int] = {}
-            for t in tokenize(chunk_text(c["title"], c["text"])):
-                tf[t] = tf.get(t, 0) + 1
-            doc_tf.append(tf)
-            for t in tf:
-                postings.setdefault(t, []).append(ci)
-
-        n = len(chunks)
-        lengths = [sum(t.values()) for t in doc_tf]
-        avgdl = sum(lengths) / max(n, 1)
+        lexical = LexicalIndex([tokenize(chunk_text(c["title"], c["text"])) for c in chunks],
+                               k1=BM25_K1, b=BM25_B)
         revision = corpus_revision(docs)
-        df = {t: len(v) for t, v in postings.items()}
-        idf = {t: math.log(1 + (n - f + 0.5) / (f + 0.5)) for t, f in df.items()}
 
         with self._lock:
             self._docs, self._chunks = docs, chunks
             self._vector_chunk_cache = None
-            self._doc_tf, self._postings = doc_tf, postings
-            self._avgdl, self._idf = avgdl, idf
-            self._lengths, self._revision = lengths, revision
+            self._lexical, self._revision = lexical, revision
             self._last_error = None
             self._dirty = self._invalidations != invalidations
             if self._dirty:
                 self._last_attempt = 0.0
             self._last_build = time.time()
-        # 向量侧**不进 build()**：这是懒刷新的热路径（TTL 一到就被评测/对话触发），
-        # 本方法只同步拉取语料、计算词法索引，不等待远端 embedding。
-        # 向量预热走后台；开关关着时不发 embedding 请求。
+        # Embedding warmup runs separately after publication of the complete lexical snapshot.
         self._warm_vectors(chunks)
 
     def _warm_vectors(self, chunks: list[dict]) -> None:
@@ -291,12 +235,18 @@ class RagIndex:
         with self._lock:
             return {"revision": self._revision, "documents": len(self._docs),
                     "stale": bool(self._last_error) or self.is_stale(),
-                    "error": self._last_error, "last_success": self._last_build}
+                    "error": self._last_error, "last_success": self._last_build,
+                    "lexical_backend": backend_info()}
 
     def docs_snapshot(self) -> list[dict]:
         """语料快照（[{type,id,title,content}]，浅拷贝列表）。索引没建好时为空列表。"""
         with self._lock:
             return list(self._docs)
+
+    def vocabulary(self) -> frozenset[str]:
+        """Read the vocabulary of the currently published lexical snapshot."""
+        with self._lock:
+            return self._lexical.vocabulary if self._lexical is not None else frozenset()
 
     def is_stale(self) -> bool:
         """没建过、或超过 REFRESH_TTL 未重建。"""
@@ -306,17 +256,9 @@ class RagIndex:
 
     def _lexical_ranked(self, query: str, top_k: int,
                         apply_cliff: bool = True) -> list[dict] | None:
-        """**词法路**（BM25）：恒跑，也是唯一的降级形态（20261005 起不叫 `search`）。
+        """Rank the complete lexical snapshot; None means unavailable, [] means no hits.
 
-        返回候选列表；**索引不可用时返回 None**（区别于「没命中」的 []）。
-
-        `apply_cliff=False` 只关断崖、其余逐字节相同（同一套打分、同一个 top_k、同一个
-        扩展开关）——`eval/cliff_probe.py` 要的"有/无断崖两臂"靠它，**生产调用方不该传它**
-        （默认 True 就是唯一的线上形态）。
-
-        20260917：此前两种失败都返回 []，工具层只能一律包成 empty(「检索无结果」)——
-        语料拉取失败会被 checker 记成「检索过、确实没有」的**事实**。
-        完整快照为空是正常结果；尚未成功构建、或旧快照超过宽限期才算不可用。
+        apply_cliff=False is reserved for evaluation of candidate pruning.
         """
         if self.is_stale() and time.time() - self._last_attempt > 30:
             try:
@@ -328,41 +270,24 @@ class RagIndex:
                 return None
             if not self._chunks:
                 return []
-            chunks, doc_tf, postings, idf, avgdl = (
-                self._chunks, self._doc_tf, self._postings, self._idf, self._avgdl)
-            lengths, revision = self._lengths, self._revision
-        # 疑问词先剔除（句法功能词非内容；不做会稀释实词权重，实证见 _QUERY_STOPWORDS），
-        # 同义扩展后仍经同一剔除路径（否则 怎么 会经替换串溜回，见 20260905 模拟）
-        q_toks = list(dict.fromkeys(t for t in tokenize(_clean_query(query)) if t in postings))
-        # 扩展只加「语料里真有的 gram」（`t in postings`）——val 若是个语料里不存在的词，
-        # 这一对就是空操作（判据里用负控钉住：换一个空词进来，结果必须与关臂一致）。
+            chunks, lexical, revision = self._chunks, self._lexical, self._revision
+        assert lexical is not None
+        vocabulary = lexical.vocabulary
+        # Deduplicate query terms without changing corpus frequencies.
+        q_toks = list(dict.fromkeys(t for t in tokenize(_clean_query(query)) if t in vocabulary))
         if _EXPANSION_ENABLED:
             for _pair in _QUERY_SYNONYMS:
                 if _pair["key"] in query:
                     q_toks += [
                         t for t in tokenize(_clean_query(query.replace(_pair["key"], _pair["val"])))
-                        if t not in q_toks and t in postings]
+                        if t not in q_toks and t in vocabulary]
         q_toks = list(dict.fromkeys(q_toks))
         if not q_toks:
             return []
-        # chunk 级 BM25 打分
-        scores: dict[int, float] = {}
-        for t in q_toks:
-            w = idf[t]
-            for ci in postings[t]:
-                dl = lengths[ci]
-                tf = doc_tf[ci].get(t, 0)
-                scores[ci] = scores.get(ci, 0.0) + w * (tf * (BM25_K1 + 1)) / (
-                    tf + BM25_K1 * (1 - BM25_B + BM25_B * dl / max(avgdl, 1)))
-        # 文档级聚合：候选 = 文档（路线 B 契约：解读走 get_article_detail 正文范围），
-        # 分数取该文档命中 chunk 的最高分，sections 汇总命中小节供定位
+        scores = lexical.scores(q_toks)
+        # Document score is its strongest matching chunk; retain section locations.
         ranked = rank_documents(chunks, scores, revision)
-        # 相对断崖（20260920 批次 d，标定见模块头注释）：**第 _CLIFF_MIN_KEEP 名之后**、
-        # 低于 top1×α 的候选丢弃。尺度无关是硬要求——绝对噪声下限已实证无可用阈值
-        # （20260916d/e 弃权闸），勿复引入。
-        # 保底 top-K（20261011）：`ranked[:_K]` 原样保留（**不过滤**），floor 只作用在尾巴上。
-        # 这一行就是"断崖不可能改变 recall@1/@3"的**唯一实现点**——别把它写回整列过滤
-        # （那样 floor 会跟着"语料里最强的文档"漂，同主题的真答案被自己切掉，见模块头注释）。
+        # A relative cutoff preserves the first three candidates independently of score scale.
         if ranked and apply_cliff:
             floor = ranked[0]["score"] * _CLIFF_RATIO
             ranked = ranked[:_CLIFF_MIN_KEEP] + [

@@ -28,7 +28,7 @@
 (js|css|woff2?|mp4|webm|jpe?g|png|webp)，**没有 json**——带 hash 的 .json 一样会落进
 no-store 每次重下；而 graph-<12位>.js 命中 immutable，缓存一年。
 
-运行环境（生产 venv 无 numpy/jieba，故独立）：依赖钉在 scripts/requirements-graph.txt，
+运行环境：jieba/UMAP 等建图依赖独立安装，版本钉在 scripts/requirements-graph.txt，
 uv 按需建临时环境——缓存 + 硬链接，多环境不重复占盘（`--python 3.12` 与文件里钉的
 umap/numba 版本一起保证与 20260917 那次建图同环境，换版本会让重出图不可比）：
   uv run --no-project --python 3.12 --with-requirements scripts/requirements-graph.txt \

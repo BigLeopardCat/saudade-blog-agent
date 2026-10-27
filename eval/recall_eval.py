@@ -145,11 +145,11 @@ def expansion_diag(idx) -> dict:
     `1/5`（如「空中升级」，只有「升级」落了地）⇒ 还搜得到东西，只是搜不到点 ⇒ **弱收益**样本。
     别把这两类读成同一件事，也别指望第二类的指标会动。
     """
-    post = getattr(idx, "_postings", {})
+    vocabulary = idx.vocabulary()
 
     def land(t: str) -> tuple[int, int]:
         gs = list(dict.fromkeys(tokenize(t.lower())))
-        return sum(1 for g in gs if g in post), len(gs)
+        return sum(1 for g in gs if g in vocabulary), len(gs)
 
     pairs = []
     for p in synonyms():
