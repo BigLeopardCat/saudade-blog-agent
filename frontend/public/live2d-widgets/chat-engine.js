@@ -195,9 +195,17 @@
         summary.appendChild(count);
         const body = document.createElement('div');
         body.className = 'agent-process-body';
+        body.tabIndex = 0;
+        body.setAttribute('aria-label', '任务执行记录');
         box.appendChild(summary);
         box.appendChild(body);
         return box;
+      };
+      const appendProcessLine = (box, line) => {
+        const body = box.querySelector('.agent-process-body');
+        const follow = body.scrollHeight - body.scrollTop - body.clientHeight < 24;
+        body.appendChild(line);
+        if (follow) body.scrollTop = body.scrollHeight;
       };
       // ── 20260828a 重构：内存为唯一渲染数据源，DB/localStorage 只是历史源 ──
       // items：已收尾条目（{id,type,text,time,process?}），id = 'd'+DB主键 / 'l'+随机；
@@ -647,7 +655,7 @@
               const line = document.createElement('div');
               line.className = 'agent-process-line ' + (m.cls || 'step');
               line.textContent = m.text;
-              h.processBox.querySelector('.agent-process-body').appendChild(line);
+              appendProcessLine(h.processBox, line);
               const cnt = h.processBox.querySelector('.agent-process-count');
               if (cnt) cnt.textContent = '';
             } else if (m.t === 'reset') {
@@ -1382,6 +1390,7 @@
       api.makeLiveBubble = makeLiveBubble;
       api.remoteLive = remoteLive;
       api.makeProcessBox = makeProcessBox;
+      api.appendProcessLine = appendProcessLine;
       api.getCollapsePref = getCollapsePref;
       api.setCollapsePref = setCollapsePref;
     };
