@@ -3,10 +3,13 @@
   'use strict';
   const shouldSubmit = e => e.key === 'Enter' && !e.shiftKey && !e.ctrlKey
     && !e.metaKey && !e.altKey && !e.isComposing && e.keyCode !== 229 && !e.repeat;
-  const deriveState = ({ isSending, remoteBusy, approvalBusy, hasContent }) => {
-    if (isSending) return { phase: 'sending', disabled: false, label: '停止', status: '正在回复，可随时停止' };
+  const deriveState = ({ isSending, remoteBusy, approvalBusy, hasContent, pausedTask, pausing, resuming }) => {
+    if (isSending && pausing) return { phase: 'pausing', disabled: true, label: '暂停中', status: '正在暂停任务' };
+    if (isSending) return { phase: 'sending', disabled: false, label: '暂停', status: '正在回复，可随时暂停' };
+    if (resuming) return { phase: 'resuming', disabled: true, label: '继续中', status: '正在继续任务' };
     if (approvalBusy) return { phase: 'approval', disabled: true, label: '发送', status: '正在处理确认操作，请稍候' };
     if (remoteBusy) return { phase: 'remote', disabled: true, label: '发送', status: '另一窗口正在回复，请稍候' };
+    if (pausedTask && !hasContent) return { phase: 'paused', disabled: false, label: '继续任务', status: '' };
     return { phase: 'ready', disabled: !hasContent, label: '发送', status: '' };
   };
   const init = (ctx, engine) => {
@@ -56,6 +59,8 @@
     const copiedIcon = '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="m5 12 4 4L19 6"/></svg>';
     const sendIcon = '<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M12 19V5m-6 6 6-6 6 6"/></svg>';
     const stopIcon = '<svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor" aria-hidden="true"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>';
+    const resumeIcon = '<svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor" aria-hidden="true"><path d="M8 5.5v13l11-6.5z"/></svg>';
+    const pauseIcon = '<svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor" aria-hidden="true"><path d="M6 5h4v14H6zm8 0h4v14h-4z"/></svg>';
     const addCopyButtons = () => {
       messages.querySelectorAll('.chat-msg.agent[data-finished="1"]').forEach(message => {
         if (enhancedMessages.has(message)) return;
@@ -91,16 +96,21 @@
       const state = deriveState({ isSending: ctx.state.isSending,
         remoteBusy: Object.keys(ctx.state.remoteRounds || {}).length > 0,
         approvalBusy: ctx.state.approvalBusy,
+        pausedTask: ctx.ui.currentPausedTask?.(), pausing: ctx.state.stoppedByUser,
+        resuming: ctx.ui.isResumingTask?.(),
         hasContent: !!input.value.trim() || (ctx.state.pendingImages || []).length > 0 });
       if (sendBtn.disabled !== state.disabled) sendBtn.disabled = state.disabled;
-      setAttr(sendBtn, 'aria-label', state.phase === 'sending' ? '停止生成' : '发送消息');
-      setAttr(sendBtn, 'title', state.phase === 'sending' ? '停止生成' : '发送消息');
+      const action = state.phase === 'sending' ? '暂停任务' : state.phase === 'pausing' ? '正在暂停任务'
+        : state.phase === 'paused' ? '继续任务' : state.phase === 'resuming' ? '正在继续任务' : '发送消息';
+      setAttr(sendBtn, 'aria-label', action);
+      setAttr(sendBtn, 'title', action);
       setAttr(input, 'aria-busy', !!ctx.state.isSending);
       if (sendBtn.dataset.phase !== state.phase || !sendBtn.querySelector('svg')) {
-        sendBtn.innerHTML = state.phase === 'sending' ? stopIcon : sendIcon;
+        sendBtn.innerHTML = state.phase === 'sending' ? stopIcon : state.phase === 'paused' ? resumeIcon
+          : state.phase === 'pausing' ? pauseIcon : sendIcon;
         sendBtn.dataset.phase = state.phase;
       }
-      imageButton.disabled = state.phase !== 'ready';
+      imageButton.disabled = !['ready', 'paused'].includes(state.phase);
       const showNotice = state.phase === 'ready' && Date.now() < noticeUntil;
       const statusText = showNotice ? notice : state.status;
       if (status.textContent !== statusText) status.textContent = statusText;
