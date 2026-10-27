@@ -120,7 +120,8 @@ def test_inbox_seal_and_submission_are_atomic_and_bound():
     assert inbox.submit("one", task["scope"], "x", "text")["status"] == "applied"
 
 
-def test_cancelled_model_keeps_queued_input_for_checkpoint_continuation():
+@pytest.mark.parametrize("resume_capable", [False, True])
+def test_cancelled_model_keeps_queued_input_for_checkpoint_continuation(resume_capable):
     from agent.runtime.control import AgentCancelled
 
     cfg, saver = config(), InMemorySaver()
@@ -139,10 +140,14 @@ def test_cancelled_model_keeps_queued_input_for_checkpoint_continuation():
     assert selected.inputs.read("same-task", scope)["phase"] == "paused"
     assert selected.inputs.read("same-task", scope)["inputs"][0]["status"] == "queued"
     restored = runtime(model, saver=saver)
+    cfg["configurable"]["task_inputs"] = resume_capable
     events = list(restored.stream_events({"resume_task": "same-task"}, cfg))
     assert "按两句话继续完成" in events[-1].reply
     assert sum(isinstance(m, HumanMessage) and m.content == "用两句话解释"
                for m in model.prompts[-1]) == 1
+    if not resume_capable:
+        assert not any(isinstance(event, TaskInputEvent) for event in events)
+    assert restored.inputs.read("same-task",scope)["phase"] == "completed"
 
 
 def test_input_without_a_remaining_model_call_is_not_reported_as_applied():
