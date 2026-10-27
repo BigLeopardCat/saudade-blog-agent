@@ -145,6 +145,7 @@ def main(argv=None) -> int:
         run, timings = bm25_run(data, max(args.k), not args.no_cliff)
     result = evaluate(data, run, sorted(set(args.k)))
     from rag.chunks import INDEX_VERSION
+    from rag.lexical import backend_info
     from rag.search import BM25_B, BM25_K1, cliff_config, synonyms
 
     root = Path(__file__).resolve().parents[1]
@@ -167,6 +168,7 @@ def main(argv=None) -> int:
         config={
             "cutoffs": args.k,
             "index_version": INDEX_VERSION,
+            "bm25_backend": backend_info(),
             "bm25_k1": BM25_K1,
             "bm25_b": BM25_B,
             "cliff": None if args.no_cliff else cliff_config(),
