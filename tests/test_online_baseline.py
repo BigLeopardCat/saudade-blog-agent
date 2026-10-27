@@ -166,6 +166,18 @@ def test_unscheduled_todo_card_must_not_invent_a_due_date():
     assert native_assertions.check(gold, result)
 
 
+def test_two_preparations_must_start_with_the_user_requested_first_operation():
+    case = next(c for c in online_baseline.load_suite() if c["id"] == "mixed_two_preparations")
+    checks = {key: case["gold"][key]
+              for key in ("require_confirm_payload", "require_confirm_specs")}
+    result = {"native_events": [], "confirm_payloads": [{"workflow": "article_tags", "specs": [{
+        "tool": "set_article_tags", "args": {"article_id": 23}}]}]}
+    assert native_assertions.check(checks, result)
+    result["confirm_payloads"] = [{"workflow": "category_create", "specs": [{
+        "tool": "create_category", "args": {"intent": {"fields": {"name": "基线远山"}}}}]}]
+    assert not native_assertions.check(checks, result)
+
+
 def test_actual_calls_not_requested_calls_or_read_receipts_are_evidence():
     gold = {"require_observations": [{"tools": ["get_article_detail"],
                                      "args": {"article_id": 23}, "kinds": ["ok"]}]}
@@ -248,6 +260,34 @@ def test_zero_usage_quota_fixture_fails_before_spending_model_budget(tmp_path, m
     monkeypatch.setattr(adapter, "host_headers", lambda _: {})
     with pytest.raises(EvaluationError, match="used > 0"):
         adapter.check_quota_fixture(722)
+    assert adapter.requests == []
+
+
+@pytest.mark.parametrize("conflict", [False, True])
+def test_category_creation_preflight_is_readonly_and_rejects_stale_state(tmp_path, monkeypatch,
+                                                                       conflict):
+    calls = []
+    name = "基线远山"
+    after = {"id": None, "name": name, "pathName": name, "introduce": None,
+             "icon": None, "color": None}
+
+    def respond(request):
+        calls.append(request)
+        return httpx.Response(200, json={"code": 409 if conflict else 200, "data": {
+            "version": "a" * 64, "before": None, "after": after,
+            "articleCount": 0, "revisionCount": 0}})
+
+    with httpx.Client(transport=httpx.MockTransport(respond)) as client:
+        adapter = OnlineTransport(agent_url="http://agent", blog_url="http://blog",
+                                  report_dir=tmp_path, client=client)
+        adapter.uid = 1
+        monkeypatch.setattr(adapter, "host_headers", lambda _: {})
+        if conflict:
+            with pytest.raises(EvaluationError, match="name/path collisions"):
+                adapter.check_category_fixture(name)
+        else:
+            adapter.check_category_fixture(name)
+    assert len(calls) == 1 and calls[0].url.path.endswith("/prepare")
     assert adapter.requests == []
 
 

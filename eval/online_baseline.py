@@ -37,6 +37,8 @@ def load_suite(path=SUITE):
     if not cases or len(set(ids)) != len(ids):
         raise ValueError("suite is empty or has duplicate IDs")
     for case in cases:
+        if "_draft" in case or "draft" in case.get("tags", []):
+            raise ValueError(f"unreviewed draft cannot run as a baseline: {case['id']}")
         if case["identity"] not in {"admin", "user", "zako"}:
             raise ValueError(f"unknown identity in {case['id']}")
         for rnd in golden.iter_rounds(case):
@@ -128,12 +130,16 @@ def run(cases, transport, identities, report_dir, *, phase, suite_hash, include_
             break
         started = time.monotonic()
         row = {"id": case["id"], "tags": case["tags"],
+               "status_scope": "deterministic_checks_only",
+               "acceptance_status": "not_evaluated",
                "case_sha256": hashlib.sha256(json.dumps(case, sort_keys=True).encode()).hexdigest()}
         try:
             key = case["identity"]
             with transport.conversation(identities[key], role_sets[key]):
                 if case.get("requires_quota_usage"):
                     transport.check_quota_fixture(case["requires_quota_usage"])
+                if case.get("requires_category_creation"):
+                    transport.check_category_fixture(case["requires_category_creation"])
                 result = golden.run_case(case, turn_runner=transport)
                 fails = golden.check_case(case, result)
                 errors = [r["error"] for r in result["rounds"] if r.get("error")]
