@@ -185,11 +185,14 @@ class NativeRuntime:
     def _run(session, prompt, *, resume=None, approval_input=(), recover=False, client_result=None):
         inbox = session.input_inbox
         session.inputs_active = bool(inbox and session.task and not session.isolated
-                                     and resume is None and ((session.config or {}).get(
-                                         "configurable") or {}).get("task_inputs"))
+                                     and resume is None and (recover or ((session.config or {}).get(
+                                         "configurable") or {}).get("task_inputs")))
+        session.input_events_enabled = bool(session.inputs_active and ((session.config or {}).get(
+            "configurable") or {}).get("task_inputs"))
         if session.inputs_active:
             enabled = inbox.open(session.task, resume=recover)
-            yield TaskInputEvent({"task_id": session.task["id"], "ready": enabled})
+            if session.input_events_enabled:
+                yield TaskInputEvent({"task_id": session.task["id"], "ready": enabled})
         runner = session.stream(prompt, resume=resume, approval_input=approval_input,
                                 recover=recover, client_result=client_result)
         outcome = None
@@ -209,7 +212,7 @@ class NativeRuntime:
             if session.inputs_active:
                 items = inbox.finish(session.task, session.applied_inputs,
                     paused=outcome is None or bool((outcome.execution or {}).get("client_action")))
-        if session.inputs_active:
+        if session.input_events_enabled:
             yield TaskInputEvent({"task_id": session.task["id"], "ready": False,
                                   "inputs": items})
         if not isinstance(outcome, TurnResult):
