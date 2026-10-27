@@ -87,3 +87,23 @@ def test_narration_failure_does_not_change_successful_execution(monkeypatch):
     monkeypatch.setattr(narration, "get_llm", fail)
     result = TurnResult("已经更新。", {"receipts": [{"tool": "fixture"}]})
     assert narration.narrate(result, {}) == result.reply
+
+
+@pytest.mark.parametrize("response", [
+    AIMessage(content='<function_call>{"name":"write","arguments":{}}</function_call>'),
+    AIMessage(content="", response_metadata={"finish_reason": "content_filter"}),
+    AIMessage(content="", additional_kwargs={"function_call": {
+        "name": "write", "arguments": "{}"}}),
+])
+def test_invalid_narration_preserves_the_successful_receipt_without_retry(monkeypatch, response):
+    calls = []
+
+    class Model:
+        def invoke(self, *args, **kwargs):
+            calls.append(True)
+            return response
+
+    monkeypatch.setattr(narration, "get_llm", lambda **_: Model())
+    result = TurnResult("已经更新。", {"receipts": [{"tool": "fixture"}]})
+    assert narration.narrate(result, {}) == result.reply
+    assert calls == [True] and result.execution == {"receipts": [{"tool": "fixture"}]}

@@ -30,7 +30,7 @@ def test_summary_reaches_native_input_as_data_not_runtime_authority():
     prompt = _input(server.build_messages(request), actor())
     trusted, _ = json.JSONDecoder().raw_decode(
         prompt[0].content.split("运行时能力（可信数据）：", 1)[1])
-    assert trusted["caller"]["role"] == "superadmin"
+    assert trusted["caller"]["role"] == "超级管理员"
     assert "曾误称不能管理" not in prompt[0].content
     assert any("用户希望中文答复" in str(m.content) for m in prompt[1:-1])
     assert prompt[-1].content == "[当前问题]: 继续"

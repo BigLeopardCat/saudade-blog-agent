@@ -11,6 +11,7 @@ from agent.products.blog.context import conversation_context
 from agent.products.blog.persona import BLOG_PERSONA_PROMPT
 from agent.runtime.budget import RequestBudget, current_budget, native_call
 from agent.runtime.control import model_options
+from agent.runtime.finalization import incomplete_response
 from agent.runtime.progress import emit
 from models.llm import get_llm
 from utils.trace import record
@@ -58,7 +59,7 @@ def narrate(result, config):
             not isinstance(text, str)
             or not text.strip()
             or getattr(response, "tool_calls", None)
-            or (response.response_metadata or {}).get("finish_reason") == "length"
+            or incomplete_response(response)
         ):
             return fallback
         return text.strip()
