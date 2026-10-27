@@ -4,7 +4,7 @@ import hashlib
 import json
 
 from agent.authz import scopes_for
-from agent.principal import ADMIN_ROLES, is_verified_identity
+from agent.principal import ADMIN_ROLES, ROLE_ZAKO, is_verified_identity
 from agent.stickers import STICKER_NAMES
 
 
@@ -22,8 +22,9 @@ def conversation_context(principal) -> dict:
     role = getattr(principal, "known_role", None) if verified else None
     return {
         "rendering": {"stickers": [f":{name}:" for name in STICKER_NAMES]},
-        "tools": {"loading": "on_demand"},
+        "tools": {"loading": "disabled" if role == ROLE_ZAKO else "on_demand"},
         "caller": {"verified": verified, "role": role,
-                     "preferred_address": "主人" if role in ADMIN_ROLES else "你"},
+                     "preferred_address": ("主人" if role in ADMIN_ROLES
+                                           else "杂鱼" if role == ROLE_ZAKO else "你")},
         "permissions": sorted(scopes_for(role)),
     }

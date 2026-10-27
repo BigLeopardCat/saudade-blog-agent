@@ -278,8 +278,24 @@ try {
   assert.equal(style.overflow, 'hidden');
   assert.equal(style.outline, 'none');
   assert.equal(style.divider, '1px');
+  const inputHeight = () => page.locator('#chat-input').evaluate(input => input.getBoundingClientRect().height);
+  const oneLine = await inputHeight();
+  await page.locator('#chat-input').fill('第一行\n第二行\n第三行');
+  assert.ok(await inputHeight() > oneLine + 20, 'Short multiline drafts must grow before scrolling');
+  assert.equal(await page.locator('#chat-input').evaluate(input => getComputedStyle(input).overflowY), 'hidden');
   await page.locator('#chat-input').fill('需要滚动的长草稿。\n'.repeat(30));
   assert.equal(await page.locator('#chat-input').evaluate(input => getComputedStyle(input).overflowY), 'auto');
+  await page.locator('#chat-input').fill('一行草稿');
+  assert.ok(Math.abs(await inputHeight() - oneLine) <= 2, 'Deleting lines must shrink the draft again');
+  assert.equal(await page.locator('#chat-input').evaluate(input => getComputedStyle(input).overflowY), 'hidden');
+  const attachment = await page.locator('#chat-img-btn').evaluate(button => {
+    const box = button.closest('.chat-input-row').getBoundingClientRect();
+    const rect = button.getBoundingClientRect();
+    return {left:rect.left-box.left, bottom:box.bottom-rect.bottom,
+      border:getComputedStyle(button).borderWidth};
+  });
+  assert.ok(attachment.left <= 8 && attachment.bottom <= 8, JSON.stringify(attachment));
+  assert.equal(attachment.border, '1px');
   for (const dark of [false, true]) {
     await page.evaluate(value => window.dispatchEvent(new CustomEvent('darkmode-change', { detail: value })), dark);
     const alpha = await page.locator('#waifu-chat').evaluate(panel => {

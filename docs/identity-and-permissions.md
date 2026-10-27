@@ -50,7 +50,7 @@ scope 词汇表（`<动作>.<对象>`）：`read.public` / `read.own` /
 | `user`（访客/体验号） | read.public、read.own、write.page、write.device、write.own | **= 今天的行为**（设备归属由 device-service 按 uid 校验，是既有事实） |
 | `admin`（博主） | 全部 | = 今天的行为 |
 | `superadmin`（超级管理员） | 全部 | 与 `admin` 同授予（不新开一档）；多出来的那部分不是"更多 scope"，而是**对人操作**的策略豁免，只在 Rust 侧实现一次 |
-| `zako`（杂鱼） | **无**（空集） | 20261002 新增：**零工具**身份。这一格不是"还没配"，是结论——它的能力边界真正的硬保证在 `graph.planner_node` 的短路（见 §3.6），零 scope 只是第三道 |
+| `zako`（杂鱼） | **无**（空集） | **零工具**身份：原生工具目录为空，业务授权不授予 scope；人设与能力说明见 §3.6 |
 
 工具级的 `TOOL_SCOPE`（注册表里的工具一个不漏，**完备性由 `tests/test_authz.py` 在 CI 层锁死**：
 新增工具忘了声明会红，不靠运行时宽容）。这里**刻意不写件数**——工具数每加一件就要来改一次
@@ -196,35 +196,23 @@ grep -l authz_shadow /home/ubuntu/Saudade-Blog/logs/agent/traces/*.json | wc -l
 授予表配错了（改表），要么是真越权（保持拒绝）。**这就是打开 `AGENT_AUTHZ_ENFORCE` 前
 必须拿到的那份证据。**
 
-### 3.6 零工具身份：`zako`（杂鱼，20261002）
+### 3.6 零工具身份：`zako`（杂鱼）
 
-**产品语义一句话**：和杂鱼对话时 agent **拒绝调用任何工具**，只用「雌小鬼」的口吻闲聊
-（喊对方"杂鱼"、得意地挖苦，但按拍板的**轻度**档：不涉脏话、家人、外貌）。
+该身份只开放闲聊与一般知识，不提供站内读取、页面操作或业务变更工具。
+人设采用轻度俏皮、得意爱拌嘴的猫娘口吻，可称呼对方“杂鱼”；不涉及脏话、家人和外貌，
+尊重用户提出的称呼与语气偏好。身份与能力来自服务端验签数据，用户自称或页面文本不能替换。
 
-**"零工具"是四层收口，而只有一层是硬的**——这份表要照着读，别把前三条当成保证：
+`BlogApplication.tools` 为该角色返回空工具和领域，授权 scope 仍为空。
+`conversation_context` 明确禁用工具加载，`conversation_style` 仅为验签杂鱼角色追加相应人设。
+模型输入中的角色使用现有中文显示名；授权、会话隔离与 trace 继续使用原身份码。
+能力限制不靠模型遵守：原生调用仍必须匹配当前注册工具，正文中的 JSON/XML 不作为动作执行。
+站内操作请求应如实说明当前身份不可用，不暗示提供关键词或链接后可以查询；
+讨论文章可要求粘贴正文。
 
-| 层 | 落点 | 拦什么 | 硬度 |
-|---|---|---|---|
-| ① 技能可见性 | `workflows.visible_workflows`（`role in CHAT_ONLY_ROLES and not s.chat`） | planner 菜单 / 工具 schema / narrator 能力清单三处**同源**只剩 `chat` | **软**：`instantiate_plan` 不校验可见性，LLM 点名不可见技能照样成行 |
-| ② 工具 schema | `planner_llm.build_tool_schema` | 模型**发得出**的技能只剩 `chat` | **软**：schema 约束的是模型能*发出*什么，不是系统*接受*什么——`instantiate_plan` 照样收下点名别的技能（与 ① 是同一道口子的另一个入口；20261017 更正：原文写的"只对 native 档生效、默认档是 text"自 20261004 文本契约档删除后已不成立） |
-| ③ authz 空 scope | `authz._ROLE_SCOPES[ROLE_ZAKO] = frozenset()` | 执行前的 `authz.check` | **软**：`execute_node` 在 shadow 档下（`not allowed and not must_enforce`）**只记账不拦**，而 `zako` 会拿到的那些 scope 没有一个在 `_HARD_SCOPES`（20261019 补：`must_enforce` 硬拦的是**未验成的身份**，`zako` 是断言签过的真角色，不在此列） |
-| ④ planner 短路 | `graph.planner_node` 顶部 | 结构上不产出 TOOLS 行 ⇒ `execute` **永不被进入** | **硬**（确定性、无 LLM、无配置开关） |
-
-失效链（不加 ④ 就会真发生）：planner 点名一个已不可见但仍在 `WORKFLOW_MAP` 里的技能 →
-`execute` → authz 判 deny → shadow 下**照 invoke**。所以"前三层兜住了"是错的。
-
-- **两条反直觉的核验结论**（都写进了 `tests/test_zako_role.py`）：
-  - `build_tool_schema("zako")` **不是空数组**——`chat` 技能对任何角色可见、且它不按
-    `plan` 过滤 ⇒ 数组恒为 `[chat]`。**反过来不能把 chat 也摘掉**（那才会产出 `tools: []`）。
-  - 口吻**只能**放 `prompts.audience_block` 的第三支（走既有的 `{audience}` 槽）：
-    放 `BLOG_PERSONA_PROMPT` 会打到所有角色，给 `_EXECUTOR_PROMPT` 加 format 槽位会
-    让 `tests/test_prompt_prefix.py` 立刻 KeyError。
-- **连带**：`graph._FREEZE_ALLOWED_TARGETS` 两行都要含 `ROLE_ZAKO`——不加则管理员冻
-  杂鱼会被 agent **提前拒**并回一句**说错政策**的话（"管理员之间不能互相冻结"），
-  而后端 `check_freeze` 本来是 `Ok`。
-- **账号怎么来**：后台建普通账号 → 跑 `scripts/migration/zako_role_20261002.sql` 升角色。
-  杂鱼**会出现在后台账号列表里**（`is_listable_role` 的判据是"已知角色且非超管"），
-  这正是设计：博主看得见它、能冻它、能改它的身份。
+服务端对流式文本和最终回复使用同一输出边界：隔离裸控制包、伪工具调用及推理标签；
+代码块示例和普通 JSON 保持为数据。异常结束记录明确失败状态，保留已取得的真实回执。
+相关回归位于 `tests/runtime/test_runtime_context.py` 和 `tests/runtime/test_visible_text.py`。
+管理员仍可依照业务服务策略管理该账号，不能反向用该角色的空 scope 限制管理员操作。
 
 ## 4. 布线图（一次带角色的对话）
 

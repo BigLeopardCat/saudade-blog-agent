@@ -47,7 +47,8 @@ def _answer_value(wanted, result, calls):
 def _runtime_stops(events):
     return [e.get("event") for e in events
             if e.get("event") in {"budget_stop", "task_stopped", "handoff_stopped",
-                                  "legacy_handoff", "answer_truncated", "invalid_tool_call"}
+                                  "legacy_handoff", "answer_truncated", "answer_blocked",
+                                  "invalid_tool_call"}
             or e.get("event") == "llm_done" and e.get("finish_reason") == "length"]
 
 
