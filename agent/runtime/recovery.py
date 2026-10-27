@@ -31,6 +31,9 @@ def allowed(snapshot, task_id, config):
 def restore_session(session, state):
     """Recover metadata and successful observations; never infer write permission."""
     restore(session, state)
+    if session.task:
+        from agent.runtime.task_inputs import consumed
+        session.input_messages = consumed(state, session.task["id"])
     messages = state.get("messages") or []
     session._restore_domains(messages)
     start = max((i for i, message in enumerate(messages) if isinstance(message, HumanMessage)

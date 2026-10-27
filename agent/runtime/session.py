@@ -64,6 +64,7 @@ class ToolSession:
         self.task = None
         self.input_inbox = None
         self.inputs_active = False
+        self.input_events_enabled = False
         self.input_messages = []
         self.applied_inputs = set()
         self.recovering = False
@@ -335,7 +336,9 @@ class ToolSession:
                 check_cancelled(self.config)
                 if mode == "updates" and isinstance(data, dict):
                     from agent.runtime.task_input_policy import events as input_events
-                    yield from input_events(self, data, reported_inputs)
+                    for input_event in input_events(self, data, reported_inputs):
+                        if self.input_events_enabled:
+                            yield input_event
                     from agent.runtime.client_actions import paused_result
                     paused = paused_result(data)
                     if paused is not None:
