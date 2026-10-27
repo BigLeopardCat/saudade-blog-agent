@@ -25,10 +25,12 @@
       if (el && el.getAttribute(name) !== String(value)) el.setAttribute(name, value);
     };
     const resize = () => {
+      input.style.overflowY = 'hidden';
       input.style.height = 'auto';
-      const height = Math.min(input.scrollHeight, 120);
+      const maximum = parseFloat(getComputedStyle(input).maxHeight) || 120;
+      const height = Math.min(input.scrollHeight, maximum);
       input.style.height = height + 'px';
-      input.style.overflowY = input.scrollHeight > height + 1 ? 'auto' : 'hidden';
+      input.style.overflowY = input.scrollHeight > input.clientHeight + 1 ? 'auto' : 'hidden';
     };
     let inputWidth = 0;
     new ResizeObserver(entries => {
