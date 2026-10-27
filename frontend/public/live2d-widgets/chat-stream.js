@@ -532,6 +532,9 @@
         if (resumingTask || ctx.state.isSending) return false;
         if (!stopped || lastUserText() !== stopped.text) { showHint?.(STALE_HINT); return false; }
         resumingTask = true;
+        const pausedCard = [...messages.querySelectorAll('.chat-msg-failed-note')]
+          .find(note => note.querySelector('.chat-msg-retry-slot')?.dataset.failedText === stopped.text);
+        if (pausedCard) pausedCard.hidden = true;
         ctx.ui.refreshComposer?.();
         try {
           const previous = [...messages.querySelectorAll('.chat-msg.agent')]
@@ -547,6 +550,7 @@
           }
           return completed;
         } finally {
+          if (pausedCard?.isConnected) pausedCard.hidden = false;
           resumingTask = false;
           ctx.ui.refreshComposer?.();
         }
@@ -674,11 +678,20 @@
       const clearFailedRound = (text) => {
         try {
           const cur = JSON.parse(localStorage.getItem(FAILED_KEY) || 'null');
-          if (!cur || !Array.isArray(cur)) return;
-          const rest = cur.filter(x => x && x.text !== text);
-          if (rest.length) localStorage.setItem(FAILED_KEY, JSON.stringify(rest));
-          else localStorage.removeItem(FAILED_KEY);
+          if (Array.isArray(cur)) {
+            const rest = cur.filter(x => x && x.text !== text);
+            if (rest.length) localStorage.setItem(FAILED_KEY, JSON.stringify(rest));
+            else localStorage.removeItem(FAILED_KEY);
+          }
         } catch (e) {/* ignore */}
+        // Local storage events only reach other windows. Settle this view now,
+        // including offline/history-delay cases, using the round's own anchor.
+        messages.querySelectorAll('.chat-msg-failed-note').forEach(note => {
+          if (note.querySelector('.chat-msg-retry-slot')?.dataset.failedText === text) note.remove();
+        });
+        messages.querySelectorAll('.chat-msg-retry').forEach(actions => {
+          if (actions.dataset.retryText === text) actions.remove();
+        });
       };
       // Keep the stopped draft and task identity for explicit continuation.
       const retainStoppedTurn = (victim, roundId, msg, silent) => {
