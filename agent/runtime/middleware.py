@@ -22,7 +22,7 @@ from agent.runtime.message_content import text_content
 from agent.runtime.progress import emit
 from agent.runtime.results import pause_notice
 from agent.runtime.task_input_policy import additions as input_additions
-from agent.runtime.task_input_policy import replace_unpublished_proposal
+from agent.runtime.task_input_policy import model_messages, replace_unpublished_proposal
 from agent.runtime.turns import check_cancelled
 from config.settings import settings
 from utils.trace import record
@@ -165,7 +165,7 @@ class SessionMiddleware(AgentMiddleware):
         if extra_inputs:
             request = request.override(messages=[*request.messages, *extra_inputs])
         prompt = [*([request.system_message] if request.system_message else []),
-                  *hydrate(request.messages, session.transient)]
+                  *model_messages(hydrate(request.messages, session.transient))]
         final = final_prompt(session.budget, prompt, session.menu, session.output_limit,
                              results_full=session.result_chars >= session.result_limit,
                              model_key=request.model)
