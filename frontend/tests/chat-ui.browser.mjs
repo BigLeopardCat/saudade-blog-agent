@@ -152,6 +152,15 @@ try {
     assert.ok(result.document <= result.viewport + 1 && result.panel <= 1 && result.messages <= 1, JSON.stringify(result));
   };
   const drawerInsidePanel = async () => {
+    const capsule = await page.locator('#chat-new-msg-note').evaluate(note => {
+      note.classList.add('active');
+      const r = note.getBoundingClientRect(), m = document.getElementById('chat-messages').getBoundingClientRect();
+      const result = { left:r.left-m.left, right:m.right-r.right, bottom:m.bottom-r.bottom };
+      note.classList.remove('active');
+      return result;
+    });
+    assert.ok(Object.values(capsule).every(n => n >= -1), JSON.stringify(capsule));
+
     const bounds = await page.locator('#waifu-conv-panel').evaluate(drawer => {
       const list = drawer.getBoundingClientRect(), panel = drawer.closest('#waifu-chat').getBoundingClientRect();
       return { width: list.width, left: list.left - panel.left, right: panel.right - list.right,
@@ -268,7 +277,7 @@ try {
       line: parseFloat(getComputedStyle(paragraph).lineHeight) };
   });
   assert.ok(shortLine.height <= shortLine.line * 1.1, 'Short text must use its natural width in an enlarged window');
-  assert.equal(await page.locator('.msg-bubble').last().evaluate(el => getComputedStyle(el).color), 'rgb(255, 255, 255)');
+  assert.equal(await page.locator('.msg-bubble').last().evaluate(el => getComputedStyle(el).color), 'rgb(84, 55, 98)');
   await page.screenshot({ path: path.join(output, 'desktop-light-bubbles.png') });
   const style = await page.locator('#chat-input').evaluate(input => {
     input.focus();
@@ -419,10 +428,21 @@ try {
       }) };
   });
   assert.deepEqual(loadingLayout, { before: true, after: true, contained: true });
+  const spinnerHeights = await page.locator('.chat-typing').evaluate(spinner => {
+    const top = () => spinner.nextElementSibling.getBoundingClientRect().top;
+    const visible = top();
+    spinner.classList.remove('typing-visible');
+    const hidden = top();
+    spinner.classList.add('typing-visible');
+    return { visible, hidden, restored: top() };
+  });
+  assert.equal(spinnerHeights.hidden, spinnerHeights.visible);
+  assert.equal(spinnerHeights.restored, spinnerHeights.visible);
+
   const originalTask = requests.filter(x => x.path === '/api/chat/stream').at(-1).body.task_id;
   const beforeStop = requests.filter(x => x.path === '/api/chat/stream').length;
   const beforeDiscard = requests.filter(x => x.path === '/api/chat/discard').length;
-  assert.match(await page.locator('#chat-send').getAttribute('aria-label') || await page.locator('#chat-send').innerText(), /停止/);
+  assert.match(await page.locator('#chat-send').getAttribute('aria-label') || await page.locator('#chat-send').innerText(), /暂停/);
   assert.match(await page.locator('#chat-status').innerText(), /生成|回复|处理/);
   await page.locator('#chat-send').click();
   await idle();
@@ -430,8 +450,14 @@ try {
   assert.equal(requests.filter(x => x.path === '/api/chat/stream').length, beforeStop);
   passed('real streaming request can be stopped with partial reply retained');
   const stoppedProgress = await page.locator('.agent-process-line').allTextContents();
-  await page.locator('.chat-resume-btn').click();
+  await page.waitForFunction(() => document.getElementById('chat-send').dataset.phase === 'paused');
+  assert.equal(await page.locator('#chat-send').getAttribute('aria-label'), '继续任务');
+  assert.match(await page.locator('#chat-messages').innerText(), /可以继续任务/);
+  assert.doesNotMatch(await page.locator('#chat-messages').innerText(), /这一轮不会再回答/);
+  await page.locator('#waifu-chat').screenshot({ path: path.join(output, 'desktop-paused.png') });
+  await page.evaluate(() => { const button = document.getElementById('chat-send'); button.click(); button.click(); });
   await idle();
+  assert.equal(requests.filter(x => x.path === '/api/chat/stream').length, beforeStop + 1);
   const resumed = requests.filter(x => x.path === '/api/chat/stream').at(-1).body;
   assert.equal(resumed.resume_task, originalTask);
   assert.equal(resumed.message, '');

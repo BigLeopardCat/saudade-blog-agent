@@ -21,7 +21,7 @@ test('empty input cannot send, text or selected image can send', () => {
 test('local streaming retains stop control even when another round is busy', () => {
   const state = deriveState({ isSending: true, remoteBusy: true, approvalBusy: true });
   assert.equal(state.disabled, false);
-  assert.equal(state.label, '停止');
+  assert.equal(state.label, '暂停');
 });
 
 test('remote work and pending cancellation explain the disabled send action', () => {
@@ -31,4 +31,12 @@ test('remote work and pending cancellation explain the disabled send action', ()
     assert.match(state.status, /窗口|确认/);
     assert.equal(state.label, '发送');
   }
+});
+
+
+test('paused task can resume with an empty draft, while a new draft sends normally', () => {
+  assert.equal(deriveState({ pausedTask: true }).phase, 'paused');
+  assert.equal(deriveState({ pausedTask: true }).disabled, false);
+  assert.equal(deriveState({ pausedTask: true, hasContent: true }).phase, 'ready');
+  assert.equal(deriveState({ isSending: true, pausing: true }).disabled, true);
 });

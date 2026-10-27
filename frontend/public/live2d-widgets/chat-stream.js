@@ -10,19 +10,8 @@
     }
     const __chatCore = ctx.core;
     const { applyMsg, renderAgentContent } = ctx.render;
-    /** 失败收尾的正文渲染：**保留已经收到的部分**，提示接在它后面。
-     *
-     *  旧写法是 `applyMsg(span, errMsg)` —— innerHTML 整体替换，把用户已经看着流出来的
-     *  半截回复直接抹掉，屏幕上只剩一行"网络错误"。20260916 线上事故：agent worker 静默
-     *  崩溃（健康探针 10:46:01 抓到新的 worker pid），SSE 断在半句上，DB 里明明存着
-     *  3460 字的半截回复（`# 一句话总结` 那行断在"——现有"），用户屏幕上却是一片空白 +
-     *  错误文案，于是以为"前半段根本没生成"，只能再问一轮让 agent 补。
-     *
-     *  这里按**成功路径的口径**把已收到的部分重渲染成 markdown（流式期间是
-     *  `textContent` 纯文本 + `.msg-streaming` 的 pre-line，收尾才走 markdown），
-     *  再把提示作为一个独立节点追加在后面。
-     *  ⚠️ 提示**只进 DOM**：存进 items/DB 的仍旧是 agent 说过的话本身（下方 partialItem
-     *  用的还是 displayText），否则错误文案会污染历史与记忆注入。 */
+    // Preserve streamed prose, then append a UI-only interruption note.
+    // History and model memory retain the original reply without this note.
     const renderFailed = (span, errMsg, partial) => {
       if (!span) return;
       try {
@@ -525,6 +514,44 @@
         }
       };
 
+      const lastUserText = () => {
+        const last = [...ctx.state.items].reverse().find(i => i.type === 'user');
+        return last ? last.text : null;
+      };
+      const STALE_HINT = '这一轮已经不是你最后一条消息了（期间发过新的），不再提供重发';
+      const pausedTask = () => {
+        try {
+          const entries = JSON.parse(localStorage.getItem('saudade-chat-failed') || '[]');
+          return entries.find(x => x && x.kind === 'stopped' && x.task_id
+            && String(x.conv_id) === String(ctx.state.conv) && x.text === lastUserText()
+            && Date.now() - x.ts < 24 * 3600 * 1000) || null;
+        } catch (_) { return null; }
+      };
+      let resumingTask = false;
+      const resumeStoppedTask = async (stopped, fallback, showHint = ctx.ui.notify) => {
+        if (resumingTask || ctx.state.isSending) return false;
+        if (!stopped || lastUserText() !== stopped.text) { showHint?.(STALE_HINT); return false; }
+        resumingTask = true;
+        ctx.ui.refreshComposer?.();
+        try {
+          const previous = [...messages.querySelectorAll('.chat-msg.agent')]
+            .find(item => item.dataset.mid === stopped.partial_id) || fallback;
+          const completed = await sendMessage({ silent: true, resumeTask: stopped.task_id,
+            resumeText: stopped.text, convId: stopped.conv_id, processFrom: previous,
+            previousProcess: stopped.process || [], onDropped: showHint });
+          if (completed) {
+            ctx.state.items = ctx.state.items.filter(x => x.id !== stopped.partial_id);
+            if (previous?.classList.contains('agent')) previous.remove();
+            clearFailedRound(stopped.text);
+            saveHistory();
+          }
+          return completed;
+        } finally {
+          resumingTask = false;
+          ctx.ui.refreshComposer?.();
+        }
+      };
+
       const attachRetryActions = (contentSpan, div, msg) => {
         const wrap = document.createElement('div');
         wrap.className = 'chat-msg-retry';
@@ -542,12 +569,7 @@
         wrap.appendChild(retryBtn);
         wrap.appendChild(editBtn);
         contentSpan.appendChild(wrap);
-        let stopped;
-        try {
-          stopped = JSON.parse(localStorage.getItem('saudade-chat-failed') || '[]')
-            .find(x => x.kind === 'stopped' && x.text === msg && x.task_id
-              && String(x.conv_id) === String(ctx.state.conv));
-        } catch (e) { /* Older failure records have no task identifier. */ }
+        const stopped = pausedTask();
         if (stopped) {
           const resumeBtn = document.createElement('button');
           resumeBtn.type = 'button';
@@ -555,21 +577,12 @@
           resumeBtn.textContent = '继续任务';
           wrap.prepend(resumeBtn);
           resumeBtn.addEventListener('click', async () => {
-            if (lastUserText() !== msg) { showHint(STALE_HINT); return; }
             resumeBtn.disabled = true;
-            const previous = [...messages.querySelectorAll('.chat-msg.agent')]
-              .find(item => item.dataset.mid === stopped.partial_id) || div;
-            const completed = await sendMessage({ silent: true, resumeTask: stopped.task_id,
-              resumeText: msg, convId: stopped.conv_id, processFrom: previous,
-              previousProcess: stopped.process || [], onDropped: showHint });
-            if (completed) {
-              ctx.state.items = ctx.state.items.filter(x => x.id !== stopped.partial_id);
-              if (previous?.classList.contains('agent')) previous.remove();
-              clearFailedRound(msg);
-              saveHistory();
-            } else resumeBtn.disabled = false;
+            try { await resumeStoppedTask(stopped, div, showHint); }
+            finally { resumeBtn.disabled = false; }
           });
         }
+
         // 操作没办成时的**可见回答**（20260927）：点一下什么都不发生是本仓明令禁止的
         // 收尾形态（"点了没反应"与"点了报错"差着一次排查）。此前 discard 失败 =
         // 按钮闪一下复原，主人只能猜。文案来自后端那句回答的**分类**，不是自创状态。
@@ -584,11 +597,6 @@
         };
         // 双保险①：失败轮必须是当前最后一条 user 消息才允许操作
         // （期间发了新消息 → 该轮已非最新，本地直接放弃）
-        const lastUserText = () => {
-          const last = [...ctx.state.items].reverse().find(i => i.type === 'user');
-          return last ? last.text : null;
-        };
-        const STALE_HINT = '这一轮已经不是你最后一条消息了（期间发过新的），不再提供重发';
         // 双保险②：后端 discard 带原文校验（见 `postDiscard` 头注）
         const discardFailedRound = () => postDiscard(msg, ctx.state.conv);
         const restoreAndCleanup = () => {
@@ -647,17 +655,7 @@
       // 最后一条 user 消息匹配标记且其后无 agent 回复，追加"（未收到回复）"提示条。
       // 不落 DB：chat_history 无标记字段、prepare_chat 全 role 注入上下文，落库会
       // 污染模型 few-shot（上一轮"回复"是失败标记）。
-      // 20260927：**连原因一起记**（`reason`，用户拍板"不入库，但要能刷新后存活"）。
-      // 旧形态只存原文 ⇒ 刷新后那条提示条只会说"未收到回复"，而失败原因恰恰是主人
-      // 唯一想知道的东西（超时？服务端出错？连不上？三种原因能做的事完全不同）。
-      // 原因文本来自**展示口径**（`errMsg`：服务端自己那句话原样、否则「网络错误: …」），
-      // 所以它天然是给主人看的措辞，不需要第二套文案；旧记录没有这个字段 ⇒ 回退到
-      // 原来的笼统说法（历史记录不必迁移）。
-      // 20261001：再加一个 `kind`——`'failed'`（超时/出错，默认）与 `'stopped'`
-      // （**主人自己按的停止**）。两者在屏幕上要做的事完全不同：前者是"没收到回复"，
-      // 后者是"我不要这一轮"，而后者还有一条自己的规矩（见 `releaseStoppedTurn`：
-      // 主人不重发也不编辑、直接说下一句 ⇒ 到那一刻才丢）。缺字段按 `'failed'`
-      //（旧记录不必迁移，行为与加这个字段之前逐字相同）。
+      // Persist interruption reason and task coordinates for refresh-safe continuation.
       const FAILED_KEY = 'saudade-chat-failed';
       const persistFailedRound = (text, reason, kind) => {
         try {
@@ -1175,7 +1173,7 @@
           div.insertBefore(typingEl, contentSpan);
           const kickTyping = () => {
             if (typingTimer) clearTimeout(typingTimer);
-            typingEl.classList.remove('typing-visible');
+            if (typingEl.classList.contains('typing-visible')) return;
             typingTimer = setTimeout(() => {
               typingEl.classList.add('typing-visible');
               scrollToBottom(messages);
@@ -1518,6 +1516,10 @@
         }
         return completed && !ctx.state.stoppedByUser;
       };
+
+      ctx.ui.isResumingTask = () => resumingTask;
+      ctx.ui.currentPausedTask = pausedTask;
+      ctx.ui.continueTask = () => resumeStoppedTask(pausedTask());
 
       const navigation = g.__waifuNavigation ? g.__waifuNavigation(ctx, engine, sendMessage) : null;
 
@@ -1883,19 +1885,9 @@
         if (ctx.state.isSending) {
           // 输出中点击 = 停止生成
           ctx.state.stoppedByUser = true;
+          ctx.ui.refreshComposer?.();
           if (ctx.state.streamCtrl) ctx.state.streamCtrl.abort();
-          // 20261001 起这里**不再**当场 apiDiscard：停止生成不丢弃这一轮（用户消息留在
-          // 原处可二次编辑/重发），真正的丢弃推迟到主人下一次发言那一刻
-          // （`releaseStoppedTurn`，见 sendMessage 入口）。旧行为是当场把 DB 里那条
-          // user 消息与残缺回复一起删——"按错了/想改个措辞"时消息已经没了。
-          // 保险：极端情况下（浏览器对已开始读取的流 abort 不触发 AbortError）catch 不会执行，
-          // UI 会卡死在"停止生成"状态——3s 后强制恢复，保证界面必能继续使用。
-          // 与 sendMessage 收尾 stoppedTurn 分支相同的保留逻辑（abort 未触发时手动补上）
-          // 20260902：扩展条件 stoppedByUser || timedOut——空闲/总超时 abort 同样可能
-          // 命中"abort 不触发 AbortError"边界（025943 事故实证：60s 超时后无任何提示、
-          // 无重发按钮，UI 卡死）。timedOut 分支不走"丢弃本轮"（空闲超时≠用户不要
-          // 这条，DB 侧已保留 user 消息），而是恢复 UI + 渲染失败气泡 + 重发/编辑
-          // 按钮 + 持久化失败标记（刷新后仍可见，见 persistFailedRound）。
+          // Repair the controls if a browser abort does not settle its reader promptly.
           setTimeout(() => {
             if (ctx.state.isSending && (ctx.state.stoppedByUser || ctx.state.timedOut)) {
               ctx.state.isSending = false;
@@ -1941,6 +1933,10 @@
               }
             }
           }, 3000);
+          return;
+        }
+        if (!input.value.trim() && !(ctx.state.pendingImages || []).length && pausedTask()) {
+          void resumeStoppedTask(pausedTask());
           return;
         }
         sendMessage();
