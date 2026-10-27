@@ -27,6 +27,9 @@ class TaskInputs:
     def __init__(self, storage):
         self.storage = storage
 
+    def delete_conversation(self, conversation_id):
+        self.storage.delete_conversation(conversation_id)
+
     @staticmethod
     def _check(state, scope):
         if not state or state["scope"] != scope:

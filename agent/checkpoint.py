@@ -245,6 +245,8 @@ def delete_thread(saver, conversation_id: object) -> bool:
         from agent.runtime import checkpoint_store
         checkpoint_store.mark_deleted(saver, tid)
         saver.delete_thread(tid)
+        from agent.runtime.task_inputs import for_saver
+        for_saver(saver).delete_conversation(conversation_id)
         return saver.get_tuple(config) is None
 
 

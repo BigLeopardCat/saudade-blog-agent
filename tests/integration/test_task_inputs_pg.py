@@ -51,6 +51,9 @@ def test_two_workers_share_inputs_and_duplicate_delivery(inboxes):
     assert len(right.boundary(task, set())) == 1
     right.boundary(task, {"input"}, applied={"input"}, final=True)
     assert left.read("one", task["scope"])["inputs"][0]["status"] == "applied"
+    right.delete_conversation(42)
+    with pytest.raises(InputConflict):
+        left.read("one",task["scope"])
 
 
 def test_finish_race_cannot_acknowledge_and_silently_skip_an_input(inboxes):

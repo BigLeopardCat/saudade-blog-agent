@@ -244,3 +244,17 @@ def test_new_requirements_supersede_a_card_that_has_not_been_published():
     assert not selected.store.load(cfg).has_pending
     assert unpublished not in str(model.prompts[-1])
     assert selected.inputs.read("same-task",scope)["inputs"][0]["status"] == "applied"
+
+
+def test_conversation_deletion_removes_its_inputs_without_affecting_other_threads():
+    from agent import checkpoint
+
+    selected = runtime(Model())
+    scope = binding(config()["configurable"]["principal"],42)
+    selected.inputs.open({"id":"one","scope":scope})
+    selected.inputs.open({"id":"other","scope":{**scope,"conversation_id":43}})
+    selected.inputs.submit("one",scope,"private","补充内容")
+    assert checkpoint.delete_thread(selected.saver,42)
+    with pytest.raises(InputConflict):
+        selected.inputs.read("one",scope)
+    assert selected.inputs.read("other",{**scope,"conversation_id":43})["phase"] == "running"
