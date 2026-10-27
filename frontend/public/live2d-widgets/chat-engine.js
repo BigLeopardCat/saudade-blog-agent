@@ -1188,7 +1188,14 @@
             if (lastIsFailedUser && !hasAgentAfter) {
               if (!failedNoteEl) {
                 failedNoteEl = document.createElement('div');
-                failedNoteEl.className = 'chat-msg-failed-note';
+                failedNoteEl.className = entry.kind === 'stopped'
+                  ? 'chat-msg-failed-note chat-task-card' : 'chat-msg-failed-note';
+                if (entry.kind === 'stopped') {
+                  const heading = document.createElement('div');
+                  heading.className = 'chat-task-heading';
+                  heading.textContent = '任务已暂停';
+                  failedNoteEl.appendChild(heading);
+                }
                 // 原因（20260927）：新记录带 `reason`（chat-stream 写入时存的是
                 // **展示口径**的那句话——服务端自己说的原样，否则「网络错误: …」），
                 // 旧记录没有这个字段 ⇒ 回退到原来那句笼统说法，历史记录不必迁移。
@@ -1196,15 +1203,9 @@
                 // 而超时/服务端出错/连不上三种原因能做的事完全不同。
                 const line = document.createElement('div');
                 line.className = 'chat-msg-failed-text';
-                // kind='stopped'（20261001）：这条是**主人自己按的停止**，不是"没收到
-                // 回复"——两件事要做的事完全不同（前者是系统的问题，值得回头查；后者
-                // 是主人自己的决定，只是还没重发/编辑）。措辞必须分开：混成一句，刷新
-                // 一次就会被读成"agent 挂了"。停下来的那条**不会再被回答**（消息还在，
-                // 那一轮已经作废），这是主人此刻唯一需要知道的事实。
-                // ⚠️ 别写成"助手没有回答"：已经流出来的半截回复是**保留**下来的
-                // （就在提示条上面那个气泡里），这句会被读成"屏幕撒谎"。
+                if (entry.kind === 'stopped') line.className = 'chat-msg-failed-text chat-task-description';
                 line.textContent = entry.kind === 'stopped'
-                  ? '⏹ 这条消息被你停止了，这一轮不会再回答（可重发或编辑）'
+                  ? (entry.task_id ? '可以继续任务，也可以输入新的要求。' : '可以重新发送或编辑这条消息。')
                   : '⏳ 该条消息未收到回复'
                     + (entry.reason ? '：' + entry.reason : '（可能已超时或网络中断）');
                 failedNoteEl.appendChild(line);
