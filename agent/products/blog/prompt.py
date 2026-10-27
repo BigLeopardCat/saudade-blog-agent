@@ -48,10 +48,8 @@ def build_prompt(messages: list, principal, own_enabled: bool = False, pending=N
     if context["caller"]["role"] is not None:
         context["caller"]["role"] = role_cn(context["caller"]["role"])
     context["caller"]["conversation_style"] = conversation_style(principal)
-    guidance = tool_guidance(principal)
-    if guidance:
-        context["tools"]["guidance"] = guidance
-    system = SystemMessage(content=BLOG_PERSONA_PROMPT + "\n" + _BOUNDARY
+    context["tools"]["guidance"] = tool_guidance(principal) or _BOUNDARY
+    system = SystemMessage(content=BLOG_PERSONA_PROMPT
                            + "\ncaller 是当前调用者的账号，不是你的身份；其权限不证明博客作者身份。"
                            + "\n运行时能力（可信数据）："
                            + json.dumps(context, ensure_ascii=False, separators=(",", ":")))
