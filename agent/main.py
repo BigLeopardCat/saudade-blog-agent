@@ -7,7 +7,14 @@ from fastapi import FastAPI
 
 from agent.api.lifecycle import lifespan
 from agent.api.middleware import body_limit_middleware, trace_id_middleware
-from agent.api.routes import chat, conversations, knowledge_graph, moderation, operations
+from agent.api.routes import (
+    chat,
+    conversations,
+    knowledge_graph,
+    moderation,
+    operations,
+    task_inputs,
+)
 
 
 def app_version() -> str:
@@ -27,6 +34,7 @@ def create_app() -> FastAPI:
     for router in (
         chat.router,
         conversations.router,
+        task_inputs.router,
         knowledge_graph.router,
         moderation.router,
         operations.router,

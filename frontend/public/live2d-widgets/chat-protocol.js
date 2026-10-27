@@ -2,6 +2,9 @@ import { createParser } from './lib/eventsource-parser-4.1.2/index.js';
 
 // Business event validation is separate from the standard SSE parser.
 const object = (data) => data !== null && typeof data === 'object' && !Array.isArray(data);
+const taskInput = data => object(data) && typeof data.id === 'string' && data.id
+  && typeof data.text === 'string' && ['queued', 'applied', 'not_applied'].includes(data.status)
+  && (data.message_id == null || Number.isInteger(data.message_id));
 const decode = ({ event, data }) => {
   let value;
   try { value = JSON.parse(data); }
@@ -19,6 +22,13 @@ const decode = ({ event, data }) => {
   }
   if (event === 'command' && object(value)
       && ['navigate', 'effect', 'darkmode'].includes(value.kind)) {
+    return { type: event, data: value };
+  }
+  if (event === 'task_input' && object(value) && typeof value.task_id === 'string'
+      && (typeof value.ready === 'boolean' || taskInput(value.input) || Array.isArray(value.inputs))
+      && (value.input === undefined || taskInput(value.input))
+      && (value.inputs === undefined || (Array.isArray(value.inputs) && value.inputs.length <= 8
+        && value.inputs.every(taskInput)))) {
     return { type: event, data: value };
   }
   throw new Error('无法识别的聊天事件，请刷新页面后重试');

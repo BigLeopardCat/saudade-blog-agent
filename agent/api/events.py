@@ -16,7 +16,8 @@ def control_event(value: str) -> tuple[str, object]:
     """Translate only trusted producer controls, never model message content."""
     prefix, sep, payload = value.partition(":")
     names = {"__PROCESS__": "progress", "__CONFIRM__": "confirmation",
-             "__PENDING__": "pending", "__CMD__": "command", "__EXEC__": "receipts"}
+             "__PENDING__": "pending", "__CMD__": "command", "__EXEC__": "receipts",
+             "__INPUT__": "task_input"}
     if not sep or prefix not in names:
         raise ValueError("unsupported producer control event")
     return names[prefix], payload if prefix == "__PROCESS__" else json.loads(payload)

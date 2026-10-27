@@ -14,6 +14,7 @@ from langchain_core.messages import AIMessageChunk
 
 from agent.products.blog.confirmation import frames as confirmation_frames
 from agent.runtime.results import TurnResult
+from agent.runtime.task_inputs import TaskInputEvent
 
 
 class TransportProtocolError(RuntimeError):
@@ -125,6 +126,9 @@ def _stream_body(events):
     for event in events:
         if terminal is not None:
             raise TransportProtocolError("runtime yielded events after TurnResult")
+        if isinstance(event, TaskInputEvent):
+            yield _json_frame("__INPUT__:", event.data)
+            continue
         if isinstance(event, AIMessageChunk):
             content = str(event.content or "")
             if content:

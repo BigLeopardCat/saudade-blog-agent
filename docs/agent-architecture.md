@@ -56,6 +56,7 @@ flowchart LR
 │   ├── api/turns.py                                    # 显式运行时的调用和队列适配
 │   ├── api/routes/chat.py                              # 聊天与 SSE 路由
 │   ├── api/routes/conversations.py                     # 会话维护及确认取消
+│   ├── api/routes/task_inputs.py                       # 运行中补充消息的认证入口与状态查询
 │   ├── api/routes/operations.py                        # 健康、就绪与版本
 │   ├── api/context.py                                   # 请求到标准消息的适配与历史回放
 │   ├── api/host_context.py                              # 有界宿主事实与历史任务投影
@@ -167,6 +168,10 @@ flowchart LR
 │   ├── runtime/execution.py                             # 标准 Agent 子图与会话审批图组合
 │   ├── runtime/client_actions.py     # 浏览器回报的框架中断与绑定校验
 │   ├── runtime/execution_state.py                       # 工具领域、来源证据与待审批状态
+│   ├── runtime/task_input_store.py                      # 跨进程任务输入的短事务存储
+│   ├── runtime/task_input_policy.py                     # 标准模型边界消费补充消息及应用事件
+│   ├── runtime/task_inputs.py                           # 幂等输入、接收状态与任务封口
+│   ├── runtime/task_scope.py                            # 与工具权限独立的任务身份绑定
 │   ├── runtime/recovery.py                              # 普通任务绑定与标准 checkpoint 续跑适配
 │   ├── runtime/budget.py                                # 当前生产代码模块
 │   ├── runtime/input_usage.py                           # 相同模型及请求前缀复用服务商输入用量

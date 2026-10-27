@@ -132,6 +132,37 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
+  task-input-postgres:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: task-input-ci
+          POSTGRES_DB: agent_inputs_it
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd="pg_isready -U postgres"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.12"
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+      - run: uv sync --locked
+      - name: Cross-worker task input and completion races
+        env:
+          SAUDADE_TASK_INPUT_TEST_DSN: postgresql://postgres:task-input-ci@127.0.0.1:5432/agent_inputs_it
+        run: uv run --frozen pytest -q tests/integration/test_task_inputs_pg.py
+
   widget-pin-drift:
     runs-on: ubuntu-latest
     timeout-minutes: 5

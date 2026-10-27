@@ -3,9 +3,13 @@
   'use strict';
   const shouldSubmit = e => e.key === 'Enter' && !e.shiftKey && !e.ctrlKey
     && !e.metaKey && !e.altKey && !e.isComposing && e.keyCode !== 229 && !e.repeat;
-  const deriveState = ({ isSending, remoteBusy, approvalBusy, hasContent, pausedTask, pausing, resuming }) => {
+  const deriveState = ({ isSending, remoteBusy, approvalBusy, hasContent, pausedTask, pausing, resuming,
+    canSteer, steeringSubmitting }) => {
     if (isSending && pausing) return { phase: 'pausing', disabled: true, label: '暂停中', status: '正在暂停任务' };
+    if (isSending && canSteer && hasContent) return { phase: 'steering', disabled: !!steeringSubmitting,
+      label: '补充', status: '补充要求将在下一轮模型调用前生效' };
     if (isSending) return { phase: 'sending', disabled: false, label: '暂停', status: '正在回复，可随时暂停' };
+    if (steeringSubmitting) return { phase: 'steering_sync', disabled: true, label: '确认中', status: '正在确认补充要求的接收状态' };
     if (resuming) return { phase: 'resuming', disabled: true, label: '继续中', status: '正在继续任务' };
     if (approvalBusy) return { phase: 'approval', disabled: true, label: '发送', status: '正在处理确认操作，请稍候' };
     if (remoteBusy) return { phase: 'remote', disabled: true, label: '发送', status: '另一窗口正在回复，请稍候' };
@@ -61,6 +65,13 @@
     const stopIcon = '<svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor" aria-hidden="true"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>';
     const resumeIcon = '<svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor" aria-hidden="true"><path d="M8 5.5v13l11-6.5z"/></svg>';
     const pauseIcon = '<svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor" aria-hidden="true"><path d="M6 5h4v14H6zm8 0h4v14h-4z"/></svg>';
+    const pauseButton = document.createElement('button');
+    pauseButton.type = 'button'; pauseButton.className = 'chat-pause-btn';
+    pauseButton.hidden = true; pauseButton.innerHTML = stopIcon;
+    pauseButton.setAttribute('aria-label', '暂停当前任务');
+    pauseButton.title = '暂停当前任务';
+    pauseButton.addEventListener('click', () => ctx.ui.pauseTask?.());
+    sendBtn.parentNode.insertBefore(pauseButton, sendBtn);
     const addCopyButtons = () => {
       messages.querySelectorAll('.chat-msg.agent[data-finished="1"]').forEach(message => {
         if (enhancedMessages.has(message)) return;
@@ -98,24 +109,29 @@
         approvalBusy: ctx.state.approvalBusy,
         pausedTask: ctx.ui.currentPausedTask?.(), pausing: ctx.state.stoppedByUser,
         resuming: ctx.ui.isResumingTask?.(),
+        canSteer: ctx.state.steeringReady, steeringSubmitting: ctx.state.steeringSubmitting,
         hasContent: !!input.value.trim() || (ctx.state.pendingImages || []).length > 0 });
       if (sendBtn.disabled !== state.disabled) sendBtn.disabled = state.disabled;
       const action = state.phase === 'sending' ? '暂停任务' : state.phase === 'pausing' ? '正在暂停任务'
-        : state.phase === 'paused' ? '继续任务' : state.phase === 'resuming' ? '正在继续任务' : '发送消息';
+        : state.phase === 'paused' ? '继续任务' : state.phase === 'resuming' ? '正在继续任务'
+        : state.phase === 'steering' ? '发送补充要求'
+        : state.phase === 'steering_sync' ? '正在确认补充要求' : '发送消息';
       setAttr(sendBtn, 'aria-label', action);
       setAttr(sendBtn, 'title', action);
       setAttr(input, 'aria-busy', !!ctx.state.isSending);
+      input.disabled = !!ctx.state.isSending && (!ctx.state.steeringReady || !!ctx.state.stoppedByUser);
+      pauseButton.hidden = state.phase !== 'steering';
       if (sendBtn.dataset.phase !== state.phase || !sendBtn.querySelector('svg')) {
         sendBtn.innerHTML = state.phase === 'sending' ? stopIcon : state.phase === 'paused' ? resumeIcon
           : state.phase === 'pausing' ? pauseIcon : sendIcon;
         sendBtn.dataset.phase = state.phase;
       }
       imageButton.disabled = !['ready', 'paused'].includes(state.phase);
-      const showNotice = state.phase === 'ready' && Date.now() < noticeUntil;
+      const showNotice = Date.now() < noticeUntil;
       const statusText = showNotice ? notice : state.status;
       if (status.textContent !== statusText) status.textContent = statusText;
       setAttr(status, 'data-phase', showNotice ? noticeTone : state.phase);
-      setAttr(status, 'data-visible', !!statusText && (showNotice || ['remote', 'approval'].includes(state.phase)));
+      setAttr(status, 'data-visible', !!statusText && (showNotice || ['remote', 'approval', 'steering_sync'].includes(state.phase)));
       setAttr(listButton, 'aria-expanded', panel.classList.contains('conv-open'));
       if (empty) {
         if (!messages.contains(empty)) messages.prepend(empty);
@@ -145,7 +161,7 @@
     input.addEventListener('keydown', e => {
       if (composing || !shouldSubmit(e)) return;
       e.preventDefault();
-      if (!ctx.state.isSending && !sendBtn.disabled) sendBtn.click();
+      if ((!ctx.state.isSending || sendBtn.dataset.phase === 'steering') && !sendBtn.disabled) sendBtn.click();
     });
     panel.addEventListener('click', e => {
       const starter = e.target.closest('[data-chat-prompt]');

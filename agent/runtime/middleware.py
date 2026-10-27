@@ -2,6 +2,7 @@
 
 import json
 import time
+from dataclasses import replace
 from threading import Condition
 
 from langchain.agents.middleware import AgentMiddleware, hook_config
@@ -20,6 +21,8 @@ from agent.runtime.memory_media import hydrate, stage
 from agent.runtime.message_content import text_content
 from agent.runtime.progress import emit
 from agent.runtime.results import pause_notice
+from agent.runtime.task_input_policy import additions as input_additions
+from agent.runtime.task_input_policy import replace_unpublished_proposal
 from agent.runtime.turns import check_cancelled
 from config.settings import settings
 from utils.trace import record
@@ -97,6 +100,9 @@ class SessionMiddleware(AgentMiddleware):
         check_cancelled(session.config)
         if state.get("resume"):
             return self._resume(state)
+        replacement = replace_unpublished_proposal(session, state)
+        if replacement:
+            return {**capture(session), "messages": replacement}
         saved = capture(session)
         if session.outcome is not None:
             saved["jump_to"] = "end"
@@ -107,6 +113,10 @@ class SessionMiddleware(AgentMiddleware):
             # A lifecycle boundary can be saved halfway through a native batch.
             session.budget.attempt_tools(sum(call["id"] not in self.cached for call in self.calls))
             saved["jump_to"] = "tools"
+        if "jump_to" not in saved:
+            extra = input_additions(session, state)
+            if extra:
+                saved["messages"] = extra
         return saved
 
     def _resume(self, state):
@@ -148,6 +158,12 @@ class SessionMiddleware(AgentMiddleware):
 
     def wrap_model_call(self, request, handler):
         session = self.session
+        # Recovery can retry the model node directly, without rerunning its
+        # preceding before_model checkpoint. Persist these additions together
+        # with this model's response through the framework's standard reducer.
+        extra_inputs = input_additions(session, request.state)
+        if extra_inputs:
+            request = request.override(messages=[*request.messages, *extra_inputs])
         prompt = [*([request.system_message] if request.system_message else []),
                   *hydrate(request.messages, session.transient)]
         final = final_prompt(session.budget, prompt, session.menu, session.output_limit,
@@ -180,7 +196,8 @@ class SessionMiddleware(AgentMiddleware):
                     model_settings=model_options(settings.llm_timeout)))
                 response = result.result[-1]
                 session.budget.settle(ticket, response)
-                return result
+                return (replace(result, result=[*extra_inputs, *result.result])
+                        if extra_inputs else result)
         finally:
             response_model = _model_name(response=response)
             record("native", "llm_done" if response is not None else "llm_error",
@@ -190,7 +207,7 @@ class SessionMiddleware(AgentMiddleware):
                    finish_reason=(getattr(response, "response_metadata", {}) or {}).get(
                        "finish_reason"), **usage_fields(response))
 
-    @hook_config(can_jump_to=["end"])
+    @hook_config(can_jump_to=["end", "model"])
     def after_model(self, state, runtime):
         session = self.session
         self._recover(state)
@@ -202,6 +219,11 @@ class SessionMiddleware(AgentMiddleware):
                     "id": None, "error": "incomplete_tool_arguments",
                     "type": "invalid_tool_call"}]})
         check_cancelled(session.config)
+        if not response.invalid_tool_calls:
+            extra = input_additions(session, state, response=response)
+            if extra:
+                session._round_index += 1
+                return {**capture(session), "messages": extra, "jump_to": "model"}
         calls, outcome = session._validate_response(response)
         system = [self.system_message] if self.system_message else []
         self.exchange = [*system, *state["messages"]]
