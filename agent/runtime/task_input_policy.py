@@ -1,9 +1,18 @@
 """Inject user steering through standard Agent message updates at model boundaries."""
 
-from langchain_core.messages import ToolMessage
+from langchain_core.messages import HumanMessage, ToolMessage
 
+from agent.runtime.message_content import text_content
 from agent.runtime.task_inputs import TaskInputEvent, consumed, messages
 from utils.trace import record
+
+
+def model_messages(messages):
+    """Identify supplemental instructions on the wire; persist the original text."""
+    return [message.model_copy(update={
+        "content": "用户补充的当前任务要求：\n" + text_content(message.content)})
+        if isinstance(message, HumanMessage) and message.additional_kwargs.get("task_input")
+        else message for message in messages]
 
 
 def additions(session, state, *, response=None):
