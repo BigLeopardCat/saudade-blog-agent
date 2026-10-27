@@ -56,8 +56,8 @@ const server = createServer(async (req, res) => {
         }
         res.write(frame('progress', '正在调用工具：search_notes'));
         res.write(frame('progress', '正在整理会话摘要…'));
-        res.write(frame('text', mode === 'literal' ? literal : (mode === 'hold' ? '这是保留的部分回复。' : '离线测试回复：已收到你的消息。')));
-        if (mode === 'hold') return;
+        if (mode !== 'hold-empty') res.write(frame('text', mode === 'literal' ? literal : (mode === 'hold' ? '这是保留的部分回复。' : '离线测试回复：已收到你的消息。')));
+        if (['hold', 'hold-empty'].includes(mode)) return;
         if (mode.startsWith('confirmation')) res.write(frame('confirmation', {
           id: 'offline-ask', task_id: body.task_id, replay_safe: mode === 'confirmation-resumable', q: '将测试文章加入收藏？这会新增一条收藏记录。',
           token: 'offline-synthetic-confirmation', exp: Math.floor(Date.now() / 1000) + 600,
@@ -134,7 +134,7 @@ try {
     await page.waitForFunction(() => window.__chatTest.ctx.state.isSending);
     await page.waitForTimeout(50);
     assert.equal(streamCount(), before + 1);
-    if (mode !== 'hold') await idle();
+    if (!['hold', 'hold-empty'].includes(mode)) await idle();
   };
   const noOverflow = async () => {
     const result = await page.evaluate(() => {
@@ -467,7 +467,39 @@ try {
   const continuedProgress = await page.locator('.agent-process-line').allTextContents();
   assert.ok(continuedProgress.includes('从已保存的进度继续'));
   assert.deepEqual(continuedProgress.slice(0, stoppedProgress.length), stoppedProgress);
+  assert.equal(await page.locator('.chat-msg-failed-note').count(), 0);
+  assert.equal(await page.locator('.chat-msg-retry').count(), 0);
+  assert.equal(await page.evaluate(() => localStorage.getItem('saudade-chat-failed')), null);
   passed('continuation preserves original progress, request and user text without a restart');
+
+  await reset();
+  await send('测试首个正文前暂停', 'hold-empty');
+  await page.locator('#chat-send').click();
+  await idle();
+  await page.locator('.chat-task-card').waitFor({ state: 'visible' });
+  nextMode = 'slow';
+  await page.locator('.chat-resume-btn').click();
+  await page.waitForFunction(() => window.__chatTest.ctx.state.isSending);
+  assert.equal(await page.locator('.chat-task-card').isVisible(), false);
+  await idle();
+  assert.equal(await page.locator('.chat-task-card').count(), 0);
+  assert.equal(await page.locator('.chat-msg-retry').count(), 0);
+  passed('pause before first text and card continuation leave no stale pause controls');
+
+  await reset();
+  await send('测试接续网络失败', 'hold-empty');
+  await page.locator('#chat-send').click();
+  await idle();
+  await page.locator('.chat-task-card').waitFor({ state: 'visible' });
+  nextMode = 'unknown';
+  await page.locator('#chat-send').click();
+  await idle();
+  await page.locator('.chat-task-card').waitFor({ state: 'visible' });
+  assert.equal(await page.locator('.chat-resume-btn').isEnabled(), true);
+  assert.equal(await page.locator('#chat-send').getAttribute('aria-label'), '继续任务');
+  assert.equal(await page.evaluate(() => window.__chatTest.ctx.state.items
+    .filter(x => x.type === 'user' && x.text === '测试接续网络失败').length), 1);
+  passed('failed continuation restores its original pause controls without duplicating the request');
 
   await reset();
   nextMode = 'slow';
