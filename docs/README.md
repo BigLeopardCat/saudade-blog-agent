@@ -31,6 +31,7 @@
 | [deepseek-task-completion-20261026.md](deepseek-task-completion-20261026.md) | DeepSeek回放适配、推理档位对照、任务评测修订与视觉边界 | 记录型 |
 | [deepseek-regression-20261026.md](deepseek-regression-20261026.md) | 排除视觉的125项全量、性能用量、独立误报复评与验收边界 | 记录型 |
 | [cache-notification-followup-20261027.md](cache-notification-followup-20261027.md) | 缓存前后与再次小批量、通知漏查根因及测试trace隔离 | 记录型 |
+| [deepseek-cancel-cache-audit-20261028.md](deepseek-cancel-cache-audit-20261028.md) | 打断与恢复请求指纹、DeepSeek缓存对照及工具菜单变化的单变量验证 | 记录型 |
 | [local-bge-production-20261027.md](local-bge-production-20261027.md) | 本地BGE启用、索引复用、故障回退、性能与检索实现边界 | 记录型 |
 | [deepseek-regression-cases-20261026.md](deepseek-regression-cases-20261026.md) | 125项场景的首判、复评、耗时、调用与token逐项记录 | 记录型 |
 | [enterprise-readiness-20261026.md](enterprise-readiness-20261026.md) | 企业试点指标建议、现有证据、尚缺指标与优先补齐顺序 | 方向型 |
