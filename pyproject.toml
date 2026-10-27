@@ -20,24 +20,24 @@ classifiers = [
 ]
 # Direct runtime dependencies; uv.lock pins reproducible installations.
 dependencies = [
-    "edge-tts==7.2.8",
-    "fastapi==0.141.1",
+    "edge-tts==7.3.1",
+    "fastapi==0.162.0",
     "httpx==0.28.1",
-    "langchain-core==1.6.10",
-    "langchain-openai==1.3.3",
-    "langgraph==1.2.12",
+    "langchain-core==1.7.0",
+    "langchain-openai==1.7.2",
+    "langgraph==1.2.17",
     # 原生 checkpoint 持久化与恢复安全的快照裁剪。
     "langgraph-checkpoint-postgres==3.2.0",
     "openai==2.44.0",
     "psycopg[binary]==3.3.6",
     "psycopg-pool==3.3.3",
-    "pydantic==2.13.4",
-    "pydantic-settings==2.14.2",
+    "pydantic==2.14.1",
+    "pydantic-settings==2.16.1",
     # JWT authentication uses the installed PyJWT implementation.
     "PyJWT==2.15.1",
-    "starlette==1.6.0",
-    "uvicorn==0.52.4",
-    "langchain==1.4.6",
+    "starlette==1.9.0",
+    "uvicorn==0.54.0",
+    "langchain==1.4.7",
     "langchain-deepseek==1.1.1",
     "bm25s==0.3.15",
 ]
@@ -46,7 +46,7 @@ dependencies = [
 [dependency-groups]
 dev = [
     "bandit==1.9.4",
-    "coverage[toml]==7.16.2",
+    "coverage[toml]==7.17.0",
     "httpx-sse==0.4.3",
     "ir-measures==0.4.3",
     "mypy==2.4.0",
@@ -55,12 +55,12 @@ dev = [
     "pytest-socket==0.8.1",
     "pytest-timeout==2.4.0",
     "pytest-xdist==3.8.0",
-    "ruff==0.14.4",
-    "tokenizers==0.22.2",
+    "ruff==0.17.2",
+    "tokenizers==0.23.3",
 ]
 
 [project.optional-dependencies]
-embedding-tokenizer = ["tokenizers==0.22.2"]
+embedding-tokenizer = ["tokenizers==0.23.3"]
 rag-data = ["pyarrow==26.0.0"]
 
 [project.urls]
