@@ -1145,7 +1145,6 @@
   margin-left: calc(var(--drag-w) + 260px);
 }
 /* 新消息指示条：双栏下消息区视觉中心右移 ~130px（260/2，拍板近似） */
-#waifu-chat.conv-open .chat-new-msg-note { left: calc(50% + 130px); }
 /* 选图按钮位于左拖拽栏底部，conv-open 时落在列表列内 → 隐藏（列表操作期不需要） */
 #waifu-chat.conv-open .chat-img-btn { display: none; }
 
@@ -1167,7 +1166,6 @@
   #waifu-chat.conv-open .chat-conv-title {
     margin-left: var(--drag-w); /* 列表已覆盖全面板，消息区无需右移 */
   }
-  #waifu-chat.conv-open .chat-new-msg-note { left: 50%; }
 }
 
 /* ══════════════════════════════════════════════════════════════════════
@@ -1249,7 +1247,6 @@
 #waifu-chat.conv-open .chat-conv-title {
   margin-left: 0;
 }
-#waifu-chat.conv-open .chat-new-msg-note { left: 50%; }
 #waifu-chat.conv-open .chat-img-btn { display: block; }
 
 /* ── 抽屉面板（叠层，z 8 盖消息内容/新消息提示，rail 在最左不受影响）── */
@@ -1420,7 +1417,6 @@
   #waifu-chat.conv-open .chat-conv-title {
     margin-left: var(--drag-w);
   }
-  #waifu-chat.conv-open .chat-new-msg-note { left: 50%; }
 }
 
 /* ══════════════════════════════════════════════════════════════════════
