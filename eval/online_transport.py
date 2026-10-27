@@ -96,6 +96,23 @@ class OnlineTransport:
             response.raise_for_status()
             self.cleaned_conversations.append(cid)
 
+    def check_category_fixture(self, name):
+        """Verify creation preconditions through the same read-only service contract."""
+        from agent.domains.categories import targets
+
+        request = targets.intent({"action": "create", "fields": {"name": name}})
+        response = self.client.post(self.blog_url + targets.PATH + "/prepare",
+                                    headers=self.host_headers(self.uid), json=request)
+        response.raise_for_status()
+        payload = response.json()
+        if not isinstance(payload, dict) or payload.get("code") != 200:
+            raise EvaluationError(
+                "category fixture cannot prepare a new category; check name/path collisions")
+        try:
+            targets.plan(payload["data"], request)
+        except (ValueError, TypeError, KeyError) as exc:
+            raise EvaluationError("category fixture has no valid new-category plan") from exc
+
     def _headers(self, request_id):
         if self.host:
             return {**self.host_headers(self.uid), "X-Request-ID": request_id,

@@ -70,12 +70,13 @@
       </div>
       <button type="button" class="chat-new-msg-note" id="chat-new-msg-note" aria-label="滚动到最新消息">↓ 有新消息</button>
       <div class="chat-input-area">
-        <div class="chat-img-preview" id="chat-img-preview" aria-label="待发送图片"></div>
+        <p class="chat-disclaimer">本回答由AI生成，内容仅供参考，请仔细甄别</p>
         <div class="chat-input-row">
+          <div class="chat-img-preview" id="chat-img-preview" aria-label="待发送图片"></div>
           <textarea class="chat-input" id="chat-input" aria-label="消息" aria-describedby="chat-status" title="Enter 发送，Shift + Enter 换行" placeholder="发消息…" rows="1"></textarea>
           <div class="chat-composer-tools">
             <button type="button" id="chat-img-btn" class="chat-img-btn" title="添加图片（最多 6 张）" aria-label="添加图片">
-              <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="4"/><circle cx="8" cy="8" r="1.5"/><path d="m3 17 5-5 4 4 4-6 5 7"/></svg>
+              <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
             </button>
             <button type="button" class="chat-send" id="chat-send" aria-label="发送消息">发送</button>
           </div>

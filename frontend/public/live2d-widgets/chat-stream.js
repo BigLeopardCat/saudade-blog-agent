@@ -1221,11 +1221,10 @@
             if (cnt) cnt.textContent = '';
           };
           const addStep = (cls, text) => {
-            const body = ensureProcessBox().querySelector('.agent-process-body');
             const line = document.createElement('div');
             line.className = 'agent-process-line ' + cls;
             line.textContent = text;
-            body.appendChild(line);
+            engine.appendProcessLine(ensureProcessBox(), line);
             steps.push({ cls, text });
             refreshCount();
             scrollToBottom(messages);

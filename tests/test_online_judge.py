@@ -72,6 +72,8 @@ def test_prepared_text_is_reviewed_as_output_not_used_as_supporting_fact(tmp_pat
     assert report["rows"][0]["status"] == "suspect"
     assert report["rows"][0]["diagnostics"]["usage"]["total_tokens"] == 100
     assert report["counts"] == {"suspect": 1}
+    assessment = json.loads((tmp_path / "semantic" / "assessment.json").read_text())
+    assert assessment["counts"] == {"needs_review": 1}
 
 
 def test_visible_card_text_is_reviewed_even_when_absent_from_signed_intent(tmp_path):
@@ -119,7 +121,7 @@ def test_semantic_result_cannot_replace_deterministic_failure(tmp_path):
     assert "passed" not in result["counts"]
 
 
-@pytest.mark.parametrize("failure", ["image", "truncated", "missing_trace", "large"])
+@pytest.mark.parametrize("failure", ["image", "truncated", "request", "missing_trace", "large"])
 def test_incomplete_material_is_not_evaluated_and_does_not_spend_tokens(tmp_path, failure):
     case = recorded(tmp_path)
     result = case["result"]["rounds"][0]
@@ -127,6 +129,8 @@ def test_incomplete_material_is_not_evaluated_and_does_not_spend_tokens(tmp_path
     trace = json.loads(path.read_text())
     if failure == "image":
         trace["input"]["has_image"] = True
+    elif failure == "request":
+        trace["input"]["message_truncated"] = True
     elif failure == "truncated":
         trace["events"][0]["result"] += truncation_mark(99999)
     elif failure == "large":
@@ -173,6 +177,19 @@ def test_model_override_changes_the_actual_client_not_just_report_label(monkeypa
     monkeypatch.setattr(models.llm, "get_llm", lambda **kwargs: captured.update(kwargs))
     llm_judge.make_llm(model="independent-judge", max_retries=0)
     assert captured["model"] == "independent-judge" and captured["max_retries"] == 0
+
+
+@pytest.mark.parametrize("status,code", [("checks_passed", 0), ("needs_review", 1),
+                                        ("failed", 1), ("not_evaluated", 2)])
+def test_cli_does_not_report_success_for_failed_or_incomplete_assessment(monkeypatch, status, code):
+    import sys
+
+    monkeypatch.setattr(sys, "argv", ["online_judge", "--report", "unused", "--out", "unused"])
+    monkeypatch.setattr(llm_judge, "make_llm", lambda **kwargs: None)
+    monkeypatch.setattr(online_judge, "review", lambda *args, **kwargs: {
+        "semantic_status": "no_issue_found", "counts": {"no_issue_found": 1},
+        "assessment_counts": {status: 1}})
+    assert online_judge.main() == code
 
 
 @pytest.mark.parametrize("model,format_type", [("deepseek-v4.1-flash", "json_object"),
