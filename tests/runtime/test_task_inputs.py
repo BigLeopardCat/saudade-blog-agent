@@ -214,3 +214,31 @@ def test_chat_only_role_can_steer_without_gaining_tools():
     assert "慢慢聊" in events[-1].reply
     assert not selected._session(cfg,selected.store.load(cfg)).tools
     assert selected.inputs.read("same-task",scope)["inputs"][0]["status"] == "applied"
+
+
+def test_new_requirements_supersede_a_card_that_has_not_been_published():
+    from agent.runtime.results import TurnResult
+
+    cfg = config()
+    scope = binding(cfg["configurable"]["principal"], 42)
+    selected = None
+
+    @tool
+    def prepare_fixture() -> object:
+        """Prepare a synthetic proposal without performing a business write."""
+        selected.inputs.submit("same-task", scope, "changed", "先不修改，只介绍功能")
+        return TurnResult("确认修改？", {"pending_confirm": {"q":"确认修改？",
+            "token":"private-unpublished-token", "opts":[],"exp":9999999999},
+            "pending_action":{"jti":"a"*32}})
+
+    model = Model(AIMessage(content="",tool_calls=[{
+        "name":"prepare_fixture","args":{},"id":"proposal"}]),
+        AIMessage(content="我只介绍功能，没有修改。"))
+    selected = runtime(model,[prepare_fixture])
+    events = list(selected.stream_events({"task_id":"same-task", "messages":[
+        HumanMessage(content="准备修改")]},cfg))
+    assert "只介绍功能" in events[-1].reply
+    assert not (events[-1].execution or {}).get("pending_confirm")
+    assert not selected.store.load(cfg).has_pending
+    assert "private-unpublished-token" not in str(model.prompts[-1])
+    assert selected.inputs.read("same-task",scope)["inputs"][0]["status"] == "applied"

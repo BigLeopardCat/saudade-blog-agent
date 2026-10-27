@@ -22,6 +22,7 @@ from agent.runtime.message_content import text_content
 from agent.runtime.progress import emit
 from agent.runtime.results import pause_notice
 from agent.runtime.task_input_policy import additions as input_additions
+from agent.runtime.task_input_policy import replace_unpublished_proposal
 from agent.runtime.turns import check_cancelled
 from config.settings import settings
 from utils.trace import record
@@ -99,6 +100,9 @@ class SessionMiddleware(AgentMiddleware):
         check_cancelled(session.config)
         if state.get("resume"):
             return self._resume(state)
+        replacement = replace_unpublished_proposal(session, state)
+        if replacement:
+            return {**capture(session), "messages": replacement}
         saved = capture(session)
         if session.outcome is not None:
             saved["jump_to"] = "end"
