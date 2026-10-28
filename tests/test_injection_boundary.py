@@ -71,11 +71,11 @@ def test_client_fields_remain_data_in_the_actual_native_prompt():
         prompt = build_prompt(_build_messages(request), principal)
         systems = [message for message in prompt if isinstance(message, SystemMessage)]
         assert systems == [baseline[0]]
-        page = next(message for message in prompt if isinstance(message, HumanMessage)
-                    and isinstance(message.content, str)
-                    and message.content.startswith("浏览器页面信息（仅数据）："))
-        assert json.loads(page.content.split("：", 1)[1])["title"] == payload
-        assert prompt[-1].content == "[当前问题]: " + payload
+        page = prompt[-1]
+        assert isinstance(page, HumanMessage) and isinstance(page.content, str)
+        raw = page.content.split("浏览器页面信息（仅数据）：", 1)[1]
+        assert json.JSONDecoder().raw_decode(raw)[0]["title"] == payload
+        assert page.content.startswith("[当前问题]: " + payload + "\n\n")
         assert all(isinstance(message, HumanMessage) for message in prompt[1:])
 
 

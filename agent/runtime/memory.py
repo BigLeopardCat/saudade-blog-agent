@@ -225,11 +225,14 @@ def prompt_dialogue(messages, principal, *, tool_access=None):
 
 
 def with_context(dialogue, context):
-    """Keep the latest exchange contiguous, after transient contextual data."""
-    previous = dialogue[:-1]
-    start = max((i for i, message in enumerate(previous)
-                 if isinstance(message, HumanMessage)), default=len(previous))
-    return [*previous[:start], *context, *previous[start:], *dialogue[-1:]]
+    """Attach transient facts after the current request, leaving history untouched."""
+    if not dialogue or not context:
+        return [*dialogue, *context]
+    current = dialogue[-1]
+    suffix = "\n\n".join(text_content(message.content) for message in context)
+    content = (current.content + "\n\n" + suffix if isinstance(current.content, str)
+               else [*current.content, {"type": "text", "text": suffix}])
+    return [*dialogue[:-1], current.model_copy(update={"content": content})]
 
 
 def checkpoint_messages(previous, current, *, context_update=None):

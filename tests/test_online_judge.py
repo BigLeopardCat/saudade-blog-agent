@@ -2,6 +2,7 @@
 
 import json
 import secrets
+from os.path import commonprefix
 from pathlib import Path
 
 import httpx
@@ -309,3 +310,25 @@ def test_repeated_catalogs_are_losslessly_shared_without_merging_changed_menus(t
         assert context == expected
         assert turn["assistant_reply_to_review"] == source["text"]
     assert len(text) < len(json.dumps(data, ensure_ascii=False, indent=2))
+
+
+def test_next_review_reuses_the_complete_prior_turn_before_variable_metadata(tmp_path):
+    case = recorded(tmp_path, text="EARLIER_REPLY_" * 100)
+    first = case["result"]["rounds"][0]
+    before = online_judge.material(case, [first])
+    next_path = tmp_path / "next.json"
+    trace = json.loads(Path(first["trace"]).read_text())
+    trace["input"]["message"] = "第二轮问题"
+    trace["events"].append({"node": "native", "event": "tool_contract", "schema": {
+        "function": {"name": "new_catalog_tool", "description": "Added on this turn."}}})
+    next_path.write_text(json.dumps(trace))
+    second = {**first, "trace": str(next_path), "text": "SECOND_REPLY"}
+    after = online_judge.material(case, [first, second])
+    first_turn = json.loads(before)["turns"][0]
+    encoded_turn = json.dumps(first_turn, ensure_ascii=False, separators=(",", ":"))
+    boundary = before.index(encoded_turn) + len(encoded_turn)
+    assert len(commonprefix([before, after])) >= boundary
+    data = json.loads(after)
+    assert data["current_turn"] == 2 and data["turns"][0] == first_turn
+    assert data["turns"][1]["assistant_reply_to_review"] == "SECOND_REPLY"
+    assert len(data["tool_catalogs"]) == 2

@@ -1,6 +1,7 @@
 """Bounded prompt history advances in batches and survives framework reloads."""
 
 import json
+from os.path import commonprefix
 
 from _memory_support import ACTOR, Capture, config, run, runtime
 from langchain_core.language_models.fake_chat_models import FakeListChatModel
@@ -44,7 +45,7 @@ def test_many_short_turns_keep_their_prefix_between_bounded_compactions(monkeypa
                 common += 1
             # A changed page attachment cannot replace the retained dialogue prefix.
             if anchor == previous_anchor and len(previous) > 7:
-                assert common >= len(previous) - 6
+                assert common >= len(previous) - 1
                 stable += 1
         boundaries.append(saved[0].id)
         assert memory._tokens(saved) <= memory.COMPACTION_TOKENS + 200
@@ -85,7 +86,9 @@ def test_summary_change_keeps_static_account_and_older_history_after_budget_fitt
         requests.append(fit_history(prompt, ACTOR, [], BudgetLimits(), 64))
     assert requests[0][:4] == requests[1][:4]
     assert '"user_id":7' in requests[0][1].content
-    assert requests[0][-3:] == requests[1][-3:] == [*history[-2:], HumanMessage(content="嗯")]
+    assert requests[0][:-1] == requests[1][:-1]
+    assert requests[0][-3:-1] == history[-2:]
+    assert all(prompt[-1].content.startswith("嗯\n\n") for prompt in requests)
     assert "old summary" not in json.dumps([m.content for m in requests[1]], ensure_ascii=False)
 
 
@@ -98,3 +101,25 @@ def test_filtered_window_boundary_does_not_resurrect_older_dialogue():
     private[0].additional_kwargs["memory_window_start"] = True
     assert memory.history([*older, *private], ACTOR) == older
     assert "PRIVATE_CANARY" in str(memory.history([*older, *private], admin))
+
+
+def test_long_turns_reuse_the_wire_prefix_through_the_previous_user_text():
+    saver, model = InMemorySaver(), Capture()
+    wire = DeepSeekChat(api_key="synthetic", model="deepseek-v4.1-flash")
+    previous, previous_question = None, None
+    for number in range(4):
+        question = f"长对话{number}：" + "保留原始阅读材料，不改变任务要求。" * 100
+        selected = runtime(saver, model)
+        run(selected, ChatRequest(message=question, current_url=f"/page-{number}",
+                                  page_title=f"CURRENT_PAGE_{number}"))
+        messages = wire._get_request_payload(model.prompts[-1])["messages"]
+        serialized = json.dumps(messages, ensure_ascii=False)
+        if previous is not None:
+            original = json.dumps("[当前问题]: " + previous_question, ensure_ascii=False)[1:-1]
+            boundary = previous.rindex(original) + len(original)
+            assert len(commonprefix([previous, serialized])) >= boundary
+            assert f"CURRENT_PAGE_{number-1}" not in serialized
+        saved = selected.store.load(config()).messages
+        assert all("CURRENT_PAGE_" not in str(message.content) for message in saved)
+        assert saved[-2].content == "[当前问题]: " + question
+        previous, previous_question = serialized, question

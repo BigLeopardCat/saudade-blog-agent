@@ -54,8 +54,10 @@ def test_current_image_system_context_and_tool_schema_take_priority_over_history
     budget = RequestBudget(BudgetLimits(context_tokens=10000, request_tokens=3500))
     consume(budget, 400)
     fitted = fit_history(original, UNKNOWN, menu, budget.limits, 64, budget=budget)
-    assert fitted[0] is original[0] and fitted[-1] is current
-    assert attachment in fitted and fitted.index(attachment) < len(fitted) - 1
+    assert fitted[0] is original[0]
+    assert fitted[-1].content[:-1] == current.content
+    assert fitted[-1].content[-1] == {"type": "text", "text": attachment.content}
+    assert current.content == original[-1].content
     assert estimate_tokens(fitted) < estimate_tokens(original)
     budget.reserve(fitted, menu, output_limit=64)
     assert budget.tokens <= budget.limits.request_tokens

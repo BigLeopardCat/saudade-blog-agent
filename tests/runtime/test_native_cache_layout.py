@@ -134,13 +134,16 @@ def test_changing_current_data_preserves_older_prefix_and_latest_exchange(change
                           current], principal,
                          pending=Pending("target B" if changed == "pending" else "target A"))
     assert before[:4] == after[:4] == [before[0], before[1], *history[:2]]
-    assert before[-3:] == after[-3:] == [*history[-2:], current]
-    assert before[-1] is after[-1] is current
+    assert before[:-1] == after[:-1] == [before[0], before[1], *history]
+    assert before[-1].content.startswith(current.content + "\n\n")
+    assert after[-1].content.startswith(current.content + "\n\n")
+    assert current.content == "继续"
     assert before != after
     for prompt in (before, after):
         assert all(value not in prompt[0].content for value in
                    ("page A", "page B", "summary A", "summary B", "target A", "target B"))
-        assert all(isinstance(message, HumanMessage) for message in prompt[4:-3])
+        assert isinstance(prompt[-1], HumanMessage)
+        assert "当前待确认操作" in prompt[-1].content
 
 
 def test_new_turn_page_state_preserves_the_recent_exchange_in_the_actual_request():
@@ -156,9 +159,10 @@ def test_new_turn_page_state_preserves_the_recent_exchange_in_the_actual_request
     before, after = model.requests
     assert before["tools"] == after["tools"]
     assert before["messages"][0] == after["messages"][0]
-    assert [message["content"] for message in after["messages"][-3:]] == [
-        "原有问题", "原有答复。", "继续"]
-    assert "page B" in json.dumps(after["messages"][:-3], ensure_ascii=False)
+    assert [message["content"] for message in after["messages"][-3:-1]] == [
+        "原有问题", "原有答复。"]
+    assert after["messages"][-1]["content"].startswith("继续\n\n")
+    assert "page B" in after["messages"][-1]["content"]
     assert "page A" not in json.dumps(after["messages"], ensure_ascii=False)
     saved = runtime.store.load(config()).messages
     assert all("page B" not in str(message.content) for message in saved)
