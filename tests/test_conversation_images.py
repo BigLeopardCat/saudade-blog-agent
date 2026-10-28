@@ -295,8 +295,9 @@ def test_current_image_wire_keeps_question_before_original_attachments(count, pe
     assert len(requests) == 1
     content = requests[0]["messages"][-1]["content"]
     assert content[0] == {"type":"text", "text":"[当前问题]: 这些图片是什么颜色"}
-    assert [part["image_url"]["url"] for part in content[1:]] == urls
-    assert all(part["type"] == "image_url" for part in content[1:])
+    assert [part["image_url"]["url"] for part in content[1:1+count]] == urls
+    assert all(part["type"] == "image_url" for part in content[1:1+count])
+    assert content[-1]["type"] == "text" and "本轮会话数据" in content[-1]["text"]
     assert all(message["role"] == "user" for message in requests[0]["messages"]
                if isinstance(message.get("content"),list))
     if persistent:

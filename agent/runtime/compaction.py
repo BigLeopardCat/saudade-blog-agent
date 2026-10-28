@@ -78,8 +78,8 @@ class ConversationCompaction(AgentMiddleware):
         session.context_update = {"summary": summary, "covered_ids": covered}
         dialogue = [summary, *preserved, *messages[current:]]
         attachments = [message for message in messages[:current] if memory.is_context(message)]
-        # Keep stable account context ahead of history; dynamic data precedes the
-        # most recent complete exchange so a short answer retains its referent.
+        # Account context stays ahead of history. Transient data belongs to the
+        # current request, preserving older messages and short-answer referents.
         leading = 0
         while leading < len(messages) and memory.is_context(messages[leading]):
             leading += 1

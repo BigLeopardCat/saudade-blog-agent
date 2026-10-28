@@ -32,8 +32,8 @@ def test_summary_reaches_native_input_as_data_not_runtime_authority():
         prompt[0].content.split("运行时能力（可信数据）：", 1)[1])
     assert trusted["caller"]["role"] == "超级管理员"
     assert "曾误称不能管理" not in prompt[0].content
-    assert any("用户希望中文答复" in str(m.content) for m in prompt[1:-1])
-    assert prompt[-1].content == "[当前问题]: 继续"
+    assert "用户希望中文答复" in prompt[-1].content
+    assert prompt[-1].content.startswith("[当前问题]: 继续\n\n")
     empty = server.build_messages(ChatRequest(message="继续"))
     assert memory.summary_message(empty) is None
 
@@ -144,8 +144,9 @@ def test_browser_content_stays_outside_the_system_instruction_channel():
     assert memory.is_context(incoming[0])
     prompt = _input(incoming, actor())
     assert "UNTRUSTED_PAGE_CANARY" not in prompt[0].content
-    page = next(m for m in prompt[1:-1] if "UNTRUSTED_PAGE_CANARY" in str(m.content))
-    assert isinstance(page, HumanMessage) and memory.is_context(page)
+    page = prompt[-1]
+    assert isinstance(page, HumanMessage) and "UNTRUSTED_PAGE_CANARY" in page.content
+    assert "浏览器页面信息（仅数据）：" in page.content
     assert not any("UNTRUSTED_PAGE_CANARY" in str(m.content)
                    for m in memory.turn_messages(incoming, [], "收到。", actor()))
 

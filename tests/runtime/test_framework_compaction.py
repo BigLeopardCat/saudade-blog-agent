@@ -53,8 +53,9 @@ def test_compaction_commits_summary_and_replacement_together_then_reloads(summar
         if isinstance(event, AIMessageChunk))
     assert "SUMMARY_CANARY" in str(model.prompts[-1])
     assert not any("question-0:" in str(m.content) for m in saved)
-    assert [m.content for m in model.prompts[-1][-3:]] == [
-        "[当前问题]: 继续核对", "收到。", "[当前问题]: 第二条呢"]
+    assert [m.content for m in model.prompts[-1][-3:-1]] == [
+        "[当前问题]: 继续核对", "收到。"]
+    assert model.prompts[-1][-1].content.startswith("[当前问题]: 第二条呢\n\n")
 
 
 def test_failed_summary_preserves_original_checkpoint_history(monkeypatch, summary_model):
