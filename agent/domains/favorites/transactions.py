@@ -12,6 +12,9 @@ from tools.base import ToolResult, get_all_tools
 _WORKFLOWS = {"favorite_add": "add_favorite", "favorite_remove": "remove_favorite"}
 
 
+PERMISSION_OPERATIONS = frozenset(_WORKFLOWS.values())
+
+
 def handles(grant) -> bool:
     return isinstance(grant, dict) and grant.get("workflow") in _WORKFLOWS
 

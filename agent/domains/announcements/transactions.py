@@ -13,6 +13,8 @@ from agent.runtime.turns import check_cancelled
 from tools import base
 from tools.result import fact, ok, tgt
 
+PERMISSION_OPERATIONS = frozenset(TOOLS.values())
+
 
 class Arguments(BaseModel):
     model_config = ConfigDict(extra="forbid")

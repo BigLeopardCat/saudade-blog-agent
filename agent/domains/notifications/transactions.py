@@ -7,3 +7,5 @@ _domain = ReadState("notifications", "notice_read", "read_notifications",
 handles = _domain.handles
 validate = _domain.validate
 execute = _domain.execute
+
+PERMISSION_OPERATIONS = frozenset({_domain.tool})
