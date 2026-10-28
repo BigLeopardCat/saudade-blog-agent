@@ -53,7 +53,7 @@ def invalid_trace_meta(uid: int, conv_id, token_len: int) -> dict:
     return {
         "message": "",  # 隐藏请求的合成文本不是主人说的话
         "has_image": False,
-        "needs_summary": False,
+        "memory_strategy": "framework_compaction",
         "history_len": 0,
         "has_exec": False,
         "has_confirm": True,  # 是"点确定"那一跳

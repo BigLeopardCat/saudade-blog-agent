@@ -7,9 +7,7 @@ from _own_support import config
 from langchain_core.messages import AIMessage, HumanMessage
 from pydantic import ValidationError
 
-from agent import summarizer
 from agent.runtime.budget import BudgetLimits, RequestBudget, budget_scope
-from agent.runtime.memory import SUMMARY_CHARS
 from agent.runtime.native import NativeRuntime
 from agent.runtime.native_store import NativeConversationStore
 from agent.runtime.session import ToolSession
@@ -101,21 +99,3 @@ def test_full_token_budget_replaces_the_unrelated_prompt_character_cap():
         assert session.budget.model_calls == 0 and result.reply != "complete"
 
 
-def test_summary_uses_its_own_output_limit_and_rejects_incomplete_output(monkeypatch):
-    import models
-
-    calls = []
-    response = SimpleNamespace(content="保留目标和未完成事项。", response_metadata={})
-
-    def factory(**kwargs):
-        calls.append(kwargs)
-        return SimpleNamespace(invoke=lambda prompt: response)
-
-    monkeypatch.setattr(models, "get_llm", factory)
-    monkeypatch.setattr(settings, "agent_summary_output_tokens", 640)
-    assert summarizer.summarize("hello", [], "old") == response.content
-    assert calls == [{"streaming": False, "max_tokens": 640, "enable_thinking": False}]
-    response.response_metadata = {"finish_reason": "length"}
-    assert summarizer.summarize("hello", [], "old") == ""
-    assert summarizer._OUT_MAX == SUMMARY_CHARS == 1600
-    assert summarizer.clean_summary("字" * 1601) == ""

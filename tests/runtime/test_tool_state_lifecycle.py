@@ -101,16 +101,24 @@ def names(request):
 
 
 @pytest.mark.parametrize("trimmed", [False, True])
-def test_completed_menu_survives_reload_and_history_trimming_in_activation_order(setup, trimmed):
+def test_completed_menu_survives_reload_and_history_trimming_in_activation_order(
+        setup, trimmed, monkeypatch):
     runtime, _, calls = setup
     first = Model(call("load_beta_info_tools"), call("load_alpha_info_tools"),
                   call("read_beta"), AIMessageChunk(content="Read complete."))
     selected = runtime(first)
     turn(selected)
     if trimmed:
+        from langchain_core.language_models.fake_chat_models import FakeListChatModel
+
+        import models
+
+        monkeypatch.setattr(models, "get_llm", lambda **kwargs: FakeListChatModel(
+            responses=["Historical fixture queries completed."]))
         for index in range(4):
             selected.store.save_turn(config(), [HumanMessage(content=f"Later {index}")],
                                      "无关的长答复。" * 350)
+        turn(runtime(Model(AIMessageChunk(content="Compacted."))), "Continue.")
         assert not any(isinstance(m, ToolMessage) for m in selected.store.load(config()).messages)
     after = Model(AIMessageChunk(content="Follow-up complete."))
     assert turn(runtime(after), "Continue.").reply == "Follow-up complete."
@@ -193,3 +201,20 @@ def test_oversized_inherited_menu_resets_before_new_task_without_losing_discover
     assert result.reply == "New task fits."
     assert names(model.requests[0]) == ["load_alpha_info_tools", "load_beta_info_tools"]
     assert budget.model_calls == 1 and budget.tokens <= budget.limits.request_tokens
+
+
+def test_compressible_old_history_does_not_unload_the_inherited_menu(setup):
+    runtime, _, _ = setup
+    turn(runtime(Model(call("load_beta_info_tools"), AIMessageChunk(content="Ready."))))
+    selected = runtime(Model(AIMessageChunk(content="Short answer.")))
+    cfg = config()
+    selected.store.save_turn(cfg, [HumanMessage(content="Older background. " * 1000)],
+                             "Earlier reply. " * 1000)
+    selected.store.save_turn(cfg, [HumanMessage(content="Keep this latest exchange.")],
+                             "Latest answer.")
+    model = Model(AIMessageChunk(content="Current tools stay loaded."))
+    budget = RequestBudget(BudgetLimits(context_tokens=3500, request_tokens=6000))
+    with budget_scope(budget):
+        result = turn(runtime(model), "Short follow-up.")
+    assert result.reply == "Current tools stay loaded."
+    assert "read_beta" in names(model.requests[0])

@@ -80,51 +80,31 @@ packages = ["agent", "config", "models", "rag", "tools", "utils"]
 # Offline tests use mocks or their own temporary loopback service.
 testpaths = ["tests"]
 addopts = "--disable-socket --allow-unix-socket"
-# 单测试超时 300s（对齐原 run_all 的套件档）。并行（`-n 4`）由 CI 显式传、这里不写死——
-# 串行是默认（本机与夜间都串行），与 run_all「串行是默认、CI 显式 -j 4」同一条纪律。
+# CI 显式设置并行度；本地默认串行。
 timeout = 300
 
 [tool.ruff]
 line-length = 100
-# 与 `requires-python` 同一个值（`tests/test_packaging.py` ⑥ 判着）。留着它是"别写出
-# 低版本解释器不认的语法"这条约束的机器化——虽然 `requires-python` 已经把它表达了。
 target-version = "py312"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "W"]
 
 [tool.mypy]
-# ⚠️ 这一项**会改变报出来的错误集**（比如 3.11+ 的 `ExceptionGroup`/`Self`、3.12 的
-# 泛型语法），而 `eval/type_gate.py` **不传 `--python-version`** ⇒ 目标只来自这一行。
-# 20261013 升 3.12 时发现的洞：基线当时只记 `mypy_version`，于是"换解释器目标"这种
-# **换了一个量**的改动在棘轮眼里和"没动过"长得一样（错误数没涨就不报）。
-# ⇒ 现在基线里也记 `python_target`，对不上退 3（同 mypy 版本那一档）。
+# 与运行环境和类型检查基线使用同一 Python 版本。
 python_version = "3.12"
 strict = false
 ignore_missing_imports = true
 
-# 覆盖率（20261013）：只出报告，**不设阈值、不进 CI**（见 dev 组那段注释）。跑法 =
-# `bash scripts/dev/coverage.sh`；`source` 只列**生产包**——`tests/` 与 `eval/` 是被测对象
-# 不是被测代码，把它们算进去只会把那个百分比稀释成一个谁都不看的数。
+# 覆盖率用于报告，不设置未经校准的通过阈值。
 [tool.coverage.run]
 source = ["agent", "config", "models", "rag", "tools", "utils"]
-# `parallel = true`：每个进程各写各的 `.coverage.<host>.<pid>.<rand>`，跑完 `combine`
-# 合成一份（`scripts/dev/coverage.sh` 指定它们的落点）。不开这个，后一个进程会
-# **整份覆盖**前一个的数据，报出来的永远是"最后跑的那一份是什么"。
-# 今天比 20261013 那次更要紧：`pytest -n 4` 与 `pytest-cov` 都会起多个进程。
+# 并发测试分别写入数据，之后 combine。
 parallel = true
-# `no-data-collected` 这条警告**按套件**打：有一套是纯读文件做判据的（编码/换行/CHANGELOG
-# 结构），一行生产代码都不碰 ⇒ 它每一次都合法地"没采到数据"，而那句话会插在套件输出中间，
-# 反复喊一件正常的事。（20261013 那版还有半句"整档没工作由 run_all.py 自己判"——那个
-# 判断随 run_all.py 一起没了；今天 `.coverage-data/` 空着就是"没采到"，看一眼就知道。）
 disable_warnings = ["no-data-collected"]
 
 [tool.coverage.report]
-# 报**全量**（不用 `--skip-covered`）：完全没被测到的文件正是最该看见的那部分，
-# 而 `--skip-covered` 恰好把它们藏起来。
 show_missing = true
-# 三样排除物，都**不是**可执行分支，算进来只会让"没覆盖到"指向一句 never 的话：
-# `TYPE_CHECKING` 块（运行期不存在）、`NotImplementedError` 兜底、`# pragma: no cover`。
 exclude_also = [
     "if TYPE_CHECKING:",
     "raise NotImplementedError",

@@ -136,14 +136,7 @@ def test_saturated_application_does_not_consume_another_applications_permit(iden
     asyncio.run(run())
 
 
-def test_mounted_summary_and_body_limits_use_the_new_routes(identity, monkeypatch):
-    seen = []
-    monkeypatch.setattr(
-        chat,
-        "summarize",
-        lambda message, history, old: (seen.append((message, history, old)) or "new summary"),
-    )
-
+def test_mounted_chat_and_body_limits_use_the_new_routes(identity, monkeypatch):
     async def run():
         application = create_app()
         application.state.runtime = Runtime("reply")
@@ -157,9 +150,7 @@ def test_mounted_summary_and_body_limits_use_the_new_routes(identity, monkeypatc
                     "/chat",
                     json={"message": "remember", "summary": "old summary", "needs_summary": True},
                 )
-                assert reply.json()["new_summary"] is None
-                # No source scope: do not pay for a summary the next request cannot accept.
-                assert seen == []
+                assert "new_summary" not in reply.json()
                 monkeypatch.setattr(middleware, "MAX_BODY_BYTES", 20)
                 assert (await client.post("/chat", json={"message": "x" * 40})).status_code == 413
                 assert len(application.state.runtime.calls) == 1

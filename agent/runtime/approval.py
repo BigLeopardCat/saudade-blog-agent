@@ -20,8 +20,6 @@ class ConversationState(TypedDict, total=False):
     receipts: list
     run: dict | None
     tool_state: dict | None
-    # Cleared on writes during the rolling upgrade; never restored or executed.
-    continuation: dict | None
 
 
 def binding(config):
@@ -49,7 +47,7 @@ def review(state, config):
     current = memory.turn_messages(facts.get("input") or [],
                                    receipt_observations(result), result.reply, principal)
     return {"pending_confirm": None, "pending_action": None, "approval": None,
-            "approved_result": facts, "continuation": None,
+            "approved_result": facts,
             "receipts": facts["execution"]["receipts"],
             "messages": memory.checkpoint_messages(state.get("messages") or [], current)}
 

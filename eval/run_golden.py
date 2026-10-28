@@ -1745,11 +1745,10 @@ GOLD_ASSERT_KEYS = frozenset({
     "require_observations", "require_observations_any", "require_todo_schedule",
     "require_confirm_specs", "require_confirm_preview", "forbid_runtime_stop",
     "forbid_business_write", "require_answer_value", "require_prepared_or_noop",
+    "require_memory_compaction",
     # 回复文本
     "nonempty", "text_contains", "text_any_regex", "text_not_contains",
     "text_not_match_regex", "not_contains_exempt_quote",
-    # 条件式豁免（20260927，opt-in）：负断言正则只在"遮罩掉条件尾巴"的文本上判命中。
-    # 逐例开关，理由见 CONDITIONAL_MARKERS 的头注（默认放宽会削弱 self-capability 那族）。
     "not_match_exempt_conditional",
     # 自带反证豁免（20261001，opt-in）：命中片段之后（本句+下一句）有失败取证、或该小句
     # 本身是问句 ⇒ 不算完成声称。逐例开关，理由见 _REFUTED_MARKERS 的头注。

@@ -185,7 +185,8 @@ flowchart LR
 │   ├── runtime/workers.py                              # 请求线程与启动预热的服务生命周期
 │   ├── runtime/jobs.py                                  # 当前生产代码模块
 │   ├── runtime/memory_media.py                          # 多模态消息的历史引用与临时图片适配
-│   ├── runtime/summary_policy.py                        # Agent 统一决定增量摘要触发时机
+│   ├── runtime/compaction.py                            # 标准摘要中间件与持久提交适配
+│   ├── runtime/summarization.py                         # 完整来源摘要与共享请求预算
 │   ├── runtime/memory_scope.py                          # 宿主历史与摘要的来源边界
 │   ├── runtime/message_content.py                       # 共用文本提取与框架 token 估算
 │   ├── runtime/visible_text.py                          # 流式正文控制包隔离，不将文本解析为动作
@@ -204,7 +205,6 @@ flowchart LR
 │   ├── runtime/writes.py                                # 当前生产代码模块
 │   ├── runtime_probe.py                                 # 当前生产代码模块
 │   ├── stickers.py                                      # 当前生产代码模块
-│   ├── summarizer.py                                    # 当前生产代码模块
 │   └── transport.py                                     # 当前生产代码模块
 ├── tools/                  # 业务工具与共享结果协议
 │   ├── __init__.py                                      # 当前生产代码模块

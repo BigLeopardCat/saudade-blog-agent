@@ -1,0 +1,29 @@
+"""Compaction acceptance needs actual replacement evidence and factual recall."""
+
+import pytest
+
+from eval.native_assertions import check
+from eval.online_baseline import POC_IDS, load_suite
+
+
+@pytest.mark.parametrize("events,passed", [
+    ([], False),
+    ([{"node": "memory", "event": "compaction_skipped"}], False),
+    ([{"node": "memory", "event": "compacted", "source_messages": 0}], False),
+    ([{"node": "memory", "event": "compacted", "source_messages": 4}], True),
+])
+def test_compaction_assertion_rejects_missing_failed_and_empty_replacements(events, passed):
+    failures = check({"require_memory_compaction": True}, {"native_events": events})
+    assert bool(failures) is not passed
+
+
+def test_missing_trace_is_not_a_compaction_pass():
+    assert check({"require_memory_compaction": True}, {})
+
+
+def test_online_poc_includes_real_multi_turn_compaction_recall():
+    case = next(case for case in load_suite() if case["id"] == "memory_compaction_recall")
+    assert case["id"] in POC_IDS
+    assert sum(len(turn["user_input"]) for turn in case["rounds"][:-1]) > 9000
+    assert case["rounds"][-1]["gold"]["require_memory_compaction"]
+    assert case["rounds"][-1]["gold"]["text_contains"] == ["松针海岸", "12"]
