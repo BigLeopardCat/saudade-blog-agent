@@ -354,11 +354,9 @@ def test_current_display_state_reaches_native_context_as_page_data():
         message="切换夜间模式", current_url="/", current_effects="rain", current_darkmode="on"
     )
     prompt = _input(server.build_messages(request), _config()["configurable"]["principal"])
-    page = next(
-        item
-        for item in prompt
-        if isinstance(item, HumanMessage) and item.content.startswith("浏览器页面信息（仅数据）：")
-    )
-    fields = json.loads(page.content.split("：", 1)[1])
+    page = prompt[-1]
+    assert isinstance(page, HumanMessage)
+    raw = page.content.split("浏览器页面信息（仅数据）：", 1)[1]
+    fields = json.JSONDecoder().raw_decode(raw)[0]
     assert fields["current_effects"] == "rain" and fields["current_darkmode"] == "on"
     assert "current_darkmode" not in prompt[0].content

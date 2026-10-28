@@ -166,11 +166,12 @@ def material(case, results):
                                                 if event.get("event") == "confirmation"],
             "assistant_reply_to_review": result["text"],
         })
-    data = {"case": case["id"], "current_turn": len(turns), "turns": turns,
+    data = {"turns": turns,
             "tool_catalogs": _tool_catalogs(turns),
             "evidence_limits": ["Missing runtime context stays unknown."
                                 " Hidden summaries and visual evidence are absent.",
-                                "No visual review or post-approval execution is implied"]}
+                                "No visual review or post-approval execution is implied"],
+            "case": case["id"], "current_turn": len(turns)}
     text = json.dumps(safe_result(data), ensure_ascii=False, separators=(",", ":"))
     if len(text) > MAX_MATERIAL_CHARS:
         raise ValueError("review material exceeds the input limit; not silently truncated")
