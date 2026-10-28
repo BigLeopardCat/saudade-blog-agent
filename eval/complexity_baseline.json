@@ -73,7 +73,7 @@
   },
   "tests/test_action_text.py::test_action_text": {
     "c": 36,
-    "lines": 321
+    "lines": 317
   },
   "tests/test_artifact_retention.py::main": {
     "c": 38,
@@ -178,25 +178,5 @@
   "tools/device.py::device_oled_display": {
     "c": 33,
     "lines": 111
-  },
-  "tools/note_admin.py::set_article_status": {
-    "c": 31,
-    "lines": 84
-  },
-  "tools/own_data.py::read_messages": {
-    "c": 32,
-    "lines": 101
-  },
-  "tools/own_data.py::read_notifications": {
-    "c": 35,
-    "lines": 106
-  },
-  "tools/tag_admin.py::create_tag": {
-    "c": 31,
-    "lines": 114
-  },
-  "tools/tag_admin.py::update_tag": {
-    "c": 61,
-    "lines": 144
   }
 }

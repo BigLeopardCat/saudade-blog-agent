@@ -20,6 +20,7 @@ import re
 import secrets
 import time
 
+from agent.confirmation_args import has_refs as has_refs
 from config import settings
 
 # Domain separation prevents reuse of signatures from other JWT-secret consumers.
@@ -94,17 +95,6 @@ def token_jti(token: str) -> str:
         return ""
     jti = payload.get("jti") if isinstance(payload, dict) else None
     return jti if isinstance(jti, str) else ""
-
-
-def has_refs(specs) -> bool:
-    """specs 里有没有残留的 `$ref`（见模块头注：有引用就不签发）。
-
-    实现只有一份（`agent.arg_refs.has_refs`，递归进 list/dict）——这里保留同名薄壳，
-    是因为调用方读的是本模块的语义（"令牌能不能签"），而不是引用模块的语法。
-    """
-    from agent.arg_refs import has_refs as _has_refs  # 局部导入：避免模块级循环
-
-    return _has_refs(specs)
 
 
 def narrow(payload: dict, pick: str) -> tuple[dict | None, str]:

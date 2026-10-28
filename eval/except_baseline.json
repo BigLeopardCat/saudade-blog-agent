@@ -5,7 +5,7 @@
     "BLE001"
   ],
   "project_lint_ignore": null,
-  "total": 71,
+  "total": 62,
   "by_file": {
     "agent/checkpoint.py": 1,
     "agent/confirm.py": 5,
@@ -35,11 +35,9 @@
     "tests/test_style_hygiene.py": 1,
     "tests/test_trace_io.py": 1,
     "tools/account_admin.py": 2,
-    "tools/base.py": 11,
+    "tools/base.py": 5,
     "tools/device.py": 4,
     "tools/notes.py": 2,
-    "tools/quota_admin.py": 2,
-    "tools/tag_admin.py": 1,
     "utils/trace_io.py": 1
   }
 }

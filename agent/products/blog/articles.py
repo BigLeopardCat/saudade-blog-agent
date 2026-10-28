@@ -96,7 +96,7 @@ class ArticleMiddleware(AgentMiddleware):
         issue = evidence.issue(reply, SITE_BASE)
         if issue:
             rejected = evidence.invalid_references(reply, SITE_BASE)
-            record("native", "handoff_stopped", reason=issue, tool_calls=self.session.calls_used,
+            record("native", "task_stopped", reason=issue, tool_calls=self.session.calls_used,
                    invalid_references=rejected[:8], omitted_references=max(0, len(rejected) - 8),
                    read_documents=len(evidence.documents), candidates=len(evidence.candidates))
             reply = ("答复中的部分文章引用无法核实，本轮暂时无法提供可靠来源。"

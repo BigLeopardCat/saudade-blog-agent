@@ -111,10 +111,6 @@
         0,
         0
       ],
-      "agent/arg_refs.py": [
-        0,
-        0
-      ],
       "agent/authz.py": [
         0,
         0
@@ -125,6 +121,10 @@
       ],
       "agent/confirm.py": [
         3,
+        0
+      ],
+      "agent/confirmation_args.py": [
+        0,
         0
       ],
       "agent/domains/__init__.py": [
@@ -687,20 +687,20 @@
         0,
         0
       ],
+      "server.py": [
+        0,
+        0
+      ],
       "tools/__init__.py": [
         0,
         0
       ],
       "tools/account_admin.py": [
-        13,
+        0,
         0
       ],
       "tools/admin_read.py": [
         6,
-        0
-      ],
-      "tools/announcements.py": [
-        8,
         0
       ],
       "tools/base.py": [
@@ -708,19 +708,15 @@
         0
       ],
       "tools/board_moderation.py": [
-        9,
+        3,
         0
       ],
       "tools/category_admin.py": [
-        14,
-        0
-      ],
-      "tools/comment_moderation.py": [
-        4,
+        0,
         0
       ],
       "tools/dashboard_todos.py": [
-        5,
+        0,
         0
       ],
       "tools/device.py": [
@@ -728,7 +724,7 @@
         0
       ],
       "tools/note_admin.py": [
-        9,
+        2,
         0
       ],
       "tools/notes.py": [
@@ -740,11 +736,11 @@
         0
       ],
       "tools/own_data.py": [
-        9,
+        5,
         0
       ],
       "tools/quota_admin.py": [
-        11,
+        3,
         0
       ],
       "tools/result.py": [
@@ -756,16 +752,12 @@
         0
       ],
       "tools/tag_admin.py": [
-        13,
-        0
-      ],
-      "server.py": [
         0,
         0
       ]
     },
     "total": [
-      469,
+      387,
       33
     ]
   },
@@ -1080,36 +1072,6 @@
       "category": "system_data",
       "q": "STICKER_NAMES",
       "why": "情绪贴纸名单（与人设/前端同源）"
-    },
-    {
-      "id": "tools/base.py::_NOTICE_TARGET_REFUSALS",
-      "file": "tools/base.py",
-      "kind": "collection",
-      "name": "_NOTICE_TARGET_REFUSALS",
-      "size": 2,
-      "category": "system_data",
-      "q": "_NOTICE_TARGET_REFUSALS",
-      "why": "对着 **Rust 侧产出**的拒绝文案"
-    },
-    {
-      "id": "tools/board_moderation.py::BOARD_APPROVED_CN",
-      "file": "tools/board_moderation.py",
-      "kind": "collection",
-      "name": "BOARD_APPROVED_CN",
-      "size": 3,
-      "category": "system_data",
-      "q": "BOARD_APPROVED_CN",
-      "why": "留言审核状态的显示字"
-    },
-    {
-      "id": "tools/quota_admin.py::_QUOTA_POLICY_REFUSALS",
-      "file": "tools/quota_admin.py",
-      "kind": "collection",
-      "name": "_QUOTA_POLICY_REFUSALS",
-      "size": 3,
-      "category": "system_data",
-      "q": "_QUOTA_POLICY_REFUSALS",
-      "why": "对着 **Rust 侧产出**的拒绝文案"
     },
     {
       "id": "tools/site.py::_NAV_LABELS",
