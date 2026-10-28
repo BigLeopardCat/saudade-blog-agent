@@ -7,10 +7,12 @@ from _memory_support import ACTOR, Capture, config, run, runtime
 from langchain_core.language_models.fake_chat_models import FakeListChatModel
 from langchain_core.messages import AIMessage, AIMessageChunk, HumanMessage
 from langgraph.checkpoint.memory import InMemorySaver
+from langgraph.graph import END, START, StateGraph
 
 from agent.api.schemas import ChatRequest
 from agent.principal import SOURCE_ASSERTION, Principal
 from agent.runtime import compaction, memory
+from agent.runtime.approval import ConversationState
 from agent.runtime.budget import BudgetLimits, RequestBudget
 from agent.runtime.summarization import SummaryUnavailable, summarize
 from agent.runtime.turns import AgentCancelled
@@ -141,3 +143,23 @@ def test_compacted_model_node_resumes_without_repeating_summary(monkeypatch, sum
     assert "SUMMARY_CANARY" in str(saved)
     assert not any("question-0:" in str(m.content) for m in saved)
     assert saved[-1].content == "continued"
+
+
+def test_removed_empty_compatibility_channel_cannot_dispatch_an_old_payload():
+    class PreviousState(ConversationState, total=False):
+        continuation: dict
+
+    saver = InMemorySaver()
+    builder = StateGraph(PreviousState)
+    builder.add_node("commit", lambda state: {})
+    builder.add_edge(START, "commit")
+    builder.add_edge("commit", END)
+    builder.compile(checkpointer=saver).invoke({
+        "messages": memory.turn_messages([HumanMessage(content="previous")], [], "reply", ACTOR),
+        "continuation": {"payload": "OBSOLETE_EXECUTION_CANARY"}}, config())
+    model = Capture()
+    selected = runtime(saver, model)
+    run(selected, ChatRequest(message="hello"))
+    assert "OBSOLETE_EXECUTION_CANARY" not in str(model.prompts[-1])
+    assert "continuation" not in selected.get_state(config()).values
+    assert selected.store.load(config()).messages[-1].content == "收到。"

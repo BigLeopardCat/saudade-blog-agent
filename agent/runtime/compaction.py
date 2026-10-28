@@ -9,7 +9,7 @@ from openai import OpenAIError
 from agent.principal import SOURCE_ASSERTION
 from agent.runtime import memory
 from agent.runtime.message_content import estimate_tokens
-from agent.runtime.summarization import SummaryUnavailable, summarize
+from agent.runtime.summarization import summarize
 from agent.runtime.turns import check_cancelled
 from config.settings import settings
 from utils.trace import record
@@ -40,7 +40,7 @@ class ConversationCompaction(AgentMiddleware):
                  *(message for message in messages[:current] if memory.is_context(message)),
                  *messages[current:]]
         room = session.budget.output_capacity(fixed, session.menu) - session.output_limit
-        trigger = max(1, min(memory.CHECKPOINT_TOKENS, room))
+        trigger = max(1, min(memory.COMPACTION_TOKENS, room))
         if estimate_tokens(completed) < trigger:
             return None
         recent = trim_messages(completed, max_tokens=max(1, trigger // 2),
@@ -60,7 +60,7 @@ class ConversationCompaction(AgentMiddleware):
                 summarizer=lambda source: summarize(source, budget=session.budget,
                                                     config=session.config, model=model))
             update = middleware.before_model({"messages": completed}, runtime)
-        except (SummaryUnavailable, OpenAIError, TimeoutError, ValueError) as error:
+        except (OpenAIError, TimeoutError, ValueError) as error:
             record("memory", "compaction_skipped", reason=type(error).__name__)
             return None
         if update is None:

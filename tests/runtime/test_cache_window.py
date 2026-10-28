@@ -47,7 +47,7 @@ def test_many_short_turns_keep_their_prefix_between_bounded_compactions(monkeypa
                 assert common >= len(previous) - 6
                 stable += 1
         boundaries.append(saved[0].id)
-        assert memory._tokens(saved) <= memory.CHECKPOINT_TOKENS + 200
+        assert memory._tokens(saved) <= memory.COMPACTION_TOKENS + 200
         assert memory.history(saved, ACTOR) == saved
         previous = payload
         previous_anchor = anchor

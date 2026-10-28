@@ -25,8 +25,8 @@ from agent.runtime.message_content import estimate_tokens as _tokens
 from agent.runtime.message_content import text_content
 from config.settings import SUMMARY_MAX_CHARS, settings
 
-HISTORY_TOKENS = 1800
-CHECKPOINT_TOKENS = 5400
+FALLBACK_HISTORY_TOKENS = 1800
+COMPACTION_TOKENS = 5400
 OBSERVATION_CHARS = 1400
 SUMMARY_CHARS = SUMMARY_MAX_CHARS
 
@@ -102,16 +102,25 @@ def history(messages, principal, *, max_tokens=None, tool_access=None):
             or isinstance(message, AIMessage) and not message.tool_calls]
     # Keep the latest complete dialogue when it fits, spending fewer tokens on older turns.
     last_tokens = _tokens(last)
-    if max_tokens is None and last_tokens <= CHECKPOINT_TOKENS:
+    if max_tokens is None and last_tokens <= COMPACTION_TOKENS:
         return [message for turn in turns for message in turn]
-    target = (min(CHECKPOINT_TOKENS, max(0, max_tokens)) if max_tokens is not None else
-              min(CHECKPOINT_TOKENS, max(HISTORY_TOKENS, last_tokens)))
-    if last_tokens > CHECKPOINT_TOKENS:
+    return _bounded_history(turns, last, _history_target(last, max_tokens))
+
+
+def _history_target(last, max_tokens):
+    last_tokens = _tokens(last)
+    target = (min(COMPACTION_TOKENS, max(0, max_tokens)) if max_tokens is not None else
+              min(COMPACTION_TOKENS, max(FALLBACK_HISTORY_TOKENS, last_tokens)))
+    if last_tokens > COMPACTION_TOKENS:
         # A partial long reply is a locator for re-reading. Do not spend the
         # expanded window on an excerpt in every following tool round.
-        target = min(target, max(HISTORY_TOKENS, _tokens(last[:1]) + 100))
+        target = min(target, max(FALLBACK_HISTORY_TOKENS, _tokens(last[:1]) + 100))
     if max_tokens is not None:
         target = min(target, max(0, max_tokens))
+    return target
+
+
+def _bounded_history(turns, last, target):
     source_turn = _source_first(turns[-1], last, target)
     if source_turn is not None:
         return source_turn
@@ -190,7 +199,7 @@ def bootstrap(snapshot, messages, principal, *, tool_access=None):
         if is_context(message):
             summary = summary_message(messages, principal)
             imported = history(message.additional_kwargs.get("host_history") or [], principal,
-                               max_tokens=HISTORY_TOKENS, tool_access=tool_access)
+                               max_tokens=FALLBACK_HISTORY_TOKENS, tool_access=tool_access)
             if summary is None:
                 return imported
             summary = summary.model_copy(update={"additional_kwargs": {
@@ -233,8 +242,8 @@ def checkpoint_messages(previous, current, *, context_update=None):
                         or isinstance(message, AIMessage) and not message.tool_calls]
             # Oversized source text remains recoverable from product history.
             # An excerpt is explicitly marked and never promoted to a summary.
-            turn = (_source_first(turn, dialogue, CHECKPOINT_TOKENS)
-                    or _excerpt(dialogue, CHECKPOINT_TOKENS))
+            turn = (_source_first(turn, dialogue, COMPACTION_TOKENS)
+                    or _excerpt(dialogue, COMPACTION_TOKENS))
         messages.extend(turn)
     if context_update:
         covered = set(context_update["covered_ids"])

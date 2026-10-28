@@ -29,7 +29,7 @@ def inherit(session, saved, prompt):
     """Reuse a completed turn's menu only within its verified conversation scope.
 
     Inherited activation is optional. Reset it at a new-task boundary if it would
-    crowd out the selected dialogue, current input or output reservation. Recovery
+    crowd out the latest exchange, current input or output reservation. Recovery
     instead uses the task checkpoint verbatim and never runs this policy.
     """
     if not saved:

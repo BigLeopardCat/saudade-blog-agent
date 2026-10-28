@@ -11,7 +11,7 @@ from agent.principal import SOURCE_ASSERTION, SOURCE_BODY, Principal
 from agent.products.blog.context import conversation_context
 from agent.products.blog.prompt import build_prompt as _input
 from agent.runtime.budget import BudgetLimits
-from agent.runtime.memory import CHECKPOINT_TOKENS, _tokens
+from agent.runtime.memory import COMPACTION_TOKENS, _tokens
 from agent.runtime.prompt_budget import fit_history
 from agent.stickers import STICKER_NAMES
 
@@ -83,7 +83,7 @@ def test_user_claims_and_history_trimming_do_not_replace_runtime_identity():
     assert context["caller"]["preferred_address"] == "你"
     assert context["permissions"] == sorted(scopes_for("user"))
     assert context["rendering"]["stickers"] == [f":{name}:" for name in STICKER_NAMES]
-    assert _tokens(prompt[1:-1]) <= CHECKPOINT_TOKENS
+    assert _tokens(prompt[1:-1]) <= COMPACTION_TOKENS
     # The most recent long input is retained intact instead of erasing the turn.
     dialogue = [message for message in prompt[1:-1]
                 if not message.additional_kwargs.get("memory_context")]
