@@ -1,16 +1,4 @@
 {
-  "agent/action_text.py": {
-    "lines": 842,
-    "top_defs": 14
-  },
-  "agent/authz.py": {
-    "lines": 1867,
-    "top_defs": 38
-  },
-  "agent/receipt_digest.py": {
-    "lines": 877,
-    "top_defs": 31
-  },
   "eval/admin_write_probe.py": {
     "lines": 2856,
     "top_defs": 82
@@ -27,16 +15,8 @@
     "lines": 1183,
     "top_defs": 36
   },
-  "tests/test_authz.py": {
-    "lines": 881,
-    "top_defs": 2
-  },
   "tests/test_judge_offline.py": {
     "lines": 1416,
     "top_defs": 12
-  },
-  "tools/base.py": {
-    "lines": 1267,
-    "top_defs": 21
   }
 }

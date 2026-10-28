@@ -134,9 +134,6 @@ class Settings(BaseSettings):
     # Require a verified host assertion before resolving caller identity.
     agent_require_assertion: bool = True
 
-    # Bound legacy host-provided task context while the host owns its expiry.
-    agent_task_inject_max: int = Field(default=3, ge=1, le=3)
-
     # ── IoT 设备服务（ESP32 OLED 显示等）─────────────────────────────
     # 与博客共用 JWT_SECRET：agent 以对话用户身份签发 JWT 调用 device-service
     jwt_secret: str = ""

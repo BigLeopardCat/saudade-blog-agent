@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Offline injection boundaries for native messages, fact markers and concrete confirmation arguments."""
+"""Injection boundaries for messages, fact markers and concrete confirmation arguments."""
 
 from __future__ import annotations
 
