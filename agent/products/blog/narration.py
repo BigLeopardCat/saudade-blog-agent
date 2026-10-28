@@ -49,7 +49,12 @@ def narrate(result, config):
                 timeout=10,
                 max_retries=0,
             )
-            response = model.invoke(prompt, **model_options(10))
+            record("narration", "llm_start", streaming=False)
+            try:
+                response = model.invoke(prompt, **model_options(10))
+            except BaseException:
+                record("narration", "llm_error", duration_s=round(time.monotonic() - started, 2))
+                raise
             budget.settle(ticket, response)
         record(
             "narration",

@@ -129,7 +129,7 @@ def run(cases, transport, identities, report_dir, *, phase, suite_hash, include_
             save()
             break
         started = time.monotonic()
-        row = {"id": case["id"], "tags": case["tags"],
+        row = {"id": case["id"], "tags": case["tags"], "identity": case["identity"],
                "status_scope": "deterministic_checks_only",
                "acceptance_status": "not_evaluated",
                "case_sha256": hashlib.sha256(json.dumps(case, sort_keys=True).encode()).hexdigest()}

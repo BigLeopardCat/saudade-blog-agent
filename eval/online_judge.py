@@ -93,7 +93,17 @@ def material(case, results):
         inp = trace["input"]
         if inp.get("has_image"):
             raise ValueError("image evidence is not available to the text judge")
-        if inp.get("message_truncated"):
+        message = inp["message"]
+        evidence = result.get("request_evidence")
+        if evidence is not None:
+            full = evidence.get("message")
+            if (not trace.get("trace_id") or evidence.get("request_id") != trace["trace_id"]
+                    or not isinstance(full, str)
+                    or not (full.startswith(message) if inp.get("message_truncated")
+                            else full == message)):
+                raise ValueError("captured request differs from correlated source trace")
+            message = full
+        elif inp.get("message_truncated"):
             raise ValueError("user request was truncated in the source trace")
         if result.get("error"):
             raise ValueError("request failed; deterministic result remains authoritative")
@@ -102,7 +112,7 @@ def material(case, results):
         if any(trace_mod.is_truncated(str(event.get("result", ""))) for event in calls):
             raise ValueError("tool evidence was truncated in the source trace")
         turns.append({
-            "user_request": inp["message"],
+            "user_request": message,
             "caller_role": inp.get("principal_role"),
             "runtime_context": runtime_context(trace.get("events", [])),
             "tool_observations": [{key: event[key] for key in

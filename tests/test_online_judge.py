@@ -135,6 +135,36 @@ def test_missing_historical_voice_stays_unknown():
     assert online_judge.runtime_context([])["product_facts"] is None
 
 
+@pytest.mark.parametrize("truncated", [False, True])
+def test_correlated_full_http_request_reaches_judge_without_expanding_source_log(
+    tmp_path, truncated
+):
+    full = "给账号发通知，正文如下：" + "内容" * 150
+    case = recorded(tmp_path, trace_extra={"trace_id": "request-a", "input": {
+        "message": full[:200] if truncated else full, "message_truncated": truncated}},
+        request_evidence={"request_id": "request-a", "message": full})
+    trace = Path(case["result"]["rounds"][0]["trace"])
+    before = trace.read_bytes()
+    model = Model()
+    report = run(tmp_path, case, model)
+    assert report["counts"] == {"no_issue_found": 1}
+    assert json.loads(model.messages[0][1]["content"])["turns"][0]["user_request"] == full
+    assert trace.read_bytes() == before
+
+
+@pytest.mark.parametrize("evidence", [
+    {"request_id": "other", "message": "原请求全文"},
+    {"request_id": "request-a", "message": "另一条请求全文"},
+    {"request_id": "request-a", "message": None},
+])
+def test_mismatched_request_projection_is_not_semantic_evidence(tmp_path, evidence):
+    case = recorded(tmp_path, trace_extra={"trace_id": "request-a", "input": {
+        "message": "原请求", "message_truncated": True}}, request_evidence=evidence)
+    model = Model()
+    assert run(tmp_path, case, model)["counts"] == {"not_evaluated": 1}
+    assert not model.messages
+
+
 def test_semantic_result_cannot_replace_deterministic_failure(tmp_path):
     case = recorded(tmp_path)
     case["status"] = "failed"

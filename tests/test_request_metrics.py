@@ -105,3 +105,16 @@ def test_current_runtime_label_and_archived_arm_labels_remain_readable():
     current = {"input": {"runtime": {"name": "native"}}, "events": []}
     archived = {"input": {"runtime": {"arm": "native"}}, "events": []}
     assert request_metrics.path_of(current) == request_metrics.path_of(archived) == "native"
+
+
+def test_model_errors_and_measured_uncached_input_are_separate_from_missing_usage(tmp_path):
+    path = _trace(tmp_path, "request", events=[
+        {"event": "llm_start"}, {"event": "llm_done", "input": 100, "cache_read": 75},
+        {"event": "llm_start"}, {"event": "llm_done", "input": 300},
+        {"event": "llm_start"}, {"event": "llm_error"}])
+    row = request_metrics.collect([path])["groups"][0]
+    assert row["started_calls"] == 3 and row["calls"] == 2 and row["errored_calls"] == 1
+    assert row["measured_uncached_input"] == 25 and row["in"] == 400
+    assert row["cache_in"] == 100 and row["cache_seen"] == 1
+    unknown = request_metrics.collect([_trace(tmp_path, "unknown", events=[])])["groups"][0]
+    assert unknown["measured_uncached_input"] is None
