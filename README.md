@@ -167,10 +167,14 @@ bash scripts/dev/coverage.sh
 # L1 检索基准（recall@k / MRR，直接测线上 rag/search.py，秒级、无网）
 .venv/bin/python eval/recall_eval.py
 
-# L2 真实模型任务评测：需要站点语料、后端和模型凭据；当前暂停线上基线
-.venv/bin/python eval/run_golden.py
-.venv/bin/python eval/run_golden.py --only <id>,<id>   # 只跑指定用例
-.venv/bin/python eval/golden_full_run.py               # 全量跑（与 run_golden 共用判据）
+# L2 当前发布验收：真实 HTTP、首次结果、不批准业务写入；身份来自实际账号
+.venv/bin/python -m eval.online_baseline --host --phase poc \
+  --admin-uid "$GOLDEN_ADMIN_UID" --user-uid "$GOLDEN_USER_UID" \
+  --zako-uid "$GOLDEN_ZAKO_UID" --report-dir /tmp/agent-poc
+# POC 通过后改为 --phase full，并使用新的 report-dir。
+# 语义评审完成后，检查冻结版本的质量与分任务成本目标：
+.venv/bin/python -m eval.release_readiness /tmp/agent-baseline/report.json \
+  --semantic /tmp/agent-semantic/report.json --out /tmp/agent-readiness.json
 
 # L2 换成自包含夹具（自带语料、桩服务与用例；出处声明跟着用例文件走）——见 eval/fixtures/README.md
 .venv/bin/python eval/fixtures/serve.py --port 8099
