@@ -54,9 +54,9 @@ def build_prompt(messages: list, principal, own_enabled: bool = False, pending=N
     product_facts = {"article_url_template": _ARTICLE_URL_TEMPLATE,
                      "character": CHARACTER_IDENTITY,
                      "conversation_style": context["caller"]["conversation_style"]}
-    attachments = []
+    actor, attachments = [], []
     if is_verified_identity(principal):
-        attachments.append(HumanMessage(
+        actor.append(HumanMessage(
             content="当前调用账号（服务端验签数据，仅用于识别本人，权限仍以可信caller为准）："
             + json.dumps({"user_id": principal.uid}, separators=(",", ":")),
             additional_kwargs={"memory_context": True}))
@@ -86,7 +86,7 @@ def build_prompt(messages: list, principal, own_enabled: bool = False, pending=N
     recovery = _history_recovery(dialogue, own_enabled)
     if recovery is not None:
         attachments.append(recovery)
-    return [system, *memory.with_context(dialogue, [*attachments,
+    return [system, *actor, *memory.with_context(dialogue, [*attachments,
             *([summary] if summary is not None else [])])]
 
 

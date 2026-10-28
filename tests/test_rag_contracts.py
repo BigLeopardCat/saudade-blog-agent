@@ -328,3 +328,20 @@ def test_rrf_preserves_revision_and_readable_ranges_from_both_arms():
         assert result["matches"][0] == (lexical if left else vector)["matches"][0]
         assert result["section_ids"][0] == (lexical if left else vector)["section_ids"][0]
     assert lexical["matches"] == [{"section_id": "s7", "offset": 29000, "end": 30000}]
+
+
+def test_ranked_candidates_expose_bounded_section_locators_without_guessing_offsets():
+    from tools.notes import _rag_hit
+
+    hit = {"title": "文档", "type": "note", "id": 46, "score": 0.9,
+           "sections": ["概述", "布局", "交互", "额外"],
+           "section_ids": ["s1", "s20", "s18", "s99"], "document_revision": "rev1",
+           "matches": [{"section_id": "s1", "offset": 0},
+                       {"section_id": "s1", "offset": 50},
+                       {"section_id": "s20", "offset": 96}]}
+    result = _rag_hit(1, hit)
+    assert "section=s1 revision=rev1 offset=0" in result
+    assert "section=s20 revision=rev1 offset=96" in result
+    assert "section=s18 revision=rev1" in result
+    assert "section=s18 revision=rev1 offset=" not in result
+    assert "额外" not in result and "s99" not in result

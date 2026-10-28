@@ -62,8 +62,8 @@ def accounts(**args):
 
 @pytest.mark.parametrize("tool", [articles, accounts])
 def test_pages_are_bounded_and_only_project_whitelisted_fields(backend, tool):
-    first = json.loads(str(tool()))
-    second = json.loads(str(tool(page=2)))
+    first = json.loads(str(tool(limit=5)))
+    second = json.loads(str(tool(page=2, limit=5)))
     assert first["total"] == second["total"] == 7
     assert len(first["items"]) == 5 and first["hasMore"]
     assert len(second["items"]) == 2 and not second["hasMore"]
@@ -109,7 +109,7 @@ def test_long_tag_lists_and_untrusted_titles_are_explicit(backend):
     assert "NAVIGATE:" not in row["title"]
 
 
-@pytest.mark.parametrize("args", [{"limit": True}, {"page": 0}, {"limit": 11},
+@pytest.mark.parametrize("args", [{"limit": True}, {"page": 0}, {"limit": 21},
                                   {"article_id": -1}, {"keyword": "x" * 101}])
 def test_invalid_schema_is_rejected_before_io(backend, args):
     with pytest.raises(ValidationError):
@@ -210,3 +210,16 @@ def test_large_metadata_page_rejects_before_runtime_can_cut_json(backend):
         row["tags"] = [{"id": i+1, "level": 1, "name": "x" * 80} for i in range(20)]
     assert articles().kind == "unavailable"
     assert articles(limit=1).kind == "ok"
+
+
+@pytest.mark.parametrize("tool,key", [(articles, "articles"), (accounts, "accounts")])
+def test_compact_catalog_default_reads_twenty_complete_records(backend, tool, key):
+    template = backend[key][0]
+    backend[key] = [{**template, "id": i} for i in range(1, 26)]
+    first = json.loads(str(tool()))
+    second = json.loads(str(tool(page=2)))
+    assert [row["id"] for row in first["items"]] == list(range(1, 21))
+    assert [row["id"] for row in second["items"]] == list(range(21, 26))
+    assert first["total"] == second["total"] == 25
+    assert first["hasMore"] and not second["hasMore"]
+    assert "password" not in str(first) and "secret article body" not in str(first)
