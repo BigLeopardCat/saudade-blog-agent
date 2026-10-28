@@ -553,11 +553,7 @@ def _rank_block(head: str, rows: list | None, metric: str) -> list[str]:
 
 
 def render_note_stats(data: dict, now: datetime | None = None) -> str:
-    """`GET /api/protected/stats/notes` 的返回 → 文章流量报表。
-
-    ⚠️ 三个总数（`totalViews`/`totalLikes`/`totalFavorites`）一律用服务端算好的聚合值，
-    不要拿榜上的行去加：榜只有前 10，加起来只会比真值小。
-    """
+    """Render backend totals, independent rankings and the bounded daily series."""
     data = data or {}
     totals = [(w, _count_int(data.get(k))) for k, w in _TOTAL_WORDS]
     lines = [f"文章流量报表（{_ts(now)}，生成于 {data.get('generatedAt') or '未知'}）",
@@ -578,13 +574,12 @@ def render_note_stats(data: dict, now: datetime | None = None) -> str:
     elif not hit:
         lines.append("- 近 30 天趋势：这 30 天里没有任何阅读或点赞记录")
     else:
-        shown = hit[-7:]
+        shown = hit[-30:]
         days = "；".join((d.get("date") or "?") + " " + _counts_text(d) for d in shown)
         prefix = f"…（更早还有 {len(hit) - len(shown)} 天）" if len(hit) > len(shown) else ""
         lines.append(f"- 近 30 天趋势（只列有记录的日子，共 {len(hit)} 天）: {prefix}{days}")
 
-    # 名次口径作为**事实**写进帧里（"哪张榜的第几名"是这张报表的结构，不是修辞）：
-    # 三张榜各自独立排名，序号之间没有关系。怎么转述是技能 reply_contract 的事。
+    # Each metric ranks independently; positions cannot be shared between rankings.
     lines.append("- 名次口径：阅读/点赞/收藏三张榜各自独立排名（同一篇文章在两张榜上"
                  "的名次可以不同）")
     return _cap("\n".join(lines))

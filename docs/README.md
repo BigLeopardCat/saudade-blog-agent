@@ -24,6 +24,7 @@
 | [migration-cleanup-20261028.md](migration-cleanup-20261028.md) | 框架迁移核查、遗留清退与博客独立审计待修项 | 记录型 |
 | [agent-architecture.md](agent-architecture.md) | 系统现在是什么：节点拓扑、跨语言契约、目录与机制 | 现状型 |
 | [产品与领域装配](product-extensions.md) | 博客产品边界、标准 middleware 与非博客库存示例 | 现状型 |
+| [framework-context-evaluation-20261029.md](framework-context-evaluation-20261029.md) | 框架上下文首跑、缓存分层、语义复核及验收缺口 | 记录型 |
 | [deployment.md](deployment.md) | 固定提交版本目录、独立环境、探活与失败回滚 | 现状型 |
 | [conversation-memory.md](conversation-memory.md) | 来源隔离、长文本接续、图片引用与按需回看，及框架摘要生命周期 | 现状型 |
 | [chat-stream-protocol.md](chat-stream-protocol.md) | 具名 SSE 事件、正文隔离、持久化边界与发布衔接 | 现状型 |

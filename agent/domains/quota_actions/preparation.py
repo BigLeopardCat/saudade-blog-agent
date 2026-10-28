@@ -51,7 +51,7 @@ def _prepare(action, request_id, account_id, reason, config):
         args["request_id"] = request_id
         if action == "reject":
             args["reason"] = reason
-    target = action_text.receipt_action(name, args, {})
+    target = action_text.receipt_action(name, args, {"account_name": current["name"]})
     target += f"（账号编号{current['userId']}）"
     if action != "reset":
         request = current["request"]
