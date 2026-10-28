@@ -1,27 +1,4 @@
-"""权限影子读数的判据（20261018 批 5）：零 LLM、零网络、零真 trace。
-
-**这一件为什么存在**：`eval/authz_shadow_divergence.py` 要回答"把 `AUTHZ_ENFORCE`
-打开会拦掉什么"。它读的是**历史 trace**，而历史 trace 不会因为判据写错而变红 ——
-一个恒返回 0 的读数与"真的零分歧"**长得一模一样**，而后者正是批 8 的触发条件。
-所以这一件拿**合成 trace** 把读数的每一格都打一遍，并给每条正面断言配一条反控。
-
-判据的形状（本仓纪律：正控不红不算数）：
-  · ① **字面锁**：`REASON_NO_MANIFEST` 与 `authz.REASON_NO_MANIFEST` 逐字相同；
-  · ② **格式往返锁**：读端解析 `Decision.__str__` / `Principal.__str__` —— 那两行**改了
-    格式这里就红**。没有它，格式一变读端会**静默**解析出空串、按 reason 的分档全变 0；
-  · ③ **正控（核心）**：影子判 denied + 同一工具 checker PASS ⇒ 分歧 1；
-  · ④–⑦ 四条反控：BLOCK / 别的工具 PASS / 无影子事件 / 坏文档 ⇒ 分歧 0（且各自证明
-    不是"恒 0"——③ 与它们共用同一个入口）；
-  · ⑧ **`call` 不算"执行了"**：影子判 denied、该工具只出现在 `call` 事件里 ⇒ 分歧 0。
-    这一条锁的是读数的**定义**（拦下的那些也照写 `call`，拿它当"执行了"会让读数恒等于
-    分母）。配一条正控：补上 PASS 就变 1；
-  · ⑨ **硬拦 scope 不许出现在影子事件里**：正控（塞一条 ⇒ 报出）+ 反控（软 scope ⇒ 不报）
-    + **导出锁**（那组 scope 是现取的，不是手抄的：拨 `authz_enforce` ⇒ 它跟着变）；
-  · ⑩ **`no_manifest` 两义**：名字在注册表里 / 不在，切开；不给注册表 ⇒ 明说"没切"；
-  · ⑪ **退出码**：窗口内零份 trace ⇒ **3**（"没数据"不是"零分歧"）；结构违约 ⇒ 1。
-
-用法：.venv/bin/python tests/test_authz_shadow.py
-"""
+"""Archived shadow traces retain denial, divergence and missing-evidence diagnostics."""
 
 
 import io
@@ -44,7 +21,6 @@ import authz_shadow_divergence as S  # noqa: E402
 
 from agent import authz  # noqa: E402
 from agent.principal import Principal  # noqa: E402
-from config.settings import settings  # noqa: E402
 
 FAILED: list[str] = []
 check = collector(FAILED)
@@ -149,31 +125,19 @@ def test_authz_shadow():
     check("  ⭐ 正控：同一个 trace 补上 PASS ⇒ 变 1（证明上一条不是恒 0）",
           S.analyze([trace("e2.json", [shadow_ev("list_tags"), call_ev("list_tags"),
                                        check_ev("list_tags")])])["diverged"] == 1)
-    print("\n⑨ 硬拦 scope 不许出现在影子事件里（现取，不手抄）")
-    _saved_enforce = settings.authz_enforce
-    try:
-        settings.authz_enforce = False                     # shadow 档 = 本读数成立的前提
-        hard = frozenset(s for s in authz.ALL_SCOPES if authz.enforcing(s))
-        check("正控：shadow 档下确实**有**这么一组 scope（空集会让下面两条变成废话）",
-              len(hard) > 0, str(sorted(hard)))
-        check("  CLI 现取的那组与它相同（`_hard_scopes()` 不是手抄的常量）",
-              S._hard_scopes() == hard, str(sorted(S._hard_scopes() or [])))
-        _hard = sorted(hard)[0]
-        _rep = S.analyze([trace("f.json", [shadow_ev("x", scope=_hard)])], hard_scopes=hard)
-        check("正控：塞一条带硬拦 scope 的影子事件 ⇒ 报出（非空）",
-              len(_rep["hard_scope_events"]) == 1, str(_rep["hard_scope_events"]))
-        _rep = S.analyze([trace("g.json", [shadow_ev("x", scope="read.public")])],
-                         hard_scopes=hard)
-        check("  （反控）软 scope ⇒ 不报", _rep["hard_scope_events"] == [], "")
-        _rep = S.analyze([trace("h.json", [shadow_ev("x", scope=_hard)])])
-        check("  （反控）不给 hard_scopes ⇒ **这一项没验**（不是'没有违规'）",
-              _rep["hard_scopes"] is None and _rep["hard_scope_events"] == [])
-        settings.authz_enforce = True                      # 反控：拨开关，导出值必须跟着变
-        check("  （反控）拨 authz_enforce ⇒ 那组 scope 跟着变（证明它真的在现取）",
-              S._hard_scopes() == frozenset(authz.ALL_SCOPES),
-              f"{len(S._hard_scopes() or [])} 个 vs ALL_SCOPES {len(authz.ALL_SCOPES)} 个")
-    finally:
-        settings.authz_enforce = _saved_enforce
+    print("\n⑨ 旧影子协议的硬拦范围固定，不取当代生产配置")
+    hard = frozenset({authz.SCOPE_ADMIN_CONSOLE, authz.SCOPE_WRITE_CONSOLE,
+                      authz.SCOPE_WRITE_DEVICE})
+    check("归档协议的硬拦 scope 不随当前运行时变化", S._hard_scopes() == hard)
+    _hard = sorted(hard)[0]
+    _rep = S.analyze([trace("f.json", [shadow_ev("x", scope=_hard)])], hard_scopes=hard)
+    check("旧协议硬拦 scope 出现在 shadow ⇒ 报出那条（强闸被绕过）",
+          len(_rep["hard_scope_events"]) == 1, str(_rep["hard_scope_events"]))
+    _rep = S.analyze([trace("g.json", [shadow_ev("x", scope="read.public")])], hard_scopes=hard)
+    check("反控：旧协议软 scope ⇒ 不报", _rep["hard_scope_events"] == [])
+    _rep = S.analyze([trace("h.json", [shadow_ev("x", scope=_hard)])])
+    check("反控：不给 hard_scopes ⇒ 明确标记未验",
+          _rep["hard_scopes"] is None and _rep["hard_scope_events"] == [])
     print("\n⑩ no_manifest 两义：'漏声明的工具' vs '名字根本不是工具'")
     _evs = [shadow_ev("circle", reason=authz.REASON_NO_MANIFEST, scope=None),
             shadow_ev("device_oled_draw", reason=authz.REASON_NO_MANIFEST, scope=None)]

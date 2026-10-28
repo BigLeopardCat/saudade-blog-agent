@@ -1589,8 +1589,8 @@ def check_premises(cases: list) -> tuple:
 # 通过的留言不能驳回 ⇒ 不许弹卡"，而新设计把审核族整体改成恒弹卡）。
 #
 # 判据（与 `premise_absent` 同一个形状：**人写前提、机器算剩下的那一半**）：
-#   · `question`           —— `authz.is_question_like(本轮输入)`：提问轮结构上不弹卡
-#                              （弹窗分叉的第一道闸，见 `authz.is_question_like` 头注）
+#   · `question`           —— 旧语料的提问前提，兼容判据位于 eval.legacy_no_popup；
+#                              不参与当前运行时的意图识别、权限或确认。
 #   · `target_absent`      —— 该轮判据里有 `require_absence`（共享族），且那个**字面目标
 #                              出自主人原话**——"查无此物 ⇒ 不弹卡"的全部依据就是它
 #   · `role_denied`        —— 点名的那几件工具，这个角色**一件都到不了**
@@ -1641,7 +1641,7 @@ def check_no_popup_premises(cases: list) -> tuple:
         why = str(pn.get("why") or "").strip()
         hit: list = []
         if kind == "question":
-            from agent.authz import is_question_like
+            from eval.legacy_no_popup import is_question_like
             if not is_question_like(str(c.get("user_input") or "")):
                 hit = ["is_question_like(本轮输入)=False"]
         elif kind == "target_absent":

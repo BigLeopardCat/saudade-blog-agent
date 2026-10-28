@@ -232,15 +232,11 @@ def analyze(items: list, hard_scopes=None, known_tools=None) -> dict:
 
 
 def _hard_scopes():
-    """`authz` 里"不吃 shadow"的那几个 scope —— **现取，不手抄**。
-
-    取法：对每个 scope 问一次 `authz.enforcing(s)`（它对 `_HARD_SCOPES` 恒 True），
-    于是这组集合跟着 `agent/authz.py` 自己变，不会漂成第二份真源。
-    取不到（agent 包 import 不了）⇒ `None` = **这一项没验**，**不是"没有违规"**。
-    """
+    """Frozen mandatory scopes for interpreting the retired shadow trace format."""
     try:
         from agent import authz
-        return frozenset(s for s in authz.ALL_SCOPES if authz.enforcing(s))
+        return frozenset({authz.SCOPE_ADMIN_CONSOLE, authz.SCOPE_WRITE_CONSOLE,
+                          authz.SCOPE_WRITE_DEVICE})
     except Exception as exc:  # noqa: BLE001
         print(f"  ⚠ 取不到 agent.authz（{type(exc).__name__}: {exc}）⇒ 硬拦 scope 这一项**没验**")
         return None
