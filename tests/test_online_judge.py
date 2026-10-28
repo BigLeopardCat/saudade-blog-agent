@@ -135,6 +135,20 @@ def test_missing_historical_voice_stays_unknown():
     assert online_judge.runtime_context([])["product_facts"] is None
 
 
+def test_recorded_browser_state_is_evidence_without_becoming_authorization(tmp_path):
+    page = {"current_url": "/article/23", "page_title": "Asyncio",
+            "current_darkmode": "on", "current_effects": "sakura"}
+    case = recorded(tmp_path, trace_extra={"input": {"message": "我现在在哪？",
+                    "principal_role": "user", "page_context": page}}, text="你在 Asyncio 文章页。")
+    model = Model()
+    run(tmp_path, case, model)
+    turn = json.loads(model.messages[0][1]["content"])["turns"][0]
+    assert turn["reported_browser_state_not_authority"] == page
+    assert turn["runtime_context"]["caller"] is None
+    assert turn["runtime_context"]["permissions"] is None
+    assert turn["execution_receipts"] == []
+
+
 @pytest.mark.parametrize("truncated", [False, True])
 def test_correlated_full_http_request_reaches_judge_without_expanding_source_log(
     tmp_path, truncated

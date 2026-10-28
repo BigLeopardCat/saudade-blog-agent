@@ -37,4 +37,10 @@ def domains(config, can_prepare, reads):
         for name, preparation in _PREPARATIONS:
             current = selected.setdefault(name, {})
             current.update(preparation.tools(current))
+    from agent.domains import public_catalog
+
+    for domain, read in (("admin_tags", public_catalog.list_tags),
+                         ("admin_categories", public_catalog.list_categories)):
+        if domain in selected:
+            selected[domain][read.name] = read
     return selected

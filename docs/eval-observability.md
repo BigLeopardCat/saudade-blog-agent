@@ -25,6 +25,7 @@
   当前网关没有可靠价格回执，不内置模型价格。
 
 原生路径记录 `llm_start/llm_done`、按需加载、工具结果种类、预算终止和持久化事件。
+`finalization_reasons` 单独记录预算收尾；有答复、零硬中止不代表任务全部完成。
 确认准备与取消工具只记录工具名、轮次、结果种类；确认令牌及终止工具结果不进入
 模型上下文或 trace。事实回执、幂等命中与工具调用是不同事件，不拿调用数冒充完成数。
 
@@ -32,7 +33,7 @@
 # 请求级 JSON；生产目录由应用配置决定
 .venv/bin/python -m eval.daily_metrics --days 7 --json
 
-# 简短日报；graph 前缀项仅针对旧图，不能作为混合路径成功率
+# 简短日报识别 native；graph 前缀项仅针对旧图，不代表原生任务成功率
 .venv/bin/python -m eval.daily_metrics --days 7
 
 # 用量与覆盖率；也可用 --dir 指向某次评测的 trace 目录
@@ -43,6 +44,9 @@
 跨版本效果比较应使用 JSON 分组与相同任务集；简短日报和 token 分项表用于排查，
 不直接用于跨版本质量结论。`trace_metrics`、`trace_alert` 和旧日志扫描保留为旧图
 诊断，尚不能作为混合运行时的完整异常检测。
+历史 `scripts/nightly_regression.sh` 仍有旧 golden 与夹具入口，不是当前线上验收命令，
+不应据其日志判断迁移完成度。当前按冻结批次运行 `eval.online_baseline`，随后独立运行
+`eval.online_judge`；详细范围与证据限制见 [线上基线](evaluation-native-baseline.md)。
 
 ## 2. 评测分层
 
@@ -168,6 +172,8 @@ PostgreSQL 验证使用 `eval/native_checkpoint_probe.py`，生产版本与就�
 `online_judge` 据此检查明显的称呼或风格串用。用户指定的昵称、语气和格式优先，
 认真答题时缺少口头禅不算失败。风格问题与虚构业务事实分开记录；旧 trace 缺少该字段时
 保留未知，不用当前人设补判历史回复。`eval/fixtures/persona_judge.jsonl` 保存正反校准材料。
+`eval/fixtures/context_judge.jsonl` 校准浏览器上报状态、执行完成、抽象权限和业务政策的区别。
+评审可使用 trace 当时记录的浏览器状态，不把它升级为权限或新操作的完成凭据。
 时间依据使用本轮实际输入的服务器时间，不用评审时刻补历史；这项投影不附带额度和宿主记录。
 校准同时区分虚拟角色动作与真实地点天气断言，避免把角色叙事误报为业务事实，也不能放过真实信息造假。
 确定性测试验证语气是否接到真实模型输入，多轮真实采样与 judge、人工复核共同检查表达效果。

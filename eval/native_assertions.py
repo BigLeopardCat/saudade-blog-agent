@@ -93,9 +93,17 @@ def _scheduled_todo(wanted, result):
                for spec in payload.get("specs", []))
 
 
+def _confirmation_preview(pattern, result):
+    previews = [event.get("data", {}).get("q", "")
+                for event in result.get("http_events", [])
+                if event.get("event") == "confirmation"
+                and isinstance(event.get("data"), dict)]
+    return any(isinstance(text, str) and re.search(pattern, text) for text in previews)
+
+
 def check(gold, result):
     keys = {"require_observations", "require_observations_any", "require_todo_schedule",
-            "require_confirm_specs", "forbid_runtime_stop",
+            "require_confirm_specs", "require_confirm_preview", "forbid_runtime_stop",
             "forbid_business_write", "require_answer_value"}
     if not keys.intersection(gold):
         return []
@@ -118,6 +126,9 @@ def check(gold, result):
         specs = [s for p in result.get("confirm_payloads", []) for s in p.get("specs", [])]
         if not any(contains(s, wanted) for s in specs):
             failures.append(f"确认卡目标或参数不符：{wanted}")
+    for pattern in gold.get("require_confirm_preview", []):
+        if not _confirmation_preview(pattern, result):
+            failures.append(f"HTTP 确认卡展示内容不符或缺失：{pattern}")
     for wanted in gold.get("require_answer_value", []):
         if not _answer_value(wanted, result, calls):
             failures.append(f"回答值不来自本轮实际读取结果：{wanted}")

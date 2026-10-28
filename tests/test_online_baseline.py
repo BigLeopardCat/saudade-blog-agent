@@ -185,6 +185,21 @@ def test_exact_card_target_checks_nested_intent_and_preserves_negative_control()
     assert native_assertions.check(gold, result)
 
 
+def test_confirmation_preview_is_checked_on_the_card_without_requiring_duplicate_reply():
+    gold = {"require_confirm_preview": [r"父级[^\n]*编程"]}
+    result = {"native_events": [], "text": "请核对卡片。", "http_events": [
+        {"event": "confirmation", "data": {"q": "父级为一级标签「编程」"}}]}
+    assert not native_assertions.check(gold, result)
+    result["http_events"][0]["data"]["q"] = "父级为一级标签「生活」"
+    assert native_assertions.check(gold, result)
+    result["text"] = "父级为一级标签「编程」"
+    assert native_assertions.check(gold, result)  # Assistant text cannot repair the wrong card.
+    result["http_events"][0]["event"] = "text"
+    assert native_assertions.check(gold, result)
+    result["http_events"] = []
+    assert native_assertions.check(gold, result)
+
+
 def test_unscheduled_todo_card_must_not_invent_a_due_date():
     case = next(c for c in online_baseline.load_suite() if c["id"] == "todo_after_chat")
     gold = case["rounds"][1]["gold"]
@@ -276,6 +291,24 @@ def test_count_case_regex_accepts_digits_and_rejects_persona_suffix():
     pattern = case["gold"]["text_any_regex"][0]
     assert re.search(pattern, "13")
     assert not re.search(pattern, "13 喵～")
+
+
+def test_character_name_accepts_the_declared_short_name_without_accepting_other_personas():
+    case = next(c for c in online_baseline.load_suite() if c["id"] == "persona_intro")
+    pattern = case["gold"]["text_any_regex"][0]
+    assert re.search(pattern, "我是泠月。") and re.search(pattern, "我是泠月喵。")
+    assert not re.search(pattern, "我是绵绵。")
+
+
+def test_page_directory_uses_declared_paths_without_unrequested_navigation():
+    case = next(c for c in online_baseline.load_suite() if c["id"] == "site_map")
+    result = {"text": "可以查看留言板 /guestbook", "native_events": [], "commands": [],
+              "exec_rows": [], "frames": [], "confirm_tokens": [], "confirm_payloads": []}
+    assert not online_baseline.golden.check_gold(case["gold"], result)
+    result["commands"] = ["NAVIGATE:/guestbook"]
+    assert online_baseline.golden.check_gold(case["gold"], result)
+    result["commands"], result["text"] = [], "随便看看。"
+    assert online_baseline.golden.check_gold(case["gold"], result)
 
 
 def test_zero_usage_quota_fixture_fails_before_spending_model_budget(tmp_path, monkeypatch):
