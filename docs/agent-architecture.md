@@ -82,6 +82,7 @@ flowchart LR
 │   ├── domains/announcements/transactions.py            # 当前生产代码模块
 │   ├── domains/article_actions/__init__.py              # 当前生产代码模块
 │   ├── domains/article_actions/preparation.py           # 当前生产代码模块
+│   ├── domains/article_actions/batch.py                 # 一次确认的有界文章批量事务
 │   ├── domains/article_actions/targets.py               # 当前生产代码模块
 │   ├── domains/article_actions/transactions.py          # 当前生产代码模块
 │   ├── domains/article_metadata.py                      # 当前生产代码模块
@@ -186,6 +187,7 @@ flowchart LR
 │   ├── runtime/workers.py                              # 请求线程与启动预热的服务生命周期
 │   ├── runtime/jobs.py                                  # 当前生产代码模块
 │   ├── runtime/memory_media.py                          # 多模态消息的历史引用与临时图片适配
+│   ├── runtime/summary_policy.py                        # Agent 统一决定增量摘要触发时机
 │   ├── runtime/memory_scope.py                          # 宿主历史与摘要的来源边界
 │   ├── runtime/message_content.py                       # 共用文本提取与框架 token 估算
 │   ├── runtime/visible_text.py                          # 流式正文控制包隔离，不将文本解析为动作

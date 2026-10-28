@@ -3,7 +3,7 @@
 import time
 
 from agent import authz
-from agent.domains.article_actions import targets
+from agent.domains.article_actions import batch, targets
 from agent.runtime import writes
 from agent.runtime.turns import check_cancelled
 from tools import base
@@ -25,6 +25,10 @@ def validate(grant, config):
         raise ValueError("确认凭据不是单项文章状态操作")
     spec = specs[0]
     args = spec.get("args") if isinstance(spec, dict) else None
+    if isinstance(spec, dict) and spec.get("tool") == batch.NAME:
+        if not authz.check(principal, "set_article_status").allowed:
+            raise ValueError("当前身份无权修改文章状态")
+        return batch.NAME, batch.validate(args)
     if (
         not isinstance(args, dict)
         or spec.get("tool") != "set_article_status"
@@ -98,6 +102,8 @@ class Operation:
 
 
 def _receipt(grant, name, args, result):
+    if name == batch.NAME:
+        return batch.receipt(name, args, result)
     meta = getattr(result, "meta", {}) or {}
     if (
         not isinstance(result, base.ToolResult)
@@ -134,6 +140,7 @@ def execute(grant, config, saver, *, tools=None, ledger=None):
         saver,
         validate=validate,
         receipt=_receipt,
-        tool_factory=lambda name: {name: Operation()} if tools is None else tools,
+        tool_factory=lambda name: {name: batch.Operation() if name == batch.NAME else Operation()}
+        if tools is None else tools,
         ledger=ledger,
     )
