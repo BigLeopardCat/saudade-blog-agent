@@ -39,9 +39,13 @@ def timings(events):
             "model_ttft_s": ttft}
 
 
-def decision_report(rows):
-    measured = [row for row in rows if row is not None]
-    return {"expected": len(rows), "measured": len(measured),
+def decision_report(groups):
+    scores = [all(group) if group and None not in group else None for group in groups]
+    measured = [score for score in scores if score is not None]
+    decisions = [score for group in groups for score in group if score is not None]
+    return {"expected": len(groups), "measured": len(measured),
             "correct": proportion(sum(measured), len(measured)),
-            "unverified": len(rows) - len(measured),
-            "scope": "first model decision, including justified discovery; not task success"}
+            "unverified": len(groups) - len(measured),
+            "decision_rate": sum(decisions) / len(decisions) if decisions else None,
+            "measured_decisions": len(decisions),
+            "scope": "complete scenario: every annotated initial decision correct; not task success"}

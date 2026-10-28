@@ -94,9 +94,11 @@ def _metrics(report):
     totals, trace_errors, first_visible, decisions, ttft = usage.empty(), [], [], [], []
     build = (report.get("service_version") or {}).get("sha")
     for case in report["cases"]:
+        case_decisions = []
         for index, rnd in enumerate(case.get("result", {}).get("rounds", []), 1):
             doc = load_trace(str(rnd.get("trace", "")))
             if not doc:
+                case_decisions.append(None)
                 trace_errors.append({"case": case["id"], "round": index, "error": "missing trace"})
                 continue
             row = request_metrics.summary(doc)
@@ -105,7 +107,7 @@ def _metrics(report):
             raw_rounds = case.get("decision_expectations") or []
             if index <= len(raw_rounds):
                 expectation = raw_rounds[index - 1]
-            decisions.append(action_metrics.decision_score(doc.get("events", []), expectation))
+            case_decisions.append(action_metrics.decision_score(doc.get("events", []), expectation))
             if row["errored_calls"]:
                 missing.append(f"{case['id']}.{index}: provider usage for errored calls")
             if not build or row["build"] != build:
@@ -126,6 +128,7 @@ def _metrics(report):
                 totals[field] += row[field]
             for population, event in cache_population(doc):
                 _add_cache(populations[population], event)
+        decisions.append(case_decisions)
     return {"groups": groups, "populations": populations, "usage": totals,
             "trace_errors": trace_errors, "first_visible": first_visible,
             "missing": missing, "decisions": action_metrics.decision_report(decisions),
@@ -142,6 +145,13 @@ def quality_statistics(cases, semantic):
                     for case in rows), len(rows)) if semantic else None,
                    "unresolved_semantic": sum(semantic.get(case["id"]) in
                     (None, "not_evaluated", "needs_review") for case in rows)}
+            for name, rows in groups.items()}
+
+
+def _action_timings(groups, minimum):
+    return {name: {field: distribution([row[field] for row in rows if row.get(field) is not None],
+                                      minimum)
+                   for field in ("first_business_tool_s", "first_business_result_s")}
             for name, rows in groups.items()}
 
 
@@ -223,6 +233,7 @@ def _budget_metrics(metrics, profile):
               "model_ttft_s": distribution(metrics["model_ttft_s"], minimum),
               "model_ttft_coverage": {"measured": len(metrics["model_ttft_s"]),
                                       "model_calls": totals["calls"]},
+              "business_action_timing": _action_timings(metrics["groups"], minimum),
               "percentile_caution": "20 samples is a reporting floor; tail latency "
                                     "still needs independent operational observation"}
     return result, failures, missing
