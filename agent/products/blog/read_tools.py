@@ -12,7 +12,7 @@ from tools.base import get_all_tools
 
 ARTICLE_READ_TOOLS = frozenset({"rag_search", "search_notes", "get_article_detail"})
 SITE_READ_TOOLS = frozenset({"get_blog_info", "get_social_links", "get_site_map"})
-OWN_READ_TOOLS = frozenset({"list_my_favorites", "get_unread_summary",
+OWN_READ_TOOLS = frozenset({"list_my_favorites", "get_unread_counts",
                             "list_notifications", "list_my_messages",
                             "list_my_board", "get_chat_history"})
 ADMIN_READ_TOOLS = frozenset({"get_server_status", "get_service_health", "get_user_stats",
@@ -102,7 +102,7 @@ def own_tools() -> dict:
 
     selected = _tools_with_scope(OWN_READ_TOOLS, SCOPE_READ_OWN)
     selected.update({tool.name: tool for tool in (
-        own_reads.get_unread_summary, own_reads.list_my_messages,
+        own_reads.list_my_messages,
         own_activity.list_my_board, own_activity.get_chat_history)})
     return selected
 

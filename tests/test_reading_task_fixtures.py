@@ -3,7 +3,7 @@
 import json
 
 from agent.domains import moderation, public_activity
-from agent.domains.own_reads import get_unread_summary
+from agent.domains.own_reads import get_unread_counts
 from agent.principal import SOURCE_ASSERTION, Principal
 from agent.products.blog.read_tools import own_tools
 from eval.reading_task_fixtures import backend
@@ -15,7 +15,7 @@ def config(role):
 
 def test_notification_fixture_distinguishes_counts_from_readable_contents():
     with backend("user") as state:
-        counts = get_unread_summary.invoke({}, config=config("user"))
+        counts = get_unread_counts.invoke({}, config=config("user"))
         result = own_tools()["list_notifications"].invoke(
             {"unread_only": True}, config=config("user"))
         assert json.loads(counts)["notifications"] == 2

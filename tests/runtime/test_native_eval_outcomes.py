@@ -19,7 +19,7 @@ def result(tool, data, **args):
 @pytest.mark.parametrize("messages,expected", [(0, True), (1, False)])
 def test_zero_unread_mail_is_a_proven_noop_only_with_an_actual_zero_count(messages, expected):
     gold = case_gold("messages_prepare")
-    value = result("get_unread_summary", {"notifications": 3, "messages": messages,
+    value = result("get_unread_counts", {"notifications": 3, "messages": messages,
                                           "total": 3 + messages})
     assert (not native_assertions.check(gold, value)) is expected
 
@@ -35,13 +35,13 @@ def test_only_an_empty_complete_inbox_proves_the_mail_read_request_is_already_do
 
 
 def test_failed_or_malformed_empty_result_is_not_a_noop_and_writes_never_pass():
-    value = result("get_unread_summary", {"messages": 0})
+    value = result("get_unread_counts", {"messages": 0})
     value["native_events"][0]["kind"] = "unavailable"
     gold = case_gold("messages_prepare")
     assert native_assertions.check(gold, value)
     value["native_events"][0].update(kind="ok", result="not-json")
     assert native_assertions.check(gold, value)
-    value = result("get_unread_summary", {"messages": 0})
+    value = result("get_unread_counts", {"messages": 0})
     value["native_events"].append({"event": "write_done"})
     assert native_assertions.check(gold, value)
 

@@ -47,6 +47,7 @@
 from __future__ import annotations
 
 import ast
+import inspect
 import pathlib
 import sys
 
@@ -132,10 +133,15 @@ def test_tool_kind_contract():
     _ENVELOPES = {"ok", "empty", "unavailable", "not_found", "ToolResult", "fact", "tgt", "_shape"}
     _FOUND: dict[str, list[int]] = {}
     _SCANNED_TOOLS = set()
-    for _p in sorted((ROOT / "tools").glob("*.py")):
+    from tools.base import get_all_tools
+
+    registered_tools = get_all_tools()
+    sources = set((ROOT / "tools").glob("*.py"))
+    sources.update(pathlib.Path(inspect.getfile(tool.func)) for tool in registered_tools)
+    for _p in sorted(sources):
         _src = _p.read_text(encoding="utf-8")
         _SCANNED_TOOLS.update(fn.name for fn in _tool_functions(ast.parse(_src)))
-        _FOUND |= offenders(_src, f"tools/{_p.name}")
+        _FOUND |= offenders(_src, _p.relative_to(ROOT).as_posix())
     LEDGER: dict[str, dict[str, str]] = {
         # ★ 批 ⑤-1（20261019）收掉的两条**病**，留在注释里当史：`device_oled_display` 的
         # 8 条硬失败（身份/参数/404/409/500）与 `get_weather` 的 `except` 那条此前都是裸串
@@ -158,9 +164,7 @@ def test_tool_kind_contract():
                                         "why": "站内结构常量，没有失败路径"},
     }
     print("① 非真空：真的扫到了工具（扫不到 ⇒ 下面每条都是空判据）")
-    from tools.base import get_all_tools
-
-    registered = {tool.name for tool in get_all_tools()}
+    registered = {tool.name for tool in registered_tools}
     check("扫描恰好覆盖全部在役工具，不依赖退休前的固定数量",
           bool(registered) and _SCANNED_TOOLS == registered,
           f"未扫描 {sorted(registered - _SCANNED_TOOLS)}；"
