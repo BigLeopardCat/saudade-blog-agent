@@ -110,6 +110,51 @@ def test_runtime_loads_public_tools_without_identity_or_legacy(backend, monkeypa
     assert len(backend["requests"]) == 1
 
 
+@pytest.mark.parametrize("domain,name", [("admin_tags", "list_tags"),
+                                        ("admin_categories", "list_categories")])
+def test_administration_domain_can_read_without_a_second_loader(backend, domain, name):
+    from langchain_core.messages import AIMessage, HumanMessage
+    from langgraph.checkpoint.memory import InMemorySaver
+
+    from agent.principal import SOURCE_ASSERTION, Principal
+    from agent.runtime.native import NativeRuntime
+    from agent.runtime.native_store import NativeConversationStore
+
+    def call(tool):
+        return AIMessage(content="", tool_calls=[{"name": tool, "args": {}, "id": tool}])
+
+    replies = iter([call(f"load_{domain}_info_tools"), call(name),
+                    call("load_public_catalog_info_tools"), AIMessage(content="已读取目录。")])
+    menus = []
+
+    class Model:
+        def bind_tools(self, tools, **kwargs):
+            menus.append([tool["function"]["name"] for tool in tools])
+            return self
+
+        def invoke(self, prompt):
+            return next(replies)
+
+    runtime = NativeRuntime(NativeConversationStore(InMemorySaver()),
+                            model_factory=lambda **_: Model())
+    cfg = {"configurable": {"principal": Principal(7, "admin", SOURCE_ASSERTION),
+                            "user_id": 7, "conversation_id": 42, "thread_id": "conv_42"}}
+    events = list(runtime.stream_events({"messages": [HumanMessage(content="查看目录")]}, cfg))
+    assert events[-1].reply == "已读取目录。" and len(backend["requests"]) == 1
+    assert name in menus[1] and menus[-1].count(name) == 1
+
+
+def test_nonadmin_cannot_load_administration_domains():
+    from agent.principal import SOURCE_ASSERTION, Principal
+    from agent.products.blog.capabilities import ToolCatalog
+
+    domains = ToolCatalog().domains({"configurable": {
+        "principal": Principal(7, "user", SOURCE_ASSERTION), "user_id": 7,
+        "conversation_id": 42}}, True)
+    assert "admin_tags" not in domains and "admin_categories" not in domains
+    assert "list_tags" in domains["public_catalog"]
+
+
 
 def test_transport_rejects_oversized_raw_page_before_model_projection(backend):
     backend["override"] = {"code": 200, "total": 1, "data": [{
