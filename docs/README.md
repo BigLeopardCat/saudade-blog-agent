@@ -26,6 +26,7 @@
 | [conversation-memory.md](conversation-memory.md) | 来源隔离、长文本接续、图片引用与按需回看，以及宿主兼容要求 | 现状型 |
 | [chat-stream-protocol.md](chat-stream-protocol.md) | 具名 SSE 事件、正文隔离、持久化边界与发布衔接 | 现状型 |
 | [evaluation-native-baseline.md](evaluation-native-baseline.md) | 原生 HTTP 测试集、首跑基线、真实身份与覆盖边界 | 现状型 |
+| [evaluation-review-20261028.md](evaluation-review-20261028.md) | 全量首跑、缓存分层、语义疑点及预检来源缺口 | 记录型 |
 | [cache-audit-20261026.md](cache-audit-20261026.md) | 首跑缓存分层、连续会话探针与固定任务模型对照 | 记录型 |
 | [model-evaluation-20261026.md](model-evaluation-20261026.md) | DeepSeek主线、Qwen部分运行与暂停、额度复验及剩余缺口 | 记录型 |
 | [deepseek-task-completion-20261026.md](deepseek-task-completion-20261026.md) | DeepSeek回放适配、推理档位对照、任务评测修订与视觉边界 | 记录型 |
@@ -51,7 +52,7 @@
 | [native-event-transport.md](native-event-transport.md) | Runtime 原生事件到聊天/SSE 协议的薄传输边界与终态规则 | 现状型 |
 | [native-context-cache.md](native-context-cache.md) | 原生工具目录、动态上下文顺序及缓存用量的验证口径 | 现状型 |
 | [legacy-compatibility-boundary.md](legacy-compatibility-boundary.md) | 原生运行时、旧图兼容层及退役条件 | 现状型（含迁移边界） |
-| [eval-observability.md](eval-observability.md) | 混合运行时指标、结果验收、旧评测边界与执行入口 | 现状型 |
+| [eval-observability.md](eval-observability.md) | 原生运行时指标、结果验收、旧评测边界与执行入口 | 现状型 |
 | [lint-baseline.md](lint-baseline.md) | 历史人工扫描快照；当前扫描以 eval 下的机器台账与 CI 为准 | 记录型 |
 | [rag-design.md](rag-design.md) | 检索设计与实现总结，§8 是触发条件驱动的升级预案 | 现状型 |
 | [rag-production-debug.md](rag-production-debug.md) | 两机配置、缓存与引擎候选、增量建库、回退和生产验收记录 | 现状型（§6–§8 为待验收方案） |

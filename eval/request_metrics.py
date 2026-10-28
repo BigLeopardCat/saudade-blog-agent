@@ -67,6 +67,8 @@ def summary(doc):
                                 if e.get("event") == "legacy_handoff"],
             "budget_stop_reasons": [_label(e.get("reason")) for e in events
                                     if e.get("event") == "budget_stop"],
+            "finalization_reasons": [_label(e.get("reason")) for e in events
+                                      if e.get("event") == "finalizing"],
             **usage.totals(events)}
 
 
@@ -101,6 +103,8 @@ def collect(paths):
                        "budget_stops": sum(bool(r["budget_stop_reasons"]) for r in rows),
                        "budget_stop_reasons": dict(Counter(
                            reason for r in rows for reason in r["budget_stop_reasons"])),
+                       "finalization_reasons": dict(Counter(
+                           reason for r in rows for reason in r["finalization_reasons"])),
                        "duration_samples": len(times), "p50_s": median(times) if times else None,
                        "p95_s": quantiles(times, n=100, method="inclusive")[94]
                        if len(times) >= 20 else None,

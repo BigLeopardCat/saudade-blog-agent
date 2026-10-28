@@ -1,19 +1,4 @@
-"""`eval/daily_metrics.py`（每日零成本观测一行）的离线自测。
-
-**为什么需要这条锁**：这一行是**替一条停掉的哨兵线**值班的——20261012 起夜间回归
-整体挂起，`token_cost_report` / `trace_metrics` 两件零成本读数装置只剩人想起来才跑。
-值班的判据自己错了，比没有判据更坏：它会以"每天一行、看着挺正常"的形态把错的数
-喂给复盘。第一版**当场就错了两处**（都是尺子不对，不是数据不对）：
-
-  · 只数 `execute/call` ⇒ 把**被拦下**的调用算成重复（实测 `audit_board_comment`
-    连发两次 `consent_required`，一次都没执行）；
-  · 不看 `execute/noop` ⇒ 把**零净改动**的重复算进来（实测 `set_account_role`
-    第二次 `changed=False`，`_trim_noop_specs` 已经按设计拦住了）。
-
-所以本文件锁的是**尺子的四条边**，不是某个数字。判据本身取自生产 trace 的实测形状。
-
-用法：.venv/bin/python tests/test_daily_metrics.py
-"""
+"""Daily accounting distinguishes native requests from legacy execution diagnostics."""
 
 
 import json
@@ -139,6 +124,20 @@ def test_daily_metrics():
 
     assert not FAILS, (
         f"{len(FAILS)} 条未通过：" + "；".join(FAILS))
+
+
+def test_native_requests_are_recognized_without_legacy_planner_events(tmp_path):
+    trace = tmp_path / "20261028T120000_7_12345678.json"
+    trace.write_text(json.dumps({"input": {"runtime": {"name": "native"}},
+                                "events": [{"node": "native", "event": "llm_done",
+                                            "input": 100, "cache_read": 75, "output": 10}]}))
+    unknown = tmp_path / "20261028T120001_7_abcdefgh.json"
+    unknown.write_text(json.dumps({"events": []}))
+    counts = dm.collect([str(trace), str(unknown)])
+    assert counts["native"] == counts["unread"] == 1
+    assert counts["total"] == 2 and counts["graph"] == counts["dup"] == 0
+    line = dm.render([str(trace)], 1)
+    assert "native=1" in line and "未识别=0" in line and "75.0%" in line
 
 
 if __name__ == "__main__":
