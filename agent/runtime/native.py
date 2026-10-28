@@ -1,4 +1,4 @@
-"""Native model/tool turns with conversation persistence and no planner fallback."""
+"""LangChain model/tool execution with durable conversation and approval state."""
 
 import asyncio
 from contextlib import ExitStack
