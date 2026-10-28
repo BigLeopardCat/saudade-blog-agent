@@ -23,7 +23,5 @@ def safe_request(req, principal):
     return req.model_copy(update={
         "history": req.history if history_allowed else [],
         "summary": req.summary if summary_allowed else "",
-        "needs_summary": (req.needs_summary and history_allowed and covered_base
-                          and not req.confirm_token),
         "summary_batch": batch if history_allowed and covered_base else None,
     })
