@@ -2,10 +2,10 @@
 
 import ast
 import re
+from ast import literal_eval as parse_data
 
 from _judge import collector
 
-from agent.arg_refs import parse_data
 from rag import sections
 from rag.search import chunk_note
 

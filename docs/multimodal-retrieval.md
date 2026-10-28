@@ -1,6 +1,5 @@
 # 多模态检索：分阶段方案与判据
 
-> ⚠️ 20261018 又一批模块历史路径映射（旧规划相关实现已删除）（**记录型文档一律保留当时的名字，不回溯改写**）：`agent/absence.py` → `agent/absence_claims.py`、`agent/frames.py` → `agent/frame_contract.py`、`agent/probe.py` → `agent/runtime_probe.py`、`agent/decisions.py` → `agent/deterministic_plan.py`、`agent/entities.py` → `agent/entity_digest.py`、`agent/refs.py` → `agent/arg_refs.py`、`agent/workflow_defs/nav.py` → `agent/workflow_defs/nav_map.py`、`agent/workflow_defs/navigation.py` → `agent/workflow_defs/nav_skills.py`、`agent/workflow_defs/reports.py` → `agent/workflow_defs/report_skills.py`、`agent/context.py` → `agent/prompt_context.py`。**现状地图（每个模块一行）**见 `docs/agent-architecture.md` §2。
 
 > **状态**：搁置（20261005），方向认可、条件未到。取舍与重开条件见
 > [adr/adr-0005-multimodal-retrieval-deferred.md](adr/adr-0005-multimodal-retrieval-deferred.md)。
