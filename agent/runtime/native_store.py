@@ -28,8 +28,8 @@ class NativeConversationStore:
         thread_id = ((config or {}).get("configurable") or {}).get("thread_id")
         if thread_id:
             checkpoint_store.require_active(self.saver, thread_id)
-        # Maintenance writes also use this node; inference from a legacy writer
-        # would otherwise try to resume an old planner or fail as ambiguous.
+        # Maintenance writes name their destination explicitly instead of inferring
+        # a writer from checkpoint history.
         node = "commit"
         if set(values) == {"messages"} and self.load(config).approval:
             # History maintenance must preserve the outstanding approval edge.

@@ -55,13 +55,7 @@ def _ts(now: datetime | None = None) -> str:
 # ── 报表 ①：服务器状态 ───────────────────────────────────────────────
 
 class ServerStatusKw(TypedDict):
-    """`render_server_status` 的六个入参（20261019 批 G5）。
-
-    为什么要有这张表：调用方（`tools/admin_read.py`）现在把**同一份**结构既喂渲染器、
-    又当 `ToolResult.data` 交出去，只能写成 `R.render_server_status(**kw)`——而一个
-    裸 dict 的 `**` 展开会让类型检查在这六个口子上**同时失明**（实测十个 arg-type）。
-    这张表就是那个 dict 的形状：写一次，调用方与渲染器都按它走。
-    """
+    """Shared keyword arguments for the server-status renderer and tool result."""
     cpu_pct: float | None
     cores: int
     load: tuple[float, float, float] | None
@@ -71,7 +65,7 @@ class ServerStatusKw(TypedDict):
 
 
 class ServiceHealthKw(TypedDict):
-    """`render_service_health` 的四个入参（同上，批 G5）。"""
+    """Shared keyword arguments for the service-health renderer and tool result."""
     services: list[tuple[str, dict]]
     health: dict
     traces: dict
@@ -179,8 +173,7 @@ def _short_health_line(line: str) -> str:
 
 # ── 报表 ③：评论（河灯留言）审核状况 ────────────────────────────────
 #
-# 口径来自**生产代码**而不是这张报表的想象（20260922 逐条对齐 src/routes/talks.rs
-# 的 board_approved）：河灯留言入库时算出一对 (approved, ai_result)——
+# Match the backend moderation fields (approved, ai_result):
 #   · ai_result=pass   ：AI 判通过 → approved=1（无人工闸）或 0（人工闸开着 ⇒ 仍要人看）
 #   · ai_result=reject ：AI 判驳回 → approved=2（直接驳回）或 0（人工闸开着）
 #   · ai_result=flag   ：AI 存疑 → 一律 approved=0
@@ -188,9 +181,7 @@ def _short_health_line(line: str) -> str:
 # 人工后续裁决**只写 approved、不改写 ai_result**（`audit_board`），所以
 # `ai_result=reject 且 approved=1` 是"AI 驳回但被人改判放行"的实证，不是脏数据。
 #
-# 上一版把 `reject` 混进了"未审"桶（只认 pass/flag），于是**AI 驳回的那批在报表里
-# 看不见**——而"哪些被 AI 驳回"正是主人最常问的一句（20260922 用户点名要读）。
-# 现在按 AI 侧四态 × 人工侧三态切分，三份名单各回答一个问题。
+# AI verdict and human approval are separate dimensions; report both.
 
 APPROVED_PENDING, APPROVED_OK, APPROVED_REJECT = 0, 1, 2
 
@@ -208,21 +199,10 @@ FOCUS_NAMES = {
 
 
 def account_text(r: dict) -> str:
-    """后台视图里的**发表账号**：`账号（userId:5／昵称 小猫咪／用户名 sora）`。
+    """Render the publishing account from administrator-only identity fields.
 
-    后台留言行（`GET /api/protect/board`）每一行都带 `userId`/`username`/`nickname`
-    ——**发留言必须登录**（`talks.rs::insert_talk` 里那道 `current_uid`），所以留空留名
-    的"匿名"留言一样溯得到是谁发的。
-
-    为什么要单独有这么一个渲染：公开视图（公开留言列表）里没有这三个字段，它透出的
-    `author` 只是留言人**自己在留名框里填的自由文本**——可以填任何字（甚至填别人的
-    昵称）、也可以留空。**它不是账号**，拿它当"是谁发的"去认人就是认错人。生产现场
-    （trace `20260930T235232`）模型正是拿着留言正文当账号名去后台名录里找，回了
-    "后台账号列表里并没有叫「博主是大笨狗」的账号"。
-
-    昵称与用户名都给（主人认人两种叫法都有），两个都空时只剩 userId（**不许留白**：
-    留白会让这一行看起来像"没有账号"，那正是公开视图的坑）。
-    """
+    The public signature is user-entered display text, never evidence of account identity.
+    Missing account fields remain unknown."""
     uid = r.get("userId")
     head = f"userId:{uid}" if uid is not None else "userId 读不到"
     nick = sanitize_untrusted(str(r.get("nickname") or ""), 20)
@@ -237,19 +217,7 @@ def account_text(r: dict) -> str:
 
 
 def _detail_line(r: dict, extra: str = "") -> str:
-    """一条留言的明细行：`talkId:<id> 时间 账号…（标注）「正文」`。
-
-    **id 带命名空间**（20260926 批 4，理由见 tools/base.py::_board_label）：这份明细
-    直接进 planner/narrator 的提示词，裸 id 会被当成别的物件。
-
-    **账号与留名分开印**（20261001）：旧版这里是 `author or nickname`——留言时填的
-    自由文本会**盖住真实账号**，于是"这条是谁发的"在报表里也没答案（匿名那条更是
-    只剩一个 userId）。现在账号一律由 `account_text` 给出，留名只作为**附加的**线索
-    跟在后面（备注里写明它是留名框填的字，不是账号）。
-
-    `sanitize_untrusted` 是必须的（见模块头注）：这是全链路唯一"访客可控文本进
-    prompt"的地方，命令前缀必须在这里拆掉——留名与正文同样访客可控。
-    """
+    """Render a bounded moderation row with a namespaced talk ID and account identity."""
     who = account_text(r)
     sign = sanitize_untrusted(r.get("author") or "", 16)
     if sign:
@@ -307,8 +275,7 @@ def render_moderation_status(rows: list[dict], status: str | None = None,
 
     lines.append("- 三份名单口径不同、**可以重叠**（一条 AI 驳回又还等人复批的留言会同时"
                  "出现在②③）——不要把三个数相加当总数")
-    # 一行图例买断整份报表的歧义（20261001）：明细行受字符预算所限，只在行内重复
-    # 「不是账号」划不来；说一次，整份都算数。
+    # Explain account identity once instead of repeating the legend in every row.
     lines.append("- 明细里「账号（…）」是**真实发表账号**（发留言必须登录，留空留名的也溯得到）；"
                  "「留名「…」」是留言时自己填的字，**不是账号**，别拿它去认人")
 
@@ -346,14 +313,7 @@ def render_moderation_status(rows: list[dict], status: str | None = None,
     missed = [r for r in rejected if r.get("ai_result") == "pass"]
     lines.append(f"- 分歧实证（人工已经裁过的）：AI 放过但被人驳回 {len(missed)} 条；"
                  f"AI 驳回但被人放行 {len(open_rej)} 条")
-    # **处置能力**（20260928）：这张报表是"某条留言现在什么状态"的唯一事实源，但它此前
-    # **只报状态、不说能对它做什么**，于是模型只能自己推——推出来的就是那句假话。
-    # 事故实证（trace `20260928T032411`）：报表把两条被驳回的留言连 id 与正文一起列了
-    # 出来，narrator 却对主人说"系统这边**没有删除被驳回留言的通道**……只能你自己进后台
-    # 手动处理"。事实相反：`_board_index` 读的就是**这份**后台清单（`GET /api/protect/board`
-    # 不过滤 approved），被驳回的留言既找得到也删得掉（驳回的更该能删）。
-    # 修法取"把事实放在模型读得到的地方"，不是加一条禁令：**能力边界是系统数据**，
-    # 与 NAV_MAP、站点地图同一类——模型不该靠推理去猜自己有什么权限。
+    # Expose supported moderation actions alongside their actual targets.
     lines.append(
         "- **处置**：上面列出的每一条（含已驳回、待审的）都有两条通道——"
         "① 复核/改判：人工通过或驳回，**按 `talkId` 指认**（编号就是上面逐条印出来的"
@@ -369,21 +329,7 @@ def render_moderation_status(rows: list[dict], status: str | None = None,
     return _cap("\n".join(lines))
 
 
-# ── 后台留言名册（20261001）─────────────────────────────────────────
-#
-# **这张名册存在的唯一理由**：公开留言接口看不到**发表账号**。它透出的 `author`
-# 是留言时在留名框里自己填的自由文本（可以填任何字、也可以留空，留空就是"匿名"），
-# 于是"这条是谁发的"在公开视图里**结构上无解**——而答案一直在后台视图里：
-# `GET /api/protect/board` 的每行都带 userId/username/nickname，且**发布强制登录**
-# （`talks.rs::insert_talk` 里那道 `current_uid`）——匿名只是没填留名，账号一样留存。
-# 生产现场（trace `20260930T235232`）：模型手上只有公开列表，于是回了一句
-# "后台账号列表里并没有叫「博主是大笨狗」的账号"——它把**留言正文**当成了账号名。
-#
-# 与报表③（`render_moderation_status`）的分工：那张按**审核状态**切三份名单、默认
-# 每份只印 5 条，回答"积压了多少、哪些被 AI 驳回了"；这一张是**逐条名册**，回答
-# "这条是谁发的、最近都说了什么"。两个问题、两张纸，刻意不合并（合并会让两边都
-# 变长，而 2400 字的报表上限就摆在那里）。
-
+# 后台名册保留发表账号；公开留名不能用于核实身份。
 # 名册的行数上限：与字符预算谁先到算谁（见 render_board_roster 的循环）。
 BOARD_ROSTER_LIMIT = 20
 
@@ -392,11 +338,7 @@ BOARD_ROSTER_FALLBACK = 5
 
 
 def _roster_line(r: dict) -> str:
-    """名册的一行：`talkId:<id> [状态] 时间 账号（…），留名「…」「正文节选」`。
-
-    ⚠️ **账号在留名之前**——顺序就是判据：读的人先看到的是"谁发的"，留名只是附注
-    （旧版两类东西挤在一个字段里，自由文本会盖住账号）。
-    """
+    """Render account identity separately from the optional public signature."""
     from tools.base import BOARD_APPROVED_CN        # 一处实现（tools/base.py，写路径同源）
     state = BOARD_APPROVED_CN.get(r.get("approved"), "状态未知")
     sign = sanitize_untrusted(r.get("author") or "", 16)
@@ -457,10 +399,8 @@ def render_board_roster(rows: list[dict], *, approved: int | None = None,
     if not hits:
         head.append(f"- 按上面的条件一条都没匹配上（后台 {len(rows)} 条里筛出来的结果是空的）"
                     "——换个关键词、或不带条件看全部。")
-        # 筛空是最危险的中间态：读的人手上什么都没有，只能拿会话历史里的旧印象凑
-        # （trace `20261001T005722` 实证：关键词「骂」筛空 → 换词猜「垃圾博客」→
-        # 再把另一条留言的**留名**讲成了它的"账号"）。所以这里不只说"没有"——
-        # 把**不带关键词**的最近几条补上（状态筛选仍生效），让"换个词"有据可依。
+        # A keyword miss may include recent rows as a clearly labelled fallback;
+        # retain the approval filter and never report them as keyword matches.
         same_status = [r for r in rows
                        if isinstance(r, dict)
                        and (approved is None or r.get("approved") == approved)]
@@ -532,7 +472,7 @@ def render_user_stats(data: dict, now: datetime | None = None) -> str:
     return _cap("\n".join(lines))
 
 
-# ── 报表 ⑤：文章流量（20260930）────────────────────────────────────
+# ── Article traffic ─────────────────────────────────────────────
 # 数据源 = `GET /api/protected/stats/notes`（`src/routes/note_stats.rs`），口径三条
 # 全在那个文件的模块头注里：只算**当前可见**的文章、三个榜**数组顺序即名次**（后端
 # 没有 rank 字段，序号由这里按下标印）、`daily` 已补零成定长 30 天。
@@ -650,7 +590,7 @@ def render_note_stats(data: dict, now: datetime | None = None) -> str:
     return _cap("\n".join(lines))
 
 
-# ── 报表 ⑥：文章分期（20261001）─────────────────────────────────────
+# ── Article publication periods ─────────────────────────────────
 # 数据源 = `GET /api/protected/stats/notes/periods`（`src/routes/note_stats.rs`）。
 # 与上面那张快照报表**三条口径同源**（只算当前可见文章、名次=数组顺序、缺键 ≠ 0），
 # 多出来的是**期**这一层，于是多出两条判据：
