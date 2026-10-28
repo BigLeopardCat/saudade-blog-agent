@@ -20,6 +20,7 @@ classifiers = [
 ]
 # Direct runtime dependencies; uv.lock pins reproducible installations.
 dependencies = [
+    "anyio==4.14.1",
     "edge-tts==7.2.8",
     "fastapi==0.141.1",
     "httpx==0.28.1",

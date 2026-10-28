@@ -8,7 +8,7 @@ import argparse
 import json
 import sys
 import time
-from contextlib import closing
+from contextlib import ExitStack, closing
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from threading import Event
@@ -34,6 +34,7 @@ from eval import (
     request_metrics,
 )
 from eval.own_fixtures import SECRET, favorite_backend, message_backend, notification_backend
+from models.transport import ModelIO
 from utils.trace_io import load_trace
 
 # run_golden's existing helpers still use imports relative to its script directory.
@@ -190,8 +191,10 @@ CASES = [("chat", favorite_backend, _chat),
 
 def _sample(name, backend, contract, run_id, sample):
     paths, rounds = [], []
-    with backend() as state, TemporaryDirectory(prefix="agent-native-eval-") as temp:
-        arm = NativeRuntime(NativeConversationStore(InMemorySaver()), narrator=narrate)
+    with (ExitStack() as resources, backend() as state,
+          TemporaryDirectory(prefix="agent-native-eval-") as temp):
+        arm = NativeRuntime(NativeConversationStore(InMemorySaver()), narrator=narrate,
+                            model_io=resources.enter_context(ModelIO()))
         store = _Store(str(Path(temp) / "ledger.sqlite3"))
         principal = _principal(state.get("caller_role", "user"))
 

@@ -3,6 +3,7 @@
 from types import SimpleNamespace
 
 import pytest
+from _memory_support import ACTOR, SCOPE, Capture, config, run, runtime
 from langchain_core.messages import AIMessageChunk, HumanMessage, ToolMessage
 from langchain_core.messages.utils import count_tokens_approximately
 from langchain_core.tools import tool
@@ -19,46 +20,8 @@ from agent.runtime.checkpoint_store import ConversationDeleted
 from agent.runtime.memory_media import image_id, image_urls
 from agent.runtime.memory_scope import safe_request
 from agent.runtime.message_content import estimate_tokens
-from agent.runtime.native import NativeRuntime
-from agent.runtime.native_store import NativeConversationStore
 from agent.runtime.results import TurnResult
 from tools import base
-
-ACTOR = Principal(7, "user", SOURCE_ASSERTION)
-SCOPE = {"user_id": 7, "role": "user", "conversation_id": 42}
-
-
-def config(principal=ACTOR):
-    return {"configurable": {"thread_id": "conv_42", "conversation_id": 42,
-                             "user_id": principal.uid, "principal": principal}}
-
-
-class Capture:
-    max_tokens = 64
-
-    def __init__(self, *responses):
-        self.prompts = []
-        self.responses = iter(responses)
-
-    def bind_tools(self, tools, **kwargs):
-        from _budget_model import schemas
-        self.kwargs = {"tools": schemas(tools)}
-        return self
-
-    def stream(self, messages, **kwargs):
-        self.prompts.append(list(messages))
-        yield next(self.responses, AIMessageChunk(content="收到。"))
-
-
-def runtime(saver, model):
-    catalog = SimpleNamespace(initial_tools=lambda _: {}, domains=lambda *_: {})
-    return NativeRuntime(NativeConversationStore(saver), catalog=catalog,
-                         model_factory=lambda **_: model)
-
-
-def run(selected, req, cfg=None):
-    return list(selected.stream_events(
-        {"messages": build_messages(req, holds_context=selected.store.available)}, cfg or config()))
 
 
 def test_image_current_input_is_multimodal_but_saved_and_replayed_history_is_small():
