@@ -69,7 +69,7 @@ class FrameworkExecution:
             return {"pending_confirm": (execution or {}).get("pending_confirm"),
                     "pending_action": (execution or {}).get("pending_action"),
                     "approval": session.approval, "approved_result": None,
-                    "continuation": None, "run": session.task,
+                    "run": session.task,
                     "tool_state": tool_state.capture(session)}
 
         return approval.graph(session.store.saver, execute)

@@ -28,7 +28,8 @@ import run_golden as golden  # noqa: E402
 
 SUITE = ROOT / "eval/golden/native_requests.jsonl"
 POC_IDS = ("chat_user", "nav_board", "article_discovery", "own_unread",
-           "admin_articles", "admin_denial", "tags_add_new", "memory_recall")
+           "admin_articles", "admin_denial", "tags_add_new", "memory_recall",
+           "memory_compaction_recall")
 
 
 def load_suite(path=SUITE):

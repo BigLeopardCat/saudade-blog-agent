@@ -123,10 +123,19 @@ def _outcome_failures(gold, result, events):
             if not _prepared_or_noop(wanted, result, events)]
 
 
+def _compaction_failures(gold, events):
+    if gold.get("require_memory_compaction") and not any(
+            event.get("node") == "memory" and event.get("event") == "compacted"
+            and event.get("source_messages", 0) > 0 for event in events):
+        return ["缺少成功覆盖历史消息的框架压缩证据"]
+    return []
+
+
 def check(gold, result):
     keys = {"require_observations", "require_observations_any", "require_todo_schedule",
             "require_confirm_specs", "require_confirm_preview", "forbid_runtime_stop",
-            "forbid_business_write", "require_answer_value", "require_prepared_or_noop"}
+            "forbid_business_write", "require_answer_value", "require_prepared_or_noop",
+            "require_memory_compaction"}
     if not keys.intersection(gold):
         return []
     events = result.get("native_events")
@@ -135,6 +144,7 @@ def check(gold, result):
     failures = []
     calls = observations(events)
     failures.extend(_outcome_failures(gold, result, events))
+    failures.extend(_compaction_failures(gold, events))
     for wanted in gold.get("require_observations", []):
         if not any(_matches_observation(wanted, event) for event in calls):
             failures.append(f"缺少实际工具观察：{wanted}")

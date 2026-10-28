@@ -66,7 +66,7 @@ class NativeConversationStore:
         saved = {"messages": memory.checkpoint_messages(
                     previous.messages, current, context_update=context_update),
                  "pending_confirm": None, "pending_action": None,
-                 "approval": approval, "continuation": None,
+                 "approval": approval,
                  "run": ({**previous.run, "input_saved": True}
                          if approval and previous.run else None)}
         for values in (pending or {}, execution or {}):
@@ -89,7 +89,7 @@ class NativeConversationStore:
         if (self.load(config).pending_action or {}).get("jti") == jti:
             self.update_state(config, {"pending_confirm": None, "pending_action": None,
                                        "approval": None, "approved_result": None,
-                                       "continuation": None, "run": None})
+                                       "run": None})
             self.prune(config)
 
     def guard(self, config):

@@ -96,6 +96,7 @@ uv sync --locked
 uv run --frozen uvicorn agent.main:app --host 127.0.0.1 --port 8010
 ```
 
+生产部署使用[固定版本目录和探活回滚](docs/deployment.md)，开发 checkout 不作为运行目录。
 生产环境使用 `uv sync --locked --no-dev`。配置了本地 BGE 输入 profile 时必须加
 `--extra embedding-tokenizer`；每次更新依赖后核对 `/health` 的 `rag_hybrid_active`
 和 `rag_state`，不能只看聊天服务已启动。检索服务缺依赖会降级为词法，

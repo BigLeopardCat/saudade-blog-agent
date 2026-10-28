@@ -56,7 +56,7 @@ def test_native_checkpoint_stays_bounded_after_many_turns_and_reload(monkeypatch
         list(runtime.stream_events(
             {"messages": [HumanMessage(content=f"question{number}" + "x" * 600)]}, cfg))
         saved = runtime.get_state(cfg).values["messages"]
-        assert memory._tokens(saved) <= memory.CHECKPOINT_TOKENS + memory._tokens(saved[-2:])
+        assert memory._tokens(saved) <= memory.COMPACTION_TOKENS + memory._tokens(saved[-2:])
     assert any(m.additional_kwargs.get("lc_source") == "summarization" for m in saved)
     assert saved[-2].content.startswith("question29")
     assert not any(m.content.startswith("question0") for m in saved)

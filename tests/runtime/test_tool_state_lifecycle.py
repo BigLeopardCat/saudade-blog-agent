@@ -109,8 +109,9 @@ def test_completed_menu_survives_reload_and_history_trimming_in_activation_order
     selected = runtime(first)
     turn(selected)
     if trimmed:
-        import models
         from langchain_core.language_models.fake_chat_models import FakeListChatModel
+
+        import models
 
         monkeypatch.setattr(models, "get_llm", lambda **kwargs: FakeListChatModel(
             responses=["Historical fixture queries completed."]))
@@ -200,3 +201,20 @@ def test_oversized_inherited_menu_resets_before_new_task_without_losing_discover
     assert result.reply == "New task fits."
     assert names(model.requests[0]) == ["load_alpha_info_tools", "load_beta_info_tools"]
     assert budget.model_calls == 1 and budget.tokens <= budget.limits.request_tokens
+
+
+def test_compressible_old_history_does_not_unload_the_inherited_menu(setup):
+    runtime, _, _ = setup
+    turn(runtime(Model(call("load_beta_info_tools"), AIMessageChunk(content="Ready."))))
+    selected = runtime(Model(AIMessageChunk(content="Short answer.")))
+    cfg = config()
+    selected.store.save_turn(cfg, [HumanMessage(content="Older background. " * 1000)],
+                             "Earlier reply. " * 1000)
+    selected.store.save_turn(cfg, [HumanMessage(content="Keep this latest exchange.")],
+                             "Latest answer.")
+    model = Model(AIMessageChunk(content="Current tools stay loaded."))
+    budget = RequestBudget(BudgetLimits(context_tokens=3500, request_tokens=6000))
+    with budget_scope(budget):
+        result = turn(runtime(model), "Short follow-up.")
+    assert result.reply == "Current tools stay loaded."
+    assert "read_beta" in names(model.requests[0])
