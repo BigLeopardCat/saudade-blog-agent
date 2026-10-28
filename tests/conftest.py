@@ -22,7 +22,6 @@ _PINNED = {
     "NO_PROXY": "127.0.0.1,localhost,::1",
     "no_proxy": "127.0.0.1,localhost,::1",
     "TRACE_DIR": str(pathlib.Path(_ARTIFACTS.name) / "traces"),
-    "IDEM_DB": str(pathlib.Path(_ARTIFACTS.name) / "idem.sqlite3"),
 }
 
 # Settings currently initializes a singleton on import. Bootstrap it with only

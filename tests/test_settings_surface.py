@@ -249,3 +249,14 @@ value = "literal and ghost_suffix"
 
 if __name__ == "__main__":
     test_settings_surface()
+
+
+def test_retired_authorization_and_sqlite_settings_are_not_exposed(monkeypatch):
+    from config.settings import Settings
+
+    monkeypatch.setenv("AUTHZ_ENFORCE", "0")
+    monkeypatch.setenv("IDEM_DB", "/nonexistent-retired-ledger/idem.sqlite3")
+    configured = Settings(_env_file=None)
+    for retired in ("authz_enforce", "idem_db"):
+        assert retired not in Settings.model_fields
+        assert not hasattr(configured, retired)
