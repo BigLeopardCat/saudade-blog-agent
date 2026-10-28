@@ -169,3 +169,18 @@ def test_database_tag_limit_propagates_truncation_and_rejects_fake_flag(backend)
     assert json.loads(str(result))["items"][0]["tagsTruncated"] is True
     backend["articles"][0]["tagsTruncated"] = "false"
     assert public_catalog.list_notes.invoke({}).kind == "unavailable"
+
+
+@pytest.mark.parametrize("name,key", [("list_categories", "categories"), ("list_tags", "tags")])
+def test_small_metadata_catalogs_default_to_twenty_records(backend, name, key):
+    template = backend[key][0]
+    backend[key] = [{**template, "id": i} for i in range(1, 26)]
+    tool = getattr(public_catalog, name)
+    first = json.loads(str(tool.invoke({})))
+    second = json.loads(str(tool.invoke({"page": 2})))
+    assert len(first["items"]) == 20 and first["hasMore"]
+    assert len(second["items"]) == 5 and not second["hasMore"]
+    assert first["total"] == second["total"] == 25
+    with pytest.raises(ValidationError):
+        tool.invoke({"page_size": 21})
+    assert len(backend["requests"]) == 2

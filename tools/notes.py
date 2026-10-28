@@ -1,38 +1,5 @@
 # -*- coding: utf-8 -*-
-"""公开读那一族：文章 / 分类标签 / 公告 / 留言板 / 说说 / 站点信息（20261018 拆 `tools/base.py`）。
-
-**为什么单独成模块**：`tools/base.py` 是全仓第二大体量文件（本次拆分前 5351 行 / 141 个
-模块级定义）。本模块收的是**连续的一大段**——从「笔记 / 文章 工具」到「站点信息 工具」
-（两节之间夹着分类标签、公告、留言板、说说）。它们的共同点不是"都是读"这么粗，而是
-**出口全是公开池**（`read.public`，见 `agent/authz.py` 的 scope 登记）：读的是**谁都能看
-的那一份**，与「用户自己那一份」（`tools/own_data.py`，`read.own`）在语义上是两套视图。
-
-**搬家方式**（与 `tools/result.py` / `tools/device.py` / `tools/own_data.py` 三刀同源）：
-`tools/base.py` 在**文件末尾**（注册表之前）按**原名** re-export 本模块全部顶层名
-（`# noqa: E402,F401`）。为什么不放在原来那一节的位置：本模块要 `from tools.base import
-_own_get`（`list_my_board` 用），而 `_own_get` 定义在 base 的第 1139 行——base 在第 126 行
-就 import 本模块的话，那个名字还不存在。**放在末尾就没有这个时序问题**（注册表本来也在末尾，
-它是唯一需要这些名字的模块级消费者）。
-
-⚠️⚠️ **被套件打桩的名字一律走 `tools.base` 的属性查找，不许按名 import，也不许直接调本
-模块的同名定义**：全仓实测（AST 扫 `X.<名> = …`，X 是 `tools.base` 的别名）被打桩的有
-**11 个**——`_client` 159 处、`_board_index` 11、`_get` 10、`_tag_index` 10、`_admin_get` 6、
-`_quota_pending_index` 5、`_public_tag_index` 4、`_find_named_user` 3、`_device_get_user_id` 2、
-`_sign_local_jwt` 2、`_user_directory` 2。本模块搬过来的正文碰到其中**三个**：
-`_get`（15 个调用点）、`_client.post`（1 个）、`_public_tag_index`（2 个）。
-函数对象取 globals 取的是**它自己所在模块**的 `__dict__`——按名 import 会拿到**打桩前**的
-旧对象，桩静默失效、测试真去发网络请求，而症状只是"断言换了个理由红"（本仓最贵的失效：
-看着在跑、其实没跑）。属性查找发生在**调用那一刻**，所以 `_base._get` 看得见桩。
-三种写法各按代价选：`_get` / `_client.post` 调用点多、行又贴着 100 列 ⇒ 各加一个**转发壳**
-（`_get` / `_client_post`），换来"搬过来的正文逐字节未动"这个可验证的性质；
-`_public_tag_index` 只有 2 个短调用点 ⇒ 直接写 `_base._public_tag_index()`。
-**其余从 base 取的名字（`_own_get` / `API_BASE` / `ToolResult` 那一族）不在上面 11 个里**
-⇒ 按名 import 是安全的（`_own_get` 是本模块 `list_my_board` 的读出口，实测无打桩点）。
-
-⚠️ **别丢注释**：`_slim_note_rows` 那段"为什么必须瘦"（`/notes` 一行 477 字符 ⇒ planner 只
-看到第一行前 300 字符的半截 JSON）与 `_read_section` 的按节取回契约都在正文里，是这一族
-存在的理由，别当排版删掉。
-"""
+"""Public article, taxonomy and activity reads with bounded source evidence."""
 
 import logging
 from typing import Annotated, Literal
@@ -346,6 +313,25 @@ def get_article_detail(
         "不是『站内一定没有』。另注意 id 不是同一套：通知链接里的 lid 是留言 id，不是文章 id。")
 
 
+def _rag_hit(index, hit):
+    title = hit["title"][:24].replace("\n", " ").replace("\r", " ")
+    text = f"{index}. type={hit['type']} id={hit['id']} score={hit['score']} title={title}"
+    hints = []
+    for position, label in enumerate((hit.get("sections") or [])[:3]):
+        label = label[:80].replace("\n", " ").replace("\r", " ")
+        hint = f"命中节={label}"
+        identifiers = hit.get("section_ids") or []
+        if position < len(identifiers) and hit.get("document_revision"):
+            ident = identifiers[position]
+            match = next((m for m in hit.get("matches", []) if m.get("section_id") == ident), {})
+            hint += f" section={ident} revision={hit['document_revision']}"
+            offset = match.get("offset")
+            if type(offset) is int and offset >= 0:
+                hint += f" offset={offset}"
+        hints.append(hint)
+    return text + (" " + " | ".join(hints) if hints else "")
+
+
 @tool
 def rag_search(
     query: Annotated[str, "检索关键词（用户问题中希望从博客内容里找到答案的核心表述）"],
@@ -354,7 +340,8 @@ def rag_search(
     """按相关性检索博客文章（语料仅限线上可见文章），返回候选文档列表（标题+类型+分数+命中节），不返回全文。
 
     用于查找某主题的文章，可直接提供候选标题与链接。
-    解读、总结或比较正文时，调用 get_article_detail 读取相关正文范围
+    按主题解读时从命中节中选择相关 section 并带 revision，调用 get_article_detail 读取正文，
+    无需从头续读整篇；全文总结或比较时按所需范围继续读取。
     （doc_type 取候选的 type）；候选不支持正文结论。
     注意：说说/留言/公告不在检索语料内——询问"最新留言/说说/公告内容"时直接用
     list_guestbook / list_talks / get_announcements 数据工具，不要用本工具检索。
@@ -366,18 +353,8 @@ def rag_search(
             return unavailable("检索索引未就绪（语料为空或重建失败），暂时无法检索")
         if not hits:
             return empty("检索无结果")
-        text = "\n".join(
-            f"{i + 1}. type={h['type']} id={h['id']} score={h['score']} "
-            f"title={h['title'][:24].replace(chr(10), ' ').replace(chr(13), ' ')}"
-            + (f" 命中节={h['sections'][0][:24]}" if h["sections"] else "")
-            + (f" section={h['section_ids'][0]} offset={h['matches'][0]['offset']} "
-               f"revision={h['document_revision']}"
-               if h.get("section_ids") and h.get("document_revision") else "")
-            for i, h in enumerate(hits)
-        )
-        # 走了哪条路**只进 meta**（20261005）：混合与纯词法的出口文本长得一模一样，
-        # 这是"开关拨了却一次没融合"唯一能被看见的地方。文本逐字不变——下游的
-        # `_RAG_ROW_RE` 与 gate 只认那串行，meta 不进提示词、也不影响判决。
+        text = "\n".join(_rag_hit(i + 1, hit) for i, hit in enumerate(hits))
+        # Retrieval mode belongs to telemetry; candidate format is shared by both routes.
         route = last_route()
         from rag.search import get_index
         corpus = get_index().status()

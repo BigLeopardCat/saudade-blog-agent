@@ -119,6 +119,7 @@ flowchart LR
 │   ├── domains/own_activity.py                          # 当前生产代码模块
 │   ├── domains/own_reads.py                             # 当前生产代码模块
 │   ├── domains/public_activity.py                       # 当前生产代码模块
+│   ├── domains/pagination.py                            # 紧凑目录元数据的分页参数上限
 │   ├── domains/public_catalog.py                        # 当前生产代码模块
 │   ├── domains/public_pages.py                          # 当前生产代码模块
 │   ├── domains/quota_actions/__init__.py                # 当前生产代码模块
