@@ -9,6 +9,7 @@ from langchain_core.messages import AIMessage, HumanMessage
 from langgraph.checkpoint.memory import InMemorySaver
 
 from agent import checkpoint
+from agent.principal import SOURCE_ASSERTION, Principal
 from agent.runtime import turns
 from agent.runtime.control import AgentCancelled
 from agent.runtime.native import NativeRuntime
@@ -16,7 +17,8 @@ from agent.runtime.native_store import NativeConversationStore
 
 
 def _config(thread_id="conv_overlap", stop_event=None):
-    return {"configurable": {"thread_id": thread_id, "stop_event": stop_event}}
+    return {"configurable": {"thread_id": thread_id, "stop_event": stop_event,
+                             "principal": Principal(7, "user", SOURCE_ASSERTION)}}
 
 
 @pytest.mark.parametrize("operation", ["turn", "discard", "delete"])

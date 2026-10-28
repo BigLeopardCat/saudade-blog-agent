@@ -173,6 +173,8 @@ def _setup_under_lock(saver, *, pool, now=time.monotonic, sleep=time.sleep,
             checkpoint_store.setup(conn)
             from agent.runtime import task_input_store
             task_input_store.setup(conn)
+            from agent.runtime import task_budget
+            task_budget.setup(conn)
             idem_pg.initialize(conn)
         finally:
             # `autocommit=True` 下 `pg_try_advisory_lock` 是**会话级**的，必须显式解锁
@@ -247,6 +249,8 @@ def delete_thread(saver, conversation_id: object) -> bool:
         saver.delete_thread(tid)
         from agent.runtime.task_inputs import for_saver
         for_saver(saver).delete_conversation(conversation_id)
+        from agent.runtime.task_budget import for_saver as task_usage
+        task_usage(saver).delete_conversation(conversation_id)
         return saver.get_tuple(config) is None
 
 
