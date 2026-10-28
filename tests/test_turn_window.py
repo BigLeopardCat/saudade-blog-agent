@@ -6,6 +6,7 @@ from agent.principal import SOURCE_ASSERTION, Principal
 from agent.runtime import memory
 from tools import base
 
+
 def test_turn_window():
     principal = Principal(7, "user", SOURCE_ASSERTION)
     history = []
