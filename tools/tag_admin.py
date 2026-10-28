@@ -1,42 +1,9 @@
 # -*- coding: utf-8 -*-
-"""管理助手写工具：**标签**（建 / 改 / 删）—— 20261018 拆 `tools/base.py`。
+"""Two-level tag administration and exact-name target resolution.
 
-**为什么单独成模块**：这一族是 `tools/base.py` 里**离散的三段**（`_tag_index` /
-`create_tag` / `_find_named_tag` + `update_tag` + `delete_tag`），scope 全是
-`write.console`，目标通道全是**标签名字**。它们共享同一个解析入口
-（`_find_named_tag`）与同一份字典快照（`_tag_index`），与同节的分类族只共用
-"名字 → id"这个形状、不共用任何数据——按域切开之后，改标签的人不必再在
-五千行的 `base.py` 里找那三个工具。
-
-## 这一族独有的事实（实现为什么长这样）
-  ① **两级标签**：`level` 是 `one` / `two`，二级标签挂在父标签下。`_tag_index`
-     把两级拼成一个 `{id: TagInfo}`，所以"同名标签不止一个"是**常态**而不是异常
-     ⇒ 按名字解析时必须能按 `level` 收窄（`update_tag` / `delete_tag` 的 `level`
-     形参就是为此存在），收不窄就拒绝并列出候选（`_near_miss_names`）。
-  ② **改名会撞名**：`update_tag` 的 `new_title` 与已有标签重名时后端会拒，工具
-     不预判、按后端政策出口（写前读的是旧值，写后复核读的是新值）。
-  ③ **删标签不删文章**：后端外键是 `ON DELETE SET NULL`，文章变成"没有标签"。
-     这条必须写进工具 docstring——planner 读的就是它。
-
-## 搬家时守的一条
-⚠️ **所有共享帮手一律写成 `_base.<名>(...)`**：`_admin_get`（套件打桩 50 处）、
-`_admin_post`（28 处）、`_admin_request`（49 处）都是**被套件直接打桩**的模块全局
-（`patch()` 就是 `setattr(tools.base, 名, 桩)`）；`_near_miss_names` 虽然今天没人
-打桩，但它按**在 `tools/base.py` 里的原位置**留给标签/分类/公告/账号四族共用
-（`tools/announcements.py` 与 `tools/account_admin.py` 已经经 `_base.` 读它）⇒
-本模块一个名字都不按名从 `tools.base` 取：模块级写 `from tools.base import <名>`
-会让 mypy 在这个环上判不出被 re-export 的那些名字的类型（20261018 在
-`tools/admin_read.py` 那一刀实测 7 条）⇒ 属性查找同时解决了时序与类型两件事。
-
-⚠️⚠️ **连本模块自己的 `_tag_index` 也走 `_base._tag_index(...)`**（8 处调用点）：
-它是这一族里**唯一被套件直接打桩的名字**（全仓 47 处 `patch(_tag_index=…)`），
-而桩是打在 `tools.base` 上的。函数对象按**自己所在模块**的 `__dict__` 解析全局名
-⇒ 在这里写裸 `_tag_index(...)` 会解析到**本模块**这个真函数，`tools.base` 上那份桩
-**静默失效**、测试真去发网络请求（20261018 实测：`tests/test_tag_admin.py` 当场
-`AttributeError: 'NoneType' object has no attribute 'get'`，因为桩传的 `config=None`）。
-这不是"多余的一层间接"：**打桩点在哪，取值点就得在哪**。同族的 `_find_named_tag`
-没人打桩，按裸名调用（同模块内），与搬家前逐字一致。
-"""
+Names may be ambiguous across levels or parents; narrowing must produce one target.
+Backend policy rejects name conflicts. Deleting tags keeps articles and removes
+their tag association. Shared transports and dictionaries are resolved through _base."""
 
 from typing import Annotated
 
@@ -46,10 +13,7 @@ from langchain_core.tools import tool
 from tools import base as _base
 from tools.result import ToolResult, fact, ok, tgt, unavailable
 
-# `__all__` = 本模块**所有不以 `_` 开头**的模块级名字（社区惯例，不留例外）：
-# 三件 `@tool`。`_tag_index` / `_find_named_tag` 是下划线名，由 `tools/base.py`
-# 按原名显式 re-export 供给（`agent/graph.py` 按名取 `_tag_index`、`_find_named_tag`；
-# 套件更是直接 `setattr(tools.base, "_tag_index", 桩)`）。
+# Public exports; helper names stay private to their modules.
 __all__ = ["create_tag", "delete_tag", "update_tag"]
 
 
@@ -95,9 +59,9 @@ def create_tag(
     if index is None:
         return unavailable("读不到现有的标签字典，无法确认是否重名，本次未创建")
 
-    # 父标签：**按名字**解析成 id（20260921 第四轮）。为什么不收 id：用户嘴里说的
+    # 父标签：**按名字**解析成 id。为什么不收 id：用户嘴里说的
     # 就是名字，跨轮执行记忆里也只有名字没有 id（`list_tags` 的摘要不带编号），
-    # 而"父标签 id 从哪来"曾是这条链上唯一解不开的环——planner 只可能猜一个数字。
+    # 而"父标签 id 从哪来"曾是这条链上唯一解不开的环——模型 只可能猜一个数字。
     # 名字对不上就**拒绝**（零写），不新建、不做模糊匹配。
     pid = None
     pname = str(parent_tag or "").strip()
@@ -126,8 +90,8 @@ def create_tag(
 
     if pid is not None:
         parent = index.get(pid)
-        # 参数对调守卫（20260921）：父标签的**名字与新标签名相同**时拒绝。
-        # 生产实证：planner 把「在编程标签下新建 Rust」填成 title=编程、父也填编程
+        # 参数对调守卫：父标签的**名字与新标签名相同**时拒绝。
+        # 生产实证：模型 把「在编程标签下新建 Rust」填成 title=编程、父也填编程
         # （父名当成了新标签名），若放行就会在「编程」下建出一个也叫「编程」的二级
         # 标签——库里多一条永远不该有的同名父子，而回复还会说"建好了"。这一判据不需要
         # 理解用户意图，只认"父子同名"这个自身矛盾的结构，误伤面 0（正常的二级标签
@@ -146,7 +110,7 @@ def create_tag(
             f"{'、'.join(c.label + ' id=' + str(c.id) for c in cands)}）；"
             f"如果你要的是它，直接用它；如果确实要新建一个同名一级标签，请说明后再来。本次未创建")
 
-    # 颜色（20260921）：点名了就用它，没点名按名字哈希（同名同色，前端手建同源）。
+    # 颜色：点名了就用它，没点名按名字哈希（同名同色，前端手建同源）。
     # **点名的色认不出 → 拒绝**，不回落哈希——那会让用户拿到一个他没要的颜色，
     # 且屏幕上看着"确实建成了"。这是写操作 fail-closed 纪律的一部分。
     color_spec = str(color or "").strip()
@@ -223,7 +187,7 @@ def _find_named_tag(name, config, level=None, role="标签", index=None):
     if hit is None:
         # 同名都在同一层（两个二级挂在不同父下）时，"说明是一级还是二级"帮不上忙
         # ——所以再给一条**能落下的**指认方式：用展示名（`父 / 子`）。这正是下面
-        # 候选名单写出来的形态，用户照着念、planner 照着填都能对上。
+        # 候选名单写出来的形态，用户照着念、模型 照着填都能对上。
         want_lv = (1 if lv == "one" else 2) if lv else None
         by_label = [t for t in index.values()
                     if t.label == want and (want_lv is None or t.level == want_lv)]
@@ -238,7 +202,7 @@ def _find_named_tag(name, config, level=None, role="标签", index=None):
                         "请用「父 / 子」这样的全名指认它（或说明是一级还是二级）")
     near = _base._near_miss_names(want, [(t.id, t.label) for t in index.values()])
     if near:
-        # 近失（20260925）：没有**同名**的，但名字接近——把候选摆出来请主人点名，
+        # 近失：没有**同名**的，但名字接近——把候选摆出来请主人点名，
         # 而不是丢一句"站内没有"（那句话在主人的视角里是假的：他记得站内有）。
         return None, (f"站内没有叫「{want}」的{role}（完全同名的一个都没有）；"
                       + "名字最接近的是 "

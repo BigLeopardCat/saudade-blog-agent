@@ -1,33 +1,9 @@
 # -*- coding: utf-8 -*-
-"""管理助手写工具：**文章分类**（建 / 改 / 删）—— 20261018 拆 `tools/base.py`。
+"""Category administration tools and exact-name target resolution.
 
-**为什么单独成模块**：这一族是 `tools/base.py` 里**连续的 207 行、5 个模块级名字**
-（分类字典 `_category_index` / 按名字解析 `_find_named_category` / 建 / 改 / 删），
-scope 全是 `write.console`、目标通道全是**分类名字**。它与紧邻的标签族只共用
-"名字 → id 解析"这个**形状**，不共用任何数据、任何通道（标签走 `/api/tag*`，
-分类走 `/api/category`）⇒ 两族各自成模块，改分类的人不必再翻标签那 400 行。
-
-## 这一族独有的事实（实现为什么长这样）
-  ① **分类没有 `level`**：标签是两级的、同名是常态，分类是平铺的；所以这里
-     `_find_named_category` 的 `level` 收窄参数不存在，重名就直接拒绝（后端对
-     `categoryTitle` 没有唯一约束，重名是**真会出现的**）。
-  ② **删分类不删文章**：后端外键 `ON DELETE SET NULL`，文章变成"没有分类"。
-     `delete_category` 的 `change` 行把"几篇文章变成没有分类"写进事实信封。
-  ③ **`_category_index` 的读点是公开面 `/api/category`**（不是 `/api/protected/…`）
-     ——它和公开读族打的是同一个 handler，只是这里以管理员身份读全量。
-
-## 搬家时守的一条
-⚠️ **所有共享帮手一律写成 `_base.<名>(...)`**：`_admin_get`（套件打桩 50 处）、
-`_admin_post`（28 处）、`_admin_request`（49 处）是**被套件直接打桩**的模块全局；
-`_near_miss_names` 按它在 `tools/base.py` 里的原位置留给标签/分类/公告/账号四族共用。
-⚠️⚠️ **连本模块自己的 `_category_index` 也走 `_base._category_index(...)`**（5 处
-调用点）：全仓有 **15 处** `patch(_category_index=…)`，而 `patch()` 就是
-`setattr(tools.base, 名, 桩)`——函数对象按**自己所在模块**的 `__dict__` 解析全局名
-⇒ 裸名调用会解析回本模块这个真函数、桩**静默失效**、测试真去发网络请求。
-同族的 `_find_named_category` 没人打桩，按裸名调用（同模块内），与搬家前逐字一致。
-本模块一个名字都不按名从 `tools.base` 取（模块级 `from tools.base import <名>` 会让
-mypy 在这个环上判不出被 re-export 的那些名字的类型，见 `tools/admin_read.py` 头注）。
-"""
+Categories are flat; duplicate names require clarification. Deleting a category
+keeps its articles and clears their category reference. Shared transports and
+dictionaries are resolved through _base so overrides remain effective."""
 
 from typing import Annotated
 
@@ -37,10 +13,7 @@ from langchain_core.tools import tool
 from tools import base as _base
 from tools.result import ToolResult, fact, ok, tgt, unavailable
 
-# `__all__` = 本模块**所有不以 `_` 开头**的模块级名字（社区惯例，不留例外）：
-# 三件 `@tool`。`_category_index` / `_find_named_category` 是下划线名，由
-# `tools/base.py` 按原名显式 re-export 供给（`agent/graph.py` 按名取
-# `_category_index`；套件更是直接 `setattr(tools.base, "_category_index", 桩)`）。
+# Public exports; helper names stay private to their modules.
 __all__ = ["create_category", "delete_category", "update_category"]
 
 

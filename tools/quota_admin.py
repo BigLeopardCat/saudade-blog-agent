@@ -1,34 +1,10 @@
 # -*- coding: utf-8 -*-
-"""管理助手写工具：对话额度的申请审核（只读队列 + 恢复满额）—— 20261018 拆 `tools/base.py`。
+"""Quota request review, direct resets and account target helpers.
 
-20261018 拆 `tools/base.py`。**为什么单独成模块**：这一族是 `tools/base.py` 里**连续的
-387 行、12 个模块级名字**（三张拒绝话术表 + 三个帮手 + 四件工具），scope 全是
-`admin.console` / `write.console`。它自己就是一个完整闭环：**读申请队列 → 按账号名或 uid
-解析唯一目标 → 代管理员恢复满额 → 读回复核**。
-
-## 这一族独有的事实（实现为什么长这样）
-  ① **恢复额度的两个入口是"两条目标通道"而不是一个带开关的工具**：`approve_quota_request`
-     按**账号名**（名录里看得见的那一行）、`reset_user_quota` 也按名字——**没有编号门**。
-     20260929 批 H · S2 之前只有 uid 通道，于是"给某个没申请过的人重置额度"这条今天真能
-     办的事被静默丢掉；名字→uid 的解析在工具侧对着**实时名录**做，唯一命中才动手。
-  ② **只读的那件（`list_quota_requests`）要标出"哪几件 agent 办不了"**：够得着的与够不着
-     的在同一屏里必须长得不一样，否则模型每次都挑到够不着的那件、每次都白跑
-     （标注用的 uid 集合来自 `_reachable_uids`）。
-  ③ **拒绝的形态是后端的政策**（"没有待处理的申请"/"这条申请已经处理过了"/"用户不存在"），
-     所以两张拒绝话术表与 `_NO_SUCCESS_TAIL` 是**给主人看的原话**，不是判定分支的输入。
-  ④ **口径是"余额"不是"计数器清零"**（20260929 用户反馈）：给主人看的话一律说余额。
-
-## 搬家时守的一条
-⚠️ **所有共享帮手一律写成 `_base.<名>(...)`**：`_user_directory`（族内 3 处、套件打桩
-**24 处**）、`_admin_get`（2 处、50 处）、`_quota_pending_index`（2 处、2 处）、
-`_find_user_by_id`（1 处）、`_find_named_user`（1 处、套件另有一处 `base._find_named_user = …`）、
-`_device_get_user_id`（1 处、2 处）、`_sign_local_jwt`（1 处、2 处）、`_client`（1 处、29 处）
-都是**被套件直接打桩**的模块全局（`patch(**kw)` + `setattr(tools.base, k, v)`）；
-`_pre_read_fail` / `_reachable_uids` / `_NO_SUCCESS_TAIL` / `_NO_IDENTITY_WRITE` /
-`ADMIN_BASE` / `logger` 虽然没人打桩，但本模块**一个名字都不按名从 `tools.base` 取**
-——模块级 from-import 会让 mypy 在这个环上判不出被 re-export 的名字的类型。
-`logger` 走 `_base.logger`：告警行名必须与搬家前逐字相同。
-"""
+Exact account discovery precedes writes, and backend policy remains authoritative.
+Approval, rejection and direct reset have distinct effects and receipts. User-facing
+results describe restored remaining allowance. Shared transports are resolved through
+_base so callers and test doubles use the same channel."""
 
 from typing import Annotated
 
@@ -38,14 +14,12 @@ from langchain_core.tools import tool
 from tools import base as _base
 from tools.result import ToolResult, empty, fact, not_found, ok, tgt, unavailable
 
-# `__all__` = 本模块**所有不以 `_` 开头**的模块级名字（社区惯例，不留例外）：
-# 四件 `@tool` 是工具本体。三张话术表与三个帮手是下划线名，由 `tools/base.py`
-# 按原名显式 re-export 供给（显式 import 不受 `__all__` 约束）。
+# Public exports; helper names stay private to their modules.
 __all__ = ["approve_quota_request", "list_quota_requests", "reject_quota_request",
            "reset_user_quota"]
 
 
-# ── 管理助手写工具：对话额度的申请审核（20260929）──────────────────────────
+# ── 管理助手写工具：对话额度的申请审核──────────────────────────
 # 背景（三端都核过的现状）：每个**普通用户**终身 500 轮（含 embedding 检索轮），
 # 管理员不设限；用尽之后由 **Rust 侧硬拦**（agent 只负责把那一轮答成一句人设话术，
 # 见 server.py 的 `_quota_blocked_stream`），唯一恢复途径 = 管理员把它恢复满。
@@ -68,22 +42,22 @@ __all__ = ["approve_quota_request", "list_quota_requests", "reject_quota_request
 # 属于**政策/状态类**的三句（跨语言契约，见 `src/routes/quota.rs` 头注与
 # `docs/security-boundary.md` §7⑬——⚠️ 是 **⑬**，⑫ 是令牌收回那节）。三句的共性 =
 # **再试一次也是同一个结果**，所以走 `policy_frame`（错误帧族）：checker 判 BLOCK ⇒
-# **零回执**、不进跨轮执行记忆，planner 拿到的原因码叫它"如实转述、别改参重试"。
+# **零回执**、不进跨轮执行记忆，模型 拿到的原因码叫它"如实转述、别改参重试"。
 # 这一条同时消灭了一个具体风险：管理员重复点通过时，**绝不会**在台账里留下第二笔"已恢复"。
-# ⚠️ **三句的来源不一样**（20260929 核过源码，别把它们一律写成"后端措辞"）：
+# ⚠️ **三句的来源不一样**：
 #   前两句是 Rust 真会发的（`这条申请已经处理过了` = 认领不到 / `你已经有一份待处理的
 #   申请了` = 重复申请）；**第三句是本节自己合成的**——它在"这个 uid 在当前 pending
 #   列表里没有行"时由 `_reset_or_review` 那条支路直接产出，Rust 侧从不发这句话。
 #   放进同一个元组是因为**分族行为相同**（都不许改参重试），不是因为来源相同。
 _QUOTA_POLICY_REFUSALS = ("该账号没有待处理的额度申请", "这条申请已经处理过了",
                           "你已经有一份待处理的申请了")
-# 属于**目标类**的一句（planner 的应对是换一个账号 / 问主人，不是"稍后再试"）。
+# 属于**目标类**的一句（模型 的应对是换一个账号 / 问主人，不是"稍后再试"）。
 _QUOTA_TARGET_REFUSALS = ("用户不存在",)
 # 申请人填的理由上限（500 字）：`quota_request.reason` 是 text 列，500 是**产品上限**
 # 而不是列宽——超限**拒绝、不截断**（截断会让主人核对的是这一句、库里存的是另一句，
 # 同 notice.rs 头注那条取舍）。
 # ⚠️ 唯一事实源是 Rust `quota::REASON_MAX`（它真的拦人）；
-# Python 侧**故意不抄这个数**（20261018 A1 删了零引用副本）。
+# Python 侧**故意不抄这个数**。
 # 管理员驳回理由的上限 = **迁移里 `quota_request.note` 的列宽**（varchar(255)），
 # 同时它会被原样拼进发给申请人的通知正文。这条理由**必须**与列宽对齐：写超了
 # 后端要么报错要么截断，而截断意味着申请人收到的理由与主人核对的那一句不同。
@@ -91,32 +65,11 @@ _QUOTA_NOTE_LIMIT = 255
 
 
 def _admin_quota_post(path: str, payload: dict, config: RunnableConfig):
-    """额度审核/重置专用的 POST：非 200 业务码**按"是目标类还是政策类"分两族**。
+    """Post a quota operation with conservative failure classification.
 
-    这个端点的非 200 有五种来源，落到这里只剩两族的区分有意义：
-
-      · **目标类**（`用户不存在`）⇒ `not_found`：planner 拿到这个原因码才会去
-        问主人 / 换一个账号；
-      · **政策/状态类**（`这条申请已经处理过了` / `你已经有一份待处理的申请了`，
-        外加本节自己合成的那句 `该账号没有待处理的额度申请`）⇒ `policy_frame`：
-        三句的共同点是**再试一次也还是它**（别人刚处理过、他没申请过、他早申请
-        过了），所以归政策族，让 planner 如实转述而**不是**改参重试；
-      · **其余一律 unavailable**（含真·存储故障、以及任何我们没见过的措辞）⇒
-        明说"未确认"，不替后端断言一个我们并不知道的原因。
-        ⚠️ 后端对"这个 id 找不到申请"说的是 `没有找到这条额度申请`，**不在**上面
-        任何一族里 ⇒ 它会落到这一档（"未确认"）。这是**安全方向**，而且按现在的
-        路径走不到：agent 发 POST 之前已经先读过 pending 列表、没有行就自己早退了
-        （见 `_review_quota_request` ③）。真要接住它，得先想清"再试一次有意义吗"。
-
-    方向刻意与 `_policy_post`（冻结族，非 200 **无条件**读成政策拒绝）不同：
-    那一族的非 200 没有一族是"服务不可用"，所以无条件按政策出口是对的；这一族有
-    真·存储故障，一律按政策/目标出口会把"库写失败"说成"没这个申请"——一句假话，
-    而且后果是**额度没有清零而主人以为清了**。按消息字符串匹配有代价（后端改字就
-    认不出），接受的依据是**兜底方向**：认不出 ⇒ unavailable（"没确认"），永远
-    不会断言一个假的结论。那几句已登记为跨语言契约，改它们要走
-    `docs/security-boundary.md §7⑬` 那条同步流程（⚠️ 是 **⑬**：⑫ 是令牌收回与
-    账号冻结那节；20260929 之前这里指向 ⑫，是一处指错的引用）。
-    """
+    Known target failures become not_found; policy refusals retain their reason.
+    Unknown failures remain unavailable. Preserve backend policy wording rather
+    than inventing a different rule."""
     from agent import adminops_target as _target
     uid = _base._device_get_user_id(config)
     if uid <= 0:
@@ -249,24 +202,11 @@ def _quota_readback(config: RunnableConfig, target_id: int, username: str, limit
 
 
 def _review_quota_request(user_id, approved: bool, reason, config: RunnableConfig) -> ToolResult:
-    """批准 / 驳回某人的额度重置申请（两个 @tool 是方向不同的薄壳，同冻结族）。
+    """Review a pending quota request for the exact, verified account ID.
 
-    照 `_set_account_frozen` 的五段式：① 读名录 → ② 按 **uid** 取出那一行 →
-    ③ 读**待处理申请**（定位 + 预检，读不到/没有他那一行都零写）→ ④ 写 →
-    ⑤ 写后复核 → 出口只有 `ok` / `not_found` / `policy_frame` / `unavailable`。
-
-    **目标走 id 通道**（20260929 批 H · S2）：参数是系统摆上桌的台账里那个
-    「账号 id=」——申请行 id（`rid`）由系统从 `_quota_pending_index[uid]` 自己取，
-    模型永远不需要知道它（它是模型猜不出的内部键）。**仍然过一次名录**：uid 必须
-    在场且真存在，见 `_find_user_by_id` 头注。
-
-    复核分两个方向，因为**两个方向改变的东西不同**：
-      · **批准**恢复额度满额 ⇒ 重读名录判 `chatQuotaUsed`（同主动重置，走
-        `_quota_readback`）；
-      · **驳回**不改变任何额度 ⇒ 重读**待处理申请**，判"那一行已经不在了"
-        （这正是服务端那次原子认领的可见效果）。用同一条读回复核去判额度在这里
-        是错的——驳回之后他的额度本来就还是用尽的样子，判它必然误报"未生效"。
-    """
+    The direction-specific tools resolve the target from current source records.
+    Approval and rejection remain distinct operations and both require read-back
+    verification before producing a success receipt."""
     from agent import adminops_quota as _quota
     from agent import adminops_target as _target
     note = str(reason or "").strip()

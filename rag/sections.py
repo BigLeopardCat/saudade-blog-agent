@@ -1,59 +1,13 @@
 # -*- coding: utf-8 -*-
-"""文章分节（20260920）：把 markdown 正文按标题切成小节——**一个实现，三处共用**。
+"""Pure Markdown section boundaries shared by indexing, range reads and excerpts.
 
-**为什么住在 `rag/` 而不是 `agent/`**（20261005 从 `agent/sections.py` 搬来）：消费者
-有三处，其中两处在 agent 层**下面**（`rag/search.py` 索引切片、`tools/base.py` 按节
-取回），第三处才是渲染侧 `agent/prompt_context.py`。原先它住在 `agent` 包里，于是**导入一个
-纯字符串函数要先跑 `agent/__init__.py`** → `agent.agent` → `agent.graph`（+ langgraph，
-本仓最大的那个模块），实测冷启动 **1.69 秒**（其中 `agent.graph` 占 1.71s 累计）——离线工具
-（`eval/recall_eval.py`、`eval/frame_budget.py`、任何只想要词法检索的入口）每次冷启动
-都在为一件不相干的事付这笔钱，两处调用点还各自写了"惰性导入：别让 tools 层启动即拉
-agent 包"来把它藏起来。`rag` 是三处里最低的一层（`agent/deterministic_plan.py`、
-`agent/prompt_context.py`、`tools/base.py` 都已经在 import `rag.search`），所以中立落点
-选这里——**导入它不再拉起任何东西**（本模块只 import `re`）。
+Only headings outside fenced code blocks delimit sections. outline preserves
+parent paths, repeated titles and empty parents; split supplies the compact
+section view. Changing these boundaries requires rebuilding the retrieval index.
 
-为什么需要它（"超长文章"问题的正解）：
-
-1. **渲染侧（agent/prompt_context.py `_frame_texts`）**：`get_article_detail` 的全文帧按字符
-   上限硬截。实测站内最长文章 note 19 = 25,445 字，上限 20,000 意味着 §7-§10 四个
-   整节**从来没进过上下文**，而模型连"有东西被截掉了、截的是什么"都不知道——它只
-   看到一段在句子中间断掉的文章。现在的做法是**按小节取舍**：能装下的整节保留，
-   装不下的整节以标题清单列在文末，并附"怎么取回"的说明。模型于是知道边界在哪。
-2. **读取侧（tools/base.py `get_article_detail(section=…)`）**：知道边界之后必须有
-   取回手段，否则"知道缺什么"只是更精确的无奈。`pick` 把用户的/planner 的小节指称
-   （标题全称、编号"9"、唯一子串）解析成一个小节读回来。
-3. **检索侧（rag/search.py `chunk_note`）**：BM25 索引本来就按同样的规则切节
-   （20260901 起），但那是它自己实现的一份。两侧各写一份的代价是"改了一边忘了
-   另一边"——索引切片、检索候选里的 `sections`、按节取回，三者必须同一套边界。
-
-**纯函数**：只吃字符串、只吐字符串/字典，不碰 IO、不碰模型（tests/test_sections.py 据此
-秒级断言，含 note 19 的真实形状）。
-
-切分支持围栏外的 1–6 级 Markdown 标题，标题行不进正文；首个标题之前
-的内容归到文章标题。索引用 outline 保留父标题路径、重复标题与空父节；旧渲染
-入口 split 继续提供节选兼容层。边界改变会影响排序，需重建索引并重跑标注集。
-
-围栏代码块中的 `#` 注释不当标题；所有消费者共用 `_fenced_flags`。
-不认围栏时线上 note:16（Git 教程）被切成 11 个**全空**的节，节名是 gitignore 的注释
-（`# ========== 依赖管理 ==========`）；全语料代价是 **330 chunk 里 48 个空正文、
-长度中位数 69 字、`avgdl` 被压到 103** ⇒ BM25 的长度归一**系统性偏爱短碎片**，
-`rag_arch_ports_real` 那条 known FAIL 的榜首就是这么来的（40 字的 `.gitignore` 残片
-拿 10.24 分，真答案 3.01 排第 4）。认了围栏之后：**197 chunk / 28 空 / 中位 318 字 /
-`avgdl` 171.9**，节名回到真标题（`1. 什么是 Git`、`3.1 三个区域`）。
-
-**父标题与它的子节是两个平级的 chunk**（`## 6. 防幻觉…` 与 `### 6.1 …` 都在列表里），
-于是**父标题自己的 `text` 常常是空串**——内容全都住在子节里。实测线上语料 10 篇
-**317 节里 47 节正文为空**（19 节的正文住在子节里、28 节是真空节；最长的一篇 25 节里 3 节，
-另一篇 178 节里 28 节）。（那一批的"28 节真空节"里，绝大多数其实是**围栏里的 `# 注释`
-被当成标题**——20261017 认了围栏之后重测：**197 chunk 里 28 个空正文、其中只有 1 节
-真的读不出来**（note:10 的 §test3，原文就是光秃秃一个标题）；空正文的绝大多数现在是
-"正文住在子节里"这种正常形状。）这不是
-边角形状，是常态，两处调用点各有一条判据挡着：
-
-- `pick` 命中一个空正文的父标题时，**连带把子节并进来**（见 `_with_children`）；
-- `excerpt` 的未展开清单**不列空正文的节**——把读不出内容的节名报成"可以按它取回
-  全文"是一句兑现不了的承诺，模型照它发一次按节读取只会空手而归（见 `excerpt`）。
-"""
+Unexpanded content is identified explicitly instead of silently truncated.
+Empty parents may include their descendants only when the heading structure
+is complete; ambiguous references never select an arbitrary section."""
 
 from __future__ import annotations
 
@@ -66,7 +20,7 @@ _HEADING_RE = re.compile(r"^#{1,6}\s+(.+)$")
 _FENCE_OPEN_RE = re.compile(r"^[ \t]{0,3}(`{3,}|~{3,})")
 
 # 未展开小节清单的标记串：渲染侧靠它在帧注记里区分"按节节选"与"退回头截断"，
-# tests/test_sections.py 也断言它出现。改字面量要同步 agent/prompt_context.py 的用法。
+# Excerpt consumers and section tests share this marker.
 UNEXPANDED_MARK = "**以下小节尚未展开**"
 
 # 清单区的预算（字符）：标题清单 + 取回说明。从节选上限里预留出来，保证
@@ -209,22 +163,10 @@ def _lead_num(s: str) -> str:
 
 
 def _is_lossy(content: str, chunks: list[dict]) -> bool:
-    """chunk 列表是不是**有损**的（正文里有标题行没能成为 chunk）。
+    """Detect headings omitted from the compact section list.
 
-    `split` 对"标题行**紧跟着另一个标题行**"的那一个不产 chunk（`cur == []`：
-    标题前一行也是标题，中间一行正文都没有）。20261009 实测线上语料 10 篇里 15 处，
-    **全部在同一篇的代码块里**（`# <<<<<<< HEAD`、`# drop = 删除该提交` …）——那正是
-    20261017 把围栏代码块排除出"标题行"的理由（见 `_fenced_flags`）。围栏认了之后这一支
-    应当基本不再命中；它**留着**，因为"有损 ⇒ 不推层级"要防的是**任何**原因导致的列表
-    不完整，而不只是代码块这一个成因。
-
-    为什么这件事必须先判：**"谁是谁的子节"是靠层级推的**。丢掉的那个标题不在列表里，
-    它后面的子节就会被算到**前一个**标题头上 ⇒ "读第 4 节"会把第 5 节的内容一起端出来，
-    而且是**无声**的。有损时一律**不做任何层级推导**（只认自身正文），代价是那一篇
-    拿不到并入的好处、退回"这一节没有正文"的如实分支——过度并比比读不到更坏。
-
-    标题行数与 `split` **同一把尺子**（`_heading_hits`），否则这里会开始报假有损。
-    """
+    Hierarchy inference is unsafe when headings are missing: later descendants
+    could attach to the wrong parent. Use the same heading parser as split."""
     lines = (content or "").split("\n")
     heads = len(_heading_hits(lines, _fenced_flags(lines)))
     lead = 1 if chunks and not chunks[0].get("level") else 0   # 首个标题之前的正文
@@ -247,16 +189,7 @@ def _child_span(chunks: list[dict], i: int, lossy: bool = False) -> tuple[int, i
 
 
 def _is_readable(chunks: list[dict], i: int, lossy: bool = False) -> bool:
-    """这一节发一次按节读取，能不能真的拿回正文。
-
-    两种能：① 自身有正文；② 自身没正文但**子节有**（取回时会连子节一起给，见
-    `_with_children`）。两者都不满足 = 真空节。
-
-    线上真空节的**主要来源曾经是围栏里的 `# 注释` 被当成标题**（那串 0 字的
-    `========== 依赖管理 ==========`，见 `_fenced_flags`）——20261017 认了围栏之后，
-    全语料 197 chunk 里只剩 **1 节**真的读不出来（note:10 的 §test3，原文就一个光标题）。
-    这条判据**留着**：它挡的是"清单里列了一个取不回来的节"这件事本身，与成因无关。
-    """
+    """A section is readable when it has text or readable descendant text."""
     start, end = _child_span(chunks, i, lossy)
     return bool((chunks[i].get("text") or "").strip()) or end > start
 
@@ -270,17 +203,10 @@ def readable_sections(content: str, title: str = "") -> list[str]:
 
 
 def _with_children(chunks: list[dict], i: int, lossy: bool = False) -> dict:
-    """命中那一节 → 自身正文为空时，**把子节的正文并进来**（返回里 `subsections` 记下并入了谁）。
+    """Include descendants only when the selected parent has no body.
 
-    **只在自身正文为空时才并入**：父标题没有正文是常态（见模块头注，线上 317 节里
-    47 节正文为空、其中 19 节的内容住在子节里），内容全都住在 `### 6.1 …` 里。只回父标题自己的 `text` 就是一个空串，
-    而调用方是照着"命中"这件事说"读到了节选"的——模型拿到空帧、也没有任何下一步可走
-    （现场：问"第 6 节写了什么"，读回来是空的，模型只能说读不到，重试一次还是同一格）。
-    并入之后"读第 6 节"才等于人话里的读第 6 节。
-    **自身有正文时正文一字不变**：那种形状下父标题自己就是要读的东西，把子节悄悄塞
-    进来只会让每一帧无谓变长（此时 `subsections` 是空的——它记的是**并入了谁**，
-    不是"有没有子节"，调用方据此说的那句话才不会失真）。
-    """
+    Never expand a nonempty parent implicitly. subsections records only the
+    children whose text was actually included."""
     base = chunks[i]
     start, end = _child_span(chunks, i, lossy)
     if (base.get("text") or "").strip() or end <= start:
@@ -292,21 +218,10 @@ def _with_children(chunks: list[dict], i: int, lossy: bool = False) -> dict:
 
 
 def pick(content: str, want: str, title: str = "") -> dict | None:
-    """按指称取一个小节；取不到/不唯一 → None（调用方据此回"可用小节"清单）。
+    """Resolve a unique section by full title, leading number, then substring.
 
-    三级匹配，逐级放宽，**命中即返回**：
-      ① 标题全称（归一化后相等）；
-      ② 前导编号相等（"9" ↔ "9. 部署与运维"、"3.1" ↔ "3.1 时序总览"）；
-      ③ 唯一子串（"部署" ↔ "9. 部署与运维"）——**唯一才认**：两节都含"部署"
-         时返回 None，让调用方把候选列出来，而不是赌一个。
-    不唯一时给候选清单比给一个可能错的小节好：模型照清单改一次指称即可（或直接
-    走 ID/编号），而赌错一次就是"读了别的节还声称读了"。
-
-    返回的 `text` 经 `_with_children` 过一道（空正文的父标题把子节并进来），
-    `subsections` = **这次并入了哪些子节名**（没并入就是空列表——它记的是"正文里
-    含了谁"，不是"有没有子节"）。调用方要用它把"这一节含哪些子节"如实说清楚，
-    否则模型不知道子节的存在，只能拿 `section=` 一个名字一个名字地试。
-    """
+    Missing or ambiguous references return None. Empty parents may include
+    descendant text through _with_children; subsections records that expansion."""
     w = _norm(want)
     if not w:
         return None
@@ -354,17 +269,10 @@ def outline_text(dropped: list[str]) -> str:
 
 
 def excerpt(content: str, cap: int, title: str = "") -> str:
-    """按小节节选正文，**整节取舍**，不越 `cap`。
+    """Fit whole sections within cap and list omitted readable headings.
 
-    - 全文装得下 → 原样返回（99% 的文章走这条，行为与旧实现完全一致）；
-    - 装不下 → 依次保留整节直到预算（`cap - _OUTLINE_RESERVE`），其余整节以标题
-      清单落在文末（含取回说明）；**空正文的节不进清单**——它读不出内容，列上去
-      等于指一条死路（它的子节另有自己的条目，不会因此漏掉）；
-    - 只有一节（正文没有小节结构）或首节自己就超预算 → 退回**头截断**并标注，
-      此时至少要说清"截了"（旧实现的问题不是截断本身，而是截断无声）。
-
-    `title` 是文章标题（首段的归属节名），只用于切分，不出现在输出里。
-    """
+    If no whole section fits, return a labeled prefix. title names the leading
+    preamble for splitting and does not appear in the rendered output."""
     text = content or ""
     if len(text) <= cap:
         return text
@@ -383,10 +291,7 @@ def excerpt(content: str, cap: int, title: str = "") -> str:
             used += len(piece)
         else:
             dropped.append(i)
-    # 清单里只列**真的读得出来**的节（`_is_readable`：自身有正文，或正文在子节里）。
-    # 列一个空节就是一句兑现不了的承诺——模型照它发一次按节读取，拿回来的是"这一节
-    # 没有正文"，白花一轮；而它的子节本来就另有自己的条目，不会因此漏掉。
-    # 清单被滤成空时退回原名（宁可列空的，也不静默少说一句"还有多少节没展开"）。
+    # Only list readable sections. Keep a fallback outline if filtering removes every entry.
     listed = [chunks[i]["section"] for i in dropped
               if _is_readable(chunks, i, lossy)]
     listed = listed or [chunks[i]["section"] for i in dropped]
@@ -427,23 +332,10 @@ def _unescape(text: str) -> str:
 
 
 def slim_frame(frame: str) -> str:
-    """详情执行帧 → 去掉**同文本的重复正文键**（帧体积接近减半）。
+    """Remove only byte-identical duplicate body fields from a dictionary frame.
 
-    `frame_excerpt` 注释里那个坑②（详情 dict 同时带 `noteContent` 与 `content`）此前
-    只在**渲染**时被吸收——那只救了 planner 看的那一份（`_frame_texts`）；narrator 拿的是
-    **原始 ToolMessage**（`graph.model_node` 的 `[system] + state["messages"]`），重复原样
-    进提示词：note 19 的帧 52,834 字里有一半是同一段正文（实测正文 25,445 字）。
-    20260925 把去重**前移到造帧那一刻**（`execute_node` 的 ToolMessage 出口），两个键都省。
-
-    三条边界：
-      · 两个键必须**字节相等**才删（不等 ⇒ 内容真不同，一个都不动）；
-      · 判据不认识的帧**原样返回**——帧的形态不止一种（`__ERROR__` 帧、命令帧、列表帧），
-        本函数对它们必须是恒等变换；
-      · **只动帧**：`tool_data` 仍由 `parse_data(str(out))` 从**原始**字符串解析
-        ⇒ `$tool[N].content` 之类的参数引用取值不受影响（**不许**改 `tools/base.py` 的
-        `_shape`，那会同时改掉引用取值源）。
-    删键后仍是合法 dict repr ⇒ `_split_frame` 的 `literal_eval` 路径照旧。
-    """
+    Unknown frame shapes pass through unchanged. This transforms presentation
+    only; the original structured tool data remains the source for consumers."""
     if "'noteContent'" not in frame and '"noteContent"' not in frame:
         return frame                     # 快路：绝大多数帧没有这个键，不必 literal_eval
     import ast
@@ -465,17 +357,10 @@ def slim_frame(frame: str) -> str:
 
 
 def frame_excerpt(frame: str, cap: int) -> str:
-    """get_article_detail 的执行帧 → 提示词里可读的按节节选。
+    """Render a dictionary frame as metadata and a bounded section excerpt.
 
-    帧是 `str(dict)`（见 tools/base.py `_shape`），直接硬截有两个坑（都实测于 note 19）：
-      ① 换行是字面 `\\n`，按 `^#{1,3}` 切节会切出 0 节（= 小节清单永远列不出来）；
-      ② 详情 dict **同时带 `noteContent` 与 `content` 两个同文本键**——帧体积是正文
-         的两倍，20,000 字的预算实际只装得回半篇（这就是 §7-§10 从来没进过上下文的
-         字面原因）。
-    所以先 `literal_eval` 还原结构：非正文字段（noteKey/noteTitle/description…）
-    压成一行帧头，正文取最长值那个键、按节节选。解析不出来（不是 dict repr）就退回
-    把字面 `\\n` 还原后按文本处理——无论如何都不会退化成"无声截断"。
-    """
+    Parse repr first so escaped newlines and duplicate body aliases do not consume
+    the budget twice. Unknown shapes use the labeled plain-text excerpt path."""
     body, header = _split_frame(frame)
     if body is None:
         return excerpt(_unescape(frame), cap)

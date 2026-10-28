@@ -16,33 +16,13 @@ from tools.base import (
 )
 from tools.result import ToolResult, _shape, fact, not_found, ok, tgt, unavailable
 
-# `__all__` = 本模块**所有不以 `_` 开头**的模块级名字（社区惯例，不留例外；
-# `tests/test_module_exports.py` 按这条规则机械判着，漂了就红）。
+# Public exports; helper names stay private to their modules.
 __all__ = ["list_my_favorites", "get_unread_summary", "add_favorite",
            "remove_favorite", "read_notifications", "list_my_messages", "read_messages"]
 
-# ---------------------------------------------------------------------------
-# 用户自己的数据工具（20260923：收藏 / 未读汇总 / 站内通知）
-# ---------------------------------------------------------------------------
-# 这一节是"用户侧感知能力"的**读**那一半（写那一半是同一批里的 add_favorite /
-# remove_favorite / read_notifications，scope 为 `write.own`）：
-# 访客问"我收藏了哪些文章""有没有未读的公告"，planner 点名这三个工具，execute
-# 以**本轮发起人身份**读他自己的数据后如实作答。
-#
-# 三条纪律：
-#   ① scope 全声明为 `read.own`（agent/authz.py）——三档角色都有，匿名没有。
-#      **不是** admin.console：收藏/通知是"我的"，与管理员身份无关，判据是
-#      "以谁的 uid 去读"，由工具层落地。
-#   ② 通道是 `_own_get`（与 `_admin_get` 同一个 `_principal_get` 本体，只有措辞
-#      不同）：fail-closed 同族，"读不到"绝不返回空——否则 narrator 会对着一次
-#      读失败说"你还没有收藏任何文章"。
-#   ③ 返回值走 `_shape(data)`（结构化），**不做中文报表**——它们是"用户要的值"
-#      （标题、日期、已读态），narrator 手上还有完整 ToolMessage 可转述；报表那套
-#      渲染（agent/reports.py）是给"数字必须可信、模型数不了"的管理报表用的。
-#      planner 那一侧由 `_compact_list_frame` 压成一行一条（见 agent/prompt_context.py）。
-#
-# 端点（Rust 侧，src/routes/profile.rs）：`/favorites`、`/notifications`、
-# `/notifications/summary` 都只认 auth_uid，**自己读自己**——没有"读别人的"接口。
+# Current-user reads use authenticated actor-scoped endpoints.
+# Missing identity or transport failures remain unavailable, never an empty collection.
+# Structured results preserve ownership and the distinction between counters and content.
 
 @tool
 def list_my_favorites(config: RunnableConfig) -> str:
@@ -53,15 +33,7 @@ def list_my_favorites(config: RunnableConfig) -> str:
     return _shape(data)
 
 
-# 未读汇总连带带回的条目（20260924）：红点问的是"几条"，紧接着的一句必定是
-# "是什么"——只有计数时那一句要么再调一次 list_notifications（多一轮）、要么
-# 拿计数去编内容。上限 10 条：条目是给"红点里是什么"看的，不是列表副本
-# （要全量走 list_notifications）；超限时在 `unread_items_note` 里如实说明。
-# 20260924 二改：`content` **进**条目。首版刻意不搬它（当时的口径是"条目只给指代用"），
-# 实测错了——留言审核的**驳回理由就写在 content 里**，不搬等于逼着多问一轮：
-# trace 20260924T025619 只拿到 title，访客紧接着问"那两条留言的审核意见是什么"，
-# 正是这一句逼出后面两轮（其中一轮还把通知里的留言 id 当文章 id 去查 get_article_detail）。
-# 截断到 120 字：条目是摘要，要原文走 list_notifications。
+# Unread previews have independent row and content bounds; full content uses list reads.
 _UNREAD_ITEMS_MAX = 10
 _UNREAD_ITEM_KEYS = ("id", "type", "title", "content", "link", "createdAt")
 _UNREAD_CONTENT_MAX = 120
@@ -128,34 +100,16 @@ def get_unread_summary(config: RunnableConfig) -> str:
     return _shape(out)
 
 
-# ── 写那一半（20260923 批 7）：收藏 / 取消收藏 / 标记已读 ────────────────────
-# scope = `write.own`（三档角色都有、匿名没有）。三条纪律，第三条是写操作独有的：
-#   ① 同意闸判"本轮有没有一条**明确命令**"，判据按**工具名**分开（agent/authz.py
-#      的 `_own_command`：一个 scope 挂多个工具，只看"有没有写动作"会让填错工具
-#      的那一轮照样放行）。判不出来走确认弹窗，既不硬拒也不静默写。
-#   ② 通道是 `_own_request`（与后台写共用 `_principal_request` 本体）：uid ≤ 0 时
-#      **一个字节都不发**——写操作最不该做的就是在没身份时猜"写给谁"。
-#   ③ **写前先读、写后再读**：写前读不到就不写（连"是不是已经收藏了"都判不出来时
-#      写下去等于蒙）；写后读不回目标状态就报"未确认生效"，**绝不拿接口的成功文案
-#      当事实**——Rust 的 `ApiResponse` 成功文案是给人看的，不是给 agent 当判据的。
-#
-# 幂等（写前读的副产品）：已经收藏 / 本来就没收藏 / 这些通知本来就是已读
-# → **不发请求**、如实说"本来就是这样"。收藏端点自己也是幂等的，但一次空写会刷新
-# 那一行的时间戳（纯副作用、无收益），与 set_article_status 的同值 noop 同一条理由。
+# Current-user mutations read the target first and verify the result afterward.
+# No-op evidence must be derived from observed state rather than assumed success.
 
 
 def _favorites_snapshot(config: RunnableConfig,
                         what: str) -> tuple[list | None, ToolResult | None]:
-    """本人收藏列表 → `(行列表, 失败原因)`，两者**恰有一个**为 None。
+    """Read current-user favorites as either rows or a failure reason.
 
-    **弹窗的「状态已达成」判据与 add/remove_favorite 的写前读走这一个函数**（照
-    `_tag_index` / `_note_index` / `_todo_rows` 那条先例）：两处各写一套形态判断时，
-    "弹窗说本来就在收藏夹里、工具却照写一遍"这种不一致没有任何东西拦得住——而它正是
-    20260926 那一批要治的病。
-
-    `what` = 失败话里的那半句（收藏与取消收藏问的不是同一件事："是不是已经收藏过"
-    /"是不是本来就没收藏"），由调用点带进来，措辞不在这里分叉。
-    """
+    Exactly one result is None. An empty row list is an observed empty collection,
+    while a failure prevents target selection and subsequent writes."""
     got = _own_get("/api/protected/favorites", config)
     if isinstance(got, ToolResult):
         return None, _pre_read_fail(got, what)
@@ -274,10 +228,7 @@ def add_favorite(
 
     after = _own_get("/api/protected/favorites", config)
     if isinstance(after, ToolResult):
-        # ⚠️ 写**已经发出去了**，此后读不回来不能再把原样的话交出去：读侧的
-        # unavailable 措辞只说"读不到"（那是写前读该说的话），而下游 narrator 需要
-        # 知道"写请求已发出、但没确认生效"。两种情形混用会让它把一次读失败讲成
-        # 收藏失败，或者更糟——照接口回的话说"已收藏"。
+        # The write has already been sent. A failed read-back means uncertain completion.
         return unavailable(f"收藏请求已发出，但读不回你的收藏列表（{after}），"
                            f"本次改动未确认生效（不要声称已收藏）")
     got = _fav_row(after, aid)
@@ -369,15 +320,8 @@ def read_notifications(
         targets = [i for i, r in rows.items() if not r.get("isRead")]
     else:
         targets = want_ids
-        # ⚠️ 这里刻意**不是**"按 id 原样交给服务端、由它在全量里改"（那是本工具
-        # 20260923 批 7 最早的写法）：列表只回最近 100 条，交出去确实能覆盖到更早的
-        # 那些，但代价是**编出来的 id 也会被照样发出去**——服务端按它匹配 0 行，
-        # 写后复核报"未确认生效"，过程行还说成「服务不可用」。trace 实证
-        # （`20260923T130033_9`）：planner 把摘要里的条数「3」当 id 填了进来（真实那条
-        # 是 23），用户看到的就是"标记已读未成功（服务不可用）"——一次注定 0 行的写
-        # 换来一句误导。现在改成写**之前**先确认这些 id 至少是**我读得到的**：
-        # 一个都不在就零写 + not_found 如实说清。上限 100 条这个边界写进话里
-        # （**不谎称"站内没有这条"**——它可能只是比最近 100 条更早）。
+        # Verify unread IDs against the current snapshot before writing.
+        # The service may otherwise accept a nonexistent ID as a successful no-op.
         unknown = [i for i in targets if i not in rows]
         if len(unknown) == len(targets):
             return not_found(
@@ -407,11 +351,7 @@ def read_notifications(
                                 before="已读", after="已读", change="本来就读过"))
     if want_all and not targets:
         return ok("你的通知本来就没有未读的，无需改动（没有发出写请求）。",
-                  # `change` 与这句正文同源、要能**独立成句**：Rust 那边把它接在物件名
-                  # 后面渲染成「站内通知本来就没有未读的（未改动）」（`render_exec_row`
-                  # 的四臂），少一个「有…的」就变成「站内通知本来就没未读」这种半截话，
-                  # 而这一行会经 recent_executions 注回下一轮上下文。
-                  # target 不带 id：这一支治的是"整个列表本来就没有未读"，不是某一条。
+                  # Keep change self-contained for host rendering.
                   meta=fact("notice_read", changed=False,
                             before="无未读", after="无未读", change="本来就没有未读的"))
 
@@ -443,9 +383,7 @@ def read_notifications(
     m_after = (after_sum or {}).get("messages")
     tail = (f" / 私信 {m_after}"
             if isinstance(m_after, int) and not isinstance(m_after, bool) else "")
-    # 三个数**同时**当结构交出去（批 G5）：回执那句话是给人看的**渲染**，而跨轮摘要
-    # （`agent/entity_digest.py`）此前只能对它跑正则抠「已把 N 条…」「现在未读：通知 N 条」
-    # ——改一句措辞，下一轮问"你真给我标了吗"就只剩动作行，答"标好了"与"没标"长得一样。
+    # Expose all three observed counters as structured evidence, not values parsed from prose.
     return ok(f"已把 {marked} 条通知标记为已读（现在未读：通知 {n_after} 条{tail}）。",
               meta=fact("notice_read", changed=True,
                         before=f"未读 {n_before} 条", after=f"未读 {n_after} 条",
@@ -453,23 +391,9 @@ def read_notifications(
               data={"marked": marked, "unread": n_after, "unread_messages": m_after})
 
 
-# ---------------------------------------------------------------------------
-# 站内信（私信）（20260923 批 8）：读信箱 / 标记已读（发信见本节的最后一小节）
-# ---------------------------------------------------------------------------
-# **术语必须分开**（用户点名要求）：站内信（私信）≠ 河灯留言。
-#   · 河灯留言 = 访客在**公开页面**写下的内容（灯影集/说说），谁都看得见
-#     ——那是 `list_guestbook` / `list_talks`。
-#   · 站内信 = 一封**一对一**的信，只有收发双方看得见——就是这一节。
-# 两者混用会让 narrator 说出"我看了你留言板上收到的私信"这种不存在的东西，
-# 所以每个工具的 docstring 与技能描述里都把这句话写死一遍。
-#
-# 端点（Rust src/routes/profile.rs）：`GET /api/protected/messages`（收件箱 +
-# 发件箱，各最近 100 条）、`POST /api/protected/messages/read`（只动收件箱里我的
-# 信）、`POST /api/protected/messages`（发一条，收件人**按账号或 UID** 精确匹配）。
-# 收发双方都只认 auth_uid——**没有"读别人的信箱"的接口**。
-#
-# 读那一半（scope = read.own）与收藏/通知同族：`_own_get` fail-closed，读不到
-# 绝不返回空（"你信箱里没有信"是结论，"没读到"不是）。
+# Private-message reads and read-state mutations are actor scoped.
+# Select inbox records explicitly; sent messages do not represent unread inbox work.
+# Read or snapshot failures cannot establish that the inbox is empty.
 
 
 def _mailbox_inbox(data) -> dict[int, dict] | None:
@@ -492,15 +416,9 @@ def _mailbox_inbox(data) -> dict[int, dict] | None:
 
 def _mailbox_snapshot(config: RunnableConfig,
                       what: str) -> tuple[dict | None, ToolResult | None]:
-    """本人信箱 → `(信箱原始返回, 失败原因)`，两者**恰有一个**为 None。
+    """Read the current-user mailbox as data or a failure reason.
 
-    这里回的是**原始返回**而不是直接给收件箱那半：同一个 payload 上还有第二个
-    事实（`unread` 未读封数）是 read_messages 的写前基线，只给 `inbox` 会逼它再读一次
-    （或者更糟——另算一遍未读数，那就成了同一件事的第二份判据）。调用方各自用
-    `_mailbox_inbox` / `_mailbox_unread` 取自己那半。
-
-    与 `_favorites_snapshot` 同一条纪律：弹窗的「已达成」判据与工具的写前读**同一份**。
-    """
+    Exactly one result is None. Missing data never proves that a message was deleted."""
     got = _own_get("/api/protected/messages", config)
     if isinstance(got, ToolResult):
         return None, _pre_read_fail(got, what)
@@ -567,9 +485,7 @@ def read_messages(
         targets = [i for i, r in rows.items() if r.get("isRead") is not True]
     else:
         targets = want_ids
-        # 与 read_notifications 同一条纪律（20260923 三轮的那次误导）：**写之前**先确认
-        # 这些 id 至少是"我读得到的"——一个都不在就零写 + not_found 如实说清，绝不让
-        # 一个编出来的 id 变成一次注定 0 行的写 + 一句「服务不可用」的误报。
+        # Verify the target before writing so a nonexistent ID cannot become a success receipt.
         unknown = [i for i in targets if i not in rows]
         if len(unknown) == len(targets):
             return not_found(
@@ -611,9 +527,7 @@ def read_messages(
     if isinstance(data, ToolResult):
         return data
 
-    # 写后复核 = **一次独立读数**（接口回的那份不算判据）：未读封数必须真降，
-    # 且点名的每一封都确实是已读了——只看"降了"会在"标错了几封、又漏了几封"
-    # 的巧合下判成功（净变化相同）。
+    # Use an independent post-write read to verify counters, even for an all-items operation.
     after = _own_get("/api/protected/messages", config)
     if isinstance(after, ToolResult):
         return unavailable(f"标记已读请求已发出，但读不回你的信箱（{after}），"

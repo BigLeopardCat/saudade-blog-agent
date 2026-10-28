@@ -1,47 +1,15 @@
-"""文章向量空间图谱的查询侧（只读）。
+"""Read-only queries over versioned word-graph artifacts.
 
-产物由 ``scripts/build_word_graph.py`` 写到 ``data/word_graph/``：
+index.json describes vocabulary, embedding identity, dimensions and stripped
+directions. vectors.f32 and mean.f32 store little-endian float32 data; dirs.f32
+may be empty when no directions were removed. Query transforms must match build
+transforms: normalize, center, remove principal directions, then normalize again.
 
-===============  ==========================================================
-index.json       词表 + build_id + **空间（模型 / 端点）** + 维度 + strip_top
-vectors.f32      L2 归一化后的节点向量（count × dim，小端 float32 行主序）
-mean.f32         训练集均值（dim）
-dirs.f32         被剔除的主方向（strip_top × dim）——**可能是 0 字节**
-===============  ==========================================================
-
-**用哪个 embedding 模型/端点不在这里决定**（20261007）：`rag/embed_space.py` 解析
-（配了 `EMBEDDING_*` 就用它、没配回落 `QWEN_*` + `qwen3.7-text-embedding`），与建图脚本
-`scripts/build_word_graph.py` 读的是**同一条规则**。两侧解出的空间不一致时，查询向量
-会落在另一片空间里 —— 症状同样是"搜 X 结果飞到一个视觉上离 X 很远的角落"，
-**而且不报错**。所以产物里记着它自己的空间，`_load()` 拿它当场对一次：不符就
-
-* 记**一条** WARNING（每个 `build_id` 只记一次，不刷日志），
-* `query_words` 返回 `{"ok": false, "reason": "space_mismatch"}` —— 在**花掉那次
-  embedding 调用之前**就返回，
-
-调用方（Rust → 前端）照既有降级链路退回本地关键词匹配。**处置只有一句**：去后台
-「站点设置 → 向量图谱」重建一次（新产物会带上新空间）。老产物没有 `base_url` 这一格
-——那一格缺就不判（只在这一格上 fail-open；模型名那格老产物也有）。
-**20260916e：弃权闸已拆除。** 曾用文章级 BM25 判"图里认不认得这句话"当闸
-（词法零 API 成本），它比不判更糟：`物联网`/`单片机`/`IOT`/`嵌入式` 这类
-**显然在域内**的查询被拦成空返回，而向量侧本来给的是 设备 / 遥测 / 传感器 /
-esp32 一群正确节点（用户实测）；`物联网`+两个字变 `物联网设备` 就过了，脆得
-没有道理。更根本的是闸的词典取自**展示层词表**（为画图挑的 341 个词），
-画图选词一改、搜索边界跟着漂。
-
-现在查询一律走向量，"能不能答"不再由一个词法部件替访客裁决；向量侧真失败
-（`embed_failed` / 产物缺失等）前端照旧降级到本地匹配——降级判据回到
-"服务是否可用"，不再有"服务说没找到"这一态。
-
-为什么不用 numpy：**生产 venv 里没有它**（当初刻意没装，见 CLAUDE.md §2）。
-这里要做的只是「一个查询向量 × 333 个节点向量」的点积，用 ``array('f')`` 读裸
-float32 + 纯 Python 点积足够快（实测 ~15ms），不值得为它给生产环境加一个
-编译依赖。
-
-⚠ 查询向量必须与服务端**同一套变换**（归一化 → 减均值 → 减去主方向 → 再归一化）。
-不这样做的话，图谱按「处理后」的相似度连边、查询却按「原始」相似度找人，会出现
-「搜 X 结果飞到一个视觉上离 X 很远的角落」——而且不会报错，只是感觉不对。
-"""
+Model or endpoint mismatches fail before embedding and are logged once per build.
+Older artifacts without base_url skip only that endpoint comparison. Unavailable
+artifacts or embeddings let the caller fall back to local matching. Queries do not
+use a lexical abstention gate. Small graph dot products use array storage without
+requiring a separate numeric dependency."""
 
 from __future__ import annotations
 
@@ -281,19 +249,11 @@ def warm() -> None:
 
 
 def query_words(q: str, top_k: int = TOP_K_DEFAULT) -> dict:
-    """查询串 → 图谱里最近的若干词。**绝不抛异常**：这是个可降级端点，
-    调用方（Rust）拿到的 ok=false 就是「前端退回本地关键词匹配」的信号。
+    """Return nearby graph words with build ID, scores and timing.
 
-    返回 {ok, reason?, build_id, words:[{w,s}], ms}
-
-    reason 全部是**故障**语义（empty_query / artifact_missing / embed_failed /
-    dim_mismatch / space_mismatch），调用方一律按"服务不可用"处理 → 前端降级到本地
-    关键词匹配。（`space_mismatch` = 产物不是当前 embedding 空间建的，见模块头注；
-    它在**花掉那次 embedding 调用之前**返回。）
-    20260916e 拆掉弃权闸后不再有"结论式弃权"（`no_match`）：域外查询照样走
-    embedding，返回的就是最近的那几个词——判断"相不相关"交回给访客，不由一个
-    词法部件代判（理由见模块顶部）。
-    """
+    Failure results let the host use local matching. Embedding-space mismatches
+    fail before a paid embedding request. Domain relevance is left to the caller;
+    there is no separate lexical abstention decision."""
     t0 = time.perf_counter()
     text = (q or "").strip()[:QUERY_MAX]
     if not text:

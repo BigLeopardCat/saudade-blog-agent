@@ -16,8 +16,7 @@ from langchain_core.tools import tool
 from tools import base as _base
 from tools.result import ToolResult, empty, ok, unavailable
 
-# `__all__` = 本模块**所有不以 `_` 开头**的模块级名字（社区惯例，不留例外；
-# `tests/test_module_exports.py` 按这条规则机械判着，漂了就红）。
+# Public exports; helper names stay private to their modules.
 __all__ = ["logger", "get_server_status", "get_service_health", "get_moderation_status",
            "list_admin_board", "list_admin_comments", "get_user_stats", "get_note_stats",
            "get_note_periods"]
