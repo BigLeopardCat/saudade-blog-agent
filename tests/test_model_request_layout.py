@@ -20,6 +20,10 @@ def test_actual_deepseek_payload_is_fingerprinted_after_reasoning_replay(monkeyp
     event = events[-1]
     assert event["messages"] == [request_trace.fingerprint(m) for m in payload["messages"]]
     assert event["session"] == request_trace.fingerprint("private-session")
+    assert event["roles"] == ["user", "assistant"]
+    assert event["message_chars"] == [len(json.dumps(m, ensure_ascii=False))
+                                       for m in payload["messages"]]
+    assert event["tool_count"] == 0 and event["tools_chars"] == 2
     assert all(value not in json.dumps(event) for value in
                ("private-user-text", "private-reasoning", "private-credential", "private-session"))
 
@@ -35,3 +39,4 @@ def test_wire_tool_order_and_message_changes_have_distinct_fingerprints(monkeypa
     assert events[0]["messages"] == events[1]["messages"]
     assert events[0]["tools"] == events[2]["tools"]
     assert events[0]["messages"] != events[2]["messages"]
+    assert events[0]["tool_count"] == 2
