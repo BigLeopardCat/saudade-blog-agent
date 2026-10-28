@@ -180,15 +180,16 @@ class SessionMiddleware(AgentMiddleware):
                    tools_retained=keep_tools)
         label = "正在整理已取得的结果…" if session.finalizing else "正在处理请求…"
         emit(session.config, label, key="model_final" if session.finalizing else "model_start")
-        record("native", "llm_start", round=session._round_index, engine="langchain",
-               prompt_chars=sum(len(text_content(message.content)) for message in prompt),
-               streaming=True, model=selected_model)
         trace_context.tools(session.menu, session.traced_contracts)
-        started, response = time.monotonic(), None
+        started, response, invoked = time.monotonic(), None, False
         tool_choice = ("none" if session.finalizing else "auto") if session.menu else None
         try:
             with native_call(session.budget, prompt, session.menu, model_key=request.model,
                              output_limit=session.output_limit) as ticket:
+                invoked = True
+                record("native", "llm_start", round=session._round_index, engine="langchain",
+                       prompt_chars=sum(len(text_content(message.content)) for message in prompt),
+                       streaming=True, model=selected_model)
                 messages = prompt[1:] if request.system_message else prompt
                 result = handler(request.override(
                     model=model, messages=messages, tools=session.menu,
@@ -200,12 +201,13 @@ class SessionMiddleware(AgentMiddleware):
                         if extra_inputs else result)
         finally:
             response_model = _model_name(response=response)
-            record("native", "llm_done" if response is not None else "llm_error",
-                   round=session._round_index, engine="langchain",
-                   duration_s=round(time.monotonic() - started, 2), streaming=True,
-                   model=selected_model or response_model, response_model=response_model,
-                   finish_reason=(getattr(response, "response_metadata", {}) or {}).get(
-                       "finish_reason"), **usage_fields(response))
+            if invoked:
+                record("native", "llm_done" if response is not None else "llm_error",
+                       round=session._round_index, engine="langchain",
+                       duration_s=round(time.monotonic() - started, 2), streaming=True,
+                       model=selected_model or response_model, response_model=response_model,
+                       finish_reason=(getattr(response, "response_metadata", {}) or {}).get(
+                           "finish_reason"), **usage_fields(response))
 
     @hook_config(can_jump_to=["end", "model"])
     def after_model(self, state, runtime):

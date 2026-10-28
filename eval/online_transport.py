@@ -153,7 +153,8 @@ class OnlineTransport:
         path = "/api/chat/stream" if self.host else "/chat/stream/v2"
         root = self.blog_url if self.host else self.agent_url
         events, done = [], False
-        first_visible, first_reply = None, None
+        first = {key: None for key in ("first_visible_s", "first_reply_s",
+                                      "first_command_s", "first_confirmation_s")}
         with connect_sse(self.client, "POST", root + path,
                          headers=self._headers(request_id), json=payload) as stream:
             stream.response.raise_for_status()
@@ -165,19 +166,21 @@ class OnlineTransport:
                                 "progress", "summary", "done", "error"}:
                     raise EvaluationError(f"unknown SSE event {kind!r}")
                 if kind in {"text", "progress", "command", "confirmation"}:
-                    first_visible = (time.monotonic() - started if first_visible is None
-                                     else first_visible)
+                    if first["first_visible_s"] is None:
+                        first["first_visible_s"] = time.monotonic() - started
                 if kind == "text":
                     if not isinstance(data, str):
                         raise EvaluationError("text event is not a string")
-                    first_reply = (time.monotonic() - started if first_reply is None
-                                   else first_reply)
+                field = {"text": "first_reply_s", "command": "first_command_s",
+                         "confirmation": "first_confirmation_s"}.get(kind)
+                if field and first[field] is None:
+                    first[field] = time.monotonic() - started
                 events.append((kind, data))
                 done = kind == "done"
         stream_errors = [data for kind, data in events if kind == "error"]
         if not done and not stream_errors:
             raise EvaluationError("HTTP stream ended without done")
-        return events, stream_errors, first_visible, first_reply
+        return events, stream_errors, first
 
     def __call__(self, req, principal=None, **_kwargs):
         if self.cid is None:
@@ -188,7 +191,7 @@ class OnlineTransport:
         if self.host and isinstance(payload["image"], str):
             payload["image"] = [payload["image"]] if payload["image"] else []
         payload.update(user_id=self.uid, conversation_id=self.cid)
-        events, errors, first_visible, first_reply = self._consume(payload, request_id, started)
+        events, errors, first = self._consume(payload, request_id, started)
         try:
             trace_path, doc = self._trace(request_id)
         except EvaluationError as exc:
@@ -197,10 +200,12 @@ class OnlineTransport:
                     f"HTTP SSE error without completed Agent trace: {errors}") from exc
             raise
         timing = {"request_id": request_id, "elapsed_s": time.monotonic() - started,
-                  "first_visible_s": first_visible, "first_reply_s": first_reply,
+                  **first,
                   "trace": str(trace_path), "transport": "blog_http" if self.host else "agent_http"}
         self.requests.append(timing)
-        return self._result(events, errors, trace_path, doc, timing)
+        result = self._result(events, errors, trace_path, doc, timing)
+        result["request_evidence"] = {"message": payload["message"], "request_id": request_id}
+        return result
 
     def _result(self, events, errors, trace_path, doc, timing):
         actual = [e for e in doc.get("events", [])

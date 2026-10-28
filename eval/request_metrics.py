@@ -62,6 +62,7 @@ def summary(doc):
             "has_reply": isinstance(doc.get("reply"), str) and bool(doc["reply"].strip()),
             "end_reason": _label(doc.get("end_reason")),
             "started_calls": sum(e.get("event") == "llm_start" for e in events),
+            "errored_calls": sum(e.get("event") == "llm_error" for e in events),
             "handoff_reasons": [_label(e.get("reason")) for e in events
                                 if e.get("event") == "legacy_handoff"],
             "budget_stop_reasons": [_label(e.get("reason")) for e in events
@@ -94,6 +95,7 @@ def collect(paths):
                        "requests": len(rows), "with_reply": sum(r["has_reply"] for r in rows),
                        "end_reasons": dict(Counter(r["end_reason"] for r in rows)),
                        "started_calls": sum(r["started_calls"] for r in rows),
+                       "errored_calls": sum(r["errored_calls"] for r in rows),
                        "handoff_reasons": dict(Counter(reason for r in rows
                                                         for reason in r["handoff_reasons"])),
                        "budget_stops": sum(bool(r["budget_stop_reasons"]) for r in rows),
@@ -104,7 +106,14 @@ def collect(paths):
                        if len(times) >= 20 else None,
                        "first_visible_samples": len(first_visible),
                        "first_visible_p50_s": median(first_visible) if first_visible else None,
+                       "first_visible_p95_s": quantiles(
+                           first_visible, n=100, method="inclusive")[94]
+                       if len(first_visible) >= 20 else None,
                        "first_reply_samples": len(first_reply),
                        "first_reply_p50_s": median(first_reply) if first_reply else None,
+                       "first_reply_p95_s": quantiles(first_reply, n=100, method="inclusive")[94]
+                       if len(first_reply) >= 20 else None,
+                       "measured_uncached_input": totals["cache_in"] - totals["cache"]
+                       if totals["cache_seen"] else None,
                        "cache_hit_rate": usage.hit_rate(totals), **totals})
     return {"unreadable": unreadable, "groups": output}
