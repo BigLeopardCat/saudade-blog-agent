@@ -35,7 +35,7 @@ def documents(chunks: list[dict], scores: dict[int, float], revision: str) -> li
             row["section_ids"].append(section_id)
             row["sections"].append(chunk["section"])
     for row in by_doc.values():
-        row["sections"] = row["sections"][:2]
-        row["section_ids"] = row["section_ids"][:2]
+        row["sections"] = row["sections"][:3]
+        row["section_ids"] = row["section_ids"][:3]
         row["matches"] = row["matches"][:3]
     return sorted(by_doc.values(), key=lambda row: -row["score"])

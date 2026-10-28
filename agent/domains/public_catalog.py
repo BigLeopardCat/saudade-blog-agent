@@ -6,6 +6,7 @@ from langchain_core.tools import tool
 from pydantic import Field, StrictInt
 
 from agent.domains.article_metadata import article, positive, text
+from agent.domains.pagination import CatalogLimit
 from agent.domains.public_pages import Identifier, Limit, Page, read_page
 
 Level = Annotated[StrictInt, Field(ge=1, le=2)]
@@ -60,13 +61,13 @@ def get_top_notes(page: Page = 1, page_size: Limit = 5) -> object:
 
 
 @tool
-def list_categories(page: Page = 1, page_size: Limit = 5) -> object:
-    """分页读取公开分类与各分类已公开文章数，默认5条、最多10条；计数不包含草稿或私密文章。"""
+def list_categories(page: Page = 1, page_size: CatalogLimit = 20) -> object:
+    """分页读取公开分类与各分类已公开文章数，默认及最多20条；计数不包含草稿或私密文章。"""
     return read_page("categories", page, page_size, {}, _category)
 
 
 @tool
-def list_tags(page: Page = 1, page_size: Limit = 5, level: Level | None = None,
+def list_tags(page: Page = 1, page_size: CatalogLimit = 20, level: Level | None = None,
               parent_id: Identifier | None = None) -> object:
     """分页读取一二级标签和公开文章计数。编号须结合level识别；parent_id筛选指定一级标签的子标签。"""
     if level == 1 and parent_id is not None:
