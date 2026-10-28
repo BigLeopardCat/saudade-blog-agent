@@ -49,7 +49,7 @@ def test_http_request_facts_reach_native_prompt_without_credentials(monkeypatch)
     assert "已发送跳转指令" in current["recent_execution_summary"]
     assert current["reported_pending_action"] == "旧卡片展示记录"
     assert "reported_open_tasks" not in current
-    assert "agent_tasks" not in ChatRequest.model_fields
+    assert {"agent_tasks", "recent_tools", "execution_rows"}.isdisjoint(ChatRequest.model_fields)
     assert "chat_quota" not in prompt[0].content
     assert all(value not in str(prompt) for value in
                ("CREDENTIAL_CANARY", "PRIVATE_PAYLOAD_CANARY", "INTERNAL_TOOL_CANARY"))
@@ -125,7 +125,7 @@ def test_context_and_summary_do_not_split_an_offer_from_a_short_answer():
 @pytest.mark.parametrize("values", [
     {"message": "x" * 4001}, {"message": "x", "image": ["image"] * 7},
     {"message": "x", "image": "x" * 1_600_001},
-    {"message": "x", "execution_rows": "x" * 8001},
+    {"message": "x", "current_url": "x" * 501},
 ])
 def test_extracted_wire_schema_still_rejects_oversized_payloads(values):
     with pytest.raises(ValidationError):

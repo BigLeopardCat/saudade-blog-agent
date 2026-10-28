@@ -13,9 +13,6 @@ MAX_IMAGES = 6
 MAX_IMAGE_CHARS = 1_600_000
 MAX_TEXT_FIELD_CHARS = 8000
 MAX_SHORT_FIELD_CHARS = 500
-MAX_RECENT_TOOLS = 40
-# The host's chat.rs uses the same execution_rows forwarding budget.
-EXEC_ROWS_MAX_CHARS = 8000
 
 
 class HistoryItem(BaseModel):
@@ -53,9 +50,6 @@ class ChatRequest(BaseModel):
     image: str | list[str] = ""
     executions: str = Field(default="", max_length=MAX_TEXT_FIELD_CHARS)
     pending_action: str = Field(default="", max_length=MAX_TEXT_FIELD_CHARS)
-    # Retained host wire fields. Neither grants authority nor enters the model prompt.
-    recent_tools: list[str] = Field(default_factory=list, max_length=MAX_RECENT_TOOLS)
-    execution_rows: str = Field(default="", max_length=EXEC_ROWS_MAX_CHARS)
     chat_quota: QuotaInfo | None = None
     quota_blocked: bool = False
     conversation_id: int | None = None
