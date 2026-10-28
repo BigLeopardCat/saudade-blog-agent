@@ -37,6 +37,35 @@ def test_sse_text_stays_opaque_and_progress_is_separate(tmp_path, monkeypatch):
     assert result["text"].startswith("__CMD__:") and result["commands"] == []
     assert result["http_timing"]["first_visible_s"] is not None
     assert result["http_timing"]["first_reply_s"] is not None
+    assert result["http_timing"]["first_command_s"] is None
+    assert result["http_timing"]["first_confirmation_s"] is None
+    assert result["request_evidence"]["message"] == "hello"
+    assert set(result["request_evidence"]) == {"message", "request_id"}
+
+
+def test_command_dispatch_and_confirmation_have_separate_first_event_times(tmp_path, monkeypatch):
+    adapter = transport(tmp_path, monkeypatch,
+                        'event: progress\ndata: "读取中"\n\n'
+                        'event: command\ndata: {"kind":"navigate","url":"/guestbook"}\n\n'
+                        'event: text\ndata: "已发送"\n\n'
+                        'event: done\ndata: {}\n\n')
+    result = adapter(ChatRequest(message="去留言板"))
+    timing = result["http_timing"]
+    assert timing["first_visible_s"] <= timing["first_command_s"] <= timing["first_reply_s"]
+    assert timing["first_confirmation_s"] is None
+    assert timing["first_command_s"] < timing["elapsed_s"]
+
+
+def test_confirmation_time_is_not_filled_from_progress(tmp_path, monkeypatch):
+    adapter = transport(tmp_path, monkeypatch,
+                        'event: progress\ndata: "准备中"\n\n'
+                        'event: confirmation\ndata: {"token":"fixture","q":"确认？"}\n\n'
+                        'event: done\ndata: {}\n\n')
+    monkeypatch.setattr("eval.online_transport.confirm.verify", lambda *args: {})
+    monkeypatch.setattr("eval.online_transport.confirm.inspect", lambda *args: {})
+    timing = adapter(ChatRequest(message="准备变更"))["http_timing"]
+    assert timing["first_visible_s"] <= timing["first_confirmation_s"] < timing["elapsed_s"]
+    assert timing["first_reply_s"] is timing["first_command_s"] is None
 
 
 @pytest.mark.parametrize("wire", [
