@@ -164,3 +164,21 @@ def test_resume_cannot_exceed_an_exhausted_task_model_limit():
     assert resumed.model_calls == len(model.prompts) == 2
     assert resumed.request_spent()["model_calls"] == 0
     assert "达到调用或上下文上限" in result.reply
+
+
+def test_byte_retention_preserves_the_latest_complete_turns(monkeypatch):
+    import json
+
+    from langchain_core.messages import messages_to_dict
+
+    monkeypatch.setattr(retention, "MAX_BYTES", 8000)
+    messages = []
+    for index in range(3):
+        messages.extend(memory.turn_messages(
+            [HumanMessage(content=f"question-{index}: " + "记忆" * 500)], [],
+            f"reply-{index}", ACTOR))
+    kept = retention.retain(messages)
+    assert kept[0].additional_kwargs["memory_retention"]
+    assert len(kept) == 5
+    assert [m.content for m in kept[-2:]] == [m.content for m in messages[-2:]]
+    assert len(json.dumps(messages_to_dict(kept), ensure_ascii=False).encode()) <= 8000
