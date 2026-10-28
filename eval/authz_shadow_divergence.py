@@ -250,8 +250,9 @@ def _known_tools():
     "解析碎片"混回一格，所以 render 会明说没切。
     """
     try:
+        from agent.domains.registry import operation_names
         from tools import get_all_tools
-        return frozenset(t.name for t in get_all_tools())
+        return frozenset({*(t.name for t in get_all_tools()), *operation_names()})
     except Exception as exc:  # noqa: BLE001
         print(f"  ⚠ 取不到工具注册表（{type(exc).__name__}: {exc}）"
               "⇒ no_manifest 那一格**没切开**（真漏声明与解析碎片混在一起）")

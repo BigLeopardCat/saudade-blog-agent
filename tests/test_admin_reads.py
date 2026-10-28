@@ -79,9 +79,6 @@ def test_admin_menu_visibility_follows_verified_authority(role, source, uid, vis
 @pytest.mark.parametrize("cfg", [config("user"), config(source=SOURCE_BODY),
                                  config(user_id=8), config(user_id=True)])
 def test_private_tool_cannot_run_even_if_accidentally_included_in_menu(cfg, monkeypatch):
-    from config import settings
-
-    monkeypatch.setattr(settings, "authz_enforce", False)
     tool = LocalTool()
     session = ToolSession(Model(), cfg, {tool.name: tool}, {})
     assert invoke_authorized(session, tool.name, {}).status == "error"

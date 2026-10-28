@@ -322,123 +322,21 @@ def _own_delete(path: str, config: RunnableConfig):
     return _own_request("DELETE", path, None, config)
 
 
-def _admin_post(path: str, payload: dict, config: RunnableConfig):
-    """POST 的薄封装（既有调用点保持原样）。"""
-    return _admin_request("POST", path, payload, config)
 
 
-def _policy_post(path: str, payload: dict, config: RunnableConfig):
-    """Post an account-policy operation and preserve the backend refusal.
-
-    These endpoints classify a non-200 business code as a policy refusal, rather
-    than a transient service failure. HTTP and transport failures stay unavailable."""
-    from agent import adminops_target as _target
-    uid = _device_get_user_id(config)
-    if uid <= 0:
-        # 身份不明时一个请求都不发（同 `_principal_request`）：写操作最不该做的就是在没身份时猜。
-        return unavailable(_NO_IDENTITY_WRITE)
-    principal = (config.get("configurable", {}) or {}).get("principal")
-    headers = {"Authorization": "Bearer " + _sign_local_jwt(uid, getattr(principal, "role", None))}
-    try:
-        resp = _client.post(f"{ADMIN_BASE}{path}", headers=headers, json=payload, timeout=15)
-    except Exception as exc:
-        logger.error("admin status post %s failed: %s", path, exc)
-        return unavailable(f"接口请求失败: {exc}{_NO_SUCCESS_TAIL}")
-    if resp.status_code in (401, 403):
-        return unavailable("当前身份无权改动账号状态（该功能仅管理员可用），本次未改动任何内容")
-    if resp.status_code != 200:
-        return unavailable(f"接口返回 HTTP {resp.status_code}{_NO_SUCCESS_TAIL}")
-    try:
-        body = resp.json()
-    except Exception:
-        return unavailable(f"接口返回的不是 JSON{_NO_SUCCESS_TAIL}")
-    if body.get("code") != 200:
-        logger.warning("admin status post %s refused: %s", path, body.get("message"))
-        # Return policy_frame directly so its kind and metadata survive.
-        return _target.policy_frame(str(body.get("message") or "后台拒绝了这次改动"))
-    return body.get("data")
 
 
-def _admin_todo_post(path: str, payload: dict, config: RunnableConfig, default_msg: str):
-    """Post a narrow todo mutation and preserve backend target refusals.
-
-    The completion and date endpoints share server-side exact-text selection.
-    Their non-200 business response is returned as not_found; transport failures
-    remain unavailable. default_msg is used only when the backend omits its message."""
-    uid = _device_get_user_id(config)
-    if uid <= 0:
-        # 身份不明时一个请求都不发（同 `_principal_request`）。
-        return unavailable(_NO_IDENTITY_WRITE)
-    principal = (config.get("configurable", {}) or {}).get("principal")
-    headers = {"Authorization": "Bearer " + _sign_local_jwt(uid, getattr(principal, "role", None))}
-    try:
-        resp = _client.post(f"{ADMIN_BASE}{path}",
-                            headers=headers, json=payload, timeout=15)
-    except Exception as exc:
-        logger.error("admin todo post %s failed: %s", path, exc)
-        return unavailable(f"接口请求失败: {exc}{_NO_SUCCESS_TAIL}")
-    if resp.status_code in (401, 403):
-        return unavailable("当前身份无权改动后台待办（该功能仅管理员可用），本次未改动任何内容")
-    if resp.status_code != 200:
-        return unavailable(f"接口返回 HTTP {resp.status_code}{_NO_SUCCESS_TAIL}")
-    try:
-        body = resp.json()
-    except Exception:
-        return unavailable(f"接口返回的不是 JSON{_NO_SUCCESS_TAIL}")
-    if body.get("code") != 200:
-        # Keep a typed failure result so callers cannot mistake this message for success.
-        logger.warning("admin todo post %s refused: %s", path, body.get("message"))
-        return not_found(str(body.get("message") or default_msg))
-    return body.get("data")
 
 
 # Known target refusals are a cross-language contract; unknown failures remain unavailable.
 _NOTICE_TARGET_REFUSALS = ("用户不存在", "该账号不能接收通知")
 
 
-def _admin_notice_post(target_id: int, title: str, content: str, config: RunnableConfig):
-    """Send one account notice with conservative failure classification.
-
-    Only known target refusals become not_found. Storage errors and unrecognized
-    backend messages remain unavailable, so an uncertain send cannot be described
-    as a missing account or a completed delivery."""
-    uid = _device_get_user_id(config)
-    if uid <= 0:
-        # 身份不明时一个请求都不发（同 `_principal_request`）。
-        return unavailable(_NO_IDENTITY_WRITE)
-    principal = (config.get("configurable", {}) or {}).get("principal")
-    headers = {"Authorization": "Bearer " + _sign_local_jwt(uid, getattr(principal, "role", None))}
-    try:
-        resp = _client.post(f"{ADMIN_BASE}/api/temp-users/{target_id}/notice",
-                            headers=headers, json={"title": title, "content": content},
-                            timeout=15)
-    except Exception as exc:
-        logger.error("admin notice post failed: %s", exc)
-        return unavailable(f"接口请求失败: {exc}{_NO_SUCCESS_TAIL}")
-    if resp.status_code in (401, 403):
-        return unavailable("当前身份无权给账号发通知（该功能仅管理员可用），本次未发送")
-    if resp.status_code != 200:
-        return unavailable(f"接口返回 HTTP {resp.status_code}{_NO_SUCCESS_TAIL}")
-    try:
-        body = resp.json()
-    except Exception:
-        return unavailable(f"接口返回的不是 JSON{_NO_SUCCESS_TAIL}")
-    if body.get("code") != 200:
-        msg = str(body.get("message") or "").strip()
-        logger.warning("admin notice post refused: %s", msg)
-        if any(k in msg for k in _NOTICE_TARGET_REFUSALS):
-            return not_found(msg or "后台没有这个账号，本次未发送")
-        return unavailable(f"{msg or '后台没有接受这次发送'}{_NO_SUCCESS_TAIL}")
-    return body.get("data")
 
 
 # Tag helpers and administration tools.
 from tools.tag_admin import (  # noqa: E402,F401
-    _find_named_tag,
     _tag_index,
-    create_tag,
-    delete_tag,
-    update_tag,
 )
 
 
@@ -455,11 +353,7 @@ def _as_article_id(value) -> int | None:
 
 # Article target helpers and administration tools.
 from tools.note_admin import (  # noqa: E402,F401
-    _note_index,
-    _read_note,
     list_admin_notes,
-    set_article_status,
-    set_article_tags,
 )
 
 
@@ -485,75 +379,28 @@ def _near_miss_names(want: str, cands, limit: int = 3):
 
 # Account target helpers and administration tools.
 from tools.account_admin import (  # noqa: E402,F401
-    _NOTICE_CONTENT_LIMIT,
-    _NOTICE_DEFAULT_TITLE,
-    _NOTICE_TITLE_LIMIT,
-    _account_muted,
-    _find_named_user,
-    _find_user_by_id,
     _reachable_uids,
-    _set_account_muted,
     _user_directory,
-    account_mute,
-    account_unmute,
-    freeze_account,
     list_accounts,
-    send_user_notice,
-    set_account_role,
-    unfreeze_account,
 )
 
 # Announcement target helpers and administration tools.
-from tools.announcements import (  # noqa: E402,F401
-    _announcement_index,
-    _find_named_announcement,
-    create_announcement,
-    delete_announcement,
-    update_announcement,
-)
-
 # Guestbook moderation helpers and tools.
 from tools.board_moderation import (  # noqa: E402,F401
     BOARD_APPROVED_CN,
     BOARD_STATUS_FILTERS,
-    _board_excerpt,
-    _board_index,
-    _board_label,
-    _board_state_cn,
-    _find_board_comment,
-    _find_board_comment_by_id,
-    audit_board_comment,
-    delete_board_comment,
 )
 
 # Category helpers and administration tools.
 from tools.category_admin import (  # noqa: E402,F401
     _category_index,
-    _find_named_category,
-    create_category,
-    delete_category,
-    update_category,
 )
 
 # Article comment moderation uses distinct targets and receipts from guestbook moderation.
-from tools.comment_moderation import (  # noqa: E402,F401
-    _comment_index,
-    _comment_label,
-    _find_comment_by_id,
-    audit_comment,
-    delete_comment,
-)
-
 # Dashboard mutations update one row; never replace the entire user-maintained list.
 from tools.dashboard_todos import (  # noqa: E402,F401
-    _TODO_MAX_ROWS,
-    _TODO_TEXT_LIMIT,
     _todo_rows,
-    _todo_text_hits,
-    complete_dashboard_todo,
-    create_dashboard_todo,
     list_dashboard_todos,
-    reschedule_dashboard_todo,
 )
 
 # Public tools import only after API_BASE and _own_get have been defined.
@@ -595,30 +442,17 @@ from tools.own_data import (  # noqa: E402,F401
     _fav_row,
     _fav_title,
     _favorites_snapshot,
-    _mailbox_inbox,
-    _mailbox_snapshot,
-    _mailbox_unread,
-    _note_items,
-    _notifications_snapshot,
     _unread_item_slim,
     add_favorite,
     get_unread_summary,
     list_my_favorites,
     list_my_messages,
-    read_messages,
-    read_notifications,
     remove_favorite,
 )
 
 # Quota request helpers and administration tools.
 from tools.quota_admin import (  # noqa: E402,F401
-    _QUOTA_NOTE_LIMIT,
-    _QUOTA_POLICY_REFUSALS,
-    _quota_pending_index,
-    approve_quota_request,
     list_quota_requests,
-    reject_quota_request,
-    reset_user_quota,
 )
 
 # Registry
@@ -665,27 +499,12 @@ _TOOL_REGISTRY = [
     # 管理助手后台写：list_admin_notes=admin.console，
     # 写工具=write.console，见"管理助手写工具"节头注
     list_admin_notes,
-    create_tag,
-    set_article_status,
-    set_article_tags,
     # 标签改/删 + 分类增删改：同样是 write.console，
     # 目标是**名字**（模型 写名字，工具确定性解析成 id，见 _find_named_tag）
-    update_tag,
-    delete_tag,
-    create_category,
-    update_category,
-    delete_category,
     # 站内公告代发/改/删：同样是 write.console，目标=公告标题
-    create_announcement,
-    update_announcement,
-    delete_announcement,
     # 河灯留言的人工复核：同样是 write.console，目标=正文片段
     # （留言没有名字/标题，见 _find_board_comment）
-    audit_board_comment,
-    delete_board_comment,
     # Article-comment IDs are distinct from guestbook IDs.
-    audit_comment,
-    delete_comment,
     # 用户自己的数据：scope = read.own（三档角色都有），见本节头注
     list_my_favorites,
     get_unread_summary,
@@ -697,33 +516,19 @@ _TOOL_REGISTRY = [
     # 见"写那一半"节头注
     add_favorite,
     remove_favorite,
-    read_notifications,
     # 站内信（私信）：读信箱=read.own，标记已读=write.own，
     # 见"站内信"节头注（术语：站内信 ≠ 河灯留言）
     list_my_messages,
-    read_messages,
     # Dashboard reads and single-row mutations.
     list_dashboard_todos,
-    create_dashboard_todo,
-    complete_dashboard_todo,
-    reschedule_dashboard_todo,
     # Account directory and actor-scoped administration tools.
     list_accounts,
     # Freeze and unfreeze preserve separate operation directions.
-    freeze_account,
-    unfreeze_account,
     # Account role policy is enforced by the backend.
-    set_account_role,
     # Muting blocks publication; freezing blocks login. Their receipts must stay distinct.
-    account_mute,
-    account_unmute,
     # Notices are irreversible outbound content and require review of the full body.
-    send_user_notice,
     # Quota approval, rejection and direct reset have distinct effects and receipts.
     list_quota_requests,
-    approve_quota_request,
-    reject_quota_request,
-    reset_user_quota,
 ]
 
 def get_all_tools():

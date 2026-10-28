@@ -39,6 +39,7 @@ sys.path.insert(0, str(ROOT / "tests"))
 import _parent_repo  # noqa: E402
 
 from agent.action_text import receipt_action, tool_action_text  # noqa: E402
+from agent.domains.registry import operation_names
 from tools.base import _TOOL_REGISTRY  # noqa: E402
 
 FAILS: list[str] = []
@@ -311,7 +312,7 @@ def test_action_text():
           == "读取文章 19《架构随笔》" and _pre("get_article_detail", {"article_id": 19})
           == "读取文章 19")
     print("\n③ 通用不变量：空参行不许退化成空书名号/空冒号（两档都要）")
-    _NAMES = sorted(t.name for t in _TOOL_REGISTRY)
+    _NAMES = sorted({*(t.name for t in _TOOL_REGISTRY), *operation_names()})
     check(f"注册表里的工具都取到了（{len(_NAMES)} 件）", len(_NAMES) > 40, str(len(_NAMES)))
     _bad: list[str] = []
     for _n in _NAMES:
