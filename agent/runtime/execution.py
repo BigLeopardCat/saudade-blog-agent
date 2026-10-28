@@ -6,7 +6,7 @@ from langgraph.graph import START
 from langgraph.graph.message import REMOVE_ALL_MESSAGES
 from langgraph.types import Command, StateSnapshot
 
-from agent.runtime import approval
+from agent.runtime import approval, tool_state
 from agent.runtime.execution_state import ExecutionState, capture, seed
 from agent.runtime.memory_media import stage
 from agent.runtime.middleware import OrderedToolsMiddleware, SessionMiddleware
@@ -25,7 +25,6 @@ class FrameworkExecution:
             "browser_task": session.task["id"] if session.task and session.store
                             and session.store.available and not session.isolated else None}
         session.config = self.config
-        session._restore_domains(prompt)
         prompt = fit_history(prompt, session.principal, session.menu, session.budget.limits,
                              session.output_limit, tool_access=session.history_access,
                              budget=session.budget)
@@ -71,7 +70,8 @@ class FrameworkExecution:
             return {"pending_confirm": (execution or {}).get("pending_confirm"),
                     "pending_action": (execution or {}).get("pending_action"),
                     "approval": session.approval, "approved_result": None,
-                    "continuation": None, "run": session.task}
+                    "continuation": None, "run": session.task,
+                    "tool_state": tool_state.capture(session)}
 
         return approval.graph(session.store.saver, execute)
 
