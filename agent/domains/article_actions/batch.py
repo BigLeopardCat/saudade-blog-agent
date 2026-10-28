@@ -6,6 +6,7 @@ from agent.domains.article_actions import targets
 from agent.products.blog.confirmation import proposal
 from agent.reports import sanitize_untrusted
 from agent.runtime.results import TurnResult
+from agent.runtime.tool_evidence import observed
 from agent.runtime.turns import check_cancelled
 from agent.runtime.writes import bound_context
 from tools import base
@@ -65,6 +66,7 @@ def prepare(article_ids, category, status, is_top, config):
             raise ValueError("批量目标与请求不符")
     except (ValueError, TypeError, KeyError):
         return base.unavailable("批量文章范围或版本不完整，本次未准备或执行改动。")
+    observed("article_state_batch", {"items": current}, ("items",))
     change = {"status": status, "is_top": is_top}
     changed = [row for row in current if not targets.satisfied(row, change)]
     if not changed:

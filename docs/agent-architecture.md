@@ -198,6 +198,7 @@ flowchart LR
 │   ├── runtime/progress.py                              # 当前生产代码模块
 │   ├── runtime/results.py                               # 当前生产代码模块
 │   ├── runtime/session.py                               # 当前生产代码模块
+│   ├── runtime/tool_evidence.py                         # 关联工具调用与已验证的准备事实
 │   ├── runtime/trace_context.py                         # 记录实际工具契约、调用者与轮次状态
 │   ├── runtime/turns.py                                 # 当前生产代码模块
 │   ├── runtime/writes.py                                # 当前生产代码模块

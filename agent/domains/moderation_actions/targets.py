@@ -1,6 +1,7 @@
 """Validate one bounded moderation target and its explicit absence contract."""
 
 from agent.principal import KNOWN_ROLES
+from agent.runtime.tool_evidence import observed
 from tools import base
 
 PATH = "/api/protected/moderation"
@@ -124,6 +125,8 @@ def read(resource, identifier, config):
             if data.get("target") is not None:
                 raise ValueError("invalid absence evidence")
             return None, None
-        return project(data["target"], resource, identifier), None
+        target = project(data["target"], resource, identifier)
+        observed("moderation", {"target": target}, ("target",))
+        return target, None
     except (ValueError, TypeError, KeyError):
         return None, base.unavailable("审核接口未提供可靠目标、归属或删除影响，本次未执行。")

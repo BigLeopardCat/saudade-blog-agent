@@ -122,7 +122,7 @@ def is_truncated(text: str) -> bool:
     return TRUNCATION_MARK_PREFIX in str(text)
 
 
-def tool_result_text(result: str, tool: str = "") -> str:
+def tool_result_text(result: str, tool: str = "", *, default_limit=None) -> str:
     """工具返回 → 写进 trace 的文本。分档见 TOOL_RESULT_LIMITS / NO_LIMIT_TOOLS。
 
     限值语义（三层，从高到低）：
@@ -144,7 +144,8 @@ def tool_result_text(result: str, tool: str = "") -> str:
             logger.warning("[trace] %s=%r 不是整数，工具返回按分档上限落盘",
                            TOOL_RESULT_LIMIT_ENV, raw)
     if limit is None:
-        limit = TOOL_RESULT_LIMITS.get(tool, TOOL_RESULT_LIMIT_DEFAULT)
+        limit = TOOL_RESULT_LIMITS.get(tool, TOOL_RESULT_LIMIT_DEFAULT
+                                      if default_limit is None else default_limit)
     if limit <= 0 or len(text) <= limit:
         return text
     return text[:limit] + truncation_mark(len(text))

@@ -4,6 +4,7 @@ from typing import Annotated
 
 from pydantic import BaseModel, ConfigDict, Field, StrictInt, StrictStr
 
+from agent.runtime.tool_evidence import observed
 from tools import base
 
 Identifier = Annotated[StrictInt, Field(gt=0)]
@@ -84,7 +85,9 @@ def prepare(article_id, request, config):
     if isinstance(result, base.ToolResult):
         return result
     try:
-        return plan(result, article_id)
+        return observed(
+            "article_tags", plan(result, article_id), ("id", "title", "before", "version")
+        )
     except (ValueError, TypeError):
         return base.unavailable("未能核对文章与标签变更，本次未生成或执行操作。")
 

@@ -3,13 +3,32 @@
 import hashlib
 import json
 import secrets
+from types import SimpleNamespace
 
-from langchain_core.messages import AIMessage, HumanMessage
+from langchain_core.messages import AIMessage, AIMessageChunk, HumanMessage
 from langchain_core.tools import tool
 
+from agent.runtime.middleware import StreamGuard
 from agent.runtime.results import TurnResult
 from agent.runtime.session import ToolSession
 from tools.result import ok
+
+
+def test_first_model_token_ignores_metadata_and_never_logs_content(monkeypatch):
+    events = []
+    clock = iter([10.0, 10.3])
+    monkeypatch.setattr("agent.runtime.middleware.time.monotonic", lambda: next(clock))
+    monkeypatch.setattr("agent.runtime.middleware.record",
+                        lambda node, event, **data: events.append({"event": event, **data}))
+    guard = StreamGuard(SimpleNamespace(config={}, _round_index=0))
+    guard.on_chat_model_start({}, [])
+    guard.on_llm_new_token("", chunk=SimpleNamespace(message=AIMessageChunk(content="")))
+    assert not events
+    guard.on_llm_new_token("PRIVATE_MODEL_TEXT", chunk=SimpleNamespace(
+        message=AIMessageChunk(content="PRIVATE_MODEL_TEXT")))
+    assert events[0]["event"] == "model_first_token"
+    assert abs(events[0]["duration_s"] - 0.3) < 1e-8
+    assert "PRIVATE_MODEL_TEXT" not in json.dumps(events)
 
 
 def test_repeated_reads_and_preparation_keep_distinct_framework_call_ids(monkeypatch):

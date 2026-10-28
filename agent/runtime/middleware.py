@@ -45,9 +45,12 @@ class StreamGuard(BaseCallbackHandler):
         self.session = session
         self.aggregate = None
         self.closed = False
+        self.started = None
+        self.first_token = False
 
     def on_chat_model_start(self, serialized, messages, **kwargs):
         self.aggregate = None
+        self.started, self.first_token = time.monotonic(), False
         self._check()
 
     def _check(self):
@@ -59,6 +62,13 @@ class StreamGuard(BaseCallbackHandler):
         self._check()
         message = getattr(chunk, "message", None)
         if isinstance(message, AIMessageChunk):
+            meaningful = bool(token or message.content or message.tool_call_chunks
+                              or message.additional_kwargs.get("reasoning_content"))
+            if meaningful and not self.first_token and self.started is not None:
+                self.first_token = True
+                record("native", "model_first_token",
+                       round=getattr(self.session, "_round_index", None),
+                       duration_s=time.monotonic() - self.started)
             self.aggregate = message if self.aggregate is None else self.aggregate + message
 
 
@@ -207,7 +217,10 @@ class SessionMiddleware(AgentMiddleware):
                        duration_s=round(time.monotonic() - started, 2), streaming=True,
                        model=selected_model or response_model, response_model=response_model,
                        finish_reason=(getattr(response, "response_metadata", {}) or {}).get(
-                           "finish_reason"), **usage_fields(response))
+                           "finish_reason"),
+                       tool_calls=[call["name"] for call in getattr(response, "tool_calls", ())],
+                       invalid_tool_calls=bool(getattr(response, "invalid_tool_calls", ())),
+                       **usage_fields(response))
 
     @hook_config(can_jump_to=["end", "model"])
     def after_model(self, state, runtime):

@@ -53,7 +53,9 @@ def build_prompt(messages: list, principal, own_enabled: bool = False, pending=N
                            + json.dumps(context, ensure_ascii=False, separators=(",", ":")))
     product_facts = {"article_url_template": _ARTICLE_URL_TEMPLATE,
                      "character": CHARACTER_IDENTITY,
-                     "conversation_style": context["caller"]["conversation_style"]}
+                     "conversation_style": context["caller"]["conversation_style"],
+                     "tool_loading": context["tools"]["loading"],
+                     "tool_guidance": context["tools"]["guidance"]}
     actor, attachments = [], []
     if is_verified_identity(principal):
         actor.append(HumanMessage(
