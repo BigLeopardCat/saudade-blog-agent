@@ -1746,7 +1746,7 @@ from corpus_provenance import (
 # Explicit assertion keys reject misspellings instead of silently skipping checks.
 GOLD_ASSERT_KEYS = frozenset({
     "require_observations", "require_observations_any", "require_todo_schedule",
-    "require_confirm_specs", "forbid_runtime_stop",
+    "require_confirm_specs", "require_confirm_preview", "forbid_runtime_stop",
     "forbid_business_write", "require_answer_value",
     # 回复文本
     "nonempty", "text_contains", "text_any_regex", "text_not_contains",

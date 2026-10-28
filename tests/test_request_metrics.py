@@ -88,6 +88,14 @@ def test_budget_stops_remain_visible_even_when_the_request_has_a_reply(tmp_path)
     assert group["handoff_reasons"] == {}
 
 
+def test_budget_finalization_is_visible_without_becoming_a_hard_stop(tmp_path):
+    path = _trace(tmp_path, "final", reply="已取得部分结果", events=[
+        {"node": "native", "event": "finalizing", "reason": "request_tokens"}])
+    row = request_metrics.collect([path])["groups"][0]
+    assert row["budget_stops"] == 0 and row["with_reply"] == 1
+    assert row["finalization_reasons"] == {"request_tokens": 1}
+
+
 def test_small_sample_percentiles_are_not_reported_as_p95(tmp_path):
     paths = [_trace(tmp_path, str(i), duration_s=i, events=[]) for i in range(20)]
     row = request_metrics.collect(paths)["groups"][0]
