@@ -51,7 +51,7 @@
 | [native-progress-events.md](native-progress-events.md) | 原生进度事件、答案流、取消围栏与服务端输出计量 | 现状型 |
 | [native-event-transport.md](native-event-transport.md) | Runtime 原生事件到聊天/SSE 协议的薄传输边界与终态规则 | 现状型 |
 | [native-context-cache.md](native-context-cache.md) | 原生工具目录、动态上下文顺序及缓存用量的验证口径 | 现状型 |
-| [legacy-compatibility-boundary.md](legacy-compatibility-boundary.md) | 原生运行时、旧图兼容层及退役条件 | 现状型（含迁移边界） |
+| [legacy-compatibility-boundary.md](legacy-compatibility-boundary.md) | 框架执行、宿主业务协议和旧数据接续范围 | 现状型（含迁移边界） |
 | [task-cost-audit-20261028.md](task-cost-audit-20261028.md) | 单任务 token、分页与检索定位放大点、摘要触发和服务商缓存口径验证 | 记录型 |
 | [eval-observability.md](eval-observability.md) | 原生运行时指标、结果验收、旧评测边界与执行入口 | 现状型 |
 | [lint-baseline.md](lint-baseline.md) | 历史人工扫描快照；当前扫描以 eval 下的机器台账与 CI 为准 | 记录型 |
