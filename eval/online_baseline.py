@@ -82,7 +82,7 @@ def run(cases, transport, identities, report_dir, *, phase, suite_hash, include_
     if not cases:
         raise ValueError("no cases remain in the selected evaluation scope")
     folder = Path(report_dir)
-    folder.mkdir(parents=True, exist_ok=False)
+    folder.mkdir(parents=True, exist_ok=False, mode=0o700)
     evaluator_hashes = snapshot(folder, cases)
     version = transport.client.get(transport.agent_url + "/version")
     version.raise_for_status()

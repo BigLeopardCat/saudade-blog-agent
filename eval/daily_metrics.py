@@ -66,7 +66,8 @@ def dup_writes(evs: list) -> list[tuple]:
 def collect(paths: list) -> dict:
     """扫一遍语料，出这一行要的全部数字。"""
     conv = {"total": 0, "unread": 0, "zero_first": 0, "zero_first_chat": 0,
-            "rev": 0, "dup": 0, "dup_detail": [], "graph": 0, "hybrid": 0, "handoff": 0}
+            "rev": 0, "dup": 0, "dup_detail": [], "native": 0,
+            "graph": 0, "hybrid": 0, "handoff": 0}
     per_workflow = defaultdict(lambda: [0, 0])      # [总, 有 gate 否决]
     for p in paths:
         doc = load_trace(p)
@@ -75,6 +76,9 @@ def collect(paths: list) -> dict:
             continue
         conv["total"] += 1
         path = request_metrics.path_of(doc)
+        if path == "native":
+            conv["native"] += 1
+            continue
         if path == "hybrid":
             conv["hybrid"] += 1
             continue
@@ -133,7 +137,7 @@ def render(paths: list, days: int) -> str:
     per_day = _inference_by_day(tcr.collect(paths)["rows"])
 
     parts = [f"近{days}天 traces={conv['total']} 未识别={conv['unread']}"]
-    parts.append(f"hybrid={conv['hybrid']} 交接={conv['handoff']}")
+    parts.append(f"native={conv['native']} hybrid={conv['hybrid']} 交接={conv['handoff']}")
     if conv["graph"]:
         zf = conv["zero_first"]
         parts.append(f"graph首轮零工具={zf}/{conv['graph']}（chat {conv['zero_first_chat']}）")
