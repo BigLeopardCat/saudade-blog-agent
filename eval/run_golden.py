@@ -242,9 +242,6 @@ def build_request(case: dict, rnd: dict | None = None) -> ChatRequest:
         # 签发那一轮与兑现那一轮的会话必须一致。用例不写 = None（两轮都是 None，
         # 同样自洽）；写了就照抄进两轮——这正是生产上"同一张卡片"的坐标。
         conversation_id=ctx.get("conversation_id"),
-        # 跨轮任务状态（20260927 批 D）：Rust 读侧交回来的 `agent_tasks` 原文（JSON
-        # 数组串）。**用例不写 = 空串**（既有用例都不写 ⇒ 零变化，见 task_state_probe 头注）。
-        agent_tasks=ctx.get("agent_tasks", ""),
         # 上一轮真执行过的工具名（20261020）：`_exec_memory_has_search` 的结构化判据源。
         # **用例不写 = `[]`**——语义是"确定地什么都没执行"（同生产 ChatRequest 那条注）。
         recent_tools=ctx.get("recent_tools", []),

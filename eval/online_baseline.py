@@ -49,7 +49,7 @@ def load_suite(path=SUITE):
             if rnd.get("confirm_message"):
                 raise ValueError("online preparation suite must not approve business mutations")
             if set(rnd["context"]) & {"history", "executions", "execution_rows", "pending_action",
-                                      "agent_tasks", "summary"}:
+                                      "summary"}:
                 raise ValueError("HTTP suite must establish memory through real turns")
     return cases
 

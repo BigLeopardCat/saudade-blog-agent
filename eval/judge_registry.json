@@ -47,7 +47,19 @@
         0,
         0
       ],
+      "agent/api/authentication.py": [
+        0,
+        0
+      ],
       "agent/api/context.py": [
+        0,
+        0
+      ],
+      "agent/api/dependencies.py": [
+        0,
+        0
+      ],
+      "agent/api/events.py": [
         0,
         0
       ],
@@ -55,20 +67,56 @@
         0,
         0
       ],
+      "agent/api/lifecycle.py": [
+        0,
+        0
+      ],
+      "agent/api/middleware.py": [
+        0,
+        0
+      ],
+      "agent/api/routes/__init__.py": [
+        0,
+        0
+      ],
+      "agent/api/routes/chat.py": [
+        0,
+        0
+      ],
+      "agent/api/routes/conversations.py": [
+        0,
+        0
+      ],
+      "agent/api/routes/knowledge_graph.py": [
+        0,
+        0
+      ],
+      "agent/api/routes/moderation.py": [
+        0,
+        0
+      ],
+      "agent/api/routes/operations.py": [
+        0,
+        0
+      ],
+      "agent/api/routes/task_inputs.py": [
+        0,
+        0
+      ],
       "agent/api/schemas.py": [
+        0,
+        0
+      ],
+      "agent/api/turns.py": [
         0,
         0
       ],
       "agent/arg_refs.py": [
         0,
-        3
+        0
       ],
       "agent/authz.py": [
-        80,
-        441
-      ],
-      "agent/block_reasons.py": [
-        22,
+        0,
         0
       ],
       "agent/checkpoint.py": [
@@ -127,6 +175,10 @@
         0,
         0
       ],
+      "agent/domains/article_actions/batch.py": [
+        0,
+        0
+      ],
       "agent/domains/article_actions/preparation.py": [
         0,
         0
@@ -159,6 +211,10 @@
         0,
         0
       ],
+      "agent/domains/articles/__init__.py": [
+        0,
+        0
+      ],
       "agent/domains/articles/evidence.py": [
         0,
         0
@@ -184,6 +240,10 @@
         0
       ],
       "agent/domains/categories/transactions.py": [
+        0,
+        0
+      ],
+      "agent/domains/conversation_images.py": [
         0,
         0
       ],
@@ -272,6 +332,10 @@
         0
       ],
       "agent/domains/own_reads.py": [
+        0,
+        0
+      ],
+      "agent/domains/pagination.py": [
         0,
         0
       ],
@@ -371,6 +435,10 @@
         0,
         0
       ],
+      "agent/main.py": [
+        0,
+        0
+      ],
       "agent/moderator.py": [
         4,
         0
@@ -379,7 +447,23 @@
         0,
         0
       ],
+      "agent/products/__init__.py": [
+        0,
+        0
+      ],
+      "agent/products/blog/__init__.py": [
+        0,
+        0
+      ],
       "agent/products/blog/admin_domains.py": [
+        0,
+        0
+      ],
+      "agent/products/blog/application.py": [
+        0,
+        0
+      ],
+      "agent/products/blog/articles.py": [
         0,
         0
       ],
@@ -399,6 +483,14 @@
         0,
         0
       ],
+      "agent/products/blog/history.py": [
+        0,
+        0
+      ],
+      "agent/products/blog/narration.py": [
+        0,
+        0
+      ],
       "agent/products/blog/pending.py": [
         0,
         0
@@ -415,15 +507,23 @@
         0,
         0
       ],
-      "agent/receipt_digest.py": [
-        9,
-        17
+      "agent/products/blog/tool_policy.py": [
+        0,
+        0
       ],
       "agent/reports.py": [
         19,
         0
       ],
       "agent/runtime/__init__.py": [
+        0,
+        0
+      ],
+      "agent/runtime/access.py": [
+        0,
+        0
+      ],
+      "agent/runtime/approval.py": [
         0,
         0
       ],
@@ -439,6 +539,10 @@
         0,
         0
       ],
+      "agent/runtime/client_actions.py": [
+        0,
+        0
+      ],
       "agent/runtime/control.py": [
         0,
         0
@@ -447,8 +551,20 @@
         0,
         0
       ],
+      "agent/runtime/execution.py": [
+        0,
+        0
+      ],
+      "agent/runtime/execution_state.py": [
+        0,
+        0
+      ],
       "agent/runtime/finalization.py": [
         3,
+        0
+      ],
+      "agent/runtime/input_usage.py": [
+        0,
         0
       ],
       "agent/runtime/jobs.py": [
@@ -456,6 +572,22 @@
         0
       ],
       "agent/runtime/memory.py": [
+        0,
+        0
+      ],
+      "agent/runtime/memory_media.py": [
+        0,
+        0
+      ],
+      "agent/runtime/memory_scope.py": [
+        0,
+        0
+      ],
+      "agent/runtime/message_content.py": [
+        0,
+        0
+      ],
+      "agent/runtime/middleware.py": [
         0,
         0
       ],
@@ -475,7 +607,23 @@
         0,
         0
       ],
+      "agent/runtime/prompt_budget.py": [
+        0,
+        0
+      ],
+      "agent/runtime/recovery.py": [
+        0,
+        0
+      ],
       "agent/runtime/results.py": [
+        0,
+        0
+      ],
+      "agent/runtime/session.py": [
+        0,
+        0
+      ],
+      "agent/runtime/summary_policy.py": [
         0,
         0
       ],
@@ -483,11 +631,39 @@
         1,
         0
       ],
-      "agent/runtime/session.py": [
+      "agent/runtime/task_input_store.py": [
+        0,
+        0
+      ],
+      "agent/runtime/task_inputs.py": [
+        0,
+        0
+      ],
+      "agent/runtime/task_scope.py": [
+        0,
+        0
+      ],
+      "agent/runtime/tool_errors.py": [
+        0,
+        0
+      ],
+      "agent/runtime/tool_state.py": [
+        0,
+        0
+      ],
+      "agent/runtime/trace_context.py": [
         0,
         0
       ],
       "agent/runtime/turns.py": [
+        0,
+        0
+      ],
+      "agent/runtime/visible_text.py": [
+        0,
+        0
+      ],
+      "agent/runtime/workers.py": [
         0,
         0
       ],
@@ -508,10 +684,6 @@
         0
       ],
       "agent/transport.py": [
-        0,
-        0
-      ],
-      "server.py": [
         0,
         0
       ],
@@ -586,11 +758,15 @@
       "tools/tag_admin.py": [
         13,
         0
+      ],
+      "server.py": [
+        0,
+        0
       ]
     },
     "total": [
-      580,
-      494
+      469,
+      33
     ]
   },
   "entries": [
@@ -866,234 +1042,6 @@
       "sunset": "写参数出处第二批（挂起：等真实流量定价，见 docs/write-provenance-shadow-20261014.md §7）"
     },
     {
-      "id": "agent/arg_refs.py::_RAG_LINE_RE",
-      "file": "agent/arg_refs.py",
-      "kind": "regex",
-      "name": "_RAG_LINE_RE",
-      "size": 3,
-      "sample": "^\\d+\\.\\s+type=(\\S+)\\s+id=(\\d+)\\s+score=([\\d.]+)\\s+title=(.*?)(?:\\s+命中节=(.*))?$",
-      "category": "parser",
-      "q": "^\\d+\\.\\s+type=(\\S+)\\s+id=(\\d+)\\s+score=([\\d.]+)\\s+title=(.*?)(?:\\s+命中节=(.*))?$",
-      "why": "拆 RAG 工具返回的行（type=/id=/score=/title=）"
-    },
-    {
-      "id": "agent/authz.py::_CONSOLE_QUESTION_RE",
-      "file": "agent/authz.py",
-      "kind": "regex",
-      "name": "_CONSOLE_QUESTION_RE",
-      "size": 77,
-      "sample": "[？?]|吗|呢|怎么|为什么|为啥|是否|能否|能不能|可不可以|会不会|要不要|有什么影响|有何影响|有没有|是不是|该不该|应不应该|好不好|行不行|对不",
-      "category": "open",
-      "q": "[？?]|吗|呢|怎么|为什么|为啥|是否|能否|能不能|可不可以|会不会|要不要|有什么影响|有何影响|有没有|是不是|该不该|应不应该|好不好|行不行|对不",
-      "why": "疑问句法 30 项（[？?]/吗/呢/怎么/是否/该不该/行不行…，封闭类）＋ **4 个打听名词**（有什么影响/有何影响/什么后果/风险，开放类——这是本表里唯一的病）。射程：907 条上词面命中 223 条，但在**同意闸**里开火 **0**（132 对判真一条都不受它影响：没有「命令形状 + 疑问口气」同时成立的生产消息）；真正承重在**弹窗分叉**（`is_question_like`：370 条判真里 **296 条**靠它）⇒ 现在动它是动「提问绝不弹卡」那条线",
-      "replacement": "疑问侧改判模型声明（inquiry/order）：批 5 已把**动词侧**改成逐工具声明（`_CONSOLE_TOOL_ACTIONS`），疑问侧还没有对应的声明格 ⇒ 替代要先开出那个格（体例同批 3 的 `reply_kind`：声明进 props 不进 required、只用于事后核对）",
-      "sunset": "挂起（无批次）：先要 inquiry 声明格；在它出现之前本条**冻结**，定价见 docs/问题记录.md §1.61"
-    },
-    {
-      "id": "agent/authz.py::_CONSOLE_HYPOTHESIS_RE",
-      "file": "agent/authz.py",
-      "kind": "regex",
-      "name": "_CONSOLE_HYPOTHESIS_RE",
-      "size": 28,
-      "sample": "^\\s*(?:如果|假如|假设|要是|若是|万一|倘若|我想问|我想知道|想问|请问|问一下)",
-      "category": "closed",
-      "q": "^\\s*(?:如果|假如|假设|要是|若是|万一|倘若|我想问|我想知道|想问|请问|问一下)",
-      "why": "假设/请问句首骨架：假定连词（如果/假如/假设/要是/若是/万一/倘若）+ 固定问句外壳（我想问/我想知道/想问/请问/问一下），全是封闭类虚词与固定套语。射程 **0**：907 条生产消息**词面命中 0**；三个 authz 消费方（`_console_command`/`_own_command`/`is_question_like`）去掉它一条都不变；`graph._question_words_are_prose` 里它是**硬否决**（有骨架也不弹卡），今天同样 0 命中。留着是因为 `tests/test_authz.py` ⑨c/⑨h 有 6 处钉住它（「如果我把文章 12 设为私密的话」⇒ 不判命令、不弹卡）——**零开火 ≠ 可以删**，它挡的是「提问被读成意图」这条用户拍板的线"
-    },
-    {
-      "id": "agent/authz.py::_CONSOLE_ORDER_RE",
-      "file": "agent/authz.py",
-      "kind": "regex",
-      "name": "_CONSOLE_ORDER_RE",
-      "size": 31,
-      "sample": "(?:^|[。！!；;\\n，,])\\s*(?:请|帮我|帮忙|麻烦|记得|快去)?\\s*(?:把|将|给)|^\\s*(?:请|帮我|帮忙|麻烦|记得)\\s*\\S",
-      "category": "closed",
-      "q": "(?:^|[。！!；;\\n，,])\\s*(?:请|帮我|帮忙|麻烦|记得|快去)?\\s*(?:把|将|给)|^\\s*(?:请|帮我|帮忙|麻烦|记得)\\s*\\S|^\\s*(?:取消|解除)[^\\n。！？!?；;，,]{0,12}?(?:置顶|顶置)",
-      "why": "命令骨架：介词 把/将/给 + 请求标记 请/帮我/帮忙/麻烦/记得/快去 + 「取消…置顶」固定框架——全是封闭类虚词，**动词一个都不在里面**（20261015 批 5 已改成逐工具读声明 `_CONSOLE_TOOL_ACTIONS` 的 `body`）。射程（907 条消息 × 8 个够得着快道的工具，132 对判真）：**112 对**靠它成立——句首动词那一支 18 对、「取消…置顶」框架 0 对（后者由 `tests/test_authz.py` ⑨c 的「取消文章 12 的置顶」钉住）"
-    },
-    {
-      "id": "agent/authz.py::_CONSOLE_INQUIRY_TAIL_RE",
-      "file": "agent/authz.py",
-      "kind": "regex",
-      "name": "_CONSOLE_INQUIRY_TAIL_RE",
-      "size": 37,
-      "sample": "多少|多久|几天|费用|价格|流程|步骤|怎么|怎样|如何|什么样|能不能|可不可以|需要|要不要|吗|呢",
-      "category": "open",
-      "q": "多少|多久|几天|费用|价格|流程|步骤|怎么|怎样|如何|什么样|能不能|可不可以|需要|要不要|吗|呢",
-      "why": "打听尾：疑问句法/量词（多少/多久/几天/怎么/能不能/要不要/吗/呢）＋ **4 个内容名词**（费用/价格/流程/步骤，开放类）。射程 **0**：它只在 `_console_confirm_order` 的「确认…」回声那一支里当拦路虎，而回声骨架在生产里只有 2 条命中、两条都通过了它 ⇒ 词面命中 172 条、判据开火 0 次",
-      "replacement": "同 `_CONSOLE_QUESTION_RE`：疑问侧一并改判模型声明（inquiry/order）",
-      "sunset": "挂起（无批次）：随疑问侧那个声明格一起收口"
-    },
-    {
-      "id": "agent/authz.py::_CONSOLE_CONFIRM_ECHO_RE",
-      "file": "agent/authz.py",
-      "kind": "regex",
-      "name": "_CONSOLE_CONFIRM_ECHO_RE",
-      "size": 4,
-      "sample": "^\\s*确认(?:一下)?\\s*",
-      "category": "closed",
-      "q": "^\\s*确认(?:一下)?\\s*",
-      "why": "「确认…」回声的**固定骨架**：只有「确认」与可选的「一下」，后面接什么由 `_console_confirm_order` 按工具声明判（旧版把骨架与回声词表混在一张正则里，20261015 批 5 拆开）。输入通常是**站内自己产出的**卡面文本（主人点「确定」时前端把卡面回传），也可能是主人自己打的「确认…」⇒ 词只有两个、划得完。射程：132 对里 **2 对**只靠它成立"
-    },
-    {
-      "id": "agent/authz.py::_CONSOLE_TAG_NAME_RE",
-      "file": "agent/authz.py",
-      "kind": "regex",
-      "name": "_CONSOLE_TAG_NAME_RE",
-      "size": 13,
-      "sample": "(?:叫|名为|叫做|名字是|名称是|标签)\\s*[：:]?\\s*[\\\"'“”‘’]?([^\\s，。！？!?；;\\\"'“”]{1,30})",
-      "category": "open",
-      "q": "(?:叫|名为|叫做|名字是|名称是|标签)\\s*[：:]?\\s*[\\\"'“”‘’]?([^\\s，。！？!?；;\\\"'“”]{1,30})",
-      "why": "从主人话里按措辞抽标签名——**目标**那一支的兜底（数字 id / 《》/ 指代之外只剩它）。射程：132 对判真里 **10 对**靠它成立。出处核对方案已定（引文核对：模型吐引文、代码逐字比对，`agent/provenance.py` 第一批已落地）、第二批挂起：等生产 `AGENT_EVIDENCE=1` 的读数（见 docs/write-provenance-shadow-20261014.md §7）",
-      "replacement": "引文核对：模型吐引文、代码逐字比对（agent/provenance.py 第一批已落地）",
-      "sunset": "写参数出处第二批（挂起：等真实流量定价，见 docs/write-provenance-shadow-20261014.md §7）"
-    },
-    {
-      "id": "agent/authz.py::_VOCATIVE_RE",
-      "file": "agent/authz.py",
-      "kind": "regex",
-      "name": "_VOCATIVE_RE",
-      "size": 20,
-      "sample": "^\\s*(?:(?:小|大|傻|臭|笨|乖)?(?:猫咪|猫猫)|泠月喵|泠月|喵喵|喵|主人)(?:\\s*[，,、:：!！~～。.…]+\\s*|\\s+)?",
-      "category": "closed",
-      "q": "^\\s*(?:(?:小|大|傻|臭|笨|乖)?(?:猫咪|猫猫)|泠月喵|泠月|喵喵|喵|主人)(?:\\s*[，,、:：!！~～。.…]+\\s*|\\s+)?",
-      "why": "站内人设的称呼就那几个（猫咪/猫猫/泠月喵/主人），划定义域不是打补丁"
-    },
-    {
-      "id": "agent/authz.py::_OWN_STATEMENT_RE",
-      "file": "agent/authz.py",
-      "kind": "regex",
-      "name": "_OWN_STATEMENT_RE",
-      "size": 18,
-      "sample": "^\\s*(?:我|咱|俺)\\s*(?:已经|刚|刚刚|刚才|早就|之前|先前)?\\s*(?:把|将)",
-      "category": "closed",
-      "q": "^\\s*(?:我|咱|俺)\\s*(?:已经|刚|刚刚|刚才|早就|之前|先前)?\\s*(?:把|将)",
-      "why": "陈述句骨架：句首自指代词 + 可选时间副词 + 介词把/将，封闭类。**今天空载**：907 条**词面命中 0**，且结构上不可能开火——族正则的锚（`^(礼貌)?(把|将)` / `^(礼貌)?动词`）与它的锚互斥（只有 `_OWN_READ_RE` 的「我(的)」那一支能起头，而那之后紧跟的名词/副词槽里没有 把/将）⇒ 它要挡的「我+把…」形状由族正则的锚同向挡掉了。登记 closed 并把「它今天从不说话」写下来（**不许读成「它一直在保护我们」**）；删它或补一条锁留给下一批"
-    },
-    {
-      "id": "agent/authz.py::_OWN_INQUIRY_RE",
-      "file": "agent/authz.py",
-      "kind": "regex",
-      "name": "_OWN_INQUIRY_RE",
-      "size": 18,
-      "sample": "哪些|哪个|哪篇|哪条|几篇|几条|几件|几个|几次",
-      "category": "closed",
-      "q": "哪些|哪个|哪篇|哪条|几篇|几条|几件|几个|几次",
-      "why": "疑问代词/量词（哪些/哪个/哪篇/哪条/几篇/几条/几件/几个/几次），封闭类。三个消费方都承重：`is_own_read_question` 23 条开火里 **9 条**靠它（少了它，事故原句「我有哪些未读通知呀」整句漏掉）、`is_site_corpus_question` **5 条**、`is_question_like` **32 条**"
-    },
-    {
-      "id": "agent/authz.py::_OWN_SELF_RE",
-      "file": "agent/authz.py",
-      "kind": "regex",
-      "name": "_OWN_SELF_RE",
-      "size": 5,
-      "sample": "我|咱|俺|自己",
-      "category": "closed",
-      "q": "我|咱|俺|自己",
-      "why": "自指代词（我/咱/俺/自己），封闭类。射程：791 条真措辞上，`is_own_read_question` ⑤b 的 5 条开火**全靠**它与通用物件名同现（去掉 ⇒ 少 5 条）"
-    },
-    {
-      "id": "agent/authz.py::_OWN_PERSONAL_OBJECT_RE",
-      "file": "agent/authz.py",
-      "kind": "regex",
-      "name": "_OWN_PERSONAL_OBJECT_RE",
-      "size": 11,
-      "sample": "未读|红点|信箱|私信|站内信",
-      "category": "system_data",
-      "q": "未读|红点|信箱|私信|站内信",
-      "why": "站内自带「我的」语义的物件名（未读/红点/信箱/私信/站内信）——它们就是站里那五件东西，改名随站内一起改，不会长出新成员。射程：**1** 条（「不应该是私信内容吗要看吗」，正是 20260923 那次纠正轮）"
-    },
-    {
-      "id": "agent/authz.py::_OWN_BROAD_OBJECT_RE",
-      "file": "agent/authz.py",
-      "kind": "regex",
-      "name": "_OWN_BROAD_OBJECT_RE",
-      "size": 12,
-      "sample": "提醒|通知|公告|消息|信息|收藏",
-      "category": "system_data",
-      "q": "提醒|通知|公告|消息|信息|收藏",
-      "why": "通用物件名（提醒/通知/公告/消息/信息/收藏）——通知/公告/收藏都是站里真实物件，提醒/消息/信息是它们的同义叫法；**只在与自指同现时才成立**（「站内最近有什么公告吗？」是公开面，golden 有专条）。射程：**5** 条，含 1 条假阳性（「帮我发个公告，正文写「今晚几点睡？」」——零帧守卫下到不了消费方：那一轮 planner 走公告技能、必有帧）"
-    },
-    {
-      "id": "agent/authz.py::_OWN_CAPABILITY_RE",
-      "file": "agent/authz.py",
-      "kind": "regex",
-      "name": "_OWN_CAPABILITY_RE",
-      "size": 24,
-      "sample": "能不能|可不可以|能否|会不会|行不行|(?:能|可以|会|支持)[^。！？!?；;\\n]{0,20}?(?:吗|嘛|么|？|\\?)",
-      "category": "closed",
-      "q": "能不能|可不可以|能否|会不会|行不行|(?:能|可以|会|支持)[^。！？!?；;\\n]{0,20}?(?:吗|嘛|么|？|\\?)",
-      "why": "能力/情态疑问（能不能/可不可以/能否/会不会/行不行；后一支 = 情态动词 + 20 字内 + 句尾语气词或问号），封闭类（唯一的非情态词是「支持」，此处作能力动词用）。射程：791 条上拦下 **8** 条（如实答「不能」才是正确出路，打回只会换个说法）"
-    },
-    {
-      "id": "agent/authz.py::_SITE_DEIXIS_RE",
-      "file": "agent/authz.py",
-      "kind": "regex",
-      "name": "_SITE_DEIXIS_RE",
-      "size": 58,
-      "sample": "站内|站里|站上|博客里|博客中|你博客|本博客|你的博客|你的文章|你写的|你发的|专栏|归档|技术文档|你的文档|这篇|那篇|哪篇|文章|教程|文档|笔记",
-      "category": "open",
-      "q": "站内|站里|站上|博客里|博客中|你博客|本博客|你的博客|你的文章|你写的|你发的|专栏|归档|技术文档|你的文档|这篇|那篇|哪篇|文章|教程|文档|笔记",
-      "why": "表里混着两类：**站内指称**（站内/站里/博客里/你的文章/你写的…，封闭类）与**内容类型名**（文章/教程/文档/笔记/专栏/归档，开放类——站里再加一种内容形态就漏）。两半都在承重：791 条真措辞上 25 条开火里，靠**内容类型名**那半成立 **13** 条、靠**指称词**那半 **4** 条、靠量词打听那半 5 条。gate 侧射程 **0**（生产从未开火，见 docs/问题记录.md §1.61）",
-      "replacement": "由检索工具面判定（planner 选没选检索族工具、有没有检索帧）——零帧哨兵本来就落在 planner/gate 两处，替代方案是把「该不该检索」整段交给模型声明 + 检索族工具的调用事实",
-      "sunset": "挂起（无批次）：本条 gate 射程 0 ⇒ 收它的收益是零、风险是要重定「何时该检索」；本批按符号分档冻结（指称那半是封闭类、内容类型名那半是开放类，同一张表里不拆开会把病登记成正常）"
-    },
-    {
-      "id": "agent/authz.py::_SITE_META_RE",
-      "file": "agent/authz.py",
-      "kind": "regex",
-      "name": "_SITE_META_RE",
-      "size": 28,
-      "sample": "工具|函数|接口|API|调用|技能|插件|你(?:是|会|能)?(?:怎么|如何|用哪|用什么|拿什么)",
-      "category": "system_data",
-      "q": "工具|函数|接口|API|调用|技能|插件|你(?:是|会|能)?(?:怎么|如何|用哪|用什么|拿什么)",
-      "why": "元问句词面：站内自己的机械名（工具/函数/接口/API/调用/技能/插件——指的都是**本 agent 自己的**工具与技能）＋ 疑问句法（你怎么/如何/用哪/用什么/拿什么）。射程 **0**：791 条真措辞里词面命中 18 条，但去掉它在 `is_site_corpus_question` 上一条都不变（那 18 条都被 ②④⑤⑥ 里别的臂挡在后面）⇒ **它今天不做决定**，如实写下来"
-    },
-    {
-      "id": "agent/authz.py::_SITE_OWNDATA_RE",
-      "file": "agent/authz.py",
-      "kind": "regex",
-      "name": "_SITE_OWNDATA_RE",
-      "size": 23,
-      "sample": "未读|红点|信箱|私信|站内信|通知|收藏|我的消息|我的留言",
-      "category": "system_data",
-      "q": "未读|红点|信箱|私信|站内信|通知|收藏|我的消息|我的留言",
-      "why": "私有面的物件名（未读/红点/信箱/私信/站内信/通知/收藏 + 站内自己的说法「我的消息/我的留言」）——与 `_OWN_PERSONAL_OBJECT_RE` 同源，这里的作用是**不抢那一族的活**。射程：拦下 **1** 条（「读取站内通知读不到吗」）"
-    },
-    {
-      "id": "agent/authz.py::_SITE_DEICTIC_RE",
-      "file": "agent/authz.py",
-      "kind": "regex",
-      "name": "_SITE_DEICTIC_RE",
-      "size": 27,
-      "sample": "那个|这个|那一?篇|这一?篇|那篇|这篇|那条|这条|它|上面|刚刚|刚才|上次",
-      "category": "closed",
-      "q": "那个|这个|那一?篇|这一?篇|那篇|这篇|那条|这条|它|上面|刚刚|刚才|上次",
-      "why": "指代/指示词与时间副词（那个/这个/…篇/…条/它/上面/刚刚/刚才/上次），封闭类。射程：拦下 **9** 条（rule 6b 该照抄跨轮执行摘要的取值指代——golden `followup_entity_slot_category` 正是这一条）"
-    },
-    {
-      "id": "agent/authz.py::_SCOPE_ERR_RE",
-      "file": "agent/authz.py",
-      "kind": "regex",
-      "name": "_SCOPE_ERR_RE",
-      "size": 4,
-      "sample": "权限不足\\[([a-z_]+)\\]",
-      "category": "parser",
-      "q": "权限不足\\[([a-z_]+)\\]",
-      "why": "拆 Rust 侧『权限不足[scope]』错误码"
-    },
-    {
-      "id": "agent/authz.py::_CONSENT_ERR_RE",
-      "file": "agent/authz.py",
-      "kind": "regex",
-      "name": "_CONSENT_ERR_RE",
-      "size": 3,
-      "sample": "待确认\\[([a-z_]+)\\]",
-      "category": "parser",
-      "q": "待确认\\[([a-z_]+)\\]",
-      "why": "拆 Rust 侧『待确认[skill]』错误码"
-    },
-    {
       "id": "agent/domains/categories/preparation.py::LABELS",
       "file": "agent/domains/categories/preparation.py",
       "kind": "collection",
@@ -1102,49 +1050,6 @@
       "category": "system_data",
       "q": "确认卡与执行回执的内部分类字段显示名称",
       "why": "只渲染名字、路径、简介、图标与颜色，不匹配用户输入或决定操作"
-    },
-    {
-      "id": "agent/receipt_digest.py::_NOTE_TOTAL_RE",
-      "file": "agent/receipt_digest.py",
-      "kind": "regex",
-      "name": "_NOTE_TOTAL_RE",
-      "size": 2,
-      "sample": "共 (\\d+) 条",
-      "category": "parser",
-      "q": "共 (\\d+) 条",
-      "why": "**回落支**（批 G2 起）：只有文本时（trace 回放/直接喂 repr 串）才走；生产走 `meta[\"page\"]` 结构"
-    },
-    {
-      "id": "agent/receipt_digest.py::_NOTE_RANGE_RE",
-      "file": "agent/receipt_digest.py",
-      "kind": "regex",
-      "name": "_NOTE_RANGE_RE",
-      "size": 2,
-      "sample": "第 (\\d+)-(\\d+) 条",
-      "category": "parser",
-      "q": "第 (\\d+)-(\\d+) 条",
-      "why": "**回落支**（批 G2 起）：只有文本时才走；生产走 `meta[\"page\"]` 结构"
-    },
-    {
-      "id": "agent/receipt_digest.py::_BOARD_STATE_WORD",
-      "file": "agent/receipt_digest.py",
-      "kind": "collection",
-      "name": "_BOARD_STATE_WORD",
-      "size": 3,
-      "category": "system_data",
-      "q": "_BOARD_STATE_WORD",
-      "why": "留言状态的显示字（由返回里的数字字段渲染）"
-    },
-    {
-      "id": "agent/receipt_digest.py::_ADMIN_NOTES_HEAD_RE",
-      "file": "agent/receipt_digest.py",
-      "kind": "regex",
-      "name": "_ADMIN_NOTES_HEAD_RE",
-      "size": 13,
-      "sample": "后台文章(?:里(?:「(?P<cat>[^」]*)」分类下)?(?:匹配「(?P<kw>[^」]*)」的)?)?共\\s*(?P<n>\\d+)\\s*篇",
-      "category": "parser",
-      "q": "后台文章(?:里(?:「(?P<cat>[^」]*)」分类下)?(?:匹配「(?P<kw>[^」]*)」的)?)?共\\s*(?P<n>\\d+)\\s*篇",
-      "why": "**回落支**（批 G5 起）：只有文本时才走；生产走 `ToolResult.data` 里的 `notes`/`keyword`/`category`/`limit` 结构"
     },
     {
       "id": "agent/reports.py::FOCUS_NAMES",
