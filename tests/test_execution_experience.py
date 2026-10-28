@@ -47,6 +47,8 @@ def test_tag_card_describes_only_the_change_without_internal_ids():
 
 def test_narration_is_tool_free_budgeted_and_keeps_execution_unchanged(monkeypatch):
     received = []
+    events = []
+    monkeypatch.setattr(narration, "record", lambda node, event, **kw: events.append(event))
     execution = {"receipts": [{"tool": "set_article_tags", "result": "added"}]}
     result = TurnResult("已添加标签「泠月喵」。", execution)
 
@@ -68,6 +70,22 @@ def test_narration_is_tool_free_budgeted_and_keeps_execution_unchanged(monkeypat
     assert settings[0]["enable_thinking"] is False
     assert result.reply in received[-1].content
     assert "receipts" not in received[-1].content
+    assert events.count("llm_start") == events.count("llm_done") == 1
+    assert "llm_error" not in events
+
+
+def test_narration_model_error_has_a_terminal_event_without_retrying_write(monkeypatch):
+    events = []
+    monkeypatch.setattr(narration, "record", lambda node, event, **kw: events.append(event))
+
+    class Model:
+        def invoke(self, *args, **kwargs):
+            raise TimeoutError("fixture")
+
+    monkeypatch.setattr(narration, "get_llm", lambda **kwargs: Model())
+    result = TurnResult("已经更新。", {"receipts": [{"tool": "fixture"}]})
+    assert narration.narrate(result, {}) == result.reply
+    assert events == ["product_context", "llm_start", "llm_error", "fallback"]
 
 
 def test_exhausted_narration_budget_preserves_committed_result_without_calling_model(monkeypatch):
