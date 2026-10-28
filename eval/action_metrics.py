@@ -48,4 +48,4 @@ def decision_report(groups):
             "unverified": len(groups) - len(measured),
             "decision_rate": sum(decisions) / len(decisions) if decisions else None,
             "measured_decisions": len(decisions),
-            "scope": "complete scenario: every annotated initial decision correct; not task success"}
+            "scope": "complete scenario: every initial decision correct; not task success"}
