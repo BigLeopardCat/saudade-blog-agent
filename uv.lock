@@ -2151,6 +2151,7 @@ name = "saudade-agent"
 version = "0.2.0"
 source = { editable = "." }
 dependencies = [
+    { name = "anyio" },
     { name = "bm25s" },
     { name = "edge-tts" },
     { name = "fastapi" },
@@ -2197,6 +2198,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
+    { name = "anyio", specifier = "==4.14.1" },
     { name = "bm25s", specifier = "==0.3.15" },
     { name = "edge-tts", specifier = "==7.2.8" },
     { name = "fastapi", specifier = "==0.141.1" },

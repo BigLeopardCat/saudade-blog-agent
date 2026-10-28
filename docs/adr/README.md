@@ -93,6 +93,7 @@
 
 | [0025](adr-0025-interrupted-task-recovery.md) | 普通任务通过框架 checkpoint 显式续跑 | 已采纳 |
 | [0026](adr-0026-tool-activation-lifecycle.md) | 工具激活状态独立于历史窗口 | 已采纳 |
+| [0027](adr-0027-cancellable-model-io.md) | 同步 Agent 通过标准异步模型 I/O 响应取消 | 已采纳 |
 
 ## 相关的、但不算 ADR 的文档
 

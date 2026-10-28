@@ -16,11 +16,13 @@ from agent.runtime.turns import check_cancelled
 from config.settings import settings
 from models.llm import get_llm
 from models.session import session_scope
+from models.transport import ModelIO, io_scope
 from utils.trace import record
 
 
 class NativeRuntime:
-    def __init__(self, store, *, catalog=None, model_factory=None, narrator=None, application=None):
+    def __init__(self, store, *, catalog=None, model_factory=None, narrator=None, application=None,
+                 model_io=None):
         self.store = store
         self.inputs = for_saver(store.saver)
         if application is None:
@@ -31,6 +33,7 @@ class NativeRuntime:
         self.application = application
         self.model_factory = model_factory
         self.narrator = narrator
+        self.model_io = model_io
 
     @property
     def saver(self):
@@ -59,8 +62,10 @@ class NativeRuntime:
         Cancellation, storage failure and generator close produce no final result.
         """
         cfg = ((config or {}).get("configurable") or {})
-        with self.conversation_guard(config), session_scope(self.application.session_key(
-                cfg.get("principal"), cfg.get("conversation_id"))):
+        with (io_scope(self.model_io, cancel_check=partial(check_cancelled, config)),
+              self.conversation_guard(config),
+              session_scope(self.application.session_key(
+                  cfg.get("principal"), cfg.get("conversation_id")))):
             try:
                 trace_context.caller(self.application.context(cfg.get("principal")))
                 for event in self._turn(state, config):
@@ -308,4 +313,5 @@ def build(*, resources: ExitStack) -> NativeRuntime:
     return NativeRuntime(
         NativeConversationStore(checkpoint.build_checkpointer(resources=resources)),
         narrator=narrate, application=BlogApplication(),
+        model_io=resources.enter_context(ModelIO()),
     )
