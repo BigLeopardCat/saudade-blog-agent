@@ -145,3 +145,22 @@ def test_shared_async_pool_keeps_parallel_request_contexts_separate(monkeypatch)
         with ThreadPoolExecutor(max_workers=2) as workers:
             assert list(workers.map(run, ["caller-A", "caller-B"])) == ["Hello.", "Hello."]
     assert sorted(seen) == [("caller-A", "caller-A"), ("caller-B", "caller-B")]
+
+
+def test_stopped_request_never_reaches_the_http_transport(monkeypatch):
+    monkeypatch.setattr("config.settings.llm_provider", "opencode")
+    requested = []
+
+    async def provider(request):
+        requested.append(request)
+        return httpx.Response(200)
+
+    stopped = threading.Event()
+    with ModelIO(transport=httpx.MockTransport(provider)) as io, io_scope(io):
+        model = get_llm(api_key="synthetic-only", base_url="https://model.test/v1",
+                        model="deepseek-v4.1-flash", streaming=False)
+        with request_scope(RequestControl(stopped, time.monotonic() + 5)):
+            stopped.set()
+            with pytest.raises(AgentCancelled):
+                model.invoke([HumanMessage(content="Hello.")])
+    assert requested == []

@@ -73,8 +73,9 @@ class ModelIO:
     def iterate(self, source):
         from agent.runtime.control import check_active
 
-        self.client
         check = _cancel_check.get() or check_active
+        check()
+        self.client
         queue, closed = Queue(maxsize=32), Event()
         responses = []
 
