@@ -38,11 +38,16 @@ def summarize(messages, *, budget, config, model=None):
 
         model = get_llm(streaming=False, max_tokens=output, enable_thinking=False, max_retries=0)
     started = time.monotonic()
-    with native_call(budget, prompt, (), output_limit=output, model_key=model) as ticket:
-        response = model.invoke(prompt, config={"tags": ["langsmith:nostream"]})
-        budget.settle(ticket, response)
-    record("summarizer", "llm_done", duration_s=round(time.monotonic() - started, 3),
-           output_limit=output, **usage_fields(response))
+    response = None
+    record("summarizer", "llm_start", output_limit=output)
+    try:
+        with native_call(budget, prompt, (), output_limit=output, model_key=model) as ticket:
+            response = model.invoke(prompt, config={"tags": ["langsmith:nostream"]})
+            budget.settle(ticket, response)
+    finally:
+        record("summarizer", "llm_done" if response is not None else "llm_error",
+               duration_s=round(time.monotonic() - started, 3), output_limit=output,
+               **usage_fields(response))
     check_cancelled(config)
     metadata = getattr(response, "response_metadata", {}) or {}
     text = text_content(response.content).strip()

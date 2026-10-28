@@ -73,6 +73,7 @@ def test_confirmation_time_is_not_filled_from_progress(tmp_path, monkeypatch):
     'event: text\ndata: "部分回复"\n\n',
     'event: done\ndata: {}\n\nevent: text\ndata: "迟到回复"\n\n',
     'event: made_up\ndata: {}\n\n',
+    'event: summary\ndata: {"text":"retired"}\n\nevent: done\ndata: {}\n\n',
 ])
 def test_incomplete_or_invalid_http_evidence_is_not_a_pass(tmp_path, monkeypatch, wire):
     adapter = transport(tmp_path, monkeypatch, wire)
