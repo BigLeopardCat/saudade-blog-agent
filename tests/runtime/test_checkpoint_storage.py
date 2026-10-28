@@ -1,6 +1,7 @@
 """Bound current message state without losing source pairs or admitting deleted threads."""
 
 import pytest
+from langchain_core.language_models.fake_chat_models import FakeListChatModel
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.graph.message import add_messages
@@ -28,15 +29,18 @@ def test_checkpoint_selection_keeps_complete_source_pairs_and_the_current_turn()
                       *memory.observation(call, base.ok("x" * 1300)), AIMessage(content="reply")])
     current = [HumanMessage(content="current"), AIMessage(content="answer")]
     selected = add_messages(prior, memory.checkpoint_messages(prior, current))
-    assert memory._tokens(selected) <= memory.CHECKPOINT_TOKENS
     assert selected[-2:] == current
-    assert len(selected) < len(prior)
+    assert len(selected) == len(prior) + len(current)
     ids = {call["id"] for m in selected if isinstance(m, AIMessage) for call in m.tool_calls}
     results = {m.tool_call_id for m in selected if isinstance(m, ToolMessage)}
     assert ids and ids == results
 
 
 def test_native_checkpoint_stays_bounded_after_many_turns_and_reload(monkeypatch):
+    import models
+
+    monkeypatch.setattr(models, "get_llm", lambda **kwargs: FakeListChatModel(
+        responses=["summary"]))
     class Model:
         def bind_tools(self, tools, **kwargs):
             return self
@@ -52,7 +56,8 @@ def test_native_checkpoint_stays_bounded_after_many_turns_and_reload(monkeypatch
         list(runtime.stream_events(
             {"messages": [HumanMessage(content=f"question{number}" + "x" * 600)]}, cfg))
         saved = runtime.get_state(cfg).values["messages"]
-        assert memory._tokens(saved) <= memory.CHECKPOINT_TOKENS
+        assert memory._tokens(saved) <= memory.CHECKPOINT_TOKENS + memory._tokens(saved[-2:])
+    assert any(m.additional_kwargs.get("lc_source") == "summarization" for m in saved)
     assert saved[-2].content.startswith("question29")
     assert not any(m.content.startswith("question0") for m in saved)
     assert checkpoint.delete_thread(saver, "bounded") is True

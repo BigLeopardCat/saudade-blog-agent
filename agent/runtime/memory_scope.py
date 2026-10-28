@@ -16,12 +16,7 @@ def safe_request(req, principal):
     """The host must persist source scopes, rather than relabel old data on read."""
     history_allowed = matches(req.history_scope, principal, req.conversation_id)
     summary_allowed = matches(req.summary_scope, principal, req.conversation_id)
-    batch = req.summary_batch
-    covered_base = (batch is not None and (
-        (batch.base_id == 0 and not req.summary.strip())
-        or (batch.base_id > 0 and summary_allowed and bool(req.summary.strip()))))
     return req.model_copy(update={
         "history": req.history if history_allowed else [],
         "summary": req.summary if summary_allowed else "",
-        "summary_batch": batch if history_allowed and covered_base else None,
     })

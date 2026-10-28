@@ -5,12 +5,11 @@
     "BLE001"
   ],
   "project_lint_ignore": null,
-  "total": 62,
+  "total": 61,
   "by_file": {
     "agent/checkpoint.py": 1,
     "agent/confirm.py": 5,
     "agent/moderator.py": 1,
-    "agent/summarizer.py": 1,
     "eval/cliff_probe.py": 1,
     "eval/corpus_provenance.py": 2,
     "eval/corpus_terms.py": 1,

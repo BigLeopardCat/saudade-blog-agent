@@ -101,16 +101,23 @@ def names(request):
 
 
 @pytest.mark.parametrize("trimmed", [False, True])
-def test_completed_menu_survives_reload_and_history_trimming_in_activation_order(setup, trimmed):
+def test_completed_menu_survives_reload_and_history_trimming_in_activation_order(
+        setup, trimmed, monkeypatch):
     runtime, _, calls = setup
     first = Model(call("load_beta_info_tools"), call("load_alpha_info_tools"),
                   call("read_beta"), AIMessageChunk(content="Read complete."))
     selected = runtime(first)
     turn(selected)
     if trimmed:
+        import models
+        from langchain_core.language_models.fake_chat_models import FakeListChatModel
+
+        monkeypatch.setattr(models, "get_llm", lambda **kwargs: FakeListChatModel(
+            responses=["Historical fixture queries completed."]))
         for index in range(4):
             selected.store.save_turn(config(), [HumanMessage(content=f"Later {index}")],
                                      "无关的长答复。" * 350)
+        turn(runtime(Model(AIMessageChunk(content="Compacted."))), "Continue.")
         assert not any(isinstance(m, ToolMessage) for m in selected.store.load(config()).messages)
     after = Model(AIMessageChunk(content="Follow-up complete."))
     assert turn(runtime(after), "Continue.").reply == "Follow-up complete."

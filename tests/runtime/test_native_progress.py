@@ -88,37 +88,6 @@ def test_progress_is_bounded_and_deduplicated():
     assert len(visible) == 24
 
 
-@pytest.mark.parametrize("needs_summary", [False, True])
-def test_summary_progress_is_emitted_only_for_an_actual_summary_job(monkeypatch, needs_summary):
-    import asyncio
-
-    class Runtime:
-        def stream_events(self, state, config):
-            yield TurnResult("reply")
-
-    calls = []
-    server = _prepare_server(monkeypatch, Runtime(), [])
-    monkeypatch.setattr(
-        server, "summarize", lambda *args: calls.append(args) or "updated summary"
-    )
-
-    async def scenario():
-        response = await server.chat_stream(
-            ChatRequest(message="remember", needs_summary=needs_summary, conversation_id=42,
-                        history_scope={"user_id": 7, "role": "user", "conversation_id": 42},
-                        summary_batch={"base_id": 0, "messages": [
-                            {"id": 10, "role": "user",
-                             "content": "previous" * (1000 if needs_summary else 1)}]}),
-            service_request()
-        )
-        return "".join([frame async for frame in response.body_iterator])
-
-    frames = asyncio.run(scenario())
-    assert bool(calls) is needs_summary
-    assert ("正在整理会话摘要" in frames) is needs_summary
-    assert ("会话摘要已更新" in frames) is needs_summary
-    assert ("event: summary" in frames) is needs_summary
-
 
 def test_transport_rechecks_stop_and_deadline_after_scheduling():
     import asyncio
@@ -396,8 +365,6 @@ def test_streamed_preface_and_terminal_confirmation_each_render_once(monkeypatch
     async def scenario():
         drained = asyncio.Event()
         monkeypatch.setattr(server, "finish_trace", lambda *args: drained.set())
-        monkeypatch.setattr(server, "summarize", lambda *args: pytest.fail(
-            "Preparing a confirmation must not wait for summary generation"))
         response = await server.chat_stream(
             ChatRequest(message="prepare", conversation_id=42, needs_summary=True,
                         history_scope={"user_id": 7, "role": "user", "conversation_id": 42},
@@ -415,8 +382,7 @@ def test_streamed_preface_and_terminal_confirmation_each_render_once(monkeypatch
         reply = "".join(text)
         assert reply.count("准备好了。") == 1
         assert question not in reply and len(cards) == 1 and cards[0]["q"] == question
-        assert any(e["event"] == "deferred" and e.get("reason") == "awaiting_confirmation"
-                   for e in events)
+        assert not any(e.get("node") == "summarizer" for e in events)
         stored = runtime.get_state({"configurable": {"thread_id": "conv_42"}})
         assert stored.values["messages"][-1].content == reply
 

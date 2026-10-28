@@ -23,11 +23,9 @@ from agent.runtime.memory_media import compact
 from agent.runtime.memory_scope import matches
 from agent.runtime.message_content import estimate_tokens as _tokens
 from agent.runtime.message_content import text_content
-from config.settings import SUMMARY_MAX_CHARS
-from utils.trace import record
+from config.settings import SUMMARY_MAX_CHARS, settings
 
 HISTORY_TOKENS = 1800
-HISTORY_RETAIN_TOKENS = 1200
 CHECKPOINT_TOKENS = 5400
 OBSERVATION_CHARS = 1400
 SUMMARY_CHARS = SUMMARY_MAX_CHARS
@@ -91,14 +89,12 @@ def _turns(messages):
     return turns
 
 
-def _window(turns):
-    start = max((index for index, turn in enumerate(turns)
-                 if turn[0].additional_kwargs.get("memory_window_start") is True), default=0)
-    return turns[start:]
+def dialogue_turns(messages):
+    return _turns(messages)
 
 
 def history(messages, principal, *, max_tokens=None, tool_access=None):
-    turns = [[compact(message) for message in turn] for turn in _window(_turns(messages))
+    turns = [[compact(message) for message in turn] for turn in _turns(messages)
              if _allowed(turn, principal, tool_access)]
     if not turns:
         return []
@@ -106,7 +102,10 @@ def history(messages, principal, *, max_tokens=None, tool_access=None):
             or isinstance(message, AIMessage) and not message.tool_calls]
     # Keep the latest complete dialogue when it fits, spending fewer tokens on older turns.
     last_tokens = _tokens(last)
-    target = min(CHECKPOINT_TOKENS, max(HISTORY_TOKENS, last_tokens))
+    if max_tokens is None and last_tokens <= CHECKPOINT_TOKENS:
+        return [message for turn in turns for message in turn]
+    target = (min(CHECKPOINT_TOKENS, max(0, max_tokens)) if max_tokens is not None else
+              min(CHECKPOINT_TOKENS, max(HISTORY_TOKENS, last_tokens)))
     if last_tokens > CHECKPOINT_TOKENS:
         # A partial long reply is a locator for re-reading. Do not spend the
         # expanded window on an excerpt in every following tool round.
@@ -189,9 +188,23 @@ def bootstrap(snapshot, messages, principal, *, tool_access=None):
         return []
     for message in reversed(messages):
         if is_context(message):
-            return history(message.additional_kwargs.get("host_history") or [], principal,
-                           tool_access=tool_access)
+            summary = summary_message(messages, principal)
+            imported = history(message.additional_kwargs.get("host_history") or [], principal,
+                               max_tokens=HISTORY_TOKENS, tool_access=tool_access)
+            if summary is None:
+                return imported
+            summary = summary.model_copy(update={"additional_kwargs": {
+                "lc_source": "summarization"}})
+            return [summary, *imported]
     return []
+
+
+def request_messages(messages):
+    """Host summaries are bootstrap data, never a second live memory stream."""
+    return [message.model_copy(update={"additional_kwargs": {
+        key: value for key, value in message.additional_kwargs.items()
+        if key not in ("conversation_summary", "host_history")}})
+        if is_context(message) else message for message in messages]
 
 
 def prompt_dialogue(messages, principal, *, tool_access=None):
@@ -210,38 +223,25 @@ def with_context(dialogue, context):
     return [*previous[:start], *context, *previous[start:], *dialogue[-1:]]
 
 
-def checkpoint_messages(previous, current):
-    """Replace the message channel with recent complete turns, keeping the current turn."""
-    messages = [compact(message) for turn in _turns([*previous, *current]) for message in turn]
-    retained = trim_messages(
-        messages, max_tokens=max(CHECKPOINT_TOKENS, _tokens(current)),
-        token_counter=_tokens, strategy="last", start_on="human", allow_partial=False,
-    )
-    window = [message for turn in _window(_turns(retained)) for message in turn]
-    if window:
-        before = _tokens(window)
-        if before > HISTORY_TOKENS:
-            # Advance the prompt boundary in batches, leaving space for new turns.
-            # Full checkpoint history remains available within its separate bound.
-            latest = _turns(window)[-1]
-            window = trim_messages(
-                window, max_tokens=max(HISTORY_RETAIN_TOKENS, _tokens(latest)),
-                token_counter=_tokens, strategy="last", start_on="human", allow_partial=False,
-            )
-        anchor = window[0]
-        changed = anchor.additional_kwargs.get("memory_window_start") is not True
-        record("memory", "window", before_tokens=before, retained_tokens=_tokens(window),
-               boundary_changed=changed, compacted=before > HISTORY_TOKENS)
-        marked = []
-        for message in retained:
-            metadata = dict(message.additional_kwargs)
-            metadata.pop("memory_window_start", None)
-            if message is anchor:
-                metadata["memory_window_start"] = True
-            marked.append(message if metadata == message.additional_kwargs else
-                          message.model_copy(update={"additional_kwargs": metadata}))
-        retained = marked
-    return [RemoveMessage(id=REMOVE_ALL_MESSAGES), *retained]
+def checkpoint_messages(previous, current, *, context_update=None):
+    """Commit standard summary replacement and the completed turn together."""
+    messages = []
+    for turn in _turns([*previous, *current]):
+        turn = [compact(message) for message in turn]
+        if _tokens(turn) > settings.agent_context_tokens:
+            dialogue = [message for message in turn if isinstance(message, HumanMessage)
+                        or isinstance(message, AIMessage) and not message.tool_calls]
+            # Oversized source text remains recoverable from product history.
+            # An excerpt is explicitly marked and never promoted to a summary.
+            turn = (_source_first(turn, dialogue, CHECKPOINT_TOKENS)
+                    or _excerpt(dialogue, CHECKPOINT_TOKENS))
+        messages.extend(turn)
+    if context_update:
+        covered = set(context_update["covered_ids"])
+        if any(message.id in covered for message in messages):
+            messages = [context_update["summary"],
+                        *(message for message in messages if message.id not in covered)]
+    return [RemoveMessage(id=REMOVE_ALL_MESSAGES), *messages]
 
 
 def observation(call, result):
