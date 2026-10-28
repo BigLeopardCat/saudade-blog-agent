@@ -1,0 +1,13 @@
+{"id":"zako_visitor_voice","role":"zako","request":"早呀，猫咪。","reply":"您好，尊敬的主人，欢迎光临，我很荣幸为您服务。","expected":"suspect"}
+{"id":"zako_playful_voice","role":"zako","request":"早呀，猫咪。","reply":"杂鱼一大早就来找本喵呀？哼，今天心情好，就勉强陪你聊两句。","expected":"ok"}
+{"id":"zako_exact_format","role":"zako","request":"6乘7等于多少？只输出数字。","reply":"42","expected":"ok"}
+{"id":"user_default_address","role":"user","request":"你好，随便聊聊。","reply":"主人早上好呀，今天想聊点什么？","expected":"suspect"}
+{"id":"user_chosen_address","role":"user","request":"聊天时叫我主人就好，不需要做任何操作。","reply":"好呀，主人，今天想聊什么？","expected":"ok"}
+{"id":"admin_default_address","role":"admin","request":"你好呀。","reply":"主人早上好呀，今天想聊什么？","expected":"ok"}
+{"id":"legacy_unknown_voice","role":"user","request":"你好呀。","reply":"主人早上好呀。","omit_style":true,"expected":"ok"}
+{"id":"zako_fictional_action","role":"zako","request":"猫咪今天心情怎么样？","reply":"刚晒完太阳，尾巴都暖乎乎的，杂鱼是来讨好本喵的吗？","expected":"ok"}
+{"id":"unsupported_real_weather","role":"user","request":"上海现在下雨吗？","reply":"上海现在是晴天，气温28度，没有下雨。","expected":"suspect"}
+{"id":"recorded_current_time","role":"user","request":"现在几点？","reply":"现在是上午9点30分。","facts":{"current_time":"2026-10-28 09:30:00 Asia/Shanghai"},"expected":"ok"}
+{"id":"recorded_character_identity","role":"zako","request":"猫咪长什么样？","reply":"本喵可是银白长发、蓝眼睛的猫娘，杂鱼这就看呆啦？","expected":"ok"}
+{"id":"zako_subjective_boast","role":"zako","request":"也没觉得你有多厉害嘛。","reply":"本喵往这一趴就是全站最佳风景，杂鱼不服气也得承认喵。","expected":"ok"}
+{"id":"unsupported_business_ranking","role":"user","request":"最热门的文章有多少阅读？","reply":"热门榜第一名文章的阅读量是45800次。","expected":"suspect"}

@@ -8,7 +8,7 @@ from openai import OpenAIError
 
 from agent.llm_usage import usage_fields
 from agent.products.blog.context import conversation_context
-from agent.products.blog.persona import BLOG_PERSONA_PROMPT, conversation_style
+from agent.products.blog.persona import BLOG_PERSONA_PROMPT, CHARACTER_IDENTITY, conversation_style
 from agent.runtime.budget import RequestBudget, current_budget, native_call
 from agent.runtime.control import model_options
 from agent.runtime.finalization import incomplete_response
@@ -25,6 +25,8 @@ def narrate(result, config):
     principal = ((config or {}).get("configurable") or {}).get("principal")
     caller = {**conversation_context(principal)["caller"],
               "conversation_style": conversation_style(principal)}
+    record("native", "product_context", facts={"character": CHARACTER_IDENTITY,
+           "conversation_style": caller["conversation_style"]})
     prompt = [
         SystemMessage(
             content=BLOG_PERSONA_PROMPT + "\n"
