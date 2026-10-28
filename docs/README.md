@@ -38,6 +38,7 @@
 | [deepseek-regression-cases-20261026.md](deepseek-regression-cases-20261026.md) | 125项场景的首判、复评、耗时、调用与token逐项记录 | 记录型 |
 | [enterprise-readiness-20261026.md](enterprise-readiness-20261026.md) | 企业试点指标建议、现有证据、尚缺指标与优先补齐顺序 | 方向型 |
 | [release-acceptance.md](release-acceptance.md) | 当前发布的质量、安全、分任务成本和时延目标，以及冻结证据的机器验收入口 | 现状型（目标未自动视为达标） |
+| [offline-improvement.md](offline-improvement.md) | 反馈复核、数据隔离、候选提案与一次独立验收的发布衔接 | 现状型 |
 | [native-baseline-20261026.md](native-baseline-20261026.md) | 框架迁移后127场景首跑、缓存用量、失败复核与后续边界 | 记录型 |
 | [native-baseline-20261025.md](native-baseline-20261025.md) | 125 场景线上首跑、成本缓存、误报复核与功能缺陷 | 记录型 |
 | [native-regression-20261025.md](native-regression-20261025.md) | 17 场景定向线上回归、排期判据复核、成本与剩余缺陷 | 记录型 |
