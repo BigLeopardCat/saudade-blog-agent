@@ -61,6 +61,9 @@ class ToolSession:
         self.approval = None
         self.awaiting_call = None
         self.framework_state = None
+        self.context_update = None
+        self.fresh_task = True
+        self.system_message = None
         self.task = None
         self.input_inbox = None
         self.inputs_active = False
@@ -309,6 +312,7 @@ class ToolSession:
         """Adapt framework events to the current transport result contract."""
         from agent.runtime.execution import FrameworkExecution
 
+        self.fresh_task = resume is None and not recover and client_result is None
         self._round_index = 0
         self.stream_guard = StreamGuard(self)
         execution = FrameworkExecution(self, prompt)

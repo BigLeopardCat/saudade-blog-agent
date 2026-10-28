@@ -170,7 +170,6 @@ def test_summary_jobs_require_accepted_history_provenance(scope):
                       summary_batch={"base_id": 0, "messages": [
                           {"id": 10, "role": "user", "content": "prior"}]})
     cleaned = safe_request(req, ACTOR)
-    assert not cleaned.needs_summary  # A nonempty base needs its own matching provenance.
     assert not cleaned.summary
 
 

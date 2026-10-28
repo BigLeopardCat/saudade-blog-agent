@@ -17,13 +17,12 @@ from agent.api.dependencies import release_slot, require_runtime, require_worker
 from agent.api.events import control_event, text_stream
 from agent.api.events import frame as sse_frame
 from agent.api.events import response as stream_response
-from agent.api.schemas import ChatRequest, ChatResponse, SummaryUpdate
+from agent.api.schemas import ChatRequest, ChatResponse
 from agent.api.turns import NativeCancelled, run_turn, stream_to_queue
 from agent.products.blog.context import conversation_session
-from agent.runtime.control import AgentCancelled, RequestControl
+from agent.runtime.control import RequestControl
 from agent.runtime.memory_scope import safe_request
 from agent.runtime.progress import StreamProgress
-from agent.summarizer import summarize
 from config.settings import settings
 from utils.logging import get_trace_id
 from utils.trace import finish_trace, record, start_trace
@@ -95,24 +94,6 @@ def _quota_blocked_text(limit: int) -> str:
     )
 
 
-async def _refresh_summary(req, jobs, workers):
-    """Maintain a derived cache only after the primary task has completed."""
-    if not req.needs_summary or req.summary_batch is None:
-        return None
-    try:
-        text = await jobs.submit(workers.executor, summarize, "",
-                                 req.summary_batch.messages, req.summary)
-    except (AgentCancelled, TimeoutError, RuntimeError) as error:
-        record("summarizer", "skipped", reason=type(error).__name__)
-        return None
-    if not text.strip():
-        return None
-    batch = req.summary_batch
-    record("summarizer", "coverage", base_id=batch.base_id, through_id=batch.through_id,
-           messages=len(batch.messages))
-    return SummaryUpdate(text=text.strip(), base_id=batch.base_id, through_id=batch.through_id)
-
-
 @router.post("/chat", response_model=ChatResponse)
 async def chat(req: ChatRequest, request: Request):
     runtime = require_runtime(request)
@@ -153,8 +134,6 @@ async def chat(req: ChatRequest, request: Request):
             principal,
             req.conversation_id,
         )
-        update = await _refresh_summary(req, jobs, workers) if reply.strip() else None
-
         if not reply.strip():
             logger.warning("Agent returned empty reply for message=%r", req.message[:60])
         final_reply = reply.strip() or _RECOVERY_SENTENCE
@@ -167,9 +146,7 @@ async def chat(req: ChatRequest, request: Request):
                 final_reply = final_nav + "\n" + final_reply
 
         return ChatResponse(
-            reply=final_reply, success=True, new_summary=update.text if update else None,
-            summary_coverage=({"base_id": update.base_id, "through_id": update.through_id}
-                              if update else None), executions=exec_rows
+            reply=final_reply, success=True, executions=exec_rows
         )
     except Exception:
         logger.exception("Agent invocation failed")
@@ -179,28 +156,12 @@ async def chat(req: ChatRequest, request: Request):
         jobs.close()
 
 
-async def _summary_events(req, jobs, workers, had_output, awaiting_confirmation):
-    """A prepared card finishes promptly; derived memory can advance on a later turn."""
-    if awaiting_confirmation:
-        if req.needs_summary:
-            record("summary", "deferred", reason="awaiting_confirmation")
-        return
-    if had_output and req.needs_summary:
-        yield sse_frame("progress", "正在整理会话摘要…")
-    update = await _refresh_summary(req, jobs, workers) if had_output else None
-    if req.needs_summary:
-        yield sse_frame("progress", "会话摘要已更新。" if update else "本轮保留原有会话摘要。")
-    if update:
-        yield sse_frame("summary", update.model_dump())
-
-
 @router.post("/chat/stream/v2")
 async def chat_stream(req: ChatRequest, request: Request):
     logger.info(
-        "POST /chat/stream/v2 user=%s msg=%r needs_summary=%s",
+        "POST /chat/stream/v2 user=%s msg=%r",
         req.user_id,
         (req.message or "")[:40],
-        req.needs_summary,
     )
     runtime = require_runtime(request)
     workers = require_workers(request)
@@ -274,7 +235,7 @@ async def chat_stream(req: ChatRequest, request: Request):
                                  "current_effects": req.current_effects,
                                  "current_darkmode": req.current_darkmode},
                 "has_image": bool(req.image),
-                "needs_summary": bool(req.needs_summary),
+                "memory_strategy": "framework_compaction",
                 "history_len": len(req.history),
                 "conversation_id": req.conversation_id,
                 "has_exec": bool(req.executions),
@@ -402,10 +363,6 @@ async def chat_stream(req: ChatRequest, request: Request):
                 frames += 1
                 progress.mark("reply")
                 yield sse_frame("text", _RECOVERY_SENTENCE)
-
-            async for frame in _summary_events(req, jobs, workers, had_output,
-                                                awaiting_confirmation):
-                yield frame
 
             yield sse_frame("done", {})
         except asyncio.CancelledError:

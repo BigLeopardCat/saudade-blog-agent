@@ -8,6 +8,7 @@ from agent.runtime import checkpoint_store, memory
 from agent.runtime.approval import graph
 from agent.runtime.conversation_store import ConversationSnapshot
 from agent.runtime.turns import check_cancelled, conversation_turn
+from config.settings import settings
 from utils.trace import record
 
 
@@ -55,14 +56,15 @@ class NativeConversationStore:
 
     def save_turn(
         self, config, messages, reply, *, observations=(), execution=None, pending=None,
-        approval=None,
+        approval=None, context_update=None,
     ) -> None:
         if not self.available:
             return
         previous = self.load(config)
         principal = ((config or {}).get("configurable") or {}).get("principal")
         current = memory.turn_messages(messages, observations, reply, principal)
-        saved = {"messages": memory.checkpoint_messages(previous.messages, current),
+        saved = {"messages": memory.checkpoint_messages(
+                    previous.messages, current, context_update=context_update),
                  "pending_confirm": None, "pending_action": None,
                  "approval": approval, "continuation": None,
                  "run": ({**previous.run, "input_saved": True}
@@ -70,6 +72,8 @@ class NativeConversationStore:
         for values in (pending or {}, execution or {}):
             saved.update({key: values[key] for key in
                           ("pending_confirm", "pending_action", "receipts") if key in values})
+        if memory._tokens(saved["messages"][1:]) > settings.agent_context_tokens:
+            raise ValueError("Uncompacted conversation exceeds the storage safety limit")
         active = self.get_state(config)
         if approval and active.values.get("approval") == approval and active.next:
             # Advance a completed application boundary, then recreate its interrupt.

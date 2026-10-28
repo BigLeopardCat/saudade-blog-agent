@@ -164,7 +164,7 @@ def test_large_tool_turn_does_not_erase_the_recommendation_before_followup():
     history = prompt[1:-1]
     assert any("article/19" in str(message.content) for message in history)
     assert any(message.content == "推荐一篇文章带我过去" for message in history)
-    assert memory._tokens(history) <= memory.HISTORY_TOKENS
+    assert memory._tokens(history) <= memory.CHECKPOINT_TOKENS
     calls = {call["id"] for message in history if isinstance(message, AIMessage)
              for call in message.tool_calls}
     results = {message.tool_call_id for message in history if isinstance(message, ToolMessage)}
@@ -185,6 +185,6 @@ def test_long_assistant_reply_cannot_crowd_out_the_recent_tool_fact():
     sources = [message for message in history if isinstance(message, ToolMessage)]
     assert len(sources) == 1 and json.loads(sources[0].content)["total"] == 12
     assert sources[0].tool_call_id == "count"
-    assert memory._tokens(history) <= memory.HISTORY_TOKENS
-    assert len(str(history[-1].content)) < len(str(saved[-1].content))
+    assert memory._tokens(history) <= memory.CHECKPOINT_TOKENS
+    assert history[-1].content == saved[-1].content
     assert memory.history(saved, actor(uid=8)) == []

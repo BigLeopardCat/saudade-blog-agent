@@ -20,6 +20,7 @@ from agent.runtime.finalization import final_prompt
 from agent.runtime.memory_media import hydrate, stage
 from agent.runtime.message_content import text_content
 from agent.runtime.progress import emit
+from agent.runtime.prompt_budget import fit_history
 from agent.runtime.results import pause_notice
 from agent.runtime.task_input_policy import additions as input_additions
 from agent.runtime.task_input_policy import model_messages, replace_unpublished_proposal
@@ -176,6 +177,10 @@ class SessionMiddleware(AgentMiddleware):
             request = request.override(messages=[*request.messages, *extra_inputs])
         prompt = [*([request.system_message] if request.system_message else []),
                   *model_messages(hydrate(request.messages, session.transient))]
+        if session._round_index == 0 and session.fresh_task:
+            prompt = fit_history(prompt, session.principal, session.menu, session.budget.limits,
+                                 session.output_limit, tool_access=session.history_access,
+                                 budget=session.budget)
         final = final_prompt(session.budget, prompt, session.menu, session.output_limit,
                              results_full=session.result_chars >= session.result_limit,
                              model_key=request.model)

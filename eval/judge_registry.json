@@ -543,6 +543,10 @@
         0,
         0
       ],
+      "agent/runtime/compaction.py": [
+        0,
+        0
+      ],
       "agent/runtime/control.py": [
         0,
         0
@@ -623,7 +627,7 @@
         0,
         0
       ],
-      "agent/runtime/summary_policy.py": [
+      "agent/runtime/summarization.py": [
         0,
         0
       ],
@@ -677,10 +681,6 @@
       ],
       "agent/stickers.py": [
         12,
-        0
-      ],
-      "agent/summarizer.py": [
-        2,
         0
       ],
       "agent/transport.py": [
@@ -757,7 +757,7 @@
       ]
     },
     "total": [
-      387,
+      385,
       33
     ]
   },
