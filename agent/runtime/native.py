@@ -191,6 +191,11 @@ class NativeRuntime:
 
     @staticmethod
     def _run(session, prompt, *, resume=None, approval_input=(), recover=False, client_result=None):
+        if session.task and session.store and session.store.available:
+            from agent.runtime.task_budget import for_saver as task_usage
+            session.budget.bind_task(task_usage(session.store.saver), session.task,
+                                    create=not (recover or resume is not None
+                                                or client_result is not None))
         inbox = session.input_inbox
         session.inputs_active = bool(inbox and session.task and not session.isolated
                                      and resume is None and (recover or ((session.config or {}).get(
@@ -231,6 +236,12 @@ class NativeRuntime:
         domain = self.application.confirmation(grant)
         if not self.store.available:
             raise RuntimeError("操作确认需要持久化服务，本次未执行。")
+        if snapshot.run and approval.matches(snapshot.approval, grant, config):
+            from agent.runtime.budget import current_budget
+            from agent.runtime.task_budget import for_saver as task_usage
+            budget = current_budget()
+            if budget is not None:
+                budget.bind_task(task_usage(self.saver), snapshot.run, create=False)
         from agent.runtime.progress import emit
 
         emit(

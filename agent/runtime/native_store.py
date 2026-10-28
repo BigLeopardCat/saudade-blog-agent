@@ -8,7 +8,6 @@ from agent.runtime import checkpoint_store, memory
 from agent.runtime.approval import graph
 from agent.runtime.conversation_store import ConversationSnapshot
 from agent.runtime.turns import check_cancelled, conversation_turn
-from config.settings import settings
 from utils.trace import record
 
 
@@ -72,8 +71,6 @@ class NativeConversationStore:
         for values in (pending or {}, execution or {}):
             saved.update({key: values[key] for key in
                           ("pending_confirm", "pending_action", "receipts") if key in values})
-        if memory._tokens(saved["messages"][1:]) > settings.agent_context_tokens:
-            raise ValueError("Uncompacted conversation exceeds the storage safety limit")
         active = self.get_state(config)
         if approval and active.values.get("approval") == approval and active.next:
             # Advance a completed application boundary, then recreate its interrupt.

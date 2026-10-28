@@ -51,7 +51,35 @@ class RequestBudget:
         self.model_calls = 0
         self.tool_calls = 0
         self.reason = None
+        self._task = None
+        self._storage = None
+        self._restored = {"tokens": 0, "model_calls": 0, "tool_calls": 0}
         self._input_anchor: tuple[input_usage.InputShape, int] | None = None
+
+    def bind_task(self, storage, task, *, create=True):
+        """Bind once under the conversation guard; resumed attempts keep their charges."""
+        if self._task is not None:
+            if self._task["id"] != task["id"] or self._task["scope"] != task["scope"]:
+                raise ValueError("request_budget_already_bound")
+            return
+        spent = storage.load(task, create=create)
+        self.restore_spent(spent)
+        self._restored = {key: spent.get(key, 0) for key in self._restored}
+        self._task, self._storage = task, storage
+        record("budget", "task_restored", task_id=task["id"], **self.spent())
+
+    def spent(self):
+        return {key: getattr(self, key) for key in ("tokens", "model_calls", "tool_calls")}
+
+    def request_spent(self):
+        """Per-HTTP increments exclude usage restored from an earlier request."""
+        return {key: max(0, value - self._restored[key]) for key, value in self.spent().items()}
+
+    def _persist(self):
+        # Reserve before network I/O. A process loss leaves a conservative charge;
+        # a completed response replaces its reservation with measured usage.
+        if self._storage is not None:
+            self._storage.save(self._task, self.spent())
 
     def _input_estimate(self, messages, tools, output_limit, model_key):
         message_tokens, schema_tokens = _estimate(messages, tools, output_limit)
@@ -62,7 +90,7 @@ class RequestBudget:
                 "framework" if anchored is None else "provider_prefix")
 
     def restore_spent(self, spent):
-        """Carry trusted checkpoint usage across an external-action suspension."""
+        """Restore trusted cumulative usage without counting the same charge twice."""
         with self._lock:
             for key in ("tokens", "model_calls", "tool_calls"):
                 value = spent.get(key, 0)
@@ -85,6 +113,7 @@ class RequestBudget:
                 self._reject(reason)
             self.tokens += estimated + output_limit
             self.model_calls += 1
+            self._persist()
             ticket = Reservation(estimated, output_limit, input_shape=current)
             calls, reserved = self.model_calls, self.tokens
         record("budget", "reserved", estimated_input=estimated, message_tokens=message_tokens,
@@ -135,6 +164,7 @@ class RequestBudget:
                 self._input_anchor = (ticket.input_shape, actual_input)
             if self.tokens > self.limits.request_tokens:
                 self.reason = "request_tokens"
+            self._persist()
             used = self.tokens
         record("budget", "settled", estimated_input=ticket.estimated_input,
                actual_input=actual_input, actual_output=actual_output, charged_tokens=charged,
@@ -147,6 +177,7 @@ class RequestBudget:
             if self.tool_calls + count > self.limits.tool_calls:
                 self._reject("tool_calls")
             self.tool_calls += count
+            self._persist()
 
 
 _active: ContextVar[RequestBudget | None] = ContextVar("agent_request_budget", default=None)

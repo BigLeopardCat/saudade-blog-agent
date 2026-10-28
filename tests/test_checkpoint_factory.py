@@ -203,6 +203,8 @@ class _FakeConn:
         if s.startswith(("CREATE TABLE IF NOT EXISTS agent_deleted_threads",
                          "CREATE TABLE IF NOT EXISTS agent_task_inputs",
                          "CREATE INDEX IF NOT EXISTS agent_task_inputs_expiry",
+                         "CREATE TABLE IF NOT EXISTS agent_task_usage",
+                         "CREATE INDEX IF NOT EXISTS agent_task_usage_conversation",
                          "CREATE TABLE IF NOT EXISTS agent_write_idem")):
             return _Res([])
         raise AssertionError(f"假连接收到了没预期的 SQL：{s}")

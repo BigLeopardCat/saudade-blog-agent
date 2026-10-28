@@ -76,6 +76,9 @@ def test_checkpoint_preserves_sources_until_a_summary_is_committed():
 def test_summary_change_keeps_static_account_and_older_history_after_budget_fitting():
     history = [HumanMessage(content="earlier question"), AIMessage(content="earlier answer"),
                HumanMessage(content="完成第一项"), AIMessage(content="第二项也要完成吗？")]
+    for message in history:
+        if isinstance(message, HumanMessage):
+            message.additional_kwargs["memory_actor"] = {"uid": 7, "role": "user"}
     requests = []
     for summary in ("old summary", "new summary"):
         context = HumanMessage(content="", additional_kwargs={
