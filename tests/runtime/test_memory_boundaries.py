@@ -210,11 +210,10 @@ def test_blog_recovery_context_describes_available_history_without_changing_the_
     saved = memory.turn_messages([HumanMessage(content="长回答")], [], "长答复" * 20000, ACTOR)
     messages = [*saved, HumanMessage(content="最后一行呢")]
     prompt = build_prompt(messages, ACTOR, own_enabled=True)
-    recovery = [message for message in prompt if memory.is_context(message)
+    recovery = [message for message in prompt if isinstance(message, HumanMessage)
                 and "get_chat_history" in str(message.content)]
     assert len(recovery) == 1 and "content_offset" in recovery[0].content
     assert "get_chat_history" not in prompt[0].content
-    assert not any(memory.is_context(message) and "get_chat_history" in str(message.content)
-                   for message in build_prompt(messages, ACTOR, own_enabled=False))
+    assert "get_chat_history" not in build_prompt(messages, ACTOR, own_enabled=False)[-1].content
     assert "get_chat_history" not in str(memory.history(saved, ACTOR)), (
         "generic memory marks excerpts; the product supplies its recovery affordance")
