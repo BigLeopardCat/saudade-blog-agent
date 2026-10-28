@@ -111,18 +111,6 @@ def test_real_tool_exposes_revision_bound_continuation_and_stable_section_ids(mo
     assert "second" in selected.data["sectionText"] and "first" not in selected.data["sectionText"]
 
 
-def test_site_question_classification_never_performs_retrieval(monkeypatch):
-    from agent.authz import is_site_corpus_question
-    from rag import search
-
-    def unexpected(*args, **kwargs):
-        raise AssertionError("authorization must not issue retrieval IO")
-
-    monkeypatch.setattr(search, "search", unexpected)
-    assert is_site_corpus_question("博客有哪些文章呢")
-    assert not is_site_corpus_question("你用哪些工具读文章")
-
-
 def test_candidate_reference_validation_precedes_streamed_output():
     model = Model([
         call("search_notes", {"keyword": "topic"}, "search"),

@@ -22,11 +22,10 @@
   "targets": [
     "."
   ],
-  "total": 71,
+  "total": 70,
   "nosec": 0,
   "by_key": {
     "agent/adminops_tags.py::B105": 5,
-    "agent/arg_refs.py::B112": 1,
     "agent/idem.py::B608": 2,
     "agent/idem_pg.py::B608": 4,
     "agent/reports.py::B105": 2,
@@ -56,12 +55,12 @@
     "scripts/build_word_graph.py::B324": 2,
     "scripts/layout_ab.py::B108": 2,
     "scripts/sticker_smoke.py::B310": 1,
+    "tests/integration/test_pg_retention_live.py::B608": 8,
     "tests/test_confirm.py::B105": 2,
     "tests/test_golden_fixture_corpus.py::B310": 1,
     "tests/test_llm_judge.py::B108": 2,
     "tests/test_packaging.py::B108": 1,
     "tests/test_pg_retention.py::B608": 1,
-    "tests/integration/test_pg_retention_live.py::B608": 8,
     "tests/test_retention_manifest.py::B108": 4,
     "tests/test_trace_io.py::B108": 1
   }

@@ -62,11 +62,10 @@ flowchart LR
 │   ├── api/host_context.py                              # 有界宿主事实与历史任务投影
 │   ├── api/events.py                                    # 具名 SSE 编码和响应头
 │   ├── api/schemas.py                                   # 聊天 HTTP 契约及字段限额
-│   ├── arg_refs.py                                      # 当前生产代码模块
+│   ├── confirmation_args.py                             # 确认参数的未解析占位符检查
 │   ├── domains/articles/__init__.py                    # 文章领域包
 │   ├── domains/articles/evidence.py                    # 候选、已读正文与文章来源证据
 │   ├── authz.py                                         # 当前生产代码模块
-│   ├── block_reasons.py                                 # 当前生产代码模块
 │   ├── checkpoint.py                                    # 当前生产代码模块
 │   ├── confirm.py                                       # 当前生产代码模块
 │   ├── domains/__init__.py                              # 当前生产代码模块
@@ -146,7 +145,6 @@ flowchart LR
 │   ├── llm_usage.py                                     # 当前生产代码模块
 │   ├── moderator.py                                     # 当前生产代码模块
 │   ├── principal.py                                     # 当前生产代码模块
-│   ├── receipt_digest.py                                # 当前生产代码模块
 │   ├── reports.py                                       # 当前生产代码模块
 │   ├── products/__init__.py                            # 产品装配包
 │   ├── products/blog/__init__.py                        # 博客产品包
@@ -211,11 +209,9 @@ flowchart LR
 │   ├── __init__.py                                      # 当前生产代码模块
 │   ├── account_admin.py                                 # 当前生产代码模块
 │   ├── admin_read.py                                    # 当前生产代码模块
-│   ├── announcements.py                                 # 当前生产代码模块
 │   ├── base.py                                          # 当前生产代码模块
 │   ├── board_moderation.py                              # 当前生产代码模块
 │   ├── category_admin.py                                # 当前生产代码模块
-│   ├── comment_moderation.py                            # 当前生产代码模块
 │   ├── dashboard_todos.py                               # 当前生产代码模块
 │   ├── device.py                                        # 当前生产代码模块
 │   ├── note_admin.py                                    # 当前生产代码模块

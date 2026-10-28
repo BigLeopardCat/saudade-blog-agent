@@ -20,6 +20,7 @@ import re
 import secrets
 import time
 
+from agent.confirmation_args import has_refs as has_refs
 from config import settings
 
 # Domain separation prevents reuse of signatures from other JWT-secret consumers.
@@ -48,15 +49,7 @@ def _b64d(text: str) -> bytes:
 
 
 def invalid_trace_meta(uid: int, conv_id, token_len: int) -> dict:
-    """**被拒**的确认请求落 trace 时用的 input 元数据（纯函数，`tests/test_confirm.py` 锁住）。
-
-    为什么是纯函数 + 单测而不是就地写个 dict：这里同时是两条纪律的**唯一展开点**——
-      · "哪次被拒了"必须事后查得到（在此之前这条路径连 trace 都没有，见 server.py
-        `_record_invalid_confirm` 的头注）；
-      · "令牌绝不进 trace/日志/回执/prompt"必须查不出来（模块头注的第一条安全语义）。
-    只记 `token_len` 是刻意的：长度足够复现"客户端到底有没有把令牌发全"，而长度
-    本身不是凭据。`uid` 只用来做 trace 的归属，不参与内容。
-    """
+    """Trace a rejected confirmation without retaining its token or payload."""
     return {
         "message": "",  # 隐藏请求的合成文本不是主人说的话
         "has_image": False,
@@ -71,17 +64,9 @@ def invalid_trace_meta(uid: int, conv_id, token_len: int) -> dict:
 
 
 def token_expiry(token: str) -> int:
-    """解出令牌**自己携带**的 `exp`（UTC 秒级时间戳）；解不出 → 0。
+    """Read the signed token's expiry for display; malformed tokens return zero.
 
-    刻意不重算（`int(time.time()) + TTL_SECONDS`）：签名里的 exp 才是验签时真正被
-    比较的那个数，展示用的有效期必须与它**逐秒一致**。重算会让两者相差签发那一瞬的
-    跨秒误差——前端按重算值起倒计时，卡片就会在令牌已失效之后还多活一秒（用户点下去、
-    必被拒），正是 20260924 那类"看着能点、点了白点"。
-
-    这里**不验签**：令牌是同一个进程刚签出来的，只用于给前端画倒计时。验签是
-    `verify` 的唯一职责，前端拿到的 exp 只是展示线索，**服务端仍以 verify 为唯一凭据**
-    （前端时钟被改、或旧客户端根本没有 exp，都不影响安全性，只影响倒计时显示）。
-    """
+    This does not verify a signature and cannot authorize execution."""
     if not token or not isinstance(token, str):
         return 0
     parts = token.split(".")
@@ -96,20 +81,9 @@ def token_expiry(token: str) -> int:
 
 
 def token_jti(token: str) -> str:
-    """解出令牌**自己携带**的 `jti`（一次性编号）；解不出 → 空串。
+    """Read the operation ID for display and persistence bookkeeping.
 
-    存在的理由与 `token_expiry` 同源、用途完全不同：**令牌要能被"用掉"**。
-    在此之前令牌是无状态的、可重放的——同一张"确定"卡片点两次、或者把同一条
-    隐藏请求重发一遍，两次都会验签通过、两次都真执行（写操作不是幂等的）。
-    20260924 起签发时给每张令牌一个随机 `jti`，落库侧认领这个编号；同一个 jti
-    只兑现一次，第二次如实拒绝。
-
-    **这里同样不验签**，调用方必须清楚它的信任等级：本函数的返回值只用来
-    （a）随 `pending_action` 落库做标记、（b）给前端展示；**认领键必须取自
-    `verify()` 解出的 payload**——拿客户端单独传上来的字段当认领键，等于让
-    调用方自己指定"我要兑现哪张令牌"。与 `token_expiry` 一样，格式坏就给空串，
-    绝不抛异常打断签发那一轮。
-    """
+    This does not verify a signature. Execution uses the ID returned by verify()."""
     if not token or not isinstance(token, str):
         return ""
     parts = token.split(".")
@@ -123,37 +97,11 @@ def token_jti(token: str) -> str:
     return jti if isinstance(jti, str) else ""
 
 
-def has_refs(specs) -> bool:
-    """specs 里有没有残留的 `$ref`（见模块头注：有引用就不签发）。
-
-    实现只有一份（`agent.arg_refs.has_refs`，递归进 list/dict）——这里保留同名薄壳，
-    是因为调用方读的是本模块的语义（"令牌能不能签"），而不是引用模块的语法。
-    """
-    from agent.arg_refs import has_refs as _has_refs  # 局部导入：避免模块级循环
-
-    return _has_refs(specs)
-
-
 def narrow(payload: dict, pick: str) -> tuple[dict | None, str]:
-    """把已验签的 `specs` **收窄成其中一个单元**；返回 `(payload, "")` 或 `(None, 原因)`。
+    """Select one signed operation unit without expanding its granted scope.
 
-    用途（20260929 批 F）：确认卡上列了 N 件时，主人可以点「全部办」，也可以只办其中
-    一件——前端把那一件的**下标**带回来（形态 `pick:<i>`，0 基），这里据此把签名过的
-    那一批裁成一条。**只做收窄，绝不做转发**：
-
-      · 收窄是安全方向——放行范围只可能变小；`pick` 里出现任何解析不出的东西
-        （非 `pick:<数字>`、负数、越界、分组读不懂、payload 里没有 specs）都是
-        `(None, 原因)`，调用方据此**零执行**（fail-closed）。**绝不"读不懂就当全部办"**：
-        那会把一次针对单件的选择放大成整批执行，是这一层唯一能出的重伤。
-      · 下标指的是**单元**不是 spec（20261010）：`units` 由签发侧算好（`adminops.
-        linked_units`）随载荷签进令牌，因为"哪几条必须一起办"是**签发那一刻的结构
-        事实**——`article_tags` 的「先建再挂」里，`set_article_tags` 单独执行注定失败
-        （工具对站内没有的名字按名字精确匹配、拒绝、不自动新建）。分组读不懂一律
-        fail-closed：宁可零执行，也不猜一个更大的放行范围。
-      · 老令牌没有 `units` ⇒ 当作**逐条一单元**（与批 F 的行为逐字相同，老卡面不受影响）。
-      · 这个函数**不改 payload 的其他字段**（uid/conv/exp/jti/workflow/units 原样）：它只是
-        按主人的选择裁一下清单，不是重新签发。令牌仍然一次性（jti CAS 在 Rust 侧）。
-    """
+    Empty selection keeps the original grant. Malformed grouping, indexes or selections
+    fail closed. Linked specs remain together; tokens without units use one spec per unit."""
     raw = (pick or "").strip()
     if not raw:
         return payload, ""  # 空 = 没有选择 = 全部办（与旧前端逐字兼容）
@@ -180,15 +128,7 @@ def narrow(payload: dict, pick: str) -> tuple[dict | None, str]:
 
 
 def units_of(payload: dict) -> "list | None":
-    """载荷里的单元分组（**读侧唯一实现**：收窄与评测判据共用同一份）。
-
-    返回 `[[0, 1], [2]]` 这样的下标分组；`None` = 分组读不懂（那是零执行的信号，不是
-    "一件一件办"）。缺失（老令牌 / 单件卡）⇒ 逐条一单元——与批 F 的行为逐字相同。
-
-    为什么要有一个公开入口：`eval/run_golden.check_gold` 的 `require_confirm_payload.units`
-    判"卡面按几格编号"，它必须与执行侧**读到同一个数**——判据自己再写一遍"缺席就算逐条"
-    这条规则，就是同一份分组规则的第二实现（`build_request` 的字段表漂移过一次，见其注）。
-    """
+    """Return validated signed operation groups, or None for malformed grouping."""
     specs = payload.get("specs") if isinstance(payload, dict) else None
     if not isinstance(specs, list) or not specs:
         return None
@@ -196,12 +136,7 @@ def units_of(payload: dict) -> "list | None":
 
 
 def _units_of(payload: dict, n: int) -> "list | None":
-    """载荷里的单元下标分组；**读不懂返回 None**（调用方零执行）。
-
-    缺失（老令牌 / 单件）⇒ 逐条一单元，与批 F 的行为逐字相同。给了就必须是一份
-    **恰好覆盖 0..n-1 一次**的下标分组——重复或漏项都算读不懂：那种令牌裁出来的
-    清单没人预期得到，而"没人预期的清单"正是这一层唯一能出的重伤。
-    """
+    """Validate the complete, non-overlapping operation grouping; malformed input returns None."""
     units = payload.get("units")
     if units is None:
         return [[i] for i in range(n)]
@@ -250,7 +185,7 @@ def sign(
         "uid": int(uid),
         "conv": conv_id if isinstance(conv_id, int) else None,
         "exp": int(time.time()) + TTL_SECONDS,
-        # 一次性编号（20260924）：32 位十六进制，容得下落库侧的 varchar(64)。
+        # 32 位操作标识，适配宿主 varchar(64) 字段。
         # 每次签发都是新的随机值——**不派生自 uid/会话/时间**，否则同一秒内两次
         # 签发会撞成同一个 jti，第二次会被自己的第一次认领挡掉。
         "jti": secrets.token_hex(16),
@@ -313,22 +248,10 @@ def verify(token: str, uid: int, conv_id) -> dict | None:
 
 
 def inspect(token: str) -> dict | None:
-    """**只解载荷，不验签**：读一眼这张令牌里装了哪个技能、哪些参数；解不出 → `None`。
+    """Decode an untrusted payload for evaluation and diagnostics, without verification.
 
-    ⚠️ **任何授权判据不得调用本函数。** 「解得出载荷」与「这张令牌可信」是两件毫不
-    相干的事：载荷就是 `base64(JSON)`，谁都能造一张出来；本函数刻意不比对签名、不看过期、
-    不看 uid/会话绑定。授予执行的唯一入口是 `verify()`——它验签失败一律 `None`，
-    而本函数对同一张伪造令牌会**高高兴兴地**把 payload 还给你。
-
-    存在的理由只有两个，都发生在**令牌刚由本进程签发之后、还没离开可信边界**时：
-      · 评测：`eval/run_golden.py` 用它读第一轮控制帧里的令牌，断言"卡片上问的技能与
-        参数可溯源"（`require_confirm_payload`）。评测若走 `verify()`，就得在跑法里
-        复刻一份 uid/会话/时钟上下文，那是把授权判据搬到测试里——方向反了。
-      · 排障：手工看一眼刚签出来的令牌里写了什么（令牌本身绝不进日志，见模块头注）。
-
-    这条边界有**单测机械守着**（`tests/test_confirm.py` 第 ⑨ 节源码扫描）：`agent/`、
-    `tools/`、`server.py` 三处生产代码里出现任何一次调用即判红。
-    """
+    Never use this helper for authorization. Only verify() checks the signature, expiry,
+    identity and conversation binding. Do not log tokens or decoded production payloads."""
     if not token or not isinstance(token, str):
         return None
     parts = token.split(".")

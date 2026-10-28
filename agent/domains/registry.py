@@ -31,3 +31,9 @@ def confirmed_domain(grant):
         if domain.handles(grant):
             return domain
     return None
+
+
+def operation_names():
+    """Permission identities for server-executed operations, not model-callable tools."""
+    return frozenset(name for domain in _DOMAINS.values()
+                     for name in domain.PERMISSION_OPERATIONS)

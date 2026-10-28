@@ -1,42 +1,13 @@
-"""向量图谱重建任务（20261003 用户第 2 条）。
+"""Background graph rebuilds with process-safe admission and disk status.
 
-## 为什么要有这个模块
+The child process writes query artifacts under data/word_graph and public
+artifacts under its web directory; no frontend rebuild is required. Exclusive
+file locks coordinate application workers. Atomic state files and per-run logs
+support polling across workers.
 
-建图脚本 `scripts/build_word_graph.py` 此前**只在开发机上手跑**：产物写进
-父仓 `frontend/public/graph/`，要等一次 `vite build` 才进 dist。于是"别人迁移过去用不了
-这张图"有两层原因——产物里的站点归属是**构建期**烧死的（迁移后重建成功也画不出来），
-而且就算重建成功，服务端写的文件也到不了浏览器。
-
-本模块把"重建"做成**服务端后台任务**：后台点一下 → 这里起一个子进程 → 页面轮询进度。
-产物写进 agent 自己的 `data/word_graph/web/`（脚本的 `--out-web`），由 Rust 的
-`/api/public/graph/*` 直接供——不碰父仓、不产生 git 变更、不等 CI。
-
-## 四样落盘的东西（uvicorn 起 4 个 worker，各持各的内存）
-
-============================  ==================================================
-`logs/graph_build/lock`       任务锁（`O_CREAT|O_EXCL` + pid 存活探测回收僵尸锁）
-`logs/graph_build/state.json` 任务状态（原子 `os.replace`）
-`logs/graph_build/<ts>.log`   该次任务的完整日志（不受环形缓冲的 400 行上限影响）
-`data/word_graph/web/`        **上一次成功**的展示产物（失败的运行不会覆盖它）
-============================  ==================================================
-
-**为什么锁是文件而不是 `threading.Lock`**：4 个 worker 是 4 个**进程**，内存里的锁
-互相看不见；轮询请求也不保证落回同一个 worker（nginx 不做会话粘性）。所以状态只能
-从盘上读，而且读的时候要**当场核一遍 pid 是否还活着**——worker 被重启（部署/OOM）会
-留下一个再也没人写终态的 `state.json`，只看文件就会永远显示"运行中"。
-
-**僵尸锁怎么回收**：锁里记的是 `owner_pid`（起任务的 worker）与 `child_pid`（建图
-进程）。属主没了而 `child_pid` 还在时，**先把子进程组杀掉再放行新任务**——子进程用
-`start_new_session=True` 起的，属主死了它不会死，但它的 stdout 管道读端已随属主消失
-（日志再也进不了 state、进程通常卡在 EPIPE 上），继续挂着只会白占内存，而这台机器
-只有 3.7GB。这条取舍写在这里：**宁可杀掉一个快跑完的图，也不留一个没人看着的建图进程**。
-（图本身可重算，代价是几分钟与一次 embedding 费用。）
-
-## 诚实报告
-
-失败要给 `exit_code` 与日志尾部；`--dry-run` 要报"没调 embedding"，不能把 0/0 说成
-"没有新增向量"（那是**没调**和**调了但全命中缓存**两件事，见下面 `_embed_stats`）。
-"""
+An abandoned owner requires terminating its child process group before admitting
+another build. Failed builds preserve the last successful artifacts. Reports
+distinguish dry runs, embedding-cache hits, failures and process exit codes."""
 from __future__ import annotations
 
 import json
@@ -73,7 +44,7 @@ TAIL_LINES = 400
 #   真实重建（400 节点 / 12 篇文章 / UMAP），**峰值 RSS 552MB**（含 uv 那一层），
 #   30 秒跑完，换页 0 次 ⇒ 1000MB 的笼子都没碰到。640 = 552 × ~1.16 的余量。
 #
-# **余量为什么故意留得小**（20261004 二次修正：先写成 700，当场就撞上了）：这台机器
+# **余量为什么故意留得小**：这台机器
 # 的 MemAvailable 随开发工具起伏，实测 699–1070MB 之间晃。余量一大，门就常年关着
 # ——那正是被修掉的那个毛病（主人连着点两次都只拿到"内存不够"）。640 的判据是
 # "实测跑得完"，不是"看着放心"；真跑起来超了，OOM 会先找上这个 552MB 的进程，
@@ -107,7 +78,7 @@ def mem_min_mb() -> int:
 # `uv` 只装在用户目录时（`~/.local/bin/uv`）**systemd 服务里 `shutil.which` 找不到它**：
 # 单元文件没有 `Environment=PATH=`，system 服务的默认 PATH 只有
 # /usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin —— 不含 ~/.local/bin。
-# 症状是"uv 明明装着，页面却报找不到 uv 命令"（20261003 实踩）。所以除了 PATH，
+# 症状是"uv 明明装着，页面却报找不到 uv 命令"。所以除了 PATH，
 # 再按这张表找一遍；找不到时把**找过的地方**一起报给用户，别只说"没有"。
 UV_FALLBACKS = ("~/.local/bin/uv", "~/.cargo/bin/uv", "/usr/local/bin/uv", "/snap/bin/uv")
 _UV_PATH: str | None = None
@@ -382,7 +353,7 @@ def resolve_params(raw: dict | None) -> dict:
         # 而不是把它擦成空串：`server.py::GraphRebuildRequest` 拿 `""` 当缺省值，
         # 于是页面留空 ⇒ 这里原样收下 `""` ⇒ `--api-base ""` 进 argv ⇒
         # 脚本拼出 `/notes?pageSize=1000`（没有 scheme）当场 `ValueError: unknown url
-        # type`（20261004 用户点重建时实际踩到，run 20261004T001407）。
+        # type`。
         # 判据：空串对这两项没有第三种语义，折叠掉不会丢信息。
         if not v and key not in _KEEP_EMPTY_STR:
             continue

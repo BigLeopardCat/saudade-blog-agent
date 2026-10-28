@@ -242,9 +242,6 @@ def build_request(case: dict, rnd: dict | None = None) -> ChatRequest:
         # 签发那一轮与兑现那一轮的会话必须一致。用例不写 = None（两轮都是 None，
         # 同样自洽）；写了就照抄进两轮——这正是生产上"同一张卡片"的坐标。
         conversation_id=ctx.get("conversation_id"),
-        # 跨轮任务状态（20260927 批 D）：Rust 读侧交回来的 `agent_tasks` 原文（JSON
-        # 数组串）。**用例不写 = 空串**（既有用例都不写 ⇒ 零变化，见 task_state_probe 头注）。
-        agent_tasks=ctx.get("agent_tasks", ""),
         # 上一轮真执行过的工具名（20261020）：`_exec_memory_has_search` 的结构化判据源。
         # **用例不写 = `[]`**——语义是"确定地什么都没执行"（同生产 ChatRequest 那条注）。
         recent_tools=ctx.get("recent_tools", []),
@@ -1589,8 +1586,8 @@ def check_premises(cases: list) -> tuple:
 # 通过的留言不能驳回 ⇒ 不许弹卡"，而新设计把审核族整体改成恒弹卡）。
 #
 # 判据（与 `premise_absent` 同一个形状：**人写前提、机器算剩下的那一半**）：
-#   · `question`           —— `authz.is_question_like(本轮输入)`：提问轮结构上不弹卡
-#                              （弹窗分叉的第一道闸，见 `authz.is_question_like` 头注）
+#   · `question`           —— 旧语料的提问前提，兼容判据位于 eval.legacy_no_popup；
+#                              不参与当前运行时的意图识别、权限或确认。
 #   · `target_absent`      —— 该轮判据里有 `require_absence`（共享族），且那个**字面目标
 #                              出自主人原话**——"查无此物 ⇒ 不弹卡"的全部依据就是它
 #   · `role_denied`        —— 点名的那几件工具，这个角色**一件都到不了**
@@ -1641,7 +1638,7 @@ def check_no_popup_premises(cases: list) -> tuple:
         why = str(pn.get("why") or "").strip()
         hit: list = []
         if kind == "question":
-            from agent.authz import is_question_like
+            from eval.legacy_no_popup import is_question_like
             if not is_question_like(str(c.get("user_input") or "")):
                 hit = ["is_question_like(本轮输入)=False"]
         elif kind == "target_absent":
@@ -2082,7 +2079,7 @@ def check_gold(gold: dict, result: dict, *, docs=None, user_input: str = "",
         if t in result["exec_tools"]:
             fails.append(f"不应有工具 {t} 的执行回执（exec：{result['exec_tools']}）")
 
-    # 20260919：参数引用（agent/arg_refs.py）不得以未解析形态进入成功执行。这条在
+    # 20260919：未解析参数占位符不得以未解析形态进入成功执行。这条在
     # 拓扑上不可能违反（resolve_args 失败即不执行），但断言的是**不变量**：
     # 回执 args 只该是真实调用值——一旦有人把失败降级成"当字面量调用"，这条先红。
     for r in result["exec_rows"]:

@@ -11,8 +11,7 @@ from config import settings as _settings
 from tools.base import SITE_BASE
 from tools.result import fact, ok, tgt
 
-# `__all__` = 本模块**所有不以 `_` 开头**的模块级名字（社区惯例，不留例外；
-# `tests/test_module_exports.py` 按这条规则机械判着，漂了就红）。
+# Public exports; helper names stay private to their modules.
 __all__ = ["get_site_map", "get_chat_history", "get_current_time",
            "get_weather", "IOT_ENABLED", "IOT_NAV_PATH", "nav_pure_path", "nav_path_valid",
            "navigate_to", "toggle_effect", "toggle_dark_mode", "nav_label"]
@@ -24,7 +23,7 @@ __all__ = ["get_site_map", "get_chat_history", "get_current_time",
 @tool
 def get_site_map() -> str:
     """返回博客功能结构图，用于引导用户了解博客有哪些功能及其位置。"""
-    # IoT 那行随开关走：没装平台却把它列进"功能结构图"，就是让 narrator 照着一份
+    # IoT 那行随开关走：没装平台却把它列进"功能结构图"，就是让 回复模型 照着一份
     # 系统自己给的假清单介绍一个 404（同 NAV_MAP 那十个别名，见文件顶部 IOT_ENABLED）。
     iot_line = (
         f"\n- 物联网控制台 ({IOT_NAV_PATH}) — 管理访客自己的 IoT 设备"
@@ -147,24 +146,8 @@ def nav_path_valid(p: str) -> bool:
     return parts[1] == "category"
 
 
-# ---------------------------------------------------------------------------
-# 站内"停在**某一条**内容上"的全部形态（20261008，**表**而不是句子）
-# ---------------------------------------------------------------------------
-# **为什么是一张表**：这件事在站内散着至少四份知识，而每一份只知道自己那个子集——
-#   · 前端搜索结果跳转 `frontend/src/frontHome/Head/aggregate.ts::hitTarget`：四类全有
-#     （note 是裸页面 `/article/<id>`；talk `?tk=` / board `?lid=` / comment `?cid=`）；
-#   · Rust 的站内通知（`src/routes/talks.rs:515`、`src/routes/comments.rs:286`）：只会
-#     带 board / comment 两种；
-#   · agent 的站内事实句（`agent/prompt_context.py` 那条 item-link 事实）：此前手写两种、还写着
-#     「站内**只有两个**形态」——**一句可抄的假话**（同族纪律：契约里不许出现可抄的错句）；
-#   · 本文件的白名单（`nav_path_valid`）：原来看整串，三种形态**一个都过不去**。
-# 生产实证（trace `20261008T024742`「带我去看看我已经通过的留言」）：planner 拿不到定位
-# 形态 ⇒ 反复调 `list_guestbook` ⇒ 去重收尾 ⇒ narrator 编「马上带你过去啦」⇒ 门判红。
-#
-# 所以事实句**从这张表渲染**（不再手写条数与措辞）：加一类形态 = 加一行，条数与措辞
-# 自动跟上。`tests/test_item_position_guide.py` 逐行断言三件事：① 形态串**真的**过
-# 白名单（那是"教了模型一个跳不动的形态"的锁）、② 形态串逐字进了事实句、③ 事实句里
-# 不再出现手写的条数。
+# Supported stable deep links for individual content records.
+# Navigation validation and visible guidance share these address forms.
 _ITEM_POSITION_FORMS: tuple[tuple[str, str, str], ...] = (
     # (形态名, 完整形态（教给模型的字面）, 取值从哪里来)
     ("评论", "/article/<文章 id>?cid=<评论 id>",

@@ -131,10 +131,10 @@ def _handled(src: str) -> set[str]:
 def test_tool_kind_contract():
     _ENVELOPES = {"ok", "empty", "unavailable", "not_found", "ToolResult", "fact", "tgt", "_shape"}
     _FOUND: dict[str, list[int]] = {}
-    _N_TOOLS = 0
+    _SCANNED_TOOLS = set()
     for _p in sorted((ROOT / "tools").glob("*.py")):
         _src = _p.read_text(encoding="utf-8")
-        _N_TOOLS += sum(1 for _ in _tool_functions(ast.parse(_src)))
+        _SCANNED_TOOLS.update(fn.name for fn in _tool_functions(ast.parse(_src)))
         _FOUND |= offenders(_src, f"tools/{_p.name}")
     LEDGER: dict[str, dict[str, str]] = {
         # ★ 批 ⑤-1（20261019）收掉的两条**病**，留在注释里当史：`device_oled_display` 的
@@ -158,7 +158,13 @@ def test_tool_kind_contract():
                                         "why": "站内结构常量，没有失败路径"},
     }
     print("① 非真空：真的扫到了工具（扫不到 ⇒ 下面每条都是空判据）")
-    check("从 `tools/*.py` 取到的 `@tool` 函数数 ≥ 60", _N_TOOLS >= 60, f"{_N_TOOLS} 件")
+    from tools.base import get_all_tools
+
+    registered = {tool.name for tool in get_all_tools()}
+    check("扫描恰好覆盖全部在役工具，不依赖退休前的固定数量",
+          bool(registered) and _SCANNED_TOOLS == registered,
+          f"未扫描 {sorted(registered - _SCANNED_TOOLS)}；"
+          f"未注册 {sorted(_SCANNED_TOOLS - registered)}")
     check("取到了裸文本返回（今天非空；哪天清零了这条也要跟着改）", bool(_FOUND),
           f"{len(_FOUND)} 件")
     print("\n② 台账双向：裸文本返回的工具集 == 台账（漏登记红、过期也红）")

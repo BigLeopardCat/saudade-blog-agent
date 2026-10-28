@@ -16,6 +16,9 @@ _WORKFLOWS = {
 }
 
 
+PERMISSION_OPERATIONS = frozenset(_WORKFLOWS.values())
+
+
 def handles(grant):
     return (
         isinstance(grant, dict)

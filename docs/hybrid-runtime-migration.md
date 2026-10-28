@@ -1,5 +1,7 @@
 # 原生运行时迁移记录
 
+> 本文保存渐进迁移各批次的实现与验收记录。当前框架和领域边界见 [架构](agent-architecture.md)，不以旧批次状态表作为在役说明。
+
 旧规划引擎已退役，当前默认构建入口是 `NativeRuntime`，模型直接选择标准 LangChain 工具；代码负责权限、确认、业务版本、幂等、取消和回执。
 
 后续框架内核收敛遵循 [ADR-0024](adr/adr-0024-framework-kernel-and-domain-extensions.md)；

@@ -1,38 +1,13 @@
-"""embedding 空间的解析规则 —— 图谱那一路的**唯一事实源**（20261007）。
+"""Resolve the embedding space shared by graph building and querying.
 
-图谱两端各自解析一次"用哪个模型、哪个端点、多少维"：
+Only standard-library dependencies are allowed because graph builds run in an
+isolated environment. Explicit EMBEDDING_* configuration takes precedence; the
+fallback uses QWEN_* independently of the chat provider. FALLBACK_MODEL selects
+new vectors; FLAT_CACHE_MODEL identifies unsigned legacy cache vectors. Never
+merge vectors with different model or endpoint identities.
 
-* 建图：``scripts/build_word_graph.py``（跑在隔离环境里，见下）
-* 查询：``rag/wordgraph.py::_embed_one``（跑在生产 venv 里）
-
-只要两端解出**同一个空间**就没事；解出两个，症状是"搜 X 结果飞到一个视觉上离 X
-很远的角落"——不报错，只是感觉不对。`rag/wordgraph.py` 的头注已经为"查询变换与
-连边不一致"写过同一句警告，这里管的是它的**配置版**：两处各读各的环境变量。
-
-所以这模块**只准用标准库**：建图脚本跑在
-``uv run --no-project --with-requirements scripts/requirements-graph.txt`` 的临时环境里
-（只有 numpy/jieba/umap 那几样，**没有 pydantic**），import 不进 ``config.settings``；
-而查询侧有 pydantic。共同可用的只有标准库——于是规则住在这里，两端都来取。
-
-## 解析规则（与 ``Settings.embedding_configured`` 同一口径，有测试锁住不许漂）
-
-``EMBEDDING_MODEL`` 与 ``EMBEDDING_API_KEY`` 都非空（且 key 不是占位串）⇒ ``source="embedding"``；
-否则回落 ``source="qwen"``（``FALLBACK_MODEL`` / 1024 维 / 批 10 + ``QWEN_*``）。
-**不回落 ``active_llm_*``**：跟着对话 provider 走时，切到一个没有 embeddings 端点的
-provider 就会哑掉，而且哑得没有声音（20260927 的教训）。
-
-⚠️ 这里**有两个模型名常量，不是一个**（20261016 拆开）：``FALLBACK_MODEL`` 是"回落档
-现在该用哪个"（会随平台换代），``FLAT_CACHE_MODEL`` 是"盘上那些没有空间签名的老缓存
-当年是谁建的"（历史事实，永不改）。**别把两者合并**——合并的那一刻
-``legacy_cache_ok()`` 就会把老模型的向量认成新模型建的，两代向量混进同一张图，
-而图不报错、只是默默变得不对（见该函数头注）。
-
-## 两处超时不是一个数（别合并）
-
-``BUILD_TIMEOUT``（这里，30s）是**离线建图**用的：一次几百个词、失败还要退避重试，
-放宽没有代价。查询是热路径，用 ``rag/wordgraph.py`` 自己的 ``EMBED_TIMEOUT = 5.0``
-——那个值还被 Rust 侧压着（``src/routes/graph.rs`` 的 ``AGENT_TIMEOUT = 6s`` 必须比它长）。
-"""
+Offline BUILD_TIMEOUT is separate from the shorter query timeout, which must
+fit within the host request deadline."""
 from __future__ import annotations
 
 import json
@@ -41,23 +16,10 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Iterable, Mapping
 
-# 回落档（`source="qwen"`）用哪个模型。**这是"现在该用哪个"，会随平台换代**——
-# 20261016 由 `text-embedding-v4` 换成它，与 `config/settings.py::embedding_model`
-# 的缺省值对齐（同一个问题在本仓只该有一个答案，否则"配了 EMBEDDING_*"与"只配
-# QWEN_*"两个部署会各自解出不同的空间，而谁都没写错过一个字）。
-#
-# 换名的依据是 20261016 实测的两个端点模型表（`GET {base}/models`，两个 workspace
-# 各 176 个模型）：`text-embedding-v4` **不是坏了、是分家**——`QWEN_BASE_URL` 那个
-# 端点照旧 200，`EMBEDDING_BASE_URL` 那个已经 403 `AccessDenied.Unpurchased`；
-# 两个端点都提供 `qwen3.7-text-embedding`（dim 1024、单请求 10 条 200）。
-# ⇒ 旧值并没有"死"，但它是**上一代**，而这个账号已经在往下掉它了。
-#
-# 代价说清楚：回落档建的老产物/老缓存要**重建一次**。这是**响亮**的（`space_mismatch`
-# 一条 WARNING + 前端退回本地关键词匹配），不是静默的——所以可以换。
+# Current fallback model for new graph vectors; independent of the chat provider.
 FALLBACK_MODEL = "qwen3.7-text-embedding"
-# 旧格式（无空间签名）缓存文件**唯一的出处**：`text-embedding-v4` + `QWEN_BASE_URL`。
-# ⚠️ **历史事实，不是缺省值**：它记的是"盘上那些老文件是谁建的"，所以**永远不许**
-# 跟着 `FALLBACK_MODEL` 走（20261007 引入空间签名之前的产物全都是它建的）。
+# Unsigned flat caches identify a fixed historical model. Never change this identity
+# when changing the model used to generate new vectors.
 FLAT_CACHE_MODEL = "text-embedding-v4"
 LEGACY_DIM = 1024
 LEGACY_BATCH = 10              # 百炼 text-embedding 单请求 input 上限 10 条
@@ -171,17 +133,10 @@ def space_of(settings) -> Space:
 
 
 def missing_config(space: Space) -> str | None:
-    """这个空间**能不能用**：能用 ⇒ None；不能用 ⇒ 一句"缺哪一格"的说明。
+    """Return a shared diagnostic for unusable embedding configuration.
 
-    两端共用同一句话（建图侧 `sys.exit`、查询侧 WARNING）：两边各自手写一句，
-    迟早会出现"同一件事在日志与终端里说成两件"（20261007 之前查询侧报的就是
-    「EMBEDDING_API_KEY+EMBEDDING_MODEL 与 QWEN_API_KEY/QWEN_BASE_URL 两处都缺」，
-    而这时候可能只是回落那一格少了端点）。
-
-    `EMBEDDING_*` 解出来的空间永远有 key 与端点（端点留空会落到 `OPENAI_DEFAULT_BASE`）
-    ⇒ 实际能缺的只有回落那一格。**说清缺的是哪一格**：只配了 key、或只配了端点，
-    处置是不一样的。
-    """
+    Explicit embedding configuration supplies a key and endpoint. Fallback
+    configuration may lack either; identify the missing input without exposing it."""
     if space.api_key and space.base_url:
         return None
     if space.source == "qwen":
@@ -204,21 +159,10 @@ def signature(space: Space) -> dict:
 
 
 def legacy_cache_ok(space: Space, env: Mapping[str, str]) -> bool:
-    """旧格式（没有空间签名）的缓存文件能不能认作 ``space`` 的。
+    """Accept an unsigned legacy cache only when model and endpoint both match.
 
-    只此一条通路：旧文件唯一的可能出处就是那条老路（``FLAT_CACHE_MODEL`` +
-    ``QWEN_BASE_URL``），所以要么这次解出来的**模型名与端点都对得上**，要么整份作废重嵌。
-    差一个字就不认——混两代向量是建图里最不该出现的静默失效。
-
-    **模型名那一格两个来源都要判**（20261016）。从前是 ``source == "qwen"`` 直接放行，
-    理由是"回落档解出来的就是那条老路"——那句话在回落模型名换成 ``FALLBACK_MODEL``
-    之后**不再成立**：老缓存是 ``FLAT_CACHE_MODEL`` 建的，而回落档现在是新模型，
-    照旧按 source 放行就会把老向量认成新模型建的、混进同一张图。
-    端点那一格对回落档是自动成立的（``resolve()`` 就是从 ``QWEN_BASE_URL`` 取的），
-    所以合并成一条判据不丢任何信息。今天还认的只剩一格：**显式配了
-    ``EMBEDDING_MODEL=FLAT_CACHE_MODEL`` + ``EMBEDDING_BASE_URL=QWEN_BASE_URL``**
-    ——即"从回落档迁到显式配置、但一个字没改空间"的那种部署。
-    """
+    The immutable flat-cache model identity differs from the configurable current
+    fallback. A mismatch requires re-embedding, never combining incompatible vectors."""
     if space.model != FLAT_CACHE_MODEL or space.dim not in (0, LEGACY_DIM):
         return False
     base = _norm(space.base_url)

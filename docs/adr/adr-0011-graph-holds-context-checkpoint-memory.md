@@ -1,5 +1,4 @@
 # ADR-0011：上下文由图自己持有（原生 checkpoint 取代手写注入）——方向认可，采纳待写幂等账
-> ⚠️ 20261018 又一批模块已改名（**记录型文档一律保留当时的名字，不回溯改写**）：`agent/absence.py` → `agent/absence_claims.py`、`agent/frames.py` → `agent/frame_contract.py`、`agent/probe.py` → `agent/runtime_probe.py`、`agent/decisions.py` → `agent/deterministic_plan.py`、`agent/entities.py` → `agent/entity_digest.py`、`agent/refs.py` → `agent/arg_refs.py`、`agent/workflow_defs/nav.py` → `agent/workflow_defs/nav_map.py`、`agent/workflow_defs/navigation.py` → `agent/workflow_defs/nav_skills.py`、`agent/workflow_defs/reports.py` → `agent/workflow_defs/report_skills.py`、`agent/context.py` → `agent/prompt_context.py`。**现状地图（每个模块一行）**见 `docs/agent-architecture.md` §2。
 
 - **状态**：**已采纳**（20261018，代码面）——"三处一起动"已落地，见文末《20261018 追记：
   采纳落地》。⚠️ **代码落地 ≠ 生产在跑**：DSN 空则 `build_checkpointer()` 返回 `None`、

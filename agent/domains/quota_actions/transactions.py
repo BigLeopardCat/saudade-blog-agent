@@ -13,6 +13,9 @@ WORKFLOWS = {"quota_approve": "approve_quota_request", "quota_reject": "reject_q
              "quota_reset": "reset_user_quota"}
 
 
+PERMISSION_OPERATIONS = frozenset(WORKFLOWS.values())
+
+
 def handles(grant):
     return (isinstance(grant, dict) and grant.get("executor") == "quota_actions"
             and grant.get("workflow") in WORKFLOWS)

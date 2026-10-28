@@ -7,3 +7,5 @@ _domain = ReadState("messages", "message_read", "read_messages",
 handles = _domain.handles
 validate = _domain.validate
 execute = _domain.execute
+
+PERMISSION_OPERATIONS = frozenset({_domain.tool})

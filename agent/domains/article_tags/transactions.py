@@ -12,6 +12,9 @@ from agent.runtime.turns import check_cancelled
 from tools import base
 from tools.result import fact, ok, tgt
 
+OPERATION = "set_article_tags"
+PERMISSION_OPERATIONS = frozenset({OPERATION})
+
 
 class Arguments(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -34,13 +37,13 @@ def validate(grant, config):
     if not handles(grant) or not isinstance(specs, list) or len(specs) != 1:
         raise ValueError("确认凭据不是单项文章标签操作")
     spec = specs[0]
-    if not isinstance(spec, dict) or spec.get("tool") != "set_article_tags":
+    if not isinstance(spec, dict) or spec.get("tool") != OPERATION:
         raise ValueError("文章标签工具不匹配")
     args = Arguments.model_validate(spec.get("args")).model_dump()
     targets.intent(args["intent"])
-    if not authz.check(principal, "set_article_tags").allowed:
+    if not authz.check(principal, OPERATION).allowed:
         raise ValueError("当前身份无权修改文章标签")
-    return "set_article_tags", args
+    return OPERATION, args
 
 
 class Operation:
