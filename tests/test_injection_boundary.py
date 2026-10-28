@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Offline injection boundaries for native messages, fact markers and reference parsing."""
+"""Injection boundaries for messages, fact markers and concrete confirmation arguments."""
 
 from __future__ import annotations
 
@@ -128,46 +128,18 @@ def test_fact_mark_guard_is_a_literal_prefix_and_nothing_else():
     _report(bad)
 
 
-def test_arg_ref_is_anchored_so_prose_stays_prose():
-    """通道 ④：参数引用 `$tool[N].field` 的正则**锚在整串上**。
+def test_confirmation_rejects_placeholders_but_preserves_literal_prose():
+    from agent.confirm import has_refs
 
-    不锚的话，一段散文里只要出现 `$search_notes[0].title` 就会被当成引用去求值 ——
-    而那正是注入想要的（让模型把**用户写的**一句话当成"上一条工具结果"读回来）。
-    锚定之后，只有**整串就是**一个引用才算引用。
-    """
-    from agent import arg_refs
-
-    bad: list[str] = []
-    print("④ 散文里的引用形状仍是散文")
     ref = "$search_notes[0].title"
-    embedded = [p for p in PAYLOADS if ref in p and p != ref]
-    for p in embedded:
-        if arg_refs.parse_ref(p) is not None:
-            bad.append(f"夹在散文里的引用被当成引用了：{p!r}")
-    ok = len(embedded) >= 1
-    print(f"  {'✅' if ok else '❌'} 反控：payload 里确实有 {len(embedded)} 条夹着引用形状"
-          f"（否则上面那条是空跑）")
-    if not ok:
-        bad.append("没有夹着引用形状的 payload，这条判据是空跑的")
-    print(f"  {'✅' if not bad else '❌'} 夹在散文里的 {len(embedded)} 条都不被解析  "
-          f"[{len(bad)} 条被误认]")
-    # 正向：整串就是引用 ⇒ 必须解析得出（否则上面那条只是"什么都不认"）
-    parsed = arg_refs.parse_ref(ref)
-    ok = parsed == ("search_notes", 0, "title")
-    print(f"  {'✅' if ok else '❌'} 正向：整串就是引用时解析得出  [{parsed}]")
-    if not ok:
-        bad.append("整串引用解析不出来 —— 上面那条是「什么都不认」而不是锚定")
-    # ⚠️ **一条 payload 就是裸引用**（`$search_notes[0].title`）——它当然解析得出，那是
-    # 正向控制。这里要说的不是"用户打的引用形状不被认"（它会被认），而是**认了也没用**：
-    # `parse_ref` 只在**计划参数**上被调用，用户文本根本不经过它（同 fact 行那条角色守卫）。
-    # 所以这条判据判的是"锚定"这一件事，别把它读成"用户文本里的引用会被求值"。
-    print("  ✅ 裸引用那条是正向控制，不是漏网（`parse_ref` 只作用于计划参数）")
-    _report(bad)
+    assert has_refs([{"args": {"nested": [{"target": ref}]}}])
+    for payload in PAYLOADS:
+        assert has_refs([{"args": {"text": payload}}]) == (payload == ref)
 
 
 if __name__ == "__main__":
     for _fn in (test_client_fields_remain_data_in_the_actual_native_prompt,
                 test_fact_mark_guard_is_a_literal_prefix_and_nothing_else,
-                test_arg_ref_is_anchored_so_prose_stays_prose):
+                test_confirmation_rejects_placeholders_but_preserves_literal_prose):
         _fn()
     print("\n全部通过")

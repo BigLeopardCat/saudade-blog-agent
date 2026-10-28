@@ -298,7 +298,7 @@ class RagIndex:
             r["sections"] = r["sections"][:2]
         return ranked
 
-    # ── 编排（20261005：词法 + 向量两路）──────────────────────────
+    # ── 编排──────────────────────────
 
     def search(self, query: str, top_k: int = 8,
                apply_cliff: bool = True) -> list[dict] | None:
@@ -420,15 +420,8 @@ def search(query: str, top_k: int = 8, apply_cliff: bool = True) -> list[dict] |
     return get_index().search(query, top_k=top_k, apply_cliff=apply_cliff)
 
 
-# ── 标题 → id 确定性解析（20260920 方案①）────────────────────────────
-# 动机：用户在会话里用《标题》点名一篇文档、而历史里从没出现过它的 id 时，planner
-# 拿到的锚点只有"（未见过 id）"，只能去 list_notes 里猜下标——线上实测它把分页
-# 列表的第一条（最新那篇）当成"用户点名的这篇"，读错文章、还谎称站内没有该文
-# （真文存在）。语料索引里本来就有全部可见文章的标题与 id，直接解析即可，模型
-# 不必猜。锚点是**确定性事实**：解析只认唯一命中，只要有一丝歧义就返回 None
-# （宁可让模型按规则去查，绝不给错 id）。**20260925 起**上游拿到 None 的处理从
-# "写（未见过 id）留在清单里"改成"这条不进清单"——留着的代价是清单里混进站内
-# 通知/公告的标题（抬头声称的却是"已点名文档"，见 agent/prompt_context.py:_doc_anchors）。
+# Resolve only unambiguous article-title references from the visible corpus.
+# No match or multiple matches return None rather than guessing an article ID.
 
 _WS_RE = re.compile(r"\s+")
 _TITLE_PART_MIN = 4  # 简称子串匹配的最短长度（《架构文档》可以，两字标题不行）

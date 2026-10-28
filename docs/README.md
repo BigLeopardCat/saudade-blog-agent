@@ -21,6 +21,7 @@
 
 | 文档 | 一句话 | 类型 |
 |---|---|---|
+| [migration-cleanup-20261028.md](migration-cleanup-20261028.md) | 框架迁移核查、遗留清退与博客独立审计待修项 | 记录型 |
 | [agent-architecture.md](agent-architecture.md) | 系统现在是什么：节点拓扑、跨语言契约、目录与机制 | 现状型 |
 | [产品与领域装配](product-extensions.md) | 博客产品边界、标准 middleware 与非博客库存示例 | 现状型 |
 | [conversation-memory.md](conversation-memory.md) | 来源隔离、长文本接续、图片引用与按需回看，以及宿主兼容要求 | 现状型 |
@@ -44,14 +45,14 @@
 | [native-account-actions.md](native-account-actions.md) | 原生账号管理接口、权限语义、迁移与隔离验证 | 现状型（已生产验收） |
 | [session-runtime-review-20261024.md](session-runtime-review-20261024.md) | 会话职责、独立报告核对、后台准入修复及剩余预算/存储工作 | 现状型 |
 | [request-budget-navigation-20261024.md](request-budget-navigation-20261024.md) | 共享模型预算、历史裁剪和跳转意图修复及真实回放范围 | 现状型 |
-| [hybrid-runtime-migration.md](hybrid-runtime-migration.md) | 旧规划引擎退役后的在役实现、存储与故障边界 | 现状型 |
+| [hybrid-runtime-migration.md](hybrid-runtime-migration.md) | 旧规划引擎退役后的在役实现、存储与故障边界 | 记录型 |
 | [repository-layout.md](repository-layout.md) | 目录职责、依赖边界与按领域迁移的归属规则 | 现状型（含迁移方向） |
 | [retired-experiments.md](retired-experiments.md) | 已退役实验臂、归档位置与保留结论 | 记录型 |
 | [问题记录.md](问题记录.md) | 事故取证，按日期：现象 → 根因 → 修复 → 回归锁（**§2.1 例外**，见下） | 记录型（+ §2.1 跨仓契约） |
 | [native-progress-events.md](native-progress-events.md) | 原生进度事件、答案流、取消围栏与服务端输出计量 | 现状型 |
 | [native-event-transport.md](native-event-transport.md) | Runtime 原生事件到聊天/SSE 协议的薄传输边界与终态规则 | 现状型 |
 | [native-context-cache.md](native-context-cache.md) | 原生工具目录、动态上下文顺序及缓存用量的验证口径 | 现状型 |
-| [legacy-compatibility-boundary.md](legacy-compatibility-boundary.md) | 原生运行时、旧图兼容层及退役条件 | 现状型（含迁移边界） |
+| [legacy-compatibility-boundary.md](legacy-compatibility-boundary.md) | 框架执行、宿主业务协议和旧数据接续范围 | 现状型（含迁移边界） |
 | [task-cost-audit-20261028.md](task-cost-audit-20261028.md) | 单任务 token、分页与检索定位放大点、摘要触发和服务商缓存口径验证 | 记录型 |
 | [eval-observability.md](eval-observability.md) | 原生运行时指标、结果验收、旧评测边界与执行入口 | 现状型 |
 | [lint-baseline.md](lint-baseline.md) | 历史人工扫描快照；当前扫描以 eval 下的机器台账与 CI 为准 | 记录型 |
@@ -71,7 +72,7 @@
 | [tool-menu-poc-20261020.md](tool-menu-poc-20261020.md) | 把技能模板换成真工具表的三臂读数：**harness 的"执行半"稳住了，丢的是路由与定序**；§5 是第二轮的前置结论 | 记录型（**§5** 方向型） |
 | [prefix-cache-audit-20261020.md](prefix-cache-audit-20261020.md) | 生产前缀缓存审计：planner 命中 50.1%，但成因是**整段冷启动**（共享网关容量淘汰 + 换模型），不是槽位位置；**§4 是三个杠杆的定价** | 记录型（**§4** 方向型） |
 | [react-architecture-plan-20261020.md](react-architecture-plan-20261020.md) | 主流 ReAct + 按需 schema 的改造方案：planner 降成路由器、散文外置、执行层改循环；**§6 是分阶段预注册判据** | 记录型（已退役） |
-| [platform-roadmap.md](platform-roadmap.md) | 平台面能力（断点恢复 / 可观测 / 错误与用量 / 权限）与整体规范化的分批预案，含明确不做 | 方向型 |
+| [platform-roadmap.md](platform-roadmap.md) | 平台面能力（断点恢复 / 可观测 / 错误与用量 / 权限）与整体规范化的分批预案，含明确不做 | 记录型 |
 
 > 这份表**刻意不写"最后修订"日期**：手抄的日期没有判据看着（CI 是浅克隆，读不到逐文件的
 > 提交日期），注定漂。要看某份文档最近改了什么：`git log -1 --format=%ad -- docs/<文件>`。

@@ -117,6 +117,8 @@ def _why_not_compared(row: dict) -> str:
 
 
 def test_action_text():
+    from agent.domains.registry import operation_names
+
     print("\n① 过程行（preview）：字与改动前逐条相同")
     _PREVIEW = [
         ("新建一级标签「大笨狗」", "create_tag", {"title": "大笨狗"}),
@@ -311,7 +313,7 @@ def test_action_text():
           == "读取文章 19《架构随笔》" and _pre("get_article_detail", {"article_id": 19})
           == "读取文章 19")
     print("\n③ 通用不变量：空参行不许退化成空书名号/空冒号（两档都要）")
-    _NAMES = sorted(t.name for t in _TOOL_REGISTRY)
+    _NAMES = sorted({*(t.name for t in _TOOL_REGISTRY), *operation_names()})
     check(f"注册表里的工具都取到了（{len(_NAMES)} 件）", len(_NAMES) > 40, str(len(_NAMES)))
     _bad: list[str] = []
     for _n in _NAMES:
@@ -371,13 +373,7 @@ def test_action_text():
          "标记站内信已读（3、4、5 等 4 封）"),
     ]
     if _rs is None:
-        # ★ 这一节在这台机器上**没有比较过**（不是通过）。20260928 实测：CI 只 checkout
-        # agent 仓（父仓私有）⇒ `_parent_repo.read` 返回 None，而本节原先照样往下跑断言
-        # ⇒ 0 对、四条全红，且红得与 Python 侧一个字都没关系（本机恒绿、CI 恒红 = 判据在测
-        # "这台机器有没有兄弟目录"）。所以这里不是"少跑一条"，是把"没评"与"通过"分开写：
-        # 读到这行的人应当知道——这一节是这套跨语言契约在 CI 上的**唯一**比较点。
-        # 夜间门禁设 `SAUDADE_REQUIRE_PARENT=1` ⇒ 上一节 `_parent_repo.read` 直接
-        # SystemExit(1)，根本走不到这里。
+        # CI requires the pinned host checkout; optional local absence is unassessed.
         print("  ⏭ ⑤ 未评估：拿不到父仓源码 ⇒ 这一节**一次也没比过**（不是通过）。"
           "夜间门禁设 SAUDADE_REQUIRE_PARENT=1，那一侧会把它变成 ❌ 并退出 1。")
     else:

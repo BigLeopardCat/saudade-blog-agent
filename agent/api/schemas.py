@@ -82,7 +82,6 @@ class ChatRequest(BaseModel):
     image: str | list[str] = ""
     executions: str = Field(default="", max_length=MAX_TEXT_FIELD_CHARS)
     pending_action: str = Field(default="", max_length=MAX_TEXT_FIELD_CHARS)
-    agent_tasks: str = Field(default="", max_length=MAX_TEXT_FIELD_CHARS)
     # Retained host wire fields. Neither grants authority nor enters the model prompt.
     recent_tools: list[str] = Field(default_factory=list, max_length=MAX_RECENT_TOOLS)
     execution_rows: str = Field(default="", max_length=EXEC_ROWS_MAX_CHARS)

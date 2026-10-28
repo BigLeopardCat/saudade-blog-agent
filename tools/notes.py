@@ -26,8 +26,7 @@ from tools.result import (
     unavailable,
 )
 
-# `__all__` = 本模块**所有不以 `_` 开头**的模块级名字（社区惯例，不留例外；
-# `tests/test_module_exports.py` 按这条规则机械判着，漂了就红）。
+# Public exports; helper names stay private to their modules.
 __all__ = ["logger", "list_notes", "search_notes", "DOC_TYPE_CN", "get_article_detail",
            "rag_search", "get_top_notes", "list_categories", "list_tags", "get_announcements",
            "list_guestbook", "list_my_board", "list_talks", "get_blog_info", "get_social_links"]
@@ -35,59 +34,22 @@ __all__ = ["logger", "list_notes", "search_notes", "DOC_TYPE_CN", "get_article_d
 logger = logging.getLogger(__name__)
 
 
-# ── 晚绑定的两个转发壳（**别改成模块级按名 import**）─────────────────────────
-# `_get` 与 `_client` 被**套件直接打桩**（全仓实测 `base._get` 10 处、`base._client` 159 处）。
-# 函数对象取 globals 取的是**它自己所在模块**的 `__dict__` ⇒ 按名 import 会把"打桩前的
-# 那个对象"钉死在本模块里，桩静默失效、代码真去发网络请求，而症状只是"断言换了个理由红"
-# （本仓最贵的失效：看着在跑、其实没跑）。这两个转发在**调用那一刻**才去 `tools.base` 取
-# 属性，所以桩生得效。
-# 为什么用转发而不是把每个调用点都写成 `_base._get(...)`：后者会让下面搬过来的正文
-# **逐行变长 6 个字符**（`_get(` → `_base._get(`），当场撞出两条新的 E501 要折行——
-# 多一层间接换来"搬过来的正文逐字节未动"这个可验证的性质，值。
-# （`_public_tag_index` 只有 2 个短调用点，不值得再添一个壳，直接写 `_base.` 前缀。）
+# Resolve shared transports at call time so consumer overrides and test doubles apply.
 def _get(path: str, *, not_found_text: str = "") -> dict | list | ToolResult:
-    """转发到 `tools.base._get`（理由见上）。
-
-    ⚠️ **返回类型注解必须与 `tools.base._get` 逐字一致**（`eval/type_gate.py` 那本棘轮
-    量的是全仓错误数）：不注解 ⇒ mypy 把返回读成 `Any` ⇒ 调用方的类型错误**整片消失**，
-    棘轮的读数会以"变小"的样子掩盖一次搬迁（20261018 实测：`get_article_detail` 的
-    `return rows` 那条 `return-value` 就是这样被抹掉的，总数 190→189）。注解在场时
-    那个数回到 190——**那正是"搬走、不是修好"的读数证明**。
-    """
+    """Resolve the shared public transport at call time, preserving its result type."""
     return _base._get(path, not_found_text=not_found_text)
 
 
 def _client_post(path: str, **kwargs) -> httpx.Response:
-    """转发到 `tools.base._client.post`（理由同上：`_client` 被 159 处套件打桩）。
-
-    返回类型注解的理由与 `_get` 逐字相同（不注解 ⇒ 调用方读到 `Any`，棘轮被抹平）。
-    """
+    """Resolve the shared HTTP client at call time, preserving its response type."""
     return _base._client.post(path, **kwargs)
 
 
-# ---------------------------------------------------------------------------
-# 笔记 / 文章 工具
-# ---------------------------------------------------------------------------
+# Article metadata and body reads.
 
-# ── note 行瘦身（20260921）──────────────────────────────────────────────
-# 为什么必须瘦：`/notes` 一行 477 字符（描述/封面/6 个焦点缩放字段/两个时间戳/重复的
-# `key` 与空 `content` 全在里面），10 行 ≈ 4.8KB —— 而 `_frame_texts` 给 planner 的
-# 单帧预算只有 300 字符，planner 看到的是**第一行的前 300 字符**（半截 JSON）：既拿不到
-# "全部标题 ↔ id"的对应，也看不出后面还有 9 条（无声截断，20260920 那类"看不见的洞"）。
-# 瘦身只留决策要用的五个：id / 标题 / 状态 / 置顶 / 标签名。
-# **两条下游契约不许动**：`agent/entity_digest.py::_note_digest`（跨轮实体摘要）与
-# `agent/deterministic_plan.py::_candidate_detail_plan`（候选改读闸的 `literal_eval`）都只读
-# `noteKey`/`noteTitle`——瘦身保留这两个键，两处照常工作。
-#
-# 20260930 追加：三个计数（阅读/点赞/收藏）**原样带上**（`_note_counts`）。它们的
-# 字节数很小（`"views":120,` 十几字节），但"这篇多少赞、哪篇看得人多"全靠它们——
-# 卡片上早就有了，此前看板娘读列表却看不见，主人问"哪篇最火"只能靠猜。
-# ⚠️ 键清单**只住 `_slim_note_rows()` 里那个字面量**，别另抄元组
-# （20261018 审计 A1 删掉一个漏了 `tags` 的死副本）。
+# Project metadata to the fields needed by the tool; preserve stable article IDs and titles.
 
-# 三张表各一个数，键名与 Rust 两侧同名同义（列表接口 `attach_stats` / 单篇读数
-# `GET /notes/:id/stats`）。**缺键 ≠ 0**：读不到就整个键不出现，绝不补 0
-# （`notes.rs` 的 `Option` + `skip_serializing_if` 是同一个取向，两边别各走一套）。
+# Missing public counters are omitted, never replaced with zero.
 _NOTE_COUNT_KEYS = ("views", "likes", "favorites")
 
 
@@ -186,16 +148,10 @@ def _read_section(data: dict, article_id, want: str) -> str:
 
 
 def _note_row_with_tag_names(row):
-    """note 行 → 补一个 `tags`（中文标签名）。**认不出形态原样返回**。
+    """Add displayable tag names while preserving internal tag IDs.
 
-    详情接口给的 `noteTags` 是**标签 id 串**（`'5'` / `'5,10000'`）——那是内部
-    id，不是标签名，narrator 只能照帧念 id（20260921 22:34 实证：反问"这篇都有什么
-    标签呀"，回了「标签是 noteTags: '5'」，用户只好说"查查吧"，白烧两轮才拿到
-    「Python（挂在 编程 下）」）。这里把名字算好放进 `tags`，`noteTags` 原样保留
-    （写操作与 `$tool[N].noteTags` 这类参数引用仍按原字段取值）。
-    名字读不到时 render_tag_list 如实渲染成 `id=5`——"这次读不到字典"与"标签不存在"
-    不混为一谈。
-    """
+    Unknown row shapes pass through unchanged. Unavailable tag dictionaries retain
+    an ID label rather than asserting that the tag does not exist."""
     if not isinstance(row, dict) or not isinstance(row.get("noteTags"), str):
         return row
     from agent import adminops_tags as _tags  # 局部导入：tools → agent 的反向依赖
@@ -206,34 +162,17 @@ def _note_row_with_tag_names(row):
 
 
 def _note_public_counts(article_id) -> dict:
-    """单篇文章的公共读数（阅读/点赞/收藏），**读不到就是空 dict**。
+    """Read non-incrementing public article counters.
 
-    为什么要单独一次请求（20260930）：详情端点 `GET /notes/:id` 刻意**不挂**这三个数
-    （见 `src/routes/note_stats.rs` 模块头注——那个端点被本工具频繁读取，挂数等于
-    给阅读量灌水），公开的 `GET /notes/:id/stats` 才是它们的出口，而**读它不计数**
-    （计数是另一个 `POST /view`，由前端在读者真的打开文章时调）。
-
-    三处刻意的取值取向：
-      · **`liked` 丢掉**：它是"当前访客点过没有"，本工具以服务身份读、没有访客身份，
-        带上它只会是恒 false 的**假事实**（"这篇没人点赞"读起来像真的）。
-      · **失败一律返回空 dict**（不返回 0、不返回错误）：草稿/私密文章在这个公开端点
-        上就是 404（它按"读者能不能打开"判），而看板娘读草稿是**正当**的——那时
-        "读不到读数"与"还没有人读"必须分得开，前者是**键不出现**。
-      · 值走 `_note_counts` 的那一套（缺键 ≠ 0、不把字符串转成数）。
-    """
+    Private or unavailable statistics return no fields, never fabricated zeros.
+    The actor-specific liked flag is omitted because this is a public service read."""
     data = _get(f"/notes/{article_id}/stats")
     if not isinstance(data, dict):
         return {}
     return _note_counts(data)
 
 
-# 文档类型 → 中文物件名（**唯一一份**；server.py 的过程行与 Rust 的回执行都按它说话）。
-# 为什么值得单列一张：`get_article_detail` 是四个数据源共用的一件工具，读的是
-# 留言/说说/公告/文章——而动作词一度恒为"读取**文章**"（Rust `render_exec_row`
-# 与 `server._tool_action_text` 两处各写一遍、两处都错）。跨轮执行记忆里因此写着
-# 「读取文章 100」而那条其实是**留言**，下一轮 narrator 照抄，主人看到的就是
-# "把留言编号当文章读"（trace `20260928T032411` 实证）。Rust 侧有一份镜像
-# （`src/routes/chat.rs::render_exec_row`）——改这里必须同步那里（有测试钉住）。
+# Document labels must stay aligned with host execution-receipt rendering.
 DOC_TYPE_CN = {
     "note": "文章",
     "talk": "说说",
@@ -376,9 +315,7 @@ def get_top_notes() -> str:
     slim = _slim_note_rows(data)
     return _shape(slim if slim is not None else data)
 
-# ---------------------------------------------------------------------------
-# 分类 / 标签 工具
-# ---------------------------------------------------------------------------
+# Category and tag reads.
 
 @tool
 def list_categories() -> str:
@@ -390,7 +327,7 @@ def list_categories() -> str:
 def list_tags() -> str:
     """获取站内**全部标签**：一级标签 + 它下面的二级标签（二级互不重名，但不同
     一级标签下可以有同名二级标签，靠 fatherKey/fatherTag 区分）。"""
-    # 两级都要读（20260921 修）：只读 /tagone 时结构上就看不见二级标签，
+    # 两级都要读：只读 /tagone 时结构上就看不见二级标签，
     # 线上实测答出"站内没有二级标签"。两个端点都是公开只读、无需鉴权。
     one = _get("/tagone")
     two = _get("/tagtwo")
@@ -402,9 +339,7 @@ def list_tags() -> str:
     from agent import adminops_tags as _tags
     return _shape(_tags.merge_tag_rows(one, two))
 
-# ---------------------------------------------------------------------------
-# 公告 工具
-# ---------------------------------------------------------------------------
+# Announcements.
 
 @tool
 def get_announcements(
@@ -417,17 +352,13 @@ def get_announcements(
     data = _get("/announcements")
     page = None
     if isinstance(data, list):
-        # 只封顶行数、**不封字段**（20261005）：公告是管理员写的，正文常是长文，
-        # 单条详情另有 get_article_detail 的 announcement 分支；在这里截正文等于
-        # 让"公告里到底写了什么"永远读不全。
+        # Cap announcement rows without truncating each body; detail reads share this source.
         data, capped, page = _cap_rows(data, _LIST_ROWS_MAX, "公告", offset)
         if capped:
             data = _rows_with_note(data, capped)
     return _shape(data, meta={"page": page} if page else None)
 
-# ---------------------------------------------------------------------------
-# 留言板 工具
-# ---------------------------------------------------------------------------
+# Guestbook reads.
 
 @tool
 def list_guestbook(
@@ -459,9 +390,7 @@ def list_guestbook(
     data = _get("/board")
     page = None
     if isinstance(data, list):
-        # 读帧的人（planner 与 narrator）都要看得见这条边界：上游恒按 Approved=1 过滤，
-        # "列表里没有"不是"这条不存在"。不写这一句，帧就只在**数量**上沉默，而
-        # "站内没有这条留言"这个结论会被当成列表给的事实（20260928 现场那条就是）。
+        # The public list includes approved rows only; absence does not prove nonexistence.
         data, capped, page = _cap_rows(data, _LIST_ROWS_MAX, "留言", offset)
         data = _board_text_keys(data)
         data = _drop_dead_mine(data)
@@ -478,16 +407,8 @@ def list_guestbook(
     return _shape(data, meta={"page": page} if page else None)
 
 
-# 公开池里的 `mine` 字段是**恒假的**（20261008 删）：上游 `talk_embed` 按
-# `uid.map(|u| t.user_id == u).unwrap_or(false)` 算它，而本工具的 `_get("/board")`
-# **不带令牌** ⇒ 上游永远拿不到 uid ⇒ 每一行都是 `mine: false`（连用户自己刚放的那盏
-# 也是）。一个看着像"这条是不是我的"、结构上却答不了这个问题的字段，比没有这个字段
-# 更坏——trace `20261008T024742` 里主人问「带我去看看我已经通过的留言」，模型正是在
-# 这份"全 false"的帧上打转（`list_guestbook` 空转 → 收尾）。
-#
-# 为什么是**删字段**而不是"给公开池带上令牌"：那会让一个公开只读工具变成身份相关
-# （同一句话不同人读出不同帧），而"我自己那一份"本来就有专用接口
-# （`/api/protect/board/mine`，见 `list_my_board`）——`mine` 是它的半个影子。
+# Public reads have no actor identity, so their mine flag is not evidence of ownership.
+# Use the authenticated own-message endpoint for ownership queries.
 def _drop_dead_mine(rows: list) -> list:
     return [{k: v for k, v in r.items() if k != "mine"}
             if isinstance(r, dict) else r for r in rows]
@@ -516,9 +437,7 @@ def list_my_board(config: RunnableConfig) -> str:
         # 读的是那一格，不再从注记的「共 N 条」里抠——注记是给人看的那份渲染。
         data, cap, page = _cap_rows(data, _LIST_ROWS_MAX, "你的河灯")
         data = _board_text_keys(data)
-        # `mine` 这个键名**只在公开池那里才有信息量**（"这条是不是你的"）；在这里
-        # 逐行都是 true，留着只会让"帧里有个 `mine` 字段"变成一条可迁移的错觉。
-        # 摘法是同一个出口函数，与公开池逐字同规（见 `_drop_dead_mine` 头注）。
+        # The authenticated list already establishes ownership; omit its redundant mine flag.
         data = _drop_dead_mine(data)
         data = _clip_fields(data, _LIST_FIELD_MAX)
         data = _rows_with_note(
@@ -529,9 +448,7 @@ def list_my_board(config: RunnableConfig) -> str:
                   "每行的「留名」是你当时自己填的字（自由文本），不是账号。")
     return _shape(data, meta={"page": page} if page else None)
 
-# ---------------------------------------------------------------------------
-# 说说 / 动态 工具
-# ---------------------------------------------------------------------------
+# Talks and activity.
 
 @tool
 def list_talks(
@@ -560,9 +477,7 @@ def list_talks(
                   "（自由文本，可留空=匿名），**不是账号**——别拿它认人")
     return _shape(data, meta={"page": page} if page else None)
 
-# ---------------------------------------------------------------------------
-# 站点信息 工具
-# ---------------------------------------------------------------------------
+# Site information.
 
 @tool
 def get_blog_info() -> str:

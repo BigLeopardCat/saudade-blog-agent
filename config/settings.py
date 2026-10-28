@@ -134,12 +134,6 @@ class Settings(BaseSettings):
     # Require a verified host assertion before resolving caller identity.
     agent_require_assertion: bool = True
 
-    # Native tools always enforce scopes; this also enforces policy in legacy host adapters.
-    authz_enforce: bool = False
-
-    # Bound legacy host-provided task context while the host owns its expiry.
-    agent_task_inject_max: int = Field(default=3, ge=1, le=3)
-
     # ── IoT 设备服务（ESP32 OLED 显示等）─────────────────────────────
     # 与博客共用 JWT_SECRET：agent 以对话用户身份签发 JWT 调用 device-service
     jwt_secret: str = ""
@@ -181,18 +175,6 @@ class Settings(BaseSettings):
     # 每请求一份 JSON（输入/节点事件序列/分段耗时/回复/退出原因）；
     # 与项目 logs/ 目录对齐（日志体系规范见 CLAUDE.md §2），logrotate 轮转
     trace_dir: str = "/home/ubuntu/Saudade-Blog/logs/agent/traces"
-    # 写操作幂等账（`agent/idem.py`，20261016 批 2）。它的闸是"这一轮挂没挂
-    # checkpointer"：**不配 `CHECKPOINT_DSN` 时恒不被打开**（图是裸的 `g.compile()`）
-    # ⇒ 那种环境下连这个文件都不会被创建；配了才开始写。
-    # 这个路径只是**降级档**（20261017）：`_shared(config)` 按 saver 自己选——挂的是 PG
-    # saver ⇒ 账落**同一个池、同一个库**（`agent/idem_pg.py`，保留期与 checkpoint 同源），
-    # 只有内存 saver / 没挂 saver 才落到这里。
-    # 落 `logs/` 下 ⇒ **必须登记进 `eval/retention_manifest.py`**（那里的 `audit()`
-    # 会把 `logs/` 树里没登记的路径报红），登记项同时给出保留期。
-    # ⚠️ PG 那张表不在该清单的射程内（它只审计 `logs/` 树）⇒ 保留期写在 ADR-0012
-    # 的《迁移到 PG》一节，是一条欠账。
-    idem_db: str = "/home/ubuntu/Saudade-Blog/logs/agent/idem.sqlite3"
-
     # Optional PostgreSQL conversation persistence. Empty disables persistence;
     # invalid configuration aborts startup without an in-memory fallback.
     # Use a separate database: framework setup manages its own schema.

@@ -9,6 +9,9 @@ from agent.runtime.turns import check_cancelled
 from tools import base
 from tools.result import fact, ok, tgt
 
+OPERATION = "set_article_status"
+PERMISSION_OPERATIONS = frozenset({OPERATION})
+
 
 def handles(grant):
     return (
@@ -26,12 +29,12 @@ def validate(grant, config):
     spec = specs[0]
     args = spec.get("args") if isinstance(spec, dict) else None
     if isinstance(spec, dict) and spec.get("tool") == batch.NAME:
-        if not authz.check(principal, "set_article_status").allowed:
+        if not authz.check(principal, OPERATION).allowed:
             raise ValueError("当前身份无权修改文章状态")
         return batch.NAME, batch.validate(args)
     if (
         not isinstance(args, dict)
-        or spec.get("tool") != "set_article_status"
+        or spec.get("tool") != OPERATION
         or set(args) != {"article_id", "version", "status", "is_top"}
         or type(args["article_id"]) is not int
         or args["article_id"] <= 0
@@ -46,9 +49,9 @@ def validate(grant, config):
         or (args["status"] is None and args["is_top"] is None)
     ):
         raise ValueError("文章确认参数无效")
-    if not authz.check(principal, "set_article_status").allowed:
+    if not authz.check(principal, OPERATION).allowed:
         raise ValueError("当前身份无权修改文章状态")
-    return "set_article_status", args
+    return OPERATION, args
 
 
 def _result(args, current, changed):

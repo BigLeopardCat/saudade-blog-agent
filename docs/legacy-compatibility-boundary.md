@@ -1,14 +1,22 @@
-# 旧运行时兼容边界
+# 运行时与兼容边界
 
-当前主线只构建 `NativeRuntime`。`graph.py`、`hybrid.py`、`graph_store.py`、`legacy_bridge.py`、旧 planner 和 workflow DSL 已从源码删除，不能通过配置回退。
+生产只构建 `NativeRuntime` 服务适配器，内部模型循环使用 LangChain `create_agent`，
+Agent 子图、审批暂停及恢复使用 LangGraph。没有旧规划器或可切换的实验运行时。
 
-仍然受支持的兼容契约是业务契约：`thread_id`、会话历史、确认签名、撤销、幂等 receipt、SSE 帧和宿主公开字段。`NativeConversationStore` 通过 LangGraph saver 的公开状态接口保存这些数据；它没有业务图节点，也不保证普通读取可以从每个中间步骤恢复。
+兼容范围是已发布的业务协议：稳定 `thread_id`、来源受限的会话历史、确认签名、撤销、
+幂等回执、具名 SSE 事件和宿主 HTTP 字段。`NativeConversationStore` 通过框架公开接口
+保存会话；普通任务和确认任务按持久子图接续，详见[架构](agent-architecture.md)。
 
-旧数据接续只接受可解析的消息、待确认事实和已完成轮次。无法恢复的未过期确认卡不会被覆盖或标记为已执行；未知写入结果必须先读已有回执。生产入口遇到未知 `AGENT_ARM` 直接拒绝。
+确认绑定用户、会话、有效期与已准备参数，恢复信号不授予写权限。不能恢复的有效确认
+不得冒充已完成；未知写入结果先查回执及实际业务状态，不能盲目重做。旧请求中多余的
+规划字段被忽略，不作为可执行指令。
 
-过渡期仍可能收到旧 planner 字段。入口保留有业务意义的历史、页面、摘要、执行台账和待确认事实，其他字段忽略并记录；这些字段不会重新启用旧规划器。
+宿主历史与摘要须携带生成时的来源范围，无来源的旧数据不自动注入模型。空 checkpoint
+的历史导入在会话锁内完成；见[会话记忆契约](conversation-memory.md)。
 
-宿主历史与摘要须携带生成时的来源范围，无来源的旧数据不自动注入模型。已有 checkpoint
-继续接续，空 checkpoint 的宿主导入在锁内完成；详见[会话记忆契约](conversation-memory.md)。
+兼容的 ASGI `server:app` 与 `agent.main:app` 导出同一应用。未支持的 `AGENT_ARM` 值
+在配置校验时拒绝，不会触发引擎回退。部署可移除这个过渡环境变量。
 
-验证方式：`tests/test_legacy_retirement.py` 在新进程中构建原生服务并触发工具路径，检查退役模块既无源码也未进入 `sys.modules`。兼容行为由 `tests/test_native_*`、确认、取消、存储和传输契约测试覆盖。
+`tests/test_legacy_retirement.py` 检查已退役实现不在源码或导入闭包；当前行为由框架
+Agent、确认/取消、重放、恢复、删除屏障和传输测试验证。历史实现和事故材料保留于 Git
+及记录型文档，不把它们写进当前执行规则。

@@ -17,6 +17,9 @@ _OPERATIONS = {
 }
 
 
+PERMISSION_OPERATIONS = frozenset(value[1] for value in _OPERATIONS.values())
+
+
 def operation(resource, action):
     return _OPERATIONS[(resource, action == "delete")]
 

@@ -1,10 +1,7 @@
-"""Execute confirmed favorite changes without the legacy planner or an LLM.
+"""Execute a signed favorite operation after checking identity, scope and binding.
 
-The existing confirmation flow resolves targets and signs concrete arguments.
-This executor rechecks identity, scope, binding and expiry. The signed operation
-ID, rather than graph task metadata, identifies a write across retries/restarts.
-The existing ledger records intent before the tool call and retains its receipt.
-"""
+The operation ID identifies retries across restarts. The durable ledger records intent
+before the external call and retains the verified receipt for replay."""
 
 import time
 
@@ -13,6 +10,9 @@ from agent.runtime import writes
 from tools.base import ToolResult, get_all_tools
 
 _WORKFLOWS = {"favorite_add": "add_favorite", "favorite_remove": "remove_favorite"}
+
+
+PERMISSION_OPERATIONS = frozenset(_WORKFLOWS.values())
 
 
 def handles(grant) -> bool:

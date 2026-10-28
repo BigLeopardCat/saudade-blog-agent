@@ -449,25 +449,8 @@ class VectorStore:
             if (m.get("fingerprint") == fp and not m.get("missing")
                     and int(m.get("count", -1)) == len(keys)
                     and self.view_for(fp) is not None):
-                # ⚠️ 这一格比的必须是 `len(keys)`（= 按 **chunk 槽位** 数的，与不变式②
-                # 和上面写 manifest 的那处同一个口径）。20261005 线上实测：这里原写
-                # `len(set(keys))`（唯一键数），而本仓语料有 322 个槽位、265 个唯一文本
-                # ⇒ 条件**恒假**，短路一次都没生效过：每次 build() 都全量重写 1.1MB、
-                # 代数 +1、四个 worker 跟着换视图——正是下面那段注释说要避免的事。
-                # （重复文本来自空正文小节：chunk 文本 = 标题+正文，正文为空时同篇诸节
-                # 逐字相同。测试语料全是互不相同的正文，所以这条一直没被抓住。）
-                # 盘上已经就是这批 chunk ⇒ 什么都不写。**不做这一步的后果**：每个
-                # worker 每 REFRESH_TTL 都重写一遍文件、代数 +1，四个 worker 互相
-                # 看着对方换视图，日志里刷满"新嵌 0 / 复用 60"这种零信息量的行。
-                #
-                # ⚠️ 最后那个 `view_for(fp) is not None` 不是多余的保险，它堵的是
-                # **冻结式降级**：只看 manifest 的元数据的话，`cache.f32` 被截断
-                # （或 cache.json 丢了）而 manifest 恰好还写着"已对齐"时，这里会一直
-                # 说"无事可做"——每个 worker 的 load() 都失败 ⇒ 视图恒 None ⇒ 恒走
-                # 纯词法，而后台**永远不去修它**（判据在断言"盘上是对的"，却没验证
-                # 它真能读出来）。判据必须落在"能不能用"上，不是"看起来对不对"。
-                #
-                # `missing` 非空时**故意**不短路：上一轮没嵌成的那几条要能重试。
+                # Compare physical row counts against chunk slots, including empty chunks.
+                # A dictionary of deduplicated keys can hide a vector/key alignment mismatch.
                 return {"skipped": "aligned", "fingerprint": fp, "embedded": 0,
                         "reused": len(set(keys)), "api_calls": 0}
             return self._update_locked(texts, keys, space, fp)
@@ -631,11 +614,9 @@ def is_enabled() -> bool:
 
 
 def degraded_reason() -> str | None:
-    """向量路为什么没在跑（None = 正常在用或本来就关着）。
+    """Expose vector-route health separately from the shared candidate format.
 
-    存在的理由：混合与纯词法的**出口文本一模一样**，下游（planner / eval / 人）
-    从候选行里看不出走了哪条路。没有这个出口，"开关坏了"永远发现不了。
-    """
+    None means the configured route is healthy or explicitly disabled."""
     if not _settings.rag_hybrid_enabled:
         return None                     # 关着是设定，不是降级
     if not _settings.embedding_configured:
@@ -658,15 +639,10 @@ def degraded_reason() -> str | None:
 
 
 def route_status() -> dict:
-    """给 tool meta / `/health` dials 用的一行事实（不含任何 key/URL）。
+    """Return non-secret route facts for tool metadata and health checks.
 
-    `state` 是**把 enabled/active 的两格合成一句话**，因为那两格最要命的组合——
-    `enabled=true, active=false, missing=0`——自己读不出病因（20261005 现场实证：
-    首建那 6 秒里就是这个组合，人看到的第一反应是"全就绪却不生效"）。取值与
-    `degraded_reason()` 同一套词，另加两个非故障值：`off`（开关没开）、`active`。
-    注意 `vector_missing` 与 `active=true` 并存是**对的**：部分 chunk 没嵌出来，
-    索引仍可用（融合照跑），这一格报的是"还有什么不干净"。
-    """
+    state distinguishes off, active and degradation reasons. vector_missing may
+    coexist with active=True when a partial index is still queryable."""
     st = get_store()
     st.load()
     view = st.view()

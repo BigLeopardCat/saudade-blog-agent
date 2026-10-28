@@ -133,11 +133,11 @@ _X = 1
     mech = set(mechanical_all(base_src))
     tool_names = {t.name for t in get_all_tools()}
     hidden = tool_names - mech
-    check("  机械集合会藏掉 ≥60 件真工具（真按它写就是「看着在跑、其实没跑」）",
-          len(hidden) >= 60, f"藏掉 {len(hidden)}/{len(tool_names)} 件")
-    check("  那 60 多件**确实**在 base 的模块面上（re-export 过，不是凭空点名）",
-          len([n for n in hidden if getattr(base, n, None) is not None]) >= 60,
-          f"{len([n for n in hidden if getattr(base, n, None) is not None])} 件取得到")
+    check("机械集合不能替代转导出的可调用工具清单", hidden == tool_names,
+          f"缺失 {sorted(tool_names - hidden)}")
+    check("所有可调用工具都能从公开适配面取得，不以固定数量充当覆盖率",
+          all(getattr(base, name, None) is not None for name in tool_names),
+          str(sorted(tool_names)))
     check("  机械集合本身非空（不是判据整体读不出东西）", len(mech) > 0, str(sorted(mech)))
     print()
     if FAILED:

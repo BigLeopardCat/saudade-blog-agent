@@ -8,6 +8,9 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 RETIRED = (
     "agent.agent",
+    "agent.arg_refs",
+    "agent.receipt_digest",
+    "agent.block_reasons",
     "agent.graph",
     "agent.planner_llm",
     "agent.plan_codec",

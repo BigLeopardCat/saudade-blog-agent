@@ -1,7 +1,7 @@
 {
   "agent/action_text.py::_arm_text": {
     "c": 205,
-    "lines": 466
+    "lines": 397
   },
   "eval/admin_write_probe.py::main": {
     "c": 32,
@@ -41,19 +41,19 @@
   },
   "eval/run_golden.py::check_gold": {
     "c": 242,
-    "lines": 601
+    "lines": 597
   },
   "eval/run_golden.py::check_no_popup_premises": {
     "c": 32,
     "lines": 59
   },
   "eval/run_golden.py::main": {
-    "c": 248,
-    "lines": 900
+    "c": 245,
+    "lines": 877
   },
   "eval/run_golden.py::run_one": {
     "c": 58,
-    "lines": 238
+    "lines": 164
   },
   "eval/trace_reconcile.py::reconcile": {
     "c": 72,
@@ -73,23 +73,19 @@
   },
   "tests/test_action_text.py::test_action_text": {
     "c": 36,
-    "lines": 321
+    "lines": 317
   },
   "tests/test_artifact_retention.py::main": {
     "c": 38,
     "lines": 170
-  },
-  "tests/test_authz.py::test_authz": {
-    "c": 141,
-    "lines": 831
   },
   "tests/test_checkpoint_factory.py::test_checkpoint_factory": {
     "c": 39,
     "lines": 263
   },
   "tests/test_ci_suite_list.py::test_ci_suite_list": {
-    "c": 33,
-    "lines": 150
+    "c": 31,
+    "lines": 147
   },
   "tests/test_corpus_terms.py::test_corpus_terms": {
     "c": 54,
@@ -112,12 +108,12 @@
     "lines": 192
   },
   "tests/test_golden_thread.py::test_golden_thread": {
-    "c": 44,
-    "lines": 99
+    "c": 35,
+    "lines": 84
   },
   "tests/test_graph_build.py::test_graph_build": {
-    "c": 43,
-    "lines": 254
+    "c": 40,
+    "lines": 238
   },
   "tests/test_judge_offline.py::main": {
     "c": 75,
@@ -157,7 +153,7 @@
   },
   "tests/test_settings_surface.py::test_settings_surface": {
     "c": 31,
-    "lines": 128
+    "lines": 126
   },
   "tests/test_tag_color_tables.py::test_tag_color_tables": {
     "c": 59,
@@ -181,26 +177,6 @@
   },
   "tools/device.py::device_oled_display": {
     "c": 33,
-    "lines": 124
-  },
-  "tools/note_admin.py::set_article_status": {
-    "c": 31,
-    "lines": 84
-  },
-  "tools/own_data.py::read_messages": {
-    "c": 32,
-    "lines": 105
-  },
-  "tools/own_data.py::read_notifications": {
-    "c": 35,
-    "lines": 119
-  },
-  "tools/tag_admin.py::create_tag": {
-    "c": 31,
-    "lines": 114
-  },
-  "tools/tag_admin.py::update_tag": {
-    "c": 61,
-    "lines": 144
+    "lines": 111
   }
 }

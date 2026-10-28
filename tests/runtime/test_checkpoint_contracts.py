@@ -8,7 +8,7 @@ import pytest
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.checkpoint.postgres import PostgresSaver
 
-from agent import checkpoint, idem, idem_pg, runtime_probe
+from agent import checkpoint, idem_pg, runtime_probe
 from agent.runtime import checkpoint_store, turns, writes
 
 
@@ -64,8 +64,6 @@ def test_startup_initializes_the_ledger_once_without_extra_pool_slots(monkeypatc
     before = connection.execute.call_count
     for _ in range(3):
         assert isinstance(writes.ledger_for(saver), idem_pg.PostgresLedger)
-        cfg = {"configurable": {"__pregel_checkpointer": saver}}
-        assert isinstance(idem._shared(cfg), idem_pg.PostgresLedger)
     assert connection.execute.call_count == before
     assert pool.connection.call_count == 1
 
@@ -97,10 +95,7 @@ def test_invalid_pool_configuration_never_echoes_credentials():
     assert "PRIVATE_CREDENTIAL" not in str(error.value)
 
 
-def test_legacy_postgres_store_cannot_silently_fall_back_to_sqlite():
-    cfg = {"configurable": {"__pregel_checkpointer": ExtendedPostgresSaver(None)}}
-    with pytest.raises(RuntimeError, match="不能回落"):
-        idem._pg_pool(cfg)
-    unrelated = SimpleNamespace(conn=SimpleNamespace(connection=lambda: None))
-    with pytest.raises(RuntimeError, match="不支持"):
-        idem._pg_pool({"configurable": {"__pregel_checkpointer": unrelated}})
+@pytest.mark.parametrize("saver", [None, InMemorySaver(), SimpleNamespace(conn=object())])
+def test_confirmed_writes_require_postgres_without_a_storage_fallback(saver):
+    with pytest.raises(RuntimeError, match="PostgreSQL"):
+        writes.ledger_for(saver)

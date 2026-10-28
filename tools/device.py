@@ -1,35 +1,9 @@
 # -*- coding: utf-8 -*-
-"""IoT 设备族：ESP32 OLED 屏显的读/写工具（经 device-service 下发）。
+"""Device discovery and ESP32 OLED commands through device-service.
 
-**为什么单独成模块**（20261017 拆 `tools/base.py`；同一批先切出 `tools/result.py`）：
-`tools/base.py` 是全仓第二大体量文件。本族对 `tools/base.py` 的**出边为零**——它只用
-stdlib / `httpx` / `langchain_core` / `config.settings` / `utils.logging.get_trace_id`，
-再加上 `tools/result.py` 里的信封构造器（`ok` / `tgt` / `empty` / `fact` / `unavailable`
-是零出边的叶子，直接从这里 import、**不经过 base**）⇒ 搬得动，且搬完不成环：
-`tools/base.py` 在自己那一族原来的位置 import 本模块，本模块**一个字都不 import base**。
-
-**它是什么**：`list_devices` 读设备列表；`device_oled_display` 写（下发屏显命令）。
-`_sign_user_jwt` 用与博客相同的 `JWT_SECRET` 签 HS256（sub=user_id，5 分钟有效），
-device-service 据此鉴权并校验设备归属——**用户只能操作自己的设备**。
-`_DISPLAY_DEDUP_SECONDS` / `_last_display` / `_last_display_lock` 是屏显幂等去重
-（多轮重试 / 客户端重试 / MQTT QoS1 at-least-once 重投 ⇒ 同内容只发一次）。
-
-**搬家方式**：`tools/base.py` 按**原名** re-export 本族全部 10 个顶层名
-⇒ 管理族那条路径（`_sign_local_jwt` 也签同一把 `JWT_SECRET`）与全仓
-`from tools.base import ...` 一处不改。`JWT_SECRET` / `_device_get_user_id` 被管理族
-**借走**（入边）——入边不为零不要紧，按原名再导出即可；**出边为零才是选刀判据**。
-
-⚠️ 别丢注释：`device_oled_display` 里那段**回执确认**是**唯一**能分辨"设备真确认了"与
-"我们根本没去问"的代码（20261012 补的 WARNING 是**日志口径**的补丁，不是行为修正，
-返回语义逐字不变，判据见 `tests/test_silent_degradation.py` ④）；`_last_display` 那把锁
-的理由（裸 dict 的 check-then-act 会让同一条屏显下发两次）也在这段注释里。
-
-⚠️ **两处折行**：`device_oled_display` 的 `device_id` 注解与"入队未回执"那句回执文案，
-在 `tools/base.py` 里都是**超 100 列的历史长行**（那边的 E501 是存量豁免）。本文件按
-`docs/lint-baseline.md` 纪律 1「新增文件零 ruff error」折了行 ⇒ 该函数**行数 121→124**，
-`eval/complexity_baseline.json` 里那一条随之重登记为 124（**`c` 仍是 33，一个字没动**；
-字面与逻辑均逐字不变，多出来的只是排版）。
-"""
+Short-lived actor JWTs let the service enforce device ownership. Display commands
+use a locked, short deduplication window. Enqueued commands and device-confirmed
+execution remain distinct; missing request IDs and lost acknowledgments are logged."""
 
 import logging
 import threading
@@ -37,7 +11,7 @@ import time
 from typing import Annotated
 
 import httpx
-import jwt  # 签发 device-service 令牌（`_sign_user_jwt`，20261020 换掉手写 HS256）
+import jwt
 from langchain_core.runnables.config import RunnableConfig
 from langchain_core.tools import tool
 
@@ -45,68 +19,37 @@ from config import settings as _settings
 from tools.result import empty, fact, invalid_args, not_found, ok, tgt, unavailable
 from utils.logging import get_trace_id
 
-# `__all__` = 本模块**所有不以 `_` 开头**的模块级名字（社区惯例，不留例外；
-# `tests/test_module_exports.py` 按这条规则机械判着，漂了就红）。
+# Public exports; helper names stay private to their modules.
 __all__ = ["logger", "DEVICE_SERVICE_URL", "list_devices", "device_oled_display"]
 
 logger = logging.getLogger(__name__)
 
 
-# ---------------------------------------------------------------------------
-# IoT 设备（ESP32 OLED 屏幕显示等，经 device-service 下发）
-# ---------------------------------------------------------------------------
+# Device-service integration.
 
 # 从 settings 读取（模块顶部已 import，见那里的说明）
 DEVICE_SERVICE_URL = _settings.device_service_url
 
 
 def _jwt_secret() -> str:
-    """当前配置里的 HS256 密钥。
-
-    **调用时取，不是导入时快照**（20261019）：此前这里是 `JWT_SECRET = _settings.jwt_secret`
-    这样一个模块级常量，而套件按既有纪律打的是 `settings.jwt_secret` 的键桩
-    （见 `tests/test_admin_write.py` 头部）——桩打在一个地方、签名读的是另一个地方，
-    桩**静默不生效**。改成函数后两边同源，桩就是真的。
-    空串的处置在两条签名路径各自的调用点（`_sign_user_jwt` / `_sign_local_jwt`），
-    这里只管取。
-    """
+    """Read the current signing configuration at call time, including test overrides."""
     return _settings.jwt_secret
 
-# 显示指令幂等去重：同一用户短时间内相同内容的重复下发直接跳过。
-# 场景：多轮重复调用（planner 重试/多轮规划） / 客户端重试 / MQTT QoS1
-# at-least-once 重投——工具层保证"同内容只发一次"。（曾防后端强制路由
-# _force_display 与自主调用双调，20260828 影子系统事故后强制路由已移除。）
+# Suppress repeated display content per actor within a short window.
 _DISPLAY_DEDUP_SECONDS = 30.0
-# ⚠️ 20260917 加锁：此前是裸 dict 的 check-then-act——两个并发请求可以同时通过
-# "30s 内没发过"的检查，同一条屏显下发两次（外部审计指出；影响面只在这条幂等优化
-# 本身，不是越权）。execute 跑在线程池里、工具会被并发调用，所以这个锁是必需的。
+# The deduplication claim is atomic because tools may run concurrently.
 _last_display: dict[int, tuple[str, float]] = {}
 _last_display_lock = threading.Lock()
 
-# ⚠️ 20261012 补观测（同一条线）：`device_oled_display` 里那段**回执确认**是为"幽灵
-# 在线窗口"写的（设备断电→遗嘱到达前，曾达 ~2 分钟；publish 入队即 200，设备其实收
-# 不到）。它靠响应体里的 `req_id` 起头——而这个 id 解析不出来时，整段确认会被**跳过**，
-# 函数照旧返回"已下发"。也就是说：唯一那段能分辨"设备真确认了"与"我们根本没去问"的
-# 代码，会在没人知道的情况下不执行，加固等于静默退回原状。所以那一格现在必写一条
-# WARNING——**这是日志口径的补丁，不是行为修正**（返回语义逐字不变，判据见
-# `tests/test_silent_degradation.py` ④）。
+# A missing request ID prevents acknowledgment polling and must be logged explicitly.
+# Enqueue success does not establish that the physical device executed the command.
 
 
 def _sign_user_jwt(user_id: int) -> str:
-    """用与博客相同的 JWT_SECRET 签发 HS256 JWT（sub=user_id，5 分钟有效），
-    供 device-service 鉴权与设备归属校验（用户只能操作自己的设备）。
+    """Sign a five-minute HS256 actor JWT for device-service ownership checks.
 
-    空密钥**不许签**（20261019 安全审计 SAU-012，CWE-321）：HMAC 拿空 key 照样算得出
-    签名 ⇒ 这一路会静静地签出一枚"格式完全正确、但谁都能伪造"的令牌。
-    与 `tools/base.py::_sign_local_jwt` 是同一条判据的两个入口。
-
-    **20261020 起签发交给 PyJWT**（`jwt.encode`，见 ADR-0014）。**形状一字未改**：
-    `{sub, exp, role}` 且**不带 aud**——Rust `auth_jwt::verify_token` 用
-    `Validation::default()`，多一个 aud 会被判 audience 无效直接验签失败。
-    ⚠️ 与验签侧那条 `verify_sub` 的地雷**方向相反**：这里是**签**，`sub` 本来就该是
-    数字（Rust `AssertionClaims.sub: i32`），PyJWT 的 `encode` 不做任何声明校验，
-    所以签发侧不受影响——地雷只在 `decode` 上。
-    """
+    Reject an empty key. Numeric sub and absent aud match the verifier contract;
+    PyJWT encode preserves those claim types without applying decode validation."""
     secret = _jwt_secret()
     if not secret:
         raise RuntimeError("JWT_SECRET 未配置（空密钥不许代签令牌）——检查 .env / 环境变量")
@@ -173,12 +116,7 @@ def device_oled_display(
     with _last_display_lock:
         prev = _last_display.get(uid)
         if prev and prev[0] == text and now - prev[1] < _DISPLAY_DEDUP_SECONDS:
-            # `changed=False`（F1，20260930）：**这一次调用没有向设备下发任何东西**
-            # ——同样的内容 30 秒内已经发过了。在事实信封之前，这条回执与"真发了"
-            # 长得一模一样（都是同一族的 ok 帧），于是两个读端都把它当成一次真改动：
-            # gate 洞⑩ 会把 narrator 照抄回执的那句"这块内容刚刚已经在屏幕上了"判成
-            # 谎打回；planner 下一轮还会为同一件事再规划一次。这是本工具里语义最
-            # 明确的一处 `changed`——防重去重本来就是"等于没做"。
+            # No command was sent; changed=False records the observed deduplication no-op.
             return ok("该内容刚刚已下发过，无需重复下发（执行结果以设备回执为准）",
                       meta=fact("device_display", changed=False,
                                 target=tgt("device", device_id, text[:20]),
@@ -189,9 +127,7 @@ def device_oled_display(
         _last_display[uid] = (text, now)
     sent = False
     try:
-        # device_id 未指定时自动选择第一个在线设备（多步工具链是 IoT 工具失败的
-        # 结构性原因：模型无法从 schema 知道运行时才能获取的 device_id，参数缺失时
-        # 倾向文本声称而非如实失败。单步化后模型一次调用即成功）
+        # When no device is specified, select the first online device returned by the service.
         if not device_id:
             resp = httpx.get(
                 f"{DEVICE_SERVICE_URL}/api/devices",
@@ -226,9 +162,7 @@ def device_oled_display(
         if resp.status_code != 200:
             return unavailable(f"指令下发失败（HTTP {resp.status_code}）: {resp.text[:100]}")
         sent = True          # 已真正下发 ⇒ 占位保留，30s 内的重复调用会被去重
-        # 回执确认（图改进Ⅴ）：幽灵在线窗口（断电→遗嘱到达前，曾达 ~2 分钟）内下发
-        # 会"假成功"——publish 入队即 200，设备实际收不到。轮询 device-service 的
-        # 回执状态接口，5s 内设备回执即确认执行，否则如实告知"未确认"，不再承诺已显示。
+        # Poll the request ID for device acknowledgment rather than equating enqueue with execution.
         rid = None
         try:
             rid = resp.json().get("req_id") or None
@@ -253,9 +187,7 @@ def device_oled_display(
                         break  # 查询鉴权失效，不再等待
                 except Exception:
                     break  # 查询接口异常，不再等待
-            # 入队成功但没等到设备回执：**指令确实发出去了**（`changed=True`），
-            # 但"屏幕上到底变了没有"没被确认——措辞与 `changed` 说的是两件事，
-            # 别把后者读成"设备已显示"。
+            # The command was enqueued, but device acknowledgment remains unknown.
             return ok("指令已入队下发，但设备未在 5 秒内回执确认——设备可能已断电或"
                       "MQTT 连接断开，请稍后到设备控制台确认",
                       meta=fact("device_display", changed=True,
@@ -269,9 +201,7 @@ def device_oled_display(
     except Exception as e:
         return unavailable(f"指令下发失败: {e}")
     finally:
-        # **没真正下发就把占位撤掉**：否则一次失败（设备离线/HTTP 错/身份缺失）会把
-        # 30s 内的正常重试也一并挡掉——那是加锁时最容易引入的行为回归。
-        # 撤之前核对占位还是自己那一条，别误撤别人后来占的。
+        # Release the deduplication claim if no command was sent so a later retry remains possible.
         if not sent:
             with _last_display_lock:
                 if _last_display.get(uid) == (text, now):

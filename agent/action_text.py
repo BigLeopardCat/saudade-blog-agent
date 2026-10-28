@@ -1,51 +1,9 @@
 # -*- coding: utf-8 -*-
-"""一次执行 → 一行中文动作：**跨语言渲染的唯一实现**（过程行 / 执行台账行两档）。
+"""Render tool actions for progress previews and durable execution receipts.
 
-## 为什么有这个模块
-
-同一件事此前有**两份互不相干的实现**：`server.py::_tool_action_text`（过程行）与
-Rust `src/routes/chat.rs::render_exec_row`（落 `execution_log.detail` 的跨轮执行记忆，
-下一轮经 `recent_executions` 注回提示词）。两份表靠注释互相提醒"改一侧要同步另一侧"，
-而**没有一条测试能发现它们分了叉**——20260928 逐行对照实测：54 条取样里只有 31 条
-逐字相同，其余分三类：① 读的键不同（Rust 读回执顶层 meta、Python 只有实参，退化成
-空书名号）；② 同一件事两种叫法（`跳转「/x/」` vs `页面跳转「物联网平台」`）；
-③ 单侧多出来的信息（《标题》、审核聚焦、量词）。
-
-现在渲染收在本模块**一份实现、两档输出**：
-
-- `preview=True` **过程行**（🛠 预告 / ✅ 完成 / ✗ 受阻）：只吃 plan spec 的实参——
-  预告发出时工具**还没跑**，回执 meta 结构上不存在。截断短（一行灰字放不下长文本）。
-- `preview=False` **执行台账行**（`rcpt["action"]` → `execution_log.detail`）：
-  实参 + 回执顶层 meta，长文本**不截断**（列宽截断归 Rust 排版那一侧）。
-
-Rust 从此只排版：读 `row["action"]`，加执行身份前缀、方括号归一为「」、拼实体摘要、
-按列宽截断；**没有 `action` 的行**（本批之前的存量，以及没真臂的工具）回落它那张
-legacy 表——存量行的渲染一个字节都没变，这是本批的收敛策略（有真臂才接管，逐件搬）。
-
-## 两档不是两份措辞
-
-两档必须是**同一件事的两种叫法**：动作词根一致、指代的对象一致。差别只有两条：
-① **截断**（过程行短、台账行不截）；② **meta 派生的细节**（《标题》、`change`、
-`before → after`、账号名）——那些东西预告那一步结构上拿不到。**改措辞两档一起改**
-（`tests/test_action_text.py` 逐条锁两档的字）。
-
-## 本批顺手收敛的几处（台账侧的字变了，过程行没变）
-
-同一件事两套字里留一套，留的是**过程行那套**（主人天天看的是它；台账只有模型读）：
-`toggle_dark_mode`/`toggle_effect`/`search_notes`/`read_messages` 的量词/`get_moderation_status`
-的聚焦。台账侧的历史行会与新行有一段时间词汇混排——它只进下一轮提示词、不在任何界面上
-显示，所以这个代价换掉"同一件事两种叫法"是划算的。
-
-另外两处是**逻辑**差异（不是措辞），一并收敛到有守卫的那版：
-- `toggle_effect`/`toggle_dark_mode` 的极性：Rust 是 `!= "off"` 当开（缺参/写"关"都算开），
-  本模块统一按"肯定词表"判（认不出 = 关）；
-- 空实参：Rust 会渲染出 `新建一级标签「」`（空书名号）这类退化，本模块一律给出不带
-  空书名号的兜底（`test_action_text.py` 的通用不变量锁住"两档都不许出现空「」/空冒号"）。
-
-## 无独立动作行的读取
-
-`get_chat_history` 在原生读取领域提供历史文本，不产生写回执；旧执行器不提供其动作行。
-"""
+Previews use call arguments and may shorten text. Receipt actions may add verified
+result metadata; the host handles final layout and column width. Neither renderer
+interprets user intent or authorizes execution."""
 import re
 
 from agent import adminops_tags as _tags  # 标签颜色/状态的既有中文词表（写工具问句共用）
@@ -60,14 +18,10 @@ from tools.site import nav_label
 
 _EFFECT_CN = {"sakura": "樱花", "rain": "大雨", "snow": "雪花"}
 
-# "开"的肯定词（认不出 = 关，绝不默认开——缺参时把"关闭"说成"开启"是**反事实**，
-# 而这一行会经 recent_executions 注回下一轮，主人问"你刚才动过我的夜间模式吗"，
-# planner 看到的就是这一行）。Rust 侧旧表是 `!= "off"` 当开，本模块统一到这张词表。
+# Unknown switch values render as off; never imply an unsupported effect was enabled.
 _ON_WORDS = frozenset({"on", "开", "开启", "打开", "true", "1", "yes", "y"})
 
-# 无参只读点名工具 → 中文动作（planner 直接点名展开，见 workflows._EXPLICIT_TOOLS）。
-# 与 Rust `render_exec_row` 的同名臂同源；**这张表是唯一来源**，Rust 那张 legacy 表
-# 只对存量行生效。
+# Display labels for parameterless read operations.
 _NOARG_VERB = {
     "list_guestbook": "查看留言板",
     "list_talks": "查看说说",
@@ -75,113 +29,40 @@ _NOARG_VERB = {
     "list_devices": "查看设备列表",
     "get_announcements": "查看公告",
     "get_current_time": "查看当前时间",
-    # 20260913 新入白名单的站点信息类（此前 planner 点不到，无中文动作词；
-    # 缺省会落到"执行 get_social_links"的内部格式）
     "get_blog_info": "查看博客信息",
     "get_social_links": "查看社交链接",
     "get_site_map": "查看站点结构",
     "get_top_notes": "查看置顶文章",
     "list_categories": "查看分类",
     "list_tags": "查看标签",
-    # 管理助手报表（20260921）：**不在** _EXPLICIT_TOOLS 里（planner 点不到名，
-    # 只由 ops_report / moderation_report / user_report 三个技能模板展开），
-    # 但过程行渲染走的是同一张表——缺了就显示"执行 get_server_status"。
     "get_server_status": "查看服务器状态",
     "get_service_health": "查看服务健康",
     "get_user_stats": "查看用户统计",
-    # 文章流量报表（20260930）：同族（admin.console，技能模板展开）
     "get_note_stats": "查看文章流量报表",
-    # 后台文章列表（20260921 第二轮，**读**）：无参，同上面几个报表工具——
-    # planner 点不到名（不在 _EXPLICIT_TOOLS），由 admin_notes 技能模板展开。
     "list_admin_notes": "查看后台文章列表",
-    # 用户自己的数据（20260923）：planner 直接点名（在 _EXPLICIT_TOOLS 里）
     "list_my_favorites": "查看我的收藏",
     "get_unread_summary": "查看未读汇总",
     "list_notifications": "查看站内通知",
-    # 自己的信箱（20260923 批 8）：与"站内通知"不是一回事（通知是系统推的、信是一对
-    # 一写的），措辞必须分开——台账行会经 recent_executions 注回下一轮，写成同一个
-    # 词，planner 就会拿通知的 id 去标记信（反之亦然）。
     "list_my_messages": "查看站内信",
-    # 我自己的河灯（20261008）：与公开池的"查看留言板"（`list_guestbook`）刻意分开措辞
-    # ——同族理由（台账行会经 recent_executions 注回下一轮）：说成同一个词，下一轮
-    # "带我去那条"就会拿**公开池的序号**去拼位置，而位置要的是这一行里的 `talkId`。
     "list_my_board": "查看我的河灯",
-    # 后台首页待办 / 日程（20260926）：读的那件（写的那件另有臂，正文要进这行）
     "list_dashboard_todos": "查看待办列表",
-    # 后台账号名录（20261006）：无参，同 `list_admin_notes` 那一格——**不在**
-    # _EXPLICIT_TOOLS 里（planner 点不到名，只由 `account_roster` 技能模板展开），
-    # 但过程行渲染走的是同一张表，缺了就显示"执行 list_accounts"。
     "list_accounts": "查看后台账号名录",
-    # 后台**评论**名册（20261019）：无参那一档，与 `list_admin_board`（留言名册）同族。
-    # ⚠️ 这里**只登记这一格**，`list_admin_board` 那件**没有**进这张表（它的无参档
-    # 由下面那条分支显式 return 同一串字）——两处必须逐字一致（测试锁着）。
-    # 措辞里「评论」两个字必须留住：台账行会经 recent_executions 注回下一轮。
     "list_admin_comments": "查看后台评论名册",
 }
 
 _REF_SOURCE_CN = {
     "search_notes": "检索结果", "rag_search": "检索结果", "list_notes": "文章列表",
     "list_talks": "说说列表", "list_guestbook": "留言列表",
-    # 后台写轮最常见的引用源（20260921 第二轮）：`$list_admin_notes[0].noteId`
-    # 是"把《X》设为私密"的标准走法（先读列表拿 id 再写），缺了它就往过程行里
-    # 打内部工具名。
     "list_admin_notes": "后台文章列表",
-    # 后台留言名册（20261001）：`$list_admin_board[N].talkKey` 是"把那条驳回/删掉"
-    # （复核与删除都按 talkId 认）的标准走法——缺了它，过程行会打出内部工具名。
     "list_admin_board": "后台留言名册",
-    # 后台评论名册（20261019）：`$list_admin_comments[N].id` 是"把那条评论驳回/删掉"
-    # （两件都按 commentId 认）的标准走法——缺了它，过程行会打出内部工具名。
     "list_admin_comments": "后台评论名册",
-    # 用户自己的数据（20260923 批 6/7）：`$list_my_favorites[0].noteId` 是"取消收藏
-    # 那一篇"的标准走法（先读自己的收藏夹拿 id 再撤），`$list_notifications[0].id`
-    # 是"把那条公告标记已读"的走法。缺了这两个来源名，过程行会打出内部工具名。
     "list_my_favorites": "收藏列表",
     "list_notifications": "通知列表",
-    # 我自己的河灯（20261008）：`$list_my_board[N].talkId` 是"带我去那条留言"的标准
-    # 走法（`/guestbook?lid=<talkId>`），与公开池的"留言列表"（`list_guestbook`）分开
-    # ——那一行的 id 是**公开池**的物件，不是"我那条"。
     "list_my_board": "我的河灯列表",
-    # 后台账号名录（20261006）：`$list_accounts[N]` 现在还写不出可用的字段引用（返回是
-    # 一段文本+meta 里的账号名列表），但**来源名要留着**——缺了它，任何一处写成
-    # `$list_accounts[…]` 的过程行都会打出内部工具名（同上面两条的注）。
     "list_accounts": "后台账号名录",
 }
 
-# ── 写能力的**动作词根**（gate 零帧声称网的词源，20260930）──────────────────
-#
-# ## 为什么住在这里
-#
-# gate 的零帧轮声称网（`agent/graph.py::_WRITE_DONE_CLAIM_RE`）要能认出**"这一轮
-# 系统真的办成了"这种没有对应工具调用的完成式断言**。在 20260930 之前，那类判据的
-# 动词是**一处一手写**的长正则表（洞① 的 ①②③④ 支），于是每上一个写能力都得有人
-# 记得回去补一个词——而**没有任何东西会因此报错**。20260930 漏的就是这一环：
-#
-#   trace `20260930T123938`（主人全程可见，uid=1）：主人说「我的未读信息全部就标记
-#   为已读」，planner 判 chat（零工具、本轮 execute 零事件），narrator 回
-#   **「这一轮系统真的办成了：你（id=1）的未读站内信已全部标记为已读。现在你的未读
-#   站内信是 0 封」**。实测把这句话喂给 graph 里**全部 12 张声称网**（洞①②④⑥⑦、
-#   系统取数、第一人称工具、命令前缀、检索、无执行……）——**一张都没命中**，gate 判
-#   PASS 放行。下一轮主人追问「你调用工具了吗就说」，narrator 自己认了「那句是我编的」
-#   （它的诚实救的场，不是系统拦下的）。
-#
-# 为什么 12 张网全漏：`read_notifications` 是 20260923 批 8 才上线的写能力，它的
-# 动作词「标记…已读」**一次都没进过任何动词表**；而这句话的施事是「系统」、完成标记
-# 落在前半句的「办成了」上——洞① 的①支要「帮你/给你」施事前缀、②③支的动词表是开合/
-# 显示族、④支只放后台写域。三个特征同时错开每一条旧支。
-#
-# 所以词根表放在**动作措辞的唯一来源**这里（与上面那些臂同一处：写一个臂就该顺手
-# 登记它的声称词根），由 `tests/test_write_done_claim.py` 的同步锁钉死——
-# **每个 write scope 工具（`agent/authz.py::TOOL_SCOPE` × `WRITE_SCOPES`）都必须
-# 在下面有一条**。加写能力忘了加词 → 离线套件当场红，而不是等下一次幻觉现场。
-#
-# ## 值是什么形态
-#
-# 值 = **正则片段**，收的是**模型自己的说法**，不是 `receipt_action` 那套系统措辞
-# ——两者刻意都收：系统措辞会被模型照抄进正文（"标记站内通知已读"），而它转述时又常
-# 换字（"标记**为**已读""标**成**已读"）。所以片段里要列同义形态。
-#
-# 词根**只认动作本身**，不认宾语：宾语（留言/标签/额度…）由 `_WRITE_DONE_CLAIM_RE`
-# 那侧的施事锚管，见 `agent/graph.py` 的长注（那里也写了为什么不能只靠宾语判）。
+# Offline judge vocabulary; these patterns never route or execute requests.
 WRITE_CLAIM_ROOTS = {
     # ── write.page（作用于访客自己看到的页面）────────────────────────────
     "navigate_to": r"跳转|跳过去|带你去|导航",
@@ -192,17 +73,11 @@ WRITE_CLAIM_ROOTS = {
     # ── write.own（主人自己的私有数据）───────────────────────────────────
     "add_favorite": r"收藏",
     "remove_favorite": r"取消收藏|移除收藏|撤掉收藏",
-    # 20260923 批 8 的两件（**20260930 事故的正主**）：同义形态要把「为/成/作」
-    # 中间的虚词收进来——模型写的是"标记**为**已读"，系统措辞是"标记…已读"。
     "read_notifications": r"标记(?:为|成|作)?已读|标为已读|标成已读|清空未读",
     "read_messages": r"标记(?:为|成|作)?已读|标为已读|标成已读",
     # ── write.console（后台管理面写）────────────────────────────────────
     "audit_board_comment": r"复核|审核|通过|驳回",
     "delete_board_comment": r"删除|删掉|清掉",
-    # 文章评论的两件（20261019）：词根与留言那两件**刻意同形**——它们描述的是同一类
-    # 动作（复核/删除），而判据关心的是"这一轮有没有声称做了一件写"，不关心做在哪张表。
-    # 分开写两份是为了过同步锁（每个 write scope 工具都要有自己的键），**不是**为了
-    # 让两边读出不同的词。
     "audit_comment": r"复核|审核|通过|驳回",
     "delete_comment": r"删除|删掉|清掉",
     "approve_quota_request": r"批准|通过",
@@ -210,18 +85,8 @@ WRITE_CLAIM_ROOTS = {
     "reset_user_quota": r"重置|恢复额度|额度恢复",
     "freeze_account": r"冻结|封号|封掉",
     "unfreeze_account": r"解冻|解封",
-    # 禁言两件（20261002）。与冻结族**必须不同形**（禁言不踢人下线），词根也各是各的：
-    # 「禁言」收的是模型自己的说法（「我已经把他禁言了」），而系统措辞是
-    # `receipt_action` 那一行「禁言账号「X」」——两者都会被模型照抄，所以两边都收。
-    # 解禁方向刻意**不**写成只认「解禁」：主人与模型都常说「解除禁言」，而这个词里
-    # 含「禁言」二字 ⇒ 两个工具的词根天然有交集，这是**有意**的——零帧轮里说
-    # 「已解除禁言」和说「已禁言」都是"声称做了一件本轮的写"，判据只关心这件事。
     "account_mute": r"禁言|封口",
     "account_unmute": r"解禁|解除禁言|撤销禁言|恢复发言",
-    # 变更身份（20261002 批 J）：词根覆盖"改成/改为/设成/降成/恢复成"这一族
-    # （技能描述里的动词与主人常说的都在里头）——洞⑨ 那条消费者（`test_write_done_claim.py`
-    # 的同步锁）会检查每个 write scope 工具都在这张表上，漏了当场红。
-    # ⚠️ 与冻结族**必须不同形**：改的是"他在哪一档"，不是"开/关"。
     "set_account_role": r"改成|改为|设为|设成|变更为|变更|调成|转成|降成|降为|升成|提升为|恢复成",
     "send_user_notice": r"发(?:送|了)?(?:站内)?通知|通知了",
     "create_tag": r"新建|创建|建好|添加|加上|加了",
@@ -251,13 +116,7 @@ def _ref_phrase(value: str) -> str:
 
 
 def _leaf(value, normalize=None, word=None) -> str:
-    """写工具的参数值 → 过程行可读短语（20260921 第二轮）。
-
-    三个来源各自成序，缺一不可：引用走 `_ref_phrase`（**绝不能打印 `$…` 原语法**）、
-    认识的取值走中文词、其余按原值截断——写工具的预告帧与完成帧都经这里，
-    两帧必须给主人看到**同一句话**（预告说"设为私密"、完成说"设为 private"会让人
-    以为改了两次）。
-    """
+    """参数值的简短展示；标题或正文缺失时使用通用物件名。"""
     s = str(value if value is not None else "").strip()
     if not s:
         return ""
@@ -271,23 +130,12 @@ def _leaf(value, normalize=None, word=None) -> str:
 
 
 def _raw(value) -> str:
-    """台账行用的取值：**不截断**（列宽截断归 Rust 排版那一侧，见模块头注）。
-
-    与 `_leaf` 分开写而不是加个开关：台账行读的是**已经落进回执的值**（一律
-    `str(v)[:120]`，见 `graph._RCPT_META_KEYS` 那条拷贝循环），它到这里已经是最终
-    形态；而过程行读的是 plan spec 里的原始实参（可能是 `$tool[0].field`）。
-    """
+    """读取未截断的台账字段；列宽裁剪由宿主负责。"""
     return str(value if value is not None else "").strip()
 
 
 def _todo_preview(value, limit: int = 24) -> str:
-    """待办正文 → 过程行用的**预览**（20260926）。
-
-    截断只发生在这一处、且**带上省略号**：这一行是执行前发出的灰色预告，主人核对
-    的那一面是确认卡（`adminops` 那两张卡与两条回执都印全文），所以它短一点没关系；
-    但裸切一刀（`body[:24]`）看上去就是"系统只记了这半句"——真实现场里主人正是
-    这么问的（trace `20260926T094843`）。
-    """
+    """待办正文的一行预览，保留可核对的前缀并限制长度。"""
     s = str(value or "").strip()
     return s if len(s) <= limit else s[:limit] + "…"
 
@@ -303,14 +151,7 @@ def _names_phrase(value) -> str:
 
 
 def _py_int_list(raw) -> list[str]:
-    """回执实参里的**列表参数**取回正整数（Rust `py_int_list` 的对应物）。
-
-    回执的 args 一律 `str(v)` 落盘（跨语言契约里只留一种类型，见 `graph.execute_node`
-    的 rcpt 构造），所以 `[7, 8]` 到这里是**字符串** `"[7, 8]"`。过程行读的是原始实参
-    （`_norm_id_list` 那一侧），台账行读的正是这串 repr ⇒ 两档都必须认得出来，
-    否则同一次执行在预告里说"标了 7、8、9"、在完成帧里说"标记站内通知已读"（无对象）。
-    形态认不出就返回空（调用方退回不带列表的说法，**绝不猜编号**）。
-    """
+    """从回执列表参数中读取正整数；兼容已持久化的列表文本。"""
     s = str(raw or "").strip().strip("[]")
     return [x.strip().strip("'\"") for x in s.split(",")
             if x.strip().strip("'\"").isdigit()]
@@ -351,12 +192,9 @@ def _arm_text(name: str, a: dict, m: dict, preview: bool):
     """有臂 → 该行的正文；**无臂 → None**（兜底交给调用方，别在这里发明措辞）。"""
     # ── 标签 ────────────────────────────────────────────────────────────
     if name == "create_tag":
-        # 一级/二级只差一个父 id；标题为空（planner 漏参）时也要给出一行像样的中文
         if preview:
             title = _leaf(a.get("title"))
             pid = _leaf(a.get("parent_id"))
-            # 颜色（20260921）：点名了才显示——过程行是"这件事长什么样"的预告，
-            # 参数里带色就说明用户点了色（没点名时 color 根本不进 args）
             hexval = _tags.match_tag_color(a.get("color")) if a.get("color") else None
             color = f"，颜色 {_tags.describe_color(hexval)}" if hexval else ""
             if not title:
@@ -437,9 +275,6 @@ def _arm_text(name: str, a: dict, m: dict, preview: bool):
 
     # ── 公告（正文一律不进这两行，理由见各分支）────────────────────────────
     if name in ("create_announcement", "update_announcement", "delete_announcement"):
-        # 过程行**只报标题，不打印正文**——正文是主人要对全体访客说的话，过程行只是
-        # 一行"在做什么"的预告，预览在确认框里。台账行同理（公告正文几百字，会把
-        # 跨轮执行记忆的窗口占满，还会让"我发过这条公告"的正文被 narrator 复述）。
         if preview:
             title = _leaf(a.get("title"))
             if name == "create_announcement":
@@ -474,9 +309,6 @@ def _arm_text(name: str, a: dict, m: dict, preview: bool):
             cn = _tags.BOARD_VERDICT_CN.get(v or "", "")
             head = f"人工复核留言（含「{quote}」的那条）" if quote else "人工复核留言"
             return f"{head}：{cn}" if cn else head
-        # 台账行：**不带留言正文**（正文是访客写的、可能很长，而 detail 列宽 300、
-        # 读侧只取最近 8 行；更要紧的是正文进了跨轮执行记忆就会被 narrator 当作
-        # "我读过这条留言"的证据复述）。所以过程行用片段、台账行用 #id + 作者。
         bid = _m(m, "board_id")
         who = _m(m, "board_author")
         change = _m(m, "change")
@@ -488,11 +320,6 @@ def _arm_text(name: str, a: dict, m: dict, preview: bool):
             head = f"{head}（{who} 的留言）"
         return f"{head}：{change}" if change else head
 
-    # ── 文章评论（20261019）────────────────────────────────────────────
-    # 与留言那一支同形，措辞**逐字带「评论」**：过程行/台账行是主人事后唯一读得到的
-    # 那句事实，写成「留言」会让他去翻错的后台页（两族的差别见 `adminops_comment`
-    # 头注）。回执侧的 id 取顶层 `comment_id`，**不取 `board_id`**——两个键名各自
-    # 独立，混用会把一条评论的行印成留言的编号。
     if name in ("audit_comment", "delete_comment"):
         cid = _m(m, "comment_id")
         if preview:
@@ -582,29 +409,19 @@ def _arm_text(name: str, a: dict, m: dict, preview: bool):
             return "站内检索"
         return f"站内检索「{q[:24] if preview else q}」"
     if name == "search_notes":
-        # 台账侧旧表写的是「搜索「x」」——同一件事两套字，留过程行这套（"检索文章"
-        # 与 rag_search 的"站内检索"成对，也说得更准：它搜的是文章，不是全站）。
         k = _raw(a.get("keyword") or a.get("query"))
         if not k:
             return "检索文章"
         return f"检索文章「{k[:24] if preview else k}」"
     if name == "get_moderation_status":
-        # 聚焦某一类时把"看的是哪一类"写进这一行（20260922）：只写「查看审核状况」
-        # 会让"主人问被驳回的、agent 却在看全部"这种偏差看不出来。两档都写。
         focus = {"ai_passed": "AI 直接通过的", "ai_rejected": "被 AI 驳回的",
                  "pending": "等人复批的"}.get(_raw(a.get("status")))
         return f"查看审核状况（只看{focus}）" if focus else "查看审核状况"
     if name == "get_note_periods":
-        # 分期报表（20261001）：**粒度必须印出来**——「上一周」与「上个月」是两张
-        # 不同的纸（数字全不一样），行里不写，事后从台账回看只剩"查看文章报表"，
-        # 主人问"你刚才说的是上个月吧"就无从核对（同 `get_moderation_status` 的聚焦
-        # 那条注，也同 `list_admin_board` 的筛选条件）。认不出的取值不猜，只说报表名。
+        # Reporting and action labels share the same granularity vocabulary.
         kind_cn = _KIND_CN.get(_raw(a.get("kind")))
         return f"查看文章{kind_cn}" if kind_cn else "查看文章分期报表"
     if name == "list_admin_board":
-        # 后台留言名册（20261001）。两档同字，但**筛选条件要写进这一行**：主人问
-        # "匿名的那些是谁发的"、agent 却只用关键词筛了一小撮——这种偏差只有在行里
-        # 才看得出来（同 `get_moderation_status` 的聚焦那条注）。
         cond = []
         st = BOARD_APPROVED_CN.get(BOARD_STATUS_FILTERS.get(_raw(a.get("status"))))
         if st:
@@ -614,10 +431,6 @@ def _arm_text(name: str, a: dict, m: dict, preview: bool):
             cond.append(f"关键词「{k[:24] if preview else k}」")
         return "查看后台留言名册（" + "，".join(cond) + "）" if cond else "查看后台留言名册"
     if name == "list_admin_comments":
-        # 后台**评论**名册（20261019）：与上面那条逐字同形（筛选条件要印进行里，
-        # 理由同它）。**「评论」两个字必须留住**——这一行会经 recent_executions 注回
-        # 下一轮，写成「留言」会让下一轮把"我读过评论名册"当成"我读过留言名册"
-        # （两族的差别见 `adminops_comment` 头注）。
         cond = []
         _code = BOARD_STATUS_FILTERS.get(_raw(a.get("status")))
         st = BOARD_APPROVED_CN.get(_code) if _code is not None else None
@@ -635,23 +448,15 @@ def _arm_text(name: str, a: dict, m: dict, preview: bool):
         k = _raw(a.get("keyword"))
         return f"查看后台文章列表（关键词「{k[:24] if preview else k}」）" if k else "查看后台文章列表"
     if name == "list_accounts":
-        # 后台账号名录（20261006）：无参、两档同字，与 `_NOARG_VERB` 那一格逐字一致
-        # （同 `list_admin_notes` 那条"两处必须一致"的注）。**「后台账号」四个字要留住**：
-        # 这一行会经 recent_executions 注回下一轮，是"我核对过名录"的唯一凭据；写成
-        # 泛泛的"查看账号列表"会和"查看我的收藏/站内通知"那几行混成一片（同
-        # `list_my_messages` 与 `list_notifications` 必须分开措辞那条）。
+        # Display labels for parameterless read operations.
         return "查看后台账号名录"
     if name == "get_article_detail":
-        # 动作词按 **doc_type** 取（20260928）：这一件工具读的是文章/说说/留言/公告
-        # 四个源，此前一律说"读取文章" ⇒ 两行都把留言读成文章。
         what = DOC_TYPE_CN.get(_raw(a.get("doc_type")) or "note", "文章")
         aid = _raw(a.get("article_id"))
         if preview:
             if aid.startswith("$"):
                 return f"读取{what}（{_ref_phrase(aid)}）"
             return f"读取{what} {aid[:12]}" if aid else f"读取{what}"
-        # 台账行带《标题》（20260912）：下轮"那篇讲架构的"要靠它核对指代，只有 id
-        # 无从核对。标题只有 note 分支派生得出，缺失就回落纯 id。
         head = f"读取{what} {aid}" if aid else f"读取{what}"
         return f"{head}{_title_suffix(m)}"
     if name in _NOARG_VERB:
@@ -673,15 +478,6 @@ def _arm_text(name: str, a: dict, m: dict, preview: bool):
         # 只写「冻结账号「X」」，跨轮记忆里就成了一次真动作。
         return f"{verb}「{acct}」：{change}" if change else f"{verb}「{acct}」"
     if name in ("account_mute", "account_unmute"):
-        # 禁言 / 解禁（20261002）。同账号族两条纪律（只报**账号名**、**不报 uid**），
-        # 外加两处这一族独有的：
-        #   · **方向必须写进行内**（两个工具一个禁一个解，只写「动了账号「X」」读不出
-        #     是哪一边）；
-        #   · 禁言方向**要报期限**：那一格是跨轮记忆里"他当时被关了多久"的唯一来源
-        #     ——主人下轮问"你把他关了多久"，没有这一格就只剩一句"禁了"。
-        #     期限取自回执 meta 的 `change`（= 工具写后重读得到的事实，不是模型填的值），
-        #     与 `before`/`after` 一起构成"从什么状态到什么状态"。
-        # ⚠️ 措辞**绝不复用冻结族的"踢下线"**：禁言不 bump `token_version`。
         acct = _m(m, "account_name") or _leaf(a.get("name"))
         verb = "禁言账号" if name == "account_mute" else "解除账号禁言"
         if preview:
@@ -694,12 +490,6 @@ def _arm_text(name: str, a: dict, m: dict, preview: bool):
         # 解禁方向那半句是「已解除禁言 / 本来就没有被禁言，本次未发生变更」。
         return f"{verb}「{acct}」：{change}" if change else f"{verb}「{acct}」"
     if name == "set_account_role":
-        # 变更身份（20261002 批 J）。同账号族两条纪律（只报账号名、**不报 uid**），
-        # 外加这一族独有的一条：**方向必须写进这一行**——同一件工具既能降成杂鱼、
-        # 也能升回普通用户，台账行上只写「改了账号「X」的身份」跨轮读回来是一团
-        # 说不清的雾（主人下轮问"你把他改成什么了"），所以目标那一档一律印出来。
-        # 那一档取自回执 meta 的 `after`（= 工具写后重读名录得到的**事实**，不是
-        # 模型填的值）；`after` 缺失时退回参数原样（preview 档也走这条路）。
         role_cn = _m(m, "after") or _leaf(a.get("role"))
         if preview:
             acct = _leaf(a.get("name"))
@@ -718,14 +508,6 @@ def _arm_text(name: str, a: dict, m: dict, preview: bool):
         # 是两件事）。
         acct = _m(m, "account_name") or _leaf(a.get("name"))
         return f"给账号「{acct}」发通知" if acct else "给账号发通知"
-    # 对话额度三件（20260929）——账号族的新成员，同一条纪律：只报**账号名**、
-    # **不报 uid**、**不报驳回理由**、也**不报额度读数**。四条各有各的说法：
-    #  · uid 是内部编号，主人核对靠名字（同冻结族那条注）；
-    #  · 驳回理由与申请理由会经站内通知原样发给对方，两行里再抄一遍，会与卡面上主人
-    #    刚核对过的那一句话看起来像两件事（同发通知不报正文）；
-    #  · 额度读数（`chatQuotaUsed`）**不是这一行该说的话**：它是写后重读的**那一刻**
-    #    的实测值，而额度每一轮流在动——落进跨轮执行记忆后会被下轮读成"他现在还剩
-    #    N 轮"。读数只住在工具返回给 narrator 的那句话里（`render_quota_status`）。
     if name in ("approve_quota_request", "reject_quota_request", "reset_user_quota"):
         acct = _m(m, "account_name") or _leaf(a.get("name"))
         # 名单里的字就是这一件的动作词（两档共用）：批准/驳回的是**他的申请**，
@@ -797,16 +579,6 @@ def _arm_text(name: str, a: dict, m: dict, preview: bool):
         body = _todo_preview(a.get("text")) if preview else _raw(a.get("text"))
         return f"把待办「{body}」勾成完成" if body else "勾完成待办"
     if name == "reschedule_dashboard_todo":
-        # 改排期（20260929 批 G）：同前两件的分工（正文 24 字预览 / 台账行不截）。
-        # 日期**原样带出来、不做二次翻译**：它到这一行时已经是展开函数归一过的值
-        # ——要么是 `YYYY-MM-DD`、要么是"清空"那个契约词（`adminops._TODO_CLEAR_WORD`），
-        # 两者在这里读起来都不含歧义（「…的排期改成2026-10-08」「…的排期改成未排期」）。
-        # 这里再翻一遍人话（「10月8日」）会多一处与卡面/回执分叉的说法——卡面与回执
-        # （`adminops.render_todo_rescheduled`）印的是人话，两者本就该各说各的：
-        # 这一行是**台账**，要的是"改成了什么值"能一眼对上库里的那一列。
-        # ⚠️ 本臂**没有** Rust 侧的同名臂，这是刻意的：Rust 老表自 20260929 起冻结
-        # （`tests/test_action_text.py` ④ 有那份声明的机器锁），新工具的措辞只住在本仓
-        # 这一侧 ⇒ 它的锁也在本仓（`tests/test_todo_schedule.py` ⑭ 逐字钉住）。
         body = _todo_preview(a.get("text")) if preview else _raw(a.get("text"))
         when = _raw(a.get("date"))
         if not body:
@@ -817,26 +589,11 @@ def _arm_text(name: str, a: dict, m: dict, preview: bool):
 
 def tool_action_text(name: str, args: dict | None = None, meta: dict | None = None,
                      preview: bool = True) -> str:
-    """一次执行 → 一行中文动作（**过程行与台账行共用这一个入口**）。
-
-    `args` = plan spec 的实参（过程行）或回执的 args（台账行，值已 `str()` 落盘）。
-    `meta` = **回执顶层**（`graph.execute_node` 构造的那个 dict：`_RCPT_META_KEYS`
-    的白名单值 + `title`/`change`/`cmd`/`digest`）——`preview=True` 时忽略它：
-    预告发出时工具还没跑，回执不存在。
-
-    无臂的工具（见模块头注"未覆盖的工具"）返回**兜底行**`执行 {name}`；回执行那一侧
-    用 `receipt_action`，它对无臂工具返回空串（不写这个键，由 Rust 的 legacy 表兜底）。
-    """
+    """Render an action preview or receipt using the same operation vocabulary."""
     text = _arm_text(name, args or {}, meta or {}, preview)
     return text if text is not None else f"执行 {name}"
 
 
 def receipt_action(name: str, args: dict | None, meta: dict | None) -> str:
-    """回执行的动作字段（`rcpt["action"]`）；**无臂 → 空串**（不写这个键）。
-
-    写成空串而不是兜底行，是为了让"没收敛的工具"与"收敛了的工具"在 Rust 那一侧
-    走**两条不同的路**：有 `action` 就排版它，没有就回落到 legacy 表——于是本批
-    上线前后，存量工具与新工具的行**一个字节都不变**（`test_action_text.py` 锁住
-    这条：无臂工具的返回值必须是空串，而不是 `执行 x`）。
-    """
+    """Return a verified receipt action, or an empty string for unsupported tools."""
     return _arm_text(name, args or {}, meta or {}, False) or ""
