@@ -1,35 +1,10 @@
 # -*- coding: utf-8 -*-
-"""管理助手写工具：**文章评论**的人工复核（审核 / 删除）—— 20261019 加。
+"""Article-comment moderation tools and stable-ID target helpers.
 
-## 为什么现在才有
-
-留言（河灯）那一族早就有读 + 复核的通道，**评论一直没有**：主人说「把那篇文章下面
-那条评论驳回」时，agent 手里没有任何工具能落地——它只能如实说"我没有直接读评论的
-能力"（生产 trace 20261018T232550 就是这个形状）。后端其实一直有对应的三个端点
-（`GET /api/protect/comments`、`PUT …/{id}/audit`、`DELETE …/{id}`），缺的只是这一侧。
-
-## 与留言那一族的异同（`tools/board_moderation.py`）
-
-**同**：目标通道、fail-closed（读回复核）、`0 = 驳回` 的请求体方向、**数字由工具内部
-产生**（上层只说 pass/reject，绝不让模型碰 1/0）、命中多条一律不替主人挑。
-
-**异**：
-  ① 评论有 **id 稳定指称**（`note_comment.id`，后台名册逐条印 `commentId:<id>`），
-     而且**已上线的后台页**（`CommentManage`）读的就是同一个端点 ⇒ 审核按 **id** 认，
-     不按正文片段。留言那边按 id 认是因为"待办台账只摆待审的行、id 由系统现摆"；
-     评论这边 id 来自名册，同样可验证（在名册里 / 不在）。
-  ② 评论是**软删**（`is_deleted = 1`，行留着溯源），留言是**真删**。所以删除的回执行
-     措辞不同（见 `adminops_comment.render_comment_deleted`），而且**已软删的行不可
-     再审**（父仓 `audit_comment` 明确拒它）——这里也照那个口径先拒，不把请求发出去。
-  ③ 评论挂在某篇文章下 ⇒ 指称与候选一律带上「文章《标题》」（主人脑子里的指代通常是
-     「那篇讲 X 的文章下面那条」）。
-
-## 搬家/新增时守的一条
-
-⚠️ **帮手一律写成 `_base.<名>(...)`**：`_admin_get` / `_admin_request` 是被套件直接
-打桩的模块全局（同 `tools/board_moderation.py` 头注那条）。按名 import 会把打桩前的
-旧对象钉死在这里，桩静默失效、代码真去发网络请求，而症状只是"断言换了个理由红"。
-"""
+Comments and guestbook messages have different ID namespaces and storage.
+Article comments are soft-deleted and deleted rows cannot be reviewed again.
+Tools map pass/reject to the backend numeric contract and verify the result.
+Shared transports are resolved through _base."""
 
 from typing import Annotated
 

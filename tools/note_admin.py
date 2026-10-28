@@ -1,40 +1,10 @@
 # -*- coding: utf-8 -*-
-"""管理助手写工具：**文章**（后台清单 / 改状态 / 打标签）—— 20261018 拆 `tools/base.py`。
+"""Article administration tools and target helpers.
 
-**为什么单独成模块**：这一族是 `tools/base.py` 里**离散的两段、5 个模块级名字**——
-前面一段是后台文章的两个读口径（`_read_note` 单篇现状、`_note_index` 整份清单），
-后面一段是三件工具（`list_admin_notes` 读后台清单 / `set_article_status` 改状态 /
-`set_article_tags` 打标签）。scope 是 `admin.console` + `write.console`，目标通道是
-**文章 id**（不是名字——与标签/分类/公告那几族的根本差别）。
-
-## 这一族独有的事实（实现为什么长这样）
-  ① **读的行与写的行必须是同一行**：`_read_note` 刻意不走
-     `/api/protected/draft/editor/:id`——那一条对「编辑修改稿」行会**解引用成原文章**，
-     而 `update_note` 只发 `{status,isTop}` 时写的是**被点的那一行本身** ⇒ 前值全假；
-     更坏的是把修改稿行写成 `status=public` 后，公开列表（只滤 `is_public`/`draft`、
-     不滤 `draft_of`）会多出一篇同标题文章。`/api/protected/notes/list` 过滤
-     `draft_of is null`，于是修改稿 id 在这里**读不到** ⇒ 调用方如实拒绝（"这不是一篇
-     文章本体"），而不是猜。
-  ② **`_read_note` / `_note_index` 是写操作的唯一读写口径**：确认弹窗里那句「现在是
-     公开还是草稿」必须与写操作自己读前值的口径**同一份数据源**，否则弹窗写的现状
-     与真正被改的那一行可能不是同一行。
-  ③ **`None` 与 `{}` 的区分是刻意的**：`{}` = 后台确实一篇文章都没有（"清单里没有
-     这一篇"是**事实**），`None` = 这一次读不到（只能说"没核对上"，不许说成"站内没有"）。
-
-## 搬家时守的一条
-⚠️ **所有共享帮手一律写成 `_base.<名>(...)`**：`_admin_get`（套件打桩 50 处）、
-`_admin_post`（28 处）、`_admin_read_post`（7 处）、`_tag_index`（47 处）、
-`_category_index`（15 处）、`_read_note`（**12 处**）、`_note_index`（1 处）都是
-**被套件直接打桩**的模块全局（`patch()` 就是 `setattr(tools.base, 名, 桩)`）；
-`_near_miss_names` 与 `_as_article_id` 这两个共享原语**留在 `tools/base.py` 的原位置**
-（前者供给标签/分类/公告/账号四族，后者被 `tools/own_data.py` 与
-`agent/adminops_noop.py` 按名 import）。
-⚠️⚠️ **连本模块自己的 `_read_note` / `_note_index` 也走 `_base.<名>(...)`**：它们各自
-被套件打桩 12 处 / 1 处，而函数对象按**自己所在模块**的 `__dict__` 解析全局名 ⇒ 裸名
-调用会让 `tools.base` 上那份桩**静默失效**（第十块那条教训的同款）。
-本模块一个名字都不按名从 `tools.base` 取（模块级 `from tools.base import <名>` 会让
-mypy 在这个环上判不出被 re-export 的那些名字的类型，见 `tools/admin_read.py` 头注）。
-"""
+Reads must address the same article row that a write changes. Editor-shadow IDs
+are excluded rather than silently dereferenced to a different article. An empty
+dictionary means an empty directory; None means the directory could not be read.
+Shared transports and dictionaries are resolved through _base."""
 
 from typing import Annotated
 
@@ -44,23 +14,14 @@ from langchain_core.tools import tool
 from tools import base as _base
 from tools.result import ToolResult, empty, fact, ok, tgt, unavailable
 
-# `__all__` = 本模块**所有不以 `_` 开头**的模块级名字（社区惯例，不留例外）：
-# 三件 `@tool`。`_read_note` / `_note_index` 是下划线名，由 `tools/base.py` 按原名
-# 显式 re-export 供给（`agent/graph.py` 按名取 `_note_index`；套件更是直接
-# `setattr(tools.base, "_read_note", 桩)`）。
+# Public exports; helper names stay private to their modules.
 __all__ = ["list_admin_notes", "set_article_status", "set_article_tags"]
 
 
 def _read_note(article_id: int, config: RunnableConfig) -> dict | None | ToolResult:
-    """读一篇文章的后台现状（**写操作的唯一读写口径**）。
+    """Read the article row addressed by a write, excluding editor shadows.
 
-    为什么不用 `/api/protected/draft/editor/:id`：那一条对「编辑修改稿」行会**解引用
-    成原文章**，而 `update_note` 只发 `{status,isTop}` 时写的是**被点的那一行本身**
-    ——读的行和写的行不是同一行，前值全假；更坏的是把修改稿行写成 status=public 后，
-    公开列表（只滤 is_public/draft，不滤 draft_of）会多出一篇同标题文章。
-    `/api/protected/notes/list` 过滤 `draft_of is null`，于是修改稿 id 在这里**读不到**
-    → 调用方如实拒绝（"这不是一篇文章本体"），而不是猜。
-    """
+    Do not dereference an editor-shadow ID to a different original article."""
     data = _base._admin_get("/api/protected/notes/list", config)
     if isinstance(data, ToolResult):
         return data
@@ -72,15 +33,9 @@ def _read_note(article_id: int, config: RunnableConfig) -> dict | None | ToolRes
 
 
 def _note_index(config: RunnableConfig) -> dict[int, dict] | None:
-    """后台文章清单 → `{noteKey: 行}`；读不到返回 None（**≠"一篇文章都没有"**，同 _tag_index）。
+    """Read article targets keyed by noteKey, excluding editor-shadow rows.
 
-    与 `_read_note` 同一份数据源、同一口径（`/api/protected/notes/list`，含草稿/私密、
-    不含「编辑修改稿」行）——确认弹窗要写的「现在是公开还是草稿」必须和写操作自己读
-    前值的口径一致，否则弹窗里那句现状可能和真正被改的那一行不是同一行。
-
-    None 与 `{}` 的区分是刻意的：`{}` = 后台确实一篇文章都没有（"后台清单里没有这一篇"
-    是**事实**），None = 这次读不到（只能说"没核对上"，不许说成"站内没有"）。
-    """
+    None means the directory was unavailable; {} means it was read and empty."""
     data = _base._admin_get("/api/protected/notes/list", config)
     if isinstance(data, ToolResult):
         return None
@@ -358,7 +313,7 @@ def set_article_tags(
     if replace is not None:
         add_ids, bad = _resolve(rep_l)
         if bad:
-            # 返回文本里**不许出现工具名**（20260921）：narrator 被要求"按工具返回作答"，
+            # 返回文本里**不许出现工具名**：回复模型 被要求"按工具返回作答"，
             # 照抄到回复里就会变成"我调用了 X"（而 X 若不在本轮执行集里，5c 具名声称闸
             # 直接判编造 → 整条回复被换成兜底道歉）。同族事故见 adminops.render_tag_created。
             return unavailable(f"站内没有这些标签：{'、'.join(bad)}——"

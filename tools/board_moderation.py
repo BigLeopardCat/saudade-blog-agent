@@ -1,35 +1,10 @@
 # -*- coding: utf-8 -*-
-"""管理助手写工具：河灯留言的人工复核（审核 / 删除）—— 20261018 拆 `tools/base.py`。
+"""Guestbook moderation tools and target helpers.
 
-**为什么单独成模块**：`tools/base.py` 是全仓第二大体量文件，而这一族是**连续的 263 行、
-10 个模块级名字**（两张状态词表 + 六个帮手 + 两个 `@tool`），scope 全是 `write.console`，
-目标通道全是**留言正文片段**。出边只有 `_admin_get` / `_admin_request` 两个共享帮手。
-
-## 留言独有那三件事（实现为什么长这样）
-与公告三件同一套纪律（名字通道 + fail-closed + 读回复核），但有三处**留言独有**：
-  ① 留言**没有标题、没有名字**（`talk` 表只有 content/cat/author/时间）：用户嘴里说的
-     就是**那句话本身** ⇒ 目标通道 = **正文片段**（唯一子串匹配）。这是名字通道的留言版：
-     目标仍是"用户说过的东西"，解析仍是确定性的，解不出仍然零写。命中的那条**由工具认、
-     不由模型认**——模型只负责把用户描述的那句原话抄进来。
-  ② 审核端点的请求体是 `{approved: i8}`，且 **0 = 驳回**（Rust 侧写 approved=2 "未通过"，
-     与"待审 0"区分）——方向传反的后果是"该驳回的给放行了"。所以**数字由工具内部产生**，
-     上层只说 pass/reject，绝不让模型碰 1/0。
-  ③ 删除端点对不存在的 id **静默无操作**（`delete_by_id` 不报错，照样返回 "Deleted"）
-     ⇒ 同公告取向：**读不回就等于没删掉**，不猜。
-
-与"名字通道"的唯一差别在**歧义的概率**：标签名撞车很罕见，而正文片段（"好"/"谢谢"）
-一撞就是好几条。所以这里的取向更严——**命中多条一律不替主人挑**（把候选连同作者/时间/
-原文列出来让他指认），绝不按"最新的那条"猜。
-
-## 搬家时守的一条
-⚠️ **两个帮手一律写成 `_base.<名>(...)`**：`_board_index`（本族内 4 个调用点，套件全仓
-打桩 **11 处**）与 `_admin_get`（1 处，套件打桩 6 处）都是**被套件直接打桩**的模块全局
-（`tests/test_tag_admin.py` 的 `patch()` 就是 `setattr(tools.base, 名, 桩)`）。函数对象取
-globals 取的是**它自己所在模块**的 `__dict__` ⇒ 按名 import 会把打桩前的旧对象钉死在这里，
-桩静默失效、代码真去发网络请求，而症状只是"断言换了个理由红"（本仓最贵的失效：
-看着在跑、其实没跑）。`_base` 这个属性查找发生在**调用那一刻**，桩才生得效。
-本模块一个名字都不按名从 `tools.base` 取——连 `re` 都是自己 import 的。
-"""
+Targets use stable IDs or unique body fragments; ambiguous matches require clarification.
+The tool maps pass/reject to the backend numeric contract and verifies the
+result after writing. Deletion must be checked because a missing ID may otherwise
+produce a successful no-op. Shared transports are resolved through _base."""
 
 import re
 from typing import Annotated
@@ -40,15 +15,12 @@ from langchain_core.tools import tool
 from tools import base as _base
 from tools.result import ToolResult, fact, ok, tgt, unavailable
 
-# `__all__` = 本模块**所有不以 `_` 开头**的模块级名字（社区惯例，不留例外）：
-# 两张状态词表是稳定词汇（`agent/action_text.py` / `agent/adminops_confirm.py` /
-# `agent/reports.py` 都在用），两个 `@tool` 是工具本体。六个帮手是下划线名，
-# 由 `tools/base.py` 按原名显式 re-export 供给（显式 import 不受 `__all__` 约束）。
+# Public exports; helper names stay private to their modules.
 __all__ = ["BOARD_APPROVED_CN", "BOARD_STATUS_FILTERS",
            "audit_board_comment", "delete_board_comment"]
 
 # ---------------------------------------------------------------------------
-# 管理助手写工具：河灯留言的人工复核（20260922 第六轮：审核 / 删除）
+# 管理助手写工具：河灯留言的人工复核
 # ---------------------------------------------------------------------------
 # 与上一节的公告三件同一套纪律（名字通道 + fail-closed + 读回复核），三处**留言
 # 独有**的事实决定了实现的形状：
@@ -96,17 +68,10 @@ def _board_index(config: RunnableConfig) -> dict[int, dict] | None:
 
 
 def _board_label(row: dict) -> str:
-    """一条留言的指称（问句/回执行共用）：`talkId:<id> 作者（时间）`。
+    """Render a target label with its talk ID, signature, state and time.
 
-    **id 必须带命名空间**（20260926 批 4）：帧里同时存在好几个 id 命名空间
-    （留言 talkKey、文章 id/key、用户 id、通知 id、信 id），裸 `#96` 没有任何东西
-    说明它是哪一种——trace `20260924T030031` 实证 planner 把通知链接里的留言 id
-    `96` 当成文章 id 去 `get_article_detail`，回来只能说"拿不到内容"。带名字后
-    读的人（和模型）一眼知道该拿它去调哪个工具。
-
-    **不带正文**：正文由调用方按需 clip 后拼上（问句要预览、回执行只留列宽），
-    而"作者"是访客可控文本（留言时可填），故经 `sanitize_untrusted` 拆命令前缀。
-    """
+    Signatures are untrusted free text, not account identities. Body excerpts
+    are added separately by callers according to their display budget."""
     from agent.adminops_tags import clip as _clip
     from agent.reports import sanitize_untrusted
     who = sanitize_untrusted(row.get("author") or row.get("nickname") or "", 16)
@@ -124,18 +89,11 @@ def _board_excerpt(row: dict) -> str:
 
 
 def _find_board_comment(quote, config: RunnableConfig, index=None):
-    """按**正文片段**在留言清单里找一条 → `(行, None)` 或 `(None, 拒绝文本)`。
+    """Find one guestbook entry by an exact body substring, then whitespace-normalized substring.
 
-    与 `_find_named_tag` 同取向（名字通道的留言版）：唯一命中才动手；命中多条
-    **不替用户选**（列出候选让他指认——「好」这种片段一撞就是好几条）；一条都不
-    匹配就如实说没有匹配的留言，**绝不模糊匹配、绝不猜"最新的那条"**；清单读不到
-    则单独一种说法（"读不到" ≠ "没有"）。
-
-    匹配口径：先按**原文子串**（最严）；不中再按**去掉所有空白后**的子串——模型
-    转写用户原话时常把换行/空格抹平（`reports._detail_line` 给 planner 看的明细行
-    也是压成一行的），这一步只为救回这种转写差，不引入任何模糊匹配。
-    `index` 是可选快照（一次操作要读同一份清单两回时用）。
-    """
+    Missing data and no matching entry remain distinct failures. Multiple matches
+    require clarification; never select the newest match implicitly. index may
+    provide a consistent snapshot for repeated reads within one operation."""
     if index is None:
         index = _base._board_index(config)
     if index is None:
@@ -164,22 +122,13 @@ def _find_board_comment(quote, config: RunnableConfig, index=None):
 # ⚠️ 三个 id 参数的注记写成 `str | int` 是**故意的、别收紧成 `str`**：模型照抄的是
 # 一串数字，而计划模板展开时那段文字要过一遍 JSON 解析（`"$user_id"` → `126`），
 # 纯数字串**必然**变 `int` 回来。声明 `str` 的话 pydantic 会在工具入口直接拒掉——
-# 一条本来正确的写操作在结构上到不了执行（20260929 批 H 实测踩到）。判据本体是
+# 一条本来正确的写操作在结构上到不了执行。判据本体是
 # `adminops.normalize_target_id`，它本来就认 `int`／纯数字串／带命名空间三种形态。
 def _find_board_comment_by_id(talk_id, config: RunnableConfig, index=None):
-    """按 **talkId**（后台清单的 `talkKey`）定位一条留言 → `(行, None)` / `(None, 拒绝文本)`。
+    """Find a guestbook entry by a positive talk ID in the authorized snapshot.
 
-    这是审核的**第二条目标通道**（20260929 批 H · S2），与按正文片段的
-    `_find_board_comment` 并列：目标来自系统摆上桌的待办台账（`talkId:<id>` 那一栏），
-    模型抄的就是这个 id。判据因此比"这段字面出自主人原话"更强——**可验证**（id 要么
-    在清单里、要么不在），也正是「你看着办」这类授权式的话能成立的前提。
-
-    三条失败各自如实说（都零写）：
-      · id 认不出（不是正整数）⇒ 说清那不是一个留言编号，**不退回去按正文猜**；
-      · 清单读不到 ⇒ 单独一种说法（"读不到" ≠ "没有"）；
-      · 清单里没有这个 id ⇒ 说清站内没有这条留言（可能已经被删了）。
-    `index` 是可选快照（一次操作要读同一份清单两回时用）。
-    """
+    Invalid IDs, unavailable snapshots and absent entries have distinct failures.
+    Never fall back from an invalid ID to guessing by body text."""
     from agent import adminops_target as _target
     if index is None:
         index = _base._board_index(config)

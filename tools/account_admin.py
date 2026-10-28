@@ -1,12 +1,10 @@
 # -*- coding: utf-8 -*-
-"""Legacy account tools retained for the explicit graph compatibility entry.
+"""Account tool entry points and actor-scoped target helpers.
 
-Native account changes use agent.domains.account_actions and the versioned backend
-transaction service. This legacy adapter resolves full usernames through the old
-account directory. Backend policy applies independently to both names and IDs;
-directory visibility is not an authorization boundary. Shared helpers stay on
-_base so existing compatibility callers and mocked transports use the same state.
-"""
+Native mutations use agent.domains.account_actions and versioned backend
+transactions. The directory supports target discovery, not authorization; backend
+policy applies independently to usernames and IDs. Shared transports are resolved
+through _base so consumers and test doubles use the same channel."""
 
 from typing import Annotated
 
@@ -16,9 +14,7 @@ from langchain_core.tools import tool
 from tools import base as _base
 from tools.result import ToolResult, empty, fact, not_found, ok, tgt, unavailable
 
-# `__all__` = 本模块**所有不以 `_` 开头**的模块级名字（社区惯例，不留例外）：
-# 七个 `@tool` 是工具本体。三个上限常量、名录与解析帮手是下划线名，由 `tools/base.py`
-# 按原名显式 re-export 供给（显式 import 不受 `__all__` 约束）。
+# Public exports; helper names stay private to their modules.
 __all__ = ["account_mute", "account_unmute", "freeze_account", "list_accounts",
            "send_user_notice", "set_account_role", "unfreeze_account"]
 
@@ -41,11 +37,11 @@ def _user_directory(config: RunnableConfig) -> dict[int, dict] | ToolResult:
     的情况下都必须零写，原样往外传一个带人话的 ToolResult 比 `None` 更好用
     （`_tag_index` 那套 `None` 是给"读不到也要出报表"的只读场景用的）。
     """
-    # ⚠️ 传进来的**必须是 config**（20260930 加的响亮失败）。本函数的调用方里有一族
+    # ⚠️ 传进来的**必须是 config**。本函数的调用方里有一族
     #    `_find_*(name, config, index=…)` 的形状——"读好的快照"是**第三个**参数。一旦
     #    有人把快照当 config 传进来，下面读出的是 uid=0，函数会回一句「无法获取当前
     #    用户身份」，而**身份其实好着**：那是一句假话，调用方还会照着它零写收场，谁也
-    #    看不出哪里错了。生产实证：额度批准/驳回整条通道自 4cb1f93（20260930）起一次都
+    #    看不出哪里错了。生产实证：额度批准/驳回整条通道自 4cb1f93起一次都
     #    没成功过，而离线套件全绿——桩写成 `lambda config: …`，把参数整个忽略了。
     #    所以这里不猜、也不返回一句含糊的"读不到"：形状不对直接抛，让错误以
     #    `__ERROR__: TypeError` 进 trace —— **这是编程错误，不是一次业务失败**。
@@ -199,21 +195,10 @@ def _find_named_user(name, config, index=None):
 
 
 def _find_user_by_id(user_id, config, index=None):
-    """按 **uid**（台账里的「账号 id=」）在后台账号名录里取那一行
-    → `(行, None)` / `(None, 拒绝文本)`。
+    """Read one positive account ID from the authorized directory.
 
-    额度批准/驳回的**第二条目标通道**（20260929 批 H · S2），与按账号名的
-    `_find_named_user` 并列：目标来自系统摆上桌的待办台账，模型抄的是 uid。
-
-    **仍然要过一次名录**（不是直接拿 uid 去发请求）：名录是"这个账号还在不在"的
-    唯一事实源，也是复核基线（`limit`/写前用量）的来源；id 查不到就如实说"名录里
-    没有这个编号"，而不是让后端回一句更含糊的拒绝。uid 认不出（不是正整数）同样
-    零写——**不退回去按名字猜**。
-
-    ⚠️ 与 `_find_named_user` 那处"方向差异"的注**不是同一条**：那里的读不到是指
-    按名字定位无从落地；这里 uid 已经给了，读不到名录就只是"没核对上"，所以这条
-    通道的读不到同样是零写（同 `_pre_read_fail` 的取向）。
-    """
+    IDs come from verified source records. Invalid IDs, unavailable directories
+    and absent accounts remain distinct failures."""
     from agent import adminops_target as _target
     if index is None:
         index = _base._user_directory(config)
@@ -225,7 +210,7 @@ def _find_user_by_id(user_id, config, index=None):
                       f"本次未改动——请把待办台账里那个申请人的账号 id 原样抄过来")
     row = index.get(uid)
     if not isinstance(row, dict):
-        # ⚠️ 这句话要**说准名录是什么**（20260930）：名录只列 `authz::is_listable_role`
+        # ⚠️ 这句话要**说准名录是什么**：名录只列 `authz::is_listable_role`
         #    的账号——**超管不在里面**（账号族那道"按名字解析必须经过列表"的既有防线），
         #    注销过的账号同样不在。而额度队列是另一份数据：超管自己提交的申请照样在
         #    `?status=pending` 里列着。于是"队列里有这一行"与"名录里有这个人"可以是
@@ -263,12 +248,10 @@ _ACCOUNT_DONE = {
 
 
 def _set_account_frozen(name, frozen: bool, config: RunnableConfig) -> ToolResult:
-    """旧图冻结/解冻兼容实现，两个工具分别表达操作方向。
+    """Implement a direction-specific account freeze or unfreeze entry point.
 
-    照 `delete_tag` 的五段式：① 读名录 → ② 解析出唯一一行 → ③ 写 → ④ 写后重读
-    **同一份名录**复核 → ⑤ 出口只有 `ok` / `not_found` / `policy_frame` /
-    `unavailable`，绝不 `return ""`。
-    """
+    Resolve the exact target through the actor-scoped directory, preserve backend
+    policy refusals and verify the state after writing."""
     from agent import adminops_account as _account
     want = str(name or "").strip()
     if not want:
@@ -281,7 +264,7 @@ def _set_account_frozen(name, frozen: bool, config: RunnableConfig) -> ToolResul
         return _base._pre_read_fail(before_index, "后台账号名录")
     # ② 解析：唯一命中才继续。**index 传进去**，于是这条路上的所有拒绝都是
     #    "目标不明"（读不到那一支已经在上面被挡掉了），出口统一按 not_found 走
-    #    ——planner 的应对是换个名字或如实问主人，不是"稍后再试"。
+    #    ——模型 的应对是换个名字或如实问主人，不是"稍后再试"。
     row, err = _base._find_named_user(want, config, index=before_index)
     if err:
         return not_found(err)
@@ -363,25 +346,10 @@ def unfreeze_account(
 
 
 def _set_account_muted(name, muted: bool, hours, config: RunnableConfig) -> ToolResult:
-    """旧图禁言/解除禁言兼容实现，两个工具分别表达操作方向。
+    """Implement direction-specific mute or unmute tool entry points.
 
-    照 `_set_account_frozen` 的五段式：① 读名录 → ② 解析出唯一一行 → ③ 写 →
-    ④ 写后重读**同一份名录**复核 → ⑤ 出口只有 `ok` / `not_found` / `policy_frame` /
-    `unavailable`，绝不 `return ""`。
-
-    与冻结族的三处差异（都是"禁言不是冻结"的直接后果）：
-      · **多一个时长参数 `hours`**（冻结没有时长这个概念）：`None` ⇒ 永久，与后端
-        `{hours: null}` 同义；认不出的字面**零写并如实问**，绝不静默按永久办
-        ——那会把「禁他三天」办成「永久禁言」，而且办完谁也看不出来；
-      · **写后复核的读数不是 `status` 而是现算的 `muted`**（`_account_muted`）；
-      · **`changed` 的判据带上 `mutedUntil`**：对一个已在禁言期的账号再禁一次是
-        **有意义的操作**（改时长/转永久，Rust 侧明确不做 no-op），只比布尔会把
-        "把三天改成永久"读成"本来就是禁言中、本次未发生变更"（一句错话）。
-
-    措辞（卡面与回执行）全在 adminops 那一份：本节**绝不复用冻结族的 `_ACCOUNT_DONE`**
-    ——它写着"所有登录会话已经全部失效"，而禁言从不 bump `token_version`（Rust
-    `set_user_muted` 头注），照抄过来是一句假话（同「消息壳架空判据」那族坑）。
-    """
+    Muting restricts publication rather than login. Preserve the backend refusal
+    and verify the resulting mute state after writing."""
     from agent import adminops_account as _account
     want = str(name or "").strip()
     if not want:
@@ -389,7 +357,7 @@ def _set_account_muted(name, muted: bool, hours, config: RunnableConfig) -> Tool
     ok_hours, hours_n = _account.normalize_mute_hours(hours)
     if not ok_hours:
         # 出口用 `not_found`（目标类失败）而不是 `unavailable`：后者的过程行是
-        # 「服务不可用」、planner 收到的指引是"稍后再试"，而这条请求**永远不会**因为
+        # 「服务不可用」、模型 收到的指引是"稍后再试"，而这条请求**永远不会**因为
         # 重试而成功；`not_found` 的指引恰好是这件事该做的——换个值、或如实问主人
         # 禁多久（措辞本身把这一步说清了）。主路径其实到不了这里：技能展开层对
         # 认不出的时长就零工具 + 问清了（同 `account_set_role` 的"认不出的身份"）。
@@ -497,22 +465,10 @@ def account_unmute(
 
 
 def _set_account_role(name, role, config: RunnableConfig) -> ToolResult:
-    """变更一个账号的身份（20261002：下放给管理员 + agent 代理）。
+    """Change account role through the backend policy endpoint.
 
-    五段式同 `_set_account_frozen`：① 读名录 → ② 按名字解析出唯一一行 → ③ 写 →
-    ④ 写后重读**同一份名录**复核 → ⑤ 出口只有 `ok` / `not_found` / `policy_frame` /
-    `unavailable`。
-
-    **这一处刻意不写第二份权限表**（用户拍板）。能改谁、能改成什么，全由后端
-    `authz::check_role_change` 一项判据说了算，agent 只负责转述它的原话——理由是
-    **政策只有一份实现**，而"更保守地预检一遍"在这件事上已经栽过一次：冻结预检
-    （`graph._freeze_policy_refusal`）曾把"管理员冻杂鱼"拦成一句**说错政策**的
-    「管理员之间不能互相冻结」。同族论证见 `_policy_post` 头注。
-    所以这里连"目标身份认不认得出"都不判：认不出的身份交给后端回「站内没有这个身份」
-    （一句真话），agent 侧预判只会得到一句**像诚实拒绝的错话**。
-
-    **幂等不短路**（同冻结那一支）：目标已经是目标身份时照样发请求，结论由复核给。
-    """
+    Role validation and management hierarchy remain authoritative on the backend.
+    Resolve the exact account, preserve refusals and verify the resulting role."""
     from agent import adminops_account as _account
     want = str(name or "").strip()
     if not want:
@@ -662,7 +618,7 @@ def _send_user_notice(name, content, title, config: RunnableConfig) -> ToolResul
     username = str(row.get("username") or want)
 
     # ③ 写。失败按原因码分区（见 `_admin_notice_post` 头注），**原样往外传**：
-    #    目标类走 not_found（planner 去问主人），其余走 unavailable（不许说成功）。
+    #    目标类走 not_found（模型 去问主人），其余走 unavailable（不许说成功）。
     data = _base._admin_notice_post(target_id, head, body_text, config)
     if isinstance(data, ToolResult):
         return data

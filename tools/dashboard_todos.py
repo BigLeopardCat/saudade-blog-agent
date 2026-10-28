@@ -1,35 +1,10 @@
 # -*- coding: utf-8 -*-
-"""后台首页的待办 / 日程：读整份 / 追加一条 / 翻完成标记 / 改排期日。
+"""Dashboard todo reads and narrow single-row mutations.
 
-20261018 拆 `tools/base.py`。
-
-**为什么单独成模块**：这一族是 `tools/base.py` 里**连续的 376 行、10 个模块级名字**
-（两张上限常量 + 四个帮手 + 四个 `@tool`），scope 是 `admin.console` / `write.console`，
-而它自己就是一整条闭环——读整份 → 按正文定位 → 发一条最小写通道 → **再读整份复核**。
-端点、判据、复核三件事都只服务这一张列表，与标签/分类/账号那些"名字通道"族没有共用语义。
-
-## 这一族独有的事实（实现为什么长这样）
-  ① **线上从不回行 id**（Rust 那份列表的"身份"是前端自己那份数组）⇒ 定位判据只能是
-     **正文逐字相等**，而且要在服务端（`pick_todo`）与 agent 侧**各判一遍**——agent 那遍
-     是为了在发出请求之前就能如实说"没有这一条 / 分不清是哪一条"。**歧义即零写**：
-     绝不替主人挑一条。
-  ② **三条最小写通道，不用 PUT 整份覆盖**：主人自己的那份列表在他手里，agent 先读再写
-     会把他刚做的改动抹掉，而"发一份自己拼的"在整份覆盖的语义下等于清空他的待办。
-     三条通道各自只动**一行**（追加 / 翻完成 / 改排期日）。
-  ③ **写完必须读回整份复核**：接口的 200 只说明请求被收下了，`changed` 由**复核**给，
-     不把一次什么都没做的请求叙述成一个动作。
-  ④ 条数上限与正文上限**同源**于 Rust 那侧的 `MAX_TODOS` / `MAX_TEXT_CHARS`，这里各留一份
-     **只为不发注定被拒的请求**；真正的判据在服务端。
-
-## 搬家时守的一条
-⚠️ **五个共享帮手一律写成 `_base.<名>(...)`**：`_admin_get`（本族 7 个调用点）是**被套件
-直接打桩**的模块全局（`tests/test_tag_admin.py` 的 `patch()` 就是 `setattr(tools.base, 名, 桩)`），
-其余四个（`_pre_read_fail` / `_admin_todo_post` / `_own_get` / `_admin_request`）虽然没人打桩，
-但本模块**一个名字都不按名从 `tools.base` 取**——模块级写 `from tools.base import <名>` 会让
-mypy 在这个环上判不出被 re-export 的那些名字的类型（20261018 在 `tools/admin_read.py` 那一刀
-实测 7 条，`tools/base.py` 13→16）。属性查找同时解决了"本模块在 base 的原位置就被 import"
-的时序问题，也保证了打桩生效——函数对象取 globals 取的是**它自己所在模块**的 `__dict__`。
-"""
+Targets use unique, exact body text because list rows have no stable external ID.
+Ambiguity prevents writing. Mutations never replace the whole list and are checked
+by reading back the result. Local bounds match backend limits; backend validation
+remains authoritative. Shared transports are resolved through _base."""
 
 from typing import Annotated
 
@@ -39,15 +14,13 @@ from langchain_core.tools import tool
 from tools import base as _base
 from tools.result import ToolResult, empty, fact, not_found, ok, tgt, unavailable
 
-# `__all__` = 本模块**所有不以 `_` 开头**的模块级名字（社区惯例，不留例外）：
-# 四个 `@tool` 是工具本体。两张上限常量与四个帮手是下划线名，由 `tools/base.py`
-# 按原名显式 re-export 供给（显式 import 不受 `__all__` 约束）。
+# Public exports; helper names stay private to their modules.
 __all__ = ["complete_dashboard_todo", "create_dashboard_todo",
            "list_dashboard_todos", "reschedule_dashboard_todo"]
 
 
 # ---------------------------------------------------------------------------
-# 后台首页待办 / 日程（20260926）：读整份 / 追加一条 / 翻完成标记 / 改排期日
+# 后台首页待办 / 日程：读整份 / 追加一条 / 翻完成标记 / 改排期日
 # ---------------------------------------------------------------------------
 # 端点在守卫域内（Rust `src/routes/todos.rs`，`auth_guard` 之后）⇒ 这一族照例是
 # `admin.console` / `write.console`（见 agent/authz.py 的登记与那里的取舍说明：
@@ -314,7 +287,7 @@ def complete_dashboard_todo(
     # `changed=False ⇒ noop: True` 那条派生的用武之地：手写证书的旧写法在这里必须
     # 内联一个 `**({"noop": True} if … else {})`，而"本来就完成"这一支就是零净变化
     #（回执文本自己也写着「本来就是完成状态」）——不带那个键，两个读端就会把它当成
-    # "真的勾了一下"（gate 洞⑩ 会误判诚实的叙述，planner 会重跑同一件）。
+    # "真的勾了一下"（gate 洞⑩ 会误判诚实的叙述，模型 会重跑同一件）。
     return ok(_todo.render_todo_done(body, changed=not before_done),
               meta=fact("dashboard_todo_done", changed=not before_done,
                         target=tgt("todo", None, body),

@@ -40,16 +40,11 @@ def _announcement_index(config: RunnableConfig) -> dict[int, dict] | None:
 
 
 def _find_named_announcement(title, config, index=None):
-    """按**标题**在公告清单里找一条 → `(行, None)` 或 `(None, 拒绝文本)`。
+    """Resolve a unique, exact announcement title from an optional snapshot.
 
-    与 `_find_named_tag` 同取向（也是同一个"名字通道"的公告版）：唯一命中才动手；
-    命中多条（同名公告）**不替用户选一条**——把候选连同 id/时间列出来让他指认；
-    一条完全同名的都没有就如实说没有，**并附上名字最接近的候选**（`_near_miss_names`，
-    20260925：被截短的标题在这里会撞成一句"站内没有"的假话）；字典读不到则单独一种
-    说法（"读不到" ≠ "没有"，把一次网络故障说成"站内没这条公告"是最坏的错法）。
-    **模糊匹配只用来提问、不用来动手**：写操作仍然只认标题完全相等。
-    `index` 是可选快照（一次操作要读同一份清单两回时用）。
-    """
+    Approximate names are clarification candidates only. Missing data, no exact
+    match and duplicate names remain distinct; ambiguous candidates never authorize
+    a write."""
     if index is None:
         index = _base._announcement_index(config)
     if index is None:
@@ -68,7 +63,7 @@ def _find_named_announcement(title, config, index=None):
     near = _base._near_miss_names(want, [(r.get("id"), str(r.get("title") or ""))
                                    for r in index.values()])
     if near:
-        # 近失（20260925 现场，见 _near_miss_names 长注）：主人点名的标题被节选
+        # 近失：主人点名的标题被节选
         # 截短 ⇒ 完全相等查不到。此时说"站内没有这条公告"是**假话**——站内有，
         # 只差三个字。把候选连同 id 摆出来，让"没有"变成一次可核对的追问。
         cands2 = "、".join(f"id={cid}「{nm}」" for cid, nm in near)
@@ -164,7 +159,7 @@ def update_announcement(
         # changed=False ⇒ `fact()` 自动补上 `noop: True`（零改动的机器可读证书）。
         # 20260930 之前这个键是**手写**的，而全仓只有 8 处 write.own 的短路回执记得写
         # ——本处与 board_audit 那处是同一件事却没带：少一个键，两个读端（gate 的洞⑩、
-        # planner 的零改动裁剪）就会把"与现在一致"当成"真的改了"。现在它是从 `changed`
+        # 模型 的零改动裁剪）就会把"与现在一致"当成"真的改了"。现在它是从 `changed`
         # 派生的一处实现（详见 `fact()` 头注），漏写不再可能。
         return ok(_board.render_announcement_noop(hit),
                   meta=fact("announcement_update", changed=False,
