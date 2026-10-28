@@ -96,12 +96,12 @@ class ToolSession:
         self.menu = [convert_to_openai_tool(tool) for tool in [*initial, *discovery, *loaded]]
         return self.model
 
-    def _handoff(self, reason, **data):
+    def _stop_turn(self, reason, **data):
         if self.receipts:
-            record("native", "handoff_stopped", reason=reason, **data)
+            record("native", "task_stopped", reason=reason, **data)
             return self._result("工具操作结果已保留；其余请求尚未完成，请继续指定要处理的事项。")
         if self.calls_used:
-            record("native", "handoff_stopped", reason=reason, **data)
+            record("native", "task_stopped", reason=reason, **data)
             return self._result("本轮查询已停止，暂时没能完成请求。请明确下一步要处理的事项。")
         record("native", "task_stopped", reason=reason, **data)
         return self._result("本轮未能完成请求，没有执行未核实的操作。请补充目标或稍后重试。")
@@ -292,12 +292,12 @@ class ToolSession:
         if not calls:
             reply = text_content(response.content).strip()
             return None, (self._result(reply) if reply else
-                          self._handoff("empty", tool_calls=self.calls_used))
+                          self._stop_turn("empty", tool_calls=self.calls_used))
         if self.finalizing:
             return None, self._budget_stop("finalization_tool_call", tool_calls=self.calls_used)
         reason = self._accept_calls(calls, self._round_index)
         if reason:
-            return None, self._handoff(reason, tool_calls=self.calls_used)
+            return None, self._stop_turn(reason, tool_calls=self.calls_used)
         try:
             self.budget.attempt_tools(len(calls))
         except BudgetExceeded as exc:

@@ -2079,7 +2079,7 @@ def check_gold(gold: dict, result: dict, *, docs=None, user_input: str = "",
         if t in result["exec_tools"]:
             fails.append(f"不应有工具 {t} 的执行回执（exec：{result['exec_tools']}）")
 
-    # 20260919：参数引用（agent/arg_refs.py）不得以未解析形态进入成功执行。这条在
+    # 20260919：未解析参数占位符不得以未解析形态进入成功执行。这条在
     # 拓扑上不可能违反（resolve_args 失败即不执行），但断言的是**不变量**：
     # 回执 args 只该是真实调用值——一旦有人把失败降级成"当字面量调用"，这条先红。
     for r in result["exec_rows"]:

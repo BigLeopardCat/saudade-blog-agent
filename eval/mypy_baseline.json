@@ -11,8 +11,8 @@
     "utils",
     "server.py"
   ],
-  "total": 40,
-  "files_checked": 221,
+  "total": 18,
+  "files_checked": 219,
   "by_file": {
     "agent/action_text.py": 1,
     "agent/adminops_quota.py": 2,
@@ -23,13 +23,7 @@
     "rag/search.py": 1,
     "tools/account_admin.py": 1,
     "tools/admin_read.py": 3,
-    "tools/announcements.py": 1,
-    "tools/board_moderation.py": 2,
-    "tools/note_admin.py": 1,
     "tools/notes.py": 1,
-    "tools/own_data.py": 14,
-    "tools/quota_admin.py": 3,
-    "tools/tag_admin.py": 1,
     "utils/trace.py": 2
   }
 }

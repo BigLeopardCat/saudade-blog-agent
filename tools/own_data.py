@@ -218,7 +218,8 @@ def list_my_messages(config: RunnableConfig) -> str:
     data = _own_get("/api/protected/messages", config)
     return _shape(data)
 
-__all__ = ['list_my_favorites', 'get_unread_summary', 'add_favorite', 'remove_favorite', 'list_my_messages']
+__all__ = ["list_my_favorites", "get_unread_summary", "add_favorite", "remove_favorite",
+           "list_my_messages"]
 
 
 def _as_ids(value) -> list[int]:
