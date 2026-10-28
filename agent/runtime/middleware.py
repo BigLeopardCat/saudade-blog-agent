@@ -9,6 +9,7 @@ from langchain.agents.middleware import AgentMiddleware, hook_config
 from langchain_core.callbacks import BaseCallbackHandler
 from langchain_core.messages import AIMessage, AIMessageChunk, RemoveMessage, ToolMessage
 from langgraph.errors import GraphInterrupt
+from langgraph.graph.message import REMOVE_ALL_MESSAGES
 from langgraph.types import Command
 
 from agent.llm_usage import usage_fields
@@ -125,9 +126,19 @@ class SessionMiddleware(AgentMiddleware):
             session.budget.attempt_tools(sum(call["id"] not in self.cached for call in self.calls))
             saved["jump_to"] = "tools"
         if "jump_to" not in saved:
+            if session._round_index == 0 and session.fresh_task:
+                prompt = [*([self.system_message] if self.system_message else []),
+                          *hydrate(state["messages"], session.transient)]
+                fitted = fit_history(prompt, session.principal, session.menu,
+                    session.budget.limits, session.output_limit,
+                    tool_access=session.history_access, budget=session.budget)
+                if fitted != prompt:
+                    body = fitted[1:] if self.system_message else fitted
+                    saved["messages"] = [RemoveMessage(id=REMOVE_ALL_MESSAGES),
+                                         *stage(body, session.transient)]
             extra = input_additions(session, state)
             if extra:
-                saved["messages"] = extra
+                saved.setdefault("messages", []).extend(extra)
         return saved
 
     def _resume(self, state):
@@ -177,10 +188,6 @@ class SessionMiddleware(AgentMiddleware):
             request = request.override(messages=[*request.messages, *extra_inputs])
         prompt = [*([request.system_message] if request.system_message else []),
                   *model_messages(hydrate(request.messages, session.transient))]
-        if session._round_index == 0 and session.fresh_task:
-            prompt = fit_history(prompt, session.principal, session.menu, session.budget.limits,
-                                 session.output_limit, tool_access=session.history_access,
-                                 budget=session.budget)
         final = final_prompt(session.budget, prompt, session.menu, session.output_limit,
                              results_full=session.result_chars >= session.result_limit,
                              model_key=request.model)

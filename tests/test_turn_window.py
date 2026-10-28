@@ -60,6 +60,9 @@ def test_turn_window():
     for i in range(20):
         history.extend([HumanMessage(content=f"问题{i}"), AIMessage(content=f"答复{i}")])
     current = [HumanMessage(content="当前"), AIMessage(content="回答")]
+    for message in [*history, *current]:
+        if isinstance(message, HumanMessage):
+            message.additional_kwargs["memory_actor"] = {"uid": 7, "role": "user"}
     prompt = memory.prompt_dialogue([*history, *current], principal)
     assert prompt[-1].content == "回答"
     assert len(prompt) <= len(history) + len(current)

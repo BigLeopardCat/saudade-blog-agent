@@ -117,6 +117,7 @@ def test_context_and_summary_do_not_split_an_offer_from_a_short_answer():
         summary_scope={"user_id":7, "role":"user", "conversation_id":42})
     previous = [HumanMessage(content="把第一条待办完成"),
                 AIMessage(content="第一条完成了。第二条也要完成吗？")]
+    previous[0].additional_kwargs["memory_actor"] = {"uid": 7, "role": "user"}
     prompt = build_prompt([*previous, *build_messages(request)], ACTOR)
     prompt = fit_history(prompt, ACTOR, [], BudgetLimits(), 128)
     assert [message.content for message in prompt[-3:-1]] == [
