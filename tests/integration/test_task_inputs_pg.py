@@ -31,10 +31,35 @@ def inboxes():
                 "row_factory": dict_row, "options": "-c search_path=" + schema}) as pool:
             with pool.connection() as conn:
                 setup(conn)
+                from agent.runtime import task_budget
+                task_budget.setup(conn)
             yield TaskInputs(PostgresInputs(pool)), TaskInputs(PostgresInputs(pool))
     finally:
         with psycopg.connect(dsn, autocommit=True) as conn:
             conn.execute(sql.SQL("DROP SCHEMA {} CASCADE").format(sql.Identifier(schema)))
+
+
+def test_task_usage_survives_worker_reconstruction_and_checks_source(inboxes):
+    from langchain_core.messages import HumanMessage
+
+    from agent.runtime.budget import BudgetExceeded, BudgetLimits, RequestBudget
+    from agent.runtime.task_budget import PostgresUsage
+
+    left, right = [PostgresUsage(inbox.storage.pool) for inbox in inboxes]
+    task = {"id": "budget", "scope": {"uid": 7, "role": "user", "conversation_id": 42}}
+    budget = RequestBudget(BudgetLimits(model_calls=1))
+    budget.bind_task(left, task)
+    budget.reserve([HumanMessage(content="synthetic")], output_limit=64)
+    restored = RequestBudget(BudgetLimits(model_calls=1))
+    restored.bind_task(right, task)
+    assert restored.model_calls == 1 and restored.tokens == budget.tokens
+    assert restored.request_spent()["model_calls"] == 0
+    with pytest.raises(BudgetExceeded, match="model_calls"):
+        restored.reserve([HumanMessage(content="retry")], output_limit=64)
+    with pytest.raises(ValueError, match="scope"):
+        right.load({**task, "scope": {**task["scope"], "uid": 8}})
+    right.delete_conversation(42)
+    assert left.load(task) == {}
 
 
 def test_two_workers_share_inputs_and_duplicate_delivery(inboxes):

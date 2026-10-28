@@ -41,13 +41,14 @@ def test_image_current_input_is_multimodal_but_saved_and_replayed_history_is_sma
     assert "连接池报错" in str(model.prompts[-1])
 
 
-def test_old_inline_checkpoint_is_compacted_on_replay_and_next_completed_save():
+def test_scoped_inline_checkpoint_media_is_compacted_on_replay_and_next_save():
     model = Capture()
     saver = InMemorySaver()
     selected = runtime(saver, model)
     url = "data:image/png;base64," + "B" * 32000
     selected.store.update_state(config(), {"messages": [HumanMessage(content=[
-        {"type": "image_url", "image_url": {"url": url}}])]})
+        {"type": "image_url", "image_url": {"url": url}}],
+        additional_kwargs={"memory_actor": {"uid": 7, "role": "user"}})]})
     run(selected, ChatRequest(message="继续"))
     assert url not in str(model.prompts[-1])
     assert image_id(url) in str(model.prompts[-1])
@@ -63,10 +64,11 @@ def test_long_chinese_input_survives_the_next_turn_and_runtime_reconstruction():
 
 
 @pytest.mark.parametrize("question,reply", [("长文本" * 20000, "已阅读"),
-                                           ("解释一下这段", "长答复" * 20000)])
+                                           ("解释一下这段", "长答复" * 20000)],
+                         ids=["long-input", "long-reply"])
 def test_oversized_turn_has_an_explicit_bounded_excerpt_instead_of_disappearing(question, reply):
     saved = memory.turn_messages([HumanMessage(content=question)], [], reply, ACTOR)
-    visible = memory.history(saved, ACTOR)
+    visible = memory.history(saved, ACTOR, max_tokens=memory.COMPACTION_TOKENS)
     assert visible and isinstance(visible[0], HumanMessage)
     assert "节选" in visible[0].content
     assert visible[0].additional_kwargs["memory_excerpt"] is True
@@ -197,7 +199,7 @@ def test_partial_long_reply_uses_normal_window_and_retains_the_original_user_req
     for question in ["读取长回答的末尾", "原始问题" * 850]:
         saved = memory.turn_messages([HumanMessage(content=question)], [],
                                      "历史长答复" * 12000, ACTOR)
-        visible = memory.history(saved, ACTOR)
+        visible = memory.history(saved, ACTOR, max_tokens=memory.COMPACTION_TOKENS)
         assert question in str(visible)
         assert "节选" in str(visible)
         assert visible[0].additional_kwargs["memory_excerpt"] is True
@@ -208,6 +210,7 @@ def test_partial_long_reply_uses_normal_window_and_retains_the_original_user_req
 
 def test_blog_recovery_context_describes_available_history_without_changing_the_system_prefix():
     saved = memory.turn_messages([HumanMessage(content="长回答")], [], "长答复" * 20000, ACTOR)
+    saved = memory.history(saved, ACTOR, max_tokens=memory.COMPACTION_TOKENS)
     messages = [*saved, HumanMessage(content="最后一行呢")]
     prompt = build_prompt(messages, ACTOR, own_enabled=True)
     recovery = [message for message in prompt if isinstance(message, HumanMessage)

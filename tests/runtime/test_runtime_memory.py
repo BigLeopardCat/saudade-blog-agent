@@ -42,6 +42,9 @@ def test_short_prior_preference_survives_more_than_two_exchanges():
     messages = [HumanMessage(content="请只用简体中文"), AIMessage(content="好。")]
     for number in range(4):
         messages.extend([HumanMessage(content=f"话题{number}"), AIMessage(content="答复。")])
+    for message in messages:
+        if isinstance(message, HumanMessage):
+            message.additional_kwargs["memory_actor"] = {"uid": 7, "role": "superadmin"}
     prompt = _input([*messages, HumanMessage(content="继续")], actor())
     assert any(m.content == "请只用简体中文" for m in prompt)
 

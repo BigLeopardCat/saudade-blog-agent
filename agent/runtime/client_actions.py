@@ -47,10 +47,6 @@ def resume_value(snapshot, task_id, config):
         status = "failed"
     if time.time() > command["expires_at"]:
         status = "timeout"
-    from agent.runtime.budget import current_budget
-    budget = current_budget()
-    if budget is not None:
-        budget.restore_spent(pending.get("spent", {}))
     progress = current_emitter(config)
     if progress is not None:
         progress.restore(pending.get("progress_keys", []))

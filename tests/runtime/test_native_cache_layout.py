@@ -126,6 +126,9 @@ def test_changing_current_data_preserves_older_prefix_and_latest_exchange(change
     history = [HumanMessage(content="Earlier question " * 30),
                AIMessage(content="Earlier answer " * 30),
                HumanMessage(content="最近的问题"), AIMessage(content="最近的提议？")]
+    for message in history:
+        if isinstance(message, HumanMessage):
+            message.additional_kwargs["memory_actor"] = {"uid": 7, "role": "user"}
     current = HumanMessage(content="继续")
     before = build_prompt([*history, context("page A", "summary A"), current],
                           principal, pending=Pending("target A"))

@@ -84,12 +84,8 @@ def navigate_page(path: Path, config: RunnableConfig) -> object:
     if cfg.get("browser_feedback") and cfg.get("browser_task"):
         task_id = cfg["browser_task"]
         command_id = hashlib.sha256((task_id + path).encode()).hexdigest()[:24]
-        from agent.runtime.budget import current_budget
-        budget = current_budget()
-        spent = ({key: getattr(budget, key) for key in ("tokens", "model_calls", "tool_calls")}
-                 if budget is not None else {})
         progress = current_emitter(config)
-        result = interrupt({"kind": "client_action", "spent": spent,
+        result = interrupt({"kind": "client_action",
             "progress_keys": progress.emitted_keys if progress is not None else [], "command": {
             **command, "path": path, "task_id": task_id, "command_id": command_id,
             "timeout_ms": 6000, "expires_at": time.time() + 60}})

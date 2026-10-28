@@ -214,9 +214,10 @@ def _sample(name, backend, contract, run_id, sample):
                            "confirmation_count": len(result["confirm_tokens"]),
                            "error": result["error"], "trace": result["trace"],
                            "elapsed_s": round(time.monotonic() - started, 3),
-                           "model_calls": control.budget.model_calls,
-                           "tool_attempts": control.budget.tool_calls,
-                           "charged_tokens": control.budget.tokens})
+                           "model_calls": control.budget.request_spent()["model_calls"],
+                           "tool_attempts": control.budget.request_spent()["tool_calls"],
+                           "charged_tokens": control.budget.request_spent()["tokens"],
+                           "task_spent": control.budget.spent()})
             if result["trace"]:
                 paths.append(result["trace"])
             _require(not result["error"], "runtime error; inspect the case trace")
