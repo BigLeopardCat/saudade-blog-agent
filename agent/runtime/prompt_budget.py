@@ -11,9 +11,13 @@ def fit_history(prompt, principal, menu, limits, output_limit, *, tool_access=No
     if not prompt or not isinstance(prompt[0], SystemMessage):
         return prompt
     current = prompt[-1:]
-    attachments = [message for message in prompt[1:-1] if memory.is_context(message)]
-    fixed = [*prompt[:1], *attachments, *current]
+    body = prompt[1:-1]
+    start = next((index for index, message in enumerate(body)
+                  if not memory.is_context(message)), len(body))
+    prefix = [*prompt[:1], *body[:start]]
+    attachments = [message for message in body[start:] if memory.is_context(message)]
+    fixed = [*prefix, *attachments, *current]
     room = (budget or RequestBudget(limits)).output_capacity(fixed, menu) - output_limit
-    previous = [message for message in prompt[1:-1] if not memory.is_context(message)]
+    previous = [message for message in body[start:] if not memory.is_context(message)]
     visible = memory.history(previous, principal, max_tokens=room, tool_access=tool_access)
-    return [*prompt[:1], *memory.with_context([*visible, *current], attachments)]
+    return [*prefix, *memory.with_context([*visible, *current], attachments)]

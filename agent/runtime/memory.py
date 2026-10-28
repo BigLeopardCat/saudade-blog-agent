@@ -24,8 +24,10 @@ from agent.runtime.memory_scope import matches
 from agent.runtime.message_content import estimate_tokens as _tokens
 from agent.runtime.message_content import text_content
 from config.settings import SUMMARY_MAX_CHARS
+from utils.trace import record
 
 HISTORY_TOKENS = 1800
+HISTORY_RETAIN_TOKENS = 1200
 CHECKPOINT_TOKENS = 5400
 OBSERVATION_CHARS = 1400
 SUMMARY_CHARS = SUMMARY_MAX_CHARS
@@ -89,8 +91,14 @@ def _turns(messages):
     return turns
 
 
+def _window(turns):
+    start = max((index for index, turn in enumerate(turns)
+                 if turn[0].additional_kwargs.get("memory_window_start") is True), default=0)
+    return turns[start:]
+
+
 def history(messages, principal, *, max_tokens=None, tool_access=None):
-    turns = [[compact(message) for message in turn] for turn in _turns(messages)
+    turns = [[compact(message) for message in turn] for turn in _window(_turns(messages))
              if _allowed(turn, principal, tool_access)]
     if not turns:
         return []
@@ -209,6 +217,30 @@ def checkpoint_messages(previous, current):
         messages, max_tokens=max(CHECKPOINT_TOKENS, _tokens(current)),
         token_counter=_tokens, strategy="last", start_on="human", allow_partial=False,
     )
+    window = [message for turn in _window(_turns(retained)) for message in turn]
+    if window:
+        before = _tokens(window)
+        if before > HISTORY_TOKENS:
+            # Advance the prompt boundary in batches, leaving space for new turns.
+            # Full checkpoint history remains available within its separate bound.
+            latest = _turns(window)[-1]
+            window = trim_messages(
+                window, max_tokens=max(HISTORY_RETAIN_TOKENS, _tokens(latest)),
+                token_counter=_tokens, strategy="last", start_on="human", allow_partial=False,
+            )
+        anchor = window[0]
+        changed = anchor.additional_kwargs.get("memory_window_start") is not True
+        record("memory", "window", before_tokens=before, retained_tokens=_tokens(window),
+               boundary_changed=changed, compacted=before > HISTORY_TOKENS)
+        marked = []
+        for message in retained:
+            metadata = dict(message.additional_kwargs)
+            metadata.pop("memory_window_start", None)
+            if message is anchor:
+                metadata["memory_window_start"] = True
+            marked.append(message if metadata == message.additional_kwargs else
+                          message.model_copy(update={"additional_kwargs": metadata}))
+        retained = marked
     return [RemoveMessage(id=REMOVE_ALL_MESSAGES), *retained]
 
 
