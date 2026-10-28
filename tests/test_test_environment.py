@@ -39,7 +39,7 @@ def test_defaults():
     assert "AGENT_ARM" not in os.environ
     assert "OPENCODE_API_KEY" not in os.environ
     assert settings.iot_enabled
-    for field in ("trace_dir", "idem_db"):
+    for field in ("trace_dir",):
         path = pathlib.Path(getattr(settings, field))
         assert pathlib.Path(tempfile.gettempdir()) in path.parents
         assert "saudade-pytest-" in str(path)

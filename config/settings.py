@@ -134,9 +134,6 @@ class Settings(BaseSettings):
     # Require a verified host assertion before resolving caller identity.
     agent_require_assertion: bool = True
 
-    # Native tools always enforce scopes; this also enforces policy in legacy host adapters.
-    authz_enforce: bool = False
-
     # Bound legacy host-provided task context while the host owns its expiry.
     agent_task_inject_max: int = Field(default=3, ge=1, le=3)
 
@@ -181,11 +178,6 @@ class Settings(BaseSettings):
     # 每请求一份 JSON（输入/节点事件序列/分段耗时/回复/退出原因）；
     # 与项目 logs/ 目录对齐（日志体系规范见 CLAUDE.md §2），logrotate 轮转
     trace_dir: str = "/home/ubuntu/Saudade-Blog/logs/agent/traces"
-    # SQLite ledger location for compatibility and offline consumers.
-    # Production confirmed writes require the PostgreSQL ledger bound to the saver.
-    # File-backed logs must remain covered by the retention manifest.
-    idem_db: str = "/home/ubuntu/Saudade-Blog/logs/agent/idem.sqlite3"
-
     # Optional PostgreSQL conversation persistence. Empty disables persistence;
     # invalid configuration aborts startup without an in-memory fallback.
     # Use a separate database: framework setup manages its own schema.
