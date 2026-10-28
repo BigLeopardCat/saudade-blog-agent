@@ -74,7 +74,7 @@ TOOL_SCOPE: dict[str, str] = {
     "get_chat_history": SCOPE_READ_OWN,
     "list_devices": SCOPE_READ_OWN,
     "list_my_favorites": SCOPE_READ_OWN,
-    "get_unread_summary": SCOPE_READ_OWN,
+    "get_unread_counts": SCOPE_READ_OWN,
     "list_notifications": SCOPE_READ_OWN,
     "list_my_messages": SCOPE_READ_OWN,
     "list_my_board": SCOPE_READ_OWN,

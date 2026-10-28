@@ -429,7 +429,7 @@ def test_topic_discovery_accepts_retrieval_and_unread_listing_requires_contents(
                                    "kind": "ok", "args": args}]}
     assert not native_assertions.check(gold, result("list_notifications", unread_only=True))
     assert native_assertions.check(gold, result("list_notifications", unread_only=False))
-    assert native_assertions.check(gold, result("get_unread_summary"))
+    assert native_assertions.check(gold, result("get_unread_counts"))
 
 
 @pytest.mark.parametrize("name,args,passed", [

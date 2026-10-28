@@ -24,71 +24,6 @@ def list_my_favorites(config: RunnableConfig) -> str:
     data = _own_get("/api/protected/favorites", config)
     return _shape(data)
 
-_UNREAD_ITEMS_MAX = 10
-
-_UNREAD_ITEM_KEYS = ("id", "type", "title", "content", "link", "createdAt")
-
-_UNREAD_CONTENT_MAX = 120
-
-_UNREAD_ITEMS_DOWN = "未读条目的内容这次没读到（只有计数是可信的）"
-
-def _unread_item_slim(row: dict) -> dict:
-    """一条未读通知 → 给 planner/narrator 看的条目（`content` 截断，别把整条通知搬进帧）。"""
-    out = {k: row[k] for k in _UNREAD_ITEM_KEYS if k in row}
-    text = out.get("content")
-    if isinstance(text, str) and len(text) > _UNREAD_CONTENT_MAX:
-        out["content"] = text[:_UNREAD_CONTENT_MAX] + "…"
-    return out
-
-@tool
-def get_unread_summary(config: RunnableConfig) -> str:
-    """查看**当前登录用户自己**的未读汇总：计数（notifications / messages / total）
-    **连带未读的那几条通知**（`unread_items`：id / type / title / content（正文，截断
-    120 字）/ link / createdAt，最多 10 条，超出时另有 `unread_items_note` 说明）。
-    红点数 = 站内通知未读 + 私信未读；**公告在发布时按用户展开成通知行**，所以
-    公告的未读也计在 notifications 里，不需要另一套计数。
-    访客问"我有未读吗""红点上有几条""有多少没看的消息""红点里是什么/是什么通知"时用
-    ——问"是什么"**不必**再调 list_notifications（未读条目连同正文就在这次返回里）。
-    **通知正文里往往就是答案本体**（如留言审核的驳回理由写在 content 里）：访客追问
-    "那是什么内容/理由是什么"时先看这里，别绕去查别的接口，更不许说"读不到内容"。
-    没携带身份时如实告知读不到。"""
-    data = _own_get("/api/protected/notifications/summary", config)
-    if isinstance(data, ToolResult):
-        # 计数都没读到：原样透出（fail-closed），**不做任何"连带"**——
-        # 计数读不到时再补一次列表调用，只会让"没携带身份"变成一次多余的请求
-        return data
-    if not isinstance(data, dict):
-        return _shape(data)
-    notices = _own_get("/api/protected/notifications", config)
-    rows: list = []
-    if isinstance(notices, dict):
-        if isinstance(notices.get("items"), list):
-            rows = notices["items"]
-    elif isinstance(notices, list):
-        rows = notices
-    if isinstance(notices, ToolResult) or not rows:
-        # 两种情况分开：条目读失败（notices 是 unavailable）与真的零条目。
-        # 读失败绝不能写成"你没有未读的通知"——本模块头注第 2 条纪律。
-        note = (_UNREAD_ITEMS_DOWN if isinstance(notices, ToolResult)
-                else "")
-        out = dict(data, unread_items=[])
-        if note:
-            out["unread_items_note"] = note
-        return _shape(out)
-    unread = [r for r in rows
-              if isinstance(r, dict) and not r.get("isRead")]
-    slim = [_unread_item_slim(r) for r in unread[:_UNREAD_ITEMS_MAX]]
-    out = dict(data, unread_items=slim)
-    # 抬头那个计数（notifications）才是权威数量：拿它跟带回来的条数比，**两种缺口
-    # 用同一句话如实说**——① 超过本条上限；② 未读里较早的落在列表接口的最近 100 条
-    # 窗口之外（那时"未读里还有几条"照样成立）。不许默默少给。
-    total_unread = data.get("notifications")
-    if (isinstance(total_unread, int) and not isinstance(total_unread, bool)
-            and total_unread > len(slim)):
-        out["unread_items_note"] = (f"只带回 {len(slim)} 条"
-                                    f"（未读通知共 {total_unread} 条）")
-    return _shape(out)
-
 def _favorites_snapshot(config: RunnableConfig,
                         what: str) -> tuple[list | None, ToolResult | None]:
     """Read current-user favorites as either rows or a failure reason.
@@ -218,7 +153,7 @@ def list_my_messages(config: RunnableConfig) -> str:
     data = _own_get("/api/protected/messages", config)
     return _shape(data)
 
-__all__ = ["list_my_favorites", "get_unread_summary", "add_favorite", "remove_favorite",
+__all__ = ["list_my_favorites", "add_favorite", "remove_favorite",
            "list_my_messages"]
 
 

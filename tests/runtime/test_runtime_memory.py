@@ -174,7 +174,7 @@ def test_large_tool_turn_does_not_erase_the_recommendation_before_followup():
 
 def test_long_assistant_reply_cannot_crowd_out_the_recent_tool_fact():
     principal = actor("user")
-    call = {"name": "get_unread_summary", "args": {}, "id": "count"}
+    call = {"name": "get_unread_counts", "args": {}, "id": "count"}
     saved = memory.turn_messages(
         [HumanMessage(content="我的未读合计多少？")],
         memory.observation(call, base.ok('{"total":12}')),

@@ -17,6 +17,7 @@
 """
 
 
+import ast
 import sys
 from pathlib import Path
 
@@ -179,7 +180,9 @@ def _test_wiring():
     print("[接线] 落盘那一处必须传工具名，否则分档不生效")
     src_runtime = (ROOT / "agent" / "runtime" / "session.py").read_text(encoding="utf-8")
     check("原生会话的 call 事件调用 tool_result_text 时**传了工具名**",
-          "trace_mod.tool_result_text(body, name)" in src_runtime)
+          any(isinstance(node, ast.Call) and getattr(node.func, "attr", None) == "tool_result_text"
+              and len(node.args) >= 2 and isinstance(node.args[1], ast.Name)
+              and node.args[1].id == "name" for node in ast.walk(ast.parse(src_runtime))))
     check("原生会话里没有别处再截一次工具返回（两处截断会各自为政）",
           src_runtime.count("tool_result_text(") == 1)
     src_run = (ROOT / "eval" / "run_golden.py").read_text(encoding="utf-8")

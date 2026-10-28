@@ -14,11 +14,14 @@ def fixture(tmp_path, count=20):
         "input": {"runtime": {"name": "native", "build_sha": "build", "model": "model"}},
         "reply": "hello", "events": [
             {"event": "request_layout", "model": "model", "tools": "tools", "messages": ["a"]},
-            {"event": "llm_done", "input": 100, "output": 10, "cache_read": 0},
+            {"node": "native", "event": "llm_done", "tool_calls": [],
+             "input": 100, "output": 10, "cache_read": 0},
         ]}))
     cases = [{"id": str(index), "tags": ["chat", "identity"], "status": "passed",
+              "first_action": {"any_tools": [], "allow_text": True},
               "result": {"rounds": [
         {"trace": str(trace), "http_timing": {"elapsed_s": 2, "first_visible_s": 0.2,
+         "first_reply_s": 1,
          "trace_sha256": hashlib.sha256(trace.read_bytes()).hexdigest()}}
     ]}} for index in range(count)]
     report = tmp_path / "report.json"

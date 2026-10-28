@@ -45,8 +45,8 @@ class ToolCatalog:
 
     def initial_tools(self, own_enabled):
         tools = dict(self.read_tools)
-        if own_enabled and "get_unread_summary" in self.own_read_tools:
-            tools["get_unread_summary"] = self.own_read_tools["get_unread_summary"]
+        if own_enabled and "get_unread_counts" in self.own_read_tools:
+            tools["get_unread_counts"] = self.own_read_tools["get_unread_counts"]
         return tools
 
     def domains(self, config, can_prepare, pending=None, saver=None):

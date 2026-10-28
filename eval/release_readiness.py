@@ -14,7 +14,8 @@ from collections import Counter, defaultdict
 from pathlib import Path
 from statistics import median, quantiles
 
-from eval import acceptance, request_metrics, usage
+from eval import acceptance, action_metrics, request_metrics, usage
+from eval.statistical_metrics import proportion
 from utils.trace_io import load_trace
 
 PROFILE = Path(__file__).with_name("release_profile.json")
@@ -90,15 +91,23 @@ def _cache_summary(row):
 def _metrics(report):
     groups, populations = defaultdict(list), defaultdict(usage.empty)
     missing = []
-    totals, trace_errors, first_visible = usage.empty(), [], []
+    totals, trace_errors, first_visible, decisions, ttft = usage.empty(), [], [], [], []
     build = (report.get("service_version") or {}).get("sha")
     for case in report["cases"]:
+        case_decisions = []
         for index, rnd in enumerate(case.get("result", {}).get("rounds", []), 1):
             doc = load_trace(str(rnd.get("trace", "")))
             if not doc:
+                case_decisions.append(None)
                 trace_errors.append({"case": case["id"], "round": index, "error": "missing trace"})
                 continue
             row = request_metrics.summary(doc)
+            ttft.extend(row["model_ttft_s"])
+            expectation = case.get("first_action") if index == 1 else None
+            raw_rounds = case.get("decision_expectations") or []
+            if index <= len(raw_rounds):
+                expectation = raw_rounds[index - 1]
+            case_decisions.append(action_metrics.decision_score(doc.get("events", []), expectation))
             if row["errored_calls"]:
                 missing.append(f"{case['id']}.{index}: provider usage for errored calls")
             if not build or row["build"] != build:
@@ -110,7 +119,7 @@ def _metrics(report):
             elif hashlib.sha256(Path(rnd["trace"]).read_bytes()).hexdigest() != expected_digest:
                 trace_errors.append({"case": case["id"], "round": index, "error": "trace changed"})
             row.update({key: timing.get(key) for key in
-                        ("elapsed_s", "first_command_s", "first_confirmation_s")})
+                        ("elapsed_s", "first_command_s", "first_confirmation_s", "first_reply_s")})
             # Only positive commands/cards have this event. Their absence is judged by gold.
             if timing.get("first_visible_s") is not None:
                 first_visible.append(timing["first_visible_s"])
@@ -119,9 +128,31 @@ def _metrics(report):
                 totals[field] += row[field]
             for population, event in cache_population(doc):
                 _add_cache(populations[population], event)
+        decisions.append(case_decisions)
     return {"groups": groups, "populations": populations, "usage": totals,
             "trace_errors": trace_errors, "first_visible": first_visible,
-            "missing": missing}
+            "missing": missing, "decisions": action_metrics.decision_report(decisions),
+            "model_ttft_s": ttft}
+
+
+def quality_statistics(cases, semantic):
+    groups = {"all": cases}
+    groups.update({tag: [case for case in cases if tag in case.get("tags", [])]
+                   for tag in sorted({tag for case in cases for tag in case.get("tags", [])})})
+    return {name: {"deterministic": proportion(sum(case.get("status") == "passed"
+                    for case in rows), len(rows)),
+                   "combined_checks": proportion(sum(semantic.get(case["id"]) == "checks_passed"
+                    for case in rows), len(rows)) if semantic else None,
+                   "unresolved_semantic": sum(semantic.get(case["id"]) in
+                    (None, "not_evaluated", "needs_review") for case in rows)}
+            for name, rows in groups.items()}
+
+
+def _action_timings(groups, minimum):
+    return {name: {field: distribution([row[field] for row in rows if row.get(field) is not None],
+                                      minimum)
+                   for field in ("first_business_tool_s", "first_business_result_s")}
+            for name, rows in groups.items()}
 
 
 def _reject(failures, name, passed, detail):
@@ -192,7 +223,19 @@ def _budget_metrics(metrics, profile):
     else:
         _reject(failures, "first_visible_s", visible["p95"] <= profile["first_visible_s_p95"],
                 visible)
-    result = {"task_metrics": costs, "first_visible_s": visible, "usage_coverage": coverage}
+    decision = metrics["decisions"]
+    if decision["unverified"]:
+        missing.append("first-action annotation or captured model decision is missing")
+    elif decision["correct"]["rate"] is not None:
+        _reject(failures, "first_action", decision["correct"]["rate"] >=
+                profile.get("first_action_target", 0.95), decision)
+    result = {"task_metrics": costs, "first_visible_s": visible, "usage_coverage": coverage,
+              "model_ttft_s": distribution(metrics["model_ttft_s"], minimum),
+              "model_ttft_coverage": {"measured": len(metrics["model_ttft_s"]),
+                                      "model_calls": totals["calls"]},
+              "business_action_timing": _action_timings(metrics["groups"], minimum),
+              "percentile_caution": "20 samples is a reporting floor; tail latency "
+                                    "still needs independent operational observation"}
     return result, failures, missing
 
 
@@ -224,6 +267,8 @@ def assess(report_path, *, semantic_path=None, profile_path=PROFILE):
         "semantic_counts": dict(Counter(semantic.values())),
         "deterministic_counts": dict(Counter(case.get("status") for case in report["cases"])),
         "usage": metrics["usage"], **costs,
+        "quality_statistics": quality_statistics(report["cases"], semantic),
+        "first_decision": metrics["decisions"],
         "cache_diagnostics": {name: _cache_summary(row)
                               for name, row in metrics["populations"].items()},
         "known_prefix_reuse_target": profile["known_prefix_reuse_target"],

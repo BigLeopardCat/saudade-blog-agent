@@ -10,6 +10,7 @@ from agent import authz
 from agent.adminops_target import normalize_target_id
 from agent.products.blog.confirmation import proposal
 from agent.runtime.results import TurnResult
+from agent.runtime.tool_evidence import observed
 from agent.runtime.turns import check_cancelled
 from agent.runtime.writes import bound_context
 from tools import base
@@ -72,6 +73,8 @@ def prepare_favorite_change(
     if error is not None:
         return error
     favorite = base._fav_row(favorites, article_id)
+    observed("favorites", {"article_id": article_id, "is_favorite": favorite is not None},
+             ("article_id", "is_favorite"))
     spec = {"tool": name, "args": {"article_id": article_id}}
     if (favorite is not None) == (action == "add"):
         state = "已经收藏" if action == "add" else "本来就未收藏"

@@ -16,10 +16,18 @@ def _list(**args):
 
 
 def test_unread_counts_fetch_no_contents(mailbox):
-    result = own_reads.get_unread_summary.invoke({}, config=config())
+    result = own_reads.get_unread_counts.invoke({}, config=config())
     assert json.loads(str(result)) == {"notifications": 2, "messages": 2, "total": 4}
     assert len(mailbox["requests"]) == 1
     assert mailbox["requests"][0].url.path.endswith("/notifications/summary")
+
+
+def test_registered_counter_has_the_same_bounded_contract(mailbox):
+    tools = {tool.name: tool for tool in base.get_all_tools()}
+    value = tools["get_unread_counts"].invoke({}, config=config())
+    assert json.loads(str(value)) == {"notifications": 2, "messages": 2, "total": 4}
+    assert "get_unread_summary" not in tools
+    assert len(mailbox["requests"]) == 1
 
 
 def test_default_list_is_small_and_omits_bodies_and_outbox(mailbox):
@@ -64,7 +72,7 @@ def test_unverified_identity_and_foreign_rows_never_become_read_facts(mailbox):
                                   {"notifications": 1, "messages": 1, "total": 4}])
 def test_bad_counts_are_not_zero(monkeypatch, data):
     monkeypatch.setattr(base, "_own_get", lambda *args: data)
-    assert own_reads.get_unread_summary.invoke({}, config=config()).kind == "unavailable"
+    assert own_reads.get_unread_counts.invoke({}, config=config()).kind == "unavailable"
 
 
 def test_network_failure_is_not_an_empty_mailbox(mailbox):

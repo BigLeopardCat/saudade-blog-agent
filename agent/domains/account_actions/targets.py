@@ -7,6 +7,7 @@ from typing import Annotated, Literal
 from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictInt, StrictStr
 
 from agent.principal import ROLE_ADMIN, ROLE_USER, ROLE_ZAKO
+from agent.runtime.tool_evidence import observed
 from tools import base
 
 Identifier = Annotated[StrictInt, Field(gt=0, le=2147483647)]
@@ -121,6 +122,10 @@ def prepare(request, config):
     if isinstance(result, base.ToolResult):
         return result
     try:
-        return plan(result, request)
+        return observed(
+            "account_actions",
+            plan(result, request),
+            ("before", "notificationCount", "revokeSessions", "version"),
+        )
     except (ValueError, TypeError):
         return base.unavailable("账号状态或实际副作用无法核对，本次未生成操作。")
