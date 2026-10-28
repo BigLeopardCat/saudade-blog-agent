@@ -159,6 +159,24 @@ def test_new_tool_output_is_not_mistaken_for_a_missed_old_prefix():
     assert measured["cache_read"] / measured["input"] == 1 / 3
 
 
+def test_absent_cache_usage_stays_unknown_in_cache_diagnostics(tmp_path):
+    report, profile, _, trace = fixture(tmp_path)
+    doc = json.loads(trace.read_bytes())
+    doc["events"][-1].pop("cache_read")
+    trace.write_text(json.dumps(doc))
+    got = assess(report, profile_path=profile)
+    assert got["cache_diagnostics"]["first_call"]["uncached_input"] is None
+
+
+def test_model_error_cost_cannot_disappear_behind_complete_successful_calls(tmp_path):
+    report, profile, _, trace = fixture(tmp_path)
+    doc = json.loads(trace.read_bytes())
+    doc["events"].append({"event": "llm_error"})
+    trace.write_text(json.dumps(doc))
+    got = assess(report, profile_path=profile)
+    assert any("errored calls" in item for item in got["unverified"])
+
+
 def test_task_classes_handle_overlapping_suite_tags():
     assert task_class(["write_prepare", "multi_intent"]) == "multi"
     assert task_class(["confirmation", "memory"]) == "control"

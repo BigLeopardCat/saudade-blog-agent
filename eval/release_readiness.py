@@ -82,7 +82,7 @@ def _add_cache(row, event):
 def _cache_summary(row):
     eligible = row.get("known_prefix_input", 0)
     return {**row, "hit_rate": usage.hit_rate(row),
-            "uncached_input": row["cache_in"] - row["cache"],
+            "uncached_input": row["cache_in"] - row["cache"] if row["cache_seen"] else None,
             "known_prefix_reuse_rate": row.get("known_prefix_reused", 0) / eligible
             if eligible else None}
 
@@ -99,6 +99,8 @@ def _metrics(report):
                 trace_errors.append({"case": case["id"], "round": index, "error": "missing trace"})
                 continue
             row = request_metrics.summary(doc)
+            if row["errored_calls"]:
+                missing.append(f"{case['id']}.{index}: provider usage for errored calls")
             if not build or row["build"] != build:
                 trace_errors.append({"case": case["id"], "round": index, "error": "build mismatch"})
             timing = rnd.get("http_timing") or {}
