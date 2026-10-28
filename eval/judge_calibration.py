@@ -40,11 +40,11 @@ def evaluate(samples, llm):
     rows = []
     for sample in samples:
         row = {"id": sample["id"], "expected_issue": sample["expected_issue"],
-               "predicted_issue": None}
+               "predicted_issue": None, "diagnostics": {}}
         text = json.dumps(sample["material"], ensure_ascii=False)
         try:
             verdict, _ = llm_judge.judge_one(text, llm, instructions=online_judge.INSTRUCTIONS,
-                                            allow_fallback=False)
+                                            allow_fallback=False, diagnostics=row["diagnostics"])
             online_judge.validate_excerpts(verdict, text)
             row.update(predicted_issue=bool(verdict["unsupported"] or not verdict["answered"]),
                        verdict=verdict)

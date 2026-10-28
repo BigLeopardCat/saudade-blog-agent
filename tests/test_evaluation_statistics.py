@@ -46,7 +46,10 @@ def test_first_decision_does_not_credit_an_unrelated_parallel_tool():
                            "invalid_tool_calls": True}],
                           {"any_tools": [], "allow_text": True}) is False
     assert decision_score([], expected) is None
-    assert decision_report([True, False, None])["correct"]["total"] == 2
+    assert decision_report([[True], [False], [None]])["correct"]["total"] == 2
+    grouped = decision_report([[True, True, True], [False]])
+    assert grouped["decision_rate"] == 0.75
+    assert grouped["correct"]["rate"] == 0.5 and grouped["correct"]["total"] == 2
 
 
 def test_timings_separate_discovery_execution_and_model_first_token():
