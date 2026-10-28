@@ -176,6 +176,7 @@ flowchart LR
 │   ├── runtime/budget.py                                # 当前生产代码模块
 │   ├── runtime/input_usage.py                           # 相同模型及请求前缀复用服务商输入用量
 │   ├── runtime/tool_errors.py                           # 参数字段错误反馈，不回显原始输入
+│   ├── runtime/tool_state.py                            # 与历史窗口独立的授权工具激活状态
 │   ├── runtime/catalog.py                               # 当前生产代码模块
 │   ├── runtime/checkpoint_store.py                      # 当前生产代码模块
 │   ├── runtime/control.py                               # 当前生产代码模块

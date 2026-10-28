@@ -2,6 +2,7 @@
 
 from langchain.agents.middleware import AgentState
 
+from agent.runtime import tool_state
 from agent.runtime.results import TurnResult
 
 
@@ -36,12 +37,8 @@ def restore(session, state):
     session.effects = {**(state.get("effects") or {}), **session.effects}
     if session.effects.get("pending_event"):
         session.outcome_adapter = None
-    for domain in state.get("loaded") or []:
-        if domain in session.domains and domain not in session.loaded:
-            session.tools.update(session.domains[domain])
-            session.loaded.append(domain)
+    tool_state.apply(session, state.get("loaded") or [])
     session.result_chars = state.get("result_chars", 0)
-    session._bind_menu()
     proposal = state.get("proposal")
     terminal = state.get("terminal")
     if terminal:

@@ -88,6 +88,30 @@ def context(title, summary):
         "summary_scope": {"user_id": 7, "role": "user", "conversation_id": 42}})
 
 
+def test_promoted_browser_action_does_not_activate_other_site_tools():
+    from agent.domains import browser
+    from agent.products.blog.catalog import initial_tools
+    from agent.products.blog.tool_policy import BlogToolMiddleware
+
+    @tool
+    def site_read() -> str:
+        """Read a site fixture."""
+        return "site fact"
+
+    model = CaptureModel(AIMessageChunk(content="", tool_calls=[{
+        "name": "navigate_page", "id": "page", "args": {"path": "/"}}]),
+        AIMessageChunk(content="页面指令已发送。"))
+    domains = {"site": {site_read.name: site_read, **browser.tools(config())}}
+    session = ToolSession(model, config(), initial_tools({}, domains), domains,
+                          middleware=(BlogToolMiddleware,))
+    result = session.run(build_prompt([HumanMessage(content="回首页")],
+                                      config()["configurable"]["principal"]))
+    assert result.execution["receipts"] and not session.loaded
+    assert model.requests[0]["tools"] == model.requests[1]["tools"]
+    assert "site_read" not in str(model.requests[1]["tools"])
+    assert list(session.tools) == ["navigate_page", "set_page_appearance"]
+
+
 class Pending:
     def __init__(self, target):
         self.target = target
