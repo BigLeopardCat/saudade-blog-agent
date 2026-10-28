@@ -59,8 +59,10 @@ def initial_tools(tools, domains):
     # These operations remain authorized by the domain builder and again on invocation.
     browser = domains.get("site") or {}
     device = domains.get("devices") or {}
+    pending = domains.get("pending") or {}
     return {
         **tools,
         **{name: browser[name] for name in _BROWSER_ACTIONS if name in browser},
         **{name: device[name] for name in ("device_oled_display",) if name in device},
+        **{name: pending[name] for name in ("cancel_pending_operation",) if name in pending},
     }

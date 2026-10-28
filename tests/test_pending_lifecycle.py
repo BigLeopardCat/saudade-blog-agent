@@ -232,3 +232,14 @@ def test_failed_boundary_checkpoint_cannot_reenable_the_revoked_signature(
     result = execute(selected, cfg, text="取消刚才的收藏")
     assert result.execution["pending_event"]["jti"] == grant["jti"]
     assert not selected.store.load(cfg).has_pending
+
+
+def test_verified_pending_can_be_cancelled_without_loading_another_domain(pending_task):
+    runtime, cfg, _, _, grant, _, requests, _ = pending_task
+    model = Model(batch(CANCEL), AIMessage(content="已取消，还没有更改收藏。"))
+    selected = runtime(model)
+    result = execute(selected, cfg, text="取消这次收藏")
+    assert result.reply == "已取消，还没有更改收藏。"
+    assert not result.execution.get("pending_confirm")
+    assert len(model.prompts) == 2
+    assert_revoked(selected, cfg, grant, requests)
