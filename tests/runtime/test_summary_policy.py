@@ -33,5 +33,5 @@ def test_policy_never_bypasses_source_or_confirmation_boundaries():
     value = request(20)
     assert not safe_request(value.model_copy(update={"history_scope": None}), ACTOR).needs_summary
     assert not safe_request(
-        value.model_copy(update={"confirm_token": "opaque"}), ACTOR
+        value.model_copy(update={"confirm_token": secrets.token_urlsafe(24)}), ACTOR
     ).needs_summary
