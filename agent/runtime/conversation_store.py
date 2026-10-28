@@ -20,6 +20,7 @@ class ConversationSnapshot:
     receipts: list = field(default_factory=list)
     unfinished: bool = False
     initialized: bool = False
+    tool_state: dict | None = None
 
     @property
     def has_pending(self) -> bool:

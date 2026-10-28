@@ -236,20 +236,6 @@ class ToolSession:
         else:
             self.outcome = self._with_receipts(adapted)
 
-    def _restore_domains(self, prompt):
-        observed = {message.name for message in prompt
-                    if isinstance(message, ToolMessage) and message.status != "error"}
-        observed.difference_update(self.initial_names)
-        restored = [domain for domain, tools in self.domains.items()
-                    if domain not in self.loaded and (observed.intersection(tools)
-                    or f"load_{domain}_info_tools" in observed)]
-        for domain in restored:
-            self.tools.update(self.domains[domain])
-            self.loaded.append(domain)
-        if restored:
-            self.llm = self._bind_menu()
-            record("native", "restore_domains", domains=restored)
-
     @staticmethod
     def _complete_tool_arguments(response):
         # LangChain deliberately repairs partial JSON for streaming previews.

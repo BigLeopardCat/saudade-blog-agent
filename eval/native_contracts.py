@@ -26,6 +26,7 @@ from agent.runtime.native import NativeRuntime
 from agent.runtime.native_store import NativeConversationStore
 from eval import (
     admin_task_contracts,
+    context_contracts,
     experience_contracts,
     navigation_contracts,
     quota_task_contracts,
@@ -87,6 +88,8 @@ def _posts(state):
 def _chat(turn, state):
     result = turn("你好，随便聊聊，不需要查资料。")
     _require(result["text"].strip() and not result["tool_calls"], "chat used tools or had no reply")
+    _require("主人" not in result["text"] and "杂鱼" not in result["text"],
+             "ordinary-user chat used another role's default address")
     trace = load_trace(result["trace"])
     _require(trace and request_metrics.summary(trace)["calls"] == 1,
              "chat did not complete in one model call")
@@ -181,7 +184,8 @@ CASES = [("chat", favorite_backend, _chat),
          ("unread_counts", message_backend, _unread_counts),
          ("message_read_replay", message_backend, _messages),
          *navigation_contracts.CASES, *experience_contracts.CASES, *admin_task_contracts.CASES,
-         *reading_task_contracts.CASES, *quota_task_contracts.CASES]
+         *reading_task_contracts.CASES, *quota_task_contracts.CASES,
+         *context_contracts.CASES]
 
 
 def _sample(name, backend, contract, run_id, sample):
