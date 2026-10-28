@@ -6,7 +6,7 @@ from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import tool
 from pydantic import Field, StrictInt
 
-from agent.domains.article_actions import targets
+from agent.domains.article_actions import batch, targets
 from agent.products.blog.confirmation import proposal
 from agent.reports import sanitize_untrusted
 from agent.runtime.results import TurnResult
@@ -16,24 +16,34 @@ from tools import base
 from tools.result import invalid_args
 
 available = targets.available
+Identifier = Annotated[StrictInt, Field(gt=0)]
+ArticleIds = Annotated[list[Identifier], Field(min_length=1, max_length=50)]
 
 
 @tool(return_direct=True)
 def prepare_article_state(
-    article_id: Annotated[StrictInt, Field(gt=0)],
     config: RunnableConfig,
+    article_id: Identifier | None = None,
+    article_ids: ArticleIds | None = None,
+    category: Annotated[str, Field(min_length=1, max_length=100)] | None = None,
     status: Literal["public", "private", "draft"] | None = None,
     is_top: Annotated[StrictInt, Field(ge=0, le=1)] | None = None,
 ) -> object:
     """按明确请求准备文章发布、隐藏、转草稿或置顶确认；只改指定字段，不编辑正文、署名或修改稿。
 
-    article_id来自真实后台清单或明确编号。核对当前文章与内容版本后生成确认卡，不执行写入。
+    单篇传article_id；整批传article_ids或用户给定的完整分类名category，三者仅选一种。
+    一次可准备最多50篇，整批核对版本、展示范围并只确认一次；超出范围明确报错，不截断。
+    编号与分类直接取用户给定信息，本工具负责读取状态和核实目标，不编辑正文。
     """
     check_cancelled(config)
     if not available(config):
         return base.unavailable("需要已验签的管理员和稳定会话，本次未生成确认卡。")
     if status is None and is_top is None:
         return invalid_args("请明确要改的文章状态或置顶开关。")
+    if sum(value is not None for value in (article_id, article_ids, category)) != 1:
+        return invalid_args("请选择单篇编号、批量编号或一个完整分类名。")
+    if article_ids is not None or category is not None:
+        return batch.prepare(article_ids, category, status, is_top, config)
     current = targets.read(article_id, config)
     if isinstance(current, base.ToolResult):
         return current
