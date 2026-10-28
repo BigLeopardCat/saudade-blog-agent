@@ -6,6 +6,7 @@ by this adapter are deleted. Confirmation credentials never leave memory.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import time
 import uuid
@@ -201,6 +202,7 @@ class OnlineTransport:
             raise
         timing = {"request_id": request_id, "elapsed_s": time.monotonic() - started,
                   **first,
+                  "trace_sha256": hashlib.sha256(trace_path.read_bytes()).hexdigest(),
                   "trace": str(trace_path), "transport": "blog_http" if self.host else "agent_http"}
         self.requests.append(timing)
         result = self._result(events, errors, trace_path, doc, timing)

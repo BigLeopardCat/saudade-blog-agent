@@ -23,6 +23,7 @@ def transport(tmp_path, monkeypatch, wire):
                               report_dir=tmp_path, client=httpx.Client(
                                   transport=httpx.MockTransport(respond)))
     adapter.uid, adapter.role, adapter.cid = 7, "user", 100
+    (tmp_path / "trace.json").write_text('{"events": []}')
     monkeypatch.setattr(adapter, "_headers", lambda _: {})
     monkeypatch.setattr(adapter, "_trace", lambda _: (tmp_path / "trace.json", {"events": []}))
     return adapter
@@ -102,6 +103,7 @@ def test_host_transport_serializes_images_as_array(tmp_path, monkeypatch, image,
         adapter = OnlineTransport(agent_url="http://agent", blog_url="http://blog",
                                   report_dir=tmp_path, host=True, client=client)
         adapter.uid, adapter.role, adapter.cid = 7, "user", 100
+        (tmp_path / "trace.json").write_text('{}')
         monkeypatch.setattr(adapter, "_headers", lambda _: {})
         monkeypatch.setattr(adapter, "_trace", lambda _: (tmp_path / "trace.json", {}))
         adapter(ChatRequest(message="hello", image=image))
