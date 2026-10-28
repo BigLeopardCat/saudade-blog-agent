@@ -1,5 +1,6 @@
 """Authorized tool activation, independent of the dialogue display window."""
 
+from agent.runtime.prompt_budget import required_input
 from agent.runtime.task_scope import binding
 from utils.trace import record
 
@@ -28,7 +29,7 @@ def inherit(session, saved, prompt):
     """Reuse a completed turn's menu only within its verified conversation scope.
 
     Inherited activation is optional. Reset it at a new-task boundary if it would
-    crowd out the selected dialogue, current input or output reservation. Recovery
+    crowd out the latest exchange, current input or output reservation. Recovery
     instead uses the task checkpoint verbatim and never runs this policy.
     """
     if not saved:
@@ -42,7 +43,7 @@ def inherit(session, saved, prompt):
     apply(session, saved.get("loaded") or [])
     if not session.loaded:
         return
-    if session.budget.output_capacity(prompt, session.menu) < session.output_limit:
+    if session.budget.output_capacity(required_input(prompt), session.menu) < session.output_limit:
         removed = list(session.loaded)
         apply(session, [])
         record("native", "tool_menu_reset", reason="budget", domains=removed)

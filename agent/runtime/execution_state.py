@@ -7,6 +7,7 @@ from agent.runtime.results import TurnResult
 
 
 class ExecutionState(AgentState, total=False):
+    context_update: dict | None
     loaded: list[str]
     result_chars: int
     proposal: dict | None
@@ -22,7 +23,7 @@ def capture(session):
     outcome = session.outcome
     proposal = ({"reply": outcome.reply, "execution": outcome.execution}
                 if outcome and (outcome.execution or {}).get("pending_confirm") else None)
-    return {"loaded": list(session.loaded),
+    return {"loaded": list(session.loaded), "context_update": session.context_update,
             "applied_inputs": sorted(session.applied_inputs),
             "effects": dict(session.effects),
             "run_id": session.task.get("id") if session.task else None,
@@ -33,6 +34,7 @@ def capture(session):
 
 
 def restore(session, state):
+    session.context_update = state.get("context_update")
     session.applied_inputs.update(state.get("applied_inputs") or [])
     session.effects = {**(state.get("effects") or {}), **session.effects}
     if session.effects.get("pending_event"):

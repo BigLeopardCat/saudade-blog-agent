@@ -94,7 +94,7 @@ class NativeRuntime:
         incoming = [*memory.bootstrap(
                         snapshot, state.get("messages") or [], principal,
                         tool_access=self.application.history_access),
-                    *(state.get("messages") or [])]
+                    *memory.request_messages(state.get("messages") or [])]
         if (snapshot.unfinished and not snapshot.run.get("input_saved")
                 and recovery.allowed(snapshot, snapshot.run["id"], config)):
             incoming = [*snapshot.run["input"], *incoming]
@@ -124,6 +124,7 @@ class NativeRuntime:
             config, [*incoming, *session.applied_messages], outcome.reply,
             observations=session.observations,
             execution=outcome.execution, pending=snapshot.pending, approval=approval_state,
+            context_update=session.context_update,
         )
         record("native", "turn_completed", chars=len(outcome.reply))
         yield outcome
@@ -166,7 +167,8 @@ class NativeRuntime:
         saved_input = [*saved_input, *session.applied_messages]
         self.store.save_turn(config, saved_input, outcome.reply,
                              observations=recovery.new_observations(snapshot, session.observations),
-                             execution=outcome.execution, approval=session.approval)
+                             execution=outcome.execution, approval=session.approval,
+                             context_update=session.context_update)
         yield outcome
 
     def _session(self, config, snapshot, pending=None):
@@ -263,6 +265,7 @@ class NativeRuntime:
             self.store.save_turn(
                 config, [], result.reply, observations=session.observations,
                 execution=result.execution, approval=session.approval,
+                context_update=session.context_update,
             )
             yield result
             return

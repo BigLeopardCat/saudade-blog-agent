@@ -7,10 +7,10 @@ from langgraph.graph.message import REMOVE_ALL_MESSAGES
 from langgraph.types import Command, StateSnapshot
 
 from agent.runtime import approval, tool_state
+from agent.runtime.compaction import ConversationCompaction
 from agent.runtime.execution_state import ExecutionState, capture, seed
 from agent.runtime.memory_media import stage
 from agent.runtime.middleware import OrderedToolsMiddleware, SessionMiddleware
-from agent.runtime.prompt_budget import fit_history
 from agent.runtime.recovery import restore_session
 
 
@@ -25,10 +25,8 @@ class FrameworkExecution:
             "browser_task": session.task["id"] if session.task and session.store
                             and session.store.available and not session.isolated else None}
         session.config = self.config
-        prompt = fit_history(prompt, session.principal, session.menu, session.budget.limits,
-                             session.output_limit, tool_access=session.history_access,
-                             budget=session.budget)
         self.system = prompt[0] if prompt and isinstance(prompt[0], SystemMessage) else None
+        session.system_message = self.system
         messages = prompt[1:] if self.system is not None else prompt
         self.initial = {"messages": [RemoveMessage(id=REMOVE_ALL_MESSAGES),
                                     *stage(messages, session.transient)],
@@ -44,7 +42,8 @@ class FrameworkExecution:
         middleware.system_message = self.system
         return create_agent(self.session.model, tools=[], system_prompt=self.system,
                             middleware=[OrderedToolsMiddleware(middleware),
-                                        *self.session.middleware, middleware],
+                                        *self.session.middleware,
+                                        ConversationCompaction(self.session), middleware],
                             state_schema=ExecutionState,
                             checkpointer=True if persistent else None)
 
@@ -70,7 +69,7 @@ class FrameworkExecution:
             return {"pending_confirm": (execution or {}).get("pending_confirm"),
                     "pending_action": (execution or {}).get("pending_action"),
                     "approval": session.approval, "approved_result": None,
-                    "continuation": None, "run": session.task,
+                    "run": session.task,
                     "tool_state": tool_state.capture(session)}
 
         return approval.graph(session.store.saver, execute)

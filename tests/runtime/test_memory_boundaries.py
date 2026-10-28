@@ -70,7 +70,7 @@ def test_oversized_turn_has_an_explicit_bounded_excerpt_instead_of_disappearing(
     assert visible and isinstance(visible[0], HumanMessage)
     assert "节选" in visible[0].content
     assert visible[0].additional_kwargs["memory_excerpt"] is True
-    assert estimate_tokens(visible) <= memory.CHECKPOINT_TOKENS
+    assert estimate_tokens(visible) <= memory.COMPACTION_TOKENS
 
 
 def test_current_images_and_schemas_take_precedence_over_history():
@@ -170,7 +170,6 @@ def test_summary_jobs_require_accepted_history_provenance(scope):
                       summary_batch={"base_id": 0, "messages": [
                           {"id": 10, "role": "user", "content": "prior"}]})
     cleaned = safe_request(req, ACTOR)
-    assert not cleaned.needs_summary  # A nonempty base needs its own matching provenance.
     assert not cleaned.summary
 
 
@@ -202,7 +201,8 @@ def test_partial_long_reply_uses_normal_window_and_retains_the_original_user_req
         assert question in str(visible)
         assert "节选" in str(visible)
         assert visible[0].additional_kwargs["memory_excerpt"] is True
-        bound = max(memory.HISTORY_TOKENS, estimate_tokens([HumanMessage(content=question)]) + 100)
+        bound = max(memory.FALLBACK_HISTORY_TOKENS,
+                    estimate_tokens([HumanMessage(content=question)]) + 100)
         assert estimate_tokens(visible) <= bound
 
 

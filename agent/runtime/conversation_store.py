@@ -46,7 +46,7 @@ class ConversationStore(Protocol):
 
     def save_turn(
         self, config, messages, reply, *, observations=(), execution=None, pending=None,
-        approval=None,
+        approval=None, context_update=None,
     ) -> None:
         """Save the completed turn while the caller holds guard(config)."""
         ...
