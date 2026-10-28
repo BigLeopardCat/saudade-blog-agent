@@ -7,10 +7,10 @@ Reads the active provider's config from ``settings.active_llm_*``.
 import logging
 import uuid
 
-from langchain_openai import ChatOpenAI
 from langchain_openai.chat_models.base import BaseChatOpenAI
 
 from config import settings
+from models.cancellable import CancellableChatOpenAI as ChatOpenAI
 from models.deepseek import DeepSeekChat
 from models.session import current_session
 
@@ -130,6 +130,11 @@ def get_llm(**kwargs) -> BaseChatOpenAI:
         params["default_headers"] = _hdrs
     if seed:
         params["seed"] = int(seed)
+    from models.transport import current_io
+
+    io = current_io()
+    if io is not None:
+        params.setdefault("http_async_client", io.client)
     client = (DeepSeekChat if settings._provider_prefix in {"deepseek", "opencode"}
               and params["model"].startswith("deepseek-") else ChatOpenAI)
     return client(**params)
