@@ -112,6 +112,29 @@ def test_unanswered_request_cannot_be_normalized_into_semantic_success(tmp_path)
     assert result["rows"][0]["verdict"]["verdict"] == "suspect"
 
 
+def test_captured_voice_reaches_review_without_replacing_other_product_facts(tmp_path):
+    events = [
+        {"node": "native", "event": "product_context", "facts": {
+            "article_url_template": "https://site.test/article/<id>"}},
+        {"node": "native", "event": "product_context", "facts": {
+            "conversation_style": "日式雌小鬼风格，称对方杂鱼，不用敬语。"}},
+    ]
+    case = recorded(tmp_path, trace_extra={"input": {"message": "早呀", "principal_role": "zako"},
+                    "events": events}, text="尊敬的主人，欢迎光临。", confirm_payloads=[])
+    model = Model({"unsupported": [], "answered": False, "verdict": "suspect",
+                   "reason": "称呼与记录中的当前角色语气冲突"})
+    report = run(tmp_path, case, model)
+    current = json.loads(model.messages[0][1]["content"])["turns"][0]
+    facts = current["runtime_context"]["product_facts"]
+    assert facts == {**events[0]["facts"], **events[1]["facts"]}
+    assert report["counts"] == {"suspect": 1}
+    assert report["rows"][0]["verdict"]["unsupported"] == []
+
+
+def test_missing_historical_voice_stays_unknown():
+    assert online_judge.runtime_context([])["product_facts"] is None
+
+
 def test_semantic_result_cannot_replace_deterministic_failure(tmp_path):
     case = recorded(tmp_path)
     case["status"] = "failed"
