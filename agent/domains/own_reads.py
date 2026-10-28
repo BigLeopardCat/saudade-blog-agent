@@ -1,4 +1,4 @@
-"""Small own-data views for the native runtime; legacy tool contracts stay intact."""
+"""Bounded current-account counts and message reads."""
 
 import json
 from typing import Annotated, Literal
@@ -8,7 +8,7 @@ from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import tool
 from pydantic import Field, StrictInt
 
-from agent.products.blog.read_tools import own_reads_enabled
+from agent.runtime.access import own_reads_enabled
 from tools import base
 
 _FIELDS = ("id", "fromUserId", "toUserId", "peerName", "title", "isRead", "createdAt")
@@ -39,7 +39,7 @@ def _entry(row, uid, folder=None):
 
 
 @tool
-def get_unread_summary(config: RunnableConfig) -> object:
+def get_unread_counts(config: RunnableConfig) -> object:
     """查询本人的未读通知数、未读站内信数及合计，只返回计数。
 
     条目清单与内容由 notifications、messages 领域读取；本工具不返回条目或正文。

@@ -5,6 +5,7 @@ from datetime import datetime
 
 from agent.domains.admin_writes import available as available
 from agent.principal import KNOWN_ROLES
+from agent.runtime.tool_evidence import observed
 from tools import base
 
 PATH = "/api/protected/quota/actions"
@@ -69,4 +70,6 @@ def read(config, *, request_id=None, user_id=None):
             raise ValueError("返回账号与指定目标不一致")
     except (ValueError, TypeError, KeyError):
         return None, base.unavailable("未能读取完整且一致的额度目标；本次未改动。")
+    observed("quota", data, ("userId", "name", "role", "used", "limit", "unlimited",
+                             "unit", "version", "request"))
     return data, None

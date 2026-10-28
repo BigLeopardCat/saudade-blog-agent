@@ -101,10 +101,32 @@ def _confirmation_preview(pattern, result):
     return any(isinstance(text, str) and re.search(pattern, text) for text in previews)
 
 
+def _prepared_or_noop(wanted, result, events):
+    specs = [spec for payload in result.get("confirm_payloads", [])
+             if payload.get("workflow") == wanted["workflow"] and len(payload.get("specs", [])) == 1
+             for spec in payload["specs"]]
+    if any(contains(spec, wanted["spec"]) for spec in specs):
+        return True
+    noop_calls = {(event.get("round"), event.get("call_id")) for event in events
+                  if event.get("event") == "call" and event.get("kind") == "noop"
+                  and event.get("name") in wanted["noop_tools"] and event.get("call_id")}
+    return any(event.get("event") == "preparation_observation"
+               and (event.get("round"), event.get("call_id")) in noop_calls
+               and event.get("complete") is True
+               and event.get("source") == wanted["source"]
+               and contains(event.get("facts"), wanted["facts"]) for event in events)
+
+
+def _outcome_failures(gold, result, events):
+    return ["缺少匹配的确认操作或同次工具核实的无需改动事实"
+            for wanted in gold.get("require_prepared_or_noop", [])
+            if not _prepared_or_noop(wanted, result, events)]
+
+
 def check(gold, result):
     keys = {"require_observations", "require_observations_any", "require_todo_schedule",
             "require_confirm_specs", "require_confirm_preview", "forbid_runtime_stop",
-            "forbid_business_write", "require_answer_value"}
+            "forbid_business_write", "require_answer_value", "require_prepared_or_noop"}
     if not keys.intersection(gold):
         return []
     events = result.get("native_events")
@@ -112,6 +134,7 @@ def check(gold, result):
         return ["[未评估] 缺少原生运行时事件，不能验证任务结果"]
     failures = []
     calls = observations(events)
+    failures.extend(_outcome_failures(gold, result, events))
     for wanted in gold.get("require_observations", []):
         if not any(_matches_observation(wanted, event) for event in calls):
             failures.append(f"缺少实际工具观察：{wanted}")

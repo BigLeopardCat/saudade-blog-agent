@@ -1,6 +1,7 @@
 """Read bounded article targets with an opaque content-bound version."""
 
 from agent.domains.admin_writes import available as available
+from agent.runtime.tool_evidence import observed
 from tools import base
 
 PATH = "/api/protected/article-actions/"
@@ -42,7 +43,9 @@ def read(article_id, config):
         result = row(value)
         if result["id"] != article_id:
             raise ValueError("Article id mismatch")
-        return result
+        return observed(
+            "article_state", result, ("id", "title", "status", "isPublic", "isTop", "version")
+        )
     except (ValueError, TypeError, KeyError):
         return base.unavailable("未能核对文章目标和版本，本次未准备或执行改动。")
 

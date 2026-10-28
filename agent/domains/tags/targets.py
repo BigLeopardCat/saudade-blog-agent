@@ -4,6 +4,7 @@ from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, StrictInt, StrictStr
 
+from agent.runtime.tool_evidence import observed
 from tools import base
 
 Identifier = Annotated[StrictInt, Field(gt=0)]
@@ -60,10 +61,7 @@ class Plan(BaseModel):
 def valid_target(t):
     return bool(
         t
-        and (
-            (t.id is not None and t.level is not None)
-            or (t.id is None and t.name is not None)
-        )
+        and ((t.id is not None and t.level is not None) or (t.id is None and t.name is not None))
         and not (t.level == 1 and t.parentId is not None)
     )
 
@@ -165,6 +163,10 @@ def prepare(request, config):
     if isinstance(result, base.ToolResult):
         return result
     try:
-        return plan(result, request)
+        return observed(
+            "tags",
+            plan(result, request),
+            ("before", "parent", "childCount", "articleCount", "revisionCount", "version"),
+        )
     except (ValueError, TypeError):
         return base.unavailable("标签变更、层级或关联范围无法核对，本次未生成操作。")

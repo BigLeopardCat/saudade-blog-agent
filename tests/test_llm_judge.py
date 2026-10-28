@@ -1,6 +1,7 @@
 """Offline judge parsing, trace completeness and report contracts."""
 
 
+import ast
 import json
 import sys
 from pathlib import Path
@@ -326,7 +327,9 @@ def _test_golden_runs_raise_the_trace_limit():
     # 落盘的文本是 `frame_text`（模型看到的那份帧，20260925 批 D——判官的材料就是它），
     # 截断策略仍是同一处（不是 graph 自己再写一个 200/8000）。
     check("原生 call 事件沿用共享的工具结果截断策略",
-          "trace_mod.tool_result_text(body, name)" in src_graph)
+          any(isinstance(node, ast.Call) and getattr(node.func, "attr", None) == "tool_result_text"
+              and len(node.args) >= 2 and isinstance(node.args[1], ast.Name)
+              and node.args[1].id == "name" for node in ast.walk(ast.parse(src_graph))))
     check("golden trace 的 input 里落了本轮上限（读的人知道自己手里是不是全文）",
           '"tool_result_limit": _lim' in (ROOT / "eval" / "golden_trace.py").read_text(
               encoding="utf-8"))

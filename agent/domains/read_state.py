@@ -11,6 +11,7 @@ from agent import action_text, authz
 from agent.products.blog.confirmation import proposal
 from agent.runtime import writes
 from agent.runtime.results import TurnResult
+from agent.runtime.tool_evidence import observed
 from agent.runtime.turns import check_cancelled
 from tools import base
 from tools.result import fact, ok
@@ -63,6 +64,9 @@ class ReadState:
                     break
                 rows[row["id"]] = row
             else:
+                observed(self.executor, {"items": [
+                    {"id": row["id"], "isRead": row["isRead"]} for row in rows.values()]},
+                    ("items",))
                 return (data, rows), None
         return None, base.unavailable(f"未能核对本人{self.label}及已读状态，本次未改动。")
 

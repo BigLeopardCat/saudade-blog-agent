@@ -6,6 +6,7 @@ from unicodedata import category
 from pydantic import BaseModel, ConfigDict, Field, StrictInt, StrictStr
 
 from agent.principal import KNOWN_ROLES, ROLE_SUPERADMIN
+from agent.runtime.tool_evidence import observed
 from tools import base
 
 Identifier = Annotated[StrictInt, Field(gt=0)]
@@ -87,6 +88,6 @@ def prepare(request, config):
     if isinstance(result, base.ToolResult):
         return result
     try:
-        return plan(result, request)
+        return observed('notices', plan(result, request), ('recipient', 'version'))
     except (TypeError, ValueError):
         return base.unavailable("收件人或通知原文无法核对，本次未生成确认。")

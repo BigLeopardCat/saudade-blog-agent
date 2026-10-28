@@ -3,6 +3,7 @@
 from datetime import date, datetime
 
 from agent.domains.admin_writes import available as available
+from agent.runtime.tool_evidence import observed
 from tools import base
 
 PATH = "/api/protected/todos"
@@ -60,4 +61,5 @@ def snapshot(config):
             raise ValueError("待办编号重复")
     except (ValueError, TypeError, KeyError):
         return None, base.unavailable("未能核对完整的本人待办及稳定编号，本次未改动。")
+    observed("todos", {"items": list(rows.values())}, ("items",))
     return rows, None

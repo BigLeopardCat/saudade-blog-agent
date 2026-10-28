@@ -173,7 +173,7 @@ def test_native_outcome_suite_uses_verified_identity_and_redacts_tokens(monkeypa
         call("load_notifications_info_tools", {}),
         call("prepare_notification_read", {"scope": "all_unread"}),
         AIMessage(content="已标记本次确认的通知为已读。"),
-        call("get_unread_summary", {}), AIMessage(content="通知2条，站内信2封，合计4条。"),
+        call("get_unread_counts", {}), AIMessage(content="通知2条，站内信2封，合计4条。"),
         call("load_messages_info_tools", {}), call("list_my_messages", {}),
         AIMessage(content="收件箱里有《欢迎来信》和《回访来信》。"),
         call("load_messages_info_tools", {}), call("list_my_messages", {"message_id": 201}),
