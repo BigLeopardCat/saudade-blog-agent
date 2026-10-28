@@ -284,3 +284,28 @@ def test_gateway_format_uses_the_actual_judge_model(monkeypatch, model, format_t
                       http_client=client, max_retries=0, streaming=False, enable_thinking=False)
         actual, degraded = llm_judge.judge_one("合成材料", llm, allow_fallback=False)
     assert actual == verdict and not degraded and len(requests) == 1
+
+
+def test_repeated_catalogs_are_losslessly_shared_without_merging_changed_menus(tmp_path):
+    contract = {"node": "native", "event": "tool_contract", "schema": {"function": {
+        "name": "read_alpha", "description": "Authorized fixture. " * 100}}}
+    case = recorded(tmp_path, trace_extra={"events": [contract]})
+    first = case["result"]["rounds"][0]
+    second_path = tmp_path / "second.json"
+    second_trace = json.loads(Path(first["trace"]).read_text())
+    second_trace["events"].append({"node": "native", "event": "tool_contract",
+                                   "schema": {"function": {"name": "read_beta"}}})
+    second_path.write_text(json.dumps(second_trace))
+    rounds = [first, first, {**first, "trace": str(second_path)}]
+    text = online_judge.material(case, rounds)
+    data = json.loads(text)
+    catalogs = data["tool_catalogs"]
+    assert len(catalogs) == 2
+    for source, turn in zip(rounds, data["turns"]):
+        trace = json.loads(Path(source["trace"]).read_text())
+        expected = online_judge.runtime_context(trace["events"])
+        context = dict(turn["runtime_context"])
+        context["available_tools"] = catalogs[context.pop("available_tools_ref")]
+        assert context == expected
+        assert turn["assistant_reply_to_review"] == source["text"]
+    assert len(text) < len(json.dumps(data, ensure_ascii=False, indent=2))
