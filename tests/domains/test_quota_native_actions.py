@@ -128,6 +128,23 @@ def test_exact_targets_signed_then_written_once_and_replayed(quota, tmp_path, ac
     assert quota["account"]["used"] == (45 if action == "reject" else 0)
 
 
+@pytest.mark.parametrize("account_name", ["agent_test_user_722", "agent_test_user_723"])
+@pytest.mark.parametrize("action,args", [
+    ("approve", {"request_id": 31}),
+    ("reject", {"request_id": 31, "reason": "暂不符合条件"}),
+    ("reset", {"account_id": 12}),
+])
+def test_confirmation_preserves_full_verified_names_with_the_same_prefix(
+        quota, account_name, action, args):
+    quota["account"]["name"] = account_name
+    prepared = prepare(action, **args)
+    question = prepared.execution["pending_confirm"]["q"]
+    assert account_name in question
+    assert "账号编号12" in question
+    assert grant(prepared)["specs"][0]["args"]["name"] == account_name
+    assert quota["writes"] == 0
+
+
 @pytest.mark.parametrize("field,value", [("reason", "修改申请原因"),
     ("createdAt", "2026-10-23 13:00:00"), ("status", 2)])
 def test_request_edits_revoke_frozen_target_before_any_write(quota, tmp_path, field, value):
