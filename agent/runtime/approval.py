@@ -19,6 +19,7 @@ class ConversationState(TypedDict, total=False):
     approved_result: dict | None
     receipts: list
     run: dict | None
+    tool_state: dict | None
     # Cleared on writes during the rolling upgrade; never restored or executed.
     continuation: dict | None
 

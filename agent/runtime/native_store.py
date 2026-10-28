@@ -50,6 +50,7 @@ class NativeConversationStore:
             receipts=list(values.get("receipts") or []),
             unfinished=bool(values.get("run")),
             initialized=snapshot.created_at is not None,
+            tool_state=values.get("tool_state"),
         )
 
     def save_turn(
