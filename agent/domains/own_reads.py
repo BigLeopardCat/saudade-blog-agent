@@ -40,7 +40,10 @@ def _entry(row, uid, folder=None):
 
 @tool
 def get_unread_summary(config: RunnableConfig) -> object:
-    """查询本人的未读通知数、未读站内信数及合计；只取计数，不读取内容。"""
+    """查询本人的未读通知数、未读站内信数及合计，只返回计数。
+
+    条目清单与内容由 notifications、messages 领域读取；本工具不返回条目或正文。
+    """
     if _principal(config) is None:
         return base.unavailable("需要已验签的本人身份，无法查询未读数。")
     data = base._own_get("/api/protected/notifications/summary", config)

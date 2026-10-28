@@ -62,7 +62,8 @@ def snapshot(folder, cases):
     sources.mkdir()
     hashes = {}
     for name in ("run_golden.py", "online_baseline.py", "online_transport.py",
-                 "native_assertions.py", "request_metrics.py", "usage.py"):
+                 "native_assertions.py", "request_metrics.py", "usage.py",
+                 "release_readiness.py", "release_profile.json"):
         body = (ROOT / "eval" / name).read_bytes()
         (sources / name).write_bytes(body)
         hashes[name] = hashlib.sha256(body).hexdigest()
