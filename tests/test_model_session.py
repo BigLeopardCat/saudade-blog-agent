@@ -8,9 +8,9 @@ from concurrent.futures import ThreadPoolExecutor
 
 import httpx
 import pytest
+from _memory_support import ACTOR, config, run, runtime
 from langchain_core.messages import AIMessageChunk
 from langgraph.checkpoint.memory import InMemorySaver
-from test_memory_boundaries import ACTOR, config, run, runtime
 
 from agent.principal import SOURCE_ASSERTION, SOURCE_BODY, Principal
 from agent.products.blog.context import conversation_session

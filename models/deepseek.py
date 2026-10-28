@@ -8,10 +8,11 @@ wire-contract tests cover streaming and ordinary responses.
 from langchain_core.messages import AIMessage
 from langchain_deepseek import ChatDeepSeek
 
+from models.cancellable import CancellableModel
 from models.request_trace import record_layout
 
 
-class DeepSeekChat(ChatDeepSeek):
+class DeepSeekChat(CancellableModel, ChatDeepSeek):
     def _get_request_payload(self, input_, *, stop=None, **kwargs):
         payload = super()._get_request_payload(input_, stop=stop, **kwargs)
         messages = self._convert_input(input_).to_messages()
