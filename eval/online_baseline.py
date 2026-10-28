@@ -19,7 +19,7 @@ from pathlib import Path
 
 import httpx
 
-from eval import request_metrics
+from eval import dataset_audit, request_metrics
 from eval.online_transport import EvaluationError, OnlineTransport, safe_result
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -37,6 +37,14 @@ def load_suite(path=SUITE):
     if not cases or len(set(ids)) != len(ids):
         raise ValueError("suite is empty or has duplicate IDs")
     for case in cases:
+        expectations = [case.get("first_action"), *(case.get("decision_expectations") or [])]
+        for value in expectations:
+            if value is not None and (not isinstance(value, dict)
+                    or set(value) != {"any_tools", "allow_text"}
+                    or type(value["allow_text"]) is not bool
+                    or not isinstance(value["any_tools"], list)
+                    or any(not isinstance(name, str) or not name for name in value["any_tools"])):
+                raise ValueError(f"invalid first-action annotation: {case['id']}")
         if "_draft" in case or "draft" in case.get("tags", []):
             raise ValueError(f"unreviewed draft cannot run as a baseline: {case['id']}")
         if case["identity"] not in {"admin", "user", "zako"}:
@@ -51,6 +59,9 @@ def load_suite(path=SUITE):
             if set(rnd["context"]) & {"history", "executions", "execution_rows", "pending_action",
                                       "summary"}:
                 raise ValueError("HTTP suite must establish memory through real turns")
+        if ("decision_expectations" in case
+                and len(case["decision_expectations"]) != len(golden.iter_rounds(case))):
+            raise ValueError(f"decision annotations must cover every declared turn: {case['id']}")
     return cases
 
 
@@ -63,7 +74,8 @@ def snapshot(folder, cases):
     hashes = {}
     for name in ("run_golden.py", "online_baseline.py", "online_transport.py",
                  "native_assertions.py", "request_metrics.py", "usage.py",
-                 "release_readiness.py", "release_profile.json"):
+                 "release_readiness.py", "release_profile.json", "statistical_metrics.py",
+                 "action_metrics.py", "dataset_audit.py"):
         body = (ROOT / "eval" / name).read_bytes()
         (sources / name).write_bytes(body)
         hashes[name] = hashlib.sha256(body).hexdigest()
@@ -77,7 +89,8 @@ def build_identity(version):
     return version["sha"], version.get("version")
 
 
-def run(cases, transport, identities, report_dir, *, phase, suite_hash, include_vision=False):
+def run(cases, transport, identities, report_dir, *, phase, suite_hash, include_vision=False,
+        dataset_role="regression"):
     excluded = [case for case in cases if not include_vision and "vision" in case["tags"]]
     cases = [case for case in cases if case not in excluded]
     if not cases:
@@ -98,6 +111,8 @@ def run(cases, transport, identities, report_dir, *, phase, suite_hash, include_
             raise ValueError(f"missing real positive account ID for {key}")
         profiles[key] = transport.profile(uid, role_sets[key])
     report = {"phase": phase, "suite_sha256": suite_hash, "evaluator_sha256": evaluator_hashes,
+              "dataset_role": dataset_role,
+              "dataset_audit": dataset_audit.audit(cases),
               "service_version": initial_version,
               "excluded_cases": [{"id": case["id"], "reason": "known model vision limitation"}
                                  for case in excluded],
@@ -134,6 +149,8 @@ def run(cases, transport, identities, report_dir, *, phase, suite_hash, include_
                "status_scope": "deterministic_checks_only",
                "acceptance_status": "not_evaluated",
                "case_sha256": hashlib.sha256(json.dumps(case, sort_keys=True).encode()).hexdigest()}
+        row.update({key: case[key] for key in ("first_action", "decision_expectations")
+                    if key in case})
         try:
             key = case["identity"]
             with transport.conversation(identities[key], role_sets[key]):
@@ -176,8 +193,10 @@ def main():
     parser.add_argument("--agent-url", default="http://127.0.0.1:8010")
     parser.add_argument("--blog-url", default="http://127.0.0.1:3000")
     parser.add_argument("--report-dir", type=Path, required=True)
+    parser.add_argument("--suite", type=Path, default=SUITE)
+    parser.add_argument("--dataset-role", choices=("regression", "holdout"), default="regression")
     args = parser.parse_args()
-    cases = load_suite()
+    cases = load_suite(args.suite)
     if args.phase == "poc":
         by_id = {c["id"]: c for c in cases}
         cases = [by_id[key] for key in POC_IDS]
@@ -187,8 +206,8 @@ def main():
         report = run(cases, transport,
                      {"admin": args.admin_uid, "user": args.user_uid, "zako": args.zako_uid},
                      args.report_dir, phase=args.phase,
-                     suite_hash=hashlib.sha256(SUITE.read_bytes()).hexdigest(),
-                     include_vision=args.include_vision)
+                     suite_hash=hashlib.sha256(args.suite.read_bytes()).hexdigest(),
+                     include_vision=args.include_vision, dataset_role=args.dataset_role)
     finally:
         transport.client.close()
     complete = len(report["cases"]) == report["planned"]

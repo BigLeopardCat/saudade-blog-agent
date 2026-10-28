@@ -12,7 +12,7 @@ from langchain_core.tools import ToolException
 from langchain_core.utils.function_calling import convert_to_openai_tool
 from pydantic import ValidationError
 
-from agent.runtime import memory
+from agent.runtime import memory, tool_evidence
 from agent.runtime.budget import (
     BudgetExceeded,
     RequestBudget,
@@ -178,7 +178,7 @@ class ToolSession:
         args = call["args"]
         self.calls_used += 1
         emit_progress(self.config, f"正在调用工具：{name}", key=f"tool:{call['id']}")
-        with native_tool(self.budget):
+        with native_tool(self.budget), tool_evidence.scope(call, round_index):
             body = self._invoke_tool(name, args, call, config=config)
         if isinstance(body, TurnResult):
             self._prepared_result(body, call, prompt, round_index)
@@ -200,7 +200,8 @@ class ToolSession:
         attachments.extend(messages[1:])
         self.result_chars += len(body)
         record("native", "call", name=name, args=args, call_id=call["id"], round=round_index,
-               kind=kind, result=trace_mod.tool_result_text(body, name))
+               kind=kind, result=trace_mod.tool_result_text(
+                   body, name, default_limit=_MAX_RESULT_CHARS))
         record("native", "tool_result", name=name, call_id=call["id"], result_chars=len(body))
         return True
 

@@ -5,6 +5,7 @@ from unicodedata import category
 
 from pydantic import BaseModel, ConfigDict, Field, StrictInt, StrictStr
 
+from agent.runtime.tool_evidence import observed
 from tools import base
 
 Identifier = Annotated[StrictInt, Field(gt=0)]
@@ -110,6 +111,8 @@ def prepare(request, config):
     if isinstance(result, base.ToolResult):
         return result
     try:
-        return plan(result, request)
+        return observed(
+            "announcements", plan(result, request), ("before", "notificationCount", "version")
+        )
     except (ValueError, TypeError):
         return base.unavailable("公告变更与通知范围无法核对，本次未生成操作。")

@@ -4,7 +4,7 @@ import math
 from collections import Counter, defaultdict
 from statistics import median, quantiles
 
-from eval import usage
+from eval import action_metrics, usage
 from utils.trace_io import load_trace
 
 
@@ -69,7 +69,7 @@ def summary(doc):
                                     if e.get("event") == "budget_stop"],
             "finalization_reasons": [_label(e.get("reason")) for e in events
                                       if e.get("event") == "finalizing"],
-            **usage.totals(events)}
+            **action_metrics.timings(events), **usage.totals(events)}
 
 
 def collect(paths):
