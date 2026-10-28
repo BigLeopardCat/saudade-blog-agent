@@ -65,6 +65,20 @@ class OnlineTransport:
             raise EvaluationError(f"account {uid}: role {role!r}, expected {expected_roles}")
         return role
 
+    def check_public_article_fixture(self, article_id):
+        """A preparation case needs a currently visible target, not a historical ID."""
+        if type(article_id) is not int or article_id <= 0:
+            raise EvaluationError("invalid public article fixture ID")
+        response = self.client.get(self.blog_url + f"/api/public/notes/{article_id}")
+        if response.status_code == 404:
+            raise EvaluationError("public article fixture is absent or not visible")
+        response.raise_for_status()
+        body = response.json()
+        row = body.get("data") if isinstance(body, dict) and body.get("code") == 200 else None
+        identifier = row.get("noteKey") if isinstance(row, dict) else None
+        if type(identifier) is not int or identifier != article_id:
+            raise EvaluationError("public article fixture identity cannot be verified")
+
     def check_quota_fixture(self, account_id):
         from agent.domains.quota_actions.targets import state
 
