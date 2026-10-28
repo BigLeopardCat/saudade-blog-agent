@@ -73,7 +73,6 @@ class ChatRequest(BaseModel):
     user_id: int = 0
     history: list[HistoryItem] = Field(default_factory=list, max_length=MAX_HISTORY_ITEMS)
     summary: str = Field(default="", max_length=MAX_TEXT_FIELD_CHARS)
-    needs_summary: bool = False
     summary_batch: SummaryBatch | None = None
     # Host-persisted provenance; never stamp existing records with today's role.
     history_scope: dict | None = None
@@ -97,6 +96,11 @@ class ChatRequest(BaseModel):
     browser_feedback: bool = False
     browser_result: BrowserResult | None = None
     resume_task: str = Field(default="", max_length=100, pattern=r"^[A-Za-z0-9_-]*$")
+
+    @property
+    def needs_summary(self) -> bool:
+        from agent.runtime.summary_policy import due
+        return not self.confirm_token and due(self.summary_batch)
 
     @model_validator(mode="after")
     def continuation_is_control_only(self):

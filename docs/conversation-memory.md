@@ -69,11 +69,14 @@
 主任务失败或取消时不生成；剩余模型次数、token 或上下文不足时跳过，不改旧摘要及水位。
 模型生成失败、空输出、非正常结束、拒绝或带未处理工具调用时也不产生新水位。
 
-支持新协议的宿主发送：
+Agent 的 `runtime/summary_policy.py` 统一决定触发时机：未覆盖完整原文达到 20 条消息或
+6,000 字符才尝试总结，确认请求不调度。宿主不决定频率，也不能通过旧 `needs_summary`
+提示强制或禁止总结。字符数用于调度，完整模型请求仍受 token 和时间预算约束。
+
+支持新协议的宿主每轮提供有界、未覆盖的完整前缀：
 
 ```json
 {
-  "needs_summary": true,
   "history_scope": {"user_id": 7, "role": "user", "conversation_id": 42},
   "summary": "先前摘要",
   "summary_scope": {"user_id": 7, "role": "user", "conversation_id": 42},
@@ -147,3 +150,8 @@ SSE 的 `summary` 事件对新协议返回 `{text, base_id, through_id}` 对象�
 选择正确工具或始终依据事实作答。生产发布探活和这些结果不能代替真实任务质量验收。
 `tests/runtime/test_history_recovery.py` 使用真实框架运行时和目录，验证跨运行时重建后的长文尾部补读，
 以及历史、本人留言、时间三来源读取中部分失败仍能保留其余结果。
+
+
+部署此职责调整时先更新 Agent，再更新宿主。新 Agent 可读取旧宿主按阈值发送的批次；
+新宿主不再发送触发标志，回退 Agent 时也须恢复兼容的宿主协议。此调整不更换存储、
+来源隔离、摘要覆盖水位或 CAS 保存规则。

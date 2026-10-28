@@ -31,7 +31,7 @@ def payload(**updates):
     return {"message": "current request", "conversation_id": 42, "needs_summary": True,
             "history_scope": SCOPE,
             "summary_batch": {"base_id": 0, "messages": [
-                {"id": 10, "role": "user", "content": "Earlier request"},
+                {"id": 10, "role": "user", "content": "Earlier request " * 400},
                 {"id": 12, "role": "assistant", "content": "Earlier answer"}]}, **updates}
 
 
@@ -48,11 +48,11 @@ def test_legacy_or_mismatched_sources_cannot_schedule_summary_or_forge_a_base():
                     {"history_scope": {**SCOPE, "role": "admin"}},
                     {"summary": "unknown source"}, {"confirm_token": secrets.token_urlsafe(24)},
                     {"summary_batch": {"base_id": 5, "messages": [
-                        {"id": 10, "role": "user", "content": "new"}]}}):
+                        {"id": 10, "role": "user", "content": "new" * 2000}]}}):
         assert not safe_request(ChatRequest(**payload(**changes)), ACTOR).needs_summary
     valid = payload(summary="old", summary_scope=SCOPE,
                     summary_batch={"base_id": 5, "messages": [
-                        {"id": 10, "role": "user", "content": "new"}]})
+                        {"id": 10, "role": "user", "content": "new" * 2000}]})
     assert safe_request(ChatRequest(**valid), ACTOR).needs_summary
     assert safe_request(ChatRequest(**payload()), ACTOR).needs_summary
     for actor in (Principal(8, "user", SOURCE_ASSERTION),
@@ -139,7 +139,7 @@ def test_real_sdk_primary_precedes_summary_and_both_transports_report_exact_cove
                                                  summary_scope=SCOPE if base_id else None,
                                                  summary_batch={"base_id": base_id, "messages": [
                                                      {"id": 10, "role": "user",
-                                                      "content": "Earlier request"},
+                                                      "content": "Earlier request " * 400},
                                                      {"id": 12, "role": "assistant",
                                                       "content": "Earlier answer"}]}))
             finally:

@@ -107,7 +107,8 @@ def test_summary_progress_is_emitted_only_for_an_actual_summary_job(monkeypatch,
             ChatRequest(message="remember", needs_summary=needs_summary, conversation_id=42,
                         history_scope={"user_id": 7, "role": "user", "conversation_id": 42},
                         summary_batch={"base_id": 0, "messages": [
-                            {"id": 10, "role": "user", "content": "previous"}]}),
+                            {"id": 10, "role": "user",
+                             "content": "previous" * (1000 if needs_summary else 1)}]}),
             service_request()
         )
         return "".join([frame async for frame in response.body_iterator])
@@ -401,7 +402,7 @@ def test_streamed_preface_and_terminal_confirmation_each_render_once(monkeypatch
             ChatRequest(message="prepare", conversation_id=42, needs_summary=True,
                         history_scope={"user_id": 7, "role": "user", "conversation_id": 42},
                         summary_batch={"base_id": 0, "messages": [
-                            {"id": 10, "role": "user", "content": "previous"}]}),
+                            {"id": 10, "role": "user", "content": "previous" * 1000}]}),
             service_request())
         text, cards = [], []
         async for frame in response.body_iterator:
