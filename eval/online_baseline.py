@@ -82,15 +82,17 @@ def snapshot(folder, cases):
     return hashes
 
 
-def build_identity(version):
+def build_identity(version, *, expected=None):
     """Workers may start at different times while serving the same build."""
     if not isinstance(version, dict) or not version.get("sha"):
         raise EvaluationError("service version has no build identity")
+    if expected is not None and version["sha"] != expected:
+        raise EvaluationError("service build differs from the frozen candidate")
     return version["sha"], version.get("version")
 
 
 def run(cases, transport, identities, report_dir, *, phase, suite_hash, include_vision=False,
-        dataset_role="regression"):
+        dataset_role="regression", expected_build=None, evaluation_id=None):
     excluded = [case for case in cases if not include_vision and "vision" in case["tags"]]
     cases = [case for case in cases if case not in excluded]
     if not cases:
@@ -101,7 +103,7 @@ def run(cases, transport, identities, report_dir, *, phase, suite_hash, include_
     version = transport.client.get(transport.agent_url + "/version")
     version.raise_for_status()
     initial_version = version.json()
-    initial_build = build_identity(initial_version)
+    initial_build = build_identity(initial_version, expected=expected_build)
     required = {c["identity"] for c in cases}
     role_sets = {"admin": {"admin", "superadmin"}, "user": {"user"}, "zako": {"zako"}}
     profiles = {}
@@ -112,6 +114,7 @@ def run(cases, transport, identities, report_dir, *, phase, suite_hash, include_
         profiles[key] = transport.profile(uid, role_sets[key])
     report = {"phase": phase, "suite_sha256": suite_hash, "evaluator_sha256": evaluator_hashes,
               "dataset_role": dataset_role,
+              "evaluation_id": evaluation_id,
               "dataset_audit": dataset_audit.audit(cases),
               "service_version": initial_version,
               "excluded_cases": [{"id": case["id"], "reason": "known model vision limitation"}
@@ -195,6 +198,7 @@ def main():
     parser.add_argument("--report-dir", type=Path, required=True)
     parser.add_argument("--suite", type=Path, default=SUITE)
     parser.add_argument("--dataset-role", choices=("regression", "holdout"), default="regression")
+    parser.add_argument("--expected-build", help="Require this deployed SHA before any model call")
     args = parser.parse_args()
     cases = load_suite(args.suite)
     if args.phase == "poc":
@@ -207,7 +211,8 @@ def main():
                      {"admin": args.admin_uid, "user": args.user_uid, "zako": args.zako_uid},
                      args.report_dir, phase=args.phase,
                      suite_hash=hashlib.sha256(args.suite.read_bytes()).hexdigest(),
-                     include_vision=args.include_vision, dataset_role=args.dataset_role)
+                     include_vision=args.include_vision, dataset_role=args.dataset_role,
+                     expected_build=args.expected_build)
     finally:
         transport.client.close()
     complete = len(report["cases"]) == report["planned"]
