@@ -12,9 +12,13 @@ from agent.runtime.visible_text import VisibleText, has_control_text
 CALL = ('<function_call>\n'
         '{"name":"search_articles","arguments":{"query":"private-canary"}}\n'
         '</function_call>')
+DSML = ('<｜DSML｜ calls>\n<｜DSML｜ invoke name="search_articles">\n'
+        '<｜DSML｜ parameter name="query">private-canary</｜DSML｜ parameter>\n'
+        '</｜DSML｜ invoke>\n</｜DSML｜ calls>')
 
 
-@pytest.mark.parametrize("text", [CALL, '前言\n' + CALL, '<tool_call name="search">private-canary',
+@pytest.mark.parametrize("text", [DSML, "前言\n" + DSML, CALL, '前言\n' + CALL,
+    '<tool_call name="search">private-canary',
     '<think>private-canary</think>', '<analysis>private-canary</analysis>',
     '{"name":"search_articles","arguments":{"query":"private-canary"}}',
     '{"function_call":{"name":"search_articles","arguments":{}}}',
@@ -33,6 +37,7 @@ def test_control_prefixes_are_held_across_arbitrary_token_boundaries(text, width
     '{"name":"文章目录","value":10}', '{"type":[],"value":false}',
     '{"function_call":"auto"}', '{"settings":{"arguments":{"value":1}}}',
     '示例：\n```xml\n' + CALL + '\n```\n结束。',
+    '示例：\n```xml\n' + DSML + '\n```\n结束。',
     '````xml\n' + CALL + '\n```\n' + CALL + '\n````',
     '~~~json\n{"name":"search","arguments":{}}\n~~~'])
 def test_ordinary_text_json_and_fenced_examples_stay_opaque(text):
@@ -43,17 +48,21 @@ def test_ordinary_text_json_and_fenced_examples_stay_opaque(text):
 
 class Model:
     max_tokens = 256
+    content = CALL
 
     def bind_tools(self, *args, **kwargs):
         return self
 
     def stream(self, *args, **kwargs):
-        for character in CALL:
+        for character in self.content:
             yield AIMessageChunk(content=character)
 
 
-def test_actual_framework_stream_and_canonical_reply_both_exclude_raw_invocation():
-    session = ToolSession(Model(), {}, {}, {})
+@pytest.mark.parametrize("content", [CALL, DSML])
+def test_actual_framework_stream_and_canonical_reply_both_exclude_raw_invocation(content):
+    model = Model()
+    model.content = content
+    session = ToolSession(model, {}, {}, {})
     chunks = []
     runner = session.stream([HumanMessage(content="查文章")])
     with pytest.raises(StopIteration) as stopped:

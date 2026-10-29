@@ -278,6 +278,44 @@ def test_numeric_answer_must_match_real_read_value_not_just_look_like_a_number()
     assert native_assertions.check(gold, result)
 
 
+@pytest.mark.parametrize("format_,text,passed", [
+    ("lines", "连接池实践\n锁与事务", True),
+    ("lines", "置顶文章如下：\n连接池实践\n锁与事务", False),
+    ("lines", "连接池实践\n锁与事务\n要我继续介绍吗？", False),
+    ("lines", "连接池实践", False),
+    ("lines", "锁与事务\n连接池实践", False),
+    ("json", '["连接池实践","锁与事务"]', True),
+    ("json", '```json\n["连接池实践","锁与事务"]\n```', False),
+    ("json", '["连接池实践","不存在的标题"]', False),
+])
+def test_list_answer_obeys_format_and_actual_tool_values(format_, text, passed):
+    gold = {"require_answer_list": [{"tools": ["get_top_notes"], "path": ["items"],
+                                    "field": "title", "format": format_}]}
+    result = {"text": text, "native_events": [{"node": "native", "event": "call",
+        "name": "get_top_notes", "kind": "ok", "result": json.dumps({"items": [
+            {"title": "连接池实践"}, {"title": "锁与事务"}]})}]}
+    assert (not native_assertions.check(gold, result)) is passed
+
+
+def test_list_answer_requires_latest_complete_observation_even_for_empty_results():
+    gold = {"require_answer_list": [{"tools": ["get_top_notes"], "path": ["items"],
+                                    "field": "title", "format": "lines"}]}
+    result = {"text": "[]", "native_events": []}
+    assert native_assertions.check(gold, result)
+    call = {"node": "native", "event": "call", "name": "get_top_notes", "kind": "ok"}
+    result["native_events"] = [{**call, "result": '{"items":[]}'}]
+    assert not native_assertions.check(gold, result)
+    result["native_events"].append({**call, "result": '{"items":[{"title":"新标题"}]}'})
+    assert native_assertions.check(gold, result)
+    result["text"] = "新标题"
+    assert not native_assertions.check(gold, result)
+    result["native_events"].append({**call, "result": '{"items":[{"id":7}]}'})
+    assert native_assertions.check(gold, result)
+    gold["require_answer_list"][0]["path"] = []
+    result["native_events"].append({**call, "result": '[{"title":"新标题"}]'})
+    assert not native_assertions.check(gold, result)
+
+
 def test_navigation_matches_relative_and_absolute_site_url_without_accepting_other_targets():
     from tools.base import SITE_BASE
 
