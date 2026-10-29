@@ -131,6 +131,29 @@ def test_duplicate_ack_does_not_generate_another_reply(navigation):
     assert result.execution["blocked"] and len(model.calls) == 2
 
 
+def test_disconnect_after_ack_resumes_saved_reply_without_replaying_browser_action(navigation):
+    from agent.runtime.control import AgentCancelled
+
+    runtime, model, config, _, command = navigation
+    original = model.invoke
+
+    def disconnected(messages, **kwargs):
+        model.calls.append(messages)
+        raise AgentCancelled()
+
+    model.invoke = disconnected
+    with pytest.raises(AgentCancelled):
+        list(runtime().stream_events({"resume_task": "page-task"}, acknowledge(config, command)))
+    assert runtime().store.load(config).unfinished
+    model.invoke = original
+    result = list(runtime().stream_events({"resume_task": "page-task"}, config))[-1]
+    assert result.reply == "页面操作结果已收到。" and len(model.calls) == 3
+    facts = [m for m in model.calls[-1] if isinstance(m, ToolMessage)]
+    assert sum(m.name == "navigate_page" for m in facts) == 1
+    assert not result.execution.get("client_action")
+    assert not runtime().store.load(config).unfinished
+
+
 def test_browser_feedback_is_a_control_without_new_content():
     from pydantic import ValidationError
     feedback = {"command_id": "navigation", "status": "completed", "path": "/"}
