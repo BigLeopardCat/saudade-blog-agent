@@ -4,11 +4,11 @@ from langchain.agents import create_agent
 from langchain_core.messages import RemoveMessage, SystemMessage
 from langgraph.graph import START
 from langgraph.graph.message import REMOVE_ALL_MESSAGES
-from langgraph.types import Command, StateSnapshot
+from langgraph.types import Command, Overwrite, StateSnapshot
 
 from agent.runtime import approval, tool_state
 from agent.runtime.compaction import ConversationCompaction
-from agent.runtime.execution_state import ExecutionState, capture, seed
+from agent.runtime.execution_state import ExecutionState, capture, restore, seed
 from agent.runtime.memory_media import stage
 from agent.runtime.middleware import OrderedToolsMiddleware, SessionMiddleware
 from agent.runtime.recovery import restore_session
@@ -30,7 +30,8 @@ class FrameworkExecution:
         messages = prompt[1:] if self.system is not None else prompt
         self.initial = {"messages": [RemoveMessage(id=REMOVE_ALL_MESSAGES),
                                     *stage(messages, session.transient)],
-                        **capture(session), "resume": None}
+                        **capture(session), "effects": Overwrite(dict(session.state["effects"])),
+                        "resume": None}
         self.persistent = bool(session.store and session.store.available and not session.isolated)
         self.child = self._agent(self.persistent)
         self.parent = self._parent(self.child) if self.persistent else None
@@ -57,6 +58,7 @@ class FrameworkExecution:
             session.framework_state = (self.recovery_state.values
                 if session.recovering and self.recovery_state is not None
                 and not self.recovery_state.next else child.invoke(inputs))
+            restore(session, session.framework_state)
             outcome = session.outcome
             execution = outcome.execution if outcome is not None else None
             if execution and execution.get("pending_confirm"):
@@ -113,7 +115,7 @@ class FrameworkExecution:
     def _lifecycle_pending(self):
         execution = self.session.outcome.execution if self.session.outcome else {}
         return bool(not self.persistent and self.session.store and self.session.store.available
-                    and (self.session.effects.get("pending_event")
+                    and (self.session.state["effects"].get("pending_event")
                          or (execution or {}).get("pending_event")))
 
     def _lifecycle_state(self):
@@ -124,7 +126,8 @@ class FrameworkExecution:
         saved = seed({**(session.framework_state or {}), **capture(session),
                       "messages": [*messages, *stage(self.policy.attachments, session.transient)]})
         promoted = {**saved, "messages": [RemoveMessage(id=REMOVE_ALL_MESSAGES),
-                                         *saved["messages"]]}
+                                         *saved["messages"]],
+                    "effects": Overwrite(dict(saved["effects"]))}
         session.recovering = True
         session.recovery_state = saved
         session.isolated = False
@@ -183,6 +186,7 @@ class FrameworkExecution:
                     "pending_confirm")):
             return
         promoted = seed(session.framework_state)
+        promoted["effects"] = Overwrite(dict(promoted.get("effects") or {}))
         promoted["messages"] = [RemoveMessage(id=REMOVE_ALL_MESSAGES), *promoted["messages"]]
         parent = self._parent(self._agent(True), promoted)
         parent.invoke({"approved_result": None, "run": session.task, "receipts": []}, self.config,

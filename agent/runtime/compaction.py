@@ -75,7 +75,7 @@ class ConversationCompaction(AgentMiddleware):
         preserved = replacement[1:]
         ids = {message.id for message in preserved}
         covered = [message.id for message in completed if message.id not in ids]
-        session.context_update = {"summary": summary, "covered_ids": covered}
+        context_update = {"summary": summary, "covered_ids": covered}
         dialogue = [summary, *preserved, *messages[current:]]
         attachments = [message for message in messages[:current] if memory.is_context(message)]
         # Account context stays ahead of history. Transient data belongs to the
@@ -90,4 +90,4 @@ class ConversationCompaction(AgentMiddleware):
                after_tokens=estimate_tokens([summary, *preserved]))
         return {"messages": [update["messages"][0], *prefix,
                 *memory.with_context(dialogue, attachments)],
-                "context_update": session.context_update}
+                "context_update": context_update}

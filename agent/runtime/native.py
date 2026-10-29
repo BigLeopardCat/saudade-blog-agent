@@ -124,7 +124,7 @@ class NativeRuntime:
             config, [*incoming, *session.applied_messages], outcome.reply,
             observations=session.observations,
             execution=outcome.execution, pending=snapshot.pending, approval=approval_state,
-            context_update=session.context_update,
+            context_update=session.state["context_update"],
         )
         record("native", "turn_completed", chars=len(outcome.reply))
         yield outcome
@@ -168,7 +168,7 @@ class NativeRuntime:
         self.store.save_turn(config, saved_input, outcome.reply,
                              observations=recovery.new_observations(snapshot, session.observations),
                              execution=outcome.execution, approval=session.approval,
-                             context_update=session.context_update)
+                             context_update=session.state["context_update"])
         yield outcome
 
     def _session(self, config, snapshot, pending=None):
@@ -223,7 +223,7 @@ class NativeRuntime:
         finally:
             runner.close()
             if session.inputs_active:
-                items = inbox.finish(session.task, session.applied_inputs,
+                items = inbox.finish(session.task, session.state["applied_inputs"],
                     paused=outcome is None or bool((outcome.execution or {}).get("client_action")))
         if session.input_events_enabled:
             yield TaskInputEvent({"task_id": session.task["id"], "ready": False,
@@ -268,7 +268,6 @@ class NativeRuntime:
             session = self._session(config, clean)
             session.task = snapshot.run
             session.receipts = list(execution["receipts"])
-            session.effects = {key: value for key, value in execution.items() if key != "receipts"}
             prompt = self.application.prompt([], session.principal)
             facts = {"jti": grant["jti"], "reply": result.reply, "execution": execution}
             result = yield from self._continue_session(session, prompt, facts,
@@ -276,7 +275,7 @@ class NativeRuntime:
             self.store.save_turn(
                 config, [], result.reply, observations=session.observations,
                 execution=result.execution, approval=session.approval,
-                context_update=session.context_update,
+                context_update=session.state["context_update"],
             )
             yield result
             return
