@@ -82,11 +82,14 @@ class NativeConversationStore:
             self.update_state(config, saved)
         record("native", "checkpoint_write", messages=len(current))
 
-    def clear_pending(self, config, jti: str) -> None:
-        if (self.load(config).pending_action or {}).get("jti") == jti:
-            self.update_state(config, {"pending_confirm": None, "pending_action": None,
-                                       "approval": None, "approved_result": None,
-                                       "run": None})
+    def clear_pending(self, config, jti: str, *, observations=()) -> None:
+        previous = self.load(config)
+        if (previous.pending_action or {}).get("jti") == jti:
+            saved = {"pending_confirm": None, "pending_action": None,
+                     "approval": None, "approved_result": None, "run": None}
+            if observations:
+                saved["messages"] = memory.checkpoint_messages(previous.messages, observations)
+            self.update_state(config, saved)
             self.prune(config)
 
     def guard(self, config):

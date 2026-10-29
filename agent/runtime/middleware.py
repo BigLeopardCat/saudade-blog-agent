@@ -13,7 +13,7 @@ from langgraph.graph.message import REMOVE_ALL_MESSAGES
 from langgraph.types import Command
 
 from agent.llm_usage import usage_fields
-from agent.runtime import trace_context
+from agent.runtime import memory, trace_context
 from agent.runtime.budget import native_call
 from agent.runtime.control import AgentCancelled, model_options
 from agent.runtime.execution_state import adopt_command, capture, restore
@@ -293,9 +293,19 @@ class SessionMiddleware(AgentMiddleware):
                 session.state["awaiting_call"] = call["id"]
                 if call["id"] != self.calls[-1]["id"]:
                     session.outcome = pause_notice(session.outcome)
-            message = (self.exchange[-1] if len(self.exchange) > before else ToolMessage(
-                content="操作已准备，等待用户决定。", name=call["name"], tool_call_id=call["id"],
-                artifact={"phase": "awaiting_approval", "proposal": capture(session)["proposal"]}))
+            if len(self.exchange) > before:
+                message = self.exchange[-1]
+            else:
+                proposal = capture(session)["proposal"]
+                message = ToolMessage(content=json.dumps({
+                    "status": "awaiting_confirmation" if proposal else "terminal",
+                    "result": (proposal["execution"]["pending_confirm"].get("q", proposal["reply"])
+                               if proposal else session.outcome.reply)}, ensure_ascii=False),
+                    name=call["name"], tool_call_id=call["id"], artifact={
+                        "kind": "prepared" if proposal else "terminal",
+                        "phase": "awaiting_approval" if proposal else "terminal",
+                        "proposal": proposal})
+                session.observations.extend(memory.observation(call, message))
         message = message.model_copy(update={"name": call["name"]})
         if self.calls and call["id"] == self.calls[-1]["id"]:
             update = {**capture(session), **(command.update if command else {}), "messages": [
