@@ -81,6 +81,7 @@ class RequestJobs:
             cleanup.callback(self.release)
             if self.on_complete is not None:
                 cleanup.callback(self.on_complete)
+            self.control.budget.trace_usage()
             now = time.monotonic()
             record("runtime", "jobs_drained", duration_s=round(now - self._started, 3),
                    detached_s=round(now - self._closed_at, 3))

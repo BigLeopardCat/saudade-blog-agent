@@ -87,7 +87,8 @@ def report(tmp_path, cases, build, *, role="regression", improved=False, evaluat
     trace = tmp_path / "trace.json"
     trace.write_text(json.dumps({"input": {"runtime": {"name": "native", "build_sha": build,
         "model": "synthetic"}}, "reply": "synthetic reply", "events": [
-        {"event": "llm_start"}, {"node": "native", "event": "llm_done", "input": 80
+        {"node": "native", "event": "llm_start"},
+        {"node": "native", "event": "llm_done", "input": 80
          if improved else 100, "output": 10, "cache_read": 70 if improved else 80,
          "tool_calls": [], "invalid_tool_calls": False}]}))
     rows = [{"id": item["id"], "identity": item["identity"], "tags": item["tags"],

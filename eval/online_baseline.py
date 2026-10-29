@@ -19,7 +19,7 @@ from pathlib import Path
 
 import httpx
 
-from eval import dataset_audit, request_metrics
+from eval import dataset_audit, request_metrics, task_metrics
 from eval.online_transport import EvaluationError, OnlineTransport, safe_result
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -77,7 +77,7 @@ def snapshot(folder, cases):
     sources.mkdir()
     hashes = {}
     for name in ("run_golden.py", "online_baseline.py", "online_transport.py",
-                 "native_assertions.py", "request_metrics.py", "usage.py",
+                 "native_assertions.py", "request_metrics.py", "task_metrics.py", "usage.py",
                  "release_readiness.py", "release_profile.json", "statistical_metrics.py",
                  "action_metrics.py", "dataset_audit.py"):
         body = (ROOT / "eval" / name).read_bytes()
@@ -137,7 +137,9 @@ def run(cases, transport, identities, report_dir, *, phase, suite_hash, include_
         report["requests"] = transport.requests
         report["cleaned_conversations"] = transport.cleaned_conversations
         report["counts"] = dict(Counter(row["status"] for row in report["cases"]))
-        report["metrics"] = request_metrics.collect([r["trace"] for r in transport.requests])
+        paths = [r["trace"] for r in transport.requests]
+        report["metrics"] = request_metrics.collect(paths)
+        report["task_metrics"] = task_metrics.collect(paths)
         target = folder / "report.json"
         temp = target.with_suffix(".tmp")
         temp.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n")

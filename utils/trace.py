@@ -1,21 +1,8 @@
-"""Per-request execution trace recording（roadmap 步骤 2：trace 落盘）。
+"""Per-request structured events, finalized after the actual worker jobs exit.
 
-每轮对话落一份 JSON trace：输入摘要、节点事件序列（planner/model/tools/
-reflector 的分段耗时与关键数据）、最终回复、退出原因、总耗时。与日志互补：
-日志是排障的粗粒度时间线，trace 是机器可读的结构化回放——RAG 动工后
-"检索拖慢了多少"这类回归问题直接在 trace 里读分段耗时即可判定。
-
-机制（两个坑的对应设计）：
-  - _recorder contextvar 定位当前请求的 recorder：与 utils.logging._trace_id
-    同源传播——producer 线程靠 _submit_with_context 的 copy_context 快照，
-    线程内 record() 拿得到实例。
-  - finish 由 event_stream finally 调用（asyncio 主任务），而 producer 线程
-    可能仍挂起（LLM 超时场景）——不能靠线程返回值，用进程内 _ACTIVE dict
-    中转：event_stream 按 trace_id 取出 recorder 补收尾元数据后落盘。
-  - 超时场景的增量：LLM 挂起时最后一条事件就是挂点（如 model llm_start 后
-    无 llm_done）——这正是 trace 相对日志的核心价值（15:21 事故：等待时长
-    完全不可见）。落盘后置 dumped，线程晚到的收尾事件丢弃（不补写已落盘
-    文件，避免 reader 读到半写状态）。
+The recorder follows request context into workers. RequestJobs retains the trace
+until every job drains, so late cancellation and usage events are included before
+atomic file publication. Model/tool results use bounded, visibly marked excerpts.
 """
 
 import contextvars
@@ -37,79 +24,21 @@ _recorder: contextvars.ContextVar = contextvars.ContextVar("trace_recorder", def
 _ACTIVE: dict = {}
 _LOCK = threading.Lock()
 
-# 与项目 logs/ 目录对齐（日志体系规范见 CLAUDE.md §2）；settings 可经
-# SAUDADE_TRACE_DIR 环境变量覆盖
+# Runtime configuration is the single source for production trace storage.
 TRACE_DIR = settings.trace_dir
 
-# 工具返回写进 trace 时留多长（字符）。**上限是天花板不是配额**——返回短的工具一分钱
-# 不多花，所以档位按"事后核查这条返回**需要**多少材料"定，不按"典型多长"定。
-#
-# 20260925 从「一律 200」改成分档，两个动机都有实证：
-#   ① 材料被悄悄砍掉：判官（`eval/llm_judge.py`）判"回复有没有编材料"时，材料就是这里
-#      写下的东西——只留 200 字符，它会把文章里确实有、只是没记进 trace 的事实判成编造
-#      （实测 `rag_git_branch`：`get_article_detail` 只留 200 字符，判官据此断定回复编了
-#      「第 3.3 节」）。
-#   ② 截断**看不出来**：`text[:limit]` 不带任何标记，读 trace 的人和脚本只能靠"长度恰好
-#      等于上限"这个启发式猜（`llm_judge.truncated_calls` 就是这么猜的）。现在任何截断
-#      都带 TRUNCATION_MARK（含原文长度），猜测那半退化成兼容老 trace 的兜底。
-#
-# 档位数值来自 20260925 golden 那一批**不受限**的实测（641 份 trace 的 call 事件）：
-#   get_article_detail 最大 40000（撞到 golden 的上限，是唯一撞的）、list_guestbook 4335、
-#   list_talks 2254、list_notes 1107、list_tags 993、get_service_health 617，其余 ≤ 700。
-# 于是：正文单列 8000（再长就该按小节读——`rag/sections.py` 机制既有），
-# 默认 4000 覆盖除正文外的全部实测最大。体积代价：约 33 份/天、每份最坏几 KB
-# ⇒ 一年 100MB 量级（20260925 实测：27 天 3.7MB；磁盘余 9.1G）。
-#
-# 那行"最大 40000、是唯一撞的"是**换算法之前**的读数：20260925 批 D 起，落进 trace 的
-# 文本改由 `execute_node` 的 `sections.slim_frame` 去重（去掉字节相等的重复正文键），
-# 于是同一批数据的最长帧从 52,834 降到 26,847 —— 40000 那档从此有 33% 余量，
-# 判官的材料也不再缺角。**这条余量有哨兵看着**（`eval/frame_budget.py` 同时量
-# "最长帧 vs 这个上限"，超了就点名），不靠注释里的这句话成立。
-#
-# `TRACE_TOOL_RESULT_LIMIT` 仍然**全局**覆盖分档（不是"只改默认档"）：L2 golden 轮
-# `run_golden.run_case` 把它设成 40000，判官要材料。**生产不设这个变量** ⇒ 走分档。
-# 运行时读环境（不缓存到模块级常量）：跑法在进程内改它也能生效，不依赖 import 顺序。
+# A per-run override applies to every tool; production uses bounded excerpts.
 TOOL_RESULT_LIMIT_ENV = "TRACE_TOOL_RESULT_LIMIT"
 TOOL_RESULT_LIMIT_DEFAULT = 4000
-# golden 轮给判官放开的上限。**数字只有一个来源**：`run_golden.run_case` 拿它设环境变量，
-# `eval/frame_budget.py` 拿它量"判官的材料会不会被截断"（批 D 补的那半边）——写两处就会
-# 漂移成"哨兵盯着 40000、跑法其实设的是别的数"。放在这里而不是 eval/ 侧：它是这一层
-# 的上限语义（谁能覆盖、覆盖成什么），`eval/run_golden.py` 一 import 就是整个 server，
-# 哨兵不该为了读一个数字去拉那一串（那是 nightly 里额外的一份导入副作用）。
+# Evaluation material can retain longer evidence without changing model context.
 GOLDEN_MATERIAL_LIMIT = 40000
 
-# 单工具覆盖（名字 → 上限；0/负数 = 不截断）。改这里要同改 tests/test_trace_truncation.py
-# 里那几条断言——它们是"这档是不是还在"的唯一机械证据。
-TOOL_RESULT_LIMITS: dict[str, int] = {
-    # 长正文：唯一会撞到上限的工具（golden 40000 档实测撞满）。8000 够核"回复引的那段在不在"
-    "get_article_detail": 8000,
-}
-
-# 不截断的工具（一直是全文）。`rag_search` 是 20260831 事故复盘定的：检索候选要能事后完整
-# 分析，"首位为什么是它"不该靠重跑复现。
+TOOL_RESULT_LIMITS: dict[str, int] = {"get_article_detail": 8000}
 NO_LIMIT_TOOLS = frozenset({"rag_search"})
-
-# 截断标记（带原文长度）。机器判定用 `is_truncated()`，**别在别处硬编码这段文本**。
 TRUNCATION_MARK_PREFIX = "…[trace 截断：原文共 "
 
-# trace JSON 的 schema 版本（20260928 起写进每份 trace 的顶层）。
-#
-# **为什么需要它**：trace 是跨语言、跨批次的**长期语料**——保留期 30 天、按天压缩归档，
-# 而读它的东西散了十几个脚本（排障扫描、效率基线、判官、对账、不变量计数）。字段只增不减
-# 时没人需要版本号；一旦某个字段的**含义**变了（比如 `receipts` 里的命令从字符串搬进
-# `meta["cmd"]`、`digest` 从无到有），事后读一份旧 trace 的人无法只凭内容判断"这是旧格式"
-# 还是"模型当时没产出"——两种解释会导出完全相反的结论（这正是 20260926 那次"帧里
-# talkKey/noteId 混用"的复盘成本）。
-#
-# **什么时候 +1**（判据是"读者能不能按同一套假设读"，不是"加了字段就 +1"）：
-#   · 已有字段的**含义/单位/嵌套形状**变了，或字段被删/改名 ⇒ +1；
-#   · 纯新增可选字段（读者 `.get()` 得到 None 就是"当时没有"）⇒ **不 +1**，
-#     因为新旧两份用同一套假设读得出正确结论。事件（`events[]`）的 `event` 名是开放集合，
-#     加新事件不算 schema 变更。
-#
-# **读侧契约**：字段缺失 = 0（= 20260928 之前的存量 trace）。**任何读取端都不许硬取**
-# `doc["schema_version"]`——存量文件会按保留期自然老去，硬取等于让"扫全量"在
-# 换版当天炸掉一半（`tests/test_trace_io.py` ⑦ 用源码锁盯着这条）。
+# Optional fields/events are additive. Increment for changed field semantics.
+# Missing schema_version denotes older retained traces.
 SCHEMA_VERSION = 1
 
 
@@ -277,7 +206,7 @@ def start_trace(trace_id: str, user_id: int, thread_id: str, input_meta: dict | 
 
 
 def record(node: str, event: str, **data) -> None:
-    """当前请求的节点事件（producer 线程内调用；非流式请求静默跳过）。"""
+    """Append an event to the current request, including its final usage snapshot."""
     rec = _recorder.get()
     if rec is not None:
         rec.record(node, event, **data)
@@ -310,13 +239,10 @@ def events_of(trace_id: str) -> list:
 
 
 def finish_trace(trace_id: str, end_reason: str, duration_s: float, frames: int = 0) -> str | None:
-    """请求收尾：补收尾元数据并落盘（event_stream finally，所有退出路径）。
+    """Publish one completed recorder; production calls this after jobs drain.
 
-    任何退出路径（断连/超时/异常/正常收尾）都会走到——超时场景在 finally
-    落盘中途 trace，事件序列里的最后一条即挂点。
-
-    返回落盘路径（写失败/无此 recorder → None）。生产调用点忽略返回值，
-    golden 用它把"哪条用例 → 哪份 trace"写进报告。
+    Disconnects and timeouts retain the recorder until the producer actually exits.
+    Returns the published path, or None when absent, already finalized or unwritable.
     """
     rec = _ACTIVE.pop(trace_id, None)
     if rec is None:

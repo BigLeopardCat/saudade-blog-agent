@@ -16,7 +16,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import token_cost_report as tcr  # noqa: E402
 import trace_metrics as tm  # noqa: E402
 
-from eval import request_metrics
+from eval import request_metrics, task_metrics
 from utils.trace_files import iter_trace_files, parse_trace_name  # noqa: E402
 from utils.trace_io import load_trace  # noqa: E402
 
@@ -171,6 +171,8 @@ def render(paths: list, days: int) -> str:
     else:
         parts.append("模型缓存=量不到")
     parts.append(f"已测输入tok={_m(tot['in'])}（{tot['measured']}/{tot['calls']}调用）")
+    if tot["unknown_attempts"]:
+        parts.append(f"未知用量尝试={tot['unknown_attempts']}")
     if tot["cache_seen"] < tot["calls"]:
         parts.append(f"⚠️报缓存{tot['cache_seen']}/{tot['calls']}")
     return " | ".join(parts)
@@ -181,6 +183,8 @@ def main() -> int:
     ap.add_argument("--dir", default=tcr.PROD_TRACE_DIR, help="trace 根目录（默认生产）")
     ap.add_argument("--days", type=int, default=7, help="窗口天数（按 trace 日期）")
     ap.add_argument("--json", action="store_true", help="按来源、版本、模型、路径分组的请求指标")
+    ap.add_argument("--tasks", action="store_true",
+                    help="按逻辑任务汇总用量、接续与覆盖缺口（JSON）")
     a = ap.parse_args()
 
     paths = iter_trace_files(a.dir)
@@ -188,8 +192,11 @@ def main() -> int:
         stamps = sorted({(parse_trace_name(p)[0] or "")[:8] for p in paths} - {""})
         keep = set(stamps[-a.days:])
         paths = [p for p in paths if (parse_trace_name(p)[0] or "")[:8] in keep]
-    print(json.dumps(request_metrics.collect(paths), ensure_ascii=False) if a.json
-          else render(paths, a.days))
+    if a.tasks:
+        print(json.dumps(task_metrics.collect(paths), ensure_ascii=False))
+    else:
+        print(json.dumps(request_metrics.collect(paths), ensure_ascii=False) if a.json
+              else render(paths, a.days))
     return 0
 
 

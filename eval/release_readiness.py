@@ -108,8 +108,9 @@ def _metrics(report):
             if index <= len(raw_rounds):
                 expectation = raw_rounds[index - 1]
             case_decisions.append(action_metrics.decision_score(doc.get("events", []), expectation))
-            if row["errored_calls"]:
-                missing.append(f"{case['id']}.{index}: provider usage for errored calls")
+            if row["unknown_attempts"]:
+                missing.append(
+                    f"{case['id']}.{index}: provider usage for errored or unfinished calls")
             if not build or row["build"] != build:
                 trace_errors.append({"case": case["id"], "round": index, "error": "build mismatch"})
             timing = rnd.get("http_timing") or {}
@@ -200,7 +201,8 @@ def _quality(report, semantic, profile):
 def _budget_metrics(metrics, profile):
     totals, failures, missing = metrics["usage"], [], []
     coverage = (min(totals["measured"], totals["output_seen"], totals["cache_seen"])
-                / totals["calls"] if totals["calls"] else None)
+                / (totals["calls"] + totals["unknown_attempts"])
+                if totals["calls"] + totals["unknown_attempts"] else None)
     if coverage is None or coverage < profile["usage_coverage"]:
         missing.append("complete provider usage including cache fields")
     minimum = profile["min_percentile_samples"]
