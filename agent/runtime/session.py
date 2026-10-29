@@ -17,6 +17,7 @@ from agent.runtime.budget import (
     current_budget,
 )
 from agent.runtime.catalog import loader
+from agent.runtime.execution_state import initial_state
 from agent.runtime.finalization import incomplete_response
 from agent.runtime.message_content import text_content
 from agent.runtime.middleware import StreamGuard
@@ -39,17 +40,13 @@ class ToolSession:
         self.initial_names = set(self.tools)
         self.domains = domains
         self.loaders = {f"load_{domain}_info_tools": domain for domain in domains}
-        self.loaded: list[str] = []
+        self.state = initial_state()
         self.calls_used = 0
-        self.result_chars = 0
         self.result_limit = tool_execution.MAX_TOTAL_RESULT_CHARS
-        self.outcome: TurnResult | None = None
         self.outcome_adapter = outcome_adapter
         self.store, self.isolated = store, isolated
         self.approval = None
-        self.awaiting_call = None
         self.framework_state = None
-        self.context_update = None
         self.fresh_task = True
         self.system_message = None
         self.task = None
@@ -57,11 +54,9 @@ class ToolSession:
         self.inputs_active = False
         self.input_events_enabled = False
         self.input_messages = []
-        self.applied_inputs = set()
         self.recovering = False
         self.recovery_state = None
         self.transient = {}
-        self.effects = {}
         self.observations = []
         self.receipts = []
         self.suppress_output = False
@@ -75,9 +70,22 @@ class ToolSession:
         self.refresh_menu()
 
     @property
+    def outcome(self):
+        saved = self.state.get("proposal") or self.state.get("terminal")
+        return TurnResult(saved["reply"], saved["execution"]) if saved else None
+
+    @outcome.setter
+    def outcome(self, result):
+        proposal = bool(result and (result.execution or {}).get("pending_confirm"))
+        self.state["proposal"], self.state["terminal"] = None, None
+        if result is not None:
+            self.state["proposal" if proposal else "terminal"] = {
+                "reply": result.reply, "execution": result.execution}
+
+    @property
     def applied_messages(self):
         return [message for message in self.input_messages
-                if message.additional_kwargs["task_input"]["id"] in self.applied_inputs]
+                if message.additional_kwargs["task_input"]["id"] in self.state["applied_inputs"]]
 
     def refresh_menu(self):
         # Keep discovery schemas in place; domain tools extend the request prefix.
@@ -100,9 +108,9 @@ class ToolSession:
         return self._with_receipts(TurnResult(reply))
 
     def _with_receipts(self, result):
-        if not self.receipts and not self.effects:
+        if not self.receipts and not self.state["effects"]:
             return result
-        execution = {**self.effects, **(result.execution or {})}
+        execution = {**self.state["effects"], **(result.execution or {})}
         return TurnResult(result.reply, {**execution, "receipts": [
             *self.receipts, *(execution.get("receipts") or [])]})
 
@@ -137,10 +145,10 @@ class ToolSession:
         record("native", "call", name=call["name"], args_hash=args_hash,
                call_id=call["id"], round=round_index, kind=kind)
         if kind == "noop" or kind == "cancelled":
-            self.effects.update(execution)
+            self.state["effects"].update(execution)
             message = ToolMessage(content=adapted.reply, name=call["name"],
                                   tool_call_id=call["id"], artifact={
-                                      "kind": "ok", "effects": dict(self.effects)})
+                                      "kind": "ok", "effects": dict(self.state["effects"])})
             prompt.append(message)
             self.observations.extend(memory.observation(call, message))
         else:

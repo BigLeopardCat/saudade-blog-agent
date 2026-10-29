@@ -1,9 +1,12 @@
-"""Application data persisted alongside standard framework messages."""
+"""Framework task state and the node-local working view used by application hooks."""
+
+from copy import deepcopy
+from operator import or_
+from typing import Annotated
 
 from langchain.agents.middleware import AgentState
 
 from agent.runtime import tool_state
-from agent.runtime.results import TurnResult
 
 
 class ExecutionState(AgentState, total=False):
@@ -15,39 +18,43 @@ class ExecutionState(AgentState, total=False):
     resume: dict | None
     run_id: str | None
     terminal: dict | None
-    effects: dict
+    effects: Annotated[dict, or_]
     applied_inputs: list[str]
 
 
+_FIELDS = ExecutionState.__annotations__.keys() - AgentState.__annotations__.keys()
+
+
+def initial_state():
+    return ExecutionState(context_update=None, loaded=[], result_chars=0, proposal=None,
+                          awaiting_call=None, resume=None, run_id=None, terminal=None,
+                          effects={}, applied_inputs=[])
+
+
 def capture(session):
-    outcome = session.outcome
-    proposal = ({"reply": outcome.reply, "execution": outcome.execution}
-                if outcome and (outcome.execution or {}).get("pending_confirm") else None)
-    return {"loaded": list(session.loaded), "context_update": session.context_update,
-            "applied_inputs": sorted(session.applied_inputs),
-            "effects": dict(session.effects),
-            "run_id": session.task.get("id") if session.task else None,
-            "terminal": ({"reply": outcome.reply, "execution": outcome.execution}
-                         if outcome and proposal is None else None),
-            "result_chars": session.result_chars, "proposal": proposal,
-            "awaiting_call": session.awaiting_call if proposal else None}
+    """Freeze this hook's application state; no separate attribute serializer."""
+    return deepcopy({**{key: value for key, value in session.state.items() if key != "resume"},
+                     "run_id": session.task.get("id") if session.task else None})
 
 
 def restore(session, state):
-    session.context_update = state.get("context_update")
-    session.applied_inputs.update(state.get("applied_inputs") or [])
-    session.effects = {**(state.get("effects") or {}), **session.effects}
-    if session.effects.get("pending_event"):
+    """The committed graph state replaces the working view at each node boundary."""
+    session.state = initial_state() | deepcopy({key: value for key, value in state.items()
+                                               if key in _FIELDS})
+    tool_state.apply(session, session.state["loaded"])
+    if session.state["effects"].get("pending_event"):
         session.outcome_adapter = None
-    tool_state.apply(session, state.get("loaded") or [])
-    session.result_chars = state.get("result_chars", 0)
-    proposal = state.get("proposal")
-    terminal = state.get("terminal")
-    if terminal:
-        session.outcome = TurnResult(terminal["reply"], terminal["execution"])
-    if proposal:
-        session.outcome = TurnResult(proposal["reply"], proposal["execution"])
-        session.awaiting_call = state["awaiting_call"]
+
+
+def adopt_command(session, update):
+    """Keep the serial tool batch's working view consistent with explicit Commands."""
+    for key, value in update.items():
+        if key not in _FIELDS:
+            continue
+        if key == "effects":
+            session.state[key] = session.state[key] | deepcopy(value)
+        else:
+            session.state[key] = deepcopy(value)
 
 
 def seed(state):
