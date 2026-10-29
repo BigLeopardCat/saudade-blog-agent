@@ -5,7 +5,7 @@ import json
 from langchain_core.messages import ToolMessage
 from langgraph.types import Command
 
-from agent.runtime import memory, tool_evidence
+from agent.runtime import memory, tool_evidence, tool_state
 from agent.runtime.budget import native_tool
 from agent.runtime.memory_media import tool_messages
 from agent.runtime.message_content import text_content
@@ -41,6 +41,7 @@ def append_result(session, request, handler, prompt, round_index, attachments):
             session.refresh_menu()
         prompt.append(ToolMessage(content=f"{domain} 工具已加载。",
                                   name=name, tool_call_id=call["id"]))
+        tool_state.reclaim(session, prompt, source="loading")
         return None
     if name not in session.tools:
         body = json.dumps({"error": "unknown_tool",
