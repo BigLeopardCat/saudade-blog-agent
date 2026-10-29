@@ -170,6 +170,8 @@ flowchart LR
 │   ├── runtime/execution_state.py                       # 工具领域、来源证据与待审批状态
 │   ├── runtime/task_input_store.py                      # 跨进程任务输入的短事务存储
 │   ├── runtime/task_budget.py                           # 跨请求任务用量预留、结算与会话级清理
+│   ├── runtime/tool_execution.py                        # 框架工具执行前后的预算、发现与结果投影
+│   ├── runtime/tool_outputs.py                          # 业务结果适配标准工具内容与 artifact
 │   ├── runtime/retention.py                             # 独立于模型窗口的工作记忆保留上限
 │   ├── runtime/task_input_policy.py                     # 标准模型边界消费补充消息及应用事件
 │   ├── runtime/task_inputs.py                           # 幂等输入、接收状态与任务封口

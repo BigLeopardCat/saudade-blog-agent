@@ -25,6 +25,7 @@ from agent.runtime.prompt_budget import fit_history
 from agent.runtime.results import pause_notice
 from agent.runtime.task_input_policy import additions as input_additions
 from agent.runtime.task_input_policy import model_messages, replace_unpublished_proposal
+from agent.runtime.tool_execution import append_result
 from agent.runtime.turns import check_cancelled
 from config.settings import settings
 from utils.trace import record
@@ -265,9 +266,11 @@ class SessionMiddleware(AgentMiddleware):
 
     def wrap_tool_call(self, request, handler):
         self._recover(request.state)
-        return self._tool_result(request.tool_call, request.runtime.config)
+        return self._tool_result(request, handler)
 
-    def _tool_result(self, call, config=None):
+    def _tool_result(self, request, handler):
+        call = request.tool_call
+        command = None
         session = self.session
         check_cancelled(session.config)
         if call["id"] in self.cached:
@@ -277,8 +280,8 @@ class SessionMiddleware(AgentMiddleware):
                                   tool_call_id=call["id"], artifact={"phase": "deferred"})
         else:
             before = len(self.exchange)
-            session._append_result(call, self.exchange, max(0, session._round_index - 1),
-                                   self.attachments, config=config)
+            command = append_result(session, request, handler, self.exchange,
+                                    max(0, session._round_index - 1), self.attachments)
             execution = (session.outcome.execution or {}) if session.outcome else {}
             if execution.get("pending_confirm"):
                 session.awaiting_call = call["id"]
@@ -288,9 +291,10 @@ class SessionMiddleware(AgentMiddleware):
                 content="操作已准备，等待用户决定。", name=call["name"], tool_call_id=call["id"],
                 artifact={"phase": "awaiting_approval", "proposal": capture(session)["proposal"]}))
         message = message.model_copy(update={"name": call["name"]})
-        if self.calls and call["id"] == self.calls[-1]["id"]:
-            return Command(update={**capture(session), "messages": [
-                message, *stage(self.attachments, session.transient)]})
+        if command is not None or self.calls and call["id"] == self.calls[-1]["id"]:
+            update = {**capture(session), **(command.update if command else {}), "messages": [
+                message, *stage(self.attachments, session.transient)]}
+            return replace(command, update=update) if command else Command(update=update)
         return message
 
 

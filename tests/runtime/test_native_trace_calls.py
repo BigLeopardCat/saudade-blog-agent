@@ -36,6 +36,8 @@ def test_repeated_reads_and_preparation_keep_distinct_framework_call_ids(monkeyp
     events = []
     monkeypatch.setattr("agent.runtime.session.record",
                         lambda node, event, **data: events.append({"event": event, **data}))
+    monkeypatch.setattr("agent.runtime.tool_execution.record",
+                        lambda node, event, **data: events.append({"event": event, **data}))
 
     @tool
     def read_article(article_id: int) -> object:

@@ -14,7 +14,7 @@ def apply(session, domains):
         if domain in session.domains and domain not in session.loaded:
             session.tools.update(session.domains[domain])
             session.loaded.append(domain)
-    session.llm = session._bind_menu()
+    session.refresh_menu()
 
 
 def capture(session):

@@ -323,7 +323,7 @@ def _test_golden_runs_raise_the_trace_limit():
     check("run_golden.run_case 里设了上限（三个跑法都走它）",
           "trace_mod.TOOL_RESULT_LIMIT_ENV" in src_run
           and "os.environ.setdefault(trace_mod.TOOL_RESULT_LIMIT_ENV" in src_run)
-    src_graph = (ROOT / "agent/runtime/session.py").read_text(encoding="utf-8")
+    src_graph = (ROOT / "agent/runtime/tool_execution.py").read_text(encoding="utf-8")
     # 落盘的文本是 `frame_text`（模型看到的那份帧，20260925 批 D——判官的材料就是它），
     # 截断策略仍是同一处（不是 graph 自己再写一个 200/8000）。
     check("原生 call 事件沿用共享的工具结果截断策略",

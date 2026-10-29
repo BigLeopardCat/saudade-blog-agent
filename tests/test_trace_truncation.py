@@ -178,7 +178,7 @@ def _test_judge_reads_the_marker():
 
 def _test_wiring():
     print("[接线] 落盘那一处必须传工具名，否则分档不生效")
-    src_runtime = (ROOT / "agent" / "runtime" / "session.py").read_text(encoding="utf-8")
+    src_runtime = (ROOT / "agent" / "runtime" / "tool_execution.py").read_text(encoding="utf-8")
     check("原生会话的 call 事件调用 tool_result_text 时**传了工具名**",
           any(isinstance(node, ast.Call) and getattr(node.func, "attr", None) == "tool_result_text"
               and len(node.args) >= 2 and isinstance(node.args[1], ast.Name)
