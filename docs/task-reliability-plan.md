@@ -146,6 +146,14 @@ PostgreSQL 恢复按 CI 的显式隔离依赖执行，不使用生产数据库�
 `eval/report/_smoke_native_contracts_20261030_063213/report.json`、
 `/tmp/saudade-p1-final-semantic-review/report.json`。
 
+
+发布记录：本批已随 #172（`3680dbb`）上线，最终 CI 离线 1976 通过、9 跳过，
+PostgreSQL 7 通过（含实际进程退出恢复）。生产仅读取/准备/取消的五次 HTTP 请求通过：
+文章标题先于确认交付、反馈沿用原任务并撤销旧卡、收藏状态未变、导航回报接续、重复回报拒绝。
+两个自建测试会话已删除，没有批准生产业务写入。浏览器回报由脚本模拟，不代表真实浏览器渲染验收。
+生产报告：`/tmp/saudade-p1-online-verification/report.json`。
+生产运行版本保持上述已验收代码提交；本次记录更新仅涉及文档。
+
 ## 5. P2：上下文、记忆、缓存与成本
 
 状态：待开始。可以先采集数据；会改变模型视图的实现应在 P0 稳定后验证。
