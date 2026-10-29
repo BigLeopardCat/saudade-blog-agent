@@ -19,6 +19,7 @@ class ConversationState(TypedDict, total=False):
     approved_result: dict | None
     receipts: list
     run: dict | None
+    turn: dict | None
 
 
 def binding(config):
@@ -59,14 +60,18 @@ def _execution_required(state):
     raise RuntimeError("Conversation maintenance cannot dispatch Agent execution")
 
 
-def graph(saver, agent=None):
+def graph(saver, agent=None, commit=None):
     builder = StateGraph(ConversationState)
     builder.add_node("agent", agent or _execution_required)
     builder.add_node("approval", review)
-    builder.add_node("commit", _commit)
+    builder.add_node("commit", commit or _commit)
     builder.add_edge(START, "agent")
+    boundary = "commit" if commit is not None else "agent"
+    if commit is not None:
+        builder.add_edge("agent", "commit")
     builder.add_conditional_edges(
-        "agent", lambda state: "approval" if state.get("approval") else END)
+        boundary, lambda state: "approval" if state.get("approval") else END)
     builder.add_edge("approval", "agent")
-    builder.add_edge("commit", END)
+    if commit is None:
+        builder.add_edge("commit", END)
     return builder.compile(checkpointer=saver)

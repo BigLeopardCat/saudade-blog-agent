@@ -252,15 +252,21 @@ def test_persistence_failure_has_no_success_result(monkeypatch):
     model = Model(AIMessageChunk(content="可见回复"))
     selected = runtime(model)
 
-    def fail(*args, **kwargs):
-        raise OSError("checkpoint unavailable")
+    put_writes = selected.saver.put_writes
 
-    monkeypatch.setattr(selected.store, "save_turn", fail)
+    def fail(config, writes, *args, **kwargs):
+        if not config["configurable"].get("checkpoint_ns") and any(
+                channel == "messages" for channel, _ in writes):
+            raise OSError("checkpoint unavailable")
+        return put_writes(config, writes, *args, **kwargs)
+
+    monkeypatch.setattr(selected.saver, "put_writes", fail)
     stream = selected.stream_events({"messages": [HumanMessage(content="请求")]}, config())
     assert next(stream).content == "可见回复"
     with pytest.raises(OSError, match="checkpoint unavailable"):
         next(stream)
-    assert selected.store.load(config()).messages == []
+    saved = selected.store.load(config()).messages
+    assert not saved or [m.content for m in saved] == ["请求", "可见回复"]
 
 
 def test_unrestorable_old_card_allows_reads_but_not_new_write_preparations():

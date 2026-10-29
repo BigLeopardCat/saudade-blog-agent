@@ -1,12 +1,15 @@
 """Compose a standard Agent subgraph with a durable approval boundary."""
 
+from functools import partial
+
 from langchain.agents import create_agent
 from langchain_core.messages import RemoveMessage, SystemMessage
 from langgraph.graph import START
 from langgraph.graph.message import REMOVE_ALL_MESSAGES
 from langgraph.types import Command, Overwrite, StateSnapshot
 
-from agent.runtime import approval
+from agent.runtime import approval, turn_commit
+from agent.runtime.budget import BudgetExceeded
 from agent.runtime.compaction import ConversationCompaction
 from agent.runtime.execution_state import ExecutionState, capture, restore, seed
 from agent.runtime.memory_media import stage
@@ -55,10 +58,13 @@ class FrameworkExecution:
             inputs = (None if session.recovering and self.recovery_state is not None
                       else {"resume": state["approved_result"]} if state.get("approved_result")
                       else promoted if promoted is not None else self.initial)
-            session.framework_state = (self.recovery_state.values
-                if session.recovering and self.recovery_state is not None
-                and not self.recovery_state.next else child.invoke(inputs))
-            restore(session, session.framework_state)
+            try:
+                session.framework_state = (self.recovery_state.values
+                    if session.recovering and self.recovery_state is not None
+                    and not self.recovery_state.next else child.invoke(inputs))
+                restore(session, session.framework_state)
+            except BudgetExceeded as exc:
+                session._budget_stop(exc.reason, tool_calls=session.calls_used)
             outcome = session.outcome
             execution = outcome.execution if outcome is not None else None
             if execution and execution.get("pending_confirm"):
@@ -71,9 +77,10 @@ class FrameworkExecution:
             return {"pending_confirm": (execution or {}).get("pending_confirm"),
                     "pending_action": (execution or {}).get("pending_action"),
                     "approval": session.approval, "approved_result": None,
-                    "run": session.task}
+                    "run": session.task, "turn": turn_commit.prepare(session, state)}
 
-        return approval.graph(session.store.saver, execute)
+        return approval.graph(session.store.saver, execute,
+                              partial(turn_commit.commit, session=session))
 
     def stream(self, *, resume=None, approval_input=(), recover=False, client_result=None):
         if self.parent is not None:

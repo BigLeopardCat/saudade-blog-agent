@@ -215,18 +215,24 @@ def test_resume_control_rejects_new_content_and_approval(extra):
         ChatRequest(**{"message": "", "resume_task": "task", "conversation_id": 42, **extra})
 
 
-def test_completed_child_survives_failure_before_the_conversation_commit():
-    class FailingStore(NativeConversationStore):
-        def save_turn(self, *args, **kwargs):
-            raise OSError("conversation commit failed")
+def test_completed_child_survives_failure_before_the_conversation_commit(monkeypatch):
+    from agent.runtime import turn_commit
 
+    commit = turn_commit.commit
+
+    def fail(*args, **kwargs):
+        raise OSError("conversation commit failed")
+
+    monkeypatch.setattr(turn_commit, "commit", fail)
     stop, saver = threading.Event(), InMemorySaver()
     model = Responses(AIMessage(content="这是已完成的答复。"))
-    first = NativeRuntime(FailingStore(saver), model_factory=lambda **_: model)
+    first = NativeRuntime(NativeConversationStore(saver), model_factory=lambda **_: model)
     with pytest.raises(OSError):
         list(first.stream_events({"messages": [HumanMessage(content="回答一次")],
                                   "task_id": "commit-task"}, cfg(stop)))
     assert first.store.load(cfg(stop)).unfinished
+    assert first.store.load(cfg(stop)).messages == []
+    monkeypatch.setattr(turn_commit, "commit", commit)
     recovered_model = Responses()
     restored = NativeRuntime(NativeConversationStore(saver),
                              model_factory=lambda **_: recovered_model)

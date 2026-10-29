@@ -105,3 +105,58 @@ def test_finish_race_cannot_acknowledge_and_silently_skip_an_input(inboxes):
         assert (item is not None) == bool(pending)
         assert left.read(task["id"], task["scope"])["phase"] == (
             "running" if item else "finishing")
+
+
+@pytest.mark.parametrize("fail_commit", [False, True])
+def test_framework_turn_commit_survives_saver_reconstruction(inboxes, monkeypatch, fail_commit):
+    from _own_support import config
+    from langchain_core.messages import AIMessage, HumanMessage
+    from langgraph.checkpoint.postgres import PostgresSaver
+
+    from agent.runtime import checkpoint_store, turn_commit
+    from agent.runtime.native import NativeRuntime
+    from agent.runtime.native_store import NativeConversationStore
+
+    pool = inboxes[0].storage.pool
+    PostgresSaver(pool).setup()
+    with pool.connection() as conn:
+        checkpoint_store.setup(conn)
+    calls = []
+
+    class Model:
+        max_tokens = 128
+
+        def bind_tools(self, *args, **kwargs):
+            return self
+
+        def invoke(self, messages, **kwargs):
+            calls.append(messages)
+            assert len(calls) == 1, "reconstruction repeated the completed model"
+            return AIMessage(content="已核实的测试答复。")
+
+    def runtime():
+        return NativeRuntime(NativeConversationStore(PostgresSaver(pool)),
+                             model_factory=lambda **_: Model())
+
+    original = turn_commit.commit
+    if fail_commit:
+        def fail(*args, **kwargs):
+            raise OSError("commit fixture interruption")
+
+        monkeypatch.setattr(turn_commit, "commit", fail)
+    selected = runtime()
+    inputs = {"messages": [HumanMessage(content="回答一次")], "task_id": "commit-task"}
+    if fail_commit:
+        with pytest.raises(OSError, match="commit fixture interruption"):
+            list(selected.stream_events(inputs, config()))
+        assert selected.store.load(config()).unfinished
+        assert selected.store.load(config()).messages == []
+        monkeypatch.setattr(turn_commit, "commit", original)
+        result = list(runtime().stream_events({"resume_task": "commit-task"}, config()))[-1]
+    else:
+        result = list(selected.stream_events(inputs, config()))[-1]
+    rebuilt = runtime()
+    saved = rebuilt.store.load(config())
+    assert result.reply == "已核实的测试答复。" and len(calls) == 1
+    assert [m.content for m in saved.messages] == ["回答一次", result.reply]
+    assert not saved.unfinished and rebuilt.get_state(config()).values["turn"] is None

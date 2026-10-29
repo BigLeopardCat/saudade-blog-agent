@@ -14,6 +14,25 @@ class TurnResult:
     execution: dict | None = None
 
 
+def complete_reply(result, displayed):
+    """Merge observed prose with a terminal outcome for storage and transport."""
+    reply = str(result.reply or "")
+    if displayed and reply.startswith(displayed):
+        missing = reply[len(displayed):]
+    elif displayed and reply and displayed.endswith(reply):
+        missing = ""
+    elif displayed and reply:
+        missing = ("\n" if not displayed.endswith("\n") else "") + reply
+    else:
+        missing = reply
+    execution = result.execution
+    terminal_key = ("confirm_text" if execution and execution.get("pending_confirm") else
+                    "noop_text" if execution and execution.get("noop_note") else None)
+    if terminal_key:
+        execution = {**execution, terminal_key: missing}
+    return TurnResult(displayed + missing, execution), missing, terminal_key
+
+
 def receipt_observations(result):
     """Keep verified facts in memory even when conversational wording is model-generated."""
     messages = []

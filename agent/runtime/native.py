@@ -100,6 +100,7 @@ class NativeRuntime:
             incoming = [*snapshot.run["input"], *incoming]
         prompt = self.application.prompt([*snapshot.messages, *incoming], principal, pending)
         session = self._session(config, snapshot, pending)
+        session.turn_input = incoming
         session.task = recovery.new_run(config, incoming, state.get("task_id"))
         if (self.inputs and snapshot.run and session.task
                 and snapshot.run["id"] != session.task["id"]):
@@ -115,16 +116,17 @@ class NativeRuntime:
             record("native", "task_paused", task_id=session.task["id"], reason="browser")
             yield outcome
             return
-        approval_state = session.approval
-        if not (execution.get("pending_confirm") or execution.get("pending_event")
-                or execution.get("noop_note")):
-            approval_state = snapshot.approval
-        self.store.save_turn(
-            config, [*incoming, *session.applied_messages], outcome.reply,
-            observations=session.observations,
-            execution=outcome.execution, pending=snapshot.pending, approval=approval_state,
-            context_update=session.state["context_update"],
-        )
+        if session.committed_result is None:
+            approval_state = session.approval
+            if not (execution.get("pending_confirm") or execution.get("pending_event")
+                    or execution.get("noop_note")):
+                approval_state = snapshot.approval
+            self.store.save_turn(
+                config, [*incoming, *session.applied_messages], outcome.reply,
+                observations=session.observations,
+                execution=outcome.execution, pending=snapshot.pending, approval=approval_state,
+                context_update=session.state["context_update"],
+            )
         record("native", "turn_completed", chars=len(outcome.reply))
         yield outcome
 
@@ -159,15 +161,6 @@ class NativeRuntime:
             yield client
             return
         outcome = yield from self._run(session, prompt, recover=True, client_result=client)
-        if (outcome.execution or {}).get("client_action"):
-            yield outcome
-            return
-        saved_input = ([] if snapshot.run.get("input_saved") else incoming)
-        saved_input = [*saved_input, *session.applied_messages]
-        self.store.save_turn(config, saved_input, outcome.reply,
-                             observations=recovery.new_observations(snapshot, session.observations),
-                             execution=outcome.execution, approval=session.approval,
-                             context_update=session.state["context_update"])
         yield outcome
 
     def _session(self, config, snapshot, pending=None):
@@ -271,14 +264,16 @@ class NativeRuntime:
             facts = {"jti": grant["jti"], "reply": result.reply, "execution": execution}
             result = yield from self._continue_session(session, prompt, facts,
                                                        state.get("messages") or [], result)
-            if (result.execution or {}).get("client_action"):
-                yield result
-                return
-            self.store.save_turn(
-                config, [], result.reply, observations=session.observations,
-                execution=result.execution, approval=session.approval,
-                context_update=session.state["context_update"],
-            )
+            yield result
+            return
+        if snapshot.run:
+            if matching and execution.get("receipts"):
+                from agent.runtime.results import receipt_observations
+
+                self.store.clear_pending(config, grant["jti"],
+                                         observations=receipt_observations(result))
+            if result.reply:
+                yield AIMessageChunk(content=result.reply)
             yield result
             return
         observations = []

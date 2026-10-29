@@ -21,7 +21,12 @@ from agent.runtime.execution_state import initial_state
 from agent.runtime.message_content import text_content
 from agent.runtime.middleware import StreamGuard
 from agent.runtime.response_validation import incomplete_response
-from agent.runtime.results import TurnResult, cancellation_content, cancellation_fact
+from agent.runtime.results import (
+    TurnResult,
+    cancellation_content,
+    cancellation_fact,
+    complete_reply,
+)
 from agent.runtime.turns import AgentCancelled, check_cancelled
 from agent.runtime.visible_text import VisibleText
 from config.settings import settings
@@ -66,6 +71,9 @@ class ToolSession:
         self.middleware = [factory(self) for factory in middleware]
         self.used_stream_api = False
         self.traced_contracts = set()
+        self.reply_parts = []
+        self.committed_result = None
+        self.turn_input = []
         self.refresh_menu()
 
     @property
@@ -172,33 +180,20 @@ class ToolSession:
         calls = getattr(response, "tool_calls", ()) or getattr(response, "invalid_tool_calls", ())
         return not calls or response.response_metadata.get("finish_reason") != "length"
 
-    def _stream_terminal(self, result, visible_parts, fallback_text=None,
-                         current_text=""):
+    def _stream_terminal(self, result, visible_parts):
         """Append any deterministic terminal text and return persisted output."""
-        displayed = "".join(visible_parts)
-        reply = str(result.reply or "")
-        if fallback_text is not None and reply == fallback_text:
-            missing = reply
-        elif current_text and reply.startswith(current_text) and displayed.endswith(current_text):
-            missing = reply[len(current_text):]
-        elif displayed and reply.startswith(displayed):
-            missing = reply[len(displayed):]
-        elif displayed and reply and displayed.endswith(reply):
-            missing = ""
-        elif displayed and reply:
-            missing = ("\n" if not displayed.endswith("\n") else "") + reply
-        else:
-            missing = reply
-        execution = result.execution
-        terminal_key = ("confirm_text" if execution and execution.get("pending_confirm") else
-                        "noop_text" if execution and execution.get("noop_note") else None)
-        if terminal_key:
-            execution = {**execution, terminal_key: missing}
+        result, missing, terminal_key = complete_reply(result, "".join(visible_parts))
         if missing:
             visible_parts.append(missing)
             if terminal_key is None:
                 yield AIMessageChunk(content=missing)
-        return TurnResult("".join(visible_parts), execution)
+        return result
+
+    def observe_reply(self, response):
+        if not self.suppress_output:
+            boundary = VisibleText()
+            text = boundary.feed(text_content(response.content)) + boundary.finish()
+            self.reply_parts.append(text)
 
     def _validate_response(self, response):
         """Apply business evidence and budget rules before framework dispatch."""
@@ -281,13 +276,16 @@ class ToolSession:
             self.stream_guard.closed = True
             stream.close()
         execution.promote()
+        if self.committed_result is not None:
+            record("native", "checkpoint_write", chars=len(self.committed_result.reply),
+                   owner="graph")
         tail = boundary.finish()
         if tail:
             visible.append(tail)
             yield AIMessageChunk(content=tail)
         if self.outcome is None:
             raise RuntimeError("Framework Agent ended without a terminal result")
-        return (yield from self._stream_terminal(self.outcome, visible))
+        return (yield from self._stream_terminal(self.committed_result or self.outcome, visible))
 
     def run(self, prompt):
         runner = self.stream(prompt)
