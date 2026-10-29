@@ -33,6 +33,8 @@ def test_confirmed_write_evaluates_continuation_and_replay_without_another_write
     row = report["cases"][0]
     assert row["passed"] and row["business_writes"] == 1
     assert [turn["model_calls"] for turn in row["rounds"]] == [3, 1, 0]
+    assert row["rounds"][0]["confirmation_previews"]
+    assert "token" not in json.dumps(row["rounds"][0]["confirmation_previews"])
     assert row["rounds"][1]["text"] == "操作完成。"
     assert row["rounds"][2]["text"] and row["rounds"][2]["exec_rows"]
 

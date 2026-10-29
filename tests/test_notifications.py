@@ -32,7 +32,8 @@ def test_prepare_all_pins_actual_unread_ids_and_never_writes(notifications):
     assert grant(result)["specs"] == [{"tool": "read_notifications",
                                       "args": {"ids": [101, 102], "all": False}}]
     assert "审核结果" in result.reply and "系统公告" in result.reply
-    assert "不可撤销" in result.reply and "新到" in result.reply
+    assert "不可撤销" not in result.reply
+    assert "本次确认的编号" in result.reply and "新到" in result.reply
     assert all(request.method == "GET" for request in notifications["requests"])
 
 

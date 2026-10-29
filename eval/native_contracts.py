@@ -214,6 +214,9 @@ def _sample(name, backend, contract, run_id, sample):
             rounds.append({"user_input": message, "text": result["text"],
                            "commands": result["commands"],
                            "confirm_payloads": result["confirm_payloads"],
+                           "confirmation_previews": [json.loads(frame.partition(":")[2])["q"]
+                               for frame in result["frames"]
+                               if frame.startswith("__CONFIRM__:")],
                            "exec_rows": result["exec_rows"],
                            "confirmation_count": len(result["confirm_tokens"]),
                            "error": result["error"], "trace": result["trace"],
