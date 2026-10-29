@@ -35,12 +35,14 @@ class TaskPlanningMiddleware(TodoListMiddleware):
         return None
 
     def wrap_model_call(self, request, handler):
-        if "task_planning" not in self.session.state["loaded"]:
+        if ("task_planning" not in self.session.state["loaded"]
+                or self.session.state["proposal"] is not None):
             return handler(request)
         return super().wrap_model_call(request, handler)
 
     async def awrap_model_call(self, request, handler):
-        if "task_planning" not in self.session.state["loaded"]:
+        if ("task_planning" not in self.session.state["loaded"]
+                or self.session.state["proposal"] is not None):
             return await handler(request)
         return await super().awrap_model_call(request, handler)
 
