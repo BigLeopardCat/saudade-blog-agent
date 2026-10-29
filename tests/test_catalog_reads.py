@@ -223,13 +223,28 @@ def test_account_lookup_and_history_restore_do_not_load_article_preparations(bac
     for message in ("查一下account_1，核对身份。", "还记得刚才的账号吗？"):
         list(runtime.stream_events({"messages": [HumanMessage(content=message)]}, cfg))
     assert len(backend["requests"]) == 1
-    assert "list_accounts" not in model.used_menus[0]
+    assert "list_accounts" in model.used_menus[0]
+    assert "prepare_account_role" not in model.used_menus[0]
     assert all({"list_accounts", "prepare_account_role"} <= menu for menu in model.used_menus[1:3])
-    assert "list_accounts" not in model.used_menus[-1]
+    assert "list_accounts" in model.used_menus[-1]
+    assert "prepare_account_role" not in model.used_menus[-1]
     assert all(not {"list_admin_notes", "prepare_article_state", "prepare_article_tags"} & menu
                for menu in model.menus)
     fact = next(message for message in model.prompts[-1] if isinstance(message, ToolMessage))
     assert json.loads(fact.content)["items"][0]["username"] == "account_1"
+
+
+@pytest.mark.parametrize("role", ["user", "zako", "admin", "superadmin"])
+def test_candidate_read_is_initial_only_when_the_catalog_authorizes_it(role):
+    from agent.products.blog.application import BlogApplication
+    from agent.runtime.native_store import NativeConversationStore
+
+    cfg = config(role)
+    initial, domains = BlogApplication().tools(
+        cfg, NativeConversationStore(None).load(cfg), None, None, True)
+    assert ("list_accounts" in initial) == (role in {"admin", "superadmin"})
+    assert not {"prepare_account_role", "prepare_account_freeze"} & initial.keys()
+    assert ("admin_account_actions" in domains) == (role in {"admin", "superadmin"})
 
 
 def test_empty_draft_title_is_preserved_instead_of_losing_the_page(backend):
