@@ -47,7 +47,7 @@ class ConversationStore(Protocol):
         self, config, messages, reply, *, observations=(), execution=None, pending=None,
         approval=None, context_update=None,
     ) -> None:
-        """Save the completed turn while the caller holds guard(config)."""
+        """Save a completed/approval turn; reject browser waits owned by the graph."""
         ...
 
     def clear_pending(self, config, jti: str, *, observations=()) -> None:
