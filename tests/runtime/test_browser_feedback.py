@@ -77,6 +77,8 @@ def test_navigation_pauses_after_one_model_call_and_survives_reconstruction(navi
     assert saved.interrupts and saved.values["run"]["id"] == "page-task"
     with pytest.raises(ValueError, match="cannot_save_incomplete_browser_turn"):
         runtime().store.save_turn(config, [], "", execution=result.execution)
+    with pytest.raises(ValueError, match="cannot_maintain_active_task"):
+        runtime().store.save_turn(config, [], "unrelated completed reply")
     unchanged = runtime().get_state(config, subgraphs=True)
     assert unchanged.config == saved.config and unchanged.interrupts == saved.interrupts
     resumed = list(runtime().stream_events({"messages": [], "resume_task": "page-task"},

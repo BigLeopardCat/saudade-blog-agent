@@ -166,6 +166,7 @@ flowchart LR
 │   ├── runtime/__init__.py                              # 当前生产代码模块
 │   ├── runtime/approval.py                              # 框架持久审批中断与执行回执提交
 │   ├── runtime/execution.py                             # 标准 Agent 子图与会话审批图组合
+│   ├── runtime/turn_commit.py                           # 父图内的轮次结果投影与原子提交
 │   ├── runtime/client_actions.py     # 浏览器回报的框架中断与绑定校验
 │   ├── runtime/execution_state.py                       # 工具领域、来源证据与待审批状态
 │   ├── runtime/task_input_store.py                      # 跨进程任务输入的短事务存储
@@ -198,11 +199,11 @@ flowchart LR
 │   ├── runtime/memory.py                                # 当前生产代码模块
 │   ├── runtime/model_budget.py                          # 当前生产代码模块
 │   ├── runtime/middleware.py                            # 标准 Agent 的预算、权限与业务结果适配
-│   ├── runtime/native.py                                # 当前生产代码模块
-│   ├── runtime/native_store.py                          # 当前生产代码模块
+│   ├── runtime/native.py                                # 服务请求、身份会话与框架执行适配
+│   ├── runtime/native_store.py                          # 框架状态读取及受控会话维护
 │   ├── runtime/progress.py                              # 当前生产代码模块
-│   ├── runtime/results.py                               # 当前生产代码模块
-│   ├── runtime/session.py                               # 当前生产代码模块
+│   ├── runtime/results.py                               # 工具事实与正文传输的统一结果投影
+│   ├── runtime/session.py                               # 标准 Agent 的请求上下文与流式输出适配
 │   ├── runtime/tool_evidence.py                         # 关联工具调用与已验证的准备事实
 │   ├── runtime/trace_context.py                         # 记录实际工具契约、调用者与轮次状态
 │   ├── runtime/turns.py                                 # 当前生产代码模块
@@ -239,7 +240,8 @@ flowchart LR
 3. 会话先发送按需领域目录；模型直接返回标准 LangChain tool call，代码检查权限、参数、确认和业务版本。账号名录与账号操作在同一领域，不必加载文章管理工具来核实账号。
 4. 只读工具直接产生受边界约束的结果；写工具先返回确认卡，确认后的下一轮由签名执行入口调用领域事务。
 5. 传输层把正文增量、进度、命令、确认卡、receipt 和结束帧编码为现有 HTTP/SSE 协议。最终正文只在 `TurnResult` 保存一次。
-6. 轮次完成后由会话存储提交历史和执行事实。模型 I/O 通过标准异步接口响应停止与截止时间，
+6. 持久任务由父图的提交节点一起保存历史、执行事实和任务状态，再结束或进入审批等待。
+   HTTP 适配器不再为普通完成、确认接续和浏览器恢复重复提交。模型 I/O 通过标准异步接口响应停止与截止时间，
    关闭本次响应后再结束生产者；工具与业务事务继续在既有操作边界检查。
    跨线程入口和连接池由应用资源生命周期管理，见 [ADR-0027](adr/adr-0027-cancellable-model-io.md)。
 
@@ -250,7 +252,8 @@ flowchart LR
 - 目标已有定位线索时先用工具核实，真实歧义才请用户选择；操作政策由业务服务核验，不由模型编造。提示词和工具可达性的回归分别验证，离线脚本不能证明真实模型始终遵守这些原则。
 - 文章发现依据真实候选提供标题与链接；正文总结与比较需读取正文。候选来源校验不强制所有检索都追加全文读取，也不替代回答语义评测。
 
-- `NativeConversationStore` 只使用 LangGraph saver 的公开 `get_state`/`update_state` 接口保存会话历史、待确认状态和完成轮次；它不是业务图，也不提供每一步崩溃恢复。
+- `NativeConversationStore` 使用框架公开状态 API 读取会话和执行受控维护；活动任务提交由父图负责。
+  维护保存不能结束活动执行；审批期间插话只保留原审批及任务。提交职责见 [ADR-0031](adr/adr-0031-framework-turn-commit.md)。
 - 普通读取中断后可以重新读取；未知写入结果必须先查询已有回执，不能盲目重试。
 - 会话使用稳定 `thread_id`、串行锁和删除屏障；不同用户与会话的历史相互隔离。
 - 服务只有原生运行时；旧 `AGENT_ARM` 仅接受迁移值 `native`，其他值拒绝。旧模块不在导入闭包中。

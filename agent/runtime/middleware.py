@@ -234,6 +234,7 @@ class SessionMiddleware(AgentMiddleware):
         self._recover(state)
         restore(session, state)
         response = state["messages"][-1]
+        session.observe_reply(response)
         aggregate = session.stream_guard.aggregate
         if aggregate is not None and not session._complete_tool_arguments(aggregate):
             response = response.model_copy(update={

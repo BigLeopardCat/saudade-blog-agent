@@ -94,11 +94,3 @@ def discard_interrupted(runtime, config, values, text):
     runtime.update_state(config, {"run": None})
     gone = not runtime.get_state(config).values.get("run")
     return {"dropped": gone, "why": "" if gone else "still_present"}
-
-
-def new_observations(snapshot, observations):
-    seen = {m.tool_call_id for m in snapshot.messages if isinstance(m, ToolMessage)}
-    return [m for m in observations
-            if not (isinstance(m, ToolMessage) and m.tool_call_id in seen)
-            and not (isinstance(m, AIMessage) and m.tool_calls
-                     and all(c["id"] in seen for c in m.tool_calls))]
