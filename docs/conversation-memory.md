@@ -63,3 +63,5 @@ Conversation 保存会话记忆；Task 保存可恢复执行坐标并累计用�
 框架接口参见 [LangChain short-term memory](https://docs.langchain.com/oss/python/langchain/short-term-memory) 与 [SummarizationMiddleware](https://docs.langchain.com/oss/python/langchain/middleware/built-in#summarization)。
 
 准备确认和撤销也作为历史工具事实保留：准备结果明确为 `awaiting_confirmation`，不表示执行成功；确认凭据和待执行计划只留在受控状态中，不进入历史模型文本。历史读取复用领域登记检查当前身份权限，按钮撤销与状态清理在同一提交内记下事实，重复点击不追加重复记录。
+
+撤销回执的范围为该次操作：`status=cancelled`、`scope=operation`、`executed=false`，业务当前状态为 `not_observed`。聊天撤销和按钮撤销使用同一事实投影；它不证明目标标签、文章或收藏在站内不存在。模型需要回答当前状态时，应读取对应业务工具，并保留分页、筛选与时点范围。摘要同样不得把“没有执行”改写为“实体不存在”。

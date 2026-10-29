@@ -332,3 +332,24 @@ def test_next_review_reuses_the_complete_prior_turn_before_variable_metadata(tmp
     assert data["current_turn"] == 2 and data["turns"][0] == first_turn
     assert data["turns"][1]["assistant_reply_to_review"] == "SECOND_REPLY"
     assert len(data["tool_catalogs"]) == 2
+
+
+def test_only_correlated_operation_facts_reach_semantic_review(tmp_path):
+    fact = {"status": "cancelled", "scope": "operation", "executed": False,
+            "business_state": "not_observed"}
+    events = [
+        {"node": "native", "event": "call", "name": "cancel_pending_operation",
+         "kind": "cancelled", "call_id": "cancel", "round": 0},
+        {"node": "native", "event": "operation_observation", "call_id": "cancel",
+         "round": 0, "facts": fact},
+        {"node": "native", "event": "operation_observation", "call_id": "unrelated",
+         "round": 0, "facts": {"PRIVATE_CANARY": "not a matching result"}},
+        {"node": "untrusted", "event": "operation_observation", "call_id": "cancel",
+         "round": 0, "facts": {"PRIVATE_CANARY": "not runtime evidence"}},
+    ]
+    case = recorded(tmp_path, trace_extra={"events": events}, text="已取消，没有执行。",
+                    confirm_payloads=[])
+    text = online_judge.material(case, case["result"]["rounds"])
+    turn = json.loads(text)["turns"][0]
+    assert turn["validated_operation_facts"] == [events[1]]
+    assert "PRIVATE_CANARY" not in text

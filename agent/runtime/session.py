@@ -21,7 +21,7 @@ from agent.runtime.execution_state import initial_state
 from agent.runtime.finalization import incomplete_response
 from agent.runtime.message_content import text_content
 from agent.runtime.middleware import StreamGuard
-from agent.runtime.results import TurnResult
+from agent.runtime.results import TurnResult, cancellation_content, cancellation_fact
 from agent.runtime.turns import AgentCancelled, check_cancelled
 from agent.runtime.visible_text import VisibleText
 from config.settings import settings
@@ -146,7 +146,11 @@ class ToolSession:
                call_id=call["id"], round=round_index, kind=kind)
         if kind == "noop" or kind == "cancelled":
             self.state["effects"].update(execution)
-            message = ToolMessage(content=adapted.reply, name=call["name"],
+            content = cancellation_content(adapted.reply) if kind == "cancelled" else adapted.reply
+            if kind == "cancelled":
+                record("native", "operation_observation", call_id=call["id"], round=round_index,
+                       facts=cancellation_fact())
+            message = ToolMessage(content=content, name=call["name"],
                                   tool_call_id=call["id"], artifact={
                                       "kind": "ok", "effects": dict(self.state["effects"])})
             prompt.append(message)

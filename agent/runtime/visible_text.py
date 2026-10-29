@@ -4,8 +4,9 @@ import json
 import re
 
 _TAGS = ("<function_call", "<function_calls", "<tool_call", "<tool_calls", "<tool_use",
-         "<think", "<analysis")
-_CONTROL = re.compile(r"^<(?:function_calls?|tool_calls?|tool_use|think|analysis)(?:\s|>|=)", re.I)
+         "<think", "<analysis", "<｜dsml｜")
+_CONTROL = re.compile(
+    r"^(?:<(?:function_calls?|tool_calls?|tool_use|think|analysis)(?:\s|>|=)|<｜DSML｜)", re.I)
 _JSON_CALL = re.compile(r'"(?:function_call|tool_calls|arguments)"\s*:')
 _FENCE = re.compile(r"^(`{3,}|~{3,})")
 

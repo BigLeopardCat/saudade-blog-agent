@@ -1742,7 +1742,7 @@ GOLD_ASSERT_KEYS = frozenset({
     "require_observations", "require_observations_any", "require_todo_schedule",
     "require_confirm_specs", "require_confirm_preview", "forbid_runtime_stop",
     "forbid_business_write", "require_answer_value", "require_prepared_or_noop",
-    "require_memory_compaction",
+    "require_memory_compaction", "require_answer_list",
     # 回复文本
     "nonempty", "text_contains", "text_any_regex", "text_not_contains",
     "text_not_match_regex", "not_contains_exempt_quote",

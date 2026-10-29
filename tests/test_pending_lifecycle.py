@@ -264,7 +264,12 @@ def test_preparation_and_chat_cancellation_survive_reconstruction(pending_task):
         assert prepared[0].artifact == {"kind": "prepared"}
         assert token not in str(prompt)
     observed = [m for m in followup.prompts[0] if isinstance(m, ToolMessage)]
-    assert sum(m.tool_call_id == CANCEL["id"] and "取消" in m.content for m in observed) == 1
+    cancelled = [m for m in observed if m.tool_call_id == CANCEL["id"]]
+    assert len(cancelled) == 1
+    fact = json.loads(cancelled[0].content)
+    assert fact == {"status": "cancelled", "scope": "operation", "executed": False,
+                    "business_state": "not_observed",
+                    "result": "已取消这项待确认操作，没有执行改动。"}
     assert any(isinstance(m, HumanMessage) and m.content == "取消这次收藏"
                for m in followup.prompts[0])
     assert not rebuilt.store.load(cfg).has_pending
@@ -284,6 +289,10 @@ def test_button_cancellation_keeps_one_fact_and_never_recreates_pending_state(pe
     list(rebuilt.stream_events({"messages": [HumanMessage(content="你好")],
                                "task_id": "after-button"}, cfg))
     tools = [m for m in followup.prompts[0] if isinstance(m, ToolMessage)]
-    assert sum(m.name == "cancel_pending_operation" and "取消" in m.content for m in tools) == 1
+    cancelled = [m for m in tools if m.name == "cancel_pending_operation"]
+    assert len(cancelled) == 1
+    assert json.loads(cancelled[0].content)["business_state"] == "not_observed"
+    assert json.loads(cancelled[0].content)["scope"] == "operation"
+    assert json.loads(cancelled[0].content)["executed"] is False
     assert token not in str(followup.prompts[0])
     assert not rebuilt.store.load(cfg).has_pending
