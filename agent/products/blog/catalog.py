@@ -5,6 +5,8 @@ from agent.domains.account_actions.targets import Role
 from agent.domains.notices.targets import DEFAULT_TITLE
 
 DOMAIN_DESCRIPTIONS = {
+    "task_planning": "Optional task checklist for multiple deliverables or work continuing after "
+                     "approval. Skip for simple questions and chat. No business effects.",
     # Discovery identifies a domain; argument and execution contracts live on its tools.
     "public_activity": "分页读取公开公告、河灯留言和说说；含公开留名，不含发表账号或待审记录。",
     "utilities": "查询当前时间或城市天气估算。",

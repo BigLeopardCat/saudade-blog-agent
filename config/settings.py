@@ -93,9 +93,9 @@ class Settings(BaseSettings):
 
     # ── Native request policy (tokens include cached input) ──────────
     agent_context_tokens: int = Field(default=16384, gt=0)
-    agent_request_tokens: int = Field(default=32768, gt=0)
-    agent_model_calls: int = Field(default=8, ge=2)
-    agent_tool_calls: int = Field(default=8, gt=0)
+    agent_request_tokens: int = Field(default=65536, gt=0)
+    agent_model_calls: int = Field(default=12, ge=2)
+    agent_tool_calls: int = Field(default=16, gt=0)
     agent_reasoning_effort: Literal["none", "low", "high", "max"] = "none"
     agent_output_tokens: int = Field(default=1536, ge=128)
     agent_summary_output_tokens: int = Field(default=512, ge=128)

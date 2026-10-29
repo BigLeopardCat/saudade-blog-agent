@@ -88,6 +88,8 @@ def test_existing_runtime_preserves_sequential_preparation_and_approval_on_the_s
                                  username="青叶", content="第一条"),
                             call(prepare_user_notice.name, "second",
                                  username="青叶", content="第二条")]},
+            {"content": "请确认第一条通知。"},
+            {"content": "请确认第二条通知。"},
             {"content": "两条通知都发好啦。"}) as (model, requests):
         runtime = NativeRuntime(NativeConversationStore(InMemorySaver()), catalog=catalog,
                                 model_factory=lambda **_: model)
@@ -98,11 +100,12 @@ def test_existing_runtime_preserves_sequential_preparation_and_approval_on_the_s
         grant = confirm.verify(token, 7, 42)
         second = list(runtime.stream_events({"confirm_grant": grant}, cfg))[-1]
         assert second.execution["pending_confirm"] and business["writes"] == ["notice"]
-        assert len(requests) == 2
+        assert len(requests) == 4
+        assert requests[2]["tool_choice"] == requests[3]["tool_choice"] == "none"
         next_token = second.execution["pending_confirm"]["token"]
         done = list(runtime.stream_events({
             "confirm_grant": confirm.verify(next_token, 7, 42)}, cfg))[-1]
-        assert done.reply == "两条通知都发好啦。" and len(requests) == 3
+        assert done.reply == "两条通知都发好啦。" and len(requests) == 5
         assert business["writes"] == ["notice", "notice"]
         assert [row["content"] for row in business["notices"]] == ["第一条", "第二条"]
         assert token not in json.dumps(requests) and next_token not in json.dumps(requests)

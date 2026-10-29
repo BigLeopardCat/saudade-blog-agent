@@ -163,6 +163,8 @@ flowchart LR
 │   ├── products/blog/tool_policy.py                     # 调用前授权与浏览器、设备回执校验
 │   ├── runtime/access.py                              # 验签身份及 scope 守卫
 │   ├── runtime/__init__.py                              # 当前生产代码模块
+│   ├── runtime/approval_response.py                     # 标准 Agent 在审批等待前交付回复
+│   ├── runtime/task_planning.py                         # 按需标准任务清单，框架 checkpoint 持有
 │   ├── runtime/approval.py                              # 框架持久审批中断与执行回执提交
 │   ├── runtime/execution.py                             # 标准 Agent 子图与会话审批图组合
 │   ├── runtime/turn_commit.py                           # 父图内的轮次结果投影与原子提交

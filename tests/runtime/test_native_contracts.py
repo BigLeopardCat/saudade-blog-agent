@@ -32,7 +32,7 @@ def test_confirmed_write_evaluates_continuation_and_replay_without_another_write
     report = native_contracts.run(["favorite_confirm"])
     row = report["cases"][0]
     assert row["passed"] and row["business_writes"] == 1
-    assert [turn["model_calls"] for turn in row["rounds"]] == [2, 1, 0]
+    assert [turn["model_calls"] for turn in row["rounds"]] == [3, 1, 0]
     assert row["rounds"][1]["text"] == "操作完成。"
     assert row["rounds"][2]["text"] and row["rounds"][2]["exec_rows"]
 
@@ -137,7 +137,7 @@ def test_admin_compound_task_preserves_approval_stages_and_final_business_state(
     monkeypatch.setattr(golden_trace, "trace_root", lambda: str(tmp_path / "traces"))
     report = native_contracts.run(["notice_role_cancel" if cancel else "notice_then_role"])
     row = report["cases"][0]
-    assert row["passed"] and row["evaluated"], row
+    assert row["passed"] and row["evaluated"], row.get("reason")
     documents = [json.loads(path.read_text()) for path in (tmp_path / "traces").rglob("*.json")]
     phases = [event for doc in documents for event in doc["events"]
               if event.get("event") == "turn_state"]
