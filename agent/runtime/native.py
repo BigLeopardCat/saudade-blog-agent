@@ -271,6 +271,9 @@ class NativeRuntime:
             facts = {"jti": grant["jti"], "reply": result.reply, "execution": execution}
             result = yield from self._continue_session(session, prompt, facts,
                                                        state.get("messages") or [], result)
+            if (result.execution or {}).get("client_action"):
+                yield result
+                return
             self.store.save_turn(
                 config, [], result.reply, observations=session.observations,
                 execution=result.execution, approval=session.approval,
