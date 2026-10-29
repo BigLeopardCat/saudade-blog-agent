@@ -24,7 +24,8 @@ def tools(menu, seen):
 
 def outcome(result):
     execution = result.execution or {}
-    phase = ("awaiting_confirmation" if execution.get("pending_confirm") else
+    phase = ("awaiting_browser" if execution.get("client_action") else
+             "awaiting_confirmation" if execution.get("pending_confirm") else
              "blocked" if execution.get("blocked") else
              "cancelled" if (execution.get("pending_event") or {}).get("event") == "cancelled"
              else "responded")

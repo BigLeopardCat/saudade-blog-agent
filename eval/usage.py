@@ -2,7 +2,7 @@
 
 
 def empty():
-    return dict(calls=0, measured=0, unnamed=0, output_seen=0,
+    return dict(calls=0, measured=0, unnamed=0, output_seen=0, unknown_attempts=0,
                 cache_seen=0, cache_in=0, cache=0, reasoning_seen=0,
                 reasoning=0, **{"in": 0, "out": 0})
 
@@ -36,9 +36,21 @@ def add(row, event):
 
 def totals(events):
     row = empty()
+    pending = {}
     for event in events:
-        if isinstance(event, dict) and event.get("event") == "llm_done":
-            add(row, event)
+        if not isinstance(event, dict):
+            continue
+        key = (str(event.get("node", "")), str(event.get("engine", "")))
+        kind = event.get("event")
+        if kind == "llm_start":
+            pending[key] = pending.get(key, 0) + 1
+        elif kind in ("llm_done", "llm_error"):
+            pending[key] = max(0, pending.get(key, 0) - 1)
+            if kind == "llm_done":
+                add(row, event)
+            else:
+                row["unknown_attempts"] += 1
+    row["unknown_attempts"] += sum(pending.values())
     return row
 
 
@@ -47,5 +59,5 @@ def hit_rate(row):
 
 
 def complete(row):
-    return row["calls"] > 0 and row["measured"] == row["output_seen"] == row[
-        "cache_seen"] == row["calls"]
+    return (row["unknown_attempts"] == 0 and row["calls"] > 0
+            and row["measured"] == row["output_seen"] == row["cache_seen"] == row["calls"])

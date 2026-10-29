@@ -177,7 +177,7 @@ def test_model_error_cost_cannot_disappear_behind_complete_successful_calls(tmp_
     doc["events"].append({"event": "llm_error"})
     trace.write_text(json.dumps(doc))
     got = assess(report, profile_path=profile)
-    assert any("errored calls" in item for item in got["unverified"])
+    assert any("errored or unfinished calls" in item for item in got["unverified"])
 
 
 def test_task_classes_handle_overlapping_suite_tags():
