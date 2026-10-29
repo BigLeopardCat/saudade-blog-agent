@@ -14,10 +14,11 @@ from agent.products.blog.prompt import build_prompt
 from agent.products.blog.read_tools import own_reads_enabled
 from agent.products.blog.tool_policy import BlogToolMiddleware
 from agent.runtime import memory
+from agent.runtime.task_planning import TaskPlanningMiddleware
 
 
 class BlogApplication:
-    middleware = (ArticleMiddleware, BlogToolMiddleware)
+    middleware = (ArticleMiddleware, BlogToolMiddleware, TaskPlanningMiddleware)
     descriptions = DOMAIN_DESCRIPTIONS
     context = staticmethod(conversation_context)
     session_key = staticmethod(conversation_session)

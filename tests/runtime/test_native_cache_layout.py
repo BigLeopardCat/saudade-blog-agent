@@ -189,7 +189,7 @@ def test_static_renderer_prefix_is_shared_without_sharing_caller_authority():
         prompt = build_prompt([HumanMessage(content="你好")], principal, own_enabled=role != "zako")
         wire = model._get_request_payload(prompt)
         system = wire["messages"][0]["content"]
-        facts = json.loads(system.split("运行时能力（可信数据）：", 1)[1])
+        facts = json.JSONDecoder().raw_decode(system.split("运行时能力（可信数据）：", 1)[1])[0]
         assert facts["caller"]["role"] == role_cn(role)
         assert facts["permissions"] == sorted(scopes_for(role))
         assert facts["tools"]["loading"] == ("disabled" if role == "zako" else "on_demand")
