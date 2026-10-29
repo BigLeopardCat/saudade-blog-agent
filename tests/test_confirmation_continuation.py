@@ -171,7 +171,6 @@ def test_single_preparation_continues_to_a_model_reply_without_extra_narration(b
     _, grant, _ = prepare(selected, FAVORITE)
     model = Model(AIMessage(content="收藏好啦～"))
     selected.model_factory = lambda **_: model
-    selected.narrator = lambda *_: pytest.fail("continuation called a second narrator")
     events = list(selected.stream_events({"confirm_grant": grant}, config()))
     wire = list(iter_transport_events(events))
     assert events[-1].reply == "收藏好啦～" and len(model.prompts) == 1
@@ -248,20 +247,21 @@ def test_cancel_stops_the_whole_suspended_task_and_stale_approval_cannot_write(b
     assert not state["writes"] and not state["read"]
 
 
-def test_chat_preserves_cursor_but_replacement_discards_older_remaining_calls(backend):
+def test_feedback_revokes_old_card_and_replans_the_remaining_actions(backend):
     state, _ = backend
     selected = runtime(Model())
     _, grant, _ = prepare(selected)
-    cursor = selected.store.load(config()).approval
-    selected.model_factory = lambda **_: Model(AIMessage(content="你好～"))
-    run(selected, "先聊聊天")
-    assert selected.store.load(config()).approval == cursor
-    replacement, replacement_grant, _ = prepare(selected, {**FAVORITE, "args": {
-        "action": "add", "article_id": 20}})
+    task = selected.store.load(config()).run["id"]
+    selected.model_factory = lambda **_: Model(AIMessage(content="", tool_calls=[
+        call("prepare_favorite_change", "replacement", action="add", article_id=20)]))
+    replacement = run(selected, "改成收藏文章20，不要标记通知已读。")
+    replacement_grant = confirm.verify(replacement.execution["pending_confirm"]["token"], 7, 42)
     assert replacement.execution["pending_event"]["jti"] == grant["jti"]
-    selected.model_factory = lambda **_: Model(AIMessage(content="已收藏文章20。"))
+    assert selected.store.load(config()).run["id"] == task
     assert not run(selected, grant=grant).execution["receipts"]
-    run(selected, grant=replacement_grant)
+    selected.model_factory = lambda **_: Model(AIMessage(content="已收藏文章20。"))
+    completed = run(selected, grant=replacement_grant)
+    assert completed.execution.get("pending_event") is None
     assert state["favorites"] == {20} and not state["read"]
     assert len(state["writes"]) == 1
 
@@ -338,7 +338,7 @@ def test_framework_owns_preparation_and_confirmation_commits(backend, monkeypatc
     def maintenance_must_not_run(*args, **kwargs):
         pytest.fail("framework execution used conversation maintenance")
 
-    monkeypatch.setattr(selected.store, "save_turn", maintenance_must_not_run)
+    monkeypatch.setattr(selected.store, "update_state", maintenance_must_not_run)
     _, grant, _ = prepare(selected, FAVORITE)
     selected.model_factory = lambda **_: Model(AIMessage(content="已收藏。"))
     result = run(selected, grant=grant)
@@ -383,16 +383,17 @@ def test_cursor_binding_rejects_changed_role_user_conversation_or_operation(back
     assert not approval.matches(cursor, {**grant, "jti": "f" * 32}, config())
 
 
-def test_changed_role_can_execute_its_valid_grant_but_cannot_restore_old_context(backend):
+def test_changed_role_cannot_execute_or_restore_the_old_approval(backend):
     state, _ = backend
     selected = runtime(Model())
     _, grant, _ = prepare(selected)
     selected.model_factory = lambda **_: pytest.fail("old authority context reached model")
-    result = run(selected, grant=grant,
-                 cfg=config(principal=Principal(7, "superadmin", SOURCE_ASSERTION)))
-    assert result.execution["receipts"] and len(state["writes"]) == 1
-    assert selected.store.load(config()).approval is None
-    assert not state["read"]
+    changed = config(principal=Principal(7, "superadmin", SOURCE_ASSERTION))
+    result = run(selected, grant=grant, cfg=changed)
+    assert not result.execution["receipts"] and not state["writes"]
+    selected.model_factory = lambda **_: Model(AIMessage(content="你好。"))
+    run(selected, "你好", cfg=changed)
+    assert selected.store.load(changed).approval is None and not state["read"]
 
 
 def test_article_evidence_and_read_progress_survive_confirmation_without_rereading(backend):
@@ -496,20 +497,27 @@ def test_incomplete_later_tool_request_does_not_deny_the_completed_write(backend
     assert len(state["writes"]) == 1 and not state["read"]
 
 
-def test_repeated_interjections_preserve_the_saved_agent_exchange(backend):
+def test_repeated_feedback_preserves_the_task_and_requires_fresh_approval(backend):
     state, _ = backend
     selected = runtime(Model())
     _, grant, _ = prepare(selected)
-    child_config = {"configurable": {"thread_id": "conv_42", "checkpoint_ns": "agent"}}
-    checkpoint_id = selected.saver.get_tuple(child_config).checkpoint["id"]
-    for _ in range(3):
-        selected.model_factory = lambda **_: Model(AIMessage(content="你好～"))
-        assert run(selected, "先聊一下").reply == "你好～"
-        assert selected.get_state(config()).next == ("approval",)
-        assert selected.saver.get_tuple(child_config).checkpoint["id"] == checkpoint_id
-    selected.model_factory = lambda **_: Model(AIMessage(content="完成。"))
-    next_card = run(selected, grant=grant)
-    assert next_card.execution["pending_confirm"] and len(state["writes"]) == 1
+    task_id = selected.store.load(config()).run["id"]
+    for index in range(3):
+        target = 20 if index % 2 == 0 else 19
+        model = Model(AIMessage(content="", tool_calls=[call(
+            "prepare_favorite_change", f"revision-{index}", action="add", article_id=target)]))
+        selected.model_factory = lambda **_: model
+        text = f"第{index}次修改，改成收藏文章{target}，其他操作先不做。"
+        revised = run(selected, text)
+        assert selected.store.load(config()).run["id"] == task_id
+        assert not run(selected, grant=grant).execution["receipts"]
+        grant = confirm.verify(revised.execution["pending_confirm"]["token"], 7, 42)
+        assert not state["writes"] and not state["read"]
+        assert sum(isinstance(m, HumanMessage) and m.content == text
+                   for m in selected.store.load(config()).messages) == 1
+    selected.model_factory = lambda **_: Model(AIMessage(content="已收藏文章20。"))
+    assert run(selected, grant=grant).reply == "已收藏文章20。"
+    assert state["favorites"] == {20} and len(state["writes"]) == 1
 
 
 def test_checkpoint_failure_after_durable_facts_does_not_repeat_dispatch(backend, monkeypatch):
@@ -562,15 +570,15 @@ def test_tool_image_attachments_remain_recoverable_without_splitting_replayed_ca
     assert reads == ["diagram"] and raw not in str(final_model.prompts)
 
 
-def test_discarding_an_interjection_preserves_the_original_approval(backend):
+def test_discarding_feedback_history_cannot_restore_the_revoked_approval(backend):
     from agent import checkpoint
 
     state, _ = backend
     selected = runtime(Model())
     _, grant, _ = prepare(selected, FAVORITE)
-    selected.model_factory = lambda **_: Model(AIMessage(content="你好～"))
+    selected.model_factory = lambda **_: Model(AIMessage(content="你好。"))
     run(selected, "先聊一下")
     assert checkpoint.drop_last_user_turn(selected, 42, "先聊一下")["dropped"]
-    selected.model_factory = lambda **_: Model(AIMessage(content="收藏完成。"))
-    assert run(selected, grant=grant).reply == "收藏完成。"
-    assert len(state["writes"]) == 1
+    selected.model_factory = lambda **_: pytest.fail("revoked approval reached a model")
+    replay = run(selected, grant=grant)
+    assert not replay.execution["receipts"] and not state["writes"]

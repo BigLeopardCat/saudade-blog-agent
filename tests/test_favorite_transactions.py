@@ -4,6 +4,7 @@
 import asyncio
 import json
 import time
+from contextlib import closing
 
 import pytest
 from _service import app
@@ -143,7 +144,7 @@ def test_exception_after_write_keeps_intent_and_prevents_retry(failure, monkeypa
     assert "无法确认" in first["reply"] and "结果未知" in second["reply"]
 
 
-def test_native_executes_confirmed_favorite_without_model_or_legacy(monkeypatch, tmp_path):
+def test_native_rejects_unbound_grant_without_model_write_or_ledger_claim(monkeypatch, tmp_path):
     tool = Favorite()
     monkeypatch.setattr(transactions, "get_all_tools", lambda: [tool])
     monkeypatch.setattr(writes, "ledger_for",
@@ -156,12 +157,13 @@ def test_native_executes_confirmed_favorite_without_model_or_legacy(monkeypatch,
     first = list(runtime.stream_events(state, _config()))
     second = list(runtime.stream_events(state, _config()))
 
-    assert first[-1].execution["receipts"][0]["tool"] == "add_favorite"
-    assert second[-1].execution["receipts"][0]["tool"] == "add_favorite"
-    assert tool.calls == 1
+    assert not first[-1].execution["receipts"] and not second[-1].execution["receipts"]
+    assert tool.calls == 0
+    with closing(idem.Ledger(str(tmp_path / "runtime.sqlite3"))) as ledger:
+        assert ledger.lookup(writes.operation_key(_grant(), tool.name, {"article_id": 19})) is None
     snapshot = runtime.get_state(_config())
     assert snapshot.next == ()
-    assert snapshot.values["pending_action"] is None
+    assert snapshot.values.get("pending_action") is None
 
 
 def test_stream_producer_emits_existing_execution_receipt(monkeypatch, tmp_path):
@@ -173,6 +175,9 @@ def test_stream_producer_emits_existing_execution_receipt(monkeypatch, tmp_path)
     monkeypatch.setattr(transactions, "get_all_tools", lambda: [tool])
     monkeypatch.setattr(writes, "ledger_for",
                         lambda saver: idem.Ledger(str(tmp_path / "stream.sqlite3")))
+    ledger = writes.ledger_for(None)
+    transactions.execute(_grant(), _config(), None, tools={tool.name: tool}, ledger=ledger)
+    ledger.close()
     monkeypatch.setattr(app.state, "runtime",
                         NativeRuntime(NativeConversationStore(InMemorySaver())))
 

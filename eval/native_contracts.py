@@ -19,7 +19,6 @@ from langgraph.checkpoint.memory import InMemorySaver
 from starlette.requests import Request
 
 from agent import confirm, idem
-from agent.products.blog.narration import narrate
 from agent.runtime import writes
 from agent.runtime.control import RequestControl, request_scope
 from agent.runtime.native import NativeRuntime
@@ -55,6 +54,10 @@ class _Store:
     def finish(self, *args):
         with closing(idem.Ledger(self.path)) as store:
             return store.finish(*args)
+
+    def lookup(self, *args):
+        with closing(idem.Ledger(self.path)) as store:
+            return store.lookup(*args)
 
 
 def _principal(role="user"):
@@ -119,14 +122,14 @@ def _favorite_confirm(turn, state):
     _require(grant["specs"] == [{"tool": "add_favorite", "args": {"article_id": 19}}],
              "favorite target changed")
     _require(not _posts(state), "preparation wrote business data")
-    for _ in range(2):
+    for replay in (False, True):
         result = turn("", token)
         _require(result["exec_rows"] and result["text"].strip(), "missing execution result")
         _require(not result["confirm_tokens"], "confirmation introduced another operation")
         trace = load_trace(result["trace"])
-        _require(trace and any(event.get("node") in {"native", "narration"}
-                              and event.get("event") == "llm_done"
-                              for event in trace["events"]), "result reply was not evaluated")
+        model_called = bool(trace and any(event.get("node") == "native"
+                            and event.get("event") == "llm_done" for event in trace["events"]))
+        _require(model_called != replay, "first completion needs Agent; replay must reuse facts")
     _require(len(_posts(state)) == 1 and state["favorites"][0]["noteId"] == 19,
              "confirmation or replay wrote an unexpected favorite")
 
@@ -193,7 +196,7 @@ def _sample(name, backend, contract, run_id, sample):
     paths, rounds = [], []
     with (ExitStack() as resources, backend() as state,
           TemporaryDirectory(prefix="agent-native-eval-") as temp):
-        arm = NativeRuntime(NativeConversationStore(InMemorySaver()), narrator=narrate,
+        arm = NativeRuntime(NativeConversationStore(InMemorySaver()),
                             model_io=resources.enter_context(ModelIO()))
         store = _Store(str(Path(temp) / "ledger.sqlite3"))
         principal = _principal(state.get("caller_role", "user"))

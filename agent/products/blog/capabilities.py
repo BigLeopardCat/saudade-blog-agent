@@ -49,7 +49,7 @@ class ToolCatalog:
             tools["get_unread_counts"] = self.own_read_tools["get_unread_counts"]
         return tools
 
-    def domains(self, config, can_prepare, pending=None, saver=None):
+    def domains(self, config, can_prepare):
         cfg = (config or {}).get("configurable") or {}
         domains = {"site": {**self.site_read_tools, **browser.tools(config)},
                    **public_domains(), **device_domain(config)}
@@ -66,8 +66,5 @@ class ToolCatalog:
             domains["favorites"] = favorite_preparation.tools(self.own_read_tools)
             domains["notifications"] = notification_preparation.tools(self.own_read_tools)
             domains["messages"] = message_preparation.tools(self.own_read_tools)
-        if pending:
-            cancel = pending.cancel_tool(saver)
-            domains["pending"] = {cancel.name: cancel}
         return domains
 

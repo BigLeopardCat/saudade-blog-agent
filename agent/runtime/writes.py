@@ -53,7 +53,13 @@ def operation_key(grant, name, args):
 
 def execute_once(grant, name, args, config, ledger, tools):
     key = operation_key(grant, name, args)
-    state, row = ledger.claim(key, name, grant["jti"], resuming=True)
+    if (config.get("configurable") or {}).get("confirmation_replay_only"):
+        previous = ledger.lookup(key)
+        if previous is None:
+            return unavailable("确认操作已失效，请重新发起请求。")
+        state, row = previous
+    else:
+        state, row = ledger.claim(key, name, grant["jti"], resuming=True)
     if state == "done":
         record("native", "write_replay_hit", name=name, key=key)
         return idem.replay_result(row)

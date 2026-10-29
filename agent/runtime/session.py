@@ -23,8 +23,6 @@ from agent.runtime.middleware import StreamGuard
 from agent.runtime.response_validation import incomplete_response
 from agent.runtime.results import (
     TurnResult,
-    cancellation_content,
-    cancellation_fact,
     complete_reply,
 )
 from agent.runtime.turns import AgentCancelled, check_cancelled
@@ -34,8 +32,8 @@ from utils.trace import record
 
 
 class ToolSession:
-    def __init__(self, model, config, tools, domains, outcome_adapter=None, *,
-                 store=None, isolated=False, descriptions=None, middleware=(), history_access=None):
+    def __init__(self, model, config, tools, domains, *,
+                 store=None, descriptions=None, middleware=(), history_access=None):
         self.budget = current_budget() or RequestBudget()
         self.output_limit = getattr(model, "max_tokens", None) or settings.agent_output_tokens
         self.model = model
@@ -48,8 +46,8 @@ class ToolSession:
         self.state = initial_state()
         self.calls_used = 0
         self.result_limit = tool_execution.MAX_TOTAL_RESULT_CHARS
-        self.outcome_adapter = outcome_adapter
-        self.store, self.isolated = store, isolated
+        self.store = store
+        self.feedback_handler = None
         self.approval = None
         self.framework_state = None
         self.fresh_task = True
@@ -140,25 +138,18 @@ class ToolSession:
 
     def _prepared_result(self, body, call, prompt, round_index):
         # Confirmation tokens stay in the terminal outcome, never in the prompt or trace.
-        adapted = self.outcome_adapter(body) if self.outcome_adapter else body
+        adapted = body
         execution = adapted.execution or {}
-        if execution.get("pending_event"):
-            self.outcome_adapter = None
         kind = ("prepared" if execution.get("pending_confirm") else
-                "noop" if execution.get("noop_note") else
-                "cancelled" if execution.get("pending_event") else "terminal")
+                "noop" if execution.get("noop_note") else "terminal")
         args_hash = hashlib.sha256(json.dumps(
             call["args"], sort_keys=True, ensure_ascii=False, separators=(",", ":")
         ).encode()).hexdigest()
         record("native", "call", name=call["name"], args_hash=args_hash,
                call_id=call["id"], round=round_index, kind=kind)
-        if kind == "noop" or kind == "cancelled":
+        if kind == "noop":
             self.state["effects"].update(execution)
-            content = cancellation_content(adapted.reply) if kind == "cancelled" else adapted.reply
-            if kind == "cancelled":
-                record("native", "operation_observation", call_id=call["id"], round=round_index,
-                       facts=cancellation_fact())
-            message = ToolMessage(content=content, name=call["name"],
+            message = ToolMessage(content=adapted.reply, name=call["name"],
                                   tool_call_id=call["id"], artifact={
                                       "kind": "ok", "effects": dict(self.state["effects"])})
             prompt.append(message)
@@ -270,12 +261,10 @@ class ToolSession:
             self._budget_stop(exc.reason, tool_calls=self.calls_used)
         except (AgentCancelled, GeneratorExit, TimeoutError):
             stream.close()
-            execution.preserve_lifecycle()
             raise
         finally:
             self.stream_guard.closed = True
             stream.close()
-        execution.promote()
         if self.committed_result is not None:
             record("native", "checkpoint_write", chars=len(self.committed_result.reply),
                    owner="graph")

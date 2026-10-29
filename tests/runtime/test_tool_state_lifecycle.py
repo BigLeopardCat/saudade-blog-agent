@@ -4,6 +4,7 @@ from copy import deepcopy
 from threading import Event
 
 import pytest
+from _conversation_seed import seed_turn
 from _own_support import config
 from langchain_core.messages import AIMessageChunk, HumanMessage, SystemMessage, ToolMessage
 from langchain_core.tools import tool
@@ -116,7 +117,7 @@ def test_new_task_starts_with_discovery_after_completion_or_history_compaction(
         monkeypatch.setattr(models, "get_llm", lambda **kwargs: FakeListChatModel(
             responses=["Historical fixture queries completed."]))
         for index in range(4):
-            selected.store.save_turn(config(), [HumanMessage(content=f"Later {index}")],
+            seed_turn(selected.store, config(), [HumanMessage(content=f"Later {index}")],
                                      "无关的长答复。" * 350)
         turn(runtime(Model(AIMessageChunk(content="Compacted."))), "Continue.")
         assert not any(isinstance(m, ToolMessage) for m in selected.store.load(config()).messages)
@@ -135,7 +136,7 @@ def test_historical_observations_do_not_activate_domains(setup, has_explicit_sta
         turn(selected)
     observed = memory.observation({"name": "read_alpha", "args": {}, "id": "old"},
                                   ok("Historical alpha fact."))
-    selected.store.save_turn(config(), [HumanMessage(content="Previous read.")], "Past answer.",
+    seed_turn(selected.store, config(), [HumanMessage(content="Previous read.")], "Past answer.",
                              observations=observed)
     model = Model(AIMessageChunk(content="No read requested."))
     turn(runtime(model), "Just chat.")
@@ -210,9 +211,9 @@ def test_history_compaction_does_not_reactivate_completed_task_tools(setup):
     turn(runtime(Model(call("load_beta_info_tools"), AIMessageChunk(content="Ready."))))
     selected = runtime(Model(AIMessageChunk(content="Short answer.")))
     cfg = config()
-    selected.store.save_turn(cfg, [HumanMessage(content="Older background. " * 1000)],
+    seed_turn(selected.store, cfg, [HumanMessage(content="Older background. " * 1000)],
                              "Earlier reply. " * 1000)
-    selected.store.save_turn(cfg, [HumanMessage(content="Keep this latest exchange.")],
+    seed_turn(selected.store, cfg, [HumanMessage(content="Keep this latest exchange.")],
                              "Latest answer.")
     model = Model(AIMessageChunk(content="Current tools stay loaded."))
     budget = RequestBudget(BudgetLimits(context_tokens=3500, request_tokens=6000))

@@ -43,8 +43,6 @@ def restore(session, state):
     session.state = initial_state() | deepcopy({key: value for key, value in state.items()
                                                if key in _FIELDS})
     tool_state.apply(session, session.state["loaded"])
-    if session.state["effects"].get("pending_event"):
-        session.outcome_adapter = None
 
 
 def adopt_command(session, update):
@@ -56,9 +54,3 @@ def adopt_command(session, update):
             session.state[key] = session.state[key] | deepcopy(value)
         else:
             session.state[key] = deepcopy(value)
-
-
-def seed(state):
-    """Only application fields and standard messages cross the subgraph boundary."""
-    return {key: value for key, value in state.items()
-            if not key.startswith("__") and key != "jump_to"} | {"resume": None}

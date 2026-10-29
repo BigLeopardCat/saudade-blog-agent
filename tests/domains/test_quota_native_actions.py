@@ -249,12 +249,12 @@ def test_cancel_or_changed_reason_replacement_revokes_old_decision(
     signed = grant(initial)
     pending = PendingOperation(signed, initial.execution["pending_action"])
     if cancel:
-        result = pending.cancel_tool(None).invoke({}, config=admin_config())
+        result = pending.cancel(admin_config(), None)
         assert result.execution["pending_action"] is None
     else:
         replacement = prepare("reject", request_id=31, reason="用户更正后的新理由")
-        result = pending.transition(replacement, admin_config(), None)
-        replacement_grant = grant(result)
+        result = pending.feedback(admin_config(), None)
+        replacement_grant = grant(replacement)
         assert replacement_grant["specs"][0]["args"]["reason"] == "用户更正后的新理由"
         assert replacement_grant["jti"] != signed["jti"]
     assert result.execution["pending_event"]["event"] == "cancelled"
