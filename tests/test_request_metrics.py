@@ -126,3 +126,26 @@ def test_model_errors_and_measured_uncached_input_are_separate_from_missing_usag
     assert row["cache_in"] == 100 and row["cache_seen"] == 1
     unknown = request_metrics.collect([_trace(tmp_path, "unknown", events=[])])["groups"][0]
     assert unknown["measured_uncached_input"] is None
+
+
+def test_failed_and_unfinished_calls_keep_cost_unknown_even_when_other_usage_is_complete(tmp_path):
+    events = [{"event": "llm_start", "node": "native"},
+              {"event": "llm_done", "node": "native", "input": 100,
+               "output": 10, "cache_read": 80},
+              {"event": "llm_start", "node": "native"},
+              {"event": "llm_error", "node": "native"},
+              {"event": "llm_start", "node": "summarizer"}]
+    path = _trace(tmp_path, "incomplete_attempts", events=events)
+    row = token_cost_report.totals([path])
+    assert row["in"] == 100 and row["out"] == 10
+    assert row["unknown_attempts"] == 2 and not usage.complete(row)
+    assert "费用未知" in token_cost_report._row("test", row, (1, 2, 0.1))
+    assert request_metrics.summary({"events": events})["unknown_attempts"] == 2
+
+
+def test_unpaired_start_in_one_engine_cannot_be_hidden_by_another_engines_done():
+    row = usage.totals([{"event": "llm_start", "node": "summarizer"},
+                        {"event": "llm_done", "node": "native", "input": 20,
+                         "output": 5, "cache_read": 0}])
+    assert row["calls"] == 1 and row["unknown_attempts"] == 1
+    assert not usage.complete(row)

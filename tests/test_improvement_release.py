@@ -56,7 +56,7 @@ def test_complete_offline_handoff_keeps_deploy_separate(evaluated, tmp_path, mon
 
 
 @pytest.mark.parametrize("fault", ["semantic_regression", "cost_regression", "missing_usage",
-                                 "wrong_candidate", "changed_evaluator"])
+                                 "wrong_candidate", "changed_evaluator", "unfinished_call"])
 def test_bad_development_cannot_open_holdout(evaluated, fault):
     registry, _, _, after, _, review, *_ = evaluated
     doc = json.loads(after.read_bytes())
@@ -64,10 +64,12 @@ def test_bad_development_cannot_open_holdout(evaluated, fault):
         doc["service_version"]["sha"] = "other"
     elif fault == "changed_evaluator":
         doc["evaluator_sha256"]["run_golden.py"] = "changed"
-    elif fault in {"cost_regression", "missing_usage"}:
+    elif fault in {"cost_regression", "missing_usage", "unfinished_call"}:
         trace = release.Path(doc["cases"][0]["result"]["rounds"][0]["trace"])
         body = json.loads(trace.read_bytes())
-        if fault == "missing_usage":
+        if fault == "unfinished_call":
+            body["events"].append({"node": "native", "event": "llm_start"})
+        elif fault == "missing_usage":
             body["events"][-1].pop("cache_read")
         else:
             body["events"][-1]["input"] = 150
