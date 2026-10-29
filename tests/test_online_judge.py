@@ -353,3 +353,15 @@ def test_only_correlated_operation_facts_reach_semantic_review(tmp_path):
     turn = json.loads(text)["turns"][0]
     assert turn["validated_operation_facts"] == [events[1]]
     assert "PRIVATE_CANARY" not in text
+
+
+def test_native_confirmation_preview_is_reviewed_without_becoming_supporting_evidence(tmp_path):
+    preview = "仅标记本次确认的通知编号101；之后新到通知不包含在内。"
+    case = recorded(tmp_path, text="请核对卡片。", confirmation_previews=[preview])
+    model = Model()
+    report = run(tmp_path, case, model)
+    current = json.loads(model.messages[0][1]["content"])["turns"][0]
+    assert current["confirmation_previews_to_review"] == [preview]
+    assert preview not in str(current["tool_observations"])
+    assert preview not in str(current["validated_preparation_facts"])
+    assert report["rows"][0]["status"] == "no_issue_found"
