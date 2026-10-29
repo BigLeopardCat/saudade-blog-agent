@@ -58,6 +58,8 @@ class NativeConversationStore:
     ) -> None:
         if not self.available:
             return
+        if (execution or {}).get("client_action"):
+            raise ValueError("cannot_save_incomplete_browser_turn")
         previous = self.load(config)
         principal = ((config or {}).get("configurable") or {}).get("principal")
         current = memory.turn_messages(messages, observations, reply, principal)
