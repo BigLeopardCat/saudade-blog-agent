@@ -28,7 +28,8 @@ def backend():
         elif request.url.path == "/api/protected/quota/requests":
             data = []
         elif request.url.path == "/api/protected/accounts":
-            data = [{"id": 722, "username": account["name"], "role": "user", "frozen": False,
+            data = [{"id": 722, "username": account["name"], "nickname": "额度测试",
+                     "role": "user", "frozen": False,
                      "muted": False, "mutedUntil": None, "quotaUsed": 19, "quotaLimit": 500}]
         else:
             state["unsupported_reads"].append(request.url.path)

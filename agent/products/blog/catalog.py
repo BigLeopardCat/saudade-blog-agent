@@ -20,7 +20,9 @@ DOMAIN_DESCRIPTIONS = {
                      f"标题默认「{DEFAULT_TITLE}」。仅管理员。",
     "admin_tags": "查询标签字典，准备新建、修改层级或字段、删除确认；"
                   "文章挂标签用admin_catalog。仅管理员。",
-    "admin_account_actions": "Query accounts by username or ID; prepare freeze/unfreeze, "
+    "admin_account_actions": "Find accounts by login name or nickname; "
+                             "exact lookup by ID or username. "
+                             "Prepare freeze/unfreeze, "
                              "role change, mute/unmute. Preparation resolves the target "
                              "and current state. Admin only. Roles: "
                              + ", ".join(f"{role.value}={role_cn(role.value)}" for role in Role)

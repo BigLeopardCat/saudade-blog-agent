@@ -16,7 +16,7 @@ from agent.runtime.budget import (
     RequestBudget,
     current_budget,
 )
-from agent.runtime.catalog import loader
+from agent.runtime.catalog import loader, tool_owners
 from agent.runtime.execution_state import initial_state
 from agent.runtime.message_content import text_content
 from agent.runtime.middleware import StreamGuard
@@ -42,6 +42,7 @@ class ToolSession:
         self.tools = dict(tools)
         self.initial_names = set(self.tools)
         self.domains = domains
+        self.tool_owners = tool_owners(tools, domains)
         self.loaders = {f"load_{domain}_info_tools": domain for domain in domains}
         self.state = initial_state()
         self.calls_used = 0
