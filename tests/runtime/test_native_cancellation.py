@@ -3,7 +3,7 @@
 import threading
 
 import pytest
-from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
+from langchain_core.messages import AIMessage, HumanMessage
 from langchain_core.tools import StructuredTool
 from langgraph.checkpoint.memory import InMemorySaver
 
@@ -44,7 +44,7 @@ class Tool:
         self.calls.append(args)
         if self.on_call:
             self.on_call()
-        return ToolMessage(content="已读取", name=self.name, tool_call_id="call")
+        return "已读取"
 
 
 def runtime(model, tools):

@@ -33,7 +33,7 @@ def tool_call(identifier="read"):
 def test_real_sdk_finishes_from_tool_facts_without_resetting_or_raising_budget(limit, monkeypatch):
     requests, reads, progress = [], [], []
     if limit == "result_budget":
-        monkeypatch.setattr("agent.runtime.session._MAX_TOTAL_RESULT_CHARS", 17)
+        monkeypatch.setattr("agent.runtime.tool_execution.MAX_TOTAL_RESULT_CHARS", 17)
 
     def read_fixture() -> str:
         reads.append("read")

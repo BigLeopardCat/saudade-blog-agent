@@ -57,7 +57,8 @@ def test_native_followup_loads_original_as_image_blocks_without_leaking_bytes_to
     client = host(monkeypatch, respond)
     def capture(*args, **kwargs):
         events.append((args, kwargs))
-    for module in (trace, native, native_store, session):
+    from agent.runtime import tool_execution
+    for module in (trace, native, native_store, session, tool_execution):
         monkeypatch.setattr(module, "record", capture)
     model = Capture(call("load_conversation_images_info_tools", "load"),
                     call("get_conversation_image", "image", image_id=REF),
