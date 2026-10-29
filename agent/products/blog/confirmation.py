@@ -61,6 +61,7 @@ def cancel(runtime, grant, config):
     from agent.domains.registry import native_domain
     from agent.products.blog.pending import PendingOperation
     from agent.runtime.memory import observation
+    from agent.runtime.results import cancellation_content
     from tools.result import ok
     if native_domain(grant) is None:
         raise ValueError("这张旧确认卡尚不支持按钮撤销，请勿批准并等待其过期。")
@@ -72,7 +73,8 @@ def cancel(runtime, grant, config):
         if not result.execution:
             return {"cancelled": False, "reply": result.reply}
         facts = observation({"name": "cancel_pending_operation", "args": {},
-                             "id": "cancelled_" + uuid.uuid4().hex}, ok(result.reply))
+                             "id": "cancelled_" + uuid.uuid4().hex},
+                            ok(cancellation_content(result.reply)))
         selected.store.clear_pending(config, grant["jti"], observations=facts)
         return {"cancelled": True, "event": result.execution["pending_event"],
                 "reply": result.reply}

@@ -44,6 +44,32 @@ def _answer_value(wanted, result, calls):
     return bool(values and match and match.group(1) in values)
 
 
+def _answer_list(wanted, result, calls):
+    expected = None
+    for event in calls:
+        if event.get("name") not in wanted["tools"] or event.get("kind") != "ok":
+            continue
+        try:
+            items = json.loads(event.get("result", ""))
+            for key in wanted["path"]:
+                items = items[key]
+            expected = ([item[wanted["field"]] for item in items]
+                        if isinstance(items, list) else None)
+            if expected is not None and not all(isinstance(value, str) for value in expected):
+                expected = None
+        except (ValueError, KeyError, TypeError):
+            expected = None
+    if expected is None:
+        return False
+    text = result.get("text", "").strip()
+    if wanted["format"] == "json" or not expected:
+        try:
+            return json.loads(text) == expected
+        except ValueError:
+            return False
+    return wanted["format"] == "lines" and text.splitlines() == expected
+
+
 def _runtime_stops(events):
     return [e.get("event") for e in events
             if e.get("event") in {"budget_stop", "task_stopped", "handoff_stopped",
@@ -131,11 +157,22 @@ def _compaction_failures(gold, events):
     return []
 
 
+def _answer_failures(gold, result, calls):
+    failures = []
+    for wanted in gold.get("require_answer_value", []):
+        if not _answer_value(wanted, result, calls):
+            failures.append(f"回答值不来自本轮实际读取结果：{wanted}")
+    for wanted in gold.get("require_answer_list", []):
+        if not _answer_list(wanted, result, calls):
+            failures.append(f"回答列表与最近一次实际读取结果或指定格式不符：{wanted}")
+    return failures
+
+
 def check(gold, result):
     keys = {"require_observations", "require_observations_any", "require_todo_schedule",
             "require_confirm_specs", "require_confirm_preview", "forbid_runtime_stop",
             "forbid_business_write", "require_answer_value", "require_prepared_or_noop",
-            "require_memory_compaction"}
+            "require_memory_compaction", "require_answer_list"}
     if not keys.intersection(gold):
         return []
     events = result.get("native_events")
@@ -145,6 +182,7 @@ def check(gold, result):
     calls = observations(events)
     failures.extend(_outcome_failures(gold, result, events))
     failures.extend(_compaction_failures(gold, events))
+    failures.extend(_answer_failures(gold, result, calls))
     for wanted in gold.get("require_observations", []):
         if not any(_matches_observation(wanted, event) for event in calls):
             failures.append(f"缺少实际工具观察：{wanted}")
@@ -162,9 +200,6 @@ def check(gold, result):
     for pattern in gold.get("require_confirm_preview", []):
         if not _confirmation_preview(pattern, result):
             failures.append(f"HTTP 确认卡展示内容不符或缺失：{pattern}")
-    for wanted in gold.get("require_answer_value", []):
-        if not _answer_value(wanted, result, calls):
-            failures.append(f"回答值不来自本轮实际读取结果：{wanted}")
     if gold.get("forbid_runtime_stop"):
         stops = _runtime_stops(events)
         if stops:
