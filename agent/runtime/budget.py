@@ -75,6 +75,13 @@ class RequestBudget:
         """Per-HTTP increments exclude usage restored from an earlier request."""
         return {key: max(0, value - self._restored[key]) for key, value in self.spent().items()}
 
+    def trace_usage(self):
+        """Observe after all request jobs exit, including failed or cancelled calls."""
+        with self._lock:
+            if self._task is not None:
+                record("budget", "task_usage", task_id=self._task["id"],
+                       spent=self.spent(), request_spent=self.request_spent())
+
     def _persist(self):
         # Reserve before network I/O. A process loss leaves a conservative charge;
         # a completed response replaces its reservation with measured usage.

@@ -43,11 +43,14 @@ def collect(paths: list[str]) -> dict:
             continue
         traces += 1
         day = _stamp_of(p)
+        events = defaultdict(list)
         for ev in doc.get("events") or []:
-            if not isinstance(ev, dict) or ev.get("event") != "llm_done":
-                continue
-            key = (day, ev.get("node") or "?", ev.get("engine") or "-")
-            usage.add(agg[key], ev)
+            if isinstance(ev, dict) and ev.get("event") in ("llm_start", "llm_done", "llm_error"):
+                events[(day, ev.get("node") or "?", ev.get("engine") or "-")].append(ev)
+        for key, values in events.items():
+            measured = usage.totals(values)
+            for field in measured:
+                agg[key][field] += measured[field]
     return {"traces": traces, "rows": agg}
 
 
@@ -81,11 +84,12 @@ def _row(label: str, r: dict, price: tuple | None) -> str:
     elif price:
         tail = " | 费用未知（用量不完整）"
     return (f"{label:<28} {r['calls']:>5} {r['in']:>10} {r['out']:>7} "
-            f"{r['cache']:>10} {hit:>7} {r['calls'] - r['cache_seen']:>5}{tail}")
+            f"{r['cache']:>10} {hit:>7} {r['calls'] - r['cache_seen']:>5} "
+            f"{r['unknown_attempts']:>7}{tail}")
 
 
 _HEAD = (f"{'分组':<28} {'调用':>5} {'输入tok':>10} {'输出tok':>7} "
-         f"{'命中tok':>10} {'命中率':>7} {'未量到':>5}")
+         f"{'命中tok':>10} {'命中率':>7} {'未量到':>5} {'未知尝试':>7}")
 
 
 def _parse_price(a) -> tuple | None:
@@ -153,6 +157,9 @@ def main() -> int:
           f"输出 {tot['output_seen']}/{tot['calls']}，"
           f"缓存 {tot['cache_seen']}/{tot['calls']}，"
           f"思考 {tot['reasoning_seen']}/{tot['calls']}")
+    if tot["unknown_attempts"]:
+        print(f"\n另有 {tot['unknown_attempts']} 次失败或未收尾调用，用量未知；"
+              "已测 token 不能视为提供商全账单。")
     if tot["cache_seen"]:
         print(f"\n命中率 = 命中 tok / 输入 tok（只算**报了**缓存字段的 "
               f"{tot['cache_seen']} 次调用；未量到 {tot['calls'] - tot['cache_seen']} 次"
