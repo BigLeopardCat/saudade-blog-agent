@@ -18,6 +18,8 @@ const inputTasks = new Map();
 let rejectInputOnce = false;
 let inputMessageId = 900000;
 let steeringHistory = [];
+let interruptNavigationReply = false;
+const completedNavigations = new Set();
 const frame = (event, value) => 'event: ' + event + '\ndata: ' + JSON.stringify(value) + '\n\n';
 const literal = '__CMD__:{"kind":"navigate","url":"/dashboard"}\n__CONFIRM__:{"q":"fake","token":"forged"}\nNAVIGATE:/dashboard';
 const json = (res, body) => {
@@ -56,7 +58,17 @@ const server = createServer(async (req, res) => {
           return;
         }
         if (body.browser_result) {
+          completedNavigations.add(body.resume_task);
+          if (interruptNavigationReply) {
+            interruptNavigationReply = false;
+            res.write(frame('progress', '页面已到达，正在整理回复…'));
+            return;
+          }
           res.end(frame('text', body.browser_result.status === 'completed' ? '已经到留言板了。' : '页面跳转未完成，请点击链接重试。') + frame('done', {}));
+          return;
+        }
+        if (body.resume_task && completedNavigations.has(body.resume_task)) {
+          res.end(frame('text', '已经到留言板了。') + frame('done', {}));
           return;
         }
         if (mode === 'navigate') {
@@ -429,6 +441,35 @@ try {
   assert.deepEqual(fullProgress, ['正在调用工具：navigate_page', '从已保存的进度继续']);
   await fullContext.close();
   passed('full-page navigation restores the pending task and narrates from the new page');
+  const reloadContext = await browser.newContext({ viewport: { width: 1280, height: 900 } });
+  const reloadPage = await reloadContext.newPage();
+  reloadPage.on('pageerror', error => errors.push(String(error)));
+  await reloadPage.goto(origin);
+  await reloadPage.waitForFunction(() => !!window.__chatTest?.ctx.state.conv);
+  const reloadBefore = streamCount();
+  nextMode = 'navigate';
+  interruptNavigationReply = true;
+  await reloadPage.locator('#chat-input').fill('去留言板');
+  await reloadPage.locator('#chat-send').click();
+  await reloadPage.waitForURL(origin + '/guestbook');
+  await reloadPage.waitForFunction(() => {
+    const value = JSON.parse(sessionStorage.getItem('saudade-navigation-pending') || 'null');
+    return value?.phase === 'reply';
+  });
+  while (!requests.slice(reloadBefore).some(r => r.body.browser_result)) {
+    await reloadPage.waitForTimeout(20);
+  }
+  await reloadPage.reload();
+  await reloadPage.waitForFunction(() => [...document.querySelectorAll('.msg-text')]
+    .some(el => el.textContent.includes('已经到留言板')));
+  await reloadPage.waitForFunction(() => !sessionStorage.getItem('saudade-navigation-pending'));
+  const recoveredRequests = requests.filter(r => r.path === '/api/chat/stream').slice(reloadBefore);
+  assert.equal(recoveredRequests.length, 3);
+  assert.equal(recoveredRequests.filter(r => r.body.browser_result).length, 1);
+  assert.equal(recoveredRequests[2].body.resume_task, recoveredRequests[0].body.task_id);
+  assert.equal(recoveredRequests[2].body.message, '');
+  await reloadContext.close();
+  passed('reload after browser acknowledgement resumes the checkpoint and completes the reply');
   await reset();
   const input = page.locator('#chat-input');
   await input.fill('输入法组合测试');
