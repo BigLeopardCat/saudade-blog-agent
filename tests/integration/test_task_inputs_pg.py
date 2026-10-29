@@ -166,7 +166,7 @@ def test_browser_ack_then_disconnect_recovers_the_actual_child_checkpoint(inboxe
     from _own_support import config
     from langchain_core.messages import HumanMessage, ToolMessage
     from langgraph.checkpoint.postgres import PostgresSaver
-    from test_browser_feedback import Model, acknowledge
+    from _browser_support import Model, acknowledge
 
     from agent.runtime import checkpoint_store
     from agent.runtime.control import AgentCancelled
