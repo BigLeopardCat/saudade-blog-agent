@@ -563,10 +563,6 @@
         0,
         0
       ],
-      "agent/runtime/finalization.py": [
-        3,
-        0
-      ],
       "agent/runtime/input_usage.py": [
         0,
         0
@@ -617,6 +613,10 @@
       ],
       "agent/runtime/recovery.py": [
         0,
+        0
+      ],
+      "agent/runtime/response_validation.py": [
+        3,
         0
       ],
       "agent/runtime/results.py": [

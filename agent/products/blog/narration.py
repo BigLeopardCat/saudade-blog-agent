@@ -11,8 +11,8 @@ from agent.products.blog.context import conversation_context
 from agent.products.blog.persona import BLOG_PERSONA_PROMPT, CHARACTER_IDENTITY, conversation_style
 from agent.runtime.budget import RequestBudget, current_budget, native_call
 from agent.runtime.control import model_options
-from agent.runtime.finalization import incomplete_response
 from agent.runtime.progress import emit
+from agent.runtime.response_validation import incomplete_response
 from models.llm import get_llm
 from utils.trace import record
 
