@@ -203,3 +203,54 @@ def test_empty_approval_response_retries_once_through_the_framework(backend):
     result = run(selected, "准备收藏文章19")
     assert result.reply == "请确认这项收藏。" and len(model.review_prompts) == 2
     assert result.execution["pending_confirm"] and not backend[0]["writes"]
+
+
+def test_notification_summary_approval_and_browser_ack_keep_one_durable_task(monkeypatch, tmp_path):
+    from _framework_ledger import Ledger
+
+    from agent.runtime import writes
+    from eval.composite_task_contracts import REQUEST, backend
+
+    saver = InMemorySaver()
+    ledger = Ledger(str(tmp_path / "ledger.sqlite3"))
+    monkeypatch.setattr(writes, "ledger_for", lambda _: ledger)
+
+    def selected(model):
+        return NativeRuntime(NativeConversationStore(saver), model_factory=lambda **_: model)
+
+    first_model = Model(AIMessage(content="", tool_calls=[
+        call("load_notifications_info_tools", "load")]),
+        AIMessage(content="", tool_calls=[call("list_notifications", "read", unread_only=True)]),
+        AIMessage(content="", tool_calls=[call("prepare_notification_read", "prepare",
+                                              scope="selected", ids=[101, 102])]))
+    first_model.approval_reply = AIMessage(content="部署 N-417，评论待审 R-862；确认后标记并打开留言板。")
+    cfg = config(browser_feedback=True)
+    try:
+        with backend() as state:
+            initial = selected(first_model)
+            prepared = run(initial, REQUEST, cfg=cfg)
+            task = initial.store.load(cfg).run["id"]
+            grant = confirm.verify(prepared.execution["pending_confirm"]["token"], 7, 42)
+            assert not [r for r in state["requests"] if r.method == "POST"]
+            after_confirm = selected(Model(AIMessage(content="", tool_calls=[
+                call("navigate_page", "open", path="/guestbook")])))
+            waiting = run(after_confirm, grant=grant, cfg=cfg)
+            action = waiting.execution["client_action"]
+            assert action["task_id"] == task
+            assert after_confirm.store.load(cfg).unfinished
+            assert all(row["isRead"] for row in state["items"][:2])
+            assert not state["items"][-1]["isRead"]
+            assert after_confirm.get_state(cfg, subgraphs=True).interrupts
+            acknowledged = config(browser_feedback=True, browser_result={
+                "command_id": action["command_id"], "path": "/guestbook", "status": "completed"})
+            rebuilt = selected(Model(AIMessage(content="所选两条通知已读，浏览器已到留言板。")))
+            done = list(rebuilt.stream_events({"resume_task": task}, acknowledged))[-1]
+            assert done.reply == "所选两条通知已读，浏览器已到留言板。"
+            assert any(r.get("browser_status") == "completed" for r in done.execution["receipts"])
+            assert not rebuilt.store.load(cfg).unfinished
+            assert len([r for r in state["requests"] if r.method == "POST"]) == 1
+            replay = run(rebuilt, grant=grant, cfg=cfg)
+            assert not replay.execution.get("client_action")
+            assert len([r for r in state["requests"] if r.method == "POST"]) == 1
+    finally:
+        ledger.close()
