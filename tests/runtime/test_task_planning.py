@@ -37,13 +37,16 @@ def test_standard_todo_state_survives_approval_reconstruction_and_resets_for_new
         return NativeRuntime(NativeConversationStore(saver), catalog=catalog,
                              model_factory=lambda **_: model)
 
-    first = selected(Model(AIMessage(content="", tool_calls=[
+    first_model = Model(AIMessage(content="", tool_calls=[
         call("load_task_planning_info_tools", "load-plan")]),
         AIMessage(content="", tool_calls=[
         call("write_todos", "plan", todos=PLAN)]), LOAD,
-        AIMessage(content="", tool_calls=[FAVORITE])))
+        AIMessage(content="", tool_calls=[FAVORITE]))
+    first = selected(first_model)
     prepared = run(first, "收藏文章19，确认后核对。")
     assert not state["writes"]
+    from agent.runtime.task_planning import SYSTEM_PROMPT
+    assert SYSTEM_PROMPT not in str(first_model.review_prompts)
     grant = confirm.verify(prepared.execution["pending_confirm"]["token"], 7, 42)
     next_model = Model(AIMessage(content="", tool_calls=[call("inspect_plan", "inspect")]),
                        AIMessage(content="已核对收藏回执。"))
