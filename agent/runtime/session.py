@@ -10,7 +10,7 @@ import json
 from langchain_core.messages import AIMessageChunk, ToolMessage
 from langchain_core.utils.function_calling import convert_to_openai_tool
 
-from agent.runtime import memory, tool_execution
+from agent.runtime import memory, tool_execution, tool_state
 from agent.runtime.budget import (
     BudgetExceeded,
     RequestBudget,
@@ -220,6 +220,7 @@ class ToolSession:
             self.budget.attempt_tools(len(calls))
         except BudgetExceeded as exc:
             return None, self._budget_stop(exc.reason, tool_calls=self.calls_used)
+        tool_state.pin(self, calls)
         return calls, None
 
     def stream(self, prompt, *, resume=None, approval_input=(), recover=False, client_result=None):

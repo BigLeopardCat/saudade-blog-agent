@@ -145,8 +145,12 @@ def test_historical_observations_do_not_activate_domains(setup, has_explicit_sta
     assert calls == []
 
 
-def test_resume_uses_checkpoint_menu_and_messages_without_repeating_a_read(setup):
+@pytest.mark.parametrize("inherited", [False, True])
+def test_resume_uses_checkpoint_menu_and_messages_without_repeating_a_read(setup, inherited):
     runtime, _, calls = setup
+    if inherited:
+        turn(runtime(Model(call("load_alpha_info_tools"), call("load_beta_info_tools"),
+                           AIMessageChunk(content="Ready."))))
     stop = Event()
     cfg = config(stop_event=stop)
     first = Model(call("load_beta_info_tools"), call("read_beta"), AgentCancelled())
@@ -218,3 +222,101 @@ def test_compressible_old_history_does_not_unload_the_inherited_menu(setup):
         result = turn(runtime(model), "Short follow-up.")
     assert result.reply == "Current tools stay loaded."
     assert "read_beta" in names(model.requests[0])
+
+
+def test_budget_pressure_reclaims_only_the_old_domain_and_preserves_a_usable_followup(
+        setup, monkeypatch):
+    from agent.runtime import tool_state
+
+    runtime, domains, calls = setup
+    domains["alpha"]["read_alpha"].description = "Large old domain definition. " * 600
+    original = Model(call("load_alpha_info_tools"), call("load_beta_info_tools"),
+                     AIMessageChunk(content="Ready."))
+    turn(runtime(original))
+    observed = []
+    monkeypatch.setattr(tool_state, "record", lambda node, event, **data: observed.append({
+        "event": event, **deepcopy(data)}))
+    model = Model(call("read_beta"), AIMessageChunk(content="Beta fact confirmed."))
+    budget = RequestBudget(BudgetLimits(context_tokens=1800, request_tokens=5000))
+    with budget_scope(budget):
+        selected = runtime(model)
+        result = turn(selected, "Read beta again.")
+    assert result.reply == "Beta fact confirmed." and calls == ["beta"]
+    assert names(model.requests[0]) == [
+        "load_alpha_info_tools", "load_beta_info_tools", "read_beta"]
+    assert budget.model_calls == 2 and budget.tool_calls == 1
+    saved = selected.store.load(config()).tool_state
+    assert saved["loaded"] == ["beta"]
+    assert saved["scope"]["uid"] == 7
+    trimming = [event for event in observed if event["event"] == "tool_menu_trim"]
+    assert len(trimming) == 1 and trimming[0]["domains"] == ["alpha"]
+    assert trimming[0]["retained"] == ["beta"]
+    footprint = next(event for event in observed if event["event"] == "tool_working_set")
+    assert footprint["estimated_schema_tokens"] < footprint["previous_estimated_schema_tokens"]
+    assert not any(event["event"] == "tool_menu_reset" for event in observed)
+    following = Model(AIMessageChunk(content="Next follow-up."))
+    with budget_scope(RequestBudget(BudgetLimits(context_tokens=1800, request_tokens=5000))):
+        turn(runtime(following), "Continue.")
+    assert following.requests[0]["tools"] == model.requests[0]["tools"]
+
+
+def test_loading_an_evicted_domain_reclaims_unused_inheritance_before_budget_stop(setup):
+    runtime, domains, calls = setup
+    for name, tools in domains.items():
+        tools[f"read_{name}"].description = f"Large {name} schema. " * 140
+    turn(runtime(Model(call("load_alpha_info_tools"), call("load_beta_info_tools"),
+                       AIMessageChunk(content="Ready."))))
+    model = Model(call("load_alpha_info_tools"), call("read_alpha"),
+                  AIMessageChunk(content="Alpha read."))
+    selected = runtime(Model())
+    cfg = config()
+    snapshot = selected.store.load(cfg)
+    prompt = selected.application.prompt([*snapshot.messages,
+        HumanMessage(content="Read alpha instead.")], cfg["configurable"]["principal"])
+    session = selected._session(cfg, snapshot)
+    from langchain_core.messages.utils import count_tokens_approximately
+
+    from agent.runtime.tool_state import apply
+
+    single_cost = []
+    for name in domains:
+        apply(session, [name])
+        single_cost.append(memory._tokens(prompt)
+                           + count_tokens_approximately([], tools=session.menu))
+    context_limit = max(single_cost) + model.max_tokens + 220
+    limits = BudgetLimits(context_tokens=context_limit, request_tokens=20000)
+    with budget_scope(RequestBudget(limits)):
+        result = turn(runtime(model), "Read alpha instead.")
+    assert result.reply == "Alpha read." and calls == ["alpha"]
+    assert "read_alpha" not in names(model.requests[0]) and "read_beta" in names(model.requests[0])
+    assert "read_alpha" in names(model.requests[1]) and "read_beta" not in names(model.requests[1])
+    assert len(model.requests) == 3
+
+
+def test_a_loader_cannot_evict_a_domain_already_selected_in_the_same_model_batch(setup):
+    from langchain_core.messages.utils import count_tokens_approximately
+
+    from agent.runtime.tool_state import apply
+
+    runtime, domains, calls = setup
+    for name, tools in domains.items():
+        tools[f"read_{name}"].description = f"Large {name} schema. " * 140
+    turn(runtime(Model(call("load_alpha_info_tools"), call("load_beta_info_tools"),
+                       AIMessageChunk(content="Ready."))))
+    load = call("load_alpha_info_tools").tool_calls[0]
+    read = call("read_beta").tool_calls[0]
+    model = Model(AIMessageChunk(content="", tool_calls=[load, read]),
+                  AIMessageChunk(content="Beta read; alpha not read."))
+    selected = runtime(Model())
+    snapshot = selected.store.load(config())
+    session = selected._session(config(), snapshot)
+    apply(session, ["beta"])
+    context_limit = count_tokens_approximately([], tools=session.menu) + 500
+    limits = BudgetLimits(context_tokens=context_limit, request_tokens=20000)
+    with budget_scope(RequestBudget(limits)):
+        result = turn(runtime(model), "Load alpha and read beta.")
+    assert calls == ["beta"] and "Beta read" in result.reply
+    assert any(m.get("tool_call_id") == "read_beta" and m.get("status") == "success"
+               for m in model.requests[-1]["messages"])
+    state = selected.store.load(config()).tool_state
+    assert state["loaded"] == ["beta", "alpha"]
