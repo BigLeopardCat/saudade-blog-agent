@@ -53,7 +53,7 @@ def invoke_authorized(session, name, args):
     request = SimpleNamespace(tool_call={"name": name, "args": args, "id": "read"},
                               state={"messages": []})
     return BlogToolMiddleware(session).wrap_tool_call(
-        request, lambda current: session._invoke_tool(name, args, current.tool_call))
+        request, lambda current: session.tools[name].invoke(args, config=session.config))
 
 
 @pytest.mark.parametrize("role,source,uid,visible", [
