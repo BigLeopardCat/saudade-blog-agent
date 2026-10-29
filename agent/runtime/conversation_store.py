@@ -51,8 +51,8 @@ class ConversationStore(Protocol):
         """Save the completed turn while the caller holds guard(config)."""
         ...
 
-    def clear_pending(self, config, jti: str) -> None:
-        """Clear only the matching card; preserve messages, receipts and other state."""
+    def clear_pending(self, config, jti: str, *, observations=()) -> None:
+        """Clear the matching card and append its optional facts in the same commit."""
         ...
 
     def guard(self, config) -> AbstractContextManager: ...
