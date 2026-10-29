@@ -106,7 +106,7 @@ def test_promoted_browser_action_does_not_activate_other_site_tools():
                           middleware=(BlogToolMiddleware,))
     result = session.run(build_prompt([HumanMessage(content="回首页")],
                                       config()["configurable"]["principal"]))
-    assert result.execution["receipts"] and not session.loaded
+    assert result.execution["receipts"] and not session.state["loaded"]
     assert model.requests[0]["tools"] == model.requests[1]["tools"]
     assert "site_read" not in str(model.requests[1]["tools"])
     assert list(session.tools) == ["navigate_page", "set_page_appearance"]

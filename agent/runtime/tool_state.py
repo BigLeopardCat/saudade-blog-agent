@@ -9,11 +9,11 @@ def apply(session, domains):
     """Replace optional tools in saved activation order, using today's catalog."""
     session.tools = {name: tool for name, tool in session.tools.items()
                      if name in session.initial_names}
-    session.loaded = []
+    session.state["loaded"] = []
     for domain in domains:
-        if domain in session.domains and domain not in session.loaded:
+        if domain in session.domains and domain not in session.state["loaded"]:
             session.tools.update(session.domains[domain])
-            session.loaded.append(domain)
+            session.state["loaded"].append(domain)
     session.refresh_menu()
 
 
@@ -22,7 +22,7 @@ def capture(session):
         scope = binding(session.config)
     except ValueError:
         return None
-    return {"scope": scope, "loaded": list(session.loaded)}
+    return {"scope": scope, "loaded": list(session.state["loaded"])}
 
 
 def inherit(session, saved, prompt):
@@ -41,11 +41,11 @@ def inherit(session, saved, prompt):
     except ValueError:
         return
     apply(session, saved.get("loaded") or [])
-    if not session.loaded:
+    if not session.state["loaded"]:
         return
     if session.budget.output_capacity(required_input(prompt), session.menu) < session.output_limit:
-        removed = list(session.loaded)
+        removed = list(session.state["loaded"])
         apply(session, [])
         record("native", "tool_menu_reset", reason="budget", domains=removed)
     else:
-        record("native", "restore_domains", source="conversation", domains=session.loaded)
+        record("native", "restore_domains", source="conversation", domains=session.state["loaded"])

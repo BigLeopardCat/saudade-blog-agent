@@ -40,12 +40,13 @@ def restore_session(session, state):
                  and not message.additional_kwargs.get("task_input")), default=0)
     calls = {}
     result_chars = 0
+    effects = {}
     for message in messages[start:]:
         if isinstance(message, AIMessage):
             calls.update({call["id"]: call for call in message.tool_calls})
         elif isinstance(message, ToolMessage):
             artifact = message.artifact or {}
-            session.effects.update(artifact.get("effects") or {})
+            effects.update(artifact.get("effects") or {})
             if "kind" in artifact and not artifact.get("phase"):
                 result_chars += len(text_content(message.content))
             session.receipts.extend(artifact.get("receipts") or [])
@@ -55,8 +56,9 @@ def restore_session(session, state):
             if message.tool_call_id in calls:
                 session.observations.extend(memory.observation(
                     calls[message.tool_call_id], message))
-    session.result_chars = max(session.result_chars, result_chars)
-    if session.effects.get("pending_event"):
+    session.state["result_chars"] = max(session.state["result_chars"], result_chars)
+    session.state["effects"] = effects | session.state["effects"]
+    if session.state["effects"].get("pending_event"):
         session.outcome_adapter = None
     # A completed child may precede the interrupted parent commit.
     last = messages[-1] if messages else None

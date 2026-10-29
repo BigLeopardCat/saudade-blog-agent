@@ -16,7 +16,7 @@ from agent.llm_usage import usage_fields
 from agent.runtime import trace_context
 from agent.runtime.budget import native_call
 from agent.runtime.control import AgentCancelled, model_options
-from agent.runtime.execution_state import capture, restore
+from agent.runtime.execution_state import adopt_command, capture, restore
 from agent.runtime.finalization import final_prompt
 from agent.runtime.memory_media import hydrate, stage
 from agent.runtime.message_content import text_content
@@ -111,6 +111,7 @@ class SessionMiddleware(AgentMiddleware):
         session = self.session
         self._recover(state)
         check_cancelled(session.config)
+        restore(session, state)
         if state.get("resume"):
             return self._resume(state)
         replacement = replace_unpublished_proposal(session, state)
@@ -119,7 +120,7 @@ class SessionMiddleware(AgentMiddleware):
         saved = capture(session)
         if session.outcome is not None:
             saved["jump_to"] = "end"
-        elif session.isolated and session.effects.get("pending_event"):
+        elif session.isolated and session.state["effects"].get("pending_event"):
             # Finish the isolated graph before transferring its standard state.
             saved["jump_to"] = "end"
         elif session.recovering and any(call["id"] not in self.cached for call in self.calls):
@@ -145,17 +146,19 @@ class SessionMiddleware(AgentMiddleware):
     def _resume(self, state):
         session = self.session
         facts = state["resume"]
-        restore(session, state)
+        session.state["resume"] = None
         proposal = (session.outcome.execution or {}) if session.outcome else {}
         if facts["jti"] != proposal.get("pending_action", {}).get("jti"):
             raise ValueError("执行回执与 Agent 待确认操作不一致")
+        session.state["effects"].update({key: value for key, value in facts["execution"].items()
+                                          if key != "receipts"})
         messages = list(state["messages"])
         index = next(i for i in range(len(messages) - 1, -1, -1)
                      if isinstance(messages[i], AIMessage) and messages[i].tool_calls)
         self.calls = messages[index].tool_calls
         answered = {message.tool_call_id: message for message in messages[index + 1:]
                     if isinstance(message, ToolMessage)}
-        awaiting = answered[session.awaiting_call]
+        awaiting = answered[session.state["awaiting_call"]]
         visible = {"status": "executed", "result": facts["reply"], "receipts": [
             {key: row[key] for key in ("tool", "args", "result", "action") if key in row}
             for row in facts["execution"]["receipts"]]}
@@ -165,9 +168,9 @@ class SessionMiddleware(AgentMiddleware):
                     if (message.artifact or {}).get("phase") == "deferred"]
         self.cached = {ident: message for ident, message in answered.items()
                        if message not in deferred}
-        self.cached[session.awaiting_call] = receipt
+        self.cached[session.state["awaiting_call"]] = receipt
         self.exchange = [*messages[:index + 1], *self.cached.values()]
-        session.outcome, session.awaiting_call = None, None
+        session.outcome, session.state["awaiting_call"] = None, None
         saved = {**capture(session), "resume": None,
                  "messages": [receipt, *(RemoveMessage(id=m.id) for m in deferred)]}
         if deferred:
@@ -190,7 +193,7 @@ class SessionMiddleware(AgentMiddleware):
         prompt = [*([request.system_message] if request.system_message else []),
                   *model_messages(hydrate(request.messages, session.transient))]
         final = final_prompt(session.budget, prompt, session.menu, session.output_limit,
-                             results_full=session.result_chars >= session.result_limit,
+                             results_full=session.state["result_chars"] >= session.result_limit,
                              model_key=request.model)
         model = request.model
         selected_model = _model_name(model)
@@ -239,6 +242,7 @@ class SessionMiddleware(AgentMiddleware):
     def after_model(self, state, runtime):
         session = self.session
         self._recover(state)
+        restore(session, state)
         response = state["messages"][-1]
         aggregate = session.stream_guard.aggregate
         if aggregate is not None and not session._complete_tool_arguments(aggregate):
@@ -282,19 +286,23 @@ class SessionMiddleware(AgentMiddleware):
             before = len(self.exchange)
             command = append_result(session, request, handler, self.exchange,
                                     max(0, session._round_index - 1), self.attachments)
+            if command is not None:
+                adopt_command(session, command.update)
             execution = (session.outcome.execution or {}) if session.outcome else {}
             if execution.get("pending_confirm"):
-                session.awaiting_call = call["id"]
+                session.state["awaiting_call"] = call["id"]
                 if call["id"] != self.calls[-1]["id"]:
                     session.outcome = pause_notice(session.outcome)
             message = (self.exchange[-1] if len(self.exchange) > before else ToolMessage(
                 content="操作已准备，等待用户决定。", name=call["name"], tool_call_id=call["id"],
                 artifact={"phase": "awaiting_approval", "proposal": capture(session)["proposal"]}))
         message = message.model_copy(update={"name": call["name"]})
-        if command is not None or self.calls and call["id"] == self.calls[-1]["id"]:
+        if self.calls and call["id"] == self.calls[-1]["id"]:
             update = {**capture(session), **(command.update if command else {}), "messages": [
                 message, *stage(self.attachments, session.transient)]}
             return replace(command, update=update) if command else Command(update=update)
+        if command is not None:
+            return replace(command, update={**command.update, "messages": [message]})
         return message
 
 

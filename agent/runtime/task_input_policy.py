@@ -23,9 +23,10 @@ def additions(session, state, *, response=None):
     session.input_messages = accepted
     seen = {message.additional_kwargs["task_input"]["id"] for message in accepted}
     if response is not None:
-        session.applied_inputs.update(seen)
+        session.state["applied_inputs"] = sorted(set(session.state["applied_inputs"]) | seen)
     pending = session.input_inbox.boundary(task, seen,
-        final=response is not None and not response.tool_calls, applied=session.applied_inputs)
+        final=response is not None and not response.tool_calls,
+        applied=session.state["applied_inputs"])
     if not pending:
         return []
     appended = []
@@ -74,5 +75,5 @@ def replace_unpublished_proposal(session, state):
         and (message.artifact or {}).get("phase") in {"awaiting_approval", "deferred"}]
     # No confirmation has left the runtime yet. The old proposal is never
     # published or persisted as the conversation's authorized pending action.
-    session.outcome, session.awaiting_call, session.approval = None, None, None
+    session.outcome, session.state["awaiting_call"], session.approval = None, None, None
     return [*replaced, *extra]
