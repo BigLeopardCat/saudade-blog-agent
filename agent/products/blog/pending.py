@@ -1,10 +1,7 @@
-"""Lifecycle of one signed proposal, shared across migrated domains."""
+"""Durable revocation for signed proposal feedback and button cancellation."""
 
 import time
 from dataclasses import dataclass
-
-from langchain_core.runnables import RunnableConfig
-from langchain_core.tools import tool
 
 from agent import confirm, idem
 from agent.domains.registry import confirmed_domain, native_domain
@@ -18,9 +15,6 @@ from tools.base import ToolResult, unavailable
 class PendingOperation:
     grant: dict
     action: dict
-
-    def context(self):
-        return {"spec": self.grant["specs"][0], "target": self.action.get("target", "")}
 
     def _revoke(self, config, saver):
         check_cancelled(config)
@@ -38,22 +32,12 @@ class PendingOperation:
         return {"event": "cancelled", "task_id": self.action["task_id"],
                 "jti": self.grant["jti"]}
 
-    def transition(self, result, config, saver):
-        execution = result.execution or {}
-        if not (execution.get("pending_confirm") or execution.get("noop_note")):
-            return result
+    def feedback(self, config, saver):
         event = self._revoke(config, saver)
         if isinstance(event, ToolResult):
-            return TurnResult(str(event))
-        return TurnResult(result.reply, {"pending_confirm": None, "pending_action": None,
-                                        **execution, "pending_event": event})
-
-    def cancel_tool(self, saver):
-        @tool
-        def cancel_pending_operation(config: RunnableConfig) -> object:
-            """用户明确要求放弃当前待确认操作时调用；撤销旧确认卡，不执行业务改动。"""
-            return self.cancel(config, saver)
-        return cancel_pending_operation
+            raise ValueError(str(event))
+        return TurnResult("", {"pending_event": {**event, "reason": "user_feedback"},
+                               "receipts": []})
 
     def cancel(self, config, saver):
         event = self._revoke(config, saver)

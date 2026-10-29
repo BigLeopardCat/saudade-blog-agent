@@ -119,7 +119,7 @@ class Model:
                 "name": name, "args": {"scope": "all_unread"} if args is None else args,
                 "id": "prepare"}])]
         if name == "cancel_pending_operation":
-            self.responses.append(AIMessage(content="旧操作已取消。"))
+            self.responses = [AIMessage(content="旧操作已取消。")]
 
     def bind_tools(self, tools, **kwargs):
         return self

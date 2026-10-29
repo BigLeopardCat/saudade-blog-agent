@@ -64,7 +64,7 @@ def invoke_authorized(session, name, args):
     ("admin", SOURCE_ASSERTION, 0, False),
 ])
 def test_admin_menu_visibility_follows_verified_authority(role, source, uid, visible):
-    domains = ToolCatalog().domains(config(role, source, uid), False, None, None)
+    domains = ToolCatalog().domains(config(role, source, uid), False)
     assert ("admin_reports" in domains) is visible
     assert ("admin_moderation" in domains) is visible
     assert ("admin_work_queue" in domains) is visible

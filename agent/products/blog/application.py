@@ -28,16 +28,16 @@ class BlogApplication:
     def __init__(self, catalog=None):
         self.catalog = catalog if catalog is not None else ToolCatalog()
 
-    def prompt(self, messages, principal, pending=None):
-        return build_prompt(messages, principal, own_reads_enabled(principal), pending)
+    def prompt(self, messages, principal):
+        return build_prompt(messages, principal, own_reads_enabled(principal))
 
     def tools(self, config, snapshot, pending, saver, available):
         principal = ((config or {}).get("configurable") or {}).get("principal")
         if getattr(principal, "known_role", None) in CHAT_ONLY_ROLES:
             return {}, {}
-        can_prepare = available and (not snapshot.has_pending or pending is not None)
+        can_prepare = available
         tools = self.catalog.initial_tools(own_reads_enabled(principal))
-        domains = self.catalog.domains(config, can_prepare, pending, saver)
+        domains = self.catalog.domains(config, can_prepare)
         visible = memory.history(snapshot.messages, principal, tool_access=self.history_access)
         images = conversation_images.tools(visible, config)
         if images:

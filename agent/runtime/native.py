@@ -9,6 +9,7 @@ from langchain_core.messages import AIMessageChunk
 from openai import OpenAIError
 
 from agent.runtime import approval, memory, recovery, trace_context
+from agent.runtime.memory_media import stage
 from agent.runtime.results import TurnResult
 from agent.runtime.session import ToolSession
 from agent.runtime.task_inputs import InputConflict, TaskInputEvent, for_saver
@@ -21,7 +22,7 @@ from utils.trace import record
 
 
 class NativeRuntime:
-    def __init__(self, store, *, catalog=None, model_factory=None, narrator=None, application=None,
+    def __init__(self, store, *, catalog=None, model_factory=None, application=None,
                  model_io=None):
         self.store = store
         self.inputs = for_saver(store.saver)
@@ -32,7 +33,6 @@ class NativeRuntime:
             raise ValueError("Pass a catalog through the selected application")
         self.application = application
         self.model_factory = model_factory
-        self.narrator = narrator
         self.model_io = model_io
 
     @property
@@ -85,20 +85,30 @@ class NativeRuntime:
         if state.get("resume_task"):
             yield from self._resume_task(snapshot, state["resume_task"], config)
             return
-        if self.application.expired(snapshot.pending):
-            snapshot = replace(snapshot, pending_confirm=None, pending_action=None,
-                               approval=None)
         pending = (self.application.pending(snapshot.pending, config)
                    if self.store.available else None)
+        if snapshot.has_pending and (self.application.expired(snapshot.pending) or not pending
+                or not snapshot.run
+                or not approval.matches(snapshot.approval, pending.grant, config)):
+            self.store.clear_pending(config, (snapshot.pending_action or {}).get("jti"))
+            snapshot, pending = self.store.load(config), None
         principal = ((config or {}).get("configurable") or {}).get("principal")
         incoming = [*memory.bootstrap(
                         snapshot, state.get("messages") or [], principal,
                         tool_access=self.application.history_access),
                     *memory.request_messages(state.get("messages") or [])]
+        if pending:
+            session = self._session(config, snapshot, pending)
+            session.task = snapshot.run
+            session.receipts = list(snapshot.receipts)
+            prompt = self.application.prompt(incoming, principal)
+            record("native", "task_feedback", task_id=session.task["id"])
+            yield from self._feedback(session, prompt, pending, incoming)
+            return
         if (snapshot.unfinished and not snapshot.run.get("input_saved")
                 and recovery.allowed(snapshot, snapshot.run["id"], config)):
             incoming = [*snapshot.run["input"], *incoming]
-        prompt = self.application.prompt([*snapshot.messages, *incoming], principal, pending)
+        prompt = self.application.prompt([*snapshot.messages, *incoming], principal)
         session = self._session(config, snapshot, pending)
         session.turn_input = incoming
         session.task = recovery.new_run(config, incoming, state.get("task_id"))
@@ -116,32 +126,22 @@ class NativeRuntime:
             record("native", "task_paused", task_id=session.task["id"], reason="browser")
             yield outcome
             return
-        if session.committed_result is None:
-            approval_state = session.approval
-            if not (execution.get("pending_confirm") or execution.get("pending_event")
-                    or execution.get("noop_note")):
-                approval_state = snapshot.approval
-            self.store.save_turn(
-                config, [*incoming, *session.applied_messages], outcome.reply,
-                observations=session.observations,
-                execution=outcome.execution, pending=snapshot.pending, approval=approval_state,
-                context_update=session.state["context_update"],
-            )
         record("native", "turn_completed", chars=len(outcome.reply))
         yield outcome
 
+    def _feedback(self, session, prompt, pending, incoming):
+        if (session.config.get("configurable") or {}).get("task_inputs"):
+            yield TaskInputEvent({"task_id": session.task["id"], "ready": False})
+        result = yield from self._run(session, prompt, resume={
+            "kind": "feedback", "jti": pending.grant["jti"],
+            "model_input": stage([m for m in prompt[1:] if not memory.is_context(m)],
+                                 session.transient)}, approval_input=incoming)
+        yield result
+
     def _resume_task(self, snapshot, task_id, config):
-        if (snapshot.has_pending and recovery.allowed(replace(
-                snapshot, pending_confirm=None, pending_action=None), task_id, config)
-                and self.application.pending(snapshot.pending, config)):
-            result = TurnResult("当前操作仍等待你的确认。", {
-                **snapshot.pending, "task_id": task_id, "receipts": []})
-            if not snapshot.run.get("input_saved"):
-                self.store.save_turn(config, snapshot.run["input"], result.reply,
-                                     execution=result.execution, approval=snapshot.approval)
-            yield result
-            return
-        if not recovery.allowed(snapshot, task_id, config):
+        resumable = (replace(snapshot, pending_confirm=None, pending_action=None)
+                     if snapshot.has_pending else snapshot)
+        if not recovery.allowed(resumable, task_id, config):
             record("native", "task_resume_rejected", task_id=task_id)
             yield TurnResult("当前任务正在等待确认，请先处理确认卡，没有恢复执行。"
                              if snapshot.has_pending else
@@ -151,7 +151,8 @@ class NativeRuntime:
         incoming = snapshot.run["input"]
         prompt = self.application.prompt([*snapshot.messages, *incoming],
                                         config["configurable"]["principal"])
-        session = self._session(config, replace(snapshot, messages=[*snapshot.messages, *incoming]))
+        session = self._session(config, replace(snapshot, messages=[*snapshot.messages, *incoming]),
+                                self.application.pending(snapshot.pending, config))
         session.task = snapshot.run
         session.receipts = list(snapshot.receipts)
         record("native", "task_resumed", task_id=task_id, engine="langgraph")
@@ -172,13 +173,12 @@ class NativeRuntime:
             enable_thinking=effort != "none", streaming=True, stream_usage=True,
             max_tokens=settings.agent_output_tokens, **options
         )
-        adapt = partial(pending.transition, config=config, saver=self.saver) if pending else None
-        session = ToolSession(model, config, tools, domains, adapt, store=self.store,
-                           isolated=snapshot.has_pending,
+        session = ToolSession(model, config, tools, domains, store=self.store,
                            descriptions=self.application.descriptions,
                            middleware=self.application.middleware,
                            history_access=self.application.history_access)
         session.input_inbox = self.inputs
+        session.feedback_handler = partial(pending.feedback, saver=self.saver) if pending else None
         return session
 
     @staticmethod
@@ -189,7 +189,8 @@ class NativeRuntime:
                                     create=not (recover or resume is not None
                                                 or client_result is not None))
         inbox = session.input_inbox
-        session.inputs_active = bool(inbox and session.task and not session.isolated
+        session.inputs_active = bool(inbox and session.task
+                                     and not (recover and session.feedback_handler)
                                      and resume is None and (recover or ((session.config or {}).get(
                                          "configurable") or {}).get("task_inputs")))
         session.input_events_enabled = bool(session.inputs_active and ((session.config or {}).get(
@@ -214,9 +215,7 @@ class NativeRuntime:
                        else AIMessageChunk(content=chunk.content))
         finally:
             runner.close()
-            if session.inputs_active:
-                items = inbox.finish(session.task, session.state["applied_inputs"],
-                    paused=outcome is None or bool((outcome.execution or {}).get("client_action")))
+            items = _finish_inputs(session, outcome)
         if session.input_events_enabled:
             yield TaskInputEvent({"task_id": session.task["id"], "ready": False,
                                   "inputs": items})
@@ -246,13 +245,14 @@ class NativeRuntime:
             ),
             key="confirmed_execution",
         )
-        outcome = domain.execute(grant, config, self.saver)
+        matching = ((snapshot.pending_action or {}).get("jti") == grant.get("jti")
+                    and approval.matches(snapshot.approval, grant, config))
+        execution_config = (config if matching else {**config, "configurable": {
+            **config["configurable"], "confirmation_replay_only": True}})
+        outcome = domain.execute(grant, execution_config, self.saver)
         execution = {key: value for key, value in outcome.items() if key != "reply"}
-        matching = (snapshot.pending_action or {}).get("jti") == grant.get("jti")
-        retained = None if matching and execution.get("receipts") else snapshot.pending
         result = TurnResult(outcome["reply"], execution)
-        modern = bool(matching and execution.get("receipts")
-                      and approval.matches(snapshot.approval, grant, config))
+        modern = bool(matching and execution.get("receipts"))
         if modern:
             emit(config, "操作已完成，正在继续处理剩余请求…", key="confirmation_resume")
             record("native", "confirmation_resumed", engine="langgraph")
@@ -266,28 +266,6 @@ class NativeRuntime:
                                                        state.get("messages") or [], result)
             yield result
             return
-        if snapshot.run:
-            if matching and execution.get("receipts"):
-                from agent.runtime.results import receipt_observations
-
-                self.store.clear_pending(config, grant["jti"],
-                                         observations=receipt_observations(result))
-            if result.reply:
-                yield AIMessageChunk(content=result.reply)
-            yield result
-            return
-        observations = []
-        if execution.get("receipts"):
-            from agent.runtime.results import receipt_observations
-
-            observations = receipt_observations(result)
-            if self.narrator is not None:
-                result = TurnResult(self.narrator(result, config), execution)
-        self.store.save_turn(
-            config, state.get("messages") or [], result.reply, execution=execution,
-            pending=retained, observations=observations,
-            approval=None if matching and execution.get("receipts") else snapshot.approval,
-        )
         if result.reply:
             yield AIMessageChunk(content=result.reply)
         yield result
@@ -317,11 +295,24 @@ class NativeRuntime:
 def build(*, resources: ExitStack) -> NativeRuntime:
     from agent import checkpoint
     from agent.products.blog.application import BlogApplication
-    from agent.products.blog.narration import narrate
     from agent.runtime.native_store import NativeConversationStore
 
     return NativeRuntime(
         NativeConversationStore(checkpoint.build_checkpointer(resources=resources)),
-        narrator=narrate, application=BlogApplication(),
+        application=BlogApplication(),
         model_io=resources.enter_context(ModelIO()),
     )
+
+
+def _finish_inputs(session, outcome):
+    if not session.input_inbox or not session.task:
+        return []
+    execution = (outcome.execution or {}) if outcome else {}
+    try:
+        return session.input_inbox.finish(session.task, session.state["applied_inputs"],
+            paused=outcome is None or bool(execution.get("client_action")
+                                          or execution.get("pending_confirm")))
+    except InputConflict as exc:
+        if str(exc) != "task_not_available":
+            raise
+        return []

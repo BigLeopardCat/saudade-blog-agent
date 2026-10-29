@@ -58,8 +58,6 @@ def restore_session(session, state):
                     calls[message.tool_call_id], message))
     session.state["result_chars"] = max(session.state["result_chars"], result_chars)
     session.state["effects"] = effects | session.state["effects"]
-    if session.state["effects"].get("pending_event"):
-        session.outcome_adapter = None
     # A completed child may precede the interrupted parent commit.
     last = messages[-1] if messages else None
     if session.outcome is None and isinstance(last, AIMessage) and not last.tool_calls:

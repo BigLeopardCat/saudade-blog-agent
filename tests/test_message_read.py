@@ -107,7 +107,7 @@ def test_replacing_and_cancelling_message_cards_revokes_old_grants(mailbox, monk
                                                     "args": {}, "id": "load"}]),
                 AIMessage(content="", tool_calls=[{"name": tool, "args": args, "id": "call"}])]
             if tool == "cancel_pending_operation":
-                responses.append(AIMessage(content="旧操作已取消。"))
+                responses = [AIMessage(content="旧操作已取消。")]
             self.responses = iter(responses)
 
         def bind_tools(self, *args, **kwargs):

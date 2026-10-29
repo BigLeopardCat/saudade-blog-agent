@@ -160,3 +160,68 @@ def test_framework_turn_commit_survives_saver_reconstruction(inboxes, monkeypatc
     assert result.reply == "已核实的测试答复。" and len(calls) == 1
     assert [m.content for m in saved.messages] == ["回答一次", result.reply]
     assert not saved.unfinished and rebuilt.get_state(config()).values["turn"] is None
+
+
+@pytest.mark.parametrize("phase", ["commit", "feedback"])
+def test_actual_process_exit_recovers_durable_task_once(inboxes, tmp_path, monkeypatch, phase):
+    import secrets
+    import subprocess
+    import sys
+    from pathlib import Path
+
+    from _own_support import config
+    from langchain_core.messages import AIMessage, HumanMessage
+    from langgraph.checkpoint.postgres import PostgresSaver
+    from test_confirmation_continuation import Model
+
+    from agent import confirm, idem_pg
+    from agent.runtime import checkpoint_store, writes
+    from agent.runtime.native import NativeRuntime
+    from agent.runtime.native_store import NativeConversationStore
+    from eval.own_fixtures import favorite_backend
+
+    pool = inboxes[0].storage.pool
+    PostgresSaver(pool).setup()
+    with pool.connection() as conn:
+        checkpoint_store.setup(conn)
+        idem_pg.initialize(conn)
+    secret = secrets.token_urlsafe(32)
+    root = Path(__file__).resolve().parents[2]
+    marker = tmp_path / "revocation-marker"
+    env = {"PATH": os.environ.get("PATH", ""), "PYTHONPATH": str(root),
+           "SAUDADE_IGNORE_ENV_FILE": "1", "CHECKPOINT_DSN": "", "RAG_HYBRID_ENABLED": "0",
+           "TRACE_DIR": str(tmp_path / "traces"),
+           "SAUDADE_TASK_INPUT_TEST_DSN": os.environ["SAUDADE_TASK_INPUT_TEST_DSN"],
+           "SAUDADE_CRASH_SCHEMA_OPTIONS": pool.kwargs["options"],
+           "SAUDADE_CRASH_SIGNING_SECRET": secret}
+    child = subprocess.run([sys.executable, str(root / "tests/_pg_lifecycle_worker.py"),
+                            phase, str(marker)], cwd=tmp_path, env=env,
+                           capture_output=True, text=True, timeout=45)
+    assert child.returncode == 73, child.stderr
+    store = NativeConversationStore(PostgresSaver(pool))
+    saved = store.load(config())
+    assert saved.unfinished and saved.run["id"] == "crash-task"
+    model = Model(AIMessage(content="只撤销本操作，没有断言当前收藏状态。"))
+    rebuilt = NativeRuntime(store, model_factory=lambda **_: model)
+    with favorite_backend() as state:
+        monkeypatch.setattr(confirm.settings, "jwt_secret", secret)
+        if phase == "feedback":
+            assert marker.read_text() == "revoked"
+            old = confirm.verify(saved.pending_confirm["token"], 7, 42)
+            domain = rebuilt.application.confirmation(old)
+            name, args = domain.validate(old, config())
+            row = writes.ledger_for(store.saver).lookup(writes.operation_key(old, name, args))
+            assert row is not None and "confirmation_revoked" in str(row)
+        result = list(rebuilt.stream_events({"resume_task": "crash-task"}, config()))[-1]
+        assert not [request for request in state["requests"] if request.method != "GET"]
+    final = NativeConversationStore(PostgresSaver(pool)).load(config())
+    assert not final.unfinished and final.run is None
+    assert len(model.prompts) == (0 if phase == "commit" else 1)
+    if phase == "commit":
+        assert [message.content for message in final.messages] == [
+            "准备任务", "进程退出后保留的答复。"]
+        assert result.reply == "进程退出后保留的答复。"
+    else:
+        assert not final.has_pending
+        assert sum(isinstance(message, HumanMessage) and
+                   message.content == "先不收藏，解释一下。" for message in final.messages) == 1

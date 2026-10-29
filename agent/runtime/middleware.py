@@ -119,9 +119,6 @@ class SessionMiddleware(AgentMiddleware):
         saved = capture(session)
         if session.outcome is not None:
             saved["jump_to"] = "end"
-        elif session.isolated and session.state["effects"].get("pending_event"):
-            # Finish the isolated graph before transferring its standard state.
-            saved["jump_to"] = "end"
         elif session.recovering and any(call["id"] not in self.cached for call in self.calls):
             # A lifecycle boundary can be saved halfway through a native batch.
             session.budget.attempt_tools(sum(call["id"] not in self.cached for call in self.calls))
@@ -149,8 +146,11 @@ class SessionMiddleware(AgentMiddleware):
         proposal = (session.outcome.execution or {}) if session.outcome else {}
         if facts["jti"] != proposal.get("pending_action", {}).get("jti"):
             raise ValueError("执行回执与 Agent 待确认操作不一致")
+        session.state["effects"]["pending_event"] = None
         session.state["effects"].update({key: value for key, value in facts["execution"].items()
                                           if key != "receipts"})
+        if facts.get("kind") == "feedback":
+            return self._feedback(state, facts)
         messages = list(state["messages"])
         index = next(i for i in range(len(messages) - 1, -1, -1)
                      if isinstance(messages[i], AIMessage) and messages[i].tool_calls)
@@ -180,6 +180,25 @@ class SessionMiddleware(AgentMiddleware):
             self._next = 0
             saved["jump_to"] = "tools"
         return saved
+
+    def _feedback(self, state, facts):
+        session = self.session
+        messages = []
+        replacements = []
+        for message in state["messages"]:
+            if isinstance(message, ToolMessage) and (
+                    message.tool_call_id == session.state["awaiting_call"]
+                    or (message.artifact or {}).get("phase") == "deferred"):
+                message = message.model_copy(update={"content": json.dumps({
+                    "status": "not_executed", "reason": "superseded_by_user_feedback"}),
+                    "artifact": None})
+                replacements.append(message)
+            messages.append(message)
+        extra = facts.get("model_input", facts.get("input")) or []
+        self.exchange = [*messages, *extra]
+        self.calls, self.cached = [], {}
+        session.outcome, session.state["awaiting_call"] = None, None
+        return {**capture(session), "resume": None, "messages": [*replacements, *extra]}
 
     def wrap_model_call(self, request, handler):
         session = self.session

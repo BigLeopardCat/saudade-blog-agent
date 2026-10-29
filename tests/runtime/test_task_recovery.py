@@ -4,6 +4,7 @@ import threading
 import uuid
 
 import pytest
+from _conversation_seed import seed_turn
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from langchain_core.tools import tool
 from langgraph.checkpoint.memory import InMemorySaver
@@ -192,7 +193,7 @@ def test_explicit_regeneration_discards_only_the_unfinished_cursor():
     stop, saver = threading.Event(), InMemorySaver()
     selected = NativeRuntime(NativeConversationStore(saver),
                              model_factory=lambda **_: Responses(AgentCancelled()))
-    selected.store.save_turn(cfg(stop), [HumanMessage(content="之前的问题")], "之前的答复")
+    seed_turn(selected.store, cfg(stop), [HumanMessage(content="之前的问题")], "之前的答复")
     before = selected.store.load(cfg(stop)).messages
     with pytest.raises(AgentCancelled):
         list(selected.stream_events({"messages": [HumanMessage(content="重新生成这个问题")],
