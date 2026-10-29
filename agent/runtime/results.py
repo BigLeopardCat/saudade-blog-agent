@@ -40,3 +40,13 @@ def pause_notice(result):
         "pending_confirm": {**popup, "q": popup["q"] + "\n" + notice},
         "pending_action": {**action, "question": action["question"] + "\n" + notice},
     })
+
+
+def cancellation_fact():
+    """Revocation proves this operation did not execute, not current entity state."""
+    return {"status": "cancelled", "scope": "operation", "executed": False,
+            "business_state": "not_observed"}
+
+
+def cancellation_content(reply):
+    return json.dumps({**cancellation_fact(), "result": reply}, ensure_ascii=False)
