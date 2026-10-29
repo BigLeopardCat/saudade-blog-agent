@@ -324,6 +324,27 @@ def test_failure_after_resumed_dispatch_cannot_repeat_browser_or_business_action
     replay = run(selected, grant=grant)
     assert len(state["writes"]) == 1
     assert all("cmd" not in receipt for receipt in replay.execution["receipts"])
+    assert selected.store.load(config()).run == saved.run
+    selected.model_factory = lambda **_: Model(AIMessage(content="已收藏并进入文章页面。"))
+    resumed = list(selected.stream_events({"resume_task": saved.run["id"]}, config()))[-1]
+    assert resumed.reply == "已收藏并进入文章页面。"
+    assert len(state["writes"]) == 1 and not selected.store.load(config()).unfinished
+
+
+def test_framework_owns_preparation_and_confirmation_commits(backend, monkeypatch):
+    state, _ = backend
+    selected = runtime(Model())
+
+    def maintenance_must_not_run(*args, **kwargs):
+        pytest.fail("framework execution used conversation maintenance")
+
+    monkeypatch.setattr(selected.store, "save_turn", maintenance_must_not_run)
+    _, grant, _ = prepare(selected, FAVORITE)
+    selected.model_factory = lambda **_: Model(AIMessage(content="已收藏。"))
+    result = run(selected, grant=grant)
+    assert result.reply == "已收藏。" and len(state["writes"]) == 1
+    assert not selected.store.load(config()).unfinished
+    assert selected.store.load(config()).messages[-1].content == result.reply
 
 
 def test_noop_sibling_does_not_drop_remaining_preparation(backend):

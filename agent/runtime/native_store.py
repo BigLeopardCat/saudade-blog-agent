@@ -61,6 +61,8 @@ class NativeConversationStore:
         if (execution or {}).get("client_action"):
             raise ValueError("cannot_save_incomplete_browser_turn")
         previous = self.load(config)
+        if previous.unfinished and (not approval or approval != previous.approval):
+            raise ValueError("cannot_maintain_active_task")
         principal = ((config or {}).get("configurable") or {}).get("principal")
         current = memory.turn_messages(messages, observations, reply, principal)
         saved = {"messages": memory.checkpoint_messages(
