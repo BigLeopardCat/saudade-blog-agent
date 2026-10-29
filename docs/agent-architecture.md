@@ -238,7 +238,8 @@ flowchart LR
 1. `agent/main.py` 装配应用；聊天路由从请求所属应用获取运行时和资源，
    `agent/api/turns.py` 将已验证的 principal、会话坐标和预算绑定到原生调用。
 2. `NativeRuntime.stream_events` 从 `ConversationStore` 恢复消息与待确认状态，并交给 `ToolSession`。
-3. 会话先发送按需领域目录；模型直接返回标准 LangChain tool call，代码检查权限、参数、确认和业务版本。账号名录与账号操作在同一领域，不必加载文章管理工具来核实账号。
+3. 会话发送授权基础工具与按需领域目录；模型直接返回标准 LangChain tool call，代码检查权限、参数、确认和业务版本。
+   管理员的有界账号候选读取属于基础工具，账号写入仍需加载账号领域，不必加载文章管理工具来核实账号。
 4. 只读工具直接产生受边界约束的结果；写工具先准备签名预览，由同一 Agent 禁止工具调用并交付答复，
    随后进入持久审批等待。确认后的下一轮由签名执行入口调用领域事务；见 [ADR-0033](adr/adr-0033-task-outcome-tracking.md)。
 5. 传输层把正文增量、进度、命令、确认卡、receipt 和结束帧编码为现有 HTTP/SSE 协议。最终正文只在 `TurnResult` 保存一次。
