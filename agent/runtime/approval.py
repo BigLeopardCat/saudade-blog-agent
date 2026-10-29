@@ -19,7 +19,6 @@ class ConversationState(TypedDict, total=False):
     approved_result: dict | None
     receipts: list
     run: dict | None
-    tool_state: dict | None
 
 
 def binding(config):

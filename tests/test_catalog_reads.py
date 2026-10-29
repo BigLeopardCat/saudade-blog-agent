@@ -192,7 +192,8 @@ def test_account_lookup_and_history_restore_do_not_load_article_preparations(bac
         list(runtime.stream_events({"messages": [HumanMessage(content=message)]}, cfg))
     assert len(backend["requests"]) == 1
     assert "list_accounts" not in model.used_menus[0]
-    assert all({"list_accounts", "prepare_account_role"} <= menu for menu in model.used_menus[1:])
+    assert all({"list_accounts", "prepare_account_role"} <= menu for menu in model.used_menus[1:3])
+    assert "list_accounts" not in model.used_menus[-1]
     assert all(not {"list_admin_notes", "prepare_article_state", "prepare_article_tags"} & menu
                for menu in model.menus)
     fact = next(message for message in model.prompts[-1] if isinstance(message, ToolMessage))
