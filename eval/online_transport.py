@@ -178,7 +178,7 @@ class OnlineTransport:
                     raise EvaluationError("event after done")
                 kind, data = event.event, json.loads(event.data)
                 if kind not in {"text", "command", "receipts", "confirmation", "pending",
-                                "progress", "done", "error"}:
+                                "progress", "task_input", "done", "error"}:
                     raise EvaluationError(f"unknown SSE event {kind!r}")
                 if kind in {"text", "progress", "command", "confirmation"}:
                     if first["first_visible_s"] is None:
