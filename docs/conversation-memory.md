@@ -61,3 +61,5 @@ Conversation 保存会话记忆；Task 保存可恢复执行坐标并累计用�
 离线桩验证数据链路和边界，不代替真实模型任务验收。线上评测必须覆盖跨压缩事实回忆，并同时记录摘要 token、首个可见事件、首个正文和端到端延迟。
 
 框架接口参见 [LangChain short-term memory](https://docs.langchain.com/oss/python/langchain/short-term-memory) 与 [SummarizationMiddleware](https://docs.langchain.com/oss/python/langchain/middleware/built-in#summarization)。
+
+准备确认和撤销也作为历史工具事实保留：准备结果明确为 `awaiting_confirmation`，不表示执行成功；确认凭据和待执行计划只留在受控状态中，不进入历史模型文本。历史读取复用领域登记检查当前身份权限，按钮撤销与状态清理在同一提交内记下事实，重复点击不追加重复记录。

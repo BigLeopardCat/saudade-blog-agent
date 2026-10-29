@@ -262,12 +262,12 @@ def observation(call, result):
     """Keep the source tool call paired with a bounded historical excerpt."""
     if isinstance(result, ToolMessage):
         artifact = result.artifact if isinstance(result.artifact, dict) else {}
-        if result.status != "success" or artifact.get("kind") != "ok":
+        if result.status != "success" or artifact.get("kind") not in ("ok", "prepared"):
             return []
         result = compact(result)
         body = _observation_excerpt(str(result.content))
         return [AIMessage(content="", tool_calls=[call]), result.model_copy(update={
-            "content": body, "artifact": {"kind": "ok"}})]
+            "content": body, "artifact": {"kind": artifact["kind"]}})]
     if getattr(result, "kind", None) not in ("ok", "empty", "not_found"):
         return []
     body = _observation_excerpt(str(result))

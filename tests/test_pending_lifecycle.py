@@ -1,5 +1,6 @@
 """Cancellation revokes an old approval without truncating the current request."""
 
+import json
 import secrets
 import threading
 import time
@@ -243,3 +244,46 @@ def test_verified_pending_can_be_cancelled_without_loading_another_domain(pendin
     assert not result.execution.get("pending_confirm")
     assert len(model.prompts) == 2
     assert_revoked(selected, cfg, grant, requests)
+
+
+def test_preparation_and_chat_cancellation_survive_reconstruction(pending_task):
+    runtime, cfg, _, _, _, token, _, _ = pending_task
+    model = Model(batch(CANCEL), AIMessage(content="旧操作已取消。"))
+    selected = runtime(model)
+    execute(selected, cfg, text="取消这次收藏")
+    followup = Model(AIMessage(content="欢迎回来。"))
+    rebuilt = runtime(followup)
+    list(rebuilt.stream_events({"messages": [HumanMessage(content="只用一句话欢迎我")],
+                               "task_id": "greeting"}, cfg))
+    for prompt in (model.prompts[0], followup.prompts[0]):
+        prepared = [m for m in prompt if isinstance(m, ToolMessage)
+                    and m.tool_call_id == "prepare-original"]
+        assert len(prepared) == 1
+        assert json.loads(prepared[0].content)["status"] == "awaiting_confirmation"
+        assert "19" in json.loads(prepared[0].content)["result"]
+        assert prepared[0].artifact == {"kind": "prepared"}
+        assert token not in str(prompt)
+    observed = [m for m in followup.prompts[0] if isinstance(m, ToolMessage)]
+    assert sum(m.tool_call_id == CANCEL["id"] and "取消" in m.content for m in observed) == 1
+    assert any(isinstance(m, HumanMessage) and m.content == "取消这次收藏"
+               for m in followup.prompts[0])
+    assert not rebuilt.store.load(cfg).has_pending
+
+
+def test_button_cancellation_keeps_one_fact_and_never_recreates_pending_state(pending_task):
+    from agent.products.blog.confirmation import cancel
+
+    runtime, cfg, _, selected, grant, token, _, _ = pending_task
+    result = cancel(selected, grant, cfg)
+    assert result["cancelled"]
+    before = list(selected.store.load(cfg).messages)
+    assert cancel(selected, grant, cfg) == result
+    assert selected.store.load(cfg).messages == before
+    followup = Model(AIMessage(content="欢迎回来。"))
+    rebuilt = runtime(followup)
+    list(rebuilt.stream_events({"messages": [HumanMessage(content="你好")],
+                               "task_id": "after-button"}, cfg))
+    tools = [m for m in followup.prompts[0] if isinstance(m, ToolMessage)]
+    assert sum(m.name == "cancel_pending_operation" and "取消" in m.content for m in tools) == 1
+    assert token not in str(followup.prompts[0])
+    assert not rebuilt.store.load(cfg).has_pending
