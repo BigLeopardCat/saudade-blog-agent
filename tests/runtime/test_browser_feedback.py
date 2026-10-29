@@ -1,6 +1,7 @@
 """Browser acknowledgements resume real framework interrupts without re-running intent."""
 
 import pytest
+from _browser_support import Model, acknowledge
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from langgraph.checkpoint.memory import InMemorySaver
 
@@ -9,23 +10,6 @@ from agent.principal import SOURCE_ASSERTION, Principal
 from agent.runtime.native import NativeRuntime
 from agent.runtime.native_store import NativeConversationStore
 from agent.transport import iter_transport_events
-
-
-class Model:
-    max_tokens = 128
-
-    def __init__(self):
-        self.calls = []
-
-    def bind_tools(self, *args, **kwargs):
-        return self
-
-    def invoke(self, messages, **kwargs):
-        self.calls.append(messages)
-        if len(self.calls) == 1:
-            return AIMessage(content="", tool_calls=[{
-                "name": "navigate_page", "args": {"path": "/guestbook"}, "id": "navigation"}])
-        return AIMessage(content="页面操作结果已收到。")
 
 
 @pytest.fixture
@@ -43,11 +27,6 @@ def navigation():
                                          "task_id": "page-task"}, config))[-1]
     command = result.execution["client_action"]
     return runtime, model, config, result, command
-
-
-def acknowledge(config, command, status="completed", path="/guestbook"):
-    return {"configurable": {**config["configurable"], "browser_result": {
-        "command_id": command["command_id"], "status": status, "path": path}}}
 
 
 def test_browser_continuation_keeps_progress_without_repeating_navigation():
