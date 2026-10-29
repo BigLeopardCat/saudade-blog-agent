@@ -29,6 +29,25 @@ def test_partial_cache_coverage_uses_only_measured_denominator(tmp_path):
     assert "费用未知" in token_cost_report._row("test", row, (1, 2, 0.1))
 
 
+def test_discovery_measurements_count_requests_not_imaginary_extra_calls(tmp_path):
+    events = [{"node": "native", "event": name, **fields} for name, fields in [
+        ("llm_start", {}), ("tool_requested", {}),
+        ("tool_error", {"reason": "tool_not_loaded"}),
+        ("tool_requested", {}), ("tool_discovery", {"domain": "a"}), ("load_domain", {}),
+        ("tool_requested", {}), ("tool_discovery", {"domain": "b"}), ("load_domain", {}),
+        ("llm_start", {}), ("llm_start", {}),
+        ("tool_requested", {}), ("tool_discovery", {"already_loaded": True}),
+        ("llm_start", {}), ("tool_requested", {}),
+        ("tool_error", {"reason": "unknown_tool"}), ("tool_error", {"reason": {}}),
+        ("tool_requested", {}), ("tool_discovery", {})]]
+    # Two loaders in one model response lead to one following model call. A final
+    # discovery with no following call must not invent one or claim causal overhead.
+    row = request_metrics.collect([_trace(tmp_path, "discovery", events=events)])["groups"][0]
+    assert row["tool_requests"] == 6 and row["discovery_requests"] == 4
+    assert row["domains_loaded"] == 2 and row["post_discovery_model_calls"] == 2
+    assert row["inactive_tool_requests"] == row["unknown_tool_requests"] == 1
+
+
 @pytest.mark.parametrize("value", [None, True, -1, 1.5, "10"])
 def test_invalid_usage_is_unmeasured(value):
     row = usage.totals([{"event": "llm_done", "input": value}])

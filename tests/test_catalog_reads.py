@@ -23,7 +23,8 @@ def backend(monkeypatch):
              "isTop": 0, "categoryId": 9, "categoryName": "分类", "tags": [
                  {"id": 1, "level": 1, "name": "一级"}, {"id": 1, "level": 2, "name": "二级"}],
              "content": "secret article body"} for i in range(1, 8)],
-             "accounts": [{"id": i, "username": "account_" + str(i), "role": "user",
+             "accounts": [{"id": i, "username": "account_" + str(i), "nickname": "昵称" + str(i),
+             "role": "user",
              "frozen": False, "muted": False, "mutedUntil": None, "quotaUsed": 5,
              "quotaLimit": 500, "password": secrets.token_urlsafe(24), "email": "private"}
              for i in range(1, 8)]}
@@ -40,6 +41,10 @@ def backend(monkeypatch):
             rows = [row for row in rows if row["id"] == int(params["id"])]
         if "username" in params:
             rows = [row for row in rows if row["username"] == params["username"]]
+        if "query" in params:
+            query = params["query"].casefold()
+            rows = [row for row in rows if any(query in row[key].casefold()
+                    for key in ("username", "nickname"))]
         if "category" in params:
             rows = [row for row in rows if row["categoryName"] == params["category"]]
         size, page = int(params["page_size"]), int(params["page"])
@@ -91,6 +96,33 @@ def test_exact_name_and_category_filters_are_transported_and_checked(backend):
     backend["override"] = {"code": 200, "data": backend["accounts"][:1], "total": 1}
     assert accounts(account_id=2).kind == "unavailable"
     assert accounts(username="account_2").kind == "unavailable"
+
+
+def test_nickname_candidates_keep_login_identity_and_literal_query_separate(backend):
+    backend["accounts"][0]["nickname"] = "Display_%"
+    backend["accounts"][1]["nickname"] = "Display_AX"
+    result = json.loads(str(accounts(query="DISPLAY_%")))
+    assert result["total"] == 1
+    assert result["items"][0]["nickname"] == "Display_%"
+    assert result["items"][0]["username"] == "account_1"
+    assert result["items"][0]["id"] == 1
+    assert backend["requests"][-1].url.params["query"] == "DISPLAY_%"
+    assert json.loads(str(accounts(username="Display_%")))["total"] == 0
+    assert json.loads(str(accounts(query="Display", account_id=3)))["total"] == 0
+
+
+def test_full_login_names_support_the_same_length_as_write_targets(backend):
+    backend["accounts"][0]["username"] = name = "a" * 255
+    assert json.loads(str(accounts(username=name)))["items"][0]["username"] == name
+    before = len(backend["requests"])
+    with pytest.raises(ValidationError):
+        accounts(username="a" * 256)
+    assert len(backend["requests"]) == before
+
+
+def test_missing_nickname_is_not_silently_accepted_as_the_current_api(backend):
+    del backend["accounts"][0]["nickname"]
+    assert accounts(account_id=1).kind == "unavailable"
 
 
 @pytest.mark.parametrize("field,value", [("role", "superadmin"), ("role", "invented"),

@@ -34,7 +34,8 @@ def backend(role):
         elif path in {"/api/public/activity/talks", "/api/protect/comments"}:
             data = []
         elif path == "/api/protected/accounts" and role in {"admin", "superadmin"}:
-            data = [{"id": 20, "username": "synthetic_author_20", "role": "user",
+            data = [{"id": 20, "username": "synthetic_author_20", "nickname": "合成作者",
+                     "role": "user",
                      "mutedUntil": None, "frozen": False, "muted": False,
                      "quotaUsed": 0, "quotaLimit": 500}]
         elif path == "/api/public/board":

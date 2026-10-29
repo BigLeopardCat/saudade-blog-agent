@@ -33,6 +33,8 @@ def append_result(session, request, handler, prompt, round_index, attachments):
     record("native", "tool_requested", name=name, call_id=call["id"])
     if name in session.loaders:
         domain = session.loaders[name]
+        record("native", "tool_discovery", domain=domain, round=round_index,
+               already_loaded=domain in session.state["loaded"])
         if domain not in session.state["loaded"]:
             session.tools.update(session.domains[domain])
             session.state["loaded"].append(domain)
@@ -43,11 +45,13 @@ def append_result(session, request, handler, prompt, round_index, attachments):
                                   name=name, tool_call_id=call["id"]))
         return None
     if name not in session.tools:
-        body = json.dumps({"error": "unknown_tool",
-                           "available_tools": sorted({*session.tools, *session.loaders})})
+        required = session.tool_owners.get(name)
+        reason = "tool_not_loaded" if required else "unknown_tool"
+        body = json.dumps({"error": reason, "tool": name,
+                           "discovery_tools": required or list(session.loaders)})
         prompt.append(ToolMessage(content=body, name=name,
                                   tool_call_id=call["id"], status="error"))
-        record("native", "tool_error", name=name, reason="unknown_tool")
+        record("native", "tool_error", name=name, reason=reason, round=round_index)
         return None
     if session.state["result_chars"] >= session.result_limit:
         session._budget_stop("result_budget")
