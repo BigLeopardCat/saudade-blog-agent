@@ -39,7 +39,7 @@ class Read:
         return "作者资料"
 
 
-def test_tool_error_provides_current_menu_without_repeating_io():
+def test_tool_error_provides_authorized_discovery_without_repeating_io():
     read = Read()
     model = Model([call("load_site_info_tools"), call("invented"), call(read.name),
                    AIMessage(content="作者资料")])
@@ -50,8 +50,9 @@ def test_tool_error_provides_current_menu_without_repeating_io():
     assert error.status == "error"
     data = json.loads(error.content)
     assert data["error"] == "unknown_tool"
-    assert data["available_tools"] == [read.name, "load_site_info_tools"]
-    assert set(data["available_tools"]) == {
+    assert data["tool"] == "invented"
+    assert data["discovery_tools"] == ["load_site_info_tools"]
+    assert set(data["discovery_tools"]) <= {
         item["function"]["name"] for item in model.kwargs["tools"]}
 
 

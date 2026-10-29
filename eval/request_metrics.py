@@ -89,6 +89,12 @@ def summary(doc):
             **action_metrics.timings(events), **usage.totals(events)}
 
 
+def _discovery_totals(rows):
+    return {field: sum(row[field] for row in rows) for field in (
+        "tool_requests", "discovery_requests", "domains_loaded",
+        "inactive_tool_requests", "unknown_tool_requests", "post_discovery_model_calls")}
+
+
 def collect(paths):
     groups = defaultdict(list)
     unreadable = 0
@@ -114,10 +120,7 @@ def collect(paths):
                        "requests": len(rows), "with_reply": sum(r["has_reply"] for r in rows),
                        "end_reasons": dict(Counter(r["end_reason"] for r in rows)),
                        "started_calls": sum(r["started_calls"] for r in rows),
-                       **{field: sum(row[field] for row in rows) for field in (
-                           "tool_requests", "discovery_requests", "domains_loaded",
-                           "inactive_tool_requests", "unknown_tool_requests",
-                           "post_discovery_model_calls")},
+                       **_discovery_totals(rows),
                        "errored_calls": sum(r["errored_calls"] for r in rows),
                        "handoff_reasons": dict(Counter(reason for r in rows
                                                         for reason in r["handoff_reasons"])),
