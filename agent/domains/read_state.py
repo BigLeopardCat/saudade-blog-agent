@@ -94,7 +94,7 @@ class ReadState:
             return TurnResult(text, {"noop_note": text, "noop_text": text, "receipts": []})
         labels = [f"{key}《{str(rows[key].get('title') or '无标题')[:80]}》" for key in unread]
         target = f"将{self.label} " + "、".join(labels) + " 标记为已读"
-        question = target + f"？已读不可撤销；确认后新到的{self.label}不包含在内。"
+        question = target + f"？仅处理本次确认的编号；之后新到的{self.label}不包含在内。"
         if len(question) > 500:
             return base.unavailable("所选内容过多，无法完整展示确认范围，请分批选择。")
         principal, cid = writes.bound_context(config)

@@ -169,9 +169,10 @@ def material(case, results):
             "execution_receipts": result.get("exec_rows", []),
             "proposed_actions_not_facts": [spec for payload in result.get("confirm_payloads", [])
                                            for spec in payload.get("specs", [])],
-            "confirmation_previews_to_review": [event["data"]["q"]
+            "confirmation_previews_to_review": [*result.get("confirmation_previews", []),
+                                                *(event["data"]["q"]
                                                 for event in result.get("http_events", [])
-                                                if event.get("event") == "confirmation"],
+                                                if event.get("event") == "confirmation")],
             "assistant_reply_to_review": result["text"],
         })
     data = {"turns": turns,

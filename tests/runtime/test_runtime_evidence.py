@@ -42,7 +42,8 @@ def test_actual_bound_schemas_and_caller_are_recorded_without_modifying_model_in
         assert actual == menus[-1]
         assert not any("admin_account_actions" in item["function"]["name"] for item in actual)
         assert "tool_contract" not in str(prompts[0])
-        trusted = json.loads(prompts[0][0].content.split("运行时能力（可信数据）：")[1])
+        trusted = json.JSONDecoder().raw_decode(
+            prompts[0][0].content.split("运行时能力（可信数据）：")[1])[0]
         assert trusted["caller"]["role"] == "普通用户" and "identity" not in trusted
         assert trusted["permissions"] == context["permissions"]
     finally:

@@ -33,7 +33,7 @@ class Model:
 
 
 def caller(prompt, marker="运行时能力（可信数据）："):
-    data = json.loads(prompt[0].content.split(marker, 1)[1])
+    data = json.JSONDecoder().raw_decode(prompt[0].content.split(marker, 1)[1])[0]
     return data["caller"] if "caller" in data else data
 
 

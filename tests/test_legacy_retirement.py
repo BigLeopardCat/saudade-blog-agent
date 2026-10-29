@@ -49,6 +49,7 @@ class Model:
             call('load_favorites_info_tools', {}),
             call('list_my_favorites', {}),
             call('prepare_favorite_change', {'action':'add', 'article_id':19}),
+            AIMessage(content='请核对确认卡。'),
         ])
     def bind_tools(self, tools, **kwargs):
         return self

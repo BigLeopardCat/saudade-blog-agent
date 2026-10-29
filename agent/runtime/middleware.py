@@ -14,6 +14,7 @@ from langgraph.types import Command
 
 from agent.llm_usage import usage_fields
 from agent.runtime import memory, trace_context
+from agent.runtime.approval_response import finish as finish_approval_response
 from agent.runtime.budget import BudgetExceeded, native_call
 from agent.runtime.control import AgentCancelled, model_options
 from agent.runtime.execution_state import adopt_command, capture, restore
@@ -21,7 +22,7 @@ from agent.runtime.memory_media import hydrate, stage
 from agent.runtime.message_content import text_content
 from agent.runtime.progress import emit
 from agent.runtime.prompt_budget import fit_history
-from agent.runtime.results import pause_notice
+from agent.runtime.results import TurnResult, pause_notice, receipt_observations
 from agent.runtime.task_input_policy import additions as input_additions
 from agent.runtime.task_input_policy import model_messages, replace_unpublished_proposal
 from agent.runtime.tool_execution import append_result
@@ -117,7 +118,8 @@ class SessionMiddleware(AgentMiddleware):
         if replacement:
             return {**capture(session), "messages": replacement}
         saved = capture(session)
-        if session.outcome is not None:
+        if session.outcome is not None and not (
+                session.outcome.execution or {}).get("pending_confirm"):
             saved["jump_to"] = "end"
         elif session.recovering and any(call["id"] not in self.cached for call in self.calls):
             # A lifecycle boundary can be saved halfway through a native batch.
@@ -179,6 +181,11 @@ class SessionMiddleware(AgentMiddleware):
             session.budget.attempt_tools(len(deferred))
             self._next = 0
             saved["jump_to"] = "tools"
+        if not deferred:
+            # The approval explanation is an assistant turn after the prepared
+            # tool response. Append fresh execution evidence after that turn.
+            saved["messages"].extend(receipt_observations(TurnResult(
+                facts["reply"], facts["execution"])))
         return saved
 
     def _feedback(self, state, facts):
@@ -215,19 +222,23 @@ class SessionMiddleware(AgentMiddleware):
         model = request.model
         selected_model = _model_name(model)
         emit(session.config, "正在处理请求…", key="model_start")
-        trace_context.tools(session.menu, session.traced_contracts)
+        reviewing = bool(session.outcome and (
+            session.outcome.execution or {}).get("pending_confirm"))
+        menu = session.menu
+        trace_context.tools(menu, session.traced_contracts)
         started, response, invoked = time.monotonic(), None, False
-        tool_choice = "auto" if session.menu else None
+        tool_choice = ("none" if reviewing else "auto") if menu else None
         try:
-            with native_call(session.budget, prompt, session.menu, model_key=request.model,
+            with native_call(session.budget, prompt, menu, model_key=request.model,
                              output_limit=session.output_limit) as ticket:
                 invoked = True
                 record("native", "llm_start", round=session._round_index, engine="langchain",
                        prompt_chars=sum(len(text_content(message.content)) for message in prompt),
-                       streaming=True, model=selected_model)
+                       streaming=True, model=selected_model,
+                       phase="approval_response" if reviewing else "execution")
                 messages = prompt[1:] if request.system_message else prompt
                 result = handler(request.override(
-                    model=model, messages=messages, tools=session.menu,
+                    model=model, messages=messages, tools=menu,
                     tool_choice=tool_choice,
                     model_settings=model_options(settings.llm_timeout)))
                 response = result.result[-1]
@@ -266,6 +277,8 @@ class SessionMiddleware(AgentMiddleware):
             if extra:
                 session._round_index += 1
                 return {**capture(session), "messages": extra, "jump_to": "model"}
+        if session.state["proposal"] is not None:
+            return finish_approval_response(session, response)
         calls, outcome = session._validate_response(response)
         system = [self.system_message] if self.system_message else []
         self.exchange = [*system, *state["messages"]]

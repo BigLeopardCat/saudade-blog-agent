@@ -20,6 +20,7 @@ from agent.products.blog.read_tools import (
     queue_tools,
     site_tools,
 )
+from agent.runtime import task_planning
 
 
 class ToolCatalog:
@@ -51,7 +52,8 @@ class ToolCatalog:
 
     def domains(self, config, can_prepare):
         cfg = (config or {}).get("configurable") or {}
-        domains = {"site": {**self.site_read_tools, **browser.tools(config)},
+        domains = {"task_planning": task_planning.tools(),
+                   "site": {**self.site_read_tools, **browser.tools(config)},
                    **public_domains(), **device_domain(config)}
         domains.update(admin_domains(config, can_prepare, {
             "admin_reports": self.admin_read_tools,

@@ -30,7 +30,7 @@ def test_prepare_never_writes_and_excludes_outbox(mailbox):
     assert _grant(result)["specs"] == [{"tool": "read_messages",
                                        "args": {"ids": [201, 202], "all": False}}]
     assert "欢迎来信" in result.reply and "发出的信" not in result.reply
-    assert "不可撤销" in result.reply
+    assert "不可撤销" not in result.reply and "本次确认的编号" in result.reply
     assert all(r.method == "GET" for r in mailbox["requests"])
     assert not isinstance(_prepare("selected", [301]), TurnResult)
 
