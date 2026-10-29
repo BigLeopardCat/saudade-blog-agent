@@ -179,6 +179,55 @@ def test_single_preparation_continues_to_a_model_reply_without_extra_narration(b
     assert "".join(event.content for event in events[:-1]) == events[-1].reply
 
 
+@pytest.mark.parametrize("navigation_in_batch", [False, True])
+def test_confirm_navigation_ack_then_next_approval_survives_reconstruction(
+        backend, navigation_in_batch):
+    state, _ = backend
+    cfg = config(browser_feedback=True)
+    navigate = call("navigate_page", "navigate", path="/guestbook")
+    message = "收藏文章19，去留言板，再将通知101标记已读。"
+    first_model = Model(LOAD, AIMessage(content="", tool_calls=[
+        FAVORITE, *([navigate] if navigation_in_batch else [])]))
+    first = runtime(first_model)
+    prepared = run(first, message, cfg=cfg)
+    task_id = first.store.load(cfg).run["id"]
+    grant = confirm.verify(prepared.execution["pending_confirm"]["token"], 7, 42)
+    assert not state["writes"]
+
+    navigation_model = Model(*([] if navigation_in_batch else [
+        AIMessage(content="", tool_calls=[navigate])]))
+    second = runtime(navigation_model, first.saver)
+    paused = run(second, grant=grant, cfg=cfg)
+    command = paused.execution["client_action"]
+    waiting = second.store.load(cfg)
+    assert waiting.unfinished and waiting.run["id"] == task_id
+    assert not waiting.has_pending and waiting.approval is None
+    assert second.get_state(cfg, subgraphs=True).interrupts
+    assert state["favorites"] == {19} and not state["read"]
+    assert len(state["writes"]) == 1
+
+    ack = config(browser_feedback=True, browser_result={
+        "command_id": command["command_id"], "path": "/guestbook", "status": "completed"})
+    next_model = Model(AIMessage(content="", tool_calls=[NOTICE]))
+    third = runtime(next_model, first.saver)
+    next_card = list(third.stream_events({"resume_task": task_id}, ack))[-1]
+    next_grant = confirm.verify(next_card.execution["pending_confirm"]["token"], 7, 42)
+    assert next_grant["specs"] == [{"tool": "read_notifications",
+                                    "args": {"ids": [101], "all": False}}]
+    assert not state["read"] and len(state["writes"]) == 1
+    assert any(isinstance(m, ToolMessage) and "浏览器已进入" in m.content
+               for m in next_model.prompts[0])
+
+    fourth = runtime(Model(AIMessage(content="已收藏、到达留言板并标记通知已读。")), first.saver)
+    done = run(fourth, grant=next_grant, cfg=cfg)
+    assert done.reply and state["read"] and len(state["writes"]) == 2
+    assert not fourth.store.load(cfg).unfinished and not fourth.store.load(cfg).has_pending
+    assert sum(isinstance(m, HumanMessage) and m.content == message
+               for m in fourth.store.load(cfg).messages) == 1
+    stale = list(runtime(Model(), first.saver).stream_events({"resume_task": task_id}, ack))[-1]
+    assert stale.execution["blocked"] and len(state["writes"]) == 2
+
+
 @pytest.mark.parametrize("mode", ["button", "tool"])
 def test_cancel_stops_the_whole_suspended_task_and_stale_approval_cannot_write(backend, mode):
     state, _ = backend
