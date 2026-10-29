@@ -472,7 +472,7 @@
         0
       ],
       "agent/products/blog/catalog.py": [
-        16,
+        15,
         0
       ],
       "agent/products/blog/confirmation.py": [
@@ -484,10 +484,6 @@
         0
       ],
       "agent/products/blog/history.py": [
-        0,
-        0
-      ],
-      "agent/products/blog/narration.py": [
         0,
         0
       ],
@@ -757,7 +753,7 @@
       ]
     },
     "total": [
-      385,
+      384,
       33
     ]
   },

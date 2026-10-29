@@ -34,7 +34,6 @@ DOMAIN_DESCRIPTIONS = {
     "favorites": "查询本人收藏，准备收藏增删确认。",
     "notifications": "分页读取本人最近通知、未读条目和原始跳转定位，准备已读确认；查看不标记已读。",
     "messages": "查询本人信件摘要、单封正文，准备收件箱已读确认；查看不标记已读。",
-    "pending": "取消当前待确认操作；修改目标请加载对应领域。",
 }
 
 
@@ -45,10 +44,8 @@ def initial_tools(tools, domains):
     # These operations remain authorized by the domain builder and again on invocation.
     browser = domains.get("site") or {}
     device = domains.get("devices") or {}
-    pending = domains.get("pending") or {}
     return {
         **tools,
         **{name: browser[name] for name in _BROWSER_ACTIONS if name in browser},
         **{name: device[name] for name in ("device_oled_display",) if name in device},
-        **{name: pending[name] for name in ("cancel_pending_operation",) if name in pending},
     }

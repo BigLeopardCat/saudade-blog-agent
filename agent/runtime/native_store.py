@@ -8,7 +8,6 @@ from agent.runtime import checkpoint_store, memory
 from agent.runtime.approval import graph
 from agent.runtime.conversation_store import ConversationSnapshot
 from agent.runtime.turns import check_cancelled, conversation_turn
-from utils.trace import record
 
 
 class NativeConversationStore:
@@ -31,9 +30,10 @@ class NativeConversationStore:
         # Maintenance writes name their destination explicitly instead of inferring
         # a writer from checkpoint history.
         node = "commit"
-        if set(values) == {"messages"} and self.load(config).approval:
-            # History maintenance must preserve the outstanding approval edge.
-            node = "agent"
+        if set(values) == {"messages"}:
+            active = self.load(config)
+            if active.unfinished and not active.approval:
+                raise ValueError("cannot_maintain_active_task")
         return self._state.update_state(config, values, as_node=node, **kwargs)
 
     def load(self, config) -> ConversationSnapshot:
@@ -51,39 +51,6 @@ class NativeConversationStore:
             unfinished=bool(values.get("run")),
             initialized=snapshot.created_at is not None,
         )
-
-    def save_turn(
-        self, config, messages, reply, *, observations=(), execution=None, pending=None,
-        approval=None, context_update=None,
-    ) -> None:
-        if not self.available:
-            return
-        if (execution or {}).get("client_action"):
-            raise ValueError("cannot_save_incomplete_browser_turn")
-        previous = self.load(config)
-        if previous.unfinished and (not approval or approval != previous.approval):
-            raise ValueError("cannot_maintain_active_task")
-        principal = ((config or {}).get("configurable") or {}).get("principal")
-        current = memory.turn_messages(messages, observations, reply, principal)
-        saved = {"messages": memory.checkpoint_messages(
-                    previous.messages, current, context_update=context_update),
-                 "pending_confirm": None, "pending_action": None,
-                 "approval": approval,
-                 "run": ({**previous.run, "input_saved": True}
-                         if approval and previous.run else None)}
-        for values in (pending or {}, execution or {}):
-            saved.update({key: values[key] for key in
-                          ("pending_confirm", "pending_action", "receipts") if key in values})
-        active = self.get_state(config)
-        if approval and active.values.get("approval") == approval and active.next:
-            # Advance a completed application boundary, then recreate its interrupt.
-            # Repeated state-only Commands would accumulate writes in one superstep.
-            check_cancelled(config)
-            self._state.update_state(config, saved, as_node="agent")
-            self._state.invoke(None, config, durability="sync")
-        else:
-            self.update_state(config, saved)
-        record("native", "checkpoint_write", messages=len(current))
 
     def clear_pending(self, config, jti: str, *, observations=()) -> None:
         previous = self.load(config)

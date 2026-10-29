@@ -272,9 +272,9 @@ def test_cancel_and_cross_domain_replacement_use_shared_revocation(todos, monkey
             "pending_action": {"task_id": "new"},
         },
     )
-    transitioned = pending.transition(replacement, admin_config(), None)
+    transitioned = pending.feedback(admin_config(), None)
     assert transitioned.execution["pending_event"]["event"] == "cancelled"
-    assert transitioned.execution["pending_confirm"] == replacement.execution["pending_confirm"]
+    assert replacement.execution["pending_confirm"]
     old = transactions.execute(signed, admin_config(), None, ledger=ledger)
     assert not old["receipts"] and todos["writes"] == 0
     assert "撤销" in old["reply"]
@@ -290,7 +290,7 @@ def test_cancelled_card_remains_revoked(todos, monkeypatch, tmp_path):
     result = prepare("create", text="准备面试")
     signed = grant(result)
     pending = PendingOperation(signed, result.execution["pending_action"])
-    cancelled = pending.cancel_tool(None).invoke({}, config=admin_config())
+    cancelled = pending.cancel(admin_config(), None)
     assert cancelled.execution["pending_action"] is None
     assert cancelled.execution["pending_event"]["jti"] == signed["jti"]
     replay = transactions.execute(signed, admin_config(), None, ledger=ledger)

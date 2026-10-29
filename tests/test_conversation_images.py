@@ -4,6 +4,7 @@ import threading
 
 import httpx
 import pytest
+from _conversation_seed import seed_turn
 from _memory_support import ACTOR, Capture, config, run, runtime
 from langchain_core.messages import AIMessageChunk, HumanMessage, ToolMessage
 from langgraph.checkpoint.memory import InMemorySaver
@@ -58,14 +59,14 @@ def test_native_followup_loads_original_as_image_blocks_without_leaking_bytes_to
     def capture(*args, **kwargs):
         events.append((args, kwargs))
     from agent.runtime import tool_execution
-    for module in (trace, native, native_store, session, tool_execution):
+    for module in (trace, native, session, tool_execution):
         monkeypatch.setattr(module, "record", capture)
     model = Capture(call("load_conversation_images_info_tools", "load"),
                     call("get_conversation_image", "image", image_id=REF),
                     AIMessageChunk(content="第三个参数是连接数。"))
     saver = InMemorySaver()
     selected = runtime(saver, model)
-    selected.store.save_turn(config(), saved_messages()[:1], "图中有三个参数。")
+    seed_turn(selected.store, config(), saved_messages()[:1], "图中有三个参数。")
     try:
         result = run(selected, ChatRequest(message="图里第三个参数是什么"))[-1]
     finally:
@@ -238,7 +239,7 @@ def test_batch_tool_receipts_precede_all_image_attachments_on_the_sdk_wire(monke
     selected = runtime(InMemorySaver(), model)
     selected.application.catalog = SimpleNamespace(
         initial_tools=lambda _: {fixture_read.name: fixture_read}, domains=lambda *_: {})
-    selected.store.save_turn(config(), [HumanMessage(content=[
+    seed_turn(selected.store, config(), [HumanMessage(content=[
         {"type": "image_url", "image_url": {"url": url}} for url in urls])], "initial analysis")
     client = host(monkeypatch, lambda _: httpx.Response(200, json={
         "conversation_id": 42, "items": [{"id": 10, "role": "user", "images": urls}]}))

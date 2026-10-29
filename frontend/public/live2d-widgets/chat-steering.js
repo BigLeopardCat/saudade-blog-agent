@@ -128,8 +128,14 @@
     });
     return {
       begin() { boundActor = actor(); ctx.state.steeringReady = false; refresh(); },
-      receive(data) {
-        if (boundActor !== actor() || data.task_id !== ctx.state.activeRound?.taskId) return;
+      receive(data, roundId) {
+        const active = ctx.state.activeRound;
+        if (boundActor !== actor() || !active || (roundId && roundId !== active.roundId)) return;
+        if (data.task_id !== active.taskId) {
+          if (roundId !== active.roundId || typeof data.ready !== 'boolean') return;
+          active.taskId = data.task_id;
+          active.resumeTask = data.task_id;
+        }
         if (typeof data.ready === 'boolean') ctx.state.steeringReady = data.ready;
         for (const item of data.input ? [data.input] : (data.inputs || [])) merge(data.task_id, item);
         refresh();

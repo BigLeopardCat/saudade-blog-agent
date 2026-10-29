@@ -48,10 +48,9 @@ def replay_result(row) -> str:
     return ToolResult(text, kind or "ok", meta if isinstance(meta, dict) else {})
 
 
-# 取行的 SQL **只此一处**：多取一列 `fp`（本模块自己比对 `attempt` 用），比对完就由
-# `_split_row` 剥掉。两个后端各写一遍列清单是它们各自方言决定的（`?` / `%s`），但**列序
-# 与列数必须是同一份**——否则 `_split_row` 的下标会在一档上错位。
+# Shared replay column order for the SQLite and PostgreSQL row codec.
 _SELECT_COLS = "status, fp, text, kind, meta"
+_SELECT_BY_KEY = f"SELECT {_SELECT_COLS} FROM idem WHERE key=?"
 
 
 def _split_row(row) -> tuple[str, tuple | None]:
@@ -131,7 +130,7 @@ class Ledger:
             " VALUES (?,?,?,'intent',?)", (key, tool, attempt, time.time()))
         if cur.rowcount == 1:
             return "new", None
-        row = conn.execute(f"SELECT {_SELECT_COLS} FROM idem WHERE key=?", (key,)).fetchone()
+        row = conn.execute(_SELECT_BY_KEY, (key,)).fetchone()
         if row is None:
             raise RuntimeError("幂等账行状态不可判定（插入被忽略但回读为空）")
         if row[1] == attempt or resuming:
@@ -144,7 +143,12 @@ class Ledger:
         if got == 1:
             return "new", None
         return _split_row(conn.execute(
-            f"SELECT {_SELECT_COLS} FROM idem WHERE key=?", (key,)).fetchone())
+            _SELECT_BY_KEY, (key,)).fetchone())
+
+    def lookup(self, key: str):
+        row = self._db().execute(
+            _SELECT_BY_KEY, (key,)).fetchone()
+        return _split_row(row) if row is not None else None
 
     def finish(self, key: str, out) -> bool:
         """记完成。返回"结果是否因超上限而未留档"（撞顶时上层补一条 trace）。"""

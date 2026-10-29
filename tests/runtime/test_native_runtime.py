@@ -6,6 +6,7 @@ import sys
 import threading
 
 import pytest
+from _conversation_seed import seed_turn
 from _framework_ledger import Ledger
 from _own_support import config
 from langchain_core.messages import AIMessage, AIMessageChunk, HumanMessage, ToolMessage
@@ -84,7 +85,7 @@ def test_close_propagates_to_provider_without_committing_partial_turn():
 def test_cancellation_after_visible_chunk_keeps_previous_turn_only():
     model = Model(AIMessageChunk(content="迟到答复"))
     selected = runtime(model)
-    selected.store.save_turn(config(), [HumanMessage(content="之前")], "原有答复")
+    seed_turn(selected.store, config(), [HumanMessage(content="之前")], "原有答复")
     stop = threading.Event()
     stream = selected.stream_events(
         {"messages": [HumanMessage(content="停止")]}, config(stop_event=stop))
@@ -143,55 +144,55 @@ def waiting(site, monkeypatch, tmp_path, request):
     ledger = Ledger(str(tmp_path / "native.sqlite3"))
     monkeypatch.setattr(writes, "ledger_for", lambda saver: ledger)
     saver = InMemorySaver()
-    seed = NativeConversationStore(saver)
-    proposal = preparation.prepare_favorite_change.invoke(
-        {"action": "add", "article_id": 19}, config=config())
-    seed.save_turn(config(), [HumanMessage(content="收藏文章19")], proposal.reply,
-                   execution=proposal.execution)
+    model = Model(AIMessage(content="", tool_calls=[
+        {"name": "load_favorites_info_tools", "args": {}, "id": "load"}]),
+        AIMessage(content="", tool_calls=[{
+            "name": "prepare_favorite_change", "args": {"action": "add", "article_id": 19},
+            "id": "prepare"}]))
+    proposal = run(runtime(model, saver), "收藏文章19")[-1]
     store = NativeConversationStore(saver)
+    monkeypatch.setattr("agent.runtime.native.get_llm", lambda **_: Model())
     grant = confirm.verify(proposal.execution["pending_confirm"]["token"], 7, 42)
     yield store, proposal, grant, ledger
     ledger.close()
 
 
-def test_pending_survives_chat_restart_and_confirmation_replays_once(waiting, site):
+def test_pending_survives_restart_and_confirmation_replays_once(waiting, site):
     store, proposal, grant, _ = waiting
     model = Model()
-    selected = NativeRuntime(store, model_factory=lambda **_: model)
-    run(selected, "先聊聊天")
     assert store.load(config()).has_pending
-    assert proposal.execution["pending_confirm"]["token"] not in str(model.prompts)
     rebuilt = NativeRuntime(NativeConversationStore(store.saver),
-                            model_factory=lambda **_: pytest.fail("confirmation invoked model"))
+                            model_factory=lambda **_: model)
     assert confirmed_runtime(rebuilt, grant) is rebuilt
     for _ in range(2):
         events = list(rebuilt.stream_events({"messages": [], "confirm_grant": grant}, config()))
         assert isinstance(events[-1], TurnResult) and events[-1].execution["receipts"]
         assert "".join(m.content for m in events[:-1]) == events[-1].reply
     assert not store.load(config()).has_pending
+    assert len(model.prompts) == 1
+    assert proposal.execution["pending_confirm"]["token"] not in str(model.prompts)
     assert sum(request.method == "POST" for request in site["requests"]) == 1
 
 
-def test_confirmed_narration_follows_execution_and_keeps_independent_facts(waiting, site):
+def test_confirmed_agent_reply_follows_execution_and_keeps_independent_facts(waiting, site):
     store, proposal, grant, _ = waiting
-    narrated = []
+    class AfterWrite(Model):
+        def stream(self, *args, **kwargs):
+            assert sum(request.method == "POST" for request in site["requests"]) == 1
+            yield from super().stream(*args, **kwargs)
 
-    def narrator(result, config):
-        assert sum(request.method == "POST" for request in site["requests"]) == 1
-        assert result.execution["receipts"][0]["tool"] == "add_favorite"
-        narrated.append(result)
-        return "收藏好啦，之后可以在收藏夹找到它喵～"
-
-    selected = NativeRuntime(store, narrator=narrator)
-    for _ in range(2):
-        events = list(selected.stream_events({"confirm_grant": grant}, config()))
-        assert events[-1].reply == "收藏好啦，之后可以在收藏夹找到它喵～"
-        assert events[-1].execution == narrated[-1].execution
+    model = AfterWrite(AIMessageChunk(content="收藏好啦，之后可以在收藏夹找到它喵～"))
+    selected = NativeRuntime(store, model_factory=lambda **_: model)
+    first = list(selected.stream_events({"confirm_grant": grant}, config()))[-1]
+    replay = list(selected.stream_events({"confirm_grant": grant}, config()))[-1]
+    assert first.reply == "收藏好啦，之后可以在收藏夹找到它喵～"
+    assert [{k: v for k, v in row.items() if k != "ts"} for row in first.execution["receipts"]] == [
+        {k: v for k, v in row.items() if k != "ts"} for row in replay.execution["receipts"]]
+    assert len(model.prompts) == 1
     assert sum(request.method == "POST" for request in site["requests"]) == 1
     saved = store.load(config()).messages
     evidence = [message for message in saved if isinstance(message, ToolMessage)]
-    assert evidence and all(message.name == "add_favorite" for message in evidence)
-    assert "19" in evidence[-1].content
+    assert any(message.name == "add_favorite" and "19" in message.content for message in evidence)
     assert saved[-1].content == "收藏好啦，之后可以在收藏夹找到它喵～"
     assert proposal.execution["pending_confirm"]["token"] not in str(saved)
 
@@ -219,7 +220,7 @@ def test_replay_of_earlier_success_preserves_newer_pending_card(waiting, site):
     list(selected.stream_events({"confirm_grant": grant}, config()))
     newer = preparation.prepare_favorite_change.invoke(
         {"action": "remove", "article_id": 19}, config=config())
-    store.save_turn(config(), [HumanMessage(content="再收藏另一篇")], newer.reply,
+    seed_turn(store, config(), [HumanMessage(content="再收藏另一篇")], newer.reply,
                     execution=newer.execution)
     before = store.load(config()).pending
     list(selected.stream_events({"confirm_grant": grant}, config()))
@@ -269,7 +270,7 @@ def test_persistence_failure_has_no_success_result(monkeypatch):
     assert not saved or [m.content for m in saved] == ["请求", "可见回复"]
 
 
-def test_unrestorable_old_card_allows_reads_but_not_new_write_preparations():
+def test_unrestorable_old_card_is_discarded_before_new_tool_discovery():
     model = Model(AIMessage(content="", tool_calls=[
         {"name": "load_favorites_info_tools", "args": {}, "id": "load"}]),
         AIMessageChunk(content="你好。"))
@@ -277,11 +278,11 @@ def test_unrestorable_old_card_allows_reads_but_not_new_write_preparations():
     opaque = secrets.token_urlsafe(16)
     pending = {"pending_confirm": {"q": "旧卡", "token": opaque},
                "pending_action": {"jti": "old"}}
-    selected.store.save_turn(config(), [], "旧卡", execution=pending)
+    seed_turn(selected.store, config(), [], "旧卡", execution=pending)
     run(selected, "先聊聊天")
-    assert selected.store.load(config()).pending == pending
+    assert not selected.store.load(config()).has_pending
     assert "load_favorites_info_tools" in str(model.menus)
-    assert "prepare_favorite_change" not in str(model.menus)
+    assert "prepare_favorite_change" in str(model.menus)
     assert opaque not in str(model.prompts)
 
 
@@ -295,7 +296,7 @@ def test_expired_card_does_not_permanently_disable_preparations(site, monkeypatc
         {"name": "load_favorites_info_tools", "args": {}, "id": "load"}]),
         AIMessageChunk(content="已加载。"))
     selected = runtime(model)
-    selected.store.save_turn(config(), [], "旧卡", execution={
+    seed_turn(selected.store, config(), [], "旧卡", execution={
         "pending_confirm": {"token": token},
         "pending_action": {"jti": confirm.token_jti(token)}})
     run(selected, "准备新的收藏请求")

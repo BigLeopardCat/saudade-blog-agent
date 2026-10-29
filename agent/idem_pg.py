@@ -102,6 +102,11 @@ class PostgresLedger:
         cur.execute(f"SELECT {idem._SELECT_COLS} FROM {TABLE} WHERE key=%s", (key,))
         return cur.fetchone()
 
+    def lookup(self, key: str):
+        with self.pool.connection() as conn, conn.cursor(row_factory=tuple_row) as cur:
+            row = self._read(cur, key)
+        return idem._split_row(row) if row is not None else None
+
     def finish(self, key: str, out) -> bool:
         """Persist the result and report whether its text exceeded the shared replay limit."""
         text = str(out)
