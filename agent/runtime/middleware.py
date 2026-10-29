@@ -14,10 +14,9 @@ from langgraph.types import Command
 
 from agent.llm_usage import usage_fields
 from agent.runtime import memory, trace_context
-from agent.runtime.budget import native_call
+from agent.runtime.budget import BudgetExceeded, native_call
 from agent.runtime.control import AgentCancelled, model_options
 from agent.runtime.execution_state import adopt_command, capture, restore
-from agent.runtime.finalization import final_prompt
 from agent.runtime.memory_media import hydrate, stage
 from agent.runtime.message_content import text_content
 from agent.runtime.progress import emit
@@ -192,23 +191,14 @@ class SessionMiddleware(AgentMiddleware):
             request = request.override(messages=[*request.messages, *extra_inputs])
         prompt = [*([request.system_message] if request.system_message else []),
                   *model_messages(hydrate(request.messages, session.transient))]
-        final = final_prompt(session.budget, prompt, session.menu, session.output_limit,
-                             results_full=session.state["result_chars"] >= session.result_limit,
-                             model_key=request.model)
+        if session.state["result_chars"] >= session.result_limit:
+            raise BudgetExceeded("result_budget")
         model = request.model
         selected_model = _model_name(model)
-        if final:
-            prompt, reason, output, keep_tools = final
-            model = model.bind(max_tokens=output) if output < session.output_limit else model
-            session.menu = session.menu if keep_tools else []
-            session.finalizing, session.output_limit = True, output
-            record("native", "finalizing", reason=reason, output_limit=output,
-                   tools_retained=keep_tools)
-        label = "正在整理已取得的结果…" if session.finalizing else "正在处理请求…"
-        emit(session.config, label, key="model_final" if session.finalizing else "model_start")
+        emit(session.config, "正在处理请求…", key="model_start")
         trace_context.tools(session.menu, session.traced_contracts)
         started, response, invoked = time.monotonic(), None, False
-        tool_choice = ("none" if session.finalizing else "auto") if session.menu else None
+        tool_choice = "auto" if session.menu else None
         try:
             with native_call(session.budget, prompt, session.menu, model_key=request.model,
                              output_limit=session.output_limit) as ticket:

@@ -10,14 +10,10 @@ from agent.runtime import middleware
 from agent.runtime.session import ToolSession
 
 
-@pytest.mark.parametrize("finalizing", [False, True])
-def test_outer_model_override_reaches_the_sdk_once_and_preserves_usage(monkeypatch, finalizing):
+def test_outer_model_override_reaches_the_sdk_once_and_preserves_usage(monkeypatch):
     events = []
     monkeypatch.setattr(middleware, "record", lambda node, event, **fields:
                         events.append({"event": event, **fields}))
-    if finalizing:
-        monkeypatch.setattr(middleware, "final_prompt", lambda budget, prompt, *args, **kwargs:
-                            (prompt, "fixture_limit", 32, False))
 
     with model_replies({"content": "不应使用默认模型。"}) as (default, default_requests), \
             model_replies({"content": "使用已选模型。"}) as (chosen, chosen_requests):
@@ -38,9 +34,6 @@ def test_outer_model_override_reaches_the_sdk_once_and_preserves_usage(monkeypat
         done = next(event for event in events if event["event"] == "llm_done")
         assert start["model"] == done["model"] == "routed-fixture"
         assert done["response_model"] == "gpt-4o-mini"
-        if finalizing:
-            payload = chosen_requests[0]
-            assert payload.get("max_tokens", payload.get("max_completion_tokens")) == 32
 
 
 def test_model_identity_never_uses_an_objects_string_representation():

@@ -31,10 +31,12 @@ def test_short_reply_contract_verifies_target_and_reuse(monkeypatch, tmp_path, f
     responses = [call("load_messages_info_tools"), call("list_my_messages"),
                  AIMessage(content="第一封是《欢迎来信》，要读正文吗？")]
     if failure != "no_read":
+        responses.append(call("load_messages_info_tools"))
         responses.append(call("list_my_messages", message_id=202 if failure == "wrong_target"
                               else 201))
     responses.append(AIMessage(content="取件码是482619。"))
     if failure == "repeat_read":
+        responses.append(call("load_messages_info_tools"))
         responses.append(call("list_my_messages", message_id=201))
     responses.append(AIMessage(content="取件码是482619。"))
     remaining = iter(responses)
@@ -53,4 +55,4 @@ def test_short_reply_contract_verifies_target_and_reuse(monkeypatch, tmp_path, f
     assert result["evaluated"] and result["business_writes"] == 0
     assert result["passed"] == (failure is None), result
     if failure is None:
-        assert [row["model_calls"] for row in result["rounds"]] == [3, 2, 1]
+        assert [row["model_calls"] for row in result["rounds"]] == [3, 3, 1]

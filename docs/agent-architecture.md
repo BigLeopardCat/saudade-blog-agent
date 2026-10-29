@@ -185,7 +185,7 @@ flowchart LR
 │   ├── runtime/checkpoint_store.py                      # 当前生产代码模块
 │   ├── runtime/control.py                               # 当前生产代码模块
 │   ├── runtime/conversation_store.py                    # 当前生产代码模块
-│   ├── runtime/finalization.py                          # 同一预算内整理事实，可保留工具定义并禁止调用
+│   ├── runtime/response_validation.py                   # 校验提供商停止原因与正文控制标记
 │   ├── runtime/workers.py                              # 请求线程与启动预热的服务生命周期
 │   ├── runtime/jobs.py                                  # 当前生产代码模块
 │   ├── runtime/memory_media.py                          # 多模态消息的历史引用与临时图片适配

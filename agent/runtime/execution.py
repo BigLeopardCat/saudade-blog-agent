@@ -6,7 +6,7 @@ from langgraph.graph import START
 from langgraph.graph.message import REMOVE_ALL_MESSAGES
 from langgraph.types import Command, Overwrite, StateSnapshot
 
-from agent.runtime import approval, tool_state
+from agent.runtime import approval
 from agent.runtime.compaction import ConversationCompaction
 from agent.runtime.execution_state import ExecutionState, capture, restore, seed
 from agent.runtime.memory_media import stage
@@ -71,8 +71,7 @@ class FrameworkExecution:
             return {"pending_confirm": (execution or {}).get("pending_confirm"),
                     "pending_action": (execution or {}).get("pending_action"),
                     "approval": session.approval, "approved_result": None,
-                    "run": session.task,
-                    "tool_state": tool_state.capture(session)}
+                    "run": session.task}
 
         return approval.graph(session.store.saver, execute)
 

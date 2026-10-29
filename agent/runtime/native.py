@@ -8,7 +8,7 @@ from functools import partial
 from langchain_core.messages import AIMessageChunk
 from openai import OpenAIError
 
-from agent.runtime import approval, memory, recovery, tool_state, trace_context
+from agent.runtime import approval, memory, recovery, trace_context
 from agent.runtime.results import TurnResult
 from agent.runtime.session import ToolSession
 from agent.runtime.task_inputs import InputConflict, TaskInputEvent, for_saver
@@ -100,7 +100,6 @@ class NativeRuntime:
             incoming = [*snapshot.run["input"], *incoming]
         prompt = self.application.prompt([*snapshot.messages, *incoming], principal, pending)
         session = self._session(config, snapshot, pending)
-        tool_state.inherit(session, snapshot.tool_state, prompt)
         session.task = recovery.new_run(config, incoming, state.get("task_id"))
         if (self.inputs and snapshot.run and session.task
                 and snapshot.run["id"] != session.task["id"]):

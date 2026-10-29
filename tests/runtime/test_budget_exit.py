@@ -1,4 +1,4 @@
-"""Budget pressure must still allow a truthful answer from collected evidence."""
+"""Resource limits stop the framework loop without a hidden narration request."""
 
 import json
 
@@ -29,9 +29,11 @@ def tool_call(identifier="read"):
 
 
 @pytest.mark.parametrize("limit", ["request_tokens", "context_tokens", "model_calls",
-                                   "tool_calls", "result_budget", "partial_output", "none"])
-def test_real_sdk_finishes_from_tool_facts_without_resetting_or_raising_budget(limit, monkeypatch):
-    requests, reads, progress = [], [], []
+                                   "tool_calls", "result_budget", "none"])
+def test_real_sdk_stops_at_resource_boundary_without_an_extra_narrator(limit, monkeypatch):
+    requests, reads, progress, phases = [], [], [], []
+    from agent.runtime import trace_context
+    monkeypatch.setattr(trace_context, "record", lambda node, event, **data: phases.append(data))
     if limit == "result_budget":
         monkeypatch.setattr("agent.runtime.tool_execution.MAX_TOTAL_RESULT_CHARS", 17)
 
@@ -45,45 +47,39 @@ def test_real_sdk_finishes_from_tool_facts_without_resetting_or_raising_budget(l
     def handle(request):
         body = json.loads(request.content)
         requests.append(body)
+        assert body["tools"] and body["tool_choice"] == "auto"
         if len(requests) == 1:
-            assert body["tools"]
             return httpx.Response(200, json=completion(
-                calls=[tool_call()], input_tokens=(4000 if limit == "context_tokens" else
-                                                  8500 if limit == "partial_output" else 7000)))
-        assert len(requests) == 2
+                calls=[tool_call()], input_tokens=4000 if limit == "context_tokens" else 7000))
+        assert len(requests) == 2 and limit in {"none", "tool_calls"}
         assert any(message["role"] == "tool" and "VERIFIED_FACT: 42" in message["content"]
                    for message in body["messages"])
-        if limit in {"none", "model_calls", "tool_calls", "result_budget"}:
-            assert body["tools"]
-            assert body["tool_choice"] == ("auto" if limit == "none" else "none")
-        else:
-            assert "tools" not in body and "tool_choice" not in body
-        if limit == "partial_output":
-            assert 128 <= body["max_completion_tokens"] < 768
-        return httpx.Response(200, json=completion("查到的结果是 42。"))
+        return httpx.Response(200, json=completion(
+            "查到的结果是 42。" if limit == "none" else "",
+            [tool_call("over-budget")] if limit == "tool_calls" else None))
 
     limits = BudgetLimits(
         context_tokens=5000 if limit == "context_tokens" else 16384,
-        request_tokens=9000 if limit in {"request_tokens", "partial_output"} else 32768,
-        model_calls=2 if limit == "model_calls" else 8,
+        request_tokens=9000 if limit == "request_tokens" else 32768,
+        model_calls=1 if limit == "model_calls" else 8,
         tool_calls=1 if limit == "tool_calls" else 8)
     budget = RequestBudget(limits)
     with httpx.Client(transport=httpx.MockTransport(handle)) as client, budget_scope(budget):
         model = get_llm(api_key="test-only", base_url="https://example.test/v1",
                         model="fixture-model", http_client=client, streaming=False,
-                        max_tokens=768 if limit == "partial_output" else 64, enable_thinking=False)
+                        max_tokens=64, enable_thinking=False)
         config = {"configurable": {"progress_emitter": ProgressEmitter(progress.append)}}
-        session = ToolSession(model, config, {reader.name: reader}, {})
-        result = session.run([HumanMessage(content="读取并回答")])
-    assert result.reply == "查到的结果是 42。" and reads == ["read"]
-    assert budget.tokens == (4040 if limit == "context_tokens" else
-                             8540 if limit == "partial_output" else 7040)
-    assert budget.reason is None
-    assert budget.model_calls == 2 and budget.tool_calls == 1
-    assert session.finalizing is (limit != "none")
-    assert progress.count("正在处理请求…") == 1
-    assert progress[-1] == ("正在调用工具：fixture_read" if limit == "none"
-                           else "正在整理已取得的结果…")
+        result = ToolSession(model, config, {reader.name: reader}, {}).run(
+            [HumanMessage(content="读取并回答")])
+    trace_context.outcome(result)
+    assert reads == ["read"] and budget.tool_calls == 1
+    assert budget.model_calls == len(requests) == (2 if limit in {"none", "tool_calls"} else 1)
+    if limit == "none":
+        assert result.reply == "查到的结果是 42。" and phases[-1]["phase"] == "responded"
+    else:
+        assert result.execution["blocked"] == [{"reason": limit}]
+        assert phases[-1]["phase"] == "blocked" and "上限" in result.reply
+    assert all("正在整理" not in label for label in progress)
 
 
 def test_capacity_inspection_cannot_poison_a_smaller_call_or_consume_budget():
@@ -97,7 +93,7 @@ def test_capacity_inspection_cannot_poison_a_smaller_call_or_consume_budget():
     assert budget.tokens == 6 and budget.model_calls == 1
 
 
-def test_final_pass_cannot_execute_a_provider_tool_call():
+def test_exhausted_model_budget_cannot_pay_for_another_call_or_execute_it():
     reads = []
 
     def read_fixture() -> str:
@@ -116,16 +112,16 @@ def test_final_pass_cannot_execute_a_provider_tool_call():
             return AIMessage(content="", tool_calls=[{
                 "name": "fixture_read", "args": {}, "id": f"read-{len(reads)}"}])
 
-    budget = RequestBudget(BudgetLimits(model_calls=2))
+    budget = RequestBudget(BudgetLimits(model_calls=1))
     with budget_scope(budget):
         session = ToolSession(Model(), {}, {reader.name: reader}, {})
         result = session.run([HumanMessage(content="读取")])
-    assert reads == ["read"] and session.finalizing
+    assert reads == ["read"] and result.execution["blocked"] == [{"reason": "model_calls"}]
     assert "上限" in result.reply
-    assert budget.model_calls == 2 and budget.tool_calls == 1
+    assert budget.model_calls == 1 and budget.tool_calls == 1
 
 
-def test_final_pass_cannot_bypass_a_context_limit_that_already_excludes_the_facts():
+def test_context_exit_cannot_discard_facts_to_force_an_extra_model_call():
     calls = []
 
     def read_fixture() -> str:
@@ -148,5 +144,5 @@ def test_final_pass_cannot_bypass_a_context_limit_that_already_excludes_the_fact
     with budget_scope(budget):
         session = ToolSession(Model(), {}, {reader.name: reader}, {})
         result = session.run([HumanMessage(content="读取")])
-    assert len(calls) == 1 and not session.finalizing
+    assert len(calls) == 1
     assert "上限" in result.reply and budget.reason == "context_tokens"
