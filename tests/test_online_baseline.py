@@ -534,3 +534,19 @@ def test_empty_primary_scope_cannot_be_reported_as_a_success(tmp_path):
     with pytest.raises(ValueError, match="no cases remain"):
         online_baseline.run([{"id": "image", "tags": ["vision"]}], None, {}, tmp_path,
                              phase="full", suite_hash="source")
+
+
+def test_online_transport_preserves_task_identity_events_separately_from_reply(
+    tmp_path, monkeypatch
+):
+    adapter = transport(tmp_path, monkeypatch,
+                        'event: task_input\ndata: {"task_id":"original","ready":false}\n\n'
+                        'event: text\ndata: "继续原任务"\n\n'
+                        'event: done\ndata: {}\n\n')
+    try:
+        result = adapter(ChatRequest(message="调整要求", task_inputs=True))
+    finally:
+        adapter.client.close()
+    assert result["text"] == "继续原任务" and not result["error"]
+    assert result["http_events"][0] == {
+        "event": "task_input", "data": {"task_id": "original", "ready": False}}
