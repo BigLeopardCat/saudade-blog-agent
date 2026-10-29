@@ -5,7 +5,7 @@ import json
 import pytest
 from langchain_core.messages import AIMessage, AIMessageChunk, HumanMessage
 
-from agent.runtime.finalization import incomplete_response
+from agent.runtime.response_validation import incomplete_response
 from agent.runtime.session import ToolSession
 from agent.runtime.visible_text import VisibleText, has_control_text
 

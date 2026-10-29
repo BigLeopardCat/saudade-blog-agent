@@ -12,7 +12,6 @@ from agent.runtime import tool_state
 class ExecutionState(AgentState, total=False):
     context_update: dict | None
     loaded: list[str]
-    evictable: list[str]
     result_chars: int
     proposal: dict | None
     awaiting_call: str | None
@@ -27,7 +26,7 @@ _FIELDS = ExecutionState.__annotations__.keys() - AgentState.__annotations__.key
 
 
 def initial_state():
-    return ExecutionState(context_update=None, loaded=[], evictable=[], result_chars=0,
+    return ExecutionState(context_update=None, loaded=[], result_chars=0,
                           proposal=None,
                           awaiting_call=None, resume=None, run_id=None, terminal=None,
                           effects={}, applied_inputs=[])

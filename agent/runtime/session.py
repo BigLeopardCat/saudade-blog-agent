@@ -10,7 +10,7 @@ import json
 from langchain_core.messages import AIMessageChunk, ToolMessage
 from langchain_core.utils.function_calling import convert_to_openai_tool
 
-from agent.runtime import memory, tool_execution, tool_state
+from agent.runtime import memory, tool_execution
 from agent.runtime.budget import (
     BudgetExceeded,
     RequestBudget,
@@ -18,9 +18,9 @@ from agent.runtime.budget import (
 )
 from agent.runtime.catalog import loader
 from agent.runtime.execution_state import initial_state
-from agent.runtime.finalization import incomplete_response
 from agent.runtime.message_content import text_content
 from agent.runtime.middleware import StreamGuard
+from agent.runtime.response_validation import incomplete_response
 from agent.runtime.results import TurnResult, cancellation_content, cancellation_fact
 from agent.runtime.turns import AgentCancelled, check_cancelled
 from agent.runtime.visible_text import VisibleText
@@ -65,7 +65,6 @@ class ToolSession:
         self.render_result = tool_execution.render_result
         self.middleware = [factory(self) for factory in middleware]
         self.used_stream_api = False
-        self.finalizing = False
         self.traced_contracts = set()
         self.refresh_menu()
 
@@ -116,8 +115,9 @@ class ToolSession:
 
     def _budget_stop(self, reason, **data):
         record("native", "budget_stop", reason=reason, **data)
-        self.outcome = self._result("本轮操作已达到调用或上下文上限，已停止继续处理。"
-                                    "请缩小请求范围后再试。")
+        self.outcome = self._with_receipts(TurnResult(
+            "本轮操作已达到调用或上下文上限，已停止继续处理。请缩小请求范围后再试。",
+            {"blocked": [{"reason": reason}]}))
         return self.outcome
 
     def _accept_calls(self, calls, round_index):
@@ -215,8 +215,6 @@ class ToolSession:
             reply = text_content(response.content).strip()
             return None, (self._result(reply) if reply else
                           self._stop_turn("empty", tool_calls=self.calls_used))
-        if self.finalizing:
-            return None, self._budget_stop("finalization_tool_call", tool_calls=self.calls_used)
         reason = self._accept_calls(calls, self._round_index)
         if reason:
             return None, self._stop_turn(reason, tool_calls=self.calls_used)
@@ -224,7 +222,6 @@ class ToolSession:
             self.budget.attempt_tools(len(calls))
         except BudgetExceeded as exc:
             return None, self._budget_stop(exc.reason, tool_calls=self.calls_used)
-        tool_state.pin(self, calls)
         return calls, None
 
     def stream(self, prompt, *, resume=None, approval_input=(), recover=False, client_result=None):

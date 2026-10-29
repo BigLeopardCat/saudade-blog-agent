@@ -7,21 +7,6 @@ from agent.runtime.budget import RequestBudget
 from utils.trace import record
 
 
-def required_input(prompt):
-    """Reserve current facts and the latest dialogue before optional older history."""
-    if not prompt:
-        return []
-    fixed = [message for message in prompt[:-1]
-             if isinstance(message, SystemMessage) or memory.is_context(message)]
-    prior = [message for message in prompt[:-1]
-             if not isinstance(message, SystemMessage) and not memory.is_context(message)]
-    turns = memory.dialogue_turns(prior)
-    latest = ([message for message in turns[-1]
-               if not getattr(message, "tool_calls", None) and message.type != "tool"]
-              if turns else [])
-    return [*fixed, *latest, prompt[-1]]
-
-
 def fit_history(prompt, principal, menu, limits, output_limit, *, tool_access=None, budget=None):
     # This runs before the first model call; never trim an in-flight tool exchange.
     if not prompt or not isinstance(prompt[0], SystemMessage):

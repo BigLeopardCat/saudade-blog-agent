@@ -103,5 +103,5 @@ def test_real_sdk_can_correct_tool_arguments_without_premature_schema_removal():
         session = ToolSession(model, {}, {tool.name: tool}, {})
         result = session.run([SystemMessage(content="x" * 2000), HumanMessage(content="execute")])
     assert result.reply == "完成" and calls == ["", "正文"] and len(requests) == 3
-    assert budget.tokens == 3030 and not session.finalizing
+    assert budget.tokens == 3030
     assert requests[0]["tools"] == requests[1]["tools"] == requests[2]["tools"]
