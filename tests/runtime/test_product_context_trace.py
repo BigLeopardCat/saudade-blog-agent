@@ -16,7 +16,8 @@ def test_recorded_product_fact_is_the_template_used_by_the_model(monkeypatch):
     messages = prompt.build_prompt([], Principal(7, "user", SOURCE_ASSERTION))
     facts = runtime_context(events)["product_facts"]
     assert facts["article_url_template"] in messages[0].content
-    caller = json.loads(messages[0].content.split("运行时能力（可信数据）：", 1)[1])["caller"]
+    caller = json.JSONDecoder().raw_decode(
+        messages[0].content.split("运行时能力（可信数据）：", 1)[1])[0]["caller"]
     assert facts["conversation_style"] == caller["conversation_style"]
     assert facts["character"] in messages[0].content
     assert set(facts) == {"article_url_template", "character", "conversation_style",

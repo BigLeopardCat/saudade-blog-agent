@@ -39,8 +39,8 @@ def confirmed_roundtrip(monkeypatch, tmp_path, config, domain, prepare_name, arg
         def invoke(self, prompt):
             self.calls += 1
             if self.calls == 3:
-                facts = prompt[-1]
-                assert isinstance(facts, ToolMessage) and facts.tool_call_id == "prepare"
+                facts = next(m for m in reversed(prompt)
+                             if isinstance(m, ToolMessage) and m.tool_call_id == "prepare")
                 assert json.loads(facts.content)["status"] == "executed"
                 assert runtime.store.load(config).approval is None
             return next(self.responses)

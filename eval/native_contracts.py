@@ -25,6 +25,7 @@ from agent.runtime.native import NativeRuntime
 from agent.runtime.native_store import NativeConversationStore
 from eval import (
     admin_task_contracts,
+    composite_task_contracts,
     context_contracts,
     experience_contracts,
     navigation_contracts,
@@ -189,7 +190,7 @@ CASES = [("chat", favorite_backend, _chat),
          ("message_read_replay", message_backend, _messages),
          *navigation_contracts.CASES, *experience_contracts.CASES, *admin_task_contracts.CASES,
          *reading_task_contracts.CASES, *quota_task_contracts.CASES,
-         *context_contracts.CASES]
+         *context_contracts.CASES, *composite_task_contracts.CASES]
 
 
 def _sample(name, backend, contract, run_id, sample):

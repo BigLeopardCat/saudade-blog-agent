@@ -509,7 +509,8 @@ def test_repeated_feedback_preserves_the_task_and_requires_fresh_approval(backen
         selected.model_factory = lambda **_: model
         text = f"第{index}次修改，改成收藏文章{target}，其他操作先不做。"
         revised = run(selected, text)
-        assert selected.store.load(config()).run["id"] == task_id
+        assert selected.store.load(config()).run and (
+            selected.store.load(config()).run["id"] == task_id), revised
         assert not run(selected, grant=grant).execution["receipts"]
         grant = confirm.verify(revised.execution["pending_confirm"]["token"], 7, 42)
         assert not state["writes"] and not state["read"]

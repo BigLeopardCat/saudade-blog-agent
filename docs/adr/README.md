@@ -100,6 +100,8 @@
 
 | [0032](adr-0032-approval-feedback.md) | 审批反馈复用原任务并撤销旧预览 | 已采纳 |
 
+| [0033](adr-0033-task-outcome-tracking.md) | 按需任务清单与准备工具的暂停契约 | 已采纳 |
+
 ## 相关的、但不算 ADR 的文档
 
 - [../toolcall-stability-roadmap.md](../toolcall-stability-roadmap.md)：工具调用稳定性的
