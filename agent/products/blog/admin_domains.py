@@ -1,5 +1,7 @@
 """Assemble authorized administrator reads and confirmation preparation tools."""
 
+from functools import cache
+
 from agent.authz import SCOPE_ADMIN_CONSOLE
 from agent.domains.account_actions import preparation as accounts
 from agent.domains.admin_writes import available
@@ -26,6 +28,13 @@ _PREPARATIONS = (
     ("admin_work_queue", todos),
     ("admin_work_queue", quotas),
 )
+
+
+@cache
+def preparation_names():
+    """Use the same preparation registry for execution menus and historical access."""
+    return frozenset(name for _, preparation in _PREPARATIONS
+                     for name in preparation.tools({}))
 
 
 def domains(config, can_prepare, reads):

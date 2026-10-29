@@ -106,6 +106,6 @@ def prepare_dashboard_todo(
 
 def tools(read_tools):
     return {
-        "list_dashboard_todos": read_tools["list_dashboard_todos"],
+        **{name: tool for name, tool in read_tools.items() if name == "list_dashboard_todos"},
         prepare_dashboard_todo.name: prepare_dashboard_todo,
     }

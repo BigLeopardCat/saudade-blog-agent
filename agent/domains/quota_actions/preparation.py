@@ -93,5 +93,5 @@ def prepare_quota_action(
 
 
 def tools(read_tools):
-    return {"list_quota_requests": read_tools["list_quota_requests"],
+    return {**{name: tool for name, tool in read_tools.items() if name == "list_quota_requests"},
             prepare_quota_action.name: prepare_quota_action}
