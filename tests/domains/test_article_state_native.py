@@ -162,7 +162,7 @@ def test_revoked_confirmation_cannot_execute(articles, tmp_path, monkeypatch):
     ledger = idem.Ledger(str(tmp_path / "revoke.sqlite3"))
     monkeypatch.setattr(writes, "ledger_for", lambda saver: ledger)
     pending = PendingOperation(signed, prepared.execution["pending_action"])
-    event = pending.cancel_tool(None).invoke({}, config=admin_config())
+    event = pending.cancel(admin_config(), None)
     assert event.execution["pending_event"]["event"] == "cancelled"
     outcome = transactions.execute(signed, admin_config(), None, ledger=ledger)
     assert not outcome["receipts"] and not articles["writes"]

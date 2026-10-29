@@ -9,16 +9,6 @@ from eval import native_contracts
 from eval.native_contracts import golden_trace
 
 
-@pytest.fixture(autouse=True)
-def narration_model(monkeypatch):
-    class Model:
-        def invoke(self, prompt, **kwargs):
-            return AIMessage(content="操作完成。", usage_metadata={
-                "input_tokens": 20, "output_tokens": 5, "total_tokens": 25})
-
-    monkeypatch.setattr("agent.products.blog.narration.get_llm", lambda **_: Model())
-
-
 def test_confirmed_write_evaluates_continuation_and_replay_without_another_write(
     monkeypatch, tmp_path
 ):
@@ -42,8 +32,9 @@ def test_confirmed_write_evaluates_continuation_and_replay_without_another_write
     report = native_contracts.run(["favorite_confirm"])
     row = report["cases"][0]
     assert row["passed"] and row["business_writes"] == 1
-    assert [turn["model_calls"] for turn in row["rounds"]] == [2, 1, 1]
-    assert [turn["text"] for turn in row["rounds"]][1:] == ["操作完成。", "操作完成。"]
+    assert [turn["model_calls"] for turn in row["rounds"]] == [2, 1, 0]
+    assert row["rounds"][1]["text"] == "操作完成。"
+    assert row["rounds"][2]["text"] and row["rounds"][2]["exec_rows"]
 
 
 def test_preflight_stops_at_first_failure_without_counting_unattempted_cases(monkeypatch):
@@ -129,8 +120,6 @@ def test_admin_compound_task_preserves_approval_stages_and_final_business_state(
     ]
     if cancel:
         responses.extend([
-            AIMessage(content="", tool_calls=[call("load_pending_info_tools")]),
-            AIMessage(content="", tool_calls=[call("cancel_pending_operation")]),
             AIMessage(content="已取消剩下的任务。")])
     else:
         responses.append(AIMessage(content="通知已发送，账号身份已调整为杂鱼。"))
@@ -168,7 +157,6 @@ def test_native_outcome_suite_uses_verified_identity_and_redacts_tokens(monkeypa
         AIMessage(content="你好"),
         call("load_favorites_info_tools", {}),
         call("prepare_favorite_change", {"action": "add", "article_id": 19}),
-        call("load_pending_info_tools", {}), call("cancel_pending_operation", {}),
         AIMessage(content="旧操作已取消。"),
         call("load_notifications_info_tools", {}),
         call("prepare_notification_read", {"scope": "all_unread"}),
@@ -201,7 +189,7 @@ def test_native_outcome_suite_uses_verified_identity_and_redacts_tokens(monkeypa
                for g in report["metrics"]["groups"])
     documents = [json.loads(path.read_text()) for path in tmp_path.rglob("*.json")]
     terminal = [event for doc in documents for event in doc["events"]
-                if event.get("kind") in {"prepared", "cancelled"}]
+              if event.get("kind") == "prepared" or event.get("event") == "approval_feedback"]
     assert len(terminal) == 4
     assert all("args" not in event and "result" not in event for event in terminal)
     assert all("pending_confirm" not in event and "token" not in event for event in terminal)

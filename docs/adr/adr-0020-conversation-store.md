@@ -16,8 +16,8 @@
 
 - `load` 读取会话状态；历史可见性仍由当前身份和工具访问策略过滤。
 - 持久任务的轮次提交已由 [ADR-0031](adr-0031-framework-turn-commit.md) 收敛到父图节点。
-  `save_turn` 仅用于受控维护与既有卡片；不能结束活动执行。审批期间追加历史必须保留原绑定。
-- `clear_pending` 只清除匹配操作及其任务；普通插话保留原审批，换卡先撤销旧签名。
+  已删除独立轮次保存方法；维护入口不能结束活动执行。
+- `clear_pending` 只清除匹配操作及其任务；审批反馈通过原 interrupt 撤销旧签名并继续同一任务，见 [ADR-0032](adr-0032-approval-feedback.md)。
 - `guard` 保持整轮串行及删除屏障；`prune` 使用框架保留策略清理 checkpoint。
 - `get_state/update_state` 保留必要维护入口；不暴露旧 plan、DSL 或持久工具游标。
 

@@ -4,6 +4,7 @@ import secrets
 from typing import Annotated, TypedDict
 
 import pytest
+from _conversation_seed import seed_turn
 from _own_support import config
 from langchain_core.messages import AIMessage, HumanMessage
 from langgraph.checkpoint.memory import InMemorySaver
@@ -46,7 +47,7 @@ def test_reads_old_checkpoint_without_exposing_plan_or_continuing_old_nodes():
     assert [m.content for m in previous.messages] == ["旧问题", "旧答复"]
     assert not previous.unfinished and not store.is_resuming(config())
     assert "plan" not in store.get_state(config()).values
-    store.save_turn(config(), [HumanMessage(content="新问题")], "新答复")
+    seed_turn(store, config(), [HumanMessage(content="新问题")], "新答复")
     rebuilt = NativeConversationStore(saver)
     assert [m.content for m in rebuilt.load(config()).messages] == [
         "旧问题", "旧答复", "新问题", "新答复"]
@@ -60,7 +61,7 @@ def test_old_pending_is_preserved_as_data_and_execution_cannot_write_plan_fields
     legacy_checkpoint(saver, pending=pending)
     store = NativeConversationStore(saver)
     assert store.load(config()).pending == pending
-    store.save_turn(config(), [HumanMessage(content="闲聊")], "你好", pending=pending,
+    seed_turn(store, config(), [HumanMessage(content="闲聊")], "你好", pending=pending,
                     execution={"plan": [{"tool": "must_not_be_used"}], "receipts": []})
     assert store.load(config()).pending == pending
     assert "plan" not in store.get_state(config()).values
@@ -69,7 +70,7 @@ def test_old_pending_is_preserved_as_data_and_execution_cannot_write_plan_fields
 def test_clear_pending_requires_exact_card_and_preserves_history_and_receipts():
     store = NativeConversationStore(InMemorySaver())
     pending = {"pending_confirm": {"q": "待确认"}, "pending_action": {"jti": "new"}}
-    store.save_turn(config(), [HumanMessage(content="请求")], "答复",
+    seed_turn(store, config(), [HumanMessage(content="请求")], "答复",
                     execution={**pending, "receipts": [{"tool": "earlier_write"}]})
     store.clear_pending(config(), "old")
     assert store.load(config()).has_pending
@@ -88,15 +89,15 @@ def test_discard_after_legacy_adoption_uses_commit_node_and_delete_rejects_late_
     result = checkpoint.drop_last_user_turn(runtime, 42, "旧问题")
     assert result == {"dropped": True, "why": ""}
     assert store.load(config()).messages == []
-    store.save_turn(config(), [HumanMessage(content="另一轮")], "答复")
+    seed_turn(store, config(), [HumanMessage(content="另一轮")], "答复")
     assert checkpoint.delete_thread(saver, 42)
     with pytest.raises(checkpoint_store.ConversationDeleted):
-        store.save_turn(config(), [], "迟到答复")
+        seed_turn(store, config(), [], "迟到答复")
     assert saver.get_tuple(config()) is None
 
 
 def test_no_saver_remains_explicitly_stateless():
     store = NativeConversationStore(None)
     assert not store.available and store.load(config()).messages == []
-    store.save_turn(config(), [HumanMessage(content="问题")], "答复")
+    seed_turn(store, config(), [HumanMessage(content="问题")], "答复")
     assert store.load(config()).messages == []

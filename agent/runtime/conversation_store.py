@@ -43,13 +43,6 @@ class ConversationStore(Protocol):
 
     def load(self, config) -> ConversationSnapshot: ...
 
-    def save_turn(
-        self, config, messages, reply, *, observations=(), execution=None, pending=None,
-        approval=None, context_update=None,
-    ) -> None:
-        """Maintain history/older cards; never end an active framework task."""
-        ...
-
     def clear_pending(self, config, jti: str, *, observations=()) -> None:
         """Clear the matching card and append its optional facts in the same commit."""
         ...

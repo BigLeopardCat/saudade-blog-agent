@@ -98,6 +98,8 @@
 | [0030](adr-0030-task-tool-scope-and-resource-exit.md) | 工具按任务激活，资源耗尽直接报告受阻 | 已采纳 |
 | [0031](adr-0031-framework-turn-commit.md) | 持久任务在父图提交正文、历史与任务状态 | 已采纳 |
 
+| [0032](adr-0032-approval-feedback.md) | 审批反馈复用原任务并撤销旧预览 | 已采纳 |
+
 ## 相关的、但不算 ADR 的文档
 
 - [../toolcall-stability-roadmap.md](../toolcall-stability-roadmap.md)：工具调用稳定性的

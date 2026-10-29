@@ -112,15 +112,7 @@ def test_promoted_browser_action_does_not_activate_other_site_tools():
     assert list(session.tools) == ["navigate_page", "set_page_appearance"]
 
 
-class Pending:
-    def __init__(self, target):
-        self.target = target
-
-    def context(self):
-        return {"target": self.target, "status": "awaiting_confirmation"}
-
-
-@pytest.mark.parametrize("changed", ["page", "summary", "pending"])
+@pytest.mark.parametrize("changed", ["page", "summary"])
 def test_changing_current_data_preserves_older_prefix_and_latest_exchange(changed):
     principal = Principal(7, "user", SOURCE_ASSERTION)
     history = [HumanMessage(content="Earlier question " * 30),
@@ -131,11 +123,10 @@ def test_changing_current_data_preserves_older_prefix_and_latest_exchange(change
             message.additional_kwargs["memory_actor"] = {"uid": 7, "role": "user"}
     current = HumanMessage(content="继续")
     before = build_prompt([*history, context("page A", "summary A"), current],
-                          principal, pending=Pending("target A"))
+                          principal)
     after = build_prompt([*history, context("page B" if changed == "page" else "page A",
                                            "summary B" if changed == "summary" else "summary A"),
-                          current], principal,
-                         pending=Pending("target B" if changed == "pending" else "target A"))
+                          current], principal)
     assert before[:4] == after[:4] == [before[0], before[1], *history[:2]]
     assert before[:-1] == after[:-1] == [before[0], before[1], *history]
     assert before[-1].content.startswith(current.content + "\n\n")
@@ -146,7 +137,7 @@ def test_changing_current_data_preserves_older_prefix_and_latest_exchange(change
         assert all(value not in prompt[0].content for value in
                    ("page A", "page B", "summary A", "summary B", "target A", "target B"))
         assert isinstance(prompt[-1], HumanMessage)
-        assert "当前待确认操作" in prompt[-1].content
+        assert "当前待确认操作" not in prompt[-1].content
 
 
 def test_new_turn_page_state_preserves_the_recent_exchange_in_the_actual_request():

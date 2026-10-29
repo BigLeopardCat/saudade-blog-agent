@@ -17,5 +17,9 @@ class Ledger:
         with closing(idem.Ledger(self.path)) as ledger:
             return ledger.finish(*args, **kwargs)
 
+    def lookup(self, *args, **kwargs):
+        with closing(idem.Ledger(self.path)) as ledger:
+            return ledger.lookup(*args, **kwargs)
+
     def close(self):
         pass

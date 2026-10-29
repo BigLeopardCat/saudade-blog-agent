@@ -1,5 +1,4 @@
-"""Pending favorite changes survive chat; cancellation invalidates old grants."""
-
+"""Approval feedback revokes old previews; signed button cancellation is durable."""
 
 import asyncio
 import json
@@ -31,13 +30,12 @@ class Model:
     def __init__(self, name=None, args=None):
         self.prompts = []
         self.responses = ([AIMessage(content="", tool_calls=[{
-            "name": ("load_pending_info_tools" if name == "cancel_pending_operation"
-                     else "load_favorites_info_tools"), "args": {}, "id": "load"}]),
+            "name": "load_favorites_info_tools", "args": {}, "id": "load"}]),
             AIMessage(content="", tool_calls=[{
                 "name": name, "args": args or {}, "id": "pending"}])]
             if name else [AIMessage(content="你好，有什么想聊的？")])
         if name == "cancel_pending_operation":
-            self.responses.append(AIMessage(content="好，刚才那项已取消。"))
+            self.responses = [AIMessage(content="好，刚才那项已取消。")]
 
     def bind_tools(self, tools, **kwargs):
         return self
@@ -51,11 +49,11 @@ class Model:
 def waiting(site, monkeypatch, tmp_path):
     ledger = Ledger(str(tmp_path / "pending.sqlite3"))
     monkeypatch.setattr(writes, "ledger_for", lambda saver: ledger)
-    runtime = NativeRuntime(NativeConversationStore(InMemorySaver()))
-    proposal = preparation.prepare_favorite_change.invoke(
-        {"action": "add", "article_id": 19}, config=config())
-    runtime.store.save_turn(config(), [HumanMessage(content="收藏文章19")], proposal.reply,
-                            execution=proposal.execution, pending=proposal.execution)
+    model = Model("prepare_favorite_change", {"action": "add", "article_id": 19})
+    runtime = NativeRuntime(NativeConversationStore(InMemorySaver()),
+        model_factory=lambda **_: model)
+    proposal = list(runtime.stream_events({"messages": [HumanMessage(content="收藏文章19")]},
+                                          config()))[-1]
     yield runtime, proposal, ledger
     ledger.close()
 
@@ -83,11 +81,12 @@ def test_cancellation_is_durable_before_reply_and_old_grant_cannot_write(
                for prompt in model.prompts for message in prompt)
 
 
-def test_chat_preserves_pending_without_emitting_another_card(waiting, monkeypatch):
+def test_feedback_invalidates_pending_without_executing_or_emitting_another_card(waiting):
     runtime, proposal, _ = waiting
     events = run(runtime, Model(), "你好")
-    expected = proposal.execution["pending_confirm"]
-    assert runtime.get_state(config()).values["pending_confirm"] == expected
+    assert runtime.get_state(config()).values["pending_confirm"] is None
+    assert (events[-1].execution["pending_event"]["jti"]
+            == proposal.execution["pending_action"]["jti"])
     assert not any(getattr(event, "execution", None) for event in events[:-1])
 
 
@@ -148,7 +147,7 @@ def test_cannot_cancel_a_started_or_completed_write(waiting, status):
     ledger.claim(key, name, active.grant["jti"])
     if status == "done":
         ledger.finish(key, base.ToolResult("已收藏", "ok", {}))
-    result = active.cancel_tool(runtime.saver).invoke({}, config=config())
+    result = active.cancel(config(), runtime.saver)
     assert result.execution is None and "不能" in result.reply
 
 
@@ -171,8 +170,14 @@ def test_storage_failure_emits_no_cancellation_and_old_card_still_cannot_write(
     if fault == "ledger":
         monkeypatch.setattr(ledger, "finish", failed)
     else:
-        # The isolated Agent is transferred to a framework checkpoint at revocation.
-        monkeypatch.setattr(runtime.saver, "put", failed)
+        from agent.runtime import approval
+        review = approval.review
+
+        def checkpoint_failed(state, config, **kwargs):
+            review(state, config, **kwargs)
+            raise RuntimeError("storage unavailable")
+
+        monkeypatch.setattr(approval, "review", checkpoint_failed)
     runtime.model_factory = lambda **_: Model("cancel_pending_operation")
     stream = runtime.stream_events({"messages": [HumanMessage(content="取消待办")]}, config())
     with pytest.raises(RuntimeError, match="storage unavailable"):
@@ -218,6 +223,10 @@ def test_stream_cancels_host_pending_and_routes_revoked_card_after_runtime_switc
             with closing(idem.Ledger(ledger.path)) as connection:
                 return connection.finish(*args)
 
+        def lookup(self, *args):
+            with closing(idem.Ledger(ledger.path)) as connection:
+                return connection.lookup(*args)
+
     monkeypatch.setattr(writes, "ledger_for", lambda saver: Store())
     frames = asyncio.run(collect(NativeRuntime(
         NativeConversationStore(runtime.saver),
@@ -225,7 +234,8 @@ def test_stream_cancels_host_pending_and_routes_revoked_card_after_runtime_switc
     controls = [json.loads(frame.removeprefix("__PENDING__:")) for frame in frames
                 if isinstance(frame, str) and frame.startswith("__PENDING__:")]
     assert controls == [{"event": "cancelled", "task_id": proposal.execution[
-        "pending_action"]["task_id"], "jti": proposal.execution["pending_action"]["jti"]}]
+        "pending_action"]["task_id"], "jti": proposal.execution["pending_action"]["jti"],
+        "reason": "user_feedback"}]
     grant = confirm.verify(proposal.execution["pending_confirm"]["token"], 7, 42)
     assert grant["executor"] == "favorites"
     # The raw runtime's stream is bypassed; the signed executor takes over.

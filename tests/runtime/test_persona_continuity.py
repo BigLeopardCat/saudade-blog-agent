@@ -9,10 +9,8 @@ from langchain_core.messages import AIMessage, HumanMessage
 from langgraph.checkpoint.memory import InMemorySaver
 
 from agent.principal import SOURCE_ASSERTION, Principal
-from agent.products.blog import narration
 from agent.runtime.native import NativeRuntime
 from agent.runtime.native_store import NativeConversationStore
-from agent.runtime.results import TurnResult
 from agent.runtime.turns import AgentCancelled
 
 
@@ -29,6 +27,9 @@ class Model:
         if isinstance(response, Exception):
             raise response
         return response
+
+    def bind_tools(self, *args, **kwargs):
+        return self
 
 
 def caller(prompt, marker="运行时能力（可信数据）："):
@@ -65,14 +66,16 @@ def test_chat_only_voice_survives_multiple_turns_and_reconstructed_resume():
 
 @pytest.mark.parametrize("role,address", [("user", "你"), ("admin", "主人"),
                                         ("superadmin", "主人"), ("zako", "杂鱼")])
-def test_result_narration_uses_the_same_selected_voice(monkeypatch, role, address):
+def test_framework_reply_uses_the_selected_voice(role, address):
     from agent.products.blog.persona import conversation_style
 
     principal = Principal(7, role, SOURCE_ASSERTION)
     model = Model(AIMessage(content="真实结果已保留。"))
-    monkeypatch.setattr(narration, "get_llm", lambda **_: model)
-    result = narration.narrate(TurnResult("本次真实结果。"), config(principal=principal))
-    assert result == "真实结果已保留。"
-    context = caller(model.prompts[0], "调用者账号（不是助手身份，可信数据）：")
+    selected = NativeRuntime(NativeConversationStore(InMemorySaver()),
+                             model_factory=lambda **_: model)
+    result = list(selected.stream_events({"messages": [HumanMessage(content="你好")]},
+                                         config(principal=principal)))[-1]
+    assert result.reply == "真实结果已保留。"
+    context = caller(model.prompts[0])
     assert context["conversation_style"] == conversation_style(principal)
     assert context["preferred_address"] == address

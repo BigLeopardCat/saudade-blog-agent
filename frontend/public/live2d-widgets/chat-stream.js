@@ -1269,7 +1269,7 @@
             }
             if (type === 'done') return;
             if (type === 'progress') { addStep('step', data); return; }
-            if (type === 'task_input') { steering?.receive(data); return; }
+            if (type === 'task_input') { steering?.receive(data, roundId); return; }
             if (type === 'confirmation') {
               const cr = ctx.state.confirmRound;
               if (cr && cr.continuation && cr.ask.id === data.id) ctx.state.confirmRound = null;

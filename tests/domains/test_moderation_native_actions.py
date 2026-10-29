@@ -368,14 +368,14 @@ def test_cancel_and_cross_domain_replacement_revoke_old_confirmation(
     replacement = todos.prepare_dashboard_todo.invoke(
         {"action": "create", "text": "准备面试"}, config=admin_config()
     )
-    moved = pending.transition(replacement, admin_config(), None)
+    moved = pending.feedback(admin_config(), None)
     assert moved.execution["pending_event"]["event"] == "cancelled"
-    assert grant(moved)["executor"] == "todos"
+    assert grant(replacement)["executor"] == "todos"
     old = transactions.execute(grant(initial), admin_config(), None, ledger=ledger)
     assert not old["receipts"] and not moderation["writes"]
     next_card = prepare("comment", "reject")
     pending = PendingOperation(grant(next_card), next_card.execution["pending_action"])
-    cancelled = pending.cancel_tool(None).invoke({}, config=admin_config())
+    cancelled = pending.cancel(admin_config(), None)
     assert cancelled.execution["pending_action"] is None
     replay = transactions.execute(grant(next_card), admin_config(), None, ledger=ledger)
     assert not replay["receipts"] and not moderation["writes"]
