@@ -223,7 +223,8 @@ def test_notification_summary_approval_and_browser_ack_keep_one_durable_task(mon
         AIMessage(content="", tool_calls=[call("list_notifications", "read", unread_only=True)]),
         AIMessage(content="", tool_calls=[call("prepare_notification_read", "prepare",
                                               scope="selected", ids=[101, 102])]))
-    first_model.approval_reply = AIMessage(content="部署 N-417，评论待审 R-862；确认后标记并打开留言板。")
+    first_model.approval_reply = AIMessage(
+        content="部署 N-417，评论待审 R-862；确认后标记并打开留言板。")
     cfg = config(browser_feedback=True)
     try:
         with backend() as state:
