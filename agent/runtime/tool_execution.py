@@ -33,9 +33,9 @@ def append_result(session, request, handler, prompt, round_index, attachments):
     record("native", "tool_requested", name=name, call_id=call["id"])
     if name in session.loaders:
         domain = session.loaders[name]
-        if domain not in session.loaded:
+        if domain not in session.state["loaded"]:
             session.tools.update(session.domains[domain])
-            session.loaded.append(domain)
+            session.state["loaded"].append(domain)
             emit(session.config, f"正在加载工具领域：{domain}", key=f"domain:{domain}")
             record("native", "load_domain", domain=domain, call_id=call["id"])
             session.refresh_menu()
@@ -49,7 +49,7 @@ def append_result(session, request, handler, prompt, round_index, attachments):
                                   tool_call_id=call["id"], status="error"))
         record("native", "tool_error", name=name, reason="unknown_tool")
         return None
-    if session.result_chars >= session.result_limit:
+    if session.state["result_chars"] >= session.result_limit:
         session._budget_stop("result_budget")
         return None
     session.calls_used += 1
@@ -71,7 +71,7 @@ def append_result(session, request, handler, prompt, round_index, attachments):
     kind = (getattr(body, "kind", artifact.get("kind", "unknown"))
             if message.status != "error" else "error")
     session.observations.extend(memory.observation(call, body))
-    remaining = session.result_limit - session.result_chars
+    remaining = session.result_limit - session.state["result_chars"]
     body = session.render_result(call, body, min(MAX_RESULT_CHARS, remaining))
     # Structured data is used by product evidence policy, not duplicated in
     # the durable transcript. Preserve artifacts supplied by standard tools.
@@ -81,7 +81,7 @@ def append_result(session, request, handler, prompt, round_index, attachments):
     prompt.append(messages[0].model_copy(update={"name": name, "artifact": {
         **(messages[0].artifact or {}), "kind": kind}}))
     attachments.extend(messages[1:])
-    session.result_chars += len(body)
+    session.state["result_chars"] += len(body)
     record("native", "call", name=name, args=call["args"], call_id=call["id"], round=round_index,
            kind=kind, result=trace_mod.tool_result_text(body, name, default_limit=MAX_RESULT_CHARS))
     record("native", "tool_result", name=name, call_id=call["id"], result_chars=len(body))

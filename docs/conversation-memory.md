@@ -28,6 +28,8 @@ Agent 的 LangGraph checkpoint 是执行上下文的唯一持久化来源。博�
 
 Conversation 保存会话记忆；Task 保存可恢复执行坐标并累计用量；HTTP Request 管理当前连接、取消信号与截止时间。人工确认或浏览器等待不占用已结束 HTTP 的时间预算，接续请求有新的截止时间，但沿用原任务的 token、模型及工具调用上限。
 
+核心任务字段由框架 `ExecutionState` 持有，Session 只保留当前节点的工作视图。每次模型节点前后从框架 state 刷新，终结结果直接从 state 生成，不维护第二套独立属性和序列化器。标准工具 `Command` 的状态更新不会被旧 Session 值覆盖；新任务显式清空旧效果，接续控制只消费一次。详见 [ADR-0029](adr/adr-0029-framework-task-state.md)。
+
 `agent_task_usage` 在独立 checkpoint 数据库保存任务来源和累计用量。模型网络调用前持久化预留，收到 usage 后再结算；未知用量保守保留预留。该记录独立于可能被取消、回滚或重放的模型节点，避免进程退出后重置消耗。会话锁串行化同一任务的更新，删除会话同步清理用量。普通暂停、浏览器回执和确认接续走同一条预算绑定路径。
 
 新请求统计只计本次增量，任务统计包含所有接续；不能把恢复的历史用量再次加进本次费用。缺少用量记录的旧未完成任务不会按零消耗恢复，需要重新发起；已完成会话原文保留。
@@ -50,6 +52,7 @@ Conversation 保存会话记忆；Task 保存可恢复执行坐标并累计用�
 
 - `test_framework_compaction.py`：真实标准 Agent 与 saver 的压缩、原子提交、失败保留、来源隔离及取消恢复。
 - `test_context_lifecycle.py`：长轮次摘要前保全、摘要失败仍提交、未知来源拒绝、存储保留和跨请求预算耗尽。
+- `test_task_state_authority.py`：同批多个 Command、跨节点状态保全、跨任务清空、恢复时旧投影不覆盖 state，以及提交数据冻结。
 - `test_task_inputs_pg.py`：显式测试 DSN 下的 PostgreSQL 跨连接用量恢复及删除；默认离线测试不连接部署数据库。
 - `test_cache_window.py`：90 轮短对话，检查只在实际压缩时改变早期消息前缀。
 - `test_history_recovery.py`、`test_memory_boundaries.py`：长文补读、图片预算、删除屏障及跨来源读取。

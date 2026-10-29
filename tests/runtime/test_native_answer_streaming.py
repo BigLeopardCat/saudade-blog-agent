@@ -173,7 +173,7 @@ def test_result_budget_stop_is_visible_after_a_streamed_preface():
             {"name": "fixture_lookup", "args": {"query": "weather"}, "id": "read"}]),
     ]])
     session = ToolSession(model, {}, {"fixture_lookup": fixture_lookup}, {})
-    session.result_chars = 16000
+    session.state["result_chars"] = 16000
     stream = session.stream([HumanMessage(content="read")])
     shown = []
     while True:
