@@ -246,6 +246,8 @@ def _sample(name, backend, contract, run_id, sample):
                 outcome["reason"] = str(exc)
         outcome["requests"] = len(rounds)
         outcome["business_writes"] = len(_posts(state))
+        if "contract_evidence" in state:
+            outcome["evidence"] = state["contract_evidence"]
         if state.get("unsupported_reads"):
             outcome.update(evaluated=False, passed=False, reason="unsupported fixture read",
                            unsupported_reads=state["unsupported_reads"])
