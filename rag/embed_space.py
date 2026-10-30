@@ -170,7 +170,7 @@ def legacy_cache_ok(space: Space, env: Mapping[str, str]) -> bool:
 
 
 def _is_vec(value) -> bool:
-    return (isinstance(value, list) and value
+    return (isinstance(value, list) and bool(value)
             and all(isinstance(x, (int, float)) and not isinstance(x, bool) for x in value))
 
 
