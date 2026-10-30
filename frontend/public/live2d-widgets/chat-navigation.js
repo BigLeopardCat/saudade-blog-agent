@@ -10,16 +10,24 @@
     const settle = async (pending, status, processFrom) => {
       if (active !== pending || pending.settled) return;
       pending.settled = true;
-      clear();
+      // Keep recovery information until the resumed stream finishes. A route's
+      // lazy chunk may force a reload after its completion acknowledgement.
+      pending.phase = 'reply';
+      store(pending);
+      await engine.ready;
       const until = Date.now() + 6000;
       while (ctx.state.isSending && Date.now() < until) await new Promise(resolve => setTimeout(resolve, 25));
       if (ctx.state.isSending) { ctx.ui.notify?.('页面操作已结束，请稍后继续原任务', 'error'); return; }
       const ok = await send({ silent: true, resumeTask: pending.task_id, convId: pending.convId,
         resumeText: pending.original || '', processFrom, previousProcess: pending.process || [],
-        browserResult: { command_id: pending.command_id, status, path: path() } });
+        ...(status ? { browserResult: {
+          command_id: pending.command_id, status, path: path() } } : {}) });
       if (ok && processFrom?.dataset.clientAction === 'pending') processFrom.remove();
       if (!ok) ctx.ui.notify?.('页面操作已结束，后续回复未完成，请继续原任务', 'error');
-      active = null;
+      if (active === pending) {
+        if (ok) clear();
+        active = null;
+      }
     };
     const watch = (pending, ready, processFrom) => {
       let navigationReady = !ready, failed = false;
@@ -36,7 +44,7 @@
     const receive = (command, context) => {
       const url = new URL(command.url, location.href);
       if (url.origin !== location.origin || !command.command_id || !command.task_id) return false;
-      if (active?.command_id === command.command_id) return true;
+      if (active?.command_id === command.command_id && !active.settled) return true;
       const pending = { ...command, convId: context.convId, original: context.original,
         process: [...(context.processFrom?.querySelectorAll('.agent-process-line') || [])]
           .slice(-24).map(line => ({ cls: 'step', text: line.textContent })),
@@ -64,8 +72,14 @@
           && typeof pending.command_id === 'string' && typeof pending.path === 'string'
           && Number.isFinite(pending.deadline)) {
         active = pending;
-        watch(pending, document.readyState === 'loading'
-          ? new Promise(resolve => document.addEventListener('DOMContentLoaded', resolve, { once: true })) : null);
+        pending.settled = false;
+        const ready = document.readyState === 'loading'
+          ? new Promise(resolve => document.addEventListener('DOMContentLoaded', resolve, { once: true }))
+          : Promise.resolve();
+        // Resume the checkpoint after an interrupted reply without resubmitting
+        // a consumed browser result. An unconsumed interrupt returns its command.
+        if (pending.phase === 'reply') void ready.then(() => settle(pending, null));
+        else watch(pending, ready);
       }
     } catch (_) { clear(); }
     return { receive };

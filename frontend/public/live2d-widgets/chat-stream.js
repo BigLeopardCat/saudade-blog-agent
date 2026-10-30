@@ -916,7 +916,8 @@
         broadcast({ t: 'sending', roundId, from: engine.windowId });
         // 20260903：busy 标记带 convId——新开窗口 restore 时按会话判定是否锁本窗
         // （跨会话发送互不阻塞）；roundId 精确匹配清除语义不变
-        try { localStorage.setItem('saudade-chat-busy', JSON.stringify({ roundId, convId: roundConvId, ts: Date.now() })); } catch (e) {}
+        try { localStorage.setItem('saudade-chat-busy', JSON.stringify({ roundId,
+          convId: roundConvId, owner: engine.tabId, ts: Date.now() })); } catch (e) {}
         if (!silent) {
           broadcast({
             t: 'user', id: userItemId, text: msg, time: sentAt, from: engine.windowId,

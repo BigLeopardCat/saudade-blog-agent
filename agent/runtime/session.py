@@ -16,7 +16,7 @@ from agent.runtime.budget import (
     RequestBudget,
     current_budget,
 )
-from agent.runtime.catalog import loader
+from agent.runtime.catalog import loader, tool_owners
 from agent.runtime.execution_state import initial_state
 from agent.runtime.message_content import text_content
 from agent.runtime.middleware import StreamGuard
@@ -42,6 +42,7 @@ class ToolSession:
         self.tools = dict(tools)
         self.initial_names = set(self.tools)
         self.domains = domains
+        self.tool_owners = tool_owners(tools, domains)
         self.loaders = {f"load_{domain}_info_tools": domain for domain in domains}
         self.state = initial_state()
         self.calls_used = 0
@@ -210,16 +211,15 @@ class ToolSession:
             return None, self._budget_stop(exc.reason, tool_calls=self.calls_used)
         return calls, None
 
-    def stream(self, prompt, *, resume=None, approval_input=(), recover=False, client_result=None):
+    def stream(self, prompt, *, resume=None, approval_input=(), recover=False):
         """Adapt framework events to the current transport result contract."""
         from agent.runtime.execution import FrameworkExecution
 
-        self.fresh_task = resume is None and not recover and client_result is None
+        self.fresh_task = resume is None and not recover
         self._round_index = 0
         self.stream_guard = StreamGuard(self)
         execution = FrameworkExecution(self, prompt)
-        stream = execution.stream(resume=resume, approval_input=approval_input, recover=recover,
-                                  client_result=client_result)
+        stream = execution.stream(resume=resume, approval_input=approval_input, recover=recover)
         visible = []
         boundary, model_key = VisibleText(), None
         self.used_stream_api = True

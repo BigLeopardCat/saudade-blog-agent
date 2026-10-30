@@ -490,6 +490,14 @@
       // （"气泡图片不显示"根因之一）。每个窗口一个随机 id，user 帧带 from 标记，
       // onmessage 收到自己的帧直接跳过。token/done/process 帧经 roundId 幂等无需排除。
       const windowId = Math.random().toString(36).slice(2, 10);
+      const tabId = (() => {
+        try {
+          const key = 'saudade-chat-tab';
+          const value = sessionStorage.getItem(key) || windowId;
+          sessionStorage.setItem(key, value);
+          return value;
+        } catch (_) { return windowId; }
+      })();
       let remotectlTimer = null; // storage 事件防抖句柄
       // 版本自检：确认浏览器加载的是当前部署脚本（nginx 对 live2d-widgets 缓存 1 年，
       // 未强刷时可能仍在跑旧版——DB 权威历史/roundId 同步只在 20260828a 之后才有）
@@ -724,6 +732,9 @@
         try {
           const b = JSON.parse(localStorage.getItem(BUSY_KEY) || 'null');
           if (b && b.roundId && b.ts) {
+            // Reloading closes this tab's former connection. Its stale lease
+            // must not block checkpoint recovery; other tabs remain protected.
+            if (b.owner === tabId) { localStorage.removeItem(BUSY_KEY); return; }
             // 20260903：busy 按会话判定——restore 时本窗已知会话且与标记会话不同
             // → 他会话的轮，不锁本窗（跨会话发送互不阻塞；标记等原窗 idle 自清，
             // 本窗不越权删）。空白新对话态无在途轮 → 跳过。b.convId 空（旧客户端
@@ -1340,8 +1351,8 @@
         }
         return div;
       };
-      // 初始化：DB 权威拉取（游客/失败自动降级本地）
-      pullHistory();
+      // Recovery waits for the initial history read before starting a new stream.
+      api.ready = pullHistory();
 
       // 导航跳转返回后：默认打开对话框并滚动到对话底部
       try {
@@ -1388,6 +1399,7 @@
       api.notifyListDirty = notifyListDirty;
       api.pruneConvCaches = pruneConvCaches;
       api.windowId = windowId; // user 帧广播标记（onmessage 排除自己的广播回环）
+      api.tabId = tabId;
       api.appendMsg = appendMsg;
       api.makeLiveBubble = makeLiveBubble;
       api.remoteLive = remoteLive;

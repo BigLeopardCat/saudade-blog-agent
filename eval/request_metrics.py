@@ -50,6 +50,17 @@ def summary(doc):
     meta = _mapping(doc.get("input"))
     runtime = _mapping(meta.get("runtime"))
     events = events_of(doc)
+    native = [event for event in events if event.get("node") == "native"]
+    discoveries = [event for event in native if event.get("event") == "tool_discovery"]
+    pending_discovery, followup_calls = False, 0
+    for event in native:
+        if event.get("event") == "tool_discovery":
+            pending_discovery = True
+        elif event.get("event") == "llm_start":
+            followup_calls += int(pending_discovery)
+            pending_discovery = False
+    tool_errors = Counter(_label(event.get("reason")) for event in native
+                          if event.get("event") == "tool_error")
     duration = doc.get("duration_s")
     valid_duration = (type(duration) in (int, float) and math.isfinite(duration)
                       and duration >= 0)
@@ -69,7 +80,19 @@ def summary(doc):
                                     if e.get("event") == "budget_stop"],
             "finalization_reasons": [_label(e.get("reason")) for e in events
                                       if e.get("event") == "finalizing"],
+            "tool_requests": sum(event.get("event") == "tool_requested" for event in native),
+            "discovery_requests": len(discoveries),
+            "domains_loaded": sum(event.get("event") == "load_domain" for event in native),
+            "inactive_tool_requests": tool_errors["tool_not_loaded"],
+            "unknown_tool_requests": tool_errors["unknown_tool"],
+            "post_discovery_model_calls": followup_calls,
             **action_metrics.timings(events), **usage.totals(events)}
+
+
+def _discovery_totals(rows):
+    return {field: sum(row[field] for row in rows) for field in (
+        "tool_requests", "discovery_requests", "domains_loaded",
+        "inactive_tool_requests", "unknown_tool_requests", "post_discovery_model_calls")}
 
 
 def collect(paths):
@@ -97,6 +120,7 @@ def collect(paths):
                        "requests": len(rows), "with_reply": sum(r["has_reply"] for r in rows),
                        "end_reasons": dict(Counter(r["end_reason"] for r in rows)),
                        "started_calls": sum(r["started_calls"] for r in rows),
+                       **_discovery_totals(rows),
                        "errored_calls": sum(r["errored_calls"] for r in rows),
                        "handoff_reasons": dict(Counter(reason for r in rows
                                                         for reason in r["handoff_reasons"])),

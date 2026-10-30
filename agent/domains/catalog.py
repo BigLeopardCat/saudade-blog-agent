@@ -1,7 +1,10 @@
 """Bounded article metadata and account catalogs; no content or credentials."""
 
+from typing import Annotated
+
 from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import tool
+from pydantic import Field, StrictStr
 
 from agent.domains.admin_pages import Identifier, Page, SearchText, read_page
 from agent.domains.article_metadata import article as _article
@@ -9,10 +12,14 @@ from agent.domains.article_metadata import positive as _positive
 from agent.domains.article_metadata import text as _text
 from agent.domains.pagination import CatalogLimit
 from agent.principal import ROLE_ADMIN, ROLE_USER, ROLE_ZAKO
+from agent.reports import sanitize_untrusted
+
+Username = Annotated[StrictStr, Field(min_length=1, max_length=255)]
 
 
 def _account(row):
     if (not isinstance(row, dict) or not _positive(row.get("id"))
+            or not isinstance(row.get("nickname"), str)
             or row.get("role") not in (ROLE_ADMIN, ROLE_USER, ROLE_ZAKO)
             or any(type(row.get(key)) is not bool for key in ("frozen", "muted"))
             or any(type(row.get(key)) is not int or row[key] < 0
@@ -24,7 +31,8 @@ def _account(row):
     if username != row["username"]:
         raise ValueError("Account identifier cannot be altered")
     return {key: row[key] for key in ("id", "username", "role", "frozen", "muted",
-                                     "mutedUntil", "quotaUsed", "quotaLimit")}
+                                     "mutedUntil", "quotaUsed", "quotaLimit")} | {
+        "nickname": sanitize_untrusted(row["nickname"], 255)}
 
 
 @tool
@@ -45,17 +53,21 @@ def list_admin_notes(config: RunnableConfig, keyword: SearchText | None = None,
 
 
 @tool
-def list_accounts(config: RunnableConfig, username: SearchText | None = None,
+def list_accounts(config: RunnableConfig, username: Username | None = None,
                    page: Page = 1, limit: CatalogLimit = 20,
-                   account_id: Identifier | None = None) -> object:
-    """分页读取后台账号名录，默认及最多20条，返回匹配总数、账号名、角色、冻结、禁言与额度。
+                   account_id: Identifier | None = None, query: SearchText | None = None) -> object:
+    """Search the admin account catalog; at most 20 candidates per page, with total count.
 
-    username 必须是完整账号名，不按昵称猜测；可用 account_id 精确定位。
-    超级管理员和未知角色不在名录中；不返回密码、邮箱、登录凭据，不修改账号。
-    quotaLimit=0 表示不限额，用量与上限的单位均为对话轮。
+    query matches a literal substring of login name OR nickname, case-insensitively.
+    username is an exact full login name; account_id is exact. Combined filters use AND.
+    For nickname clues, search query first. Use the unique candidate's ID for preparation;
+    show distinguishing IDs, login names and nicknames when multiple candidates match.
+    Empty results mean no match in this catalog/filter, not global account nonexistence.
+    Returns nickname, role, frozen/mute state and quotas; excludes superadmin and unknown
+    roles, passwords, email and credentials. Read-only. quotaLimit=0 means unlimited turns.
     """
     if account_id is not None:
         page, limit = 1, 1
     return read_page("accounts", config, page, limit,
-                     {"username": username, "id": account_id}, _account,
+                     {"username": username, "id": account_id, "query": query}, _account,
                      {"id": account_id, "username": username})
