@@ -17,14 +17,18 @@ from tools import base
 @contextmanager
 def backend():
     state = {"caller_role": "admin", "requests": [], "unsupported_reads": [], "writes": [],
-             "account": {"id": 20, "username": "青叶", "role": "user", "status": 0,
+             "account": {"id": 20, "username": "青叶", "nickname": "青叶昵称",
+                         "role": "user", "status": 0,
                          "mutedUntil": None}, "notices": [], "revision": 0}
 
+    state["accounts"] = {20: state["account"]}
+
     def plan(intent, notice):
-        row = state["account"]
-        if any(value is not None and row[key] != value
-               for key, value in intent["target"].items()):
+        matches = [row for row in state["accounts"].values() if all(
+            value is None or row[key] == value for key, value in intent["target"].items())]
+        if len(matches) != 1:
             return None
+        row = {key: matches[0][key] for key in ("id", "username", "role", "status", "mutedUntil")}
         version = hashlib.sha256(json.dumps([row, intent, state["revision"]],
                                             sort_keys=True).encode()).hexdigest()
         if notice:
@@ -42,15 +46,21 @@ def backend():
         state["requests"].append(request)
         path = request.url.path
         if request.method == "GET" and path == "/api/protected/accounts":
-            account = state["account"]
-            matches = all(value is None or str(account[key]) == value for key, value in
-                          (("id", request.url.params.get("id")),
-                           ("username", request.url.params.get("username"))))
-            rows = [{key: account[key] for key in ("id", "username", "role", "mutedUntil")}
-                    | {"frozen": False, "muted": False, "quotaUsed": 0, "quotaLimit": 500}]
-            return httpx.Response(200, json={"code": 200,
-                                            "data": rows if matches else [],
-                                            "total": int(matches)})
+            params = request.url.params
+            rows = [row for row in state["accounts"].values() if row["role"] in {
+                "admin", "user", "zako"} and all(
+                value is None or str(row[key]) == value for key, value in
+                (("id", params.get("id")), ("username", params.get("username"))))]
+            if "query" in params:
+                query = params["query"].casefold()
+                rows = [row for row in rows if any(query in row[key].casefold()
+                        for key in ("username", "nickname"))]
+            total = len(rows)
+            page, size = int(params.get("page", "1")), int(params.get("page_size", "20"))
+            rows = [{key: row[key] for key in ("id", "username", "nickname", "role", "mutedUntil")}
+                    | {"frozen": False, "muted": False, "quotaUsed": 0, "quotaLimit": 500}
+                    for row in sorted(rows, key=lambda row: row["id"])[(page-1)*size:page*size]]
+            return httpx.Response(200, json={"code": 200, "data": rows, "total": total})
         notice = path.startswith("/api/protected/notice-actions")
         if request.method != "POST" or path not in {
                 "/api/protected/notice-actions", "/api/protected/notice-actions/prepare",
@@ -70,7 +80,10 @@ def backend():
             state["writes"].append("notice")
             data = {"notificationId": 101, "delivered": True, "state": current}
         else:
-            state["account"] = deepcopy(current["after"])
+            updated = {**state["accounts"][current["after"]["id"]], **deepcopy(current["after"])}
+            state["accounts"][updated["id"]] = updated
+            if updated["id"] == 20:
+                state["account"] = updated
             state["writes"].append("role")
             data = {"changed": current["changed"], "beforeVersion": body["version"],
                     "state": current}

@@ -162,6 +162,47 @@ def test_framework_turn_commit_survives_saver_reconstruction(inboxes, monkeypatc
     assert not saved.unfinished and rebuilt.get_state(config()).values["turn"] is None
 
 
+def test_browser_ack_then_disconnect_recovers_the_actual_child_checkpoint(inboxes, monkeypatch):
+    from _browser_support import Model, acknowledge
+    from _own_support import config
+    from langchain_core.messages import HumanMessage, ToolMessage
+    from langgraph.checkpoint.postgres import PostgresSaver
+
+    from agent.runtime import checkpoint_store
+    from agent.runtime.control import AgentCancelled
+    from agent.runtime.native import NativeRuntime
+    from agent.runtime.native_store import NativeConversationStore
+
+    pool = inboxes[0].storage.pool
+    PostgresSaver(pool).setup()
+    with pool.connection() as conn:
+        checkpoint_store.setup(conn)
+    model, cfg = Model(), config(browser_feedback=True)
+
+    def runtime():
+        return NativeRuntime(NativeConversationStore(PostgresSaver(pool)),
+                             model_factory=lambda **_: model)
+
+    first = list(runtime().stream_events({"messages": [HumanMessage(content="去留言板")],
+                                         "task_id": "page-task"}, cfg))[-1]
+    original = model.invoke
+
+    def disconnected(messages, **kwargs):
+        raise AgentCancelled()
+
+    with monkeypatch.context() as scoped:
+        scoped.setattr(model, "invoke", disconnected)
+        with pytest.raises(AgentCancelled):
+            list(runtime().stream_events({"resume_task": "page-task"},
+                acknowledge(cfg, first.execution["client_action"])))
+    assert model.invoke == original and runtime().store.load(cfg).unfinished
+    result = list(runtime().stream_events({"resume_task": "page-task"}, cfg))[-1]
+    assert result.reply and not result.execution.get("client_action")
+    assert sum(isinstance(m, ToolMessage) and m.name == "navigate_page"
+               for m in model.calls[-1]) == 1
+    assert not runtime().store.load(cfg).unfinished
+
+
 @pytest.mark.parametrize("phase", ["commit", "feedback"])
 def test_actual_process_exit_recovers_durable_task_once(inboxes, tmp_path, monkeypatch, phase):
     import secrets

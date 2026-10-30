@@ -14,6 +14,7 @@ from agent.runtime.execution_state import ExecutionState, capture, restore
 from agent.runtime.memory_media import stage
 from agent.runtime.middleware import OrderedToolsMiddleware, SessionMiddleware
 from agent.runtime.recovery import restore_session
+from agent.runtime.results import TurnResult
 
 
 class FrameworkExecution:
@@ -82,10 +83,18 @@ class FrameworkExecution:
                               partial(turn_commit.commit, session=session),
                               feedback=session.feedback_handler)
 
-    def stream(self, *, resume=None, approval_input=(), recover=False, client_result=None):
+    def stream(self, *, resume=None, approval_input=(), recover=False):
         if self.parent is not None:
+            client_result = None
             if recover:
                 self._recover()
+                from agent.runtime.client_actions import resume_value
+                snapshot = self.recovery_state or self.parent.get_state(
+                    self.config, subgraphs=True)
+                client_result = resume_value(snapshot, self.session.task["id"], self.config)
+                if isinstance(client_result, TurnResult):
+                    self.session.outcome = client_result
+                    return
                 if (not self.resume_parent and self.recovery_state is not None
                         and not self.recovery_state.next):
                     return

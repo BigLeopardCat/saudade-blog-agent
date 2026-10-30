@@ -23,7 +23,8 @@ def backend(monkeypatch):
              "isTop": 0, "categoryId": 9, "categoryName": "分类", "tags": [
                  {"id": 1, "level": 1, "name": "一级"}, {"id": 1, "level": 2, "name": "二级"}],
              "content": "secret article body"} for i in range(1, 8)],
-             "accounts": [{"id": i, "username": "account_" + str(i), "role": "user",
+             "accounts": [{"id": i, "username": "account_" + str(i), "nickname": "昵称" + str(i),
+             "role": "user",
              "frozen": False, "muted": False, "mutedUntil": None, "quotaUsed": 5,
              "quotaLimit": 500, "password": secrets.token_urlsafe(24), "email": "private"}
              for i in range(1, 8)]}
@@ -40,6 +41,10 @@ def backend(monkeypatch):
             rows = [row for row in rows if row["id"] == int(params["id"])]
         if "username" in params:
             rows = [row for row in rows if row["username"] == params["username"]]
+        if "query" in params:
+            query = params["query"].casefold()
+            rows = [row for row in rows if any(query in row[key].casefold()
+                    for key in ("username", "nickname"))]
         if "category" in params:
             rows = [row for row in rows if row["categoryName"] == params["category"]]
         size, page = int(params["page_size"]), int(params["page"])
@@ -91,6 +96,33 @@ def test_exact_name_and_category_filters_are_transported_and_checked(backend):
     backend["override"] = {"code": 200, "data": backend["accounts"][:1], "total": 1}
     assert accounts(account_id=2).kind == "unavailable"
     assert accounts(username="account_2").kind == "unavailable"
+
+
+def test_nickname_candidates_keep_login_identity_and_literal_query_separate(backend):
+    backend["accounts"][0]["nickname"] = "Display_%"
+    backend["accounts"][1]["nickname"] = "Display_AX"
+    result = json.loads(str(accounts(query="DISPLAY_%")))
+    assert result["total"] == 1
+    assert result["items"][0]["nickname"] == "Display_%"
+    assert result["items"][0]["username"] == "account_1"
+    assert result["items"][0]["id"] == 1
+    assert backend["requests"][-1].url.params["query"] == "DISPLAY_%"
+    assert json.loads(str(accounts(username="Display_%")))["total"] == 0
+    assert json.loads(str(accounts(query="Display", account_id=3)))["total"] == 0
+
+
+def test_full_login_names_support_the_same_length_as_write_targets(backend):
+    backend["accounts"][0]["username"] = name = "a" * 255
+    assert json.loads(str(accounts(username=name)))["items"][0]["username"] == name
+    before = len(backend["requests"])
+    with pytest.raises(ValidationError):
+        accounts(username="a" * 256)
+    assert len(backend["requests"]) == before
+
+
+def test_missing_nickname_is_not_silently_accepted_as_the_current_api(backend):
+    del backend["accounts"][0]["nickname"]
+    assert accounts(account_id=1).kind == "unavailable"
 
 
 @pytest.mark.parametrize("field,value", [("role", "superadmin"), ("role", "invented"),
@@ -191,13 +223,28 @@ def test_account_lookup_and_history_restore_do_not_load_article_preparations(bac
     for message in ("查一下account_1，核对身份。", "还记得刚才的账号吗？"):
         list(runtime.stream_events({"messages": [HumanMessage(content=message)]}, cfg))
     assert len(backend["requests"]) == 1
-    assert "list_accounts" not in model.used_menus[0]
+    assert "list_accounts" in model.used_menus[0]
+    assert "prepare_account_role" not in model.used_menus[0]
     assert all({"list_accounts", "prepare_account_role"} <= menu for menu in model.used_menus[1:3])
-    assert "list_accounts" not in model.used_menus[-1]
+    assert "list_accounts" in model.used_menus[-1]
+    assert "prepare_account_role" not in model.used_menus[-1]
     assert all(not {"list_admin_notes", "prepare_article_state", "prepare_article_tags"} & menu
                for menu in model.menus)
     fact = next(message for message in model.prompts[-1] if isinstance(message, ToolMessage))
     assert json.loads(fact.content)["items"][0]["username"] == "account_1"
+
+
+@pytest.mark.parametrize("role", ["user", "zako", "admin", "superadmin"])
+def test_candidate_read_is_initial_only_when_the_catalog_authorizes_it(role):
+    from agent.products.blog.application import BlogApplication
+    from agent.runtime.native_store import NativeConversationStore
+
+    cfg = config(role)
+    initial, domains = BlogApplication().tools(
+        cfg, NativeConversationStore(None).load(cfg), None, None, True)
+    assert ("list_accounts" in initial) == (role in {"admin", "superadmin"})
+    assert not {"prepare_account_role", "prepare_account_freeze"} & initial.keys()
+    assert ("admin_account_actions" in domains) == (role in {"admin", "superadmin"})
 
 
 def test_empty_draft_title_is_preserved_instead_of_losing_the_page(backend):

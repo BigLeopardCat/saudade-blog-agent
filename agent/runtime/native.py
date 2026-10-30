@@ -156,12 +156,7 @@ class NativeRuntime:
         session.task = snapshot.run
         session.receipts = list(snapshot.receipts)
         record("native", "task_resumed", task_id=task_id, engine="langgraph")
-        from agent.runtime.client_actions import resume_value
-        client = resume_value(self.get_state(config, subgraphs=True), task_id, config)
-        if isinstance(client, TurnResult):
-            yield client
-            return
-        outcome = yield from self._run(session, prompt, recover=True, client_result=client)
+        outcome = yield from self._run(session, prompt, recover=True)
         yield outcome
 
     def _session(self, config, snapshot, pending=None):
@@ -182,12 +177,11 @@ class NativeRuntime:
         return session
 
     @staticmethod
-    def _run(session, prompt, *, resume=None, approval_input=(), recover=False, client_result=None):
+    def _run(session, prompt, *, resume=None, approval_input=(), recover=False):
         if session.task and session.store and session.store.available:
             from agent.runtime.task_budget import for_saver as task_usage
             session.budget.bind_task(task_usage(session.store.saver), session.task,
-                                    create=not (recover or resume is not None
-                                                or client_result is not None))
+                                    create=not (recover or resume is not None))
         inbox = session.input_inbox
         session.inputs_active = bool(inbox and session.task
                                      and not (recover and session.feedback_handler)
@@ -200,7 +194,7 @@ class NativeRuntime:
             if session.input_events_enabled:
                 yield TaskInputEvent({"task_id": session.task["id"], "ready": enabled})
         runner = session.stream(prompt, resume=resume, approval_input=approval_input,
-                                recover=recover, client_result=client_result)
+                                recover=recover)
         outcome = None
         try:
             while True:

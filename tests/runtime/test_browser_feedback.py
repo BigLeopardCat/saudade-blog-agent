@@ -1,6 +1,7 @@
 """Browser acknowledgements resume real framework interrupts without re-running intent."""
 
 import pytest
+from _browser_support import Model, acknowledge
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from langgraph.checkpoint.memory import InMemorySaver
 
@@ -9,23 +10,6 @@ from agent.principal import SOURCE_ASSERTION, Principal
 from agent.runtime.native import NativeRuntime
 from agent.runtime.native_store import NativeConversationStore
 from agent.transport import iter_transport_events
-
-
-class Model:
-    max_tokens = 128
-
-    def __init__(self):
-        self.calls = []
-
-    def bind_tools(self, *args, **kwargs):
-        return self
-
-    def invoke(self, messages, **kwargs):
-        self.calls.append(messages)
-        if len(self.calls) == 1:
-            return AIMessage(content="", tool_calls=[{
-                "name": "navigate_page", "args": {"path": "/guestbook"}, "id": "navigation"}])
-        return AIMessage(content="页面操作结果已收到。")
 
 
 @pytest.fixture
@@ -43,11 +27,6 @@ def navigation():
                                          "task_id": "page-task"}, config))[-1]
     command = result.execution["client_action"]
     return runtime, model, config, result, command
-
-
-def acknowledge(config, command, status="completed", path="/guestbook"):
-    return {"configurable": {**config["configurable"], "browser_result": {
-        "command_id": command["command_id"], "status": status, "path": path}}}
 
 
 def test_browser_continuation_keeps_progress_without_repeating_navigation():
@@ -129,6 +108,29 @@ def test_duplicate_ack_does_not_generate_another_reply(navigation):
         result = list(runtime().stream_events(
             {"messages": [], "resume_task": "page-task"}, cfg))[-1]
     assert result.execution["blocked"] and len(model.calls) == 2
+
+
+def test_disconnect_after_ack_resumes_saved_reply_without_replaying_browser_action(navigation):
+    from agent.runtime.control import AgentCancelled
+
+    runtime, model, config, _, command = navigation
+    original = model.invoke
+
+    def disconnected(messages, **kwargs):
+        model.calls.append(messages)
+        raise AgentCancelled()
+
+    model.invoke = disconnected
+    with pytest.raises(AgentCancelled):
+        list(runtime().stream_events({"resume_task": "page-task"}, acknowledge(config, command)))
+    assert runtime().store.load(config).unfinished
+    model.invoke = original
+    result = list(runtime().stream_events({"resume_task": "page-task"}, config))[-1]
+    assert result.reply == "页面操作结果已收到。" and len(model.calls) == 3
+    facts = [m for m in model.calls[-1] if isinstance(m, ToolMessage)]
+    assert sum(m.name == "navigate_page" for m in facts) == 1
+    assert not result.execution.get("client_action")
+    assert not runtime().store.load(config).unfinished
 
 
 def test_browser_feedback_is_a_control_without_new_content():
