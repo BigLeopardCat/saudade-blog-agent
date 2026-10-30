@@ -4,16 +4,14 @@
 import logging
 from typing import Annotated, Literal
 
-import httpx
 from langchain_core.runnables.config import RunnableConfig
 from langchain_core.tools import tool
 
 from tools import base as _base
-from tools.base import API_BASE, _own_get
+from tools.base import _own_get
 from tools.result import (
     _LIST_FIELD_MAX,
     _LIST_ROWS_MAX,
-    UPSTREAM_DOWN,
     ToolResult,
     _board_text_keys,
     _cap_rows,
@@ -35,14 +33,10 @@ logger = logging.getLogger(__name__)
 
 
 # Resolve shared transports at call time so consumer overrides and test doubles apply.
-def _get(path: str, *, not_found_text: str = "") -> dict | list | ToolResult:
+def _get(path: str, *, not_found_text: str = "",
+         payload: dict | None = None) -> dict | list | ToolResult:
     """Resolve the shared public transport at call time, preserving its result type."""
-    return _base._get(path, not_found_text=not_found_text)
-
-
-def _client_post(path: str, **kwargs) -> httpx.Response:
-    """Resolve the shared HTTP client at call time, preserving its response type."""
-    return _base._client.post(path, **kwargs)
+    return _base._get(path, not_found_text=not_found_text, payload=payload)
 
 
 # Article metadata and body reads.
@@ -124,23 +118,14 @@ def search_notes(keyword: Annotated[str, "搜索关键词"]) -> str:
     按标题或标签查找文章用本工具，按内容主题检索可用 rag_search。
     候选标题和链接可直接用于推荐；解读、总结或比较正文时需用 get_article_detail 读取正文。
     """
-    try:
-        resp = _client_post(
-            f"{API_BASE}/notes/search",
-            json={"keyword": keyword},
-            timeout=15,
-        )
-        resp.raise_for_status()
-        body = resp.json()
-        data = body.get("data", [])
-        # Successful empty results remain distinct from transport failures.
-        if not data:
-            return empty("[]")
-        slim = _slim_note_rows(data)
-        return _shape(slim if slim is not None else data)
-    except Exception as exc:
-        logger.error("Search failed: %s", exc)
-        return unavailable(f"搜索服务暂时不可用（{type(exc).__name__}），请稍后再试")
+    data = _get("/notes/search", payload={"keyword": keyword})
+    if isinstance(data, ToolResult):
+        return data
+    # Successful empty results remain distinct from transport failures.
+    if not data:
+        return empty("[]")
+    slim = _slim_note_rows(data)
+    return _shape(slim if slim is not None else data)
 
 def _read_section(data: dict, article_id, want: str) -> str:
     from rag.reading import article_page
@@ -331,10 +316,12 @@ def list_tags() -> str:
     # 线上实测答出"站内没有二级标签"。两个端点都是公开只读、无需鉴权。
     one = _get("/tagone")
     two = _get("/tagtwo")
-    if isinstance(one, ToolResult) or isinstance(two, ToolResult):
+    if isinstance(one, ToolResult):
         # 任一路读不到 → **不合并半份**：半份清单会把"这次没读到二级标签"伪装成
         # "站内没有二级标签"，正是上面那个结论的来源。如实报不可用。
-        return UPSTREAM_DOWN
+        return one
+    if isinstance(two, ToolResult):
+        return two
     # 局部导入：agent.graph → tools 的反向依赖会构成循环导入（同 _tag_index）
     from agent import adminops_tags as _tags
     return _shape(_tags.merge_tag_rows(one, two))

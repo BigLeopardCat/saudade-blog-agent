@@ -164,7 +164,7 @@ def test_real_statistics_tool_uses_actor_identity_and_preserves_api_failure(monk
         monkeypatch.setattr(base, "_client", client)
         session = ToolSession(Model(), config(user_id=7), admin_tools(), {})
         result = invoke_authorized(session, "get_user_stats", {})
-    assert len(requests) == 1
+    assert len(requests) == (2 if status == 503 else 1)
     assert result.kind == ("ok" if status == 200 else "unavailable")
     if status == 200:
         assert "用户总数 0" in str(result)
