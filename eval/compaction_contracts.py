@@ -4,6 +4,7 @@ This synthetic fixture uses 24K to exercise the boundary cheaply; it is not a
 production capacity setting or an estimate of 1M-context retrieval quality.
 """
 
+import json
 from unittest.mock import patch
 
 from langchain_core.messages import HumanMessage
@@ -25,7 +26,7 @@ def compaction_recall(turn, state):
 
     actor = Principal(7, "user", SOURCE_ASSERTION)
     source = memory.turn_messages([HumanMessage(content=(
-        "项目名松针海岸，预算12元，目标文章19。先前加标签的提议已撤销，保持文章原样。"
+        "项目名松针海岸，预算12元，目标文章编号19。先前加标签的提议已撤销，保持文章原样。"
         "输出用中文；不要发送通知。候选日期周六已经否决，改为周日。"))], [], "已记录。", actor)
     number = 0
     while memory._tokens(source) < 15000:
@@ -38,12 +39,16 @@ def compaction_recall(turn, state):
                              "user_id": 7, "principal": actor}}
     arm.store.update_state(cfg, {"messages": source})
     with patch.object(settings, "agent_context_tokens", 24000):
-        recalled = turn("不用查询，只回忆项目名、预算、文章编号、最终标签决定和最终日期。")
-    text = recalled["text"]
-    _require(all(value in text for value in ("松针海岸", "12", "19", "周日")),
-             "compaction lost a resolved project fact")
-    _require("撤销" in text or "不" in text and ("标签" in text or "原样" in text),
-             "compaction lost the cancellation or negative constraint")
+        recalled = turn("不用查询，回忆项目名、预算（元）、文章编号、最终标签决定和最终日期。"
+                        "只输出JSON正文，不加Markdown或说明。字段为project、budget、article_id、"
+                        "tag_action、day；budget和article_id用数字，tag_action用unchanged表示保持原样。")
+    summaries = [m.content for m in arm.store.load(cfg).messages
+                 if m.additional_kwargs.get("lc_source") == "summarization"]
+    state["contract_evidence"] = {"context_tokens": 24000, "summaries": summaries}
+    expected = {"project": "松针海岸", "budget": 12, "article_id": 19,
+                "tag_action": "unchanged", "day": "周日"}
+    _require(json.loads(recalled["text"]) == expected,
+             "compaction changed a resolved fact, identifier, unit or negative constraint")
     trace = load_trace(recalled["trace"])
     compacted = [e for e in (trace or {}).get("events", [])
                  if e.get("node") == "memory" and e.get("event") == "compacted"]
