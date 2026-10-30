@@ -14,9 +14,12 @@ from agent.runtime.budget import BudgetExceeded, BudgetLimits, RequestBudget, bu
 from agent.runtime.summarization import SummaryUnavailable
 from agent.runtime.task_budget import for_saver
 from agent.runtime.turns import AgentCancelled
+from config.settings import settings
 
 
 def test_long_latest_turn_reaches_summarizer_before_any_history_is_removed(monkeypatch):
+    monkeypatch.setattr(settings, "agent_context_tokens", 8000)
+    monkeypatch.setattr(settings, "agent_summary_output_tokens", 512)
     monkeypatch.setattr("models.get_llm", lambda **_: FakeListChatModel(responses=["unused"]))
     selected, sources = runtime(InMemorySaver(), Capture()), []
     old = memory.turn_messages([HumanMessage(content="项目代号 ONLY_EARLY_FACT")], [],
@@ -37,6 +40,7 @@ def test_long_latest_turn_reaches_summarizer_before_any_history_is_removed(monke
 
 
 def test_failed_summary_can_commit_history_larger_than_the_model_window(monkeypatch):
+    monkeypatch.setattr(settings, "agent_context_tokens", 16384)
     monkeypatch.setattr("models.get_llm", lambda **_: FakeListChatModel(responses=["unused"]))
     model = Capture()
     selected = runtime(InMemorySaver(), model)
@@ -65,11 +69,16 @@ def test_unknown_checkpoint_origin_cannot_be_dated_by_the_current_caller(actor):
 
 
 def test_retention_evicts_whole_turns_only_at_the_independent_storage_ceiling(monkeypatch):
-    monkeypatch.setattr(retention, "MAX_TURNS", 2)
     messages = []
     for index in range(3):
         messages.extend(memory.turn_messages([HumanMessage(content=f"question-{index}")], [],
                                             f"reply-{index}", ACTOR))
+    import json
+
+    from langchain_core.messages import messages_to_dict
+
+    monkeypatch.setattr(retention, "MAX_BYTES", len(json.dumps(
+        messages_to_dict(messages[2:]), ensure_ascii=False).encode()) + 4)
     kept = retention.retain(messages)
     assert kept[0].additional_kwargs["memory_retention"]
     assert [m.content for m in kept[1:]] == [m.content for m in messages[2:]]

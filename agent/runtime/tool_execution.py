@@ -16,7 +16,6 @@ from utils import trace as trace_mod
 from utils.trace import record
 
 MAX_RESULT_CHARS = 8000
-MAX_TOTAL_RESULT_CHARS = 16000
 
 
 def render_result(call, value, limit):
@@ -53,9 +52,6 @@ def append_result(session, request, handler, prompt, round_index, attachments):
                                   tool_call_id=call["id"], status="error"))
         record("native", "tool_error", name=name, reason=reason, round=round_index)
         return None
-    if session.state["result_chars"] >= session.result_limit:
-        session._budget_stop("result_budget")
-        return None
     session.calls_used += 1
     emit(session.config, f"正在调用工具：{name}", key=f"tool:{call['id']}")
     with native_tool(session.budget), tool_evidence.scope(call, round_index):
@@ -75,8 +71,7 @@ def append_result(session, request, handler, prompt, round_index, attachments):
     kind = (getattr(body, "kind", artifact.get("kind", "unknown"))
             if message.status != "error" else "error")
     session.observations.extend(memory.observation(call, body))
-    remaining = session.result_limit - session.state["result_chars"]
-    body = session.render_result(call, body, min(MAX_RESULT_CHARS, remaining))
+    body = session.render_result(call, body, MAX_RESULT_CHARS)
     # Structured data is used by product evidence policy, not duplicated in
     # the durable transcript. Preserve artifacts supplied by standard tools.
     message = message.model_copy(update={"artifact": {
@@ -85,7 +80,6 @@ def append_result(session, request, handler, prompt, round_index, attachments):
     prompt.append(messages[0].model_copy(update={"name": name, "artifact": {
         **(messages[0].artifact or {}), "kind": kind}}))
     attachments.extend(messages[1:])
-    session.state["result_chars"] += len(body)
     record("native", "call", name=name, args=call["args"], call_id=call["id"], round=round_index,
            kind=kind, result=trace_mod.tool_result_text(body, name, default_limit=MAX_RESULT_CHARS))
     record("native", "tool_result", name=name, call_id=call["id"], result_chars=len(body))

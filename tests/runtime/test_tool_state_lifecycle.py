@@ -113,6 +113,10 @@ def test_new_task_starts_with_discovery_after_completion_or_history_compaction(
         from langchain_core.language_models.fake_chat_models import FakeListChatModel
 
         import models
+        from config.settings import settings
+
+        monkeypatch.setattr(settings, "agent_context_tokens", 8000)
+        monkeypatch.setattr(settings, "agent_summary_output_tokens", 512)
 
         monkeypatch.setattr(models, "get_llm", lambda **kwargs: FakeListChatModel(
             responses=["Historical fixture queries completed."]))

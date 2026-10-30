@@ -6,8 +6,7 @@ from langchain_core.messages import HumanMessage, messages_to_dict
 
 from utils.trace import record
 
-MAX_BYTES = 1024 * 1024
-MAX_TURNS = 256
+MAX_BYTES = 16 * 1024 * 1024
 
 
 def retain(messages):
@@ -23,7 +22,7 @@ def retain(messages):
     sizes = [len(json.dumps(messages_to_dict(turn), ensure_ascii=False).encode())
              for turn in turns]
     total, start = sum(sizes), 0
-    while start < len(turns) - 1 and (len(turns) - start > MAX_TURNS or total > MAX_BYTES):
+    while start < len(turns) - 1 and total > MAX_BYTES:
         total -= sizes[start]
         start += 1
     kept = [message for turn in turns[start:] for message in turn]

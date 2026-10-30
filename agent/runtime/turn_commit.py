@@ -11,6 +11,7 @@ def prepare(session, state):
     result, _, _ = complete_reply(session.outcome, "".join(session.reply_parts))
     previous = state.get("messages") or []
     seen = {message.tool_call_id for message in previous if isinstance(message, ToolMessage)}
+    seen.update((session.state.get("context_update") or {}).get("covered_tool_calls", []))
     observations = [message for message in session.observations
                    if not (isinstance(message, ToolMessage) and message.tool_call_id in seen)
                    and not (isinstance(message, AIMessage) and message.tool_calls
