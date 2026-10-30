@@ -18,6 +18,17 @@ from langchain_core.runnables.config import RunnableConfig
 # Load deployment settings before constructing module-level endpoints.
 from config import settings as _settings
 
+# Request classification and bounded read retry; see tools/http_channel.py.
+from tools.http_channel import (
+    ERROR_INVALID_RESPONSE,
+    READ_ATTEMPTS,
+    READ_TIMEOUT,
+    Failure,
+    read_failure,
+    request_json,
+    write_failure,
+)
+
 # Result helpers remain re-exported for existing callers and transport test doubles.
 from tools.result import (
     _FRAME_ID_KEYS,  # noqa: F401 —— 外面取：tests/test_item_position_guide.py
@@ -25,7 +36,7 @@ from tools.result import (
     _LIST_FIELD_MAX,  # noqa: F401 —— 外面取：tests/test_frame_caps.py
     _LIST_ROWS_MAX,  # noqa: F401 —— 外面取：tests/test_frame_caps.py
     TGT_KINDS,  # noqa: F401 —— 外面取：tests/test_write_facts.py
-    UPSTREAM_DOWN,
+    UPSTREAM_DOWN,  # noqa: F401 —— 外面取：旧工具与测试的故障哨兵
     ToolResult,
     _board_text_keys,  # noqa: F401 —— 外面取：tests/test_id_namespaces.py
     _cap_rows,  # noqa: F401 —— 外面取：tests/test_frame_caps.py
@@ -36,7 +47,7 @@ from tools.result import (
     empty,  # noqa: F401 —— 外面取：tests/test_hardening.py（`base.empty`，取的是函数对象）
     fact,  # noqa: F401 —— 外面取：tests/test_write_facts.py 等（`base.fact(...)`）
     is_noop,  # noqa: F401 —— 外面取：shared no-op result contract
-    not_found,
+    not_found,  # noqa: F401 —— 外面取：既有 not_found 契约
     ok,  # noqa: F401 —— 外面取：tests/test_admin_write.py 等（`base.ok(...)`）
     tgt,  # noqa: F401 —— 外面取：tests/test_write_facts.py 等（`base.tgt(...)`）
     unavailable,
@@ -59,25 +70,28 @@ SITE_BASE = _site_base(API_BASE)
 # Reuse the HTTP client with certificate verification enabled; responses enter model context.
 _client = httpx.Client(timeout=15)
 
-def _get(path: str, *, not_found_text: str = "") -> dict | list | ToolResult:
+def _get(path: str, *, not_found_text: str = "",
+         payload: dict | None = None) -> dict | list | ToolResult:
     """Read a public API envelope without turning failures into empty results.
 
-    Only callers that supply not_found_text classify HTTP 404 as a missing target;
-    other HTTP, business-code, transport and decoding failures remain unavailable."""
-    try:
-        resp = _client.get(f"{API_BASE}{path}")
-        if not_found_text and resp.status_code == 404:
-            logger.info("API 404: %s", path)
-            return not_found(not_found_text)
-        resp.raise_for_status()
-        body = resp.json()
-        if body.get("code") == 200:
-            return body["data"]
-        logger.warning("API error: %s", body.get("message"))
-        return UPSTREAM_DOWN
-    except Exception as exc:
-        logger.error("API call failed: %s", exc)
-        return UPSTREAM_DOWN
+    Only callers that supply not_found_text classify HTTP 404 as a missing target.
+    Transient transport or 408/429/502/503/504 failures are retried once; argument
+    rejection, authorization denial, business rejection and undecodable bodies are
+    not. A body-based POST read is selected explicitly by passing payload — the
+    path is never inspected to guess read/write intent."""
+    body, failure = request_json(
+        _client, method="POST" if payload is not None else "GET",
+        url=f"{API_BASE}{path}", json_body=payload, timeout=READ_TIMEOUT,
+        attempts=READ_ATTEMPTS)
+    if failure is not None:
+        return read_failure(failure, deny_msg="当前身份无权读取该公开数据",
+                            not_found_text=not_found_text)
+    assert body is not None
+    if "data" not in body:
+        return read_failure(
+            Failure(ERROR_INVALID_RESPONSE),
+            deny_msg="当前身份无权读取该公开数据", not_found_text=not_found_text)
+    return body["data"]
 
 # Import public tools after their shared channel definitions to avoid circular initialization.
 
@@ -137,45 +151,38 @@ def _sign_local_jwt(uid: int, role: str | None) -> str:
     }, secret, algorithm="HS256")
 
 
+def _stop_requested(config: RunnableConfig) -> bool:
+    """Read the runtime stop signal without importing runtime internals."""
+    event = ((config or {}).get("configurable") or {}).get("stop_event")
+    return bool(event is not None and event.is_set())
+
+
 def _principal_get(path: str, config: RunnableConfig, *,
                    uid_msg: str, deny_msg: str,
                    payload: dict | None = None,
                    paginated: bool = False) -> dict | list | ToolResult:
     """Read an authenticated API using the requesting actor's short-lived token.
 
-    API failures remain unavailable. POST is used only for body-based read filters.
-    Paginated reads preserve total counts instead of discarding envelope metadata.
-    """
+    A body-based POST read is chosen explicitly by passing payload; the path is
+    never inspected to guess read/write intent. Transient failures are retried
+    once unless the runtime stop signal is already set. Authorization denial,
+    missing targets and malformed responses are typed and never retried."""
     uid = _device_get_user_id(config)
     if uid <= 0:
         return unavailable(uid_msg)
     principal = (config.get("configurable", {}) or {}).get("principal")
     headers = {"Authorization": "Bearer " + _sign_local_jwt(uid, getattr(principal, "role", None))}
-    try:
-        if payload is None:
-            resp = _client.get(f"{ADMIN_BASE}{path}", headers=headers, timeout=15)
-        else:
-            resp = _client.post(f"{ADMIN_BASE}{path}", headers=headers,
-                                json=payload, timeout=15)
-    except Exception as exc:
-        logger.error("principal API call failed: %s", exc)
-        return unavailable(f"接口请求失败: {exc}")
-    if resp.status_code in (401, 403):
-        return unavailable(deny_msg)
-    if resp.status_code != 200:
-        return unavailable(f"接口返回 HTTP {resp.status_code}")
-    try:
-        body = resp.json()
-    except Exception:
-        return unavailable("接口返回的不是 JSON")
-    if not isinstance(body, dict):
-        return unavailable("接口返回的不是有效响应信封")
-    if body.get("code") != 200:
-        logger.warning("principal API error: %s", body.get("message"))
-        return unavailable(f"接口报错: {body.get('message')}")
+    body, failure = request_json(
+        _client, method="POST" if payload is not None else "GET",
+        url=f"{ADMIN_BASE}{path}", headers=headers, json_body=payload,
+        timeout=READ_TIMEOUT, attempts=READ_ATTEMPTS,
+        stop=lambda: _stop_requested(config))
+    if failure is not None:
+        return read_failure(failure, deny_msg=deny_msg)
+    assert body is not None
     data = body.get("data")
     if not isinstance(data, (dict, list)):
-        return unavailable("接口未返回有效的可读取数据")
+        return read_failure(Failure(ERROR_INVALID_RESPONSE), deny_msg=deny_msg)
     if paginated:
         return {"items": data, "total": body.get("total")}
     return data
@@ -235,32 +242,22 @@ def _principal_request(method: str, path: str, payload, config: RunnableConfig,
                        *, label: str, uid_msg: str, deny_msg: str, tail: str):
     """Send an authenticated request using the verified requesting actor.
 
-    HTTP, business-code and decoding failures remain unavailable and cannot certify
-    a write. Callers supply operation-specific identity and failure wording."""
+    Writes are sent exactly once. Transport failures, unreadable responses and
+    statuses that cannot certify the outcome return an explicit unknown result;
+    argument rejection and authorization denial are typed and say the change
+    did not happen. Callers supply operation-specific identity wording."""
     uid = _device_get_user_id(config)
     if uid <= 0:
         # Missing identity prevents the request from leaving this process.
         return unavailable(uid_msg)
     principal = (config.get("configurable", {}) or {}).get("principal")
     headers = {"Authorization": "Bearer " + _sign_local_jwt(uid, getattr(principal, "role", None))}
-    try:
-        resp = _client.request(method, f"{ADMIN_BASE}{path}",
-                               headers=headers, json=payload, timeout=15)
-    except Exception as exc:
-        logger.error("principal %s %s failed: %s", method, path, exc)
-        return unavailable(f"{label}接口请求失败: {exc}{tail}")
-    if resp.status_code in (401, 403):
-        return unavailable(deny_msg)
-    if resp.status_code != 200:
-        return unavailable(f"{label}接口返回 HTTP {resp.status_code}{tail}")
-    try:
-        body = resp.json()
-    except Exception:
-        return unavailable(f"{label}接口返回的不是 JSON{tail}")
-    if body.get("code") != 200:
-        # ⚠️ 见本节头注：只看 HTTP 状态码会把 Rust 的 ApiResponse::error 当成功。
-        logger.warning("principal %s %s error: %s", method, path, body.get("message"))
-        return unavailable(f"{label}接口报错: {body.get('message')}{tail}")
+    body, failure = request_json(
+        _client, method=method, url=f"{ADMIN_BASE}{path}", headers=headers,
+        json_body=payload, timeout=READ_TIMEOUT, attempts=1, write=True)
+    if failure is not None:
+        return write_failure(failure, label=label, deny_msg=deny_msg, tail=tail)
+    assert body is not None
     return body.get("data")
 
 

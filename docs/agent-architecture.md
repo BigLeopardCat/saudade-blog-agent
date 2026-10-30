@@ -221,6 +221,7 @@ flowchart LR
 │   ├── category_admin.py                                # 当前生产代码模块
 │   ├── dashboard_todos.py                               # 当前生产代码模块
 │   ├── device.py                                        # 当前生产代码模块
+│   ├── http_channel.py                                  # 有界读取重试、类型化失败分类与写入未知
 │   ├── note_admin.py                                    # 当前生产代码模块
 │   ├── notes.py                                         # 当前生产代码模块
 │   ├── own_data.py                                      # 当前生产代码模块
