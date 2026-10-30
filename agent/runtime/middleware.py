@@ -15,7 +15,7 @@ from langgraph.types import Command
 from agent.llm_usage import usage_fields
 from agent.runtime import memory, trace_context
 from agent.runtime.approval_response import finish as finish_approval_response
-from agent.runtime.budget import BudgetExceeded, native_call
+from agent.runtime.budget import native_call
 from agent.runtime.control import AgentCancelled, model_options
 from agent.runtime.execution_state import adopt_command, capture, restore
 from agent.runtime.memory_media import hydrate, stage
@@ -217,8 +217,6 @@ class SessionMiddleware(AgentMiddleware):
             request = request.override(messages=[*request.messages, *extra_inputs])
         prompt = [*([request.system_message] if request.system_message else []),
                   *model_messages(hydrate(request.messages, session.transient))]
-        if session.state["result_chars"] >= session.result_limit:
-            raise BudgetExceeded("result_budget")
         model = request.model
         selected_model = _model_name(model)
         emit(session.config, "正在处理请求…", key="model_start")

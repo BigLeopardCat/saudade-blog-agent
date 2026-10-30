@@ -150,10 +150,14 @@ def _outcome_failures(gold, result, events):
 
 
 def _compaction_failures(gold, events):
-    if gold.get("require_memory_compaction") and not any(
+    compacted = any(
             event.get("node") == "memory" and event.get("event") == "compacted"
-            and event.get("source_messages", 0) > 0 for event in events):
+            and event.get("source_messages", 0) > 0 for event in events)
+    if gold.get("require_memory_compaction") and not compacted:
         return ["缺少成功覆盖历史消息的框架压缩证据"]
+    if gold.get("forbid_memory_compaction") and (compacted or any(
+            e.get("node") == "summarizer" and e.get("event") == "llm_start" for e in events)):
+        return ["容量充足的历史回忆不应额外调用摘要模型"]
     return []
 
 
@@ -172,7 +176,7 @@ def check(gold, result):
     keys = {"require_observations", "require_observations_any", "require_todo_schedule",
             "require_confirm_specs", "require_confirm_preview", "forbid_runtime_stop",
             "forbid_business_write", "require_answer_value", "require_prepared_or_noop",
-            "require_memory_compaction", "require_answer_list"}
+            "require_memory_compaction", "forbid_memory_compaction", "require_answer_list"}
     if not keys.intersection(gold):
         return []
     events = result.get("native_events")

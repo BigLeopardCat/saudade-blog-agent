@@ -38,7 +38,10 @@ def test_checkpoint_selection_keeps_complete_source_pairs_and_the_current_turn()
 
 def test_native_checkpoint_stays_bounded_after_many_turns_and_reload(monkeypatch):
     import models
+    from config.settings import settings
 
+    monkeypatch.setattr(settings, "agent_context_tokens", 10000)
+    monkeypatch.setattr(settings, "agent_summary_output_tokens", 512)
     monkeypatch.setattr(models, "get_llm", lambda **kwargs: FakeListChatModel(
         responses=["summary"]))
     class Model:
@@ -56,7 +59,7 @@ def test_native_checkpoint_stays_bounded_after_many_turns_and_reload(monkeypatch
         list(runtime.stream_events(
             {"messages": [HumanMessage(content=f"question{number}" + "x" * 600)]}, cfg))
         saved = runtime.get_state(cfg).values["messages"]
-        assert memory._tokens(saved) <= memory.COMPACTION_TOKENS + memory._tokens(saved[-2:])
+        assert memory._tokens(saved) <= settings.agent_context_tokens
     assert any(m.additional_kwargs.get("lc_source") == "summarization" for m in saved)
     assert saved[-2].content.startswith("question29")
     assert not any(m.content.startswith("question0") for m in saved)

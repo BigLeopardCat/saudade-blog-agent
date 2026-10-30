@@ -21,7 +21,10 @@ from tools import base
 
 def test_many_short_turns_keep_their_prefix_between_bounded_compactions(monkeypatch):
     import models
+    from config.settings import settings
 
+    monkeypatch.setattr(settings, "agent_context_tokens", 8000)
+    monkeypatch.setattr(settings, "agent_summary_output_tokens", 512)
     monkeypatch.setattr(models, "get_llm", lambda **kwargs: FakeListChatModel(responses=[
         "用户希望继续聊当前话题。"] ))
     saver, model = InMemorySaver(), Capture()
@@ -48,7 +51,7 @@ def test_many_short_turns_keep_their_prefix_between_bounded_compactions(monkeypa
                 assert common >= len(previous) - 1
                 stable += 1
         boundaries.append(saved[0].id)
-        assert memory._tokens(saved) <= memory.COMPACTION_TOKENS + 200
+        assert memory._tokens(saved) <= settings.agent_context_tokens
         assert memory.history(saved, ACTOR) == saved
         previous = payload
         previous_anchor = anchor

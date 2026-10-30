@@ -26,7 +26,6 @@ from agent.runtime.message_content import text_content
 from config.settings import SUMMARY_MAX_CHARS
 
 FALLBACK_HISTORY_TOKENS = 1800
-COMPACTION_TOKENS = 5400
 OBSERVATION_CHARS = 1400
 SUMMARY_CHARS = SUMMARY_MAX_CHARS
 
@@ -251,9 +250,9 @@ def checkpoint_messages(previous, current, *, context_update=None):
         messages.extend(turn)
     if context_update:
         covered = set(context_update["covered_ids"])
-        if any(message.id in covered for message in messages):
-            messages = [context_update["summary"],
-                        *(message for message in messages if message.id not in covered)]
+        summary = context_update["summary"]
+        messages = [summary, *(message for message in messages
+                              if message.id not in covered and message.id != summary.id)]
     from agent.runtime.retention import retain
     return [RemoveMessage(id=REMOVE_ALL_MESSAGES), *retain(messages)]
 
