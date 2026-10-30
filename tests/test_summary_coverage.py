@@ -36,6 +36,14 @@ def test_summary_receives_the_complete_source_prefix_without_clipping():
     assert "EARLY_TAIL_CANARY" not in seen[0][0].content
 
 
+def test_complete_summary_can_exceed_the_retired_1600_character_ceiling():
+    text = "保留已澄清的限制与未决对象。" * 160
+    assert len(text) > 1600
+    model = SimpleNamespace(invoke=lambda *a, **k: AIMessage(content=text))
+    assert summarize([HumanMessage(content="source")], budget=RequestBudget(),
+                     config={}, model=model) == text
+
+
 @pytest.mark.parametrize("kind", ["empty", "truncated", "refusal", "tools", "oversized"])
 def test_incomplete_summary_is_rejected_without_claiming_coverage(kind):
     response = AIMessage(content="summary")
@@ -48,7 +56,7 @@ def test_incomplete_summary_is_rejected_without_claiming_coverage(kind):
     elif kind == "tools":
         response.tool_calls = [{"name": "unused", "args": {}, "id": "one"}]
     else:
-        response.content = "字" * 1601
+        response.content = "字" * 8192
     model = SimpleNamespace(invoke=lambda *args, **kwargs: response)
     with pytest.raises(SummaryUnavailable):
         summarize([HumanMessage(content="source")], budget=RequestBudget(), config={}, model=model)

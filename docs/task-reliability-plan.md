@@ -180,7 +180,7 @@ checkpoint，避免维护图的旧父级 interrupt 误导。组件在答复完�
 
 ## 5. P2：上下文、记忆、缓存与成本
 
-状态：待开始。可以先采集数据；会改变模型视图的实现应在 P0 稳定后验证。
+状态：进行中。容量驱动压缩、摘要保真度和任务内压缩正在验证；其余记忆与统计验收仍按下列清单推进。
 
 代码范围：`agent/runtime/memory.py`、`agent/runtime/compaction.py`、
 `agent/runtime/summarization.py`、`agent/runtime/prompt_budget.py`、

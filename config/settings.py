@@ -35,7 +35,7 @@ PROVIDER_DEFAULTS = {
 KNOWN_LLM_PROVIDERS = frozenset(PROVIDER_DEFAULTS)
 
 
-SUMMARY_MAX_CHARS = 1600
+SUMMARY_MAX_CHARS = 12000
 
 
 def check_retired_runtime(value, key):
@@ -92,13 +92,16 @@ class Settings(BaseSettings):
     llm_seed: int = 0
 
     # ── Native request policy (tokens include cached input) ──────────
-    agent_context_tokens: int = Field(default=16384, gt=0)
-    agent_request_tokens: int = Field(default=65536, gt=0)
+    # Deployment sets the verified endpoint capacity; unknown models stay conservative.
+    agent_context_tokens: int = Field(default=128000, gt=0)
+    agent_request_tokens: int = Field(default=8000000, gt=0)
     agent_model_calls: int = Field(default=12, ge=2)
     agent_tool_calls: int = Field(default=16, gt=0)
     agent_reasoning_effort: Literal["none", "low", "high", "max"] = "none"
     agent_output_tokens: int = Field(default=1536, ge=128)
-    agent_summary_output_tokens: int = Field(default=512, ge=128)
+    agent_summary_output_tokens: int = Field(default=4096, ge=128)
+    agent_compaction_trigger: float = Field(default=0.8, gt=0, lt=1)
+    agent_compaction_target: float = Field(default=0.4, gt=0, lt=1)
     agent_verbose: bool = True
 
     @model_validator(mode="after")
@@ -106,6 +109,8 @@ class Settings(BaseSettings):
         ceiling = min(self.agent_context_tokens, self.agent_request_tokens)
         if max(self.agent_output_tokens, self.agent_summary_output_tokens) >= ceiling:
             raise ValueError("Agent output limits must leave room for input tokens")
+        if self.agent_compaction_target >= self.agent_compaction_trigger:
+            raise ValueError("Compaction target must be below its trigger")
         return self
 
     @model_validator(mode="before")

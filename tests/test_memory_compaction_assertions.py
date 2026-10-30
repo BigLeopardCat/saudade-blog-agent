@@ -21,9 +21,19 @@ def test_missing_trace_is_not_a_compaction_pass():
     assert check({"require_memory_compaction": True}, {})
 
 
-def test_online_poc_includes_real_multi_turn_compaction_recall():
-    case = next(case for case in load_suite() if case["id"] == "memory_compaction_recall")
+@pytest.mark.parametrize("event", [
+    {"node": "memory", "event": "compacted", "source_messages": 4},
+    {"node": "summarizer", "event": "llm_start"},
+])
+def test_unnecessary_summary_calls_fail_the_history_retention_contract(event):
+    assert check({"forbid_memory_compaction": True}, {"native_events": [event]})
+    assert not check({"forbid_memory_compaction": True}, {"native_events": []})
+
+
+def test_online_poc_recalls_original_history_without_forcing_an_early_summary():
+    case = next(case for case in load_suite() if case["id"] == "memory_history_recall")
     assert case["id"] in POC_IDS
     assert sum(len(turn["user_input"]) for turn in case["rounds"][:-1]) > 9000
-    assert case["rounds"][-1]["gold"]["require_memory_compaction"]
+    assert all(turn["gold"]["forbid_memory_compaction"] for turn in case["rounds"])
+    assert not any(turn["gold"].get("require_memory_compaction") for turn in case["rounds"])
     assert case["rounds"][-1]["gold"]["text_contains"] == ["松针海岸", "12"]

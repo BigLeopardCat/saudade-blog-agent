@@ -165,7 +165,7 @@ def test_repaired_or_truncated_tool_arguments_are_never_executed(arguments, meta
     assert len(model.calls) == 1
 
 
-def test_result_budget_stop_is_visible_after_a_streamed_preface():
+def test_tool_budget_stop_is_visible_after_a_streamed_preface():
     FIXTURE_CALLS.clear()
     model = _StreamingModel([[
         AIMessageChunk(content="我先查一下。"),
@@ -173,7 +173,7 @@ def test_result_budget_stop_is_visible_after_a_streamed_preface():
             {"name": "fixture_lookup", "args": {"query": "weather"}, "id": "read"}]),
     ]])
     session = ToolSession(model, {}, {"fixture_lookup": fixture_lookup}, {})
-    session.state["result_chars"] = 16000
+    session.budget.tool_calls = session.budget.limits.tool_calls
     stream = session.stream([HumanMessage(content="read")])
     shown = []
     while True:

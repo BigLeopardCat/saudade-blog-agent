@@ -155,6 +155,11 @@ class RequestBudget:
             return max(0, min(self.limits.context_tokens - estimated,
                               self.limits.request_tokens - self.tokens - estimated))
 
+    def input_tokens(self, messages, tools=(), *, model_key=None):
+        """Complete input size, independently of cumulative task spending."""
+        with self._lock:
+            return self._input_estimate(messages, tools, 1, model_key)[0]
+
     def settle(self, ticket, response):
         usage = usage_fields(response)
         actual_input, actual_output = usage.get("input"), usage.get("output")

@@ -46,7 +46,6 @@ class ToolSession:
         self.loaders = {f"load_{domain}_info_tools": domain for domain in domains}
         self.state = initial_state()
         self.calls_used = 0
-        self.result_limit = tool_execution.MAX_TOTAL_RESULT_CHARS
         self.store = store
         self.feedback_handler = None
         self.approval = None

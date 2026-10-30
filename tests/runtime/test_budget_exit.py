@@ -29,13 +29,11 @@ def tool_call(identifier="read"):
 
 
 @pytest.mark.parametrize("limit", ["request_tokens", "context_tokens", "model_calls",
-                                   "tool_calls", "result_budget", "none"])
+                                   "tool_calls", "none"])
 def test_real_sdk_stops_at_resource_boundary_without_an_extra_narrator(limit, monkeypatch):
     requests, reads, progress, phases = [], [], [], []
     from agent.runtime import trace_context
     monkeypatch.setattr(trace_context, "record", lambda node, event, **data: phases.append(data))
-    if limit == "result_budget":
-        monkeypatch.setattr("agent.runtime.tool_execution.MAX_TOTAL_RESULT_CHARS", 17)
 
     def read_fixture() -> str:
         reads.append("read")

@@ -26,6 +26,7 @@ from agent.runtime.native_store import NativeConversationStore
 from eval import (
     account_candidate_contracts,
     admin_task_contracts,
+    compaction_contracts,
     composite_task_contracts,
     context_contracts,
     experience_contracts,
@@ -192,7 +193,7 @@ CASES = [("chat", favorite_backend, _chat),
          *navigation_contracts.CASES, *experience_contracts.CASES, *admin_task_contracts.CASES,
          *reading_task_contracts.CASES, *quota_task_contracts.CASES,
          *context_contracts.CASES, *composite_task_contracts.CASES,
-         *account_candidate_contracts.CASES]
+         *account_candidate_contracts.CASES, *compaction_contracts.CASES]
 
 
 def _sample(name, backend, contract, run_id, sample):
@@ -245,6 +246,8 @@ def _sample(name, backend, contract, run_id, sample):
                 outcome["reason"] = str(exc)
         outcome["requests"] = len(rounds)
         outcome["business_writes"] = len(_posts(state))
+        if "contract_evidence" in state:
+            outcome["evidence"] = state["contract_evidence"]
         if state.get("unsupported_reads"):
             outcome.update(evaluated=False, passed=False, reason="unsupported fixture read",
                            unsupported_reads=state["unsupported_reads"])

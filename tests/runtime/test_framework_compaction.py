@@ -31,7 +31,10 @@ def seed(selected, count=16):
 @pytest.fixture
 def summary_model(monkeypatch):
     import models
+    from config.settings import settings
 
+    monkeypatch.setattr(settings, "agent_context_tokens", 8000)
+    monkeypatch.setattr(settings, "agent_summary_output_tokens", 512)
     model = FakeListChatModel(responses=["SUMMARY_CANARY: 用户希望继续核对维护事项。"])
     monkeypatch.setattr(models, "get_llm", lambda **kwargs: model)
     return model

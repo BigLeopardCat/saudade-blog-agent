@@ -68,11 +68,11 @@ def test_long_chinese_input_survives_the_next_turn_and_runtime_reconstruction():
                          ids=["long-input", "long-reply"])
 def test_oversized_turn_has_an_explicit_bounded_excerpt_instead_of_disappearing(question, reply):
     saved = memory.turn_messages([HumanMessage(content=question)], [], reply, ACTOR)
-    visible = memory.history(saved, ACTOR, max_tokens=memory.COMPACTION_TOKENS)
+    visible = memory.history(saved, ACTOR, max_tokens=5400)
     assert visible and isinstance(visible[0], HumanMessage)
     assert "节选" in visible[0].content
     assert visible[0].additional_kwargs["memory_excerpt"] is True
-    assert estimate_tokens(visible) <= memory.COMPACTION_TOKENS
+    assert estimate_tokens(visible) <= 5400
 
 
 def test_current_images_and_schemas_take_precedence_over_history():
@@ -199,7 +199,7 @@ def test_partial_long_reply_uses_normal_window_and_retains_the_original_user_req
     for question in ["读取长回答的末尾", "原始问题" * 850]:
         saved = memory.turn_messages([HumanMessage(content=question)], [],
                                      "历史长答复" * 12000, ACTOR)
-        visible = memory.history(saved, ACTOR, max_tokens=memory.COMPACTION_TOKENS)
+        visible = memory.history(saved, ACTOR, max_tokens=5400)
         assert question in str(visible)
         assert "节选" in str(visible)
         assert visible[0].additional_kwargs["memory_excerpt"] is True
@@ -210,7 +210,7 @@ def test_partial_long_reply_uses_normal_window_and_retains_the_original_user_req
 
 def test_blog_recovery_context_describes_available_history_without_changing_the_system_prefix():
     saved = memory.turn_messages([HumanMessage(content="长回答")], [], "长答复" * 20000, ACTOR)
-    saved = memory.history(saved, ACTOR, max_tokens=memory.COMPACTION_TOKENS)
+    saved = memory.history(saved, ACTOR, max_tokens=5400)
     messages = [*saved, HumanMessage(content="最后一行呢")]
     prompt = build_prompt(messages, ACTOR, own_enabled=True)
     recovery = [message for message in prompt if isinstance(message, HumanMessage)
