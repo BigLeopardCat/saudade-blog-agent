@@ -11,19 +11,15 @@
     "utils",
     "server.py"
   ],
-  "total": 18,
-  "files_checked": 219,
+  "total": 11,
+  "files_checked": 226,
   "by_file": {
     "agent/action_text.py": 1,
     "agent/adminops_quota.py": 2,
     "agent/hostinfo.py": 2,
     "agent/reports.py": 1,
-    "rag/embed_space.py": 1,
-    "rag/graph_build.py": 3,
-    "rag/search.py": 1,
     "tools/account_admin.py": 1,
     "tools/admin_read.py": 3,
-    "tools/notes.py": 1,
-    "utils/trace.py": 2
+    "tools/notes.py": 1
   }
 }

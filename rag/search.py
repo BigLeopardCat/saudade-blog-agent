@@ -503,5 +503,5 @@ if __name__ == "__main__":
     idx = get_index()
     idx.build()
     q = sys.argv[1] if len(sys.argv) > 1 else "ESP32-S3 OTA 更新需要哪些分区？"
-    for h in idx.search(q):
+    for h in idx.search(q) or []:
         print(f"  {h['type']}:{h['id']:<4} {h['score']:<8.4f} [{h['section']}] {h['title'][:24]}")
