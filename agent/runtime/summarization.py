@@ -25,6 +25,10 @@ _INSTRUCTIONS = (
 class SummaryUnavailable(ValueError):
     """No complete summary was produced; the original messages must remain."""
 
+    def __init__(self, reason):
+        self.reason = reason
+        super().__init__(reason)
+
 
 def summarize(messages, *, budget, config, model=None):
     check_cancelled(config)

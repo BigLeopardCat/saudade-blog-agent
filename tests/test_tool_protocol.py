@@ -95,7 +95,7 @@ def test_loading_and_reading_in_one_batch_cannot_bypass_the_read_limit():
     assert read.calls == 0
 
 
-def test_exhausted_result_budget_stops_before_another_read():
+def test_large_results_stay_individually_bounded_without_ending_the_task():
     class LargeRead(Read):
         def invoke(self, args, config=None):
             self.calls += 1
@@ -103,10 +103,12 @@ def test_exhausted_result_budget_stops_before_another_read():
 
     read = LargeRead()
     calls = [{"name": read.name, "args": {}, "id": f"read_{i}"} for i in range(3)]
-    model = Model([AIMessage(content="", tool_calls=calls)])
+    model = Model([AIMessage(content="", tool_calls=calls), AIMessage(content="完成")])
     session = ToolSession(model, {}, {read.name: read}, {})
-    assert "已停止继续处理" in session.run([HumanMessage(content="查询作者")]).reply
-    assert read.calls == 2
+    assert session.run([HumanMessage(content="查询作者")]).reply == "完成"
+    assert read.calls == 3
+    results = [m for m in model.prompts[-1] if isinstance(m, ToolMessage)]
+    assert len(results) == 3 and all(len(m.content) <= 8000 for m in results)
 
 
 def test_budget_stop_does_not_restart_another_runtime():
