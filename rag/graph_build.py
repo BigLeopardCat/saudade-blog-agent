@@ -329,24 +329,24 @@ def resolve_params(raw: dict | None) -> dict:
         if key not in raw or raw[key] in ("", None):
             continue
         try:
-            v = int(raw[key])
+            iv = int(raw[key])
         except (TypeError, ValueError):
             raise ValueError(f"{key} 要是整数，收到 {raw[key]!r}")
-        if not (lo <= v <= hi):
-            raise ValueError(f"{key} 要在 {lo}..{hi} 之间，收到 {v}")
-        out[key] = v
+        if not (lo <= iv <= hi):
+            raise ValueError(f"{key} 要在 {lo}..{hi} 之间，收到 {iv}")
+        out[key] = iv
     for key, (_, choices) in _CHOICE_PARAMS.items():
         if key not in raw or raw[key] in ("", None):
             continue
-        v = str(raw[key])
-        if v not in choices:
-            raise ValueError(f"{key} 只能是 {'/'.join(choices)}，收到 {v!r}")
-        out[key] = v
+        cv = str(raw[key])
+        if cv not in choices:
+            raise ValueError(f"{key} 只能是 {'/'.join(choices)}，收到 {cv!r}")
+        out[key] = cv
     for key, (_, limit) in _STR_PARAMS.items():
         if key not in raw or raw[key] is None:
             continue
-        v = str(raw[key]).strip()
-        if len(v) > limit:
+        sv = str(raw[key]).strip()
+        if len(sv) > limit:
             raise ValueError(f"{key} 太长（上限 {limit} 字符）")
         # 三个字符串参数里**只有 exclude_ids 的空串是有意义的值**（＝一个都不排除，
         # 见 20261003 修的静默 bug）。api_base / site 的空串是"没填"，必须**保留默认值**
@@ -355,9 +355,9 @@ def resolve_params(raw: dict | None) -> dict:
         # 脚本拼出 `/notes?pageSize=1000`（没有 scheme）当场 `ValueError: unknown url
         # type`。
         # 判据：空串对这两项没有第三种语义，折叠掉不会丢信息。
-        if not v and key not in _KEEP_EMPTY_STR:
+        if not sv and key not in _KEEP_EMPTY_STR:
             continue
-        out[key] = v
+        out[key] = sv
     for key in _FLAG_PARAMS:
         out[key] = _as_flag(raw.get(key))
     if out["exclude_ids"] is None:

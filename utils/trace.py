@@ -106,8 +106,9 @@ class _TraceRecorder:
         self.input_meta = input_meta
         self.events: list = []
         self.reply = ""
-        self.end_reason = None
-        self.duration_s = None
+        # Filled by finalize(); None keeps "not finished yet" distinct from an empty value.
+        self.end_reason: str | None = None
+        self.duration_s: float | None = None
         self.frames = 0
         self.dumped = False
 

@@ -268,6 +268,10 @@ def test_embed_space():
     _write({K1: [0.1, True], K2: [0.3, 0.4]})
     got, _ = _read()
     check("  布尔不算数字（`True` 是 int 的子类，会悄悄变成 1.0 混进向量）", set(got) == {K2}, got)
+    check("  `_is_vec` 返回真正的 bool（空列表曾是它偷偷交出的真值，不是 False）",
+          es._is_vec([0.1, 0.2]) is True and es._is_vec([]) is False
+          and es._is_vec([True]) is False and es._is_vec("x") is False,
+          [es._is_vec([]), es._is_vec([0.1])])
     print("\n⑤ wordgraph：产物空间不符 ⇒ space_mismatch，且零 embedding 调用")
     shutil.rmtree(_GRAPH, ignore_errors=True)
     _GRAPH.mkdir(parents=True)
