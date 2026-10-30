@@ -9,7 +9,7 @@ from test_own_activity import backend as backend
 from test_own_activity import config
 
 from agent.runtime import memory
-from agent.runtime.budget import RequestBudget, budget_scope
+from agent.runtime.budget import BudgetLimits, RequestBudget, budget_scope
 from agent.runtime.native import NativeRuntime
 from agent.runtime.native_store import NativeConversationStore
 from agent.runtime.results import TurnResult
@@ -92,7 +92,7 @@ def test_reconstructed_runtime_recovers_unseen_tail_and_preserves_mixed_read_out
     # A fresh runtime must be able to recover text outside its checkpoint excerpt.
     model = RecoverHistory()
     runtime = NativeRuntime(NativeConversationStore(saver), model_factory=lambda **_:model)
-    budget = RequestBudget()
+    budget = RequestBudget(BudgetLimits(context_tokens=16384, request_tokens=65536))
     with budget_scope(budget):
         events = list(runtime.stream_events({"messages":[HumanMessage(
             content="查一下之前长回答末尾的标记，再告诉我河灯留言和当前时间。") ]}, cfg))

@@ -11,7 +11,7 @@ from agent.runtime import memory
 from agent.runtime.execution_state import restore
 from agent.runtime.memory_media import hydrate
 from agent.runtime.message_content import estimate_tokens
-from agent.runtime.summarization import summarize
+from agent.runtime.summarization import SummaryUnavailable, summarize
 from agent.runtime.turns import check_cancelled
 from config.settings import settings
 from utils.trace import record
@@ -93,7 +93,8 @@ class ConversationCompaction(AgentMiddleware):
             update = middleware.before_model({"messages": source}, runtime)
         except (OpenAIError, TimeoutError, ValueError) as error:
             self.failed = True
-            record("memory", "compaction_skipped", reason=type(error).__name__,
+            record("memory", "compaction_skipped", reason=(
+                error.reason if isinstance(error, SummaryUnavailable) else type(error).__name__),
                    request_tokens=before, trigger_tokens=trigger)
             return anchored
         if update is None:

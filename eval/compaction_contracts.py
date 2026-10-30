@@ -28,7 +28,7 @@ def compaction_recall(turn, state):
         "项目名松针海岸，预算12元，目标文章19。先前加标签的提议已撤销，保持文章原样。"
         "输出用中文；不要发送通知。候选日期周六已经否决，改为周日。"))], [], "已记录。", actor)
     number = 0
-    while memory._tokens(source) < 20000:
+    while memory._tokens(source) < 15000:
         number += 1
         source.extend(memory.turn_messages([HumanMessage(content=f"材料{number}：" + (
             "窗边有薄荷，记录清晨阳光与读书感受；本段不改变任何项目约定。" * 25))],
