@@ -87,7 +87,7 @@ def _db(dsn: str) -> str:
 
 def _safe_diagnostics(dials):
     budget = dials.get("budget")
-    expected = {"context_tokens", "request_tokens", "model_calls", "tool_calls",
+    expected = {"context_tokens", "input_tokens", "request_tokens", "model_calls", "tool_calls",
                 "output_tokens", "summary_output_tokens"}
     if not isinstance(budget, dict) or set(budget) != expected:
         return False

@@ -63,6 +63,7 @@ def test_incomplete_summary_is_rejected_without_claiming_coverage(kind):
 
 
 @pytest.mark.parametrize("limits", [BudgetLimits(context_tokens=1000),
+                                    BudgetLimits(context_tokens=1000000, input_tokens=1000),
                                     BudgetLimits(model_calls=0)])
 def test_oversized_or_unfunded_summary_does_not_call_the_provider(limits):
     budget = RequestBudget(limits)
