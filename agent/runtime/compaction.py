@@ -48,6 +48,24 @@ def _replacement(messages, summary, covered_ids):
             *(m for m in messages[leading:] if m.id not in covered_ids)]
 
 
+def _summarizable(source_tokens, keep, budget):
+    """A legacy checkpoint may exceed the per-call budget; skip its summary safely."""
+    if source_tokens <= keep:
+        return False
+    limit = budget.limits.input_tokens - settings.agent_summary_output_tokens - 256
+    if source_tokens - keep <= limit:
+        return True
+    record("memory", "compaction_skipped", reason="summary_input_too_large",
+           source_tokens=source_tokens, keep_tokens=keep, summary_limit=limit)
+    return False
+
+
+def _capacity_shortage(error):
+    """Capacity pressure is retryable; provider and validation failures are not."""
+    return (isinstance(error, SummaryUnavailable)
+            and error.reason in ("context_tokens", "input_tokens", "request_tokens"))
+
+
 class ConversationCompaction(AgentMiddleware):
     """Reserve complete input/output space and compact only under capacity pressure."""
 
@@ -70,15 +88,16 @@ class ConversationCompaction(AgentMiddleware):
         budget, menu = session.budget, session.menu
         prompt = [*system, *hydrate(messages, session.transient)]
         before = budget.input_tokens(prompt, menu, model_key=session.model) + session.output_limit
-        trigger = int(budget.limits.context_tokens * settings.agent_compaction_trigger)
+        trigger = int(budget.limits.input_tokens * settings.agent_compaction_trigger)
         if before < trigger:
             return anchored
         source = [m for m in messages if not memory.is_context(m)]
+        source_tokens = estimate_tokens(source)
         fixed = [*system, *(m for m in messages if memory.is_context(m) or m.id in protected)]
-        target = int(budget.limits.context_tokens * settings.agent_compaction_target)
+        target = int(budget.limits.input_tokens * settings.agent_compaction_target)
         keep = max(1, target - budget.input_tokens(fixed, menu)
                    - session.output_limit - settings.agent_summary_output_tokens)
-        if len(source) < 2 or estimate_tokens(source) <= keep:
+        if len(source) < 2 or not _summarizable(source_tokens, keep, budget):
             return anchored
         try:
             from models import get_llm
@@ -92,7 +111,10 @@ class ConversationCompaction(AgentMiddleware):
                                                 config=session.config, model=model))
             update = middleware.before_model({"messages": source}, runtime)
         except (OpenAIError, TimeoutError, ValueError) as error:
-            self.failed = True
+            # Capacity pressure is expected on the first request after a legacy
+            # oversized checkpoint; the history selector bounds that request, so
+            # do not poison later rounds. Provider failures stay terminal.
+            self.failed = self.failed or not _capacity_shortage(error)
             record("memory", "compaction_skipped", reason=(
                 error.reason if isinstance(error, SummaryUnavailable) else type(error).__name__),
                    request_tokens=before, trigger_tokens=trigger)
