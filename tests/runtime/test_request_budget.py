@@ -36,6 +36,23 @@ def schema(description):
     }}
 
 
+def test_input_budget_is_separate_from_the_model_window():
+    limits = BudgetLimits(context_tokens=1000000, input_tokens=1000)
+    assert limits.input_tokens == 1000
+    budget = RequestBudget(limits)
+    with pytest.raises(BudgetExceeded, match="input_tokens"):
+        budget.reserve([HumanMessage(content="x" * 3000)], output_limit=10)
+    assert budget.model_calls == budget.tokens == 0
+
+    budget = RequestBudget(BudgetLimits(context_tokens=1000000, input_tokens=100000))
+    ticket = budget.reserve([HumanMessage(content="x" * 3000)], output_limit=10)
+    assert ticket.estimated_input > 0
+
+
+def test_input_budget_never_exceeds_the_model_window():
+    assert BudgetLimits(context_tokens=500, input_tokens=64000).input_tokens == 500
+
+
 def test_schema_and_tool_call_arguments_are_part_of_context_with_output_reserve():
     limits = BudgetLimits(context_tokens=1000)
     tiny = [HumanMessage(content="hello")]
