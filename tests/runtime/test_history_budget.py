@@ -42,6 +42,20 @@ def test_fresh_request_uses_the_smaller_request_limit_even_without_a_budget_argu
     assert estimate_tokens(fitted) + 64 <= limits.request_tokens
 
 
+def test_per_call_input_budget_limits_history_even_with_a_large_model_window():
+    original = [SystemMessage(content="System policy."),
+                HumanMessage(content="旧问题" * 2000),
+                AIMessage(content="旧答复" * 2000),
+                HumanMessage(content="现在的问题")]
+    limits = BudgetLimits(context_tokens=1000000, input_tokens=2000,
+                          request_tokens=100000)
+    fitted = fit_history(original, UNKNOWN, [], limits, 64)
+    assert fitted[0] is original[0] and fitted[-1] is original[-1]
+    assert estimate_tokens(fitted) < estimate_tokens(original)
+    assert estimate_tokens(fitted) + 64 <= limits.input_tokens
+    RequestBudget(limits).reserve(fitted, output_limit=64)
+
+
 def test_current_image_system_context_and_tool_schema_take_priority_over_history():
     current = HumanMessage(content=[{"type": "text", "text": "看这张图"}, {
         "type": "image_url", "image_url": {"url": "data:image/png;base64,AA"}}])

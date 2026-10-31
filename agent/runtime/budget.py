@@ -17,9 +17,14 @@ from utils.trace import record
 @dataclass(frozen=True)
 class BudgetLimits:
     context_tokens: int = field(default_factory=lambda: settings.agent_context_tokens)
+    input_tokens: int = field(default_factory=lambda: settings.agent_input_tokens)
     request_tokens: int = field(default_factory=lambda: settings.agent_request_tokens)
     model_calls: int = field(default_factory=lambda: settings.agent_model_calls)
     tool_calls: int = field(default_factory=lambda: settings.agent_tool_calls)
+
+    def __post_init__(self):
+        # The per-call input budget can never exceed the model's hard window.
+        object.__setattr__(self, "input_tokens", min(self.input_tokens, self.context_tokens))
 
 
 class BudgetExceeded(RuntimeError):
@@ -133,6 +138,8 @@ class RequestBudget:
             return self.reason
         if estimated + output_limit > self.limits.context_tokens:
             return "context_tokens"
+        if estimated > self.limits.input_tokens:
+            return "input_tokens"
         if self.model_calls >= self.limits.model_calls:
             return "model_calls"
         if self.tokens + estimated + output_limit > self.limits.request_tokens:
@@ -153,6 +160,7 @@ class RequestBudget:
             if self.reason or self.model_calls >= self.limits.model_calls:
                 return 0
             return max(0, min(self.limits.context_tokens - estimated,
+                              self.limits.input_tokens - estimated,
                               self.limits.request_tokens - self.tokens - estimated))
 
     def input_tokens(self, messages, tools=(), *, model_key=None):
