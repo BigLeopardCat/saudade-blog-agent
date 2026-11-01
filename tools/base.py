@@ -70,18 +70,26 @@ SITE_BASE = _site_base(API_BASE)
 # Reuse the HTTP client with certificate verification enabled; responses enter model context.
 _client = httpx.Client(timeout=15)
 
+
+def _request_timeout():
+    """Recheck shared cancellation and remaining time before every HTTP attempt."""
+    from agent.runtime.control import model_options
+
+    return model_options(READ_TIMEOUT).get("timeout", READ_TIMEOUT)
+
+
 def _get(path: str, *, not_found_text: str = "",
          payload: dict | None = None) -> dict | list | ToolResult:
     """Read a public API envelope without turning failures into empty results.
 
-    Only callers that supply not_found_text classify HTTP 404 as a missing target.
+    Missing targets retain the caller's optional not_found_text.
     Transient transport or 408/429/502/503/504 failures are retried once; argument
     rejection, authorization denial, business rejection and undecodable bodies are
     not. A body-based POST read is selected explicitly by passing payload — the
     path is never inspected to guess read/write intent."""
     body, failure = request_json(
         _client, method="POST" if payload is not None else "GET",
-        url=f"{API_BASE}{path}", json_body=payload, timeout=READ_TIMEOUT,
+        url=f"{API_BASE}{path}", json_body=payload, timeout=_request_timeout,
         attempts=READ_ATTEMPTS)
     if failure is not None:
         return read_failure(failure, deny_msg="当前身份无权读取该公开数据",
@@ -175,7 +183,7 @@ def _principal_get(path: str, config: RunnableConfig, *,
     body, failure = request_json(
         _client, method="POST" if payload is not None else "GET",
         url=f"{ADMIN_BASE}{path}", headers=headers, json_body=payload,
-        timeout=READ_TIMEOUT, attempts=READ_ATTEMPTS,
+        timeout=_request_timeout, attempts=READ_ATTEMPTS,
         stop=lambda: _stop_requested(config))
     if failure is not None:
         return read_failure(failure, deny_msg=deny_msg)
@@ -254,7 +262,7 @@ def _principal_request(method: str, path: str, payload, config: RunnableConfig,
     headers = {"Authorization": "Bearer " + _sign_local_jwt(uid, getattr(principal, "role", None))}
     body, failure = request_json(
         _client, method=method, url=f"{ADMIN_BASE}{path}", headers=headers,
-        json_body=payload, timeout=READ_TIMEOUT, attempts=1, write=True)
+        json_body=payload, timeout=_request_timeout, attempts=1, write=True)
     if failure is not None:
         return write_failure(failure, label=label, deny_msg=deny_msg, tail=tail)
     assert body is not None

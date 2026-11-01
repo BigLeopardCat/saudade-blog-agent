@@ -152,14 +152,16 @@ def _attempt_once(client: httpx.Client, *, method: str, url: str, headers=None,
 
 
 def request_json(client: httpx.Client, *, method: str, url: str, headers=None,
-                 json_body=None, timeout: float = READ_TIMEOUT,
+                 json_body=None, timeout: float | Callable[[], float] = READ_TIMEOUT,
                  attempts: int = READ_ATTEMPTS,
                  stop: Callable[[], bool] | None = None,
                  write: bool = False) -> tuple[dict | None, Failure | None]:
     """Send a JSON request and return ``(envelope, failure)``; exactly one is set.
 
     Reads pass ``attempts=2`` (the default). Writes must pass ``attempts=1``
-    and ``write=True`` so a possibly-applied request is never replayed."""
+    and ``write=True`` so a possibly-applied request is never replayed.
+    A timeout callback can enforce the caller's deadline before each attempt;
+    its cancellation/deadline exceptions propagate without classification."""
     retryer = Retrying(
         stop=stop_after_attempt(max(1, attempts)),
         wait=wait_fixed(RETRY_WAIT_SECONDS),
@@ -173,22 +175,23 @@ def request_json(client: httpx.Client, *, method: str, url: str, headers=None,
         nonlocal sent
         if stop is not None and stop():
             raise _Stopped()
+        remaining = timeout() if callable(timeout) else timeout
         sent += 1
         return _attempt_once(client, method=method, url=url, headers=headers,
-                             json_body=json_body, timeout=timeout, write=write)
+                             json_body=json_body, timeout=remaining, write=write)
 
     try:
         for attempt in retryer:
             with attempt:
                 return send(), None
     except _Stopped:
-        logger.warning("request stopped before send: method=%s url=%s", method, url)
+        logger.warning("request stopped before send: method=%s attempts=%s", method, sent)
         return None, Failure(ERROR_WRITE_UNKNOWN if write else ERROR_UPSTREAM_UNAVAILABLE,
                              attempts=sent)
     except Failure as failure:
         failure.attempts = sent
-        logger.warning("request failed: method=%s url=%s code=%s status=%s attempts=%s",
-                       method, url, failure.code, failure.status, failure.attempts)
+        logger.warning("request failed: method=%s code=%s status=%s attempts=%s",
+                       method, failure.code, failure.status, failure.attempts)
         return None, failure
     return None, Failure(ERROR_WRITE_UNKNOWN if write else ERROR_UPSTREAM_UNAVAILABLE,
                          attempts=sent)
