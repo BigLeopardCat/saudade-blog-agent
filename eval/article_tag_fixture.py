@@ -13,6 +13,16 @@ from eval.own_fixtures import SECRET
 from tools import base
 
 
+def article_page(state, params):
+    ident = params.get("id")
+    rows = [{"id": row["id"], "title": row["title"], "status": "public", "isPublic": True,
+             "isTop": 0, "categoryId": None, "categoryName": None, "tags": row["tags"]}
+            for row in state["rows"].values() if ident is None or str(row["id"]) == ident]
+    page, limit = int(params.get("page", 1)), int(params.get("page_size", 20))
+    return httpx.Response(200, json={"code": 200,
+        "data": rows[(page - 1) * limit:page * limit], "total": len(rows)})
+
+
 @contextmanager
 def backend():
     state = {"caller_role": "admin", "requests": [], "unsupported_reads": [], "writes": [],
@@ -38,6 +48,9 @@ def backend():
         state["requests"].append(request)
         path = request.url.path
         root = "/api/protected/article-tag-actions/"
+        if (request.method == "GET" and path == "/api/protected/articles"
+                and set(request.url.params) <= {"id", "page", "page_size"}):
+            return article_page(state, request.url.params)
         if request.method != "POST" or not path.startswith(root):
             state["unsupported_reads"].append(str(request.url))
             return httpx.Response(404)

@@ -48,6 +48,8 @@ _NOARG_VERB = {
     "list_dashboard_todos": "查看待办列表",
     "list_accounts": "查看后台账号名录",
     "list_admin_comments": "查看后台评论名册",
+    "set_article_status_batch": "整批修改文章状态",
+    "set_article_tags_batch": "整批修改文章标签",
 }
 
 _REF_SOURCE_CN = {
@@ -340,10 +342,6 @@ def _arm_text(name: str, a: dict, m: dict, preview: bool):
         return f"{head}：{change}" if change else head
 
     # Article state and tag operations share the same display boundary.
-    if name == "set_article_status_batch":
-        return "整批修改文章状态"
-    if name == "set_article_tags_batch":
-        return "整批修改文章标签"
     if name == "set_article_status":
         if preview:
             aid = _leaf(a.get("article_id"))
