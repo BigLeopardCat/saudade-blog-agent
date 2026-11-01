@@ -217,6 +217,8 @@ def _sample(name, backend, contract, run_id, sample):
                                  principal, {"run": run_id,
                                              "case": f"native_{name}_{sample}_{len(rounds)}"},
                                  thread="conv_42", confirm_token=token or "")
+            evidence = load_trace(result["trace"]) if result.get("trace") else None
+            result["native_events"] = evidence["events"] if evidence else None
             # Persist observable outcomes, never signed confirmation credentials.
             rounds.append({"user_input": message, "text": result["text"],
                            "commands": result["commands"],
