@@ -1,6 +1,7 @@
 """Current approval controls are authenticated checkpoint projections, not local drafts."""
 
 import asyncio
+import secrets
 import time
 from types import SimpleNamespace
 
@@ -67,8 +68,9 @@ def test_current_card_is_readable_under_turn_lock_and_disappears_after_revocatio
 
 def test_display_fallback_id_is_stable_and_excludes_private_execution_fields(monkeypatch):
     monkeypatch.setattr("agent.products.blog.confirmation.time.time", lambda: 100)
-    value = {"pending_confirm": {"token": "synthetic-opaque", "q": "确认？",
+    opaque = secrets.token_urlsafe(24)
+    value = {"pending_confirm": {"token": opaque, "q": "确认？",
                                 "opts": [], "specs": [{"private": "data"}], "exp": 123}}
     before, after = public_card(value), public_card(value)
     assert before == after and before["id"]
-    assert "specs" not in before and "synthetic-opaque" not in before["id"]
+    assert "specs" not in before and opaque not in before["id"]
