@@ -306,3 +306,24 @@ def test_model_discovers_scheduling_and_prepares_card_through_real_middleware(mo
     )[-1]
     assert result.execution["pending_confirm"]["workflow"] == "automation_create"
     assert not result.execution.get("receipts")
+
+
+def test_notification_preview_is_explicit_and_receipt_identity_is_verified(monkeypatch):
+    monkeypatch.setattr(settings, "jwt_secret", "scheduling-fixture-secret-at-least-32")
+    receipt = {"notificationId": 42, "replayed": False}
+    sent = []
+
+    def handler(request):
+        if request.method == "GET":
+            return httpx.Response(200, json={"code": 200, "data": {"id": 7, "role": "admin"}})
+        sent.append(json.loads(request.content))
+        return httpx.Response(200, json={"code": 200, "data": receipt})
+
+    with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+        host = BlogHost(client)
+        result = host.notify(7, "run", "提醒", "长" * 1100)
+        assert result["delivered"] and result["notification_id"] == 42
+        assert len(sent[0]["content"]) <= 1000 and "完整结果" in sent[0]["content"]
+        receipt["notificationId"] = True
+        with pytest.raises(ValueError):
+            host.notify(7, "run", "提醒", "正文")
