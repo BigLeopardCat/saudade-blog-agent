@@ -414,6 +414,37 @@ def test_cancellation_before_dispatch_does_not_claim_an_execution(backend):
     assert ledger.lookup(writes.operation_key(grant, spec["tool"], spec["args"])) is None
 
 
+@pytest.mark.parametrize("historical_time", [None, 300])
+def test_feedback_revokes_approval_after_time_budget_is_unavailable(backend, historical_time):
+    import time
+    from threading import Event
+
+    from agent.runtime.control import RequestControl, request_scope
+    from agent.runtime.task_budget import for_saver
+
+    state, ledger = backend
+    selected = runtime(Model())
+    _, grant, _ = prepare(selected, FAVORITE)
+    usage = for_saver(selected.saver)
+    task = selected.store.load(config()).run
+    if historical_time is not None:
+        usage.save(task, {**usage.load(task), "active_seconds": historical_time})
+    model = Model()
+    selected.model_factory = lambda **_: model
+    budget = TaskBudget(BudgetLimits(task_seconds=300))
+    with request_scope(RequestControl(Event(), time.monotonic() + 90, budget)):
+        result = run(selected, text="取消刚才操作，不执行其他改动。")
+    assert not state["writes"] and not model.prompts
+    assert result.execution["pending_event"]["jti"] == grant["jti"]
+    assert not selected.store.load(config()).has_pending
+    assert not selected.store.load(config()).unfinished
+    spec = grant["specs"][0]
+    row = ledger.lookup(writes.operation_key(grant, spec["tool"], spec["args"]))
+    assert row[0] == "done"
+    from agent.idem import replay_result
+    assert replay_result(row[1]).meta["reason"] == "confirmation_revoked"
+
+
 def test_cursor_binding_rejects_changed_role_user_conversation_or_operation(backend):
     selected = runtime(Model())
     _, grant, _ = prepare(selected)
