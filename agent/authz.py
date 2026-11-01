@@ -97,6 +97,8 @@ TOOL_SCOPE: dict[str, str] = {
     "create_tag": SCOPE_WRITE_CONSOLE,
     "set_article_status": SCOPE_WRITE_CONSOLE,
     "set_article_tags": SCOPE_WRITE_CONSOLE,
+    "set_article_tags_batch": SCOPE_WRITE_CONSOLE,
+    "set_article_status_batch": SCOPE_WRITE_CONSOLE,
     "update_tag": SCOPE_WRITE_CONSOLE,
     "delete_tag": SCOPE_WRITE_CONSOLE,
     "create_category": SCOPE_WRITE_CONSOLE,
