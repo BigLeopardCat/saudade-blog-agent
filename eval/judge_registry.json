@@ -236,11 +236,15 @@
         0
       ],
       "agent/domains/automations/preparation.py": [
-        3,
+        0,
+        0
+      ],
+      "agent/domains/automations/presentation.py": [
+        4,
         0
       ],
       "agent/domains/automations/transactions.py": [
-        1,
+        0,
         0
       ],
       "agent/domains/browser.py": [
@@ -1144,6 +1148,16 @@
       "why": "主人怎么表达『清空/取消』这个截止日",
       "replacement": "模型声明 clear 布尔参数",
       "sunset": "写参数出处第二批（挂起：等真实流量定价，见 docs/write-provenance-shadow-20261014.md §7）"
+    },
+    {
+      "id": "agent/domains/automations/presentation.py::LABELS",
+      "file": "agent/domains/automations/presentation.py",
+      "kind": "collection",
+      "name": "LABELS",
+      "size": 4,
+      "category": "system_data",
+      "q": "是否仅渲染已核验操作？",
+      "why": "仅把计划操作的内部枚举显示为中文回执，不参与意图判断、授权或执行决策。"
     },
     {
       "id": "agent/domains/categories/preparation.py::LABELS",

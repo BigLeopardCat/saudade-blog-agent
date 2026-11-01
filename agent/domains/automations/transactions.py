@@ -3,6 +3,7 @@
 import time
 
 from agent import authz
+from agent.domains.automations.presentation import action_text
 from agent.runtime import writes
 from agent.scheduling.models import ControlArguments, CreateArguments
 from tools.result import ok
@@ -52,7 +53,10 @@ class Operation:
             result = self.service.control(
                 principal, args["schedule_id"], self.action, args["version"]
             )
-        return ok("计划任务已保存。", meta={"schedule_result": result, "approved_args": args})
+        display = action_text(OPERATIONS[self.action], args, {"schedule": result["schedule"]})
+        return ok(
+            display or "计划任务已保存。", meta={"schedule_result": result, "approved_args": args}
+        )
 
 
 def _receipt(grant, name, args, result):
@@ -69,7 +73,7 @@ def _receipt(grant, name, args, result):
         "skill": grant["workflow"],
         "tool": name,
         "args": args,
-        "result": "计划任务已保存。",
+        "result": str(result),
         "ts": time.time(),
         "schedule": row,
         "changed": state["changed"],

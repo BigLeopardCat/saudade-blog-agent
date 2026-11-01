@@ -8,6 +8,7 @@ from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import tool
 from pydantic import Field, StrictInt
 
+from agent.domains.automations.presentation import LABELS
 from agent.domains.automations.transactions import OPERATIONS
 from agent.products.blog.confirmation import proposal
 from agent.runtime.tool_evidence import observed
@@ -140,7 +141,7 @@ def tools(service, can_prepare):
         current = service.get(actor, schedule_id)
         observed("automations", current, ("id", "status", "definition", "version"))
         args = {"schedule_id": schedule_id, "action": action, "version": current["version"]}
-        label = {"pause": "暂停", "resume": "恢复", "cancel": "取消"}[action]
+        label = LABELS[OPERATIONS[action]]
         question = (
             f"{label}「{current['definition']['title']}」？已开始的读取可能完成，不撤销已完成操作。"
         )
