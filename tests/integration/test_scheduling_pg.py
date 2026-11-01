@@ -232,3 +232,26 @@ def test_real_scheduled_agent_uses_isolated_checkpoint_and_cleanup_follows_child
     assert query("SELECT count(*) FROM checkpoints WHERE thread_id=%s", (thread,))[0][0] == 0
     assert query("SELECT count(*) FROM agent_task_usage")[0][0] == 0
     assert query("SELECT count(*) FROM test_notifications")[0][0] == 1
+
+
+def test_owned_schedule_lists_do_not_confuse_administrator_id_prefixes(site):
+    service, query, _, _ = site
+    query("INSERT INTO test_actors VALUES (70,'admin')")
+    own, _, _ = create(service, delay_seconds=None, cron="0 8 * * *")
+    other = "sc_" + uuid.uuid4().hex
+    service.create(
+        Principal(70, "admin", "assertion"),
+        other,
+        {
+            "title": "other owner",
+            "instruction": "private reminder",
+            "action": "reminder",
+            "cron": "0 8 * * *",
+        },
+    )
+    assert [row["id"] for row in service.list(ADMIN)["items"]] == [own]
+    assert [row["id"] for row in service.list(Principal(70, "admin", "assertion"))["items"]] == [
+        other
+    ]
+    with pytest.raises(ScheduleNotFound):
+        service.get(ADMIN, other)
