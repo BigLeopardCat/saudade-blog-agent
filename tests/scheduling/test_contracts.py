@@ -327,3 +327,18 @@ def test_notification_preview_is_explicit_and_receipt_identity_is_verified(monke
         receipt["notificationId"] = True
         with pytest.raises(ValueError):
             host.notify(7, "run", "提醒", "正文")
+
+
+def test_schedule_action_text_uses_verified_title_and_covers_all_operations():
+    from agent.action_text import receipt_action
+    from agent.domains.automations.presentation import LABELS
+    from agent.domains.automations.transactions import PERMISSION_OPERATIONS
+
+    assert set(LABELS) == PERMISSION_OPERATIONS
+    result = receipt_action(
+        "create_automation",
+        {"definition": {"title": "proposal"}},
+        {"schedule": {"definition": {"title": "verified"}}},
+    )
+    assert result == "创建计划任务「verified」"
+    assert all(receipt_action(name, {}, {}) for name in PERMISSION_OPERATIONS)

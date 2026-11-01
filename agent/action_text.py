@@ -7,13 +7,15 @@ interprets user intent or authorizes execution."""
 import re
 
 from agent import adminops_tags as _tags  # 标签颜色/状态的既有中文词表（写工具问句共用）
+
 # 分期报表的粒度词（周报/月报/年报）：**唯一一份**在 `agent/reports.py`（帧头与
 # 动作行必须同一套字），这里只取用、不另抄。
+from agent.domains.automations.presentation import action_text as automation_action
 from agent.reports import _KIND_CN
+
 # 四个数据源的中文名词（note/talk/board/announcement）；留言的**状态词与筛选键**也
 # 取同一处（`tools/base.py` 是唯一实现，写路径、名册、动作行共用一份，别在这里再抄）。
-from tools.base import BOARD_APPROVED_CN, BOARD_STATUS_FILTERS, DOC_TYPE_CN
-from tools.base import _as_bool, _as_ids
+from tools.base import BOARD_APPROVED_CN, BOARD_STATUS_FILTERS, DOC_TYPE_CN, _as_bool, _as_ids
 from tools.site import nav_label
 
 _EFFECT_CN = {"sakura": "樱花", "rain": "大雨", "snow": "雪花"}
@@ -587,10 +589,12 @@ def _arm_text(name: str, a: dict, m: dict, preview: bool):
 def tool_action_text(name: str, args: dict | None = None, meta: dict | None = None,
                      preview: bool = True) -> str:
     """Render an action preview or receipt using the same operation vocabulary."""
-    text = _arm_text(name, args or {}, meta or {}, preview)
+    text = (automation_action(name, args or {}, meta or {})
+            or _arm_text(name, args or {}, meta or {}, preview))
     return text if text is not None else f"执行 {name}"
 
 
 def receipt_action(name: str, args: dict | None, meta: dict | None) -> str:
     """Return a verified receipt action, or an empty string for unsupported tools."""
-    return _arm_text(name, args or {}, meta or {}, False) or ""
+    return (automation_action(name, args or {}, meta or {})
+            or _arm_text(name, args or {}, meta or {}, False) or "")

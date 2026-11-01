@@ -57,6 +57,7 @@ flowchart LR
 │   ├── api/routes/automations.py                        # 管理员计划管理接口
 │   ├── domains/automations/__init__.py                  # 定时领域包
 │   ├── domains/automations/preparation.py               # 按需工具与确认卡
+│   ├── domains/automations/presentation.py             # 已核验计划操作的可读回执
 │   ├── domains/automations/transactions.py              # 计划变更与执行账回执
 │   ├── scheduling/__init__.py                           # 持久后台调度包
 │   ├── scheduling/backend.py                            # DBOS 公开客户端与管理锁
