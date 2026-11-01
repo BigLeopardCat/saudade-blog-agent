@@ -23,6 +23,7 @@
 |---|---|---|
 | [task-reliability-plan.md](task-reliability-plan.md) | 任务生命周期、完整交付、上下文、成本与验收的分阶段整改清单 | 方向型 |
 | [p2-completion-report.md](p2-completion-report.md) | P1/P2 发布版本、离线与线上验收、分层用量及剩余边界 | 记录型 |
+| [p3-completion-report.md](p3-completion-report.md) | 确认恢复、请求归属、导航与进度的跨仓发布及交互验收 | 记录型 |
 | [migration-cleanup-20261028.md](migration-cleanup-20261028.md) | 框架迁移核查、遗留清退与博客独立审计待修项 | 记录型 |
 | [agent-architecture.md](agent-architecture.md) | 系统现在是什么：节点拓扑、跨语言契约、目录与机制 | 现状型 |
 | [产品与领域装配](product-extensions.md) | 博客产品边界、标准 middleware 与非博客库存示例 | 现状型 |
