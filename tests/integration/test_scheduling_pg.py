@@ -114,6 +114,7 @@ def test_timing_replay_owner_isolation_pause_and_resume(site):
     service, query, _, _ = site
     ident, definition, first = create(service)
     assert first["changed"]
+    assert service.backend.once(ADMIN.uid, ident).status == "DELAYED"
     assert not service.create(ADMIN, ident, definition)["changed"]
     with pytest.raises(ScheduleConflict):
         service.create(ADMIN, ident, {**definition, "instruction": "不同内容"})

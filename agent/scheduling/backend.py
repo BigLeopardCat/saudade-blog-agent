@@ -1,11 +1,14 @@
 """Public DBOS client adapter; no timer, queue or execution lease implementation."""
 
 from contextlib import contextmanager
+from datetime import datetime
 from hashlib import blake2b
 from threading import BoundedSemaphore
 
 import psycopg
 from dbos import DBOSClient, DBOSPortableJSONSerializer, WorkflowSerializationFormat
+
+from agent.scheduling.models import utc_now
 
 APP = "saudade-automations"
 SCHEMA = "saudade_automations"
@@ -79,6 +82,9 @@ class Backend:
                 "workflow_name": ONCE,
                 "queue_name": CONTROL_QUEUE,
                 "workflow_id": storage_name(owner, identifier),
+                "delay_seconds": max(
+                    0.0, (datetime.fromisoformat(payload["start_at"]) - utc_now()).total_seconds()
+                ),
                 "authenticated_user": str(owner),
                 "attributes": {
                     "definition": payload["definition"],
