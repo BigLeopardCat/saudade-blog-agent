@@ -29,6 +29,7 @@ from eval import (
     article_tag_contracts,
     compaction_contracts,
     composite_task_contracts,
+    confirmation_failure_contracts,
     context_contracts,
     experience_contracts,
     navigation_contracts,
@@ -195,7 +196,7 @@ CASES = [("chat", favorite_backend, _chat),
          *reading_task_contracts.CASES, *quota_task_contracts.CASES,
          *context_contracts.CASES, *composite_task_contracts.CASES,
          *account_candidate_contracts.CASES, *compaction_contracts.CASES,
-         *article_tag_contracts.CASES]
+         *article_tag_contracts.CASES, *confirmation_failure_contracts.CASES]
 
 
 def _sample(name, backend, contract, run_id, sample):

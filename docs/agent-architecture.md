@@ -168,6 +168,7 @@ flowchart LR
 │   ├── runtime/approval_response.py                     # 标准 Agent 在审批等待前交付回复
 │   ├── runtime/task_planning.py                         # 按需标准任务清单，框架 checkpoint 持有
 │   ├── runtime/approval.py                              # 框架持久审批中断与执行回执提交
+│   ├── runtime/approval_messages.py                     # 已确认结果与未执行后续项的原生消息投影
 │   ├── runtime/execution.py                             # 标准 Agent 子图与会话审批图组合
 │   ├── runtime/turn_commit.py                           # 父图内的轮次结果投影与原子提交
 │   ├── runtime/client_actions.py     # 浏览器回报的框架中断与绑定校验
