@@ -365,3 +365,23 @@ def test_native_confirmation_preview_is_reviewed_without_becoming_supporting_evi
     assert preview not in str(current["tool_observations"])
     assert preview not in str(current["validated_preparation_facts"])
     assert report["rows"][0]["status"] == "no_issue_found"
+
+
+@pytest.mark.parametrize("uid,source,verified,role,expected", [
+    (7, "assertion", True, "admin", 7),
+    (True, "assertion", True, "admin", None),
+    (0, "assertion", True, "admin", None),
+    (7, "browser", True, "admin", None),
+    (7, "assertion", False, "admin", None),
+    (7, "assertion", True, "user", None),
+])
+def test_only_correlated_verified_actor_id_reaches_semantic_review(
+    tmp_path, uid, source, verified, role, expected
+):
+    case = recorded(tmp_path, trace_extra={"user_id": uid,
+        "input": {"message": "这条留言是我发的吗？", "principal_role": "admin",
+                  "principal_source": source},
+        "events": [{"node": "native", "event": "caller_context", "caller": {
+            "verified": verified, "role": role}}]})
+    data = json.loads(online_judge.material(case, case["result"]["rounds"]))
+    assert data["turns"][0]["verified_current_account_id"] == expected

@@ -156,11 +156,19 @@ def material(case, results):
         if result.get("error"):
             raise ValueError("request failed; deterministic result remains authoritative")
         calls, preparations, operations = _observations(trace)
+        context = runtime_context(trace.get("events", []))
+        caller = context.get("caller") or {}
+        uid = trace.get("user_id")
+        verified_uid = (uid if inp.get("principal_source") == "assertion"
+                        and caller.get("verified") is True
+                        and caller.get("role") == inp.get("principal_role")
+                        and type(uid) is int and uid > 0 else None)
         turns.append({
             "user_request": message,
             "caller_role": inp.get("principal_role"),
+            "verified_current_account_id": verified_uid,
             "reported_browser_state_not_authority": inp.get("page_context"),
-            "runtime_context": runtime_context(trace.get("events", [])),
+            "runtime_context": context,
             "validated_preparation_facts": preparations,
             "validated_operation_facts": operations,
             "tool_observations": [{key: event[key] for key in
