@@ -37,6 +37,7 @@ dependencies = [
     # JWT authentication uses the installed PyJWT implementation.
     "PyJWT==2.15.1",
     "starlette==1.6.0",
+    "tenacity==9.1.4",
     "uvicorn==0.52.4",
     "langchain==1.4.6",
     "langchain-deepseek==1.1.1",

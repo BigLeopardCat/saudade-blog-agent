@@ -2169,6 +2169,7 @@ dependencies = [
     { name = "pydantic-settings" },
     { name = "pyjwt" },
     { name = "starlette" },
+    { name = "tenacity" },
     { name = "uvicorn" },
 ]
 
@@ -2218,6 +2219,7 @@ requires-dist = [
     { name = "pydantic-settings", specifier = "==2.14.2" },
     { name = "pyjwt", specifier = "==2.15.1" },
     { name = "starlette", specifier = "==1.6.0" },
+    { name = "tenacity", specifier = "==9.1.4" },
     { name = "tokenizers", marker = "extra == 'embedding-tokenizer'", specifier = "==0.22.2" },
     { name = "uvicorn", specifier = "==0.52.4" },
 ]
