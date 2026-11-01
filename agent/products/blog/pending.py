@@ -17,7 +17,8 @@ class PendingOperation:
     action: dict
 
     def _revoke(self, config, saver):
-        check_cancelled(config)
+        # Local revocation closes an approval; it does not fund business execution.
+        check_cancelled(config, check_budget=False)
         domain = confirmed_domain(self.grant)
         name, args = domain.validate(self.grant, config)
         store = writes.ledger_for(saver)
