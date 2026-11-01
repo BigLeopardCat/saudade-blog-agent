@@ -172,7 +172,7 @@ def test_resume_cannot_exceed_an_exhausted_task_model_limit():
         result = list(selected().stream_events({"resume_task": task["id"]}, config()))[-1]
     assert resumed.model_calls == len(model.prompts) == 2
     assert resumed.request_spent()["model_calls"] == 0
-    assert "达到调用或上下文上限" in result.reply
+    assert "达到执行预算上限" in result.reply
 
 
 def test_byte_retention_preserves_the_latest_complete_turns(monkeypatch):
