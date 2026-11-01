@@ -119,10 +119,10 @@ def _observations(trace):
         raise ValueError("tool evidence was truncated in the source trace")
     ids = {(call.get("round"), call.get("call_id")) for call in calls}
     operations = [event for event in trace.get("events", [])
-                  if event.get("node") == "native" and event.get("event") == "operation_observation"
-                  and event.get("call_id") and (event.get("round"), event["call_id"]) in ids]
-    operations.extend(event for event in trace.get("events", []) if event.get("node") == "native"
-                      and event.get("event") == "approval_feedback")
+                  if event.get("node") == "native" and (
+                      event.get("event") == "approval_feedback"
+                      or event.get("event") == "operation_observation" and event.get("call_id")
+                      and (event.get("round"), event["call_id"]) in ids)]
     return calls, [event for event in preparations
                    if event.get("complete") is True
                    and (event.get("round"), event.get("call_id")) in ids], operations
