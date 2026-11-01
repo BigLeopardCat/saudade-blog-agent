@@ -7,18 +7,21 @@ from models.session import current_session
 from utils.trace import record
 
 
-def fingerprint(value):
-    return hashlib.sha256(json.dumps(value, ensure_ascii=False).encode()).hexdigest()
+def fingerprint(value, *, sort_keys=False):
+    return hashlib.sha256(json.dumps(value, ensure_ascii=False, sort_keys=sort_keys)
+                          .encode()).hexdigest()
 
 
 def record_layout(payload, *, endpoint=None):
     messages = payload.get("messages") or []
     tools = payload.get("tools") or []
-    record("model", "request_layout", model=payload.get("model"),
+    # SDK transport options are not generation parameters or prompt content.
+    controls = {key: fingerprint(value, sort_keys=True) for key, value in payload.items()
+                if key not in ("model", "messages", "tools", "timeout", "extra_headers")}
+    record("model", "request_layout", layout_version=2, model=payload.get("model"),
            tools=fingerprint(tools), tool_count=len(tools),
            tool_fingerprints=[fingerprint(tool) for tool in tools],
-           controls=fingerprint({key: value for key, value in payload.items()
-                                 if key not in ("model", "messages", "tools")}),
+           controls=fingerprint(controls, sort_keys=True), control_fingerprints=controls,
            endpoint=fingerprint(str(endpoint)) if endpoint else None,
            tools_chars=len(json.dumps(tools, ensure_ascii=False)),
            messages=[fingerprint(message) for message in messages],
