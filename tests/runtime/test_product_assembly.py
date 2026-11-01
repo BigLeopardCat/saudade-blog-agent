@@ -4,7 +4,7 @@ from _own_support import config
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from langgraph.checkpoint.memory import InMemorySaver
 
-from agent.runtime.budget import BudgetLimits, RequestBudget, budget_scope
+from agent.runtime.budget import BudgetLimits, TaskBudget, budget_scope
 from agent.runtime.native import NativeRuntime
 from agent.runtime.native_store import NativeConversationStore
 from examples.inventory_agent import InventoryApplication
@@ -53,7 +53,7 @@ def test_inventory_product_cannot_bypass_shared_tool_budget():
     model = Model(request("load_inventory_info_tools"), request("get_stock", sku="keyboard"))
     selected = NativeRuntime(NativeConversationStore(InMemorySaver()),
                              application=InventoryApplication(), model_factory=lambda **_: model)
-    budget = RequestBudget(BudgetLimits(tool_calls=1))
+    budget = TaskBudget(BudgetLimits(tool_calls=1))
     with budget_scope(budget):
         result = list(selected.stream_events({"messages": [HumanMessage(content="Stock?")]},
                                             config()))[-1]

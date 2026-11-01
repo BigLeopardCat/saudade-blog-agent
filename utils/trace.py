@@ -11,6 +11,7 @@ import logging
 import os
 import threading
 import time
+from datetime import datetime
 
 from config.settings import settings
 
@@ -87,21 +88,11 @@ class _TraceRecorder:
         self.trace_id = trace_id
         self.user_id = user_id
         self.thread_id = thread_id
-        # 落盘目录与文件名可覆盖（20260922，golden set 用）：**默认仍是生产
-        # trace 目录**——只有显式传参才改，误配的代价是把评测流量混进生产语料
-        # （trace_alert/trace_metrics/效率基线扫的就是那个目录）。
-        # `name` 给定时文件名就是 `<name>.json`（golden 要"一个用例一份、可直接点名"），
-        # 否则沿用"时间戳_uid_trace_id 前 8 位"的可读命名。
-        #
-        # `by_day`（20260925）：生产 trace 落 `<dir>/<YYYYMMDD>/`，**golden 必须传 False**。
-        # 平铺到 20260925 积了 863 个文件（用户 20260925 提的"trace 列表很长"），
-        # 按天一层后 `ls` 是 26 个目录；保留治理（`eval/trace_retention.py`）也按天对齐。
-        # golden 不能跟着分：`golden_traces/<run_id>/` 已经是它自己的分目录，再套一层
-        # 会让 `llm_judge` 的 `glob("*.json")`、`golden_trace.prune` 和报告里的路径全落空。
+        # Explicit evaluation paths stay separate from production traces.
         self.trace_dir = trace_dir or TRACE_DIR
         self.name = name or ""
         self.by_day = by_day
-        self.started_at = time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime())
+        self.started_at = datetime.now().astimezone().isoformat(timespec="seconds")
         self._t0 = time.monotonic()
         self.input_meta = input_meta
         self.events: list = []
@@ -153,12 +144,7 @@ class _TraceRecorder:
                 "reply": self.reply,
                 "events": self.events,
             }
-            # 20260830：文件名可读化——时间戳 + user_id + trace_id 前 8 位，
-            # ls 目录即知哪次对话（纯 hash 命名要挨个点开才知道）；trace_id
-            # 完整保留在 JSON 内对账。保留期由 `eval/trace_retention.py` 执行、
-            # 不再走 logrotate（20260925 起，见该脚本头注），读取端因此要同时认
-            # `.json` 与 gz（存量归档件是 logrotate 时代留下的 .1.gz）
-            stamp = self.started_at.replace("-", "").replace(":", "")
+            stamp = datetime.fromisoformat(self.started_at).strftime("%Y%m%dT%H%M%S")
             if self.name:
                 fname = f"{self.name}.json"
             else:

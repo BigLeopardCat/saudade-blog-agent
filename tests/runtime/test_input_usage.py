@@ -7,7 +7,7 @@ import pytest
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 from langchain_core.tools import StructuredTool
 
-from agent.runtime.budget import BudgetLimits, RequestBudget, budget_scope
+from agent.runtime.budget import BudgetLimits, TaskBudget, budget_scope
 from agent.runtime.message_content import estimate_tokens
 from agent.runtime.session import ToolSession
 from models.llm import get_llm
@@ -24,7 +24,7 @@ def anchor(budget, messages, menu, *, usage=1000):
 
 
 def test_exact_prefix_uses_actual_input_and_estimates_only_appended_tool_exchange():
-    budget = RequestBudget()
+    budget = TaskBudget()
     messages = [SystemMessage(content="中文前缀" * 400), HumanMessage(content="处理")]
     menu = [{"type": "function", "function": {"name": "fixture", "description": "read"}}]
     anchor(budget, messages, menu)
@@ -39,7 +39,7 @@ def test_exact_prefix_uses_actual_input_and_estimates_only_appended_tool_exchang
 
 @pytest.mark.parametrize("change", ["system", "history", "tools", "model", "unknown_usage"])
 def test_any_prefix_or_envelope_change_falls_back_to_complete_framework_estimate(change):
-    budget, fresh = RequestBudget(), RequestBudget()
+    budget, fresh = TaskBudget(), TaskBudget()
     messages = [SystemMessage(content="前缀" * 400), HumanMessage(content="request")]
     menu = [{"type": "function", "function": {"name": "fixture", "description": "read"}}]
     anchor(budget, messages, menu, usage=0 if change == "unknown_usage" else 1000)
@@ -63,11 +63,11 @@ def test_equal_models_still_need_the_same_instance_to_reuse_input_usage():
 
     original, replacement = EqualModel(), EqualModel()
     messages = [HumanMessage(content="上下文" * 400)]
-    budget = RequestBudget()
+    budget = TaskBudget()
     ticket = budget.reserve(messages, output_limit=64, model_key=original)
     budget.settle(ticket, AIMessage(content="reply", usage_metadata={
         "input_tokens": 100, "output_tokens": 10, "total_tokens": 110}))
-    expected = RequestBudget().reserve(messages, output_limit=64).estimated_input
+    expected = TaskBudget().reserve(messages, output_limit=64).estimated_input
     assert budget.reserve(messages, output_limit=64,
                           model_key=replacement).estimated_input == expected
 
@@ -96,7 +96,7 @@ def test_real_sdk_can_correct_tool_arguments_without_premature_schema_removal():
                 "finish_reason": "tool_calls" if len(requests) <= 2 else "stop"}],
             "usage": {"prompt_tokens": 1000, "completion_tokens": 10, "total_tokens": 1010}})
 
-    budget = RequestBudget(BudgetLimits(request_tokens=4000))
+    budget = TaskBudget(BudgetLimits(task_tokens=4000))
     with httpx.Client(transport=httpx.MockTransport(provider)) as client, budget_scope(budget):
         model = get_llm(api_key="test-only", base_url="https://model.test/v1", model="fixture",
                         http_client=client, max_tokens=64, streaming=False, enable_thinking=False)

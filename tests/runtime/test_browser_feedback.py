@@ -192,18 +192,18 @@ def test_expired_completion_is_a_timeout_fact(navigation, monkeypatch):
 
 
 def test_browser_resume_carries_the_existing_task_budget():
-    from agent.runtime.budget import BudgetLimits, RequestBudget, budget_scope
+    from agent.runtime.budget import BudgetLimits, TaskBudget, budget_scope
     model = Model()
     config = {"configurable": {"user_id": 7, "conversation_id": 42, "thread_id": "conv_42",
         "principal": Principal(7, "user", SOURCE_ASSERTION), "browser_feedback": True}}
     runtime = NativeRuntime(NativeConversationStore(InMemorySaver()),
                             model_factory=lambda **_: model)
     limits = BudgetLimits(model_calls=1)
-    with budget_scope(RequestBudget(limits)):
+    with budget_scope(TaskBudget(limits)):
         first = list(runtime.stream_events({"messages": [HumanMessage(content="去留言板")],
                                             "task_id": "page-task"}, config))[-1]
     command = first.execution["client_action"]
-    carried = RequestBudget(limits)
+    carried = TaskBudget(limits)
     with budget_scope(carried):
         result = list(runtime.stream_events({"messages": [], "resume_task": "page-task"},
                                             acknowledge(config, command)))[-1]

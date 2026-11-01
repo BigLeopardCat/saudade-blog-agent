@@ -7,7 +7,7 @@ import pytest
 from langchain_core.messages import AIMessage, HumanMessage
 from langchain_core.tools import StructuredTool
 
-from agent.runtime.budget import BudgetLimits, RequestBudget, budget_scope
+from agent.runtime.budget import BudgetLimits, TaskBudget, budget_scope
 from agent.runtime.progress import ProgressEmitter
 from agent.runtime.session import ToolSession
 from models.llm import get_llm
@@ -28,7 +28,7 @@ def tool_call(identifier="read"):
         "name": "fixture_read", "arguments": "{}"}}
 
 
-@pytest.mark.parametrize("limit", ["request_tokens", "context_tokens", "model_calls",
+@pytest.mark.parametrize("limit", ["task_tokens", "context_tokens", "model_calls",
                                    "tool_calls", "none"])
 def test_real_sdk_stops_at_resource_boundary_without_an_extra_narrator(limit, monkeypatch):
     requests, reads, progress, phases = [], [], [], []
@@ -58,10 +58,10 @@ def test_real_sdk_stops_at_resource_boundary_without_an_extra_narrator(limit, mo
 
     limits = BudgetLimits(
         context_tokens=5000 if limit == "context_tokens" else 16384,
-        request_tokens=9000 if limit == "request_tokens" else 32768,
+        task_tokens=9000 if limit == "task_tokens" else 32768,
         model_calls=1 if limit == "model_calls" else 8,
         tool_calls=1 if limit == "tool_calls" else 8)
-    budget = RequestBudget(limits)
+    budget = TaskBudget(limits)
     with httpx.Client(transport=httpx.MockTransport(handle)) as client, budget_scope(budget):
         model = get_llm(api_key="test-only", base_url="https://example.test/v1",
                         model="fixture-model", http_client=client, streaming=False,
@@ -81,7 +81,7 @@ def test_real_sdk_stops_at_resource_boundary_without_an_extra_narrator(limit, mo
 
 
 def test_capacity_inspection_cannot_poison_a_smaller_call_or_consume_budget():
-    budget = RequestBudget(BudgetLimits(request_tokens=1000, context_tokens=1000))
+    budget = TaskBudget(BudgetLimits(task_tokens=1000, context_tokens=1000))
     large = [HumanMessage(content="x" * 3000)]
     assert budget.call_block_reason(large, output_limit=10) == "context_tokens"
     assert budget.reason is None and budget.tokens == budget.model_calls == 0
@@ -110,7 +110,7 @@ def test_exhausted_model_budget_cannot_pay_for_another_call_or_execute_it():
             return AIMessage(content="", tool_calls=[{
                 "name": "fixture_read", "args": {}, "id": f"read-{len(reads)}"}])
 
-    budget = RequestBudget(BudgetLimits(model_calls=1))
+    budget = TaskBudget(BudgetLimits(model_calls=1))
     with budget_scope(budget):
         session = ToolSession(Model(), {}, {reader.name: reader}, {})
         result = session.run([HumanMessage(content="读取")])
@@ -138,7 +138,7 @@ def test_context_exit_cannot_discard_facts_to_force_an_extra_model_call():
             return AIMessage(content="", tool_calls=[{
                 "name": "fixture_read", "args": {}, "id": "read"}])
 
-    budget = RequestBudget(BudgetLimits(context_tokens=1000))
+    budget = TaskBudget(BudgetLimits(context_tokens=1000))
     with budget_scope(budget):
         session = ToolSession(Model(), {}, {reader.name: reader}, {})
         result = session.run([HumanMessage(content="读取")])

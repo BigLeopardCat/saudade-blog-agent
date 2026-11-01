@@ -94,10 +94,10 @@ class Settings(BaseSettings):
     # ── Native request policy (tokens include cached input) ──────────
     # Deployment sets the verified endpoint capacity; unknown models stay conservative.
     agent_context_tokens: int = Field(default=128000, gt=0)
-    # Per-call input budget. The model window is a ceiling, not a spending target:
-    # cold starts have no warm prompt cache, so history is selected to this budget.
-    agent_input_tokens: int = Field(default=64000, gt=0)
-    agent_request_tokens: int = Field(default=8000000, gt=0)
+    # Application working input is independent of the provider's model window.
+    agent_input_tokens: int = Field(default=128000, gt=0)
+    agent_task_tokens: int = Field(default=1000000, gt=0)
+    agent_task_seconds: int = Field(default=300, gt=0)
     agent_model_calls: int = Field(default=12, ge=2)
     agent_tool_calls: int = Field(default=16, gt=0)
     agent_reasoning_effort: Literal["none", "low", "high", "max"] = "none"
@@ -109,7 +109,7 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def validate_output_budgets(self):
-        ceiling = min(self.agent_context_tokens, self.agent_request_tokens)
+        ceiling = min(self.agent_context_tokens, self.agent_task_tokens)
         if max(self.agent_output_tokens, self.agent_summary_output_tokens) >= ceiling:
             raise ValueError("Agent output limits must leave room for input tokens")
         if self.agent_compaction_target >= self.agent_compaction_trigger:

@@ -233,10 +233,11 @@ trace 与 golden trace 的保留各有其执行者（`eval/trace_retention.py`�
 | `AGENT_REQUIRE_ASSERTION` | `1` | 缺失/验签失败的身份断言 ⇒ **401**（20261019 起这是默认值，安全审计 SAU-005）。显式置 `0` 才回退信任请求体里的 `user_id`——那条路径上的身份没有角色，工具一件都调不动（`authz.must_enforce`），别留在生产配置里 |
 | `RAG_HYBRID_ENABLED`、`EMBEDDING_*`、`RRF_K` | 不设（= 纯词法） | 向量 + RRF 混合检索，可选件。⚠️ **`EMBEDDING_*` 不只管检索**：首页那件「文章向量空间图谱」的建图（`scripts/build_word_graph.py`）与检索（`rag/wordgraph.py`）也用它——配了走它，没配回落 `QWEN_*` + `qwen3.7-text-embedding`（两端共用 `rag/embed_space.py` 一条规则）。**换模型/端点后要重建一次图谱**（后台「站点设置 → 向量图谱」），否则检索侧以 `space_mismatch` 明着降级 |
 | `AGENT_CONTEXT_TOKENS` | `128000` | 模型窗口硬上限，含输出预留与缓存输入。按实际端点配置；OpenCode DeepSeek 部署及 `.env.example` 使用 1M。**它不是单次请求预算。** |
-| `AGENT_INPUT_TOKENS` | `64000` | 单次模型调用的输入预算（含消息、工具 schema、工具参数）。冷启动、压缩阈值与历史选取都按它计算；超过模型窗口时自动收敛到窗口值。 |
-| `AGENT_REQUEST_TOKENS` | `8000000` | 整项任务累计 token 上限，含暂停/确认/恢复后继续消耗的用量。 |
+| `AGENT_INPUT_TOKENS` | `128000` | 单次模型调用的工作输入上限，含消息、工具 schema 和工具参数；超过窗口时收敛到窗口值。与提供商缓存状态无关。 |
+| `AGENT_TASK_TOKENS` | `1000000` | 整项任务累计 token 上限，含缓存输入、摘要及暂停/确认/恢复后的用量；不是期望消耗。 |
+| `AGENT_TASK_SECONDS` | `300` 秒 | 跨请求累计活动执行时间；人工审批和断开后的等待不计入。进程失联保守保留已预留时间。 |
 | `AGENT_COMPACTION_TRIGGER` / `AGENT_COMPACTION_TARGET` | `0.8` / `0.4` | 输入达到单次预算的 80% 时压缩，目标回落到约 40%；不按固定轮数或小历史窗口刷新。 |
-| `AGENT_MODEL_CALLS` / `AGENT_TOOL_CALLS` | `12` / `16` | 整项任务的模型调用和工具尝试上限，领域加载也计为工具调用；摘要共用请求预算。 |
+| `AGENT_MODEL_CALLS` / `AGENT_TOOL_CALLS` | `12` / `16` | 整项任务的模型调用和工具尝试上限，领域加载也计为工具调用；摘要共用任务预算。 |
 | `AGENT_OUTPUT_TOKENS` / `AGENT_SUMMARY_OUTPUT_TOKENS` | `1536` / `4096` | 对话与摘要输出上限；审批前交付和确认后回复使用同一 Agent 的对话预算。 |
 | `AGENT_MAX_BODY_BYTES` / `AGENT_MAX_CONCURRENT` / `AGENT_MAX_REVIEW` | `12 MiB` / `8` / `4` | 请求体、每 worker 运行请求数、侧任务并发上限。 |
 | `AGENT_STREAM_IDLE_TIMEOUT` / `AGENT_STREAM_TOTAL_TIMEOUT` | `120` / `300` 秒 | 流式空闲与请求总截止时间。 |

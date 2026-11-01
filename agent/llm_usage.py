@@ -13,11 +13,12 @@ logger = logging.getLogger(__name__)
 
 
 def _int(v):
-    """能转 int 就转，转不了回 None（'12'／12 都认；None／''／对象都不认）。"""
-    if isinstance(v, bool):
+    """Accept non-negative integer counts; malformed measurements stay unknown."""
+    if isinstance(v, bool) or not isinstance(v, (int, str)):
         return None
     try:
-        return int(v)
+        value = int(v)
+        return value if value >= 0 else None
     except (TypeError, ValueError):
         return None
 
@@ -51,14 +52,14 @@ def usage_fields(resp) -> dict:
         det = um.get("input_token_details") or um.get("prompt_tokens_details") or {}
         if isinstance(det, dict):
             cache = _int(det.get("cache_read", det.get("cached_tokens")))
-            if cache is not None:
+            if cache is not None and n_in is not None and cache <= n_in:
                 out["cache_read"] = cache
         details = um.get("output_token_details") or um.get("completion_tokens_details") or {}
         if isinstance(details, dict):
             reasoning = _int(details.get("reasoning", details.get("reasoning_tokens")))
-            if reasoning is not None:
+            if reasoning is not None and n_out is not None and reasoning <= n_out:
                 out["reasoning"] = reasoning
         return out
     except Exception as e:  # noqa: BLE001 —— 记账绝不许反噬调用方
-        logger.warning("[usage] 用量提取失败（本轮不记用量）: %s", e)
+        logger.warning("[usage] 用量提取失败（本轮不记用量）: %s", type(e).__name__)
         return {}

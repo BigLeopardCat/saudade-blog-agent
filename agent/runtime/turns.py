@@ -19,14 +19,14 @@ _local_locks: dict[tuple, tuple] = {}
 _POLL_SECONDS = 0.05
 
 
-def stopped(config):
-    check_active()
+def stopped(config, *, check_budget=True):
+    check_active(check_budget=check_budget)
     event = ((config or {}).get("configurable") or {}).get("stop_event")
     return event is not None and event.is_set()
 
 
-def check_cancelled(config):
-    if stopped(config):
+def check_cancelled(config, *, check_budget=True):
+    if stopped(config, check_budget=check_budget):
         raise AgentCancelled()
 
 

@@ -42,15 +42,15 @@ def inboxes():
 def test_task_usage_survives_worker_reconstruction_and_checks_source(inboxes):
     from langchain_core.messages import HumanMessage
 
-    from agent.runtime.budget import BudgetExceeded, BudgetLimits, RequestBudget
+    from agent.runtime.budget import BudgetExceeded, BudgetLimits, TaskBudget
     from agent.runtime.task_budget import PostgresUsage
 
     left, right = [PostgresUsage(inbox.storage.pool) for inbox in inboxes]
     task = {"id": "budget", "scope": {"uid": 7, "role": "user", "conversation_id": 42}}
-    budget = RequestBudget(BudgetLimits(model_calls=1))
+    budget = TaskBudget(BudgetLimits(model_calls=1))
     budget.bind_task(left, task)
     budget.reserve([HumanMessage(content="synthetic")], output_limit=64)
-    restored = RequestBudget(BudgetLimits(model_calls=1))
+    restored = TaskBudget(BudgetLimits(model_calls=1))
     restored.bind_task(right, task)
     assert restored.model_calls == 1 and restored.tokens == budget.tokens
     assert restored.request_spent()["model_calls"] == 0
