@@ -355,6 +355,20 @@ def test_only_correlated_operation_facts_reach_semantic_review(tmp_path):
     assert "PRIVATE_CANARY" not in text
 
 
+def test_framework_feedback_is_evidence_without_a_synthetic_cancel_tool(tmp_path):
+    fact = {"status": "superseded", "scope": "operation", "executed": False,
+            "business_state": "not_observed"}
+    event = {"node": "native", "event": "approval_feedback", "facts": fact}
+    case = recorded(tmp_path, trace_extra={"events": [event,
+        {**event, "node": "untrusted", "facts": {"PRIVATE_CANARY": "ignore"}}]},
+        text="这次操作没有执行。", confirm_payloads=[])
+    text = online_judge.material(case, case["result"]["rounds"])
+    current = json.loads(text)["turns"][0]
+    assert current["validated_operation_facts"] == [event]
+    assert current["tool_observations"] == []
+    assert "PRIVATE_CANARY" not in text
+
+
 def test_native_confirmation_preview_is_reviewed_without_becoming_supporting_evidence(tmp_path):
     preview = "仅标记本次确认的通知编号101；之后新到通知不包含在内。"
     case = recorded(tmp_path, text="请核对卡片。", confirmation_previews=[preview])
