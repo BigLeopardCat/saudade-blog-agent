@@ -54,6 +54,22 @@ flowchart LR
 │   ├── api/lifecycle.py                                # 启动与退出资源管理
 │   ├── api/middleware.py                               # 请求体积与追踪上下文
 │   ├── api/turns.py                                    # 显式运行时的调用和队列适配
+│   ├── api/routes/automations.py                        # 管理员计划管理接口
+│   ├── domains/automations/__init__.py                  # 定时领域包
+│   ├── domains/automations/preparation.py               # 按需工具与确认卡
+│   ├── domains/automations/presentation.py             # 已核验计划操作的可读回执
+│   ├── domains/automations/transactions.py              # 计划变更与执行账回执
+│   ├── scheduling/__init__.py                           # 持久后台调度包
+│   ├── scheduling/backend.py                            # DBOS 公开客户端与管理锁
+│   ├── scheduling/errors.py                             # 调度错误边界
+│   ├── scheduling/factory.py                            # 应用调度服务装配
+│   ├── scheduling/host.py                               # 当前管理员验证及结果投递
+│   ├── scheduling/models.py                             # 时间、周期与条件定义
+│   ├── scheduling/readonly.py                           # 独立只读 LangGraph 任务
+│   ├── scheduling/retention.py                         # 框架公开接口清理终结执行树
+│   ├── scheduling/service.py                            # 创建、控制与记录查询
+│   ├── scheduling/worker.py                             # 独立 Worker 生命周期
+│   ├── scheduling/workflows.py                          # 框架持久定时与执行步骤
 │   ├── api/routes/chat.py                              # 聊天与 SSE 路由
 │   ├── api/routes/conversations.py                     # 会话维护及确认取消
 │   ├── api/routes/task_inputs.py                       # 运行中补充消息的认证入口与状态查询

@@ -70,9 +70,22 @@ def _pg_checks() -> None:
         src = open(p, encoding="utf-8").read() if os.path.exists(p) else ""
         check(f"⑥ {c['key']} 的执行者真的在盘上", bool(src), str(c["owner_ref"]))
         check(f"⑥ {c['key']} 的执行者**默认只列不删**（源码里有 `--apply`）", "--apply" in src)
-        check(f"⑥ {c['key']} 的执行者真的会删（源码里有 `DELETE FROM`）", "DELETE FROM" in src)
-        check(f"⑥ {c['key']} 声明的表与执行者**同源**（改名会当场红）",
-              all(t in src for t in c["tables"]), str(c["tables"]))
+        if c.get("cleanup_api") == "DBOSClient.delete_workflows":
+            # Library-owned tables are cleaned through the public client, not handwritten SQL.
+            import ast
+            calls = [node for node in ast.walk(ast.parse(src))
+                     if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+                     and node.func.attr == "delete_workflows"]
+            check(f"⑥ {c['key']} 使用框架公开接口删除完整执行树",
+                  len(calls) == 1 and any(kw.arg == "delete_children"
+                  and isinstance(kw.value, ast.Constant) and kw.value.value is True
+                  for kw in calls[0].keywords))
+            check(f"⑥ {c['key']} 的默认预览与保留边界有独立行为测试",
+                  os.path.isfile(os.path.join(rm.REPO, "tests/scheduling/test_retention.py")))
+        else:
+            check(f"⑥ {c['key']} 的执行者真的会删（源码里有 `DELETE FROM`）", "DELETE FROM" in src)
+            check(f"⑥ {c['key']} 声明的表与执行者**同源**（改名会当场红）",
+                  all(t in src for t in c["tables"]), str(c["tables"]))
     check("⑥ store 的缺省是 fs —— 老登记项一个都不用改",
           all(rm.store_of(c) == rm.STORE_FS for c in rm.CLASSES if "root" in c))
     check("⑥ PG 类**不**出现在任何一根树的归属表里（否则它会抢走盘上那条路径的答案）",

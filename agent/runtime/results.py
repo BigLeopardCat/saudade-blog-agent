@@ -16,6 +16,16 @@ class TurnResult:
     execution: dict | None = None
 
 
+
+def turn_phase(result):
+    execution = result.execution or {}
+    return ("awaiting_browser" if execution.get("client_action") else
+            "awaiting_confirmation" if execution.get("pending_confirm") else
+            "blocked" if execution.get("blocked") else
+            "cancelled" if (execution.get("pending_event") or {}).get("event") == "cancelled"
+            else "responded")
+
+
 def complete_reply(result, displayed):
     """Merge observed prose with a terminal outcome for storage and transport."""
     reply = str(result.reply or "")

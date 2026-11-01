@@ -37,15 +37,27 @@ activate() {
   ln -sfn -- "$1" "$release_root/current.next"
   mv -Tf -- "$release_root/current.next" "$release_root/current"
 }
+restart_services() {
+  local failed=0
+  if [[ "${DEPLOY_SCHEDULER:-0}" == 1 ]]; then
+    if [[ -f "$release_root/current/scripts/serve_scheduler.sh" ]]; then
+      sudo -n systemctl restart saudade-scheduler || failed=1
+    else
+      sudo -n systemctl stop saudade-scheduler || failed=1
+    fi
+  fi
+  sudo -n systemctl restart saudade-agent || failed=1
+  return "$failed"
+}
 rollback() {
   if [[ -n "$previous" ]]; then
     activate "$previous"
-    sudo -n systemctl restart saudade-agent
+    restart_services || echo "A service could not restart after rollback" >&2
   fi
   echo "Deployment failed; previous release restored when available" >&2
 }
 activate "$release"
-if ! sudo -n systemctl restart saudade-agent; then
+if ! restart_services; then
   rollback
   exit 1
 fi
@@ -54,6 +66,11 @@ for attempt in {1..45}; do
   if curl -fsS "http://127.0.0.1:$port/ready" >/dev/null 2>&1 &&
       curl -fsS "http://127.0.0.1:$port/version" | "$release/.venv/bin/python" -c \
       'import json,sys; assert json.load(sys.stdin)["sha"] == sys.argv[1]' "$revision"; then
+    if [[ "${DEPLOY_SCHEDULER:-0}" == 1 ]] &&
+        ! sudo -n systemctl is-active --quiet saudade-scheduler; then
+      rollback
+      exit 1
+    fi
     echo "Published $revision"
     exit 0
   fi

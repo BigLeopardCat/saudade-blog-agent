@@ -83,6 +83,8 @@
 | [react-architecture-plan-20261020.md](react-architecture-plan-20261020.md) | 主流 ReAct + 按需 schema 的改造方案：planner 降成路由器、散文外置、执行层改循环；**§6 是分阶段预注册判据** | 记录型（已退役） |
 | [platform-roadmap.md](platform-roadmap.md) | 平台面能力（断点恢复 / 可观测 / 错误与用量 / 权限）与整体规范化的分批预案，含明确不做 | 记录型 |
 
+| [scheduling.md](scheduling.md) | 管理员持久定时、只读后台分析、执行记录与部署 | 当前规范 |
+
 > 这份表**刻意不写"最后修订"日期**：手抄的日期没有判据看着（CI 是浅克隆，读不到逐文件的
 > 提交日期），注定漂。要看某份文档最近改了什么：`git log -1 --format=%ad -- docs/<文件>`。
 

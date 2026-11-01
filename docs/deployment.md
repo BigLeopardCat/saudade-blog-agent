@@ -15,3 +15,6 @@ scripts/deploy_release.sh COMMIT_SHA /srv/saudade-agent /etc/saudade/agent.env /
 脚本用 flock 串行化发布，只接收 Git 中存在的提交，使用 `git archive` 排除工作区文件和凭据。依赖安装、导入检查完成后才原子切换 current；探活同时核对 `/ready` 和预期构建 SHA。失败恢复上一版本并重启，未自动删除旧版本或用户数据。首次部署没有上一版本，需由运维处理失败。
 
 公开 PR CI 不使用生产配置或凭据。部署应在该提交的必需检查通过后执行；发布探活不代替真实模型回归。需要数据库迁移的变更须单独核对前置条件，脚本不自动执行数据迁移。
+
+启用[管理员后台计划](scheduling.md)后，安装独立 scheduler 单元，发布时设置
+`DEPLOY_SCHEDULER=1`。脚本将一并重启和回滚 Worker，未启用该选项的部署行为不变。
