@@ -124,7 +124,7 @@ def test_same_agent_delivers_read_facts_after_preparation_without_execution_or_s
     from _framework_ledger import Ledger
 
     from agent.runtime import writes
-    from agent.runtime.budget import RequestBudget, budget_scope
+    from agent.runtime.budget import TaskBudget, budget_scope
     from eval.composite_task_contracts import REQUEST, backend
 
     ledger = Ledger(str(tmp_path / "ledger.sqlite3"))
@@ -137,7 +137,7 @@ def test_same_agent_delivers_read_facts_after_preparation_without_execution_or_s
                 {"tool_calls": [wire_call("prepare_notification_read", "prepare",
                                          scope="selected", ids=[101, 102])]},
                 {"content": summary}) as (model, requests):
-            budget = RequestBudget()
+            budget = TaskBudget()
             selected = NativeRuntime(NativeConversationStore(InMemorySaver()),
                                      model_factory=lambda **_: model)
             with budget_scope(budget):

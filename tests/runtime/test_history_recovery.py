@@ -9,7 +9,7 @@ from test_own_activity import backend as backend
 from test_own_activity import config
 
 from agent.runtime import memory
-from agent.runtime.budget import BudgetLimits, RequestBudget, budget_scope
+from agent.runtime.budget import BudgetLimits, TaskBudget, budget_scope
 from agent.runtime.native import NativeRuntime
 from agent.runtime.native_store import NativeConversationStore
 from agent.runtime.results import TurnResult
@@ -92,7 +92,7 @@ def test_reconstructed_runtime_recovers_unseen_tail_and_preserves_mixed_read_out
     # A fresh runtime must be able to recover text outside its checkpoint excerpt.
     model = RecoverHistory()
     runtime = NativeRuntime(NativeConversationStore(saver), model_factory=lambda **_:model)
-    budget = RequestBudget(BudgetLimits(context_tokens=16384, request_tokens=65536))
+    budget = TaskBudget(BudgetLimits(context_tokens=16384, task_tokens=65536))
     with budget_scope(budget):
         events = list(runtime.stream_events({"messages":[HumanMessage(
             content="查一下之前长回答末尾的标记，再告诉我河灯留言和当前时间。") ]}, cfg))
@@ -105,7 +105,7 @@ def test_reconstructed_runtime_recovers_unseen_tail_and_preserves_mixed_read_out
         assert "尚未核实" in result.reply
     assert result.execution is None, "read-only recovery must not prepare business changes"
     assert budget.reason is None and budget.model_calls == 4 and budget.tool_calls == 6
-    assert budget.tokens <= budget.limits.request_tokens
+    assert budget.tokens <= budget.limits.task_tokens
     requests = backend_state["requests"]
     assert len(requests) == 3 and all(request.method == "GET" for request in requests)
     tail = requests[-1].url.params

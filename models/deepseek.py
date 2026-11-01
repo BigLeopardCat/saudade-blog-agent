@@ -20,5 +20,5 @@ class DeepSeekChat(CancellableModel, ChatDeepSeek):
             if isinstance(message, AIMessage):
                 outgoing.setdefault("reasoning_content",
                                     message.additional_kwargs.get("reasoning_content") or "")
-        record_layout(payload)
+        record_layout(payload, endpoint=self.openai_api_base)
         return payload

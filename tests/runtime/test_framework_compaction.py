@@ -13,7 +13,7 @@ from agent.api.schemas import ChatRequest
 from agent.principal import SOURCE_ASSERTION, Principal
 from agent.runtime import compaction, memory
 from agent.runtime.approval import ConversationState
-from agent.runtime.budget import BudgetLimits, RequestBudget
+from agent.runtime.budget import BudgetLimits, TaskBudget
 from agent.runtime.summarization import SummaryUnavailable, summarize
 from agent.runtime.turns import AgentCancelled
 
@@ -100,7 +100,7 @@ def test_host_summary_is_bootstrap_only_and_cannot_replace_saved_memory():
 
 
 def test_budgeted_summary_counts_once_and_rejects_incomplete_output():
-    budget = RequestBudget(BudgetLimits(context_tokens=10000, request_tokens=20000))
+    budget = TaskBudget(BudgetLimits(context_tokens=10000, task_tokens=20000))
     calls = []
 
     def invoke(prompt, config=None):

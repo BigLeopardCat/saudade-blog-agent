@@ -32,10 +32,14 @@ class SummaryUnavailable(ValueError):
         super().__init__(reason)
 
 
+def input_prompt(messages):
+    return [SystemMessage(content=_INSTRUCTIONS),
+            HumanMessage(content=get_buffer_string(messages, format="xml"))]
+
+
 def summarize(messages, *, budget, config, model=None):
     check_cancelled(config)
-    prompt = [SystemMessage(content=_INSTRUCTIONS),
-              HumanMessage(content=get_buffer_string(messages, format="xml"))]
+    prompt = input_prompt(messages)
     output = settings.agent_summary_output_tokens
     reason = budget.call_block_reason(prompt, output_limit=output)
     if reason:

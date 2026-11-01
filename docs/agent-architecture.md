@@ -175,6 +175,7 @@ flowchart LR
 │   ├── runtime/execution_state.py                       # 工具领域、来源证据与待审批状态
 │   ├── runtime/task_input_store.py                      # 跨进程任务输入的短事务存储
 │   ├── runtime/task_budget.py                           # 跨请求任务用量预留、结算与会话级清理
+│   ├── runtime/task_time.py                             # 累计活动时间预留与退出结算
 │   ├── runtime/tool_execution.py                        # 框架工具执行前后的预算、发现与结果投影
 │   ├── runtime/tool_outputs.py                          # 业务结果适配标准工具内容与 artifact
 │   ├── runtime/retention.py                             # 独立于模型窗口的工作记忆保留上限
@@ -195,6 +196,7 @@ flowchart LR
 │   ├── runtime/jobs.py                                  # 当前生产代码模块
 │   ├── runtime/memory_media.py                          # 多模态消息的历史引用与临时图片适配
 │   ├── runtime/compaction.py                            # 标准摘要中间件与持久提交适配
+│   ├── runtime/context_selection.py                     # 完整工具交换的有界摘要输入选择
 │   ├── runtime/summarization.py                         # 完整来源摘要与共享请求预算
 │   ├── runtime/memory_scope.py                          # 宿主历史与摘要的来源边界
 │   ├── runtime/message_content.py                       # 共用文本提取与框架 token 估算
