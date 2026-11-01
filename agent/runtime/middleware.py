@@ -160,20 +160,34 @@ class SessionMiddleware(AgentMiddleware):
         answered = {message.tool_call_id: message for message in messages[index + 1:]
                     if isinstance(message, ToolMessage)}
         awaiting = answered[session.state["awaiting_call"]]
-        visible = {"status": "executed", "result": facts["reply"], "receipts": [
+        unverified = bool(facts["execution"].get("operation_outcome"))
+        visible = {"status": "unverified" if unverified else "executed",
+            "result": facts["reply"], "receipts": [
             {key: row[key] for key in ("tool", "args", "result", "action") if key in row}
             for row in facts["execution"]["receipts"]]}
         receipt = awaiting.model_copy(update={"content": json.dumps(visible, ensure_ascii=False),
+                                              "status": "error" if unverified else "success",
                                               "artifact": None})
         deferred = [message for message in answered.values()
                     if (message.artifact or {}).get("phase") == "deferred"]
+        if unverified:
+            # Dependent requests must return to the model after a failed action;
+            # do not automatically prepare the next approval from the old batch.
+            resolved = [message.model_copy(update={"content": json.dumps({
+                "status": "not_executed", "reason": "previous_operation_unverified"}),
+                "status": "error", "artifact": None}) for message in deferred]
+            answered.update({message.tool_call_id: message for message in resolved})
+            deferred = []
+        else:
+            resolved = []
         self.cached = {ident: message for ident, message in answered.items()
                        if message not in deferred}
         self.cached[session.state["awaiting_call"]] = receipt
         self.exchange = [*messages[:index + 1], *self.cached.values()]
         session.outcome, session.state["awaiting_call"] = None, None
         saved = {**capture(session), "resume": None,
-                 "messages": [receipt, *(RemoveMessage(id=m.id) for m in deferred)]}
+                 "messages": [receipt, *resolved,
+                              *(RemoveMessage(id=m.id) for m in deferred)]}
         if deferred:
             self.attachments = [message for message in messages[index + 1:]
                                 if not isinstance(message, ToolMessage)]

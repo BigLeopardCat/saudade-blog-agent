@@ -4,6 +4,8 @@ import json
 import uuid
 from dataclasses import dataclass
 
+from langchain_core.messages import AIMessage, ToolMessage
+
 from agent.runtime.memory import observation
 from tools.result import ok
 
@@ -46,6 +48,14 @@ def receipt_observations(result):
             {"result": row.get("result"), "action": row.get("action")}, ensure_ascii=False
         )
         messages.extend(observation(call, ok(fact)))
+    outcome = (result.execution or {}).get("operation_outcome")
+    if outcome:
+        call = {"name": outcome["tool"], "args": outcome["args"],
+                "id": "unverified_" + uuid.uuid4().hex}
+        messages.extend([AIMessage(content="", tool_calls=[call]), ToolMessage(
+            content=json.dumps({"status": "unverified", "scope": "operation",
+                                "result": outcome["result"]}, ensure_ascii=False),
+            tool_call_id=call["id"], name=call["name"], status="error")])
     return messages
 
 
