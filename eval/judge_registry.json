@@ -199,8 +199,16 @@
         0,
         0
       ],
-      "agent/domains/article_tags/preparation.py": [
+      "agent/domains/article_tags/batch.py": [
+        0,
+        0
+      ],
+      "agent/domains/article_tags/presentation.py": [
         2,
+        0
+      ],
+      "agent/domains/article_tags/preparation.py": [
+        0,
         0
       ],
       "agent/domains/article_tags/targets.py": [
