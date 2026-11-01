@@ -425,7 +425,6 @@ def test_checkpoint_factory():
     check("抢到锁 ⇒ 返回试了几次（3 次），且 setup 还没被调（那一层不归它管）",
           _tries == 3 and _s.calls == 0 and _c.unlocks == 0, f"tries={_tries}")
     C._setup_under_lock(_s, pool=_FakePool(_c))
-    check("后台预算范围迁移在同一初始化锁内执行一次", _c.usage_schema_upgrades == 1)
     check("`_setup_under_lock` 走完 ⇒ setup 恰好一次、解锁恰好一次",
           _s.calls == 1 and _c.unlocks == 1, f"setup={_s.calls} unlock={_c.unlocks}")
     _clock = _Clock()
@@ -547,6 +546,14 @@ def test_checkpoint_factory():
 
     assert not FAILS, (
         f"{len(FAILS)} 条未通过：" + "；".join(FAILS))
+
+
+
+def test_background_usage_schema_upgrade_keeps_setup_lock():
+    connection, saver = _FakeConn([True]), _Saver()
+    C._setup_under_lock(saver, pool=_FakePool(connection))
+    assert connection.usage_schema_upgrades == 1
+    assert connection.lock_tries == connection.unlocks == saver.calls == 1
 
 
 if __name__ == "__main__":
