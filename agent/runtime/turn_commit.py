@@ -3,7 +3,7 @@
 from langchain_core.messages import AIMessage, ToolMessage
 
 from agent.runtime import checkpoint_store, memory
-from agent.runtime.results import TurnResult, complete_reply
+from agent.runtime.results import TurnResult, complete_reply, turn_phase
 from agent.runtime.turns import check_cancelled
 
 
@@ -33,7 +33,7 @@ def commit(state, config, *, session):
         state.get("messages") or [], turn["messages"], context_update=turn["context_update"]),
         "run": ({**state["run"], "input_saved": True}
                 if state.get("approval") and state.get("run") else None),
-        "turn": None}
+        "turn": None, "last_outcome": turn_phase(TurnResult(turn["reply"], turn["execution"]))}
     execution = turn["execution"] or {}
     if "receipts" in execution:
         update["receipts"] = execution["receipts"]

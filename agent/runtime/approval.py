@@ -25,6 +25,7 @@ class ConversationState(TypedDict, total=False):
     receipts: list
     run: dict | None
     turn: dict | None
+    last_outcome: str | None
 
 
 def binding(config):

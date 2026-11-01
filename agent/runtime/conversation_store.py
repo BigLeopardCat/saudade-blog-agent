@@ -18,6 +18,7 @@ class ConversationSnapshot:
     approval: dict | None = None
     run: dict | None = None
     receipts: list = field(default_factory=list)
+    last_outcome: str | None = None
     unfinished: bool = False
     initialized: bool = False
 

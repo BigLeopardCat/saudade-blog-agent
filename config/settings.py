@@ -190,6 +190,11 @@ class Settings(BaseSettings):
     # Reject a business database name supplied by the deployment.
     checkpoint_forbid_db: str = ""         # CHECKPOINT_FORBID_DB
 
+    # Optional durable administrator jobs. The worker owns DBOS lifecycle;
+    # HTTP processes use its database client, without starting schedulers.
+    scheduling_enabled: bool = False
+    scheduling_dsn: str = ""
+
     # ── Active provider helpers ─────────────────────────────────────
 
     @property

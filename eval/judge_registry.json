@@ -79,6 +79,10 @@
         0,
         0
       ],
+      "agent/api/routes/automations.py": [
+        0,
+        0
+      ],
       "agent/api/routes/chat.py": [
         0,
         0
@@ -203,12 +207,12 @@
         0,
         0
       ],
-      "agent/domains/article_tags/presentation.py": [
-        2,
-        0
-      ],
       "agent/domains/article_tags/preparation.py": [
         0,
+        0
+      ],
+      "agent/domains/article_tags/presentation.py": [
+        2,
         0
       ],
       "agent/domains/article_tags/targets.py": [
@@ -224,6 +228,22 @@
         0
       ],
       "agent/domains/articles/evidence.py": [
+        0,
+        0
+      ],
+      "agent/domains/automations/__init__.py": [
+        0,
+        0
+      ],
+      "agent/domains/automations/preparation.py": [
+        0,
+        0
+      ],
+      "agent/domains/automations/presentation.py": [
+        4,
+        0
+      ],
+      "agent/domains/automations/transactions.py": [
         0,
         0
       ],
@@ -535,6 +555,10 @@
         0,
         0
       ],
+      "agent/runtime/approval_response.py": [
+        0,
+        0
+      ],
       "agent/runtime/budget.py": [
         0,
         0
@@ -635,11 +659,19 @@
         0,
         0
       ],
+      "agent/runtime/retention.py": [
+        0,
+        0
+      ],
       "agent/runtime/session.py": [
         0,
         0
       ],
       "agent/runtime/summarization.py": [
+        0,
+        0
+      ],
+      "agent/runtime/task_budget.py": [
         0,
         0
       ],
@@ -655,6 +687,10 @@
         0,
         0
       ],
+      "agent/runtime/task_planning.py": [
+        0,
+        0
+      ],
       "agent/runtime/task_scope.py": [
         0,
         0
@@ -667,11 +703,27 @@
         0,
         0
       ],
+      "agent/runtime/tool_evidence.py": [
+        0,
+        0
+      ],
+      "agent/runtime/tool_execution.py": [
+        0,
+        0
+      ],
+      "agent/runtime/tool_outputs.py": [
+        0,
+        0
+      ],
       "agent/runtime/tool_state.py": [
         0,
         0
       ],
       "agent/runtime/trace_context.py": [
+        0,
+        0
+      ],
+      "agent/runtime/turn_commit.py": [
         0,
         0
       ],
@@ -695,15 +747,55 @@
         0,
         0
       ],
+      "agent/scheduling/__init__.py": [
+        0,
+        0
+      ],
+      "agent/scheduling/backend.py": [
+        0,
+        0
+      ],
+      "agent/scheduling/errors.py": [
+        0,
+        0
+      ],
+      "agent/scheduling/factory.py": [
+        0,
+        0
+      ],
+      "agent/scheduling/host.py": [
+        0,
+        0
+      ],
+      "agent/scheduling/models.py": [
+        0,
+        0
+      ],
+      "agent/scheduling/readonly.py": [
+        0,
+        0
+      ],
+      "agent/scheduling/retention.py": [
+        0,
+        0
+      ],
+      "agent/scheduling/service.py": [
+        0,
+        0
+      ],
+      "agent/scheduling/worker.py": [
+        0,
+        0
+      ],
+      "agent/scheduling/workflows.py": [
+        0,
+        0
+      ],
       "agent/stickers.py": [
         12,
         0
       ],
       "agent/transport.py": [
-        0,
-        0
-      ],
-      "server.py": [
         0,
         0
       ],
@@ -739,6 +831,10 @@
         2,
         0
       ],
+      "tools/http_channel.py": [
+        0,
+        0
+      ],
       "tools/note_admin.py": [
         2,
         0
@@ -770,10 +866,14 @@
       "tools/tag_admin.py": [
         0,
         0
+      ],
+      "server.py": [
+        0,
+        0
       ]
     },
     "total": [
-      386,
+      390,
       33
     ]
   },
@@ -1048,6 +1148,16 @@
       "why": "主人怎么表达『清空/取消』这个截止日",
       "replacement": "模型声明 clear 布尔参数",
       "sunset": "写参数出处第二批（挂起：等真实流量定价，见 docs/write-provenance-shadow-20261014.md §7）"
+    },
+    {
+      "id": "agent/domains/automations/presentation.py::LABELS",
+      "file": "agent/domains/automations/presentation.py",
+      "kind": "collection",
+      "name": "LABELS",
+      "size": 4,
+      "category": "system_data",
+      "q": "是否仅渲染已核验操作？",
+      "why": "仅把计划操作的内部枚举显示为中文回执，不参与意图判断、授权或执行决策。"
     },
     {
       "id": "agent/domains/categories/preparation.py::LABELS",

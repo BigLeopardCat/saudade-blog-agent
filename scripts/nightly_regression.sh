@@ -288,6 +288,9 @@ $PY eval/artifact_retention.py --apply >> "$LOG" 2>&1 || echo "[$TS] artifact_re
 echo "--- PG 保留治理 (checkpoint 三张表 + 幂等账，超 30 天裁; 明细即审计轨迹) ---" >> "$LOG"
 $PY eval/pg_retention.py --apply >> "$LOG" 2>&1 || echo "[$TS] pg_retention 运行异常（不影响门禁；明细见上方）" >> "$LOG"
 
+# DBOS deletes terminal execution trees only; plans and pending tasks are retained.
+$PY -m agent.scheduling.retention --apply >> "$LOG" 2>&1 || echo "[$TS] scheduling retention failed" >> "$LOG"
+
 if [ "$fail" -eq 0 ]; then
   echo "[$TS] ALL PASS" >> "$LOG"
   rm -f "$MARK"

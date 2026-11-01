@@ -56,6 +56,16 @@ _ROLE_SCOPES: dict[str, frozenset[str]] = {
 }
 
 TOOL_SCOPE: dict[str, str] = {
+    "list_automations": SCOPE_ADMIN_CONSOLE,
+    "get_automation": SCOPE_ADMIN_CONSOLE,
+    "list_automation_runs": SCOPE_ADMIN_CONSOLE,
+    "get_automation_result": SCOPE_ADMIN_CONSOLE,
+    "prepare_automation": SCOPE_ADMIN_CONSOLE,
+    "prepare_automation_control": SCOPE_ADMIN_CONSOLE,
+    "create_automation": SCOPE_WRITE_CONSOLE,
+    "pause_automation": SCOPE_WRITE_CONSOLE,
+    "resume_automation": SCOPE_WRITE_CONSOLE,
+    "cancel_automation": SCOPE_WRITE_CONSOLE,
     "list_notes": SCOPE_READ_PUBLIC,
     "search_notes": SCOPE_READ_PUBLIC,
     "get_article_detail": SCOPE_READ_PUBLIC,

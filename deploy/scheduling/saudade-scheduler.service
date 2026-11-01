@@ -1,0 +1,21 @@
+[Unit]
+Description=Saudade administrator background tasks
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=exec
+User=saudade
+Group=saudade
+WorkingDirectory=/srv/saudade-agent/current
+ExecStart=/srv/saudade-agent/current/scripts/serve_scheduler.sh
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=120
+KillMode=control-group
+NoNewPrivileges=true
+PrivateTmp=true
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target
