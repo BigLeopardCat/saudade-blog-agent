@@ -142,6 +142,7 @@
     ['chat-protocol', '__waifuChatProtocol'],
     ['chat-navigation', '__waifuNavigation'],
     ['chat-steering', '__waifuSteering'],
+    ['chat-approval', '__waifuApproval'],
     ['chat-stream', '__waifuStream'],
     ['chat-ui', '__waifuChatUI'],
     ['chat-session', '__waifuSession'], // 20260903 会话化 UI 壳（会话管理列表/双栏）

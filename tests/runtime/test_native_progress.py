@@ -88,6 +88,64 @@ def test_progress_is_bounded_and_deduplicated():
     assert len(visible) == 24
 
 
+def test_distinct_calls_with_the_same_display_label_are_not_lost():
+    visible = []
+    emitter = ProgressEmitter(visible.append)
+    assert emitter.emit("read", key="tool:first")
+    assert emitter.emit("read", key="tool:second")
+    assert not emitter.emit("read", key="tool:second")
+    assert visible == ["read", "read"]
+
+
+def test_checkpoint_resume_does_not_announce_the_same_request_state_again():
+    from _own_support import config
+    from langgraph.checkpoint.memory import InMemorySaver
+
+    from agent.runtime.control import AgentCancelled
+    from agent.runtime.native import NativeRuntime
+    from agent.runtime.native_store import NativeConversationStore
+
+    class Stopped(_Model):
+        def invoke(self, prompt, **kwargs):
+            raise AgentCancelled()
+
+    saver, first, second = InMemorySaver(), [], []
+    initial = NativeRuntime(NativeConversationStore(saver), model_factory=lambda **_: Stopped([]))
+    with pytest.raises(AgentCancelled):
+        list(initial.stream_events({"task_id": "same-progress", "messages": [
+            HumanMessage(content="reply once")]},
+            config(progress_emitter=ProgressEmitter(first.append))))
+    assert first == ["正在处理请求…"]
+    restored = NativeRuntime(NativeConversationStore(saver),
+                             model_factory=lambda **_: _Model([AIMessage(content="done")]))
+    result = list(restored.stream_events({"resume_task": "same-progress"},
+        config(progress_emitter=ProgressEmitter(second.append))))[-1]
+    assert result.reply == "done" and second == []
+
+
+def test_scheduled_progress_after_budget_exhaustion_has_no_unhandled_loop_error():
+    import asyncio
+
+    from agent.runtime.control import RequestControl
+    from agent.runtime.progress import StreamProgress
+
+    async def scenario():
+        loop, queue, errors = asyncio.get_running_loop(), asyncio.Queue(), []
+        original = loop.get_exception_handler()
+        loop.set_exception_handler(lambda _, context: errors.append(context))
+        try:
+            control = RequestControl(threading.Event(), time.monotonic() + 10)
+            progress = StreamProgress(loop, queue, control)
+            assert progress.enqueue("queued")
+            control.budget.clock.deadline = time.monotonic() - 1
+            await asyncio.sleep(0)
+            assert queue.empty() and errors == []
+        finally:
+            loop.set_exception_handler(original)
+
+    asyncio.run(scenario())
+
+
 
 def test_transport_rechecks_stop_and_deadline_after_scheduling():
     import asyncio

@@ -10,7 +10,7 @@ from agent.principal import SOURCE_ASSERTION
 from agent.runtime import memory
 from agent.runtime.budget import BudgetExceeded
 from agent.runtime.context_selection import summary_cutoff
-from agent.runtime.execution_state import restore
+from agent.runtime.execution_state import capture, restore
 from agent.runtime.memory_media import hydrate
 from agent.runtime.message_content import estimate_tokens
 from agent.runtime.summarization import SummaryUnavailable, summarize
@@ -121,6 +121,7 @@ class ConversationCompaction(AgentMiddleware):
                protected_messages=len(protected), phase="task" if any(
                    isinstance(m, AIMessage) and m.tool_calls for m in covered) else "history")
         saved = {"messages": [update["messages"][0], *replacement], "context_anchor": anchor,
+                 "progress_keys": capture(session)["progress_keys"],
                  "context_update": _coverage(state.get("context_update"), covered, summary)}
         if after >= trigger:
             saved["jump_to"] = "model"

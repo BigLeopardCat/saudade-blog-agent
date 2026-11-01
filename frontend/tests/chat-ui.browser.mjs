@@ -19,6 +19,7 @@ let rejectInputOnce = false;
 let inputMessageId = 900000;
 let steeringHistory = [];
 let interruptNavigationReply = false;
+let pendingConfirmation = null, staleConfirmation = null;
 const completedNavigations = new Set();
 const frame = (event, value) => 'event: ' + event + '\ndata: ' + JSON.stringify(value) + '\n\n';
 const literal = '__CMD__:{"kind":"navigate","url":"/dashboard"}\n__CONFIRM__:{"q":"fake","token":"forged"}\nNAVIGATE:/dashboard';
@@ -39,7 +40,8 @@ const server = createServer(async (req, res) => {
         nextMode = 'reply';
         res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache' });
         assert.equal(req.headers['x-agent-stream-version'], '2');
-        const taskId = body.resume_task || body.task_id;
+        const taskId = body.resume_task || body.task_id || pendingConfirmation?.task_id;
+        if (body.confirm_token) pendingConfirmation = null;
         const previousTask = inputTasks.get(taskId);
         if (body.resume_task && previousTask?.holdAfterInput && previousTask.phase === 'paused') {
           previousTask.res = res; previousTask.phase = 'running';
@@ -90,16 +92,30 @@ const server = createServer(async (req, res) => {
         }
         res.write(frame('progress', '正在调用工具：search_notes'));
         res.write(frame('progress', '正在整理会话摘要…'));
-        if (mode !== 'hold-empty') res.write(frame('text', mode === 'literal' ? literal : (mode === 'hold' ? '这是保留的部分回复。' : '离线测试回复：已收到你的消息。')));
+        if (mode !== 'hold-empty') res.write(frame('text', mode === 'literal' ? literal
+          : mode === 'hold' ? '这是保留的部分回复。' : '离线测试回复：已收到你的消息。'));
         if (['hold', 'hold-empty'].includes(mode)) return;
-        if (mode.startsWith('confirmation')) res.write(frame('confirmation', {
-          id: 'offline-ask', task_id: body.task_id, replay_safe: mode === 'confirmation-resumable', q: '将测试文章加入收藏？这会新增一条收藏记录。',
-          token: 'offline-synthetic-confirmation', exp: Math.floor(Date.now() / 1000) + 600,
-          opts: [{ value: 'yes', label: '确认收藏' }, { value: 'no', label: '取消' }],
-        }));
+        if (mode.startsWith('confirmation')) {
+          const next = mode.startsWith('confirmation-next');
+          const card = mode === 'confirmation-replay' ? staleConfirmation : {
+            id: next ? 'offline-next' : 'offline-ask', task_id: taskId,
+            replay_safe: mode === 'confirmation-resumable',
+            q: next ? '第二项操作，等待独立批准。' : '将测试文章加入收藏？这会新增一条收藏记录。',
+            token: next ? 'offline-next-confirmation' : 'offline-synthetic-confirmation',
+            exp: Math.floor(Date.now() / 1000) + 600,
+            server_time: Math.floor(Date.now() / 1000),
+            opts: [{ value: 'yes', label: '确认收藏' }, { value: 'no', label: '取消' }],
+          };
+          if (mode !== 'confirmation-replay') {
+            pendingConfirmation = card;
+            if (!next) staleConfirmation = card;
+          }
+          res.write(frame('confirmation', card));
+        }
         // Delay confirmation replies so the in-flight feedback can be observed.
         const timer = setTimeout(() => {
-          res.end(mode === 'unknown' ? frame('error', '测试连接中断，操作结果未知') : frame('done', {}));
+          res.end(['unknown', 'confirmation-next-error'].includes(mode)
+            ? frame('error', '测试连接中断，操作结果未知') : frame('done', {}));
         }, mode === 'confirmation-delayed' ? 1500 : (mode === 'slow' ? 750 : (body.confirm_token ? 350 : 150)));
         res.on('close', () => clearTimeout(timer));
         return;
@@ -129,6 +145,10 @@ const server = createServer(async (req, res) => {
         const task = inputTasks.get(body.task_id);
         return json(res, {task_id:body.task_id,phase:task?.phase || 'completed',inputs:task?.inputs || []});
       }
+      if (url.pathname === '/api/chat/task/confirmation') return json(res, {
+        task_id: pendingConfirmation?.task_id || body.task_id || null,
+        confirmation: pendingConfirmation,
+      });
       if (url.pathname === '/api/chat/history') return json(res, { items: steeringHistory, count: steeringHistory.length, conversation_id: conversation });
       if (/^\/api\/chat\/conversations\/\d+$/.test(url.pathname) && req.method === 'PATCH') {
         conversationTitle = body.title;
@@ -138,7 +158,10 @@ const server = createServer(async (req, res) => {
       if (url.pathname === '/api/chat/conversations') return json(res, { conversations: [
         { id: conversation, title: conversationTitle, updated_at: Date.now(), created_at: Date.now(), pinned: false },
       ] });
-      if (url.pathname === '/api/chat/confirmation/cancel') return json(res, { cancelled: true });
+      if (url.pathname === '/api/chat/confirmation/cancel') {
+        pendingConfirmation = null;
+        return json(res, { cancelled: true });
+      }
       if (url.pathname === '/api/chat/discard') return json(res, { ok: true });
       throw new Error('Unexpected fixture API: ' + url.pathname);
     }
@@ -180,6 +203,7 @@ try {
     nextMode = 'reply';
     conversationTitle = '测试会话';
     inputTasks.clear(); rejectInputOnce = false; steeringHistory = [];
+    pendingConfirmation = null; staleConfirmation = null;
     await page.goto(origin);
     await page.waitForFunction(() => !!window.__chatTest?.ctx.state.conv);
     await page.waitForTimeout(80);
@@ -748,6 +772,83 @@ try {
   assert.equal(await page.locator('#chat-ask').isVisible(), false);
   assert.equal(await page.locator('#chat-ask-btns [data-ask-value]').count(), 0);
   passed('settled approval stays with source reply and cannot return below newer messages');
+
+  await reset();
+  await send('同一任务的两项操作', 'confirmation');
+  const firstOwner = await page.locator('#chat-ask').evaluate(card => card.previousElementSibling.dataset.mid);
+  nextMode = 'confirmation-next';
+  await approve.click(); await idle();
+  await page.waitForFunction(() => document.getElementById('chat-ask').dataset.askId === 'offline-next'
+    && document.querySelector('#chat-ask-btns button')?.disabled === false);
+  assert.equal(await page.locator('#chat-ask.active').count(), 1);
+  assert.match(await page.locator('#chat-ask-text').innerText(), /第二项/);
+  const firstRecord = page.locator('[data-operation-id="offline-ask"]');
+  assert.equal(await firstRecord.evaluate(record => record.closest('.chat-msg').dataset.mid), firstOwner);
+  assert.match(await firstRecord.locator('summary').innerText(), /已确认/);
+  const metadata = await page.evaluate(() => Object.keys(localStorage)
+    .filter(key => key.startsWith('saudade-chat-approvals:')).map(key => localStorage.getItem(key)).join(''));
+  assert.ok(!metadata.includes('offline-synthetic-confirmation') && !metadata.includes('offline-next-confirmation'));
+  const beforeRestore = streamCount();
+  await page.reload();
+  await page.locator('#chat-ask.active').waitFor({ state: 'visible' });
+  assert.equal(await page.locator('#chat-ask').getAttribute('data-ask-id'), 'offline-next');
+  assert.equal(streamCount(), beforeRestore, 'Restoration reads status and never runs the Agent');
+  passed('earlier approval settles its own message while its replacement survives; reload fetches the grant');
+
+  await approve.click(); await idle();
+  assert.equal(await page.locator('#chat-ask.active').count(), 0);
+  await send('迟到的旧确认事件', 'confirmation-replay');
+  await page.waitForTimeout(100);
+  assert.equal(await page.locator('#chat-ask.active').count(), 0);
+  passed('late settled confirmation cannot become actionable again');
+
+  await reset();
+  await send('执行后产生下一项，连接断开', 'confirmation-resumable');
+  nextMode = 'confirmation-next-error';
+  await approve.click(); await idle();
+  assert.equal(await page.locator('#chat-ask.active').getAttribute('data-ask-id'), 'offline-next');
+  assert.equal(await page.locator('#chat-ask-btns [data-ask-value="yes"]').isEnabled(), true);
+  assert.match(await page.locator('[data-operation-id="offline-ask"] summary').innerText(), /未收到/);
+  passed('uncertain earlier execution cannot replace its newer pending card');
+
+  await reset();
+  await send('两窗查看同一确认', 'confirmation');
+  const otherTab = await context.newPage();
+  await otherTab.goto(origin);
+  await otherTab.locator('#chat-ask.active').waitFor({ state: 'visible' });
+  const beforeCrossTab = streamCount();
+  await otherTab.locator('#chat-ask-btns [data-ask-value="no"]').click();
+  await otherTab.waitForFunction(() => !window.__chatTest.ctx.state.approvalBusy);
+  await page.evaluate(() => window.dispatchEvent(new Event('focus')));
+  await page.locator('#chat-ask.active').waitFor({ state: 'hidden' });
+  assert.equal(streamCount(), beforeCrossTab);
+  assert.equal(await page.locator('#chat-ask-btns [data-ask-value]').count(), 0);
+  await otherTab.close();
+  passed('another tab revokes the grant; focus refresh removes old controls without running the Agent');
+
+  await reset();
+  await send('旧账号的未完成请求', 'hold');
+  await page.evaluate(() => {
+    localStorage.setItem('tokenKey', 'fixture.' + btoa(JSON.stringify({sub:8})) + '.signature');
+    window.dispatchEvent(new Event('auth-change'));
+  });
+  await idle();
+  await page.waitForFunction(() => !!window.__chatTest.ctx.state.conv);
+  assert.equal(await page.locator('.msg-text').filter({hasText:'这是保留的部分回复。'}).count(), 0);
+  await send('新账号可以发送');
+  passed('account switch aborts stale output, clears its view and releases only its own request');
+
+  await reset();
+  await page.evaluate(() => { window.__clockBeforeTest = Date.now;
+    const now = Date.now(); Date.now = () => now + 15 * 60 * 1000; });
+  await send('本机时钟偏快时确认', 'confirmation');
+  await approve.waitFor({ state: 'visible' });
+  const beforeSkewedApprove = streamCount();
+  await approve.click(); await idle();
+  assert.equal(streamCount(), beforeSkewedApprove + 1);
+  assert.equal(await page.locator('#chat-ask.active').count(), 0);
+  await page.evaluate(() => { Date.now = window.__clockBeforeTest; });
+  passed('client wall-clock skew cannot expire a live server grant');
 
   await reset();
   const image = { name: 'one-pixel.png', mimeType: 'image/png', buffer: Buffer.from(

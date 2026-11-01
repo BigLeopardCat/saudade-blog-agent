@@ -85,7 +85,8 @@ def test_signed_controls_remain_separate_from_body_and_ordered(monkeypatch):
         "text", "command", "receipts", "pending", "confirmation", "pending", "done"]
     assert token not in "".join(data for kind, data in events if kind == "text")
     card = next(data for kind, data in events if kind == "confirmation")
-    assert set(card) == {"id", "q", "opts", "token", "exp", "replay_safe"}
+    assert set(card) == {"id", "q", "opts", "token", "exp", "replay_safe", "server_time"}
+    assert isinstance(card["server_time"], int) and card["id"] == "pa_new"
     assert card["token"] == token
     assert events[3][1]["jti"] == "old"
 

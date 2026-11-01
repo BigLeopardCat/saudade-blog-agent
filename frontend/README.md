@@ -34,7 +34,8 @@ git 仓库都等于那个仓在分发它。所以这里没有它，博客仓也�
 frontend/public/live2d-widgets/
   boot.js          加载器：统一静态资源版本，管理看板娘显隐/拖拽/工具条
   renderer.js      模型渲染、参数注入与口型
-  chat-stream.js   SSE、命令、确认和停止生成
+  chat-stream.js   SSE 请求、命令调度和暂停续接
+  chat-approval.js 确认卡来源、历史展示与服务端状态恢复
   chat-navigation.js  浏览器导航完成或超时后的原任务接续
   chat-engine.js   会话状态、历史拉取、滚动与缓存
   chat-session.js  会话抽屉、命名、置顶与搜索
