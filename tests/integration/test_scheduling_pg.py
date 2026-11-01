@@ -5,8 +5,10 @@ import subprocess
 import sys
 import time
 import uuid
+from contextlib import ExitStack
 from datetime import timedelta
 from pathlib import Path
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 import psycopg
 import pytest
@@ -14,8 +16,10 @@ from psycopg import sql
 
 from agent.principal import Principal
 from agent.scheduling.backend import Backend
+from agent.scheduling.checkpoints import Cleanup
 from agent.scheduling.models import utc_now
 from agent.scheduling.service import ScheduleConflict, ScheduleNotFound, ScheduleService
+from config.settings import settings
 
 ADMIN = Principal(7, "admin", "assertion")
 
@@ -135,7 +139,13 @@ def test_timing_replay_owner_isolation_pause_and_resume(site):
     preview = collect(service.backend, now=lambda: utc_now() + timedelta(days=31))
     assert preview["candidates"] == [runs["items"][0]["id"]]
     assert preview["deleted"] == []
-    deleted = collect(service.backend, apply=True, now=lambda: utc_now() + timedelta(days=31))
+    with ExitStack() as resources:
+        deleted = collect(
+            service.backend,
+            apply=True,
+            now=lambda: utc_now() + timedelta(days=31),
+            cleanup=Cleanup(service.backend.client, resources),
+        )
     assert deleted["deleted"] == preview["candidates"]
     assert service.backend.once(7, ident) is None
     assert service.get(ADMIN, live_id)["status"] == "scheduled"
@@ -187,3 +197,37 @@ def test_cron_uses_native_persistent_controls(site):
     assert resumed["status"] == "active"
     service.control(ADMIN, ident, "cancel", resumed["version"])
     assert service.backend.recurring(7, ident) is None
+
+
+def test_real_scheduled_agent_uses_isolated_checkpoint_and_cleanup_follows_children(
+    site, monkeypatch
+):
+    service, query, _, _ = site
+    ident, _, _ = create(service, action="read_only_agent")
+    eventually(lambda: service.get(ADMIN, ident)["status"] == "finished")
+    root = service.runs(ADMIN, ident)["items"][0]["id"]
+    result = service.result(ADMIN, ident, root)["result"]
+    assert result["status"] == "completed" and result["text"] == "isolated background answer"
+    thread = result["thread_id"]
+    assert thread.startswith("background_")
+    assert query("SELECT 1 FROM checkpoints WHERE thread_id=%s LIMIT 1", (thread,))
+    assert query("SELECT conversation_id FROM agent_task_usage")[0][0] is None
+    url = urlsplit(service.backend.dsn)
+    params = dict(parse_qsl(url.query))
+    params["options"] = "-csearch_path=" + query("SELECT current_schema()")[0][0]
+    scoped = urlunsplit((url.scheme, url.netloc, url.path, urlencode(params), url.fragment))
+    monkeypatch.setattr(settings, "checkpoint_dsn", scoped)
+    monkeypatch.setattr(settings, "checkpoint_forbid_db", "")
+    from agent.scheduling.retention import collect
+
+    with ExitStack() as resources:
+        report = collect(
+            service.backend,
+            apply=True,
+            now=lambda: utc_now() + timedelta(days=31),
+            cleanup=Cleanup(service.backend.client, resources),
+        )
+    assert report["deleted"] == [root]
+    assert query("SELECT count(*) FROM checkpoints WHERE thread_id=%s", (thread,))[0][0] == 0
+    assert query("SELECT count(*) FROM agent_task_usage")[0][0] == 0
+    assert query("SELECT count(*) FROM test_notifications")[0][0] == 1

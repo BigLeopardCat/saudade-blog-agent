@@ -2,9 +2,11 @@
 
 import argparse
 import json
+from contextlib import ExitStack
 from datetime import timedelta
 
 from agent.scheduling.backend import APP, ONCE, PERIODIC, Backend
+from agent.scheduling.checkpoints import Cleanup
 from agent.scheduling.factory import configured_dsn
 from agent.scheduling.models import utc_now
 from config.settings import settings
@@ -12,7 +14,7 @@ from config.settings import settings
 KEEP_DAYS = 30
 
 
-def collect(backend, *, apply=False, now=utc_now):
+def collect(backend, *, apply=False, now=utc_now, cleanup=None):
     client = backend.client
     rows = client.list_workflows(
         application_name=APP,
@@ -39,6 +41,10 @@ def collect(backend, *, apply=False, now=utc_now):
             continue
         candidates.append(row.workflow_id)
     if apply and candidates:
+        if cleanup is None:
+            raise ValueError("checkpoint cleanup is required before pruning execution evidence")
+        for identifier in candidates:
+            cleanup(identifier)
         client.delete_workflows(candidates, delete_children=True)
     return {"candidates": candidates, "deleted": candidates if apply else []}
 
@@ -50,11 +56,14 @@ def main():
     if not settings.scheduling_enabled:
         print(json.dumps({"skipped": "scheduling_disabled"}))
         return
-    backend = Backend(configured_dsn())
-    try:
-        print(json.dumps(collect(backend, apply=args.apply)))
-    finally:
-        backend.close()
+    with ExitStack() as resources:
+        backend = Backend(configured_dsn())
+        resources.callback(backend.close)
+        print(
+            json.dumps(
+                collect(backend, apply=args.apply, cleanup=Cleanup(backend.client, resources))
+            )
+        )
 
 
 if __name__ == "__main__":

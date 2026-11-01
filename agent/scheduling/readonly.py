@@ -3,7 +3,6 @@
 import hashlib
 import time
 import uuid
-from functools import partial
 from threading import Event
 
 from langchain_core.messages import AIMessage, HumanMessage
@@ -15,6 +14,7 @@ from agent.runtime.budget import BudgetLimits, TaskBudget
 from agent.runtime.control import RequestControl, request_scope
 from agent.runtime.native import NativeRuntime
 from agent.runtime.native_store import NativeConversationStore
+from agent.runtime.task_scope import background_thread
 from config.settings import settings
 from models.llm import get_llm
 from models.transport import ModelIO
@@ -52,15 +52,20 @@ class ReadOnlyRunner:
         self.runtime = NativeRuntime(
             NativeConversationStore(saver),
             application=ReadOnlyBlogApplication(),
-            model_factory=partial(get_llm, max_tokens=1000),
+            model_factory=lambda **options: get_llm(**{**options, "max_tokens": 1000}),
             model_io=resources.enter_context(ModelIO()),
         )
 
     def run(self, principal, run_id, instruction):
-        thread = "scheduled_" + hashlib.sha256(run_id.encode()).hexdigest()
-        task = "scheduled_" + hashlib.sha256(run_id.encode()).hexdigest()[:32]
+        thread = background_thread(principal.uid, run_id)
+        task = thread[:43]
         config = {
-            "configurable": {"thread_id": thread, "user_id": principal.uid, "principal": principal}
+            "configurable": {
+                "thread_id": thread,
+                "user_id": principal.uid,
+                "principal": principal,
+                "background_run_id": run_id,
+            }
         }
         saved = self.runtime.store.load(config)
         if saved.initialized and not saved.unfinished:
