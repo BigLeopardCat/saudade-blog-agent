@@ -1,6 +1,7 @@
 """Task controls authenticate independently and never wait for the turn lock."""
 
 from fastapi import APIRouter, HTTPException, Request
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 from agent.api.authentication import resolve_principal
@@ -22,6 +23,13 @@ class StatusRequest(BaseModel):
     user_id: int = Field(gt=0)
     conversation_id: int = Field(gt=0)
     task_id: str = Field(min_length=1, max_length=100, pattern=r"^[A-Za-z0-9_-]+$")
+
+
+class ConfirmationRequest(BaseModel):
+    user_id: int = Field(gt=0)
+    conversation_id: int = Field(gt=0)
+    task_id: str | None = Field(default=None, min_length=1, max_length=100,
+                                pattern=r"^[A-Za-z0-9_-]+$")
 
 
 async def operation(request, req, action, *args):
@@ -52,3 +60,13 @@ async def status(req: StatusRequest, request: Request):
     if inbox is None:
         raise HTTPException(503, "task_inputs_unavailable")
     return await operation(request, req, inbox.read)
+
+
+@router.post("/tasks/confirmation")
+async def confirmation_status(req: ConfirmationRequest, request: Request):
+    from agent.products.blog.confirmation import current_card
+
+    principal = resolve_principal(request, req.user_id)
+    result = await require_workers(request).run(
+        current_card, require_runtime(request), principal, req.conversation_id, req.task_id)
+    return JSONResponse(result, headers={"Cache-Control": "no-store"})

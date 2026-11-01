@@ -6,6 +6,7 @@ import asyncio
 import time
 from collections.abc import Callable, Mapping
 
+from agent.runtime.budget import BudgetExceeded
 from agent.runtime.control import AgentCancelled, RequestControl
 from utils.trace import record
 
@@ -21,7 +22,6 @@ class ProgressEmitter:
         self.sink = sink
         self._seen: set[str] = set()
         self._count = 0
-        self._last_text = ""
 
     @property
     def emitted_keys(self) -> list[str]:
@@ -35,12 +35,10 @@ class ProgressEmitter:
     def emit(self, text: str, *, key: str) -> bool:
         if not self.sink or not isinstance(text, str) or not text:
             return False
-        if (key in self._seen or self._count >= _MAX_EVENTS
-                or text == self._last_text):
+        if key in self._seen or self._count >= _MAX_EVENTS:
             return False
         self._seen.add(key)
         self._count += 1
-        self._last_text = text
         return self.sink(text) is not False
 
 
@@ -58,7 +56,7 @@ class StreamProgress:
     def _active(self) -> bool:
         try:
             self.control.check()
-        except (AgentCancelled, TimeoutError):
+        except (AgentCancelled, TimeoutError, BudgetExceeded):
             return False
         return not self.loop.is_closed()
 
