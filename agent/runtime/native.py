@@ -246,14 +246,14 @@ class NativeRuntime:
         outcome = domain.execute(grant, execution_config, self.saver)
         execution = {key: value for key, value in outcome.items() if key != "reply"}
         result = TurnResult(outcome["reply"], execution)
-        modern = bool(matching and execution.get("receipts"))
+        modern = bool(matching and approval.has_result(execution, grant["specs"]))
         if modern:
-            emit(config, "操作已完成，正在继续处理剩余请求…", key="confirmation_resume")
+            emit(config, "正在核对操作结果并继续处理请求…", key="confirmation_resume")
             record("native", "confirmation_resumed", engine="langgraph")
             clean = replace(snapshot, pending_confirm=None, pending_action=None, approval=None)
             session = self._session(config, clean)
             session.task = snapshot.run
-            session.receipts = list(execution["receipts"])
+            session.receipts = [*snapshot.receipts, *execution["receipts"]]
             prompt = self.application.prompt([], session.principal)
             facts = {"jti": grant["jti"], "reply": result.reply, "execution": execution}
             result = yield from self._continue_session(session, prompt, facts,
@@ -281,7 +281,8 @@ class NativeRuntime:
             suffix = (("\n" if visible else "") + executed.reply
                       + "\n后续处理暂时中断，请继续指定要处理的事项。")
             yield AIMessageChunk(content=suffix)
-            return TurnResult("".join(visible) + suffix, {"receipts": session.receipts})
+            return TurnResult("".join(visible) + suffix,
+                              {**(executed.execution or {}), "receipts": session.receipts})
         finally:
             runner.close()
 
