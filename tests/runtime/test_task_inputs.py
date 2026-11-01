@@ -155,7 +155,7 @@ def test_cancelled_model_keeps_queued_input_for_checkpoint_continuation(resume_c
 def test_input_without_a_remaining_model_call_is_not_reported_as_applied():
     from dataclasses import replace
 
-    from agent.runtime.budget import RequestBudget, budget_scope
+    from agent.runtime.budget import TaskBudget, budget_scope
 
     cfg = config()
     scope = binding(cfg["configurable"]["principal"], 42)
@@ -167,7 +167,7 @@ def test_input_without_a_remaining_model_call_is_not_reported_as_applied():
 
     model = Model(answer)
     selected = runtime(model)
-    budget = RequestBudget()
+    budget = TaskBudget()
     budget.limits = replace(budget.limits, model_calls=1)
     with budget_scope(budget):
         events = list(selected.stream_events({"task_id":"same-task", "messages":[

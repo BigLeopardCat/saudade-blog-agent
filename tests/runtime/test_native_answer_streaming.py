@@ -7,7 +7,7 @@ import pytest
 from langchain_core.messages import AIMessage, AIMessageChunk, HumanMessage
 from langchain_core.tools import tool
 
-from agent.runtime.budget import BudgetLimits, RequestBudget, budget_scope
+from agent.runtime.budget import BudgetLimits, TaskBudget, budget_scope
 from agent.runtime.session import ToolSession
 from agent.runtime.turns import AgentCancelled
 
@@ -122,7 +122,7 @@ def test_stream_usage_settles_one_shared_budget_ticket():
         AIMessageChunk(content="完成", usage_metadata={
             "input_tokens": 4, "output_tokens": 2, "total_tokens": 6}),
     ]])
-    budget = RequestBudget(BudgetLimits(model_calls=1))
+    budget = TaskBudget(BudgetLimits(model_calls=1))
     with budget_scope(budget):
         result = ToolSession(model, {}, {}, {}).run([HumanMessage(content="预算")])
     assert result.reply == "完成"
@@ -239,7 +239,7 @@ def test_sdk_stream_requests_usage_and_settles_provider_totals(monkeypatch):
         return httpx.Response(200, headers={"Content-Type": "text/event-stream"},
                               content=(body + "data: [DONE]\n\n").encode())
 
-    budget = RequestBudget(BudgetLimits(model_calls=1))
+    budget = TaskBudget(BudgetLimits(model_calls=1))
     with httpx.Client(transport=httpx.MockTransport(handle)) as client, budget_scope(budget):
         model = get_llm(base_url="https://fixture.invalid/v1", api_key="fixture-only",
                         http_client=client, streaming=True, stream_usage=True, max_tokens=64)

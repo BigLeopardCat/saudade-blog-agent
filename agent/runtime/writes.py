@@ -53,12 +53,15 @@ def operation_key(grant, name, args):
 
 def execute_once(grant, name, args, config, ledger, tools):
     key = operation_key(grant, name, args)
+    previous = ledger.lookup(key)
     if (config.get("configurable") or {}).get("confirmation_replay_only"):
-        previous = ledger.lookup(key)
         if previous is None:
             return unavailable("确认操作已失效，请重新发起请求。")
         state, row = previous
+    elif previous is not None:
+        state, row = previous
     else:
+        check_cancelled(config)
         state, row = ledger.claim(key, name, grant["jti"], resuming=True)
     if state == "done":
         record("native", "write_replay_hit", name=name, key=key)
@@ -77,7 +80,6 @@ def execute_once(grant, name, args, config, ledger, tools):
 
 
 def execute_confirmed(grant, config, saver, *, validate, receipt, tool_factory, ledger=None):
-    check_cancelled(config)
     try:
         name, args = validate(grant, config)
     except ValueError as exc:
@@ -99,10 +101,9 @@ def execute_confirmed(grant, config, saver, *, validate, receipt, tool_factory, 
                  else "工具未提供有效回执，无法确认改动。")
         failure = {"reply": reply, "receipts": [],
                    "blocked": [{"tool": name, "reason": "error_frame"}]}
-        # A still-unresolved ledger claim cannot advance a task. A returned
-        # failure can be handed to the Agent for readback, without a success receipt.
-        if (getattr(result, "meta", {}) or {}).get("reason") != idem.REASON_OUTCOME_UNKNOWN:
-            failure["operation_outcome"] = {
-                "status": "unverified", "tool": name, "args": args, "result": reply}
+        # The conversation lock excludes a concurrent local executor. An unknown
+        # ledger intent still forbids replay, while the Agent can read actual state.
+        failure["operation_outcome"] = {
+            "status": "unverified", "tool": name, "args": args, "result": reply}
         return failure
     return {"reply": str(result), "receipts": [evidence], "blocked": []}

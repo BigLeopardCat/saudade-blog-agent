@@ -162,6 +162,20 @@ def test_new_tool_output_is_not_mistaken_for_a_missed_old_prefix():
     assert measured["cache_read"] / measured["input"] == 1 / 3
 
 
+def test_outcome_costs_keep_failed_spending_and_unreviewed_success_separate():
+    from eval import usage
+    from eval.release_readiness import outcome_usage
+
+    cases = [{"id": "ok", "status": "passed"}, {"id": "failed", "status": "failed"},
+             {"id": "unknown", "status": "passed"}]
+    measured = {case["id"]: usage.totals([{"event": "llm_done", "input": 100,
+                                         "output": 10, "cache_read": 50}]) for case in cases}
+    got = outcome_usage(cases, {"ok": "checks_passed"}, measured)
+    assert set(got) == {"passed", "failed", "unverified"}
+    assert all(row["scenarios"] == 1 and row["in"] == 100 and row["uncached_input"] == 50
+               and row["fee"] is None for row in got.values())
+
+
 def test_absent_cache_usage_stays_unknown_in_cache_diagnostics(tmp_path):
     report, profile, _, trace = fixture(tmp_path)
     doc = json.loads(trace.read_bytes())

@@ -8,6 +8,7 @@ from langgraph.graph.message import REMOVE_ALL_MESSAGES
 from langgraph.types import Command, Overwrite, StateSnapshot
 
 from agent.runtime import approval, turn_commit
+from agent.runtime.approval_messages import ApprovalResumeMiddleware
 from agent.runtime.budget import BudgetExceeded
 from agent.runtime.compaction import ConversationCompaction
 from agent.runtime.execution_state import ExecutionState, capture, restore
@@ -45,6 +46,7 @@ class FrameworkExecution:
         middleware.system_message = self.system
         return create_agent(self.session.model, tools=[], system_prompt=self.system,
                             middleware=[OrderedToolsMiddleware(middleware),
+                                        ApprovalResumeMiddleware(middleware),
                                         *self.session.middleware,
                                         ConversationCompaction(self.session), middleware],
                             state_schema=ExecutionState,

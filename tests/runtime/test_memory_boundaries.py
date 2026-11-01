@@ -15,7 +15,7 @@ from agent.api.schemas import ChatRequest
 from agent.principal import SOURCE_ASSERTION, SOURCE_BODY, Principal
 from agent.products.blog.prompt import build_prompt
 from agent.runtime import memory
-from agent.runtime.budget import BudgetLimits, RequestBudget
+from agent.runtime.budget import BudgetLimits, TaskBudget
 from agent.runtime.checkpoint_store import ConversationDeleted
 from agent.runtime.memory_media import image_id, image_urls
 from agent.runtime.memory_scope import safe_request
@@ -93,7 +93,7 @@ def test_current_images_and_schemas_take_precedence_over_history():
     fixed = build_prompt(build_messages(req), ACTOR)
     schema_tokens = count_tokens_approximately([], tools=schemas([fixture_read]))
     limit = estimate_tokens(fixed) + schema_tokens + model.max_tokens + 400
-    budget = RequestBudget(BudgetLimits(context_tokens=limit))
+    budget = TaskBudget(BudgetLimits(context_tokens=limit))
     from agent.runtime.budget import budget_scope
     with budget_scope(budget):
         result = run(selected, req)[-1]

@@ -17,7 +17,7 @@ from agent.domains.favorites import preparation
 from agent.principal import SOURCE_ASSERTION, Principal
 from agent.products.blog.confirmation import cancel, confirmed_runtime
 from agent.runtime import writes
-from agent.runtime.budget import BudgetLimits, RequestBudget, budget_scope
+from agent.runtime.budget import BudgetLimits, TaskBudget, budget_scope
 from agent.runtime.native import NativeRuntime
 from agent.runtime.native_store import NativeConversationStore
 from agent.runtime.results import TurnResult
@@ -108,7 +108,7 @@ def test_chat_only_role_has_no_tool_schema_and_cannot_call_omitted_tools():
 def test_budget_exhaustion_finishes_without_constructing_another_engine():
     model = Model()
     selected = runtime(model)
-    with budget_scope(RequestBudget(BudgetLimits(model_calls=0))):
+    with budget_scope(TaskBudget(BudgetLimits(model_calls=0))):
         events = run(selected)
     assert isinstance(events[-1], TurnResult) and "上限" in events[-1].reply
     assert not model.prompts

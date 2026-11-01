@@ -11,11 +11,15 @@ def fingerprint(value):
     return hashlib.sha256(json.dumps(value, ensure_ascii=False).encode()).hexdigest()
 
 
-def record_layout(payload):
+def record_layout(payload, *, endpoint=None):
     messages = payload.get("messages") or []
     tools = payload.get("tools") or []
     record("model", "request_layout", model=payload.get("model"),
            tools=fingerprint(tools), tool_count=len(tools),
+           tool_fingerprints=[fingerprint(tool) for tool in tools],
+           controls=fingerprint({key: value for key, value in payload.items()
+                                 if key not in ("model", "messages", "tools")}),
+           endpoint=fingerprint(str(endpoint)) if endpoint else None,
            tools_chars=len(json.dumps(tools, ensure_ascii=False)),
            messages=[fingerprint(message) for message in messages],
            message_chars=[len(json.dumps(message, ensure_ascii=False)) for message in messages],

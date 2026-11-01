@@ -1,4 +1,4 @@
-"""Bounded request accounting using framework estimates and provider usage."""
+"""Task spending and per-call capacity using framework estimates and provider usage."""
 
 import threading
 from contextlib import contextmanager
@@ -10,6 +10,7 @@ from langchain_core.messages.utils import count_tokens_approximately
 from agent.llm_usage import usage_fields
 from agent.runtime import input_usage
 from agent.runtime.message_content import estimate_tokens
+from agent.runtime.task_time import TaskClock
 from config.settings import settings
 from utils.trace import record
 
@@ -18,9 +19,10 @@ from utils.trace import record
 class BudgetLimits:
     context_tokens: int = field(default_factory=lambda: settings.agent_context_tokens)
     input_tokens: int = field(default_factory=lambda: settings.agent_input_tokens)
-    request_tokens: int = field(default_factory=lambda: settings.agent_request_tokens)
+    task_tokens: int = field(default_factory=lambda: settings.agent_task_tokens)
     model_calls: int = field(default_factory=lambda: settings.agent_model_calls)
     tool_calls: int = field(default_factory=lambda: settings.agent_tool_calls)
+    task_seconds: int = field(default_factory=lambda: settings.agent_task_seconds)
 
     def __post_init__(self):
         # The per-call input budget can never exceed the model's hard window.
@@ -30,7 +32,7 @@ class BudgetLimits:
 class BudgetExceeded(RuntimeError):
     def __init__(self, reason):
         self.reason = reason
-        super().__init__(f"Agent request budget exceeded: {reason}")
+        super().__init__(f"Agent task budget exceeded: {reason}")
 
 
 @dataclass
@@ -48,7 +50,7 @@ def _estimate(messages, tools, output_limit):
     return estimate_tokens(messages), count_tokens_approximately([], tools=list(tools))
 
 
-class RequestBudget:
+class TaskBudget:
     def __init__(self, limits=None):
         self.limits = limits or BudgetLimits()
         self._lock = threading.Lock()
@@ -60,17 +62,47 @@ class RequestBudget:
         self._storage = None
         self._restored = {"tokens": 0, "model_calls": 0, "tool_calls": 0}
         self._input_anchor: tuple[input_usage.InputShape, int] | None = None
+        self.clock = TaskClock(self.limits.task_seconds)
+
+    def enter_request(self, deadline):
+        with self._lock:
+            if self.clock.enter(deadline) and self._storage is not None:
+                self._bind_time(self._storage.load(self._task, create=False), create=False)
+                self._persist()
+
+    def leave_request(self):
+        with self._lock:
+            if self.clock.leave():
+                self._persist()
+
+    def _bind_time(self, spent, *, create):
+        try:
+            self.clock.bind(spent, create=create)
+        except ValueError:
+            # Unknown historical time cannot fund new work. Reserving the entire
+            # allowance still lets the framework consume receipts and close an approval.
+            self.clock.bind({"active_seconds": self.limits.task_seconds}, create=False)
+            self.reason = "task_time_unknown"
+            record("budget", "time_unknown", task_id=self._task["id"] if self._task else None)
+
+    def check_time(self):
+        with self._lock:
+            if self.clock.expired():
+                self._reject(self.reason or "task_seconds")
 
     def bind_task(self, storage, task, *, create=True):
         """Bind once under the conversation guard; resumed attempts keep their charges."""
         if self._task is not None:
             if self._task["id"] != task["id"] or self._task["scope"] != task["scope"]:
-                raise ValueError("request_budget_already_bound")
+                raise ValueError("task_budget_already_bound")
             return
         spent = storage.load(task, create=create)
         self.restore_spent(spent)
         self._restored = {key: spent.get(key, 0) for key in self._restored}
         self._task, self._storage = task, storage
+        self._bind_time(spent, create=create)
+        if self.clock.charged is not None:
+            self._persist()
         record("budget", "task_restored", task_id=task["id"], **self.spent())
 
     def spent(self):
@@ -85,13 +117,18 @@ class RequestBudget:
         with self._lock:
             if self._task is not None:
                 record("budget", "task_usage", task_id=self._task["id"],
-                       spent=self.spent(), request_spent=self.request_spent())
+                       spent=self.spent(), request_spent=self.request_spent(),
+                       charged_active_seconds=self.clock.elapsed(),
+                       reserved_active_seconds=self.clock.charged)
 
     def _persist(self):
         # Reserve before network I/O. A process loss leaves a conservative charge;
         # a completed response replaces its reservation with measured usage.
         if self._storage is not None:
-            self._storage.save(self._task, self.spent())
+            spent = self.spent()
+            if self.clock.charged is not None:
+                spent["active_seconds"] = self.clock.charged
+            self._storage.save(self._task, spent)
 
     def _input_estimate(self, messages, tools, output_limit, model_key):
         message_tokens, schema_tokens = _estimate(messages, tools, output_limit)
@@ -112,7 +149,7 @@ class RequestBudget:
     def _reject(self, reason):
         self.reason = reason
         record("budget", "rejected", reason=reason, model_calls=self.model_calls,
-               tool_calls=self.tool_calls, request_tokens=self.tokens)
+               tool_calls=self.tool_calls, task_tokens=self.tokens)
         raise BudgetExceeded(reason)
 
     def reserve(self, messages, tools=(), *, output_limit=None, model_key=None):
@@ -134,6 +171,8 @@ class RequestBudget:
         return ticket
 
     def _call_block_reason(self, estimated, output_limit):
+        if self.clock.expired():
+            return self.reason or "task_seconds"
         if self.reason:
             return self.reason
         if estimated + output_limit > self.limits.context_tokens:
@@ -142,8 +181,8 @@ class RequestBudget:
             return "input_tokens"
         if self.model_calls >= self.limits.model_calls:
             return "model_calls"
-        if self.tokens + estimated + output_limit > self.limits.request_tokens:
-            return "request_tokens"
+        if self.tokens + estimated + output_limit > self.limits.task_tokens:
+            return "task_tokens"
         return None
 
     def call_block_reason(self, messages, tools=(), *, output_limit=None, model_key=None):
@@ -160,8 +199,14 @@ class RequestBudget:
             if self.reason or self.model_calls >= self.limits.model_calls:
                 return 0
             return max(0, min(self.limits.context_tokens - estimated,
-                              self.limits.input_tokens - estimated,
-                              self.limits.request_tokens - self.tokens - estimated))
+                              self.limits.task_tokens - self.tokens - estimated))
+
+    def input_capacity(self, messages, tools=(), *, output_limit, model_key=None):
+        """Additional input room; spending limits never silently remove task context."""
+        with self._lock:
+            estimated = self._input_estimate(messages, tools, output_limit, model_key)[0]
+            return max(0, min(self.limits.input_tokens - estimated,
+                              self.limits.context_tokens - estimated - output_limit))
 
     def input_tokens(self, messages, tools=(), *, model_key=None):
         """Complete input size, independently of cumulative task spending."""
@@ -182,16 +227,18 @@ class RequestBudget:
             self.tokens += charged - ticket.estimated_input - ticket.output_limit
             if ticket.input_shape is not None and actual_input is not None and actual_input > 0:
                 self._input_anchor = (ticket.input_shape, actual_input)
-            if self.tokens > self.limits.request_tokens:
-                self.reason = "request_tokens"
+            if self.tokens > self.limits.task_tokens:
+                self.reason = "task_tokens"
             self._persist()
             used = self.tokens
         record("budget", "settled", estimated_input=ticket.estimated_input,
                actual_input=actual_input, actual_output=actual_output, charged_tokens=charged,
-               request_tokens=used)
+               task_tokens=used)
 
     def attempt_tools(self, count=1):
         with self._lock:
+            if self.clock.expired():
+                self._reject(self.reason or "task_seconds")
             if self.reason:
                 raise BudgetExceeded(self.reason)
             if self.tool_calls + count > self.limits.tool_calls:
@@ -200,8 +247,8 @@ class RequestBudget:
             self._persist()
 
 
-_active: ContextVar[RequestBudget | None] = ContextVar("agent_request_budget", default=None)
-_native: ContextVar[RequestBudget | None] = ContextVar("agent_native_model_call", default=None)
+_active: ContextVar[TaskBudget | None] = ContextVar("agent_task_budget", default=None)
+_native: ContextVar[TaskBudget | None] = ContextVar("agent_native_model_call", default=None)
 
 
 @contextmanager
@@ -231,7 +278,7 @@ def native_owns(budget):
     return _native.get() is budget
 
 
-_tool_owner: ContextVar[RequestBudget | None] = ContextVar("agent_native_tool_call", default=None)
+_tool_owner: ContextVar[TaskBudget | None] = ContextVar("agent_native_tool_call", default=None)
 
 
 @contextmanager

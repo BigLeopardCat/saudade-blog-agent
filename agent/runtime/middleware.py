@@ -112,8 +112,6 @@ class SessionMiddleware(AgentMiddleware):
         self._recover(state)
         check_cancelled(session.config)
         restore(session, state)
-        if state.get("resume"):
-            return self._resume(state)
         replacement = replace_unpublished_proposal(session, state)
         if replacement:
             return {**capture(session), "messages": replacement}
@@ -126,12 +124,13 @@ class SessionMiddleware(AgentMiddleware):
             session.budget.attempt_tools(sum(call["id"] not in self.cached for call in self.calls))
             saved["jump_to"] = "tools"
         if "jump_to" not in saved:
-            if session._round_index == 0 and session.fresh_task:
+            if state.get("messages"):
                 prompt = [*([self.system_message] if self.system_message else []),
                           *hydrate(state["messages"], session.transient)]
                 fitted = fit_history(prompt, session.principal, session.menu,
                     session.budget.limits, session.output_limit,
-                    tool_access=session.history_access, budget=session.budget)
+                    tool_access=session.history_access, budget=session.budget,
+                    anchor=state.get("context_anchor"), model_key=session.model)
                 if fitted != prompt:
                     body = fitted[1:] if self.system_message else fitted
                     saved["messages"] = [RemoveMessage(id=REMOVE_ALL_MESSAGES),
