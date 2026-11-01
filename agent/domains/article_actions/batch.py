@@ -52,11 +52,9 @@ def validate(args):
 
 def prepare(article_ids, category, status, is_top, config):
     selection = {"articleIds": article_ids} if article_ids is not None else {"category": category}
-    rows = base._admin_request("POST", targets.PATH + "batch/prepare", selection, config)
+    rows = base._admin_read_post(targets.PATH + "batch/prepare", selection, config)
     if isinstance(rows, base.ToolResult):
-        return base.unavailable(
-            "未完成批量目标核对，本次未执行任何改动。请核对选择范围，或稍后重试。"
-        )
+        return rows
     try:
         if not isinstance(rows, list) or len(rows) > MAX_ITEMS:
             raise ValueError("无效批量目标")
