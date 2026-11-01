@@ -101,6 +101,8 @@
 | [0033](adr-0033-task-outcome-tracking.md) | 按需任务清单与准备工具的暂停契约 | 已采纳 |
 | [0034](adr-0034-context-task-budgets.md) | 工作上下文、分段摘要与持久任务预算 | 已采纳 |
 
+| [0035](adr-0035-background-scheduling.md) | 管理员调度采用独立 DBOS Worker，Agent 保留 LangGraph | 已采纳 |
+
 ## 相关的、但不算 ADR 的文档
 
 - [../toolcall-stability-roadmap.md](../toolcall-stability-roadmap.md)：工具调用稳定性的

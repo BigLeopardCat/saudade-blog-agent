@@ -132,6 +132,16 @@ CLASSES = [
         rule=None,
     ),
     dict(
+        key="agent-scheduling-store", label="DBOS plans and execution results", store=STORE_PG,
+        status="managed", owner="agent/scheduling/retention.py",
+        owner_ref="agent/scheduling/retention.py", retention="Terminal runs older than 30 days",
+        why="Public DBOS APIs delete terminal execution trees. Live and paused plans remain; "
+            "child executions must be terminal. Nightly cleanup is disabled with scheduling.",
+        rule=None, dsn_env="SCHEDULING_DSN",
+        tables=["saudade_automations.workflow_status", "saudade_automations.operation_outputs",
+                "saudade_automations.schedules"],
+    ),
+    dict(
         key="agent-checkpoint-store",
         label="对话上下文与幂等账（**PG**：langgraph checkpoint 三张表 + 幂等账表）",
         # **不在盘上** ⇒ 没有 root/patterns，判据是"哪个库、哪些表"（见 store_of 上面那段）。

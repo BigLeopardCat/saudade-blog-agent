@@ -48,6 +48,7 @@ class NativeConversationStore:
             approval=values.get("approval"),
             run=values.get("run"),
             receipts=list(values.get("receipts") or []),
+            last_outcome=values.get("last_outcome"),
             unfinished=bool(values.get("run")),
             initialized=snapshot.created_at is not None,
         )

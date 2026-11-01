@@ -3,6 +3,7 @@
 import hashlib
 import json
 
+from agent.runtime.results import turn_phase
 from utils.trace import record
 
 
@@ -24,10 +25,6 @@ def tools(menu, seen):
 
 def outcome(result):
     execution = result.execution or {}
-    phase = ("awaiting_browser" if execution.get("client_action") else
-             "awaiting_confirmation" if execution.get("pending_confirm") else
-             "blocked" if execution.get("blocked") else
-             "cancelled" if (execution.get("pending_event") or {}).get("event") == "cancelled"
-             else "responded")
+    phase = turn_phase(result)
     record("native", "turn_state", phase=phase,
            receipt_count=len(execution.get("receipts") or []))

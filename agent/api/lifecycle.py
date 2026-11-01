@@ -45,6 +45,8 @@ async def lifespan(app: FastAPI):
                 _provider,
             )
         app.state.runtime = build_runtime(resources)
+        app.state.scheduling = getattr(getattr(app.state.runtime, "application", None),
+                                       "scheduling", None)
         logger.info("Native agent ready")
         # Optional warmups do not block startup.
         workers.warm_up(wordgraph.warm)
@@ -56,6 +58,7 @@ async def lifespan(app: FastAPI):
             await workers.aclose()
         finally:
             app.state.runtime = None
+            app.state.scheduling = None
             app.state.workers = None
             await asyncio.to_thread(resources.close)
         logger.info("Agent stopped; request workers and checkpoint pool closed")
