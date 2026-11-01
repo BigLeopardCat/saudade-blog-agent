@@ -1,11 +1,14 @@
 """Public DBOS client adapter; no timer, queue or execution lease implementation."""
 
 from contextlib import contextmanager
+from datetime import datetime
 from hashlib import blake2b
 from threading import BoundedSemaphore
 
 import psycopg
 from dbos import DBOSClient, DBOSPortableJSONSerializer, WorkflowSerializationFormat
+
+from agent.scheduling.models import utc_now
 
 APP = "saudade-automations"
 SCHEMA = "saudade_automations"
@@ -65,13 +68,32 @@ class Backend:
 
     def once(self, owner, identifier):
         rows = self.client.list_workflows(
-            workflow_ids=[storage_name(owner, identifier)], application_name=APP
+            workflow_ids=[storage_name(owner, identifier)], application_name=APP, user=str(owner)
         )
         return rows[0] if rows else None
 
     def recurring(self, owner, identifier):
         row = self.client.get_schedule(storage_name(owner, identifier))
-        return row if row and row.get("application_name") == APP else None
+        return row if self._owned_schedule(row, owner) else None
+
+    @staticmethod
+    def _owned_schedule(row, owner):
+        return bool(
+            row
+            and row.get("application_name") == APP
+            and isinstance(row.get("context"), dict)
+            and type(row["context"].get("owner_id")) is int
+            and row["context"]["owner_id"] == owner
+        )
+
+    def recurring_schedules(self, owner):
+        # Prefix filters are lookup hints; ownership is an explicit context check.
+        rows = self.client.list_schedules(
+            schedule_name_prefix=storage_name(owner, ""),
+            application_name=APP,
+            workflow_name=PERIODIC,
+        )
+        return [row for row in rows if self._owned_schedule(row, owner)]
 
     def enqueue_once(self, owner, identifier, payload):
         return self.client.enqueue(
@@ -79,6 +101,9 @@ class Backend:
                 "workflow_name": ONCE,
                 "queue_name": CONTROL_QUEUE,
                 "workflow_id": storage_name(owner, identifier),
+                "delay_seconds": max(
+                    0.0, (datetime.fromisoformat(payload["start_at"]) - utc_now()).total_seconds()
+                ),
                 "authenticated_user": str(owner),
                 "attributes": {
                     "definition": payload["definition"],

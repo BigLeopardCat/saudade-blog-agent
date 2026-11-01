@@ -111,12 +111,11 @@ class ScheduleService:
                 return {"changed": False, "schedule": previous}
             # The owner lock serializes schedule admission across HTTP processes.
             prefix = storage_name(owner, "")
-            recurring = self.backend.client.list_schedules(
-                schedule_name_prefix=prefix, application_name=APP, workflow_name=PERIODIC
-            )
+            recurring = self.backend.recurring_schedules(owner)
             pending = self.backend.client.list_workflows(
                 workflow_id_prefix=prefix,
                 application_name=APP,
+                user=str(owner),
                 name=ONCE,
                 status=["ENQUEUED", "DELAYED", "PENDING", "CANCELLED"],
                 attributes={"cancelled": False},
@@ -215,17 +214,13 @@ class ScheduleService:
     def list(self, principal, limit=10, offset=0):
         owner = self.authorize(principal)
         prefix = storage_name(owner, "")
-        recurring = [
-            recurring_view(row)
-            for row in self.backend.client.list_schedules(
-                schedule_name_prefix=prefix, application_name=APP, workflow_name=PERIODIC
-            )
-        ]
+        recurring = [recurring_view(row) for row in self.backend.recurring_schedules(owner)]
         once = [
             once_view(row)
             for row in self.backend.client.list_workflows(
                 workflow_id_prefix=prefix,
                 application_name=APP,
+                user=str(owner),
                 name=ONCE,
                 limit=limit + offset + 1,
                 sort_desc=True,

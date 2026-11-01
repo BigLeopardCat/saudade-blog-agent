@@ -61,6 +61,7 @@ flowchart LR
 │   ├── domains/automations/transactions.py              # 计划变更与执行账回执
 │   ├── scheduling/__init__.py                           # 持久后台调度包
 │   ├── scheduling/backend.py                            # DBOS 公开客户端与管理锁
+│   ├── scheduling/checkpoints.py                       # 后台 checkpoint 与预算清理
 │   ├── scheduling/errors.py                             # 调度错误边界
 │   ├── scheduling/factory.py                            # 应用调度服务装配
 │   ├── scheduling/host.py                               # 当前管理员验证及结果投递

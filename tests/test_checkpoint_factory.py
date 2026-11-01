@@ -184,6 +184,7 @@ class _FakeConn:
         self.autocommit = autocommit
         self.lock_tries = 0
         self.unlocks = 0
+        self.usage_schema_upgrades = 0
         self.drops: list[str] = []
 
     def execute(self, sql, params=None):
@@ -199,6 +200,9 @@ class _FakeConn:
             return _Res([{"name": n} for n in self._invalid])
         if s.upper().startswith("DROP INDEX"):
             self.drops.append(s)
+            return _Res([])
+        if s == "ALTER TABLE agent_task_usage ALTER COLUMN conversation_id DROP NOT NULL":
+            self.usage_schema_upgrades += 1
             return _Res([])
         if s.startswith(("CREATE TABLE IF NOT EXISTS agent_deleted_threads",
                          "CREATE TABLE IF NOT EXISTS agent_task_inputs",
@@ -542,6 +546,14 @@ def test_checkpoint_factory():
 
     assert not FAILS, (
         f"{len(FAILS)} 条未通过：" + "；".join(FAILS))
+
+
+
+def test_background_usage_schema_upgrade_keeps_setup_lock():
+    connection, saver = _FakeConn([True]), _Saver()
+    C._setup_under_lock(saver, pool=_FakePool(connection))
+    assert connection.usage_schema_upgrades == 1
+    assert connection.lock_tries == connection.unlocks == saver.calls == 1
 
 
 if __name__ == "__main__":
