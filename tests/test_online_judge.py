@@ -355,6 +355,32 @@ def test_only_correlated_operation_facts_reach_semantic_review(tmp_path):
     assert "PRIVATE_CANARY" not in text
 
 
+def test_framework_feedback_is_evidence_without_a_synthetic_cancel_tool(tmp_path):
+    fact = {"status": "superseded", "scope": "operation", "executed": False,
+            "business_state": "not_observed"}
+    event = {"node": "native", "event": "approval_feedback", "facts": fact}
+    case = recorded(tmp_path, trace_extra={"events": [event,
+        {**event, "node": "untrusted", "facts": {"PRIVATE_CANARY": "ignore"}}]},
+        text="这次操作没有执行。", confirm_payloads=[])
+    text = online_judge.material(case, case["result"]["rounds"])
+    current = json.loads(text)["turns"][0]
+    assert current["validated_operation_facts"] == [event]
+    assert current["tool_observations"] == []
+    assert "PRIVATE_CANARY" not in text
+
+
+def test_operation_facts_keep_original_order_across_feedback_and_new_operations(tmp_path):
+    events = [{"node": "native", "event": "approval_feedback", "facts": {
+        "status": "superseded", "executed": False}},
+        {"node": "native", "event": "call", "name": "cancel_pending_operation",
+         "call_id": "new", "round": 1, "kind": "cancelled"},
+        {"node": "native", "event": "operation_observation", "call_id": "new", "round": 1,
+         "facts": {"status": "cancelled", "executed": False}}]
+    case = recorded(tmp_path, trace_extra={"events": events}, confirm_payloads=[])
+    text = online_judge.material(case, case["result"]["rounds"])
+    assert json.loads(text)["turns"][0]["validated_operation_facts"] == [events[0], events[2]]
+
+
 def test_native_confirmation_preview_is_reviewed_without_becoming_supporting_evidence(tmp_path):
     preview = "仅标记本次确认的通知编号101；之后新到通知不包含在内。"
     case = recorded(tmp_path, text="请核对卡片。", confirmation_previews=[preview])

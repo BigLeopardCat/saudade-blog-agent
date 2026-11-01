@@ -10,7 +10,7 @@ from langgraph.graph.message import add_messages
 from langgraph.types import interrupt
 
 from agent.runtime import memory
-from agent.runtime.results import TurnResult, receipt_observations
+from agent.runtime.results import TurnResult, cancellation_fact, receipt_observations
 from agent.runtime.writes import bound_context
 from tools.result import ok
 from utils.trace import record
@@ -60,12 +60,14 @@ def review(state, config, *, feedback=None):
         if feedback is None:
             raise ValueError("approval_feedback_not_available")
         execution = feedback(config).execution
-        observed = {"status": "superseded", "scope": "operation", "executed": False,
-                    "business_state": "not_observed"}
+        observed = {**cancellation_fact(), "status": "superseded"}
+        content = json.dumps({**observed,
+            "result": "本次待确认操作已撤销，原确认卡已失效，未执行改动；目标当前状态未查询。"},
+            ensure_ascii=False)
         observations = []
         for spec in action["specs"]:
             observations.extend(memory.observation({"name": spec["tool"], "args": spec["args"],
-                "id": "superseded_" + uuid.uuid4().hex}, ok(json.dumps(observed))))
+                "id": "superseded_" + uuid.uuid4().hex}, ok(content)))
         principal = config["configurable"]["principal"]
         current = memory.turn_messages(facts.get("input") or [], observations, "", principal)[:-1]
         record("native", "approval_feedback", facts=observed)

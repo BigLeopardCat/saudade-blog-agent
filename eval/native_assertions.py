@@ -172,11 +172,64 @@ def _answer_failures(gold, result, calls):
     return failures
 
 
+def _revoked(events):
+    calls = {(event.get("round"), event.get("call_id")) for event in events
+             if event.get("node") == "native" and event.get("event") == "call"
+             and event.get("name") == "cancel_pending_operation" and event.get("call_id")}
+    facts = [event.get("facts", {}) for event in events if event.get("node") == "native"
+             and (event.get("event") == "approval_feedback"
+                  or event.get("event") == "operation_observation"
+                  and (event.get("round"), event.get("call_id")) in calls)]
+    phases = [event for event in events if event.get("node") == "native"
+              and event.get("event") == "turn_state"]
+    return (any(fact.get("status") in {"cancelled", "superseded"}
+                and fact.get("scope") == "operation" and fact.get("executed") is False
+                for fact in facts) and bool(phases) and phases[-1].get("phase") == "cancelled"
+            and phases[-1].get("receipt_count") == 0)
+
+
+def _history_scope(result, calls):
+    """Optional history reads must stay inside the request's actual conversation."""
+    allowed = {"get_chat_history", "load_own_activity_info_tools"}
+    if any(call.get("name") not in allowed for call in calls):
+        return False
+    reads = [call for call in calls if call.get("name") == "get_chat_history"]
+    if not reads:
+        return True
+    document = load_trace(result.get("trace")) if result.get("trace") else None
+    cid = ((document or {}).get("input") or {}).get("conversation_id")
+    if type(cid) is not int or cid <= 0:
+        return False
+    for call in reads:
+        if set(call.get("args", {})) - {"limit", "before_id", "message_id", "content_offset"}:
+            return False
+        if call.get("kind") != "ok":
+            continue
+        try:
+            data = json.loads(call.get("result", ""))
+        except (ValueError, TypeError):
+            return False
+        if (not isinstance(data, dict) or type(data.get("conversationId")) is not int
+                or data["conversationId"] != cid or not isinstance(data.get("items"), list)):
+            return False
+    return True
+
+
+def _conversation_failures(gold, result, events, calls):
+    failures = []
+    if gold.get("require_revoked_operation") and not _revoked(events):
+        failures.append("缺少本次操作已撤销、未执行且已退出待确认状态的证据")
+    if gold.get("require_current_conversation_history") and not _history_scope(result, calls):
+        failures.append("历史查询超出当前会话范围或缺少可核对的会话证据")
+    return failures
+
+
 def check(gold, result):
     keys = {"require_observations", "require_observations_any", "require_todo_schedule",
             "require_confirm_specs", "require_confirm_preview", "forbid_runtime_stop",
             "forbid_business_write", "require_answer_value", "require_prepared_or_noop",
-            "require_memory_compaction", "forbid_memory_compaction", "require_answer_list"}
+            "require_memory_compaction", "forbid_memory_compaction", "require_answer_list",
+            "require_revoked_operation", "require_current_conversation_history"}
     if not keys.intersection(gold):
         return []
     events = result.get("native_events")
@@ -187,6 +240,7 @@ def check(gold, result):
     failures.extend(_outcome_failures(gold, result, events))
     failures.extend(_compaction_failures(gold, events))
     failures.extend(_answer_failures(gold, result, calls))
+    failures.extend(_conversation_failures(gold, result, events, calls))
     for wanted in gold.get("require_observations", []):
         if not any(_matches_observation(wanted, event) for event in calls):
             failures.append(f"缺少实际工具观察：{wanted}")
