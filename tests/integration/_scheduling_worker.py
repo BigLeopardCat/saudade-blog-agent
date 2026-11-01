@@ -4,12 +4,14 @@ import sys
 import time
 from contextlib import ExitStack
 from pathlib import Path
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 import psycopg
 from dbos import DBOS, DBOSPortableJSONSerializer
+from langchain_core.messages import AIMessage, AIMessageChunk
 
 from agent.principal import Principal
-from agent.scheduling import workflows
+from agent.scheduling import readonly, workflows
 from agent.scheduling.backend import (
     APP,
     CONTROL_QUEUE,
@@ -19,8 +21,32 @@ from agent.scheduling.backend import (
     database_url,
 )
 from agent.scheduling.worker import WorkerActions
+from config.settings import settings
 
 DSN, SCHEMA, READY = sys.argv[1:]
+url = urlsplit(DSN)
+params = dict(parse_qsl(url.query))
+params["options"] = "-csearch_path=" + SCHEMA
+settings.checkpoint_dsn = urlunsplit(
+    (url.scheme, url.netloc, url.path, urlencode(params), url.fragment)
+)
+settings.checkpoint_forbid_db = ""
+
+
+class Model:
+    max_tokens = 64
+
+    def bind_tools(self, tools, **kwargs):
+        return self
+
+    def stream(self, messages, **kwargs):
+        yield AIMessageChunk(content="isolated background answer")
+
+    def invoke(self, messages, **kwargs):
+        return AIMessage(content="isolated background answer")
+
+
+readonly.get_llm = lambda **_: Model()
 
 
 def connection():

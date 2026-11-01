@@ -212,7 +212,7 @@ def test_background_agent_uses_standard_runtime_and_reuses_finished_checkpoint(m
         assert blocked["status"] == "incomplete"
     assert first["text"] == replay["text"] == "隔离任务结果"
     assert replay["reused"] and model.calls == 1
-    assert first["thread_id"].startswith("scheduled_")
+    assert first["thread_id"].startswith("background_")
 
 
 def test_confirmed_create_uses_existing_execution_ledger_and_replay_does_not_reinvoke(
@@ -342,3 +342,27 @@ def test_schedule_action_text_uses_verified_title_and_covers_all_operations():
     )
     assert result == "创建计划任务「verified」"
     assert all(receipt_action(name, {}, {}) for name in PERMISSION_OPERATIONS)
+
+
+def test_background_task_identity_is_owner_bound_and_separate_from_chat():
+    from agent.runtime.task_scope import background_thread, binding
+
+    cfg = {
+        "principal": ADMIN,
+        "user_id": ADMIN.uid,
+        "background_run_id": "run",
+        "thread_id": background_thread(ADMIN.uid, "run"),
+    }
+    assert binding({"configurable": cfg}) == {
+        "uid": ADMIN.uid,
+        "role": "admin",
+        "background_run_id": "run",
+    }
+    for mutation in (
+        {"conversation_id": 42},
+        {"user_id": 8},
+        {"thread_id": background_thread(8, "run")},
+        {"background_run_id": ""},
+    ):
+        with pytest.raises(ValueError):
+            binding({"configurable": {**cfg, **mutation}})

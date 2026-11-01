@@ -29,5 +29,21 @@ def test_preview_has_no_delete_and_apply_only_prunes_terminal_unpaused_roots():
     assert first_query["name"] == [ONCE, PERIODIC]
     assert set(first_query["status"]) == {"SUCCESS", "ERROR", "CANCELLED"}
     assert first_query["has_parent"] is False and first_query["completed_before"]
-    assert collect(backend, apply=True)["deleted"] == ["done"]
+    cleaner = Mock()
+    assert collect(backend, apply=True, cleanup=cleaner)["deleted"] == ["done"]
+    cleaner.assert_called_once_with("done")
     client.delete_workflows.assert_called_once_with(["done"], delete_children=True)
+
+
+def test_failed_checkpoint_cleanup_preserves_scheduler_recovery_evidence():
+    import pytest
+
+    client = Mock()
+    client.list_workflows.side_effect = [[SimpleNamespace(workflow_id="done", attributes={})], []]
+
+    def failed(_):
+        raise RuntimeError("checkpoint storage unavailable")
+
+    with pytest.raises(RuntimeError):
+        collect(SimpleNamespace(client=client), apply=True, cleanup=failed)
+    client.delete_workflows.assert_not_called()
