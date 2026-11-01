@@ -42,7 +42,9 @@ class Model:
         return self.responses.pop(0)
 
 
-def test_preparation_signs_real_target_without_writing_or_exposing_token(site):
+def test_preparation_signs_real_target_without_writing_or_exposing_token(site, monkeypatch):
+    events = []
+    monkeypatch.setattr("agent.runtime.tool_evidence.record", lambda *_, **kw: events.append(kw))
     result = preparation.prepare_favorite_change.invoke(
         {"action": "add", "article_id": 19}, config=config())
     assert isinstance(result, TurnResult)
@@ -57,6 +59,9 @@ def test_preparation_signs_real_target_without_writing_or_exposing_token(site):
     assert popup["token"] not in result.reply
     assert confirm.verify(popup["token"], 8, 42) is None
     assert confirm.verify(popup["token"], 7, 43) is None
+    target = next(event for event in events if event["source"] == "articles")
+    assert target["facts"] == {"article_id": 19, "title": "真实文章标题"}
+    assert popup["token"] not in json.dumps(events)
 
 
 @pytest.mark.parametrize("identifiers", [{"noteKey": 19}, {"noteId": 19},
