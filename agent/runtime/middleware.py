@@ -13,7 +13,7 @@ from langgraph.graph.message import REMOVE_ALL_MESSAGES
 from langgraph.types import Command
 
 from agent.llm_usage import usage_fields
-from agent.runtime import memory, trace_context
+from agent.runtime import approval_messages, memory, trace_context
 from agent.runtime.approval_response import finish as finish_approval_response
 from agent.runtime.budget import native_call
 from agent.runtime.control import AgentCancelled, model_options
@@ -160,26 +160,9 @@ class SessionMiddleware(AgentMiddleware):
         answered = {message.tool_call_id: message for message in messages[index + 1:]
                     if isinstance(message, ToolMessage)}
         awaiting = answered[session.state["awaiting_call"]]
-        unverified = bool(facts["execution"].get("operation_outcome"))
-        visible = {"status": "unverified" if unverified else "executed",
-            "result": facts["reply"], "receipts": [
-            {key: row[key] for key in ("tool", "args", "result", "action") if key in row}
-            for row in facts["execution"]["receipts"]]}
-        receipt = awaiting.model_copy(update={"content": json.dumps(visible, ensure_ascii=False),
-                                              "status": "error" if unverified else "success",
-                                              "artifact": None})
-        deferred = [message for message in answered.values()
-                    if (message.artifact or {}).get("phase") == "deferred"]
-        if unverified:
-            # Dependent requests must return to the model after a failed action;
-            # do not automatically prepare the next approval from the old batch.
-            resolved = [message.model_copy(update={"content": json.dumps({
-                "status": "not_executed", "reason": "previous_operation_unverified"}),
-                "status": "error", "artifact": None}) for message in deferred]
-            answered.update({message.tool_call_id: message for message in resolved})
-            deferred = []
-        else:
-            resolved = []
+        receipt = approval_messages.receipt(awaiting, facts)
+        deferred, resolved = approval_messages.deferred_results(
+            answered, bool(facts["execution"].get("operation_outcome")))
         self.cached = {ident: message for ident, message in answered.items()
                        if message not in deferred}
         self.cached[session.state["awaiting_call"]] = receipt
