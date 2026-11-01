@@ -1,30 +1,8 @@
-"""复杂度 / 函数长度**预算闸**（20261009）。
+"""Function complexity and length ratchet over Python source files.
 
-要回答的问题：本仓有一批函数圈复杂度偏高、还有几个超过 300 行（**落地前实测**：
-1343 个函数里 264 个 C>10、157 个 C>15、52 个 C>30，四个超过 300 行，居首
-`agent/graph.py::_planner_decide` 1470 行 / C=291——该函数随后已拆开、现不在台账）
-——**而没有任何机制看着这件事**。`eval.yml` 只跑 `ruff --select F821`（未定义名），`docs/lint-baseline.md`
-自己写着「机械闸 `eval/lint_gate.py` … **没做之前，这份文件只是快照，还算不上闸**」。
-
-**为什么不走 ruff 的 C901**（实测过，免得重议）：本机 ruff 要 `uvx ruff@0.14.4`；
-`[tool.ruff.lint]` 的 `select = ["E","F","I","W"]` 不含 C901；而开 C901 取常规阈值 10
-会报 **264 个**违规，取任何能挡住 `_planner_decide` 的阈值（≥100）又等于没闸。
-改成「预算 + 台账」不受阈值语义影响：**判据是「这个函数没变大」**，`C_MAX`/`LINES_MAX`
-只要**稳定**即可，不必是规范 McCabe 值——这让读数便宜可辩护。
-
-**判法**（`judge()`，一句话）：超上限的函数必须在台账里、且只许缩小；台账里的条目
-一旦回到预算内就要销账；台账里找不到对应函数的条目是过期的。
-
-台账 = `eval/complexity_baseline.json`，`--update` 是唯一的放宽通道（reviewer 直接
-看那份 diff）。本套件由 pytest 按目录收集 ⇒ **CI 与夜间 04:00 自动到手**，
-零 workflow 改动。
-
-用法（cd 仓根，用仓的 venv）：
-  .venv/bin/python tests/test_complexity_budget.py              # 检查（CI 这样调）
-  .venv/bin/python tests/test_complexity_budget.py --update     # 重写台账
-  .venv/bin/python tests/test_complexity_budget.py --c-max 10   # 临时换阈值（看它会不会红）
-退出码：0 全在预算内 / 1 有函数超预算、长大了，或台账过期。
-"""
+Oversize functions must match eval/complexity_baseline.json; removed or smaller
+entries require tightening the ledger. Nested functions have separate metrics.
+Run with --update to regenerate the reviewable ledger; this is not a McCabe score."""
 
 
 import argparse
@@ -59,11 +37,7 @@ _NESTED = (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)
 
 
 def _complexity(fn: ast.AST) -> int:
-    """函数自己的判定点数 + 1。
-
-    不下钻到嵌套函数 / `lambda` 体——它们的判定点算它们自己的（`_collect` 会把它们
-    当独立条目逐个报出来），否则一个"外壳 + 大内部函数"会把复杂度记两遍。
-    """
+    """Count this function’s decision points, excluding nested functions and lambdas."""
     total = 1
     stack = [fn]
     while stack:
@@ -95,11 +69,7 @@ def _collect(node: ast.AST, prefix: str, out: dict) -> None:
 
 
 def scan() -> tuple[dict, int]:
-    """扫描全仓，返回 `({条目: {"lines": n, "c": m}}, 文件数)`。
-
-    条目键 = `相对路径::限定名`。**解析失败不静默跳过**：一个读不进来的文件会让它
-    整族函数从闸下溜走（"守卫静默跳过"正是本仓最贵的失效模式之一）⇒ 当场非零退出。
-    """
+    """Return per-function metrics and file count; parse errors fail the scan."""
     out: dict = {}
     n_files = 0
     for p in sorted(ROOT.rglob("*.py")):
@@ -236,7 +206,7 @@ def _self_test() -> bool:
         if not ok:
             fails.append(f"判据自检：{desc}")
 
-    # 盘上格式/键序漂了 ⇒ 红；恰好是 `dump()` 的产物 ⇒ 绿（20261018 审计 A5）
+    # Reject noncanonical ledger formatting and ordering.
     unordered = {"b.py::z": {"c": 40, "lines": 100}, "a.py::y": {"c": 31, "lines": 50}}
     o_cases = [
         ("恰好是 dump() 的产物 ⇒ 不报", dump(unordered), False),
@@ -261,17 +231,7 @@ def dump(ledger: dict) -> str:
 
 
 def order_violation(raw: str) -> str | None:
-    """盘上台账的**字节**是否就是 `--update` 会写出来的那一份；不是就返回一句说明。
-
-    为什么这值得一条判据（20261018 审计 A5）：`--update` 的产物是排序过的，而盘上这份
-    台账历史上是手写落地的、**键序不排序**。只要不校正一次，**下次任何一条触发
-    `--update`，diff 就是整份文件重排**——"这一条真的变了"被埋进噪声里，而这道闸的
-    全部价值就是让人看得见那份 diff（`--update` 是唯一的放宽通道）。
-
-    判法是**往返比字节**（不是自己再写一套排序规则）：把盘上解析出来的 dict 按 `dump()`
-    重新序列化，与原文逐字比。这样"格式"与"顺序"一次判完，将来改 `dump()` 也不会让
-    判据与它脱钩。
-    """
+    """Check that the ledger bytes match the canonical dump() serialization."""
     want = dump(json.loads(raw))
     if want == raw:
         return None

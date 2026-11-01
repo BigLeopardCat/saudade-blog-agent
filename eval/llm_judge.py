@@ -1,14 +1,9 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""评测侧 LLM 评审员，不是判分器，不参与业务授权。
+"""评测侧 LLM 评审适配，不是判分器，不参与业务授权。
 
-旧 trace CLI 仅筛选可疑回复，不修改 golden 结果。当前线上报告（含待确认正文）
-使用 ``python -m eval.online_judge``，独立保存疑点和未评估项。
-材料保留来源与截断标记；默认与生产同源，结论须校准并供人工核对。
-
-旧接口：python -m eval.llm_judge --traces <目录> [--dry-run]
-离线验证：tests/test_llm_judge.py。
-"""
+Frozen HTTP reports use eval.online_judge, with separate findings and unknown
+outcomes. Review requires calibration and never authorizes business operations."""
 from __future__ import annotations
 
 import argparse
@@ -24,10 +19,7 @@ sys.path.insert(0, str(ROOT / "eval"))
 
 from utils import trace as trace_mod  # 截断标记的唯一事实源（`is_truncated`），别在本文件另抄一份
 
-# 工具返回与回复正文的截断上限：判官看的是"有没有出处"，不是复述全文。
-# **截太狠会把出处截掉 ⇒ 假 suspect**（20260925 实测：判官拿 200 字符的文章摘要当真材料，
-# 把回复里的「第 3.3 节」判成编造）。所以这里给得宽（比 golden 轮的 trace 上限 40000
-# 低一档，正常轮里等于不截断），真被截断时材料里会带可见的截断标记。
+# Explicit limits keep reviewer-side clipping distinct from missing source evidence.
 RESULT_LIMIT = 12000
 REPLY_LIMIT = 3000          # trace 里 reply 本身落盘时已截 2000（utils/trace.set_reply）
 
@@ -117,17 +109,7 @@ def calls_of(trace: dict) -> list[dict]:
 
 
 def _call_body(result: object, declared: int | None, judge_limit: int) -> str:
-    """一条工具返回写进材料的样子（含"这份是不是全文"的说明）。
-
-    **两种截断必须分开说**：trace 那一层的截断是"素材本来就缺一块"，要明说"真实返回可能
-    更长"；判官自己这层的截断（超过 `judge_limit`）是"给多了看不完"。混成一句话会让判官
-    以为 trace 里的长度就是真实长度。
-
-    trace 那层怎么认（20260925 起）：**标记说了算**——`utils/trace` 截断时会附
-    「…[trace 截断：原文共 N 字符]」。老 trace 没有标记，退化成"长度恰等于当轮声明的上限"
-    （那条启发式的两个前提——上限是全局的一个数、且恰好等于才是砍在这里了——只对老
-    trace 成立；新 trace 一律带标记，不再需要猜）。
-    """
+    """Distinguish source-trace truncation from this reviewer’s material limit."""
     text = str(result or "")
     if trace_mod.is_truncated(text):
         return (text + "\n   …（**这一轮的工具返回在 trace 里被截断过**——"
@@ -139,20 +121,7 @@ def _call_body(result: object, declared: int | None, judge_limit: int) -> str:
 
 
 def material(trace: dict, *, result_limit: int = RESULT_LIMIT) -> str:
-    """golden trace → 判官看到的材料。
-
-    四段：访客的问题 / 本轮真实执行的工具调用与返回原文 / **判官看不到的东西** / 回复正文。
-
-    **只读 trace 里已经存在的东西**：`input.message` 是提问，`call` 事件带 name/args/result
-    （返回原文，不是摘要），`reply` 是最终回复。没有 `call` 事件就是零帧轮——如实写成
-    "本轮没有执行任何工具"，那正是最需要盯的一类（零帧轮回复里的具体事实必然无出处）。
-
-    **材料不完整必须写在材料里**（20260925 实测教训）：trace 里工具返回被截断的那些轮
-    （生产曾一律只留 200 字符，20260925 起改分档但仍会截正文，见 `utils/trace`），判官会拿
-    摘要当真相当成"回复编造"，而它其实什么都没看到；`input` 里也没有注入给叙述者的时间/
-    页面语境，于是"现在是凌晨三点"这种有据的话被判成编造。这两类都不是回复的错 ⇒
-    材料里明写盲区与截断标记，并让判官据此**不列**。
-    """
+    """Build trace-screening material and mark missing source context."""
     lines = []
     inp = trace.get("input") or {}
     lines.append("【访客的问题】")
@@ -176,34 +145,18 @@ def material(trace: dict, *, result_limit: int = RESULT_LIMIT) -> str:
     return "\n".join(lines)
 
 
-# trace 里"这一轮的工具返回被截断了"的判据（20260925）：拿被截断的材料当真相当材料，
-# 判官会把"它没看到"读成"回复编造"，结论不可信 ⇒ **响亮说出来**。
-#
-# 判据从"猜"改成"读标记"（20260925 同批）：`utils/trace` 截断时附
-# 「…[trace 截断：原文共 N 字符]」，认标记即可，不再依赖"上限是全局的一个数"这个前提
-# （分档之后它也不成立了——unset 时不同工具的上限不同）。
-# `STUB_LEN` 只服务于**老 trace**（20260925 之前落的，`text[:200]` 无标记）那条兜底启发式。
+# Unmarked trace screening conservatively uses the declared limit or STUB_LEN.
 STUB_LEN = 200
 
 
 def declared_result_limit(trace: dict) -> int | None:
-    """这一轮声明的工具返回上限（`input.tool_result_limit`，golden 20260925 起落）。
-
-    老 trace 没有这个字段 ⇒ 返回 None。**它现在只是老 trace 那条启发式要用的输入**
-    （见 `truncated_calls`）——生产侧已改分档，一个数字不再能描述"这一轮的上限是多少"。
-    """
+    """Read a declared limit for unmarked trace evidence; absent limits stay unknown."""
     v = (trace.get("input") or {}).get("tool_result_limit")
     return v if isinstance(v, int) and v > 0 else None
 
 
 def truncated_calls(trace: dict) -> list[str]:
-    """这一轮里"返回文本被 trace 截断过"的工具名（空列表 = 材料完整）。
-
-    **标记优先**：`utils/trace` 截断时附标记，`is_truncated` 认它——这是新 trace 的唯一判据。
-    老 trace（20260925 之前）没有标记，退化成两个启发式：长度恰等于当轮声明的上限，
-    或（上限也取不到的更老的 trace）长度 ≥ `STUB_LEN`。宽判宁多报——**"材料可能不完整"
-    多报一条的代价，远小于把"判官没看到"当成"回复编造"**。
-    """
+    """Find explicit truncation markers, or conservatively flag unmarked trace evidence."""
     limit = declared_result_limit(trace)
     hit = []
     for e in calls_of(trace):
