@@ -9,7 +9,7 @@ short, static progress labels through the existing `RunnableConfig` configurable
 map. The server adapts those labels to the existing `__PROCESS__` SSE frame;
 there is no second event protocol.
 
-The transport adapter deduplicates by operation key and caps one request at 24 labels. It
+The transport adapter deduplicates by operation key and caps one persisted task at 24 labels. It
 never includes tool arguments, results, prompts, confirmation material, or
 exception text. The server performs queue insertion through an event-loop-safe
 handoff; `RequestJobs` keeps the admission permit until the worker and queue
