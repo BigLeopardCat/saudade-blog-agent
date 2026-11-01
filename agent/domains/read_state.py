@@ -9,6 +9,7 @@ from pydantic import Field, StrictInt
 
 from agent import action_text, authz
 from agent.products.blog.confirmation import proposal
+from agent.reports import sanitize_untrusted
 from agent.runtime import writes
 from agent.runtime.results import TurnResult
 from agent.runtime.tool_evidence import observed
@@ -92,11 +93,13 @@ class ReadState:
         if not unread:
             text = f"所选{self.label}均已读，本次无需改动。"
             return TurnResult(text, {"noop_note": text, "noop_text": text, "receipts": []})
-        labels = [f"{key}《{str(rows[key].get('title') or '无标题')[:80]}》" for key in unread]
-        target = f"将{self.label} " + "、".join(labels) + " 标记为已读"
-        question = target + f"？仅处理本次确认的编号；之后新到的{self.label}不包含在内。"
-        if len(question) > 500:
-            return base.unavailable("所选内容过多，无法完整展示确认范围，请分批选择。")
+        if len(unread) > 100:
+            return base.unavailable("每批最多确认100条，请选择明确的编号范围后分批处理。")
+        labels = [f"- #{key}《{sanitize_untrusted(str(rows[key].get('title') or '无标题'), 40)}》"
+                  for key in unread]
+        target = f"将所选{len(unread)}条{self.label}标记为已读"
+        question = target + "：\n\n" + "\n".join(labels)
+        question += f"\n\n仅处理本次确认的编号；之后新到的{self.label}不包含在内。"
         principal, cid = writes.bound_context(config)
         check_cancelled(config)
         return proposal(principal, cid, self.workflow, {

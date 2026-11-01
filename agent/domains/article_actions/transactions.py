@@ -10,7 +10,7 @@ from tools import base
 from tools.result import fact, ok, tgt
 
 OPERATION = "set_article_status"
-PERMISSION_OPERATIONS = frozenset({OPERATION})
+PERMISSION_OPERATIONS = frozenset({OPERATION, batch.NAME})
 
 
 def handles(grant):

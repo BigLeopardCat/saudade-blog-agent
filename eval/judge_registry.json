@@ -12,7 +12,7 @@
         0
       ],
       "agent/action_text.py": [
-        95,
+        97,
         0
       ],
       "agent/adminops_account.py": [
@@ -199,8 +199,16 @@
         0,
         0
       ],
-      "agent/domains/article_tags/preparation.py": [
+      "agent/domains/article_tags/batch.py": [
+        0,
+        0
+      ],
+      "agent/domains/article_tags/presentation.py": [
         2,
+        0
+      ],
+      "agent/domains/article_tags/preparation.py": [
+        0,
         0
       ],
       "agent/domains/article_tags/targets.py": [
@@ -753,7 +761,7 @@
       ]
     },
     "total": [
-      384,
+      386,
       33
     ]
   },
@@ -783,7 +791,7 @@
       "file": "agent/action_text.py",
       "kind": "collection",
       "name": "_NOARG_VERB",
-      "size": 25,
+      "size": 27,
       "category": "system_data",
       "q": "_NOARG_VERB",
       "why": "工具名 → 动作文案的渲染表（键是工具名，无参调用时的显示字）"

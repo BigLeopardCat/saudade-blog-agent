@@ -1,12 +1,15 @@
 """Prepare one article tag change; the service creates nothing until approval."""
 
+from typing import Annotated
+
 from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import tool
+from pydantic import Field
 
 from agent.domains.admin_writes import available
-from agent.domains.article_tags import targets
+from agent.domains.article_tags import batch, targets
+from agent.domains.article_tags.presentation import change_summary
 from agent.products.blog.confirmation import proposal
-from agent.reports import sanitize_untrusted
 from agent.runtime.results import TurnResult
 from agent.runtime.turns import check_cancelled
 from agent.runtime.writes import bound_context
@@ -14,37 +17,12 @@ from tools import base
 from tools.result import invalid_args
 
 
-def labels(tags):
-    return "、".join(f"「{sanitize_untrusted(tag['name'], 40)}」" for tag in tags) or "无标签"
-
-
-def change_summary(plan, intent=None):
-    before, after = plan["before"], plan["after"]
-    old = {(tag["level"], tag["id"]): tag for tag in before}
-    new = {(tag["level"], tag["id"]): tag for tag in after if tag["id"] is not None}
-    added = [tag for tag in after if tag["id"] is None or (tag["level"], tag["id"]) not in old]
-    removed = [tag for tag in before if (tag["level"], tag["id"]) not in new]
-    lines = [f"文章：《{sanitize_untrusted(plan['title'], 255)}》"]
-    if added:
-        lines.append("添加标签：" + labels(added))
-    if removed:
-        lines.append("移除标签：" + labels(removed))
-    created = [tag for tag in added if tag["id"] is None]
-    for level, label in ((1, "一级"), (2, "二级")):
-        selected = [tag for tag in created if tag["level"] == level]
-        if selected:
-            lines.append(f"将新建{label}标签：" + labels(selected))
-    if intent and any(tag["level"] == 2 for tag in added) and intent.get("parent_tag"):
-        lines.append("所属一级标签：" + sanitize_untrusted(intent["parent_tag"], 40))
-    if intent and intent.get("color") and created:
-        lines.append("新标签颜色：" + intent["color"])
-    return "\n".join(lines)
-
-
 @tool(return_direct=True)
 def prepare_article_tags(
-    article_id: targets.Identifier,
     config: RunnableConfig,
+    article_id: targets.Identifier | None = None,
+    article_ids: Annotated[list[targets.Identifier],
+                           Field(min_length=1, max_length=20)] | None = None,
     add: targets.Names | None = None,
     remove: targets.Names | None = None,
     replace: targets.Names | None = None,
@@ -54,7 +32,8 @@ def prepare_article_tags(
 ) -> object:
     """准备文章标签增删或整体替换确认，不写入。add/remove填写用户要操作的标签名列表。
 
-    输入用户给定的文章编号和标签名，本工具核实文章、已有标签及缺失标签的创建计划。
+    单篇传article_id，同类整批传article_ids，二者选一；最多20篇，整批只确认一次。
+    输入用户给定的编号和标签名，本工具整批核实版本、范围及新建计划，无需逐篇查接口。
     每次合计至多10个标签名。未指定的标签保留；仅明确整体替换时传replace，[]表示清空。
     同名不唯一时用level或parent_tag区分。新增缺失标签在确认后与挂载同一事务完成；
     默认建一级，建二级需已有父标签名。color仅用于新建，格式#RRGGBB；不传使用应用默认。
@@ -75,6 +54,10 @@ def prepare_article_tags(
         )
     except (ValueError, TypeError) as exc:
         return invalid_args(str(exc))
+    if (article_id is None) == (article_ids is None):
+        return invalid_args("请选择单篇编号或一组文章编号，不能混用。")
+    if article_ids is not None:
+        return batch.prepare(article_ids, request, config)
     current = targets.prepare(article_id, request, config)
     if isinstance(current, base.ToolResult):
         return current
