@@ -311,6 +311,7 @@
       revision++; currentAsk = null; restoring = null; owners.clear();
       clearTimeout(askTimer); askTimer = null;
     });
-    return { reportConfirm, reportAskStage, saveAsk, dropAsk, askSettle, askExpire, askRollback, askUnknown, hideAsk, revealAskOther, setAskQuestion, syncAsk, restoreAsk, receive };
+    return { reportConfirm, reportAskStage, saveAsk, dropAsk, askSettle, askExpire, askRollback, askUnknown, hideAsk, revealAskOther, setAskQuestion, syncAsk, restoreAsk, receive,
+      invalidate: () => { revision++; } };
   };
 })(typeof window !== 'undefined' ? window : globalThis);
