@@ -5,15 +5,15 @@ import time
 from pydantic import BaseModel, ConfigDict, Field, StrictStr
 
 from agent import authz
-from agent.domains.article_tags import targets
-from agent.domains.article_tags.preparation import change_summary
+from agent.domains.article_tags import batch, targets
+from agent.domains.article_tags.presentation import change_summary
 from agent.runtime import writes
 from agent.runtime.turns import check_cancelled
 from tools import base
 from tools.result import fact, ok, tgt
 
 OPERATION = "set_article_tags"
-PERMISSION_OPERATIONS = frozenset({OPERATION})
+PERMISSION_OPERATIONS = frozenset({OPERATION, batch.NAME})
 
 
 class Arguments(BaseModel):
@@ -37,8 +37,12 @@ def validate(grant, config):
     if not handles(grant) or not isinstance(specs, list) or len(specs) != 1:
         raise ValueError("确认凭据不是单项文章标签操作")
     spec = specs[0]
-    if not isinstance(spec, dict) or spec.get("tool") != OPERATION:
+    if not isinstance(spec, dict) or spec.get("tool") not in (OPERATION, batch.NAME):
         raise ValueError("文章标签工具不匹配")
+    if spec["tool"] == batch.NAME:
+        if not authz.check(principal, OPERATION).allowed:
+            raise ValueError("当前身份无权修改文章标签")
+        return batch.NAME, batch.validate(spec.get("args"))
     args = Arguments.model_validate(spec.get("args")).model_dump()
     targets.intent(args["intent"])
     if not authz.check(principal, OPERATION).allowed:
@@ -92,6 +96,8 @@ class Operation:
 
 
 def _receipt(grant, name, args, result):
+    if name == batch.NAME:
+        return batch.receipt(name, args, result)
     meta = getattr(result, "meta", {}) or {}
     if (
         not isinstance(result, base.ToolResult)
@@ -133,6 +139,7 @@ def execute(grant, config, saver, *, tools=None, ledger=None):
         saver,
         validate=validate,
         receipt=_receipt,
-        tool_factory=lambda name: {name: Operation()} if tools is None else tools,
+        tool_factory=lambda name: {name: batch.Operation() if name == batch.NAME else Operation()}
+        if tools is None else tools,
         ledger=ledger,
     )
