@@ -27,6 +27,9 @@ class TaskInputs:
     def __init__(self, storage):
         self.storage = storage
 
+    def delete_task(self, task_id):
+        self.storage.delete_task(task_id)
+
     def delete_conversation(self, conversation_id):
         self.storage.delete_conversation(conversation_id)
 

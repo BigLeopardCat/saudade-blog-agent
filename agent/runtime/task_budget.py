@@ -6,10 +6,11 @@ import threading
 def setup(conn):
     conn.execute("""CREATE TABLE IF NOT EXISTS agent_task_usage (
         task_id TEXT PRIMARY KEY,
-        conversation_id BIGINT NOT NULL,
+        conversation_id BIGINT,
         scope JSONB NOT NULL,
         spent JSONB NOT NULL
     )""")
+    conn.execute("ALTER TABLE agent_task_usage ALTER COLUMN conversation_id DROP NOT NULL")
     conn.execute("CREATE INDEX IF NOT EXISTS agent_task_usage_conversation "
                  "ON agent_task_usage(conversation_id)")
 
@@ -25,7 +26,7 @@ class PostgresUsage:
             if create:
                 conn.execute("INSERT INTO agent_task_usage VALUES (%s,%s,%s,%s) "
                              "ON CONFLICT DO NOTHING",
-                             (task["id"], task["scope"]["conversation_id"],
+                             (task["id"], task["scope"].get("conversation_id"),
                               Jsonb(task["scope"]), Jsonb({})))
             row = conn.execute("SELECT scope, spent FROM agent_task_usage WHERE task_id=%s",
                                (task["id"],)).fetchone()
@@ -43,6 +44,10 @@ class PostgresUsage:
                 "WHERE task_id=%s AND scope=%s", (Jsonb(spent), task["id"], Jsonb(task["scope"])))
             if changed.rowcount != 1:
                 raise ValueError("task_usage_scope_mismatch")
+
+    def delete_task(self, task_id):
+        with self.pool.connection() as conn:
+            conn.execute("DELETE FROM agent_task_usage WHERE task_id=%s", (task_id,))
 
     def delete_conversation(self, conversation_id):
         with self.pool.connection() as conn:
@@ -72,10 +77,14 @@ class MemoryUsage:
                 raise ValueError("task_usage_scope_mismatch")
             self.rows[task["id"]] = (scope, dict(spent))
 
+    def delete_task(self, task_id):
+        with self.lock:
+            self.rows.pop(task_id, None)
+
     def delete_conversation(self, conversation_id):
         with self.lock:
             self.rows = {key: row for key, row in self.rows.items()
-                         if row[0]["conversation_id"] != int(conversation_id)}
+                         if row[0].get("conversation_id") != int(conversation_id)}
 
 
 def for_saver(saver):

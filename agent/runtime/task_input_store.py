@@ -20,6 +20,10 @@ class PostgresInputs:
     def __init__(self, pool):
         self.pool = pool
 
+    def delete_task(self, task_id):
+        with self.pool.connection() as conn:
+            conn.execute("DELETE FROM agent_task_inputs WHERE task_id=%s", (task_id,))
+
     def delete_conversation(self, conversation_id):
         with self.pool.connection() as conn:
             conn.execute("DELETE FROM agent_task_inputs "
@@ -50,10 +54,14 @@ class MemoryInputs:
     def __init__(self):
         self.rows, self.lock = {}, threading.Lock()
 
+    def delete_task(self, task_id):
+        with self.lock:
+            self.rows.pop(task_id, None)
+
     def delete_conversation(self, conversation_id):
         with self.lock:
             self.rows = {key: value for key, value in self.rows.items()
-                         if str(value["scope"]["conversation_id"]) != str(conversation_id)}
+                         if str(value["scope"].get("conversation_id")) != str(conversation_id)}
 
     @contextmanager
     def edit(self, task_id, initial=None):
