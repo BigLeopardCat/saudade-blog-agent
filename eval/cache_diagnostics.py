@@ -27,9 +27,12 @@ def compare(previous, current):
     changed_keys = (sorted(key for key in old_controls.keys() | new_controls.keys()
                            if old_controls.get(key) != new_controls.get(key))
                     if old_controls is not None and new_controls is not None else None)
-    changed_controls = any(previous.get(key) != current.get(key) for key in
-                           ("model", "endpoint", "session", "controls", "tool_choice",
-                            "thinking", "reasoning_effort"))
+    # The complete control hash is authoritative; newly exposed summary fields
+    # must not make unchanged older SDK payloads look like generation changes.
+    keys = ["model", "endpoint", "session", "controls"]
+    if previous.get("controls") is None or current.get("controls") is None:
+        keys.extend(("tool_choice", "thinking", "reasoning_effort"))
+    changed_controls = any(previous.get(key) != current.get(key) for key in keys)
     tools_changed = previous.get("tools") != current.get("tools")
     tools_before, tools_after = (previous.get("tool_fingerprints"),
                                  current.get("tool_fingerprints"))

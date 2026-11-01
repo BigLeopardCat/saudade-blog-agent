@@ -68,3 +68,16 @@ def test_transport_deadline_and_header_changes_are_not_generation_changes(monkey
     assert events[0]["controls"] == events[1]["controls"]
     assert set(events[0]["control_fingerprints"]) == {"temperature"}
     assert "secret" not in json.dumps(events)
+
+
+def test_thinking_summary_reads_the_same_sdk_extra_body_as_the_request(monkeypatch):
+    events = []
+    monkeypatch.setattr(request_trace, "record", lambda *args, **data: events.append(data))
+    for enabled in (True, False):
+        mode = {"type": "enabled" if enabled else "disabled"}
+        model = DeepSeekChat(api_key="private-credential", model="deepseek-v4.1-flash",
+                            extra_body={"thinking": mode})
+        payload = model._get_request_payload("hello")
+        assert events[-1]["thinking"] == payload["extra_body"]["thinking"] == mode
+    assert events[0]["controls"] != events[1]["controls"]
+    assert "private-credential" not in json.dumps(events)
