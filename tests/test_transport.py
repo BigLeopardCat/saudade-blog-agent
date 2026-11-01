@@ -40,7 +40,8 @@ def test_terminal_only_confirmation_is_emitted_once_with_receipt_command():
     assert pending == []
     popup = [json.loads(str(event).split(":", 1)[1]) for event in events
              if str(event).startswith("__CONFIRM__:")][0]
-    assert set(popup) == {"id", "q", "opts", "token", "exp", "replay_safe"}
+    assert set(popup) == {"id", "q", "opts", "token", "exp", "replay_safe", "server_time"}
+    assert isinstance(popup["server_time"], int)
     assert popup["q"] == ""
 
 
