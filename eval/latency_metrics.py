@@ -25,10 +25,10 @@ def model_calls(events):
             continue
         if kind == "llm_start":
             phase = "summary" if node == "summarizer" else event.get("phase")
-            rows.append({"node": node, "round": event.get("round"),
-                         "phase": phase if isinstance(phase, str) and phase else "unknown",
-                         "status": "unfinished", "total_s": None, "first_token_s": None,
-                         "remaining_s": None})
+            rows.append(dict(node=node, round=event.get("round"),
+                             phase=phase if isinstance(phase, str) and phase else "unknown",
+                             status="unfinished", total_s=None, first_token_s=None,
+                             remaining_s=None))
             continue
         row = next((row for row in reversed(rows) if row["status"] == "unfinished"
                     and row["node"] == node and row["round"] == event.get("round")), None)
@@ -81,3 +81,7 @@ def aggregate(calls):
                     **{field: distribution([row[field] for row in rows])
                        for field in ("total_s", "first_token_s", "remaining_s")}}
             for phase, rows in sorted(phases.items())}
+
+
+def request_phases(rows):
+    return aggregate(call for row in rows for call in row["model_latency"])

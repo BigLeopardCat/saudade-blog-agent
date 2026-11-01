@@ -122,8 +122,7 @@ def collect(paths):
                        "requests": len(rows), "with_reply": sum(r["has_reply"] for r in rows),
                        "end_reasons": dict(Counter(r["end_reason"] for r in rows)),
                        "started_calls": sum(r["started_calls"] for r in rows),
-                       "model_phases": latency_metrics.aggregate(
-                           [call for row in rows for call in row["model_latency"]]),
+                       "model_phases": latency_metrics.request_phases(rows),
                        **_discovery_totals(rows),
                        "errored_calls": sum(r["errored_calls"] for r in rows),
                        "handoff_reasons": dict(Counter(reason for r in rows

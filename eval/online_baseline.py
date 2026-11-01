@@ -32,6 +32,15 @@ POC_IDS = ("chat_user", "nav_board", "article_discovery", "own_unread",
            "memory_history_recall", "favorite_prepare")
 
 
+def fixture_articles(case):
+    fixtures = case.get("requires_public_articles", [])
+    if ("requires_public_article" in case or not isinstance(fixtures, list)
+            or any(type(value) is not int or value <= 0 for value in fixtures)
+            or len(set(fixtures)) != len(fixtures)):
+        raise ValueError(f"invalid public article fixture: {case['id']}")
+    return fixtures
+
+
 def load_suite(path=SUITE):
     cases = [json.loads(line) for line in Path(path).read_text().splitlines() if line.strip()]
     ids = [c["id"] for c in cases]
@@ -48,9 +57,7 @@ def load_suite(path=SUITE):
                 raise ValueError(f"invalid first-action annotation: {case['id']}")
         if "_draft" in case or "draft" in case.get("tags", []):
             raise ValueError(f"unreviewed draft cannot run as a baseline: {case['id']}")
-        fixture = case.get("requires_public_article")
-        if fixture is not None and (type(fixture) is not int or fixture <= 0):
-            raise ValueError(f"invalid public article fixture: {case['id']}")
+        fixture_articles(case)
         if case["identity"] not in {"admin", "user", "zako"}:
             raise ValueError(f"unknown identity in {case['id']}")
         for rnd in golden.iter_rounds(case):
@@ -164,8 +171,8 @@ def run(cases, transport, identities, report_dir, *, phase, suite_hash, include_
         try:
             key = case["identity"]
             with transport.conversation(identities[key], role_sets[key]):
-                if case.get("requires_public_article") is not None:
-                    transport.check_public_article_fixture(case["requires_public_article"])
+                for identifier in fixture_articles(case):
+                    transport.check_public_article_fixture(identifier)
                 if case.get("requires_quota_usage"):
                     transport.check_quota_fixture(case["requires_quota_usage"])
                 if case.get("requires_category_creation"):
