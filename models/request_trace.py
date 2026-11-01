@@ -15,6 +15,8 @@ def fingerprint(value, *, sort_keys=False):
 def record_layout(payload, *, endpoint=None):
     messages = payload.get("messages") or []
     tools = payload.get("tools") or []
+    # The OpenAI SDK merges extra_body into the JSON request, overriding base fields.
+    extra = payload.get("extra_body") or {}
     # SDK transport options are not generation parameters or prompt content.
     controls = {key: fingerprint(value, sort_keys=True) for key, value in payload.items()
                 if key not in ("model", "messages", "tools", "timeout", "extra_headers")}
@@ -27,6 +29,7 @@ def record_layout(payload, *, endpoint=None):
            messages=[fingerprint(message) for message in messages],
            message_chars=[len(json.dumps(message, ensure_ascii=False)) for message in messages],
            roles=[message.get("role") for message in messages],
-           tool_choice=payload.get("tool_choice"),
-           thinking=payload.get("thinking"), reasoning_effort=payload.get("reasoning_effort"),
+           tool_choice=extra.get("tool_choice", payload.get("tool_choice")),
+           thinking=extra.get("thinking", payload.get("thinking")),
+           reasoning_effort=extra.get("reasoning_effort", payload.get("reasoning_effort")),
            session=fingerprint(current_session()) if current_session() else None)

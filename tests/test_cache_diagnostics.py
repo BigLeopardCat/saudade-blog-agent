@@ -63,3 +63,11 @@ def test_changed_generation_parameter_is_identified_without_exposing_its_value()
     before = {"control_fingerprints": {"max_tokens": "a"}, "controls": "a"}
     after = {"control_fingerprints": {"max_tokens": "b", "seed": "c"}, "controls": "b"}
     assert compare(before, after)["changed_control_keys"] == ["max_tokens", "seed"]
+
+
+def test_more_complete_thinking_summary_does_not_change_the_frozen_control_hash():
+    before = {"messages": ["a"], "controls": "same", "thinking": None}
+    after = {**before, "thinking": {"type": "disabled"}}
+    assert compare(before, after)["change"] == "same_payload"
+    after["controls"] = "different"
+    assert compare(before, after)["change"] == "controls_changed"

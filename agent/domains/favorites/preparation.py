@@ -84,6 +84,8 @@ def prepare_favorite_change(
     target = _target(article_id, favorite)
     if isinstance(target, base.ToolResult):
         return target
+    observed("articles", {"article_id": article_id, "title": target["noteTitle"]},
+             ("article_id", "title"))
     check_cancelled(config)
     return _confirmation(principal, cid, f"favorite_{action}", spec, target)
 
