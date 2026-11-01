@@ -77,7 +77,8 @@ def snapshot(folder, cases):
     sources.mkdir()
     hashes = {}
     for name in ("run_golden.py", "online_baseline.py", "online_transport.py",
-                 "native_assertions.py", "request_metrics.py", "task_metrics.py", "usage.py",
+                 "native_assertions.py", "request_metrics.py", "latency_metrics.py",
+                 "task_metrics.py", "usage.py",
                  "release_readiness.py", "release_profile.json", "statistical_metrics.py",
                  "action_metrics.py", "dataset_audit.py"):
         body = (ROOT / "eval" / name).read_bytes()

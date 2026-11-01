@@ -4,7 +4,7 @@ import math
 from collections import Counter, defaultdict
 from statistics import median, quantiles
 
-from eval import action_metrics, usage
+from eval import action_metrics, latency_metrics, usage
 from utils.trace_io import load_trace
 
 
@@ -71,6 +71,8 @@ def summary(doc):
             "first_visible_event_s": _event_duration(events, "first_visible_event"),
             "first_reply_s": _event_duration(events, "first_reply"),
             "has_reply": isinstance(doc.get("reply"), str) and bool(doc["reply"].strip()),
+            "model_latency": latency_metrics.model_calls(events),
+            "tool_latency": latency_metrics.tool_calls(events),
             "end_reason": _label(doc.get("end_reason")),
             "started_calls": sum(e.get("event") == "llm_start" for e in events),
             "errored_calls": sum(e.get("event") == "llm_error" for e in events),
@@ -120,6 +122,8 @@ def collect(paths):
                        "requests": len(rows), "with_reply": sum(r["has_reply"] for r in rows),
                        "end_reasons": dict(Counter(r["end_reason"] for r in rows)),
                        "started_calls": sum(r["started_calls"] for r in rows),
+                       "model_phases": latency_metrics.aggregate(
+                           [call for row in rows for call in row["model_latency"]]),
                        **_discovery_totals(rows),
                        "errored_calls": sum(r["errored_calls"] for r in rows),
                        "handoff_reasons": dict(Counter(reason for r in rows
