@@ -22,7 +22,7 @@ def deployment(tmp_path):
     commands.mkdir()
     (source / "scripts").mkdir()
     (source / "agent").mkdir()
-    for name in ("serve.sh", "deploy_release.sh"):
+    for name in ("serve.sh", "serve_scheduler.sh", "deploy_release.sh"):
         shutil.copy(ROOT / "scripts" / name, source / "scripts" / name)
     (source / "agent" / "__init__.py").touch()
     (source / "agent" / "main.py").write_text(
@@ -100,3 +100,11 @@ def test_unknown_revision_cannot_change_current_release(deployment):
     previous = (releases / "current").resolve()
     assert publish(deployment, "unknown-revision").returncode != 0
     assert (releases / "current").resolve() == previous
+
+
+def test_scheduler_enabled_release_restarts_both_services(deployment):
+    _, _, _, releases, _ = deployment
+    result = publish(deployment, DEPLOY_SCHEDULER="1")
+    assert result.returncode == 0, result.stderr
+    # Scheduler restart, HTTP restart and scheduler liveness all target the pinned release.
+    assert len((releases/"restarts").read_text().splitlines()) == 3

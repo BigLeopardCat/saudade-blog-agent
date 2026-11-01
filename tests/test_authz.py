@@ -3,7 +3,7 @@
 import pytest
 
 from agent import authz
-from agent.domains.registry import operation_names
+from agent.domains.registry import bound_tool_names, operation_names
 from agent.principal import (
     KNOWN_ROLES,
     ROLE_ADMIN,
@@ -20,7 +20,7 @@ def principal(role):
 
 
 def test_manifest_is_complete_closed_and_uses_declared_scopes():
-    names = [tool.name for tool in get_all_tools()] + sorted(operation_names())
+    names = [tool.name for tool in get_all_tools()] + sorted(operation_names() | bound_tool_names())
     assert not authz.manifest_gaps(names)
     assert not authz.manifest_stale(names)
     assert set(authz.TOOL_SCOPE.values()) <= authz.ALL_SCOPES

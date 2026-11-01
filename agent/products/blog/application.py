@@ -26,8 +26,9 @@ class BlogApplication:
     expired = staticmethod(expired)
     history_access = staticmethod(tool_access)
 
-    def __init__(self, catalog=None):
+    def __init__(self, catalog=None, *, scheduling=None):
         self.catalog = catalog if catalog is not None else ToolCatalog()
+        self.scheduling = scheduling
 
     def prompt(self, messages, principal):
         return build_prompt(messages, principal, own_reads_enabled(principal))
@@ -39,15 +40,24 @@ class BlogApplication:
         can_prepare = available
         tools = self.catalog.initial_tools(own_reads_enabled(principal))
         domains = self.catalog.domains(config, can_prepare)
+        if self.scheduling:
+            from agent.domains.admin_writes import available as admin_available
+            from agent.domains.automations.preparation import tools as scheduling_tools
+            if admin_available(config):
+                domains["admin_automations"] = scheduling_tools(self.scheduling, can_prepare)
         visible = memory.history(snapshot.messages, principal, tool_access=self.history_access)
         images = conversation_images.tools(visible, config)
         if images:
             domains = {**domains, "conversation_images": images}
         return initial_tools(tools, domains), domains
 
-    @staticmethod
-    def confirmation(grant):
+    def confirmation(self, grant):
         domain = confirmed_domain(grant)
         if domain is None or native_domain(grant) is not domain:
             raise ValueError("这张确认卡不支持当前执行入口，请重新发起操作；本次未执行。")
+        if grant.get("executor") == "automations":
+            from agent.domains.automations.transactions import BoundDomain
+            if self.scheduling is None:
+                raise ValueError("scheduling is disabled")
+            return BoundDomain(self.scheduling)
         return domain

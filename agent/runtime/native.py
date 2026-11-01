@@ -291,10 +291,11 @@ def build(*, resources: ExitStack) -> NativeRuntime:
     from agent import checkpoint
     from agent.products.blog.application import BlogApplication
     from agent.runtime.native_store import NativeConversationStore
+    from agent.scheduling.factory import build as build_scheduling
 
     return NativeRuntime(
         NativeConversationStore(checkpoint.build_checkpointer(resources=resources)),
-        application=BlogApplication(),
+        application=BlogApplication(scheduling=build_scheduling(resources)),
         model_io=resources.enter_context(ModelIO()),
     )
 
