@@ -255,6 +255,23 @@ def test_suite_establishes_real_memory_and_never_approves_business_writes():
     assert by_id["nav_zako"]["user_input"] == by_id["nav_board"]["user_input"]
 
 
+@pytest.mark.parametrize("value", [[0], [True], [19, 19], 19])
+def test_fixture_article_lists_reject_invalid_or_duplicate_preconditions(value):
+    with pytest.raises(ValueError, match="public article fixture"):
+        online_baseline.fixture_articles({"id": "fixture", "requires_public_articles": value})
+
+
+def test_multiple_article_premises_are_complete_and_the_negative_target_is_not_rewritten():
+    cases = {case["id"]: case for case in online_baseline.load_suite()}
+    assert online_baseline.fixture_articles(cases["article_compare"]) == [22, 23]
+    assert online_baseline.fixture_articles(cases["pending_cancel"]) == [62]
+    assert online_baseline.fixture_articles(cases["tags_unknown_article"]) == []
+    assert "999999" in cases["tags_unknown_article"]["user_input"]
+    assert "文章62" in cases["pending_cancel"]["rounds"][0]["user_input"]
+    with pytest.raises(ValueError, match="public article fixture"):
+        online_baseline.fixture_articles({"id": "old", "requires_public_article": 19})
+
+
 def test_legacy_inventory_has_no_silently_discarded_case():
     folder = online_baseline.SUITE.parent
     manifest = json.loads((folder / "native_migration.json").read_text())

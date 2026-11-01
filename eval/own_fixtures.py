@@ -14,27 +14,27 @@ SECRET = secrets.token_urlsafe(32)
 
 
 @contextmanager
-def favorite_backend():
+def favorite_backend(article_id=19):
     state = {"favorites": [], "requests": [], "unavailable": False,
-             "article": {"noteKey": 19, "noteTitle": "真实文章标题", "status": 1}}
+             "article": {"noteKey": article_id, "noteTitle": "真实文章标题", "status": 1}}
 
     def handle(request):
         state["requests"].append(request)
         if state["unavailable"]:
             return httpx.Response(503)
-        if request.url.path.endswith("/notes/19"):
+        if request.url.path.endswith(f"/notes/{article_id}"):
             data = state["article"]
         elif request.url.path.endswith("/notes/search"):
             keyword = json.loads(request.content).get("keyword", "")
-            data = ([{"noteId": 19, "noteTitle": "真实文章标题", "status": 1}]
+            data = ([{"noteId": article_id, "noteTitle": "真实文章标题", "status": 1}]
                     if "真实" in keyword else [])
         elif request.url.path.endswith("/protected/favorites"):
             assert request.headers.get("Authorization", "").startswith("Bearer ")
             if request.method == "POST":
-                assert json.loads(request.content) == {"noteId": 19}
-                state["favorites"] = [{"noteId": 19, "title": "真实文章标题"}]
+                assert json.loads(request.content) == {"noteId": article_id}
+                state["favorites"] = [{"noteId": article_id, "title": "真实文章标题"}]
             data = list(state["favorites"])
-        elif request.method == "DELETE" and request.url.path.endswith("/favorites/19"):
+        elif request.method == "DELETE" and request.url.path.endswith(f"/favorites/{article_id}"):
             state["favorites"] = []
             data = None
         else:

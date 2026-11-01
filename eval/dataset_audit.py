@@ -8,18 +8,25 @@ from pathlib import Path
 
 def audit(cases):
     inputs = defaultdict(list)
-    total_rounds, annotated = 0, 0
+    total_rounds, annotated, text_rounds, text_annotated = 0, 0, 0, 0
     for case in cases:
         rounds = case.get("rounds") or [case]
         total_rounds += len(rounds)
         labels = case.get("decision_expectations")
-        annotated += (sum(label is not None for label in labels) if labels
-                      else bool(case.get("first_action")))
+        decisions = (sum(label is not None for label in labels) if labels
+                     else bool(case.get("first_action")))
+        annotated += decisions
+        if "vision" not in case.get("tags", []):
+            text_rounds += len(rounds)
+            text_annotated += decisions
         body = {"identity": case["identity"], "context": case.get("context"),
                 "turns": [{key: rnd.get(key) for key in ("user_input", "context", "image")}
                           for rnd in rounds]}
         inputs[json.dumps(body, ensure_ascii=False, sort_keys=True)].append(case["id"])
     return {"cases": len(cases), "rounds": total_rounds, "annotated_decisions": annotated,
+            "text_rounds": text_rounds, "unannotated_text_decisions": text_rounds - text_annotated,
+            "missing_source_groups": [case["id"] for case in cases
+                                      if not case.get("source_group")],
             "separate_vision_cases": [case["id"] for case in cases
                                       if "vision" in case.get("tags", [])],
             "unannotated_decisions": total_rounds - annotated,

@@ -23,6 +23,7 @@ from agent.runtime import writes
 from agent.runtime.control import RequestControl, request_scope
 from agent.runtime.native import NativeRuntime
 from agent.runtime.native_store import NativeConversationStore
+from config.settings import settings
 from eval import (
     account_candidate_contracts,
     admin_task_contracts,
@@ -216,6 +217,8 @@ def _sample(name, backend, contract, run_id, sample):
                                  principal, {"run": run_id,
                                              "case": f"native_{name}_{sample}_{len(rounds)}"},
                                  thread="conv_42", confirm_token=token or "")
+            evidence = load_trace(result["trace"]) if result.get("trace") else None
+            result["native_events"] = evidence["events"] if evidence else None
             # Persist observable outcomes, never signed confirmation credentials.
             rounds.append({"user_input": message, "text": result["text"],
                            "commands": result["commands"],
@@ -282,6 +285,9 @@ def run(case_names=None, repeat=1, *, fail_fast=False):
                "passed": sum(row["passed"] for row in results if row["case"] == name)}
               for name, _, _ in CASES if name in selected]
     return {"trace_run": run_id, "business_api": "synthetic", "checkpoint": "memory",
+            "model_config": {"provider": settings.llm_provider,
+                             "model": settings.active_llm_model,
+                             "reasoning_effort": settings.agent_reasoning_effort},
             "navigation_retrieval": "synthetic_lexical",
             "ledger": "temporary_sqlite", "repeat": repeat,
             "planned_samples": len(selected) * repeat,

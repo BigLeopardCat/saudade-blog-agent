@@ -49,7 +49,7 @@ def test_invalid_fixture_identifiers_are_rejected_before_http(tmp_path, article_
 def test_favorite_poc_target_and_expected_action_agree_with_the_preflight():
     case = next(case for case in load_suite() if case["id"] == "favorite_prepare")
     assert case["id"] in POC_IDS
-    assert case["requires_public_article"] == 23
+    assert case["requires_public_articles"] == [23]
     assert case["context"]["current_url"] == "/article/23"
     expected = case["gold"]["require_prepared_or_noop"][0]
     assert expected["spec"]["args"]["article_id"] == expected["facts"]["article_id"] == 23
