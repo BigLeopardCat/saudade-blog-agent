@@ -5,8 +5,9 @@ from agent.domains.account_actions.targets import Role
 from agent.domains.notices.targets import DEFAULT_TITLE
 
 DOMAIN_DESCRIPTIONS = {
-    "task_planning": "Optional task checklist for multiple deliverables or work continuing after "
-                     "approval. Skip for simple questions and chat. No business effects.",
+    "task_planning": "Agent-private execution checklist for multi-step work. "
+                     "Not user to-dos or reminders; those use admin_work_queue. "
+                     "Skip simple requests and chat. No business effects.",
     # Discovery identifies a domain; argument and execution contracts live on its tools.
     "public_activity": "分页读取公开公告、河灯留言和说说；含公开留名，不含发表账号或待审记录。",
     "utilities": "查询当前时间或城市天气估算。",
@@ -30,7 +31,9 @@ DOMAIN_DESCRIPTIONS = {
     "admin_announcements": "准备站内公告发布、修改、删除确认。仅管理员。",
     "admin_categories": "查询文章分类，按编号或完整名称准备新建、修改、删除确认。仅管理员。",
     "admin_work_queue": "查询额度重置申请、本人后台待办和日程；"
-                        "准备待办变更、额度审批或重置确认。仅管理员。",
+                        "准备待办变更、额度审批或重置确认。仅管理员。"
+                        " User-requested to-dos and reminders are business records here, "
+                        "separate from the agent's private execution checklist.",
     "admin_moderation": "查询河灯留言、文章评论及审核状态，含匿名留言的真实发表账号；"
                         "准备审核或删除确认。仅管理员。",
     "admin_reports": "Read server health, user statistics and article traffic reports. Admin only.",
