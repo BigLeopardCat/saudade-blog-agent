@@ -339,7 +339,11 @@ def _arm_text(name: str, a: dict, m: dict, preview: bool):
             head = f"{head}（{who} 的评论）"
         return f"{head}：{change}" if change else head
 
-    # ── 文章状态 / 标签 ─────────────────────────────────────────────────
+    # Article state and tag operations share the same display boundary.
+    if name == "set_article_status_batch":
+        return "整批修改文章状态"
+    if name == "set_article_tags_batch":
+        return "整批修改文章标签"
     if name == "set_article_status":
         if preview:
             aid = _leaf(a.get("article_id"))
@@ -349,12 +353,9 @@ def _arm_text(name: str, a: dict, m: dict, preview: bool):
             head = f"修改文章 {aid}" if aid else "修改文章状态"
             bits = [b for b in bits if b]
             return f"{head}：{'、'.join(bits)}" if bits else head
-        # 台账行：变更前后取回执顶层 meta（before/after 是工具读回的真状态，比实参
-        # 可靠——实参说"设为私密"、工具可能读到"本来就是私密"）。
+        # Completion uses verified result metadata rather than proposed arguments.
         aid = _m(m, "article_id") or _raw(a.get("article_id"))
         head = f"修改文章 {aid}" if aid else "修改文章状态"
-        # 回执里 before/after 都缺时**不给空冒号**（Rust 那张老表是无条件拼接 ⇒
-        # 会渲染成「修改文章 ：」；收敛时按"空书名号一律不给"的同一条纪律收口）
         act = _arrow(m)
         return f"{head}：{act}" if act else head
     if name == "set_article_tags":
@@ -372,8 +373,6 @@ def _arm_text(name: str, a: dict, m: dict, preview: bool):
                 acts.append("去掉 " + _names_phrase(a.get("remove")))
             return f"{head}：{'、'.join(acts)}" if acts else head
         aid = _m(m, "article_id") or _raw(a.get("article_id"))
-        # 与过程行同字（Rust 那张老表写的是「修改文章 12 标签：」，少一个「的」——
-        # 台账侧的字允许收敛，同一件事在两处必须长得一样）
         head = f"修改文章 {aid} 的标签" if aid else "修改文章标签"
         act = _arrow(m)
         return f"{head}：{act}" if act else head

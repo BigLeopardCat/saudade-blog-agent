@@ -86,7 +86,9 @@ flowchart LR
 │   ├── domains/article_actions/transactions.py          # 当前生产代码模块
 │   ├── domains/article_metadata.py                      # 当前生产代码模块
 │   ├── domains/article_tags/__init__.py                 # 当前生产代码模块
+│   ├── domains/article_tags/batch.py                    # 明确文章集合的准备、事务调用与逐项回执
 │   ├── domains/article_tags/preparation.py              # 当前生产代码模块
+│   ├── domains/article_tags/presentation.py             # 标签变更的人类可读预览
 │   ├── domains/article_tags/targets.py                  # 当前生产代码模块
 │   ├── domains/article_tags/transactions.py             # 当前生产代码模块
 │   ├── domains/browser.py                               # 当前生产代码模块
