@@ -159,7 +159,7 @@ def plan(value, request, *, committed=False):
 
 
 def prepare(request, config):
-    result = base._admin_request("POST", PATH + "/prepare", request, config)
+    result = base._admin_read_post(PATH + "/prepare", request, config)
     if isinstance(result, base.ToolResult):
         return result
     try:

@@ -59,5 +59,20 @@ def notice_role_cancel(turn, state):
             and state["account"]["role"] == "user", "cancelled task still changed business state")
 
 
+def notice_done_cancel_role(turn, state):
+    token, _ = card(turn(REQUEST), "notices")
+    pending = turn("", token)
+    next_token, _ = card(pending, "account_actions")
+    require(state["writes"] == ["notice"], "first approval did not execute just the notice")
+    cancelled = turn("取消后面的身份修改，已发出的通知保留，不要再做其他事。")
+    require(not cancelled["confirm_tokens"], "cancellation created another approval")
+    turn("", next_token)
+    turn("", token)
+    require(state["writes"] == ["notice"] and state["account"]["role"] == "user"
+            and len(state["notices"]) == 1 and state["notices"][0]["content"] == BODY,
+            "cancelling remaining work changed the completed effect or executed the role")
+
+
 CASES = [("notice_then_role", backend, notice_then_role),
-         ("notice_role_cancel", backend, notice_role_cancel)]
+         ("notice_role_cancel", backend, notice_role_cancel),
+         ("notice_done_cancel_role", backend, notice_done_cancel_role)]

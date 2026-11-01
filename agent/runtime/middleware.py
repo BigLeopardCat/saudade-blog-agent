@@ -13,7 +13,7 @@ from langgraph.graph.message import REMOVE_ALL_MESSAGES
 from langgraph.types import Command
 
 from agent.llm_usage import usage_fields
-from agent.runtime import memory, trace_context
+from agent.runtime import approval_messages, memory, trace_context
 from agent.runtime.approval_response import finish as finish_approval_response
 from agent.runtime.budget import native_call
 from agent.runtime.control import AgentCancelled, model_options
@@ -160,20 +160,17 @@ class SessionMiddleware(AgentMiddleware):
         answered = {message.tool_call_id: message for message in messages[index + 1:]
                     if isinstance(message, ToolMessage)}
         awaiting = answered[session.state["awaiting_call"]]
-        visible = {"status": "executed", "result": facts["reply"], "receipts": [
-            {key: row[key] for key in ("tool", "args", "result", "action") if key in row}
-            for row in facts["execution"]["receipts"]]}
-        receipt = awaiting.model_copy(update={"content": json.dumps(visible, ensure_ascii=False),
-                                              "artifact": None})
-        deferred = [message for message in answered.values()
-                    if (message.artifact or {}).get("phase") == "deferred"]
+        receipt = approval_messages.receipt(awaiting, facts)
+        deferred, resolved = approval_messages.deferred_results(
+            answered, bool(facts["execution"].get("operation_outcome")))
         self.cached = {ident: message for ident, message in answered.items()
                        if message not in deferred}
         self.cached[session.state["awaiting_call"]] = receipt
         self.exchange = [*messages[:index + 1], *self.cached.values()]
         session.outcome, session.state["awaiting_call"] = None, None
         saved = {**capture(session), "resume": None,
-                 "messages": [receipt, *(RemoveMessage(id=m.id) for m in deferred)]}
+                 "messages": [receipt, *resolved,
+                              *(RemoveMessage(id=m.id) for m in deferred)]}
         if deferred:
             self.attachments = [message for message in messages[index + 1:]
                                 if not isinstance(message, ToolMessage)]

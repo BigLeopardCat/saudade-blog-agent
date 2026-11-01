@@ -40,6 +40,14 @@ def matches(approval, grant, config):
         return False
 
 
+def has_result(execution, specs):
+    outcome = execution.get("operation_outcome")
+    return bool(execution.get("receipts") or (
+        isinstance(outcome, dict) and outcome.get("status") == "unverified"
+        and isinstance(outcome.get("result"), str) and outcome["result"].strip()
+        and {"tool": outcome.get("tool"), "args": outcome.get("args")} in specs))
+
+
 def review(state, config, *, feedback=None):
     action, approval = state["pending_action"], state["approval"]
     if action["jti"] != approval["jti"] or approval["scope"] != binding(config):
@@ -63,7 +71,7 @@ def review(state, config, *, feedback=None):
         return {"pending_confirm": None, "pending_action": None, "approval": None,
                 "approved_result": {**facts, "execution": execution},
                 "messages": memory.checkpoint_messages(state.get("messages") or [], current)}
-    if not facts.get("execution", {}).get("receipts"):
+    if not has_result(facts.get("execution", {}), action["specs"]):
         raise ValueError("确认恢复需要当前操作的真实执行回执")
     result = TurnResult(facts["reply"], facts["execution"])
     principal = config["configurable"]["principal"]
@@ -71,7 +79,7 @@ def review(state, config, *, feedback=None):
                                    receipt_observations(result), result.reply, principal)
     return {"pending_confirm": None, "pending_action": None, "approval": None,
             "approved_result": facts,
-            "receipts": facts["execution"]["receipts"],
+            "receipts": [*state.get("receipts", []), *facts["execution"]["receipts"]],
             "messages": memory.checkpoint_messages(state.get("messages") or [], current)}
 
 

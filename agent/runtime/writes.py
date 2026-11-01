@@ -97,6 +97,12 @@ def execute_confirmed(grant, config, saver, *, validate, receipt, tool_factory, 
         reply = (str(result) if isinstance(result, ToolResult)
                  and (result.kind != "ok" or (result.meta or {}).get("reason"))
                  else "工具未提供有效回执，无法确认改动。")
-        return {"reply": reply, "receipts": [],
-                "blocked": [{"tool": name, "reason": "error_frame"}]}
+        failure = {"reply": reply, "receipts": [],
+                   "blocked": [{"tool": name, "reason": "error_frame"}]}
+        # A still-unresolved ledger claim cannot advance a task. A returned
+        # failure can be handed to the Agent for readback, without a success receipt.
+        if (getattr(result, "meta", {}) or {}).get("reason") != idem.REASON_OUTCOME_UNKNOWN:
+            failure["operation_outcome"] = {
+                "status": "unverified", "tool": name, "args": args, "result": reply}
+        return failure
     return {"reply": str(result), "receipts": [evidence], "blocked": []}
