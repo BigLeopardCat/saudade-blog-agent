@@ -87,6 +87,7 @@ class SessionMiddleware(AgentMiddleware):
         self._next = 0
         self.system_message = None
         self._failed = False
+        self._tool_failed = False
         self._paused = False
         self.cached = {}
         self._recovered = False
@@ -104,6 +105,7 @@ class SessionMiddleware(AgentMiddleware):
             self.cached = {m.tool_call_id: m for m in messages[index + 1:]
                            if isinstance(m, ToolMessage)
                            and (m.artifact or {}).get("phase") != "deferred"}
+            self._tool_failed = any(message.status == "error" for message in self.cached.values())
         self._recovered = True
 
     @hook_config(can_jump_to=["end", "tools"])
@@ -279,6 +281,7 @@ class SessionMiddleware(AgentMiddleware):
         self.calls, self.attachments = calls or [], []
         self._next = 0
         self.cached = {}
+        self._failed = self._paused = self._tool_failed = False
         session._round_index += 1
         if outcome is not None:
             session.outcome = outcome
@@ -352,18 +355,33 @@ class OrderedToolsMiddleware(AgentMiddleware):
                    and policy.calls[policy._next]["id"] != request.tool_call["id"]):
                 check_cancelled(policy.session.config)
                 policy._order.wait(0.05)
-            if policy._failed:
-                return ToolMessage(content="前序操作等待接续，本项尚未执行。" if policy._paused
-                                   else "前序调用失败，本项未执行。",
-                                   status="success" if policy._paused else "error",
-                                   artifact={"phase": "deferred"} if policy._paused else None,
-                                   tool_call_id=request.tool_call["id"])
+            tool = policy.session.tools.get(request.tool_call["name"])
+            blocked = policy._tool_failed and bool(getattr(tool, "return_direct", False))
+            if policy._failed or blocked:
+                message = ToolMessage(content="前序操作等待接续，本项尚未执行。" if policy._paused
+                                      else "前序调用失败，本项未执行。",
+                                      status="success" if policy._paused else "error",
+                                      artifact={"phase": "deferred"} if policy._paused else None,
+                                      name=request.tool_call["name"],
+                                      tool_call_id=request.tool_call["id"])
+                record("native", "tool_skipped", name=request.tool_call["name"],
+                       call_id=request.tool_call["id"],
+                       reason="awaiting_resume" if policy._paused else "prior_tool_failure")
+                if blocked and not policy._failed:
+                    policy._next += 1
+                    policy._order.notify_all()
+                if not policy._paused and request.tool_call["id"] == policy.calls[-1]["id"]:
+                    return Command(update={**capture(policy.session), "messages": [
+                        message, *stage(policy.attachments, policy.session.transient)]})
+                return message
             try:
                 result = handler(request)
                 messages = (result.update.get("messages", ())
                             if isinstance(result, Command) else [result])
                 for message in messages:
                     if isinstance(message, ToolMessage):
+                        if message.status == "error":
+                            policy._tool_failed = True
                         policy.cached[message.tool_call_id] = message
                         policy.exchange = [message if isinstance(old, ToolMessage)
                             and old.tool_call_id == message.tool_call_id else old

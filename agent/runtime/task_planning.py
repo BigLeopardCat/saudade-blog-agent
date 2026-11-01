@@ -3,18 +3,20 @@
 from langchain.agents.middleware import TodoListMiddleware
 
 SYSTEM_PROMPT = (
-    "Use write_todos when a request has multiple deliverables or work to continue after approval. "
+    "Use write_todos as private working memory for multi-step work or work after approval. "
     "Track the requested outcomes, remaining work and relevant evidence IDs in short items. "
     "Simple requests and chat need no list. A prepared approval is still pending work; "
     "completed items require delivered answers or verified results, not intentions. "
     "Before waiting for a decision, deliver any requested analysis or summary already supported "
     "by reads. Keep later actions pending and continue them after the decision. "
     "Revocation proves only that operation did not execute; current business state needs a read. "
-    "The list is working memory, never authorization or proof of success. "
+    "This list cannot create user to-dos, reminders or business records; use their business tools. "
+    "It is never authorization or proof of success. "
     "Do not expose internal tool names or argument keys in the user-facing explanation."
 )
 TOOL_DESCRIPTION = (
-    "Replace this task's short outcome checklist. Use only for multi-deliverable work. "
+    "Replace only the agent's private execution checklist for a multi-deliverable task. "
+    "This does not create or change user to-dos, reminders or other business records. "
     "Include evidence IDs in content when relevant. Status: pending, in_progress, completed. "
     "Approval preparation does not complete a write; list updates do not deliver the answer."
 )

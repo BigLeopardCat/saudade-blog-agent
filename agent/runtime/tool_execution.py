@@ -76,6 +76,8 @@ def append_result(session, request, handler, prompt, round_index, attachments):
     # the durable transcript. Preserve artifacts supplied by standard tools.
     message = message.model_copy(update={"artifact": {
         key: value for key, value in artifact.items() if key != "application_data"}})
+    if kind in {"invalid_args", "unavailable", "not_found"}:
+        message = message.model_copy(update={"status": "error"})
     messages = tool_messages(message, body, call["id"])
     prompt.append(messages[0].model_copy(update={"name": name, "artifact": {
         **(messages[0].artifact or {}), "kind": kind}}))
