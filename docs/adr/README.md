@@ -97,10 +97,9 @@
 | [0029](adr-0029-framework-task-state.md) | 任务状态由框架 checkpoint 持有，Session 使用节点工作视图 | 已采纳 |
 | [0030](adr-0030-task-tool-scope-and-resource-exit.md) | 工具按任务激活，资源耗尽直接报告受阻 | 已采纳 |
 | [0031](adr-0031-framework-turn-commit.md) | 持久任务在父图提交正文、历史与任务状态 | 已采纳 |
-
 | [0032](adr-0032-approval-feedback.md) | 审批反馈复用原任务并撤销旧预览 | 已采纳 |
-
 | [0033](adr-0033-task-outcome-tracking.md) | 按需任务清单与准备工具的暂停契约 | 已采纳 |
+| [0034](adr-0034-context-task-budgets.md) | 工作上下文、分段摘要与持久任务预算 | 已采纳 |
 
 ## 相关的、但不算 ADR 的文档
 
