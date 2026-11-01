@@ -26,8 +26,9 @@ not return the running permit until worker jobs actually finish.
 
 These timestamps measure the server emitting renderable progress, nonblank reply
 text, or a safe error. They do not measure browser paint or network latency.
-Internal control frames, command-only text and confirmation payloads (which the
-widget defers until stream completion) do not start the metric. Progress and
+Internal control frames, command-only text and confirmation payloads do not start
+the metric. The widget displays prepared cards on arrival and enables their
+controls after stream completion. Progress and
 whitespace alone do not suppress the empty-answer recovery message. Missing or
 invalid observations are not treated as zero; only producer observations count.
 Native model replies use the locked LangChain streaming iterator. Plain chat
