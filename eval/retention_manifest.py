@@ -132,7 +132,8 @@ CLASSES = [
         rule=None,
     ),
     dict(
-        key="agent-scheduling-store", cleanup_api="DBOSClient.delete_workflows", label="DBOS plans and execution results", store=STORE_PG,
+        key="agent-scheduling-store", cleanup_api="DBOSClient.delete_workflows",
+        label="DBOS plans and execution results", store=STORE_PG,
         status="managed", owner="agent/scheduling/retention.py",
         owner_ref="agent/scheduling/retention.py", retention="Terminal runs older than 30 days",
         why="Public DBOS APIs delete terminal execution trees. Live and paused plans remain; "
