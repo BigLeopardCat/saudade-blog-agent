@@ -81,8 +81,9 @@ def pending_task(monkeypatch, tmp_path):
         selected = runtime(Model(batch(call("load_favorites_info_tools", "load-original")),
                                  batch(call("prepare_favorite_change", "prepare-original",
                                             action="add", article_id=19))))
-        original = list(selected.stream_events({
-            "messages": [HumanMessage(content="收藏文章19")], "task_id": "original"}, cfg))[-1]
+        with request_scope(RequestControl(stop, time.monotonic() + 30)):
+            original = list(selected.stream_events({
+                "messages": [HumanMessage(content="收藏文章19")], "task_id": "original"}, cfg))[-1]
         token = original.execution["pending_confirm"]["token"]
         grant = confirm.verify(token, 7, 42)
         yield runtime, cfg, stop, selected, grant, token, requests, ledger

@@ -85,7 +85,9 @@ def test_sdk_cancel_preserves_completed_read_and_retry_wire(monkeypatch, control
         worker.join(2)
         assert not worker.is_alive() and closed.is_set() and len(errors) == 1
         assert runtime().store.load(config()).unfinished
-        with request_scope(RequestControl(threading.Event(), time.monotonic() + 10)):
+        scope = (request_scope(RequestControl(threading.Event(), time.monotonic() + 10))
+                 if controlled else nullcontext())
+        with scope:
             result = list(runtime().stream_events({"resume_task": "io-recover"}, config()))[-1]
         assert result.reply == "Recovered the saved fact."
         assert calls == ["read"] and len(requests) == 3

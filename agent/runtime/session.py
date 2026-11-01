@@ -13,7 +13,7 @@ from langchain_core.utils.function_calling import convert_to_openai_tool
 from agent.runtime import memory, tool_execution
 from agent.runtime.budget import (
     BudgetExceeded,
-    RequestBudget,
+    TaskBudget,
     current_budget,
 )
 from agent.runtime.catalog import loader, tool_owners
@@ -34,7 +34,7 @@ from utils.trace import record
 class ToolSession:
     def __init__(self, model, config, tools, domains, *,
                  store=None, descriptions=None, middleware=(), history_access=None):
-        self.budget = current_budget() or RequestBudget()
+        self.budget = current_budget() or TaskBudget()
         self.output_limit = getattr(model, "max_tokens", None) or settings.agent_output_tokens
         self.model = model
         self.config = config
@@ -122,7 +122,7 @@ class ToolSession:
     def _budget_stop(self, reason, **data):
         record("native", "budget_stop", reason=reason, **data)
         self.outcome = self._with_receipts(TurnResult(
-            "本轮操作已达到调用或上下文上限，已停止继续处理。请缩小请求范围后再试。",
+            "任务已达到执行预算上限，已停止后续处理。已完成结果会保留，请缩小范围后重新发起。",
             {"blocked": [{"reason": reason}]}))
         return self.outcome
 
@@ -225,7 +225,9 @@ class ToolSession:
         reported_inputs = set()
         try:
             for mode, data in stream:
-                check_cancelled(self.config)
+                # Model/tool boundaries enforce spending; draining graph updates
+                # must still reach the commit node after a budget stop.
+                check_cancelled(self.config, check_budget=False)
                 if mode == "updates" and isinstance(data, dict):
                     from agent.runtime.task_input_policy import events as input_events
                     for input_event in input_events(self, data, reported_inputs):

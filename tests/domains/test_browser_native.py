@@ -24,7 +24,7 @@ from agent.principal import SOURCE_ASSERTION, Principal
 from agent.products.blog.history import tool_access
 from agent.products.blog.tool_policy import BlogToolMiddleware
 from agent.runtime import memory
-from agent.runtime.budget import BudgetLimits, RequestBudget, budget_scope
+from agent.runtime.budget import BudgetLimits, TaskBudget, budget_scope
 from agent.runtime.native import NativeRuntime
 from agent.runtime.native_store import NativeConversationStore
 from agent.runtime.session import ToolSession
@@ -244,7 +244,7 @@ def test_queued_commands_survive_budget_finalization_without_replay(monkeypatch)
         AIMessage(content="雪花设置已发送，浏览器执行结果尚未确认。"),
     ]
     arm, model = _arm(monkeypatch, responses)
-    budget = RequestBudget(BudgetLimits(model_calls=4))
+    budget = TaskBudget(BudgetLimits(model_calls=4))
     with budget_scope(budget):
         events = list(arm.stream_events(
             {"messages": [HumanMessage(content="开雪花然后继续")]}, _config()))

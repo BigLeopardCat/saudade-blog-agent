@@ -17,7 +17,7 @@ from agent.domains.favorites import preparation
 from agent.principal import SOURCE_ASSERTION, Principal
 from agent.products.blog.confirmation import cancel, confirmed_runtime
 from agent.runtime import writes
-from agent.runtime.budget import BudgetLimits, RequestBudget, budget_scope
+from agent.runtime.budget import BudgetLimits, TaskBudget, budget_scope
 from agent.runtime.native import NativeRuntime
 from agent.runtime.native_store import NativeConversationStore
 from agent.runtime.results import TurnResult
@@ -108,7 +108,7 @@ def test_chat_only_role_has_no_tool_schema_and_cannot_call_omitted_tools():
 def test_budget_exhaustion_finishes_without_constructing_another_engine():
     model = Model()
     selected = runtime(model)
-    with budget_scope(RequestBudget(BudgetLimits(model_calls=0))):
+    with budget_scope(TaskBudget(BudgetLimits(model_calls=0))):
         events = run(selected)
     assert isinstance(events[-1], TurnResult) and "上限" in events[-1].reply
     assert not model.prompts
@@ -197,15 +197,18 @@ def test_confirmed_agent_reply_follows_execution_and_keeps_independent_facts(wai
     assert proposal.execution["pending_confirm"]["token"] not in str(saved)
 
 
-def test_unknown_write_result_is_not_retried_and_keeps_pending_card(waiting, site):
+def test_unknown_write_result_is_not_retried_and_releases_the_old_card(waiting, site):
     store, _, grant, ledger = waiting
     name, args = writes_tool(grant)
     ledger.claim(writes.operation_key(grant, name, args), name, grant["jti"])
-    selected = NativeRuntime(store)
+    model = Model(AIMessageChunk(content="结果尚未核实，不能重复执行。"))
+    selected = NativeRuntime(store, model_factory=lambda **_: model)
     for _ in range(2):
         events = list(selected.stream_events({"confirm_grant": grant}, config()))
         assert events[-1].execution["receipts"] == []
-    assert store.load(config()).has_pending
+    assert not store.load(config()).has_pending
+    assert len(model.prompts) == 1
+    assert ledger.lookup(writes.operation_key(grant, name, args))[0] == "intent"
     assert all(request.method == "GET" for request in site["requests"])
 
 

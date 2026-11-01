@@ -12,7 +12,7 @@ from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from agent.api.routes import chat as server
 from agent.main import create_app
 from agent.principal import SOURCE_ASSERTION, Principal
-from agent.runtime.budget import BudgetLimits, RequestBudget
+from agent.runtime.budget import BudgetLimits, TaskBudget
 from agent.runtime.control import RequestControl
 from agent.runtime.native import NativeRuntime
 from agent.runtime.native_store import NativeConversationStore
@@ -30,7 +30,7 @@ def test_summary_receives_the_complete_source_prefix_without_clipping():
     model = SimpleNamespace(invoke=lambda prompt, **kwargs: seen.append(prompt) or
                             AIMessage(content="summary", response_metadata={
                                 "finish_reason": "stop"}))
-    assert summarize(messages, budget=RequestBudget(), config={}, model=model) == "summary"
+    assert summarize(messages, budget=TaskBudget(), config={}, model=model) == "summary"
     assert len(seen) == 1 and isinstance(seen[0][0], SystemMessage)
     assert "EARLY_TAIL_CANARY" in seen[0][1].content and "source-34" in seen[0][1].content
     assert "EARLY_TAIL_CANARY" not in seen[0][0].content
@@ -40,7 +40,7 @@ def test_complete_summary_can_exceed_the_retired_1600_character_ceiling():
     text = "保留已澄清的限制与未决对象。" * 160
     assert len(text) > 1600
     model = SimpleNamespace(invoke=lambda *a, **k: AIMessage(content=text))
-    assert summarize([HumanMessage(content="source")], budget=RequestBudget(),
+    assert summarize([HumanMessage(content="source")], budget=TaskBudget(),
                      config={}, model=model) == text
 
 
@@ -59,13 +59,14 @@ def test_incomplete_summary_is_rejected_without_claiming_coverage(kind):
         response.content = "字" * 8192
     model = SimpleNamespace(invoke=lambda *args, **kwargs: response)
     with pytest.raises(SummaryUnavailable):
-        summarize([HumanMessage(content="source")], budget=RequestBudget(), config={}, model=model)
+        summarize([HumanMessage(content="source")], budget=TaskBudget(), config={}, model=model)
 
 
 @pytest.mark.parametrize("limits", [BudgetLimits(context_tokens=1000),
+                                    BudgetLimits(context_tokens=1000000, input_tokens=1000),
                                     BudgetLimits(model_calls=0)])
 def test_oversized_or_unfunded_summary_does_not_call_the_provider(limits):
-    budget = RequestBudget(limits)
+    budget = TaskBudget(limits)
     model = SimpleNamespace(invoke=lambda *args, **kwargs: pytest.fail("unfunded call"))
     with pytest.raises(SummaryUnavailable):
         summarize([HumanMessage(content="x" * 20000 + "TAIL_CANARY")],
@@ -93,7 +94,7 @@ def test_retired_host_hints_schedule_no_second_call_on_actual_http_and_sdk(monke
                 {"index": 0, "message": message, "finish_reason": "stop"}], "usage": usage})
 
     def control(*args, **kwargs):
-        budget = RequestBudget(BudgetLimits(model_calls=1))
+        budget = TaskBudget(BudgetLimits(model_calls=1))
         budgets.append(budget)
         return RequestControl(*args, **kwargs, budget=budget)
 

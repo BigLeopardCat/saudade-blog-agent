@@ -18,7 +18,7 @@ from agent.domains.catalog import list_accounts
 from agent.domains.notices.preparation import prepare_user_notice
 from agent.principal import SOURCE_ASSERTION, Principal
 from agent.runtime import writes
-from agent.runtime.budget import BudgetExceeded, BudgetLimits, RequestBudget
+from agent.runtime.budget import BudgetExceeded, BudgetLimits, TaskBudget
 from agent.runtime.model_budget import ModelBudgetHandler, ToolBudgetHandler
 from agent.runtime.native import NativeRuntime
 from agent.runtime.native_store import NativeConversationStore
@@ -134,7 +134,7 @@ def test_framework_streams_visible_tokens_without_the_custom_tool_loop():
 
 
 def test_existing_request_budget_stops_framework_before_an_extra_provider_call():
-    budget = RequestBudget(BudgetLimits(model_calls=1))
+    budget = TaskBudget(BudgetLimits(model_calls=1))
     cfg = {**admin_config(), "callbacks": [ModelBudgetHandler(budget), ToolBudgetHandler(budget)]}
     with backend(), model_replies(
             {"tool_calls": [call("list_accounts", username="青叶")]}) as (model, requests):

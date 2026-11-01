@@ -20,7 +20,7 @@ from agent.principal import SOURCE_ASSERTION, Principal
 from agent.products.blog.capabilities import ToolCatalog
 from agent.products.blog.confirmation import cancel
 from agent.runtime import approval, writes
-from agent.runtime.budget import BudgetLimits, RequestBudget, budget_scope
+from agent.runtime.budget import BudgetLimits, TaskBudget, budget_scope
 from agent.runtime.native import NativeRuntime
 from agent.runtime.native_store import NativeConversationStore
 from agent.runtime.results import TurnResult
@@ -266,18 +266,23 @@ def test_feedback_revokes_old_card_and_replans_the_remaining_actions(backend):
     assert len(state["writes"]) == 1
 
 
-def test_unknown_write_retains_cursor_without_advancing_or_retrying_business_io(backend):
+def test_unknown_write_returns_to_readback_without_replaying_or_preparing_siblings(backend):
     state, ledger = backend
     selected = runtime(Model())
     _, grant, _ = prepare(selected)
-    before = selected.store.load(config())
     name, args = transactions.validate(grant, config())
     ledger.claim(writes.operation_key(grant, name, args), name, grant["jti"])
-    selected.model_factory = lambda **_: pytest.fail("unknown write resumed task")
-    for _ in range(2):
-        assert not run(selected, grant=grant).execution["receipts"]
-    assert selected.store.load(config()).approval == before.approval
-    assert selected.store.load(config()).pending == before.pending
+    model = Model(AIMessage(content="", tool_calls=[call("list_my_favorites", "verify")]),
+                  AIMessage(content="目前没有查到收藏结果，通知尚未处理。"))
+    selected.model_factory = lambda **_: model
+    result = run(selected, grant=grant)
+    assert not result.execution["receipts"] and result.execution["operation_outcome"]
+    assert len(model.prompts) == 2 and not selected.store.load(config()).has_pending
+    count = len(state["requests"])
+    selected.model_factory = lambda **_: pytest.fail("old grant restarted a task")
+    assert not run(selected, grant=grant).execution["receipts"]
+    assert ledger.lookup(writes.operation_key(grant, name, args))[0] == "intent"
+    assert len(state["requests"]) == count
     assert not state["writes"]
 
 
@@ -363,12 +368,50 @@ def test_current_approval_budget_is_shared_by_resumed_tools(backend):
     state, _ = backend
     selected = runtime(Model())
     _, grant, _ = prepare(selected)
-    budget = RequestBudget(BudgetLimits(tool_calls=0))
+    budget = TaskBudget(BudgetLimits(tool_calls=0))
     with budget_scope(budget):
         result = run(selected, grant=grant)
     assert "上限" in result.reply and result.execution["receipts"]
     assert len(state["writes"]) == 1 and not state["read"]
     assert not selected.store.load(config()).has_pending
+
+
+def test_unknown_historical_time_closes_approval_without_funding_a_write(backend):
+    import time
+    from threading import Event
+
+    from agent.runtime.control import RequestControl, request_scope
+
+    state, ledger = backend
+    selected = runtime(Model())
+    _, grant, _ = prepare(selected, FAVORITE)
+    selected.model_factory = lambda **_: Model()
+    budget = TaskBudget()
+    with request_scope(RequestControl(Event(), time.monotonic() + 90, budget)):
+        result = run(selected, grant=grant)
+    assert not state["writes"] and not result.execution.get("receipts")
+    assert not selected.store.load(config()).has_pending
+    assert not selected.store.load(config()).unfinished
+    spec = grant["specs"][0]
+    key = writes.operation_key(grant, spec["tool"], spec["args"])
+    assert ledger.lookup(key) is None
+
+
+def test_cancellation_before_dispatch_does_not_claim_an_execution(backend):
+    from threading import Event
+
+    from agent.runtime.turns import AgentCancelled
+
+    _, ledger = backend
+    selected = runtime(Model())
+    _, grant, _ = prepare(selected, FAVORITE)
+    spec = grant["specs"][0]
+    stop = Event()
+    stop.set()
+    with pytest.raises(AgentCancelled):
+        writes.execute_once(grant, spec["tool"], spec["args"],
+                            config(stop_event=stop), ledger, {})
+    assert ledger.lookup(writes.operation_key(grant, spec["tool"], spec["args"])) is None
 
 
 def test_cursor_binding_rejects_changed_role_user_conversation_or_operation(backend):
@@ -465,7 +508,7 @@ def test_confirmation_does_not_reset_an_exhausted_model_budget(backend):
     _, grant, _ = prepare(selected, FAVORITE)
     model = Model()
     selected.model_factory = lambda **_: model
-    with budget_scope(RequestBudget(BudgetLimits(model_calls=0))):
+    with budget_scope(TaskBudget(BudgetLimits(model_calls=0))):
         result = run(selected, grant=grant)
     assert "上限" in result.reply and result.execution["receipts"]
     assert len(state["writes"]) == 1 and not model.prompts

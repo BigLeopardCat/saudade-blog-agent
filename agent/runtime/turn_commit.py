@@ -25,7 +25,8 @@ def prepare(session, state):
 
 
 def commit(state, config, *, session):
-    check_cancelled(config)
+    # Exhausting execution resources cannot prevent committing the known outcome.
+    check_cancelled(config, check_budget=False)
     checkpoint_store.require_active(session.store.saver, config["configurable"]["thread_id"])
     turn = state["turn"]
     update = {"messages": memory.checkpoint_messages(

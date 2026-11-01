@@ -33,4 +33,9 @@ class CancellableModel(BaseChatModel):
 
 
 class CancellableChatOpenAI(CancellableModel, ChatOpenAI):
-    pass
+    def _get_request_payload(self, input_, *, stop=None, **kwargs):
+        from models.request_trace import record_layout
+
+        payload = super()._get_request_payload(input_, stop=stop, **kwargs)
+        record_layout(payload, endpoint=self.openai_api_base)
+        return payload

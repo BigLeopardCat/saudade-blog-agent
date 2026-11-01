@@ -15,7 +15,7 @@ from agent.principal import SOURCE_ASSERTION, Principal
 from agent.products.blog.application import BlogApplication
 from agent.products.blog.capabilities import ToolCatalog
 from agent.runtime import memory
-from agent.runtime.budget import BudgetLimits, RequestBudget, budget_scope
+from agent.runtime.budget import BudgetLimits, TaskBudget, budget_scope
 from agent.runtime.native import NativeRuntime
 from agent.runtime.native_store import NativeConversationStore
 from agent.runtime.turns import AgentCancelled
@@ -202,12 +202,12 @@ def test_large_completed_task_cannot_enlarge_the_next_task_menu(setup):
     first = Model(call("load_beta_info_tools"), AIMessageChunk(content="Ready."))
     turn(runtime(first))
     model = Model(AIMessageChunk(content="New task fits."))
-    budget = RequestBudget(BudgetLimits(context_tokens=3500, request_tokens=6000))
+    budget = TaskBudget(BudgetLimits(context_tokens=3500, task_tokens=6000))
     with budget_scope(budget):
         result = turn(runtime(model), "Just chat.")
     assert result.reply == "New task fits."
     assert names(model.requests[0]) == ["load_alpha_info_tools", "load_beta_info_tools"]
-    assert budget.model_calls == 1 and budget.tokens <= budget.limits.request_tokens
+    assert budget.model_calls == 1 and budget.tokens <= budget.limits.task_tokens
 
 
 def test_history_compaction_does_not_reactivate_completed_task_tools(setup):
@@ -220,7 +220,7 @@ def test_history_compaction_does_not_reactivate_completed_task_tools(setup):
     seed_turn(selected.store, cfg, [HumanMessage(content="Keep this latest exchange.")],
                              "Latest answer.")
     model = Model(AIMessageChunk(content="Current tools stay loaded."))
-    budget = RequestBudget(BudgetLimits(context_tokens=3500, request_tokens=6000))
+    budget = TaskBudget(BudgetLimits(context_tokens=3500, task_tokens=6000))
     with budget_scope(budget):
         result = turn(runtime(model), "Short follow-up.")
     assert result.reply == "Current tools stay loaded."
@@ -234,7 +234,7 @@ def test_completed_domain_fits_one_call_but_cannot_exhaust_a_multistep_new_task(
     turn(runtime(Model(call("load_alpha_info_tools"), AIMessageChunk(content="Ready."))))
     model = Model(call("load_beta_info_tools"), call("read_beta"),
                   AIMessageChunk(content="Beta fact confirmed."))
-    budget = RequestBudget(BudgetLimits(context_tokens=2500, request_tokens=2400))
+    budget = TaskBudget(BudgetLimits(context_tokens=2500, task_tokens=2400))
     with budget_scope(budget):
         result = turn(runtime(model), "Read beta and answer.")
     assert result.reply == "Beta fact confirmed." and calls == ["beta"]
@@ -242,7 +242,7 @@ def test_completed_domain_fits_one_call_but_cannot_exhaust_a_multistep_new_task(
     assert not any("read_alpha" in names(request) for request in model.requests)
     assert "read_beta" in names(model.requests[1])
     assert model.requests[1]["tools"] == model.requests[2]["tools"]
-    assert budget.tokens <= budget.limits.request_tokens
+    assert budget.tokens <= budget.limits.task_tokens
 
 
 def test_loading_another_domain_preserves_current_task_tools_until_completion(setup):

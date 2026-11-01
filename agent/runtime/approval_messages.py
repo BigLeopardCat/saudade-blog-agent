@@ -2,6 +2,27 @@
 
 import json
 
+from langchain.agents.middleware import AgentMiddleware, hook_config
+
+from agent.runtime.execution_state import restore
+from agent.runtime.turns import check_cancelled
+
+
+class ApprovalResumeMiddleware(AgentMiddleware):
+    """Consume approval results before the context-capacity boundary."""
+
+    def __init__(self, policy):
+        self.policy = policy
+
+    @hook_config(can_jump_to=["tools"])
+    def before_model(self, state, runtime):
+        if not state.get("resume"):
+            return None
+        self.policy._recover(state)
+        check_cancelled(self.policy.session.config, check_budget=False)
+        restore(self.policy.session, state)
+        return self.policy._resume(state)
+
 
 def receipt(awaiting, facts):
     unverified = bool(facts["execution"].get("operation_outcome"))

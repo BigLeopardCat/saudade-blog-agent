@@ -15,6 +15,7 @@ from pathlib import Path
 from statistics import median, quantiles
 
 from eval import acceptance, action_metrics, request_metrics, usage
+from eval.cache_diagnostics import compare
 from eval.statistical_metrics import proportion
 from utils.trace_io import load_trace
 
@@ -52,12 +53,8 @@ def cache_population(doc):
             label = "unknown_layout"
             if current:
                 label = "first_call" if previous is None else "changed_layout"
-                if (previous and all(previous.get(key) == current.get(key) for key in
-                        ("tools", "model", "session", "tool_choice", "thinking",
-                         "reasoning_effort"))
-                        and previous.get("messages")
-                        and current.get("messages", [])[:len(previous["messages"])]
-                        == previous["messages"]):
+                if previous and compare(previous, current)["change"] in (
+                        "same_payload", "append_only") and previous.get("messages"):
                     label = "stable_prefix"
             measured = dict(event)
             if label == "stable_prefix" and previous_usage:
@@ -90,14 +87,16 @@ def _cache_summary(row):
 
 def _metrics(report):
     groups, populations = defaultdict(list), defaultdict(usage.empty)
-    missing = []
+    missing, case_usage = [], {}
     totals, trace_errors, first_visible, decisions, ttft = usage.empty(), [], [], [], []
     build = (report.get("service_version") or {}).get("sha")
     for case in report["cases"]:
         case_decisions = []
+        case_total = usage.empty()
         for index, rnd in enumerate(case.get("result", {}).get("rounds", []), 1):
             doc = load_trace(str(rnd.get("trace", "")))
             if not doc:
+                case_total["unknown_attempts"] += 1
                 case_decisions.append(None)
                 trace_errors.append({"case": case["id"], "round": index, "error": "missing trace"})
                 continue
@@ -127,13 +126,33 @@ def _metrics(report):
             groups[task_class(case.get("tags", []))].append(row)
             for field in totals:
                 totals[field] += row[field]
+                case_total[field] += row[field]
             for population, event in cache_population(doc):
                 _add_cache(populations[population], event)
         decisions.append(case_decisions)
+        case_usage[case["id"]] = case_total
     return {"groups": groups, "populations": populations, "usage": totals,
             "trace_errors": trace_errors, "first_visible": first_visible,
             "missing": missing, "decisions": action_metrics.decision_report(decisions),
-            "model_ttft_s": ttft}
+            "model_ttft_s": ttft, "case_usage": case_usage}
+
+
+def outcome_usage(cases, semantic, measured):
+    """Separate failure spending from verified success; absent review stays unverified."""
+    groups = defaultdict(usage.empty)
+    counts = Counter()
+    for case in cases:
+        status = semantic.get(case["id"])
+        outcome = ("failed" if case.get("status") == "failed" or status == "failed"
+                   else "passed" if status == "checks_passed" else "unverified")
+        counts[outcome] += 1
+        for field, value in measured[case["id"]].items():
+            groups[outcome][field] += value
+    return {name: dict(row, scenarios=counts[name], hit_rate=usage.hit_rate(row),
+                       uncached_input=row["cache_in"] - row["cache"]
+                       if row["cache_seen"] else None,
+                       fee=None, fee_reason="prices_not_configured")
+            for name, row in groups.items()}
 
 
 def quality_statistics(cases, semantic):
@@ -269,6 +288,7 @@ def assess(report_path, *, semantic_path=None, profile_path=PROFILE):
         "semantic_counts": dict(Counter(semantic.values())),
         "deterministic_counts": dict(Counter(case.get("status") for case in report["cases"])),
         "usage": metrics["usage"], **costs,
+        "usage_by_outcome": outcome_usage(report["cases"], semantic, metrics["case_usage"]),
         "quality_statistics": quality_statistics(report["cases"], semantic),
         "first_decision": metrics["decisions"],
         "cache_diagnostics": {name: _cache_summary(row)

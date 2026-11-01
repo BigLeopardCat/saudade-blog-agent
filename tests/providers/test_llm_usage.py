@@ -17,6 +17,10 @@ from agent.runtime.session import ToolSession
     ({"input_tokens": 100, "input_token_details": {"cache_read": 0}},
      {"input": 100, "cache_read": 0}),
     ({"input_tokens": True, "output_tokens": 1}, {"output": 1}),
+    ({"input_tokens": -1, "output_tokens": 2.5}, {}),
+    ({"input_tokens": 100, "output_tokens": 7,
+      "input_token_details": {"cache_read": 101},
+      "output_token_details": {"reasoning": 8}}, {"input": 100, "output": 7}),
     ({"input_tokens": "invalid"}, {}), ({}, {}), ("invalid", {}),
 ])
 def test_normalized_usage_preserves_unknown_fields(metadata, expected):

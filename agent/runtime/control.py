@@ -6,7 +6,7 @@ from contextvars import ContextVar
 from dataclasses import dataclass, field
 from threading import Event
 
-from agent.runtime.budget import RequestBudget, budget_scope
+from agent.runtime.budget import TaskBudget, budget_scope
 from models.session import session_scope
 
 
@@ -18,12 +18,14 @@ class AgentCancelled(Exception):
 class RequestControl:
     stop_event: Event
     deadline: float
-    budget: RequestBudget = field(default_factory=RequestBudget)
+    budget: TaskBudget = field(default_factory=TaskBudget)
     session_id: str | None = None
 
-    def check(self):
+    def check(self, *, check_budget=True):
         if self.stop_event.is_set():
             raise AgentCancelled()
+        if check_budget:
+            self.budget.check_time()
         if time.monotonic() >= self.deadline:
             raise TimeoutError("Agent request deadline exceeded")
 
@@ -35,17 +37,21 @@ _current: ContextVar[RequestControl | None] = ContextVar("agent_request_control"
 def request_scope(control):
     token = _current.set(control)
     try:
+        control.budget.enter_request(control.deadline)
         control.check()
         with budget_scope(control.budget), session_scope(control.session_id):
             yield
     finally:
-        _current.reset(token)
+        try:
+            control.budget.leave_request()
+        finally:
+            _current.reset(token)
 
 
-def check_active():
+def check_active(*, check_budget=True):
     control = _current.get()
     if control is not None:
-        control.check()
+        control.check(check_budget=check_budget)
 
 
 def model_options(timeout):
@@ -54,4 +60,5 @@ def model_options(timeout):
     if control is None:
         return {}
     control.check()
-    return {"timeout": min(timeout, max(0.001, control.deadline - time.monotonic()))}
+    deadline = min(control.deadline, control.budget.clock.deadline or control.deadline)
+    return {"timeout": min(timeout, max(0.001, deadline - time.monotonic()))}

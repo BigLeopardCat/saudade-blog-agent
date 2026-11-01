@@ -10,7 +10,7 @@ from agent import checkpoint
 from agent.api.schemas import ChatRequest
 from agent.principal import SOURCE_ASSERTION, Principal
 from agent.runtime import compaction, memory, retention
-from agent.runtime.budget import BudgetExceeded, BudgetLimits, RequestBudget, budget_scope
+from agent.runtime.budget import BudgetExceeded, BudgetLimits, TaskBudget, budget_scope
 from agent.runtime.summarization import SummaryUnavailable
 from agent.runtime.task_budget import for_saver
 from agent.runtime.turns import AgentCancelled
@@ -91,17 +91,17 @@ def test_reconstructed_budget_retains_reservation_and_settles_actual_usage():
     saver = InMemorySaver()
     storage = for_saver(saver)
     task = {"id": "budget-task", "scope": {"uid": 7, "role": "user", "conversation_id": 42}}
-    first = RequestBudget(BudgetLimits(model_calls=2))
+    first = TaskBudget(BudgetLimits(model_calls=2))
     first.bind_task(storage, task)
     ticket = first.reserve([HumanMessage(content="request")], output_limit=64)
     assert storage.load(task)["model_calls"] == 1
     first.settle(ticket, AIMessage(content="answer", usage_metadata={
         "input_tokens": 10, "output_tokens": 5, "total_tokens": 15}))
-    restored = RequestBudget(BudgetLimits(model_calls=2))
+    restored = TaskBudget(BudgetLimits(model_calls=2))
     restored.bind_task(for_saver(saver), task)
     assert restored.tokens == 15 and restored.model_calls == 1
     restored.reserve([HumanMessage(content="retry")], output_limit=64)
-    retry = RequestBudget(BudgetLimits(model_calls=2))
+    retry = TaskBudget(BudgetLimits(model_calls=2))
     retry.bind_task(for_saver(saver), task)
     with pytest.raises(BudgetExceeded, match="model_calls"):
         retry.reserve([HumanMessage(content="third")], output_limit=64)
@@ -110,7 +110,7 @@ def test_reconstructed_budget_retains_reservation_and_settles_actual_usage():
     assert checkpoint.delete_thread(saver, 42)
     assert for_saver(saver).rows == {}
     with pytest.raises(ValueError, match="unavailable"):
-        RequestBudget().bind_task(for_saver(saver), task, create=False)
+        TaskBudget().bind_task(for_saver(saver), task, create=False)
 
 
 def test_cancelled_model_attempt_counts_against_the_same_resumed_task():
@@ -122,12 +122,12 @@ def test_cancelled_model_attempt_counts_against_the_same_resumed_task():
             yield AIMessageChunk(content="continued")
 
     saver, model = InMemorySaver(), Interrupted()
-    first = RequestBudget(BudgetLimits(model_calls=2))
+    first = TaskBudget(BudgetLimits(model_calls=2))
     with budget_scope(first), pytest.raises(AgentCancelled):
         run(runtime(saver, model), ChatRequest(message="继续任务"))
     selected = runtime(saver, model)
     task = selected.store.load(config()).run
-    second = RequestBudget(BudgetLimits(model_calls=2))
+    second = TaskBudget(BudgetLimits(model_calls=2))
     with budget_scope(second):
         result = list(selected.stream_events({"resume_task": task["id"]}, config()))[-1]
     assert result.reply == "continued"
@@ -164,15 +164,15 @@ def test_resume_cannot_exceed_an_exhausted_task_model_limit():
         return NativeRuntime(NativeConversationStore(saver), catalog=catalog,
                              model_factory=lambda **_: model)
 
-    with budget_scope(RequestBudget(BudgetLimits(model_calls=2))), pytest.raises(AgentCancelled):
+    with budget_scope(TaskBudget(BudgetLimits(model_calls=2))), pytest.raises(AgentCancelled):
         run(selected(), ChatRequest(message="读取并解释"))
     task = selected().store.load(config()).run
-    resumed = RequestBudget(BudgetLimits(model_calls=2))
+    resumed = TaskBudget(BudgetLimits(model_calls=2))
     with budget_scope(resumed):
         result = list(selected().stream_events({"resume_task": task["id"]}, config()))[-1]
     assert resumed.model_calls == len(model.prompts) == 2
     assert resumed.request_spent()["model_calls"] == 0
-    assert "达到调用或上下文上限" in result.reply
+    assert "达到执行预算上限" in result.reply
 
 
 def test_byte_retention_preserves_the_latest_complete_turns(monkeypatch):
