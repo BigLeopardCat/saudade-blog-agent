@@ -34,9 +34,11 @@ from eval import (
     context_contracts,
     experience_contracts,
     navigation_contracts,
+    ordered_preparation_contracts,
     quota_task_contracts,
     reading_task_contracts,
     request_metrics,
+    todo_task_contracts,
 )
 from eval.own_fixtures import SECRET, favorite_backend, message_backend, notification_backend
 from models.transport import ModelIO
@@ -197,7 +199,8 @@ CASES = [("chat", favorite_backend, _chat),
          *reading_task_contracts.CASES, *quota_task_contracts.CASES,
          *context_contracts.CASES, *composite_task_contracts.CASES,
          *account_candidate_contracts.CASES, *compaction_contracts.CASES,
-         *article_tag_contracts.CASES, *confirmation_failure_contracts.CASES]
+         *article_tag_contracts.CASES, *confirmation_failure_contracts.CASES,
+         *todo_task_contracts.CASES, *ordered_preparation_contracts.CASES]
 
 
 def _sample(name, backend, contract, run_id, sample):
