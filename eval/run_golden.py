@@ -1743,6 +1743,7 @@ GOLD_ASSERT_KEYS = frozenset({
     "require_confirm_specs", "require_confirm_preview", "forbid_runtime_stop",
     "forbid_business_write", "require_answer_value", "require_prepared_or_noop",
     "require_memory_compaction", "forbid_memory_compaction", "require_answer_list",
+    "require_revoked_operation", "require_current_conversation_history",
     # 回复文本
     "nonempty", "text_contains", "text_any_regex", "text_not_contains",
     "text_not_match_regex", "not_contains_exempt_quote",
@@ -1762,8 +1763,7 @@ GOLD_ASSERT_KEYS = frozenset({
     # 诚实拒绝的共享族（20260925，见 DENIAL_FAMILY 的头注）：与 text_contains /
     # text_any_regex 同为 OR —— 用例只要"回复里表达了做不到"，措辞不再各抄一份
     "require_denial",
-    # 「不许给主人派登录的活」的共享判据（20261008，见 `LOGIN_DEMAND_RE` 的头注）：
-    # 同一条负正则此前被 8 条用例各抄一份，两处假红都长在它边界之外的格子上
+    # 不要求已验签用户重新登录。
     "forbid_login_demand",
     # 「目标不存在」的共享族（20261001，见 ABSENCE_COMPOUND 的头注）：同一条 OR 的第四个
     # 成员，值 = **字面目标**（字符串或一组）——"这个留言/标签/公告站内没有"的措辞
