@@ -103,6 +103,21 @@ def build_identity(version, *, expected=None):
     return version["sha"], version.get("version")
 
 
+def actor_preflight(cases, transport, identities):
+    roles = {"admin": {"admin", "superadmin"}, "user": {"user"}, "zako": {"zako"}}
+    profiles, allowances = {}, {}
+    for key in sorted({case["identity"] for case in cases}):
+        uid = identities.get(key, 0)
+        if type(uid) is not int or uid <= 0:
+            raise ValueError(f"missing real positive account ID for {key}")
+        profiles[key] = transport.profile(uid, roles[key])
+        if getattr(transport, "host", False):
+            required = sum(len(case.get("rounds") or [case])
+                           for case in cases if case["identity"] == key)
+            allowances[key] = transport.check_turn_allowance(uid, required)
+    return profiles, allowances, roles
+
+
 def run(cases, transport, identities, report_dir, *, phase, suite_hash, include_vision=False,
         dataset_role="regression", expected_build=None, evaluation_id=None):
     excluded = [case for case in cases if not include_vision and "vision" in case["tags"]]
@@ -116,14 +131,7 @@ def run(cases, transport, identities, report_dir, *, phase, suite_hash, include_
     version.raise_for_status()
     initial_version = version.json()
     initial_build = build_identity(initial_version, expected=expected_build)
-    required = {c["identity"] for c in cases}
-    role_sets = {"admin": {"admin", "superadmin"}, "user": {"user"}, "zako": {"zako"}}
-    profiles = {}
-    for key in required:
-        uid = identities.get(key, 0)
-        if type(uid) is not int or uid <= 0:
-            raise ValueError(f"missing real positive account ID for {key}")
-        profiles[key] = transport.profile(uid, role_sets[key])
+    profiles, allowances, role_sets = actor_preflight(cases, transport, identities)
     report = {"phase": phase, "suite_sha256": suite_hash, "evaluator_sha256": evaluator_hashes,
               "dataset_role": dataset_role,
               "evaluation_id": evaluation_id,
@@ -132,7 +140,8 @@ def run(cases, transport, identities, report_dir, *, phase, suite_hash, include_
               "excluded_cases": [{"id": case["id"], "reason": "known model vision limitation"}
                                  for case in excluded],
               "include_vision": include_vision,
-              "identities": profiles, "planned": len(cases), "cases": [], "requests": [],
+              "identities": profiles, "actor_allowances": allowances,
+              "planned": len(cases), "cases": [], "requests": [],
               "automatic_retries": 0, "business_write_approval": False,
               "coverage_limits": ["不批准线上业务写入；实际执行、回放和未知结果由隔离契约评测覆盖",
                                   "自动判据验证行为与部分内容；不等同于完整语义或视觉体验验收",
