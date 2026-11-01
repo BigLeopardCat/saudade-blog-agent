@@ -16,8 +16,10 @@ from pathlib import Path
 import httpx
 import jwt
 from httpx_sse import connect_sse
+from pydantic import ValidationError
 
 from agent import confirm
+from agent.api.schemas import QuotaInfo
 from agent.transport import command_wire
 from config.settings import settings
 from tools.base import _sign_local_jwt
@@ -64,6 +66,33 @@ class OnlineTransport:
         if role not in expected_roles:
             raise EvaluationError(f"account {uid}: role {role!r}, expected {expected_roles}")
         return role
+
+    def check_turn_allowance(self, uid, required):
+        """Check the host's current allowance for every planned turn before spending."""
+        if type(required) is not int or required <= 0:
+            raise EvaluationError("invalid planned turn count")
+        response = self.client.get(self.blog_url + "/api/protected/quota",
+                                   headers=self.host_headers(uid))
+        response.raise_for_status()
+        body = response.json()
+        data = body.get("data") if isinstance(body, dict) and body.get("code") == 200 else None
+        fields = {"used", "limit", "remaining", "unlimited"}
+        if not isinstance(data, dict) or not fields <= data.keys():
+            raise EvaluationError("host turn allowance is missing")
+        try:
+            quota = QuotaInfo.model_validate(data, strict=True)
+        except ValidationError as exc:
+            raise EvaluationError("host turn allowance is invalid") from exc
+        values = (quota.used, quota.limit, quota.remaining)
+        if (any(value < 0 for value in values)
+                or (quota.unlimited and any(values))
+                or (not quota.unlimited and (quota.limit == 0
+                    or quota.remaining != max(0, quota.limit - quota.used)))):
+            raise EvaluationError("host turn allowance is inconsistent")
+        if not quota.unlimited and quota.remaining < required:
+            raise EvaluationError(
+                f"account {uid}: {quota.remaining} turns remain; {required} planned")
+        return {**quota.model_dump(), "required_turns": required}
 
     def check_public_article_fixture(self, article_id):
         """A preparation case needs a currently visible target, not a historical ID."""
