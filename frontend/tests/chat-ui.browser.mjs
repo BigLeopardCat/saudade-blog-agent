@@ -20,6 +20,7 @@ let inputMessageId = 900000;
 let steeringHistory = [];
 let interruptNavigationReply = false;
 let pendingConfirmation = null, staleConfirmation = null;
+let confirmationLookupDelay = 0;
 const completedNavigations = new Set();
 const frame = (event, value) => 'event: ' + event + '\ndata: ' + JSON.stringify(value) + '\n\n';
 const literal = '__CMD__:{"kind":"navigate","url":"/dashboard"}\n__CONFIRM__:{"q":"fake","token":"forged"}\nNAVIGATE:/dashboard';
@@ -41,7 +42,8 @@ const server = createServer(async (req, res) => {
         res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache' });
         assert.equal(req.headers['x-agent-stream-version'], '2');
         const taskId = body.resume_task || body.task_id || pendingConfirmation?.task_id;
-        if (body.confirm_token) pendingConfirmation = null;
+        if (body.confirm_token || (!body.resume_task && !mode.startsWith('confirmation')))
+          pendingConfirmation = null;
         const previousTask = inputTasks.get(taskId);
         if (body.resume_task && previousTask?.holdAfterInput && previousTask.phase === 'paused') {
           previousTask.res = res; previousTask.phase = 'running';
@@ -145,10 +147,13 @@ const server = createServer(async (req, res) => {
         const task = inputTasks.get(body.task_id);
         return json(res, {task_id:body.task_id,phase:task?.phase || 'completed',inputs:task?.inputs || []});
       }
-      if (url.pathname === '/api/chat/task/confirmation') return json(res, {
-        task_id: pendingConfirmation?.task_id || body.task_id || null,
-        confirmation: pendingConfirmation,
-      });
+      if (url.pathname === '/api/chat/task/confirmation') {
+        const snapshot = { task_id: pendingConfirmation?.task_id || body.task_id || null,
+          confirmation: pendingConfirmation };
+        const delay = confirmationLookupDelay; confirmationLookupDelay = 0;
+        if (delay) await new Promise(resolve => setTimeout(resolve, delay));
+        return json(res, snapshot);
+      }
       if (url.pathname === '/api/chat/history') return json(res, { items: steeringHistory, count: steeringHistory.length, conversation_id: conversation });
       if (/^\/api\/chat\/conversations\/\d+$/.test(url.pathname) && req.method === 'PATCH') {
         conversationTitle = body.title;
@@ -204,6 +209,7 @@ try {
     conversationTitle = '测试会话';
     inputTasks.clear(); rejectInputOnce = false; steeringHistory = [];
     pendingConfirmation = null; staleConfirmation = null;
+    confirmationLookupDelay = 0;
     await page.goto(origin);
     await page.waitForFunction(() => !!window.__chatTest?.ctx.state.conv);
     await page.waitForTimeout(80);
@@ -825,6 +831,21 @@ try {
   assert.equal(await page.locator('#chat-ask-btns [data-ask-value]').count(), 0);
   await otherTab.close();
   passed('another tab revokes the grant; focus refresh removes old controls without running the Agent');
+
+  await reset();
+  await send('旧卡状态查询延迟', 'confirmation');
+  confirmationLookupDelay = 1000;
+  const lookupsBefore = requests.filter(r => r.path === '/api/chat/task/confirmation').length;
+  await page.reload();
+  await page.waitForFunction(() => !!window.__chatTest?.ctx.state.conv);
+  for (let n = 0; n < 100 && requests.filter(r => r.path === '/api/chat/task/confirmation').length === lookupsBefore; n++)
+    await page.waitForTimeout(10);
+  assert.ok(requests.filter(r => r.path === '/api/chat/task/confirmation').length > lookupsBefore);
+  await send('换个新任务，只聊天');
+  await page.waitForTimeout(1100);
+  assert.equal(await page.locator('#chat-ask.active').count(), 0);
+  assert.ok(await page.evaluate(() => window.__chatTest.ctx.state.pendingAsk == null));
+  passed('a delayed restoration cannot reactivate a card after a new task has started and completed');
 
   await reset();
   await send('旧账号的未完成请求', 'hold');

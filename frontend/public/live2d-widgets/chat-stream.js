@@ -492,6 +492,7 @@
           resumeText: opts.resumeText || (silent ? ([...ctx.state.items].reverse()
             .find(x => x.type === 'user') || {}).text : '') };
         const roundState = ctx.state.activeRound;
+        approval.invalidate();
         const ownsRound = () => ctx.state.activeRound === roundState
           && ctx.state.conv === roundConvId && localStorage.getItem('tokenKey') === token;
         const staleRound = () => Object.assign(new Error('请求已不属于当前会话'), { staleRound: true });
