@@ -62,6 +62,39 @@ def test_task_usage_survives_worker_reconstruction_and_checks_source(inboxes):
     assert left.load(task) == {}
 
 
+@pytest.mark.parametrize("lost_worker", [False, True])
+def test_postgres_time_lease_survives_worker_reconstruction(inboxes, monkeypatch, lost_worker):
+    from types import SimpleNamespace
+
+    from agent.runtime import control, task_time
+    from agent.runtime.budget import BudgetLimits, TaskBudget
+    from agent.runtime.task_budget import PostgresUsage
+
+    now = [0.0]
+    clock = SimpleNamespace(monotonic=lambda: now[0])
+    monkeypatch.setattr(control, "time", clock)
+    monkeypatch.setattr(task_time, "time", clock)
+    left, right = [PostgresUsage(inbox.storage.pool) for inbox in inboxes]
+    task = {"id": "time", "scope": {"uid": 7, "role": "user", "conversation_id": 42}}
+    first = TaskBudget(BudgetLimits(task_seconds=50))
+    first.enter_request(20)
+    first.bind_task(left, task)
+    assert right.load(task, create=False)["active_seconds"] == 20
+    if not lost_worker:
+        now[0] = 5
+        first.leave_request()
+    charged = 20 if lost_worker else 5
+    assert right.load(task, create=False)["active_seconds"] == charged
+    now[0] = 1000
+    rebuilt = TaskBudget(BudgetLimits(task_seconds=50))
+    with control.request_scope(control.RequestControl(threading.Event(), 1100, rebuilt)):
+        rebuilt.bind_task(right, task, create=False)
+        assert control.model_options(90)["timeout"] == 50 - charged
+        assert left.load(task, create=False)["active_seconds"] == 50
+        now[0] += 1
+    assert left.load(task, create=False)["active_seconds"] == charged + 1
+
+
 def test_two_workers_share_inputs_and_duplicate_delivery(inboxes):
     left, right = inboxes
     task = {"id": "one", "scope": {"uid": 7, "role": "user", "conversation_id": 42}}
