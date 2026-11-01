@@ -54,13 +54,24 @@ class BlogHost:
 
     def notify(self, owner, run_id, title, text):
         self.actor(owner)
+        content = (
+            text if len(text) <= 1000 else text[:960] + "\n\n完整结果可请助手查询此计划的执行记录。"
+        )
         response = self.client.post(
             self.base + "/api/protected/automation-results",
             headers=self.headers(owner),
-            json={"runId": run_id, "title": title[:80], "content": text[:1000]},
+            json={"runId": run_id, "title": title[:80], "content": content},
         )
         response.raise_for_status()
         body = response.json()
         if not isinstance(body, dict) or body.get("code") != 200:
             raise RuntimeError("schedule result notification was not acknowledged")
-        return {"notification_id": body["data"]["notificationId"]}
+        data = body.get("data")
+        if not isinstance(data, dict) or type(data.get("replayed")) is not bool:
+            raise ValueError("invalid schedule notification receipt")
+        identifier = data.get("notificationId")
+        if identifier is None and data["replayed"]:
+            return {"delivered": False, "reason": "notification_removed", "replayed": True}
+        if type(identifier) is not int or identifier <= 0:
+            raise ValueError("invalid schedule notification identity")
+        return {"notification_id": identifier, "delivered": True, "replayed": data["replayed"]}
