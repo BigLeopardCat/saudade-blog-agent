@@ -56,3 +56,15 @@ def test_generic_provider_records_final_payload_and_hashes_endpoint(monkeypatch)
     assert events[-1]["messages"] == [request_trace.fingerprint(m) for m in payload["messages"]]
     assert events[-1]["endpoint"] == request_trace.fingerprint("https://private/api")
     assert "private" not in json.dumps(events)
+
+
+def test_transport_deadline_and_header_changes_are_not_generation_changes(monkeypatch):
+    events = []
+    monkeypatch.setattr(request_trace, "record", lambda *args, **data: events.append(data))
+    request_trace.record_layout({"temperature": 0.7, "timeout": 10,
+                                 "extra_headers": {"Authorization": "secret-one"}})
+    request_trace.record_layout({"extra_headers": {"Authorization": "secret-two"},
+                                 "timeout": 9, "temperature": 0.7})
+    assert events[0]["controls"] == events[1]["controls"]
+    assert set(events[0]["control_fingerprints"]) == {"temperature"}
+    assert "secret" not in json.dumps(events)

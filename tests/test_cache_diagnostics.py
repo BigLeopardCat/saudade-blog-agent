@@ -57,3 +57,9 @@ def test_summary_calls_are_not_compared_with_main_agent_calls():
                     ("c", document(["a", "b"], cache=50))])
     assert [row["change"] for row in got["calls"]] == [
         "first_observed", "first_observed", "append_only"]
+
+
+def test_changed_generation_parameter_is_identified_without_exposing_its_value():
+    before = {"control_fingerprints": {"max_tokens": "a"}, "controls": "a"}
+    after = {"control_fingerprints": {"max_tokens": "b", "seed": "c"}, "controls": "b"}
+    assert compare(before, after)["changed_control_keys"] == ["max_tokens", "seed"]

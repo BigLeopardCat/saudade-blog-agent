@@ -22,6 +22,11 @@ def compare(previous, current):
         return {"change": "first_observed"}
     before, after = previous.get("messages", []), current.get("messages", [])
     shared = common_prefix(before, after)
+    old_controls, new_controls = (previous.get("control_fingerprints"),
+                                  current.get("control_fingerprints"))
+    changed_keys = (sorted(key for key in old_controls.keys() | new_controls.keys()
+                           if old_controls.get(key) != new_controls.get(key))
+                    if old_controls is not None and new_controls is not None else None)
     changed_controls = any(previous.get(key) != current.get(key) for key in
                            ("model", "endpoint", "session", "controls", "tool_choice",
                             "thinking", "reasoning_effort"))
@@ -44,7 +49,7 @@ def compare(previous, current):
             "tools_appended": bool(tools_changed and tool_index is not None
                                    and tool_index == len(tools_before)
                                    and len(tools_after) > len(tools_before)),
-            "controls_changed": changed_controls}
+            "controls_changed": changed_controls, "changed_control_keys": changed_keys}
 
 
 def _timestamp(doc):
