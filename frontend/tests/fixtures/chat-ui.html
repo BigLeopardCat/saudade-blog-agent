@@ -19,11 +19,12 @@
 <script type="module" src="/live2d-widgets/chat-protocol.js"></script>
 <script src="/live2d-widgets/chat-navigation.js"></script>
 <script src="/live2d-widgets/chat-steering.js"></script>
+<script src="/live2d-widgets/chat-approval.js"></script>
 <script src="/live2d-widgets/chat-stream.js"></script>
 <script src="/live2d-widgets/chat-session.js"></script>
 <script src="/live2d-widgets/chat-ui.js"></script>
 <script>
-  localStorage.setItem('tokenKey', 'offline-fixture-token');
+  localStorage.setItem('tokenKey', 'fixture.' + btoa(JSON.stringify({sub:7})) + '.signature');
   localStorage.setItem('username', '离线测试用户');
   // A controlled host-renderer fixture, not a second Markdown implementation.
   // It supplies real rich-text elements to the production rendering/layout code.

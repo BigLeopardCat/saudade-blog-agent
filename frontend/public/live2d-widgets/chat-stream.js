@@ -41,393 +41,8 @@
             askOther, askOtherInput, askOtherSend } = ctx.dom;
     const scrollToBottom = engine.scrollToBottom;
     const broadcast = engine.broadcast;
-    // Cards carry signed operations. Approval, revocation and replay are settled
-    // by the server; tokens must never enter logs or monitoring payloads.
-    const reportConfirm = (why) => {
-      try {
-        if (typeof window.__reportError === 'function') {
-          window.__reportError({ type: 'confirm_card', message: why, url: location.href });
-        }
-      } catch (e) { /* 上报自身失败静默 */ }
-    };
-    // ── 确认链路的**正常分支**埋点（20260924）──────────────────────────────
-    // 上面那个 reportConfirm 是**失败**类型：对账脚本按 `type=confirm_card` 数异常
-    // （eval/trace_reconcile.py 的 MONITOR_ANOMALY），所以正常链路的每一跳必须另起
-    // 一个类型 `confirm_flow`——两者混用会把"用户点了一次确定"数成"一次异常"，
-    // 判据当天就得失准。为什么正常分支也要埋：这类失败全是"屏幕上看不出来"的形态
-    // （帧到了卡片没挂上、点了没发出去、发出去了没有任何结论），只报失败分支等于
-    // **只在事后取证**——用户不截图就无据可查。有了逐跳记录，跨源对账能直接看出
-    // "点了几次、发出去几次、结算几次"这三者该相等而不等的那一次。
-    // 逐跳：frame（确认帧到）→ card（卡片就位）→ click（点了哪个）→ sent（请求真发出）
-    //       → settle（结论：ok/unknown/expired/cancel/rollback）。
-    // **绝不带令牌**（它是一次同意的唯一凭据，与 confirm_card 同纪律）。
-    // 每一跳都带一个**同一枚待办内单调的序号 n**（1,2,3…）。两个用途：
-    // ① 真上报链（boot.js 的 report）按 `type|message 前 80 字符|url` 在页面
-    //    生命周期内去重、整条丢掉——同一枚待办被挂第二次（回滚放回 / reconcile 自愈
-    //    接回）时消息一模一样，没有序号就会在**真链上被吃掉**，而沙箱里看得见
-    //    ⇒ 那正是"沙箱绿、线上没有"的假绿；
-    // ② 对账读日志时，同一秒内的多跳只能靠序号定序（日志行只有整秒）。
-    const askSeq = {};
-    const reportAskStage = (stage, extra) => {
-      try {
-        if (typeof window.__reportError !== 'function') return;
-        const id = String((extra || {}).id || '');
-        askSeq[id] = (askSeq[id] || 0) + 1;
-        const parts = ['stage=' + stage, 'n=' + askSeq[id]];
-        Object.keys(extra || {}).forEach((k) => {
-          const v = extra[k];
-          if (v === undefined || v === null || v === '') return;
-          parts.push(k + '=' + String(v).replace(/\s+/g, ' ').slice(0, 60));
-        });
-        window.__reportError({ type: 'confirm_flow', message: parts.join(' '),
-                               url: location.href });
-      } catch (e) { /* 上报自身失败静默 */ }
-    };
-    // 卡片挂着的**待办标识**（帧里的 id，服务端每次弹窗签发一个 8 位随机串）：逐跳埋点
-    // 全带它，对账才能把 frame/card/click/sent/settle 串成**同一件事**的序列。
-    // 它**不是**凭据（token 才是），所以能进上报；token 永远不进（见 reportAskStage）。
-    const askIdOf = () => {
-      try {
-        if (askBox && askBox.dataset.askId) return askBox.dataset.askId;
-        return (ctx.state.pendingAsk || {}).id || '';
-      } catch (e) { return ''; }
-    };
-    // ── 卡片跨刷新存活（20260924）────────────────────────────────────────
-    // 这张卡片此前只活在**当轮的 SSE 帧**里：刷新页面、切走再回来、或者那条流中途
-    // 断了，卡片就结构上不可能再出现——而令牌其实还在有效期内（10 分钟）。用户看到
-    // 的是"agent 说要确认，可我没地方点"（报的就是这个）。
-    // 现在卡片随帧落一份到 localStorage（按会话分桶，与会话缓存同一套键纪律），页面
-    // 拉完历史/DOM 重建后自动接回。存的是帧里那一份的**原样拷贝**（问句/按钮/令牌/
-    // 到期时刻），不是重造的——重建出来的卡片必须与主人当时看到的那张逐字一致，
-    // 否则他等于在确认一件自己没看过的事。
-    // 把令牌放进 localStorage 不放宽任何一条既有纪律：它本来就交到这位主人手里
-    // （帧是发给他一个人的），而这个 localStorage 里早就躺着同一主人的登录 JWT
-    // （`tokenKey`）；"令牌不进 trace/日志/回执/prompt"一天没松，这里也没破——访客
-    // （无 tokenKey）连键都建不出来。服务端依旧零状态。
-    //
-    // 三处作废（缺一处卡片就会阴魂不散地回来，且回来时又是可点的）：
-    //   · 点击那一刻（handleAskChoice 走 askSettle）——一次点击只兑现一次；
-    //   · 任何结算（askSettle：已过期/已取消/已用过/知道了）；
-    //   · 改口作废（hideAsk 也走 askSettle）。
-    // **没发出去**的回滚（askRollback）刻意不删：那次卡片还是活的，刷新该接回来。
-    let askConvId = null;        // 当前这张卡属于哪个会话——存档/清档都按它分桶
-    let askPruned = false;       // 这次页面生命周期里清过一次过期存档没有
-    let askRestored = false;     // 这一次挂载是"刷新接回来"的（埋点据此带 restored=1）
-    const askKey = (conv) => {
-      let tk = null;
-      try { tk = localStorage.getItem('tokenKey'); } catch (e) {}
-      if (!tk || conv === null || conv === undefined) return null;
-      return 'chat_ask_' + tk + '_' + conv;
-    };
-    const saveAsk = (ask) => {
-      const k = askKey((ask || {}).convId);
-      if (!k) return;
-      try {
-        localStorage.setItem(k, JSON.stringify({
-          id: ask.id || '', q: ask.q || '', opts: ask.opts || [],
-          token: ask.token || '', exp: ask.exp || 0, replay_safe: ask.replay_safe === true,
-          task_id: ask.task_id || '',
-        }));
-      } catch (e) {/* 存不下（隐私模式/配额满）：这一轮照常弹，只是刷新后不回来 */}
-    };
-    const dropAsk = (conv) => {
-      const k = askKey(conv);
-      if (!k) return;
-      try { localStorage.removeItem(k); } catch (e) {}
-    };
-    // 改口输入行的收起（20261006）。放在 askSettle 之前定义：askSettle 要调它，
-    // 而"结算"这条路径上有五个出口，谁都不该自己记得收这一行。
-    const hideAskOther = () => {
-      if (!askOther) return;
-      askOther.classList.remove('active');
-      if (askOtherInput) askOtherInput.value = '';
-    };
-    let askAnchor = null;
-    const askSettle = (note, state, result) => {
-      if (askTimer) { clearTimeout(askTimer); askTimer = null; }
-      // Settled cards must not be restored as actionable local drafts.
-      dropAsk(askConvId);
-      hideAskOther();
-      askBtns.innerHTML = '';
-      const el = document.createElement('div');
-      el.className = 'chat-ask-note';
-      el.textContent = note;
-      askBtns.appendChild(el);
-      if (askBox) {
-        askBox.dataset.askState = state || 'settled';
-        askBox.dataset.result = result || '';
-      }
-      if (result) reportAskStage('settle', { id: askIdOf(), result });
-      if ((state || 'settled') === 'settled') {
-        if (askAnchor && messages.contains(askAnchor)) {
-          const previous = askAnchor.querySelector('.chat-approval-result');
-          if (previous) previous.remove();
-          const record = document.createElement('div');
-          record.className = 'chat-approval-result';
-          record.textContent = note;
-          askAnchor.appendChild(record);
-        }
-        askBox.classList.remove('active');
-      }
-    };
-    // ── 卡片的结算态（20260924）──────────────────────────────────────────
-    // 此前这张卡只有两种命：可点，或者"已确认"。而"已确认"是**点击那一刻**写下的
-    // 乐观文本，没有任何回滚——令牌过期了、那条隐藏请求被忙守卫丢掉了、轮次以网络
-    // 错误收尾了，卡片照样写着"已确认"（20260924 生产事故 00:21：卡片说已确认，
-    // 系统里零执行，agent 事后又答"系统里也没有生成待确认的指令"）。
-    // 现在：点下去是「确认中…」，真实结论由**轮次收尾**给出（成功→已确认 / 没发出去
-    // →可重试 / 收尾失败→不确定），另有到期定时器兜底把卡片收成「已过期」。
-    // 展示用的到期时刻来自帧里的 exp（agent 侧取自令牌自身，不是重算）。
-    let askTimer = null;
-    const askExpire = () => {
-      askTimer = null;
-      // 本轮还在跑 ⇒ 结算权归它（它会给出真结果），此刻收卡片等于用一个猜的结论
-      // 覆盖即将到来的事实
-      if (ctx.state.confirmRound) return;
-      const pending = !!(askBox && askBox.dataset.askState === 'pending');
-      ctx.state.pendingAsk = null;
-      // 卡片已被摘走（切会话清了消息流）就不结算也不上报——那是"用户在别处"，
-      // 不是"点了没反应"，报上去全是假警报
-      if (!askBox || !askBox.classList.contains('active')
-          || askBox.parentNode !== messages) return;
-      if (pending) {
-        // 点了确定、等到令牌过期都没回音：正是最难查的那种静默失败，必须留痕
-        reportConfirm('点了确定之后等到令牌过期仍没有回复（卡片：确认中 → 已过期）');
-      }
-      askSettle('已过期，没有执行任何操作；要处理的话再跟我说一次', undefined, 'expired');
-    };
-    const askArmTimer = (ask) => {
-      if (askTimer) { clearTimeout(askTimer); askTimer = null; }
-      const exp = Number(ask && ask.exp) || 0;
-      // 没有 exp（旧服务端/签发失败）就按改动前处理：不显示倒计时、不自动结算。
-      // 服务端仍以验签为唯一凭据，缺这个数不影响安全，只少一层"卡片不会永远乐观"。
-      if (!exp) return;
-      const left = exp * 1000 - Date.now();
-      if (left <= 0) { askExpire(); return; }
-      askTimer = setTimeout(askExpire, left);
-    };
-    // 回滚（20260924）：这一跳**根本没出去**（忙守卫/建会话失败）。卡片退回可点，
-    // 原因写在问句下面——不是写进 .chat-ask-note，那一行的语义是"这件事有结论了"。
-    // `retry=true` 只给"确知什么都没发生"的场合；请求已经发出去过的失败一律走
-    // askUnknown（见轮次收尾）：那种时刻真话是"不知道有没有生效"，此时把按钮
-    // 放回去等于请用户再签一次字，而第一次可能已经执行了。
-    const askRollback = (ask, why) => {
-      if (!ask || !askBox || !askBox.classList.contains('active')) return;
-      ctx.state.pendingAsk = ask;
-      reportAskStage('settle', { id: askIdOf(), result: 'rollback', why });
-      askBox.dataset.askState = '';   // 抹掉状态 ⇒ syncAsk 的就位判据不成立，强制重建按钮
-      syncAsk();
-      setAskQuestion(ask.q, '（上一次没发出去：' + why + '，可以再点一次）');
-    };
-    const askUnknown = (why, ask) => {
-      if (ask && ask.replay_safe === true) {
-        ctx.state.pendingAsk = ask;
-        askBox.dataset.askState = '';
-        syncAsk();
-        saveAsk(ask);
-        setAskQuestion(ask.q, '未收到执行结果。可再次确定以重取原操作结果；不会重复执行。');
-        return;
-      }
-      if (!askBox || !askBox.classList.contains('active')) return;
-      ctx.state.pendingAsk = null;    // 不重新放行：请求发出去过，不能再签一次字
-      reportConfirm('点了确定之后本轮以失败收尾（' + why + '）——卡片按"不确定"结算，不再放行重试');
-      askSettle('没收到回复，不确定有没有生效；可以问我"刚才那件事办成了吗"', undefined, 'unknown');
-    };
-    const hideAsk = () => {                // 未点击的收场（用户改口打字说了别的）
-      const shown = askBox && askBox.classList.contains('active');
-      ctx.state.pendingAsk = null;
-      if (shown) askSettle('已收起卡片；这不会撤销操作。', undefined, 'dismiss');
-      else if (askBtns) askBtns.innerHTML = '';
-    };
-    // ── 改口（20261006）：卡上那枚「其他（我来说）」────────────────────────
-    // 用户原话："弹窗是否用改给个 other 选项输入框，而不是点了否再重新输入会话。"
-    // 此前要改口得先点「取消」、再到下面输入框重述一遍：多一步之外，卡片还会先写上
-    // 「已取消」——读起来像"这件事被否了"，而他其实只是想把它说成别的。
-    //
-    // 这一跳**不碰令牌**：提交出去的是**普通新轮**（非 silent、不带 confirmToken/
-    // confirmPick）。于是"一次点头只兑现一次"那条不变量原样成立——令牌没人认领，
-    // 自然到期作废，服务端依旧零状态。planner 照常从零重新规划，而上一轮那张卡
-    // 说了什么**在历史里**（`confirm_text` 走 AI 帧就是为了落库，见 server.py 那段
-    // 注释），指代接得上。
-    //
-    // **顺序是判据**（见 handleAskChoice 里 `other` 那一支）：`other` 不是 `yes` 也
-    // 不是 `pick:<i>`，一旦漏进隐藏确认请求，服务端 `confirm.narrow` 会 fail-closed
-    // 拒掉——卡片结算了、屏幕上一切正常、其实一个字节都没执行。本仓最贵的失效形态。
-    //
-    // 这里只有**开输入框**那一半（只碰工厂层看得见的东西）。提交那一半
-    // （submitAskOther）住在 init 里、紧挨着 handleAskChoice：它要调 resizeInput 与
-    // sendMessage，而这两个是 init 的局部 const——工厂层调它们就是 20260921d 那次
-    // `Uncaught ReferenceError: sendMessage is not defined`（点确定什么都没发生、
-    // 界面也没有任何提示）。父仓 `frontend/tests/live2d-widget-scope.test.mjs` 的
-    // 作用域洞扫描盯着这条线，别把 submitAskOther 挪回工厂层。
-    const revealAskOther = () => {
-      if (!askOther) {
-        // 模板缺节点不能静默：用户看到的是"点了按钮什么都没发生"
-        reportConfirm('模板里没有 #chat-ask-other 节点，「其他（我来说）」无处可输入');
-        return;
-      }
-      askOther.classList.add('active');
-      if (askOtherInput) { try { askOtherInput.focus(); } catch (e) {} }
-      scrollToBottom(messages, true);
-    };
-    // 问句渲染（20260925）：与气泡走同一套 markdown 管线（applyMsg → renderMarkdown
-    // + 渲染后增强）。此前是 `textContent`，问句里的 `**全部**`、列表、行内代码会被
-    // 原样显示成一串星号/反引号（用户报"卡片没有渲染 markdown 文本"）。问句是 agent
-    // 写的正文，不是系统文案，渲染口径本该与气泡一致。
-    // 注记（"上一次没发出去…"）另起一个纯文本节点、**不进 markdown**：它是系统文案，
-    // 里面带 `*`/`_` 的话会被渲染成强调，把一句准话渲染歪。
-    const setAskQuestion = (q, note) => {
-      if (!askQuestion) return;
-      try { applyMsg(askQuestion, String(q || '')); }
-      catch (e) { askQuestion.textContent = String(q || ''); }  // 渲染失败退回纯文本，绝不空着
-      if (note) {
-        const el = document.createElement('div');
-        el.className = 'chat-ask-retry-note';
-        el.textContent = note;
-        askQuestion.appendChild(el);
-      }
-    };
-    // 卡片后面还有没有"真内容"（判定它是否仍在消息流末位）。20261001 与 syncAsk 的
-    // "在末位"判据同批加。
-    // **空气**两类，与 reconcileDOM 的孤儿清理同源（少了这层区分，卡片会被一次次
-    // 重新挂载——屏幕上什么都没变，埋点却刷成噪声，而"卡片就位"这条记录的用法正是
-    // "没刷过 = 一直好着"）：
-    //   · 非元素节点（模板/换行留下的文本节点）；
-    //   · 时间标签（.chat-time-divider）——它是相邻气泡的**前导**附属，永远长在
-    //     气泡前面，出现在卡片后面只可能是"下一个气泡还没插进来"。
-    const askAtEnd = () => {
-      if (!askBox || askBox.parentNode !== messages) return false;
-      let n = askBox.nextSibling;
-      while (n) {
-        if (n.nodeType === 1 && !n.classList.contains('chat-time-divider')) return false;
-        n = n.nextSibling;
-      }
-      return true;
-    };
-    // 把待办渲染成可点卡片。**幂等**（20260923）：同一个待办重复调用是零副作用。
-    // 它现在有两个调用点——流收尾（正常时机）与 reconcileDOM 收尾的钩子
-    // onAskResync（每次 DOM 重建后的自愈），后者可能一轮里被调到多次。旧版每次都
-    // 重建按钮并 appendChild：重复调用会把"已确认/已取消"的记录态覆盖回可点按钮
-    // （再点一次什么都不发生），还会把卡片反复挪位置。
-    const syncAsk = () => {
-      const ask = ctx.state.pendingAsk;
-      if (!ask) return;
-      if (!askBox) {
-        // 待办在、模板节点不在（模板被改坏/被外部摘走）⇒ 不能静默：用户看到的是
-        // "agent 说完就没了"，而库里一切正常
-        reportConfirm('模板里没有 #chat-ask 节点，待办无处可挂（q=' + String(ask.q || '').slice(0, 40) + '）');
-        return;
-      }
-      const token = String(ask.token || '');
-      const busy = ctx.state.isSending || Object.keys(ctx.state.remoteRounds || {}).length > 0;
-      // A live card follows the current round; settled status belongs to its source message.
-      if (askBox.dataset.askToken === token
-          && askBox.dataset.askState === 'live'
-          && askBox.classList.contains('active')
-          && askBox.parentNode === messages
-          && !!askBtns.querySelector('button[data-ask-value]')
-          && askAtEnd()) {
-        askBtns.querySelectorAll('button[data-ask-value]').forEach(button => { button.disabled = busy; });
-        return;
-      }
-      if (askBox.dataset.askToken !== token) askAnchor = null;
-      askBox.dataset.askToken = token;
-      askBox.dataset.askId = String(ask.id || '');   // 埋点用（非凭据，见 askIdOf）
-      setAskQuestion(ask.q);
-      askBtns.innerHTML = '';
-      // 重建 = 这是一张**新**卡（令牌换了，或上一次发出去被打回）⇒ 改口输入行回到
-      // 收起态、不留上一张卡打了一半的字。注意上面那条"已就位就提前返回"的判据
-      // 管着另一半：同一张卡被 reconcile/自愈重新调到这里时**不会**执行到这一行，
-      // 所以已经点开、正打着字的输入行不会被 DOM 重建吞掉。
-      hideAskOther();
-      (ask.opts || []).forEach((op) => {
-        const b = document.createElement('button');
-        b.type = 'button';
-        b.disabled = busy;
-        // 复用导航确认框的按钮样式（.chat-nav-btn yes/no），观感与它完全一致。
-        // 三档（20261006）：取消=no（灰）、其他（我来说）=other（按 no 那档的观感，
-        // 它不是"同意"）、其余=yes（主色）。少了 other 这一档，「其他」会被画成
-        // 主按钮——卡上同时出现两枚"看起来都是同意"的红按钮。
-        b.className = 'chat-nav-btn '
-                      + (op.value === 'no' ? 'no' : (op.value === 'other' ? 'other' : 'yes'));
-        b.textContent = op.label || '确定';
-        b.setAttribute('data-ask-value', op.value || 'yes');
-        askBtns.appendChild(b);
-      });
-      const anchors = messages.querySelectorAll('.chat-msg.agent');
-      if (!askAnchor || !messages.contains(askAnchor)) {
-        askAnchor = anchors.length ? anchors[anchors.length - 1] : null;
-      }
-      messages.appendChild(askBox);
-      askBox.classList.add('active');
-      delete askBox.dataset.result;
-      askBox.dataset.askState = 'live';   // 可点（见 askSettle/askRollback 的状态语义）
-      // 卡片**真的挂上去了**才埋点（上面那条幂等提前返回不报，否则每次 DOM 重建
-      // 都刷一条，"卡片就位"这个事实会被刷成噪声）。**必须排在 askArmTimer 前面**：
-      // 帧里的 exp 已经是过去时刻时 askArmTimer 会当场结算并埋一条 settle，先埋
-      // card 才与真实顺序一致——反过来会记成"先结算、后挂卡"这种不存在的序列，
-      // 而跨源对账正是按序列读的（假顺序=假警报）。
-      // restored=1：这一次挂载是刷新接回来的（不是帧弹的）。挂载埋点只有这一处，
-      // 所以"接回"这件事**不能**在 restoreAsk 里另报一条——那会把一次挂载报成两跳
-      // （card + card），跨源对账按跳数读，多出来的那一条就是一条假记录。
-      reportAskStage('card', askRestored ? { id: String(ask.id || ''), restored: 1 }
-                                         : { id: String(ask.id || '') });
-      askArmTimer(ask);                   // 到期自动结算（帧里有 exp 才起，见 askArmTimer）
-      scrollToBottom(messages, true);
-    };
-
-    // 把存档里的卡片接回来（见上面"卡片跨刷新存活"一节）。**幂等**，且内存里已经有
-    // 同一枚待办时直接返回——帧刚弹的那张永远比存档新。
-    // 调用点 = reconcileDOM 收尾（onAskResync）：页面加载时历史拉完会走一次，切会话
-    // 回来也会走一次，两条真路径都覆盖，不另设启动钩子。
-    const restoreAsk = () => {
-      const conv = ctx.state.conv;
-      pruneAskStore();
-      if (ctx.state.pendingAsk) return;
-      const k = askKey(conv);
-      if (!k) return;
-      let saved = null;
-      try { saved = JSON.parse(localStorage.getItem(k) || 'null'); } catch (e) { saved = null; }
-      if (!saved || typeof saved !== 'object') return;
-      const exp = Number(saved.exp) || 0;
-      // 缺件（没有令牌/问句/按钮就是一张点不动的卡）或已过期 ⇒ 清掉、不接回。
-      // 过期判定与 askArmTimer 同口径（exp 是 UTC 秒，帧里取自令牌自身）。
-      if (!saved.q || !saved.token || !(saved.opts || []).length
-          || (exp && Date.now() >= exp * 1000)) {
-        dropAsk(conv);
-        return;
-      }
-      askConvId = conv;
-      ctx.state.pendingAsk = Object.assign({}, saved, { convId: conv });
-      // 埋点仍用 stage=card（"卡片就位"这个事实与帧带来的那次一模一样），只是多带
-      // 一个 restored=1 让对账分得出"这张是刷新接回来的"。**刻意不新造阶段名**：
-      // trace_reconcile.py 的 FLOW_STAGES 是封闭表，多一个名字就会计进 unknown_stage
-      // 并报"埋点与对账要同步"。这一跳由 syncAsk 真正挂上卡片时发出（那里是唯一的
-      // 挂载埋点），这里只把"来源"告诉它。
-      askRestored = true;
-      syncAsk();
-      askRestored = false;   // 兜底清除：syncAsk 幂等提前返回时这一轮没人消费它
-    };
-    // 顺手清过期存档（同一个会话删掉/换了设备之后，旧键没有任何读取路径，只会堆在
-    // localStorage 里）。一次页面生命周期清一次；没有 token 就不动手。
-    const pruneAskStore = () => {
-      if (askPruned) return;
-      let tk = null;
-      try { tk = localStorage.getItem('tokenKey'); } catch (e) { return; }
-      if (!tk) return;
-      askPruned = true;
-      const prefix = 'chat_ask_' + tk + '_';
-      try {
-        for (let i = localStorage.length - 1; i >= 0; i--) {
-          const k = localStorage.key(i);
-          if (!k || k.indexOf(prefix) !== 0) continue;
-          let s = null;
-          try { s = JSON.parse(localStorage.getItem(k) || 'null'); } catch (e) { s = null; }
-          const exp = Number((s || {}).exp) || 0;
-          if (!s || (exp && Date.now() >= exp * 1000)) localStorage.removeItem(k);
-        }
-      } catch (e) {/* 清不动就算了：读取端每次都自己判过期，不靠这里 */}
-    };
+    const approval = g.__waifuApproval(ctx, engine);
+    const { reportConfirm, reportAskStage, saveAsk, dropAsk, askSettle, askExpire, askRollback, askUnknown, hideAsk, revealAskOther, setAskQuestion, syncAsk, restoreAsk } = approval;
 
     // 主题日 = 以 06:00 为界（23:00-6:00 自动夜间的恢复边界）：手动/对话调节的
     // 让位只在当前主题日内有效，跨 6:00 自动切换恢复（20260908 时效化，与 App 同语义）
@@ -876,6 +491,10 @@
           resumeTask: opts.resumeTask || (opts.confirmAsk || {}).task_id,
           resumeText: opts.resumeText || (silent ? ([...ctx.state.items].reverse()
             .find(x => x.type === 'user') || {}).text : '') };
+        const roundState = ctx.state.activeRound;
+        const ownsRound = () => ctx.state.activeRound === roundState
+          && ctx.state.conv === roundConvId && localStorage.getItem('tokenKey') === token;
+        const staleRound = () => Object.assign(new Error('请求已不属于当前会话'), { staleRound: true });
         steering?.begin();
         if (ctx.ui.beginReply) ctx.ui.beginReply();
         if (!silent) {
@@ -1054,10 +673,11 @@
         let div = null, contentSpan = null; // live 气泡（catch 异常路径 failRound 也要引用转正，提升到 try 外）
         // 空闲/总超时计时器：声明提升到 try 外——catch 异常路径也要 clearTimeout
         // （块级 let 在 try 内声明会让 catch 引用抛 ReferenceError）
-        let idleTimer = null, totalTimer = null;
+        let idleTimer = null, totalTimer = null, requestController = null;
         try {
           // SSE 流式对话：agent 首 token 即上屏，不再等待完整回复
           const ctrl = new AbortController();
+          requestController = ctrl;
           ctx.state.streamCtrl = ctrl;
           // 空闲超时：超过 60s 无任何数据帧则中止（正常生成中每帧都会重置；
           // LLM 工具调用间隙通常 <15s，但慢生成（thinking 长思考/服务端排队，
@@ -1107,6 +727,7 @@
             }),
             signal: ctrl.signal,
           });
+          if (!ownsRound()) throw staleRound();
           if (!resp.ok) {
             // 网关/代理超时可能返回 HTML 错误页（如 504），先读文本再解析
             const text = await resp.text();
@@ -1262,6 +883,7 @@
           };
 
           const protocol = window.__waifuChatProtocol.createStream(({ type, data }) => {
+            if (!ownsRound()) throw staleRound();
             kickTyping();
             if (type === 'error') {
               const err = new Error(data);
@@ -1274,9 +896,7 @@
             if (type === 'confirmation') {
               const cr = ctx.state.confirmRound;
               if (cr && cr.continuation && cr.ask.id === data.id) ctx.state.confirmRound = null;
-              ctx.state.pendingAsk = Object.assign({}, data, { convId: roundConvId });
-              askConvId = roundConvId;
-              saveAsk(ctx.state.pendingAsk);
+              if (!approval.receive(data, roundConvId, div)) return;
               reportAskStage('frame', { id: String(data.id || ''), opts: data.opts.length,
                                        exp: data.exp ? 'yes' : 'no', q: data.q.slice(0, 40) });
               syncAsk();
@@ -1352,6 +972,7 @@
           // 解析意图、不再执行（见 execAgentCommands 的长注）。
           execAgentCommands(programCmds, contentSpan);
         } catch(e) {
+          if (e?.staleRound || !ownsRound()) return false;
           // 20260903 会话已删（skipFailedPersist 标记）：输入已还原、乐观条目已移除、
           // handleConvGone 已触发恢复流程——这里只静默收尾（finally 复位 UI/busy/
           // 补拉），不再渲染错误气泡/重发按钮/失败持久化标记（会话已不存在）
@@ -1475,57 +1096,70 @@
             }
           }
         } finally {
-          // 复位必须在 finally：catch 内 applyMsg/broadcast 万一抛错，
-          // 未复位 isSending 会把对话框永久锁死（后续发送全部被拦，即"卡死"）
-          ctx.state.isSending = false;
-          ctx.state.streamCtrl = null;
-          steering?.end();
-          // 20260901：远端窗口回复中（remoteRounds 非空）时保持按钮禁用——
-          // 否则本窗收尾逻辑会把跨窗同步禁用错误解除
-          sendBtn.disabled = Object.keys(ctx.state.remoteRounds || {}).length > 0;
-          sendBtn.title = '发送';
-          sendBtn.innerHTML = '发送';
-          sendBtn.classList.remove('stop-mode');
-          input.disabled = false;
-          if (ctx.ui.restoreInputFocus) ctx.ui.restoreInputFocus();
-          // 20260901：跨窗 idle 广播 + 清除 busy 标记（与 sending 成对）——
-          // 其他窗口恢复发送按钮（正常收尾/异常中断/停止生成统一走 finally）
-          broadcast({ t: 'idle', roundId, from: engine.windowId });
-          try { localStorage.removeItem('saudade-chat-busy'); } catch (e) {}
-          // A completed continuation settles its original card; redisplay stays pending.
-          if (ctx.state.confirmRound) {
-            const cr = ctx.state.confirmRound;
-            ctx.state.confirmRound = null;
-            if (cr.failed) askUnknown(cr.failed, cr.ask);
-            else {
-              if (ctx.state.pendingAsk && cr.ask && ctx.state.pendingAsk.id === cr.ask.id)
-                ctx.state.pendingAsk = null;
-              askSettle('已确认，结果见下方回复', undefined, 'ok');
-              if (ctx.state.pendingAsk) saveAsk(ctx.state.pendingAsk);
+          clearTimeout(idleTimer); clearTimeout(totalTimer); clearTimeout(typingTimer);
+          if (ctx.state.activeRound === roundState) {
+            const sameView = ownsRound();
+            // 复位必须在 finally：catch 内 applyMsg/broadcast 万一抛错，
+            // 未复位 isSending 会把对话框永久锁死（后续发送全部被拦，即"卡死"）
+            ctx.state.isSending = false;
+            ctx.state.streamCtrl = null;
+            steering?.end();
+            // 20260901：远端窗口回复中（remoteRounds 非空）时保持按钮禁用——
+            // 否则本窗收尾逻辑会把跨窗同步禁用错误解除
+            sendBtn.disabled = Object.keys(ctx.state.remoteRounds || {}).length > 0;
+            sendBtn.title = '发送';
+            sendBtn.innerHTML = '发送';
+            sendBtn.classList.remove('stop-mode');
+            input.disabled = false;
+            if (ctx.ui.restoreInputFocus) ctx.ui.restoreInputFocus();
+            // 20260901：跨窗 idle 广播 + 清除 busy 标记（与 sending 成对）——
+            // 其他窗口恢复发送按钮（正常收尾/异常中断/停止生成统一走 finally）
+            broadcast({ t: 'idle', roundId, from: engine.windowId });
+            try { localStorage.removeItem('saudade-chat-busy'); } catch (e) {}
+            // A completed continuation settles its original card; redisplay stays pending.
+            if (!sameView) {
+              ctx.state.confirmRound = null;
+              ctx.state.pendingAsk = null;
+              ctx.state.approvalBusy = false;
+              askBox.classList.remove('active');
+            } else if (ctx.state.confirmRound) {
+              const cr = ctx.state.confirmRound;
+              ctx.state.confirmRound = null;
+              if (cr.failed) askUnknown(cr.failed, cr.ask);
+              else {
+                if (ctx.state.pendingAsk && cr.ask && ctx.state.pendingAsk.id === cr.ask.id)
+                  ctx.state.pendingAsk = null;
+                askSettle('已确认，结果见后续回复', undefined, 'ok', cr.ask);
+                if (ctx.state.pendingAsk) saveAsk(ctx.state.pendingAsk);
+              }
             }
+            // 流式中被推迟的 DB 拉取在此补拉（storage 事件可能在流中到达）
+            if (ctx.state.pendingPull) { ctx.state.pendingPull = false; setTimeout(pullHistory, 0); }
+            // 20260903：本轮收尾——标题派生/updated_at touch 都发生在服务端该轮
+            // 入库时，本地无从得知；通知 UI 重拉会话列表收敛（排序/标题/新建行）
+            engine.notifyListDirty();
+            // Cards render on arrival; enable their controls after the stream has settled.
+            setTimeout(() => {
+              if (!ctx.state.pendingAsk) return;
+              if (!ctx.state.isSending) syncAsk();
+            }, 0);
+            // 20260923：一轮对话收尾 → 广播给"看板娘可能改过的那些状态"。
+            // agent 有写自己数据的工具（收藏/通知已读/站内信），它改的是**服务端**，
+            // 页面上的★、收藏列表、红点都没有理由知道——此前只能等下一次轮询（或永远不变）。
+            // 这里不判断"这轮到底写没写"：过程帧里只有中文人话、没有可判的机器标记，
+            // 而为此让 Rust 多转发一种帧要动三端协议。改成一个无条件的信号 + 订阅方自己
+            // 决定拉不拉（收藏那一份只在"这一刻真的在看收藏"时才会发请求，见
+            // src/components/UserCenter/favorites.ts 的 useFavorites/enabled）。
+            try {
+              window.dispatchEvent(new CustomEvent('agent-turn-done'));
+            } catch (e) { /* ignore */ }
+          } else {
+            requestController?.abort();
+            typingEl?.remove();
+            delete ctx.state.live[roundId];
           }
-          // 流式中被推迟的 DB 拉取在此补拉（storage 事件可能在流中到达）
-          if (ctx.state.pendingPull) { ctx.state.pendingPull = false; setTimeout(pullHistory, 0); }
-          // 20260903：本轮收尾——标题派生/updated_at touch 都发生在服务端该轮
-          // 入库时，本地无从得知；通知 UI 重拉会话列表收敛（排序/标题/新建行）
-          engine.notifyListDirty();
-          // Cards render on arrival; enable their controls after the stream has settled.
-          setTimeout(() => {
-            if (!ctx.state.pendingAsk) return;
-            if (!ctx.state.isSending) syncAsk();
-          }, 0);
-          // 20260923：一轮对话收尾 → 广播给"看板娘可能改过的那些状态"。
-          // agent 有写自己数据的工具（收藏/通知已读/站内信），它改的是**服务端**，
-          // 页面上的★、收藏列表、红点都没有理由知道——此前只能等下一次轮询（或永远不变）。
-          // 这里不判断"这轮到底写没写"：过程帧里只有中文人话、没有可判的机器标记，
-          // 而为此让 Rust 多转发一种帧要动三端协议。改成一个无条件的信号 + 订阅方自己
-          // 决定拉不拉（收藏那一份只在"这一刻真的在看收藏"时才会发请求，见
-          // src/components/UserCenter/favorites.ts 的 useFavorites/enabled）。
-          try {
-            window.dispatchEvent(new CustomEvent('agent-turn-done'));
-          } catch (e) { /* ignore */ }
         }
-        if (ctx.state.stoppedTurn) {
+        if (ownsRound() && ctx.state.stoppedTurn) {
           // Preserve the draft; Continue reuses its task, while Regenerate is a new run.
           ctx.state.stoppedTurn = false;
           // 保留这一轮的全部动作收在 `retainStoppedTurn` 里（与 3s 保险那条路径共用
@@ -1533,7 +1167,7 @@
           retainStoppedTurn(ctx.state.live[roundId], roundId, msg, silent);
           setTimeout(pullHistory, 0); // DB 已是权威（残缺回复本就没落库），收敛一致
         }
-        return completed && !ctx.state.stoppedByUser;
+        return ownsRound() && completed && !ctx.state.stoppedByUser;
       };
 
       ctx.ui.isResumingTask = () => resumingTask;
@@ -1902,13 +1536,15 @@
 
       const pauseTask = () => {
         if (!ctx.state.isSending) return;
+        const pausedRound = ctx.state.activeRound;
           // 输出中点击 = 停止生成
           ctx.state.stoppedByUser = true;
           ctx.ui.refreshComposer?.();
           if (ctx.state.streamCtrl) ctx.state.streamCtrl.abort();
           // Repair the controls if a browser abort does not settle its reader promptly.
           setTimeout(() => {
-            if (ctx.state.isSending && (ctx.state.stoppedByUser || ctx.state.timedOut)) {
+            if (ctx.state.activeRound === pausedRound && ctx.state.isSending
+                && (ctx.state.stoppedByUser || ctx.state.timedOut)) {
               ctx.state.isSending = false;
               ctx.state.streamCtrl = null;
               sendBtn.disabled = Object.keys(ctx.state.remoteRounds || {}).length > 0;
@@ -2200,9 +1836,12 @@
       };
       const cancelAsk = async (ask) => {
         const conv = ctx.state.conv;
-        ctx.state.approvalBusy = true;
+        const token = localStorage.getItem('tokenKey');
+        const request = {};
+        const current = () => ctx.state.conv === conv && localStorage.getItem('tokenKey') === token;
+        ctx.state.approvalBusy = request;
         ctx.state.pendingAsk = null;
-        askSettle('撤销中…', 'pending', 'cancelling');
+        askSettle('撤销中…', 'pending', 'cancelling', ask);
         saveAsk(ask);
         const controller = new AbortController();
         const timer = setTimeout(() => controller.abort(), 12000);
@@ -2211,7 +1850,7 @@
           const response = await fetch('/api/chat/confirmation/cancel', {
             method: 'POST', signal: controller.signal,
             headers: { 'Content-Type': 'application/json',
-              'Authorization': 'Bearer ' + localStorage.getItem('tokenKey') },
+              'Authorization': 'Bearer ' + token },
             body: JSON.stringify({ conversation_id: conv, token: ask.token }),
           });
           const body = await response.json();
@@ -2220,12 +1859,13 @@
               : (typeof body.reply === 'string' ? body.reply : failureNote);
             throw new Error('revocation_unverified');
           }
-          dropAsk(conv);
-          if (ctx.state.conv === conv && askBox.dataset.askToken === ask.token) {
-            askSettle('已撤销，未执行改动', undefined, 'cancel');
+          if (current()) {
+            dropAsk(conv, ask.id);
+            if (ctx.state.pendingAsk?.id === ask.id) ctx.state.pendingAsk = null;
+            askSettle('已撤销，未执行改动', undefined, 'cancel', ask);
           }
         } catch (error) {
-          if (ctx.state.conv === conv && askBox.dataset.askToken === ask.token) {
+          if (current() && askBox.dataset.askToken === ask.token) {
             ctx.state.pendingAsk = ask;
             askBox.dataset.askState = '';
             syncAsk();
@@ -2233,7 +1873,7 @@
           }
         } finally {
           clearTimeout(timer);
-          ctx.state.approvalBusy = false;
+          if (ctx.state.approvalBusy === request) ctx.state.approvalBusy = false;
         }
       };
       const handleAskChoice = (value) => {
@@ -2247,17 +1887,11 @@
         }
         if (value === 'no') { cancelAsk(ask); return; }
         ctx.state.pendingAsk = null;
-        // 令牌已经过期（帧里带了 exp）⇒ 本地上账、**不发这一跳**。到期定时器在
-        // 后台标签页里会被浏览器节流（几十秒到几分钟才跑一次），所以"按钮还在"
-        // 不等于"令牌还有效"；不挡这一下，服务端验签必拒、回一句失效文案，而卡片
-        // 已经写成"已确认"——正是这次要根除的那类自相矛盾。
-        if (ask.exp && Date.now() >= Number(ask.exp) * 1000) {
-          askExpire();   // 与到期定时器同一个出口：结算文案、清待办、停倒计时
+        // Local expiry is presentation only; server verification remains authoritative.
+        if (Number.isFinite(ask.expiresAt) && performance.now() >= ask.expiresAt) {
+          askExpire();
           return;
         }
-        // 点下去写的是「确认中…」——**不再是「已确认」**。请求还没出去，而"已确认"
-        // 是点击那一刻的乐观文本、没有任何回滚（20260924 事故：卡片说已确认，系统里
-        // 零执行）。真实结论由轮次收尾给出，另有到期定时器兜底。
         askSettle('确认中…', 'pending');
         if (ask.replay_safe === true) saveAsk(ask);
         // 隐藏确认请求：不进历史、不起气泡。令牌是唯一凭据（agent 侧验签），

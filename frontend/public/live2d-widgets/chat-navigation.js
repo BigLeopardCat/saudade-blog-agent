@@ -3,7 +3,14 @@
   'use strict';
   g.__waifuNavigation = (ctx, engine, send) => {
     const key = 'saudade-navigation-pending';
+    const seenKey = 'saudade-navigation-seen';
     let active = null;
+    const actor = () => {
+      try { return String(JSON.parse(atob(localStorage.getItem('tokenKey').split('.')[1]
+        .replace(/-/g, '+').replace(/_/g, '/'))).sub || ''); }
+      catch (_) { return ''; }
+    };
+    const owns = pending => pending.actor === actor() && ctx.state.conv === pending.convId;
     const path = () => location.pathname + location.search + location.hash;
     const store = value => { try { sessionStorage.setItem(key, JSON.stringify(value)); } catch (_) {} };
     const clear = () => { try { sessionStorage.removeItem(key); } catch (_) {} };
@@ -16,14 +23,19 @@
       store(pending);
       await engine.ready;
       const until = Date.now() + 6000;
-      while (ctx.state.isSending && Date.now() < until) await new Promise(resolve => setTimeout(resolve, 25));
+      while (owns(pending) && ctx.state.isSending && Date.now() < until)
+        await new Promise(resolve => setTimeout(resolve, 25));
+      if (!owns(pending)) {
+        if (active === pending) { active = null; clear(); }
+        return;
+      }
       if (ctx.state.isSending) { ctx.ui.notify?.('页面操作已结束，请稍后继续原任务', 'error'); return; }
       const ok = await send({ silent: true, resumeTask: pending.task_id, convId: pending.convId,
         resumeText: pending.original || '', processFrom, previousProcess: pending.process || [],
         ...(status ? { browserResult: {
           command_id: pending.command_id, status, path: path() } } : {}) });
       if (ok && processFrom?.dataset.clientAction === 'pending') processFrom.remove();
-      if (!ok) ctx.ui.notify?.('页面操作已结束，后续回复未完成，请继续原任务', 'error');
+      if (!ok && owns(pending)) ctx.ui.notify?.('页面操作已结束，后续回复未完成，请继续原任务', 'error');
       if (active === pending) {
         if (ok) clear();
         active = null;
@@ -44,8 +56,17 @@
     const receive = (command, context) => {
       const url = new URL(command.url, location.href);
       if (url.origin !== location.origin || !command.command_id || !command.task_id) return false;
-      if (active?.command_id === command.command_id && !active.settled) return true;
-      const pending = { ...command, convId: context.convId, original: context.original,
+      if (!actor() || ctx.state.conv !== context.convId
+          || (ctx.state.activeRound?.taskId && ctx.state.activeRound.taskId !== command.task_id)) return false;
+      if (active?.command_id === command.command_id && active.task_id === command.task_id) return true;
+      try {
+        const id = actor() + ':' + command.task_id + ':' + command.command_id;
+        const recent = JSON.parse(sessionStorage.getItem(seenKey) || '[]')
+          .filter(item => Date.now() - item.ts < 86400000).slice(-63);
+        if (recent.some(item => item.id === id)) return true;
+        sessionStorage.setItem(seenKey, JSON.stringify([...recent, { id, ts: Date.now() }]));
+      } catch (_) { /* The server still validates the one-use command outcome. */ }
+      const pending = { ...command, actor: actor(), convId: context.convId, original: context.original,
         process: [...(context.processFrom?.querySelectorAll('.agent-process-line') || [])]
           .slice(-24).map(line => ({ cls: 'step', text: line.textContent })),
         path: url.pathname + url.search + url.hash,
@@ -70,7 +91,7 @@
       const pending = JSON.parse(sessionStorage.getItem(key) || 'null');
       if (pending && typeof pending.task_id === 'string' && pending.convId > 0
           && typeof pending.command_id === 'string' && typeof pending.path === 'string'
-          && Number.isFinite(pending.deadline)) {
+          && pending.actor === actor() && Number.isFinite(pending.deadline)) {
         active = pending;
         pending.settled = false;
         const ready = document.readyState === 'loading'
@@ -80,7 +101,7 @@
         // a consumed browser result. An unconsumed interrupt returns its command.
         if (pending.phase === 'reply') void ready.then(() => settle(pending, null));
         else watch(pending, ready);
-      }
+      } else clear();
     } catch (_) { clear(); }
     return { receive };
   };

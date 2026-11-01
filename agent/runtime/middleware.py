@@ -112,6 +112,7 @@ class SessionMiddleware(AgentMiddleware):
         self._recover(state)
         check_cancelled(session.config)
         restore(session, state)
+        emit(session.config, "正在处理请求…", key="model_start")
         replacement = replace_unpublished_proposal(session, state)
         if replacement:
             return {**capture(session), "messages": replacement}
@@ -215,7 +216,6 @@ class SessionMiddleware(AgentMiddleware):
                   *model_messages(hydrate(request.messages, session.transient))]
         model = request.model
         selected_model = _model_name(model)
-        emit(session.config, "正在处理请求…", key="model_start")
         reviewing = bool(session.outcome and (
             session.outcome.execution or {}).get("pending_confirm"))
         menu = session.menu

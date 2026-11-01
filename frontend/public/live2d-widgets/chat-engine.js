@@ -430,6 +430,7 @@
       // 不在窗口（>50 条会话的早前命中）→ locateHit 逐页回拉合并后定位闪烁
       const adoptConversation = (id, hitDbId) => {
         pullSeq++; // 作废在途旧会话拉取
+        ctx.state.streamCtrl?.abort();
         ctx.state.items = [];
         ctx.state.live = {};
         if (messages) messages.innerHTML = '';
@@ -572,17 +573,21 @@
         // 全部作废，回落 auto 态无参重决议（新账号最新非空会话；无会话 → 空白态）。
         // UI 钩子先行（列表清空/标题复位不依赖流状态），再处理视图切换
         pullSeq++;
+        ctx.state.streamCtrl?.abort();
+        ctx.state.pendingAsk = null;
+        ctx.state.approvalBusy = false;
+        if (ctx.dom.askBox) ctx.dom.askBox.classList.remove('active');
         try { localStorage.removeItem(convPrefKey()); } catch (e) {}
         ctx.state.conv = null;
         ctx.state.convNeedCreate = false;
         if (ctx.state.ui && typeof ctx.state.ui.onAuthChange === 'function') {
           try { ctx.state.ui.onAuthChange(); } catch (e) {}
         }
-        if (ctx.state.isSending || ctx.state.streamCtrl) { ctx.state.pendingPull = true; return; }
         ctx.state.items = [];
         ctx.state.live = {};
+        ctx.state.remoteRounds = {};
         if (messages) messages.innerHTML = '';
-        ctx.state.pendingAsk = null;   // 同上：消息区一清，挂起的确认卡片随之作废
+        if (ctx.state.isSending || ctx.state.streamCtrl) { ctx.state.pendingPull = true; return; }
         pullHistory();
       });
       if (chatChannel) {
