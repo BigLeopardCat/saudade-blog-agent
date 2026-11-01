@@ -93,26 +93,7 @@ class ConversationCompaction(AgentMiddleware):
             self.failed = True
             record("memory", "compaction_skipped", reason="oversized_exchange")
             return anchored
-        try:
-            from models import get_llm
-
-            model = get_llm(streaming=False, max_tokens=settings.agent_summary_output_tokens,
-                            enable_thinking=False, max_retries=0)
-            middleware = SummarizationMiddleware(
-                model=model, trigger=("tokens", 1), keep=("messages", len(source) - cutoff),
-                token_counter=estimate_tokens, trim_tokens_to_summarize=None,
-                summarizer=lambda old: summarize(old, budget=budget,
-                                                config=session.config, model=model))
-            update = middleware.before_model({"messages": source}, runtime)
-        except (OpenAIError, TimeoutError, ValueError) as error:
-            if isinstance(error, SummaryUnavailable) and error.reason in (
-                    "task_tokens", "model_calls", "task_seconds"):
-                raise BudgetExceeded(error.reason) from error
-            self.failed = True
-            record("memory", "compaction_skipped", reason=(
-                error.reason if isinstance(error, SummaryUnavailable) else type(error).__name__),
-                   input_tokens=before, trigger_tokens=trigger)
-            return anchored
+        update = self._summarize(source, cutoff, runtime, before, trigger)
         if update is None:
             return anchored
         summary, *preserved = update["messages"][1:]
@@ -144,3 +125,25 @@ class ConversationCompaction(AgentMiddleware):
         if after >= trigger:
             saved["jump_to"] = "model"
         return saved
+
+    def _summarize(self, source, cutoff, runtime, before, trigger):
+        from models import get_llm
+
+        try:
+            model = get_llm(streaming=False, max_tokens=settings.agent_summary_output_tokens,
+                            enable_thinking=False, max_retries=0)
+            middleware = SummarizationMiddleware(
+                model=model, trigger=("tokens", 1), keep=("messages", len(source) - cutoff),
+                token_counter=estimate_tokens, trim_tokens_to_summarize=None,
+                summarizer=lambda old: summarize(old, budget=self.session.budget,
+                                                config=self.session.config, model=model))
+            return middleware.before_model({"messages": source}, runtime)
+        except (OpenAIError, TimeoutError, ValueError) as error:
+            if isinstance(error, SummaryUnavailable) and error.reason in (
+                    "task_tokens", "model_calls", "task_seconds", "task_time_unknown"):
+                raise BudgetExceeded(error.reason) from error
+            self.failed = True
+            record("memory", "compaction_skipped", reason=(
+                error.reason if isinstance(error, SummaryUnavailable) else type(error).__name__),
+                   input_tokens=before, trigger_tokens=trigger)
+            return None

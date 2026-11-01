@@ -61,7 +61,7 @@ def test_repeated_domain_loading_still_exhausts_the_tool_budget_without_business
     model = Model([call("load_site_info_tools") for _ in range(3)])
     session = ToolSession(model, {}, {}, {"site": {read.name: read}})
     session.budget = TaskBudget(BudgetLimits(tool_calls=2))
-    assert "已停止继续处理" in session.run([HumanMessage(content="查询作者")]).reply
+    assert "已停止后续处理" in session.run([HumanMessage(content="查询作者")]).reply
     assert len(model.prompts) == 3 and read.calls == 0
     assert session.budget.tool_calls == 2
     replies = [next(item for item in reversed(prompt) if isinstance(item, ToolMessage))
@@ -74,7 +74,7 @@ def test_repeated_invalid_requests_exhaust_the_configured_model_budget():
     read = Read()
     session = ToolSession(model, {}, {read.name: read}, {})
     session.budget = TaskBudget(BudgetLimits(model_calls=5))
-    assert "已停止继续处理" in session.run([HumanMessage(content="查询作者")]).reply
+    assert "已停止后续处理" in session.run([HumanMessage(content="查询作者")]).reply
     assert len(model.prompts) == 5 and read.calls == 0
 
 
@@ -91,7 +91,7 @@ def test_loading_and_reading_in_one_batch_cannot_bypass_the_read_limit():
     model = Model([AIMessage(content="", tool_calls=calls)])
     session = ToolSession(model, {}, {}, {"site": {read.name: read}})
     session.budget = TaskBudget(BudgetLimits(tool_calls=5))
-    assert "已停止继续处理" in session.run([HumanMessage(content="查询作者")]).reply
+    assert "已停止后续处理" in session.run([HumanMessage(content="查询作者")]).reply
     assert read.calls == 0
 
 
@@ -116,7 +116,7 @@ def test_budget_stop_does_not_restart_another_runtime():
     with budget_scope(TaskBudget(BudgetLimits(model_calls=5))):
         session = ToolSession(model, {}, {}, {})
         result = session.run([HumanMessage(content="查询作者")])
-    assert "已停止继续处理" in result.reply
+    assert "已停止后续处理" in result.reply
     assert len(model.prompts) == 5
 
 

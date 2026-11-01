@@ -197,15 +197,18 @@ def test_confirmed_agent_reply_follows_execution_and_keeps_independent_facts(wai
     assert proposal.execution["pending_confirm"]["token"] not in str(saved)
 
 
-def test_unknown_write_result_is_not_retried_and_keeps_pending_card(waiting, site):
+def test_unknown_write_result_is_not_retried_and_releases_the_old_card(waiting, site):
     store, _, grant, ledger = waiting
     name, args = writes_tool(grant)
     ledger.claim(writes.operation_key(grant, name, args), name, grant["jti"])
-    selected = NativeRuntime(store)
+    model = Model(AIMessageChunk(content="结果尚未核实，不能重复执行。"))
+    selected = NativeRuntime(store, model_factory=lambda **_: model)
     for _ in range(2):
         events = list(selected.stream_events({"confirm_grant": grant}, config()))
         assert events[-1].execution["receipts"] == []
-    assert store.load(config()).has_pending
+    assert not store.load(config()).has_pending
+    assert len(model.prompts) == 1
+    assert ledger.lookup(writes.operation_key(grant, name, args))[0] == "intent"
     assert all(request.method == "GET" for request in site["requests"])
 
 

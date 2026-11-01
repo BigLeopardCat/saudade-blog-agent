@@ -63,8 +63,14 @@ def test_unknown_remote_outcome_does_not_reissue_the_write_after_restart(tmp_pat
     assert "changed" not in result.meta
 
 
-def test_unavailable_ledger_never_reaches_the_remote_operation():
+@pytest.mark.parametrize("stage", ["lookup", "claim"])
+def test_unavailable_ledger_never_reaches_the_remote_operation(stage):
     class UnavailableLedger:
+        def lookup(self, *args):
+            if stage == "lookup":
+                raise OSError("storage unavailable")
+            return None
+
         def claim(self, *args, **kwargs):
             raise OSError("storage unavailable")
 
