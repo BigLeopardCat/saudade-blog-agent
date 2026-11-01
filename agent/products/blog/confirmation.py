@@ -1,6 +1,8 @@
 """Adapt signed confirmation execution and lifecycle updates to the server protocol."""
 
+import hashlib
 import json
+import time
 import uuid
 
 
@@ -80,21 +82,52 @@ def cancel(runtime, grant, config):
                 "reply": result.reply}
 
 
+def public_card(execution):
+    """Project display fields and the original grant; never expose specs or graph state."""
+    popup = execution.get("pending_confirm")
+    if not popup:
+        return None
+    identifier = ((execution.get("pending_action") or {}).get("task_id")
+                  or hashlib.sha256(str(popup.get("token", "")).encode()).hexdigest()[:16])
+    return {
+        "id": identifier, "q": popup.get("q", ""),
+        "opts": popup.get("opts") or [], "token": popup.get("token", ""),
+        "exp": popup.get("exp") or 0, "server_time": int(time.time()),
+        **({"task_id": execution["task_id"]} if execution.get("task_id") else {}),
+        "replay_safe": popup.get("replay_safe") is True}
+
+
+def current_card(runtime, principal, cid, task_id):
+    """Read the current checkpoint without queuing behind an in-flight model call."""
+    from agent import checkpoint, confirm
+    from agent.runtime import approval, task_scope
+
+    config = {"configurable": {"principal": principal, "user_id": principal.uid,
+              "conversation_id": cid, "thread_id": checkpoint.conversation_thread(cid)}}
+    snapshot = runtime.store.load(config)
+    task = snapshot.run
+    result = {"task_id": task_id, "confirmation": None}
+    if (not task or (task_id is not None and task["id"] != task_id)
+            or task["scope"] != task_scope.binding(config)):
+        return result
+    token = (snapshot.pending_confirm or {}).get("token", "")
+    grant = confirm.verify(token, principal.uid, cid)
+    if grant is None or not approval.matches(snapshot.approval, grant, config):
+        return result
+    return {"task_id": task["id"], "confirmation": public_card({
+        "pending_confirm": snapshot.pending_confirm, "pending_action": snapshot.pending_action,
+        "task_id": task["id"]})}
+
+
 def frames(execution):
     """Cancellation precedes a replacement card and its host persistence event."""
     event = execution.get("pending_event")
     if event:
         yield "__PENDING__:" + json.dumps(event, ensure_ascii=False)
-    popup = execution.get("pending_confirm")
-    if not popup:
+    card = public_card(execution)
+    if card is None:
         return
-    yield "__CONFIRM__:" + json.dumps({
-        "id": (execution.get("pending_action") or {}).get("task_id") or uuid.uuid4().hex[:8],
-        "q": popup.get("q", ""),
-        "opts": popup.get("opts") or [], "token": popup.get("token", ""),
-        "exp": popup.get("exp") or 0,
-        **({"task_id": execution["task_id"]} if execution.get("task_id") else {}),
-        "replay_safe": popup.get("replay_safe") is True}, ensure_ascii=False)
+    yield "__CONFIRM__:" + json.dumps(card, ensure_ascii=False)
     action = execution.get("pending_action")
     if action:
         yield "__PENDING__:" + json.dumps(action, ensure_ascii=False)

@@ -1,6 +1,6 @@
 // ═ ChatCore：聊天核心纯函数（无 DOM/闭包依赖，Node 可 require 直测）══
 // 消息 id 三来源：'d'+DB主键（DB 拉取，跨窗天然一致）/ 'l'+随机（乐观 user/远端轮）。
-// mergeItems 规则：同 id 严格替换；id 不同但 type|text 内容碰撞 → 原位收养
+// Live updates merge by message identity; database history owns reconciliation.
 // （条目换成 incoming 的 id/time，position 不动——根治旧 type|time 去重误判）；
 // 都不匹配 → 按 time 排序插入。
 (function (g) {
@@ -68,23 +68,7 @@
       }));
     };
     const mergeItems = (local, incoming) => {
-      const out = local.slice();
-      const byId = new Set(out.map(i => i.id));
-      const consumed = new Set();
-      for (const inc of incoming) {
-        if (byId.has(inc.id)) {
-          out[out.findIndex(i => i.id === inc.id)] = inc;   // 同 id 严格替换
-          continue;
-        }
-        let adopted = false;
-        for (let j = 0; j < out.length; j++) {
-          if (consumed.has(j)) continue;
-          if (out[j].type === inc.type && matchText(out[j].text, inc.text)) {
-            out[j] = inc; consumed.add(j); adopted = true; break;  // 内容收养（不重复）
-          }
-        }
-        if (!adopted) out.push(inc);
-      }
+      const out = [...new Map([...local, ...incoming].map(item => [item.id, item])).values()];
       out.sort((a, b) => (a.time || 0) - (b.time || 0));
       return out;
     };
