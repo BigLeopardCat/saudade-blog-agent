@@ -63,6 +63,9 @@ def test_appearance_waits_and_recovers_from_actual_settings(reported, expected):
     assert len(model.prompts) == 2 and not runtime().store.load(cfg).unfinished
     observations = [json.loads(m.content) for m in model.prompts[-1]
                     if isinstance(m, ToolMessage) and m.name == "set_page_appearance"]
+    statuses = [m.status for m in model.prompts[-1]
+                if isinstance(m, ToolMessage) and m.name == "set_page_appearance"]
+    assert statuses[-1] == ("success" if expected == "completed" else "error")
     assert observations[-1]["status"] == expected
     assert observations[-1]["observed"] == reported.get("settings")
     assert all(row["browser_status"] == expected for row in done.execution["receipts"])

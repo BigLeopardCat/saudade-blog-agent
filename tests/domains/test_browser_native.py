@@ -116,7 +116,8 @@ def test_effect_switch_uses_absolute_states_and_standard_artifacts():
         {"kind": "effect", "effect": "rain", "action": "off"},
         {"kind": "effect", "effect": "snow", "action": "on"},
     ]
-    assert "尚未回报完成" in result.content
+    assert json.loads(result.content)["status"] == "sent"
+    assert json.loads(result.content)["observed"] is None
     assert not any(word in result.content for word in ("EFFECT:", "DARKMODE:", "__CMD__"))
     again = browser.set_page_appearance.invoke(_call("set_page_appearance", args), config=_config())
     assert [row["cmd"] for row in again.artifact["receipts"]] == [
@@ -360,3 +361,16 @@ def test_current_display_state_reaches_native_context_as_page_data():
     fields = json.JSONDecoder().raw_decode(raw)[0]
     assert fields["current_effects"] == "rain" and fields["current_darkmode"] == "on"
     assert "current_darkmode" not in prompt[0].content
+
+
+@pytest.mark.parametrize('name,args', [
+    ('navigate_page', {'path':'/guestbook'}),
+    ('set_page_appearance', {'snow':'on'}),
+])
+def test_client_without_feedback_only_gets_a_queued_action(name, args):
+    result = browser.tools(_config())[name].invoke(_call(name, args), config=_config())
+    facts = json.loads(result.content)
+    assert facts['status'] == 'sent' and facts['observed'] is None
+    assert facts['scope'] == 'browser'
+    assert result.artifact['kind'] == 'ok' and result.artifact['receipts']
+    assert all('browser_status' not in row for row in result.artifact['receipts'])

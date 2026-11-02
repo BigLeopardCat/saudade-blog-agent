@@ -58,8 +58,14 @@ def _receipt(workflow, name, args, command):
     return receipt
 
 
-def _outcome(reply, receipts):
-    return reply, {"kind": "ok", "receipts": receipts}
+def _outcome(reply, receipts, *, failed=False):
+    return reply, {"kind": "unavailable" if failed else "ok", "receipts": receipts}
+
+
+def _sent(command, receipts):
+    return _outcome(json.dumps({"status": "sent", "scope": "browser", "requested": command,
+                               "observed": None, "result": receipts[0]["result"]},
+                              ensure_ascii=False), receipts)
 
 
 def _await_browser(command, config):
@@ -104,19 +110,19 @@ def navigate_page(path: Path, config: RunnableConfig) -> object:
     command = {"kind": "navigate", "url": url, "mode": "direct"}
     cfg = (config or {}).get("configurable") or {}
     if cfg.get("browser_feedback") and cfg.get("browser_task"):
-        status = _await_browser({**command, "path": path}, config)["status"]
+        result = _await_browser({**command, "path": path}, config)
+        status = result["status"]
         completed = status == "completed"
         reply = ("浏览器已进入：" + url if completed else
                  "页面跳转超时，未确认进入目标页面：" + url if status == "timeout" else
                  "页面跳转未完成：" + url)
         receipt = _receipt("navigate", "navigate_to", {"path": path, "confirm": False}, command)
         receipt.update(result=reply, browser_status="completed" if completed else status)
-        return _outcome(reply, [receipt])
+        return _outcome(json.dumps({"status": status, "scope": "browser_navigation",
+            "requested": path, "observed": result.get("path"), "result": reply},
+            ensure_ascii=False), [receipt], failed=status != "completed")
     receipt = _receipt("navigate", "navigate_to", {"path": path, "confirm": False}, command)
-    reply = "已发送跳转指令：" + url + "；浏览器尚未回报完成。"
-    if site.nav_pure_path(path) in site._NAV_WHOLE_PAGE_PATHS:
-        reply += "本条回复结束后才会跳转。"
-    return _outcome(reply, [receipt])
+    return _sent(command, [receipt])
 
 
 @tool(response_format="content_and_artifact")
@@ -131,6 +137,7 @@ def set_page_appearance(
     requested settings; omit the rest. A switch such as rain to snow sets rain=off,
     snow=on together. Commands set absolute states, so repeats do not toggle them.
     With browser feedback, waits for observed settings before reporting completion.
+    Status sent means queued only; only completed proves application.
     """
     effects = {
         name: mode
@@ -162,7 +169,6 @@ def set_page_appearance(
                 {"kind": "effect", "effect": effect, "action": mode},
             )
         )
-    actions = "；".join(row["action"] for row in receipts)
     cfg = (config or {}).get("configurable") or {}
     if cfg.get("browser_feedback") and cfg.get("browser_task"):
         settings = {**effects, **({"dark_mode": dark_mode} if dark_mode is not None else {})}
@@ -173,9 +179,9 @@ def set_page_appearance(
                            ensure_ascii=False)
         for receipt in receipts:
             receipt.update(result=reply, browser_status=status)
-        return _outcome(reply, receipts)
-    reply = f"已发送显示设置：{actions}；浏览器尚未回报完成。"
-    return _outcome(reply, receipts)
+        return _outcome(reply, receipts, failed=status != "completed")
+    settings = {**effects, **({"dark_mode": dark_mode} if dark_mode is not None else {})}
+    return _sent({"kind": "appearance", "settings": settings}, receipts)
 
 
 def tools(config):
@@ -187,7 +193,8 @@ def tools(config):
         + ". Article: /article/<id>; category: /category/<name>. Use the source article link "
         "for a chosen recommendation. No site-map lookup is needed for the known pages. "
         "With browser feedback, execution pauses durably until the client reports completion "
-        "or timeout, then continues the same task. No confirmation card."})
+        "or timeout, then continues the same task. Status sent means queued only; "
+        "only completed proves arrival. No confirmation card."})
     return {
         item.name: item.model_copy(
             update={"handle_tool_error": True, "handle_validation_error": str}
