@@ -56,7 +56,7 @@ class ModelIO:
         self._lock = Lock()
         self._closed = self._unhealthy = False
         self._portal = self._client = None
-        self._streams = set()
+        self._streams = {}
         self._shutdown = None
         self._shutdown_complete = Event()
 
@@ -73,7 +73,8 @@ class ModelIO:
     @property
     def pending_cleanup(self):
         with self._lock:
-            return sum(not event.is_set() for event in self._streams) + int(
+            return sum(not exited.is_set() and (cleaning.is_set() or self._closed)
+                       for exited, cleaning in self._streams.items()) + int(
                 self._shutdown is not None and not self._shutdown_complete.is_set())
 
     def _quarantine(self, reason):
@@ -151,7 +152,7 @@ class ModelIO:
         check = _cancel_check.get() or check_active
         check()
         self.client
-        queue, closed = Queue(maxsize=32), Event()
+        queue, closed, cleaning = Queue(maxsize=32), Event(), Event()
         responses = []
 
         async def produce(*, task_status=anyio.TASK_STATUS_IGNORED):
@@ -168,6 +169,7 @@ class ModelIO:
                         except Full:
                             await anyio.sleep(0.005)
             finally:
+                cleaning.set()
                 try:
                     await self._finish_stream(stream, responses)
                 finally:
@@ -177,8 +179,9 @@ class ModelIO:
         with self._lock:
             if not self.ready:
                 raise ModelCleanupError("Model transport is unavailable")
-            self._streams = {event for event in self._streams if not event.is_set()}
-            self._streams.add(closed)
+            self._streams = {exited: closing for exited, closing in self._streams.items()
+                             if not exited.is_set()}
+            self._streams[closed] = cleaning
             future, _ = self._portal.start_task(produce)
         try:
             while True:
