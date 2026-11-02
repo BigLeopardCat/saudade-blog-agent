@@ -18,3 +18,13 @@ def test_one_hundred_long_titles_form_one_complete_read_only_approval(notificati
     assert "- #1《" in card["q"] and "- #100《" in card["q"]
     assert "之后新到" in card["q"] and "内容" * 21 not in card["q"]
     assert all(request.method == "GET" for request in notifications["requests"])
+
+
+def test_all_unread_outside_recent_window_is_rejected_without_noop_or_approval(notifications):
+    notifications['items'] = [{'id': key, 'isRead': True, 'title': '已读'}
+                              for key in range(1, 101)]
+    notifications['hidden_unread'] = 1
+    result = prepare_notification_read.invoke({'scope': 'all_unread'}, config=config())
+    assert result.kind == 'unavailable'
+    assert '覆盖全部未读' in str(result)
+    assert all(request.method == 'GET' for request in notifications['requests'])

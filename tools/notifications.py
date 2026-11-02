@@ -35,11 +35,12 @@ def _window(data):
             raise ValueError("Invalid notification link")
         if len(row["type"]) > 40 or len(row["createdAt"]) > 40:
             raise ValueError("Invalid notification metadata")
+    window_unread = sum(not row["isRead"] for row in rows)
     if (len({row["id"] for row in rows}) != len(rows)
-            or type(data.get("unread")) is not int
-            or data["unread"] != sum(not row["isRead"] for row in rows)):
+            or type(data.get("unread")) is not int or data["unread"] < window_unread
+            or (len(rows) < _WINDOW_LIMIT and data["unread"] != window_unread)):
         raise ValueError("Invalid notification counts")
-    return rows, data["unread"]
+    return rows, window_unread, data["unread"]
 
 
 def _entry(row, detailed):
@@ -63,7 +64,8 @@ def list_notifications(config: RunnableConfig, limit: _Limit = 5, page: _Page = 
     notification_id 读取窗口内单条正文（最多2000字），忽略分页和未读筛选。
     query 在整个窗口的标题和正文中按原词搜索，再分页；查回复可搜索“回复”。
     matchedInWindow 是筛选后的匹配总数，hasMoreInWindow=true 时当前页不是全部结果。
-    windowComplete=false 表示窗口外历史未知；unreadInWindow 不是全局未读数。
+    windowComplete=false 表示窗口外历史未知；unreadInWindow 是窗口未读数，
+    unreadTotal是后端提供的全局未读数，二者可以不同。
     查看不会标记已读。站内信使用 list_my_messages。
     """
     # Registry construction also occurs during policy imports; enforce after bootstrap.
@@ -82,7 +84,7 @@ def list_notifications(config: RunnableConfig, limit: _Limit = 5, page: _Page = 
     if isinstance(data, base.ToolResult):
         return data
     try:
-        rows, unread = _window(data)
+        rows, unread, unread_total = _window(data)
     except ValueError:
         return base.unavailable("通知窗口、内容或未读数量无法核对，请稍后重查。")
     matched = [row for row in rows if (not unread_only or not row["isRead"])
@@ -94,7 +96,8 @@ def list_notifications(config: RunnableConfig, limit: _Limit = 5, page: _Page = 
         selected = matched[(page - 1) * limit:page * limit]
     result = {"items": [_entry(row, notification_id is not None) for row in selected],
               "windowLimit": _WINDOW_LIMIT, "windowCount": len(rows),
-              "windowComplete": len(rows) < _WINDOW_LIMIT, "unreadInWindow": unread}
+              "windowComplete": len(rows) < _WINDOW_LIMIT, "unreadInWindow": unread,
+              "unreadTotal": unread_total}
     if notification_id is None:
         result.update(page=page, pageSize=limit, matchedInWindow=len(matched),
                       hasMoreInWindow=page * limit < len(matched))
