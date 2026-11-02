@@ -66,6 +66,7 @@
 | [eval-observability.md](eval-observability.md) | 原生运行时指标、结果验收、旧评测边界与执行入口 | 现状型 |
 | [lint-baseline.md](lint-baseline.md) | 历史人工扫描快照；当前扫描以 eval 下的机器台账与 CI 为准 | 记录型 |
 | [rag-design.md](rag-design.md) | 检索设计与实现总结，§8 是触发条件驱动的升级预案 | 现状型 |
+| [rag-library-migration.md](rag-library-migration.md) | 成熟检索库、标准Markdown解析、空间迁移与质量/资源对照 | 现状型（含专项验证） |
 | [rag-production-debug.md](rag-production-debug.md) | 两机配置、缓存与引擎候选、增量建库、回退和生产验收记录 | 现状型（§6–§8 为待验收方案） |
 | [embedding-inputs.md](embedding-inputs.md) | 可选 tokenizer 的完整输入预算、空间签名与验证方式 | 现状型（末节含验证记录） |
 | [native-toolcalls-mainline.md](native-toolcalls-mainline.md) | 换主线的**交接件**：为什么换、冻结了什么、边界在哪 | 记录型 |
