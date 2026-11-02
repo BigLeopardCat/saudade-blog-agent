@@ -21,11 +21,12 @@ from utils.trace import record
 
 def _protected(messages, anchor, pending=False):
     """Keep the task's original request and steering verbatim, outside its summary."""
-    start = next((i for i, message in enumerate(messages) if anchor and message.id == anchor), None)
+    start = next((i for i, message in enumerate(messages) if anchor and message.id == anchor
+                  and memory.is_user_input(message)
+                  and not message.additional_kwargs.get("task_input")), None)
     if start is None:
         start = max((i for i, message in enumerate(messages)
-                 if isinstance(message, HumanMessage) and not memory.is_context(message)
-                 and message.additional_kwargs.get("lc_source") != "summarization"
+                 if memory.is_user_input(message)
                  and not message.additional_kwargs.get("task_input")), default=len(messages))
     protected = {message.id for message in messages[start:] if isinstance(message, HumanMessage)}
     if pending or (messages and isinstance(messages[-1], ToolMessage)):
@@ -125,7 +126,7 @@ class ConversationCompaction(AgentMiddleware):
             record("memory", "compaction_skipped", reason="oversized_exchange")
             return anchored
         guard = next((m for m in reversed(messages) if m.id in protected
-                      and isinstance(m, HumanMessage) and not memory.is_context(m)), None)
+                      and memory.is_user_input(m)), None)
         if guard is None:
             return anchored
         update = self._summarize(source, cutoff, guard, runtime, before, trigger)

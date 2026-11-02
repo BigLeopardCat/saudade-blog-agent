@@ -9,7 +9,7 @@ from openai import OpenAIError
 
 from agent.runtime import approval, memory, recovery, trace_context
 from agent.runtime.memory_media import stage
-from agent.runtime.results import TurnResult
+from agent.runtime.results import ReplyReset, TurnResult
 from agent.runtime.session import ToolSession
 from agent.runtime.task_inputs import InputConflict, TaskInputEvent, for_saver
 from agent.runtime.turns import check_cancelled
@@ -198,7 +198,7 @@ class AgentRuntime:
                     break
                 # The transport gets body deltas only. Provider reasoning, tool
                 # argument fragments and usage metadata stay inside the session.
-                yield (chunk if isinstance(chunk, TaskInputEvent)
+                yield (chunk if isinstance(chunk, (TaskInputEvent, ReplyReset))
                        else AIMessageChunk(content=chunk.content))
         finally:
             runner.close()
@@ -266,7 +266,10 @@ class AgentRuntime:
                     chunk = next(runner)
                 except StopIteration as stop:
                     return stop.value
-                visible.append(chunk.content)
+                if isinstance(chunk, ReplyReset):
+                    visible.clear()
+                elif isinstance(chunk, AIMessageChunk):
+                    visible.append(chunk.content)
                 yield chunk
         except (OpenAIError, TimeoutError) as error:
             record("native", "task_stopped", reason="continuation_failed",

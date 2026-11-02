@@ -897,6 +897,12 @@
               throw err;
             }
             if (type === 'done') return;
+            if (type === 'text_reset') {
+              displayText = '';
+              contentSpan.textContent = '';
+              broadcast({t: 'text_reset', roundId});
+              return;
+            }
             if (type === 'progress') { addStep('step', data); return; }
             if (type === 'task_input') { steering?.receive(data, roundId); return; }
             if (type === 'confirmation') {
