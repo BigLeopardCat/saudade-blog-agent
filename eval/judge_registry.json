@@ -536,7 +536,7 @@
         0
       ],
       "agent/reports.py": [
-        19,
+        20,
         0
       ],
       "agent/runtime/__init__.py": [
@@ -885,7 +885,7 @@
       ]
     },
     "total": [
-      403,
+      404,
       33
     ]
   },

@@ -31,7 +31,8 @@ _ADMIN_DESCRIPTIONS = {
                           "records; does not establish failure causes. Admin only.",
     "get_user_stats": "Read total users, role distribution and recent activity. Admin only.",
     "get_note_stats": "Read visible articles' aggregate traffic, rankings and daily traffic "
-                      "for the last 30 days. Use for recent within-month trends. Admin only.",
+                      "for a rolling 30-day window, not calendar-month totals. Use for recent "
+                      "within-month trends; compare full months with get_note_periods. Admin only.",
     "get_note_periods": "Read article traffic totals per week, month or year, including partial "
                         "periods. Choose kind from the user's requested period. For a daily "
                         "series use get_note_stats; this report contains period totals. "

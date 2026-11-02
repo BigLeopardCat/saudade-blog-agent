@@ -303,6 +303,7 @@ def test_legacy_inventory_has_no_silently_discarded_case():
     assert set(mapped) == legacy and len(mapped) == len(legacy)
     digest = hashlib.sha256(online_baseline.SUITE.read_bytes()).hexdigest()
     assert manifest["current_sha256"] == digest
+    assert manifest["current_cases"] == len(online_baseline.load_suite())
     assert set(manifest["family_replacements"]) <= {c["id"] for c in online_baseline.load_suite()}
 
 
