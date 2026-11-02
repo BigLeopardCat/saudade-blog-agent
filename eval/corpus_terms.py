@@ -22,7 +22,7 @@
      理由是**形态学**：数字在语料里是阈值/端口/版本号，不是主题词，且跨篇偶然同形
      （实测 `8010` 落在 13/19、`30` 落在 19/46）；点号串是 markdown 序号/省略号的残渣。
      **不许**把它写成"它们不在正文里"——它们在，只是不承担主题；
-  S3 停用词/疑问词（复用检索侧那一份 `_QUERY_STOPWORDS`，单一事实源）+ 中文功能词；
+  S3 本诊断的中文功能词过滤，不改变检索查询；
   S4 **df 门**：按**篇**计（同一篇里出现多次只算 1），默认 `df <= df_max`，
      `strict=True` ⇒ `df == 1`。门是相对**整个语料**判的、候选集是相对**申报文档**取的
      ——两者缺一，派生集要么恒真（无 df 门）要么冒充专有（无申报集）；
@@ -60,7 +60,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from rag.search import _QUERY_STOPWORDS, tokenize  # noqa: E402
+from rag.search import tokenize  # noqa: E402
 
 # S2：**没有字母也没有汉字的 token 一律排除**（纯数字、纯标点、`1.`、`1.1.0`、`..`）。
 # 形态学判据，不是"内容判据"：数字在语料里是阈值/端口/版本号，不是主题词（实测 `8010`
@@ -191,7 +191,7 @@ def derive(doc_keys, *, docs=None, df_max: int = 2, strict: bool = False,
     for t, _n in tf.items():
         if len(t) < 2 or not _WORDY.search(t):           # S1 / S2
             continue
-        if t in _QUERY_STOPWORDS or t in _FUNCTION_WORDS:  # S3
+        if t in _FUNCTION_WORDS:                        # S3
             continue
         f = df.get(t, 0)
         if (f == 1) if strict else (f <= df_max):        # S4

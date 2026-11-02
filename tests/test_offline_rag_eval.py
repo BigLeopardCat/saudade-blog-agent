@@ -55,7 +55,7 @@ def test_production_bm25_is_offline_even_with_hybrid_enabled(monkeypatch):
     monkeypatch.setattr(settings, "rag_hybrid_enabled", True)
     monkeypatch.setattr(search, "warm_vectors", forbidden)
     monkeypatch.setattr(search.RagIndex, "_fetch_corpus", forbidden)
-    run, timing = bm25_run(dataset(), 3, True)
+    run, timing = bm25_run(dataset(), 3)
     assert list(run["single"])[0] == "cursor"
     assert set(run["multi"]) == {"cursor", "hash"}
     assert run["absent"] == {}

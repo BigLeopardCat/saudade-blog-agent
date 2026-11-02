@@ -13,7 +13,7 @@
 | 混合排名 | LangChain EnsembleRetriever.weighted_reciprocal_rank，等权与原 k 配置 |
 | 向量相似度 | SciPy cdist(metric="cosine")，只读 float64 矩阵，零行相似度为零 |
 
-中文/ASCII 边界、同义词及候选宽度仍是应用策略，不宣称是库默认。
+中文/ASCII 边界与领域别名是应用配置，不宣称是库默认；查询保持原文，候选使用固定 top_k。
 langchain-classic 只提供上述官方 retriever；现有 LangChain/LangGraph 运行时不变。
 HF Tokenizers 仅修改每次 encode 得到的独立 Encoding，不改变共享 Tokenizer 的截断配置。
 
@@ -88,15 +88,17 @@ parser 策略也进入 v4 分块空间，发布计划须以 v4 代码重新计�
 两个 Runnable 适配器只返回已有列表，不重新查询、发模型、执行工具或拥有调度/重试循环；
 它们属于该公开 retriever 的输入适配，没有增加 Agent 执行器。
 
-查询停用词、同义词与 CLIFF 本次保持原行为及评测 API：
+查询策略已收敛为原始查询与固定 top_k，领域别名保留为 key/val/why 的小型配置。
+CLIFF、手工疑问词删除及对应实验 API、探针和夜间入口已经退役，不保留空兼容开关。
+完整新索引上的[固定查询消融](../eval/report/baseline_rag_query_simplification.json)说明取舍：
 
-- 停用词仅影响词法查询，是应用的中文问句策略。删除会改变宽泛词的召回与噪声，
-  应通过多样查询的独立对照决定；直接换通用停用词表也无法证明站内收益。
-- 四组同义扩展是显式博客术语映射，已有无扩展对照与负控；保留为有边界的领域词表。
-  扩大词表前需要真实措辞证据，不扩展成新的通用查询重写器。
-- CLIFF 是自定义候选宽度策略。后续可考虑只保留各路固定窗口以减少策略，
-  但需同时比较多篇证据覆盖、无答案供给与工具成本，并有序退役 cliff_probe 的评测入口。
-  本轮不以成熟库迁移为由无证据删去这些已公开的对照 API。
+- 16 题 hybrid 的 Hit@1=15/16、Recall@3=1、nDCG@8=0.980839，简化前后相同；
+  候选具体顺序仍有变化，不能把指标相同当作最终回答等价。
+- 词法 fallback 的 Recall@3 从 1 降至 0.96875，nDCG@8 从 0.975822 降至 0.973165；
+  agent_intro 中文章 62 离开前 3。接受这项明确的词法取舍，未改标注或融合权重。
+- 16 题均不含别名 key，不能由零变化宣称别名无用。既有词法查询显示 JWT、断连、OTA
+  的当前召回收益；现有“RAG测评体系怎么建立？”中别名使目标文章 19 从第 6 升至第 3。
+  这些是站内术语别名，并非自建通用分词、语义改写或排名算法。
 
 参考：[markdown-it-py 配置与 token](https://markdown-it-py.readthedocs.io/en/latest/using.html)、
 [Token source map](https://markdown-it-py.readthedocs.io/en/latest/api/markdown_it.token.html)。
