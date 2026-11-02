@@ -8,7 +8,7 @@
     "I",
     "W"
   ],
-  "total": 226,
+  "total": 223,
   "by_file": {
     "agent/action_text.py": 2,
     "agent/factblock.py": 1,
@@ -16,7 +16,6 @@
     "agent/reports.py": 5,
     "eval/admin_write_probe.py": 29,
     "eval/category_read_probe.py": 2,
-    "eval/cliff_probe.py": 1,
     "eval/corpus_terms.py": 6,
     "eval/d4_structured_output_poc.py": 5,
     "eval/golden_case_runner.py": 4,
@@ -42,7 +41,6 @@
     "scripts/sticker_smoke.py": 1,
     "tests/test_action_text.py": 2,
     "tests/test_artifact_retention.py": 1,
-    "tests/test_cliff_min_keep.py": 2,
     "tests/test_complexity_budget.py": 4,
     "tests/test_confirm.py": 5,
     "tests/test_corpus_terms.py": 1,

@@ -20,6 +20,8 @@ from rag.corpus import fetch as fetch_corpus
 from rag.embedding_inputs import InputProfileError, vector_chunks
 from rag.lexical import LexicalIndex, backend_info
 from rag.ranking import documents as rank_documents
+from rag.sections import reading_revision
+from rag.tokenization import tokenize
 from rag.vector_index import (
     chunk_text,
     corpus_fingerprint,
@@ -36,50 +38,22 @@ from rag.vector_index import warm_async as warm_vectors
 
 logger = logging.getLogger(__name__)
 
-CJK = re.compile(r"[一-鿿]")
-GRAM = re.compile(r"[一-鿿]+|[a-zA-Z0-9_\.]+")
-
 BM25_K1 = 1.2
 BM25_B = 0.75
 
 REFRESH_TTL = 600.0  # 10 分钟懒刷新
 
-# Keep the first three document candidates; prune only the low-scoring tail.
-_CLIFF_RATIO = 0.25
-_CLIFF_MIN_KEEP = 3
-
-# Query-only function-word removal leaves corpus token statistics unchanged.
-_QUERY_STOPWORDS = ("有没有", "怎么样", "为什么", "怎样", "怎么", "什么", "如何",
-                    "哪些", "哪个", "哪里", "哪儿", "多少", "为何", "干啥", "干嘛",
-                    "是否", "咋", "啥")
-
-
-def _clean_query(query: str) -> str:
-    for w in _QUERY_STOPWORDS:
-        query = query.replace(w, "")
-    return query
-
-
 # Reviewed query variants contribute only tokens present in the current vocabulary.
 _QUERY_SYNONYMS: tuple[dict, ...] = (
-    {"key": "测评", "val": "评测",
-     "why": "措辞漂移：1.26 回流用例「RAG测评体系怎么建立」期望 note:19，而那篇的小节标题"
-            "写的是「评测」。语料里 测评 df=0、评测 df=2 ⇒ 补等价词，不改期望"},
-    {"key": "令牌", "val": "JWT",
-     "why": "访客说中文、语料写缩写：令牌全站 df=0（一次都没出现），JWT 见于 note:14/19/22。"
-            "短问「令牌怎么签发？」扩展前有效 token=0 ⇒ 返回空；扩展后 rank=1"},
-    {"key": "断线", "val": "断连",
-     "why": "同上：断线 df=0、断连见于 note:19（断连中断机制那一节）。「断线了会怎样？」"
-            "扩展前只靠一个功能词命中无关文档，扩展后 rank=1"},
-    {"key": "空中升级", "val": "OTA",
-     "why": "同义变体，但 升级 本身在语料里 ⇒ 收益弱于上面两对：「空中升级怎么做的？」"
-            "扩展前后 rank 都是 1，**只把 note:12 拉进 @3**。留它是因为零回归，"
-            "不是因为它是主收益——这是个「过了闸门但收益很小」的样本，别当成常态"},
+    {"key": "测评", "val": "评测", "why": "将访客措辞映射为站内评测术语。"},
+    {"key": "令牌", "val": "JWT", "why": "将中文鉴权用语映射为文档中的协议名。"},
+    {"key": "断线", "val": "断连", "why": "统一连接中断的领域别名。"},
+    {"key": "空中升级", "val": "OTA", "why": "将固件升级的中文别名映射为文档缩写。"},
 )
 
 
 def synonyms() -> tuple[dict, ...]:
-    """词表的只读视图（判据与评测读它，不另抄一份）。"""
+    """Return the configured domain aliases and their rationale."""
     return _QUERY_SYNONYMS
 
 
@@ -88,7 +62,7 @@ _EXPANSION_ENABLED = True
 
 
 def set_expansion(on: bool) -> None:
-    """开/关查询侧同义扩展。**仅 A/B 与判据使用**，生产不调用。"""
+    """Enable domain aliases for retrieval evaluation."""
     global _EXPANSION_ENABLED
     _EXPANSION_ENABLED = bool(on)
 
@@ -97,23 +71,6 @@ def expansion_enabled() -> bool:
     return _EXPANSION_ENABLED
 
 
-def cliff_config() -> dict:
-    """断崖参数的只读视图（α 与保底 K）。报告与判据读这里，不另抄一份数
-    ——抄一份的那个数会漂，而这两项正是"判据与实现同源"要保的东西。"""
-    return {"ratio": _CLIFF_RATIO, "min_keep": _CLIFF_MIN_KEEP}
-
-
-def tokenize(text: str) -> list[str]:
-    """中文连续段拆 2-gram/3-gram（子串匹配近似）+ 英文/数字按词。与 eval 一致。"""
-    toks: list[str] = []
-    for m in GRAM.finditer(text.lower()):
-        t = m.group(0)
-        if CJK.match(t):
-            for n in (3, 2):
-                toks.extend(t[i:i + n] for i in range(len(t) - n + 1))
-        else:
-            toks.append(t)
-    return toks
 
 
 def chunk_note(title: str, content: str) -> list[dict]:
@@ -134,27 +91,18 @@ def _record(mode: str, reason: str | None, vectors: int = 0, missing: int = 0) -
 
 
 def last_route() -> dict:
-    """**本线程**最近一次 `search()` 实际走的路线（默认 = 词法）。
-
-    为什么记而不是"再判一次"：退回词法发生在函数内部（视图与语料对不上、查询嵌不出来），
-    从返回值看不出来——而"开关开着、其实一次都没融合过"恰恰是最需要被看见的那一格。
-    用线程局部：4 个 worker × 线程池，同一进程里并发的两条检索不能互相覆盖。
-    """
+    """Return the retrieval mode and degradation reason for this thread."""
     return dict(getattr(_route, "last",
                         {"mode": "lexical", "reason": None, "vectors": 0, "missing": 0}))
 
 
 def _mode_for(reason: str | None) -> str:
-    """没融合时的档位名：**跑不起来** = degraded，**没跑**或**跑了但没相关项** = lexical。
-
-    区分点是有没有"出了事"：关着开关、向量路一条都没找到，都不是故障（`/health` 与
-    工具 meta 里把它们报成 degraded 会让真正的故障——凭据没配、视图对不上——淹掉）。
-    """
+    """Distinguish a disabled/empty vector route from an unavailable route."""
     return "lexical" if reason in (None, "no_vector_hits") else "degraded"
 
 
 def _rrf_k() -> int:
-    """RRF 的 k（标准 60）。取内存取值、给个兜底：`0`/缺项都不该把融合变成除零。"""
+    """Read the configured RRF constant, defaulting to 60."""
     return int(getattr(settings, "rrf_k", 60) or 60)
 
 
@@ -202,8 +150,9 @@ class RagIndex:
         docs = self._corpus_loader() if self._corpus_loader else self._fetch_corpus()
         chunks: list[dict] = []
         for d in docs:
+            read_revision = reading_revision(d["title"], d["content"])
             for c in chunk_note(d["title"], d["content"]):
-                chunks.append({**d, **c})
+                chunks.append({**d, **c, "reading_revision": read_revision})
 
         lexical = LexicalIndex([tokenize(chunk_text(c["title"], c["text"])) for c in chunks],
                                k1=BM25_K1, b=BM25_B)
@@ -239,7 +188,7 @@ class RagIndex:
                     "lexical_backend": backend_info()}
 
     def docs_snapshot(self) -> list[dict]:
-        """语料快照（[{type,id,title,content}]，浅拷贝列表）。索引没建好时为空列表。"""
+        """Return the currently published public document snapshot."""
         with self._lock:
             return list(self._docs)
 
@@ -249,17 +198,13 @@ class RagIndex:
             return self._lexical.vocabulary if self._lexical is not None else frozenset()
 
     def is_stale(self) -> bool:
-        """没建过、或超过 REFRESH_TTL 未重建。"""
+        """Report whether the snapshot is dirty, missing or past its refresh TTL."""
         return self._dirty or not self._last_build or time.time() - self._last_build > REFRESH_TTL
 
     # ── 查询 ──────────────────────────────────────────────────────
 
-    def _lexical_ranked(self, query: str, top_k: int,
-                        apply_cliff: bool = True) -> list[dict] | None:
-        """Rank the complete lexical snapshot; None means unavailable, [] means no hits.
-
-        apply_cliff=False is reserved for evaluation of candidate pruning.
-        """
+    def _lexical_ranked(self, query: str, top_k: int) -> list[dict] | None:
+        """Return raw-query BM25 candidates bounded by top_k; None means unavailable."""
         if self.is_stale() and time.time() - self._last_attempt > 30:
             try:
                 self.build()
@@ -274,12 +219,12 @@ class RagIndex:
         assert lexical is not None
         vocabulary = lexical.vocabulary
         # Deduplicate query terms without changing corpus frequencies.
-        q_toks = list(dict.fromkeys(t for t in tokenize(_clean_query(query)) if t in vocabulary))
+        q_toks = list(dict.fromkeys(t for t in tokenize(query) if t in vocabulary))
         if _EXPANSION_ENABLED:
             for _pair in _QUERY_SYNONYMS:
                 if _pair["key"] in query:
                     q_toks += [
-                        t for t in tokenize(_clean_query(query.replace(_pair["key"], _pair["val"])))
+                        t for t in tokenize(query.replace(_pair["key"], _pair["val"]))
                         if t not in q_toks and t in vocabulary]
         q_toks = list(dict.fromkeys(q_toks))
         if not q_toks:
@@ -287,11 +232,6 @@ class RagIndex:
         scores = lexical.scores(q_toks)
         # Document score is its strongest matching chunk; retain section locations.
         ranked = rank_documents(chunks, scores, revision)
-        # A relative cutoff preserves the first three candidates independently of score scale.
-        if ranked and apply_cliff:
-            floor = ranked[0]["score"] * _CLIFF_RATIO
-            ranked = ranked[:_CLIFF_MIN_KEEP] + [
-                r for r in ranked[_CLIFF_MIN_KEEP:] if r["score"] >= floor]
         ranked = ranked[:max(1, top_k)]
         for r in ranked:
             r["score"] = round(r["score"], 4)
@@ -300,33 +240,15 @@ class RagIndex:
 
     # ── 编排──────────────────────────
 
-    def search(self, query: str, top_k: int = 8,
-               apply_cliff: bool = True) -> list[dict] | None:
-        """检索入口（编排器）：词法路恒跑；向量路在场且**与这批语料对齐**时才融合。
-
-        `apply_cliff` 透传给词法路（见 `_lexical_ranked`）：**只给两臂 A/B 用**，生产恒默认。
-        注意它只关**词法路**的断崖——向量路本来就没有断崖（`_vector_ranked` 只切 top_k），
-        所以拨到 False 时"断崖前"这个口径只在词法档下严格成立（融合档下两臂本就该几乎相同）。
-
-        三条硬规则（都不是风格问题，各自对应一种静默的错法）：
-
-        1. **只有两路都在场才融合**。单路 RRF 与 BM25 不是同一套分数语义（≈0.016 vs
-           个位数），跨查询或跨模式不能直接比较原始分数。降级保持词法结果的形状：
-           关开关 ≡ 向量不可用 ≡ 融合前，
-           逐字节同今天（含 BM25 原分、原断崖、原候选数）。
-        2. **不在 RRF 分数空间里再造断崖**。每路各自剪枝（词法路保留 `_CLIFF_RATIO`），
-           RRF 只对并集重排序；把 0.25 照搬到量级 ≈0.016 的融合分上等于把候选清空。
-        3. **向量侧绝不进 `build()`**（见那里的注释），也绝不拿**对不上语料**的向量融合
-           ——对齐由 `view_for(指纹)` 保证，对不上就是没有，宁可少一路。
-        """
-        lex = self._lexical_ranked(query, top_k, apply_cliff)
+    def search(self, query: str, top_k: int = 8) -> list[dict] | None:
+        """Rank lexical candidates and fuse only corpus-aligned vector candidates."""
+        lex = self._lexical_ranked(query, top_k)
         if lex is None:
             _record("unavailable", None)
             return None
         vec, reason, miss = self._vector_ranked(query, top_k)
         if not vec:
-            # 关着是"设定"、向量路跑了但没相关项是"正常"、跑不起来才是"降级"——
-            # 三件事在下游眼里必须分得开，否则"开关拨了但一次都没生效"永远看不见。
+            # Disabled, empty and failed vector routes have distinct telemetry.
             _record(_mode_for(reason), reason, missing=miss)
             return lex
         if lex and lex[0].get("corpus_revision") != vec[0].get("corpus_revision"):
@@ -347,12 +269,7 @@ class RagIndex:
         return refined
 
     def _vector_ranked(self, query: str, top_k: int) -> tuple[list[dict], str | None, int]:
-        """向量路候选（文档级取最高分，与词法路同构）。返回 (rows, 没融合的原因, 缺几条)。
-
-        rows 为空 ⇒ 调用方整条退回词法。**它在"取不到"这件事上必须是诚实的**：
-        没有向量就说没有（reason 报出去），绝不返回"上一批语料"或"另一个空间"的向量。
-        reason = `no_vector_hits` 是"跑了、但这段语料里没有相关项"，不是故障。
-        """
+        """Return document candidates, degradation reason and missing-vector count."""
         if not is_enabled():
             # 开关关着、或凭据没配全（`degraded_reason()` 分得清这两件事，见它自己的注）
             return [], (degraded_reason() if settings.rag_hybrid_enabled else None), 0
@@ -365,9 +282,7 @@ class RagIndex:
         except InputProfileError:
             return [], "embedding_profile_error", 0
         store = get_store()
-        store.load()        # 读一次 manifest（几百字节，签名没变就早退）：不读的话，本进程
-                            # **第一次**检索必然报"还没有向量"——盘上明明是好的。读它顺带也
-                            # 就是"别的 worker 刚更新过 ⇒ 这里换视图"的那一步。
+        store.load()        # Observe committed generations from other workers.
         view = store.view_for(corpus_fingerprint(space, chunks))
         if view is None:
             self._warm_vectors(chunks)    # 后台补建/补齐；本轮不阻塞、不等它
@@ -404,7 +319,8 @@ def invalidate_document(article_id: int, revision: str) -> None:
     """An authoritative revision mismatch invalidates only a matching cached article."""
     idx = get_index()
     with idx._lock:
-        if not any(d["id"] == article_id and d.get("revision") == revision for d in idx._docs):
+        if not any(d["id"] == article_id and reading_revision(d["title"], d["content"]) == revision
+                   for d in idx._docs):
             return
         idx._dirty = True
         idx._invalidations += 1
@@ -412,12 +328,9 @@ def invalidate_document(article_id: int, revision: str) -> None:
     warm_async()
 
 
-def search(query: str, top_k: int = 8, apply_cliff: bool = True) -> list[dict] | None:
-    """检索入口：返回候选列表 [{type, id, title, section, score}]，不含全文。
-
-    `apply_cliff=False` 关掉词法路的相对断崖（`eval/cliff_probe.py` 的两臂用），**线上恒默认**。
-    """
-    return get_index().search(query, top_k=top_k, apply_cliff=apply_cliff)
+def search(query: str, top_k: int = 8) -> list[dict] | None:
+    """Return ranked article candidates with readable source locators, without full text."""
+    return get_index().search(query, top_k=top_k)
 
 
 # Resolve only unambiguous article-title references from the visible corpus.
@@ -436,13 +349,7 @@ def _norm_title(s: str) -> str:
 
 
 def match_doc_title(title: str, docs: list[dict]) -> DocId | None:
-    """标题 → 文章 id（纯函数，便于单测）。唯一命中才返回 id，否则 None。
-
-    ① 归一化后完全相等；
-    ② 唯一子串包含（口语简称《架构文档》对全称《…架构文档》），两侧任一方向且
-       锚点标题 ≥_TITLE_PART_MIN 字。两条都要求**候选唯一**——两条候选打平就是
-       歧义，返回 None。
-    """
+    """Resolve a unique normalized title or a sufficiently long unique substring."""
     n = _norm_title(title)
     if not n or not docs:
         return None
@@ -461,10 +368,7 @@ def match_doc_title(title: str, docs: list[dict]) -> DocId | None:
 
 
 def resolve_title(title: str) -> DocId | None:
-    """按标题查文章 id；索引没建好返回 None。**不阻塞**调用方（只读快照）。
-
-    冷/过期时踢一次后台重建（不在本调用里等）——下一次解析就能拿到新文章。
-    """
+    """Resolve an article title from the current snapshot; refresh stale data asynchronously."""
     idx = get_index()
     docs = idx.docs_snapshot()
     if idx.is_stale():
@@ -473,7 +377,7 @@ def resolve_title(title: str) -> DocId | None:
 
 
 def warm() -> bool:
-    """同步建好语料索引（启动预热、评测夹具、单测用）。失败返回 False 不抛。"""
+    """Build the corpus snapshot synchronously; return False on failure."""
     try:
         return get_index().build()
     except Exception:
@@ -486,7 +390,7 @@ _warm_lock = threading.Lock()   # 只防同刻重复起线程，不阻塞调用�
 
 
 def warm_async() -> None:
-    """后台预热一次（不等待）。并发调用只会起一个线程，重建幂等。"""
+    """Start at most one background corpus refresh without blocking the caller."""
     if not _warm_lock.acquire(blocking=False):
         return
     def _run() -> None:
@@ -504,4 +408,4 @@ if __name__ == "__main__":
     idx.build()
     q = sys.argv[1] if len(sys.argv) > 1 else "ESP32-S3 OTA 更新需要哪些分区？"
     for h in idx.search(q) or []:
-        print(f"  {h['type']}:{h['id']:<4} {h['score']:<8.4f} [{h['section']}] {h['title'][:24]}")
+        print(f"  {h['type']}:{h['id']:<4} [{h['sections']}] {h['title'][:24]}")

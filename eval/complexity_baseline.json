@@ -27,10 +27,6 @@
     "c": 40,
     "lines": 101
   },
-  "eval/corpus_terms.py::derive": {
-    "c": 31,
-    "lines": 76
-  },
   "eval/corpus_terms.py::drift": {
     "c": 39,
     "lines": 92

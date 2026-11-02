@@ -57,7 +57,7 @@ def corpus_snapshot() -> dict:
     from rag.chunks import INDEX_VERSION
     from rag.corpus import content_revision, corpus_revision
     from rag.lexical import backend_info
-    from rag.search import BM25_B, BM25_K1, cliff_config
+    from rag.search import BM25_B, BM25_K1
     from rag.vector_index import space_from_settings
     query_hash = hashlib.sha256(json.dumps(QUERIES, ensure_ascii=False,
                                sort_keys=True).encode()).hexdigest()
@@ -71,15 +71,14 @@ def corpus_snapshot() -> dict:
         "index_version": INDEX_VERSION,
         "retrieval_config": {"bm25_backend": backend_info(),
             "bm25_k1": BM25_K1, "bm25_b": BM25_B,
-            "cliff": cliff_config(), "hybrid": settings.rag_hybrid_enabled,
+            "hybrid": settings.rag_hybrid_enabled,
             "rrf_k": settings.rrf_k,
             "embedding_space_hash": hashlib.sha256(json.dumps(
                 space_from_settings().as_dict(), sort_keys=True).encode()).hexdigest()},
         "retrieval_code_hash": hashlib.sha256(b"".join(
-            (Path(__file__).resolve().parents[1] / "rag" / f).read_bytes()
-            for f in ("search.py", "lexical.py", "chunks.py", "sections.py",
-                      "ranking.py", "corpus.py", "vector_index.py",
-                      "vector_files.py"))).hexdigest(),
+            source.read_bytes()
+            for source in sorted((Path(__file__).resolve().parents[1] / "rag").glob("*.py"))
+        )).hexdigest(),
         "corpus_by_type": by_type,
         "expected": exp,
         "expected_count": len(exp),

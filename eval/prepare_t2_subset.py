@@ -116,7 +116,7 @@ def select(
     if required - corpus.keys():
         raise ValueError("source is missing judged documents")
     probe = {"corpus": {**pool, **corpus}, "queries": queries}
-    run, _ = bm25_run(probe, top_k=50, cliff=False)
+    run, _ = bm25_run(probe, top_k=50)
     hard = {}
     for q, hits in run.items():
         candidates = [d for d in hits if d not in qrels[q]]

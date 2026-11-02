@@ -1,0 +1,1835 @@
+{
+  "scope": "16 fixed development queries, new complete 223-vector v4 index, no model/API calls and no source changes; pre-existing real BGE query vectors reused because weights/profile/query preprocessing are unchanged",
+  "index": {
+    "vectors": 223,
+    "dim": 512,
+    "fingerprint": "7fd414c2e7e605f98aedf989b6fc40dfed80fb4beda5c734ec2565bd89420bb1",
+    "corpus_revision": "885f474772b2fb8dddf683d37fb64c1246e747803e78635c96c2a04e948a9d41",
+    "profile_signature": "e37afc6871ce24825ac3001e04de64f518ec9e22106a5fbac16c323238beae03",
+    "missing": 0
+  },
+  "query_vector_provenance": {
+    "capture_revision": "57246e5e",
+    "capture_file_sha256": "5cc5c75ef3b44553b80489eb86ec440a99fba6ee60a4deca62bb594a5e7af831",
+    "query_text_function_ast_unchanged": true,
+    "query_prefix": "为这个句子生成表示以用于检索相关文章：",
+    "model_revision": "CompendiumLabs/bge-small-zh-v1.5-gguf@5bf683e6a1bd454bbb60ba051088c50731d63fcb/bge-small-zh-v1.5-q8_0.gguf/5a88d266870fbd27c6f329df60de80e2d4cf3bbd5e6f080bd5c1b2e5abb12039;llama-b11829;tokenizer.ggml.normalizer.lowercase=bool:false,tokenizer.ggml.normalizer.strip_accents=bool:false",
+    "model": "bge-small-zh-v1.5-q8_0",
+    "vectors_sha256": "2d45c9fbf0676acdf4cedb2884ab5abdef912f5de594e9555b0126843d04cdca"
+  },
+  "query_synonym_keys_exercised": [],
+  "supplementary_existing_lexical_holdout": [
+    {
+      "qid": "h_token_short",
+      "query": "令牌怎么签发？",
+      "expected": [
+        "note:22",
+        "note:19",
+        "note:14"
+      ],
+      "lexical_ids": {
+        "clean=1,synonyms=1,cliff=1": [
+          22,
+          19,
+          14,
+          1,
+          46
+        ],
+        "clean=1,synonyms=1,cliff=0": [
+          22,
+          19,
+          14,
+          1,
+          46
+        ],
+        "clean=1,synonyms=0,cliff=1": [],
+        "clean=1,synonyms=0,cliff=0": [],
+        "clean=0,synonyms=1,cliff=1": [
+          14,
+          46,
+          22,
+          16,
+          19,
+          1
+        ],
+        "clean=0,synonyms=1,cliff=0": [
+          14,
+          46,
+          22,
+          16,
+          19,
+          1
+        ],
+        "clean=0,synonyms=0,cliff=1": [
+          46,
+          16,
+          14
+        ],
+        "clean=0,synonyms=0,cliff=0": [
+          46,
+          16,
+          14
+        ]
+      }
+    },
+    {
+      "qid": "h_token_long",
+      "query": "接口鉴权用的令牌是怎么签发的？",
+      "expected": [
+        "note:22",
+        "note:19",
+        "note:14"
+      ],
+      "lexical_ids": {
+        "clean=1,synonyms=1,cliff=1": [
+          22,
+          14,
+          1,
+          19,
+          23,
+          46
+        ],
+        "clean=1,synonyms=1,cliff=0": [
+          22,
+          14,
+          1,
+          19,
+          23,
+          46
+        ],
+        "clean=1,synonyms=0,cliff=1": [
+          23,
+          19,
+          14,
+          22,
+          1,
+          46
+        ],
+        "clean=1,synonyms=0,cliff=0": [
+          23,
+          19,
+          14,
+          22,
+          1,
+          46
+        ],
+        "clean=0,synonyms=1,cliff=1": [
+          14,
+          22,
+          46,
+          1,
+          19,
+          23,
+          16
+        ],
+        "clean=0,synonyms=1,cliff=0": [
+          14,
+          22,
+          46,
+          1,
+          19,
+          23,
+          16
+        ],
+        "clean=0,synonyms=0,cliff=1": [
+          14,
+          46,
+          23,
+          19,
+          16,
+          22,
+          1
+        ],
+        "clean=0,synonyms=0,cliff=0": [
+          14,
+          46,
+          23,
+          19,
+          16,
+          22,
+          1
+        ]
+      }
+    },
+    {
+      "qid": "h_disconnect",
+      "query": "断线了会怎样？",
+      "expected": [
+        "note:19"
+      ],
+      "lexical_ids": {
+        "clean=1,synonyms=1,cliff=1": [
+          46,
+          19,
+          62
+        ],
+        "clean=1,synonyms=1,cliff=0": [
+          46,
+          19,
+          62
+        ],
+        "clean=1,synonyms=0,cliff=1": [
+          46
+        ],
+        "clean=1,synonyms=0,cliff=0": [
+          46
+        ],
+        "clean=0,synonyms=1,cliff=1": [
+          46,
+          19,
+          62
+        ],
+        "clean=0,synonyms=1,cliff=0": [
+          46,
+          19,
+          62
+        ],
+        "clean=0,synonyms=0,cliff=1": [
+          46
+        ],
+        "clean=0,synonyms=0,cliff=0": [
+          46
+        ]
+      }
+    },
+    {
+      "qid": "h_ota_air",
+      "query": "空中升级怎么做的？",
+      "expected": [
+        "note:12",
+        "note:14",
+        "note:22"
+      ],
+      "lexical_ids": {
+        "clean=1,synonyms=1,cliff=1": [
+          14,
+          22,
+          46,
+          12
+        ],
+        "clean=1,synonyms=1,cliff=0": [
+          14,
+          22,
+          46,
+          12
+        ],
+        "clean=1,synonyms=0,cliff=1": [
+          14,
+          22,
+          46
+        ],
+        "clean=1,synonyms=0,cliff=0": [
+          14,
+          22,
+          46
+        ],
+        "clean=0,synonyms=1,cliff=1": [
+          46,
+          14,
+          22
+        ],
+        "clean=0,synonyms=1,cliff=0": [
+          46,
+          14,
+          22,
+          16,
+          12
+        ],
+        "clean=0,synonyms=0,cliff=1": [
+          46,
+          14,
+          16
+        ],
+        "clean=0,synonyms=0,cliff=0": [
+          46,
+          14,
+          16,
+          22
+        ]
+      }
+    },
+    {
+      "qid": "h_page_closed",
+      "query": "页面关掉后还会继续跑吗？",
+      "expected": [
+        "note:19"
+      ],
+      "lexical_ids": {
+        "clean=1,synonyms=1,cliff=1": [
+          46,
+          23,
+          22,
+          62,
+          16,
+          19
+        ],
+        "clean=1,synonyms=1,cliff=0": [
+          46,
+          23,
+          22,
+          62,
+          16,
+          19
+        ],
+        "clean=1,synonyms=0,cliff=1": [
+          46,
+          23,
+          22,
+          62,
+          16,
+          19
+        ],
+        "clean=1,synonyms=0,cliff=0": [
+          46,
+          23,
+          22,
+          62,
+          16,
+          19
+        ],
+        "clean=0,synonyms=1,cliff=1": [
+          46,
+          23,
+          22,
+          62,
+          16,
+          19
+        ],
+        "clean=0,synonyms=1,cliff=0": [
+          46,
+          23,
+          22,
+          62,
+          16,
+          19
+        ],
+        "clean=0,synonyms=0,cliff=1": [
+          46,
+          23,
+          22,
+          62,
+          16,
+          19
+        ],
+        "clean=0,synonyms=0,cliff=0": [
+          46,
+          23,
+          22,
+          62,
+          16,
+          19
+        ]
+      }
+    },
+    {
+      "qid": "h_rss",
+      "query": "这个站支持 RSS 订阅吗？",
+      "expected": [],
+      "lexical_ids": {
+        "clean=1,synonyms=1,cliff=1": [
+          14,
+          46,
+          22,
+          16,
+          19,
+          62,
+          23
+        ],
+        "clean=1,synonyms=1,cliff=0": [
+          14,
+          46,
+          22,
+          16,
+          19,
+          62,
+          23
+        ],
+        "clean=1,synonyms=0,cliff=1": [
+          14,
+          46,
+          22,
+          16,
+          19,
+          62,
+          23
+        ],
+        "clean=1,synonyms=0,cliff=0": [
+          14,
+          46,
+          22,
+          16,
+          19,
+          62,
+          23
+        ],
+        "clean=0,synonyms=1,cliff=1": [
+          14,
+          46,
+          22,
+          16,
+          19,
+          62,
+          23
+        ],
+        "clean=0,synonyms=1,cliff=0": [
+          14,
+          46,
+          22,
+          16,
+          19,
+          62,
+          23
+        ],
+        "clean=0,synonyms=0,cliff=1": [
+          14,
+          46,
+          22,
+          16,
+          19,
+          62,
+          23
+        ],
+        "clean=0,synonyms=0,cliff=0": [
+          14,
+          46,
+          22,
+          16,
+          19,
+          62,
+          23
+        ]
+      }
+    }
+  ],
+  "supplementary_existing_measurement_query": {
+    "id": "rag_eval_system",
+    "query": "RAG测评体系怎么建立？",
+    "expected": [
+      "note:19"
+    ],
+    "raw_fixed_window_synonyms_on_off": {
+      "True": [
+        62,
+        46,
+        19,
+        16,
+        14,
+        22
+      ],
+      "False": [
+        46,
+        62,
+        16,
+        14,
+        22,
+        19
+      ]
+    }
+  },
+  "date": "2026-11-03",
+  "strategy_before_revision": "82c7f248",
+  "candidate_window": 8,
+  "arms": {
+    "clean=1,synonyms=1,cliff=1": {
+      "metrics": {
+        "lexical": {
+          "R@1": {
+            "value": 0.8020833333333334,
+            "queries": 16
+          },
+          "R@3": {
+            "value": 1.0,
+            "queries": 16
+          },
+          "R@8": {
+            "value": 1.0,
+            "queries": 16
+          },
+          "RR@1": {
+            "value": 0.9375,
+            "queries": 16
+          },
+          "RR@3": {
+            "value": 0.96875,
+            "queries": 16
+          },
+          "RR@8": {
+            "value": 0.96875,
+            "queries": 16
+          },
+          "Success@1": {
+            "value": 0.9375,
+            "queries": 16
+          },
+          "Success@3": {
+            "value": 1.0,
+            "queries": 16
+          },
+          "Success@8": {
+            "value": 1.0,
+            "queries": 16
+          },
+          "nDCG@1": {
+            "value": 0.9375,
+            "queries": 16
+          },
+          "nDCG@3": {
+            "value": 0.9758216995478411,
+            "queries": 16
+          },
+          "nDCG@8": {
+            "value": 0.9758216995478411,
+            "queries": 16
+          }
+        },
+        "hybrid": {
+          "R@1": {
+            "value": 0.8020833333333334,
+            "queries": 16
+          },
+          "R@3": {
+            "value": 1.0,
+            "queries": 16
+          },
+          "R@8": {
+            "value": 1.0,
+            "queries": 16
+          },
+          "RR@1": {
+            "value": 0.9375,
+            "queries": 16
+          },
+          "RR@3": {
+            "value": 0.96875,
+            "queries": 16
+          },
+          "RR@8": {
+            "value": 0.96875,
+            "queries": 16
+          },
+          "Success@1": {
+            "value": 0.9375,
+            "queries": 16
+          },
+          "Success@3": {
+            "value": 1.0,
+            "queries": 16
+          },
+          "Success@8": {
+            "value": 1.0,
+            "queries": 16
+          },
+          "nDCG@1": {
+            "value": 0.9375,
+            "queries": 16
+          },
+          "nDCG@3": {
+            "value": 0.9808391502260794,
+            "queries": 16
+          },
+          "nDCG@8": {
+            "value": 0.9808391502260794,
+            "queries": 16
+          }
+        }
+      },
+      "mean_lexical_candidates": 3.625,
+      "details": [
+        {
+          "qid": "git_branch",
+          "lexical_ids": [
+            16,
+            23,
+            14,
+            12
+          ],
+          "hybrid_ids": [
+            16,
+            23,
+            12,
+            14,
+            62,
+            19,
+            46,
+            22
+          ],
+          "lexical_candidates": 4
+        },
+        {
+          "qid": "git_svn",
+          "lexical_ids": [
+            16,
+            46,
+            19
+          ],
+          "hybrid_ids": [
+            16,
+            46,
+            19,
+            23,
+            12,
+            62,
+            22,
+            14
+          ],
+          "lexical_candidates": 3
+        },
+        {
+          "qid": "git_snapshot",
+          "lexical_ids": [
+            16,
+            19,
+            12
+          ],
+          "hybrid_ids": [
+            16,
+            19,
+            12,
+            14,
+            22,
+            46,
+            1,
+            23
+          ],
+          "lexical_candidates": 3
+        },
+        {
+          "qid": "ota_partition",
+          "lexical_ids": [
+            14,
+            12,
+            22,
+            46
+          ],
+          "hybrid_ids": [
+            14,
+            12,
+            22,
+            46,
+            19,
+            16,
+            23,
+            1
+          ],
+          "lexical_candidates": 4
+        },
+        {
+          "qid": "ota_fail",
+          "lexical_ids": [
+            12,
+            22,
+            14
+          ],
+          "hybrid_ids": [
+            12,
+            14,
+            22,
+            16,
+            19,
+            46,
+            23,
+            62
+          ],
+          "lexical_candidates": 3
+        },
+        {
+          "qid": "iot_register",
+          "lexical_ids": [
+            22,
+            14,
+            46
+          ],
+          "hybrid_ids": [
+            22,
+            14,
+            46,
+            19,
+            62,
+            16,
+            1,
+            12
+          ],
+          "lexical_candidates": 3
+        },
+        {
+          "qid": "iot_auth",
+          "lexical_ids": [
+            46,
+            22,
+            14,
+            19,
+            1,
+            62,
+            12
+          ],
+          "hybrid_ids": [
+            46,
+            22,
+            14,
+            19,
+            1,
+            62,
+            12,
+            16
+          ],
+          "lexical_candidates": 7
+        },
+        {
+          "qid": "async_loop",
+          "lexical_ids": [
+            23,
+            46,
+            19
+          ],
+          "hybrid_ids": [
+            23,
+            19,
+            46,
+            62,
+            16,
+            14,
+            1,
+            12
+          ],
+          "lexical_candidates": 3
+        },
+        {
+          "qid": "async_parallel",
+          "lexical_ids": [
+            23,
+            19,
+            46
+          ],
+          "hybrid_ids": [
+            23,
+            19,
+            46,
+            62,
+            12,
+            16,
+            14,
+            1
+          ],
+          "lexical_candidates": 3
+        },
+        {
+          "qid": "async_thread",
+          "lexical_ids": [
+            23,
+            16,
+            46
+          ],
+          "hybrid_ids": [
+            23,
+            16,
+            46,
+            19,
+            22,
+            1,
+            62,
+            14
+          ],
+          "lexical_candidates": 3
+        },
+        {
+          "qid": "agent_stack",
+          "lexical_ids": [
+            62,
+            19,
+            22,
+            46
+          ],
+          "hybrid_ids": [
+            62,
+            19,
+            22,
+            46,
+            1,
+            16,
+            12,
+            14
+          ],
+          "lexical_candidates": 4
+        },
+        {
+          "qid": "agent_memory",
+          "lexical_ids": [
+            19,
+            23,
+            62,
+            22,
+            1
+          ],
+          "hybrid_ids": [
+            19,
+            62,
+            23,
+            1,
+            12,
+            16,
+            22,
+            46
+          ],
+          "lexical_candidates": 5
+        },
+        {
+          "qid": "vector_graph",
+          "lexical_ids": [
+            46,
+            19,
+            16
+          ],
+          "hybrid_ids": [
+            46,
+            19,
+            16,
+            1,
+            62,
+            12,
+            23,
+            22
+          ],
+          "lexical_candidates": 3
+        },
+        {
+          "qid": "vector_similarity",
+          "lexical_ids": [
+            46,
+            19,
+            62
+          ],
+          "hybrid_ids": [
+            46,
+            19,
+            62,
+            1,
+            16,
+            23,
+            22,
+            12
+          ],
+          "lexical_candidates": 3
+        },
+        {
+          "qid": "blog_layout",
+          "lexical_ids": [
+            1,
+            16,
+            19,
+            62
+          ],
+          "hybrid_ids": [
+            1,
+            19,
+            16,
+            62,
+            46,
+            12,
+            22,
+            23
+          ],
+          "lexical_candidates": 4
+        },
+        {
+          "qid": "agent_intro",
+          "lexical_ids": [
+            19,
+            1,
+            62
+          ],
+          "hybrid_ids": [
+            19,
+            62,
+            1,
+            16,
+            46,
+            23,
+            12,
+            14
+          ],
+          "lexical_candidates": 3
+        }
+      ]
+    },
+    "clean=1,synonyms=1,cliff=0": {
+      "metrics": {
+        "lexical": {
+          "R@1": {
+            "value": 0.8020833333333334,
+            "queries": 16
+          },
+          "R@3": {
+            "value": 1.0,
+            "queries": 16
+          },
+          "R@8": {
+            "value": 1.0,
+            "queries": 16
+          },
+          "RR@1": {
+            "value": 0.9375,
+            "queries": 16
+          },
+          "RR@3": {
+            "value": 0.96875,
+            "queries": 16
+          },
+          "RR@8": {
+            "value": 0.96875,
+            "queries": 16
+          },
+          "Success@1": {
+            "value": 0.9375,
+            "queries": 16
+          },
+          "Success@3": {
+            "value": 1.0,
+            "queries": 16
+          },
+          "Success@8": {
+            "value": 1.0,
+            "queries": 16
+          },
+          "nDCG@1": {
+            "value": 0.9375,
+            "queries": 16
+          },
+          "nDCG@3": {
+            "value": 0.9758216995478411,
+            "queries": 16
+          },
+          "nDCG@8": {
+            "value": 0.9758216995478411,
+            "queries": 16
+          }
+        },
+        "hybrid": {
+          "R@1": {
+            "value": 0.8020833333333334,
+            "queries": 16
+          },
+          "R@3": {
+            "value": 1.0,
+            "queries": 16
+          },
+          "R@8": {
+            "value": 1.0,
+            "queries": 16
+          },
+          "RR@1": {
+            "value": 0.9375,
+            "queries": 16
+          },
+          "RR@3": {
+            "value": 0.96875,
+            "queries": 16
+          },
+          "RR@8": {
+            "value": 0.96875,
+            "queries": 16
+          },
+          "Success@1": {
+            "value": 0.9375,
+            "queries": 16
+          },
+          "Success@3": {
+            "value": 1.0,
+            "queries": 16
+          },
+          "Success@8": {
+            "value": 1.0,
+            "queries": 16
+          },
+          "nDCG@1": {
+            "value": 0.9375,
+            "queries": 16
+          },
+          "nDCG@3": {
+            "value": 0.9808391502260794,
+            "queries": 16
+          },
+          "nDCG@8": {
+            "value": 0.9808391502260794,
+            "queries": 16
+          }
+        }
+      },
+      "mean_lexical_candidates": 6.9375,
+      "details": [
+        {
+          "qid": "git_branch",
+          "lexical_ids": [
+            16,
+            23,
+            14,
+            12,
+            19,
+            46,
+            22
+          ],
+          "hybrid_ids": [
+            16,
+            23,
+            12,
+            19,
+            14,
+            46,
+            22,
+            62
+          ],
+          "lexical_candidates": 7
+        },
+        {
+          "qid": "git_svn",
+          "lexical_ids": [
+            16,
+            46,
+            19,
+            22
+          ],
+          "hybrid_ids": [
+            16,
+            46,
+            19,
+            22,
+            23,
+            12,
+            62,
+            14
+          ],
+          "lexical_candidates": 4
+        },
+        {
+          "qid": "git_snapshot",
+          "lexical_ids": [
+            16,
+            19,
+            12,
+            1,
+            23,
+            46,
+            22
+          ],
+          "hybrid_ids": [
+            16,
+            19,
+            12,
+            1,
+            22,
+            46,
+            23,
+            14
+          ],
+          "lexical_candidates": 7
+        },
+        {
+          "qid": "ota_partition",
+          "lexical_ids": [
+            14,
+            12,
+            22,
+            46,
+            1,
+            19,
+            62
+          ],
+          "hybrid_ids": [
+            14,
+            12,
+            22,
+            19,
+            46,
+            1,
+            16,
+            62
+          ],
+          "lexical_candidates": 7
+        },
+        {
+          "qid": "ota_fail",
+          "lexical_ids": [
+            12,
+            22,
+            14,
+            16,
+            46,
+            19,
+            62
+          ],
+          "hybrid_ids": [
+            12,
+            16,
+            14,
+            22,
+            19,
+            46,
+            62,
+            23
+          ],
+          "lexical_candidates": 7
+        },
+        {
+          "qid": "iot_register",
+          "lexical_ids": [
+            22,
+            14,
+            46,
+            19,
+            16,
+            1,
+            12,
+            62
+          ],
+          "hybrid_ids": [
+            22,
+            14,
+            46,
+            19,
+            16,
+            62,
+            1,
+            12
+          ],
+          "lexical_candidates": 8
+        },
+        {
+          "qid": "iot_auth",
+          "lexical_ids": [
+            46,
+            22,
+            14,
+            19,
+            1,
+            62,
+            12,
+            16
+          ],
+          "hybrid_ids": [
+            46,
+            22,
+            14,
+            19,
+            1,
+            62,
+            12,
+            16
+          ],
+          "lexical_candidates": 8
+        },
+        {
+          "qid": "async_loop",
+          "lexical_ids": [
+            23,
+            46,
+            19,
+            12,
+            16,
+            62,
+            22,
+            1
+          ],
+          "hybrid_ids": [
+            23,
+            19,
+            46,
+            62,
+            16,
+            12,
+            1,
+            14
+          ],
+          "lexical_candidates": 8
+        },
+        {
+          "qid": "async_parallel",
+          "lexical_ids": [
+            23,
+            19,
+            46,
+            22,
+            14,
+            62,
+            16,
+            1
+          ],
+          "hybrid_ids": [
+            23,
+            19,
+            62,
+            46,
+            14,
+            16,
+            1,
+            22
+          ],
+          "lexical_candidates": 8
+        },
+        {
+          "qid": "async_thread",
+          "lexical_ids": [
+            23,
+            16,
+            46,
+            19,
+            62
+          ],
+          "hybrid_ids": [
+            23,
+            16,
+            19,
+            46,
+            62,
+            22,
+            1,
+            14
+          ],
+          "lexical_candidates": 5
+        },
+        {
+          "qid": "agent_stack",
+          "lexical_ids": [
+            62,
+            19,
+            22,
+            46,
+            1,
+            16,
+            14
+          ],
+          "hybrid_ids": [
+            62,
+            19,
+            22,
+            1,
+            46,
+            16,
+            14,
+            12
+          ],
+          "lexical_candidates": 7
+        },
+        {
+          "qid": "agent_memory",
+          "lexical_ids": [
+            19,
+            23,
+            62,
+            22,
+            1,
+            16,
+            12,
+            14
+          ],
+          "hybrid_ids": [
+            19,
+            12,
+            62,
+            16,
+            23,
+            1,
+            14,
+            22
+          ],
+          "lexical_candidates": 8
+        },
+        {
+          "qid": "vector_graph",
+          "lexical_ids": [
+            46,
+            19,
+            16,
+            62,
+            14,
+            1,
+            23,
+            22
+          ],
+          "hybrid_ids": [
+            46,
+            19,
+            62,
+            16,
+            1,
+            23,
+            22,
+            14
+          ],
+          "lexical_candidates": 8
+        },
+        {
+          "qid": "vector_similarity",
+          "lexical_ids": [
+            46,
+            19,
+            62,
+            16,
+            22,
+            14,
+            1,
+            23
+          ],
+          "hybrid_ids": [
+            46,
+            19,
+            62,
+            16,
+            1,
+            22,
+            23,
+            14
+          ],
+          "lexical_candidates": 8
+        },
+        {
+          "qid": "blog_layout",
+          "lexical_ids": [
+            1,
+            16,
+            19,
+            62,
+            46,
+            12,
+            22,
+            23
+          ],
+          "hybrid_ids": [
+            1,
+            19,
+            16,
+            46,
+            62,
+            12,
+            22,
+            23
+          ],
+          "lexical_candidates": 8
+        },
+        {
+          "qid": "agent_intro",
+          "lexical_ids": [
+            19,
+            1,
+            62
+          ],
+          "hybrid_ids": [
+            19,
+            62,
+            1,
+            16,
+            46,
+            23,
+            12,
+            14
+          ],
+          "lexical_candidates": 3
+        }
+      ]
+    },
+    "clean=0,synonyms=1,cliff=0": {
+      "metrics": {
+        "lexical": {
+          "R@1": {
+            "value": 0.8020833333333334,
+            "queries": 16
+          },
+          "R@3": {
+            "value": 0.96875,
+            "queries": 16
+          },
+          "R@8": {
+            "value": 1.0,
+            "queries": 16
+          },
+          "RR@1": {
+            "value": 0.9375,
+            "queries": 16
+          },
+          "RR@3": {
+            "value": 0.96875,
+            "queries": 16
+          },
+          "RR@8": {
+            "value": 0.96875,
+            "queries": 16
+          },
+          "Success@1": {
+            "value": 0.9375,
+            "queries": 16
+          },
+          "Success@3": {
+            "value": 1.0,
+            "queries": 16
+          },
+          "Success@8": {
+            "value": 1.0,
+            "queries": 16
+          },
+          "nDCG@1": {
+            "value": 0.9375,
+            "queries": 16
+          },
+          "nDCG@3": {
+            "value": 0.9566608497739206,
+            "queries": 16
+          },
+          "nDCG@8": {
+            "value": 0.9731651074347075,
+            "queries": 16
+          }
+        },
+        "hybrid": {
+          "R@1": {
+            "value": 0.8020833333333334,
+            "queries": 16
+          },
+          "R@3": {
+            "value": 1.0,
+            "queries": 16
+          },
+          "R@8": {
+            "value": 1.0,
+            "queries": 16
+          },
+          "RR@1": {
+            "value": 0.9375,
+            "queries": 16
+          },
+          "RR@3": {
+            "value": 0.96875,
+            "queries": 16
+          },
+          "RR@8": {
+            "value": 0.96875,
+            "queries": 16
+          },
+          "Success@1": {
+            "value": 0.9375,
+            "queries": 16
+          },
+          "Success@3": {
+            "value": 1.0,
+            "queries": 16
+          },
+          "Success@8": {
+            "value": 1.0,
+            "queries": 16
+          },
+          "nDCG@1": {
+            "value": 0.9375,
+            "queries": 16
+          },
+          "nDCG@3": {
+            "value": 0.9808391502260794,
+            "queries": 16
+          },
+          "nDCG@8": {
+            "value": 0.9808391502260794,
+            "queries": 16
+          }
+        }
+      },
+      "mean_lexical_candidates": 7.1875,
+      "details": [
+        {
+          "qid": "git_branch",
+          "lexical_ids": [
+            16,
+            19,
+            46,
+            23,
+            14,
+            12,
+            62,
+            22
+          ],
+          "hybrid_ids": [
+            16,
+            19,
+            12,
+            23,
+            46,
+            62,
+            14,
+            22
+          ],
+          "lexical_candidates": 8
+        },
+        {
+          "qid": "git_svn",
+          "lexical_ids": [
+            16,
+            46,
+            19,
+            62,
+            22
+          ],
+          "hybrid_ids": [
+            16,
+            46,
+            19,
+            62,
+            22,
+            23,
+            12,
+            14
+          ],
+          "lexical_candidates": 5
+        },
+        {
+          "qid": "git_snapshot",
+          "lexical_ids": [
+            16,
+            19,
+            46,
+            12,
+            1,
+            23,
+            22
+          ],
+          "hybrid_ids": [
+            16,
+            19,
+            46,
+            12,
+            22,
+            1,
+            23,
+            14
+          ],
+          "lexical_candidates": 7
+        },
+        {
+          "qid": "ota_partition",
+          "lexical_ids": [
+            14,
+            12,
+            22,
+            46,
+            1,
+            19,
+            62
+          ],
+          "hybrid_ids": [
+            14,
+            12,
+            22,
+            19,
+            46,
+            1,
+            16,
+            62
+          ],
+          "lexical_candidates": 7
+        },
+        {
+          "qid": "ota_fail",
+          "lexical_ids": [
+            12,
+            16,
+            22,
+            14,
+            46,
+            19,
+            62
+          ],
+          "hybrid_ids": [
+            12,
+            16,
+            14,
+            22,
+            19,
+            46,
+            62,
+            23
+          ],
+          "lexical_candidates": 7
+        },
+        {
+          "qid": "iot_register",
+          "lexical_ids": [
+            22,
+            14,
+            46,
+            19,
+            16,
+            1,
+            12,
+            62
+          ],
+          "hybrid_ids": [
+            22,
+            14,
+            46,
+            19,
+            16,
+            62,
+            1,
+            12
+          ],
+          "lexical_candidates": 8
+        },
+        {
+          "qid": "iot_auth",
+          "lexical_ids": [
+            46,
+            22,
+            14,
+            19,
+            1,
+            62,
+            12,
+            16
+          ],
+          "hybrid_ids": [
+            46,
+            22,
+            14,
+            19,
+            1,
+            62,
+            12,
+            16
+          ],
+          "lexical_candidates": 8
+        },
+        {
+          "qid": "async_loop",
+          "lexical_ids": [
+            23,
+            46,
+            16,
+            14,
+            19,
+            12,
+            62,
+            22
+          ],
+          "hybrid_ids": [
+            23,
+            46,
+            19,
+            16,
+            62,
+            14,
+            12,
+            1
+          ],
+          "lexical_candidates": 8
+        },
+        {
+          "qid": "async_parallel",
+          "lexical_ids": [
+            23,
+            19,
+            46,
+            62,
+            22,
+            16,
+            14,
+            1
+          ],
+          "hybrid_ids": [
+            23,
+            19,
+            62,
+            46,
+            16,
+            14,
+            1,
+            12
+          ],
+          "lexical_candidates": 8
+        },
+        {
+          "qid": "async_thread",
+          "lexical_ids": [
+            23,
+            16,
+            46,
+            19,
+            62
+          ],
+          "hybrid_ids": [
+            23,
+            16,
+            19,
+            46,
+            62,
+            22,
+            1,
+            14
+          ],
+          "lexical_candidates": 5
+        },
+        {
+          "qid": "agent_stack",
+          "lexical_ids": [
+            62,
+            19,
+            46,
+            22,
+            16,
+            1,
+            14
+          ],
+          "hybrid_ids": [
+            62,
+            19,
+            22,
+            46,
+            1,
+            16,
+            14,
+            12
+          ],
+          "lexical_candidates": 7
+        },
+        {
+          "qid": "agent_memory",
+          "lexical_ids": [
+            19,
+            23,
+            62,
+            16,
+            22,
+            1,
+            46,
+            12
+          ],
+          "hybrid_ids": [
+            19,
+            16,
+            62,
+            23,
+            12,
+            46,
+            1,
+            22
+          ],
+          "lexical_candidates": 8
+        },
+        {
+          "qid": "vector_graph",
+          "lexical_ids": [
+            46,
+            19,
+            16,
+            62,
+            14,
+            1,
+            23,
+            22
+          ],
+          "hybrid_ids": [
+            46,
+            19,
+            62,
+            16,
+            1,
+            23,
+            22,
+            14
+          ],
+          "lexical_candidates": 8
+        },
+        {
+          "qid": "vector_similarity",
+          "lexical_ids": [
+            46,
+            19,
+            62,
+            16,
+            22,
+            14,
+            1,
+            23
+          ],
+          "hybrid_ids": [
+            46,
+            19,
+            62,
+            16,
+            1,
+            22,
+            23,
+            14
+          ],
+          "lexical_candidates": 8
+        },
+        {
+          "qid": "blog_layout",
+          "lexical_ids": [
+            1,
+            16,
+            19,
+            62,
+            46,
+            12,
+            22,
+            23
+          ],
+          "hybrid_ids": [
+            1,
+            19,
+            16,
+            46,
+            62,
+            12,
+            22,
+            23
+          ],
+          "lexical_candidates": 8
+        },
+        {
+          "qid": "agent_intro",
+          "lexical_ids": [
+            19,
+            1,
+            46,
+            62,
+            16
+          ],
+          "hybrid_ids": [
+            19,
+            62,
+            1,
+            46,
+            16,
+            23,
+            12,
+            14
+          ],
+          "lexical_candidates": 5
+        }
+      ]
+    }
+  },
+  "fixed_query_labels": {
+    "QUERIES_unchanged": true,
+    "HOLDOUT_unchanged": true,
+    "main_count": 22,
+    "holdout_count": 6
+  },
+  "decision": {
+    "remove": [
+      "question-word deletion",
+      "relative candidate cutoff",
+      "cutoff evaluation API and probe"
+    ],
+    "retain": "four domain aliases with current lexical recall evidence",
+    "fixed_set_limit": "No alias keys occur in the 16-query set; alias benefit is from existing supplementary lexical queries only",
+    "fallback_tradeoff": "agent_intro loses article 62 from lexical top 3; hybrid labelled metrics unchanged",
+    "new_vector_index_read_only": true,
+    "model_api_calls": 0,
+    "index_write_calls": 0
+  },
+  "post_implementation_verification": {
+    "production_search_entry_order_equal_to_target_queries": 16,
+    "all_routes": "hybrid",
+    "missing": 0,
+    "manifest_sha256_unchanged": true,
+    "model_api_calls": 0,
+    "index_update_calls": 0
+  },
+  "after_retrieval_code_sha256": "e992d0ec9aadcd3e445fc85b2944a190802eb676042122081d450b9e43a8824f"
+}

@@ -13,6 +13,7 @@ from rag import vector_index as vectors
 from rag.chunks import MAX_CHARS
 from rag.corpus import CorpusUnavailable, content_revision, corpus_revision, fetch
 from rag.reading import RevisionChanged, article_page
+from rag.sections import reading_revision
 from tools.result import unavailable
 
 
@@ -294,7 +295,7 @@ def test_authoritative_mismatch_is_not_lost_during_an_inflight_build(monkeypatch
     worker = threading.Thread(target=ix.build)
     worker.start()
     assert entered.wait(2)
-    retrieval.invalidate_document(1, original[0]["revision"])
+    retrieval.invalidate_document(1, reading_revision(original[0]["title"], original[0]["content"]))
     release.set()
     worker.join(2)
     assert ix.status()["stale"] and not worker.is_alive()
@@ -340,6 +341,7 @@ def test_ranked_candidates_expose_bounded_section_locators_without_guessing_offs
                        {"section_id": "s1", "offset": 50},
                        {"section_id": "s20", "offset": 96}]}
     result = _rag_hit(1, hit)
+    assert "rank=1" in result and "score=" not in result
     assert "section=s1 revision=rev1 offset=0" in result
     assert "section=s20 revision=rev1 offset=96" in result
     assert "section=s18 revision=rev1" in result

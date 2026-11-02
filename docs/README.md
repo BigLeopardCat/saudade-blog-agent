@@ -66,6 +66,7 @@
 | [eval-observability.md](eval-observability.md) | 原生运行时指标、结果验收、旧评测边界与执行入口 | 现状型 |
 | [lint-baseline.md](lint-baseline.md) | 历史人工扫描快照；当前扫描以 eval 下的机器台账与 CI 为准 | 记录型 |
 | [rag-design.md](rag-design.md) | 检索设计与实现总结，§8 是触发条件驱动的升级预案 | 现状型 |
+| [rag-library-migration.md](rag-library-migration.md) | 成熟检索库、标准Markdown解析、空间迁移与质量/资源对照 | 现状型（含专项验证） |
 | [rag-production-debug.md](rag-production-debug.md) | 两机配置、缓存与引擎候选、增量建库、回退和生产验收记录 | 现状型（§6–§8 为待验收方案） |
 | [embedding-inputs.md](embedding-inputs.md) | 可选 tokenizer 的完整输入预算、空间签名与验证方式 | 现状型（末节含验证记录） |
 | [native-toolcalls-mainline.md](native-toolcalls-mainline.md) | 换主线的**交接件**：为什么换、冻结了什么、边界在哪 | 记录型 |
@@ -81,7 +82,7 @@
 | [tool-menu-poc-20261020.md](tool-menu-poc-20261020.md) | 把技能模板换成真工具表的三臂读数：**harness 的"执行半"稳住了，丢的是路由与定序**；§5 是第二轮的前置结论 | 记录型（**§5** 方向型） |
 | [prefix-cache-audit-20261020.md](prefix-cache-audit-20261020.md) | 生产前缀缓存审计：planner 命中 50.1%，但成因是**整段冷启动**（共享网关容量淘汰 + 换模型），不是槽位位置；**§4 是三个杠杆的定价** | 记录型（**§4** 方向型） |
 | [react-architecture-plan-20261020.md](react-architecture-plan-20261020.md) | 主流 ReAct + 按需 schema 的改造方案：planner 降成路由器、散文外置、执行层改循环；**§6 是分阶段预注册判据** | 记录型（已退役） |
-| [platform-roadmap.md](platform-roadmap.md) | 平台面能力（断点恢复 / 可观测 / 错误与用量 / 权限）与整体规范化的分批预案，含明确不做 | 记录型 |
+| [platform-roadmap.md](platform-roadmap.md) | 当前整改结果、后续维护事项及触发条件 | 方向型（含当前状态） |
 
 | [scheduling.md](scheduling.md) | 管理员持久定时、只读后台分析、执行记录与部署 | 当前规范 |
 
