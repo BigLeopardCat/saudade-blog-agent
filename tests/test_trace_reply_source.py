@@ -35,9 +35,9 @@ def drive(events, monkeypatch, tmp_path, *, failure=None):
             asyncio.get_running_loop(), user_id=7))
         items = []
         while True:
-            item = await asyncio.wait_for(queue.get(), 2)
+            item = await turns.next_stream_item(queue, task)
             items.append(item)
-            if item is None or isinstance(item, turns.NativeCancelled):
+            if item is None or isinstance(item, (turns.NativeCancelled, Exception)):
                 break
         await task
         return items

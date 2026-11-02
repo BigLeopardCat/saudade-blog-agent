@@ -72,7 +72,10 @@ class StreamProgress:
 
     def _deliver(self, text: str):
         if self._active():
-            self.queue.put_nowait(f"__PROCESS__:{text}")
+            try:
+                self.queue.put_nowait(f"__PROCESS__:{text}")
+            except asyncio.QueueFull:
+                record("producer", "progress_dropped", reason="backpressure")
 
     def reply(self, text: str) -> bool:
         if not visible_reply(text):

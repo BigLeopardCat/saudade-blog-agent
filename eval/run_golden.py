@@ -11,14 +11,11 @@ premises are not a calibrated native baseline.
 """
 import argparse
 import asyncio
-import contextvars
 import json
 import os
 import re
 import sys
-import threading
 import time
-from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -49,6 +46,7 @@ from agent.api.context import build_messages as _build_messages
 # Evaluation uses the production producer without HTTP.
 from agent.api.routes import chat as chat_routes
 from agent.api.schemas import ChatRequest, HistoryItem
+from agent.api.turns import NativeCancelled, next_stream_item
 from agent.api.turns import stream_to_queue as _run_agent_stream_to_queue
 from agent.principal import Principal  # 管理助手用例的调用者身份（20260921）
 from agent.transport import command_wire, reply_text
@@ -323,31 +321,28 @@ def run_one(req: ChatRequest, principal: "Principal | None" = None,
             trace_ctx["run"], trace_ctx.get("case", ""), req.message or "",
             (principal.role if principal is not None else None), thread=thread,
             runtime=runtime_probe.request_context(runtime))
-    loop = asyncio.new_event_loop()
-    queue = asyncio.Queue()
-    frames = []
-
-    def drain():
+    async def collect_frames():
+        queue = asyncio.Queue(maxsize=64)
+        producer = asyncio.create_task(asyncio.to_thread(
+            _run_agent_stream_to_queue, runtime,
+            _build_messages(req, holds_context=runtime_probe.holds_context(runtime)),
+            thread, queue, asyncio.get_running_loop(), req.user_id, None, principal,
+            confirm_grant, req.conversation_id))
+        frames = []
         while True:
-            item = loop.run_until_complete(queue.get())
+            item = await next_stream_item(queue, producer, timeout=None)
             if item is None:
+                break
+            if isinstance(item, NativeCancelled):
+                frames.append(RuntimeError("Evaluation producer cancelled"))
                 break
             frames.append(item)
             if isinstance(item, BaseException):
                 break
+        await producer
+        return frames
 
-    t = threading.Thread(target=drain)
-    t.start()
-    ctx = contextvars.copy_context()
-    with ThreadPoolExecutor(max_workers=1) as ex:
-        ex.submit(
-            ctx.run, _run_agent_stream_to_queue, runtime,
-            _build_messages(req, holds_context=runtime_probe.holds_context(runtime)),
-            thread, queue,
-            loop, req.user_id, None, principal, confirm_grant, req.conversation_id,
-        ).result()
-    t.join()
-    loop.close()
+    frames = asyncio.run(collect_frames())
     ledger_frames: list[dict] = []
     if trace_id:
         from utils import trace as _trace

@@ -48,8 +48,8 @@
     "lines": 877
   },
   "eval/run_golden.py::run_one": {
-    "c": 58,
-    "lines": 164
+    "c": 55,
+    "lines": 160
   },
   "eval/trace_reconcile.py::reconcile": {
     "c": 72,
@@ -102,10 +102,6 @@
   "tests/test_golden_rerun_offline.py::test_golden_rerun_offline": {
     "c": 60,
     "lines": 192
-  },
-  "tests/test_golden_thread.py::test_golden_thread": {
-    "c": 35,
-    "lines": 84
   },
   "tests/test_graph_build.py::test_graph_build": {
     "c": 40,

@@ -1,6 +1,5 @@
 """Resolve application-owned resources and bounded chat admission from a request."""
 
-import asyncio
 import logging
 
 from fastapi import HTTPException, Request
@@ -8,7 +7,6 @@ from fastapi import HTTPException, Request
 from config.settings import settings
 
 logger = logging.getLogger(__name__)
-STREAM_QUEUE_WAIT = 3.0
 
 
 def require_runtime(request: Request):
@@ -30,15 +28,15 @@ async def try_acquire_slot(request: Request) -> bool:
     if workers is None or workers.closing:
         return False
     slots = request.app.state.chat_slots
-    try:
-        await asyncio.wait_for(slots.acquire(), timeout=STREAM_QUEUE_WAIT)
-        if workers.closing:
-            slots.release()
-            return False
-        return True
-    except TimeoutError:
+    if slots.locked():
         logger.warning("Chat admission full (%d permits)", settings.max_concurrent_streams)
         return False
+    # The uncontended Semaphore fast path does not suspend this event loop.
+    await slots.acquire()
+    if workers.closing:
+        slots.release()
+        return False
+    return True
 
 
 def release_slot(request: Request) -> None:
