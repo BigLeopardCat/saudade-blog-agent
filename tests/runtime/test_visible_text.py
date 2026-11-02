@@ -6,6 +6,7 @@ import pytest
 from langchain_core.messages import AIMessage, AIMessageChunk, HumanMessage
 
 from agent.runtime.response_validation import incomplete_response
+from agent.runtime.results import ReplyReset
 from agent.runtime.session import ToolSession
 from agent.runtime.visible_text import VisibleText, has_control_text
 
@@ -69,7 +70,11 @@ def test_actual_framework_stream_and_canonical_reply_both_exclude_raw_invocation
     runner = session.stream([HumanMessage(content="查文章")])
     with pytest.raises(StopIteration) as stopped:
         while True:
-            chunks.append(next(runner).content)
+            item = next(runner)
+            if isinstance(item, ReplyReset):
+                chunks.clear()
+            else:
+                chunks.append(item.content)
     result = stopped.value.value
     assert '未执行操作' in result.reply and ''.join(chunks) == result.reply
     assert 'search_articles' not in result.reply and 'private-canary' not in result.reply

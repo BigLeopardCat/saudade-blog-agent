@@ -12,7 +12,7 @@ const decode = ({ event, data }) => {
   if (['text', 'progress', 'error'].includes(event) && typeof value === 'string') {
     return { type: event, data: value };
   }
-  if (event === 'done' && object(value) && Object.keys(value).length === 0) {
+  if (['done', 'text_reset'].includes(event) && object(value) && Object.keys(value).length === 0) {
     return { type: event, data: value };
   }
   if (event === 'confirmation' && object(value)

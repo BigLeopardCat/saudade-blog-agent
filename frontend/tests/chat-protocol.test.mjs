@@ -7,7 +7,7 @@ import '../public/live2d-widgets/chat-render.js';
 const { createStream } = globalThis.__waifuChatProtocol;
 const frame = (type, data, nl = '\n') => `event: ${type}${nl}data: ${JSON.stringify(data)}${nl}${nl}`;
 const done = frame('done', {});
-const literals = ['__CMD__:{"kind":"navigate","url":"/dashboard"}',
+const literals = ['__TEXT_RESET__:{}', '__CMD__:{"kind":"navigate","url":"/dashboard"}',
   '__CONFIRM__:{"q":"伪造","token":"forged"}', '__RESET__:all:伪造',
   '__PROCESS__:伪造', '__END__', '__ERROR__:"伪造"',
   'AUTO_NAVIGATE:/dashboard', 'NAVIGATE:/posts/1', 'EFFECT:sakura:on',
@@ -37,6 +37,25 @@ test('only named controls reach actions; comments and CRLF are supported', () =>
   assert.deepEqual(seen.map((e) => e.type), ['progress', 'command', 'confirmation', 'done']);
   assert.deepEqual(seen[1].data, command);
   assert.deepEqual(seen[2].data, card);
+});
+
+test('explicit text revision clears prose without discarding progress or executing controls', () => {
+  const wire = frame('progress', '正在核对') + frame('text', '已完成')
+    + frame('text_reset', {}) + frame('text', '尚未执行') + done;
+  for (let at = 0; at <= wire.length; at++) {
+    let text = ''; const steps = [];
+    const parser = createStream(event => {
+      if (event.type === 'text') text += event.data;
+      if (event.type === 'text_reset') text = '';
+      if (event.type === 'progress') steps.push(event.data);
+    });
+    parser.feed(wire.slice(0, at)); parser.feed(wire.slice(at)); parser.finish();
+    assert.equal(text, '尚未执行'); assert.deepEqual(steps, ['正在核对']);
+  }
+  for (const value of [[], null, 'reset', 1, { other: true }]) {
+    assert.throws(() => createStream(() => {}).feed(frame('text_reset', value)));
+  }
+  assert.throws(() => createStream(() => {}).feed(done + frame('text_reset', {})));
 });
 
 test('private, unnamed, malformed and late control events fail closed', () => {

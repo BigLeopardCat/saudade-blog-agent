@@ -207,8 +207,10 @@ class OnlineTransport:
                     raise EvaluationError("event after done")
                 kind, data = event.event, json.loads(event.data)
                 if kind not in {"text", "command", "receipts", "confirmation", "pending",
-                                "progress", "task_input", "done", "error"}:
+                                "progress", "task_input", "text_reset", "done", "error"}:
                     raise EvaluationError(f"unknown SSE event {kind!r}")
+                if kind == "text_reset" and (type(data) is not dict or data):
+                    raise EvaluationError("invalid text_reset payload")
                 if kind in {"text", "progress", "command", "confirmation"}:
                     if first["first_visible_s"] is None:
                         first["first_visible_s"] = time.monotonic() - started
@@ -264,7 +266,13 @@ class OnlineTransport:
         frames = [prefixes[k] + json.dumps(d, ensure_ascii=False)
                   for k, d in events if k in prefixes]
         rows = [row for k, data in events if k == "receipts" for row in data]
-        return {"text": "".join(d for k, d in events if k == "text"),
+        text = []
+        for kind, data in events:
+            if kind == "text_reset":
+                text.clear()
+            elif kind == "text":
+                text.append(data)
+        return {"text": "".join(text),
                 "commands": [command_wire(d) for k, d in events if k == "command"],
                 "tool_calls": [e["name"] for e in actual],
                 "tool_rounds": len({e.get("round") for e in actual}), "frames": frames,

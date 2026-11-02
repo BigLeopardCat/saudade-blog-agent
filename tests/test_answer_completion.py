@@ -38,10 +38,10 @@ def test_real_sdk_stream_preserves_finish_reason_and_marks_incomplete_answers(mo
         result = ToolSession(model, {}, {}, {}).run([HumanMessage(content="回答")])
     done = next(event for event in events if event["event"] == "llm_done")
     assert done["finish_reason"] == finish
-    assert result.reply.startswith("已展示的文字")
     failures = native_assertions.check({"forbid_runtime_stop": True}, {"native_events": events})
     if finish == "length":
         assert "尚未完整生成" in result.reply and failures
+        assert "已展示的文字" not in result.reply
     else:
         assert result.reply == "已展示的文字" and not failures
 
