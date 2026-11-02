@@ -113,3 +113,4 @@
 - [../问题记录.md](../问题记录.md)：事故级取证，按日期。
 
 | [0036](adr-0036-explicit-product-composition.md) | 显式产品装配与共享层依赖方向 | 已采纳 |
+| [0037](adr-0037-bounded-model-cleanup.md) | 模型连接清理有期限且失败后停止复用 | 已采纳 |

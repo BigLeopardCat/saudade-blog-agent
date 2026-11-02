@@ -26,6 +26,7 @@ import tomllib
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
+from eval.ruff_scan import counts, scan  # noqa: E402
 from eval.source_files import python_sources  # noqa: E402
 
 BASELINE = ROOT / "eval" / "except_baseline.json"
@@ -33,8 +34,6 @@ BASELINE = ROOT / "eval" / "except_baseline.json"
 # Track BLE001 separately from the general lint rule set.
 SELECT = ["BLE001"]
 
-_ERR_RE = re.compile(r"^(?P<file>[^:\n]+):\d+:\d+: (?P<code>[A-Z]+\d+) ")
-_SUM_RE = re.compile(r"^Found (?P<n>\d+) errors?", re.M)
 _VER_RE = re.compile(r"ruff (?P<v>[0-9][^\s]*)")
 
 
@@ -48,23 +47,7 @@ def _ruff_cfg() -> tuple[str | None, list[str] | None]:
 
 
 def _counts(out: str) -> dict[str, int]:
-    """Parse scanner findings and verify that detail counts match the reported total."""
-    by_file: dict[str, int] = {}
-    for line in out.splitlines():
-        m = _ERR_RE.match(line)
-        if m:
-            f = m.group("file")
-            by_file[f] = by_file.get(f, 0) + 1
-    s = _SUM_RE.search(out)
-    if not s:
-        if not by_file:
-            return {}
-        raise ValueError("ruff 的输出里认不出汇总行（输出格式变了？）")
-    total = int(s.group("n"))
-    if total != sum(by_file.values()):
-        raise ValueError(f"汇总行说 {total} 条，逐行只数出 {sum(by_file.values())} 条 "
-                         f"—— 两个口径分岔了，先查 `--output-format` 是不是变了")
-    return by_file
+    return counts(out, ROOT)
 
 
 def judge(by_file: dict[str, int], base_files: dict[str, int]) -> list[str]:
@@ -94,21 +77,18 @@ def _ignored_ble(ignore: list[str] | None) -> bool:
 
 def _self_check() -> None:
     """Verify parsing and ratchet behavior with positive and negative controls."""
-    out = (
-        "tools/notes.py:12:9: BLE001 Do not catch blind exception: `Exception`\n"
-        "tools/notes.py:30:9: BLE001 Do not catch blind exception: `Exception`\n"
-        "agent/graph.py:9:9: BLE001 Do not catch blind exception: `Exception`\n"
-        "\nFound 3 errors.\n"
-    )
-    got = _counts(out)
-    assert got == {"tools/notes.py": 2, "agent/graph.py": 1}, f"逐文件计数错了：{got}"
-    assert _counts("") == {}, "全清（空输出）应当是 0 条，不是异常"
-    try:
-        _counts("a.py:1:1: BLE001 x\n\nFound 9 errors.\n")
-    except ValueError:
-        pass
-    else:
-        raise AssertionError("汇总行与逐行对不上却没抛 —— 口径分岔会被静默吞掉")
+    out = json.dumps([
+        {"filename": "tools/base.py", "code": "BLE001", "message": "finding",
+         "location": {"row": row, "column": 1}} for row in (12, 30)])
+    assert _counts(out) == {"tools/base.py": 2}
+    assert _counts("[]") == {}
+    for invalid in ("", "not JSON", '{"error": "configuration"}'):
+        try:
+            _counts(invalid)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("Invalid scanner output was accepted")
 
     base = {"a.py": 5, "b.py": 2}
     assert not judge({"a.py": 5, "b.py": 2}, base), "没动却红了"
@@ -179,12 +159,8 @@ def main() -> int:
             return 3
 
     sources = [path.relative_to(ROOT).as_posix() for path in python_sources(ROOT)]
-    r = subprocess.run(prog + ["check", "--no-cache", "--output-format=concise",
-                               "--select", ",".join(SELECT), *sources],
-                       cwd=ROOT, capture_output=True, text=True)
-    out = (r.stdout or "") + (r.stderr or "")
     try:
-        by_file = _counts(out)
+        by_file = scan(prog, ROOT, sources, select=SELECT)
     except ValueError as e:
         print(f"❌ {e}")
         return 3

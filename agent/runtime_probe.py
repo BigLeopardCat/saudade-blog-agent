@@ -115,6 +115,9 @@ def ready_payload(agent, settings) -> tuple[int, dict]:
     reasons: list[str] = []
     if agent is None:
         reasons.append("agent_not_built")
+    model_io = getattr(agent, "model_io", None)
+    if model_io is not None and not getattr(model_io, "ready", True):
+        reasons.append("model_transport_unavailable")
     try:
         prov = settings.check_provider()
     except Exception:                               # noqa: BLE001
