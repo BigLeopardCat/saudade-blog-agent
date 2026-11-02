@@ -44,6 +44,27 @@ def test_sse_text_stays_opaque_and_progress_is_separate(tmp_path, monkeypatch):
     assert set(result["request_evidence"]) == {"message", "request_id"}
 
 
+def test_http_revision_uses_only_reconciled_text_and_rejects_invalid_payloads(tmp_path, monkeypatch):
+    adapter = transport(tmp_path, monkeypatch,
+        'event: progress\ndata: "核对中"\n\nevent: text\ndata: "错误的成功声明"\n\n'
+        'event: text_reset\ndata: {}\n\nevent: text\ndata: "尚未执行"\n\n'
+        'event: done\ndata: {}\n\n')
+    try:
+        result = adapter(ChatRequest(message="处理请求"))
+        assert result["text"] == "尚未执行" and len(adapter.requests) == 1
+        assert any(row["event"] == "text_reset" for row in result["http_events"])
+    finally:
+        adapter.client.close()
+    for payload in ([], None, "", {"text": "replacement"}):
+        adapter = transport(tmp_path, monkeypatch,
+            'event: text_reset\ndata: ' + json.dumps(payload) + '\n\nevent: done\ndata: {}\n\n')
+        try:
+            with pytest.raises(EvaluationError, match="invalid text_reset"):
+                adapter(ChatRequest(message="处理请求"))
+        finally:
+            adapter.client.close()
+
+
 def test_command_dispatch_and_confirmation_have_separate_first_event_times(tmp_path, monkeypatch):
     adapter = transport(tmp_path, monkeypatch,
                         'event: progress\ndata: "读取中"\n\n'
