@@ -1,46 +1,14 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""静态检查棘轮：ruff 的 error 数**只许变小**（20261018，审计 A3）。
+"""Ruff error-count ratchet over repository Python sources.
 
-**为什么是棘轮而不是门禁**：`pyproject.toml` 从 20260927 起就写着
-`[tool.ruff.lint] select = ["E", "F", "I", "W"]`，而 CI 至今只跑 `--select F821`
-一条（未定义名，会炸的那一类）。剩下那一大片（E/F/I/W，**会烂的那一类**）的唯一约束
-是 `docs/lint-baseline.md` 里那四条**散文纪律**——没有判据看着，靠自觉。
-20261018 实测全规则读数：**882 errors / 221 个文件**（其中 534 条是 E501 行长）。
-一上来当门禁 ⇒ CI 恒红 ⇒ 人人学会无视它。所以照同族三道（复杂度 / 类型 / 模块体量）
-同款：**记下当前读数，只许它变小**。
+New files must be clean; total and per-file counts may only decrease. Ruff
+version, selected rules and line length must match pyproject.toml and the baseline.
+Missing baseline files or invalid scanner output fail closed.
 
-**判据的形状**（三条，任一成立即红）：
-  ① 总数变大；
-  ② **某个文件**变大——防"这边修了三个、那边坏了两个"互相抵消（总数看不出来）；
-  ③ 基线里**没有**的文件带着 error 出现（新文件按纪律 1 必须零 error；它的"基线"是 0，
-     所以这一条其实是 ② 的特例，但**单独报**——新文件与"存量又脏了一点"是两种事故，
-     混在一句里读者会以为是自己动过的那个老文件）。
-变好**不**报红（标准的棘轮行为：绿着，并提示你可以 `--update` 把账收得更紧）。
-
-**第四类是"账自己坏了"（20261018 补）**：基线里**有**、盘上却没有的键（文件被删掉了）。
-`by_file` 的键只被用来做 `get(f, 0)` ⇒ 它不进上面任何一条判据、也不影响 `total`，
-只会让账慢慢变脏，还会被"已经清零，可以销账"那句**报成好消息**。退 3（账不可用
-⇒ 先 `--update`），与三个量对不上同档。同族的洞在 `eval/type_gate.py` 那处危害更大
-（改名会让新文件按 0 起算），两处一起补的。
-
-**三个量必须同源，否则量的是另一件事**（同 `eval/type_gate.py` 的教训）：
-  · **ruff 版本**——升版就换了一套规则实现与默认行为，基线里记着出账时的版本；
-  · **`line-length`**——E501 一条就占掉全仓 60% 的条目，改它等于换一套账；
-  · **`select`**——多加一个规则族，全仓当场多出一片条目。
-三者任一与 `pyproject.toml` 对不上 ⇒ **退 3**（不是 1）：这不是"变差了"，是**换了一个量**。
-它们的真值只有一处：`pyproject.toml`（`tests/test_packaging.py` ⑤ 盯着接线）。
-
-**与 `docs/lint-baseline.md` 的分工**：那份文档是**参照点**（纪律怎么理解、存量怎么分批清），
-本脚本是**闸**（那些纪律的机器化）。文档里"机械闸（待建）"那一条到本文件为止。
-
-用法：
-    python eval/lint_gate.py                    # CI：dev 组已装好 ruff，走 sys.executable -m ruff
-    python eval/lint_gate.py --ruff "uvx ruff@0.14.4"   # 本机（.venv 是产线 venv，不许 uv sync）
-    python eval/lint_gate.py --update           # 重出基线（唯一放宽通道）
-
-退出码：0 通过 / 1 变差 / 3 跑不起来或**账不可用**（缺 ruff、输出格式变了、三个量
-        （ruff 版本 / line-length / select）对不上、账里有盘上不存在的键）。
+Run ``python eval/lint_gate.py`` in the locked development environment. Use
+``--ruff COMMAND`` for an alternate launcher and ``--update`` only for a reviewed
+baseline change. Exit codes: 0 pass, 1 regression, 3 invalid setup or baseline.
 """
 
 from __future__ import annotations
@@ -61,21 +29,13 @@ from eval.source_files import python_sources  # noqa: E402
 
 BASELINE = ROOT / "eval" / "lint_baseline.json"
 
-# `--output-format=concise` 的一行：`path:line:col: CODE message`。
-# 刻意**只认**这个形状：认不出就抛（见 `_counts`），不许退化成"按行数估"。
 _ERR_RE = re.compile(r"^(?P<file>[^:\n]+):\d+:\d+: (?P<code>[A-Z]+\d+) ")
 _SUM_RE = re.compile(r"^Found (?P<n>\d+) errors?", re.M)
-# `ruff --version` → `ruff 0.14.4`
 _VER_RE = re.compile(r"ruff (?P<v>[0-9][^\s]*)")
 
 
 def _ruff_cfg() -> tuple[str | None, int | None, list[str] | None]:
-    """从 `pyproject.toml` 取（钉住的 ruff 版本, line-length, select）。
-
-    用 `tomllib` 而不是正则抠文本：`line-length` / `select` 这两个名字在本文件里
-    也作为**注释里的文字**出现过（`docs/lint-baseline.md` 与 `pyproject.toml` 都在讲它们），
-    整篇搜会把注释当取值读——本仓踩过同形状的坑（见 `type_gate._pinned_python` 的注）。
-    """
+    """Read the pinned Ruff version and relevant configuration from pyproject.toml."""
     data = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
     dev = data.get("dependency-groups", {}).get("dev", [])
     pin = next((re.search(r"^ruff==(.+)$", d).group(1)
@@ -85,11 +45,7 @@ def _ruff_cfg() -> tuple[str | None, int | None, list[str] | None]:
 
 
 def _counts(out: str) -> dict[str, int]:
-    """ruff 的 concise 输出 ⇒ 逐文件计数。
-
-    **认不出就抛**：`_SUM_RE` 拿不到总数时不许拿逐行加出来的数顶上去——两个口径
-    一旦分岔，棘轮就在悄悄量另一个东西（`type_gate._counts` 里那条教训的同形）。
-    """
+    """Parse scanner findings and verify that detail counts match the reported total."""
     by_file: dict[str, int] = {}
     for line in out.splitlines():
         m = _ERR_RE.match(line)
@@ -99,7 +55,7 @@ def _counts(out: str) -> dict[str, int]:
     s = _SUM_RE.search(out)
     if not s:
         if not by_file:
-            return {}                       # 全清：ruff 不打印汇总行，那是胜利不是故障
+            return {}
         raise ValueError("ruff 的输出里认不出汇总行（输出格式变了？）")
     total = int(s.group("n"))
     if total != sum(by_file.values()):
@@ -109,7 +65,7 @@ def _counts(out: str) -> dict[str, int]:
 
 
 def judge(by_file: dict[str, int], base_files: dict[str, int]) -> list[str]:
-    """三条判据（空 = 没变差）。纯函数：自带正反控，见 `_self_check()`。"""
+    """Return regressions against the baseline; independent file counts cannot offset each other."""
     bad: list[str] = []
     for f in sorted(by_file):
         now, was = by_file[f], base_files.get(f, 0)
@@ -121,26 +77,12 @@ def judge(by_file: dict[str, int], base_files: dict[str, int]) -> list[str]:
 
 
 def ghost_keys(base_files: dict) -> list[str]:
-    """账里有、盘上却没有的键（20261018 补）。
-
-    `by_file` 的键只被用来做 `base_files.get(f, 0)` ⇒ **删掉一个文件**之后旧键永远留在
-    账上：它不出现在 `judge()` 的任何一条判据里（那三条都只遍历**现在**报出来的文件），
-    也不影响 `total`（total 是 ruff 汇总行的数），于是它只是让账慢慢变脏——而下面那句
-    「这些文件已经清零，可以销账」还会把它**当成好消息报出来**。
-
-    与 `eval/type_gate.py` 那处的差别：那里**改名**会让新文件按 0 起算（静默买回一份
-    额度），这里改名会撞上纪律 1（新文件必须零 error）**当场红** ⇒ 危害小一档。
-    但"文件整个删掉、它的 error 也一起消失"那一种，两边一样静默。
-    """
+    """Return baseline files that no longer exist; stale keys make the baseline invalid."""
     return sorted(k for k in base_files if not (ROOT / k).is_file())
 
 
 def _self_check() -> None:
-    """正控 + 反控各来一遍：**没有这一段，「闸其实是空的」没人看着**。
-
-    同 `tests/test_module_budget.py::_self_check()` 的理由——本仓最贵的失效模式是
-    "看着在跑、其实没判"。这里判的是：计数解析得对、三条判据该红的红、没动的绿。
-    """
+    """Verify parsing and ratchet behavior with positive and negative controls."""
     out = (
         "tools/base.py:12:1: E501 Line too long (120 > 100)\n"
         "tools/base.py:30:5: F401 [*] `os` imported but unused\n"
@@ -151,7 +93,6 @@ def _self_check() -> None:
     got = _counts(out)
     assert got == {"tools/base.py": 2, "agent/graph.py": 1}, f"逐文件计数错了：{got}"
     assert _counts("") == {}, "全清（空输出）应当是 0 条，不是异常"
-    # 汇总行与逐行对不上 ⇒ 必须抛（不许静默换口径）
     try:
         _counts("a.py:1:1: E501 x\n\nFound 9 errors.\n")
     except ValueError:
@@ -168,7 +109,6 @@ def _self_check() -> None:
     assert any("新增文件" in b for b in judge({"c.py": 1}, base)), \
         "新文件那条要与'变脏'分开报（两种事故）"
 
-    # 幽灵键：盘上没有的键要被抓到，盘上有的**不许**被抓（否则它会把整份账判成幽灵）
     assert ghost_keys({"eval/this_file_was_deleted.py": 3}) == ["eval/this_file_was_deleted.py"], \
         "盘上没有的键没被抓到 —— 幽灵键守卫是空的"
     assert ghost_keys({"eval/lint_gate.py": 1}) == [], \
@@ -189,7 +129,6 @@ def main() -> int:
         print(f"❌ 自检没过——先修计数器/判据，再看扫描结果（否则读数不可信）：{e}")
         return 3
 
-    # 跑一次版本探测：它同时证明"ruff 起得来"，代价可忽略。
     v = subprocess.run(prog + ["--version"], cwd=ROOT, capture_output=True, text=True)
     vm = _VER_RE.search((v.stdout or "") + (v.stderr or ""))
     if v.returncode != 0 or not vm:
@@ -204,16 +143,12 @@ def main() -> int:
             print(f"❌ 没有基线文件 {BASELINE.relative_to(ROOT)}——先跑 `--update` 出一次。")
             return 3
         base = json.loads(BASELINE.read_text(encoding="utf-8"))
-        # 三个量任一换掉 ⇒ 退 3 而不是 1：这不是"变差了"，是**换了一个量**。
         for key, now_v in (("ruff_version", running), ("line_length", line_length),
                            ("select", select)):
             if base.get(key) != now_v:
                 print(f"❌ 基线里的 `{key}` 是 {base.get(key)!r}，现在是 {now_v!r} —— "
                       f"换它等于换一套条目集，先 `--update` 重出账。")
                 return 3
-        # ④ 账里有、盘上却没有的键（见 `ghost_keys` 的注）。排在跑 ruff 之前：这一条
-        # 只读文本，而一次全仓 ruff 是几秒到十几秒——退 3 不该付那个代价，
-        # 反控"改一格 ⇒ 当场红"也就从十几秒变成一瞬。
         ghosts = ghost_keys(base.get("by_file") or {})
         if ghosts:
             print(f"❌ 基线里有 {len(ghosts)} 个键在盘上找不到对应文件（删除后的残留）："

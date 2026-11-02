@@ -269,13 +269,16 @@ class SessionMiddleware(AgentMiddleware):
         self._recover(state)
         restore(session, state)
         response = state["messages"][-1]
-        session.observe_reply(response)
         aggregate = session.stream_guard.aggregate
         if aggregate is not None and not session._complete_tool_arguments(aggregate):
             response = response.model_copy(update={
                 "tool_calls": [], "invalid_tool_calls": [{"name": None, "args": "",
                     "id": None, "error": "incomplete_tool_arguments",
                     "type": "invalid_tool_call"}]})
+        if response_validation.incomplete_response(response):
+            response_validation.withdraw(session)
+        else:
+            session.observe_reply(response)
         check_cancelled(session.config)
         if not response.invalid_tool_calls:
             extra = input_additions(session, state, response=response)

@@ -11,6 +11,11 @@ from tools.result import ok
 
 
 @dataclass(frozen=True)
+class ReplyReset:
+    """Withdraw this turn's provisional prose, retaining all execution facts."""
+
+
+@dataclass(frozen=True)
 class TurnResult:
     reply: str
     execution: dict | None = None

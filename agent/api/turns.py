@@ -140,6 +140,8 @@ def stream_to_queue(
             future.result(timeout=5)
             if isinstance(value, AIMessageChunk):
                 visible_parts.append(str(value.content or ""))
+            elif value == "__TEXT_RESET__:{}":
+                visible_parts.clear()
         except TimeoutError:
             future.cancel()
             raise AgentCancelled() from None

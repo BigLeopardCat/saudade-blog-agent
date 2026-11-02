@@ -35,8 +35,7 @@ def restore_session(session, state):
         from agent.runtime.task_inputs import consumed
         session.input_messages = consumed(state, session.task["id"])
     messages = state.get("messages") or []
-    start = max((i for i, message in enumerate(messages) if isinstance(message, HumanMessage)
-                 and not memory.is_context(message)
+    start = max((i for i, message in enumerate(messages) if memory.is_user_input(message)
                  and not message.additional_kwargs.get("task_input")), default=0)
     calls = {}
     effects = {}

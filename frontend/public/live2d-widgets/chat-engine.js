@@ -659,6 +659,9 @@
               // 不剥离会显示在气泡里）；碎片命令由 done 帧含命令检测强制重渲染兜底
               h.contentSpan.textContent += m.text || '';
               scrollToBottom(messages);
+            } else if (m.t === 'text_reset') {
+              if (h.finished) return;
+              h.contentSpan.textContent = '';
             } else if (m.t === 'process') {
               if (h.finished) return;
               if (!h.processBox) {

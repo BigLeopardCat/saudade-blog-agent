@@ -9,7 +9,7 @@ from test_confirmation_continuation import Model, call
 
 from agent.products.blog.application import BlogApplication
 from agent.runtime.checkpoint_conversations import CheckpointConversationStore
-from agent.runtime.results import turn_phase
+from agent.runtime.results import ReplyReset, turn_phase
 from agent.runtime.service import AgentRuntime
 from agent.runtime.session import ToolSession
 from agent.runtime.task_planning import TaskPlanningMiddleware, tools
@@ -71,7 +71,9 @@ def test_pending_work_is_explicitly_blocked_after_the_single_review():
     result = selected.run([HumanMessage(content="比较两篇文章")])
     assert len(model.prompts) == 3 and turn_phase(result) == "blocked"
     assert result.execution["unfinished_work"] == pending
-    assert "尚未交付的比较" in result.reply
+    assert "尚未交付的比较" not in result.reply
+    assert "部分请求尚未完成" in result.reply
+    assert result.reply.count("暂时无法完成") == 1
 
 
 def test_reconstruction_cannot_reset_the_protocol_correction_allowance():
@@ -94,3 +96,18 @@ def test_reconstruction_cannot_reset_the_protocol_correction_allowance():
     resumed = Model(malformed())
     result = list(runtime(resumed).stream_events({"resume_task": "repair-task"}, cfg))[-1]
     assert len(resumed.prompts) == 1 and turn_phase(result) == "blocked"
+
+
+def test_invalid_success_claim_is_withdrawn_from_stream_and_durable_reply():
+    saver, cfg = InMemorySaver(), config()
+    invalid = malformed().model_copy(update={"content": "本次操作已经成功完成。"})
+    model = Model(invalid, AIMessage(content="本次操作尚未执行。"))
+    selected = AgentRuntime(CheckpointConversationStore(saver), application=BlogApplication(),
+                            model_factory=lambda **_: model)
+    events = list(selected.stream_events({"messages": [HumanMessage(content="处理请求")],
+                                          "task_id": "withdraw-prose"}, cfg))
+    assert sum(isinstance(e, ReplyReset) for e in events) == 1
+    result = events[-1]
+    assert result.reply == "本次操作尚未执行。"
+    assert "已经成功" not in str(selected.store.load(cfg).messages)
+    assert "已经成功" not in str(model.prompts[-1])
