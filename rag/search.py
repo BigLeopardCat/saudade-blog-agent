@@ -20,6 +20,7 @@ from rag.corpus import fetch as fetch_corpus
 from rag.embedding_inputs import InputProfileError, vector_chunks
 from rag.lexical import LexicalIndex, backend_info
 from rag.ranking import documents as rank_documents
+from rag.tokenization import tokenize
 from rag.vector_index import (
     chunk_text,
     corpus_fingerprint,
@@ -35,9 +36,6 @@ from rag.vector_index import (
 from rag.vector_index import warm_async as warm_vectors
 
 logger = logging.getLogger(__name__)
-
-CJK = re.compile(r"[一-鿿]")
-GRAM = re.compile(r"[一-鿿]+|[a-zA-Z0-9_\.]+")
 
 BM25_K1 = 1.2
 BM25_B = 0.75
@@ -101,19 +99,6 @@ def cliff_config() -> dict:
     """断崖参数的只读视图（α 与保底 K）。报告与判据读这里，不另抄一份数
     ——抄一份的那个数会漂，而这两项正是"判据与实现同源"要保的东西。"""
     return {"ratio": _CLIFF_RATIO, "min_keep": _CLIFF_MIN_KEEP}
-
-
-def tokenize(text: str) -> list[str]:
-    """中文连续段拆 2-gram/3-gram（子串匹配近似）+ 英文/数字按词。与 eval 一致。"""
-    toks: list[str] = []
-    for m in GRAM.finditer(text.lower()):
-        t = m.group(0)
-        if CJK.match(t):
-            for n in (3, 2):
-                toks.extend(t[i:i + n] for i in range(len(t) - n + 1))
-        else:
-            toks.append(t)
-    return toks
 
 
 def chunk_note(title: str, content: str) -> list[dict]:
@@ -504,4 +489,4 @@ if __name__ == "__main__":
     idx.build()
     q = sys.argv[1] if len(sys.argv) > 1 else "ESP32-S3 OTA 更新需要哪些分区？"
     for h in idx.search(q) or []:
-        print(f"  {h['type']}:{h['id']:<4} {h['score']:<8.4f} [{h['section']}] {h['title'][:24]}")
+        print(f"  {h['type']}:{h['id']:<4} [{h['sections']}] {h['title'][:24]}")

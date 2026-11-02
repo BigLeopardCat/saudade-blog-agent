@@ -48,14 +48,16 @@ RagIndex 使用单次构建锁，在短锁内替换完整视图。失败保留�
 rag/sections.py 提供共享 Markdown 边界和 outline：识别围栏外 1–6 级标题，
 保留空父标题、层级路径和文档版本内的小节 ID。重复名称/编号不能默认取首个。
 
-rag/chunks.py 在小节内部继续按段落/行切片，限制字符预算并保留重叠，
+rag/chunks.py 使用 LangChain 的 RecursiveCharacterTextSplitter 在小节内切片，
+按段落、行和中英文边界配置限制字符预算并保留重叠，
 记录 chunk_id、section_id、标题路径和相对小节正文的范围。
 词法与向量均使用文章标题、路径和正文，标题不再因跨过长度阈值而丢失。
 字符预算是模型无关的输入上限，不宣称等于供应商的精确 token 数。
 可选 embedding profile 只在向量侧细分超 token 预算的片段，完整计算标题、路径及
 指令，保留小节源范围；配置损坏仍可走词法，见 [输入预算说明](embedding-inputs.md)。
 
-词法使用 CJK 2/3-gram 与英文数字词元，查询词元去重。`rag/lexical.py` 是 BM25S 的薄适配，
+词法通过 scikit-learn CountVectorizer 的公开 analyzer 生成 CJK 2/3-gram 与英文数字词元；
+应用只配置语言边界，不再手写 n-gram 生成循环。查询词元去重。`rag/lexical.py` 是 BM25S 的薄适配，
 索引、词频统计、长度归一与评分交给锁定版本的库；参数来自 BM25_K1、BM25_B。
 使用 Lucene 方法、float64 和 NumPy 后端，构建后只读，随完整语料快照原子替换。
 状态与评测报告记录库版本和评分方法。原生分数与旧实现的绝对尺度不同，不作为置信度；
@@ -68,7 +70,9 @@ rag/chunks.py 在小节内部继续按段落/行切片，限制字符预算并�
 RAG_HYBRID_ENABLED 和 AGENT_ARM 是独立开关。向量保持可选；
 只融合可用、与语料和空间一致的视图，故障明确退回词法并记录原因。
 
-空间包含模型、端点和请求维度；内容键覆盖实际 embedding 文本。
+空间包含模型、端点、请求维度和分块策略签名（切片库版本、分隔符、预算和重叠）；
+内容键覆盖实际 embedding 文本。缺少策略签名的旧清单不能作为当前视图使用，
+升级需要先在隔离目录准备新索引，不能将旧向量套在新切片上。
 启用 profile 时还包含固定 tokenizer、输入指令、预算与模型版本等语义配置的签名。
 查询 LRU 按空间及预处理后的查询分区，命中仍校验维度。
 拒绝不等长点积、非有限值和错误批响应 index；维度变化时重新构建完整视图。
@@ -80,6 +84,11 @@ RAG_HYBRID_ENABLED 和 AGENT_ARM 是独立开关。向量保持可选；
 旧 schema 1 的固定文件不能证明未发生错位，因此不导入，首次启用会重新嵌入；
 升级前应估算一次全量 embedding 成本。旧文件不自动删除，可作回滚材料。
 
+向量扫描使用 SciPy cdist 的 cosine 距离，在只读数值矩阵中计算；零向量不贡献相关性。
+RRF 排名交给 LangChain 官方 EnsembleRetriever.weighted_reciprocal_rank，
+仅合并博客来源位置，不复制其评分算法。该公开接口只返回顺序，混合候选因此提供 rank，
+不伪造 score；词法、向量单路的原生分仅用于各路排序和截断，工具出口统一显示排名。
+langchain-classic 只提供此 retriever，不装配第二套运行时。
 RRF 是相对排名，不是相关性置信度。启用前比较固定语料上的命中、噪声、证据获取、
 回答支持度与延迟/成本；文章篇数不能单独证明收益。
 
@@ -127,3 +136,5 @@ readOffset、nextOffset、totalChars、readComplete、source 和小节 ID。
 - [Lucene BM25Similarity](https://lucene.apache.org/core/9_9_0/core/org/apache/lucene/search/similarities/BM25Similarity.html)：平均长度采用总词频/文档数。
 - [Azure RAG chunking](https://learn.microsoft.com/en-us/azure/architecture/ai-ml/guide/rag/rag-chunking-phase)：按结构和预算切分并验证效果。
 - [Lance table format](https://lance.org/format/table/)：不可变文件与版本化 manifest 的提交思想；本项目没有引入 Lance 依赖。
+
+成熟库迁移的范围、固定开发样本与CPU微基准见[专项记录](rag-library-migration.md)。

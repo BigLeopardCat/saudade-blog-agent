@@ -13,11 +13,11 @@ import math
 import threading
 import time
 from array import array
-from dataclasses import dataclass
-from operator import mul
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from config import settings as _settings
+from rag.chunks import strategy_signature
 from rag.embedding_inputs import (
     InputProfileError,
     active_profile,
@@ -60,15 +60,17 @@ class Space:
     base_url: str   # 进键：同一模型名在不同平台不是同一个向量空间
     dim: int        # **请求**维度；0 = 不传 dimensions，以返回长度为准
     profile: str = ""  # 固定 tokenizer / 指令 / 预算 / 模型版本的签名
+    chunking: str = field(default_factory=strategy_signature)
 
     def as_dict(self) -> dict:
         return {"model": self.model, "base_url": self.base_url, "dim": self.dim,
-                "profile": self.profile}
+                "profile": self.profile, "chunking": self.chunking}
 
     @staticmethod
     def from_dict(d: dict) -> "Space":
         return Space(str(d.get("model", "")), str(d.get("base_url", "")),
-                     int(d.get("dim", 0) or 0), str(d.get("profile", "")))
+                     int(d.get("dim", 0) or 0), str(d.get("profile", "")),
+                     str(d.get("chunking", "")))
 
 
 def space_from_settings() -> Space:
@@ -89,7 +91,7 @@ def chunk_text(title: str, text: str) -> str:
 
 def chunk_key(space: Space, text: str) -> str:
     """内容寻址键：同一份文本在同一空间里恒得同一个键，换空间必得不同键。"""
-    raw = f"{space.model}{SEP}{space.base_url}{SEP}{space.dim}{SEP}{text}"
+    raw = f"{space.chunking}{SEP}{space.model}{SEP}{space.base_url}{SEP}{space.dim}{SEP}{text}"
     if space.profile:
         raw = f"{space.profile}{SEP}{raw}"
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
@@ -114,42 +116,52 @@ def corpus_fingerprint(space: Space, chunks: list[dict]) -> str:
 # ══════════════════════════════════════════════════════════════════════════
 
 def cos_sim(a, b) -> float:
-    """余弦。**不假设 provider 返回单位向量**（wordgraph 敢用点积是因为它自己归一化了）。"""
-    if len(a) != len(b):
-        raise ValueError("Embedding dimension mismatch")
-    dot = sum(map(mul, a, b))
-    na = sum(x * x for x in a) ** 0.5
-    nb = sum(x * x for x in b) ** 0.5
-    return dot / (na * nb) if na and nb else 0.0
+    """SciPy cosine, sharing the zero-vector and shape rules of the batch view."""
+    return VectorView([array("f", b)], len(b)).similar(array("f", a))[0]
 
 
 def rrf_fuse(lex: list[dict], vec: list[dict], k: int, top_k: int) -> list[dict]:
-    """Fuse document ranks by summing 1/(k+rank), then return top_k.
+    """Official LangChain RRF ordering plus blog-specific evidence metadata."""
+    from langchain_classic.retrievers.ensemble import EnsembleRetriever
+    from langchain_core.documents import Document
+    from langchain_core.runnables import RunnableLambda
 
-    Merge source locations from both lists. Equal scores are possible; stable
-    sorting preserves first occurrence in the lexical list, then the vector list.
-    Per-retriever cutoffs stay outside the fusion score space.
-    """
-    scores: dict[tuple, float] = {}
     info: dict[tuple, dict] = {}
+    ranked_documents = []
     for ranked in (lex, vec):
-        for rank, d in enumerate(ranked, 1):
+        documents = []
+        for d in ranked:
             key = (d["type"], d["id"])
-            scores[key] = scores.get(key, 0.0) + 1.0 / (k + rank)
+            documents.append(Document(page_content="", metadata={"identity": key}))
             agg = info.get(key)
             if agg is None:
                 agg = info[key] = {**d, "sections": [], "section_ids": [], "matches": []}
-            for field in ("sections", "section_ids", "matches"):
-                for value in d.get(field) or []:
-                    if value not in agg[field]:
-                        agg[field].append(value)
-    out = [dict(info[key], score=round(scores[key], 4))
-           for key in sorted(scores, key=lambda x: -scores[x])]
-    for r in out:
-        r["sections"] = r["sections"][:2]
-        r["section_ids"] = r["section_ids"][:3]
-        r["matches"] = r["matches"][:3]
-    return out[:max(1, top_k)]
+                agg.pop("score", None)
+            for location in ("sections", "section_ids", "matches"):
+                for value in d.get(location) or []:
+                    if value not in agg[location]:
+                        agg[location].append(value)
+        ranked_documents.append(documents)
+    # Only reuse the maintained retriever's public fusion method, not a second runtime.
+    def retriever_for(rows: list[Document]) -> RunnableLambda:
+        def retrieve(_: str) -> list[Document]:
+            return rows
+
+        return RunnableLambda(retrieve)
+
+    ensemble = EnsembleRetriever(
+        retrievers=[retriever_for(rows) for rows in ranked_documents],
+        weights=[0.5, 0.5], c=k, id_key="identity",
+    )
+    fused = ensemble.weighted_reciprocal_rank(ranked_documents)
+    out = []
+    for rank, document in enumerate(fused[:max(1, top_k)], 1):
+        row = dict(info[document.metadata["identity"]], rank=rank)
+        row["sections"] = row["sections"][:2]
+        row["section_ids"] = row["section_ids"][:3]
+        row["matches"] = row["matches"][:3]
+        out.append(row)
+    return out
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -240,21 +252,38 @@ def _embed_texts(texts: list[str], space: Space) -> list[list[float] | None]:
 class VectorView:
     """与一批 chunk **按序对齐**的向量视图（只读，构造后不再变）。
 
-    `vectors[i]` 对应调用方 chunks[i]。点积用 `array('f')` + `map(mul)`：纯 Python
-    但不逐元素建中间列表。
+    `vectors[i]` 对应调用方 chunks[i]。SciPy computes cosine distances over an
+    immutable float64 matrix without starting BLAS worker threads.
     """
 
-    __slots__ = ("vectors", "dim")
+    __slots__ = ("vectors", "dim", "_matrix")
 
     def __init__(self, vectors: list[array], dim: int) -> None:
         self.vectors = vectors
         self.dim = dim
+        import numpy as np
+
+        self._matrix = np.asarray(vectors, dtype=np.float64).reshape(len(vectors), dim)
+        if not np.isfinite(self._matrix).all():
+            raise ValueError("Non-finite document embedding")
+        self._matrix.setflags(write=False)
 
     def __len__(self) -> int:
         return len(self.vectors)
 
     def similar(self, q: array) -> list[float]:
-        return [cos_sim(q, v) for v in self.vectors]
+        import numpy as np
+        from scipy.spatial.distance import cdist
+
+        if len(q) != self.dim:
+            raise ValueError("Embedding dimension mismatch")
+        if not np.isfinite(q).all():
+            raise ValueError("Non-finite query embedding")
+        if not self.vectors:
+            return []
+        similarities = 1.0 - cdist([q], self._matrix, metric="cosine")[0]
+        # Failed/empty chunks deliberately use zero rows, whose distance is NaN.
+        return np.nan_to_num(similarities, nan=0.0).tolist()
 
 
 class DimensionChanged(ValueError):

@@ -239,7 +239,7 @@ def get_article_detail(
 
 def _rag_hit(index, hit):
     title = hit["title"][:24].replace("\n", " ").replace("\r", " ")
-    text = f"{index}. type={hit['type']} id={hit['id']} score={hit['score']} title={title}"
+    text = f"{index}. type={hit['type']} id={hit['id']} rank={index} title={title}"
     hints = []
     for position, label in enumerate((hit.get("sections") or [])[:3]):
         label = label[:80].replace("\n", " ").replace("\r", " ")
@@ -261,7 +261,7 @@ def rag_search(
     query: Annotated[str, "检索关键词（用户问题中希望从博客内容里找到答案的核心表述）"],
     top_k: Annotated[int, "返回候选文档数量，默认 8"] = 8,
 ) -> str:
-    """按相关性检索博客文章（语料仅限线上可见文章），返回候选文档列表（标题+类型+分数+命中节），不返回全文。
+    """按相关性检索博客文章（语料仅限线上可见文章），返回候选文档列表（标题+类型+排名+命中节），不返回全文。
 
     用于查找某主题的文章，可直接提供候选标题与链接。
     按主题解读时从命中节中选择相关 section 并带 revision，调用 get_article_detail 读取正文，

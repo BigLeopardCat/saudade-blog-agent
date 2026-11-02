@@ -14,7 +14,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 from config import settings
-from rag.chunks import OVERLAP
+from rag.chunks import INDEX_VERSION, OVERLAP
 
 
 class InputProfileError(ValueError):
@@ -76,8 +76,11 @@ def load_profile(filename: str) -> InputProfile:
         tokenizer.no_padding()
         identity = spec.model_dump(exclude={"tokenizer_file"})
         if spec.unicode_normalization == "none":
-            identity.pop("unicode_normalization")  # Preserve existing profile namespaces.
-        identity.update(tokenizers_version=version("tokenizers"), splitter="source-char-window-v1")
+            identity.pop("unicode_normalization")
+        identity.update(
+            tokenizers_version=version("tokenizers"),
+            splitter="tokenizers-offset-window-v2", chunking=INDEX_VERSION,
+        )
         signature = hashlib.sha256(json.dumps(identity, sort_keys=True).encode()).hexdigest()
         return InputProfile(spec, signature, tokenizer)
     except (OSError, ValueError, ImportError) as error:
@@ -110,31 +113,31 @@ def validate_inputs(texts: list[str], signature: str) -> None:
 
 @lru_cache(maxsize=2048)
 def _ranges(profile: InputProfile, title: str, heading: str, body: str) -> tuple:
-    def fits(value: str) -> bool:
-        return (
-            profile.count(document_text(title, heading + value, profile)) <= profile.spec.max_tokens
-        )
-
-    if fits(body):
+    complete = document_text(title, heading + body, profile)
+    if profile.count(complete) <= profile.spec.max_tokens:
         return ((0, len(body), heading + body),)
-    spans, start = [], 0
-    while start < len(body):
-        low, high = 0, len(body) - start
-        while low < high:
-            middle = (low + high + 1) // 2
-            if fits(body[start : start + middle]):
-                low = middle
-            else:
-                high = middle - 1
-        if not low:
-            raise InputProfileError("embedding metadata leaves no room for source text")
-        end = start + low
-        # Character offsets slice the original string; no token decoding or Unicode loss.
-        profile.validate(document_text(title, heading + body[start:end], profile))
-        spans.append((start, end, heading + body[start:end]))
-        if end == len(body):
-            break
-        start = end - min(OVERLAP, low // 4)
+    # Reserve full metadata and special tokens. HF Tokenizers owns token windows and
+    # overlap; offsets project those windows onto the original, un-decoded source.
+    budget = profile.spec.max_tokens - profile.count(document_text(title, heading, profile))
+    if budget <= 0:
+        raise InputProfileError("embedding metadata leaves no room for source text")
+    encoded = profile.tokenizer.encode(body, add_special_tokens=False)
+    encoded.truncate(budget, stride=min(OVERLAP, budget // 4))
+    windows = [encoded, *encoded.overflowing]
+    spans = []
+    previous_end = 0
+    for i, window in enumerate(windows):
+        offsets = [(low, high) for low, high in window.offsets if high > low]
+        if not offsets:
+            raise InputProfileError("tokenizer returned no source offsets")
+        start = min(offsets[0][0], previous_end)
+        end = len(body) if i == len(windows) - 1 else offsets[-1][1]
+        if start < 0 or end <= start or end > len(body):
+            raise InputProfileError("tokenizer returned an invalid source range")
+        text = heading + body[start:end]
+        profile.validate(document_text(title, text, profile))
+        spans.append((start, end, text))
+        previous_end = end
     return tuple(spans)
 
 
