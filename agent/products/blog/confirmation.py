@@ -17,41 +17,16 @@ def presentation(result):
     return TurnResult(reply, {**execution, "confirm_text": reply})
 
 
-def proposal(principal, cid, workflow, spec, *, executor, question, target):
-    from agent import confirm
-    from agent.runtime.results import TurnResult
-    from tools.base import unavailable
-
-    specs = [spec]
-    token = confirm.sign(principal.uid, cid, workflow, specs, executor=executor)
-    if not token:
-        return unavailable("确认服务暂不可用，本次未生成确认卡，也未执行改动。")
-    expiry, jti = confirm.token_expiry(token), confirm.token_jti(token)
-    options = [{"label": "确认执行", "value": "yes", "kind": "primary"},
-               {"label": "取消操作", "value": "no", "kind": "default"}]
-    reply = question + "\n确认后执行；修改需求直接在聊天里说。"
-    return TurnResult(reply, {
-        "pending_confirm": {"q": question, "opts": options, "token": token,
-                            "specs": specs, "workflow": workflow, "exp": expiry,
-                            "replay_safe": True},
-        "pending_action": {"task_id": f"pa_{jti}", "skill": workflow, "specs": specs,
-                           "target": target, "requested_by": "user",
-                           "source_event": "confirm_popup", "question": question,
-                           "options": options, "token": token, "jti": jti,
-                           "expires_at": expiry},
-        "confirm_text": reply, "receipts": []})
-
-
 def confirmed_runtime(runtime, grant):
     from agent.domains.registry import native_domain
-    from agent.runtime.native import NativeRuntime
+    from agent.runtime.service import AgentRuntime
 
     if isinstance(grant, dict) and grant.get("executor") and native_domain(grant) is None:
         raise ValueError("无法识别确认操作的执行入口，本次未执行。")
     if native_domain(grant) is None:
         return runtime
-    if not isinstance(runtime, NativeRuntime):
-        raise ValueError("确认执行需要 NativeRuntime，本次未执行。")
+    if not isinstance(runtime, AgentRuntime):
+        raise ValueError("确认执行需要 AgentRuntime，本次未执行。")
     selected = runtime
     if selected.store.saver is None:
         raise RuntimeError("操作确认需要持久化服务，本次未执行。")

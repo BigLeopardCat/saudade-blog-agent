@@ -38,7 +38,7 @@ def test_retired_or_unknown_runtime_never_falls_back(monkeypatch, name):
 
 
 def test_builds_only_selected_runtime(monkeypatch):
-    import agent.runtime.native as native
+    import agent.composition as native
 
     instance = object()
     received = []

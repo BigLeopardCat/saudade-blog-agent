@@ -55,6 +55,7 @@ def build_prompt(messages: list, principal, own_enabled: bool = False) -> list:
                      "character": CHARACTER_IDENTITY,
                      "conversation_style": context["caller"]["conversation_style"],
                      "tool_loading": context["tools"]["loading"],
+                     "rendering": context["rendering"],
                      "tool_guidance": guidance}
     actor, attachments = [], []
     if is_verified_identity(principal):

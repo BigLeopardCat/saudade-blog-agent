@@ -10,10 +10,11 @@ from langgraph.checkpoint.memory import InMemorySaver
 
 from agent import checkpoint
 from agent.principal import SOURCE_ASSERTION, Principal
+from agent.products.blog.application import BlogApplication
 from agent.runtime import turns
+from agent.runtime.checkpoint_conversations import CheckpointConversationStore
 from agent.runtime.control import AgentCancelled
-from agent.runtime.native import NativeRuntime
-from agent.runtime.native_store import NativeConversationStore
+from agent.runtime.service import AgentRuntime
 
 
 def _config(thread_id="conv_overlap", stop_event=None):
@@ -40,7 +41,11 @@ def test_turn_serializes_history_and_lifecycle(monkeypatch, operation):
             assert "第一轮回复" in prompts[1]
             return AIMessage(content="第二轮回复")
 
-    runtime = NativeRuntime(NativeConversationStore(saver), model_factory=lambda **_: Model())
+    runtime = AgentRuntime(
+        CheckpointConversationStore(saver),
+        application=BlogApplication(),
+        model_factory=lambda **_: Model(),
+    )
 
     def turn(text):
         return list(runtime.stream_events({"messages": [HumanMessage(content=text)]}, _config()))

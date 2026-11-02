@@ -8,10 +8,11 @@ from langgraph.checkpoint.memory import InMemorySaver
 
 from agent.domains.notices.targets import DEFAULT_TITLE
 from agent.principal import SOURCE_ASSERTION, Principal
+from agent.products.blog.application import BlogApplication
 from agent.products.blog.catalog import DOMAIN_DESCRIPTIONS
 from agent.runtime.catalog import loader
-from agent.runtime.native import NativeRuntime
-from agent.runtime.native_store import NativeConversationStore
+from agent.runtime.checkpoint_conversations import CheckpointConversationStore
+from agent.runtime.service import AgentRuntime
 
 
 @pytest.mark.parametrize("role", ["superadmin", "admin", "user", "zako"])
@@ -28,8 +29,11 @@ def test_initial_request_exposes_assignable_role_names_only_to_administrators(ro
         def stream(self, prompt, **kwargs):
             yield AIMessageChunk(content="你好。")
 
-    runtime = NativeRuntime(NativeConversationStore(InMemorySaver()),
-                            model_factory=lambda **_: Model())
+    runtime = AgentRuntime(
+        CheckpointConversationStore(InMemorySaver()),
+        application=BlogApplication(),
+        model_factory=lambda **_: Model(),
+    )
     list(runtime.stream_events({"messages": [HumanMessage(content="你好")]},
                                config(principal=Principal(7, role, SOURCE_ASSERTION))))
     loaders = [item for item in menus if item["name"] == "load_admin_account_actions_info_tools"]

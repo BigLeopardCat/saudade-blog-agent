@@ -17,13 +17,14 @@ from langgraph.checkpoint.memory import InMemorySaver
 from agent import confirm
 from agent.domains.favorites import transactions
 from agent.principal import SOURCE_ASSERTION, Principal
+from agent.products.blog.application import BlogApplication
 from agent.products.blog.capabilities import ToolCatalog
 from agent.products.blog.confirmation import cancel
 from agent.runtime import approval, writes
 from agent.runtime.budget import BudgetLimits, TaskBudget, budget_scope
-from agent.runtime.native import NativeRuntime
-from agent.runtime.native_store import NativeConversationStore
+from agent.runtime.checkpoint_conversations import CheckpointConversationStore
 from agent.runtime.results import TurnResult
+from agent.runtime.service import AgentRuntime
 from agent.transport import iter_transport_events
 from tools import base
 
@@ -101,8 +102,8 @@ def backend(monkeypatch, tmp_path):
 
 
 def runtime(model, saver=None, catalog=None):
-    return NativeRuntime(NativeConversationStore(saver or InMemorySaver()),
-                         model_factory=lambda **_: model, catalog=catalog)
+    return AgentRuntime(CheckpointConversationStore(saver or InMemorySaver()),
+                         model_factory=lambda **_: model, application=BlogApplication(catalog))
 
 
 def run(selected, text=None, grant=None, cfg=None):

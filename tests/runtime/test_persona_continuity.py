@@ -9,8 +9,9 @@ from langchain_core.messages import AIMessage, HumanMessage
 from langgraph.checkpoint.memory import InMemorySaver
 
 from agent.principal import SOURCE_ASSERTION, Principal
-from agent.runtime.native import NativeRuntime
-from agent.runtime.native_store import NativeConversationStore
+from agent.products.blog.application import BlogApplication
+from agent.runtime.checkpoint_conversations import CheckpointConversationStore
+from agent.runtime.service import AgentRuntime
 from agent.runtime.turns import AgentCancelled
 
 
@@ -44,7 +45,11 @@ def test_chat_only_voice_survives_multiple_turns_and_reconstructed_resume():
                   AgentCancelled())
 
     def runtime(model):
-        return NativeRuntime(NativeConversationStore(saver), model_factory=lambda **_: model)
+        return AgentRuntime(
+            CheckpointConversationStore(saver),
+            application=BlogApplication(),
+            model_factory=lambda **_: model,
+        )
 
     selected = runtime(first)
     for text in ("早呀", "Python 的 is 比较什么？"):
@@ -71,8 +76,11 @@ def test_framework_reply_uses_the_selected_voice(role, address):
 
     principal = Principal(7, role, SOURCE_ASSERTION)
     model = Model(AIMessage(content="真实结果已保留。"))
-    selected = NativeRuntime(NativeConversationStore(InMemorySaver()),
-                             model_factory=lambda **_: model)
+    selected = AgentRuntime(
+        CheckpointConversationStore(InMemorySaver()),
+        application=BlogApplication(),
+        model_factory=lambda **_: model,
+    )
     result = list(selected.stream_events({"messages": [HumanMessage(content="你好")]},
                                          config(principal=principal)))[-1]
     assert result.reply == "真实结果已保留。"

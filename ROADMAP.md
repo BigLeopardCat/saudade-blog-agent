@@ -12,7 +12,7 @@
 
 ## 当前状态
 
-旧规划引擎和 DSL 已退出。`NativeRuntime` 适配现有服务与会话协议，`ToolSession`
+旧规划引擎和 DSL 已退出。`AgentRuntime` 适配现有服务与会话协议，`ToolSession`
 通过 LangChain `create_agent` 执行模型—工具循环，公开 middleware 接入预算与业务结果规则。
 LangGraph 持久 Agent 子图和审批中断承接逐项恢复，自建确认游标已删除。
 博客能力与产品配置已显式装配，非博客库存读取示例复用同一运行时。
@@ -61,5 +61,4 @@ DeepSeek low完成[125项非视觉全量](docs/deepseek-regression-20261026.md)�
 | 物联网平台建设 | 维持可关闭的演示适配；仅在产品范围发生明确变化时重新评估 |
 | Agent 自动发布 | 手动发布出现明确瓶颈后再建设，当前不作为重构前置条件 |
 
-参与开发见 [CONTRIBUTING.md](CONTRIBUTING.md)。旧的分批记录保留在
-[平台路线记录](docs/platform-roadmap.md)，不作为当前运行时设计的依据。
+参与开发见 [CONTRIBUTING.md](CONTRIBUTING.md)。规范化后续事项与启动条件见[平台维护规划](docs/platform-roadmap.md)。

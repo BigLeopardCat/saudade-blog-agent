@@ -8,10 +8,11 @@ from langgraph.graph.message import add_messages
 
 from agent import checkpoint
 from agent.principal import SOURCE_ASSERTION, Principal
+from agent.products.blog.application import BlogApplication
 from agent.runtime import memory
+from agent.runtime.checkpoint_conversations import CheckpointConversationStore
 from agent.runtime.checkpoint_store import ConversationDeleted
-from agent.runtime.native import NativeRuntime
-from agent.runtime.native_store import NativeConversationStore
+from agent.runtime.service import AgentRuntime
 from tools import base
 
 
@@ -52,7 +53,11 @@ def test_native_checkpoint_stays_bounded_after_many_turns_and_reload(monkeypatch
             return AIMessage(content="answer" * 150)
 
     saver = InMemorySaver()
-    runtime = NativeRuntime(NativeConversationStore(saver), model_factory=lambda **_: Model())
+    runtime = AgentRuntime(
+        CheckpointConversationStore(saver),
+        application=BlogApplication(),
+        model_factory=lambda **_: Model(),
+    )
     cfg = {"configurable": {"thread_id": "conv_bounded", "conversation_id": "bounded",
                             "principal": Principal(7, "user", SOURCE_ASSERTION), "user_id": 7}}
     for number in range(30):

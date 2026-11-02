@@ -14,9 +14,10 @@ from langchain_core.messages import HumanMessage
 from langchain_core.tools import tool
 from langgraph.checkpoint.memory import InMemorySaver
 
+from agent.products.blog.application import BlogApplication
+from agent.runtime.checkpoint_conversations import CheckpointConversationStore
 from agent.runtime.control import AgentCancelled, RequestControl, request_scope
-from agent.runtime.native import NativeRuntime
-from agent.runtime.native_store import NativeConversationStore
+from agent.runtime.service import AgentRuntime
 from models.llm import get_llm
 from models.transport import ModelIO
 from tools.result import ok
@@ -63,9 +64,17 @@ def test_sdk_cancel_preserves_completed_read_and_retry_wire(monkeypatch, control
                               domains=lambda *_: {})
     with ModelIO(transport=httpx.MockTransport(provider)) as io:
         def runtime():
-            return NativeRuntime(NativeConversationStore(saver), catalog=catalog, model_io=io,
-                model_factory=lambda **kwargs: get_llm(api_key="synthetic-only",
-                    base_url="https://model.test/v1", model="deepseek-v4.1-flash", **kwargs))
+            return AgentRuntime(
+                CheckpointConversationStore(saver),
+                application=BlogApplication(catalog),
+                model_io=io,
+                model_factory=lambda **kwargs: get_llm(
+                    api_key="synthetic-only",
+                    base_url="https://model.test/v1",
+                    model="deepseek-v4.1-flash",
+                    **kwargs,
+                ),
+            )
 
         def run():
             try:

@@ -18,7 +18,7 @@ def test_personal_todo_contract_checks_business_card_instead_of_success_wording(
     model = Model(AIMessage(content="陪你聊聊。"),
                   AIMessage(content="", tool_calls=[call(f"load_{domain}_info_tools", "load")]),
                   AIMessage(content="", tool_calls=[operation]), AIMessage(content="已经记上啦。"))
-    monkeypatch.setattr("agent.runtime.native.get_llm", lambda **_: model)
+    monkeypatch.setattr("agent.runtime.service.get_llm", lambda **_: model)
     monkeypatch.setattr(native_contracts.golden_trace, "trace_root", lambda: str(tmp_path))
     report = native_contracts.run(["todo_after_chat"])
     result = report["cases"][0]

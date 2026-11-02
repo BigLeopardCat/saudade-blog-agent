@@ -8,9 +8,10 @@ from langchain_core.messages import AIMessageChunk, HumanMessage
 from langgraph.checkpoint.memory import InMemorySaver
 
 from agent.principal import SOURCE_ASSERTION, Principal
+from agent.products.blog.application import BlogApplication
+from agent.runtime.checkpoint_conversations import CheckpointConversationStore
 from agent.runtime.control import AgentCancelled
-from agent.runtime.native import NativeRuntime
-from agent.runtime.native_store import NativeConversationStore
+from agent.runtime.service import AgentRuntime
 from agent.runtime.task_inputs import binding
 from models.llm import get_llm
 
@@ -34,7 +35,7 @@ def test_resumed_sdk_stream_does_not_echo_injected_user_or_repeat_final_message(
             raise AgentCancelled()
 
     scope = binding(cfg["configurable"]["principal"], 42)
-    selected = NativeRuntime(NativeConversationStore(saver),
+    selected = AgentRuntime(CheckpointConversationStore(saver), application=BlogApplication(),
                              model_factory=lambda **_: CancelledModel())
     with pytest.raises(AgentCancelled):
         list(selected.stream_events({"task_id": "same-task", "messages": [
@@ -60,7 +61,11 @@ def test_resumed_sdk_stream_does_not_echo_injected_user_or_repeat_final_message(
     with httpx.Client(transport=httpx.MockTransport(handle)) as client:
         model = get_llm(base_url="https://fixture.invalid/v1", api_key="fixture-only",
                         http_client=client, streaming=True, max_tokens=64)
-        restored = NativeRuntime(NativeConversationStore(saver), model_factory=lambda **_: model)
+        restored = AgentRuntime(
+            CheckpointConversationStore(saver),
+            application=BlogApplication(),
+            model_factory=lambda **_: model,
+        )
         events = list(restored.stream_events({"resume_task": "same-task"}, cfg))
     assert len(requests) == 1
     assert events[-1].reply == "恢复完成。"

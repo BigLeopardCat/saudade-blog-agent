@@ -7,8 +7,9 @@ from langgraph.checkpoint.memory import InMemorySaver
 
 from agent.api.schemas import ChatRequest
 from agent.principal import SOURCE_ASSERTION, Principal
-from agent.runtime.native import NativeRuntime
-from agent.runtime.native_store import NativeConversationStore
+from agent.products.blog.application import BlogApplication
+from agent.runtime.checkpoint_conversations import CheckpointConversationStore
+from agent.runtime.service import AgentRuntime
 from agent.transport import iter_transport_events
 
 
@@ -20,7 +21,11 @@ def navigation():
         "principal": Principal(7, "user", SOURCE_ASSERTION), "browser_feedback": True}}
 
     def runtime():
-        return NativeRuntime(NativeConversationStore(saver), model_factory=lambda **_: model)
+        return AgentRuntime(
+            CheckpointConversationStore(saver),
+            application=BlogApplication(),
+            model_factory=lambda **_: model,
+        )
 
     selected = runtime()
     result = list(selected.stream_events({"messages": [HumanMessage(content="去留言板")],
@@ -36,8 +41,11 @@ def test_browser_continuation_keeps_progress_without_repeating_navigation():
     config = {"configurable": {"user_id": 7, "conversation_id": 42, "thread_id": "conv_42",
         "principal": Principal(7, "user", SOURCE_ASSERTION), "browser_feedback": True,
         "progress_emitter": ProgressEmitter(visible.append)}}
-    runtime = NativeRuntime(NativeConversationStore(InMemorySaver()),
-                            model_factory=lambda **_: model)
+    runtime = AgentRuntime(
+        CheckpointConversationStore(InMemorySaver()),
+        application=BlogApplication(),
+        model_factory=lambda **_: model,
+    )
     first = list(runtime.stream_events({"messages": [HumanMessage(content="去留言板")],
                                         "task_id": "page-task"}, config))[-1]
     resumed_config = acknowledge(config, first.execution["client_action"])
@@ -170,8 +178,11 @@ def test_remaining_batch_runs_only_after_navigation_result():
     config = {"configurable": {"user_id": 7, "conversation_id": 42, "thread_id": "conv_42",
         "principal": Principal(7, "user", SOURCE_ASSERTION), "browser_feedback": True}}
     catalog = ToolCatalog(read_tools={"after_navigation": after_navigation})
-    runtime = NativeRuntime(NativeConversationStore(InMemorySaver()), catalog=catalog,
-                            model_factory=lambda **_: model)
+    runtime = AgentRuntime(
+        CheckpointConversationStore(InMemorySaver()),
+        application=BlogApplication(catalog),
+        model_factory=lambda **_: model,
+    )
     first = list(runtime.stream_events({"messages": [HumanMessage(content="先跳转再读取")],
                                         "task_id": "page-task"}, config))[-1]
     assert not seen, first
@@ -196,8 +207,11 @@ def test_browser_resume_carries_the_existing_task_budget():
     model = Model()
     config = {"configurable": {"user_id": 7, "conversation_id": 42, "thread_id": "conv_42",
         "principal": Principal(7, "user", SOURCE_ASSERTION), "browser_feedback": True}}
-    runtime = NativeRuntime(NativeConversationStore(InMemorySaver()),
-                            model_factory=lambda **_: model)
+    runtime = AgentRuntime(
+        CheckpointConversationStore(InMemorySaver()),
+        application=BlogApplication(),
+        model_factory=lambda **_: model,
+    )
     limits = BudgetLimits(model_calls=1)
     with budget_scope(TaskBudget(limits)):
         first = list(runtime.stream_events({"messages": [HumanMessage(content="去留言板")],

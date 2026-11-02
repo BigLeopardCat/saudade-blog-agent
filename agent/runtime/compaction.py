@@ -28,12 +28,24 @@ def _protected(messages, anchor, pending=False):
                  and message.additional_kwargs.get("lc_source") != "summarization"
                  and not message.additional_kwargs.get("task_input")), default=len(messages))
     protected = {message.id for message in messages[start:] if isinstance(message, HumanMessage)}
-    if pending:
-        exchange = max((i for i, message in enumerate(messages)
-                        if isinstance(message, AIMessage) and message.tool_calls),
-                       default=len(messages))
+    if pending or (messages and isinstance(messages[-1], ToolMessage)):
+        exchange = max(
+            (
+                i
+                for i, message in enumerate(messages)
+                if isinstance(message, AIMessage) and message.tool_calls
+            ),
+            default=len(messages),
+        )
         protected.update(message.id for message in messages[exchange:])
     return messages[start].id if start < len(messages) else None, protected
+
+
+def _complete_compaction(anchored, state):
+    update = state.get("context_update") or {}
+    if update.get("compaction_pending"):
+        return {**(anchored or {}), "context_update": {**update, "compaction_pending": False}}
+    return anchored
 
 
 def _coverage(previous, covered, summary):
@@ -106,7 +118,7 @@ class ConversationCompaction(AgentMiddleware):
         keep = max(1, target - budget.input_tokens(fixed, menu)
                    - settings.agent_summary_output_tokens)
         if len(source) < 2 or estimate_tokens(source) <= keep:
-            return anchored
+            return _complete_compaction(anchored, state)
         cutoff = summary_cutoff(source, keep, budget)
         if not cutoff:
             self.failed = True

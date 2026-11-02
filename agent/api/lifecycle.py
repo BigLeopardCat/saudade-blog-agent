@@ -18,7 +18,7 @@ MAX_CONCURRENT_STREAMS = settings.max_concurrent_streams
 
 def build_runtime(resources: ExitStack):
     """Build the only supported conversation runtime."""
-    from agent.runtime.native import build
+    from agent.composition import build
 
     return build(resources=resources)
 

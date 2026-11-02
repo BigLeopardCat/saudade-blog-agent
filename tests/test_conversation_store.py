@@ -6,10 +6,11 @@ from langgraph.checkpoint.memory import InMemorySaver
 
 from agent import checkpoint
 from agent.principal import SOURCE_ASSERTION, Principal
+from agent.products.blog.application import BlogApplication
+from agent.runtime.checkpoint_conversations import CheckpointConversationStore
 from agent.runtime.checkpoint_store import ConversationDeleted
-from agent.runtime.native import NativeRuntime
-from agent.runtime.native_store import NativeConversationStore
 from agent.runtime.results import TurnResult
+from agent.runtime.service import AgentRuntime
 
 
 def config():
@@ -33,7 +34,11 @@ class Model:
 
 
 def runtime(saver, text="答复"):
-    return NativeRuntime(NativeConversationStore(saver), model_factory=lambda **_: Model(text))
+    return AgentRuntime(
+        CheckpointConversationStore(saver),
+        application=BlogApplication(),
+        model_factory=lambda **_: Model(text),
+    )
 
 
 def test_reconstructed_native_runtime_continues_saved_history():

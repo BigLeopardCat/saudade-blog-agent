@@ -10,7 +10,7 @@ from pydantic import Field, StrictInt
 
 from agent.domains.automations.presentation import LABELS
 from agent.domains.automations.transactions import OPERATIONS
-from agent.products.blog.confirmation import proposal
+from agent.proposals import proposal
 from agent.runtime.tool_evidence import observed
 from agent.runtime.writes import bound_context
 from agent.scheduling.errors import tool_boundary

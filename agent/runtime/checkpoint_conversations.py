@@ -10,7 +10,7 @@ from agent.runtime.conversation_store import ConversationSnapshot
 from agent.runtime.turns import check_cancelled, conversation_turn
 
 
-class NativeConversationStore:
+class CheckpointConversationStore:
     def __init__(self, saver):
         self.saver = saver
         self._state = graph(saver)

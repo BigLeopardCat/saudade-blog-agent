@@ -12,6 +12,7 @@ from pydantic import ValidationError
 from agent.api import turns
 from agent.domains import own_activity
 from agent.principal import SOURCE_ASSERTION, SOURCE_BODY, Principal
+from agent.products.blog.application import BlogApplication
 from tools import base
 
 
@@ -159,8 +160,8 @@ def test_legacy_history_entry_reads_records_instead_of_claiming_injected_context
 def test_sync_entry_binds_current_conversation_to_native_history(backend, monkeypatch):
     from langchain_core.messages import AIMessage, HumanMessage
 
-    from agent.runtime.native import NativeRuntime
-    from agent.runtime.native_store import NativeConversationStore
+    from agent.runtime.checkpoint_conversations import CheckpointConversationStore
+    from agent.runtime.service import AgentRuntime
 
     def call(name):
         return AIMessage(content="", tool_calls=[{"id": name, "name": name, "args": {}}])
@@ -175,8 +176,15 @@ def test_sync_entry_binds_current_conversation_to_native_history(backend, monkey
         def invoke(self, prompt):
             return next(responses)
 
-    monkeypatch.setattr(app.state, "runtime", NativeRuntime(
-        NativeConversationStore(None), model_factory=lambda **_: Model()))
+    monkeypatch.setattr(
+        app.state,
+        "runtime",
+        AgentRuntime(
+            CheckpointConversationStore(None),
+            application=BlogApplication(),
+            model_factory=lambda **_: Model(),
+        ),
+    )
     result = turns.run_turn(
         app.state.runtime, [HumanMessage(content="查查之前的聊天")], "activity-test",
                                     user_id=7, principal=Principal(7, "user", SOURCE_ASSERTION),

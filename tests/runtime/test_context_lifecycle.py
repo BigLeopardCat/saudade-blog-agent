@@ -9,6 +9,7 @@ from langgraph.checkpoint.memory import InMemorySaver
 from agent import checkpoint
 from agent.api.schemas import ChatRequest
 from agent.principal import SOURCE_ASSERTION, Principal
+from agent.products.blog.application import BlogApplication
 from agent.runtime import compaction, memory, retention
 from agent.runtime.budget import BudgetExceeded, BudgetLimits, TaskBudget, budget_scope
 from agent.runtime.summarization import SummaryUnavailable
@@ -139,8 +140,8 @@ def test_resume_cannot_exceed_an_exhausted_task_model_limit():
     from langchain_core.tools import tool
 
     from agent.products.blog.capabilities import ToolCatalog
-    from agent.runtime.native import NativeRuntime
-    from agent.runtime.native_store import NativeConversationStore
+    from agent.runtime.checkpoint_conversations import CheckpointConversationStore
+    from agent.runtime.service import AgentRuntime
     from tools.result import ok
 
     @tool
@@ -161,8 +162,11 @@ def test_resume_cannot_exceed_an_exhausted_task_model_limit():
     catalog = ToolCatalog(read_tools={"read_fixture": read_fixture})
 
     def selected():
-        return NativeRuntime(NativeConversationStore(saver), catalog=catalog,
-                             model_factory=lambda **_: model)
+        return AgentRuntime(
+            CheckpointConversationStore(saver),
+            application=BlogApplication(catalog),
+            model_factory=lambda **_: model,
+        )
 
     with budget_scope(TaskBudget(BudgetLimits(model_calls=2))), pytest.raises(AgentCancelled):
         run(selected(), ChatRequest(message="读取并解释"))

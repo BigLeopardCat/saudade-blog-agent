@@ -5,7 +5,7 @@ from langchain_core.tools import tool
 
 from agent.domains.admin_writes import available
 from agent.domains.categories import targets
-from agent.products.blog.confirmation import proposal
+from agent.proposals import proposal
 from agent.reports import sanitize_untrusted
 from agent.runtime.results import TurnResult
 from agent.runtime.turns import check_cancelled
