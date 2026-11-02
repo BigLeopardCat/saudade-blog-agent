@@ -571,9 +571,14 @@
         // 返回 false = 只能等流尾（整页跳转，见上）。
         const applyCmd = (c, contentSpan, allowDeferred) => {
             if (!c || typeof c !== 'object' || c.__done) return true;
+            if (c.kind === 'appearance' && browserActions) {
+              c.__done = browserActions.receive(c, { convId: roundConvId, original: msg,
+                                                     processFrom: div });
+              return c.__done;
+            }
             if (c.kind === 'navigate' && c.url) {
-              if (c.task_id && navigation) {
-                c.__done = navigation.receive(c, { convId: roundConvId, original: msg,
+              if (c.task_id && browserActions) {
+                c.__done = browserActions.receive(c, { convId: roundConvId, original: msg,
                                                    processFrom: div });
                 return c.__done;
               }
@@ -704,7 +709,7 @@
               task_inputs: !!steering && (!silent || !!opts.resumeTask),
               message: msg,
               ...(!silent ? { task_id: roundId } : {}),
-              browser_feedback: !!navigation,
+              browser_feedback: !!browserActions,
               ...(opts.resumeTask ? { resume_task: opts.resumeTask } : {}),
               ...(opts.browserResult ? { browser_result: opts.browserResult } : {}),
               // 20260903 会话化：显式会话定向写入；roundConvId=null（auto 未决议）
@@ -1175,7 +1180,20 @@
       ctx.ui.currentPausedTask = pausedTask;
       ctx.ui.continueTask = () => resumeStoppedTask(pausedTask());
 
-      const navigation = g.__waifuNavigation ? g.__waifuNavigation(ctx, engine, sendMessage) : null;
+      const browserActions = g.__waifuBrowserActions
+        ? g.__waifuBrowserActions(ctx, engine, sendMessage, settings => {
+          for (const [name, mode] of Object.entries(settings)) {
+            if (name === 'dark_mode') {
+              markVisitorChoice(mode === 'on');
+              applyDarkMode(mode === 'on', true);
+            } else {
+              const start = { sakura: 'startSakura', rain: 'startRain', snow: 'startSnow' }[name];
+              if (mode === 'on' && typeof g[start] !== 'function')
+                throw new Error('显示特效尚未就绪');
+              toggleEffect(name, mode);
+            }
+          }
+        }) : null;
 
       // 将 waifu-tool-hitokoto 改为聊天面板开关
       // （hitokoto 工具已从 tools 移除——A7 修复；按钮不存在时自建一个，复用原按钮位 id，保持开关可用）

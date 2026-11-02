@@ -55,6 +55,24 @@ def _replacement(messages, summary, covered_ids):
             *(m for m in messages[leading:] if m.id not in covered_ids)]
 
 
+def _apply_summary(messages, source, update, guard, protected, principal):
+    """Stamp summary provenance and replace only the source messages it covered."""
+    summary, *preserved = update["messages"][1:]
+    preserved = [m for m in preserved if m.id != guard.id]
+    actor = ({"uid": principal.uid, "role": principal.known_role}
+             if getattr(principal, "source", None) == SOURCE_ASSERTION else None)
+    summary = summary.model_copy(update={"id": uuid.uuid4().hex, "additional_kwargs": {
+        **summary.additional_kwargs, **({"memory_actor": actor} if actor else {})}})
+    kept = protected | {message.id for message in preserved}
+    covered = [message for message in source if message.id not in kept]
+    replacement = _replacement(messages, summary, {message.id for message in covered})
+    counts = {"source_messages": len(covered), "before_tokens": estimate_tokens(source),
+              "after_tokens": estimate_tokens([summary, *preserved]),
+              "protected_messages": len(protected), "phase": "task" if any(
+                  isinstance(m, AIMessage) and m.tool_calls for m in covered) else "history"}
+    return summary, covered, replacement, counts
+
+
 class ConversationCompaction(AgentMiddleware):
     """Reserve complete input/output space and compact only under capacity pressure."""
 
@@ -79,7 +97,8 @@ class ConversationCompaction(AgentMiddleware):
         capacity = min(budget.limits.input_tokens,
                        budget.limits.context_tokens - session.output_limit)
         trigger = int(capacity * settings.agent_compaction_trigger)
-        if before < trigger:
+        continuing = bool((state.get("context_update") or {}).get("compaction_pending"))
+        if before < trigger and not continuing:
             return anchored
         source = [m for m in messages if not memory.is_context(m) and m.id not in protected]
         fixed = [*system, *(m for m in messages if memory.is_context(m) or m.id in protected)]
@@ -93,52 +112,45 @@ class ConversationCompaction(AgentMiddleware):
             self.failed = True
             record("memory", "compaction_skipped", reason="oversized_exchange")
             return anchored
-        update = self._summarize(source, cutoff, runtime, before, trigger)
+        guard = next((m for m in reversed(messages) if m.id in protected
+                      and isinstance(m, HumanMessage) and not memory.is_context(m)), None)
+        if guard is None:
+            return anchored
+        update = self._summarize(source, cutoff, guard, runtime, before, trigger)
         if update is None:
             return anchored
-        summary, *preserved = update["messages"][1:]
-        principal = session.principal
-        actor = ({"uid": principal.uid, "role": principal.known_role}
-                 if getattr(principal, "source", None) == SOURCE_ASSERTION else None)
-        summary = summary.model_copy(update={"id": uuid.uuid4().hex, "additional_kwargs": {
-            **summary.additional_kwargs, **({"memory_actor": actor} if actor else {})}})
-        kept = protected | {message.id for message in preserved}
-        covered = [message for message in source if message.id not in kept]
+        summary, covered, replacement, counts = _apply_summary(
+            messages, source, update, guard, protected, session.principal)
         if not covered:
             return anchored
-        covered_ids = {message.id for message in covered}
-        replacement = _replacement(messages, summary, covered_ids)
         after = budget.input_tokens([*system, *hydrate(replacement, session.transient)], menu)
         if after >= before:
             self.failed = True
             record("memory", "compaction_skipped", reason="no_reduction")
             return anchored
-        record("memory", "compacted", source_messages=len(covered),
-               before_tokens=estimate_tokens(source),
-               after_tokens=estimate_tokens([summary, *preserved]),
+        record("memory", "compacted", **counts,
                request_before_tokens=before, request_after_tokens=after,
-               trigger_tokens=trigger, target_tokens=target,
-               protected_messages=len(protected), phase="task" if any(
-                   isinstance(m, AIMessage) and m.tool_calls for m in covered) else "history")
+               trigger_tokens=trigger, target_tokens=target)
         saved = {"messages": [update["messages"][0], *replacement], "context_anchor": anchor,
                  "progress_keys": capture(session)["progress_keys"],
-                 "context_update": _coverage(state.get("context_update"), covered, summary)}
-        if after >= trigger:
+                 "context_update": {**_coverage(state.get("context_update"), covered, summary),
+                                    "compaction_pending": after > target}}
+        if after > target:
             saved["jump_to"] = "model"
         return saved
 
-    def _summarize(self, source, cutoff, runtime, before, trigger):
+    def _summarize(self, source, cutoff, guard, runtime, before, trigger):
         from models import get_llm
 
         try:
             model = get_llm(streaming=False, max_tokens=settings.agent_summary_output_tokens,
                             enable_thinking=False, max_retries=0)
             middleware = SummarizationMiddleware(
-                model=model, trigger=("tokens", 1), keep=("messages", len(source) - cutoff),
+                model=model, trigger=("tokens", 1), keep=("messages", len(source) + 1 - cutoff),
                 token_counter=estimate_tokens, trim_tokens_to_summarize=None,
                 summarizer=lambda old: summarize(old, budget=self.session.budget,
                                                 config=self.session.config, model=model))
-            return middleware.before_model({"messages": source}, runtime)
+            return middleware.before_model({"messages": [*source, guard]}, runtime)
         except (OpenAIError, TimeoutError, ValueError) as error:
             if isinstance(error, SummaryUnavailable) and error.reason in (
                     "task_tokens", "model_calls", "task_seconds", "task_time_unknown"):

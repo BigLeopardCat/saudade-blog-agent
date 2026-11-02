@@ -124,7 +124,8 @@ def get_moderation_status(config: RunnableConfig) -> object:
             or data["pending"] + data["passed"] + data["rejected"] != data["total"]
             or sum(data[key] for key in _COUNTS[4:]) != data["total"]):
         return base.unavailable("审核汇总缺少有效计数或分布与总数不一致。")
-    return _render({key: data[key] for key in _COUNTS})
+    return _render({"finalStatus": {key: data[key] for key in _COUNTS[:4]},
+                    "aiDecision": {key: data[key] for key in _COUNTS[4:]}})
 
 
 @tool
