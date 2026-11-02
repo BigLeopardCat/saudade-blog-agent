@@ -1,7 +1,7 @@
 # P4：当前状态
 
 本轮工程收敛和固定版本全量回归已完成，产品发布验收仍为failed，未宣告企业达标。
-详情、原始分数、人工分歧、缓存口径与剩余问题见[收尾验证](p4-completion-report-20261103.md)。
+详情、原始分数、材料复核分歧、缓存口径与剩余问题见[收尾验证](p4-completion-report-20261103.md)。
 
 - 生产保持OpenCode Go / DeepSeek v4.1 Flash、low；未切换模型。
 - LangChain/LangGraph/DBOS承接通用执行、状态与后台任务，博客显式装配。
