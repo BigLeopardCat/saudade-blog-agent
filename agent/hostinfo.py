@@ -1,27 +1,9 @@
-"""本机运维读数（20260921，agent 管理助手）——**只读、无第三方依赖、纯函数为主**。
+"""Bounded host diagnostics and pure report parsers.
 
-agent 与 Rust/device-service 同机部署，所以"服务器健康度"不需要任何新接口：
-读 `/proc`、`shutil.disk_usage`、`systemctl`、日志文件就够了。这也让运维报表
-**不经过**后台那道门（不消耗发起人的身份），与审核/用户报表的通道是两回事。
-
-分层理由（与 `rag/sections.py`、`agent/entity_digest.py` 同一手法）：把「真去读 /proc、
-跑 systemctl、tail 日志」和「把这些数字组织成人话」分开。前者只有真机上才有意义，
-后者可以喂构造数据单测——而报表最容易错的恰恰是后者（百分比、单位、边界、截断），
-不是前者。所以本模块的函数分两族：`read_*` 碰系统，`parse_*` / `render_*` 只碰数据。
-
-## 口径与坑（写在这里，免得下一个改的人踩）
-
-- **CPU 使用率必须两次采样求差**：`/proc/stat` 第一行是**开机以来的累计 jiffies**，
-  单次采样只能算出"开机至今的平均使用率"——那是个几乎恒定的数，看着像报表其实是常数。
-- **负载 ≠ 使用率**：loadavg 是"可运行 + 不可中断"的进程数，单核 1.0 才叫满载；
-  4 核机器上 0.5 是闲。两个数都给，但别混着解释。
-- **内存看 MemAvailable 不看 MemFree**：MemFree 不含可回收的 page cache，
-  拿它算"内存吃紧"会把一台正常的机器报成快爆了。
-- **磁盘只报真实挂载点**：本机是单 ext4 根（`/dev/vda2` → `/`）。遍历 `/proc/mounts`
-  会把一堆 tmpfs/overlay 的几十兆假盘也列出来，反而淹没真信息。
-- **日志只读尾部**：这些日志可能上百 MB，`open().read()` 会把 worker 内存打满
-  （本机总内存 3.7G）。`read_text_tail` 从文件尾 seek，且丢掉半截首行。
-- **子进程一律带超时**：systemctl 卡住不该把一轮对话拖到 `STREAM_TOTAL_TIMEOUT`。
+CPU utilization uses two samples; memory uses MemAvailable; disks refer to real
+mount points. Log reads are bounded and subprocesses have deadlines. Host log
+locations require BLOG_ROOT; Agent trace statistics use TRACE_DIR independently.
+Missing data remains unknown rather than a fabricated zero.
 """
 
 from __future__ import annotations
@@ -33,16 +15,17 @@ import subprocess
 import time
 from datetime import datetime, timedelta
 
+from config.settings import settings
 from utils.trace_files import iter_trace_files
 from utils.trace_io import load_trace
 
 logger = logging.getLogger(__name__)
 
-# 博客仓库根（日志、trace 都在这下面）。与 settings.trace_dir 的部署约定一致。
-BLOG_ROOT = "/home/ubuntu/Saudade-Blog"
-LOGS_DIR = os.path.join(BLOG_ROOT, "logs")
-TRACES_DIR = os.path.join(LOGS_DIR, "agent", "traces")
-HEALTH_LOG = os.path.join(LOGS_DIR, "health.log")
+# Local host logs require explicit deployment coordinates; traces use Agent storage.
+BLOG_ROOT = settings.blog_root
+LOGS_DIR = os.path.join(BLOG_ROOT, "logs") if BLOG_ROOT else ""
+TRACES_DIR = settings.trace_dir
+HEALTH_LOG = os.path.join(LOGS_DIR, "health.log") if LOGS_DIR else ""
 
 # systemd 服务（本机就是生产机，见 CLAUDE.md §2）。`saudade-device` 属物联网平台
 # 那一套（可选件）：没装就没有这个 unit，列出来只会得到一行"不存在/未运行"的**假故障**
@@ -63,17 +46,12 @@ _TAIL_BYTES = 256 * 1024
 # ── I/O：读本机 ──────────────────────────────────────────────────────
 
 def read_text_tail(path: str, max_bytes: int = _TAIL_BYTES) -> str:
-    """读文件尾部 `max_bytes` 字节并解码。文件不存在/读不动 → 空串（不抛）。
+    """Read a bounded tail; missing or unreadable files return an empty string.
 
-    **丢掉第一行**：从中间 seek 进去多半停在某行中间，留着这半截会污染解析
-    （时间戳解析失败倒还好，计数会把它算成一条"无时间戳的异常行"）。
-
-    **不可 seek 的文件整读**（20260921 实测）：`/proc` 下的伪文件 `st_size` 恒 0，
-    `seek(0, SEEK_END)` 之后 `tell()` 得 0，`seek(0)` 更是直接 `EINVAL`
-    ——首版没兜这一条，`read_meminfo()`/`read_cpu_stat()` 在生产机上恒返回空串，
-    报表里 CPU 与内存永远"读不到"（而磁盘/负载正常，看起来像"采集偶发失败"）。
-    `/proc/meminfo`、`/proc/stat` 都只有几 KB，整读没有代价。
-    """
+    Discard an incomplete first line after seeking. Nonseekable /proc files use
+    a bounded read from the beginning."""
+    if not path:
+        return ""
     try:
         with open(path, "rb") as f:
             try:
@@ -171,9 +149,12 @@ def service_show(unit: str) -> dict:
     return parse_service_show(r.stdout)
 
 
-def log_sizes(root: str = LOGS_DIR) -> list[dict]:
+def log_sizes(root: str | None = None) -> list[dict]:
     """`logs/` 下存活日志（`.log`，不含 archive/ 与 `.gz` 轮转档）的体积，降序。"""
-    out = []
+    out: list[dict[str, object]] = []
+    root = LOGS_DIR if root is None else root
+    if not root:
+        return out
     for dirpath, dirnames, filenames in os.walk(root):
         dirnames[:] = [d for d in dirnames if d not in ("archive",)]
         for fn in filenames:
@@ -189,23 +170,10 @@ def log_sizes(root: str = LOGS_DIR) -> list[dict]:
 
 
 def trace_stats(day_start: datetime | None = None) -> dict:
-    """今日对话 trace 的概况：轮数 / 异常收尾 / 质检拦截 / shadow 权限拒绝。
+    """Count today's readable traces from the configured Agent trace directory.
 
-    **按 mtime 过滤**一次（`day_start` 之后），因为归档、手工拷贝、按天目录的边界
-    都可能把别的日子的文件带进来。`.json` 与 `.gz` 都算（压缩归档也是 trace 语料）。
-
-    ⚠️ **枚举必须走 `utils.trace_files`**（本仓的 trace 自 20260925 起按天分目录，
-    写侧 `utils/trace.py::_TraceRecorder.dump` 的布局契约与它同源）。**别在这里手写
-    `os.listdir` + `endswith(".json")`**——那是 20260925 之前的平铺布局（20261018
-    实测：本函数原来就这么写，`os.listdir` 回的全是目录名 ⇒ 一份都进不了循环 ⇒
-    报表上**天天**是"今日 0 轮 / 异常 0 / 质检拦截 0 / 权限拒绝 0"，而 `readable`
-    还是 `True`。**"缺键绝不编 0" 那一族里最坏的一种：它编的是一份全绿。**
-    `tests/test_reports.py` 的夹具写的正是平铺布局 ⇒ 判据结构上看不见这个。）
-
-    20261019：那两个模块从 `eval/` 搬到 `utils/`（生产代码只许 import 本仓的 wheel
-    包，见 `tests/test_packaging.py` ①），本函数原来的 `_trace_readers()` 兜底
-    （取不到就按"读不到"报）随之删掉——同一只 wheel 里没有"取不到"这一档了。
-    """
+    Filter by mtime and use the shared reader for dated directories and gzip
+    archives. A missing trace directory is unavailable, not a measured zero."""
     day_start = day_start or datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
     cutoff = day_start.timestamp()
     rounds = abnormal = fallback = denied = 0
@@ -388,6 +356,8 @@ def parse_health_log(text: str, cutoff: datetime,
     时间跨度是有意带的：`312 条` 与 `312 条（00:45~01:56）` 是两件完全不同的事
     ——后者是一次 worker 重启风暴，不是"长期不健康"。
     """
+    if not text.strip():
+        return {}
     warn = fail = 0
     first = last = None
     tail: list[str] = []

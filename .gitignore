@@ -48,6 +48,7 @@ data/rag_vectors/
 # ⚠️ 与**父仓**的 logs/ 不是一回事：那边是站点运维日志（rust/agent/traces，
 # logrotate 管轮转）；这份是后台重建任务的临时现场。
 logs/
+data/traces/
 
 # 改代码前的本地备份（如 graph.py 拆分前的全量副本；内容等价于 git 历史，不进库）
 agent/*.bak_*
