@@ -143,10 +143,6 @@
     "c": 57,
     "lines": 260
   },
-  "tests/test_retention_manifest.py::main": {
-    "c": 31,
-    "lines": 167
-  },
   "tests/test_sections.py::test_sections": {
     "c": 44,
     "lines": 359

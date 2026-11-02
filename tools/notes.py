@@ -167,7 +167,7 @@ DOC_TYPE_CN = {
 
 
 _ARTICLE_OFFSET_DESC = "正文范围起点；用返回中的 nextOffset 继续读取"
-_ARTICLE_LIMIT_DESC = "本次最多读取字符数，1..12000，默认 6000"
+_ARTICLE_LIMIT_DESC = "本次最多读取字符数，1..24000，默认 12000；实际可见范围受剩余上下文预算限制"
 _ARTICLE_REVISION_DESC = "继续读取时照抄 contentRevision，防止跨版本拼接"
 
 
@@ -186,7 +186,7 @@ def get_article_detail(
         "只读该文章的某一小节：优先用检索的 section id 并带 revision；支持唯一标题/编号",
     ] = "",
     offset: Annotated[int, _ARTICLE_OFFSET_DESC] = 0,
-    max_chars: Annotated[int, _ARTICLE_LIMIT_DESC] = 6000,
+    max_chars: Annotated[int, _ARTICLE_LIMIT_DESC] = 12000,
     revision: Annotated[str, _ARTICLE_REVISION_DESC] = "",
 ) -> str:
     """读取指定文章、说说、留言或公告的正文证据。

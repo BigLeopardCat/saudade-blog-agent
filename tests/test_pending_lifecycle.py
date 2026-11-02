@@ -279,7 +279,7 @@ def test_preparation_and_chat_cancellation_survive_reconstruction(pending_task):
     assert fact == {"status": "superseded", "scope": "operation", "executed": False,
                     "business_state": "not_observed",
                     "result": ("本次待确认操作已撤销，原确认卡已失效，未执行改动；"
-                               "目标当前状态未查询。")}
+                               "目标当前状态未查询。如仍需执行，必须重新准备确认卡；普通聊天文字不构成批准。")}
     assert any(isinstance(m, HumanMessage) and m.content == "取消这次收藏"
                for m in followup.prompts[0])
     assert not rebuilt.store.load(cfg).has_pending

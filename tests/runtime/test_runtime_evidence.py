@@ -10,6 +10,7 @@ from langgraph.checkpoint.memory import InMemorySaver
 from agent.principal import SOURCE_ASSERTION, Principal
 from agent.products.blog.application import BlogApplication
 from agent.runtime.checkpoint_conversations import CheckpointConversationStore
+from agent.runtime.message_content import text_content
 from agent.runtime.service import AgentRuntime
 from eval.online_judge import runtime_context
 from utils import trace
@@ -47,7 +48,7 @@ def test_actual_bound_schemas_and_caller_are_recorded_without_modifying_model_in
         assert not any("admin_account_actions" in item["function"]["name"] for item in actual)
         assert "tool_contract" not in str(prompts[0])
         trusted = json.JSONDecoder().raw_decode(
-            prompts[0][0].content.split("运行时能力（可信数据）：")[1])[0]
+            text_content(prompts[0][0].content).split("运行时能力（可信数据）：")[1])[0]
         assert trusted["caller"]["role"] == "普通用户" and "identity" not in trusted
         assert trusted["permissions"] == context["permissions"]
     finally:

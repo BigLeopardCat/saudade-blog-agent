@@ -1,4 +1,4 @@
-"""Article-body evidence collected by native tool sessions."""
+"""Link provenance and visible body ranges; not a semantic claim validator."""
 
 from __future__ import annotations
 
@@ -26,6 +26,24 @@ def body_text(data: dict | None) -> str:
     return str(data.get("sectionText") or data.get("noteContent") or data.get("content") or "")
 
 
+def _read_range(data, article_id):
+    source = data.get("source") if isinstance(data.get("source"), dict) else {}
+    start, end = source.get("offset"), source.get("end")
+    body = body_text(data)
+    located = (source.get("type") == "note" and type(source.get("id")) is int
+               and source["id"] == article_id
+               and type(start) is int and type(end) is int and 0 <= start <= end
+               and end - start == len(body))
+    total = data.get("totalChars")
+    total_known = located and type(total) is int and total >= end
+    return {"revision": source.get("revision") if located else None,
+            "section_id": source.get("section_id") if located else None,
+            "start": start if located else None, "end": end if located else None,
+            "visible_chars": len(body),
+            "selected_total_chars": total if total_known else None,
+            "selected_range_reaches_end": end == total if total_known else None}
+
+
 def _article_links(text):
     urls = [*re.findall(r"\]\((/article/\d+[^)]*)\)", text),
             *re.findall(r"https?://[^\s)<>]+", text)]
@@ -46,11 +64,13 @@ class ArticleEvidence:
         self.empty = False
         self.failed = False
         self.documents: dict[int, str] = {}
+        self.read_ranges: dict[int, list[dict]] = {}
         self.candidates: dict[int, str] = {}
         self.references: set[tuple[str, int]] = set()
 
     def snapshot(self):
-        return {**vars(self), "references": sorted(self.references)}
+        return {**vars(self), "references": sorted(self.references), "read_ranges": {
+            ident: [dict(row) for row in rows] for ident, rows in self.read_ranges.items()}}
 
     @classmethod
     def restore(cls, state):
@@ -59,6 +79,8 @@ class ArticleEvidence:
             setattr(evidence, key, bool(state[key]))
         for key in ("documents", "candidates"):
             setattr(evidence, key, {int(ident): title for ident, title in state[key].items()})
+        evidence.read_ranges = {int(ident): [dict(row) for row in rows] for ident, rows
+                                in state.get("read_ranges", {}).items()}
         evidence.references = {tuple(row) for row in state["references"]}
         return evidence
 
@@ -82,11 +104,30 @@ class ArticleEvidence:
             name == "get_article_detail" and args.get("doc_type", "note") == "note" and kind == "ok"
         ):
             data = payload(value)
-            if body_text(data).strip() and type(args.get("article_id")) is int:
-                self.documents[args["article_id"]] = str((data or {}).get("noteTitle") or "文章")
+            ident = args.get("article_id")
+            if data and body_text(data).strip() and type(ident) is int and ident > 0:
+                self.documents[ident] = str(data.get("noteTitle") or "文章")
+                ranges = self.read_ranges.setdefault(ident, [])
+                observed = _read_range(data, ident)
+                if observed not in ranges:
+                    ranges.append(observed)
                 self.references.update(_article_links(body_text(data)))
 
+    def provenance(self, site):
+        """Distinguish known links from read content without claiming answer support."""
+        origin = urlsplit(site).netloc.casefold()
+        return {
+            "candidate_articles": [{"id": ident, "title": title}
+                                   for ident, title in self.candidates.items()],
+            "body_reads": [{"id": ident, "title": title,
+                            "ranges": [dict(row) for row in self.read_ranges.get(ident, [])]}
+                           for ident, title in self.documents.items()],
+            "mentioned_article_ids": sorted({ident for host, ident in self.references
+                                              if not host or host == origin}),
+        }
+
     def issue(self, reply: str, site: str) -> str | None:
+        """Validate references only; content grounding requires semantic evaluation."""
         if self.found and not self.documents and not self.candidates:
             return "article_body_missing"
         if not self.searched and not self.documents and not self.candidates:

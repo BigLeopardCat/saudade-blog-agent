@@ -8,9 +8,6 @@ DOMAIN_DESCRIPTIONS = {
     "admin_automations": "Administrator-owned persistent reminders and read-only background tasks. "
                          "Create at a time, after a delay, or on cron; inspect runs and prepare "
                          "pause/resume/cancel. No unattended business writes or browser actions.",
-    "task_planning": "Agent-private execution checklist for multi-step work. "
-                     "Not user to-dos or reminders; those use admin_work_queue. "
-                     "Skip simple requests and chat. No business effects.",
     # Discovery identifies a domain; argument and execution contracts live on its tools.
     "public_activity": "分页读取公开公告、河灯留言和说说；含公开留名，不含发表账号或待审记录。",
     "utilities": "查询当前时间或城市天气估算。",

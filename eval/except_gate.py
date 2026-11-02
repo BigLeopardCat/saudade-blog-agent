@@ -55,6 +55,10 @@ import sys
 import tomllib
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT))
+
+from eval.source_files import python_sources  # noqa: E402
+
 BASELINE = ROOT / "eval" / "except_baseline.json"
 
 # 本闸扫的规则族。**只有一条**：盲捕获。加第二条要先想清楚它是不是该进 `lint_gate` 的
@@ -224,8 +228,9 @@ def main() -> int:
                   f"（下面那句「已经清零，可以销账」还会把它们报成好消息）。先 `--update`。")
             return 3
 
+    sources = [path.relative_to(ROOT).as_posix() for path in python_sources(ROOT)]
     r = subprocess.run(prog + ["check", "--no-cache", "--output-format=concise",
-                               "--select", ",".join(SELECT), "."],
+                               "--select", ",".join(SELECT), *sources],
                        cwd=ROOT, capture_output=True, text=True)
     out = (r.stdout or "") + (r.stderr or "")
     try:

@@ -101,7 +101,8 @@ class Settings(BaseSettings):
     agent_model_calls: int = Field(default=12, ge=2)
     agent_tool_calls: int = Field(default=16, gt=0)
     agent_reasoning_effort: Literal["none", "low", "high", "max"] = "none"
-    agent_output_tokens: int = Field(default=1536, ge=128)
+    agent_output_tokens: int = Field(default=4096, ge=128)
+    agent_tool_result_tokens: int = Field(default=12000, ge=128)
     agent_summary_output_tokens: int = Field(default=4096, ge=128)
     agent_compaction_trigger: float = Field(default=0.8, gt=0, lt=1)
     agent_compaction_target: float = Field(default=0.4, gt=0, lt=1)

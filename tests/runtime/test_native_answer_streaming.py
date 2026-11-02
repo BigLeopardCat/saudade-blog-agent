@@ -157,12 +157,12 @@ def test_repaired_or_truncated_tool_arguments_are_never_executed(arguments, meta
     FIXTURE_CALLS.clear()
     chunk = AIMessageChunk(content="", response_metadata=metadata, tool_call_chunks=[
         {"name": "fixture_lookup", "args": arguments, "id": "partial", "index": 0}])
-    model = _StreamingModel([[chunk]])
+    model = _StreamingModel([[chunk], [chunk.model_copy()]])
     result = ToolSession(model, {}, {"fixture_lookup": fixture_lookup}, {}).run([
         HumanMessage(content="read")])
     assert FIXTURE_CALLS == []
     assert "未执行" in result.reply
-    assert len(model.calls) == 1
+    assert len(model.calls) == 2
 
 
 def test_tool_budget_stop_is_visible_after_a_streamed_preface():

@@ -5,7 +5,9 @@ import json
 from langchain.agents.middleware import AgentMiddleware, hook_config
 
 from agent.runtime.execution_state import restore
+from agent.runtime.memory import observation
 from agent.runtime.turns import check_cancelled
+from tools.result import ok
 
 
 class ApprovalResumeMiddleware(AgentMiddleware):
@@ -44,3 +46,13 @@ def deferred_results(answered, unverified):
         "status": "error", "artifact": None}) for message in deferred]
     answered.update({message.tool_call_id: message for message in resolved})
     return [], resolved
+
+
+def feedback_observations(messages, facts, awaiting_call):
+    """Place the committed revocation fact after the user's latest feedback."""
+    observed = facts.get("operation_feedback")
+    if not observed:
+        return []
+    name = next((m.name for m in messages if m.tool_call_id == awaiting_call), "approval_feedback")
+    return observation({"name": name, "args": {}, "id": "feedback_" + facts["jti"]},
+                       ok(json.dumps(observed, ensure_ascii=False)))

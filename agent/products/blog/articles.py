@@ -93,6 +93,8 @@ class ArticleMiddleware(AgentMiddleware):
             return result
         reply = text_content(response.content).strip()
         evidence = self.evidence
+        if evidence.searched or evidence.documents or evidence.candidates:
+            record("native", "article_evidence", provenance=evidence.provenance(SITE_BASE))
         issue = evidence.issue(reply, SITE_BASE)
         if issue:
             rejected = evidence.invalid_references(reply, SITE_BASE)

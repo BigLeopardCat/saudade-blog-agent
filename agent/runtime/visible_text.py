@@ -4,11 +4,16 @@ import json
 import re
 
 _TAGS = ("<function_call", "<function_calls", "<tool_call", "<tool_calls", "<tool_use",
-         "<think", "<analysis", "<｜dsml｜")
+         "<think", "<analysis", "<｜dsml｜", "<｜｜dsml｜｜", "<|dsml|", "<||dsml||")
 _CONTROL = re.compile(
-    r"^(?:<(?:function_calls?|tool_calls?|tool_use|think|analysis)(?:\s|>|=)|<｜DSML｜)", re.I)
+    r"(?:<(?:function_calls?|tool_calls?|tool_use|think|analysis)(?:\s|>|=)|"
+    r"<[｜|]{1,2}DSML[｜|]{1,2})", re.I)
 _JSON_CALL = re.compile(r'"(?:function_call|tool_calls|arguments)"\s*:')
 _FENCE = re.compile(r"^(`{3,}|~{3,})")
+
+
+def _partial_tag(value):
+    return any(tag.startswith(value.lower()) for tag in _TAGS)
 
 
 def _invocation(value):
@@ -41,6 +46,18 @@ class VisibleText:
             if not self.line:
                 end = self.pending.find("\n") + 1
                 count = end or len(self.pending)
+                if not self.fence:
+                    segment = self.pending[:count]
+                    marker = _CONTROL.search(segment)
+                    if marker:
+                        output.append(segment[:marker.start()])
+                        self.blocked = True
+                        break
+                    opening = segment.rfind("<")
+                    if opening >= 0 and _partial_tag(segment[opening:]):
+                        output.append(segment[:opening])
+                        self.pending = self.pending[opening:]
+                        break
                 output.append(self.pending[:count])
                 self.pending = self.pending[count:]
                 self.line = bool(end)
@@ -62,7 +79,7 @@ class VisibleText:
             if not self.fence:
                 if head.startswith("[") and not head[1:].strip():
                     break
-                if any(tag.startswith(head.lower()) for tag in _TAGS):
+                if _partial_tag(head):
                     break
                 if _CONTROL.match(head):
                     self.blocked = True
@@ -86,7 +103,7 @@ class VisibleText:
 
     def finish(self):
         head = self.pending.lstrip().lower()
-        if not self.fence and (head and any(tag.startswith(head) for tag in _TAGS)
+        if not self.fence and (head and _partial_tag(head)
                                or head.startswith(("{", "[")) and _JSON_CALL.search(head)):
             self.blocked = True
         text, self.pending = ("" if self.blocked else self.pending), ""

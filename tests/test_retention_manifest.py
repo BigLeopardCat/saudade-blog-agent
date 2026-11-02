@@ -1,18 +1,8 @@
-"""产物保留登记表（`eval/retention_manifest.py`）单测。
+"""Retention policies and inventory behavior use isolated artifact trees.
 
-离线、秒级、零网络、零生产目录改动（真树只读）。
-
-两件事要一起钉死，缺一半就没意义：
-
-  ① **表自己得是自洽的**：managed 有执行者、frozen/open 写了为什么、owner_ref 真的存在、
-     exclude 有对应 frozen 登记项。这些由 `check_classes()` 回答；
-  ② **盘上得真的都被登记了**：`audit()` 在真树上报「未登记 0 条」。**这一条是本套件的
-     存在理由**——登记表的价值全在"没有例外"上，漏一个目录就等于那类产物又回到
-     "没人知道归谁"的状态（本仓同族问题出过四次：R2 `--keep 3`、logrotate `rotate 14`、
-     `logs/archive/`、`eval/report/runs/`）。
-
-第 ① 项还要**反向**验一次（`_bad_class`）：只证明"真表干净"不能说明检查有效，
-得证明"坏表会被抓住"——否则那些校验就只是装饰（同族教训：装饰性的东西看起来都对）。
+The operational command ``python eval/retention_manifest.py --json`` audits real
+storage. Offline tests validate the same ownership and unknown-artifact checks
+against temporary roots so a developer's report history cannot change CI results.
 """
 
 
@@ -220,49 +210,36 @@ def main() -> int:
         check("④ 目录不存在 ⇒ unregistered 空表不抛",
               rm.unregistered(os.path.join(tmp, "nope")) == [])
 
-        # ── ⑤ 真树审计：盘上不许有"没人认领"的条目 ───────────────────────
-        # 两个根里 eval/report 在本仓（CI 上可能是空目录 ⇒ 平凡通过），logs 是本机生产路径
-        # （别的机器上没有 ⇒ **如实跳过**，不假装验过）
-        for root in (rm.DEFAULT_REPORT_ROOT, rm.DEFAULT_LOGS_ROOT):
-            if not os.path.isdir(root):
-                print(f"  ⏭  {root} 不存在（非本机生产环境）⇒ 跳过该根的真实盘点")
-                continue
-            un = rm.unregistered(root)
-            check(f"⑤ 真树零未登记：{root}",
-                  un == [], f"{len(un)} 条，例如 {un[:3]}")
-        if not os.path.isdir(rm.DEFAULT_LOGS_ROOT):
-            # 非生产机上，审计逻辑仍要有实证——用夹具树再走一遍（上面 ③④ 已覆盖判据）。
-            # 20260928 修（这一段此前**在任何地方都没绿过**）：真树那一支只在生产机上走
-            # （`logs/` 是绝对路径），而这里的期望值本身是错的、还叠了一个更根本的错：
-            #   · `stray.log` 被 `service-logs` 的 `*.log*` 认领——它**不是**"没人认领"的例子；
-            #   · `unregistered(f)` 用的是默认 CLASSES，而那些类的 root 是**生产的绝对路径**
-            #     ⇒ 整棵临时树一条都比不中，三条全报未登记（症状就是"期望 1 条、实得 3 条"）。
-            # 现在拆两步，都用模块的公开 API：① `matches`（它的 docstring 就写着刻意不看
-            # root、"配合 `--root` 覆盖到临时目录"，正是为这种场景留的）逐条问"这条归谁"；
-            # ② 把 logs 那批类的 root 改指到夹具上再走一遍 `unregistered`，端到端确认
-            # "没主人"的那条真被报出来。
-            f = os.path.join(tmp, "logs")
-            os.makedirs(os.path.join(f, "agent", "traces", "20260925"))
-            open(os.path.join(f, "rust.log"), "w").write("x")
-            open(os.path.join(f, "agent", "traces", "20260925", "t.json"), "w").write("{}")
-            open(os.path.join(f, "stray.bin"), "w").write("x")
-            _logs = [c for c in rm.CLASSES if c.get("root") == rm.DEFAULT_LOGS_ROOT]
+        # Inventory both root types using the same audit API as operations.
+        fixture_logs = os.path.join(tmp, "logs")
+        fixture_reports = os.path.join(tmp, "reports")
+        os.makedirs(os.path.join(fixture_logs, "agent", "traces", "20260925"))
+        os.makedirs(fixture_reports)
+        Path(fixture_logs, "rust.log").write_text("x")
+        Path(fixture_logs, "agent", "traces", "20260925", "t.json").write_text("{}")
+        Path(fixture_logs, "stray.bin").write_text("x")
+        Path(fixture_reports, "unknown.bin").write_text("x")
+        roots = {rm.DEFAULT_LOGS_ROOT: fixture_logs,
+                 rm.DEFAULT_REPORT_ROOT: fixture_reports}
+        classes = [dict(c, root=roots.get(c.get("root"), c.get("root"))) for c in rm.CLASSES]
+        logs = [c for c in classes if c.get("root") == fixture_logs]
 
-            def _claims(rel: str) -> list[str]:
-                return [c["key"] for c in _logs if rm.matches(rel, c)]
+        def claims(rel: str) -> list[str]:
+            return [c["key"] for c in logs if rm.matches(rel, c)]
 
-            check("⑤ 夹具树：根下的 .log 归 service-logs（日志那三处 glob 真在管）",
-                  _claims("rust.log") == ["service-logs"], str(_claims("rust.log")))
-            check("⑤ 夹具树：trace 归 traces（不是被哪个宽 glob 顺手接走的）",
-                  _claims("agent/traces/20260925/t.json") == ["traces"],
-                  str(_claims("agent/traces/20260925/t.json")))
-            check("⑤ 夹具树：没有类认领的后缀，谁都不认（这正是「缺口」的形状）",
-                  _claims("stray.bin") == [], str(_claims("stray.bin")))
-            _reroot = [dict(c, root=f) if c.get("root") == rm.DEFAULT_LOGS_ROOT else c
-                       for c in rm.CLASSES]
-            check("⑤ 夹具树：端到端只报出那一条没主人的（root 覆盖到临时目录）",
-                  rm.unregistered(f, _reroot) == ["stray.bin"],
-                  str(rm.unregistered(f, _reroot)))
+        check("⑤ 日志夹具由 service-logs 认领", claims("rust.log") == ["service-logs"])
+        check("⑤ trace夹具由 traces 认领",
+              claims("agent/traces/20260925/t.json") == ["traces"])
+        check("⑤ 未知产物没有被宽泛规则认领", claims("stray.bin") == [])
+        inventory = rm.audit([fixture_logs, fixture_reports], classes)
+        check("⑤ 两种根的未登记产物均被完整报告",
+              inventory["unregistered"] == {fixture_logs: ["stray.bin"],
+                                             fixture_reports: ["unknown.bin"]},
+              str(inventory["unregistered"]))
+        check("⑤ 审计汇总与实际扫描条目一致",
+              inventory["total_unregistered"] == 2
+              and inventory["scanned"] == {fixture_logs: 3, fixture_reports: 1},
+              str(inventory))
 
         # ── ⑥ PG 那一路（20261019 批 C）───────────────────────────────────
         _pg_checks()
@@ -285,6 +262,20 @@ def test_retention_manifest():
 
     assert not FAILS, (
         f"{len(FAILS)} 条未通过：" + "；".join(FAILS))
+
+
+def test_explicit_inventory_cli_reports_unknown_files(tmp_path, capsys):
+    import json
+
+    logs, reports = tmp_path / "logs", tmp_path / "reports"
+    logs.mkdir()
+    reports.mkdir()
+    (logs / "unowned.bin").write_bytes(b"test")
+    status = rm.main(["--logs-root", str(logs), "--report-root", str(reports), "--json"])
+    result = json.loads(capsys.readouterr().out)
+    assert status == 1
+    assert result["unregistered"] == {str(logs): ["unowned.bin"], str(reports): []}
+    assert result["total_unregistered"] == 1 and result["policy_errors"] == []
 
 
 if __name__ == "__main__":

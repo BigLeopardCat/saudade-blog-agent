@@ -38,6 +38,9 @@ validated_operation_facts描述已匹配工具调用或框架审批反馈的操�
 操作状态以最新有效回执为准；历史待确认不能覆盖后续撤销，也不能要求用户再处理已失效的卡片。
 reported_browser_state_not_authority 是浏览器上报的当轮页面与显示状态，可据此回答当前页面、
 主题和特效；它不证明文章正文、账号权限或新操作已完成。缺失时仍保持未知。
+article_provenance区分检索候选、实际可见的正文范围和正文提及的其他文章链接。
+候选标题与链接仅支持发现和导航，不支持正文结论；提及链接不代表读过该链接的正文。
+正文结论须由实际工具观察支持；到达某小节末尾不等于读完全文，不合并不同版本推断全文已读。
 用户明确要求的变更可以按将/计划表述，无需已有执行回执；这不等于已完成或站点既有规则。
 
 检查：
@@ -92,7 +95,9 @@ def runtime_context(events):
     contracts = [event["schema"]["function"] for event in native
                  if event.get("event") == "tool_contract"]
     product = [event for event in native if event.get("event") == "product_context"]
+    articles = [event for event in native if event.get("event") == "article_evidence"]
     return {
+        "article_provenance": articles[-1].get("provenance") if articles else None,
         "product_facts": ({key: value for event in product
                            for key, value in (event.get("facts") or {}).items()}
                           if product else None),
