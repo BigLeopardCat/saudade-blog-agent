@@ -139,7 +139,6 @@ def test_sse_close_keeps_admission_and_trace_until_real_producer_exit(monkeypatc
     monkeypatch.setattr(server, "_resolve_principal",
                         lambda request, uid: Principal(7, "user", SOURCE_ASSERTION))
     monkeypatch.setattr(app.state, "chat_slots", asyncio.BoundedSemaphore(1))
-    monkeypatch.setattr(dependencies, "STREAM_QUEUE_WAIT", .01)
     monkeypatch.setattr(server, "start_trace", lambda *args, **kwargs: None)
     monkeypatch.setattr(server, "finish_trace", lambda *args: finalized.append(args))
 
@@ -192,3 +191,21 @@ def test_model_factory_uses_remaining_sdk_timeout_without_transport_retries(monk
 
 
 pytestmark = pytest.mark.usefixtures("service_workers")
+
+
+def test_burst_admission_rejects_excess_without_accumulating_waiters(monkeypatch):
+    from types import SimpleNamespace
+
+    async def scenario():
+        monkeypatch.setattr(app.state, 'workers', SimpleNamespace(closing=False))
+        slots = asyncio.BoundedSemaphore(4)
+        monkeypatch.setattr(app.state, 'chat_slots', slots)
+        results = await asyncio.wait_for(asyncio.gather(*(
+            dependencies.try_acquire_slot(service_request()) for _ in range(100))), 0.5)
+        assert sum(results) == 4 and slots.locked()
+        for _ in range(4):
+            dependencies.release_slot(service_request())
+        assert await dependencies.try_acquire_slot(service_request())
+        dependencies.release_slot(service_request())
+
+    asyncio.run(scenario())

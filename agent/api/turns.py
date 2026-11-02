@@ -3,6 +3,7 @@
 import asyncio
 import logging
 import threading
+import time
 
 from langchain_core.messages import AIMessageChunk
 
@@ -17,7 +18,33 @@ logger = logging.getLogger(__name__)
 
 
 class NativeCancelled:
-    """Worker cancellation sentinel; it must not become a successful END frame."""
+    """Worker cancellation result; it must not become a successful END frame."""
+
+
+async def next_stream_item(queue, producer, *, timeout=2.0):
+    """Drain ordered data before observing the producer's separate terminal result."""
+    waiting = asyncio.create_task(queue.get())
+    try:
+        done, _ = await asyncio.wait((waiting, producer), timeout=timeout,
+                                     return_when=asyncio.FIRST_COMPLETED)
+        if waiting.done():
+            return waiting.result()
+        if not done:
+            raise TimeoutError()
+        if not queue.empty():
+            return await waiting
+        if producer.cancelled():
+            return NativeCancelled()
+        error = producer.exception()
+        if error is not None:
+            return NativeCancelled() if isinstance(error, AgentCancelled) else error
+        result = producer.result()
+        return (result if isinstance(result, (NativeCancelled, Exception)) else
+                RuntimeError("Stream producer ended without a terminal frame"))
+    finally:
+        if not waiting.done():
+            waiting.cancel()
+        await asyncio.gather(waiting, return_exceptions=True)
 
 
 def runtime_events(
@@ -120,8 +147,8 @@ def stream_to_queue(
     """Run native events in the worker and enqueue protocol-safe values.
 
     Queue insertion is the only async boundary here. Runtime exceptions are
-    delivered before the terminal sentinel, so the HTTP adapter cannot emit a
-    successful end frame after an error or cancellation.
+    delivered via the worker Future, so cancellation cannot be blocked behind
+    buffered output. Only a normal stream puts the terminal sentinel.
     """
     visible_parts = []
 
@@ -137,14 +164,26 @@ def stream_to_queue(
             pending.close()
             raise AgentCancelled() from None
         try:
-            future.result(timeout=5)
+            deadline = time.monotonic() + 5
+            while True:
+                if stop_event is not None and stop_event.is_set():
+                    raise AgentCancelled()
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    record("producer", "backpressure_timeout", buffer_limit=queue.maxsize)
+                    raise AgentCancelled()
+                try:
+                    future.result(timeout=min(0.05, remaining))
+                    break
+                except TimeoutError:
+                    continue
             if isinstance(value, AIMessageChunk):
                 visible_parts.append(str(value.content or ""))
             elif value == "__TEXT_RESET__:{}":
                 visible_parts.clear()
-        except TimeoutError:
-            future.cancel()
-            raise AgentCancelled() from None
+        finally:
+            if not future.done():
+                future.cancel()
 
     try:
         events = runtime_events(
@@ -167,14 +206,9 @@ def stream_to_queue(
         put(None)
     except AgentCancelled:
         logger.info("[stream] native runtime cancelled")
-        if not loop.is_closed():
-            loop.call_soon_threadsafe(queue.put_nowait, NativeCancelled())
+        return NativeCancelled()
     except Exception as exc:
         logger.exception("[stream] native runtime producer failed: %s", exc)
-        put(exc)
-        try:
-            put(None)
-        except (AgentCancelled, RuntimeError):
-            logger.info("[stream] producer sentinel consumer already closed")
+        return exc
     finally:
         record("producer", "stream_end", reply="".join(visible_parts))

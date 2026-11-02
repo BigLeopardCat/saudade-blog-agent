@@ -11,7 +11,7 @@ import httpx
 import pytest
 from langchain_core.messages import AIMessageChunk
 
-from agent.api import dependencies, middleware
+from agent.api import middleware
 from agent.api.routes import chat
 from agent.main import app, create_app
 from agent.runtime.results import TurnResult
@@ -107,7 +107,6 @@ def test_concurrent_applications_use_their_own_runtime_and_admission(identity):
 
 
 def test_saturated_application_does_not_consume_another_applications_permit(identity, monkeypatch):
-    monkeypatch.setattr(dependencies, "STREAM_QUEUE_WAIT", 0.01)
 
     async def run():
         first, second = create_app(), create_app()

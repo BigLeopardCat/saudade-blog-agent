@@ -118,16 +118,30 @@ def test_golden_thread():
     _rg = (ROOT / "eval" / "run_golden.py").read_text(encoding="utf-8")
     _tree = ast.parse(_rg)
     _check_turn_runner_coordinates()
-    _ro = _fn(_tree, "run_one")
-    _submits = [n for n in ast.walk(_ro or ast.Module(body=[], type_ignores=[]))
-                if isinstance(n, ast.Call) and _call_name(n.func) == "submit"]
-    _sent = [ast.unparse(a) for n in _submits for a in n.args
-             if "_run_agent_stream_to_queue" in ast.unparse(a)]
-    check("找得到把活儿交给 `_run_agent_stream_to_queue` 的那次 `submit`（前提自己摆）",
-          len(_submits) == 1 and len(_sent) == 1, "；".join(_sent) or "（没找到）")
-    _stream_pos = [ast.unparse(a) for n in _submits for a in n.args]
-    check("传给图的线程是**形参** `thread`（位置：messages 之后、queue 之前），不是字面",
-          len(_stream_pos) >= 6 and _stream_pos[4] == "thread", "；".join(_stream_pos))
+    from contextvars import ContextVar
+
+    import run_golden as rg
+
+    from agent.runtime.results import TurnResult
+
+    marker = ContextVar("coordinate_test", default=None)
+    received = []
+
+    class Runtime:
+        def stream_events(self, state, config):
+            received.append((config["configurable"]["thread_id"], marker.get()))
+            yield TurnResult("fixture")
+
+    token = marker.set("copied_context")
+    try:
+        with patch.object(rg, "ensure_agent", return_value=Runtime()):
+            result = rg.run_one(rg.ChatRequest(message="fixture", user_id=7),
+                                thread="coordinate_fixture")
+    finally:
+        marker.reset(token)
+    check("生产者收到会话坐标与调用上下文", received == [
+        ("coordinate_fixture", "copied_context")], repr(received))
+    check("生产终态正常被评测接收", result["text"] == "fixture" and not result["error"])
     check("文件里**不再**出现 `\"golden_thread\"` 这个字面常量（常量退场 = 本件的落点）",
           not [n for n in ast.walk(_tree)
                if isinstance(n, ast.Constant) and n.value == gt.LEGACY])
