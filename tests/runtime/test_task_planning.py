@@ -53,6 +53,8 @@ def test_standard_todo_state_survives_approval_reconstruction_and_resets_for_new
     assert SYSTEM_PROMPT not in str(first_model.review_prompts)
     grant = confirm.verify(prepared.execution["pending_confirm"]["token"], 7, 42)
     next_model = Model(AIMessage(content="", tool_calls=[call("inspect_plan", "inspect")]),
+                       AIMessage(content="", tool_calls=[call("write_todos", "done", todos=[{
+                           "content": PLAN[0]["content"], "status": "completed"}])]),
                        AIMessage(content="已核对收藏回执。"))
     run(selected(next_model), grant=grant)
     assert seen == [PLAN] and len(state["writes"]) == 1

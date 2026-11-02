@@ -7,8 +7,8 @@ import re
 from rag.corpus import content_revision
 from rag.sections import outline, render
 
-DEFAULT_READ_CHARS = 6000
-MAX_READ_CHARS = 12000
+DEFAULT_READ_CHARS = 12000
+MAX_READ_CHARS = 24000
 
 
 class RevisionChanged(ValueError):

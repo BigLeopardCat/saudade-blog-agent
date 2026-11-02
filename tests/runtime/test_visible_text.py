@@ -15,9 +15,11 @@ CALL = ('<function_call>\n'
 DSML = ('<｜DSML｜ calls>\n<｜DSML｜ invoke name="search_articles">\n'
         '<｜DSML｜ parameter name="query">private-canary</｜DSML｜ parameter>\n'
         '</｜DSML｜ invoke>\n</｜DSML｜ calls>')
+DSML_PROVIDER = DSML.replace('｜', '｜｜')
 
 
-@pytest.mark.parametrize("text", [DSML, "前言\n" + DSML, CALL, '前言\n' + CALL,
+@pytest.mark.parametrize("text", [DSML, DSML_PROVIDER, "前言" + DSML_PROVIDER,
+    "前言" + CALL, "前言\n" + DSML, CALL, '前言\n' + CALL,
     '<tool_call name="search">private-canary',
     '<think>private-canary</think>', '<analysis>private-canary</analysis>',
     '{"name":"search_articles","arguments":{"query":"private-canary"}}',
@@ -58,7 +60,7 @@ class Model:
             yield AIMessageChunk(content=character)
 
 
-@pytest.mark.parametrize("content", [CALL, DSML])
+@pytest.mark.parametrize("content", [CALL, DSML, "前言" + DSML_PROVIDER])
 def test_actual_framework_stream_and_canonical_reply_both_exclude_raw_invocation(content):
     model = Model()
     model.content = content

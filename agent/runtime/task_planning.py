@@ -1,11 +1,19 @@
 """Optional task tracking using LangChain's standard checkpointed todo middleware."""
 
+import json
+
 from langchain.agents.middleware import TodoListMiddleware
+from langchain_core.messages import HumanMessage
+
+from agent.runtime.results import TurnResult
+from utils.trace import record
 
 SYSTEM_PROMPT = (
     "Use write_todos as private working memory for multi-step work or work after approval. "
     "Track the requested outcomes, remaining work and relevant evidence IDs in short items. "
     "Simple requests and chat need no list. A prepared approval is still pending work; "
+    "For dependent outcomes, record their requested order before preparing any approval, "
+    "then work on the first unfinished item. Never skip an earlier action to prepare a later one. "
     "completed items require delivered answers or verified results, not intentions. "
     "Before waiting for a decision, deliver any requested analysis or summary already supported "
     "by reads. Keep later actions pending and continue them after the decision. "
@@ -17,6 +25,7 @@ SYSTEM_PROMPT = (
 TOOL_DESCRIPTION = (
     "Replace only the agent's private execution checklist for a multi-deliverable task. "
     "This does not create or change user to-dos, reminders or other business records. "
+    "List dependent outcomes in the user's requested order and work on the first unfinished item. "
     "Include evidence IDs in content when relevant. Status: pending, in_progress, completed. "
     "Approval preparation does not complete a write; list updates do not deliver the answer."
 )
@@ -27,7 +36,7 @@ class TaskPlanningMiddleware(TodoListMiddleware):
         super().__init__(system_prompt=SYSTEM_PROMPT, tool_description=TOOL_DESCRIPTION)
         self.session = session
         self.started = False
-        # The ordinary discovery domain supplies the standard tool on demand.
+        # The application catalog owns exposing the standard tool.
         self.tools = []
 
     def before_model(self, state, runtime):
@@ -37,13 +46,13 @@ class TaskPlanningMiddleware(TodoListMiddleware):
         return None
 
     def wrap_model_call(self, request, handler):
-        if ("task_planning" not in self.session.state["loaded"]
+        if ("write_todos" not in self.session.tools
                 or self.session.state["proposal"] is not None):
             return handler(request)
         return super().wrap_model_call(request, handler)
 
     async def awrap_model_call(self, request, handler):
-        if ("task_planning" not in self.session.state["loaded"]
+        if ("write_todos" not in self.session.tools
                 or self.session.state["proposal"] is not None):
             return await handler(request)
         return await super().awrap_model_call(request, handler)
@@ -52,3 +61,29 @@ class TaskPlanningMiddleware(TodoListMiddleware):
 def tools():
     middleware = TodoListMiddleware(system_prompt=SYSTEM_PROMPT, tool_description=TOOL_DESCRIPTION)
     return {tool.name: tool for tool in middleware.tools}
+
+
+def review(session, state, response, outcome):
+    """Recheck explicitly unfinished work once; a model checklist is not proof."""
+    if (outcome is None or response.tool_calls or (outcome.execution or {}).get("blocked")
+            or not any(isinstance(item, TaskPlanningMiddleware) for item in session.middleware)):
+        return None
+    pending = [item for item in state.get("todos", ()) if item["status"] != "completed"]
+    if not pending:
+        return None
+    record("native", "completion_review", pending=pending,
+           attempt=session.state["completion_checks"])
+    if session.state["completion_checks"] >= 1:
+        session.outcome = TurnResult(outcome.reply + "\n尚未完成：" +
+            "；".join(item["content"] for item in pending), {
+                **(outcome.execution or {}), "unfinished_work": pending,
+                "blocked": [{"reason": "unfinished_work"}]})
+        return None
+    session.state["completion_checks"] += 1
+    return [HumanMessage(content="Runtime completion review: your execution checklist still has "
+        "unfinished work: " + json.dumps(pending, ensure_ascii=False) +
+        ". Continue feasible work on the original task. If delivered, update the checklist using "
+        "the actual evidence. If blocked, cancelled or clarification is needed, explain this and "
+        "leave unfinished items pending. A checklist update is not proof of a business change; "
+        "only verified receipts authorize completion. Do not replay completed writes.",
+        additional_kwargs={"runtime_feedback": "completion_review"})]

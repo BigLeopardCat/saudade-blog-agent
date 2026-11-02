@@ -8,6 +8,8 @@ together. Frozen classes are intentionally preserved. PostgreSQL stores use
 DSN/table metadata instead of filesystem patterns.
 """
 
+import argparse
+import json
 import os
 import re
 
@@ -567,12 +569,23 @@ def check_classes(classes: list[dict] | None = None) -> list[str]:
     return bad
 
 
-if __name__ == "__main__":
-    import sys
-    probs = check_classes()
+def main(argv=None):
+    """Explicit, read-only operational inventory; never deletes artifacts."""
+    parser = argparse.ArgumentParser(description="Audit artifact ownership and retention policies")
+    parser.add_argument("--logs-root", default=DEFAULT_LOGS_ROOT)
+    parser.add_argument("--report-root", default=DEFAULT_REPORT_ROOT)
+    parser.add_argument("--json", action="store_true",
+                        help="Print the complete machine-readable audit")
+    args = parser.parse_args(argv)
+    roots = {DEFAULT_LOGS_ROOT: args.logs_root, DEFAULT_REPORT_ROOT: args.report_root}
+    classes = [dict(c, root=roots.get(c.get("root"), c.get("root"))) for c in CLASSES]
+    probs = check_classes(classes)
+    a = audit(list(roots.values()), classes)
+    if args.json:
+        print(json.dumps({**a, "policy_errors": probs}, ensure_ascii=False, indent=2))
+        return 1 if (probs or a["total_unregistered"]) else 0
     for p in probs:
         print(f"✗ 登记表自检：{p}")
-    a = audit()
     for r, u in a["unregistered"].items():
         if not os.path.isdir(r):
             print(f"— {r}：不存在（跳过）")
@@ -581,4 +594,8 @@ if __name__ == "__main__":
         for rel in u:
             print(f"    ✗ 未登记：{rel}")
     print(f"未登记合计 {a['total_unregistered']} 条；登记表自检问题 {len(probs)} 条")
-    sys.exit(1 if (probs or a["total_unregistered"]) else 0)
+    return 1 if (probs or a["total_unregistered"]) else 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

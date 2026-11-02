@@ -13,7 +13,13 @@ from langgraph.graph.message import REMOVE_ALL_MESSAGES
 from langgraph.types import Command
 
 from agent.llm_usage import usage_fields
-from agent.runtime import approval_messages, memory, trace_context
+from agent.runtime import (
+    approval_messages,
+    memory,
+    response_validation,
+    task_planning,
+    trace_context,
+)
 from agent.runtime.approval_response import finish as finish_approval_response
 from agent.runtime.budget import native_call
 from agent.runtime.control import AgentCancelled, model_options
@@ -201,6 +207,8 @@ class SessionMiddleware(AgentMiddleware):
                 replacements.append(message)
             messages.append(message)
         extra = facts.get("model_input", facts.get("input")) or []
+        extra = [*extra, *approval_messages.feedback_observations(
+            replacements, facts, session.state["awaiting_call"])]
         self.exchange = [*messages, *extra]
         self.calls, self.cached = [], {}
         session.outcome, session.state["awaiting_call"] = None, None
@@ -216,6 +224,7 @@ class SessionMiddleware(AgentMiddleware):
             request = request.override(messages=[*request.messages, *extra_inputs])
         prompt = [*([request.system_message] if request.system_message else []),
                   *model_messages(hydrate(request.messages, session.transient))]
+        session.system_message = request.system_message
         model = request.model
         selected_model = _model_name(model)
         reviewing = bool(session.outcome and (
@@ -275,7 +284,15 @@ class SessionMiddleware(AgentMiddleware):
                 return {**capture(session), "messages": extra, "jump_to": "model"}
         if session.state["proposal"] is not None:
             return finish_approval_response(session, response)
+        repair = response_validation.repair(session, response)
+        if repair:
+            session._round_index += 1
+            return {**capture(session), "messages": repair, "jump_to": "model"}
         calls, outcome = session._validate_response(response)
+        review = task_planning.review(session, state, response, outcome)
+        if review:
+            session._round_index += 1
+            return {**capture(session), "messages": review, "jump_to": "model"}
         system = [self.system_message] if self.system_message else []
         self.exchange = [*system, *state["messages"]]
         self.calls, self.attachments = calls or [], []
@@ -284,7 +301,7 @@ class SessionMiddleware(AgentMiddleware):
         self._failed = self._paused = self._tool_failed = False
         session._round_index += 1
         if outcome is not None:
-            session.outcome = outcome
+            session.outcome = session.outcome or outcome
             return {**capture(session), "jump_to": "end"}
         return capture(session)
 
