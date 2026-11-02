@@ -38,6 +38,9 @@ async def health(request: Request):
     return {
         "status": "ok",
         "agent_ready": runtime is not None,
+        "model_transport": ({"ready": runtime.model_io.ready,
+                             "pending_cleanup": runtime.model_io.pending_cleanup}
+                            if getattr(runtime, "model_io", None) is not None else None),
         "dials": {
             "runtime": runtime_probe.runtime_name(runtime),
             "budget": {**asdict(BudgetLimits()),
