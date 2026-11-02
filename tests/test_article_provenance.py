@@ -50,9 +50,9 @@ def test_read_range_uses_the_visible_excerpt_not_the_full_backend_result():
 
 
 def test_article_trace_preserves_a_complete_model_observation_above_the_old_log_limit():
-    source = "正文" * 6000 + "SOURCE_TAIL_CANARY"
+    source = "Article body. " * 1713 + "TAIL_CANARY"
     data = article_page({"noteTitle": "Source", "noteContent": source}, 19, max_chars=24000)
-    text, visible = render_article_result(ok(str(data), data=data), 18000)
+    text, visible = render_article_result(ok(str(data), data=data), 28000)
     recorded = ast.literal_eval(tool_result_text(text, "get_article_detail"))
     assert recorded["noteContent"] == visible["noteContent"] == source
     assert recorded["source"]["end"] == len(source)
