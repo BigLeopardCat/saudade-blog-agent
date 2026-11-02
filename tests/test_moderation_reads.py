@@ -9,6 +9,7 @@ from pydantic import ValidationError
 
 from agent.domains import moderation
 from agent.principal import SOURCE_ASSERTION, Principal
+from agent.products.blog.application import BlogApplication
 from tools import base
 
 
@@ -201,8 +202,8 @@ def test_real_empty_page_remains_a_valid_zero_result(backend):
 def test_runtime_discovers_native_summary_without_loading_record_bodies(backend, monkeypatch):
     from langchain_core.messages import AIMessage, HumanMessage
 
-    from agent.runtime.native import NativeRuntime
-    from agent.runtime.native_store import NativeConversationStore
+    from agent.runtime.checkpoint_conversations import CheckpointConversationStore
+    from agent.runtime.service import AgentRuntime
 
     def call(name):
         return AIMessage(content="", tool_calls=[{"name": name, "args": {}, "id": name}])
@@ -217,7 +218,11 @@ def test_runtime_discovers_native_summary_without_loading_record_bodies(backend,
         def invoke(self, prompt):
             return next(responses)
 
-    runtime = NativeRuntime(NativeConversationStore(None), model_factory=lambda **_: Model())
+    runtime = AgentRuntime(
+        CheckpointConversationStore(None),
+        application=BlogApplication(),
+        model_factory=lambda **_: Model(),
+    )
     events = list(runtime.stream_events(
         {"messages": [HumanMessage(content="审核情况如何？")]}, config()))
     assert events[-1].reply.startswith("待审2条")

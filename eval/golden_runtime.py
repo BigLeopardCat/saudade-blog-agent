@@ -24,7 +24,7 @@ def check_environment():
 
 
 def build_agent(*, resources):
-    from agent.runtime.native import build
+    from agent.composition import build
 
     check_environment()
     return build(resources=resources)

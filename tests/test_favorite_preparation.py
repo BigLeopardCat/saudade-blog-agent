@@ -15,10 +15,11 @@ from agent import confirm, idem
 from agent.api.schemas import ChatRequest
 from agent.domains.favorites import preparation
 from agent.principal import Principal
+from agent.products.blog.application import BlogApplication
 from agent.runtime import writes
-from agent.runtime.native import NativeRuntime
-from agent.runtime.native_store import NativeConversationStore
+from agent.runtime.checkpoint_conversations import CheckpointConversationStore
 from agent.runtime.results import TurnResult
+from agent.runtime.service import AgentRuntime
 
 
 class Model:
@@ -91,8 +92,11 @@ def test_preparation_checkpoints_then_executes_once(site, monkeypatch, tmp_path,
     initial = ([{"noteId": 19, "title": "真实文章标题"}] if action == "remove" else [])
     site["favorites"] = initial
     model = Model(action)
-    runtime = NativeRuntime(NativeConversationStore(InMemorySaver()),
-                            model_factory=lambda **_: model)
+    runtime = AgentRuntime(
+        CheckpointConversationStore(InMemorySaver()),
+        application=BlogApplication(),
+        model_factory=lambda **_: model,
+    )
     first = list(runtime.stream_events(
         {"messages": [HumanMessage(content="收藏文章 19")]}, config()))[-1]
     popup = first.execution["pending_confirm"]
@@ -162,12 +166,19 @@ def test_read_failure_never_becomes_an_empty_favorite_state(site):
 
 def test_stream_emits_one_card_and_one_reply_from_current_page(site, monkeypatch):
     from agent.api.routes import chat as server
-    from agent.runtime.native import NativeRuntime
-    from agent.runtime.native_store import NativeConversationStore
+    from agent.runtime.checkpoint_conversations import CheckpointConversationStore
+    from agent.runtime.service import AgentRuntime
 
     model = Model()
-    monkeypatch.setattr(app.state, "runtime", NativeRuntime(
-        NativeConversationStore(InMemorySaver()), model_factory=lambda **_: model))
+    monkeypatch.setattr(
+        app.state,
+        "runtime",
+        AgentRuntime(
+            CheckpointConversationStore(InMemorySaver()),
+            application=BlogApplication(),
+            model_factory=lambda **_: model,
+        ),
+    )
     req = ChatRequest(message="收藏当前这篇", user_id=7, conversation_id=42,
                              current_url="/article/19", page_title="不可信页面标题")
 

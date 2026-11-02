@@ -16,8 +16,8 @@ from agent.products.blog.application import BlogApplication
 from agent.products.blog.capabilities import ToolCatalog
 from agent.runtime import memory
 from agent.runtime.budget import BudgetLimits, TaskBudget, budget_scope
-from agent.runtime.native import NativeRuntime
-from agent.runtime.native_store import NativeConversationStore
+from agent.runtime.checkpoint_conversations import CheckpointConversationStore
+from agent.runtime.service import AgentRuntime
 from agent.runtime.turns import AgentCancelled
 from tools.result import ok
 
@@ -81,7 +81,7 @@ def setup():
             SystemMessage(content="Read authorized fixture data."),
             *memory.prompt_dialogue(messages, principal,
                                     tool_access=application.history_access)]
-        return NativeRuntime(NativeConversationStore(saver),
+        return AgentRuntime(CheckpointConversationStore(saver),
                              application=application,
                              model_factory=lambda **_: model)
 

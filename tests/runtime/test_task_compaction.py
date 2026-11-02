@@ -9,10 +9,11 @@ from langchain_core.messages import AIMessage, AIMessageChunk, HumanMessage, Too
 from langchain_core.tools import tool
 from langgraph.checkpoint.memory import InMemorySaver
 
+from agent.products.blog.application import BlogApplication
 from agent.runtime import compaction, memory
+from agent.runtime.checkpoint_conversations import CheckpointConversationStore
 from agent.runtime.execution_state import initial_state
-from agent.runtime.native import NativeRuntime
-from agent.runtime.native_store import NativeConversationStore
+from agent.runtime.service import AgentRuntime
 from agent.runtime.session import ToolSession
 from agent.runtime.turns import AgentCancelled
 from config.settings import settings
@@ -60,8 +61,11 @@ def test_multiple_task_compactions_survive_reload_and_do_not_restore_covered_obs
                               domains=lambda *_: {"reading": {read_material.name: read_material}})
 
     def selected():
-        return NativeRuntime(NativeConversationStore(saver), catalog=catalog,
-                             model_factory=lambda **_: model)
+        return AgentRuntime(
+            CheckpointConversationStore(saver),
+            application=BlogApplication(catalog),
+            model_factory=lambda **_: model,
+        )
 
     runtime = selected()
     source = memory.turn_messages([HumanMessage(content="旧问题")], [], "旧回答", ACTOR)

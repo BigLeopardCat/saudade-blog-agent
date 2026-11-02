@@ -11,9 +11,10 @@ from langgraph.checkpoint.memory import InMemorySaver
 from pydantic import ValidationError
 
 from agent.principal import SOURCE_ASSERTION, SOURCE_BODY, Principal
+from agent.products.blog.application import BlogApplication
 from agent.products.blog.read_tools import own_tools
-from agent.runtime.native import NativeRuntime
-from agent.runtime.native_store import NativeConversationStore
+from agent.runtime.checkpoint_conversations import CheckpointConversationStore
+from agent.runtime.service import AgentRuntime
 from tools import base
 from tools import notifications as reads
 
@@ -182,8 +183,11 @@ def test_native_read_can_navigate_to_the_exact_notification_reply(notifications)
                 response = call("navigate_page", path=source["items"][0]["link"])
             yield response
 
-    runtime = NativeRuntime(NativeConversationStore(InMemorySaver()),
-                            model_factory=lambda **kwargs: Model())
+    runtime = AgentRuntime(
+        CheckpointConversationStore(InMemorySaver()),
+        application=BlogApplication(),
+        model_factory=lambda **kwargs: Model(),
+    )
     events = list(runtime.stream_events({"messages": [HumanMessage(content="打开这条回复")]},
                                       config()))
     receipts = events[-1].execution["receipts"]

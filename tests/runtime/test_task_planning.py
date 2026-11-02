@@ -10,9 +10,10 @@ from test_confirmation_continuation import FAVORITE, LOAD, Model, call, run
 from test_confirmation_continuation import backend as backend_fixture
 
 from agent import confirm
+from agent.products.blog.application import BlogApplication
 from agent.products.blog.capabilities import ToolCatalog
-from agent.runtime.native import NativeRuntime
-from agent.runtime.native_store import NativeConversationStore
+from agent.runtime.checkpoint_conversations import CheckpointConversationStore
+from agent.runtime.service import AgentRuntime
 from agent.runtime.session import ToolSession
 from agent.runtime.task_planning import TaskPlanningMiddleware, tools
 
@@ -34,8 +35,11 @@ def test_standard_todo_state_survives_approval_reconstruction_and_resets_for_new
     saver = InMemorySaver()
 
     def selected(model):
-        return NativeRuntime(NativeConversationStore(saver), catalog=catalog,
-                             model_factory=lambda **_: model)
+        return AgentRuntime(
+            CheckpointConversationStore(saver),
+            application=BlogApplication(catalog),
+            model_factory=lambda **_: model,
+        )
 
     first_model = Model(AIMessage(content="", tool_calls=[
         call("load_task_planning_info_tools", "load-plan")]),
@@ -94,7 +98,7 @@ def test_composite_acceptance_rejects_partial_delivery_even_with_a_valid_card(
         AIMessage(content="", tool_calls=[call("list_notifications", "read", unread_only=True)]),
         AIMessage(content="" if omission == "summary" else "部署 N-417，审核 R-862。",
                   tool_calls=calls), AIMessage(content="已标记并发送页面指令。"))
-    monkeypatch.setattr("agent.runtime.native.get_llm", lambda **_: model)
+    monkeypatch.setattr("agent.runtime.service.get_llm", lambda **_: model)
     monkeypatch.setattr(golden_trace, "trace_root", lambda: str(tmp_path / "traces"))
     report = native_contracts.run([composite_task_contracts.CASES[0][0]])
     result = report["cases"][0]
@@ -138,8 +142,11 @@ def test_same_agent_delivers_read_facts_after_preparation_without_execution_or_s
                                          scope="selected", ids=[101, 102])]},
                 {"content": summary}) as (model, requests):
             budget = TaskBudget()
-            selected = NativeRuntime(NativeConversationStore(InMemorySaver()),
-                                     model_factory=lambda **_: model)
+            selected = AgentRuntime(
+                CheckpointConversationStore(InMemorySaver()),
+                application=BlogApplication(),
+                model_factory=lambda **_: model,
+            )
             with budget_scope(budget):
                 events = list(selected.stream_events({"messages": [HumanMessage(content=REQUEST)]},
                                                      config()))
@@ -161,7 +168,11 @@ def test_failed_approval_response_recovers_without_repreparing_or_rereading(back
     first_model = Model(LOAD, AIMessage(content="", tool_calls=[FAVORITE]))
     first_model.approval_reply = OSError("synthetic reply failure")
     saver = InMemorySaver()
-    selected = NativeRuntime(NativeConversationStore(saver), model_factory=lambda **_: first_model)
+    selected = AgentRuntime(
+        CheckpointConversationStore(saver),
+        application=BlogApplication(),
+        model_factory=lambda **_: first_model,
+    )
     with pytest.raises(OSError, match="synthetic reply failure"):
         list(selected.stream_events({"messages": [HumanMessage(content="准备收藏文章19")],
                                      "task_id": "review-recovery"}, config()))
@@ -169,7 +180,11 @@ def test_failed_approval_response_recovers_without_repreparing_or_rereading(back
     assert selected.store.load(config()).unfinished and not state["writes"]
     next_model = Model()
     next_model.approval_reply = AIMessage(content="收藏准备好了，等你确认。")
-    rebuilt = NativeRuntime(NativeConversationStore(saver), model_factory=lambda **_: next_model)
+    rebuilt = AgentRuntime(
+        CheckpointConversationStore(saver),
+        application=BlogApplication(),
+        model_factory=lambda **_: next_model,
+    )
     result = list(rebuilt.stream_events({"resume_task": "review-recovery"}, config()))[-1]
     assert result.reply == "收藏准备好了，等你确认。"
     assert result.execution["pending_confirm"] and state["requests"] == previous_reads
@@ -181,8 +196,11 @@ def test_approval_response_cannot_execute_another_tool_and_keeps_original_previe
     model = Model(LOAD, AIMessage(content="", tool_calls=[FAVORITE]))
     model.approval_reply = AIMessage(content="", tool_calls=[
         call("prepare_notification_read", "forbidden", scope="selected", ids=[101])])
-    selected = NativeRuntime(NativeConversationStore(InMemorySaver()),
-                             model_factory=lambda **_: model)
+    selected = AgentRuntime(
+        CheckpointConversationStore(InMemorySaver()),
+        application=BlogApplication(),
+        model_factory=lambda **_: model,
+    )
     result = run(selected, "准备收藏文章19")
     grant = confirm.verify(result.execution["pending_confirm"]["token"], 7, 42)
     assert grant["executor"] == "favorites" and len(model.review_prompts) == 1
@@ -198,8 +216,11 @@ def test_empty_approval_response_retries_once_through_the_framework(backend):
 
     model = Replies(LOAD, AIMessage(content="", tool_calls=[FAVORITE]))
     model.reviews = iter([AIMessage(content=""), AIMessage(content="请确认这项收藏。")])
-    selected = NativeRuntime(NativeConversationStore(InMemorySaver()),
-                             model_factory=lambda **_: model)
+    selected = AgentRuntime(
+        CheckpointConversationStore(InMemorySaver()),
+        application=BlogApplication(),
+        model_factory=lambda **_: model,
+    )
     result = run(selected, "准备收藏文章19")
     assert result.reply == "请确认这项收藏。" and len(model.review_prompts) == 2
     assert result.execution["pending_confirm"] and not backend[0]["writes"]
@@ -216,7 +237,11 @@ def test_notification_summary_approval_and_browser_ack_keep_one_durable_task(mon
     monkeypatch.setattr(writes, "ledger_for", lambda _: ledger)
 
     def selected(model):
-        return NativeRuntime(NativeConversationStore(saver), model_factory=lambda **_: model)
+        return AgentRuntime(
+            CheckpointConversationStore(saver),
+            application=BlogApplication(),
+            model_factory=lambda **_: model,
+        )
 
     first_model = Model(AIMessage(content="", tool_calls=[
         call("load_notifications_info_tools", "load")]),

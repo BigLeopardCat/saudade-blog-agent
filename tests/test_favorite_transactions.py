@@ -14,6 +14,7 @@ from langgraph.checkpoint.memory import InMemorySaver
 from agent import idem
 from agent.domains.favorites import transactions
 from agent.principal import SOURCE_ASSERTION, Principal
+from agent.products.blog.application import BlogApplication
 from agent.runtime import writes
 from tools.result import fact, ok, tgt
 
@@ -149,9 +150,12 @@ def test_native_rejects_unbound_grant_without_model_write_or_ledger_claim(monkey
     monkeypatch.setattr(transactions, "get_all_tools", lambda: [tool])
     monkeypatch.setattr(writes, "ledger_for",
                         lambda saver: idem.Ledger(str(tmp_path / "runtime.sqlite3")))
-    from agent.runtime.native import NativeRuntime
-    from agent.runtime.native_store import NativeConversationStore
-    runtime = NativeRuntime(NativeConversationStore(InMemorySaver()))
+    from agent.runtime.checkpoint_conversations import CheckpointConversationStore
+    from agent.runtime.service import AgentRuntime
+
+    runtime = AgentRuntime(
+        CheckpointConversationStore(InMemorySaver()), application=BlogApplication()
+    )
     state = {"messages": [HumanMessage(content="确认收藏")], "confirm_grant": _grant()}
 
     first = list(runtime.stream_events(state, _config()))
@@ -168,8 +172,8 @@ def test_native_rejects_unbound_grant_without_model_write_or_ledger_claim(monkey
 
 def test_stream_producer_emits_existing_execution_receipt(monkeypatch, tmp_path):
     from agent.api.routes import chat as server
-    from agent.runtime.native import NativeRuntime
-    from agent.runtime.native_store import NativeConversationStore
+    from agent.runtime.checkpoint_conversations import CheckpointConversationStore
+    from agent.runtime.service import AgentRuntime
 
     tool = Favorite()
     monkeypatch.setattr(transactions, "get_all_tools", lambda: [tool])
@@ -178,8 +182,11 @@ def test_stream_producer_emits_existing_execution_receipt(monkeypatch, tmp_path)
     ledger = writes.ledger_for(None)
     transactions.execute(_grant(), _config(), None, tools={tool.name: tool}, ledger=ledger)
     ledger.close()
-    monkeypatch.setattr(app.state, "runtime",
-                        NativeRuntime(NativeConversationStore(InMemorySaver())))
+    monkeypatch.setattr(
+        app.state,
+        "runtime",
+        AgentRuntime(CheckpointConversationStore(InMemorySaver()), application=BlogApplication()),
+    )
 
     async def collect():
         queue = asyncio.Queue()

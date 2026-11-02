@@ -7,8 +7,9 @@ from langgraph.checkpoint.memory import InMemorySaver
 
 from agent import runtime_probe
 from agent.llm_usage import usage_fields
-from agent.runtime.native import NativeRuntime
-from agent.runtime.native_store import NativeConversationStore
+from agent.products.blog.application import BlogApplication
+from agent.runtime.checkpoint_conversations import CheckpointConversationStore
+from agent.runtime.service import AgentRuntime
 from models import llm
 
 
@@ -19,7 +20,9 @@ def test_version_stays_with_loaded_process_after_working_tree_changes(monkeypatc
 
 
 def test_health_reports_actual_runtime_type():
-    runtime = NativeRuntime(NativeConversationStore(InMemorySaver()))
+    runtime = AgentRuntime(
+        CheckpointConversationStore(InMemorySaver()), application=BlogApplication()
+    )
     assert runtime_probe.runtime_name(runtime) == "native"
     assert runtime_probe.runtime_name(None) == "unknown"
     metadata = runtime_probe.request_context(runtime)
@@ -67,7 +70,11 @@ def test_native_model_uses_explicit_reasoning_policy_without_changing_output_lim
         return Model()
 
     monkeypatch.setattr(settings, "agent_reasoning_effort", effort)
-    runtime = NativeRuntime(NativeConversationStore(InMemorySaver()), model_factory=factory)
+    runtime = AgentRuntime(
+        CheckpointConversationStore(InMemorySaver()),
+        application=BlogApplication(),
+        model_factory=factory,
+    )
     config = {"configurable": {"thread_id": "conv_42"}}
     runtime._session(config, runtime.store.load(config))
     assert captured["enable_thinking"] is thinking

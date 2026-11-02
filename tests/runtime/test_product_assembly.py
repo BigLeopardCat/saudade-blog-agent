@@ -5,8 +5,8 @@ from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from langgraph.checkpoint.memory import InMemorySaver
 
 from agent.runtime.budget import BudgetLimits, TaskBudget, budget_scope
-from agent.runtime.native import NativeRuntime
-from agent.runtime.native_store import NativeConversationStore
+from agent.runtime.checkpoint_conversations import CheckpointConversationStore
+from agent.runtime.service import AgentRuntime
 from examples.inventory_agent import InventoryApplication
 
 
@@ -31,7 +31,7 @@ def test_inventory_product_uses_unchanged_runtime_and_preserves_its_own_conversa
     model = Model(request("load_inventory_info_tools"), request("get_stock", sku="keyboard"),
                   AIMessage(content="The keyboard has 12 units available."))
     saver = InMemorySaver()
-    selected = NativeRuntime(NativeConversationStore(saver), application=InventoryApplication(),
+    selected = AgentRuntime(CheckpointConversationStore(saver), application=InventoryApplication(),
                              model_factory=lambda **_: model)
     incoming = {"messages": [HumanMessage(content="Stock for keyboard?")]}
     result = list(selected.stream_events(incoming, config()))[-1]
@@ -41,7 +41,7 @@ def test_inventory_product_uses_unchanged_runtime_and_preserves_its_own_conversa
     assert any(isinstance(message, ToolMessage) and "12 units" in message.content
                for message in model.prompts[-1])
     another = Model(AIMessage(content="You asked about the keyboard."))
-    rebuilt = NativeRuntime(NativeConversationStore(saver), application=InventoryApplication(),
+    rebuilt = AgentRuntime(CheckpointConversationStore(saver), application=InventoryApplication(),
                             model_factory=lambda **_: another)
     list(rebuilt.stream_events({"messages": [HumanMessage(content="What did I ask?")]}, config()))
     assert "Stock for keyboard?" in str(another.prompts)
@@ -51,7 +51,7 @@ def test_inventory_product_uses_unchanged_runtime_and_preserves_its_own_conversa
 
 def test_inventory_product_cannot_bypass_shared_tool_budget():
     model = Model(request("load_inventory_info_tools"), request("get_stock", sku="keyboard"))
-    selected = NativeRuntime(NativeConversationStore(InMemorySaver()),
+    selected = AgentRuntime(CheckpointConversationStore(InMemorySaver()),
                              application=InventoryApplication(), model_factory=lambda **_: model)
     budget = TaskBudget(BudgetLimits(tool_calls=1))
     with budget_scope(budget):

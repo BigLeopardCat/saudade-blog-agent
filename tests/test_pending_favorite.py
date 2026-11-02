@@ -13,17 +13,21 @@ from langgraph.checkpoint.memory import InMemorySaver
 from agent import confirm, idem
 from agent.domains.favorites import preparation, transactions
 from agent.products.blog import pending
+from agent.products.blog.application import BlogApplication
 from agent.products.blog.confirmation import confirmed_runtime
 from agent.runtime import writes
-from agent.runtime.native import NativeRuntime
-from agent.runtime.native_store import NativeConversationStore
+from agent.runtime.checkpoint_conversations import CheckpointConversationStore
 from agent.runtime.results import TurnResult
+from agent.runtime.service import AgentRuntime
 from tools import base
 
 
 def test_pinned_executor_cannot_fall_back_when_persistence_is_disabled():
     with pytest.raises(RuntimeError, match="需要持久化"):
-        confirmed_runtime(NativeRuntime(NativeConversationStore(None)), {"executor": "favorites"})
+        confirmed_runtime(
+            AgentRuntime(CheckpointConversationStore(None), application=BlogApplication()),
+            {"executor": "favorites"},
+        )
 
 
 class Model:
@@ -50,8 +54,11 @@ def waiting(site, monkeypatch, tmp_path):
     ledger = Ledger(str(tmp_path / "pending.sqlite3"))
     monkeypatch.setattr(writes, "ledger_for", lambda saver: ledger)
     model = Model("prepare_favorite_change", {"action": "add", "article_id": 19})
-    runtime = NativeRuntime(NativeConversationStore(InMemorySaver()),
-        model_factory=lambda **_: model)
+    runtime = AgentRuntime(
+        CheckpointConversationStore(InMemorySaver()),
+        application=BlogApplication(),
+        model_factory=lambda **_: model,
+    )
     proposal = list(runtime.stream_events({"messages": [HumanMessage(content="收藏文章19")]},
                                           config()))[-1]
     yield runtime, proposal, ledger
@@ -193,8 +200,8 @@ def test_storage_failure_emits_no_cancellation_and_old_card_still_cannot_write(
 def test_stream_cancels_host_pending_and_routes_revoked_card_after_runtime_switch(
         waiting, monkeypatch, site):
     from agent.api.routes import chat as server
-    from agent.runtime.native import NativeRuntime
-    from agent.runtime.native_store import NativeConversationStore
+    from agent.runtime.checkpoint_conversations import CheckpointConversationStore
+    from agent.runtime.service import AgentRuntime
 
     runtime, proposal, ledger = waiting
 
@@ -228,8 +235,8 @@ def test_stream_cancels_host_pending_and_routes_revoked_card_after_runtime_switc
                 return connection.lookup(*args)
 
     monkeypatch.setattr(writes, "ledger_for", lambda saver: Store())
-    frames = asyncio.run(collect(NativeRuntime(
-        NativeConversationStore(runtime.saver),
+    frames = asyncio.run(collect(AgentRuntime(
+        CheckpointConversationStore(runtime.saver), application=BlogApplication(),
         model_factory=lambda **_: Model("cancel_pending_operation"))))
     controls = [json.loads(frame.removeprefix("__PENDING__:")) for frame in frames
                 if isinstance(frame, str) and frame.startswith("__PENDING__:")]
@@ -239,8 +246,8 @@ def test_stream_cancels_host_pending_and_routes_revoked_card_after_runtime_switc
     grant = confirm.verify(proposal.execution["pending_confirm"]["token"], 7, 42)
     assert grant["executor"] == "favorites"
     # The raw runtime's stream is bypassed; the signed executor takes over.
-    replay = asyncio.run(collect(NativeRuntime(
-        NativeConversationStore(runtime.saver)), grant))
+    replay = asyncio.run(collect(AgentRuntime(
+        CheckpointConversationStore(runtime.saver), application=BlogApplication()), grant))
     assert any("撤销" in str(frame.content) for frame in replay
                if isinstance(frame, AIMessageChunk))
     assert not any(str(frame).startswith("__EXEC__:") for frame in replay)
@@ -340,4 +347,7 @@ def test_cancellation_api_checks_signed_identity_and_never_calls_a_model(
 
 def test_unknown_executor_cannot_enter_legacy_planner():
     with pytest.raises(ValueError, match="执行入口"):
-        confirmed_runtime(NativeRuntime(NativeConversationStore(None)), {"executor": "unknown"})
+        confirmed_runtime(
+            AgentRuntime(CheckpointConversationStore(None), application=BlogApplication()),
+            {"executor": "unknown"},
+        )

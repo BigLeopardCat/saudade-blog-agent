@@ -254,8 +254,8 @@ def test_model_discovers_scheduling_and_prepares_card_through_real_middleware(mo
     from langgraph.checkpoint.memory import InMemorySaver
 
     from agent.products.blog.application import BlogApplication
-    from agent.runtime.native import NativeRuntime
-    from agent.runtime.native_store import NativeConversationStore
+    from agent.runtime.checkpoint_conversations import CheckpointConversationStore
+    from agent.runtime.service import AgentRuntime
 
     monkeypatch.setattr(settings, "jwt_secret", "scheduling-fixture-secret-at-least-32")
     service = ScheduleService(None, lambda _: ADMIN, now=lambda: NOW)
@@ -294,8 +294,8 @@ def test_model_discovers_scheduling_and_prepares_card_through_real_middleware(mo
         def invoke(self, messages):
             return next(responses)
 
-    runtime = NativeRuntime(
-        NativeConversationStore(InMemorySaver()),
+    runtime = AgentRuntime(
+        CheckpointConversationStore(InMemorySaver()),
         application=BlogApplication(scheduling=service),
         model_factory=lambda **_: Model(),
     )

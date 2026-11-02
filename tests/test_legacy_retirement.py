@@ -31,8 +31,9 @@ def test_retired_modules_have_no_importable_source():
 def test_native_service_process_does_not_load_retired_modules():
     script = """
 import agent.main
-from agent.runtime.native import NativeRuntime
-from agent.runtime.native_store import NativeConversationStore
+from agent.products.blog.application import BlogApplication
+from agent.runtime.service import AgentRuntime
+from agent.runtime.checkpoint_conversations import CheckpointConversationStore
 from langgraph.checkpoint.memory import InMemorySaver
 from langchain_core.messages import AIMessage, HumanMessage
 from agent.principal import Principal, SOURCE_ASSERTION
@@ -56,7 +57,7 @@ class Model:
     def invoke(self, messages):
         return next(self.responses)
 
-runtime = NativeRuntime(NativeConversationStore(InMemorySaver()),
+runtime = AgentRuntime(CheckpointConversationStore(InMemorySaver()), application=BlogApplication(),
                         model_factory=lambda **_: Model())
 config = {'configurable': {'thread_id': 'conv_1', 'conversation_id': 1,
                            'user_id': 1,

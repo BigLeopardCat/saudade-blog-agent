@@ -12,7 +12,7 @@ from langgraph.checkpoint.memory import InMemorySaver
 from agent import checkpoint
 from agent.api import lifecycle
 from agent.main import create_app
-from agent.runtime import native
+from agent.runtime import service as native
 from config.settings import settings
 
 

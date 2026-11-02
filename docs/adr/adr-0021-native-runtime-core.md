@@ -2,14 +2,14 @@
 
 - **状态**：已采纳；原生核心、会话存储和传输消费者已接线；服务配置采用 native。
 - **承接**：[ADR-0020](adr-0020-conversation-store.md)
-- **范围**：NativeRuntime、NativeConversationStore、共享工具目录及原生确认接线。
+- **范围**：AgentRuntime、CheckpointConversationStore、共享工具目录及原生确认接线。
 
 后续执行内核方向见 [ADR-0024](adr-0024-framework-kernel-and-domain-extensions.md)。
 本文描述在役自建运行时与旧图退役结果；框架替换需要保留以下业务安全和可见行为契约。
 
 ## 决策
 
-`NativeRuntime.stream_events(state, config)` 只产出标准 `AIMessageChunk` 与一个最终
+`AgentRuntime.stream_events(state, config)` 只产出标准 `AIMessageChunk` 与一个最终
 `TurnResult`。文本块仅包含可见正文；最终结果的 reply 是完整、已保存的正文，不是再次追加的文本。
 确认卡等结构化事实继续在 execution 中传递；进度仍走现有受限回调。
 存储失败、取消或关闭生成器不会产出成功结果，关闭会传递到模型迭代器。
@@ -23,7 +23,7 @@ state 使用 messages 和可选的 confirm_grant；历史 plan、ledger、open_t
 ## 存储与恢复
 
 继续使用 ConversationStore 边界和现有 saver、会话锁、删除屏障、裁剪与执行账。
-NativeConversationStore 用一个不可执行业务的 commit 节点，复用框架公开的 get_state/update_state
+CheckpointConversationStore 用一个不可执行业务的 commit 节点，复用框架公开的 get_state/update_state
 及消息 reducer；不自行实现 checkpoint 序列化、版本号或 SQL 存储。
 
 会话状态只含 messages、pending_confirm、pending_action、receipts；更新指定 commit，

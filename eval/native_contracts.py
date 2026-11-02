@@ -19,10 +19,11 @@ from langgraph.checkpoint.memory import InMemorySaver
 from starlette.requests import Request
 
 from agent import confirm, idem
+from agent.products.blog.application import BlogApplication
 from agent.runtime import writes
+from agent.runtime.checkpoint_conversations import CheckpointConversationStore
 from agent.runtime.control import RequestControl, request_scope
-from agent.runtime.native import NativeRuntime
-from agent.runtime.native_store import NativeConversationStore
+from agent.runtime.service import AgentRuntime
 from config.settings import settings
 from eval import (
     account_candidate_contracts,
@@ -207,8 +208,11 @@ def _sample(name, backend, contract, run_id, sample):
     paths, rounds = [], []
     with (ExitStack() as resources, backend() as state,
           TemporaryDirectory(prefix="agent-native-eval-") as temp):
-        arm = NativeRuntime(NativeConversationStore(InMemorySaver()),
-                            model_io=resources.enter_context(ModelIO()))
+        arm = AgentRuntime(
+            CheckpointConversationStore(InMemorySaver()),
+            application=BlogApplication(),
+            model_io=resources.enter_context(ModelIO()),
+        )
         store = _Store(str(Path(temp) / "ledger.sqlite3"))
         principal = _principal(state.get("caller_role", "user"))
 

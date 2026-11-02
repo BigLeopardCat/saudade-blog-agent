@@ -7,9 +7,10 @@ from langchain_core.tools import tool
 from langgraph.checkpoint.memory import InMemorySaver
 from test_confirmation_continuation import Model, call
 
+from agent.products.blog.application import BlogApplication
 from agent.products.blog.capabilities import ToolCatalog
-from agent.runtime.native import NativeRuntime
-from agent.runtime.native_store import NativeConversationStore
+from agent.runtime.checkpoint_conversations import CheckpointConversationStore
+from agent.runtime.service import AgentRuntime
 from eval.own_fixtures import favorite_backend
 from tools.result import ToolResult, ok
 
@@ -30,8 +31,8 @@ def test_failed_prerequisite_does_not_prepare_the_next_operation_until_repaired(
             call("prepare_favorite_change", "blocked", action="add", article_id=19)]),
         AIMessage(content="", tool_calls=[call("check_input", "repaired", content="已核实"),
             call("prepare_favorite_change", "prepared", action="add", article_id=19)]))
-    runtime = NativeRuntime(NativeConversationStore(InMemorySaver()),
-        catalog=ToolCatalog(read_tools={check_input.name: check_input}),
+    runtime = AgentRuntime(CheckpointConversationStore(InMemorySaver()),
+        application=BlogApplication(ToolCatalog(read_tools={check_input.name: check_input})),
         model_factory=lambda **_: model)
     with favorite_backend() as state:
         result = list(runtime.stream_events(

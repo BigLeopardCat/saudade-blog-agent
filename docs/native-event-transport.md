@@ -29,14 +29,14 @@ Runtime 负责会话存储、授权、确认、取消、幂等和持久化；
 HTTP 层只发安全 `__ERROR__`，不会再发 `__END__`。取消使用独立哨兵，不伪装成成功结束。
 并发许可由 `RequestJobs` 持有到 worker 真正完成；队列排空和客户端关闭不会提前归还许可。
 
-服务入口直接消费 `NativeRuntime.stream_events`；不会把旧节点事件翻译成伪原生事件。
+服务入口直接消费 `AgentRuntime.stream_events`；不会把旧节点事件翻译成伪原生事件。
 
 离线测试使用可控 fake Runtime，覆盖正文去重、命令顺序、确认字段边界、取消/no-op、空回复、
 存储异常、worker 哨兵和同步适配器结果一致性；没有生产数据库、模型或网络调用。
 
 ## 服务切换
 
-服务工厂现在只构建 NativeRuntime，默认及示例为 AGENT_ARM=native；旧 graph/hybrid 配置
+服务工厂现在只构建 AgentRuntime，默认及示例为 AGENT_ARM=native；旧 graph/hybrid 配置
 会在启动时报错，部署时须同步更新。关闭传输迭代器会关闭上游 Runtime，队列写入有超时和
 停止围栏。producer 的 stream_end 记录已入队正文，涵盖确认正文后缀；凭据不进入普通 trace。
 
