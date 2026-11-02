@@ -25,6 +25,7 @@
 | [p2-completion-report.md](p2-completion-report.md) | P1/P2 发布版本、离线与线上验收、分层用量及剩余边界 | 记录型 |
 | [p3-completion-report.md](p3-completion-report.md) | 确认恢复、请求归属、导航与进度的跨仓发布及交互验收 | 记录型 |
 | [p4-progress.md](p4-progress.md) | 思考开关配对、时延观测、评测覆盖及 P4 剩余验收边界 | 记录型 |
+| [p4-completion-report-20261103.md](p4-completion-report-20261103.md) | 标准框架与成熟库收敛、145场景冻结回归、语义分歧和成本缓存指标 | 记录型 |
 | [migration-cleanup-20261028.md](migration-cleanup-20261028.md) | 框架迁移核查、遗留清退与博客独立审计待修项 | 记录型 |
 | [agent-architecture.md](agent-architecture.md) | 系统现在是什么：节点拓扑、跨语言契约、目录与机制 | 现状型 |
 | [产品与领域装配](product-extensions.md) | 博客产品边界、标准 middleware 与非博客库存示例 | 现状型 |

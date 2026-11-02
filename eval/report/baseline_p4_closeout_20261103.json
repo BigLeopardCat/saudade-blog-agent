@@ -1,0 +1,1813 @@
+{
+  "scope": "Single frozen development regression, excluding known unsupported vision; no approved business writes",
+  "service_sha": "6750b516fd418a2995eb0b58c934e79a98b30994",
+  "model": "deepseek-v4.1-flash",
+  "reasoning_effort": "low",
+  "dataset_role": "regression",
+  "started_at": "2026-11-03T01:06:43.969418+08:00",
+  "finished_at": "2026-11-03T01:27:35.078189+08:00",
+  "cases": 145,
+  "rounds": 172,
+  "excluded_vision_cases": 2,
+  "source_report_sha256": "6e59715bed95368dd338bd415572c38b7539cd1fcc3fc899ab7178c340e8f7ac",
+  "semantic_report_sha256": "f345ca7de917a15183a79148f5554a51e8fa9df64a1ea24834f665ca96248e54",
+  "suite_sha256": "445cd915501c77368e1d9849a524d151b80ecb469d1f6893402dd2ffe505143d",
+  "deterministic_counts": {
+    "passed": 145
+  },
+  "semantic_turn_counts": {
+    "no_issue_found": 157,
+    "suspect": 15
+  },
+  "combined_scenario_counts": {
+    "checks_passed": 131,
+    "needs_review": 14
+  },
+  "manual_review_of_flagged_turns": {
+    "real_defect": 8,
+    "judge_core_misclassification": 5,
+    "insufficient_material": 2,
+    "write_denial_recovery_advice_remains_unverified": true,
+    "original_scores_unchanged": true
+  },
+  "usage": {
+    "calls": 382,
+    "usage_coverage": 1.0,
+    "unknown_attempts": 0,
+    "input_including_cached": 1689994,
+    "cached_input": 1263872,
+    "uncached_input": 426122,
+    "input_hit_rate": 0.7478559095476078,
+    "output_including_reasoning": 40595,
+    "reasoning_already_in_output": 13597,
+    "total_input_plus_output": 1730589,
+    "actual_fee": null,
+    "fee_reason": "No configured bill-equivalent pricing; no invented fee"
+  },
+  "cache_populations": {
+    "first_call": {
+      "calls": 172,
+      "measured": 172,
+      "unnamed": 0,
+      "output_seen": 172,
+      "unknown_attempts": 0,
+      "cache_seen": 172,
+      "cache_in": 663278,
+      "cache": 458624,
+      "reasoning_seen": 172,
+      "reasoning": 7457,
+      "in": 663278,
+      "out": 15237,
+      "known_prefix_input": 0,
+      "known_prefix_reused": 0,
+      "known_prefix_samples": 0,
+      "hit_rate": 0.6914506436215282,
+      "uncached_input": 204654,
+      "known_prefix_reuse_rate": null
+    },
+    "stable_prefix": {
+      "calls": 100,
+      "measured": 100,
+      "unnamed": 0,
+      "output_seen": 100,
+      "unknown_attempts": 0,
+      "cache_seen": 100,
+      "cache_in": 564991,
+      "cache": 472832,
+      "reasoning_seen": 100,
+      "reasoning": 2609,
+      "in": 564991,
+      "out": 15108,
+      "known_prefix_input": 477326,
+      "known_prefix_reused": 471839,
+      "known_prefix_samples": 100,
+      "hit_rate": 0.836884127357781,
+      "uncached_input": 92159,
+      "known_prefix_reuse_rate": 0.9885047116645647
+    },
+    "changed_layout": {
+      "calls": 110,
+      "measured": 110,
+      "unnamed": 0,
+      "output_seen": 110,
+      "unknown_attempts": 0,
+      "cache_seen": 110,
+      "cache_in": 461725,
+      "cache": 332416,
+      "reasoning_seen": 110,
+      "reasoning": 3531,
+      "in": 461725,
+      "out": 10250,
+      "known_prefix_input": 0,
+      "known_prefix_reused": 0,
+      "known_prefix_samples": 0,
+      "hit_rate": 0.7199436894255239,
+      "uncached_input": 129309,
+      "known_prefix_reuse_rate": null
+    }
+  },
+  "first_decision": {
+    "expected": 145,
+    "measured": 145,
+    "correct": {
+      "passed": 138,
+      "total": 145,
+      "rate": 0.9517241379310345,
+      "wilson_95": [
+        0.9037099869829122,
+        0.9764211339960396
+      ],
+      "sampling_note": "curated cases; binomial interval is descriptive, not proof of production success probability"
+    },
+    "unverified": 0,
+    "decision_rate": 0.9593023255813954,
+    "measured_decisions": 172,
+    "scope": "complete scenario: every initial decision correct; not task success"
+  },
+  "quality_statistics": {
+    "all": {
+      "deterministic": {
+        "passed": 145,
+        "total": 145,
+        "rate": 1.0,
+        "wilson_95": [
+          0.9741909354347176,
+          1.0
+        ],
+        "sampling_note": "curated cases; binomial interval is descriptive, not proof of production success probability"
+      },
+      "combined_checks": {
+        "passed": 131,
+        "total": 145,
+        "rate": 0.903448275862069,
+        "wilson_95": [
+          0.844458557677603,
+          0.9416127488455829
+        ],
+        "sampling_note": "curated cases; binomial interval is descriptive, not proof of production success probability"
+      },
+      "unresolved_semantic": 14
+    },
+    "accounts": {
+      "deterministic": {
+        "passed": 2,
+        "total": 2,
+        "rate": 1.0,
+        "wilson_95": [
+          0.34238022750665303,
+          1.0
+        ],
+        "sampling_note": "curated cases; binomial interval is descriptive, not proof of production success probability"
+      },
+      "combined_checks": {
+        "passed": 2,
+        "total": 2,
+        "rate": 1.0,
+        "wilson_95": [
+          0.34238022750665303,
+          1.0
+        ],
+        "sampling_note": "curated cases; binomial interval is descriptive, not proof of production success probability"
+      },
+      "unresolved_semantic": 0
+    },
+    "activity": {
+      "deterministic": {
+        "passed": 3,
+        "total": 3,
+        "rate": 1.0,
+        "wilson_95": [
+          0.4385029682449546,
+          1.0
+        ],
+        "sampling_note": "curated cases; binomial interval is descriptive, not proof of production success probability"
+      },
+      "combined_checks": {
+        "passed": 3,
+        "total": 3,
+        "rate": 1.0,
+        "wilson_95": [
+          0.4385029682449546,
+          1.0
+        ],
+        "sampling_note": "curated cases; binomial interval is descriptive, not proof of production success probability"
+      },
+      "unresolved_semantic": 0
+    },
+    "admin": {
+      "deterministic": {
+        "passed": 12,
+        "total": 12,
+        "rate": 1.0,
+        "wilson_95": [
+          0.7575059933447592,
+          1.0
+        ],
+        "sampling_note": "curated cases; binomial interval is descriptive, not proof of production success probability"
+      },
+      "combined_checks": {
+        "passed": 9,
+        "total": 12,
+        "rate": 0.75,
+        "wilson_95": [
+          0.46769466506643426,
+          0.9110583316059453
+        ],
+        "sampling_note": "curated cases; binomial interval is descriptive, not proof of production success probability"
+      },
+      "unresolved_semantic": 3
+    },
+    "announcements": {
+      "deterministic": {
+        "passed": 1,
+        "total": 1,
+        "rate": 1.0,
+        "wilson_95": [
+          0.20654931437723745,
+          1.0
+        ],
+        "sampling_note": "curated cases; binomial interval is descriptive, not proof of production success probability"
+      },
+      "combined_checks": {
+        "passed": 1,
+        "total": 1,
+        "rate": 1.0,
+        "wilson_95": [
+          0.20654931437723745,
+          1.0
+        ],
+        "sampling_note": "curated cases; binomial interval is descriptive, not proof of production success probability"
+      },
+      "unresolved_semantic": 0
+    },
+    "appearance": {
+      "deterministic": {
+        "passed": 5,
+        "total": 5,
+        "rate": 1.0,
+        "wilson_95": [
+          0.5655175352168251,
+          1.0
+        ],
+        "sampling_note": "curated cases; binomial interval is descriptive, not proof of production success probability"
+      },
+      "combined_checks": {
+        "passed": 5,
+        "total": 5,
+        "rate": 1.0,
+        "wilson_95": [
+          0.5655175352168251,
+          1.0
+        ],
+        "sampling_note": "curated cases; binomial interval is descriptive, not proof of production success probability"
+      },
+      "unresolved_semantic": 0
+    },
+    "article_state": {
+      "deterministic": {
+        "passed": 2,
+        "total": 2,
+        "rate": 1.0,
+        "wilson_95": [
+          0.34238022750665303,
+          1.0
+        ],
+        "sampling_note": "curated cases; binomial interval is descriptive, not proof of production success probability"
+      },
+      "combined_checks": {
+        "passed": 2,
+        "total": 2,
+        "rate": 1.0,
+        "wilson_95": [
+          0.34238022750665303,
+          1.0
+        ],
+        "sampling_note": "curated cases; binomial interval is descriptive, not proof of production success probability"
+      },
+      "unresolved_semantic": 0
+    },
+    "article_tags": {
+      "deterministic": {
+        "passed": 5,
+        "total": 5,
+        "rate": 1.0,
+        "wilson_95": [
+          0.5655175352168251,
+          1.0
+        ],
+        "sampling_note": "curated cases; binomial interval is descriptive, not proof of production success probability"
+      },
+      "combined_checks": {
+        "passed": 5,
+        "total": 5,
+        "rate": 1.0,
+        "wilson_95": [
+          0.5655175352168251,
+          1.0
+        ],
+        "sampling_note": "curated cases; binomial interval is descriptive, not proof of production success probability"
+      },
+      "unresolved_semantic": 0
+    },
+    "articles": {
+      "deterministic": {
+        "passed": 1,
+        "total": 1,
+        "rate": 1.0,
+        "wilson_95": [
+          0.20654931437723745,
+          1.0
+        ],
+        "sampling_note": "curated cases; binomial interval is descriptive, not proof of production success probability"
+      },
+      "combined_checks": {
+        "passed": 1,
+        "total": 1,
+        "rate": 1.0,
+        "wilson_95": [
+          0.20654931437723745,
+          1.0
+        ],
+        "sampling_note": "curated cases; binomial interval is descriptive, not proof of production success probability"
+      },
+      "unresolved_semantic": 0
+    },
+    "body": {
+      "deterministic": {
+        "passed": 2,
+        "total": 2,
+        "rate": 1.0,
+        "wilson_95": [
+          0.34238022750665303,
+          1.0
+        ],
+        "sampling_note": "curated cases; binomial interval is descriptive, not proof of production success probability"
+      },
+      "combined_checks": {
+        "passed": 2,
+        "total": 2,
+        "rate": 1.0,
+        "wilson_95": [
+          0.34238022750665303,
+          1.0
+        ],
+        "sampling_note": "curated cases; binomial interval is descriptive, not proof of production success probability"
+      },
+      "unresolved_semantic": 0
+    },
+    "browser": {
+      "deterministic": {
+        "passed": 19,
+        "total": 19,
+        "rate": 1.0,
+        "wilson_95": [
+          0.8318207759473838,
+          1.0
+        ],
+        "sampling_note": "curated cases; binomial interval is descriptive, not proof of production success probability"
+      },
+      "combined_checks": {
+        "passed": 16,
+        "total": 19,
+        "rate": 0.8421052631578947,
+        "wilson_95": [
+          0.6243452472967093,
+          0.9447952836146587
+        ],
+        "sampling_note": "curated cases; binomial interval is descriptive, not proof of production success probability"
+      },
+      "unresolved_semantic": 3
+    },
+    "cache": {
+      "deterministic": {
+        "passed": 1,
+        "total": 1,
+        "rate": 1.0,
+        "wilson_95": [
+          0.20654931437723745,
+          1.0
+        ],
+        "sampling_note": "curated cases; binomial interval is descriptive, not proof of production success probability"
+      },
+      "combined_checks": {
+        "passed": 1,
+        "total": 1,
+        "rate": 1.0,
+        "wilson_95": [
+          0.20654931437723745,
+          1.0
+        ],
+        "sampling_note": "curated cases; binomial interval is descriptive, not proof of production success probability"
+      },
+      "unresolved_semantic": 0
+    },
+    "cancel": {
+      "deterministic": {
+        "passed": 3,
+        "total": 3,
+        "rate": 1.0,
+        "wilson_95": [
+          0.4385029682449546,
+          1.0
+        ],
+        "sampling_note": "curated cases; binomial interval is descriptive, not proof of production success probability"
+      },
+      "combined_checks": {
+        "passed": 3,
+        "total": 3,
+        "rate": 1.0,
+        "wilson_95": [
+          0.4385029682449546,
+          1.0
+        ],
+        "sampling_note": "curated cases; binomial interval is descriptive, not proof of production success probability"
+      },
+      "unresolved_semantic": 0
+    },
+    "capabilities": {
+      "deterministic": {
+        "passed": 4,
+        "total": 4,
+        "rate": 1.0,
+        "wilson_95": [
+          0.5101091635454027,
+          1.0
+        ],
+        "sampling_note": "curated cases; binomial interval is descriptive, not proof of production success probability"
+      },
+      "combined_checks": {
+        "passed": 4,
+        "total": 4,
+        "rate": 1.0,
+        "wilson_95": [
+          0.5101091635454027,
+          1.0
+        ],
+        "sampling_note": "curated cases; binomial interval is descriptive, not proof of production success probability"
+      },
+      "unresolved_semantic": 0
+    },
+    "categories": {
+      "deterministic": {
+        "passed": 2,
+        "total": 2,
+        "rate": 1.0,
+        "wilson_95": [
+          0.34238022750665303,
+          1.0
+        ],
+        "sampling_note": "curated cases; binomial interval is descriptive, not proof of production success probability"
+      },
+      "combined_checks": {
+        "passed": 2,
+        "total": 2,
+        "rate": 1.0,
+        "wilson_95": [
+          0.34238022750665303,
+          1.0
+        ],
+        "sampling_note": "curated cases; binomial interval is descriptive, not proof of production success probability"
+      },
+      "unresolved_semantic": 0
+    },
+    "chat": {
+      "deterministic": {
+        "passed": 9,
+        "total": 9,
+        "rate": 1.0,
+        "wilson_95": [
+          0.7008549515804559,
+          1.0
+        ],
+        "sampling_note": "curated cases; binomial interval is descriptive, not proof of production success probability"
+      },
+      "combined_checks": {
+        "passed": 8,
+        "total": 9,
+        "rate": 0.8888888888888888,
+        "wilson_95": [
+          0.5650002944233439,
+          0.9801091123614551
+        ],
+        "sampling_note": "curated cases; binomial interval is descriptive, not proof of production success probability"
+      },
+      "unresolved_semantic": 1
+    },
+    "clarification": {
+      "deterministic": {
+        "passed": 4,
+        "total": 4,
+        "rate": 1.0,
+        "wilson_95": [
+          0.5101091635454027,
+          1.0
+        ],
+        "sampling_note": "curated cases; binomial interval is descriptive, not proof of production success probability"
+      },
+      "combined_checks": {
+        "passed": 4,
+        "total": 4,
+        "rate": 1.0,
+        "wilson_95": [
+          0.5101091635454027,
+          1.0
+        ],
+        "sampling_note": "curated cases; binomial interval is descriptive, not proof of production success probability"
+      },
+      "unresolved_semantic": 0
+    },
+    "comparison": {
+      "deterministic": {
+        "passed": 1,
+        "total": 1,
+        "rate": 1.0,
+        "wilson_95": [
+          0.20654931437723745,
+          1.0
+        ],
+        "sampling_note": "curated cases; binomial interval is descriptive, not proof of production success probability"
+      },
+      "combined_checks": {
+        "passed": 1,
+        "total": 1,
+        "rate": 1.0,
+        "wilson_95": [
+          0.20654931437723745,
+          1.0
+        ],
+        "sampling_note": "curated cases; binomial interval is descriptive, not proof of production success probability"
+      },
+      "unresolved_semantic": 0
+    },
+    "confirmation": {
+      "deterministic": {
+        "passed": 5,
+        "total": 5,
+        "rate": 1.0,
+        "wilson_95": [
+          0.5655175352168251,
+          1.0
+        ],
+        "sampling_note": "curated cases; binomial interval is descriptive, not proof of production success probability"
+      },
+      "combined_checks": {
+        "passed": 5,
+        "total": 5,
+        "rate": 1.0,
+        "wilson_95": [
+          0.5655175352168251,
+          1.0
+        ],
+        "sampling_note": "curated cases; binomial interval is descriptive, not proof of production success probability"
+      },
+      "unresolved_semantic": 0
+    },
+    "context": {
+      "deterministic": {
+        "passed": 4,
+        "total": 4,
+        "rate": 1.0,
+        "wilson_95": [
+          0.5101091635454027,
+          1.0
+        ],
+        "sampling_note": "curated cases; binomial interval is descriptive, not proof of production success probability"
+      },
+      "combined_checks": {
+        "passed": 4,
+        "total": 4,
+        "rate": 1.0,
+        "wilson_95": [
+          0.5101091635454027,
+          1.0
+        ],
+        "sampling_note": "curated cases; binomial interval is descriptive, not proof of production success probability"
+      },
+      "unresolved_semantic": 0
+    },
+    "dependency": {
+      "deterministic": {
+        "passed": 1,
+        "total": 1,
+        "rate": 1.0,
+        "wilson_95": [
+          0.20654931437723745,
+          1.0
+        ],
+        "sampling_note": "curated cases; binomial interval is descriptive, not proof of production success probability"
+      },
+      "combined_checks": {
+        "passed": 1,
+        "total": 1,
+        "rate": 1.0,
+        "wilson_95": [
+          0.20654931437723745,
+          1.0
+        ],
+        "sampling_note": "curated cases; binomial interval is descriptive, not proof of production success probability"
+      },
+      "unresolved_semantic": 0
+    },
+    "device": {
+      "deterministic": {
+        "passed": 1,
+        "total": 1,
+        "rate": 1.0,
+        "wilson_95": [
+          0.20654931437723745,
+          1.0
+        ],
+        "sampling_note": "curated cases; binomial interval is descriptive, not proof of production success probability"
+      },
+      "combined_checks": {
+        "passed": 1,
+        "total": 1,
+        "rate": 1.0,
+        "wilson_95": [
+          0.20654931437723745,
+          1.0
+        ],
+        "sampling_note": "curated cases; binomial interval is descriptive, not proof of production success probability"
+      },
+      "unresolved_semantic": 0
+    },
+    "discovery": {
+      "deterministic": {
+        "passed": 1,
+        "total": 1,
+        "rate": 1.0,
+        "wilson_95": [
+          0.20654931437723745,
+          1.0
+        ],
+        "sampling_note": "curated cases; binomial interval is descriptive, not proof of production success probability"
+      },
+      "combined_checks": {
+        "passed": 1,
+        "total": 1,
+        "rate": 1.0,
+        "wilson_95": [
+          0.20654931437723745,
+          1.0
+        ],
+        "sampling_note": "curated cases; binomial interval is descriptive, not proof of production success probability"
+      },
+      "unresolved_semantic": 0
+    },
+    "evidence": {
+      "deterministic": {
+        "passed": 1,
+        "total": 1,
+        "rate": 1.0,
+        "wilson_95": [
+          0.20654931437723745,
+          1.0
+        ],
+        "sampling_note": "curated cases; binomial interval is descriptive, not proof of production success probability"
+      },
+      "combined_checks": {
+        "passed": 1,
+        "total": 1,
+        "rate": 1.0,
+        "wilson_95": [
+          0.20654931437723745,
+          1.0
+        ],
+        "sampling_note": "curated cases; binomial interval is descriptive, not proof of production success probability"
+      },
+      "unresolved_semantic": 0
+    },
+    "favorites": {
+      "deterministic": {
+        "passed": 1,
+        "total": 1,
+        "rate": 1.0,
+        "wilson_95": [
+          0.20654931437723745,
+          1.0
+        ],
+        "sampling_note": "curated cases; binomial interval is descriptive, not proof of production success probability"
+      },
+      "combined_checks": {
+        "passed": 1,
+        "total": 1,
+        "rate": 1.0,
+        "wilson_95": [
+          0.20654931437723745,
+          1.0
+        ],
+        "sampling_note": "curated cases; binomial interval is descriptive, not proof of production success probability"
+      },
+      "unresolved_semantic": 0
+    },
+    "format": {
+      "deterministic": {
+        "passed": 10,
+        "total": 10,
+        "rate": 1.0,
+        "wilson_95": [
+          0.7224672001371109,
+          1.0
+        ],
+        "sampling_note": "curated cases; binomial interval is descriptive, not proof of production success probability"
+      },
+      "combined_checks": {
+        "passed": 10,
+        "total": 10,
+        "rate": 1.0,
+        "wilson_95": [
+          0.7224672001371109,
+          1.0
+        ],
+        "sampling_note": "curated cases; binomial interval is descriptive, not proof of production success probability"
+      },
+      "unresolved_semantic": 0
+    },
+    "history": {
+      "deterministic": {
+        "passed": 1,
+        "total": 1,
+        "rate": 1.0,
+        "wilson_95": [
+          0.20654931437723745,
+          1.0
+        ],
+        "sampling_note": "curated cases; binomial interval is descriptive, not proof of production success probability"
+      },
+      "combined_checks": {
+        "passed": 1,
+        "total": 1,
+        "rate": 1.0,
+        "wilson_95": [
+          0.20654931437723745,
+          1.0
+        ],
+        "sampling_note": "curated cases; binomial interval is descriptive, not proof of production success probability"
+      },
+      "unresolved_semantic": 0
+    },
+    "identity": {
+      "deterministic": {
+        "passed": 21,
+        "total": 21,
+        "rate": 1.0,
+        "wilson_95": [
+          0.8453609810751531,
+          1.0
+        ],
+        "sampling_note": "curated cases; binomial interval is descriptive, not proof of production success probability"
+      },
+      "combined_checks": {
+        "passed": 16,
+        "total": 21,
+        "rate": 0.7619047619047619,
+        "wilson_95": [
+          0.5490882631704925,
+          0.8937198697736355
+        ],
+        "sampling_note": "curated cases; binomial interval is descriptive, not proof of production success probability"
+      },
+      "unresolved_semantic": 5
+    },
+    "isolation": {
+      "deterministic": {
+        "passed": 1,
+        "total": 1,
+        "rate": 1.0,
+        "wilson_95": [
+          0.20654931437723745,
+          1.0
+        ],
+        "sampling_note": "curated cases; binomial interval is descriptive, not proof of production success probability"
+      },
+      "combined_checks": {
+        "passed": 1,
+        "total": 1,
+        "rate": 1.0,
+        "wilson_95": [
+          0.20654931437723745,
+          1.0
+        ],
+        "sampling_note": "curated cases; binomial interval is descriptive, not proof of production success probability"
+      },
+      "unresolved_semantic": 0
+    },
+    "knowledge": {
+      "deterministic": {
+        "passed": 4,
+        "total": 4,
+        "rate": 1.0,
+        "wilson_95": [
+          0.5101091635454027,
+          1.0
+        ],
+        "sampling_note": "curated cases; binomial interval is descriptive, not proof of production success probability"
+      },
+      "combined_checks": {
+        "passed": 4,
+        "total": 4,
+        "rate": 1.0,
+        "wilson_95": [
+          0.5101091635454027,
+          1.0
+        ],
+        "sampling_note": "curated cases; binomial interval is descriptive, not proof of production success probability"
+      },
+      "unresolved_semantic": 0
+    },
+    "memory": {
+      "deterministic": {
+        "passed": 10,
+        "total": 10,
+        "rate": 1.0,
+        "wilson_95": [
+          0.7224672001371109,
+          1.0
+        ],
+        "sampling_note": "curated cases; binomial interval is descriptive, not proof of production success probability"
+      },
+      "combined_checks": {
+        "passed": 10,
+        "total": 10,
+        "rate": 1.0,
+        "wilson_95": [
+          0.7224672001371109,
+          1.0
+        ],
+        "sampling_note": "curated cases; binomial interval is descriptive, not proof of production success probability"
+      },
+      "unresolved_semantic": 0
+    },
+    "moderation": {
+      "deterministic": {
+        "passed": 3,
+        "total": 3,
+        "rate": 1.0,
+        "wilson_95": [
+          0.4385029682449546,
+          1.0
+        ],
+        "sampling_note": "curated cases; binomial interval is descriptive, not proof of production success probability"
+      },
+      "combined_checks": {
+        "passed": 3,
+        "total": 3,
+        "rate": 1.0,
+        "wilson_95": [
+          0.4385029682449546,
+          1.0
+        ],
+        "sampling_note": "curated cases; binomial interval is descriptive, not proof of production success probability"
+      },
+      "unresolved_semantic": 0
+    },
+    "multi_intent": {
+      "deterministic": {
+        "passed": 10,
+        "total": 10,
+        "rate": 1.0,
+        "wilson_95": [
+          0.7224672001371109,
+          1.0
+        ],
+        "sampling_note": "curated cases; binomial interval is descriptive, not proof of production success probability"
+      },
+      "combined_checks": {
+        "passed": 8,
+        "total": 10,
+        "rate": 0.8,
+        "wilson_95": [
+          0.4901624715366418,
+          0.9433178485456248
+        ],
+        "sampling_note": "curated cases; binomial interval is descriptive, not proof of production success probability"
+      },
+      "unresolved_semantic": 2
+    },
+    "multi_turn": {
+      "deterministic": {
+        "passed": 5,
+        "total": 5,
+        "rate": 1.0,
+        "wilson_95": [
+          0.5655175352168251,
+          1.0
+        ],
+        "sampling_note": "curated cases; binomial interval is descriptive, not proof of production success probability"
+      },
+      "combined_checks": {
+        "passed": 4,
+        "total": 5,
+        "rate": 0.8,
+        "wilson_95": [
+          0.3755346297625253,
+          0.9637758913675698
+        ],
+        "sampling_note": "curated cases; binomial interval is descriptive, not proof of production success probability"
+      },
+      "unresolved_semantic": 1
+    },
+    "navigation": {
+      "deterministic": {
+        "passed": 6,
+        "total": 6,
+        "rate": 1.0,
+        "wilson_95": [
+          0.6096657120978346,
+          1.0
+        ],
+        "sampling_note": "curated cases; binomial interval is descriptive, not proof of production success probability"
+      },
+      "combined_checks": {
+        "passed": 6,
+        "total": 6,
+        "rate": 1.0,
+        "wilson_95": [
+          0.6096657120978346,
+          1.0
+        ],
+        "sampling_note": "curated cases; binomial interval is descriptive, not proof of production success probability"
+      },
+      "unresolved_semantic": 0
+    },
+    "negative": {
+      "deterministic": {
+        "passed": 16,
+        "total": 16,
+        "rate": 1.0,
+        "wilson_95": [
+          0.8063923194655637,
+          1.0
+        ],
+        "sampling_note": "curated cases; binomial interval is descriptive, not proof of production success probability"
+      },
+      "combined_checks": {
+        "passed": 12,
+        "total": 16,
+        "rate": 0.75,
+        "wilson_95": [
+          0.5050168346449122,
+          0.8981793250878696
+        ],
+        "sampling_note": "curated cases; binomial interval is descriptive, not proof of production success probability"
+      },
+      "unresolved_semantic": 4
+    },
+    "no_implicit_approval": {
+      "deterministic": {
+        "passed": 3,
+        "total": 3,
+        "rate": 1.0,
+        "wilson_95": [
+          0.4385029682449546,
+          1.0
+        ],
+        "sampling_note": "curated cases; binomial interval is descriptive, not proof of production success probability"
+      },
+      "combined_checks": {
+        "passed": 3,
+        "total": 3,
+        "rate": 1.0,
+        "wilson_95": [
+          0.4385029682449546,
+          1.0
+        ],
+        "sampling_note": "curated cases; binomial interval is descriptive, not proof of production success probability"
+      },
+      "unresolved_semantic": 0
+    },
+    "notices": {
+      "deterministic": {
+        "passed": 4,
+        "total": 4,
+        "rate": 1.0,
+        "wilson_95": [
+          0.5101091635454027,
+          1.0
+        ],
+        "sampling_note": "curated cases; binomial interval is descriptive, not proof of production success probability"
+      },
+      "combined_checks": {
+        "passed": 3,
+        "total": 4,
+        "rate": 0.75,
+        "wilson_95": [
+          0.30064184258240184,
+          0.9544127391902995
+        ],
+        "sampling_note": "curated cases; binomial interval is descriptive, not proof of production success probability"
+      },
+      "unresolved_semantic": 1
+    },
+    "own": {
+      "deterministic": {
+        "passed": 9,
+        "total": 9,
+        "rate": 1.0,
+        "wilson_95": [
+          0.7008549515804559,
+          1.0
+        ],
+        "sampling_note": "curated cases; binomial interval is descriptive, not proof of production success probability"
+      },
+      "combined_checks": {
+        "passed": 7,
+        "total": 9,
+        "rate": 0.7777777777777778,
+        "wilson_95": [
+          0.4525889691069889,
+          0.9367748928821533
+        ],
+        "sampling_note": "curated cases; binomial interval is descriptive, not proof of production success probability"
+      },
+      "unresolved_semantic": 2
+    },
+    "pagination": {
+      "deterministic": {
+        "passed": 1,
+        "total": 1,
+        "rate": 1.0,
+        "wilson_95": [
+          0.20654931437723745,
+          1.0
+        ],
+        "sampling_note": "curated cases; binomial interval is descriptive, not proof of production success probability"
+      },
+      "combined_checks": {
+        "passed": 1,
+        "total": 1,
+        "rate": 1.0,
+        "wilson_95": [
+          0.20654931437723745,
+          1.0
+        ],
+        "sampling_note": "curated cases; binomial interval is descriptive, not proof of production success probability"
+      },
+      "unresolved_semantic": 0
+    },
+    "persona": {
+      "deterministic": {
+        "passed": 10,
+        "total": 10,
+        "rate": 1.0,
+        "wilson_95": [
+          0.7224672001371109,
+          1.0
+        ],
+        "sampling_note": "curated cases; binomial interval is descriptive, not proof of production success probability"
+      },
+      "combined_checks": {
+        "passed": 8,
+        "total": 10,
+        "rate": 0.8,
+        "wilson_95": [
+          0.4901624715366418,
+          0.9433178485456248
+        ],
+        "sampling_note": "curated cases; binomial interval is descriptive, not proof of production success probability"
+      },
+      "unresolved_semantic": 2
+    },
+    "prompt": {
+      "deterministic": {
+        "passed": 1,
+        "total": 1,
+        "rate": 1.0,
+        "wilson_95": [
+          0.20654931437723745,
+          1.0
+        ],
+        "sampling_note": "curated cases; binomial interval is descriptive, not proof of production success probability"
+      },
+      "combined_checks": {
+        "passed": 1,
+        "total": 1,
+        "rate": 1.0,
+        "wilson_95": [
+          0.20654931437723745,
+          1.0
+        ],
+        "sampling_note": "curated cases; binomial interval is descriptive, not proof of production success probability"
+      },
+      "unresolved_semantic": 0
+    },
+    "quota": {
+      "deterministic": {
+        "passed": 1,
+        "total": 1,
+        "rate": 1.0,
+        "wilson_95": [
+          0.20654931437723745,
+          1.0
+        ],
+        "sampling_note": "curated cases; binomial interval is descriptive, not proof of production success probability"
+      },
+      "combined_checks": {
+        "passed": 1,
+        "total": 1,
+        "rate": 1.0,
+        "wilson_95": [
+          0.20654931437723745,
+          1.0
+        ],
+        "sampling_note": "curated cases; binomial interval is descriptive, not proof of production success probability"
+      },
+      "unresolved_semantic": 0
+    },
+    "read": {
+      "deterministic": {
+        "passed": 37,
+        "total": 37,
+        "rate": 1.0,
+        "wilson_95": [
+          0.9059421741627975,
+          1.0
+        ],
+        "sampling_note": "curated cases; binomial interval is descriptive, not proof of production success probability"
+      },
+      "combined_checks": {
+        "passed": 34,
+        "total": 37,
+        "rate": 0.918918918918919,
+        "wilson_95": [
+          0.7869932065071161,
+          0.972039425899552
+        ],
+        "sampling_note": "curated cases; binomial interval is descriptive, not proof of production success probability"
+      },
+      "unresolved_semantic": 3
+    },
+    "regression": {
+      "deterministic": {
+        "passed": 9,
+        "total": 9,
+        "rate": 1.0,
+        "wilson_95": [
+          0.7008549515804559,
+          1.0
+        ],
+        "sampling_note": "curated cases; binomial interval is descriptive, not proof of production success probability"
+      },
+      "combined_checks": {
+        "passed": 7,
+        "total": 9,
+        "rate": 0.7777777777777778,
+        "wilson_95": [
+          0.4525889691069889,
+          0.9367748928821533
+        ],
+        "sampling_note": "curated cases; binomial interval is descriptive, not proof of production success probability"
+      },
+      "unresolved_semantic": 2
+    },
+    "retrieval": {
+      "deterministic": {
+        "passed": 8,
+        "total": 8,
+        "rate": 1.0,
+        "wilson_95": [
+          0.6755924351161198,
+          1.0
+        ],
+        "sampling_note": "curated cases; binomial interval is descriptive, not proof of production success probability"
+      },
+      "combined_checks": {
+        "passed": 8,
+        "total": 8,
+        "rate": 1.0,
+        "wilson_95": [
+          0.6755924351161198,
+          1.0
+        ],
+        "sampling_note": "curated cases; binomial interval is descriptive, not proof of production success probability"
+      },
+      "unresolved_semantic": 0
+    },
+    "revision": {
+      "deterministic": {
+        "passed": 1,
+        "total": 1,
+        "rate": 1.0,
+        "wilson_95": [
+          0.20654931437723745,
+          1.0
+        ],
+        "sampling_note": "curated cases; binomial interval is descriptive, not proof of production success probability"
+      },
+      "combined_checks": {
+        "passed": 1,
+        "total": 1,
+        "rate": 1.0,
+        "wilson_95": [
+          0.20654931437723745,
+          1.0
+        ],
+        "sampling_note": "curated cases; binomial interval is descriptive, not proof of production success probability"
+      },
+      "unresolved_semantic": 0
+    },
+    "security": {
+      "deterministic": {
+        "passed": 8,
+        "total": 8,
+        "rate": 1.0,
+        "wilson_95": [
+          0.6755924351161198,
+          1.0
+        ],
+        "sampling_note": "curated cases; binomial interval is descriptive, not proof of production success probability"
+      },
+      "combined_checks": {
+        "passed": 7,
+        "total": 8,
+        "rate": 0.875,
+        "wilson_95": [
+          0.5291118177871464,
+          0.9775825085499433
+        ],
+        "sampling_note": "curated cases; binomial interval is descriptive, not proof of production success probability"
+      },
+      "unresolved_semantic": 1
+    },
+    "site": {
+      "deterministic": {
+        "passed": 5,
+        "total": 5,
+        "rate": 1.0,
+        "wilson_95": [
+          0.5655175352168251,
+          1.0
+        ],
+        "sampling_note": "curated cases; binomial interval is descriptive, not proof of production success probability"
+      },
+      "combined_checks": {
+        "passed": 5,
+        "total": 5,
+        "rate": 1.0,
+        "wilson_95": [
+          0.5655175352168251,
+          1.0
+        ],
+        "sampling_note": "curated cases; binomial interval is descriptive, not proof of production success probability"
+      },
+      "unresolved_semantic": 0
+    },
+    "sticker": {
+      "deterministic": {
+        "passed": 3,
+        "total": 3,
+        "rate": 1.0,
+        "wilson_95": [
+          0.4385029682449546,
+          1.0
+        ],
+        "sampling_note": "curated cases; binomial interval is descriptive, not proof of production success probability"
+      },
+      "combined_checks": {
+        "passed": 3,
+        "total": 3,
+        "rate": 1.0,
+        "wilson_95": [
+          0.4385029682449546,
+          1.0
+        ],
+        "sampling_note": "curated cases; binomial interval is descriptive, not proof of production success probability"
+      },
+      "unresolved_semantic": 0
+    },
+    "tags": {
+      "deterministic": {
+        "passed": 2,
+        "total": 2,
+        "rate": 1.0,
+        "wilson_95": [
+          0.34238022750665303,
+          1.0
+        ],
+        "sampling_note": "curated cases; binomial interval is descriptive, not proof of production success probability"
+      },
+      "combined_checks": {
+        "passed": 2,
+        "total": 2,
+        "rate": 1.0,
+        "wilson_95": [
+          0.34238022750665303,
+          1.0
+        ],
+        "sampling_note": "curated cases; binomial interval is descriptive, not proof of production success probability"
+      },
+      "unresolved_semantic": 0
+    },
+    "taxonomy": {
+      "deterministic": {
+        "passed": 3,
+        "total": 3,
+        "rate": 1.0,
+        "wilson_95": [
+          0.4385029682449546,
+          1.0
+        ],
+        "sampling_note": "curated cases; binomial interval is descriptive, not proof of production success probability"
+      },
+      "combined_checks": {
+        "passed": 3,
+        "total": 3,
+        "rate": 1.0,
+        "wilson_95": [
+          0.4385029682449546,
+          1.0
+        ],
+        "sampling_note": "curated cases; binomial interval is descriptive, not proof of production success probability"
+      },
+      "unresolved_semantic": 0
+    },
+    "todos": {
+      "deterministic": {
+        "passed": 2,
+        "total": 2,
+        "rate": 1.0,
+        "wilson_95": [
+          0.34238022750665303,
+          1.0
+        ],
+        "sampling_note": "curated cases; binomial interval is descriptive, not proof of production success probability"
+      },
+      "combined_checks": {
+        "passed": 2,
+        "total": 2,
+        "rate": 1.0,
+        "wilson_95": [
+          0.34238022750665303,
+          1.0
+        ],
+        "sampling_note": "curated cases; binomial interval is descriptive, not proof of production success probability"
+      },
+      "unresolved_semantic": 0
+    },
+    "transport": {
+      "deterministic": {
+        "passed": 2,
+        "total": 2,
+        "rate": 1.0,
+        "wilson_95": [
+          0.34238022750665303,
+          1.0
+        ],
+        "sampling_note": "curated cases; binomial interval is descriptive, not proof of production success probability"
+      },
+      "combined_checks": {
+        "passed": 2,
+        "total": 2,
+        "rate": 1.0,
+        "wilson_95": [
+          0.34238022750665303,
+          1.0
+        ],
+        "sampling_note": "curated cases; binomial interval is descriptive, not proof of production success probability"
+      },
+      "unresolved_semantic": 0
+    },
+    "write_prepare": {
+      "deterministic": {
+        "passed": 35,
+        "total": 35,
+        "rate": 1.0,
+        "wilson_95": [
+          0.9010990076755959,
+          1.0
+        ],
+        "sampling_note": "curated cases; binomial interval is descriptive, not proof of production success probability"
+      },
+      "combined_checks": {
+        "passed": 32,
+        "total": 35,
+        "rate": 0.9142857142857143,
+        "wilson_95": [
+          0.776207260341035,
+          0.9704176317330302
+        ],
+        "sampling_note": "curated cases; binomial interval is descriptive, not proof of production success probability"
+      },
+      "unresolved_semantic": 3
+    }
+  },
+  "first_visible_s": {
+    "samples": 172,
+    "p50": 0.12048561254050583,
+    "p95": 0.35621426490833985,
+    "max": 2.878937219036743
+  },
+  "model_ttft_s": {
+    "samples": 382,
+    "p50": 1.9596043948549777,
+    "p95": 3.1053128330037,
+    "max": 15.753717229003087
+  },
+  "task_metrics": {
+    "chat": {
+      "calls": {
+        "samples": 32,
+        "p50": 1.0,
+        "p95": 1.0,
+        "max": 2,
+        "target_p95": 1
+      },
+      "in": {
+        "samples": 32,
+        "p50": 3565.5,
+        "p95": 4611.9,
+        "max": 11896,
+        "target_p95": 5000
+      },
+      "out": {
+        "samples": 32,
+        "p50": 122.5,
+        "p95": 463.6,
+        "max": 776,
+        "target_p95": 400
+      },
+      "elapsed_s": {
+        "samples": 32,
+        "p50": 3.531793402391486,
+        "p95": 7.080794393981341,
+        "max": 13.504864709917456,
+        "target_p95": 10
+      },
+      "first_reply_s": {
+        "samples": 32,
+        "p50": 2.9532661985140294,
+        "p95": 4.889834748138673,
+        "max": 13.475981913972646,
+        "target_p95": 8
+      }
+    },
+    "browser": {
+      "calls": {
+        "samples": 15,
+        "p50": 2,
+        "p95": null,
+        "max": 3,
+        "target_p95": 2
+      },
+      "in": {
+        "samples": 15,
+        "p50": 7241,
+        "p95": null,
+        "max": 11323,
+        "target_p95": 11000
+      },
+      "out": {
+        "samples": 15,
+        "p50": 98,
+        "p95": null,
+        "max": 297,
+        "target_p95": 500
+      },
+      "elapsed_s": {
+        "samples": 15,
+        "p50": 4.992975475965068,
+        "p95": null,
+        "max": 8.32991501991637,
+        "target_p95": 15
+      },
+      "first_command_s": {
+        "samples": 11,
+        "p50": 4.983617888996378,
+        "p95": null,
+        "max": 8.320813179947436,
+        "target_p95": 6
+      },
+      "first_reply_s": {
+        "samples": 15,
+        "p50": 4.538746643811464,
+        "p95": null,
+        "max": 8.101099252933636,
+        "target_p95": 12
+      }
+    },
+    "read": {
+      "calls": {
+        "samples": 39,
+        "p50": 3,
+        "p95": 4.0,
+        "max": 4,
+        "target_p95": 3
+      },
+      "in": {
+        "samples": 39,
+        "p50": 12633,
+        "p95": 19065.0,
+        "max": 21912,
+        "target_p95": 18000
+      },
+      "out": {
+        "samples": 39,
+        "p50": 220,
+        "p95": 554.3,
+        "max": 696,
+        "target_p95": 1200
+      },
+      "elapsed_s": {
+        "samples": 39,
+        "p50": 7.859282165998593,
+        "p95": 11.878968436154537,
+        "max": 15.26028536609374,
+        "target_p95": 20
+      },
+      "first_reply_s": {
+        "samples": 39,
+        "p50": 6.719222872052342,
+        "p95": 10.535774824488907,
+        "max": 14.574201379204169,
+        "target_p95": 18
+      }
+    },
+    "article_read": {
+      "calls": {
+        "samples": 4,
+        "p50": 2.5,
+        "p95": null,
+        "max": 4,
+        "target_p95": 5
+      },
+      "in": {
+        "samples": 4,
+        "p50": 22290.0,
+        "p95": null,
+        "max": 34061,
+        "target_p95": 32000
+      },
+      "out": {
+        "samples": 4,
+        "p50": 984.5,
+        "p95": null,
+        "max": 1643,
+        "target_p95": 1600
+      },
+      "elapsed_s": {
+        "samples": 4,
+        "p50": 13.355148440459743,
+        "p95": null,
+        "max": 19.382404973963276,
+        "target_p95": 30
+      },
+      "first_reply_s": {
+        "samples": 4,
+        "p50": 8.98970326257404,
+        "p95": null,
+        "max": 19.295366612030193,
+        "target_p95": 25
+      }
+    },
+    "prepare": {
+      "calls": {
+        "samples": 29,
+        "p50": 3,
+        "p95": 4.0,
+        "max": 4,
+        "target_p95": 4
+      },
+      "in": {
+        "samples": 29,
+        "p50": 15825,
+        "p95": 20341.0,
+        "max": 21698,
+        "target_p95": 24000
+      },
+      "out": {
+        "samples": 29,
+        "p50": 255,
+        "p95": 457.2,
+        "max": 687,
+        "target_p95": 1000
+      },
+      "elapsed_s": {
+        "samples": 29,
+        "p50": 9.537487369962037,
+        "p95": 13.289584185974672,
+        "max": 24.65868315915577,
+        "target_p95": 20
+      },
+      "first_confirmation_s": {
+        "samples": 20,
+        "p50": 9.79063122253865,
+        "p95": 13.767039276123977,
+        "max": 24.648730052169412,
+        "target_p95": 15
+      }
+    },
+    "control": {
+      "calls": {
+        "samples": 10,
+        "p50": 2.0,
+        "p95": null,
+        "max": 4,
+        "target_p95": 3
+      },
+      "in": {
+        "samples": 10,
+        "p50": 8572.5,
+        "p95": null,
+        "max": 21737,
+        "target_p95": 20000
+      },
+      "out": {
+        "samples": 10,
+        "p50": 163.5,
+        "p95": null,
+        "max": 541,
+        "target_p95": 800
+      },
+      "elapsed_s": {
+        "samples": 10,
+        "p50": 5.917838238412514,
+        "p95": null,
+        "max": 12.557698349002749,
+        "target_p95": 20
+      },
+      "first_reply_s": {
+        "samples": 10,
+        "p50": 3.625467073987238,
+        "p95": null,
+        "max": 11.8967462729197,
+        "target_p95": 18
+      }
+    },
+    "conversation": {
+      "calls": {
+        "samples": 31,
+        "p50": 1,
+        "p95": 3.0,
+        "max": 3,
+        "target_p95": 4
+      },
+      "in": {
+        "samples": 31,
+        "p50": 3739,
+        "p95": 11584.0,
+        "max": 16610,
+        "target_p95": 24000
+      },
+      "out": {
+        "samples": 31,
+        "p50": 87,
+        "p95": 237.5,
+        "max": 352,
+        "target_p95": 1600
+      },
+      "elapsed_s": {
+        "samples": 31,
+        "p50": 3.132012363988906,
+        "p95": 8.173516527982429,
+        "max": 8.566065804101527,
+        "target_p95": 25
+      },
+      "first_reply_s": {
+        "samples": 31,
+        "p50": 2.5883555598556995,
+        "p95": 7.596088895108551,
+        "max": 7.7734945439733565,
+        "target_p95": 20
+      }
+    },
+    "multi": {
+      "calls": {
+        "samples": 12,
+        "p50": 3.0,
+        "p95": null,
+        "max": 5,
+        "target_p95": 8
+      },
+      "in": {
+        "samples": 12,
+        "p50": 13777.0,
+        "p95": null,
+        "max": 29266,
+        "target_p95": 32768
+      },
+      "out": {
+        "samples": 12,
+        "p50": 424.0,
+        "p95": null,
+        "max": 958,
+        "target_p95": 4000
+      },
+      "elapsed_s": {
+        "samples": 12,
+        "p50": 10.212136710062623,
+        "p95": null,
+        "max": 17.2834471068345,
+        "target_p95": 45
+      },
+      "first_reply_s": {
+        "samples": 12,
+        "p50": 9.343232414568774,
+        "p95": null,
+        "max": 15.721752546960488,
+        "target_p95": 35
+      }
+    }
+  },
+  "release_status": "failed",
+  "failed_gates": [
+    {
+      "gate": "task_quality",
+      "detail": {
+        "rate": 0.903448275862069,
+        "target": 0.95,
+        "cases": 145
+      }
+    },
+    {
+      "gate": "core_quality",
+      "detail": {
+        "rate": 0.8984375,
+        "target": 0.98,
+        "cases": 128
+      }
+    },
+    {
+      "gate": "semantic_critical",
+      "detail": "critical cases require deterministic and semantic passes"
+    },
+    {
+      "gate": "chat.out",
+      "detail": {
+        "samples": 32,
+        "p50": 122.5,
+        "p95": 463.6,
+        "max": 776,
+        "target_p95": 400
+      }
+    },
+    {
+      "gate": "read.calls",
+      "detail": {
+        "samples": 39,
+        "p50": 3,
+        "p95": 4.0,
+        "max": 4,
+        "target_p95": 3
+      }
+    },
+    {
+      "gate": "read.in",
+      "detail": {
+        "samples": 39,
+        "p50": 12633,
+        "p95": 19065.0,
+        "max": 21912,
+        "target_p95": 18000
+      }
+    }
+  ],
+  "unverified": [
+    "browser.calls: at least 20 measured rounds",
+    "browser.in: at least 20 measured rounds",
+    "browser.out: at least 20 measured rounds",
+    "browser.elapsed_s: at least 20 measured rounds",
+    "browser.first_command_s: at least 20 measured rounds",
+    "browser.first_reply_s: at least 20 measured rounds",
+    "article_read.calls: at least 20 measured rounds",
+    "article_read.in: at least 20 measured rounds",
+    "article_read.out: at least 20 measured rounds",
+    "article_read.elapsed_s: at least 20 measured rounds",
+    "article_read.first_reply_s: at least 20 measured rounds",
+    "control.calls: at least 20 measured rounds",
+    "control.in: at least 20 measured rounds",
+    "control.out: at least 20 measured rounds",
+    "control.elapsed_s: at least 20 measured rounds",
+    "control.first_reply_s: at least 20 measured rounds",
+    "multi.calls: at least 20 measured rounds",
+    "multi.in: at least 20 measured rounds",
+    "multi.out: at least 20 measured rounds",
+    "multi.elapsed_s: at least 20 measured rounds",
+    "multi.first_reply_s: at least 20 measured rounds"
+  ],
+  "offline_ci": {
+    "passed": 2282,
+    "skipped": 19,
+    "postgres_passed": 17,
+    "run": 41486939243
+  },
+  "rag": {
+    "documents": 9,
+    "vectors": 223,
+    "dimension": 512,
+    "missing": 0,
+    "repeated_prepare_new_calls": 0,
+    "fixed_development_queries": 16,
+    "hit_at_1": 0.9375,
+    "recall_at_3": 1,
+    "ndcg_at_8": 0.9808391502260794,
+    "lexical_fallback_recall_at_3_before": 1,
+    "lexical_fallback_recall_at_3_after": 0.96875
+  },
+  "limitations": [
+    "Curated development data, not an independent acceptance sample.",
+    "137 historical source groups are missing; exact duplicates are zero.",
+    "A progress event is not first reply or browser completion.",
+    "The original first-run findings remain even after targeted fixes.",
+    "No observed operational SLO or complete real business write coverage."
+  ]
+}
