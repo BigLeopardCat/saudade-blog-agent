@@ -22,7 +22,8 @@ def conversation_context(principal) -> dict:
     role = getattr(principal, "known_role", None) if verified else None
     return {
         "rendering": {"stickers": [f":{name}:" for name in STICKER_NAMES]},
-        "tools": {"loading": "disabled" if role == ROLE_ZAKO else "on_demand"},
+        "tools": {"loading": "disabled" if role == ROLE_ZAKO else "on_demand",
+                  "administration_requires": sorted(ADMIN_ROLES)},
         "caller": {"verified": verified, "role": role,
                      "preferred_address": ("主人" if role in ADMIN_ROLES
                                            else "杂鱼" if role == ROLE_ZAKO else "你")},

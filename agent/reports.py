@@ -552,6 +552,24 @@ def _rank_block(head: str, rows: list | None, metric: str) -> list[str]:
     return lines
 
 
+def _daily_window_lines(window):
+    """Display backend coverage and subtotals without deriving business statistics."""
+    if (not isinstance(window, dict) or window.get("scope") != "rolling_window"
+            or not isinstance(window.get("start"), str)
+            or not isinstance(window.get("end"), str)):
+        return ["- 日序列范围：后端未返回覆盖范围，不能据此断言整月合计。"]
+    lines = [f"- 本次日序列范围：{window['start']} 至 {window['end']}；"
+             "滚动窗口不是自然月整月合计，整月比较需读取对应月报。"]
+    subtotals = window.get("monthlySubtotals")
+    if isinstance(subtotals, list):
+        for row in subtotals:
+            if isinstance(row, dict) and isinstance(row.get("month"), str):
+                value = _count_int(row.get("views"))
+                if value is not None:
+                    lines.append(f"- 窗口内{row['month']}小计（不是整月合计）：阅读 {value}")
+    return lines
+
+
 def render_note_stats(data: dict, now: datetime | None = None) -> str:
     """Render backend totals, independent rankings and the bounded daily series."""
     data = data or {}
@@ -566,13 +584,20 @@ def render_note_stats(data: dict, now: datetime | None = None) -> str:
 
     # `daily` 同样三态：没读到 / 读到但全是零 / 读到且有数（见 `_rank_block` 注）
     daily = data.get("daily")
+    lines += _daily_window_lines(data.get("dailyWindow"))
     hit = [d for d in (daily or [])
            if isinstance(d, dict) and ((_count_int(d.get("views")) or 0)
                                        or (_count_int(d.get("likes")) or 0))]
     if daily is None:
         lines.append("- 近 30 天趋势：本次没读到（后台没有返回这一项）")
+    elif not daily:
+        lines.append("- 日趋势：本次未返回日明细，不能据此断言零访问。")
     elif not hit:
-        lines.append("- 近 30 天趋势：这 30 天里没有任何阅读或点赞记录")
+        if all(isinstance(row, dict) and _count_int(row.get("views")) == 0
+               and _count_int(row.get("likes")) == 0 for row in daily):
+            lines.append("- 近 30 天趋势：返回日期内的阅读和点赞均为零")
+        else:
+            lines.append("- 日趋势：指标缺失，不能据此断言零访问。")
     else:
         shown = hit[-30:]
         days = "；".join((d.get("date") or "?") + " " + _counts_text(d) for d in shown)
