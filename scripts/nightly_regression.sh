@@ -2,6 +2,14 @@
 # Opt-in nightly checks. Missing optional host probes are skipped, never counted as evaluated.
 # Required failures set the sentinel; diagnostic reports do not relax those checks.
 set -u
+for actor_key in GOLDEN_ADMIN_UID GOLDEN_USER_UID; do
+  actor_id="${!actor_key:-}"
+  if ! [[ "$actor_id" =~ ^[1-9][0-9]*$ ]]; then
+    echo "未评估：请显式配置 $actor_key 为测试账号的正整数编号。" >&2
+    exit 3
+  fi
+done
+export GOLDEN_ADMIN_UID GOLDEN_USER_UID
 cd "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PY=.venv/bin/python
 LOG="$HOME/agent_regression.log"
@@ -22,9 +30,7 @@ echo "--- 语料漂移哨兵 (词表型断言 vs 语料, 秒级, 非门禁) ---"
 $PY eval/corpus_terms.py --drift >> "$LOG" 2>&1 || echo "[$TS] corpus_terms --drift 有 ORPHAN/MISBOUND 或运行异常（非门禁，看报告）" >> "$LOG"
 echo "--- 真写夹具残留哨兵 (只读公开接口, 秒级, 非门禁) ---" >> "$LOG"
 $PY eval/golden_fixture.py --verify >> "$LOG" 2>&1 || echo "[$TS] 真写夹具有残留或读不到公开接口（非门禁，见上面的 [fixture-leftover]/[fixture-check-failed] 行）" >> "$LOG"
-echo "--- golden set (149 条用例；其中 3 条真写按设计不在此处跑 = 146 条真实对话，约 25 分钟) ---" >> "$LOG"
-export GOLDEN_ADMIN_UID=756
-export GOLDEN_USER_UID=722
+echo "--- golden 趋势回归（实际规模、跳过与费用以本轮报告为准） ---" >> "$LOG"
 $PY eval/golden_fixture_account.py --verify >> "$LOG" 2>&1 || echo "[$TS] 账号夹具有残留或读不到后台账号名录（非门禁，见上面的 [fixture-leftover]/[fixture-check-failed] 行）" >> "$LOG"
 $PY eval/golden_fixture_board.py --verify >> "$LOG" 2>&1 || echo "[$TS] 留言夹具有残留或读不到后台留言清单（非门禁，见上面的 [fixture-leftover]/[fixture-check-failed] 行）" >> "$LOG"
 $PY eval/golden_fixture_todo.py --verify >> "$LOG" 2>&1 || echo "[$TS] 待办夹具有残留或读不到后台待办列表（非门禁，见上面的 [fixture-leftover]/[fixture-check-failed] 行）" >> "$LOG"
