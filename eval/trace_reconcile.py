@@ -70,14 +70,15 @@ from datetime import datetime, timedelta
 # 四个读取端共用一处，免得"改了布局漏改一个脚本"= 那天它少看一半数据）。
 # 与 `trace_files.py` 同目录，直接按脚本目录导入（本模块本来就被 tests 以同样方式加载）。
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from config.settings import settings  # noqa: E402
 from utils.trace_files import iter_trace_files  # noqa: E402
 from utils.trace_io import load_trace  # noqa: E402  （读取的唯一实现，含 gz）
 
 # ── CLI 默认路径（读者函数一律把路径当参数收，模块常量只给 CLI 与自测用）──────
-TRACE_DIR = "/home/ubuntu/Saudade-Blog/logs/agent/traces"
-AGENT_LOG_DIR = "/home/ubuntu/Saudade-Blog/logs/agent"
-MONITOR_DIR = "/home/ubuntu/Saudade-Blog/logs/frontend"
-HEALTH_LOG = "/home/ubuntu/Saudade-Blog/logs/health.log"
+TRACE_DIR = settings.trace_dir
+AGENT_LOG_DIR = os.path.join(settings.blog_root, "logs", "agent") if settings.blog_root else ""
+MONITOR_DIR = os.path.join(settings.blog_root, "logs", "frontend") if settings.blog_root else ""
+HEALTH_LOG = os.path.join(settings.blog_root, "logs", "health.log") if settings.blog_root else ""
 REPORT_DIR = "eval/report"
 
 TS_FMT = "%Y-%m-%d %H:%M:%S"
@@ -531,6 +532,8 @@ def main():
     ap.add_argument("--report-dir", default=REPORT_DIR)
     ap.add_argument("--json", action="store_true", help="只打印结果 JSON（管道/程序读）")
     args = ap.parse_args()
+    if not args.log_dir or not args.monitor_dir:
+        ap.error("Set BLOG_ROOT or provide --log-dir and --monitor-dir; host logs are unavailable")
 
     now = datetime.now()
     if args.since:
@@ -558,7 +561,7 @@ def main():
 
     print(summarize(r))
     print(f"报告: {md}")
-    if r["has_anomaly"]:
+    if r["has_anomaly"] and args.health_log:
         # 只在异常时进 health.log（同既有约定：干净就不写，一行都不多）
         try:
             with open(args.health_log, "a", encoding="utf-8") as f:

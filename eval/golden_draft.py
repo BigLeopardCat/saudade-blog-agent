@@ -116,6 +116,8 @@ def draft(record, index, inputs):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--dir", default=ta.TRACE_DIR,
+                        help="Trace root; defaults to TRACE_DIR configuration")
     parser.add_argument("--days", type=int, default=1)
     parser.add_argument("--from", dest="since", default="")
     parser.add_argument("--to", dest="until", default="99999999")
@@ -133,7 +135,7 @@ def main():
         report = json.loads(Path(path).read_text())
         excluded.update(row["request_id"] for row in report.get("requests", []))
     since = args.since or (datetime.now() - timedelta(days=args.days)).strftime("%Y%m%d")
-    flagged, ordinary, scanned = collect(iter_trace_files(ta.TRACE_DIR), since,
+    flagged, ordinary, scanned = collect(iter_trace_files(args.dir), since,
                                          args.until, excluded)
     candidates = list(reversed(flagged))[:args.limit or None]
     for record in SystemRandom().sample(ordinary, min(args.sample, len(ordinary))):
