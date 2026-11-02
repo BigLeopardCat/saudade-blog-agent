@@ -62,6 +62,7 @@ def build_prompt(messages: list, principal, own_enabled: bool = False) -> list:
                      "character": CHARACTER_IDENTITY,
                      "conversation_style": context["caller"]["conversation_style"],
                      "tool_loading": context["tools"]["loading"],
+                     "administration_requires": context["tools"]["administration_requires"],
                      "rendering": context["rendering"],
                      "tool_guidance": guidance, "factual_policy": _FACTS}
     actor, attachments = [], []
