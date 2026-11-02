@@ -91,13 +91,15 @@ def test_stream_error_has_error_sentinel_and_no_success_sentinel_first(monkeypat
     async def run():
         q = asyncio.Queue()
         loop = asyncio.get_running_loop()
-        await asyncio.to_thread(server.stream_to_queue, app.state.runtime, [], "conv", q, loop, 7,
-                                threading.Event(), Principal(uid=7))
-        return [await q.get(), await q.get(), await q.get()]
+        producer = asyncio.create_task(asyncio.to_thread(
+            server.stream_to_queue, app.state.runtime, [], "conv", q, loop, 7,
+            threading.Event(), Principal(uid=7)))
+        return [await turns.next_stream_item(q, producer),
+                await turns.next_stream_item(q, producer)]
     values = asyncio.run(run())
     assert isinstance(values[0], AIMessageChunk)
     assert isinstance(values[1], RuntimeError)
-    assert values[2] is None
+    assert len(values) == 2
 
 
 def test_empty_terminal_is_allowed_for_recovery_but_missing_terminal_is_not(monkeypatch):
@@ -183,10 +185,11 @@ def test_stop_fences_late_body_and_closes_runtime_generator(monkeypatch):
 
     async def run():
         queue = asyncio.Queue()
-        await asyncio.to_thread(server.stream_to_queue, app.state.runtime, [], "conv", queue,
-                                asyncio.get_running_loop(), 7, stop)
-        first = await asyncio.wait_for(queue.get(), 1)
-        terminal = await asyncio.wait_for(queue.get(), 1)
+        producer = asyncio.create_task(asyncio.to_thread(
+            server.stream_to_queue, app.state.runtime, [], "conv", queue,
+            asyncio.get_running_loop(), 7, stop))
+        first = await turns.next_stream_item(queue, producer)
+        terminal = await turns.next_stream_item(queue, producer)
         assert first.content == "首段"
         assert isinstance(terminal, turns.NativeCancelled)
         assert queue.empty()

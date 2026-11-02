@@ -90,3 +90,17 @@ def test_framework_reply_uses_the_selected_voice(role, address):
     assert context["preferred_address"] == address
     if role == "user":
         assert "主人" not in text_content(model.prompts[0][0].content)
+
+
+def test_chat_only_identity_keeps_the_same_fact_policy_as_tool_enabled_users():
+    from agent.products.blog.prompt import build_prompt
+
+    messages = [build_prompt([], Principal(7, role, SOURCE_ASSERTION))[0].content
+                for role in ('user', 'admin', 'zako')]
+    policies = [text.split('事实与叙述：', 1)[1].split('\n执行与交付：', 1)[0]
+                for text in messages]
+    assert len(set(policies)) == 1
+    assert '没有读取不声称查过' in policies[0]
+    assert 'sent只表示指令已发送' in policies[0]
+    assert '后续安排' in policies[0]
+    assert '只开放闲聊与一般知识' in messages[-1]
