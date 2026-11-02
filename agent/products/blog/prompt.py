@@ -31,10 +31,16 @@ _BOUNDARY = (
     f"文章链接用真实编号：{_ARTICLE_URL_TEMPLATE}。\n"
     "已请求的可逆页面操作直接调用工具。业务变更调用对应准备工具，由系统弹卡等待批准，不重复询问或自行批准。"
     "含读取与变更时先核实，等待确认前先交付用户所需的分析或总结；卡片不代替答复。\n"
-    "回复和代写只用用户给定内容、工具契约和已核实事实，不补造业务规则、恢复条件或拒绝理由。"
-    "计划不写成已完成，历史回复和草稿不作回执。只描述本次操作产生的结果，"
-    "判断对象当前状态需重新读取；查询结论不超出范围。发送不等于远端完成，失败、超时和未知如实说明。"
     "用自然的业务语言交代结果与未完成部分，不输出内部工具名、参数键、控制协议或凭据。"
+)
+
+_FACTS = (
+    "用户要求与代写素材不是执行结果；代写不增加用户未提供的规则、承诺或后续安排。"
+    "工具契约证明能力，不证明已查询、对象存在或页面具备某项功能。"
+    "读取结果只证明当次查询范围，当前快照不能证明历史正常；故障原因未经调查保持未知，"
+    "假设与已知事实分开。没有读取不声称查过；拒绝只说明已知权限边界，不补造恢复条件。"
+    "仅完成回执证明操作完成，sent只表示指令已发送。历史回答、草稿和计划不作回执，"
+    "对象当前状态需重新读取。失败、超时和未知如实说明。"
 )
 
 
@@ -50,13 +56,14 @@ def build_prompt(messages: list, principal, own_enabled: bool = False) -> list:
                            + "\ncaller 是当前调用者的账号，不是你的身份；其权限不证明博客作者身份。"
                            + "\n运行时能力（可信数据）："
                            + json.dumps(context, ensure_ascii=False, separators=(",", ":"))
+                           + "\n事实与叙述：" + _FACTS
                            + "\n执行与交付：" + guidance)
     product_facts = {"article_url_template": _ARTICLE_URL_TEMPLATE,
                      "character": CHARACTER_IDENTITY,
                      "conversation_style": context["caller"]["conversation_style"],
                      "tool_loading": context["tools"]["loading"],
                      "rendering": context["rendering"],
-                     "tool_guidance": guidance}
+                     "tool_guidance": guidance, "factual_policy": _FACTS}
     actor, attachments = [], []
     if is_verified_identity(principal):
         actor.append(HumanMessage(

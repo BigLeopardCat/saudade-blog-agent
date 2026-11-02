@@ -27,11 +27,15 @@ QUEUE_READ_TOOLS = frozenset({"list_quota_requests", "list_dashboard_todos"})
 
 _ADMIN_DESCRIPTIONS = {
     "get_server_status": "Read server CPU, load, memory, disk usage and uptime. Admin only.",
-    "get_service_health": "Read service health, restarts and recent diagnostic counts. Admin only.",
+    "get_service_health": "Read current service states, restart counts and historical probe "
+                          "records; does not establish failure causes. Admin only.",
     "get_user_stats": "Read total users, role distribution and recent activity. Admin only.",
-    "get_note_stats": "Read visible articles' aggregate traffic, rankings and trend. Admin only.",
-    "get_note_periods": "Read article traffic by week, month or year, including partial periods. "
-                        "Choose kind from the user's requested period. Admin only.",
+    "get_note_stats": "Read visible articles' aggregate traffic, rankings and daily traffic "
+                      "for the last 30 days. Use for recent within-month trends. Admin only.",
+    "get_note_periods": "Read article traffic totals per week, month or year, including partial "
+                        "periods. Choose kind from the user's requested period. For a daily "
+                        "series use get_note_stats; this report contains period totals. "
+                        "Admin only.",
 }
 
 
