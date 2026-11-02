@@ -19,7 +19,7 @@ import ir_measures  # noqa: E402
 from eval.rag_dataset import load  # noqa: E402
 
 
-def bm25_run(data: dict, top_k: int, cliff: bool) -> tuple[dict, dict]:
+def bm25_run(data: dict, top_k: int) -> tuple[dict, dict]:
     # Dedicated offline process: ignore deployment .env before importing settings.
     os.environ["SAUDADE_IGNORE_ENV_FILE"] = "1"
     from rag.corpus import content_revision
@@ -46,7 +46,7 @@ def bm25_run(data: dict, top_k: int, cliff: bool) -> tuple[dict, dict]:
     run = {}
     for qid, query in data["queries"].items():
         start = time.perf_counter()
-        hits = index._lexical_ranked(query["text"], top_k, apply_cliff=cliff)
+        hits = index._lexical_ranked(query["text"], top_k)
         if hits is None:
             raise RuntimeError("offline index unavailable")
         timings["query_seconds"][qid] = time.perf_counter() - start
@@ -124,7 +124,6 @@ def main(argv=None) -> int:
     parser.add_argument("--run-info", type=Path, help="external run provenance JSON")
     parser.add_argument("--k", type=int, nargs="+", default=[1, 3, 10])
     parser.add_argument("--max-docs", type=int, default=10000)
-    parser.add_argument("--no-cliff", action="store_true")
     args = parser.parse_args(argv)
     if not args.k or min(args.k) < 1 or args.max_docs < 1:
         parser.error("cutoffs and max-docs must be positive")
@@ -142,11 +141,11 @@ def main(argv=None) -> int:
     if args.run:
         run = read_run(args.run, data)
     else:
-        run, timings = bm25_run(data, max(args.k), not args.no_cliff)
+        run, timings = bm25_run(data, max(args.k))
     result = evaluate(data, run, sorted(set(args.k)))
     from rag.chunks import INDEX_VERSION
     from rag.lexical import backend_info
-    from rag.search import BM25_B, BM25_K1, cliff_config, synonyms
+    from rag.search import BM25_B, BM25_K1, synonyms
 
     root = Path(__file__).resolve().parents[1]
     sources = [*sorted((root / "rag").glob("*.py")), Path(__file__), root / "eval/rag_dataset.py"]
@@ -171,7 +170,6 @@ def main(argv=None) -> int:
             "bm25_backend": backend_info(),
             "bm25_k1": BM25_K1,
             "bm25_b": BM25_B,
-            "cliff": None if args.no_cliff else cliff_config(),
             "synonyms": synonyms(),
         },
         run_hash=(hashlib.sha256(args.run.read_bytes()).hexdigest() if args.run else None),

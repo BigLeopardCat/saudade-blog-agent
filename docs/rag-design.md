@@ -41,34 +41,41 @@ RagIndex 使用单次构建锁，在短锁内替换完整视图。失败保留�
 
 正文读取仍实时核对公开可见性；索引标题元数据有刷新窗口，不声称即时撤回。
 读取反馈的版本不匹配会使相关缓存失效，构建期间的失效信号也不能丢失。
-判断“是否该查站内资料”不进行 I/O，也不依赖语料源是否可用。
 
 ## 4. 切片与词法检索
 
-rag/sections.py 提供共享 Markdown 边界和 outline：识别围栏外 1–6 级标题，
-保留空父标题、层级路径和文档版本内的小节 ID。重复名称/编号不能默认取首个。
+rag/sections.py 使用 markdown-it-py 的 CommonMark block token 与 source line map，
+识别顶层 ATX/Setext 标题；围栏、缩进代码和 HTML 中的类标题，以及引用/列表内局部标题，
+均留在所在正文中。应用只维护分节树、空父标题、层级路径和读取视图版本内的小节 ID。
+正文和后代范围直接切原始字符串，保留 CRLF/CR 和 Unicode，不经渲染文本找回偏移。
+重复名称/编号不能默认取首个。
 
-rag/chunks.py 在小节内部继续按段落/行切片，限制字符预算并保留重叠，
+rag/chunks.py 使用 LangChain 的 RecursiveCharacterTextSplitter 在小节内切片，
+按段落、行和中英文边界配置限制字符预算并保留重叠，
 记录 chunk_id、section_id、标题路径和相对小节正文的范围。
 词法与向量均使用文章标题、路径和正文，标题不再因跨过长度阈值而丢失。
 字符预算是模型无关的输入上限，不宣称等于供应商的精确 token 数。
 可选 embedding profile 只在向量侧细分超 token 预算的片段，完整计算标题、路径及
 指令，保留小节源范围；配置损坏仍可走词法，见 [输入预算说明](embedding-inputs.md)。
 
-词法使用 CJK 2/3-gram 与英文数字词元，查询词元去重。`rag/lexical.py` 是 BM25S 的薄适配，
+词法通过 scikit-learn CountVectorizer 的公开 analyzer 生成 CJK 2/3-gram 与英文数字词元；
+应用只配置语言边界，不再手写 n-gram 生成循环。查询词元去重。`rag/lexical.py` 是 BM25S 的薄适配，
 索引、词频统计、长度归一与评分交给锁定版本的库；参数来自 BM25_K1、BM25_B。
 使用 Lucene 方法、float64 和 NumPy 后端，构建后只读，随完整语料快照原子替换。
 状态与评测报告记录库版本和评分方法。原生分数与旧实现的绝对尺度不同，不作为置信度；
-相对截断与 RRF 的排名语义保留。
+原分只用于本路排序，候选由固定 top_k 限制，RRF 按相对名次融合。
 两路共用 rag/ranking.py 聚合文档，并提供可回取的命中位置。
-候选断崖保留既有前 K 名保护，只控制供给宽度，不证明文档有答案。
+查询保留原始问句；不删除疑问词、不按头部分数裁掉尾候选。
+少量领域别名映射属于博客词表配置；候选与实际答案证据仍分开判断。
 
 ## 5. 向量与持久化
 
-RAG_HYBRID_ENABLED 和 AGENT_ARM 是独立开关。向量保持可选；
+RAG_HYBRID_ENABLED 控制可选的向量融合；
 只融合可用、与语料和空间一致的视图，故障明确退回词法并记录原因。
 
-空间包含模型、端点和请求维度；内容键覆盖实际 embedding 文本。
+空间包含模型、端点、请求维度和分块策略签名（切片库版本、分隔符、预算和重叠）；
+内容键覆盖实际 embedding 文本。缺少策略签名的旧清单不能作为当前视图使用，
+升级需要先在隔离目录准备新索引，不能将旧向量套在新切片上。
 启用 profile 时还包含固定 tokenizer、输入指令、预算与模型版本等语义配置的签名。
 查询 LRU 按空间及预处理后的查询分区，命中仍校验维度。
 拒绝不等长点积、非有限值和错误批响应 index；维度变化时重新构建完整视图。
@@ -80,6 +87,11 @@ RAG_HYBRID_ENABLED 和 AGENT_ARM 是独立开关。向量保持可选；
 旧 schema 1 的固定文件不能证明未发生错位，因此不导入，首次启用会重新嵌入；
 升级前应估算一次全量 embedding 成本。旧文件不自动删除，可作回滚材料。
 
+向量扫描使用 SciPy cdist 的 cosine 距离，在只读数值矩阵中计算；零向量不贡献相关性。
+RRF 排名交给 LangChain 官方 EnsembleRetriever.weighted_reciprocal_rank，
+仅合并博客来源位置，不复制其评分算法。该公开接口只返回顺序，混合候选因此提供 rank，
+不伪造 score；词法、向量单路的原生分仅用于各路排序和截断，工具出口统一显示排名。
+langchain-classic 只提供此 retriever，不装配第二套运行时。
 RRF 是相对排名，不是相关性置信度。启用前比较固定语料上的命中、噪声、证据获取、
 回答支持度与延迟/成本；文章篇数不能单独证明收益。
 
@@ -89,6 +101,9 @@ get_article_detail 增加 offset、max_chars、revision，返回 contentRevision
 readOffset、nextOffset、totalChars、readComplete、source 和小节 ID。
 续读范围或按小节 ID 读取必须带版本，防止编辑后跨版本拼接。
 按标题/编号只接受唯一匹配；父节读取包括子节。
+contentRevision 是包含解析策略及库版本、标题和原文的读取视图 hash；它与宿主语料传输的
+内容 revision 分开。检索候选 document_revision 使用相同读取视图版本，客户端只需原样回传。
+解析策略变化会明确拒绝旧 sN/续读版本；首次全文读取可取得当前版本与目录。
 
 无结构文章和超长单节也能连续读到尾部。偏移以选定正文为准，
 切片记录与按节读取一致。预算渲染保持可解析数据，并把 nextOffset/source.end
@@ -96,16 +111,23 @@ readOffset、nextOffset、totalChars、readComplete、source 和小节 ID。
 
 ## 7. 运行时证据规则
 
-默认图在 RAG 候选后试图空工具收尾时先产生正文读取计划。
-重复检索的补读允许有限探索未读候选，不把最高检索分当作答案充分性，
-也不跨 query 比较 BM25 原分来禁止补读，补读直接定位命中小节与范围。
+文章能力运行于现有 LangChain Agent，通过
+[ArticleMiddleware](../agent/products/blog/articles.py) 的公开 middleware hooks 观察工具结果、
+处理最终回复，并在恢复时读取已保存的证据快照。工具选择与后续读取由 Agent 决定。
 
-可选 hybrid 运行时记录成功读取的非空正文。候选直答交回默认图；
-搜索为空和服务失败使用不同的确定性答复。引用来自实际读过的文章，
-缺少引用时追加真实来源。普通聊天和目录工具保持各自路径。
+[ArticleEvidence](../agent/domains/articles/evidence.py) 分别记录公开搜索候选、
+模型实际可见的非空正文范围，以及已读正文提到的文章链接。正文先按本轮预算渲染，
+再登记可见字符、revision、小节及范围；到达选定范围末尾不等于读完全文。
+候选与其中的真实链接可用于文章推荐，带来源的可见片段可作为局部工具观察，
+但这些观察不登记为正文读取，也不证明看过整篇或能支持任意正文结论。
 
-成功读取是必要条件，不是语义正确性的证明。相关性、忠实度和提示词注入
-仍需端到端评测，不宣称程序检查消除了全部幻觉。
+最终回复的站内文章引用必须来自已知候选、已读文章或已读正文提到的本站链接；
+未知文章及错误站点引用会被阻止。成功读取正文后，若回复遗漏相应来源，
+中间件追加真实已读文章链接。RAG 搜索的 empty 与服务 failed 分别记录，
+无可核实结果时使用不同说明。
+
+这些检查验证链接出处和读取范围。内容相关性、结论支持度、忠实度及提示词注入风险
+仍由语义评测与端到端验收判断，不能从候选分数、链接合法或成功读取推导答案正确。
 
 ## 8. 评测与验收
 
@@ -127,3 +149,5 @@ readOffset、nextOffset、totalChars、readComplete、source 和小节 ID。
 - [Lucene BM25Similarity](https://lucene.apache.org/core/9_9_0/core/org/apache/lucene/search/similarities/BM25Similarity.html)：平均长度采用总词频/文档数。
 - [Azure RAG chunking](https://learn.microsoft.com/en-us/azure/architecture/ai-ml/guide/rag/rag-chunking-phase)：按结构和预算切分并验证效果。
 - [Lance table format](https://lance.org/format/table/)：不可变文件与版本化 manifest 的提交思想；本项目没有引入 Lance 依赖。
+
+成熟库迁移的范围、固定开发样本与CPU微基准见[专项记录](rag-library-migration.md)。

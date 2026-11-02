@@ -4,8 +4,7 @@ from __future__ import annotations
 
 import re
 
-from rag.corpus import content_revision
-from rag.sections import outline, render
+from rag.sections import outline, reading_revision
 
 DEFAULT_READ_CHARS = 12000
 MAX_READ_CHARS = 24000
@@ -68,9 +67,9 @@ def article_page(
     _validate_range(offset, max_chars, section, revision)
     content = data.get("noteContent") or data.get("content") or ""
     title = data.get("noteTitle") or data.get("title") or ""
-    current = content_revision(title, content)
+    current = reading_revision(title, content)
     if revision and revision != current:
-        raise RevisionChanged("文章已更新，请重新检索后读取当前版本")
+        raise RevisionChanged("读取版本不一致，请从头重新读取以获取当前目录")
     rows = outline(content, title)
     available = [
         {"id": r["section_id"], "title": r["section"], "path": r["path"]}
@@ -95,9 +94,7 @@ def article_page(
         row = rows[i]
         selected_id = row["section_id"]
         scope = _scope(rows, i)
-        selected = scope[0]["text"]
-        if len(scope) > 1:
-            selected += "\n\n" + "\n\n".join(render(r) for r in scope[1:])
+        selected = content[row["body_start"]:scope[-1]["body_end"]]
         # Empty parents have readable children; a truly empty section has no body.
         if not any(r["text"].strip() for r in scope):
             selected = ""

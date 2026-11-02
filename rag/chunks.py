@@ -3,27 +3,47 @@
 from __future__ import annotations
 
 import hashlib
+import json
+from importlib.metadata import version
 
-from rag.sections import outline
+from langchain_text_splitters import RecursiveCharacterTextSplitter
 
-INDEX_VERSION = "markdown-path-v2"
+from rag.sections import outline, parser_signature
+
+INDEX_VERSION = "commonmark-path-langchain-v4"
 MAX_CHARS = 1800
 OVERLAP = 180
+SEPARATORS = ["\n\n", "\n", "。", "；", " ", ""]
+
+
+def strategy_signature() -> str:
+    """Pinned library and source-window policy belong to the vector namespace."""
+    policy = {
+        "version": INDEX_VERSION,
+        "parser": parser_signature(),
+        "library": version("langchain-text-splitters"),
+        "max_chars": MAX_CHARS,
+        "overlap": OVERLAP,
+        "separators": SEPARATORS,
+    }
+    return hashlib.sha256(json.dumps(policy, sort_keys=True).encode()).hexdigest()
 
 
 def _windows(text: str, budget: int):
-    start = 0
-    while start < len(text):
-        end = min(start + budget, len(text))
-        if end < len(text):
-            # Prefer a paragraph/line boundary, retaining enough context on both sides.
-            cut = text.rfind("\n", start + budget // 2, end)
-            if cut >= 0:
-                end = cut + 1
-        yield start, end, text[start:end]
-        if end == len(text):
-            break
-        start = max(start + 1, end - min(OVERLAP, budget // 4))
+    splitter = RecursiveCharacterTextSplitter(
+        chunk_size=budget,
+        chunk_overlap=min(OVERLAP, budget // 4),
+        separators=SEPARATORS,
+        keep_separator="end",
+        strip_whitespace=False,
+        add_start_index=True,
+    )
+    for document in splitter.create_documents([text]):
+        start = document.metadata["start_index"]
+        body = document.page_content
+        if start < 0 or text[start:start + len(body)] != body:
+            raise ValueError("splitter returned an invalid source range")
+        yield start, start + len(body), body
 
 
 def split(title: str, content: str) -> list[dict]:

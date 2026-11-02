@@ -78,7 +78,7 @@ verdict: unsupported非空或answered为false时为suspect，否则ok。
 reason: 一句话解释依据，区分已证实问题和材料不足；不要猜测。
 {"unsupported": [], "answered": true, "verdict": "ok", "reason": "未发现问题"}
 """
-MAX_MATERIAL_CHARS = 32000
+MAX_MATERIAL_CHARS = 64000
 
 
 def digest(body: bytes) -> str:

@@ -57,16 +57,17 @@ def _test_tiers():
     restore = _with_env(None)
     try:
         t = trace_mod.tool_result_text
-        long_text = "x" * 20000
+        long_text = "x" * 40000
         got = t(long_text, "get_article_detail")
-        check("正文档：截到 8000（这档是给'回复引的那段在不在'用的）",
-              got.startswith("x" * 8000) and len(got) == 8000 + len(trace_mod.truncation_mark(20000)),
+        check("正文档覆盖当前模型观察，超过32000仍带截断标记",
+              got.startswith("x" * 32000)
+              and len(got) == 32000 + len(trace_mod.truncation_mark(40000)),
               str(len(got)))
         check("正文档截断带原文长度（判官知道缺了多少）",
-              trace_mod.truncation_mark(20000) in got)
+              trace_mod.truncation_mark(40000) in got)
         check("默认档：没单列的工具截到 4000（覆盖其余工具的实测最大）",
               t(long_text, "list_guestbook").startswith("x" * 4000)
-              and trace_mod.truncation_mark(20000) in t(long_text, "list_guestbook"))
+              and trace_mod.truncation_mark(40000) in t(long_text, "list_guestbook"))
         check("工具名缺失（空串）也走默认档，不是不截断",
               t(long_text) .startswith("x" * 4000))
         check("短于上限 ⇒ 逐字返回、不带标记",
@@ -91,13 +92,13 @@ def _test_env_override():
         check("env 一设，所有工具都按它（评测轮放开就靠这个）",
               t("x" * 20000, "list_guestbook").startswith("x" * 8000))
         check("env 也压过正文档（不是'取两者较大'）",
-              t("x" * 20000, "get_article_detail").startswith("x" * 8000))
+              t("x" * 40000, "get_article_detail").startswith("x" * 8000))
     finally:
         restore()
     restore = _with_env("0")
     try:
         check("env=0 ⇒ 不截断（语义明写 ≤0 = 全文）",
-              t("x" * 20000, "get_article_detail") == "x" * 20000)
+              t("x" * 40000, "get_article_detail") == "x" * 40000)
     finally:
         restore()
     restore = _with_env("八千")
@@ -105,7 +106,7 @@ def _test_env_override():
         check("env 写坏 ⇒ 退回分档（既不静默放开也不静默砍到 200）",
               t("x" * 20000, "list_guestbook").startswith("x" * 4000))
         check("env 写坏 ⇒ 正文档也还在",
-              t("x" * 20000, "get_article_detail").startswith("x" * 8000))
+              t("x" * 40000, "get_article_detail").startswith("x" * 32000))
     finally:
         restore()
     restore = _with_env(None)

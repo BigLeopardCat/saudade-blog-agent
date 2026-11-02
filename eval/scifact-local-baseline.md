@@ -18,7 +18,7 @@ claims/annotations 的 CC BY 4.0 与摘要的 ODC-By 1.0；不把本项目的 MI
 # 已有压缩包时，改用 --archive /path/to/scifact.zip，无网络操作。
 .venv/bin/python eval/offline_rag_eval.py eval/data/scifact \
   --output eval/report/baseline_scifact_bm25_cliff.json
-.venv/bin/python eval/offline_rag_eval.py eval/data/scifact --no-cliff \
+.venv/bin/python eval/offline_rag_eval.py eval/data/scifact \
   --output eval/report/baseline_scifact_bm25_no_cliff.json
 ```
 

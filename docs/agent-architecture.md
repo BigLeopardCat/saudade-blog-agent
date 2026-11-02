@@ -34,7 +34,7 @@ flowchart LR
 目录树由 `tests/test_module_index.py` 与磁盘双向校验；树中的路径是当前源码，不包含已退役实现。
 
 ```
-├── agent/                  # 原生运行时、权限、会话与领域模块
+├── agent/                  # 应用装配、运行时适配、权限与领域模块
 │   ├── __init__.py                                      # 当前生产代码模块
 │   ├── action_text.py                                   # 当前生产代码模块
 │   ├── adminops_account.py                              # 当前生产代码模块
