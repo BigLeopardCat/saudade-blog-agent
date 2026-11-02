@@ -99,3 +99,15 @@ RAG 使用 9 篇公开文章、223 个 512 维向量，missing=0；原样二次 
 - 依赖安全维护与历史类型检查债继续单列，不把基线门禁未回退叫作零告警。
 
 后续指标与触发条件见 [维护规划](platform-roadmap.md)。
+
+## 上线后的定向复测
+
+页内统计与可移植配置已随[PR #195](https://github.com/BigLeopardCat/saudade-blog-agent/pull/195)
+发布为`2acfc9b95aa5bc728a4e305344a67c4d168dd417`。最终CI为2,298通过、19跳过，
+PostgreSQL集成17通过；生产显式保留原TRACE_DIR与BLOG_ROOT，Agent、DBOS worker和BGE均active，
+向量仍为223个、missing=0，诊断能读取原目录，模型和推理档位未变。
+
+原`admin_articles`场景重复3次，真实HTTP行为和各自语义评审均通过，3个测试会话均清理。
+这是同一任务的重复观察，不是3个独立场景，也不把原始全量中的文章计数失败改成通过。
+页内统计只提供准确依据，不保证模型任意叙述永不出错。其余首跑语义缺陷仍保留，
+没有以局部复测宣布全量验收达标。RAG库替换合并为[PR #194](https://github.com/BigLeopardCat/saudade-blog-agent/pull/194)。

@@ -1809,5 +1809,63 @@
     "A progress event is not first reply or browser completion.",
     "The original first-run findings remain even after targeted fixes.",
     "No observed operational SLO or complete real business write coverage."
-  ]
+  ],
+  "post_fix_observations": {
+    "service_sha": "2acfc9b95aa5bc728a4e305344a67c4d168dd417",
+    "case": "admin_articles",
+    "scope": "Three repetitions of one original task, not three independent scenarios",
+    "samples": [
+      {
+        "sample": 1,
+        "baseline_sha256": "15c73da4033553d1e1b70ebd2ec8d376460788c7e3f873ed9cfdf67b9888a416",
+        "semantic_sha256": "17a43906456cd9dd04c598c84234fbda7dfefb781e10467d9e55166204dd6642",
+        "deterministic": {
+          "passed": 1
+        },
+        "semantic": {
+          "no_issue_found": 1
+        },
+        "cleaned_conversations": 1
+      },
+      {
+        "sample": 2,
+        "baseline_sha256": "9bc89ea107248682359506a370ba2dd1801a91af4ee8ee1d14ee27cbf9b1215d",
+        "semantic_sha256": "4147cf925cacc10a50823eaebfc81e24041f2c600ff7b631dc1c88962de83b9a",
+        "deterministic": {
+          "passed": 1
+        },
+        "semantic": {
+          "no_issue_found": 1
+        },
+        "cleaned_conversations": 1
+      },
+      {
+        "sample": 3,
+        "baseline_sha256": "7bc381e92cd51b87767f17bfbab749091478a11167725a620f6fde06b28b3e8a",
+        "semantic_sha256": "c5e5301242cfcad589081c32c442b3ef868bdad5f80865d378a573e4344128e4",
+        "deterministic": {
+          "passed": 1
+        },
+        "semantic": {
+          "no_issue_found": 1
+        },
+        "cleaned_conversations": 1
+      }
+    ],
+    "new_business_writes_approved": 0,
+    "full_first_run_scores_unchanged": true,
+    "ci": {
+      "passed": 2298,
+      "skipped": 19,
+      "postgres_passed": 17,
+      "run": 41496792508
+    },
+    "diagnostics": {
+      "trace_path_unchanged": true,
+      "host_root_explicit": true,
+      "rag_vectors": 223,
+      "rag_missing": 0,
+      "agent_scheduler_embedding_active": true
+    }
+  }
 }
