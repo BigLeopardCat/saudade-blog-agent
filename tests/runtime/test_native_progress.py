@@ -186,7 +186,6 @@ def _prepare_server(monkeypatch, runtime, events):
     monkeypatch.setattr(server, "_resolve_principal",
                         lambda request, uid: Principal(7, "user", SOURCE_ASSERTION))
     monkeypatch.setattr(app.state, "chat_slots", asyncio.BoundedSemaphore(1))
-    monkeypatch.setattr(dependencies, "STREAM_QUEUE_WAIT", .01)
     monkeypatch.setattr(server, "start_trace", lambda *args, **kwargs: None)
     monkeypatch.setattr(server, "finish_trace", lambda *args: None)
     def capture(node, event, **data):

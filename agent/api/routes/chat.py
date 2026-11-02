@@ -18,7 +18,7 @@ from agent.api.events import control_event, text_stream
 from agent.api.events import frame as sse_frame
 from agent.api.events import response as stream_response
 from agent.api.schemas import ChatRequest, ChatResponse
-from agent.api.turns import NativeCancelled, run_turn, stream_to_queue
+from agent.api.turns import NativeCancelled, next_stream_item, run_turn, stream_to_queue
 from agent.products.blog.context import conversation_session
 from agent.runtime.control import RequestControl
 from agent.runtime.memory_scope import safe_request
@@ -31,6 +31,7 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 STREAM_IDLE_TIMEOUT = settings.stream_idle_timeout
 STREAM_TOTAL_TIMEOUT = settings.stream_total_timeout
+STREAM_BUFFER_SIZE = 64
 PRODUCER_ERROR_TEXT = "服务这边出了点问题，这一轮没能生成回复，请再说一次。"
 _RECOVERY_SENTENCE = "喵呜……主人抱歉，泠月喵刚才脑袋卡壳了，没有生成出回复，请主人再问一遍喵～ 🐾"
 
@@ -257,7 +258,7 @@ async def chat_stream(req: ChatRequest, request: Request):
     )
 
     async def event_stream():
-        queue: asyncio.Queue = asyncio.Queue()
+        queue: asyncio.Queue = asyncio.Queue(maxsize=STREAM_BUFFER_SIZE)
         loop = asyncio.get_running_loop()  # 同上（event_stream 也是协程）
         progress = StreamProgress(loop, queue, jobs.control)
         started = progress.started
@@ -270,7 +271,7 @@ async def chat_stream(req: ChatRequest, request: Request):
                                                       if req.browser_result else None))
                     if req.task_id or req.resume_task or req.browser_feedback or req.task_inputs
                     else stream_to_queue)
-        jobs.submit(
+        producer_job = jobs.submit(
             workers.executor,
             producer,
             runtime,
@@ -294,7 +295,7 @@ async def chat_stream(req: ChatRequest, request: Request):
         try:
             while True:
                 try:
-                    chunk = await asyncio.wait_for(queue.get(), timeout=2.0)
+                    chunk = await next_stream_item(queue, producer_job)
                 except asyncio.TimeoutError:
                     elapsed = loop.time() - started
                     if elapsed >= STREAM_TOTAL_TIMEOUT:
