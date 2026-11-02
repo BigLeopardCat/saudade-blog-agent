@@ -28,7 +28,8 @@
     "judge_core_misclassification": 5,
     "insufficient_material": 2,
     "write_denial_recovery_advice_remains_unverified": true,
-    "original_scores_unchanged": true
+    "original_scores_unchanged": true,
+    "reviewer_provenance": "Codex primary and subagents performing recorded-evidence inspection, not independent human labeling"
   },
   "usage": {
     "calls": 382,
