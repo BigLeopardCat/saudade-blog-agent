@@ -1,5 +1,6 @@
 """Bounded article metadata and account catalogs; no content or credentials."""
 
+from collections import Counter
 from typing import Annotated
 
 from langchain_core.runnables import RunnableConfig
@@ -15,6 +16,12 @@ from agent.principal import ROLE_ADMIN, ROLE_USER, ROLE_ZAKO
 from agent.reports import sanitize_untrusted
 
 Username = Annotated[StrictStr, Field(min_length=1, max_length=255)]
+
+
+def _article_summary(rows):
+    counts = Counter(row["status"] for row in rows)
+    return {"scope": "returned_items", "count": len(rows), "status_counts": [
+        {"status": status, "count": count} for status, count in counts.items()]}
 
 
 def _account(row):
@@ -44,12 +51,13 @@ def list_admin_notes(config: RunnableConfig, keyword: SearchText | None = None,
     默认及最多20条，含匹配总数、原始状态、公开标志、分类与分层标签；内容过大时减小limit。
     keyword 按连续字串匹配标题、正文或标签名，category 按分类名精确匹配；不做语义搜索。
     可用 article_id 定位一篇文章，仅返回元数据。未知状态保持原值，不推测已公开。
+    returned_summary仅按本次返回记录的原始status计数，不是全部匹配文章或全库状态统计。
     """
     if article_id is not None:
         page, limit = 1, 1
     return read_page("articles", config, page, limit,
                      {"keyword": keyword, "category": category, "id": article_id}, _article,
-                     {"id": article_id, "categoryName": category})
+                     {"id": article_id, "categoryName": category}, summarize=_article_summary)
 
 
 @tool

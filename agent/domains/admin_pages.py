@@ -16,7 +16,7 @@ Identifier = Annotated[StrictInt, Field(gt=0)]
 SearchText = Annotated[str, Field(min_length=1, max_length=100)]
 
 
-def read_page(resource, config, page, limit, filters, project, expected=None):
+def read_page(resource, config, page, limit, filters, project, expected=None, *, summarize=None):
     cfg = (config or {}).get("configurable") or {}
     if not scoped_reads_enabled(cfg.get("principal"), SCOPE_ADMIN_CONSOLE, cfg.get("user_id")):
         return base.unavailable("需要已验签且一致的管理员身份。")
@@ -43,6 +43,8 @@ def read_page(resource, config, page, limit, filters, project, expected=None):
         return base.unavailable("返回记录与请求范围不一致。")
     result = {"resource": resource, "filters": filters, "items": entries, "total": total,
               "page": page, "pageSize": limit, "hasMore": offset + len(entries) < total}
+    if summarize is not None:
+        result["returned_summary"] = summarize(entries)
     encoded = json.dumps(result, ensure_ascii=False, separators=(",", ":"))
     if len(encoded) > 7500:
         return base.unavailable("本页内容超过读取上限，请减小limit后重试。")
