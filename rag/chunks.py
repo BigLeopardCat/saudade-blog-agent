@@ -8,9 +8,9 @@ from importlib.metadata import version
 
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 
-from rag.sections import outline
+from rag.sections import outline, parser_signature
 
-INDEX_VERSION = "markdown-path-langchain-v3"
+INDEX_VERSION = "commonmark-path-langchain-v4"
 MAX_CHARS = 1800
 OVERLAP = 180
 SEPARATORS = ["\n\n", "\n", "。", "；", " ", ""]
@@ -20,6 +20,7 @@ def strategy_signature() -> str:
     """Pinned library and source-window policy belong to the vector namespace."""
     policy = {
         "version": INDEX_VERSION,
+        "parser": parser_signature(),
         "library": version("langchain-text-splitters"),
         "max_chars": MAX_CHARS,
         "overlap": OVERLAP,

@@ -45,8 +45,11 @@ RagIndex 使用单次构建锁，在短锁内替换完整视图。失败保留�
 
 ## 4. 切片与词法检索
 
-rag/sections.py 提供共享 Markdown 边界和 outline：识别围栏外 1–6 级标题，
-保留空父标题、层级路径和文档版本内的小节 ID。重复名称/编号不能默认取首个。
+rag/sections.py 使用 markdown-it-py 的 CommonMark block token 与 source line map，
+识别顶层 ATX/Setext 标题；围栏、缩进代码和 HTML 中的类标题，以及引用/列表内局部标题，
+均留在所在正文中。应用只维护分节树、空父标题、层级路径和读取视图版本内的小节 ID。
+正文和后代范围直接切原始字符串，保留 CRLF/CR 和 Unicode，不经渲染文本找回偏移。
+重复名称/编号不能默认取首个。
 
 rag/chunks.py 使用 LangChain 的 RecursiveCharacterTextSplitter 在小节内切片，
 按段落、行和中英文边界配置限制字符预算并保留重叠，
@@ -98,6 +101,9 @@ get_article_detail 增加 offset、max_chars、revision，返回 contentRevision
 readOffset、nextOffset、totalChars、readComplete、source 和小节 ID。
 续读范围或按小节 ID 读取必须带版本，防止编辑后跨版本拼接。
 按标题/编号只接受唯一匹配；父节读取包括子节。
+contentRevision 是包含解析策略及库版本、标题和原文的读取视图 hash；它与宿主语料传输的
+内容 revision 分开。检索候选 document_revision 使用相同读取视图版本，客户端只需原样回传。
+解析策略变化会明确拒绝旧 sN/续读版本；首次全文读取可取得当前版本与目录。
 
 无结构文章和超长单节也能连续读到尾部。偏移以选定正文为准，
 切片记录与按节读取一致。预算渲染保持可解析数据，并把 nextOffset/source.end

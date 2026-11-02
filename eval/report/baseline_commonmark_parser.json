@@ -1,0 +1,175 @@
+{
+  "scope": "CommonMark source-mapping regression on a previously fixed development set; no new full-corpus vector quality claim",
+  "date": "2026-11-03",
+  "before_revision": "274d1307",
+  "parser": "commonmark-top-level-source-v1:markdown-it-py-4.2.0",
+  "retrieval_code_sha256": "dd39c4100124beff47879ad1c80ed927a0b3bcee624eed3f4b21960a71cda53b",
+  "corpus_sha256": "90fb77ab61ef820de135843e3429857e7d3f7071cb98d1aa4e1cff448f0162fc",
+  "documents": 9,
+  "query_count": 16,
+  "before_v3": {
+    "lexical_chunks": 183,
+    "vector_input_plan": 224
+  },
+  "after_v4": {
+    "lexical_chunks": 182,
+    "vector_input_plan": 223
+  },
+  "quality": {
+    "v3_lexical": {
+      "R@1": {
+        "value": 0.8020833333333334,
+        "queries": 16
+      },
+      "R@10": {
+        "value": 1.0,
+        "queries": 16
+      },
+      "R@3": {
+        "value": 1.0,
+        "queries": 16
+      },
+      "RR@1": {
+        "value": 0.9375,
+        "queries": 16
+      },
+      "RR@10": {
+        "value": 0.96875,
+        "queries": 16
+      },
+      "RR@3": {
+        "value": 0.96875,
+        "queries": 16
+      },
+      "Success@1": {
+        "value": 0.9375,
+        "queries": 16
+      },
+      "Success@10": {
+        "value": 1.0,
+        "queries": 16
+      },
+      "Success@3": {
+        "value": 1.0,
+        "queries": 16
+      },
+      "nDCG@1": {
+        "value": 0.9375,
+        "queries": 16
+      },
+      "nDCG@10": {
+        "value": 0.9758216995478411,
+        "queries": 16
+      },
+      "nDCG@3": {
+        "value": 0.9758216995478411,
+        "queries": 16
+      }
+    },
+    "v4_lexical": {
+      "R@1": {
+        "value": 0.8020833333333334,
+        "queries": 16
+      },
+      "R@10": {
+        "value": 1.0,
+        "queries": 16
+      },
+      "R@3": {
+        "value": 1.0,
+        "queries": 16
+      },
+      "RR@1": {
+        "value": 0.9375,
+        "queries": 16
+      },
+      "RR@10": {
+        "value": 0.96875,
+        "queries": 16
+      },
+      "RR@3": {
+        "value": 0.96875,
+        "queries": 16
+      },
+      "Success@1": {
+        "value": 0.9375,
+        "queries": 16
+      },
+      "Success@10": {
+        "value": 1.0,
+        "queries": 16
+      },
+      "Success@3": {
+        "value": 1.0,
+        "queries": 16
+      },
+      "nDCG@1": {
+        "value": 0.9375,
+        "queries": 16
+      },
+      "nDCG@10": {
+        "value": 0.9758216995478411,
+        "queries": 16
+      },
+      "nDCG@3": {
+        "value": 0.9758216995478411,
+        "queries": 16
+      }
+    }
+  },
+  "warm_lexical_build": {
+    "before": {
+      "documents": 9,
+      "chunks": 183,
+      "warm_build_ms": [
+        87.41799392737448,
+        85.91111516579986,
+        85.49550198949873,
+        83.82350206375122,
+        85.68126894533634,
+        85.75517893768847,
+        84.61547712795436
+      ],
+      "median_ms": 85.68126894533634
+    },
+    "after": {
+      "documents": 9,
+      "chunks": 182,
+      "warm_build_ms": [
+        131.90177804790437,
+        140.43772500008345,
+        130.57852210476995,
+        127.27739801630378,
+        122.6983240339905,
+        122.06536810845137,
+        123.30537987872958
+      ],
+      "median_ms": 127.27739801630378
+    },
+    "scope": "7 sequential warm in-process lexical rebuilds per version, same fixed corpus; excludes import, HTTP and model time"
+  },
+  "source_contracts": [
+    "CommonMark top-level ATX and Setext source line maps",
+    "fences, indented code, HTML, quoted/list-local headings",
+    "raw LF/CRLF/CR and Unicode source spans",
+    "empty parents, descendants, duplicate title disambiguation",
+    "opaque parser-versioned read revision distinct from corpus transport hash",
+    "candidate revision accepted by body reader, stale revisions refused",
+    "parallel deterministic source maps"
+  ],
+  "validation": {
+    "expanded_rag_and_repository_tests_passed": 119,
+    "additional_article_evidence_and_probe_tests_passed": 28,
+    "standalone_commonmark_cases": 20,
+    "static_gates": [
+      "type",
+      "lint",
+      "blind_exception",
+      "security",
+      "F821",
+      "lock_consistency"
+    ]
+  },
+  "production_index_written": false,
+  "new_vector_index_built": false
+}

@@ -1,7 +1,8 @@
 # -*- coding: utf-8 -*-
 """Pure Markdown section boundaries shared by indexing, range reads and excerpts.
 
-Only headings outside fenced code blocks delimit sections. outline preserves
+CommonMark top-level headings delimit sections; markdown-it-py handles syntax.
+The source-backed outline preserves
 parent paths, repeated titles and empty parents; split supplies the compact
 section view. Changing these boundaries requires rebuilding the retrieval index.
 
@@ -11,13 +12,37 @@ is complete; ambiguous references never select an arbitrary section."""
 
 from __future__ import annotations
 
+import hashlib
+import json
 import re
+from dataclasses import dataclass
+from importlib.metadata import version
 
-# 围栏外的 1–6 级标题；索引与读取共用。
-_HEADING_RE = re.compile(r"^#{1,6}\s+(.+)$")
+from markdown_it import MarkdownIt
 
-# 围栏代码块（``` / ~~~，三个起；开栏行后面可以跟信息串，如 ```gitignore）
-_FENCE_OPEN_RE = re.compile(r"^[ \t]{0,3}(`{3,}|~{3,})")
+PARSER_VERSION = "commonmark-top-level-source-v1"
+_MARKDOWN = MarkdownIt("commonmark").disable("inline")
+
+
+def parser_signature() -> str:
+    return f"{PARSER_VERSION}:markdown-it-py-{version('markdown-it-py')}"
+
+
+def reading_revision(title: str, content: str) -> str:
+    """Opaque read-view version; corpus transport keeps its original content hash."""
+    raw = json.dumps(
+        [parser_signature(), title, content], ensure_ascii=False, separators=(",", ":"),
+    )
+    return hashlib.sha256(raw.encode()).hexdigest()
+
+
+@dataclass(frozen=True)
+class Heading:
+    start: int
+    end: int
+    title: str
+    level: int
+
 
 # 未展开小节清单的标记串：渲染侧靠它在帧注记里区分"按节节选"与"退回头截断"，
 # Excerpt consumers and section tests share this marker.
@@ -29,119 +54,70 @@ _OUTLINE_RESERVE = 600
 _OUTLINE_MAX_ITEMS = 12
 
 
-def _fence_open(line: str) -> str:
-    """这一行是不是围栏的**开栏行**；是就返回那串围栏（如 "```" / "~~~~"），否则 ""。"""
-    m = _FENCE_OPEN_RE.match(line)
-    return m.group(1) if m else ""
-
-
-def _fence_close(line: str, fence: str) -> bool:
-    """这一行关掉 `fence` 吗——**只由同一种字符构成、且不短于开栏那串**。"""
-    s = line.strip()
-    return bool(s) and set(s) == {fence[0]} and len(s) >= len(fence)
-
-
-def _fenced_flags(lines: list[str]) -> list[bool]:
-    """逐行标出"这一行住在围栏代码块里吗"（**围栏行自己也算 True**）。
-
-    为什么必须有它：`.gitignore` / shell / diff 的**示例内容整段住在 ``` 围栏里**，
-    而 `.gitignore` 的注释行就是 `# …` —— 与 markdown 一级标题**逐字同形**。不认围栏
-    时它们会被当成标题切成几十个 0 字小节（线上 note:16 实测：从
-    `# ========== 依赖管理 ==========` 一路切到 `# ========== 本地数据库文件 ==========`，
-    11 节全部空正文，节名还是 gitignore 的注释）。围栏里的行一律不当标题。
-    """
-    flags: list[bool] = []
-    fence = ""
-    for ln in lines:
-        if fence:
-            flags.append(True)
-            if _fence_close(ln, fence):
-                fence = ""
+def _heading_hits(content: str) -> list[Heading]:
+    # CommonMark normalizes CR/LF internally. Project its line maps onto the
+    # original string, including CRLF and Unicode; never search rendered text.
+    offsets = [0, *(match.end() for match in re.finditer(r"\r\n|\r|\n", content)), len(content)]
+    tokens = _MARKDOWN.parse(content)
+    result = []
+    for i, token in enumerate(tokens):
+        # Quoted/list-local headings stay inside their containing article body.
+        if token.type != "heading_open" or token.level != 0 or token.map is None:
             continue
-        fence = _fence_open(ln)
-        flags.append(bool(fence))
-    return flags
-
-
-def _heading_hits(lines: list[str], fenced: list[bool]) -> list[tuple[int, re.Match]]:
-    """`(行号, 匹配)` 列表 —— 只认**围栏外**的 1–6 级标题。
-
-    `split` 与 `_is_lossy` **共用这一把尺子**：两处各判一次的话，"正文里有几个标题行"
-    与"切出几个 chunk"就按两套口径算，`_is_lossy` 会开始报假有损（或漏报真损）。
-    """
-    return [(i, m) for i, ln in enumerate(lines) if not fenced[i]
-            and (m := _HEADING_RE.match(ln.strip()))]
-
-
-def split(content: str, title: str = "", shortcut: bool = True) -> list[dict]:
-    """按 markdown 标题切节 → `[{"section", "text", "level"}]`。
-
-    shortcut=True（兼容旧渲染调用）：正文 < 2000 字不切，整篇算一节
-    （小节名取文章标题）——短文的标题结构没有检索价值，切开只会把同一篇拆成
-    多个低分 chunk。**渲染侧与取回侧要 shortcut=False**：那两处关心的是"哪一段
-    属于哪一节"，与文章长短无关。
-
-    围栏代码块里的行不当标题；索引侧使用保留路径与空父节的 outline。
-    """
-    text = content or ""
-    if shortcut and len(text) < 2000:
-        return [{"section": title, "text": text, "level": 0}]
-    lines = text.split("\n")
-    heads = dict(_heading_hits(lines, _fenced_flags(lines)))
-    chunks: list[dict] = []
-    cur: list[str] = []
-    cur_section, cur_level = title, 0
-    for i, line in enumerate(lines):
-        m = heads.get(i)
-        if m:
-            if cur:
-                chunks.append({"section": cur_section, "text": "\n".join(cur),
-                               "level": cur_level})
-            cur_section = m.group(1)
-            cur_level = len(line.strip()) - len(line.strip().lstrip("#"))
-            cur = []
-        else:
-            cur.append(line)
-    if cur:
-        chunks.append({"section": cur_section, "text": "\n".join(cur),
-                       "level": cur_level})
-    return chunks
+        start, end = token.map
+        result.append(Heading(
+            offsets[start], offsets[end], tokens[i + 1].content, int(token.tag[1:]),
+        ))
+    return result
 
 
 def outline(content: str, title: str = "") -> list[dict]:
-    """Lossless section records, including empty parents and duplicate headings.
-
-    IDs are scoped to this document revision. All consumers use the same fenced
-    Markdown boundaries; paths preserve the context of otherwise empty parents.
-    """
-    lines = (content or "").split("\n")
-    heads = dict(_heading_hits(lines, _fenced_flags(lines)))
+    """Source-backed sections, preserving empty parents and duplicate headings."""
+    text = content or ""
+    headings = _heading_hits(text)
     records: list[dict] = []
     stack: list[tuple[int, str]] = []
-    body: list[str] = []
-    section, level = title, 0
-    path: list[str] = []
 
-    def append() -> None:
-        records.append({"section": section, "text": "\n".join(body), "level": level,
-                        "path": list(path), "section_id": f"s{len(records) + 1}"})
+    def append(section: str, level: int, low: int, high: int, heading: str = "") -> None:
+        records.append({
+            "section": section, "text": text[low:high], "level": level,
+            "path": [name for _, name in stack], "section_id": f"s{len(records) + 1}",
+            "body_start": low, "body_end": high, "heading": heading,
+        })
 
-    for i, line in enumerate(lines):
-        if i not in heads:
-            body.append(line)
-            continue
-        if body or level:
-            append()
-        section = heads[i].group(1)
-        level = len(line.strip()) - len(line.strip().lstrip("#"))
-        while stack and stack[-1][0] >= level:
+    if not headings:
+        append(title, 0, 0, len(text))
+        return records
+    if headings[0].start:
+        append(title, 0, 0, headings[0].start)
+    for i, heading in enumerate(headings):
+        while stack and stack[-1][0] >= heading.level:
             stack.pop()
-        stack.append((level, section))
-        path = [name for _, name in stack]
-        body = []
-    if body or level:
-        append()
+        stack.append((heading.level, heading.title))
+        end = headings[i + 1].start if i + 1 < len(headings) else len(text)
+        append(heading.title, heading.level, heading.end, end, text[heading.start:heading.end])
     return records
+
+
+def split(content: str, title: str = "", shortcut: bool = True) -> list[dict]:
+    """Compact excerpt view; indexing and range reads use the full source outline."""
+    text = content or ""
+    if shortcut and len(text) < 2000:
+        return [{"section": title, "text": text, "level": 0}]
+    rows = outline(text, title)
+    compact = []
+    for i, row in enumerate(rows):
+        # Preserve the legacy compact-view omission of immediate empty parents.
+        if not row["text"]:
+            continue
+        body = row["text"]
+        if i < len(rows) - 1:
+            if body.endswith("\r\n"):
+                body = body[:-2]
+            else:
+                body = body.removesuffix("\n").removesuffix("\r")
+        compact.append({**row, "text": body})
+    return compact
 
 
 def headings(content: str) -> list[str]:
@@ -167,8 +143,7 @@ def _is_lossy(content: str, chunks: list[dict]) -> bool:
 
     Hierarchy inference is unsafe when headings are missing: later descendants
     could attach to the wrong parent. Use the same heading parser as split."""
-    lines = (content or "").split("\n")
-    heads = len(_heading_hits(lines, _fenced_flags(lines)))
+    heads = len(_heading_hits(content or ""))
     lead = 1 if chunks and not chunks[0].get("level") else 0   # 首个标题之前的正文
     return len(chunks) - lead != heads
 
@@ -251,6 +226,8 @@ def candidates(content: str, want: str, title: str = "") -> list[str]:
 
 def render(chunk: dict) -> str:
     """小节 → 带标题行的 markdown 片段（渲染侧要用，因为它比裸 text 好读）。"""
+    if chunk.get("heading"):
+        return chunk["heading"] + chunk["text"]
     if chunk.get("level"):
         return "#" * int(chunk["level"]) + " " + chunk["section"] + "\n" + chunk["text"]
     return chunk["text"]
@@ -325,7 +302,7 @@ _HEADER_KEYS_MAX = 12
 
 
 def _unescape(text: str) -> str:
-    """repr 里换行是**字面** `\\n`（两个字符）——按 `^#{1,3}` 切之前必须先还原，
+    """repr 里换行是**字面** `\\n`（两个字符）——解析 Markdown 前必须先还原，
     否则一节都切不出来（实测：note 19 的详情 repr 52834 字里真换行 0 个、
     字面 `\\n` 1154 个）。"""
     return text.replace("\\n", "\n")

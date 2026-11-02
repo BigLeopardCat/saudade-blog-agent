@@ -16,7 +16,7 @@ def documents(chunks: list[dict], scores: dict[int, float], revision: str) -> li
                 "title": chunk["title"],
                 "score": score,
                 "corpus_revision": revision,
-                "document_revision": chunk.get("revision"),
+                "document_revision": chunk.get("reading_revision", chunk.get("revision")),
                 "sections": [],
                 "section_ids": [],
                 "matches": [],

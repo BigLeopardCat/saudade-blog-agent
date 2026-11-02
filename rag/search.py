@@ -20,6 +20,7 @@ from rag.corpus import fetch as fetch_corpus
 from rag.embedding_inputs import InputProfileError, vector_chunks
 from rag.lexical import LexicalIndex, backend_info
 from rag.ranking import documents as rank_documents
+from rag.sections import reading_revision
 from rag.tokenization import tokenize
 from rag.vector_index import (
     chunk_text,
@@ -187,8 +188,9 @@ class RagIndex:
         docs = self._corpus_loader() if self._corpus_loader else self._fetch_corpus()
         chunks: list[dict] = []
         for d in docs:
+            read_revision = reading_revision(d["title"], d["content"])
             for c in chunk_note(d["title"], d["content"]):
-                chunks.append({**d, **c})
+                chunks.append({**d, **c, "reading_revision": read_revision})
 
         lexical = LexicalIndex([tokenize(chunk_text(c["title"], c["text"])) for c in chunks],
                                k1=BM25_K1, b=BM25_B)
@@ -389,7 +391,8 @@ def invalidate_document(article_id: int, revision: str) -> None:
     """An authoritative revision mismatch invalidates only a matching cached article."""
     idx = get_index()
     with idx._lock:
-        if not any(d["id"] == article_id and d.get("revision") == revision for d in idx._docs):
+        if not any(d["id"] == article_id and reading_revision(d["title"], d["content"]) == revision
+                   for d in idx._docs):
             return
         idx._dirty = True
         idx._invalidations += 1

@@ -6,6 +6,7 @@
 | 环节 | 实现 |
 | --- | --- |
 | 词元/gram 生成 | scikit-learn CountVectorizer.build_analyzer，CJK 字符 2/3-gram、ASCII 词元 |
+| Markdown 语法 | markdown-it-py CommonMark block tokens 与原始 source line map |
 | 小节内字符切片 | LangChain RecursiveCharacterTextSplitter，保留分隔符、空白及 start_index |
 | embedding 超预算窗口 | Hugging Face Tokenizers Encoding.truncate/overflowing，以原始 offsets 回取正文 |
 | BM25 | 保留 BM25S 的公开索引与评分接口 |
@@ -71,3 +72,39 @@ SciPy 的该距离内核不调度 BLAS 矩阵乘法线程，没有调整服务�
 [EnsembleRetriever](https://reference.langchain.com/python/langchain-classic/retrievers/ensemble/EnsembleRetriever)、
 [SciPy cdist](https://docs.scipy.org/doc/scipy/reference/generated/scipy.spatial.distance.cdist.html)。
 Tokenizers 接口以锁定的 0.22.2 实际安装代码及相应回归为准，未依赖最新预发布文档中的 API。
+
+## 标准 Markdown parser 追加
+
+通用标题、围栏、缩进代码及 HTML 语法交给 markdown-it-py 4.2.0。库返回的行范围直接映射
+原始 CR/LF 字符串；仅顶层标题进入文章分节，引用与列表内部的局部标题保留在正文。
+正文及父节的后代读取直接切原文，保留原始标题标记、换行和 Unicode。
+
+读取视图的 contentRevision 同时覆盖 parser 策略/库版本、标题和原文；宿主 corpus 的传输
+内容 hash 不变。检索候选与读取工具共享视图版本，旧 checkpoint 中的 sN/游标版本明确过期。
+parser 策略也进入 v4 分块空间，发布计划须以 v4 代码重新计算，不能使用 v3 输入计划代替。
+上节开发集与 CPU 数字记录的是 v3 替换；parser 追加的离线对照见其独立验证记录。
+
+融合通过官方 EnsembleRetriever.invoke 承接预计算的两路候选，库内执行其公开 RRF。
+两个 Runnable 适配器只返回已有列表，不重新查询、发模型、执行工具或拥有调度/重试循环；
+它们属于该公开 retriever 的输入适配，没有增加 Agent 执行器。
+
+查询停用词、同义词与 CLIFF 本次保持原行为及评测 API：
+
+- 停用词仅影响词法查询，是应用的中文问句策略。删除会改变宽泛词的召回与噪声，
+  应通过多样查询的独立对照决定；直接换通用停用词表也无法证明站内收益。
+- 四组同义扩展是显式博客术语映射，已有无扩展对照与负控；保留为有边界的领域词表。
+  扩大词表前需要真实措辞证据，不扩展成新的通用查询重写器。
+- CLIFF 是自定义候选宽度策略。后续可考虑只保留各路固定窗口以减少策略，
+  但需同时比较多篇证据覆盖、无答案供给与工具成本，并有序退役 cliff_probe 的评测入口。
+  本轮不以成熟库迁移为由无证据删去这些已公开的对照 API。
+
+参考：[markdown-it-py 配置与 token](https://markdown-it-py.readthedocs.io/en/latest/using.html)、
+[Token source map](https://markdown-it-py.readthedocs.io/en/latest/api/markdown_it.token.html)。
+
+parser 追加的[脱敏验证记录](../eval/report/baseline_commonmark_parser.json)：固定语料最终为
+182 个词法切片、223 个 BGE 输入计划；16 题词法指标与 v3 一致。119 项扩大专项和
+28 项额外来源/运行时证据/探针测试通过。首次全量新索引的混合质量需单独验收。
+
+相同 9 篇语料各运行 7 次进程内热词法重建，中位耗时从 85.68ms 变为 127.28ms；
+该开销包括标准 Markdown 解析和读取视图摘要，未计导入、HTTP、模型或完整聊天。
+markdown-it-py 4.2.0 已在原依赖锁中，本次只显式声明直接使用，没有新服务。
