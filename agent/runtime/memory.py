@@ -35,6 +35,13 @@ def is_context(message):
             and message.additional_kwargs.get("memory_context") is True)
 
 
+def is_user_input(message):
+    """Identify user requests and steering, excluding generated runtime messages."""
+    return (isinstance(message, HumanMessage) and not is_context(message)
+            and not message.additional_kwargs.get("runtime_feedback")
+            and message.additional_kwargs.get("lc_source") != "summarization")
+
+
 def summary_message(messages, principal=None):
     for message in reversed(messages):
         if not is_context(message):

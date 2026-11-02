@@ -1,11 +1,13 @@
 # -*- coding: utf-8 -*-
 """Artifact ownership and retention policies for files and PostgreSQL stores.
 
-Filesystem ownership uses the first matching class; specific exceptions must
-precede broad patterns. Managed classes require a cleanup implementation.
-Open classes retain evidence until their cleanup and trace references are handled
-together. Frozen classes are intentionally preserved. PostgreSQL stores use
-DSN/table metadata instead of filesystem patterns.
+Filesystem ownership uses the first matching class. Managed classes require a
+cleanup implementation; open classes retain evidence pending cleanup design;
+frozen classes are preserved. PostgreSQL stores use DSN/table metadata rather
+than filesystem patterns. Offline tests use isolated roots.
+
+Run ``python eval/retention_manifest.py --json`` for a read-only operational
+inventory. ``--logs-root`` and ``--report-root`` select explicit storage roots.
 """
 
 import argparse
@@ -15,63 +17,36 @@ import re
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
-# 两个产物根。日志根是生产落点（与 settings.trace_dir 同址），报告根在仓库里
-# （`eval/report/` 被 gitignore，是 run artifacts 不是源码）。
+# Operational defaults; offline tests always override storage roots.
 DEFAULT_LOGS_ROOT = "/home/ubuntu/Saudade-Blog/logs"
 DEFAULT_REPORT_ROOT = os.path.join(REPO, "eval", "report")
 
-# ── 保留期常量（**唯一的数在这里**，`artifact_retention.py` 与夜间脚本都不复述） ──
-KEEP_DAYS_ARCHIVE = 90          # logs/archive/ 下手工归档的东西，三个月足够回头找
-KEEP_COUNT_REPORTS = 20         # eval/report/ 每族报告保留最近 N 份
-KEEP_COUNT_DRAFTS = 10          # 例外：golden 草稿族只留 10 份（人审用品的窗口比复审单短）
-KEEP_COUNT_WORDGRAPH = 10       # 词图构建中间产物
-# 槽稳定性读数（`eval/slot_stability.py`）。**比别的族短**：它是一份"改提示词前后各跑一次"
-# 的仪器读数，对照面只在**最近几次改动**之间；每份都含逐遍的原始取值（N 遍 × 若干用例），
-# 留太多只是把盘占住。
+# Retention constants are shared with cleanup executors.
+KEEP_DAYS_ARCHIVE = 90
+KEEP_COUNT_REPORTS = 20
+KEEP_COUNT_DRAFTS = 10
+KEEP_COUNT_WORDGRAPH = 10
 KEEP_COUNT_SLOT_STABILITY = 10
-# PG 那一路（`store="pg"`）的保留期。**与 `eval/pg_retention.py::KEEP_DAYS_DEFAULT` 是
-# 同一个数**，两处都要改（这里是人读的登记，那里是执行者的缺省）——判据
-# `tests/test_pg_retention.py` 钉着它们相等。
+# Must match eval.pg_retention.KEEP_DAYS_DEFAULT.
 KEEP_DAYS_CHECKPOINT = 30
 
-# 存放形态（20261019 批 C）。`fs` = 盘上的树（本表原来只管这一种）；`pg` = PG 里的表，
-# **不在盘上**，所以它没有 root/patterns，判据换成 `dsn_env`（哪个环境变量给出库坐标）
-# 与 `tables`（哪些表）。审计器（`audit`/`unregistered`/`_matcher`）**跳过非 fs 的类**
-# ——它们本来就不是"某棵树下的一条路径"，硬塞进路径判据只会得到一条恒不命中的规则。
+# Filesystem policies use root/patterns; PostgreSQL policies use dsn_env/tables.
 STORE_FS = "fs"
 STORE_PG = "pg"
 
 
 def store_of(c: dict) -> str:
-    """这条登记项管的是哪一种存放（**缺省 `fs`**——表里绝大多数是盘上的树）。"""
+    """Return the storage type; filesystem storage is the default."""
     return c.get("store", STORE_FS)
 
-# 报告文件名：`<族>_<YYYYMMDD>[-_]<HHMMSS>.<ext>`。族名非贪婪取到第一个 8 位日期前
-# （`golden_drafts_20260921_014611.jsonl` ⇒ 族 = `golden_drafts`）。日期与时刻的分隔符
-# **两种都出现过**（`20260824-002825` 与 `20260924_014855`）⇒ 都要认。
+# Report family names use YYYYMMDD-HHMMSS or YYYYMMDD_HHMMSS timestamps.
 FAMILY_RE = re.compile(r"^([a-z][a-z0-9_]*?)_(\d{8})[-_](\d{6})\.(md|jsonl)$")
 
-# 词图中间产物：`<YYYYMMDD>-<HHMMSS>_<vocab.txt|build.json>`
 WORDGRAPH_RE = re.compile(r"^(\d{8})-(\d{6})_")
-# 槽稳定性读数的留档名（`report_archive.open_archive` 的产物）：`<YYYYMMDD>_<HHMMSS>_<mmm>.json`。
-# 前两组就是 `name_re` 要的日期与时刻（`_stamp_epoch` 按 `YYYYMMDD-HHMMSS` 解）。
 SLOT_STABILITY_RE = re.compile(r"^(\d{8})_(\d{6})_\d{3}\.json$")
 
 
-# ── 登记表 ────────────────────────────────────────────────────────────────────
-# 字段：
-#   key/label      标识与中文名
-#   root/patterns  归属判据（相对 root 的 glob；`**` 跨层，`*` 不跨层）
-#   status         managed（有执行者）/ frozen（刻意永不删）/ open（登记了，暂时没执行者）
-#   owner          谁负责清（人读描述；**只有 managed 能填**，frozen/open 写了就是自相矛盾）
-#   owner_ref      相关文件（**相对本仓**，存在性由 check_classes 校验；父仓文件写
-#                  `../scripts/...` 这种形态）。managed 指执行者；frozen 指「谁在用它」
-#                  ——没有清理者，但有被谁读写的事实
-#   owner_external managed 专用：执行者不在本仓（如 logrotate 的配置在 /etc），没有 owner_ref 可指
-#   retention      人读的保留期
-#   why            为什么是这个处置（**必填**，包括 frozen/open 也要写）
-#   rule           交给 `eval/artifact_retention.py` 的机器可读规则；None = 执行者在别处
-#   store          `fs`（缺省，盘上的树）/ `pg`（PG 里的表，判据换成 dsn_env + tables）
+# Ordered ownership policies. Managed entries require an implementation reference.
 CLASSES = [
     dict(
         key="service-logs",
@@ -88,11 +63,6 @@ CLASSES = [
             "20260925 实测三组各有完整 14 代际",
         rule=None,
     ),
-    # 曾经这里登记过 `trace-audio`（`utils/tts.py` 写的 output_audio）。**20260925 删除**：
-    # 那条登记项的三处坐标全是错的——tts.py 的 OUTPUT_DIR 已锚在**仓根**（不再随调用方
-    # CWD 漂移），目录因此不在 `logs/` 之下（本表只管 `logs/` 这一棵树），而且那个目录
-    # 已随修复一起消失（原先散落的 6 个都是 0 文件）。留一条"管不到的路径"等于给下一个人
-    # 一个假坐标；真要再出现在 traces/ 下，`audit()` 会照常报"未登记"。
     dict(
         key="traces",
         label="对话 trace",
@@ -110,11 +80,8 @@ CLASSES = [
         key="agent-idem-ledger",
         label="写操作幂等账（**降级档**：agent 自持的 SQLite）",
         root=DEFAULT_LOGS_ROOT,
-        # `*` 要带上 `-wal` / `-shm`：WAL 模式下这两个兄弟文件与主库同生共死，
-        # 只登记主库的话，账本一开起来审计就红（而红的原因与安全无关）。
         patterns=["agent/idem.sqlite3*"],
         status="open",
-        # 没人清 ⇒ 不填 owner（填了 check_classes 判自相矛盾）
         owner=None,
         owner_ref=None,
         retention="未接管（与将来的 checkpoint store 必须一起设计）",
@@ -147,7 +114,6 @@ CLASSES = [
     dict(
         key="agent-checkpoint-store",
         label="对话上下文与幂等账（**PG**：langgraph checkpoint 三张表 + 幂等账表）",
-        # **不在盘上** ⇒ 没有 root/patterns，判据是"哪个库、哪些表"（见 store_of 上面那段）。
         store=STORE_PG,
         status="managed",
         owner="eval/pg_retention.py",
@@ -215,8 +181,6 @@ CLASSES = [
             "没有别处可重建。这类文件按内容重要度保留，不按年龄",
         rule=None,
     ),
-    # 两条 frozen 必须排在 archive 之上：否则 `archive/**` 先把它们认走，
-    # owner_of 的答案就成了「90 天后删」——与事实正好相反
     dict(
         key="archive",
         label="手工归档的旧日志/旧产物",
@@ -238,12 +202,7 @@ CLASSES = [
         root=DEFAULT_LOGS_ROOT,
         patterns=[".deploy.lock", ".last_deploy_sha", ".deploy_manifest.txt"],
         status="frozen",
-        # 没人负责清（frozen）⇒ 不填 owner（填了 check_classes 判自相矛盾）
         owner=None,
-        # 不给 owner_ref：读写者在**父仓**（`scripts/deploy/deploy_from_r2.sh`），而 owner_ref
-        # 是存在性校验的仓相对路径——父仓文件在独立克隆里不存在，填了会让 check_classes 变成
-        # **环境依赖**（本机过、CI 红）。它只写进 why，不做机器校验：这里要的是"别删它"，
-        # 不是"脚本在哪"。同族的诚实：机器能证的才写成断言，证不了的写成人读的话。
         owner_ref=None,
         retention="不轮转、不删",
         why="住在 logs/ 但不是日志（读写者 = 父仓 `scripts/deploy/deploy_from_r2.sh`）："
@@ -286,6 +245,17 @@ CLASSES = [
         why="`last_run.json`（最近一次全量基线，只被全量跑覆盖）/ `last_reconcile.json` / "
             "`baseline_*.json`（历史对照）。合计 7 份、260K——**按份数清它没有意义，"
             "按天数清它会毁掉对照面**",
+        rule=None,
+    ),
+    dict(
+        key="task-evaluation-evidence",
+        label="任务回归、语义校准与成本审计证据",
+        root=DEFAULT_REPORT_ROOT,
+        patterns=["online-*/**", "runtime-*/**", "semantic-*/**", "task-cost-audit-*/**"],
+        status="frozen", owner=None, owner_ref=None,
+        retention="整组保留，未经归档决策不自动删除",
+        why="冻结的请求、判据快照、trace和人工复核共同组成任务验收依据；"
+            "失败与中止记录不能按源码清理或单独丢弃。",
         rule=None,
     ),
     dict(
@@ -371,20 +341,15 @@ CLASSES = [
 ]
 
 
-# ── 判据 ─────────────────────────────────────────────────────────────────────
 def _glob_to_re(pat: str) -> re.Pattern:
-    """把登记表里的 glob 翻成正则。`**` 跨层（`**/` 也匹配零层）、`*`/`?` 不跨层。
-
-    不引 `pathlib.PurePath.match`：它不把 `**` 当跨层通配，
-    `archive/**` 会匹配不到 `archive/20260829/x.log`——那正是这张表要判的东西。
-    """
+    """Compile policy globs: ** crosses directories, **/ allows zero levels, * and ? do not."""
     out, i, n = [], 0, len(pat)
     while i < n:
         c = pat[i]
         if c == "*":
             if pat[i:i + 2] == "**":
                 i += 2
-                if pat[i:i + 1] == "/":       # `**/`：零层或多层
+                if pat[i:i + 1] == "/":
                     out.append("(?:.*/)?")
                     i += 1
                 else:
@@ -402,13 +367,7 @@ def _glob_to_re(pat: str) -> re.Pattern:
 
 
 def iter_entries(root: str) -> list[str]:
-    """枚举 root 下**需要登记的条目**，相对路径、目录带尾斜杠。
-
-    只收「文件」与「空目录」：中间层目录（`agent/`、`frontend/`）是结构不是产物，
-    收了就得给每个父目录也编一条登记项。空目录要收——这条判据就是被一个 0 文件的空目录
-    逼出来的（`agent/traces/output_audio/`，20260925 已随 `utils/tts.py` 的锚定修复消失），
-    **空不等于不存在**（它照样得有主人）。
-    """
+    """List files and empty directories relative to root; directory entries end with a slash."""
     out: list[str] = []
     for dirpath, dirnames, filenames in os.walk(root):
         rel = os.path.relpath(dirpath, root)
@@ -426,12 +385,7 @@ def iter_entries(root: str) -> list[str]:
 
 
 def _matcher(classes: list[dict], root: str) -> list[tuple[str, re.Pattern]]:
-    """[(class_key, 编译后的正则)]——只取 root 与当前根相同的**盘上**的类。
-
-    `store != fs` 的类（PG 表）**跳过**：它们没有 root/patterns，本来就判不进"某棵树下
-    的一条路径"。塞进来只会得到一条恒不命中的规则，而那种规则的表现是"看着登记了、
-    其实什么都没管"——本表最不该有的形态。
-    """
+    """Compile filesystem patterns for the selected root; PostgreSQL policies are excluded."""
     out = []
     for c in classes:
         if store_of(c) != STORE_FS:
@@ -444,7 +398,7 @@ def _matcher(classes: list[dict], root: str) -> list[tuple[str, re.Pattern]]:
 
 
 def owner_of(rel: str, root: str, classes: list[dict] | None = None) -> str | None:
-    """这条相对路径归哪个类；没登记返回 None。**按 CLASSES 顺序取第一个命中**。"""
+    """Return the first matching policy key, or None when the path is unregistered."""
     classes = CLASSES if classes is None else classes
     for key, rx in _matcher(classes, root):
         if rx.match(rel):
@@ -453,25 +407,19 @@ def owner_of(rel: str, root: str, classes: list[dict] | None = None) -> str | No
 
 
 def matches(rel: str, c: dict) -> bool:
-    """rel（相对**这个类自己的 root**）是否属于类 `c`——只看 patterns，不看 root 落在哪。
-
-    与 `owner_of` 的分工：`owner_of` 回答「这条路径归哪一类」（要比较 root，
-    故按 CLASSES 顺序取第一个命中）；`matches` 回答「这个类要不要管这条路径」
-    （不看 root，所以执行者可以用它配合 `--root` 覆盖到临时目录上）。
-    glob 语义仍只有 `_glob_to_re` 一处实现。
-    """
+    """Match a path relative to a policy root without comparing physical root locations."""
     return any(_glob_to_re(p).match(rel) for p in c["patterns"])
 
 
 def unregistered(root: str, classes: list[dict] | None = None) -> list[str]:
-    """root 下**没登记**的条目（这就是「缺口」的定义）。目录不存在 ⇒ 空表（不是异常）。"""
+    """List unowned entries; a missing storage root has no entries."""
     if not os.path.isdir(root):
         return []
     return [rel for rel in iter_entries(root) if owner_of(rel, root, classes) is None]
 
 
 def audit(roots: list[str] | None = None, classes: list[dict] | None = None) -> dict:
-    """全量盘点：每根下没登记的条目 + 各自扫了多少条。"""
+    """Report unowned entries and scanned counts for each selected storage root."""
     classes = CLASSES if classes is None else classes
     roots = [DEFAULT_LOGS_ROOT, DEFAULT_REPORT_ROOT] if roots is None else roots
     per = {r: unregistered(r, classes) for r in roots}
@@ -481,18 +429,12 @@ def audit(roots: list[str] | None = None, classes: list[dict] | None = None) -> 
 
 
 def _sample_path(pattern: str) -> str:
-    """把一个 glob 变成一条具体的样本路径（`archive/DELETED-*.txt` → `archive/DELETED-x.txt`）。
-
-    用于"这条 frozen 规则是否落在某个 managed 规则的范围里"——才够判**子集关系**：
-    glob 的子集判定一般做不到，但拿样本路径去过一遍宽规则，足以抓住实际会出现的那种疏漏
-    （有人加了一条永久保留的例外、却忘了从 keep-days 的 exclude 里排掉）。
-    """
+    """Construct a representative path for frozen-policy overlap checks."""
     return pattern.replace("**/", "").replace("**", "x").replace("*", "x").replace("?", "x")
 
 
 def _frozen_covered(classes: list[dict]) -> list[str]:
-    """**反向校验**：frozen 的规则落在某个 managed keep-days 类的范围里时，
-    那个类的 exclude 必须盖住它。少了这层，保护就只活在"我记得加过 exclude"里。"""
+    """Require keep-days exclusions to protect overlapping frozen policies."""
     bad = []
     for fc in classes:
         if fc["status"] != "frozen" or store_of(fc) != STORE_FS:
@@ -513,17 +455,12 @@ def _frozen_covered(classes: list[dict]) -> list[str]:
 
 
 def basename_match(name: str, pattern: str) -> bool:
-    """基名 glob（`rule.exclude` 用的形态，如 `DELETED-*.txt`）。
-
-    **不引 fnmatch**：glob 语义在这份文件里只有 `_glob_to_re` 一处实现
-    （`*` = `[^/]*`，基名里没有 `/` 故等价）。两个实现就会有两种行为，
-    而 exclude 的失效方式是"以为护住了、其实没有"——正是这条链最不该有的歧义。
-    """
+    """Match an exclusion basename using the same glob semantics as ownership patterns."""
     return bool(_glob_to_re(pattern).match(name))
 
 
 def check_classes(classes: list[dict] | None = None) -> list[str]:
-    """登记表自身的结构自检，返回问题清单（空表 = 表是自洽的）。"""
+    """Validate policy structure, implementation references and frozen-file protection."""
     classes = CLASSES if classes is None else classes
     bad: list[str] = []
     seen: set[str] = set()
@@ -539,32 +476,25 @@ def check_classes(classes: list[dict] | None = None) -> list[str]:
         for f in ("label", "status", "retention"):
             if not c.get(f):
                 bad.append(f"{k}：缺字段 {f}")
-        # 归属判据按存放形态二选一：盘上的树要 root+patterns，PG 表要 dsn_env+tables。
-        # **不许两者都缺**——那样这条登记就没有任何判据，只是一句"有这么个东西"。
         need = ("root", "patterns") if store_of(c) == STORE_FS else ("dsn_env", "tables")
         for f in need:
             if not c.get(f):
                 bad.append(f"{k}：store={store_of(c)} 却缺字段 {f}")
         if c["status"] not in ("managed", "frozen", "open"):
             bad.append(f"{k}：status 不认识（{c['status']}）")
-        # owner_ref 的存在性对所有类都查（frozen 的 owner_ref 指「谁在用它」，一样不许指向空气）
         if c.get("owner_ref") and not os.path.exists(os.path.join(REPO, c["owner_ref"])):
             bad.append(f"{k}：owner_ref 指向的文件不存在（{c['owner_ref']}）")
         if c["status"] == "managed":
             if not c.get("owner"):
                 bad.append(f"{k}：managed 但没有执行者（owner）")
-            # 「谁在清」必须落在盘上可指的地方：本仓脚本、别的执行者脚本、或仓外的执行者
-            # （logrotate 的配置在 /etc）——三者都没有，这条登记就只是句口头承诺
             if not (c.get("rule") or c.get("owner_ref") or c.get("owner_external")):
                 bad.append(f"{k}：managed 既没有 rule、也没有 owner_ref/owner_external"
                            "——那它到底谁在清？")
         if c["status"] in ("frozen", "open") and c.get("owner"):
             bad.append(f"{k}：{c['status']} 却写着执行者（自相矛盾）")
-        # exclude 必须与某个 frozen 类的 patterns 对得上：否则「排除」就成了一句没登记的口头承诺
         for ex in (c.get("rule") or {}).get("exclude", []) or []:
             if not any(fp.endswith(ex) or ex.endswith(fp.split("/")[-1]) for fp in frozen):
                 bad.append(f"{k}：exclude `{ex}` 没有对应的 frozen 登记项（排除必须写明为什么）")
-    # 双向：上面正向管「exclude 不许凭空冒出来」，反向管「frozen 不许被宽规则吞掉」
     bad += _frozen_covered(classes)
     return bad
 

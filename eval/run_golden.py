@@ -38,7 +38,7 @@ from landing_gate import (  # noqa: F401 —— 再导出（唯一实现在 land
     fallback_resets,
     wilson_ci,
 )
-from langchain_core.messages import AIMessageChunk, ToolMessage
+from langchain_core.messages import ToolMessage
 
 from agent import (
     confirm,  # 双轮（20260925）：验签 + 只读解载荷，见 run_one/run_case
@@ -51,7 +51,7 @@ from agent.api.routes import chat as chat_routes
 from agent.api.schemas import ChatRequest, HistoryItem
 from agent.api.turns import stream_to_queue as _run_agent_stream_to_queue
 from agent.principal import Principal  # 管理助手用例的调用者身份（20260921）
-from agent.transport import command_wire
+from agent.transport import command_wire, reply_text
 from eval import golden_runtime
 from eval.golden_runtime import close_agent, ensure_agent
 from eval.native_assertions import check as check_native
@@ -283,7 +283,6 @@ def parse_reset(text: str) -> tuple[str, str]:
 
 
 
-# `fallback_resets` 已搬到 `landing_gate`（判据的唯一实现处），本模块顶部再导出。
 def run_one(req: ChatRequest, principal: "Principal | None" = None,
             trace_ctx: dict | None = None, *,
             confirm_token: str = "", confirm_pick: str = "",
@@ -371,6 +370,7 @@ def run_one(req: ChatRequest, principal: "Principal | None" = None,
     control_frames: list[str] = []
     task_frames: list[dict] = []
     for item in frames:
+        final_text = reply_text(final_text, item)
         if isinstance(item, str) and item.startswith("__RESET__"):
             final_text = ""  # 作废轮 → 清空（与前端最终显示一致）
             tool_calls.clear()  # 被作废轮的工具调用不算数（断言的是最终采纳轮的执行）
@@ -405,8 +405,6 @@ def run_one(req: ChatRequest, principal: "Principal | None" = None,
                 _tf = None
             if isinstance(_tf, dict):
                 task_frames.append(_tf)
-        elif isinstance(item, AIMessageChunk) and item.content:
-            final_text += str(item.content)
         elif isinstance(item, ToolMessage) and item.content:
             name = getattr(item, "name", "") or ""
             if name:

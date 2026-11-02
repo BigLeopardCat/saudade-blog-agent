@@ -74,8 +74,8 @@ def review(session, state, response, outcome):
     record("native", "completion_review", pending=pending,
            attempt=session.state["completion_checks"])
     if session.state["completion_checks"] >= 1:
-        session.outcome = TurnResult(outcome.reply + "\n尚未完成：" +
-            "；".join(item["content"] for item in pending), {
+        visible = "".join(session.reply_parts) or outcome.reply
+        session.outcome = TurnResult(visible + "\n部分请求尚未完成。", {
                 **(outcome.execution or {}), "unfinished_work": pending,
                 "blocked": [{"reason": "unfinished_work"}]})
         return None

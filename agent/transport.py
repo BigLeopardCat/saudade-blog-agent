@@ -1,6 +1,6 @@
 """Translate the native runtime contract to the existing chat protocols.
 
-The runtime yields only ``AIMessageChunk`` objects and one terminal ``TurnResult``.
+The runtime yields text deltas, typed input/revision events and one terminal result.
 This module owns the wire details (SSE control frames and the legacy JSON response)
 without inspecting planner nodes, graph state, or model metadata.
 """
@@ -13,7 +13,7 @@ from typing import Callable, Generator, Iterable, Iterator
 from langchain_core.messages import AIMessageChunk
 
 from agent.products.blog.confirmation import frames as confirmation_frames
-from agent.runtime.results import TurnResult
+from agent.runtime.results import ReplyReset, TurnResult
 from agent.runtime.task_inputs import TaskInputEvent
 
 
@@ -106,7 +106,7 @@ def _terminal_delta(visible: str, reply: str) -> str:
 
 
 def iter_transport_events(
-    events: Iterable[AIMessageChunk | TurnResult],
+    events: Iterable[AIMessageChunk | TurnResult | ReplyReset],
 ) -> Generator[str | AIMessageChunk, None, None]:
     """Yield visible chunks and protocol frames, exactly once per event.
 
@@ -131,6 +131,10 @@ def _stream_body(events):
         if isinstance(event, TaskInputEvent):
             yield _json_frame("__INPUT__:", event.data)
             continue
+        if isinstance(event, ReplyReset):
+            visible = ""
+            yield _json_frame("__TEXT_RESET__:", {})
+            continue
         if isinstance(event, AIMessageChunk):
             content = str(event.content or "")
             if content:
@@ -152,17 +156,23 @@ def _stream_body(events):
     yield from _execution_frames(terminal.execution)
 
 
-def collect_turn(events: Iterable[AIMessageChunk | TurnResult]) -> CollectedTurn:
+def reply_text(previous, event):
+    """Apply a typed delta or trusted producer revision without parsing model text."""
+    if isinstance(event, AIMessageChunk):
+        return previous + str(event.content or "")
+    return "" if event == "__TEXT_RESET__:{}" else previous
+
+
+def collect_turn(events: Iterable[AIMessageChunk | TurnResult | ReplyReset]) -> CollectedTurn:
     """Collect a native turn for the non-streaming HTTP response."""
     reply = ""
     navigation = ""
     receipts = []
     for event in iter_transport_events(events):
-        if isinstance(event, AIMessageChunk):
-            reply += str(event.content or "")
-        elif event.startswith("__CMD__:"):
+        reply = reply_text(reply, event)
+        if isinstance(event, str) and event.startswith("__CMD__:"):
             navigation = command_wire(json.loads(event[len("__CMD__:"):]))
-        elif event.startswith("__EXEC__:"):
+        elif isinstance(event, str) and event.startswith("__EXEC__:"):
             receipts.extend(json.loads(event[len("__EXEC__:"):]))
     return CollectedTurn(reply=reply, navigation=navigation, execution=receipts)
 

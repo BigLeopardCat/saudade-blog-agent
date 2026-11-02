@@ -1,44 +1,35 @@
-# 原生事件传输边界
+# 运行时事件与正文一致性
 
-`agent.transport` 是 Runtime 与博客 HTTP 协议之间的薄适配层。Runtime 只需要实现：
+`AgentRuntime.stream_events(state, config)`输出`AIMessageChunk`、`TaskInputEvent`、
+`ReplyReset`以及唯一终态`TurnResult`。LangChain/LangGraph负责执行和恢复，
+`agent.transport`只适配博客协议，不读取内部图节点或从正文解释动作。
 
-```python
-runtime.stream_events(state, config)
-# Iterator[AIMessageChunk | TurnResult]
-```
+消息携带用户输入；任务编号与恢复请求用于选择持久执行。
+配置提供服务端验签身份、会话坐标、取消、进度与共享预算。
+模型推理、工具参数片段和凭据不作为正文输出。
 
-`state` 只携带 `messages` 和可选的 `confirm_grant`。`config` 负责验签身份、会话坐标、
-停止信号、进度回调和当前请求预算（预算对象也由 `RequestJobs` 的请求作用域共享）。
-Runtime 负责会话存储、授权、确认、取消、幂等和持久化；
-传输层不读取业务图状态，也不解析历史节点事件。
+## 正文与修订
 
-每个正常迭代器必须产生且只产生一个 `TurnResult`。`AIMessageChunk` 是已经允许展示的正文
-增量；`TurnResult.reply` 是最终保存的完整正文。传输层只补齐还没有从增量中发出的后缀，
-绝不会再次发送完整 reply。若两者前缀不一致，适配器失败关闭，避免重复或错正文。
+- 正常正文逐字流式发送；最终`TurnResult.reply`只补缺失后缀，不重复发送整段。
+- 发现无效调用、内容过滤或输出截断时，运行时撤回本轮临时正文；纠错是否继续由
+  有限恢复策略和统一预算决定。不能将“已完成”的错误前缀拼入纠正后的答复。
+- 类型化`ReplyReset`经适配器编码为`text_reset`事件，载荷严格为`{}`。
+  浏览器本地消息、跨标签同步、Rust正文聚合、生产trace和两种评测入口均清空旧正文。
+- 修订不撤销业务操作，不清除进度、工具观察、确认卡或执行回执，也不赋予重试写入权限。
+- 模型正文里的`__TEXT_RESET__:{}`仍是普通文本，不能触发控制事件。
+- 修订后的正文与最终记录必须一致；终态后的事件、非法载荷及不一致结果失败关闭。
 
-`TurnResult.execution` 继续使用现有结构化回执：
+## 其他事件与资源
 
-- `receipts[*].cmd` 编码 `__CMD__`，并同步给非流式响应使用的 `AUTO_NAVIGATE`、
-  `NAVIGATE`、`EFFECT`、`DARKMODE` 连线格式；不从正文猜命令；
-- 回执整体编码 `__EXEC__`；
-- 确认、取消和替换卡由 `agent.products.blog.confirmation.frames` 统一生成
-  `__PENDING__` / `__CONFIRM__`，传输层不把令牌、规格等额外字段直接暴露；
-- no-op、空回复和保存失败分别由 Runtime 的终态、事件错误和 HTTP 现有兜底处理。
+HTTP以具名SSE区分`text`、`progress`、`task_input`、`confirmation`、`command`、
+`done`和`error`。内部回执经宿主持久化，不向浏览器暴露确认规格与签名凭据。
+页面命令的发送和实际浏览器反馈分别记录；不把发送成功当作执行成功。
 
-队列顺序是：正文增量、结构化执行帧、一个正常哨兵。Worker 异常先入队异常，再入队哨兵，
-HTTP 层只发安全 `__ERROR__`，不会再发 `__END__`。取消使用独立哨兵，不伪装成成功结束。
-并发许可由 `RequestJobs` 持有到 worker 真正完成；队列排空和客户端关闭不会提前归还许可。
+Worker异常、取消与正常结束使用独立出口。并发许可持续到Worker真正退出；
+客户端断开不提前归还执行许可。停止读取关闭上游迭代器；队列写入受超时与停止信号约束。
 
-服务入口直接消费 `AgentRuntime.stream_events`；不会把旧节点事件翻译成伪原生事件。
+协议扩展先发布可接收新事件的宿主与组件，再部署会发出该事件的Agent。
+组件由宿主锁定提交与子树哈希，不依靠本机源码碰巧一致。
 
-离线测试使用可控 fake Runtime，覆盖正文去重、命令顺序、确认字段边界、取消/no-op、空回复、
-存储异常、worker 哨兵和同步适配器结果一致性；没有生产数据库、模型或网络调用。
-
-## 服务切换
-
-服务工厂现在只构建 AgentRuntime，默认及示例为 AGENT_ARM=native；旧 graph/hybrid 配置
-会在启动时报错，部署时须同步更新。关闭传输迭代器会关闭上游 Runtime，队列写入有超时和
-停止围栏。producer 的 stream_end 记录已入队正文，涵盖确认正文后缀；凭据不进入普通 trace。
-
-旧四节点门禁已由 HTTP/SSE 接续、持久化和正文不重复行为测试取代；文本计划不再是 producer 契约。
-全量线上模型基线仍挂起；离线结果不能代替真实模型的功能质量验收。
+离线测试覆盖正文修订、持久化、回执保留、重复与迟到事件、非法载荷及同步/流式一致性。
+真实模型、浏览器和全量验证记录见[P4进展](p4-progress.md)。

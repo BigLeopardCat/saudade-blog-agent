@@ -43,3 +43,10 @@ def repair(session, response):
         "Previously recorded receipts remain authoritative; do not replay completed writes.",
         additional_kwargs={"runtime_feedback": "response_repair"})
     return [cleaned, feedback]
+
+
+def withdraw(session):
+    """Invalidate provisional prose across storage and live consumers."""
+    session.reply_parts.clear()
+    session.state["output_revision"] += 1
+    record("native", "reply_withdrawn", revision=session.state["output_revision"])

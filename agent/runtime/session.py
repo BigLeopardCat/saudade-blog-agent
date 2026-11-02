@@ -22,6 +22,7 @@ from agent.runtime.message_content import text_content
 from agent.runtime.middleware import StreamGuard
 from agent.runtime.response_validation import incomplete_response
 from agent.runtime.results import (
+    ReplyReset,
     TurnResult,
     complete_reply,
 )
@@ -222,6 +223,7 @@ class ToolSession:
         stream = execution.stream(resume=resume, approval_input=approval_input, recover=recover)
         visible = []
         boundary, model_key = VisibleText(), None
+        output_revision = 0
         self.used_stream_api = True
         reported_inputs = set()
         try:
@@ -230,6 +232,14 @@ class ToolSession:
                 # must still reach the commit node after a budget stop.
                 check_cancelled(self.config, check_budget=False)
                 if mode == "updates" and isinstance(data, dict):
+                    for update in data.values():
+                        revision = (update.get("output_revision", 0)
+                                    if isinstance(update, dict) else 0)
+                        if revision > output_revision:
+                            output_revision = revision
+                            visible.clear()
+                            boundary, model_key = VisibleText(), None
+                            yield ReplyReset()
                     from agent.runtime.task_input_policy import events as input_events
                     for input_event in input_events(self, data, reported_inputs):
                         if self.input_events_enabled:

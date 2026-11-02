@@ -5,7 +5,7 @@ import json
 import pytest
 from langchain_core.messages import AIMessageChunk
 
-from agent.runtime.results import TurnResult
+from agent.runtime.results import ReplyReset, TurnResult
 from agent.transport import (
     TransportProtocolError,
     collect_turn,
@@ -22,6 +22,20 @@ def test_stream_chunks_and_terminal_result_do_not_duplicate_body():
     ])
     chunks = [event for event in events if isinstance(event, AIMessageChunk)]
     assert "".join(chunk.content for chunk in chunks) == "你好，泠月喵。"
+
+
+def test_reply_reset_withdraws_only_prose_and_preserves_factual_receipts():
+    source = [AIMessageChunk(content="无效正文"), ReplyReset(),
+              AIMessageChunk(content="纠正后的正文"),
+              TurnResult("纠正后的正文", {"receipts": [{"tool": "write", "result": "ok"}]})]
+    stream = list(iter_transport_events(source))
+    assert "__TEXT_RESET__:{}" in stream
+    assert any(isinstance(e, str) and e.startswith("__EXEC__:") for e in stream)
+    collected = collect_turn(source)
+    assert collected.reply == "纠正后的正文"
+    assert collected.execution == [{"tool": "write", "result": "ok"}]
+    with pytest.raises(TransportProtocolError):
+        list(iter_transport_events([TurnResult("done"), ReplyReset()]))
 
 
 def test_terminal_only_confirmation_is_emitted_once_with_receipt_command():
