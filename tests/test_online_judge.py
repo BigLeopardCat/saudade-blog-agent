@@ -211,6 +211,15 @@ def test_incomplete_material_is_not_evaluated_and_does_not_spend_tokens(tmp_path
     assert report["counts"] == {"not_evaluated": 1} and not model.messages
 
 
+def test_complete_long_article_material_is_reviewable_without_clipping(tmp_path):
+    case = recorded(tmp_path, text="完整答复" * 9000)
+    model = Model()
+    report = run(tmp_path, case, model)
+    assert report["counts"] == {"no_issue_found": 1} and len(model.messages) == 1
+    material = json.loads((tmp_path / "semantic" / "material-1.json").read_text())
+    assert material["turns"][0]["assistant_reply_to_review"] == "完整答复" * 9000
+
+
 @pytest.mark.parametrize("error,finish", [(OpenAIError("unavailable"), "stop"),
                                          (None, "length")])
 def test_judge_failure_does_not_retry_or_fall_back_to_a_pass(tmp_path, error, finish):
