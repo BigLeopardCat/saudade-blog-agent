@@ -302,9 +302,7 @@ _HEADER_KEYS_MAX = 12
 
 
 def _unescape(text: str) -> str:
-    """repr 里换行是**字面** `\\n`（两个字符）——解析 Markdown 前必须先还原，
-    否则一节都切不出来（实测：note 19 的详情 repr 52834 字里真换行 0 个、
-    字面 `\\n` 1154 个）。"""
+    """Restore literal newline escapes before parsing a plain tool frame."""
     return text.replace("\\n", "\n")
 
 
