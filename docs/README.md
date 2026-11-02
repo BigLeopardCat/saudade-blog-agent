@@ -82,7 +82,7 @@
 | [tool-menu-poc-20261020.md](tool-menu-poc-20261020.md) | 把技能模板换成真工具表的三臂读数：**harness 的"执行半"稳住了，丢的是路由与定序**；§5 是第二轮的前置结论 | 记录型（**§5** 方向型） |
 | [prefix-cache-audit-20261020.md](prefix-cache-audit-20261020.md) | 生产前缀缓存审计：planner 命中 50.1%，但成因是**整段冷启动**（共享网关容量淘汰 + 换模型），不是槽位位置；**§4 是三个杠杆的定价** | 记录型（**§4** 方向型） |
 | [react-architecture-plan-20261020.md](react-architecture-plan-20261020.md) | 主流 ReAct + 按需 schema 的改造方案：planner 降成路由器、散文外置、执行层改循环；**§6 是分阶段预注册判据** | 记录型（已退役） |
-| [platform-roadmap.md](platform-roadmap.md) | 平台面能力（断点恢复 / 可观测 / 错误与用量 / 权限）与整体规范化的分批预案，含明确不做 | 记录型 |
+| [platform-roadmap.md](platform-roadmap.md) | 当前整改结果、后续维护事项及触发条件 | 方向型（含当前状态） |
 
 | [scheduling.md](scheduling.md) | 管理员持久定时、只读后台分析、执行记录与部署 | 当前规范 |
 
