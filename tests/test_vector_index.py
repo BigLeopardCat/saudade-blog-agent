@@ -390,11 +390,9 @@ def test_vector_index():
     vec = [dict(B, score=0.91), dict(Cc, score=0.88), dict(D, score=0.85)]
     fused = V.rrf_fuse(lex, vec, 60, 4)
     by = {h["id"]: h for h in fused}
-    check("分数 = 两路 1/(k+rank) 之和（rank 基准写错就全错）",
-          by[12]["score"] == round(1 / 62 + 1 / 61, 4) and by[11]["score"] == round(1 / 61, 4),
-          f"乙篇={by[12]['score']} 甲篇={by[11]['score']}")
-    check("词法原分不参与融合（混着加 = 两套数量级相加）",
-          all(h["score"] < 0.1 for h in fused), str([h["score"] for h in fused]))
+    check("融合仅提供官方排序，不伪造未公开的分值",
+          (by[12]["rank"], by[11]["rank"]) == (1, 3), str(fused))
+    check("不把各路原分当融合分", "score" not in by[12], str(by[12]))
     check("按融合分降序（只出现在词法路的甲篇排在两路都有的丙篇之后）",
           [h["id"] for h in fused] == [12, 13, 11, 14], str([h["id"] for h in fused]))
     check("top_k 收口", [h["id"] for h in V.rrf_fuse(lex, vec, 60, 2)] == [12, 13])
@@ -470,8 +468,9 @@ def test_vector_index():
     check("只在向量路出现的丁篇进了最终结果（融合是并集，不是交集）",
           14 in {h["id"] for h in fused}, str([h["id"] for h in fused]))
     check("向量路确实贡献了 1 条候选", _r["vectors"] == 1, str(_r))
-    check("融合分落在 0.0x 那一档（不是把 BM25 原分混着加进来）",
-          max(h["score"] for h in fused) < 0.1, str([h["score"] for h in fused]))
+    check("融合结果使用明确的顺序，不混用各路原分",
+          [h["rank"] for h in fused] == list(range(1, len(fused) + 1))
+          and all("score" not in h for h in fused), str(fused))
     _n = len(SENT)
     S.rag_hybrid_enabled = False
     off = idx.search(Q, 8)

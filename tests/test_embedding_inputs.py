@@ -289,3 +289,29 @@ def test_local_probe_normalizes_then_rejects_tokenizer_drift(profile, monkeypatc
     assert manage.probe(2, True)["ok"] is (not mismatch)
     assert any("é" in text for text in seen)
     assert all("e\u0301" not in text for text in seen)
+
+
+def test_parallel_token_windows_preserve_shared_tokenizer_configuration(profile):
+    from concurrent.futures import ThreadPoolExecutor
+
+    policy = inputs.active_profile()
+    before = policy.tokenizer.to_str()
+    body = "博客Rust👩🏽‍💻é\n" * 90 + "TAIL"
+    chunks = [
+        {**chunk, "title": "标题"} for chunk in split("标题", "## 来源\n" + body)
+    ]
+
+    def prepare(_):
+        refined = inputs.vector_chunks(chunks)
+        covered = set()
+        for chunk in refined:
+            assert chunk["text"][chunk["prefix_chars"]:] == body[chunk["start"]:chunk["end"]]
+            covered.update(range(chunk["start"], chunk["end"]))
+            policy.validate(inputs.document_text("标题", chunk["text"], policy))
+        assert covered == set(range(len(body)))
+        return policy.count(body)
+
+    with ThreadPoolExecutor(max_workers=4) as executor:
+        counts = list(executor.map(prepare, range(12)))
+    assert min(counts) > policy.spec.max_tokens
+    assert policy.tokenizer.to_str() == before

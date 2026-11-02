@@ -121,20 +121,7 @@ def main() -> int:
     log = logging.getLogger("rag.vector_index")
     log.setLevel(logging.DEBUG)
     root = Path(__file__).resolve().parents[1]
-    sources = [
-        root / "rag" / name
-        for name in (
-            "chunks.py",
-            "corpus.py",
-            "embedding_inputs.py",
-            "ranking.py",
-            "search.py",
-            "sections.py",
-            "vector_index.py",
-            "vector_files.py",
-        )
-    ]
-    sources.append(Path(__file__))
+    sources = [*sorted((root / "rag").glob("*.py")), Path(__file__)]
     code_hash = hashlib.sha256(b"".join(p.read_bytes() for p in sources)).hexdigest()
     data = load(args.dataset, args.split)
     report = execute(data, args.index_dir, args.candidates, args.expected_dim)
