@@ -53,6 +53,7 @@ def test_cooperative_close_is_bounded_and_failed_pool_cannot_be_reused(monkeypat
     with ModelIO(cleanup_timeout=0.03) as io, io_scope(io):
         iterator = io.iterate(lambda: resource)
         assert next(iterator) == "first"
+        assert io.ready and io.pending_cleanup == 0
         started = time.monotonic()
         iterator.close()
         assert time.monotonic() - started < 1
@@ -73,6 +74,7 @@ def test_shielded_cleanup_retains_ownership_and_fails_readiness_until_actual_exi
         with io_scope(io):
             iterator = io.iterate(lambda: resource)
             assert next(iterator) == "first"
+            assert io.ready and io.pending_cleanup == 0
             started = time.monotonic()
             iterator.close()
             assert time.monotonic() - started < 1
