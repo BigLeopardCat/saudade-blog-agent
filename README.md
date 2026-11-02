@@ -165,7 +165,7 @@ uv sync
 # 一直没人碰"——是个**给人看的**东西。
 bash scripts/dev/coverage.sh
 
-# L1 检索基准（recall@k / MRR，直接测线上 rag/search.py，秒级、无网）
+# L1 检索基准：读取已配置公开语料；混合检索还需要embedding，不属于默认离线CI。
 .venv/bin/python eval/recall_eval.py
 
 # L2 当前发布验收：真实 HTTP、首次结果、不批准业务写入；身份来自实际账号
@@ -194,7 +194,7 @@ BLOG_API_BASE=http://127.0.0.1:8099/api/public \
 几点要知道：
 
 - **L2 的判据锚在维护者的语料上**：`eval/golden/basic.jsonl` 的期望（`require_doc_terms` 的术语表、检索用例的命中目标）是从默认站点那几篇文章的正文里派生的 ⇒ 对着**自己**的博客跑必然对不上，而**红的样子与“模型退化”一模一样**。启动时有一条语料出处闸先判这件事（对不上 ⇒ 全部用例**未评估** + 退出码 3，并明说“这不是模型退化”）；想在自己的部署上跑端到端，用 `eval/fixtures/` 的自包含夹具（自带语料、桩服务与用例，跑法见那里的 README）。
-- L0 适合 CI（秒级、无外部依赖），push 即拦截；L2 依赖真实模型和外部服务，不进普通 push 门禁——它由 `scripts/nightly_regression.sh` 在夜间跑，联动 L1 与 L3，任一门禁项失败会在磁盘上留一个标记文件由心跳探针带出来。**这个夜间任务默认是关的**（出厂不装任何 cron；一次全量约 10M tok / ¥2.4，跑的是维护者那台机器上的语料与夹具）——想天天跑就用 `bash scripts/enable_nightly.sh` 打开（默认干跑，`--apply` 才写 crontab），只想看一次读数就直接手跑那个脚本。**没开的时候 `~/agent_regression.failed` 恒不存在 ⇒ 心跳探针那一项恒静默，静默不等于绿。**
+- L0 适合 CI（秒级、无外部依赖），push 即拦截；L2 依赖真实模型和外部服务，不进普通 push 门禁——它由 `scripts/nightly_regression.sh` 在夜间跑，联动 L1 与 L3，任一门禁项失败会在磁盘上留一个标记文件由心跳探针带出来。**这个夜间任务默认是关的**（出厂不装 cron；实际消耗以本次 usage 和配置价格计算），它属于趋势监测，不代替上述冻结HTTP与语义发布验收。想天天跑就用 `GOLDEN_ADMIN_UID=<专用管理员编号> GOLDEN_USER_UID=<专用普通账号编号> bash scripts/enable_nightly.sh` 预览，再加 `--apply` 打开（默认干跑，`--apply` 才写 crontab），只想看一次读数就直接手跑那个脚本。**没开的时候 `~/agent_regression.failed` 恒不存在 ⇒ 心跳探针那一项恒静默，静默不等于绿。**
 - golden 分两类判：带 `regression` 标签的回归组硬判 100%，能力题按通过率。平均数会把两类红混在一起，严重度不同，所以分开。
 - 有几条用例需要“真实身份”（要以某个 uid 真调上游），由环境变量给出（见下一节）；未设时它们**响亮地跳过并计入报告**，不静默豁免。
 - 设备真实屏显不进入自动化评测；离线验证授权和下发回执。会话历史已有原生读取，
@@ -211,10 +211,6 @@ BLOG_API_BASE=http://127.0.0.1:8099/api/public \
 trace 与 golden trace 的保留各有其执行者（`eval/trace_retention.py`、
 `eval/golden_trace.py::prune`），表里 `rule=None` 各指一处。
 
-这条规矩的由来：同一形状的问题出现过四次（R2 的保留数、logrotate 的 `rotate 14`、`logs/archive/`、
-`eval/report/runs/`），形态都是**「策略写了，但没有任何东西在执行它」**——装饰性配置比没有配置
-更坏，因为它看起来是对的。
-
 ## 环境变量
 
 配置的取值源**只有一份**：`config/settings.py`（pydantic-settings，读 `.env`）。当前支持的字段列在 [.env.example](.env.example) 里（那个文件是这一份的镜像，两边的分节一一对应）。常用项：
@@ -229,7 +225,8 @@ trace 与 golden trace 的保留各有其执行者（`eval/trace_retention.py`�
 | `AGENT_ADMIN_BASE` | `http://127.0.0.1:3000` | 管理读接口的上游地址 |
 | `DEVICE_SERVICE_URL` | `http://127.0.0.1:3100` | IoT 设备服务地址 |
 | `IOT_ENABLED` | 不设（= 未部署） | IoT 平台是可选件，**不设变量 = 没装**；装了置 `1` |
-| `TRACE_DIR` | 部署环境的绝对路径（**自建部署须覆盖**） | 对话 trace 落盘目录。**20260925 起写进 `<TRACE_DIR>/<YYYYMMDD>/`**：枚举由 `utils/trace_files.py` 单点负责（四种读取端共用），保留期由 `eval/trace_retention.py` 执行（>24h 压缩、>30 天删；默认只列不删，`--apply` 才动手） |
+| `TRACE_DIR` | `data/traces` | 相对应用工作目录的追踪根。生产可显式设共享绝对路径；写入、巡检与保留工具共用此配置，CLI显式目录优先。按日期分目录，保留清理默认只预览。 |
+| `BLOG_ROOT` | 空 | 本地博客宿主根，仅用于宿主日志体积与 health.log 巡检。未配置时如实不可用；trace统计独立使用TRACE_DIR，不猜宿主位置。 |
 | `AGENT_REQUIRE_ASSERTION` | `1` | 缺失/验签失败的身份断言 ⇒ **401**（20261019 起这是默认值，安全审计 SAU-005）。显式置 `0` 才回退信任请求体里的 `user_id`——那条路径上的身份没有角色，工具一件都调不动（`authz.must_enforce`），别留在生产配置里 |
 | `RAG_HYBRID_ENABLED`、`EMBEDDING_*`、`RRF_K` | 不设（= 纯词法） | 向量 + RRF 混合检索，可选件。⚠️ **`EMBEDDING_*` 不只管检索**：首页那件「文章向量空间图谱」的建图（`scripts/build_word_graph.py`）与检索（`rag/wordgraph.py`）也用它——配了走它，没配回落 `QWEN_*` + `qwen3.7-text-embedding`（两端共用 `rag/embed_space.py` 一条规则）。**换模型/端点后要重建一次图谱**（后台「站点设置 → 向量图谱」），否则检索侧以 `space_mismatch` 明着降级 |
 | `AGENT_CONTEXT_TOKENS` | `128000` | 模型窗口硬上限，含输出预留与缓存输入。按实际端点配置；OpenCode DeepSeek 部署及 `.env.example` 使用 1M。**它不是单次请求预算。** |
@@ -238,11 +235,9 @@ trace 与 golden trace 的保留各有其执行者（`eval/trace_retention.py`�
 | `AGENT_TASK_SECONDS` | `300` 秒 | 跨请求累计活动执行时间；人工审批和断开后的等待不计入。进程失联保守保留已预留时间。 |
 | `AGENT_COMPACTION_TRIGGER` / `AGENT_COMPACTION_TARGET` | `0.8` / `0.4` | 输入达到单次预算的 80% 时压缩，目标回落到约 40%；不按固定轮数或小历史窗口刷新。 |
 | `AGENT_MODEL_CALLS` / `AGENT_TOOL_CALLS` | `12` / `16` | 整项任务的模型调用和工具尝试上限，领域加载也计为工具调用；摘要共用任务预算。 |
-| `AGENT_OUTPUT_TOKENS` / `AGENT_SUMMARY_OUTPUT_TOKENS` | `1536` / `4096` | 对话与摘要输出上限；审批前交付和确认后回复使用同一 Agent 的对话预算。 |
+| `AGENT_OUTPUT_TOKENS` / `AGENT_SUMMARY_OUTPUT_TOKENS` | `4096` / `4096` | 对话与摘要输出上限；审批前交付和确认后回复使用同一 Agent 的对话预算。 |
 | `AGENT_MAX_BODY_BYTES` / `AGENT_MAX_CONCURRENT` / `AGENT_MAX_REVIEW` | `12 MiB` / `8` / `4` | 请求体、每 worker 运行请求数、侧任务并发上限。 |
 | `AGENT_STREAM_IDLE_TIMEOUT` / `AGENT_STREAM_TOTAL_TIMEOUT` | `120` / `300` 秒 | 流式空闲与请求总截止时间。 |
-
-（20261020 之前这里还有一张 B 表——"`server.py` 直读进程环境的四个常量，`.env` 管不到"。双轨收敛后那张表删了：那四个键连同两个此前改不了的流式超时，都成了上面 A 表的成员，`.env` / systemd `Environment=` / 代码缺省三轨同值。历史见 CHANGELOG 20261020。）
 
 `GOLDEN_ADMIN_UID` / `GOLDEN_USER_UID` 只给 golden 里“需要真身份”的用例用（未设则那些用例响亮跳过）；`TRACE_TOOL_RESULT_LIMIT` 控制 trace 里工具返回留多长（不设 = 按工具分档）；`SAUDADE_IGNORE_ENV_FILE=1` 让**整份 `.env` 不读**（离线套件用，见 `settings.py` 的注）。这三个都是**进程变量，不走 `.env`**。
 
@@ -251,13 +246,13 @@ trace 与 golden trace 的保留各有其执行者（`eval/trace_retention.py`�
 **状态、触发条件与"明确不做"的清单以 [ROADMAP.md](ROADMAP.md) 为准**（这一节只说方向，
 不重复那份表里会变的状态）；每个决定的取舍与当时的替代选项在 [docs/adr/](docs/adr/)。
 
-当前维护重点是收敛运行时与业务接口：
+当前维护重点：
 
-- 完成领域工具迁移，同时删除对应旧技能模板、关键词修正和交接逻辑；
-- 将字符串 IR 与 SSE 魔法前缀收敛到明确的结构化边界；
-- 先完善工具能力与真实结果评测，再精简提示词；
-- 保持 PR 的离线 CI 不依赖维护者服务器、生产凭据或真实模型；
-- 用真实任务完成率、token、延迟和缓存指标验证收益。
+- 使用现有框架的工具循环、checkpoint、interrupt与公开middleware扩展领域；
+- 维护授权、确认、幂等、可信事实、取消和恢复的业务边界；
+- 保持离线CI无需维护者服务器或凭据，真实模型评测独立执行；
+- 按固定版本报告完整任务质量、分层延迟、总量与未缓存输入，保留失败和未评估项；
+- 持续积累独立验收材料与真实流量指标，具体触发条件见路线图。
 
 ## 参与
 
