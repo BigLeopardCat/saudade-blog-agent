@@ -19,6 +19,8 @@ class ExecutionState(AgentState, total=False):
     resume: dict | None
     run_id: str | None
     terminal: dict | None
+    response_repairs: int
+    completion_checks: int
     effects: Annotated[dict, or_]
     applied_inputs: list[str]
     progress_keys: list[str]
@@ -31,7 +33,8 @@ def initial_state():
     return ExecutionState(context_update=None, context_anchor=None, loaded=[],
                           proposal=None,
                           awaiting_call=None, resume=None, run_id=None, terminal=None,
-                          effects={}, applied_inputs=[], progress_keys=[])
+                          effects={}, applied_inputs=[], progress_keys=[],
+                          response_repairs=0, completion_checks=0)
 
 
 def capture(session):

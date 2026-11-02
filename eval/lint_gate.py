@@ -55,6 +55,10 @@ import sys
 import tomllib
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT))
+
+from eval.source_files import python_sources  # noqa: E402
+
 BASELINE = ROOT / "eval" / "lint_baseline.json"
 
 # `--output-format=concise` 的一行：`path:line:col: CODE message`。
@@ -218,7 +222,8 @@ def main() -> int:
                   f"（下面那句「已经清零，可以销账」还会把它们报成好消息）。先 `--update`。")
             return 3
 
-    r = subprocess.run(prog + ["check", "--no-cache", "--output-format=concise", "."],
+    sources = [path.relative_to(ROOT).as_posix() for path in python_sources(ROOT)]
+    r = subprocess.run(prog + ["check", "--no-cache", "--output-format=concise", *sources],
                        cwd=ROOT, capture_output=True, text=True)
     out = (r.stdout or "") + (r.stderr or "")
     try:

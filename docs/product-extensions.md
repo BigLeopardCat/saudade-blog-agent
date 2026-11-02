@@ -1,6 +1,6 @@
 # 产品与领域装配
 
-`AgentRuntime` 默认装配博客产品；应用可通过 `application=` 显式替换产品配置。
+`AgentRuntime` 必须通过 `application=` 显式接收产品配置，博客服务在 `agent/composition.py` 装配。
 执行仍由 LangChain `create_agent` 与 LangGraph 持久审批图负责。
 
 | 位置 | 职责 |

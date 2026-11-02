@@ -77,6 +77,10 @@ import subprocess
 import sys
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT))
+
+from eval.source_files import python_sources  # noqa: E402
+
 BASELINE = ROOT / "eval" / "mypy_baseline.json"
 
 # 查什么：**生产代码**。`tests/`、`eval/`、`scripts/` 不进棘轮——它们是判据与工具，
@@ -137,7 +141,8 @@ def _counts(out: str) -> tuple[dict[str, int], int, int]:
 
 
 def _run(cmd: list[str]) -> subprocess.CompletedProcess:
-    return subprocess.run(cmd + TARGETS, cwd=ROOT, capture_output=True, text=True)
+    sources = [path.relative_to(ROOT).as_posix() for path in python_sources(ROOT, TARGETS)]
+    return subprocess.run(cmd + sources, cwd=ROOT, capture_output=True, text=True)
 
 
 def _gather(prog: list[str]) -> tuple[dict[str, int], int, int]:

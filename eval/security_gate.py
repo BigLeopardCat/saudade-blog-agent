@@ -78,6 +78,10 @@ import tempfile
 import tomllib
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT))
+
+from eval.source_files import python_sources  # noqa: E402
+
 BASELINE = ROOT / "eval" / "security_baseline.json"
 
 # 跳过的规则。理由见模块 docstring；**往这里加规则 = 缩小扫描面** ⇒ 必须与账里那份同源，
@@ -91,7 +95,7 @@ BASELINE = ROOT / "eval" / "security_baseline.json"
 #   （`subprocess.run` 是闸的必需品）。不跳的话"新文件必须零条"这条纪律一出生就是死的。
 SKIPS = ["B101", "B404", "B603", "B607"]
 
-# 扫描面。`.` 递归 + 这几个排除（`.venv` 里有整个 site-packages；其余是产物目录）。
+# Repository sources only; ignored report snapshots are artifact-retention input.
 TARGETS = ["."]
 EXCLUDE = [".venv", ".git", "node_modules", "__pycache__", ".mypy_cache",
            ".ruff_cache", ".pytest_cache", ".coverage-data", "frontend/dist"]
@@ -286,8 +290,12 @@ def _run_json(prog: list[str]) -> dict:
     **stdout** 上（`[main] INFO …`、`Working... ━━━`、`[warnings] …`），与 JSON 混在一起
     —— 按"第一行是不是 `{`"去认会当场认错。这个坑是 `--update` 第一次跑就撞上的。
     """
+    sources = [path.relative_to(ROOT).as_posix() for path in python_sources(ROOT)
+               if not _excluded(path.relative_to(ROOT).as_posix())]
+    if not sources:
+        raise RuntimeError("No repository Python sources found")
     cmd = prog + ["-r", "-f", "json", "--exit-zero", "-s", ",".join(SKIPS),
-                  "--exclude", ",".join(_exclude_globs())] + TARGETS
+                  "--exclude", ",".join(_exclude_globs())] + sources
     with tempfile.TemporaryDirectory() as td:
         out_path = pathlib.Path(td) / "bandit.json"
         r = subprocess.run(cmd + ["-o", str(out_path)], cwd=ROOT, capture_output=True, text=True)

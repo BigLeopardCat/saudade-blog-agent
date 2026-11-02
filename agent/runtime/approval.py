@@ -61,9 +61,10 @@ def review(state, config, *, feedback=None):
             raise ValueError("approval_feedback_not_available")
         execution = feedback(config).execution
         observed = {**cancellation_fact(), "status": "superseded"}
-        content = json.dumps({**observed,
-            "result": "本次待确认操作已撤销，原确认卡已失效，未执行改动；目标当前状态未查询。"},
-            ensure_ascii=False)
+        feedback_fact = {**observed,
+            "result": "本次待确认操作已撤销，原确认卡已失效，未执行改动；目标当前状态未查询。"
+                      "如仍需执行，必须重新准备确认卡；普通聊天文字不构成批准。"}
+        content = json.dumps(feedback_fact, ensure_ascii=False)
         observations = []
         for spec in action["specs"]:
             observations.extend(memory.observation({"name": spec["tool"], "args": spec["args"],
@@ -72,7 +73,8 @@ def review(state, config, *, feedback=None):
         current = memory.turn_messages(facts.get("input") or [], observations, "", principal)[:-1]
         record("native", "approval_feedback", facts=observed)
         return {"pending_confirm": None, "pending_action": None, "approval": None,
-                "approved_result": {**facts, "execution": execution},
+                "approved_result": {**facts, "execution": execution,
+                                    "operation_feedback": feedback_fact},
                 "messages": memory.checkpoint_messages(state.get("messages") or [], current)}
     if not has_result(facts.get("execution", {}), action["specs"]):
         raise ValueError("确认恢复需要当前操作的真实执行回执")
