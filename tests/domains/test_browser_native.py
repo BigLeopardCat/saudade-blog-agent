@@ -21,12 +21,13 @@ from pydantic import ValidationError
 from agent.api.schemas import ChatRequest
 from agent.domains import browser
 from agent.principal import SOURCE_ASSERTION, Principal
+from agent.products.blog.application import BlogApplication
 from agent.products.blog.history import tool_access
 from agent.products.blog.tool_policy import BlogToolMiddleware
 from agent.runtime import memory
 from agent.runtime.budget import BudgetLimits, TaskBudget, budget_scope
-from agent.runtime.native import NativeRuntime
-from agent.runtime.native_store import NativeConversationStore
+from agent.runtime.checkpoint_conversations import CheckpointConversationStore
+from agent.runtime.service import AgentRuntime
 from agent.runtime.session import ToolSession
 from tools import site
 
@@ -69,7 +70,7 @@ class Model:
 
 def _arm(monkeypatch, responses):
     model = Model(responses)
-    return NativeRuntime(NativeConversationStore(InMemorySaver()),
+    return AgentRuntime(CheckpointConversationStore(InMemorySaver()), application=BlogApplication(),
                          model_factory=lambda **_: model), model
 
 
@@ -259,8 +260,8 @@ def test_queued_commands_survive_budget_finalization_without_replay(monkeypatch)
 
 def test_stream_producer_emits_commands_and_receipts_without_confirmation(monkeypatch):
     from agent.api.routes import chat as server
-    from agent.runtime.native import NativeRuntime
-    from agent.runtime.native_store import NativeConversationStore
+    from agent.runtime.checkpoint_conversations import CheckpointConversationStore
+    from agent.runtime.service import AgentRuntime
 
     arm, model = _arm(
         monkeypatch,
@@ -270,8 +271,8 @@ def test_stream_producer_emits_commands_and_receipts_without_confirmation(monkey
             AIMessage(content="设置指令已发送。"),
         ],
     )
-    monkeypatch.setattr(app.state, "runtime", NativeRuntime(
-        NativeConversationStore(None), application=arm.application,
+    monkeypatch.setattr(app.state, "runtime", AgentRuntime(
+        CheckpointConversationStore(None), application=arm.application,
         model_factory=lambda **_: model))
 
     async def collect():

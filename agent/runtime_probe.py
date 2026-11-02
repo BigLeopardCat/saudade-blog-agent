@@ -39,9 +39,9 @@ BUILD_IDENTITY = build_sha()
 
 
 def runtime_name(agent):
-    from agent.runtime.native import NativeRuntime
+    from agent.runtime.service import AgentRuntime
 
-    return "native" if isinstance(agent, NativeRuntime) else "unknown"
+    return "native" if isinstance(agent, AgentRuntime) else "unknown"
 
 
 def request_context(agent):

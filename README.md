@@ -114,7 +114,7 @@ saudade-blog-agent/
 ├── agent/
 │   ├── main.py            应用工厂与 ASGI 入口
 │   ├── api/               HTTP 模型、字段限额和请求上下文适配
-│   ├── runtime/           NativeRuntime、会话存储、预算、确认与传输
+│   ├── runtime/           AgentRuntime、会话存储、预算、确认与传输
 │   ├── domains/           按需领域工具与业务操作准备
 │   ├── authz.py           principal 权限模型与工具 scope
 │   ├── principal.py       验证后的调用者身份
@@ -134,7 +134,7 @@ saudade-blog-agent/
 
 系统已经具备以下生产防线：
 
-- NativeRuntime 有界模型循环和请求预算；
+- AgentRuntime 有界模型循环和请求预算；
 - LLM 调用超时、流式空闲超时、总时长上限；
 - 线程池和流式并发闸；
 - 请求体、字段、历史条数和图片大小限制；

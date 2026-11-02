@@ -8,11 +8,12 @@ from langchain_core.tools import tool
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.types import Command
 
+from agent.products.blog.application import BlogApplication
 from agent.products.blog.capabilities import ToolCatalog
+from agent.runtime.checkpoint_conversations import CheckpointConversationStore
 from agent.runtime.execution_state import capture, initial_state, restore
-from agent.runtime.native import NativeRuntime
-from agent.runtime.native_store import NativeConversationStore
 from agent.runtime.results import TurnResult
+from agent.runtime.service import AgentRuntime
 from agent.runtime.session import ToolSession
 from agent.runtime.turns import AgentCancelled
 
@@ -69,8 +70,8 @@ def test_a_new_task_resets_effects_even_when_reusing_the_same_persistent_child()
 
     model = Capture(AIMessageChunk(content="", tool_calls=[call("task_effect", "effect")]),
                     AIMessageChunk(content="first done"), AIMessageChunk(content="new task"))
-    selected = NativeRuntime(NativeConversationStore(InMemorySaver()),
-        catalog=ToolCatalog(read_tools={task_effect.name: task_effect}),
+    selected = AgentRuntime(CheckpointConversationStore(InMemorySaver()),
+        application=BlogApplication(ToolCatalog(read_tools={task_effect.name: task_effect})),
         model_factory=lambda **_: model)
     first = list(selected.stream_events(
         {"messages": [HumanMessage(content="first")]}, config()))[-1]
@@ -104,8 +105,8 @@ def test_resume_does_not_replace_committed_effects_with_an_older_message_project
     model, saver = Interrupted(), InMemorySaver()
 
     def selected():
-        return NativeRuntime(NativeConversationStore(saver),
-            catalog=ToolCatalog(read_tools={task_effect.name: task_effect}),
+        return AgentRuntime(CheckpointConversationStore(saver),
+            application=BlogApplication(ToolCatalog(read_tools={task_effect.name: task_effect})),
             model_factory=lambda **_: model)
 
     with pytest.raises(AgentCancelled):

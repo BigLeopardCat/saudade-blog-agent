@@ -8,7 +8,7 @@ from pydantic import BaseModel, ConfigDict, Field, StrictStr
 
 from agent.domains.article_tags import targets
 from agent.domains.article_tags.presentation import change_summary
-from agent.products.blog.confirmation import proposal
+from agent.proposals import proposal
 from agent.runtime.results import TurnResult
 from agent.runtime.tool_evidence import observed
 from agent.runtime.turns import check_cancelled

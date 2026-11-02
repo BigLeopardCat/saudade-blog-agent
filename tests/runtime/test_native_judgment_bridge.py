@@ -14,7 +14,7 @@ def test_native_turn_supplies_saved_events_to_the_shared_judgment(monkeypatch, t
         def invoke(self, *args, **kwargs):
             return AIMessage(content="收到")
 
-    monkeypatch.setattr("agent.runtime.native.get_llm", lambda **_: Model())
+    monkeypatch.setattr("agent.runtime.service.get_llm", lambda **_: Model())
     monkeypatch.setattr(native_contracts.golden_trace, "trace_root", lambda: str(tmp_path))
 
     def contract(turn, state):

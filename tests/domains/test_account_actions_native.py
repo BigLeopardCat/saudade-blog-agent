@@ -13,6 +13,7 @@ from pydantic import ValidationError
 from agent import confirm, idem
 from agent.domains.account_actions import preparation, transactions
 from agent.principal import SOURCE_ASSERTION, Principal
+from agent.products.blog.application import BlogApplication
 from agent.runtime import writes
 from tools import base
 
@@ -317,10 +318,12 @@ def test_cancel_is_durable_and_prevents_later_confirmation(accounts, tmp_path, m
     from langgraph.checkpoint.memory import InMemorySaver
 
     from agent.products.blog.confirmation import cancel
-    from agent.runtime.native import NativeRuntime
-    from agent.runtime.native_store import NativeConversationStore
+    from agent.runtime.checkpoint_conversations import CheckpointConversationStore
+    from agent.runtime.service import AgentRuntime
 
-    runtime = NativeRuntime(NativeConversationStore(InMemorySaver()))
+    runtime = AgentRuntime(
+        CheckpointConversationStore(InMemorySaver()), application=BlogApplication()
+    )
     runtime.store.update_state(admin_config(), {
         "pending_action": prepared.execution["pending_action"],
         "pending_confirm": prepared.execution["pending_confirm"],

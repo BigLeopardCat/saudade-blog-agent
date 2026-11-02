@@ -58,7 +58,7 @@ checkpoint 保存应用进度，不能保存模型内部生成进度。
 
 状态：已完成。Agent #171 已发布，博客组件 #112 已合并；实现与线上验收证据见文末。
 
-代码范围：`agent/runtime/native.py`、`agent/runtime/native_store.py`、
+代码范围：`agent/runtime/service.py`、`agent/runtime/checkpoint_conversations.py`、
 `agent/runtime/execution.py`、`agent/runtime/approval.py`、
 `agent/runtime/conversation_store.py` 与对应恢复测试。
 

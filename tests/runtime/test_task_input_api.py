@@ -10,8 +10,9 @@ from langgraph.checkpoint.memory import InMemorySaver
 
 from agent.main import create_app
 from agent.principal import SOURCE_ASSERTION, Principal
-from agent.runtime.native import NativeRuntime
-from agent.runtime.native_store import NativeConversationStore
+from agent.products.blog.application import BlogApplication
+from agent.runtime.checkpoint_conversations import CheckpointConversationStore
+from agent.runtime.service import AgentRuntime
 from agent.runtime.task_inputs import binding
 from config.settings import settings
 
@@ -20,7 +21,9 @@ def test_signed_control_is_available_while_conversation_is_locked(monkeypatch):
     monkeypatch.setattr(settings, "jwt_secret", "task-input-test-secret-does-not-leave-the-test")
     monkeypatch.setattr(settings, "agent_require_assertion", True)
     application = create_app()
-    selected = NativeRuntime(NativeConversationStore(InMemorySaver()))
+    selected = AgentRuntime(
+        CheckpointConversationStore(InMemorySaver()), application=BlogApplication()
+    )
     application.state.runtime = selected
 
     async def run(function, *args):

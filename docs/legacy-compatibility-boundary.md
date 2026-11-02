@@ -1,10 +1,10 @@
 # 运行时与兼容边界
 
-生产只构建 `NativeRuntime` 服务适配器，内部模型循环使用 LangChain `create_agent`，
+生产只构建 `AgentRuntime` 服务适配器，内部模型循环使用 LangChain `create_agent`，
 Agent 子图、审批暂停及恢复使用 LangGraph。没有旧规划器或可切换的实验运行时。
 
 兼容范围是已发布的业务协议：稳定 `thread_id`、来源受限的会话历史、确认签名、撤销、
-幂等回执、具名 SSE 事件和宿主 HTTP 字段。`NativeConversationStore` 通过框架公开接口
+幂等回执、具名 SSE 事件和宿主 HTTP 字段。`CheckpointConversationStore` 通过框架公开接口
 保存会话；普通任务和确认任务按持久子图接续，详见[架构](agent-architecture.md)。
 
 确认绑定用户、会话、有效期与已准备参数，恢复信号不授予写权限。无匹配框架审批绑定的旧卡只能读取执行账，不能首次执行。不能恢复的有效确认

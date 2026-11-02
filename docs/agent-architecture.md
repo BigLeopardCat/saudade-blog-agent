@@ -1,6 +1,6 @@
 # Saudade Blog AI Agent 架构
 
-本文描述当前主线实现。`NativeRuntime` 适配服务与会话协议，`ToolSession` 调用 LangChain
+本文描述当前主线实现。`AgentRuntime` 适配服务与会话协议，`ToolSession` 调用 LangChain
 `create_agent` 执行模型—工具循环；业务工具由模型选择。旧 planner、workflow DSL 与 hybrid
 适配层已从生产依赖中删除，历史实现保留在 Git 历史。
 
@@ -83,6 +83,8 @@ flowchart LR
 │   ├── domains/articles/__init__.py                    # 文章领域包
 │   ├── domains/articles/evidence.py                    # 候选、已读正文与文章来源证据
 │   ├── authz.py                                         # 当前生产代码模块
+│   ├── composition.py                                 # 博客服务依赖装配与资源生命周期
+│   ├── proposals.py                                   # 签名操作提案与共享确认协议
 │   ├── checkpoint.py                                    # 当前生产代码模块
 │   ├── confirm.py                                       # 当前生产代码模块
 │   ├── domains/__init__.py                              # 当前生产代码模块
@@ -222,8 +224,8 @@ flowchart LR
 │   ├── runtime/memory.py                                # 当前生产代码模块
 │   ├── runtime/model_budget.py                          # 当前生产代码模块
 │   ├── runtime/middleware.py                            # 标准 Agent 的预算、权限与业务结果适配
-│   ├── runtime/native.py                                # 服务请求、身份会话与框架执行适配
-│   ├── runtime/native_store.py                          # 框架状态读取及受控会话维护
+│   ├── runtime/service.py                                # 服务请求、身份会话与框架执行适配
+│   ├── runtime/checkpoint_conversations.py                          # 框架状态读取及受控会话维护
 │   ├── runtime/progress.py                              # 当前生产代码模块
 │   ├── runtime/results.py                               # 工具事实与正文传输的统一结果投影
 │   ├── runtime/session.py                               # 标准 Agent 的请求上下文与流式输出适配
@@ -254,13 +256,13 @@ flowchart LR
 │   └── tag_admin.py                                     # 当前生产代码模块
 ```
 
-历史路径对照：`agent/graph.py` → `agent/runtime/native.py`（已改名，历史记录）。
+历史路径对照：`agent/graph.py` → `agent/runtime/service.py`（已改名，历史记录）。
 
 ## 3. 一次对话的完整链路
 
 1. `agent/main.py` 装配应用；聊天路由从请求所属应用获取运行时和资源，
    `agent/api/turns.py` 将已验证的 principal、会话坐标和预算绑定到原生调用。
-2. `NativeRuntime.stream_events` 从 `ConversationStore` 恢复消息与待确认状态，并交给 `ToolSession`。
+2. `AgentRuntime.stream_events` 从 `ConversationStore` 恢复消息与待确认状态，并交给 `ToolSession`。
 3. 会话发送授权基础工具与按需领域目录；模型直接返回标准 LangChain tool call，代码检查权限、参数、确认和业务版本。
    管理员的有界账号候选读取属于基础工具，账号写入仍需加载账号领域，不必加载文章管理工具来核实账号。
 4. 只读工具直接产生受边界约束的结果；写工具先准备签名预览，由同一 Agent 禁止工具调用并交付答复，
@@ -287,7 +289,7 @@ flowchart LR
   没有下一次调用则不计。它是调用链观察量，不能直接解释为发现机制导致的额外成本。
 - 文章发现依据真实候选提供标题与链接；正文总结与比较需读取正文。候选来源校验不强制所有检索都追加全文读取，也不替代回答语义评测。
 
-- `NativeConversationStore` 使用框架公开状态 API 读取会话和执行受控维护；活动任务提交由父图负责。
+- `CheckpointConversationStore` 使用框架公开状态 API 读取会话和执行受控维护；活动任务提交由父图负责。
   维护写入不能结束活动执行。审批期间的新文本通过原 interrupt 提交反馈，撤销旧预览后继续同一任务；见 [ADR-0032](adr/adr-0032-approval-feedback.md)。提交职责见 [ADR-0031](adr/adr-0031-framework-turn-commit.md)。
 - 普通读取中断后可以重新读取；未知写入结果必须先查询已有回执，不能盲目重试。
 - 浏览器回执接续由执行图读取实际子图的 checkpoint，维护图上的父级等待标记可能仍属

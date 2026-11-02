@@ -2,15 +2,15 @@
 
 > 本文保存渐进迁移各批次的实现与验收记录。当前框架和领域边界见 [架构](agent-architecture.md)，不以旧批次状态表作为在役说明。
 
-旧规划引擎已退役，当前默认构建入口是 `NativeRuntime`，模型直接选择标准 LangChain 工具；代码负责权限、确认、业务版本、幂等、取消和回执。
+旧规划引擎已退役，当前默认构建入口是 `AgentRuntime`，模型直接选择标准 LangChain 工具；代码负责权限、确认、业务版本、幂等、取消和回执。
 
 后续框架内核收敛遵循 [ADR-0024](adr/adr-0024-framework-kernel-and-domain-extensions.md)；
 本记录只说明旧引擎退役后的在役状态，不表示框架复用和插件化已经完成。
 
 ## 当前边界
 
-- `NativeConversationStore` 负责消息历史、待确认状态、完成轮次和删除屏障。
-- `NativeRuntime.stream_events` 产出正文增量与一个最终 `TurnResult`；最终正文只保存和发送一次。
+- `CheckpointConversationStore` 负责消息历史、待确认状态、完成轮次和删除屏障。
+- `AgentRuntime.stream_events` 产出正文增量与一个最终 `TurnResult`；最终正文只保存和发送一次。
 - `agent.transport` 与 `server.py` 共同维护既有 HTTP/SSE 协议。
 - PostgreSQL checkpoint 和进程内 saver 都保留；未配置持久化时仅用于离线开发。
 

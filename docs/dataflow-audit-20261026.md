@@ -61,7 +61,7 @@
 现有 `favorite_backend` 模拟；框架使用 InMemorySaver，执行账使用临时 SQLite。
 
 1. 真实模型加载工具、准备确认；夹具收藏为空，未写入。
-2. 重建 NativeRuntime，再用已验签确认恢复 LangGraph；夹具只收到一次收藏 POST。
+2. 重建 AgentRuntime，再用已验签确认恢复 LangGraph；夹具只收到一次收藏 POST。
 3. 模型继续读取收藏，依据真实模拟回执自然回复；pending 与 approval 清空。
 4. 重放同一确认，只返回既有回执，模型调用为零，夹具写入仍为一次。
 

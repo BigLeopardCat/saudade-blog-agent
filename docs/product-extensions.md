@@ -1,6 +1,6 @@
 # 产品与领域装配
 
-`NativeRuntime` 默认装配博客产品；应用可通过 `application=` 显式替换产品配置。
+`AgentRuntime` 默认装配博客产品；应用可通过 `application=` 显式替换产品配置。
 执行仍由 LangChain `create_agent` 与 LangGraph 持久审批图负责。
 
 | 位置 | 职责 |
@@ -34,12 +34,12 @@
 ```python
 from langgraph.checkpoint.memory import InMemorySaver
 
-from agent.runtime.native import NativeRuntime
-from agent.runtime.native_store import NativeConversationStore
+from agent.runtime.service import AgentRuntime
+from agent.runtime.checkpoint_conversations import CheckpointConversationStore
 from examples.inventory_agent import InventoryApplication
 
-runtime = NativeRuntime(
-    NativeConversationStore(InMemorySaver()),
+runtime = AgentRuntime(
+    CheckpointConversationStore(InMemorySaver()),
     application=InventoryApplication(),
 )
 ```

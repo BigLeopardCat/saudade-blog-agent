@@ -16,7 +16,7 @@
 专属模块、测试、驱动脚本和生产图中的 checkpoint 实验钩子同时撤除。
 生产共享的鉴权、帧协议、状态 reducer、持久化、幂等与用量统计继续保留。
 PostgreSQL 接续验收改由 `eval/native_checkpoint_probe.py` 使用公开
-NativeConversationStore 接口完成；旧探针随混合臂退役。
+CheckpointConversationStore 接口完成；旧探针随混合臂退役。
 历史报告保留原目录身份，不覆盖生产基线，也不因入口退役而自动删除。
 
 ## 保留的结论

@@ -7,6 +7,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 
+from agent.products.blog.application import BlogApplication
 from agent.runtime.task_input_store import PostgresInputs, setup
 from agent.runtime.task_inputs import InputConflict, TaskInputs
 
@@ -147,8 +148,8 @@ def test_framework_turn_commit_survives_saver_reconstruction(inboxes, monkeypatc
     from langgraph.checkpoint.postgres import PostgresSaver
 
     from agent.runtime import checkpoint_store, turn_commit
-    from agent.runtime.native import NativeRuntime
-    from agent.runtime.native_store import NativeConversationStore
+    from agent.runtime.checkpoint_conversations import CheckpointConversationStore
+    from agent.runtime.service import AgentRuntime
 
     pool = inboxes[0].storage.pool
     PostgresSaver(pool).setup()
@@ -168,8 +169,11 @@ def test_framework_turn_commit_survives_saver_reconstruction(inboxes, monkeypatc
             return AIMessage(content="已核实的测试答复。")
 
     def runtime():
-        return NativeRuntime(NativeConversationStore(PostgresSaver(pool)),
-                             model_factory=lambda **_: Model())
+        return AgentRuntime(
+            CheckpointConversationStore(PostgresSaver(pool)),
+            application=BlogApplication(),
+            model_factory=lambda **_: Model(),
+        )
 
     original = turn_commit.commit
     if fail_commit:
@@ -202,9 +206,9 @@ def test_browser_ack_then_disconnect_recovers_the_actual_child_checkpoint(inboxe
     from langgraph.checkpoint.postgres import PostgresSaver
 
     from agent.runtime import checkpoint_store
+    from agent.runtime.checkpoint_conversations import CheckpointConversationStore
     from agent.runtime.control import AgentCancelled
-    from agent.runtime.native import NativeRuntime
-    from agent.runtime.native_store import NativeConversationStore
+    from agent.runtime.service import AgentRuntime
 
     pool = inboxes[0].storage.pool
     PostgresSaver(pool).setup()
@@ -213,8 +217,11 @@ def test_browser_ack_then_disconnect_recovers_the_actual_child_checkpoint(inboxe
     model, cfg = Model(), config(browser_feedback=True)
 
     def runtime():
-        return NativeRuntime(NativeConversationStore(PostgresSaver(pool)),
-                             model_factory=lambda **_: model)
+        return AgentRuntime(
+            CheckpointConversationStore(PostgresSaver(pool)),
+            application=BlogApplication(),
+            model_factory=lambda **_: model,
+        )
 
     first = list(runtime().stream_events({"messages": [HumanMessage(content="去留言板")],
                                          "task_id": "page-task"}, cfg))[-1]
@@ -250,8 +257,8 @@ def test_actual_process_exit_recovers_durable_task_once(inboxes, tmp_path, monke
 
     from agent import confirm, idem_pg
     from agent.runtime import checkpoint_store, writes
-    from agent.runtime.native import NativeRuntime
-    from agent.runtime.native_store import NativeConversationStore
+    from agent.runtime.checkpoint_conversations import CheckpointConversationStore
+    from agent.runtime.service import AgentRuntime
     from eval.own_fixtures import favorite_backend
 
     pool = inboxes[0].storage.pool
@@ -272,11 +279,11 @@ def test_actual_process_exit_recovers_durable_task_once(inboxes, tmp_path, monke
                             phase, str(marker)], cwd=tmp_path, env=env,
                            capture_output=True, text=True, timeout=45)
     assert child.returncode == 73, child.stderr
-    store = NativeConversationStore(PostgresSaver(pool))
+    store = CheckpointConversationStore(PostgresSaver(pool))
     saved = store.load(config())
     assert saved.unfinished and saved.run["id"] == "crash-task"
     model = Model(AIMessage(content="只撤销本操作，没有断言当前收藏状态。"))
-    rebuilt = NativeRuntime(store, model_factory=lambda **_: model)
+    rebuilt = AgentRuntime(store, application=BlogApplication(), model_factory=lambda **_: model)
     with favorite_backend() as state:
         monkeypatch.setattr(confirm.settings, "jwt_secret", secret)
         if phase == "feedback":
@@ -288,7 +295,7 @@ def test_actual_process_exit_recovers_durable_task_once(inboxes, tmp_path, monke
             assert row is not None and "confirmation_revoked" in str(row)
         result = list(rebuilt.stream_events({"resume_task": "crash-task"}, config()))[-1]
         assert not [request for request in state["requests"] if request.method != "GET"]
-    final = NativeConversationStore(PostgresSaver(pool)).load(config())
+    final = CheckpointConversationStore(PostgresSaver(pool)).load(config())
     assert not final.unfinished and final.run is None
     assert len(model.prompts) == (0 if phase == "commit" else 1)
     if phase == "commit":

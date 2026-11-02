@@ -111,3 +111,5 @@
 - [../multimodal-retrieval.md](../multimodal-retrieval.md)：多模态检索的分阶段方案
   （ADR-0005 的展开）；
 - [../问题记录.md](../问题记录.md)：事故级取证，按日期。
+
+| [0036](adr-0036-explicit-product-composition.md) | 显式产品装配与共享层依赖方向 | 已采纳 |

@@ -9,8 +9,9 @@ from pydantic import ValidationError
 
 from agent.api.schemas import ChatRequest
 from agent.principal import SOURCE_ASSERTION, Principal
-from agent.runtime.native import NativeRuntime
-from agent.runtime.native_store import NativeConversationStore
+from agent.products.blog.application import BlogApplication
+from agent.runtime.checkpoint_conversations import CheckpointConversationStore
+from agent.runtime.service import AgentRuntime
 from agent.transport import iter_transport_events
 
 
@@ -47,7 +48,11 @@ def test_appearance_waits_and_recovers_from_actual_settings(reported, expected):
         "principal": Principal(7, "user", SOURCE_ASSERTION), "browser_feedback": True}}
 
     def runtime():
-        return NativeRuntime(NativeConversationStore(saver), model_factory=lambda **_: model)
+        return AgentRuntime(
+            CheckpointConversationStore(saver),
+            application=BlogApplication(),
+            model_factory=lambda **_: model,
+        )
 
     state = {"messages": [HumanMessage(content="夜间模式，下雨换成下雪")],
              "task_id": "appearance-task"}

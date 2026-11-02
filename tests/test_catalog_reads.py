@@ -9,6 +9,7 @@ from pydantic import ValidationError
 
 from agent.domains import catalog
 from agent.principal import SOURCE_ASSERTION, SOURCE_BODY, Principal
+from agent.products.blog.application import BlogApplication
 from tools import base
 
 
@@ -162,8 +163,8 @@ def test_private_catalog_rejects_unverified_or_unbound_actor(backend, cfg, tool)
 def test_runtime_discovers_catalog_without_legacy(backend, monkeypatch, name):
     from langchain_core.messages import AIMessage, HumanMessage
 
-    from agent.runtime.native import NativeRuntime
-    from agent.runtime.native_store import NativeConversationStore
+    from agent.runtime.checkpoint_conversations import CheckpointConversationStore
+    from agent.runtime.service import AgentRuntime
 
     def call(tool_name):
         return AIMessage(content="", tool_calls=[{"name": tool_name, "args": {}, "id": tool_name}])
@@ -179,7 +180,11 @@ def test_runtime_discovers_catalog_without_legacy(backend, monkeypatch, name):
         def invoke(self, prompt):
             return next(responses)
 
-    runtime = NativeRuntime(NativeConversationStore(None), model_factory=lambda **_: Model())
+    runtime = AgentRuntime(
+        CheckpointConversationStore(None),
+        application=BlogApplication(),
+        model_factory=lambda **_: Model(),
+    )
     events = list(runtime.stream_events(
         {"messages": [HumanMessage(content="读取后台清单")]}, config()))
     assert events[-1].reply.startswith("已读取")
@@ -191,8 +196,8 @@ def test_account_lookup_and_history_restore_do_not_load_article_preparations(bac
     from langchain_core.utils.function_calling import convert_to_openai_tool
     from langgraph.checkpoint.memory import InMemorySaver
 
-    from agent.runtime.native import NativeRuntime
-    from agent.runtime.native_store import NativeConversationStore
+    from agent.runtime.checkpoint_conversations import CheckpointConversationStore
+    from agent.runtime.service import AgentRuntime
 
     responses = iter([
         AIMessage(content="", tool_calls=[{
@@ -218,8 +223,11 @@ def test_account_lookup_and_history_restore_do_not_load_article_preparations(bac
     cfg = {"configurable": {**config()["configurable"],
                             "conversation_id": 42, "thread_id": "conv_42"}}
     model = Model()
-    runtime = NativeRuntime(NativeConversationStore(InMemorySaver()),
-                            model_factory=lambda **_: model)
+    runtime = AgentRuntime(
+        CheckpointConversationStore(InMemorySaver()),
+        application=BlogApplication(),
+        model_factory=lambda **_: model,
+    )
     for message in ("查一下account_1，核对身份。", "还记得刚才的账号吗？"):
         list(runtime.stream_events({"messages": [HumanMessage(content=message)]}, cfg))
     assert len(backend["requests"]) == 1
@@ -237,11 +245,11 @@ def test_account_lookup_and_history_restore_do_not_load_article_preparations(bac
 @pytest.mark.parametrize("role", ["user", "zako", "admin", "superadmin"])
 def test_candidate_read_is_initial_only_when_the_catalog_authorizes_it(role):
     from agent.products.blog.application import BlogApplication
-    from agent.runtime.native_store import NativeConversationStore
+    from agent.runtime.checkpoint_conversations import CheckpointConversationStore
 
     cfg = config(role)
     initial, domains = BlogApplication().tools(
-        cfg, NativeConversationStore(None).load(cfg), None, None, True)
+        cfg, CheckpointConversationStore(None).load(cfg), None, None, True)
     assert ("list_accounts" in initial) == (role in {"admin", "superadmin"})
     assert not {"prepare_account_role", "prepare_account_freeze"} & initial.keys()
     assert ("admin_account_actions" in domains) == (role in {"admin", "superadmin"})

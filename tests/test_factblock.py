@@ -183,7 +183,7 @@ def _test_strip_fact_lines():
 
 
 def _test_injection_points():
-    """Server history injection strips system fact lines before NativeRuntime input."""
+    """Server history injection strips system fact lines before AgentRuntime input."""
     print("\n[接线] server history injection strips fact lines")
     from agent.api.routes import chat as server
     block = render_fact_block(["页面已跳转：https://saudade.site/device-console/"])
@@ -193,7 +193,10 @@ def _test_injection_points():
         message="现在呢", history=history, conversation_id=42,
         history_scope={"user_id": 7, "role": "user", "conversation_id": 42}))
     assistant = [str(message.content) for message in messages if isinstance(message, AIMessage)]
-    check("历史 assistant 不再携带系统事实行", assistant and all(FACT_MARK not in text for text in assistant))
+    check(
+        "历史 assistant 不再携带系统事实行",
+        assistant and all(FACT_MARK not in text for text in assistant),
+    )
     check("事实行被剥离后保留模型包装", assistant and "控制台在眼前啦" in assistant[0])
 
 

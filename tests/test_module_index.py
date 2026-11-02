@@ -1,40 +1,4 @@
-"""模块地图 ↔ 磁盘 **双向一致**（离线、秒级）。
-
-要回答的问题：`docs/agent-architecture.md` §2 那张目录树**本该是"这仓有哪些模块"的唯一入口**，
-而它一直是纯人工同步的——实测（20261018）：点名了 3 个已不存在的文件（`adminops.py` /
-`helpers.py` / `native_plan.py`），磁盘上 38/81 个模块它一个字都没提，**没有任何东西会红**。
-
-`tests/test_docs_links.py` ④ 为什么管不到它：那条判据要求路径**在反引号里且带 `/`**
-（`` `agent/foo.py` ``），而树里写的是裸文件名 + 缩进表目录（`│   ├── foo.py`）
-⇒ **整棵树在它射程之外**。两个套件分工互补，别互相替代：
-
-  · `test_docs_links.py` ④：**散在正文里的、带目录前缀的反引号路径**；
-  · 本套件：**树结构里的裸文件名**。
-
-四条判据：
-
-  ① 树里点名的每条仓内 `.py` 都指得着（幽灵路径当场红）；
-  ② `agent/**/*.py` + `tools/*.py` **每个模块都在 §2 出现**（漏列当场红）；
-  ③ 每个文件行的 `#` 后有非空职责（补了行不补话当场红）；
-  ④ 同一路径不出现两次。
-
-**射程**：只判 `agent/` 与 `tools/` 两棵子树——这仓 81 个模块全在这儿。fence 里其余的
-（`models/` `config/` `utils/` `eval/` `frontend/` 与宿主仓库路径）不归本套件管：它们的树根
-不是规范的一行，逐条推目录只会推出假红，而且那不是"找不到某个模块"的地方。
-
-**为什么 ② 就是覆盖率自检**：解析器一坏（正则不匹配、fence 找错）就会"一条都没看见 ⇒ 全都对"
-⇒ 本仓最贵的失效（看着在跑、其实没跑）。所以 ② 判的是**磁盘 ⊆ 树**（漏一条就红），
-另加一条独立计数对账（见"解析器不是空转"那两条）。
-
-红基线（自查用）：
-  · 从 §2 删掉 `plan_status.py` 那一行 ⇒ ② 必红；
-  · 往 §2 加一行 `│   ├── helpers.py` ⇒ ① 必红（该文件不存在）；
-  · 把某文件行末尾的 `# 说明` 删掉 ⇒ ③ 必红；
-  · 把 §2 里某条路径写两遍 ⇒ ④ 必红。
-
-用法：.venv/bin/python tests/test_module_index.py
-"""
-
+"""Keep the documented module map aligned with maintained Python modules."""
 
 import pathlib
 import re
@@ -148,8 +112,8 @@ def test_module_index():
     check("§2 的树行数与解析器记下的条目数一致", _raw == len(_A["entries"]),
           f"原始文本数到 {_raw} 条，解析器记下 {len(_A['entries'])} 条")
     check("解析器在真输入上确实认出了已知存在的模块",
-          "agent/runtime/native.py" in {p for p, _, _ in _A["scoped"]},
-          "agent/runtime/native.py 都没认出来 ⇒ 解析器坏了，不是树对了")
+          "agent/runtime/service.py" in {p for p, _, _ in _A["scoped"]},
+          "agent/runtime/service.py 都没认出来 ⇒ 解析器坏了，不是树对了")
     check("两处 fence 都取到了（标题或围栏改了会让上面全部空过）",
           bool(_arch_fence) and bool(_readme_fence),
           f"§2 fence {len(_arch_fence)} 行 / README fence {len(_readme_fence)} 行")

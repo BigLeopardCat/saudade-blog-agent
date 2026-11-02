@@ -10,10 +10,11 @@ from pydantic import ValidationError
 
 from agent import confirm, idem
 from agent.domains.messages import preparation, transactions
+from agent.products.blog.application import BlogApplication
 from agent.runtime import writes
-from agent.runtime.native import NativeRuntime
-from agent.runtime.native_store import NativeConversationStore
+from agent.runtime.checkpoint_conversations import CheckpointConversationStore
 from agent.runtime.results import TurnResult
+from agent.runtime.service import AgentRuntime
 
 
 def _prepare(scope="all_unread", ids=None, cfg=None):
@@ -98,7 +99,9 @@ def test_replacing_and_cancelling_message_cards_revokes_old_grants(mailbox, monk
 
     store = Ledger(str(tmp_path / "cancel.sqlite3"))
     monkeypatch.setattr(writes, "ledger_for", lambda _: store)
-    runtime = NativeRuntime(NativeConversationStore(InMemorySaver()))
+    runtime = AgentRuntime(
+        CheckpointConversationStore(InMemorySaver()), application=BlogApplication()
+    )
 
     class Model:
         def __init__(self, domain, tool, args):

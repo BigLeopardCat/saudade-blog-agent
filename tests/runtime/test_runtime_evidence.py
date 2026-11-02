@@ -8,8 +8,9 @@ from langchain_core.utils.function_calling import convert_to_openai_tool
 from langgraph.checkpoint.memory import InMemorySaver
 
 from agent.principal import SOURCE_ASSERTION, Principal
-from agent.runtime.native import NativeRuntime
-from agent.runtime.native_store import NativeConversationStore
+from agent.products.blog.application import BlogApplication
+from agent.runtime.checkpoint_conversations import CheckpointConversationStore
+from agent.runtime.service import AgentRuntime
 from eval.online_judge import runtime_context
 from utils import trace
 
@@ -31,8 +32,11 @@ def test_actual_bound_schemas_and_caller_are_recorded_without_modifying_model_in
 
     recorder = trace.start_trace("fixture-context", 0, "conv_42", dir=str(tmp_path))
     try:
-        runtime = NativeRuntime(NativeConversationStore(InMemorySaver()),
-                                model_factory=lambda **_: Model())
+        runtime = AgentRuntime(
+            CheckpointConversationStore(InMemorySaver()),
+            application=BlogApplication(),
+            model_factory=lambda **_: Model(),
+        )
         list(runtime.stream_events({"messages": [HumanMessage(content="你好")]},
                                    config(principal=Principal(7, "user", SOURCE_ASSERTION))))
         context = runtime_context(recorder.events)

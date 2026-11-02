@@ -12,10 +12,11 @@ from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from agent.api.routes import chat as server
 from agent.main import create_app
 from agent.principal import SOURCE_ASSERTION, Principal
+from agent.products.blog.application import BlogApplication
 from agent.runtime.budget import BudgetLimits, TaskBudget
+from agent.runtime.checkpoint_conversations import CheckpointConversationStore
 from agent.runtime.control import RequestControl
-from agent.runtime.native import NativeRuntime
-from agent.runtime.native_store import NativeConversationStore
+from agent.runtime.service import AgentRuntime
 from agent.runtime.summarization import SummaryUnavailable, summarize
 from agent.runtime.workers import RequestWorkers
 from models.llm import get_llm
@@ -104,8 +105,8 @@ def test_retired_host_hints_schedule_no_second_call_on_actual_http_and_sdk(monke
                            base_url="https://model.test/v1", http_client=model_client, **kwargs)
 
         catalog = SimpleNamespace(initial_tools=lambda _: {}, domains=lambda *_: {})
-        selected = NativeRuntime(NativeConversationStore(None), model_factory=factory,
-                                 catalog=catalog)
+        selected = AgentRuntime(CheckpointConversationStore(None), model_factory=factory,
+                                 application=BlogApplication(catalog))
         monkeypatch.setattr(server, "RequestControl", control)
         monkeypatch.setattr(server, "_resolve_principal", lambda *args: ACTOR)
 

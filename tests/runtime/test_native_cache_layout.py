@@ -12,10 +12,11 @@ from langgraph.checkpoint.memory import InMemorySaver
 
 from agent.adminops_account import role_cn
 from agent.principal import SOURCE_ASSERTION, Principal
+from agent.products.blog.application import BlogApplication
 from agent.products.blog.prompt import build_prompt
-from agent.runtime.native import NativeRuntime
-from agent.runtime.native_store import NativeConversationStore
+from agent.runtime.checkpoint_conversations import CheckpointConversationStore
 from agent.runtime.results import TurnResult
+from agent.runtime.service import AgentRuntime
 from agent.runtime.session import ToolSession
 from tools import base
 
@@ -142,8 +143,11 @@ def test_changing_current_data_preserves_older_prefix_and_latest_exchange(change
 
 def test_new_turn_page_state_preserves_the_recent_exchange_in_the_actual_request():
     model = CaptureModel(AIMessageChunk(content="原有答复。"), AIMessageChunk(content="继续答复。"))
-    runtime = NativeRuntime(NativeConversationStore(InMemorySaver()),
-                            model_factory=lambda **_: model)
+    runtime = AgentRuntime(
+        CheckpointConversationStore(InMemorySaver()),
+        application=BlogApplication(),
+        model_factory=lambda **_: model,
+    )
     first = list(runtime.stream_events({"messages": [context("page A", ""),
                                                      HumanMessage(content="原有问题")]}, config()))
     second = list(runtime.stream_events({"messages": [context("page B", "最新摘要"),

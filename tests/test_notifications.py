@@ -11,10 +11,11 @@ from pydantic import ValidationError
 from agent import confirm, idem
 from agent.domains.notifications import preparation, transactions
 from agent.principal import Principal
+from agent.products.blog.application import BlogApplication
 from agent.runtime import writes
-from agent.runtime.native import NativeRuntime
-from agent.runtime.native_store import NativeConversationStore
+from agent.runtime.checkpoint_conversations import CheckpointConversationStore
 from agent.runtime.results import TurnResult
+from agent.runtime.service import AgentRuntime
 
 
 def prepare(scope="all_unread", ids=None):
@@ -136,7 +137,9 @@ def test_native_pending_edit_cancel_and_stale_click_preserve_new_card(
 
     store = Ledger(str(tmp_path / "native.sqlite3"))
     monkeypatch.setattr(writes, "ledger_for", lambda saver: store)
-    runtime = NativeRuntime(NativeConversationStore(InMemorySaver()))
+    runtime = AgentRuntime(
+        CheckpointConversationStore(InMemorySaver()), application=BlogApplication()
+    )
 
     def run(model, text, confirmed=None):
         runtime.model_factory = lambda **_: model
@@ -170,7 +173,9 @@ def test_replacement_across_domains_revokes_only_the_previous_card(
 
     store = Ledger(str(tmp_path / "cross-domain.sqlite3"))
     monkeypatch.setattr(writes, "ledger_for", lambda saver: store)
-    runtime = NativeRuntime(NativeConversationStore(InMemorySaver()))
+    runtime = AgentRuntime(
+        CheckpointConversationStore(InMemorySaver()), application=BlogApplication()
+    )
     models = {"favorites": lambda: Model("favorites", "prepare_favorite_change", {
         "action": "add", "article_id": 19}), "notifications": Model}
     second_domain = "notifications" if first_domain == "favorites" else "favorites"

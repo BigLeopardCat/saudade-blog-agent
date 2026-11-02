@@ -7,9 +7,10 @@ from _own_support import config
 from langchain_core.messages import AIMessage, HumanMessage
 from pydantic import ValidationError
 
+from agent.products.blog.application import BlogApplication
 from agent.runtime.budget import BudgetLimits, TaskBudget, budget_scope
-from agent.runtime.native import NativeRuntime
-from agent.runtime.native_store import NativeConversationStore
+from agent.runtime.checkpoint_conversations import CheckpointConversationStore
+from agent.runtime.service import AgentRuntime
 from agent.runtime.session import ToolSession
 from config.settings import Settings, settings
 
@@ -73,7 +74,9 @@ def test_runtime_model_uses_configured_output_without_changing_sdk_default(monke
         model.bind_tools = lambda *a, **k: model
         return model
 
-    runtime = NativeRuntime(NativeConversationStore(None), model_factory=factory)
+    runtime = AgentRuntime(
+        CheckpointConversationStore(None), application=BlogApplication(), model_factory=factory
+    )
     # Construct the same session used by ordinary native turns.
     runtime._session(config(), runtime.store.load(config()))
     assert calls[0]["max_tokens"] == 1792

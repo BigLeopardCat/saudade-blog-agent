@@ -1,4 +1,4 @@
-"""Exercise real NativeRuntime preparation, checkpointing and confirmed replay."""
+"""Exercise real AgentRuntime preparation, checkpointing and confirmed replay."""
 
 import json
 
@@ -7,9 +7,10 @@ from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from langgraph.checkpoint.memory import InMemorySaver
 
 from agent import confirm
+from agent.products.blog.application import BlogApplication
 from agent.runtime import writes
-from agent.runtime.native import NativeRuntime
-from agent.runtime.native_store import NativeConversationStore
+from agent.runtime.checkpoint_conversations import CheckpointConversationStore
+from agent.runtime.service import AgentRuntime
 
 
 def confirmed_roundtrip(monkeypatch, tmp_path, config, domain, prepare_name, arguments):
@@ -48,8 +49,11 @@ def confirmed_roundtrip(monkeypatch, tmp_path, config, domain, prepare_name, arg
     model = Model()
     ledger = Ledger(str(tmp_path / "native.sqlite3"))
     monkeypatch.setattr(writes, "ledger_for", lambda saver: ledger)
-    runtime = NativeRuntime(NativeConversationStore(InMemorySaver()),
-                            model_factory=lambda **_: model)
+    runtime = AgentRuntime(
+        CheckpointConversationStore(InMemorySaver()),
+        application=BlogApplication(),
+        model_factory=lambda **_: model,
+    )
     prepared = list(runtime.stream_events(
         {"messages": [HumanMessage(content="准备指定操作")]}, config))
     execution = prepared[-1].execution

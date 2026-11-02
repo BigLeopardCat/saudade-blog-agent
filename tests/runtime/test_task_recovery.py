@@ -10,9 +10,10 @@ from langchain_core.tools import tool
 from langgraph.checkpoint.memory import InMemorySaver
 
 from agent.principal import SOURCE_ASSERTION, Principal
+from agent.products.blog.application import BlogApplication
 from agent.products.blog.capabilities import ToolCatalog
-from agent.runtime.native import NativeRuntime
-from agent.runtime.native_store import NativeConversationStore
+from agent.runtime.checkpoint_conversations import CheckpointConversationStore
+from agent.runtime.service import AgentRuntime
 from agent.runtime.turns import AgentCancelled
 from tools.result import ok
 
@@ -99,8 +100,11 @@ def test_reconstructed_runtime_continues_after_read_without_repeating_it(paralle
     catalog = ToolCatalog(read_tools={t.name: t for t in (first, second)})
 
     def runtime():
-        return NativeRuntime(NativeConversationStore(saver), catalog=catalog,
-                             model_factory=lambda **_: model)
+        return AgentRuntime(
+            CheckpointConversationStore(saver),
+            application=BlogApplication(catalog),
+            model_factory=lambda **_: model,
+        )
 
     selected = runtime()
     with pytest.raises(AgentCancelled):
@@ -150,7 +154,11 @@ def test_stopping_after_confirmed_write_preserves_write_and_history(
                       call("prepare_favorite_change", action="add", article_id=19))
 
     def runtime():
-        return NativeRuntime(NativeConversationStore(saver), model_factory=lambda **_: model)
+        return AgentRuntime(
+            CheckpointConversationStore(saver),
+            application=BlogApplication(),
+            model_factory=lambda **_: model,
+        )
 
     with favorite_backend() as business, closing(idem.Ledger(str(tmp_path / "ledger"))) as ledger:
         monkeypatch.setattr(writes, "ledger_for", lambda _: ledger)
@@ -191,7 +199,7 @@ def test_explicit_regeneration_discards_only_the_unfinished_cursor():
     from agent import checkpoint
 
     stop, saver = threading.Event(), InMemorySaver()
-    selected = NativeRuntime(NativeConversationStore(saver),
+    selected = AgentRuntime(CheckpointConversationStore(saver), application=BlogApplication(),
                              model_factory=lambda **_: Responses(AgentCancelled()))
     seed_turn(selected.store, cfg(stop), [HumanMessage(content="之前的问题")], "之前的答复")
     before = selected.store.load(cfg(stop)).messages
@@ -227,7 +235,11 @@ def test_completed_child_survives_failure_before_the_conversation_commit(monkeyp
     monkeypatch.setattr(turn_commit, "commit", fail)
     stop, saver = threading.Event(), InMemorySaver()
     model = Responses(AIMessage(content="这是已完成的答复。"))
-    first = NativeRuntime(NativeConversationStore(saver), model_factory=lambda **_: model)
+    first = AgentRuntime(
+        CheckpointConversationStore(saver),
+        application=BlogApplication(),
+        model_factory=lambda **_: model,
+    )
     with pytest.raises(OSError):
         list(first.stream_events({"messages": [HumanMessage(content="回答一次")],
                                   "task_id": "commit-task"}, cfg(stop)))
@@ -235,7 +247,7 @@ def test_completed_child_survives_failure_before_the_conversation_commit(monkeyp
     assert first.store.load(cfg(stop)).messages == []
     monkeypatch.setattr(turn_commit, "commit", commit)
     recovered_model = Responses()
-    restored = NativeRuntime(NativeConversationStore(saver),
+    restored = AgentRuntime(CheckpointConversationStore(saver), application=BlogApplication(),
                              model_factory=lambda **_: recovered_model)
     result = list(restored.stream_events({"resume_task": "commit-task"}, cfg(stop)))[-1]
     assert result.reply == "这是已完成的答复。" and not recovered_model.prompts
