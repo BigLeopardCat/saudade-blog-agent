@@ -34,8 +34,8 @@ TOOL_RESULT_LIMIT_DEFAULT = 4000
 # Evaluation material can retain longer evidence without changing model context.
 GOLDEN_MATERIAL_LIMIT = 40000
 
-# Cover the configured per-result model budget, including article cursor metadata.
-TOOL_RESULT_LIMITS: dict[str, int] = {"get_article_detail": 24000}
+# Retain maximum-size article pages with source metadata; operator overrides still apply.
+TOOL_RESULT_LIMITS: dict[str, int] = {"get_article_detail": 32000}
 NO_LIMIT_TOOLS = frozenset({"rag_search"})
 TRUNCATION_MARK_PREFIX = "…[trace 截断：原文共 "
 
