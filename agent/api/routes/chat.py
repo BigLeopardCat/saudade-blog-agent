@@ -398,4 +398,4 @@ async def chat_stream(req: ChatRequest, request: Request):
             finally:
                 jobs.close()
 
-    return stream_response(managed_stream())
+    return stream_response(managed_stream(), on_close=jobs.close)

@@ -21,10 +21,12 @@ def test_recorded_product_fact_is_the_template_used_by_the_model(monkeypatch):
     assert facts["conversation_style"] == caller["conversation_style"]
     assert facts["character"] in messages[0].content
     assert set(facts) == {"article_url_template", "character", "conversation_style",
-                         "tool_loading", "tool_guidance", "rendering", "factual_policy"}
+                         "tool_loading", "tool_guidance", "rendering", "factual_policy",
+                         "administration_requires"}
     assert facts["tool_loading"] == "on_demand"
     assert facts["tool_guidance"] in messages[0].content
     assert facts["factual_policy"] in messages[0].content
+    assert facts["administration_requires"] == ["admin", "superadmin"]
     assert all(token in messages[0].content for token in facts["rendering"]["stickers"])
 
 
@@ -40,7 +42,8 @@ def test_only_the_time_used_in_the_prompt_is_added_to_review_facts(monkeypatch):
     assert facts["current_time"] == context.additional_kwargs["request_context"]["current_time"]
     assert facts["current_time"] in str(messages)
     assert set(facts) == {"article_url_template", "character", "conversation_style", "current_time",
-                         "tool_loading", "tool_guidance", "rendering", "factual_policy"}
+                         "tool_loading", "tool_guidance", "rendering", "factual_policy",
+                         "administration_requires"}
     assert "PRIVATE_CANARY" not in str(records)
 
 
