@@ -16,6 +16,10 @@ scripts/deploy_release.sh COMMIT_SHA /srv/saudade-agent /etc/saudade/agent.env /
 
 公开 PR CI 不使用生产配置或凭据。部署应在该提交的必需检查通过后执行；发布探活不代替真实模型回归。需要数据库迁移的变更须单独核对前置条件，脚本不自动执行数据迁移。
 
+发行包由 `bash scripts/dev/package_smoke.sh` 验证。脚本构建 sdist 和 wheel，在源码目录外的
+隔离环境中按 `uv.lock` 和哈希安装运行依赖及 wheel，核对包路径、应用版本和工具注册；此检查加入公开 PR CI。
+它不启动模型、数据库或生产服务，不能代替全新部署的外部服务接线验收。
+
 Trace 默认写入应用工作目录的 `data/traces`，该目录不进入 Git。生产可在私有配置中显式设置
 `TRACE_DIR=/var/lib/saudade-agent/traces`，使日志位置独立于版本目录。保留治理与活跃 metrics、
 告警、草稿及对账 CLI 使用同一配置默认根；显式 `--dir`（对账为 `--trace-dir`）优先。

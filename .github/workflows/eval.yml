@@ -42,6 +42,9 @@ jobs:
       - name: Install dependencies
         run: uv sync --locked
 
+      - name: Build and verify isolated distribution
+        run: bash scripts/dev/package_smoke.sh
+
       - name: 提交信息闸门（与本地同一份 .githooks/commit-msg）
         env:
           BEFORE: ${{ github.event.before || github.event.pull_request.base.sha }}
