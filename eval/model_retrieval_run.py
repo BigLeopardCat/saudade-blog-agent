@@ -54,7 +54,7 @@ def execute(data: dict, index_dir: Path, candidates: int, expected_dim: int) -> 
     runs: dict[str, dict] = {name: {} for name in ("bm25", "vector", "hybrid")}
     query_seconds = {}
     for qid, query in data["queries"].items():
-        lexical = index._lexical_ranked(query["text"], candidates, apply_cliff=True)
+        lexical = index._lexical_ranked(query["text"], candidates)
         start = time.perf_counter()
         dense, reason, missing = index._vector_ranked(query["text"], candidates)
         query_seconds[qid] = time.perf_counter() - start

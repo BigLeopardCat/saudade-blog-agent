@@ -43,37 +43,12 @@ BM25_B = 0.75
 
 REFRESH_TTL = 600.0  # 10 分钟懒刷新
 
-# Keep the first three document candidates; prune only the low-scoring tail.
-_CLIFF_RATIO = 0.25
-_CLIFF_MIN_KEEP = 3
-
-# Query-only function-word removal leaves corpus token statistics unchanged.
-_QUERY_STOPWORDS = ("有没有", "怎么样", "为什么", "怎样", "怎么", "什么", "如何",
-                    "哪些", "哪个", "哪里", "哪儿", "多少", "为何", "干啥", "干嘛",
-                    "是否", "咋", "啥")
-
-
-def _clean_query(query: str) -> str:
-    for w in _QUERY_STOPWORDS:
-        query = query.replace(w, "")
-    return query
-
-
 # Reviewed query variants contribute only tokens present in the current vocabulary.
 _QUERY_SYNONYMS: tuple[dict, ...] = (
-    {"key": "测评", "val": "评测",
-     "why": "措辞漂移：1.26 回流用例「RAG测评体系怎么建立」期望 note:19，而那篇的小节标题"
-            "写的是「评测」。语料里 测评 df=0、评测 df=2 ⇒ 补等价词，不改期望"},
-    {"key": "令牌", "val": "JWT",
-     "why": "访客说中文、语料写缩写：令牌全站 df=0（一次都没出现），JWT 见于 note:14/19/22。"
-            "短问「令牌怎么签发？」扩展前有效 token=0 ⇒ 返回空；扩展后 rank=1"},
-    {"key": "断线", "val": "断连",
-     "why": "同上：断线 df=0、断连见于 note:19（断连中断机制那一节）。「断线了会怎样？」"
-            "扩展前只靠一个功能词命中无关文档，扩展后 rank=1"},
-    {"key": "空中升级", "val": "OTA",
-     "why": "同义变体，但 升级 本身在语料里 ⇒ 收益弱于上面两对：「空中升级怎么做的？」"
-            "扩展前后 rank 都是 1，**只把 note:12 拉进 @3**。留它是因为零回归，"
-            "不是因为它是主收益——这是个「过了闸门但收益很小」的样本，别当成常态"},
+    {"key": "测评", "val": "评测", "why": "将访客措辞映射为站内评测术语。"},
+    {"key": "令牌", "val": "JWT", "why": "将中文鉴权用语映射为文档中的协议名。"},
+    {"key": "断线", "val": "断连", "why": "统一连接中断的领域别名。"},
+    {"key": "空中升级", "val": "OTA", "why": "将固件升级的中文别名映射为文档缩写。"},
 )
 
 
@@ -96,9 +71,6 @@ def expansion_enabled() -> bool:
     return _EXPANSION_ENABLED
 
 
-def cliff_config() -> dict:
-    """Return candidate-pruning configuration for evaluation."""
-    return {"ratio": _CLIFF_RATIO, "min_keep": _CLIFF_MIN_KEEP}
 
 
 def chunk_note(title: str, content: str) -> list[dict]:
@@ -231,12 +203,8 @@ class RagIndex:
 
     # ── 查询 ──────────────────────────────────────────────────────
 
-    def _lexical_ranked(self, query: str, top_k: int,
-                        apply_cliff: bool = True) -> list[dict] | None:
-        """Rank the complete lexical snapshot; None means unavailable, [] means no hits.
-
-        apply_cliff=False is reserved for evaluation of candidate pruning.
-        """
+    def _lexical_ranked(self, query: str, top_k: int) -> list[dict] | None:
+        """Return raw-query BM25 candidates bounded by top_k; None means unavailable."""
         if self.is_stale() and time.time() - self._last_attempt > 30:
             try:
                 self.build()
@@ -251,12 +219,12 @@ class RagIndex:
         assert lexical is not None
         vocabulary = lexical.vocabulary
         # Deduplicate query terms without changing corpus frequencies.
-        q_toks = list(dict.fromkeys(t for t in tokenize(_clean_query(query)) if t in vocabulary))
+        q_toks = list(dict.fromkeys(t for t in tokenize(query) if t in vocabulary))
         if _EXPANSION_ENABLED:
             for _pair in _QUERY_SYNONYMS:
                 if _pair["key"] in query:
                     q_toks += [
-                        t for t in tokenize(_clean_query(query.replace(_pair["key"], _pair["val"])))
+                        t for t in tokenize(query.replace(_pair["key"], _pair["val"]))
                         if t not in q_toks and t in vocabulary]
         q_toks = list(dict.fromkeys(q_toks))
         if not q_toks:
@@ -264,11 +232,6 @@ class RagIndex:
         scores = lexical.scores(q_toks)
         # Document score is its strongest matching chunk; retain section locations.
         ranked = rank_documents(chunks, scores, revision)
-        # A relative cutoff preserves the first three candidates independently of score scale.
-        if ranked and apply_cliff:
-            floor = ranked[0]["score"] * _CLIFF_RATIO
-            ranked = ranked[:_CLIFF_MIN_KEEP] + [
-                r for r in ranked[_CLIFF_MIN_KEEP:] if r["score"] >= floor]
         ranked = ranked[:max(1, top_k)]
         for r in ranked:
             r["score"] = round(r["score"], 4)
@@ -277,10 +240,9 @@ class RagIndex:
 
     # ── 编排──────────────────────────
 
-    def search(self, query: str, top_k: int = 8,
-               apply_cliff: bool = True) -> list[dict] | None:
+    def search(self, query: str, top_k: int = 8) -> list[dict] | None:
         """Rank lexical candidates and fuse only corpus-aligned vector candidates."""
-        lex = self._lexical_ranked(query, top_k, apply_cliff)
+        lex = self._lexical_ranked(query, top_k)
         if lex is None:
             _record("unavailable", None)
             return None
@@ -366,9 +328,9 @@ def invalidate_document(article_id: int, revision: str) -> None:
     warm_async()
 
 
-def search(query: str, top_k: int = 8, apply_cliff: bool = True) -> list[dict] | None:
+def search(query: str, top_k: int = 8) -> list[dict] | None:
     """Return ranked article candidates with readable source locators, without full text."""
-    return get_index().search(query, top_k=top_k, apply_cliff=apply_cliff)
+    return get_index().search(query, top_k=top_k)
 
 
 # Resolve only unambiguous article-title references from the visible corpus.
