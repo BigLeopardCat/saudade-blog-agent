@@ -21,7 +21,7 @@ const decode = ({ event, data }) => {
     return { type: event, data: value };
   }
   if (event === 'command' && object(value)
-      && ['navigate', 'effect', 'darkmode'].includes(value.kind)) {
+      && ['navigate', 'effect', 'darkmode', 'appearance'].includes(value.kind)) {
     return { type: event, data: value };
   }
   if (event === 'task_input' && object(value) && typeof value.task_id === 'string'

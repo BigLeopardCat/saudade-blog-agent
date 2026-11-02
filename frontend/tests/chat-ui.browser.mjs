@@ -68,11 +68,19 @@ const server = createServer(async (req, res) => {
             res.write(frame('progress', '页面已到达，正在整理回复…'));
             return;
           }
-          res.end(frame('text', body.browser_result.status === 'completed' ? '已经到留言板了。' : '页面跳转未完成，请点击链接重试。') + frame('done', {}));
+          const text = body.browser_result.settings ? '显示设置实际结果已收到。'
+            : body.browser_result.status === 'completed' ? '已经到留言板了。' : '页面跳转未完成，请点击链接重试。';
+          res.end(frame('text', text) + frame('done', {}));
           return;
         }
         if (body.resume_task && completedNavigations.has(body.resume_task)) {
           res.end(frame('text', '已经到留言板了。') + frame('done', {}));
+          return;
+        }
+        if (mode === 'appearance') {
+          res.end(frame('command', {kind:'appearance', settings:{dark_mode:'on',rain:'off'},
+            task_id:body.task_id, command_id:'offline-appearance',timeout_ms:1000,
+            expires_at:Date.now()/1000+60}) + frame('done',{}));
           return;
         }
         if (mode === 'navigate') {
@@ -452,6 +460,23 @@ try {
   }
   passed('SPA navigation acknowledges actual completion or bounded timeout before narrating; no duplicate user request');
 
+  await reset();
+  const appearanceStart = streamCount();
+  nextMode = 'appearance';
+  await page.locator('#chat-input').fill('打开夜间模式，关闭下雨');
+  await page.locator('#chat-send').click();
+  await page.waitForFunction(() => [...document.querySelectorAll('.chat-msg.agent .msg-text')]
+    .some(el => el.textContent.includes('显示设置实际结果已收到')));
+  await idle();
+  const appearanceRequests = requests.filter(r => r.path === '/api/chat/stream').slice(appearanceStart);
+  assert.equal(appearanceRequests.length, 2);
+  assert.equal(appearanceRequests[1].body.resume_task, appearanceRequests[0].body.task_id);
+  assert.equal(appearanceRequests[1].body.browser_result.status, 'completed');
+  assert.equal(appearanceRequests[1].body.browser_result.settings.dark_mode, 'on');
+  assert.equal(appearanceRequests[1].body.browser_result.settings.rain, 'off');
+  assert.equal(await page.evaluate(() => window.__darkMode), true);
+  passed('appearance applies actual local state before resuming the same task');
+
   const fullContext = await browser.newContext({ viewport: { width: 1280, height: 900 }, reducedMotion: 'reduce' });
   const fullPage = await fullContext.newPage();
   await fullPage.goto(origin);
@@ -483,7 +508,7 @@ try {
   await reloadPage.locator('#chat-send').click();
   await reloadPage.waitForURL(origin + '/guestbook');
   await reloadPage.waitForFunction(() => {
-    const value = JSON.parse(sessionStorage.getItem('saudade-navigation-pending') || 'null');
+    const value = JSON.parse(sessionStorage.getItem('saudade-browser-action-pending') || 'null');
     return value?.phase === 'reply';
   });
   while (!requests.slice(reloadBefore).some(r => r.body.browser_result)) {
@@ -492,7 +517,7 @@ try {
   await reloadPage.reload();
   await reloadPage.waitForFunction(() => [...document.querySelectorAll('.msg-text')]
     .some(el => el.textContent.includes('已经到留言板')));
-  await reloadPage.waitForFunction(() => !sessionStorage.getItem('saudade-navigation-pending'));
+  await reloadPage.waitForFunction(() => !sessionStorage.getItem('saudade-browser-action-pending'));
   const recoveredRequests = requests.filter(r => r.path === '/api/chat/stream').slice(reloadBefore);
   assert.equal(recoveredRequests.length, 3);
   assert.equal(recoveredRequests.filter(r => r.body.browser_result).length, 1);
