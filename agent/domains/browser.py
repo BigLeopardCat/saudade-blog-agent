@@ -192,6 +192,7 @@ def tools(config):
         "Open a site page immediately when requested. Known pages: " + pages
         + ". Article: /article/<id>; category: /category/<name>. Use the source article link "
         "for a chosen recommendation. No site-map lookup is needed for the known pages. "
+        "This allowlist defines supported commands, not whether other URLs exist. "
         "With browser feedback, execution pauses durably until the client reports completion "
         "or timeout, then continues the same task. Status sent means queued only; "
         "only completed proves arrival. No confirmation card."})
