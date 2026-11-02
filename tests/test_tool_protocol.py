@@ -6,7 +6,9 @@ import pytest
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
 from agent.runtime.budget import BudgetLimits, TaskBudget, budget_scope
+from agent.runtime.message_content import estimate_tokens
 from agent.runtime.session import ToolSession
+from config.settings import settings
 
 
 def call(name):
@@ -99,7 +101,7 @@ def test_large_results_stay_individually_bounded_without_ending_the_task():
     class LargeRead(Read):
         def invoke(self, args, config=None):
             self.calls += 1
-            return "x" * 10000
+            return "x" * 50000
 
     read = LargeRead()
     calls = [{"name": read.name, "args": {}, "id": f"read_{i}"} for i in range(3)]
@@ -108,7 +110,9 @@ def test_large_results_stay_individually_bounded_without_ending_the_task():
     assert session.run([HumanMessage(content="查询作者")]).reply == "完成"
     assert read.calls == 3
     results = [m for m in model.prompts[-1] if isinstance(m, ToolMessage)]
-    assert len(results) == 3 and all(len(m.content) <= 8000 for m in results)
+    assert len(results) == 3 and all(
+        estimate_tokens([m]) <= settings.agent_tool_result_tokens for m in results)
+    assert all("结果截断" in m.content for m in results)
 
 
 def test_budget_stop_does_not_restart_another_runtime():

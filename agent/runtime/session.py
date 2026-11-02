@@ -195,7 +195,8 @@ class ToolSession:
                 reply = "已有操作回执已保留；后续工具请求未完整，未执行新的操作。"
             record("native", event, round=self._round_index,
                    count=len(getattr(response, "invalid_tool_calls", ()) or ()))
-            return None, self._result(reply)
+            return None, self._with_receipts(TurnResult(
+                reply, {"blocked": [{"reason": event}]}))
         calls = getattr(response, "tool_calls", None) or []
         if not calls:
             reply = text_content(response.content).strip()

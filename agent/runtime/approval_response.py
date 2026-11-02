@@ -20,4 +20,9 @@ def finish(session, response):
         record("native", "approval_response_failed", reason="empty")
     else:
         record("native", "approval_response_failed", reason="invalid_response")
-    return {**capture(session), "jump_to": "end"}
+    saved = {**capture(session), "jump_to": "end"}
+    if incomplete_response(response) or response.tool_calls or response.invalid_tool_calls:
+        saved["messages"] = [response.model_copy(update={
+            "content": session.outcome.reply, "tool_calls": [], "invalid_tool_calls": [],
+            "additional_kwargs": {}})]
+    return saved

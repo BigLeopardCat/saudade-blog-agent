@@ -565,8 +565,9 @@ def test_incomplete_later_tool_request_does_not_deny_the_completed_write(backend
     state, _ = backend
     selected = runtime(Model())
     _, grant, _ = prepare(selected, FAVORITE)
-    selected.model_factory = lambda **_: Model(AIMessage(content="", invalid_tool_calls=[{
-        "name": "prepare_notification_read", "args": "{", "id": "invalid", "error": "JSON"}]))
+    malformed = AIMessage(content="", invalid_tool_calls=[{
+        "name": "prepare_notification_read", "args": "{", "id": "invalid", "error": "JSON"}])
+    selected.model_factory = lambda **_: Model(malformed, malformed.model_copy())
     result = run(selected, grant=grant)
     assert "未执行新的操作" in result.reply and result.execution["receipts"]
     assert len(state["writes"]) == 1 and not state["read"]

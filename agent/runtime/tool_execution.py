@@ -2,27 +2,44 @@
 
 import json
 
-from langchain_core.messages import ToolMessage
+from langchain_core.messages import ToolMessage, trim_messages
 from langgraph.types import Command
 
 from agent.runtime import memory, tool_evidence
 from agent.runtime.budget import native_tool
 from agent.runtime.memory_media import tool_messages
-from agent.runtime.message_content import text_content
+from agent.runtime.message_content import estimate_tokens, text_content
 from agent.runtime.progress import emit
 from agent.runtime.results import TurnResult
 from agent.runtime.tool_outputs import application_result, framework_tool
+from config.settings import settings
 from utils import trace as trace_mod
 from utils.trace import record
 
-MAX_RESULT_CHARS = 8000
+TRACE_RESULT_CHARS = 8000
+_TRUNCATION_MARKER = "\n[结果截断，请缩小检索范围]"
+
+
+def result_limit(value):
+    """Bound one observation; native_call enforces the complete request budget.
+
+    Context exhaustion must not silently discard facts to fund another call.
+    Paged product renderers use the returned size to preserve continuation cursors.
+    """
+    body = text_content(value.content) if isinstance(value, ToolMessage) else str(value)
+    marker_tokens = estimate_tokens([ToolMessage(content=_TRUNCATION_MARKER,
+                                                 tool_call_id="result-budget")])
+    kept = trim_messages([ToolMessage(content=body, tool_call_id="result-budget")],
+        max_tokens=max(0, settings.agent_tool_result_tokens - marker_tokens),
+        token_counter=estimate_tokens, strategy="first", allow_partial=True, text_splitter=list)
+    return len(kept[0].content) if kept else 0
 
 
 def render_result(call, value, limit):
     body = text_content(value.content) if isinstance(value, ToolMessage) else str(value)
     if len(body) > limit:
-        marker = "\n[结果截断，请缩小检索范围]"
-        body = body[:max(0, limit - len(marker))] + marker
+        marker = _TRUNCATION_MARKER
+        body = (body[:max(0, limit - len(marker))] + marker)[:limit]
     return body
 
 
@@ -71,7 +88,7 @@ def append_result(session, request, handler, prompt, round_index, attachments):
     kind = (getattr(body, "kind", artifact.get("kind", "unknown"))
             if message.status != "error" else "error")
     session.observations.extend(memory.observation(call, body))
-    body = session.render_result(call, body, MAX_RESULT_CHARS)
+    body = session.render_result(call, body, result_limit(body))
     # Structured data is used by product evidence policy, not duplicated in
     # the durable transcript. Preserve artifacts supplied by standard tools.
     message = message.model_copy(update={"artifact": {
@@ -83,6 +100,7 @@ def append_result(session, request, handler, prompt, round_index, attachments):
         **(messages[0].artifact or {}), "kind": kind}}))
     attachments.extend(messages[1:])
     record("native", "call", name=name, args=call["args"], call_id=call["id"], round=round_index,
-           kind=kind, result=trace_mod.tool_result_text(body, name, default_limit=MAX_RESULT_CHARS))
+           kind=kind, result=trace_mod.tool_result_text(
+               body, name, default_limit=TRACE_RESULT_CHARS))
     record("native", "tool_result", name=name, call_id=call["id"], result_chars=len(body))
     return command

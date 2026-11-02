@@ -11,6 +11,7 @@ from langgraph.checkpoint.memory import InMemorySaver
 from agent.principal import SOURCE_ASSERTION, Principal
 from agent.products.blog.application import BlogApplication
 from agent.runtime.checkpoint_conversations import CheckpointConversationStore
+from agent.runtime.message_content import text_content
 from agent.runtime.service import AgentRuntime
 from agent.runtime.turns import AgentCancelled
 
@@ -34,7 +35,7 @@ class Model:
 
 
 def caller(prompt, marker="运行时能力（可信数据）："):
-    data = json.JSONDecoder().raw_decode(prompt[0].content.split(marker, 1)[1])[0]
+    data = json.JSONDecoder().raw_decode(text_content(prompt[0].content).split(marker, 1)[1])[0]
     return data["caller"] if "caller" in data else data
 
 
@@ -87,3 +88,5 @@ def test_framework_reply_uses_the_selected_voice(role, address):
     context = caller(model.prompts[0])
     assert context["conversation_style"] == conversation_style(principal)
     assert context["preferred_address"] == address
+    if role == "user":
+        assert "主人" not in text_content(model.prompts[0][0].content)

@@ -12,7 +12,9 @@ import pathlib
 import sys
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT))
 
+from eval.source_files import python_sources  # noqa: E402
 
 LEDGER = ROOT / "eval" / "module_baseline.json"
 
@@ -21,9 +23,6 @@ LINES_MAX = 800     # 文件行数上限：超过就进台账
 
 
 DEFS_MAX = 60       # 模块级定义数上限：同上
-
-
-_SKIP_DIRS = {".venv", "__pycache__", ".git", "node_modules", "dist", ".mypy_cache"}
 
 
 def measure(text: str) -> dict:
@@ -38,10 +37,8 @@ def scan() -> tuple[dict, int]:
     """Scan source modules; return metrics and file count, failing on parse errors."""
     out: dict = {}
     n_files = 0
-    for p in sorted(ROOT.rglob("*.py")):
+    for p in python_sources(ROOT):
         rel = p.relative_to(ROOT)
-        if set(rel.parts) & _SKIP_DIRS:
-            continue
         try:
             out[rel.as_posix()] = measure(p.read_text(encoding="utf-8"))
         except (SyntaxError, UnicodeDecodeError) as e:  # pragma: no cover

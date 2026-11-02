@@ -12,7 +12,9 @@ import pathlib
 import sys
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT))
 
+from eval.source_files import python_sources  # noqa: E402
 
 LEDGER = ROOT / "eval" / "complexity_baseline.json"
 
@@ -21,9 +23,6 @@ C_MAX = 30          # McCabe 上限：超过就进台账
 
 
 LINES_MAX = 300     # 函数行数上限：同上
-
-
-_SKIP_DIRS = {".venv", "__pycache__", ".git", "node_modules", "dist", ".mypy_cache"}
 
 
 _BRANCHES = (ast.If, ast.For, ast.AsyncFor, ast.While, ast.ExceptHandler,
@@ -72,10 +71,8 @@ def scan() -> tuple[dict, int]:
     """Return per-function metrics and file count; parse errors fail the scan."""
     out: dict = {}
     n_files = 0
-    for p in sorted(ROOT.rglob("*.py")):
+    for p in python_sources(ROOT):
         rel = p.relative_to(ROOT)
-        if set(rel.parts) & _SKIP_DIRS:
-            continue
         try:
             tree = ast.parse(p.read_text(encoding="utf-8"), filename=rel.as_posix())
         except (SyntaxError, UnicodeDecodeError) as e:  # pragma: no cover
