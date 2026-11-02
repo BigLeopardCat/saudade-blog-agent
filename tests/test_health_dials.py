@@ -1,22 +1,4 @@
-"""`/health` 的 `dials` 块（20260929 补）：**回显这个进程的内存取值**，且**只回档位名**。
-
-为什么值得一条判据：这一块存在的理由是"线上到底跑的哪一档"这件事此前只能靠**读 `.env`
-再去推断**，而本仓吃过两次同形的亏——20260927 那次 provider 中断（`.env` 里换了 key/端点，
-`/health` 照旧 `agent_ready: true`、一开口就错）与 `agent_task_state` 这类开关（离线套件跑的是
-**钉住的出厂档**，线上读的是 `.env`；"能力有测试"≠"接线有测试"≠**这个进程真加载了它**）。
-它一旦退化成"重新解析一遍 `.env`"，就恰好把要治的那件事治回去了——**文件里写的与人看到的一样**，
-而进程里实际加载的可能不是那一份（dotenv 只在启动时读一次，改完不重启不生效，这正是本仓
-「agent 仓 push ≠ 生效」那句话）。所以判据 ② 钉的是"取自内存单例"。
-
-判据 ③ 钉的是**别把密钥带出去**：这一块唯一会回的内容是引擎名、模型名与三个布尔；
-`active_llm_model` 是**派生属性**（已按 provider 解析过），而同样在这张 settings 上的
-`active_llm_api_key` 只差一个词——把 `model` 写成 `api_key` 的代价是**外泄**，且这一行在
-review 里长得跟正确的那行几乎一样。所以用"注入哨兵值再断言它不出现"来判，比 grep 源码可靠。
-
-秒级、无网络、不跑 LLM；由 pytest 按目录收集自动收。
-
-用法：.venv/bin/python tests/test_health_dials.py
-"""
+"""Health diagnostics reflect live settings and expose no credentials."""
 
 
 from __future__ import annotations
@@ -112,8 +94,9 @@ def test_health_dials():
         body = wire(r)
         check('返回体里仍含 "agent_ready":true 这个子串（心跳探针的唯一判据）',
               '"agent_ready":true' in body, body[:80])
-        check("顶层键 = status / agent_ready / dials（多一个少一个都要有人解释）",
-              set(r) == {"status", "agent_ready", "dials"}, sorted(r))
+        check("存活、运行时与连接清理诊断均有明确字段",
+              set(r) == {"status", "agent_ready", "dials", "model_transport"}, sorted(r))
+        check("无模型连接池时清理状态明确不可用", r["model_transport"] is None)
         check("dials 是一个对象、键集恰好那几格",
               isinstance(r["dials"], dict) and set(r["dials"]) == DIAL_KEYS,
               sorted(r.get("dials") or []))
