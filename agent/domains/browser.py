@@ -1,6 +1,7 @@
 """Native, reversible browser commands using the existing renderer protocol."""
 
 import hashlib
+import json
 import time
 from typing import Annotated, Literal
 
@@ -11,6 +12,7 @@ from pydantic import Field, StrictStr
 
 from agent import action_text, authz
 from agent.products.blog.read_tools import scoped_reads_enabled
+from agent.runtime.client_actions import successful
 from agent.runtime.progress import current_emitter
 from tools import site
 
@@ -60,6 +62,26 @@ def _outcome(reply, receipts):
     return reply, {"kind": "ok", "receipts": receipts}
 
 
+def _await_browser(command, config):
+    cfg = config["configurable"]
+    task_id = cfg["browser_task"]
+    identity = json.dumps([task_id, command], sort_keys=True, separators=(",", ":"))
+    command = {**command, "task_id": task_id,
+               "command_id": hashlib.sha256(identity.encode()).hexdigest()[:24],
+               "timeout_ms": 6000, "expires_at": time.time() + 60}
+    progress = current_emitter(config)
+    result = interrupt({"kind": "client_action", "command": command,
+                        "progress_keys": progress.emitted_keys if progress is not None else []})
+    if result.get("command_id") != command["command_id"]:
+        raise ToolException("Browser result does not match the pending action")
+    status = result.get("status")
+    if status == "completed" and not successful(command, result):
+        status = "failed"
+    if status not in {"completed", "failed", "timeout"}:
+        raise ToolException("Invalid browser outcome")
+    return {**result, "status": status}
+
+
 @tool(response_format="content_and_artifact")
 def navigate_page(path: Path, config: RunnableConfig) -> object:
     """Open a verified site path when the user asks to go there, including an article
@@ -82,17 +104,8 @@ def navigate_page(path: Path, config: RunnableConfig) -> object:
     command = {"kind": "navigate", "url": url, "mode": "direct"}
     cfg = (config or {}).get("configurable") or {}
     if cfg.get("browser_feedback") and cfg.get("browser_task"):
-        task_id = cfg["browser_task"]
-        command_id = hashlib.sha256((task_id + path).encode()).hexdigest()[:24]
-        progress = current_emitter(config)
-        result = interrupt({"kind": "client_action",
-            "progress_keys": progress.emitted_keys if progress is not None else [], "command": {
-            **command, "path": path, "task_id": task_id, "command_id": command_id,
-            "timeout_ms": 6000, "expires_at": time.time() + 60}})
-        if result.get("command_id") != command_id:
-            raise ToolException("Browser result does not match the pending navigation")
-        status = result.get("status")
-        completed = status == "completed" and result.get("path") == path
+        status = _await_browser({**command, "path": path}, config)["status"]
+        completed = status == "completed"
         reply = ("浏览器已进入：" + url if completed else
                  "页面跳转超时，未确认进入目标页面：" + url if status == "timeout" else
                  "页面跳转未完成：" + url)
@@ -117,6 +130,7 @@ def set_page_appearance(
     """Set the user's page theme or effects when requested. Pass on/off only for
     requested settings; omit the rest. A switch such as rain to snow sets rain=off,
     snow=on together. Commands set absolute states, so repeats do not toggle them.
+    With browser feedback, waits for observed settings before reporting completion.
     """
     effects = {
         name: mode
@@ -149,6 +163,17 @@ def set_page_appearance(
             )
         )
     actions = "；".join(row["action"] for row in receipts)
+    cfg = (config or {}).get("configurable") or {}
+    if cfg.get("browser_feedback") and cfg.get("browser_task"):
+        settings = {**effects, **({"dark_mode": dark_mode} if dark_mode is not None else {})}
+        result = _await_browser({"kind": "appearance", "settings": settings}, config)
+        status = result["status"]
+        reply = json.dumps({"status": status, "scope": "browser_appearance",
+                            "requested": settings, "observed": result.get("settings")},
+                           ensure_ascii=False)
+        for receipt in receipts:
+            receipt.update(result=reply, browser_status=status)
+        return _outcome(reply, receipts)
     reply = f"已发送显示设置：{actions}；浏览器尚未回报完成。"
     return _outcome(reply, receipts)
 

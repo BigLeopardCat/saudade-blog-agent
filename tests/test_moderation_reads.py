@@ -93,7 +93,11 @@ def test_default_pages_include_totals_and_previews_not_full_bodies(backend):
 
 def test_summary_is_one_aggregate_request_with_no_content(backend):
     data = json.loads(str(moderation.get_moderation_status.invoke({}, config=config())))
-    assert data == backend["counts"]
+    assert data == {
+        "finalStatus": {key: backend["counts"][key] for key in
+                        ("total", "pending", "passed", "rejected")},
+        "aiDecision": {key: backend["counts"][key] for key in
+                       ("aiPassed", "aiFlagged", "aiRejected", "aiUnreviewed")}}
     assert len(backend["requests"]) == 1
     assert backend["requests"][0].url.path.endswith("/moderation/summary")
     assert "content" not in str(data)

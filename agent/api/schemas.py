@@ -33,6 +33,8 @@ class BrowserResult(BaseModel):
     command_id: str = Field(min_length=1, max_length=100, pattern=r"^[A-Za-z0-9_-]+$")
     status: Literal["completed", "timeout", "failed"]
     path: str = Field(max_length=512)
+    settings: dict[Literal["dark_mode", "sakura", "rain", "snow"],
+                   Literal["on", "off"]] | None = Field(default=None, max_length=4)
 
 
 class ChatRequest(BaseModel):

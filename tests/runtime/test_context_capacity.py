@@ -69,6 +69,9 @@ def test_oversized_history_is_compacted_in_bounded_steps_then_reused(monkeypatch
     monkeypatch.setattr(settings, "agent_summary_output_tokens", 512)
     monkeypatch.setattr("models.get_llm", lambda **_: FakeListChatModel(responses=["unused"]))
     calls = []
+    compacted = []
+    monkeypatch.setattr(compaction, "record", lambda node, event, **data:
+                        compacted.append(data) if event == "compacted" else None)
     monkeypatch.setattr(compaction, "summarize", lambda source, **kw: (
         calls.append(source) or "remembered-fact-0; older data is represented here."))
     model = Capture()
@@ -86,6 +89,7 @@ def test_oversized_history_is_compacted_in_bounded_steps_then_reused(monkeypatch
     assert "remembered-fact-0" in str(model.prompts[-1])
     assert "保留当前要求：只读核对，不发送通知。" in str(model.prompts[-1])
     count = len(calls)
+    assert compacted[-1]["request_after_tokens"] <= compacted[-1]["target_tokens"]
     run(selected, ChatRequest(message="还记得先前的信息吗？"))
     assert len(calls) == count and "remembered-fact-0" in str(model.prompts[-1])
 

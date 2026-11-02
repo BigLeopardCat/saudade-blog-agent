@@ -23,7 +23,8 @@ def summary_cutoff(messages, keep, budget):
     """Bound the rendered summary request, including instructions and XML framing."""
     tail = trim_messages(messages, max_tokens=keep, token_counter=estimate_tokens,
                          strategy="last", start_on=("human", "ai"), allow_partial=False)
-    points = _cut_points(messages, min(len(messages) - 1, len(messages) - len(tail)))
+    # The current task is protected separately; all old source messages may be covered.
+    points = _cut_points(messages, len(messages) - len(tail))
     ceiling = min(budget.limits.input_tokens,
                   budget.limits.context_tokens - settings.agent_summary_output_tokens)
     low, high, selected = 0, len(points), 0
