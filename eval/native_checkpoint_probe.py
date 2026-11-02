@@ -1,7 +1,7 @@
-"""Exercise NativeRuntime persistence on a configured PostgreSQL saver.
+"""Exercise AgentRuntime persistence on a configured PostgreSQL saver.
 
 This probe is intentionally separate from production startup and real model
-calls.  It uses a deterministic model and the public NativeConversationStore
+calls.  It uses a deterministic model and the public CheckpointConversationStore
 surface to verify process reconstruction, conversation isolation and cleanup.
 Use an explicitly configured PostgreSQL saver; only random probe conversations
 are touched and cleaned up. Offline CI uses equivalent InMemorySaver tests.
@@ -22,8 +22,9 @@ from langchain_core.outputs import ChatGeneration, ChatResult
 
 from agent import checkpoint
 from agent.principal import SOURCE_ASSERTION, Principal
-from agent.runtime.native import NativeRuntime
-from agent.runtime.native_store import NativeConversationStore
+from agent.products.blog.application import BlogApplication
+from agent.runtime.checkpoint_conversations import CheckpointConversationStore
+from agent.runtime.service import AgentRuntime
 
 
 class ProbeModel(BaseChatModel):
@@ -58,8 +59,8 @@ def _config(conversation_id: str):
 
 def _turn(saver, conversation_id: str, resume: bool):
     marker = conversation_id
-    runtime = NativeRuntime(
-        NativeConversationStore(saver),
+    runtime = AgentRuntime(
+        CheckpointConversationStore(saver), application=BlogApplication(),
         model_factory=lambda **_: ProbeModel(marker=marker, resume=resume),
     )
     text = f"[当前问题]: {marker}" if not resume else "[当前问题]: 刚才的标记是什么？"

@@ -15,11 +15,12 @@ from langgraph.checkpoint.memory import InMemorySaver
 
 from agent import confirm
 from agent.domains.favorites import transactions
+from agent.products.blog.application import BlogApplication
 from agent.products.blog.pending import PendingOperation
 from agent.runtime import writes
+from agent.runtime.checkpoint_conversations import CheckpointConversationStore
 from agent.runtime.control import RequestControl, request_scope
-from agent.runtime.native import NativeRuntime
-from agent.runtime.native_store import NativeConversationStore
+from agent.runtime.service import AgentRuntime
 from agent.runtime.turns import AgentCancelled
 from tools import base
 
@@ -76,7 +77,11 @@ def pending_task(monkeypatch, tmp_path):
         cfg = config(stop_event=stop)
 
         def runtime(model):
-            return NativeRuntime(NativeConversationStore(saver), model_factory=lambda **_: model)
+            return AgentRuntime(
+                CheckpointConversationStore(saver),
+                application=BlogApplication(),
+                model_factory=lambda **_: model,
+            )
 
         selected = runtime(Model(batch(call("load_favorites_info_tools", "load-original")),
                                  batch(call("prepare_favorite_change", "prepare-original",

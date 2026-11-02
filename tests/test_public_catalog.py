@@ -7,6 +7,7 @@ import pytest
 from pydantic import ValidationError
 
 from agent.domains import public_catalog
+from agent.products.blog.application import BlogApplication
 from tools import base
 
 
@@ -87,8 +88,8 @@ def test_arguments_reject_unbounded_or_coerced_values(backend, args):
 def test_runtime_loads_public_tools_without_identity_or_legacy(backend, monkeypatch, name):
     from langchain_core.messages import AIMessage, HumanMessage
 
-    from agent.runtime.native import NativeRuntime
-    from agent.runtime.native_store import NativeConversationStore
+    from agent.runtime.checkpoint_conversations import CheckpointConversationStore
+    from agent.runtime.service import AgentRuntime
 
     def call(tool_name):
         return AIMessage(content="", tool_calls=[{"name": tool_name, "args": {}, "id": tool_name}])
@@ -103,7 +104,11 @@ def test_runtime_loads_public_tools_without_identity_or_legacy(backend, monkeypa
         def invoke(self, prompt):
             return next(responses)
 
-    runtime = NativeRuntime(NativeConversationStore(None), model_factory=lambda **_: Model())
+    runtime = AgentRuntime(
+        CheckpointConversationStore(None),
+        application=BlogApplication(),
+        model_factory=lambda **_: Model(),
+    )
     events = list(runtime.stream_events(
         {"messages": [HumanMessage(content="读取公开资料")]}, {}))
     assert events[-1].reply == "已读取公开资料。"
@@ -117,8 +122,8 @@ def test_administration_domain_can_read_without_a_second_loader(backend, domain,
     from langgraph.checkpoint.memory import InMemorySaver
 
     from agent.principal import SOURCE_ASSERTION, Principal
-    from agent.runtime.native import NativeRuntime
-    from agent.runtime.native_store import NativeConversationStore
+    from agent.runtime.checkpoint_conversations import CheckpointConversationStore
+    from agent.runtime.service import AgentRuntime
 
     def call(tool):
         return AIMessage(content="", tool_calls=[{"name": tool, "args": {}, "id": tool}])
@@ -135,8 +140,11 @@ def test_administration_domain_can_read_without_a_second_loader(backend, domain,
         def invoke(self, prompt):
             return next(replies)
 
-    runtime = NativeRuntime(NativeConversationStore(InMemorySaver()),
-                            model_factory=lambda **_: Model())
+    runtime = AgentRuntime(
+        CheckpointConversationStore(InMemorySaver()),
+        application=BlogApplication(),
+        model_factory=lambda **_: Model(),
+    )
     cfg = {"configurable": {"principal": Principal(7, "admin", SOURCE_ASSERTION),
                             "user_id": 7, "conversation_id": 42, "thread_id": "conv_42"}}
     events = list(runtime.stream_events({"messages": [HumanMessage(content="查看目录")]}, cfg))

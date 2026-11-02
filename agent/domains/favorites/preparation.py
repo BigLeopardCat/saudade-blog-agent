@@ -8,7 +8,7 @@ from pydantic import Field, StrictInt
 
 from agent import authz
 from agent.adminops_target import normalize_target_id
-from agent.products.blog.confirmation import proposal
+from agent.proposals import proposal
 from agent.runtime.results import TurnResult
 from agent.runtime.tool_evidence import observed
 from agent.runtime.turns import check_cancelled

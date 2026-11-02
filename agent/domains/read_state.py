@@ -8,7 +8,7 @@ from urllib.parse import urlencode
 from pydantic import Field, StrictInt
 
 from agent import action_text, authz
-from agent.products.blog.confirmation import proposal
+from agent.proposals import proposal
 from agent.reports import sanitize_untrusted
 from agent.runtime import writes
 from agent.runtime.results import TurnResult

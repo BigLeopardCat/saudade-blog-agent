@@ -9,6 +9,7 @@ from pydantic import ValidationError
 
 from agent.domains import work_queue
 from agent.principal import SOURCE_ASSERTION, SOURCE_BODY, Principal
+from agent.products.blog.application import BlogApplication
 from tools import base
 
 
@@ -158,8 +159,8 @@ def test_oversized_legacy_detail_reports_truncation(backend):
 def test_runtime_loads_queue_and_reads_without_legacy(backend, monkeypatch, name):
     from langchain_core.messages import AIMessage, HumanMessage
 
-    from agent.runtime.native import NativeRuntime
-    from agent.runtime.native_store import NativeConversationStore
+    from agent.runtime.checkpoint_conversations import CheckpointConversationStore
+    from agent.runtime.service import AgentRuntime
 
     def call(tool_name):
         return AIMessage(content="", tool_calls=[{"name": tool_name, "args": {}, "id": tool_name}])
@@ -174,7 +175,11 @@ def test_runtime_loads_queue_and_reads_without_legacy(backend, monkeypatch, name
         def invoke(self, prompt):
             return next(responses)
 
-    runtime = NativeRuntime(NativeConversationStore(None), model_factory=lambda **_: Model())
+    runtime = AgentRuntime(
+        CheckpointConversationStore(None),
+        application=BlogApplication(),
+        model_factory=lambda **_: Model(),
+    )
     events = list(runtime.stream_events(
         {"messages": [HumanMessage(content="读取后台记录")]}, config()))
     assert events[-1].reply.startswith("已读到")

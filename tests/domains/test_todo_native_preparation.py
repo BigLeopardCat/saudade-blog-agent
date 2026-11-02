@@ -11,6 +11,7 @@ from pydantic import ValidationError
 from agent import confirm, idem
 from agent.domains.todos import preparation, transactions
 from agent.principal import SOURCE_ASSERTION, Principal
+from agent.products.blog.application import BlogApplication
 from agent.products.blog.pending import PendingOperation
 from agent.runtime import writes
 from agent.runtime.results import TurnResult
@@ -311,8 +312,8 @@ def test_native_prepares_executes_then_continues_without_repeating_write(
     from langchain_core.messages import AIMessage, HumanMessage
     from langgraph.checkpoint.memory import InMemorySaver
 
-    from agent.runtime.native import NativeRuntime
-    from agent.runtime.native_store import NativeConversationStore
+    from agent.runtime.checkpoint_conversations import CheckpointConversationStore
+    from agent.runtime.service import AgentRuntime
 
     class Model:
         def __init__(self):
@@ -347,8 +348,11 @@ def test_native_prepares_executes_then_continues_without_repeating_write(
     model = Model()
     ledger = idem.Ledger(str(tmp_path / "hybrid.sqlite3"))
     monkeypatch.setattr(writes, "ledger_for", lambda saver: ledger)
-    runtime = NativeRuntime(NativeConversationStore(InMemorySaver()),
-                            model_factory=lambda **_: model)
+    runtime = AgentRuntime(
+        CheckpointConversationStore(InMemorySaver()),
+        application=BlogApplication(),
+        model_factory=lambda **_: model,
+    )
     prepared = list(runtime.stream_events(
         {"messages": [HumanMessage(content="按要求改个人待办")]}, admin_config()))
     execution = prepared[-1].execution

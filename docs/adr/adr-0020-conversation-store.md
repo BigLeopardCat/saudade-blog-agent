@@ -1,13 +1,13 @@
 # ADR-0020：会话存储使用薄接口与框架 checkpoint
 
 - **状态**：已采纳；旧图适配已由 [ADR-0024](adr-0024-framework-kernel-and-domain-extensions.md) 替换。
-- **影响范围**：ConversationStore、NativeConversationStore 与会话维护接口。
+- **影响范围**：ConversationStore、CheckpointConversationStore 与会话维护接口。
 - **判据**：会话存储、checkpoint 接线、取消、审批接续及普通任务恢复的行为回归。
 
 ## 决策
 
 `agent/runtime/conversation_store.py` 定义会话快照及存储协议；
-`agent/runtime/native_store.py` 通过 LangGraph 公开状态 API 实现读取、提交和维护。
+`agent/runtime/checkpoint_conversations.py` 通过 LangGraph 公开状态 API 实现读取、提交和维护。
 模型—工具循环及审批图使用同一生产 PostgreSQL saver，没有旧规划图或内存降级入口。
 
 快照包含标准消息、待确认项、审批绑定、当前任务与真实执行回执。

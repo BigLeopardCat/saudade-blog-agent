@@ -11,6 +11,7 @@ from langchain_core.tools import StructuredTool
 
 from agent.api import dependencies
 from agent.api.schemas import ChatRequest
+from agent.products.blog.application import BlogApplication
 from agent.runtime.progress import ProgressEmitter
 from agent.runtime.results import TurnResult
 from agent.runtime.session import ToolSession
@@ -101,22 +102,26 @@ def test_checkpoint_resume_does_not_announce_the_same_request_state_again():
     from _own_support import config
     from langgraph.checkpoint.memory import InMemorySaver
 
+    from agent.runtime.checkpoint_conversations import CheckpointConversationStore
     from agent.runtime.control import AgentCancelled
-    from agent.runtime.native import NativeRuntime
-    from agent.runtime.native_store import NativeConversationStore
+    from agent.runtime.service import AgentRuntime
 
     class Stopped(_Model):
         def invoke(self, prompt, **kwargs):
             raise AgentCancelled()
 
     saver, first, second = InMemorySaver(), [], []
-    initial = NativeRuntime(NativeConversationStore(saver), model_factory=lambda **_: Stopped([]))
+    initial = AgentRuntime(
+        CheckpointConversationStore(saver),
+        application=BlogApplication(),
+        model_factory=lambda **_: Stopped([]),
+    )
     with pytest.raises(AgentCancelled):
         list(initial.stream_events({"task_id": "same-progress", "messages": [
             HumanMessage(content="reply once")]},
             config(progress_emitter=ProgressEmitter(first.append))))
     assert first == ["正在处理请求…"]
-    restored = NativeRuntime(NativeConversationStore(saver),
+    restored = AgentRuntime(CheckpointConversationStore(saver), application=BlogApplication(),
                              model_factory=lambda **_: _Model([AIMessage(content="done")]))
     result = list(restored.stream_events({"resume_task": "same-progress"},
         config(progress_emitter=ProgressEmitter(second.append))))[-1]
@@ -388,9 +393,9 @@ def test_streamed_preface_and_terminal_confirmation_each_render_once(monkeypatch
     from langgraph.checkpoint.memory import InMemorySaver
 
     from agent.products.blog.capabilities import ToolCatalog
-    from agent.runtime.native import NativeRuntime
-    from agent.runtime.native_store import NativeConversationStore
+    from agent.runtime.checkpoint_conversations import CheckpointConversationStore
     from agent.runtime.results import TurnResult
+    from agent.runtime.service import AgentRuntime
 
     question = "确认本次测试操作。"
 
@@ -413,10 +418,14 @@ def test_streamed_preface_and_terminal_confirmation_each_render_once(monkeypatch
             yield AIMessageChunk(content="", tool_calls=[
                 {"name": "fixture_prepare", "args": {}, "id": "prepare"}])
 
-    store = NativeConversationStore(InMemorySaver())
-    runtime = NativeRuntime(store, model_factory=lambda **_: Model(),
-                            catalog=ToolCatalog(read_tools={"fixture_prepare": fixture_prepare},
-                                                site_read_tools={}))
+    store = CheckpointConversationStore(InMemorySaver())
+    runtime = AgentRuntime(
+        store,
+        model_factory=lambda **_: Model(),
+        application=BlogApplication(
+            ToolCatalog(read_tools={"fixture_prepare": fixture_prepare}, site_read_tools={})
+        ),
+    )
     events = []
     server = _prepare_server(monkeypatch, runtime, events)
 

@@ -6,8 +6,9 @@ from langchain_core.messages import AIMessageChunk
 
 from agent.api.context import build_messages
 from agent.principal import SOURCE_ASSERTION, Principal
-from agent.runtime.native import NativeRuntime
-from agent.runtime.native_store import NativeConversationStore
+from agent.products.blog.application import BlogApplication
+from agent.runtime.checkpoint_conversations import CheckpointConversationStore
+from agent.runtime.service import AgentRuntime
 
 ACTOR = Principal(7, "user", SOURCE_ASSERTION)
 SCOPE = {"user_id": 7, "role": "user", "conversation_id": 42}
@@ -37,7 +38,7 @@ class Capture:
 
 def runtime(saver, model):
     catalog = SimpleNamespace(initial_tools=lambda _: {}, domains=lambda *_: {})
-    return NativeRuntime(NativeConversationStore(saver), catalog=catalog,
+    return AgentRuntime(CheckpointConversationStore(saver), application=BlogApplication(catalog),
                          model_factory=lambda **_: model)
 
 

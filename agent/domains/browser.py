@@ -11,7 +11,7 @@ from langgraph.types import interrupt
 from pydantic import Field, StrictStr
 
 from agent import action_text, authz
-from agent.products.blog.read_tools import scoped_reads_enabled
+from agent.runtime.access import scoped_reads_enabled
 from agent.runtime.client_actions import successful
 from agent.runtime.progress import current_emitter
 from tools import site

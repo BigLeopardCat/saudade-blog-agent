@@ -1,7 +1,6 @@
 """LangChain model/tool execution with durable conversation and approval state."""
 
 import asyncio
-from contextlib import ExitStack
 from dataclasses import replace
 from functools import partial
 
@@ -17,20 +16,14 @@ from agent.runtime.turns import check_cancelled
 from config.settings import settings
 from models.llm import get_llm
 from models.session import session_scope
-from models.transport import ModelIO, io_scope
+from models.transport import io_scope
 from utils.trace import record
 
 
-class NativeRuntime:
-    def __init__(self, store, *, catalog=None, model_factory=None, application=None,
-                 model_io=None):
+class AgentRuntime:
+    def __init__(self, store, *, application, model_factory=None, model_io=None):
         self.store = store
         self.inputs = for_saver(store.saver)
-        if application is None:
-            from agent.products.blog.application import BlogApplication
-            application = BlogApplication(catalog)
-        elif catalog is not None:
-            raise ValueError("Pass a catalog through the selected application")
         self.application = application
         self.model_factory = model_factory
         self.model_io = model_io
@@ -285,19 +278,6 @@ class NativeRuntime:
                               {**(executed.execution or {}), "receipts": session.receipts})
         finally:
             runner.close()
-
-
-def build(*, resources: ExitStack) -> NativeRuntime:
-    from agent import checkpoint
-    from agent.products.blog.application import BlogApplication
-    from agent.runtime.native_store import NativeConversationStore
-    from agent.scheduling.factory import build as build_scheduling
-
-    return NativeRuntime(
-        NativeConversationStore(checkpoint.build_checkpointer(resources=resources)),
-        application=BlogApplication(scheduling=build_scheduling(resources)),
-        model_io=resources.enter_context(ModelIO()),
-    )
 
 
 def _finish_inputs(session, outcome):

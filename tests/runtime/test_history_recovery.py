@@ -8,11 +8,12 @@ from langgraph.checkpoint.memory import InMemorySaver
 from test_own_activity import backend as backend
 from test_own_activity import config
 
+from agent.products.blog.application import BlogApplication
 from agent.runtime import memory
 from agent.runtime.budget import BudgetLimits, TaskBudget, budget_scope
-from agent.runtime.native import NativeRuntime
-from agent.runtime.native_store import NativeConversationStore
+from agent.runtime.checkpoint_conversations import CheckpointConversationStore
 from agent.runtime.results import TurnResult
+from agent.runtime.service import AgentRuntime
 
 
 class RecoverHistory:
@@ -85,13 +86,17 @@ def test_reconstructed_runtime_recovers_unseen_tail_and_preserves_mixed_read_out
     cfg = config()
     cfg["configurable"]["thread_id"] = "conv_9"
     saver = InMemorySaver()
-    store = NativeConversationStore(saver)
+    store = CheckpointConversationStore(saver)
     store.update_state(cfg, {"messages": memory.turn_messages(
         [HumanMessage(content="之前的长文说明")], [], original,
         cfg["configurable"]["principal"])})
     # A fresh runtime must be able to recover text outside its checkpoint excerpt.
     model = RecoverHistory()
-    runtime = NativeRuntime(NativeConversationStore(saver), model_factory=lambda **_:model)
+    runtime = AgentRuntime(
+        CheckpointConversationStore(saver),
+        application=BlogApplication(),
+        model_factory=lambda **_: model,
+    )
     budget = TaskBudget(BudgetLimits(context_tokens=16384, task_tokens=65536))
     with budget_scope(budget):
         events = list(runtime.stream_events({"messages":[HumanMessage(

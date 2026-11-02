@@ -504,7 +504,7 @@
         0
       ],
       "agent/products/blog/confirmation.py": [
-        2,
+        0,
         0
       ],
       "agent/products/blog/context.py": [
@@ -631,11 +631,11 @@
         0,
         0
       ],
-      "agent/runtime/native.py": [
+      "agent/runtime/service.py": [
         0,
         0
       ],
-      "agent/runtime/native_store.py": [
+      "agent/runtime/checkpoint_conversations.py": [
         0,
         0
       ],
@@ -792,7 +792,7 @@
         0
       ],
       "agent/stickers.py": [
-        12,
+        24,
         0
       ],
       "agent/transport.py": [
@@ -874,10 +874,18 @@
       "agent/scheduling/checkpoints.py": [
         0,
         0
+      ],
+      "agent/proposals.py": [
+        2,
+        0
+      ],
+      "agent/composition.py": [
+        0,
+        0
       ]
     },
     "total": [
-      391,
+      403,
       33
     ]
   },
@@ -1192,16 +1200,6 @@
       "category": "system_data",
       "q": "_KIND_CN",
       "why": "周报/月报/年报的显示字"
-    },
-    {
-      "id": "agent/stickers.py::STICKER_NAMES",
-      "file": "agent/stickers.py",
-      "kind": "collection",
-      "name": "STICKER_NAMES",
-      "size": 12,
-      "category": "system_data",
-      "q": "STICKER_NAMES",
-      "why": "情绪贴纸名单（与人设/前端同源）"
     },
     {
       "id": "tools/site.py::_NAV_LABELS",

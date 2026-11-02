@@ -15,11 +15,12 @@ from agent.api.context import build_messages
 from agent.api.routes import chat as server
 from agent.api.schemas import ChatRequest
 from agent.principal import SOURCE_ASSERTION, Principal
+from agent.products.blog.application import BlogApplication
 from agent.products.blog.prompt import build_prompt
 from agent.runtime.budget import BudgetLimits
-from agent.runtime.native import NativeRuntime
-from agent.runtime.native_store import NativeConversationStore
+from agent.runtime.checkpoint_conversations import CheckpointConversationStore
 from agent.runtime.prompt_budget import fit_history
+from agent.runtime.service import AgentRuntime
 
 ACTOR = Principal(7, "user", SOURCE_ASSERTION)
 
@@ -93,13 +94,15 @@ def test_current_facts_preserve_latest_exchange_and_do_not_survive_checkpoint_re
             requests.append(deepcopy(prompt))
             yield AIMessageChunk(content="收到。")
 
-    store = NativeConversationStore(InMemorySaver())
+    store = CheckpointConversationStore(InMemorySaver())
     catalog = SimpleNamespace(initial_tools=lambda _: {}, domains=lambda *_: {})
     config = {"configurable": {"thread_id": "conv_42", "user_id": 7,
                                 "conversation_id": 42, "principal": ACTOR}}
     for marker in ("FIRST_TIME_CANARY", "SECOND_TIME_CANARY"):
         monkeypatch.setattr(host_context, "format_local_now", lambda: marker)
-        runtime = NativeRuntime(store, catalog=catalog, model_factory=lambda **_: Model())
+        runtime = AgentRuntime(
+            store, application=BlogApplication(catalog), model_factory=lambda **_: Model()
+        )
         incoming = build_messages(ChatRequest(message="继续", chat_quota={"remaining": 3}),
                                   holds_context=True)
         list(runtime.stream_events({"messages": incoming}, config))

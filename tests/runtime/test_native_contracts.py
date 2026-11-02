@@ -27,7 +27,7 @@ def test_confirmed_write_evaluates_continuation_and_replay_without_another_write
         def invoke(self, prompt, **kwargs):
             return next(responses)
 
-    monkeypatch.setattr("agent.runtime.native.get_llm", lambda **_: Model())
+    monkeypatch.setattr("agent.runtime.service.get_llm", lambda **_: Model())
     monkeypatch.setattr(golden_trace, "trace_root", lambda: str(tmp_path / "traces"))
     report = native_contracts.run(["favorite_confirm"])
     row = report["cases"][0]
@@ -83,7 +83,7 @@ def test_article_discovery_counts_actual_native_tool_calls(monkeypatch, tmp_path
         def invoke(self, prompt, **kwargs):
             return next(responses)
 
-    monkeypatch.setattr("agent.runtime.native.get_llm", lambda **_: Model())
+    monkeypatch.setattr("agent.runtime.service.get_llm", lambda **_: Model())
     monkeypatch.setattr(golden_trace, "trace_root", lambda: str(tmp_path / "traces"))
     report = native_contracts.run(["article_discovery"])
     assert report["cases"][0]["passed"], report["cases"]
@@ -135,7 +135,7 @@ def test_admin_compound_task_preserves_approval_stages_and_final_business_state(
         def invoke(self, prompt, **kwargs):
             return next(remaining)
 
-    monkeypatch.setattr("agent.runtime.native.get_llm", lambda **_: Model())
+    monkeypatch.setattr("agent.runtime.service.get_llm", lambda **_: Model())
     monkeypatch.setattr(golden_trace, "trace_root", lambda: str(tmp_path / "traces"))
     report = native_contracts.run(["notice_role_cancel" if cancel else "notice_then_role"])
     row = report["cases"][0]
@@ -180,7 +180,7 @@ def test_native_outcome_suite_uses_verified_identity_and_redacts_tokens(monkeypa
         def invoke(self, prompt, **kwargs):
             return next(responses)
 
-    monkeypatch.setattr("agent.runtime.native.get_llm", lambda **_: Model())
+    monkeypatch.setattr("agent.runtime.service.get_llm", lambda **_: Model())
     monkeypatch.setattr(golden_trace, "trace_root", lambda: str(tmp_path / "traces"))
     monkeypatch.delenv(golden_trace.ENV_OFF, raising=False)
     report = native_contracts.run(["chat", "favorite_cancel", "notification_replay",
@@ -233,7 +233,7 @@ def test_navigation_samples_keep_failed_attempts_and_real_effects(monkeypatch, t
             return next(responses).model_copy(update={"usage_metadata": {
                 "input_tokens": 100, "output_tokens": 10, "total_tokens": 110}})
 
-    monkeypatch.setattr("agent.runtime.native.get_llm", lambda **_: Model())
+    monkeypatch.setattr("agent.runtime.service.get_llm", lambda **_: Model())
     monkeypatch.setattr(golden_trace, "trace_root", lambda: str(tmp_path / "traces"))
     monkeypatch.delenv(golden_trace.ENV_OFF, raising=False)
     report = native_contracts.run([case[0] for case in native_contracts.navigation_contracts.CASES],
@@ -287,7 +287,7 @@ def test_unsupported_fixture_read_is_not_a_model_quality_score(monkeypatch, tmp_
         def invoke(self, prompt, **kwargs):
             return next(responses)
 
-    monkeypatch.setattr("agent.runtime.native.get_llm", lambda **_: Model())
+    monkeypatch.setattr("agent.runtime.service.get_llm", lambda **_: Model())
     monkeypatch.setattr(golden_trace, "trace_root", lambda: str(tmp_path / "traces"))
     monkeypatch.delenv(golden_trace.ENV_OFF, raising=False)
     report = native_contracts.run(["navigation_direct"])

@@ -12,7 +12,10 @@ from langgraph.checkpoint.memory import InMemorySaver
 from agent.api.schemas import ChatRequest
 from agent.domains import conversation_images
 from agent.principal import SOURCE_ASSERTION, SOURCE_BODY, Principal
-from agent.runtime import memory, native, native_store, session
+from agent.products.blog.application import BlogApplication
+from agent.runtime import checkpoint_conversations as native_store
+from agent.runtime import memory, session
+from agent.runtime import service as native
 from agent.runtime.control import AgentCancelled
 from agent.runtime.memory_media import image_id, image_urls
 from agent.runtime.results import TurnResult
@@ -289,9 +292,13 @@ def test_current_image_wire_keeps_question_before_original_attachments(count, pe
     req = ChatRequest(message="这些图片是什么颜色", image=urls)
     saver = InMemorySaver() if persistent else None
     with model_replies({"content":"已看到图片。"}) as (model, requests):
-        selected = native.NativeRuntime(native_store.NativeConversationStore(saver),
-            catalog=SimpleNamespace(initial_tools=lambda _: {}, domains=lambda *_:{}),
-            model_factory=lambda **_:model)
+        selected = native.AgentRuntime(
+            native_store.CheckpointConversationStore(saver),
+            application=BlogApplication(
+                SimpleNamespace(initial_tools=lambda _: {}, domains=lambda *_: {})
+            ),
+            model_factory=lambda **_: model,
+        )
         events = list(selected.stream_events({"messages":build_messages(req)}, config()))
         assert events[-1].reply == "已看到图片。"
     assert len(requests) == 1

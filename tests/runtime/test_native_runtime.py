@@ -15,12 +15,13 @@ from langgraph.checkpoint.memory import InMemorySaver
 from agent import confirm
 from agent.domains.favorites import preparation
 from agent.principal import SOURCE_ASSERTION, Principal
+from agent.products.blog.application import BlogApplication
 from agent.products.blog.confirmation import cancel, confirmed_runtime
 from agent.runtime import writes
 from agent.runtime.budget import BudgetLimits, TaskBudget, budget_scope
-from agent.runtime.native import NativeRuntime
-from agent.runtime.native_store import NativeConversationStore
+from agent.runtime.checkpoint_conversations import CheckpointConversationStore
 from agent.runtime.results import TurnResult
+from agent.runtime.service import AgentRuntime
 from agent.runtime.turns import AgentCancelled
 
 
@@ -46,8 +47,11 @@ class Model:
 
 
 def runtime(model, saver=None):
-    return NativeRuntime(NativeConversationStore(saver or InMemorySaver()),
-                         model_factory=lambda **_: model)
+    return AgentRuntime(
+        CheckpointConversationStore(saver or InMemorySaver()),
+        application=BlogApplication(),
+        model_factory=lambda **_: model,
+    )
 
 
 def run(selected, text="你好", **values):
@@ -150,8 +154,8 @@ def waiting(site, monkeypatch, tmp_path, request):
             "name": "prepare_favorite_change", "args": {"action": "add", "article_id": 19},
             "id": "prepare"}]))
     proposal = run(runtime(model, saver), "收藏文章19")[-1]
-    store = NativeConversationStore(saver)
-    monkeypatch.setattr("agent.runtime.native.get_llm", lambda **_: Model())
+    store = CheckpointConversationStore(saver)
+    monkeypatch.setattr("agent.runtime.service.get_llm", lambda **_: Model())
     grant = confirm.verify(proposal.execution["pending_confirm"]["token"], 7, 42)
     yield store, proposal, grant, ledger
     ledger.close()
@@ -161,7 +165,7 @@ def test_pending_survives_restart_and_confirmation_replays_once(waiting, site):
     store, proposal, grant, _ = waiting
     model = Model()
     assert store.load(config()).has_pending
-    rebuilt = NativeRuntime(NativeConversationStore(store.saver),
+    rebuilt = AgentRuntime(CheckpointConversationStore(store.saver), application=BlogApplication(),
                             model_factory=lambda **_: model)
     assert confirmed_runtime(rebuilt, grant) is rebuilt
     for _ in range(2):
@@ -182,7 +186,7 @@ def test_confirmed_agent_reply_follows_execution_and_keeps_independent_facts(wai
             yield from super().stream(*args, **kwargs)
 
     model = AfterWrite(AIMessageChunk(content="收藏好啦，之后可以在收藏夹找到它喵～"))
-    selected = NativeRuntime(store, model_factory=lambda **_: model)
+    selected = AgentRuntime(store, application=BlogApplication(), model_factory=lambda **_: model)
     first = list(selected.stream_events({"confirm_grant": grant}, config()))[-1]
     replay = list(selected.stream_events({"confirm_grant": grant}, config()))[-1]
     assert first.reply == "收藏好啦，之后可以在收藏夹找到它喵～"
@@ -202,7 +206,7 @@ def test_unknown_write_result_is_not_retried_and_releases_the_old_card(waiting, 
     name, args = writes_tool(grant)
     ledger.claim(writes.operation_key(grant, name, args), name, grant["jti"])
     model = Model(AIMessageChunk(content="结果尚未核实，不能重复执行。"))
-    selected = NativeRuntime(store, model_factory=lambda **_: model)
+    selected = AgentRuntime(store, application=BlogApplication(), model_factory=lambda **_: model)
     for _ in range(2):
         events = list(selected.stream_events({"confirm_grant": grant}, config()))
         assert events[-1].execution["receipts"] == []
@@ -219,7 +223,7 @@ def writes_tool(grant):
 
 def test_replay_of_earlier_success_preserves_newer_pending_card(waiting, site):
     store, _, grant, _ = waiting
-    selected = NativeRuntime(store)
+    selected = AgentRuntime(store, application=BlogApplication())
     list(selected.stream_events({"confirm_grant": grant}, config()))
     newer = preparation.prepare_favorite_change.invoke(
         {"action": "remove", "article_id": 19}, config=config())
@@ -233,7 +237,7 @@ def test_replay_of_earlier_success_preserves_newer_pending_card(waiting, site):
 
 def test_cancel_uses_native_store_and_prevents_later_write(waiting, site):
     store, _, grant, _ = waiting
-    selected = NativeRuntime(store)
+    selected = AgentRuntime(store, application=BlogApplication())
     assert cancel(selected, grant, config())["cancelled"]
     assert not store.load(config()).has_pending
     events = list(selected.stream_events({"confirm_grant": grant}, config()))
@@ -242,11 +246,13 @@ def test_cancel_uses_native_store_and_prevents_later_write(waiting, site):
 
 
 def test_native_factory_does_not_import_or_construct_legacy_graph():
-    code = ("import sys; from contextlib import ExitStack; from agent.runtime.native import build; "
-            "resources=ExitStack(); runtime=build(resources=resources); "
-            "assert not runtime.store.available; resources.close(); "
-            "assert 'agent.graph' not in sys.modules; "
-            "assert 'agent.agent' not in sys.modules")
+    code = (
+        "import sys; from contextlib import ExitStack; from agent.composition import build; "
+        "resources=ExitStack(); runtime=build(resources=resources); "
+        "assert not runtime.store.available; resources.close(); "
+        "assert 'agent.graph' not in sys.modules; "
+        "assert 'agent.agent' not in sys.modules"
+    )
     result = subprocess.run([sys.executable, "-c", code],
                             capture_output=True, text=True, timeout=30)
     assert result.returncode == 0, result.stderr

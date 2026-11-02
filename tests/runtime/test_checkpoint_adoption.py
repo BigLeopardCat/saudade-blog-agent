@@ -15,8 +15,9 @@ from agent import checkpoint
 from agent.api import lifecycle
 from agent.api.routes import chat as server
 from agent.api.schemas import ChatRequest, HistoryItem
-from agent.runtime.native import NativeRuntime
-from agent.runtime.native_store import NativeConversationStore
+from agent.products.blog.application import BlogApplication
+from agent.runtime.checkpoint_conversations import CheckpointConversationStore
+from agent.runtime.service import AgentRuntime
 
 
 @pytest.mark.parametrize("saver", [None, InMemorySaver()])
@@ -24,7 +25,7 @@ def test_default_factory_attaches_the_selected_saver(monkeypatch, saver):
     monkeypatch.setattr(checkpoint, "build_checkpointer", lambda **kwargs: saver)
     with ExitStack() as resources:
         runtime = lifecycle.build_runtime(resources)
-    assert isinstance(runtime, NativeRuntime)
+    assert isinstance(runtime, AgentRuntime)
     assert checkpoint.live_saver(runtime) is saver
     assert runtime.store.available is (saver is not None)
     assert not runtime.store.is_resuming(config())
@@ -44,8 +45,11 @@ def test_http_and_sse_share_history_without_duplicates(monkeypatch, persistent):
             prompts.append(list(prompt))
             yield AIMessageChunk(content=f"答复{len(prompts)}")
 
-    runtime = NativeRuntime(NativeConversationStore(InMemorySaver() if persistent else None),
-                            model_factory=lambda **_: Model())
+    runtime = AgentRuntime(
+        CheckpointConversationStore(InMemorySaver() if persistent else None),
+        application=BlogApplication(),
+        model_factory=lambda **_: Model(),
+    )
     monkeypatch.setattr(app.state, "runtime", runtime)
     monkeypatch.setattr(server, "_resolve_principal", lambda request, uid: config()[
         "configurable"]["principal"])

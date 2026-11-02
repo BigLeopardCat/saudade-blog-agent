@@ -11,11 +11,12 @@ from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
 from agent.api.routes import chat as server
 from agent.api.schemas import ChatRequest
 from agent.principal import SOURCE_ASSERTION, SOURCE_BODY, Principal
+from agent.products.blog.application import BlogApplication
 from agent.products.blog.capabilities import ToolCatalog
 from agent.products.blog.prompt import build_prompt as _input
 from agent.runtime import memory
-from agent.runtime.native import NativeRuntime
-from agent.runtime.native_store import NativeConversationStore
+from agent.runtime.checkpoint_conversations import CheckpointConversationStore
+from agent.runtime.service import AgentRuntime
 from tools import base
 
 
@@ -113,12 +114,15 @@ def test_real_native_loop_persists_source_observations_across_followup_and_reloa
     config = {"configurable": {"thread_id": "memory-followup", "conversation_id": 8,
                                "user_id": 7, "principal": actor()}}
     catalog = ToolCatalog(read_tools={"search_notes": Search()})
-    runtime = NativeRuntime(NativeConversationStore(saver), catalog=catalog,
+    runtime = AgentRuntime(CheckpointConversationStore(saver), application=BlogApplication(catalog),
                             model_factory=lambda **_: model)
     for message in ("找一下架构文档", "好的"):
         list(runtime.stream_events({"messages": [HumanMessage(content=message)]}, config))
-    reloaded = NativeRuntime(NativeConversationStore(saver), catalog=catalog,
-                             model_factory=lambda **_: model)
+    reloaded = AgentRuntime(
+        CheckpointConversationStore(saver),
+        application=BlogApplication(catalog),
+        model_factory=lambda **_: model,
+    )
     list(reloaded.stream_events(
         {"messages": [HumanMessage(content="刚才那篇编号是多少？")]}, config))
     tools = [m for m in model.prompts[-1] if isinstance(m, ToolMessage)]

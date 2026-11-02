@@ -10,9 +10,10 @@ from langchain_core.tools import tool
 from langgraph.checkpoint.memory import InMemorySaver
 
 from agent.principal import SOURCE_ASSERTION, Principal
+from agent.products.blog.application import BlogApplication
 from agent.products.blog.capabilities import ToolCatalog
-from agent.runtime.native import NativeRuntime
-from agent.runtime.native_store import NativeConversationStore
+from agent.runtime.checkpoint_conversations import CheckpointConversationStore
+from agent.runtime.service import AgentRuntime
 from agent.runtime.task_inputs import InputConflict, TaskInputEvent, binding
 
 
@@ -23,8 +24,8 @@ def config():
 
 
 def runtime(model, tools=(), saver=None):
-    return NativeRuntime(NativeConversationStore(saver or InMemorySaver()),
-        catalog=ToolCatalog(read_tools={item.name: item for item in tools}),
+    return AgentRuntime(CheckpointConversationStore(saver or InMemorySaver()),
+        application=BlogApplication(ToolCatalog(read_tools={item.name: item for item in tools})),
         model_factory=lambda **_: model)
 
 
@@ -215,8 +216,11 @@ def test_chat_only_role_can_steer_without_gaining_tools():
         return AIMessage(content="原回答")
 
     model = Model(first, AIMessage(content="好呀，我们慢慢聊。"))
-    selected = NativeRuntime(NativeConversationStore(InMemorySaver()),
-                             model_factory=lambda **_: model)
+    selected = AgentRuntime(
+        CheckpointConversationStore(InMemorySaver()),
+        application=BlogApplication(),
+        model_factory=lambda **_: model,
+    )
     events = list(selected.stream_events({"task_id":"same-task", "messages":[
         HumanMessage(content="聊聊天")]}, cfg))
     assert "慢慢聊" in events[-1].reply

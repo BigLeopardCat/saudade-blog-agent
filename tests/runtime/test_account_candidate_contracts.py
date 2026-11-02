@@ -19,7 +19,7 @@ def run(monkeypatch, tmp_path, case, *responses):
         def invoke(self, prompt, **kwargs):
             return next(remaining)
 
-    monkeypatch.setattr("agent.runtime.native.get_llm", lambda **_: Model())
+    monkeypatch.setattr("agent.runtime.service.get_llm", lambda **_: Model())
     monkeypatch.setattr(native_contracts.golden_trace, "trace_root", lambda: str(tmp_path))
     return native_contracts.run([case])["cases"][0]
 

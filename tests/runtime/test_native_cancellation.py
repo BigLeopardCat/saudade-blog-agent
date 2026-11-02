@@ -8,9 +8,10 @@ from langchain_core.tools import StructuredTool
 from langgraph.checkpoint.memory import InMemorySaver
 
 from agent.principal import SOURCE_ASSERTION, Principal
+from agent.products.blog.application import BlogApplication
 from agent.products.blog.capabilities import ToolCatalog
-from agent.runtime.native import NativeRuntime
-from agent.runtime.native_store import NativeConversationStore
+from agent.runtime.checkpoint_conversations import CheckpointConversationStore
+from agent.runtime.service import AgentRuntime
 from agent.runtime.turns import AgentCancelled
 
 
@@ -49,8 +50,11 @@ class Tool:
 
 def runtime(model, tools):
     catalog = ToolCatalog(read_tools={tool.name: tool.tool for tool in tools})
-    return NativeRuntime(NativeConversationStore(InMemorySaver()), catalog=catalog,
-                         model_factory=lambda **_: model)
+    return AgentRuntime(
+        CheckpointConversationStore(InMemorySaver()),
+        application=BlogApplication(catalog),
+        model_factory=lambda **_: model,
+    )
 
 
 def test_cancel_at_entry_never_calls_model():

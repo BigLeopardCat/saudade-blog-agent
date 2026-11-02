@@ -10,11 +10,12 @@ from langchain_core.messages import AIMessage, HumanMessage
 
 from agent import authz
 from agent.principal import SOURCE_ASSERTION, SOURCE_BODY, Principal
+from agent.products.blog.application import BlogApplication
 from agent.products.blog.capabilities import ToolCatalog
 from agent.products.blog.read_tools import ADMIN_READ_TOOLS, MODERATION_READ_TOOLS, admin_tools
 from agent.products.blog.tool_policy import BlogToolMiddleware
-from agent.runtime.native import NativeRuntime
-from agent.runtime.native_store import NativeConversationStore
+from agent.runtime.checkpoint_conversations import CheckpointConversationStore
+from agent.runtime.service import AgentRuntime
 from agent.runtime.session import ToolSession
 from tools import base
 
@@ -110,9 +111,9 @@ def test_native_admin_read_loads_only_requested_domain_and_never_calls_legacy(mo
                    AIMessage(content="CPU 17%，内存 36%。")])
     tool = LocalTool()
     cfg = config(user_id=7)
-    runtime = NativeRuntime(
-        NativeConversationStore(None),
-        catalog=ToolCatalog(admin_read_tools={tool.name: tool}),
+    runtime = AgentRuntime(
+        CheckpointConversationStore(None),
+        application=BlogApplication(ToolCatalog(admin_read_tools={tool.name: tool})),
         model_factory=lambda **_: model,
     )
     events = list(runtime.stream_events(

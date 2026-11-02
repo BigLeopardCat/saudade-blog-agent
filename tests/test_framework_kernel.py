@@ -17,11 +17,12 @@ from agent import confirm
 from agent.domains.catalog import list_accounts
 from agent.domains.notices.preparation import prepare_user_notice
 from agent.principal import SOURCE_ASSERTION, Principal
+from agent.products.blog.application import BlogApplication
 from agent.runtime import writes
 from agent.runtime.budget import BudgetExceeded, BudgetLimits, TaskBudget
+from agent.runtime.checkpoint_conversations import CheckpointConversationStore
 from agent.runtime.model_budget import ModelBudgetHandler, ToolBudgetHandler
-from agent.runtime.native import NativeRuntime
-from agent.runtime.native_store import NativeConversationStore
+from agent.runtime.service import AgentRuntime
 from agent.runtime.session import ToolSession
 from eval.admin_task_fixture import backend
 
@@ -91,8 +92,11 @@ def test_existing_runtime_preserves_sequential_preparation_and_approval_on_the_s
             {"content": "请确认第一条通知。"},
             {"content": "请确认第二条通知。"},
             {"content": "两条通知都发好啦。"}) as (model, requests):
-        runtime = NativeRuntime(NativeConversationStore(InMemorySaver()), catalog=catalog,
-                                model_factory=lambda **_: model)
+        runtime = AgentRuntime(
+            CheckpointConversationStore(InMemorySaver()),
+            application=BlogApplication(catalog),
+            model_factory=lambda **_: model,
+        )
         first = list(runtime.stream_events(
             {"messages": [HumanMessage(content="给青叶分别发送两条通知。") ]}, cfg))[-1]
         assert first.execution["pending_confirm"] and not business["writes"]

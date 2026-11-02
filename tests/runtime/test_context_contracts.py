@@ -16,7 +16,7 @@ def test_default_user_address_is_part_of_chat_acceptance(monkeypatch, tmp_path, 
         def invoke(self, prompt, **kwargs):
             return AIMessage(content=reply)
 
-    monkeypatch.setattr("agent.runtime.native.get_llm", lambda **_: Model())
+    monkeypatch.setattr("agent.runtime.service.get_llm", lambda **_: Model())
     monkeypatch.setattr(native_contracts.golden_trace, "trace_root",
                         lambda: str(tmp_path / "traces"))
     result = native_contracts.run(["chat"])["cases"][0]
@@ -48,7 +48,7 @@ def test_short_reply_contract_verifies_target_and_reuse(monkeypatch, tmp_path, f
         def invoke(self, prompt, **kwargs):
             return next(remaining)
 
-    monkeypatch.setattr("agent.runtime.native.get_llm", lambda **_: Model())
+    monkeypatch.setattr("agent.runtime.service.get_llm", lambda **_: Model())
     monkeypatch.setattr(native_contracts.golden_trace, "trace_root",
                         lambda: str(tmp_path / "traces"))
     result = native_contracts.run(["mailbox_short_followup"])["cases"][0]

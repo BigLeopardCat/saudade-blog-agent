@@ -11,9 +11,9 @@ from agent import checkpoint
 from agent.products.blog.application import BlogApplication
 from agent.products.blog.catalog import initial_tools
 from agent.runtime.budget import BudgetLimits, TaskBudget
+from agent.runtime.checkpoint_conversations import CheckpointConversationStore
 from agent.runtime.control import RequestControl, request_scope
-from agent.runtime.native import NativeRuntime
-from agent.runtime.native_store import NativeConversationStore
+from agent.runtime.service import AgentRuntime
 from agent.runtime.task_scope import background_thread
 from config.settings import settings
 from models.llm import get_llm
@@ -49,8 +49,8 @@ class ReadOnlyRunner:
         )
         if saver is None:
             raise RuntimeError("scheduled Agent tasks require persistent checkpoints")
-        self.runtime = NativeRuntime(
-            NativeConversationStore(saver),
+        self.runtime = AgentRuntime(
+            CheckpointConversationStore(saver),
             application=ReadOnlyBlogApplication(),
             model_factory=lambda **options: get_llm(**{**options, "max_tokens": 1000}),
             model_io=resources.enter_context(ModelIO()),
