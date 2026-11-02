@@ -13,6 +13,7 @@ from rag import vector_index as vectors
 from rag.chunks import MAX_CHARS
 from rag.corpus import CorpusUnavailable, content_revision, corpus_revision, fetch
 from rag.reading import RevisionChanged, article_page
+from rag.sections import reading_revision
 from tools.result import unavailable
 
 
@@ -294,7 +295,7 @@ def test_authoritative_mismatch_is_not_lost_during_an_inflight_build(monkeypatch
     worker = threading.Thread(target=ix.build)
     worker.start()
     assert entered.wait(2)
-    retrieval.invalidate_document(1, original[0]["revision"])
+    retrieval.invalidate_document(1, reading_revision(original[0]["title"], original[0]["content"]))
     release.set()
     worker.join(2)
     assert ix.status()["stale"] and not worker.is_alive()

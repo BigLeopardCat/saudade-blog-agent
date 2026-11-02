@@ -153,7 +153,7 @@ def rrf_fuse(lex: list[dict], vec: list[dict], k: int, top_k: int) -> list[dict]
         retrievers=[retriever_for(rows) for rows in ranked_documents],
         weights=[0.5, 0.5], c=k, id_key="identity",
     )
-    fused = ensemble.weighted_reciprocal_rank(ranked_documents)
+    fused = ensemble.invoke("")
     out = []
     for rank, document in enumerate(fused[:max(1, top_k)], 1):
         row = dict(info[document.metadata["identity"]], rank=rank)
