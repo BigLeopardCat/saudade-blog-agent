@@ -355,7 +355,8 @@ def _test_golden_runs_raise_the_trace_limit():
         check("env 是**全局**覆盖：非正文工具也按它留（评测轮的语义）",
               t("x" * 9000, "list_guestbook") == "x" * 8000 + trace_mod.truncation_mark(9000))
         _os.environ[trace_mod.TOOL_RESULT_LIMIT_ENV] = "0"
-        check("0 = 不截断（语义明写：≤0 全文）", t("x" * 30000, "get_article_detail") == "x" * 30000)
+        check("0 = 不截断（语义明写：≤0 全文）",
+              t("x" * 30000, "get_article_detail") == "x" * 30000)
         _os.environ[trace_mod.TOOL_RESULT_LIMIT_ENV] = "八千"
         check("值写坏了退回分档（不是悄悄放开，也不是悄悄砍到 200）",
               t("x" * 30000, "get_article_detail")
