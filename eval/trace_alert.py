@@ -35,10 +35,11 @@ from datetime import datetime, timedelta
 # trace 文件枚举的唯一实现（20260925：生产 trace 改按天分目录，四个读取端共用一处，
 # 免得"改了布局漏改一个脚本"= 那天它少看一半数据）。只吃路径参数、不依赖应用配置。
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from config.settings import settings  # noqa: E402
 from utils.trace_files import iter_trace_files, parse_trace_name  # noqa: E402
 from utils.trace_io import load_trace  # noqa: E402  （读取的唯一实现，含 gz）
 
-TRACE_DIR = "/home/ubuntu/Saudade-Blog/logs/agent/traces"
+TRACE_DIR = settings.trace_dir
 
 # R1 用户侧：质疑/纠错信号（单独的「？」「？？？」是 9/8 现场的原始形态；
 # 「老是」等抱怨词收进——「你老是读什么 git」需要触发）
@@ -328,6 +329,8 @@ def _print_fastpath(rows: list, dials: dict, scanned: int, seq: dict) -> None:
 
 def main():
     ap = argparse.ArgumentParser()
+    ap.add_argument("--dir", default=TRACE_DIR,
+                    help="Trace root; defaults to TRACE_DIR configuration")
     ap.add_argument("--days", type=int, default=7, help="近 N 天（默认 7；给定 --from 时忽略）")
     ap.add_argument("--from", dest="since", default="", help="起点日期 20260908")
     ap.add_argument("--to", dest="until", default="99999999", help="终点 20260908T235959")
@@ -344,7 +347,7 @@ def main():
     r5, dials, seq = [], defaultdict(int), defaultdict(list)
     # R6（20261015 批 3）：短应答自我申报行（`planner.reply_kind`）。
     r6: list = []
-    files = iter_trace_files(TRACE_DIR)
+    files = iter_trace_files(args.dir)
     for f in files:
         stamp, uid_s = parse_trace_name(f)
         if not stamp or not (since <= stamp <= until):

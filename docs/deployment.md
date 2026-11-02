@@ -16,5 +16,21 @@ scripts/deploy_release.sh COMMIT_SHA /srv/saudade-agent /etc/saudade/agent.env /
 
 公开 PR CI 不使用生产配置或凭据。部署应在该提交的必需检查通过后执行；发布探活不代替真实模型回归。需要数据库迁移的变更须单独核对前置条件，脚本不自动执行数据迁移。
 
+Trace 默认写入应用工作目录的 `data/traces`，该目录不进入 Git。生产可在私有配置中显式设置
+`TRACE_DIR=/var/lib/saudade-agent/traces`，使日志位置独立于版本目录。保留治理与活跃 metrics、
+告警、草稿及对账 CLI 使用同一配置默认根；显式 `--dir`（对账为 `--trace-dir`）优先。
+保留治理默认只列清单，确认后才加 `--apply`。已有部署升级前应将原 trace 位置显式登记为
+`TRACE_DIR`，不会自动搬迁文件。
+
+`BLOG_ROOT` 是可选的本地博客部署根；设置后，服务健康工具读取其中的 `logs/health.log`
+及日志体积。独立部署没有博客文件时留空，报表如实显示读不到宿主日志；不推测 Agent
+release 目录的父级就是博客。Trace 统计始终使用 `TRACE_DIR`，与 `BLOG_ROOT` 解耦。
+跨源对账需要宿主日志；未设置 `BLOG_ROOT` 时应显式传入 `--log-dir`、`--monitor-dir`，
+否则 CLI 报前置条件缺失，不将缺失数据计为零异常。
+
+可选 nightly 的父仓探针使用 `SAUDADE_PARENT_REPO`，其次使用既有 `PROJECT_DIR`，未设时按
+源码 checkout 的相邻父仓布局解析。父仓探针不存在时显式记录 `SKIP / 未评估`，不计为通过。
+这项源码测试坐标不作为生产宿主日志配置。
+
 启用[管理员后台计划](scheduling.md)后，安装独立 scheduler 单元，发布时设置
 `DEPLOY_SCHEDULER=1`。脚本将一并重启和回滚 Worker，未启用该选项的部署行为不变。

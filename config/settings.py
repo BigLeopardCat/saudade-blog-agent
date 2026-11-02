@@ -180,10 +180,10 @@ class Settings(BaseSettings):
     # ── Logging ─────────────────────────────────────────────────────
     log_level: str = "INFO"
 
-    # ── Tracing（对话执行 trace 落盘，见 utils/trace.py）──────────────
-    # 每请求一份 JSON（输入/节点事件序列/分段耗时/回复/退出原因）；
-    # 与项目 logs/ 目录对齐（日志体系规范见 CLAUDE.md §2），logrotate 轮转
-    trace_dir: str = "/home/ubuntu/Saudade-Blog/logs/agent/traces"
+    # Relative storage follows the application's working directory; deployments may override it.
+    trace_dir: str = "data/traces"
+    # Optional local blog checkout/deployment for host log diagnostics, never inferred from parents.
+    blog_root: str = ""
     # Optional PostgreSQL conversation persistence. Empty disables persistence;
     # invalid configuration aborts startup without an in-memory fallback.
     # Use a separate database: framework setup manages its own schema.
