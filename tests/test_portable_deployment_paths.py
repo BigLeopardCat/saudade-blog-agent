@@ -127,7 +127,8 @@ def test_nightly_probe_uses_selected_host_checkout_and_missing_is_unassessed(tmp
         (selected / "scripts").mkdir(exist_ok=True, parents=True)
         (selected / "scripts/probe_token_revoke.py").write_text("fixture only")
     values = {"HOME": str(home), "PATH": str(binary) + os.pathsep + os.environ["PATH"],
-              "PROBE_ARGUMENTS": str(probe_arguments)}
+              "PROBE_ARGUMENTS": str(probe_arguments),
+              "GOLDEN_ADMIN_UID": "123", "GOLDEN_USER_UID": "456"}
     if selection in {"project", "explicit"}:
         values["PROJECT_DIR"] = str(selected if selection == "project" else tmp_path / "wrong-host")
     if selection in {"explicit", "missing"}:
@@ -141,6 +142,6 @@ def test_nightly_probe_uses_selected_host_checkout_and_missing_is_unassessed(tmp
         assert not probe_arguments.exists()
     else:
         assert probe_arguments.read_text().splitlines() == [
-            str(selected / "scripts/probe_token_revoke.py"), "--admin-uid", "756",
+            str(selected / "scripts/probe_token_revoke.py"), "--admin-uid", "123",
             "--no-self-probe"]
     assert not (home / "agent_regression.failed").exists()
