@@ -140,7 +140,7 @@
     ['chat-render', '__waifuRender'],
     ['chat-engine', '__waifuEngine'],
     ['chat-protocol', '__waifuChatProtocol'],
-    ['chat-navigation', '__waifuNavigation'],
+    ['chat-browser-actions', '__waifuBrowserActions'],
     ['chat-steering', '__waifuSteering'],
     ['chat-approval', '__waifuApproval'],
     ['chat-stream', '__waifuStream'],

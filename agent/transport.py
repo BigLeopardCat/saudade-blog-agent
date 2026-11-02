@@ -43,6 +43,8 @@ def command_wire(command: dict) -> str:
         return f"EFFECT:{command['effect']}:{command.get('action', 'on')}"
     if kind == "darkmode" and command.get("mode"):
         return "DARKMODE:" + str(command["mode"])
+    if kind == "appearance" and command.get("settings"):
+        return "APPEARANCE:" + json.dumps(command["settings"], separators=(",", ":"))
     if kind:
         raise TransportProtocolError(f"unsupported receipt command kind: {kind}")
     raise TransportProtocolError("receipt command kind is missing")

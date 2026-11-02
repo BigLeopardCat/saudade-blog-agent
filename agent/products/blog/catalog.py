@@ -19,7 +19,7 @@ DOMAIN_DESCRIPTIONS = {
     "conversation_images": "Re-read a referenced conversation image when details are needed.",
     "own_activity": "读取本人河灯留言及审核状态，或当前会话聊天原文。",
     "admin_catalog": "后台文章分页查询（含草稿、私密）；准备单篇或整批状态、置顶确认，"
-                     "或文章标签增删替换（可同卡创建标签）。仅管理员。",
+                     "或文章标签增删替换（可同卡创建标签）；含发布状态的可见范围与保留规则。仅管理员。",
     "admin_notices": "按账号编号或完整账号名准备个人通知确认；需收件人和正文，"
                      f"标题默认「{DEFAULT_TITLE}」。仅管理员。",
     "admin_tags": "查询标签字典，准备新建、修改层级或字段、删除确认；"

@@ -82,7 +82,8 @@ def prepare_tag_create(
     parent_name: targets.TargetName | None = None,
 ) -> object:
     """准备新建标签确认，不写入。默认一级；填写一级父标签编号或完整名字则创建二级。
-    颜色可选#RRGGBB；这是标签字典管理，给文章加标签应使用文章标签工具。
+    颜色可选#RRGGBB；省略则保存为未设置，不继承父级颜色、不自动分配颜色。
+    这是标签字典管理，给文章加标签应使用文章标签工具。
     """
     parent = (
         _target(parent_id, parent_name, 1)
@@ -108,7 +109,7 @@ def prepare_tag_update(
     """准备改标签名字、颜色、父级或层级确认，不写入。编号必须同时给当前level(1/2)。
     或用完整原名，同名二级可用current_parent_id区分。仅填要改的字段，颜色空串清空。
     parent_id/parent_name指定一级父标签；to_level=1升为一级。带子标签的一级标签不能降级。
-    跨层移动保留文章引用，实际编号可能变化。
+    跨层移动保留文章引用，实际编号可能变化；同层改父级保留编号。
     """
     parent = (
         _target(parent_id, parent_name, 1)

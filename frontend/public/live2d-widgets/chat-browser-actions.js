@@ -1,9 +1,9 @@
-/* Navigate first; resume the persisted Agent task with the browser outcome. */
+/* Apply bounded browser actions, then resume the checkpoint with observed state. */
 (function (g) {
   'use strict';
-  g.__waifuNavigation = (ctx, engine, send) => {
-    const key = 'saudade-navigation-pending';
-    const seenKey = 'saudade-navigation-seen';
+  g.__waifuBrowserActions = (ctx, engine, send, applyAppearance) => {
+    const key = 'saudade-browser-action-pending';
+    const seenKey = 'saudade-browser-action-seen';
     let active = null;
     const actor = () => {
       try { return String(JSON.parse(atob(localStorage.getItem('tokenKey').split('.')[1]
@@ -12,6 +12,10 @@
     };
     const owns = pending => pending.actor === actor() && ctx.state.conv === pending.convId;
     const path = () => location.pathname + location.search + location.hash;
+    const settings = () => Object.fromEntries(['dark_mode', 'sakura', 'rain', 'snow'].flatMap(name => {
+      const value = name === 'dark_mode' ? g.__darkMode : g.__effectState?.[name];
+      return typeof value === 'boolean' ? [[name, value ? 'on' : 'off']] : [];
+    }));
     const store = value => { try { sessionStorage.setItem(key, JSON.stringify(value)); } catch (_) {} };
     const clear = () => { try { sessionStorage.removeItem(key); } catch (_) {} };
     const settle = async (pending, status, processFrom) => {
@@ -33,7 +37,8 @@
       const ok = await send({ silent: true, resumeTask: pending.task_id, convId: pending.convId,
         resumeText: pending.original || '', processFrom, previousProcess: pending.process || [],
         ...(status ? { browserResult: {
-          command_id: pending.command_id, status, path: path() } } : {}) });
+          command_id: pending.command_id, status, path: path(),
+          ...(pending.kind === 'appearance' ? { settings: settings() } : {}) } } : {}) });
       if (ok && processFrom?.dataset.clientAction === 'pending') processFrom.remove();
       if (!ok && owns(pending)) ctx.ui.notify?.('页面操作已结束，后续回复未完成，请继续原任务', 'error');
       if (active === pending) {
@@ -47,14 +52,22 @@
       const tick = () => {
         if (active !== pending || pending.settled) return;
         if (failed) { void settle(pending, 'failed', processFrom); return; }
-        if (navigationReady && path() === pending.path) { void settle(pending, 'completed', processFrom); return; }
+        const reached = pending.kind === 'appearance'
+          ? Object.entries(pending.settings).every(([name, mode]) => settings()[name] === mode)
+          : path() === pending.path;
+        if (navigationReady && reached) { void settle(pending, 'completed', processFrom); return; }
         if (Date.now() >= pending.deadline) { void settle(pending, 'timeout', processFrom); return; }
         setTimeout(tick, 40);
       };
       tick();
     };
     const receive = (command, context) => {
-      const url = new URL(command.url, location.href);
+      const appearance = command.kind === 'appearance';
+      if (!appearance && command.kind !== 'navigate') return false;
+      const values = Object.entries(command.settings || {});
+      if (appearance && (!values.length || !applyAppearance || !values.every(([name, mode]) =>
+        ['dark_mode', 'sakura', 'rain', 'snow'].includes(name) && ['on', 'off'].includes(mode)))) return false;
+      const url = new URL(appearance ? location.href : command.url, location.href);
       if (url.origin !== location.origin || !command.command_id || !command.task_id) return false;
       if (!actor() || ctx.state.conv !== context.convId
           || (ctx.state.activeRound?.taskId && ctx.state.activeRound.taskId !== command.task_id)) return false;
@@ -76,7 +89,8 @@
       sessionStorage.setItem('chat_open', '1');
       let ready = null;
       try {
-        if (path() !== pending.path) {
+        if (appearance) ready = applyAppearance(pending.settings);
+        else if (path() !== pending.path) {
           if (g.__spaNavigate?.(url.href)) ready = g.__spaNavigationComplete || null;
           else {
             sessionStorage.setItem('chat_nav_slide', '1');
