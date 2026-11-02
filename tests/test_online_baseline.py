@@ -44,7 +44,7 @@ def test_sse_text_stays_opaque_and_progress_is_separate(tmp_path, monkeypatch):
     assert set(result["request_evidence"]) == {"message", "request_id"}
 
 
-def test_http_revision_uses_only_reconciled_text_and_rejects_invalid_payloads(tmp_path, monkeypatch):
+def test_http_revision_reconciles_text_and_rejects_invalid_payloads(tmp_path, monkeypatch):
     adapter = transport(tmp_path, monkeypatch,
         'event: progress\ndata: "核对中"\n\nevent: text\ndata: "错误的成功声明"\n\n'
         'event: text_reset\ndata: {}\n\nevent: text\ndata: "尚未执行"\n\n'
