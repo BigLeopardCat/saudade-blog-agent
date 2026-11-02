@@ -208,3 +208,14 @@ def test_registry_import_order_resolves_to_one_tool(first):
     result = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True,
                             timeout=20)
     assert result.returncode == 0, result.stderr
+
+
+def test_global_unread_outside_full_window_does_not_break_window_reads(notifications):
+    notifications['items'] = rows(100)
+    notifications['hidden_unread'] = 7
+    result = json.loads(str(read()))
+    assert result['unreadInWindow'] == 66
+    assert result['unreadTotal'] == 73
+    assert result['windowComplete'] is False
+    assert len(result['items']) == 5
+    assert all(request.method == 'GET' for request in notifications['requests'])
