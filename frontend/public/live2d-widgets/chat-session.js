@@ -107,7 +107,11 @@
       if (delTimer) { clearTimeout(delTimer); delTimer = null; }
       if (convList) {
         for (const row of convList.children) {
-          if (row.classList) row.classList.remove('menu-open', 'del-confirm', 'renaming');
+          if (row.classList) {
+            row.classList.remove('menu-open', 'del-confirm', 'renaming');
+            const label = row.querySelector('.conv-delete-label');
+            if (label) label.textContent = '删除';
+          }
         }
       }
     };
@@ -182,15 +186,12 @@
       } catch(e) { return false; }
     };
 
-    // ── 删除两步确认（⋯ → 菜单删除 → 行变红色确认条 3s 过期还原；不用原生 confirm）
+    // Confirm at the original menu button; preserve its position and keyboard focus.
     const armDelete = (row) => {
-      row.classList.remove('menu-open');
       row.classList.add('del-confirm');
+      row.querySelector('.conv-delete-label').textContent = '确认删除';
       if (delTimer) clearTimeout(delTimer);
-      delTimer = setTimeout(() => {
-        delTimer = null;
-        if (row.parentNode) row.classList.remove('del-confirm');
-      }, 3000);
+      delTimer = setTimeout(clearMenuAll, 8000);
     };
     const doDelete = async (id) => {
       const tk = getToken();
@@ -373,41 +374,21 @@
           b.addEventListener('click', (e) => { e.stopPropagation(); fn(); });
           return b;
         };
-        menu.appendChild(mk('删除', ICON_DELETE, 'danger', () => armDelete(row)));
+        const deleteButton = mk('删除', ICON_DELETE, 'danger', () => {
+          if (row.classList.contains('del-confirm')) doDelete(c.id);
+          else armDelete(row);
+        });
+        deleteButton.querySelector('span').className = 'conv-delete-label';
+        menu.appendChild(deleteButton);
         menu.appendChild(mk(c.pinned ? '删除书签' : '加入书签', c.pinned ? ICON_UNPIN : ICON_PIN, '', () => togglePin(row, c)));
         menu.appendChild(mk('重命名', ICON_RENAME, '', () => startRename(row, c)));
         main.appendChild(t);
         main.appendChild(time);
         main.appendChild(more);
         main.appendChild(menu);
-        // 删除确认条（armDelete 后覆盖行内容，3s 过期还原；20260905 拆两半：
-        // 左 橘红「确定删除」= 真删；右 白「取消」= 还原（不再整条都是删））
-        const confirm = document.createElement('div');
-        confirm.className = 'conv-row-confirm';
-        const disarmRow = () => {
-          if (delTimer) { clearTimeout(delTimer); delTimer = null; }
-          row.classList.remove('del-confirm');
-        };
-        const btnDel = document.createElement('button');
-        btnDel.type = 'button';
-        btnDel.className = 'conv-confirm-del';
-        btnDel.textContent = '确定删除';
-        btnDel.addEventListener('click', (e) => {
-          e.stopPropagation();
-          doDelete(c.id); // doDelete 首步 clearMenuAll（清 timer + del-confirm）
-        });
-        const btnCancel = document.createElement('button');
-        btnCancel.type = 'button';
-        btnCancel.className = 'conv-confirm-cancel';
-        btnCancel.textContent = '取消';
-        btnCancel.addEventListener('click', (e) => {
-          e.stopPropagation();
-          disarmRow();
-        });
-        confirm.appendChild(btnDel);
-        confirm.appendChild(btnCancel);
+        const cancelDelete = mk('取消', '', 'conv-cancel-delete', clearMenuAll);
+        menu.appendChild(cancelDelete);
         row.appendChild(main);
-        row.appendChild(confirm);
         // ⋯：开/关菜单（点行空白/非列表区自动收起）。方向默认从行当前位置
         // 向下展开；仅当菜单会溢出列表下缘（被 conv-list-body overflow-y 裁切）
         // 才向上翻。判据按列表内容区折算：row.offsetTop 的基准是面板（含列表头
@@ -497,6 +478,7 @@
       titleEl = document.getElementById('chat-conv-title-tag');
       rail = document.getElementById('chat-rail');
       searchEl = document.getElementById('conv-search');
+      searchEl?.closest('form')?.addEventListener('submit', e => e.preventDefault());
       chatPanel.style.setProperty('--conv-w', convWidth + 'px');
       // rail 图标注入（文字兜底在注入前瞬间可见，可忽略）
       const icons = { 'conv-toggle-btn': ICON_SIDEBAR, 'conv-new-btn': ICON_NEW, 'conv-history-btn': ICON_HISTORY };

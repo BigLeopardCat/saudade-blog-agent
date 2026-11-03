@@ -3,7 +3,7 @@
 import time
 
 from agent import action_text, authz
-from agent.domains.todos import targets
+from agent.domains.todos import deletion, targets
 from agent.runtime import writes
 from agent.runtime.turns import check_cancelled
 from tools import base
@@ -13,6 +13,7 @@ _WORKFLOWS = {
     "dashboard_todo_add": "create_dashboard_todo",
     "dashboard_todo_done": "complete_dashboard_todo",
     "dashboard_todo_reschedule": "reschedule_dashboard_todo",
+    "dashboard_todo_delete": "delete_dashboard_todo",
 }
 
 
@@ -67,14 +68,13 @@ def _same(current, args):
 
 def _verified_state(name, args, before, written, after):
     actual = after.get(written["id"])
-    if actual is None or actual["text"] != args["text"]:
+    if actual is None or actual != written or actual["text"] != args["text"]:
         return None
     if name == "create_dashboard_todo":
         return (
             actual
             if (
-                actual["id"] not in before
-                and actual["done"] is False
+                actual["done"] is False
                 and actual["date"] == args["date"]
             )
             else None
@@ -92,13 +92,15 @@ class Operation:
         self.workflow, self.name = workflow, name
 
     def invoke(self, args, config=None):
-        rows, error = targets.snapshot(config)
+        if self.name == "delete_dashboard_todo":
+            return deletion.invoke(args, config)
+        create = self.name == "create_dashboard_todo"
+        rows, error = ({}, None) if create else targets.snapshot(config, args["item_id"])
         if error is not None:
             return error
-        create = self.name == "create_dashboard_todo"
         current = None if create else rows.get(args["item_id"])
-        if (create and len(rows) >= targets.MAX_ROWS) or (not create and not _same(current, args)):
-            return base.unavailable("已确认的待办已变化或列表已满，请重新读取并确认；本次未改动。")
+        if not create and not _same(current, args):
+            return base.unavailable("已确认的待办已变化，请重新读取并确认；本次未改动。")
         payload = {"text": args["text"]}
         if not create:
             payload.update(id=args["item_id"], version=args["version"])
@@ -116,7 +118,7 @@ class Operation:
             written = targets.row(out)
         except (ValueError, TypeError, KeyError):
             return base.unavailable("待办请求已发出，但返回目标无法核对；结果未知，请先查询状态。")
-        after, error = targets.snapshot(config)
+        after, error = targets.snapshot(config, written["id"])
         if error is not None:
             return base.unavailable("待办请求已发出，但未能读回列表；结果未知，请先查询状态。")
         actual = _verified_state(self.name, args, rows, written, after)
@@ -152,6 +154,8 @@ class Operation:
 
 
 def _receipt(grant, name, args, result):
+    if name == "delete_dashboard_todo":
+        return deletion.receipt(grant, args, result)
     meta = getattr(result, "meta", {}) or {}
     if (
         not isinstance(result, base.ToolResult)
