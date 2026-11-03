@@ -1,9 +1,9 @@
 """Assemble authorized administrator reads and confirmation preparation tools."""
 
 from functools import cache
-from agent.domains import article_editor
 
 from agent.authz import SCOPE_ADMIN_CONSOLE
+from agent.domains import article_editor
 from agent.domains.account_actions import preparation as accounts
 from agent.domains.admin_writes import available
 from agent.domains.announcements import preparation as announcements

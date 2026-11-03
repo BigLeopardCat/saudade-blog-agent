@@ -8,7 +8,6 @@ from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import tool
 
 from config import settings as _settings
-from tools.base import SITE_BASE
 from tools.result import fact, ok, tgt
 
 # Public exports; helper names stay private to their modules.
@@ -172,6 +171,8 @@ def navigate_to(
     if not nav_path_valid(p):
         return (f"导航路径无效: {p!r}。可用页面: {', '.join(sorted(_NAV_EXACT_PATHS))}，"
                 "以及 /article/<正整数编号>、/category/<分类名>；请从站点资料或真实链接核对。")
+    from tools.base import SITE_BASE
+
     full_url = f"{SITE_BASE.rstrip('/')}{p}"
     mode = "confirm" if confirm else "direct"
     if confirm:
