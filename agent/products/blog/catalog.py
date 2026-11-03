@@ -5,6 +5,9 @@ from agent.domains.account_actions.targets import Role
 from agent.domains.notices.targets import DEFAULT_TITLE
 
 DOMAIN_DESCRIPTIONS = {
+    "article_editor": "Collaborate on the currently OPEN article editor: read its live unsaved "
+                      "draft, propose exact body edits for red/green review and user acceptance, "
+                      "or directly create/replace the summary. Never publishes. Admin only.",
     "admin_automations": "Administrator-owned persistent reminders and read-only background tasks. "
                          "Create at a time, after a delay, or on cron; inspect runs and prepare "
                          "pause/resume/cancel. No unattended business writes or browser actions.",

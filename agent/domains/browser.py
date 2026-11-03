@@ -1,19 +1,16 @@
 """Native, reversible browser commands using the existing renderer protocol."""
 
-import hashlib
 import json
 import time
 from typing import Annotated, Literal
 
 from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import ToolException, tool
-from langgraph.types import interrupt
 from pydantic import Field, StrictStr
 
 from agent import action_text, authz
 from agent.runtime.access import scoped_reads_enabled
-from agent.runtime.client_actions import successful
-from agent.runtime.progress import current_emitter
+from agent.runtime.client_actions import await_result as _await_browser
 from tools import site
 
 Path = Annotated[StrictStr, Field(min_length=1, max_length=512)]
@@ -68,26 +65,6 @@ def _sent(command, receipts):
                               ensure_ascii=False), receipts)
 
 
-def _await_browser(command, config):
-    cfg = config["configurable"]
-    task_id = cfg["browser_task"]
-    identity = json.dumps([task_id, command], sort_keys=True, separators=(",", ":"))
-    command = {**command, "task_id": task_id,
-               "command_id": hashlib.sha256(identity.encode()).hexdigest()[:24],
-               "timeout_ms": 6000, "expires_at": time.time() + 60}
-    progress = current_emitter(config)
-    result = interrupt({"kind": "client_action", "command": command,
-                        "progress_keys": progress.emitted_keys if progress is not None else []})
-    if result.get("command_id") != command["command_id"]:
-        raise ToolException("Browser result does not match the pending action")
-    status = result.get("status")
-    if status == "completed" and not successful(command, result):
-        status = "failed"
-    if status not in {"completed", "failed", "timeout"}:
-        raise ToolException("Invalid browser outcome")
-    return {**result, "status": status}
-
-
 @tool(response_format="content_and_artifact")
 def navigate_page(path: Path, config: RunnableConfig) -> object:
     """Open a verified site path when the user asks to go there, including an article
@@ -106,7 +83,9 @@ def navigate_page(path: Path, config: RunnableConfig) -> object:
             "/article/<positive integer>, /category/<name>. "
             "Read get_site_map for page names or copy a source link."
         )
-    url = site.SITE_BASE.rstrip("/") + path
+    from tools.base import SITE_BASE
+
+    url = SITE_BASE.rstrip("/") + path
     command = {"kind": "navigate", "url": url, "mode": "direct"}
     cfg = (config or {}).get("configurable") or {}
     if cfg.get("browser_feedback") and cfg.get("browser_task"):

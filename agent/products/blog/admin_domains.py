@@ -3,6 +3,7 @@
 from functools import cache
 
 from agent.authz import SCOPE_ADMIN_CONSOLE
+from agent.domains import article_editor
 from agent.domains.account_actions import preparation as accounts
 from agent.domains.admin_writes import available
 from agent.domains.announcements import preparation as announcements
@@ -42,6 +43,9 @@ def domains(config, can_prepare, reads):
     if not scoped_reads_enabled(cfg.get("principal"), SCOPE_ADMIN_CONSOLE, cfg.get("user_id")):
         return {}
     selected = {name: dict(tools) for name, tools in reads.items()}
+    editor_tools = article_editor.tools(config)
+    if editor_tools:
+        selected["article_editor"] = editor_tools
     if can_prepare and available(config):
         for name, preparation in _PREPARATIONS:
             current = selected.setdefault(name, {})
