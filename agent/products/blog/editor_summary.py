@@ -52,12 +52,14 @@ class SummaryApprovalMiddleware(AgentMiddleware):
         if row["status"] == "approved":
             args = command["operation"]["args"]
             try:
-                article_editor._run(self.session.config, "set_article_summary", "summary",
+                document = article_editor._run(
+                    self.session.config, "set_article_summary", "summary",
                     args["request_id"], **{key: args[key] for key in
                                          ("editor_id", "revision")},
                                     description=command["description"])
                 row = article_summary.receipt(command["operation_id"], args, "completed",
                                               "摘要已更新到编辑草稿，未发布；服务端保存以自动保存状态为准。")
+                row["document"] = json.loads(document)
             except ToolException as error:
                 row = article_summary.receipt(command["operation_id"], args, "unverified",
                                               "未能确认摘要应用结果：" + str(error))
