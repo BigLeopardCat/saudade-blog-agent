@@ -236,6 +236,24 @@ def test_judge_cannot_invent_its_own_evidence_quote(tmp_path):
     assert report["counts"] == {"not_evaluated": 1}
 
 
+def test_quote_can_match_visible_markdown_without_accepting_invented_words(tmp_path):
+    case = recorded(tmp_path, text="**颜色不继承**：不会自动跟随新父级。")
+    text = online_judge.material(case, case["result"]["rounds"])
+    online_judge.validate_excerpts({"unsupported": ["颜色不继承：不会自动跟随新父级"],
+                                   "reason": "规则缺少依据"}, text)
+    with pytest.raises(ValueError, match="excerpts"):
+        online_judge.validate_excerpts({"unsupported": ["颜色会自动跟随新父级"],
+                                       "reason": "编造引文"}, text)
+
+
+def test_quote_cannot_join_distinct_markdown_items(tmp_path):
+    case = recorded(tmp_path, text="- **已经完成**\n- **尚未完成**")
+    text = online_judge.material(case, case["result"]["rounds"])
+    with pytest.raises(ValueError, match="excerpts"):
+        online_judge.validate_excerpts({"unsupported": ["已经完成尚未完成"],
+                                       "reason": "拼接引文"}, text)
+
+
 def test_history_is_included_but_cannot_be_quoted_as_current_output(tmp_path):
     case = recorded(tmp_path, text="先前错误")
     first = case["result"]["rounds"][0]

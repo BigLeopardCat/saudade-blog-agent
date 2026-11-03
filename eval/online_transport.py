@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
+import tempfile
 import time
 import uuid
 from contextlib import contextmanager
@@ -252,6 +254,15 @@ class OnlineTransport:
         self.requests.append(timing)
         result = self._result(events, errors, trace_path, doc, timing)
         result["request_evidence"] = {"message": payload["message"], "request_id": request_id}
+        folder = self.report_dir / "requests"
+        folder.mkdir(exist_ok=True, mode=0o700)
+        with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=folder,
+                                         prefix="." + request_id, delete=False) as saved:
+            json.dump(safe_result(result), saved, ensure_ascii=False, indent=2)
+            saved.write("\n")
+            saved.flush()
+            os.fsync(saved.fileno())
+        Path(saved.name).replace(folder / (request_id + ".json"))
         return result
 
     def _result(self, events, errors, trace_path, doc, timing):
