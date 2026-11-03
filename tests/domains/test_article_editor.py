@@ -213,16 +213,17 @@ def test_real_checkpoint_round_trip_applies_summary_only_after_confirmation(
             "editor_id": "editor-1", "revision": 1, "outcome": "updated"}}}}
     result = list(runtime().stream_events({"resume_task": "edit-task"}, resumed))[-1]
     assert result.reply and model.calls == 5
-    assert [row["status"] for row in result.execution["receipts"]] == (
-        ["completed"] if browser_status == "completed" else [])
-    if browser_status != "completed":
-        assert result.execution["operation_outcome"]["status"] == "unverified"
+    assert_summary_result(result, browser_status)
     repeated = list(runtime().stream_events({"confirm_grant": grant}, cfg))[-1]
     assert model.calls == 5 and not (repeated.execution or {}).get("client_action")
-    if browser_status == "completed":
-        assert repeated.execution["receipts"][0]["status"] == "completed"
-    else:
-        assert repeated.execution["operation_outcome"]["status"] == "unverified"
+    assert_summary_result(repeated, browser_status)
+
+
+def assert_summary_result(result, status):
+    assert [row["status"] for row in result.execution["receipts"]] == (
+        ["completed"] if status == "completed" else [])
+    if status != "completed":
+        assert result.execution["operation_outcome"]["status"] == "unverified"
 
 
 def test_client_failure_is_reported_as_tool_error(monkeypatch):
