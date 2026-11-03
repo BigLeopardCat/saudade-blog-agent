@@ -7,7 +7,7 @@ from langchain_core.messages import AIMessage, ToolMessage
 from langgraph.types import Command
 
 from agent.authz import SCOPE_ADMIN_CONSOLE, SCOPE_READ_OWN, TOOL_SCOPE, WRITE_SCOPES, check
-from agent.domains import browser, device_actions
+from agent.domains import article_editor, browser, device_actions
 from agent.products.blog.confirmation import presentation
 from agent.products.blog.read_tools import scoped_reads_enabled
 from agent.runtime.execution_state import capture
@@ -42,7 +42,8 @@ class BlogToolMiddleware(AgentMiddleware):
     def _allowed(self, name):
         session = self.session
         scope = TOOL_SCOPE.get(name)
-        if scope in WRITE_SCOPES and not device_actions.authorized(session.config, name):
+        if scope in WRITE_SCOPES and not (device_actions.authorized(session.config, name)
+                                          or article_editor.authorized(session.config, name)):
             return False
         if scope in (SCOPE_READ_OWN, SCOPE_ADMIN_CONSOLE):
             uid = ((session.config or {}).get("configurable") or {}).get("user_id")

@@ -39,6 +39,21 @@ def successful(command, value):
         observed = value.get("settings")
         return isinstance(observed, dict) and all(
             observed.get(key) == mode for key, mode in command["settings"].items())
+    if command["kind"] == "article_editor":
+        from agent.api.schemas import EditorObservation
+        from pydantic import ValidationError
+        try:
+            document = EditorObservation.model_validate(value.get("document"))
+        except ValidationError:
+            return False
+        if command["operation"] == "read":
+            return (document.outcome == "read" and document.content is not None
+                    and document.description is not None and document.total_chars is not None
+                    and document.offset == command["offset"])
+        return (document.editor_id == command["editor_id"]
+                and document.revision >= command["revision"]
+                and document.outcome == ("proposed" if command["operation"] == "propose" else "updated")
+                and (command["operation"] != "propose" or bool(document.proposal_id)))
     return False
 
 
@@ -64,9 +79,11 @@ def resume_value(snapshot, task_id, config):
     if progress is not None:
         progress.restore(pending.get("progress_keys", []))
         completed = ("页面已到达，正在整理回复…" if command["kind"] == "navigate" else
+                     "编辑器已返回结果，正在整理回复…" if command["kind"] == "article_editor" else
                      "显示设置已应用，正在整理回复…")
         progress.emit(completed if status == "completed" else
                       "页面操作已结束，正在整理结果…", key="client_result:" + command["command_id"])
     record("native", "browser_result", status=status, command_id=command["command_id"])
     return {"command_id": command["command_id"], "status": status,
-            "path": value.get("path", ""), "settings": value.get("settings")}
+            "path": value.get("path", ""), "settings": value.get("settings"),
+            "document": value.get("document"), "error": value.get("error")}
