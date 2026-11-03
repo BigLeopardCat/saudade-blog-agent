@@ -50,9 +50,10 @@ def complete_reply(result, displayed):
     return TurnResult(displayed + missing, execution), missing, terminal_key
 
 
-def receipt_observations(result):
+def receipt_observations(result, *, user_confirmed=False):
     """Keep verified facts in memory even when conversational wording is model-generated."""
     messages = []
+    approval = {"approval": "user_confirmed"} if user_confirmed else {}
     for row in (result.execution or {}).get("receipts", ()):
         call = {
             "name": row["tool"],
@@ -60,7 +61,8 @@ def receipt_observations(result):
             "id": "executed_" + uuid.uuid4().hex,
         }
         fact = json.dumps(
-            {"result": row.get("result"), "action": row.get("action")}, ensure_ascii=False
+            {**approval, "status": "executed", "result": row.get("result"),
+             "action": row.get("action")}, ensure_ascii=False
         )
         messages.extend(observation(call, ok(fact)))
     outcome = (result.execution or {}).get("operation_outcome")
@@ -68,7 +70,7 @@ def receipt_observations(result):
         call = {"name": outcome["tool"], "args": outcome["args"],
                 "id": "unverified_" + uuid.uuid4().hex}
         messages.extend([AIMessage(content="", tool_calls=[call]), ToolMessage(
-            content=json.dumps({"status": "unverified", "scope": "operation",
+            content=json.dumps({**approval, "status": "unverified", "scope": "operation",
                                 "result": outcome["result"]}, ensure_ascii=False),
             tool_call_id=call["id"], name=call["name"], status="error")])
     return messages
