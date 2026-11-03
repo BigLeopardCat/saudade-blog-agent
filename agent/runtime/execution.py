@@ -129,7 +129,8 @@ class FrameworkExecution:
 
     def _recover(self):
         saved = self.parent.get_state(self.config, subgraphs=True)
-        self.resume_parent = bool(saved.next or any(
+        handoff = bool(saved.values.get("approved_result"))
+        self.resume_parent = bool(handoff or saved.next or any(
             task.error or task.interrupts for task in saved.tasks))
         self.session.recovering = True
         state = None
@@ -137,6 +138,10 @@ class FrameworkExecution:
             if task.name == "agent" and isinstance(task.state, StateSnapshot):
                 state = task.state
                 break
+        # Before the next child starts, the persisted approval result is the
+        # continuation; the preceding child's completed proposal is stale.
+        if state is None and handoff:
+            return
         if state is None:
             config = {**self.config, "configurable": {
                 **self.config["configurable"], "checkpoint_ns": "agent"}}
