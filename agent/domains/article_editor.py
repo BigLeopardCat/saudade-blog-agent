@@ -123,6 +123,8 @@ def prepare_article_summary(
     for message in reversed(runtime.state.get("messages", [])):
         if not isinstance(message, ToolMessage) or message.name != "read_current_article":
             continue
+        if not isinstance(message.content, str):
+            break
         try:
             saved = json.loads(message.content)
         except (ValueError, TypeError):
