@@ -1,8 +1,10 @@
 """Read, deliver, approve and dispatch are independent task acceptance criteria."""
 
+import json
 from contextlib import contextmanager
 
 from agent import confirm
+from eval.native_assertions import observations
 from eval.own_fixtures import notification_backend
 from tools import base
 from utils.trace_io import load_trace
@@ -33,7 +35,21 @@ def prepared(turn, state):
     result = turn(REQUEST)
     require(all(code in result["text"] for code in CODES),
             "notification body summary was not delivered before approval")
-    require("list_notifications" in result["tool_calls"], "notification bodies were not read")
+    trace = load_trace(result.get("trace")) if result.get("trace") else None
+    bodies = {}
+    for event in observations((trace or {}).get("events", [])):
+        if event.get("name") == "prepare_notification_read":
+            break
+        if event.get("name") != "list_notifications" or event.get("kind") != "ok":
+            continue
+        try:
+            value = json.loads(event.get("result", ""))
+            if value.get("contentIncluded") is True:
+                bodies.update({row["id"]: row.get("content", "") for row in value["items"]})
+        except (ValueError, KeyError, TypeError):
+            continue
+    require(all(code in bodies.get(key, "") for key, code in zip((101, 102), CODES, strict=True)),
+            "notification body evidence was not read before approval preparation")
     require(not posts(state) and not result["commands"] and not result["exec_rows"],
             "mutation or navigation happened before approval")
     require(len(result["confirm_tokens"]) == 1, "expected one fixed-scope approval")
