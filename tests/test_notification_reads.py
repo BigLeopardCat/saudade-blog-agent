@@ -34,12 +34,13 @@ def test_registered_default_read_bounds_contents_and_preserves_links(notificatio
     notifications["items"] = rows(100)
     assert own_tools()["list_notifications"] is base.list_notifications is reads.list_notifications
     result = json.loads(str(read()))
-    assert len(result["items"]) == 5 and result["windowCount"] == 100
+    assert len(result["items"]) == 20 and result["windowCount"] == 100
     assert result["windowComplete"] is False and result["hasMoreInWindow"] is True
     assert result["unreadInWindow"] == 66
     assert result["items"][0]["link"] == "/article/19?cid=1000#reply"
-    assert result["items"][0]["contentTruncated"] is True
-    assert len(result["items"][0]["content"]) == 240
+    assert result["contentIncluded"] is False
+    assert all("content" not in row and "contentTruncated" not in row
+               for row in result["items"])
     assert len(notifications["items"][0]["content"]) == 3000
     assert [request.method for request in notifications["requests"]] == ["GET"]
 
@@ -86,7 +87,7 @@ def test_search_uses_full_content_and_normalizes_case_without_fuzzy_matching(not
     notifications["items"][1]["content"] += " UniqueSuffix"
     found = json.loads(str(read(query=" uniquesuffix ")))
     assert found["query"] == "uniquesuffix" and found["items"][0]["id"] == 999
-    assert found["items"][0]["contentTruncated"] is True
+    assert found["contentIncluded"] is False and "content" not in found["items"][0]
     assert json.loads(str(read(query="unique suffix")))["items"] == []
 
 
@@ -115,7 +116,7 @@ def test_missing_id_reports_only_the_known_window(notifications, size):
     assert result["items"] == [] and result["windowComplete"] is (size < 100)
 
 
-@pytest.mark.parametrize("args", [{"limit": 0}, {"limit": 11}, {"limit": True},
+@pytest.mark.parametrize("args", [{"limit": 0}, {"limit": 21}, {"limit": True},
                                   {"page": 101}, {"page": "2"}, {"notification_id": False},
                                   {"notification_id": -1}, {"unread_only": "false"},
                                   {"query": ""}, {"query": "x" * 121}, {"query": True}])
@@ -217,5 +218,30 @@ def test_global_unread_outside_full_window_does_not_break_window_reads(notificat
     assert result['unreadInWindow'] == 66
     assert result['unreadTotal'] == 73
     assert result['windowComplete'] is False
-    assert len(result['items']) == 5
+    assert len(result['items']) == 20
     assert all(request.method == 'GET' for request in notifications['requests'])
+
+
+def test_one_summary_page_handles_eighteen_unread_items_without_exposing_bodies(notifications):
+    notifications['items'] = [dict(row, isRead=False,
+        content='PRIVATE_BODY_CANARY_' * 1000) for row in rows(18)]
+    result = read(unread_only=True)
+    body = json.loads(str(result))
+    assert result.kind == 'ok' and len(body['items']) == body['unreadTotal'] == 18
+    assert body['matchedInWindow'] == 18 and body['hasMoreInWindow'] is False
+    assert body['contentIncluded'] is False and 'PRIVATE_BODY_CANARY_' not in str(result)
+    assert [request.method for request in notifications['requests']] == ['GET']
+    assert all(not row['isRead'] for row in notifications['items'])
+
+
+def test_long_bodies_do_not_inflate_lists_and_detail_reads_are_explicit(notifications):
+    notifications['items'] = rows(100)
+    summary = read()
+    assert summary.kind == 'ok' and len(str(summary)) <= 7500
+    shown = json.loads(str(summary))
+    assert len(shown['items']) == 20 and shown['hasMoreInWindow'] is True
+    detail = json.loads(str(read(notification_id=shown['items'][0]['id'])))
+    assert detail['contentIncluded'] is True
+    assert detail['items'][0]['content'] == notifications['items'][0]['content'][:2000]
+    assert detail['items'][0]['contentTruncated'] is True
+    assert [request.method for request in notifications['requests']] == ['GET', 'GET']

@@ -12,7 +12,7 @@ from tools import base
 
 __all__ = ["list_notifications"]
 
-_Limit = Annotated[StrictInt, Field(ge=1, le=10)]
+_Limit = Annotated[StrictInt, Field(ge=1, le=20)]
 _Page = Annotated[StrictInt, Field(ge=1, le=100)]
 _Identifier = Annotated[StrictInt, Field(gt=0)]
 _Query = Annotated[str, Field(min_length=1, max_length=120, strict=True)]
@@ -45,8 +45,10 @@ def _window(data):
 
 def _entry(row, detailed):
     result = {"id": row["id"], "isRead": row["isRead"], "link": row.get("link")}
-    for field, cap in (("type", 40), ("title", 160),
-                       ("content", 2000 if detailed else 240), ("createdAt", 40)):
+    fields = [("type", 40), ("title", 160), ("createdAt", 40)]
+    if detailed:
+        fields.append(("content", 2000))
+    for field, cap in fields:
         result[field] = row[field][:cap]
         if field in ("title", "content"):
             result[field + "Truncated"] = len(row[field]) > cap
@@ -54,11 +56,12 @@ def _entry(row, detailed):
 
 
 @tool
-def list_notifications(config: RunnableConfig, limit: _Limit = 5, page: _Page = 1,
+def list_notifications(config: RunnableConfig, limit: _Limit = 20, page: _Page = 1,
                        unread_only: StrictBool = False,
                        notification_id: _Identifier | None = None,
                        query: _Query | None = None) -> object:
-    """读取本人的最近通知及原始跳转链接；默认5条，最多10条，正文节选240字。
+    """读取本人的最近通知及原始跳转链接；默认20条，最多20条，列表只含摘要元数据。
+    列表没有正文；需要解读通知内容时用notification_id单独读取，不从标题推断正文。
 
     page 翻阅最近100条窗口，unread_only 只筛选该窗口内未读通知。
     notification_id 读取窗口内单条正文（最多2000字），忽略分页和未读筛选。
@@ -97,7 +100,7 @@ def list_notifications(config: RunnableConfig, limit: _Limit = 5, page: _Page = 
     result = {"items": [_entry(row, notification_id is not None) for row in selected],
               "windowLimit": _WINDOW_LIMIT, "windowCount": len(rows),
               "windowComplete": len(rows) < _WINDOW_LIMIT, "unreadInWindow": unread,
-              "unreadTotal": unread_total}
+              "unreadTotal": unread_total, "contentIncluded": notification_id is not None}
     if notification_id is None:
         result.update(page=page, pageSize=limit, matchedInWindow=len(matched),
                       hasMoreInWindow=page * limit < len(matched))
