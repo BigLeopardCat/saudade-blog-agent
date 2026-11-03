@@ -43,7 +43,7 @@ def domains(config, can_prepare, reads):
     if not scoped_reads_enabled(cfg.get("principal"), SCOPE_ADMIN_CONSOLE, cfg.get("user_id")):
         return {}
     selected = {name: dict(tools) for name, tools in reads.items()}
-    editor_tools = article_editor.tools(config)
+    editor_tools = article_editor.tools(config, can_prepare)
     if editor_tools:
         selected["article_editor"] = editor_tools
     if can_prepare and available(config):

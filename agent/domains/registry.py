@@ -1,5 +1,6 @@
 """The migrated confirmation domains; no model intent matching belongs here."""
 
+from agent.domains import article_summary
 from agent.domains.account_actions import transactions as account_actions
 from agent.domains.announcements import transactions as announcements
 from agent.domains.article_actions import transactions as article_state
@@ -19,7 +20,8 @@ _DOMAINS = {"favorites": favorites, "notifications": notifications,
             "messages": messages, "todos": todos, "article_state": article_state,
             "moderation": moderation, "quota_actions": quota_actions, "article_tags": article_tags,
             "categories": categories, "tags": tags, "announcements": announcements,
-            "account_actions": account_actions, "notices": notices, "automations": automations}
+            "account_actions": account_actions, "notices": notices, "automations": automations,
+            "editor_summary": article_summary}
 
 
 def native_domain(grant):
