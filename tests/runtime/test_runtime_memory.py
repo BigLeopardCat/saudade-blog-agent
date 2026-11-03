@@ -31,12 +31,27 @@ def test_summary_reaches_native_input_as_data_not_runtime_authority():
     prompt = _input(server.build_messages(request), actor())
     trusted, _ = json.JSONDecoder().raw_decode(
         prompt[0].content.split("运行时能力（可信数据）：", 1)[1])
-    assert trusted["caller"]["role"] == "超级管理员"
+    assert trusted["caller"]["role"] == "superadmin"
+    assert trusted["caller"]["role_label"] == "超级管理员"
+    assert trusted["caller"]["can_access_admin_console"] is True
+    assert trusted["caller"]["role"] in trusted["guestbook"]["publisher_lookup_roles"]
+    assert trusted["guestbook"]["posting_requires_login"] is True
     assert "曾误称不能管理" not in prompt[0].content
     assert "用户希望中文答复" in prompt[-1].content
     assert prompt[-1].content.startswith("[当前问题]: 继续\n\n")
     empty = server.build_messages(ChatRequest(message="继续"))
     assert memory.summary_message(empty) is None
+
+
+@pytest.mark.parametrize("role,source,allowed", [
+    ("user", SOURCE_ASSERTION, False), ("superadmin", SOURCE_BODY, False),
+    ("admin", SOURCE_ASSERTION, True),
+])
+def test_admin_console_access_describes_the_verified_caller(role, source, allowed):
+    prompt = _input([HumanMessage(content="你好")], actor(role, source=source))
+    trusted, _ = json.JSONDecoder().raw_decode(
+        prompt[0].content.split("运行时能力（可信数据）：", 1)[1])
+    assert trusted["caller"]["can_access_admin_console"] is allowed
 
 
 def test_short_prior_preference_survives_more_than_two_exchanges():
