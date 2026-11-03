@@ -375,3 +375,25 @@ def test_client_without_feedback_only_gets_a_queued_action(name, args):
     assert facts['scope'] == 'browser'
     assert result.artifact['kind'] == 'ok' and result.artifact['receipts']
     assert all('browser_status' not in row for row in result.artifact['receipts'])
+
+
+@pytest.mark.parametrize("role", ["user", "admin", "superadmin"])
+def test_navigation_catalog_and_execution_share_console_permissions(role):
+    cfg = _config(principal=Principal(uid=7, role=role, source=SOURCE_ASSERTION))
+    navigation = browser.tools(cfg)["navigate_page"]
+    assert ("/dashboard/users" in navigation.description) == (role in {"admin", "superadmin"})
+    call = _call("navigate_page", {"path": "/dashboard/users?tab=accounts"})
+    result = navigation.invoke(call, config=cfg)
+    if role == "user":
+        assert result.status == "error" and not result.artifact
+    else:
+        assert result.artifact["receipts"][0]["cmd"]["url"].endswith(
+            "/dashboard/users?tab=accounts")
+
+
+def test_invalid_navigation_does_not_advertise_inaccessible_console_routes():
+    cfg = _config()
+    result = browser.tools(cfg)["navigate_page"].invoke(
+        _call("navigate_page", {"path": "/not-a-site-page"}), config=cfg)
+    assert result.status == "error" and "/dashboard" not in result.content
+    assert "/guestbook" in result.content

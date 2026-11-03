@@ -42,6 +42,17 @@ def authorized(config, name):
     return available(config) and history_allowed(principal, name)
 
 
+def console_access(config):
+    cfg = (config or {}).get("configurable") or {}
+    return scoped_reads_enabled(cfg.get("principal"), authz.SCOPE_ADMIN_CONSOLE,
+                                cfg.get("user_id"))
+
+
+def accessible_paths(config):
+    return {path for path in site._NAV_EXACT_PATHS
+            if not path.startswith("/dashboard") or console_access(config)}
+
+
 def _receipt(workflow, name, args, command):
     receipt = {
         "skill": workflow,
@@ -77,12 +88,14 @@ def navigate_page(path: Path, config: RunnableConfig) -> object:
     if not authorized(config, "navigate_page"):
         return "当前身份无权操作页面。", {"kind": "unavailable"}
     if not site.nav_path_valid(path):
-        allowed = ", ".join(sorted(site._NAV_EXACT_PATHS))
+        allowed = ", ".join(sorted(accessible_paths(config)))
         raise ToolException(
             f"Invalid site path. Exact paths: {allowed}. Dynamic paths: "
             "/article/<positive integer>, /category/<name>. "
             "Read get_site_map for page names or copy a source link."
         )
+    if site.nav_pure_path(path).startswith("/dashboard") and not console_access(config):
+        raise ToolException("当前账号没有后台管理权限，无法进入后台管理页面。")
     from tools.base import SITE_BASE
 
     url = SITE_BASE.rstrip("/") + path
@@ -166,9 +179,11 @@ def set_page_appearance(
 def tools(config):
     if not available(config):
         return {}
-    pages = "; ".join(label + "=" + path for path, label in site._NAV_LABELS.items())
+    allowed = accessible_paths(config)
+    pages = "; ".join(label + "=" + path for path, label in site._NAV_LABELS.items()
+                      if path in allowed)
     navigation = navigate_page.model_copy(update={"description":
-        "Open a site page immediately when requested. Known pages: " + pages
+        "Open a site page immediately when requested. Pages available to this caller: " + pages
         + ". Article: /article/<id>; category: /category/<name>. Use the source article link "
         "for a chosen recommendation. No site-map lookup is needed for the known pages. "
         "This allowlist defines supported commands, not whether other URLs exist. "
