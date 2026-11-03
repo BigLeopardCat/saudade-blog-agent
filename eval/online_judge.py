@@ -13,6 +13,7 @@ from collections import Counter
 from datetime import datetime
 from pathlib import Path
 
+from markdown_it import MarkdownIt
 from openai import OpenAIError
 
 from eval import acceptance, llm_judge
@@ -213,6 +214,16 @@ def material(case, results):
     return text
 
 
+def _visible_blocks(markdown):
+    for token in MarkdownIt("commonmark", {"html": False}).parse(markdown):
+        if token.type == "inline":
+            yield "".join(child.content if child.type in {"text", "code_inline", "image"}
+                          else "\n" if child.type in {"softbreak", "hardbreak"} else ""
+                          for child in token.children or [])
+        elif token.type in {"fence", "code_block"}:
+            yield token.content
+
+
 def validate_excerpts(verdict, text):
     current = json.loads(text)["turns"][-1]
     outputs = [current["assistant_reply_to_review"],
@@ -230,6 +241,7 @@ def validate_excerpts(verdict, text):
 
     outputs.extend(strings(current["proposed_actions_not_facts"]))
     outputs.extend(current["confirmation_previews_to_review"])
+    outputs.extend(block for output in list(outputs) for block in _visible_blocks(output))
     if (not isinstance(verdict["reason"], str) or not verdict["reason"].strip()
             or len(verdict["unsupported"]) > 5
             or any(not isinstance(item, str) or not item.strip()

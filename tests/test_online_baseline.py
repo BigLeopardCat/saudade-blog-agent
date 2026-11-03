@@ -90,6 +90,30 @@ def test_confirmation_time_is_not_filled_from_progress(tmp_path, monkeypatch):
     assert timing["first_reply_s"] is timing["first_command_s"] is None
 
 
+def test_completed_round_is_private_and_durable_before_later_judgment(tmp_path, monkeypatch):
+    token = token_urlsafe()
+    adapter = transport(tmp_path, monkeypatch,
+        'event: confirmation\ndata: ' + json.dumps({"token": token, "q": "确认？"})
+        + '\n\nevent: done\ndata: {}\n\n')
+    monkeypatch.setattr("eval.online_transport.confirm.verify", lambda *args: {})
+    monkeypatch.setattr("eval.online_transport.confirm.inspect", lambda *args: {})
+    try:
+        with pytest.raises(KeyboardInterrupt):
+            result = adapter(ChatRequest(message="准备操作"))
+            assert result["confirm_tokens"] == [token]
+            raise KeyboardInterrupt("collector interrupted after the HTTP round")
+        files = list((tmp_path / "requests").glob("*.json"))
+        assert len(files) == 1 and files[0].stat().st_mode & 0o777 == 0o600
+        body = files[0].read_text()
+        assert token not in body
+        captured = json.loads(body)
+        assert captured["request_evidence"]["message"] == "准备操作"
+        assert captured["http_timing"]["trace_sha256"]
+        assert captured["http_events"][-1]["event"] == "done"
+    finally:
+        adapter.client.close()
+
+
 @pytest.mark.parametrize("wire", [
     'event: text\ndata: "部分回复"\n\n',
     'event: done\ndata: {}\n\nevent: text\ndata: "迟到回复"\n\n',
