@@ -126,6 +126,8 @@ def test_real_checkpoint_round_trip_applies_summary_only_after_confirmation(
 
         def invoke(self, messages, **kwargs):
             self.calls += 1
+            if self.calls == 5:
+                assert_pending_body_review(messages, browser_status)
             return next(responses)
 
     model = Model()
@@ -210,13 +212,23 @@ def test_real_checkpoint_round_trip_applies_summary_only_after_confirmation(
         "command_id": command["command_id"], "status": browser_status,
         "error": "草稿已变化" if browser_status == "failed" else None,
         "path": "/dashboard/notes/new", "document": {
-            "editor_id": "editor-1", "revision": 1, "outcome": "updated"}}}}
+            "editor_id": "editor-1", "revision": 1, "outcome": "updated",
+            "proposal_id": "proposal-1"}}}}
     result = list(runtime().stream_events({"resume_task": "edit-task"}, resumed))[-1]
     assert result.reply and model.calls == 5
     assert_summary_result(result, browser_status)
     repeated = list(runtime().stream_events({"confirm_grant": grant}, cfg))[-1]
     assert model.calls == 5 and not (repeated.execution or {}).get("client_action")
     assert_summary_result(repeated, browser_status)
+
+
+def assert_pending_body_review(messages, status):
+    if status != "completed":
+        return
+    facts = [json.loads(message.content) for message in messages
+             if isinstance(message, ToolMessage) and message.name == "set_article_summary"
+             and isinstance(message.content, str)]
+    assert facts[-1]["document"]["proposal_id"] == "proposal-1"
 
 
 def assert_summary_result(result, status):
