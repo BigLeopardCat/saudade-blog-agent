@@ -32,9 +32,6 @@ def conversation_context(principal) -> dict:
                   "administration_requires": sorted(ADMIN_ROLES)},
         "caller": {"verified": verified, "role": role,
                      "can_access_admin_console": verified and role in ADMIN_ROLES,
-                     "article_action": ("可用后台编辑器或文章管理工具"
-                         if verified and role in ADMIN_ROLES else
-                         "联系管理员"),
                      "preferred_address": ("主人" if role in ADMIN_ROLES
                                            else "杂鱼" if role == ROLE_ZAKO else "你")},
         "permissions": sorted(scopes_for(role)),
