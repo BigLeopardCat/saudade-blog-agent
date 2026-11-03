@@ -20,13 +20,13 @@ classifiers = [
 ]
 # Direct runtime dependencies; uv.lock pins reproducible installations.
 dependencies = [
-    "anyio==4.14.1",
+    "anyio==4.14.2",
     "edge-tts==7.2.8",
     "fastapi==0.141.1",
     "httpx==0.28.1",
     "langchain-core==1.6.10",
     "langchain-openai==1.3.3",
-    "langgraph==1.2.12",
+    "langgraph==1.2.14",
     # 原生 checkpoint 持久化与恢复安全的快照裁剪。
     "langgraph-checkpoint-postgres==3.2.0",
     "openai==2.44.0",
