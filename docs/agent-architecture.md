@@ -99,6 +99,7 @@ flowchart LR
 │   ├── domains/announcements/targets.py                 # 当前生产代码模块
 │   ├── domains/announcements/transactions.py            # 当前生产代码模块
 │   ├── domains/article_actions/__init__.py              # 当前生产代码模块
+│   ├── domains/article_summary.py                      # 摘要确认的内容绑定与执行账
 │   ├── domains/article_editor.py                       # 当前编辑器的草稿读取、正文审阅提案和摘要更新
 │   ├── domains/article_actions/preparation.py           # 当前生产代码模块
 │   ├── domains/article_actions/batch.py                 # 一次确认的有界文章批量事务
@@ -174,6 +175,7 @@ flowchart LR
 │   ├── products/blog/__init__.py                        # 博客产品包
 │   ├── products/blog/application.py                     # 博客工具、身份上下文与标准 middleware 装配
 │   ├── products/blog/articles.py                        # 文章结果渲染、来源校验与框架状态扩展
+│   ├── products/blog/editor_summary.py                 # 已确认摘要的编辑器执行与回执
 │   ├── products/blog/admin_domains.py                   # 管理员读取与确认准备工具装配
 │   ├── products/blog/capabilities.py                    # 博客领域能力目录及按身份装配
 │   ├── products/blog/catalog.py                         # 博客领域说明与高频页面设备工具晋升

@@ -1,17 +1,23 @@
 """Administrator collaboration with the current browser working copy, never publication."""
 
+import hashlib
 import json
 from typing import Annotated
 
+from langchain.tools import ToolRuntime
+from langchain_core.messages import ToolMessage
 from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import InjectedToolCallId, ToolException, tool
 from pydantic import BaseModel, Field, StrictStr
 
 from agent import authz
+from agent.proposals import proposal
 from agent.runtime.access import scoped_reads_enabled
 from agent.runtime.client_actions import await_result as _await_browser
+from agent.runtime.tool_evidence import observed
+from agent.runtime.writes import bound_context
 
-NAMES = frozenset({"read_current_article", "propose_article_edits", "set_article_summary"})
+NAMES = frozenset({"read_current_article", "propose_article_edits", "prepare_article_summary"})
 
 EditorId = Annotated[StrictStr, Field(min_length=1, max_length=64)]
 Revision = Annotated[int, Field(strict=True, ge=0, le=9_007_199_254_740_991)]
@@ -26,7 +32,7 @@ def available(config, name):
     cfg = (config or {}).get("configurable") or {}
     scope = authz.TOOL_SCOPE.get(name)
     return (
-        name in NAMES
+        name in NAMES | {"set_article_summary"}
         and type(cfg.get("user_id")) is int
         and scoped_reads_enabled(cfg.get("principal"), scope, cfg["user_id"])
         and bool(cfg.get("browser_feedback"))
@@ -98,35 +104,53 @@ def propose_article_edits(
     )
 
 
-@tool
-def set_article_summary(
+@tool(return_direct=True)
+def prepare_article_summary(
     editor_id: EditorId,
     revision: Revision,
     description: Annotated[str, Field(max_length=16000)],
-    tool_call_id: Annotated[str, InjectedToolCallId],
-    config: RunnableConfig,
-) -> str:
-    """Create or replace the current draft's summary/description directly, without diff review.
-    Read the current editor first and use its editor_id/revision. This updates the working
-    copy and its normal autosave; it does not publish. Do not claim a server save or
-    publication from this browser acknowledgement. Re-read after a version conflict.
+    runtime: ToolRuntime,
+) -> object:
+    """Prepare a confirmation card to create or replace the current draft's summary.
+    Read the current editor first and use its editor_id/revision. Nothing is changed
+    before the user approves the card. Approval updates the working copy and normal
+    autosave, never publication. A changed draft needs a fresh read and confirmation.
     """
-    return _run(
-        config,
-        "set_article_summary",
-        "summary",
-        tool_call_id,
-        editor_id=editor_id,
-        revision=revision,
-        description=description,
-    )
+    config = runtime.config
+    if not authorized(config, "prepare_article_summary"):
+        raise ToolException("当前身份或客户端不支持后台文章协作编辑。")
+    principal, cid = bound_context(config)
+    for message in reversed(runtime.state.get("messages", [])):
+        if not isinstance(message, ToolMessage) or message.name != "read_current_article":
+            continue
+        try:
+            saved = json.loads(message.content)
+        except (ValueError, TypeError):
+            break
+        if (isinstance(saved, dict) and message.status == "success"
+                and saved.get("scope") == "editor_draft"
+                and saved.get("editor_id") == editor_id and saved.get("revision") == revision):
+            if not isinstance(runtime.tool_call_id, str) or len(runtime.tool_call_id) > 100:
+                raise ToolException("工具调用标识无效，请重新准备摘要。")
+            observed("editor_summary", {"ownerUserId": principal.uid}, ("ownerUserId",))
+            return proposal(principal, cid, "editor_summary", {
+                "tool": "set_article_summary", "args": {"editor_id": editor_id,
+                    "revision": revision,
+                    "summary_sha256": hashlib.sha256(description.encode()).hexdigest(),
+                    "request_id": runtime.tool_call_id}}, executor="editor_summary",
+                question=("确认替换当前草稿的摘要？\n\n" + description if description
+                          else "确认清空当前草稿的摘要？"),
+                target="更新当前编辑草稿的摘要", payload={"description": description})
+        break
+    raise ToolException("请先读取当前编辑草稿，并使用读取回执中的编辑器标识和版本。")
 
 
-def tools(config):
+def tools(config, can_prepare=True):
     return {
         item.name: item.model_copy(
             update={"handle_tool_error": True, "handle_validation_error": str}
         )
-        for item in (read_current_article, propose_article_edits, set_article_summary)
+        for item in (read_current_article, propose_article_edits, prepare_article_summary)
         if available(config, item.name)
+        and (can_prepare or item.name != "prepare_article_summary")
     }

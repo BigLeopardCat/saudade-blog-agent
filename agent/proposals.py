@@ -1,7 +1,8 @@
 """Create signed operation proposals for the shared confirmation protocol."""
 
 
-def proposal(principal, cid, workflow, spec, *, executor, question, target, choices=None):
+def proposal(principal, cid, workflow, spec, *, executor, question, target, choices=None,
+             payload=None):
     from agent import confirm
     from agent.runtime.results import TurnResult
     from tools.base import unavailable
@@ -35,6 +36,7 @@ def proposal(principal, cid, workflow, spec, *, executor, question, target, choi
                 "replay_safe": True,
             },
             "pending_action": {
+                **({"payload": payload} if payload is not None else {}),
                 "task_id": f"pa_{jti}",
                 "skill": workflow,
                 "specs": specs,
