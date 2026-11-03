@@ -52,6 +52,7 @@ _NOARG_VERB = {
     "list_admin_comments": "查看后台评论名册",
     "set_article_status_batch": "整批修改文章状态",
     "set_article_tags_batch": "整批修改文章标签",
+    "set_article_summary": "更新当前编辑草稿的摘要",
 }
 
 _REF_SOURCE_CN = {

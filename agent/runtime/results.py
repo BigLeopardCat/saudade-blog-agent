@@ -63,7 +63,7 @@ def receipt_observations(result, *, user_confirmed=False):
             "id": "executed_" + uuid.uuid4().hex,
         }
         fact = json.dumps(
-            {**approval, "status": "executed", "result": row.get("result"),
+            {**approval, "status": row.get("status", "executed"), "result": row.get("result"),
              "action": row.get("action")}, ensure_ascii=False
         )
         messages.extend(observation(call, ok(fact)))
@@ -75,6 +75,18 @@ def receipt_observations(result, *, user_confirmed=False):
             content=json.dumps({**approval, "status": "unverified", "scope": "operation",
                                 "result": outcome["result"]}, ensure_ascii=False),
             tool_call_id=call["id"], name=call["name"], status="error")])
+    return messages
+
+
+def approval_observations(result):
+    messages = receipt_observations(result, user_confirmed=True)
+    authorized = (result.execution or {}).get("authorized_operation")
+    if authorized:
+        call = {"name": authorized["tool"], "args": authorized["args"],
+                "id": "approved_" + authorized["operation_id"]}
+        messages.extend(observation(call, ok(json.dumps({"status": "approved",
+            "approval": "user_confirmed", "executed": False,
+            "result": "已获用户确认，尚未应用；以编辑器执行回执为准。"}, ensure_ascii=False))))
     return messages
 
 

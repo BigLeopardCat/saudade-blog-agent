@@ -241,7 +241,7 @@ class AgentRuntime:
         if grant.get("selection"):
             execution["approval_selection"] = grant["selection"]
         result = TurnResult(outcome["reply"], execution)
-        modern = bool(matching and approval.has_result(execution, grant["specs"]))
+        modern = bool(matching and approval.has_result(execution, grant["specs"], jti=grant["jti"]))
         if modern:
             emit(config, "正在核对操作结果并继续处理请求…", key="confirmation_resume")
             record("native", "confirmation_resumed", engine="langgraph")

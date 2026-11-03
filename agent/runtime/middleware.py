@@ -28,7 +28,7 @@ from agent.runtime.memory_media import hydrate, stage
 from agent.runtime.message_content import text_content
 from agent.runtime.progress import emit
 from agent.runtime.prompt_budget import fit_history
-from agent.runtime.results import TurnResult, pause_notice, receipt_observations
+from agent.runtime.results import TurnResult, approval_observations, pause_notice
 from agent.runtime.task_input_policy import additions as input_additions
 from agent.runtime.task_input_policy import model_messages, replace_unpublished_proposal
 from agent.runtime.tool_execution import append_result
@@ -190,16 +190,16 @@ class SessionMiddleware(AgentMiddleware):
                                 if not isinstance(message, ToolMessage)
                                 or message.tool_call_id not in call_ids]
             saved["messages"].extend(RemoveMessage(id=m.id) for m in self.attachments)
-            self.attachments.extend(receipt_observations(TurnResult(
-                facts["reply"], facts["execution"]), user_confirmed=True))
+            self.attachments.extend(approval_observations(TurnResult(
+                facts["reply"], facts["execution"])))
             session.budget.attempt_tools(len(deferred))
             self._next = 0
             saved["jump_to"] = "tools"
         if not deferred:
             # The approval explanation is an assistant turn after the prepared
             # tool response. Append fresh execution evidence after that turn.
-            saved["messages"].extend(receipt_observations(TurnResult(
-                facts["reply"], facts["execution"]), user_confirmed=True))
+            saved["messages"].extend(approval_observations(TurnResult(
+                facts["reply"], facts["execution"])))
         return saved
 
     def _feedback(self, state, facts):
