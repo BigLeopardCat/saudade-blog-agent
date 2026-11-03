@@ -3,7 +3,7 @@
 import time
 
 from agent import action_text, authz
-from agent.domains.todos import deletion, targets
+from agent.domains.todos import batch, deletion, targets
 from agent.runtime import writes
 from agent.runtime.turns import check_cancelled
 from tools import base
@@ -14,6 +14,7 @@ _WORKFLOWS = {
     "dashboard_todo_done": "complete_dashboard_todo",
     "dashboard_todo_reschedule": "reschedule_dashboard_todo",
     "dashboard_todo_delete": "delete_dashboard_todo",
+    batch.WORKFLOW: batch.NAME,
 }
 
 
@@ -29,6 +30,8 @@ def handles(grant):
 
 
 def validate(grant, config):
+    if isinstance(grant, dict) and grant.get("workflow") == batch.WORKFLOW:
+        return batch.validate(grant, config)
     principal = writes.validate_binding(grant, config)
     specs = grant.get("specs")
     if not handles(grant) or not isinstance(specs, list) or len(specs) != 1:
@@ -92,6 +95,8 @@ class Operation:
         self.workflow, self.name = workflow, name
 
     def invoke(self, args, config=None):
+        if self.name == batch.NAME:
+            return batch.invoke(args, config)
         if self.name == "delete_dashboard_todo":
             return deletion.invoke(args, config)
         create = self.name == "create_dashboard_todo"
@@ -154,6 +159,8 @@ class Operation:
 
 
 def _receipt(grant, name, args, result):
+    if name == batch.NAME:
+        return batch.receipt(grant, args, result)
     if name == "delete_dashboard_todo":
         return deletion.receipt(grant, args, result)
     meta = getattr(result, "meta", {}) or {}

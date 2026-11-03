@@ -128,7 +128,7 @@
         0
       ],
       "agent/confirm.py": [
-        3,
+        5,
         0
       ],
       "agent/confirmation_args.py": [
@@ -424,6 +424,10 @@
         0
       ],
       "agent/domains/todos/__init__.py": [
+        0,
+        0
+      ],
+      "agent/domains/todos/batch.py": [
         0,
         0
       ],
@@ -815,10 +819,6 @@
         0,
         0
       ],
-      "server.py": [
-        0,
-        0
-      ],
       "tools/__init__.py": [
         0,
         0
@@ -886,10 +886,14 @@
       "tools/tag_admin.py": [
         0,
         0
+      ],
+      "server.py": [
+        0,
+        0
       ]
     },
     "total": [
-      405,
+      407,
       33
     ]
   },

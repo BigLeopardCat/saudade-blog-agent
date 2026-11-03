@@ -54,6 +54,8 @@ def receipt_observations(result, *, user_confirmed=False):
     """Keep verified facts in memory even when conversational wording is model-generated."""
     messages = []
     approval = {"approval": "user_confirmed"} if user_confirmed else {}
+    if user_confirmed and (result.execution or {}).get("approval_selection"):
+        approval["selection"] = result.execution["approval_selection"]
     for row in (result.execution or {}).get("receipts", ()):
         call = {
             "name": row["tool"],

@@ -62,6 +62,7 @@
       const view = read(ask.convId), old = view.records.find(row => row.id === ask.id);
       const anchor = owners.get(ask.id);
       const row = { ...old, id: ask.id, task_id: ask.task_id, q: ask.q, exp: ask.exp,
+        selected: Array.isArray(ask.selected) ? ask.selected : old?.selected,
         anchor_id: anchor?.dataset.mid || ask.anchor_id || old?.anchor_id,
         ts: old?.ts || Date.now() };
       view.records = [...view.records.filter(item => item.id !== row.id), row].slice(-64);
@@ -227,6 +228,9 @@
           && positioned) {
         saveAsk(ask);
         askBtns.querySelectorAll('button[data-ask-value]').forEach(button => { button.disabled = busy; });
+        askBtns.querySelectorAll('input[type="checkbox"]').forEach(input => { input.disabled = busy; });
+        const submit = askBtns.querySelector('button[data-ask-submit]');
+        if (submit) submit.disabled = busy || !ask.selected?.length;
         return;
       }
       askBox.dataset.askToken = token;
@@ -234,7 +238,53 @@
       setAskQuestion(ask.q);
       askBtns.innerHTML = '';
       hideAskOther();
-      (ask.opts || []).forEach((op) => {
+      const choices = (ask.opts || []).filter(op => /^pick:\d+$/.test(op.value || ''));
+      const buttons = (ask.opts || []).filter(op => !/^pick:\d+$/.test(op.value || ''));
+      let submit = null;
+      let updateSelection = null;
+      if (choices.length) {
+        const values = choices.map(op => Number(op.value.slice(5)));
+        ask.selected = Array.isArray(ask.selected) ? ask.selected.filter(value => values.includes(value)) : [...values];
+        const selected = new Set(ask.selected);
+        const list = document.createElement('div');
+        list.className = 'chat-ask-selection';
+        list.setAttribute('role', 'group');
+        list.setAttribute('aria-label', '选择要执行的项目');
+        const allLabel = document.createElement('label');
+        allLabel.className = 'chat-ask-choice chat-ask-select-all';
+        const all = document.createElement('input');
+        all.type = 'checkbox'; all.disabled = busy;
+        allLabel.append(all, document.createTextNode('全选'));
+        list.appendChild(allLabel);
+        const inputs = [];
+        const update = () => {
+          ask.selected = values.filter(value => selected.has(value));
+          all.checked = ask.selected.length === values.length;
+          all.indeterminate = ask.selected.length > 0 && !all.checked;
+          inputs.forEach(({input, value}) => {input.checked = selected.has(value);});
+          if (submit) {
+            submit.textContent = `确认执行 ${ask.selected.length} 项`;
+            submit.disabled = ctx.state.isSending || Object.keys(ctx.state.remoteRounds || {}).length > 0
+              || !ask.selected.length;
+            submit.setAttribute('data-ask-value', 'pick:' + ask.selected.join(','));
+          }
+          saveAsk(ask);
+        };
+        all.addEventListener('change', () => {
+          values.forEach(value => all.checked ? selected.add(value) : selected.delete(value)); update();
+        });
+        choices.forEach(op => {
+          const value = Number(op.value.slice(5));
+          const label = document.createElement('label'); label.className = 'chat-ask-choice';
+          const input = document.createElement('input'); input.type = 'checkbox'; input.disabled = busy;
+          const text = document.createElement('span'); text.textContent = op.label || `项目 ${value + 1}`;
+          label.append(input, text); list.appendChild(label); inputs.push({input, value});
+          input.addEventListener('change', () => {input.checked ? selected.add(value) : selected.delete(value); update();});
+        });
+        askBtns.appendChild(list);
+        updateSelection = update;
+      }
+      buttons.forEach((op) => {
         const b = document.createElement('button');
         b.type = 'button';
         b.disabled = busy;
@@ -242,8 +292,10 @@
                       + (op.value === 'no' ? 'no' : (op.value === 'other' ? 'other' : 'yes'));
         b.textContent = op.label || '确定';
         b.setAttribute('data-ask-value', op.value || 'yes');
+        if (choices.length && op.value === 'yes') {submit = b; b.setAttribute('data-ask-submit', '');}
         askBtns.appendChild(b);
       });
+      if (updateSelection) updateSelection();
       if (anchor) messages.insertBefore(askBox, anchor.nextSibling);
       else messages.appendChild(askBox);
       saveAsk(ask);
@@ -266,6 +318,7 @@
       const deadline = ttl === null ? undefined : performance.now() + Math.max(0, ttl);
       const previous = currentAsk?.id === data.id ? currentAsk.expiresAt : undefined;
       currentAsk = { ...data, convId, anchor_id: row?.anchor_id,
+        selected: currentAsk?.id === data.id ? currentAsk.selected : row?.selected,
         expiresAt: Number.isFinite(previous) && Number.isFinite(deadline)
           ? Math.min(previous, deadline) : deadline };
       if (anchor && !owners.get(data.id)?.isConnected) owners.set(data.id, anchor);

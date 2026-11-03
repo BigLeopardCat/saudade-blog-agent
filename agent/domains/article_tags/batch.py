@@ -40,6 +40,21 @@ def validate(value):
     return args
 
 
+def combine(specs):
+    if not isinstance(specs, list) or not specs:
+        raise ValueError("标签批量清单不能为空")
+    parts = []
+    for spec in specs:
+        if not isinstance(spec, dict) or spec.get("tool") != NAME:
+            raise ValueError("标签批量事务不能混入其他操作")
+        parts.append(validate(spec.get("args")))
+    first = parts[0]
+    if any(part["intent"] != first["intent"] for part in parts):
+        raise ValueError("标签批量意图不一致")
+    return validate({"items": [item for part in parts for item in part["items"]],
+                     "intent": first["intent"]})
+
+
 def plans(ids, intent, config):
     if len(set(ids)) != len(ids):
         return invalid_args("批量文章编号不能重复。")
@@ -78,8 +93,11 @@ def prepare(ids, intent, config):
         text += f"\n\n另有{len(rows) - len(changed)}篇已达成，不纳入改动。"
     principal, cid = bound_context(config)
     check_cancelled(config)
-    return proposal(principal, cid, "article_tags", {"tool": NAME, "args": args},
-                    executor="article_tags", question=text + "\n\n确认后整批执行。", target=text)
+    specs = [{"tool": NAME, "args": {"items": [item], "intent": args["intent"]}}
+             for item in args["items"]]
+    return proposal(principal, cid, "article_tags", specs, executor="article_tags",
+                    question="选择要修改标签的文章；未勾选的保留原标签。", target=text,
+                    choices=[f"#{row['id']}\n" + change_summary(row, intent) for row in changed])
 
 
 def outcomes(rows, args, before):
