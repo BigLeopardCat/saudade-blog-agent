@@ -571,7 +571,7 @@
         // 返回 false = 只能等流尾（整页跳转，见上）。
         const applyCmd = (c, contentSpan, allowDeferred) => {
             if (!c || typeof c !== 'object' || c.__done) return true;
-            if (c.kind === 'appearance' && browserActions) {
+            if (['appearance', 'article_editor'].includes(c.kind) && browserActions) {
               c.__done = browserActions.receive(c, { convId: roundConvId, original: msg,
                                                      processFrom: div });
               return c.__done;
