@@ -86,6 +86,15 @@ def _summary_attempted(events):
                for event in events)
 
 
+def _source_labels(doc):
+    meta = doc.get("input")
+    meta = meta if isinstance(meta, dict) else {}
+    runtime = meta.get("runtime")
+    runtime = runtime if isinstance(runtime, dict) else {}
+    return tuple(value if isinstance(value, str) and value else "unknown"
+                 for value in (meta.get("source"), runtime.get("build_sha")))
+
+
 def request_cohorts(documents, prices=None):
     """Compare request lifecycles; first observed never implies a provider cold cache."""
     seen, after_compaction, groups = set(), set(), {}
@@ -116,10 +125,7 @@ def request_cohorts(documents, prices=None):
                 after_compaction.add(identity)
         models = {event.get("model") for event in layouts if event.get("model")}
         model = next(iter(models)) if len(models) == 1 else "mixed_or_unknown"
-        meta = doc.get("input") or {}
-        runtime = meta.get("runtime") or {}
-        key = (cohort, model, meta.get("source") or "unknown",
-               runtime.get("build_sha") or "unknown")
+        key = (cohort, model, *_source_labels(doc))
         if key not in groups:
             groups[key] = {"cohort": cohort, "model": model, "source": key[2],
                            "build": key[3], "requests": 0, **usage.empty()}
@@ -128,6 +134,7 @@ def request_cohorts(documents, prices=None):
         for field, value in usage.totals(events).items():
             row[field] += value
     return [{**row, "hit_rate": usage.hit_rate(row),
+             **usage.provider_costs(row),
              "measured_uncached_input": row["cache_in"] - row["cache"],
              "estimated_cost": estimate_cost(row, prices)
              if row["model"] != "mixed_or_unknown" else None}

@@ -35,7 +35,9 @@ def test_reasoning_tool_roundtrip_retains_gateway_headers_media_and_usage(stream
                     "reasoning_content": "verified"})
         usage = {"prompt_tokens": 30, "completion_tokens": 8, "total_tokens": 38,
                  "prompt_cache_hit_tokens": 20,
-                 "completion_tokens_details": {"reasoning_tokens": 3}}
+                 "completion_tokens_details": {"reasoning_tokens": 3}, "cost": 0,
+                 "opencode": {"billing_source": "go", "list_cost": 0.0002,
+                              "allowance": 0.00012, "private_value": "SECRET_CANARY"}}
         finish = "tool_calls" if len(requests) == 1 else "stop"
         if not streaming:
             return httpx.Response(200, json={"id": "reply", "model": "deepseek-v4.1-flash",
@@ -73,6 +75,14 @@ def test_reasoning_tool_roundtrip_retains_gateway_headers_media_and_usage(stream
     assert final.content == "Read complete."
     assert final.usage_metadata["input_token_details"]["cache_read"] == 20
     assert final.usage_metadata["output_token_details"]["reasoning"] == 3
+    from agent.llm_usage import usage_fields
+    fields = usage_fields(final)
+    assert fields["provider_cost_usd"] == 0
+    assert fields["provider_list_cost_usd"] == 0.0002
+    assert fields["provider_allowance_usd"] == 0.00012
+    assert fields["provider_billing_source"] == "go"
+    assert "SECRET_CANARY" not in str(fields)
+    assert "provider_billing" not in json.dumps(requests)
 
 
 def test_canonical_assistant_history_uses_empty_reasoning_without_inventing_it():

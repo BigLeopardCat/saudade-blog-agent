@@ -36,6 +36,35 @@ def test_raw_gateway_usage_and_absent_responses():
         assert usage_fields(response) == {}
 
 
+@pytest.mark.parametrize("value", [None, True, -1, float("inf"), float("nan"),
+                                   "0.0001", 10**400])
+def test_invalid_billing_never_falsifies_or_breaks_token_accounting(value):
+    response = AIMessage(content="", usage_metadata={
+        "input_tokens": 100, "output_tokens": 7, "total_tokens": 107},
+        response_metadata={"provider_billing": {
+            "provider_billing_source": "go", "provider_cost_usd": value}})
+    fields = usage_fields(response)
+    assert fields["input"] == 100 and fields["output"] == 7
+    assert "provider_cost_usd" not in fields
+
+
+def test_billing_contract_does_not_treat_arbitrary_cost_fields_as_dollars():
+    response = AIMessage(content="", response_metadata={"token_usage": {
+        "prompt_tokens": 100, "completion_tokens": 7, "cost": 1000000}})
+    assert usage_fields(response) == {"input": 100, "output": 7}
+    response.response_metadata["token_usage"]["opencode"] = {"billing_source": []}
+    assert usage_fields(response) == {"input": 100, "output": 7}
+
+
+def test_byok_cost_estimate_is_explicit_and_billing_does_not_require_token_coverage():
+    response = AIMessage(content="", response_metadata={"token_usage": {
+        "cost": .001, "opencode": {"billing_source": "byok", "estimated": True}}})
+    fields = usage_fields(response)
+    assert fields["provider_cost_usd"] == .001
+    assert fields["provider_cost_is_estimate"] is True
+    assert "input" not in fields and "output" not in fields
+
+
 @pytest.mark.parametrize("cache", [None, 0, 64])
 def test_native_loop_records_measured_cache_usage_without_inventing_a_zero(monkeypatch, cache):
     events = []
