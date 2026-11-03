@@ -70,7 +70,8 @@ def read_current_article(
     """Read the currently OPEN article editor's live unsaved draft and summary, admin only.
     Returns editor_id and revision for subsequent edits, content slice, total_chars and
     next_offset (null at end). Use further offsets for long drafts. This is draft content,
-    not the published article. No open editor means unavailable; never invent a draft.
+    not the published article. proposal_id identifies an existing pending body review.
+    No open editor means unavailable; never invent a draft.
     """
     if type(offset) is not int or offset < 0 or type(limit) is not int or not 1 <= limit <= 24000:
         raise ToolException("正文读取范围不合法。")
@@ -114,7 +115,8 @@ def prepare_article_summary(
     """Prepare a confirmation card to create or replace the current draft's summary.
     Read the current editor first and use its editor_id/revision. Nothing is changed
     before the user approves the card. Approval updates the working copy and normal
-    autosave, never publication. A changed draft needs a fresh read and confirmation.
+    autosave, never publication. Existing body review is retained. A changed draft needs
+    a fresh read and confirmation.
     """
     config = runtime.config
     if not authorized(config, "prepare_article_summary"):
