@@ -440,4 +440,5 @@ if __name__ == "__main__":
 
 
 def test_todo_batch_receipt_uses_selected_count():
-    assert _full("delete_dashboard_todos", {"items": [{"item_id": 1}, {"item_id": 3}]}) == "删除 2 项待办"
+    items = [{"item_id": 1}, {"item_id": 3}]
+    assert _full("delete_dashboard_todos", {"items": items}) == "删除 2 项待办"
