@@ -3,7 +3,7 @@
 
 Host metrics read local system state. Site reports call the Blog API with the
 requesting user's identity; the backend checks current administrator privileges.
-Native menus use compact descriptions while legacy callers keep these schemas.
+Tool definitions are the single source of model-visible descriptions and schemas.
 """
 
 import logging
@@ -27,9 +27,7 @@ logger = logging.getLogger(__name__)
 def get_server_status() -> str:
     """查看服务器运行状态：CPU 核数与使用率、1/5/15 分钟负载、内存与 Swap 用量、
     各磁盘用量与可用空间、开机时长。数据由 agent 直接读本机 /proc 得到，不经后台接口。"""
-    # 延迟导入：tools.base 在 `agent` 包的导入链**上游**（agent/__init__ → agent.agent
-    # → agent.graph → tools），模块级 `from agent import …` 会构成循环导入。
-    # 同先例见 rag/search.py 的 `from tools.base import _get`。
+    # Import report dependencies lazily to avoid the tool registry's import cycle.
     from agent import hostinfo as H
     from agent import reports as R
     try:
@@ -38,9 +36,7 @@ def get_server_status() -> str:
         if cpu is None and not mem:
             # 两样都读不到 = 这根本不是一台正常机器，如实说"读不到"而不是给一张空报表
             return unavailable("读取服务器状态失败：本机 /proc 不可读")
-        # 渲染用的那几个数**同时**当结构交出去（批 G5）：报表文本是给人看的**渲染**，
-        # 而跨轮实体摘要（`entity_digest`）此前只能对着它跑正则抽数字——改一句措辞
-        # 摘要就静默变空。数本来就在这个作用域里，这里只是让它们多留一格。
+        # Preserve structured measurements alongside their readable projection.
         kw: R.ServerStatusKw = {"cpu_pct": cpu, "cores": os.cpu_count() or 0,
               "load": H.parse_loadavg(H.read_loadavg()), "mem": mem,
               "disks": H.disk_rows(), "uptime_s": H.read_uptime()}
@@ -52,10 +48,9 @@ def get_server_status() -> str:
 
 @tool
 def get_service_health() -> str:
-    """查看服务健康：本机 systemd 服务（Rust 后端、Python agent，装了物联网平台时
-    还有 device-service）的状态、重启次数与启动时刻，心跳探针近 24 小时的 WARN/FAIL，
-    今日对话的轮数、异常收尾与质检拦截，以及存活日志的体积。读的是本机的 systemctl
-    与 logs/ 目录。"""
+    """读取当前服务状态、重启次数、历史探针记录、对话计数和日志体积，仅管理员。
+    当前状态不能证明历史一直正常；这些读数不证明故障原因。
+    """
     from agent import hostinfo as H
     from agent import reports as R
     try:
@@ -201,15 +196,11 @@ def get_user_stats(config: RunnableConfig) -> str:
 
 @tool
 def get_note_stats(config: RunnableConfig) -> str:
-    """查看文章**流量**报表（全站口径）：阅读量/点赞量/收藏量的合计、三张排行榜
-    （阅读榜、点赞榜、收藏榜，各取前 10，**报表里逐条印着「第 N 名」**）、
-    以及最近 30 天的日趋势。
-
-    用来回答"哪几篇最火 / 阅读量最高的是哪篇、排第几 / 这篇排第几 / 最近有人看吗"。
-    只算**当前可见**的文章（草稿与私密不计入，连带它们的历史阅读量）。
-    这是**全站排行**：问**某一篇**有多少阅读/点赞/收藏，用 get_article_detail
-    （它逐篇带这三个数），别用本工具去猜单篇。
-    需要管理员身份。"""
+    """查询当前可见文章的历史累计合计与阅读、点赞、收藏排行榜，另附近30天日趋势。
+    合计和排行均为历史累计，不是本周、本月或本年；有明确自然周期时使用get_note_periods。
+    日趋势是独立滚动窗口，不能据此把累计排行榜称为窗口内排名。
+    单篇文章的累计指标使用get_article_detail。本工具仅管理员可用。
+    """
     from agent import reports as R
     data = _base._admin_get("/api/protected/stats/notes", config)
     if isinstance(data, ToolResult):
@@ -226,23 +217,14 @@ def get_note_stats(config: RunnableConfig) -> str:
 @tool
 def get_note_periods(
     kind: Annotated[Literal["week", "month", "year"],
-                    "报表粒度：week=按周 / month=按月 / year=按年。"
-                    "**必填**——主人问「上周/这个月/今年」就按他说的那个粒度给，"
-                    "别用一个近似的档糊过去"],
+                    "自然周期：week=周，month=月，year=年；按用户要求选择。"],
     config: RunnableConfig,
 ) -> str:
-    """查看文章的**分期**报表（周报 / 月报 / 年报）：逐期给出阅读/点赞/收藏的合计，
-    以及**这一期阅读量最高的几篇**（每篇带三个数）。
-
-    与 `get_note_stats` 是两张纸，别拿一张当另一张：
-    · `get_note_stats` = **当下快照**（全站合计、三张总榜、近 30 天日趋势）；
-    · 本工具 = **按期切开**（"上周怎么样""这个月和上个月比""去年哪几篇最热"）。
-    口径与它一致：只算**当前可见**的文章。
-    期数由后端定（一周一期给一年、一月一期给一年、一年一期给五年），**不要**自己
-    指定期数；报表会写明某一期是不是**不完整**（统计功能上线那一期只统计了部分天数），
-    照它说不完整，别把"部分"读成"掉了"；报表说一行记录都还没有时，那是"还没开始
-    统计"，不是"这些期没人看"。
-    需要管理员身份。"""
+    """按自然周、月或年查询文章访问合计和各期阅读排行，仅管理员。
+    每期合计涵盖本期全量，排行仅列前几篇。只算当前可见文章，范围由后端返回。
+    当前期或统计开始前的期可能不完整；未开始统计不等于零访问。
+    本工具不提供每日明细；查看近30天日序列用get_note_stats。
+    """
     from agent import reports as R
     data = _base._admin_get(f"/api/protected/stats/notes/periods?kind={kind}", config)
     if isinstance(data, ToolResult):

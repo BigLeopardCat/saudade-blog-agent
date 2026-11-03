@@ -25,21 +25,6 @@ ACCOUNT_READ_TOOLS = frozenset({"list_accounts"})
 
 QUEUE_READ_TOOLS = frozenset({"list_quota_requests", "list_dashboard_todos"})
 
-_ADMIN_DESCRIPTIONS = {
-    "get_server_status": "Read server CPU, load, memory, disk usage and uptime. Admin only.",
-    "get_service_health": "Read current service states, restart counts and historical probe "
-                          "records; does not establish failure causes. Admin only.",
-    "get_user_stats": "Read total users, role distribution and recent activity. Admin only.",
-    "get_note_stats": "Read visible articles' aggregate traffic, rankings and daily traffic "
-                      "for a rolling 30-day window, not calendar-month totals. Use for recent "
-                      "within-month trends; compare full months with get_note_periods. Admin only.",
-    "get_note_periods": "Read article traffic totals per week, month or year, including partial "
-                        "periods. Choose kind from the user's requested period. For a daily "
-                        "series use get_note_stats; this report contains period totals. "
-                        "Admin only.",
-}
-
-
 def _tools_with_scope(names: frozenset[str], scope: str) -> dict:
     wrong_scope = {name: TOOL_SCOPE.get(name) for name in names
                    if TOOL_SCOPE.get(name) != scope}
@@ -63,9 +48,7 @@ def site_tools() -> dict:
 
 
 def admin_tools() -> dict:
-    selected = _tools_with_scope(ADMIN_READ_TOOLS, SCOPE_ADMIN_CONSOLE)
-    return {name: tool.model_copy(update={"description": _ADMIN_DESCRIPTIONS[name]})
-            for name, tool in selected.items()}
+    return _tools_with_scope(ADMIN_READ_TOOLS, SCOPE_ADMIN_CONSOLE)
 
 
 def moderation_tools() -> dict:

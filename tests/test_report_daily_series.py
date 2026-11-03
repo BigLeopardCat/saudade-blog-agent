@@ -67,3 +67,22 @@ def test_missing_daily_rows_and_missing_metrics_are_not_zero_observations():
         assert '不能据此断言零访问' in text
     text = render_note_stats({'daily': [{'date': '2026-11-01', 'views': 0, 'likes': 0}]})
     assert '返回日期内的阅读和点赞均为零' in text
+
+
+def test_lifetime_rankings_and_recent_daily_values_keep_distinct_scopes():
+    text = render_note_stats({
+        'totalViews': 1200, 'totalLikes': 7, 'totalFavorites': 3,
+        'topViewed': [{'noteId': 23, 'title': '跨年文章', 'views': 900,
+                       'likes': 2, 'favorites': 1}],
+        'topLiked': [], 'topFavorited': [],
+        'daily': [{'date': '2026-11-03', 'views': 4, 'likes': 0}],
+        'dailyWindow': {'scope': 'rolling_window', 'start': '2026-10-05',
+                        'end': '2026-11-03',
+                        'monthlySubtotals': [{'month': '2026-11', 'views': 4}]},
+    })
+    assert '历史累计合计' in text and '阅读 1200' in text
+    ranking = text.split('历史累计阅读榜', 1)[1].split('历史累计点赞榜', 1)[0]
+    assert 'noteId 23' in ranking and '阅读 900' in ranking
+    assert '窗口内2026-11小计（不是整月合计）：阅读 4' in text
+    assert '2026-11-03 阅读 4' in text
+    assert '本期阅读榜' not in text

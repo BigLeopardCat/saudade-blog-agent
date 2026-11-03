@@ -57,15 +57,16 @@ def _prepare(target, title, content, config):
 @tool(return_direct=True)
 def prepare_user_notice(
     content: Annotated[targets.Content, Field(description=(
-        "实际发送正文。用户指定原文则逐字保留；代写时，后续待执行操作须用将/计划表述。"
-        "例如先通知再降级，应写将调整，不能在没有成功回执时写已调整。"
-        "不增添用户未提供的规则、条件或承诺。"))],
+        "收件人将看到的完整正文。用户给出原文时逐字保留；否则简短转述其明确要求的消息，"
+        "未要求扩写时只转述消息本身，不添加原因、政策或后续安排。尚未执行的变更用将/计划表述；"
+        "已完成的变更须有成功回执。"))],
     config: RunnableConfig,
     user_id: targets.Identifier | None = None,
     username: targets.Username | None = None,
     title: targets.Title | None = None,
 ) -> object:
-    """准备给单个账号发送个人通知的确认，不写入。收件人以唯一编号或完整账号名定位。
+    """准备单向站内通知的确认，不写入；收件人不能回复通知，发送后不能撤回。
+    收件人以唯一编号或完整账号名定位。
     同时提供user_id和username时必须指向同一个账号。
     正文最多1000字，完整展示后确认；标题可选，最多128字，省略为站内通知。
     代写只使用用户提供或工具核实的信息；群体公开通知应使用公告工具。
