@@ -575,6 +575,10 @@ def _todo_text(name, a, preview):
         # Describe intent here; only the execution receipt establishes completion.
         body = _todo_preview(a.get("text")) if preview else _raw(a.get("text"))
         return f"把待办「{body}」勾成完成" if body else "勾完成待办"
+    if name == "delete_dashboard_todos":
+        items = a.get("items")
+        count = len(items) if isinstance(items, list) else 0
+        return f"删除 {count} 项待办" if count else "批量删除待办"
     if name == "delete_dashboard_todo":
         body = _todo_preview(a.get("text")) if preview else _raw(a.get("text"))
         return f"删除待办「{body}」" if body else "删除待办"
