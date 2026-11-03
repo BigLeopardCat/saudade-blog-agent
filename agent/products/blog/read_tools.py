@@ -1,4 +1,4 @@
-"""Authorized read domains used by the native tool loop.
+"""Authorized read domains used by the agent tool loop.
 
 This is a capability boundary: adding a tool here changes what the model can
 read directly. Private reads require verified identity and a runtime scope
@@ -25,17 +25,18 @@ ACCOUNT_READ_TOOLS = frozenset({"list_accounts"})
 
 QUEUE_READ_TOOLS = frozenset({"list_quota_requests", "list_dashboard_todos"})
 
+
 def _tools_with_scope(names: frozenset[str], scope: str) -> dict:
     wrong_scope = {name: TOOL_SCOPE.get(name) for name in names
                    if TOOL_SCOPE.get(name) != scope}
     if wrong_scope:
         label = scope.removeprefix("read.")
-        raise RuntimeError(f"Native tools must remain {label} reads: {wrong_scope}")
+        raise RuntimeError(f"Read tools must remain {label} reads: {wrong_scope}")
     selected = {tool.name: tool for tool in get_all_tools()
                 if tool.name in names}
     missing = names - selected.keys()
     if missing:
-        raise RuntimeError(f"Native tools missing from registry: {sorted(missing)}")
+        raise RuntimeError(f"Read tools missing from registry: {sorted(missing)}")
     return selected
 
 
