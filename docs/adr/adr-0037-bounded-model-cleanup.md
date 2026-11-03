@@ -1,7 +1,6 @@
 # ADR-0037：模型连接清理有期限且失败后停止复用
 
 - **状态**：已采纳（2026-11-03）。
-- **承接**：[ADR-0024](adr-0024-framework-kernel-and-domain-extensions.md)。
 - **影响范围**：ModelIO 生命周期、就绪检查与资源诊断。
 - **判据**：`tests/providers/test_model_cleanup.py`，以及既有模型停止、截止时间和连接池复用测试。
 

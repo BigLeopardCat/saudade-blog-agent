@@ -1,36 +1,4 @@
-"""手抄表的机器锁 · 第二站：**标签配色与色名**（20261013，行业规范收口批 3c/3d）。
-
-**病**：站内那 8 个色值在这条链路上住着**五处**，而它们**互相牵制**——
-
-  · A `agent/adminops.py::NEW_TAG_COLORS` —— agent 建标签时按名字哈希取色的**取色表**；
-  · B `agent/adminops.py::_COLOR_CANON` —— hex → 规范中文名（**回程渲染**用：
-    「颜色 粉色（#eb2f96）」）；
-  · C `agent/adminops.py::_TAG_COLOR_ALIASES` —— 口语说法 → hex（「橘」「大红」）；
-  · D 父仓 `frontend/src/utils/chatMarkdown.ts::chatColorPalette` —— 站内聊天气泡的
-    色块装饰器**白名单**（色板外的色值**不画色块**）；
-  · E 父仓 `frontend/src/components/NoteTagSelect/index.tsx::NEW_TAG_COLORS` ——
-    用户手建标签时**前端自己**按名字取色（不经过 agent）。
-
-**为什么值得上锁**（每一处漏同步的代价都看得见）：
-  · A/D/E 是**有序**表，而取色是 `hash % len(表)` ⇒ **换序 = 全站换色**（同一个标签名
-    在 agent 建的与用户手建的上面呈现两种颜色）。三个表还各自是"取值"的来源，
-    少一个色 ⇒ 那个色在某一侧永远落不到。
-  · B 的名字是**回程话术**：色板里加了色而 `_COLOR_CANON` 没跟，回程就会说
-    「颜色 None（#xxxxxx）」或者干脆编一个（`黄` 落到 `#a0d911` 那件事就是这么定的调）。
-  · C 的值必须落在色板内：色板外的 hex **前端不画色块**（D 是白名单），
-    于是 agent 回答"我给你标成 #ff0000"而屏幕上一片空白——**说得出、画不出**。
-  · 哈希算子本身跨语言：Python 走 `_utf16_units`（显式 UTF-16 码元），JS 走
-    `name.charCodeAt(i)`。用 `ord()` 顶替它，**只在 emoji 名字上**不一样 ⇒
-    一个词在两侧两种颜色，而中文语料里**看不出来**（§④ 给了一个真实 emoji 对照）。
-
-判据一律**从源码现取值**（AST 读 Python 字面量、正则读 TS 字面量），不抄常量——
-抄一份常量就是把"手抄表"搬进测试里，那正是本套件要消灭的东西。
-
-**本套件不管什么**：色值的**渲染**（`decorateColorSwatches` 怎么画）是父仓自己的事；
-`agent/adminops.py` 的别名表**收多少种口语说法**也只管"值域在色板内"，不管收没收全
-（那是话术覆盖度，靠 golden 看，不靠这张表）。
-
-用法：.venv/bin/python tests/test_tag_color_tables.py
+"""手抄表的机器锁 · 第二站：**标签配色与色名**。
 """
 
 
@@ -61,7 +29,7 @@ def _py_literal(rel: str, name: str):
 
     ⚠️ 不能用"抓 `NAME = [...]` 到行尾"那种：本仓的这两个表**跨行**写，
     而且行尾带注释（`"黄": "#a0d911",   # 站内没有正黄…`）——注释里的色值会被
-    当成表里的色。同族教训：`docs/lint-baseline.md` 记的"注释伪装成代码骗过断言"。
+    当成表里的色。注释中的示例不应被解析成配置。
     """
     tree = ast.parse((ROOT / rel).read_text(encoding="utf-8"))
     for node in tree.body:

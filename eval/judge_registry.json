@@ -968,7 +968,7 @@
       "q": "_ROLE_ALIASES",
       "why": "主人怎么称呼角色（超管/管理员/杂鱼…）",
       "replacement": "模型声明 role 枚举",
-      "sunset": "写参数出处第二批（挂起：等真实流量定价，见 docs/write-provenance-shadow-20261014.md §7）"
+      "sunset": "现有参数归一化；仅允许基于真实流量评估后收敛"
     },
     {
       "id": "agent/adminops_account.py::_ROLE_CONSEQ",
@@ -1010,7 +1010,7 @@
       "q": "_QUOTA_VERB",
       "why": "主人怎么表达批准/驳回/重置",
       "replacement": "模型声明 action 枚举",
-      "sunset": "写参数出处第二批（挂起：等真实流量定价，见 docs/write-provenance-shadow-20261014.md §7）"
+      "sunset": "现有参数归一化；仅允许基于真实流量评估后收敛"
     },
     {
       "id": "agent/adminops_tags.py::_TAG_COLOR_ALIASES",
@@ -1022,7 +1022,7 @@
       "q": "_TAG_COLOR_ALIASES",
       "why": "主人怎么用中文说颜色别名",
       "replacement": "颜色值由模型声明为规范化色值，_COLOR_CANON 只当规范表",
-      "sunset": "写参数出处第二批（挂起：等真实流量定价，见 docs/write-provenance-shadow-20261014.md §7）"
+      "sunset": "现有参数归一化；仅允许基于真实流量评估后收敛"
     },
     {
       "id": "agent/adminops_tags.py::_COLOR_CANON",
@@ -1044,7 +1044,7 @@
       "q": "_STATUS_ALIASES",
       "why": "主人怎么表达文章状态（公开/私密/草稿）",
       "replacement": "模型在参数格声明 status 枚举，代码只查枚举",
-      "sunset": "写参数出处第二批（挂起：等真实流量定价，见 docs/write-provenance-shadow-20261014.md §7）"
+      "sunset": "现有参数归一化；仅允许基于真实流量评估后收敛"
     },
     {
       "id": "agent/adminops_tags.py::_TOP_ALIASES",
@@ -1056,7 +1056,7 @@
       "q": "_TOP_ALIASES",
       "why": "主人怎么表达置顶/取消置顶",
       "replacement": "模型声明布尔参数",
-      "sunset": "写参数出处第二批（挂起：等真实流量定价，见 docs/write-provenance-shadow-20261014.md §7）"
+      "sunset": "现有参数归一化；仅允许基于真实流量评估后收敛"
     },
     {
       "id": "agent/adminops_tags.py::_VERDICT_ALIASES",
@@ -1068,7 +1068,7 @@
       "q": "_VERDICT_ALIASES",
       "why": "主人怎么表达通过/驳回",
       "replacement": "模型声明 verdict 枚举",
-      "sunset": "写参数出处第二批（挂起：等真实流量定价，见 docs/write-provenance-shadow-20261014.md §7）"
+      "sunset": "现有参数归一化；仅允许基于真实流量评估后收敛"
     },
     {
       "id": "agent/adminops_target.py::_TARGET_ID_NS_RE",
@@ -1092,7 +1092,7 @@
       "q": "(?:文章|笔记|帖子|文档)\\s*[#＃No.、]?\\s*(\\d{1,7})",
       "why": "从主人话里抽『文章3』这种指名",
       "replacement": "指名由模型抽成 article_id 参数",
-      "sunset": "写参数出处第二批（挂起：等真实流量定价，见 docs/write-provenance-shadow-20261014.md §7）"
+      "sunset": "现有参数归一化；仅允许基于真实流量评估后收敛"
     },
     {
       "id": "agent/adminops_target.py::_NAMED_ORDINAL_RES",
@@ -1105,7 +1105,7 @@
       "q": "第\\s*(\\d{1,7})\\s*(?:篇|章|条|个)",
       "why": "从主人话里抽『第3篇』这种序数指名",
       "replacement": "同上：模型抽成参数",
-      "sunset": "写参数出处第二批（挂起：等真实流量定价，见 docs/write-provenance-shadow-20261014.md §7）"
+      "sunset": "现有参数归一化；仅允许基于真实流量评估后收敛"
     },
     {
       "id": "agent/adminops_target.py::_NAMED_LIST_ITEM_RE",
@@ -1118,7 +1118,7 @@
       "q": "\\s*(?:和|与|跟|及|以及|还有|、|,|，)\\s*(?:第\\s*)?[#＃]?\\s*(\\d{1,7})",
       "why": "从主人话里抽列表项之间的分隔（和/与/以及/、）",
       "replacement": "列表项由模型拆分后逐项成参数",
-      "sunset": "写参数出处第二批（挂起：等真实流量定价，见 docs/write-provenance-shadow-20261014.md §7）"
+      "sunset": "现有参数归一化；仅允许基于真实流量评估后收敛"
     },
     {
       "id": "agent/adminops_target.py::_COUNT_TAIL_RE",
@@ -1131,7 +1131,7 @@
       "q": "^\\s*(?:篇|个|条|次|字|行|块|张|页)",
       "why": "从主人话里抽数量尾巴（篇/个/条/次…）",
       "replacement": "数量由模型抽成数字参数",
-      "sunset": "写参数出处第二批（挂起：等真实流量定价，见 docs/write-provenance-shadow-20261014.md §7）"
+      "sunset": "现有参数归一化；仅允许基于真实流量评估后收敛"
     },
     {
       "id": "agent/adminops_target.py::_TARGET_VERB",
@@ -1143,7 +1143,7 @@
       "q": "_TARGET_VERB",
       "why": "主人怎么表达收藏/取消收藏",
       "replacement": "模型声明 action 枚举",
-      "sunset": "写参数出处第二批（挂起：等真实流量定价，见 docs/write-provenance-shadow-20261014.md §7）"
+      "sunset": "现有参数归一化；仅允许基于真实流量评估后收敛"
     },
     {
       "id": "agent/adminops_todo.py::_DUE_REL_DAYS",
@@ -1155,7 +1155,7 @@
       "q": "_DUE_REL_DAYS",
       "why": "主人说『今天/明天/后天』这种相对日期",
       "replacement": "相对日期由模型换算成日期参数",
-      "sunset": "写参数出处第二批（挂起：等真实流量定价，见 docs/write-provenance-shadow-20261014.md §7）"
+      "sunset": "现有参数归一化；仅允许基于真实流量评估后收敛"
     },
     {
       "id": "agent/adminops_todo.py::_TODO_CLEAR_DATES",
@@ -1167,7 +1167,7 @@
       "q": "_TODO_CLEAR_DATES",
       "why": "主人怎么表达『清空/取消』这个截止日",
       "replacement": "模型声明 clear 布尔参数",
-      "sunset": "写参数出处第二批（挂起：等真实流量定价，见 docs/write-provenance-shadow-20261014.md §7）"
+      "sunset": "现有参数归一化；仅允许基于真实流量评估后收敛"
     },
     {
       "id": "agent/domains/automations/presentation.py::LABELS",

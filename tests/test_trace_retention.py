@@ -1,20 +1,4 @@
 """trace 目录布局与保留治理（`utils/trace` + `trace_files` / `trace_retention`）单测。
-
-离线、秒级、零网络、零生产目录（全部在 tmpdir 里）。
-
-为什么单独一套：20260925 之前的保留期**从来没有生效过**——`/etc/logrotate.d/saudade`
-写着 `rotate 14`，而 trace 是"一次会话一个、文件名唯一"的产物，logrotate 的
-`rotate N` 靠同名后缀计数，这种文件永远不会第二次成为轮转候选（实测 `.2.gz`/`.3.gz`
-各 0 个、最老文件 26 天）。**装饰性的保留策略**正是本仓反复踩的那类坑，所以这里钉三件事：
-
-  ① **布局契约**：写侧（`_TraceRecorder.dump`）与读侧（`iter_trace_files`）必须一致——
-     一次真实落盘的往返断言，比两边各自"看起来对"强；
-  ② **判据与动作**：谁该删、谁该压、dry-run 绝不动盘；
-  ③ **压缩不许给文件续命**：压缩若刷新 mtime，年龄就归零，保留期会第二次变成装饰性的
-     ——所以断言压缩后 mtime 逐字不变。
-
-golden 那半也要盯（`by_day=False`）：它一旦被套上 `<YYYYMMDD>/`，
-`llm_judge` 的 `glob("*.json")` 与 `golden_trace.prune` 会一起落空、而且不报错。
 """
 
 

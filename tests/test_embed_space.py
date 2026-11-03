@@ -1,22 +1,4 @@
-"""图谱这一路的 embedding 空间解析（`rag/embed_space.py`）离线套件（20261007）。
-
-秒级、零网络、零 LLM：**一次 embedding 调用都不发**（真调要花一次钱，而且离线套件的
-纪律就是无网络）。这里量的是"两端会不会解出两个空间"——那件事不会报错，只会让图
-默默变得不对，所以判据只能建在**解析结果与产物记账**上：
-
-① **解析规则**（`resolve`）：`EMBEDDING_*` 齐 ⇒ 用它；缺 key / 占位 key / 缺 model ⇒
-   回落 `QWEN_*` + `FALLBACK_MODEL`；垃圾的 dim/batch 不许炸、也不许悄悄变成别的值。
-② **与 `Settings.embedding_configured` 同口径**：那条规则写在两处（一处给配置面看，
-   一处给图谱用），两边**任何一格分叉**都会让"配了却没生效"或"没配却去调"。
-③ **旧缓存兼容只有一条通路**：旧文件没有空间签名，唯一可能的出处就是老路
-   （`FLAT_CACHE_MODEL` + `QWEN_BASE_URL`）——差一个字就整份作废重嵌，**绝不半读**
-   （半读 = 两代向量混进同一张图）。⚠️ **`FALLBACK_MODEL` 与 `FLAT_CACHE_MODEL` 是两个
-   不同的东西**（"现在该用哪个" vs "老文件当年是谁建的"），这里有一条锁钉住它们不相等。
-④ **查询侧明着降级**：产物不是当前空间建的 ⇒ `query_words` 返回 `space_mismatch`，
-   且**一次 embedding 调用都不花**（`_embed_one` 被换成计数器：它动了就是红）。
-
-⚠️ 本套件不依赖本机 `.env`：`resolve()` 全部显式传 dict，`Settings` 全部显式传参
-（`tests/conftest.py` 的钉子环境与产线取值无关，判据也不能跟着它变）。
+"""图谱这一路的 embedding 空间解析（`rag/embed_space.py`）离线套件。
 """
 
 

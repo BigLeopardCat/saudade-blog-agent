@@ -1,15 +1,3 @@
-# 依赖升级的机器入口（20261013 补）。
-#
-# **为什么本来该有、却一直没有**：`SECURITY.md` 把上游 CVE 明确推给"上游与 Dependabot"
-# （见该文件「不在本仓支持范围内」那一节的最后一条），但仓库里从来没有这份配置 ⇒
-# 只有 GitHub 的**安全告警**，没有**版本升级 PR**；而本仓的依赖一律 `==` 钉死
-# （见 pyproject.toml 那段注），没有任何东西会去动它们 ⇒ 那句"交给 Dependabot"
-# 当时是一句空头承诺。补上这份配置，那句话才成立。
-#
-# 与 CI 的关系：本仓的静态扫描与套件都以**锁定的版本**为准（CI 跑 `uv sync --frozen`，
-# `docs/lint-baseline.md` 的纪律①b 还断言"文档里的 ruff 版本 == dev 分组的版本"）。
-# 所以 ruff 的升级 PR **必须**同时改 `pyproject.toml` 与 `docs/lint-baseline.md`——
-# 那份 PR 绿了才说明改齐了；这条不是提醒，是 `tests/test_ci_suite_list.py` ①b 会红的。
 version: 2
 
 updates:

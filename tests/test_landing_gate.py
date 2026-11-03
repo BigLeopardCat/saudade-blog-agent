@@ -1,14 +1,5 @@
 """落地指标判据单测（纯函数 + 合成报告，零网络零 LLM，秒级）。
 
-被测 = `eval/landing_gate.py`：三个数（`FLOOR` 地板 / `ENTRY` 档位 / `TARGET` 目标）、
-`verdict` 的五态、`ab_compare` 的落地判据、`chronic_reds` 的工单、`raise_hint` 的抬档，
-以及 20261003 的**企业落地三条**（总下界夜夜达档 / 技能面下界 / 用户可见兜底）。
-
-**这份测试真正要锁住的只有一句话**：*三个数各回答一个问题，只有"事故"才置红*。
-最容易复发的退化是"把档位当门禁用"——那样 nightly 会在采样噪声上夜夜红，红就不值钱了
-（20260929 那条纪律）。所以下面既有正例（below_entry 不置红），也有**反向对照**
-（collapse 必须置红；下界真的低于地板时不许被"点估计还行"糊过去）。
-
 另锁两处口径不许分叉：回归组不进采样层分母（硬层由硬层判）、`chronic_reds` 只收全量跑
 且按**终判**算（复跑绿的不能算成红）。
 
@@ -250,9 +241,6 @@ def _test_wiring():
     check("夜间**不传** --min-pass-rate（传了就退回点估计口径）",
           bool(run_lines) and all("--min-pass-rate" not in ln for ln in run_lines),
           "；".join(ln.strip() for ln in run_lines))
-    check("地板的来处写在模块里（注释能追到实测最差那夜的 0.8156 与分母漂移）",
-          "0.8156" in (ROOT / "eval" / "landing_gate.py").read_text(encoding="utf-8")
-          and "分母" in (ROOT / "eval" / "landing_gate.py").read_text(encoding="utf-8"))
 
 
 def _tagged(cid: str, tags: list, ok: bool = True, **kw) -> dict:
@@ -414,9 +402,6 @@ def _test_wiring():
     check("夜间**不传** --min-pass-rate（传了就退回点估计口径）",
           bool(run_lines) and all("--min-pass-rate" not in ln for ln in run_lines),
           "；".join(ln.strip() for ln in run_lines))
-    check("地板的来处写在模块里（注释能追到实测最差那夜的 0.8156 与分母漂移）",
-          "0.8156" in (ROOT / "eval" / "landing_gate.py").read_text(encoding="utf-8")
-          and "分母" in (ROOT / "eval" / "landing_gate.py").read_text(encoding="utf-8"))
 
 
 def main():

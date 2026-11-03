@@ -1,23 +1,5 @@
 # -*- coding: utf-8 -*-
-"""身份断言验签换库的**契约**（20261020，ADR-0014）：新验签 vs 旧手写验签**逐例同判**。
-
-**为什么非有这一套**：`tests/test_hardening.py::_test_user_assertion` 已经把
-"空密钥 / 合法 / 过期 / 错 aud / 错密钥 / 篡改签名 / 垃圾串 / 空串"都判过了，但它签的是
-**字符串** `sub`（`sign_assertion` 里 `"sub": str(sub)`）。而 Rust
-`auth_jwt::AssertionClaims.sub` 是 **`i32`**（JSON 数字）—— 换 PyJWT 之后，
-`decode` 默认 `options["verify_sub"] = True`，`_validate_sub` 在 `sub` 不是字符串时抛
-`InvalidSubjectError`。生产 `AGENT_REQUIRE_ASSERTION=1` ⇒ **每一条断言都被拒 ⇒ 全站对话
-401**，而**已有的那套用例在两种设置下都通得过、抓不到它**。所以这一套的第一件事就是拿
-**Rust 同形状（数字 sub）** 的令牌去撞，并且把"关掉那个选项就必须红"写成反控。
-
-第二件事是**逐例同判**：把旧的手写实现（照抄换库前那一版）搬进本文件当参照物，一张用例表
-两边各跑一遍，要求结论一致。换实现最容易漂的就是这些边角（缺声明 / `sub<=0` / `alg` 混淆 /
-边界时钟），而它们**每一条都是 401**。**两处故意不同**（都是收紧）单列在 `_TIGHTENED` 里，
-免得下一个人当成 bug 去"修"。
-
-用法：
-    uv run pytest tests/test_assertion_contract.py -v
-    uv run python tests/test_assertion_contract.py
+"""身份断言验签换库的**契约**：新验签 vs 旧手写验签**逐例同判**。
 """
 
 from __future__ import annotations

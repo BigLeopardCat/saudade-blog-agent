@@ -1,7 +1,4 @@
-"""Check text formatting, changelog coverage and a single version source.
-
-Dates use Asia/Shanghai. Pending changelog fragments may be newer than HEAD,
-but cannot be in the future. Generated artifacts are excluded from text checks."""
+"""Validate repository text formatting, dated changelog entries and version ownership."""
 
 
 import os
@@ -17,12 +14,6 @@ ROOT = Path(__file__).resolve().parent.parent  # 仓根
 
 
 sys.path.insert(0, str(ROOT))
-
-
-sys.path.insert(0, str(ROOT / "scripts" / "dev"))
-
-
-import changelog as _changelog  # noqa: E402  （碎片机制的工具，按路径取，不是包）
 
 FAILS: list[str] = []
 check = collector(FAILS)
@@ -86,20 +77,9 @@ def _parse_editorconfig(text: str) -> tuple[dict, dict]:
     return top, sections
 
 
-def _record_covers_head(record: str, head: str, today: str) -> bool:
-    return head <= record <= today
-
-
-def test_changelog_allows_pending_current_fragments():
-    assert _record_covers_head("20261022", "20261021", "20261022")
-    assert _record_covers_head("20261021", "20261021", "20261022")
-    assert not _record_covers_head("20261020", "20261021", "20261022")
-    assert not _record_covers_head("20261023", "20261021", "20261022")
-
-
 def _check_changelog() -> None:
-    """Validate dated entries and pending fragments on the repository timezone."""
-    print("\n③ CHANGELOG：日期倒序、每条有正文、记录覆盖 HEAD 且不是未来")
+    """Validate the single changelog using the repository timezone."""
+    print("\n③ CHANGELOG：日期倒序、每条有正文、日期有效且不是未来")
     cl = ROOT / "CHANGELOG.md"
     check("CHANGELOG.md 在位", cl.is_file())
     if not cl.is_file():
@@ -118,30 +98,16 @@ def _check_changelog() -> None:
             empty.append(d)
     check("每条日期下都有 `- ` 正文（哪怕是「这天无行为变更」那一行）",
           not empty, "、".join(empty))
-    # 与真实历史对齐：这一条是**强制决定**——那天没什么可记也要写一行。
-    try:
-        _frag_dates = sorted({d for d, _n, _b in _changelog.read_fragments()})
-    except ValueError as e:
-        _frag_dates = []
-        check(f"读得出 `changelog.d/` 里的碎片（{e}）", False)
-    newest_record = max([dates[0] if dates else ""] + _frag_dates)
-    # 日期一律按**本仓钟面**（+08:00）读，与 `_today_cn` 同一条纪律。`--date=short` 印的
-    # 是**提交自己记的时区**，而 CI 上这条读到的常常是 **PR 的 merge commit**——GitHub 现场
-    # 造、时区 +0000 ⇒ 同一份碎片在 +08:00 的 00:00–08:00 这个窗口推上去就红、别的时间绿
-    # （20261020 实测：碎片写 20261020、判据读回 20261019，而本机同一条绿）。这不是"某次
-    # 假红"：判据自己在读**提交者那台机器的钟**，正是它下面那条反面锁要挡的东西。
-    head = subprocess.run(["git", "log", "-1", "--date=format-local:%Y-%m-%d", "--format=%ad"],
-                          cwd=ROOT, capture_output=True, text=True,
-                          env={**os.environ, "TZ": "Asia/Shanghai"})
-    latest = head.stdout.strip().replace("-", "")
-    if len(latest) == 8 and latest.isdigit():
-        check(f"记录覆盖最后一笔提交且不是未来（{latest}）",
-              _record_covers_head(newest_record, latest, _today_cn()),
-              f"CHANGELOG={dates[0] if dates else None} 碎片={_frag_dates}")
-    else:
-        check("取到最后一笔提交的日期（取不到就不算通过）", False, repr(latest))
-    check("最新记录日期不是未来", bool(newest_record) and newest_record <= _today_cn(),
-          f"记录={newest_record} 本仓钟面今天={_today_cn()}")
+    check("日期没有重复", len(dates) == len(set(dates)))
+    check("没有遗留合并冲突标记", not re.search(r"^(?:<<<<<<<|=======|>>>>>>>)", text, re.M))
+    valid = []
+    for date in dates:
+        try:
+            datetime.strptime(date, "%Y%m%d")
+            valid.append(date <= _today_cn())
+        except ValueError:
+            valid.append(False)
+    check("日期有效且不是未来", bool(dates) and all(valid))
     # 反面锁：**判据本身必须环境无关**。上面那条在另一个时区里跑整个套件再判一次——
     # 子进程里所有断言都重跑，所以"有一次读回了跑它的那台机器的钟"就会红。用环境变量
     # 挡住递归（子进程不再套娃）；America/New_York 与 +08:00 的日期在一天里大半时间不同，

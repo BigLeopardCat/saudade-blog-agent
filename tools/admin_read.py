@@ -128,14 +128,7 @@ def list_admin_board(
     rows = data if isinstance(data, list) else []
     if not rows:
         return empty("河灯留言板目前还没有任何留言（后台名册也是空的）")
-    # 认不出的筛选值由**函数签名的闭集**挡在门外（`Literal[...]` → langchain 在调进
-    # 本函数之前就 ArgValidationError，execute 把它包成 `__ERROR__` 帧，原因码
-    # `args_parse`）。这正是批 5 给 `get_moderation_status.status` 补的那一课：以前
-    # 是散文里的取值，臆造值落回**混合视图**而叙述照样说成"这些是被驳回的"——答错且
-    # 无声（见 docs/toolcall-stability-roadmap.md 批 5）。所以此处**不写**手写兜底：
-    # 再写一层只是死代码，真判据是那句注解（`test_reports` ⑬ 钉着它不许放宽成 str）。
-    #   另注：隔壁那张报表的取值是 ai_passed|ai_rejected|pending，与本工具
-    # pending|passed|rejected **不是同一套**——注解与菜单行都写明了两套不能混用。
+    # Literal validation rejects unknown states; each report owns its status vocabulary.
     approved = _base.BOARD_STATUS_FILTERS.get(str(status)) if status is not None else None
     try:
         return ok(R.render_board_roster(rows, approved=approved, keyword=keyword),

@@ -1,52 +1,10 @@
 # -*- coding: utf-8 -*-
-"""**账号**族真写夹具的只读在位检查（20260926）。
-
-## 为什么另开一个文件，而不是塞进 `golden_fixture.py`
-
-分类族那半（`golden_fixture.py`）的纪律是**零凭据**：它只走 `tools.base._get` 这条公开读
-路径，源码扫描测试机械守着（出现 `Authorization` / `_sign_local_jwt` / 写方法即判红）。
-账号族**做不到**那条纪律，而且不是"懒得做"：
-
-  · 后台账号名录 `GET /api/temp-users` 是**管理员域**接口（`auth_guard` 挡着），全站没有
-    任何一条公开读能看到"某个账号在不在、是不是冻结态"；
-  · 而夹具的在位判据只能是它——用例要动的那一行，正是名录里那一行。
+"""**账号**族真写夹具的只读在位检查。
 
 所以这条读路径与 `eval/identity_preflight.py` 同源：**自签一枚只读的管理员令牌**
 （`tools.base._sign_local_jwt`，与 agent 代调完全同一个函数），打一次 GET，**只看，不写**。
 两条纪律分别由两个测试守着（分类族：不带身份；账号族：不带写动词），见
 `tests/test_golden_fixture.py` 的 ④ 与 ⑦。
-
-⚠️ 这里**不是**第二条写通道：本模块只有 GET，源码扫描把 `.post(` / `/status` / `frozen`
-这些写形状全列为禁止项。改这个文件之前先读 `docs/security-boundary.md` 与
-父仓 `scripts/migration/golden_fixture_account_20260926.sql` 的头注：生产写的授权串是
-「用户点名库名+迁移文件」，不因为"评测脚本也需要"而多出第二张许可。
-
-## 族约定：账号夹具**建出来就是冻结态**
-
-`agent_admin_fixture` 族（前缀沿用 `golden_fixture.FIXTURE_PREFIX`）里的账号，一律由
-父仓 `scripts/migration/golden_fixture_account_20260926.sql` 插成 `status=1`（冻结）。
-这不是本模块的猜测，是**文件与用例之间的契约**：唯一消费它的用例
-（`account_unfreeze_exec`）做的就是"把它解冻"，所以"它现在是冻结的"正是这条用例能证明
-任何东西的前提。
-
-**为什么这个前提非查不可**（假绿的那条路）：用例跑完夹具就变成"正常"了。此时若不复位
-再跑一次，工具照样会走完整条写通道——后端那个方向本来就有真 no-op 分支（"该账号已经是
-正常状态"→ `ApiResponse::success`），于是**回执照样生成、`require_exec_tools` 照样过**，
-用例静默变绿而一个问题都没验。所以期望态不符时本模块判 `wrong_state` ⇒ 用例**响亮跳过**
-（`run_golden` 的夹具闸按"不在位"处理并打印复位办法），而不是让它跑成一条空的绿。
-
-## 四种状态，`读不到` 不是 `没有`（与分类族同一条取向）
-
-    present      名录里那一行在，且 `status` 正是期望态 ⇒ 可以跑
-    absent       名录里没有这个名字 ⇒ 夹具没建（或被人删了）
-    wrong_state  行在、但状态不是期望态 ⇒ 多半是"用例跑完没复位"，重跑迁移 SQL 即可
-    unreadable   名录读不回来（没给 uid / 网络错 / 后端拒绝）⇒ **不知道**，不跑
-
-把 `unreadable` 归成 `absent` 的后果与分类族一模一样：一次网络抖动让真写用例静默跳过，
-而真相是我们不知道夹具在不在。
-
-用法：
-    .venv/bin/python eval/golden_fixture_account.py --verify   # 残留哨兵（夜间一行，非门禁）
 """
 from __future__ import annotations
 

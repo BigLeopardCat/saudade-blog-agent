@@ -3,16 +3,6 @@
 180s 超时 SIGABRT（faulthandler 栈）再 SIGKILL——防 LLM/HTTP 悬挂污染后续用例。
 用法（仓库根 cwd）: nohup .venv/bin/python eval/golden_full_run.py
 报告: eval/report/runs/<ts>.json **并更新 eval/report/last_run.json**
-（`<ts>` = `YYYYMMDD_HHMMSS_mmm`，20261002 起毫秒级：秒级会让同秒两次跑同名覆盖，
- 见 eval/report_archive.py）
-（20260924 起 last_run.json 的语义 = 最近一次**全量**跑；run_golden.py 那边同样只在
- full_run 时写它，两边不打架——此前注释写着"双写不冲突"，实际是 run_golden 每次调试跑
- 都会覆盖它，最后一次 `--only <单条>` 就把它写成了 total=1）
-
-20260924：回归组（tags 含 regression）首跑红 → **各重跑一次再判**（口径与
-run_golden.py 逐字一致，复跑也走独立子进程）：复跑仍红=真 FAIL，复跑绿=按方差放行但
-必须响——首跑红与复跑绿两条都进报告（cases[].rerun / regression.flaked_ids /
-failed_first_run）与汇总打印。复跑的 trace 用 `<case>__rerun` 名，首跑那份不被覆盖。
 """
 import argparse
 import io

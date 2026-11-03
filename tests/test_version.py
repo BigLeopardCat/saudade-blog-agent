@@ -1,28 +1,4 @@
-"""`/version`：**构建身份**有一个可读的出口，且它不回显活体档位（20261018）。
-
-**要回答的问题**：本仓与父仓的部署纪律是「**push ≠ 部署、生效须 restart**」，而"线上跑的
-是哪一版"这件事在 agent 侧此前**没有任何出口**——父仓写 `frontend/dist/build-info.json`，
-agent 侧只能靠读 `.env` 与提交历史去推。20261018 加 `/version`。
-
-判据四条，缺一条这块就可能是错的：
-
-判定逻辑住在 `agent/runtime_probe.py`（纯函数，`server.py` 只留接线），所以第 ② 节直接喂
-`runtime_probe.build_sha`——不传 env/git 的那两档是它的入参，不是它的全局。
-
-  ① **sha 与 git 同源**：本机是 git 仓 ⇒ 它必须逐字等于 `git rev-parse HEAD`。
-     取值顺序 env → git → `"unknown"`，**不许手抄**一个像真的 sha——假 sha 比没有更坏，
-     它会让人以为两份对上了（同 `server._app_version` 那段"假版本号比没有版本号更坏"）。
-  ② **`sha_source` 必须自证**：`"unknown"` 与一个真 sha 长得一样权威，所以要把"这个 sha
-     是从哪来的"一起回。env 覆盖时必须报 `env`，取不到时必须报 `unknown`——三档都要有人判。
-  ③ **不回显活体档位**：`/health` 的 `dials` 是那些事实的**唯一**来源（它回的是内存取值），
-     `/version` 再回一份就是第二个真源（本仓最贵的那类失效）。所以钉两件事：键集恰好那五个、
-     且**不出现**任何一格 dials 的名字。
-  ④ **密钥一个都不能出现**：注入哨兵值再断言它不在返回体里（比 grep 源码可靠，
-     同 `tests/test_health_dials.py` ③ 的做法）。
-
-秒级、无网络、不跑 LLM；由 pytest 按目录收集自动收。
-
-用法：.venv/bin/python tests/test_version.py
+"""`/version`：**构建身份**有一个可读的出口，且它不回显活体档位。
 """
 
 
