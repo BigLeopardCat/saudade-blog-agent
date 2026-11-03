@@ -199,8 +199,16 @@
         0,
         0
       ],
+      "agent/domains/article_editor.py": [
+        0,
+        0
+      ],
       "agent/domains/article_metadata.py": [
         0,
+        0
+      ],
+      "agent/domains/article_summary.py": [
+        3,
         0
       ],
       "agent/domains/article_tags/__init__.py": [
@@ -523,6 +531,10 @@
         0,
         0
       ],
+      "agent/products/blog/editor_summary.py": [
+        0,
+        0
+      ],
       "agent/products/blog/history.py": [
         0,
         0
@@ -668,7 +680,7 @@
         0
       ],
       "agent/runtime/results.py": [
-        0,
+        1,
         0
       ],
       "agent/runtime/retention.py": [
@@ -893,7 +905,7 @@
       ]
     },
     "total": [
-      407,
+      411,
       33
     ]
   },

@@ -10,7 +10,7 @@ from langgraph.graph.message import add_messages
 from langgraph.types import interrupt
 
 from agent.runtime import memory
-from agent.runtime.results import TurnResult, cancellation_fact, receipt_observations
+from agent.runtime.results import TurnResult, approval_observations, cancellation_fact
 from agent.runtime.writes import bound_context
 from tools.result import ok
 from utils.trace import record
@@ -41,7 +41,12 @@ def matches(approval, grant, config):
         return False
 
 
-def has_result(execution, specs):
+def has_result(execution, specs, *, jti=None):
+    authorized = execution.get("authorized_operation")
+    if (jti and isinstance(authorized, dict) and authorized.get("status") == "approved"
+            and authorized.get("operation_id") == jti
+            and {"tool": authorized.get("tool"), "args": authorized.get("args")} in specs):
+        return True
     outcome = execution.get("operation_outcome")
     return bool(execution.get("receipts") or (
         isinstance(outcome, dict) and outcome.get("status") == "unverified"
@@ -76,12 +81,12 @@ def review(state, config, *, feedback=None):
                 "approved_result": {**facts, "execution": execution,
                                     "operation_feedback": feedback_fact},
                 "messages": memory.checkpoint_messages(state.get("messages") or [], current)}
-    if not has_result(facts.get("execution", {}), action["specs"]):
+    if not has_result(facts.get("execution", {}), action["specs"], jti=action["jti"]):
         raise ValueError("确认恢复需要当前操作的真实执行回执")
     result = TurnResult(facts["reply"], facts["execution"])
     principal = config["configurable"]["principal"]
     current = memory.turn_messages(facts.get("input") or [],
-                                   receipt_observations(result, user_confirmed=True),
+                                   approval_observations(result),
                                    result.reply, principal)
     return {"pending_confirm": None, "pending_action": None, "approval": None,
             "approved_result": facts,
