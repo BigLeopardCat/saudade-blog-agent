@@ -462,16 +462,11 @@
 .chat-msg.agent .msg-label { font-weight: 600; color: #e74c3c; font-size: 13px; }
 .chat-msg.error { color: #e74c3c; text-align: center; font-size: 13px; }
 
-/* 对话内内置表情包尺寸（:名字: → <img class="sticker">，class 与 src 前缀双保险）。
-   ⚠️ 选择器必须带上 `.chat-msg.agent .msg-text`：下面那条气泡内 markdown 图片规则
-   `.chat-msg.agent .msg-text img { height: auto }`（0,3,1）优先级高于原来的
-   `.chat-msg img.sticker`（0,2,1），实测把 :犯错: 按**原图**渲染成 128×116、独占好几行
-   （20260916 用户报"表情占多行 / 文本滚不到底"）——补成 4 个 class 才压得住。 */
+/* Keep sticker proportions and reserve readable space inside message text. */
 .chat-msg img.sticker, .chat-msg img[src^="/stickers/"],
 .chat-msg.agent .msg-text img.sticker, .chat-msg.agent .msg-text img[src^="/stickers/"] {
-  /* 3.9em ≈ 58px（面板基准 15px）= 素材原生 128×116 的**一半**。20260916 用户定：
-     1.8em（27px）太小、原始尺寸（116px，被更具体的规则意外放着）太大。 */
-  height: 3.9em; width: auto; vertical-align: middle; display: inline-block; margin: 0 2px;
+  height: 5.5em; width: auto; max-width: 100%; object-fit: contain;
+  vertical-align: middle; display: inline-block; margin: 0 3px;
 }
 
 @keyframes fadeIn { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: translateY(0); } }
@@ -1356,34 +1351,6 @@
 .conv-menu-item:hover { background: #fdf3f2; color: #c0392b; }
 .conv-menu-item.danger { color: #e74c3c; }
 .conv-menu-item.danger:hover { background: #fdecea; }
-/* 删除确认条（armDelete 后替换行内容，3s 过期还原；20260905 拆两半：
-   左 橘红「确定删除」= 真删 / 右 白「取消」= 还原） */
-.conv-row-confirm {
-  display: none;
-  flex: 1;
-}
-.conv-row.del-confirm .conv-row-main { display: none; }
-/* 20260905：确认条 flex:1 撑满整行——此前为横向 flex 子项被 shrink 压到 70px，
-   文字越界被行 overflow:hidden 裁成半截（"删除确认条不完整/怪异"），row 内仅剩
-   该子项时须占满行宽。两半按钮各自 flex:1 均分行宽，行 overflow:hidden 圆角收边 */
-.conv-row.del-confirm .conv-row-confirm { display: flex; }
-.conv-row.del-confirm { border-radius: 8px; overflow: hidden; }
-.conv-row-confirm button {
-  flex: 1;
-  min-width: 0;
-  border: none;
-  padding: 7px 0;
-  font-size: 12px;
-  line-height: 1;
-  cursor: pointer;
-  user-select: none;
-  white-space: nowrap;
-}
-.conv-confirm-del { background: #e74c3c; color: #fff; }
-.conv-confirm-del:hover { background: #c0392b; }
-.conv-confirm-cancel { background: #fff; color: #666; }
-.conv-confirm-cancel:hover { background: #fdf3f2; }
-.conv-confirm-del + .conv-confirm-cancel { border-left: 1px solid #f5d5cf; }
 /* 重命名输入框（行内替代标题） */
 .conv-rename-input {
   flex: 1;
