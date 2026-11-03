@@ -1,40 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""自包含夹具的**桩服务**（20261006）：把 `corpus/*.md` 当成一个小博客的公开接口供出来。
-
-为什么要有它：`eval/golden/basic.jsonl` 的每条期望都锚在**维护者那个站点**的文章上，
-别人 clone 下来对不上（而红的样子与「模型退化」一模一样，见 `eval/corpus_provenance.py`）。
-`eval/fixtures/` 这一整套要解决的就是"在自己的机器上跑一次端到端"——语料、用例、出处声明
-都在本目录，桩服务是最后一块：**让真实的读路径（`tools/base.py::_get` → `rag/search.py::
-_fetch_corpus`）在没有任何外部依赖的情况下跑得通**。
-
-它不是"重新实现一遍博客后端"，只是**最小**的公开读接口：
-
-  `GET  <base>/rag/corpus?limit=&after=&revision=` → 版本化公开语料快照
-  `GET  <base>/notes?page=&page_size=`   → `{"code":200,"data":[行, …]}`（分页）
-  `GET  <base>/notes/<id>`               → `{"code":200,"data":{…含 noteContent}}`；
-                                           库里没有这个 id ⇒ **HTTP 404**（真接口就是这么回的，
-                                           `get_article_detail` 的 not_found 分支靠它）
-  `GET  <base>/notes/<id>/stats`         → `{"code":200,"data":{views,likes,favorites}}`
-  `POST <base>/notes/search`             → `{"code":200,"data":[行, …]}`（标题+正文子串命中）
-  其余一律                          → `{"code":501,"message":"…"}`（**诚实的边界**：
-                                           桩没实现，工具侧读成 unavailable、agent 会说
-                                           "服务暂时不可用"——这是桩的边界，不是夹具坏了）
-
-字段名与真实接口逐个对齐（`noteKey`/`noteTitle`/`noteContent`/`status`/`isTop`/`noteTags`）：
-**如果这里写错一个字段名，桩自己不会报错**——`_fetch_corpus` 只会拿到空标题、空正文，
-语料静默变空。所以 `tests/test_golden_fixture_corpus.py` 会把真实的读路径（不是本文件的
-`json` 拼装）拉起来对一遍，字段名漂了它当场红。
-
-跑法（仓根）：
-
-  .venv/bin/python eval/fixtures/serve.py --port 8099          # 前台跑，Ctrl-C 停
-  # 另一个终端：
-  BLOG_API_BASE=http://127.0.0.1:8099/api/public \\
-      .venv/bin/python eval/run_golden.py --golden eval/fixtures/golden_smoke.jsonl
-
-只依赖标准库（`http.server`）——夹具不该再拉一个 web 框架进来。语料是**编的**，
-不是任何真实站点的文章。
+"""自包含夹具的**桩服务**：把 `corpus/*.md` 当成一个小博客的公开接口供出来。
 """
 import argparse
 import hashlib

@@ -1,29 +1,4 @@
 """日志初始化单测（秒级、零网络、零 LLM）。
-
-被测 = `utils.logging.setup_logging()`：它决定**本进程写进 `logs/agent/agent.log` 的
-那一种格式**（带 `tid=` 的 trace_id 前缀、统一时间戳），以及四家噪声库的级别。
-
-为什么要单测一个"只是配 logging"的函数：它在 lifespan 里**每个 worker 各调一次**，
-幂等与否的分界线恰好在一个只写了一次的坑上——20260928 之前的形状是
-
-    if not root.handlers:            # ← 读代码的人以为幂等靠这里
-        root.addHandler(handler)
-    for noisy in (...):
-        logging.getLogger(noisy).setLevel(...)
-    else:                            # ← for/else：循环没 break ⇒ **恒执行**
-        root.handlers = [handler]
-
-for/else 的 else 属于 for（不是 if），于是每次调用都无条件重置 root.handlers，
-上面那个 if 形同虚设。生产上"碰巧"没出症状（uvicorn 默认配置不给 root 装 handler、
-每个进程只调一次），但形状有两种解释：谁要按注释把 `else` 删掉、改成 `addHandler`
-累加，就会得到**每行日志打印 N 遍**（N = 调用次数）——那种沉默的重复行最难查。
-所以这里锁的是**决定本身**，不是"今天恰好等于什么"。
-
-契约（改实现前先读这条，判据②会红）：
-  · 调用后 root 上**有且只有**本模块装的那一个 handler，且它带 `_TraceIdFilter`
-    与 `tid=%(trace_id)s` 格式（②：预先存在的 handler 被**替换**、不是叠加、也不是放行）；
-  · 重复调用不叠加（①③：一行日志只出现一次）；
-  · 噪声库级别 = `max(settings.log_level, WARNING)`（④）。
 """
 
 

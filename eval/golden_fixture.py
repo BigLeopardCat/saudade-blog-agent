@@ -1,58 +1,11 @@
 # -*- coding: utf-8 -*-
-"""golden 真写用例的夹具：只读在位检查 + 残留哨兵（20260925）。
-
-## 这个文件为什么存在
-
-`eval/golden/basic.jsonl` 里有第一条**会真写生产库**的用例（`golden_write_category_delete_exec`，
-本机即生产：它删掉分类 `agent_fixture_category_a`）。那条用例的安全边界有三条，本文件是其中两条
-的实现：
+"""golden 真写用例的夹具：只读在位检查 + 残留哨兵。
 
   ① 目标只能是夹具（用例侧 `require_exec_args` 逐字锁参数 + `forbid_exec_tools` 覆盖其余写工具）；
   ② **前置条件**：夹具不在位就不该跑（跑了会红成"站内没有叫 X 的分类"——一个看起来像模型退化、
      其实是前置条件缺失的红）；← 本文件 `fixture_state`
   ③ **残留**：用例失败中途没删掉，夹具就留在生产库里（它同时**在公开分类列表里**，访客看得见）。
      读者不该靠"我记得跑过"来判断，得有个只读的机械检查。← 本文件 `--verify`
-
-## 只有读：这里没有第二条写通道
-
-本模块**只用 `tools.base._get`**（GET，公开接口）——不读任何凭据、不带任何身份、不做任何写。
-理由不是洁癖：一条"评测脚本也能写库"的代码路径，等于给真写用例开了第二张许可，而那张许可
-不在任何人的授权串里（生产写必须点名「库名+迁移文件」）。这条纪律有**测试机械守着**
-（`tests/test_golden_fixture.py` 的源码扫描节：本文件里出现凭据读取/写方法即判红）。
-
-## 四族夹具与本文件的分派角色（20260926；20261001 加留言族；20261003 加待办族）
-
-`requires_fixture_kind` 说明是哪一族（**不写就是分类族**）：
-
-    category  `agent_fixture_category_*`  公开分类列表里读得到 ⇒ 本文件（零凭据）
-    account   `agent_fixture_freeze_*`    后台账号名录里读得到 ⇒ `golden_fixture_account.py`
-                                          （只读管理员身份，为什么非带不可见那边头注）
-    board     `agent_fixture_*` 的留言正文  后台留言清单里读得到 ⇒ `golden_fixture_board.py`
-                                          （同上；**待审态**是族约定——公开接口只放行
-                                          approved=1，用例要动的那一行只在后台视图里）
-    todo      `agent_fixture_*` 的待办正文  后台首页那份待办列表里读得到 ⇒ `golden_fixture_todo.py`
-                                          （同上；**未完成且恰好一条**是族约定——已完成会
-                                          撞上"状态已达成 ⇒ 不弹卡"，同名多条则歧义即零写，
-                                          两种都让用例要的卡根本不存在）
-
-两个跑法的夹具闸都收在本文件的 `gate()` 里（此前各写一份、靠注释维持"口径一致"）；
-本文件自己**仍然不读任何带身份的东西**——账号族那条读路径在那个模块里，这里只是按 kind
-挑模块。
-
-## 判据是"公开接口读得到"
-
-`API_BASE = https://saudade.site/api/public`，`/category` 与用例里 agent 走的那条名通道
-（`tools/base._category_index` → `/api/category`）**同一个 handler**（`src/routes/mod.rs:110`）。
-所以"在位"的定义就是**访客视角读得到它**：库里插进去了、这个接口读不到 ⇒ 仍然是"不在位"。
-
-## 三种状态，`读不到` 不是 `没有`
-
-同 `_get` 的既有判据（"服务挂了"不许伪装成"查到了、就是空的"）：
-`present` / `absent` / `unreadable` 三态分列，**绝不把 unreadable 归成 absent**——
-把两者混起来，一次网络抖动就会让用例静默 SKIP（看着"不需要跑"），而真相是我们不知道。
-
-用法：
-    .venv/bin/python eval/golden_fixture.py --verify     # 残留哨兵（夜间一行，非门禁）
 """
 from __future__ import annotations
 

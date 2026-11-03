@@ -1,73 +1,8 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""权限影子读数的定点统计：**只测量，不切换**（20261018 批 5）。
-
-## 它回答的问题
-
-`AUTHZ_ENFORCE` 今天是 0 —— 权限判据照算、照进 trace，但**不改变行为**
-（`agent/authz.py` 头注：先观测、后收口）。要把它打开，得先知道**打开会拦掉什么**；
-这份读数就是那个"什么"。
-
-判据只有一个点：`agent/graph.py::execute_node` 在调用工具**之前**算一次
-`authz.check(principal, tool)`，判 denied 且该 scope 不吃 shadow 时写一条
-`authz_shadow` 事件，**然后照常往下走**。于是：
-
-  · 影子拒绝 + 那一件**真的执行成功**（`check` 事件 `verdict=PASS`）= **分歧**：
-    今天开 enforce 会拦掉这一条真实执行。
-  · 影子拒绝 + 那一件**没执行**（被同意闸/目标校验拦下，或 planner 改了主意）=
-    开 enforce **不改变行为**，它不是收口成本。
-
-**"分歧非零"本身不是缺陷** —— shadow 的定义就是"判了不拦"。分歧的价值在**分档**：
-
-  · `reason=no_manifest` —— 这个工具**没声明 scope**。开 enforce 会拦掉一个本该工作的能力。
-    **这一档是两个意思**，所以本脚本再切一刀（`known_tools` 那一维）：
-      - 名字**在工具注册表里** ⇒ 真·工程疏漏（新增工具漏了声明表）。**应该是 0**。
-      - 名字**根本不在注册表里** ⇒ 它不是"漏声明的工具"，是**解析碎片或幻觉工具名**
-        （20260929 生产实证：模型给 `device_oled_draw` 的 `ops` 写了一串分号伪 DSL
-        ⇒ 一条调用被计划文本的分隔符撕成 13 条，12 条成了 `tri`/`circle`/`line`/`text`。
-        已由写端 `_esc_spec` 修，见 `tests/test_plan_channel.py` ④）。
-        两者**都要修，但修的不是同一处** —— 混在一格里会让"注册表漏声明"这个真信号
-        被历史噪声淹掉。
-  · `reason=unknown_role` —— 身份不明（uid=0 / 认不出的角色）。零权限是**设计如此**。
-    20261019 起这一格的**含义变了**：未验成的身份（`source="body"`，审计 SAU-005 的
-    回退分支）现在一律硬拦 ⇒ 它的 deny **不再写影子事件**。所以这一格若还有数，只可能
-    来自**断言签过、但角色 agent 认不出**的身份（或 `source="golden"` 的评测直调）——
-    那正是"Rust 多了一档新角色、agent 这边授予表还没跟上"的信号，比原来更值得看一眼。
-  · `reason=denied` —— 角色已认、scope 没授予。**要校准的就是这张授予表**：
-    它是"授予表写窄了"还是"真的有人越权"，读不出结论、但读得出清单。
-
-## 它不判什么
+"""权限影子读数的定点统计：**只测量，不切换**。
 
 不判"该不该拦"（那是人的裁决）；不改任何配置；不跑 LLM、不联网。**只读 trace。**
-
-## 口径：为什么必须现在量
-
-影子读数必须在**当前请求形状**上取 —— 断点恢复（批 6/7）会改请求形状（历史注入循环
-消失、thread 换会话坐标），届时语料与今天不可比。**先量再切。**
-
-## 一条结构不变量：硬拦 scope 不许出现在影子事件里
-
-`authz._HARD_SCOPES`（`admin.console` / `write.console` / `write.device`）**不吃 shadow**
-—— `enforcing(scope)` 对它们恒 True，所以判 denied 时走的是拒绝分支、**根本不会写影子事件**。
-一条带硬拦 scope 的影子事件 = 写侧那行 `must_enforce(decision, principal)`（20261019 起
-从 `enforcing(decision.scope)` 换来，见 `agent/authz.py`）的判据被绕过了（等价于"后台写
-被 shadow 放行了"）。**这是缺陷，不是读数**，单独列出来、并计入退出码。
-
-那组 scope **现取不手抄**（对每个 scope 问一次 `enforcing()`）；取不到 agent 包时写
-**"这一项没验"**，不是"没有违规"（同父仓 `scripts/healthcheck.sh` 第 8 项的写法）。
-
-## 跑法
-
-    .venv/bin/python eval/authz_shadow_divergence.py                 # 默认最近 7 天
-    .venv/bin/python eval/authz_shadow_divergence.py --days 30
-    .venv/bin/python eval/authz_shadow_divergence.py --since 20261018
-    .venv/bin/python eval/authz_shadow_divergence.py --json /tmp/x.json
-
-退出码：**0** = 跑通（分歧非零也算跑通，那是读数）；**1** = 出现结构违约（硬拦 scope
-进了影子事件）；**3** = 窗口内一份 trace 都没有（"没数据"与"零分歧"必须分开 ——
-把前者读成后者正是这套东西要防的那种假绿）。
-
-判据在 `tests/test_authz_shadow.py`（纯函数 + 合成 trace，不进 CI 的网络面）。
 """
 
 from __future__ import annotations

@@ -1,14 +1,14 @@
 {
   "eval/admin_write_probe.py": {
-    "lines": 2856,
+    "lines": 2739,
     "top_defs": 82
   },
   "eval/corpus_terms.py": {
-    "lines": 901,
+    "lines": 850,
     "top_defs": 30
   },
   "eval/run_golden.py": {
-    "lines": 3449,
+    "lines": 3441,
     "top_defs": 50
   },
   "scripts/build_word_graph.py": {
@@ -16,7 +16,7 @@
     "top_defs": 36
   },
   "tests/test_judge_offline.py": {
-    "lines": 1416,
+    "lines": 1398,
     "top_defs": 12
   }
 }

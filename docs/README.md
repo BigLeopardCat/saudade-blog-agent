@@ -3,88 +3,31 @@
 这里是本仓手写文档的**唯一入口**。根 [README.md](../README.md) 只讲"这是什么、怎么跑"，
 细节见下表——按"你现在想知道什么"挑一份，不要按文件名猜。
 
-**三档类型**（判断一份文档该不该改写时按这个分）：
-
-| 类型 | 正文写什么 | 日期戳怎么处理 |
-|---|---|---|
-| **现状型** | 只写"**现在是什么**" | 成段的逐版流水账收进文首/文末的《变更注 / 修订记录》，正文不写；**但"这条规则当初怎么来的、为什么现在是它"那句话留着**——它是这条规则的依据，不是流水账 |
-| **记录型** | 时间线**就是内容**（事故、实验、评估、交接，按日期） | 不动——历史描述是这份文件存在的意义 |
-| **方向型** | 还没做、或已搁置的**预案**，带触发条件 | 只写"在什么可观测的事实出现时重开" |
-
-> **允许一份文档跨档，但必须在文首给一张分节地图。** 框架（现状）与路线（方向）常长在同一份
-> 文件里，切不干净时不要硬贴一个标签了事——**在文首写一行"哪几节是什么档"**，索引表那一格写
-> **主档 + 括注另一档的节号**。判据**按节走**：现状节照现状型改（该更新就更新），方向节照方向型改，
-> 记录节不动。**别因为"这份是方向型"就放过它里面的现状节，也别因为"这份是现状型"就把它的历史节
-> 重写一遍。**
-
 ## 目录
 
 | 文档 | 一句话 | 类型 |
 |---|---|---|
 | [confirmation-groups.md](confirmation-groups.md) | 按事务分组确认、批量勾选与部分执行语义 | 现状型 |
-| [task-reliability-plan.md](task-reliability-plan.md) | 任务生命周期、完整交付、上下文、成本与验收的分阶段整改清单 | 方向型 |
-| [p2-completion-report.md](p2-completion-report.md) | P1/P2 发布版本、离线与线上验收、分层用量及剩余边界 | 记录型 |
-| [p3-completion-report.md](p3-completion-report.md) | 确认恢复、请求归属、导航与进度的跨仓发布及交互验收 | 记录型 |
-| [p4-progress.md](p4-progress.md) | 思考开关配对、时延观测、评测覆盖及 P4 剩余验收边界 | 记录型 |
 | [p4-completion-report-20261103.md](p4-completion-report-20261103.md) | 标准框架与成熟库收敛、145场景冻结回归、语义分歧和成本缓存指标 | 记录型 |
-| [migration-cleanup-20261028.md](migration-cleanup-20261028.md) | 框架迁移核查、遗留清退与博客独立审计待修项 | 记录型 |
 | [agent-architecture.md](agent-architecture.md) | 系统现在是什么：节点拓扑、跨语言契约、目录与机制 | 现状型 |
 | [产品与领域装配](product-extensions.md) | 博客产品边界、标准 middleware 与非博客库存示例 | 现状型 |
-| [framework-context-evaluation-20261029.md](framework-context-evaluation-20261029.md) | 框架上下文首跑、缓存分层、语义复核及验收缺口 | 记录型 |
 | [backend-capability-boundaries.md](backend-capability-boundaries.md) | 后端业务事实、Agent适配校验与计算职责边界 | 现状型（含后续收敛原则） |
 | [deployment.md](deployment.md) | 固定提交版本目录、独立环境、探活与失败回滚 | 现状型 |
 | [conversation-memory.md](conversation-memory.md) | 来源隔离、长文本接续、图片引用与按需回看，及框架摘要生命周期 | 现状型 |
 | [chat-stream-protocol.md](chat-stream-protocol.md) | 具名 SSE 事件、正文隔离、持久化边界与发布衔接 | 现状型 |
-| [evaluation-native-baseline.md](evaluation-native-baseline.md) | 原生 HTTP 测试集、首跑基线、真实身份与覆盖边界 | 现状型 |
-| [evaluation-review-20261028.md](evaluation-review-20261028.md) | 全量首跑、缓存分层、语义疑点及预检来源缺口 | 记录型 |
-| [cache-audit-20261026.md](cache-audit-20261026.md) | 首跑缓存分层、连续会话探针与固定任务模型对照 | 记录型 |
-| [model-evaluation-20261026.md](model-evaluation-20261026.md) | DeepSeek主线、Qwen部分运行与暂停、额度复验及剩余缺口 | 记录型 |
-| [deepseek-task-completion-20261026.md](deepseek-task-completion-20261026.md) | DeepSeek回放适配、推理档位对照、任务评测修订与视觉边界 | 记录型 |
-| [deepseek-regression-20261026.md](deepseek-regression-20261026.md) | 排除视觉的125项全量、性能用量、独立误报复评与验收边界 | 记录型 |
-| [cache-notification-followup-20261027.md](cache-notification-followup-20261027.md) | 缓存前后与再次小批量、通知漏查根因及测试trace隔离 | 记录型 |
-| [deepseek-cancel-cache-audit-20261028.md](deepseek-cancel-cache-audit-20261028.md) | 打断与恢复请求指纹、DeepSeek缓存对照及工具菜单变化的单变量验证 | 记录型 |
-| [cache-window-audit-20261029.md](cache-window-audit-20261029.md) | 短对话历史窗口、摘要用量分离与真实 API 配对验证 | 记录型 |
-| [local-bge-production-20261027.md](local-bge-production-20261027.md) | 本地BGE启用、索引复用、故障回退、性能与检索实现边界 | 记录型 |
-| [deepseek-regression-cases-20261026.md](deepseek-regression-cases-20261026.md) | 125项场景的首判、复评、耗时、调用与token逐项记录 | 记录型 |
-| [enterprise-readiness-20261026.md](enterprise-readiness-20261026.md) | 企业试点指标建议、现有证据、尚缺指标与优先补齐顺序 | 方向型 |
 | [release-acceptance.md](release-acceptance.md) | 当前发布的质量、安全、分任务成本和时延目标，以及冻结证据的机器验收入口 | 现状型（目标未自动视为达标） |
 | [offline-improvement.md](offline-improvement.md) | 反馈复核、数据隔离、候选提案与一次独立验收的发布衔接 | 现状型 |
-| [native-baseline-20261026.md](native-baseline-20261026.md) | 框架迁移后127场景首跑、缓存用量、失败复核与后续边界 | 记录型 |
-| [native-baseline-20261025.md](native-baseline-20261025.md) | 125 场景线上首跑、成本缓存、误报复核与功能缺陷 | 记录型 |
-| [native-regression-20261025.md](native-regression-20261025.md) | 17 场景定向线上回归、排期判据复核、成本与剩余缺陷 | 记录型 |
-| [dataflow-audit-20261026.md](dataflow-audit-20261026.md) | 真实找文、解读、写入准备和取消的节点数据检查，及隔离确认续行 | 记录型 |
-| [agent-architecture-audit-20261023.md](agent-architecture-audit-20261023.md) | 架构、IR、记忆、确认恢复与单任务成本审计，含整改顺序 | 记录型 |
 | [native-account-actions.md](native-account-actions.md) | 原生账号管理接口、权限语义、迁移与隔离验证 | 现状型（已生产验收） |
-| [session-runtime-review-20261024.md](session-runtime-review-20261024.md) | 会话职责、独立报告核对、后台准入修复及剩余预算/存储工作 | 现状型 |
-| [request-budget-navigation-20261024.md](request-budget-navigation-20261024.md) | 共享模型预算、历史裁剪和跳转意图修复及真实回放范围 | 现状型 |
-| [hybrid-runtime-migration.md](hybrid-runtime-migration.md) | 旧规划引擎退役后的在役实现、存储与故障边界 | 记录型 |
 | [repository-layout.md](repository-layout.md) | 目录职责、依赖边界与按领域迁移的归属规则 | 现状型（含迁移方向） |
-| [retired-experiments.md](retired-experiments.md) | 已退役实验臂、归档位置与保留结论 | 记录型 |
-| [问题记录.md](问题记录.md) | 事故取证，按日期：现象 → 根因 → 修复 → 回归锁（**§2.1 例外**，见下） | 记录型（+ §2.1 跨仓契约） |
 | [native-progress-events.md](native-progress-events.md) | 原生进度事件、答案流、取消围栏与服务端输出计量 | 现状型 |
 | [native-event-transport.md](native-event-transport.md) | Runtime 原生事件到聊天/SSE 协议的薄传输边界与终态规则 | 现状型 |
 | [native-context-cache.md](native-context-cache.md) | 原生工具目录、动态上下文顺序及缓存用量的验证口径 | 现状型 |
-| [legacy-compatibility-boundary.md](legacy-compatibility-boundary.md) | 框架执行、宿主业务协议和旧数据接续范围 | 现状型（含迁移边界） |
-| [task-cost-audit-20261028.md](task-cost-audit-20261028.md) | 单任务 token、分页与检索定位放大点、摘要触发和服务商缓存口径验证 | 记录型 |
 | [eval-observability.md](eval-observability.md) | 原生运行时指标、结果验收、旧评测边界与执行入口 | 现状型 |
-| [lint-baseline.md](lint-baseline.md) | 历史人工扫描快照；当前扫描以 eval 下的机器台账与 CI 为准 | 记录型 |
 | [rag-design.md](rag-design.md) | 检索设计与实现总结，§8 是触发条件驱动的升级预案 | 现状型 |
 | [rag-library-migration.md](rag-library-migration.md) | 成熟检索库、标准Markdown解析、空间迁移与质量/资源对照 | 现状型（含专项验证） |
 | [rag-production-debug.md](rag-production-debug.md) | 两机配置、缓存与引擎候选、增量建库、回退和生产验收记录 | 现状型（§6–§8 为待验收方案） |
 | [embedding-inputs.md](embedding-inputs.md) | 可选 tokenizer 的完整输入预算、空间签名与验证方式 | 现状型（末节含验证记录） |
-| [native-toolcalls-mainline.md](native-toolcalls-mainline.md) | 换主线的**交接件**：为什么换、冻结了什么、边界在哪 | 记录型 |
-| [toolcall-stability-roadmap.md](toolcall-stability-roadmap.md) | 旧规划引擎的稳定性治理记录，保留 D1–D6 跨仓引用锚点 | 记录型 |
-| [react-line-experiment.md](react-line-experiment.md) | ReAct 试验线的实测：原生 tool calls 当骨架行不行；**§六 = 这条臂的读数许可闸**（`comparable`） | 记录型（**§四 现状表 / §六** 是现状型） |
-| [zero-call-residual.md](zero-call-residual.md) | 「零调用/声称」一次没有效果的实测与残余落点 | 记录型 |
-| [param-tuning-20261006.md](param-tuning-20261006.md) | 旋钮 A/B 实验报告（温度 / 思考 / 跨模型 + 两臂成本） | 记录型 |
-| [agent-eval-report-20260924.md](agent-eval-report-20260924.md) | 2026-09-24 的评估报告与当时列的行为清单 | 记录型 |
 | [identity-and-permissions.md](identity-and-permissions.md) | 身份与权限落地记录及跨仓引用锚点；原生边界见当前架构说明 | 记录型 |
-| [multimodal-retrieval.md](multimodal-retrieval.md) | 多模态检索分阶段方案（ADR-0005 的展开，**已搁置**） | 方向型 |
-| [write-provenance-shadow-20261014.md](write-provenance-shadow-20261014.md) | 写参数出处改造第一批（影子）的两臂读数与分歧报告，**§6 是第二批决策输入** | 记录型（**§6** 方向型） |
-| [fastpath-pricing-20261015.md](fastpath-pricing-20261015.md) | 五条确定性快道的定价读数（生产命中分布 + 语料两臂），**§5 是删除/收窄清单** | 记录型（**§5** 方向型） |
-| [tool-menu-poc-20261020.md](tool-menu-poc-20261020.md) | 把技能模板换成真工具表的三臂读数：**harness 的"执行半"稳住了，丢的是路由与定序**；§5 是第二轮的前置结论 | 记录型（**§5** 方向型） |
-| [prefix-cache-audit-20261020.md](prefix-cache-audit-20261020.md) | 生产前缀缓存审计：planner 命中 50.1%，但成因是**整段冷启动**（共享网关容量淘汰 + 换模型），不是槽位位置；**§4 是三个杠杆的定价** | 记录型（**§4** 方向型） |
-| [react-architecture-plan-20261020.md](react-architecture-plan-20261020.md) | 主流 ReAct + 按需 schema 的改造方案：planner 降成路由器、散文外置、执行层改循环；**§6 是分阶段预注册判据** | 记录型（已退役） |
 | [platform-roadmap.md](platform-roadmap.md) | 当前整改结果、后续维护事项及触发条件 | 方向型（含当前状态） |
 
 | [scheduling.md](scheduling.md) | 管理员持久定时、只读后台分析、执行记录与部署 | 当前规范 |
@@ -98,24 +41,4 @@
 [CONTRIBUTING.md](../CONTRIBUTING.md)（判据规矩、能/不能在本机跑什么）、
 [ROADMAP.md](../ROADMAP.md)（现在做什么 / 等触发条件 / 明确不做）、
 [SECURITY.md](../SECURITY.md)（安全问题走私密通道）、[CHANGELOG.md](../CHANGELOG.md)（对外行为与判据的变更；
-**新变更写在 [changelog.d/](../changelog.d/README.md) 的碎片里**，汇总后再折进那一份）。
-
-## ⚠️ 跨仓引用契约：这四组编号/标题**不许动**
-
-父仓（`/home/ubuntu/Saudade-Blog`）的文档与迁移脚本**按编号/标题**引用本仓这几份文档。
-改标题、重排编号会让那些引用**静默指错**（没有任何判据会红——这正是要把它们写下来的原因）：
-
-| 本仓的锚点 | 父仓引用它的地方 |
-|---|---|
-| [问题记录.md](问题记录.md) **§2.1** | `docs/iot-device-integration.md`（两处）、`iot/firmware/固件开发指南.md` |
-| [identity-and-permissions.md](identity-and-permissions.md) | 身份与权限落地记录及跨仓引用锚点；原生边界见当前架构说明 | 记录型 |
-| [agent-architecture.md](agent-architecture.md) 的标题 **《3. 一次对话的完整链路》** | 父仓 `README.md`（按标题引） |
-| [toolcall-stability-roadmap.md](toolcall-stability-roadmap.md) | 旧规划引擎的稳定性治理记录，保留 D1–D6 跨仓引用锚点 | 记录型 |
-
-`tests/test_docs_links.py` 会核对这四组锚点仍在（改了就红，提醒你先去父仓同步）。
-
-> 顺带纠正一条**曾经被记错**的说法：`agent-architecture.md` 的**其它**章节编号**不是**跨仓契约
-> ——父仓只在两处提它（一处按文件名、一处按上面那个标题），代码注释里一处都没有。
-> 唯一被引的章节标题就是上面那一行。
-
-- [显式产品装配与共享层依赖](adr/adr-0036-explicit-product-composition.md)：运行时、领域权限和确认提案边界。
+直接记录近期对外变更）。

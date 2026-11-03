@@ -22,9 +22,7 @@
 
 - [ ] `.venv/bin/python -m pytest -q` —— 全绿
 - [ ] `uvx ruff@0.14.4 check --select F821 --no-cache .` —— 干净
-- [ ] 若改了 agent 的**对外行为**（说什么/做什么/什么时候弹卡）：在
-      [`changelog.d/`](../changelog.d/README.md) 加了一个碎片（**别直接改 `CHANGELOG.md`**，
-      那个文件只有一个插入点 ⇒ 并发 PR 必冲突；汇总由人在合并时跑）
+- [ ] 若改了 Agent 的对外行为：更新 `CHANGELOG.md`
 - [ ] 若改了三端契约（Python ↔ Rust ↔ 前端：帧、字段、字面）：**另一侧也改了**，
       并且说明了怎么核对的
 - [ ] 若改了提示词的可缓存前缀：`tests/test_prompt_prefix.py` 仍然绿

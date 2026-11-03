@@ -1,34 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""管理助手**线上活体探针**（20260921，不进 CI）：真打本机 8010，验身份区分真的生效。
-
-为什么需要它（golden 覆盖不到的部分）：
-  * golden 用的是**进程内**图调用（run_golden.run_one 直接把 Principal 塞进 config），
-    跳过了 HTTP 入口的 `_resolve_principal`——"断言验签 → Principal"这一段只有活体
-    能测（aud/exp/role 任一处写错，golden 全绿而线上恒零权限）。
-  * 令牌全部**本进程内自签**（`settings.jwt_secret`），不落盘、不打印、不进仓库；
-    uid 由命令行/env 传入（仓库是公开的，用例里不写真实账号）。
-
-两个身份各问四问：
-  ① admin 断言 → 四张报表（运维/审核/用户/文章流量）的问题，期望**真的调了**对应工具
-     （executions 里能看到），回复里出现报表形态的数字；
-  ② 普通登录用户（role=user 的断言）→ 同样四问，期望**零工具 + 不编数字**。
-     ⚠ 这里**必须也带断言**：`AGENT_REQUIRE_ASSERTION=1` 已生效，无头请求在入口就
-     401（实测），根本到不了图；空头探"零权限"是探了个 401，不是探了权限判断。
-     所以访客用 role=user 的合法断言 —— 这比"无身份"更贴近真实越权场景：一个
-     **真的登录了**的普通用户来问运维报表。
-
-用法：
-  .venv/bin/python eval/admin_report_probe.py --uid <管理员的 uid> [--visitor-uid N]
-  APP_ADMIN_UID=<uid> .venv/bin/python eval/admin_report_probe.py
-退出码 = 不符预期的检查项数（0 = 全绿）。agent 必须已在跑（127.0.0.1:8010）。
-
-⚠️ admin 那半必须给**库里真实是 admin 的 uid**：给个不存在的 uid，断言里的 role 仍是 admin
-（agent 不查库），但工具签的 JWT 到了 Rust 会被 `auth_guard` 按库里的角色挡回 403 —— 那条
-路径是预期行为，只是探针从外部区分不了它与"planner 压根没规划"，所以会照常报 FAIL（"未验到"
-不等于"验过"）。这一轮本身也是一次有价值的取证：403 时 agent 必须**如实说无权**，不许把
-"没权限"叙述成"没有待审留言"（20260921 实测：三个问题都收了「只有博主（管理员）登录之后
-才能查看」，回执为空、零编造——真正的断言在 golden 的 ops_report_denied_visitor 上）。
+"""管理助手**线上活体探针**：真打本机 8010，验身份区分真的生效。
 """
 import argparse
 import base64

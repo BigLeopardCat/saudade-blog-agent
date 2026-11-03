@@ -524,9 +524,7 @@ def render_account_roster(rows) -> str:
             f"- 「{name}」{gap}身份={role_cn(row.get('role'))}，"
             f"账号状态={account_state_cn(_row_frozen(row))}，"
             f"禁言状态={mute_state_cn(_row_muted(row))}"))
-    # **按 id 升序**：同一份名录在两轮之间要逐字节相同。后端给的顺序不保证稳定，而这份
-    # 文本要进 planner 上下文——本仓刚量过"输入里任何逐轮/逐分钟变的东西都会让对照失效"
-    # （见 docs/param-tuning-20261006.md 里 `page_ctx` 台账年龄串那条）。
+    # Stable ID order avoids needless differences in repeated roster observations.
     items.sort(key=lambda it: it[0])
     body = "\n".join(line for _, line in items)
     if not body:

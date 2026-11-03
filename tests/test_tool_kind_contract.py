@@ -1,46 +1,4 @@
-"""工具返回值契约的机器锁：**「没声明 kind」与「声明了 ok」在消费侧长得一样**（20261019）。
-
-**病**（`tools/result.py` 的 `ToolResult` 契约只写在注释里，没有机器看着它）：
-
-  工具的返回值应当是**信封**——`ok` / `empty` / `unavailable` / `not_found` 四取一。
-  但消费侧那一行是
-
-      getattr(out, "kind", "ok")            # agent/graph.py::execute_node
-
-  ⇒ 一个**裸字符串**（压根没声明 kind）读出来是 `"ok"`，与真的声明了 `ok` **逐字相同**。
-  于是"没做成"被 `_check_spec` 判 PASS ⇒ 产回执 ⇒ 落 `execution_log` ⇒ 下一轮
-  `recent_executions` 把它注回提示词 ⇒ planner/narrator 读成**系统确认的事实**。
-
-  实测（20261019，`_check_spec` 真跑）：
-
-      device_oled_display 设备离线（409）⇒ 裸串 ⇒ kind='ok' ⇒ PASS ⇒ 回执
-      ⇒ Rust `legacy_exec_row` 渲染成「屏幕显示「你好」」   ← 设备离线，什么都没显示
-
-  这不是"某人可能写错"，是**已经写错了**：`get_weather` 把三条失败路径里的**两条**
-  包了 `unavailable`、第三条（`except` 那条）漏了；`device_oled_display` 包了一条
-  `empty`、漏了八条。同一函数里两种写法并存 ⇒ 是疏忽，不是设计。
-
-**本套件锁什么**：`tools/*.py` 里每个 `@tool` 函数的**裸文本返回**必须**登记在案**，
-登记要写明它是 `success_only`（只出现在成功路径上——默认 `ok` 恰好正确）还是
-`failure`（出现在"没做成"的路径上——**这是病**，必须带 `sunset`）。集合**双向**：
-漏登记一条红，台账里留一条已经不裸的也红。
-
-**射程（写下来免得起假安心）**：
-  · **只认"纯文本构造"**——字符串字面量 / f-string / `+` 拼接 / `.join` `.strip` 这类
-    文本方法。`return data`、`return _helper(...)` 这种**委托返回**不在射程内：它们的
-    运行时类型静态判不出来，而它们绝大多数（`_admin_post` / `_pre_read_fail` / `guard` /
-    `fail`）确实交回信封。⇒ 本套件**保证不了**"没有别的裸返回"，它保证的是
-    "**明摆着的**那些一条都躲不掉"。
-  · **不判文案**：台账里那句 `why` 是给人读的，不是判据。
-  · **不判 `_check_spec` 的缺省**：`getattr(…, "kind", "ok")` 是病根，但它是**一个**位置，
-    改它（或改成 `isinstance` 判定）是另一件事，不在本套件里。
-
-**为什么不是"直接禁止裸返回"**：9 件工具里 6 件是 `success_only`（站点地图、固定告知语、
-时间），把它们的成功返回包一层 `ok()` 是纯噪音——默认 `ok` 在**成功路径**上是对的。
-判据要的是"**失败路径**不许裸返回"，而"这一条在不在失败路径上"静态判不出来 ⇒ 由人登记、
-由机器守登记（与 `eval/judge_registry.json` 同一形状：不确定就填病那一侧）。
-
-用法：.venv/bin/python tests/test_tool_kind_contract.py
+"""工具返回值契约的机器锁：**「没声明 kind」与「声明了 ok」在消费侧长得一样**。
 """
 
 

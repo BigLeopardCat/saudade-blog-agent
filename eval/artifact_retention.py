@@ -2,55 +2,14 @@
 # -*- coding: utf-8 -*-
 r"""产物保留执行者：按 `eval/retention_manifest.py` 的登记表执行保留期（**默认只列不删**）。
 
-## 它解决的是什么
-
-同族坑本仓踩了四次：R2 的 `--keep 3`、logrotate 的 traces `rotate 14`、
-`logs/archive/`（零引用最长到 2026-06-10）、`eval/report/runs/`（576 份零策略）。
-四次的共同形态是**「保留策略写了，但没有任何东西在执行它」**——策略是装饰性的。
-所以现在反过来：产物在登记表里**登记**（谁负责、留多久、为什么），
-`managed` 且带 `rule` 的类**由本脚本执行**。表是唯一事实源——这里不写任何路径与天数，
-**改保留期只改 `retention_manifest.py` 的常量**，不去改夜间的命令行。
-
 （`rule=None` 的 managed 类有别的执行者：trace 走 `eval/trace_retention.py`、
 golden trace 走 `eval/golden_trace.py::prune`，本脚本不碰。）
-
-## 两种 rule
-
-- `{"kind": "keep-days", "days": N, "exclude": [...]}`：文件 mtime 超过 N 天 ⇒ 删。
-  `exclude` 是**基名 glob**（`DELETED-*.txt` 这种），命中的文件永不删——但它们在
-  登记表里必须另有 `frozen` 登记项（`check_classes` 会校验这条对应关系，
-  否则「排除」就成了一句没有依据的口头承诺）。
-- `{"kind": "keep-count", "keep": N, ...}`：保留最近 N 份。**两种粒度**：
-  - `family_re`（每份 = 一个文件）：文件名 `^([a-z_]+?)_(\d{8})[-_](\d{6})\.(md|jsonl)$`
-    ⇒ 族 = `group(1)`，同族内按日期戳排序保留最新 N 个。报告族用这种
-    （`review_` 一天能落 24 份，按天数会把密集调试那天整族清掉）。
-    可选 `keep_by_family={"族名": M}` 按族覆盖份数（20260925：草稿族窗口比复审单短）——
-    **数仍然只在登记表里**，这里只是读它。
-  - `name_re`（每份 = 一组同戳文件）：名首 `^(\d{8})-(\d{6})_`
-    ⇒ **按戳分组、整组一起删**。词图构建一次落一套（`_vocab.txt` + `build.json`…），
-    按文件数删会留下半个构建产物。
-
-## 三条安全设计
-
-1. **判据不认识的产物一律不删**：`keep-count` 里名字没有日期戳的文件（或 `keep-days`
-   之外的东西）→ 只印 WARN + 计数。**「不知道它是什么」从来不是删除的理由**——
-   登记表的整个意义就是消灭这种"看着像垃圾就顺手清掉"。
-2. **删除路径必须先证实落在本类声明的 root 里**（`_under`）——路径拼接写错时宁可报错也不越界。
-   边界还有一层：**根是共用的，类的范围只由 `patterns` 划**（`_walk_files` 里的 `matches`）。
-   初版少了这层过滤，实测 `wordgraph-builds` 会把 `eval/report/runs/` 下的文件算成自己的
-   ——那正好是登记表点名「不能单独清」的 golden 留档。
-3. **dry-run 与 `--apply` 共用同一份 `plan()`**：两条路径各算一遍判据，就是「看到的和做的不一样」
-   的来源。
-
-## 跑法（cd saudade-blog-agent）
 
   .venv/bin/python eval/artifact_retention.py                # 只列不删（默认）
   .venv/bin/python eval/artifact_retention.py --json         # 机器可读摘要（夜间日志用）
   .venv/bin/python eval/artifact_retention.py --apply        # 真删
   .venv/bin/python eval/artifact_retention.py --only archive --apply
   .venv/bin/python eval/artifact_retention.py --root /tmp/x --only archive   # 离线测试用
-
-退出码：0 = 跑完了（含"没有可删的"）；1 = 有文件操作失败（明细在 stderr）。
 """
 import argparse
 import json

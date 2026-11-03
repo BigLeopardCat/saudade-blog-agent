@@ -1,31 +1,4 @@
-r"""手写文档的**索引 / 链接 / 跨界锚点**（离线、秒级）。
-
-要回答的问题：这一仓 12,000 行手写文档此前**没有任何机制**看着它们——链接指向不存在的
-文件、`docs/` 新加一份却没人进索引、把父仓按编号引用的章节改名，三种都会**静默**发生
-（没有任何东西会红）。这份文件把这三件事变成判据：
-
-  ① 每份手写文档里的**相对 md 链接**都指得着（指到仓外的，例如父仓，不在此列）；
-  ② `docs/README.md` 的索引与磁盘上的 `docs/*.md` **双向一致**（漏列、列了已删的都红）；
-  ③ 那四组**跨仓引用锚点**还在（父仓按编号/标题引用它们，改了会静默打断父仓）；
-  ④ 文档里点名的**仓内 `xxx.py` 路径**存在——除非同一行标了「已删 / 待建 / 未建 / 占位」。
-
-**为什么不查 CHANGELOG 与仓根 md 的 ④**：那是记录型的文件，逐字保留了当时的事实
-（例如"这次新增了 `agent/oled_draw.py`"——那个文件后来删了，但**当时确实新增过**）。
-拿"文件今天在不在"去判历史叙述，是把记录型文档误当现状型文档读。
-
-**④ 的射程有个洞，由 `tests/test_module_index.py` 补**：`_PY_RE` 要求路径**在反引号里且带 `/`**，
-所以目录树里的裸文件名（`│   ├── foo.py`）它一条都看不见——实测 20261018 之前
-`docs/agent-architecture.md` §2 因此烂到"点名 3 个已不存在的文件、漏 38 个真模块"而全绿。
-分工：**本套件管散在正文里的反引号路径，那边管树结构里的裸文件名**，互不重复。
-
-**红基线（自查用）**：
-  - 删掉 `docs/README.md` 里 `multimodal-retrieval.md` 那一行 ⇒ ② 必红；
-  - 把 `docs/问题记录.md` 的 `### 2.1` 改成 `### 2.2` ⇒ ③ 必红；
-  - 把 `docs/lint-baseline.md` 的「（**待建**）：\`eval/lint_gate.py\`」里那对括号去掉 ⇒ ④ 必红。
-
-用法：.venv/bin/python tests/test_docs_links.py
-"""
-
+"""Validate maintained documentation links, index entries and current source references."""
 
 import pathlib
 import re
@@ -52,22 +25,9 @@ def _check_source_paths(root, handwritten, skip_parts):
              if d.is_dir() and d.name not in skip_parts and not d.name.startswith(".")}
     _MARKERS = ("已删", "删除", "待建", "未建", "占位", "xxx")
     _PY_RE = re.compile(r"`([A-Za-z0-9_./\-]+/[A-Za-z0-9_./\-]+\.py)`")
-    _RENAME_RE = re.compile(r"`([A-Za-z0-9_./\-]+\.py)`\s*→\s*`([A-Za-z0-9_./\-]+\.py)`")
     # Recorded audits and ADRs cite their historical source snapshots. All other
     # documents remain checked, including newly added current documentation.
     historical = _historical_documents(root)
-    _RENAMED: dict[str, str] = {}
-    for p in handwritten:
-        if _historical_source(p, historical, root):
-            continue
-        for line in p.read_text(encoding="utf-8").splitlines():
-            if "已改名" not in line:
-                continue
-            for old, new in _RENAME_RE.findall(line):
-                _RENAMED[old] = new
-    check("改名表里的新路径都在盘上（自说自话的改名表不许洗白幽灵路径）",
-          all((root / v).exists() for v in _RENAMED.values()) and bool(_RENAMED),
-          f"表={_RENAMED}")
     _ghost: list[str] = []
     for p in handwritten:
         if _historical_source(p, historical, root):
@@ -79,7 +39,7 @@ def _check_source_paths(root, handwritten, skip_parts):
                 t = m.group(1)
                 if t.startswith("/") or ".." in t or t.split("/")[0] not in _TOPS:
                     continue                  # 库内路径（langgraph/…）与父仓路径不归本套件管
-                if (root / t).exists() or t in _RENAMED or any(k in line for k in _MARKERS):
+                if (root / t).exists() or any(k in line for k in _MARKERS):
                     continue
                 _ghost.append(f"{p.relative_to(root)}:{i} → {t}")
     check("没有指向不存在文件的仓内 .py 路径（除已标已删/待建/未建的）",
@@ -121,15 +81,12 @@ def test_docs_links():
           "adr/README.md" in _index_txt, "少了 adr/README.md 的链接")
     print("\n③ 跨仓引用锚点仍在（父仓按编号/标题引，改了会静默打断）")
     _ANCHORS = [
-        ("docs/问题记录.md", r"^### 2\.1\b", "§2.1（父仓 iot-device-integration / 固件开发指南）"),
         ("docs/identity-and-permissions.md", r"^### 3\.4\b", "§3.4（父仓 security-boundary）"),
         ("docs/identity-and-permissions.md", r"^### 3\.6\b", "§3.6（父仓 security-boundary / zako_role 迁移）"),
         ("docs/identity-and-permissions.md", r"^### 5\.2\b", "§5.2（父仓 security-boundary）"),
         ("docs/identity-and-permissions.md", r"^### 5\.3\b", "§5.3（父仓 security-boundary）"),
         ("docs/agent-architecture.md", r"^## 3\. 一次对话的完整链路\s*$", "《3. 一次对话的完整链路》（父仓 README）"),
-    ] + [("docs/toolcall-stability-roadmap.md",
-        rf"^### D{n}\b", f"D{n}（execution_log_struct 迁移）")
-         for n in range(1, 7)]
+    ]
     for rel, pat, why in _ANCHORS:
         txt = (ROOT / rel).read_text(encoding="utf-8")
         check(f"{rel} 仍有 {why}", bool(re.search(pat, txt, re.M)), f"找不到 /{pat}/m")

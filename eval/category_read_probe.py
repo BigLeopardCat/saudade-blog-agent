@@ -1,46 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """「按分类读后台文章清单」的真链路探针：**验的是 golden 验不到的那一半**。
-
-## 为什么必须单独探（先看这条，否则会以为全量跑绿就等于这件事修好了）
-
-20261009 的改动让 `list_admin_notes` 长出 `category` 参数、并在每行末尾印分类名。
-全量 golden（00:16–00:40 那一跑）**结构上测不到它**：178 条用例里没有一条的主人话
-是「某个分类下的文章」——`category` 参数为新，就没有旧用例用得上它；而用例不许新增
-（分母 178 不动）。跑了、绿了、红数没涨，只说明"没伤到别处"，**不说明这条新路被走到过**
-（同族教训见 `eval/task_state_probe.py` 头注：验收用例在跑 ≠ 被测的那条路被走到）。
-
-## 现场（它治的是什么）
-
-生产 trace `logs/agent/traces/20261008/20261008T234509_1_r16c4ec8.json`：主人说
-「猫猫帮我把你个测试分类的的文章全部转为私密」，planner 选了 `list_admin_notes`，
-但**只填了 keyword="测试"**——那是**搜索**（切词匹配标题/正文/标签名），搜出来的是
-标题带"测试"的 8 篇，与"归在「测试」分类下"是两回事。模型于是如实说它手上没有那份
-清单，并把「你去后台笔记页按分类筛一遍」这个**本可自动完成**的步骤退给了主人。
-
-而站内这个筛选一直存在（后台笔记页走的就是同一个端点 + `categories` 字段）。缺的两处
-都在 agent 这一侧：① 工具参数没暴露；② 行里连分类名都不印。两处 20261009 都已补上
-（离线锁在 `tests/test_admin_write.py` §㉕）。
-
-**本探针问的只有一件事**：同一句话再说一遍，planner 现在选不选 `category`。
-
-## 它不验什么（如实划界）
-
-- **不验写侧**：主人那句的后半截是"全部转为私密"。站内**没有**按分类批量改状态的接口，
-  agent 也**没有**暴露批量写——这一半今天是真缺（本批明确不做，见工单）。所以本探针
-  只看**读**那一半有没有走到；别把"读对了"读成"事情办完了"。
-- **不是门禁**：默认退出码 0（同 `llm_judge.py` / `task_state_probe.py` 的取向）；
-  `--strict` 才在任一断言不成立时退出 1。
-- **单跑不作结论**（本仓定论）：结论一律按**计数**读——跑 N 遍，报"几遍选了 category"。
-  N 由 `--runs` 给（默认 3）。
-
-跑法（cd saudade-blog-agent，需网络与 LLM key）：
-
-    GOLDEN_ADMIN_UID=<管理员 uid> .venv/bin/python eval/category_read_probe.py
-    GOLDEN_ADMIN_UID=<管理员 uid> .venv/bin/python eval/category_read_probe.py --runs 5 --strict
-
-报告落 `eval/report/category_read_probe_<ts>.md`，同时打印到 stdout。**本脚本不改任何
-文档**，结论由人手写进 CHANGELOG / 工单。
 """
 import argparse
 import json
@@ -88,7 +48,7 @@ CASE = {
 def _decisions(trace: dict) -> list:
     """这一轮的 planner 决策事件。`run_one` 回的是 trace **路径**（不是内容），
     所以这里自己读一次——读法走 `trace_io.load_trace`（仓内相对路径会让它静默读到
-    None，同族坑见 `docs/native-toolcalls-mainline.md`）。"""
+    None）。"""
     return [e for e in ((trace or {}).get("events") or [])
             if e.get("node") == "planner" and e.get("event") == "decision"]
 

@@ -1,20 +1,5 @@
 #!/usr/bin/env python3
-"""向量检索 POC（20260831，rag-design.md §9）：词法 BM25 vs 百炼 text-embedding-v4 vs RRF 三路对比。
-
-设计定论：
-- 复用 rag/search.py 的语料与词法路（评测即线上实现，不另写模拟）
-- 向量路：chunk 级 embedding（text-embedding-v4, 1024 维, float）→ 余弦相似度
-  → 文档级聚合取最高分 chunk——与 BM25 的"chunk 打分 → 文档最高分聚合"完全同构，
-  两路只在打分维度上不同，指标对比公平
-- RRF：k=60 标准常量，按两路各自排名融合（k 大对低排名宽容，适合召回场景）
-  ——**用线上那份实现**（`rag/vector_index.rrf_fuse`，20261005 收口；此前这里另有一份，
-  两份公式同源实现各写各的，等于"评测的融合"与"线上的融合"不是同一件事）
-- 纯 Python 点积（零 numpy 依赖：语料 ~60 chunk × 1024 维，单查询全库点积微秒级；
-  生产化后同样够用，不必引入依赖）
-- embedding 落盘缓存 eval/cache/vector_poc.json（文本 md5 为键，语料变化自动重算；
-  首次跑 ~57 条文本 ≈ 6 批 API 调用，之后全部命中缓存）
-- key/base_url 复用 agent 现有 QWEN_API_KEY / QWEN_BASE_URL（百炼 compatible-mode，
-  与 qwen-3.8-flash 同一工作空间，无需新增配置）
+"""向量检索 POC：词法 BM25 vs 百炼 text-embedding-v4 vs RRF 三路对比。
 
 用法：
   .venv/bin/python eval/recall_vector_poc.py [--show] [--refresh]

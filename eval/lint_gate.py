@@ -149,7 +149,7 @@ def main() -> int:
             "_note": "ruff error 数的棘轮基线。只许变小；--update 是唯一放宽通道。"
                      "三个量（ruff 版本 / line-length / select）都必须与 pyproject.toml "
                      "同源——三者都会改变条目集。判据见 eval/lint_gate.py 头注；"
-                     "纪律怎么理解见 docs/lint-baseline.md。",
+                     "纪律见 CONTRIBUTING.md。",
             "ruff_version": running,
             "line_length": line_length,
             "select": select,
@@ -168,7 +168,7 @@ def main() -> int:
     if total > base["total"]:
         print(f"  ❌ 总数 {total} > 基线 {base['total']}")
     if bad or total > base["total"]:
-        print("\n失败：新代码按 `docs/lint-baseline.md` 的纪律 1 必须零 error；"
+        print("\n失败：新代码按 CONTRIBUTING.md 必须零 error；"
               "存量文件按纪律 2 不许把计数改大。真要放宽就 `--update` 并说清为什么。")
         return 1
 

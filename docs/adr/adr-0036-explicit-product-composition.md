@@ -1,7 +1,6 @@
 # ADR-0036：显式产品装配与共享层依赖方向
 
 - **状态**：已采纳（2026-11-02），实现与验证随本轮交付。
-- **承接**：[ADR-0024](adr-0024-framework-kernel-and-domain-extensions.md)。
 - **影响范围**：运行时构造、会话适配器命名、领域权限和确认提案依赖。
 - **判据**：`tests/runtime/test_application_boundaries.py`、跨产品装配和框架持久恢复测试。
 
