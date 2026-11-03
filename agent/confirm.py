@@ -98,7 +98,7 @@ def token_jti(token: str) -> str:
 
 
 def narrow(payload: dict, pick: str) -> tuple[dict | None, str]:
-    """Select one signed operation unit without expanding its granted scope.
+    """Select signed operation units without expanding their granted scope.
 
     Empty selection keeps the original grant. Malformed grouping, indexes or selections
     fail closed. Linked specs remain together; tokens without units use one spec per unit."""
@@ -113,17 +113,27 @@ def narrow(payload: dict, pick: str) -> tuple[dict | None, str]:
     units = _units_of(payload, len(specs))
     if units is None:
         return None, "令牌里的分组读不懂"
-    m = re.fullmatch(r"pick:(\d{1,3})", raw)
+    m = re.fullmatch(r"pick:(\d{1,3}(?:,\d{1,3}){0,49})", raw)
     if not m:
         return None, f"选择记号读不懂（{raw[:32]}）"
-    idx = int(m.group(1))
-    if idx >= len(units):
-        return None, f"选择越界（{idx} / 共 {len(units)} 件）"
-    picked = [specs[i] for i in units[idx]]
+    indexes = [int(value) for value in m.group(1).split(",")]
+    if len(set(indexes)) != len(indexes) or any(index >= len(units) for index in indexes):
+        return None, "选择重复或超出已确认清单"
+    indexes.sort()
+    picked = [specs[i] for index in indexes for i in units[index]]
     if not picked or not all(isinstance(s, dict) for s in picked):
-        return None, f"选择越界（{idx} / 共 {len(units)} 件）"
+        return None, "选择不包含有效操作"
     out = dict(payload)
     out["specs"] = picked
+    out["selection"] = {"selected_units": len(indexes), "total_units": len(units),
+                        "unselected": "retained_not_queued"}
+    if payload.get("units") is not None:
+        cursor = 0
+        out["units"] = []
+        for index in indexes:
+            size = len(units[index])
+            out["units"].append(list(range(cursor, cursor + size)))
+            cursor += size
     return out, ""
 
 

@@ -238,6 +238,8 @@ class AgentRuntime:
             **config["configurable"], "confirmation_replay_only": True}})
         outcome = domain.execute(grant, execution_config, self.saver)
         execution = {key: value for key, value in outcome.items() if key != "reply"}
+        if grant.get("selection"):
+            execution["approval_selection"] = grant["selection"]
         result = TurnResult(outcome["reply"], execution)
         modern = bool(matching and approval.has_result(execution, grant["specs"]))
         if modern:

@@ -31,10 +31,14 @@ def test_one_card_freezes_all_targets_and_replays_one_atomic_write(tmp_path):
     with backend() as state, closing(idem.Ledger(str(tmp_path / "batch.sqlite3"))) as store:
         card = prepared()
         signed = grant(card)
-        args = signed["specs"][0]["args"]
-        assert len(signed["specs"]) == 1 and signed["specs"][0]["tool"] == batch.NAME
-        assert [row["id"] for row in args["items"]] == [11, 12]
-        assert "#11" in card.reply and "#12" in card.reply and not state["writes"]
+        assert len(signed["specs"]) == 2
+        assert all(spec["tool"] == batch.NAME and len(spec["args"]["items"]) == 1
+                   for spec in signed["specs"])
+        assert [spec["args"]["items"][0]["id"] for spec in signed["specs"]] == [11, 12]
+        choices = [option for option in card.execution["pending_confirm"]["opts"]
+                   if option["kind"] == "choice"]
+        assert "#11" in choices[0]["label"] and "#12" in choices[1]["label"]
+        assert not state["writes"]
         first = transactions.execute(signed, cfg(), None, ledger=store)
         replay = transactions.execute(signed, cfg(), None, ledger=store)
         assert first["receipts"] == replay["receipts"] or (
@@ -93,6 +97,20 @@ def test_untrusted_or_unauthorized_batch_never_reads_or_writes(tmp_path):
         widened["specs"][0]["args"]["items"].append({"id": 11, "version": "a" * 64})
         assert not transactions.execute(widened, cfg(), None, ledger=store)["receipts"]
         assert not state["writes"]
+
+
+def test_selected_article_tags_preserve_unselected_articles_and_reject_mixed_intents(tmp_path):
+    with backend() as state, closing(idem.Ledger(str(tmp_path / "selection.sqlite3"))) as store:
+        signed = grant(prepared())
+        mixed = deepcopy(signed)
+        mixed["specs"][1]["args"]["intent"]["add"] = ["另一项改动"]
+        assert not transactions.execute(mixed, cfg(), None, ledger=store)["receipts"]
+        assert not state["writes"]
+        selected, error = confirm.narrow(signed, "pick:1")
+        assert not error
+        result = transactions.execute(selected, cfg(), None, ledger=store)
+        assert len(result["receipts"]) == 1 and state["writes"] == [[12]]
+        assert state["rows"][12]["tags"] and not state["rows"][11]["tags"]
 
 
 def test_bounded_selection_and_noop_do_not_issue_misleading_cards():

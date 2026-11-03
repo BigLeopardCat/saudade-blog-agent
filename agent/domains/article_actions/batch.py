@@ -50,6 +50,22 @@ def validate(args):
     return args
 
 
+def combine(specs):
+    if not isinstance(specs, list) or not specs:
+        raise ValueError("文章批量清单不能为空")
+    parts = []
+    for spec in specs:
+        if not isinstance(spec, dict) or spec.get("tool") != NAME:
+            raise ValueError("文章批量事务不能混入其他操作")
+        parts.append(validate(spec.get("args")))
+    first = parts[0]
+    if any((part["status"], part["is_top"]) != (first["status"], first["is_top"])
+           for part in parts):
+        raise ValueError("文章批量目标状态不一致")
+    return validate({"items": [item for part in parts for item in part["items"]],
+                     "status": first["status"], "is_top": first["is_top"]})
+
+
 def prepare(article_ids, category, status, is_top, config):
     selection = {"articleIds": article_ids} if article_ids is not None else {"category": category}
     rows = base._admin_read_post(targets.PATH + "batch/prepare", selection, config)
@@ -84,10 +100,12 @@ def prepare(article_ids, category, status, is_top, config):
         principal,
         cid,
         "set_status",
-        {"tool": NAME, "args": args},
+        [{"tool": NAME, "args": {**change, "items": [item]}} for item in args["items"]],
         executor="article_state",
-        question=text + "\n\n确认后整批执行。",
+        question=targets.description(change) + "；未勾选的文章保留原状态。"
+        + (lines[-1] if len(current) != len(changed) else ""),
         target=text,
+        choices=[f"《{sanitize_untrusted(row['title'], 100)}》（#{row['id']}）" for row in changed],
     )
 
 

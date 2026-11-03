@@ -24,14 +24,16 @@ def handles(grant):
 def validate(grant, config):
     principal = writes.validate_binding(grant, config)
     specs = grant.get("specs")
-    if not handles(grant) or not isinstance(specs, list) or len(specs) != 1:
+    if not handles(grant) or not isinstance(specs, list) or not 1 <= len(specs) <= batch.MAX_ITEMS:
         raise ValueError("确认凭据不是单项文章状态操作")
     spec = specs[0]
     args = spec.get("args") if isinstance(spec, dict) else None
     if isinstance(spec, dict) and spec.get("tool") == batch.NAME:
         if not authz.check(principal, OPERATION).allowed:
             raise ValueError("当前身份无权修改文章状态")
-        return batch.NAME, batch.validate(args)
+        return batch.NAME, batch.combine(specs)
+    if len(specs) != 1:
+        raise ValueError("不同文章事务需要分别确认")
     if (
         not isinstance(args, dict)
         or spec.get("tool") != OPERATION
