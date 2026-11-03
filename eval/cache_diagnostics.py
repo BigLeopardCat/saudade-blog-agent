@@ -7,6 +7,7 @@ from datetime import datetime
 from pathlib import Path
 
 from eval import usage
+from eval.token_cost_report import estimate_cost, parse_prices
 from utils.trace_files import iter_trace_files
 from utils.trace_io import load_trace
 
@@ -79,8 +80,63 @@ def _calls(doc, source):
             layout = None
 
 
-def diagnose(documents):
+def _summary_attempted(events):
+    return any(event.get("node") == "summarizer"
+               and event.get("event") in {"llm_start", "llm_done", "llm_error"}
+               for event in events)
+
+
+def request_cohorts(documents, prices=None):
+    """Compare request lifecycles; first observed never implies a provider cold cache."""
+    seen, after_compaction, groups = set(), set(), {}
+    ordered = sorted(documents, key=lambda item: (
+        _timestamp(item[1]) is None, _timestamp(item[1]) or 0, item[0]))
+    for _, doc in ordered:
+        events = [event for event in doc.get("events", []) if isinstance(event, dict)]
+        layouts = [event for event in events if event.get("event") == "request_layout"]
+        layout = next((event for event in layouts if event.get("tool_choice") == "auto"),
+                      layouts[0] if layouts else {})
+        identity = (layout.get("endpoint"), layout.get("session"))
+        comparable = all(identity) and _timestamp(doc) is not None
+        compacted = any(event.get("event") == "compacted" for event in events)
+        if compacted or _summary_attempted(events):
+            cohort = "compaction_request"
+        elif not comparable:
+            cohort = "unclassified"
+        elif identity in after_compaction:
+            cohort = "first_request_after_compaction"
+        elif identity in seen:
+            cohort = "continued_request"
+        else:
+            cohort = "first_observed_request"
+        if comparable:
+            seen.add(identity)
+            after_compaction.discard(identity)
+            if compacted:
+                after_compaction.add(identity)
+        models = {event.get("model") for event in layouts if event.get("model")}
+        model = next(iter(models)) if len(models) == 1 else "mixed_or_unknown"
+        meta = doc.get("input") or {}
+        runtime = meta.get("runtime") or {}
+        key = (cohort, model, meta.get("source") or "unknown",
+               runtime.get("build_sha") or "unknown")
+        if key not in groups:
+            groups[key] = {"cohort": cohort, "model": model, "source": key[2],
+                           "build": key[3], "requests": 0, **usage.empty()}
+        row = groups[key]
+        row["requests"] += 1
+        for field, value in usage.totals(events).items():
+            row[field] += value
+    return [{**row, "hit_rate": usage.hit_rate(row),
+             "measured_uncached_input": row["cache_in"] - row["cache"],
+             "estimated_cost": estimate_cost(row, prices)
+             if row["model"] != "mixed_or_unknown" else None}
+            for _, row in sorted(groups.items())]
+
+
+def diagnose(documents, *, prices=None):
     """Group by observed model/endpoint/session and keep summarizers separate."""
+    documents = list(documents)
     calls = [row for source, doc in documents for row in _calls(doc, source)]
     calls.sort(key=lambda row: (row["timestamp"] is None, row["timestamp"] or 0,
                                 row["trace"], row["index"]))
@@ -106,18 +162,36 @@ def diagnose(documents):
             "cache_observation": ("reported_hit" if cached else "reported_miss")
             if known else "unknown"})
     return {"calls": result, "groups": {name: dict(row, hit_rate=usage.hit_rate(row))
-                                       for name, row in groups.items()}}
+                                       for name, row in groups.items()},
+            "request_cohorts": request_cohorts(documents, prices)}
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--dir", required=True)
     parser.add_argument("--out", required=True)
+    parser.add_argument("--price-in", type=float, help="Uncached input rate per million tokens")
+    parser.add_argument("--price-out", type=float, help="Output rate per million tokens")
+    parser.add_argument("--price-cache", type=float, help="Cached input rate per million tokens")
+    parser.add_argument("--currency", type=str.upper,
+                        help="Currency of the supplied rates, e.g. USD")
     args = parser.parse_args()
+    try:
+        prices = parse_prices(args)
+    except ValueError as error:
+        parser.error(str(error))
+    if args.currency and not (len(args.currency) == 3 and args.currency.isascii()
+                              and args.currency.isalpha()):
+        parser.error("Currency must be a three-letter code")
     documents = [(str(Path(path).relative_to(args.dir)), doc)
                  for path in iter_trace_files(args.dir)
                  if isinstance(doc := load_trace(path), dict)]
-    Path(args.out).write_text(json.dumps(diagnose(documents), ensure_ascii=False, indent=2))
+    report = diagnose(documents, prices=prices)
+    report["pricing"] = {"rates_per_million_tokens": dict(zip(
+        ("uncached_input", "output_including_reasoning", "cached_input"), prices, strict=True))
+        if prices is not None else None, "currency": args.currency,
+                         "basis": "caller_supplied_estimate_not_provider_invoice"}
+    Path(args.out).write_text(json.dumps(report, ensure_ascii=False, indent=2))
     return 0
 
 

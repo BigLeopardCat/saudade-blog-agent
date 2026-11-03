@@ -10,9 +10,10 @@ import math
 import os
 import sys
 from collections import defaultdict
+from pathlib import Path
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-# 生产 trace 根 = 应用配置那一处（`settings.trace_dir`），不手抄第二份路径。
+if __package__ in (None, ""):
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from config import settings  # noqa: E402
 from eval import usage
 from utils.trace_files import iter_trace_files, parse_trace_name  # noqa: E402
@@ -71,14 +72,22 @@ def totals(paths: list[str]) -> dict:
     return tot
 
 
+def estimate_cost(row: dict, price: tuple | None) -> float | None:
+    """Caller-supplied rates per million tokens; incomplete usage has unknown cost."""
+    if price is None or not usage.complete(row):
+        return None
+    p_in, p_out, p_cache = price
+    return ((row["in"] - row["cache"]) * p_in
+            + row["cache"] * p_cache + row["out"] * p_out) / 1e6
+
+
 def _row(label: str, r: dict, price: tuple | None) -> str:
     ratio = usage.hit_rate(r)
     hit = f"{ratio * 100:.1f}%" if ratio is not None else "n/a"
     tail = ""
     if price and usage.complete(r):
         p_in, p_out, p_cache = price
-        miss = r["in"] - r["cache"]
-        yuan = (miss * p_in + r["cache"] * p_cache + r["out"] * p_out) / 1e6
+        yuan = estimate_cost(r, price)
         no_cache = (r["in"] * p_in + r["out"] * p_out) / 1e6
         tail = f" | ¥{yuan:.2f}（不命中则 ¥{no_cache:.2f}）"
     elif price:
@@ -92,7 +101,7 @@ _HEAD = (f"{'分组':<28} {'调用':>5} {'输入tok':>10} {'输出tok':>7} "
          f"{'命中tok':>10} {'命中率':>7} {'未量到':>5} {'未知尝试':>7}")
 
 
-def _parse_price(a) -> tuple | None:
+def parse_prices(a) -> tuple | None:
     values = (a.price_in, a.price_out, a.price_cache)
     if all(v is None for v in values):
         return None
@@ -112,7 +121,7 @@ def main() -> int:
     ap.add_argument("--price-cache", type=float, default=None, help="元/百万 token")
     a = ap.parse_args()
     try:
-        price = _parse_price(a)
+        price = parse_prices(a)
     except ValueError as exc:
         ap.error(str(exc))
 
