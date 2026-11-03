@@ -7,6 +7,7 @@ from langchain_core.tools import tool
 from pydantic import Field, StrictInt, StrictStr
 
 from agent.domains.todos import targets
+from agent.domains.todos.batch import prepare_dashboard_todo_deletions
 from agent.proposals import proposal
 from agent.runtime.results import TurnResult
 from agent.runtime.turns import check_cancelled
@@ -111,4 +112,5 @@ def tools(read_tools):
     return {
         **{name: tool for name, tool in read_tools.items() if name == "list_dashboard_todos"},
         prepare_dashboard_todo.name: prepare_dashboard_todo,
+        prepare_dashboard_todo_deletions.name: prepare_dashboard_todo_deletions,
     }

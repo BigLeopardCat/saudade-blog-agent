@@ -437,3 +437,8 @@ def test_action_text():
 
 if __name__ == "__main__":
     test_action_text()
+
+
+def test_todo_batch_receipt_uses_selected_count():
+    items = [{"item_id": 1}, {"item_id": 3}]
+    assert _full("delete_dashboard_todos", {"items": items}) == "删除 2 项待办"

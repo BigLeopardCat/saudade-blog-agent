@@ -34,7 +34,7 @@ def handles(grant):
 def validate(grant, config):
     principal = writes.validate_binding(grant, config)
     specs = grant.get("specs")
-    if not handles(grant) or not isinstance(specs, list) or len(specs) != 1:
+    if not handles(grant) or not isinstance(specs, list) or not 1 <= len(specs) <= 20:
         raise ValueError("确认凭据不是单项文章标签操作")
     spec = specs[0]
     if not isinstance(spec, dict) or spec.get("tool") not in (OPERATION, batch.NAME):
@@ -42,7 +42,9 @@ def validate(grant, config):
     if spec["tool"] == batch.NAME:
         if not authz.check(principal, OPERATION).allowed:
             raise ValueError("当前身份无权修改文章标签")
-        return batch.NAME, batch.validate(spec.get("args"))
+        return batch.NAME, batch.combine(specs)
+    if len(specs) != 1:
+        raise ValueError("不同标签事务需要分别确认")
     args = Arguments.model_validate(spec.get("args")).model_dump()
     targets.intent(args["intent"])
     if not authz.check(principal, OPERATION).allowed:

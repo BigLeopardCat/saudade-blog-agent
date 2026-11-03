@@ -156,6 +156,7 @@ flowchart LR
 │   ├── domains/tags/transactions.py                     # 当前生产代码模块
 │   ├── domains/todos/deletion.py                        # 版本绑定删除与实际回执核验
 │   ├── domains/todos/__init__.py                        # 当前生产代码模块
+│   ├── domains/todos/batch.py                           # 可勾选的同事务待办批量删除与完整回执核对
 │   ├── domains/todos/preparation.py                     # 当前生产代码模块
 │   ├── domains/todos/targets.py                         # 当前生产代码模块
 │   ├── domains/todos/transactions.py                    # 当前生产代码模块

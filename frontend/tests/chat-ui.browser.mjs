@@ -114,7 +114,11 @@ const server = createServer(async (req, res) => {
             token: next ? 'offline-next-confirmation' : 'offline-synthetic-confirmation',
             exp: Math.floor(Date.now() / 1000) + 600,
             server_time: Math.floor(Date.now() / 1000),
-            opts: [{ value: 'yes', label: '确认收藏' }, { value: 'no', label: '取消' }],
+            opts: mode === 'confirmation-select' ? [
+              {value:'yes',label:'确认执行'},
+              ...['第一项待办','第二项待办','第三项待办'].map((label,index)=>({value:`pick:${index}`,label})),
+              {value:'no',label:'取消'},
+            ] : [{ value: 'yes', label: '确认收藏' }, { value: 'no', label: '取消' }],
           };
           if (mode !== 'confirmation-replay') {
             pendingConfirmation = card;
@@ -763,6 +767,28 @@ try {
   assert.equal(await page.evaluate(() => window.__chatTest.ctx.state.items.filter(i => i.type === 'agent').at(-1).text), literal);
   passed('literal command and confirmation prefixes render as text without actions');
 
+  await send('批量删除三项待办', 'confirmation-select');
+  const selection = page.getByRole('group',{name:'选择要执行的项目'});
+  await selection.waitFor({state:'visible'});
+  assert.equal(await selection.getByRole('checkbox').count(),4);
+  await selection.getByRole('checkbox',{name:'第二项待办',exact:true}).uncheck();
+  const selectedSubmit=page.getByRole('button',{name:'确认执行 2 项'});
+  await selectedSubmit.waitFor({state:'visible'});
+  assert.equal(await selectedSubmit.isEnabled(),true,'selecting after SSE completion remains actionable');
+  const beforeSelection=streamCount();
+  await selectedSubmit.click();
+  await idle();
+  const selectedRequest=requests.filter(r=>r.path==='/api/chat/stream').at(-1);
+  assert.equal(selectedRequest.body.confirm_pick,'pick:0,2');
+  assert.equal(streamCount(),beforeSelection+1,'one selection causes one approval request');
+  await reset();
+  await send('暂不选择任何待办', 'confirmation-select');
+  await page.getByRole('checkbox',{name:'全选',exact:true}).uncheck();
+  assert.equal(await page.getByRole('button',{name:'确认执行 0 项'}).isDisabled(),true);
+  await page.getByRole('checkbox',{name:'第三项待办',exact:true}).check();
+  assert.equal(await page.getByRole('button',{name:'确认执行 1 项'}).isEnabled(),true);
+  passed('selectable transaction card sends only the checked signed units; empty selection cannot execute');
+  await reset();
   await send('测试确认卡', 'confirmation');
   const progress = await page.locator('.agent-process').last().innerText();
   assert.match(progress, /正在调用工具：search_notes/);

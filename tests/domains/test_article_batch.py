@@ -2,6 +2,8 @@
 
 import json
 import secrets
+from contextlib import closing
+from copy import deepcopy
 
 import httpx
 import pytest
@@ -79,11 +81,12 @@ def test_batch_has_one_card_and_one_idempotent_write(service, tmp_path):
     result = prepare()
     assert service["writes"] == 0
     card = result.execution["pending_confirm"]
-    assert len(card["specs"]) == 1
+    assert len(card["specs"]) == 2
     grant = confirm.verify(card["token"], 7, 42)
-    args = grant["specs"][0]["args"]
-    assert [item["id"] for item in args["items"]] == [11, 12]
-    assert "#11" in card["q"] and "#12" in card["q"] and "1篇" in card["q"]
+    assert [spec["args"]["items"][0]["id"] for spec in grant["specs"]] == [11, 12]
+    assert all(len(spec["args"]["items"]) == 1 for spec in grant["specs"])
+    choices = [option for option in card["opts"] if option["kind"] == "choice"]
+    assert "#11" in choices[0]["label"] and "#12" in choices[1]["label"] and "1篇" in card["q"]
     ledger = idem.Ledger(str(tmp_path / "batch.sqlite3"))
     first = transactions.execute(grant, cfg(), None, ledger=ledger)
     replay = transactions.execute(grant, cfg(), None, ledger=ledger)
@@ -91,6 +94,24 @@ def test_batch_has_one_card_and_one_idempotent_write(service, tmp_path):
     assert service["writes"] == 1
     assert not transactions.execute(grant, cfg("user"), None, ledger=ledger)["receipts"]
     assert service["writes"] == 1
+
+
+def test_selected_article_state_executes_only_selected_ids_and_rejects_mixed_transactions(
+    service, tmp_path
+):
+    card = prepare().execution["pending_confirm"]
+    grant = confirm.verify(card["token"], 7, 42)
+    with closing(idem.Ledger(str(tmp_path / "selection.sqlite3"))) as ledger:
+        mixed = deepcopy(grant)
+        mixed["specs"][1]["args"]["status"] = "draft"
+        assert not transactions.execute(mixed, cfg(), None, ledger=ledger)["receipts"]
+        assert service["writes"] == 0
+        selected, error = confirm.narrow(grant, "pick:1")
+        assert not error
+        result = transactions.execute(selected, cfg(), None, ledger=ledger)
+        assert len(result["receipts"]) == 1 and service["writes"] == 1
+        payload = json.loads(service["requests"][-1].content)
+        assert [item["id"] for item in payload["items"]] == [12]
 
 
 @pytest.mark.parametrize("failure", ["lost", "stale", "duplicate"])

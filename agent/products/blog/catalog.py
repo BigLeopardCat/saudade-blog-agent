@@ -36,7 +36,10 @@ DOMAIN_DESCRIPTIONS = {
     "admin_work_queue": "查询额度重置申请、本人后台待办和日程；"
                         "准备待办新增、完成、改期或删除，以及额度审批或重置确认。仅管理员。"
                         " User-requested to-dos and reminders are business records here, "
-                        "separate from the agent's private execution checklist.",
+                        "separate from the agent's private execution checklist. "
+                        "Deleting multiple todos uses one selectable batch approval, "
+                        "not repeated single-item cards. "
+                        "Different transactions keep separate approvals.",
     "admin_moderation": "查询河灯留言、文章评论及审核状态，含匿名留言的真实发表账号；"
                         "准备审核或删除确认。仅管理员。",
     "admin_reports": "Read server health, user statistics and article traffic reports. Admin only.",
