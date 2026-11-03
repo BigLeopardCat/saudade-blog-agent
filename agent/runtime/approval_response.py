@@ -1,5 +1,7 @@
 """Finalize the standard Agent's reply before its prepared approval is published."""
 
+from langchain_core.messages import RemoveMessage
+
 from agent.runtime.execution_state import capture
 from agent.runtime.message_content import text_content
 from agent.runtime.response_validation import incomplete_response
@@ -16,7 +18,8 @@ def finish(session, response):
         if attempts == 0:
             session.state["proposal"]["response_attempts"] = 1
             record("native", "approval_response_retry", reason="empty")
-            return {**capture(session), "jump_to": "model"}
+            return {**capture(session), "jump_to": "model",
+                    "messages": [RemoveMessage(id=response.id)] if response.id else []}
         record("native", "approval_response_failed", reason="empty")
     else:
         record("native", "approval_response_failed", reason="invalid_response")
