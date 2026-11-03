@@ -334,6 +334,10 @@ def test_action_text():
     check("退役的知识库占位工具没有留在注册表中",
           "search_knowledge_base" not in _NAMES)
 
+    check("批量待办回执带实际选择数量",
+          _full("delete_dashboard_todos", {"items": [{"item_id": 1}, {"item_id": 3}]})
+          == "删除 2 项待办")
+
     print("\n④ 接线锁：Python 回执提供 action，Rust 只读顶层字段")
     _rs = _parent_repo.read(
         "src/routes/chat.rs",
