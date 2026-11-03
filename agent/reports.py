@@ -575,12 +575,12 @@ def render_note_stats(data: dict, now: datetime | None = None) -> str:
     data = data or {}
     totals = [(w, _count_int(data.get(k))) for k, w in _TOTAL_WORDS]
     lines = [f"文章流量报表（{_ts(now)}，生成于 {data.get('generatedAt') or '未知'}）",
-             "- 全站合计（只算当前可见文章）："
+             "- 历史累计合计（只算当前可见文章，不是本期合计）："
              + ("、".join(f"{w} {n}" for w, n in totals if n is not None)
                 or "本次没读到合计值")]
-    lines += _rank_block("阅读榜", data.get("topViewed"), "views")
-    lines += _rank_block("点赞榜", data.get("topLiked"), "likes")
-    lines += _rank_block("收藏榜", data.get("topFavorited"), "favorites")
+    lines += _rank_block("历史累计阅读榜", data.get("topViewed"), "views")
+    lines += _rank_block("历史累计点赞榜", data.get("topLiked"), "likes")
+    lines += _rank_block("历史累计收藏榜", data.get("topFavorited"), "favorites")
 
     # `daily` 同样三态：没读到 / 读到但全是零 / 读到且有数（见 `_rank_block` 注）
     daily = data.get("daily")
