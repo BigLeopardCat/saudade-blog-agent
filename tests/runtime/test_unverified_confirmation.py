@@ -46,7 +46,13 @@ def test_unknown_response_returns_to_readback_and_does_not_dispatch_siblings(bac
         facts = [json.loads(message.content) for message in model.prompts[0]
                  if isinstance(message, ToolMessage)
                  and message.tool_call_id in ("favorite", "notice")]
-        assert {row["status"] for row in facts} == {"unverified", "not_executed"}
+        assert {row["status"] for row in facts} == {"awaiting_confirmation", "not_executed"}
+        unknown = next(message for message in model.prompts[0]
+                       if isinstance(message, ToolMessage)
+                       and message.tool_call_id.startswith("unverified_"))
+        assert unknown.status == "error"
+        assert json.loads(unknown.content)["status"] == "unverified"
+        assert json.loads(unknown.content)["approval"] == "user_confirmed"
         assert not selected.store.load(config()).has_pending
         before = len(state["requests"])
         replay = run(selected, grant=grant)
