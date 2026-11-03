@@ -22,9 +22,16 @@ def conversation_context(principal) -> dict:
     role = getattr(principal, "known_role", None) if verified else None
     return {
         "rendering": {"stickers": [f":{name}:" for name in STICKER_NAMES]},
+        "guestbook": {"posting_requires_login": True,
+                      "anonymous": "hides public display name, not the authenticated publisher",
+                      "publisher_lookup_roles": sorted(ADMIN_ROLES)},
+        "article_management": {"requires_admin_console_access": True,
+                               "applies_to": ["agent_tools", "web_editor"],
+                               "author_ownership_is_not_permission": True},
         "tools": {"loading": "disabled" if role == ROLE_ZAKO else "on_demand",
                   "administration_requires": sorted(ADMIN_ROLES)},
         "caller": {"verified": verified, "role": role,
+                     "can_access_admin_console": verified and role in ADMIN_ROLES,
                      "preferred_address": ("主人" if role in ADMIN_ROLES
                                            else "杂鱼" if role == ROLE_ZAKO else "你")},
         "permissions": sorted(scopes_for(role)),

@@ -47,9 +47,9 @@ _FACTS = (
 def build_prompt(messages: list, principal, own_enabled: bool = False) -> list:
     """Compose current authority, historical data, and bounded source observations."""
     context = conversation_context(principal)
-    # Present the business label; authorization continues to use the principal.
+    # Keep the authorization code distinct from its localized display label.
     if context["caller"]["role"] is not None:
-        context["caller"]["role"] = role_cn(context["caller"]["role"])
+        context["caller"]["role_label"] = role_cn(context["caller"]["role"])
     context["caller"]["conversation_style"] = conversation_style(principal)
     guidance = tool_guidance(principal) or _BOUNDARY
     system = SystemMessage(content=BLOG_PERSONA_PROMPT
@@ -63,6 +63,9 @@ def build_prompt(messages: list, principal, own_enabled: bool = False) -> list:
                      "conversation_style": context["caller"]["conversation_style"],
                      "tool_loading": context["tools"]["loading"],
                      "administration_requires": context["tools"]["administration_requires"],
+                     "can_access_admin_console": context["caller"]["can_access_admin_console"],
+                     "guestbook": context["guestbook"],
+                     "article_management": context["article_management"],
                      "rendering": context["rendering"],
                      "tool_guidance": guidance, "factual_policy": _FACTS}
     actor, attachments = [], []
