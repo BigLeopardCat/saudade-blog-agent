@@ -119,7 +119,8 @@ def test_missing_id_reports_only_the_known_window(notifications, size):
 @pytest.mark.parametrize("args", [{"limit": 0}, {"limit": 21}, {"limit": True},
                                   {"page": 101}, {"page": "2"}, {"notification_id": False},
                                   {"notification_id": -1}, {"unread_only": "false"},
-                                  {"query": ""}, {"query": "x" * 121}, {"query": True}])
+                                  {"query": ""}, {"query": "x" * 121}, {"query": True},
+                                  {"include_preview": "true"}, {"include_preview": 1}])
 def test_invalid_bounds_fail_before_http(notifications, args):
     with pytest.raises(ValidationError):
         read(**args)
@@ -244,4 +245,17 @@ def test_long_bodies_do_not_inflate_lists_and_detail_reads_are_explicit(notifica
     assert detail['contentIncluded'] is True
     assert detail['items'][0]['content'] == notifications['items'][0]['content'][:2000]
     assert detail['items'][0]['contentTruncated'] is True
+    assert [request.method for request in notifications['requests']] == ['GET', 'GET']
+
+
+def test_explicit_batch_preview_keeps_summary_tasks_within_a_bounded_read(notifications):
+    notifications['items'] = rows(18)
+    first = json.loads(str(read(include_preview=True)))
+    assert len(first['items']) == first['pageSize'] == 10
+    assert first['contentIncluded'] is True and first['hasMoreInWindow'] is True
+    assert all(len(row['content']) == 240 and row['contentTruncated'] for row in first['items'])
+    second = json.loads(str(read(include_preview=True, page=2)))
+    assert len(second['items']) == 8 and second['hasMoreInWindow'] is False
+    assert {row['id'] for row in first['items'] + second['items']} == {
+        row['id'] for row in notifications['items']}
     assert [request.method for request in notifications['requests']] == ['GET', 'GET']

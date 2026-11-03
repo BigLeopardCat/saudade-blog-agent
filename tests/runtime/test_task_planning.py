@@ -84,7 +84,7 @@ def test_chat_only_session_has_no_planning_tool_or_additional_model_call():
     assert len(model.prompts) == 1 and not session.menu
 
 
-@pytest.mark.parametrize("omission", [None, "summary", "navigation", "scope"])
+@pytest.mark.parametrize("omission", [None, "body", "summary", "navigation", "scope"])
 def test_composite_acceptance_rejects_partial_delivery_even_with_a_valid_card(
     monkeypatch, tmp_path, omission
 ):
@@ -95,9 +95,14 @@ def test_composite_acceptance_rejects_partial_delivery_even_with_a_valid_card(
     calls = [call("prepare_notification_read", "prepare", scope="selected", ids=ids)]
     if omission != "navigation":
         calls.append(call("navigate_page", "navigate", path="/guestbook"))
-    model = Model(AIMessage(content="", tool_calls=[
+    reads = [AIMessage(content="", tool_calls=[
         call("load_notifications_info_tools", "load")]),
-        AIMessage(content="", tool_calls=[call("list_notifications", "read", unread_only=True)]),
+        AIMessage(content="", tool_calls=[call("list_notifications", "read", unread_only=True)])]
+    if omission != "body":
+        reads.append(AIMessage(content="", tool_calls=[
+            call("list_notifications", "body-101", notification_id=101),
+            call("list_notifications", "body-102", notification_id=102)]))
+    model = Model(*reads,
         AIMessage(content="" if omission == "summary" else "部署 N-417，审核 R-862。",
                   tool_calls=calls), AIMessage(content="已标记并发送页面指令。"))
     monkeypatch.setattr("agent.runtime.service.get_llm", lambda **_: model)
@@ -106,7 +111,8 @@ def test_composite_acceptance_rejects_partial_delivery_even_with_a_valid_card(
     result = report["cases"][0]
     assert result["passed"] is (omission is None), result.get("reason")
     if omission:
-        reason = {"summary": "summary", "navigation": "navigation", "scope": "approval"}[omission]
+        reason = {"body": "body", "summary": "summary", "navigation": "navigation",
+                  "scope": "approval"}[omission]
         assert reason in result["reason"]
 
 
@@ -140,6 +146,8 @@ def test_same_agent_delivers_read_facts_after_preparation_without_execution_or_s
         with backend() as state, model_replies(
                 {"tool_calls": [wire_call("load_notifications_info_tools", "load")]},
                 {"tool_calls": [wire_call("list_notifications", "read", unread_only=True)]},
+                {"tool_calls": [wire_call("list_notifications", "body-101", notification_id=101),
+                                wire_call("list_notifications", "body-102", notification_id=102)]},
                 {"tool_calls": [wire_call("prepare_notification_read", "prepare",
                                          scope="selected", ids=[101, 102])]},
                 {"content": summary}) as (model, requests):
@@ -155,11 +163,12 @@ def test_same_agent_delivers_read_facts_after_preparation_without_execution_or_s
             result = events[-1]
             assert result.reply == summary and result.execution["pending_confirm"]
             assert not [r for r in state["requests"] if r.method != "GET"]
-            assert budget.model_calls == len(requests) == 4
+            assert budget.model_calls == len(requests) == 5
             assert requests[-1]["tool_choice"] == "none"
             assert requests[-2]["tools"] == requests[-1]["tools"]
             assert result.execution["pending_confirm"]["token"] not in str(requests)
-            assert "N-417" in str(requests[-1]["messages"])
+            assert "N-417" not in str(requests[2]["messages"])
+            assert all(code in str(requests[-1]["messages"]) for code in ("N-417", "R-862"))
             assert selected.store.load(config()).messages[-1].content == summary
     finally:
         ledger.close()
@@ -248,6 +257,9 @@ def test_notification_summary_approval_and_browser_ack_keep_one_durable_task(mon
     first_model = Model(AIMessage(content="", tool_calls=[
         call("load_notifications_info_tools", "load")]),
         AIMessage(content="", tool_calls=[call("list_notifications", "read", unread_only=True)]),
+        AIMessage(content="", tool_calls=[
+            call("list_notifications", "body-101", notification_id=101),
+            call("list_notifications", "body-102", notification_id=102)]),
         AIMessage(content="", tool_calls=[call("prepare_notification_read", "prepare",
                                               scope="selected", ids=[101, 102])]))
     first_model.approval_reply = AIMessage(
