@@ -43,11 +43,41 @@ def todos(monkeypatch):
         if request.method == "GET":
             if state["after_unavailable"] and state["writes"]:
                 return httpx.Response(503)
-            return httpx.Response(200, json={"code": 200, "data": state["rows"]})
+            ident = int(request.url.path.rsplit("/", 1)[-1])
+            row = next((row for row in state["rows"] if row["id"] == ident), None)
+            return httpx.Response(
+                200,
+                json={"code": 200, "data": row}
+                if row
+                else {"code": 404, "message": "待办已变化", "data": {}},
+            )
         payload = json.loads(request.content)
         state["writes"] += 1
         if state["write_error"]:
             raise httpx.ReadTimeout("request sent; response lost")
+        if request.method == "DELETE":
+            ident = int(request.url.path.rsplit("/", 1)[-1])
+            row = next((row for row in state["rows"] if row["id"] == ident), None)
+            if (
+                row is None
+                or row["version"] != payload["version"]
+                or row["text"] != payload["text"]
+            ):
+                state["writes"] -= 1
+                return httpx.Response(200, json={"code": 409, "message": "待办已变化", "data": {}})
+            if not state["ignore"]:
+                state["rows"] = [other for other in state["rows"] if other["id"] != ident]
+            return httpx.Response(
+                200,
+                json={
+                    "code": 200,
+                    "data": {
+                        "id": ident,
+                        "version": payload["version"],
+                        "deleted": not state["ignore"],
+                    },
+                },
+            )
         if request.url.path.endswith("/item"):
             row = {
                 "id": 20,
@@ -105,6 +135,7 @@ def test_unscheduled_create_binds_no_due_date_and_never_writes(todos, date):
             "create_dashboard_todo",
         ),
         ("complete", {"item_id": 11}, "dashboard_todo_done", "complete_dashboard_todo"),
+        ("delete", {"item_id": 11}, "dashboard_todo_delete", "delete_dashboard_todo"),
         (
             "reschedule",
             {"item_id": 11, "date": None},
@@ -353,8 +384,11 @@ def test_native_prepares_executes_then_continues_without_repeating_write(
         application=BlogApplication(),
         model_factory=lambda **_: model,
     )
-    prepared = list(runtime.stream_events(
-        {"messages": [HumanMessage(content="按要求改个人待办")]}, admin_config()))
+    prepared = list(
+        runtime.stream_events(
+            {"messages": [HumanMessage(content="按要求改个人待办")]}, admin_config()
+        )
+    )
     execution = prepared[-1].execution
     assert todos["writes"] == 0 and len(model.calls) == 2
     token = execution["pending_confirm"]["token"]
@@ -362,9 +396,12 @@ def test_native_prepares_executes_then_continues_without_repeating_write(
     signed = confirm.verify(token, 7, 42)
     assert runtime.get_state(admin_config()).values["pending_confirm"]["token"] == token
     for _ in range(2):
-        completed = list(runtime.stream_events(
-            {"messages": [HumanMessage(content="确认")], "confirm_grant": signed},
-            admin_config()))
+        completed = list(
+            runtime.stream_events(
+                {"messages": [HumanMessage(content="确认")], "confirm_grant": signed},
+                admin_config(),
+            )
+        )
         result = completed[-1].execution
         assert result["receipts"][0]["tool"] == signed["specs"][0]["tool"]
     assert todos["writes"] == 1 and len(model.calls) == 3
@@ -392,5 +429,45 @@ def test_satisfied_state_needs_no_card_or_post(todos, action, args):
 )
 def test_malformed_snapshot_is_unknown_not_empty(todos, field, value):
     todos["rows"][0][field] = value
-    result = prepare("create", text="准备面试")
+    result = prepare("complete", item_id=11)
     assert result.kind == "unavailable" and todos["writes"] == 0
+
+
+def test_delete_freezes_one_id_and_version_and_replays_without_a_second_request(todos, tmp_path):
+    todos["rows"].append({**todos["rows"][0], "id": 12})
+    signed = grant(prepare("delete", item_id=11))
+    assert todos["writes"] == 0
+    assert [request.url.path for request in todos["requests"]] == ["/api/protected/todos/item/11"]
+    ledger = idem.Ledger(str(tmp_path / "delete.sqlite3"))
+    first = transactions.execute(signed, admin_config(), None, ledger=ledger)
+    second = transactions.execute(signed, admin_config(), None, ledger=ledger)
+    assert len(first["receipts"]) == len(second["receipts"]) == 1
+    assert first["receipts"][0]["args"] == second["receipts"][0]["args"]
+    assert first["receipts"][0]["result"] == second["receipts"][0]["result"]
+    assert todos["writes"] == 1 and [row["id"] for row in todos["rows"]] == [12]
+    assert [request.method for request in todos["requests"]] == ["GET", "DELETE"]
+
+
+@pytest.mark.parametrize("mode", ["write_error", "ignore"])
+def test_delete_unknown_or_invalid_receipt_is_never_repeated(todos, tmp_path, mode):
+    signed = grant(prepare("delete", item_id=11))
+    todos[mode] = True
+    ledger = idem.Ledger(str(tmp_path / "unknown-delete.sqlite3"))
+    first = transactions.execute(signed, admin_config(), None, ledger=ledger)
+    second = transactions.execute(signed, admin_config(), None, ledger=ledger)
+    assert not first["receipts"] and not second["receipts"]
+    assert todos["writes"] == 1
+
+
+def test_delete_stale_version_is_rejected_by_backend_without_deleting(todos, tmp_path):
+    signed = grant(prepare("delete", item_id=11))
+    todos["rows"][0]["version"] = "2026-11-03 11:30:00"
+    result = transactions.execute(
+        signed, admin_config(), None, ledger=idem.Ledger(str(tmp_path / "stale-delete.sqlite3"))
+    )
+    assert not result["receipts"] and todos["writes"] == 0 and len(todos["rows"]) == 1
+
+
+def test_create_does_not_read_existing_todo_list(todos):
+    assert grant(prepare("create", text="准备面试"))["specs"][0]["tool"] == "create_dashboard_todo"
+    assert not todos["requests"]

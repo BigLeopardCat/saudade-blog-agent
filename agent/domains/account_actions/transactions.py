@@ -62,16 +62,14 @@ def outcome(value, args, plan):
 
 class Operation:
     def invoke(self, args, config=None):
-        plan = targets.prepare(args["intent"], config)
-        if isinstance(plan, base.ToolResult):
-            return plan
-        if plan["version"] != args["version"]:
-            return base.unavailable("账号或操作者权限已变化，请重新核对并确认，本次未改动。")
         check_cancelled(config)
         result = base._admin_request("POST", targets.PATH, args, config)
         if isinstance(result, base.ToolResult):
             return result
         try:
+            plan = targets.plan(result["state"], args["intent"])
+            if plan["version"] != args["version"]:
+                raise ValueError("Backend outcome does not match the confirmed version")
             state = outcome(result, args, plan)
         except (ValueError, TypeError, KeyError):
             return base.unavailable("账号请求已发出，但实际结果无法确认；请先查询，不要重复执行。")

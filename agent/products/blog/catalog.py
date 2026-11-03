@@ -31,7 +31,7 @@ DOMAIN_DESCRIPTIONS = {
     "admin_announcements": "准备站内公告发布、修改、删除确认。仅管理员。",
     "admin_categories": "查询文章分类，按编号或完整名称准备新建、修改、删除确认。仅管理员。",
     "admin_work_queue": "查询额度重置申请、本人后台待办和日程；"
-                        "准备待办变更、额度审批或重置确认。仅管理员。"
+                        "准备待办新增、完成、改期或删除，以及额度审批或重置确认。仅管理员。"
                         " User-requested to-dos and reminders are business records here, "
                         "separate from the agent's private execution checklist.",
     "admin_moderation": "查询河灯留言、文章评论及审核状态，含匿名留言的真实发表账号；"
