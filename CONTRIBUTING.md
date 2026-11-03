@@ -66,7 +66,7 @@ uv run --frozen python eval/lint_gate.py
 
 当前维护批次的 PR 标题、提交摘要及说明默认用中文，代码标识符和 type/scope 使用英文。
 国际协作者可以使用英文描述，格式与验证要求相同；中英文文档分别维护。
-`type` 用这八个（取自本仓七百余笔提交的实际分布，别自创）：
+`type` 用这八个：
 
 `fix` · `feat` · `docs` · `test` · `chore` · `refactor` · `ci` · `perf`
 
@@ -82,22 +82,7 @@ uv run --frozen python eval/lint_gate.py
 - 提交信息里出现的内部编号（如「洞⑪」「批 G」）要**展开成人话**：
   读提交的人没有你脑子里那张表。
 
-行为改动的正文写**为什么**，以及**判据在哪儿和实际验证结果**。改动对"agent 会怎么做"有影响的，
-**不要改 [CHANGELOG.md](CHANGELOG.md)，在 [`changelog.d/`](changelog.d/README.md) 加一个碎片**：
-
-```bash
-.venv/bin/python scripts/dev/changelog.py --new <ascii-slug>   # 开一个今天的碎片
-```
-
-**为什么加碎片而不是直接写 CHANGELOG**：那个文件只有**一个**插入点（当日那一节的组首）
-⇒ 任何两个同时开着的 PR 都必然在那里冲突（实测 PR #21 / #22 / #23 连着三次撞的都是同一处）。
-碎片是"一个新文件"，两个 PR 各加一个，三路合并永远不冲突。汇总由人在合并时（或发布前）跑：
-
-```bash
-.venv/bin/python scripts/dev/changelog.py     # 折进 CHANGELOG.md 并删掉碎片
-```
-
-记什么/不记什么，[CHANGELOG.md](CHANGELOG.md) 的头注写得比这里细。
+行为改动在 [CHANGELOG.md](CHANGELOG.md) 记录对外影响；验证细节保留在提交或 PR 中。
 
 上面这几条里**机器判得了的那几条**（首行长度 / type 白名单 / 空行 / 署名尾注）由
 `.githooks/commit-msg` 拦：本机 `bash scripts/dev/install-hooks.sh` 装一次，CI 的
@@ -140,7 +125,6 @@ uv run --frozen python eval/lint_gate.py
   于是它每隔一阵子会被人重新提议一次。
 - 长期但不做的方向：写进 [ROADMAP.md](ROADMAP.md)，并留下**可观测的触发条件**
   （"图片 ≥1000 张"是可观测的，"以后有需要再做"不是）。
-- 事故级取证写 [docs/问题记录.md](docs/问题记录.md)：现场 trace id、复现路径、根因。
 - 改文档时注意：`docs/*.md`、`README.md` 会被套件扫描，别在里面手抄一份会漂的取值。
 
 ## 6. 去哪找活

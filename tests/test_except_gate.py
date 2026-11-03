@@ -1,24 +1,5 @@
 # -*- coding: utf-8 -*-
 """盲捕获棘轮（`eval/except_gate.py`）的**接线与账**判据。
-
-**为什么这一套要单起**：那道闸判的是"仓库里的 `except Exception` 有没有变多"，它自己
-**没有**判"账是不是还在量同一件事"。而它的失效方式恰好都在那一边：
-
-| 坏法 | 会怎样 | 本套件哪一条钉它 |
-|---|---|---|
-| `[tool.ruff.lint].ignore` 里加一句 `"BLE001"` | 扫描读到 **0 条**、闸报绿 | ④ |
-| 账里留着已删文件的键 | 那句「已经清零，可以销账」把它报成**好消息** | ③ |
-| ruff 升版 / 换了 select | 换了**一套条目集**，棘轮不再量同一个东西 | ② |
-| CI 没接这一步 | 闸在本机绿、在 CI 从不运行 | ⑤ |
-| 闸自己坏了（计数解析、判据恒绿） | 全部绿 | ⑥（跑它自带的 `_self_check`） |
-
-**为什么不在 `tests/test_packaging.py` ⑦ 里加一节**：那一套已经是 318 行（复杂度台账
-贴着顶），而 ⑤⑥⑦ 判的是**打包与 pin** 这件事；一道新闸的接线判据住它自己那套房子里
-（同 `tests/test_process_isolation.py` 之于 conftest 的还原层）。
-
-用法：
-    uv run pytest tests/test_except_gate.py -v
-    uv run python tests/test_except_gate.py
 """
 
 from __future__ import annotations

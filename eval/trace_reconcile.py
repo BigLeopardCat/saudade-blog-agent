@@ -1,10 +1,5 @@
 # -*- coding: utf-8 -*-
-"""跨源对账（20260924）：trace ↔ agent.log ↔ monitor.log，对不上就是异常。
-
-为什么要有这一层：现有的 `trace_metrics.py` / `trace_alert.py` 都是**单源规则扫描**
-——只看 trace 一个文件，规则写在 trace 内部（轮次/工具/语义告警）。而 20260920 那起
-"数据真改了、回执落了库、前端只见报错"（路由表里没有 `model` 的落点 ⇒ 每次点确定都
-报错）单源扫描结构上看不见：trace 里每一段都自洽，错在**两个源之间**。
+"""跨源对账：trace ↔ agent.log ↔ monitor.log，对不上就是异常。
 
 本脚本做确定性对账：零 LLM、零网络、零 DB、**只读**。三个源与各自权威的东西：
   · `logs/agent/traces/*.json` / `*.json.*.gz`  每轮一份 trace（trace_id / user_id /
@@ -12,49 +7,6 @@
   · `logs/agent/agent.log(.N.gz)`               每轮收尾一行 `[stream] end reason=…
     duration=…s frames=…`（同一行带 `tid=`）
   · `logs/frontend/monitor.log`                 前端错误上报（POST /api/monitor/log，匿名可写）
-
-判据 v1（全部确定性）：
-  ① TRACE_WITHOUT_END  trace 有、收尾行没有
-  ② END_WITHOUT_TRACE  收尾行有、trace 没有。子类：
-       · `dump_failed`  agent.log 里有 `trace dump failed trace_id=` 佐证（写盘失败）
-       · `process_death` 无佐证——进程被杀 / OOM / 重启，dump 从未执行
-  ③ DUPLICATE_TID      同一个 trace_id 落在多个 trace 文件里（`utils/trace.py` 的
-       `_ACTIVE` 是"后写覆盖"语义 ⇒ 前一份被静默丢弃）
-  ④ FIELD_MISMATCH     配上了但 end_reason / frames 不等（验收基线上三者全等，不等即有信息）
-  ⑤ MONITOR_ANOMALY    前端上报里的 `confirm_card`（弹窗链路只在失败分支调用）与
-       `orphan_dom_drop`（消息流 DOM 清理）
-  ⑥ CLUE               不做硬判：弹窗轮（`execute.consent_popup` 事件）与 `confirm_card`
-       的候选配对，**必须 uid 相同且 |时间差| ≤ CLUE_MIN**——否则就是巧合检测器
-  ⑦ CLUE               不做硬判：弹窗链的逐跳记录（前端 `confirm_flow` 埋点，20260924）
-       ——同一枚待办靠帧里的 id 串成 frame→card→click→sent→settle，跳数对不上即线索
-
-三条纪律（各由一次真实故障换来）：
-  · **只在两个源覆盖范围的交集里判 ①②**：logrotate 00:00 对 `*.log` 用 copytruncate
-    ⇒ 午夜必然缺行；trace 目录只留最近两周。交集之外一律记 UNCOVERED、不报缺失。
-  · **tid 只从文件里的 `trace_id` 字段取、绝不切文件名**（既有 `diag_1790032810_0_…`
-    这类非 hex 的 tid；文件名只有前 8 位）。
-  · **monitor.log 只能是线索、不能当证据**：`type=` 是匿名可写的原样插值
-    （`monitor.rs`），内容可以被伪造。所以 ⑤ 只报计数与原文，⑥ 只做候选配对。
-
-⑦ 为什么也**只出线索、不进 has_anomaly**（后来者别顺手改）：链上跳数不齐的真实成因
-里混着"用户关掉了标签页"——点了确定、请求还没收尾就把页面关了，这类天天可能有几条，
-一旦接进 health.log 那条通道，每晚一条 WARN 会让整条告警通道失真（本文件开头就写着
-"响多了就没人看了"）。它的价值在于**单源看不见的那类**：链在日志里存在、跳数却不齐，
-夜里对账时能把"点了没结论""请求出去了没结论""帧到手卡片没挂上"这几种形态分出来并
-点名，人再去看报告。计数进 stdout 一行结论（夜间日志收它）。
-
-输出：一行结论到 stdout（夜间日志收它）+ `eval/report/reconcile_<ts>.md` +
-`eval/report/last_reconcile.json`；**仅在异常时**往 `logs/health.log` 追加一条 WARN
-（与既有的一分钟心跳探针同一条告警通道）。巡检非门禁：**永远 exit 0**。
-
-用法（cd saudade-blog-agent）：
-  .venv/bin/python eval/trace_reconcile.py              # 默认对账**昨夜**（近 1 天）
-  .venv/bin/python eval/trace_reconcile.py --days 3
-  .venv/bin/python eval/trace_reconcile.py --from 20260922 --to 20260923   # 指定闭合窗口
-  .venv/bin/python eval/trace_reconcile.py --json       # 只打印 JSON 摘要（管道用）
-
-为什么默认 1 天而不是 7：对账要的是"刚过去这一夜有没有对不上"，窗口一开大，
-轮转缺口、已复核过的历史异常、旧格式变化全被翻出来，噪声会盖住新伤。
 """
 import argparse
 import glob

@@ -1,44 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""槽稳定性读数：**同一条用例跑 N 遍，某一格取值是不是每一遍都一样**（20261020）。
-
-## 为什么要有这个读数
-
-`eval/run_golden.py` 每条用例**只跑一次**。一个七成可靠的槽（模型每次采样都重填，
-有时候对、有时候把整条原话抄进去）在单发金标里是 **100% 绿**——而线上画给主人看的是
-错的那一次。更糟的是"复跑按 flake 放行"（`run_golden.py` 头注里自己写着"同一条用例
-红绿两态并存"）**正好把不稳定当噪声抹掉**：红的那一遍被复跑救回来，读数上看不见。
-
-现场（20261020，trace `20261020T050425_1_r75832df`）：主人说「猫咪加条待办，亲亲泠月喵。」，
-`create_dashboard_todo` 的 `text` 被填成**整条原话**（连命令部分一起），而不是「亲亲泠月喵」。
-那条用例（`admin_todo_add_popup`）当时是绿的：它的判据 `args_from_input` 只判
-「值是不是原话的子串」——**抓得住编造，抓不住整条照抄**（整条原话当然是自己的子串）。
-
-## 它判什么、不判什么
-
-判：**逐遍一致率** = 出现最多的那个取值占多少遍。1.0 = 每一遍都一样。
-**不判对错**——"每一遍都抄错"是一致的，本读数不会红。对错是 gold 断言的事，两件必须
-分开看（一致 + 对 ⇒ 稳且对；一致 + 错 ⇒ 稳但错，改判据；不一致 ⇒ 改行为）。
-
-## 怎么跑（cd 仓根，需网络与 API key）
-
-  .venv/bin/python eval/slot_stability.py --case admin_todo_add_popup \\
-      --slot create_dashboard_todo.text --trials 12
-  .venv/bin/python eval/slot_stability.py --case a --case b --trials 8 --json
-  .venv/bin/python eval/slot_stability.py --case a --slot t.f --min-agreement 1.0   # 当闸用
-
-**不进夜间、不进 CI**（用户 20261020 定）：它跑真 LLM，N 遍就是 N 次真对话，成本随 N
-线性涨。它是"改提示词前后各跑一次"的仪器，不是常驻哨兵。报告落
-`eval/report/slot_stability/`（与 `runs/` **分开**：那一个是 `golden_trace.prune` 的判据源、
-`landing_gate` 按目录整扫，混进去会把本读数当成一次 golden 跑）。
-
-## 两个实现上的硬约束（都是踩过的形状）
-
-· **逐遍必须换线程坐标**（`GOLDEN_REP=i`，见 `eval/golden_thread.py`）：不换的话第 i 遍
-  接着第 i-1 遍的 PG state 跑，读数看着正常、其实根本不是独立抽样。`ckpt_ab_driver.py`
-  就是这么设的，这里照抄。
-· **拿不到槽值不许静默跳过**：那一遍记成 `(缺席)` 并**算进分母**。跳过等于把"模型这一遍
-  根本没产出那个参数"从读数里删掉——那正是最该看见的一遍。
+"""槽稳定性读数：**同一条用例跑 N 遍，某一格取值是不是每一遍都一样**。
 """
 import argparse
 import atexit

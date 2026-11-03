@@ -4,34 +4,6 @@
 
 **只读实验**：只发 LLM 请求，不碰数据库、不写 trace、不改任何生产状态。需要网络与 API key，
 **因此不入 L0 套件、不进夜间**（pytest 按目录收集 `tests/`，本文件在 eval/）。
-
-## 它要回答什么（roadmap D4 的"前置未知量"）
-
-roadmap D4 的目标是把 planner 的行文本协议换成 JSON Schema 结构化输出，验收判据是
-`args_parse` / pydantic `ValidationError` / `unknown_target` 三族受阻归零。**但生产模型
-到底支不支持、支持到什么程度，此前全是推测**——所以 POC 挡在动手之前。
-
-关键在于把三件长得像的事分开，本脚本每个探针都是为"分开它们"设计的：
-
-  ① **端点直接拒绝**（HTTP 400）——最容易看清，也最不可能被误读成"支持"；
-  ② **接受了但静默忽略**——最危险的一种。它照样返回一段像模像样的 JSON，看着能用，
-     实际约束一条没有（schema 里的 enum/类型全是装饰）。**判据必须是"模型做不到违抗"，
-     不是"输出看着对"**：所以有 P1b 那个"提示词故意要求违反 schema 类型"的探针——
-     真做了约束解码时它**结构上**给不出字符串，被忽略时它会顺着提示词给出字符串；
-  ③ **真约束**——连"提示词要求违约"都违不了。
-
-function calling 侧同理：`tool_choice` 强制指定函数时，支持 ⇒ 必然回 tool_call；
-不支持/被忽略 ⇒ 回文本或 400。
-
-## 跑法（cd saudade-blog-agent，需网络）
-
-  .venv/bin/python eval/d4_structured_output_poc.py                 # 默认每档 3 次
-  .venv/bin/python eval/d4_structured_output_poc.py --trials 5
-  .venv/bin/python eval/d4_structured_output_poc.py --thinking      # 额外跑"思考开"那档
-  .venv/bin/python eval/d4_structured_output_poc.py --json          # 机器可读摘要
-
-报告同时落 `eval/report/d4_poc_<ts>.md`（原始证据留档；结论由人手写进
-`docs/toolcall-stability-roadmap.md`，本脚本**不改那份文档**）。
 """
 import argparse
 import json

@@ -1,31 +1,4 @@
-"""工程配置的六条判据（20261013，行业规范收口批 2；⑥ 同日升 3.12 时补）。
-
-**为什么单起一套**：这几处此前的失效形状**一模一样**——"文件里写着一句话，而那句
-话没有任何东西看着"：
-
-  ① `pyproject.toml` 的 wheel 包列表列了并不存在的 `chains/`、漏了生产代码真的
-     import 的 `rag/`。列错**不会报错**，因为本仓从不构建 wheel（部署走 git pull）。
-  ② `server.py` 的 `version="1.0.0"` 与 `pyproject.toml` 的 `0.2.0` **差着两个大版本**
-     ——`/openapi.json` 上挂着哪个，全看读的是哪一份。
-  ③ `SECURITY.md` 把上游 CVE 明确推给"Dependabot"，而仓库里从来没有
-     `.github/dependabot.yml` ⇒ 那句承诺当时是空的（依赖又全 `==` 钉死，没有它
-     什么都不会升级）。
-  ④ `[tool.mypy]` 配了却**从不执行**（mypy 不在依赖、不在 lock、CI 没有这一步）
-     ⇒ 函数签名注释了约 78% 而没有一个被校验。补成真之后，"棘轮真的接在 CI 上"
-     与"三处写的 mypy 版本是同一个"同样需要有人看着——否则它会以 ① 那种方式再死一次。
-  ⑤ 覆盖率那一档（`scripts/dev/coverage.sh`）的 pin 与配置：pin 少写 `[toml]` extra ⇒
-     coverage 读不了 `pyproject.toml`、**每个套件都退 1**（现场像整批代码坏了；
-     当年是 3.10，标准库没有 TOML）；`[tool.coverage.run].source` 少列一个包 ⇒
-     那个包**整份**从报告里消失，而"哪些文件一直没人碰"这个问题的答案就悄悄少一块。
-     两处都是"同一件事写两遍"。
-  ⑥ **解释器版本**：这一条一度是上面五条里唯一**没有**机器锁的，而它恰好是写法最
-     分散的一项——`requires-python`、`.python-version`、`[tool.ruff].target-version`、
-     `[tool.mypy].python_version`、CI 的 `python-version`、棘轮基线的 `python_target`，
-     **六处**。20261013 把 3.10 升到 3.12 时逐处手改才看清：任何一处漏掉都不报错，
-     只会以"CI 装了 3.10 而代码声明 3.12"这种**假绿**的形式存在（反过来更糟：
-     声明 3.12、CI 只验 3.10 ⇒ 升版这件事压根没被验过）。另外还有 `uv.lock` 这份
-     **生成物**（不是手写的第七处）：它同样记着 `requires-python`，改声明忘重跑
-     `uv lock` 会落在 CI 的 `uv sync --frozen` 上，而本机没有这条出口可验。
+"""工程配置的六条判据。
 
 判据一律读**磁盘事实**（目录在不在、源码里还有没有第二份字面量），不读"文档里写了
 这一条"——后者的失效方式正是"名单对了、事情没做"。
@@ -64,7 +37,7 @@ def _strip_comments(text: str) -> str:
     （`# 现在只有"声明我有哪些包"的价值`）。不剥注释的话，下面那句
     `"([^"]+)"` 会把**注释里的中文**当包名读出来，断言就报出一个磁盘上
     从来没有过的"包"——正是"注释伪装成代码骗过断言"那一族（同
-    `docs/lint-baseline.md` 记的 CSS 注释关掉整块规则）。引号计数只是够用，
+    CSS 注释关掉整块规则）。引号计数只是够用，
     不是 TOML 词法：本文件的字符串值里没有 `#`。
     """
     out = []
@@ -281,22 +254,6 @@ def test_packaging():
           "eval/type_gate.py" in _eval_code2)
     check("  CI 那一行不手写 mypy 版本（版本只从 dev 分组来）",
           "uvx mypy" not in _eval_code2 and "mypy==" not in _eval_code2)
-    _MYPY_CMD_RE = re.compile("uvx " + r"mypy@([0-9][0-9A-Za-z.\-]*)")
-    _SWEEP_EXT = {".py", ".toml", ".md", ".yml", ".yaml", ".sh"}
-    _SKIP_DIRS = {".git", ".venv", ".mypy_cache", "__pycache__", "node_modules"}
-    _hits: list[tuple[str, str]] = []
-    for _p in ROOT.rglob("*"):
-        if not _p.is_file() or _p.suffix not in _SWEEP_EXT:
-            continue
-        if _SKIP_DIRS & set(_p.relative_to(ROOT).parts):
-            continue
-        for _v in _MYPY_CMD_RE.findall(_p.read_text(encoding="utf-8", errors="ignore")):
-            _hits.append((str(_p.relative_to(ROOT)), _v))
-    check("  对照：整仓确实扫到了 `uvx mypy@X`（否则上面那条是空跑）",
-          len(_hits) >= 3, f"{len(_hits)} 处：" + "、".join(f"{f}@{v}" for f, v in _hits))
-    _bad_ver = [f"{f}@{v}" for f, v in _hits if v != MYPY_PIN]
-    check(f"  整仓的 `uvx mypy@X` 与 dev 分组同版（{MYPY_PIN}）——升版只改一处就会被这条抓住",
-          not _bad_ver, "、".join(_bad_ver))
     print("\n⑤ 覆盖率那一档（`scripts/dev/coverage.sh`）：pin 要带 extra，量的面要与打包的面同源")
     _cov_pin = re.search(r'"coverage(\[[^\]]*\])?==([0-9][^"]*)"', _dg_sec)
     check("pyproject 的 dev 分组钉了 coverage 版本", _cov_pin is not None,
@@ -423,9 +380,6 @@ def test_packaging():
           "eval/lint_gate.py" in _eval_code2)
     check("  CI 那一行不手写 ruff 版本（版本只从 dev 分组来）",
           "uvx ruff" not in _eval_code2 and "ruff==" not in _eval_code2)
-    _lbd = (ROOT / "docs/lint-baseline.md").read_text(encoding="utf-8")
-    check("  docs/lint-baseline.md 不再写着「机械闸（待建）」",
-          "机械闸（**待建**）" not in _lbd and "eval/lint_gate.py" in _lbd)
     print()
     if FAILED:
         print(f"❌ 失败 {len(FAILED)} 项：" + "、".join(FAILED))

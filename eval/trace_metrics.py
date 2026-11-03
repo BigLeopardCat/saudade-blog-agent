@@ -1,30 +1,11 @@
 # -*- coding: utf-8 -*-
-"""真实对话效率指标（20260902 用户指出"重试次数成本是重要指标"后固化）。
+"""真实对话效率指标。
 
 golden 只断言最终文本——首轮零工具+编造+修正照样 PASS，能力退化与
 打回成本都不可见。本脚本扫 logs/agent/traces/ 真实对话，按技能统计：
   - 首轮即调率（round 0 的计划就点了工具名，而不是空手交给 narrator）
   - 打回成本：gate fallback 次数（整轮被否决，最贵）+ 受阻 spec 数（execute BLOCK）
   - planner 点名工具 vs 自由计划的对比（content_query 两种形态）
-
-**20260926 修正一处静默假绿**（本脚本此前连续 23 天在骗人）：`analyze` 读的两处键
-（`check` 事件上的 `tool_calls`、`done`）自 20260904 receipt 驱动重构起就再没命中过——
-事件形状早已改成「每个 spec 一条 `execute/check`（`tool`/`verdict`/`reason`/`workflow`）+
-`planner/decision` 自带 `round`」，而 `tool_calls` 如今只出现在 `model/llm_done` 上且恒假。
-键读不到**不报错**，于是全表打印「首轮即调=0% / 打回=0」看起来像"效率很好"。
-⇒ 现在按真实键取，且**读不到信号的 trace 一律返回 None**（计入输出里的"未识别"），
-宁可说"这份没读到"，也不许把"没读到"渲染成"确实是 0"。
-
-用法（cd saudade-blog-agent）：
-  .venv/bin/python eval/trace_metrics.py                 # 默认近 24h
-  .venv/bin/python eval/trace_metrics.py --from 20260901 # 自该日起
-  .venv/bin/python eval/trace_metrics.py --from 20260830 --to 20260901T2200  # 历史窗口
-
-技能形态对照（数据解读用）：
-  rag_query（0901 前）= 受限规划：TOOLS 固定两段式（rag_search+get_article_detail），
-    首轮 100% 即调但 REVISE 多为"读错文章/参数填错"的策略性打回
-  content_query 点名 = planner 显式点名工具（20260902 起，_EXPLICIT_TOOLS）
-  content_query 自由 = 自由 ReAct（plan=[]），零工具豁免口子在规则 1
 """
 import argparse
 import json

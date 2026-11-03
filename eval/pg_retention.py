@@ -2,59 +2,11 @@
 # -*- coding: utf-8 -*-
 """checkpoint store 与幂等账的**保留治理**（PG 那一路）：默认只列不删，`--apply` 才动手。
 
-## 为什么需要它（20261019 批 C）
-
-`eval/retention_manifest.py` 那张登记表**只审计盘上的树**（`logs/` 与 `eval/report/`），
-而 20261018 采纳之后 agent 的上下文落进了 PG —— 那张表对它是瞎的：
-
-  · `checkpoints` 那一族**每个 checkpoint 存整份快照**（实测：`messages` 通道的 blob
-    随会话长度 1417 → 2917 → 2441 → 3713 → 5135 → 6646 字节单调长），而一条会话的
-    checkpoint 数随轮数线性长 ⇒ **存储按会话长度平方增长**，且**没有任何东西在裁它**；
-  · 幂等账 `agent_write_idem` 同样零清理（它的登记项写在 `logs/` 那条降级档上，
-    理由里那句"与将来的 checkpoint store 必须一起设计"就是本文件）。
-
-同族的先例是 `eval/trace_retention.py`（logrotate 的 `rotate 14` 对"文件名唯一"的产物
-结构上无效）与 R2 的 `--keep 3`：**保留策略必须由一个真的会跑的东西执行**，写在配置或
-登记表里不算。本文件就是那个执行者，接在 `scripts/nightly_regression.sh` 末位。
-
-## 两条不变量（这一件真正的判据，比"删掉多少行"重要）
-
-**① 账与 checkpoint 必须一起裁。** 留下 checkpoint 却删掉账本行，等于把幂等账要堵的那个
-洞重新打开（ADR-0012）。所以：**同一个 cutoff、同一个事务、commit 前断言**。断言不成立
-⇒ 整个事务回滚（宁可什么都不删，也不留下半裁的状态）。
-
-**② 取不到时间的线程永不裁。** 线程的"最近活动"取自 `max(checkpoint->>'ts')`——
-`checkpoints` **没有时间列**（DDL 里只有 `thread_id / checkpoint_ns / checkpoint_id /
-parent_checkpoint_id / type / checkpoint / metadata`），时间只住在 `checkpoint` 那个 JSONB
-里。取不到（NULL）就是"这条线程的年龄不可知" ⇒ **不动它**（判据缺失时不动手，同
-`trace_retention` 那条"先看清再删"）。
-
-⚠️ **如实的残余（别把这一件读成"账与 checkpoint 逐线程一一对应"）**：`agent_write_idem`
-**没有 `thread_id` 列**（键是 `sha256(...)`，见 `agent/idem.py`），所以无法逐线程对齐。
-本文件的口径是"**同窗**"而不是"**同一批线程**"：账按 `ts < cutoff` 全裁，checkpoint 只裁
-**最近活动早于 cutoff 的那些线程**。⇒ 一条长期活跃的会话，它 30 天前的 checkpoint 会留下、
-对应的账行会被删掉。**这个方向是安全的**：重放只针对线程的**最新** checkpoint
-（`langgraph/pregel/_loop.py` 的恢复语义），而活跃线程的最新 checkpoint 必然在窗内 ⇒
-早于 N 天的账行**永远等不到它的读者**。要结构性保证就得给账表加 `thread_id` 列
-（`idem_pg.setup()` 的 DDL + `claim` 时写 `configurable.thread_id`），那是后续一件独立的事。
-
-## 与库无关
-
-DSN 从 `--dsn` 或 `CHECKPOINT_DSN` 读，**不硬编码库名**（本仓是**公开仓**，运维坐标不落仓；
-同族纪律见 `agent/checkpoint.py` 头注《DSN 指向哪个库》）。表名写在这里是因为**它们是
-langgraph 的公开 schema**（`BasePostgresSaver.MIGRATIONS` 里逐条写着），不是某台机器的坐标。
-
-## 跑法（cd saudade-blog-agent）
-
   .venv/bin/python eval/pg_retention.py                    # 只列不删（默认）
   .venv/bin/python eval/pg_retention.py --json             # 机器可读摘要
   .venv/bin/python eval/pg_retention.py --apply            # 真删
   .venv/bin/python eval/pg_retention.py --keep-days 7 --apply
   .venv/bin/python eval/pg_retention.py --dsn 'postgresql://…'   # 换库（离线测试用）
-
-退出码：0 = 跑完了（含"没有可删的"与"这个库还没建表"）；1 = 有错（连不上 / 断言不成立 /
-删除失败）。**"没配 DSN"退 0 并印一行响亮的"这一层没量"**——它和"跑过了、没有可删的"
-是两件事，别让汇总里那行 ✓ 把它们混成一个（同离线套件那条「未评估」口径）。
 """
 import argparse
 import json

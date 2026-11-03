@@ -1,30 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""`/ready`：**能不能真的接一轮对话**——与 `/health` 的"进程活没活"是两件事（20261018）。
-
-**要回答的问题**：`/health` 刻意对配置错误 fail-open（见 `server.health` 的注：一个拼写
-错误不该被报成"agent 挂了"，那是**指错方向**的告警）。于是 20260927 那次的形状至今没有
-出口——`.env` 里换了 key 之后新键四个端点一律 401，而 `/health` 照旧 `agent_ready: true`：
-**进程活着、每一轮对话都错**。`/ready` 就是那个缺掉的第二问。
-
-**判据的核心是一条否定式**：某个硬依赖缺失时 `/ready` 必须 503，**而同一条件下 `/health`
-仍然 200**。两者同时红同时绿就说明 `/ready` 是装饰——它要么恒 200（等于没有），要么只是
-`/health` 的复制品。三种缺失各判一遍（图没建好 / provider 认不出 / 凭据缺），
-每一遍都配一条"`/health` 同一条件下仍然 200"。
-
-**边界（写在判据里，别让它看起来比实际大）**：`/ready` 现在是**建议性**的——没有任何探针
-在读它（父仓 `scripts/healthcheck.sh` 读的是 `/health`）。它把"能接活"变成一个**可被读的**
-事实，但**没有**接进任何自动通道；把它接进探针是父仓那侧的活。别把这一套读成
-"生产已经在按 /ready 摘流量了"。
-
-**前提由判据自己摆**：离线套件跑在 `SAUDADE_IGNORE_ENV_FILE=1` 下（`tests/conftest.py::_PINNED`），
-`.env` 根本不读 ⇒ `*_api_key` 全是空的。"凭据在位"这一格必须由本文件自己设——继承运维取值的话，
-它会**单跑绿、进套件红**（实测撞上过一次）。同 `test_checkpoint_factory.py` ① 钉
-`CHECKPOINT_DSN=""` 的理由：判据量的是被测代码，不是这台机器的 `.env`。
-
-秒级、无网络、不跑 LLM；由 pytest 按目录收集自动收。
-
-用法：.venv/bin/python tests/test_ready.py
+"""`/ready`：**能不能真的接一轮对话**——与 `/health` 的"进程活没活"是两件事。
 """
 
 from __future__ import annotations
