@@ -127,11 +127,14 @@ def test_native_admin_read_loads_only_requested_domain_and_never_calls_legacy(mo
     assert events[-1].reply == "CPU 17%，内存 36%。"
 
 
-def test_admin_menu_rejects_write_scope_and_preserves_legacy_descriptions(monkeypatch):
-    original = base.get_note_periods.description
+def test_admin_menu_uses_the_canonical_contract_and_rejects_write_scope(monkeypatch):
+    from langchain_core.utils.function_calling import convert_to_openai_tool
+
+    monkeypatch.setattr(base.get_note_periods, "description", "CANONICAL_PERIOD_CONTRACT")
     tools = admin_tools()
-    assert tools["get_note_periods"].description != original
-    assert base.get_note_periods.description == original
+    assert convert_to_openai_tool(tools["get_note_periods"]) == convert_to_openai_tool(
+        base.get_note_periods)
+    assert tools["get_note_periods"].description == "CANONICAL_PERIOD_CONTRACT"
     monkeypatch.setitem(authz.TOOL_SCOPE, "get_note_periods", authz.SCOPE_WRITE_CONSOLE)
     with pytest.raises(RuntimeError, match="admin.console reads"):
         admin_tools()
