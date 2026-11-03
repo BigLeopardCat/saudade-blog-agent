@@ -37,7 +37,6 @@ scikit-learn analyzer与CommonMark parser。生产本地BGE Q8索引为9篇公�
 - 依赖安全、类型检查债和可达模块的维护按实际风险排序；
   新能力优先扩展现有领域接口与框架middleware，不重造计划器、执行器或调度器。
 
-执行计划与既有阶段证据见[任务可靠性计划](docs/task-reliability-plan.md)，
 长期事项和启动条件见[维护规划](docs/platform-roadmap.md)。
 
 ## 暂缓方向
@@ -46,7 +45,7 @@ scikit-learn analyzer与CommonMark parser。生产本地BGE Q8索引为9篇公�
 | --- | --- |
 | 纯向量替代混合检索 | 当前本地BGE与BM25S融合；扩大独立标注集并作固定对照，见 [RAG设计](docs/rag-design.md) |
 | 知识图谱检索 | 暂缓；明确的关系查询需求及对照效果出现后再评估，不作为当前迁移前置 |
-| 多模态检索 | 出现图片检索需求及足够语料，见 [ADR-0005](docs/adr/adr-0005-multimodal-retrieval-deferred.md) |
+| 多模态检索 | 出现图片检索需求及足够语料 |
 | 物联网平台建设 | 维持可关闭的演示适配；仅在产品范围发生明确变化时重新评估 |
 | Agent 自动发布 | 手动发布出现明确瓶颈后再建设，当前不作为重构前置条件 |
 

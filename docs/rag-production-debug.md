@@ -3,8 +3,6 @@
 类型：§0–§5 为现状与操作步骤；§6–§8 为待目标机验证的门槛、引擎候选与验收记录。
 
 本文适用于另一台 **4 核、4GB、Linux x86_64** 服务器，Python 3.12、systemd ≥249。
-目标机的BGE Q8低流量试点已于20261027启用，结果及未完成指标见
-[部署记录](local-bge-production-20261027.md)。以下保留可复现的准备、预检与回退步骤。
 评测结果和来源见 [中文模型对照](../eval/t2-chinese-baseline.md)，输入预算见
 [embedding-inputs.md](embedding-inputs.md)。
 

@@ -1,38 +1,4 @@
-"""`GOLDEN_PROD_HISTORY` 注入进去的，必须是**能被读的历史**（20261016 批 3）。
-
-## 这个文件是为什么写的
-
-批 3 要量的那一刀是「图自持上下文 ⇒ `server.build_messages` 停止注入 `req.history[-20:]`」。
-可**语料测不出它**：`eval/golden/basic.jsonl` 里 11 条多轮用例**一条都不注入 `history`**
-（Rust 每轮真会发，golden 是进程内驱动所以省了）。于是加了 `GOLDEN_PROD_HISTORY=1`：
-多轮用例第 i>1 轮的 `history` = 第 1..i−1 轮**真发出去的那两句**，与 Rust `history[-20:]`
-逐字同形——四臂跑同一份驱动，对照才同源。
-
-**第一版写错了，而且错法很贵**：`_prod_hist` 攒的是裸 dict
-（`{"role": "user", "content": …}`，因为它长得就像 Rust 发过来的那份 JSON），
-赋值给 `req.history` 时 **pydantic 不校验**——`ChatRequest` 没开 `validate_assignment`，
-而 `list[HistoryItem]` 的强制转换只发生在**构造时**。于是：
-
-    AttributeError: 'dict' object has no attribute 'role'   （server.py:684）
-
-**症状与病因完全不成比例**：异常在**主线程**抛出、traceback 也打出来了，但进程
-**不退出**——挂满 15 分钟被 `subprocess` 的超时杀掉，看起来像"服务商把连接挂了"
-（当时真的去查了 socket 状态：CLOSE-WAIT 那条是无关的旧连接）。而臂 B 在批 0 跑过
-同一条用例 3/3、每次约 9 秒 ⇒ 差异只在"这一格有没有开"。
-
-所以本文件的判据**不是**"源码里有 `HistoryItem(` 这个字面"（那种锁在本仓被点名过：
-锁的落点要选判据别选字面），而是**把 `run_case` 真驱动起来**（`run_one` 换桩，
-零 LLM、零网络、零报告），逐轮问它：**注入进去的每一条，读得出 `.role` / `.content` 吗**。
-最后再用**真的** `_build_messages` 走一遍——那正是当初炸掉的那一行。
-
-## 反向对照（缺了它前一格可能恒绿）
-
-`GOLDEN_PROD_HISTORY` **关**的时候，多轮用例每一轮的 `history` 必须**都是空**——
-否则"注入生效"与"语料本来就有 history"分不开，而那正是这一格存在的理由。
-
-秒级、无网络、无 LLM；由 eval.yml 在 push 时跑。
-
-用法：.venv/bin/python tests/test_golden_prod_history.py
+"""`GOLDEN_PROD_HISTORY` 注入进去的，必须是**能被读的历史**。
 """
 
 

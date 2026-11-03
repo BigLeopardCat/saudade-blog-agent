@@ -1,27 +1,5 @@
 # -*- coding: utf-8 -*-
-"""`eval/type_gate.py` 的**运行版本守卫**（20261020 补的那个洞）。
-
-**为什么单起一套、而不是加进 `tests/test_packaging.py` ④**：那一套已经
-C=124 / 318 行（复杂度台账贴着顶），往里加一节要 `--update` 放宽台账——而棘轮的纪律是
-**台账只许缩小**。新起的这一套只判一件事，自带的本地清单（不是模块级 `FAILS`）不会
-跨用例泄漏。
-
-**为什么这件事非在测试里走一遍不可**：CI 与夜间**恒跑对版本**（`uv run --frozen` 拿
-dev 分组钉的那份）⇒ `running != pin` 那条分支在 CI 里**永远不被执行**。没有这一套，
-它会静默腐烂成死代码，而它守的正是"**换了一个量**被读成**变差了**"：
-
-    python eval/type_gate.py --mypy "uvx mypy@<别的版本>"
-    → [扫描] mypy 2.4.0 / py3.12：193 个错误 / 30 个文件（基线 190 / 30 个）
-      ❌ agent/graph.py  81（基线 79）—— 这一处变多了
-      ❌ 总数 193 > 基线 190                      ⇒ 退 1
-
-读起来是"`agent/graph.py` 变脏了"，真相是换了 mypy、错误集整个变了。而且扫描行印的是
-`pin`（`mypy 2.4.0`）——**日志上看不出区别**。同族的 `lint_gate` / `except_gate` 都读
-运行版本（`ruff --version`），只有这里漏了。
-
-用法：
-    uv run pytest tests/test_type_gate.py -v
-    uv run python tests/test_type_gate.py
+"""`eval/type_gate.py` 的**运行版本守卫**。
 """
 
 from __future__ import annotations

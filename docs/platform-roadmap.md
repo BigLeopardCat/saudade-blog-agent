@@ -1,7 +1,7 @@
 # 平台维护与长期规划
 
 更新：2026-11-03。当前实现以[架构说明](agent-architecture.md)为准；
-本轮产品验收见[P4进展](p4-progress.md)，架构取舍见[ADR-0036](adr/adr-0036-explicit-product-composition.md)。
+本轮产品验收见[P4收尾验证](p4-completion-report-20261103.md)，架构取舍见[ADR-0036](adr/adr-0036-explicit-product-composition.md)。
 
 ## 本轮收尾
 

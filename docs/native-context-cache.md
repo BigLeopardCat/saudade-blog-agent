@@ -129,8 +129,6 @@ OpenCode 的 `x-opencode-session` 按已验签账号、当前角色与会话编�
 前缀复用，见[服务商说明](https://api-docs.deepseek.com/guides/kv_cache/)。OpenCode Go的实际收益
 继续以响应usage衡量。上一轮79.37%的全量成绩仍归属于当时版本。
 
-一次具体取消请求的链路审计与单变量验证见
-[DeepSeek 打断与缓存审计](deepseek-cancel-cache-audit-20261028.md)。
 
 ## 评审材料的前缀
 

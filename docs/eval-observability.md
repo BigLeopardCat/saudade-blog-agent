@@ -53,7 +53,7 @@
 诊断，尚不能作为混合运行时的完整异常检测。
 历史 `scripts/nightly_regression.sh` 仍有旧 golden 与夹具入口，不是当前线上验收命令，
 不应据其日志判断迁移完成度。当前按冻结批次运行 `eval.online_baseline`，随后独立运行
-`eval.online_judge`；详细范围与证据限制见 [线上基线](evaluation-native-baseline.md)。
+`eval.online_judge`；详细范围与证据限制见 [P4收尾验证](p4-completion-report-20261103.md)。
 
 ## 2. 评测分层
 

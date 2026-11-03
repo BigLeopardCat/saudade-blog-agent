@@ -2,42 +2,6 @@
 # -*- coding: utf-8 -*-
 """trace 保留治理：先压缩、再按保留期删（**默认只列不删**，`--apply` 才动手）。
 
-## 为什么需要它（20260925 实测）
-
-`/etc/logrotate.d/saudade` 的 traces 块写着 `daily rotate 14 compress`，而**保留期从来
-没有生效过**：trace 是"一次会话一个文件、文件名唯一"的产物，logrotate 的 `rotate N`
-靠"同名文件每次轮转后缀 +1"计数（`x.log.1 → x.log.2.gz`），而
-`<时间戳>_<uid>_<hash>.json` 永远不会第二次成为轮转候选——每个文件只在**首次**轮转时
-被压成 `.1.gz`，此后与轮转彻底无关。实测：`traces/` 下 839 个 `.json.1.gz`，
-`.2.gz` 与 `.3.gz` **各 0 个**，最老的是 20260830（26 天前，而保留期写着 14）
-⇒ 实际保留无界，配置是装饰性的。
-
-同一形态本仓见过一次：R2 的保留数在 `prune_r2.py` 之前也是"写了但没人执行"。
-结论一样——**保留策略必须由一个真的会跑的东西执行**，写在配置里不算。
-
-## 两道动作（判序固定：先判删、再判压）
-
-1. **删除**：任何 trace 文件（`.json` / `.json.gz` / `.json.N.gz`）mtime 超过
-   `--keep-days`（默认 30）⇒ 删。**已经该删的不再压缩**（省一次无意义的读写）。
-2. **压缩**：还在窗内、但已凉过 `--compress-after-hours`（默认 24）的 `.json`
-   ⇒ gzip 成 `<原名>.json.gz`（读取端两种命名都认）。已有 `.gz` 孪生的跳过。
-
-保留期取 30 天而不是 logrotate 那份 14：trace 是排障与 L3 对账的语料，
-`trace_alert --days 7`、`golden_draft --days 1`、`trace_reconcile` 的窗口都在里面；
-14 天会把"上月同类问题"的对照面砍掉。**要改就改 `KEEP_DAYS_DEFAULT` 这一个常量**
-（夜间脚本不再复述这个数）。
-
-## 判据是 mtime 还是文件名里的时间戳
-
-以 **mtime** 为准（文件被移动/被别的工具碰过时文件名不变、mtime 会），但两者差超过
-`SKEW_WARN_DAYS` 就印一行 WARN——那说明"文件名说的那天"与"盘上说的时间"对不上，
-删之前人应该看一眼。这正是这类脚本最容易悄悄删错的地方。
-
-**压缩必须保留原 mtime**（`os.utime` + gzip 头 mtime 都写原值）：否则每压一次就刷新
-年龄，一个文件能被"压缩"这件无关的事无限续命——保留期会再次变成装饰性的。
-
-## 跑法（cd saudade-blog-agent）
-
   .venv/bin/python eval/trace_retention.py                     # 只列不删（默认）
   .venv/bin/python eval/trace_retention.py --json              # 机器可读摘要
   .venv/bin/python eval/trace_retention.py --apply             # 真压缩 + 真删

@@ -1,44 +1,4 @@
-"""手抄表的机器锁 · 第五站：**写通道的两个枚举词表**（20261013，行业规范收口批 3f）。
-
-**契约**：agent 通过 `/api/protect/notes` 与标签接口写东西，有两个字段不是自由文本而是
-**枚举**，取值域在两处各写一份：
-
-  | 词表 | agent 侧产出 | Rust 侧认得 |
-  |---|---|---|
-  | 标签层级 | `normalize_level`、`level_of` → `one`/`two` | `tags.rs::parse_level` |
-  | 文章状态 | `normalize_status` → `public`/`private`/`draft` | `notes.rs::normalize_status_word` |
-
-层级两侧都**拒**认不出的词（`parse_level` 是唯一的解析点）；状态**20261018 起两侧也都拒**
-——后端把状态词收进唯一解析点 `notes.rs::normalize_status_word`，未知词一律 400
-（本笔之前是"原样写库"）。
-
-**为什么值得上锁**（两条通道的失效形状不一样，这一点是本站的全部理由）：
-  · **层级**：`parse_level` 认不出就返回 `None` ⇒ 后端把这次移动**拒掉**。危害有限
-    （看得见的失败），但代价是"主人点了确定、什么也没发生"。
-  · **状态**：**本笔之前**后端不拒未知状态——`update_note` 是
-    `active_model.status = Set(Some(v.clone()))` **原样写库**，只有它认得的那四个词
-    才会**顺带**设 `is_public`。所以 agent 若发出一个后端不认的词（比如哪天归一化表里
-    多了一档「hidden」），库里就留下一行 `status=hidden` 而 `is_public` 还是 `true` 的
-    **矛盾行**——不报错、不告警，前台按 `is_public` 展示、后台按 `status` 分类，
-    两边各说各话。现在后端改成了白名单 + 400，**两侧都拒**，失效形状从"静默矛盾行"
-    变成"看得见的失败"；但"两侧不同源"这件事本身仍然要锁——一档只在 agent 侧存在的词
-    会让主人的每一次操作都 400，而这条锁是唯一会先红的判据。
-
-判据一律**从源码现取值**（Python 走 AST、Rust 走 `tests/_rust_src.py` 的函数体取值），
-**绝不抄常量**——抄一份就是把"手抄表"搬进测试里。
-
-**台账的方向**：agent 的**产出**必须是 Rust 认得的**子集**（发出去的每个词后端都认）。
-反过来不要求——Rust 认得的比 agent 会写的多，那些词**逐条写在台账里**（现在只有
-`published` 一个），漏写红、过期也红（同 `test_cross_language_tables.py` 的差集台账形状）。
-
-**本套件不管什么**（写下来免得起假安心）：
-  · `agent/workflow_defs/` 的提示词里写着 `one/two`——那是**话术**（告诉模型该填什么），
-    不是判据，改了不影响行为；
-  · `adminops._TOP_ALIASES`（置顶）——那是 `0/1` 整数，Rust 侧没有对应词表；
-  · `STATUS_CN` 的中文名——前端那份界面标签在父仓前端，与本侧这张只用于"说给主人听"
-    的表用途不同（同 `ROLE_CN` 与 `role_label` 的关系）。
-
-用法：.venv/bin/python tests/test_write_param_words.py
+"""手抄表的机器锁 · 第五站：**写通道的两个枚举词表**。
 """
 
 

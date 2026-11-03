@@ -1,23 +1,5 @@
 # -*- coding: utf-8 -*-
 """安全扫描棘轮（`eval/security_gate.py`）的**接线与账**判据。
-
-**为什么单起一套**：同 `tests/test_except_gate.py`——一道闸判的是"仓库里的 finding 有没有
-变多"，它自己**没有**判"账是不是还在量同一件事"。而它的失效方式全在那一边：
-
-| 坏法 | 会怎样 | 哪一条钉它 |
-|---|---|---|
-| `pyproject.toml` 里加一句 `[tool.bandit]` | bandit **自动发现**它 ⇒ 少报、闸报绿 | ③ |
-| 某个文件里加一行 `# nosec` | 那条 finding 不进 `results`、只进 `metrics.nosec` | ③ |
-| 换 bandit 跑在哪个解释器上 | 同一份源码 3.10 读 205 / 3.12 读 211 ⇒ 换了条目集 | ② |
-| 版本行只认一种启动器形状 | CI 走 `-m`、印 `__main__.py 1.9.4` ⇒ 闸恒退 3 | ⑥ |
-| 排除面交给 bandit 的 `--exclude` | target 是 `.` 时它**空转** ⇒ CI 把 `.venv` 扫进来 | ⑦ |
-| 键退回"光文件" | 同文件里 B105 换 B608 按文件数是"没变" | ②（`by_key` 的形状） |
-| CI 没接这一步 | 闸在本机绿、在 CI 从不运行 | ④ |
-| 闸自己坏了（JSON 解析、判据恒绿） | 全部绿 | ⑤（跑它自带的 `_self_check`） |
-
-用法：
-    uv run pytest tests/test_security_gate.py -v
-    uv run python tests/test_security_gate.py
 """
 
 from __future__ import annotations
