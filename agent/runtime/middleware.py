@@ -103,8 +103,11 @@ class SessionMiddleware(AgentMiddleware):
             return
         state = self.session.recovery_state or state
         messages = list(state.get("messages") or [])
+        awaiting = state.get("awaiting_call")
         index = next((i for i in range(len(messages) - 1, -1, -1)
-                      if isinstance(messages[i], AIMessage) and messages[i].tool_calls), None)
+                      if isinstance(messages[i], AIMessage) and messages[i].tool_calls
+                      and (not awaiting or any(call["id"] == awaiting
+                                               for call in messages[i].tool_calls))), None)
         self.exchange = [*([self.system_message] if self.system_message else []), *messages]
         if index is not None:
             self.calls = messages[index].tool_calls
@@ -163,17 +166,17 @@ class SessionMiddleware(AgentMiddleware):
             return self._feedback(state, facts)
         messages = list(state["messages"])
         index = next(i for i in range(len(messages) - 1, -1, -1)
-                     if isinstance(messages[i], AIMessage) and messages[i].tool_calls)
+                     if isinstance(messages[i], AIMessage) and any(
+                         call["id"] == session.state["awaiting_call"]
+                         for call in messages[i].tool_calls))
         self.calls = messages[index].tool_calls
+        call_ids = {call["id"] for call in self.calls}
         answered = {message.tool_call_id: message for message in messages[index + 1:]
-                    if isinstance(message, ToolMessage)}
+                    if isinstance(message, ToolMessage) and message.tool_call_id in call_ids}
         awaiting = answered[session.state["awaiting_call"]]
-        receipt = approval_messages.receipt(awaiting, facts)
+        receipt = awaiting.model_copy(update={"artifact": None})
         deferred, resolved = approval_messages.deferred_results(
             answered, bool(facts["execution"].get("operation_outcome")))
-        if not deferred:
-            # Preserve the preparation before its explanation; execution happened later.
-            receipt = awaiting.model_copy(update={"artifact": None})
         self.cached = {ident: message for ident, message in answered.items()
                        if message not in deferred}
         self.cached[session.state["awaiting_call"]] = receipt
@@ -184,8 +187,11 @@ class SessionMiddleware(AgentMiddleware):
                               *(RemoveMessage(id=m.id) for m in deferred)]}
         if deferred:
             self.attachments = [message for message in messages[index + 1:]
-                                if not isinstance(message, ToolMessage)]
+                                if not isinstance(message, ToolMessage)
+                                or message.tool_call_id not in call_ids]
             saved["messages"].extend(RemoveMessage(id=m.id) for m in self.attachments)
+            self.attachments.extend(receipt_observations(TurnResult(
+                facts["reply"], facts["execution"]), user_confirmed=True))
             session.budget.attempt_tools(len(deferred))
             self._next = 0
             saved["jump_to"] = "tools"
@@ -255,6 +261,7 @@ class SessionMiddleware(AgentMiddleware):
                         if extra_inputs else result)
         finally:
             response_model = _model_name(response=response)
+            reasoning = (getattr(response, "additional_kwargs", {}) or {}).get("reasoning_content")
             if invoked:
                 record("native", "llm_done" if response is not None else "llm_error",
                        round=session._round_index, engine="langchain",
@@ -264,6 +271,8 @@ class SessionMiddleware(AgentMiddleware):
                            "finish_reason"),
                        tool_calls=[call["name"] for call in getattr(response, "tool_calls", ())],
                        invalid_tool_calls=bool(getattr(response, "invalid_tool_calls", ())),
+                       content_chars=len(text_content(getattr(response, "content", ""))),
+                       reasoning_chars=len(str(reasoning or "")),
                        **usage_fields(response))
 
     @hook_config(can_jump_to=["end", "model"])
