@@ -1,10 +1,13 @@
 """Usage aggregation with explicit coverage; absent measurements are not zero."""
 
+from utils.provider_billing import AMOUNT_FIELDS, amount
+
 
 def empty():
     return dict(calls=0, measured=0, unnamed=0, output_seen=0, unknown_attempts=0,
                 cache_seen=0, cache_in=0, cache=0, reasoning_seen=0,
-                reasoning=0, **{"in": 0, "out": 0})
+                reasoning=0, provider_cost_estimate_calls=0, **{"in": 0, "out": 0},
+                **{name + suffix: 0 for name in AMOUNT_FIELDS for suffix in ("_sum", "_seen")})
 
 
 def count(value):
@@ -13,6 +16,12 @@ def count(value):
 
 def add(row, event):
     row["calls"] += 1
+    for name in AMOUNT_FIELDS:
+        value = amount(event.get(name))
+        if value is not None:
+            row[name + "_sum"] += value
+            row[name + "_seen"] += 1
+    row["provider_cost_estimate_calls"] += event.get("provider_cost_is_estimate") is True
     incoming = count(event.get("input"))
     outgoing = count(event.get("output"))
     cached = count(event.get("cache_read"))
@@ -61,3 +70,9 @@ def hit_rate(row):
 def complete(row):
     return (row["unknown_attempts"] == 0 and row["calls"] > 0
             and row["measured"] == row["output_seen"] == row["cache_seen"] == row["calls"])
+
+
+def provider_costs(row):
+    """A zero balance charge is valid; missing quota receipts remain unknown."""
+    return {name: row[name + "_sum"] if row["calls"] > 0 and not row["unknown_attempts"]
+            and row[name + "_seen"] == row["calls"] else None for name in AMOUNT_FIELDS}

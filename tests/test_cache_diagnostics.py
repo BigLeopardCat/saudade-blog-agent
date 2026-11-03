@@ -131,3 +131,25 @@ def test_estimated_cost_includes_reasoning_in_output_only_once():
     doc["events"][-1]["reasoning"] = 5
     row = request_cohorts([("a", doc)], (0.3, 1.2, 0.006))[0]
     assert abs(row["estimated_cost"] - (40*.3 + 60*.006 + 5*1.2)/1e6) < 1e-12
+
+
+def test_provider_receipts_stay_separate_from_estimates_and_require_complete_coverage():
+    first = document(["a"], cache=60)
+    first["events"][-1].update(provider_cost_usd=0, provider_list_cost_usd=.001,
+                                provider_allowance_usd=.0006)
+    row = request_cohorts([("a", first)], (.3, 1.2, .006))[0]
+    assert row["provider_cost_usd"] == 0 and row["provider_allowance_usd"] == .0006
+    assert row["estimated_cost"] != row["provider_list_cost_usd"]
+    second = document(["a", "b"], cache=90, timestamp="2026-11-01T12:01:00+08:00")
+    second["events"].extend(first["events"][-1:])
+    row = request_cohorts([("b", second)])[0]
+    assert row["provider_cost_usd"] is None and row["provider_allowance_usd"] is None
+    assert row["provider_allowance_usd_seen"] == 1 and row["calls"] == 2
+
+
+def test_old_or_malformed_trace_metadata_does_not_invent_source_labels():
+    for meta in ("raw historical request", {"source": [], "runtime": True},
+                 {"runtime": {"build_sha": {}}}):
+        doc = {**document(["a"]), "input": meta}
+        row = request_cohorts([("a", doc)])[0]
+        assert row["source"] == row["build"] == "unknown"

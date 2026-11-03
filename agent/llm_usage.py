@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import logging
 
+from utils.provider_billing import from_usage, sanitize
+
 logger = logging.getLogger(__name__)
 
 
@@ -32,17 +34,21 @@ def usage_fields(resp) -> dict:
     老版本 langchain 只填后者的情形实测存在，两条都读。
     """
     try:
+        metadata = getattr(resp, "response_metadata", None)
+        metadata = metadata if isinstance(metadata, dict) else {}
+        billing = (sanitize(metadata.get("provider_billing"))
+                   or from_usage(metadata.get("token_usage")))
         um = getattr(resp, "usage_metadata", None)
         if not isinstance(um, dict) or not um:
             rm = getattr(resp, "response_metadata", None)
             um = rm.get("token_usage") if isinstance(rm, dict) else None
         if not isinstance(um, dict) or not um:
-            return {}
+            return billing
         n_in = _int(um.get("input_tokens", um.get("prompt_tokens")))
         n_out = _int(um.get("output_tokens", um.get("completion_tokens")))
         # 解析不出来的**不写**（写成 0 是把"读不懂这个值"记成"token 数是 0"，
         # 聚合时会静默拉低均值）；一个都没解析出来就整格不记。
-        out = {}
+        out = dict(billing)
         if n_in is not None:
             out["input"] = n_in
         if n_out is not None:
