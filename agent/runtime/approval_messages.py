@@ -29,6 +29,7 @@ class ApprovalResumeMiddleware(AgentMiddleware):
 def receipt(awaiting, facts):
     unverified = bool(facts["execution"].get("operation_outcome"))
     visible = {"status": "unverified" if unverified else "executed",
+               "approval": "user_confirmed",
                "result": facts["reply"], "receipts": [
                    {key: row[key] for key in ("tool", "args", "result", "action") if key in row}
                    for row in facts["execution"]["receipts"]]}
