@@ -42,5 +42,6 @@ def operation_names():
 
 def bound_tool_names():
     """Inventory service-bound tools without publishing an unusable global tool instance."""
+    from agent.domains.article_editor import NAMES
     from agent.domains.automations.preparation import tools
-    return frozenset(tools(None, True))
+    return frozenset(tools(None, True)) | NAMES
