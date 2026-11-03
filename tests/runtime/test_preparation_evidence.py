@@ -52,6 +52,29 @@ def test_oversize_facts_are_explicitly_incomplete(monkeypatch):
     assert events[0]["complete"] is False and events[0]["facts"] is None
 
 
+def test_todo_creation_records_verified_owner_without_promoting_draft_text(monkeypatch):
+    from _own_support import config
+
+    from agent import confirm
+    from agent.domains.todos.preparation import prepare_dashboard_todo
+    from agent.principal import SOURCE_ASSERTION, Principal
+
+    events = []
+    monkeypatch.setattr(confirm.settings, "jwt_secret", secrets.token_urlsafe(32))
+    monkeypatch.setattr("agent.runtime.tool_evidence.record", lambda node, event, **data:
+                        events.append({"node": node, "event": event, **data}))
+    cfg = config(principal=Principal(7, "admin", SOURCE_ASSERTION))
+    with scope({"id": "create-todo"}, 2):
+        result = prepare_dashboard_todo.invoke(
+            {"action": "create", "text": "UNVERIFIED_DRAFT_CANARY"}, config=cfg)
+    assert result.execution["pending_confirm"]
+    assert events == [{"node": "native", "event": "preparation_observation",
+                       "call_id": "create-todo", "round": 2, "source": "todo_create",
+                       "facts": {"ownerUserId": 7}, "complete": True}]
+    assert "UNVERIFIED_DRAFT_CANARY" not in json.dumps(events)
+    assert result.execution["pending_confirm"]["token"] not in json.dumps(events)
+
+
 def test_noop_requires_same_call_verified_target_and_state():
     wanted = {"workflow": "set_status", "spec": {"tool": "set_article_status",
               "args": {"article_id": 54, "status": "private"}},
