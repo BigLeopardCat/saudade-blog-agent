@@ -21,6 +21,7 @@
 
 | 文档 | 一句话 | 类型 |
 |---|---|---|
+| [confirmation-groups.md](confirmation-groups.md) | 按事务分组确认、批量勾选与部分执行语义 | 现状型 |
 | [task-reliability-plan.md](task-reliability-plan.md) | 任务生命周期、完整交付、上下文、成本与验收的分阶段整改清单 | 方向型 |
 | [p2-completion-report.md](p2-completion-report.md) | P1/P2 发布版本、离线与线上验收、分层用量及剩余边界 | 记录型 |
 | [p3-completion-report.md](p3-completion-report.md) | 确认恢复、请求归属、导航与进度的跨仓发布及交互验收 | 记录型 |

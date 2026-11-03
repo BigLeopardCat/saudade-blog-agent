@@ -130,6 +130,7 @@ TOOL_SCOPE: dict[str, str] = {
     "complete_dashboard_todo": SCOPE_WRITE_CONSOLE,
     "reschedule_dashboard_todo": SCOPE_WRITE_CONSOLE,
     "delete_dashboard_todo": SCOPE_WRITE_CONSOLE,
+    "delete_dashboard_todos": SCOPE_WRITE_CONSOLE,
     "freeze_account": SCOPE_WRITE_CONSOLE,
     "unfreeze_account": SCOPE_WRITE_CONSOLE,
     "set_account_role": SCOPE_WRITE_CONSOLE,
