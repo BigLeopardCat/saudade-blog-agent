@@ -171,6 +171,9 @@ class SessionMiddleware(AgentMiddleware):
         receipt = approval_messages.receipt(awaiting, facts)
         deferred, resolved = approval_messages.deferred_results(
             answered, bool(facts["execution"].get("operation_outcome")))
+        if not deferred:
+            # Preserve the preparation before its explanation; execution happened later.
+            receipt = awaiting.model_copy(update={"artifact": None})
         self.cached = {ident: message for ident, message in answered.items()
                        if message not in deferred}
         self.cached[session.state["awaiting_call"]] = receipt
@@ -190,7 +193,7 @@ class SessionMiddleware(AgentMiddleware):
             # The approval explanation is an assistant turn after the prepared
             # tool response. Append fresh execution evidence after that turn.
             saved["messages"].extend(receipt_observations(TurnResult(
-                facts["reply"], facts["execution"])))
+                facts["reply"], facts["execution"]), user_confirmed=True))
         return saved
 
     def _feedback(self, state, facts):

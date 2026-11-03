@@ -81,7 +81,8 @@ def review(state, config, *, feedback=None):
     result = TurnResult(facts["reply"], facts["execution"])
     principal = config["configurable"]["principal"]
     current = memory.turn_messages(facts.get("input") or [],
-                                   receipt_observations(result), result.reply, principal)
+                                   receipt_observations(result, user_confirmed=True),
+                                   result.reply, principal)
     return {"pending_confirm": None, "pending_action": None, "approval": None,
             "approved_result": facts,
             "receipts": [*state.get("receipts", []), *facts["execution"]["receipts"]],

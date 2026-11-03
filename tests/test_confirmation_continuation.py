@@ -130,7 +130,11 @@ def assert_preserved_exchange(prompt, original, token):
     assert generated.tool_calls == [FAVORITE, NOTICE]
     facts = [message for message in prompt if isinstance(message, ToolMessage)
              and message.tool_call_id in ("favorite", "notice")]
-    assert all(json.loads(message.content)["status"] == "executed" for message in facts)
+    assert json.loads(facts[-1].content)["status"] != "executed"
+    completed = [json.loads(message.content) for message in prompt
+                 if isinstance(message, ToolMessage) and message.content.startswith("{")
+                 and json.loads(message.content).get("approval") == "user_confirmed"]
+    assert len(completed) >= 2 and all(row["status"] == "executed" for row in completed)
     assert token not in str(prompt)
 
 
@@ -177,6 +181,36 @@ def test_single_preparation_continues_to_a_model_reply_without_extra_narration(b
     assert events[-1].reply == "收藏好啦～" and len(model.prompts) == 1
     assert sum(str(frame).startswith("__EXEC__:") for frame in wire) == 1
     assert "".join(event.content for event in events[:-1]) == events[-1].reply
+
+
+def test_approval_keeps_preparation_before_explanation_and_appends_execution_after_it(backend):
+    from _framework_fixture import call as wire_call
+    from _framework_fixture import model_replies
+
+    with model_replies(
+        {"tool_calls": [wire_call("load_favorites_info_tools", "load")]},
+        {"tool_calls": [wire_call("prepare_favorite_change", "favorite",
+                                  action="add", article_id=19)]},
+        {"content": "请确认收藏这篇文章。"}, {"content": "已按你的确认收藏。"}
+    ) as (model, requests):
+        selected = runtime(model)
+        proposal = run(selected, "收藏文章19。")
+        token = proposal.execution["pending_confirm"]["token"]
+        grant = confirm.verify(token, 7, 42)
+        before = next(message for message in requests[-1]["messages"]
+                      if message.get("tool_call_id") == "favorite")
+        assert run(selected, grant=grant).reply == "已按你的确认收藏。"
+        prompt = requests[-1]["messages"]
+        preserved = next(message for message in prompt if message.get("tool_call_id") == "favorite")
+        assert preserved["content"] == before["content"]
+        explained = next(i for i, message in enumerate(prompt)
+                         if message["role"] == "assistant"
+                         and message.get("content") == "请确认收藏这篇文章。")
+        executed = [i for i, message in enumerate(prompt)
+                    if message["role"] == "tool" and message["content"].startswith("{")
+                    and json.loads(message["content"]).get("approval") == "user_confirmed"]
+        assert prompt.index(preserved) < explained < min(executed)
+        assert len(requests) == 4 and token not in str(requests)
 
 
 @pytest.mark.parametrize("navigation_in_batch", [False, True])
