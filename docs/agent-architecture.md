@@ -99,6 +99,7 @@ flowchart LR
 │   ├── domains/announcements/targets.py                 # 当前生产代码模块
 │   ├── domains/announcements/transactions.py            # 当前生产代码模块
 │   ├── domains/article_actions/__init__.py              # 当前生产代码模块
+│   ├── domains/article_editor.py                       # 当前编辑器的草稿读取、正文审阅提案和摘要更新
 │   ├── domains/article_actions/preparation.py           # 当前生产代码模块
 │   ├── domains/article_actions/batch.py                 # 一次确认的有界文章批量事务
 │   ├── domains/article_actions/targets.py               # 当前生产代码模块

@@ -29,7 +29,7 @@ from agent.runtime.budget import BudgetLimits, TaskBudget, budget_scope
 from agent.runtime.checkpoint_conversations import CheckpointConversationStore
 from agent.runtime.service import AgentRuntime
 from agent.runtime.session import ToolSession
-from tools import site
+from tools import base, site
 
 
 def _config(**overrides):
@@ -194,7 +194,7 @@ def test_valid_navigation_preserves_source_link(path):
     result = browser.navigate_page.invoke(_call("navigate_page", {"path": path}), config=_config())
     assert result.artifact["receipts"][0]["cmd"] == {
         "kind": "navigate",
-        "url": site.SITE_BASE.rstrip("/") + path,
+        "url": base.SITE_BASE.rstrip("/") + path,
         "mode": "direct",
     }
 

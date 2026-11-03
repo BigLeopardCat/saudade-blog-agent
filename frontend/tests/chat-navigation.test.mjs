@@ -5,6 +5,11 @@ import vm from 'node:vm';
 
 const source = readFileSync(new URL('../public/live2d-widgets/chat-browser-actions.js', import.meta.url), 'utf8');
 const flush = () => new Promise(resolve => setTimeout(resolve, 10));
+async function waitFor(condition) {
+  const deadline=Date.now()+2000;
+  while (!condition() && Date.now()<deadline) await flush();
+  assert.ok(condition(),'browser acknowledgement did not arrive');
+}
 function fixture(applyAppearance) {
   let actor = 7, resolveReady;
   const storage = new Map(), calls = [], navigations = [];
@@ -106,4 +111,59 @@ test('commands from another task, conversation or origin never reach the browser
   assert.equal(f.navigation.receive({...f.command, url:'https://other/'}, f.context), false);
   assert.equal(f.navigations.length, 0);
   assert.equal(f.calls.length, 0);
+});
+
+test('article editor acknowledges a live working copy once, without navigating', async () => {
+  const f = fixture(); let runs = 0;
+  const document = {editor_id:'editor-1',revision:0,outcome:'read',content:'未保存正文',description:'',
+    offset:0,next_offset:null,total_chars:5};
+  f.sandbox.__saudadeArticleEditor = {execute: command => {runs++; assert.equal(command.operation,'read'); return document}};
+  const command = {kind:'article_editor',operation:'read',offset:0,limit:12000,task_id:'task',command_id:'read-editor'};
+  assert.equal(f.navigation.receive(command,f.context),true);
+  f.ready(); await waitFor(() => f.calls.length===1);
+  assert.equal(runs,1);
+  assert.deepEqual(JSON.parse(JSON.stringify(f.calls[0].browserResult.document)),document);
+  assert.equal(f.navigations.length,0);
+  f.navigation.receive(command,f.context); await flush();
+  assert.equal(runs,1);
+});
+
+test('missing or stale editor returns failure and its reason without affecting navigation', async () => {
+  for (const absent of [true,false]) {
+    const f=fixture();
+    if (!absent) f.sandbox.__saudadeArticleEditor = {execute: () => {throw new Error('草稿已变化')}};
+    f.navigation.receive({kind:'article_editor',operation:'summary',editor_id:'e',revision:0,
+      description:'新概述',task_id:'task',command_id:'summary'},f.context);
+    f.ready(); await waitFor(() => f.calls.length===1);
+    assert.equal(f.calls[0].browserResult.status,'failed');
+    assert.match(f.calls[0].browserResult.error,/编辑器|草稿已变化/);
+    assert.equal(f.navigations.length,0);
+  }
+});
+
+test('recovered unconsumed interrupt resends its observation without applying an edit again', async () => {
+  const f=fixture(); f.ready(); let executions=0;
+  f.sandbox.__saudadeArticleEditor={execute:()=>{executions++;throw new Error('must not repeat')}};
+  const command={kind:'article_editor',operation:'summary',editor_id:'editor-1',revision:0,
+    description:'新概述',task_id:'task',command_id:'summary'};
+  const observed={editor_id:'editor-1',revision:1,outcome:'updated'};
+  f.storage.set('saudade-browser-action-pending',JSON.stringify({...command,document:observed,
+    actor:'7',convId:42,path:'/',deadline:Date.now()+1000,phase:'reply',result_status:'completed'}));
+  let recovered;
+  const calls=[];
+  recovered=f.sandbox.__waifuBrowserActions(f.ctx,{ready:Promise.resolve()},async options=>{
+    calls.push(options);
+    if (!options.browserResult) {
+      f.ctx.state.isSending=true;
+      recovered.receive(command,f.context);
+      await flush();
+      f.ctx.state.isSending=false;
+    }
+    return true;
+  });
+  await waitFor(()=>calls.length===2);
+  assert.equal(executions,0);
+  assert.equal(calls[0].browserResult,undefined);
+  assert.deepEqual(JSON.parse(JSON.stringify(calls[1].browserResult.document)),observed);
+  assert.equal(calls[1].browserResult.status,'completed');
 });

@@ -29,12 +29,27 @@ class QuotaInfo(BaseModel):
     unlimited: bool = False
 
 
+class EditorObservation(BaseModel):
+    editor_id: str = Field(min_length=1, max_length=64)
+    revision: int = Field(strict=True, ge=0, le=9_007_199_254_740_991)
+    outcome: Literal["read", "proposed", "updated"]
+    title: str | None = Field(default=None, max_length=1000)
+    content: str | None = Field(default=None, max_length=24000)
+    description: str | None = Field(default=None, max_length=16000)
+    offset: int | None = Field(default=None, ge=0, le=1_000_000)
+    next_offset: int | None = Field(default=None, ge=0, le=1_000_000)
+    total_chars: int | None = Field(default=None, ge=0, le=1_000_000)
+    proposal_id: str | None = Field(default=None, max_length=64)
+
+
 class BrowserResult(BaseModel):
     command_id: str = Field(min_length=1, max_length=100, pattern=r"^[A-Za-z0-9_-]+$")
     status: Literal["completed", "timeout", "failed"]
     path: str = Field(max_length=512)
     settings: dict[Literal["dark_mode", "sakura", "rain", "snow"],
                    Literal["on", "off"]] | None = Field(default=None, max_length=4)
+    document: EditorObservation | None = None
+    error: str | None = Field(default=None, max_length=500)
 
 
 class ChatRequest(BaseModel):

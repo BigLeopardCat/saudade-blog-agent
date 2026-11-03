@@ -24,12 +24,13 @@
       // Keep recovery information until the resumed stream finishes. A route's
       // lazy chunk may force a reload after its completion acknowledgement.
       pending.phase = 'reply';
+      if (status) pending.result_status = status;
       store(pending);
       await engine.ready;
       const until = Date.now() + 6000;
       while (owns(pending) && ctx.state.isSending && Date.now() < until)
         await new Promise(resolve => setTimeout(resolve, 25));
-      if (!owns(pending)) {
+      if (active !== pending || !owns(pending)) {
         if (active === pending) { active = null; clear(); }
         return;
       }
@@ -38,6 +39,8 @@
         resumeText: pending.original || '', processFrom, previousProcess: pending.process || [],
         ...(status ? { browserResult: {
           command_id: pending.command_id, status, path: path(),
+          ...(pending.kind === 'article_editor' ? { document: pending.document || null,
+            error: pending.error || null } : {}),
           ...(pending.kind === 'appearance' ? { settings: settings() } : {}) } } : {}) });
       if (ok && processFrom?.dataset.clientAction === 'pending') processFrom.remove();
       if (!ok && owns(pending)) ctx.ui.notify?.('页面操作已结束，后续回复未完成，请继续原任务', 'error');
@@ -52,7 +55,7 @@
       const tick = () => {
         if (active !== pending || pending.settled) return;
         if (failed) { void settle(pending, 'failed', processFrom); return; }
-        const reached = pending.kind === 'appearance'
+        const reached = pending.kind === 'article_editor' ? !!pending.document : pending.kind === 'appearance'
           ? Object.entries(pending.settings).every(([name, mode]) => settings()[name] === mode)
           : path() === pending.path;
         if (navigationReady && reached) { void settle(pending, 'completed', processFrom); return; }
@@ -63,15 +66,26 @@
     };
     const receive = (command, context) => {
       const appearance = command.kind === 'appearance';
-      if (!appearance && command.kind !== 'navigate') return false;
+      const editor = command.kind === 'article_editor';
+      if (!appearance && !editor && command.kind !== 'navigate') return false;
+      if (editor && !['read', 'propose', 'summary'].includes(command.operation)) return false;
       const values = Object.entries(command.settings || {});
       if (appearance && (!values.length || !applyAppearance || !values.every(([name, mode]) =>
         ['dark_mode', 'sakura', 'rain', 'snow'].includes(name) && ['on', 'off'].includes(mode)))) return false;
-      const url = new URL(appearance ? location.href : command.url, location.href);
+      const url = new URL(appearance || editor ? location.href : command.url, location.href);
       if (url.origin !== location.origin || !command.command_id || !command.task_id) return false;
       if (!actor() || ctx.state.conv !== context.convId
           || (ctx.state.activeRound?.taskId && ctx.state.activeRound.taskId !== command.task_id)) return false;
-      if (active?.command_id === command.command_id && active.task_id === command.task_id) return true;
+      if (active?.command_id === command.command_id && active.task_id === command.task_id) {
+        // A replayed interrupt proves the server has not consumed the stored result.
+        // Resend that observation rather than repeating a local edit or navigation.
+        if (active.phase === 'reply' && active.settled && active.result_status) {
+          const retry = {...active, settled:false};
+          active = retry;
+          void settle(retry, retry.result_status, context.processFrom);
+        }
+        return true;
+      }
       try {
         const id = actor() + ':' + command.task_id + ':' + command.command_id;
         const recent = JSON.parse(sessionStorage.getItem(seenKey) || '[]')
@@ -89,7 +103,17 @@
       sessionStorage.setItem('chat_open', '1');
       let ready = null;
       try {
-        if (appearance) ready = applyAppearance(pending.settings);
+        if (editor) {
+          ready = Promise.resolve().then(() => {
+            if (!g.__saudadeArticleEditor) throw new Error('当前页面没有打开文章编辑器。');
+            pending.document = g.__saudadeArticleEditor.execute(pending);
+            store(pending);
+          }).catch(error => {
+            pending.error = String(error?.message || '编辑器操作未完成').slice(0, 500);
+            throw error;
+          });
+        }
+        else if (appearance) ready = applyAppearance(pending.settings);
         else if (path() !== pending.path) {
           if (g.__spaNavigate?.(url.href)) ready = g.__spaNavigationComplete || null;
           else {
