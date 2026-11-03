@@ -10,6 +10,7 @@ from agent.domains.todos import targets
 from agent.domains.todos.batch import prepare_dashboard_todo_deletions
 from agent.proposals import proposal
 from agent.runtime.results import TurnResult
+from agent.runtime.tool_evidence import observed
 from agent.runtime.turns import check_cancelled
 from agent.runtime.writes import bound_context
 from tools import base
@@ -76,6 +77,8 @@ def _prepare(action, text, item_id, date, config):
     if action in ("create", "reschedule"):
         target += f"；排期：{args['date'] or '未排期'}"
     principal, cid = bound_context(config)
+    if action == "create":
+        observed("todo_create", {"ownerUserId": principal.uid}, ("ownerUserId",))
     check_cancelled(config)
     return proposal(
         principal,

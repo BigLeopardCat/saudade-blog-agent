@@ -38,7 +38,7 @@ def get_site_map() -> str:
   写内容即可放灯；留名框默认预填昵称、可匿名，无需注册邮箱
 - 关于我 (/about) — 个人介绍
 - 文章详情 (/article/:id) — 查看文章全文，支持 Mermaid 图表
-- 后台管理 (/dashboard) — 登录后可管理文章、分类、标签、公告等{iot_line}
+- 后台管理 (/dashboard) — 仅管理员可管理文章、分类、标签、公告等{iot_line}
 """
 
 # Current conversation history is backed by the verified native read adapter.
