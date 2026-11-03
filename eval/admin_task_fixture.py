@@ -69,11 +69,14 @@ def backend():
             return httpx.Response(404)
         body = json.loads(request.content)
         preparation = path.endswith("/prepare")
-        current = plan(body if preparation else body["intent"], notice)
+        intent = ({key: body.get(key) for key in ("action", "target", "role", "mutedUntil")}
+                  if preparation and not notice else body if preparation else body["intent"])
+        current = plan(intent, notice)
         if current is None or not preparation and current["version"] != body["version"]:
             return httpx.Response(200, json={"code": 409, "message": "目标或版本不匹配"})
         if preparation:
-            return httpx.Response(200, json={"code": 200, "data": current})
+            return httpx.Response(200, json={"code": 200, "data": current if notice else
+                                           {"plan": current, "intent": intent}})
         state["revision"] += 1
         if notice:
             state["notices"].append(deepcopy(current))

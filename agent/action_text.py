@@ -559,12 +559,12 @@ def _arm_text(name: str, a: dict, m: dict, preview: bool):
     if name == "get_weather":
         loc = _leaf(a.get("location"))
         return f"查看天气「{loc}」" if loc else "查看天气"
+    return _todo_text(name, a, preview)
+
+
+def _todo_text(name, a, preview):
     if name == "create_dashboard_todo":
-        # 正文按 device_oled_display 的同款截断（24 字）——待办正文上限 200 字，过程行
-        # 放不下；台账行不截（列宽截断归 Rust 排版那一侧）。截断**带省略号**：裸切一刀
-        # 会读成"系统只记了这半句"（那正是 `_todo_preview` 的由来）。
-        # ⚠️ 这一行是**预告**，不是主人核对用的那一面——卡面与回执都印全文
-        # （见 `adminops.render_todo_added` 头注里那次真实现场）。
+        # Bound progress previews; confirmation and receipts retain the full text.
         body = _todo_preview(a.get("text")) if preview else _raw(a.get("text"))
         if not body:
             return "添加待办"
@@ -572,11 +572,12 @@ def _arm_text(name: str, a: dict, m: dict, preview: bool):
         head = f"添加待办「{body}」"
         return f"{head}（{due}）" if due else head
     if name == "complete_dashboard_todo":
-        # 同样按 24 字截断并带省略号（台账行不截）。刻意**不写**「已完成」：过程行是
-        # **预告**（执行前发出），而后端在幂等分支上是真 no-op；把结果写进动作名会让
-        # "本来就是完成"那一次看起来也改了什么（台账行那侧另有 `change` 判据）。
+        # Describe intent here; only the execution receipt establishes completion.
         body = _todo_preview(a.get("text")) if preview else _raw(a.get("text"))
         return f"把待办「{body}」勾成完成" if body else "勾完成待办"
+    if name == "delete_dashboard_todo":
+        body = _todo_preview(a.get("text")) if preview else _raw(a.get("text"))
+        return f"删除待办「{body}」" if body else "删除待办"
     if name == "reschedule_dashboard_todo":
         body = _todo_preview(a.get("text")) if preview else _raw(a.get("text"))
         when = _raw(a.get("date"))

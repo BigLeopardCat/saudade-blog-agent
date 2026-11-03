@@ -39,6 +39,11 @@ class Intent(BaseModel):
     mutedUntil: Deadline | None = None
 
 
+class PrepareRequest(Intent):
+    hours: Annotated[StrictInt, Field(gt=0, le=2147483647)] | None = None
+    permanent: StrictBool = False
+
+
 class Account(BaseModel):
     model_config = ConfigDict(extra="forbid")
     id: Identifier
@@ -66,8 +71,7 @@ def _username(value):
     )
 
 
-def intent(value):
-    parsed = Intent.model_validate(value)
+def _identity(parsed):
     target = parsed.target
     if target.id is None and target.username is None:
         raise ValueError("缺少目标账号：请填写account_id或完整username；同时填写时必须指向同一账号")
@@ -75,10 +79,24 @@ def intent(value):
         raise ValueError("username必须是完整账号名，不能包含首尾空格或控制字符")
     if (parsed.action == "set_role") != (parsed.role is not None):
         raise ValueError("只有变更身份操作必须填写role，合法值为admin/user/zako")
+
+
+def intent(value):
+    parsed = Intent.model_validate(value)
+    _identity(parsed)
     if (parsed.action == "mute") != (parsed.mutedUntil is not None):
         raise ValueError("只有禁言操作必须填写到期时间mutedUntil或永久期限")
     if parsed.mutedUntil is not None:
         datetime.fromisoformat(parsed.mutedUntil)
+    return parsed.model_dump(mode="json")
+
+
+def preparation_request(value):
+    parsed = PrepareRequest.model_validate(value)
+    _identity(parsed)
+    choices = sum((parsed.hours is not None, parsed.permanent, parsed.mutedUntil is not None))
+    if choices != (1 if parsed.action == "mute" else 0):
+        raise ValueError("禁言须明确指定小时数、永久或绝对到期时间，且只能选择一项")
     return parsed.model_dump(mode="json")
 
 
@@ -122,9 +140,17 @@ def prepare(request, config):
     if isinstance(result, base.ToolResult):
         return result
     try:
+        if not isinstance(result, dict) or set(result) != {"plan", "intent"}:
+            raise ValueError("Invalid preparation response")
+        normalized = intent(result["intent"])
+        if (any(normalized[key] != request[key] for key in ("action", "target", "role"))
+                or request["mutedUntil"] is not None
+                and normalized["mutedUntil"] != request["mutedUntil"]
+                or request["permanent"] and normalized["mutedUntil"] != FOREVER):
+            raise ValueError("Normalized intent does not match the requested action")
         return observed(
             "account_actions",
-            plan(result, request),
+            {**plan(result["plan"], normalized), "intent": normalized},
             ("before", "notificationCount", "revokeSessions", "version"),
         )
     except (ValueError, TypeError):

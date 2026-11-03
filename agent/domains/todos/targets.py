@@ -7,7 +7,6 @@ from agent.runtime.tool_evidence import observed
 from tools import base
 
 PATH = "/api/protected/todos"
-MAX_ROWS = 200
 
 
 def due_date(value):
@@ -49,17 +48,15 @@ def row(value):
     }
 
 
-def snapshot(config):
-    data = base._admin_get(PATH, config)
+def snapshot(config, item_id):
+    data = base._admin_get(f"{PATH}/item/{item_id}", config)
     if isinstance(data, base.ToolResult):
         return None, data
     try:
-        if not isinstance(data, list) or len(data) > MAX_ROWS:
-            raise ValueError("待办列表范围无法核对")
-        rows = {item["id"]: item for item in map(row, data)}
-        if len(rows) != len(data):
-            raise ValueError("待办编号重复")
+        rows = {item_id: row(data)}
+        if rows and rows[item_id]["id"] != item_id:
+            raise ValueError("待办编号与请求不符")
     except (ValueError, TypeError, KeyError):
-        return None, base.unavailable("未能核对完整的本人待办及稳定编号，本次未改动。")
+        return None, base.unavailable("未能核对本人待办及稳定编号，本次未改动。")
     observed("todos", {"items": list(rows.values())}, ("items",))
     return rows, None

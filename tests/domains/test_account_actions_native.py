@@ -52,6 +52,7 @@ def accounts(monkeypatch):
         "revocations": 0,
         "requests": [],
         "revision": 0,
+        "clock": "2030-01-31T23:30:00",
     }
 
     def plan(intent):
@@ -90,7 +91,26 @@ def accounts(monkeypatch):
     def handle(request):
         state["requests"].append(request)
         payload = json.loads(request.content)
-        intent = payload if request.url.path.endswith("/prepare") else payload["intent"]
+        preparing = request.url.path.endswith("/prepare")
+        intent = (
+            {key: payload.get(key) for key in ("action", "target", "role", "mutedUntil")}
+            if preparing
+            else payload["intent"]
+        )
+        if preparing and intent["action"] == "mute":
+            from datetime import datetime, timedelta
+
+            if payload.get("permanent"):
+                intent["mutedUntil"] = "9999-12-31T23:59:59"
+            elif payload.get("hours"):
+                try:
+                    intent["mutedUntil"] = (
+                        datetime.fromisoformat(state["clock"]) + timedelta(hours=payload["hours"])
+                    ).isoformat()
+                except OverflowError:
+                    return httpx.Response(
+                        200, json={"code": 400, "message": "期限超出范围", "data": {}}
+                    )
         if state.get("denied") or (
             state.get("commit_denied") and not request.url.path.endswith("/prepare")
         ):
@@ -105,7 +125,9 @@ def accounts(monkeypatch):
                 prepared["after"]["username"] = "另一个账号"
             if state.get("sensitive_plan"):
                 prepared["before"]["password"] = secrets.token_urlsafe(24)
-            return httpx.Response(200, json={"code": 200, "data": prepared})
+            return httpx.Response(
+                200, json={"code": 200, "data": {"plan": prepared, "intent": intent}}
+            )
         if state.get("race"):
             state["revision"] += 1
             prepared = plan(intent)
@@ -180,9 +202,7 @@ def test_prepare_is_read_only_and_replay_applies_exact_change_once(
     assert accounts["revocations"] == int(action in {"freeze", "role"})
 
 
-@pytest.mark.parametrize(
-    "args", [{}, {"account_id": 11, "username": " "}, {"username": " "}]
-)
+@pytest.mark.parametrize("args", [{}, {"account_id": 11, "username": " "}, {"username": " "}])
 def test_invalid_target_never_reaches_service(accounts, args):
     result = prepare("freeze", **args)
     assert result.kind == "invalid_args" and not accounts["requests"]
@@ -229,13 +249,13 @@ def test_repeated_freeze_still_confirms_session_revocation(accounts, tmp_path):
 def test_temporary_mute_freezes_absolute_expiry_and_preserves_other_fields(accounts):
     prepared = prepare("mute", username="测试账号", hours=24)
     intent = grant(prepared)["specs"][0]["args"]["intent"]
-    from datetime import datetime, timedelta, timezone
+    from datetime import datetime
 
-    expiry = datetime.fromisoformat(intent["mutedUntil"]).replace(
-        tzinfo=timezone(timedelta(hours=8))
-    )
-    remaining = (expiry - datetime.now(timezone.utc)).total_seconds()
-    assert 86380 < remaining <= 86400
+    expiry = datetime.fromisoformat(intent["mutedUntil"])
+    assert expiry.isoformat() == "2030-02-01T23:30:00"
+    sent = json.loads(accounts["requests"][-1].content)
+    assert sent["hours"] == 24 and sent["mutedUntil"] is None
+    assert "hours" not in intent and "permanent" not in intent
     assert expiry.date().isoformat() in prepared.reply
     assert expiry.time().isoformat() in prepared.reply
     assert "测试账号" in prepared.reply
@@ -324,10 +344,13 @@ def test_cancel_is_durable_and_prevents_later_confirmation(accounts, tmp_path, m
     runtime = AgentRuntime(
         CheckpointConversationStore(InMemorySaver()), application=BlogApplication()
     )
-    runtime.store.update_state(admin_config(), {
-        "pending_action": prepared.execution["pending_action"],
-        "pending_confirm": prepared.execution["pending_confirm"],
-    })
+    runtime.store.update_state(
+        admin_config(),
+        {
+            "pending_action": prepared.execution["pending_action"],
+            "pending_confirm": prepared.execution["pending_confirm"],
+        },
+    )
     for _ in range(2):
         result = cancel(runtime, signed, admin_config())
         assert result["cancelled"] and result["event"]["event"] == "cancelled"
@@ -386,6 +409,7 @@ def test_role_card_discloses_previous_and_new_role_and_session_effect(accounts):
 def test_temporary_mute_replay_uses_the_confirmed_absolute_expiry(accounts, tmp_path):
     signed = grant(prepare("mute", account_id=11, hours=24))
     expiry = signed["specs"][0]["args"]["intent"]["mutedUntil"]
+    accounts["clock"] = "2030-02-01T01:00:00"
     ledger = idem.Ledger(str(tmp_path / "temporary-mute.sqlite3"))
     for _ in range(2):
         result = transactions.execute(signed, admin_config(), None, ledger=ledger)
@@ -393,6 +417,10 @@ def test_temporary_mute_replay_uses_the_confirmed_absolute_expiry(accounts, tmp_
         assert accounts["rows"][11]["mutedUntil"] == expiry
     assert accounts["writes"] == accounts["notifications"] == 1
     assert not accounts["revocations"]
+    assert [request.url.path for request in accounts["requests"]] == [
+        "/api/protected/account-actions/prepare",
+        "/api/protected/account-actions",
+    ]
 
 
 def test_unmute_clears_expired_record_without_changing_role_or_frozen_status(accounts, tmp_path):

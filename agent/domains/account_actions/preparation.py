@@ -1,9 +1,7 @@
 """Read-only proposals for account status, role and explicit mute deadlines."""
 
 import json
-from datetime import datetime, timedelta
 from typing import Annotated
-from zoneinfo import ZoneInfo
 
 from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import tool
@@ -86,19 +84,21 @@ def description(plan, action):
     return details + f"\n{effect}；原子发送 {plan['notificationCount']} 条系统通知。"
 
 
-def _prepare(action, target, role, muted_until, config):
+def _prepare(action, target, role, muted_until, config, *, hours=None, permanent=False):
     check_cancelled(config)
     if not available(config):
         return base.unavailable("需要已验签的管理员和稳定会话，本次未生成确认卡。")
     try:
-        request = targets.intent(
-            {"action": action, "target": target, "role": role, "mutedUntil": muted_until}
+        request = targets.preparation_request(
+            {"action": action, "target": target, "role": role, "mutedUntil": muted_until,
+             "hours": hours, "permanent": permanent}
         )
     except (ValueError, TypeError) as exc:
         return invalid_args(str(exc))
     plan = targets.prepare(request, config)
     if isinstance(plan, base.ToolResult):
         return plan
+    request = plan.pop("intent")
     spec = {"tool": TOOLS[action], "args": {"version": plan["version"], "intent": request}}
     text = description(plan, action)
     if not plan["changed"]:
@@ -167,18 +167,8 @@ def prepare_account_mute(
     """
     if permanent and hours is not None or not permanent and hours is None:
         return invalid_args("请明确指定正数小时数或永久禁言，二选一；未指定时不会默认永久。")
-    try:
-        if hours is None:
-            until = targets.FOREVER
-        else:
-            until = (
-                (datetime.now(ZoneInfo("Asia/Shanghai")) + timedelta(hours=hours))
-                .replace(microsecond=0)
-                .strftime("%Y-%m-%dT%H:%M:%S")
-            )
-    except (ValueError, OverflowError):
-        return invalid_args("禁言时长超出可表示范围，请明确较短期限。")
-    return _prepare("mute", {"id": account_id, "username": username}, None, until, config)
+    return _prepare("mute", {"id": account_id, "username": username}, None, None, config,
+                    hours=hours, permanent=permanent)
 
 
 @tool(return_direct=True)
