@@ -335,6 +335,25 @@ try {
   assert.ok(resizedSplit.history.width <= openBounds.history.width - 10, JSON.stringify({ openBounds, resizedSplit }));
   await page.screenshot({ path: path.join(output, 'desktop-history.png') });
   passed('bubble starts above avatar; compact chrome and resizable internal history keep outer bounds');
+  const searchContract = await page.locator('#conv-search').evaluate(input => ({
+    type: input.type, name: input.name, autocomplete: input.autocomplete,
+    form: input.closest('form')?.getAttribute('role'), passwordManagerIgnore: input.dataset.lpignore
+  }));
+  assert.deepEqual(searchContract, {type:'search',name:'conversation-query',autocomplete:'off',form:'search',passwordManagerIgnore:'true'});
+  await page.locator('.conv-more').click();
+  const deleteAction = page.locator('.conv-row-menu .danger');
+  const deleteBefore = await deleteAction.boundingBox();
+  const deletesBefore = requests.filter(request => request.method === 'DELETE').length;
+  await deleteAction.click();
+  assert.equal(await deleteAction.textContent().then(text => text.trim()), '确认删除');
+  const deleteAfter = await deleteAction.boundingBox();
+  for (const axis of ['x','y','width','height']) assert.ok(Math.abs(deleteBefore[axis]-deleteAfter[axis]) <= 1, JSON.stringify({deleteBefore,deleteAfter}));
+  assert.equal(requests.filter(request => request.method === 'DELETE').length, deletesBefore);
+  assert.equal(await page.locator('.conv-row-main').isVisible(), true);
+  await page.screenshot({path:path.join(output,'desktop-delete-confirm.png')});
+  await page.getByRole('button',{name:'取消',exact:true}).click();
+  assert.equal(requests.filter(request => request.method === 'DELETE').length, deletesBefore);
+  passed('conversation search is isolated from credentials; deletion confirms at the same pointer position');
   await page.locator('.conv-more').click();
   await page.getByRole('button', { name: '重命名', exact: true }).click();
   const rename = page.locator('.conv-rename-input');

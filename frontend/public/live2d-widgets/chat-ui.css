@@ -4,7 +4,7 @@
   --drag-h: 36px;
   --side-w: 0px;
   --chat-gradient: var(--washi-grad, linear-gradient(100deg, #ff7fc0 0%, #b06ee8 52%, #63b8e8 100%));
-  --chat-paper: rgb(255 253 250 / 88%);
+  --chat-paper: rgb(255 253 250 / 94%);
   --chat-surface: #ffffff;
   --chat-soft: #faf2f9;
   --chat-rail: #faf0f7;
@@ -20,7 +20,8 @@
   --chat-accent-soft: #f6e7f6;
   --chat-danger: #b13730;
   --chat-danger-soft: #fff0ed;
-  --chat-code: #f0e8e2;
+  --chat-code: #f0e8f5;
+  --chat-highlight: #71416f;
   --chat-focus: #9e62ad;
   --chat-success: #397052;
   --chat-success-soft: #eff6ed;
@@ -52,7 +53,7 @@
 #waifu-chat[data-theme='dark'],
 [data-theme='dark'] #waifu-chat,
 .dark #waifu-chat {
-  --chat-paper: rgb(43 35 55 / 80%);
+  --chat-paper: rgb(43 35 55 / 92%);
   --chat-surface: rgb(64 51 75 / 62%);
   --chat-soft: rgb(70 53 80 / 62%);
   --chat-rail: rgb(57 43 68 / 60%);
@@ -69,6 +70,7 @@
   --chat-danger: #ffa99b;
   --chat-danger-soft: #492c2c;
   --chat-code: #423540;
+  --chat-highlight: #f1c2e4;
   --chat-focus: #f2adbd;
   --chat-success: #a3d2b2;
   --chat-success-soft: #293b31;
@@ -232,7 +234,7 @@
 }
 #waifu-chat .chat-msg :is(.msg-label) { display: block; margin: 0 0 7px; font-size: 11px; font-weight: 600; color: var(--chat-muted); }
 #waifu-chat .chat-msg.agent .msg-label { color: var(--chat-accent); }
-#waifu-chat .chat-msg.agent .msg-text { display: block; color: var(--chat-ink); font-size: 14px; line-height: 1.85; }
+#waifu-chat .chat-msg.agent .msg-text { display: block; color: var(--chat-ink); font-size: 16px; line-height: 1.85; }
 #waifu-chat .chat-typing { display: flex; visibility: hidden; height: 22px; position: static; min-height: 22px; box-sizing: border-box; margin: 2px 0 8px; padding: 6px 0; color: var(--chat-accent); }
 #waifu-chat .chat-typing.typing-visible { visibility: visible; display: flex; width: max-content; align-items: center; gap: 4px; }
 #waifu-chat .chat-typing i { position: static; display: block; flex: none; margin: 0; }
@@ -262,9 +264,11 @@
 #waifu-chat .chat-msg.agent .msg-text :is(h1, h2, h3, h4, h5, h6) { margin: 1.2em 0 .6em; font-size: 1.05em; line-height: 1.5; font-weight: 650; }
 #waifu-chat .chat-msg.agent .msg-text :is(ul, ol) { margin: .65em 0 1em; padding-left: 1.5em; }
 #waifu-chat .chat-msg.agent .msg-text li { margin: .3em 0; }
-#waifu-chat .chat-msg.agent .msg-text a { color: var(--chat-accent); text-decoration: underline; text-underline-offset: 3px; }
-#waifu-chat .chat-msg.agent .msg-text code { background: var(--chat-code); padding: 2px 5px; border-radius: 4px; font-size: .88em; }
-#waifu-chat .chat-msg .msg-text pre { max-width: 100%; padding: 14px; margin: 12px 0; border-radius: 10px; font-size: 12px; line-height: 1.7; }
+#waifu-chat .chat-msg.agent .msg-text a { color: var(--chat-highlight); text-decoration: underline; text-underline-offset: 3px; }
+#waifu-chat .chat-msg.agent .msg-text :is(strong, em) { color: var(--chat-highlight); }
+#waifu-chat .chat-msg.agent .msg-text mark { color: var(--chat-ink); background: var(--chat-code); }
+#waifu-chat .chat-msg.agent .msg-text code { color: var(--chat-highlight); background: var(--chat-code); padding: 2px 5px; border-radius: 4px; font-size: .88em; }
+#waifu-chat .chat-msg .msg-text pre { max-width: 100%; padding: 14px; margin: 12px 0; border-radius: 10px; font-size: 14px; line-height: 1.7; }
 #waifu-chat .chat-msg.agent .msg-text pre code { background: transparent; padding: 0; color: inherit; font-size: inherit; }
 #waifu-chat .chat-msg .msg-text :is(code, pre, pre *) { font-family: ui-monospace, SFMono-Regular, Consolas, monospace !important; }
 #waifu-chat .chat-msg .msg-text .code-block-head { padding: 7px 12px; font-size: 11px; border-radius: 10px 10px 0 0; }
@@ -539,14 +543,13 @@
 #waifu-chat .conv-menu-item:hover { background: var(--chat-soft); color: var(--chat-ink); }
 #waifu-chat .conv-menu-item.danger { color: var(--chat-danger); }
 #waifu-chat .conv-menu-item.danger:hover { background: var(--chat-danger-soft); }
-#waifu-chat .conv-row-confirm button { min-height: 42px; font-size: 11px; }
-#waifu-chat .conv-confirm-del,
-#waifu-chat.washiDark .conv-confirm-del { background: var(--chat-danger-soft); color: var(--chat-danger); }
-#waifu-chat .conv-confirm-del:hover,
-#waifu-chat.washiDark .conv-confirm-del:hover { background: var(--chat-danger); color: var(--chat-paper); }
-#waifu-chat .conv-confirm-cancel { color: var(--chat-ink); background: var(--chat-surface); }
-#waifu-chat .conv-confirm-cancel:hover { background: var(--chat-soft); }
-#waifu-chat .conv-confirm-del + .conv-confirm-cancel { border-color: var(--chat-line); }
+#waifu-chat .conv-row-menu { min-width: 132px; }
+#waifu-chat .conv-search-form { margin: 0; min-width: 0; }
+#waifu-chat .conv-search { box-sizing: border-box; width: 100%; }
+#waifu-chat .conv-cancel-delete { display: none; }
+#waifu-chat .conv-row.del-confirm .conv-cancel-delete { display: flex; }
+#waifu-chat .conv-row.del-confirm .conv-menu-item:not(.danger):not(.conv-cancel-delete) { display: none; }
+#waifu-chat .conv-row.del-confirm .conv-menu-item.danger { background: var(--chat-danger-soft); }
 #waifu-chat .conv-list-empty { padding: 30px 12px; color: var(--chat-muted); font-size: 12px; }
 #waifu-chat .conv-sizer:hover { background: var(--chat-accent-soft); border-right: 1px solid var(--chat-accent); }
 #waifu-chat .conv-sizer { left: calc(var(--drag-w) + var(--side-w) - 3px); top: var(--drag-h); border-color: var(--chat-line); }

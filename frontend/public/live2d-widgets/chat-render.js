@@ -99,7 +99,9 @@
       </nav>
       <div id="waifu-conv-panel" class="waifu-conv-panel" role="region" aria-label="会话历史">
         <div class="conv-list-head"><span class="conv-list-title">会话历史</span>
-          <input type="search" class="conv-search" id="conv-search" aria-label="搜索会话" placeholder="搜索会话" autocomplete="off">
+          <form class="conv-search-form" role="search" autocomplete="off">
+            <input type="search" name="conversation-query" class="conv-search" id="conv-search" aria-label="搜索会话" placeholder="搜索会话" autocomplete="off" autocapitalize="none" autocorrect="off" spellcheck="false" data-lpignore="true" data-1p-ignore="true" data-form-type="other">
+          </form>
         </div><div class="conv-list-body" id="conv-list"></div>
       </div>
     </section>
