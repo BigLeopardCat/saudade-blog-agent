@@ -124,7 +124,7 @@ def test_small_sample_percentiles_are_not_reported_as_p95(tmp_path):
 @pytest.mark.parametrize("prices", [(1, None, 0), (1, 2, -1), (float("nan"), 2, 0)])
 def test_incomplete_or_invalid_prices_are_rejected(prices):
     with pytest.raises(ValueError):
-        token_cost_report._parse_price(SimpleNamespace(
+        token_cost_report.parse_prices(SimpleNamespace(
             price_in=prices[0], price_out=prices[1], price_cache=prices[2]))
 
 
