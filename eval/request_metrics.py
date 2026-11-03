@@ -123,6 +123,7 @@ def collect(paths):
                        "end_reasons": dict(Counter(r["end_reason"] for r in rows)),
                        "started_calls": sum(r["started_calls"] for r in rows),
                        "model_phases": latency_metrics.request_phases(rows),
+                       **usage.provider_costs(totals),
                        **_discovery_totals(rows),
                        "errored_calls": sum(r["errored_calls"] for r in rows),
                        "handoff_reasons": dict(Counter(reason for r in rows
