@@ -38,6 +38,7 @@ def conversation_context(principal) -> dict:
                                            else "杂鱼" if role == ROLE_ZAKO else "你")},
         "permissions": sorted(scopes_for(role)),
         "manual_ui": {
+            "article_comments": {"location": "after article body"},
             "public_pages": public_navigation() if role == ROLE_ZAKO else {},
             "effects": {"entry": "mascot star button",
                         "options": ["sakura", "rain", "snow"]},

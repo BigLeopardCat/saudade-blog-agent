@@ -118,6 +118,7 @@ def test_effect_switch_uses_absolute_states_and_standard_artifacts():
         {"kind": "effect", "effect": "snow", "action": "on"},
     ]
     assert json.loads(result.content)["status"] == "sent"
+    assert json.loads(result.content)["completion_confirmed"] is False
     assert json.loads(result.content)["observed"] is None
     assert not any(word in result.content for word in ("EFFECT:", "DARKMODE:", "__CMD__"))
     again = browser.set_page_appearance.invoke(_call("set_page_appearance", args), config=_config())
@@ -372,6 +373,7 @@ def test_client_without_feedback_only_gets_a_queued_action(name, args):
     result = browser.tools(_config())[name].invoke(_call(name, args), config=_config())
     facts = json.loads(result.content)
     assert facts['status'] == 'sent' and facts['observed'] is None
+    assert facts['completion_confirmed'] is False
     assert facts['scope'] == 'browser'
     assert result.artifact['kind'] == 'ok' and result.artifact['receipts']
     assert all('browser_status' not in row for row in result.artifact['receipts'])
