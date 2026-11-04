@@ -200,3 +200,20 @@ def test_authorized_menus_keep_deletion_distinct_from_read_and_global_scope():
     assert {'prepare_announcement_create', 'prepare_announcement_update',
             'prepare_announcement_delete', 'prepare_announcement_deletions'} <= set(
                 admin['admin_announcements'])
+
+
+@pytest.mark.parametrize('copy_type,expected', [('all', 'all'),
+    ('personal_notice_copies', 'notice'), ('announcement_copies', 'announcement')])
+def test_notification_copy_filter_preserves_the_backend_scope(service, copy_type, expected):
+    result = prepare(notification, notification_type=copy_type)
+    assert signed(result)['specs'][0]['args']['kind'] == expected
+    assert service['requests'][0][1]['kind'] == expected
+    assert '/notification-deletions/prepare' in service['requests'][0][0]
+    assert service['writes'] == 0
+
+
+def test_unknown_or_obsolete_copy_filter_cannot_silently_expand_scope(service):
+    for args in ({'notification_type': 'notice'}, {'kind': 'notice'}):
+        with pytest.raises(ValidationError):
+            prepare(notification, **args)
+    assert not service['requests']
