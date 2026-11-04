@@ -87,8 +87,8 @@ def _run() -> None:
           len(_root().handlers) == 1, f"handlers={len(_root().handlers)}")
     check("……且那一个就是我模块装的（带 _TraceIdFilter）",
           len(ours) == 1, f"ours={len(ours)}")
-    check("格式里有 tid=%(trace_id)s（trace_id 靠它进 agent.log）",
-          len(ours) == 1 and "tid=%(trace_id)s" in ours[0].formatter._fmt,
+    check("格式里有 request_id=%(trace_id)s（trace_id 靠它进 agent.log）",
+          len(ours) == 1 and "request_id=%(trace_id)s" in ours[0].formatter._fmt,
           ours[0].formatter._fmt if ours else "（没有我们的 handler）")
     check("root 级别跟着 settings.log_level", _root().level == level, f"{_root().level} vs {level}")
     check("① 的两次调用本身没有往 stdout 写东西（配日志不该打日志）", out == "", repr(out[:80]))
@@ -121,12 +121,12 @@ def _run() -> None:
 
     out = _capture(_emit)
     lines = [ln for ln in out.splitlines() if "hello-" in ln]
-    check("③ 走 contextvar 的 trace_id 进了格式（tid=t-1234）",
-          any("tid=t-1234" in ln and "hello-tid" in ln for ln in lines), repr(lines[:2]))
+    check("③ 走 contextvar 的 trace_id 进了格式（request_id=t-1234）",
+          any("request_id=t-1234" in ln and "hello-tid" in ln for ln in lines), repr(lines[:2]))
     check("日志包含实际处理进程编号",
           all(f"pid={os.getpid()}" in line for line in lines))
-    check("③ reset 后回落默认值（tid=-），不留上一条请求的 id",
-          any("tid=-" in ln and "hello-plain" in ln for ln in lines), repr(lines[:2]))
+    check("③ reset 后回落默认值（request_id=-），不留上一条请求的 id",
+          any("request_id=-" in ln and "hello-plain" in ln for ln in lines), repr(lines[:2]))
     check("③ 两条记录恰两行——同一 stdout 上连配两次也没制造重复行",
           len(lines) == 2, f"lines={len(lines)}；{lines[:4]}")
 

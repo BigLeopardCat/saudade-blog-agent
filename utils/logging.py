@@ -2,7 +2,9 @@
 
 import contextvars
 import logging
+import re
 import sys
+import uuid
 
 from config import settings
 
@@ -41,8 +43,8 @@ def setup_logging() -> None:
     handler.setFormatter(
         logging.Formatter(
             fmt=("%(asctime)s | %(name)-24s | %(levelname)-7s | "
-                 "pid=%(process)d | tid=%(trace_id)s | %(message)s"),
-            datefmt="%Y-%m-%d %H:%M:%S",
+                 "service=saudade-agent | pid=%(process)d | request_id=%(trace_id)s | %(message)s"),
+            datefmt="%Y-%m-%dT%H:%M:%S%z",
         )
     )
 
@@ -54,3 +56,10 @@ def setup_logging() -> None:
     # Silence noisy third-party loggers
     for noisy in ("httpx", "httpcore", "urllib3", "openai"):
         logging.getLogger(noisy).setLevel(max(level, logging.WARNING))
+
+
+def request_id(value: str | None) -> str:
+    """Accept a bounded correlation value; never put untrusted control text in logs or paths."""
+    if value and re.fullmatch(r"[A-Za-z0-9_-]{1,128}", value):
+        return value
+    return uuid.uuid4().hex

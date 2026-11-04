@@ -31,8 +31,8 @@ def create_app() -> FastAPI:
     application.state.workers = None
     application.state.chat_slots = None
     application.state.scheduling = None
-    application.middleware("http")(trace_id_middleware)
     application.middleware("http")(body_limit_middleware)
+    application.middleware("http")(trace_id_middleware)
     for router in (
         chat.router,
         automations.router,
