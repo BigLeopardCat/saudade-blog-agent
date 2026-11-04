@@ -226,7 +226,8 @@ def tools(config):
     )
     navigation = navigate_page.model_copy(
         update={
-            "description": "Open a site page immediately when requested. Pages available to this caller: "
+            "description": "Open a site page immediately when requested. "
+            "Pages available to this caller: "
             + pages
             + ". Article: /article/<id>; category: /category/<name>. Use the source article link "
             "for a chosen recommendation. No site-map lookup is needed for the known pages. "
