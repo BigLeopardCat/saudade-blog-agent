@@ -79,7 +79,7 @@ def _parse_editorconfig(text: str) -> tuple[dict, dict]:
 
 def _check_changelog() -> None:
     """Validate the single changelog using the repository timezone."""
-    print("\n③ CHANGELOG：日期倒序、每条有正文、日期有效且不是未来")
+    print("\n③ CHANGELOG：版本条目有正文；日期存在时有效且非未来")
     cl = ROOT / "CHANGELOG.md"
     check("CHANGELOG.md 在位", cl.is_file())
     if not cl.is_file():
@@ -87,16 +87,16 @@ def _check_changelog() -> None:
     text = cl.read_text(encoding="utf-8")
     # 只认行首的 `## YYYYMMDD`（正文里提到日期的句子不算条目）
     secs = [(m.group(1), m.start(), m.end())
-            for m in re.finditer(r"^##\s+(\d{8})\s*$", text, re.M)]
-    check("至少有一条日期条目", len(secs) >= 1, f"{len(secs)} 条")
-    dates = [d for d, _, _ in secs]
+            for m in re.finditer(r"^##\s+(Unreleased|\d+\.\d+\.\d+[^\n]*|\d{8})\s*$", text, re.M)]
+    check("存在未发布或版本变更条目", len(secs) >= 1, f"{len(secs)} 条")
+    dates = [d for d, _, _ in secs if re.fullmatch(r"\d{8}", d)]
     check("日期倒序（最新在最上）", dates == sorted(dates, reverse=True), "、".join(dates))
     empty = []
     for i, (d, _s, e) in enumerate(secs):
         body = text[e:secs[i + 1][1] if i + 1 < len(secs) else len(text)]
         if not re.search(r"^-\s+\S", body, re.M):
             empty.append(d)
-    check("每条日期下都有 `- ` 正文（哪怕是「这天无行为变更」那一行）",
+    check("每个版本条目都有变更正文",
           not empty, "、".join(empty))
     check("日期没有重复", len(dates) == len(set(dates)))
     check("没有遗留合并冲突标记", not re.search(r"^(?:<<<<<<<|=======|>>>>>>>)", text, re.M))
@@ -107,7 +107,7 @@ def _check_changelog() -> None:
             valid.append(date <= _today_cn())
         except ValueError:
             valid.append(False)
-    check("日期有效且不是未来", bool(dates) and all(valid))
+    check("日期有效且不是未来", all(valid))
     # 反面锁：**判据本身必须环境无关**。上面那条在另一个时区里跑整个套件再判一次——
     # 子进程里所有断言都重跑，所以"有一次读回了跑它的那台机器的钟"就会红。用环境变量
     # 挡住递归（子进程不再套娃）；America/New_York 与 +08:00 的日期在一天里大半时间不同，

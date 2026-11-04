@@ -1,7 +1,7 @@
 # RAG 文章检索与证据读取
 
 当前契约由版本化语料快照、结构感知检索、正文范围读取和证据检查组成。
-决策见 [ADR-0017](adr/adr-0017-versioned-rag-evidence.md)；旧实验和基线保存在 Git 历史。
+决策见 [架构边界](agent-architecture.md)；旧实验和基线保存在 Git 历史。
 
 ## 1. 数据与权限边界
 
@@ -149,5 +149,3 @@ contentRevision 是包含解析策略及库版本、标题和原文的读取视�
 - [Lucene BM25Similarity](https://lucene.apache.org/core/9_9_0/core/org/apache/lucene/search/similarities/BM25Similarity.html)：平均长度采用总词频/文档数。
 - [Azure RAG chunking](https://learn.microsoft.com/en-us/azure/architecture/ai-ml/guide/rag/rag-chunking-phase)：按结构和预算切分并验证效果。
 - [Lance table format](https://lance.org/format/table/)：不可变文件与版本化 manifest 的提交思想；本项目没有引入 Lance 依赖。
-
-成熟库迁移的范围、固定开发样本与CPU微基准见[专项记录](rag-library-migration.md)。

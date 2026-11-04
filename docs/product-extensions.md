@@ -1,51 +1,28 @@
-# 产品与领域装配
+# 产品装配与领域扩展
 
-`AgentRuntime` 必须通过 `application=` 显式接收产品配置，博客服务在 `agent/composition.py` 装配。
-执行仍由 LangChain `create_agent` 与 LangGraph 持久审批图负责。
+运行时通过应用入口显式装配产品。博客人设、页面上下文和领域目录属于产品适配，通用执行循环不默认构造 BlogApplication。
 
-| 位置 | 职责 |
-| --- | --- |
-| `agent/runtime` | 会话和框架接线、预算、取消、事实存储、顺序执行与审批恢复 |
-| `agent/products/blog/application.py` | 博客产品的显式装配入口 |
-| `agent/products/blog` | 人设、提示词、工具目录、历史访问、调用授权和文章证据 middleware |
-| `agent/domains` | 业务接口、目标和版本核验、确认准备及执行回执 |
-| `examples/inventory_agent.py` | 无博客工具、人设或站点 URL 的只读库存示例 |
+## 增加能力
 
-## 添加能力
+1. 先在业务后端提供带权限、版本条件和分页的 API。计算、事务及幂等尽量位于事实归属服务。
+2. 在 `tools/` 编写有界适配器，区分成功、空结果、冲突、不可用和结果未知。
+3. 在 `agent/domains/` 登记领域元数据、工具及 scope。模型决定是否发现和加载领域。
+4. 写入提供准备工具和独立执行能力，复用签名确认及执行账，不能让工具自行批准。
+5. 在产品应用中显式装配目录；人设只影响表达，不能决定工具权限。
+6. 加入领域单测、真实 ToolNode/middleware 准入测试及完整任务评测。
 
-为现有博客添加领域时，定义标准工具并在产品目录显式注册，声明工具说明与相应权限。
-新增业务规则优先使用 LangChain `AgentMiddleware`；领域状态由 middleware 的标准状态 schema
-声明，持久子图保存并在确认后恢复。领域说明和参数只描述能力，不做关键词意图路由。
+工具结果使用不可变 `ToolResult`，单向映射为框架 `ToolMessage`。正文供模型阅读，artifact 保存供程序消费的结构化事实。客户端操作使用类型化状态与执行账引用，不从自然语言推断完成。
 
-博客的 `ArticleMiddleware` 提供文章结果渲染、正文证据与引用校验。
-`BlogToolMiddleware` 在每次新调用前核验身份和权限，并核验浏览器及设备回执。
-通用顺序 middleware 包住整个处理链，确保拒绝也推进批次、回执在后续准备前被收集。
+## 依赖与加载
 
-工具结果渲染接口用于保留现有结构化工具结果及有界显示。
-原始媒体只在请求内使用；标准 Agent 状态保存引用。提示词、工具说明及其顺序保持稳定，
-新增 middleware 本身不会发起模型调用。
+领域不依赖 `agent/products/` 的博客实现。共享权限和操作协议属于应用边界，产品从外部注入具体实现。
 
-## 替换产品
+按需加载首先指模型可见的工具 schema；当前 registry 的 Python 导入仍可以是静态导入。只有测出启动时间或可选依赖成本后才引入延迟导入，不能把 schema 加载误写成 Python 插件热加载。
 
-库存示例通过 `application=InventoryApplication()` 接入同一个运行时。
-它显式提供提示词、工具目录、历史工具访问规则、调用者上下文及只读确认策略；
-共享会话持久化、模型传输、工具发现和预算。示例工具使用合成数据。
+## 选择工具或工作流
 
-```python
-from langgraph.checkpoint.memory import InMemorySaver
+通用对话由 Agent 选择工具。业务 API 可以封装稳定事务；只有步骤长期稳定、需要确定性事务或后台持久执行时才引入固定工作流。避免同时暴露重复的细粒度工具与同义工作流，新增能力不另建 planner、executor 或工具 DSL。
 
-from agent.runtime.service import AgentRuntime
-from agent.runtime.checkpoint_conversations import CheckpointConversationStore
-from examples.inventory_agent import InventoryApplication
+## 示例验证
 
-runtime = AgentRuntime(
-    CheckpointConversationStore(InMemorySaver()),
-    application=InventoryApplication(),
-)
-```
-
-内存 saver 适合示例。生产部署沿用持久化配置、可信身份以及业务后端授权。
-新增写入领域还须实现有效确认绑定、版本校验和幂等执行，不因接入框架而自动获得这些保证。
-
-验证：`tests/runtime/test_product_assembly.py` 覆盖非博客读取、多轮来源事实与共享预算；
-博客相关 suites 继续覆盖权限、卡片、回放、文章证据、缓存前缀和多模态行为。
+图片领域的发现、准备审批及拒绝直接写入见 `tests/domains/test_image_tool_dispatch.py`。同样的接线测试应覆盖新增领域；单独调用工具函数无法证明线上 middleware 允许模型调用它。
