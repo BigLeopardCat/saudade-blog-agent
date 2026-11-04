@@ -8,7 +8,8 @@ DOMAIN_DESCRIPTIONS = {
     "admin_image_generation": "Administrator AI image generation and article-cover illustration. "
                               "Prepare exact prompts and optional gallery references for human "
                               "approval before a paid API call; inspect status and show actual "
-                              "results for separate approval into the gallery. No automatic cover writes.",
+                              "results for separate approval into the gallery. "
+                              "No automatic cover writes.",
     "admin_gallery": "Administrator image library: search filenames/descriptions and folders, "
                      "inspect candidate images when needed, prepare metadata/move/favorite changes "
                      "and article cover confirmation. Start with the bounded index, not pixels.",
