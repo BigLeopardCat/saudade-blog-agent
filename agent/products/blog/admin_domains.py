@@ -6,6 +6,7 @@ from agent.authz import SCOPE_ADMIN_CONSOLE
 from agent.domains import article_editor
 from agent.domains.account_actions import preparation as accounts
 from agent.domains.admin_writes import available
+from agent.domains.image_generation import tools as image_generation
 from agent.domains.announcements import preparation as announcements
 from agent.domains.article_actions import preparation as articles
 from agent.domains.article_tags import preparation as article_tags
@@ -22,6 +23,7 @@ from agent.products.blog.read_tools import scoped_reads_enabled
 _PREPARATIONS = (
     ("admin_account_actions", accounts),
     ("admin_gallery", gallery_preparation),
+    ("admin_image_generation", image_generation),
     ("admin_catalog", articles),
     ("admin_catalog", article_tags),
     ("admin_categories", categories),
@@ -47,6 +49,9 @@ def domains(config, can_prepare, reads):
         return {}
     selected = {name: dict(tools) for name, tools in reads.items()}
     selected["admin_gallery"] = gallery_reads.tools()
+    selected["admin_image_generation"] = {
+        image_generation.get_image_generation.name: image_generation.get_image_generation
+    }
     editor_tools = article_editor.tools(config, can_prepare)
     if editor_tools:
         selected["article_editor"] = editor_tools

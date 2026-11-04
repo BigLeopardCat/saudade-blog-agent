@@ -57,6 +57,11 @@ _ROLE_SCOPES: dict[str, frozenset[str]] = {
 
 TOOL_SCOPE: dict[str, str] = {
     "read_current_article": SCOPE_ADMIN_CONSOLE,
+    "prepare_image_generation": SCOPE_WRITE_CONSOLE,
+    "get_image_generation": SCOPE_ADMIN_CONSOLE,
+    "prepare_generated_image_acceptance": SCOPE_WRITE_CONSOLE,
+    "start_image_generation": SCOPE_WRITE_CONSOLE,
+    "accept_generated_image": SCOPE_WRITE_CONSOLE,
     "get_gallery_index": SCOPE_ADMIN_CONSOLE,
     "list_gallery_folders": SCOPE_ADMIN_CONSOLE,
     "get_gallery_image": SCOPE_ADMIN_CONSOLE,
