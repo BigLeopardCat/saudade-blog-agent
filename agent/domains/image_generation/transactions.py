@@ -86,7 +86,16 @@ class Operation:
             if action == "approve"
             else f"生成结果已存入图库，图片编号 {value['imageId']}。"
         )
-        return base.ok(text, meta={"image_job": value, "approved_args": args})
+        return base.ok(
+            text,
+            meta={
+                "image_job": {
+                    key: value.get(key)
+                    for key in ("id", "status", "requestHash", "outputHash", "imageId")
+                },
+                "approved_args": args,
+            },
+        )
 
 
 def receipt(grant, name, args, result):
