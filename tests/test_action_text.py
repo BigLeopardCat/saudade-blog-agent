@@ -37,7 +37,7 @@ def _full(name, args=None, meta=None) -> str:
 
 _RUST_PAIR_RE = re.compile(
     r'let (\w+) = json!\(\s*\{'
-    r'|assert_eq!\(render_exec_row\(&(\w+)\)\s*,\s*'
+    r'|assert_eq!\(\s*render_exec_row\(&(\w+)\)\s*,\s*'
     r'("(?:[^"\\]|\\.)*"(?:\s*\.to_string\(\))?(?:\s*,\s*"(?:[^"\\]|\\.)*")*)\s*,?\s*\)'
 )
 
@@ -318,10 +318,14 @@ def test_action_text():
 
     print("\n④ 接线锁：Python 回执提供 action，Rust 只读顶层字段")
     _rs = _parent_repo.read(
-        "src/routes/chat.rs",
+        "src/routes/chat/execution_history.rs",
         why="进程行/台账行的渲染**已经搬到 Python**（`agent/action_text.py`）：Rust 那半若"
         "不读 `row[\"action\"]`，这个字段就是个摆设——两侧测试都绿，而线上一个字都没变")
     if _rs is not None:
+        _fixtures = _parent_repo.read("src/routes/chat/tests.rs", why="实际回执排版断言")
+        if _fixtures is not None:
+            _rs += "\n" + _fixtures
+
         def _fn(src: str, name: str) -> str:
             """取顶格函数的函数体（到下一个顶格 `}` 为止）。取不到返回空串，
         让断言报 ❌ 而不是抛栈——**"改了名"和"删了"都该是红**，不该是崩。"""
@@ -424,3 +428,11 @@ if __name__ == "__main__":
 def test_todo_batch_receipt_uses_selected_count():
     items = [{"item_id": 1}, {"item_id": 3}]
     assert _full("delete_dashboard_todos", {"items": items}) == "删除 2 项待办"
+
+
+def test_rust_fixture_whitespace_does_not_hide_comparison():
+    declaration = 'let row = json!({"tool":"read_messages", "args":{"all":"True"}});'
+    wanted = {"tool": "read_messages", "args": {"all": "True"}}
+    for padding in ("", " ", "\n    "):
+        source = declaration + 'assert_eq!(' + padding + 'render_exec_row(&row), "receipt");'
+        assert _rust_pairs(source) == [(wanted, "receipt")]
