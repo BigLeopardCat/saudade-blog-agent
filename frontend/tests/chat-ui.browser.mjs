@@ -525,6 +525,9 @@ try {
   await reloadPage.goto(origin);
   await reloadPage.waitForFunction(() => !!window.__chatTest?.ctx.state.conv);
   const reloadBefore = streamCount();
+  const browserAcknowledged = reloadPage.waitForResponse(response =>
+    new URL(response.url()).pathname === '/api/chat/stream'
+      && !!response.request().postDataJSON()?.browser_result);
   nextMode = 'navigate';
   interruptNavigationReply = true;
   await reloadPage.locator('#chat-input').fill('去留言板');
@@ -534,9 +537,8 @@ try {
     const value = JSON.parse(sessionStorage.getItem('saudade-browser-action-pending') || 'null');
     return value?.phase === 'reply';
   });
-  while (!requests.slice(reloadBefore).some(r => r.body.browser_result)) {
-    await reloadPage.waitForTimeout(20);
-  }
+  // The response headers prove this task's observation reached the fixture server.
+  await browserAcknowledged;
   await reloadPage.reload();
   await reloadPage.waitForFunction(() => [...document.querySelectorAll('.msg-text')]
     .some(el => el.textContent.includes('已经到留言板')));
