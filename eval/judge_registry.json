@@ -12,7 +12,7 @@
         0
       ],
       "agent/action_text.py": [
-        105,
+        110,
         0
       ],
       "agent/adminops_account.py": [
@@ -946,10 +946,22 @@
       "agent/domains/gallery/__init__.py": [
         0,
         0
+      ],
+      "agent/domains/image_generation/__init__.py": [
+        0,
+        0
+      ],
+      "agent/domains/image_generation/tools.py": [
+        0,
+        0
+      ],
+      "agent/domains/image_generation/transactions.py": [
+        0,
+        0
       ]
     },
     "total": [
-      422,
+      427,
       33
     ]
   },
@@ -979,10 +991,10 @@
       "file": "agent/action_text.py",
       "kind": "collection",
       "name": "_NOARG_VERB",
-      "size": 35,
+      "size": 40,
       "category": "system_data",
       "q": "_NOARG_VERB",
-      "why": "工具名 → 动作文案的渲染表（键是工具名，无参调用时的显示字）；图库工具新增七条展示名称，不参与意图路由或授权。"
+      "why": "工具名 → 动作文案的渲染表（键是工具名，无参调用时的显示字）；图库工具新增七条展示名称，不参与意图路由或授权。；生图新增五条动作名称，只供进度和回执展示。"
     },
     {
       "id": "agent/action_text.py::_REF_SOURCE_CN",
