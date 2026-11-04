@@ -657,6 +657,7 @@ try {
   const stoppedProgress = await page.locator('.agent-process-line').allTextContents();
   await page.waitForFunction(() => document.getElementById('chat-send').dataset.phase === 'paused');
   assert.equal(await page.locator('#chat-send').getAttribute('aria-label'), '继续任务');
+  await page.getByText('可以继续任务，也可以输入新的要求。',{exact:true}).waitFor();
   assert.match(await page.locator('#chat-messages').innerText(), /可以继续任务/);
   assert.doesNotMatch(await page.locator('#chat-messages').innerText(), /这一轮不会再回答/);
   await page.locator('#waifu-chat').screenshot({ path: path.join(output, 'desktop-paused.png') });
