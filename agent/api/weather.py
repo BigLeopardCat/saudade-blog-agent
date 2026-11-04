@@ -47,8 +47,8 @@ class WeatherSnapshot(BaseModel):
     humidity_percent: float = Field(ge=0, le=100, allow_inf_nan=False)
     wind_speed_kmh: float = Field(ge=0, le=500, allow_inf_nan=False)
     valid_at: StrictInt = Field(gt=0)
-    source: Literal["Open-Meteo"] = "Open-Meteo"
-    location_source: Literal["GeoJS IP", "Cloudflare IP"]
+    source: Literal["Open-Meteo"]
+    location_source: Literal["GeoJS IP"]
 
     @model_validator(mode="after")
     def usable_snapshot(self):
