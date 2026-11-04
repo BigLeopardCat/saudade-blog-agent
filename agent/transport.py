@@ -45,7 +45,8 @@ def command_wire(command: dict) -> str:
         return "DARKMODE:" + str(command["mode"])
     if kind == "appearance" and command.get("settings"):
         return "APPEARANCE:" + json.dumps(command["settings"], separators=(",", ":"))
-    if kind == "article_editor" and command.get("operation") in {"read", "propose", "summary"}:
+    if kind == "article_editor" and command.get("operation") in {
+            "read", "propose", "summary", "prepare_publish"}:
         return "ARTICLE_EDITOR:" + json.dumps(command, separators=(",", ":"))
     if kind:
         raise TransportProtocolError(f"unsupported receipt command kind: {kind}")

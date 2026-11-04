@@ -18,7 +18,8 @@ from agent.runtime.client_actions import await_result as _await_browser
 from agent.runtime.tool_evidence import observed
 from agent.runtime.writes import bound_context
 
-NAMES = frozenset({"read_current_article", "propose_article_edits", "prepare_article_summary"})
+NAMES = frozenset({"read_current_article", "propose_article_edits", "prepare_article_summary",
+                   "prepare_article_publication"})
 
 EditorId = Annotated[StrictStr, Field(min_length=1, max_length=64)]
 Revision = Annotated[int, Field(strict=True, ge=0, le=9_007_199_254_740_991)]
@@ -71,7 +72,7 @@ def read_current_article(
     offset: int = 0,
     limit: int = 12000,
 ) -> str:
-    """Read the currently OPEN article editor's live unsaved draft and summary, admin only.
+    """Read the currently OPEN article editor's live unsaved title, body and summary, admin only.
     Returns editor_id and revision for subsequent edits, content slice, total_chars and
     next_offset (null at end), all in Unicode code points. Use further offsets for long
     drafts. This is draft content,
@@ -88,18 +89,25 @@ def read_current_article(
 def propose_article_edits(
     editor_id: EditorId,
     revision: Revision,
-    edits: Annotated[list[TextEdit], Field(min_length=1, max_length=20)],
     tool_call_id: Annotated[str, InjectedToolCallId],
     config: RunnableConfig,
+    edits: Annotated[list[TextEdit], Field(max_length=20)] = [],
+    title: Annotated[str | None, Field(max_length=255)] = None,
 ) -> str:
-    """Propose exact replacements in the current draft using the editor_id/revision just read.
+    """Propose title and/or body changes using the editor_id/revision just read.
+    Supply title to rename the article; edits may be empty for a title-only proposal.
     Each old_text must match exactly once in that draft; include enough context to make it
     unique. Empty old_text creates a blank document only. Disjoint edits are reviewed with
-    red deletions/green additions and user accept/reject controls. No body is applied or
+    red deletions/green additions and user accept/reject controls. No change is applied or
     published by this tool. Status proposed means awaiting review, never 'already edited'.
     """
+    if (not edits and title is None) or (title is not None and not title.strip()):
+        raise ToolException("请提供非空标题或正文修改。")
     if sum(len(item.old_text) + len(item.new_text) for item in edits) > 64000:
         raise ToolException("修改提案过大，请分批修改。")
+    arguments = {"edits": [item.model_dump() for item in edits]}
+    if title is not None:
+        arguments["title"] = title
     return _output(_run(
         config,
         "propose_article_edits",
@@ -107,7 +115,7 @@ def propose_article_edits(
         tool_call_id,
         editor_id=editor_id,
         revision=revision,
-        edits=[item.model_dump() for item in edits],
+        **arguments,
     ))
 
 
@@ -153,12 +161,32 @@ def prepare_article_summary(
     raise ToolException("请先读取当前编辑草稿，并使用读取回执中的编辑器标识和版本。")
 
 
+@tool(response_format="content_and_artifact")
+def prepare_article_publication(
+    editor_id: EditorId,
+    revision: Revision,
+    tool_call_id: Annotated[str, InjectedToolCallId],
+    config: RunnableConfig,
+) -> str:
+    """Open the current editor's publication confirmation without leaving the page.
+    Read the current editor first and use its editor_id/revision. Finish accepting or
+    rejecting title/body suggestions first. The user reviews publication settings and
+    clicks Publish in that dialog; its normal form validation, save and version checks
+    apply. This tool opens a dialog only. publication_ready never means published.
+    For this live draft, use this tool rather than changing the saved article's status.
+    """
+    return _output(_run(config, "prepare_article_publication", "prepare_publish",
+                        tool_call_id, editor_id=editor_id, revision=revision))
+
+
 def tools(config, can_prepare=True):
     return {
         item.name: item.model_copy(
             update={"handle_tool_error": True, "handle_validation_error": str}
         )
-        for item in (read_current_article, propose_article_edits, prepare_article_summary)
+        for item in (read_current_article, propose_article_edits, prepare_article_summary,
+                     prepare_article_publication)
         if available(config, item.name)
-        and (can_prepare or item.name != "prepare_article_summary")
+        and (can_prepare or item.name not in {
+            "prepare_article_summary", "prepare_article_publication"})
     }

@@ -68,7 +68,7 @@
       const appearance = command.kind === 'appearance';
       const editor = command.kind === 'article_editor';
       if (!appearance && !editor && command.kind !== 'navigate') return false;
-      if (editor && !['read', 'propose', 'summary'].includes(command.operation)) return false;
+      if (editor && !['read', 'propose', 'summary', 'prepare_publish'].includes(command.operation)) return false;
       const values = Object.entries(command.settings || {});
       if (appearance && (!values.length || !applyAppearance || !values.every(([name, mode]) =>
         ['dark_mode', 'sakura', 'rain', 'snow'].includes(name) && ['on', 'off'].includes(mode)))) return false;
