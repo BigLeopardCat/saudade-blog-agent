@@ -118,6 +118,11 @@ flowchart LR
 │   ├── domains/article_tags/transactions.py             # 当前生产代码模块
 │   ├── domains/browser.py                               # 当前生产代码模块
 │   ├── domains/conversation_images.py                   # 当前会话历史原图的鉴权回看
+│   ├── domains/gallery/__init__.py  # 图库领域工具
+│   ├── domains/gallery/targets.py  # 图库领域工具
+│   ├── domains/gallery/reads.py  # 图库领域工具
+│   ├── domains/gallery/preparation.py  # 图库领域工具
+│   ├── domains/gallery/transactions.py  # 图库领域工具
 │   ├── domains/catalog.py                               # 当前生产代码模块
 │   ├── domains/categories/__init__.py                   # 当前生产代码模块
 │   ├── domains/categories/preparation.py                # 当前生产代码模块

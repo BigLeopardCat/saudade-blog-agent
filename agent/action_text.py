@@ -25,6 +25,13 @@ _ON_WORDS = frozenset({"on", "开", "开启", "打开", "true", "1", "yes", "y"}
 
 # Display labels for parameterless read operations.
 _NOARG_VERB = {
+    "get_gallery_index": "检索图库",
+    "list_gallery_folders": "查看图库文件夹",
+    "get_gallery_image": "查看图片",
+    "prepare_gallery_image_change": "准备图库修改",
+    "prepare_article_cover": "准备文章封面",
+    "update_gallery_image": "修改图库信息",
+    "set_article_cover": "设置文章封面",
     "list_guestbook": "查看留言板",
     "list_talks": "查看说说",
     "list_notes": "查看文章列表",
