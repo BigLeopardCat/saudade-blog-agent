@@ -4,6 +4,7 @@
 
 import io
 import logging
+import os
 import sys
 from pathlib import Path
 
@@ -122,6 +123,8 @@ def _run() -> None:
     lines = [ln for ln in out.splitlines() if "hello-" in ln]
     check("③ 走 contextvar 的 trace_id 进了格式（tid=t-1234）",
           any("tid=t-1234" in ln and "hello-tid" in ln for ln in lines), repr(lines[:2]))
+    check("日志包含实际处理进程编号",
+          all(f"pid={os.getpid()}" in line for line in lines))
     check("③ reset 后回落默认值（tid=-），不留上一条请求的 id",
           any("tid=-" in ln and "hello-plain" in ln for ln in lines), repr(lines[:2]))
     check("③ 两条记录恰两行——同一 stdout 上连配两次也没制造重复行",
