@@ -1,0 +1,44 @@
+{
+  "version": 1,
+  "disable_existing_loggers": false,
+  "filters": {
+    "request_context": {
+      "()": "utils.logging.RequestContextFilter"
+    }
+  },
+  "formatters": {
+    "standard": {
+      "()": "utils.logging.standard_formatter"
+    }
+  },
+  "handlers": {
+    "console": {
+      "class": "logging.StreamHandler",
+      "stream": "ext://sys.stdout",
+      "formatter": "standard",
+      "filters": [
+        "request_context"
+      ]
+    }
+  },
+  "root": {
+    "handlers": [
+      "console"
+    ],
+    "level": "INFO"
+  },
+  "loggers": {
+    "uvicorn": {
+      "handlers": [],
+      "propagate": true
+    },
+    "uvicorn.error": {
+      "handlers": [],
+      "propagate": true
+    },
+    "uvicorn.access": {
+      "handlers": [],
+      "propagate": true
+    }
+  }
+}

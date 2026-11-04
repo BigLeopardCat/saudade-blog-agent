@@ -5,6 +5,7 @@ import os
 import signal
 import subprocess
 import sys
+from datetime import datetime
 from pathlib import Path
 
 from utils import trace
@@ -46,3 +47,18 @@ def test_trace_content_is_private_even_with_a_permissive_process_umask(tmp_path)
     finally:
         os.umask(previous)
     assert Path(path).stat().st_mode & 0o777 == 0o600
+
+
+def test_framework_startup_logs_have_process_time_and_service_before_app_startup():
+    code = """
+import json,logging.config
+from pathlib import Path
+logging.config.dictConfig(json.loads(Path('config/logging.json').read_text()))
+logging.getLogger('uvicorn.error').info('framework-startup-fixture')
+"""
+    result = subprocess.run([sys.executable, '-c', code], cwd=ROOT, capture_output=True,
+                            text=True, timeout=15, check=True)
+    lines = [line for line in result.stdout.splitlines() if 'framework-startup-fixture' in line]
+    assert len(lines) == 1
+    assert all(value in lines[0] for value in ('service=saudade-agent', 'pid=', 'request_id=-'))
+    assert datetime.fromisoformat(lines[0].split(' | ')[0]).utcoffset() is not None
