@@ -169,7 +169,6 @@
   window.__waifuRender(ctx);
   const engine = window.__waifuEngine(ctx);
   if (!engine) { console.error('[agent-chat] chat-engine 初始化失败'); return; }
-  window.__waifuStream(ctx, engine);
   const renderer = window.__waifuRenderer();
 
   // ── 渲染引擎三件套（顺序不能换）──────────────────────────────────────────

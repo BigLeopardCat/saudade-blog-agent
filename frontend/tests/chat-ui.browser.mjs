@@ -5,6 +5,7 @@ import { createServer } from 'node:http';
 import { readFile, mkdir, writeFile } from 'node:fs/promises';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import path from 'node:path';
+import { assertBootstrapRecovery } from './chat-bootstrap.browser.mjs';
 
 const frontend = path.resolve(fileURLToPath(new URL('../', import.meta.url)));
 const output = process.env.CHAT_UI_PREVIEW_DIR || '/tmp/chat-ui-preview';
@@ -182,7 +183,8 @@ const server = createServer(async (req, res) => {
       if (url.pathname === '/api/chat/discard') return json(res, { ok: true });
       throw new Error('Unexpected fixture API: ' + url.pathname);
     }
-    const file = ['/', '/guestbook'].includes(url.pathname) ? path.join(frontend, 'tests/fixtures/chat-ui.html')
+    const file = url.pathname === '/bootstrap' ? path.join(frontend, 'tests/fixtures/chat-bootstrap.html')
+      : ['/', '/guestbook'].includes(url.pathname) ? path.join(frontend, 'tests/fixtures/chat-ui.html')
       : path.join(frontend, 'public', decodeURIComponent(url.pathname));
     if (!file.startsWith(frontend + path.sep)) throw new Error('Invalid fixture path');
     const content = await readFile(file);
@@ -582,6 +584,8 @@ try {
     await leaseContext.close();
   }
   passed('own, expired and other-conversation leases preserve full initialization; an active peer lease stays protected');
+  await assertBootstrapRecovery({browser,origin,requests,completedNavigations});
+  passed('production boot initializes one stream controller after the engine is ready and restores an interrupted reply');
   await reset();
   const input = page.locator('#chat-input');
   await input.fill('输入法组合测试');
