@@ -56,10 +56,15 @@ class SummaryApprovalMiddleware(AgentMiddleware):
                     self.session.config, "set_article_summary", "summary",
                     args["request_id"], **{key: args[key] for key in
                                          ("editor_id", "revision")},
+                                    expected_revision=args["revision"] + (
+                                        args["summary_sha256"] != args["previous_summary_sha256"]),
                                     description=command["description"])
-                row = article_summary.receipt(command["operation_id"], args, "completed",
-                                              "摘要已更新到编辑草稿，未发布；服务端保存以自动保存状态为准。")
-                row["document"] = json.loads(document)
+                document = json.loads(document)
+                text = ("编辑草稿摘要已符合确认内容，无需再次修改；未发布。"
+                        if document["outcome"] == "unchanged" else
+                        "摘要已更新到编辑草稿，未发布；服务端保存以自动保存状态为准。")
+                row = article_summary.receipt(command["operation_id"], args, "completed", text)
+                row["document"] = document
             except ToolException as error:
                 row = article_summary.receipt(command["operation_id"], args, "unverified",
                                               "未能确认摘要应用结果：" + str(error))
