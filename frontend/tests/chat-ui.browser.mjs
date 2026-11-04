@@ -1033,7 +1033,14 @@ try {
     await reset();
     await page.locator('#chat-input').fill('收起后保留的草稿');
     const original = await page.locator('#waifu-chat').boundingBox();
+    // The minus button docks immediately; header taps independently fold content.
     await page.locator('#chat-minimize').click();
+    await page.waitForTimeout(420);
+    assert.equal(await page.locator('#waifu-chat').getAttribute('data-window-mode'), 'docked');
+    await page.locator('#chat-restore').click();
+    await page.waitForTimeout(420);
+    assert.equal(await page.locator('#waifu-chat').getAttribute('data-window-mode'), 'expanded');
+    await page.locator('#chat-restore').click();
     await page.waitForTimeout(100);
     const halfway = await page.locator('#waifu-chat').boundingBox();
     assert.ok(halfway.height > 36 && halfway.height < original.height, JSON.stringify({ halfway, original }));
@@ -1062,14 +1069,37 @@ try {
     assert.equal(await page.locator('#chat-input').evaluate(el => el.closest('.chat-input-area').inert), false);
     assert.ok((await page.locator('#waifu-chat').boundingBox()).height > 180);
     // A header tap expands; touch drags use the same pointer path and cancel cleanly.
-    await page.locator('#chat-minimize').click();
+    await page.locator('#chat-restore').click();
     await page.waitForTimeout(420);
     await page.locator('#chat-restore').click();
     await page.waitForTimeout(420);
     assert.equal(await page.locator('#waifu-chat').getAttribute('data-window-mode'), 'expanded');
     assert.equal(await page.locator('#chat-input').inputValue(), '收起后保留的草稿');
+    // A nighttime notch needs a visible surface and readable label against the page.
+    await page.evaluate(() => {
+      document.body.style.backgroundColor = '#202224';
+      document.getElementById('waifu-chat').classList.add('washiDark');
+    });
+    await page.locator('#chat-minimize').click();
+    await page.waitForTimeout(420);
+    const contrast = await page.locator('#waifu-chat').evaluate(panel => {
+      const luminance = color => {
+        const [r,g,b] = color.match(/[\d.]+/g).slice(0,3).map(Number).map(value => {
+          const channel = value / 255;
+          return channel <= .04045 ? channel / 12.92 : ((channel + .055) / 1.055) ** 2.4;
+        });
+        return .2126*r + .7152*g + .0722*b;
+      };
+      const ratio = (a,b) => (Math.max(a,b)+.05)/(Math.min(a,b)+.05);
+      const style = getComputedStyle(panel), background = luminance(style.backgroundColor);
+      return {surface:ratio(background,luminance(getComputedStyle(document.body).backgroundColor)),
+        text:ratio(background,luminance(style.color))};
+    });
+    assert.ok(contrast.surface >= 2 && contrast.text >= 4.5, JSON.stringify(contrast));
+    await page.screenshot({ path: path.join(output, `docked-night-${width}.png`) });
+    await page.locator('#chat-restore').click();
   }
-  passed('desktop and mobile collapse, drag without reopening, dock at top, and restore draft');
+  passed('desktop/mobile: minus docks directly, header folds, dragging preserves state, night notch remains visible');
   console.log(JSON.stringify({ passed: checks, screenshots: output, requests: requests.length }, null, 2));
 } finally {
   if (browser) await browser.close();
