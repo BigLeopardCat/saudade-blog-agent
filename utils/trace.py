@@ -43,6 +43,11 @@ TRUNCATION_MARK_PREFIX = "…[trace 截断：原文共 "
 # Missing schema_version denotes older retained traces.
 SCHEMA_VERSION = 1
 
+# These stage markers survive a process exit even if final trace publication cannot run.
+_LOGGED_STAGES = frozenset({"caller_context", "llm_start", "llm_done", "llm_error",
+                            "model_first_token", "tool_requested", "checkpoint_write",
+                            "consumer_closed", "jobs_drained"})
+
 
 def truncation_mark(original_len: int) -> str:
     return f"{TRUNCATION_MARK_PREFIX}{original_len} 字符]"
@@ -87,6 +92,7 @@ class _TraceRecorder:
                  trace_dir: str | None = None, name: str | None = None,
                  by_day: bool = True):
         self.trace_id = trace_id
+        self.process_id = os.getpid()
         self.user_id = user_id
         self.thread_id = thread_id
         # Explicit evaluation paths stay separate from production traces.
@@ -103,11 +109,14 @@ class _TraceRecorder:
         self.duration_s: float | None = None
         self.frames = 0
         self.dumped = False
+        logger.info("trace_id=%s stage=request_started", self.trace_id)
 
     def record(self, node: str, event: str, **data) -> None:
         if self.dumped:
             return
         # 相对请求开始的单调偏移秒——跨事件排序/分段耗时直接读差值
+        if event in _LOGGED_STAGES:
+            logger.info("trace_id=%s stage=%s.%s", self.trace_id, node, event)
         self.events.append({"t": round(time.monotonic() - self._t0, 3),
                             "node": node, "event": event, **data})
 
@@ -135,6 +144,7 @@ class _TraceRecorder:
                 # 放第一个：读一份 trace 第一眼就知道该用哪套假设（见 SCHEMA_VERSION 的注释）
                 "schema_version": SCHEMA_VERSION,
                 "trace_id": self.trace_id,
+                "process_id": self.process_id,
                 "user_id": self.user_id,
                 "thread_id": self.thread_id,
                 "started_at": self.started_at,
