@@ -97,7 +97,6 @@ TOOL_SCOPE: dict[str, str] = {
     "get_social_links": SCOPE_READ_PUBLIC,
     "get_site_map": SCOPE_READ_PUBLIC,
     "get_current_time": SCOPE_READ_PUBLIC,
-    "get_weather": SCOPE_READ_PUBLIC,
     "get_chat_history": SCOPE_READ_OWN,
     "list_devices": SCOPE_READ_OWN,
     "list_my_favorites": SCOPE_READ_OWN,

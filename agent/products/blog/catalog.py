@@ -15,7 +15,7 @@ DOMAIN_DESCRIPTIONS = {
                          "confirm creation or lifecycle changes. No unattended business writes.",
     # Discovery identifies a domain; argument and execution contracts live on its tools.
     "public_activity": "分页读取公开公告、河灯留言和说说；含公开留名，不含发表账号或待审记录。",
-    "utilities": "查询当前时间或城市天气估算。",
+    "utilities": "查询当前时间。",
     "devices": "查询可访问设备，或在已授权OLED设备显示文字。",
     "public_catalog": "分页查询公开文章清单、置顶文章、分类、分层标签和文章计数。",
     "conversation_images": "Re-read a referenced conversation image when details are needed.",

@@ -2,8 +2,16 @@
 
 from typing import Literal
 
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    Field,
+    ValidationError,
+    ValidatorFunctionWrapHandler,
+    field_validator,
+    model_validator,
+)
 
+from agent.api.weather import WeatherSnapshot
 from agent.confirm import MAX_TOKEN_CHARS
 from agent.contracts.client import EditorObservation as EditorObservation
 from agent.principal import KNOWN_ROLES
@@ -52,6 +60,7 @@ class ChatRequest(BaseModel):
     summary_scope: dict | None = None
     current_effects: str = Field(default="", max_length=MAX_SHORT_FIELD_CHARS)
     current_darkmode: str = Field(default="", max_length=MAX_SHORT_FIELD_CHARS)
+    current_weather: WeatherSnapshot | None = None
     image: str | list[str] = ""
     executions: str = Field(default="", max_length=MAX_TEXT_FIELD_CHARS)
     pending_action: str = Field(default="", max_length=MAX_TEXT_FIELD_CHARS)
@@ -77,6 +86,14 @@ class ChatRequest(BaseModel):
         if self.browser_result is not None and not self.resume_task:
             raise ValueError("浏览器回报只能接续原任务")
         return self
+
+    @field_validator("current_weather", mode="wrap")
+    @classmethod
+    def optional_weather(cls, value, handler: ValidatorFunctionWrapHandler):
+        try:
+            return handler(value)
+        except (ValidationError, ValueError):
+            return None
 
     @field_validator("history_scope", "summary_scope")
     @classmethod

@@ -12,7 +12,7 @@ from tools.result import ToolResult, fact, ok, tgt
 
 # Public exports; helper names stay private to their modules.
 __all__ = ["get_site_map", "get_chat_history", "get_current_time",
-           "get_weather", "IOT_ENABLED", "IOT_NAV_PATH", "nav_pure_path", "nav_path_valid",
+           "IOT_ENABLED", "IOT_NAV_PATH", "nav_pure_path", "nav_path_valid",
            "navigate_to", "toggle_effect", "toggle_dark_mode", "nav_label", "public_navigation"]
 
 # ---------------------------------------------------------------------------
@@ -62,21 +62,6 @@ def get_current_time() -> str:
     from utils.clock import format_local_now
     return format_local_now()
 
-@tool
-def get_weather(
-    location: Annotated[str, "City, optionally country or province"],
-    location_id: Annotated[int | None, "Selected geocoding candidate"] = None,
-) -> object:
-    """Read current weather-model data through the shared native weather adapter."""
-    from agent.domains.utilities import get_weather as read_weather
-
-    return read_weather.invoke({"location": location, "location_id": location_id})
-
-# ---------------------------------------------------------------------------
-# 导航工具
-# ---------------------------------------------------------------------------
-
-# Exact routes and dynamic route shapes are shared by native and compatibility tools.
 IOT_ENABLED: bool = _settings.iot_enabled
 IOT_NAV_PATH = "/device-console/"
 

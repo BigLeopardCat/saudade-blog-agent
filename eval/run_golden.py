@@ -225,6 +225,10 @@ def build_request(case: dict, rnd: dict | None = None) -> ChatRequest:
         needs_summary=g.get("needs_summary", False),
         current_effects=ctx.get("current_effects", ""),
         current_darkmode=ctx.get("current_darkmode", ""),
+        current_weather=({**ctx["current_weather"], "valid_at": int(time.time())}
+                         if isinstance(ctx.get("current_weather"), dict)
+                         and ctx["current_weather"].get("valid_at") == "{now}"
+                         else ctx.get("current_weather")),
         history=ctx.get("history", []),
         summary=ctx.get("summary", ""),
         # 20260904 C3：跨轮执行记忆（模拟 Rust 侧 execution_log 渲染注入——

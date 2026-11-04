@@ -1,6 +1,4 @@
-// ═ ChatStream：对话交互层（sendMessage 全流程/命令执行/面板 UI 控件）══
-// 20260828o 拆分自 boot.js initChat 巨型闭包（原 1182-2091 行）。逻辑零改动，
-// 共享符号统一走 ctx.dom / ctx.state / engine API（数据层在 chat-engine.js）。
+// Chat interaction, browser commands and task continuation.
 (function (g) {
   'use strict';
   g.__waifuStream = function (ctx, engine) {
@@ -8,6 +6,10 @@
       console.error('[chat-stream] 缺少 ctx/engine——chat-core/chat-render/chat-engine 未加载或加载顺序错误');
       return null;
     }
+    const readWeather = () => {
+      try { return g.__agentCurrentWeather?.() || null; }
+      catch (_) { return null; }
+    };
     const __chatCore = ctx.core;
     const { applyMsg, renderAgentContent } = ctx.render;
     // Preserve streamed prose, then append a UI-only interruption note.
@@ -720,6 +722,7 @@
               ...(imgs.length ? { image: imgs } : {}), // 多模态：dataURL 数组（每张 ≤1MB，最多 6 张）
               current_url: window.location.href,
               page_title: document.title,
+              current_weather: readWeather(),
               current_effects: (window.__effectStateList || ''), // 实时特效状态，供 agent 感知
               current_darkmode: (window.__darkMode ? 'on' : 'off'), // 实时夜间模式状态（与特效同理），供 agent 感知
               // 20260921 隐藏确认请求：带上弹窗令牌，Rust 见它就不把这条 message

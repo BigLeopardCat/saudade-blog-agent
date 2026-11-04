@@ -231,7 +231,9 @@ async def chat_stream(req: ChatRequest, request: Request):
                 "message_truncated": len(req.message or "") > 200,
                 "page_context": {"current_url": req.current_url, "page_title": req.page_title,
                                  "current_effects": req.current_effects,
-                                 "current_darkmode": req.current_darkmode},
+                                 "current_darkmode": req.current_darkmode,
+                                 "current_weather": (req.current_weather.facts()
+                                                     if req.current_weather else None)},
                 "has_image": bool(req.image),
                 "memory_strategy": "framework_compaction",
                 "history_len": len(req.history),
