@@ -161,14 +161,20 @@ jobs:
           enable-cache: true
           cache-dependency-glob: uv.lock
       - run: uv sync --locked
-      - name: Cross-worker task input and completion races
+      - name: PostgreSQL integration with no skipped cases
         env:
           SAUDADE_TASK_INPUT_TEST_DSN: postgresql://postgres:task-input-ci@127.0.0.1:5432/agent_inputs_it
           SAUDADE_SCHEDULING_TEST_DSN: postgresql://postgres:task-input-ci@127.0.0.1:5432/agent_inputs_it
-        run: >-
-          uv run --frozen pytest -q tests/integration/test_task_inputs_pg.py
-          tests/integration/test_scheduling_pg.py tests/integration/test_scheduled_agent_pg.py
-          tests/integration/test_client_operations_pg.py
+          SAUDADE_CKPT_TEST_DSN: postgresql://postgres:task-input-ci@127.0.0.1:5432/agent_inputs_it
+          SAUDADE_REQUIRE_CKPT_TEST: "1"
+        run: |
+          uv run --frozen pytest -q tests/integration --junitxml=eval/report/ci/postgres.xml
+          python3 - <<'PYCODE'
+          import xml.etree.ElementTree as ET
+          suites = ET.parse('eval/report/ci/postgres.xml').getroot().findall('testsuite')
+          assert suites and sum(int(suite.attrib['tests']) for suite in suites) > 0
+          assert all(int(suite.attrib['skipped']) == 0 for suite in suites), 'Integration tests skipped'
+          PYCODE
 
   widget-pin-drift:
     runs-on: ubuntu-latest

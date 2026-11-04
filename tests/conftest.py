@@ -10,7 +10,7 @@ from unittest.mock import patch
 
 import pytest
 
-pytest_plugins = ("_own_support", "pytester")
+pytest_plugins = ("_own_support", "_checkpoint_postgres", "pytester")
 
 _ARTIFACTS = tempfile.TemporaryDirectory(prefix="saudade-pytest-")
 _PINNED = {
