@@ -94,18 +94,12 @@
           messages.addEventListener(t, () => { selfScroll = false; }, { passive: true });
         });
       } catch(e) {/* ignore */}
-      // 消息内图片单击放大（20260901）：复用文章页 zoomOverlay——React 全局注册
-      // window.__openZoomOverlay（App.tsx 副作用 import），样式在全局 App.sass；
-      // 委托挂整个面板 #waifu-chat（20260901c：发送前预览缩略图 #chat-img-preview
-      // 在输入区、不在消息区内，挂 #chat-messages 会漏掉——用户反馈"功能没实现"）——
-      // 范围：agent markdown 图（.msg-text）+ 用户已发送图（.msg-img-grid）+
-      // 发送前预览缩略图（.chat-img-preview-item）；仅排除 × 移除按钮
-      // （.chat-img-preview-remove，点 × 是删除不是放大）
+      // The host registers one shared image viewer for messages, cards and previews.
       const waifuChat = document.getElementById('waifu-chat');
       if (waifuChat) {
         try {
           waifuChat.addEventListener('click', (e) => {
-            if (!window.__openZoomOverlay) return; // 文章页模块未加载（异常场景）静默
+            if (!window.__openZoomOverlay) return;
             const t = e.target;
             if (!(t instanceof Element)) return;
             if (t.closest('.chat-img-preview-remove')) return;

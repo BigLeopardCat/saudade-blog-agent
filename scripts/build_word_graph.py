@@ -1,53 +1,10 @@
 #!/usr/bin/env python3
-"""文章向量空间知识图谱 · 离线建图脚本（20260915）
+"""Build the optional article vector visualization from the public corpus.
 
-做什么：公开文章 → jieba 抽词 → embedding 向量化 → **UMAP 三维布局**
-        → 1024 维 kNN 连边 → 产出前端展示数据 + agent 查询用向量。
-        **用哪个模型/端点/维度不在这里决定**：`rag/embed_space.py`（两端唯一事实源）
-        解析 —— 配了 `EMBEDDING_*` 就用它、没配回落 `QWEN_*` + `qwen3.7-text-embedding`。
-        与图谱检索侧（`rag/wordgraph.py`）读的是同一份规则；两边一旦解出不同的空间，
-        查询向量就落在别处，而图不报错、只是默默不对。
-        （20260917 起默认布局是 UMAP；`--layout semantic` 保留旧的 PCA+弹簧，
-          `--layout pca` 是纯 PCA。三者的离线 A/B 见 layout_umap 的注释。）
-
-产物（三份，见 docs/word-graph.md）：
-  1. <web>/graph-<sha1前12>.js    展示数据（export default {...}）
-  2. <web>/manifest.json          指针（前端靠它发现带 hash 的文件名
-                                  + `site` = 产物归属站点，浏览器**运行期**据此判断这件
-                                  展品该不该在本站画出来）
-  3. data/word_graph/{index.json,vectors.f32,...} agent 查询用（裸 float32，不进 git）
-
-`<web>` 缺省是父仓 `frontend/public/graph`（提交进仓、随下个部署进 dist）；**`--out-web`
-给了就写成服务端自己的目录**（`data/word_graph/web/`，由 Rust 的产物接口直接供出去，
-见 docs/word-graph.md 的《重建》一节）——服务端重建不能依赖"再跑一次 vite build"。
-
-节点大小 = **文章热度**（`h`，见 `HEAT_W` / `fetch_heat`），不是 tf-idf 重要度：
-`n` 仍留在产物里给检索相关度用（`locate.ts`），**热度不参与搜索排序**。
-
-为什么产物是 .js 而不是 .json：nginx 的「带 hash 长缓存」location 扩展名白名单是
-(js|css|woff2?|mp4|webm|jpe?g|png|webp)，**没有 json**——带 hash 的 .json 一样会落进
-no-store 每次重下；而 graph-<12位>.js 命中 immutable，缓存一年。
-
-运行环境：jieba/UMAP 等建图依赖独立安装，版本钉在 scripts/requirements-graph.txt，
-uv 按需建临时环境——缓存 + 硬链接，多环境不重复占盘（`--python 3.12` 与文件里钉的
-umap/numba 版本一起保证与 20260917 那次建图同环境，换版本会让重出图不可比）：
-  uv run --no-project --python 3.12 --with-requirements scripts/requirements-graph.txt \
-      python3 scripts/build_word_graph.py --dry-run
-
-**还差一份可用的 embedding 配置**（`--dry-run` 不查，真跑才查）：`EMBEDDING_API_KEY`
-+ `EMBEDDING_MODEL` 配了就认（与 agent 的向量检索同一份），没配则回落 `QWEN_API_KEY` /
-`QWEN_BASE_URL`（旧口径）。两者都没有 ⇒ 在 ③ 那一步停下并说清"两处都缺"，不会带着
-半个词表往下跑。这几项**写在 systemd 单元里而不是 `.env` 里也照样认**（进程环境优先，
-与 pydantic-settings 的优先级一致）——后台的建图任务是整份透传子进程环境的，
-不这样兜一层的话，"配在单元里"那条路会让建图与查询解出两个空间。
-
-重建流程（两条路，产物是同一份）：
-  · **本站开发**：改词表/黑名单 → 重跑（缺省 `--out-frontend`）→ 人工过目 vocab 报告
-    → 提交 frontend/public/graph/* 与 data/word_graph/*（后者不进 git）
-    → sudo systemctl restart saudade-agent；
-  · **任何站点自助**（20261003 起，后台「向量图谱」页签走这条）：服务端带
-    `--out-web <agent>/data/word_graph/web --out-agent <agent>/data/word_graph` 起一次
-    子进程，产物**不落父仓、不需重新部署**，由 `GET /api/public/graph/*` 供出去。
+Embedding configuration is shared with rag.embed_space. Output includes the
+hashed web module/manifest and the Agent vector index. Use --out-web for
+server-published assets; otherwise the frontend public directory is used.
+Dependencies are pinned in scripts/requirements-graph.txt. See --help for options.
 """
 from __future__ import annotations
 
@@ -710,7 +667,7 @@ def layout_semantic(pca_p: np.ndarray, edges: list[list], iters: int = 400,
     多余的节点被摊开、不再随机挤在别人身边。目标线长 l_max=0.25 特意取得比 PCA 的
     自然点距（中位 0.343）还小——取大了（如 1.75）弹簧会跟布局对着干，保真度掉到 0.075。
 
-    参数是在本语料上扫出来的，位于帕累托前沿中段（详见 docs/word-graph.md 的前沿表）；
+    参数是在本语料上扫出来的，位于帕累托前沿中段；
     换语料后若节点数/密度变化大，l_min/l_max 要按新的点距重标。
 
     确定性：无随机数、无随机初值、固定迭代数、全向量化更新 ⇒ 同输入必同输出。
@@ -988,10 +945,7 @@ def main() -> None:
     ap.add_argument("--layout-iters", type=int, default=400)
     ap.add_argument("--out-frontend", default=str(REPO_PARENT / "frontend" / "public"))
     ap.add_argument("--out-agent", default=str(REPO_AGENT / "data" / "word_graph"))
-    # 展示数据（graph-*.js + manifest.json）写到哪。**给了 --out-web 就不碰
-    # frontend/public**：服务端重建走这条（产物由 Rust 直接供，见 docs/word-graph.md），
-    # 因为它不能依赖"再跑一次 vite build 把 public/ 拷进 dist/"——那次构建之后
-    # 还会被下一次部署的 dist 差集清理换回仓库里的旧版（静默回退成旧图）。
+    # Server-published artifacts must not depend on a frontend rebuild.
     ap.add_argument("--out-web", default="",
                     help="展示产物的目录；给了就写这里、**不碰 frontend/public**"
                          "（服务端重建用；缺省仍是 <out-frontend>/graph）")

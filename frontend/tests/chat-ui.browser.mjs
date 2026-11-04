@@ -110,7 +110,7 @@ const server = createServer(async (req, res) => {
           const card = mode === 'confirmation-replay' ? staleConfirmation : {
             id: next ? 'offline-next' : 'offline-ask', task_id: taskId,
             replay_safe: mode === 'confirmation-resumable',
-            q: next ? '第二项操作，等待独立批准。' : '将测试文章加入收藏？这会新增一条收藏记录。',
+            q: mode === 'confirmation-images' ? 'fixture-images' : next ? '第二项操作，等待独立批准。' : '将测试文章加入收藏？这会新增一条收藏记录。',
             token: next ? 'offline-next-confirmation' : 'offline-synthetic-confirmation',
             exp: Math.floor(Date.now() / 1000) + 600,
             server_time: Math.floor(Date.now() / 1000),
@@ -963,6 +963,62 @@ try {
   assert.equal(imageRequest.body.image.length, 1);
   await page.waitForFunction(() => [...document.querySelectorAll('.msg-img')].some(image => image.naturalWidth === 1));
   passed('image-only send, six-image limit, preview removal, and decoded image bubble');
+
+  // Exercise real message/card rendering with large decoded portrait and landscape images.
+  for (const viewport of [{width:1440,height:1000}, {width:375,height:812}, {width:812,height:375}]) {
+    await page.setViewportSize(viewport);
+    await reset();
+    if(viewport.width===1440) await page.locator('#waifu-chat').screenshot({path:path.join(output,'desktop-clean-start.png')});
+    await page.evaluate(() => {
+      const {ctx, engine} = window.__chatTest;
+      const item = {id:'image-preview',type:'agent',time:Date.now(),text:'fixture-images'};
+      ctx.state.items.push(item); engine.appendMsg(item);
+    });
+    await send('核对参考图', 'confirmation-images');
+    await page.waitForFunction(() => [...document.querySelectorAll('#waifu-chat img')].every(image => image.complete));
+    for (const selector of ['.msg-text img:not(.sticker)', '#chat-ask img:not(.sticker)']) {
+      const messageHeight = await page.locator('#chat-messages').evaluate(el=>el.clientHeight);
+      const sizes = await page.locator(selector).evaluateAll(images => images.map(image => {
+        const box=image.getBoundingClientRect(), style=getComputedStyle(image);
+        return {width:box.width,height:box.height,ratio:image.naturalWidth/image.naturalHeight,
+          fit:style.objectFit,parent:image.parentElement.getBoundingClientRect().width};
+      }));
+      assert.equal(sizes.length, 2);
+      for (const size of sizes) {
+        assert.ok(size.width > 0 && size.width <= 321 && size.width <= size.parent+1);
+        assert.ok(size.height > 0 && size.height <= Math.min(messageHeight*.5,220)+1);
+        assert.ok(Math.abs(size.width/size.height-size.ratio) < .03, JSON.stringify(size));
+        assert.equal(size.fit, 'contain');
+      }
+    }
+    const sticker = await page.locator('.msg-text img.sticker').evaluate(image => ({
+      height:image.getBoundingClientRect().height,font:parseFloat(getComputedStyle(image).fontSize)}));
+    assert.ok(Math.abs(sticker.height-sticker.font*5.5) < 1, 'Stickers keep their independent readable size');
+    await page.locator('#chat-ask img').first().evaluate(image => {
+      const messages=document.getElementById('chat-messages');
+      messages.scrollTop += image.getBoundingClientRect().top-messages.getBoundingClientRect().top-8;
+    });
+    await page.waitForTimeout(100);
+    await page.locator('#chat-ask img').first().click();
+    assert.equal(await page.evaluate(() => window.__chatImageOpened.length),1);
+    if (viewport.width === 1440) await page.locator('#waifu-chat').screenshot({path:path.join(output,'desktop-image-previews.png')});
+  }
+  await page.setViewportSize({width:1440,height:1000});
+  await reset();
+  const portrait = await page.evaluate(() => window.__chatFixtureImages.portrait);
+  await page.locator('#chat-img-file').setInputFiles({name:'portrait.svg',mimeType:'image/svg+xml',
+    buffer:Buffer.from(portrait.split(',')[1],'base64')});
+  await page.waitForFunction(() => window.__chatTest.ctx.state.pendingImages.length === 1);
+  assert.equal(await page.locator('.chat-img-preview-item img').evaluate(image => getComputedStyle(image).objectFit),'contain');
+  await page.locator('.chat-img-preview-item img').click();
+  assert.equal(await page.evaluate(() => window.__chatImageOpened.length),1);
+  await send('上传长图');
+  const uploaded = await page.locator('.msg-img').evaluate(image => {
+    const box=image.getBoundingClientRect();return {width:box.width,height:box.height,ratio:image.naturalWidth/image.naturalHeight,fit:getComputedStyle(image).objectFit};
+  });
+  assert.ok(uploaded.height <= 221 && Math.abs(uploaded.width/uploaded.height-uploaded.ratio)<.03);
+  assert.equal(uploaded.fit,'contain');
+  passed('message, upload and approval images preserve proportions with bounded previews; stickers keep their size');
 
   const addLong = async () => page.evaluate(() => {
     const { ctx, engine } = window.__chatTest;

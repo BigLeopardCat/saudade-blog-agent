@@ -32,7 +32,18 @@
   const codeLine = 'const embeddingDimensions = [' + '1024, '.repeat(90) + '];';
   const richText = '向量检索部署对照\n\n' + longUrl + '\n\n' + codeLine;
   window.__chatFixtureRichText = richText;
-  window.__chatRenderMarkdown = text => text === richText
+  const picture = (width, height, color) => 'data:image/svg+xml;base64,' + btoa(
+    `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}"><rect width="100%" height="100%" fill="${color}"/></svg>`);
+  window.__chatFixtureImages = {
+    portrait: picture(1024, 4096, '#b4a0d6'), landscape: picture(4096, 1024, '#ecc0cf'),
+    sticker: picture(128, 128, '#fed4a4'),
+  };
+  const images = '<p><img alt="portrait" src="' + window.__chatFixtureImages.portrait + '"></p>'
+    + '<p><img alt="landscape" src="' + window.__chatFixtureImages.landscape + '"></p>'
+    + '<p><img class="sticker" alt="sticker" src="' + window.__chatFixtureImages.sticker + '"></p>';
+  window.__chatImageOpened = [];
+  window.__openZoomOverlay = image => window.__chatImageOpened.push(image.currentSrc || image.src);
+  window.__chatRenderMarkdown = text => text === 'fixture-images' ? images : text === richText
     ? '<h3>向量检索部署对照</h3><p>长文本、专业术语和多篇参考资料应保持可读。</p>'
       + '<p><a href="' + longUrl + '">' + longUrl + '</a></p>'
       + '<pre><code>' + codeLine + '</code></pre>'

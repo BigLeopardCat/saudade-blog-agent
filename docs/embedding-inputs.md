@@ -92,31 +92,8 @@ schema 2 持久化格式保持不变。成熟库切片迁移新增分块签名�
 不同 API/本地模型同时保留索引时配置各自的 `RAG_VECTOR_DIR`；不自动将一个模型的
 查询向量发给另一模型的文档索引。
 
-## 验证记录
+## 验证
 
-离线回归覆盖 special tokens、配置内截断关闭、Unicode 原文覆盖、长查询、增量复用、
-空间变化与配置故障下的真实生产入口。它通过 MockTransport 走现有 OpenAI SDK，
-没有新的推理协议实现。
+输入预算、缓存空间和故障回退分别使用离线回归验证。真实模型验证使用固定语料、profile、tokenizer 和服务版本，并记录召回质量、截断率、耗时及内存；开发配置不能直接当作生产最优参数。
 
-启动临时 Qwen 服务后，可显式运行真实端点验证：
-
-```bash
-.venv/bin/python eval/verify_embedding_budget.py \
-  --profile eval/data/qwen-local/profile.json \
-  --base-url http://127.0.0.1:18081/v1 --model qwen3-embedding-0.6b-q8_0 \
-  --output eval/report/qwen-budget.json
-```
-
-它使用临时向量目录，并在结束时删除，不访问博客语料。会实际调用所选服务，
-API 密钥从 `EMBEDDING_API_KEY` 读取；未设置时只使用临时本地占位值。
-
-2026-10-23 的 [真实服务记录](../eval/report/baseline_qwen3_token_budget.json)：
-1,804 字符/1,190 tokens 的中文样本保留全部原文与尾部，产生 4 个输入，完整 token
-数为 512/512/416/129，全部成功、missing=0，查询/文档均为 1024 维。
-相同内容第二次更新 embedded=0、API 调用=0。这是功能验证，不能作为检索质量成绩
-或另一台 4 核 4GB 服务器的性能验收。模型服务在验证后停止。
-
-本地 Qwen profile 显式设置 `unicode_normalization="NFC"`，实际 embedding 请求在
-前缀拼接后用标准 Unicode NFC 规范化，保持与官方 tokenizer 一致。原文和源范围保留。
-该字段参与空间签名；默认 `none` 保持已有 profile namespace。
-服务端 token ID 预检与部署说明见 [生产调试手册](rag-production-debug.md)。
+验证工具：`eval/verify_embedding_budget.py`，离线样本见 `eval/profiles/`。使用前阅读 CLI `--help`；不得把一次延迟或召回样本当作完整验收。

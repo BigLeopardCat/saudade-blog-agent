@@ -83,7 +83,7 @@ jobs:
       - name: 安全扫描棘轮（bandit 只许变小）
         run: uv run --frozen python eval/security_gate.py
 
-      # Public, immutable contract source; see docs/adr/adr-0004-cross-language-guard-in-ci.md.
+      # Public, immutable contract source; see docs/eval-observability.md.
       - name: Read host contract revision
         id: parent
         run: |

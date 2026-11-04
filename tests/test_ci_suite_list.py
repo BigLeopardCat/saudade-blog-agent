@@ -282,7 +282,7 @@ def test_ci_suite_list(tmp_path):
             else:
                 os.environ[k] = v
     print("\n⑥ CI 与父仓的接线（跨语言守卫在 CI 里也真判）")
-    _ADR = ROOT / "docs" / "adr" / "adr-0004-cross-language-guard-in-ci.md"
+    _ADR = ROOT / "docs" / "eval-observability.md"
     _ADR_NAME = _ADR.name
     _eval_txt = EVAL_YML.read_text(encoding="utf-8")        # 含注释：接线信息有一半写在注释里
     _check_public_host_source(_eval_txt)
@@ -308,10 +308,10 @@ def test_ci_suite_list(tmp_path):
                     if not _cone_covers(rel, ["docs"]))
     check("锥判据真的咬：换成无关目录锥（docs）重算，扫到的路径全被判成锥外",
           len(_other) == len(_reads) and len(_reads) > 0, f"锥外：{_other}")
-    check(f"ADR 记录公开契约锁（{_ADR_NAME}）",
+    check(f"评测文档记录公开契约锁（{_ADR_NAME}）",
           _ADR.is_file() and ".github/host-contract.json" in _ADR.read_text(encoding="utf-8"),
           _ADR_NAME)
-    check("eval.yml 指着那份 ADR（接线与轮换只有一处说明）",
+    check("eval.yml 指向当前评测文档（接线与轮换只有一处说明）",
           _ADR_NAME in _eval_txt)
     print("\n⑦ PR 上也跑门禁的接线（20261019）：不许静默地退回「PR 上什么都不跑」")
     _bad_gate = _pr_gate_problems(_eval_txt)

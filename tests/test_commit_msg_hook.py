@@ -54,7 +54,7 @@ def contributing_types(text: str) -> set[str] | None:
     （`Co-Authored-By`、`git diff -U0`），宽一点的正则会把它们当 type 读进来，
     而"多读了几个词"会让这条判据红在错的地方（**判据失明与真的不同源要分得开**）。
     """
-    m = re.search(r"^## 3\. 提交约定$(?P<body>.*?)(?=^## |\Z)", text, re.M | re.S)
+    m = re.search(r"^## (?:\d+\. )?提交(?:约定|与评审)$(?P<body>.*?)(?=^## |\Z)", text, re.M | re.S)
     if not m:
         return None
     for line in m.group("body").splitlines():

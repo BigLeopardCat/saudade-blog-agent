@@ -521,7 +521,7 @@
 #waifu-chat .chat-img-preview { min-height: 0; height: auto; max-height: 142px; margin: 0; padding: 6px 4px 4px; gap: 8px; flex-wrap: wrap; overflow-y: auto; }
 #waifu-chat .chat-img-preview:empty { display: none; }
 #waifu-chat .chat-img-preview-item { flex: none; width: 58px; height: 58px; margin: 0; }
-#waifu-chat .chat-img-preview-item img { width: 58px; height: 58px; object-fit: cover; border: 1px solid var(--chat-line); border-radius: 9px; }
+#waifu-chat .chat-img-preview-item img { width: 58px; height: 58px; object-fit: contain; border: 1px solid var(--chat-line); border-radius: 9px; }
 #waifu-chat .chat-img-preview-remove { display: grid; place-items: center; line-height: 1; width: 24px; height: 24px; top: -5px; right: -5px; border: 2px solid var(--chat-paper); background: var(--chat-danger); color: var(--chat-paper); font-size: 14px; }
 #waifu-chat .chat-msg .msg-bubble .msg-img-grid { max-width: 100%; }
 #waifu-chat .chat-msg .msg-bubble .msg-img { max-width: 100%; border-radius: 9px; }
@@ -671,6 +671,18 @@
   #waifu-chat .conv-row-main { min-height: 42px; }
 }
 
+/* Short viewports need room for message previews as well as the composer. */
+@media (max-height: 600px) {
+  #waifu-chat:not([data-window-mode='collapsed']):not([data-window-mode='docked']) {
+    position: fixed;
+    top: 16px;
+    left: 16px;
+    bottom: auto;
+    height: calc(100dvh - 32px);
+    max-height: calc(100dvh - 32px);
+  }
+}
+
 @media (pointer: coarse) {
   #waifu-chat .chat-copy-reply { width: 44px; height: 44px; }
 }
@@ -703,3 +715,19 @@
 #waifu-chat .chat-steering-notice span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 #waifu-chat .chat-steering-notice button { flex: none; border: 0; background: var(--chat-soft); color: var(--chat-accent); border-radius: 6px; padding: 4px 6px; }
 #waifu-chat .chat-pause-btn { border: 1px solid var(--chat-line); border-radius: 50%; background: var(--chat-soft); color: var(--chat-accent); width: 30px; height: 30px; display: grid; place-items: center; }
+
+#waifu-chat .chat-messages { container-type: size; }
+
+/* Ordinary images stay readable without cropping or filling the conversation. */
+#waifu-chat :is(.msg-text, .msg-bubble, .chat-ask-question) img:not(.sticker):not([src^="/stickers/"]),
+#waifu-chat .chat-ask img:not(.sticker):not([src^="/stickers/"]) {
+  display: inline-block;
+  width: auto;
+  height: auto;
+  max-width: min(100%, 320px);
+  max-height: min(220px, 50cqh);
+  object-fit: contain;
+  vertical-align: middle;
+  border-radius: 10px;
+  cursor: zoom-in;
+}

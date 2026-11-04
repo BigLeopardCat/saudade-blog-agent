@@ -471,13 +471,11 @@
 
 @keyframes fadeIn { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: translateY(0); } }
 
-/* 已选图片缩放图标（20260828 修正 + 20260828s 多图）：输入栏顶部常驻留白
-   （输入栏加高的落点，缩略图 ≈ 按钮图标大小 18px，一行最多 6 张），选图后
-   JS 动态填充 .chat-img-preview-item（img + 右上角 ×，逐个移除） */
+/* Attachment previews; the chat theme sets their final size. */
 .chat-img-preview {
   display: flex;
   align-items: center;
-  height: 18px; /* 20260829a：20px→18px 刚好放下缩略图，不留余量（输入栏再缩矮） */
+  height: 18px;
   margin: 0 40px 0 28px; /* 28px 对齐消息区左内边距 */
   flex-shrink: 0;
 }
@@ -490,7 +488,7 @@
 .chat-img-preview-item img {
   width: 18px;
   height: 18px;
-  object-fit: cover;
+  object-fit: contain;
   border-radius: 4px;
   border: 1px solid #e8c8c4;
   background: #fff;
@@ -531,22 +529,22 @@
 }
 .chat-img-btn svg { width: 18px; height: 18px; display: block; }
 .chat-img-btn:hover { background: rgba(231, 76, 60, 0.15); }
-/* 气泡内图片（多模态 20260828 改进②，20260828s 多图）：用户消息带图直接展示；
-   多图走网格横排（flex wrap 自动换行）；远端窗口无图数据渲染灰色占位块 */
+/* Uploaded attachments keep their original aspect ratio. */
 .chat-msg .msg-bubble .msg-img-grid {
   display: flex;
   flex-wrap: wrap;
   gap: 4px;
-  max-width: 372px; /* 2 × 180px + gap */
+  max-width: 100%;
   margin-bottom: 4px;
 }
 .chat-msg .msg-bubble .msg-img {
   display: block;
-  width: 180px;
-  height: 180px;
+  width: auto;
+  height: auto;
+  max-width: 100%;
   border-radius: 8px;
   border: 1px solid #eee;
-  object-fit: cover;
+  object-fit: contain;
   background: #fff;
 }
 .chat-msg .msg-bubble .msg-img-placeholder {
