@@ -22,7 +22,7 @@ def test_recorded_product_fact_is_the_template_used_by_the_model(monkeypatch):
     assert facts["character"] in messages[0].content
     assert set(facts) == {"article_url_template", "character", "conversation_style",
                          "tool_loading", "tool_guidance", "rendering", "factual_policy",
-                         "administration_requires", "guestbook", "article_management",
+                         "administration_requires", "manual_ui", "guestbook", "article_management",
                          "can_access_admin_console"}
     assert facts["tool_loading"] == "on_demand"
     assert facts["tool_guidance"] in messages[0].content
@@ -48,10 +48,24 @@ def test_only_the_time_used_in_the_prompt_is_added_to_review_facts(monkeypatch):
     assert facts["current_time"] in str(messages)
     assert set(facts) == {"article_url_template", "character", "conversation_style", "current_time",
                          "tool_loading", "tool_guidance", "rendering", "factual_policy",
-                         "administration_requires", "guestbook", "article_management",
+                         "administration_requires", "manual_ui", "guestbook", "article_management",
                          "can_access_admin_console"}
     assert "PRIVATE_CANARY" not in str(records)
 
 
 def test_old_trace_does_not_gain_current_product_configuration():
     assert runtime_context([])["product_facts"] is None
+
+
+def test_manual_help_does_not_expand_chat_only_tool_permissions():
+    from agent.domains import browser
+    from agent.products.blog.context import conversation_context
+
+    principal = Principal(9, "zako", SOURCE_ASSERTION)
+    context = conversation_context(principal)
+    assert context["permissions"] == [] and context["tools"]["loading"] == "disabled"
+    assert context["manual_ui"]["public_pages"]["留言板"] == "/guestbook"
+    assert not any(path.startswith("/dashboard")
+                   for path in context["manual_ui"]["public_pages"].values())
+    assert context["manual_ui"]["grants_agent_permissions"] is False
+    assert browser.tools({"configurable": {"principal": principal, "user_id": 9}}) == {}

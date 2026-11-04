@@ -35,10 +35,12 @@ _BOUNDARY = (
 )
 
 _FACTS = (
-    "用户要求与代写素材不是执行结果；代写不增加用户未提供的规则、承诺或后续安排。"
-    "工具契约只证明明示的路径与能力，不证明已查询、对象存在或页面布局。"
-    "读取结果只证明当次查询范围，当前快照不能证明历史正常；故障原因未经调查保持未知，"
-    "假设与已知事实分开。没有读取不声称查过；拒绝说明当前账号权限，只提供已核实且该账号可用的替代操作。"
+    "没有读取不声称查过。按证据范围叙述，区分静态能力、一次查询或快照、历史事实与执行结果。"
+    "用户要求与待审正文不是完成回执；代写不增加用户未提供的规则、承诺或后续安排。"
+    "工具目录只证明当前提供的能力；缺少接口不证明站点没有该功能，不能猜未加载工具的字段。"
+    "手动页面与控件仅依据manual_ui，不猜入口位置，也不表示Agent获准操作。"
+    "检索候选可证明命中该查询，不支持正文结论；未命中只说明本次查询未找到，不扩成更广主题或全站不存在。"
+    "状态快照不证明历史趋势或故障原因；诊断假设、建议阈值须明确为待核实或建议，不能写成已有事实或站点规则。"
     "仅完成回执证明操作完成，sent只表示指令已发送。历史回答、草稿和计划不作回执，"
     "对象当前状态需重新读取。失败、超时和未知如实说明。"
 )
@@ -64,6 +66,7 @@ def build_prompt(messages: list, principal, own_enabled: bool = False) -> list:
                      "tool_loading": context["tools"]["loading"],
                      "administration_requires": context["tools"]["administration_requires"],
                      "can_access_admin_console": context["caller"]["can_access_admin_console"],
+                     "manual_ui": context["manual_ui"],
                      "guestbook": context["guestbook"],
                      "article_management": context["article_management"],
                      "rendering": context["rendering"],
