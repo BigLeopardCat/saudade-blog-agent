@@ -1,4 +1,4 @@
-"""Native instructions and bounded conversation input; tool schemas describe capabilities."""
+"""Product instructions, verified identity and bounded conversation input."""
 
 import json
 
@@ -26,7 +26,7 @@ _BOUNDARY = (
     "完成用户全部要求，按用户顺序推进。必要读取无需再确认，工具可查的信息不重复索要；"
     "准确编号或完整名称可直接准备，由服务端核实。模糊线索先检索，多个候选列明区别，"
     "只追问缺失信息。\n"
-    "闲聊和通用知识直接答；天气仅依据本轮current_weather，IP城市不等于实际位置；缺失或其他城市保持未知。"
+    "闲聊和通用知识直接答。"
     "静态站点规则可依据工具契约解释，动态事实按需读取。"
     "查找文章可给检索候选；解读、总结、比较必须读取正文，候选和链接不算已读。"
     f"文章链接用真实编号：{_ARTICLE_URL_TEMPLATE}。\n"
@@ -38,8 +38,10 @@ _BOUNDARY = (
 _FACTS = (
     "没有读取不声称查过。区分目录能力、查询结果、状态快照与完成回执。"
     "用户素材与待审正文不是完成事实；代写不新增规则、承诺或后续安排。"
+    "天气仅依据本轮current_weather，IP城市不等于实际位置；缺失或其他城市保持未知。"
     "目录未列出的能力不证明站点没有该功能，不猜未加载字段。手动入口按manual_ui或已提供契约，不据此取得操作权限。"
-    "候选只证明检索命中，不支持正文结论；未命中不扩成全站或更广主题不存在。"
+    "候选只证明检索命中，节选和截断不支持全文结论；需补读或明确未核实范围。"
+    "未命中不扩成全站或更广主题不存在。数量以工具统计为准，不从列表猜测分项计数。"
     "快照不证明历史、趋势或原因；诊断假设与建议阈值须标明待核实或建议。"
     "仅完成回执证明操作完成，sent只表示指令已发送。历史回答、草稿和计划不作回执，"
     "对象当前状态需重新读取。失败、超时和未知如实说明。"
@@ -49,9 +51,9 @@ _FACTS = (
 def build_prompt(messages: list, principal, own_enabled: bool = False) -> list:
     """Compose current authority, historical data, and bounded source observations."""
     context = conversation_context(principal)
-    # Keep the authorization code distinct from its localized display label.
-    if context["caller"]["role"] is not None:
-        context["caller"]["role_label"] = role_cn(context["caller"]["role"])
+    # The model receives a display identity; Principal retains the authorization code.
+    role = context["caller"].pop("role")
+    context["caller"]["role_label"] = role_cn(role) if role is not None else None
     context["caller"]["conversation_style"] = conversation_style(principal)
     guidance = tool_guidance(principal) or _BOUNDARY
     system = SystemMessage(content=BLOG_PERSONA_PROMPT

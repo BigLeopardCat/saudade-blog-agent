@@ -194,7 +194,7 @@ def test_static_renderer_prefix_is_shared_without_sharing_caller_authority():
         wire = model._get_request_payload(prompt)
         system = wire["messages"][0]["content"]
         facts = json.JSONDecoder().raw_decode(system.split("运行时能力（可信数据）：", 1)[1])[0]
-        assert facts["caller"]["role"] == role
+        assert "role" not in facts["caller"]
         assert facts["caller"]["role_label"] == role_cn(role)
         assert facts["permissions"] == sorted(scopes_for(role))
         assert facts["tools"]["loading"] == ("disabled" if role == "zako" else "on_demand")
@@ -203,5 +203,5 @@ def test_static_renderer_prefix_is_shared_without_sharing_caller_authority():
     shared = commonprefix(systems)
     assert all(f":{name}:" in shared for name in STICKER_NAMES)
     assert '"loading"' in shared
-    assert '"role":"superadmin"' not in shared
-    assert '"role":"user"' not in shared
+    assert '"role_label":"超级管理员"' not in shared
+    assert '"role_label":"普通用户"' not in shared

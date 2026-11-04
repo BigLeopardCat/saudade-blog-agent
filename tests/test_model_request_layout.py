@@ -81,3 +81,57 @@ def test_thinking_summary_reads_the_same_sdk_extra_body_as_the_request(monkeypat
         assert events[-1]["thinking"] == payload["extra_body"]["thinking"] == mode
     assert events[0]["controls"] != events[1]["controls"]
     assert "private-credential" not in json.dumps(events)
+
+
+def test_http_wire_records_the_deepseek_sdk_body_and_actual_header(monkeypatch):
+    import httpx
+
+    from config.settings import settings
+    from models.llm import get_llm
+    from models.transport import ModelIO, io_scope
+
+    events, requests = [], []
+    monkeypatch.setattr(settings, 'llm_provider', 'opencode')
+    monkeypatch.setattr(request_trace, 'record',
+                        lambda _node, event, **data: events.append((event, data)))
+
+    def handle(request):
+        requests.append(request)
+        return httpx.Response(200, json={'id':'fixture','object':'chat.completion',
+            'created':0,'model':'deepseek-v4.1-flash','choices':[{'index':0,
+            'message':{'role':'assistant','content':'ok'},'finish_reason':'stop'}]})
+
+    with ModelIO(transport=httpx.MockTransport(handle)) as io, io_scope(io), \
+            session_scope('intended-private-session'):
+        model = get_llm(api_key='private-credential', model='deepseek-v4.1-flash',
+            base_url='https://fixture.test/v1', streaming=False, enable_thinking=False)
+        model.invoke('private-user-text',
+                     extra_headers={'x-opencode-session':'actual-private-session'})
+    wire = next(data for event, data in events if event == 'wire_request')
+    before = next(data for event, data in events if event == 'request_layout')
+    actual = json.loads(requests[0].content)
+    assert wire['session'] == request_trace.fingerprint('actual-private-session')
+    assert before['session'] == request_trace.fingerprint('intended-private-session')
+    assert wire['messages'] == [request_trace.fingerprint(row) for row in actual['messages']]
+    assert wire['thinking'] == actual['thinking'] == {'type':'disabled'}
+    assert 'extra_body' not in wire['control_fingerprints']
+    assert all(value not in json.dumps(events) for value in (
+        'private-credential','private-user-text','intended-private-session','actual-private-session'))
+
+
+def test_large_or_non_chat_wire_observations_do_not_break_the_request(monkeypatch):
+    import asyncio
+
+    import httpx
+
+    events = []
+    monkeypatch.setattr(request_trace, 'record',
+                        lambda _node, event, **data: events.append((event, data)))
+    for body in (b'x'*(request_trace.MAX_WIRE_LAYOUT_BYTES+1), b'not JSON',
+                 b'[]', b'{"messages":["private-user-text"]}'):
+        request = httpx.Request('POST','https://fixture.test/v1/chat/completions',content=body)
+        asyncio.run(request_trace.record_wire_request(request))
+    assert len(events) == 4
+    assert all(event == 'wire_request_unavailable' and data['session'] is None
+               for event, data in events)
+    assert 'private-user-text' not in json.dumps(events)

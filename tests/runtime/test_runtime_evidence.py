@@ -49,7 +49,7 @@ def test_actual_bound_schemas_and_caller_are_recorded_without_modifying_model_in
         assert "tool_contract" not in str(prompts[0])
         trusted = json.JSONDecoder().raw_decode(
             text_content(prompts[0][0].content).split("运行时能力（可信数据）：")[1])[0]
-        assert trusted["caller"]["role"] == "user" and "identity" not in trusted
+        assert "role" not in trusted["caller"] and "identity" not in trusted
         assert trusted["caller"]["role_label"] == "普通用户"
         assert trusted["permissions"] == context["permissions"]
     finally:

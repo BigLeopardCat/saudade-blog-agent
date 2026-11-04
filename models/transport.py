@@ -11,6 +11,7 @@ import anyio
 import httpx
 from anyio.from_thread import start_blocking_portal
 
+from models.request_trace import record_wire_request
 from utils.trace import record
 
 logger = logging.getLogger(__name__)
@@ -95,7 +96,8 @@ class ModelIO:
             if self._portal is None:
                 self._portal = self._resources.enter_context(start_blocking_portal())
                 self._client = self._portal.call(lambda: httpx.AsyncClient(
-                    transport=self._transport, event_hooks={"response": [_track_response]}))
+                    transport=self._transport,
+                    event_hooks={"request": [record_wire_request], "response": [_track_response]}))
             return self._client
 
     async def _close_pool(self):

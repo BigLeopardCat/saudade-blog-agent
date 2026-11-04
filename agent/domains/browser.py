@@ -1,4 +1,4 @@
-"""Native, reversible browser commands using the existing renderer protocol."""
+"""Authorized browser commands and observed completion facts."""
 
 import json
 import time
@@ -44,13 +44,15 @@ def authorized(config, name):
 
 def console_access(config):
     cfg = (config or {}).get("configurable") or {}
-    return scoped_reads_enabled(cfg.get("principal"), authz.SCOPE_ADMIN_CONSOLE,
-                                cfg.get("user_id"))
+    return scoped_reads_enabled(cfg.get("principal"), authz.SCOPE_ADMIN_CONSOLE, cfg.get("user_id"))
 
 
 def accessible_paths(config):
-    return {path for path in site._NAV_EXACT_PATHS
-            if not path.startswith("/dashboard") or console_access(config)}
+    return {
+        path
+        for path in site._NAV_EXACT_PATHS
+        if not path.startswith("/dashboard") or console_access(config)
+    }
 
 
 def _receipt(workflow, name, args, command):
@@ -71,14 +73,26 @@ def _outcome(reply, receipts, *, failed=False):
 
 
 def _sent(command, receipts):
-    return _outcome(json.dumps({"status": "sent", "scope": "browser", "requested": command,
-                               "observed": None, "result": receipts[0]["result"]},
-                              ensure_ascii=False), receipts)
+    return _outcome(
+        json.dumps(
+            {
+                "status": "sent",
+                "completion_confirmed": False,
+                "scope": "browser",
+                "requested": command,
+                "observed": None,
+                "result": receipts[0]["result"],
+            },
+            ensure_ascii=False,
+        ),
+        receipts,
+    )
 
 
 @tool(response_format="content_and_artifact")
-def navigate_page(path: Path, config: RunnableConfig,
-                  tool_call_id: Annotated[str, InjectedToolCallId]) -> object:
+def navigate_page(
+    path: Path, config: RunnableConfig, tool_call_id: Annotated[str, InjectedToolCallId]
+) -> object:
     """Open a verified site path when the user asks to go there, including an article
     chosen from a recommendation or resolved from conversation context. If asked
     to recommend and open, choose a source then navigate; recommending alone does
@@ -106,14 +120,30 @@ def navigate_page(path: Path, config: RunnableConfig,
         result = _await_browser({**command, "path": path, "request_id": tool_call_id}, config)
         status = result["status"]
         completed = status == "completed"
-        reply = ("浏览器已进入：" + url if completed else
-                 "页面跳转超时，未确认进入目标页面：" + url if status == "timeout" else
-                 "页面跳转未完成：" + url)
+        reply = (
+            "浏览器已进入：" + url
+            if completed
+            else "页面跳转超时，未确认进入目标页面：" + url
+            if status == "timeout"
+            else "页面跳转未完成：" + url
+        )
         receipt = _receipt("navigate", "navigate_to", {"path": path, "confirm": False}, command)
         receipt.update(result=reply, browser_status="completed" if completed else status)
-        return _outcome(json.dumps({"status": status, "scope": "browser_navigation",
-            "requested": path, "observed": result.get("path"), "result": reply},
-            ensure_ascii=False), [receipt], failed=status != "completed")
+        return _outcome(
+            json.dumps(
+                {
+                    "status": status,
+                    "completion_confirmed": completed,
+                    "scope": "browser_navigation",
+                    "requested": path,
+                    "observed": result.get("path"),
+                    "result": reply,
+                },
+                ensure_ascii=False,
+            ),
+            [receipt],
+            failed=status != "completed",
+        )
     receipt = _receipt("navigate", "navigate_to", {"path": path, "confirm": False}, command)
     return _sent(command, [receipt])
 
@@ -166,12 +196,20 @@ def set_page_appearance(
     cfg = (config or {}).get("configurable") or {}
     if cfg.get("browser_feedback") and cfg.get("browser_task"):
         settings = {**effects, **({"dark_mode": dark_mode} if dark_mode is not None else {})}
-        result = _await_browser({"kind": "appearance", "settings": settings,
-                                 "request_id": tool_call_id}, config)
+        result = _await_browser(
+            {"kind": "appearance", "settings": settings, "request_id": tool_call_id}, config
+        )
         status = result["status"]
-        reply = json.dumps({"status": status, "scope": "browser_appearance",
-                            "requested": settings, "observed": result.get("settings")},
-                           ensure_ascii=False)
+        reply = json.dumps(
+            {
+                "status": status,
+                "completion_confirmed": status == "completed",
+                "scope": "browser_appearance",
+                "requested": settings,
+                "observed": result.get("settings"),
+            },
+            ensure_ascii=False,
+        )
         for receipt in receipts:
             receipt.update(result=reply, browser_status=status)
         return _outcome(reply, receipts, failed=status != "completed")
@@ -183,16 +221,22 @@ def tools(config):
     if not available(config):
         return {}
     allowed = accessible_paths(config)
-    pages = "; ".join(label + "=" + path for path, label in site._NAV_LABELS.items()
-                      if path in allowed)
-    navigation = navigate_page.model_copy(update={"description":
-        "Open a site page immediately when requested. Pages available to this caller: " + pages
-        + ". Article: /article/<id>; category: /category/<name>. Use the source article link "
-        "for a chosen recommendation. No site-map lookup is needed for the known pages. "
-        "This allowlist defines supported commands, not whether other URLs exist. "
-        "With browser feedback, execution pauses durably until the client reports completion "
-        "or timeout, then continues the same task. Status sent means queued only; "
-        "only completed proves arrival. No confirmation card."})
+    pages = "; ".join(
+        label + "=" + path for path, label in site._NAV_LABELS.items() if path in allowed
+    )
+    navigation = navigate_page.model_copy(
+        update={
+            "description": "Open a site page immediately when requested. "
+            "Pages available to this caller: "
+            + pages
+            + ". Article: /article/<id>; category: /category/<name>. Use the source article link "
+            "for a chosen recommendation. No site-map lookup is needed for the known pages. "
+            "This allowlist defines supported commands, not whether other URLs exist. "
+            "With browser feedback, execution pauses durably until the client reports completion "
+            "or timeout, then continues the same task. Status sent means queued only; "
+            "only completed proves arrival. No confirmation card."
+        }
+    )
     return {
         item.name: item.model_copy(
             update={"handle_tool_error": True, "handle_validation_error": str}

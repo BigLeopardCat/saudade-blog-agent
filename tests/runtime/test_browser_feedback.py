@@ -1,5 +1,7 @@
 """Browser acknowledgements resume real framework interrupts without re-running intent."""
 
+import json
+
 import pytest
 from _browser_support import Model, acknowledge
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
@@ -71,6 +73,7 @@ def test_navigation_pauses_after_one_model_call_and_survives_reconstruction(navi
     assert len(model.calls) == 2 and resumed.reply == "页面操作结果已收到。"
     facts = [m for m in model.calls[-1] if isinstance(m, ToolMessage)]
     assert any("浏览器已进入" in m.content for m in facts)
+    assert all(json.loads(m.content)["completion_confirmed"] is True for m in facts)
     assert not runtime().store.load(config).unfinished
     assert not any(isinstance(frame, str) and frame.startswith("__CMD__:")
                    for frame in iter_transport_events([resumed]))
@@ -89,6 +92,7 @@ def test_failure_or_wrong_location_is_not_a_success_fact(navigation, status, pat
     assert result.reply and len(model.calls) == 2
     facts = [m for m in model.calls[-1] if isinstance(m, ToolMessage)]
     assert any(expected in m.content for m in facts)
+    assert all(json.loads(m.content)["completion_confirmed"] is False for m in facts)
     assert not any("浏览器已进入" in m.content for m in facts)
 
 
