@@ -128,6 +128,37 @@ def actor_preflight(cases, transport, identities):
     return profiles, allowances, roles
 
 
+
+def check_case_fixtures(case, transport):
+    """Read preparation targets; never approve or execute a business mutation."""
+    for identifier in fixture_articles(case):
+        transport.check_public_article_fixture(identifier)
+    for identifier in fixture_images(case):
+        transport.check_gallery_fixture(identifier)
+    if case.get("requires_quota_usage"):
+        transport.check_quota_fixture(case["requires_quota_usage"])
+    if case.get("requires_category_creation"):
+        transport.check_category_fixture(case["requires_category_creation"])
+
+
+def fixture_preflight(cases, transport, identities):
+    """Validate every fixture before the first model call, retaining per-case results."""
+    previous_uid = getattr(transport, "uid", None)
+    results = []
+    try:
+        for case in cases:
+            transport.uid = identities[case["identity"]]
+            row = {"id": case["id"], "status": "passed"}
+            try:
+                check_case_fixtures(case, transport)
+            except (httpx.HTTPError, EvaluationError, ValueError) as exc:
+                row.update(status="evaluation_error", error=f"{type(exc).__name__}: {exc}")
+            results.append(row)
+    finally:
+        transport.uid = previous_uid
+    return results
+
+
 def run(cases, transport, identities, report_dir, *, phase, suite_hash, include_vision=False,
         dataset_role="regression", expected_build=None, evaluation_id=None):
     excluded = [case for case in cases if not include_vision and "vision" in case["tags"]]
@@ -173,6 +204,15 @@ def run(cases, transport, identities, report_dir, *, phase, suite_hash, include_
         temp.replace(target)
 
     save()
+    preflight = fixture_preflight(cases, transport, identities)
+    (folder / "preflight.json").write_text(
+        json.dumps(preflight, ensure_ascii=False, indent=2) + "\n")
+    if any(row["status"] != "passed" for row in preflight):
+        report.update(stopped_reason="fixture preflight failed before any model request",
+                      preflight=preflight, full_run=False,
+                      finished_at=datetime.now().astimezone().isoformat())
+        save()
+        return report
     for case in cases:
         before = transport.client.get(transport.agent_url + "/version")
         before.raise_for_status()
@@ -190,14 +230,8 @@ def run(cases, transport, identities, report_dir, *, phase, suite_hash, include_
         try:
             key = case["identity"]
             with transport.conversation(identities[key], role_sets[key]):
-                for identifier in fixture_articles(case):
-                    transport.check_public_article_fixture(identifier)
-                for identifier in fixture_images(case):
-                    transport.check_gallery_fixture(identifier)
-                if case.get("requires_quota_usage"):
-                    transport.check_quota_fixture(case["requires_quota_usage"])
-                if case.get("requires_category_creation"):
-                    transport.check_category_fixture(case["requires_category_creation"])
+                # Preconditions may change after the suite-wide check.
+                check_case_fixtures(case, transport)
                 result = golden.run_case(case, turn_runner=transport)
                 fails = golden.check_case(case, result)
                 errors = [r["error"] for r in result["rounds"] if r.get("error")]
