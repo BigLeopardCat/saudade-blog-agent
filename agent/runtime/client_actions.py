@@ -14,6 +14,8 @@ from utils.trace import record
 
 def await_result(command, config):
     task_id = config["configurable"]["browser_task"]
+    if not isinstance(command.get("request_id"), str) or not command["request_id"]:
+        raise ToolException("Client actions require a stable tool invocation ID")
     identity = json.dumps([task_id, command], sort_keys=True, separators=(",", ":"))
     command = {
         **command,
@@ -82,20 +84,7 @@ def successful(command, value):
             document = EditorObservation.model_validate(value.get("document"))
         except ValidationError:
             return False
-        if command["operation"] == "read":
-            return (
-                document.outcome == "read"
-                and document.content is not None
-                and document.description is not None
-                and document.total_chars is not None
-                and document.offset == command["offset"]
-            )
-        return (
-            document.editor_id == command["editor_id"]
-            and document.revision >= command["revision"]
-            and document.outcome == ("proposed" if command["operation"] == "propose" else "updated")
-            and (command["operation"] != "propose" or bool(document.proposal_id))
-        )
+        return document.matches(command)
     return False
 
 
