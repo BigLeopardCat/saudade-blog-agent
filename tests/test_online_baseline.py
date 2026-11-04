@@ -613,3 +613,86 @@ def test_online_transport_preserves_task_identity_events_separately_from_reply(
     assert result["text"] == "继续原任务" and not result["error"]
     assert result["http_events"][0] == {
         "event": "task_input", "data": {"task_id": "original", "ready": False}}
+
+
+def test_late_invalid_fixture_stops_the_entire_suite_before_model_spend(tmp_path, monkeypatch):
+    class Fake:
+        agent_url = "http://agent"
+        uid = None
+        requests = []
+        cleaned_conversations = []
+        client = httpx.Client(transport=httpx.MockTransport(
+            lambda request: httpx.Response(200, json={"sha": "fixed"}, request=request)))
+
+        def profile(self, *_):
+            return "user"
+
+        def check_quota_fixture(self, _):
+            assert self.uid == 7
+            raise EvaluationError("quota fixture has no usage")
+
+        def conversation(self, *_):
+            pytest.fail("fixture failure must prevent even the first conversation")
+
+    monkeypatch.setattr(online_baseline.golden, "run_case",
+                        lambda *a, **k: pytest.fail("no model call is allowed"))
+    cases = [{"id": "first", "identity": "user", "tags": []},
+             {"id": "late", "identity": "user", "tags": [], "requires_quota_usage": 722}]
+    adapter = Fake()
+    folder = tmp_path / "report"
+    report = online_baseline.run(cases, adapter, {"user": 7}, folder,
+                                 phase="full", suite_hash="fixed")
+    assert not report["full_run"] and report["cases"] == report["requests"] == []
+    assert report["stopped_reason"] == "fixture preflight failed before any model request"
+    assert report["preflight"][1]["status"] == "evaluation_error"
+    assert json.loads((folder / "preflight.json").read_text()) == report["preflight"]
+    assert adapter.uid is None
+
+
+def test_fixture_change_after_preflight_is_still_rejected_before_model(tmp_path, monkeypatch):
+    class Fake:
+        agent_url = "http://agent"
+        uid = None
+        requests = []
+        cleaned_conversations = []
+        checks = 0
+        client = httpx.Client(transport=httpx.MockTransport(
+            lambda request: httpx.Response(200, json={"sha": "fixed"}, request=request)))
+
+        def profile(self, *_):
+            return "user"
+
+        def check_quota_fixture(self, _):
+            self.checks += 1
+            if self.checks > 1:
+                raise EvaluationError("fixture changed after preflight")
+
+        @contextmanager
+        def conversation(self, uid, *_):
+            self.uid = uid
+            yield 1
+
+    monkeypatch.setattr(online_baseline.golden, "run_case",
+                        lambda *a, **k: pytest.fail("stale fixture cannot reach a model"))
+    case = {"id": "quota", "identity": "user", "tags": [], "requires_quota_usage": 722}
+    adapter = Fake()
+    report = online_baseline.run([case], adapter, {"user": 7}, tmp_path / "report",
+                                 phase="full", suite_hash="fixed")
+    assert report["counts"] == {"evaluation_error": 1} and adapter.checks == 2
+    assert report["requests"] == []
+
+
+def test_fixture_preflight_uses_each_cases_identity_and_restores_actor():
+    class Fake:
+        uid = 99
+
+        def check_gallery_fixture(self, identifier):
+            seen.append((self.uid, identifier))
+
+    seen = []
+    adapter = Fake()
+    cases = [{"id": "admin", "identity": "admin", "requires_gallery_images": [72]},
+             {"id": "user", "identity": "user", "requires_gallery_images": [72]}]
+    assert all(row["status"] == "passed" for row in online_baseline.fixture_preflight(
+        cases, adapter, {"admin": 1, "user": 4}))
+    assert seen == [(1, 72), (4, 72)] and adapter.uid == 99
