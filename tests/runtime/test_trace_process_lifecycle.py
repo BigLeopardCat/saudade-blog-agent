@@ -36,3 +36,13 @@ os.kill(os.getpid(),signal.SIGKILL)
     assert 'trace_id=killed-worker-fixture stage=native.llm_start' in result.stdout
     assert 'pid=' in result.stdout and 'PRIVATE_MODEL_REQUEST_CANARY' not in result.stdout
     assert not list(tmp_path.glob('*.json'))
+
+
+def test_trace_content_is_private_even_with_a_permissive_process_umask(tmp_path):
+    previous = os.umask(0)
+    try:
+        trace.start_trace('private-fixture', 0, 'fixture', dir=str(tmp_path), by_day=False)
+        path = trace.finish_trace('private-fixture', 'producer_done', 0.1)
+    finally:
+        os.umask(previous)
+    assert Path(path).stat().st_mode & 0o777 == 0o600
