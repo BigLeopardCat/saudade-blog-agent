@@ -46,7 +46,7 @@ class WeatherSnapshot(BaseModel):
     weather_code: StrictInt
     humidity_percent: float = Field(ge=0, le=100, allow_inf_nan=False)
     wind_speed_kmh: float = Field(ge=0, le=500, allow_inf_nan=False)
-    valid_at: StrictInt = Field(gt=0)
+    valid_at: StrictInt = Field(gt=0, le=9_007_199_254_740_991)
     source: Literal["Open-Meteo"]
     location_source: Literal["GeoJS IP"]
 
