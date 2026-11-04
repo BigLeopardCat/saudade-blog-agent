@@ -40,7 +40,7 @@ def test_invented_and_foreign_links_remain_rejected_even_when_body_has_other_ref
 def test_unseen_or_failed_read_cannot_authorize_a_reference():
     raw = article_page({"noteTitle": "Source", "noteContent": "x" * 4000
                         + "[Unseen](/article/9)"}, 1)
-    text, visible = render_article_result(ok(str(raw), data=raw), 1200)
+    text, visible = render_article_result(raw, str(raw), 1200)
     evidence = ArticleEvidence()
     evidence.observe("get_article_detail", {"article_id": 1}, ok(text, data=visible))
     evidence.observe("get_article_detail", {"article_id": 2}, unavailable("outage", data={

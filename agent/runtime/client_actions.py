@@ -78,7 +78,7 @@ def successful(command, value):
     if command["kind"] == "article_editor":
         from pydantic import ValidationError
 
-        from agent.api.schemas import EditorObservation
+        from agent.contracts.client import EditorObservation
 
         try:
             document = EditorObservation.model_validate(value.get("document"))

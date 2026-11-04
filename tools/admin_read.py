@@ -24,7 +24,7 @@ __all__ = ["logger", "get_server_status", "get_service_health", "get_moderation_
 logger = logging.getLogger(__name__)
 
 @tool
-def get_server_status() -> str:
+def get_server_status() -> str | ToolResult:
     """查看服务器运行状态：CPU 核数与使用率、1/5/15 分钟负载、内存与 Swap 用量、
     各磁盘用量与可用空间、开机时长。数据由 agent 直接读本机 /proc 得到，不经后台接口。"""
     # Import report dependencies lazily to avoid the tool registry's import cycle.
@@ -47,7 +47,7 @@ def get_server_status() -> str:
 
 
 @tool
-def get_service_health() -> str:
+def get_service_health() -> str | ToolResult:
     """读取当前服务状态、重启次数、历史探针记录、对话计数和日志体积，仅管理员。
     当前状态不能证明历史一直正常；这些读数不证明故障原因。
     """
@@ -71,7 +71,7 @@ def get_moderation_status(
     status: Annotated[Literal["ai_passed", "ai_rejected", "pending"] | None,
                       "只列某一类明细：ai_passed=AI 直接通过的 / ai_rejected=AI 驳回的 / "
                       "pending=需要人工复批的；不填则三类各列最近几条（其余只计数）"] = None,
-) -> str:
+) -> str | ToolResult:
     """查看河灯留言的审核状况：总数与待审/已通过/已驳回的分布、AI 侧判定分布
     （AI 通过 / AI 驳回 / AI 存疑转人工 / 未走 AI），以及三份可读名单——
     ① AI 直接通过的 ② AI 驳回的（并说明人工是维持驳回、改判放行还是仍在等）
@@ -106,7 +106,7 @@ def list_admin_board(
     keyword: Annotated[str | None,
                        "按关键词过滤（在正文、留名、账号昵称/用户名里做子串匹配）；"
                        "只在留言很多、要定位某一条时填"] = None,
-) -> str:
+) -> str | ToolResult:
     """查看河灯留言的**后台名册**：逐条给出 talkId、审核状态、时间、**发表账号**
     （userId/昵称/用户名）、留言时自己填的留名、正文节选。**待审与未通过的留言也在
     这里**（公开留言板列表只含已通过的）。
@@ -142,7 +142,7 @@ def list_admin_comments(
     keyword: Annotated[str | None,
                        "按关键词过滤（在评论正文、作者昵称/用户名、文章标题里做子串匹配）；"
                        "只在评论很多、要定位某一条时填"] = None,
-) -> str:
+) -> str | ToolResult:
     """查看**文章评论**的**后台名册**：逐条给出 commentId、审核状态、时间、发表账号
     （userId/昵称/用户名）、**挂在哪篇文章下**（文章标题与 noteId）、正文节选。
     待审与未通过的评论也在这里（公开的评论区只显示已通过的）。
@@ -172,7 +172,7 @@ def list_admin_comments(
 
 
 @tool
-def get_user_stats(config: RunnableConfig) -> str:
+def get_user_stats(config: RunnableConfig) -> str | ToolResult:
     """查看全站用户数据报表：用户总数与角色分布、会话/消息/执行回执的总量、
     近 7 天与近 30 天的活跃人数、以及按消息数倒序的用户明细（最多 50 行）。
     需要管理员身份。口径是"活动"不是"注册"（系统没存注册时间）。"""
@@ -195,7 +195,7 @@ def get_user_stats(config: RunnableConfig) -> str:
 
 
 @tool
-def get_note_stats(config: RunnableConfig) -> str:
+def get_note_stats(config: RunnableConfig) -> str | ToolResult:
     """查询当前可见文章的历史累计合计与阅读、点赞、收藏排行榜，另附近30天日趋势。
     合计和排行均为历史累计，不是本周、本月或本年；有明确自然周期时使用get_note_periods。
     日趋势是独立滚动窗口，不能据此把累计排行榜称为窗口内排名。
@@ -219,7 +219,7 @@ def get_note_periods(
     kind: Annotated[Literal["week", "month", "year"],
                     "自然周期：week=周，month=月，year=年；按用户要求选择。"],
     config: RunnableConfig,
-) -> str:
+) -> str | ToolResult:
     """按自然周、月或年查询文章访问合计和各期阅读排行，仅管理员。
     每期合计涵盖本期全量，排行仅列前几篇。只算当前可见文章，范围由后端返回。
     当前期或统计开始前的期可能不完整；未开始统计不等于零访问。

@@ -38,7 +38,7 @@ def _render(data):
     encoded = json.dumps(data, ensure_ascii=False, separators=(",", ":"))
     if len(encoded) > 7500:
         return base.unavailable("本页内容超过读取上限，请减小limit后重试。")
-    return base.ok(encoded)
+    return base.ok(encoded, data=data)
 
 
 def _content(row):

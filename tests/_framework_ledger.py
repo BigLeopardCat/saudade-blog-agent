@@ -21,5 +21,9 @@ class Ledger:
         with closing(idem.Ledger(self.path)) as ledger:
             return ledger.lookup(*args, **kwargs)
 
+    def replace(self, *args, **kwargs):
+        with closing(idem.Ledger(self.path)) as ledger:
+            return ledger.replace(*args, **kwargs)
+
     def close(self):
         pass

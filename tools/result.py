@@ -8,23 +8,26 @@ Presentation helpers preserve ID namespaces and ownership meaning without I/O.""
 __all__ = ["ToolResult", "ok", "empty", "unavailable", "not_found", "invalid_args", "TGT_KINDS",
            "tgt", "fact", "is_noop", "UPSTREAM_DOWN", "error_frame"]
 
-# Readable tool results retain explicit kinds: ok, empty, unavailable and not_found.
-# Page commands use structured metadata; ordinary reply text is not executable.
-class ToolResult(str):
+from dataclasses import dataclass, field
+
+
+@dataclass(frozen=True, init=False)
+class ToolResult:
+    """Application value projected once into ToolMessage content and artifact."""
+
+    text: str
     kind: str = "ok"
-    # Compact machine-readable write evidence, separate from display text.
-    meta: dict = {}
-    # Original structured tool data. None means no structured payload; {} means empty data.
-    # Receipt metadata stays compact; full data is not copied into the host receipt.
+    meta: dict = field(default_factory=dict)
     data: object = None
 
-    def __new__(cls, text: str, kind: str = "ok",
-                meta: dict | None = None, data: object = None) -> "ToolResult":
-        obj = str.__new__(cls, text)
-        obj.kind = kind
-        obj.meta = dict(meta) if meta else {}
-        obj.data = data
-        return obj
+    def __init__(self, text: str, kind: str = "ok", meta: dict | None = None, data: object = None):
+        object.__setattr__(self, "text", text)
+        object.__setattr__(self, "kind", kind)
+        object.__setattr__(self, "meta", dict(meta or {}))
+        object.__setattr__(self, "data", data)
+
+    def __str__(self) -> str:
+        return self.text
 
 
 def ok(text: str, meta: dict | None = None, *, data: object = None) -> ToolResult:
@@ -129,7 +132,7 @@ UPSTREAM_DOWN = unavailable("服务暂时不可用，请稍后再试")
 # Tools also retain runtime validation for callers that bypass schema validation.
 
 
-def _shape(data, *, meta: dict | None = None) -> str:
+def _shape(data, *, meta: dict | None = None) -> ToolResult:
     """Preserve typed outcomes and expose the same structured data as rendered text.
 
     Normalize ID namespaces once for every consumer. Existing ToolResult objects
@@ -166,14 +169,7 @@ def _board_text_keys(rows: list) -> list:
 
 
 def _rows_with_note(rows: list, note: str) -> list:
-    """列表帧尾补一条**系统注记**（给模型读的边界事实）。
-
-    为什么放在 list **里面**而不是拼在文本外面：帧文本还是 `$ref` 的取值源
-    （`graph.py` 的 `parse_data(str(out))`）——外面拼一行说明会让 `literal_eval`
-    整个失败、引用退化成 `ref_unparsed`。而多出来的**非 dict 元素**天然被结构化
-    消费者跳过（`entities._rows` 按 `isinstance(x, dict)` 过滤、`decisions` 的候选
-    扫描同样带 isinstance 判断），下标寻址（`$list_guestbook[0].content`）也不动。
-    """
+    """Append the visible window boundary without changing the source row dictionaries."""
     return list(rows) + [f"〔系统注记〕{note}"]
 
 

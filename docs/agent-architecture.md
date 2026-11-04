@@ -84,6 +84,8 @@ flowchart LR
 │   ├── domains/articles/evidence.py                    # 候选、已读正文与文章来源证据
 │   ├── authz.py                                         # 当前生产代码模块
 │   ├── composition.py                                 # 博客服务依赖装配与资源生命周期
+│   ├── contracts/__init__.py                            # 客户端边界契约
+│   ├── contracts/client.py                              # 客户端观察与持久操作引用
 │   ├── proposals.py                                   # 签名操作提案与共享确认协议
 │   ├── checkpoint.py                                    # 当前生产代码模块
 │   ├── confirm.py                                       # 当前生产代码模块
@@ -101,6 +103,7 @@ flowchart LR
 │   ├── domains/announcements/transactions.py            # 当前生产代码模块
 │   ├── domains/article_actions/__init__.py              # 当前生产代码模块
 │   ├── domains/article_summary.py                      # 摘要确认的内容绑定与执行账
+│   ├── domains/article_summary_state.py                 # 摘要操作的类型化生命周期与核验投影
 │   ├── domains/article_editor.py                       # 当前编辑器的草稿读取、正文审阅提案和摘要更新
 │   ├── domains/article_actions/preparation.py           # 当前生产代码模块
 │   ├── domains/article_actions/batch.py                 # 一次确认的有界文章批量事务

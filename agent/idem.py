@@ -36,7 +36,7 @@ def unknown_frame(name: str) -> ToolResult:
             REASON_OUTCOME_UNKNOWN)
 
 
-def replay_result(row) -> str:
+def replay_result(row) -> str | ToolResult:
     """Restore persisted text, result kind and metadata; absent text uses a truthful fallback."""
     _status, text, kind, meta_json = row
     if text is None:
@@ -159,6 +159,16 @@ class Ledger:
             (None if capped else text, str(getattr(out, "kind", "ok") or "ok"),
              json.dumps(getattr(out, "meta", None) or {}, ensure_ascii=False), key))
         return capped
+
+    def replace(self, key: str, previous: tuple, out) -> bool:
+        """Advance a client lifecycle only while its exact persisted result is current."""
+        text = str(out)
+        cursor = self._db().execute(
+            "UPDATE idem SET text=?, kind=?, meta=? WHERE key=? AND status='done'"
+            " AND kind=? AND meta=?",
+            (None if len(text) > _RESULT_MAX else text, out.kind,
+             json.dumps(out.meta, ensure_ascii=False), key, previous[2], previous[3]))
+        return cursor.rowcount == 1
 
     def close(self) -> None:
         if self._conn is not None:

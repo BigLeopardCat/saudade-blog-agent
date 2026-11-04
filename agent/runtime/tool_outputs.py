@@ -5,7 +5,6 @@ from functools import wraps
 from langchain_core.tools import StructuredTool, ToolException
 from pydantic import ValidationError
 
-from agent.runtime.message_content import text_content
 from agent.runtime.results import TurnResult
 from agent.runtime.tool_errors import validation_result
 from tools.result import ToolResult, invalid_args, unavailable
@@ -22,8 +21,7 @@ def _output(result, response_format):
         return content, {
             "application_result": {"reply": result.reply, "execution": result.execution}}
     if isinstance(result, ToolResult):
-        return str(result), {"application_data": {
-            "kind": result.kind, "data": result.data, "meta": result.meta}}
+        return str(result), {"kind": result.kind, "data": result.data, "meta": result.meta}
     return result, None
 
 
@@ -69,14 +67,10 @@ def framework_tool(original):
     return original.model_copy(update=updates)
 
 
-def application_result(message):
-    """Recover structured data without putting artifacts into model text."""
+def prepared_result(message):
+    """Read application approval control without rebuilding ordinary tool results."""
     artifact = message.artifact if isinstance(message.artifact, dict) else {}
     terminal = artifact.get("application_result")
     if terminal is not None:
         return TurnResult(terminal["reply"], terminal["execution"])
-    data = artifact.get("application_data")
-    if data is not None:
-        return ToolResult(text_content(message.content), kind=data["kind"],
-                          meta=data.get("meta"), data=data.get("data"))
-    return message
+    return None

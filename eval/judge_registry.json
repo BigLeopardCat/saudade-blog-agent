@@ -135,6 +135,14 @@
         0,
         0
       ],
+      "agent/contracts/__init__.py": [
+        0,
+        0
+      ],
+      "agent/contracts/client.py": [
+        0,
+        0
+      ],
       "agent/domains/__init__.py": [
         0,
         0
@@ -213,6 +221,10 @@
       ],
       "agent/domains/article_summary.py": [
         3,
+        0
+      ],
+      "agent/domains/article_summary_state.py": [
+        1,
         0
       ],
       "agent/domains/article_tags/__init__.py": [
@@ -917,7 +929,7 @@
       ]
     },
     "total": [
-      412,
+      413,
       33
     ]
   },

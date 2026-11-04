@@ -14,7 +14,7 @@ def list_quota_requests(
     config: RunnableConfig,
     status: Annotated[str | None,
                       "看哪些：「pending」只看待处理的（默认），「all」连已处理的一起看"] = None,
-) -> str:
+) -> str | ToolResult:
     """查看用户提交的**对话额度重置申请**清单：每行给出申请人的**账号 id**、账号名、
     他现在用了多少轮、申请理由与状态。
 
