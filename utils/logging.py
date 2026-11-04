@@ -25,7 +25,7 @@ def reset_trace_id() -> None:
     _trace_id.set("-")
 
 
-class _TraceIdFilter(logging.Filter):
+class RequestContextFilter(logging.Filter):
     """把 contextvar 中的 trace_id 注入每条 log record。"""
 
     def filter(self, record: logging.LogRecord) -> bool:
@@ -39,14 +39,8 @@ def setup_logging() -> None:
 
     handler = logging.StreamHandler(sys.stdout)
     handler.setLevel(level)
-    handler.addFilter(_TraceIdFilter())
-    handler.setFormatter(
-        logging.Formatter(
-            fmt=("%(asctime)s | %(name)-24s | %(levelname)-7s | "
-                 "service=saudade-agent | pid=%(process)d | request_id=%(trace_id)s | %(message)s"),
-            datefmt="%Y-%m-%dT%H:%M:%S%z",
-        )
-    )
+    handler.addFilter(RequestContextFilter())
+    handler.setFormatter(standard_formatter())
 
     root = logging.getLogger()
     root.setLevel(level)
@@ -63,3 +57,12 @@ def request_id(value: str | None) -> str:
     if value and re.fullmatch(r"[A-Za-z0-9_-]{1,128}", value):
         return value
     return uuid.uuid4().hex
+
+
+def standard_formatter() -> logging.Formatter:
+    """One formatter for application logs and Uvicorn's pre-startup process diagnostics."""
+    return logging.Formatter(
+        fmt=("%(asctime)s | %(name)-24s | %(levelname)-7s | "
+             "service=saudade-agent | pid=%(process)d | request_id=%(trace_id)s | %(message)s"),
+        datefmt="%Y-%m-%dT%H:%M:%S%z",
+    )
