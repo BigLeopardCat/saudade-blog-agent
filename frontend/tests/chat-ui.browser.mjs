@@ -1027,6 +1027,49 @@ try {
   }
   passed('desktop/light/dark and 375px mobile long/empty/history without horizontal overflow');
   assert.deepEqual(errors, [], 'Uncaught browser errors');
+  await page.emulateMedia({ reducedMotion: 'no-preference' });
+  for (const width of [1440, 375]) {
+    await page.setViewportSize({ width, height: 1000 });
+    await reset();
+    await page.locator('#chat-input').fill('收起后保留的草稿');
+    const original = await page.locator('#waifu-chat').boundingBox();
+    await page.locator('#chat-minimize').click();
+    await page.waitForTimeout(100);
+    const halfway = await page.locator('#waifu-chat').boundingBox();
+    assert.ok(halfway.height > 36 && halfway.height < original.height, JSON.stringify({ halfway, original }));
+    await page.waitForTimeout(320);
+    const bar = await page.locator('#waifu-chat').boundingBox();
+    assert.ok(bar.height <= 38 && Math.abs(bar.width - original.width) < 2);
+    assert.equal(await page.locator('#chat-input').evaluate(el => el.closest('.chat-input-area').inert), true);
+    const start = await page.locator('#chat-restore').boundingBox();
+    await page.mouse.move(start.x + 40, start.y + 16);
+    await page.mouse.down();
+    await page.mouse.move(start.x + 50, start.y + 116, { steps: 8 });
+    await page.mouse.up();
+    assert.equal(await page.locator('#waifu-chat').getAttribute('data-window-mode'), 'collapsed');
+    const moved = await page.locator('#waifu-chat').boundingBox();
+    assert.ok(Math.abs(moved.y - bar.y) > 50);
+    await page.screenshot({ path: path.join(output, `collapsed-${width}.png`) });
+    await page.locator('#chat-minimize').click();
+    await page.waitForTimeout(420);
+    const notch = await page.locator('#waifu-chat').boundingBox();
+    assert.ok(notch.y === 0 && notch.width === 148 && notch.height === 44, JSON.stringify(notch));
+    await page.screenshot({ path: path.join(output, `docked-${width}.png`) });
+    await page.locator('#chat-restore').click();
+    await page.waitForTimeout(420);
+    assert.equal(await page.locator('#waifu-chat').getAttribute('data-window-mode'), 'expanded');
+    assert.equal(await page.locator('#chat-input').inputValue(), '收起后保留的草稿');
+    assert.equal(await page.locator('#chat-input').evaluate(el => el.closest('.chat-input-area').inert), false);
+    assert.ok((await page.locator('#waifu-chat').boundingBox()).height > 180);
+    // A header tap expands; touch drags use the same pointer path and cancel cleanly.
+    await page.locator('#chat-minimize').click();
+    await page.waitForTimeout(420);
+    await page.locator('#chat-restore').click();
+    await page.waitForTimeout(420);
+    assert.equal(await page.locator('#waifu-chat').getAttribute('data-window-mode'), 'expanded');
+    assert.equal(await page.locator('#chat-input').inputValue(), '收起后保留的草稿');
+  }
+  passed('desktop and mobile collapse, drag without reopening, dock at top, and restore draft');
   console.log(JSON.stringify({ passed: checks, screenshots: output, requests: requests.length }, null, 2));
 } finally {
   if (browser) await browser.close();

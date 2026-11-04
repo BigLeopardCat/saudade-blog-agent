@@ -47,6 +47,8 @@
         <div class="chat-heading">
           <div id="chat-conv-title" class="chat-conv-title"><span class="chat-conv-title-tag" id="chat-conv-title-tag"></span></div>
         </div>
+        <button type="button" class="chat-restore" id="chat-restore" aria-label="展开对话" title="展开对话" hidden>展开对话</button>
+        <button type="button" class="chat-minimize" id="chat-minimize" aria-label="收起对话内容" title="收起对话内容" aria-expanded="true">−</button>
         <button type="button" class="chat-close" id="chat-close" aria-label="关闭对话" title="关闭对话">×</button>
       </header>
       <div class="chat-messages" id="chat-messages" role="region" aria-label="聊天记录" tabindex="0">

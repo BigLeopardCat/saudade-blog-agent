@@ -21,6 +21,7 @@
     const { chatPanel: panel, input, sendBtn, messages, askBox } = ctx.dom;
     if (panel.dataset.uiReady) return;
     panel.dataset.uiReady = '1';
+    initWindow(panel);
     const status = panel.querySelector('#chat-status');
     const empty = panel.querySelector('#chat-empty');
     const imageButton = panel.querySelector('#chat-img-btn');
@@ -203,5 +204,110 @@
     observer.observe(panel.querySelector('#chat-img-preview'), { childList: true });
     resize(); refresh();
   };
+  // Keep the conversation mounted: minimizing must preserve drafts and live replies.
+  function initWindow(panel) {
+    const minimize = panel.querySelector('#chat-minimize');
+    const restore = panel.querySelector('#chat-restore');
+    const header = panel.querySelector('.chat-header');
+    if (!minimize || !restore || !header) return;
+    const home = panel.parentNode;
+    let expandedHeight = '', expandedSize = 0, dockStyle = '', drag = null, dragged = false;
+    let transitionTimer;
+    const mode = () => panel.dataset.windowMode || 'expanded';
+    const fit = () => {
+      if (!panel.classList.contains('active') || mode() === 'docked') return;
+      const rect = panel.getBoundingClientRect();
+      const left = Math.max(8, Math.min(rect.left, innerWidth - rect.width - 8));
+      const top = Math.max(8, Math.min(rect.top, innerHeight - rect.height - 8));
+      panel.style.left = panel.offsetLeft + left - rect.left + 'px';
+      panel.style.top = panel.offsetTop + top - rect.top + 'px';
+      panel.style.right = panel.style.bottom = 'auto';
+    };
+    const setMode = next => {
+      const previous = mode();
+      if (next === previous) return;
+      const before = panel.getBoundingClientRect();
+      const returnFocus = panel.contains(document.activeElement);
+      clearTimeout(transitionTimer);
+      if (previous === 'docked') {
+        home.appendChild(panel);
+        panel.style.cssText = dockStyle;
+      }
+      if (previous === 'expanded') {
+        const rect = panel.getBoundingClientRect();
+        expandedHeight = panel.style.height;
+        expandedSize = rect.height;
+        // Anchor the top edge before shrinking a panel originally anchored to its bottom.
+        panel.style.top = panel.offsetTop + 'px';
+        panel.style.bottom = 'auto';
+        panel.style.height = rect.height + 'px';
+        panel.dataset.detached = 'true';
+      }
+      if (next === 'docked') {
+        dockStyle = panel.style.cssText;
+        document.body.appendChild(panel);
+      }
+      panel.dataset.windowMode = next;
+      const collapsed = next !== 'expanded';
+      Array.from(panel.children).forEach(child => {
+        if (child !== header && !child.classList.contains('chat-drag-bar-t')) child.inert = collapsed;
+      });
+      restore.hidden = !collapsed;
+      minimize.hidden = next === 'docked';
+      minimize.setAttribute('aria-expanded', String(!collapsed));
+      minimize.setAttribute('aria-label', collapsed ? '收纳到页面顶部' : '收起对话内容');
+      minimize.title = minimize.getAttribute('aria-label');
+      header.title = collapsed ? '单击展开，拖动移动' : '';
+      panel.style.height = collapsed ? '36px' : expandedSize + 'px';
+      if ((next === 'docked' || previous === 'docked')
+          && !window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+        const after = panel.getBoundingClientRect();
+        const base = next === 'docked' ? 'translateX(-50%) ' : '';
+        panel.animate([
+          { transform: `${base}translate(${before.left - after.left}px, ${before.top - after.top}px) scale(${before.width / after.width}, ${before.height / after.height})`, transformOrigin: 'top left' },
+          { transform: base || 'none', transformOrigin: 'top left' },
+        ], { duration: 360, easing: 'cubic-bezier(.22, 1, .36, 1)' });
+      }
+      // CSS transitions only during a state change, never while following a pointer.
+      panel.dataset.windowTransition = 'true';
+      transitionTimer = setTimeout(() => {
+        delete panel.dataset.windowTransition;
+        if (mode() === 'expanded') panel.style.height = expandedHeight;
+        fit();
+      }, 380);
+      if (returnFocus) (collapsed ? restore : minimize).focus({ preventScroll: true });
+    };
+    minimize.addEventListener('click', () => setMode(mode() === 'expanded' ? 'collapsed' : 'docked'));
+    restore.addEventListener('click', () => { if (!dragged) setMode('expanded'); });
+    panel.addEventListener('click', e => {
+      if (mode() !== 'expanded' && !dragged && !e.target.closest('button')) setMode('expanded');
+    });
+    panel.addEventListener('pointerdown', e => {
+      if (mode() !== 'collapsed' || e.button !== 0 || e.target.closest('#chat-minimize, #chat-close')) return;
+      e.preventDefault(); e.stopPropagation();
+      dragged = false;
+      drag = { x: e.clientX, y: e.clientY, left: panel.offsetLeft, top: panel.offsetTop, id: e.pointerId };
+      panel.setPointerCapture(e.pointerId);
+    });
+    panel.addEventListener('pointermove', e => {
+      if (!drag || drag.id !== e.pointerId) return;
+      const dx = e.clientX - drag.x, dy = e.clientY - drag.y;
+      if (Math.hypot(dx, dy) > 5) dragged = true;
+      if (!dragged) return;
+      panel.style.left = drag.left + dx + 'px';
+      panel.style.top = drag.top + dy + 'px';
+      panel.style.right = panel.style.bottom = 'auto';
+    });
+    const endDrag = e => {
+      if (!drag || drag.id !== e.pointerId) return;
+      if (panel.hasPointerCapture(e.pointerId)) panel.releasePointerCapture(e.pointerId);
+      drag = null; fit();
+      // The synthesized click after a drag must not reopen the conversation.
+      setTimeout(() => { dragged = false; }, 0);
+    };
+    panel.addEventListener('pointerup', endDrag);
+    panel.addEventListener('pointercancel', endDrag);
+    window.addEventListener('resize', fit);
+  }
   g.__waifuChatUI = { init, deriveState, shouldSubmit };
 })(typeof window !== 'undefined' ? window : globalThis);
