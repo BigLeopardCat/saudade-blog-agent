@@ -252,11 +252,12 @@
       Array.from(panel.children).forEach(child => {
         if (child !== header && !child.classList.contains('chat-drag-bar-t')) child.inert = collapsed;
       });
-      restore.hidden = !collapsed;
+      restore.hidden = false;
+      restore.setAttribute('aria-label', collapsed ? '展开对话' : '收起为顶部栏');
+      restore.setAttribute('aria-expanded', String(!collapsed));
+      restore.title = collapsed ? '单击展开，拖动移动' : '单击收起为顶部栏，拖动移动';
+      restore.textContent = collapsed ? '展开对话' : '收起对话';
       minimize.hidden = next === 'docked';
-      minimize.setAttribute('aria-expanded', String(!collapsed));
-      minimize.setAttribute('aria-label', collapsed ? '收纳到页面顶部' : '收起对话内容');
-      minimize.title = minimize.getAttribute('aria-label');
       header.title = collapsed ? '单击展开，拖动移动' : '';
       panel.style.height = collapsed ? '36px' : expandedSize + 'px';
       if ((next === 'docked' || previous === 'docked')
@@ -275,19 +276,24 @@
         if (mode() === 'expanded') panel.style.height = expandedHeight;
         fit();
       }, 380);
-      if (returnFocus) (collapsed ? restore : minimize).focus({ preventScroll: true });
+      if (returnFocus) restore.focus({ preventScroll: true });
     };
-    minimize.addEventListener('click', () => setMode(mode() === 'expanded' ? 'collapsed' : 'docked'));
-    restore.addEventListener('click', () => { if (!dragged) setMode('expanded'); });
+    minimize.addEventListener('click', () => setMode('docked'));
+    restore.addEventListener('click', () => { if (!dragged) setMode(mode() === 'expanded' ? 'collapsed' : 'expanded'); });
     panel.addEventListener('click', e => {
-      if (mode() !== 'expanded' && !dragged && !e.target.closest('button')) setMode('expanded');
+      if (!dragged && !e.target.closest('button') && e.target.closest('.chat-header, .chat-drag-bar-t'))
+        setMode(mode() === 'expanded' ? 'collapsed' : 'expanded');
     });
     panel.addEventListener('pointerdown', e => {
-      if (mode() !== 'collapsed' || e.button !== 0 || e.target.closest('#chat-minimize, #chat-close')) return;
+      if (mode() === 'docked' || e.button !== 0 || e.target.closest('#chat-minimize, #chat-close')
+          || !e.target.closest('.chat-header, .chat-drag-bar-t')) return;
       e.preventDefault(); e.stopPropagation();
       dragged = false;
-      drag = { x: e.clientX, y: e.clientY, left: panel.offsetLeft, top: panel.offsetTop, id: e.pointerId };
-      panel.setPointerCapture(e.pointerId);
+      panel.dataset.detached = 'true';
+      // Capture on the pressed control so a tap still synthesizes its button click.
+      const capture = e.target;
+      drag = { x: e.clientX, y: e.clientY, left: panel.offsetLeft, top: panel.offsetTop, id: e.pointerId, capture };
+      capture.setPointerCapture(e.pointerId);
     });
     panel.addEventListener('pointermove', e => {
       if (!drag || drag.id !== e.pointerId) return;
@@ -300,7 +306,7 @@
     });
     const endDrag = e => {
       if (!drag || drag.id !== e.pointerId) return;
-      if (panel.hasPointerCapture(e.pointerId)) panel.releasePointerCapture(e.pointerId);
+      if (drag.capture.hasPointerCapture(e.pointerId)) drag.capture.releasePointerCapture(e.pointerId);
       drag = null; fit();
       // The synthesized click after a drag must not reopen the conversation.
       setTimeout(() => { dragged = false; }, 0);
