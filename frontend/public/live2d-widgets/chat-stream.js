@@ -1483,6 +1483,7 @@
       // 拖动（仅通过顶部/左侧边框条移动面板，其余区域允许选中文本）
       let isDragging = false, isResizing = false, resizeCorner = 'br', startX, startY, startW, startH, startLeft, startTop, offsetX, offsetY;
       chatPanel.addEventListener('pointerdown', (e) => {
+        if (chatPanel.dataset.windowMode && chatPanel.dataset.windowMode !== 'expanded') return;
         // 仅在边框条上按下时启动拖动，其余区域不做拦截以便选中/复制文本
         if (!e.target.closest('.chat-drag-bar-t, .chat-drag-bar-l')) return;
         // 阻止事件冒泡到 #waifu（live2d-widgets 的拖拽会冲突）并防止选中文本
@@ -1525,6 +1526,9 @@
         }
       });
       document.addEventListener('pointerup', () => {
+        isDragging = false; isResizing = false;
+      });
+      document.addEventListener('pointercancel', () => {
         isDragging = false; isResizing = false;
       });
       // 缩放把手：四角纯隐形热区（20260905f 去视觉化——用户反馈橙色三角
