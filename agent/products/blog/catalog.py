@@ -9,7 +9,8 @@ DOMAIN_DESCRIPTIONS = {
                       "draft, propose title/body edits for red/green review and user acceptance, "
                       "or prepare confirmation to create/replace the summary. "
                       "Summary changes require approval before application. "
-                      "Open the live draft's publication confirmation in place; the user publishes. Admin only.",
+                      "Open the live draft's publication confirmation in place; "
+                      "the user publishes. Admin only.",
     "admin_automations": "Administrator-owned persistent reminders and read-only background tasks. "
                          "Create at a time, after a delay, or on cron; inspect runs and prepare "
                          "pause/resume/cancel. No unattended business writes or browser actions.",
