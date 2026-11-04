@@ -16,6 +16,9 @@ _Limit = Annotated[StrictInt, Field(ge=1, le=20)]
 _Page = Annotated[StrictInt, Field(ge=1, le=100)]
 _Identifier = Annotated[StrictInt, Field(gt=0)]
 _Query = Annotated[str, Field(min_length=1, max_length=120, strict=True)]
+_UnreadOnly = Annotated[StrictBool, Field(
+    description="true returns unread notifications only; false includes read notifications. "
+                "Set true when the user asks which notifications are unread.")]
 _WINDOW_LIMIT = 100
 
 
@@ -57,10 +60,10 @@ def _entry(row, detailed, include_preview):
 
 @tool
 def list_notifications(config: RunnableConfig, limit: _Limit | None = None, page: _Page = 1,
-                       unread_only: StrictBool = False, include_preview: StrictBool = False,
+                       unread_only: _UnreadOnly = False, include_preview: StrictBool = False,
                        notification_id: _Identifier | None = None,
                        query: _Query | None = None) -> object:
-    """读取本人的通知摘要与原始跳转链接，默认20条；最多20条/页。
+    """读取本人的通知摘要与原始跳转链接。查未读设unread_only=true；默认20条，最多20条/页。
     默认不含正文。总结多条内容时可用include_preview=true读取每条最多240字，默认10条。
     预览截断或需精读时用notification_id读取单条正文，不从标题推断内容。
 
@@ -106,8 +109,8 @@ def list_notifications(config: RunnableConfig, limit: _Limit | None = None, page
               "unreadTotal": unread_total,
               "contentIncluded": notification_id is not None or include_preview}
     if notification_id is None:
-        result.update(page=page, pageSize=limit, matchedInWindow=len(matched),
-                      hasMoreInWindow=page * limit < len(matched))
+        result.update(page=page, pageSize=limit, unreadOnly=unread_only,
+                      matchedInWindow=len(matched), hasMoreInWindow=page * limit < len(matched))
         if query is not None:
             result["query"] = query.strip()
     encoded = json.dumps(result, ensure_ascii=False, separators=(",", ":"))

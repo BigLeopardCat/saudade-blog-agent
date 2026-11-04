@@ -53,6 +53,8 @@ def test_page_size_one_can_reach_the_whole_window_and_unread_filter_is_local(not
     expected = [row["id"] for row in notifications["items"] if not row["isRead"]][3:6]
     assert [row["id"] for row in unread["items"]] == expected
     assert unread["matchedInWindow"] == 66 and unread["windowComplete"] is False
+    assert unread["unreadOnly"] is True
+    assert all(row["isRead"] is False for row in unread["items"])
 
 
 def test_search_filters_the_complete_window_before_pagination(notifications):
