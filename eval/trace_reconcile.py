@@ -40,7 +40,7 @@ SHOW_MAX = 8         # 报告里每类最多列几条明细
 # `2026-09-24 00:12:25 | server | INFO | tid=r32bdcf8… | [stream] end reason=… duration=…s frames=…`
 # tid 用非贪婪（它后面紧跟 ` | [stream] end`）；行首 19 字符是本地钟面时间戳。
 STREAM_END_RE = re.compile(
-    r"^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}).*?tid=(.*?) \| \[stream\] end "
+    r"^(\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}).*?(?:request_id|tid)=(.*?) \| \[stream\] end "
     r"reason=(\S+) duration=([\d.]+)s frames=(\d+)")
 DUMP_FAILED_RE = re.compile(r"trace dump failed trace_id=(\S+)")
 # `2026-09-24 00:00:44.731 ERROR [monitor] type=fetch_fail uid=guest url=… msg=… stack=… ua=… webgl=… dup=…`

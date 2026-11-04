@@ -19,11 +19,13 @@ import logging
 import re
 import time
 from typing import Callable
+from urllib.parse import urlsplit
 
 import httpx
 from tenacity import Retrying, retry_if_exception, stop_after_attempt, wait_fixed
 
 from tools.result import ToolResult, invalid_args, not_found, unavailable
+from utils.logging import get_trace_id
 
 __all__ = ["ERROR_FORBIDDEN", "ERROR_INVALID_ARGS", "ERROR_INVALID_RESPONSE",
            "ERROR_NOT_FOUND", "ERROR_UPSTREAM_REJECTED", "ERROR_UPSTREAM_UNAVAILABLE",
@@ -162,6 +164,14 @@ def request_json(client: httpx.Client, *, method: str, url: str, headers=None,
     and ``write=True`` so a possibly-applied request is never replayed.
     A timeout callback can enforce the caller's deadline before each attempt;
     its cancellation/deadline exceptions propagate without classification."""
+    trace_id = get_trace_id()
+    if trace_id != "-":
+        headers = httpx.Headers(headers)
+        headers["X-Request-ID"] = trace_id
+    try:
+        endpoint = urlsplit(url)
+    except ValueError:
+        endpoint = urlsplit("")
     retryer = Retrying(
         stop=stop_after_attempt(max(1, attempts)),
         wait=wait_fixed(RETRY_WAIT_SECONDS),
@@ -177,8 +187,20 @@ def request_json(client: httpx.Client, *, method: str, url: str, headers=None,
             raise _Stopped()
         remaining = timeout() if callable(timeout) else timeout
         sent += 1
-        return _attempt_once(client, method=method, url=url, headers=headers,
-                             json_body=json_body, timeout=remaining, write=write)
+        began = time.monotonic()
+        try:
+            result = _attempt_once(client, method=method, url=url, headers=headers,
+                                   json_body=json_body, timeout=remaining, write=write)
+        except Failure as failure:
+            logger.warning("tool_http_failed method=%s host=%s path=%s status=%s "
+                           "code=%s attempt=%s duration_ms=%.2f", method, endpoint.hostname,
+                           endpoint.path, failure.status, failure.code, sent,
+                           (time.monotonic() - began) * 1000)
+            raise
+        logger.info("tool_http_response method=%s host=%s path=%s status=200 "
+                    "attempt=%s duration_ms=%.2f", method, endpoint.hostname, endpoint.path,
+                    sent, (time.monotonic() - began) * 1000)
+        return result
 
     try:
         for attempt in retryer:
