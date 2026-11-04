@@ -16,6 +16,7 @@ from agent.products.blog.application import BlogApplication
 from agent.runtime import writes
 from agent.runtime.checkpoint_conversations import CheckpointConversationStore
 from agent.runtime.client_actions import successful
+from agent.runtime.results import TurnResult
 from agent.runtime.service import AgentRuntime
 from agent.transport import iter_transport_events
 
@@ -31,6 +32,48 @@ def config(role="admin"):
             "browser_task": "edit-task",
         }
     }
+
+
+@pytest.mark.parametrize("title,edits", [("新标题", []), ("新标题", [
+    article_editor.TextEdit(old_text="旧正文", new_text="新正文")])])
+def test_title_is_a_review_proposal_and_never_a_write(monkeypatch, title, edits):
+    commands = []
+    def browser(command, _):
+        commands.append(command)
+        return {"status": "completed", "document": {"editor_id": "e", "revision": 0,
+                "outcome": "proposed", "proposal_id": "p"}}
+    monkeypatch.setattr(article_editor, "_await_browser", browser)
+    _, artifact = article_editor.propose_article_edits.func(
+        editor_id="e", revision=0, title=title, edits=edits, tool_call_id="title", config=config())
+    assert commands[0]["title"] == title and commands[0]["operation"] == "propose"
+    assert artifact["data"]["published"] is False
+    assert artifact["data"]["outcome"] == "proposed"
+
+
+@pytest.mark.parametrize("title", [None, " "])
+def test_empty_title_proposals_do_not_reach_the_browser(monkeypatch, title):
+    monkeypatch.setattr(article_editor, "_await_browser", lambda *_: pytest.fail("no command"))
+    with pytest.raises(ToolException):
+        article_editor.propose_article_edits.func(editor_id="e", revision=0, title=title,
+            tool_call_id="bad", config=config())
+
+
+def test_publication_opens_confirmation_without_claiming_publication(monkeypatch):
+    commands = []
+    def browser(command, _):
+        commands.append(command)
+        return {"status": "completed", "document": {"editor_id": "e", "revision": 2,
+                "outcome": "publication_ready", "title": "新标题"}}
+    monkeypatch.setattr(article_editor, "_await_browser", browser)
+    _, artifact = article_editor.prepare_article_publication.func(
+        editor_id="e", revision=2, tool_call_id="publish", config=config())
+    assert commands[0]["operation"] == "prepare_publish"
+    assert artifact["data"]["published"] is False
+    assert artifact["data"]["outcome"] == "publication_ready"
+    assert "prepare_article_publication" not in article_editor.tools(config(), can_prepare=False)
+    assert "prepare_article_publication" in article_editor.tools(config())
+    assert any(isinstance(item, str) and item.startswith("__CMD__:") for item in
+               iter_transport_events([TurnResult("", {"client_action": commands[0]})]))
 
 
 @pytest.mark.parametrize("role", ["user", "zako", None])

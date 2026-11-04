@@ -22,7 +22,7 @@ class EditorObservation(BaseModel):
 
     editor_id: str = Field(min_length=1, max_length=64)
     revision: int = Field(strict=True, ge=0, le=9_007_199_254_740_991)
-    outcome: Literal["read", "proposed", "updated", "unchanged"]
+    outcome: Literal["read", "proposed", "updated", "unchanged", "publication_ready"]
     title: str | None = Field(default=None, max_length=1000)
     content: str | None = Field(default=None, max_length=24000)
     description: str | None = Field(default=None, max_length=16000)
@@ -49,6 +49,9 @@ class EditorObservation(BaseModel):
         if operation == "propose":
             return (self.outcome == "proposed" and self.revision == command.get("revision")
                     and bool(self.proposal_id))
+        if operation == "prepare_publish":
+            return (self.outcome == "publication_ready" and self.revision == command.get("revision")
+                    and self.title is not None)
         if operation != "summary" or self.description != command.get("description"):
             return False
         revision = command.get("revision")
