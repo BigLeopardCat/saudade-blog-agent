@@ -1,17 +1,22 @@
 """Check current documentation navigation and local assets without network access."""
 
-import re
 from pathlib import Path
 from urllib.parse import unquote, urlsplit
 
+from markdown_it import MarkdownIt
+
 ROOT = Path(__file__).resolve().parents[1]
-LINK = re.compile(r"!?\[[^\]]*\]\(([^)\s]+)\)")
 
 
 def document_links(path: Path) -> list[str]:
-    """Ignore examples in fenced code blocks; include both page and image links."""
-    text = re.sub(r"^```[^\n]*\n.*?^```\s*$", "", path.read_text(), flags=re.M | re.S)
-    return LINK.findall(text)
+    """Use the installed CommonMark parser for pages, images and references."""
+    links = []
+    for token in MarkdownIt().parse(path.read_text()):
+        for child in token.children or []:
+            attribute = {"link_open": "href", "image": "src"}.get(child.type)
+            if attribute and (target := child.attrGet(attribute)):
+                links.append(target)
+    return links
 
 
 def broken_links(root: Path, documents: list[Path]) -> list[str]:
