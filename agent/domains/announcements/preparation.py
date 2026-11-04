@@ -5,6 +5,7 @@ from langchain_core.tools import tool
 
 from agent.domains.admin_writes import available
 from agent.domains.announcements import targets
+from agent.domains.announcements.deletion import prepare_announcement_deletions
 from agent.proposals import proposal
 from agent.reports import sanitize_untrusted
 from agent.runtime.results import TurnResult
@@ -124,6 +125,7 @@ def tools(read_tools):
                 prepare_announcement_create,
                 prepare_announcement_update,
                 prepare_announcement_delete,
+                prepare_announcement_deletions,
             )
         },
     }
