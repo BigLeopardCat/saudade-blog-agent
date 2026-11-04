@@ -323,9 +323,8 @@ def test_sections():
         "正控：结构完整的文章清单**一字不变**（LONG 里没有空节）",
         all((f"§{s}" in sections.excerpt(LONG, CAP, TITLE) for s in SEC_NAMES[6:])),
     )
-    frame = str(
-        {"noteKey": 19, "key": 19, "noteTitle": TITLE, "noteContent": LONG, "content": LONG}
-    )
+    source = {"noteKey": 19, "key": 19, "noteTitle": TITLE, "noteContent": LONG, "content": LONG}
+    frame = str(source)
     check(
         "最小复现：repr 里真换行为 0、字面 \\n 很多", "\n" not in frame and frame.count("\\n") > 100
     )
@@ -333,7 +332,7 @@ def test_sections():
         "直接按文本切节会切出 0 节（旧路径的死因）",
         len(sections.split(frame, TITLE, shortcut=False)) == 1,
     )
-    cut = sections.frame_excerpt(frame, CAP)
+    cut = sections.frame_excerpt(source, CAP)
     check("frame_excerpt 输出不越上限", len(cut) <= CAP, str(len(cut)))
     check("换行已还原（输出里有真换行、不再整块一行）", cut.count("\n") > 20)
     check("小节结构可用（保留节标题行）", "## 1. 系统总览" in cut)
@@ -347,14 +346,14 @@ def test_sections():
     )
     check("重复键不进帧头（否则又白占 200 字预算）", "'content'" not in cut)
     check(
-        "非 dict 帧退回文本路径（转义还原 + 有标注）",
+        "非 dict 帧退回有标注的文本路径",
         "原文共" in sections.frame_excerpt("x" * 30000, CAP),
     )
     check(
         "小节名重复时要求消歧，不取第一个匹配",
         sections.pick(LONG + "\n\n## 9. 部署与运维\n重复节", "9", TITLE) is None,
     )
-    slim = sections.slim_frame(frame)
+    slim = sections.slim_frame(source)
     check("帧体积接近减半（省 ≥45%）", len(slim) < len(frame) * 0.55, f"{len(frame)} → {len(slim)}")
     check("重复键被去掉、留下的那个还在", "'content'" not in slim and "'noteContent'" in slim)
     check(
@@ -362,16 +361,17 @@ def test_sections():
         slim.count("第1节的正文内容") == 150 and slim.count("第10节的正文内容") == 150,
     )
     check(
-        "仍可 literal_eval（refs 的 $tool[N].field 靠它取值）",
+        "展示保持字典格式，来源数据不被修改",
         isinstance(ast.literal_eval(slim), dict),
     )
     check(
         "去重只删字节相等的键：内容不同（真有两段正文）时一个都不动",
-        sections.slim_frame(str({"noteContent": "AAA", "content": "BBB"}))
+        sections.slim_frame({"noteContent": "AAA", "content": "BBB"})
         == str({"noteContent": "AAA", "content": "BBB"}),
     )
-    _empty = str({"noteContent": "", "content": ""})
-    check("空正文不去重（两个空串相等，但那不是同一段正文）", sections.slim_frame(_empty) == _empty)
+    _empty = {"noteContent": "", "content": ""}
+    check("空正文不去重（两个空串相等，但那不是同一段正文）",
+          sections.slim_frame(_empty) == str(_empty))
     check(
         "判据不认识的帧恒等：`__ERROR__` 帧",
         sections.slim_frame("__ERROR__: 未知工具 x") == "__ERROR__: 未知工具 x",
@@ -380,7 +380,7 @@ def test_sections():
     check("判据不认识的帧恒等：命令帧", sections.slim_frame("NAVIGATE:/talk") == "NAVIGATE:/talk")
     check(
         "判据不认识的帧恒等：没有该键的 dict",
-        sections.slim_frame(str({"noteKey": 1, "noteTitle": "T"}))
+        sections.slim_frame({"noteKey": 1, "noteTitle": "T"})
         == str({"noteKey": 1, "noteTitle": "T"}),
     )
     check(
@@ -389,7 +389,7 @@ def test_sections():
     )
     ref_row = str({"noteKey": 19, "noteContent": LONG, "content": LONG})
     check(
-        "原始字符串里 `content` 还在（`_shape` 没被动过 ⇒ $tool[N].content 不受影响）",
+        "来源数据保留原始字段，不受展示去重影响",
         "'content'" in ref_row and "content" in parse_data(ref_row),
     )
     assert not FAILS, "；".join(FAILS)

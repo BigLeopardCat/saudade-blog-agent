@@ -75,7 +75,7 @@ def _user_directory(config: RunnableConfig) -> dict[int, dict] | ToolResult:
     return out
 
 @tool
-def list_accounts(config: RunnableConfig) -> str:
+def list_accounts(config: RunnableConfig) -> str | ToolResult:
     """查看**后台账号名录**：每个账号一行，给出**账号名**、账号 id、身份（超级管理员/
     管理员/普通用户/杂鱼）、是否已冻结、是否禁言中。超级管理员的账号不在这份
     名单里。

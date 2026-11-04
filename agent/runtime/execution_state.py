@@ -6,6 +6,7 @@ from typing import Annotated
 
 from langchain.agents.middleware import AgentState
 
+from agent.contracts.client import ClientOperationRef
 from agent.runtime import tool_state
 from agent.runtime.progress import current_emitter
 
@@ -23,6 +24,7 @@ class ExecutionState(AgentState, total=False):
     completion_checks: int
     output_revision: int
     effects: Annotated[dict, or_]
+    client_operations: Annotated[dict[str, ClientOperationRef], or_]
     applied_inputs: list[str]
     progress_keys: list[str]
 
@@ -34,7 +36,7 @@ def initial_state():
     return ExecutionState(context_update=None, context_anchor=None, loaded=[],
                           proposal=None,
                           awaiting_call=None, resume=None, run_id=None, terminal=None,
-                          effects={}, applied_inputs=[], progress_keys=[],
+                          effects={}, client_operations={}, applied_inputs=[], progress_keys=[],
                           response_repairs=0, completion_checks=0, output_revision=0)
 
 
@@ -62,7 +64,7 @@ def adopt_command(session, update):
     for key, value in update.items():
         if key not in _FIELDS:
             continue
-        if key == "effects":
+        if key in ("effects", "client_operations"):
             session.state[key] = session.state[key] | deepcopy(value)
         else:
             session.state[key] = deepcopy(value)

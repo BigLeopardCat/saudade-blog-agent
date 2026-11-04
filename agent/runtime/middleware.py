@@ -161,7 +161,8 @@ class SessionMiddleware(AgentMiddleware):
             raise ValueError("执行回执与 Agent 待确认操作不一致")
         session.state["effects"]["pending_event"] = None
         session.state["effects"].update({key: value for key, value in facts["execution"].items()
-                                          if key != "receipts"})
+            if key not in {"receipts", "client_operations", "authorized_operation"}})
+        session.state["client_operations"].update(facts["execution"].get("client_operations", {}))
         if facts.get("kind") == "feedback":
             return self._feedback(state, facts)
         messages = list(state["messages"])

@@ -1,6 +1,5 @@
 """Public activity reads keep visibility, totals and bounded text explicit."""
 
-import json
 
 import httpx
 import pytest
@@ -46,10 +45,10 @@ def test_public_tool_contract_and_safe_projection(backend, name, resource, sourc
     backend["data"] = [record(source=source)]
     result = getattr(public_activity, name).invoke({"page": 1, "limit": 3})
     assert result.kind == "ok"
-    data = json.loads(result)
+    data = result.data
     assert data["total"] == 1 and data["hasMore"] is False
     assert data["pageSize"] == 3 and data["items"][0]["id"] == 9
-    assert "userId" not in result and "rejectReason" not in result and "mine" not in result
+    assert all(key not in str(result) for key in ("userId", "rejectReason", "mine"))
     request = backend["requests"][0]
     assert request.url.path.endswith("/activity/" + resource)
     assert dict(request.url.params) == {"page": "1", "page_size": "3"}
@@ -98,10 +97,10 @@ def test_duplicates_are_not_presented_as_distinct_records(backend):
 def test_page_metadata_distinguishes_empty_page_from_empty_collection(backend):
     backend.update(data=[], total=7)
     result = public_activity.list_guestbook.invoke({"page": 3})
-    data = json.loads(result)
+    data = result.data
     assert data["items"] == [] and data["total"] == 7 and data["hasMore"] is False
     backend.update(data=[record(i) for i in range(1, 6)], total=7)
-    data = json.loads(public_activity.list_guestbook.invoke({}))
+    data = public_activity.list_guestbook.invoke({}).data
     assert data["hasMore"] is True
 
 
@@ -109,7 +108,7 @@ def test_explicit_truncation_flags_and_untrusted_text_are_preserved(backend):
     backend["data"][0].update(content="文" * 240, contentTruncated=True,
                               displayName="名" * 100, title="题" * 300)
     result = public_activity.list_guestbook.invoke({})
-    row = json.loads(result)["items"][0]
+    row = result.data["items"][0]
     assert row["contentTruncated"] and row["titleTruncated"] and row["displayNameTruncated"]
     assert len(row["content"]) == 240
     assert len(row["title"]) <= 256 and len(row["displayName"]) <= 81
@@ -132,4 +131,4 @@ def test_common_transport_allows_composite_keys(backend):
     backend.update(data=[{"level": 1, "id": 7}, {"level": 2, "id": 7}], total=2)
     result = public_pages.read_page("tags", 1, 5, {}, lambda row: row,
                                     identity=lambda row: (row["level"], row["id"]))
-    assert result.kind == "ok" and len(json.loads(result)["items"]) == 2
+    assert result.kind == "ok" and len(result.data["items"]) == 2

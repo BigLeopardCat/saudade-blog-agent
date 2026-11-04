@@ -84,7 +84,7 @@ def test_successful_body_read_adds_real_source_and_rejects_unread_articles():
 def test_render_budget_keeps_valid_data_and_cursor_at_visible_end():
     body = ("'\n\\" * 4000) + "TAIL"
     raw = article_page({"noteTitle": "T", "noteContent": body}, 1, max_chars=12000)
-    text, visible = render_article_result(ok(str(raw), data=raw), 1600)
+    text, visible = render_article_result(raw, str(raw), 1600)
     assert len(text) <= 1600 and ast.literal_eval(text) == visible
     assert visible["noteContent"] == body[: visible["nextOffset"]]
     assert visible["nextOffset"] < raw["nextOffset"]

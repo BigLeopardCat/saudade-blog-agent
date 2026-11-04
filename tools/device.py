@@ -16,7 +16,7 @@ from langchain_core.runnables.config import RunnableConfig
 from langchain_core.tools import tool
 
 from config import settings as _settings
-from tools.result import empty, fact, invalid_args, not_found, ok, tgt, unavailable
+from tools.result import ToolResult, empty, fact, invalid_args, not_found, ok, tgt, unavailable
 from utils.logging import get_trace_id
 
 # Public exports; helper names stay private to their modules.
@@ -70,7 +70,7 @@ def _valid_device_id(device_id: str) -> bool:
 
 
 @tool
-def list_devices(config: RunnableConfig) -> str:
+def list_devices(config: RunnableConfig) -> str | ToolResult:
     """列出当前登录用户拥有的 IoT 设备（ESP32 等），返回设备 id、名称、在线状态。"""
     uid = _device_get_user_id(config)
     if uid <= 0:
@@ -101,7 +101,7 @@ def device_oled_display(
     device_id: Annotated[
         str | None, "设备 id（可选；不填时自动选择当前用户第一个在线设备）"
     ] = None,
-) -> str:
+) -> str | ToolResult:
     """在 ESP32 OLED 小屏幕上显示一段文字（经 MQTT 指令实时下发到设备）。
     指令下发后设备即收到，实际显示效果以设备端为准。"""
     # 注意：config 必须是精确的 RunnableConfig 类型（无默认值）——框架按类型注入，

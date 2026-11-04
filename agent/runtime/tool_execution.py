@@ -10,8 +10,7 @@ from agent.runtime.budget import native_tool
 from agent.runtime.memory_media import tool_messages
 from agent.runtime.message_content import estimate_tokens, text_content
 from agent.runtime.progress import emit
-from agent.runtime.results import TurnResult
-from agent.runtime.tool_outputs import application_result, framework_tool
+from agent.runtime.tool_outputs import framework_tool, prepared_result
 from config.settings import settings
 from utils import trace as trace_mod
 from utils.trace import record
@@ -26,10 +25,14 @@ def result_limit(value):
     Context exhaustion must not silently discard facts to fund another call.
     Paged product renderers use the returned size to preserve continuation cursors.
     """
-    body = text_content(value.content) if isinstance(value, ToolMessage) else str(value)
-    marker_tokens = estimate_tokens([ToolMessage(content=_TRUNCATION_MARKER,
-                                                 tool_call_id="result-budget")])
-    kept = trim_messages([ToolMessage(content=body, tool_call_id="result-budget")],
+    message = value if isinstance(value, ToolMessage) else ToolMessage(
+        content=str(value), tool_call_id="result-budget")
+    body = text_content(message.content)
+    if estimate_tokens([message]) <= settings.agent_tool_result_tokens:
+        return len(body)
+    marker_tokens = (estimate_tokens([message.model_copy(update={"content": _TRUNCATION_MARKER})])
+                     - estimate_tokens([message.model_copy(update={"content": ""})]))
+    kept = trim_messages([message.model_copy(update={"content": body})],
         max_tokens=max(0, settings.agent_tool_result_tokens - marker_tokens),
         token_counter=estimate_tokens, strategy="first", allow_partial=True, text_splitter=list)
     return len(kept[0].content) if kept else 0
@@ -40,7 +43,7 @@ def render_result(call, value, limit):
     if len(body) > limit:
         marker = _TRUNCATION_MARKER
         body = (body[:max(0, limit - len(marker))] + marker)[:limit]
-    return body
+    return value.model_copy(update={"content": body})
 
 
 def append_result(session, request, handler, prompt, round_index, attachments):
@@ -80,22 +83,22 @@ def append_result(session, request, handler, prompt, round_index, attachments):
     if message is None:
         raise ValueError("Tool response does not match the framework call ID")
     attachments.extend(m for m in messages if m is not message)
-    body = application_result(message)
-    if isinstance(body, TurnResult):
-        session._prepared_result(body, call, prompt, round_index)
+    prepared = prepared_result(message)
+    if prepared is not None:
+        session._prepared_result(prepared, call, prompt, round_index)
         return command
     artifact = message.artifact if isinstance(message.artifact, dict) else {}
-    kind = (getattr(body, "kind", artifact.get("kind", "unknown"))
+    kind = (artifact.get("kind", "ok")
             if message.status != "error" else "error")
-    session.observations.extend(memory.observation(call, body))
-    body = session.render_result(call, body, result_limit(body))
-    # Structured data is used by product evidence policy, not duplicated in
-    # the durable transcript. Preserve artifacts supplied by standard tools.
-    message = message.model_copy(update={"artifact": {
-        key: value for key, value in artifact.items() if key != "application_data"}})
+    original = message
+    message = session.render_result(call, message, result_limit(message))
     if kind in {"invalid_args", "unavailable", "not_found"}:
         message = message.model_copy(update={"status": "error"})
-    messages = tool_messages(message, body, call["id"])
+    message = message.model_copy(update={"artifact": {**(message.artifact or {}), "kind": kind}})
+    session.observations.extend(memory.observation(call, message))
+    body = text_content(message.content)
+    source = original.model_copy(update={"artifact": message.artifact, "status": message.status})
+    messages = tool_messages(source, body, call["id"])
     prompt.append(messages[0].model_copy(update={"name": name, "artifact": {
         **(messages[0].artifact or {}), "kind": kind}}))
     attachments.extend(messages[1:])
