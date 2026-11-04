@@ -41,6 +41,9 @@ def test_actual_prompt_selects_only_the_verified_callers_voice(role, source):
     assert ("来访的朋友" in style) == (not is_admin and not (
         source == SOURCE_ASSERTION and role == "zako"))
     assert ("日式雌小鬼" in style) == (source == SOURCE_ASSERTION and role == "zako")
+    assert "role" not in context["caller"]
+    known = role if source == SOURCE_ASSERTION and role is not None else None
+    assert context["caller"]["role_label"] == (role_cn(known) if known else None)
     assert context["permissions"] == conversation_context(principal)["permissions"]
 
 
@@ -52,8 +55,8 @@ def test_chat_only_role_has_its_own_style_and_no_tools_without_trusting_user_cla
     assert "日式雌小鬼" in prompt[0].content and "不提供任何站内读取" in prompt[0].content
     assert "亲切活泼的猫娘女仆语气" not in prompt[0].content
     assert "变更遵循工具的审阅或确认契约" not in prompt[0].content
-    assert '"role":"zako"' in prompt[0].content
     assert '"role_label":"杂鱼"' in prompt[0].content
+    assert '"role":' not in prompt[0].content
     assert "粘贴正文" in prompt[0].content
     assert BlogApplication().tools({"configurable": {"principal": principal}},
                                     None, None, None, False) == ({}, {})
@@ -84,7 +87,7 @@ def test_user_claims_and_history_trimming_do_not_replace_runtime_identity():
     prompt = fit_history(prompt, Principal(7, "user", SOURCE_ASSERTION), [], BudgetLimits(), 128)
     system = str(prompt[0].content)
     context = json.JSONDecoder().raw_decode(system.split("运行时能力（可信数据）：", 1)[1])[0]
-    assert context["caller"]["role"] == "user"
+    assert "role" not in context["caller"]
     assert context["caller"]["role_label"] == role_cn("user")
     assert context["caller"]["preferred_address"] == "你"
     assert context["permissions"] == sorted(scopes_for("user"))
@@ -105,7 +108,7 @@ def test_administrator_authority_is_not_proof_of_blog_authorship(role):
     prompt = fit_history(prompt, Principal(7, "user", SOURCE_ASSERTION), [], BudgetLimits(), 128)
     system = str(prompt[0].content)
     context = json.JSONDecoder().raw_decode(system.split("运行时能力（可信数据）：", 1)[1])[0]
-    assert context["caller"]["role"] == role
+    assert "role" not in context["caller"]
     assert context["caller"]["role_label"] == role_cn(role)
     assert context["permissions"] == sorted(scopes_for(role))
     assert "当前对话者是博客作者" not in system

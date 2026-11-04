@@ -1,4 +1,4 @@
-"""Native instructions and bounded conversation input; tool schemas describe capabilities."""
+"""Product instructions, verified identity and bounded conversation input."""
 
 import json
 
@@ -49,9 +49,9 @@ _FACTS = (
 def build_prompt(messages: list, principal, own_enabled: bool = False) -> list:
     """Compose current authority, historical data, and bounded source observations."""
     context = conversation_context(principal)
-    # Keep the authorization code distinct from its localized display label.
-    if context["caller"]["role"] is not None:
-        context["caller"]["role_label"] = role_cn(context["caller"]["role"])
+    # The model receives a display identity; Principal retains the authorization code.
+    role = context["caller"].pop("role")
+    context["caller"]["role_label"] = role_cn(role) if role is not None else None
     context["caller"]["conversation_style"] = conversation_style(principal)
     guidance = tool_guidance(principal) or _BOUNDARY
     system = SystemMessage(content=BLOG_PERSONA_PROMPT

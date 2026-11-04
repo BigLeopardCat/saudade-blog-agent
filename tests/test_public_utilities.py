@@ -113,7 +113,8 @@ def test_client_snapshot_is_data_not_account_authority():
     value.update(role="superadmin", permissions=["admin.console"])
     request = ChatRequest(message="你好", current_weather=value)
     prompt = build_prompt(build_messages(request), Principal(9, "zako", SOURCE_ASSERTION))
-    assert '"role":"zako"' in prompt[0].content
+    assert '"role_label":"杂鱼"' in prompt[0].content
+    assert '"role":' not in prompt[0].content
     assert '"permissions":[]' in prompt[0].content
     assert "admin.console" not in str(prompt)
     with pytest.raises(ValidationError):
