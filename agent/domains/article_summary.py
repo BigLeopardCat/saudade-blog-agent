@@ -26,11 +26,14 @@ def validate(grant, config):
         raise ValueError("确认内容与摘要修改不一致")
     args = specs[0].get("args")
     if (not isinstance(args, dict)
-            or set(args) != {"editor_id", "revision", "summary_sha256", "request_id"}
+            or set(args) != {"editor_id", "revision", "summary_sha256",
+                             "previous_summary_sha256", "request_id"}
             or not isinstance(args["editor_id"], str) or not 1 <= len(args["editor_id"]) <= 64
             or type(args["revision"]) is not int or not 0 <= args["revision"] <= 2**53 - 1
             or not isinstance(args["summary_sha256"], str)
             or not re.fullmatch(r"[0-9a-f]{64}", args["summary_sha256"])
+            or not isinstance(args["previous_summary_sha256"], str)
+            or not re.fullmatch(r"[0-9a-f]{64}", args["previous_summary_sha256"])
             or not isinstance(args["request_id"], str) or not 1 <= len(args["request_id"]) <= 100):
         raise ValueError("摘要确认参数无效")
     if not authz.check(principal, "set_article_summary").allowed:

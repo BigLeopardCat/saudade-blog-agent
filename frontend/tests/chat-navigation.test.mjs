@@ -72,6 +72,19 @@ test('partial application is reported as failed with actual state', async () => 
   assert.deepEqual(JSON.parse(JSON.stringify(f.calls[0].browserResult.settings)), {dark_mode:'on'});
 });
 
+test('distinct invocations apply on-off-on while each invocation is deduplicated', async () => {
+  const f = fixture((settings, browser) => { browser.__darkMode = settings.dark_mode === 'on'; });
+  f.ready();
+  for (const [mode, id] of [['on','on-first'],['off','off'],['on','on-again']]) {
+    const command = {kind:'appearance',task_id:'task',command_id:id,settings:{dark_mode:mode}};
+    f.navigation.receive(command,f.context); await flush();
+    f.navigation.receive(command,f.context); await flush();
+  }
+  assert.equal(f.sandbox.__darkMode,true);
+  assert.equal(f.calls.length,3);
+  assert.deepEqual(f.calls.map(row => row.browserResult.command_id),['on-first','off','on-again']);
+});
+
 test('unknown or mismatched settings never acknowledge completion', async () => {
   for (const observed of [undefined, false]) {
     const f = fixture((settings, browser) => {

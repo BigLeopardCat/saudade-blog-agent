@@ -86,9 +86,19 @@ def test_editor_observation_is_control_only_and_cannot_change_approval():
     )
 
 
-@pytest.mark.parametrize("browser_status", ["completed", "failed", "timeout"])
+@pytest.mark.parametrize("browser_status,reported,expected,initial_description", [
+    ("completed", {}, "completed", ""),
+    ("failed", {}, "failed", ""),
+    ("timeout", {}, "timeout", ""),
+    ("completed", {"description": None}, "failed", ""),
+    ("completed", {"description": "未批准的摘要"}, "failed", ""),
+    ("completed", {"revision": 0}, "failed", ""),
+    ("completed", {"revision": 2}, "failed", ""),
+    ("completed", {"revision": 0, "outcome": "unchanged"}, "failed", ""),
+    ("completed", {"revision": 0, "outcome": "unchanged"}, "completed", "新概述"),
+])
 def test_real_checkpoint_round_trip_applies_summary_only_after_confirmation(
-        monkeypatch, tmp_path, browser_status):
+        monkeypatch, tmp_path, browser_status, reported, expected, initial_description):
     monkeypatch.setattr(confirm.settings, "jwt_secret", secrets.token_urlsafe(32))
     ledger = Ledger(str(tmp_path / "summary.sqlite3"))
     monkeypatch.setattr(writes, "ledger_for", lambda _: ledger)
@@ -113,7 +123,7 @@ def test_real_checkpoint_round_trip_applies_summary_only_after_confirmation(
                 "prepare_article_summary",
                 {"editor_id": "editor-1", "revision": 0, "description": "新概述"},
             ),
-            AIMessage(content=("摘要已更新到编辑草稿，未发布。" if browser_status == "completed"
+            AIMessage(content=("摘要已更新到编辑草稿，未发布。" if expected == "completed"
                                else "未确认摘要更新成功，请重新检查草稿。")),
         ]
     )
@@ -127,7 +137,7 @@ def test_real_checkpoint_round_trip_applies_summary_only_after_confirmation(
         def invoke(self, messages, **kwargs):
             self.calls += 1
             if self.calls == 5:
-                assert_pending_body_review(messages, browser_status)
+                assert_pending_body_review(messages, expected)
             return next(responses)
 
     model = Model()
@@ -157,7 +167,7 @@ def test_real_checkpoint_round_trip_applies_summary_only_after_confirmation(
                 "outcome": "read",
                 "title": "草稿",
                 "content": "旧正文",
-                "description": "",
+                "description": initial_description,
                 "offset": 0,
                 "next_offset": None,
                 "total_chars": 3,
@@ -213,13 +223,13 @@ def test_real_checkpoint_round_trip_applies_summary_only_after_confirmation(
         "error": "草稿已变化" if browser_status == "failed" else None,
         "path": "/dashboard/notes/new", "document": {
             "editor_id": "editor-1", "revision": 1, "outcome": "updated",
-            "proposal_id": "proposal-1"}}}}
+            "proposal_id": "proposal-1", "description": "新概述", **reported}}}}
     result = list(runtime().stream_events({"resume_task": "edit-task"}, resumed))[-1]
     assert result.reply and model.calls == 5
-    assert_summary_result(result, browser_status)
+    assert_summary_result(result, expected)
     repeated = list(runtime().stream_events({"confirm_grant": grant}, cfg))[-1]
     assert model.calls == 5 and not (repeated.execution or {}).get("client_action")
-    assert_summary_result(repeated, browser_status)
+    assert_summary_result(repeated, expected)
 
 
 def assert_pending_body_review(messages, status):
@@ -253,7 +263,8 @@ def test_large_summary_is_bound_by_digest_and_never_copied_into_approval_token(m
     runtime = SimpleNamespace(config=config(), tool_call_id="summary-create", state={
         "messages": [ToolMessage(name="read_current_article", tool_call_id="read",
                                   content=json.dumps(
-            {"scope": "editor_draft", "editor_id": "editor-1", "revision": 0}))]})
+            {"scope": "editor_draft", "editor_id": "editor-1",
+             "revision": 0, "description": ""}))]})
     result = article_editor.prepare_article_summary.func(
         editor_id="editor-1", revision=0, description=content, runtime=runtime)
     token = result.execution["pending_confirm"]["token"]

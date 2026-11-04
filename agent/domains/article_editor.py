@@ -69,7 +69,8 @@ def read_current_article(
 ) -> str:
     """Read the currently OPEN article editor's live unsaved draft and summary, admin only.
     Returns editor_id and revision for subsequent edits, content slice, total_chars and
-    next_offset (null at end). Use further offsets for long drafts. This is draft content,
+    next_offset (null at end), all in Unicode code points. Use further offsets for long
+    drafts. This is draft content,
     not the published article. proposal_id identifies an existing pending body review.
     No open editor means unavailable; never invent a draft.
     """
@@ -133,7 +134,8 @@ def prepare_article_summary(
             break
         if (isinstance(saved, dict) and message.status == "success"
                 and saved.get("scope") == "editor_draft"
-                and saved.get("editor_id") == editor_id and saved.get("revision") == revision):
+                and saved.get("editor_id") == editor_id and saved.get("revision") == revision
+                and isinstance(saved.get("description"), str)):
             if not isinstance(runtime.tool_call_id, str) or len(runtime.tool_call_id) > 100:
                 raise ToolException("工具调用标识无效，请重新准备摘要。")
             observed("editor_summary", {"ownerUserId": principal.uid}, ("ownerUserId",))
@@ -141,6 +143,8 @@ def prepare_article_summary(
                 "tool": "set_article_summary", "args": {"editor_id": editor_id,
                     "revision": revision,
                     "summary_sha256": hashlib.sha256(description.encode()).hexdigest(),
+                    "previous_summary_sha256": hashlib.sha256(
+                        saved["description"].encode()).hexdigest(),
                     "request_id": runtime.tool_call_id}}, executor="editor_summary",
                 question=("确认替换当前草稿的摘要？\n\n" + description if description
                           else "确认清空当前草稿的摘要？"),
