@@ -27,6 +27,9 @@
   --chat-success-soft: #eff6ed;
   --chat-warning: #8a5c18;
   --chat-warning-soft: #fff6e5;
+  --chat-notch-bg: #231d2b;
+  --chat-notch-ink: #f9ecfa;
+  --chat-notch-edge: #967ca5;
   width: 420px;
   height: min(420px, calc(100dvh - 350px));
   min-width: 280px;
@@ -76,6 +79,9 @@
   --chat-success-soft: #293b31;
   --chat-warning: #efc58d;
   --chat-warning-soft: #403629;
+  --chat-notch-bg: #645479;
+  --chat-notch-ink: #fff6ff;
+  --chat-notch-edge: #d7b5ef;
   color-scheme: dark;
 }
 
@@ -250,10 +256,10 @@
   min-height: 44px;
   max-height: 44px;
   border-radius: 0 0 20px 20px;
-  background: #231d2b;
-  color: #f9ecfa;
-  border-color: #4e424c;
-  box-shadow: 0 5px 18px rgb(30 20 40 / 20%);
+  background: var(--chat-notch-bg);
+  color: var(--chat-notch-ink);
+  border-color: var(--chat-notch-edge);
+  box-shadow: 0 6px 24px rgb(12 6 22 / 35%), 0 0 0 1px var(--chat-notch-edge);
 }
 #waifu-chat[data-window-mode='docked'] .chat-header { height: 44px; padding: 0; }
 #waifu-chat[data-window-mode='docked'] .chat-heading,

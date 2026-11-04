@@ -1484,6 +1484,8 @@
       let isDragging = false, isResizing = false, resizeCorner = 'br', startX, startY, startW, startH, startLeft, startTop, offsetX, offsetY;
       chatPanel.addEventListener('pointerdown', (e) => {
         if (chatPanel.dataset.windowMode && chatPanel.dataset.windowMode !== 'expanded') return;
+        // The header's click/drag gesture is owned by chat-ui; this path keeps the left rail.
+        if (e.target.closest('.chat-drag-bar-t, .chat-header')) return;
         // 仅在边框条上按下时启动拖动，其余区域不做拦截以便选中/复制文本
         if (!e.target.closest('.chat-drag-bar-t, .chat-drag-bar-l')) return;
         // 阻止事件冒泡到 #waifu（live2d-widgets 的拖拽会冲突）并防止选中文本
