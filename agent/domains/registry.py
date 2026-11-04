@@ -27,7 +27,8 @@ _DOMAINS = {"announcement_deletions": announcement_deletions,
             "moderation": moderation, "quota_actions": quota_actions, "article_tags": article_tags,
             "categories": categories, "tags": tags, "announcements": announcements,
             "account_actions": account_actions, "notices": notices, "automations": automations,
-            "editor_summary": article_summary, "gallery": gallery, "image_generation": image_generation}
+            "editor_summary": article_summary, "gallery": gallery,
+            "image_generation": image_generation}
 
 
 def native_domain(grant):
