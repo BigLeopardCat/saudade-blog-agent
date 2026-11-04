@@ -550,6 +550,38 @@ try {
   assert.equal(recoveredRequests[2].body.message, '');
   await reloadContext.close();
   passed('reload after browser acknowledgement resumes the checkpoint and completes the reply');
+  for (const kind of ['own','different','peer','expired']) {
+    const leaseContext = await browser.newContext({viewport:{width:1280,height:900}});
+    await leaseContext.addInitScript(kind => {
+      const token='fixture.'+btoa(JSON.stringify({sub:7}))+'.signature';
+      localStorage.setItem('tokenKey',token);
+      localStorage.setItem('chat_conv_'+token,'1');
+      sessionStorage.setItem('saudade-chat-tab','lease-test-tab');
+      localStorage.setItem('saudade-chat-busy',JSON.stringify({roundId:'lease-test-round',
+        owner:kind==='own'?'lease-test-tab':'other-tab',convId:kind==='different'?999:1,
+        ts:Date.now()-(kind==='expired'?7*60*1000:0)}));
+    },kind);
+    const leasePage=await leaseContext.newPage();
+    leasePage.on('pageerror',error=>errors.push(String(error)));
+    await leasePage.goto(origin);
+    await leasePage.waitForFunction(()=>!!window.__chatTest?.ctx.state.conv);
+    const state=await leasePage.evaluate(()=>({
+      api:['setConvUI','ensureConversation'].every(name=>typeof window.__chatTest.engine[name]==='function'),
+      peers:Object.keys(window.__chatTest.ctx.state.remoteRounds).length,
+      lease:!!localStorage.getItem('saudade-chat-busy'),
+    }));
+    assert.equal(state.api,true);
+    assert.equal(state.peers,kind==='peer'?1:0);
+    assert.equal(state.lease,kind==='peer'||kind==='different');
+    if(kind==='own') {
+      await leasePage.locator('#chat-input').fill('恢复后继续聊天');
+      await leasePage.locator('#chat-send').click();
+      await leasePage.waitForFunction(()=>[...document.querySelectorAll('.msg-text')]
+        .some(el=>el.textContent.includes('离线测试回复')));
+    }
+    await leaseContext.close();
+  }
+  passed('own, expired and other-conversation leases preserve full initialization; an active peer lease stays protected');
   await reset();
   const input = page.locator('#chat-input');
   await input.fill('输入法组合测试');

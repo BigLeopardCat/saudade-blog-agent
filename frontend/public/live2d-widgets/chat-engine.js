@@ -1,7 +1,4 @@
-// ═ ChatEngine：对话数据层（状态机/增量渲染/历史存取/多标签同步）══
-// 20260828o 拆分自 boot.js initChat 巨型闭包（原 583-1180 行）。逻辑零改动，
-// 仅将共享符号显式化到 ctx（dom/state）与 engine API，供 chat-stream.js 交互层引用。
-// 工厂返回 engine API；init() 在 #waifu 存在后调用（= 原 initChat 主体）。
+/* Conversation state, history rendering and synchronization across tabs. */
 (function (g) {
   'use strict';
   g.__waifuEngine = function (ctx) {
@@ -729,31 +726,26 @@
             }
           } catch(e) {/* 广播渲染失败不影响本页 */}
         };
-        // 20260901：新开窗口可能错过另一窗口的 sending 帧（回复进行中才打开）——
-        // 读 localStorage busy 标记恢复禁用态；标记过期（发送窗口崩溃残留）清除
-        try {
-          const b = JSON.parse(localStorage.getItem(BUSY_KEY) || 'null');
-          if (b && b.roundId && b.ts) {
-            // Reloading closes this tab's former connection. Its stale lease
-            // must not block checkpoint recovery; other tabs remain protected.
-            if (b.owner === tabId) { localStorage.removeItem(BUSY_KEY); return; }
-            // 20260903：busy 按会话判定——restore 时本窗已知会话且与标记会话不同
-            // → 他会话的轮，不锁本窗（跨会话发送互不阻塞；标记等原窗 idle 自清，
-            // 本窗不越权删）。空白新对话态无在途轮 → 跳过。b.convId 空（旧客户端
-            // /auto 未决议窗口写入）保守视为匹配，维持旧同桶并发语义
-            if (ctx.state.convNeedCreate) return;
-            if (ctx.state.conv !== null && b.convId !== undefined && b.convId !== null
-                && b.convId !== ctx.state.conv) return;
-            const remain = REMOTE_BUSY_FALLBACK_MS - (Date.now() - b.ts);
-            if (remain > 0) {
-              ctx.state.remoteRounds[b.roundId] = true;
-              resetRemoteBusyTimer(remain);
-              applyRemoteBusyUI();
-            } else {
+        // Restoring a lease must never exit initialization of the engine API.
+        const restoreBusyLease = () => {
+          try {
+            const lease = JSON.parse(localStorage.getItem(BUSY_KEY) || 'null');
+            if (!lease?.roundId || !lease.ts) return;
+            if (lease.owner === tabId) {
               localStorage.removeItem(BUSY_KEY);
+              return;
             }
-          }
-        } catch (e) { /* 隐私模式等 */ }
+            if (ctx.state.convNeedCreate || (ctx.state.conv !== null
+                && lease.convId != null && lease.convId !== ctx.state.conv)) return;
+            const remaining = REMOTE_BUSY_FALLBACK_MS - (Date.now() - lease.ts);
+            if (remaining > 0) {
+              ctx.state.remoteRounds[lease.roundId] = true;
+              resetRemoteBusyTimer(remaining);
+              applyRemoteBusyUI();
+            } else localStorage.removeItem(BUSY_KEY);
+          } catch (_) { /* Storage can be unavailable in private browsing. */ }
+        };
+        restoreBusyLease();
       }
       // 从 JWT 提取用户 ID
       const getUserId = () => {
