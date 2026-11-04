@@ -2,11 +2,11 @@
 
 import os
 import uuid
+from urllib.parse import parse_qsl, urlencode, urlsplit
 
 import psycopg
 import pytest
 from psycopg import sql
-from psycopg.conninfo import make_conninfo
 
 
 @pytest.fixture
@@ -20,7 +20,9 @@ def checkpoint_database():
     with psycopg.connect(dsn, autocommit=True, connect_timeout=5) as conn:
         conn.execute(sql.SQL('CREATE SCHEMA {}').format(sql.Identifier(schema)))
     try:
-        yield make_conninfo(dsn, options='-c search_path=' + schema)
+        parts = urlsplit(dsn)
+        query = {**dict(parse_qsl(parts.query)), 'options': '-c search_path=' + schema}
+        yield parts._replace(query=urlencode(query)).geturl()
     finally:
         with psycopg.connect(dsn, autocommit=True, connect_timeout=5) as conn:
             conn.execute(sql.SQL('DROP SCHEMA {} CASCADE').format(sql.Identifier(schema)))
