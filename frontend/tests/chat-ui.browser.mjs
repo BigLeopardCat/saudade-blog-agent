@@ -521,7 +521,7 @@ try {
   passed('full-page navigation restores the pending task and narrates from the new page');
   const reloadContext = await browser.newContext({ viewport: { width: 1280, height: 900 } });
   const reloadPage = await reloadContext.newPage();
-  reloadPage.on('pageerror', error => errors.push(String(error)));
+  reloadPage.on('pageerror', error => { errors.push(String(error)); console.error('Reload page error:',String(error)); });
   await reloadPage.goto(origin);
   await reloadPage.waitForFunction(() => !!window.__chatTest?.ctx.state.conv);
   const reloadBefore = streamCount();
@@ -1168,6 +1168,7 @@ try {
       diagnostics.pages.push(await page.evaluate(()=>({url:location.href,
         pending:JSON.parse(sessionStorage.getItem('saudade-browser-action-pending')||'null'),
         conv:window.__chatTest?.ctx.state.conv,sending:window.__chatTest?.ctx.state.isSending,
+        ready:document.readyState,engine:typeof window.__waifuEngine,stream:typeof window.__waifuStream,
         remoteBusy:window.__chatTest?.ctx.state.remoteBusy,
         status:document.getElementById('chat-status')?.textContent,
         texts:[...document.querySelectorAll('.msg-text')].map(el=>el.textContent.slice(0,250)),
