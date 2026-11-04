@@ -5,6 +5,9 @@ from agent.domains.account_actions.targets import Role
 from agent.domains.notices.targets import DEFAULT_TITLE
 
 DOMAIN_DESCRIPTIONS = {
+    "admin_gallery": "Administrator image library: search filenames/descriptions and folders, "
+                     "inspect candidate images when needed, prepare metadata/move/favorite changes "
+                     "and article cover confirmation. Start with the bounded index, not pixels.",
     "article_editor": "Collaborate on the currently OPEN article editor: read its live unsaved "
                       "draft, propose title/body edits for red/green review and user acceptance, "
                       "or prepare confirmation to create/replace the summary. "

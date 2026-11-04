@@ -1,6 +1,7 @@
 """Keep recoverable image references in dialogue, never inline media payloads."""
 
 import hashlib
+import json
 import uuid
 
 from langchain_core.messages import HumanMessage, ToolMessage
@@ -33,20 +34,36 @@ def compact(message):
     refs = list(dict.fromkeys(image_id(url) for url in urls))
     text = text_content(message.content)
     hint = "历史图片引用：" + ", ".join(refs)
-    hint += "\n[原图未附在历史上下文；细节需使用 get_conversation_image 重新读取。]"
+    reader = message.additional_kwargs.get("image_reader")
+    if isinstance(message, ToolMessage) and isinstance(message.artifact, dict):
+        reader = message.artifact.get("image_reader", reader)
+    if isinstance(reader, dict) and len(json.dumps(reader)) <= 500:
+        hint += (
+            "\n[原图未附在历史上下文；重新读取方式：" + json.dumps(reader, ensure_ascii=False) + "]"
+        )
+    else:
+        hint += "\n[原图未附在历史上下文；细节需使用 get_conversation_image 重新读取。]"
     # Keep the first text block intact for the existing discard/source-text contract.
-    content = ([{"type": "text", "text": text}, {"type": "text", "text": hint}]
-               if isinstance(message, HumanMessage) else text + "\n" + hint)
-    return message.model_copy(update={
-        "content": content,
-        "additional_kwargs": {**message.additional_kwargs, "memory_images": refs},
-    })
+    content = (
+        [{"type": "text", "text": text}, {"type": "text", "text": hint}]
+        if isinstance(message, HumanMessage)
+        else text + "\n" + hint
+    )
+    return message.model_copy(
+        update={
+            "content": content,
+            "additional_kwargs": {**message.additional_kwargs, "memory_images": refs},
+        }
+    )
 
 
 def references(messages) -> set[str]:
-    return {ref for message in messages
-            for ref in compact(message).additional_kwargs.get("memory_images", [])
-            if isinstance(ref, str) and ref.startswith("img_")}
+    return {
+        ref
+        for message in messages
+        for ref in compact(message).additional_kwargs.get("memory_images", [])
+        if isinstance(ref, str) and ref.startswith("img_")
+    }
 
 
 def tool_messages(message, text, call_id):
@@ -57,10 +74,14 @@ def tool_messages(message, text, call_id):
     urls = image_urls(message.content)
     if not urls:
         return [receipt]
-    attachment = HumanMessage(content=[
-        {"type": "text", "text": text},
-        *({"type": "image_url", "image_url": {"url": url}} for url in urls),
-    ], additional_kwargs={"memory_context": True})
+    reader = (message.artifact or {}).get("image_reader")
+    attachment = HumanMessage(
+        content=[
+            {"type": "text", "text": text},
+            *({"type": "image_url", "image_url": {"url": url}} for url in urls),
+        ],
+        additional_kwargs={"memory_context": True, **({"image_reader": reader} if reader else {})},
+    )
     return [receipt, attachment]
 
 
