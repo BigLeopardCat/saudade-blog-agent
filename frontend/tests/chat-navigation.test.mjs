@@ -141,6 +141,23 @@ test('article editor acknowledges a live working copy once, without navigating',
   assert.equal(runs,1);
 });
 
+test('publication opens the editor confirmation once and only reports readiness', async () => {
+  const f=fixture(); let runs=0;
+  const document={editor_id:'e',revision:2,outcome:'publication_ready',title:'新标题'};
+  f.sandbox.__saudadeArticleEditor={execute:command=>{
+    runs++;assert.equal(command.operation,'prepare_publish');return document;
+  }};
+  const command={kind:'article_editor',operation:'prepare_publish',editor_id:'e',revision:2,
+    task_id:'task',command_id:'publication'};
+  assert.equal(f.navigation.receive(command,f.context),true);
+  f.ready();await waitFor(()=>f.calls.length===1);
+  assert.equal(f.calls[0].browserResult.status,'completed');
+  assert.equal(f.calls[0].browserResult.document.outcome,'publication_ready');
+  assert.equal(f.navigations.length,0);
+  f.navigation.receive(command,f.context);await flush();
+  assert.equal(runs,1);
+});
+
 test('missing or stale editor returns failure and its reason without affecting navigation', async () => {
   for (const absent of [true,false]) {
     const f=fixture();
