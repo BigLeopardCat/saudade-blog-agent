@@ -108,13 +108,14 @@ def own_domains(tools: dict) -> dict:
 
 
 def public_domains() -> dict:
-    from agent.domains import public_activity, public_catalog, utilities
+    from agent.domains import public_activity, public_catalog
+    from tools.site import get_current_time
 
     groups = {"public_catalog": (public_catalog.list_notes, public_catalog.get_top_notes,
                                   public_catalog.list_categories, public_catalog.list_tags),
               "public_activity": (public_activity.get_announcements, public_activity.list_guestbook,
                                    public_activity.list_talks),
-              "utilities": (utilities.get_current_time, utilities.get_weather)}
+              "utilities": (get_current_time,)}
     domains = {}
     for domain, tools in groups.items():
         names = frozenset(tool.name for tool in tools)

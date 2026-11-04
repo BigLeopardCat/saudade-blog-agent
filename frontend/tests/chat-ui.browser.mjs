@@ -320,6 +320,18 @@ try {
   assert.equal(await page.locator('.chat-kicker, .chat-keyboard-hint, .chat-composer-meta').count(), 0);
   await page.screenshot({ path: path.join(output, 'desktop-empty.png') });
   passed('desktop empty state and empty-send disabled; starters preserve drafts');
+  await page.evaluate(() => { window.__agentCurrentWeather = () => ({city:'Hangzhou',country_code:'CN',
+    temperature_c:12,humidity_percent:67,wind_speed_kmh:9,weather_code:0,
+    valid_at:Math.floor(Date.now()/1000)-300,source:'Open-Meteo',location_source:'GeoJS IP'}); });
+  await send('浏览器天气上下文');
+  assert.equal(requests.filter(r=>r.path==='/api/chat/stream').at(-1).body.current_weather.city, 'Hangzhou');
+  await page.evaluate(() => { window.__agentCurrentWeather = () => { throw new Error('host unavailable'); }; });
+  await send('天气来源失效也能聊天');
+  assert.equal(requests.filter(r=>r.path==='/api/chat/stream').at(-1).body.current_weather, null);
+  await page.evaluate(() => { delete window.__agentCurrentWeather; });
+  await reset();
+  passed('host weather snapshot is optional and cannot block a chat request');
+
   await page.locator('#chat-close').click();
   assert.equal(await page.locator('#waifu-chat').isVisible(), false);
   await page.evaluate(() => window.__chatTest.ctx.dom.chatPanel.classList.add('active'));
@@ -665,6 +677,7 @@ try {
   await idle();
   assert.equal(requests.filter(x => x.path === '/api/chat/stream').length, beforeStop + 1);
   const resumed = requests.filter(x => x.path === '/api/chat/stream').at(-1).body;
+  assert.equal(resumed.current_weather, null);
   assert.equal(resumed.resume_task, originalTask);
   assert.equal(resumed.message, '');
   assert.equal(requests.filter(x => x.path === '/api/chat/discard').length, beforeDiscard);

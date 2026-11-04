@@ -202,16 +202,7 @@ def first_gold(case: dict) -> dict:
 
 
 def build_request(case: dict, rnd: dict | None = None) -> ChatRequest:
-    """用例 dict → ChatRequest。**两个跑法（本脚本 / golden_case_runner.py）共用的唯一构造点**。
-
-    20260920：进程隔离跑法（golden_full_run.py → golden_case_runner.py）此前自己手写了一份
-    ChatRequest，漏了 `executions`（20260904 才加进用例 context 的字段）⇒ 那 3 条
-    「执行记忆 / 实体摘要」用例在隔离跑法下**必然假失败**（模型看不到 recent_executions，
-    如实答"没有执行记录"/重跑工具）。同一份用例两个跑法结论不同的根因就是这份复制粘贴——
-    字段表只留这一处，再不许各自维护。
-
-    `rnd`（20260925）：`iter_rounds` 给的那一轮；不给 = 第 1 轮（既有调用点一个都不改）。
-    """
+    """Build the same typed request for in-process and isolated golden drivers."""
     if rnd is None:
         rnd = iter_rounds(case)[0]
     g = rnd["gold"]
@@ -225,20 +216,14 @@ def build_request(case: dict, rnd: dict | None = None) -> ChatRequest:
         needs_summary=g.get("needs_summary", False),
         current_effects=ctx.get("current_effects", ""),
         current_darkmode=ctx.get("current_darkmode", ""),
+        current_weather=({**ctx["current_weather"], "valid_at": int(time.time())}
+                         if isinstance(ctx.get("current_weather"), dict)
+                         and ctx["current_weather"].get("valid_at") == "{now}"
+                         else ctx.get("current_weather")),
         history=ctx.get("history", []),
         summary=ctx.get("summary", ""),
-        # 20260904 C3：跨轮执行记忆（模拟 Rust 侧 execution_log 渲染注入——
-        # 二轮用例把首轮回执作为 executions 传进来，锁"据记忆如实回答"路径）；
-        # 20261001 起两个台账字段都过 `expand_now`：行首时间戳会按运行时刻算年龄，
-        # 写死的日期等于让判定随挂钟漂移（见 `expand_now` 头注）。
         executions=expand_now(ctx.get("executions", "")),
-        # 20260924：跨轮待办（Rust 侧从 pending_action 表读回注入的另一半台账，
-        # 与 executions 合一成"确认与执行事实"块，见 server._ledger_block）——
-        # 用例带了才能在 golden 里跑到那条路径（gate 洞⑦ 的判据也看这一半）。
         pending_action=expand_now(ctx.get("pending_action", "")),
-        # 会话 id（20260925 双轮）：令牌把 `conv` 签进签名（agent/confirm.py），
-        # 签发那一轮与兑现那一轮的会话必须一致。用例不写 = None（两轮都是 None，
-        # 同样自洽）；写了就照抄进两轮——这正是生产上"同一张卡片"的坐标。
         conversation_id=ctx.get("conversation_id"),
 
     )

@@ -35,6 +35,8 @@ def execution_summary(text: str) -> str:
 def request_facts(req: ChatRequest) -> dict:
     """Project host display/history fields, excluding credentials and raw execution payloads."""
     facts: dict = {"current_time": format_local_now()}
+    if req.current_weather is not None:
+        facts["current_weather"] = req.current_weather.facts()
     if req.chat_quota is not None:
         facts["chat_quota"] = req.chat_quota.model_dump()
     if req.executions.strip():
