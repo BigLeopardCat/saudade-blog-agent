@@ -155,19 +155,11 @@ def article_page(
     return out
 
 
-def render_article_result(value, cap: int) -> tuple[str, dict | None]:
+def render_article_result(data, text: str, cap: int) -> tuple[str, dict | None]:
     """Budget an article frame while keeping a parseable, truthful read cursor."""
-    import ast
-
     from rag.sections import frame_excerpt, slim_frame
 
-    data = getattr(value, "data", None)
-    text = slim_frame(str(value))
-    if not isinstance(data, dict):
-        try:
-            data = ast.literal_eval(text)
-        except (ValueError, SyntaxError):
-            data = None
+    text = slim_frame(data if isinstance(data, dict) else text)
     if len(text) <= cap:
         return text, data if isinstance(data, dict) else None
     if not isinstance(data, dict):

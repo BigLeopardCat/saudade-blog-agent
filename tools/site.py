@@ -8,7 +8,7 @@ from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import tool
 
 from config import settings as _settings
-from tools.result import fact, ok, tgt
+from tools.result import ToolResult, fact, ok, tgt
 
 # Public exports; helper names stay private to their modules.
 __all__ = ["get_site_map", "get_chat_history", "get_current_time",
@@ -165,7 +165,7 @@ def navigate_to(
                          "/article/3 /talk /guestbook /about /dashboard/notes"],
     confirm: Annotated[bool, "Whether user confirmation is needed. "
                               "false=direct nav, true=ask user"] = True,
-) -> str:
+) -> str | ToolResult:
     """Send a validated navigation command in the execution receipt."""
     p = path.strip()
     if not nav_path_valid(p):
@@ -195,7 +195,7 @@ def toggle_effect(
     effect: Annotated[Literal["sakura", "rain", "snow"],
                       "Effect name: sakura(樱花), rain(大雨), snow(雪花)"],
     action: Annotated[Literal["on", "off"], "开启还是关闭: on(开启), off(关闭)"] = "on",
-) -> str:
+) -> str | ToolResult:
     """开启或关闭博客页面的视觉效果（樱花/大雨/雪花）。
     系统按本工具的执行回执驱动前端开关（按 action 显式开合，不因重复命令翻转状态）。
     参数校验：无效 effect/action 返回提示而非执行回执——**回执只代表真实发生的切换**，
@@ -217,7 +217,7 @@ def toggle_effect(
 @tool
 def toggle_dark_mode(
     mode: Annotated[Literal["on", "off"], "夜间模式开关: on(开启夜间模式), off(关闭夜间模式)"],
-) -> str:
+) -> str | ToolResult:
     """开启或关闭博客页面的夜间模式（暗色主题）。
     系统按本工具的执行回执驱动前端切换；状态会持久化记忆。"""
     if mode in ("on", "off"):

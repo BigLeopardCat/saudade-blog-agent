@@ -22,9 +22,10 @@ def prepared(monkeypatch):
     config = {"configurable": {"user_id": 7, "conversation_id": 42, "thread_id": "conv_42",
         "principal": Principal(7, "admin", SOURCE_ASSERTION),
         "browser_feedback": True, "browser_task": "edit-task"}}
+    observed = {"scope": "editor_draft", "editor_id": "editor", "revision": 3, "description": ""}
     runtime = SimpleNamespace(config=config, tool_call_id="summary", state={"messages": [
-        ToolMessage(name="read_current_article", tool_call_id="read", content=json.dumps({
-            "scope": "editor_draft", "editor_id": "editor", "revision": 3, "description": ""}))]})
+        ToolMessage(name="read_current_article", tool_call_id="read", content=json.dumps(observed),
+                    artifact={"kind": "ok", "data": observed})]})
     result = article_editor.prepare_article_summary.func(
         editor_id="editor", revision=3, description="新摘要", runtime=runtime)
     grant = confirm.verify(result.execution["pending_confirm"]["token"], 7, 42)
@@ -45,7 +46,7 @@ def test_checkpoint_payload_must_match_signed_digest(prepared, monkeypatch, tmp_
     ledger = Ledger(str(tmp_path / "summary.sqlite3"))
     result = article_summary.execute(grant, config, None, ledger=ledger)
     assert result["blocked"] and not result["receipts"]
-    assert not result.get("editor_summary_command")
+    assert not result.get("client_operations")
     args = grant["specs"][0]["args"]
     assert ledger.lookup(article_summary.writes.operation_key(grant, "set_article_summary", args)) \
         is None
@@ -58,7 +59,11 @@ def test_approval_result_is_not_an_execution_receipt(prepared, monkeypatch, tmp_
     ledger = Ledger(str(tmp_path / "summary.sqlite3"))
     execution = article_summary.execute(grant, config, None, ledger=ledger)
     assert not execution["receipts"]
-    assert execution["editor_summary_command"]["description"] == "新摘要"
+    reference = execution["client_operations"][grant["jti"]]
+    stored = ledger.lookup(reference["ledger_key"])
+    from agent.domains.article_summary_state import restore
+    assert restore(stored[1], reference).description == "新摘要"
+    assert "description" not in reference
     assert approval.has_result(execution, grant["specs"], jti=grant["jti"])
     assert not approval.has_result(execution, grant["specs"], jti="wrong")
     assert not approval.has_result(execution, [{"tool": "other", "args": {}}], jti=grant["jti"])
@@ -67,13 +72,13 @@ def test_approval_result_is_not_an_execution_receipt(prepared, monkeypatch, tmp_
     assert fact["status"] == "approved" and fact["executed"] is False
     replay_config = {"configurable": {**config["configurable"], "confirmation_replay_only": True}}
     replay = article_summary.execute(grant, replay_config, None, ledger=ledger)
-    assert not replay.get("editor_summary_command") and not replay["receipts"]
+    assert not replay.get("client_operations") and not replay["receipts"]
     operation = grant["specs"][0]
     key = article_summary.writes.operation_key(grant, operation["tool"], operation["args"])
     ledger.finish(key, unavailable("cancelled"))
     revoked = article_summary.execute(grant, config, None, ledger=ledger)
     assert revoked["blocked"] and not revoked["receipts"]
-    assert not revoked.get("editor_summary_command")
+    assert not revoked.get("client_operations")
 
 
 @pytest.mark.parametrize("role,uid,cid", [("user", 7, 42), ("admin", 8, 42), ("admin", 7, 43)])

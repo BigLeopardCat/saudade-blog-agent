@@ -43,7 +43,8 @@ def test_dynamic_tool_receives_trusted_framework_runtime_and_callbacks():
     assert result.reply == "done" and observed == ["read"] and events == ["start", "end"]
     message = next(m for m in model.prompts[-1] if isinstance(m, ToolMessage)
                    and m.tool_call_id == "read")
-    assert message.content == "fixture fact" and message.artifact == {"kind": "ok"}
+    assert message.content == "fixture fact"
+    assert message.artifact == {"kind": "ok", "data": {"value": 7}, "meta": {}}
     assert dynamic_read.response_format == "content"
     assert convert_to_openai_tool(dynamic_read) == convert_to_openai_tool(
         framework_tool(dynamic_read))
@@ -104,5 +105,5 @@ def test_output_adapter_preserves_both_sync_and_async_tool_contracts():
     async_result = asyncio.run(adapted.ainvoke(request))
     assert sync_result.content == "sync fact" and async_result.content == "async fact"
     assert sync_result.artifact == async_result.artifact == {
-        "application_data": {"kind": "ok", "data": {"value": 7}, "meta": {}}}
+        "kind": "ok", "data": {"value": 7}, "meta": {}}
     assert original.response_format == "content"

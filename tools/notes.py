@@ -105,14 +105,14 @@ def _slim_note_rows(rows):
 def list_notes(
     page: Annotated[int, "Page number, default 1"] = 1,
     page_size: Annotated[int, "Items per page, default 10"] = 10,
-) -> str:
+) -> str | ToolResult:
     """获取文章列表，按页返回。每篇给出：id（noteId）、标题、状态、是否置顶、标签名。"""
     data = _get(f"/notes?page={page}&page_size={page_size}")
     slim = _slim_note_rows(data)
     return _shape(slim if slim is not None else data)
 
 @tool
-def search_notes(keyword: Annotated[str, "搜索关键词"]) -> str:
+def search_notes(keyword: Annotated[str, "搜索关键词"]) -> str | ToolResult:
     """按关键词匹配文章标题、正文和标签，返回按相关度排序的文章元数据。
 
     按标题或标签查找文章用本工具，按内容主题检索可用 rag_search。
@@ -127,7 +127,7 @@ def search_notes(keyword: Annotated[str, "搜索关键词"]) -> str:
     slim = _slim_note_rows(data)
     return _shape(slim if slim is not None else data)
 
-def _read_section(data: dict, article_id, want: str) -> str:
+def _read_section(data: dict, article_id, want: str) -> str | ToolResult:
     from rag.reading import article_page
     return _shape(article_page(data, article_id, section=want))
 
@@ -188,7 +188,7 @@ def get_article_detail(
     offset: Annotated[int, _ARTICLE_OFFSET_DESC] = 0,
     max_chars: Annotated[int, _ARTICLE_LIMIT_DESC] = 12000,
     revision: Annotated[str, _ARTICLE_REVISION_DESC] = "",
-) -> str:
+) -> str | ToolResult:
     """读取指定文章、说说、留言或公告的正文证据。
 
     文章支持按小节或字符范围读取；续读须带返回的 contentRevision，使用 nextOffset
@@ -260,7 +260,7 @@ def _rag_hit(index, hit):
 def rag_search(
     query: Annotated[str, "检索关键词（用户问题中希望从博客内容里找到答案的核心表述）"],
     top_k: Annotated[int, "返回候选文档数量，默认 8"] = 8,
-) -> str:
+) -> str | ToolResult:
     """按相关性检索博客文章（语料仅限线上可见文章），返回候选文档列表（标题+类型+排名+命中节），不返回全文。
 
     用于查找某主题的文章，可直接提供候选标题与链接。
@@ -294,7 +294,7 @@ def rag_search(
         return unavailable(f"检索服务不可用（{type(exc).__name__}）")
 
 @tool
-def get_top_notes() -> str:
+def get_top_notes() -> str | ToolResult:
     """获取置顶文章列表（每篇给出 id、标题、状态、是否置顶、标签名）。"""
     data = _get("/topnotes")
     slim = _slim_note_rows(data)
@@ -303,13 +303,13 @@ def get_top_notes() -> str:
 # Category and tag reads.
 
 @tool
-def list_categories() -> str:
+def list_categories() -> str | ToolResult:
     """获取全部分类列表，包含分类名称、颜色、图标、文章数量。"""
     data = _get("/category")
     return _shape(data)
 
 @tool
-def list_tags() -> str:
+def list_tags() -> str | ToolResult:
     """获取站内**全部标签**：一级标签 + 它下面的二级标签（二级互不重名，但不同
     一级标签下可以有同名二级标签，靠 fatherKey/fatherTag 区分）。"""
     # 两级都要读：只读 /tagone 时结构上就看不见二级标签，
@@ -331,7 +331,7 @@ def list_tags() -> str:
 @tool
 def get_announcements(
     offset: Annotated[int, "（可选）跳过最新的多少条，用于取回更早的公告；默认 0"] = 0,
-) -> str:
+) -> str | ToolResult:
     """获取博客公告列表（默认带回最新的那批，注记里写明一共多少条）。
 
     列表比一次能带的多时，只带回最新的一批；帧尾注记会写明一共多少条、**以及**
@@ -350,7 +350,7 @@ def get_announcements(
 @tool
 def list_guestbook(
     offset: Annotated[int, "（可选）跳过最新的多少条，用于取回更早的留言；默认 0"] = 0,
-) -> str:
+) -> str | ToolResult:
     """获取留言板（河灯留言）列表（默认带回最新的那批，注记里写明一共多少条）。
 
     留言比一次能带的多时，只带回最新的一批；帧尾注记会写明一共多少条、**以及**
@@ -398,7 +398,7 @@ def _drop_dead_mine(rows: list) -> list:
 
 
 @tool
-def list_my_board(config: RunnableConfig) -> str:
+def list_my_board(config: RunnableConfig) -> str | ToolResult:
     """列出**当前登录用户自己**放的全部河灯留言（返回 talkId / 内容 / 留名 /
     `approved` 状态 / 驳回理由 / 时间）——**含待审与未通过的那些**，不只公开池里
     已放行的。
@@ -436,7 +436,7 @@ def list_my_board(config: RunnableConfig) -> str:
 @tool
 def list_talks(
     offset: Annotated[int, "（可选）跳过最新的多少条，用于取回更早的说说；默认 0"] = 0,
-) -> str:
+) -> str | ToolResult:
     """获取说说（动态/碎语）列表（默认带回最新的那批，注记里写明一共多少条）。
 
     说说比一次能带的多时，只带回最新的一批；帧尾注记会写明一共多少条、**以及**
@@ -463,13 +463,13 @@ def list_talks(
 # Site information.
 
 @tool
-def get_blog_info() -> str:
+def get_blog_info() -> str | ToolResult:
     """获取博客基本信息：作者、头像、签名、ICP备案号等。"""
     data = _get("/user")
     return _shape(data)
 
 @tool
-def get_social_links() -> str:
+def get_social_links() -> str | ToolResult:
     """获取社交链接（QQ、GitHub、BILIBILI等）。"""
     data = _get("/social")
     return _shape(data)

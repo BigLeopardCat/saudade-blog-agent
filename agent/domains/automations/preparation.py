@@ -35,13 +35,15 @@ def tools(service, can_prepare):
     @tool_boundary
     def list_automations(config: RunnableConfig, limit: Limit = 5, offset: Offset = 0) -> object:
         """List this administrator's own reminders and read-only background tasks."""
-        return ok(json.dumps(service.list(principal(config), limit, offset), ensure_ascii=False))
+        data = service.list(principal(config), limit, offset)
+        return ok(json.dumps(data, ensure_ascii=False), data=data)
 
     @tool
     @tool_boundary
     def get_automation(schedule_id: Identifier, config: RunnableConfig) -> object:
         """Inspect one owned schedule's exact definition, timing, state and current version."""
-        return ok(json.dumps(service.get(principal(config), schedule_id), ensure_ascii=False))
+        data = service.get(principal(config), schedule_id)
+        return ok(json.dumps(data, ensure_ascii=False), data=data)
 
     @tool
     @tool_boundary
@@ -49,11 +51,8 @@ def tools(service, can_prepare):
         schedule_id: Identifier, config: RunnableConfig, limit: Limit = 5, offset: Offset = 0
     ) -> object:
         """Read this administrator's execution history and results for one schedule."""
-        return ok(
-            json.dumps(
-                service.runs(principal(config), schedule_id, limit, offset), ensure_ascii=False
-            )
-        )
+        data = service.runs(principal(config), schedule_id, limit, offset)
+        return ok(json.dumps(data, ensure_ascii=False), data=data)
 
     @tool
     @tool_boundary
@@ -61,9 +60,8 @@ def tools(service, can_prepare):
         schedule_id: Identifier, run_id: str, config: RunnableConfig
     ) -> object:
         """Read the complete saved result of one owned execution, using its history ID."""
-        return ok(
-            json.dumps(service.result(principal(config), schedule_id, run_id), ensure_ascii=False)
-        )
+        data = service.result(principal(config), schedule_id, run_id)
+        return ok(json.dumps(data, ensure_ascii=False), data=data)
 
     @tool(return_direct=True)
     @tool_boundary

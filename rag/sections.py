@@ -301,55 +301,28 @@ _HEADER_VALUE_MAX = 200      # 帧头里每个非正文字段保留的长度
 _HEADER_KEYS_MAX = 12
 
 
-def _unescape(text: str) -> str:
-    """Restore literal newline escapes before parsing a plain tool frame."""
-    return text.replace("\\n", "\n")
-
-
-def slim_frame(frame: str) -> str:
-    """Remove only byte-identical duplicate body fields from a dictionary frame.
-
-    Unknown frame shapes pass through unchanged. This transforms presentation
-    only; the original structured tool data remains the source for consumers."""
-    if "'noteContent'" not in frame and '"noteContent"' not in frame:
-        return frame                     # 快路：绝大多数帧没有这个键，不必 literal_eval
-    import ast
-    try:
-        data = ast.literal_eval(frame)
-    except Exception:
-        return frame
+def slim_frame(data: dict | str) -> str:
+    """Render structured data once, removing only byte-identical duplicate body fields."""
     if not isinstance(data, dict):
-        return frame
+        return data
     body = data.get("noteContent")
     if not isinstance(body, str) or not body:
-        return frame
-    dup = [k for k, v in data.items() if k != "noteContent" and v == body]
-    if not dup:
-        return frame
-    for k in dup:
-        data.pop(k)
-    return str(data)
+        return str(data)
+    return str({key: value for key, value in data.items()
+                if key == "noteContent" or value != body})
 
 
-def frame_excerpt(frame: str, cap: int) -> str:
-    """Render a dictionary frame as metadata and a bounded section excerpt.
-
-    Parse repr first so escaped newlines and duplicate body aliases do not consume
-    the budget twice. Unknown shapes use the labeled plain-text excerpt path."""
+def frame_excerpt(frame: dict | str, cap: int) -> str:
+    """Render structured metadata and a bounded excerpt without parsing display text."""
     body, header = _split_frame(frame)
     if body is None:
-        return excerpt(_unescape(frame), cap)
+        return excerpt(str(frame), cap)
     head_txt = header + "\n\n正文：\n" if header else ""
     return head_txt + excerpt(body, max(200, cap - len(head_txt)))
 
 
-def _split_frame(frame: str) -> tuple[str | None, str]:
-    """帧 → (正文, 帧头文本)。不是"含正文的 dict repr"时正文为 None。"""
-    import ast
-    try:
-        data = ast.literal_eval(frame)
-    except Exception:
-        return None, ""
+def _split_frame(data: dict | str) -> tuple[str | None, str]:
+    """Select the body and metadata from structured source data."""
     if not isinstance(data, dict):
         return None, ""
     str_vals = {k: v for k, v in data.items() if isinstance(v, str)}

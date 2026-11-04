@@ -1,12 +1,23 @@
-"""Apply approved summary changes at a framework checkpoint before model narration."""
+"""Resolve checkpoint references through the authoritative summary-operation ledger."""
 
 import json
 
 from langchain.agents.middleware import AgentMiddleware
+from langchain_core.messages import ToolMessage
 from langchain_core.tools import ToolException
+from pydantic import ValidationError
 
-from agent import idem
-from agent.domains import article_editor, article_summary
+from agent.contracts.client import reference_adapter
+from agent.domains import article_editor
+from agent.domains.article_summary_state import (
+    ApprovedSummary,
+    AwaitingSummary,
+    UnverifiedSummary,
+    VerifiedSummary,
+    projection,
+    restore,
+    saved_result,
+)
 from agent.runtime import memory, writes
 from tools.result import ok
 from utils.trace import record
@@ -16,75 +27,71 @@ class SummaryApprovalMiddleware(AgentMiddleware):
     def __init__(self, session):
         self.session = session
 
-    def _sync(self, state):
-        rows = (state.get("effects") or {}).get("editor_summary_results", {})
-        self.session.receipts = [rows.get(row.get("operation_id"), row)
-                                 for row in self.session.receipts]
-        self.session.receipts = [row for row in self.session.receipts
-                                 if row.get("status") not in {"approved", "unverified"}]
-        present = {row.get("operation_id") for row in self.session.receipts}
-        self.session.receipts.extend(row for key, row in rows.items()
-                                     if key not in present and row["status"] == "completed")
-        for row in rows.values():
-            if row["status"] == "unverified":
-                self.session.state["effects"]["operation_outcome"] = {
-                    "tool": row["tool"], "args": row["args"], "status": "unverified",
-                    "result": row["result"]}
+    def _load(self, store, reference):
+        previous = store.lookup(reference['ledger_key'])
+        if previous is None or previous[0] != 'done':
+            raise ValueError('Client operation ledger is unavailable')
+        return restore(previous[1], reference), previous[1]
+
+    def _apply(self, store, reference):
+        operation, previous = self._load(store, reference)
+        if isinstance(operation, ApprovedSummary):
+            store.replace(reference['ledger_key'], previous, saved_result(operation.awaiting()))
+            operation, previous = self._load(store, reference)
+        if not isinstance(operation, AwaitingSummary):
+            return operation
+        args = operation.args
+        try:
+            document = article_editor._run(self.session.config, 'set_article_summary', 'summary',
+                args.request_id, editor_id=args.editor_id, revision=args.revision,
+                expected_revision=operation.command()['expected_revision'],
+                description=operation.description)
+            observed = operation.verify(document)
+        except ValidationError:
+            observed = operation.uncertain('Client observation does not prove the approved summary')
+        except ToolException as error:
+            observed = operation.uncertain(str(error)[:1000] or 'Client observation is unavailable')
+        store.replace(reference['ledger_key'], previous, saved_result(observed))
+        operation, _ = self._load(store, reference)
+        record('native', 'client_operation_observed', operation_id=operation.operation_id,
+               status=operation.phase)
+        return operation
 
     def before_model(self, state, runtime):
-        self._sync(state)
-        effects = state.get("effects") or {}
-        command = effects.get("editor_summary_command")
-        if not command:
+        references = state.get('client_operations') or {}
+        if not references:
             return None
         principal, cid = writes.bound_context(self.session.config)
-        if command["uid"] != principal.uid or command["conv"] != cid:
-            raise ValueError("摘要确认与当前账号或会话不一致")
         store = writes.ledger_for(self.session.store.saver)
-        saved = store.lookup(command["ledger_key"])
-        result = idem.replay_result(saved[1]) if saved and saved[0] == "done" else None
-        meta = getattr(result, "meta", {}) or {}
-        if (meta.get("operation") != command["operation"]
-                or not article_summary.description_matches(command.get("description"),
-                                                           command["operation"]["args"])):
-            raise ValueError("摘要确认已撤销或不可用")
-        row = meta["receipt"]
-        if row["status"] == "approved":
-            args = command["operation"]["args"]
-            try:
-                document = article_editor._run(
-                    self.session.config, "set_article_summary", "summary",
-                    args["request_id"], **{key: args[key] for key in
-                                         ("editor_id", "revision")},
-                                    expected_revision=args["revision"] + (
-                                        args["summary_sha256"] != args["previous_summary_sha256"]),
-                                    description=command["description"])
-                document = json.loads(document)
-                text = ("编辑草稿摘要已符合确认内容，无需再次修改；未发布。"
-                        if document["outcome"] == "unchanged" else
-                        "摘要已更新到编辑草稿，未发布；服务端保存以自动保存状态为准。")
-                row = article_summary.receipt(command["operation_id"], args, "completed", text)
-                row["document"] = document
-            except ToolException as error:
-                row = article_summary.receipt(command["operation_id"], args, "unverified",
-                                              "未能确认摘要应用结果：" + str(error))
-            store.finish(command["ledger_key"], article_summary.saved_result(
-                command["operation"], row, command["description"]))
-            record("native", "client_operation_observed", operation_id=command["operation_id"],
-                   status=row["status"], result=row["result"])
-        results = {**effects.get("editor_summary_results", {}), command["operation_id"]: row}
-        updated = {**effects, "editor_summary_command": None, "authorized_operation": None,
-                   "editor_summary_results": results}
-        if row["status"] == "unverified":
-            updated["operation_outcome"] = {"tool": row["tool"], "args": row["args"],
-                                             "status": "unverified", "result": row["result"]}
-        self._sync({"effects": updated})
-        observed = memory.observation({"name": "set_article_summary", "args": row["args"],
-                                      "id": "editor_result_" + command["operation_id"]},
-                                     ok(json.dumps(row, ensure_ascii=False)))
-        self.session.observations.extend(observed)
-        return {"effects": updated, "messages": observed}
-
-    def wrap_model_call(self, request, handler):
-        self._sync(request.state)
-        return handler(request)
+        messages, outcome = [], None
+        for operation_id, raw in references.items():
+            reference = reference_adapter.validate_python(raw, strict=True)
+            if (reference['uid'] != principal.uid or reference['conv'] != cid
+                    or reference['operation_id'] != operation_id):
+                raise ValueError('Client operation reference differs from its conversation')
+            if reference['tool'] != 'set_article_summary':
+                continue
+            operation = self._apply(store, reference)
+            self.session.receipts = [row for row in self.session.receipts
+                                    if row.get('operation_id') != operation_id]
+            row = projection(operation)
+            if isinstance(operation, VerifiedSummary):
+                self.session.receipts.append(row)
+            elif isinstance(operation, UnverifiedSummary):
+                outcome = {**operation.spec(), 'status': 'unverified', 'result': row['result']}
+            else:
+                raise ValueError('Client operation did not reach an observed outcome')
+            call_id = 'editor_result_' + operation_id
+            if not any(isinstance(message, ToolMessage) and message.tool_call_id == call_id
+                       for message in state.get('messages', ())):
+                observed = memory.observation({'name': 'set_article_summary', 'args': row['args'],
+                    'id': call_id}, ok(json.dumps(row, ensure_ascii=False)))
+                for index, message in enumerate(observed):
+                    message.id = call_id + '_' + str(index)
+                self.session.observations.extend(observed)
+                messages.extend(observed)
+        effects = {**(state.get('effects') or {})}
+        if outcome:
+            effects['operation_outcome'] = outcome
+        self.session.state['effects'] = effects
+        return {'effects': effects, 'messages': messages}

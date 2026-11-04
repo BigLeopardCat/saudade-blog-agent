@@ -157,7 +157,7 @@ def test_legacy_tools_share_attempt_budget_and_native_tools_count_only_once():
     budget = TaskBudget(BudgetLimits(tool_calls=1))
     with budget_scope(budget):
         config = {"callbacks": tool_callbacks()}
-        assert fixture_read.invoke({}, config=config) == "source"
+        assert str(fixture_read.invoke({}, config=config)) == "source"
         with pytest.raises(BudgetExceeded, match="tool_calls"):
             fixture_read.invoke({}, config=config)
     assert budget.tool_calls == 1

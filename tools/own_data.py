@@ -17,7 +17,7 @@ from tools.result import ToolResult, _shape, fact, ok, tgt, unavailable
 
 
 @tool
-def list_my_favorites(config: RunnableConfig) -> str:
+def list_my_favorites(config: RunnableConfig) -> str | ToolResult:
     """列出**当前登录用户自己**收藏的文章（返回 noteId / title / status / createdAt）。
     访客问"我收藏了哪些文章""我的收藏夹里有什么"时用。没携带身份时如实告知读不到。
     注意：这条读的是**用户自己的**收藏夹，不是全站文章列表（那是 list_notes）。"""
@@ -62,7 +62,7 @@ def add_favorite(
                                "必须先用检索/列表工具或 get_article_detail 拿到确切 id，"
                                "不许凭记忆猜"],
     config: RunnableConfig,
-) -> str:
+) -> str | ToolResult:
     """把一篇文章收藏进**当前登录用户自己**的收藏夹（幂等：已收藏过就如实说本来就有，
     不会重复收藏）。收藏只有他自己看得见，**不改变文章的公开状态**。
     没携带身份时如实告知，一个请求都不发。"""
@@ -105,7 +105,7 @@ def remove_favorite(
     article_id: Annotated[int, "文章 id：同 add_favorite（点名了就直接用，"
                                "只说特征/指代时先用检索或收藏列表拿到确切 id）"],
     config: RunnableConfig,
-) -> str:
+) -> str | ToolResult:
     """把一篇文章从**当前登录用户自己**的收藏夹里去掉（本来就没收藏过就如实说，
     不当成出错——同一个按钮点两次不该报错）。只动他自己的收藏夹，不改文章本身。
     没携带身份时如实告知，一个请求都不发。"""
@@ -142,7 +142,7 @@ def remove_favorite(
                         before="已收藏", after="未收藏", change="已取消收藏", article_id=aid))
 
 @tool
-def list_my_messages(config: RunnableConfig) -> str:
+def list_my_messages(config: RunnableConfig) -> str | ToolResult:
     """列出**当前登录用户自己**的站内信（私信）：收件箱与发件箱各最近 100 条，
     外加未读封数（返回 inbox / outbox / unread，每封带 id / fromUserId / toUserId /
     peerName / title / content / isRead / createdAt）。
