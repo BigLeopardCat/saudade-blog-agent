@@ -2,7 +2,7 @@
 // PLAYWRIGHT_MODULE and CHROMIUM_EXECUTABLE may point to existing local installs.
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
-import { readFile, mkdir } from 'node:fs/promises';
+import { readFile, mkdir, writeFile } from 'node:fs/promises';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import path from 'node:path';
 
@@ -1159,6 +1159,25 @@ try {
   }
   passed('desktop/mobile: minus docks directly, header folds, dragging preserves state, night notch remains visible');
   console.log(JSON.stringify({ passed: checks, screenshots: output, requests: requests.length }, null, 2));
+} catch (error) {
+  const diagnostics = {error:String(error),pages:[],requests:requests.filter(r=>r.path==='/api/chat/stream').slice(-6).map(r=>({
+    task:r.body.task_id,resume:r.body.resume_task,message:r.body.message,browserResult:!!r.body.browser_result,
+  }))};
+  if(browser) for(const context of browser.contexts()) for(const page of context.pages()) {
+    try {
+      diagnostics.pages.push(await page.evaluate(()=>({url:location.href,
+        pending:JSON.parse(sessionStorage.getItem('saudade-browser-action-pending')||'null'),
+        conv:window.__chatTest?.ctx.state.conv,sending:window.__chatTest?.ctx.state.isSending,
+        remoteBusy:window.__chatTest?.ctx.state.remoteBusy,
+        status:document.getElementById('chat-status')?.textContent,
+        texts:[...document.querySelectorAll('.msg-text')].map(el=>el.textContent.slice(0,250)),
+      })));
+      await page.screenshot({path:path.join(output,`failure-${diagnostics.pages.length}.png`)});
+    } catch (_) { /* The failing page may already be navigating. */ }
+  }
+  await writeFile(path.join(output,'browser-diagnostics.json'),JSON.stringify(diagnostics,null,2));
+  console.error(JSON.stringify(diagnostics,null,2));
+  throw error;
 } finally {
   if (browser) await browser.close();
   server.closeAllConnections();
