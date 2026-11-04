@@ -228,6 +228,12 @@ def _own_get(path: str, config: RunnableConfig) -> dict | list | ToolResult:
         deny_msg="当前身份无权读取该数据")
 
 
+def _own_read_post(path: str, payload: dict, config: RunnableConfig):
+    """Prepare a caller-owned snapshot over POST without treating it as a write."""
+    return _principal_get(path, config, payload=payload,
+                          uid_msg=_NO_IDENTITY_READ, deny_msg="当前身份无权读取该数据")
+
+
 # Administrator read tools resolve shared transports through this module at call time.
 
 # Administrator report and moderation-list exports.

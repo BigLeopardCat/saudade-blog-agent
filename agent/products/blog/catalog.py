@@ -33,7 +33,8 @@ DOMAIN_DESCRIPTIONS = {
                              "and current state. Admin only. Roles: "
                              + ", ".join(f"{role.value}={role_cn(role.value)}" for role in Role)
                              + ".",
-    "admin_announcements": "准备站内公告发布、修改、删除确认。仅管理员。",
+    "admin_announcements": "后台管理的全站公告：发布、编辑、单条或批量删除、清空；"
+                           "删除会移除所有接收人的关联通知。不同于本人通知列表。仅管理员。",
     "admin_categories": "查询文章分类，按编号或完整名称准备新建、修改、删除确认。仅管理员。",
     "admin_work_queue": "查询额度重置申请、本人后台待办和日程；"
                         "准备待办新增、完成、改期或删除，以及额度审批或重置确认。仅管理员。"
@@ -47,7 +48,8 @@ DOMAIN_DESCRIPTIONS = {
     "admin_reports": "Read server health, user statistics and article traffic reports. Admin only.",
     "site": "打开站内页面、设置主题和特效；查询作者信息、社交链接和站点功能。",
     "favorites": "查询本人收藏，准备收藏增删确认。",
-    "notifications": "分页读取本人最近通知、未读条目和原始跳转定位，准备已读确认；查看不标记已读。",
+    "notifications": "本人通知列表：读取、标记已读、删除或批量清空，只影响本人；"
+                     "全站公告管理使用admin_announcements，发送个人通知使用admin_notices。",
     "messages": "查询本人信件摘要、单封正文，准备收件箱已读确认；查看不标记已读。",
 }
 

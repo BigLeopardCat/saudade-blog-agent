@@ -110,6 +110,9 @@ WRITE_CLAIM_ROOTS = {
     "reschedule_dashboard_todo": r"排期改|改排期|改到|排到|重排",
 }
 
+WRITE_CLAIM_ROOTS["delete_notifications"] = WRITE_CLAIM_ROOTS["delete_announcement"]
+WRITE_CLAIM_ROOTS["delete_announcements"] = WRITE_CLAIM_ROOTS["delete_announcement"]
+
 
 def _ref_phrase(value: str) -> str:
     """引用字面量 → 过程行可读短语（非引用或形态不认识 → 泛称，绝不打印原语法）。"""
@@ -277,6 +280,11 @@ def _arm_text(name: str, a: dict, m: dict, preview: bool):
             return f"{verb}「{cname}」" if cname else verb
         head = f"{verb}「{cname}」" if cname else verb
         return f"{head}：{change}" if change else head
+
+    if name in ("delete_notifications", "delete_announcements"):
+        label = "全站公告" if name == "delete_announcements" else "本人通知"
+        count = len(_ids_arg(a))
+        return f"删除 {count} 条{label}" if count else f"删除{label}"
 
     # ── 公告（正文一律不进这两行，理由见各分支）────────────────────────────
     if name in ("create_announcement", "update_announcement", "delete_announcement"):
