@@ -115,6 +115,10 @@
         0,
         0
       ],
+      "agent/api/weather.py": [
+        0,
+        0
+      ],
       "agent/authz.py": [
         0,
         0
@@ -160,6 +164,10 @@
         0
       ],
       "agent/domains/account_actions/transactions.py": [
+        0,
+        0
+      ],
+      "agent/domains/activity_search.py": [
         0,
         0
       ],
@@ -320,6 +328,38 @@
         0
       ],
       "agent/domains/favorites/transactions.py": [
+        0,
+        0
+      ],
+      "agent/domains/gallery/__init__.py": [
+        0,
+        0
+      ],
+      "agent/domains/gallery/preparation.py": [
+        0,
+        0
+      ],
+      "agent/domains/gallery/reads.py": [
+        2,
+        0
+      ],
+      "agent/domains/gallery/targets.py": [
+        0,
+        0
+      ],
+      "agent/domains/gallery/transactions.py": [
+        0,
+        0
+      ],
+      "agent/domains/image_generation/__init__.py": [
+        0,
+        0
+      ],
+      "agent/domains/image_generation/tools.py": [
+        0,
+        0
+      ],
+      "agent/domains/image_generation/transactions.py": [
         0,
         0
       ],
@@ -540,7 +580,7 @@
         0
       ],
       "agent/products/blog/catalog.py": [
-        15,
+        0,
         0
       ],
       "agent/products/blog/confirmation.py": [
@@ -922,42 +962,10 @@
       "server.py": [
         0,
         0
-      ],
-      "agent/domains/gallery/reads.py": [
-        2,
-        0
-      ],
-      "agent/domains/gallery/preparation.py": [
-        0,
-        0
-      ],
-      "agent/domains/gallery/targets.py": [
-        0,
-        0
-      ],
-      "agent/domains/gallery/transactions.py": [
-        0,
-        0
-      ],
-      "agent/domains/gallery/__init__.py": [
-        0,
-        0
-      ],
-      "agent/domains/image_generation/__init__.py": [
-        0,
-        0
-      ],
-      "agent/domains/image_generation/tools.py": [
-        0,
-        0
-      ],
-      "agent/domains/image_generation/transactions.py": [
-        0,
-        0
       ]
     },
     "total": [
-      427,
+      412,
       33
     ]
   },

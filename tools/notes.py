@@ -189,12 +189,10 @@ def get_article_detail(
     max_chars: Annotated[int, _ARTICLE_LIMIT_DESC] = 12000,
     revision: Annotated[str, _ARTICLE_REVISION_DESC] = "",
 ) -> str | ToolResult:
-    """读取指定文章、说说、留言或公告的正文证据。
+    """读取指定来源的正文；文章按小节或范围续读，使用contentRevision和nextOffset。
 
-    文章支持按小节或字符范围读取；续读须带返回的 contentRevision，使用 nextOffset
-    继续读取，readComplete 表示本范围读完。其他文档返回公开列表中的完整短文本。
-    tags 是可展示的标签名，noteTags 是内部编号。views/likes/favorites 缺失表示未取得，
-    不代表零。不同文档类型的编号不通用；not_found 表示本次未找到，不代表服务故障。
+    readComplete表示所需范围读完；候选不是正文。编号按doc_type区分，tags可展示，
+    noteTags是内部编号；缺失计数不代表零，not_found不代表服务故障。
     """
     if doc_type == "note":
         data = _get(f"/notes/{article_id}", not_found_text=(
@@ -261,14 +259,10 @@ def rag_search(
     query: Annotated[str, "检索关键词（用户问题中希望从博客内容里找到答案的核心表述）"],
     top_k: Annotated[int, "返回候选文档数量，默认 8"] = 8,
 ) -> str | ToolResult:
-    """按相关性检索博客文章（语料仅限线上可见文章），返回候选文档列表（标题+类型+排名+命中节），不返回全文。
+    """按主题检索公开文章候选与命中小节，不返回全文。
 
-    用于查找某主题的文章，可直接提供候选标题与链接。
-    按主题解读时从命中节中选择相关 section 并带 revision，调用 get_article_detail 读取正文，
-    无需从头续读整篇；全文总结或比较时按所需范围继续读取。
-    （doc_type 取候选的 type）；候选不支持正文结论。
-    注意：说说/留言/公告不在检索语料内——询问"最新留言/说说/公告内容"时直接用
-    list_guestbook / list_talks / get_announcements 数据工具，不要用本工具检索。
+    推荐可用候选链接；解读需用get_article_detail按命中section及revision补读。
+    公告、留言和说说的关键词查询使用public_activity领域，不在此语料中。
     """
     try:
         from rag.search import last_route, search

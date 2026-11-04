@@ -93,6 +93,7 @@ TOOL_SCOPE: dict[str, str] = {
     "get_announcements": SCOPE_READ_PUBLIC,
     "list_guestbook": SCOPE_READ_PUBLIC,
     "list_talks": SCOPE_READ_PUBLIC,
+    "search_public_activity": SCOPE_READ_PUBLIC,
     "get_blog_info": SCOPE_READ_PUBLIC,
     "get_social_links": SCOPE_READ_PUBLIC,
     "get_site_map": SCOPE_READ_PUBLIC,

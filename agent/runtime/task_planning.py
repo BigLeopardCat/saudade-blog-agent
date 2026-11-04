@@ -23,11 +23,9 @@ SYSTEM_PROMPT = (
     "Do not expose internal tool names or argument keys in the user-facing explanation."
 )
 TOOL_DESCRIPTION = (
-    "Replace only the agent's private execution checklist for a multi-deliverable task. "
-    "This does not create or change user to-dos, reminders or other business records. "
-    "List dependent outcomes in the user's requested order and work on the first unfinished item. "
-    "Include evidence IDs in content when relevant. Status: pending, in_progress, completed. "
-    "Approval preparation does not complete a write; list updates do not deliver the answer."
+    "Replace the agent's private checklist for multi-step outcomes, in the requested order. "
+    "Not user to-dos/reminders. Keep evidence IDs; completed requires delivered output or "
+    "verified receipts, not approval preparation. Status: pending, in_progress, completed."
 )
 
 

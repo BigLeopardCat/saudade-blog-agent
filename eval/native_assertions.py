@@ -98,9 +98,10 @@ def _matches_observation(wanted, event):
     if (event.get("name") not in wanted["tools"] or not contains(event.get("args", {}), args)
             or wanted.get("kinds") and event.get("kind") not in wanted["kinds"]):
         return False
-    if "result" in wanted:
+    expected = (wanted.get("result_by_tool") or {}).get(event.get("name"), wanted.get("result"))
+    if expected is not None:
         try:
-            return contains(json.loads(event.get("result", "")), wanted["result"])
+            return contains(json.loads(event.get("result", "")), expected)
         except (ValueError, TypeError):
             return False
     return True

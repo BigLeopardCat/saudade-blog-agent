@@ -4,53 +4,46 @@ from agent.adminops_account import role_cn
 from agent.domains.account_actions.targets import Role
 from agent.domains.notices.targets import DEFAULT_TITLE
 
+# Discovery identifies the task; detailed arguments belong to the loaded tools.
 DOMAIN_DESCRIPTIONS = {
-    "admin_image_generation": "Administrator AI images: review prompts/references before paid "
-                              "generation; inspect results and separately approve gallery storage.",
-    "admin_gallery": "Administrator gallery index and folders, optional image inspection, "
-                     "confirmed metadata changes and article covers. Start with metadata.",
-    "article_editor": "Administrator collaboration on the OPEN unsaved editor: read draft, "
-                      "review title/body edits, confirm summary changes or in-place publication.",
-    "admin_automations": "Administrator persistent reminders and scheduled read-only tasks; "
-                         "confirm creation or lifecycle changes. No unattended business writes.",
-    # Discovery identifies a domain; argument and execution contracts live on its tools.
-    "public_activity": "分页读取公开公告、河灯留言和说说；含公开留名，不含发表账号或待审记录。",
-    "utilities": "查询当前时间。",
-    "devices": "查询可访问设备，或在已授权OLED设备显示文字。",
-    "public_catalog": "分页查询公开文章清单、置顶文章、分类、分层标签和文章计数。",
-    "conversation_images": "Re-read a referenced conversation image when details are needed.",
-    "own_activity": "读取本人河灯留言及审核状态，或当前会话聊天原文。",
-    "admin_catalog": "后台文章分页查询（含草稿、私密）；准备单篇或整批状态、置顶确认，"
-                     "或文章标签增删替换（可同卡创建标签）；含发布状态的可见范围与保留规则。仅管理员。",
-    "admin_notices": "按账号编号或完整账号名准备个人通知确认；需收件人和正文，"
-                     f"标题默认「{DEFAULT_TITLE}」。仅管理员。",
-    "admin_tags": "查询标签字典，准备新建、修改层级或字段、删除确认；"
-                  "文章挂标签用admin_catalog。仅管理员。",
-    "admin_account_actions": "Find accounts by login name or nickname; "
-                             "exact lookup by ID or username. "
-                             "Prepare freeze/unfreeze, "
-                             "role change, mute/unmute. Preparation resolves the target "
-                             "and current state. Admin only. Roles: "
-                             + ", ".join(f"{role.value}={role_cn(role.value)}" for role in Role)
-                             + ".",
-    "admin_announcements": "后台管理的全站公告：发布、编辑、单条或批量删除、清空；"
-                           "删除会移除所有接收人的关联通知。不同于本人通知列表。仅管理员。",
-    "admin_categories": "查询文章分类，按编号或完整名称准备新建、修改、删除确认。仅管理员。",
-    "admin_work_queue": "查询额度重置申请、本人后台待办和日程；"
-                        "准备待办新增、完成、改期或删除，以及额度审批或重置确认。仅管理员。"
-                        " User-requested to-dos and reminders are business records here, "
-                        "separate from the agent's private execution checklist. "
-                        "Deleting multiple todos uses one selectable batch approval, "
-                        "not repeated single-item cards. "
-                        "Different transactions keep separate approvals.",
-    "admin_moderation": "查询河灯留言、文章评论及审核状态，含匿名留言的真实发表账号；"
-                        "准备审核或删除确认。仅管理员。",
-    "admin_reports": "Read server health, user statistics and article traffic reports. Admin only.",
-    "site": "打开站内页面、设置主题和特效；查询作者信息、社交链接和站点功能。",
-    "favorites": "查询本人收藏，准备收藏增删确认。",
-    "notifications": "本人通知列表：读取、标记已读、删除或批量清空，只影响本人；"
-                     "全站公告管理使用admin_announcements，发送个人通知使用admin_notices。",
-    "messages": "查询本人信件摘要、单封正文，准备收件箱已读确认；查看不标记已读。",
+    "admin_image_generation": "AI image generation: approve prompt/references, inspect results, "
+                              "then approve gallery storage.",
+    "admin_gallery": "Gallery images/folders, image inspection, metadata edits and article covers.",
+    "article_editor": "Collaborate on the open editor: draft, title/body review, summary approval "
+                      "and in-place publication.",
+    "admin_automations": "Persistent reminders and scheduled read-only tasks; "
+                         "confirm lifecycle changes.",
+    "public_activity": "Search public announcements, guestbook and talks by keyword; read latest "
+                       "entries. Public display names are not account identities.",
+    "utilities": "Read the current time.",
+    "devices": "List accessible devices and control authorized OLED displays.",
+    "public_catalog": "Public article lists, pinned articles, categories and hierarchical tags.",
+    "conversation_images": "Inspect a referenced conversation image.",
+    "own_activity": "Read your guestbook entries/status or this conversation's original messages.",
+    "admin_catalog": "Articles including private/drafts; confirm state, pinning "
+                     "and article-tag changes.",
+    "admin_notices": "Prepare a personal notification: recipient and body; "
+                     f"default title: {DEFAULT_TITLE}.",
+    "admin_tags": "Tag dictionary and confirmed tag creation, edits or deletion. "
+                  "Article-tag assignment: admin_catalog.",
+    "admin_account_actions": "Prepare account freeze, mute or role changes; preparation resolves "
+                             "known IDs/names and checks state. Search ambiguous names first. "
+                             + ", ".join(f"{role.value}={role_cn(role.value)}" for role in Role),
+    "admin_announcements": "Global announcement publication, editing and batch deletion; deletion "
+                           "also removes recipients' copies.",
+    "admin_categories": "Category dictionary and confirmed creation, editing or deletion.",
+    "admin_work_queue": "Quota applications/reset and user-facing to-dos/reminders, including "
+                        "selectable batch deletion. Known account IDs can reset directly. "
+                        "Business records, not private planning.",
+    "admin_moderation": "Guestbook/comments with real publishers; "
+                        "confirm moderation or deletion.",
+    "admin_reports": "Server health, user statistics and article traffic reports.",
+    "site": "Author profile, social links, site map and page controls.",
+    "favorites": "Your favorites and confirmed additions/removals.",
+    "notifications": "Your notification copies: list, mark read or delete in batches. "
+                     "Delete-all preparation selects the scope without a prior list read. "
+                     "Global management: admin_announcements. Sending: admin_notices.",
+    "messages": "Your inbox summaries/body and read-state approval; reading does not mark read.",
 }
 
 
