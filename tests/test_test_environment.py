@@ -59,8 +59,10 @@ def test_collecting_postgres_without_explicit_dsn_never_connects(filename, monke
     monkeypatch.delenv("SAUDADE_REQUIRE_CKPT_TEST", raising=False)
     connect = Mock(side_effect=AssertionError("collection must not connect"))
     monkeypatch.setattr(psycopg, "connect", connect)
+    runpy.run_path(str(ROOT / "tests/integration" / filename))
+    from _checkpoint_postgres import checkpoint_database
     with pytest.raises(pytest.skip.Exception, match="SAUDADE_CKPT_TEST_DSN"):
-        runpy.run_path(str(ROOT / "tests/integration" / filename))
+        next(checkpoint_database.__wrapped__())
     connect.assert_not_called()
 
 
@@ -78,3 +80,11 @@ def test_missing_optional_host_contract_is_reported_as_skipped(monkeypatch):
     monkeypatch.delenv("SAUDADE_REQUIRE_PARENT", raising=False)
     with pytest.raises(pytest.skip.Exception, match="host contract"):
         _parent_repo.read("src/routes/chat.rs")
+
+
+def test_required_postgres_job_cannot_silently_skip(monkeypatch):
+    from _checkpoint_postgres import checkpoint_database
+    monkeypatch.delenv("SAUDADE_CKPT_TEST_DSN", raising=False)
+    monkeypatch.setenv("SAUDADE_REQUIRE_CKPT_TEST", "1")
+    with pytest.raises(pytest.fail.Exception, match="SAUDADE_CKPT_TEST_DSN"):
+        next(checkpoint_database.__wrapped__())
