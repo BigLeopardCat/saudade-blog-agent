@@ -18,14 +18,13 @@ def conversation_session(principal, conversation_id):
 
 
 def conversation_context(principal) -> dict:
-    from tools.site import _NAV_LABELS
+    from tools.site import public_navigation
 
     verified = is_verified_identity(principal)
     role = getattr(principal, "known_role", None) if verified else None
     return {
         "manual_ui": {
-            "public_pages": {label: path for path, label in _NAV_LABELS.items()
-                             if not path.startswith("/dashboard")},
+            "public_pages": public_navigation() if role == ROLE_ZAKO else {},
             "effects": {"entry": "mascot star button",
                         "options": ["sakura", "rain", "snow"]},
             "grants_agent_permissions": False,

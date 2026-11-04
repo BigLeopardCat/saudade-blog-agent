@@ -112,6 +112,12 @@ if IOT_ENABLED:
     _NAV_LABELS[IOT_NAV_PATH] = "物联网平台"
 
 
+def public_navigation() -> dict[str, str]:
+    """Static public links for manual help; these do not grant tool permissions."""
+    return {label: path for path, label in _NAV_LABELS.items()
+            if not path.startswith("/dashboard")}
+
+
 def nav_label(path: str) -> str:
     """Return a stable human label for a validated route, or the route itself."""
     return _NAV_LABELS.get(str(path or ""), str(path or ""))
