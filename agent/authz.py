@@ -57,6 +57,13 @@ _ROLE_SCOPES: dict[str, frozenset[str]] = {
 
 TOOL_SCOPE: dict[str, str] = {
     "read_current_article": SCOPE_ADMIN_CONSOLE,
+    "get_gallery_index": SCOPE_ADMIN_CONSOLE,
+    "list_gallery_folders": SCOPE_ADMIN_CONSOLE,
+    "get_gallery_image": SCOPE_ADMIN_CONSOLE,
+    "prepare_gallery_image_change": SCOPE_WRITE_CONSOLE,
+    "prepare_article_cover": SCOPE_WRITE_CONSOLE,
+    "update_gallery_image": SCOPE_WRITE_CONSOLE,
+    "set_article_cover": SCOPE_WRITE_CONSOLE,
     "propose_article_edits": SCOPE_WRITE_CONSOLE,
     "set_article_summary": SCOPE_WRITE_CONSOLE,
     "prepare_article_summary": SCOPE_ADMIN_CONSOLE,

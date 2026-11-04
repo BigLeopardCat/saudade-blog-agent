@@ -63,7 +63,7 @@ def invalid_args(text: str, meta: dict | None = None, *, data: object = None) ->
 # State fields contain values, not narration. Preserve cross-language receipt keys.
 TGT_KINDS = ("note", "tag", "category", "announcement", "board_comment",
              # Article comments and guestbook messages have distinct ID namespaces and storage.
-             "comment", "todo",
+             "comment", "todo", "image",
              "user", "quota_request", "notice", "message", "device", "page")
 
 

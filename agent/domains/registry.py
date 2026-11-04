@@ -9,6 +9,7 @@ from agent.domains.article_tags import transactions as article_tags
 from agent.domains.automations import transactions as automations
 from agent.domains.categories import transactions as categories
 from agent.domains.favorites import transactions as favorites
+from agent.domains.gallery import transactions as gallery
 from agent.domains.messages import transactions as messages
 from agent.domains.moderation_actions import transactions as moderation
 from agent.domains.notices import transactions as notices
@@ -25,7 +26,7 @@ _DOMAINS = {"announcement_deletions": announcement_deletions,
             "moderation": moderation, "quota_actions": quota_actions, "article_tags": article_tags,
             "categories": categories, "tags": tags, "announcements": announcements,
             "account_actions": account_actions, "notices": notices, "automations": automations,
-            "editor_summary": article_summary}
+            "editor_summary": article_summary, "gallery": gallery}
 
 
 def native_domain(grant):
@@ -50,4 +51,6 @@ def bound_tool_names():
     """Inventory service-bound tools without publishing an unusable global tool instance."""
     from agent.domains.article_editor import NAMES
     from agent.domains.automations.preparation import tools
-    return frozenset(tools(None, True)) | NAMES
+    from agent.domains.gallery.preparation import tools as gallery_tools
+    from agent.domains.gallery.reads import tools as gallery_reads
+    return frozenset(tools(None, True)) | NAMES | frozenset(gallery_tools(gallery_reads()))
