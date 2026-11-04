@@ -58,6 +58,11 @@ def load_suite(path=SUITE):
         if "_draft" in case or "draft" in case.get("tags", []):
             raise ValueError(f"unreviewed draft cannot run as a baseline: {case['id']}")
         fixture_articles(case)
+        images = case.get("requires_gallery_images", [])
+        if (not isinstance(images, list)
+                or any(type(image) is not int or image <= 0 for image in images)
+                or len(set(images)) != len(images)):
+            raise ValueError(f"invalid gallery fixture: {case['id']}")
         if case["identity"] not in {"admin", "user", "zako"}:
             raise ValueError(f"unknown identity in {case['id']}")
         for rnd in golden.iter_rounds(case):
@@ -182,6 +187,8 @@ def run(cases, transport, identities, report_dir, *, phase, suite_hash, include_
             with transport.conversation(identities[key], role_sets[key]):
                 for identifier in fixture_articles(case):
                     transport.check_public_article_fixture(identifier)
+                for identifier in case.get("requires_gallery_images", []):
+                    transport.check_gallery_fixture(identifier)
                 if case.get("requires_quota_usage"):
                     transport.check_quota_fixture(case["requires_quota_usage"])
                 if case.get("requires_category_creation"):

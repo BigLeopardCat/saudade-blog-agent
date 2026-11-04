@@ -53,3 +53,37 @@ def test_favorite_poc_target_and_expected_action_agree_with_the_preflight():
     assert case["context"]["current_url"] == "/article/23"
     expected = case["gold"]["require_prepared_or_noop"][0]
     assert expected["spec"]["args"]["article_id"] == expected["facts"]["article_id"] == 23
+
+
+@pytest.mark.parametrize('fault', ['none', 'wrong_id', 'invalid_version', 'missing'])
+def test_gallery_preflight_reads_only_authoritative_metadata(tmp_path, monkeypatch, fault):
+    from eval import image_generation_contracts
+
+    row = {'imageKey': 72, 'imageUrl': 'https://cdn.test/cover.webp', 'displayName': 'fixture',
+           'description': '', 'folderId': 0, 'isFavorite': False, 'version': 'a' * 64}
+    if fault == 'wrong_id':
+        row['imageKey'] = 73
+    if fault == 'invalid_version':
+        row['version'] = 'unknown'
+    calls = []
+
+    def respond(request):
+        calls.append(request)
+        assert request.method == 'GET'
+        assert request.url.path == '/api/protect/gallery/images/72'
+        return httpx.Response(200, json={'code': 404 if fault == 'missing' else 200, 'data': row})
+
+    with httpx.Client(transport=httpx.MockTransport(respond)) as client:
+        transport = OnlineTransport(agent_url='http://agent', blog_url='http://blog',
+                                    report_dir=tmp_path, client=client)
+        monkeypatch.setattr(transport, 'host_headers',
+                            lambda _: {'Authorization': 'Bearer fixture'})
+        if fault == 'none':
+            transport.check_gallery_fixture(72)
+        else:
+            with pytest.raises(EvaluationError):
+                transport.check_gallery_fixture(72)
+    assert len(calls) == 1 and not transport.requests
+    # The paid preparation is registered on the synthetic transport, not the HTTP suite.
+    assert image_generation_contracts.REQUEST
+    assert 'release_image_generation_prepare' not in {case['id'] for case in load_suite()}

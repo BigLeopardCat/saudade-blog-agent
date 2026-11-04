@@ -110,6 +110,23 @@ class OnlineTransport:
         if type(identifier) is not int or identifier != article_id:
             raise EvaluationError("public article fixture identity cannot be verified")
 
+    def check_gallery_fixture(self, image_id):
+        from agent.domains.gallery.targets import Image
+
+        if type(image_id) is not int or image_id <= 0:
+            raise EvaluationError("invalid gallery fixture identifier")
+        response = self.client.get(self.blog_url + f"/api/protect/gallery/images/{image_id}",
+                                   headers=self.host_headers(self.uid))
+        response.raise_for_status()
+        body = response.json()
+        data = body.get("data") if isinstance(body, dict) and body.get("code") == 200 else None
+        try:
+            row = Image.model_validate(data)
+        except ValueError as exc:
+            raise EvaluationError("gallery fixture cannot be verified") from exc
+        if row.imageKey != image_id:
+            raise EvaluationError("gallery fixture identity mismatch")
+
     def check_quota_fixture(self, account_id):
         from agent.domains.quota_actions.targets import state
 
