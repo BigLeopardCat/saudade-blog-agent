@@ -35,6 +35,7 @@ def prepare_article_state(
     一次可准备最多50篇，整批核对版本、展示范围并只确认一次；超出范围明确报错，不截断。
     编号与分类直接取用户给定信息，本工具负责读取状态和核实目标，不编辑正文。
     本站public才公开可读；private和draft不进入公开列表、搜索或公开正文接口，管理员仍可后台查询。
+    发布当前打开的编辑稿请用article_editor领域的prepare_article_publication；本工具不应用修改稿。
     状态修改保留文章编号、正文、标签和互动记录，恢复public沿用原链接；不撤回外部已保存的副本。
     """
     check_cancelled(config)

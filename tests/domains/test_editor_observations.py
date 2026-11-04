@@ -62,3 +62,13 @@ def test_unchanged_cannot_replace_a_version_increase_required_by_approved_baseli
                         'description': '新摘要', 'expected_revision': 6},
                        {'editor_id': 'e', 'revision': 5, 'outcome': 'unchanged',
                         'description': '新摘要'})
+
+
+@pytest.mark.parametrize('mutation', [
+    {}, {'outcome':'updated'}, {'revision':3}, {'editor_id':'other'}, {'title':None},
+])
+def test_publication_ready_proves_only_the_matching_editor_dialog(mutation):
+    document={'editor_id':'e','revision':2,'outcome':'publication_ready','title':'新标题',
+              **mutation}
+    assert accepts({'operation':'prepare_publish','editor_id':'e','revision':2}, document) \
+        is (not mutation)

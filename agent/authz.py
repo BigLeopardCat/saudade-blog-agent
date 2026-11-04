@@ -60,6 +60,7 @@ TOOL_SCOPE: dict[str, str] = {
     "propose_article_edits": SCOPE_WRITE_CONSOLE,
     "set_article_summary": SCOPE_WRITE_CONSOLE,
     "prepare_article_summary": SCOPE_ADMIN_CONSOLE,
+    "prepare_article_publication": SCOPE_WRITE_CONSOLE,
     "list_automations": SCOPE_ADMIN_CONSOLE,
     "get_automation": SCOPE_ADMIN_CONSOLE,
     "list_automation_runs": SCOPE_ADMIN_CONSOLE,
