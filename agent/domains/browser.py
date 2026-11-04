@@ -5,7 +5,7 @@ import time
 from typing import Annotated, Literal
 
 from langchain_core.runnables import RunnableConfig
-from langchain_core.tools import ToolException, tool
+from langchain_core.tools import InjectedToolCallId, ToolException, tool
 from pydantic import Field, StrictStr
 
 from agent import action_text, authz
@@ -77,7 +77,8 @@ def _sent(command, receipts):
 
 
 @tool(response_format="content_and_artifact")
-def navigate_page(path: Path, config: RunnableConfig) -> object:
+def navigate_page(path: Path, config: RunnableConfig,
+                  tool_call_id: Annotated[str, InjectedToolCallId]) -> object:
     """Open a verified site path when the user asks to go there, including an article
     chosen from a recommendation or resolved from conversation context. If asked
     to recommend and open, choose a source then navigate; recommending alone does
@@ -102,7 +103,7 @@ def navigate_page(path: Path, config: RunnableConfig) -> object:
     command = {"kind": "navigate", "url": url, "mode": "direct"}
     cfg = (config or {}).get("configurable") or {}
     if cfg.get("browser_feedback") and cfg.get("browser_task"):
-        result = _await_browser({**command, "path": path}, config)
+        result = _await_browser({**command, "path": path, "request_id": tool_call_id}, config)
         status = result["status"]
         completed = status == "completed"
         reply = ("浏览器已进入：" + url if completed else
@@ -120,6 +121,7 @@ def navigate_page(path: Path, config: RunnableConfig) -> object:
 @tool(response_format="content_and_artifact")
 def set_page_appearance(
     config: RunnableConfig,
+    tool_call_id: Annotated[str, InjectedToolCallId],
     dark_mode: Mode | None = None,
     sakura: Mode | None = None,
     rain: Mode | None = None,
@@ -164,7 +166,8 @@ def set_page_appearance(
     cfg = (config or {}).get("configurable") or {}
     if cfg.get("browser_feedback") and cfg.get("browser_task"):
         settings = {**effects, **({"dark_mode": dark_mode} if dark_mode is not None else {})}
-        result = _await_browser({"kind": "appearance", "settings": settings}, config)
+        result = _await_browser({"kind": "appearance", "settings": settings,
+                                 "request_id": tool_call_id}, config)
         status = result["status"]
         reply = json.dumps({"status": status, "scope": "browser_appearance",
                             "requested": settings, "observed": result.get("settings")},
