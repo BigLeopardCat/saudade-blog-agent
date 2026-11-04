@@ -43,7 +43,8 @@ def test_reads_use_unicode_code_points_and_exact_continuation(content, offset, t
 def test_summary_matches_approved_content_and_update_or_noop_revision(outcome, revision,
                                                                     description, valid):
     assert accepts({'operation': 'summary', 'editor_id': 'e', 'revision': 5,
-                    'description': '新摘要😀'},
+                    'description': '新摘要😀',
+                    'expected_revision': 5 if outcome == 'unchanged' else 6},
                    {'editor_id': 'e', 'revision': revision, 'outcome': outcome,
                     'description': description}) is valid
 
@@ -54,3 +55,10 @@ def test_proposals_do_not_claim_a_different_draft_revision():
                              'proposal_id': 'review'})
     assert not accepts(command, {'editor_id': 'e', 'revision': 6, 'outcome': 'proposed',
                                  'proposal_id': 'review'})
+
+
+def test_unchanged_cannot_replace_a_version_increase_required_by_approved_baseline():
+    assert not accepts({'operation': 'summary', 'editor_id': 'e', 'revision': 5,
+                        'description': '新摘要', 'expected_revision': 6},
+                       {'editor_id': 'e', 'revision': 5, 'outcome': 'unchanged',
+                        'description': '新摘要'})

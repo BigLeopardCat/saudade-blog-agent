@@ -24,7 +24,7 @@ def prepared(monkeypatch):
         "browser_feedback": True, "browser_task": "edit-task"}}
     runtime = SimpleNamespace(config=config, tool_call_id="summary", state={"messages": [
         ToolMessage(name="read_current_article", tool_call_id="read", content=json.dumps({
-            "scope": "editor_draft", "editor_id": "editor", "revision": 3}))]})
+            "scope": "editor_draft", "editor_id": "editor", "revision": 3, "description": ""}))]})
     result = article_editor.prepare_article_summary.func(
         editor_id="editor", revision=3, description="新摘要", runtime=runtime)
     grant = confirm.verify(result.execution["pending_confirm"]["token"], 7, 42)

@@ -64,9 +64,11 @@ class EditorObservation(BaseModel):
         if operation != "summary" or self.description != command.get("description"):
             return False
         revision = command.get("revision")
+        expected = command.get("expected_revision")
         return (type(revision) is int and self.description is not None
-                and ((self.outcome == "updated" and self.revision == revision + 1)
-                     or (self.outcome == "unchanged" and self.revision == revision)))
+                and type(expected) is int and self.revision == expected
+                and ((self.outcome == "updated" and expected == revision + 1)
+                     or (self.outcome == "unchanged" and expected == revision)))
 
 
 class BrowserResult(BaseModel):
