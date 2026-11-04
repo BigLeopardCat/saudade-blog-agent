@@ -5,4 +5,5 @@ cd "$release_dir"
 export DEPLOY_SHA="$(cat REVISION)"
 exec "$release_dir/.venv/bin/python" -m uvicorn agent.main:app \
   --host 127.0.0.1 --port "${AGENT_PORT:-8010}" \
-  --workers "${AGENT_WORKERS:-4}" --no-access-log
+  --workers "${AGENT_WORKERS:-1}" \
+  --timeout-worker-healthcheck "${AGENT_WORKER_HEALTHCHECK_SECONDS:-30}" --no-access-log

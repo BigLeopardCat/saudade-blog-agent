@@ -10,7 +10,7 @@ scripts/deploy_release.sh COMMIT_SHA /srv/saudade-agent /etc/saudade/agent.env /
 
 使用本地 BGE profile 时，在发布命令前加 `DEPLOY_EMBEDDING_TOKENIZER=1`，安装锁定的 tokenizer 可选依赖。
 
-服务账户需可写 release root、读取私有配置，以及重启 `saudade-agent` 的运维权限。服务单元继续设置既有嵌入模型环境、日志和停机超时；监听地址固定为 loopback，端口和 worker 数可用 `AGENT_PORT`、`AGENT_WORKERS` 指定。
+服务账户需可写 release root、读取私有配置，以及重启 `saudade-agent` 的运维权限。服务单元继续设置既有嵌入模型环境、日志和停机超时；监听地址固定为 loopback，端口和 worker 数可用进程环境变量 `AGENT_PORT`、`AGENT_WORKERS` 指定。默认单进程，由应用自身限制并发请求；增加进程前按内存、数据库连接和模型额度测量容量。多进程健康检查等待默认30秒，可由 `AGENT_WORKER_HEALTHCHECK_SECONDS` 调整。这些启动参数需由服务管理器注入，应用的 `.env` 不负责配置 Uvicorn。
 
 脚本用 flock 串行化发布，只接收 Git 中存在的提交，使用 `git archive` 排除工作区文件和凭据。依赖安装、导入检查完成后才原子切换 current；探活同时核对 `/ready` 和预期构建 SHA。失败恢复上一版本并重启，未自动删除旧版本或用户数据。首次部署没有上一版本，需由运维处理失败。
 
