@@ -249,11 +249,29 @@ def judge_one(material_text: str, llm, *, structured: bool = True,
     return parse_verdict(raw), degraded
 
 
-def make_llm(**kwargs):
-    """Default to the configured endpoint; overrides change the actual client."""
+REASONING_EFFORTS = ("none", "low", "medium", "high")
+
+
+def make_llm(*, reasoning_effort="none", **kwargs):
+    """Set the actual client policy; reasoning needs its own output reservation."""
     from models.llm import get_llm
-    return get_llm(**{"temperature": 0.0, "max_tokens": 700,
-                      "enable_thinking": False, **kwargs})
+
+    if reasoning_effort not in REASONING_EFFORTS:
+        raise ValueError("Unsupported judge reasoning effort")
+    defaults = {"temperature": 0.0, "max_tokens": 700 if reasoning_effort == "none" else 4096,
+                "enable_thinking": reasoning_effort != "none"}
+    if reasoning_effort != "none":
+        defaults["reasoning_effort"] = reasoning_effort
+    return get_llm(**{**defaults, **kwargs})
+
+
+def reviewer_options(llm):
+    """Record only public inference controls, never client credentials or headers."""
+    body = getattr(llm, "extra_body", None) or {}
+    return {"reasoning_effort": getattr(llm, "reasoning_effort", None) or "none",
+            "thinking": (body.get("thinking") or {}).get("type", body.get("enable_thinking")),
+            "max_tokens": getattr(llm, "max_tokens", None),
+            "temperature": getattr(llm, "temperature", None)}
 
 
 # ── 报告 ─────────────────────────────────────────────────────────────────────
