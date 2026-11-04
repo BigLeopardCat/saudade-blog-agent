@@ -141,7 +141,6 @@ class _TraceRecorder:
         self.dumped = True
         try:
             doc = {
-                # 放第一个：读一份 trace 第一眼就知道该用哪套假设（见 SCHEMA_VERSION 的注释）
                 "schema_version": SCHEMA_VERSION,
                 "trace_id": self.trace_id,
                 "process_id": self.process_id,
@@ -160,19 +159,13 @@ class _TraceRecorder:
                 fname = f"{self.name}.json"
             else:
                 fname = f"{stamp}_{self.user_id}_{self.trace_id[:8]}.json"
-            # 按天分目录（20260925）：读侧枚举在 `utils/trace_files.py::iter_trace_files`
-            # ——那个模块是"哪些文件算 trace"的唯一实现，改布局必须两处一起改
-            # （`tests/test_trace_retention.py` 有一次真实落盘的往返断言盯着）。
             out_dir = os.path.join(self.trace_dir, stamp[:8]) if self.by_day else self.trace_dir
-            # mode 显式 0700：20260925 安全审计 A6 把 logs/ + logs/agent/ + logs/agent/traces/
-            # 收紧到 0700（里面是访客对话正文），而这个按天目录是**新建**的——默认 0755。
-            # 今天父目录 0700 已经挡住横向越权，所以不是当下的暴露面；但边界一旦按审计建议
-            # 放宽到 0750，逐级目录里只要有一层 0755 就等于没挡（www-data 在 group ubuntu 里）。
-            # 与其留一个"靠上一层的模式兜着"的耦合，不如让这一层自己就是对的。
+            # Trace directories and files are private; readers only see atomic publication.
             os.makedirs(out_dir, mode=0o700, exist_ok=True)
             path = os.path.join(out_dir, fname)
             tmp = path + ".tmp"  # 原子替换：reader 不会读到半截文件
-            with open(tmp, "w", encoding="utf-8") as f:
+            with open(tmp, "w", encoding="utf-8",
+                      opener=lambda target, flags: os.open(target, flags, 0o600)) as f:
                 json.dump(doc, f, ensure_ascii=False, indent=1)
             os.replace(tmp, path)
             return path
@@ -183,17 +176,9 @@ class _TraceRecorder:
 
 def start_trace(trace_id: str, user_id: int, thread_id: str, input_meta: dict | None = None,
                 dir: str | None = None, name: str | None = None, by_day: bool = True):
-    """请求开始：创建 recorder，挂 contextvar（producer 线程可见）+ 全局注册表。
+    """Register the trace in request context before submitting owned producer jobs.
 
-    在 chat_stream 任务里调用（middleware 已 set trace_id 的同一上下文）；
-    producer 经 _submit_with_context 的 copy_context 继承，节点内 record 命中。
-
-    `dir`/`name` 覆盖落盘位置与文件名（20260922 起 golden set 用；生产调用点
-    一个都不传，行为与之前逐字一致）——**必须在"提交给线程池之前"的上下文里调**，
-    否则 recorder 不会随 copy_context 传进 producer 线程（事件为空）。
-
-    `by_day` 默认 True（生产按天分目录）；**golden 调用点显式传 False**——理由见
-    `_TraceRecorder.__init__` 里那段（golden 自己已有 `<run_id>/` 一层）。
+    Evaluation can override storage and naming without mixing production artifacts.
     """
     rec = _TraceRecorder(trace_id, user_id, thread_id, input_meta or {},
                          trace_dir=dir, name=name, by_day=by_day)
