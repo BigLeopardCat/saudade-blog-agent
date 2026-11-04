@@ -49,6 +49,7 @@ dependencies = [
     "numpy==2.5.4",
     "scipy==1.18.1",
     "markdown-it-py==4.2.0",
+    "pillow==13.0.0",
 ]
 
 # Test, analysis and optional offline evaluation tools.
