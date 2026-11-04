@@ -136,7 +136,7 @@ async def chat(req: ChatRequest, request: Request):
             req.conversation_id,
         )
         if not reply.strip():
-            logger.warning("Agent returned empty reply for message=%r", req.message[:60])
+            logger.warning("Agent returned empty reply message_chars=%s", len(req.message))
         final_reply = reply.strip() or _RECOVERY_SENTENCE
 
         final_nav = nav_line
@@ -159,16 +159,13 @@ async def chat(req: ChatRequest, request: Request):
 
 @router.post("/chat/stream/v2")
 async def chat_stream(req: ChatRequest, request: Request):
-    logger.info(
-        "POST /chat/stream/v2 user=%s msg=%r",
-        req.user_id,
-        (req.message or "")[:40],
-    )
     runtime = require_runtime(request)
     workers = require_workers(request)
     principal = _resolve_principal(request, req.user_id)  # 身份以签名为准（见 _resolve_principal）
     req.user_id = principal.uid
     req = safe_request(req, principal)
+    logger.info("chat_stream_started user_id=%s conversation_id=%s message_chars=%s",
+                principal.uid, req.conversation_id, len(req.message or ""))
     grant = None
     if req.confirm_token.strip():
         grant = confirm.verify(req.confirm_token, principal.uid, req.conversation_id)
@@ -377,10 +374,11 @@ async def chat_stream(req: ChatRequest, request: Request):
             if end_reason == "unknown":
                 end_reason = "client_closed"
             logger.info(
-                "[stream] end reason=%s duration=%.1fs frames=%d",
+                "[stream] end reason=%s duration=%.1fs frames=%d conversation_id=%s",
                 end_reason,
                 loop.time() - started,
                 frames,
+                req.conversation_id,
             )
             jobs.on_complete = functools.partial(
                 finish_trace, trace_id, end_reason, loop.time() - started, frames
