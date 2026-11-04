@@ -27,7 +27,7 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version-file: frontend/.node-version
 
       - name: Widget Markdown security regression
         run: node --test frontend/tests/*.test.mjs
@@ -190,3 +190,37 @@ jobs:
           persist-credentials: false
       - name: 与父仓 pin 比对（漂移则 ::warning::，恒退 0）
         run: bash scripts/widget_pin_drift.sh
+
+  widget-browser:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: frontend/.node-version
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Install locked browser test dependency
+        working-directory: frontend
+        run: npm ci --ignore-scripts
+      - name: Install Chromium and CJK fonts
+        working-directory: frontend
+        run: |
+          npx playwright install --with-deps chromium
+          sudo apt-get install -y --no-install-recommends fonts-noto-cjk
+      - name: Chat interaction and responsive image regression
+        working-directory: frontend
+        env:
+          CHAT_UI_PREVIEW_DIR: ${{ runner.temp }}/chat-ui-preview
+        run: npm run test:browser
+      - name: Keep synthetic browser screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: chat-ui-preview
+          path: ${{ runner.temp }}/chat-ui-preview
+          retention-days: 7
+          if-no-files-found: ignore

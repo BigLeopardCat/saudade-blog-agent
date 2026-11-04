@@ -2,9 +2,10 @@
 // PLAYWRIGHT_MODULE and CHROMIUM_EXECUTABLE may point to existing local installs.
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
-import { readFile, mkdir } from 'node:fs/promises';
+import { readFile, mkdir, writeFile } from 'node:fs/promises';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import path from 'node:path';
+import { assertBootstrapRecovery } from './chat-bootstrap.browser.mjs';
 
 const frontend = path.resolve(fileURLToPath(new URL('../', import.meta.url)));
 const output = process.env.CHAT_UI_PREVIEW_DIR || '/tmp/chat-ui-preview';
@@ -182,7 +183,8 @@ const server = createServer(async (req, res) => {
       if (url.pathname === '/api/chat/discard') return json(res, { ok: true });
       throw new Error('Unexpected fixture API: ' + url.pathname);
     }
-    const file = ['/', '/guestbook'].includes(url.pathname) ? path.join(frontend, 'tests/fixtures/chat-ui.html')
+    const file = url.pathname === '/bootstrap' ? path.join(frontend, 'tests/fixtures/chat-bootstrap.html')
+      : ['/', '/guestbook'].includes(url.pathname) ? path.join(frontend, 'tests/fixtures/chat-ui.html')
       : path.join(frontend, 'public', decodeURIComponent(url.pathname));
     if (!file.startsWith(frontend + path.sep)) throw new Error('Invalid fixture path');
     const content = await readFile(file);
@@ -521,10 +523,13 @@ try {
   passed('full-page navigation restores the pending task and narrates from the new page');
   const reloadContext = await browser.newContext({ viewport: { width: 1280, height: 900 } });
   const reloadPage = await reloadContext.newPage();
-  reloadPage.on('pageerror', error => errors.push(String(error)));
+  reloadPage.on('pageerror', error => { errors.push(String(error)); console.error('Reload page error:',String(error)); });
   await reloadPage.goto(origin);
   await reloadPage.waitForFunction(() => !!window.__chatTest?.ctx.state.conv);
   const reloadBefore = streamCount();
+  const browserAcknowledged = reloadPage.waitForResponse(response =>
+    new URL(response.url()).pathname === '/api/chat/stream'
+      && !!response.request().postDataJSON()?.browser_result);
   nextMode = 'navigate';
   interruptNavigationReply = true;
   await reloadPage.locator('#chat-input').fill('去留言板');
@@ -534,9 +539,8 @@ try {
     const value = JSON.parse(sessionStorage.getItem('saudade-browser-action-pending') || 'null');
     return value?.phase === 'reply';
   });
-  while (!requests.slice(reloadBefore).some(r => r.body.browser_result)) {
-    await reloadPage.waitForTimeout(20);
-  }
+  // The response headers prove this task's observation reached the fixture server.
+  await browserAcknowledged;
   await reloadPage.reload();
   await reloadPage.waitForFunction(() => [...document.querySelectorAll('.msg-text')]
     .some(el => el.textContent.includes('已经到留言板')));
@@ -548,6 +552,40 @@ try {
   assert.equal(recoveredRequests[2].body.message, '');
   await reloadContext.close();
   passed('reload after browser acknowledgement resumes the checkpoint and completes the reply');
+  for (const kind of ['own','different','peer','expired']) {
+    const leaseContext = await browser.newContext({viewport:{width:1280,height:900}});
+    await leaseContext.addInitScript(kind => {
+      const token='fixture.'+btoa(JSON.stringify({sub:7}))+'.signature';
+      localStorage.setItem('tokenKey',token);
+      localStorage.setItem('chat_conv_'+token,'1');
+      sessionStorage.setItem('saudade-chat-tab','lease-test-tab');
+      localStorage.setItem('saudade-chat-busy',JSON.stringify({roundId:'lease-test-round',
+        owner:kind==='own'?'lease-test-tab':'other-tab',convId:kind==='different'?999:1,
+        ts:Date.now()-(kind==='expired'?7*60*1000:0)}));
+    },kind);
+    const leasePage=await leaseContext.newPage();
+    leasePage.on('pageerror',error=>errors.push(String(error)));
+    await leasePage.goto(origin);
+    await leasePage.waitForFunction(()=>!!window.__chatTest?.ctx.state.conv);
+    const state=await leasePage.evaluate(()=>({
+      api:['setConvUI','ensureConversation'].every(name=>typeof window.__chatTest.engine[name]==='function'),
+      peers:Object.keys(window.__chatTest.ctx.state.remoteRounds).length,
+      lease:!!localStorage.getItem('saudade-chat-busy'),
+    }));
+    assert.equal(state.api,true);
+    assert.equal(state.peers,kind==='peer'?1:0);
+    assert.equal(state.lease,kind==='peer'||kind==='different');
+    if(kind==='own') {
+      await leasePage.locator('#chat-input').fill('恢复后继续聊天');
+      await leasePage.locator('#chat-send').click();
+      await leasePage.waitForFunction(()=>[...document.querySelectorAll('.msg-text')]
+        .some(el=>el.textContent.includes('离线测试回复')));
+    }
+    await leaseContext.close();
+  }
+  passed('own, expired and other-conversation leases preserve full initialization; an active peer lease stays protected');
+  await assertBootstrapRecovery({browser,origin,requests,completedNavigations});
+  passed('production boot initializes one stream controller after the engine is ready and restores an interrupted reply');
   await reset();
   const input = page.locator('#chat-input');
   await input.fill('输入法组合测试');
@@ -619,6 +657,7 @@ try {
   const stoppedProgress = await page.locator('.agent-process-line').allTextContents();
   await page.waitForFunction(() => document.getElementById('chat-send').dataset.phase === 'paused');
   assert.equal(await page.locator('#chat-send').getAttribute('aria-label'), '继续任务');
+  await page.getByText('可以继续任务，也可以输入新的要求。',{exact:true}).waitFor();
   assert.match(await page.locator('#chat-messages').innerText(), /可以继续任务/);
   assert.doesNotMatch(await page.locator('#chat-messages').innerText(), /这一轮不会再回答/);
   await page.locator('#waifu-chat').screenshot({ path: path.join(output, 'desktop-paused.png') });
@@ -1157,6 +1196,26 @@ try {
   }
   passed('desktop/mobile: minus docks directly, header folds, dragging preserves state, night notch remains visible');
   console.log(JSON.stringify({ passed: checks, screenshots: output, requests: requests.length }, null, 2));
+} catch (error) {
+  const diagnostics = {error:String(error),pages:[],requests:requests.filter(r=>r.path==='/api/chat/stream').slice(-6).map(r=>({
+    task:r.body.task_id,resume:r.body.resume_task,message:r.body.message,browserResult:!!r.body.browser_result,
+  }))};
+  if(browser) for(const context of browser.contexts()) for(const page of context.pages()) {
+    try {
+      diagnostics.pages.push(await page.evaluate(()=>({url:location.href,
+        pending:JSON.parse(sessionStorage.getItem('saudade-browser-action-pending')||'null'),
+        conv:window.__chatTest?.ctx.state.conv,sending:window.__chatTest?.ctx.state.isSending,
+        ready:document.readyState,engine:typeof window.__waifuEngine,stream:typeof window.__waifuStream,
+        remoteBusy:window.__chatTest?.ctx.state.remoteBusy,
+        status:document.getElementById('chat-status')?.textContent,
+        texts:[...document.querySelectorAll('.msg-text')].map(el=>el.textContent.slice(0,250)),
+      })));
+      await page.screenshot({path:path.join(output,`failure-${diagnostics.pages.length}.png`)});
+    } catch (_) { /* The failing page may already be navigating. */ }
+  }
+  await writeFile(path.join(output,'browser-diagnostics.json'),JSON.stringify(diagnostics,null,2));
+  console.error(JSON.stringify(diagnostics,null,2));
+  throw error;
 } finally {
   if (browser) await browser.close();
   server.closeAllConnections();

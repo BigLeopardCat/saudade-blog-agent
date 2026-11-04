@@ -54,9 +54,7 @@ data/traces/
 agent/*.bak_*
 *.bak_*
 
-# CI 里把父仓（Rust，私有）只读 checkout 到这个路径，给跨语言守卫当期望值来源
-# （见 docs/adr/adr-0004-cross-language-guard-in-ci.md）。它是**外部仓库**、不是本仓的一部分：
-# 忽略掉，`git status` 与一切按工作区遍历的工具都不会把它当本仓的文件。
+# Read-only public host contract checkout used by CI.
 _parent/
 
 # golden 草稿（含真实用户文本，绝不入库；只在本机被 REVIEW 与人工挑选用）
@@ -71,3 +69,6 @@ eval/drafts/
 
 # pytest 的本地缓存（--lf 上次失败名单等，只对这台机器的这一次跑有意义，同上）。
 .pytest_cache/
+
+# Browser test dependencies and generated previews.
+frontend/node_modules/
