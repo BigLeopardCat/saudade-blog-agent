@@ -5,12 +5,13 @@ from agent.domains import browser, conversation_images
 from agent.domains.favorites import preparation as favorites
 from agent.domains.messages import preparation as messages
 from agent.domains.notifications import preparation as notifications
+from agent.domains.notifications.deletion import prepare_notification_deletions
 from agent.products.blog.admin_domains import preparation_names
 from agent.runtime.access import scoped_reads_enabled
 
 _OWN_PREPARATIONS = frozenset(tool.name for tool in (
     favorites.prepare_favorite_change, messages.prepare_message_read,
-    notifications.prepare_notification_read))
+    notifications.prepare_notification_read, prepare_notification_deletions))
 
 
 def tool_access(principal, name):
