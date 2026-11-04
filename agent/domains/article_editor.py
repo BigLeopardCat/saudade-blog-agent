@@ -105,7 +105,7 @@ def propose_article_edits(
         raise ToolException("请提供非空标题或正文修改。")
     if sum(len(item.old_text) + len(item.new_text) for item in edits) > 64000:
         raise ToolException("修改提案过大，请分批修改。")
-    arguments = {"edits": [item.model_dump() for item in edits]}
+    arguments: dict[str, object] = {"edits": [item.model_dump() for item in edits]}
     if title is not None:
         arguments["title"] = title
     return _output(_run(
