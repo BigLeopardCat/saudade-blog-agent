@@ -7,6 +7,7 @@ from langchain_core.messages import AIMessage
 
 from eval import native_contracts
 from eval.native_contracts import golden_trace
+from tools.base import SITE_BASE
 
 
 def test_confirmed_write_evaluates_continuation_and_replay_without_another_write(
@@ -73,7 +74,7 @@ def test_article_discovery_counts_actual_native_tool_calls(monkeypatch, tmp_path
     responses = iter([
         AIMessage(content="", tool_calls=[{"name": "search_notes",
                    "args": {"keyword": "区块链"}, "id": "search"}]),
-        AIMessage(content="找到《区块链笔记》：https://saudade.site/article/23"),
+        AIMessage(content=f"找到《区块链笔记》：{SITE_BASE}/article/23"),
     ])
 
     class Model:

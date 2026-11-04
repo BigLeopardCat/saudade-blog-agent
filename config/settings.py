@@ -19,7 +19,7 @@ PROVIDER_DEFAULTS = {
     },
     "qwen": {
         "model": "qwen3.6-flash",
-        "base_url": "https://ws-98l2m94bvvnta30m.cn-beijing.maas.aliyuncs.com/compatible-mode/v1",
+        "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
     },
     "openai": {
         "model": "gpt-4o",
@@ -154,7 +154,7 @@ class Settings(BaseSettings):
     agent_admin_base: str = "http://127.0.0.1:3000"
 
     # Public host API used by tools and retrieval.
-    blog_api_base: str = "https://saudade.site/api/public"
+    blog_api_base: str = "http://127.0.0.1:3000/api/public"
 
     # Corpus source for rebuilding the graph; it does not define the public site origin.
     graph_api_base: str = "http://127.0.0.1:3000/api/public"

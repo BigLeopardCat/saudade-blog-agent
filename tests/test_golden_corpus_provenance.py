@@ -58,7 +58,6 @@ def state_with_prov(prov: dict, docs) -> str:
         os.unlink(path)
 
 
-from config.settings import Settings  # noqa: E402  （只在需要时导入，见文件头）
 
 
 def test_golden_corpus_provenance():
@@ -136,11 +135,10 @@ def test_golden_corpus_provenance():
           str(_prov.get("min_present")))
     check("声明的那几个锚点**真的都在真语料里认得出**（拿真声明跑真锚点）",
           state_of(_docs(*REAL_ANCHORS)) == "ok")
-    _default = Settings.model_fields["blog_api_base"].default
-    check("declared_for.api_base == settings.blog_api_base 的默认值"
-      "（改了默认地址却没改声明 ⇒ 红：闸会拿旧站点的锚点去认新语料）",
-          (_prov.get("declared_for") or {}).get("api_base") == _default,
-          f"{(_prov.get('declared_for') or {}).get('api_base')} vs {_default}")
+    # Corpus fixtures identify their own source; application defaults are portable.
+    check("语料来源明确绑定原始公开站点，不跟随应用默认值重写",
+          (_prov.get("declared_for") or {}).get("api_base")
+          == "https://saudade.site/api/public")
     print("\n⑥ 接线：两个跑法共用一处实现，且全量跑法把闸放在主循环**之前**")
     _RG = (ROOT / "eval" / "run_golden.py").read_text(encoding="utf-8")
     _FR = (ROOT / "eval" / "golden_full_run.py").read_text(encoding="utf-8")

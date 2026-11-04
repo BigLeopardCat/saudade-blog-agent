@@ -85,23 +85,23 @@ from config import settings as S  # noqa: E402  （`config/__init__` 导出的�
 
 
 def test_blog_api_base():
-    LEGACY_API_BASE = "https://saudade.site/api/public"
-    print("\n① 出厂档（不设变量、不读 .env）：与历史上那个写死的字面量逐字相同")
+    DEFAULT_API_BASE = "http://127.0.0.1:3000/api/public"
+    print("\n① 默认配置：只连接本机宿主，不访问维护者站点")
     out = probe()
-    check("API_BASE 就是历史值（改了默认 = 改了本站线上行为）",
-          out["api_base"] == LEGACY_API_BASE, out["api_base"])
+    check("默认 API_BASE 指向本机宿主",
+          out["api_base"] == DEFAULT_API_BASE, out["api_base"])
     check("站点根 = 该地址的 origin（导航链接由它拼）",
-          out["site_base"] == "https://saudade.site", out["site_base"])
+          out["site_base"] == "http://127.0.0.1:3000", out["site_base"])
     check("同源关系成立：站点根 + /api/public == API_BASE",
           out["site_base"] + "/api/public" == out["api_base"])
-    check("导航事实文本逐字未变",
-          out["nav_talk"] == "页面已跳转：https://saudade.site/talk", out["nav_talk"])
-    check("整页目标的另一套措辞也逐字未变（它还没跳，字不一样）",
+    check("导航目标与宿主同源",
+          out["nav_talk"] == "页面已跳转：http://127.0.0.1:3000/talk", out["nav_talk"])
+    check("整页导航保留待执行状态",
           out["nav_whole"]
-              == "页面即将跳转：https://saudade.site/device-console/（本条回复说完再跳）",
+              == "页面即将跳转：http://127.0.0.1:3000/device-console/（本条回复说完再跳）",
           out["nav_whole"])
     check("连线命令里的 url 也是那个绝对地址",
-          out["nav_talk_cmd"] == {"kind": "navigate", "url": "https://saudade.site/talk",
+          out["nav_talk_cmd"] == {"kind": "navigate", "url": "http://127.0.0.1:3000/talk",
                                   "mode": "direct"}, str(out["nav_talk_cmd"]))
     print("\n② 换档（BLOG_API_BASE=别的站）：读接口与导航链接**一起**跟着走")
     OTHER = "https://blog.example.test/api/public"
@@ -120,9 +120,9 @@ def test_blog_api_base():
     _expected = [["GET", OTHER + "/notes"], ["POST", OTHER + "/notes/search"]]
     check("_get 与 search_notes 两个动词都打到新基址",
           alt["outbound"] == _expected, str(alt["outbound"]))
-    check("对照：出厂档那一次打的是历史地址（证明 ③ 判的是环境、不是恒定值）",
-          out["outbound"] == [["GET", LEGACY_API_BASE + "/notes"],
-                              ["POST", LEGACY_API_BASE + "/notes/search"]], str(out["outbound"]))
+    check("对照：默认请求使用本机基址",
+          out["outbound"] == [["GET", DEFAULT_API_BASE + "/notes"],
+                              ["POST", DEFAULT_API_BASE + "/notes/search"]], str(out["outbound"]))
     print("\n④ 单一事实源：站点字面量只剩 settings 里那一处")
     _src = "".join((ROOT / "tools" / f).read_text(encoding="utf-8")
                    for f in ("base.py", "notes.py"))
