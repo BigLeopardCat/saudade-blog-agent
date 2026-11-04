@@ -50,11 +50,13 @@ def operation_names():
 
 
 def bound_tool_names():
-    """Inventory service-bound tools without publishing an unusable global tool instance."""
+    """Inventory product tools declared outside the shared tool registry."""
+    from agent.domains.activity_search import search_public_activity
     from agent.domains.article_editor import NAMES
     from agent.domains.automations.preparation import tools
     from agent.domains.gallery.preparation import tools as gallery_tools
     from agent.domains.gallery.reads import tools as gallery_reads
     from agent.domains.image_generation.tools import tools as generation_tools
-    return (frozenset(tools(None, True)) | NAMES | frozenset(gallery_tools(gallery_reads()))
+    return (frozenset({search_public_activity.name})
+            | frozenset(tools(None, True)) | NAMES | frozenset(gallery_tools(gallery_reads()))
             | frozenset(generation_tools()))

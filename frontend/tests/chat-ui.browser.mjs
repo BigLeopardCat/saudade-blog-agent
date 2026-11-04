@@ -1060,7 +1060,7 @@ try {
   const portrait = await page.evaluate(() => window.__chatFixtureImages.portrait);
   await page.locator('#chat-img-file').setInputFiles({name:'portrait.svg',mimeType:'image/svg+xml',
     buffer:Buffer.from(portrait.split(',')[1],'base64')});
-  await page.waitForFunction(() => window.__chatTest.ctx.state.pendingImages.length === 1);
+  await page.waitForFunction(() => window.__chatTest.ctx.state.pendingImages?.length === 1);
   assert.equal(await page.locator('.chat-img-preview-item img').evaluate(image => getComputedStyle(image).objectFit),'contain');
   await page.locator('.chat-img-preview-item img').click();
   assert.equal(await page.evaluate(() => window.__chatImageOpened.length),1);

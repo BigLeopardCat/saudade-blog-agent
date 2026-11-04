@@ -26,12 +26,16 @@ ACCOUNT_READ_TOOLS = frozenset({"list_accounts"})
 QUEUE_READ_TOOLS = frozenset({"list_quota_requests", "list_dashboard_todos"})
 
 
-def _tools_with_scope(names: frozenset[str], scope: str) -> dict:
+def _validate_scope(names: frozenset[str], scope: str):
     wrong_scope = {name: TOOL_SCOPE.get(name) for name in names
                    if TOOL_SCOPE.get(name) != scope}
     if wrong_scope:
         label = scope.removeprefix("read.")
         raise RuntimeError(f"Read tools must remain {label} reads: {wrong_scope}")
+
+
+def _tools_with_scope(names: frozenset[str], scope: str) -> dict:
+    _validate_scope(names, scope)
     selected = {tool.name: tool for tool in get_all_tools()
                 if tool.name in names}
     missing = names - selected.keys()
@@ -108,18 +112,20 @@ def own_domains(tools: dict) -> dict:
 
 
 def public_domains() -> dict:
-    from agent.domains import public_activity, public_catalog
+    from agent.domains import activity_search, public_activity, public_catalog
     from tools.site import get_current_time
 
     groups = {"public_catalog": (public_catalog.list_notes, public_catalog.get_top_notes,
                                   public_catalog.list_categories, public_catalog.list_tags),
-              "public_activity": (public_activity.get_announcements, public_activity.list_guestbook,
+              "public_activity": (activity_search.search_public_activity,
+                                   public_activity.get_announcements,
+                                   public_activity.list_guestbook,
                                    public_activity.list_talks),
               "utilities": (get_current_time,)}
     domains = {}
     for domain, tools in groups.items():
         names = frozenset(tool.name for tool in tools)
-        _tools_with_scope(names, SCOPE_READ_PUBLIC)
+        _validate_scope(names, SCOPE_READ_PUBLIC)
         domains[domain] = {tool.name: tool for tool in tools}
     return domains
 

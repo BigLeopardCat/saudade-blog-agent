@@ -64,15 +64,11 @@ def list_admin_notes(config: RunnableConfig, keyword: SearchText | None = None,
 def list_accounts(config: RunnableConfig, username: Username | None = None,
                    page: Page = 1, limit: CatalogLimit = 20,
                    account_id: Identifier | None = None, query: SearchText | None = None) -> object:
-    """Search the admin account catalog; at most 20 candidates per page, with total count.
-
-    query matches a literal substring of login name OR nickname, case-insensitively.
-    username is an exact full login name; account_id is exact. Combined filters use AND.
-    For nickname clues, search query first. Use the unique candidate's ID for preparation;
-    show distinguishing IDs, login names and nicknames when multiple candidates match.
-    Empty results mean no match in this catalog/filter, not global account nonexistence.
-    Returns nickname, role, frozen/mute state and quotas; excludes superadmin and unknown
-    roles, passwords, email and credentials. Read-only. quotaLimit=0 means unlimited turns.
+    """Search account metadata: query matches login/nickname substrings; username/account_id
+    match exactly. Combined filters use AND. Disambiguate names before preparation;
+    known IDs can go directly to preparation, which verifies the target and state.
+    Returns totals, public admin fields and quotas (quotaLimit=0: unlimited turns).
+    Excludes superadmin/unknown roles and credentials; empty means no match in this scope.
     """
     if account_id is not None:
         page, limit = 1, 1
