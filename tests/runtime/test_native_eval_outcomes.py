@@ -62,3 +62,11 @@ def test_todo_checks_content_and_real_calendar_due_date_in_the_same_confirmation
 def test_relative_schedule_without_request_time_evidence_cannot_pass():
     assert native_assertions.check({"require_todo_schedule": {"text": "交房租", "days": 1}},
                                    {"native_events": []})
+
+
+@pytest.mark.parametrize('kind,accepted', [('ok', True), ('unknown', False),
+                                          ('unavailable', False), ('error', False)])
+def test_current_time_requires_a_successful_observation_not_an_unknown_result(kind, accepted):
+    value = result('get_current_time', '2026年11月05日 星期四 02:06')
+    value['native_events'][0]['kind'] = kind
+    assert (not native_assertions.check(case_gold('current_time'), value)) is accepted

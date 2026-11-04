@@ -59,6 +59,7 @@ def main():
     parser.add_argument("--samples", type=Path, default=SAMPLES)
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument("--reasoning-effort", choices=llm_judge.REASONING_EFFORTS, default="none")
     args = parser.parse_args()
     samples = load_samples(args.samples)
     args.out.mkdir(mode=0o700, parents=True, exist_ok=False)
@@ -72,8 +73,11 @@ def main():
     if args.dry_run:
         report.update(status="not_evaluated", samples=len(samples))
     else:
-        llm = llm_judge.make_llm(max_retries=0, streaming=False, timeout=30)
-        report.update(model=llm.model_name, **evaluate(samples, llm))
+        llm = llm_judge.make_llm(reasoning_effort=args.reasoning_effort, max_retries=0,
+                                 streaming=False,
+                                 timeout=60 if args.reasoning_effort != "none" else 30)
+        report.update(model=llm.model_name, reviewer_options=llm_judge.reviewer_options(llm),
+                      **evaluate(samples, llm))
     (args.out / "report.json").write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n")
     print(json.dumps({key: value for key, value in report.items() if key != "rows"},
                      ensure_ascii=False))

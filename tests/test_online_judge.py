@@ -438,3 +438,30 @@ def test_only_correlated_verified_actor_id_reaches_semantic_review(
             "verified": verified, "role": role}}]})
     data = json.loads(online_judge.material(case, case["result"]["rounds"]))
     assert data["turns"][0]["verified_current_account_id"] == expected
+
+
+@pytest.mark.parametrize('effort', ['none', 'low'])
+def test_judge_reasoning_controls_reach_the_provider_and_are_recorded(monkeypatch, effort):
+    monkeypatch.setattr('config.settings.llm_provider', 'opencode')
+    captured = []
+    verdict = {'unsupported': [], 'answered': True, 'verdict': 'ok', 'reason': 'Supported'}
+
+    def provider(request):
+        captured.append(json.loads(request.content))
+        return httpx.Response(200, json={'id': 'fixture', 'model': 'deepseek-v4.1-flash',
+            'choices': [{'index': 0, 'finish_reason': 'stop', 'message': {
+                'role': 'assistant', 'content': json.dumps(verdict)}}],
+            'usage': {'prompt_tokens': 10, 'completion_tokens': 10, 'total_tokens': 20}})
+
+    with httpx.Client(transport=httpx.MockTransport(provider)) as client:
+        llm = llm_judge.make_llm(reasoning_effort=effort, model='deepseek-v4.1-flash',
+            api_key='test-only', base_url='https://model.test/v1', http_client=client,
+            max_retries=0, streaming=False)
+        llm_judge.judge_one('Synthetic material', llm, allow_fallback=False)
+    assert len(captured) == 1
+    assert captured[0]['thinking']['type'] == ('disabled' if effort == 'none' else 'enabled')
+    assert captured[0].get('reasoning_effort', 'none') == effort
+    options = llm_judge.reviewer_options(llm)
+    assert options['reasoning_effort'] == effort
+    assert options['max_tokens'] == (700 if effort == 'none' else 4096)
+    assert 'test-only' not in json.dumps(options) and 'headers' not in options

@@ -5,23 +5,14 @@ from agent.domains.account_actions.targets import Role
 from agent.domains.notices.targets import DEFAULT_TITLE
 
 DOMAIN_DESCRIPTIONS = {
-    "admin_image_generation": "Administrator AI image generation and article-cover illustration. "
-                              "Prepare exact prompts and optional gallery references for human "
-                              "approval before a paid API call; inspect status and show actual "
-                              "results for separate approval into the gallery. "
-                              "No automatic cover writes.",
-    "admin_gallery": "Administrator image library: search filenames/descriptions and folders, "
-                     "inspect candidate images when needed, prepare metadata/move/favorite changes "
-                     "and article cover confirmation. Start with the bounded index, not pixels.",
-    "article_editor": "Collaborate on the currently OPEN article editor: read its live unsaved "
-                      "draft, propose title/body edits for red/green review and user acceptance, "
-                      "or prepare confirmation to create/replace the summary. "
-                      "Summary changes require approval before application. "
-                      "Open the live draft's publication confirmation in place; "
-                      "the user publishes. Admin only.",
-    "admin_automations": "Administrator-owned persistent reminders and read-only background tasks. "
-                         "Create at a time, after a delay, or on cron; inspect runs and prepare "
-                         "pause/resume/cancel. No unattended business writes or browser actions.",
+    "admin_image_generation": "Administrator AI images: review prompts/references before paid "
+                              "generation; inspect results and separately approve gallery storage.",
+    "admin_gallery": "Administrator gallery index and folders, optional image inspection, "
+                     "confirmed metadata changes and article covers. Start with metadata.",
+    "article_editor": "Administrator collaboration on the OPEN unsaved editor: read draft, "
+                      "review title/body edits, confirm summary changes or in-place publication.",
+    "admin_automations": "Administrator persistent reminders and scheduled read-only tasks; "
+                         "confirm creation or lifecycle changes. No unattended business writes.",
     # Discovery identifies a domain; argument and execution contracts live on its tools.
     "public_activity": "分页读取公开公告、河灯留言和说说；含公开留名，不含发表账号或待审记录。",
     "utilities": "查询当前时间或城市天气估算。",

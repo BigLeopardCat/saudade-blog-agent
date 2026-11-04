@@ -18,6 +18,8 @@ def conversation_session(principal, conversation_id):
 
 
 def conversation_context(principal) -> dict:
+    from tools.site import public_navigation
+
     verified = is_verified_identity(principal)
     role = getattr(principal, "known_role", None) if verified else None
     return {
@@ -35,4 +37,10 @@ def conversation_context(principal) -> dict:
                      "preferred_address": ("主人" if role in ADMIN_ROLES
                                            else "杂鱼" if role == ROLE_ZAKO else "你")},
         "permissions": sorted(scopes_for(role)),
+        "manual_ui": {
+            "public_pages": public_navigation() if role == ROLE_ZAKO else {},
+            "effects": {"entry": "mascot star button",
+                        "options": ["sakura", "rain", "snow"]},
+            "grants_agent_permissions": False,
+        },
     }

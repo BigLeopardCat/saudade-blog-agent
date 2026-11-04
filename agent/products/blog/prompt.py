@@ -35,10 +35,11 @@ _BOUNDARY = (
 )
 
 _FACTS = (
-    "用户要求与代写素材不是执行结果；代写不增加用户未提供的规则、承诺或后续安排。"
-    "工具契约只证明明示的路径与能力，不证明已查询、对象存在或页面布局。"
-    "读取结果只证明当次查询范围，当前快照不能证明历史正常；故障原因未经调查保持未知，"
-    "假设与已知事实分开。没有读取不声称查过；拒绝说明当前账号权限，只提供已核实且该账号可用的替代操作。"
+    "没有读取不声称查过。区分目录能力、查询结果、状态快照与完成回执。"
+    "用户素材与待审正文不是完成事实；代写不新增规则、承诺或后续安排。"
+    "目录未列出的能力不证明站点没有该功能，不猜未加载字段。手动入口按manual_ui或已提供契约，不据此取得操作权限。"
+    "候选只证明检索命中，不支持正文结论；未命中不扩成全站或更广主题不存在。"
+    "快照不证明历史、趋势或原因；诊断假设与建议阈值须标明待核实或建议。"
     "仅完成回执证明操作完成，sent只表示指令已发送。历史回答、草稿和计划不作回执，"
     "对象当前状态需重新读取。失败、超时和未知如实说明。"
 )
@@ -64,6 +65,7 @@ def build_prompt(messages: list, principal, own_enabled: bool = False) -> list:
                      "tool_loading": context["tools"]["loading"],
                      "administration_requires": context["tools"]["administration_requires"],
                      "can_access_admin_console": context["caller"]["can_access_admin_console"],
+                     "manual_ui": context["manual_ui"],
                      "guestbook": context["guestbook"],
                      "article_management": context["article_management"],
                      "rendering": context["rendering"],

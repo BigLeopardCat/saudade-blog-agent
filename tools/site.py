@@ -13,7 +13,7 @@ from tools.result import ToolResult, fact, ok, tgt
 # Public exports; helper names stay private to their modules.
 __all__ = ["get_site_map", "get_chat_history", "get_current_time",
            "get_weather", "IOT_ENABLED", "IOT_NAV_PATH", "nav_pure_path", "nav_path_valid",
-           "navigate_to", "toggle_effect", "toggle_dark_mode", "nav_label"]
+           "navigate_to", "toggle_effect", "toggle_dark_mode", "nav_label", "public_navigation"]
 
 # ---------------------------------------------------------------------------
 # 导航 / 引导工具
@@ -110,6 +110,12 @@ _NAV_LABELS = {
 }
 if IOT_ENABLED:
     _NAV_LABELS[IOT_NAV_PATH] = "物联网平台"
+
+
+def public_navigation() -> dict[str, str]:
+    """Static public links for manual help; these do not grant tool permissions."""
+    return {label: path for path, label in _NAV_LABELS.items()
+            if not path.startswith("/dashboard")}
 
 
 def nav_label(path: str) -> str:

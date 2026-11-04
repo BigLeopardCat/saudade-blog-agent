@@ -62,6 +62,9 @@ def test_full_request_schema_can_trigger_compaction_without_a_history_only_thres
 
 
 def test_oversized_history_is_compacted_in_bounded_steps_then_reused(monkeypatch):
+    from math import ceil
+
+    from agent.api.context import build_messages
     from agent.runtime.summarization import input_prompt
 
     monkeypatch.setattr(settings, "agent_context_tokens", 1000000)
@@ -76,16 +79,23 @@ def test_oversized_history_is_compacted_in_bounded_steps_then_reused(monkeypatch
         calls.append(source) or "remembered-fact-0; older data is represented here."))
     model = Capture()
     selected, source = runtime(InMemorySaver(), model), []
+    request = ChatRequest(message="保留当前要求：只读核对，不发送通知。")
+    fixed = selected.application.prompt(build_messages(request), ACTOR)
+    # The target must fit the actual product prefix plus reserved summary output.
+    counter = TaskBudget(BudgetLimits(context_tokens=1000000))
+    working = max(4000, ceil((counter.input_tokens(fixed) + 512)
+                             / settings.agent_compaction_target))
+    monkeypatch.setattr(settings, "agent_input_tokens", working)
     for number in range(16):
         source.extend(memory.turn_messages([HumanMessage(
             content=f"fact-{number}: " + "history " * 100)], [], "answer " * 100, ACTOR))
     selected.store.update_state(config(), {"messages": source})
-    run(selected, ChatRequest(message="保留当前要求：只读核对，不发送通知。"))
+    run(selected, request)
     assert len(calls) >= 2
-    budget = TaskBudget(BudgetLimits(context_tokens=1000000, input_tokens=4000))
+    budget = TaskBudget(BudgetLimits(context_tokens=1000000, input_tokens=working))
     assert all(budget.call_block_reason(input_prompt(old), output_limit=512) is None
                for old in calls)
-    assert memory._tokens(model.prompts[-1]) <= 4000
+    assert memory._tokens(model.prompts[-1]) <= working
     assert "remembered-fact-0" in str(model.prompts[-1])
     assert "保留当前要求：只读核对，不发送通知。" in str(model.prompts[-1])
     count = len(calls)

@@ -273,6 +273,7 @@ def review(report_path, folder, llm, *, only=()):
     report = {"source_report_sha256": digest(source), "evaluator_sha256": hashes,
               "rubric_sha256": digest(INSTRUCTIONS.encode()),
               "model": getattr(llm, "model_name", "unknown"),
+              "reviewer_options": llm_judge.reviewer_options(llm),
               "automatic_retries": 0, "business_requests_replayed": 0,
               "service_version": source_report.get("service_version"), "rows": [],
               "started_at": datetime.now().astimezone().isoformat()}
@@ -323,10 +324,13 @@ def main():
     parser.add_argument("--report", type=Path, required=True)
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument("--model", default="")
+    parser.add_argument("--reasoning-effort", choices=llm_judge.REASONING_EFFORTS, default="none")
     parser.add_argument("--only", default="", help="Comma-separated case IDs")
     args = parser.parse_args()
-    llm = llm_judge.make_llm(**({"model": args.model} if args.model else {}),
-                             max_retries=0, streaming=False, timeout=30)
+    llm = llm_judge.make_llm(reasoning_effort=args.reasoning_effort,
+                             **({"model": args.model} if args.model else {}),
+                             max_retries=0, streaming=False,
+                             timeout=60 if args.reasoning_effort != "none" else 30)
     report = review(args.report, args.out, llm,
                     only=[key for key in args.only.split(",") if key])
     print(json.dumps({"semantic_status": report["semantic_status"],
