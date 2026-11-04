@@ -18,7 +18,7 @@ sys.path.insert(0, str(ROOT))
 
 from config.settings import settings  # noqa: E402
 from utils.logging import (  # noqa: E402
-    _TraceIdFilter,
+    RequestContextFilter,
     reset_trace_id,
     set_trace_id,
     setup_logging,
@@ -34,7 +34,7 @@ def _root() -> logging.Logger:
 
 def _is_ours(h: logging.Handler) -> bool:
     """这个 handler 是 setup_logging 装的那个吗（靠它独有的 filter 认，不靠对象同一性）。"""
-    return any(isinstance(f, _TraceIdFilter) for f in h.filters)
+    return any(isinstance(f, RequestContextFilter) for f in h.filters)
 
 
 PROBE = "probe.logging_setup"
@@ -85,7 +85,7 @@ def _run() -> None:
     ours = [h for h in _root().handlers if _is_ours(h)]
     check("连调两次 setup_logging ⇒ root 上只有一个 handler（不叠加）",
           len(_root().handlers) == 1, f"handlers={len(_root().handlers)}")
-    check("……且那一个就是我模块装的（带 _TraceIdFilter）",
+    check("……且那一个就是我模块装的（带 RequestContextFilter）",
           len(ours) == 1, f"ours={len(ours)}")
     check("格式里有 request_id=%(trace_id)s（trace_id 靠它进 agent.log）",
           len(ours) == 1 and "request_id=%(trace_id)s" in ours[0].formatter._fmt,

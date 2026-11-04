@@ -20,6 +20,8 @@ ROOT = Path(__file__).resolve().parents[1]
 def test_server_capacity_is_explicit_and_defaults_to_a_single_process(
         tmp_path, overrides, workers, healthcheck, port):
     (tmp_path / 'scripts').mkdir()
+    (tmp_path / 'config').mkdir()
+    shutil.copy(ROOT / 'config/logging.json', tmp_path / 'config/logging.json')
     (tmp_path / '.venv/bin').mkdir(parents=True)
     shutil.copy(ROOT / 'scripts/serve.sh', tmp_path / 'scripts/serve.sh')
     (tmp_path / 'REVISION').write_text('fixture-revision\n')
@@ -43,4 +45,5 @@ print(json.dumps({"argv":sys.argv[1:],"sha":os.environ["DEPLOY_SHA"]}))
     assert args[args.index('--workers') + 1] == workers
     assert args[args.index('--timeout-worker-healthcheck') + 1] == healthcheck
     assert args[args.index('--port') + 1] == port
+    assert Path(args[args.index('--log-config') + 1]) == tmp_path / 'config/logging.json'
     assert observed['sha'] == 'fixture-revision'
