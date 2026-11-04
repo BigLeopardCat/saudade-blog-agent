@@ -88,3 +88,17 @@ def test_required_postgres_job_cannot_silently_skip(monkeypatch):
     monkeypatch.setenv("SAUDADE_REQUIRE_CKPT_TEST", "1")
     with pytest.raises(pytest.fail.Exception, match="SAUDADE_CKPT_TEST_DSN"):
         next(checkpoint_database.__wrapped__())
+
+
+def test_scoped_checkpoint_url_is_accepted_by_application_and_database_driver():
+    from _checkpoint_postgres import scoped_dsn
+    from psycopg.conninfo import conninfo_to_dict
+
+    from agent.checkpoint import backend_for
+
+    dsn = scoped_dsn('postgresql://fixture:dummy@127.0.0.1/test?connect_timeout=5',
+                     'checkpoint_test_fixture')
+    assert backend_for(dsn)[0] == 'langgraph.checkpoint.postgres'
+    parsed = conninfo_to_dict(dsn)
+    assert parsed['options'] == '-c search_path=checkpoint_test_fixture'
+    assert parsed['connect_timeout'] == '5' and parsed['dbname'] == 'test'
