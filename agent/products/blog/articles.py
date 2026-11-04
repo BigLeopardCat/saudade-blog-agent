@@ -8,9 +8,9 @@ from langgraph.types import Command
 
 from agent.domains.articles.evidence import ArticleEvidence
 from agent.runtime.message_content import text_content
+from agent.runtime.tool_execution import result_limit
 from rag.reading import render_article_result
 from tools.base import SITE_BASE
-from tools.result import ToolResult
 from utils.trace import record
 
 
@@ -73,13 +73,18 @@ class ArticleMiddleware(AgentMiddleware):
 
     def render_result(self, call, value, limit):
         if call["name"] == "get_article_detail":
-            body, visible = render_article_result(value, limit)
-            value = ToolResult(body, kind=getattr(value, "kind", "unknown"), data=visible)
+            artifact = value.artifact if isinstance(value.artifact, dict) else {}
+            data = artifact.get("data")
+            if isinstance(data, dict):
+                limit = result_limit(value.model_copy(update={"content": str(data)}))
+            body, visible = render_article_result(data, value.content, limit)
+            value = value.model_copy(update={"content": body,
+                "artifact": {**artifact, "data": visible}})
         else:
-            body = self.render_default(call, value, limit)
+            value = self.render_default(call, value, limit)
         self.evidence.observe(call["name"], call["args"], value)
         self._visibility()
-        return body
+        return value
 
     def _visibility(self):
         self.session.suppress_output = bool(self.evidence.searched or self.evidence.documents

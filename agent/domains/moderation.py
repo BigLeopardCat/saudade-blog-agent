@@ -29,7 +29,7 @@ def _allowed(config):
 
 
 def _render(data):
-    return base.ok(json.dumps(data, ensure_ascii=False, separators=(",", ":")))
+    return base.ok(json.dumps(data, ensure_ascii=False, separators=(",", ":")), data=data)
 
 
 def _text(value, limit=80):

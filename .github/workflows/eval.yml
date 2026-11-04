@@ -168,6 +168,7 @@ jobs:
         run: >-
           uv run --frozen pytest -q tests/integration/test_task_inputs_pg.py
           tests/integration/test_scheduling_pg.py tests/integration/test_scheduled_agent_pg.py
+          tests/integration/test_client_operations_pg.py
 
   widget-pin-drift:
     runs-on: ubuntu-latest

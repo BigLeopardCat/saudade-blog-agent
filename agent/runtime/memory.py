@@ -268,7 +268,8 @@ def observation(call, result):
     """Keep the source tool call paired with a bounded historical excerpt."""
     if isinstance(result, ToolMessage):
         artifact = result.artifact if isinstance(result.artifact, dict) else {}
-        if result.status != "success" or artifact.get("kind") not in ("ok", "prepared"):
+        if (artifact.get("kind") not in ("ok", "empty", "not_found", "prepared")
+                or result.status != "success" and artifact.get("kind") != "not_found"):
             return []
         result = compact(result)
         body = _observation_excerpt(str(result.content))

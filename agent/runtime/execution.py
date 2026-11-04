@@ -35,6 +35,7 @@ class FrameworkExecution:
         self.initial = {"messages": [RemoveMessage(id=REMOVE_ALL_MESSAGES),
                                     *stage(messages, session.transient)],
                         **capture(session), "effects": Overwrite(dict(session.state["effects"])),
+                        "client_operations": Overwrite(dict(session.state["client_operations"])),
                         "resume": None}
         self.persistent = bool(session.store and session.store.available)
         self.child = self._agent(self.persistent)

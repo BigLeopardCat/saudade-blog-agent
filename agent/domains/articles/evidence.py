@@ -2,22 +2,18 @@
 
 from __future__ import annotations
 
-import ast
 import re
 from urllib.parse import urlsplit
+
+from langchain_core.messages import ToolMessage
 
 SEARCH_TOOLS = frozenset({"rag_search"})
 
 
-def payload(value) -> dict | None:
-    data = getattr(value, "data", None)
-    if isinstance(data, dict):
-        return data
-    try:
-        parsed = ast.literal_eval(str(value))
-    except (ValueError, SyntaxError):
-        return None
-    return parsed if isinstance(parsed, dict) else None
+def payload(value):
+    """Read source data, never infer executable facts by parsing displayed prose."""
+    return ((value.artifact or {}).get("data") if isinstance(value, ToolMessage)
+            else getattr(value, "data", None))
 
 
 def body_text(data: dict | None) -> str:
@@ -85,9 +81,12 @@ class ArticleEvidence:
         return evidence
 
     def observe(self, name: str, args: dict, value) -> None:
-        kind = getattr(value, "kind", "ok")
+        kind = ((value.artifact or {}).get("kind", "ok") if isinstance(value, ToolMessage)
+                else getattr(value, "kind", "ok"))
+        text = ((value.content if isinstance(value.content, str) else "")
+                if isinstance(value, ToolMessage) else str(value))
         if name in SEARCH_TOOLS or name == "search_notes":
-            rows = getattr(value, "data", None)
+            rows = payload(value)
             if isinstance(rows, list) and kind == "ok":
                 for row in rows:
                     if not isinstance(row, dict) or row.get("type", "note") != "note":
@@ -99,13 +98,14 @@ class ArticleEvidence:
             self.searched = True
             self.empty |= kind == "empty"
             self.failed |= kind in ("unavailable", "not_found", "invalid_args")
-            self.found |= kind == "ok" and bool(str(value).strip())
+            self.found |= kind == "ok" and bool(text.strip())
         elif (
             name == "get_article_detail" and args.get("doc_type", "note") == "note" and kind == "ok"
         ):
             data = payload(value)
             ident = args.get("article_id")
-            if data and body_text(data).strip() and type(ident) is int and ident > 0:
+            if (isinstance(data, dict) and body_text(data).strip()
+                    and type(ident) is int and ident > 0):
                 self.documents[ident] = str(data.get("noteTitle") or "文章")
                 ranges = self.read_ranges.setdefault(ident, [])
                 observed = _read_range(data, ident)

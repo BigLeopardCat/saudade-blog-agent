@@ -125,6 +125,7 @@ def test_real_checkpoint_round_trip_applies_summary_only_after_confirmation(
             ),
             AIMessage(content=("摘要已更新到编辑草稿，未发布。" if expected == "completed"
                                else "未确认摘要更新成功，请重新检查草稿。")),
+            AIMessage(content="新话题你好。"),
         ]
     )
 
@@ -230,6 +231,15 @@ def test_real_checkpoint_round_trip_applies_summary_only_after_confirmation(
     repeated = list(runtime().stream_events({"confirm_grant": grant}, cfg))[-1]
     assert model.calls == 5 and not (repeated.execution or {}).get("client_action")
     assert_summary_result(repeated, expected)
+    assert_fresh_task_has_no_previous_operation(runtime, cfg, model)
+
+
+def assert_fresh_task_has_no_previous_operation(runtime, cfg, model):
+    fresh = list(runtime().stream_events(
+        {"messages": [HumanMessage(content="新话题你好")]}, cfg))[-1]
+    assert model.calls == 6 and fresh.reply == "新话题你好。"
+    assert not (fresh.execution or {}).get("receipts")
+    assert not (fresh.execution or {}).get("operation_outcome")
 
 
 def assert_pending_body_review(messages, status):
@@ -260,11 +270,11 @@ def test_client_failure_is_reported_as_tool_error(monkeypatch):
 def test_large_summary_is_bound_by_digest_and_never_copied_into_approval_token(monkeypatch):
     monkeypatch.setattr(confirm.settings, "jwt_secret", secrets.token_urlsafe(32))
     content = "摘要正文" * 4000
+    observed = {"scope": "editor_draft", "editor_id": "editor-1", "revision": 0, "description": ""}
     runtime = SimpleNamespace(config=config(), tool_call_id="summary-create", state={
         "messages": [ToolMessage(name="read_current_article", tool_call_id="read",
-                                  content=json.dumps(
-            {"scope": "editor_draft", "editor_id": "editor-1",
-             "revision": 0, "description": ""}))]})
+                                  content=json.dumps(observed),
+                                  artifact={"kind": "ok", "data": observed})]})
     result = article_editor.prepare_article_summary.func(
         editor_id="editor-1", revision=0, description=content, runtime=runtime)
     token = result.execution["pending_confirm"]["token"]

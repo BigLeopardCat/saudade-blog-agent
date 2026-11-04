@@ -11,6 +11,7 @@ from langchain_core.tools import InjectedToolCallId, ToolException, tool
 from pydantic import BaseModel, Field, StrictStr
 
 from agent import authz
+from agent.contracts.client import EditorObservation
 from agent.proposals import proposal
 from agent.runtime.access import scoped_reads_enabled
 from agent.runtime.client_actions import await_result as _await_browser
@@ -54,13 +55,16 @@ def _run(config, name, operation, tool_call_id, **arguments):
         raise ToolException(
             result.get("error") or "当前编辑器不可用，或草稿已变化。请重新读取当前草稿。"
         )
-    observation = result.get("document")
-    return json.dumps(
-        {"scope": "editor_draft", "published": False, **observation}, ensure_ascii=False
-    )
+    return EditorObservation.model_validate(result.get("document"))
 
 
-@tool
+def _output(observation):
+    data = {"scope": "editor_draft", "published": False,
+            **observation.model_dump(exclude_none=True)}
+    return json.dumps(data, ensure_ascii=False), {"kind": "ok", "data": data}
+
+
+@tool(response_format="content_and_artifact")
 def read_current_article(
     config: RunnableConfig,
     tool_call_id: Annotated[str, InjectedToolCallId],
@@ -76,10 +80,11 @@ def read_current_article(
     """
     if type(offset) is not int or offset < 0 or type(limit) is not int or not 1 <= limit <= 24000:
         raise ToolException("正文读取范围不合法。")
-    return _run(config, "read_current_article", "read", tool_call_id, offset=offset, limit=limit)
+    return _output(_run(config, "read_current_article", "read", tool_call_id,
+                        offset=offset, limit=limit))
 
 
-@tool
+@tool(response_format="content_and_artifact")
 def propose_article_edits(
     editor_id: EditorId,
     revision: Revision,
@@ -95,7 +100,7 @@ def propose_article_edits(
     """
     if sum(len(item.old_text) + len(item.new_text) for item in edits) > 64000:
         raise ToolException("修改提案过大，请分批修改。")
-    return _run(
+    return _output(_run(
         config,
         "propose_article_edits",
         "propose",
@@ -103,7 +108,7 @@ def propose_article_edits(
         editor_id=editor_id,
         revision=revision,
         edits=[item.model_dump() for item in edits],
-    )
+    ))
 
 
 @tool(return_direct=True)
@@ -126,12 +131,7 @@ def prepare_article_summary(
     for message in reversed(runtime.state.get("messages", [])):
         if not isinstance(message, ToolMessage) or message.name != "read_current_article":
             continue
-        if not isinstance(message.content, str):
-            break
-        try:
-            saved = json.loads(message.content)
-        except (ValueError, TypeError):
-            break
+        saved = (message.artifact or {}).get("data")
         if (isinstance(saved, dict) and message.status == "success"
                 and saved.get("scope") == "editor_draft"
                 and saved.get("editor_id") == editor_id and saved.get("revision") == revision

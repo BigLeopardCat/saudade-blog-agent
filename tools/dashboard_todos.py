@@ -44,7 +44,7 @@ def _todo_pending(config: RunnableConfig):
             "quota": data.get("pendingQuota")}
 
 @tool
-def list_dashboard_todos(config: RunnableConfig) -> str:
+def list_dashboard_todos(config: RunnableConfig) -> str | ToolResult:
     """查看**后台首页**的待办 / 日程列表（主人自己在后台首页那张卡里记的事）：
     每行给出正文、排期日（写「未排期」的是没定日子那条）与是否已完成；
     末尾还会给出**另外几类等着你处理的**计数——留言待审几条、评论待审几条、

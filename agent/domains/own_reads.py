@@ -24,7 +24,7 @@ def _principal(config):
 
 
 def _render(data):
-    return base.ok(json.dumps(data, ensure_ascii=False, separators=(",", ":")))
+    return base.ok(json.dumps(data, ensure_ascii=False, separators=(",", ":")), data=data)
 
 
 def _entry(row, uid, folder=None):

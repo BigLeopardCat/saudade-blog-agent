@@ -9,6 +9,7 @@ The shared row codec retains the same replay semantics as the SQLite test ledger
 import json
 import logging
 
+from psycopg import sql
 from psycopg.rows import tuple_row
 
 from agent import idem
@@ -118,6 +119,19 @@ class PostgresLedger:
                 (None if capped else text, str(getattr(out, "kind", "ok") or "ok"),
                  _meta_json(out), key))
         return capped
+
+    def replace(self, key: str, previous: tuple, out) -> bool:
+        """Compare and replace a client phase without regressing a newer observation."""
+        ensure_autocommit(self.pool)
+        text = str(out)
+        with self.pool.connection() as conn:
+            changed = conn.execute(
+                sql.SQL("UPDATE {} SET text=%s, kind=%s, meta=%s"
+                        " WHERE key=%s AND status='done' AND kind=%s AND meta=%s").format(
+                            sql.Identifier(TABLE)),
+                (None if len(text) > idem._RESULT_MAX else text, out.kind,
+                 _meta_json(out), key, previous[2], previous[3]))
+            return changed.rowcount == 1
 
     def close(self) -> None:
         """The application owns the shared pool; ledger cleanup leaves it open."""
