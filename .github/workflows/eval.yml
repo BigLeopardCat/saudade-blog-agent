@@ -192,7 +192,7 @@ jobs:
         run: bash scripts/widget_pin_drift.sh
 
   widget-browser:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
@@ -206,11 +206,33 @@ jobs:
       - name: Install locked browser test dependency
         working-directory: frontend
         run: npm ci --ignore-scripts
-      - name: Install Chromium and CJK fonts
+      - name: Install browser system dependencies
+        timeout-minutes: 6
         working-directory: frontend
         run: |
-          npx playwright install --with-deps chromium
-          sudo apt-get install -y --no-install-recommends fonts-noto-cjk
+          # hosted runner 的 HTTP Azure 镜像多次仅几十 KB/s；使用 Ubuntu 官方 HTTPS 源。
+          sudo tee /etc/apt/saudade-ci.sources.list >/dev/null <<'EOF'
+          deb [signed-by=/usr/share/keyrings/ubuntu-archive-keyring.gpg] https://archive.ubuntu.com/ubuntu noble main universe restricted multiverse
+          deb [signed-by=/usr/share/keyrings/ubuntu-archive-keyring.gpg] https://archive.ubuntu.com/ubuntu noble-updates main universe restricted multiverse
+          deb [signed-by=/usr/share/keyrings/ubuntu-archive-keyring.gpg] https://security.ubuntu.com/ubuntu noble-security main universe restricted multiverse
+          EOF
+          sudo tee /etc/apt/apt.conf.d/80-saudade-ci-network >/dev/null <<'EOF'
+          Dir::Etc::sourcelist "/etc/apt/saudade-ci.sources.list";
+          Dir::Etc::sourceparts "-";
+          Acquire::Retries "3";
+          Acquire::http::Timeout "30";
+          Acquire::https::Timeout "30";
+          EOF
+          npx --no-install playwright install-deps chromium
+      - name: Install pinned CJK font
+        timeout-minutes: 4
+        run: bash scripts/ci/install-cjk-font.sh
+      - name: Install Chromium
+        working-directory: frontend
+        timeout-minutes: 4
+        env:
+          PLAYWRIGHT_DOWNLOAD_CONNECTION_TIMEOUT: 45000
+        run: npx --no-install playwright install chromium
       - name: Chat interaction and responsive image regression
         working-directory: frontend
         env:
