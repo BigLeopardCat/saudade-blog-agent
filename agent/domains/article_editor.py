@@ -69,7 +69,8 @@ def read_current_article(
 ) -> str:
     """Read the currently OPEN article editor's live unsaved draft and summary, admin only.
     Returns editor_id and revision for subsequent edits, content slice, total_chars and
-    next_offset (null at end). Use further offsets for long drafts. This is draft content,
+    next_offset (null at end), all in Unicode code points. Use further offsets for long
+    drafts. This is draft content,
     not the published article. proposal_id identifies an existing pending body review.
     No open editor means unavailable; never invent a draft.
     """

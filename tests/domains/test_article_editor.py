@@ -213,7 +213,7 @@ def test_real_checkpoint_round_trip_applies_summary_only_after_confirmation(
         "error": "草稿已变化" if browser_status == "failed" else None,
         "path": "/dashboard/notes/new", "document": {
             "editor_id": "editor-1", "revision": 1, "outcome": "updated",
-            "proposal_id": "proposal-1"}}}}
+            "proposal_id": "proposal-1", "description": "新概述"}}}}
     result = list(runtime().stream_events({"resume_task": "edit-task"}, resumed))[-1]
     assert result.reply and model.calls == 5
     assert_summary_result(result, browser_status)
