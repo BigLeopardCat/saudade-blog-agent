@@ -95,6 +95,7 @@ flowchart LR
 │   ├── domains/admin_pages.py                           # 当前生产代码模块
 │   ├── domains/admin_writes.py                          # 当前生产代码模块
 │   ├── domains/announcements/__init__.py                # 当前生产代码模块
+│   ├── domains/announcements/deletion.py                # 固定范围删除的准备与确认执行
 │   ├── domains/announcements/preparation.py             # 当前生产代码模块
 │   ├── domains/announcements/targets.py                 # 当前生产代码模块
 │   ├── domains/announcements/transactions.py            # 当前生产代码模块
@@ -137,6 +138,7 @@ flowchart LR
 │   ├── domains/notices/targets.py                       # 当前生产代码模块
 │   ├── domains/notices/transactions.py                  # 当前生产代码模块
 │   ├── domains/notifications/__init__.py                # 当前生产代码模块
+│   ├── domains/notifications/deletion.py                # 固定范围删除的准备与确认执行
 │   ├── domains/notifications/preparation.py             # 当前生产代码模块
 │   ├── domains/notifications/transactions.py            # 当前生产代码模块
 │   ├── domains/own_activity.py                          # 当前生产代码模块
@@ -151,6 +153,7 @@ flowchart LR
 │   ├── domains/quota_actions/transactions.py            # 当前生产代码模块
 │   ├── domains/read_state.py                            # 当前生产代码模块
 │   ├── domains/registry.py                              # 当前生产代码模块
+│   ├── domains/removals.py                              # 固定范围删除的准备与确认执行
 │   ├── domains/tags/__init__.py                         # 当前生产代码模块
 │   ├── domains/tags/preparation.py                      # 当前生产代码模块
 │   ├── domains/tags/targets.py                          # 当前生产代码模块

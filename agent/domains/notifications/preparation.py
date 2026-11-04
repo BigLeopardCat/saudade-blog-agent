@@ -3,6 +3,7 @@
 from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import tool
 
+from agent.domains.notifications.deletion import prepare_notification_deletions
 from agent.domains.notifications.transactions import _domain
 from agent.domains.read_state import Identifiers, Selection
 
@@ -23,4 +24,5 @@ def prepare_notification_read(scope: Selection, config: RunnableConfig,
 
 def tools(own_tools):
     return {"list_notifications": own_tools["list_notifications"],
-            prepare_notification_read.name: prepare_notification_read}
+            prepare_notification_read.name: prepare_notification_read,
+            prepare_notification_deletions.name: prepare_notification_deletions}

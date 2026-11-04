@@ -167,6 +167,10 @@
         0,
         0
       ],
+      "agent/domains/announcements/deletion.py": [
+        0,
+        0
+      ],
       "agent/domains/announcements/preparation.py": [
         2,
         0
@@ -359,6 +363,10 @@
         0,
         0
       ],
+      "agent/domains/notifications/deletion.py": [
+        0,
+        0
+      ],
       "agent/domains/notifications/preparation.py": [
         0,
         0
@@ -412,6 +420,10 @@
         0
       ],
       "agent/domains/registry.py": [
+        0,
+        0
+      ],
+      "agent/domains/removals.py": [
         0,
         0
       ],
