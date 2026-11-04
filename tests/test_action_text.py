@@ -19,6 +19,7 @@ sys.path.insert(0, str(ROOT / "tests"))
 
 
 import _parent_repo  # noqa: E402
+from _rust_src import fn_body  # noqa: E402
 
 from agent.action_text import receipt_action, tool_action_text  # noqa: E402
 from tools.base import _TOOL_REGISTRY  # noqa: E402
@@ -96,6 +97,78 @@ def _why_not_compared(row: dict) -> str:
     if not receipt_action(str(row.get("tool") or ""), row.get("args") or {}, _meta_of(row)):
         return "无臂工具（Python 不写 action，这份回执仍走 Rust 老表）"
     return ""
+
+
+def _check_host_receipt_contract():
+    print("\n④ 接线锁：Python 回执提供 action，Rust 只读顶层字段")
+    _rs = _parent_repo.read(
+        "src/routes/chat/execution_history.rs",
+        why="进程行/台账行的渲染**已经搬到 Python**（`agent/action_text.py`）：Rust 那半若"
+        "不读 `row[\"action\"]`，这个字段就是个摆设——两侧测试都绿，而线上一个字都没变")
+    if _rs is not None:
+        _fixtures = _parent_repo.read("src/routes/chat/tests.rs", why="实际回执排版断言")
+        if _fixtures is not None:
+            _rs += "\n" + _fixtures
+
+        _body = fn_body(_rs, "render_exec_row")
+        check("Rust 有 render_exec_row（渲染入口）", bool(_body))
+        check("Rust render_exec_row 读了回执顶层的 action", 'row["action"]' in _body)
+        check("  且没有把 action 忘了写成 `args[\"action\"]`（tools 的实参里没有这个键）",
+              'args["action"]' not in _body)
+        check("★ 活路径上**不再有按工具名的分支**（整张老表搬进 legacy_exec_row）",
+              '"device_oled_display" =>' not in _body and "legacy_exec_row(row)" in _body,
+              _body[:0])
+        _legacy = fn_body(_rs, "legacy_exec_row")
+        check("  老表**仍在**（回执缺 `action` 时才走它——那条路只留给回滚与两件无臂死工具；"
+          "已落库的行不走它，`execution_log.detail` 存的就是渲染后的字）",
+              '"create_tag" =>' in _legacy and '"device_oled_display" =>' in _legacy)
+
+        check("  排版三件仍留在 Rust 侧（方括号归一 / 实体摘要拼接 / 列宽截断）",
+              'replace(\'[\', "「")' in _body and 'row["digest"]' in _body
+              and ".take(120)" in _body and ".take(300)" in _body)
+    print("\n⑤ 两边真的比过：现从父仓测试源码取期望值，逐条与 Python 对账")
+    _INTENTIONAL = [
+        ("create_tag", "新建一级标签「」", "新建标签"),
+        ("read_messages", "标记站内信已读（3、4、5 等 4 条）",
+         "标记站内信已读（3、4、5 等 4 封）"),
+    ]
+    if _rs is None:
+        # CI requires the pinned host checkout; optional local absence is unassessed.
+        print("  ⏭ ⑤ 未评估：拿不到父仓源码 ⇒ 这一节**一次也没比过**（不是通过）。"
+          "夜间门禁设 SAUDADE_REQUIRE_PARENT=1，那一侧会把它变成 ❌ 并退出 1。")
+    else:
+        _pairs = _rust_pairs(_rs)
+        check(f"从父仓测试源码现取成对期望（{len(_pairs)} 对，下限 26）",
+              len(_pairs) >= 26, str(len(_pairs)))
+
+        _same: list[str] = []
+        _skipped: list[str] = []
+        _diffs: list[tuple[str, str, str]] = []
+        for _row, _want in _pairs:
+            _why = _why_not_compared(_row)
+            if _why:
+                _skipped.append(f"{_row.get('tool')}【{_why}】")
+                continue
+            _got = receipt_action(str(_row.get("tool") or ""), _row.get("args") or {},
+                                  _meta_of(_row))
+            _got = _got.replace("[", "「").replace("]", "」")[:120]  # Rust 只排版的两件
+            if _got == _want:
+                _same.append(_want)
+            else:
+                _diffs.append((str(_row.get("tool")), _want, _got))
+
+        check(f"★ 逐条对上：{len(_same)} 条 Python 输出经 Rust 排版后与父仓期望**逐字相同**",
+              len(_same) >= 20, str(len(_same)))
+        check("★ 剩下的差异**恰好**是有意偏离（白名单外差一个字都红）",
+              sorted(_diffs) == sorted(_INTENTIONAL), str(_diffs))
+        check("  且白名单没有陈年条目（父仓哪天把某条改了，这条会红 ⇒ 删掉那行白名单）",
+              all(d in _diffs for d in _INTENTIONAL))
+        check("★ 每一对都有归宿（逐字相同 / 有意偏离 / 三类结构性跳过），没有悄悄漏掉的",
+              len(_same) + len(_diffs) + len(_skipped) == len(_pairs),
+              f"same={len(_same)} diff={len(_diffs)} skip={len(_skipped)} all={len(_pairs)}")
+        check("  跳过的每一对都写明了理由（无臂 / 合成输入 / 排版附加件）",
+              all(_why_not_compared(_row) for _row, _ in _pairs
+                  if f"{_row.get('tool')}【{_why_not_compared(_row)}】" in _skipped))
 
 
 def test_action_text():
@@ -316,85 +389,7 @@ def test_action_text():
     check("退役的知识库占位工具没有留在注册表中",
           "search_knowledge_base" not in _NAMES)
 
-    print("\n④ 接线锁：Python 回执提供 action，Rust 只读顶层字段")
-    _rs = _parent_repo.read(
-        "src/routes/chat/execution_history.rs",
-        why="进程行/台账行的渲染**已经搬到 Python**（`agent/action_text.py`）：Rust 那半若"
-        "不读 `row[\"action\"]`，这个字段就是个摆设——两侧测试都绿，而线上一个字都没变")
-    if _rs is not None:
-        _fixtures = _parent_repo.read("src/routes/chat/tests.rs", why="实际回执排版断言")
-        if _fixtures is not None:
-            _rs += "\n" + _fixtures
-
-        def _fn(src: str, name: str) -> str:
-            """取顶格函数的函数体（到下一个顶格 `}` 为止）。取不到返回空串，
-        让断言报 ❌ 而不是抛栈——**"改了名"和"删了"都该是红**，不该是崩。"""
-            i = src.find(f"fn {name}(")
-            if i < 0:
-                return ""
-            body = src[i:]
-            j = body.find("\n}\n")
-            return body[:j] if j > 0 else body
-
-        _body = _fn(_rs, "render_exec_row")
-        check("Rust 有 render_exec_row（渲染入口）", bool(_body))
-        check("Rust render_exec_row 读了回执顶层的 action", 'row["action"]' in _body)
-        check("  且没有把 action 忘了写成 `args[\"action\"]`（tools 的实参里没有这个键）",
-              'args["action"]' not in _body)
-        check("★ 活路径上**不再有按工具名的分支**（整张老表搬进 legacy_exec_row）",
-              '"device_oled_display" =>' not in _body and "legacy_exec_row(row)" in _body,
-              _body[:0])
-        _legacy = _fn(_rs, "legacy_exec_row")
-        check("  老表**仍在**（回执缺 `action` 时才走它——那条路只留给回滚与两件无臂死工具；"
-          "已落库的行不走它，`execution_log.detail` 存的就是渲染后的字）",
-              '"create_tag" =>' in _legacy and '"device_oled_display" =>' in _legacy)
-
-        check("  排版三件仍留在 Rust 侧（方括号归一 / 实体摘要拼接 / 列宽截断）",
-              'replace(\'[\', "「")' in _body and 'row["digest"]' in _body
-              and ".take(120)" in _body and ".take(300)" in _body)
-    print("\n⑤ 两边真的比过：现从父仓测试源码取期望值，逐条与 Python 对账")
-    _INTENTIONAL = [
-        ("create_tag", "新建一级标签「」", "新建标签"),
-        ("read_messages", "标记站内信已读（3、4、5 等 4 条）",
-         "标记站内信已读（3、4、5 等 4 封）"),
-    ]
-    if _rs is None:
-        # CI requires the pinned host checkout; optional local absence is unassessed.
-        print("  ⏭ ⑤ 未评估：拿不到父仓源码 ⇒ 这一节**一次也没比过**（不是通过）。"
-          "夜间门禁设 SAUDADE_REQUIRE_PARENT=1，那一侧会把它变成 ❌ 并退出 1。")
-    else:
-        _pairs = _rust_pairs(_rs)
-        check(f"从父仓测试源码现取成对期望（{len(_pairs)} 对，下限 26）",
-              len(_pairs) >= 26, str(len(_pairs)))
-
-        _same: list[str] = []
-        _skipped: list[str] = []
-        _diffs: list[tuple[str, str, str]] = []
-        for _row, _want in _pairs:
-            _why = _why_not_compared(_row)
-            if _why:
-                _skipped.append(f"{_row.get('tool')}【{_why}】")
-                continue
-            _got = receipt_action(str(_row.get("tool") or ""), _row.get("args") or {},
-                                  _meta_of(_row))
-            _got = _got.replace("[", "「").replace("]", "」")[:120]  # Rust 只排版的两件
-            if _got == _want:
-                _same.append(_want)
-            else:
-                _diffs.append((str(_row.get("tool")), _want, _got))
-
-        check(f"★ 逐条对上：{len(_same)} 条 Python 输出经 Rust 排版后与父仓期望**逐字相同**",
-              len(_same) >= 20, str(len(_same)))
-        check("★ 剩下的差异**恰好**是有意偏离（白名单外差一个字都红）",
-              sorted(_diffs) == sorted(_INTENTIONAL), str(_diffs))
-        check("  且白名单没有陈年条目（父仓哪天把某条改了，这条会红 ⇒ 删掉那行白名单）",
-              all(d in _diffs for d in _INTENTIONAL))
-        check("★ 每一对都有归宿（逐字相同 / 有意偏离 / 三类结构性跳过），没有悄悄漏掉的",
-              len(_same) + len(_diffs) + len(_skipped) == len(_pairs),
-              f"same={len(_same)} diff={len(_diffs)} skip={len(_skipped)} all={len(_pairs)}")
-        check("  跳过的每一对都写明了理由（无臂 / 合成输入 / 排版附加件）",
-              all(_why_not_compared(_row) for _row, _ in _pairs
-                  if f"{_row.get('tool')}【{_why_not_compared(_row)}】" in _skipped))
+    _check_host_receipt_contract()
     print("\n⑥ 新臂逐一钉住（冻结之后加的工具，动作词只住在 Python 这侧）")
     check("① 名册·无参：两档同字", _pre("list_admin_board") == "查看后台留言名册"
           == _full("list_admin_board"), _full("list_admin_board"))

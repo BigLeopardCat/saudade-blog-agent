@@ -1,7 +1,7 @@
 # frontend/ —— 看板娘与对话面板
 
 博客页面上那只 Live2D 看板娘「泠月喵」，以及挂在它旁边的网页对话面板（会话抽屉、流式
-回复、命令执行、停止生成）。它是纯静态资源：没有构建步骤、没有 npm 依赖，浏览器直接按
+回复、命令执行、停止生成）。它是纯静态资源：没有生产构建步骤或生产 npm 依赖，浏览器直接按
 `<script>` + ES module 加载。构建与部署这一半发生在博客仓，这里只放源码。
 
 ## 许可
@@ -87,3 +87,16 @@ frontend/public/live2d_model/
 ## 对话体验与验证
 
 布局、键盘交互、状态反馈与宿主接入步骤见 [对话 UI](CHAT-UI.md)。
+
+## 浏览器回归
+
+使用 `.node-version` 中的 Node 版本，在本目录执行：
+
+```sh
+npm ci
+npx playwright install --with-deps chromium
+npm test
+npm run test:browser
+```
+
+Playwright 只用于开发验证，版本固定在锁文件。公开 CI 自动验证聊天、确认、图片布局、暂停接续及执行中补充要求；全部接口使用隔离本地夹具，不调用模型或线上业务。截图只含合成数据。
