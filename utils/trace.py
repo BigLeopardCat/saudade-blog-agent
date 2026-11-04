@@ -172,7 +172,8 @@ class _TraceRecorder:
             os.makedirs(out_dir, mode=0o700, exist_ok=True)
             path = os.path.join(out_dir, fname)
             tmp = path + ".tmp"  # 原子替换：reader 不会读到半截文件
-            with open(tmp, "w", encoding="utf-8") as f:
+            with open(tmp, "w", encoding="utf-8",
+                      opener=lambda target, flags: os.open(target, flags, 0o600)) as f:
                 json.dump(doc, f, ensure_ascii=False, indent=1)
             os.replace(tmp, path)
             return path
