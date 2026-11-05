@@ -598,7 +598,7 @@
               // 模型幻觉输出可能省略尾部斜杠（AUTO_NAVIGATE:/device-console）——device-console 的斜杠可选。
               // 20260828b：命令与正文同行时也可能保留尾斜杠（AUTO_NAVIGATE:…/guestbook/ 喵呜～…），
               // 全部站内页面路由统一容忍尾斜杠（曾把 /guestbook/ 误拦成"非博客页面"——实测案例）
-              const BLOG_ROUTES = [/^\/$/, /^\/about\/?$/, /^\/friends\/?$/, /^\/guestbook\/?$/, /^\/talk\/?$/, /^\/times\/?$/, /^\/login\/?$/, /^\/dashboard/, /^\/category\//, /^\/article\//, /^\/device-console\/?/];
+              const BLOG_ROUTES = [/^\/$/, /^\/about\/?$/, /^\/guestbook\/?$/, /^\/talk\/?$/, /^\/times\/?$/, /^\/login\/?$/, /^\/dashboard/, /^\/category\//, /^\/article\//, /^\/device-console\/?/];
               const navPath = (() => { try { return new URL(navUrl).pathname; } catch(e3) { return null; } })();
               const navOk = !!navPath && BLOG_ROUTES.some(r => r.test(navPath));
               // 直接跳转额外校验同源：白名单只查 pathname，幻觉的
