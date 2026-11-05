@@ -127,7 +127,9 @@ def test_model_response_timing_does_not_record_headers_or_error_payload(monkeypa
     assert "PRIVATE" not in json.dumps(events)
 
 
-def test_availability_stop_uses_captured_sdk_facts_without_resampling(tmp_path, monkeypatch):
+@pytest.mark.parametrize("recovered_index", [None, 2])
+def test_availability_stop_uses_captured_sdk_facts_without_resampling(
+        tmp_path, monkeypatch, recovered_index):
     path = tmp_path / "failed-trace.json"
     path.write_text(json.dumps({"events": [{"node": "native", "event": "llm_error",
         "http_status": 429, "failure_source": "provider", "retryable": True,
@@ -136,6 +138,14 @@ def test_availability_stop_uses_captured_sdk_facts_without_resampling(tmp_path, 
     assert online_baseline.provider_unavailable({"result": result})
     assert not online_baseline.provider_unavailable({"result": {"rounds": [{
         "text": "upstream 429 overloaded retryable true", "error": "429"}]}})
+    recovered_path = tmp_path / "recovered-trace.json"
+    recovered_path.write_text(json.dumps({"events": [
+        {"event": "llm_error", "failure_source": "provider", "retryable": True},
+        {"event": "llm_done", "input": 20, "output": 5, "cache_read": 0}]}))
+    recovered = {"rounds": [{"trace": str(recovered_path), "error": ""}]}
+    assert not online_baseline.provider_unavailable({"result": recovered})
+    assert not online_baseline.provider_unavailable({"result": {"rounds": [
+        {"trace": str(recovered_path), "error": "later application failure"}]}})
     calls = []
 
     class Fake:
@@ -153,18 +163,22 @@ def test_availability_stop_uses_captured_sdk_facts_without_resampling(tmp_path, 
 
     def drive(case, **kwargs):
         calls.append(case["id"])
-        return result
+        return recovered if case["id"] == str(recovered_index) else result
 
     monkeypatch.setattr(online_baseline.golden, "run_case", drive)
-    monkeypatch.setattr(online_baseline.golden, "check_case", lambda *args: ["model unavailable"])
-    cases = [{"id": str(i), "identity": "user", "tags": []} for i in range(5)]
+    monkeypatch.setattr(online_baseline.golden, "check_case", lambda case, row:
+                        [] if row is recovered else ["model unavailable"])
+    cases = [{"id": str(i), "identity": "user", "tags": []} for i in range(8)]
     transport = Fake()
     try:
         report = online_baseline.run(cases, transport, {"user": 7}, tmp_path / "report",
                                      phase="full", suite_hash="synthetic")
     finally:
         transport.client.close()
-    assert calls == ["0", "1", "2"] and report["counts"] == {"failed": 3}
+    expected = 3 if recovered_index is None else 6
+    assert calls == [str(i) for i in range(expected)]
+    assert report["counts"] == ({"failed": 3} if recovered_index is None else
+                                {"failed": 5, "passed": 1})
     assert not report["full_run"] and "availability" in report["stopped_reason"]
     assert report["automatic_retries"] == 0
     metrics = request_metrics.summary(json.loads(path.read_text()))
