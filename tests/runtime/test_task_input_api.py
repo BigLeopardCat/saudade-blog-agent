@@ -61,3 +61,48 @@ def test_signed_control_is_available_while_conversation_is_locked(monkeypatch):
             assert status.json()["inputs"] == [response.json()["input"]]
 
     asyncio.run(scenario())
+
+
+def test_task_manager_lists_and_cancels_only_the_signed_owner(monkeypatch):
+    from langchain_core.messages import HumanMessage
+
+    monkeypatch.setattr(settings, 'jwt_secret', 'task-manager-api-fixture-with-32-characters')
+    monkeypatch.setattr(settings, 'agent_require_assertion', True)
+    application = create_app()
+    selected = AgentRuntime(CheckpointConversationStore(InMemorySaver()),
+                            application=BlogApplication())
+    application.state.runtime = selected
+
+    async def run(function, *args):
+        return await asyncio.to_thread(function, *args)
+
+    application.state.workers = SimpleNamespace(closing=False, run=run)
+    principal = Principal(7, 'user', SOURCE_ASSERTION)
+    task = {'id': 'paused', 'scope': binding(principal, 42),
+            'input': [HumanMessage(content='待继续的任务')]}
+    selected.inputs.open(task)
+    selected.inputs.finish(task, [], paused=True)
+    cfg = {'configurable': {'thread_id': 'conv_42'}}
+    selected.update_state(cfg, {'run': task})
+
+    def token(uid):
+        return {'X-Agent-Assertion': jwt.encode({'sub': uid, 'role': 'user', 'aud': 'agent',
+                    'exp': int(time.time()) + 60}, settings.jwt_secret, algorithm='HS256')}
+
+    async def scenario():
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=application),
+                                     base_url='http://fixture') as client:
+            response = await client.get('/tasks/paused?user_id=999', headers=token(7))
+            assert response.headers['Cache-Control'] == 'no-store'
+            assert [r['task_id'] for r in response.json()['items']] == ['paused']
+            foreign = await client.get('/tasks/paused?user_id=7', headers=token(8))
+            assert foreign.json()['items'] == []
+            assert (await client.get('/tasks/paused?user_id=7')).status_code == 401
+            payload = {'user_id': 999, 'conversation_id': 42, 'task_id': 'paused'}
+            rejected = await client.post('/tasks/cancel', json=payload, headers=token(8))
+            assert rejected.status_code == 409
+            response = await client.post('/tasks/cancel', json=payload, headers=token(7))
+            assert response.status_code == 200 and response.json()['cancelled']
+            assert selected.store.load(cfg).run is None
+
+    asyncio.run(scenario())

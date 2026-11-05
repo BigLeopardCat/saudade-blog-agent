@@ -14,6 +14,8 @@ def setup(conn):
     )""")
     conn.execute("CREATE INDEX IF NOT EXISTS agent_task_inputs_expiry "
                  "ON agent_task_inputs(expires_at)")
+    conn.execute("CREATE INDEX IF NOT EXISTS agent_task_inputs_owner_phase "
+                 "ON agent_task_inputs ((state #>> '{scope,uid}'), (state->>'phase'))")
 
 
 class PostgresInputs:
@@ -29,12 +31,25 @@ class PostgresInputs:
             conn.execute("DELETE FROM agent_task_inputs "
                          "WHERE state #>> '{scope,conversation_id}' = %s", (str(conversation_id),))
 
+    def paused(self, uid, role, limit):
+        with self.pool.connection() as conn:
+            rows = conn.execute("SELECT task_id,state FROM agent_task_inputs "
+                "WHERE state #>> '{scope,uid}'=%s AND state #>> '{scope,role}'=%s "
+                "AND state->>'phase'='paused' AND state #> '{scope,conversation_id}' IS NOT NULL "
+                "AND expires_at>now() ORDER BY expires_at DESC,task_id LIMIT %s",
+                (str(uid), role, limit)).fetchall()
+            return [(row["task_id"], row["state"]) for row in rows]
+
     @contextmanager
     def edit(self, task_id, initial=None):
         from psycopg.types.json import Jsonb
 
         with self.pool.connection() as conn, conn.transaction():
             if initial is not None:
+                if initial["scope"].get("conversation_id"):
+                    conn.execute("UPDATE agent_task_inputs SET state=jsonb_set(state,'{phase}',%s) "
+                        "WHERE state->'scope'=%s AND state->>'phase'='paused' AND task_id<>%s",
+                        (Jsonb("superseded"), Jsonb(initial["scope"]), task_id))
                 conn.execute("DELETE FROM agent_task_inputs WHERE expires_at < now()")
                 conn.execute("INSERT INTO agent_task_inputs VALUES (%s,%s,to_timestamp(%s)) "
                              "ON CONFLICT DO NOTHING",
@@ -63,12 +78,27 @@ class MemoryInputs:
             self.rows = {key: value for key, value in self.rows.items()
                          if str(value["scope"].get("conversation_id")) != str(conversation_id)}
 
+    def paused(self, uid, role, limit):
+        with self.lock:
+            rows = [(key, copy.deepcopy(state)) for key, state in self.rows.items()
+                    if state["scope"].get("uid") == uid and state["scope"].get("role") == role
+                    and state["scope"].get("conversation_id")
+                    and state["phase"] == "paused" and state["expires"] > time.time()]
+            return sorted(rows, key=lambda row: (-row[1]["expires"], row[0]))[:limit]
+
     @contextmanager
     def edit(self, task_id, initial=None):
         with self.lock:
             self.rows = {key: value for key, value in self.rows.items()
                          if value["expires"] > time.time()}
-            state = copy.deepcopy(self.rows.get(task_id, initial))
+            staged = copy.deepcopy(self.rows)
+            if initial is not None and initial["scope"].get("conversation_id"):
+                for key, row in staged.items():
+                    if (key != task_id and row["scope"] == initial["scope"]
+                            and row["phase"] == "paused"):
+                        row["phase"] = "superseded"
+            state = copy.deepcopy(staged.get(task_id, initial))
             yield state
             if state is not None:
-                self.rows[task_id] = state
+                staged[task_id] = state
+                self.rows = staged

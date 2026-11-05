@@ -1,7 +1,9 @@
 """Administrator-owned schedule management, using DBOS as the state authority."""
 
 from datetime import datetime
+from zoneinfo import ZoneInfo
 
+from croniter import croniter
 from dbos import WorkflowSerializationFormat
 
 from agent import authz
@@ -211,7 +213,7 @@ class ScheduleService:
             )
             return {"changed": True, "schedule": view}
 
-    def list(self, principal, limit=10, offset=0):
+    def list(self, principal, limit=10, offset=0, active_only=False):
         owner = self.authorize(principal)
         prefix = storage_name(owner, "")
         recurring = [recurring_view(row) for row in self.backend.recurring_schedules(owner)]
@@ -222,6 +224,8 @@ class ScheduleService:
                 application_name=APP,
                 user=str(owner),
                 name=ONCE,
+                **({"status": ["ENQUEUED", "DELAYED", "PENDING", "CANCELLED"],
+                    "attributes": {"cancelled": False}} if active_only else {}),
                 limit=limit + offset + 1,
                 sort_desc=True,
                 load_input=False,
@@ -229,13 +233,22 @@ class ScheduleService:
             )
         ]
         items = sorted(recurring, key=lambda item: item["id"]) + once
+        if active_only:
+            items = [row for row in items if row["status"] in {"active", "paused", "scheduled"}]
         summaries = [
             {
                 "id": row["id"],
                 "title": row["definition"]["title"],
+                **({"version": row["version"],
+                    "instruction": row["definition"]["instruction"],
+                    "condition": row["definition"].get("condition")} if active_only else {}),
                 "action": row["definition"]["action"],
                 "status": row["status"],
                 "run_at": row.get("run_at"),
+                "next_run_at": (croniter(row["definition"]["cron"],
+                    self.now().astimezone(ZoneInfo(row["definition"]["timezone"])))
+                    .get_next(datetime).isoformat() if row["definition"].get("cron")
+                    and row["status"] in ("active", "scheduled") else row.get("run_at")),
                 "cron": row["definition"].get("cron"),
                 "timezone": row["definition"]["timezone"],
             }

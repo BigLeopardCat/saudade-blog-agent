@@ -1,6 +1,6 @@
 """Task controls authenticate independently and never wait for the turn lock."""
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
@@ -69,4 +69,30 @@ async def confirmation_status(req: ConfirmationRequest, request: Request):
     principal = resolve_principal(request, req.user_id)
     result = await require_workers(request).run(
         current_card, require_runtime(request), principal, req.conversation_id, req.task_id)
+    return JSONResponse(result, headers={"Cache-Control": "no-store"})
+
+
+@router.get("/tasks/paused")
+async def paused(request: Request, user_id: int = Query(gt=0), limit: int = Query(20, ge=1, le=20)):
+    from agent.runtime.task_management import list_paused
+
+    principal = resolve_principal(request, user_id)
+    try:
+        result = await require_workers(request).run(
+            list_paused, require_runtime(request), principal, limit)
+    except PermissionError as exc:
+        raise HTTPException(403, "verified identity required") from exc
+    return JSONResponse(result, headers={"Cache-Control": "no-store"})
+
+
+@router.post("/tasks/cancel")
+async def cancel_paused_task(req: StatusRequest, request: Request):
+    from agent.runtime.task_management import cancel_paused
+
+    principal = resolve_principal(request, req.user_id)
+    try:
+        result = await require_workers(request).run(
+            cancel_paused, require_runtime(request), principal, req.conversation_id, req.task_id)
+    except (InputConflict, TimeoutError, ValueError) as exc:
+        raise HTTPException(409, str(exc)) from exc
     return JSONResponse(result, headers={"Cache-Control": "no-store"})
