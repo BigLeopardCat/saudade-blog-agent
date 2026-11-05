@@ -76,8 +76,7 @@ def backend():
             "childCount": 0,
         }
 
-    def handle(request):
-        state["requests"].append(request)
+    def read(request):
         path = request.url.path
         if request.method == "GET" and path == "/api/protected/talk-actions":
             data = {"items": list(state["posts"].values()), "total": len(state["posts"]), "page": 1}
@@ -125,36 +124,69 @@ def backend():
                     "total": len(rows),
                 },
             )
-        payload = json.loads(request.content) if request.content else {}
-        domain = (
-            "talks"
-            if path.startswith("/api/protected/talk-actions")
-            else "folders"
-            if path.startswith("/api/protect/gallery/folder-actions")
-            else "articles"
-            if path.startswith("/api/protected/article-deletions")
-            else None
-        )
+
+    def article_effect(payload, prepare):
+        ids = payload["articleIds"] if prepare else [item["id"] for item in payload["items"]]
+        rows = [deepcopy(state["articles"][identifier]) for identifier in sorted(ids)]
+        if prepare:
+            return rows
+        if payload["items"] != [{"id": row["id"], "version": row["version"]} for row in rows]:
+            raise ValueError("stale article batch")
+        for row in rows:
+            del state["articles"][row["id"]]
+        return {"deleted": True, "items": rows}
+
+    def post_effect(intent, plan, version):
+        changed = plan["before"] != plan["after"]
+        if plan["after"] is None:
+            del state["posts"][intent["id"]]
+        else:
+            plan["after"]["id"] = plan["after"]["id"] or 12
+            state["posts"][plan["after"]["id"]] = deepcopy(plan["after"])
+        return {"changed": changed, "beforeVersion": version, "state": plan}
+
+    def folder_effect(intent, version):
+        folder = None
+        if intent["action"] == "create":
+            folder = {
+                "id": 23,
+                "name": intent["name"],
+                "parentId": intent["parentId"],
+                "imageCount": 0,
+            }
+            state["folders"][23] = deepcopy(folder)
+        else:
+            del state["folders"][intent["id"]]
+        return {"changed": True, "beforeVersion": version, "folder": folder}
+
+    def corrupt(data, domain):
+        if domain == "talks":
+            data["state"]["after"]["authorId"] = 99
+        elif domain == "folders":
+            data["folder"]["parentId"] = 999
+        else:
+            data["items"] = data["items"][:1]
+
+    paths = {
+        "/api/protected/talk-actions": "talks",
+        "/api/protect/gallery/folder-actions": "folders",
+        "/api/protected/article-deletions": "articles",
+    }
+
+    def handle(request):
+        state["requests"].append(request)
+        if request.method == "GET" and (response := read(request)) is not None:
+            return response
+        path = request.url.path
+        prepare = path.endswith("/prepare")
+        domain = paths.get(path.removesuffix("/prepare"))
         if domain is None:
             state.setdefault("unsupported_reads", []).append(path)
             return httpx.Response(404)
-        prepare = path.endswith("/prepare")
+        payload = json.loads(request.content) if request.content else {}
         try:
             if domain == "articles":
-                ids = (
-                    payload["articleIds"] if prepare else [item["id"] for item in payload["items"]]
-                )
-                rows = [deepcopy(state["articles"][identifier]) for identifier in sorted(ids)]
-                if prepare:
-                    data = rows
-                else:
-                    if payload["items"] != [
-                        {"id": row["id"], "version": row["version"]} for row in rows
-                    ]:
-                        raise ValueError("stale article batch")
-                    for row in rows:
-                        del state["articles"][row["id"]]
-                    data = {"deleted": True, "items": rows}
+                data = article_effect(payload, prepare)
             else:
                 intent = payload if prepare else payload["intent"]
                 plan = post_plan(intent) if domain == "talks" else folder_plan(intent)
@@ -163,35 +195,11 @@ def backend():
                 else:
                     if payload["version"] != plan["version"]:
                         raise ValueError("stale target")
-                    if domain == "talks":
-                        changed = plan["before"] != plan["after"]
-                        if plan["after"] is None:
-                            del state["posts"][intent["id"]]
-                        else:
-                            plan["after"]["id"] = plan["after"]["id"] or 12
-                            state["posts"][plan["after"]["id"]] = deepcopy(plan["after"])
-                        data = {
-                            "changed": changed,
-                            "beforeVersion": payload["version"],
-                            "state": plan,
-                        }
-                    else:
-                        folder = None
-                        if intent["action"] == "create":
-                            folder = {
-                                "id": 23,
-                                "name": intent["name"],
-                                "parentId": intent["parentId"],
-                                "imageCount": 0,
-                            }
-                            state["folders"][23] = deepcopy(folder)
-                        else:
-                            del state["folders"][intent["id"]]
-                        data = {
-                            "changed": True,
-                            "beforeVersion": payload["version"],
-                            "folder": folder,
-                        }
+                    data = (
+                        post_effect(intent, plan, payload["version"])
+                        if domain == "talks"
+                        else folder_effect(intent, payload["version"])
+                    )
         except (ValueError, KeyError):
             return httpx.Response(200, json={"code": 409, "message": "target changed", "data": {}})
         if not prepare:
@@ -199,12 +207,7 @@ def backend():
             if state.get("lost"):
                 raise httpx.ReadTimeout("effect committed, reply lost")
             if state.get("tamper"):
-                if domain == "talks":
-                    data["state"]["after"]["authorId"] = 99
-                elif domain == "folders":
-                    data["folder"]["parentId"] = 999
-                else:
-                    data["items"] = data["items"][:1]
+                corrupt(data, domain)
         return httpx.Response(200, json={"code": 200, "data": data})
 
     with (
