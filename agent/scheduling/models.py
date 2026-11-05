@@ -27,12 +27,18 @@ def utc_now():
 
 
 def parse_time(value: str, zone: str):
+    try:
+        selected_zone = ZoneInfo(zone)
+    except (ZoneInfoNotFoundError, ValueError) as exc:
+        raise ValueError("use an IANA timezone") from exc
+    if len(value) in (5, 8) and value[2] == ":":
+        value = utc_now().astimezone(selected_zone).date().isoformat() + "T" + value
     parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
     if parsed.tzinfo is None:
-        local = parsed.replace(tzinfo=ZoneInfo(zone))
+        local = parsed.replace(tzinfo=selected_zone)
         if (
             local.utcoffset() != local.replace(fold=1).utcoffset()
-            or local.astimezone(timezone.utc).astimezone(ZoneInfo(zone)).replace(tzinfo=None)
+            or local.astimezone(timezone.utc).astimezone(selected_zone).replace(tzinfo=None)
             != parsed
         ):
             raise ValueError("ambiguous or nonexistent local time; provide an explicit UTC offset")
@@ -47,25 +53,38 @@ class ArticlePublic(BaseModel):
     check_interval_seconds: Annotated[StrictInt, Field(ge=30, le=3600)] = 60
 
 
-class Definition(BaseModel):
+class Trigger(BaseModel):
+    """One trigger. Use run_at for an absolute clock time (ISO or local HH:MM),
+    delay_seconds only for a user-requested relative delay starting after approval.
+    """
+
     model_config = ConfigDict(extra="forbid")
 
-    title: Annotated[StrictStr, Field(min_length=1, max_length=80)]
-    action: Literal["reminder", "read_only_agent", "publish_announcement"]
-    instruction: Annotated[StrictStr, Field(min_length=1, max_length=2000)]
     timezone: StrictStr = "Asia/Shanghai"
-    run_at: AwareDatetime | None = None
-    delay_seconds: Annotated[StrictInt, Field(ge=5, le=31_536_000)] | None = None
+    run_at: AwareDatetime | None = Field(
+        default=None,
+        description="Explicit date/clock time, ISO date-time or local HH:MM. "
+        "Never calculate this for a "
+        "relative request such as in five minutes; use delay_seconds for relative requests.",
+    )
+    delay_seconds: Annotated[StrictInt, Field(ge=5, le=31_536_000)] | None = Field(
+        default=None,
+        description="Relative duration requested by the user, starting after human "
+        "approval: in five minutes means 300. Do not turn it into an estimated run_at clock time.",
+    )
     cron: Annotated[StrictStr, Field(min_length=9, max_length=100)] | None = None
     expires_at: AwareDatetime | None = None
     condition: ArticlePublic | None = None
     grace_seconds: Annotated[StrictInt, Field(ge=0, le=86400)] = 3600
 
-    @field_validator("title", "instruction")
+    @model_validator(mode="before")
     @classmethod
-    def nonempty(cls, value):
-        if not value.strip() or "\x00" in value:
-            raise ValueError("title and instruction require nonempty text without NUL")
+    def normalize_times(cls, value):
+        if isinstance(value, dict):
+            value = dict(value)
+            for field in ("run_at", "expires_at"):
+                if isinstance(value.get(field), str):
+                    value[field] = parse_time(value[field], value.get("timezone", "Asia/Shanghai"))
         return value
 
     @field_validator("timezone")
@@ -81,11 +100,6 @@ class Definition(BaseModel):
     def validate_trigger(self):
         if sum(value is not None for value in (self.run_at, self.delay_seconds, self.cron)) != 1:
             raise ValueError("provide exactly one of run_at, delay_seconds or cron")
-        if self.action == "publish_announcement":
-            from agent.domains.announcements.targets import intent
-
-            intent({"action": "create",
-                    "fields": {"title": self.title, "content": self.instruction}})
         if self.cron:
             if len(self.cron.split()) != 5 or not croniter.is_valid(self.cron):
                 raise ValueError("cron must have five fields, with minute precision")
@@ -112,20 +126,53 @@ class Definition(BaseModel):
             else None
         )
 
-    def validate_creation(self, now):
+    def validate_creation(self, now, *, allow_missed=False):
         if self.cron:
             croniter(
                 self.cron, now.astimezone(ZoneInfo(self.timezone)), max_years_between_matches=8
             ).get_next(datetime)
         start = self.resolved_time(now)
         if start and (
-            start < now - timedelta(seconds=self.grace_seconds) or start > now + timedelta(days=366)
+            start < now - timedelta(seconds=self.grace_seconds if allow_missed else 0)
+            or start > now + timedelta(days=366)
         ):
             raise ValueError("execution time is outside the accepted scheduling window")
         if self.expires_at and self.expires_at <= (start or now):
             raise ValueError("deadline must follow the execution time")
         if self.condition and self.expires_at - start > timedelta(days=7):
             raise ValueError("condition waiting is limited to seven days")
+
+
+class Definition(Trigger):
+    title: Annotated[StrictStr, Field(min_length=1, max_length=80)]
+    action: Literal["reminder", "read_only_agent", "publish_announcement", "admin_write"]
+    instruction: Annotated[StrictStr, Field(min_length=1, max_length=2000)]
+    write: dict | None = None
+
+    @field_validator("title", "instruction")
+    @classmethod
+    def nonempty(cls, value):
+        if not value.strip() or "\x00" in value:
+            raise ValueError("title and instruction require nonempty text without NUL")
+        return value
+
+    @model_validator(mode="after")
+    def validate_action(self):
+        if self.action == "admin_write":
+            from agent.scheduling.effects import validate
+
+            self.write = validate(self.write)
+            if self.cron:
+                raise ValueError("version-bound business changes require a one-time schedule")
+        elif self.write is not None:
+            raise ValueError("only admin_write may contain a business change")
+        if self.action == "publish_announcement":
+            from agent.domains.announcements.targets import intent
+
+            intent(
+                {"action": "create", "fields": {"title": self.title, "content": self.instruction}}
+            )
+        return self
 
 
 class CreateArguments(BaseModel):

@@ -99,18 +99,64 @@ class BlogHost:
             json.dumps([title, content], ensure_ascii=False, separators=(",", ":")).encode()
         ).hexdigest()
         if (
-            not isinstance(data, dict) or data.get("payloadHash") != digest
+            not isinstance(data, dict)
+            or data.get("payloadHash") != digest
             or type(data.get("replayed")) is not bool
-            or type(data.get("notificationCount")) is not int or data["notificationCount"] < 0
+            or type(data.get("notificationCount")) is not int
+            or data["notificationCount"] < 0
         ):
             raise ValueError("invalid scheduled announcement receipt")
         identifier = data.get("announcementId")
         if identifier is None and data["replayed"]:
-            return {"status": "completed", "text": "定时公告曾发布，现已删除，不会重新发布。",
-                    "publication": data}
+            return {
+                "status": "completed",
+                "text": "定时公告曾发布，现已删除，不会重新发布。",
+                "publication": data,
+            }
         if type(identifier) is not int or identifier <= 0:
             raise ValueError("invalid scheduled announcement identity")
-        return {"status": "completed",
-                "text": (f"已发布公告 #{identifier}「{title}」，"
-                         f"创建 {data['notificationCount']} 条个人通知。"),
-                "publication": data}
+        return {
+            "status": "completed",
+            "text": (
+                f"已发布公告 #{identifier}「{title}」，"
+                f"创建 {data['notificationCount']} 条个人通知。"
+            ),
+            "publication": data,
+        }
+
+    def change(self, owner, run_id, write, title):
+        """Execute an approved version-bound transaction, with an atomic backend receipt."""
+        try:
+            self.actor(owner)
+        except PermissionError:
+            return {"status": "blocked", "reason": "owner_not_authorized"}
+        response = self.client.post(
+            self.base + "/api/protected/automation-changes",
+            headers=self.headers(owner),
+            json={"runId": run_id, "write": write},
+        )
+        if response.status_code in (401, 403):
+            return {"status": "blocked", "reason": "owner_not_authorized"}
+        if response.status_code == 409:
+            return {
+                "status": "incomplete",
+                "text": "定时变更未执行或未能确认，请核对目标状态后重新审批。",
+            }
+        response.raise_for_status()
+        body = response.json()
+        data = body.get("data") if isinstance(body, dict) and body.get("code") == 200 else None
+        digest = hashlib.sha256(
+            json.dumps(write, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()
+        ).hexdigest()
+        if (
+            not isinstance(data, dict)
+            or data.get("payloadHash") != digest
+            or type(data.get("replayed")) is not bool
+            or not isinstance(data.get("outcome"), (dict, list))
+        ):
+            raise ValueError("invalid scheduled business receipt")
+        return {
+            "status": "completed",
+            "text": f"定时任务「{title}」已执行并核对回执。",
+            "change": data,
+        }

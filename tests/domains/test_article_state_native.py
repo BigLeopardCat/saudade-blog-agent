@@ -180,3 +180,17 @@ def test_runtime_article_confirmation_and_replay_are_native(articles, monkeypatc
         {"article_id": 11, "status": "public"},
     )
     assert articles["writes"] == 1
+
+
+def test_scheduled_article_state_uses_the_same_version_bound_batch_transaction(
+    articles, enabled_scheduler
+):
+    result = prepare(article_id=11, status="public", schedule={"delay_seconds": 300})
+    approved = grant(result)
+    assert approved["executor"] == "automations"
+    definition = approved["specs"][0]["args"]["definition"]
+    assert definition["write"] == {
+        "kind": "article_state",
+        "change": {"items": [{"id": 11, "version": "a" * 64}], "status": "public", "isTop": None},
+    }
+    assert articles["writes"] == 0

@@ -204,10 +204,10 @@ def test_invalid_target_is_rejected_before_io(announcements, args):
 
 
 def test_target_pair_is_cross_checked_before_an_announcement_card(announcements):
-    assert prepare("delete", announcement_id=11,
-                   announcement_title="测试").execution["pending_confirm"]
-    assert prepare("delete", announcement_id=11,
-                   announcement_title="不匹配").kind == "unavailable"
+    assert prepare("delete", announcement_id=11, announcement_title="测试").execution[
+        "pending_confirm"
+    ]
+    assert prepare("delete", announcement_id=11, announcement_title="不匹配").kind == "unavailable"
     assert not announcements["writes"]
 
 
@@ -282,6 +282,7 @@ def test_confirmation_content_is_complete_and_reversible(announcements):
     assert "正文：\n\n" + content in prepared.reply
     assert "JSON原文" not in prepared.reply
     from agent.transport import iter_transport_events
+
     frames = [frame for frame in iter_transport_events([prepared]) if isinstance(frame, str)]
     assert not any(frame.startswith("__CMD__:") for frame in frames)
     assert grant(prepared)["specs"][0]["args"]["intent"]["fields"]["content"] == content
@@ -292,3 +293,25 @@ def test_unstorable_control_text_is_rejected_before_service_io(announcements, fi
     args = {"title": "标题", "content": "正文", field: value}
     result = prepare("create", **args)
     assert result.kind == "invalid_args" and not announcements["requests"]
+
+
+@pytest.mark.parametrize(
+    "operation,arguments",
+    [
+        ("prepare_announcement_create", {"title": "新公告", "content": "正文"}),
+        ("prepare_announcement_update", {"announcement_id": 11, "new_title": "改名"}),
+        ("prepare_announcement_delete", {"announcement_id": 11}),
+    ],
+)
+def test_scheduled_announcement_keeps_approved_transaction(
+    announcements, operation, arguments, enabled_scheduler
+):
+    result = getattr(preparation, operation).invoke(
+        {**arguments, "schedule": {"delay_seconds": 300}}, config=admin_config()
+    )
+    grant = confirm.verify(result.execution["pending_confirm"]["token"], 7, 42)
+    definition = grant["specs"][0]["args"]["definition"]
+    assert grant["executor"] == "automations"
+    assert definition["write"]["kind"] == "announcements"
+    assert definition["write"]["change"]["intent"]["action"] == operation.rsplit("_", 1)[1]
+    assert announcements["writes"] == 0

@@ -151,7 +151,6 @@ _FRAME_ID_KEYS = {
     "tagKey": "tagId",
     "categoryKey": "categoryId",
     "fatherKey": "fatherId",
-    "friendKey": "friendId",
 }
 
 

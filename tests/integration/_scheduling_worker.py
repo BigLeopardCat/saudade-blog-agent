@@ -1,5 +1,6 @@
 """Isolated DBOS worker used only by the explicit PostgreSQL integration suite."""
 
+import json
 import sys
 import time
 from contextlib import ExitStack
@@ -84,6 +85,10 @@ class Host:
                 break
             time.sleep(0.05)
         return {"status": "completed", "text": "已发布审批原文"}
+
+    def change(self, owner, run_id, write, title):
+        return self.publish_announcement(owner, run_id, title,
+                                         json.dumps(write, ensure_ascii=False, sort_keys=True))
 
     def notify(self, owner, run_id, title, text):
         self.actor(owner)

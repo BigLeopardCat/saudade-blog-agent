@@ -14,6 +14,7 @@ from agent.proposals import proposal
 from agent.runtime.results import TurnResult
 from agent.runtime.turns import check_cancelled
 from agent.runtime.writes import bound_context
+from agent.scheduling.models import Trigger
 from tools import base
 from tools.result import invalid_args
 
@@ -84,14 +85,22 @@ def description(plan, action):
     return details + f"\n{effect}；原子发送 {plan['notificationCount']} 条系统通知。"
 
 
-def _prepare(action, target, role, muted_until, config, *, hours=None, permanent=False):
+def _prepare(
+    action, target, role, muted_until, config, *, hours=None, permanent=False, schedule=None
+):
     check_cancelled(config)
     if not available(config):
         return base.unavailable("需要已验签的管理员和稳定会话，本次未生成确认卡。")
     try:
         request = targets.preparation_request(
-            {"action": action, "target": target, "role": role, "mutedUntil": muted_until,
-             "hours": hours, "permanent": permanent}
+            {
+                "action": action,
+                "target": target,
+                "role": role,
+                "mutedUntil": muted_until,
+                "hours": hours,
+                "permanent": permanent,
+            }
         )
     except (ValueError, TypeError) as exc:
         return invalid_args(str(exc))
@@ -101,7 +110,7 @@ def _prepare(action, target, role, muted_until, config, *, hours=None, permanent
     request = plan.pop("intent")
     spec = {"tool": TOOLS[action], "args": {"version": plan["version"], "intent": request}}
     text = description(plan, action)
-    if not plan["changed"]:
+    if schedule is None and not plan["changed"]:
         return TurnResult(
             text, {"noop_note": text, "noop_text": text, "task_satisfied": [spec], "receipts": []}
         )
@@ -115,6 +124,7 @@ def _prepare(action, target, role, muted_until, config, *, hours=None, permanent
         executor="account_actions",
         question=text + "\n确认执行？",
         target=text,
+        schedule=schedule,
     )
 
 
@@ -123,11 +133,14 @@ def prepare_account_freeze(
     config: RunnableConfig,
     account_id: targets.Identifier | None = None,
     username: targets.Username | None = None,
+    schedule: Trigger | None = None,
 ) -> object:
     """准备冻结账号确认，只读。按唯一账号编号或完整账号名定位，不按昵称匹配。
     冻结使旧登录状态失效；已经冻结时再次执行仍会撤销此前登录状态并通知当事人。
     """
-    return _prepare("freeze", {"id": account_id, "username": username}, None, None, config)
+    return _prepare(
+        "freeze", {"id": account_id, "username": username}, None, None, config, schedule=schedule
+    )
 
 
 @tool(return_direct=True)
@@ -135,9 +148,12 @@ def prepare_account_unfreeze(
     config: RunnableConfig,
     account_id: targets.Identifier | None = None,
     username: targets.Username | None = None,
+    schedule: Trigger | None = None,
 ) -> object:
     """准备解冻账号确认，只读。按唯一账号编号或完整账号名定位，解冻不恢复旧登录状态。"""
-    return _prepare("unfreeze", {"id": account_id, "username": username}, None, None, config)
+    return _prepare(
+        "unfreeze", {"id": account_id, "username": username}, None, None, config, schedule=schedule
+    )
 
 
 @tool(return_direct=True)
@@ -146,12 +162,15 @@ def prepare_account_role(
     config: RunnableConfig,
     account_id: targets.Identifier | None = None,
     username: targets.Username | None = None,
+    schedule: Trigger | None = None,
 ) -> object:
     """准备变更账号身份确认，只读。新身份明确填写admin/user/zako；只改身份，保留冻结和禁言。
     同时提供account_id和username时必须指向同一个账号。
     后端按当前操作者与目标身份核验政策；真实变更使旧登录状态失效。
     """
-    return _prepare("set_role", {"id": account_id, "username": username}, role, None, config)
+    return _prepare(
+        "set_role", {"id": account_id, "username": username}, role, None, config, schedule=schedule
+    )
 
 
 @tool(return_direct=True)
@@ -161,14 +180,24 @@ def prepare_account_mute(
     username: targets.Username | None = None,
     hours: Hours | None = None,
     permanent: StrictBool = False,
+    schedule: Trigger | None = None,
 ) -> object:
     """准备禁言确认，只读。明确指定正数hours或permanent=true，二选一；未给期限需先询问。
     冻结北京时间到期时刻；永久需明确选择。仅限制评论与留言，不改身份、冻结或登录状态。
     """
+    if schedule is not None:
+        return invalid_args("定时禁言需明确到期语义，请先使用即时禁言；本次没有创建计划。")
     if permanent and hours is not None or not permanent and hours is None:
         return invalid_args("请明确指定正数小时数或永久禁言，二选一；未指定时不会默认永久。")
-    return _prepare("mute", {"id": account_id, "username": username}, None, None, config,
-                    hours=hours, permanent=permanent)
+    return _prepare(
+        "mute",
+        {"id": account_id, "username": username},
+        None,
+        None,
+        config,
+        hours=hours,
+        permanent=permanent,
+    )
 
 
 @tool(return_direct=True)
@@ -176,11 +205,14 @@ def prepare_account_unmute(
     config: RunnableConfig,
     account_id: targets.Identifier | None = None,
     username: targets.Username | None = None,
+    schedule: Trigger | None = None,
 ) -> object:
     """准备解除禁言确认，只读。仅清除指定账号禁言期限，保留身份、冻结和登录状态。
     已到期但仍存有期限的记录会清理；无禁言记录则无需写入。
     """
-    return _prepare("unmute", {"id": account_id, "username": username}, None, None, config)
+    return _prepare(
+        "unmute", {"id": account_id, "username": username}, None, None, config, schedule=schedule
+    )
 
 
 def tools(read_tools):

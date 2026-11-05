@@ -104,28 +104,10 @@ def _cmd_matches(pre: str, c: str) -> bool:
 
 
 def iter_rounds(case: dict) -> list[dict]:
-    """用例 dict → **轮**的列表（20260925：多轮用例的唯一归一化点）。
+    """Normalize single/multi-turn cases and merge each turn's context overrides.
 
-    单轮用例（今天 134 条里的绝大多数）没有 `rounds`，整条用例就是一个第 1 轮——
-    字段全在顶层，行为与 20260925 之前逐字相同。多轮用例写 `rounds`：
-
-    ```json
-    "rounds": [
-      {"round": 1, "user_input": "那个叫「X」的分类我不需要了，清理掉吧",
-       "gold": {"require_frame_prefix": ["__CONFIRM__:"], "require_zero_exec": true}},
-      {"round": 2, "confirm_message": "确认执行：删除分类「X」",
-       "gold": {"round": 2, "require_exec_tools": ["delete_category"]}}
-    ]
-    ```
-
-    确认轮还可以带 `confirm_pick`（20261010，形态 `pick:<i>`，0 基）＝"主人点的不是
-    「全部办」，是卡上第 i 格"。它进 `ChatRequest.confirm_pick`，服务端在验签之后、
-    任何消费之前照同一份 `units` 裁（见 `run_one` 那一段与 `agent/confirm.narrow`）。
-
-    **为什么要归一**：轮次顺序决定第 2 轮能不能拿到第 1 轮的令牌，而"顺序"这件事
-    在三处都要一致（进程内跑法、隔离子进程、逐轮判据）。散着写就会出现"某个跑法按
-    另一套顺序读"的漂移——`build_request` 那份字段表漂移过（见其 docstring），
-    这里是同一个坑的第二形态。
+    A confirmation turn can select ``pick:<i>``; the server verifies and narrows
+    the signed operation before execution. All runners share this turn ordering.
     """
     rounds = case.get("rounds")
     if rounds:
@@ -1710,6 +1692,7 @@ from corpus_provenance import (
 # Explicit assertion keys reject misspellings instead of silently skipping checks.
 GOLD_ASSERT_KEYS = frozenset({
     "require_observations", "require_observations_any", "require_todo_schedule",
+    "require_automation_schedule",
     "require_confirm_specs", "require_confirm_preview", "forbid_runtime_stop",
     "forbid_business_write", "require_answer_value", "require_prepared_or_noop",
     "require_memory_compaction", "forbid_memory_compaction", "require_answer_list",
