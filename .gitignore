@@ -14,11 +14,15 @@ wheels/
 .vscode/
 .idea/
 
-# Environment variables (contains secrets!)
-.env
-# `.env` 的备份同样是秘密（换 key / 换模型时留的那份）。20261017 之前没有这条，
-# 盘上那份 `?? .env.bak-*` 一直躺在"未跟踪但也没被忽略"的位置，`git add -A` 会带走它。
-.env.bak-*
+# Private environment variants; sanitized examples remain reviewable.
+.env*
+!.env.example
+!**/.env.example
+/CLAUDE.local.md
+/.claude/settings.local.json
+
+# Host-issued bearer credentials; never publish background authorization.
+/data/delegations/
 
 # Generated audio files
 output_audio/
@@ -43,10 +47,7 @@ data/word_graph/
 # 且换 embedding 模型就会整库失效 ⇒ 入库只会留一份过期垃圾。
 data/rag_vectors/
 
-# 建图任务的本机状态（20261003）：lock / state.json / <ts>.log，全是**运行时**产物
-# （见 rag/graph_build.py）。它对站点没有任何价值、只对这台机器有意义，不入库。
-# ⚠️ 与**父仓**的 logs/ 不是一回事：那边是站点运维日志（rust/agent/traces，
-# logrotate 管轮转）；这份是后台重建任务的临时现场。
+
 logs/
 data/traces/
 

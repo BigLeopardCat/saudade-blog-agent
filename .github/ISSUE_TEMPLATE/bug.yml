@@ -60,6 +60,6 @@ body:
     id: version
     attributes:
       label: 提交号
-      description: `git rev-parse --short HEAD`
+      description: "`git rev-parse HEAD`；部署问题同时提供 Agent /version 的构建标识。"
     validations:
       required: false

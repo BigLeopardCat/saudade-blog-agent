@@ -1,20 +1,9 @@
 #!/usr/bin/env python3
-"""三维布局的离线 A/B 夹具（20260917）——**同语料 / 同 embedding / 同边集，只换布局**。
+"""离线比较三维布局：固定语料、embedding 和边集，仅改变布局算法。
 
-为什么单独留一个脚本：布局算法的选择是这个项目里最容易"凭感觉"的一处，而它直接决定
-访客点一个词之后看到的是不是相关内容。20260917 用它做了决定（结论见 build_word_graph.py
-的 layout_umap docstring），以后想再换布局/调参，改这里重跑，别凭观感。
-
-口径与质量门**完全一致**（复用 build_word_graph 里的 fidelity / spearman / 边集）：
-  保真度 = 视图 10-NN vs 处理空间 10-NN（越高越好；随机基线 10/(n-1)≈0.025）
-  rho    = spearman(边长, 相似度)（越负越"相似=线短"；**它不是门**，理由见
-           build_word_graph.py 里那段注释：只在边集上优化即可做到 −1.000 而保真度随机）
-
-用法：
-    uv run --no-project --python 3.12 --with-requirements scripts/requirements-graph.txt \
-        python3 scripts/layout_ab.py --variant umap
-    ... --variant baseline|umap|umap_spring|isomap_knn|isomap_edges|smacof_edges
-    （umap/umap_spring 需要 umap-learn；其余纯 numpy）
+复用 build_word_graph 的近邻保真度、Spearman 和边集定义。
+保真度用于检查邻域结构；线长相关性只作诊断，不能替代质量门。
+用 scripts/requirements-graph.txt 的独立环境运行，并以 --variant 选择布局。
 """
 from __future__ import annotations
 

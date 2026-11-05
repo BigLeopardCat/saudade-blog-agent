@@ -1,0 +1,12 @@
+# Ownership metadata; review requirements depend on repository branch protection.
+* @BigLeopardCat
+
+# Shared instructions, host contracts, widget source and release boundaries.
+/AGENTS.md @BigLeopardCat
+/CLAUDE.md @BigLeopardCat
+/CONTRIBUTING.md @BigLeopardCat
+/.github/ @BigLeopardCat
+/scripts/deploy_release.sh @BigLeopardCat
+/scripts/serve*.sh @BigLeopardCat
+/config/ @BigLeopardCat
+/frontend/public/ @BigLeopardCat
