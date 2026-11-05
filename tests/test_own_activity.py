@@ -187,7 +187,7 @@ def test_sync_entry_binds_current_conversation_to_native_history(backend, monkey
         app.state.runtime, [HumanMessage(content="查查之前的聊天")], "activity-test",
                                     user_id=7, principal=Principal(7, "user", SOURCE_ASSERTION),
                                     conversation_id=9)
-    assert result[0] == "已读取当前会话的较早消息。"
+    assert result.reply == "已读取当前会话的较早消息。"
     assert len(backend["requests"]) == 1
 
 

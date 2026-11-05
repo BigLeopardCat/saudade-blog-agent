@@ -6,9 +6,8 @@ without inspecting planner nodes, graph state, or model metadata.
 """
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass
-from typing import Callable, Generator, Iterable, Iterator, cast
+from typing import Callable, Generator, Iterable, Iterator
 
 from langchain_core.messages import AIMessageChunk
 
@@ -25,28 +24,25 @@ class TransportProtocolError(RuntimeError):
 @dataclass(frozen=True)
 class CollectedTurn:
     reply: str
-    navigation: str
-    execution: list[dict]
+    events: list[StreamEvent]
 
 
-def command_wire(command: dict) -> str:
-    """Encode a receipt command for the synchronous response contract."""
-    kind = command.get("kind") if isinstance(command, dict) else None
-    if kind == "navigate" and command.get("url"):
-        prefix = "NAVIGATE:" if str(command.get("mode") or "") == "confirm" else "AUTO_NAVIGATE:"
-        return prefix + str(command["url"])
-    if kind == "effect" and command.get("effect"):
-        return f"EFFECT:{command['effect']}:{command.get('action', 'on')}"
-    if kind == "darkmode" and command.get("mode"):
-        return "DARKMODE:" + str(command["mode"])
-    if kind == "appearance" and command.get("settings"):
-        return "APPEARANCE:" + json.dumps(command["settings"], separators=(",", ":"))
-    if kind == "article_editor" and command.get("operation") in {
-            "read", "propose", "summary", "prepare_publish"}:
-        return "ARTICLE_EDITOR:" + json.dumps(command, separators=(",", ":"))
-    if kind:
-        raise TransportProtocolError(f"unsupported receipt command kind: {kind}")
-    raise TransportProtocolError("receipt command kind is missing")
+def validate_command(command: dict) -> None:
+    """Reject unsupported control shapes without converting them into prose."""
+    if not isinstance(command, dict):
+        raise TransportProtocolError("receipt command must be an object")
+    kind = command.get("kind")
+    valid = (
+        kind == "navigate" and isinstance(command.get("url"), str) and command["url"]
+        or kind == "effect" and isinstance(command.get("effect"), str) and command["effect"]
+        or kind == "darkmode" and isinstance(command.get("mode"), str) and command["mode"]
+        or kind == "appearance" and isinstance(command.get("settings"), dict)
+        and command["settings"]
+        or kind == "article_editor" and command.get("operation") in {
+            "read", "propose", "summary", "prepare_publish"}
+    )
+    if not valid:
+        raise TransportProtocolError("unsupported or malformed receipt command")
 
 
 def _execution_payload(execution: dict | None) -> dict:
@@ -64,7 +60,7 @@ def _execution_frames(execution: dict | None) -> Iterator[StreamEvent]:
     commands = []
     client_action = execution.get("client_action")
     if client_action:
-        command_wire(client_action)
+        validate_command(client_action)
         commands.append(StreamEvent("command", client_action))
     receipts = execution.get("receipts") or []
     if not isinstance(receipts, list):
@@ -76,7 +72,7 @@ def _execution_frames(execution: dict | None) -> Iterator[StreamEvent]:
         if command is not None:
             if not isinstance(command, dict):
                 raise TransportProtocolError("execution receipt cmd is invalid")
-            command_wire(command)
+            validate_command(command)
             if receipt.get("browser_status") not in {"completed", "failed", "timeout"}:
                 commands.append(StreamEvent("command", command))
     yield from commands
@@ -165,15 +161,12 @@ def reply_text(previous, event):
 def collect_turn(events: Iterable[AIMessageChunk | TurnResult | ReplyReset]) -> CollectedTurn:
     """Collect a native turn for the non-streaming HTTP response."""
     reply = ""
-    navigation = ""
-    receipts: list[dict] = []
+    controls = []
     for event in iter_transport_events(events):
         reply = reply_text(reply, event)
-        if isinstance(event, StreamEvent) and event.name == "command":
-            navigation = command_wire(cast(dict, event.data))
-        elif isinstance(event, StreamEvent) and event.name == "receipts":
-            receipts.extend(cast(list[dict], event.data))
-    return CollectedTurn(reply=reply, navigation=navigation, execution=receipts)
+        if isinstance(event, StreamEvent) and event.name != "text_reset":
+            controls.append(event)
+    return CollectedTurn(reply=reply, events=controls)
 
 
 def emit_to_queue(
