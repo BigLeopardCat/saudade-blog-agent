@@ -38,16 +38,10 @@ def _fmt_bytes(n: float) -> str:
 
 
 def _walk_files(root: str, c: dict) -> list[str]:
-    """类 `c` 要管的文件（绝对路径）。
+    """Enumerate absolute files owned by this class.
 
-    **必须按 patterns 过滤**（用 `retention_manifest.matches`，glob 语义只有那一处实现）：
-    初版只 `os.walk(root)` 而不过滤，实测后果是 `wordgraph-builds`（patterns 只有
-    `wordgraph/**`）把 `runs/` 里的 `20260831-133434_vector_poc.json` 也算成自己的产物
-     ⇒ **会去删 golden 留档**，而那正是登记表里点名「不能单独清」的东西。
-    根目录是共用的，**类的边界只能靠 patterns 划**。
-
-    跳过符号链接（删一个链接指向的东西不是这里的事）。
-    """
+    Apply the shared ownership patterns, since multiple classes may share a
+    root directory. Skip symlinks; cleanup does not follow their targets."""
     out: list[str] = []
     for dirpath, dirnames, filenames in os.walk(root):
         dirnames[:] = [d for d in dirnames if not os.path.islink(os.path.join(dirpath, d))]
@@ -78,7 +72,7 @@ def _excluded(name: str, exclude: list[str]) -> bool:
 
 
 def _stamp_epoch(stamp: str) -> float:
-    """`20260925-143012` / `20260925_143012` → epoch（本地钟面，与文件名同源）。"""
+    """Parse timestamped artifact names as local-clock epoch values."""
     try:
         return time.mktime(time.strptime(stamp, "%Y%m%d-%H%M%S"))
     except ValueError:

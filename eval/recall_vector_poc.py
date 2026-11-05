@@ -51,11 +51,10 @@ def save_cache(cache: dict[str, list[float]]) -> None:
 
 def embed(client, texts: list[str], cache: dict[str, list[float]],
           refresh: bool) -> list[list[float]]:
-    """带缓存 embedding；新增文本批量调用 API，命中缓存直接取。
+    """Embed uncached texts in batches and reuse cached vectors.
 
-    健壮性：批量响应条数 != 请求条数时（实测 265 条批次有丢数据），
-    降级为逐条调用兜底——POC 阶段就不允许静默缺 embedding。
-    """
+    If batch cardinality differs, fall back to per-item requests rather than
+    silently dropping embeddings."""
     keys = [_hash(t) for t in texts]
     fresh: list[str] = [t for t, k in zip(texts, keys) if refresh or k not in cache]
     if fresh:

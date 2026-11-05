@@ -36,8 +36,7 @@ DAY = 86400.0
 
 
 def _stamp_epoch(stamp: str) -> float | None:
-    """`20260925T143012` → epoch（取不到返回 None）。按**本地钟面**解析——
-    trace 文件名就是本地时间写的（`time.strftime`），跨时区会差出整天。"""
+    """Parse local-clock trace filename timestamps, returning None when invalid."""
     if len(stamp) != 15:
         return None
     try:

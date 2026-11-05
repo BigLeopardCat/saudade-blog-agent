@@ -1,10 +1,10 @@
 {
   "eval/admin_write_probe.py": {
-    "lines": 2517,
+    "lines": 2494,
     "top_defs": 81
   },
   "eval/corpus_terms.py": {
-    "lines": 845,
+    "lines": 813,
     "top_defs": 30
   },
   "eval/run_golden.py": {

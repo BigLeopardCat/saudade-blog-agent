@@ -78,12 +78,7 @@ def todo_rows() -> list[dict] | None:
 
 
 def _matches(rows: list[dict], name: str) -> list[dict]:
-    """正文以 `name` 打头的那些行（`name` 是夹具名，族约定 = 正文本身）。
-
-    **前缀而不是相等**：与那份 SQL 的幂等/清场判据逐字一致（`LIKE 'agent\_fixture\_%'`）
-    ——检查用的判据与清场用的判据必须是同一条，否则会出现"检查说在、清场删不掉"的行。
-    真待办不可能以这个前缀打头，所以多匹配的风险是 0。
-    """
+    """Return rows whose body starts with the literal fixture name."""
     return [r for r in rows
             if str(r.get("text") or "").startswith(name)]
 
@@ -172,15 +167,9 @@ def declared_fixtures() -> list[str]:
 
 
 def leftovers(rows: list[dict], declared: list[str]) -> list[str]:
-    """那份列表里属于夹具前缀族、**又不是任何用例声明的那个**的正文（排序后返回）。
+    """Return sorted fixture-prefixed bodies not declared by any case.
 
-    与账号族同一条不对称：待办夹具是**常驻的**（用例只读、不复位也还在），所以"声明的
-    那些"必须放行。真正要报的是别的东西——一次中断的 SQL、一次手工插入，
-    或者将来某个探针把靶子留在了列表里。
-
-    **只认前缀**（`startswith`，与清场 SQL 的 `LIKE 'agent\_fixture\_%'` 同一判据）：
-    正文中间出现该串的行，清场语句删不掉它，哨兵也就不该报它。
-    """
+    Prefix comparison is literal; underscores are not SQL LIKE wildcards."""
     keep = set(declared)
     return sorted({str(r.get("text") or "") for r in rows
                    if str(r.get("text") or "").startswith(FIXTURE_PREFIX)

@@ -593,10 +593,7 @@ def _probe_conv(rep: Report, uid: int, role: str, tag: str) -> int | None:
 
 
 def drop_conv(uid: int, role: str, cid: int) -> None:
-    """删会话。**不走 backend_send**：会话系列接口是裸 JSON（`{"success":true}` /
-    `{"id":N}`），没有 `{code,data}` 信封——用带信封的 helper 会在**请求已经发出去之后**
-    抛错，于是"删除其实成功了、探针却报 FAIL"，真出错时反而分不清（20260921 实证）。
-    """
+    """Delete the probe conversation using its bare-JSON endpoint contract."""
     body = _http("DELETE", f"{BASE}/api/chat/conversations/{cid}", {},
                  {"Authorization": "Bearer " + login_jwt(uid, role)}, 20)
     if not body.get("success"):
@@ -1765,21 +1762,10 @@ _QUOTA_STAGE_REASON = "探针临时申请（验证复核链路，跑完即删）
 
 
 def _stage_quota_request(rep: Report, uid: int, role: str):
-    """自造一份**够得着**的待处理额度申请 → `(申请人 uid, 账号名)`；造不出返回 None。
+    """Create an eligible quota request owned by a disposable ordinary account.
 
-    为什么要造：队列里等着的那几件可能**名录够不着**——20260930 实测唯一一件正是
-    uid=1（超管）的，而 `GET /api/temp-users` 按 `is_listable_role` 过滤、超管不列，
-    额度写通道按设计办不了它。拿那种靶子验"点确定 → 库真值真翻"是**验不出来**的：
-    只会得到一句**正确**的拒绝（帧里现在也如实标着"agent 办不了这一件"）。
-
-    所以自建一个一次性**普通账号**、用它自己的身份提交申请（`POST /api/protected/quota/apply`
-    是用户入口，与真人在页面上点那颗按钮走的是同一个 handler）：得到一个够得着的靶子，
-    而全程只碰探针自己的数据——**不碰任何真人的额度**（本腿原来动的是别人的申请）。
-
-    代价如实记：`quota_request` 无外键（见 entity 头注 ③），删号**不带走**申请行。
-    所以收尾时若这一行还挂着 pending，探针会以管理员身份把它**驳回**掉
-    （`_finish_staged_quota`）——只留一行已终态的记录，pending 队列干净。
-    """
+    Use the normal user request endpoint and never modify a real user's quota.
+    Return the requester ID/name, or None when staging fails."""
     name = f"agent_fixture_probe_q{int(time.time()) % 1000000}"
     aid = _new_probe_account(rep, uid, role, name, tag="⑰")
     if aid is None:
@@ -1799,15 +1785,10 @@ def _stage_quota_request(rep: Report, uid: int, role: str):
 
 
 def _spend_one_round(rep: Report, aid: int, name: str, uid: int, role: str) -> bool:
-    """以那个账号自己的身份真跑**一轮**对话 ⇒ 它的计数器不再是 0。
+    """Spend one real model-backed turn as the fixture account.
 
-    为什么非跑不可（20260930 第二次实跑实测）：批准/重置的"已达成"判据是**这个人的
-    计数器本来就是 0**（`adminops._reached_one`：`used != 0` 才照弹），而新账号的
-    `chatQuotaUsed` 天然是 0 ⇒ 模型会（**正确地**）把这一件从卡上摘掉、如实回一句
-    「额度本来就是满的，没有列进这一批」。那是对的行为，但这条腿就永远验不到
-    "点确定 → 真写"——上一版自造靶子只建号 + 提交申请，正好踩在这里。
-    真跑一轮的代价 = 一次真 LLM 调用；换来的是靶子**长得像真的申请人**。
-    """
+    A fresh zero-usage account cannot exercise a quota-reset mutation; this
+    preparation intentionally incurs one model request."""
     cid = _probe_conv(rep, aid, "user", "staging 额度靶子")
     if cid is None:
         return False
@@ -2093,13 +2074,9 @@ _ACCOUNT_NOOP_RE = re.compile(r"本来就是|没有重复")
 
 
 def _account_directory(uid: int, role: str) -> dict:
-    """后台账号名录（探针自己的真值读路径）：`{"name": row}`。
+    """Return the backend account directory keyed by name.
 
-    **不走 `backend_get`**：`/api/temp-users` 是全站唯一不套 `ApiResponse` 信封的
-    `/api/protected` 接口（裸数组），而那个 helper 要 `{code,data}` ⇒ 会在读取**成功**时
-    抛 ProbeError（与 20260921 那次探针自身 BUG 同族）。也不许反过来去改后端包信封：
-    前端账号页与 token 探针都按裸数组读。
-    """
+    This endpoint returns a bare array rather than the shared data envelope."""
     rows = _http("GET", f"{BASE}/api/temp-users", None,
                  {"Authorization": "Bearer " + login_jwt(uid, role)}, 15)
     if not isinstance(rows, list):

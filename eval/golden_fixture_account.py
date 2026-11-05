@@ -129,16 +129,9 @@ def declared_fixtures() -> list[str]:
 
 
 def leftovers(directory: dict[str, dict], declared: list[str]) -> list[str]:
-    """名录里属于夹具前缀族、**又不是任何用例声明的那个**的账号名（排序后返回）。
+    """Return sorted fixture-prefixed account names not declared by any case.
 
-    与分类族的哨兵有一处**刻意的不对称**：那边用例跑完夹具就该消失，所以前缀族里出现
-    任何一行都是残留；这边夹具是**常驻的**（用例只改它的状态、不复位就得重跑 SQL），
-    所以"声明的那些"必须放行。真正要报的是别的东西——一次中断的 SQL、一次手工插入、
-    或者将来某个探针把靶子留在了库里。
-
-    **只认前缀**（`startswith`，与清场 SQL 的 `LIKE 'agent\_fixture\_%'` 同一判据）：
-    名字中间出现该串的账号，清场语句删不掉它，哨兵也就不该报它。
-    """
+    Prefix comparison is literal; underscores are not SQL LIKE wildcards."""
     keep = set(declared)
     return sorted(u for u in directory if u.startswith(FIXTURE_PREFIX) and u not in keep)
 

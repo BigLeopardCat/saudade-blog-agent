@@ -68,12 +68,9 @@ def board() -> dict[str, dict] | None:
 
 
 def _matches(board_map: dict[str, dict], name: str) -> list[dict]:
-    """正文以 `name` 打头的那些行（`name` 是夹具名，族约定 = 正文前缀）。
+    """Return rows whose content starts with the literal fixture name.
 
-    **前缀而不是相等**：与那份 SQL 的幂等/清场判据逐字一致（`LIKE 'agent\_fixture\_%'`）
-    ——检查用的判据与清场用的判据必须是同一条，否则会出现"检查说在、清场删不掉"的行。
-    真留言不可能以这个前缀打头，所以多匹配的风险是 0。
-    """
+    Underscores in names are literal characters, not SQL LIKE wildcards."""
     return [r for r in board_map.values()
             if str(r.get("content") or "").startswith(name)]
 
