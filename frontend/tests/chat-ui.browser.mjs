@@ -1276,6 +1276,7 @@ try {
   assert.equal(await page.locator('#waifu-chat').getAttribute('data-window-mode'),'expanded');
   assert.equal(await page.locator('#chat-task-panel').isVisible(),true);
   await page.locator('#chat-task-panel summary').filter({hasText:'继续阅读文章'}).click();
+  await page.waitForFunction(()=>!document.querySelector('#waifu-chat').hasAttribute('data-window-transition'));
   const pausedRow = page.locator('#chat-task-panel details').filter({hasText:'继续阅读文章'});
   await pausedRow.getByRole('button',{name:'删除任务',exact:true}).scrollIntoViewIfNeeded();
   const taskDeleteBefore = await pausedRow.getByRole('button',{name:'删除任务',exact:true}).boundingBox();
