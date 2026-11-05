@@ -4,8 +4,6 @@
 """
 import argparse
 import base64
-import hashlib
-import hmac
 import json
 import os
 import re
@@ -62,16 +60,8 @@ def _b64(raw: bytes) -> str:
 
 
 def sign_assertion(uid: int, role: str, ttl: int = 60) -> str:
-    """签一条身份断言（本进程内，用完即弃）。uid/role 只是**入参**，密钥来自 settings。"""
-    from config.settings import settings
-    secret = (settings.jwt_secret or "").encode()
-    if not secret:
-        raise SystemExit("settings.jwt_secret 为空——探针无法自签断言（agent 环境没读 .env？）")
-    hdr = _b64(json.dumps({"alg": "HS256", "typ": "JWT"}, separators=(",", ":")).encode())
-    pl = _b64(json.dumps({"sub": str(uid), "role": role, "aud": _AUD,
-                          "exp": int(time.time()) + ttl}, separators=(",", ":")).encode())
-    sig = _b64(hmac.new(secret, f"{hdr}.{pl}".encode(), hashlib.sha256).digest())
-    return f"{hdr}.{pl}.{sig}"
+    from eval.operator_credentials import assertion
+    return assertion(uid, role, ttl)
 
 
 def ask(msg: str, assertion: str | None) -> dict:

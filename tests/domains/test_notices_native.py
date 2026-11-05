@@ -72,7 +72,9 @@ def notices(monkeypatch):
 
     with httpx.Client(transport=httpx.MockTransport(handle)) as client:
         monkeypatch.setattr(base, "_client", client)
-        monkeypatch.setattr("config.settings.jwt_secret", "native-notice-test-secret-at-least-32")
+        monkeypatch.setattr(
+            "config.settings.confirmation_secret", "native-notice-test-secret-at-least-32"
+        )
         yield state
 
 
@@ -86,8 +88,9 @@ def grant(prepared):
     return confirm.verify(prepared.execution["pending_confirm"]["token"], 7, 42)
 
 
-@pytest.mark.parametrize("target", [{"user_id": 11}, {"username": "测试账号"},
-                                     {"user_id": 11, "username": "测试账号"}])
+@pytest.mark.parametrize(
+    "target", [{"user_id": 11}, {"username": "测试账号"}, {"user_id": 11, "username": "测试账号"}]
+)
 def test_full_text_readonly_preparation_and_exactly_one_send(notices, tmp_path, target):
     prepared = prepare(**target)
     signed = grant(prepared)
@@ -175,7 +178,8 @@ def test_max_unicode_notice_is_signed_without_truncation(notices):
 
 
 def test_native_roundtrip_continues_after_confirmation_and_replays_once(
-        notices, tmp_path, monkeypatch):
+    notices, tmp_path, monkeypatch
+):
     from _admin_actions_support import confirmed_roundtrip
 
     confirmed_roundtrip(

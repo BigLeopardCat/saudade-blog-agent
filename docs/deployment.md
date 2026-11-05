@@ -5,12 +5,12 @@
 `systemd` 的 `ExecStart` 指向 `<release-root>/current/scripts/serve.sh`。该入口先解析真实版本目录，再以绝对路径启动 `agent.main:app`，并从 `REVISION` 提供 `/version` 的构建标识。切换 current 符号链接不会改变旧进程的 Python 模块搜索路径。
 
 ```sh
-scripts/deploy_release.sh COMMIT_SHA /srv/saudade-agent /etc/saudade/agent.env /var/lib/saudade-agent/data
+scripts/deploy_release.sh COMMIT_SHA /srv/saudade-agent /etc/saudade/agent-runtime.env /var/lib/saudade-agent/data
 ```
 
-使用本地 BGE profile 时，在发布命令前加 `DEPLOY_EMBEDDING_TOKENIZER=1`，安装锁定的 tokenizer 可选依赖。
+配置 `EMBEDDING_PROFILE` 时，发布脚本自动安装锁定的 tokenizer 可选依赖并在激活前加载 profile 校验；也可显式设置 `DEPLOY_EMBEDDING_TOKENIZER=1`。检索验收应确认 `rag_state=active` 和 `vector_missing=0`。
 
-服务账户需可写 release root、读取私有配置，以及重启 `saudade-agent` 的运维权限。服务单元继续设置既有嵌入模型环境、日志和停机超时；监听地址固定为 loopback，端口和 worker 数可用进程环境变量 `AGENT_PORT`、`AGENT_WORKERS` 指定。默认单进程，由应用自身限制并发请求；增加进程前按内存、数据库连接和模型额度测量容量。多进程健康检查等待默认30秒，可由 `AGENT_WORKER_HEALTHCHECK_SECONDS` 调整。这些启动参数需由服务管理器注入，应用的 `.env` 不负责配置 Uvicorn。
+部署账号拥有 release root 和重启权限；运行账号 `saudade-agent` 只读发布代码、读取自己的配置、写 `/var/lib/saudade-agent` 与缓存，没有 sudo 权限。发布时设置 `DEPLOY_SERVICE_GROUP=saudade-agent`、`DEPLOY_RUNTIME_STATE=/var/lib/saudade-agent`。嵌入配置合并到唯一 runtime.env；用最后排序的 `zz-runtime-env.conf` 清空旧 EnvironmentFile 列表，防止遗留 local-embedding.conf 覆盖状态路径。服务单元保留日志和停机超时；监听地址固定为 loopback，端口和 worker 数可用进程环境变量 `AGENT_PORT`、`AGENT_WORKERS` 指定。默认单进程，由应用自身限制并发请求；增加进程前按内存、数据库连接和模型额度测量容量。多进程健康检查等待默认30秒，可由 `AGENT_WORKER_HEALTHCHECK_SECONDS` 调整。这些启动参数需由服务管理器注入，应用的 `.env` 不负责配置 Uvicorn。
 
 脚本用 flock 串行化发布，只接收 Git 中存在的提交，使用 `git archive` 排除工作区文件和凭据。依赖安装、导入检查完成后才原子切换 current；探活同时核对 `/ready` 和预期构建 SHA。失败恢复上一版本并重启，未自动删除旧版本或用户数据。首次部署没有上一版本，需由运维处理失败。
 
@@ -38,3 +38,8 @@ release 目录的父级就是博客。Trace 统计始终使用 `TRACE_DIR`，与
 
 启用[管理员后台计划](scheduling.md)后，安装独立 scheduler 单元，发布时设置
 `DEPLOY_SCHEDULER=1`。脚本将一并重启和回滚 Worker，未启用该选项的部署行为不变。
+
+鉴权协议升级需要与宿主同步：Rust 增加 BLOG_DELEGATION_SECRET、AGENT_ASSERTION_SECRET 和
+可选 DEVICE_SIGNING_SECRET；Agent 使用同一 AGENT_ASSERTION_SECRET 及独立 AGENT_CONFIRM_SECRET，
+删除 JWT_SECRET。先在候选回环端口验证登录交换、工具读取、确认接续及设备网关，再排空服务并
+协调切换，不保留旧共享密钥回退。配置和二进制一起回滚，保留同一份可写数据。

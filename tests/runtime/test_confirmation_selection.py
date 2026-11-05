@@ -9,7 +9,7 @@ from agent import confirm
 
 @pytest.fixture
 def grant(monkeypatch):
-    monkeypatch.setattr(confirm.settings, "jwt_secret", secrets.token_urlsafe(32))
+    monkeypatch.setattr(confirm.settings, "confirmation_secret", secrets.token_urlsafe(32))
     specs = [{"tool": "delete_dashboard_todo", "args": {"item_id": value}} for value in range(1, 6)]
     token = confirm.sign(7, 42, "fixture", specs, units=[[0, 1], [2], [3, 4]])
     return confirm.verify(token, 7, 42)

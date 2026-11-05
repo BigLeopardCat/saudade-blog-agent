@@ -1,6 +1,5 @@
 """Administrator reads require verified, bound identity before any local or HTTP I/O."""
 
-import secrets
 from types import SimpleNamespace
 
 import httpx
@@ -27,6 +26,7 @@ class Model:
 
     def bind_tools(self, tools, **kwargs):
         from _budget_model import schemas
+
         self.kwargs = {"tools": schemas(tools)}
         self.menus.append(list(tools))
         return self
@@ -51,19 +51,28 @@ def config(role="superadmin", source=SOURCE_ASSERTION, uid=7, **extra):
 
 
 def invoke_authorized(session, name, args):
-    request = SimpleNamespace(tool_call={"name": name, "args": args, "id": "read"},
-                              state={"messages": []})
+    request = SimpleNamespace(
+        tool_call={"name": name, "args": args, "id": "read"}, state={"messages": []}
+    )
     return BlogToolMiddleware(session).wrap_tool_call(
-        request, lambda current: session.tools[name].invoke(args, config=session.config))
+        request, lambda current: session.tools[name].invoke(args, config=session.config)
+    )
 
 
-@pytest.mark.parametrize("role,source,uid,visible", [
-    ("admin", SOURCE_ASSERTION, 7, True), ("superadmin", SOURCE_ASSERTION, 7, True),
-    ("user", SOURCE_ASSERTION, 7, False), ("zako", SOURCE_ASSERTION, 7, False),
-    ("invented", SOURCE_ASSERTION, 7, False), (None, SOURCE_ASSERTION, 7, False),
-    ("admin", SOURCE_BODY, 7, False), ("admin", SOURCE_ASSERTION, True, False),
-    ("admin", SOURCE_ASSERTION, 0, False),
-])
+@pytest.mark.parametrize(
+    "role,source,uid,visible",
+    [
+        ("admin", SOURCE_ASSERTION, 7, True),
+        ("superadmin", SOURCE_ASSERTION, 7, True),
+        ("user", SOURCE_ASSERTION, 7, False),
+        ("zako", SOURCE_ASSERTION, 7, False),
+        ("invented", SOURCE_ASSERTION, 7, False),
+        (None, SOURCE_ASSERTION, 7, False),
+        ("admin", SOURCE_BODY, 7, False),
+        ("admin", SOURCE_ASSERTION, True, False),
+        ("admin", SOURCE_ASSERTION, 0, False),
+    ],
+)
 def test_admin_menu_visibility_follows_verified_authority(role, source, uid, visible):
     domains = ToolCatalog().domains(config(role, source, uid), False)
     assert ("admin_reports" in domains) is visible
@@ -77,8 +86,9 @@ def test_admin_menu_visibility_follows_verified_authority(role, source, uid, vis
         assert set(domains["admin_account_actions"]) == {"list_accounts"}
 
 
-@pytest.mark.parametrize("cfg", [config("user"), config(source=SOURCE_BODY),
-                                 config(user_id=8), config(user_id=True)])
+@pytest.mark.parametrize(
+    "cfg", [config("user"), config(source=SOURCE_BODY), config(user_id=8), config(user_id=True)]
+)
 def test_private_tool_cannot_run_even_if_accidentally_included_in_menu(cfg, monkeypatch):
     tool = LocalTool()
     session = ToolSession(Model(), cfg, {tool.name: tool}, {})
@@ -89,8 +99,10 @@ def test_private_tool_cannot_run_even_if_accidentally_included_in_menu(cfg, monk
 def test_permission_is_checked_again_after_domain_discovery(monkeypatch):
     tool = LocalTool()
     session = ToolSession(Model(), config(), {tool.name: tool}, {})
-    monkeypatch.setattr("agent.products.blog.tool_policy.check", lambda *args: authz.Decision(
-        False, "denied", authz.SCOPE_ADMIN_CONSOLE, tool.name))
+    monkeypatch.setattr(
+        "agent.products.blog.tool_policy.check",
+        lambda *args: authz.Decision(False, "denied", authz.SCOPE_ADMIN_CONSOLE, tool.name),
+    )
     assert invoke_authorized(session, tool.name, {}).status == "error"
     assert not tool.calls
 
@@ -107,8 +119,13 @@ def test_native_admin_read_loads_only_requested_domain_and_never_calls_legacy(mo
     def call(name):
         return AIMessage(content="", tool_calls=[{"name": name, "args": {}, "id": name}])
 
-    model = Model([call("load_admin_reports_info_tools"), call("get_server_status"),
-                   AIMessage(content="CPU 17%，内存 36%。")])
+    model = Model(
+        [
+            call("load_admin_reports_info_tools"),
+            call("get_server_status"),
+            AIMessage(content="CPU 17%，内存 36%。"),
+        ]
+    )
     tool = LocalTool()
     cfg = config(user_id=7)
     runtime = AgentRuntime(
@@ -116,11 +133,13 @@ def test_native_admin_read_loads_only_requested_domain_and_never_calls_legacy(mo
         application=BlogApplication(ToolCatalog(admin_read_tools={tool.name: tool})),
         model_factory=lambda **_: model,
     )
-    events = list(runtime.stream_events(
-        {"messages": [HumanMessage(content="查看服务器状态")]}, cfg))
+    events = list(
+        runtime.stream_events({"messages": [HumanMessage(content="查看服务器状态")]}, cfg)
+    )
     assert len(tool.calls) == 1
-    assert all(tool.calls[0]["configurable"][key] == value
-               for key, value in cfg["configurable"].items())
+    assert all(
+        tool.calls[0]["configurable"][key] == value for key, value in cfg["configurable"].items()
+    )
     menus = [{item["function"]["name"] for item in menu} for menu in model.menus]
     assert tool.name not in menus[0] and tool.name in menus[1]
     assert not any(name.startswith("prepare_") for name in menus[1])
@@ -133,7 +152,8 @@ def test_admin_menu_uses_the_canonical_contract_and_rejects_write_scope(monkeypa
     monkeypatch.setattr(base.get_note_periods, "description", "CANONICAL_PERIOD_CONTRACT")
     tools = admin_tools()
     assert convert_to_openai_tool(tools["get_note_periods"]) == convert_to_openai_tool(
-        base.get_note_periods)
+        base.get_note_periods
+    )
     assert tools["get_note_periods"].description == "CANONICAL_PERIOD_CONTRACT"
     monkeypatch.setitem(authz.TOOL_SCOPE, "get_note_periods", authz.SCOPE_WRITE_CONSOLE)
     with pytest.raises(RuntimeError, match="admin.console reads"):
@@ -149,21 +169,33 @@ def test_missing_or_invalid_statistics_never_become_a_zero_report(monkeypatch, d
 
 @pytest.mark.parametrize("status", [200, 403, 503])
 def test_real_statistics_tool_uses_actor_identity_and_preserves_api_failure(monkeypatch, status):
-    secret = secrets.token_urlsafe(32)
-    data = {"totalUsers": 0, "totalConversations": 0, "totalMessages": 0,
-            "totalExecutions": 0, "activeUsers7d": 0, "activeUsers30d": 0,
-            "roleCounts": [], "users": []}
+    fixture_key = "offline-host-delegation-key-at-least-32-bytes"
+    data = {
+        "totalUsers": 0,
+        "totalConversations": 0,
+        "totalMessages": 0,
+        "totalExecutions": 0,
+        "activeUsers7d": 0,
+        "activeUsers30d": 0,
+        "roleCounts": [],
+        "users": [],
+    }
     requests = []
 
     def handle(request):
         requests.append(request)
         assert request.method == "GET" and request.url.path == "/api/protected/stats/users"
         token = request.headers["Authorization"].removeprefix("Bearer ")
-        claims = jwt.decode(token, secret, algorithms=["HS256"], options={"verify_sub": False})
+        claims = jwt.decode(
+            token,
+            fixture_key,
+            algorithms=["HS256"],
+            audience="blog-tools",
+            options={"verify_sub": False},
+        )
         assert claims["sub"] == 7
         return httpx.Response(status, json={"code": 200, "data": data})
 
-    monkeypatch.setattr(base, "_jwt_secret", lambda: secret)
     with httpx.Client(transport=httpx.MockTransport(handle)) as client:
         monkeypatch.setattr(base, "_client", client)
         session = ToolSession(Model(), config(user_id=7), admin_tools(), {})

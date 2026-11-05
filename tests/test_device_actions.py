@@ -2,7 +2,6 @@
 
 import copy
 import json
-import secrets
 
 import httpx
 import jwt
@@ -22,7 +21,6 @@ from agent.products.blog.read_tools import device_domain
 from agent.products.blog.tool_policy import BlogToolMiddleware
 from agent.runtime import memory
 from agent.runtime.session import ToolSession
-from tools import device
 
 
 def config(**changes):
@@ -37,8 +35,7 @@ def config(**changes):
 
 @pytest.fixture
 def service(monkeypatch):
-    secret = secrets.token_urlsafe(32)
-    monkeypatch.setattr(device, "_jwt_secret", lambda: secret)
+    fixture_key = "offline-host-delegation-key-at-least-32-bytes"
     monkeypatch.setattr(device_reads.settings, "iot_enabled", True)
     state = {
         "devices": [{"id": "demo-a", "name": "demo", "online": True}],
@@ -58,12 +55,12 @@ def service(monkeypatch):
         state["requests"].append(req)
         claims = jwt.decode(
             req.headers["Authorization"].removeprefix("Bearer "),
-            secret,
+            fixture_key,
             algorithms=["HS256"],
-            options={"verify_sub": False},
+            audience="blog-tools", options={"verify_sub": False},
         )
         assert claims["sub"] == 7 and claims["role"] == "user"
-        parts = req.url.path.split("/")
+        parts = req.url.path.removeprefix("/api/device-gateway").split("/")
         if req.method == "PUT":
             state["rid"] = req.headers["X-Request-Id"]
             assert json.loads(req.content)["type"] == "display"

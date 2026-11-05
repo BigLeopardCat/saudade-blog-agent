@@ -10,7 +10,6 @@ from pydantic import ValidationError
 
 from agent.domains import device_reads
 from agent.principal import SOURCE_ASSERTION, SOURCE_BODY, Principal
-from tools import device
 
 
 def config(uid=7, source=SOURCE_ASSERTION):
@@ -19,18 +18,33 @@ def config(uid=7, source=SOURCE_ASSERTION):
 
 @pytest.fixture
 def service(monkeypatch):
-    secret = secrets.token_urlsafe(32)
-    monkeypatch.setattr(device, "_jwt_secret", lambda: secret)
+    fixture_key = "offline-host-delegation-key-at-least-32-bytes"
     monkeypatch.setattr(device_reads.settings, "iot_enabled", True)
-    state = {"rows": [{"id": f"esp-{i}", "name": "演示设备" + str(i), "online": bool(i % 2),
-                       "config": {"secret": secrets.token_urlsafe(32)}} for i in range(12)],
-             "requests": [], "status": 200}
+    state = {
+        "rows": [
+            {
+                "id": f"esp-{i}",
+                "name": "演示设备" + str(i),
+                "online": bool(i % 2),
+                "config": {"fixture_key": secrets.token_urlsafe(32)},
+            }
+            for i in range(12)
+        ],
+        "requests": [],
+        "status": 200,
+    }
 
     def handle(request):
         state["requests"].append(request)
-        assert request.method == "GET" and request.url.path == "/api/devices"
+        assert request.method == "GET" and request.url.path == "/api/device-gateway/api/devices"
         token = request.headers["Authorization"].removeprefix("Bearer ")
-        claims = jwt.decode(token, secret, algorithms=["HS256"], options={"verify_sub": False})
+        claims = jwt.decode(
+            token,
+            fixture_key,
+            algorithms=["HS256"],
+            audience="blog-tools",
+            options={"verify_sub": False},
+        )
         assert claims["sub"] == 7 and claims["role"] == "user"
         assert request.extensions["timeout"]["read"] == 10
         if state.get("timeout"):
@@ -57,7 +71,7 @@ def test_bounded_projection_reports_shared_access_and_real_totals(service):
     assert set(first["items"][0]) == {"id", "name", "online", "nameTruncated"}
     assert json.loads(str(read(page=4)))["items"] == []
     rendered = json.dumps(first, ensure_ascii=False)
-    assert all(row["config"]["secret"] not in rendered for row in service["rows"])
+    assert all(row["config"]["fixture_key"] not in rendered for row in service["rows"])
 
 
 @pytest.mark.parametrize("case", ["body", "mismatch", "missing", "boolean", "none"])

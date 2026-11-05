@@ -9,10 +9,8 @@ runtime and domain execution boundaries, with independent backend enforcement.""
 
 import logging
 import re
-import time
 
 import httpx
-import jwt
 from langchain_core.runnables.config import RunnableConfig
 
 # Load deployment settings before constructing module-level endpoints.
@@ -108,7 +106,6 @@ from tools.device import (  # noqa: E402,F401
     _DISPLAY_DEDUP_SECONDS,
     DEVICE_SERVICE_URL,
     _device_get_user_id,
-    _jwt_secret,
     _last_display,
     _last_display_lock,
     _sign_user_jwt,
@@ -141,21 +138,9 @@ ADMIN_BASE = _settings.agent_admin_base
 
 
 def _sign_local_jwt(uid: int, role: str | None) -> str:
-    """Sign a 60-second actor token for local backend requests.
-
-    The backend reloads account role and frozen state. Numeric sub and absent aud/ver
-    match its token contract: the caller identity was just verified for this request,
-    so a guessed token generation would incorrectly reject valid delegated calls.
-    Missing signing configuration fails before any request is sent."""
-    # Reject an empty signing key before sending any authenticated request.
-    secret = _jwt_secret()
-    if not secret:
-        raise RuntimeError("JWT_SECRET 未配置（空密钥不许代签令牌）——检查 .env / 环境变量")
-    return jwt.encode({
-        "sub": uid,
-        "exp": int(time.time()) + 60,
-        "role": role or "user",
-    }, secret, algorithm="HS256")
+    """Use a host-issued actor capability; the Agent cannot mint blog login tokens."""
+    from agent.delegation import credential
+    return credential(uid)
 
 
 def _stop_requested(config: RunnableConfig) -> bool:

@@ -86,7 +86,7 @@ def test_fresh_role_and_owner_must_match():
 
 
 def test_real_preparation_signs_definition_without_creating_schedule(monkeypatch):
-    monkeypatch.setattr(settings, "jwt_secret", "scheduling-fixture-secret-at-least-32")
+    monkeypatch.setattr(settings, "confirmation_secret", "scheduling-fixture-secret-at-least-32")
     service = ScheduleService(None, lambda _: ADMIN, now=lambda: NOW)
     selected = tools(service, True)
     result = selected["prepare_automation"].invoke(
@@ -153,7 +153,7 @@ def test_run_list_bounds_text_but_exact_result_retains_text():
 
 
 def test_host_rechecks_current_account_and_handles_hidden_article(monkeypatch):
-    monkeypatch.setattr(settings, "jwt_secret", "scheduling-fixture-secret-at-least-32")
+    monkeypatch.setattr(settings, "confirmation_secret", "scheduling-fixture-secret-at-least-32")
     requests = []
 
     def handler(request):
@@ -224,7 +224,7 @@ def test_confirmed_create_uses_existing_execution_ledger_and_replay_does_not_rei
     from agent.domains.automations.transactions import BoundDomain
     from agent.runtime import writes
 
-    monkeypatch.setattr(settings, "jwt_secret", "scheduling-fixture-secret-at-least-32")
+    monkeypatch.setattr(settings, "confirmation_secret", "scheduling-fixture-secret-at-least-32")
     service = ScheduleService(None, lambda _: ADMIN, now=lambda: NOW)
     cfg = config(principal=ADMIN)
     prepared = tools(service, True)["prepare_automation"].invoke(
@@ -257,7 +257,7 @@ def test_model_discovers_scheduling_and_prepares_card_through_real_middleware(mo
     from agent.runtime.checkpoint_conversations import CheckpointConversationStore
     from agent.runtime.service import AgentRuntime
 
-    monkeypatch.setattr(settings, "jwt_secret", "scheduling-fixture-secret-at-least-32")
+    monkeypatch.setattr(settings, "confirmation_secret", "scheduling-fixture-secret-at-least-32")
     service = ScheduleService(None, lambda _: ADMIN, now=lambda: NOW)
     responses = iter(
         [
@@ -309,7 +309,7 @@ def test_model_discovers_scheduling_and_prepares_card_through_real_middleware(mo
 
 
 def test_notification_preview_is_explicit_and_receipt_identity_is_verified(monkeypatch):
-    monkeypatch.setattr(settings, "jwt_secret", "scheduling-fixture-secret-at-least-32")
+    monkeypatch.setattr(settings, "confirmation_secret", "scheduling-fixture-secret-at-least-32")
     receipt = {"notificationId": 42, "replayed": False}
     sent = []
 

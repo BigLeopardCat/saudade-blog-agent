@@ -285,7 +285,7 @@ def test_actual_process_exit_recovers_durable_task_once(inboxes, tmp_path, monke
     model = Model(AIMessage(content="只撤销本操作，没有断言当前收藏状态。"))
     rebuilt = AgentRuntime(store, application=BlogApplication(), model_factory=lambda **_: model)
     with favorite_backend() as state:
-        monkeypatch.setattr(confirm.settings, "jwt_secret", secret)
+        monkeypatch.setattr(confirm.settings, "confirmation_secret", secret)
         if phase == "feedback":
             assert marker.read_text() == "revoked"
             old = confirm.verify(saved.pending_confirm["token"], 7, 42)

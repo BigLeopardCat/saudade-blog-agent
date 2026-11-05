@@ -11,7 +11,7 @@ from eval.online_transport import EvaluationError, OnlineTransport
 
 @pytest.fixture(autouse=True)
 def synthetic_signer(monkeypatch):
-    monkeypatch.setattr("eval.online_transport._sign_local_jwt", lambda *_: token_urlsafe())
+    monkeypatch.setattr("eval.operator_credentials.session", lambda *_: token_urlsafe())
 
 
 @pytest.mark.parametrize("used,limit,remaining,unlimited,required,accepted", [

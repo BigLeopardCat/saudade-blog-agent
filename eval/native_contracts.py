@@ -76,7 +76,8 @@ def _principal(role="user"):
                         "exp": int(time.time()) + 600}, SECRET, algorithm="HS256")
     request = Request({"type": "http", "headers": [
         (b"x-agent-assertion", token.encode())]})
-    principal = resolve_principal(request, 7)
+    with patch.object(settings, "agent_assertion_secret", SECRET):
+        principal = resolve_principal(request, 7)
     if principal.source != "assertion":
         raise RuntimeError("synthetic identity did not pass production verification")
     return principal

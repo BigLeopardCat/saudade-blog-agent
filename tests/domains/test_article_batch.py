@@ -65,7 +65,7 @@ def service(monkeypatch):
             rows[-1] = rows[0]
         return httpx.Response(200, json={"code": 200, "data": rows})
 
-    monkeypatch.setattr(confirm.settings, "jwt_secret", secrets.token_urlsafe(32))
+    monkeypatch.setattr(confirm.settings, "confirmation_secret", secrets.token_urlsafe(32))
     with httpx.Client(transport=httpx.MockTransport(handle)) as client:
         monkeypatch.setattr(base, "_client", client)
         yield state

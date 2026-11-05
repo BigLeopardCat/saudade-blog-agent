@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""`/ready`：**能不能真的接一轮对话**——与 `/health` 的"进程活没活"是两件事。
-"""
+"""`/ready`：**能不能真的接一轮对话**——与 `/health` 的"进程活没活"是两件事。"""
 
 from __future__ import annotations
 
@@ -36,6 +35,7 @@ def health_ok() -> bool:
 
 READY_KEYS = {"ready", "reasons", "provider"}
 
+
 def test_ready():
     print("① 正常态：就绪，且与 /health 一致（都在说'活着且能干活'）")
     _agent_saved = app.state.runtime
@@ -51,15 +51,24 @@ def test_ready():
     try:
         for _k in _KEY_FIELDS:
             setattr(settings, _k, _FAKE_KEY)
-        app.state.runtime = object()                    # 假装图已经建好
+        app.state.runtime = object()  # 假装图已经建好
         _code, _body = call()
         check("顶层键恰好 ready / reasons / provider", set(_body) == READY_KEYS, sorted(_body))
-        check("图建好了、provider 认得出、凭据在位 ⇒ 200 + ready=true",
-              _code == 200 and _body["ready"] is True, f"{_code} {_body}")
-        check("  ready == (reasons 为空)（两个字段不许各说各话）",
-              _body["ready"] == (not _body["reasons"]), str(_body["reasons"]))
-        check("  provider 回的是归一化后的名字（不是 env 原文）",
-              _body["provider"] == settings.check_provider(), _body["provider"])
+        check(
+            "图建好了、provider 认得出、凭据在位 ⇒ 200 + ready=true",
+            _code == 200 and _body["ready"] is True,
+            f"{_code} {_body}",
+        )
+        check(
+            "  ready == (reasons 为空)（两个字段不许各说各话）",
+            _body["ready"] == (not _body["reasons"]),
+            str(_body["reasons"]),
+        )
+        check(
+            "  provider 回的是归一化后的名字（不是 env 原文）",
+            _body["provider"] == settings.check_provider(),
+            _body["provider"],
+        )
     finally:
         app.state.runtime = _agent_saved
         for _k, _v in _keys_saved.items():
@@ -70,10 +79,16 @@ def test_ready():
         app.state.runtime = None
         _code, _body = call()
         check("503", _code == 503, str(_code))
-        check("reasons 点名 agent_not_built",
-              "agent_not_built" in _body["reasons"], str(_body["reasons"]))
-        check("  ⭐ 同一条件下 /health 仍然 200（两者同时红就说明 /ready 只是复制品）",
-              health_ok(), "" if health_ok() else "health 也红了 ⇒ /ready 只是它的复制品")
+        check(
+            "reasons 点名 agent_not_built",
+            "agent_not_built" in _body["reasons"],
+            str(_body["reasons"]),
+        )
+        check(
+            "  ⭐ 同一条件下 /health 仍然 200（两者同时红就说明 /ready 只是复制品）",
+            health_ok(),
+            "" if health_ok() else "health 也红了 ⇒ /ready 只是它的复制品",
+        )
     finally:
         app.state.runtime = _agent_saved
 
@@ -84,35 +99,51 @@ def test_ready():
         settings.llm_provider = "SENTINEL_PROVIDER"
         _code, _body = call()
         check("503", _code == 503, str(_code))
-        check("reasons 点名 unknown_provider",
-              "unknown_provider" in _body["reasons"], str(_body["reasons"]))
-        check("  ⭐ 同一条件下 /health 仍然 200（它**刻意**对配置错误 fail-open）",
-              health_ok(), "" if health_ok() else "health 也红了 ⇒ 这个端点没有带来新信息")
+        check(
+            "reasons 点名 unknown_provider",
+            "unknown_provider" in _body["reasons"],
+            str(_body["reasons"]),
+        )
+        check(
+            "  ⭐ 同一条件下 /health 仍然 200（它**刻意**对配置错误 fail-open）",
+            health_ok(),
+            "" if health_ok() else "health 也红了 ⇒ 这个端点没有带来新信息",
+        )
         # 回 env **原文**（不是归一化后的名字）：认不出就没有"归一化后的名字"可回，而现场
         # 要读的恰恰是"你到底把 LLM_PROVIDER 写成了什么"——编一个已知的顶上会把病因抹掉。
-        check("  provider 那一格如实回 env 原文（不编一个已知的名字顶上）",
-              _body["provider"] == "SENTINEL_PROVIDER", repr(_body["provider"]))
+        check(
+            "  provider 那一格如实回 env 原文（不编一个已知的名字顶上）",
+            _body["provider"] == "SENTINEL_PROVIDER",
+            repr(_body["provider"]),
+        )
     finally:
         settings.llm_provider = _prov_saved
         app.state.runtime = _agent_saved
 
     print("\n④ 凭据缺 ⇒ 503 + missing_credentials（20260927 那次的形状）")
-    _key_saved = {k: getattr(settings, k)
-                  for k in ("qwen_api_key", "deepseek_api_key", "openai_api_key")}
+    _key_saved = {
+        k: getattr(settings, k) for k in ("qwen_api_key", "deepseek_api_key", "openai_api_key")
+    }
     try:
         app.state.runtime = object()
         settings.llm_provider = "qwen"
-        settings.qwen_api_key = ""                  # 名字认得、key 没有 ⇒ 每一条请求都会 401
+        settings.qwen_api_key = ""  # 名字认得、key 没有 ⇒ 每一条请求都会 401
         _code, _body = call()
         check("503", _code == 503, str(_code))
-        check("reasons 点名 missing_credentials（与向量路同一套词）",
-              "missing_credentials" in _body["reasons"], str(_body["reasons"]))
+        check(
+            "reasons 点名 missing_credentials（与向量路同一套词）",
+            "missing_credentials" in _body["reasons"],
+            str(_body["reasons"]),
+        )
         _h = asyncio.run(server.health(service_request()))
-        check("  ⭐ 同一条件下 /health 仍然 200 且 agent_ready=true —— 这正是它治的那件事",
-              _h.get("status") == "ok" and _h.get("agent_ready") is True,
-              "" if _h.get("agent_ready") is True
-              else f"health 没在 fail-open：agent_ready={_h.get('agent_ready')!r} ⇒ "
-                   f"这一条失去意义（两者本来就同红同绿）")
+        check(
+            "  ⭐ 同一条件下 /health 仍然 200 且 agent_ready=true —— 这正是它治的那件事",
+            _h.get("status") == "ok" and _h.get("agent_ready") is True,
+            ""
+            if _h.get("agent_ready") is True
+            else f"health 没在 fail-open：agent_ready={_h.get('agent_ready')!r} ⇒ "
+            f"这一条失去意义（两者本来就同红同绿）",
+        )
     finally:
         for k, v in _key_saved.items():
             setattr(settings, k, v)
@@ -120,18 +151,21 @@ def test_ready():
 
     print("\n⑤ 不回显密钥（注入哨兵值再判），且 reasons 恒是短字符串列表")
     SENTINEL = "sk-SENTINEL-MUST-NOT-LEAK-0123456789"
-    _saved2 = {k: getattr(settings, k)
-               for k in ("jwt_secret", "qwen_api_key", "deepseek_api_key", "openai_api_key")}
+    _saved2 = {
+        k: getattr(settings, k)
+        for k in ("confirmation_secret", "qwen_api_key", "deepseek_api_key", "openai_api_key")
+    }
     try:
         for k in _saved2:
             setattr(settings, k, SENTINEL)
         _code, _body = call()
-        check("返回体里不含任何密钥取值",
-              SENTINEL not in json.dumps(_body, ensure_ascii=False))
-        check("reasons 是字符串列表（不是 None / 不是把异常对象挂上去）",
-              isinstance(_body["reasons"], list)
-              and all(isinstance(x, str) and 0 < len(x) <= 64 for x in _body["reasons"]),
-              repr(_body["reasons"]))
+        check("返回体里不含任何密钥取值", SENTINEL not in json.dumps(_body, ensure_ascii=False))
+        check(
+            "reasons 是字符串列表（不是 None / 不是把异常对象挂上去）",
+            isinstance(_body["reasons"], list)
+            and all(isinstance(x, str) and 0 < len(x) <= 64 for x in _body["reasons"]),
+            repr(_body["reasons"]),
+        )
     finally:
         for k, v in _saved2.items():
             setattr(settings, k, v)
