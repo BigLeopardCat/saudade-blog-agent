@@ -83,6 +83,7 @@ def prepare_announcement_create(
 ) -> object:
     """准备发布站内公告确认，不写入。确认卡完整展示标题和正文；用户给出原文时照录。
     公告公开可见，并为当前用户创建个人通知，点击确认后原子发布。
+    延时或定期发布使用 admin_automations 的 prepare_automation(action="publish_announcement")。
     """
     return _prepare("create", None, {"title": title, "content": content}, config)
 

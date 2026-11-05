@@ -50,15 +50,15 @@ def paused_result(update):
     return None
 
 
-def _pending(snapshot):
+def pending_interrupt(snapshot, kind="client_action"):
     for interruption in snapshot.interrupts:
         value = interruption.value
-        if isinstance(value, dict) and value.get("kind") == "client_action":
+        if isinstance(value, dict) and value.get("kind") == kind:
             return value
     for task in snapshot.tasks:
         state = task.state
         if hasattr(state, "interrupts"):
-            command = _pending(state)
+            command = pending_interrupt(state, kind)
             if command:
                 return command
     return None
@@ -89,7 +89,7 @@ def successful(command, value):
 
 
 def resume_value(snapshot, task_id, config):
-    pending = _pending(snapshot)
+    pending = pending_interrupt(snapshot)
     value = config["configurable"].get("browser_result")
     if pending is None:
         if value is not None:

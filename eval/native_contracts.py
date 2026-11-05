@@ -41,6 +41,7 @@ from eval import (
     quota_task_contracts,
     reading_task_contracts,
     request_metrics,
+    task_lifecycle_contracts,
     todo_task_contracts,
 )
 from eval.own_fixtures import SECRET, favorite_backend, message_backend, notification_backend
@@ -206,7 +207,8 @@ CASES = [("chat", favorite_backend, _chat),
          *context_contracts.CASES, *composite_task_contracts.CASES,
          *account_candidate_contracts.CASES, *compaction_contracts.CASES,
          *article_tag_contracts.CASES, *confirmation_failure_contracts.CASES,
-         *todo_task_contracts.CASES, *ordered_preparation_contracts.CASES]
+         *todo_task_contracts.CASES, *ordered_preparation_contracts.CASES,
+         *task_lifecycle_contracts.CASES]
 
 
 def _sample(name, backend, contract, run_id, sample):
@@ -215,7 +217,7 @@ def _sample(name, backend, contract, run_id, sample):
           TemporaryDirectory(prefix="agent-native-eval-") as temp):
         arm = AgentRuntime(
             CheckpointConversationStore(InMemorySaver()),
-            application=BlogApplication(),
+            application=state.get("application") or BlogApplication(),
             model_io=resources.enter_context(ModelIO()),
         )
         store = _Store(str(Path(temp) / "ledger.sqlite3"))

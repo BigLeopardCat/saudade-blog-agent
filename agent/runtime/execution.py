@@ -95,6 +95,9 @@ class FrameworkExecution:
                 snapshot = self.recovery_state or self.parent.get_state(
                     self.config, subgraphs=True)
                 client_result = resume_value(snapshot, self.session.task["id"], self.config)
+                if client_result is None:
+                    from agent.runtime.task_pause import resume_value as resume_pause
+                    client_result = resume_pause(snapshot, self.session.task["id"])
                 if isinstance(client_result, TurnResult):
                     self.session.outcome = client_result
                     return

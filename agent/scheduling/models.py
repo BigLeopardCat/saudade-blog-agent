@@ -51,7 +51,7 @@ class Definition(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     title: Annotated[StrictStr, Field(min_length=1, max_length=80)]
-    action: Literal["reminder", "read_only_agent"]
+    action: Literal["reminder", "read_only_agent", "publish_announcement"]
     instruction: Annotated[StrictStr, Field(min_length=1, max_length=2000)]
     timezone: StrictStr = "Asia/Shanghai"
     run_at: AwareDatetime | None = None
@@ -81,6 +81,11 @@ class Definition(BaseModel):
     def validate_trigger(self):
         if sum(value is not None for value in (self.run_at, self.delay_seconds, self.cron)) != 1:
             raise ValueError("provide exactly one of run_at, delay_seconds or cron")
+        if self.action == "publish_announcement":
+            from agent.domains.announcements.targets import intent
+
+            intent({"action": "create",
+                    "fields": {"title": self.title, "content": self.instruction}})
         if self.cron:
             if len(self.cron.split()) != 5 or not croniter.is_valid(self.cron):
                 raise ValueError("cron must have five fields, with minute precision")

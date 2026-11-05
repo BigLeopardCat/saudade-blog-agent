@@ -388,3 +388,76 @@ def test_ui_list_uses_active_backend_filter_and_server_side_cron_time():
     due = datetime.fromisoformat(item['next_run_at']).astimezone(timezone.utc)
     assert due == NOW + timedelta(hours=1)
     assert client.list_workflows.call_args.kwargs['attributes'] == {'cancelled': False}
+
+
+def test_scheduled_publication_approval_freezes_exact_content_and_does_not_publish(monkeypatch):
+    from _own_support import config
+
+    monkeypatch.setattr(settings, "confirmation_secret", "scheduling-fixture-secret-at-least-32")
+    service = ScheduleService(None, lambda _: ADMIN, now=lambda: NOW)
+    result = tools(service, True)["prepare_automation"].invoke(
+        {"title": "测试公告", "instruction": " 保留原文\n😀 ",
+         "action": "publish_announcement", "delay_seconds": 300},
+        config=config(principal=ADMIN),
+    )
+    card = result.execution["pending_confirm"]
+    grant = confirm.verify(card["token"], ADMIN.uid, 42)
+    frozen = grant["specs"][0]["args"]["definition"]
+    assert frozen["action"] == "publish_announcement" and frozen["delay_seconds"] == 300
+    assert frozen["title"] == "测试公告" and frozen["instruction"] == " 保留原文\n😀 "
+    assert "发布时的全部用户" in card["q"] and "无需再次确认" in card["q"]
+    assert not result.execution.get("receipts")
+
+
+@pytest.mark.parametrize("title,content", [("bad\n", "body"), ("title", "bad\x01")])
+def test_scheduled_publication_uses_same_content_validation_as_interactive_posts(title, content):
+    with pytest.raises(ValidationError):
+        Definition(title=title, instruction=content,
+                   action="publish_announcement", delay_seconds=300)
+
+
+def test_scheduled_publication_checks_bound_receipt_and_never_calls_model(monkeypatch):
+    from agent.scheduling.models import fingerprint
+
+    monkeypatch.setattr(settings, "confirmation_secret", "scheduling-fixture-secret-at-least-32")
+    title, text = "测试公告", " 原文\n😀 "
+    receipt = {"announcementId": 54, "notificationCount": 2,
+               "payloadHash": fingerprint([title, text]), "replayed": False}
+    sent = []
+
+    def handler(request):
+        if request.method == "GET":
+            return httpx.Response(200, json={"code": 200, "data": {"id": 7, "role": "admin"}})
+        sent.append(json.loads(request.content))
+        return httpx.Response(200, json={"code": 200, "data": receipt})
+
+    with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+        host = BlogHost(client)
+        result = host.publish_announcement(7, "run", title, text)
+        assert result["status"] == "completed" and result["publication"]["announcementId"] == 54
+        assert sent == [{"runId": "run", "title": title, "content": text}]
+        receipt["payloadHash"] = "a" * 64
+        with pytest.raises(ValueError):
+            host.publish_announcement(7, "run", title, text)
+
+
+def test_scheduled_publication_worker_rechecks_pause_and_executes_frozen_payload():
+    from unittest.mock import Mock
+
+    from agent.scheduling.worker import WorkerActions
+
+    value = Definition(title="公告", action="publish_announcement",
+                       instruction="正文", delay_seconds=300)
+    row = SimpleNamespace(attributes={"paused": True, "cancelled": False})
+    backend = SimpleNamespace(once=lambda *_: row)
+    host = SimpleNamespace(actor=lambda _: ADMIN,
+                           publish_announcement=Mock(return_value={"status": "completed"}))
+    worker = WorkerActions(backend, host, None)
+    payload = {"owner_id": 7, "schedule_id": IDENT, "definition": value.model_dump(mode="json"),
+               "start_at": datetime.now(timezone.utc).isoformat()}
+    assert worker.perform(payload, "run")["status"] == "blocked"
+    host.publish_announcement.assert_not_called()
+    row.attributes["paused"] = False
+    assert worker.perform(payload, "run")["status"] == "completed"
+    host.publish_announcement.assert_called_once_with(7, "run", "公告", "正文")
+    assert worker.runner is None

@@ -3,7 +3,6 @@
 import hashlib
 import json
 import time
-import uuid
 
 
 def presentation(result):
@@ -37,9 +36,7 @@ def cancel(runtime, grant, config):
     """Revoke the signed operation under the same lock used for execution."""
     from agent.domains.registry import native_domain
     from agent.products.blog.pending import PendingOperation
-    from agent.runtime.memory import observation
-    from agent.runtime.results import cancellation_content
-    from tools.result import ok
+    from agent.runtime.results import cancellation_observations
     if native_domain(grant) is None:
         raise ValueError("这张旧确认卡尚不支持按钮撤销，请勿批准并等待其过期。")
     selected = confirmed_runtime(runtime, grant)
@@ -49,9 +46,7 @@ def cancel(runtime, grant, config):
         result = PendingOperation(grant, action).cancel(config, saver)
         if not result.execution:
             return {"cancelled": False, "reply": result.reply}
-        facts = observation({"name": "cancel_pending_operation", "args": {},
-                             "id": "cancelled_" + uuid.uuid4().hex},
-                            ok(cancellation_content(result.reply)))
+        facts = cancellation_observations(result.reply)
         selected.store.clear_pending(config, grant["jti"], observations=facts)
         return {"cancelled": True, "event": result.execution["pending_event"],
                 "reply": result.reply}

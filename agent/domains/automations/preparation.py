@@ -34,7 +34,7 @@ def tools(service, can_prepare):
     @tool
     @tool_boundary
     def list_automations(config: RunnableConfig, limit: Limit = 5, offset: Offset = 0) -> object:
-        """List this administrator's own reminders and read-only background tasks."""
+        """List owned reminders, background analyses and scheduled announcements."""
         data = service.list(principal(config), limit, offset)
         return ok(json.dumps(data, ensure_ascii=False), data=data)
 
@@ -68,7 +68,7 @@ def tools(service, can_prepare):
     def prepare_automation(
         title: str,
         instruction: str,
-        action: Literal["reminder", "read_only_agent"],
+        action: Literal["reminder", "read_only_agent", "publish_announcement"],
         config: RunnableConfig,
         run_at: str | None = None,
         delay_seconds: int | None = None,
@@ -80,6 +80,10 @@ def tools(service, can_prepare):
         """Prepare an administrator's persistent schedule for approval; do not activate it.
 
         Provide exactly one: absolute run_at, seconds after creation, or five-field cron.
+        Delay starts ONLY after approval. While pending, do not claim it is queued
+        or translate the delay to an exact clock time.
+        publish_announcement publishes the EXACT title and instruction as the public title/body,
+        notifying all accounts present at execution. The approval includes this content and timing.
         reminder sends the supplied text to the owner. read_only_agent runs a NEW isolated task:
         include all needed instructions, as it has no original chat history, browser actions,
         or business writes. Results notify the owner. A public-article condition needs expires_at.
@@ -111,6 +115,8 @@ def tools(service, can_prepare):
                 f"截止 {definition.expires_at.isoformat()}。"
             )
         question += (
+            "\n到期自动公开发布以上标题和正文，并通知发布时的全部用户；无需再次确认。"
+            if action == "publish_announcement" else
             "\n结果发送给你本人。后台分析仅使用读取工具，不执行页面操作或业务写入；"
             "不会携带当前聊天历史。"
         )
