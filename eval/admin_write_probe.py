@@ -46,7 +46,7 @@ _NOTFOUND_RE = re.compile(
 
 
 class ProbeError(RuntimeError):
-    """真值读失败——**绝不当成"读到了空"**（那正是这批工具最坏的失败形态）。"""
+    """A failed truth-source read is not an empty result."""
 
 
 def _b64(raw: bytes) -> str:
@@ -1865,26 +1865,10 @@ def _finish_staged_quota(rep: Report, uid: int, role: str, aid: int, name: str) 
 
 
 def step18_ledger_zero_write(rep: Report, uid: int, role: str) -> None:
-    """⑱ 台账那条腿的**零写半**：授权 ≠ 签字；且模型不动作时必须问一句、不许静默。
+    """Exercise the archived ledger zero-write probe.
 
-    批 H 删掉旧确定性快道之后，模型没选写技能时不再有任何"系统替你拼一张写计划"的
-    兜底，留下的**唯一**地基是 S4 那句收尾事实（`agent/graph.py _ledger_closing_note`
-    第二支）：把台账念给主人、问他要办哪几件。这条腿验它**在生产里**真的这么表现：
-
-      · 弹了确认框 ⇒ 本腿**绝不点确定**：库真值一个字节不动，就是"授权 ≠ 签字"的
-        活体证据（与本腿同源的 ⑰ 点下去，两条腿合起来才是完整的那条链）。
-      · 没弹确认框 ⇒ 回复必须**照着台账**问一句（念出那几件里的一件），且**绝不**
-        把没办的写成办了、也不许说"没有等着办的"（台账里明明有）。这就是"删掉确定性
-        车道之后不许变成静默"的那条判据。
-
-    **零写是这条腿的判据本体**，所以它不要 `--allow-write`、也不要 `--allow-board-audit`
-    （它从不签字，只是把弹窗拿出来看一眼）。另加一条**只有这条腿能验**的事：闲聊轮
-    **一次都不读**台账（trace 里连 `ledger_frame` 事件都不该有）——S1「只有触发器命中
-    才去读」的活体证据，离线锁只能证函数、证不了生产这条链路。
-
-    ⚠️ 必须排在 ⑰ **之前**跑：⑰ 会真判掉那些待审留言（跑完不复原），台账一空 ⑱ 的
-    前提就没了。两条腿共用同一份真实数据，顺序本身就是约束。
-    """
+    Contextual authorization is not signed approval. With no selected mutation,
+    check the probe's pending-item follow-up against its source data."""
     from agent.adminops_quota import _QUOTA_VERB
     from agent.adminops_tags import BOARD_VERDICT_CN
     from agent.authz import is_write
