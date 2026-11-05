@@ -1,6 +1,8 @@
 # 参与开发
 
-Python 3.12+；依赖和工具版本由 `pyproject.toml` 与 `uv.lock` 固定。
+共享会话规则见 [AGENTS.md](AGENTS.md)。Python 3.12+；依赖和工具版本由 `pyproject.toml` 与 `uv.lock` 固定。
+
+下面命令用于 CI 或独立开发环境；共享生产主机优先复用已有工具，运行定向检查。
 
 ```sh
 uv sync --locked
@@ -55,3 +57,32 @@ PR 说明问题、最终行为、验证和限制。勿提交密钥、真实私�
 README 保留定位和起步；`docs/` 解释当前架构、操作与契约，配置默认值以代码和 `.env.example` 为准。重要取舍归入对应架构说明，不为每次修复追加 ADR 或日报。用户可感知的变化汇总至 `CHANGELOG.md`，未来方向写入 `ROADMAP.md`。
 
 使用教程可逐步扩展到 Wiki，但仓库中的快速开始、配置、兼容要求和发布验收必须可以随代码评审和版本固定。截图使用合成数据，不含真实账号、私信或密钥。
+
+## 跨仓协作与交接
+
+本仓主线为 `main`，博客主线为 `cn_sora_blog`。优先使用用户指定的基线；每个任务创建独立
+工作树，开始和提交前核对仓库、分支与其他会话改动。交接使用已推送分支、完整 commit
+和配套 PR，分别记录该版本的检查结果、尚未完成项与真实部署版本。
+
+`.github/host-contract.json` 固定宿主测试源码；博客的 `frontend/widget.lock.json` 固定
+本仓看板娘提交及两棵资源子树。两个锁不要求互相指向 HEAD，也不代表生产服务版本。
+更新任一组件子树时核对博客 pin；只改 Python 或文档无需同步 widget pin。宿主契约改变
+才更新 host lock，且源提交必须已推送、公开可取回。
+
+本地严格跨仓验证可从已有博客仓准备独立候选工作树，在本仓执行：
+
+```sh
+BLOG_SOURCE=/path/to/Saudade-Blog
+CONTRACT_ROOT="$(mktemp -d /tmp/saudade-host-contract.XXXXXX)"
+HOST_REV="$(python3 -c 'import json; print(json.load(open(".github/host-contract.json"))["revision"])')"
+git -C "$BLOG_SOURCE" fetch origin "$HOST_REV"
+git -C "$BLOG_SOURCE" worktree add --detach "$CONTRACT_ROOT" "$HOST_REV"
+test "$(git -C "$CONTRACT_ROOT" rev-parse HEAD)" = "$HOST_REV"
+SAUDADE_PARENT_REPO="$CONTRACT_ROOT" SAUDADE_REQUIRE_PARENT=1 uv run --frozen pytest -q
+```
+
+完整套件仍交给 CI 或独立开发环境。候选接口联调可以显式选择开发工作树，但须记录其
+实际提交和未提交差异，不能称为锁定版本回归。缺少宿主而跳过的用例也不能算通过。
+
+三端协议、鉴权或确认机制变更，在配套 PR 中说明兼容、合并/发布顺序和回滚。
+运行凭据、后台委托和操作员登录文件放私有目录；`.env.example` 只保留脱敏字段说明。

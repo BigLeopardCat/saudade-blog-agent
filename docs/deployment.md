@@ -5,7 +5,10 @@
 `systemd` 的 `ExecStart` 指向 `<release-root>/current/scripts/serve.sh`。该入口先解析真实版本目录，再以绝对路径启动 `agent.main:app`，并从 `REVISION` 提供 `/version` 的构建标识。切换 current 符号链接不会改变旧进程的 Python 模块搜索路径。
 
 ```sh
-scripts/deploy_release.sh COMMIT_SHA /srv/saudade-agent /etc/saudade/agent-runtime.env /var/lib/saudade-agent/data
+DEPLOY_SERVICE_GROUP=saudade-agent \
+DEPLOY_RUNTIME_STATE=/var/lib/saudade-agent \
+bash scripts/deploy_release.sh COMMIT_SHA /srv/saudade-agent \
+  /etc/saudade/agent-runtime.env /var/lib/saudade-agent/data
 ```
 
 配置 `EMBEDDING_PROFILE` 时，发布脚本自动安装锁定的 tokenizer 可选依赖并在激活前加载 profile 校验；也可显式设置 `DEPLOY_EMBEDDING_TOKENIZER=1`。检索验收应确认 `rag_state=active` 和 `vector_missing=0`。
@@ -14,7 +17,7 @@ scripts/deploy_release.sh COMMIT_SHA /srv/saudade-agent /etc/saudade/agent-runti
 
 脚本用 flock 串行化发布，只接收 Git 中存在的提交，使用 `git archive` 排除工作区文件和凭据。依赖安装、导入检查完成后才原子切换 current；探活同时核对 `/ready` 和预期构建 SHA。失败恢复上一版本并重启，未自动删除旧版本或用户数据。首次部署没有上一版本，需由运维处理失败。
 
-公开 PR CI 不使用生产配置或凭据。部署应在该提交的必需检查通过后执行；发布探活不代替真实模型回归。需要数据库迁移的变更须单独核对前置条件，脚本不自动执行数据迁移。
+公开 PR CI 不使用生产配置或凭据，也不部署 Agent。博客构建只拉取锁定的组件子树，不会更新 Agent 进程。部署应在该提交的必需检查通过后执行；发布探活不代替真实模型回归。需要数据库迁移的变更须单独核对前置条件，脚本不自动执行数据迁移。
 
 发行包由 `bash scripts/dev/package_smoke.sh` 验证。脚本构建 sdist 和 wheel，在源码目录外的
 隔离环境中按 `uv.lock` 和哈希安装运行依赖及 wheel，核对包路径、应用版本和工具注册；此检查加入公开 PR CI。

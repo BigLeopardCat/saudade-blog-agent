@@ -6,16 +6,13 @@ body:
   - type: markdown
     attributes:
       value: |
-        本仓当前处于 **feature freeze**：只接受稳定性、安全性、可观测性和回归测试方向的
-        改动（见 ROADMAP.md）。所以一条提议最有用的部分往往不是"做什么"，
-        而是**它让哪一种真实发生过的坏结果变得不可能**。
-
-        「以后要做但现在不做」也是一种提议——那种情况下请把**触发条件**写出来。
+        请描述当前问题、预期行为、影响范围和可验证的验收条件。
+        涉及跨仓接口时，附上配套仓库及兼容要求。
   - type: textarea
     id: problem
     attributes:
       label: 要解决什么问题
-      description: 描述现状里真实存在的那件坏事（有 trace id / 事故记录更好），而不是先描述方案。
+      description: 描述可复现的现状，附脱敏日志或 trace 标识。
     validations:
       required: true
   - type: textarea
@@ -62,6 +59,6 @@ body:
     id: alternatives
     attributes:
       label: 你考虑过的其它做法，以及为什么不选
-      description: 这一格能让后来的人不用把同样的调研重做一遍——包括你自己三个月后。
+      description: 说明备选方案及当前取舍。
     validations:
       required: false

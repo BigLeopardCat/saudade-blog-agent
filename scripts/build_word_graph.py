@@ -32,24 +32,17 @@ BLOCKLIST_FILE = Path(__file__).resolve().parent / "graph_blocklist.txt"
 USERDICT_FILE = Path(__file__).resolve().parent / "graph_userdict.txt"   # jieba 切分/词性白名单
 ALLOW_FILE = Path(__file__).resolve().parent / "graph_allow.txt"         # 绕过词配额的主题词
 
-# 图谱两端（本脚本 + `rag/wordgraph.py`）共用一份 embedding 空间解析规则。那个模块
-# **只用标准库**（本脚本跑在 `--no-project` 的隔离环境里、没有 pydantic，import 不进
-# `config.settings`），所以两边都 import 得动它 —— 这是"共用一个事实源"的前提。
-# 原先这里钉着 `EMBED_MODEL/EMBED_DIM/BATCH` 三个常量，模型名在本文件、查询侧、
-# 缓存键三处各存一份：换模型时它们会各自漂，而漂的后果（查询向量落在另一个空间）
-# 不报错、只是图默默变得不对。
+
 sys.path.insert(0, str(REPO_AGENT))
 from rag.embed_space import (BUILD_TIMEOUT, Space, cache_payload,  # noqa: E402
                              missing_config, read_cache, resolve)
 
-# 垃圾文章（近乎空的测试文，20260915 实测正文 0/8/122 字）
+
 EXCLUDE_IDS_DEFAULT = {9, 10, 11}
 MIN_CHARS_DEFAULT = 400
 TITLE_JUNK_RE = re.compile(r"^(测试|test|hello|aaa|untitled)", re.I)
 
-# 词性闸：只丢明确的虚词/标点/数量词/代词/方位词。
-# 注意不能只留 n/vn——jieba 会把「异步」标成 d、「并发」标成 v、「单线程」标成 b，
-# 这些正是本站要的领域词（20260915 实测）。真正的噪声交给停用词表 + tf-idf 排名。
+
 POS_DROP = {
     "x", "w", "m", "mq", "q", "p", "c", "u", "uj", "ul", "uv", "uz", "ug", "ud",
     "r", "f", "t", "e", "o", "y", "z", "zg", "nr", "nrfg", "nrt", "h", "k", "s",
@@ -163,11 +156,7 @@ def fetch_articles(api_base: str) -> list[dict]:
     return arts
 
 
-# ---------------------------------------------------------------- 热度
 
-# 热度权重（20261003 用户第 2 条：节点大小改由**文章热度**决定）。就是下面这一块常量，
-# 要调只调这里：浏览最廉价（点开就 +1），讨论最贵（要打字），点赞/收藏居中。
-# 每个读数都先 log1p 再乘权重 —— 一篇爆款不该把其余文章全压成一个点。
 HEAT_W = {"views": 1.0, "likes": 3.0, "favorites": 3.0, "comments": 4.0}
 
 
@@ -237,16 +226,7 @@ def clean_markdown(md: str) -> str:
 
 
 def resolve_exclude_ids(raw: str | None) -> set[int]:
-    """`--exclude-ids` 的取值 → 要排除的 id 集合。
-
-    · `None`（**没传**这个参数）⇒ 本站默认的那三篇垃圾短文；
-    · 空串 / 只有逗号 ⇒ **一个都不排除**（这是明确的意图，不是"没传"）；
-    · 出现不是整数的词 ⇒ 报错，**不静默跳过**（跳过等于让人以为已经排除了）。
-
-    20261003 之前这个判断写在 `select_articles` 里、写成
-    `a["id"] in exclude_ids or a["id"] in EXCLUDE_IDS_DEFAULT`，于是连空串也照样排除
-    那三个 id —— 别人 clone 过去建图时，同号的文章被静默丢掉（回归锁见
-    `tests/test_word_graph_build.py`）。"""
+    """解析排除 ID：未传时使用默认集合，空串表示不排除，非法整数报错。"""
     if raw is None:
         return set(EXCLUDE_IDS_DEFAULT)
     out = set()
@@ -261,13 +241,7 @@ def resolve_exclude_ids(raw: str | None) -> set[int]:
 
 
 def select_articles(arts: list[dict], exclude_ids: set[int], min_chars: int) -> tuple[list[dict], list[str]]:
-    """`exclude_ids` 就是**全部**要排除的 id —— 这里不再叠一份 `EXCLUDE_IDS_DEFAULT`。
-
-    20261003 修：原来写的是 `a["id"] in exclude_ids or a["id"] in EXCLUDE_IDS_DEFAULT`，
-    于是那三个默认 id（9/10/11，本站的三篇垃圾短文）**永远被排除**，连
-    `--exclude-ids ""`（"一个都不排除"）也排除——别人 clone 过去建图时，同号的
-    文章会被静默丢掉，而日志只会说"排除 3 篇"。默认值现在由 `main()` 在
-    **没传这个参数时**填进去（`--exclude-ids ""` = 真的不排除）。"""
+    """按显式排除集合和最低正文长度选择文章，不额外合并默认 ID。"""
     kept, dropped = [], []
     for a in arts:
         clean = clean_markdown(a["content"])
@@ -525,25 +499,11 @@ def _embed_batch(space: Space, url: str, headers: dict, batch: list[str],
 
 def project_3d(vecs: np.ndarray, importance: np.ndarray, alpha: float, gamma: float,
                clip: float, strip_top: int = 0) -> tuple[np.ndarray, dict, dict]:
-    """PCA 到 3 维 + 软白化 + 尾部压缩 + 球归一。
+    """PCA 三维投影、软白化、尾部压缩和球归一。
 
-    调参实测（20260915，332 词 6 篇语料）：α ∈ [0,1] × γ ∈ [0.6,1] × 逐轴标准化开/关
-    的全部组合下，近邻保真度恒在 0.15~0.20（随机基线 0.030），差异全在噪声级；
-    clip=1.3 时**一个点都没裁到**（本语料没有离群点）。默认取 (α=0.3, γ=1.0)，
-    保留旋钮是为了换语料后还能调，不是它们现在有多关键。
-
-      α 软白化：U[:,k]*S_k^α。本语料谱很平（S1/S3 仅 2.04，前 3 主成分共 17.3% 方差），
-               所以 α 几乎不改形状——α=0 各轴 std 0.112/0.105/0.106（近似球），
-               α=1 是 0.354/0.222/0.195（扁 1.8:1）。
-      γ 尾部压缩：sign(z)|z|^γ 逐轴单调，不改近邻序，只把离群点拉回、中心撑开。
-      strip_top：all-but-the-top（减掉前 k 个主方向）。**本语料上实测有害无益**
-               （strip=1 让保真度 0.191→0.154，线长指标纹丝不动），默认 0。
-    符号固定：SVD 符号任意，不固定会导致每次重建整体翻转——令重要度最高的节点取负。
-
-    ⚠ 本函数给的坐标**线长不携带语义**（高相似边平均长 0.364 vs 低相似边 0.416，
-    只差 12%）——1024→3 线性降维保不住近邻，是维度决定的。真正让「相关=线短」成立的
-    是 layout_semantic()，本函数的输出只是它的初值。别指望只调这里的参数能修好。
-    """
+alpha 控制奇异值缩放，gamma 控制逐轴尾部压缩，strip_top 去除主方向。
+固定 SVD 符号以保持重建方向稳定。线性投影仅提供初值，不保证线长反映语义。
+"""
     x = vecs / np.maximum(np.linalg.norm(vecs, axis=1, keepdims=True), 1e-12)
     mean = x.mean(axis=0)
     xc = x - mean
@@ -598,44 +558,11 @@ def _finalize_layout(pos: np.ndarray, clip: float) -> np.ndarray:
 
 def layout_umap(sim: np.ndarray, clip: float, n_neighbors: int = 15,
                 min_dist: float = 0.2, seed: int = 42) -> np.ndarray:
-    """UMAP 三维（McInnes 2018）——**默认布局**（20260917 换的）。
+    """UMAP 三维布局，仅建图环境依赖 umap-learn。
 
-    为什么换（离线 A/B，同语料/同 embedding/同 693 条边，只换布局；测法见
-    `scripts/layout_ab.py`，指标口径与质量门完全一致）：
-
-        布局                     保真度 10-NN   rho(线长~相似度)
-        PCA-3D + 语义弹簧（旧默认）    0.255        −0.383
-        **UMAP-3D（本函数）**         **0.433**    −0.278
-        Isomap（kNN k=10/15/30）     0.21/0.21/0.18  −0.26/−0.24/−0.21
-        Isomap（跑在稀疏边集上）       0.064        −0.375
-        SMACOF（只在边集上做应力）     0.027 ≈ 随机   **−1.000**
-        （随机基线 0.025）
-
-    三条结论，别丢：
-    ① **保真度**（"点一个词、它周围的词是否真的相关"，也就是访客实际感受到的东西）
-       只有 UMAP 显著更好（+70%）；谱方法一支（PCA/Isomap/经典 MDS）都在 0.03~0.26
-       ——它们优化全局方差/距离，而 UMAP 优化局部邻域。
-    ② **旧默认之上再叠弹簧会吃掉大部分收益**（0.433 → 0.25~0.28）：弹簧只用 693 条边
-       （占全部点对 0.87%）去拽 400 个点，覆盖掉 UMAP 学到的结构。所以这里**不叠弹簧**。
-    ③ **rho 不再是门**（见 main 的 gate 注释）：SMACOF 只优化那 693 条边就能做到
-       rho = −1.000 而保真度塌到随机 ⇒ 它可被"游戏"，且优化方向与访客感受相反。
-
-    min_dist 扫描（同一份语料；"重叠点" = 最近邻距离 < 0.02，也就是会视觉叠在一起）：
-
-        min_dist   保真度 k=5/10/20      最近邻距离中位   重叠点   全局点距中位
-        0.05       0.435/0.433/0.426    0.033          88      0.618
-        **0.2**    0.423/0.426/0.432    0.061           8      0.777
-        0.4        0.382/0.412/0.420    0.075           2      0.790
-
-    ⇒ 默认取 **0.2**：保真度与 0.05 基本无差（0.426 vs 0.433），重叠点从 88 降到 8、
-    整体铺得更开。0.05 那种"点为邻域牺牲"的取向在这张图上会挤成一坨（22% 的点与邻居
-    距离 <0.02），观感就是"糊"；0.4 更开但保真度开始掉（0.412）。要更开可以
-    `--umap-min-dist 0.4`，代价是约 3% 保真度。
-
-    依赖：umap-learn（连带 numba/llvmlite/scipy/sklearn ≈ 470MB）。**只在建图侧**——
-    查询侧只用 1024 维余弦 + 节点坐标，永远不需要它。
-    随机性：固定 `random_state=seed` ⇒ 同输入同产物（与 layout_semantic 同样可复现）。
-    """
+固定 seed 以保持同输入可复现；min_dist 控制局部密度。
+不叠加边集弹簧，避免覆盖邻域结构。以近邻保真度验收，rho 只作诊断。
+"""
     try:
         import umap
     except ImportError as e:            # 依赖缺失要给出可执行的下一步，别只抛 ImportError
@@ -652,26 +579,11 @@ def layout_semantic(pca_p: np.ndarray, edges: list[list], iters: int = 400,
                     l_min: float = 0.05, l_max: float = 0.25, k_spring: float = 0.35,
                     k_rep: float = 0.02, r_rep: float = 0.36,
                     anchor: float = 0.02, clip: float = 1.6) -> np.ndarray:
-    """以 PCA 为初值的**语义弹簧松弛**：按相似度给每条边分配目标线长，把它拉到位。
+    """按相似度分配目标边长，进行确定性的弹簧松弛。
 
-    为什么需要它（20260915 在 332 词 6 篇语料上的实测，别删这段）：
-    纯 PCA 视图里**线长基本不携带语义**——spearman(线长, 相似度) 只有 −0.083，
-    高相似边的平均线长 0.364 vs 低相似边 0.416，只差 12%，肉眼分不出来。根因是谱太平
-    （前 3 主成分只占 17.3% 方差，S1/S3 仅 2.04），1024→3 的线性降维保不住近邻；
-    这是维度决定的，调 α/γ/strip/标准化都救不回来（全部组合的保真度都卡在 0.15~0.20）。
-
-    弹簧松弛实测能**同时**改善两个指标（不是拿一个换另一个）：
-        纯 PCA  :  近邻保真度 0.198（随机基线 0.030）  spearman −0.083
-        本函数  :  近邻保真度 0.289                    spearman −0.512
-    保真度反升是因为：弹簧把真正的近邻拽到一起，而 r_rep 距离外只有很弱的斥力，
-    多余的节点被摊开、不再随机挤在别人身边。目标线长 l_max=0.25 特意取得比 PCA 的
-    自然点距（中位 0.343）还小——取大了（如 1.75）弹簧会跟布局对着干，保真度掉到 0.075。
-
-    参数是在本语料上扫出来的，位于帕累托前沿中段；
-    换语料后若节点数/密度变化大，l_min/l_max 要按新的点距重标。
-
-    确定性：无随机数、无随机初值、固定迭代数、全向量化更新 ⇒ 同输入必同输出。
-    """
+使用 PCA 初值、固定迭代和全向量化更新。语料密度变化时需重新校准目标边长；
+仅优化稀疏边集不能保证完整邻域保真度，须结合质量门验证。
+"""
     pos = np.asarray(pca_p, dtype=np.float64).copy()
     n = len(pos)
     if not edges:
@@ -829,9 +741,7 @@ def origin_of(url: str) -> str:
 
 
 def _artifact_body(payload: dict) -> str:
-    """写盘内容 = 前缀 + JSON + 换行。manifest 的 bytes 必须按**这个**长度算——
-    只算 JSON blob 会少 16 字节（'export default ' 15 + '\\n'），
-    后来者拿它对 Content-Length 或体积预算就会对不上。"""
+    """生成完整写盘内容。manifest 字节数包括 export 前缀、JSON 和末尾换行。"""
     blob = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
     return "export default " + blob + "\n"
 
@@ -897,9 +807,7 @@ def _write_f32(path: Path, mat: np.ndarray) -> None:
 
 def main() -> None:
     ap = argparse.ArgumentParser()
-    # ⚠️ 默认值**必须是本机**（20261002 改；原来是作者的线上站点）。默认指向别人的站，
-    #    意味着 fork 出去的人不传参数跑一次，就把**原作者的文章**建成谱、还提交进自己
-    #    的仓。宁可默认连不上、报错让他显式指定，也不要静默去抓别人的语料。
+
     ap.add_argument("--api-base", default="http://localhost:3000/api/public",
                     help="公开接口基址（从哪个站点拉语料）——填**你自己的**站点，别指向别人的")
     ap.add_argument("--site", default="",
@@ -911,30 +819,22 @@ def main() -> None:
                          f"{sorted(EXCLUDE_IDS_DEFAULT)}）。**传空串 = 一个都不排除**"
                          "——别人 clone 过去时先用它把默认值清掉")
     ap.add_argument("--min-chars", type=int, default=MIN_CHARS_DEFAULT)
-    ap.add_argument("--alpha", type=float, default=0.3, help="软白化指数（实测噪声级，见 project_3d）")
+    ap.add_argument("--alpha", type=float, default=0.3, help="软白化指数，见 project_3d")
     ap.add_argument("--gamma", type=float, default=1.0, help="尾部压缩指数（<1 才压缩）")
     ap.add_argument("--clip", type=float, default=1.6)
-    # ⚠️ 默认值 1（20260917 改，原来是 0）：**第一主方向 = 语言/脚本轴**（实测 PC1 的组间方差
-    #    占比 0.93，随机方向只有 0.08）。它给"同语言"虚高、给"跨语言"压分——剥掉之后
-    #    跨语言相似度保留率 35%→77%（设备↔device 0.414→0.731）、三维里两团交融
-    #    （间距/半径和 1.84→0.12）、近邻保真度反而从 0.426 升到 0.446。
-    #    当年设成 0 是因为在**纯 PCA** 布局下剥它有害（0.191→0.154）；换 UMAP 后结论反转。
+
     ap.add_argument("--strip-top", type=int, default=1,
                     help="all-but-the-top 减掉的主方向数（默认 1 = 剥掉语言轴，见 §2.3）")
     ap.add_argument("--knn-k", type=int, default=6, help="每词取几个候选近邻")
-    # τ=0.45 曾是拍的，实测全库两两余弦 p99 才 0.332（随机对均值 −0.003），
-    # 卡 0.45 会让半数节点一条语义边都没有、只能靠补边撑门面。0.30 处孤立率 6%。
-    # τ 随 strip_top 一起调（20260917）：剥掉语言轴后相似度分布整体下移（同语言虚高没了），
-    # 仍用 0.30 会让边从 693 掉到 475。0.20 下边 778 / 平均度 3.89，比原来还密一点。
+
     ap.add_argument("--knn-tau", type=float, default=0.20, help="语义边的余弦下限")
     ap.add_argument("--edge-max-len", type=float, default=1.0, help="PCA 布局下剔除跨屏长线（语义布局不用）")
-    ap.add_argument("--umap-neighbors", type=int, default=15, help="UMAP n_neighbors（A/B 实测 15 优于 30）")
+    ap.add_argument("--umap-neighbors", type=int, default=15, help="UMAP 邻居数")
     ap.add_argument("--umap-min-dist", type=float, default=0.2,
                     help="UMAP min_dist：越小邻域越紧、点越容易叠在一起（见 layout_umap 的扫描表）")
     ap.add_argument("--umap-seed", type=int, default=42, help="UMAP 随机种子（固定 ⇒ 同输入同产物）")
     ap.add_argument("--layout", choices=("umap", "semantic", "pca"), default="umap",
-                    # 这句原来把 semantic 写成"默认"——20260917 换成 umap 之后没跟着改，
-                    # 于是 `--help` 与代码互相打脸。三者的差别要写全，别只写"哪个是默认"。
+
                     help="umap（默认）=近邻保真最好，要 umap/numba 那套重依赖；"
                          "semantic=PCA 初值 + 语义弹簧松弛（只用 numpy/jieba，线长携带语义）；"
                          "pca=纯线性投影")
@@ -1011,8 +911,7 @@ def main() -> None:
     log(f"③ embedding {space.describe()}")
     t = time.time()
     vecs = embed_words(words, space, env, args.refresh)
-    # 产物里记的维度取**实测值**：`EMBEDDING_DIM=0` 时维度由服务端定，写配置里的那个数
-    # （旧版写死 1024）只是碰巧对；查询侧会拿它当校验和，写错会比不写更坏。
+
     embed_dim = int(vecs.shape[1])
     log(f"  向量就绪 {vecs.shape}，耗时 {time.time() - t:.1f}s")
 
@@ -1053,8 +952,7 @@ def main() -> None:
     fid_raw = fidelity(vecs, p)          # 兜底口径：vs 原始 embedding 近邻（会低于上面那个）
     elen = [float(np.linalg.norm(p[a] - p[b])) for a, b, _ in edges]
     sims = [s for _, _, s in edges]
-    # 方向不能搞反：这里算的是 spearman(线长, 相似度)，「越相似线越短」⇒ **负值才正确**。
-    # （20260915 实测记一笔：写成 spearman(-len, sim) 再按「应为负」读，会把结论整个读反。）
+
     rho = spearman(elen, sims)
     fid_k = {k: fidelity(sim_vecs, p, kk=k) for k in (5, 10, 20)}
     log(f"  近邻保真度 k=5/10/20 = {fid_k[5]:.3f} / {fid_k[10]:.3f} / {fid_k[20]:.3f}"
@@ -1068,7 +966,6 @@ def main() -> None:
         bad = []
         if fid < 0.30:
             bad.append(f"近邻保真度 {fid:.3f} 低于 0.30（视图的近邻结构已失真；"
-                       f"当前默认 UMAP 在本语料实测 0.433，旧的 PCA+弹簧是 0.255 —— "
                        f"低于 0.30 说明布局或语料出了问题，别急着 --force）")
         if not 150 <= len(words) <= 600:
             bad.append(f"节点数 {len(words)} 不在 150~600")

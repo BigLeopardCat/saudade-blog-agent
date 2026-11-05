@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""20260904 sticker smoke：情绪输入 → 观察 :名字: 引用（频率/位置/堆砌/编造外名）+ 中性输入 → 观察不用。"""
+"""表情引用 smoke：检查情绪输入的名称、频率、位置与中性输入不使用表情。"""
 import json
 import pathlib
 import re

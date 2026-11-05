@@ -50,7 +50,7 @@ else
     echo "[$TS] 令牌收回探针 FAILED（冻结/改密码/旁路收口有回归——先看上面逐条 ❌，再谈 golden）" >> "$LOG"
   fi
 fi
-$PY eval/run_golden.py >> "$LOG" 2>&1 || { fail=1; echo "[$TS] golden set FAILED (复审单 eval/report/review_*.md；回归组红 = 当天必修；采样层下界 < 地板 0.78 = 事故；未到档位不置红、只记；用户可见兜底轮次 ≥ 5% = 事故；退出码 3 = 前提不可用，不是通过率；企业落地三条见 landing_gate.py --readiness)" >> "$LOG"; }
+$PY eval/run_golden.py >> "$LOG" 2>&1 || { fail=1; echo "[$TS] golden set FAILED（检查本轮报告；前置条件不可用不计通过）" >> "$LOG"; }
 echo "--- 回复出处评审 (LLM-as-judge, 约 10 分钟, 非门禁) ---" >> "$LOG"
 PYTHONUNBUFFERED=1 $PY eval/llm_judge.py >> "$LOG" 2>&1 || echo "[$TS] llm_judge 运行异常（非门禁，看 eval/report/judge_*.md）" >> "$LOG"
 echo "--- hybrid task outcomes (synthetic business API) ---" >> "$LOG"
