@@ -36,11 +36,12 @@ def test_sync_adapter_uses_native_contract_and_structured_command(monkeypatch):
     ])
     monkeypatch.setattr(app.state, "runtime", runtime)
     grant = {"jti": "j1"}
-    reply, nav, rows = turns.run_turn(
+    result = turns.run_turn(
         app.state.runtime, [], "conv", 7, Principal(uid=7), 42)
-    assert reply == "已打开博客。"
-    assert nav == "AUTO_NAVIGATE:/posts/1"
-    assert rows[0]["cmd"]["kind"] == "navigate"
+    assert result.reply == "已打开博客。"
+    assert result.events[0] == StreamEvent("command", {
+        "kind": "navigate", "url": "/posts/1"})
+    assert result.events[1].name == "receipts"
     state, config = runtime.calls[0]
     assert list(state) == ["messages"]
     assert config["configurable"]["conversation_id"] == 42
@@ -106,7 +107,7 @@ def test_stream_error_has_error_sentinel_and_no_success_sentinel_first(monkeypat
 def test_empty_terminal_is_allowed_for_recovery_but_missing_terminal_is_not(monkeypatch):
     runtime = FakeRuntime([TurnResult("", {"receipts": []})])
     monkeypatch.setattr(app.state, "runtime", runtime)
-    assert turns.run_turn(app.state.runtime, [], "conv")[0] == ""
+    assert turns.run_turn(app.state.runtime, [], "conv").reply == ""
     runtime.events = [AIMessageChunk(content="orphan")]
     with pytest.raises(Exception):
         turns.run_turn(app.state.runtime, [], "conv")
@@ -252,3 +253,30 @@ def test_sse_keepalive_uses_comments_and_does_not_extend_model_idle_deadline(
         assert "event: error" in wire and "event: done" not in wire
     else:
         assert "event: done" in wire and "event: error" not in wire
+
+
+@pytest.mark.parametrize("text,execution", [
+    ("AUTO_NAVIGATE:/quoted", {"receipts": []}),
+    ("", {"client_action": {"kind": "navigate", "url": "/article/1"}}),
+    ("请确认。", {"pending_confirm": {"q": "确认？", "opts": []}}),
+])
+def test_sync_http_keeps_controls_out_of_prose_and_allows_action_only_turns(
+        monkeypatch, text, execution):
+    monkeypatch.setattr(app.state, "runtime", FakeRuntime([TurnResult(text, execution)]))
+    monkeypatch.setattr(server, "_resolve_principal", lambda request, uid: Principal(uid=uid))
+    monkeypatch.setattr(server, "try_acquire_slot", lambda request: _ready())
+    monkeypatch.setattr(server, "release_slot", lambda request: None)
+    monkeypatch.setattr(server, "build_messages", lambda req, **kwargs: [])
+    async def request():
+        scope = {"app": app, "type": "http", "method": "POST", "path": "/chat",
+                 "headers": [], "query_string": b""}
+        return await server.chat(ChatRequest(message="测试", user_id=7), Request(scope))
+    response = asyncio.run(request()).model_dump()
+    assert response["reply"] == text and response["success"]
+    assert "executions" not in response
+    if execution.get("client_action"):
+        assert response["events"] == [{"name": "command", "data": execution["client_action"]}]
+    elif execution.get("pending_confirm"):
+        assert response["events"][0]["name"] == "confirmation"
+    else:
+        assert response["events"] == []

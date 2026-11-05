@@ -48,8 +48,8 @@ from agent.api.routes import chat as chat_routes
 from agent.api.schemas import ChatRequest, HistoryItem
 from agent.api.turns import stream_to_queue as _run_agent_stream_to_queue
 from agent.principal import Principal  # 管理助手用例的调用者身份（20260921）
-from agent.transport import command_wire, reply_text
-from eval import golden_runtime
+from agent.transport import reply_text
+from eval import command_report, golden_runtime
 from eval.golden_runtime import close_agent, ensure_agent
 from eval.native_assertions import check as check_native
 from eval.native_assertions import command_matches
@@ -340,7 +340,7 @@ def run_one(req: ChatRequest, principal: "Principal | None" = None,
         elif isinstance(item, str) and item.startswith("__CMD__:"):
             try:
                 _cmd = json.loads(item[len("__CMD__:"):])
-                _wire = command_wire(_cmd) if isinstance(_cmd, dict) else ""
+                _wire = command_report.command_wire(_cmd) if isinstance(_cmd, dict) else ""
             except Exception:
                 _wire = ""
             if _wire:

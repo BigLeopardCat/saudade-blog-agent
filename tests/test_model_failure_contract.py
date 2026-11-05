@@ -18,7 +18,8 @@ from models.errors import error_fields
 
 def overloaded():
     return RateLimitError("PRIVATE_UPSTREAM_CANARY", response=httpx.Response(
-        429, request=httpx.Request("POST", "https://unit.invalid")), body={"secret": secrets.token_urlsafe()})
+        429, request=httpx.Request("POST", "https://unit.invalid")),
+        body={"secret": secrets.token_urlsafe()})
 
 
 @pytest.mark.parametrize("error,expected", [
