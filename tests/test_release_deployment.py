@@ -49,7 +49,8 @@ def deployment(tmp_path):
            "GIT_AUTHOR_NAME": "Fixture", "GIT_AUTHOR_EMAIL": "fixture@example.invalid",
            "GIT_COMMITTER_NAME": "Fixture", "GIT_COMMITTER_EMAIL": "fixture@example.invalid"}
     wrappers = {
-        "uv": '#!/bin/sh\nprintf "%s\\n" "$@" > uv-args\nmkdir -p .venv/bin\nln -sf "$FIXTURE_PYTHON" .venv/bin/python\n',
+        "uv": ('#!/bin/sh\nprintf "%s\\n" "$@" > uv-args\nmkdir -p .venv/bin\n'
+               'ln -sf "$FIXTURE_PYTHON" .venv/bin/python\n'),
         "sudo": '#!/bin/sh\nshift\nexec "$@"\n',
         "systemctl": ('#!/bin/sh\nreadlink -f "$FIXTURE_RELEASES/current" '
                       '>> "$FIXTURE_RELEASES/restarts"\n'),
