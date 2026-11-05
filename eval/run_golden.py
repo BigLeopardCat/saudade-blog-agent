@@ -46,7 +46,6 @@ from agent.api.context import build_messages as _build_messages
 # Evaluation uses the production producer without HTTP.
 from agent.api.routes import chat as chat_routes
 from agent.api.schemas import ChatRequest, HistoryItem
-from agent.api.turns import NativeCancelled, next_stream_item
 from agent.api.turns import stream_to_queue as _run_agent_stream_to_queue
 from agent.principal import Principal  # 管理助手用例的调用者身份（20260921）
 from agent.transport import command_wire, reply_text
@@ -295,19 +294,7 @@ def run_one(req: ChatRequest, principal: "Principal | None" = None,
             _build_messages(req, holds_context=runtime_probe.holds_context(runtime)),
             thread, queue, asyncio.get_running_loop(), req.user_id, None, principal,
             confirm_grant, req.conversation_id))
-        frames = []
-        while True:
-            item = await next_stream_item(queue, producer, timeout=None)
-            if item is None:
-                break
-            if isinstance(item, NativeCancelled):
-                frames.append(RuntimeError("Evaluation producer cancelled"))
-                break
-            frames.append(item)
-            if isinstance(item, BaseException):
-                break
-        await producer
-        return frames
+        return await golden_runtime.collect_frames(queue, producer)
 
     frames = asyncio.run(collect_frames())
     ledger_frames: list[dict] = []
@@ -321,13 +308,13 @@ def run_one(req: ChatRequest, principal: "Principal | None" = None,
 
     final_text = ""
     commands: list[str] = []
-    tool_calls: list[str] = []  # 20260902：已调用的工具名（require_tool_calls 断言用）
-    exec_rows: list = []  # 20260904：checker 验收回执（__EXEC__ 帧，系统确认事实）
+    tool_calls: list[str] = []
+    exec_rows: list = []
     resets = 0
     resets_reasons: list[str] = []
     reset_scopes: list[str] = []
     fallback_reasons: list[str] = []
-    tool_rounds = 0   # 效率基线：planner 发出 TOOLS 清单的轮数（🛠 过程帧计数）
+    tool_rounds = 0
     error = None
     control_frames: list[str] = []
     task_frames: list[dict] = []

@@ -278,7 +278,7 @@ def _sample(name, backend, contract, run_id, sample):
     return outcome, paths
 
 
-def run(case_names=None, repeat=1, *, fail_fast=False):
+def run(case_names=None, repeat=1, *, fail_fast=False, on_sample=None):
     _require(golden_trace.enabled(), "native contracts require evaluation tracing")
     _require(type(repeat) is int and 1 <= repeat <= 50, "repeat must be between 1 and 50")
     selected = set(case_names) if case_names is not None else {case[0] for case in CASES}
@@ -293,6 +293,8 @@ def run(case_names=None, repeat=1, *, fail_fast=False):
             result, traces = _sample(name, backend, contract, run_id, sample)
             results.append(result)
             paths.extend(traces)
+            if on_sample is not None:
+                on_sample(result)
             if fail_fast and not result["passed"]:
                 break
         if fail_fast and results and not results[-1]["passed"]:
@@ -320,7 +322,18 @@ def main(argv=None):
     parser.add_argument("--repeat", type=int, choices=range(1, 51), default=1)
     parser.add_argument("--fail-fast", action="store_true", help="首次失败后停止扩量")
     args = parser.parse_args(argv)
-    report = run(args.case, args.repeat, fail_fast=args.fail_fast)
+    journal = Path("eval/report") / ("_native_journal_" + golden_trace.resolve_run_id() + ".jsonl")
+    journal.parent.mkdir(parents=True, exist_ok=True)
+
+    def completed(row):
+        with journal.open("a") as output:
+            output.write(json.dumps(row, ensure_ascii=False) + "\n")
+        print(json.dumps({"case": row["case"], "sample": row["sample"],
+                          "passed": row["passed"], "reason": row.get("reason")},
+                         ensure_ascii=False), flush=True)
+
+    report = run(args.case, args.repeat, fail_fast=args.fail_fast, on_sample=completed)
+    report["sample_journal"] = str(journal)
     path = Path("eval/report") / f"_smoke_native_contracts_{report['trace_run']}" / "report.json"
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(report, ensure_ascii=False, indent=2))
