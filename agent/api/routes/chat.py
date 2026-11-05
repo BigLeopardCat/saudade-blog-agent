@@ -240,7 +240,6 @@ async def chat_stream(req: ChatRequest, request: Request):
                 "memory_strategy": "framework_compaction",
                 "history_len": len(req.history),
                 "conversation_id": req.conversation_id,
-                "has_exec": bool(req.executions),
                 "has_confirm": bool(req.confirm_token),
             },
         )

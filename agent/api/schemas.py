@@ -62,8 +62,6 @@ class ChatRequest(BaseModel):
     current_darkmode: str = Field(default="", max_length=MAX_SHORT_FIELD_CHARS)
     current_weather: WeatherSnapshot | None = None
     image: str | list[str] = ""
-    executions: str = Field(default="", max_length=MAX_TEXT_FIELD_CHARS)
-    pending_action: str = Field(default="", max_length=MAX_TEXT_FIELD_CHARS)
     chat_quota: QuotaInfo | None = None
     quota_blocked: bool = False
     conversation_id: int | None = None

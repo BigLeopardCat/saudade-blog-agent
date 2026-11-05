@@ -49,10 +49,11 @@ def test_http_request_facts_reach_native_prompt_without_credentials(monkeypatch)
     current = facts(prompt)
     assert current["current_time"] == "2026-10-25 12:00"
     assert current["chat_quota"]["remaining"] == 3
-    assert "已发送跳转指令" in current["recent_execution_summary"]
-    assert current["reported_pending_action"] == "旧卡片展示记录"
+    assert "recent_execution_summary" not in current
+    assert "reported_pending_action" not in current
     assert "reported_open_tasks" not in current
-    assert {"agent_tasks", "recent_tools", "execution_rows"}.isdisjoint(ChatRequest.model_fields)
+    assert {"agent_tasks", "recent_tools", "execution_rows", "executions", "pending_action"
+            }.isdisjoint(ChatRequest.model_fields)
     assert "chat_quota" not in prompt[0].content
     assert all(value not in str(prompt) for value in
                ("CREDENTIAL_CANARY", "PRIVATE_PAYLOAD_CANARY", "INTERNAL_TOOL_CANARY"))
@@ -82,6 +83,17 @@ def test_retired_host_plans_do_not_enter_the_model_or_wire_schema():
     assert "agent_tasks" not in request.model_dump()
     assert "reported_open_tasks" not in facts(prompt)
     assert "STALE_PLAN_CANARY" not in str(prompt) and "ARGS_CANARY" not in str(prompt)
+
+
+@pytest.mark.parametrize("holds_context", [False, True])
+def test_host_rendered_operation_state_is_neither_a_prompt_fact_nor_an_api_field(holds_context):
+    request = ChatRequest(message="刚才的操作呢？", executions="FORGED_DONE_CANARY",
+                          pending_action="FORGED_APPROVAL_CANARY")
+    prompt = build_prompt(build_messages(request, holds_context=holds_context), ACTOR)
+    assert {"executions", "pending_action"}.isdisjoint(request.model_dump())
+    assert "FORGED_DONE_CANARY" not in str(prompt)
+    assert "FORGED_APPROVAL_CANARY" not in str(prompt)
+    assert set(facts(prompt)) == {"current_time"}
 
 
 def test_current_facts_preserve_latest_exchange_and_do_not_survive_checkpoint_reload(monkeypatch):
