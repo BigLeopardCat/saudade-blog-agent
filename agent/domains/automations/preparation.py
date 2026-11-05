@@ -16,7 +16,9 @@ from agent.runtime.writes import bound_context
 from agent.scheduling.errors import tool_boundary
 from agent.scheduling.models import (
     ArticlePublic,
+    ClockTime,
     Definition,
+    DelaySeconds,
     Identifier,
     parse_time,
     time_description,
@@ -70,8 +72,8 @@ def tools(service, can_prepare):
         instruction: str,
         action: Literal["reminder", "read_only_agent", "publish_announcement"],
         config: RunnableConfig,
-        run_at: str | None = None,
-        delay_seconds: int | None = None,
+        run_at: ClockTime | None = None,
+        delay_seconds: DelaySeconds | None = None,
         cron: str | None = None,
         timezone: str = "Asia/Shanghai",
         expires_at: str | None = None,
@@ -79,8 +81,9 @@ def tools(service, can_prepare):
     ) -> object:
         """Prepare an administrator's persistent schedule for approval; do not activate it.
 
-        Provide exactly one: absolute run_at (ISO date/time or local HH:MM), seconds after creation,
-        or five-field cron. For a clock time use run_at; NEVER convert it into delay_seconds.
+        Provide exactly one: absolute run_at (ISO date/time or local HH:MM),
+        relative delay_seconds after approval, or five-field cron.
+        For a clock time use run_at; NEVER convert it into delay_seconds.
         Other scheduled business changes use the domain preparation tool with schedule;
         do not replace a requested write with a reminder.
         Delay starts ONLY after approval. While pending, do not claim it is queued

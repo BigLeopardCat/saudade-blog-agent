@@ -18,7 +18,7 @@ import jwt
 from langgraph.checkpoint.memory import InMemorySaver
 from starlette.requests import Request
 
-from agent import confirm, idem
+from agent import confirm, delegation, idem
 from agent.products.blog.application import BlogApplication
 from agent.runtime import writes
 from agent.runtime.checkpoint_conversations import CheckpointConversationStore
@@ -75,8 +75,11 @@ class _Store:
 
 
 def _principal(role="user"):
-    token = jwt.encode({"sub": 7, "role": role, "aud": "agent",
-                        "exp": int(time.time()) + 600}, SECRET, algorithm="HS256")
+    expires = int(time.time()) + 600
+    capability = jwt.encode({"sub": 7, "role": role, "aud": "blog-tools", "ver": 0,
+                             "scope": "tools", "exp": expires}, SECRET, algorithm="HS256")
+    token = jwt.encode({"sub": 7, "role": role, "aud": "agent", "exp": expires,
+                        "delegation": capability}, SECRET, algorithm="HS256")
     request = Request({"type": "http", "headers": [
         (b"x-agent-assertion", token.encode())]})
     with patch.object(settings, "agent_assertion_secret", SECRET):
@@ -219,6 +222,8 @@ def _sample(name, backend, contract, run_id, sample):
     paths, rounds = [], []
     with (ExitStack() as resources, backend() as state,
           TemporaryDirectory(prefix="agent-native-eval-") as temp):
+        credential_scope = delegation.clear()
+        resources.callback(delegation.reset, credential_scope)
         arm = AgentRuntime(
             CheckpointConversationStore(InMemorySaver()),
             application=state.get("application") or BlogApplication(),

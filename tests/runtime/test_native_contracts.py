@@ -413,3 +413,32 @@ def test_provider_timeout_is_a_failed_sample_with_trace_and_next_case_still_runs
     assert second["passed"] and not report["stopped_early"]
     assert observed == report["cases"]
     assert sum(group["requests"] for group in report["metrics"]["groups"]) == 2
+
+
+def test_real_contract_principal_carries_scoped_synthetic_host_authority_and_restores_context(
+    monkeypatch, tmp_path
+):
+    import jwt
+
+    from agent import delegation
+
+    before = delegation._current.get()
+    observed = []
+
+    class Model:
+        def bind_tools(self, *args, **kwargs):
+            return self
+
+        def invoke(self, prompt, **kwargs):
+            uid, token = delegation._current.get()
+            claims = jwt.decode(token, options={"verify_signature": False})
+            observed.append((uid, claims["sub"], claims["aud"], claims["scope"], claims["ver"]))
+            return AIMessage(content="你好。")
+
+    monkeypatch.setattr("agent.runtime.service.get_llm", lambda **_: Model())
+    monkeypatch.setattr(golden_trace, "trace_root", lambda: str(tmp_path / "traces"))
+    report = native_contracts.run(["chat"])
+    assert report["cases"][0]["passed"]
+    assert observed == [(7, 7, "blog-tools", "tools", 0)]
+    assert delegation._current.get() == before
+    assert '"delegation"' not in json.dumps(report)

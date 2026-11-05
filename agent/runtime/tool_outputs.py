@@ -47,7 +47,7 @@ def framework_tool(original):
                 result = original.func(*args, **kwargs)
             except (ValidationError, ToolException):
                 raise
-            except ValueError as exc:
+            except (ValueError, PermissionError) as exc:
                 result = failed(exc)
             return _output(result, original.response_format)
 
@@ -59,7 +59,7 @@ def framework_tool(original):
                 result = await original.coroutine(*args, **kwargs)
             except (ValidationError, ToolException):
                 raise
-            except ValueError as exc:
+            except (ValueError, PermissionError) as exc:
                 result = failed(exc)
             return _output(result, original.response_format)
 
