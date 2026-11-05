@@ -1277,6 +1277,7 @@ try {
   assert.equal(await page.locator('#chat-task-panel').isVisible(),true);
   await page.locator('#chat-task-panel summary').filter({hasText:'继续阅读文章'}).click();
   const pausedRow = page.locator('#chat-task-panel details').filter({hasText:'继续阅读文章'});
+  await pausedRow.getByRole('button',{name:'删除任务',exact:true}).scrollIntoViewIfNeeded();
   const taskDeleteBefore = await pausedRow.getByRole('button',{name:'删除任务',exact:true}).boundingBox();
   const rowBefore = await pausedRow.boundingBox();
   await pausedRow.getByRole('button',{name:'删除任务',exact:true}).click();
