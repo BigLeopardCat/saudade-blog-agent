@@ -118,7 +118,7 @@ def test_feedback_reports_original_task_identity_and_seals_inputs_after_recovery
     selected = runtime(Model(LOAD, AIMessage(content="", tool_calls=[FAVORITE])))
     run(selected, "收藏文章19", cfg=cfg)
     task = selected.store.load(cfg).run
-    assert selected.inputs.read(task["id"], task["scope"])["phase"] == "paused"
+    assert selected.inputs.read(task["id"], task["scope"])["phase"] == "awaiting_confirmation"
     selected.model_factory = lambda **_: StoppedModel()
     stream = selected.stream_events({"messages": [HumanMessage(content="先解释一下")],
                                      "task_id": "new-http-request"}, cfg)

@@ -30,6 +30,7 @@ class ReadOnlyBlogApplication(BlogApplication):
 
     def tools(self, config, snapshot, pending, saver, available):
         initial = self.catalog.initial_tools(True)
+        initial.pop("pause_task", None)
         domains = self.catalog.domains(config, can_prepare=False)
         domains.pop("devices", None)
         for group in domains.values():

@@ -21,6 +21,7 @@ from agent.products.blog.read_tools import (
     site_tools,
 )
 from agent.runtime import task_planning
+from agent.runtime.task_pause import pause_task
 
 
 class ToolCatalog:
@@ -46,6 +47,8 @@ class ToolCatalog:
 
     def initial_tools(self, own_enabled):
         tools = {**self.read_tools, **task_planning.tools()}
+        if own_enabled:
+            tools[pause_task.name] = pause_task
         if own_enabled and "get_inbox_overview" in self.own_read_tools:
             tools["get_inbox_overview"] = self.own_read_tools["get_inbox_overview"]
         return tools

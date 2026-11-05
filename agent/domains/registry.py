@@ -57,6 +57,7 @@ def bound_tool_names():
     from agent.domains.gallery.preparation import tools as gallery_tools
     from agent.domains.gallery.reads import tools as gallery_reads
     from agent.domains.image_generation.tools import tools as generation_tools
-    return (frozenset({search_public_activity.name})
+    from agent.runtime.task_pause import pause_task
+    return (frozenset({search_public_activity.name, pause_task.name})
             | frozenset(tools(None, True)) | NAMES | frozenset(gallery_tools(gallery_reads()))
             | frozenset(generation_tools()))

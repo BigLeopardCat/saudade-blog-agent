@@ -1,5 +1,8 @@
 """Fresh actor verification, bounded conditions and idempotent result delivery to the blog."""
 
+import hashlib
+import json
+
 import httpx
 
 from agent.principal import SOURCE_ASSERTION, Principal
@@ -75,3 +78,39 @@ class BlogHost:
         if type(identifier) is not int or identifier <= 0:
             raise ValueError("invalid schedule notification identity")
         return {"notification_id": identifier, "delivered": True, "replayed": data["replayed"]}
+
+    def publish_announcement(self, owner, run_id, title, content):
+        """Publish one approved payload; the blog atomically deduplicates by owner/run."""
+        try:
+            self.actor(owner)
+        except PermissionError:
+            return {"status": "blocked", "reason": "owner_not_authorized"}
+        response = self.client.post(
+            self.base + "/api/protected/automation-announcements",
+            headers=self.headers(owner),
+            json={"runId": run_id, "title": title, "content": content},
+        )
+        if response.status_code in (401, 403):
+            return {"status": "blocked", "reason": "owner_not_authorized"}
+        response.raise_for_status()
+        body = response.json()
+        data = body.get("data") if isinstance(body, dict) and body.get("code") == 200 else None
+        digest = hashlib.sha256(
+            json.dumps([title, content], ensure_ascii=False, separators=(",", ":")).encode()
+        ).hexdigest()
+        if (
+            not isinstance(data, dict) or data.get("payloadHash") != digest
+            or type(data.get("replayed")) is not bool
+            or type(data.get("notificationCount")) is not int or data["notificationCount"] < 0
+        ):
+            raise ValueError("invalid scheduled announcement receipt")
+        identifier = data.get("announcementId")
+        if identifier is None and data["replayed"]:
+            return {"status": "completed", "text": "定时公告曾发布，现已删除，不会重新发布。",
+                    "publication": data}
+        if type(identifier) is not int or identifier <= 0:
+            raise ValueError("invalid scheduled announcement identity")
+        return {"status": "completed",
+                "text": (f"已发布公告 #{identifier}「{title}」，"
+                         f"创建 {data['notificationCount']} 条个人通知。"),
+                "publication": data}

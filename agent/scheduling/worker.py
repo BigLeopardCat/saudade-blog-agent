@@ -82,12 +82,16 @@ class WorkerActions:
         return row is not None and not (row.attributes or {}).get("cancelled")
 
     def perform(self, payload, run_id):
-        if not self.enabled(payload, allow_paused=True):
-            return {"status": "blocked", "reason": "schedule_disabled"}
-        principal = self.host.actor(payload["owner_id"])
         definition = Definition.model_validate(payload["definition"])
+        if not self.enabled(payload, allow_paused=definition.action != "publish_announcement"):
+            return {"status": "blocked", "reason": "schedule_disabled"}
+        if definition.action == "publish_announcement":
+            return self.host.publish_announcement(
+                payload["owner_id"], run_id, definition.title, definition.instruction
+            )
         if definition.action == "reminder":
             return {"status": "completed", "text": definition.instruction}
+        principal = self.host.actor(payload["owner_id"])
         if self.runner is None:
             self.runner = ReadOnlyRunner(self.resources, self.stop_event)
         return {"status": "completed", **self.runner.run(principal, run_id, definition.instruction)}

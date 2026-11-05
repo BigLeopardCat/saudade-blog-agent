@@ -56,6 +56,7 @@ _ROLE_SCOPES: dict[str, frozenset[str]] = {
 }
 
 TOOL_SCOPE: dict[str, str] = {
+    "pause_task": SCOPE_READ_OWN,
     "read_current_article": SCOPE_ADMIN_CONSOLE,
     "prepare_image_generation": SCOPE_ADMIN_CONSOLE,
     "get_image_generation": SCOPE_ADMIN_CONSOLE,

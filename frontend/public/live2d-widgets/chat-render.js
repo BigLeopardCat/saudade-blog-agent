@@ -49,10 +49,10 @@
           <div id="chat-conv-title" class="chat-conv-title"><span class="chat-conv-title-tag" id="chat-conv-title-tag"></span></div>
         </div>
         <div class="chat-header-tasks">
-          <button type="button" id="chat-schedule-chip" class="chat-task-chip" aria-label="查看定时任务" hidden><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><circle cx="12" cy="13" r="8"/><path d="M12 8v5l3 2M3 5l3-3m12 0 3 3M5 21l1-2m12 0 1 2"/></svg><span></span></button>
+          <button type="button" id="chat-schedule-chip" class="chat-task-chip" aria-label="查看定时任务" hidden><i class="chat-timer-icon" aria-hidden="true">◷</i><span></span></button>
           <button type="button" id="chat-paused-chip" class="chat-task-chip" aria-label="查看挂起任务" hidden><svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor" aria-hidden="true"><path d="M6 5h4v14H6zm8 0h4v14h-4z"/></svg><span></span></button>
         </div>
-        <span id="chat-dock-countdown" hidden></span>
+        <span id="chat-dock-countdown" hidden><i class="chat-timer-icon" aria-hidden="true">◷</i><span></span></span>
         <button type="button" class="chat-restore" id="chat-restore" aria-label="收起为顶部栏" title="单击收起为顶部栏，拖动移动" aria-expanded="true">收起对话</button>
         <button type="button" class="chat-minimize" id="chat-minimize" aria-label="收纳到页面顶部" title="收纳到页面顶部">−</button>
         <button type="button" class="chat-close" id="chat-close" aria-label="关闭对话" title="关闭对话">×</button>

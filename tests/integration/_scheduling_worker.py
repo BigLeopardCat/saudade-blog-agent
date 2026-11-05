@@ -68,6 +68,23 @@ class Host:
                 "SELECT value FROM test_flags WHERE key='article_public'"
             ).fetchone()[0]
 
+    def publish_announcement(self, owner, run_id, title, text):
+        self.actor(owner)
+        with connection() as conn:
+            conn.execute(
+                "INSERT INTO test_publications VALUES (%s,%s,%s,%s) "
+                "ON CONFLICT(run_id) DO NOTHING", (run_id, owner, title, text),
+            )
+        while True:
+            with connection() as conn:
+                block = conn.execute(
+                    "SELECT value FROM test_flags WHERE key='block_publish_after_commit'"
+                ).fetchone()[0]
+            if not block:
+                break
+            time.sleep(0.05)
+        return {"status": "completed", "text": "已发布审批原文"}
+
     def notify(self, owner, run_id, title, text):
         self.actor(owner)
         with connection() as conn:

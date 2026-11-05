@@ -41,6 +41,8 @@ class BlogApplication:
             return {}, {}
         can_prepare = available
         tools = self.catalog.initial_tools(own_reads_enabled(principal))
+        if not available:
+            tools.pop("pause_task", None)
         domains = self.catalog.domains(config, can_prepare)
         if self.scheduling:
             from agent.domains.admin_writes import available as admin_available

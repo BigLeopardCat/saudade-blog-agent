@@ -16,6 +16,7 @@ let nextMode = 'reply';
 let serviceReady = true;
 let managedTasks = {paused:{items:[]},schedules:{items:[]}};
 let taskDeletes = 0;
+let holdTaskList = null;
 let conversation = 1;
 let conversationTitle = '测试会话';
 const inputTasks = new Map();
@@ -41,7 +42,11 @@ const server = createServer(async (req, res) => {
       const body = chunks.length ? JSON.parse(Buffer.concat(chunks)) : {};
       requests.push({ method: req.method, path: url.pathname, body });
       if (url.pathname === '/api/chat/service/status') return json(res, {ready:serviceReady});
-      if (url.pathname === '/api/chat/tasks') return json(res, {...managedTasks,server_time:new Date().toISOString()});
+      if (url.pathname === '/api/chat/tasks') {
+        const snapshot = structuredClone({...managedTasks,server_time:new Date().toISOString()});
+        if (holdTaskList) { const hold = holdTaskList; holdTaskList = null; hold(() => json(res,snapshot)); return; }
+        return json(res,snapshot);
+      }
       if (url.pathname === '/api/chat/tasks/cancel') {
         assert.equal(body.task_id, 'paused-ui'); assert.equal(body.conversation_id, 1); taskDeletes++;
         managedTasks.paused.items=[]; return json(res,{task_id:body.task_id,cancelled:true});
@@ -90,6 +95,17 @@ const server = createServer(async (req, res) => {
         if (body.resume_task && completedNavigations.has(body.resume_task)) {
           res.end(frame('text', '已经到留言板了。') + frame('done', {}));
           return;
+        }
+        if (mode === 'agent-pause') {
+          const id=body.task_id;
+          inputTasks.set(id,{agentPaused:true,phase:'paused',inputs:[]});
+          managedTasks.paused.items=[{task_id:id,conversation_id:1,title:body.message}];
+          res.end(frame('task_input',{task_id:id,ready:false,phase:'paused',inputs:[]})
+            +frame('text','已挂起，稍后可以从保存的进度继续。')+frame('done',{}));return;
+        }
+        if (body.resume_task && inputTasks.get(body.resume_task)?.agentPaused) {
+          inputTasks.get(body.resume_task).phase='completed';managedTasks.paused.items=[];
+          res.end(frame('text','继续讲零知识证明。')+frame('done',{}));return;
         }
         if (mode === 'appearance') {
           res.end(frame('command', {kind:'appearance', settings:{dark_mode:'on',rain:'off'},
@@ -1152,6 +1168,19 @@ try {
   for (const width of [1440, 375]) {
     await page.setViewportSize({ width, height: 1000 });
     await reset();
+    await page.evaluate(() => {
+      document.body.style.backgroundColor = '#ffffff';
+      document.getElementById('waifu-chat').classList.remove('washiDark');
+    });
+    const assertLightCompact = async () => {
+      const colors = await page.locator('#waifu-chat').evaluate(panel => {
+        const style = getComputedStyle(panel);
+        return {surface:style.backgroundColor.match(/\d+/g).slice(0,3).map(Number),
+          text:style.color.match(/\d+/g).slice(0,3).map(Number)};
+      });
+      assert.ok(colors.surface.every(channel => channel >= 230), JSON.stringify(colors));
+      assert.ok(colors.text.every(channel => channel < 120), JSON.stringify(colors));
+    };
     await page.locator('#chat-input').fill('收起后保留的草稿');
     const original = await page.locator('#waifu-chat').boundingBox();
     // The minus button docks immediately; header taps independently fold content.
@@ -1166,6 +1195,7 @@ try {
     const halfway = await page.locator('#waifu-chat').boundingBox();
     assert.ok(halfway.height > 36 && halfway.height < original.height, JSON.stringify({ halfway, original }));
     await page.waitForTimeout(320);
+    await assertLightCompact();
     const bar = await page.locator('#waifu-chat').boundingBox();
     assert.ok(bar.height <= 38 && Math.abs(bar.width - original.width) < 2);
     assert.equal(await page.locator('#chat-input').evaluate(el => el.closest('.chat-input-area').inert), true);
@@ -1182,6 +1212,7 @@ try {
     await page.waitForTimeout(420);
     const notch = await page.locator('#waifu-chat').boundingBox();
     assert.ok(notch.y === 0 && notch.width === 148 && notch.height === 44, JSON.stringify(notch));
+    await assertLightCompact();
     await page.screenshot({ path: path.join(output, `docked-${width}.png`) });
     await page.locator('#chat-restore').click();
     await page.waitForTimeout(420);
@@ -1229,25 +1260,51 @@ try {
       next_run_at:new Date(Date.now()+480000).toISOString(),version:'b'.repeat(64)}]}};
   await page.evaluate(async()=>{await window.__chatTest.ctx.ui.reloadTasks();await window.__chatTest.ctx.ui.checkService();});
   await page.waitForFunction(()=>document.querySelector('#chat-service-indicator').dataset.state==='paused');
-  await page.locator('#chat-restore').click();
+  await page.locator('#chat-restore').click({position:{x:8,y:18}});
   await page.waitForTimeout(400);
   assert.equal(await page.locator('#chat-paused-chip').isVisible(),true);
+  assert.equal(await page.locator('#chat-dock-countdown').isVisible(),false);
+  assert.equal(await page.locator('#chat-schedule-chip').isVisible(),true);
+  const titleBounds = await page.locator('#chat-conv-title-tag').boundingBox();
+  const timerBounds = await page.locator('#chat-schedule-chip').boundingBox();
+  assert.ok(timerBounds.x-titleBounds.x-titleBounds.width <= 20,'countdown stays next to title');
+  const centeredHeader = await page.locator('.chat-header').boundingBox();
+  assert.ok(Math.abs(titleBounds.x+titleBounds.width/2-centeredHeader.x-centeredHeader.width/2)<1,
+    'title stays centered with both task controls visible');
+  await page.screenshot({path:path.join(output,'task-header-centered.png')});
   await page.locator('#chat-paused-chip').click();
   assert.equal(await page.locator('#waifu-chat').getAttribute('data-window-mode'),'expanded');
   assert.equal(await page.locator('#chat-task-panel').isVisible(),true);
   await page.locator('#chat-task-panel summary').filter({hasText:'继续阅读文章'}).click();
-  await page.locator('#chat-task-panel details').filter({hasText:'继续阅读文章'}).getByRole('button',{name:'删除任务',exact:true}).click();
+  const pausedRow = page.locator('#chat-task-panel details').filter({hasText:'继续阅读文章'});
+  const taskDeleteBefore = await pausedRow.getByRole('button',{name:'删除任务',exact:true}).boundingBox();
+  const rowBefore = await pausedRow.boundingBox();
+  await pausedRow.getByRole('button',{name:'删除任务',exact:true}).click();
+  const taskDeleteAfter = await pausedRow.getByRole('button',{name:'确认删除',exact:true}).boundingBox();
+  const rowAfter = await pausedRow.boundingBox();
+  for(const key of ['x','y','width','height']) assert.ok(Math.abs(taskDeleteBefore[key]-taskDeleteAfter[key])<1,JSON.stringify({key,taskDeleteBefore,taskDeleteAfter}));
+  assert.ok(Math.abs(rowBefore.height-rowAfter.height)<1);
   assert.equal(taskDeletes,0);
+  let releaseSnapshot;
+  const snapshotStarted = new Promise(resolve => { holdTaskList = release => {releaseSnapshot=release;resolve();}; });
+  await page.evaluate(()=>{void window.__chatTest.ctx.ui.reloadTasks();});
+  await snapshotStarted;
   await page.getByRole('button',{name:'确认删除',exact:true}).click();
   await page.waitForFunction(()=>document.querySelector('#chat-paused-chip').hidden);
+  assert.equal(await pausedRow.count(),0);
+  releaseSnapshot();
+  await page.waitForTimeout(80);
+  assert.equal(await pausedRow.count(),0,'an older GET must not resurrect an acknowledged deletion');
   assert.equal(taskDeletes,1);
   await page.getByRole('button',{name:'关闭任务列表',exact:true}).click();
   await page.locator('#chat-minimize').click(); await page.waitForTimeout(400);
   assert.equal(await page.locator('#chat-dock-countdown').isVisible(),true);
   assert.equal(await page.locator('#chat-schedule-chip').isVisible(),false);
-  assert.match(await page.locator('#chat-dock-countdown').textContent(),/◷ (7:5[0-9]|8:00)/);
+  assert.match(await page.locator('#chat-dock-countdown').textContent(),/(7:5[0-9]|8:00)/);
+  assert.equal(await page.locator('#chat-dock-countdown .chat-timer-icon').count(),1);
   await page.screenshot({path:path.join(output,'task-countdown-notch.png')});
   await page.locator('#chat-restore').click(); await page.waitForTimeout(400);
+  assert.equal(await page.locator('#chat-dock-countdown').isVisible(),false);
   await page.locator('#conv-tasks-btn').click();
   await page.locator('#chat-task-panel summary').filter({hasText:'稍后提醒'}).click();
   await page.locator('#chat-task-panel details').filter({hasText:'稍后提醒'}).getByRole('button',{name:'删除任务',exact:true}).click();
@@ -1264,6 +1321,18 @@ try {
   assert.equal(await page.locator('#chat-service-indicator').getAttribute('data-state'),'busy');
   await page.evaluate(()=>{window.__chatTest.ctx.state.isSending=false;window.__chatTest.ctx.ui.refreshComposer();});
   passed('task chips, server-owned deletion, four-state health signal and read-only countdown notch');
+  await page.getByRole('button',{name:'关闭任务列表',exact:true}).click();
+  nextMode='agent-pause';
+  await page.locator('#chat-input').fill('讲零知识证明，先挂起');
+  await page.locator('#chat-send').click();
+  await page.waitForFunction(()=>document.querySelector('#chat-send').getAttribute('aria-label')==='继续任务');
+  const heldRequest=requests.filter(r=>r.path==='/api/chat/stream').at(-1).body;
+  await page.locator('#chat-send').click();
+  await page.waitForFunction(()=>!window.__chatTest.ctx.state.isSending);
+  const resumedRequest=requests.filter(r=>r.path==='/api/chat/stream').at(-1).body;
+  assert.equal(resumedRequest.resume_task,heldRequest.task_id);
+  assert.ok((await page.locator('#chat-messages').textContent()).includes('继续讲零知识证明。'));
+  passed('model-requested pause exposes Continue and resumes the same task');
 
   console.log(JSON.stringify({ passed: checks, screenshots: output, requests: requests.length }, null, 2));
 } catch (error) {

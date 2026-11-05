@@ -37,7 +37,10 @@
         credentials: 'same-origin', cache: 'no-store', signal: AbortSignal.timeout(12000),
         headers: { Authorization: 'Bearer ' + token(), ...(data ? { 'Content-Type': 'application/json' } : {}) },
         ...(data ? { body: JSON.stringify(data) } : {}) });
-      if (!response.ok) throw new Error(response.status === 409 ? '任务状态已变化，请刷新后再试' : '暂时无法读取任务，请稍后重试');
+      if (!response.ok) {
+        const error = new Error(response.status === 409 ? '任务状态已变化，请核对最新状态后再试' : '任务请求失败，请稍后重试');
+        error.status = response.status; throw error;
+      }
       return response.json();
     };
     const appendText = (parent, tag, text, cls) => {
@@ -48,29 +51,41 @@
     const hide = () => { viewer.hidden = true; returnFocus?.focus({ preventScroll: true }); };
     close.addEventListener('click', hide);
     viewer.addEventListener('keydown', e => { if (e.key === 'Escape') { e.stopPropagation(); hide(); } });
-    const remove = (actions, row, scheduled) => {
-      actions.replaceChildren();
-      const yes = appendText(actions, 'button', '确认删除'); yes.type = 'button';
-      const no = appendText(actions, 'button', '保留'); no.type = 'button';
-      no.addEventListener('click', render);
+    const removeControl = (actions, row, scheduled) => {
+      const group = document.createElement('div'); group.className = 'chat-task-delete';
+      const yes = appendText(group, 'button', '删除任务'); yes.type = 'button';
+      const no = appendText(group, 'button', '保留', 'chat-task-keep'); no.type = 'button';
+      let armed = false;
+      const arm = value => {
+        armed = value; yes.textContent = value ? '确认删除' : '删除任务';
+        no.setAttribute('aria-hidden', String(!value)); no.tabIndex = value ? 0 : -1;
+      };
+      arm(false); no.addEventListener('click', () => { arm(false); yes.focus(); });
       yes.addEventListener('click', async () => {
+        if (!armed) { arm(true); return; }
         yes.disabled = no.disabled = true;
+        const tk = token();
         try {
           if (scheduled) await request('/api/chat/schedules/cancel', { schedule_id: row.id, version: row.version });
-          else {
-            await request('/api/chat/tasks/cancel', { conversation_id: row.conversation_id, task_id: row.task_id });
-            ctx.ui.dismissManagedTask?.(row.task_id);
-          }
-          await refresh(true);
+          else await request('/api/chat/tasks/cancel', { conversation_id: row.conversation_id, task_id: row.task_id });
+          if (token() !== tk) return;
+          // Acknowledged deletion invalidates any older list snapshot before refetching.
+          sequence++;
+          if (scheduled) schedules = schedules.filter(item => item.id !== row.id);
+          else { paused = paused.filter(item => item.task_id !== row.task_id); ctx.ui.dismissManagedTask?.(row.task_id); }
+          update(); render(); await refresh(true);
         } catch (error) {
+          if (token() !== tk) return;
           yes.disabled = no.disabled = false;
-          appendText(actions, 'span', error.message, 'chat-task-error');
+          ctx.ui.notify?.(error.message, 'error');
+          if (error.status === 409) await refresh(true);
         }
       });
-      yes.focus();
+      actions.append(group);
     };
     function render() {
       if (viewer.hidden) return;
+      const opened = new Set([...body.querySelectorAll('details[open]')].map(item => item.dataset.taskKey));
       body.replaceChildren();
       if (!token()) { appendText(body, 'p', '登录后可以查看任务。'); return; }
       if (failed) {
@@ -82,6 +97,8 @@
       if (!paused.length && !schedules.length) appendText(body, 'p', '目前没有待执行或挂起的任务。');
       const add = (row, scheduled) => {
         const details = document.createElement('details'); details.className = 'chat-task-item';
+        details.dataset.taskKey = (scheduled ? 'schedule:' + row.id : 'paused:' + row.task_id);
+        details.open = opened.has(details.dataset.taskKey);
         const summary = document.createElement('summary');
         appendText(summary, 'span', scheduled ? (row.status === 'paused' ? 'Ⅱ' : '◷') : 'Ⅱ', 'chat-task-kind');
         appendText(summary, 'span', row.title || '未命名任务');
@@ -102,8 +119,7 @@
             finally { resume.disabled = false; }
           });
         }
-        const del = appendText(actions, 'button', '删除任务'); del.type = 'button';
-        del.addEventListener('click', () => remove(actions, row, scheduled));
+        removeControl(actions, row, scheduled);
         details.append(actions); body.append(details);
       };
       schedules.forEach(row => add(row, true)); paused.forEach(row => add(row, false));
@@ -126,11 +142,11 @@
       scheduledChip.hidden = !next; pausedChip.hidden = !pausedCount;
       if (time) scheduledChip.querySelector('span').textContent = time;
       pausedChip.querySelector('span').textContent = `待继续 ${pausedCount}`;
-      dock.textContent = time ? '◷ ' + time : ''; dock.hidden = !time;
+      dock.querySelector('span').textContent = time; dock.hidden = !time;
       panel.dataset.hasCountdown = String(!!time);
     }
     async function refresh(force = false) {
-      if (refreshing || (!force && Date.now() - lastFetch < 30000)) return;
+      if (!force && (refreshing || Date.now() - lastFetch < 30000)) return;
       refreshing = true; lastFetch = Date.now(); const seq = ++sequence, tk = token();
       try {
         if (tk) {
@@ -142,7 +158,10 @@
           if (Number.isFinite(server)) clockOffset = server - Date.now();
         } else { paused = []; schedules = []; }
       } catch (_) { if (seq === sequence) failed = true; }
-      finally { refreshing = false; update(); render(); if (token() !== tk) void refresh(true); }
+      finally {
+        if (seq === sequence) { refreshing = false; update(); render(); }
+        if (token() !== tk) void refresh(true);
+      }
     }
     const health = async (force = false) => {
       if (!force && Date.now() - lastHealth < 15000) return;
