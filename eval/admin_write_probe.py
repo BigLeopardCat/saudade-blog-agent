@@ -9,6 +9,7 @@ import hmac
 import json
 import os
 import re
+import secrets
 import sys
 import time
 import urllib.error
@@ -2273,31 +2274,9 @@ def step18_ledger_zero_write(rep: Report, uid: int, role: str) -> None:
         _drop_conv(rep, uid, role, conv_id, "⑱")
 
 
-# ── ⑲ 冻结 / 解冻账号（20260926，--allow-account-freeze）────────────────────────
-# 为什么非活体不可：golden 的真写用例走的是**进程内** harness（读 `__EXEC__` 帧里的回执），
-# 它能证明"工具被调用、参数逐字对、工具自己的写后复核过了"，但证不了 Rust 落库、更证不了
-# 库里那一行真的翻了；而"冻结"这个动作的全部意义落在**别人的登录能力**上——只有走真 HTTP
-# 才能验。
-#
-# 靶子是探针**自建**的一次性账号（`agent_fixture_probe_<ts>`：role=user、口令是结构性不可用
-# 的占位串，**从不登录**），跑完在 finally 里删掉。名字带夹具保留前缀 ⇒ 崩溃残留会被夜间的
-# 账号夹具哨兵点出来（`eval/golden_fixture_account.py --verify` 的 `[fixture-leftover]` 行）
-# ——这正是那个前缀的用处：一个没人管的探针账号不该静默躺在生产库里。
-#
-# 三件本腿独有、别的腿证不了的事：
-#   ① 弹卡轮库真值一个字节没变（"未确认前零写"在**真链路**上成立，不是靠离线桩）；
-#   ② 点确定之后 `status` 真的翻了（后端真值，不看工具自述）；
-#   ③ 那个账号**手里的旧令牌**依次被两种理由拒掉：冻结中「账号已被冻结」、解冻后
-#      「登录状态已失效」——后者正是卡面那句"解冻也换不回那批会话"的实现。
-#      ⚠️ 这一条**必须用带 `ver` 的令牌**（`_login_jwt_with_ver`）：`login_jwt` 刻意不写
-#      `ver`，而 `authz::check_token` 对没有代次声明的令牌**跳过代次比对**
-#      （见 `docs/security-boundary.md` §2.3）⇒ 拿它去验"解冻后旧令牌仍被拒"会拿到 200，
-#      这条腿就成了一句假话。**别把它"统一"回 login_jwt。**
-
-_ACCOUNT_PROBE_PASSWORD = "agent_fixture_probe_no_login_do_not_use"
-# 「没有真的发生变更」的口吻：后端那份对同一目标再来一次时走**真 no-op 分支**，agent 的回执
-# 必带这两句之一（`agent/adminops.py::render_account_status(changed=False)`）。与 golden 真写
-# 用例的 `require_exec_result.not_match` 是同一个判据、同一个理由（那两句话只在没发生变更时出现）。
+# The freeze probe uses a temporary fixture account and a real login session.
+# Always remove the fixture in finally; no login signing key is available here.
+_ACCOUNT_PROBE_PASSWORD = secrets.token_urlsafe(32)
 _ACCOUNT_NOOP_RE = re.compile(r"本来就是|没有重复")
 
 
@@ -2327,9 +2306,20 @@ def _acct_status(uid: int, role: str, name: str):
         return "?"
 
 
-def _login_jwt_with_ver(uid: int, role: str, ver: int, ttl: int = 300) -> str:
-    """Use the explicitly authenticated operator session; probes cannot forge generations."""
-    return login_jwt(uid, role, ttl)
+def _login_jwt_with_ver(uid: int, role: str, ver: int, name: str) -> str:
+    """Authenticate the probe-owned fixture instead of forging a login generation."""
+    import jwt
+    if not name.startswith("agent_fixture_probe_"):
+        raise ProbeError("login is restricted to the temporary probe fixture")
+    body = _http("POST", BASE + "/api/login",
+                 {"username": name, "password": _ACCOUNT_PROBE_PASSWORD}, {}, 20)
+    token = body.get("data")
+    if not isinstance(token, str):
+        raise ProbeError("fixture login did not return a session")
+    claims = jwt.decode(token, options={"verify_signature": False})
+    if (claims.get("sub"), claims.get("role"), claims.get("ver")) != (uid, role, ver):
+        raise ProbeError("fixture session identity or generation mismatch")
+    return token
 
 
 def _raw_get_code(path: str, token: str) -> tuple:
@@ -2452,7 +2442,7 @@ def step19_account_freeze(rep: Report, uid: int, role: str) -> None:
             return
         # 基线：这一枚令牌**带代次 0**。它能用 ⇒ 顺带证明了这个账号的代次现在确实是 0
         # （代次对不上的话 `check_token` 直接判 Revoked ⇒ 401）。后面的 401 才有意义。
-        tok = _login_jwt_with_ver(aid, "user", 0)
+        tok = _login_jwt_with_ver(aid, "user", 0, name)
         if not _acct_token_check(rep, "⑲ 冻结前（基线，必须能用）", tok, 200, ""):
             return
 
