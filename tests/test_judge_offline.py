@@ -475,9 +475,7 @@ CASES = [
     ("PASS", VOCW, "10/1 夜间原话：条件承诺（就可以帮你收藏啦）", VOC_1001),
     ("FAIL", VOCW, "反例：无条件完成声称照旧判红（豁免不是后门）",
      VOC_1001.replace("等你想收藏的时候跟我说一声，就可以帮你收藏啦～", "已经帮你收藏好啦～")),
-    # ② 否认的**形态**（`_NEG_FORM_RE`）：'这不是我脑补的'。夜间原话里"点名来源"三条正则
-    #    全中（正面全过），只因这两个字被裸子串命中而判红——而那条用例的 _note 自己写着
-    #    「『不是我猜的』是对这问句的正常答法，收进去等于把正确措辞判红」。
+    # A direct denial is not a fresh unsupported claim; another unqualified occurrence still fails.
     ("PASS", NEAR, "10/1 夜间原话：这不是我脑补的（否认形态）", NEAR_1001),
     ("FAIL", NEAR, "反例：正面承认照旧判红",
      "主人，是我脑补的：系统核对过后台账号列表，没有叫「xinguan」的账号喵"),
@@ -1059,7 +1057,7 @@ RESCHEDULE_CASE = "admin_todo_reschedule_popup"
 RESCHEDULE_TITLE = "agent_fixture_todo_pending_a（评测夹具，勿手改）"
 
 
-RESCHEDULE_DAY = "2026-12-15"      # 只做"是个日子"的形状样本，不锁具体哪天（见该用例 `_note`）
+RESCHEDULE_DAY = "2026-12-15"      # 只做"是个日子"的形状样本，不锁具体哪天
 
 
 def _reschedule_result(card_line: str, user_input: str) -> dict:
