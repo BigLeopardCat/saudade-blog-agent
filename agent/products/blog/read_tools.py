@@ -12,7 +12,7 @@ from tools.base import get_all_tools
 
 ARTICLE_READ_TOOLS = frozenset({"rag_search", "search_notes", "get_article_detail"})
 SITE_READ_TOOLS = frozenset({"get_blog_info", "get_social_links", "get_site_map"})
-OWN_READ_TOOLS = frozenset({"list_my_favorites", "get_unread_counts",
+OWN_READ_TOOLS = frozenset({"list_my_favorites", "get_inbox_overview",
                             "list_notifications", "list_my_messages",
                             "list_my_board", "get_chat_history"})
 ADMIN_READ_TOOLS = frozenset({"get_server_status", "get_service_health", "get_user_stats",

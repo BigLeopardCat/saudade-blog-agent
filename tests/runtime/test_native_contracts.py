@@ -48,10 +48,10 @@ def test_preflight_stops_at_first_failure_without_counting_unattempted_cases(mon
         return {"case": name, "evaluated": True, "passed": False, "rounds": []}, []
 
     monkeypatch.setattr(native_contracts, "_sample", sample)
-    report = native_contracts.run(["chat", "unread_counts"], fail_fast=True)
+    report = native_contracts.run(["chat", "inbox_counts"], fail_fast=True)
     assert calls == ["chat"] and report["stopped_early"]
     assert report["planned_samples"] == 2
-    assert report["scores"][-1] == {"case": "unread_counts", "samples": 0,
+    assert report["scores"][-1] == {"case": "inbox_counts", "samples": 0,
                                     "evaluated": 0, "passed": 0}
 
 
@@ -164,7 +164,8 @@ def test_native_outcome_suite_uses_verified_identity_and_redacts_tokens(monkeypa
         call("load_notifications_info_tools", {}),
         call("prepare_notification_read", {"scope": "all_unread"}),
         AIMessage(content="已标记本次确认的通知为已读。"),
-        call("get_unread_counts", {}), AIMessage(content="通知2条，站内信2封，合计4条。"),
+        call("get_inbox_overview", {"mode": "counts_only"}),
+        AIMessage(content="通知2条，站内信2封，合计4条。"),
         call("load_messages_info_tools", {}), call("list_my_messages", {}),
         AIMessage(content="收件箱里有《欢迎来信》和《回访来信》。"),
         call("load_messages_info_tools", {}), call("list_my_messages", {"message_id": 201}),
@@ -185,7 +186,7 @@ def test_native_outcome_suite_uses_verified_identity_and_redacts_tokens(monkeypa
     monkeypatch.setattr(golden_trace, "trace_root", lambda: str(tmp_path / "traces"))
     monkeypatch.delenv(golden_trace.ENV_OFF, raising=False)
     report = native_contracts.run(["chat", "favorite_cancel", "notification_replay",
-                                   "unread_counts", "message_read_replay"])
+                                   "inbox_counts", "message_read_replay"])
     assert all(case["passed"] for case in report["cases"]), report["cases"]
     assert sum(case["requests"] for case in report["cases"]) == 13
     assert all(g["source"] == "evaluation" and g["path"] == "native"

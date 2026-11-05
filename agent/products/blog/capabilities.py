@@ -46,8 +46,8 @@ class ToolCatalog:
 
     def initial_tools(self, own_enabled):
         tools = {**self.read_tools, **task_planning.tools()}
-        if own_enabled and "get_unread_counts" in self.own_read_tools:
-            tools["get_unread_counts"] = self.own_read_tools["get_unread_counts"]
+        if own_enabled and "get_inbox_overview" in self.own_read_tools:
+            tools["get_inbox_overview"] = self.own_read_tools["get_inbox_overview"]
         return tools
 
     def domains(self, config, can_prepare):

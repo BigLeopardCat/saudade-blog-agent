@@ -90,8 +90,33 @@ def notification_backend():
         yield state
 
 
+
+def inbox_overview(notifications, messages, limit=5, uid=7):
+    """Fixture service projection, with no bodies or implicit read-state changes."""
+    visible_notifications = [row for row in notifications if not row["isRead"]]
+    visible_messages = [row for row in messages if not row["isRead"]]
+    def header(row):
+        title = row.get("title") or ""
+        return {"id": row["id"], "title": title[:64], "titleTruncated": len(title)>64,
+                "isRead": False, "createdAt": row.get("createdAt", "2026-11-05T08:00:00")}
+    return {"userId": uid, "notifications": len(visible_notifications),
+            "messages": len(visible_messages),
+            "total": len(visible_notifications)+len(visible_messages), "limit": limit,
+            "unreadOnly": True,
+            "notificationItems": [{**header(row), "type": row.get("type", "system")}
+                                  for row in visible_notifications[:limit]],
+            "messageItems": [{**header(row), "fromUserId": row.get("fromUserId", 8),
+                              "peerName": "fixture peer"} for row in visible_messages[:limit]],
+            "notificationsHasMore": len(visible_notifications)>limit,
+            "messagesHasMore": len(visible_messages)>limit}
+
+
 def _mailbox_get(request, state):
-    if request.url.path.endswith("/notifications/summary"):
+    if request.url.path.endswith("/inbox/overview"):
+        data = inbox_overview([{"id": 101, "title": "notice", "isRead": False},
+                               {"id": 102, "title": "announcement", "isRead": False}],
+                              state["items"], int(request.url.params.get("limit", "5")))
+    elif request.url.path.endswith("/notifications/summary"):
         unread = sum(not row["isRead"] for row in state["items"])
         data = {"notifications": 2, "messages": unread, "total": 2 + unread}
     elif request.url.path.endswith("/messages/recent"):

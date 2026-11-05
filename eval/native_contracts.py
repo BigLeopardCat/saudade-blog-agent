@@ -167,7 +167,7 @@ def _notifications(turn, state):
                  {"id": 104, "title": "新到通知", "isRead": False})
 
 
-def _unread_counts(turn, state):
+def _inbox_counts(turn, state):
     result = turn("请告诉我未读通知数、站内信数与合计。只查计数，不查内容。")
     _require(result["text"].strip() and not result["confirm_tokens"], "no count reply")
     _require(len(state["requests"]) == 1 and
@@ -196,7 +196,7 @@ CASES = [("chat", favorite_backend, _chat),
          ("favorite_cancel", favorite_backend, _favorite_cancel),
          ("favorite_confirm", favorite_backend, _favorite_confirm),
          ("notification_replay", notification_backend, _notifications),
-         ("unread_counts", message_backend, _unread_counts),
+         ("inbox_counts", message_backend, _inbox_counts),
          ("message_read_replay", message_backend, _messages),
          *image_generation_contracts.CASES, *navigation_contracts.CASES,
          *experience_contracts.CASES, *admin_task_contracts.CASES,

@@ -197,7 +197,7 @@ def test_large_tool_turn_does_not_erase_the_recommendation_before_followup():
 
 def test_long_assistant_reply_cannot_crowd_out_the_recent_tool_fact():
     principal = actor("user")
-    call = {"name": "get_unread_counts", "args": {}, "id": "count"}
+    call = {"name": "get_inbox_overview", "args": {}, "id": "count"}
     saved = memory.turn_messages(
         [HumanMessage(content="我的未读合计多少？")],
         memory.observation(call, base.ok('{"total":12}')),
@@ -211,3 +211,16 @@ def test_long_assistant_reply_cannot_crowd_out_the_recent_tool_fact():
     assert memory._tokens(history) <= 5400
     assert history[-1].content == saved[-1].content
     assert memory.history(saved, actor(uid=8)) == []
+
+
+def test_retired_counter_history_remains_owned_data_without_becoming_a_callable():
+    from agent.products.blog.history import tool_access
+    from tools.base import get_all_tools
+    principal = actor("user")
+    saved = memory.turn_messages([HumanMessage(content="未读多少")], memory.observation(
+        {"name": "get_unread_counts", "args": {}, "id": "retired-count"},
+        base.ok('{"total":12}')), "12条", principal)
+    assert memory.history(saved, principal, tool_access=tool_access)
+    assert not memory.history(saved, actor(uid=8), tool_access=tool_access)
+    assert not memory.history(saved, actor("zako"), tool_access=tool_access)
+    assert "get_unread_counts" not in {tool.name for tool in get_all_tools()}

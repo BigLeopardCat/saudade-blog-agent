@@ -33,7 +33,10 @@ def domain(request):
 def prepare(domain, **args):
     tool = (domain.prepare_announcement_deletions if domain is announcement
             else domain.prepare_notification_deletions)
-    return tool.invoke({'scope': 'all', **args}, config=context(domain is announcement))
+    if domain is notification:
+        mode = 'selected_ids' if args.pop('scope', 'all') == 'selected' else 'all_received'
+        return tool.invoke({'selection': mode, **args}, config=context())
+    return tool.invoke({'scope': 'all', **args}, config=context(True))
 
 
 def signed(prepared):
@@ -202,10 +205,10 @@ def test_authorized_menus_keep_deletion_distinct_from_read_and_global_scope():
                 admin['admin_announcements'])
 
 
-@pytest.mark.parametrize('copy_type,expected', [('all', 'all'),
-    ('personal_notice_copies', 'notice'), ('announcement_copies', 'announcement')])
-def test_notification_copy_filter_preserves_the_backend_scope(service, copy_type, expected):
-    result = prepare(notification, notification_type=copy_type)
+@pytest.mark.parametrize('selection,expected', [('all_received', 'all'),
+    ('system_notices', 'notice'), ('announcement_copies', 'announcement')])
+def test_notification_copy_filter_preserves_the_backend_scope(service, selection, expected):
+    result = prepare(notification, selection=selection)
     assert signed(result)['specs'][0]['args']['kind'] == expected
     assert service['requests'][0][1]['kind'] == expected
     assert '/notification-deletions/prepare' in service['requests'][0][0]
@@ -213,7 +216,8 @@ def test_notification_copy_filter_preserves_the_backend_scope(service, copy_type
 
 
 def test_unknown_or_obsolete_copy_filter_cannot_silently_expand_scope(service):
-    for args in ({'notification_type': 'notice'}, {'kind': 'notice'}):
+    for args in ({'notification_type': 'notice'}, {'kind': 'notice'},
+                 {'selection': 'all', 'ids': []}):
         with pytest.raises(ValidationError):
             prepare(notification, **args)
     assert not service['requests']

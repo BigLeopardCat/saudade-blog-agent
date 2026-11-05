@@ -580,7 +580,7 @@
         0
       ],
       "agent/products/blog/catalog.py": [
-        0,
+        1,
         0
       ],
       "agent/products/blog/confirmation.py": [
@@ -965,7 +965,7 @@
       ]
     },
     "total": [
-      412,
+      413,
       33
     ]
   },

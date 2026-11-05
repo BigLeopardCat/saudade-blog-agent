@@ -40,9 +40,8 @@ DOMAIN_DESCRIPTIONS = {
     "admin_reports": "Server health, user statistics and article traffic reports.",
     "site": "Author profile, social links, site map and page controls.",
     "favorites": "Your favorites and confirmed additions/removals.",
-    "notifications": "Your notification copies: list, mark read or delete in batches. "
-                     "Delete-all preparation selects the scope without a prior list read. "
-                     "Global management: admin_announcements. Sending: admin_notices.",
+    "notifications": "本人通知条目、未读清单、已读和删除；包含个人通知与公告副本。"
+                     "清空本人列表保留全站公告原文和其他人的通知。",
     "messages": "Your inbox summaries/body and read-state approval; reading does not mark read.",
 }
 
