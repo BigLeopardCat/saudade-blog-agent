@@ -161,12 +161,16 @@ def fixture_preflight(cases, transport, identities):
 
 
 def provider_unavailable(case):
-    """Only captured SDK facts identify an unavailable model, never reply wording."""
+    """Require a failed round and its terminal model-failure fact, never reply wording."""
     for round_ in case.get("result", {}).get("rounds", []):
+        if not round_.get("error"):
+            continue
         trace = load_trace(str(round_.get("trace", ""))) or {}
-        if any(event.get("event") == "llm_error" and event.get("retryable") is True
-               and event.get("failure_source") in {"provider", "transport"}
-               for event in trace.get("events", [])):
+        attempts = [event for event in trace.get("events", [])
+                    if event.get("event") in {"llm_start", "llm_done", "llm_error"}]
+        final = attempts[-1] if attempts else {}
+        if (final.get("event") == "llm_error" and final.get("retryable") is True
+                and final.get("failure_source") in {"provider", "transport"}):
             return True
     return False
 
