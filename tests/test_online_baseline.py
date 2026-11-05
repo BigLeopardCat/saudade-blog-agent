@@ -233,6 +233,23 @@ def test_exact_card_target_checks_nested_intent_and_preserves_negative_control()
     assert native_assertions.check(gold, result)
 
 
+@pytest.mark.parametrize("items,expected,passed", [
+    ([{"id": 23, "version": "v1"}], [{"id": 23}], True),
+    ([{"id": 54, "version": "v1"}], [{"id": 23}], False),
+    ([{"id": 23}, {"id": 54}], [{"id": 23}], False),
+    ([], [{"id": 23}], False),
+    ([{"id": 54}, {"id": 23}], [{"id": 23}, {"id": 54}], False),
+    ([{"id": 23}, {"id": 23}], [{"id": 23}, {"id": 54}], False),
+    ([{"id": 23, "version": "v2"}], [{"id": 23, "version": "v1"}], False),
+    ({"id": 23}, [{"id": 23}], False),
+])
+def test_versioned_card_targets_keep_exact_ids_cardinality_and_order(items, expected, passed):
+    gold = {"require_confirm_specs": [{"tool": "delete_articles", "args": {"items": expected}}]}
+    result = {"native_events": [], "confirm_payloads": [{"specs": [{
+        "tool": "delete_articles", "args": {"items": items}}]}]}
+    assert (not native_assertions.check(gold, result)) is passed
+
+
 def test_confirmation_preview_is_checked_on_the_card_without_requiring_duplicate_reply():
     gold = {"require_confirm_preview": [r"父级[^\n]*编程"]}
     result = {"native_events": [], "text": "请核对卡片。", "http_events": [
