@@ -1,11 +1,5 @@
 # -*- coding: utf-8 -*-
-"""**账号**族真写夹具的只读在位检查。
-
-所以这条读路径与 `eval/identity_preflight.py` 同源：**自签一枚只读的管理员令牌**
-（`tools.base._sign_local_jwt`，与 agent 代调完全同一个函数），打一次 GET，**只看，不写**。
-两条纪律分别由两个测试守着（分类族：不带身份；账号族：不带写动词），见
-`tests/test_golden_fixture.py` 的 ④ 与 ⑦。
-"""
+"""Read-only fixture account inventory through host-issued tool credentials."""
 from __future__ import annotations
 
 import json
@@ -55,12 +49,10 @@ def directory() -> dict[str, dict] | None:
     if not uid.isdigit() or int(uid) <= 0:
         return None
     try:
-        # 与真链路同源：同一个签名函数、同一个后台地址（lazy import 同 identity_preflight：
-        # import 顺序/副作用，且取不到签名能力本身要能报成"不知道"）。
-        from tools.base import ADMIN_BASE, _sign_local_jwt
+        from tools.base import ADMIN_BASE, host_credential
     except Exception:  # noqa: BLE001
         return None
-    token = _sign_local_jwt(int(uid), "admin")
+    token = host_credential(int(uid))
     req = urllib.request.Request(
         f"{ADMIN_BASE}{DIRECTORY_PATH}", headers={"Authorization": "Bearer " + token})
     try:
@@ -136,7 +128,9 @@ def declared_fixtures() -> list[str]:
             case = json.loads(ln)
         except Exception:  # noqa: BLE001
             continue
-        if str(case.get("requires_fixture_kind") or "") == "account" and case.get("requires_fixture"):
+        if str(case.get("requires_fixture_kind") or "") == "account" and case.get(
+            "requires_fixture"
+        ):
             name = str(case["requires_fixture"])
             if name not in out:
                 out.append(name)

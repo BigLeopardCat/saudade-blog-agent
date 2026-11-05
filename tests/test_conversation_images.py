@@ -41,7 +41,7 @@ def tool_result(tool, cfg=None, ref=REF):
 
 
 def host(monkeypatch, handler):
-    monkeypatch.setattr(base, "_sign_local_jwt", lambda *_: "TEST_CREDENTIAL")
+    monkeypatch.setattr(base, "host_credential", lambda *_: "TEST_CREDENTIAL")
     client = httpx.Client(transport=httpx.MockTransport(handler))
     monkeypatch.setattr(base, "_client", client)
     return client

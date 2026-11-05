@@ -1,6 +1,7 @@
 """Own the native evaluation runtime and its checkpoint resources for one CLI process."""
 
 import asyncio
+import json
 import os
 import time
 from contextlib import ExitStack
@@ -12,6 +13,19 @@ REPORTS_DIR = "eval/report/runs"
 
 _runtime = None
 _resources = ExitStack()
+
+
+def assertion_frame(value):
+    """Normalize typed controls to the stored golden report format, outside production."""
+    from agent.contracts.events import StreamEvent
+
+    if not isinstance(value, StreamEvent):
+        return value
+    prefixes = {"progress": "__PROCESS__:", "confirmation": "__CONFIRM__:",
+                "pending": "__PENDING__:", "command": "__CMD__:", "receipts": "__EXEC__:",
+                "task_input": "__INPUT__:", "text_reset": "__TEXT_RESET__:"}
+    body = value.data if value.name == "progress" else json.dumps(value.data, ensure_ascii=False)
+    return prefixes[value.name] + body
 
 
 def close_agent():

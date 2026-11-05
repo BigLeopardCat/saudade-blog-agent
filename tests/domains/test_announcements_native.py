@@ -11,6 +11,7 @@ from _own_support import config
 from pydantic import ValidationError
 
 from agent import confirm, idem
+from agent.contracts.events import StreamEvent
 from agent.domains.announcements import preparation, transactions
 from agent.principal import SOURCE_ASSERTION, Principal
 from agent.products.blog.pending import PendingOperation
@@ -283,8 +284,10 @@ def test_confirmation_content_is_complete_and_reversible(announcements):
     assert "JSON原文" not in prepared.reply
     from agent.transport import iter_transport_events
 
-    frames = [frame for frame in iter_transport_events([prepared]) if isinstance(frame, str)]
-    assert not any(frame.startswith("__CMD__:") for frame in frames)
+    frames = [
+        frame for frame in iter_transport_events([prepared]) if isinstance(frame, StreamEvent)
+    ]
+    assert not any((isinstance(frame, StreamEvent) and frame.name == "command") for frame in frames)
     assert grant(prepared)["specs"][0]["args"]["intent"]["fields"]["content"] == content
 
 

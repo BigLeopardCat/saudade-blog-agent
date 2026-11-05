@@ -1,6 +1,5 @@
 """Page commands remain authorized, serializable and inside the native loop."""
 
-
 import asyncio
 import json
 
@@ -19,6 +18,7 @@ from langgraph.checkpoint.memory import InMemorySaver
 from pydantic import ValidationError
 
 from agent.api.schemas import ChatRequest
+from agent.contracts.events import StreamEvent
 from agent.domains import browser
 from agent.principal import SOURCE_ASSERTION, Principal
 from agent.products.blog.application import BlogApplication
@@ -301,9 +301,9 @@ def test_stream_producer_emits_commands_and_receipts_without_confirmation(monkey
 
     frames = asyncio.run(collect())
     commands = [
-        json.loads(frame[len("__CMD__:") :])
+        frame.data
         for frame in frames
-        if isinstance(frame, str) and frame.startswith("__CMD__:")
+        if isinstance(frame, StreamEvent) and frame.name == "command"
     ]
     assert commands == [
         {"kind": "darkmode", "mode": "on"},
@@ -311,10 +311,18 @@ def test_stream_producer_emits_commands_and_receipts_without_confirmation(monkey
         {"kind": "effect", "effect": "snow", "action": "on"},
     ]
     assert (
-        len([frame for frame in frames if isinstance(frame, str) and frame.startswith("__EXEC__:")])
+        len(
+            [
+                frame
+                for frame in frames
+                if isinstance(frame, StreamEvent) and frame.name == "receipts"
+            ]
+        )
         == 1
     )
-    assert not any(isinstance(frame, str) and frame.startswith("__CONFIRM__:") for frame in frames)
+    assert not any(
+        isinstance(frame, StreamEvent) and frame.name == "confirmation" for frame in frames
+    )
     assert not any(isinstance(frame, Exception) for frame in frames)
     assert [frame.content for frame in frames if isinstance(frame, AIMessageChunk)] == [
         "设置指令已发送。"

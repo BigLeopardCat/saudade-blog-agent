@@ -305,7 +305,6 @@ def run_one(req: ChatRequest, principal: "Principal | None" = None,
     native_names, native_rounds = golden_trace.tool_call_stats(trace_id)
     trace_path = golden_trace.finish_case(trace_id, time.monotonic() - t_trace0,
                                           len(frames))
-
     final_text = ""
     commands: list[str] = []
     tool_calls: list[str] = []
@@ -320,8 +319,9 @@ def run_one(req: ChatRequest, principal: "Principal | None" = None,
     task_frames: list[dict] = []
     for item in frames:
         final_text = reply_text(final_text, item)
+        item = golden_runtime.assertion_frame(item)
         if isinstance(item, str) and item.startswith("__RESET__"):
-            final_text = ""  # 作废轮 → 清空（与前端最终显示一致）
+            final_text = ""
             tool_calls.clear()  # 被作废轮的工具调用不算数（断言的是最终采纳轮的执行）
             _scope, _reason = parse_reset(item)
             if _scope != "text":

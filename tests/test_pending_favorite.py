@@ -1,7 +1,6 @@
 """Approval feedback revokes old previews; signed button cancellation is durable."""
 
 import asyncio
-import json
 
 import pytest
 from _framework_ledger import Ledger
@@ -11,6 +10,7 @@ from langchain_core.messages import AIMessage, AIMessageChunk, HumanMessage
 from langgraph.checkpoint.memory import InMemorySaver
 
 from agent import confirm, idem
+from agent.contracts.events import StreamEvent
 from agent.domains.favorites import preparation, transactions
 from agent.products.blog import pending
 from agent.products.blog.application import BlogApplication
@@ -238,8 +238,8 @@ def test_stream_cancels_host_pending_and_routes_revoked_card_after_runtime_switc
     frames = asyncio.run(collect(AgentRuntime(
         CheckpointConversationStore(runtime.saver), application=BlogApplication(),
         model_factory=lambda **_: Model("cancel_pending_operation"))))
-    controls = [json.loads(frame.removeprefix("__PENDING__:")) for frame in frames
-                if isinstance(frame, str) and frame.startswith("__PENDING__:")]
+    controls = [frame.data for frame in frames
+                if isinstance(frame, StreamEvent) and frame.name == "pending"]
     assert controls == [{"event": "cancelled", "task_id": proposal.execution[
         "pending_action"]["task_id"], "jti": proposal.execution["pending_action"]["jti"],
         "reason": "user_feedback"}]
@@ -250,7 +250,9 @@ def test_stream_cancels_host_pending_and_routes_revoked_card_after_runtime_switc
         CheckpointConversationStore(runtime.saver), application=BlogApplication()), grant))
     assert any("撤销" in str(frame.content) for frame in replay
                if isinstance(frame, AIMessageChunk))
-    assert not any(str(frame).startswith("__EXEC__:") for frame in replay)
+    assert not any(
+        (isinstance(frame, StreamEvent) and frame.name == "receipts") for frame in replay
+    )
     assert all(request.method == "GET" for request in site["requests"])
 
 

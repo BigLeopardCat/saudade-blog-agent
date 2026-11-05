@@ -6,6 +6,7 @@ import asyncio
 import time
 from collections.abc import Callable, Mapping
 
+from agent.contracts.events import StreamEvent
 from agent.runtime.budget import BudgetExceeded
 from agent.runtime.control import AgentCancelled, RequestControl
 from utils.trace import record
@@ -73,7 +74,7 @@ class StreamProgress:
     def _deliver(self, text: str):
         if self._active():
             try:
-                self.queue.put_nowait(f"__PROCESS__:{text}")
+                self.queue.put_nowait(StreamEvent("progress", text))
             except asyncio.QueueFull:
                 record("producer", "progress_dropped", reason="backpressure")
 

@@ -1,10 +1,5 @@
 # -*- coding: utf-8 -*-
-"""**留言**族夹具的只读在位检查。
-
-所以本模块与 `golden_fixture_account.py` 同一条读路径：**自签一枚只读的管理员令牌**
-（`tools.base._sign_local_jwt`，与 agent 代调完全同一个函数），打一次 GET，**只看，不写**。
-两个模块的纪律分别由测试守着（分类族：不带身份；账号族与留言族：不带写动词）。
-"""
+"""Read-only guestbook fixture presence and state checks through host-issued credentials."""
 from __future__ import annotations
 
 import json
@@ -48,12 +43,10 @@ def board() -> dict[str, dict] | None:
     if not uid.isdigit() or int(uid) <= 0:
         return None
     try:
-        # 与真链路同源：同一个签名函数、同一个后台地址（lazy import 同 account 模块：
-        # import 顺序/副作用，且取不到签名能力本身要能报成"不知道"）。
-        from tools.base import ADMIN_BASE, _sign_local_jwt
+        from tools.base import ADMIN_BASE, host_credential
     except Exception:  # noqa: BLE001
         return None
-    token = _sign_local_jwt(int(uid), "admin")
+    token = host_credential(int(uid))
     req = urllib.request.Request(
         f"{ADMIN_BASE}{BOARD_PATH}", headers={"Authorization": "Bearer " + token})
     try:

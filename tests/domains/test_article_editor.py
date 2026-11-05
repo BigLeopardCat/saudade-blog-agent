@@ -1,3 +1,4 @@
+
 import json
 import secrets
 from types import SimpleNamespace
@@ -10,6 +11,7 @@ from langgraph.checkpoint.memory import InMemorySaver
 
 from agent import confirm
 from agent.api.schemas import ChatRequest
+from agent.contracts.events import StreamEvent
 from agent.domains import article_editor, article_summary
 from agent.principal import SOURCE_ASSERTION, Principal
 from agent.products.blog.application import BlogApplication
@@ -72,7 +74,7 @@ def test_publication_opens_confirmation_without_claiming_publication(monkeypatch
     assert artifact["data"]["outcome"] == "publication_ready"
     assert "prepare_article_publication" not in article_editor.tools(config(), can_prepare=False)
     assert "prepare_article_publication" in article_editor.tools(config())
-    assert any(isinstance(item, str) and item.startswith("__CMD__:") for item in
+    assert any(isinstance(item, StreamEvent) and item.name == "command" for item in
                iter_transport_events([TurnResult("", {"client_action": commands[0]})]))
 
 
@@ -230,7 +232,7 @@ def test_real_checkpoint_round_trip_applies_summary_only_after_confirmation(
         command = result.execution["client_action"]
         assert command["kind"] == "article_editor" and command["operation"] == operation
         events = list(iter_transport_events([result]))
-        assert any(isinstance(item, str) and item.startswith("__CMD__:") for item in events)
+        assert any(isinstance(item, StreamEvent) and item.name == "command" for item in events)
         if operation == "propose":
             assert command["edits"] == [{"old_text": "旧正文", "new_text": "新正文"}]
         report = {

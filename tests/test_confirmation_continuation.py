@@ -15,6 +15,7 @@ from langchain_core.utils.function_calling import convert_to_openai_tool
 from langgraph.checkpoint.memory import InMemorySaver
 
 from agent import confirm
+from agent.contracts.events import StreamEvent
 from agent.domains.favorites import transactions
 from agent.principal import SOURCE_ASSERTION, Principal
 from agent.products.blog.application import BlogApplication
@@ -179,7 +180,7 @@ def test_single_preparation_continues_to_a_model_reply_without_extra_narration(b
     events = list(selected.stream_events({"confirm_grant": grant}, config()))
     wire = list(iter_transport_events(events))
     assert events[-1].reply == "收藏好啦～" and len(model.prompts) == 1
-    assert sum(str(frame).startswith("__EXEC__:") for frame in wire) == 1
+    assert sum((isinstance(frame, StreamEvent) and frame.name == "receipts") for frame in wire) == 1
     assert "".join(event.content for event in events[:-1]) == events[-1].reply
 
 

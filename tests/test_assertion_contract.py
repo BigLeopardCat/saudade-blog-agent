@@ -314,7 +314,7 @@ def test_signers_keep_their_shape(monkeypatch):
 
     opaque = "host-issued-capability"
     monkeypatch.setattr(delegation, "credential", lambda uid: opaque if uid == 7 else None)
-    assert base._sign_local_jwt(7, "admin") == opaque
+    assert base.host_credential(7) == opaque
     assert device._sign_user_jwt(7) == opaque
 
 

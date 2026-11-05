@@ -48,4 +48,4 @@ def read_page(resource, config, page, limit, filters, project, expected=None, *,
     encoded = json.dumps(result, ensure_ascii=False, separators=(",", ":"))
     if len(encoded) > 7500:
         return base.unavailable("本页内容超过读取上限，请减小limit后重试。")
-    return base.ok(encoded)
+    return base.ok(encoded, data=result)

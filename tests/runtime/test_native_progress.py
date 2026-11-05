@@ -1,6 +1,5 @@
 """Native progress stays on the existing process-frame path."""
 
-
 import threading
 import time
 
@@ -11,6 +10,7 @@ from langchain_core.tools import StructuredTool
 
 from agent.api import dependencies
 from agent.api.schemas import ChatRequest
+from agent.contracts.events import StreamEvent
 from agent.products.blog.application import BlogApplication
 from agent.runtime.progress import ProgressEmitter
 from agent.runtime.results import TurnResult
@@ -329,8 +329,13 @@ def test_real_sse_internal_frames_are_not_first_visible(monkeypatch):
     server = _prepare_server(monkeypatch, object(), events)
 
     def producer(runtime, messages, thread, queue, loop, uid, stop, *args):
-        for frame in ('__PENDING__:{}', '__EXEC__:[]', AIMessageChunk(content=" \n"),
-                      RuntimeError("private error"), None):
+        for frame in (
+            StreamEvent("pending", {}),
+            StreamEvent("receipts", []),
+            AIMessageChunk(content=" \n"),
+            RuntimeError("private error"),
+            None,
+        ):
             loop.call_soon_threadsafe(queue.put_nowait, frame)
 
     monkeypatch.setattr(server, "stream_to_queue", producer)

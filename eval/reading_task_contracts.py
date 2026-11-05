@@ -9,8 +9,9 @@ def _require(value, message):
 
 
 def unread_contents(turn, state):
-    result = turn("我有哪些未读通知？")
-    _require(all(title in result["text"] for title in ("合成部署完成", "合成评论待审")),
+    result = turn("把我的未读通知正文逐条展开，保留原文。")
+    facts = ("合成部署完成", "合成评论待审", "本次部署已完成", "有评论等待审核")
+    _require(all(title in result["text"] for title in facts),
              "unread contents were not delivered")
     _require("list_notifications" in result["tool_calls"], "no notification contents were read")
     _require(not result["confirm_tokens"] and not result["exec_rows"],

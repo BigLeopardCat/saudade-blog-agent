@@ -8,6 +8,7 @@ from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from langgraph.checkpoint.memory import InMemorySaver
 
 from agent.api.schemas import ChatRequest
+from agent.contracts.events import StreamEvent
 from agent.principal import SOURCE_ASSERTION, Principal
 from agent.products.blog.application import BlogApplication
 from agent.runtime.checkpoint_conversations import CheckpointConversationStore
@@ -61,7 +62,7 @@ def test_navigation_pauses_after_one_model_call_and_survives_reconstruction(navi
     runtime, model, config, result, command = navigation
     assert len(model.calls) == 1 and result.reply == ""
     assert command["task_id"] == "page-task" and command["timeout_ms"] == 6000
-    assert "__CMD__:" in next(iter(iter_transport_events([result])))
+    assert next(iter(iter_transport_events([result]))).name == "command"
     saved = runtime().get_state(config, subgraphs=True)
     assert saved.interrupts and saved.values["run"]["id"] == "page-task"
     with pytest.raises(ValueError, match="cannot_maintain_active_task"):
@@ -75,7 +76,7 @@ def test_navigation_pauses_after_one_model_call_and_survives_reconstruction(navi
     assert any("浏览器已进入" in m.content for m in facts)
     assert all(json.loads(m.content)["completion_confirmed"] is True for m in facts)
     assert not runtime().store.load(config).unfinished
-    assert not any(isinstance(frame, str) and frame.startswith("__CMD__:")
+    assert not any(isinstance(frame, StreamEvent) and frame.name == "command"
                    for frame in iter_transport_events([resumed]))
     messages = runtime().store.load(config).messages
     assert sum(isinstance(m, HumanMessage) and m.content == "去留言板" for m in messages) == 1
