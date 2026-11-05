@@ -1,12 +1,4 @@
-"""看板娘 pin 漂移提示：判据的判据（20261002）。
-
-`scripts/widget_pin_drift.sh` 是一道**只警告、恒退 0** 的守卫。恒退 0 的守卫有个天然
-风险：它自己也可能是**恒不出声**的——那样它就成了一块装饰，而且没有任何东西会告诉你。
-所以这里把它的每一个分支都真跑一遍（离线、无网络：`curl` 用桩顶掉），逐条判
-"该响的时候响、不该响的时候不响、任何情况下都不退非 0"。
-
-跑法：`.venv/bin/python tests/test_widget_pin_drift.py`
-"""
+"""Offline coverage for advisory pin drift, unavailable inputs and model-only changes."""
 
 
 import json
@@ -16,6 +8,7 @@ import subprocess
 import sys
 import tempfile
 
+import pytest
 from _judge import collector
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
@@ -117,8 +110,6 @@ def test_widget_pin_drift():
               "本次 push 没动看板娘前端：退 0 且不警告", r.stdout.strip()[:40])
 
         print("\n② 该出声：漂移要警告，一致不警告")
-        # PR 事件（20261019 加）：区间是 base.sha..merge，语义与 push 那一趟相同 ⇒ 一样要判、
-        # 一样要出声。漂移最有用的时刻恰恰是 PR 里（等合并后才说就晚了）。
         r = run_script(repo, "ok", OTHER, event="pull_request", before=first, sha=touched)
         check(r.returncode == 0 and "::warning::" in r.stdout,
               "PR 事件：漂移照样警告（不是只在 push 上判）", r.stdout.strip()[:60])
@@ -155,8 +146,12 @@ def test_widget_pin_drift():
         print("\n④ 脚本自己的形状")
         src = SCRIPT.read_text(encoding="utf-8")
         check("exit 1" not in src, "脚本里没有 exit 1（它是提示，不是门禁）")
-        check(src.count("exit 0") >= 6, "每条退出路径都显式 exit 0",
-              f"{src.count('exit 0')} 处")
+        invalid = run_script(repo, "ok", SAME, before="f" * 40, sha=touched)
+        check(invalid.returncode == 0 and "::notice::" in invalid.stdout,
+              "未知基线：显式未评估且不阻断")
+        invalid = run_script(repo, "ok", SAME, before=first, sha="f" * 40)
+        check(invalid.returncode == 0 and "::notice::" in invalid.stdout,
+              "未知目标：显式未评估且不阻断")
         ev = (ROOT / ".github" / "workflows" / "eval.yml").read_text(encoding="utf-8")
         check("widget-pin-drift:" in ev and "scripts/widget_pin_drift.sh" in ev,
               "eval.yml 里有这个 job 且在跑这个脚本")
@@ -169,6 +164,54 @@ def test_widget_pin_drift():
 
     assert not FAILED, (
         f"{len(FAILED)} 条未通过：" + "；".join(FAILED))
+
+
+PATHS = ('frontend/public/live2d-widgets', 'frontend/public/live2d_model')
+
+
+def git(root, *args):
+    return subprocess.check_output(
+        ['git', '-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid',
+         '-c', 'commit.gpgsign=false', *args], cwd=root, text=True,
+    ).strip()
+
+
+@pytest.mark.parametrize('changed_path', PATHS)
+@pytest.mark.parametrize('synced', [False, True])
+def test_changed_subtree_is_checked_against_its_own_pin(tmp_path, changed_path, synced):
+    git(tmp_path, 'init', '-q')
+    for index, path in enumerate(PATHS):
+        directory = tmp_path / path
+        directory.mkdir(parents=True)
+        (directory / f'fixture-{index}.txt').write_text('before')
+    git(tmp_path, 'add', 'frontend')
+    git(tmp_path, 'commit', '-qm', 'before')
+    before = git(tmp_path, 'rev-parse', 'HEAD')
+    target = next((tmp_path / changed_path).glob('*.txt'))
+    target.write_text('after')
+    git(tmp_path, 'add', 'frontend')
+    git(tmp_path, 'commit', '-qm', 'after')
+    after = git(tmp_path, 'rev-parse', 'HEAD')
+    pin_revision = after if synced else before
+    pin = tmp_path / 'pin.json'
+    pin.write_text(json.dumps({'trees': {
+        path: git(tmp_path, 'rev-parse', pin_revision + ':' + path) for path in PATHS
+    }}))
+    commands = tmp_path / 'bin'
+    commands.mkdir()
+    curl = commands / 'curl'
+    curl.write_text('#!/bin/sh\ncat "$PIN_FIXTURE"\n')
+    curl.chmod(0o755)
+    result = subprocess.run(
+        ['bash', str(ROOT / 'scripts/widget_pin_drift.sh')], cwd=tmp_path,
+        env={**os.environ, 'PATH': str(commands) + os.pathsep + os.environ['PATH'],
+             'PIN_FIXTURE': str(pin), 'BEFORE': before, 'SHA': after,
+             'EVENT_NAME': 'pull_request'}, capture_output=True, text=True,
+    )
+    assert result.returncode == 0
+    assert changed_path in result.stdout
+    assert ('::warning::' in result.stdout) is not synced
+    assert (PATHS[1] if changed_path == PATHS[0] else PATHS[0]) not in result.stdout
 
 
 if __name__ == "__main__":
