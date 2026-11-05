@@ -83,8 +83,12 @@ class WorkerActions:
 
     def perform(self, payload, run_id):
         definition = Definition.model_validate(payload["definition"])
-        if not self.enabled(payload, allow_paused=definition.action != "publish_announcement"):
+        if not self.enabled(
+            payload, allow_paused=definition.action not in {"publish_announcement", "admin_write"}
+        ):
             return {"status": "blocked", "reason": "schedule_disabled"}
+        if definition.action == "admin_write":
+            return self.host.change(payload["owner_id"], run_id, definition.write, definition.title)
         if definition.action == "publish_announcement":
             return self.host.publish_announcement(
                 payload["owner_id"], run_id, definition.title, definition.instruction

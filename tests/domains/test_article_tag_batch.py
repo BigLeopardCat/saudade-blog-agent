@@ -19,8 +19,9 @@ def cfg(role="admin"):
 
 
 def prepared(ids=None, **intent):
-    return preparation.prepare_article_tags.invoke({"article_ids": ids or [12, 11],
-                                                   "add": ["测试"], **intent}, config=cfg())
+    return preparation.prepare_article_tags.invoke(
+        {"article_ids": ids or [12, 11], "add": ["测试"], **intent}, config=cfg()
+    )
 
 
 def grant(result):
@@ -32,17 +33,23 @@ def test_one_card_freezes_all_targets_and_replays_one_atomic_write(tmp_path):
         card = prepared()
         signed = grant(card)
         assert len(signed["specs"]) == 2
-        assert all(spec["tool"] == batch.NAME and len(spec["args"]["items"]) == 1
-                   for spec in signed["specs"])
+        assert all(
+            spec["tool"] == batch.NAME and len(spec["args"]["items"]) == 1
+            for spec in signed["specs"]
+        )
         assert [spec["args"]["items"][0]["id"] for spec in signed["specs"]] == [11, 12]
-        choices = [option for option in card.execution["pending_confirm"]["opts"]
-                   if option["kind"] == "choice"]
+        choices = [
+            option
+            for option in card.execution["pending_confirm"]["opts"]
+            if option["kind"] == "choice"
+        ]
         assert "#11" in choices[0]["label"] and "#12" in choices[1]["label"]
         assert not state["writes"]
         first = transactions.execute(signed, cfg(), None, ledger=store)
         replay = transactions.execute(signed, cfg(), None, ledger=store)
         assert first["receipts"] == replay["receipts"] or (
-            first["receipts"][0]["items"] == replay["receipts"][0]["items"])
+            first["receipts"][0]["items"] == replay["receipts"][0]["items"]
+        )
         assert not first["blocked"] and len(first["receipts"]) == 1
         assert [row["id"] for row in first["receipts"][0]["items"]] == [11, 12]
         assert state["writes"] == [[11, 12]] and len(state["tags"]) == 1
@@ -119,3 +126,14 @@ def test_bounded_selection_and_noop_do_not_issue_misleading_cards():
         assert not state["requests"]
         result = prepared(replace=[], add=[])
         assert result.execution["noop_note"] and not result.execution.get("pending_confirm")
+
+
+def test_scheduled_tag_batch_preserves_every_approved_target_and_stays_read_only(enabled_scheduler):
+    with backend() as state:
+        result = prepared(schedule={"delay_seconds": 300})
+        approved = grant(result)
+        definition = approved["specs"][0]["args"]["definition"]
+        assert approved["executor"] == "automations"
+        assert definition["write"]["kind"] == "article_tags"
+        assert [item["id"] for item in definition["write"]["change"]["items"]] == [11, 12]
+        assert not state["writes"]

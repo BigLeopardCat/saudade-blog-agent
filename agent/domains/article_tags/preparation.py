@@ -13,6 +13,7 @@ from agent.proposals import proposal
 from agent.runtime.results import TurnResult
 from agent.runtime.turns import check_cancelled
 from agent.runtime.writes import bound_context
+from agent.scheduling.models import Trigger
 from tools import base
 from tools.result import invalid_args
 
@@ -21,14 +22,15 @@ from tools.result import invalid_args
 def prepare_article_tags(
     config: RunnableConfig,
     article_id: targets.Identifier | None = None,
-    article_ids: Annotated[list[targets.Identifier],
-                           Field(min_length=1, max_length=20)] | None = None,
+    article_ids: Annotated[list[targets.Identifier], Field(min_length=1, max_length=20)]
+    | None = None,
     add: targets.Names | None = None,
     remove: targets.Names | None = None,
     replace: targets.Names | None = None,
     level: targets.Level | None = None,
     parent_tag: targets.Name | None = None,
     color: str | None = None,
+    schedule: Trigger | None = None,
 ) -> object:
     """准备文章标签增删或整体替换确认，不写入。add/remove填写用户要操作的标签名列表。
 
@@ -57,14 +59,14 @@ def prepare_article_tags(
     if (article_id is None) == (article_ids is None):
         return invalid_args("请选择单篇编号或一组文章编号，不能混用。")
     if article_ids is not None:
-        return batch.prepare(article_ids, request, config)
+        return batch.prepare(article_ids, request, config, schedule=schedule)
     current = targets.prepare(article_id, request, config)
     if isinstance(current, base.ToolResult):
         return current
     args = {"article_id": article_id, "version": current["version"], "intent": request}
     spec = {"tool": "set_article_tags", "args": args}
     target = change_summary(current, request)
-    if current["before"] == current["after"]:
+    if schedule is None and current["before"] == current["after"]:
         text = target + "，标签已达成，本次无需改动。"
         return TurnResult(
             text, {"noop_note": text, "noop_text": text, "task_satisfied": [spec], "receipts": []}
@@ -79,6 +81,7 @@ def prepare_article_tags(
         executor="article_tags",
         question="确认修改文章标签？\n" + target,
         target=target,
+        schedule=schedule,
     )
 
 

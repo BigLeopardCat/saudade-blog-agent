@@ -79,7 +79,10 @@ def tools(service, can_prepare):
     ) -> object:
         """Prepare an administrator's persistent schedule for approval; do not activate it.
 
-        Provide exactly one: absolute run_at, seconds after creation, or five-field cron.
+        Provide exactly one: absolute run_at (ISO date/time or local HH:MM), seconds after creation,
+        or five-field cron. For a clock time use run_at; NEVER convert it into delay_seconds.
+        Other scheduled business changes use the domain preparation tool with schedule;
+        do not replace a requested write with a reminder.
         Delay starts ONLY after approval. While pending, do not claim it is queued
         or translate the delay to an exact clock time.
         publish_announcement publishes the EXACT title and instruction as the public title/body,
@@ -139,7 +142,7 @@ def tools(service, can_prepare):
     ) -> object:
         """Prepare pause/resume/cancel approval, bound to the schedule's current version.
 
-        Stops future execution; already started reads can finish. It does not undo completed work.
+        Stops future execution; already started effects can finish. It does not undo completed work.
         """
         actor, cid = bound_context(config)
         current = service.get(actor, schedule_id)
@@ -147,7 +150,7 @@ def tools(service, can_prepare):
         args = {"schedule_id": schedule_id, "action": action, "version": current["version"]}
         label = LABELS[OPERATIONS[action]]
         question = (
-            f"{label}「{current['definition']['title']}」？已开始的读取可能完成，不撤销已完成操作。"
+            f"{label}「{current['definition']['title']}」？已开始的执行可能完成，不撤销已完成操作。"
         )
         return proposal(
             actor,

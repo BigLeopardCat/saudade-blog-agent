@@ -1,5 +1,6 @@
 """Real timer/queue recovery. Runs only against an explicitly supplied disposable DSN."""
 
+import json
 import os
 import subprocess
 import sys
@@ -260,11 +261,27 @@ def test_owned_schedule_lists_do_not_confuse_administrator_id_prefixes(site):
         service.get(ADMIN, other)
 
 
-def test_approved_publication_waits_durably_and_crash_replay_does_not_republish(site):
+@pytest.mark.parametrize("business_change", [False, True])
+def test_approved_publication_waits_durably_and_crash_replay_does_not_republish(
+    site, business_change
+):
     service, query, start, processes = site
     query("UPDATE test_flags SET value=true WHERE key='block_publish_after_commit'")
-    ident, _, _ = create(service, action="publish_announcement", title="审批标题",
-                         instruction=" 审批正文\n😀 ", delay_seconds=5)
+    extra = {"action": "publish_announcement"}
+    if business_change:
+        extra = {
+            "action": "admin_write",
+            "write": {
+                "kind": "categories",
+                "change": {
+                    "version": "a" * 64,
+                    "intent": {"action": "create", "fields": {"name": "密码学"}},
+                },
+            },
+        }
+    ident, _, _ = create(
+        service, title="审批标题", instruction=" 审批正文\n😀 ", delay_seconds=5, **extra
+    )
     assert service.backend.once(ADMIN.uid, ident).status == "DELAYED"
     assert query("SELECT count(*) FROM test_publications")[0][0] == 0
     eventually(lambda: query("SELECT count(*) FROM test_publications")[0][0] == 1)
@@ -274,9 +291,12 @@ def test_approved_publication_waits_durably_and_crash_replay_does_not_republish(
     query("UPDATE test_flags SET value=false WHERE key='block_publish_after_commit'")
     start()
     eventually(lambda: service.get(ADMIN, ident)["status"] == "finished")
-    assert query("SELECT owner_id,title,body FROM test_publications") == [
-        (7, "审批标题", " 审批正文\n😀 ")
-    ]
+    rows = query("SELECT owner_id,title,body FROM test_publications")
+    assert len(rows) == 1 and rows[0][:2] == (7, "审批标题")
+    if business_change:
+        assert json.loads(rows[0][2])["change"]["intent"]["fields"]["name"] == "密码学"
+    else:
+        assert rows[0][2] == " 审批正文\n😀 "
     assert query("SELECT count(*) FROM test_notifications")[0][0] == 1
     result = service.runs(ADMIN, ident)["items"][0]["result"]
     assert result["status"] == "completed"

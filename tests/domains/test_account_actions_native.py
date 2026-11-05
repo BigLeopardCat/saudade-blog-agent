@@ -448,3 +448,23 @@ def test_unknown_previous_role_is_displayed_without_emitting_browser_frames(acco
     signed = grant(prepared)
     assert signed["specs"][0]["args"]["intent"]["role"] == "user"
     assert not accounts["writes"]
+
+
+@pytest.mark.parametrize(
+    "action,arguments",
+    [
+        ("freeze", {"account_id": 11}),
+        ("unfreeze", {"account_id": 12}),
+        ("role", {"account_id": 11, "role": "zako"}),
+    ],
+)
+def test_future_account_change_keeps_target_policy_and_requires_approval(
+    accounts, action, arguments, enabled_scheduler
+):
+    result = prepare(action, **arguments, schedule={"delay_seconds": 300})
+    approved = grant(result)
+    assert approved["executor"] == "automations"
+    definition = approved["specs"][0]["args"]["definition"]
+    assert definition["write"]["kind"] == "account_actions"
+    assert definition["write"]["change"]["intent"]["target"]["id"] == arguments["account_id"]
+    assert accounts["writes"] == 0
