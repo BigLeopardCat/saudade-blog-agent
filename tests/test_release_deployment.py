@@ -22,6 +22,16 @@ def deployment(tmp_path):
     commands.mkdir()
     (source / "scripts").mkdir()
     (source / "agent").mkdir()
+    (source / "config").mkdir()
+    (source / "config/__init__.py").touch()
+    (source / "config/settings.py").write_text(
+        'import os\nfrom types import SimpleNamespace\n'
+        'settings=SimpleNamespace(embedding_profile=os.getenv("FIXTURE_PROFILE", ""))\n')
+    (source / "rag").mkdir()
+    (source / "rag/__init__.py").touch()
+    (source / "rag/embedding_inputs.py").write_text(
+        'import os\ndef active_profile():\n'
+        ' if os.getenv("FIXTURE_BAD_PROFILE"): raise ValueError("invalid profile")\n')
     for name in ("serve.sh", "serve_scheduler.sh", "deploy_release.sh"):
         shutil.copy(ROOT / "scripts" / name, source / "scripts" / name)
     (source / "agent" / "__init__.py").touch()
@@ -39,7 +49,7 @@ def deployment(tmp_path):
            "GIT_AUTHOR_NAME": "Fixture", "GIT_AUTHOR_EMAIL": "fixture@example.invalid",
            "GIT_COMMITTER_NAME": "Fixture", "GIT_COMMITTER_EMAIL": "fixture@example.invalid"}
     wrappers = {
-        "uv": '#!/bin/sh\nmkdir -p .venv/bin\nln -sf "$FIXTURE_PYTHON" .venv/bin/python\n',
+        "uv": '#!/bin/sh\nprintf "%s\\n" "$@" > uv-args\nmkdir -p .venv/bin\nln -sf "$FIXTURE_PYTHON" .venv/bin/python\n',
         "sudo": '#!/bin/sh\nshift\nexec "$@"\n',
         "systemctl": ('#!/bin/sh\nreadlink -f "$FIXTURE_RELEASES/current" '
                       '>> "$FIXTURE_RELEASES/restarts"\n'),
@@ -131,3 +141,24 @@ def test_preparation_links_writable_state_without_activating_or_changing_secrets
     assert (release / "data").resolve() == data
     assert (release / "agent/main.py").stat().st_mode & 0o020 == 0
     assert (release / "scripts/serve.sh").stat().st_mode & 0o050 == 0o050
+
+
+def test_configured_profile_installs_tokenizer_without_an_operator_flag(deployment):
+    _, config, _, releases, _ = deployment
+    config.write_text('EMBEDDING_PROFILE="/opt/fixture/profile.json"\n')
+    result = publish(deployment, DEPLOY_PREPARE_ONLY="1")
+    assert result.returncode == 0, result.stderr
+    release = next((releases / "releases").iterdir())
+    assert '--extra\nembedding-tokenizer\n' in (release / "uv-args").read_text()
+    assert not (releases / "current").exists()
+
+
+def test_invalid_tokenizer_profile_never_replaces_the_running_release(deployment):
+    assert publish(deployment).returncode == 0
+    _, _, _, releases, _ = deployment
+    previous = (releases / "current").resolve()
+    restarts = (releases / "restarts").read_text()
+    result = publish(deployment, FIXTURE_PROFILE="configured", FIXTURE_BAD_PROFILE="1")
+    assert result.returncode != 0 and 'invalid profile' in result.stderr
+    assert (releases / "current").resolve() == previous
+    assert (releases / "restarts").read_text() == restarts

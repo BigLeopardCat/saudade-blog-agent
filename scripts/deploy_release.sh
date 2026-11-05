@@ -28,7 +28,8 @@ if [[ -n "${DEPLOY_SERVICE_GROUP:-}" ]]; then
   # Permission changes must not affect hard-linked package-cache files.
   uv_args+=(--link-mode copy)
 fi
-if [[ "${DEPLOY_EMBEDDING_TOKENIZER:-0}" == 1 ]]; then
+if [[ "${DEPLOY_EMBEDDING_TOKENIZER:-0}" == 1 ]] || \
+    grep -Eq '^[[:space:]]*EMBEDDING_PROFILE[[:space:]]*=[[:space:]]*[^#[:space:]]' "$config_file"; then
   uv_args+=(--extra embedding-tokenizer)
 fi
 (cd "$release" && uv "${uv_args[@]}")
@@ -44,6 +45,8 @@ if [[ -n "${DEPLOY_RUNTIME_STATE:-}" ]]; then
   done
 fi
 (cd "$release" && SAUDADE_IGNORE_ENV_FILE=1 .venv/bin/python -c 'from agent.main import app; assert app.state.runtime is None')
+# Validate the configured local tokenizer before activating a release; no model request.
+(cd "$release" && .venv/bin/python -c 'from config.settings import settings; from rag.embedding_inputs import active_profile; active_profile() if settings.embedding_profile else None')
 if [[ -n "${DEPLOY_SERVICE_GROUP:-}" ]]; then
   chgrp -hR -- "$DEPLOY_SERVICE_GROUP" "$release"
   chmod -R g+rX,g-w,o-rwx -- "$release"
