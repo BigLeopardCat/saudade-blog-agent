@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import secrets
 import time
 from contextlib import contextmanager
 
@@ -17,7 +18,7 @@ from models.errors import error_fields
 
 def overloaded():
     return RateLimitError("PRIVATE_UPSTREAM_CANARY", response=httpx.Response(
-        429, request=httpx.Request("POST", "https://unit.invalid")), body={"secret": "canary"})
+        429, request=httpx.Request("POST", "https://unit.invalid")), body={"secret": secrets.token_urlsafe()})
 
 
 @pytest.mark.parametrize("error,expected", [
