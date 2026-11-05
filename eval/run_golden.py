@@ -203,8 +203,6 @@ def build_request(case: dict, rnd: dict | None = None) -> ChatRequest:
                          else ctx.get("current_weather")),
         history=ctx.get("history", []),
         summary=ctx.get("summary", ""),
-        executions=expand_now(ctx.get("executions", "")),
-        pending_action=expand_now(ctx.get("pending_action", "")),
         conversation_id=ctx.get("conversation_id"),
 
     )
