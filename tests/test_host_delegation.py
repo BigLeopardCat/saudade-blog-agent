@@ -97,7 +97,9 @@ def test_assertion_key_does_not_accept_confirmation_or_login_key(monkeypatch):
     assert 'delegation' not in repr(principal)
 
 
-def test_operator_file_requires_private_permissions_and_matching_host_capability(monkeypatch, tmp_path):
+def test_operator_file_requires_private_permissions_and_matching_host_capability(
+    monkeypatch, tmp_path
+):
     source = tmp_path / 'operator.json'
     token = capability()
     source.write_text(json.dumps({'7': token}))
