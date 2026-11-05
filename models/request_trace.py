@@ -2,6 +2,7 @@
 
 import hashlib
 import json
+import time
 
 import httpx
 
@@ -44,6 +45,7 @@ def record_layout(payload, *, endpoint=None, event="request_layout",
 
 async def record_wire_request(request):
     """Observe the SDK's merged HTTP JSON and actual routing header, without private values."""
+    request.extensions["saudade_model_started"] = time.monotonic()
     session = request.headers.get("x-opencode-session")
     try:
         body = request.content

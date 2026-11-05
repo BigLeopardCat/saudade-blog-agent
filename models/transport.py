@@ -39,6 +39,10 @@ class _ResponseStream(httpx.AsyncByteStream):
 
 
 async def _track_response(response):
+    started = response.request.extensions.get("saudade_model_started")
+    if started is not None:
+        record("model", "http_response_headers", http_status=response.status_code,
+               duration_s=round(monotonic() - started, 3))
     responses = _responses.get()
     if responses is not None:
         response.stream = _ResponseStream(response.stream)

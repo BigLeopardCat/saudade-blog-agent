@@ -21,6 +21,7 @@ import httpx
 
 from eval import dataset_audit, request_metrics, task_metrics
 from eval.online_transport import EvaluationError, OnlineTransport, safe_result
+from utils.trace_io import load_trace
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "eval"))
@@ -159,6 +160,17 @@ def fixture_preflight(cases, transport, identities):
     return results
 
 
+def provider_unavailable(case):
+    """Only captured SDK facts identify an unavailable model, never reply wording."""
+    for round_ in case.get("result", {}).get("rounds", []):
+        trace = load_trace(str(round_.get("trace", ""))) or {}
+        if any(event.get("event") == "llm_error" and event.get("retryable") is True
+               and event.get("failure_source") in {"provider", "transport"}
+               for event in trace.get("events", [])):
+            return True
+    return False
+
+
 def run(cases, transport, identities, report_dir, *, phase, suite_hash, include_vision=False,
         dataset_role="regression", expected_build=None, evaluation_id=None):
     excluded = [case for case in cases if not include_vision and "vision" in case["tags"]]
@@ -184,6 +196,7 @@ def run(cases, transport, identities, report_dir, *, phase, suite_hash, include_
               "identities": profiles, "actor_allowances": allowances,
               "planned": len(cases), "cases": [], "requests": [],
               "automatic_retries": 0, "business_write_approval": False,
+              "retry_scope": "No case resampling; model retry attempts are included in metrics",
               "coverage_limits": ["不批准线上业务写入；实际执行、回放和未知结果由隔离契约评测覆盖",
                                   "自动判据验证行为与部分内容；不等同于完整语义或视觉体验验收",
                                   ("Blog HTTP 包含宿主鉴权和聊天历史；没有模拟浏览器点击"
@@ -213,6 +226,7 @@ def run(cases, transport, identities, report_dir, *, phase, suite_hash, include_
                       finished_at=datetime.now().astimezone().isoformat())
         save()
         return report
+    provider_failure_streak = 0
     for case in cases:
         before = transport.client.get(transport.agent_url + "/version")
         before.raise_for_status()
@@ -245,6 +259,11 @@ def run(cases, transport, identities, report_dir, *, phase, suite_hash, include_
         save()
         print(json.dumps({k: row[k] for k in ("id", "status", "elapsed_s")},
                          ensure_ascii=False), flush=True)
+        provider_failure_streak = provider_failure_streak + 1 if provider_unavailable(row) else 0
+        if provider_failure_streak >= 3:
+            report["stopped_reason"] = "three consecutive captured model availability failures"
+            save()
+            break
         if phase == "poc" and row["status"] == "evaluation_error":
             report["stopped_reason"] = "HTTP/evidence precondition failed"
             save()

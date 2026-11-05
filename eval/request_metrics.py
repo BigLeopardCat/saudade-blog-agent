@@ -46,6 +46,18 @@ def path_of(doc):
     return "graph" if "planner" in nodes else "unknown"
 
 
+def _model_attempts(events):
+    starts = Counter((event.get("node"), event.get("phase"), event["round"])
+                     for event in events if event.get("node") == "native"
+                     and event.get("event") == "llm_start" and type(event.get("round")) is int)
+    return {
+        "model_retry_attempts": sum(max(0, count - 1) for count in starts.values()),
+        "model_failures": [{key: e[key] for key in (
+            "error_type", "failure_source", "http_status", "retryable") if key in e}
+            for e in events if e.get("event") == "llm_error"],
+    }
+
+
 def summary(doc):
     meta = _mapping(doc.get("input"))
     runtime = _mapping(meta.get("runtime"))
@@ -76,6 +88,7 @@ def summary(doc):
             "end_reason": _label(doc.get("end_reason")),
             "started_calls": sum(e.get("event") == "llm_start" for e in events),
             "errored_calls": sum(e.get("event") == "llm_error" for e in events),
+            **_model_attempts(events),
             "handoff_reasons": [_label(e.get("reason")) for e in events
                                 if e.get("event") == "legacy_handoff"],
             "budget_stop_reasons": [_label(e.get("reason")) for e in events
@@ -95,6 +108,15 @@ def _discovery_totals(rows):
     return {field: sum(row[field] for row in rows) for field in (
         "tool_requests", "discovery_requests", "domains_loaded",
         "inactive_tool_requests", "unknown_tool_requests", "post_discovery_model_calls")}
+
+
+def _failure_totals(rows):
+    failures = [event for row in rows for event in row["model_failures"]]
+    return {"model_retry_attempts": sum(row["model_retry_attempts"] for row in rows),
+            "model_error_types": dict(Counter(e.get("error_type", "unclassified")
+                                               for e in failures)),
+            "model_http_errors": dict(Counter(str(e["http_status"]) for e in failures
+                                               if "http_status" in e))}
 
 
 def collect(paths):
@@ -147,5 +169,6 @@ def collect(paths):
                        if len(first_reply) >= 20 else None,
                        "measured_uncached_input": totals["cache_in"] - totals["cache"]
                        if totals["cache_seen"] else None,
+                       **_failure_totals(rows),
                        "cache_hit_rate": usage.hit_rate(totals), **totals})
     return {"unreadable": unreadable, "groups": output}
