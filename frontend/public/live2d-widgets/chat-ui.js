@@ -21,7 +21,9 @@
     const { chatPanel: panel, input, sendBtn, messages, askBox } = ctx.dom;
     if (panel.dataset.uiReady) return;
     panel.dataset.uiReady = '1';
-    initWindow(panel);
+    const windowUI = initWindow(panel);
+    ctx.ui.expandChat = () => windowUI?.setMode('expanded');
+    g.__waifuTaskUI?.init(ctx, engine);
     const status = panel.querySelector('#chat-status');
     const empty = panel.querySelector('#chat-empty');
     const imageButton = panel.querySelector('#chat-img-btn');
@@ -149,6 +151,7 @@
           || (askBox.dataset.askState === 'pending' ? '正在确认' : '需要你的确认');
         if (heading.textContent !== title) heading.textContent = title;
       }
+      ctx.ui.refreshTaskStatus?.();
       addCopyButtons();
     }
     const schedule = () => {
@@ -285,7 +288,7 @@
         setMode(mode() === 'expanded' ? 'collapsed' : 'expanded');
     });
     panel.addEventListener('pointerdown', e => {
-      if (mode() === 'docked' || e.button !== 0 || e.target.closest('#chat-minimize, #chat-close')
+      if (mode() === 'docked' || e.button !== 0 || e.target.closest('#chat-minimize, #chat-close, .chat-header-tasks')
           || !e.target.closest('.chat-header, .chat-drag-bar-t')) return;
       e.preventDefault(); e.stopPropagation();
       dragged = false;
@@ -314,6 +317,7 @@
     panel.addEventListener('pointerup', endDrag);
     panel.addEventListener('pointercancel', endDrag);
     window.addEventListener('resize', fit);
+    return { setMode, mode };
   }
   g.__waifuChatUI = { init, deriveState, shouldSubmit };
 })(typeof window !== 'undefined' ? window : globalThis);

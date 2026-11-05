@@ -144,6 +144,7 @@
     ['chat-steering', '__waifuSteering'],
     ['chat-approval', '__waifuApproval'],
     ['chat-stream', '__waifuStream'],
+    ['chat-tasks', '__waifuTaskUI'],
     ['chat-ui', '__waifuChatUI'],
     ['chat-session', '__waifuSession'], // 20260903 会话化 UI 壳（会话管理列表/双栏）
     ['renderer', '__waifuRenderer'],    // 看板娘渲染层（20261001 自研，替换上游 GPL-3.0 实现）

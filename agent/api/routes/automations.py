@@ -22,7 +22,7 @@ def private_response(response: Response):
 router = APIRouter(
     prefix="/automations", tags=["automations"], dependencies=[Depends(private_response)]
 )
-Limit = Annotated[int, Query(ge=1, le=10)]
+Limit = Annotated[int, Query(ge=1, le=20)]
 Offset = Annotated[int, Query(ge=0, le=1000)]
 
 
@@ -47,8 +47,10 @@ async def invoke(request, operation, *args):
 
 
 @router.get("")
-async def list_schedules(request: Request, limit: Limit = 5, offset: Offset = 0):
-    return await invoke(request, "list", limit, offset)
+async def list_schedules(request: Request, limit: Limit = 5, offset: Offset = 0,
+                         active_only: bool = False):
+    return await invoke(request, "list", limit, offset, True) if active_only else await invoke(
+        request, "list", limit, offset)
 
 
 @router.post("")

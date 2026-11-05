@@ -738,6 +738,7 @@
           });
           if (!ownsRound()) throw staleRound();
           if (!resp.ok) {
+            if (resp.status >= 500) void ctx.ui.checkService?.();
             // 网关/代理超时可能返回 HTML 错误页（如 504），先读文本再解析
             const text = await resp.text();
             let d = null;
@@ -1182,12 +1183,40 @@
           retainStoppedTurn(ctx.state.live[roundId], roundId, msg, silent);
           setTimeout(pullHistory, 0); // DB 已是权威（残缺回复本就没落库），收敛一致
         }
+        if (ownsRound()) void ctx.ui.reloadTasks?.();
         return ownsRound() && completed && !ctx.state.stoppedByUser;
       };
 
       ctx.ui.isResumingTask = () => resumingTask;
       ctx.ui.currentPausedTask = pausedTask;
       ctx.ui.continueTask = () => resumeStoppedTask(pausedTask());
+      ctx.ui.resumeManagedTask = async row => {
+        if (ctx.state.isSending || Object.keys(ctx.state.remoteRounds || {}).length)
+          throw new Error('请先暂停或等待当前任务完成');
+        const response = await fetch('/api/chat/task/inputs/status', {
+          method: 'POST', credentials: 'same-origin',
+          headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + (localStorage.getItem('tokenKey') || '') },
+          body: JSON.stringify({ conversation_id: row.conversation_id, task_id: row.task_id }),
+        });
+        if (!response.ok) throw new Error('任务已变化或不可用，请刷新任务列表');
+        const state = await response.json();
+        if (state.phase !== 'paused' || state.task_id !== row.task_id)
+          throw new Error('任务当前不可继续，请刷新任务列表');
+        if (String(ctx.state.conv) !== String(row.conversation_id)) {
+          engine.setConvState(row.conversation_id, { user: true });
+          await engine.pullHistory();
+        }
+        const stopped = { kind: 'stopped', task_id: row.task_id, conv_id: row.conversation_id,
+          text: state.original_text, process: [], ts: Date.now() };
+        await resumeStoppedTask(stopped, null, ctx.ui.notify);
+      };
+      ctx.ui.dismissManagedTask = taskId => {
+        try {
+          const rows = JSON.parse(localStorage.getItem('saudade-chat-failed') || '[]');
+          localStorage.setItem('saudade-chat-failed', JSON.stringify(rows.filter(row => row.task_id !== taskId)));
+        } catch (_) { /* Server state already removed the continuation. */ }
+        engine.refreshView(); ctx.ui.refreshComposer?.();
+      };
 
       const browserActions = g.__waifuBrowserActions
         ? g.__waifuBrowserActions(ctx, engine, sendMessage, settings => {

@@ -306,3 +306,19 @@ def test_actual_process_exit_recovers_durable_task_once(inboxes, tmp_path, monke
         assert not final.has_pending
         assert sum(isinstance(message, HumanMessage) and
                    message.content == "先不收藏，解释一下。" for message in final.messages) == 1
+
+
+def test_paused_listing_is_owned_and_new_foreground_task_supersedes_old(inboxes):
+    left, right = inboxes
+    own = {'uid': 7, 'role': 'user', 'conversation_id': 42}
+    first = {'id': 'old', 'scope': own}
+    foreign = {'id': 'foreign', 'scope': {**own, 'uid': 8}}
+    for task in (first, foreign):
+        left.open(task)
+        left.finish(task, [], paused=True)
+    assert [key for key, _ in right.storage.paused(7, 'user', 20)] == ['old']
+    assert right.storage.paused(7, 'zako', 20) == []
+    right.open({'id': 'new', 'scope': own})
+    assert left.read('old', own)['phase'] == 'superseded'
+    assert left.storage.paused(7, 'user', 20) == []
+    assert [key for key, _ in right.storage.paused(8, 'user', 20)] == ['foreign']

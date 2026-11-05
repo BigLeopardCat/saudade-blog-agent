@@ -13,6 +13,9 @@ const modulePath = process.env.PLAYWRIGHT_MODULE;
 const { chromium } = await import(modulePath ? pathToFileURL(modulePath) : 'playwright');
 const requests = [];
 let nextMode = 'reply';
+let serviceReady = true;
+let managedTasks = {paused:{items:[]},schedules:{items:[]}};
+let taskDeletes = 0;
 let conversation = 1;
 let conversationTitle = '测试会话';
 const inputTasks = new Map();
@@ -37,6 +40,16 @@ const server = createServer(async (req, res) => {
       for await (const chunk of req) chunks.push(chunk);
       const body = chunks.length ? JSON.parse(Buffer.concat(chunks)) : {};
       requests.push({ method: req.method, path: url.pathname, body });
+      if (url.pathname === '/api/chat/service/status') return json(res, {ready:serviceReady});
+      if (url.pathname === '/api/chat/tasks') return json(res, {...managedTasks,server_time:new Date().toISOString()});
+      if (url.pathname === '/api/chat/tasks/cancel') {
+        assert.equal(body.task_id, 'paused-ui'); assert.equal(body.conversation_id, 1); taskDeletes++;
+        managedTasks.paused.items=[]; return json(res,{task_id:body.task_id,cancelled:true});
+      }
+      if (url.pathname === '/api/chat/schedules/cancel') {
+        assert.equal(body.schedule_id,'sc_'+'a'.repeat(32)); assert.equal(body.version,'b'.repeat(64)); taskDeletes++;
+        managedTasks.schedules.items=[]; return json(res,{changed:true});
+      }
       if (url.pathname === '/api/chat/stream') {
         const mode = nextMode;
         nextMode = 'reply';
@@ -335,7 +348,7 @@ try {
   await page.locator('#chat-close').click();
   assert.equal(await page.locator('#waifu-chat').isVisible(), false);
   await page.evaluate(() => window.__chatTest.ctx.dom.chatPanel.classList.add('active'));
-  await page.locator('#conv-history-btn').click();
+  await page.locator('#conv-toggle-btn').click();
   assert.equal(await page.locator('#waifu-chat').evaluate(el => el.classList.contains('conv-open')), true);
   await noOverflow();
   await drawerInsidePanel();
@@ -1121,7 +1134,7 @@ try {
   const closedHeader = await headerMetrics();
   const mobileClosed = await workspaceBounds();
   assert.ok(mobileClosed.panel.bottom <= mobileClosed.avatar.top - 8, JSON.stringify(mobileClosed));
-  await page.locator('#conv-history-btn').click();
+  await page.locator('#conv-toggle-btn').click();
   await noOverflow();
   await drawerInsidePanel();
   await page.screenshot({ path: path.join(output, 'mobile-history.png') });
@@ -1208,6 +1221,50 @@ try {
     await page.locator('#chat-restore').click();
   }
   passed('desktop/mobile: minus docks directly, header folds, dragging preserves state, night notch remains visible');
+
+  await page.setViewportSize({width:1280,height:900});
+  await reset();
+  managedTasks={paused:{items:[{task_id:'paused-ui',conversation_id:1,title:'继续阅读文章',expires_at:Date.now()/1000+3600}]},
+    schedules:{items:[{id:'sc_'+'a'.repeat(32),title:'稍后提醒',instruction:'提醒休息',status:'scheduled',
+      next_run_at:new Date(Date.now()+480000).toISOString(),version:'b'.repeat(64)}]}};
+  await page.evaluate(async()=>{await window.__chatTest.ctx.ui.reloadTasks();await window.__chatTest.ctx.ui.checkService();});
+  await page.waitForFunction(()=>document.querySelector('#chat-service-indicator').dataset.state==='paused');
+  await page.locator('#chat-restore').click();
+  await page.waitForTimeout(400);
+  assert.equal(await page.locator('#chat-paused-chip').isVisible(),true);
+  await page.locator('#chat-paused-chip').click();
+  assert.equal(await page.locator('#waifu-chat').getAttribute('data-window-mode'),'expanded');
+  assert.equal(await page.locator('#chat-task-panel').isVisible(),true);
+  await page.locator('#chat-task-panel summary').filter({hasText:'继续阅读文章'}).click();
+  await page.locator('#chat-task-panel details').filter({hasText:'继续阅读文章'}).getByRole('button',{name:'删除任务',exact:true}).click();
+  assert.equal(taskDeletes,0);
+  await page.getByRole('button',{name:'确认删除',exact:true}).click();
+  await page.waitForFunction(()=>document.querySelector('#chat-paused-chip').hidden);
+  assert.equal(taskDeletes,1);
+  await page.getByRole('button',{name:'关闭任务列表',exact:true}).click();
+  await page.locator('#chat-minimize').click(); await page.waitForTimeout(400);
+  assert.equal(await page.locator('#chat-dock-countdown').isVisible(),true);
+  assert.equal(await page.locator('#chat-schedule-chip').isVisible(),false);
+  assert.match(await page.locator('#chat-dock-countdown').textContent(),/◷ (7:5[0-9]|8:00)/);
+  await page.screenshot({path:path.join(output,'task-countdown-notch.png')});
+  await page.locator('#chat-restore').click(); await page.waitForTimeout(400);
+  await page.locator('#conv-tasks-btn').click();
+  await page.locator('#chat-task-panel summary').filter({hasText:'稍后提醒'}).click();
+  await page.locator('#chat-task-panel details').filter({hasText:'稍后提醒'}).getByRole('button',{name:'删除任务',exact:true}).click();
+  await page.getByRole('button',{name:'确认删除',exact:true}).click();
+  await page.waitForFunction(()=>document.querySelector('#chat-schedule-chip').hidden);
+  assert.equal(taskDeletes,2);
+  serviceReady=false;
+  await page.evaluate(()=>window.__chatTest.ctx.ui.checkService());
+  assert.equal(await page.locator('#chat-service-indicator').getAttribute('data-state'),'offline');
+  serviceReady=true;
+  await page.evaluate(()=>window.__chatTest.ctx.ui.checkService());
+  assert.equal(await page.locator('#chat-service-indicator').getAttribute('data-state'),'ready');
+  await page.evaluate(()=>{window.__chatTest.ctx.state.isSending=true;window.__chatTest.ctx.ui.refreshComposer();});
+  assert.equal(await page.locator('#chat-service-indicator').getAttribute('data-state'),'busy');
+  await page.evaluate(()=>{window.__chatTest.ctx.state.isSending=false;window.__chatTest.ctx.ui.refreshComposer();});
+  passed('task chips, server-owned deletion, four-state health signal and read-only countdown notch');
+
   console.log(JSON.stringify({ passed: checks, screenshots: output, requests: requests.length }, null, 2));
 } catch (error) {
   const diagnostics = {error:String(error),pages:[],requests:requests.filter(r=>r.path==='/api/chat/stream').slice(-6).map(r=>({
