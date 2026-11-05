@@ -853,7 +853,9 @@ def write_artifacts(payload: dict, nodes: np.ndarray, words: list[str], transfor
         return {"build_id": build_id, "file": fname, "bytes": nbytes, "dry": True, "site": site}
 
     gdir.mkdir(parents=True, exist_ok=True)
+    gdir.chmod(0o755)
     (gdir / fname).write_text(body, encoding="utf-8")
+    (gdir / fname).chmod(0o644)
     (gdir / "manifest.json").write_text(
         json.dumps({"v": build_id, "file": fname, "bytes": nbytes,
                     # site = 产物的**归属站点**：浏览器**运行期**拿它跟本站 origin 比，
@@ -868,6 +870,7 @@ def write_artifacts(payload: dict, nodes: np.ndarray, words: list[str], transfor
                     # 不另取 time.time()——否则两个时间戳会差几毫秒、对不上账。
                     "built": payload["built"]},
                    ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
+    (gdir / "manifest.json").chmod(0o644)
     # 只保留最近 2 代（留一代给 manifest 回滚）
     olds = sorted(gdir.glob("graph-*.js"), key=lambda p: p.stat().st_mtime, reverse=True)
     for p in olds[2:]:

@@ -108,3 +108,23 @@ def test_scheduler_enabled_release_restarts_both_services(deployment):
     assert result.returncode == 0, result.stderr
     # Scheduler restart, HTTP restart and scheduler liveness all target the pinned release.
     assert len((releases/"restarts").read_text().splitlines()) == 3
+
+
+def test_preparation_links_writable_state_without_activating_or_changing_secrets(deployment):
+    source, config, data, releases, env = deployment
+    config.chmod(0o600)
+    state = source.parent / "state"
+    state.mkdir()
+    result = publish(deployment, DEPLOY_PREPARE_ONLY="1", DEPLOY_RUNTIME_STATE=str(state),
+                     DEPLOY_SERVICE_GROUP=str(os.getgid()))
+    assert result.returncode == 0, result.stderr
+    assert not (releases / "current").exists()
+    assert not (releases / "restarts").exists()
+    revision = run(["git", "rev-parse", "HEAD"], cwd=source, env=env).stdout.strip()
+    release = releases / "releases" / revision
+    for path in ("logs", "output_audio", "eval/cache", "eval/report"):
+        assert (release / path).resolve() == state / path
+    assert config.stat().st_mode & 0o777 == 0o600
+    assert (release / "data").resolve() == data
+    assert (release / "agent/main.py").stat().st_mode & 0o020 == 0
+    assert (release / "scripts/serve.sh").stat().st_mode & 0o050 == 0o050
