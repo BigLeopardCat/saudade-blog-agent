@@ -103,19 +103,10 @@ def state_label(state: str, name: str) -> str:
 
 
 def declared_fixtures() -> list[str]:
-    """用例文件里声明的**账号**族夹具名（`requires_fixture_kind: "account"`）。
+    """Return the distinct account fixture names declared by the corpus.
 
-    **派生，不手写**：残留哨兵要放行的正是"名正言顺的那些夹具"，而谁名正言顺由用例
-    说了算——手抄一份名单，早晚出现"用例改了名字、哨兵还在放行旧的"（那种哨兵会对着
-    一条真残留一直报，然后被学会忽略）。读不到用例文件 ⇒ 空列表（哨兵只报前缀族，
-    不做"这个是不是合法夹具"的判断——宁可多报一行，不可静默放过）。
-
-    **去重**（保留首次出现顺序）：账号夹具是**常驻**的（用例只改它的状态，见模块头注），
-    所以多条用例共用同一个夹具是正常形态、而且会越来越多（20260926 起「解冻」与「发通知」
-    两条都挂在 `agent_fixture_freeze_a` 上）。不去重的话，`--verify` 会印成
-    「也不算残留：[A, A]」，而"同一个名字出现两次"读起来像是有两个夹具或有人插重了
-    ——哨兵自己生成的一句误导，正是这类哨兵最容易被学会忽略的方式。
-    """
+    Multiple cases may intentionally share the same fixture; deduplicate names
+    without changing case counts or eligibility."""
     try:
         lines = CASES_FILE.read_text(encoding="utf-8").splitlines()
     except OSError:

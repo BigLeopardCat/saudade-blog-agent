@@ -20,11 +20,7 @@ _WORDY = re.compile(r"[a-zA-Z一-鿿]")
 _ASCII_ALPHA = re.compile(r"[a-zA-Z]")
 _PURE_CJK3 = re.compile(r"^[一-鿿]{3}$")
 
-# S3 的第二半：中文功能词 2/3-gram。它们跨篇高频（df 门多半已拦住），但语料里总有几个
-# 恰好只落在申报的那两篇里（"这个/那个/我们"在短文档里很常见）——做断言词等于恒真。
-# 纪律：这份表**只放纯句法词**（虚词、代词、连接词），不放任何名词/动词——语义词一律
-# 交给 S4 的 df 门判，否则又是"人抄的词表"当家。
-# 依据：`rag_python_is` 的 `["值", "身份"]` 对任何回答几乎恒真（20260924 漂移哨兵报出）。
+# Exclude common Chinese function n-grams from document-specific term candidates.
 _FUNCTION_WORDS = (
     "这个", "那个", "这些", "那些", "这样", "那样", "这里", "那里", "什么", "怎么",
     "我们", "你们", "他们", "自己", "一个", "一些", "可以", "不能", "不是", "没有",
@@ -336,8 +332,7 @@ def _drift_console(out, rc: int, n_words: int, orphan, generic, misbound, thin, 
     print(f"[drift] 报告 → {out}" + ("" if rc == 0 else "（有 ORPHAN/MISBOUND ⇒ 非零退出）"))
 
 
-# ── 判据暴露度（20261015 批 4）：把**今天的判据**跑在归档的历史回复上 ────────────────
-# 上面四类与这一节的分工见模块头注「第二个哨兵」。
+# Measure current assertions against archived replies without rerunning the model.
 _ARCHIVE = "report/runs"
 # 探的四个键 = 判据层里"只判措辞"的那一半（`text_any_regex` 是正断言，可由 ORPHAN 那套管，
 # 不在探针里）。`forbid_login_demand` 是 bool 键、自己不装词表（词表在 `LOGIN_DEMAND_RE`

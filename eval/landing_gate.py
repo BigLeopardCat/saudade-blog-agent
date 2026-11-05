@@ -1,6 +1,8 @@
 # -*- coding: utf-8 -*-
-"""落地指标：判"这一轮/这次改动能不能算过关"的**唯一一处**实现。
-"""
+"""Archived golden-run diagnostics and statistical comparisons.
+
+Current release decisions use eval.release_readiness and release_profile.json.
+This module retains the metrics needed to compare archived runner reports."""
 import argparse
 import glob
 import json
@@ -11,9 +13,7 @@ import sys
 # ── 三个数（唯一取值处；夜间、报告、复审单都从这里读，不在各处重抄）────────────────
 FLOOR = 0.78          # 地板：采样层下界低于它 ⇒ 当夜置红（事故闸，不是目标）
 ENTRY = 0.90          # 当前档位：达档只记，不置红；连 RAISE_NIGHTS 夜达档 ⇒ 抬档
-                      # 20261003 从 0.85 抬到 0.90：三夜采样层下界 [0.8662, 0.885,
-                      # 0.8946] 夜夜 ≥ 0.85 ⇒ 按 RAISE_STEP 抬一档（主人当天点头）。
-                      # **地板不动**（0.78 是事故闸，与档位语义不同）；下一档是 TARGET。
+
 TARGET = 0.95         # 落地目标（主人定的整体线）
 RAISE_STEP = 0.05     # 抬档步长
 RAISE_NIGHTS = 3      # 连几夜达档才抬档（单夜达标是运气，连三夜才是水平）
@@ -23,15 +23,7 @@ AB_TOL = 0.005        # A/B：下界回退不超过这个量算"在噪声内"（
 RUNS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "report", "runs")
 FULL_RUN_MIN_CASES = 100   # 「全量跑」的判据（`--only` 的调试跑不进红榜：分母不可比）
 
-# ── 企业落地的三条补充口径（20261003，主人拍板）────────────────────────────
-# 上面那三个数回答的是"整体爬到哪里了"，它**看不见形状**：20261003 实测全站下界
-# 0.916，而 `multi_step` 面 0.690 / `todo` 面 0.734 / `account` 面 0.758 —— 一个
-# "5 条用例全崩"的面在 151 条的分母里只值 3.3 分。企业落地看的不是平均分，是**最弱面**。
-# 三条各管一件（与 FLOOR/ENTRY/TARGET 同规：只有事故置红）：
-#   · `DOMAIN_HINT` 技能面下界低于它 ⇒ 记"短板面"（黄，打印出来；不置红）
-#   · `HARM_*`     用户**真的看到**那句兜底道歉的轮次占比（判据是 `fallback_resets`
-#                  的 scope=text，不是 `resets` 计数）——这是唯一直接伤害体验的一类
-#   · `READY_NIGHTS` 面判据要跨几夜聚合（每晚每面只有 3–5 条，单夜下界没有证明力）
+# Archived diagnostics retain separate overall, domain and visible-fallback thresholds.
 DOMAIN_HINT = 0.90      # 技能面下界 ≥ 它算健康；< FLOOR 算事故（只在 readiness 里判）
 DOMAIN_MIN_ROUNDS = 20  # 一个面至少这么多轮次才判下界（跨夜聚合的窗口里）
 HARM_HINT = 0.01        # 用户可见兜底占比 ≥ 它 ⇒ 记黄
@@ -42,23 +34,7 @@ READY_NIGHTS = 5        # 企业落地判据看最近几夜
 
 
 def wilson_ci(passed: int, total: int, z: float = Z95) -> list:
-    """通过率的 Wilson 置信区间（20260924 写；20261001 从 `run_golden` 搬到这里）。
-
-    **为什么不是 passed/total 一个数**：110 条里 110 绿，写进报告是「通过率 1.000」——
-    读它的人会当成「这个系统不会错」。可 n=110 时「零失败」的 95% 上界仍有约 2.7%
-    （rule of three：3/n），换成下界就是真通过率最低可能只有 ~0.966。区间把这句话写进
-    数字里，比在文档里补一句"注意样本量"难绕过去。同理，按 tag 分组的那些 n=2、n=3 的
-    小组，单看百分比毫无意义——它们**只有**区间有意义。
-
-    取 Wilson 而不是正态近似（Wald）：Wald 在 p 接近 0/1 时会给出越界或零宽区间
-    （p=1.0 时宽为 0，正是本仓最常见的形态），Wilson 不会。
-
-    **搬家的理由**：`landing_gate` 要拿它当门禁判据，而 `run_golden` / `golden_full_run`
-    / `baseline_group` 又都在用——留两份实现迟早不一致。现在只此一份，
-    `run_golden.wilson_ci` 是**再导出**，下游 import 路径一个字不用改。
-
-    返回 `[下界, 上界]`，各四舍五入到 4 位。
-    """
+    """Return a Wilson confidence interval for a Bernoulli success proportion."""
     if total <= 0:
         return [0.0, 0.0]
     p = passed / total
@@ -69,45 +45,15 @@ def wilson_ci(passed: int, total: int, z: float = Z95) -> list:
 
 
 def min_n_zero_fail(target: float, z: float = Z95) -> int:
-    """**零失败**时，要声称"下界 ≥ target"所需的最小样本数。
-
-    p=1 时下界退化成 `n/(n+z²)`（见 `wilson_ci`），解 `n ≥ target·z²/(1-target)`：
-    target=0.95 ⇒ **73**，0.90 ⇒ 35，0.85 ⇒ 22，0.78 ⇒ 14。
-
-    这个数比"rule of three"给的 60 大——两者问的不是同一件事（那个说的是"失败率上界
-    <5%"，这个说的是"通过率下界 >95%"）。写在门禁旁边，是因为**n≈146 看起来很大，让人
-    忘了"零失败"这句话本身也要靠样本量撑**：一次 `--only 5 条` 的全绿什么也证明不了。
-    """
+    """Return the minimum zero-failure sample size needed for the target lower bound."""
     return int(math.ceil(target * z * z / (1 - target)))
 
 
 def fallback_resets(result: dict) -> list[str]:
-    """本轮**终局兜底**（`__RESET__:text`）的理由列表——`forbid_fallback` 的唯一判据。
+    """Return reasons for archived text-only terminal fallbacks.
 
-    **为什么不能只看 `resets`**（20261002 实测）：`parse_reset` 分出来的那两个 scope 对
-    "用户最终看到的是不是道歉"这个问题的答案**正好相反**：
-
-      · `text` —— 终局 fallback：叙述被 `fallback_text` 整段替换 ⇒ 正断言命中的就是
-        那句道歉，判红是对的；
-      · `all`  —— gate 打回 ⇒ **planner 重规划**：被否定的那段已经作废（前端清空、
-        Rust 清累积 reply、不进 chat_history），最终文本是**重查之后的真回答**。
-        判红不但错，FAIL 文案还会断言一件没发生的事（"用户收到的是兜底道歉"）。
-
-    20261002 全量跑实证：5 条 `forbid_fallback` 红里有 4 条是这个形状
-    （`admin_announcement_question_no_popup` / `capability_list_user_no_admin_leak` /
-    `admin_capability_absent_honest` / `dark_state_consistent`）——逐条读 trace：gate
-    抓的都是**真的编造**（`dark_state_consistent` 那条判的是"系统自动帮你切换成护眼
-    模式了"，随后 `check → pass`），重规划后收尾是如实的。真正的终局兜底只有一条
-    （`data_devices_online`）。旧口径把"打回"与"兜底"当成同一件事，是 20261001 拆
-    scope 之前的历史遗留（那句注释"`__RESET__` 会把整轮叙述换成一句兜底道歉"描述的
-    正是拆分前的行为）。
-
-    `reset_scopes` 缺席（老归档 / 手合成的 result）时**退回旧口径**（按 `resets` 计数）：
-    键缺了是"不知道是哪种"，不知道就不该放行——与 `parse_reset` 对缺 scope 段取保守
-    侧的取向一致。
-
-    返回空列表 = 用户看到的是**模型写的**文本（无论打回过几次），`forbid_fallback` 该放行。
-    """
+    Decision resets invalidate provisional plans and are not necessarily
+    user-visible failures; archived unscoped resets remain conservatively counted."""
     scopes = result.get("reset_scopes")
     if scopes is None:
         return [str(r) for r in (result.get("resets_reasons") or [])] \
@@ -118,17 +64,9 @@ def fallback_resets(result: dict) -> list[str]:
     return list(reasons)
 
 def harm_stats(cases: list, *, floor: float = HARM_FLOOR, hint: float = HARM_HINT) -> dict:
-    """用户可见兜底：本轮有多少轮**用户真的收到了那句道歉**（企业落地的第三条）。
+    """Count evaluated turns that exposed a terminal fallback to the user.
 
-    **判据是 `fallback_resets`（scope=text），不是 `resets` 计数**——打回后 planner
-    重规划答对了的那些轮，用户看到的是**真回答**（20261001 拆 scope 的直接产物）。
-    这里再说一遍是因为指标名一旦叫"伤害"，误用成计数就会把"打回"报成"道歉"，而两者
-    对体验的意思正好相反。
-
-    实测（21 次全量 / 2960 轮）：`resets>0` 28 轮，其中真道歉 27 轮 = **0.91%**；最差的
-    一夜 6/151 = 4.0%。所以 `HARM_FLOOR=5%` 是**事故闸**（gate 整片误伤那种），不是
-    爬坡线——正常波动全落在黄区。
-    """
+    Do not count decision resets followed by a successful answer as user-visible harm."""
     total = len(cases)
     ids = [c.get("id") for c in cases if fallback_resets(c)]
     rate = len(ids) / total if total else 0.0
@@ -142,22 +80,9 @@ def harm_stats(cases: list, *, floor: float = HARM_FLOOR, hint: float = HARM_HIN
 
 def domain_rates(cases: list, *, hint: float = DOMAIN_HINT, floor: float = FLOOR,
                  min_rounds: int = DOMAIN_MIN_ROUNDS) -> list:
-    """把采样层按 tag 拆成**技能面**，各算 Wilson 95% 下界（企业落地的第二条）。
+    """Compute per-tag success proportions and Wilson intervals for the sampled cases.
 
-    与 `run_golden.by_tag_stats` 的分工：那个是**单夜报告**的分组读数，这个是**跨夜
-    聚合**的面判据。区别不是重复而是证明力——每晚每个面只有 3–5 条用例，`4/4` 的下界
-    只有 0.51，单夜判面就是把噪声当结论。所以面判据住在 `readiness()`（把最近 N 夜的
-    同名 tag 并起来，`multi_step` 于是有 ~25 条），不住 `verdict()`。
-
-    · 只收**非回归组**（与 `verdict` 的采样层是同一个总体 ⇒ 面读数与总读数可比）；
-    · 一条用例可挂多个 tag ⇒ 各面轮次之和 > 总数，这是刻意的（一条多步链同时属于
-      `multi_step` 与 `20260927`，两个面都该看见它）；
-    · `rounds < min_rounds` 的面 `judged=False`（不判、也不算短板）——小面要么干净、
-      要么出声，就是不假装判过（同 `underpowered` 的取向）。
-
-    返回按**下界升序**（最弱的排前面 = 工单顺序），每项含 `tag/rounds/passed/point/
-    ci95/lower/upper/judged/floor_ok/hint_ok`。
-    """
+    A case may belong to multiple tags; these groups are not disjoint populations."""
     buckets: dict = {}
     for c in cases:
         if "regression" in (c.get("tags") or []):
@@ -184,18 +109,10 @@ def readiness(runs_dir: str = RUNS_DIR, *, nights: int = READY_NIGHTS,
               min_cases: int = FULL_RUN_MIN_CASES, entry: float = ENTRY,
               target: float = TARGET, domain_hint: float = DOMAIN_HINT,
               harm_floor: float = HARM_FLOOR, harm_hint: float = HARM_HINT) -> dict:
-    """**企业落地判据**：三条同时成立才叫"能落地"（跨夜聚合；每晚单独判不住）。
+    """Assess archived multi-run targets across overall, domain and fallback metrics.
 
-    | 条 | 判据 | 为什么是它 |
-    |---|---|---|
-    | `overall` | 最近 N 夜**每一夜**下界 ≥ 档位（`strong`：≥ 目标） | 单夜达标是运气，夜夜才是水平（同 `raise_hint`） |
-    | `domains` | 每个判定得了的**技能面**下界 ≥ 地板，`strong` 要 ≥ 0.90 | 总分是平均数，会把一个面全崩摊平（20261003：multi_step 0.690 vs 全站 0.916） |
-    | `harm` | 用户收到兜底道歉的轮次占比 < 5%，`strong` 要 < 1% | 唯一直接伤害体验的一类；且它是**用户可见面**，不是判据技术细节 |
-
-    `ready` = 三条的 `ok` 全真；`strong` = 三条都够到 hint/target 级。**这两个都不置红**
-    ——夜里那道红仍是 `FLOOR` 的事故语义（红线一响就得有人看，20260929 纪律）。这里给的是
-    "离企业落地还差什么"的读数与工单，不是第四道闸。
-    """
+    Keep insufficient sample sizes and missing report evidence explicit.
+    Passing this historical profile does not establish current release readiness."""
     reps = full_reports(runs_dir, limit=nights, min_cases=min_cases)
     cases: list = []
     lows: list = []
@@ -255,28 +172,10 @@ def _rate(cases: list) -> dict:
 def verdict(cases: list, regression_failed_ids: list, *,
             floor: float = FLOOR, entry: float = ENTRY, target: float = TARGET,
             z: float = Z95) -> dict:
-    """这一轮的落地判定（纯函数：喂 `report["cases"]` 与回归组红名单）。
+    """Assess one archived run from its case outcomes and regression failures.
 
-    **采样层的分母是"本轮真跑了的、且不在回归组里的"用例**——回归组由硬层判，两层的红
-    不许互相抵消（20260921 分组的分组原意，这里只是让它在判据上真的成立）。被
-    `--skip-ids`/`--only` 摘掉的用例**既不在分子也不在分母**（这一轮没被测到），但分母
-    因此变小 ⇒ 由 `run_golden.is_full_run` 判"这不是全量"，不在这里重判一次。
-
-    `state` 五种，**只有 `collapse` 置红**：
-      · `collapse`    下界 < floor ⇒ **事故**（比历史最差还差）
-      · `below_entry` 下界 < entry ⇒ 没到档位，但没塌，只记
-      · `pass`        下界 ≥ entry（`raise_ready` 说连几夜了）
-      · `at_target`   下界 ≥ target ⇒ 可以谈落地
-      · `underpowered` 样本数不够判 entry（n=5 全绿的下界只有 0.51，判红会造出一个永远
-                       达不到的门禁，判绿是替样本量撒谎）⇒ **不判、不置红**
-
-    **`underpowered` 有一条前置例外（20261001 当天补）**：小样本也**可能整片塌掉**，而
-    "样本不足 ⇒ 不判"会把"1 条全红"放成退出码 0——一个整片失败却绿灯的出口，正是本仓反复
-    踩的那族（空分母退 0、点估计把 20 条红读成 0.86 达标）。小样本判塌方用的是**点估计**
-    而不是下界：下界在这里没有证明力（n=1 全红的下界恒等于 0，"证据"是空的），点估计才是
-    这一轮最诚实的读数（全红 ⇒ 0 < floor ⇒ 塌方）。够不上 floor 的小样本仍走 `underpowered`
-    退 0（5 条全绿、21 条 3 红都属此列）——**小样本要么干净、要么出声，就是不假装判过档位**。
-    """
+    Keep fixed regressions separate from sampled cases. A small sample can
+    indicate collapse, but cannot certify the target confidence bound."""
     s = _rate(cases)
     total, lower = s["total"], s["lower"]
     need_n = min_n_zero_fail(entry, z)
@@ -316,7 +215,7 @@ def verdict(cases: list, regression_failed_ids: list, *,
         "distance_to_target": round(max(0.0, target - lower), 4),
         "raise_ready": state in ("pass", "at_target"),
         "floor": floor, "entry": entry, "target": target,
-        # 企业落地的后两条（20261003）：面只记录（判决在 readiness），伤害单夜可判。
+        # Record domain rates; readiness performs the multi-run domain assessment.
         "domains": {
             "weakest": doms[:5],
             "note": "单夜每面只有 3–5 条用例，下界没有证明力 ⇒ 这里只记录最弱的几面，"
@@ -350,22 +249,10 @@ def describe(v: dict) -> str:
 
 
 def ab_compare(before: list, after: list, *, tol: float = AB_TOL, z: float = Z95) -> dict:
-    """**改动的落地判据**：改动前后各跑 N 遍，比采样层下界（`before`/`after` 是报告列表）。
+    """Compare archived before/after runs without resampling failed cases.
 
-    **为什么必须是相对判据**：绝对值今天到不了目标（最好一夜 0.906），拿它当"能不能上线"
-    会把每一次改动都否掉。而"这次改动有没有把它弄坏"是**可以**回答的——同一档位、同一台机、
-    同一批用例，前后各跑几遍，下界不退就是没弄坏。
-
-    **判据只有一条**：`after` 的下界不低于 `before` 的下界（容差 `tol`，半个百分点以内算
-    噪声）。逐条上升的用例`per_case_rose` 单独点名——**聚合没退化 ≠ 没有一条变坏**，
-    一条 5%→60% 的用例会被另外几条好转抵消掉，那正是最该看的东西。
-
-    样本不足（任一侧 < `min_n_zero_fail(ENTRY)`）⇒ `underpowered`，**不判**：跑 5 条
-    去比 A/B 是本仓反复出现过的自欺（区间宽到能装下任何结论）。
-
-    `before`/`after` 可以是报告 dict 列表，也可以是"每组报告里 cases 拼成的一串"——
-    传 `[[{case}, {case}...], ...]` 形状时按多次采样合并统计。
-    """
+    Use repeated-run evidence and report sample limitations rather than
+    treating a single higher point estimate as a reliable improvement."""
     def _flatten(side: list) -> list:
         out: list = []
         for item in side:
@@ -412,18 +299,9 @@ def ab_compare(before: list, after: list, *, tol: float = AB_TOL, z: float = Z95
 
 def chronic_reds(runs_dir: str = RUNS_DIR, *, min_cases: int = FULL_RUN_MIN_CASES,
                  min_runs: int = 1) -> list:
-    """从历史报告里算**每条用例的终判红率**（"按指标优化"的工单）。
+    """Compute per-case terminal failure rates from full archived reports.
 
-    **为什么读历史而不是再跑一遍**：一条用例"是不是慢性红"是**跨轮**性质，单跑不可判读
-    （本仓定论）。历史报告全在盘上（852 份，其中 27 次是全量），算它秒级纯 IO。
-
-    只收**全量跑**（`len(cases) >= min_cases`）——`--only` 的调试跑分母不可比，混进来会
-    把一条调试时的红算成"历史红率"。
-
-    返回按"红次数"降序；每项含 `runs/red/first_run_red/rate/ci95`。`first_run_red` 与
-    `red` 并列是刻意的：两者之差就是"被复跑吸收掉的红斑"，差得越多这条用例的判据越脆
-    （见 `run_golden` 头注"放行 ≠ 通过"那条）。
-    """
+    Exclude partial diagnostic runs; a single run cannot establish a recurring failure."""
     total: dict = {}
     final_red: dict = {}
     first_red: dict = {}
@@ -488,12 +366,9 @@ def full_reports(runs_dir: str = RUNS_DIR, *, limit: int = 0,
 
 
 def raise_hint(runs_dir: str = RUNS_DIR, *, nights: int = RAISE_NIGHTS) -> dict:
-    """档位该不该抬：**最近 `nights` 次全量**是否夜夜达档。
+    """Check whether every one of the latest required full runs meets the target.
 
-    单夜达标是运气（前文那 6–15 条红数摆动就是证据），连三夜才是水平——所以抬档看的是
-    "最近 N 夜的**每一夜**都 ≥ 档位"，不是"平均下来够"。历史里没有 `landing` 块的旧报告
-    现场按 `verdict` 重算（口径同一处实现，不读第二份）。
-    """
+    Missing evidence and too few full runs remain unverified."""
     reps = full_reports(runs_dir, limit=nights)
     if len(reps) < nights:
         return {"ready": False, "lows": [], "entry": ENTRY, "target": TARGET,

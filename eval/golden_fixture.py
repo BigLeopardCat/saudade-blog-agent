@@ -29,12 +29,9 @@ UNREADABLE_TAG = "[fixture-check-failed]"
 
 
 def category_titles() -> list[str] | None:
-    """公开分类名清单；**读不到返回 `None`**（≠ 空列表，见模块头注的三种状态）。
+    """Return visible category titles, or None when the source is unavailable.
 
-    走 `_get`：它把上游故障收成 `UPSTREAM_DOWN`（`ToolResult`，kind=unavailable）。
-    这里额外判 `isinstance(data, list)`——`ToolResult` 是 `str` 子类，不判它就会把
-    一句人话当成"分类名清单"去迭代（真按字符迭代了，`fixture_state` 会安安静静地
-    回 absent：又一条"故障伪装成空"）。
+    A ToolResult is an error observation, not a collection of category rows.
     """
     data = _get("/category")
     if not isinstance(data, list):

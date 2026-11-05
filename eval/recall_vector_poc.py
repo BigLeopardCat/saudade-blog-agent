@@ -115,9 +115,7 @@ def vec_search(query_vec: list[float], chunks: list[dict], chunk_vecs: list[list
     return ranked
 
 
-# 20261005：这里原本有**第二份** `rrf_fuse` 实现，已删——同一套公式写两遍就是两份行为
-# （RRF 常量、并列时的稳定序、sections 截取口径各写各的），而这份 PoC 的结论正是拿来给
-# "线上要不要融合"当依据的。现在统一用 `rag.vector_index.rrf_fuse(lex, vec, RRF_K, TOP_N)`。
+# Use the production RRF implementation so retrieval comparisons share one fusion rule.
 
 
 def evaluate(route: str, hits_fn, show: bool) -> dict:
