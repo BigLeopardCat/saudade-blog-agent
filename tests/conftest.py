@@ -13,6 +13,13 @@ import pytest
 pytest_plugins = ("_own_support", "_checkpoint_postgres", "pytester")
 
 
+@pytest.fixture
+def enabled_scheduler(monkeypatch):
+    from config.settings import settings
+
+    monkeypatch.setattr(settings, "scheduling_enabled", True)
+
+
 @pytest.fixture(autouse=True)
 def _host_capabilities_for_mock_backends(request, monkeypatch):
     """Tool behavior tests receive an opaque host credential; protocol tests use real forwarding."""
