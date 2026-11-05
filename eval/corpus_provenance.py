@@ -66,8 +66,7 @@ def _norm_title(t: str) -> str:
     return re.sub(r"\s+", "", t or "").casefold()
 
 
-# 公开别名（20261009）：`run_golden.check_entity_premises` 也按标题问"那件实体还在不在场"
-# ——同一个归一化只许有一处，两处归一化就是第二个会漂移的判据（同族教训见模块头注）。
+# Share title normalization between corpus and entity-premise checks.
 norm_title = _norm_title
 
 
@@ -89,9 +88,7 @@ def check_corpus_premises(docs, provenance_file: "str | None" = None) -> tuple:
         row["state"] = CORPUS_PROV_UNKNOWN
         return CORPUS_PROV_UNKNOWN, "声明里没有可用的锚点（文件缺失或写坏了）", row
     if not docs:
-        # 空快照 ⇒ **只能**报"判不了"（理由见模块头注：不抛的取数失败与真的没文章
-        # 读数完全一样）。所以这里没有 `corpus_total` 可用，也不拿别的计数去补——
-        # 缺键≠0，同族教训。
+        # An empty or unavailable snapshot cannot establish that an entity is absent.
         row["state"] = CORPUS_PROV_UNKNOWN
         return (CORPUS_PROV_UNKNOWN,
                 "语料快照取不到或为空——接口不通 / `BLOG_API_BASE` 指错地址 / 站点还没有"
@@ -100,8 +97,7 @@ def check_corpus_premises(docs, provenance_file: "str | None" = None) -> tuple:
     titles = [_norm_title(d.get("title")) for d in docs]
     for a in anchors:
         na = _norm_title(a["title"])
-        # 锚点取标题的**子串**即算命中：容忍标题末尾被加了后缀（如"（2026）"），
-        # 但不容忍"完全不同的另一篇同义标题"。
+        # Title substring matching tolerates a source title suffix.
         hit = bool(na) and any(na in t for t in titles)
         (row["present"] if hit else row["missing"]).append(a["title"])
     need = int(prov.get("min_present") or max(1, len(anchors) // 2))
@@ -114,30 +110,7 @@ def check_corpus_premises(docs, provenance_file: "str | None" = None) -> tuple:
             row)
 
 
-# ── "判据点名的那件实体还在不在"（20261009）──────────────────────────────────
-# 上面那条问的是"这一轮评的是哪块地"；这一条问的是同一块地上**最直白的那句**：
-# **这条判据点名的那个东西，还在不在**。
-#
-# 一手证据：`rag_test4_cover`（「小猫咪，测试文章 TEST8 里画的是什么呀」，
-# `require_tool_calls:[get_article_detail]`）从 20261008 13:56 起恒红。**红的不是模型**
-# ——站主在 06:44:46 把 note 13（标题 TEST8）改成了 `status='private'`，模型此后每次
-# **如实**答"站内没有 TEST8"，判据把它读成"没去读文章"。偶发的"绿"还是**假绿**：模型答
-# 「站内**没有叫** TEST8 的测试文章」，恰好绕开了词表 `[没找到/找不到/没有这个]`，又顺手
-# 套了个别的 `get_article_detail` ⇒ 判据此刻在**奖励乱读一篇、惩罚诚实回答**。
-#
-# 判据两半（同 `run_golden.premise_absent` 的纪律：**人写前提、机器算剩下那一半**）：
-#   人写：用例里落笔 `premise_entity`——"这条判据锚在这件东西在场"；
-#   机器：拿**标题**去**公开语料快照**（本模块的 `snapshot_docs()`，与语料出处闸同一个
-#         取数口）里找。在场 ⇒ 照跑；不在 ⇒ **未评估**（摘用例 + 进 skipped_ids + 退出码 3）。
-#
-# 为什么锚"公开语料快照"而不是另开一个探针：那**正是工具出口那一侧的同一份真相**——
-# `rag.search._fetch_corpus` 与 `tools/base._get` 读的是同一个公开接口，一篇被改成 private
-# 在两边同时消失。另开一个探针只会造出第二份会各自漂移的判据（同本模块头注那条）。
-#
-# ⚠ **"快照取不到或为空"归 unknown（照跑），不归 changed**——同语料那条纪律：
-# `tools/base._get` 把连不上/5xx/坏 JSON 一律吞成 `UPSTREAM_DOWN`（不抛），"接口不通"与
-# "这篇文章真的没了"在读数上长得一模一样。不知道就不动；硬判"实体没了"等于把一次网络
-# 故障说成站主删了文章。它同时是离线 `--only` 那条路的安全阀（那时语料本就取不到）。
+# Entity premises distinguish missing source entities from model execution failures.
 ENTITY_KINDS: tuple[str, ...] = ("note_visible",)
 # 声明里必须写 why 的下限（同 `run_golden` 的 `premise_no_popup.capability_boundary`）：
 # 那一半是"为什么这条判据要求这件东西在场"，机器判不了，但至少要写下来。
@@ -244,9 +217,7 @@ def report_lines(state: str, detail: str, row: dict) -> list:
             "**这不是模型退化**：红色里判的是判据自己",
             "[corpus-premise]    自己部署的人：这套用例要用自己的语料重做判据"
             "（或先跑自包含夹具，见 eval/fixtures/README.md）；"
-            # **点名这一轮真正读的那份声明**（`row["file"]`），不是默认那份常量：
-            # `--golden eval/fixtures/golden_smoke.jsonl` 时顺手抄常量会把修法指到另一个
-            # 文件上（20261006 实跑 `--golden` 时抓到——两个跑法都错的同一句话）。
+            # Report the corpus declaration actually used, including custom corpus paths.
             f"只是标题改了名 ⇒ 修 {row.get('file') or CORPUS_PROVENANCE_FILE} 的 anchors",
         ]
     if state == CORPUS_PROV_UNKNOWN:
