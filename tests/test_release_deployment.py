@@ -29,6 +29,8 @@ def deployment(tmp_path):
         "from types import SimpleNamespace\n"
         "app=SimpleNamespace(state=SimpleNamespace(runtime=None))\n")
     (source / "uv.lock").touch()
+    (source / "eval/report").mkdir(parents=True)
+    (source / "eval/report/baseline.json").write_text('{"fixture":true}')
     config, data, releases = tmp_path / "private.env", tmp_path / "data", tmp_path / "releases"
     config.write_text("PRIVATE_FIXTURE=not-for-archive\n")
     data.mkdir()
@@ -76,6 +78,7 @@ def test_release_excludes_dirty_and_private_files_and_pins_its_own_environment(d
     assert not (release / "uncommitted.py").exists()
     assert (release / ".env").resolve() == config
     assert (release / "data").resolve() == data
+    assert (release / "eval/report/baseline.json").read_text() == '{"fixture":true}'
     assert (release / ".venv/bin/python").exists()
 
 
@@ -122,7 +125,7 @@ def test_preparation_links_writable_state_without_activating_or_changing_secrets
     assert not (releases / "restarts").exists()
     revision = run(["git", "rev-parse", "HEAD"], cwd=source, env=env).stdout.strip()
     release = releases / "releases" / revision
-    for path in ("logs", "output_audio", "eval/cache", "eval/report"):
+    for path in ("logs", "output_audio", "eval/cache", "eval/report/wordgraph"):
         assert (release / path).resolve() == state / path
     assert config.stat().st_mode & 0o777 == 0o600
     assert (release / "data").resolve() == data
