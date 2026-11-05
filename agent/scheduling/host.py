@@ -8,7 +8,7 @@ import httpx
 from agent.principal import SOURCE_ASSERTION, Principal
 from agent.scheduling.service import require_admin
 from config.settings import settings
-from tools.base import _sign_local_jwt
+from tools.base import host_credential
 
 
 class BlogHost:
@@ -20,7 +20,7 @@ class BlogHost:
         self.client.close()
 
     def headers(self, owner):
-        return {"Authorization": "Bearer " + _sign_local_jwt(owner, "user")}
+        return {"Authorization": "Bearer " + host_credential(owner)}
 
     def actor(self, owner):
         response = self.client.get(

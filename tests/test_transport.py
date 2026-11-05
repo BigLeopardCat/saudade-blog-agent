@@ -1,10 +1,9 @@
 from __future__ import annotations
 
-import json
-
 import pytest
 from langchain_core.messages import AIMessageChunk
 
+from agent.contracts.events import StreamEvent
 from agent.runtime.results import ReplyReset, TurnResult
 from agent.transport import (
     TransportProtocolError,
@@ -29,8 +28,8 @@ def test_reply_reset_withdraws_only_prose_and_preserves_factual_receipts():
               AIMessageChunk(content="纠正后的正文"),
               TurnResult("纠正后的正文", {"receipts": [{"tool": "write", "result": "ok"}]})]
     stream = list(iter_transport_events(source))
-    assert "__TEXT_RESET__:{}" in stream
-    assert any(isinstance(e, str) and e.startswith("__EXEC__:") for e in stream)
+    assert StreamEvent("text_reset", {}) in stream
+    assert any(isinstance(e, StreamEvent) and e.name == "receipts" for e in stream)
     collected = collect_turn(source)
     assert collected.reply == "纠正后的正文"
     assert collected.execution == [{"tool": "write", "result": "ok"}]
@@ -46,14 +45,21 @@ def test_terminal_only_confirmation_is_emitted_once_with_receipt_command():
          "receipts": [{"tool": "navigate_to", "cmd": {"kind": "navigate", "url": "/x"}}]},
     )]))
     assert sum(isinstance(event, AIMessageChunk) for event in events) == 1
-    assert sum(str(event).startswith("__CONFIRM__:") for event in events) == 1
-    assert sum(str(event).startswith("__CMD__:") for event in events) == 1
-    assert sum(str(event).startswith("__EXEC__:") for event in events) == 1
-    pending = [json.loads(str(event).split(":", 1)[1]) for event in events
-               if str(event).startswith("__PENDING__:")]
+    assert (
+        sum((isinstance(event, StreamEvent) and event.name == "confirmation") for event in events)
+        == 1
+    )
+    assert (
+        sum((isinstance(event, StreamEvent) and event.name == "command") for event in events) == 1
+    )
+    assert (
+        sum((isinstance(event, StreamEvent) and event.name == "receipts") for event in events) == 1
+    )
+    pending = [event.data for event in events
+               if (isinstance(event, StreamEvent) and event.name == "pending")]
     assert pending == []
-    popup = [json.loads(str(event).split(":", 1)[1]) for event in events
-             if str(event).startswith("__CONFIRM__:")][0]
+    popup = [event.data for event in events
+             if (isinstance(event, StreamEvent) and event.name == "confirmation")][0]
     assert set(popup) == {"id", "q", "opts", "token", "exp", "replay_safe", "server_time"}
     assert isinstance(popup["server_time"], int)
     assert popup["q"] == ""
@@ -149,10 +155,20 @@ def test_explicit_close_releases_upstream_runtime():
     assert closed == [True]
 
 
-def test_all_receipts_validate_before_dispatching_any_command():
-    stream = iter_transport_events([TurnResult("", {"receipts": [
+@pytest.mark.parametrize("client_action", [None, {"kind": "navigate", "url": "/about"}])
+def test_all_receipts_validate_before_dispatching_any_command(client_action):
+    stream = iter_transport_events([TurnResult("", {"client_action": client_action, "receipts": [
         {"cmd": {"kind": "navigate", "url": "/about"}},
         {"cmd": {"kind": "unsupported"}},
     ]})])
     with pytest.raises(TransportProtocolError):
         next(stream)
+
+
+@pytest.mark.parametrize("name,data", [
+    ("confirmation", "not an object"), ("receipts", {}), ("receipts", ["invalid row"]),
+    ("progress", {}), ("unknown", {}),
+])
+def test_control_event_rejects_invalid_envelopes(name, data):
+    with pytest.raises(ValueError):
+        StreamEvent(name, data)

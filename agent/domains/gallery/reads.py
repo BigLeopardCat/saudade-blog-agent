@@ -77,7 +77,8 @@ def get_gallery_index(
             }
             for row in rows
         ]
-        return base.ok(json.dumps({"items": rows, "next_cursor": cursor}, ensure_ascii=False))
+        page = {"items": rows, "next_cursor": cursor}
+        return base.ok(json.dumps(page, ensure_ascii=False), data=page)
     except (ValueError, TypeError, KeyError):
         return base.unavailable("图库索引读取失败，请稍后重试。")
 
@@ -105,25 +106,16 @@ def list_gallery_folders(
         return value
     if not isinstance(value, list) or len(value) > limit + 1:
         return base.unavailable("图库目录读取失败。")
-    rows = [
-        row
-        for row in value
-        if isinstance(row, dict)
-        and type(row.get("id")) is int
-        and row["id"] > before
-        and row.get("parentId") == parent_id
-        and isinstance(row.get("name"), str)
-    ]
-    rows.sort(key=lambda row: row["id"])
-    return base.ok(
-        json.dumps(
-            {
-                "items": rows[:limit],
-                "next_cursor": rows[limit - 1]["id"] if len(rows) > limit else None,
-            },
-            ensure_ascii=False,
-        )
-    )
+    if any(not isinstance(row, dict) or type(row.get("id")) is not int
+           or row["id"] <= before or row.get("parentId") != parent_id
+           or not isinstance(row.get("name"), str) for row in value):
+        return base.unavailable("图库目录读取失败。")
+    ids = [row["id"] for row in value]
+    if ids != sorted(set(ids)):
+        return base.unavailable("图库目录读取失败。")
+    page = {"items": value[:limit],
+            "next_cursor": value[limit - 1]["id"] if len(value) > limit else None}
+    return base.ok(json.dumps(page, ensure_ascii=False), data=page)
 
 
 def _download(row, config):
@@ -134,8 +126,8 @@ def _download(row, config):
             raise ValueError("Invalid library path")
         url = urljoin(base.ADMIN_BASE + "/", url)
         cfg = config["configurable"]
-        headers["Authorization"] = "Bearer " + base._sign_local_jwt(
-            cfg["user_id"], cfg["principal"].known_role
+        headers["Authorization"] = "Bearer " + base.host_credential(
+            cfg["user_id"]
         )
     else:
         settings = base._admin_get("/api/protect/images/r2", config)

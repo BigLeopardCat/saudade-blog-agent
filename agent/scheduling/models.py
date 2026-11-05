@@ -28,8 +28,10 @@ _DELAY_DESCRIPTION = (
     "User-requested relative duration, starting AFTER approval: in five minutes "
     "means 300. Never turn it into an estimated clock time."
 )
-ClockTime = Annotated[StrictStr, Field(description=_CLOCK_DESCRIPTION)]
-DelaySeconds = Annotated[StrictInt, Field(ge=5, le=31_536_000, description=_DELAY_DESCRIPTION)]
+ClockTime = Annotated[StrictStr | None, Field(description=_CLOCK_DESCRIPTION)]
+DelaySeconds = Annotated[
+    StrictInt | None, Field(ge=5, le=31_536_000, description=_DELAY_DESCRIPTION)
+]
 
 
 def utc_now():
@@ -72,7 +74,7 @@ class Trigger(BaseModel):
 
     timezone: StrictStr = "Asia/Shanghai"
     run_at: AwareDatetime | None = Field(default=None, description=_CLOCK_DESCRIPTION)
-    delay_seconds: DelaySeconds | None = None
+    delay_seconds: DelaySeconds = None
     cron: Annotated[StrictStr, Field(min_length=9, max_length=100)] | None = None
     expires_at: AwareDatetime | None = None
     condition: ArticlePublic | None = None
@@ -148,8 +150,8 @@ class WriteSchedule(BaseModel):
     """One approved business change, with optional public-article waiting."""
 
     model_config = ConfigDict(extra="forbid")
-    run_at: ClockTime | None = None
-    delay_seconds: DelaySeconds | None = None
+    run_at: ClockTime = None
+    delay_seconds: DelaySeconds = None
     timezone: StrictStr = "Asia/Shanghai"
     when_article_public: PositiveID | None = None
     expires_at: StrictStr | None = None

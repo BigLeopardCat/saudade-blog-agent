@@ -13,6 +13,7 @@ from langchain_core.messages import AIMessageChunk
 from agent.api import turns
 from agent.api.routes import chat as server
 from agent.api.schemas import ChatRequest
+from agent.contracts.events import StreamEvent
 from agent.principal import Principal
 from agent.runtime.results import TurnResult
 
@@ -76,9 +77,9 @@ def test_stream_adapter_keeps_receipts_and_confirmation_order(monkeypatch):
                 return values
     values = asyncio.run(run())
     assert isinstance(values[0], AIMessageChunk)
-    assert values[1].startswith("__PENDING__:")
-    assert values[2].startswith("__CONFIRM__:")
-    assert values[3].startswith("__PENDING__:")
+    assert isinstance(values[1], StreamEvent) and values[1].name == "pending"
+    assert isinstance(values[2], StreamEvent) and values[2].name == "confirmation"
+    assert isinstance(values[3], StreamEvent) and values[3].name == "pending"
     assert values[-1] is None
 
 
@@ -199,3 +200,55 @@ def test_stop_fences_late_body_and_closes_runtime_generator(monkeypatch):
 
 
 pytestmark = pytest.mark.usefixtures("service_workers")
+
+
+@pytest.mark.parametrize("idle_timeout", [False, True])
+def test_sse_keepalive_uses_comments_and_does_not_extend_model_idle_deadline(
+    monkeypatch, idle_timeout
+):
+    from agent.api.events import KEEPALIVE_FRAME
+
+    release = threading.Event()
+
+    class QuietRuntime:
+        def stream_events(self, state, config):
+            release.wait(2)
+            yield TurnResult("完成。")
+
+    monkeypatch.setattr(app.state, "runtime", QuietRuntime())
+    monkeypatch.setattr(server, "_resolve_principal", lambda request, uid: Principal(uid=uid))
+    monkeypatch.setattr(server, "try_acquire_slot", lambda request: _ready())
+    monkeypatch.setattr(server, "release_slot", lambda request: None)
+    monkeypatch.setattr(server, "build_messages", lambda req, **kwargs: [])
+    monkeypatch.setattr(server.runtime_probe, "request_context", lambda runtime: "native")
+    monkeypatch.setattr(server, "start_trace", lambda *args, **kwargs: None)
+    monkeypatch.setattr(server, "STREAM_PING_INTERVAL", 0)
+    monkeypatch.setattr(server, "STREAM_IDLE_TIMEOUT", 0.05 if idle_timeout else 10)
+
+    async def next_item(queue, producer):
+        return await turns.next_stream_item(queue, producer, timeout=0.01)
+
+    monkeypatch.setattr(server, "next_stream_item", next_item)
+
+    async def consume():
+        request = Request({"app": app, "type": "http", "method": "POST", "path": "/chat/stream/v2",
+                           "headers": [], "query_string": b""})
+        response = await server.chat_stream(ChatRequest(message="查询", user_id=7), request)
+        frames = []
+        try:
+            async for frame in response.body_iterator:
+                frames.append(frame)
+                if frame == KEEPALIVE_FRAME and not idle_timeout:
+                    release.set()
+        finally:
+            release.set()
+            await response.body_iterator.aclose()
+        return frames
+
+    frames = asyncio.run(consume())
+    assert KEEPALIVE_FRAME in frames and KEEPALIVE_FRAME == ": ping\n\n"
+    wire = "".join(frames)
+    if idle_timeout:
+        assert "event: error" in wire and "event: done" not in wire
+    else:
+        assert "event: done" in wire and "event: error" not in wire

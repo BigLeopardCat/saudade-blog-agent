@@ -21,6 +21,7 @@ from _judge import collector
 from langchain_core.messages import AIMessage, AIMessageChunk
 
 from agent.api.schemas import ChatRequest, HistoryItem
+from agent.contracts.events import StreamEvent
 
 ROOT = Path(__file__).resolve().parent.parent  # 仓根（测试统一在 tests/）
 
@@ -242,8 +243,8 @@ def _test_native_producer_does_not_print_fact_blocks():
     chunks = [str(item.content) for item in items if isinstance(item, AIMessageChunk)]
     check("原生正文不追加系统事实块", chunks == [reply], str(chunks))
     check("结构化命令与回执各发一次",
-          sum(isinstance(x, str) and x.startswith("__CMD__:") for x in items) == 1
-          and sum(isinstance(x, str) and x.startswith("__EXEC__:") for x in items) == 1)
+          sum(isinstance(x, StreamEvent) and x.name == "command" for x in items) == 1
+          and sum(isinstance(x, StreamEvent) and x.name == "receipts" for x in items) == 1)
     check("完成轮次不使用旧 RESET 纠偏协议",
           not any(isinstance(x, str) and x.startswith("__RESET__") for x in items))
 

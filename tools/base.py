@@ -137,7 +137,7 @@ from tools.site import (  # noqa: E402,F401
 ADMIN_BASE = _settings.agent_admin_base
 
 
-def _sign_local_jwt(uid: int, role: str | None) -> str:
+def host_credential(uid: int) -> str:
     """Use a host-issued actor capability; the Agent cannot mint blog login tokens."""
     from agent.delegation import credential
     return credential(uid)
@@ -162,8 +162,7 @@ def _principal_get(path: str, config: RunnableConfig, *,
     uid = _device_get_user_id(config)
     if uid <= 0:
         return unavailable(uid_msg)
-    principal = (config.get("configurable", {}) or {}).get("principal")
-    headers = {"Authorization": "Bearer " + _sign_local_jwt(uid, getattr(principal, "role", None))}
+    headers = {"Authorization": "Bearer " + host_credential(uid)}
     body, failure = request_json(
         _client, method="POST" if payload is not None else "GET",
         url=f"{ADMIN_BASE}{path}", headers=headers, json_body=payload,
@@ -248,8 +247,7 @@ def _principal_request(method: str, path: str, payload, config: RunnableConfig,
     if uid <= 0:
         # Missing identity prevents the request from leaving this process.
         return unavailable(uid_msg)
-    principal = (config.get("configurable", {}) or {}).get("principal")
-    headers = {"Authorization": "Bearer " + _sign_local_jwt(uid, getattr(principal, "role", None))}
+    headers = {"Authorization": "Bearer " + host_credential(uid)}
     body, failure = request_json(
         _client, method=method, url=f"{ADMIN_BASE}{path}", headers=headers,
         json_body=payload, timeout=_request_timeout, attempts=1, write=True)

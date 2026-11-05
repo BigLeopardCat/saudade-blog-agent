@@ -8,6 +8,7 @@ from langgraph.checkpoint.memory import InMemorySaver
 from pydantic import ValidationError
 
 from agent.api.schemas import ChatRequest
+from agent.contracts.events import StreamEvent
 from agent.principal import SOURCE_ASSERTION, Principal
 from agent.products.blog.application import BlogApplication
 from agent.runtime.checkpoint_conversations import CheckpointConversationStore
@@ -61,7 +62,7 @@ def test_appearance_waits_and_recovers_from_actual_settings(reported, expected):
     assert command["kind"] == "appearance" and len(model.prompts) == 1
     assert command["settings"] == {"dark_mode": "on", "rain": "off", "snow": "on"}
     assert runtime().get_state(cfg, subgraphs=True).interrupts
-    assert "__CMD__:" in next(iter(iter_transport_events([paused])))
+    assert next(iter(iter_transport_events([paused]))).name == "command"
     resumed_cfg = {"configurable": {**cfg["configurable"], "browser_result": {
         "command_id": command["command_id"], "path": "/", **reported}}}
     done = list(runtime().stream_events({"resume_task": "appearance-task"}, resumed_cfg))[-1]
@@ -75,7 +76,10 @@ def test_appearance_waits_and_recovers_from_actual_settings(reported, expected):
     assert observations[-1]["completion_confirmed"] is (expected == "completed")
     assert observations[-1]["observed"] == reported.get("settings")
     assert all(row["browser_status"] == expected for row in done.execution["receipts"])
-    assert not any(str(frame).startswith("__CMD__:") for frame in iter_transport_events([done]))
+    assert not any(
+        (isinstance(frame, StreamEvent) and frame.name == "command")
+        for frame in iter_transport_events([done])
+    )
 
 
 @pytest.mark.parametrize("settings", [{"snow": "toggle"}, {"permission": "on"}, {"rain": True}])

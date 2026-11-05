@@ -28,7 +28,7 @@ _WRITE_VERBS = (".post(", ".put(", ".delete(", ".patch(", ".request(")
 _WRITE_PATTERNS = (
     "os.environ", "getenv",              # 凭据/环境（真写通道会从这里开始）
     "/api/protected",                    # 后台写接口前缀
-    "Authorization", "_sign_local_jwt",  # 带身份去调（写工具的形状）
+    "Authorization", "host_credential",  # 带身份去调（写工具的形状）
 ) + _WRITE_VERBS
 
 
@@ -250,7 +250,7 @@ def test_golden_fixture():
               bool(scan(_s, _ACC_PATTERNS)) == _want)
     check("身份那一半**必须在**（不在的话 directory() 恒 None ⇒ 真写用例永远静默跳过，"
       "而「跳过」看起来只是「前置没配好」、不像是这一族坏了）",
-          "_sign_local_jwt" in _SRC_ACC and "Authorization" in _SRC_ACC)
+          "host_credential" in _SRC_ACC and "Authorization" in _SRC_ACC)
     check("'读不到'与'没有'在源码里就分得开（`if directory is None` 早退，不是 try 里吞异常）",
           "if directory is None" in _SRC_ACC)
     _old_uid = os.environ.pop("GOLDEN_ADMIN_UID", None)
@@ -277,7 +277,7 @@ def test_golden_fixture():
               bool(scan(_s, _BRD_PATTERNS)) == _want)
     check("身份那一半**必须在**（不在的话 board() 恒 None ⇒ 真写用例永远静默跳过，"
       "而「跳过」看起来只是「前置没配好」、不像是这一族坏了）",
-          "_sign_local_jwt" in _SRC_BRD and "Authorization" in _SRC_BRD)
+          "host_credential" in _SRC_BRD and "Authorization" in _SRC_BRD)
     check("'读不到'与'没有'在源码里就分得开（`if board_map is None` 早退，不是 try 里吞异常）",
           "if board_map is None" in _SRC_BRD)
     check("在位：正文以夹具名打头 + 待审 ⇒ present",
@@ -428,7 +428,7 @@ def test_golden_fixture():
               bool(scan(_s, _TODO_PATTERNS)) == _want)
     check("身份那一半**必须在**（不在的话 todo_rows() 恒 None ⇒ 用例永远静默跳过，"
       "而「跳过」看起来只是「前置没配好」、不像是这一族坏了）",
-          "_sign_local_jwt" in _SRC_TODO and "Authorization" in _SRC_TODO)
+          "host_credential" in _SRC_TODO and "Authorization" in _SRC_TODO)
     check("'读不到'与'没有'在源码里就分得开（`if rows is None` 早退，不是 try 里吞异常）",
           "if rows is None" in _SRC_TODO)
     check("在位：正文对得上 + 未完成 + 排期对得上 ⇒ present",

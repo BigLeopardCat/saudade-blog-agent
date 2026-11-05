@@ -112,3 +112,60 @@ def test_direct_article_answer_is_validated_before_its_chunks_become_visible(
         assert reference not in result.reply and "尚未完整生成" in result.reply
     else:
         assert reference not in result.reply and "无法核实" in result.reply
+
+
+@pytest.mark.parametrize("tool", ["list_notes", "get_top_notes", "list_admin_notes"])
+def test_catalog_candidates_remain_reference_evidence_after_an_empty_search(tool):
+    from tools.result import empty
+
+    evidence = ArticleEvidence()
+    evidence.observe("rag_search", {}, empty("no matches"))
+    evidence.observe(tool, {}, ok("a visible article", data={
+        "resource": "articles", "items": [{"id": 19, "title": "Candidate"}]}))
+    assert evidence.issue("[Candidate](/article/19)", SITE_BASE) is None
+    assert evidence.issue("[Invented](/article/99)", SITE_BASE) == "unread_article_reference"
+    assert evidence.documents == {} and evidence.provenance(SITE_BASE)["body_reads"] == []
+
+
+def test_catalog_facts_from_wrong_resources_or_failed_reads_cannot_justify_article_links():
+    from tools.result import empty
+
+    evidence = ArticleEvidence()
+    evidence.observe("rag_search", {}, empty("no matches"))
+    evidence.observe("list_notes", {}, ok("category", data={
+        "resource": "categories", "items": [{"id": 19, "title": "Not an article"}]}))
+    evidence.observe("list_notes", {}, unavailable("failed", data={
+        "resource": "articles", "items": [{"id": 20, "title": "Failed article"}]}))
+    assert not evidence.candidates
+    for ident in (19, 20):
+        assert (
+            evidence.issue(f"[Unknown](/article/{ident})", SITE_BASE) == "unread_article_reference"
+        )
+
+
+def test_runtime_keeps_a_verified_catalog_recommendation_after_search_has_no_matches():
+    from _memory_support import Capture
+
+    from tools.result import empty
+
+    @tool
+    def rag_search() -> object:
+        """Search a synthetic article corpus."""
+        return empty("no matching articles")
+
+    @tool
+    def get_top_notes() -> object:
+        """Read a verified synthetic article catalog."""
+        return ok("Candidate article #19", data={"resource": "articles", "items": [
+            {"id": 19, "title": "Candidate"}]})
+
+    model = Capture(AIMessageChunk(content="", tool_calls=[{
+        "name": "rag_search", "args": {}, "id": "search"}]),
+        AIMessageChunk(content="", tool_calls=[{
+            "name": "get_top_notes", "args": {}, "id": "catalog"}]),
+        AIMessageChunk(content="推荐 [Candidate](/article/19)。"))
+    session = ToolSession(model, {}, {t.name: t for t in (rag_search, get_top_notes)}, {},
+                          middleware=(ArticleMiddleware,))
+    result = session.run([HumanMessage(content="推荐一篇文章")])
+    assert result.reply == "推荐 [Candidate](/article/19)。"
+    assert len(model.prompts) == 3

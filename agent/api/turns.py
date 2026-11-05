@@ -7,6 +7,7 @@ import time
 
 from langchain_core.messages import AIMessageChunk
 
+from agent.contracts.events import StreamEvent
 from agent.principal import Principal
 from agent.runtime.budget import current_budget
 from agent.runtime.control import AgentCancelled
@@ -179,7 +180,7 @@ def stream_to_queue(
                     continue
             if isinstance(value, AIMessageChunk):
                 visible_parts.append(str(value.content or ""))
-            elif value == "__TEXT_RESET__:{}":
+            elif isinstance(value, StreamEvent) and value.name == "text_reset":
                 visible_parts.clear()
         finally:
             if not future.done():

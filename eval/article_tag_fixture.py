@@ -23,6 +23,17 @@ def article_page(state, params):
         "data": rows[(page - 1) * limit:page * limit], "total": len(rows)})
 
 
+def tag_page(state, params):
+    rows = [{"id": tag["id"], "name": tag["name"], "level": tag["level"],
+             "parentId": tag["parentId"], "publicArticleCount": sum(
+                 any(t["id"] == tag["id"] for t in row["tags"])
+                 for row in state["rows"].values())}
+            for tag in state["tags"].values()]
+    level = params.get("level")
+    rows = [row for row in rows if level is None or str(row["level"]) == level]
+    return httpx.Response(200, json={"code": 200, "data": rows, "total": len(rows)})
+
+
 @contextmanager
 def backend():
     state = {"caller_role": "admin", "requests": [], "unsupported_reads": [], "writes": [],
@@ -44,6 +55,26 @@ def backend():
         return {"id": ident, "title": row["title"], "version": version,
                 "before": before, "after": after}
 
+    def apply(plans, ids):
+        results = []
+        for row in plans:
+            changed = row["before"] != row["after"]
+            for tag in row["after"]:
+                if tag["id"] is None:
+                    if tag["name"] not in state["tags"]:
+                        state["tags"][tag["name"]] = {**tag, "id": 100 + len(state["tags"])}
+                    tag.update(state["tags"][tag["name"]])
+            state["rows"][row["id"]]["tags"] = deepcopy(row["after"])
+            results.append({"beforeVersion": row["version"], "changed": changed, "state": row})
+        state["writes"].append(ids)
+        if state.get("lost"):
+            raise httpx.ReadTimeout("synthetic lost response")
+        if state.get("duplicate"):
+            results[-1] = results[0]
+        if state.get("incomplete"):
+            results.pop()
+        return results
+
     def handle(request):
         state["requests"].append(request)
         path = request.url.path
@@ -51,6 +82,8 @@ def backend():
         if (request.method == "GET" and path == "/api/protected/articles"
                 and set(request.url.params) <= {"id", "page", "page_size"}):
             return article_page(state, request.url.params)
+        if request.method == "GET" and path == "/api/public/tags":
+            return tag_page(state, request.url.params)
         if request.method != "POST" or not path.startswith(root):
             state["unsupported_reads"].append(str(request.url))
             return httpx.Response(404)
@@ -69,23 +102,7 @@ def backend():
             ids[0]: body["version"]}
         if any(row["version"] != expected[row["id"]] for row in plans):
             return httpx.Response(200, json={"code": 409, "message": "版本已变化，整批未执行"})
-        results = []
-        for row in plans:
-            changed = row["before"] != row["after"]
-            for tag in row["after"]:
-                if tag["id"] is None:
-                    if tag["name"] not in state["tags"]:
-                        state["tags"][tag["name"]] = {**tag, "id": 100 + len(state["tags"])}
-                    tag.update(state["tags"][tag["name"]])
-            state["rows"][row["id"]]["tags"] = deepcopy(row["after"])
-            results.append({"beforeVersion": row["version"], "changed": changed, "state": row})
-        state["writes"].append(ids)
-        if state.get("lost"):
-            raise httpx.ReadTimeout("synthetic lost response")
-        if state.get("duplicate"):
-            results[-1] = results[0]
-        if state.get("incomplete"):
-            results.pop()
+        results = apply(plans, ids)
         return httpx.Response(200, json={"code": 200, "data": results if batch else results[0]})
 
     with httpx.Client(transport=httpx.MockTransport(handle)) as client, \

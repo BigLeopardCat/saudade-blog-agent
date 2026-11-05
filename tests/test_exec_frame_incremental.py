@@ -1,10 +1,10 @@
 """Native receipts are emitted once after a validated terminal result."""
 
-import json
 
 import pytest
 from langchain_core.messages import AIMessageChunk
 
+from agent.contracts.events import StreamEvent
 from agent.runtime.results import TurnResult
 from agent.transport import TransportProtocolError, iter_transport_events
 
@@ -19,9 +19,11 @@ def test_visible_preface_precedes_completion_and_receipts_are_exactly_once():
     assert next(stream).content == "我来处理。"
     tail = list(stream)
     assert tail[0].content == "指令已发送。"
-    assert len([row for row in tail if str(row).startswith("__CMD__:")]) == 1
-    frames = [json.loads(row.removeprefix("__EXEC__:")) for row in tail
-              if isinstance(row, str) and row.startswith("__EXEC__:")]
+    assert (
+        len([row for row in tail if (isinstance(row, StreamEvent) and row.name == "command")]) == 1
+    )
+    frames = [row.data for row in tail
+              if isinstance(row, StreamEvent) and row.name == "receipts"]
     assert frames == [[RECEIPT]]
 
 

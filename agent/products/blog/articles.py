@@ -109,7 +109,8 @@ class ArticleMiddleware(AgentMiddleware):
             reply = ("答复中的部分文章引用无法核实，本轮暂时无法提供可靠来源。"
                      if issue == "unread_article_reference" else
                      "暂时无法核实文章正文，不能据此回答文章内容。请重新指定要阅读的文章。")
-        elif evidence.searched and not evidence.documents and not evidence.found:
+        elif (evidence.searched and not evidence.documents and not evidence.found
+              and not evidence.candidates):
             if evidence.failed:
                 reply = "文章检索暂时不可用，当前无法核实文章内容。"
             elif evidence.empty:

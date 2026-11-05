@@ -16,7 +16,7 @@ DOMAIN_DESCRIPTIONS = {
     "and in-place publication.",
     "admin_automations": "Persistent reminders, scheduled read-only analysis and approved "
     "announcement publication. Other business changes use the relevant domain prepare tool "
-    "with schedule; use absolute run_at for clock times, never compute seconds. "
+    "with schedule. Clock times use run_at; relative delays use delay_seconds after approval. "
     "confirm lifecycle changes.",
     "public_activity": "Search public announcements, guestbook and talks by keyword; read latest "
     "entries. Public display names are not account identities.",
@@ -41,7 +41,8 @@ DOMAIN_DESCRIPTIONS = {
     "admin_work_queue": "Quota applications/reset and user-facing to-dos/reminders, including "
     "selectable batch deletion. Known account IDs can reset directly. "
     "Business records, not private planning.",
-    "admin_moderation": "Guestbook/comments with real publishers; confirm moderation or deletion.",
+    "admin_moderation": "Guestbook/comments with real publishers, including anonymous entries. "
+    "Publisher lookup is read-only; confirm only moderation or deletion.",
     "admin_reports": "Server health, user statistics and article traffic reports.",
     "site": "Author profile, social links, site map and page controls.",
     "favorites": "Your favorites and confirmed additions/removals.",

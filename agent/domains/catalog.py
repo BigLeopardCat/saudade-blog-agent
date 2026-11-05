@@ -67,6 +67,7 @@ def list_accounts(config: RunnableConfig, username: Username | None = None,
     """Search account metadata: query matches login/nickname substrings; username/account_id
     match exactly. Combined filters use AND. Disambiguate names before preparation;
     known IDs can go directly to preparation, which verifies the target and state.
+    For ambiguous matches show each ID, login username and nickname to distinguish candidates.
     Returns totals, public admin fields and quotas (quotaLimit=0: unlimited turns).
     Excludes superadmin/unknown roles and credentials; empty means no match in this scope.
     """
