@@ -11,7 +11,7 @@ from agent.reports import sanitize_untrusted
 from agent.runtime.results import TurnResult
 from agent.runtime.turns import check_cancelled
 from agent.runtime.writes import bound_context
-from agent.scheduling.models import Trigger
+from agent.scheduling.models import WriteSchedule
 from tools import base
 from tools.result import invalid_args
 
@@ -84,7 +84,7 @@ def prepare_announcement_create(
     title: targets.Title,
     content: targets.Content,
     config: RunnableConfig,
-    schedule: Trigger | None = None,
+    schedule: WriteSchedule | None = None,
 ) -> object:
     """Optional schedule delays this exact approved change; use run_at for clock times.
     准备发布站内公告确认，不写入。确认卡完整展示标题和正文；用户给出原文时照录。
@@ -101,7 +101,7 @@ def prepare_announcement_update(
     announcement_title: targets.Title | None = None,
     new_title: targets.Title | None = None,
     content: targets.Content | None = None,
-    schedule: Trigger | None = None,
+    schedule: WriteSchedule | None = None,
 ) -> object:
     """Optional schedule delays this exact approved change; use run_at for clock times.
     准备修改公告确认，不写入。以唯一编号或完整原标题定位；仅填写需改的标题或正文。
@@ -121,7 +121,7 @@ def prepare_announcement_delete(
     config: RunnableConfig,
     announcement_id: targets.Identifier | None = None,
     announcement_title: targets.Title | None = None,
-    schedule: Trigger | None = None,
+    schedule: WriteSchedule | None = None,
 ) -> object:
     """Optional schedule delays this exact approved change; use run_at for clock times.
     准备删除公告确认，不写入。以唯一编号或完整原标题定位，同时删除其关联个人通知。"""

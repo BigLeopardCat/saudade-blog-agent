@@ -12,7 +12,7 @@ from agent.domains.notices import targets
 from agent.proposals import proposal
 from agent.runtime.turns import check_cancelled
 from agent.runtime.writes import bound_context
-from agent.scheduling.models import Trigger
+from agent.scheduling.models import WriteSchedule
 from tools import base
 from tools.result import invalid_args
 
@@ -72,7 +72,7 @@ def prepare_user_notice(
     user_id: targets.Identifier | None = None,
     username: targets.Username | None = None,
     title: targets.Title | None = None,
-    schedule: Trigger | None = None,
+    schedule: WriteSchedule | None = None,
 ) -> object:
     """准备单向站内通知的确认，不写入；收件人不能回复通知，发送后不能撤回。
     收件人以唯一编号或完整账号名定位。

@@ -11,3 +11,9 @@ def scoped_reads_enabled(principal, scope: str, user_id=None) -> bool:
 
 def own_reads_enabled(principal) -> bool:
     return scoped_reads_enabled(principal, SCOPE_READ_OWN)
+
+
+def configured_reads_enabled(config, scope: str) -> bool:
+    """Read access depends on verified scope and actor consistency, not a writable chat thread."""
+    cfg = (config or {}).get("configurable") or {}
+    return scoped_reads_enabled(cfg.get("principal"), scope, cfg.get("user_id"))

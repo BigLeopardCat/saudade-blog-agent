@@ -5,7 +5,7 @@ import uuid
 from pydantic import BaseModel, ConfigDict, Field, StrictStr
 
 from agent.principal import Principal
-from agent.scheduling.models import Definition, Trigger, parse_time, time_description, utc_now
+from agent.scheduling.models import Definition, WriteSchedule, time_description, utc_now
 from agent.scheduling.service import require_admin
 
 
@@ -16,11 +16,14 @@ class Change(BaseModel):
 
 
 def validate(value):
+    from agent.domains import talks
     from agent.domains.account_actions import targets as accounts
     from agent.domains.announcements import targets as announcements
     from agent.domains.article_actions import batch as states
+    from agent.domains.article_actions import deletion
     from agent.domains.article_tags import batch as article_tags
     from agent.domains.categories import targets as categories
+    from agent.domains.gallery import folders
     from agent.domains.notices import targets as notices
     from agent.domains.tags import targets as tags
 
@@ -38,10 +41,14 @@ def validate(value):
             "status": normalized["status"],
             "isTop": normalized["is_top"],
         }
+    elif kind == "article_deletions":
+        change = deletion.arguments(change)
     elif kind == "article_tags":
         change = article_tags.validate(change)
     else:
         validators = {
+            "talks": talks.intent,
+            "gallery_folders": folders.intent,
             "categories": categories.intent,
             "tags": tags.intent,
             "announcements": announcements.intent,
@@ -63,6 +70,10 @@ def effect(executor, spec):
     from agent.domains.article_tags import batch as article_tags
 
     specs = spec if isinstance(spec, list) else [spec]
+    if executor == "article_deletions":
+        from agent.domains.article_actions import deletion
+
+        return {"kind": executor, "change": deletion.combine(specs)}
     if executor == "article_state":
         if specs[0]["tool"] == states.NAME:
             args = states.combine(specs)
@@ -94,7 +105,15 @@ def effect(executor, spec):
 
 def task_title(write):
     kind, change = write["kind"], write["change"]
-    if kind in {"categories", "tags", "announcements", "account_actions", "notices"}:
+    if kind in {
+        "categories",
+        "tags",
+        "announcements",
+        "account_actions",
+        "notices",
+        "talks",
+        "gallery_folders",
+    }:
         intent = change["intent"]
         fields, target = intent.get("fields") or {}, intent.get("target") or {}
         label = (
@@ -104,9 +123,13 @@ def task_title(write):
             or target.get("username")
             or target.get("title")
             or target.get("id")
+            or intent.get("name")
+            or intent.get("id")
             or ""
         )
         names = {
+            "talks": "说说变更",
+            "gallery_folders": "图库文件夹变更",
             "categories": "分类变更",
             "tags": "标签变更",
             "announcements": "公告变更",
@@ -125,9 +148,10 @@ def propose(principal: Principal, cid, executor, spec, question, target, schedul
     require_admin(principal)
     if not settings.scheduling_enabled:
         return unavailable("Scheduling is disabled; no schedule or business write was created.")
-    values = schedule.model_dump() if isinstance(schedule, Trigger) else dict(schedule)
-    if values.get("run_at") is not None and isinstance(values["run_at"], str):
-        values["run_at"] = parse_time(values["run_at"], values.get("timezone", "Asia/Shanghai"))
+    timing = (
+        schedule if isinstance(schedule, WriteSchedule) else WriteSchedule.model_validate(schedule)
+    )
+    values = timing.definition_values()
     details = question if str(target) in question else f"{question}\n{target}"
     preview = details if len(details) <= 2000 else details[:1960] + "…（完整内容以审批卡为准）"
     write = effect(executor, spec)

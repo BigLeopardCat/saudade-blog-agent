@@ -13,7 +13,7 @@ from agent.proposals import proposal
 from agent.runtime.results import TurnResult
 from agent.runtime.turns import check_cancelled
 from agent.runtime.writes import bound_context
-from agent.scheduling.models import Trigger
+from agent.scheduling.models import WriteSchedule
 from tools import base
 from tools.result import invalid_args
 
@@ -30,7 +30,7 @@ def prepare_article_tags(
     level: targets.Level | None = None,
     parent_tag: targets.Name | None = None,
     color: str | None = None,
-    schedule: Trigger | None = None,
+    schedule: WriteSchedule | None = None,
 ) -> object:
     """准备文章标签增删或整体替换确认，不写入。add/remove填写用户要操作的标签名列表。
 

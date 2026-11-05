@@ -32,6 +32,7 @@ from eval import (
     compaction_contracts,
     composite_task_contracts,
     confirmation_failure_contracts,
+    content_contracts,
     context_contracts,
     experience_contracts,
     image_generation_contracts,
@@ -210,7 +211,8 @@ CASES = [("chat", favorite_backend, _chat),
          *article_tag_contracts.CASES, *confirmation_failure_contracts.CASES,
          *todo_task_contracts.CASES, *ordered_preparation_contracts.CASES,
          *task_lifecycle_contracts.CASES,
-         *scheduled_change_contracts.CASES]
+         *scheduled_change_contracts.CASES,
+         *content_contracts.CASES]
 
 
 def _sample(name, backend, contract, run_id, sample):

@@ -143,6 +143,39 @@ class Trigger(BaseModel):
             raise ValueError("condition waiting is limited to seven days")
 
 
+class WriteSchedule(BaseModel):
+    """One approved business change, with optional public-article waiting."""
+
+    model_config = ConfigDict(extra="forbid")
+    run_at: StrictStr | None = Field(
+        default=None,
+        description="Explicit ISO date/time or local HH:MM. "
+        "For relative requests use delay_seconds.",
+    )
+    delay_seconds: Annotated[StrictInt, Field(ge=5, le=31_536_000)] | None = Field(
+        default=None,
+        description="User-requested relative duration, starting AFTER approval: "
+        "in five minutes means 300. Never turn it into an estimated clock time.",
+    )
+    timezone: StrictStr = "Asia/Shanghai"
+    when_article_public: PositiveID | None = None
+    expires_at: StrictStr | None = None
+
+    def definition_values(self):
+        values = self.model_dump(exclude={"when_article_public"})
+        values["condition"] = (
+            ArticlePublic(article_id=self.when_article_public)
+            if self.when_article_public is not None
+            else None
+        )
+        return values
+
+    @model_validator(mode="after")
+    def valid(self):
+        Trigger.model_validate(self.definition_values())
+        return self
+
+
 class Definition(Trigger):
     title: Annotated[StrictStr, Field(min_length=1, max_length=80)]
     action: Literal["reminder", "read_only_agent", "publish_announcement", "admin_write"]
