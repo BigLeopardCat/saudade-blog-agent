@@ -24,10 +24,14 @@ def command_matches(expected, actual):
 
 
 def contains(actual, expected):
-    """Recursive subset for objects; declared lists preserve their exact meaning."""
+    """Match declared object fields while preserving list length and order."""
     if isinstance(expected, dict):
         return isinstance(actual, dict) and all(
             k in actual and contains(actual[k], v) for k, v in expected.items()
+        )
+    if isinstance(expected, list):
+        return isinstance(actual, list) and len(actual) == len(expected) and all(
+            contains(value, wanted) for value, wanted in zip(actual, expected)
         )
     return actual == expected
 
