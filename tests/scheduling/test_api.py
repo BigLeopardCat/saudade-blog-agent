@@ -16,7 +16,7 @@ from config.settings import settings
     "role,expected", [(None, 401), ("user", 403), ("zako", 403), ("admin", 200)]
 )
 def test_api_rejects_untrusted_actors_before_contacting_service(monkeypatch, role, expected):
-    monkeypatch.setattr(settings, "jwt_secret", secrets.token_hex(32))
+    monkeypatch.setattr(settings, "agent_assertion_secret", secrets.token_hex(32))
     monkeypatch.setattr(settings, "agent_require_assertion", True)
     calls = []
 
@@ -31,7 +31,7 @@ def test_api_rejects_untrusted_actors_before_contacting_service(monkeypatch, rol
         else {
             "X-Agent-Assertion": jwt.encode(
                 {"sub": 7, "role": role, "aud": "agent", "exp": time.time() + 60},
-                settings.jwt_secret,
+                settings.agent_assertion_secret,
                 algorithm="HS256",
             )
         }

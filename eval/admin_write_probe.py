@@ -57,32 +57,14 @@ def _b64(raw: bytes) -> str:
     return base64.urlsafe_b64encode(raw).rstrip(b"=").decode()
 
 
-def _sign(payload: dict) -> str:
-    from config.settings import settings
-    secret = (settings.jwt_secret or "").encode()
-    if not secret:
-        raise SystemExit("settings.jwt_secret 为空——探针无法自签（agent 环境没读 .env？）")
-    hdr = _b64(json.dumps({"alg": "HS256", "typ": "JWT"}, separators=(",", ":")).encode())
-    pl = _b64(json.dumps(payload, separators=(",", ":")).encode())
-    sig = _b64(hmac.new(secret, f"{hdr}.{pl}".encode(), hashlib.sha256).digest())
-    return f"{hdr}.{pl}.{sig}"
-
-
 def login_jwt(uid: int, role: str, ttl: int = 300) -> str:
-    """签一个登录态令牌。Rust `auth_jwt::Claims` 是 `{sub, exp, role}` 加一个**可选的 `ver`**
-    （20260926 起；**无 aud** —— Rust 用的是 `Validation::default()`，带 aud 反而会被拒）。
-
-    这里**刻意不写 `ver`**：`check_token` 对"没有代次声明"的令牌只判冻结、跳过代次比对，
-    正是 agent 代调令牌（`tools/base.py::_sign_local_jwt`）依赖的那条分支。
-    另注：**不带 `ver` 的令牌在"改密码"这条路径上不受代次收回约束**（冻结照判）——
-    详见 `docs/security-boundary.md` §2.3。"""
-    return _sign({"sub": uid, "exp": int(time.time()) + ttl, "role": role})
+    from eval.operator_credentials import session
+    return session(uid)
 
 
 def assertion(uid: int, role: str, ttl: int = 60) -> str:
-    """agent 入口的身份断言（`X-Agent-Assertion`）：多一个 `aud=agent`，uid 在 sub。"""
-    return _sign({"sub": str(uid), "role": role, "aud": _ASSERTION_AUD,
-                  "exp": int(time.time()) + ttl})
+    from eval.operator_credentials import assertion as host_assertion
+    return host_assertion(uid, role, ttl)
 
 
 def _http(method: str, url: str, payload: dict | None, headers: dict, timeout: int) -> dict:
@@ -255,7 +237,7 @@ def _stale_token(uid: int, conv_id: int, workflow: str, specs: list) -> str:
     payload = {"v": confirm._VERSION, "uid": uid, "conv": conv_id,
                "exp": int(time.time()) - 1, "workflow": workflow, "specs": specs}
     body = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode()
-    sig = hmac.new((settings.jwt_secret or "").encode(),
+    sig = hmac.new((settings.confirmation_secret or "").encode(),
                    confirm._DOMAIN + body, hashlib.sha256).digest()
     return confirm._b64e(body) + "." + confirm._b64e(sig)
 
@@ -1526,7 +1508,7 @@ def _trace_events(msg: str, name: str, within_s: int = 300) -> list[dict]:
     ⇒ 两条腿的 trace 断言**全部变成空的绿**：判据还在跑，只是永远看不到证据。
     """
     from config.settings import settings
-    from utils.trace_files import iter_trace_files     # 枚举的唯一实现（仓根在 sys.path 上）
+    from utils.trace_files import iter_trace_files  # 枚举的唯一实现（仓根在 sys.path 上）
     best: tuple[str, dict] | None = None
     for p in iter_trace_files(settings.trace_dir):
         try:
@@ -2346,8 +2328,8 @@ def _acct_status(uid: int, role: str, name: str):
 
 
 def _login_jwt_with_ver(uid: int, role: str, ver: int, ttl: int = 300) -> str:
-    """带代次的登录令牌——⑲ 的关键工具，理由见上面那段 ⚠️（别换成 `login_jwt`）。"""
-    return _sign({"sub": uid, "exp": int(time.time()) + ttl, "role": role, "ver": ver})
+    """Use the explicitly authenticated operator session; probes cannot forge generations."""
+    return login_jwt(uid, role, ttl)
 
 
 def _raw_get_code(path: str, token: str) -> tuple:

@@ -16,7 +16,6 @@ from contextlib import contextmanager
 from pathlib import Path
 
 import httpx
-import jwt
 from httpx_sse import connect_sse
 from pydantic import ValidationError
 
@@ -24,7 +23,6 @@ from agent import confirm
 from agent.api.schemas import QuotaInfo
 from agent.transport import command_wire
 from config.settings import settings
-from tools.base import _sign_local_jwt
 
 
 class EvaluationError(RuntimeError):
@@ -58,7 +56,8 @@ class OnlineTransport:
         self.cleaned_conversations = []
 
     def host_headers(self, uid):
-        return {"Authorization": "Bearer " + _sign_local_jwt(uid, "user")}
+        from eval.operator_credentials import session
+        return {"Authorization": "Bearer " + session(uid)}
 
     def profile(self, uid, expected_roles):
         response = self.client.get(self.blog_url + "/api/protected/profile",
@@ -180,11 +179,8 @@ class OnlineTransport:
         if self.host:
             return {**self.host_headers(self.uid), "X-Request-ID": request_id,
                     "X-Agent-Stream-Version": "2"}
-        if not settings.jwt_secret:
-            raise EvaluationError("JWT secret is unavailable")
-        token = jwt.encode({"sub": self.uid, "role": self.role, "aud": "agent",
-                            "exp": int(time.time()) + 180}, settings.jwt_secret,
-                           algorithm="HS256")
+        from eval.operator_credentials import assertion
+        token = assertion(self.uid, self.role, 180)
         return {"X-Agent-Assertion": token, "X-Request-ID": request_id}
 
     def _trace(self, request_id):

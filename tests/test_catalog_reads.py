@@ -52,7 +52,6 @@ def backend(monkeypatch):
         return httpx.Response(200, json={"code": 200, "data": rows[(page-1)*size:page*size],
                                       "total": len(rows)})
 
-    monkeypatch.setattr(base, "_jwt_secret", lambda: secrets.token_urlsafe(32))
     with httpx.Client(transport=httpx.MockTransport(handle)) as client:
         monkeypatch.setattr(base, "_client", client)
         yield state

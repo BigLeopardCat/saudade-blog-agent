@@ -91,7 +91,7 @@ def test_discovered_preparations_reach_approval_through_the_real_tool_chain(
         return httpx.Response(200, json={"code": 200, "data": data})
 
     cfg = config(principal=Principal(7, "superadmin", SOURCE_ASSERTION))
-    monkeypatch.setattr(confirm.settings, "jwt_secret", secrets.token_urlsafe(32))
+    monkeypatch.setattr(confirm.settings, "confirmation_secret", secrets.token_urlsafe(32))
     with httpx.Client(transport=httpx.MockTransport(handle)) as client:
         monkeypatch.setattr(base, "_client", client)
         domains = ToolCatalog().domains(cfg, True)

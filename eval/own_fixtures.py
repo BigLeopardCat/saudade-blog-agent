@@ -7,7 +7,7 @@ from unittest.mock import patch
 
 import httpx
 
-from agent import confirm
+from agent import confirm, delegation
 from tools import base
 
 SECRET = secrets.token_urlsafe(32)
@@ -43,7 +43,9 @@ def favorite_backend(article_id=19):
 
     with httpx.Client(transport=httpx.MockTransport(handle)) as client, \
             patch.object(base, "_client", client), \
-            patch.object(confirm.settings, "jwt_secret", SECRET):
+            patch.object(confirm.settings, "confirmation_secret", SECRET), \
+            patch.object(confirm.settings, "agent_assertion_secret", SECRET), \
+            patch.object(delegation, "credential", lambda uid: "offline-host-capability"):
         yield state
 
 
@@ -86,7 +88,9 @@ def notification_backend():
 
     with httpx.Client(transport=httpx.MockTransport(handle)) as client, \
             patch.object(base, "_client", client), \
-            patch.object(confirm.settings, "jwt_secret", SECRET):
+            patch.object(confirm.settings, "confirmation_secret", SECRET), \
+            patch.object(confirm.settings, "agent_assertion_secret", SECRET), \
+            patch.object(delegation, "credential", lambda uid: "offline-host-capability"):
         yield state
 
 
@@ -183,5 +187,7 @@ def message_backend():
 
     with httpx.Client(transport=httpx.MockTransport(handle)) as client, \
             patch.object(base, "_client", client), \
-            patch.object(confirm.settings, "jwt_secret", SECRET):
+            patch.object(confirm.settings, "confirmation_secret", SECRET), \
+            patch.object(confirm.settings, "agent_assertion_secret", SECRET), \
+            patch.object(delegation, "credential", lambda uid: "offline-host-capability"):
         yield state

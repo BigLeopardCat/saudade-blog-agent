@@ -150,7 +150,7 @@ def accounts(monkeypatch):
 
     with httpx.Client(transport=httpx.MockTransport(handle)) as client:
         monkeypatch.setattr(base, "_client", client)
-        monkeypatch.setattr(confirm.settings, "jwt_secret", secrets.token_urlsafe(32))
+        monkeypatch.setattr(confirm.settings, "confirmation_secret", secrets.token_urlsafe(32))
         yield state
 
 

@@ -25,39 +25,52 @@ def deployment(tmp_path):
     (source / "config").mkdir()
     (source / "config/__init__.py").touch()
     (source / "config/settings.py").write_text(
-        'import os\nfrom types import SimpleNamespace\n'
-        'settings=SimpleNamespace(embedding_profile=os.getenv("FIXTURE_PROFILE", ""))\n')
+        "import os\nfrom types import SimpleNamespace\n"
+        'settings=SimpleNamespace(embedding_profile=os.getenv("FIXTURE_PROFILE", ""))\n'
+    )
     (source / "rag").mkdir()
     (source / "rag/__init__.py").touch()
     (source / "rag/embedding_inputs.py").write_text(
-        'import os\ndef active_profile():\n'
-        ' if os.getenv("FIXTURE_BAD_PROFILE"): raise ValueError("invalid profile")\n')
+        "import os\ndef active_profile():\n"
+        ' if os.getenv("FIXTURE_BAD_PROFILE"): raise ValueError("invalid profile")\n'
+    )
     for name in ("serve.sh", "serve_scheduler.sh", "deploy_release.sh"):
         shutil.copy(ROOT / "scripts" / name, source / "scripts" / name)
     (source / "agent" / "__init__.py").touch()
     (source / "agent" / "main.py").write_text(
         "from types import SimpleNamespace\n"
-        "app=SimpleNamespace(state=SimpleNamespace(runtime=None))\n")
+        "app=SimpleNamespace(state=SimpleNamespace(runtime=None))\n"
+    )
     (source / "uv.lock").touch()
     (source / "eval/report").mkdir(parents=True)
     (source / "eval/report/baseline.json").write_text('{"fixture":true}')
     config, data, releases = tmp_path / "private.env", tmp_path / "data", tmp_path / "releases"
     config.write_text("PRIVATE_FIXTURE=not-for-archive\n")
     data.mkdir()
-    env = {**os.environ, "PATH": str(commands) + os.pathsep + os.environ["PATH"],
-           "FIXTURE_PYTHON": sys.executable, "FIXTURE_RELEASES": str(releases),
-           "GIT_AUTHOR_NAME": "Fixture", "GIT_AUTHOR_EMAIL": "fixture@example.invalid",
-           "GIT_COMMITTER_NAME": "Fixture", "GIT_COMMITTER_EMAIL": "fixture@example.invalid"}
+    env = {
+        **os.environ,
+        "PATH": str(commands) + os.pathsep + os.environ["PATH"],
+        "FIXTURE_PYTHON": sys.executable,
+        "FIXTURE_RELEASES": str(releases),
+        "GIT_AUTHOR_NAME": "Fixture",
+        "GIT_AUTHOR_EMAIL": "fixture@example.invalid",
+        "GIT_COMMITTER_NAME": "Fixture",
+        "GIT_COMMITTER_EMAIL": "fixture@example.invalid",
+    }
     wrappers = {
-        "uv": '#!/bin/sh\nprintf "%s\\n" "$@" > uv-args\nmkdir -p .venv/bin\nln -sf "$FIXTURE_PYTHON" .venv/bin/python\n',
+        "uv": (
+            '#!/bin/sh\nprintf "%s\\n" "$@" > uv-args\nmkdir -p .venv/bin\n'
+            'ln -sf "$FIXTURE_PYTHON" .venv/bin/python\n'
+        ),
         "sudo": '#!/bin/sh\nshift\nexec "$@"\n',
-        "systemctl": ('#!/bin/sh\nreadlink -f "$FIXTURE_RELEASES/current" '
-                      '>> "$FIXTURE_RELEASES/restarts"\n'),
-        "curl": '''#!/bin/sh
+        "systemctl": (
+            '#!/bin/sh\nreadlink -f "$FIXTURE_RELEASES/current" >> "$FIXTURE_RELEASES/restarts"\n'
+        ),
+        "curl": """#!/bin/sh
 [ -z "$FAIL_PROBE" ] || exit 1
 printf '{"sha":"%s"}\\n' "$(cat "$FIXTURE_RELEASES/current/REVISION")"
-''',
-        "sleep": '#!/bin/sh\nexit 0\n',
+""",
+        "sleep": "#!/bin/sh\nexit 0\n",
     }
     for name, body in wrappers.items():
         path = commands / name
@@ -71,8 +84,11 @@ printf '{"sha":"%s"}\\n' "$(cat "$FIXTURE_RELEASES/current/REVISION")"
 
 def publish(fixture, revision="HEAD", **extra):
     source, config, data, releases, env = fixture
-    return run(["bash", "scripts/deploy_release.sh", revision, str(releases),
-                str(config), str(data)], cwd=source, env={**env, **extra})
+    return run(
+        ["bash", "scripts/deploy_release.sh", revision, str(releases), str(config), str(data)],
+        cwd=source,
+        env={**env, **extra},
+    )
 
 
 def test_release_excludes_dirty_and_private_files_and_pins_its_own_environment(deployment):
@@ -120,7 +136,7 @@ def test_scheduler_enabled_release_restarts_both_services(deployment):
     result = publish(deployment, DEPLOY_SCHEDULER="1")
     assert result.returncode == 0, result.stderr
     # Scheduler restart, HTTP restart and scheduler liveness all target the pinned release.
-    assert len((releases/"restarts").read_text().splitlines()) == 3
+    assert len((releases / "restarts").read_text().splitlines()) == 3
 
 
 def test_preparation_links_writable_state_without_activating_or_changing_secrets(deployment):
@@ -128,8 +144,12 @@ def test_preparation_links_writable_state_without_activating_or_changing_secrets
     config.chmod(0o600)
     state = source.parent / "state"
     state.mkdir()
-    result = publish(deployment, DEPLOY_PREPARE_ONLY="1", DEPLOY_RUNTIME_STATE=str(state),
-                     DEPLOY_SERVICE_GROUP=str(os.getgid()))
+    result = publish(
+        deployment,
+        DEPLOY_PREPARE_ONLY="1",
+        DEPLOY_RUNTIME_STATE=str(state),
+        DEPLOY_SERVICE_GROUP=str(os.getgid()),
+    )
     assert result.returncode == 0, result.stderr
     assert not (releases / "current").exists()
     assert not (releases / "restarts").exists()
@@ -149,7 +169,7 @@ def test_configured_profile_installs_tokenizer_without_an_operator_flag(deployme
     result = publish(deployment, DEPLOY_PREPARE_ONLY="1")
     assert result.returncode == 0, result.stderr
     release = next((releases / "releases").iterdir())
-    assert '--extra\nembedding-tokenizer\n' in (release / "uv-args").read_text()
+    assert "--extra\nembedding-tokenizer\n" in (release / "uv-args").read_text()
     assert not (releases / "current").exists()
 
 
@@ -159,6 +179,6 @@ def test_invalid_tokenizer_profile_never_replaces_the_running_release(deployment
     previous = (releases / "current").resolve()
     restarts = (releases / "restarts").read_text()
     result = publish(deployment, FIXTURE_PROFILE="configured", FIXTURE_BAD_PROFILE="1")
-    assert result.returncode != 0 and 'invalid profile' in result.stderr
+    assert result.returncode != 0 and "invalid profile" in result.stderr
     assert (releases / "current").resolve() == previous
     assert (releases / "restarts").read_text() == restarts

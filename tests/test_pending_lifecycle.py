@@ -71,7 +71,7 @@ def pending_task(monkeypatch, tmp_path):
 
     ledger = Ledger(str(tmp_path / "lifecycle.sqlite3"))
     monkeypatch.setattr(writes, "ledger_for", lambda _: ledger)
-    monkeypatch.setattr(confirm.settings, "jwt_secret", secrets.token_urlsafe(32))
+    monkeypatch.setattr(confirm.settings, "confirmation_secret", secrets.token_urlsafe(32))
     with httpx.Client(transport=httpx.MockTransport(handle)) as client:
         monkeypatch.setattr(base, "_client", client)
         cfg = config(stop_event=stop)

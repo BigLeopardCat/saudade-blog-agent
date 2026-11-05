@@ -1,7 +1,6 @@
 """Review reads preserve bounded pages, actor identity and independent review axes."""
 
 import json
-import secrets
 
 import httpx
 import pytest
@@ -65,7 +64,6 @@ def backend(monkeypatch):
         return httpx.Response(200, json={"code": 200, "data": data,
                                       "total": state.get("total_override", total)})
 
-    monkeypatch.setattr(base, "_jwt_secret", lambda: secrets.token_urlsafe(32))
     with httpx.Client(transport=httpx.MockTransport(handle)) as client:
         monkeypatch.setattr(base, "_client", client)
         yield state

@@ -144,9 +144,12 @@ class Settings(BaseSettings):
     agent_require_assertion: bool = True
 
     # ── IoT 设备服务（ESP32 OLED 显示等）─────────────────────────────
-    # 与博客共用 JWT_SECRET：agent 以对话用户身份签发 JWT 调用 device-service
-    jwt_secret: str = ""
-    device_service_url: str = "http://127.0.0.1:3100"
+    # Independent identity and approval keys; backend capabilities are host-issued.
+    confirmation_secret: str = Field(default="", validation_alias="AGENT_CONFIRM_SECRET")
+    agent_assertion_secret: str = ""
+    delegation_dir: str = "data/delegations"
+
+    device_service_url: str = "http://127.0.0.1:3000/api/device-gateway"
     # Optional demo device integration; hide unavailable tools and routes.
     iot_enabled: bool = False
 

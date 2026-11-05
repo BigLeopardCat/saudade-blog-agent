@@ -12,6 +12,28 @@ import pytest
 
 pytest_plugins = ("_own_support", "_checkpoint_postgres", "pytester")
 
+
+@pytest.fixture(autouse=True)
+def _host_capabilities_for_mock_backends(request, monkeypatch):
+    """Tool behavior tests receive an opaque host credential; protocol tests use real forwarding."""
+    if request.module.__name__.endswith("test_host_delegation"):
+        yield
+        return
+    import time
+
+    import jwt
+
+    from agent import delegation
+
+    context = delegation.clear()
+    def fixture_credential(uid):
+        return jwt.encode({"sub": uid, "role": "user", "ver": 0, "scope": "tools",
+                           "aud": "blog-tools", "exp": int(time.time()) + 300},
+                          "offline-host-delegation-key-at-least-32-bytes", algorithm="HS256")
+    monkeypatch.setattr(delegation, "credential", fixture_credential)
+    yield
+    delegation.reset(context)
+
 _ARTIFACTS = tempfile.TemporaryDirectory(prefix="saudade-pytest-")
 _PINNED = {
     "RAG_HYBRID_ENABLED": "0",

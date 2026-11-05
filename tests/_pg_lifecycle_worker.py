@@ -31,7 +31,7 @@ def main():
             kwargs={"autocommit": True, "row_factory": dict_row,
                     "options": os.environ["SAUDADE_CRASH_SCHEMA_OPTIONS"]}) as pool:
         with favorite_backend():
-            confirm.settings.jwt_secret = os.environ["SAUDADE_CRASH_SIGNING_SECRET"]
+            confirm.settings.confirmation_secret = os.environ["SAUDADE_CRASH_SIGNING_SECRET"]
             model = (Model(AIMessage(content="进程退出后保留的答复。"))
                      if phase == "commit" else Model(
                 LOAD, AIMessage(content="", tool_calls=[FAVORITE])))

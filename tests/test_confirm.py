@@ -22,7 +22,6 @@ sys.path.insert(0, str(ROOT))
 
 
 from agent import confirm
-from tools import base as _base  # 工具的返回值契约（ToolResult：str 子类 + kind）
 
 FAILED: list[str] = []
 check = collector(FAILED)
@@ -33,10 +32,11 @@ import hmac  # noqa: E402
 
 from config.settings import settings  # noqa: E402
 
+
 def test_confirm():
-    _SAVED_SECRET = settings.jwt_secret
+    _SAVED_SECRET = settings.confirmation_secret
     _STUB_SECRET = "test-secret-for-confirm-tokens-not-a-real-secret"
-    settings.jwt_secret = _STUB_SECRET
+    settings.confirmation_secret = _STUB_SECRET
     SPECS = [{"tool": "create_tag", "args": {"title": "测试标签", "parent_id": None, "color": "#eb2f96"}}]
     print("① 令牌签发/验签")
     tok = confirm.sign(7, 42, "tag_create", SPECS)
@@ -65,7 +65,7 @@ def test_confirm():
     _past = {"v": 1, "uid": 7, "conv": 42, "exp": int(time.time()) - 1,
              "workflow": "tag_create", "specs": SPECS}
     _body = json.dumps(_past, ensure_ascii=False, separators=(",", ":")).encode()
-    _sig = hmac.new(settings.jwt_secret.encode(), confirm._DOMAIN + _body, hashlib.sha256).digest()
+    _sig = hmac.new(settings.confirmation_secret.encode(), confirm._DOMAIN + _body, hashlib.sha256).digest()
     _stale = confirm._b64e(_body) + "." + confirm._b64e(_sig)
     check("过期（exp 在签发后已过）→ None（签名合法也不行）",
           confirm.verify(_stale, 7, 42) is None)
@@ -88,12 +88,12 @@ def test_confirm():
     check("不可序列化的参数 → 不签发（不抛）",
           confirm.sign(7, 42, "tag_create",
                        [{"tool": "create_tag", "args": {"title": object()}}]) == "")
-    settings.jwt_secret = ""
+    settings.confirmation_secret = ""
     check("密钥空缺 → **既不签也不验**（绝不降级成无签名令牌）",
           confirm.sign(7, 42, "tag_create", SPECS) == "" and confirm.verify(tok, 7, 42) is None)
-    settings.jwt_secret = _STUB_SECRET   # 恢复桩值（见上方 _STUB_SECRET 处的说明）
+    settings.confirmation_secret = _STUB_SECRET   # 恢复桩值（见上方 _STUB_SECRET 处的说明）
     print("\n⑧ 令牌的一次性编号 jti：同一张令牌不许兑现两次")
-    settings.jwt_secret = _STUB_SECRET
+    settings.confirmation_secret = _STUB_SECRET
     _t1 = confirm.sign(7, 42, "tag_create", [{"tool": "create_tag_one", "args": {"name": "X"}}])
     _t2 = confirm.sign(7, 42, "tag_create", [{"tool": "create_tag_one", "args": {"name": "X"}}])
     _j1, _j2 = confirm.token_jti(_t1), confirm.token_jti(_t2)
@@ -116,7 +116,7 @@ def test_confirm():
         hmac.new(_STUB_SECRET.encode(), confirm._DOMAIN + _v1_body, hashlib.sha256).digest())
     check("  签名正确但版本为 1 的令牌验不过（旧令牌一律失效，而不是尽力解析）",
           confirm.verify(_v1, 7, 42) is None)
-    settings.jwt_secret = _SAVED_SECRET
+    settings.confirmation_secret = _SAVED_SECRET
     print()
     print()
     if FAILED:

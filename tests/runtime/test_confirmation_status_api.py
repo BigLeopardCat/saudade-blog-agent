@@ -17,7 +17,9 @@ from config.settings import settings
 backend = continuation.backend
 
 
-def test_current_card_is_readable_under_turn_lock_and_disappears_after_revocation(backend):
+def test_current_card_is_readable_under_turn_lock_and_disappears_after_revocation(
+    backend, monkeypatch
+):
     state, _ = backend
     selected = continuation.runtime(continuation.Model())
     prepared, grant, _ = continuation.prepare(selected, continuation.FAVORITE)
@@ -30,33 +32,54 @@ def test_current_card_is_readable_under_turn_lock_and_disappears_after_revocatio
 
     application.state.workers = SimpleNamespace(closing=False, run=run)
 
+    monkeypatch.setattr(
+        settings, "agent_assertion_secret", "confirmation-status-assertion-test-secret"
+    )
+
     def headers(uid=7, role="user"):
-        token = jwt.encode({"sub": uid, "role": role, "aud": "agent",
-                            "exp": int(time.time()) + 60}, settings.jwt_secret, algorithm="HS256")
+        token = jwt.encode(
+            {"sub": uid, "role": role, "aud": "agent", "exp": int(time.time()) + 60},
+            settings.agent_assertion_secret,
+            algorithm="HS256",
+        )
         return {"X-Agent-Assertion": token}
 
     async def scenario():
-        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=application),
-                                    base_url="http://fixture") as client:
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=application), base_url="http://fixture"
+        ) as client:
             payload = {"user_id": 999, "conversation_id": 42}
             with selected.conversation_guard(config()):
-                response = await asyncio.wait_for(client.post(
-                    "/tasks/confirmation", json=payload, headers=headers()), timeout=2)
+                response = await asyncio.wait_for(
+                    client.post("/tasks/confirmation", json=payload, headers=headers()), timeout=2
+                )
             assert response.status_code == 200
             assert response.headers["cache-control"] == "no-store"
             body = response.json()
             assert body["task_id"] == task and body["confirmation"]["task_id"] == task
             assert body["confirmation"]["token"] == prepared.execution["pending_confirm"]["token"]
-            assert set(body["confirmation"]) == {"id", "task_id", "q", "opts", "token", "exp",
-                                                  "replay_safe", "server_time"}
+            assert set(body["confirmation"]) == {
+                "id",
+                "task_id",
+                "q",
+                "opts",
+                "token",
+                "exp",
+                "replay_safe",
+                "server_time",
+            }
             assert not state["writes"]
             for uid, role, cid in [(8, "user", 42), (7, "admin", 42), (7, "user", 43)]:
-                value = await client.post("/tasks/confirmation",
-                    json={**payload, "conversation_id": cid}, headers=headers(uid, role))
+                value = await client.post(
+                    "/tasks/confirmation",
+                    json={**payload, "conversation_id": cid},
+                    headers=headers(uid, role),
+                )
                 assert value.json()["confirmation"] is None
                 assert body["confirmation"]["token"] not in value.text
-            mismatch = await client.post("/tasks/confirmation",
-                json={**payload, "task_id": "other-task"}, headers=headers())
+            mismatch = await client.post(
+                "/tasks/confirmation", json={**payload, "task_id": "other-task"}, headers=headers()
+            )
             assert mismatch.json() == {"task_id": "other-task", "confirmation": None}
             assert (await client.post("/tasks/confirmation", json=payload)).status_code == 401
             assert cancel(selected, grant, config())["cancelled"]
@@ -69,8 +92,15 @@ def test_current_card_is_readable_under_turn_lock_and_disappears_after_revocatio
 def test_display_fallback_id_is_stable_and_excludes_private_execution_fields(monkeypatch):
     monkeypatch.setattr("agent.products.blog.confirmation.time.time", lambda: 100)
     opaque = secrets.token_urlsafe(24)
-    value = {"pending_confirm": {"token": opaque, "q": "确认？",
-                                "opts": [], "specs": [{"private": "data"}], "exp": 123}}
+    value = {
+        "pending_confirm": {
+            "token": opaque,
+            "q": "确认？",
+            "opts": [],
+            "specs": [{"private": "data"}],
+            "exp": 123,
+        }
+    }
     before, after = public_card(value), public_card(value)
     assert before == after and before["id"]
     assert "specs" not in before and opaque not in before["id"]
