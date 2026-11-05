@@ -366,3 +366,25 @@ def test_background_task_identity_is_owner_bound_and_separate_from_chat():
     ):
         with pytest.raises(ValueError):
             binding({"configurable": {**cfg, **mutation}})
+
+
+def test_ui_list_uses_active_backend_filter_and_server_side_cron_time():
+    from unittest.mock import Mock
+
+    recurring = {'status': 'ACTIVE', 'context': {'schedule_id': IDENT,
+        'definition': definition().model_copy(update={'delay_seconds': None,
+            'cron': '0 * * * *'}).model_dump(mode='json')}}
+    once = SimpleNamespace(status='SUCCESS', attributes={'schedule_id': 'sc_'+'b'*32,
+        'definition': definition().model_dump(mode='json'), 'start_at': NOW.isoformat()})
+    client = SimpleNamespace(list_workflows=Mock(return_value=[once]))
+    backend = SimpleNamespace(client=client, recurring_schedules=lambda owner: [recurring])
+    service = ScheduleService(backend, lambda uid: ADMIN, now=lambda: NOW)
+    normal = service.list(ADMIN)
+    assert 'instruction' not in normal['items'][0]
+    result = service.list(ADMIN, 20, 0, True)
+    assert len(result['items']) == 1 and result['items'][0]['status'] == 'active'
+    item = result['items'][0]
+    assert item['instruction'] == '喝水' and len(item['version']) == 64
+    due = datetime.fromisoformat(item['next_run_at']).astimezone(timezone.utc)
+    assert due == NOW + timedelta(hours=1)
+    assert client.list_workflows.call_args.kwargs['attributes'] == {'cancelled': False}

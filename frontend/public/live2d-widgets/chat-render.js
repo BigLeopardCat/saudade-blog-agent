@@ -44,9 +44,15 @@
     <section id="waifu-chat" role="region" aria-label="与泠月喵对话">
       <div class="chat-drag-bar-t"></div><div class="chat-drag-bar-l"></div><div class="chat-inner-border"></div>
       <header class="chat-header">
+        <span id="chat-service-indicator" class="chat-service-indicator" role="status" aria-label="正在检查对话服务" data-state="checking"></span>
         <div class="chat-heading">
           <div id="chat-conv-title" class="chat-conv-title"><span class="chat-conv-title-tag" id="chat-conv-title-tag"></span></div>
         </div>
+        <div class="chat-header-tasks">
+          <button type="button" id="chat-schedule-chip" class="chat-task-chip" aria-label="查看定时任务" hidden><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><circle cx="12" cy="13" r="8"/><path d="M12 8v5l3 2M3 5l3-3m12 0 3 3M5 21l1-2m12 0 1 2"/></svg><span></span></button>
+          <button type="button" id="chat-paused-chip" class="chat-task-chip" aria-label="查看挂起任务" hidden><svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor" aria-hidden="true"><path d="M6 5h4v14H6zm8 0h4v14h-4z"/></svg><span></span></button>
+        </div>
+        <span id="chat-dock-countdown" hidden></span>
         <button type="button" class="chat-restore" id="chat-restore" aria-label="收起为顶部栏" title="单击收起为顶部栏，拖动移动" aria-expanded="true">收起对话</button>
         <button type="button" class="chat-minimize" id="chat-minimize" aria-label="收纳到页面顶部" title="收纳到页面顶部">−</button>
         <button type="button" class="chat-close" id="chat-close" aria-label="关闭对话" title="关闭对话">×</button>
@@ -96,7 +102,7 @@
         <button type="button" class="chat-rail-btn" id="conv-toggle-btn" title="会话列表" aria-label="会话列表" aria-controls="waifu-conv-panel" aria-expanded="false">☰</button>
         <div class="chat-rail-bot">
           <button type="button" class="chat-rail-btn" id="conv-new-btn" title="新对话" aria-label="新对话">＋</button>
-          <button type="button" class="chat-rail-btn" id="conv-history-btn" title="搜索历史会话" aria-label="搜索历史会话">历</button>
+          <button type="button" class="chat-rail-btn" id="conv-tasks-btn" title="查看任务" aria-label="查看任务"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><rect x="5" y="4" width="15" height="17" rx="2"/><path d="M9 3h7v3H9zM9 11h7m-7 5h7"/></svg></button>
         </div>
       </nav>
       <div id="waifu-conv-panel" class="waifu-conv-panel" role="region" aria-label="会话历史">
