@@ -1,5 +1,6 @@
 """Accounting must preserve unknown usage and separate unlike request populations."""
 
+import gzip
 import json
 import math
 from types import SimpleNamespace
@@ -168,3 +169,23 @@ def test_unpaired_start_in_one_engine_cannot_be_hidden_by_another_engines_done()
                          "output": 5, "cache_read": 0}])
     assert row["calls"] == 1 and row["unknown_attempts"] == 1
     assert not usage.complete(row)
+
+
+def test_path_objects_and_compressed_traces_keep_usage_and_unreadable_evidence(tmp_path):
+    events = [{"node": "native", "event": "llm_done", "input": 100,
+               "output": 5, "cache_read": 80}]
+    plain = tmp_path / "plain.json"
+    plain.write_text(json.dumps({"events": events}), encoding="utf-8")
+    packed = tmp_path / "packed.json.gz"
+    packed.write_bytes(gzip.compress(plain.read_bytes()))
+    broken = tmp_path / "broken.json.gz"
+    broken.write_bytes(packed.read_bytes()[:-5])
+    invalid = tmp_path / "invalid.json"
+    invalid.write_bytes(b"\xff")
+    malformed = tmp_path / "malformed.json"
+    malformed.write_text('{"events": [null]}')
+    result = request_metrics.collect([plain, packed, broken, invalid, malformed])
+    assert result["unreadable"] == 3 and len(result["groups"]) == 1
+    group = result["groups"][0]
+    assert group["requests"] == 2 and group["in"] == 200 and group["cache"] == 160
+    assert load_trace(str(plain)) == load_trace(plain) == load_trace(packed)

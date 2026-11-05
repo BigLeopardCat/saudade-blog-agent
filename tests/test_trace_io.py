@@ -11,7 +11,6 @@ import re
 import shutil
 import sys
 import tempfile
-from datetime import datetime
 from pathlib import Path
 
 from _judge import collector
@@ -38,15 +37,7 @@ def src(rel: str) -> str:
 
 
 def _check_legacy_event_key(tmp: str, plain: str, oldp: str) -> None:
-    """⑨ 改名遗留：旧事件键 `skill` 映射成 `workflow`（带日落）。
-
-    20261017 `skill` → `workflow`。trace 保留 30 天 ⇒ 改名当天盘上**全是旧键**，
-    读取端只认新键的话，那 30 天里按 `workflow` 统计的判据全部静默读到 0，而且
-    到期自己恢复（旧文件被删）——"看着在跑、其实没跑"那一族。映射落在读取的唯
-    一点（`load_trace`）上，不是十个读取端各写一遍。
-
-    （单列一个函数：`main` 在 `eval/complexity_baseline.json` 里记着账，只许缩小。）
-    """
+    """Archived event aliases preserve current keys and need no wall-clock deadline."""
     print("\n⑨ 旧事件键 `skill` → `workflow`（映射在 load_trace 里，带日落日期）")
     legacy = {"events": [{"node": "planner", "event": "decision", "skill": "chat"},
                          {"node": "planner", "event": "decision", "workflow": "navigate"},
@@ -65,24 +56,10 @@ def _check_legacy_event_key(tmp: str, plain: str, oldp: str) -> None:
     check("⑨ 新格式的事件一个键都不多（映射只在缺新键时动手）",
           set(trace_io.load_trace(plain)["events"][0]) ==
           {"node", "event", "workflow", "round"})
-    # **日落**：到那天盘上不可能再有旧键，这一节连同 trace_io 里那个函数一起删。
-    _today = datetime.now().strftime("%Y%m%d")
-    check(f"⑨ 日落日期未到（{trace_io.LEGACY_SUNSET}）——到日请删掉 "
-          f"`trace_io._alias_legacy_event_key` 与本节",
-          _today < trace_io.LEGACY_SUNSET,
-          f"今天 {_today}，日落 {trace_io.LEGACY_SUNSET}")
 
 
 def _check_schema_version(tmp: str) -> str:
-    """⑦ 顶层 schema_version：写侧盖章、读侧只许 `.get`（不许硬取）。返回那份**存量旧
-    trace** 的路径（⑨ 复用它当"没有 events 也不炸"的输入）。
-
-    动机：trace 是保留 30 天、按天归档的**长期语料**，读它的脚本十几个；字段含义变过
-    一次（命令从字符串搬进 `meta["cmd"]`）之后，事后读旧 trace 的人分不清"旧格式"与
-    "当时没有"——两种解释导出相反结论。版本号给出判据。
-
-    （单列一个函数：`main` 在 `eval/complexity_baseline.json` 里记着账，只许缩小。）
-    """
+    """Verify schema stamps and tolerate missing versions in archived traces."""
     check("⑦ SCHEMA_VERSION 是 ≥1 的整数（版本号本身别写成字符串/0）",
           isinstance(trace_mod.SCHEMA_VERSION, int) and trace_mod.SCHEMA_VERSION >= 1,
           repr(trace_mod.SCHEMA_VERSION))
