@@ -1,6 +1,6 @@
 """Access to blog-specific source observations in conversation history."""
 
-from agent.authz import SCOPE_WRITE_CONSOLE, SCOPE_WRITE_OWN, check
+from agent.authz import SCOPE_READ_OWN, SCOPE_WRITE_CONSOLE, SCOPE_WRITE_OWN, check
 from agent.domains import browser, conversation_images
 from agent.domains.favorites import preparation as favorites
 from agent.domains.messages import preparation as messages
@@ -17,6 +17,10 @@ _OWN_PREPARATIONS = frozenset(tool.name for tool in (
 def tool_access(principal, name):
     # Historical facts grant no execution authority. Source/role matching is also
     # required by memory.history before any tool observation reaches the model.
+    # Persisted observations keep their source identity after a callable is retired.
+    # This permits reading owned history only; the name is absent from execution catalogs.
+    if name == "get_unread_counts":
+        return scoped_reads_enabled(principal, SCOPE_READ_OWN)
     if name == "cancel_pending_operation" or name in _OWN_PREPARATIONS:
         return scoped_reads_enabled(principal, SCOPE_WRITE_OWN)
     if name in preparation_names():

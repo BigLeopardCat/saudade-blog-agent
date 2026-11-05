@@ -55,7 +55,7 @@ _NOARG_VERB = {
     "get_note_stats": "查看文章流量报表",
     "list_admin_notes": "查看后台文章列表",
     "list_my_favorites": "查看我的收藏",
-    "get_unread_counts": "查看未读数量",
+    "get_inbox_overview": "查看未读收件总览",
     "list_notifications": "查看站内通知",
     "list_my_messages": "查看站内信",
     "list_my_board": "查看我的河灯",

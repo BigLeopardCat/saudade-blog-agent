@@ -6,7 +6,7 @@ from urllib.parse import urlencode
 
 from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import tool
-from pydantic import Field, StrictInt
+from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictInt, StrictStr, model_validator
 
 from agent.runtime.access import own_reads_enabled
 from tools import base
@@ -38,23 +38,92 @@ def _entry(row, uid, folder=None):
     return {key: row[key] for key in _FIELDS if key in row}
 
 
-@tool
-def get_unread_counts(config: RunnableConfig) -> object:
-    """查询本人的未读通知数、未读站内信数及合计，只返回计数。
+Count = Annotated[StrictInt, Field(ge=0)]
+PreviewLimit = Annotated[StrictInt, Field(ge=1, le=5)]
 
-    条目清单与内容由 notifications、messages 领域读取；本工具不返回条目或正文。
+
+class Header(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    id: Annotated[StrictInt, Field(gt=0)]
+    title: Annotated[StrictStr, Field(max_length=64)]
+    titleTruncated: StrictBool
+    createdAt: StrictStr
+    isRead: StrictBool
+
+    @model_validator(mode="after")
+    def unread(self):
+        if self.isRead:
+            raise ValueError("Overview contains a read item")
+        return self
+
+
+class NotificationHeader(Header):
+    type: Annotated[StrictStr, Field(max_length=40)]
+
+
+class MessageHeader(Header):
+    fromUserId: Annotated[StrictInt, Field(gt=0)]
+    peerName: Annotated[StrictStr, Field(max_length=80)]
+
+
+class InboxOverview(BaseModel):
+    userId: Annotated[StrictInt, Field(gt=0)]
+    notifications: Count
+    messages: Count
+    total: Count
+    limit: PreviewLimit
+    unreadOnly: StrictBool
+    notificationItems: list[NotificationHeader]
+    messageItems: list[MessageHeader]
+    notificationsHasMore: StrictBool
+    messagesHasMore: StrictBool
+
+    @model_validator(mode="after")
+    def complete(self):
+        if self.total != self.notifications + self.messages or not self.unreadOnly:
+            raise ValueError("Inconsistent unread counts")
+        for rows, count, more in ((self.notificationItems, self.notifications,
+                                   self.notificationsHasMore),
+                                  (self.messageItems, self.messages, self.messagesHasMore)):
+            if (len(rows) != min(count, self.limit) or more != (len(rows) < count)
+                    or len({row.id for row in rows}) != len(rows)):
+                raise ValueError("Incomplete unread preview")
+        return self
+
+
+@tool
+def get_inbox_overview(config: RunnableConfig, limit: PreviewLimit = 5,
+    mode: Annotated[Literal["recent_unread", "counts_only"], Field(description=
+        "recent_unread lists unread headers and counts; use it for which/what unread items. "
+        "counts_only is only for an explicitly count-only request.")] = "recent_unread") -> object:
+    """查看本人未读通知与站内信：可靠计数和最近各5条未读标题（含公告副本），只读不标记。
+
+    回答“有哪些未读”可直接展示条目与来源；hasMore为true时明确仅展示最近部分。
+    仅明确要求只查数量时选择counts_only；更多条目、正文和操作使用notifications、messages领域。
     """
-    if _principal(config) is None:
-        return base.unavailable("需要已验签的本人身份，无法查询未读数。")
-    data = base._own_get("/api/protected/notifications/summary", config)
+    principal = _principal(config)
+    if principal is None:
+        return base.unavailable("需要已验签的本人身份，无法查询未读收件。")
+    if mode == "counts_only":
+        data = base._own_get("/api/protected/notifications/summary", config)
+        if isinstance(data, base.ToolResult):
+            return data
+        fields = ("notifications", "messages", "total")
+        if (not isinstance(data, dict)
+                or any(type(data.get(key)) is not int or data[key] < 0 for key in fields)
+                or data["total"] != data["notifications"] + data["messages"]):
+            return base.unavailable("未能核对未读数量，本次不作结论。")
+        return _render({**{key: data[key] for key in fields}, "itemsIncluded": False})
+    data = base._own_get("/api/protected/inbox/overview?" + urlencode({"limit": limit}), config)
     if isinstance(data, base.ToolResult):
         return data
-    fields = ("notifications", "messages", "total")
-    if (not isinstance(data, dict) or any(
-            type(data.get(key)) is not int or data[key] < 0 for key in fields)
-            or data["total"] != data["notifications"] + data["messages"]):
-        return base.unavailable("未能核对未读计数，请稍后重查。")
-    return _render({key: data[key] for key in fields})
+    try:
+        result = InboxOverview.model_validate(data)
+        if result.userId != principal.uid or result.limit != limit:
+            raise ValueError("Inbox recipient or preview scope mismatch")
+    except ValueError:
+        return base.unavailable("未能核对未读计数和条目，本次不作结论。")
+    return _render({**result.model_dump(exclude={"userId"}), "itemsIncluded": True})
 
 
 @tool

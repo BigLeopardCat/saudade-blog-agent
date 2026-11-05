@@ -6,7 +6,7 @@ from unittest.mock import patch
 import httpx
 
 from agent import confirm
-from eval.own_fixtures import SECRET
+from eval.own_fixtures import SECRET, inbox_overview
 from tools import base
 
 
@@ -27,7 +27,9 @@ def backend(role):
             return httpx.Response(200, json={"code": 422, "message": "需要明确禁言时长"})
         if request.method != "GET":
             raise AssertionError("synthetic reading task cannot perform a business mutation")
-        if path == "/api/protected/notifications/summary":
+        if path == "/api/protected/inbox/overview":
+            data = inbox_overview(notifications, [], int(request.url.params.get("limit", "5")))
+        elif path == "/api/protected/notifications/summary":
             data = {"notifications": 2, "messages": 0, "total": 2}
         elif path == "/api/protected/notifications":
             data = {"items": notifications, "unread": 2}

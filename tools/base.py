@@ -388,7 +388,7 @@ def _near_miss_names(want: str, cands, limit: int = 3):
 
 
 # Account target helpers and administration tools.
-from agent.domains.own_reads import get_unread_counts  # noqa: E402,F401
+from agent.domains.own_reads import get_inbox_overview  # noqa: E402,F401
 from tools.account_admin import (  # noqa: E402,F401
     _reachable_uids,
     _user_directory,
@@ -511,7 +511,7 @@ _TOOL_REGISTRY = [
     # Article-comment IDs are distinct from guestbook IDs.
     # 用户自己的数据：scope = read.own（三档角色都有），见本节头注
     list_my_favorites,
-    get_unread_counts,
+    get_inbox_overview,
     list_notifications,
     # 我自己的河灯：也是 read.own。与上面三条同族——"我自己那一份"
     # 在公开池里读不出来（公开池恒 Approved=1，且 `mine` 那一格结构上恒假）。

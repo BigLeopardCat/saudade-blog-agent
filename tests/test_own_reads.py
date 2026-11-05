@@ -15,18 +15,20 @@ def _list(**args):
     return own_reads.list_my_messages.invoke(args, config=config())
 
 
-def test_unread_counts_fetch_no_contents(mailbox):
-    result = own_reads.get_unread_counts.invoke({}, config=config())
-    assert json.loads(str(result)) == {"notifications": 2, "messages": 2, "total": 4}
+def test_explicit_counts_mode_fetches_no_headers_or_bodies(mailbox):
+    result = own_reads.get_inbox_overview.invoke({"mode": "counts_only"}, config=config())
+    assert json.loads(str(result)) == {"notifications": 2, "messages": 2, "total": 4,
+                                       "itemsIncluded": False}
     assert len(mailbox["requests"]) == 1
     assert mailbox["requests"][0].url.path.endswith("/notifications/summary")
 
 
 def test_registered_counter_has_the_same_bounded_contract(mailbox):
     tools = {tool.name: tool for tool in base.get_all_tools()}
-    value = tools["get_unread_counts"].invoke({}, config=config())
-    assert json.loads(str(value)) == {"notifications": 2, "messages": 2, "total": 4}
-    assert "get_unread_summary" not in tools
+    value = tools["get_inbox_overview"].invoke({"mode": "counts_only"}, config=config())
+    assert json.loads(str(value)) == {"notifications": 2, "messages": 2, "total": 4,
+                                      "itemsIncluded": False}
+    assert "get_unread_summary" not in tools and "get_unread_counts" not in tools
     assert len(mailbox["requests"]) == 1
 
 
@@ -72,7 +74,7 @@ def test_unverified_identity_and_foreign_rows_never_become_read_facts(mailbox):
                                   {"notifications": 1, "messages": 1, "total": 4}])
 def test_bad_counts_are_not_zero(monkeypatch, data):
     monkeypatch.setattr(base, "_own_get", lambda *args: data)
-    assert own_reads.get_unread_counts.invoke({}, config=config()).kind == "unavailable"
+    assert own_reads.get_inbox_overview.invoke({}, config=config()).kind == "unavailable"
 
 
 def test_network_failure_is_not_an_empty_mailbox(mailbox):
@@ -85,3 +87,36 @@ def test_unexpected_server_body_is_not_forwarded(monkeypatch):
                                                 "content": "not requested"}], "hasMore": False}
     monkeypatch.setattr(base, "_own_get", lambda *args: response)
     assert "not requested" not in str(_list())
+
+
+def test_default_overview_returns_owned_unread_headers_without_bodies(mailbox):
+    result = own_reads.get_inbox_overview.invoke({}, config=config())
+    assert result.kind == "ok"
+    data = result.data
+    assert data["notifications"] == data["messages"] == 2 and data["total"] == 4
+    assert data["unreadOnly"] and data["itemsIncluded"]
+    assert len(data["notificationItems"]) == len(data["messageItems"]) == 2
+    assert all(row["isRead"] is False and "content" not in row
+               for row in data["notificationItems"] + data["messageItems"])
+    assert "userId" not in data and not data["notificationsHasMore"]
+    assert len(mailbox["requests"]) == 1
+    assert mailbox["requests"][0].url.path.endswith("/inbox/overview")
+
+
+@pytest.mark.parametrize("fault", ["recipient", "missing_items", "counts", "read", "duplicates"])
+def test_overview_rejects_unowned_or_incomplete_evidence(monkeypatch, fault):
+    from eval.own_fixtures import inbox_overview
+    data = inbox_overview([{"id": 1, "title": "header", "isRead": False}], [])
+    if fault == "recipient":
+        data["userId"] = 8
+    elif fault == "missing_items":
+        data["notificationItems"] = []
+    elif fault == "counts":
+        data["total"] = 5
+    elif fault == "read":
+        data["notificationItems"][0]["isRead"] = True
+    else:
+        data["notificationItems"] *= 2
+        data.update(notifications=2, total=2)
+    monkeypatch.setattr(base, "_own_get", lambda *args: data)
+    assert own_reads.get_inbox_overview.invoke({}, config=config()).kind == "unavailable"
