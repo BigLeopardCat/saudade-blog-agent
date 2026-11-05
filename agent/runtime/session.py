@@ -245,7 +245,8 @@ class ToolSession:
                         if self.input_events_enabled:
                             yield input_event
                     from agent.runtime.client_actions import paused_result
-                    paused = paused_result(data)
+                    from agent.runtime.task_pause import paused_result as user_paused
+                    paused = paused_result(data) or user_paused(data)
                     if paused is not None:
                         self.outcome = paused
                 if mode != "messages":

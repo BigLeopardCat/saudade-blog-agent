@@ -908,7 +908,12 @@
               return;
             }
             if (type === 'progress') { addStep('step', data); return; }
-            if (type === 'task_input') { steering?.receive(data, roundId); return; }
+            if (type === 'task_input') {
+              steering?.receive(data, roundId);
+              if (data.phase === 'paused' && data.task_id === ctx.state.activeRound?.taskId)
+                ctx.state.activeRound.agentPaused = true;
+              return;
+            }
             if (type === 'confirmation') {
               const cr = ctx.state.confirmRound;
               if (cr && cr.continuation && cr.ask.id === data.id) ctx.state.confirmRound = null;
@@ -1182,6 +1187,10 @@
           // 一份实现——两处拷贝此前已经漂过，见那个函数的头注）
           retainStoppedTurn(ctx.state.live[roundId], roundId, msg, silent);
           setTimeout(pullHistory, 0); // DB 已是权威（残缺回复本就没落库），收敛一致
+        }
+        if (ownsRound() && ctx.state.activeRound?.agentPaused) {
+          persistFailedRound(msg, '任务已挂起', 'stopped');
+          engine.refreshView(); ctx.ui.refreshComposer?.();
         }
         if (ownsRound()) void ctx.ui.reloadTasks?.();
         return ownsRound() && completed && !ctx.state.stoppedByUser;

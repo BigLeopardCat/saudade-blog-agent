@@ -55,7 +55,10 @@ def site(tmp_path):
         "INSERT INTO test_flags VALUES ('block_notify',false),('article_public',false);"
         "CREATE TABLE test_effects(id serial,run_id text);"
         "CREATE TABLE test_attempts(id serial,run_id text);"
-        "CREATE TABLE test_notifications(run_id text primary key, owner_id integer,body text)"
+        "CREATE TABLE test_notifications(run_id text primary key, owner_id integer,body text);"
+        "CREATE TABLE test_publications(run_id text primary key,"
+        "owner_id integer,title text,body text);"
+        "INSERT INTO test_flags VALUES ('block_publish_after_commit',false)"
     )
     processes, logs = [], []
 
@@ -255,3 +258,25 @@ def test_owned_schedule_lists_do_not_confuse_administrator_id_prefixes(site):
     ]
     with pytest.raises(ScheduleNotFound):
         service.get(ADMIN, other)
+
+
+def test_approved_publication_waits_durably_and_crash_replay_does_not_republish(site):
+    service, query, start, processes = site
+    query("UPDATE test_flags SET value=true WHERE key='block_publish_after_commit'")
+    ident, _, _ = create(service, action="publish_announcement", title="审批标题",
+                         instruction=" 审批正文\n😀 ", delay_seconds=5)
+    assert service.backend.once(ADMIN.uid, ident).status == "DELAYED"
+    assert query("SELECT count(*) FROM test_publications")[0][0] == 0
+    eventually(lambda: query("SELECT count(*) FROM test_publications")[0][0] == 1)
+    assert query("SELECT count(*) FROM test_notifications")[0][0] == 0
+    processes[0].kill()
+    processes[0].wait(timeout=10)
+    query("UPDATE test_flags SET value=false WHERE key='block_publish_after_commit'")
+    start()
+    eventually(lambda: service.get(ADMIN, ident)["status"] == "finished")
+    assert query("SELECT owner_id,title,body FROM test_publications") == [
+        (7, "审批标题", " 审批正文\n😀 ")
+    ]
+    assert query("SELECT count(*) FROM test_notifications")[0][0] == 1
+    result = service.runs(ADMIN, ident)["items"][0]["result"]
+    assert result["status"] == "completed"

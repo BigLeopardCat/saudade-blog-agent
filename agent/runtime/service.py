@@ -115,8 +115,9 @@ class AgentRuntime:
                     raise
         outcome = yield from self._run(session, prompt)
         execution = outcome.execution or {}
-        if execution.get("client_action"):
-            record("native", "task_paused", task_id=session.task["id"], reason="browser")
+        if execution.get("client_action") or execution.get("paused_task"):
+            record("native", "task_paused", task_id=session.task["id"],
+                   reason="requested" if execution.get("paused_task") else "browser")
             yield outcome
             return
         record("native", "turn_completed", chars=len(outcome.reply))
@@ -205,7 +206,9 @@ class AgentRuntime:
             items = _finish_inputs(session, outcome)
         if session.input_events_enabled:
             yield TaskInputEvent({"task_id": session.task["id"], "ready": False,
-                                  "inputs": items})
+                                  "inputs": items,
+                                  **({"phase": "paused"} if outcome is not None and
+                                     (outcome.execution or {}).get("paused_task") else {})})
         if not isinstance(outcome, TurnResult):
             raise RuntimeError("Native tool session ended without a terminal result")
         return outcome
@@ -291,9 +294,14 @@ def _finish_inputs(session, outcome):
     execution = (outcome.execution or {}) if outcome else {}
     try:
         return session.input_inbox.finish(session.task, session.state["applied_inputs"],
-            paused=outcome is None or bool(execution.get("client_action")
+            paused=outcome is None or bool(execution.get("paused_task")
+                                          or execution.get("client_action")
                                           or execution.get("pending_confirm")))
     except InputConflict as exc:
         if str(exc) != "task_not_available":
             raise
+        if execution.get("paused_task"):
+            session.input_inbox.open(session.task)
+            return session.input_inbox.finish(
+                session.task, session.state["applied_inputs"], paused=True)
         return []

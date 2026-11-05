@@ -7,9 +7,12 @@
 
 - 一次性绝对时间、确认创建后的相对延时、带 IANA 时区的五段 cron。
 - 个人提醒直接发送提供的正文，不调用模型；只读后台分析复用现有 LangChain Agent。
+- 定时公告支持一次性或 cron：确认卡冻结完整标题、正文和时间，授权到期公开发布并通知当时的全部用户。
+  到期无需再次确认或调用模型；执行前复核管理员权限，取消后阻止尚未开始的发布。
+  已发出的请求不能撤回；博客以账号与执行编号在同一事务中去重公告和通知，删除后重放也不重新发布。
 - 一次性任务可等待指定文章公开，必须提供截止时间，最多等待七天，默认每分钟查询。
-- 只读分析使用独立 checkpoint，没有原聊天历史、页面操作、设备操作或业务写入。
-  提示中必须提供完整目标。首版不迁移正在交互的任务，不自动批准未来业务写入。
+- 只读分析使用独立 checkpoint，没有原聊天历史、页面操作、设备操作或任意业务写入。
+  提示中必须提供完整目标。不迁移正在交互的任务；仅执行创建计划时明确批准的公告内容，其余业务写入未开放。
 - 结果通知发给创建者本人，超过通知长度的内容截取预览；完整结果在执行记录中读取。
 
 模型只准备计划。确认后服务端保存定义，到期由独立 DBOS Worker 执行。
@@ -39,8 +42,8 @@
 
 ## 部署
 
-1. 先在博客仓应用 PostgreSQL 编号迁移 `0021_automation_results.sql`，
-   发布 `/api/protected/automation-actor` 和 `/api/protected/automation-results`。
+1. 先在博客仓应用 PostgreSQL 编号迁移 `0021_automation_results.sql` 和 `0025_automation_announcements.sql`，
+   发布 `/api/protected/automation-actor` 、`/api/protected/automation-results` 和 `/api/protected/automation-announcements`。
 2. 配置 `SCHEDULING_ENABLED=true`。`SCHEDULING_DSN` 为空时使用 `CHECKPOINT_DSN`。
    DSN 必须指向独立的 Agent PostgreSQL 数据库，不能是博客业务库。
    DBOS 在 `saudade_automations` schema 建表；它使用公开的 JSON 序列化，禁止 pickle。

@@ -11,7 +11,8 @@ DOMAIN_DESCRIPTIONS = {
     "admin_gallery": "Gallery images/folders, image inspection, metadata edits and article covers.",
     "article_editor": "Collaborate on the open editor: draft, title/body review, summary approval "
                       "and in-place publication.",
-    "admin_automations": "Persistent reminders and scheduled read-only tasks; "
+    "admin_automations": "Persistent reminders, scheduled read-only analysis and approved "
+                         "announcement publication; "
                          "confirm lifecycle changes.",
     "public_activity": "Search public announcements, guestbook and talks by keyword; read latest "
                        "entries. Public display names are not account identities.",

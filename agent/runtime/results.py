@@ -24,7 +24,8 @@ class TurnResult:
 
 def turn_phase(result):
     execution = result.execution or {}
-    return ("awaiting_browser" if execution.get("client_action") else
+    return ("paused" if execution.get("paused_task") else
+            "awaiting_browser" if execution.get("client_action") else
             "awaiting_confirmation" if execution.get("pending_confirm") else
             "blocked" if execution.get("blocked") else
             "cancelled" if (execution.get("pending_event") or {}).get("event") == "cancelled"

@@ -856,7 +856,7 @@
         0
       ],
       "agent/scheduling/host.py": [
-        0,
+        1,
         0
       ],
       "agent/scheduling/models.py": [
@@ -962,10 +962,14 @@
       "server.py": [
         0,
         0
+      ],
+      "agent/runtime/task_pause.py": [
+        0,
+        0
       ]
     },
     "total": [
-      413,
+      414,
       33
     ]
   },
