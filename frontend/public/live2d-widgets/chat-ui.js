@@ -21,6 +21,20 @@
     const { chatPanel: panel, input, sendBtn, messages, askBox } = ctx.dom;
     if (panel.dataset.uiReady) return;
     panel.dataset.uiReady = '1';
+    const heading = panel.querySelector('.chat-heading'), header = panel.querySelector('.chat-header');
+    const scheduled = panel.querySelector('#chat-schedule-chip'), paused = panel.querySelector('#chat-paused-chip');
+    const alignHeader = () => {
+      if (!header.clientWidth || panel.dataset.windowMode === 'docked') return;
+      const style = getComputedStyle(header), gap = parseFloat(style.gap) || 0;
+      const width = element => element.hidden ? 0 : element.getBoundingClientRect().width;
+      const right = width(scheduled) + width(panel.querySelector('#chat-minimize'))
+        + width(panel.querySelector('#chat-close')) + gap * 3 + parseFloat(style.paddingRight);
+      const left = width(paused) + 38;
+      heading.style.maxWidth = Math.max(0, header.clientWidth - 2 * Math.max(left, right)) + 'px';
+      header.style.setProperty('--chat-title-width', heading.getBoundingClientRect().width + 'px');
+    };
+    const headerObserver = new ResizeObserver(alignHeader);
+    [header, heading, scheduled, paused].forEach(element => headerObserver.observe(element));
     const windowUI = initWindow(panel);
     ctx.ui.expandChat = () => windowUI?.setMode('expanded');
     g.__waifuTaskUI?.init(ctx, engine);

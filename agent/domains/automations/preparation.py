@@ -80,6 +80,8 @@ def tools(service, can_prepare):
         """Prepare an administrator's persistent schedule for approval; do not activate it.
 
         Provide exactly one: absolute run_at, seconds after creation, or five-field cron.
+        Delay starts ONLY after approval. While pending, do not claim it is queued
+        or translate the delay to an exact clock time.
         publish_announcement publishes the EXACT title and instruction as the public title/body,
         notifying all accounts present at execution. The approval includes this content and timing.
         reminder sends the supplied text to the owner. read_only_agent runs a NEW isolated task:

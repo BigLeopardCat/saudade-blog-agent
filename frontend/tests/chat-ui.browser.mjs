@@ -1268,6 +1268,10 @@ try {
   const titleBounds = await page.locator('#chat-conv-title-tag').boundingBox();
   const timerBounds = await page.locator('#chat-schedule-chip').boundingBox();
   assert.ok(timerBounds.x-titleBounds.x-titleBounds.width <= 20,'countdown stays next to title');
+  const centeredHeader = await page.locator('.chat-header').boundingBox();
+  assert.ok(Math.abs(titleBounds.x+titleBounds.width/2-centeredHeader.x-centeredHeader.width/2)<1,
+    'title stays centered with both task controls visible');
+  await page.screenshot({path:path.join(output,'task-header-centered.png')});
   await page.locator('#chat-paused-chip').click();
   assert.equal(await page.locator('#waifu-chat').getAttribute('data-window-mode'),'expanded');
   assert.equal(await page.locator('#chat-task-panel').isVisible(),true);

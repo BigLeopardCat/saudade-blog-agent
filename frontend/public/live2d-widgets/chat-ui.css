@@ -1,5 +1,6 @@
 /* Conversation workspace. Loaded after widget.css; all tokens and rules stay local. */
 #waifu-chat {
+  container: chat-window / inline-size;
   --drag-w: 32px;
   --drag-h: 36px;
   --side-w: 0px;
@@ -150,7 +151,7 @@
   border-radius: 0 17px 0 0;
   pointer-events: none;
 }
-#waifu-chat .chat-heading { flex: 0 1 auto; min-width: 0; }
+#waifu-chat .chat-heading { position: absolute; left: 50%; transform: translateX(-50%); min-width: 0; max-width: calc(100% - 80px); }
 #waifu-chat .chat-conv-title,
 #waifu-chat.conv-open .chat-conv-title,
 #waifu-chat.show-title .chat-conv-title {
@@ -742,8 +743,9 @@
 #waifu-chat .chat-service-indicator[data-state='busy'] { --signal-color: #e5b44c; }
 #waifu-chat .chat-service-indicator[data-state='paused'] { --signal-color: #72a7e7; }
 #waifu-chat .chat-service-indicator[data-state='offline'] { --signal-color: #e5788e; }
-#waifu-chat .chat-header-tasks { display: flex; gap: 5px; flex: none; margin-right: auto; z-index: 2; pointer-events: auto; }
+#waifu-chat .chat-header-tasks { display: contents; }
 #waifu-chat .chat-task-chip {
+  position: absolute; z-index: 2; pointer-events: auto;
   display: inline-flex; align-items: center; gap: 5px; height: 25px; padding: 0 8px;
   border: 1px solid var(--chat-line); border-radius: 999px; background: var(--chat-soft);
   color: var(--chat-ink); font-size: 11px; cursor: pointer; font-variant-numeric: tabular-nums;
@@ -785,3 +787,12 @@
 
 #waifu-chat .chat-timer-icon { font-style: normal; font-size: 15px; line-height: 1; }
 #waifu-chat #chat-schedule-chip { background: transparent; border-color: transparent; padding-inline: 4px; }
+
+#waifu-chat #chat-schedule-chip { left: calc(50% + var(--chat-title-width, 0px) / 2 + 8px); }
+#waifu-chat #chat-paused-chip { left: 28px; }
+#waifu-chat .chat-minimize { margin-left: auto; }
+@container chat-window (max-width: 360px) {
+  #waifu-chat .chat-header { gap: 4px; }
+  #waifu-chat :is(.chat-minimize, .chat-close) { width: 24px; }
+  #waifu-chat .chat-task-chip { font-size: 10px; padding-inline: 4px; }
+}

@@ -393,7 +393,7 @@ def test_ui_list_uses_active_backend_filter_and_server_side_cron_time():
 def test_scheduled_publication_approval_freezes_exact_content_and_does_not_publish(monkeypatch):
     from _own_support import config
 
-    monkeypatch.setattr(settings, "jwt_secret", "scheduling-fixture-secret-at-least-32")
+    monkeypatch.setattr(settings, "confirmation_secret", "scheduling-fixture-secret-at-least-32")
     service = ScheduleService(None, lambda _: ADMIN, now=lambda: NOW)
     result = tools(service, True)["prepare_automation"].invoke(
         {"title": "测试公告", "instruction": " 保留原文\n😀 ",
@@ -419,7 +419,7 @@ def test_scheduled_publication_uses_same_content_validation_as_interactive_posts
 def test_scheduled_publication_checks_bound_receipt_and_never_calls_model(monkeypatch):
     from agent.scheduling.models import fingerprint
 
-    monkeypatch.setattr(settings, "jwt_secret", "scheduling-fixture-secret-at-least-32")
+    monkeypatch.setattr(settings, "confirmation_secret", "scheduling-fixture-secret-at-least-32")
     title, text = "测试公告", " 原文\n😀 "
     receipt = {"announcementId": 54, "notificationCount": 2,
                "payloadHash": fingerprint([title, text]), "replayed": False}
