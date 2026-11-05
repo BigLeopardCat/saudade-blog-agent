@@ -23,12 +23,35 @@ fi
 printf '%s\n' "$revision" > "$release/REVISION"
 ln -sfn -- "$config_file" "$release/.env"
 ln -sfn -- "$data_dir" "$release/data"
-uv_args=(sync --locked --no-dev)
+uv_args=(sync --locked --no-dev --no-editable)
+if [[ -n "${DEPLOY_SERVICE_GROUP:-}" ]]; then
+  # Permission changes must not affect hard-linked package-cache files.
+  uv_args+=(--link-mode copy)
+fi
 if [[ "${DEPLOY_EMBEDDING_TOKENIZER:-0}" == 1 ]]; then
   uv_args+=(--extra embedding-tokenizer)
 fi
 (cd "$release" && uv "${uv_args[@]}")
-(cd "$release" && .venv/bin/python -c 'from agent.main import app; assert app.state.runtime is None')
+if [[ -n "${DEPLOY_RUNTIME_STATE:-}" ]]; then
+  runtime_state="$(realpath -e -- "$DEPLOY_RUNTIME_STATE")"
+  for path in logs output_audio eval/cache eval/report/wordgraph; do
+    mkdir -p "$runtime_state/$path" "$(dirname -- "$release/$path")"
+    if [[ -e "$release/$path" && ! -L "$release/$path" ]]; then
+      echo "Refusing to replace release content: $path" >&2
+      exit 1
+    fi
+    ln -sfn -- "$runtime_state/$path" "$release/$path"
+  done
+fi
+(cd "$release" && SAUDADE_IGNORE_ENV_FILE=1 .venv/bin/python -c 'from agent.main import app; assert app.state.runtime is None')
+if [[ -n "${DEPLOY_SERVICE_GROUP:-}" ]]; then
+  chgrp -hR -- "$DEPLOY_SERVICE_GROUP" "$release"
+  chmod -R g+rX,g-w,o-rwx -- "$release"
+fi
+if [[ "${DEPLOY_PREPARE_ONLY:-0}" == 1 ]]; then
+  echo "Prepared $revision; current and services unchanged"
+  exit 0
+fi
 previous=""
 if [[ -L "$release_root/current" ]]; then
   previous="$(readlink -e -- "$release_root/current")"
