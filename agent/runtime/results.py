@@ -111,3 +111,8 @@ def cancellation_fact():
 
 def cancellation_content(reply):
     return json.dumps({**cancellation_fact(), "result": reply}, ensure_ascii=False)
+
+
+def cancellation_observations(reply):
+    return observation({"name": "cancel_pending_operation", "args": {},
+                        "id": "cancelled_" + uuid.uuid4().hex}, ok(cancellation_content(reply)))

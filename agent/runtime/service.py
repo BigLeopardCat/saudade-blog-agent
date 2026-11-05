@@ -296,7 +296,8 @@ def _finish_inputs(session, outcome):
         return session.input_inbox.finish(session.task, session.state["applied_inputs"],
             paused=outcome is None or bool(execution.get("paused_task")
                                           or execution.get("client_action")
-                                          or execution.get("pending_confirm")))
+                                          or execution.get("pending_confirm")),
+            awaiting_confirmation=bool(execution.get("pending_confirm")))
     except InputConflict as exc:
         if str(exc) != "task_not_available":
             raise

@@ -1220,6 +1220,7 @@
         await resumeStoppedTask(stopped, null, ctx.ui.notify);
       };
       ctx.ui.dismissManagedTask = taskId => {
+        if (ctx.state.pendingAsk?.task_id === taskId) void restoreAsk(true);
         try {
           const rows = JSON.parse(localStorage.getItem('saudade-chat-failed') || '[]');
           localStorage.setItem('saudade-chat-failed', JSON.stringify(rows.filter(row => row.task_id !== taskId)));

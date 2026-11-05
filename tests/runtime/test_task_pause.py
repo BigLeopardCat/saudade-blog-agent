@@ -4,13 +4,16 @@ from dataclasses import replace
 
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from langgraph.checkpoint.memory import InMemorySaver
-from test_confirmation_continuation import Model, call
+from test_confirmation_continuation import FAVORITE, LOAD, Model, call
+from test_confirmation_continuation import backend as backend_fixture
 
 from agent.principal import Principal
 from agent.products.blog.application import BlogApplication
 from agent.runtime.checkpoint_conversations import CheckpointConversationStore
 from agent.runtime.service import AgentRuntime
 from agent.runtime.task_management import cancel_paused, list_paused
+
+backend = backend_fixture
 
 
 def test_model_can_defer_and_resume_real_checkpoint_without_turning_it_into_a_todo():
@@ -61,3 +64,42 @@ def test_paused_checkpoint_cannot_be_resumed_by_another_role_and_can_be_deleted(
     assert len(model.prompts) == 1
     cancel_paused(selected, actor, 42, 'held-task')
     assert list_paused(selected, actor)['items'] == []
+
+
+def test_waiting_approval_is_not_listed_as_resumable_and_expired_card_can_be_deleted():
+    from test_task_inputs import Model as InputModel
+    from test_task_inputs import config, runtime
+    from test_task_management import paused
+
+    selected, cfg = runtime(InputModel()), config()
+    actor = paused(selected, cfg, "old-card")
+    snapshot = selected.store.load(cfg)
+    selected.inputs.finish(snapshot.run, [], paused=True, awaiting_confirmation=True)
+    assert list_paused(selected, actor)["items"] == []
+    selected.update_state(cfg, {"pending_confirm": {"token": "expired"},
+                               "pending_action": {"jti": "old"}})
+    result = cancel_paused(selected, actor, 42, "old-card")
+    assert result["cancelled"]
+    assert selected.store.load(cfg).run is None
+    assert not selected.store.load(cfg).has_pending
+
+
+def test_deleting_waiting_approval_revokes_its_ledger_before_removing_the_task(backend):
+    from _own_support import config
+
+    from agent import confirm
+
+    state, _ = backend
+    cfg = config(task_inputs=True)
+    model = Model(LOAD, AIMessage(content="", tool_calls=[FAVORITE]))
+    selected = AgentRuntime(CheckpointConversationStore(InMemorySaver()),
+                            application=BlogApplication(), model_factory=lambda **_: model)
+    prepared = list(selected.stream_events({"messages": [HumanMessage(content="收藏文章19")],
+                                           "task_id": "approval-task"}, cfg))[-1]
+    grant = confirm.verify(prepared.execution["pending_confirm"]["token"], 7, 42)
+    assert list_paused(selected, cfg["configurable"]["principal"])["items"] == []
+    cancelled = cancel_paused(selected, cfg["configurable"]["principal"], 42, "approval-task")
+    assert cancelled["cancelled"]
+    replay = list(selected.stream_events({"confirm_grant": grant}, cfg))[-1]
+    assert replay.execution["blocked"] and not replay.execution.get("receipts")
+    assert not state["writes"] and not selected.store.load(cfg).run

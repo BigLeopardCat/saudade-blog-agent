@@ -22,9 +22,21 @@ def cancel_paused(runtime, principal, conversation_id, task_id):
     with conversation_turn(runtime.saver, config, timeout=2):
         state = runtime.inputs.read(task_id, scope)
         snapshot = runtime.store.load(config)
-        if (state["phase"] != "paused" or snapshot.has_pending or not snapshot.run
+        if (state["phase"] not in {"paused", "awaiting_confirmation"} or not snapshot.run
                 or snapshot.run.get("id") != task_id or snapshot.run.get("scope") != scope):
             raise InputConflict("task_is_not_paused")
+        if snapshot.has_pending:
+            from agent.runtime.results import cancellation_observations
+
+            pending = runtime.application.pending(snapshot.pending, config)
+            facts = []
+            if pending is not None:
+                result = pending.cancel(config, runtime.saver)
+                if not (result.execution or {}).get("pending_event"):
+                    raise InputConflict("operation_already_executed_or_unknown")
+                facts = cancellation_observations(result.reply)
+            runtime.store.clear_pending(config, (snapshot.pending_action or {}).get("jti"),
+                                        observations=facts)
         # Same state transition as discarding an interrupted run. Keep conversation
         # messages, completed side-effect receipts and accounting records intact.
         runtime.update_state(config, {"run": None})

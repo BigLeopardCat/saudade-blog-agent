@@ -94,10 +94,11 @@ class TaskInputs:
                 state["phase"] = "finishing"
             return pending
 
-    def finish(self, task, seen, *, paused=False):
+    def finish(self, task, seen, *, paused=False, awaiting_confirmation=False):
         with self.storage.edit(task["id"]) as state:
             self._check(state, task["scope"])
-            state["phase"] = "paused" if paused else "completed"
+            state["phase"] = ("awaiting_confirmation" if awaiting_confirmation
+                              else "paused" if paused else "completed")
             for item in state["inputs"]:
                 if item["id"] in seen:
                     item["status"] = "applied"
