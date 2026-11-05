@@ -60,7 +60,7 @@ def test_todo_creation_records_verified_owner_without_promoting_draft_text(monke
     from agent.principal import SOURCE_ASSERTION, Principal
 
     events = []
-    monkeypatch.setattr(confirm.settings, "jwt_secret", secrets.token_urlsafe(32))
+    monkeypatch.setattr(confirm.settings, "confirmation_secret", secrets.token_urlsafe(32))
     monkeypatch.setattr("agent.runtime.tool_evidence.record", lambda node, event, **data:
                         events.append({"node": node, "event": event, **data}))
     cfg = config(principal=Principal(7, "admin", SOURCE_ASSERTION))

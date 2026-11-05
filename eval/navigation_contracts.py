@@ -64,7 +64,7 @@ def backend(articles=None):
 
     with httpx.Client(transport=httpx.MockTransport(handle)) as client, \
             patch.object(base, "_client", client), \
-            patch.object(confirm.settings, "jwt_secret", SECRET), \
+            patch.object(confirm.settings, "confirmation_secret", SECRET), \
             patch.object(search, "_index", index), \
             patch.object(search, "is_enabled", lambda: False):
         yield state

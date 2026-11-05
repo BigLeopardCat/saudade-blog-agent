@@ -25,11 +25,6 @@ def config(stop=None):
     return {"configurable": configurable}
 
 
-@pytest.fixture(autouse=True)
-def signing(monkeypatch):
-    monkeypatch.setattr(base, "_jwt_secret", lambda: "offline-test-signing-key")
-
-
 def install(monkeypatch, handler):
     """Install a mock transport and return the recorded requests."""
     calls = []

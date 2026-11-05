@@ -18,7 +18,7 @@ def aliases(part):
 @pytest.mark.parametrize('component', ['payload', 'signature'])
 def test_equivalent_but_unissued_spellings_cannot_bypass_host_claim_parsing(
         monkeypatch, component):
-    monkeypatch.setattr(confirm.settings, 'jwt_secret', 'encoding-contract-fixture-only')
+    monkeypatch.setattr(confirm.settings, 'confirmation_secret', 'encoding-contract-fixture-only')
     for size in range(1, 4):
         token = confirm.sign(7, 42, 'favorite_add', [
             {'tool': 'add_favorite', 'args': {'text': 'x' * size}}])

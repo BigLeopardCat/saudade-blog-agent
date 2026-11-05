@@ -18,7 +18,7 @@ from tools.result import unavailable
 
 @pytest.fixture
 def prepared(monkeypatch):
-    monkeypatch.setattr(confirm.settings, "jwt_secret", secrets.token_urlsafe(32))
+    monkeypatch.setattr(confirm.settings, "confirmation_secret", secrets.token_urlsafe(32))
     config = {"configurable": {"user_id": 7, "conversation_id": 42, "thread_id": "conv_42",
         "principal": Principal(7, "admin", SOURCE_ASSERTION),
         "browser_feedback": True, "browser_task": "edit-task"}}

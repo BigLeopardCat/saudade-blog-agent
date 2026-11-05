@@ -33,7 +33,7 @@ _VERSION = 2
 
 def _secret() -> bytes:
     """签名密钥；空缺返回 b""（调用方据此拒绝签/验）。"""
-    return (settings.jwt_secret or "").encode()
+    return (settings.confirmation_secret or "").encode()
 
 
 def _b64e(raw: bytes) -> str:

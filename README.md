@@ -25,7 +25,7 @@ uv run --frozen pytest -q
 cp .env.example .env
 ```
 
-运行服务前填写模型密钥、与博客一致的 `JWT_SECRET` 和部署地址。
+运行服务前填写模型密钥、与博客一致的 `AGENT_ASSERTION_SECRET`、独立的 `AGENT_CONFIRM_SECRET` 和部署地址。
 `BLOG_API_BASE` 同时决定公开工具地址和页面导航的站点来源，部署时必须设为自己的站点。
 需要可恢复任务和确认操作时配置独立 PostgreSQL 数据库 `CHECKPOINT_DSN`。
 `AGENT_CONTEXT_TOKENS` 应匹配实际模型端点窗口，工作预算及压缩设置见会话文档。

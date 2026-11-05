@@ -95,7 +95,7 @@ def backend(monkeypatch, tmp_path):
 
     with httpx.Client(transport=httpx.MockTransport(handle)) as client:
         monkeypatch.setattr(base, "_client", client)
-        monkeypatch.setattr(confirm.settings, "jwt_secret", secrets.token_urlsafe(32))
+        monkeypatch.setattr(confirm.settings, "confirmation_secret", secrets.token_urlsafe(32))
         with closing(Ledger(str(tmp_path / "execution.sqlite3"))) as ledger:
             monkeypatch.setattr(writes, "ledger_for", lambda saver: ledger)
             yield state, ledger

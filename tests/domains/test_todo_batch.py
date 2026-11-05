@@ -50,7 +50,7 @@ def selection(monkeypatch, tmp_path):
         return httpx.Response(200, json={"code": 200, "data": data})
 
     cfg = config(principal=Principal(7, "admin", SOURCE_ASSERTION))
-    monkeypatch.setattr(confirm.settings, "jwt_secret", secrets.token_urlsafe(32))
+    monkeypatch.setattr(confirm.settings, "confirmation_secret", secrets.token_urlsafe(32))
     with (
         httpx.Client(transport=httpx.MockTransport(handle)) as client,
         closing(Ledger(str(tmp_path / "execution.sqlite3"))) as ledger,

@@ -6,6 +6,7 @@ import time
 from fastapi import Request
 from fastapi.responses import JSONResponse
 
+from agent import delegation
 from config.settings import settings
 from utils.logging import request_id, reset_trace_id, set_trace_id
 
@@ -15,6 +16,7 @@ logger = logging.getLogger(__name__)
 
 
 async def trace_id_middleware(request: Request, call_next):
+    credential_context = delegation.clear()
     trace_id = request_id(request.headers.get(_TRACE_ID_HEADER))
     set_trace_id(trace_id)
     started = time.monotonic()
@@ -32,6 +34,7 @@ async def trace_id_middleware(request: Request, call_next):
                          (time.monotonic() - started) * 1000)
         raise
     finally:
+        delegation.reset(credential_context)
         reset_trace_id()
 
 

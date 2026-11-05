@@ -142,7 +142,7 @@ def test_editor_observation_is_control_only_and_cannot_change_approval():
 ])
 def test_real_checkpoint_round_trip_applies_summary_only_after_confirmation(
         monkeypatch, tmp_path, browser_status, reported, expected, initial_description):
-    monkeypatch.setattr(confirm.settings, "jwt_secret", secrets.token_urlsafe(32))
+    monkeypatch.setattr(confirm.settings, "confirmation_secret", secrets.token_urlsafe(32))
     ledger = Ledger(str(tmp_path / "summary.sqlite3"))
     monkeypatch.setattr(writes, "ledger_for", lambda _: ledger)
     def call(name, arguments=None):
@@ -311,7 +311,7 @@ def test_client_failure_is_reported_as_tool_error(monkeypatch):
 
 
 def test_large_summary_is_bound_by_digest_and_never_copied_into_approval_token(monkeypatch):
-    monkeypatch.setattr(confirm.settings, "jwt_secret", secrets.token_urlsafe(32))
+    monkeypatch.setattr(confirm.settings, "confirmation_secret", secrets.token_urlsafe(32))
     content = "摘要正文" * 4000
     observed = {"scope": "editor_draft", "editor_id": "editor-1", "revision": 0, "description": ""}
     runtime = SimpleNamespace(config=config(), tool_call_id="summary-create", state={

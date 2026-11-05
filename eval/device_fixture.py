@@ -7,10 +7,10 @@ from unittest.mock import patch
 
 import httpx
 
-from agent import confirm
+from agent import confirm, delegation
 from agent.domains import device_actions, device_reads
 from eval.own_fixtures import SECRET
-from tools import base, device
+from tools import base
 
 
 @contextmanager
@@ -39,11 +39,12 @@ def backend():
         api = stack.enter_context(client())
         for owner, key, value in [
             (base, "_client", api),
-            (confirm.settings, "jwt_secret", SECRET),
+            (confirm.settings, "confirmation_secret", SECRET),
+            (confirm.settings, "agent_assertion_secret", SECRET),
+            (delegation, "credential", lambda uid: "offline-host-capability"),
             (device_reads.settings, "iot_enabled", True),
             (device_reads, "_read", lambda uid: [
                 {"id": "isolated-demo", "name": "isolated", "online": True}]),
-            (device, "_jwt_secret", lambda: SECRET),
             (device_actions, "httpx", SimpleNamespace(Client=client, HTTPError=httpx.HTTPError)),
         ]:
             stack.enter_context(patch.object(owner, key, value))

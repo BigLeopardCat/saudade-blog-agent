@@ -1,6 +1,5 @@
 # -*- coding: utf-8 -*-
-"""身份断言验签换库的**契约**：新验签 vs 旧手写验签**逐例同判**。
-"""
+"""身份断言验签换库的**契约**：新验签 vs 旧手写验签**逐例同判**。"""
 
 from __future__ import annotations
 
@@ -40,8 +39,7 @@ def rust_assertion(sub=7, aud=AUD, ttl=60, role=None, secret=FIXTURE_KEY, iat=No
     那枚地雷；这一份才是 Rust 真正会发出来的东西。
     """
     now = int(time.time())
-    payload = {"sub": sub, "aud": aud, "exp": now + ttl,
-               "iat": now if iat is None else iat}
+    payload = {"sub": sub, "aud": aud, "exp": now + ttl, "iat": now if iat is None else iat}
     if role:
         payload["role"] = role
     return _mint(payload, secret)
@@ -93,9 +91,10 @@ def _report(bad: list[str]) -> None:
 
 
 def _stub(secret=FIXTURE_KEY):
-    """把 `settings.jwt_secret` 换成夹具值（调用方负责还原 —— 跨套件还原层也看着它）。"""
+    """Use a fixture assertion key; the caller restores settings."""
     from config.settings import settings
-    settings.jwt_secret = secret
+
+    settings.agent_assertion_secret = secret
     return settings
 
 
@@ -122,26 +121,43 @@ def test_rust_shaped_numeric_sub_is_accepted():
         # 反控：默认选项下**必须**炸 —— 这就是那个地雷本身
         raised = ""
         try:
-            pyjwt.decode(tok, FIXTURE_KEY, algorithms=["HS256"], audience=AUD,
-                         options={"require": ["exp", "sub", "aud"]})
+            pyjwt.decode(
+                tok,
+                FIXTURE_KEY,
+                algorithms=["HS256"],
+                audience=AUD,
+                options={"require": ["exp", "sub", "aud"]},
+            )
         except pyjwt.InvalidTokenError as e:
             raised = type(e).__name__
         ok = raised == "InvalidSubjectError"
-        print(f"  {'✅' if ok else '❌'} 反控：`verify_sub` 用默认值 ⇒ 抛 "
-              f"`InvalidSubjectError`  [{raised or '没抛'}]")
+        print(
+            f"  {'✅' if ok else '❌'} 反控：`verify_sub` 用默认值 ⇒ 抛 "
+            f"`InvalidSubjectError`  [{raised or '没抛'}]"
+        )
         if not ok:
             bad.append(f"反控没炸（{raised or '没抛'}）—— 那条注释就成了一句空话")
         # 反过来：`verify_sub: True` 对**字符串** sub 是放行的 ⇒ 证明地雷的成因是类型，
         # 而不是"我们关掉的那个选项其实无关紧要"
         str_tok = _mint({"sub": "7", "aud": AUD, "exp": int(time.time()) + 60})
-        ok = pyjwt.decode(str_tok, FIXTURE_KEY, algorithms=["HS256"], audience=AUD,
-                          options={"require": ["exp", "sub", "aud"]})["sub"] == "7"
-        print(f"  {'✅' if ok else '❌'} 对照：字符串 sub 在**默认**选项下放行"
-              f"（地雷的成因是类型，不是那个选项无关紧要）")
+        ok = (
+            pyjwt.decode(
+                str_tok,
+                FIXTURE_KEY,
+                algorithms=["HS256"],
+                audience=AUD,
+                options={"require": ["exp", "sub", "aud"]},
+            )["sub"]
+            == "7"
+        )
+        print(
+            f"  {'✅' if ok else '❌'} 对照：字符串 sub 在**默认**选项下放行"
+            f"（地雷的成因是类型，不是那个选项无关紧要）"
+        )
         if not ok:
             bad.append("对照不成立")
     finally:
-        _stub(orig.jwt_secret)
+        _stub(orig.agent_assertion_secret)
     _report(bad)
 
 
@@ -149,12 +165,23 @@ def test_rust_shaped_numeric_sub_is_accepted():
 _CASES = [
     ("合法（数字 sub）", lambda s: rust_assertion(secret=s), 7),
     ("带 role", lambda s: rust_assertion(sub=3, role="user", secret=s), 3),
-    ("role 为 null", lambda s: _mint({"sub": 3, "aud": AUD, "exp": int(time.time()) + 60,
-                                     "role": None}, s), 3),
-    ("多余声明", lambda s: _mint({"sub": 3, "aud": AUD, "exp": int(time.time()) + 60,
-                                 "foo": "bar", "jti": "x"}, s), 3),
-    ("字符串 sub（旧 Rust）", lambda s: _mint({"sub": "3", "aud": AUD,
-                                           "exp": int(time.time()) + 60}, s), 3),
+    (
+        "role 为 null",
+        lambda s: _mint({"sub": 3, "aud": AUD, "exp": int(time.time()) + 60, "role": None}, s),
+        3,
+    ),
+    (
+        "多余声明",
+        lambda s: _mint(
+            {"sub": 3, "aud": AUD, "exp": int(time.time()) + 60, "foo": "bar", "jti": "x"}, s
+        ),
+        3,
+    ),
+    (
+        "字符串 sub（旧 Rust）",
+        lambda s: _mint({"sub": "3", "aud": AUD, "exp": int(time.time()) + 60}, s),
+        3,
+    ),
     ("过期", lambda s: rust_assertion(ttl=-10, secret=s), None),
     ("错 aud", lambda s: rust_assertion(aud="other", secret=s), None),
     ("缺 aud", lambda s: _mint({"sub": 7, "exp": int(time.time()) + 60}, s), None),
@@ -162,14 +189,24 @@ _CASES = [
     ("缺 sub", lambda s: _mint({"aud": AUD, "exp": int(time.time()) + 60}, s), None),
     ("sub 为 0", lambda s: rust_assertion(sub=0, secret=s), None),
     ("sub 为负", lambda s: rust_assertion(sub=-1, secret=s), None),
-    ("sub 不是数字", lambda s: _mint({"sub": "abc", "aud": AUD,
-                                     "exp": int(time.time()) + 60}, s), None),
+    (
+        "sub 不是数字",
+        lambda s: _mint({"sub": "abc", "aud": AUD, "exp": int(time.time()) + 60}, s),
+        None,
+    ),
     ("别的密钥签的", lambda s: rust_assertion(secret=OTHER_KEY), None),
     # 真·`alg:none` 攻击：头部说 none、**签名段是空的**。两边都必须拒（旧实现算出的
     # HMAC 与空串比不相等；PyJWT 直接说 alg 不在白名单里）。
-    ("alg:none 且签名为空（真攻击）",
-     lambda s: _mint({"sub": 7, "aud": AUD, "exp": int(time.time()) + 60}, s,
-                     header={"alg": "none", "typ": "JWT"}).rsplit(".", 1)[0] + ".", None),
+    (
+        "alg:none 且签名为空（真攻击）",
+        lambda s: _mint(
+            {"sub": 7, "aud": AUD, "exp": int(time.time()) + 60},
+            s,
+            header={"alg": "none", "typ": "JWT"},
+        ).rsplit(".", 1)[0]
+        + ".",
+        None,
+    ),
     ("垃圾串", lambda s: "not.a.jwt", None),
     ("空串", lambda s: "", None),
     ("两段（少一段）", lambda s: "a.b", None),
@@ -180,9 +217,9 @@ _CASES = [
 # 安全效果（攻击者拿不到密钥就伪造不出签名）。新增的白名单只是把这件事写成显式的。
 _TIGHTENED = {
     "头部写 RS256、签名却是合法 HS256": "旧实现**从不读 `alg`** ⇒ 放行；"
-                                      "PyJWT 的 `algorithms=[\"HS256\"]` 白名单拒绝",
+    'PyJWT 的 `algorithms=["HS256"]` 白名单拒绝',
     "头部写 alg:none、签名却是合法 HS256": "同上。（这一格不是真攻击——真攻击的签名段是空的，"
-                                         "两边都拒，见 `_CASES` 里那条）",
+    "两边都拒，见 `_CASES` 里那条）",
 }
 # 还有一处**理论上的**差异，但实测不可观测，所以不写成判据：PyJWT 的过期判据是
 # `exp <= now`、旧实现是 `exp < now`。要看见它得让 `time.time()` 恰好返回整数
@@ -217,9 +254,11 @@ def test_new_and_old_agree_case_by_case():
         if not ok:
             bad.append("空密钥没 fail-closed")
     finally:
-        _stub(orig.jwt_secret)
-    print(f"  ℹ️ 另有 {len(_TIGHTENED)} 格**故意不同**（收紧）"
-          f"，单列在 `test_tightenings_are_deliberate`")
+        _stub(orig.agent_assertion_secret)
+    print(
+        f"  ℹ️ 另有 {len(_TIGHTENED)} 格**故意不同**（收紧）"
+        f"，单列在 `test_tightenings_are_deliberate`"
+    )
     _report(bad)
 
 
@@ -236,87 +275,55 @@ def test_tightenings_are_deliberate():
     orig = _stub()
     try:
         now = int(time.time())
-        rs256 = _mint({"sub": 7, "aud": AUD, "exp": now + 60}, FIXTURE_KEY,
-                      header={"alg": "RS256", "typ": "JWT"})
-        none_hdr = _mint({"sub": 7, "aud": AUD, "exp": now + 60}, FIXTURE_KEY,
-                         header={"alg": "none", "typ": "JWT"})
-        for name, tok in (("头部 RS256 + 合法 HS256 签名", rs256),
-                          ("头部 alg:none + 合法 HS256 签名", none_hdr)):
+        rs256 = _mint(
+            {"sub": 7, "aud": AUD, "exp": now + 60},
+            FIXTURE_KEY,
+            header={"alg": "RS256", "typ": "JWT"},
+        )
+        none_hdr = _mint(
+            {"sub": 7, "aud": AUD, "exp": now + 60},
+            FIXTURE_KEY,
+            header={"alg": "none", "typ": "JWT"},
+        )
+        for name, tok in (
+            ("头部 RS256 + 合法 HS256 签名", rs256),
+            ("头部 alg:none + 合法 HS256 签名", none_hdr),
+        ):
             new = authentication.verify_assertion_claims(tok)
             old = _old_verify(tok)
             ok = new is None and old is not None
-            print(f"  {'✅' if ok else '❌'} {name}：新={'拒' if new is None else '放'} / "
-                  f"旧={'拒' if old is None else '放'}")
+            print(
+                f"  {'✅' if ok else '❌'} {name}：新={'拒' if new is None else '放'} / "
+                f"旧={'拒' if old is None else '放'}"
+            )
             if not ok:
-                bad.append(f"{name} 的收紧没成立（新={'拒' if new is None else '放'}，"
-                           f"旧={'拒' if old is None else '放'}）")
+                bad.append(
+                    f"{name} 的收紧没成立（新={'拒' if new is None else '放'}，"
+                    f"旧={'拒' if old is None else '放'}）"
+                )
         print(f"  ℹ️ {_EXP_BOUNDARY_NOTE}")
     finally:
-        _stub(orig.jwt_secret)
+        _stub(orig.agent_assertion_secret)
     _report(bad)
 
 
-def test_signers_keep_their_shape():
-    """④ 签发侧形状一字未改：`{sub, exp, role}`，**没有 aud、没有 ver**，`sub` 是数字。
-
-    这两条"没有"都是刻意的（`_sign_local_jwt` 的注释里写了为什么）：Rust
-    `Validation::default()` 会因多余的 `aud` 判 audience 无效；而 `ver` 缺席是
-    "这枚令牌代表 Rust 本次请求刚认证过的身份"的载体，填任何值都会让
-    "改过密码的管理员 + 管理助手"整体 401。
-    """
-    import jwt as pyjwt
-
+def test_signers_keep_their_shape(monkeypatch):
+    """Both backend adapters forward the same host capability without resigning it."""
+    from agent import delegation
     from tools import base, device
 
-    bad: list[str] = []
-    print("④ 签发侧形状")
-    from config.settings import settings
-    orig = settings.jwt_secret
-    settings.jwt_secret = FIXTURE_KEY
-    try:
-        for name, fn, want_ttl in (
-                ("_sign_local_jwt", lambda: base._sign_local_jwt(7, "admin"), 60),
-                ("_sign_user_jwt", lambda: device._sign_user_jwt(7), 300)):
-            tok = fn()
-            claims = pyjwt.decode(tok, FIXTURE_KEY, algorithms=["HS256"],
-                                  options={"verify_aud": False, "verify_sub": False})
-            ok = isinstance(claims.get("sub"), int) and claims["sub"] == 7
-            print(f"  {'✅' if ok else '❌'} {name}：`sub` 是数字  [{claims.get('sub')!r}]")
-            if not ok:
-                bad.append(f"{name} 的 sub 不是数字")
-            ok = "aud" not in claims and "ver" not in claims
-            print(f"  {'✅' if ok else '❌'} {name}：**不带 `aud`、不带 `ver`**  "
-                  f"[aud={'aud' in claims} ver={'ver' in claims}]")
-            if not ok:
-                bad.append(f"{name} 多带了 aud/ver —— Rust 那边会验不过")
-            left = claims["exp"] - int(time.time())
-            ok = want_ttl - 5 <= left <= want_ttl + 2
-            print(f"  {'✅' if ok else '❌'} {name}：有效期约 {want_ttl}s  [{left}s]")
-            if not ok:
-                bad.append(f"{name} 的有效期是 {left}s，期望约 {want_ttl}s")
-            ok = len(tok.split(".")) == 3 and "=" not in tok
-            print(f"  {'✅' if ok else '❌'} {name}：三段 base64url 且无 padding")
-            if not ok:
-                bad.append(f"{name} 的形状不对")
-        # 空密钥 ⇒ 抛（fail-closed 原样保留，SAU-012）
-        _stub(EMPTY_KEY)
-        for name, fn in (("_sign_local_jwt", lambda: base._sign_local_jwt(7, None)),
-                         ("_sign_user_jwt", lambda: device._sign_user_jwt(7))):
-            try:
-                fn()
-                print(f"  ❌ {name}：空密钥却签出来了")
-                bad.append(f"{name} 空密钥没抛")
-            except RuntimeError:
-                print(f"  ✅ {name}：空密钥 ⇒ `RuntimeError`（fail-closed 原样保留）")
-    finally:
-        settings.jwt_secret = orig
-    _report(bad)
+    opaque = "host-issued-capability"
+    monkeypatch.setattr(delegation, "credential", lambda uid: opaque if uid == 7 else None)
+    assert base._sign_local_jwt(7, "admin") == opaque
+    assert device._sign_user_jwt(7) == opaque
 
 
 if __name__ == "__main__":
-    for _fn in (test_rust_shaped_numeric_sub_is_accepted,
-                test_new_and_old_agree_case_by_case,
-                test_tightenings_are_deliberate,
-                test_signers_keep_their_shape):
+    for _fn in (
+        test_rust_shaped_numeric_sub_is_accepted,
+        test_new_and_old_agree_case_by_case,
+        test_tightenings_are_deliberate,
+        test_signers_keep_their_shape,
+    ):
         _fn()
     print("\n全部通过")

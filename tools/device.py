@@ -11,7 +11,6 @@ import time
 from typing import Annotated
 
 import httpx
-import jwt
 from langchain_core.runnables.config import RunnableConfig
 from langchain_core.tools import tool
 
@@ -31,33 +30,14 @@ logger = logging.getLogger(__name__)
 DEVICE_SERVICE_URL = _settings.device_service_url
 
 
-def _jwt_secret() -> str:
-    """Read the current signing configuration at call time, including test overrides."""
-    return _settings.jwt_secret
-
-# Suppress repeated display content per actor within a short window.
 _DISPLAY_DEDUP_SECONDS = 30.0
-# The deduplication claim is atomic because tools may run concurrently.
 _last_display: dict[int, tuple[str, float]] = {}
 _last_display_lock = threading.Lock()
 
-# A missing request ID prevents acknowledgment polling and must be logged explicitly.
-# Enqueue success does not establish that the physical device executed the command.
-
 
 def _sign_user_jwt(user_id: int) -> str:
-    """Sign a five-minute HS256 actor JWT for device-service ownership checks.
-
-    Reject an empty key. Numeric sub and absent aud match the verifier contract;
-    PyJWT encode preserves those claim types without applying decode validation."""
-    secret = _jwt_secret()
-    if not secret:
-        raise RuntimeError("JWT_SECRET 未配置（空密钥不许代签令牌）——检查 .env / 环境变量")
-    return jwt.encode({
-        "sub": user_id,
-        "exp": int(time.time()) + 300,
-        "role": "user",
-    }, secret, algorithm="HS256")
+    from agent.delegation import credential
+    return credential(user_id)
 
 
 def _device_get_user_id(config: RunnableConfig) -> int:

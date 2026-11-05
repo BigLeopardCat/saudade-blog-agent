@@ -26,7 +26,7 @@ SERVICE_ENDPOINTS = [("POST", "/review"), ("POST", "/graph/query"), *BUILD_ENDPO
 
 @pytest.fixture
 def client(monkeypatch):
-    monkeypatch.setattr(settings, "jwt_secret", secrets.token_hex(32))
+    monkeypatch.setattr(settings, "agent_assertion_secret", secrets.token_hex(32))
     monkeypatch.setattr(settings, "agent_require_assertion", True)
     # No lifespan: service endpoints must work independently of a chat runtime.
     monkeypatch.setattr(app.state, "runtime", None)
@@ -38,7 +38,7 @@ def client(monkeypatch):
 def signed(role="admin", *, ttl=60):
     assertion = jwt.encode({"sub": 7, "role": role, "aud": "agent",
                             "exp": int(time.time()) + ttl},
-                           settings.jwt_secret, algorithm="HS256")
+                           settings.agent_assertion_secret, algorithm="HS256")
     return {"X-Agent-Assertion": assertion}
 
 

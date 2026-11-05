@@ -114,7 +114,7 @@ def tags(monkeypatch):
     with httpx.Client(transport=httpx.MockTransport(handle)) as client:
         monkeypatch.setattr(base, "_client", client)
         monkeypatch.setattr(
-            "config.settings.jwt_secret", "tag-native-test-secret-at-least-32-bytes"
+            "config.settings.confirmation_secret", "tag-native-test-secret-at-least-32-bytes"
         )
         yield state
 

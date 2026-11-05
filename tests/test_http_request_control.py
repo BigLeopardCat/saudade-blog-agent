@@ -15,7 +15,6 @@ from tools import base
 def test_active_request_stops_another_attempt(monkeypatch, stop, private):
     now, calls, event = [0.0], [], Event()
     monkeypatch.setattr(control, "time", SimpleNamespace(monotonic=lambda: now[0]))
-    monkeypatch.setattr(base, "_jwt_secret", lambda: "offline-request-control")
 
     def handle(request):
         calls.append(request)
