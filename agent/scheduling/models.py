@@ -147,7 +147,7 @@ class Definition(Trigger):
     title: Annotated[StrictStr, Field(min_length=1, max_length=80)]
     action: Literal["reminder", "read_only_agent", "publish_announcement", "admin_write"]
     instruction: Annotated[StrictStr, Field(min_length=1, max_length=2000)]
-    write: dict | None = None
+    write: dict | None = Field(default=None, exclude_if=lambda value: value is None)
 
     @field_validator("title", "instruction")
     @classmethod

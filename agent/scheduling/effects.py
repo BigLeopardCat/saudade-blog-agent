@@ -128,11 +128,13 @@ def propose(principal: Principal, cid, executor, spec, question, target, schedul
     values = schedule.model_dump() if isinstance(schedule, Trigger) else dict(schedule)
     if values.get("run_at") is not None and isinstance(values["run_at"], str):
         values["run_at"] = parse_time(values["run_at"], values.get("timezone", "Asia/Shanghai"))
+    details = question if str(target) in question else f"{question}\n{target}"
+    preview = details if len(details) <= 2000 else details[:1960] + "…（完整内容以审批卡为准）"
     write = effect(executor, spec)
     definition = Definition(
         **values,
         title=task_title(write),
-        instruction="执行已审批的业务变更",
+        instruction=preview,
         action="admin_write",
         write=write,
     )
@@ -141,7 +143,6 @@ def propose(principal: Principal, cid, executor, spec, question, target, schedul
         "schedule_id": "sc_" + uuid.uuid4().hex,
         "definition": definition.model_dump(mode="json"),
     }
-    details = question if str(target) in question else f"{question}\n{target}"
     return proposal(
         principal,
         cid,

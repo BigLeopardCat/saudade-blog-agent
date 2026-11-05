@@ -155,3 +155,53 @@ def test_disabled_scheduler_never_issues_a_future_execution_card(monkeypatch):
     )
     assert result.kind == "unavailable"
     signer.assert_not_called()
+
+
+def test_optional_write_payload_does_not_change_saved_read_schedule_identity():
+    from contextlib import nullcontext
+    from types import SimpleNamespace
+
+    from agent.principal import Principal
+    from agent.runtime.writes import operation_key
+    from agent.scheduling.models import CreateArguments
+    from agent.scheduling.service import ScheduleService
+
+    owner = Principal(7, "admin", "assertion")
+    identifier = "sc_" + "a" * 32
+    definition = {
+        "title": "reminder",
+        "instruction": "read-only text",
+        "action": "reminder",
+        "timezone": "Asia/Shanghai",
+        "run_at": None,
+        "delay_seconds": 60,
+        "cron": None,
+        "expires_at": None,
+        "condition": None,
+        "grace_seconds": 3600,
+    }
+    frozen = {"schedule_id": identifier, "definition": definition}
+    normalized = CreateArguments.model_validate(frozen).model_dump(mode="json")
+    grant = {"uid": 7, "conv": 42, "jti": "b" * 32}
+    assert operation_key(grant, "create_automation", normalized) == operation_key(
+        grant, "create_automation", frozen
+    )
+    row = SimpleNamespace(
+        status="DELAYED",
+        attributes={
+            "schedule_id": identifier,
+            "definition": definition,
+            "start_at": "2026-11-07T00:00:00+00:00",
+        },
+    )
+    backend = SimpleNamespace(
+        mutation=lambda _: nullcontext(),
+        recurring=lambda *_: None,
+        once=lambda *_: row,
+        enqueue_once=Mock(),
+    )
+    service = ScheduleService(backend, lambda _: owner)
+    result = service.create(owner, identifier, definition)
+    assert result["changed"] is False
+    assert result["schedule"]["definition"] == definition
+    backend.enqueue_once.assert_not_called()
