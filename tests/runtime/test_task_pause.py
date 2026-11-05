@@ -1,5 +1,6 @@
 """A user-requested hold must interrupt the framework and keep business effects unexecuted."""
 
+import secrets
 from dataclasses import replace
 
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
@@ -76,7 +77,7 @@ def test_waiting_approval_is_not_listed_as_resumable_and_expired_card_can_be_del
     snapshot = selected.store.load(cfg)
     selected.inputs.finish(snapshot.run, [], paused=True, awaiting_confirmation=True)
     assert list_paused(selected, actor)["items"] == []
-    selected.update_state(cfg, {"pending_confirm": {"token": "expired"},
+    selected.update_state(cfg, {"pending_confirm": {"token": secrets.token_urlsafe(32)},
                                "pending_action": {"jti": "old"}})
     result = cancel_paused(selected, actor, 42, "old-card")
     assert result["cancelled"]
