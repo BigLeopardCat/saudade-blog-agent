@@ -10,7 +10,7 @@ from agent.reports import sanitize_untrusted
 from agent.runtime.results import TurnResult
 from agent.runtime.turns import check_cancelled
 from agent.runtime.writes import bound_context
-from agent.scheduling.models import Trigger
+from agent.scheduling.models import WriteSchedule
 from tools import base
 from tools.result import invalid_args
 
@@ -85,7 +85,7 @@ def prepare_category_create(
     introduce: targets.Text | None = None,
     icon: targets.Text | None = None,
     color: targets.Color | None = None,
-    schedule: Trigger | None = None,
+    schedule: WriteSchedule | None = None,
 ) -> object:
     """Optional schedule delays this exact approved change; use run_at for clock times.
     准备新建文章分类确认，不写入。默认以名字作路径；含空格或路径保留字符时需另填path_name。
@@ -110,7 +110,7 @@ def prepare_category_update(
     introduce: targets.Text | None = None,
     icon: targets.Text | None = None,
     color: targets.Color | None = None,
-    schedule: Trigger | None = None,
+    schedule: WriteSchedule | None = None,
 ) -> object:
     """Optional schedule delays this exact approved change; use run_at for clock times.
     准备修改分类确认，不写入。按category_id或完整category_name定位，同时提供时交叉核对。
@@ -137,7 +137,7 @@ def prepare_category_delete(
     config: RunnableConfig,
     category_id: targets.Identifier | None = None,
     category_name: targets.TargetName | None = None,
-    schedule: Trigger | None = None,
+    schedule: WriteSchedule | None = None,
 ) -> object:
     """Optional schedule delays this exact approved change; use run_at for clock times.
     准备删除分类确认，不写入。以唯一编号或完整原名定位；文章不删除，关联记录改为无分类。

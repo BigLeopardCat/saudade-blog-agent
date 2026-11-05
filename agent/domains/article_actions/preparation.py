@@ -12,7 +12,7 @@ from agent.reports import sanitize_untrusted
 from agent.runtime.results import TurnResult
 from agent.runtime.turns import check_cancelled
 from agent.runtime.writes import bound_context
-from agent.scheduling.models import Trigger
+from agent.scheduling.models import WriteSchedule
 from tools import base
 from tools.result import invalid_args
 
@@ -29,7 +29,7 @@ def prepare_article_state(
     category: Annotated[str, Field(min_length=1, max_length=100)] | None = None,
     status: Literal["public", "private", "draft"] | None = None,
     is_top: Annotated[StrictInt, Field(ge=0, le=1)] | None = None,
-    schedule: Trigger | None = None,
+    schedule: WriteSchedule | None = None,
 ) -> object:
     """按明确请求准备文章发布、隐藏、转草稿或置顶确认；只改指定字段，不编辑正文、署名或修改稿。
 

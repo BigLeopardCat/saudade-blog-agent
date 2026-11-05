@@ -153,3 +153,26 @@ def test_storage_allowlist_rejects_arbitrary_urls_before_download(monkeypatch):
     ]:
         with pytest.raises(ValueError):
             reads._download({"imageUrl": url}, admin())
+
+
+def test_background_metadata_reads_do_not_require_a_writable_conversation(gallery):
+    cfg = {
+        "configurable": {
+            "principal": Principal(7, "admin", SOURCE_ASSERTION),
+            "user_id": 7,
+            "thread_id": "schedule:isolated-checkpoint",
+        }
+    }
+    result = reads.get_gallery_index.invoke({}, config=cfg)
+    assert result.kind == "ok" and gallery["writes"] == 0
+    count = len(gallery["requests"])
+    assert (
+        preparation.prepare_gallery_image_change.invoke(
+            {"image_id": 11, "display_name": "new name"}, config=cfg
+        ).kind
+        == "unavailable"
+    )
+    assert len(gallery["requests"]) == count
+    cfg["configurable"]["user_id"] = 8
+    assert reads.get_gallery_index.invoke({}, config=cfg).kind == "unavailable"
+    assert len(gallery["requests"]) == count

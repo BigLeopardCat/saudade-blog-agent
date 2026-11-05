@@ -205,3 +205,50 @@ def test_optional_write_payload_does_not_change_saved_read_schedule_identity():
     assert result["changed"] is False
     assert result["schedule"]["definition"] == definition
     backend.enqueue_once.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "timing",
+    [
+        {"delay_seconds": 300},
+        {"run_at": "2026-12-01T15:00", "timezone": "Asia/Shanghai"},
+        {"delay_seconds": 300, "when_article_public": 54, "expires_at": "2026-12-02T15:00+08:00"},
+    ],
+)
+def test_write_schedule_uses_the_shared_trigger_validation_and_storage_shape(timing):
+    from agent.scheduling.models import WriteSchedule
+
+    compact = WriteSchedule.model_validate(timing)
+    full = Trigger.model_validate(compact.definition_values())
+    assert full.delay_seconds == timing.get("delay_seconds")
+    assert (full.condition.article_id if full.condition else None) == timing.get(
+        "when_article_public"
+    )
+    definition = Definition(
+        **compact.definition_values(),
+        title="分类",
+        instruction="已批准内容",
+        action="admin_write",
+        write=change(),
+    )
+    assert (
+        definition.model_dump(mode="json")["condition"] == full.model_dump(mode="json")["condition"]
+    )
+
+
+@pytest.mark.parametrize(
+    "timing",
+    [
+        {},
+        {"delay_seconds": 300, "cron": "0 8 * * *"},
+        {"delay_seconds": 300, "grace_seconds": 0},
+        {"delay_seconds": 300, "run_at": "2026-12-01T15:00"},
+        {"delay_seconds": 300, "when_article_public": 54},
+        {"delay_seconds": 300, "timezone": "not/a-zone"},
+    ],
+)
+def test_write_schedule_rejects_unsupported_or_inconsistent_controls(timing):
+    from agent.scheduling.models import WriteSchedule
+
+    with pytest.raises(ValidationError):
+        WriteSchedule.model_validate(timing)

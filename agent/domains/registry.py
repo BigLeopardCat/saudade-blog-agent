@@ -1,14 +1,16 @@
 """The migrated confirmation domains; no model intent matching belongs here."""
 
-from agent.domains import article_summary
+from agent.domains import article_summary, talks
 from agent.domains.account_actions import transactions as account_actions
 from agent.domains.announcements import deletion as announcement_deletions
 from agent.domains.announcements import transactions as announcements
+from agent.domains.article_actions import deletion as article_deletions
 from agent.domains.article_actions import transactions as article_state
 from agent.domains.article_tags import transactions as article_tags
 from agent.domains.automations import transactions as automations
 from agent.domains.categories import transactions as categories
 from agent.domains.favorites import transactions as favorites
+from agent.domains.gallery import folders as gallery_folders
 from agent.domains.gallery import transactions as gallery
 from agent.domains.image_generation import transactions as image_generation
 from agent.domains.messages import transactions as messages
@@ -20,15 +22,30 @@ from agent.domains.quota_actions import transactions as quota_actions
 from agent.domains.tags import transactions as tags
 from agent.domains.todos import transactions as todos
 
-_DOMAINS = {"announcement_deletions": announcement_deletions,
-            "notification_deletions": notification_deletions,
-            "favorites": favorites, "notifications": notifications,
-            "messages": messages, "todos": todos, "article_state": article_state,
-            "moderation": moderation, "quota_actions": quota_actions, "article_tags": article_tags,
-            "categories": categories, "tags": tags, "announcements": announcements,
-            "account_actions": account_actions, "notices": notices, "automations": automations,
-            "editor_summary": article_summary, "gallery": gallery,
-            "image_generation": image_generation}
+_DOMAINS = {
+    "talks": talks,
+    "article_deletions": article_deletions,
+    "gallery_folders": gallery_folders,
+    "announcement_deletions": announcement_deletions,
+    "notification_deletions": notification_deletions,
+    "favorites": favorites,
+    "notifications": notifications,
+    "messages": messages,
+    "todos": todos,
+    "article_state": article_state,
+    "moderation": moderation,
+    "quota_actions": quota_actions,
+    "article_tags": article_tags,
+    "categories": categories,
+    "tags": tags,
+    "announcements": announcements,
+    "account_actions": account_actions,
+    "notices": notices,
+    "automations": automations,
+    "editor_summary": article_summary,
+    "gallery": gallery,
+    "image_generation": image_generation,
+}
 
 
 def native_domain(grant):
@@ -45,8 +62,7 @@ def confirmed_domain(grant):
 
 def operation_names():
     """Permission identities for server-executed operations, not model-callable tools."""
-    return frozenset(name for domain in _DOMAINS.values()
-                     for name in domain.PERMISSION_OPERATIONS)
+    return frozenset(name for domain in _DOMAINS.values() for name in domain.PERMISSION_OPERATIONS)
 
 
 def bound_tool_names():
@@ -58,6 +74,15 @@ def bound_tool_names():
     from agent.domains.gallery.reads import tools as gallery_reads
     from agent.domains.image_generation.tools import tools as generation_tools
     from agent.runtime.task_pause import pause_task
-    return (frozenset({search_public_activity.name, pause_task.name})
-            | frozenset(tools(None, True)) | NAMES | frozenset(gallery_tools(gallery_reads()))
-            | frozenset(generation_tools()))
+
+    return (
+        frozenset({search_public_activity.name, pause_task.name})
+        | frozenset(tools(None, True))
+        | NAMES
+        | frozenset(gallery_tools(gallery_reads()))
+        | frozenset(generation_tools())
+        | frozenset(talks.tools({}))
+        | {talks.list_admin_talks.name}
+        | frozenset(article_deletions.tools({}))
+        | frozenset(gallery_folders.tools({}))
+    )

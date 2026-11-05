@@ -8,7 +8,10 @@ from agent.domains.notices.targets import DEFAULT_TITLE
 DOMAIN_DESCRIPTIONS = {
     "admin_image_generation": "AI image generation: approve prompt/references, inspect results, "
     "then approve gallery storage.",
-    "admin_gallery": "Gallery images/folders, image inspection, metadata edits and article covers.",
+    "admin_talks": "Publish, edit or permanently delete administrator posts; "
+    "not guestbook moderation.",
+    "admin_gallery": "Gallery images/folders, inspection, metadata edits, folder creation/empty "
+    "deletion and article covers.",
     "article_editor": "Collaborate on the open editor: draft, title/body review, summary approval "
     "and in-place publication.",
     "admin_automations": "Persistent reminders, scheduled read-only analysis and approved "
@@ -23,7 +26,7 @@ DOMAIN_DESCRIPTIONS = {
     "conversation_images": "Inspect a referenced conversation image.",
     "own_activity": "Read your guestbook entries/status or this conversation's original messages.",
     "admin_catalog": "Articles including private/drafts; confirm state, pinning "
-    "and article-tag changes.",
+    "article-tag changes and permanent article deletion with impact review.",
     "admin_notices": "Prepare a personal notification: recipient and body; "
     f"default title: {DEFAULT_TITLE}.",
     "admin_tags": "Tag dictionary and confirmed tag creation, edits or deletion. "

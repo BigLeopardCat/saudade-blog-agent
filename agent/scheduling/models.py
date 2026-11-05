@@ -21,6 +21,16 @@ from pydantic import (
 Identifier = Annotated[StrictStr, Field(pattern=r"^sc_[0-9a-f]{32}$")]
 PositiveID = Annotated[StrictInt, Field(gt=0)]
 
+_CLOCK_DESCRIPTION = (
+    "Explicit ISO date/time or local HH:MM. For relative requests use delay_seconds."
+)
+_DELAY_DESCRIPTION = (
+    "User-requested relative duration, starting AFTER approval: in five minutes "
+    "means 300. Never turn it into an estimated clock time."
+)
+ClockTime = Annotated[StrictStr, Field(description=_CLOCK_DESCRIPTION)]
+DelaySeconds = Annotated[StrictInt, Field(ge=5, le=31_536_000, description=_DELAY_DESCRIPTION)]
+
 
 def utc_now():
     return datetime.now(timezone.utc)
@@ -61,17 +71,8 @@ class Trigger(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     timezone: StrictStr = "Asia/Shanghai"
-    run_at: AwareDatetime | None = Field(
-        default=None,
-        description="Explicit date/clock time, ISO date-time or local HH:MM. "
-        "Never calculate this for a "
-        "relative request such as in five minutes; use delay_seconds for relative requests.",
-    )
-    delay_seconds: Annotated[StrictInt, Field(ge=5, le=31_536_000)] | None = Field(
-        default=None,
-        description="Relative duration requested by the user, starting after human "
-        "approval: in five minutes means 300. Do not turn it into an estimated run_at clock time.",
-    )
+    run_at: AwareDatetime | None = Field(default=None, description=_CLOCK_DESCRIPTION)
+    delay_seconds: DelaySeconds | None = None
     cron: Annotated[StrictStr, Field(min_length=9, max_length=100)] | None = None
     expires_at: AwareDatetime | None = None
     condition: ArticlePublic | None = None
@@ -141,6 +142,31 @@ class Trigger(BaseModel):
             raise ValueError("deadline must follow the execution time")
         if self.condition and self.expires_at - start > timedelta(days=7):
             raise ValueError("condition waiting is limited to seven days")
+
+
+class WriteSchedule(BaseModel):
+    """One approved business change, with optional public-article waiting."""
+
+    model_config = ConfigDict(extra="forbid")
+    run_at: ClockTime | None = None
+    delay_seconds: DelaySeconds | None = None
+    timezone: StrictStr = "Asia/Shanghai"
+    when_article_public: PositiveID | None = None
+    expires_at: StrictStr | None = None
+
+    def definition_values(self):
+        values = self.model_dump(exclude={"when_article_public"})
+        values["condition"] = (
+            ArticlePublic(article_id=self.when_article_public)
+            if self.when_article_public is not None
+            else None
+        )
+        return values
+
+    @model_validator(mode="after")
+    def valid(self):
+        Trigger.model_validate(self.definition_values())
+        return self
 
 
 class Definition(Trigger):

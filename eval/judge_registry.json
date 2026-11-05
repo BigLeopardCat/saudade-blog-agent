@@ -12,7 +12,7 @@
         0
       ],
       "agent/action_text.py": [
-        110,
+        117,
         0
       ],
       "agent/adminops_account.py": [
@@ -211,6 +211,10 @@
         0,
         0
       ],
+      "agent/domains/article_actions/deletion.py": [
+        0,
+        0
+      ],
       "agent/domains/article_actions/preparation.py": [
         0,
         0
@@ -336,6 +340,10 @@
         0
       ],
       "agent/domains/gallery/__init__.py": [
+        0,
+        0
+      ],
+      "agent/domains/gallery/folders.py": [
         0,
         0
       ],
@@ -496,6 +504,10 @@
         0
       ],
       "agent/domains/tags/transactions.py": [
+        0,
+        0
+      ],
+      "agent/domains/talks.py": [
         0,
         0
       ],
@@ -860,7 +872,7 @@
         0
       ],
       "agent/scheduling/effects.py": [
-        5,
+        7,
         0
       ],
       "agent/scheduling/errors.py": [
@@ -981,7 +993,7 @@
       ]
     },
     "total": [
-      420,
+      429,
       33
     ]
   },
@@ -1011,7 +1023,7 @@
       "file": "agent/action_text.py",
       "kind": "collection",
       "name": "_NOARG_VERB",
-      "size": 40,
+      "size": 47,
       "category": "system_data",
       "q": "_NOARG_VERB",
       "why": "工具名 → 动作文案的渲染表（键是工具名，无参调用时的显示字）；图库工具新增七条展示名称，不参与意图路由或授权。；生图新增五条动作名称，只供进度和回执展示。"

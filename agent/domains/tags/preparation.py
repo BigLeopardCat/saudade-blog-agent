@@ -10,7 +10,7 @@ from agent.reports import sanitize_untrusted
 from agent.runtime.results import TurnResult
 from agent.runtime.turns import check_cancelled
 from agent.runtime.writes import bound_context
-from agent.scheduling.models import Trigger
+from agent.scheduling.models import WriteSchedule
 from tools import base
 from tools.result import invalid_args
 
@@ -84,7 +84,7 @@ def prepare_tag_create(
     color: targets.Color | None = None,
     parent_id: targets.Identifier | None = None,
     parent_name: targets.TargetName | None = None,
-    schedule: Trigger | None = None,
+    schedule: WriteSchedule | None = None,
 ) -> object:
     """Optional schedule delays this exact approved change; use run_at for clock times.
     准备新建标签确认，不写入。默认一级；填写一级父标签编号或完整名字则创建二级。
@@ -113,7 +113,7 @@ def prepare_tag_update(
     to_level: targets.Level | None = None,
     parent_id: targets.Identifier | None = None,
     parent_name: targets.TargetName | None = None,
-    schedule: Trigger | None = None,
+    schedule: WriteSchedule | None = None,
 ) -> object:
     """Optional schedule delays this exact approved change; use run_at for clock times.
     准备改标签名字、颜色、父级或层级确认，不写入。编号必须同时给当前level(1/2)。
@@ -143,7 +143,7 @@ def prepare_tag_delete(
     tag_name: targets.TargetName | None = None,
     level: targets.Level | None = None,
     parent_id: targets.Identifier | None = None,
-    schedule: Trigger | None = None,
+    schedule: WriteSchedule | None = None,
 ) -> object:
     """Optional schedule delays this exact approved change; use run_at for clock times.
     准备删除标签确认，不写入。编号需同时提供当前层级；或用完整原名，二级同名可补父编号。
