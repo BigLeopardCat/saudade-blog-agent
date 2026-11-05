@@ -34,6 +34,7 @@ from agent.runtime.task_input_policy import model_messages, replace_unpublished_
 from agent.runtime.tool_execution import append_result
 from agent.runtime.turns import check_cancelled
 from config.settings import settings
+from models.errors import error_fields
 from utils.trace import record
 
 
@@ -242,6 +243,7 @@ class SessionMiddleware(AgentMiddleware):
         menu = session.menu
         trace_context.tools(menu, session.traced_contracts)
         started, response, invoked = time.monotonic(), None, False
+        error = None
         tool_choice = ("none" if reviewing else "auto") if menu else None
         try:
             with native_call(session.budget, prompt, menu, model_key=request.model,
@@ -260,6 +262,9 @@ class SessionMiddleware(AgentMiddleware):
                 session.budget.settle(ticket, response)
                 return (replace(result, result=[*extra_inputs, *result.result])
                         if extra_inputs else result)
+        except BaseException as exc:
+            error = exc
+            raise
         finally:
             response_model = _model_name(response=response)
             reasoning = (getattr(response, "additional_kwargs", {}) or {}).get("reasoning_content")
@@ -274,7 +279,7 @@ class SessionMiddleware(AgentMiddleware):
                        invalid_tool_calls=bool(getattr(response, "invalid_tool_calls", ())),
                        content_chars=len(text_content(getattr(response, "content", ""))),
                        reasoning_chars=len(str(reasoning or "")),
-                       **usage_fields(response))
+                       **usage_fields(response), **error_fields(error))
 
     @hook_config(can_jump_to=["end", "model"])
     def after_model(self, state, runtime):
