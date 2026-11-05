@@ -12,7 +12,7 @@
     "top_defs": 50
   },
   "scripts/build_word_graph.py": {
-    "lines": 1137,
+    "lines": 1133,
     "top_defs": 36
   },
   "tests/test_judge_offline.py": {

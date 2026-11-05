@@ -858,16 +858,9 @@ def write_artifacts(payload: dict, nodes: np.ndarray, words: list[str], transfor
     (gdir / fname).chmod(0o644)
     (gdir / "manifest.json").write_text(
         json.dumps({"v": build_id, "file": fname, "bytes": nbytes,
-                    # site = 产物的**归属站点**：浏览器**运行期**拿它跟本站 origin 比，
-                    # 不是本站就不画（第三方 clone 时，别人的文章不该被画到他的首页上）。
-                    # 判定在 frontend/src/components/WordGraphExhibit/loader.ts —— 20261003
-                    # 从"构建期写死"挪到运行期：构建期那道闸对"迁移后自己重建成功"的站点
-                    # 永远关着门（`import.meta.env` 在构建时就烧死了），那正是别人用不了的一半原因。
+                    # 浏览器在运行时校验产物归属站点，避免展示其他站点的文章图谱。
                     "site": site,
-                    # built 一并透出（前端展示柜的「向量数据库更新时间」角标读它）：
-                    # 产物 blob 里本来就有，但前端拿它要先把整个 100KB+ 的 graph-*.js
-                    # 下下来，manifest 只有一百多字节、还能 no-store 命中。值同源，
-                    # 不另取 time.time()——否则两个时间戳会差几毫秒、对不上账。
+                    # manifest 与完整产物使用同一更新时间。
                     "built": payload["built"]},
                    ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
     (gdir / "manifest.json").chmod(0o644)
