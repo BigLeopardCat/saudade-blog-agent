@@ -172,14 +172,14 @@ async def chat(req: ChatRequest, request: Request):
         release_slot(request)
         raise
     trace_id = get_trace_id()
-    outcome = {"reason": "client_closed", "errors": 0}
+    end_reason, trace_errors = "client_closed", 0
     loop = asyncio.get_running_loop()
     jobs = workers.request(
         loop,
         functools.partial(release_slot, request),
         control=RequestControl(threading.Event(), time.monotonic() + STREAM_TOTAL_TIMEOUT,
                                session_id=conversation_session(principal, req.conversation_id)),
-        on_complete=lambda: finish_trace(trace_id, outcome["reason"], 0.0, outcome["errors"]),
+        on_complete=lambda: finish_trace(trace_id, end_reason, 0.0, trace_errors),
     )
     try:
         turn = functools.partial(
@@ -202,10 +202,10 @@ async def chat(req: ChatRequest, request: Request):
         final_reply = result.reply.strip()
         if not final_reply and not result.events:
             final_reply = _RECOVERY_SENTENCE
-        outcome["reason"] = "producer_done"
+        end_reason = "producer_done"
         return ChatResponse(reply=final_reply, success=True, events=result.events)
     except Exception:
-        outcome.update(reason="producer_error", errors=1)
+        end_reason, trace_errors = "producer_error", 1
         logger.exception("Agent invocation failed")
         return ChatResponse(reply=PRODUCER_ERROR_TEXT, success=False, error=PRODUCER_ERROR_TEXT)
 
