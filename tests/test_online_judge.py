@@ -136,6 +136,26 @@ def test_missing_historical_voice_stays_unknown():
     assert online_judge.runtime_context([])["product_facts"] is None
 
 
+def test_available_but_unused_tools_retain_their_captured_parameter_contracts(tmp_path):
+    contracts = [
+        {"name": "navigate_page", "parameters": {"type": "object", "properties": {
+            "path": {"type": "string", "enum": ["/", "/about"]}}}},
+        {"name": "prepare_tag_update", "parameters": {"type": "object", "properties": {
+            "schedule": {"$ref": "#/$defs/Schedule"}}, "$defs": {
+                "Schedule": {"type": "object", "properties": {
+                    "delay_seconds": {"type": "integer", "minimum": 1}}}}}},
+    ]
+    events = [{"node": "native", "event": "tool_contract", "schema": {"function": item}}
+              for item in contracts]
+    case = recorded(tmp_path, trace_extra={"events": events})
+    model = Model()
+    run(tmp_path, case, model)
+    data = json.loads(model.messages[0][1]["content"])
+    context = data["turns"][0]["runtime_context"]
+    assert data["tool_catalogs"][context["available_tools_ref"]] == contracts
+    assert context["used_tool_contracts"] == []
+
+
 def test_recorded_browser_state_is_evidence_without_becoming_authorization(tmp_path):
     page = {"current_url": "/article/23", "page_title": "Asyncio",
             "current_darkmode": "on", "current_effects": "sakura"}

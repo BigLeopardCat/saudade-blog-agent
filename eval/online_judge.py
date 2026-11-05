@@ -108,8 +108,7 @@ def runtime_context(events):
         "permissions": callers[-1].get("permissions") if callers else None,
         "turn_phase": phases[-1].get("phase") if phases else "not_recorded",
         "receipt_count": phases[-1].get("receipt_count") if phases else None,
-        "available_tools": [{"name": item["name"], "description": item.get("description", "")}
-                            for item in contracts],
+        "available_tools": contracts,
         "used_tool_contracts": [item for item in contracts if item["name"] in used],
         "missing": [name for name, present in (("caller", callers), ("phase", phases),
                                                ("tool_contracts", contracts)) if not present],
