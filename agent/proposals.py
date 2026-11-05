@@ -1,15 +1,34 @@
 """Create signed operation proposals for the shared confirmation protocol."""
 
 
-def proposal(principal, cid, workflow, spec, *, executor, question, target, choices=None,
-             payload=None):
+def proposal(
+    principal,
+    cid,
+    workflow,
+    spec,
+    *,
+    executor,
+    question,
+    target,
+    choices=None,
+    payload=None,
+    schedule=None,
+):
+    if schedule is not None:
+        from agent.scheduling.effects import propose
+
+        return propose(principal, cid, executor, spec, question, target, schedule)
+
     from agent import confirm
     from agent.runtime.results import TurnResult
     from tools.base import unavailable
 
     specs = spec if isinstance(spec, list) else [spec]
-    if choices is not None and (len(choices) != len(specs) or not 1 <= len(specs) <= 50
-                                or not all(isinstance(label, str) and label for label in choices)):
+    if choices is not None and (
+        len(choices) != len(specs)
+        or not 1 <= len(specs) <= 50
+        or not all(isinstance(label, str) and label for label in choices)
+    ):
         return unavailable("确认选项与操作清单不一致，本次未生成确认卡。")
     token = confirm.sign(principal.uid, cid, workflow, specs, executor=executor)
     if not token:
@@ -20,8 +39,10 @@ def proposal(principal, cid, workflow, spec, *, executor, question, target, choi
         {"label": "取消操作", "value": "no", "kind": "default"},
     ]
     if choices is not None:
-        options[1:1] = [{"label": label, "value": f"pick:{index}", "kind": "choice"}
-                        for index, label in enumerate(choices)]
+        options[1:1] = [
+            {"label": label, "value": f"pick:{index}", "kind": "choice"}
+            for index, label in enumerate(choices)
+        ]
     reply = question + "\n确认后执行；修改需求直接在聊天里说。"
     return TurnResult(
         reply,

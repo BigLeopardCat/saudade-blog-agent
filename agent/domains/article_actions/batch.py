@@ -59,14 +59,20 @@ def combine(specs):
             raise ValueError("文章批量事务不能混入其他操作")
         parts.append(validate(spec.get("args")))
     first = parts[0]
-    if any((part["status"], part["is_top"]) != (first["status"], first["is_top"])
-           for part in parts):
+    if any(
+        (part["status"], part["is_top"]) != (first["status"], first["is_top"]) for part in parts
+    ):
         raise ValueError("文章批量目标状态不一致")
-    return validate({"items": [item for part in parts for item in part["items"]],
-                     "status": first["status"], "is_top": first["is_top"]})
+    return validate(
+        {
+            "items": [item for part in parts for item in part["items"]],
+            "status": first["status"],
+            "is_top": first["is_top"],
+        }
+    )
 
 
-def prepare(article_ids, category, status, is_top, config):
+def prepare(article_ids, category, status, is_top, config, *, schedule=None):
     selection = {"articleIds": article_ids} if article_ids is not None else {"category": category}
     rows = base._admin_read_post(targets.PATH + "batch/prepare", selection, config)
     if isinstance(rows, base.ToolResult):
@@ -82,7 +88,8 @@ def prepare(article_ids, category, status, is_top, config):
         return base.unavailable("批量文章范围或版本不完整，本次未准备或执行改动。")
     observed("article_state_batch", {"items": current}, ("items",))
     change = {"status": status, "is_top": is_top}
-    changed = [row for row in current if not targets.satisfied(row, change)]
+    changed = current if schedule is not None else [
+        row for row in current if not targets.satisfied(row, change)]
     if not changed:
         text = f"匹配{len(current)}篇文章，均无需改动。"
         return TurnResult(text, {"noop_note": text, "noop_text": text, "receipts": []})
@@ -102,9 +109,11 @@ def prepare(article_ids, category, status, is_top, config):
         "set_status",
         [{"tool": NAME, "args": {**change, "items": [item]}} for item in args["items"]],
         executor="article_state",
-        question=targets.description(change) + "；未勾选的文章保留原状态。"
+        question=targets.description(change)
+        + "；未勾选的文章保留原状态。"
         + (lines[-1] if len(current) != len(changed) else ""),
         target=text,
+        schedule=schedule,
         choices=[f"《{sanitize_untrusted(row['title'], 100)}》（#{row['id']}）" for row in changed],
     )
 

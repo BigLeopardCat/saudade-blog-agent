@@ -10,6 +10,7 @@ from agent.reports import sanitize_untrusted
 from agent.runtime.results import TurnResult
 from agent.runtime.turns import check_cancelled
 from agent.runtime.writes import bound_context
+from agent.scheduling.models import WriteSchedule
 from tools import base
 from tools.result import invalid_args
 
@@ -44,7 +45,7 @@ def description(plan):
     return f"{heading}：{details}。{scope}"
 
 
-def _prepare(action, target, fields, config):
+def _prepare(action, target, fields, config, schedule=None):
     check_cancelled(config)
     if not available(config):
         return base.unavailable("需要已验签的管理员和稳定会话，本次未生成确认卡。")
@@ -58,7 +59,7 @@ def _prepare(action, target, fields, config):
     args = {"version": plan["version"], "intent": request}
     spec = {"tool": TOOLS[action], "args": args}
     text = description(plan)
-    if plan["before"] == plan["after"]:
+    if schedule is None and plan["before"] == plan["after"]:
         return TurnResult(
             text, {"noop_note": text, "noop_text": text, "task_satisfied": [spec], "receipts": []}
         )
@@ -72,6 +73,7 @@ def _prepare(action, target, fields, config):
         executor="categories",
         question=text + "。确认执行？",
         target=text,
+        schedule=schedule,
     )
 
 
@@ -83,8 +85,10 @@ def prepare_category_create(
     introduce: targets.Text | None = None,
     icon: targets.Text | None = None,
     color: targets.Color | None = None,
+    schedule: WriteSchedule | None = None,
 ) -> object:
-    """准备新建文章分类确认，不写入。默认以名字作路径；含空格或路径保留字符时需另填path_name。
+    """Optional schedule delays this exact approved change; use run_at for clock times.
+    准备新建文章分类确认，不写入。默认以名字作路径；含空格或路径保留字符时需另填path_name。
     可选简介、图标和#RRGGBB颜色，不填保持未设置；名字和非空路径不能与已有分类冲突。
     """
     return _prepare(
@@ -92,6 +96,7 @@ def prepare_category_create(
         None,
         {"name": name, "pathName": path_name, "introduce": introduce, "icon": icon, "color": color},
         config,
+        schedule,
     )
 
 
@@ -105,8 +110,10 @@ def prepare_category_update(
     introduce: targets.Text | None = None,
     icon: targets.Text | None = None,
     color: targets.Color | None = None,
+    schedule: WriteSchedule | None = None,
 ) -> object:
-    """准备修改分类确认，不写入。按category_id或完整category_name定位，同时提供时交叉核对。
+    """Optional schedule delays this exact approved change; use run_at for clock times.
+    准备修改分类确认，不写入。按category_id或完整category_name定位，同时提供时交叉核对。
     仅填写要改的字段；new_name是新名字。简介、图标和颜色可传空串清空；路径不能清空。
     名字/路径的变化会影响所有关联文章的分类展示，确认卡列出影响数量。
     """
@@ -121,6 +128,7 @@ def prepare_category_update(
             "color": color,
         },
         config,
+        schedule,
     )
 
 
@@ -129,11 +137,13 @@ def prepare_category_delete(
     config: RunnableConfig,
     category_id: targets.Identifier | None = None,
     category_name: targets.TargetName | None = None,
+    schedule: WriteSchedule | None = None,
 ) -> object:
-    """准备删除分类确认，不写入。以唯一编号或完整原名定位；文章不删除，关联记录改为无分类。
+    """Optional schedule delays this exact approved change; use run_at for clock times.
+    准备删除分类确认，不写入。以唯一编号或完整原名定位；文章不删除，关联记录改为无分类。
     确认卡包含文章和编辑草稿的影响数量；关联范围变化后必须重新确认。
     """
-    return _prepare("delete", {"id": category_id, "name": category_name}, {}, config)
+    return _prepare("delete", {"id": category_id, "name": category_name}, {}, config, schedule)
 
 
 def tools(read_tools):

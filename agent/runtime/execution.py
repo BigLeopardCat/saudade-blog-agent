@@ -3,6 +3,7 @@
 from functools import partial
 
 from langchain.agents import create_agent
+from langchain.agents.middleware import ModelRetryMiddleware
 from langchain_core.messages import RemoveMessage, SystemMessage
 from langgraph.graph.message import REMOVE_ALL_MESSAGES
 from langgraph.types import Command, Overwrite, StateSnapshot
@@ -16,6 +17,7 @@ from agent.runtime.memory_media import stage
 from agent.runtime.middleware import OrderedToolsMiddleware, SessionMiddleware
 from agent.runtime.recovery import restore_session
 from agent.runtime.results import TurnResult
+from models.errors import retryable_model_request
 
 
 class FrameworkExecution:
@@ -46,7 +48,10 @@ class FrameworkExecution:
         middleware = SessionMiddleware(self.session)
         middleware.system_message = self.system
         return create_agent(self.session.model, tools=[], system_prompt=self.system,
-                            middleware=[OrderedToolsMiddleware(middleware),
+                            middleware=[ModelRetryMiddleware(
+                                            max_retries=1, initial_delay=2, max_delay=3,
+                                            retry_on=retryable_model_request, on_failure="error"),
+                                        OrderedToolsMiddleware(middleware),
                                         ApprovalResumeMiddleware(middleware),
                                         *self.session.middleware,
                                         ConversationCompaction(self.session), middleware],

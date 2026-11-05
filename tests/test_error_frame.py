@@ -15,6 +15,7 @@ from _judge import collector
 from _service import app, service_request
 
 from agent.api.schemas import ChatRequest, ChatResponse
+from agent.principal import Principal
 
 ROOT = Path(__file__).resolve().parent.parent  # 仓根（20260924：测试统一搬进 tests/）
 sys.path.insert(0, str(ROOT))
@@ -227,7 +228,7 @@ def _sync_chat_failure_shape():
         raise KeyError(boom)
 
     app.state.runtime = object()
-    server._resolve_principal = lambda request, uid: type("P", (), {"uid": 1})()
+    server._resolve_principal = lambda request, uid: Principal(uid=1)
     server.build_messages = lambda req, **kwargs: []
     server.run_turn = _explode
     try:

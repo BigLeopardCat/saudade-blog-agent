@@ -1,11 +1,5 @@
 # -*- coding: utf-8 -*-
-"""**账号**族真写夹具的只读在位检查。
-
-所以这条读路径与 `eval/identity_preflight.py` 同源：**自签一枚只读的管理员令牌**
-（`tools.base._sign_local_jwt`，与 agent 代调完全同一个函数），打一次 GET，**只看，不写**。
-两条纪律分别由两个测试守着（分类族：不带身份；账号族：不带写动词），见
-`tests/test_golden_fixture.py` 的 ④ 与 ⑦。
-"""
+"""Read-only fixture account inventory through host-issued tool credentials."""
 from __future__ import annotations
 
 import json
@@ -55,12 +49,10 @@ def directory() -> dict[str, dict] | None:
     if not uid.isdigit() or int(uid) <= 0:
         return None
     try:
-        # 与真链路同源：同一个签名函数、同一个后台地址（lazy import 同 identity_preflight：
-        # import 顺序/副作用，且取不到签名能力本身要能报成"不知道"）。
-        from tools.base import ADMIN_BASE, _sign_local_jwt
+        from tools.base import ADMIN_BASE, host_credential
     except Exception:  # noqa: BLE001
         return None
-    token = _sign_local_jwt(int(uid), "admin")
+    token = host_credential(int(uid))
     req = urllib.request.Request(
         f"{ADMIN_BASE}{DIRECTORY_PATH}", headers={"Authorization": "Bearer " + token})
     try:
@@ -111,19 +103,10 @@ def state_label(state: str, name: str) -> str:
 
 
 def declared_fixtures() -> list[str]:
-    """用例文件里声明的**账号**族夹具名（`requires_fixture_kind: "account"`）。
+    """Return the distinct account fixture names declared by the corpus.
 
-    **派生，不手写**：残留哨兵要放行的正是"名正言顺的那些夹具"，而谁名正言顺由用例
-    说了算——手抄一份名单，早晚出现"用例改了名字、哨兵还在放行旧的"（那种哨兵会对着
-    一条真残留一直报，然后被学会忽略）。读不到用例文件 ⇒ 空列表（哨兵只报前缀族，
-    不做"这个是不是合法夹具"的判断——宁可多报一行，不可静默放过）。
-
-    **去重**（保留首次出现顺序）：账号夹具是**常驻**的（用例只改它的状态，见模块头注），
-    所以多条用例共用同一个夹具是正常形态、而且会越来越多（20260926 起「解冻」与「发通知」
-    两条都挂在 `agent_fixture_freeze_a` 上）。不去重的话，`--verify` 会印成
-    「也不算残留：[A, A]」，而"同一个名字出现两次"读起来像是有两个夹具或有人插重了
-    ——哨兵自己生成的一句误导，正是这类哨兵最容易被学会忽略的方式。
-    """
+    Multiple cases may intentionally share the same fixture; deduplicate names
+    without changing case counts or eligibility."""
     try:
         lines = CASES_FILE.read_text(encoding="utf-8").splitlines()
     except OSError:
@@ -136,7 +119,9 @@ def declared_fixtures() -> list[str]:
             case = json.loads(ln)
         except Exception:  # noqa: BLE001
             continue
-        if str(case.get("requires_fixture_kind") or "") == "account" and case.get("requires_fixture"):
+        if str(case.get("requires_fixture_kind") or "") == "account" and case.get(
+            "requires_fixture"
+        ):
             name = str(case["requires_fixture"])
             if name not in out:
                 out.append(name)
@@ -144,16 +129,9 @@ def declared_fixtures() -> list[str]:
 
 
 def leftovers(directory: dict[str, dict], declared: list[str]) -> list[str]:
-    """名录里属于夹具前缀族、**又不是任何用例声明的那个**的账号名（排序后返回）。
+    """Return sorted fixture-prefixed account names not declared by any case.
 
-    与分类族的哨兵有一处**刻意的不对称**：那边用例跑完夹具就该消失，所以前缀族里出现
-    任何一行都是残留；这边夹具是**常驻的**（用例只改它的状态、不复位就得重跑 SQL），
-    所以"声明的那些"必须放行。真正要报的是别的东西——一次中断的 SQL、一次手工插入、
-    或者将来某个探针把靶子留在了库里。
-
-    **只认前缀**（`startswith`，与清场 SQL 的 `LIKE 'agent\_fixture\_%'` 同一判据）：
-    名字中间出现该串的账号，清场语句删不掉它，哨兵也就不该报它。
-    """
+    Prefix comparison is literal; underscores are not SQL LIKE wildcards."""
     keep = set(declared)
     return sorted(u for u in directory if u.startswith(FIXTURE_PREFIX) and u not in keep)
 

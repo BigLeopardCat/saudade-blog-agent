@@ -1,8 +1,9 @@
 """Adapt signed confirmation execution and lifecycle updates to the server protocol."""
 
 import hashlib
-import json
 import time
+
+from agent.contracts.events import StreamEvent
 
 
 def presentation(result):
@@ -93,11 +94,11 @@ def frames(execution):
     """Cancellation precedes a replacement card and its host persistence event."""
     event = execution.get("pending_event")
     if event:
-        yield "__PENDING__:" + json.dumps(event, ensure_ascii=False)
+        yield StreamEvent("pending", event)
     card = public_card(execution)
     if card is None:
         return
-    yield "__CONFIRM__:" + json.dumps(card, ensure_ascii=False)
+    yield StreamEvent("confirmation", card)
     action = execution.get("pending_action")
     if action:
-        yield "__PENDING__:" + json.dumps(action, ensure_ascii=False)
+        yield StreamEvent("pending", action)

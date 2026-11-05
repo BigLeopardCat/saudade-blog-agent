@@ -70,11 +70,32 @@ def gallery(monkeypatch):
 def test_index_is_compact_and_has_no_pixels_or_storage_tokens(gallery):
     result = reads.get_gallery_index.invoke({}, config=admin())
     page = json.loads(str(result))
+    assert result.data == page
     assert len(page["items"][0]["description"]) == 160
     assert page["items"][0]["description_truncated"]
     assert "imageUrl" not in str(result) and "version" not in str(result)
     assert gallery["requests"][0].url.params["limit"] == "20"
     assert not gallery["writes"]
+
+
+@pytest.mark.parametrize("rows", [
+    [{"id": 2, "parentId": 0, "name": "a"}, {"id": 1, "parentId": 0, "name": "b"}],
+    [{"id": 1, "parentId": 0, "name": "a"}] * 2,
+    [{"id": 1, "parentId": 2, "name": "wrong parent"}],
+    [{"id": True, "parentId": 0, "name": "invalid identifier"}],
+    [None],
+])
+def test_invalid_folder_pages_never_look_like_an_empty_or_valid_collection(monkeypatch, rows):
+    monkeypatch.setattr(base, "_admin_get", lambda *args: rows)
+    result = reads.list_gallery_folders.invoke({}, config=admin())
+    assert result.kind == "unavailable" and result.data is None
+
+
+def test_folder_page_exposes_the_same_structured_continuation_as_its_display(monkeypatch):
+    rows = [{"id": i, "parentId": 0, "name": str(i)} for i in range(1, 4)]
+    monkeypatch.setattr(base, "_admin_get", lambda *args: rows)
+    result = reads.list_gallery_folders.invoke({"limit": 2}, config=admin())
+    assert result.data == json.loads(str(result)) == {"items": rows[:2], "next_cursor": 2}
 
 
 def test_preparation_and_replay_are_readonly_then_exactly_one_write(gallery, tmp_path):
@@ -153,3 +174,26 @@ def test_storage_allowlist_rejects_arbitrary_urls_before_download(monkeypatch):
     ]:
         with pytest.raises(ValueError):
             reads._download({"imageUrl": url}, admin())
+
+
+def test_background_metadata_reads_do_not_require_a_writable_conversation(gallery):
+    cfg = {
+        "configurable": {
+            "principal": Principal(7, "admin", SOURCE_ASSERTION),
+            "user_id": 7,
+            "thread_id": "schedule:isolated-checkpoint",
+        }
+    }
+    result = reads.get_gallery_index.invoke({}, config=cfg)
+    assert result.kind == "ok" and gallery["writes"] == 0
+    count = len(gallery["requests"])
+    assert (
+        preparation.prepare_gallery_image_change.invoke(
+            {"image_id": 11, "display_name": "new name"}, config=cfg
+        ).kind
+        == "unavailable"
+    )
+    assert len(gallery["requests"]) == count
+    cfg["configurable"]["user_id"] = 8
+    assert reads.get_gallery_index.invoke({}, config=cfg).kind == "unavailable"
+    assert len(gallery["requests"]) == count

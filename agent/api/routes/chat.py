@@ -14,11 +14,12 @@ from agent import checkpoint, confirm, runtime_probe
 from agent.api.authentication import resolve_principal as _resolve_principal
 from agent.api.context import build_messages
 from agent.api.dependencies import release_slot, require_runtime, require_workers, try_acquire_slot
-from agent.api.events import control_event, text_stream
+from agent.api.events import KEEPALIVE_FRAME, text_stream
 from agent.api.events import frame as sse_frame
 from agent.api.events import response as stream_response
 from agent.api.schemas import ChatRequest, ChatResponse
 from agent.api.turns import NativeCancelled, next_stream_item, run_turn, stream_to_queue
+from agent.contracts.events import StreamEvent
 from agent.products.blog.context import conversation_session
 from agent.runtime.control import RequestControl
 from agent.runtime.memory_scope import safe_request
@@ -32,6 +33,7 @@ router = APIRouter()
 STREAM_IDLE_TIMEOUT = settings.stream_idle_timeout
 STREAM_TOTAL_TIMEOUT = settings.stream_total_timeout
 STREAM_BUFFER_SIZE = 64
+STREAM_PING_INTERVAL = 15.0
 PRODUCER_ERROR_TEXT = "服务这边出了点问题，这一轮没能生成回复，请再说一次。"
 _RECOVERY_SENTENCE = "喵呜……主人抱歉，泠月喵刚才脑袋卡壳了，没有生成出回复，请主人再问一遍喵～ 🐾"
 
@@ -95,6 +97,51 @@ def _quota_blocked_text(limit: int) -> str:
     )
 
 
+def _confirmation(req, principal):
+    """Verify and narrow signed approval identically for both transports."""
+    grant = None
+    if req.confirm_token.strip():
+        grant = confirm.verify(req.confirm_token, principal.uid, req.conversation_id)
+        if grant is None:
+            _record_invalid_confirm(
+                get_trace_id(), principal.uid, req.conversation_id, len(req.confirm_token))
+            return None, INVALID_CONFIRM_TEXT
+        if req.confirm_pick.strip():
+            grant, error = confirm.narrow(grant, req.confirm_pick)
+            if error or grant is None:
+                _record_invalid_confirm(
+                    get_trace_id(), principal.uid, req.conversation_id, len(req.confirm_token),
+                    reason="invalid_pick", detail=error, exit_reason="invalid_confirm_pick")
+                return None, INVALID_PICK_TEXT
+    return grant, None
+
+
+def _start_turn_trace(runtime, req, principal, thread_id):
+    start_trace(
+        get_trace_id(),
+        req.user_id,
+        thread_id,
+        {
+            "source": "production",
+            "runtime": runtime_probe.request_context(runtime),
+            "principal_role": principal.known_role,
+            "principal_source": principal.source,
+            "message": (req.message or "")[:200],
+            "message_truncated": len(req.message or "") > 200,
+            "page_context": {"current_url": req.current_url, "page_title": req.page_title,
+                             "current_effects": req.current_effects,
+                             "current_darkmode": req.current_darkmode,
+                             "current_weather": (req.current_weather.facts()
+                                                 if req.current_weather else None)},
+            "has_image": bool(req.image),
+            "memory_strategy": "framework_compaction",
+            "history_len": len(req.history),
+            "conversation_id": req.conversation_id,
+            "has_confirm": bool(req.confirm_token),
+        },
+    )
+
+
 @router.post("/chat", response_model=ChatResponse)
 async def chat(req: ChatRequest, request: Request):
     runtime = require_runtime(request)
@@ -103,29 +150,44 @@ async def chat(req: ChatRequest, request: Request):
     req.user_id = principal.uid
     req = safe_request(req, principal)
 
+    grant, refusal = _confirmation(req, principal)
+    if refusal:
+        return ChatResponse(reply=refusal, success=True)
     if req.quota_blocked:
         _limit = req.chat_quota.limit if req.chat_quota is not None else 0
         logger.info("[quota] 额度用尽，本轮零执行（uid=%s limit=%s）", req.user_id, _limit)
         return ChatResponse(reply=_quota_blocked_text(_limit), success=True, error=None)
 
-    messages = build_messages(req, holds_context=runtime_probe.holds_context(runtime))
+    messages = ([] if grant is not None or req.resume_task else
+                build_messages(req, holds_context=runtime_probe.holds_context(runtime)))
     thread_id = checkpoint.thread_id_for(
         req.user_id, req.conversation_id, runtime_probe.holds_context(runtime)
     )
 
     if not await try_acquire_slot(request):
         raise HTTPException(503, "Agent busy（并发已满），请稍后重试")
+    try:
+        _start_turn_trace(runtime, req, principal, thread_id)
+    except Exception:
+        release_slot(request)
+        raise
+    trace_id = get_trace_id()
+    end_reason, trace_errors = "client_closed", 0
     loop = asyncio.get_running_loop()
     jobs = workers.request(
         loop,
         functools.partial(release_slot, request),
         control=RequestControl(threading.Event(), time.monotonic() + STREAM_TOTAL_TIMEOUT,
                                session_id=conversation_session(principal, req.conversation_id)),
+        on_complete=lambda: finish_trace(trace_id, end_reason, 0.0, trace_errors),
     )
     try:
-        turn = (functools.partial(run_turn, task_id=req.task_id, resume_task=req.resume_task)
-                if req.task_id or req.resume_task else run_turn)
-        reply, nav_line, exec_rows = await jobs.submit(
+        turn = functools.partial(
+            run_turn, task_id=req.task_id, resume_task=req.resume_task,
+            confirm_grant=grant, browser_feedback=req.browser_feedback,
+            browser_result=req.browser_result.model_dump() if req.browser_result else None,
+            task_inputs=req.task_inputs)
+        result = await jobs.submit(
             workers.executor,
             turn,
             runtime,
@@ -135,21 +197,15 @@ async def chat(req: ChatRequest, request: Request):
             principal,
             req.conversation_id,
         )
-        if not reply.strip():
+        if not result.reply.strip() and not result.events:
             logger.warning("Agent returned empty reply message_chars=%s", len(req.message))
-        final_reply = reply.strip() or _RECOVERY_SENTENCE
-
-        final_nav = nav_line
-        if final_nav and not final_reply.startswith(("NAVIGATE:", "AUTO_NAVIGATE:")):
-            if final_nav.startswith("EFFECT:"):
-                final_reply = final_reply + "\n" + final_nav
-            else:
-                final_reply = final_nav + "\n" + final_reply
-
-        return ChatResponse(
-            reply=final_reply, success=True, executions=exec_rows
-        )
+        final_reply = result.reply.strip()
+        if not final_reply and not result.events:
+            final_reply = _RECOVERY_SENTENCE
+        end_reason = "producer_done"
+        return ChatResponse(reply=final_reply, success=True, events=result.events)
     except Exception:
+        end_reason, trace_errors = "producer_error", 1
         logger.exception("Agent invocation failed")
         return ChatResponse(reply=PRODUCER_ERROR_TEXT, success=False, error=PRODUCER_ERROR_TEXT)
 
@@ -166,46 +222,9 @@ async def chat_stream(req: ChatRequest, request: Request):
     req = safe_request(req, principal)
     logger.info("chat_stream_started user_id=%s conversation_id=%s message_chars=%s",
                 principal.uid, req.conversation_id, len(req.message or ""))
-    grant = None
-    if req.confirm_token.strip():
-        grant = confirm.verify(req.confirm_token, principal.uid, req.conversation_id)
-        if grant is None:
-            logger.warning(
-                "[confirm] 令牌验签失败（uid=%s conv=%s 长度=%d）→ 零执行",
-                principal.uid,
-                req.conversation_id,
-                len(req.confirm_token),
-            )
-            _record_invalid_confirm(
-                get_trace_id(), principal.uid, req.conversation_id, len(req.confirm_token)
-            )
-            return stream_response(text_stream(INVALID_CONFIRM_TEXT))
-        if req.confirm_pick.strip():
-            before = len(grant.get("specs") or [])
-            grant, pick_err = confirm.narrow(grant, req.confirm_pick)
-            if pick_err or grant is None:
-                logger.warning(
-                    "[confirm] 挑选记号读不懂（uid=%s conv=%s pick=%r：%s）→ 零执行",
-                    principal.uid,
-                    req.conversation_id,
-                    req.confirm_pick[:32],
-                    pick_err,
-                )
-                _record_invalid_confirm(
-                    get_trace_id(),
-                    principal.uid,
-                    req.conversation_id,
-                    len(req.confirm_token),
-                    reason="invalid_pick",
-                    detail=pick_err,
-                    exit_reason="invalid_confirm_pick",
-                )
-                return stream_response(text_stream(INVALID_PICK_TEXT))
-            logger.info(
-                "[confirm] 确认收窄：%d 件 → 1 件（%s）",
-                before,
-                (grant.get("specs") or [{}])[0].get("tool"),
-            )
+    grant, refusal = _confirmation(req, principal)
+    if refusal:
+        return stream_response(text_stream(refusal))
     if req.quota_blocked:
         _limit = req.chat_quota.limit if req.chat_quota is not None else 0
         logger.info("[quota] 额度用尽，本轮零执行（uid=%s limit=%s）", req.user_id, _limit)
@@ -218,30 +237,7 @@ async def chat_stream(req: ChatRequest, request: Request):
         thread_id = checkpoint.thread_id_for(
             req.user_id, req.conversation_id, runtime_probe.holds_context(runtime)
         )
-        start_trace(
-            get_trace_id(),
-            req.user_id,
-            thread_id,
-            {
-                "source": "production",
-                "runtime": runtime_probe.request_context(runtime),
-                "principal_role": principal.known_role,
-                "principal_source": principal.source,
-                "message": (req.message or "")[:200],
-                "message_truncated": len(req.message or "") > 200,
-                "page_context": {"current_url": req.current_url, "page_title": req.page_title,
-                                 "current_effects": req.current_effects,
-                                 "current_darkmode": req.current_darkmode,
-                                 "current_weather": (req.current_weather.facts()
-                                                     if req.current_weather else None)},
-                "has_image": bool(req.image),
-                "memory_strategy": "framework_compaction",
-                "history_len": len(req.history),
-                "conversation_id": req.conversation_id,
-                "has_exec": bool(req.executions),
-                "has_confirm": bool(req.confirm_token),
-            },
-        )
+        _start_turn_trace(runtime, req, principal, thread_id)
     except Exception:
         release_slot(request)
         raise
@@ -290,7 +286,7 @@ async def chat_stream(req: ChatRequest, request: Request):
         end_reason = "unknown"
         had_output = False
         awaiting_confirmation = False
-        last_frame = started
+        last_frame = last_ping = started
         try:
             while True:
                 try:
@@ -309,6 +305,9 @@ async def chat_stream(req: ChatRequest, request: Request):
                         progress.mark("error")
                         yield sse_frame("error", "服务响应超时，请稍后重试")
                         return
+                    if loop.time() - last_ping >= STREAM_PING_INTERVAL:
+                        last_ping = loop.time()
+                        yield KEEPALIVE_FRAME
                     continue
                 last_frame = loop.time()
                 if chunk is None:
@@ -335,14 +334,8 @@ async def chat_stream(req: ChatRequest, request: Request):
                     progress.mark("error")
                     yield sse_frame("error", PRODUCER_ERROR_TEXT)
                     return
-                if isinstance(chunk, str):
-                    try:
-                        kind, payload = control_event(chunk)
-                    except ValueError:
-                        end_reason = "producer_protocol_error"
-                        progress.mark("error")
-                        yield sse_frame("error", PRODUCER_ERROR_TEXT)
-                        return
+                if isinstance(chunk, StreamEvent):
+                    kind, payload = chunk.name, chunk.data
                     had_output |= kind in ("confirmation", "command")
                     awaiting_confirmation |= kind == "confirmation"
                     frames += 1
@@ -355,6 +348,11 @@ async def chat_stream(req: ChatRequest, request: Request):
                     had_output |= progress.reply(text)
                     frames += 1
                     yield sse_frame("text", text)
+                    continue
+                end_reason = "producer_protocol_error"
+                progress.mark("error")
+                yield sse_frame("error", PRODUCER_ERROR_TEXT)
+                return
 
             if not had_output:
                 logger.warning(

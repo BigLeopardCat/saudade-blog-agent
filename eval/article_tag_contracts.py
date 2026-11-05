@@ -18,14 +18,14 @@ def prepare(turn, state):
             "batch did not produce exactly one read-only approval")
     token = result["confirm_tokens"][0]
     grant = confirm.verify(token, 7, 42)
-    spec, = grant["specs"]
-    args = spec["args"]
-    require(grant["executor"] == "article_tags" and spec["tool"] == batch.NAME
+    args = batch.combine(grant["specs"])
+    require(grant["executor"] == "article_tags"
             and [row["id"] for row in args["items"]] == [11, 12]
             and args["intent"]["add"] == ["测试"] and args["intent"]["replace"] is None,
             "approved article set or exact tag name changed")
-    require(len(state["requests"]) == 1,
-            "explicit batch required mechanical article-by-article reads")
+    require(sum(r.method == "POST" and r.url.path.endswith("/prepare")
+                for r in state["requests"]) == 1,
+            "explicit batch required mechanical article-by-article preparations")
     return token
 
 

@@ -146,3 +146,26 @@ def test_no_result_approval_before_generation_finishes(service):
     prepare()
     result = tools.prepare_generated_image_acceptance.invoke({"job_id": ID}, config=admin())
     assert result.kind == "unavailable" and not service["accepts"]
+
+
+def test_background_generation_status_read_does_not_gain_paid_execution(service):
+    service["job"] = {"id": ID, "status": "review", "imageId": None, "error": None}
+    cfg = {
+        "configurable": {
+            "principal": Principal(7, "admin", SOURCE_ASSERTION),
+            "user_id": 7,
+            "thread_id": "schedule:isolated-checkpoint",
+        }
+    }
+    result = tools.get_image_generation.invoke({"job_id": ID}, config=cfg)
+    assert result.kind == "ok"
+    assert service["paid_calls"] == 0 and service["accepts"] == 0
+    count = len(service["requests"])
+    assert (
+        tools.prepare_generated_image_acceptance.invoke({"job_id": ID}, config=cfg).kind
+        == "unavailable"
+    )
+    assert len(service["requests"]) == count
+    cfg["configurable"]["user_id"] = 8
+    assert tools.get_image_generation.invoke({"job_id": ID}, config=cfg).kind == "unavailable"
+    assert len(service["requests"]) == count

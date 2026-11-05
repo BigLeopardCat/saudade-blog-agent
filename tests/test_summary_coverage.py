@@ -131,5 +131,5 @@ def test_retired_host_hints_schedule_no_second_call_on_actual_http_and_sdk(monke
         assert "event: done\n" in response.text and "event: summary\n" not in response.text
     else:
         assert response.json() == {"reply": "primary answer", "success": True,
-                                   "error": None, "executions": []}
+                                   "error": None, "events": []}
     assert budgets[0].model_calls == 1 and budgets[0].tokens == 25

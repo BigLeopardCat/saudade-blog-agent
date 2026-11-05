@@ -7,11 +7,12 @@ import time
 
 from langchain_core.messages import AIMessageChunk
 
+from agent.contracts.events import StreamEvent
 from agent.principal import Principal
 from agent.runtime.budget import current_budget
 from agent.runtime.control import AgentCancelled
 from agent.runtime.progress import ProgressEmitter
-from agent.transport import collect_turn, emit_to_queue
+from agent.transport import CollectedTurn, collect_turn, emit_to_queue
 from utils.trace import record
 
 logger = logging.getLogger(__name__)
@@ -106,9 +107,11 @@ def run_turn(
     resume_task=None,
     browser_feedback=False,
     browser_result=None,
-) -> tuple[str, str, list]:
-    """Run one native turn and return the legacy non-streaming response shape."""
-    turn = collect_turn(
+    confirm_grant=None,
+    task_inputs=False,
+) -> CollectedTurn:
+    """Run one turn, preserving ordered controls separately from visible prose."""
+    return collect_turn(
         runtime_events(
             runtime,
             messages,
@@ -120,9 +123,10 @@ def run_turn(
             resume_task=resume_task,
             browser_feedback=browser_feedback,
             browser_result=browser_result,
+            confirm_grant=confirm_grant,
+            task_inputs=task_inputs,
         )
     )
-    return turn.reply, turn.navigation, turn.execution
 
 
 def stream_to_queue(
@@ -179,7 +183,7 @@ def stream_to_queue(
                     continue
             if isinstance(value, AIMessageChunk):
                 visible_parts.append(str(value.content or ""))
-            elif value == "__TEXT_RESET__:{}":
+            elif isinstance(value, StreamEvent) and value.name == "text_reset":
                 visible_parts.clear()
         finally:
             if not future.done():

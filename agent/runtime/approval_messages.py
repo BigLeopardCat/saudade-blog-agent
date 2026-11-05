@@ -34,7 +34,8 @@ def receipt(awaiting, facts):
                    {key: row[key] for key in ("tool", "args", "result", "action") if key in row}
                    for row in facts["execution"]["receipts"]]}
     return awaiting.model_copy(update={"content": json.dumps(visible, ensure_ascii=False),
-        "status": "error" if unverified else "success", "artifact": None})
+        "status": "error" if unverified else "success",
+        "artifact": {"kind": "unavailable" if unverified else "ok", "data": visible}})
 
 
 def deferred_results(answered, unverified):

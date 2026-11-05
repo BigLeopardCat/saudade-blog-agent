@@ -21,8 +21,8 @@ from pydantic import ValidationError
 
 from agent import confirm
 from agent.api.schemas import QuotaInfo
-from agent.transport import command_wire
 from config.settings import settings
+from eval.command_report import command_wire
 
 
 class EvaluationError(RuntimeError):

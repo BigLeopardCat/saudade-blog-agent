@@ -18,7 +18,7 @@ import jwt
 from langgraph.checkpoint.memory import InMemorySaver
 from starlette.requests import Request
 
-from agent import confirm, idem
+from agent import confirm, delegation, idem
 from agent.products.blog.application import BlogApplication
 from agent.runtime import writes
 from agent.runtime.checkpoint_conversations import CheckpointConversationStore
@@ -32,6 +32,7 @@ from eval import (
     compaction_contracts,
     composite_task_contracts,
     confirmation_failure_contracts,
+    content_contracts,
     context_contracts,
     experience_contracts,
     image_generation_contracts,
@@ -41,6 +42,7 @@ from eval import (
     quota_task_contracts,
     reading_task_contracts,
     request_metrics,
+    scheduled_change_contracts,
     task_lifecycle_contracts,
     todo_task_contracts,
 )
@@ -73,8 +75,11 @@ class _Store:
 
 
 def _principal(role="user"):
-    token = jwt.encode({"sub": 7, "role": role, "aud": "agent",
-                        "exp": int(time.time()) + 600}, SECRET, algorithm="HS256")
+    expires = int(time.time()) + 600
+    capability = jwt.encode({"sub": 7, "role": role, "aud": "blog-tools", "ver": 0,
+                             "scope": "tools", "exp": expires}, SECRET, algorithm="HS256")
+    token = jwt.encode({"sub": 7, "role": role, "aud": "agent", "exp": expires,
+                        "delegation": capability}, SECRET, algorithm="HS256")
     request = Request({"type": "http", "headers": [
         (b"x-agent-assertion", token.encode())]})
     with patch.object(settings, "agent_assertion_secret", SECRET):
@@ -208,13 +213,17 @@ CASES = [("chat", favorite_backend, _chat),
          *account_candidate_contracts.CASES, *compaction_contracts.CASES,
          *article_tag_contracts.CASES, *confirmation_failure_contracts.CASES,
          *todo_task_contracts.CASES, *ordered_preparation_contracts.CASES,
-         *task_lifecycle_contracts.CASES]
+         *task_lifecycle_contracts.CASES,
+         *scheduled_change_contracts.CASES,
+         *content_contracts.CASES]
 
 
 def _sample(name, backend, contract, run_id, sample):
     paths, rounds = [], []
     with (ExitStack() as resources, backend() as state,
           TemporaryDirectory(prefix="agent-native-eval-") as temp):
+        credential_scope = delegation.clear()
+        resources.callback(delegation.reset, credential_scope)
         arm = AgentRuntime(
             CheckpointConversationStore(InMemorySaver()),
             application=state.get("application") or BlogApplication(),
@@ -274,7 +283,7 @@ def _sample(name, backend, contract, run_id, sample):
     return outcome, paths
 
 
-def run(case_names=None, repeat=1, *, fail_fast=False):
+def run(case_names=None, repeat=1, *, fail_fast=False, on_sample=None):
     _require(golden_trace.enabled(), "native contracts require evaluation tracing")
     _require(type(repeat) is int and 1 <= repeat <= 50, "repeat must be between 1 and 50")
     selected = set(case_names) if case_names is not None else {case[0] for case in CASES}
@@ -289,6 +298,8 @@ def run(case_names=None, repeat=1, *, fail_fast=False):
             result, traces = _sample(name, backend, contract, run_id, sample)
             results.append(result)
             paths.extend(traces)
+            if on_sample is not None:
+                on_sample(result)
             if fail_fast and not result["passed"]:
                 break
         if fail_fast and results and not results[-1]["passed"]:
@@ -316,7 +327,18 @@ def main(argv=None):
     parser.add_argument("--repeat", type=int, choices=range(1, 51), default=1)
     parser.add_argument("--fail-fast", action="store_true", help="首次失败后停止扩量")
     args = parser.parse_args(argv)
-    report = run(args.case, args.repeat, fail_fast=args.fail_fast)
+    journal = Path("eval/report") / ("_native_journal_" + golden_trace.resolve_run_id() + ".jsonl")
+    journal.parent.mkdir(parents=True, exist_ok=True)
+
+    def completed(row):
+        with journal.open("a") as output:
+            output.write(json.dumps(row, ensure_ascii=False) + "\n")
+        print(json.dumps({"case": row["case"], "sample": row["sample"],
+                          "passed": row["passed"], "reason": row.get("reason")},
+                         ensure_ascii=False), flush=True)
+
+    report = run(args.case, args.repeat, fail_fast=args.fail_fast, on_sample=completed)
+    report["sample_journal"] = str(journal)
     path = Path("eval/report") / f"_smoke_native_contracts_{report['trace_run']}" / "report.json"
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(report, ensure_ascii=False, indent=2))

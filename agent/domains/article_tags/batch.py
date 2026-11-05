@@ -51,15 +51,17 @@ def combine(specs):
     first = parts[0]
     if any(part["intent"] != first["intent"] for part in parts):
         raise ValueError("标签批量意图不一致")
-    return validate({"items": [item for part in parts for item in part["items"]],
-                     "intent": first["intent"]})
+    return validate(
+        {"items": [item for part in parts for item in part["items"]], "intent": first["intent"]}
+    )
 
 
 def plans(ids, intent, config):
     if len(set(ids)) != len(ids):
         return invalid_args("批量文章编号不能重复。")
-    rows = base._admin_read_post(targets.PATH + "batch/prepare",
-                                {"article_ids": ids, "intent": intent}, config)
+    rows = base._admin_read_post(
+        targets.PATH + "batch/prepare", {"article_ids": ids, "intent": intent}, config
+    )
     if isinstance(rows, base.ToolResult):
         return rows
     try:
@@ -69,35 +71,57 @@ def plans(ids, intent, config):
         if sorted(row["id"] for row in result) != sorted(ids):
             raise ValueError("target mismatch")
         result = sorted(result, key=lambda row: row["id"])
-        observed("article_tags_batch", {"items": [
-            {key: row[key] for key in ("id", "title", "version", "before")} for row in result]},
-            ("items",))
+        observed(
+            "article_tags_batch",
+            {
+                "items": [
+                    {key: row[key] for key in ("id", "title", "version", "before")}
+                    for row in result
+                ]
+            },
+            ("items",),
+        )
         return result
     except (ValueError, TypeError, KeyError):
         return base.unavailable("批量目标或版本无法核对，本次未准备或执行改动。")
 
 
-def prepare(ids, intent, config):
+def prepare(ids, intent, config, *, schedule=None):
     rows = plans(ids, intent, config)
     if isinstance(rows, base.ToolResult):
         return rows
-    changed = [row for row in rows if row["before"] != row["after"]]
+    changed = rows if schedule is not None else [
+        row for row in rows if row["before"] != row["after"]]
     if not changed:
         text = f"所选{len(rows)}篇文章的标签均已达成，无需改动。"
         return TurnResult(text, {"noop_note": text, "noop_text": text, "receipts": []})
-    args = validate({"items": [{"id": row["id"], "version": row["version"]}
-                               for row in changed], "intent": intent})
+    args = validate(
+        {
+            "items": [{"id": row["id"], "version": row["version"]} for row in changed],
+            "intent": intent,
+        }
+    )
     details = [f"### #{row['id']}\n" + change_summary(row, intent) for row in changed]
     text = f"批量修改{len(changed)}篇文章的标签：\n\n" + "\n\n".join(details)
     if len(changed) < len(rows):
         text += f"\n\n另有{len(rows) - len(changed)}篇已达成，不纳入改动。"
     principal, cid = bound_context(config)
     check_cancelled(config)
-    specs = [{"tool": NAME, "args": {"items": [item], "intent": args["intent"]}}
-             for item in args["items"]]
-    return proposal(principal, cid, "article_tags", specs, executor="article_tags",
-                    question="选择要修改标签的文章；未勾选的保留原标签。", target=text,
-                    choices=[f"#{row['id']}\n" + change_summary(row, intent) for row in changed])
+    specs = [
+        {"tool": NAME, "args": {"items": [item], "intent": args["intent"]}}
+        for item in args["items"]
+    ]
+    return proposal(
+        principal,
+        cid,
+        "article_tags",
+        specs,
+        executor="article_tags",
+        question="选择要修改标签的文章；未勾选的保留原标签。",
+        target=text,
+        schedule=schedule,
+        choices=[f"#{row['id']}\n" + change_summary(row, intent) for row in changed],
+    )
 
 
 def outcomes(rows, args, before):
@@ -108,15 +132,17 @@ def outcomes(rows, args, before):
     for row in rows:
         state = targets.plan(row["state"], row["state"]["id"])
         plan = expected.pop(state["id"])
-        if (type(row.get("changed")) is not bool
-                or row.get("beforeVersion") != plan["version"]
-                or state["version"] != plan["version"] or state["before"] != plan["before"]
-                or state["title"] != plan["title"]
-                or row["changed"] != (plan["before"] != plan["after"])
-                or not targets.matches(state["after"], plan["after"])):
+        if (
+            type(row.get("changed")) is not bool
+            or row.get("beforeVersion") != plan["version"]
+            or state["version"] != plan["version"]
+            or state["before"] != plan["before"]
+            or state["title"] != plan["title"]
+            or row["changed"] != (plan["before"] != plan["after"])
+            or not targets.matches(state["after"], plan["after"])
+        ):
             raise ValueError("outcome mismatch")
-        results.append({"id": state["id"], "title": state["title"],
-                        "changed": row["changed"]})
+        results.append({"id": state["id"], "title": state["title"], "changed": row["changed"]})
     return sorted(results, key=lambda row: row["id"])
 
 
@@ -135,20 +161,30 @@ class Operation:
             items = outcomes(rows, args, before)
         except (ValueError, TypeError, KeyError):
             return base.unavailable("批量请求已发出，但回执无法完整核对；结果未知，请先查询。")
-        text = json.dumps({"status": "completed", "intent": args["intent"], "items": items},
-                          ensure_ascii=False)
+        text = json.dumps(
+            {"status": "completed", "intent": args["intent"], "items": items}, ensure_ascii=False
+        )
         return base.ok(text, meta={"confirmed_args": args, "plans": before, "outcomes": rows})
 
 
 def receipt(name, args, result):
     meta = getattr(result, "meta", {}) or {}
-    if not isinstance(result, base.ToolResult) or result.kind != "ok" or meta.get(
-            "confirmed_args") != args:
+    if (
+        not isinstance(result, base.ToolResult)
+        or result.kind != "ok"
+        or meta.get("confirmed_args") != args
+    ):
         return None
     try:
         items = outcomes(meta["outcomes"], args, meta["plans"])
     except (ValueError, TypeError, KeyError):
         return None
-    return {"skill": "article_tags", "tool": name, "args": args, "items": items,
-            "result": str(result), "action": f"已核对{len(items)}篇文章的标签结果。",
-            "ts": time.time()}
+    return {
+        "skill": "article_tags",
+        "tool": name,
+        "args": args,
+        "items": items,
+        "result": str(result),
+        "action": f"已核对{len(items)}篇文章的标签结果。",
+        "ts": time.time(),
+    }

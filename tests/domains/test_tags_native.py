@@ -179,10 +179,12 @@ def test_wrong_service_plan_cannot_authorize_extra_changes(tags):
 
 def test_target_pair_preserves_tag_namespace_and_rejects_conflicting_name(tags):
     matched = preparation.prepare_tag_delete.invoke(
-        {"tag_id": 11, "level": 1, "tag_name": "测试"}, config=admin_config())
+        {"tag_id": 11, "level": 1, "tag_name": "测试"}, config=admin_config()
+    )
     assert matched.execution["pending_confirm"] and not tags["writes"]
     mismatch = preparation.prepare_tag_delete.invoke(
-        {"tag_id": 11, "level": 1, "tag_name": "子标签"}, config=admin_config())
+        {"tag_id": 11, "level": 1, "tag_name": "子标签"}, config=admin_config()
+    )
     assert isinstance(mismatch, base.ToolResult) and not tags["writes"]
 
 
@@ -232,7 +234,8 @@ def test_noop_and_cancel_do_not_write(tags, tmp_path, monkeypatch):
 
 
 def test_native_roundtrip_continues_after_confirmation_and_replays_once(
-        tags, tmp_path, monkeypatch):
+    tags, tmp_path, monkeypatch
+):
     from _admin_actions_support import confirmed_roundtrip
 
     confirmed_roundtrip(
@@ -244,3 +247,26 @@ def test_native_roundtrip_continues_after_confirmation_and_replays_once(
         {"tag_id": 11, "level": 2, "to_level": 1},
     )
     assert tags["writes"] == 1
+
+
+@pytest.mark.parametrize(
+    "operation,arguments",
+    [
+        ("prepare_tag_create", {"name": "新标签"}),
+        ("prepare_tag_update", {"tag_id": 11, "level": 1, "new_name": "改名"}),
+        ("prepare_tag_delete", {"tag_id": 11, "level": 1}),
+    ],
+)
+def test_scheduled_tag_freezes_intent_without_writing(
+    tags, operation, arguments, enabled_scheduler
+):
+    result = getattr(preparation, operation).invoke(
+        {**arguments, "schedule": {"delay_seconds": 300}}, config=admin_config()
+    )
+    grant = confirm.verify(result.execution["pending_confirm"]["token"], 7, 42)
+    definition = grant["specs"][0]["args"]["definition"]
+    assert grant["executor"] == "automations"
+    assert definition["write"]["kind"] == "tags"
+    assert definition["write"]["change"]["intent"]["action"] == operation.rsplit("_", 1)[1]
+    assert definition["delay_seconds"] == 300
+    assert tags["writes"] == 0

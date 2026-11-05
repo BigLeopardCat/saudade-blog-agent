@@ -51,11 +51,10 @@ def save_cache(cache: dict[str, list[float]]) -> None:
 
 def embed(client, texts: list[str], cache: dict[str, list[float]],
           refresh: bool) -> list[list[float]]:
-    """带缓存 embedding；新增文本批量调用 API，命中缓存直接取。
+    """Embed uncached texts in batches and reuse cached vectors.
 
-    健壮性：批量响应条数 != 请求条数时（实测 265 条批次有丢数据），
-    降级为逐条调用兜底——POC 阶段就不允许静默缺 embedding。
-    """
+    If batch cardinality differs, fall back to per-item requests rather than
+    silently dropping embeddings."""
     keys = [_hash(t) for t in texts]
     fresh: list[str] = [t for t, k in zip(texts, keys) if refresh or k not in cache]
     if fresh:
@@ -115,9 +114,7 @@ def vec_search(query_vec: list[float], chunks: list[dict], chunk_vecs: list[list
     return ranked
 
 
-# 20261005：这里原本有**第二份** `rrf_fuse` 实现，已删——同一套公式写两遍就是两份行为
-# （RRF 常量、并列时的稳定序、sections 截取口径各写各的），而这份 PoC 的结论正是拿来给
-# "线上要不要融合"当依据的。现在统一用 `rag.vector_index.rrf_fuse(lex, vec, RRF_K, TOP_N)`。
+# Use the production RRF implementation so retrieval comparisons share one fusion rule.
 
 
 def evaluate(route: str, hits_fn, show: bool) -> dict:

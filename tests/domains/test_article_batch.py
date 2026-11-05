@@ -152,3 +152,16 @@ def test_noop_batch_and_invalid_identity_do_not_offer_an_approval(service):
 def test_batch_manifest_rejects_coerced_duplicate_and_unbounded_targets(items):
     with pytest.raises(ValueError):
         batch.validate({"items": items, "status": "private", "is_top": None})
+
+
+def test_scheduled_status_batch_keeps_all_versions_in_one_approval(service, enabled_scheduler):
+    result = preparation.prepare_article_state.invoke(
+        {"article_ids": [11, 12, 13], "status": "private", "schedule": {"delay_seconds": 300}},
+        config=cfg(),
+    )
+    approved = confirm.verify(result.execution["pending_confirm"]["token"], 7, 42)
+    definition = approved["specs"][0]["args"]["definition"]
+    assert approved["executor"] == "automations"
+    assert definition["write"]["kind"] == "article_state"
+    assert [item["id"] for item in definition["write"]["change"]["items"]] == [11, 12, 13]
+    assert service["writes"] == 0

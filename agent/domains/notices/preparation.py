@@ -12,6 +12,7 @@ from agent.domains.notices import targets
 from agent.proposals import proposal
 from agent.runtime.turns import check_cancelled
 from agent.runtime.writes import bound_context
+from agent.scheduling.models import WriteSchedule
 from tools import base
 from tools.result import invalid_args
 
@@ -24,7 +25,7 @@ def quoted(value):
     return json.dumps(value, ensure_ascii=False).replace(":", r"\u003a").replace("：", r"\uff1a")
 
 
-def _prepare(target, title, content, config):
+def _prepare(target, title, content, config, schedule=None):
     check_cancelled(config)
     if not available(config):
         return base.unavailable("需要已验签的管理员和稳定会话，本次未生成确认。")
@@ -51,19 +52,27 @@ def _prepare(target, title, content, config):
         executor="notices",
         question=question,
         target=target_text,
+        schedule=schedule,
     )
 
 
 @tool(return_direct=True)
 def prepare_user_notice(
-    content: Annotated[targets.Content, Field(description=(
-        "收件人将看到的完整正文。用户给出原文时逐字保留；否则简短转述其明确要求的消息，"
-        "未要求扩写时只转述消息本身，不添加原因、政策或后续安排。尚未执行的变更用将/计划表述；"
-        "已完成的变更须有成功回执。"))],
+    content: Annotated[
+        targets.Content,
+        Field(
+            description=(
+                "收件人将看到的完整正文。用户给出原文时逐字保留；否则简短转述其明确要求的消息，"
+                "未要求扩写时只转述消息本身，不添加原因、政策或后续安排。尚未执行的变更用将/计划表述；"
+                "已完成的变更须有成功回执。"
+            )
+        ),
+    ],
     config: RunnableConfig,
     user_id: targets.Identifier | None = None,
     username: targets.Username | None = None,
     title: targets.Title | None = None,
+    schedule: WriteSchedule | None = None,
 ) -> object:
     """准备单向站内通知的确认，不写入；收件人不能回复通知，发送后不能撤回。
     收件人以唯一编号或完整账号名定位。
@@ -71,7 +80,7 @@ def prepare_user_notice(
     正文最多1000字，完整展示后确认；标题可选，最多128字，省略为站内通知。
     代写只使用用户提供或工具核实的信息；群体公开通知应使用公告工具。
     """
-    return _prepare({"id": user_id, "username": username}, title, content, config)
+    return _prepare({"id": user_id, "username": username}, title, content, config, schedule)
 
 
 def tools(read_tools):

@@ -11,6 +11,7 @@ from agent.reports import sanitize_untrusted
 from agent.runtime.results import TurnResult
 from agent.runtime.turns import check_cancelled
 from agent.runtime.writes import bound_context
+from agent.scheduling.models import WriteSchedule
 from tools import base
 from tools.result import invalid_args
 
@@ -20,7 +21,6 @@ TOOLS = {
     "delete": "delete_announcement",
 }
 WORKFLOWS = {key: "announcement_" + key for key in TOOLS}
-
 
 
 def description(plan):
@@ -35,8 +35,9 @@ def description(plan):
             if before is None or before[field] != after[field]:
                 if field == "content":
                     if before:
-                        lines.append("原正文：\n\n" + before[field]
-                                     + "\n\n修改为：\n\n" + after[field])
+                        lines.append(
+                            "原正文：\n\n" + before[field] + "\n\n修改为：\n\n" + after[field]
+                        )
                     else:
                         lines.append("正文：\n\n" + after[field])
                 else:
@@ -47,7 +48,7 @@ def description(plan):
     return f"{heading}：{details}\n{scope} {plan['notificationCount']} 条关联个人通知；公告公开可见"
 
 
-def _prepare(action, target, fields, config):
+def _prepare(action, target, fields, config, schedule=None):
     check_cancelled(config)
     if not available(config):
         return base.unavailable("需要已验签的管理员和稳定会话，本次未生成确认卡。")
@@ -60,7 +61,7 @@ def _prepare(action, target, fields, config):
         return plan
     spec = {"tool": TOOLS[action], "args": {"version": plan["version"], "intent": request}}
     text = description(plan)
-    if plan["before"] == plan["after"]:
+    if schedule is None and plan["before"] == plan["after"]:
         return TurnResult(
             text, {"noop_note": text, "noop_text": text, "task_satisfied": [spec], "receipts": []}
         )
@@ -74,18 +75,23 @@ def _prepare(action, target, fields, config):
         executor="announcements",
         question=text + "。确认执行？",
         target=text,
+        schedule=schedule,
     )
 
 
 @tool(return_direct=True)
 def prepare_announcement_create(
-    title: targets.Title, content: targets.Content, config: RunnableConfig
+    title: targets.Title,
+    content: targets.Content,
+    config: RunnableConfig,
+    schedule: WriteSchedule | None = None,
 ) -> object:
-    """准备发布站内公告确认，不写入。确认卡完整展示标题和正文；用户给出原文时照录。
+    """Optional schedule delays this exact approved change; use run_at for clock times.
+    准备发布站内公告确认，不写入。确认卡完整展示标题和正文；用户给出原文时照录。
     公告公开可见，并为当前用户创建个人通知，点击确认后原子发布。
     延时或定期发布使用 admin_automations 的 prepare_automation(action="publish_announcement")。
     """
-    return _prepare("create", None, {"title": title, "content": content}, config)
+    return _prepare("create", None, {"title": title, "content": content}, config, schedule)
 
 
 @tool(return_direct=True)
@@ -95,8 +101,10 @@ def prepare_announcement_update(
     announcement_title: targets.Title | None = None,
     new_title: targets.Title | None = None,
     content: targets.Content | None = None,
+    schedule: WriteSchedule | None = None,
 ) -> object:
-    """准备修改公告确认，不写入。以唯一编号或完整原标题定位；仅填写需改的标题或正文。
+    """Optional schedule delays this exact approved change; use run_at for clock times.
+    准备修改公告确认，不写入。以唯一编号或完整原标题定位；仅填写需改的标题或正文。
     保留未指定字段，并同步关联个人通知；不重复发布公告，不增加通知接收人。
     """
     return _prepare(
@@ -104,6 +112,7 @@ def prepare_announcement_update(
         {"id": announcement_id, "title": announcement_title},
         {"title": new_title, "content": content},
         config,
+        schedule,
     )
 
 
@@ -112,9 +121,13 @@ def prepare_announcement_delete(
     config: RunnableConfig,
     announcement_id: targets.Identifier | None = None,
     announcement_title: targets.Title | None = None,
+    schedule: WriteSchedule | None = None,
 ) -> object:
-    """准备删除公告确认，不写入。以唯一编号或完整原标题定位，同时删除其关联个人通知。"""
-    return _prepare("delete", {"id": announcement_id, "title": announcement_title}, {}, config)
+    """Optional schedule delays this exact approved change; use run_at for clock times.
+    准备删除公告确认，不写入。以唯一编号或完整原标题定位，同时删除其关联个人通知。"""
+    return _prepare(
+        "delete", {"id": announcement_id, "title": announcement_title}, {}, config, schedule
+    )
 
 
 def tools(read_tools):

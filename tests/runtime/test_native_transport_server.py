@@ -13,6 +13,7 @@ from langchain_core.messages import AIMessageChunk
 from agent.api import turns
 from agent.api.routes import chat as server
 from agent.api.schemas import ChatRequest
+from agent.contracts.events import StreamEvent
 from agent.principal import Principal
 from agent.runtime.results import TurnResult
 
@@ -35,11 +36,12 @@ def test_sync_adapter_uses_native_contract_and_structured_command(monkeypatch):
     ])
     monkeypatch.setattr(app.state, "runtime", runtime)
     grant = {"jti": "j1"}
-    reply, nav, rows = turns.run_turn(
+    result = turns.run_turn(
         app.state.runtime, [], "conv", 7, Principal(uid=7), 42)
-    assert reply == "已打开博客。"
-    assert nav == "AUTO_NAVIGATE:/posts/1"
-    assert rows[0]["cmd"]["kind"] == "navigate"
+    assert result.reply == "已打开博客。"
+    assert result.events[0] == StreamEvent("command", {
+        "kind": "navigate", "url": "/posts/1"})
+    assert result.events[1].name == "receipts"
     state, config = runtime.calls[0]
     assert list(state) == ["messages"]
     assert config["configurable"]["conversation_id"] == 42
@@ -76,9 +78,9 @@ def test_stream_adapter_keeps_receipts_and_confirmation_order(monkeypatch):
                 return values
     values = asyncio.run(run())
     assert isinstance(values[0], AIMessageChunk)
-    assert values[1].startswith("__PENDING__:")
-    assert values[2].startswith("__CONFIRM__:")
-    assert values[3].startswith("__PENDING__:")
+    assert isinstance(values[1], StreamEvent) and values[1].name == "pending"
+    assert isinstance(values[2], StreamEvent) and values[2].name == "confirmation"
+    assert isinstance(values[3], StreamEvent) and values[3].name == "pending"
     assert values[-1] is None
 
 
@@ -105,7 +107,7 @@ def test_stream_error_has_error_sentinel_and_no_success_sentinel_first(monkeypat
 def test_empty_terminal_is_allowed_for_recovery_but_missing_terminal_is_not(monkeypatch):
     runtime = FakeRuntime([TurnResult("", {"receipts": []})])
     monkeypatch.setattr(app.state, "runtime", runtime)
-    assert turns.run_turn(app.state.runtime, [], "conv")[0] == ""
+    assert turns.run_turn(app.state.runtime, [], "conv").reply == ""
     runtime.events = [AIMessageChunk(content="orphan")]
     with pytest.raises(Exception):
         turns.run_turn(app.state.runtime, [], "conv")
@@ -199,3 +201,82 @@ def test_stop_fences_late_body_and_closes_runtime_generator(monkeypatch):
 
 
 pytestmark = pytest.mark.usefixtures("service_workers")
+
+
+@pytest.mark.parametrize("idle_timeout", [False, True])
+def test_sse_keepalive_uses_comments_and_does_not_extend_model_idle_deadline(
+    monkeypatch, idle_timeout
+):
+    from agent.api.events import KEEPALIVE_FRAME
+
+    release = threading.Event()
+
+    class QuietRuntime:
+        def stream_events(self, state, config):
+            release.wait(2)
+            yield TurnResult("完成。")
+
+    monkeypatch.setattr(app.state, "runtime", QuietRuntime())
+    monkeypatch.setattr(server, "_resolve_principal", lambda request, uid: Principal(uid=uid))
+    monkeypatch.setattr(server, "try_acquire_slot", lambda request: _ready())
+    monkeypatch.setattr(server, "release_slot", lambda request: None)
+    monkeypatch.setattr(server, "build_messages", lambda req, **kwargs: [])
+    monkeypatch.setattr(server.runtime_probe, "request_context", lambda runtime: "native")
+    monkeypatch.setattr(server, "start_trace", lambda *args, **kwargs: None)
+    monkeypatch.setattr(server, "STREAM_PING_INTERVAL", 0)
+    monkeypatch.setattr(server, "STREAM_IDLE_TIMEOUT", 0.05 if idle_timeout else 10)
+
+    async def next_item(queue, producer):
+        return await turns.next_stream_item(queue, producer, timeout=0.01)
+
+    monkeypatch.setattr(server, "next_stream_item", next_item)
+
+    async def consume():
+        request = Request({"app": app, "type": "http", "method": "POST", "path": "/chat/stream/v2",
+                           "headers": [], "query_string": b""})
+        response = await server.chat_stream(ChatRequest(message="查询", user_id=7), request)
+        frames = []
+        try:
+            async for frame in response.body_iterator:
+                frames.append(frame)
+                if frame == KEEPALIVE_FRAME and not idle_timeout:
+                    release.set()
+        finally:
+            release.set()
+            await response.body_iterator.aclose()
+        return frames
+
+    frames = asyncio.run(consume())
+    assert KEEPALIVE_FRAME in frames and KEEPALIVE_FRAME == ": ping\n\n"
+    wire = "".join(frames)
+    if idle_timeout:
+        assert "event: error" in wire and "event: done" not in wire
+    else:
+        assert "event: done" in wire and "event: error" not in wire
+
+
+@pytest.mark.parametrize("text,execution", [
+    ("AUTO_NAVIGATE:/quoted", {"receipts": []}),
+    ("", {"client_action": {"kind": "navigate", "url": "/article/1"}}),
+    ("请确认。", {"pending_confirm": {"q": "确认？", "opts": []}}),
+])
+def test_sync_http_keeps_controls_out_of_prose_and_allows_action_only_turns(
+        monkeypatch, text, execution):
+    monkeypatch.setattr(app.state, "runtime", FakeRuntime([TurnResult(text, execution)]))
+    monkeypatch.setattr(server, "_resolve_principal", lambda request, uid: Principal(uid=uid))
+    monkeypatch.setattr(server, "try_acquire_slot", lambda request: _ready())
+    monkeypatch.setattr(server, "release_slot", lambda request: None)
+    monkeypatch.setattr(server, "build_messages", lambda req, **kwargs: [])
+    async def request():
+        scope = {"app": app, "type": "http", "method": "POST", "path": "/chat",
+                 "headers": [], "query_string": b""}
+        return await server.chat(ChatRequest(message="测试", user_id=7), Request(scope))
+    response = asyncio.run(request()).model_dump()
+    assert response["reply"] == text and response["success"]
+    assert "executions" not in response
+    if execution.get("client_action"):
+        assert response["events"] == [{"name": "command", "data": execution["client_action"]}]
+    elif execution.get("pending_confirm"):
+        assert response["events"][0]["name"] == "confirmation"
+    else:
+        assert response["events"] == []

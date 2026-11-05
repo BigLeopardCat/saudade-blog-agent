@@ -10,12 +10,7 @@ import io
 import json
 import sys
 
-# stdout 编码：只在**还没包过**的时候包一次。无守卫地二次包裹会让前一个 wrapper 失去引用
-# 被 GC，它持有的底层 buffer 跟着被关，表现成"第一次 print 就 `I/O operation on closed
-# file`"（异常应保留清晰的文件坐标）。
-# 20261020 补这道守卫：进 pytest 后 `sys.stdout` 是捕获对象，本行是**被 import 时的副作用**，
-# 无守卫就会把捕获的 tmpfile 一起带走 —— 整个 pytest 会话当场崩、且报错点在捕获收尾，
-# 看着与本案无关（`tests/test_baseline_group.py` 实测）。Linux 上这行本来就是空操作。
+# Only wrap non-UTF-8 stdout; never replace pytest capture or an existing UTF-8 wrapper.
 if getattr(sys.stdout, "encoding", "").lower() not in ("utf-8", "utf8"):
     sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", line_buffering=True)
 sys.path.insert(0, "eval")

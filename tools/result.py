@@ -115,11 +115,8 @@ def is_noop(meta) -> bool:
 
 
 def error_frame(text: str, reason: str) -> ToolResult:
-    """Return an error frame with its machine-readable reason metadata.
-
-    The existing wire kind remains ok; consumers inspect reason or the error frame.
-    Return this object directly: wrapping it again would lose its metadata."""
-    return ToolResult(text, "ok", {"reason": reason})
+    """Report a typed failure with its reason, never a successful observation."""
+    return ToolResult(text, "unavailable", {"reason": reason})
 
 
 # 上游故障哨兵：`_get` 失败时返回它而不是 `[]`（"故障伪装成空"的源头就在那）。
@@ -151,7 +148,6 @@ _FRAME_ID_KEYS = {
     "tagKey": "tagId",
     "categoryKey": "categoryId",
     "fatherKey": "fatherId",
-    "friendKey": "friendId",
 }
 
 

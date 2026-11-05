@@ -14,6 +14,7 @@ from pydantic import (
 from agent.api.weather import WeatherSnapshot
 from agent.confirm import MAX_TOKEN_CHARS
 from agent.contracts.client import EditorObservation as EditorObservation
+from agent.contracts.events import StreamEvent
 from agent.principal import KNOWN_ROLES
 
 MAX_MESSAGE_CHARS = 4000
@@ -62,8 +63,6 @@ class ChatRequest(BaseModel):
     current_darkmode: str = Field(default="", max_length=MAX_SHORT_FIELD_CHARS)
     current_weather: WeatherSnapshot | None = None
     image: str | list[str] = ""
-    executions: str = Field(default="", max_length=MAX_TEXT_FIELD_CHARS)
-    pending_action: str = Field(default="", max_length=MAX_TEXT_FIELD_CHARS)
     chat_quota: QuotaInfo | None = None
     quota_blocked: bool = False
     conversation_id: int | None = None
@@ -125,4 +124,4 @@ class ChatResponse(BaseModel):
     reply: str
     success: bool
     error: str | None = None
-    executions: list = Field(default_factory=list)
+    events: list[StreamEvent] = Field(default_factory=list)

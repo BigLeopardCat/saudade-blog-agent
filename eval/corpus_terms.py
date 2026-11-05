@@ -20,11 +20,7 @@ _WORDY = re.compile(r"[a-zA-Z一-鿿]")
 _ASCII_ALPHA = re.compile(r"[a-zA-Z]")
 _PURE_CJK3 = re.compile(r"^[一-鿿]{3}$")
 
-# S3 的第二半：中文功能词 2/3-gram。它们跨篇高频（df 门多半已拦住），但语料里总有几个
-# 恰好只落在申报的那两篇里（"这个/那个/我们"在短文档里很常见）——做断言词等于恒真。
-# 纪律：这份表**只放纯句法词**（虚词、代词、连接词），不放任何名词/动词——语义词一律
-# 交给 S4 的 df 门判，否则又是"人抄的词表"当家。
-# 依据：`rag_python_is` 的 `["值", "身份"]` 对任何回答几乎恒真（20260924 漂移哨兵报出）。
+# Exclude common Chinese function n-grams from document-specific term candidates.
 _FUNCTION_WORDS = (
     "这个", "那个", "这些", "那些", "这样", "那样", "这里", "那里", "什么", "怎么",
     "我们", "你们", "他们", "自己", "一个", "一些", "可以", "不能", "不是", "没有",
@@ -174,12 +170,7 @@ def hit_terms(terms, text) -> list[str]:
 
 
 def _literal_df(docs: list[dict], word: str) -> int:
-    """字面（子串）落在多少篇里——**与 token 的 df 不是一回事**。
-
-    `Content-Type` 是最好的反例：它字面就在 note:12 的正文里，词频 df 却是 0，因为
-    `tokenize` 按字符类把 `-` 切掉、只剩 `content`/`type` 两个 token。哨兵若只报 token df，
-    会把一条**有语料依据**的断言误判成死支（这正是 20260925 差点发生的事）。
-    """
+    """Count literal-substring document frequency independently of tokenization."""
     return sum(1 for d in docs if word.lower() in _doc_text(d).lower())
 
 
@@ -197,30 +188,14 @@ def _token_df(docs: list[dict], word: str) -> int:
 
 def drift(*, case: str = "", docs=None, df_max: int = 2, generic_df: int = 4,
           report_dir: str = "eval/report", runs: int = 0) -> int:
-    """**漂移哨兵**：扫 golden 的词表型断言，报出四类"看着在、其实不在"的判据。
+    """Inspect corpus-derived assertion terms for stale or weak source evidence.
 
-    人抄的词表会随语料漂移（`rag_ota_http` 就是现场：期望词的前提"某篇已下架"过期了），
-    而漂移的表现是**用例继续绿或持续红，没人知道判据已经不成立**。四类：
-
-      ORPHAN    词在**全库**都不出现 ⇒ 模型只要"猜"就能过（假阳性通路）；
-      GENERIC   词字面落在 ≥`generic_df` 篇里 ⇒ 恒真（对任何回答都可能成立）；
-      MISBOUND  该用例申报了 `doc`，而这个词**不在申报篇里** ⇒ 词表与申报互相矛盾；
-      THIN      申报篇派生不出 ≥2 个术语 ⇒ 判据力不足（别用"派生集只有 1 个词"冒充严判据）。
-
-    **只判"能判的"**：缺失语义族（没有/找不到/未收录…）是**否定**语义，不是主题词，
-    按小词表白名单跳过并打印计数（语料里 `没有` 字面就在 4 篇里，拿"满语料"去判它毫无意义）。
-    没有申报 `doc` 的用例仍扫 ORPHAN/GENERIC，但**给不出建议替换词**（没有建议来源）。
-    **扫描范围**见 `_SCOPE_TAGS`：只扫"期望来自文章语料"的用例，其余**计数但不判**（范围外的
-    正断言判的是贴纸名单/特效开关/执行记忆/当前文章正文等别的数据源，拿 ORPHAN 判它们
-    只会刷一屏噪音——首次上线实测 38 条全是此类）。范围外计数照打，不静默丢。
-
-    **20261015 批 4 起另带一节「判据暴露度」**（`exposure()`）：只判措辞的那一半（负正则 /
-    正反词表 / `forbid_login_demand`）在上面四类里没有位置——它们的期望词按定义不在语料里。
-    那一节**不参与 rc**（读数不判红），口径与三条代价见它自己的 docstring。
-
-    报告落 `eval/report/corpus_drift_<ts>.md`（与 `review_*.md`/`reconcile_*.md` 同族）；
-    有 ORPHAN/MISBOUND ⇒ 非零退出。**非门禁**：它是"给人看的哨兵"，不是 CI 闸。
-    """
+    ORPHAN terms occur nowhere; GENERIC terms have excessive document frequency;
+    MISBOUND terms are absent from the declared document; THIN sources yield
+    fewer than two specific terms. Inspect only corpus-scoped cases and report
+    excluded semantic families separately. Missing document declarations prevent
+    replacement suggestions. ORPHAN/MISBOUND findings set a nonzero exit code;
+    archive exposure statistics remain advisory and do not affect that code."""
     import json as _json
     from datetime import datetime
 
@@ -336,8 +311,7 @@ def _drift_console(out, rc: int, n_words: int, orphan, generic, misbound, thin, 
     print(f"[drift] 报告 → {out}" + ("" if rc == 0 else "（有 ORPHAN/MISBOUND ⇒ 非零退出）"))
 
 
-# ── 判据暴露度（20261015 批 4）：把**今天的判据**跑在归档的历史回复上 ────────────────
-# 上面四类与这一节的分工见模块头注「第二个哨兵」。
+# Measure current assertions against archived replies without rerunning the model.
 _ARCHIVE = "report/runs"
 # 探的四个键 = 判据层里"只判措辞"的那一半（`text_any_regex` 是正断言，可由 ORPHAN 那套管，
 # 不在探针里）。`forbid_login_demand` 是 bool 键、自己不装词表（词表在 `LOGIN_DEMAND_RE`
@@ -527,25 +501,14 @@ def exposure(*, runs: int = 0, report_dir: str | None = "eval/report",
              golden_path: "Path | str | None" = None,
              archive_dir: "Path | str | None" = None
              ) -> tuple[int, str, list[str]]:
-    """把**今天的判据**跑在归档的历史回复上：逐格读"这条判据还咬得住吗"。
+    """Measure current assertions against their own archived case rounds.
 
-    返回 `(rc, markdown, 打印行)`。**rc 只管"跑起来了没有"**（没有归档 / 判据 import 不了
-    ⇒ 1，未评估）：读数本身不判红——负判据 0 命中在"化石"与"模型一直守规矩"之间**长得
-    一模一样**，机器判不了，只能报数给人读（同 `_SCOPE_TAGS` 那条纪律）。
-
-    三条口径，逐条都有代价，写在这里免得被读成"判据口径"：
-      · **逐格只在自己的轮次上判**（用例 A 的判据不拿去量用例 B 的回复）——跨用例量的是
-        另一个问题（"这条措辞在全站出现得多不多"），且会把卡组模板文案刷成命中。
-      · **golden 用今天那份、回复用历史那份**：归档里的回复是各历史版本产出的，而判据
-        只有一份（今天这份）。所以读数是"今天的判据在历史回复上"的表现，不是当年那次跑测
-        的复现（当年那次有它自己的报告，别拿这份去对账）。
-      · **截断轮 / 轮数不符的用例整条跳过并计数**：截断的 `text` 会让正判据假"恒失败"、
-        让负判据漏命中；轮数不符说明 gold 改过轮次，历史那份对不上今天的判据（`iter_rounds`
-        的轮序是判据的一部分）。**跳过不是静默丢**，计数打在汇总行里。
-
-    `golden_path` / `archive_dir` 只为**可测**而留（`tests/test_corpus_terms.py` ⑧：临时树里
-    放夹具归档与夹具 golden，把上面这几条口径逐条钉住）——真仓跑法不传这两个参数。
-    """
+    Return status, Markdown and console lines. The status indicates whether
+    assessment could run, not whether the observed hit rates are acceptable.
+    Current assertions applied to old replies do not reproduce an old judgment.
+    Skip and count truncated replies and changed round shapes; never hide them.
+    Zero negative hits alone cannot distinguish a useless assertion from
+    consistently correct behavior. Optional paths support isolated fixture tests."""
     from datetime import datetime
 
     ev_dir = Path(__file__).resolve().parent

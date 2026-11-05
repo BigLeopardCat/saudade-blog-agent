@@ -8,12 +8,16 @@ from urllib.parse import urlsplit
 from langchain_core.messages import ToolMessage
 
 SEARCH_TOOLS = frozenset({"rag_search"})
+CATALOG_TOOLS = frozenset({"list_notes", "get_top_notes", "list_admin_notes"})
 
 
 def payload(value):
     """Read source data, never infer executable facts by parsing displayed prose."""
-    return ((value.artifact or {}).get("data") if isinstance(value, ToolMessage)
-            else getattr(value, "data", None))
+    return (
+        (value.artifact or {}).get("data")
+        if isinstance(value, ToolMessage)
+        else getattr(value, "data", None)
+    )
 
 
 def body_text(data: dict | None) -> str:
@@ -26,23 +30,33 @@ def _read_range(data, article_id):
     source = data.get("source") if isinstance(data.get("source"), dict) else {}
     start, end = source.get("offset"), source.get("end")
     body = body_text(data)
-    located = (source.get("type") == "note" and type(source.get("id")) is int
-               and source["id"] == article_id
-               and type(start) is int and type(end) is int and 0 <= start <= end
-               and end - start == len(body))
+    located = (
+        source.get("type") == "note"
+        and type(source.get("id")) is int
+        and source["id"] == article_id
+        and type(start) is int
+        and type(end) is int
+        and 0 <= start <= end
+        and end - start == len(body)
+    )
     total = data.get("totalChars")
     total_known = located and type(total) is int and total >= end
-    return {"revision": source.get("revision") if located else None,
-            "section_id": source.get("section_id") if located else None,
-            "start": start if located else None, "end": end if located else None,
-            "visible_chars": len(body),
-            "selected_total_chars": total if total_known else None,
-            "selected_range_reaches_end": end == total if total_known else None}
+    return {
+        "revision": source.get("revision") if located else None,
+        "section_id": source.get("section_id") if located else None,
+        "start": start if located else None,
+        "end": end if located else None,
+        "visible_chars": len(body),
+        "selected_total_chars": total if total_known else None,
+        "selected_range_reaches_end": end == total if total_known else None,
+    }
 
 
 def _article_links(text):
-    urls = [*re.findall(r"\]\((/article/\d+[^)]*)\)", text),
-            *re.findall(r"https?://[^\s)<>]+", text)]
+    urls = [
+        *re.findall(r"\]\((/article/\d+[^)]*)\)", text),
+        *re.findall(r"https?://[^\s)<>]+", text),
+    ]
     for url in urls:
         try:
             parsed = urlsplit(url.rstrip(".,，。"))
@@ -65,8 +79,13 @@ class ArticleEvidence:
         self.references: set[tuple[str, int]] = set()
 
     def snapshot(self):
-        return {**vars(self), "references": sorted(self.references), "read_ranges": {
-            ident: [dict(row) for row in rows] for ident, rows in self.read_ranges.items()}}
+        return {
+            **vars(self),
+            "references": sorted(self.references),
+            "read_ranges": {
+                ident: [dict(row) for row in rows] for ident, rows in self.read_ranges.items()
+            },
+        }
 
     @classmethod
     def restore(cls, state):
@@ -75,18 +94,32 @@ class ArticleEvidence:
             setattr(evidence, key, bool(state[key]))
         for key in ("documents", "candidates"):
             setattr(evidence, key, {int(ident): title for ident, title in state[key].items()})
-        evidence.read_ranges = {int(ident): [dict(row) for row in rows] for ident, rows
-                                in state.get("read_ranges", {}).items()}
+        evidence.read_ranges = {
+            int(ident): [dict(row) for row in rows]
+            for ident, rows in state.get("read_ranges", {}).items()
+        }
         evidence.references = {tuple(row) for row in state["references"]}
         return evidence
 
     def observe(self, name: str, args: dict, value) -> None:
-        kind = ((value.artifact or {}).get("kind", "ok") if isinstance(value, ToolMessage)
-                else getattr(value, "kind", "ok"))
-        text = ((value.content if isinstance(value.content, str) else "")
-                if isinstance(value, ToolMessage) else str(value))
-        if name in SEARCH_TOOLS or name == "search_notes":
+        kind = (
+            (value.artifact or {}).get("kind", "ok")
+            if isinstance(value, ToolMessage)
+            else getattr(value, "kind", "ok")
+        )
+        text = (
+            (value.content if isinstance(value.content, str) else "")
+            if isinstance(value, ToolMessage)
+            else str(value)
+        )
+        if name in SEARCH_TOOLS or name == "search_notes" or name in CATALOG_TOOLS:
             rows = payload(value)
+            if name in CATALOG_TOOLS:
+                rows = (
+                    rows.get("items")
+                    if isinstance(rows, dict) and rows.get("resource") == "articles"
+                    else None
+                )
             if isinstance(rows, list) and kind == "ok":
                 for row in rows:
                     if not isinstance(row, dict) or row.get("type", "note") != "note":
@@ -104,8 +137,12 @@ class ArticleEvidence:
         ):
             data = payload(value)
             ident = args.get("article_id")
-            if (isinstance(data, dict) and body_text(data).strip()
-                    and type(ident) is int and ident > 0):
+            if (
+                isinstance(data, dict)
+                and body_text(data).strip()
+                and type(ident) is int
+                and ident > 0
+            ):
                 self.documents[ident] = str(data.get("noteTitle") or "文章")
                 ranges = self.read_ranges.setdefault(ident, [])
                 observed = _read_range(data, ident)
@@ -117,13 +154,20 @@ class ArticleEvidence:
         """Distinguish known links from read content without claiming answer support."""
         origin = urlsplit(site).netloc.casefold()
         return {
-            "candidate_articles": [{"id": ident, "title": title}
-                                   for ident, title in self.candidates.items()],
-            "body_reads": [{"id": ident, "title": title,
-                            "ranges": [dict(row) for row in self.read_ranges.get(ident, [])]}
-                           for ident, title in self.documents.items()],
-            "mentioned_article_ids": sorted({ident for host, ident in self.references
-                                              if not host or host == origin}),
+            "candidate_articles": [
+                {"id": ident, "title": title} for ident, title in self.candidates.items()
+            ],
+            "body_reads": [
+                {
+                    "id": ident,
+                    "title": title,
+                    "ranges": [dict(row) for row in self.read_ranges.get(ident, [])],
+                }
+                for ident, title in self.documents.items()
+            ],
+            "mentioned_article_ids": sorted(
+                {ident for host, ident in self.references if not host or host == origin}
+            ),
         }
 
     def issue(self, reply: str, site: str) -> str | None:
@@ -142,8 +186,11 @@ class ArticleEvidence:
         referenced = {ident for host, ident in self.references if not host or host == origin}
         available = {*self.documents, *self.candidates, *referenced}
         return [
-            {"article_id": ident, "same_site": not host or host == origin,
-             "known_id": ident in available}
+            {
+                "article_id": ident,
+                "same_site": not host or host == origin,
+                "known_id": ident in available,
+            }
             for host, ident in _article_links(reply)
             if ident not in available or host and host != origin
         ]

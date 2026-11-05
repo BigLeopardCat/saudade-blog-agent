@@ -38,7 +38,7 @@ def test_no_login_key_or_self_signing_fallback(monkeypatch):
     assert 'jwt_secret' not in Settings.model_fields
     assert configured.confirmation_secret != KEY
     with pytest.raises(PermissionError):
-        base._sign_local_jwt(7, 'admin')
+        base.host_credential(7)
     with pytest.raises(PermissionError):
         device._sign_user_jwt(7)
 
@@ -46,7 +46,7 @@ def test_no_login_key_or_self_signing_fallback(monkeypatch):
 def test_forwarding_preserves_host_signature_and_actor_across_threads():
     token = capability()
     delegation.accept(7, token)
-    assert base._sign_local_jwt(7, 'admin') == token
+    assert base.host_credential(7) == token
     assert device._sign_user_jwt(7) == token
     assert asyncio.run(asyncio.to_thread(delegation.credential, 7)) == token
     with pytest.raises(ValueError):

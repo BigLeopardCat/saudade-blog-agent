@@ -1,29 +1,9 @@
-"""D3 的拍板前置：动作轮的回复里，到底有多少字是"事实性内容"？
+"""Estimate factual repetition in archived tool-using replies; read-only.
 
-**为什么存在**（roadmap D3 的步骤 1）：把动作轮的叙述权收归系统（用户可见正文 =
-系统渲染的确定性事实块 + narrator 一句话），技术上是在**删**代码、判据也能退役，
-但代价在**观感**——回复会变短、变干、变确定。这个代价值不值得付，取决于一个可以量
-出来的数：动作轮回复里的字，有多少是在**复述工具已经说过的事**（系统本来就能渲染），
-又有多少是语气、解释、建议（系统没有那份事实，只能由模型写）。
-
-**口径**（给的是区间，不是一个数——两端的近似方向相反）：
-
-- **下界（严）**：句子与"本轮工具返回原文"共享 4-gram ⇒ 判为事实句。
-  这条抓的是**逐字复述**（模型抄了工具返回里的路径/标题/原话）。
-  漏掉的是换了说法的复述（工具说「已打开」，它写「樱花飘起来啦」）。
-- **上界（宽）**：在下界之上，再并入"含完成式族词 **且** 与工具返回有 2-gram 重合"的句子。
-  这条抓的是**改写型复述**。它会把"解释句里偶然出现『已经』"也算进来，故是上界。
-
-两个数之间的区间，就是"砍掉叙述"这件事的**不确定性**；下界与上界差得越远，说明模型改写
-得越多、D3 替换掉的那部分文本越难被自动识别（也就越需要人工看样例——所以本脚本会打样例）。
-
-**分母**：只统计**本轮真有工具执行**（`execute` 节点下出现过 `call` 事件）的轮次。
-纯闲聊轮 D3 根本不碰（没有事实块可拼），进分母只会稀释比例。
-
-**纪律**：只读；trace 枚举走 `trace_files.iter_trace_files` 唯一入口（别自己 glob，
-那正是"按天目录 + 存量平铺"两种形状会漏一种的地方）；**不进 CI**——它读生产 trace，
-且是拍板用的一次性量化，不是门禁。
-"""
+The strict bound counts sentence/tool-result 4-gram overlap. The broad bound
+also counts completion phrases with 2-gram overlap. Both are heuristics,
+not semantic correctness judgments. Only turns with recorded execute.call
+events enter the denominator; current native traces need separate coverage."""
 
 from __future__ import annotations
 
@@ -69,15 +49,10 @@ def _sentences(text: str) -> list[str]:
 
 
 def _facts(trace: dict) -> tuple[list[str], list[str]]:
-    """本轮的工具事实 = `execute.call` 的 result 原文，外加这些调用各自属于哪个族。
+    """Return archived execution results and their presentation families.
 
-    **为什么分族**（这个分类不是装饰，它直接决定 D3 的射程）：命令类工具（导航/特效/夜间/
-    屏幕）的返回**本来就是给人看的中文事实**，且命令本体已经走 `cmd` 字段离开文本
-    （20260926 批 2）⇒ 系统现成就能渲染，砍掉模型那句无代价；**数据类**工具返回的是 JSON
-    （见样例里的通知列表），模型现在干的事恰恰是"把 JSON 讲成人话"——砍掉它等于把 JSON
-    甩给用户，比现在还差。所以"动作轮砍掉 48%"这个总数会误导：能安全砍的比例，只在
-    命令族与写族里量。
-    """
+    Command/write receipts and data-query results are reported separately;
+    turning structured query data into prose is not redundant receipt narration."""
     facts, families = [], []
     for e in trace.get("events") or []:
         if e.get("node") != "execute" or e.get("event") != "call" or not e.get("result"):

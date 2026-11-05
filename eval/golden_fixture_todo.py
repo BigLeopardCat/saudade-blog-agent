@@ -1,12 +1,5 @@
 # -*- coding: utf-8 -*-
-"""**待办**族夹具的只读在位检查。
-
-`GET /api/protected/todos` 是**管理员域**接口（`src/middleware.rs::auth_guard` 挡着），
-全站没有第二条读能回答"某个人的待办列表里有没有这一条"——而待办夹具的在位判据只能是它：
-用例要动的那一行，正是那份列表里的一行。所以这条读路径与 `eval/identity_preflight.py`、
-`golden_fixture_account.py` 同源：**自签一枚只读的管理员令牌**（`tools.base._sign_local_jwt`，
-与 agent 代调完全同一个函数），打一次 GET，**只看，不写**。
-"""
+"""Read-only presence and state checks for administrator-owned todo fixtures."""
 from __future__ import annotations
 
 import json
@@ -39,7 +32,6 @@ EXPECT_DONE = False
 EXPECT_DATE = "2026-11-30"
 
 # 读这份列表的路径（后端 `src/routes/todos.rs::list_todos`）。**带身份**：这是管理员域
-# 接口，与本文件另两族一样非自签令牌不可。
 TODO_PATH = "/api/protected/todos"
 
 # 残留哨兵的行标（夜间日志/复审时按它 grep）
@@ -64,12 +56,10 @@ def todo_rows() -> list[dict] | None:
     if not uid.isdigit() or int(uid) <= 0:
         return None
     try:
-        # 与真链路同源：同一个签名函数、同一个后台地址（lazy import 同另两族：
-        # import 顺序/副作用，且取不到签名能力本身要能报成"不知道"）。
-        from tools.base import ADMIN_BASE, _sign_local_jwt
+        from tools.base import ADMIN_BASE, host_credential
     except Exception:  # noqa: BLE001
         return None
-    token = _sign_local_jwt(int(uid), "admin")
+    token = host_credential(int(uid))
     req = urllib.request.Request(
         f"{ADMIN_BASE}{TODO_PATH}", headers={"Authorization": "Bearer " + token})
     try:
@@ -88,12 +78,7 @@ def todo_rows() -> list[dict] | None:
 
 
 def _matches(rows: list[dict], name: str) -> list[dict]:
-    """正文以 `name` 打头的那些行（`name` 是夹具名，族约定 = 正文本身）。
-
-    **前缀而不是相等**：与那份 SQL 的幂等/清场判据逐字一致（`LIKE 'agent\_fixture\_%'`）
-    ——检查用的判据与清场用的判据必须是同一条，否则会出现"检查说在、清场删不掉"的行。
-    真待办不可能以这个前缀打头，所以多匹配的风险是 0。
-    """
+    """Return rows whose body starts with the literal fixture name."""
     return [r for r in rows
             if str(r.get("text") or "").startswith(name)]
 
@@ -182,15 +167,9 @@ def declared_fixtures() -> list[str]:
 
 
 def leftovers(rows: list[dict], declared: list[str]) -> list[str]:
-    """那份列表里属于夹具前缀族、**又不是任何用例声明的那个**的正文（排序后返回）。
+    """Return sorted fixture-prefixed bodies not declared by any case.
 
-    与账号族同一条不对称：待办夹具是**常驻的**（用例只读、不复位也还在），所以"声明的
-    那些"必须放行。真正要报的是别的东西——一次中断的 SQL、一次手工插入，
-    或者将来某个探针把靶子留在了列表里。
-
-    **只认前缀**（`startswith`，与清场 SQL 的 `LIKE 'agent\_fixture\_%'` 同一判据）：
-    正文中间出现该串的行，清场语句删不掉它，哨兵也就不该报它。
-    """
+    Prefix comparison is literal; underscores are not SQL LIKE wildcards."""
     keep = set(declared)
     return sorted({str(r.get("text") or "") for r in rows
                    if str(r.get("text") or "").startswith(FIXTURE_PREFIX)

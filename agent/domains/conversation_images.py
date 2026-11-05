@@ -38,7 +38,7 @@ def _page(config, before=None):
     params = {"conversation_id": cfg["conversation_id"]}
     if before is not None:
         params["before_id"] = before
-    token = base._sign_local_jwt(cfg["user_id"], cfg["principal"].known_role)
+    token = base.host_credential(cfg["user_id"])
     url = base.ADMIN_BASE + "/api/chat/history?" + urlencode(params)
     # The fixed host route verifies current account state and conversation ownership.
     with base._client.stream("GET", url, headers={"Authorization": "Bearer " + token},

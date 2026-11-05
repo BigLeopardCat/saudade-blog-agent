@@ -283,3 +283,32 @@ def test_native_roundtrip_continues_after_confirmation_and_replays_once(
         {"category_id": 11, "introduce": ""},
     )
     assert categories["writes"] == 1
+
+
+@pytest.mark.parametrize(
+    "operation,arguments",
+    [
+        ("prepare_category_create", {"name": "密码学"}),
+        ("prepare_category_update", {"category_id": 11, "new_name": "密码学"}),
+        ("prepare_category_delete", {"category_id": 11}),
+    ],
+)
+def test_scheduled_category_uses_one_bound_approval_and_never_writes(
+    categories, operation, arguments, enabled_scheduler
+):
+    from datetime import datetime, timedelta, timezone
+
+    stamp = datetime.now(timezone.utc) + timedelta(hours=1)
+    result = getattr(preparation, operation).invoke(
+        {**arguments, "schedule": {"run_at": stamp.isoformat()}}, config=admin_config()
+    )
+    grant = confirm.verify(result.execution["pending_confirm"]["token"], 7, 42)
+    assert grant["executor"] == "automations"
+    definition = grant["specs"][0]["args"]["definition"]
+    assert definition["action"] == "admin_write"
+    assert definition["write"]["kind"] == "categories"
+    assert definition["write"]["change"]["intent"]["action"] == operation.rsplit("_", 1)[1]
+    assert datetime.fromisoformat(definition["run_at"]) == stamp
+    assert definition["delay_seconds"] is None
+    assert categories["writes"] == 0
+    assert all(request.url.path.endswith("/prepare") for request in categories["requests"])

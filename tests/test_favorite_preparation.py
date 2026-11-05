@@ -1,6 +1,5 @@
 """Favorite preparation, confirmation and execution through actual tool boundaries."""
 
-
 import asyncio
 import json
 
@@ -13,6 +12,7 @@ from pydantic import ValidationError
 
 from agent import confirm, idem
 from agent.api.schemas import ChatRequest
+from agent.contracts.events import StreamEvent
 from agent.domains.favorites import preparation
 from agent.principal import Principal
 from agent.products.blog.application import BlogApplication
@@ -195,15 +195,16 @@ def test_stream_emits_one_card_and_one_reply_from_current_page(site, monkeypatch
         return frames
 
     frames = asyncio.run(collect())
-    cards = [json.loads(frame.removeprefix("__CONFIRM__:")) for frame in frames
-             if isinstance(frame, str) and frame.startswith("__CONFIRM__:")]
+    cards = [frame.data for frame in frames
+             if isinstance(frame, StreamEvent) and frame.name == "confirmation"]
     assert len(cards) == 1
     assert "真实文章标题" in cards[0]["q"]
     assert "不可信页面标题" not in cards[0]["q"]
     replies = [str(frame.content) for frame in frames if isinstance(frame, AIMessageChunk)]
     assert "".join(replies) and cards[0]["q"] not in "".join(replies)
-    assert any(frame.startswith("__PENDING__:") for frame in frames if isinstance(frame, str))
-    assert all(not frame.startswith("__EXEC__:") for frame in frames if isinstance(frame, str))
+    controls = [frame for frame in frames if isinstance(frame, StreamEvent)]
+    assert any(frame.name == "pending" for frame in controls)
+    assert all(frame.name != "receipts" for frame in controls)
     assert "/article/19" not in model.calls[0][0].content
     assert any(isinstance(message, HumanMessage) and "/article/19" in str(message.content)
                for message in model.calls[0][1:])

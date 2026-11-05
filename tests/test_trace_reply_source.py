@@ -1,6 +1,5 @@
 """Production traces record the same body queued by native transport."""
 
-
 import asyncio
 import json
 import secrets
@@ -12,6 +11,7 @@ from langchain_core.messages import AIMessageChunk
 
 from agent.api import turns
 from agent.api.routes import chat as server
+from agent.contracts.events import StreamEvent
 from agent.runtime.results import TurnResult
 from utils import trace
 
@@ -65,7 +65,9 @@ def test_card_body_matches_trace_and_credentials_stay_out(monkeypatch, tmp_path)
         "confirm_text": "请确认。"})], monkeypatch, tmp_path)
     assert doc["reply"] == "前言。请确认。"
     assert opaque not in json.dumps(doc)
-    assert sum(str(item).startswith("__CONFIRM__:") for item in items) == 1
+    assert (
+        sum((isinstance(item, StreamEvent) and item.name == "confirmation") for item in items) == 1
+    )
 
 
 def test_protocol_failure_records_only_visible_partial_body(monkeypatch, tmp_path):

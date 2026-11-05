@@ -58,9 +58,8 @@ CLASSES = [
         owner_ref=None,
         owner_external=True,
         retention="daily + rotate 14 + compress",
-        why="固定文件名 + 进程持有 fd ⇒ `rotate N` 按同名后缀计数**有效**、copytruncate 保 fd。"
-            "这类才是 rotate 真正管用的形态（对比已摘除的 traces 块：文件名唯一 ⇒ 装饰性）。"
-            "20260925 实测三组各有完整 14 代际",
+        why='Stable log filenames use daily rotation with 14 compressed generations; copytruncate '
+            'preserves open descriptors.',
         rule=None,
     ),
     dict(
@@ -85,19 +84,9 @@ CLASSES = [
         owner=None,
         owner_ref=None,
         retention="未接管（与将来的 checkpoint store 必须一起设计）",
-        why="20261016 批 2（`agent/idem.py`，ADR-0012）新增；20261017 起账有**两档**，"
-            "这条登记的是**降级档**——挂的是 PG saver 时账落 PG（`agent/idem_pg.py`，"
-            "表 `agent_write_idem`，**与 checkpoint 同一个库**），不落这个文件。"
-            "**今天这个文件根本不存在**：它的闸是「这一轮挂没挂 checkpointer」，"
-            "而生产没有 saver ⇒ 惰性、一行都不写。登记它是因为**它一上线就会长在 `logs/` "
-            "树下**（`settings.idem_db`），而没登记的表现就是审计把一条正常的运行产物报成异类。"
-            "**为什么是「未接管」而不是给个保留期**：账本行的意义只到「同一个 superstep 的"
-            "崩溃恢复」为止（几秒），按那个窗口裁当然安全——但账本与 checkpoint **必须一起裁**："
-            "留下 checkpoint 却删掉账本行，恰恰等于把本批要堵的那个洞重新打开，"
-            "而两者今天都还没有执行者。等 ADR-0011 真接上 saver 时，这件事与"
-            "checkpoint store 的保留策略同批设计（与 `golden-traces` / `runs/` 同一条理由："
-            "分开清会正好帮倒忙）。⚠️ **PG 那张表不在本清单的射程内**（这里只审计 `logs/` 树）"
-            "⇒ 它的保留口径写在 ADR-0012 的《迁移到 PG》，并且是一条**欠账**",
+        why='Historical SQLite ledger files may require checkpoint evidence before deletion. '
+            'Current production writes use the PostgreSQL ledger; this rule does not enable a '
+            'SQLite fallback.',
         rule=None,
     ),
     dict(
@@ -119,18 +108,9 @@ CLASSES = [
         owner="eval/pg_retention.py",
         owner_ref="eval/pg_retention.py",
         retention=f"线程最近活动 >{KEEP_DAYS_CHECKPOINT} 天裁（与幂等账**同窗、同事务**）",
-        why="20261019 批 C 新增。它此前**整个不在本表的射程内**——本表只审计 `logs/` 与 "
-            "`eval/report/` 两棵树，而 20261018 采纳之后 agent 的上下文落进了 PG："
-            "`checkpoints` 那一族**每个 checkpoint 存整份快照**（实测 messages 通道的 blob "
-            "1417 → 2917 → 2441 → 3713 → 5135 → 6646 字节随会话长度单调长），checkpoint 数又"
-            "随轮数线性长 ⇒ **按会话长度平方增长**，而没有任何东西在裁它。"
-            "**为什么与 `agent-idem-ledger`（上面那条）不是同一条**：那条登记的是"
-            "**降级档**（agent 自持的 SQLite，住在 `logs/` 树下、今天根本不存在）；"
-            "这条是挂 PG saver 时的**正档**，两个库、两个执行者、两套坐标。"
-            "**执行者**：`eval/pg_retention.py`（默认只列不删、`--apply` 才动手，接在 "
-            "`scripts/nightly_regression.sh` 末位）。**两条不变量写在那个文件的头注里**："
-            "账与 checkpoint 必须同窗同事务一起裁（半裁比不裁更坏）；取不到时间的线程永不裁。"
-            "⚠️ 库坐标**不写在这张表里**（本仓是公开仓）：DSN 由 `dsn_env` 指的那个环境变量给。",
+        why='Delete inactive conversation checkpoints and their idempotency records in the same '
+            'window and transaction. Unknown activity times are retained. Credentials come only '
+            'from the declared DSN environment variable.',
         rule=None,
         dsn_env="CHECKPOINT_DSN",
         tables=["checkpoints", "checkpoint_blobs", "checkpoint_writes", "agent_write_idem",
@@ -145,14 +125,8 @@ CLASSES = [
         owner="eval/golden_trace.py::prune（由 run_golden / golden_full_run 调用）",
         owner_ref="eval/golden_trace.py",
         retention="最近 30 个 run + **所有有失败记录的 run 永久保留**",
-        why="判红的 trace 是复核红的唯一证据；「证据不足就不删」是刻意的保守规则。"
-            "20260925 只读审计（**数字以这次实测为准，早先写的归因是错的**）：59 个目录里 "
-            "33 个能被某份留档的 `trace_run` 认领，另 26 个**没有任何留档提到过**"
-            "（0924 清晨 05:02–05:06 一连 20 个 + `adhoc` 等）——那些跑落了 trace 却没把报告"
-            "写进 `runs/`，按保守规则永久保留。连接键 `trace_run` 是 20260923 上线的："
-            "0922 及以前 491 份留档**结构性没有这个字段**（一次性存量），上线后仍有 6 份 null"
-            "（5 份有真实用例、1 份 0 用例空跑；成因未定，不猜）。"
-            "prune 每轮都在跑（窗口内留 30 + 有失败记录的全留）⇒ 这不是无界泄漏",
+        why='Keep recent runs and all failed, flaky or unverified runs. Missing report links and '
+            'unreadable reports never authorize trace deletion.',
         rule=None,
     ),
     dict(
@@ -177,8 +151,8 @@ CLASSES = [
         owner=None,
         owner_ref=None,
         retention="永久",
-        why="例如 `chat_conv_20260903_pre.sql`（会话化迁移前的历史正文）——**它是唯一一份**，"
-            "没有别处可重建。这类文件按内容重要度保留，不按年龄",
+        why='Preserve pre-migration data snapshots that cannot be reconstructed from another '
+            'source; age alone does not authorize deletion.',
         rule=None,
     ),
     dict(
@@ -190,9 +164,8 @@ CLASSES = [
         owner="eval/artifact_retention.py",
         owner_ref="eval/artifact_retention.py",
         retention=f"{KEEP_DAYS_ARCHIVE} 天（上面两条 frozen 除外）",
-        why="归档目录此前**全仓零引用**（没人认领，最老到 2026-06-10）。给它一个保留期，"
-            "比留着「谁也不敢删」更有用；两个 exclude 各有 frozen 登记项（见上面两条），"
-            "**少了 exclude 这条规则就会去删审计轨迹**——check_classes 双向校验这层对应关系",
+        why='Remove expired ordinary archives while preserving SQL snapshots and deletion audit '
+            'records. Exclusions must match the separately frozen ownership entries.',
         rule=dict(kind="keep-days", days=KEEP_DAYS_ARCHIVE,
                   exclude=["DELETED-*.txt", "*.sql"]),
     ),
@@ -205,14 +178,8 @@ CLASSES = [
         owner=None,
         owner_ref=None,
         retention="不轮转、不删",
-        why="住在 logs/ 但不是日志（读写者 = 父仓 `scripts/deploy/deploy_from_r2.sh`）："
-            "`.deploy.lock` 是 flock 的目标文件、`.last_deploy_sha` 是「上一版 sha」"
-            "（后端按源码是否变化决定要不要重启）、`.deploy_manifest.txt` 是本代前端的"
-            "`js`/`vendor` 成员清单（20260925 起解压那一步顺手写，落地后按**集合差**删上一代"
-            "死块；每次部署整文件覆盖写 ⇒ 零增长）。**登记它们正是因为盘点时"
-            "它们以「非 log 形态的异类」冒出来**——没有登记的表现就是「没人知道这是什么、"
-            "能不能删」（`.deploy_manifest.txt` 就是这么被 `audit()` 在 20260925 当天抓出来的："
-            "父仓那次改动落地后 4 分钟，L0 的「真树零未登记」就红了）",
+        why='Deployment locks, prior release identity and the current asset manifest are live '
+            'operational state. They are not disposable log output.',
         rule=None,
     ),
     dict(
@@ -225,11 +192,8 @@ CLASSES = [
         owner_ref="eval/artifact_retention.py",
         retention=f"每族保留最近 {KEEP_COUNT_REPORTS} 份（族 = 文件名里日期戳之前的前缀；"
                   f"草稿族 {KEEP_COUNT_DRAFTS} 份，见 why）",
-        why="按**份数**而不是天数：这些产物是「跑一次落一份」（review_ 一天能落 24 份），"
-            "按天数会在密集调试的那天把整族清掉、按份数才对应「最近几次跑」这个真实语义。"
-            f"`golden_drafts` 例外留 {KEEP_COUNT_DRAFTS} 份（20260925）：它是夜间自动产的**候选草稿**、"
-            "等人手抄进 basic.jsonl，人审窗口比「复审单」短得多，留 20 天没有读者；"
-            "其余族仍是复审/对账/漂移那类要回头看现场的，保持 20。",
+        why='Retain the latest reports per filename family, with a shorter count for candidate '
+            'drafts. Count-based retention preserves recent runs during dense debugging.',
         rule=dict(kind="keep-count", keep=KEEP_COUNT_REPORTS, family_re=FAMILY_RE.pattern,
                   keep_by_family={"golden_drafts": KEEP_COUNT_DRAFTS}),
     ),

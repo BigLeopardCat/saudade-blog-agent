@@ -1,16 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""golden「真实身份」通道的前置在位检查。
-
-**判据不猜。** 拿**与 agent 代调完全同源**的令牌（`tools.base._sign_local_jwt`——
-真链路用的就是那个函数，连"不带 `ver` 声明"这条都一致）打一次**管理员域**的只读接口
-`/api/protected/todos`，按 `src/middleware.rs::auth_guard` 的三态分：
-
-与探针的分工：父仓 `scripts/probe_token_revoke.py` 验的是**收回语义**（冻结/改密码真的
-作废令牌、旁路真的收口，会写库、要 `--admin-uid`）；本模块只做**一次只读探测**，
-是评测开跑前的在位检查。两者都自签令牌，但探针刻意用自己的签名路径（"探针自己的读
-路径，与 agent 工具完全独立"）——这里相反，**必须**用 agent 那条，因为它检的就是那条。
-"""
+"""Verify current actor metadata through host-issued tool credentials; never mint login tokens."""
 import json
 import time
 import urllib.error
@@ -57,10 +47,10 @@ def probe(uid: int, *, role_expected: str, timeout: int = 10,
     try:
         # 与真链路同源：同一个签名函数、同一个后台地址。lazy import 的理由同
         # admin_write_probe（import 顺序/副作用），且 import 失败本身要能报出来。
-        from tools.base import ADMIN_BASE, _sign_local_jwt
-    except Exception as exc:  # 取不到签名能力 ⇒ 不知道，不是不可用
-        return UNKNOWN, f"取不到 agent 的签名函数/后台地址（{exc}）"
-    token = _sign_local_jwt(int(uid), role_expected)
+        from tools.base import ADMIN_BASE, host_credential
+    except Exception as exc:  # Credential setup errors leave identity unverified.
+        return UNKNOWN, f"无法获取主机委托或后台地址（{exc}）"
+    token = host_credential(int(uid))
     url = f"{ADMIN_BASE}{PROBE_PATH}"
     status: int | None = None
     for attempt in range(retries + 1):

@@ -15,11 +15,7 @@ import time
 # 自动 dump 全线程栈到 stderr 后退出，主脚本 communicate 即可拿到卡死点
 faulthandler.enable()
 
-# 仓根按**本文件的位置**算（20261004）：此前这里是写死的主仓绝对路径
-# （`/home/ubuntu/Saudade-Blog/saudade-blog-agent`），而它排在 `PYTHONPATH=$PWD` **前面** ⇒
-# 在 worktree 里跑评测时，本文件 import 到的恒是**主仓**的 `run_golden`/`server`
-# ⇒ 第二条臂（react）的模块**永远看不见**，「在 worktree 里跑本分支的臂」会静默变成
-# 「跑主仓的图」——一份看着像第二条臂的假读数。按本文件位置算，跑的是哪棵树就 import 哪棵树。
+# Resolve the repository from this source file, not an installation-specific checkout.
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 sys.path.insert(0, os.path.join(ROOT, "eval"))
@@ -37,46 +33,19 @@ def main():
     # 归因用的第 1 轮 gold：多轮用例顶层没有 `gold` 键（双层用例就是这么写的），
     # 取法必须与 `run_golden.main` 一致 —— 走它的具名入口，不在这里自己下标。
     g = run_golden.first_gold(case)
-    # 请求构造只走 run_golden.build_request（20260920 前本文件手写了一份、漏了 executions）；
-    # 调用者身份同理只走 run_golden.build_principal（20260921 管理助手用例需要 role，
-    # 隔离跑法若各自维护一份，就会重演"两个跑法结论不同"那次）——20260925 起连**轮次
-    # 驱动**（第 2 轮要令牌、会话 id 必须一致）也只走 run_golden.run_case：本文件不再
-    # 自己发请求，它只负责"一条用例一个进程"这层壳。
-    # golden trace（20260922）：run_id 由父进程经 GOLDEN_TRACE_RUN 传进来（隔离跑法下
-    # 一个 run 一个目录，子进程各自 resolve 会散成 N 个目录）。父进程没设时退回当前
-    # 时刻——单条手跑也照样有 trace，只是那条独占一个目录。
+    # Use the shared request, principal and multi-round driver instead of rebuilding them here.
     run_id = golden_trace.resolve_run_id()
-    # 复跑（20260924）：父进程给的名字后缀 —— 回归组首跑红要重跑一次，两次必须落
-    # **两份** trace（同名文件会把首跑那份覆盖掉，而"首跑为什么红"正是复跑要回答的）。
-    # 结果 dict 的 id 不带后缀（父进程按 id 归并）。
+    # Keep first-attempt and rerun traces distinct without changing the case ID.
     suffix = sys.argv[3] if len(sys.argv) > 3 else ""
-    # 语料索引**必须在跑用例之前就绪**（20261002，锁见 tests/test_golden_runner_parity.py）：
-    # `rag_search.warm_async()` 挂在 `server.py` 的 **lifespan** 上，而本进程从不启动那个
-    # app ⇒ 跑用例的那一刻索引恒为空，planner 把《标题》解析成 id 那一步恒降级
-    # （`agent/prompt_context.py::_doc_anchors` 会如实注记「语料索引未就绪」）⇒ 模型拿不到 id、
-    # 只能去检索，撞上用例的 `forbid_tool_calls: [rag_search…]`。进程内跑法在用例循环
-    # **之前**就建好了它（`judge_corpus()`）——同一个用例两个跑法结论不同，正是本仓反复
-    # 治过的那个病。判据侧不做"这个跑法没接上就放行"的妥协，所以只能在**跑之前**把前提
-    # 补齐；顺带这一份快照就是判据要用的那一份（跑完再取一次，等于允许语料在两次之间变过）。
+    # Load the assertion corpus before execution; reuse that snapshot for judgment.
     docs = run_golden.judge_corpus()
     t0 = time.time()
     result = run_golden.run_case(case, run_id=run_id, suffix=suffix)
     elapsed = time.time() - t0
-    # 语料快照同进程内取一次（20260925）：`require_doc_terms` 要拿**正文**派生术语，
-    # 取不到就得判「未评估」而不是静默通过——两个跑法（进程内 / 隔离）在这一点上必须
-    # 给出同一个结论（判据侧不做"这个跑法没接上就放行"的妥协）。
+    # Missing corpus data leaves dependent assertions unevaluated in both runner modes.
     fails = run_golden.check_case(case, result, docs=docs)
     ok = not fails and not result["error"]
-    # 字段表与 run_golden.py 的 `results.append({...})` **逐字段对齐**（20260924）：两个
-    # 跑法（进程内 / 隔离子进程）写出形状不同的报告，"红了照报告读现场"这条纪律就只在
-    # 一个跑法里成立。此前这里差三处：
-    #   ① `text` 被 `[:300]` 截断——报告是隔离跑法唯一的产物（stdout 只有一行 JSON），
-    #      截断等于**把现场丢掉**：红条要看的正是"它到底说了什么"，而前 300 字常常只是
-    #      客套。现在全文落报告，并显式写 `text_truncated: false` 让读的人不必去猜阈值。
-    #   ② `tool_rounds`（效率基线的规划轮数）缺席 ⇒ 隔离跑法算不出这条指标。
-    #   ③ `requires_tools`（工具类/非工具类归因）缺席 ⇒ 同上。判据与 run_golden 一致：
-    #      该用例**要求**过工具调用即算工具类。
-    # `tags` 仍不在这里出——父进程（golden_full_run.py）从用例文件本地补，两边不重复。
+    # Keep full reply text and efficiency fields aligned with the shared runner report.
     requires = bool(g.get("require_tool_calls") or g.get("require_tool_calls_any"))
     out = {
         "id": case["id"],
@@ -86,9 +55,7 @@ def main():
         "error": result["error"],
         "resets": result["resets"],
         "resets_reasons": result["resets_reasons"],
-        # 打回的形状（20261002）：`all`=重规划 / `text`=终局兜底。判据在子进程里就地跑
-        # （用的是内存里那份完整 result），这个字段是**给报告读的人**留的——`resets=1`
-        # 单看读不出"用户看到的是重查后的真回答、还是兜底道歉"。
+        # Distinguish archived decision resets from terminal text fallbacks.
         "reset_scopes": result["reset_scopes"],
         "commands": result["commands"],
         "tool_calls": result["tool_calls"],
@@ -96,12 +63,7 @@ def main():
         "requires_tools": requires,
         "text": result["text"],
         "text_truncated": False,
-        # 逐轮留档（20260925）：与 run_golden.py 的报告同名字段同形状——多轮用例的
-        # "第 1 轮弹没弹卡"只在第 1 轮里，末轮的扁平结果看不见它。
-        # `confirm_payloads`（解开的载荷，判据 `require_confirm_payload` 要读它）**必须
-        # 与进程内跑法一样在这里出**：隔离跑法的报告就是本文件这行 stdout JSON，少一个
-        # 字段，同一条用例在两个跑法下结论就会不同（`[]` vs 有值 ⇒ 一边 PASS 一边 FAIL）。
-        # 原始令牌两处都不落盘——它是 10 分钟有效的写授权凭据。
+        # Preserve each conversation round in the subprocess result.
         "rounds": [{"round": r["round"], "elapsed": r["elapsed"],
                     "text": r["text"], "frames": run_golden.redact_frames(r.get("frames")),
                     "commands": r["commands"], "tool_calls": r["tool_calls"],
@@ -110,7 +72,7 @@ def main():
                     "confirm_payloads": r.get("confirm_payloads") or [],
                     "error": r["error"], "trace": r.get("trace")}
                    for r in (result.get("rounds") or [])],
-        # 这一条的 trace 路径（20260922）：父进程报告里带出去，红条能直接指着读
+        # Link the exact trace for the attempt.
         "trace": result.get("trace"),
     }
     print("RESULT " + json.dumps(out, ensure_ascii=False))

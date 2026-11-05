@@ -1,15 +1,9 @@
 # -*- coding: utf-8 -*-
-"""真实对话语义告警巡检。
+"""Read-only heuristic review of conversation traces.
 
-golden 只测 66 条固定用例、trace_metrics 只测过程指标（轮次/工具/打回）——
-开放对话"答得对不对"没有监控：9/8 用户 1 的架构文档跑题连错三轮，两套体系
-都不告警，直到用户自己发现。本脚本用纯规则扫真实 trace 补这个盲区——9/8 的
-现场（用户「？？？」+ narrator 连续两次道歉自认串台）规则就能抓到。
-
-巡检非门禁：不置失败标记（避免与 golden 门禁混同制造红斑）。局限：抓的是
-"用户有反应/agent 自知"的拉锯；无道歉词的静默跑题（9/8 第 2 轮「读正文」
-那样闷头答错的）仍漏——后续可加信号。
-"""
+Signals identify challenges, repeated apologies and conversation friction
+for human review. They do not prove semantic correctness or set release gates.
+Planner-specific sections describe archived traces only."""
 import argparse
 import os
 import re
@@ -17,8 +11,7 @@ import sys
 from collections import defaultdict
 from datetime import datetime, timedelta
 
-# trace 文件枚举的唯一实现（20260925：生产 trace 改按天分目录，四个读取端共用一处，
-# 免得"改了布局漏改一个脚本"= 那天它少看一半数据）。只吃路径参数、不依赖应用配置。
+# Use the shared iterator for plain and compressed trace files.
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from config.settings import settings  # noqa: E402
 from utils.trace_files import iter_trace_files, parse_trace_name  # noqa: E402
@@ -53,15 +46,10 @@ _MAX_LIST = 40   # R5 逐条清单的上限（命中本来就少，这是防它�
 
 
 def _squash(s: str) -> str:
-    """去空白（R4 用的那一把尺子）。
+    """Remove whitespace for an independent heuristic comparison.
 
-    **刻意不复用 `agent/textnorm.norm`**（那里还有全角→半角 + `casefold`），两个理由：
-      ① 引它要 `import agent.textnorm`，而包名解析走的是 **.venv 里可编辑安装指向的
-         那个 checkout**——在 worktree 里跑本脚本会读**产线那份代码**（本仓踩过这个
-         假红：套件在 worktree 里读产线 checkout）；按路径直载又要多一层兜底与静默分支。
-      ② R4 是**独立巡检**，比判据更严只会更少命中、不会造出"系统自己判自己"的循环
-         证据——全角/大小写造成的漏报，人眼在下面那行原样打印的 `values=` 里看得见。
-    """
+    Keep punctuation, case and width unchanged; stricter matching limits false
+    positives and does not import runtime text-normalization behavior."""
     return re.sub(r"\s+", "", str(s or ""))
 
 
@@ -117,18 +105,10 @@ def _r3_chains(records: list, hits_stamps: set):
 
 
 def _refusal_hits(doc: dict, stamp: str, uid: int, msg: str):
-    """一份 trace 里的**出处族拒绝** → `(候选, 拒绝次数, 读得到字面的次数, 旧trace降级次数)`。
+    """Collect target-provenance refusals and their readable values.
 
-    判据在事件里：`write_target_unresolved` 且 `source` 在 `REFUSAL_SOURCES` 内（= 拒的
-    是"这个值没有出处"），被拒的那个**字面**取结构化 `values=`（与 `write_value_unresolved`
-    同形，见 `graph._decide_write_guard`）。**缺键 ≠ 空**：`values` 不在场就跳过这条，
-    不当成"拒了个空值"。
-
-    三个计数**必须都印出来**（见 `utils/trace_io.py` 头注那条纪律）："候选误拒 0"与
-    "一次都没读到被拒的字面"是两件事，只印前者会把后者读成绿。`readable` 与 `legacy`
-    之和才是"读到了字面"的完整口径——20261014 之前的 trace 只把值写在 `reason` 那段
-    散文里，退一步读它的「」是这段历史窗口的临时通道；新 trace 有 `values=` 就再也不走它。
-    """
+    Missing values are not empty targets. Report structured, archived-text and
+    unreadable counts separately so absent evidence cannot look like zero defects."""
     cands, seen, readable, legacy = [], 0, 0, 0
     sq_msg = _squash(msg)
     for ev in (doc.get("events") or []):
@@ -157,11 +137,7 @@ def _refusal_hits(doc: dict, stamp: str, uid: int, msg: str):
 
 
 def _print_refusals(r4: list, seen: int, readable: int, legacy: int) -> None:
-    """R4 那一节（**这一节是 20261014 那股改造的验收判据之一**）。
-
-    判据在事件里、不在这段打印里；这里只把候选摊开给复审的人看：被拒的字面 + 那一轮
-    主人的原话（两者都在场，才判得出"是不是误拒"）。
-    """
+    """Print refusal candidates with the rejected value and corresponding user request."""
     print(f"R4 出处闸：窗口内拒绝 {seen} 次，其中**读得到被拒字面**的 {readable} 次"
           + (f"（另 {legacy} 次走旧 trace 的 `reason` 引号降级读）" if legacy else "")
           + f"，候选误拒 {len(r4)} 条")
@@ -174,19 +150,10 @@ def _print_refusals(r4: list, seen: int, readable: int, legacy: int) -> None:
 
 
 def _fastpath_rows(doc: dict, stamp: str, uid: int, conv: int, msg: str) -> list[dict]:
-    """一份 trace → 快道命中行（R5 的原料：**命中次数 + 命中后那一轮的结构信号**）。
+    """Read archived fastpath events and associated planner calls and fallbacks.
 
-    判据全在**结构化事件**里，一个字的文案都不读：
-      · 命中 = `planner.fastpath`，它的 `kind=`／`tools=`（工具数 = 这一轮快道替主人做了几件）；
-      · 本轮的 planner 调用次数 = `planner.llm_done` 的条数。⚠️ **别把它读成"快道省了几次
-        LLM"**：execute 跑完控制权一律回到 planner，所以命中轮恒有 ≥1 次——"零 LLM"说的是
-        **命中那一刻**不叫模型，不是"整轮不叫"。有意义的是**比 1 多出来的那几次**：那才是
-        快道没接住的后续意图（trace 20260923T123437 主人说「把这篇文章收藏了」，快道先读了
-        一遍文章，planner 紧接着又为收藏跑了一轮）；
-      · 打回 = `gate.fallback`（打回 = 主人看到的是兜底文本，是命中的代价之一）；
-      · 档位 = `planner.context` 的 `fastpath` 格。**缺那一格 ≠ 开档**：它是本档
-        上线（20261015）之前的存量 trace，与"开了但没命中"必须分开数。
-    """
+    A hit does not prove a zero-model-call turn. Missing configuration fields
+    remain unknown rather than being treated as enabled."""
     hits, llm_done, fallback, dial = [], 0, False, None
     for ev in (doc.get("events") or []):
         key = (ev.get("node"), ev.get("event"))
@@ -208,15 +175,9 @@ def _fastpath_rows(doc: dict, stamp: str, uid: int, conv: int, msg: str) -> list
 
 
 def _reply_kind_rows(doc: dict, stamp: str, uid: int, msg: str) -> list[dict]:
-    """一份 trace → 短应答**自我申报**行（R6 的原料；20261015 批 3 的取数口）。
+    """Read archived model-declared short-reply kinds and pending-target availability.
 
-    `planner.reply_kind` 是模型对这一轮那句短话读法的**唯一**读数口（三张手写词表
-    删掉之后，系统侧不再有第二份判断可以对照）。两个字段缺一不可：
-      · `kind` —— 模型读成 pos/neg/auth 里的哪一类（认不出的写法原样留 16 字）；
-      · `target` —— **系统这一轮手里有没有可承接的目标**（台账帧非空）。
-    `kind=auth` 而 `target=False` 就是"模型以为主人把决定权交出来了、系统手里却一件
-    都拿不出来"——旧版由词表在这里兜底，现在这条只记账、由人复核（**不拦截**）。
-    """
+    An authorization reading without a target is a review candidate, not a refusal rule."""
     out = []
     for ev in (doc.get("events") or []):
         if (ev.get("node"), ev.get("event")) != ("planner", "reply_kind"):
@@ -229,12 +190,7 @@ def _reply_kind_rows(doc: dict, stamp: str, uid: int, msg: str) -> list[dict]:
 
 
 def _print_reply_kind(rows: list, scanned: int) -> None:
-    """R6 那一节（短应答自我申报的取数出口）。
-
-    不定结论：这一节摊开的是"模型把短话读成了哪一类、当时手里有没有东西可给"。
-    「过度授权候选」（auth + 无目标）**只列不判**——它也可能是主人当场把决定权交出来、
-    而这一轮确实没有等着办的事（那种情况零写收尾才是对的）。判"该不该"是人的事。
-    """
+    """Display archived short-reply interpretations for human review without deciding intent."""
     if not rows:
         print("R6 短应答申报：窗口内无 `planner.reply_kind` 事件"
               "（⚠️ 这条 20261015 才上线 ⇒ 窗口跨上线日时，前段没有是正常的）\n")
@@ -273,10 +229,7 @@ def _next_turn_challenged(row: dict, seq: dict) -> bool:
 
 
 def _print_fastpath(rows: list, dials: dict, scanned: int, seq: dict) -> None:
-    """R5 那一节（**20261015 快道定价档的取数出口**）。
-
-    仅解析历史快道事件；当前服务没有快道开关。
-    """
+    """Display archived fastpath metrics; the current runtime has no fastpath switch."""
     if not rows:
         print("R5 快道定价：窗口内无 `planner.fastpath` 命中（⚠️ 这不等于五条都没用——"
               "先把 `planner.context` 的档位格数一遍再看）\n")
@@ -325,12 +278,11 @@ def main():
     until = args.until
 
     records, golden_skipped, scanned = [], 0, 0
-    # R4 的候选（20261014）：**独立一趟扫事件**，不往 `records` 里塞 events——R3 的链
-    # 只吃 stamp/uid/msg，而 events 是每份 trace 里最大的一块。
+    # Collect refusal evidence separately from the conversation-frequency records.
     r4, r4_seen, r4_readable, r4_legacy = [], 0, 0, 0
-    # R5（20261015）：命中行 + 档位格计数 + 会话内时序（`_next_turn_challenged` 用）。
+    # Collect archived fastpath events and configuration separately.
     r5, dials, seq = [], defaultdict(int), defaultdict(list)
-    # R6（20261015 批 3）：短应答自我申报行（`planner.reply_kind`）。
+    # Collect archived model-declared short-reply interpretations.
     r6: list = []
     files = iter_trace_files(args.dir)
     for f in files:

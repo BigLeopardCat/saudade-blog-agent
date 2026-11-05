@@ -2,11 +2,12 @@
 """Shared JSON/gzip trace reader for online diagnostics and offline evaluation."""
 import gzip
 import json
+import zlib
+from os import PathLike
+from pathlib import Path
 
-# Retain the old event key during the 30-day trace retention window.
-# Remove the alias after 2026-11-16, once all retained traces use workflow.
+# Archived failed runs may outlive production retention; normalize at this read boundary only.
 LEGACY_EVENT_KEY = "skill"
-LEGACY_SUNSET = "20261116"
 
 
 def _alias_legacy_event_key(doc: dict) -> dict:
@@ -17,18 +18,14 @@ def _alias_legacy_event_key(doc: dict) -> dict:
     return doc
 
 
-def load_trace(path: str) -> dict | None:
-    """读一份 trace（`.json` 与 `.json.gz` 都认）；坏文件返回 None，不抛。
-
-    「读不到」与「里面没有那件事」是两件事：调用端一律按前者处理，不许把 None 当成
-    "这份 trace 里没有我要找的东西"（扫描不能因为一个坏文件中断，也不能因此改口径）。
-    """
+def load_trace(path: str | PathLike[str]) -> dict | None:
+    """Read a UTF-8 JSON or gzip trace; unreadable data returns None, never an empty trace."""
     try:
-        if path.endswith(".gz"):
-            doc = json.loads(gzip.decompress(open(path, "rb").read()))
-        else:
-            doc = json.load(open(path))
-    except Exception:
+        source = Path(path)
+        reader = gzip.open if source.suffix == ".gz" else open
+        with reader(source, "rt", encoding="utf-8") as stream:
+            doc = json.load(stream)
+    except (OSError, ValueError, UnicodeError, EOFError, zlib.error):
         return None
     if not isinstance(doc, dict):
         return None

@@ -172,7 +172,7 @@ class ScheduleService:
                             "run_at": datetime.fromisoformat(prior["run_at"]),
                         }
                     )
-                definition.validate_creation(self.now())
+                definition.validate_creation(self.now(), allow_missed=True)
             name = storage_name(owner, identifier)
             client = self.backend.client
             if prior["kind"] == "recurring":

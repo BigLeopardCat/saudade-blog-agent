@@ -199,17 +199,7 @@ def _file_metric(tree: ast.AST) -> list[int]:
     return [coll, regex]
 
 
-# ── ③ eval 侧：评测判据面的棘轮（批 4）───────────────────────────────────────
-#
-# 这一段的判据来源与①②不同：那里扫**代码形状**，这里的三块各扫一种"评测判据面"——
-#   · `keys`    ：golden 三个文本断言键的**模式/词条全集** + 格数 + 项数（数据在 jsonl 里）
-#   · `exempt`  ：六个豁免开关**各被哪些用例打开**（开关是判据替自己打的补丁：加了一处
-#                 就说明有一条判据又在误伤，值得被人看见一次）
-#   · `families`：`run_golden.py` 里四张共享族（诚实拒绝 / 目标不存在 / 存在性引导词 /
-#                 派登录）的元素数 + 元素集哈希。**哈希是为了抓"数量不变、条目被换掉"**
-#                 （逐条替换措辞正是这一族的病，见 `ABSENCE_COMPOUND` 头注那次假红）。
-#   另加 `judge_metric`：`run_golden.py` 走一遍①②的穷举量（集合里的中文串 + 含中文的正则
-#   字符数）——上面三块是**窄口径**（我点得出名字的才数），这句是补网。
+# Evaluation assertion matching surfaces have an independent growth ratchet.
 EVAL_GOLDEN = "eval/golden/basic.jsonl"
 EVAL_JUDGE = "eval/run_golden.py"
 EVAL_KEYS = ("text_not_match_regex", "text_contains", "text_not_contains")
@@ -373,27 +363,18 @@ def _grown_files(now: dict, _oldby: dict) -> list:
 
 
 def _shrunk_files(now: dict, _oldby: dict) -> list:
-    """台账比实测**松**的文件（缩小了却没重切账）——20261018 补，与 `_grown_files` 反向。
+    """Find registered counts larger than current measurements.
 
-    为什么要有这一条：只判"变大"的棘轮会留下一笔**永久免费额度**。实测抓到过
-    `tools/base.py`：账上写着 132，盘上其实早就是 125 —— 那 7 条是历史上缩小之后没重切
-    留下的，于是下一批新增只要没回到 132 就**一格都不报**（"改完还是绿的"与"没改"同形）。
-    同族：`tests/test_module_budget.py` 的双向棘轮（同日补）、`eval/type_gate.py` 与
-    `eval/lint_gate.py` 的幽灵键守卫。三处一起补的，理由一样。
-
-    **只判账上已有的键**：新文件不在账里，那是 `_grown_files` 那一侧的活（那里"缺席按 0 算"）。
-    """
+    Report stale slack separately from growth so unrelated reductions cannot
+    conceal a newly expanded matching surface."""
     return [(f, _oldby[f], now[f]) for f in _oldby
             if f in now and any(int(now[f][i]) < int(_oldby[f][i]) for i in (0, 1))]
 
 
 def _stale_metric_keys(now: dict, _oldby: dict) -> list:
-    """账上有、这次扫描里却没有的文件键（删了 / 改名了 / 移出扫描面）——20261018 补。
+    """Find registered files absent from the current scan.
 
-    与 `_shrunk_files` 同族：键留着就是**一笔等着被领的额度**——同路径哪天再出现一个文件
-    （改名改回来、文件被重建），它会拿着旧额度静默通过。`eval/type_gate.py` 那处的危害更大
-    （改名会让新文件按 0 起算、等于凭空买回一份额度），三处一起补的。
-    """
+    Deleted, renamed or excluded files must not leave reusable baseline slack."""
     return sorted(f for f in _oldby if f not in now)
 
 
@@ -604,8 +585,7 @@ def check() -> int:
     gone = [i for i in reg if i not in {c.ident for c in cands}]
     _oldby = whole.get("metric", {}).get("by_file", {})
     metric_grew = _grown_files(metric["by_file"], _oldby)
-    # 反方向两条（20261018 补）：账比现场松 / 账上的文件已经不在扫描面里。只判"变大"
-    # 的棘轮会留下一笔永久免费额度——实测在 `tools/base.py` 上抓到过 7 条。
+    # Also reject stale registrations and counts larger than current measurements.
     metric_shrunk = _shrunk_files(metric["by_file"], _oldby)
     metric_stale = _stale_metric_keys(metric["by_file"], _oldby)
     verdicts = _verdicts(cands, reg)

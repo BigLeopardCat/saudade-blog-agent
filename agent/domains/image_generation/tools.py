@@ -6,8 +6,10 @@ from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import tool
 from pydantic import Field
 
+from agent.authz import SCOPE_ADMIN_CONSOLE
 from agent.domains.admin_writes import available
 from agent.proposals import proposal
+from agent.runtime.access import configured_reads_enabled
 from agent.runtime.writes import bound_context
 from tools import base
 
@@ -132,7 +134,7 @@ def get_image_generation(job_id: JobID, config: RunnableConfig) -> object:
     exist but are NOT in the gallery; use prepare_generated_image_acceptance to show the
     result for human approval. unknown must be reconciled, never automatically restarted.
     """
-    if not available(config):
+    if not configured_reads_enabled(config, SCOPE_ADMIN_CONSOLE):
         return base.unavailable("当前身份无权查看生图任务。")
     value = read(job_id, config)
     if isinstance(value, base.ToolResult):

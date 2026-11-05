@@ -3,13 +3,15 @@
 from functools import cache
 
 from agent.authz import SCOPE_ADMIN_CONSOLE
-from agent.domains import article_editor
+from agent.domains import article_editor, talks
 from agent.domains.account_actions import preparation as accounts
 from agent.domains.admin_writes import available
 from agent.domains.announcements import preparation as announcements
+from agent.domains.article_actions import deletion as article_deletions
 from agent.domains.article_actions import preparation as articles
 from agent.domains.article_tags import preparation as article_tags
 from agent.domains.categories import preparation as categories
+from agent.domains.gallery import folders as gallery_folders
 from agent.domains.gallery import preparation as gallery_preparation
 from agent.domains.gallery import reads as gallery_reads
 from agent.domains.image_generation import tools as image_generation
@@ -23,6 +25,9 @@ from agent.products.blog.read_tools import scoped_reads_enabled
 _PREPARATIONS = (
     ("admin_account_actions", accounts),
     ("admin_gallery", gallery_preparation),
+    ("admin_gallery", gallery_folders),
+    ("admin_talks", talks),
+    ("admin_catalog", article_deletions),
     ("admin_image_generation", image_generation),
     ("admin_catalog", articles),
     ("admin_catalog", article_tags),
@@ -39,8 +44,7 @@ _PREPARATIONS = (
 @cache
 def preparation_names():
     """Use the same preparation registry for execution menus and historical access."""
-    return frozenset(name for _, preparation in _PREPARATIONS
-                     for name in preparation.tools({}))
+    return frozenset(name for _, preparation in _PREPARATIONS for name in preparation.tools({}))
 
 
 def domains(config, can_prepare, reads):
@@ -49,6 +53,7 @@ def domains(config, can_prepare, reads):
         return {}
     selected = {name: dict(tools) for name, tools in reads.items()}
     selected["admin_gallery"] = gallery_reads.tools()
+    selected["admin_talks"] = {talks.list_admin_talks.name: talks.list_admin_talks}
     selected["admin_image_generation"] = {
         image_generation.get_image_generation.name: image_generation.get_image_generation
     }
@@ -61,8 +66,10 @@ def domains(config, can_prepare, reads):
             current.update(preparation.tools(current))
     from agent.domains import public_catalog
 
-    for domain, read in (("admin_tags", public_catalog.list_tags),
-                         ("admin_categories", public_catalog.list_categories)):
+    for domain, read in (
+        ("admin_tags", public_catalog.list_tags),
+        ("admin_categories", public_catalog.list_categories),
+    ):
         if domain in selected:
             selected[domain][read.name] = read
     return selected

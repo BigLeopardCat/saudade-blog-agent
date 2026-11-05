@@ -70,3 +70,31 @@ def test_current_time_requires_a_successful_observation_not_an_unknown_result(ki
     value = result('get_current_time', '2026年11月05日 星期四 02:06')
     value['native_events'][0]['kind'] = kind
     assert (not native_assertions.check(case_gold('current_time'), value)) is accepted
+
+
+@pytest.mark.parametrize("stamp,delay,expected", [
+    ("2026-11-06T07:00:00Z", None, True),
+    ("2026-11-06T07:04:38Z", None, False),
+    (None, 10080, False),
+    ("2026-11-06T15:00:00", None, False),
+])
+def test_absolute_schedule_checks_clock_date_and_timezone(tmp_path, stamp, delay, expected):
+    path=tmp_path/'trace.json'
+    path.write_text(json.dumps({'started_at':'2026-11-05T12:16:02+08:00'}))
+    value={'trace':str(path),'native_events':[], 'confirm_payloads':[{'specs':[
+        {'tool':'create_automation','args':{'definition':{
+            'action':'admin_write','run_at':stamp,'delay_seconds':delay}}}]}]}
+    gold={'require_automation_schedule':{'action':'admin_write','days':1,'clock':'15:00:00'}}
+    assert (not native_assertions.check(gold,value)) is expected
+
+
+def test_relative_schedule_requires_approval_anchored_delay_and_complete_time_evidence(tmp_path):
+    path=tmp_path/'trace.json'
+    path.write_text(json.dumps({'started_at':'2026-11-05T12:16:02+08:00'}))
+    value={'trace':str(path),'native_events':[],'confirm_payloads':[{'specs':[
+        {'tool':'create_automation','args':{'definition':{
+            'action':'admin_write','run_at':None,'delay_seconds':300}}}]}]}
+    gold={'require_automation_schedule':{'action':'admin_write','delay_seconds':300}}
+    assert not native_assertions.check(gold,value)
+    value.pop('trace')
+    assert native_assertions.check(gold,value)

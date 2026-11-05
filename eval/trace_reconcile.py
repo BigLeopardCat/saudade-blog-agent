@@ -18,9 +18,7 @@ import sys
 from collections import defaultdict
 from datetime import datetime, timedelta
 
-# trace 文件枚举的唯一实现（20260925：生产 trace 改按天分目录 `<root>/<YYYYMMDD>/`，
-# 四个读取端共用一处，免得"改了布局漏改一个脚本"= 那天它少看一半数据）。
-# 与 `trace_files.py` 同目录，直接按脚本目录导入（本模块本来就被 tests 以同样方式加载）。
+# Use the shared iterator for partitioned and compressed trace files.
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from config.settings import settings  # noqa: E402
 from utils.trace_files import iter_trace_files  # noqa: E402
@@ -51,8 +49,7 @@ DUMP_FAILED_RE = re.compile(r"trace dump failed trace_id=(\S+)")
 MON_HEAD_RE = re.compile(r"^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})(?:[.,]\d+)? \S+ \[monitor\] ")
 # 前端上报里"只在失败分支出现"的两个 type（前者是弹窗链路，后者是消息流 DOM 清理）
 MON_FAILURE_TYPES = ("confirm_card", "orphan_dom_drop")
-# 弹窗链的**正常分支**逐跳记录（20260924 前端埋点）。**不能并进 MON_FAILURE_TYPES**：
-# 那是"数异常"的口径，把正常链路算进去，等于每点一次确定都算一次异常。
+# Normal confirmation lifecycle messages are not frontend failures.
 FLOW_TYPE = "confirm_flow"
 # 弹窗链上五个阶段（判据 ⑦ 按它数跳、缺哪一跳点名哪一跳）
 FLOW_STAGES = ("frame", "card", "click", "sent", "settle")
@@ -66,8 +63,7 @@ TRACE_NAME_RE = re.compile(r"^\d{8}T\d{6}_\d+_[0-9a-zA-Z]+\.json$")
 
 
 def _parse_ts(s: str) -> datetime | None:
-    """解析时间戳。**两种分隔符都要收**：trace 的 `started_at` 是 `2026-09-24T00:12:20`
-    （ISO 的 T，文件名去掉它才成 `20260924T001220`），日志行首是空格分隔的钟面。"""
+    """Parse ISO timestamps and space-separated log timestamps."""
     try:
         return datetime.strptime(s[:19].replace("T", " "), TS_FMT)
     except Exception:
@@ -128,10 +124,7 @@ def read_traces(trace_dir: str, since: datetime, until: datetime) -> dict:
         index[tid].append(rec)
         if started is not None and since <= started <= until:
             records.append(rec)
-    # 卫生项（异物）只报**窗口内**的：2026-09-01/03 那几份早年诊断 trace 躺在生产目录里
-    # 是既有事实，若按"看见就报"会每晚重报一次已复核过的旧账，把新伤淹掉。
-    # 时间戳解析不出来的（bad）保留在列表里——坏文件值得每晚提醒到有人清掉为止。
-    # 同一份文件可能同时命中两条理由（uid=0 且文件名非标准）⇒ 按文件合并成一条。
+    # Report malformed trace records only within the requested inspection window.
     in_win, why_by_file = [], defaultdict(list)
     for n, t, w in odd:
         if t is None or since <= t <= until:
@@ -165,16 +158,10 @@ def read_stream_ends(log_dir: str) -> dict:
 
 
 def read_monitor(monitor_dir: str) -> dict:
-    """读 monitor.log 及其轮转归档。**只当线索、不当证据**。
+    """Read client monitor reports as diagnostic leads, never authoritative evidence.
 
-    20261004 修正措辞：说「type/uid 都是匿名可写的原样插值」已经不准了——同一批改动
-    （Rust `src/routes/monitor.rs`）之后，落盘行是服务端**拼**的：换行被剥掉、`type`
-    收敛成闭集（白名单外的取值一律记 `other`）、`uid` 是服务端从令牌解析出来的
-    `guest`/数字。所以整行伪造这条路已经堵上。
-    **但它仍不是证据**：`msg` / `url` / `ua` 依旧是客户端自述的文本，一条类型真实的
-    上报完全可以带着假内容。判据要用这里的东西**去找**（定位到那一刻、那一类），
-    不要拿它**证明**。
-    """
+    The server normalizes type and identity fields, but message, URL and user
+    agent remain client-controlled claims."""
     paths = sorted(glob.glob(os.path.join(monitor_dir, "monitor.log*")))
     events, raw = [], 0
     for line in _iter_lines(paths):

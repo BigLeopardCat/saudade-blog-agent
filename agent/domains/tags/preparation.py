@@ -10,6 +10,7 @@ from agent.reports import sanitize_untrusted
 from agent.runtime.results import TurnResult
 from agent.runtime.turns import check_cancelled
 from agent.runtime.writes import bound_context
+from agent.scheduling.models import WriteSchedule
 from tools import base
 from tools.result import invalid_args
 
@@ -35,11 +36,13 @@ def description(plan):
             text += "；移除父级，成为一级标签"
         if before and before["level"] != after["level"]:
             text += "；保留文章引用，标签编号可能改变"
-    return (f"{text}。影响 {plan['articleCount']} 篇文章（含私密及独立草稿）、"
-            f"{plan['revisionCount']} 份编辑草稿")
+    return (
+        f"{text}。影响 {plan['articleCount']} 篇文章（含私密及独立草稿）、"
+        f"{plan['revisionCount']} 份编辑草稿"
+    )
 
 
-def _prepare(action, target, fields, config):
+def _prepare(action, target, fields, config, schedule=None):
     check_cancelled(config)
     if not available(config):
         return base.unavailable("需要已验签的管理员和稳定会话，本次未生成确认卡。")
@@ -52,7 +55,7 @@ def _prepare(action, target, fields, config):
         return plan
     spec = {"tool": TOOLS[action], "args": {"version": plan["version"], "intent": request}}
     text = description(plan)
-    if plan["before"] == plan["after"]:
+    if schedule is None and plan["before"] == plan["after"]:
         return TurnResult(
             text, {"noop_note": text, "noop_text": text, "task_satisfied": [spec], "receipts": []}
         )
@@ -66,6 +69,7 @@ def _prepare(action, target, fields, config):
         executor="tags",
         question=text + "。确认执行？",
         target=text,
+        schedule=schedule,
     )
 
 
@@ -80,8 +84,10 @@ def prepare_tag_create(
     color: targets.Color | None = None,
     parent_id: targets.Identifier | None = None,
     parent_name: targets.TargetName | None = None,
+    schedule: WriteSchedule | None = None,
 ) -> object:
-    """准备新建标签确认，不写入。默认一级；填写一级父标签编号或完整名字则创建二级。
+    """Optional schedule delays this exact approved change; use run_at for clock times.
+    准备新建标签确认，不写入。默认一级；填写一级父标签编号或完整名字则创建二级。
     颜色可选#RRGGBB；省略则保存为未设置，不继承父级颜色、不自动分配颜色。
     这是标签字典管理，给文章加标签应使用文章标签工具。
     """
@@ -90,7 +96,9 @@ def prepare_tag_create(
         if parent_id is not None or parent_name is not None
         else None
     )
-    return _prepare("create", None, {"name": name, "color": color, "parent": parent}, config)
+    return _prepare(
+        "create", None, {"name": name, "color": color, "parent": parent}, config, schedule
+    )
 
 
 @tool(return_direct=True)
@@ -105,8 +113,10 @@ def prepare_tag_update(
     to_level: targets.Level | None = None,
     parent_id: targets.Identifier | None = None,
     parent_name: targets.TargetName | None = None,
+    schedule: WriteSchedule | None = None,
 ) -> object:
-    """准备改标签名字、颜色、父级或层级确认，不写入。编号必须同时给当前level(1/2)。
+    """Optional schedule delays this exact approved change; use run_at for clock times.
+    准备改标签名字、颜色、父级或层级确认，不写入。编号必须同时给当前level(1/2)。
     或用完整原名，同名二级可用current_parent_id区分。仅填要改的字段，颜色空串清空。
     parent_id/parent_name指定一级父标签；to_level=1升为一级。带子标签的一级标签不能降级。
     跨层移动保留文章引用，实际编号可能变化；同层改父级保留编号。
@@ -122,6 +132,7 @@ def prepare_tag_update(
         _target(tag_id, tag_name, level, current_parent_id),
         {"name": new_name, "color": color, "level": to_level, "parent": parent},
         config,
+        schedule,
     )
 
 
@@ -132,11 +143,13 @@ def prepare_tag_delete(
     tag_name: targets.TargetName | None = None,
     level: targets.Level | None = None,
     parent_id: targets.Identifier | None = None,
+    schedule: WriteSchedule | None = None,
 ) -> object:
-    """准备删除标签确认，不写入。编号需同时提供当前层级；或用完整原名，二级同名可补父编号。
+    """Optional schedule delays this exact approved change; use run_at for clock times.
+    准备删除标签确认，不写入。编号需同时提供当前层级；或用完整原名，二级同名可补父编号。
     删除一级会同时删除二级子标签；文章不删除，只清除相应引用。确认卡展示实际影响数量。
     """
-    return _prepare("delete", _target(tag_id, tag_name, level, parent_id), {}, config)
+    return _prepare("delete", _target(tag_id, tag_name, level, parent_id), {}, config, schedule)
 
 
 def tools(read_tools):

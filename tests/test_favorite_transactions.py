@@ -1,8 +1,6 @@
 """Confirmed writes use durable operation identities and factual tool receipts."""
 
-
 import asyncio
-import json
 import time
 from contextlib import closing
 
@@ -12,6 +10,7 @@ from langchain_core.messages import HumanMessage
 from langgraph.checkpoint.memory import InMemorySaver
 
 from agent import idem
+from agent.contracts.events import StreamEvent
 from agent.domains.favorites import transactions
 from agent.principal import SOURCE_ASSERTION, Principal
 from agent.products.blog.application import BlogApplication
@@ -206,8 +205,8 @@ def test_stream_producer_emits_existing_execution_receipt(monkeypatch, tmp_path)
         return frames
 
     frames = asyncio.run(collect())
-    receipts = [json.loads(frame.removeprefix("__EXEC__:")) for frame in frames
-                if isinstance(frame, str) and frame.startswith("__EXEC__:")]
+    receipts = [frame.data for frame in frames
+                if isinstance(frame, StreamEvent) and frame.name == "receipts"]
     assert len(receipts) == 1
     assert receipts[0][0]["tool"] == "add_favorite"
     assert receipts[0][0]["args"] == {"article_id": "19"}

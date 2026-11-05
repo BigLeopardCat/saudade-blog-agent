@@ -57,7 +57,10 @@ def _code_of(src: str) -> str:
 
 def test_identity_preflight():
     print("① classify 全表：三个状态、两个角色")
-    check("admin 通道 + 200 → ok（活的管理员）", ip.classify(role_expected="admin", status=200)[0] == ip.OK)
+    check(
+        "admin 通道 + 200 → ok（活的管理员）",
+        ip.classify(role_expected="admin", status=200)[0] == ip.OK,
+    )
     check("admin 通道 + 403 → unusable（不是管理员）",
           ip.classify(role_expected="admin", status=403)[0] == ip.UNUSABLE)
     check("user 通道 + 403 → ok（活着的普通用户，这正是它的期望值）",
@@ -86,10 +89,10 @@ def test_identity_preflight():
     print("\n③ probe 的探测与重试纪律（urlopen 全程被替换）")
     _slept: list[float] = []
     _orig_urlopen, _orig_sign, _orig_sleep = (
-        ip.urllib.request.urlopen, _tb._sign_local_jwt, ip.time.sleep)
+        ip.urllib.request.urlopen, _tb.host_credential, ip.time.sleep)
     try:
         # 签名函数换成空壳：本节一次都不真签、更不发请求
-        _tb._sign_local_jwt = lambda uid, role: "stub-token"
+        _tb.host_credential = lambda uid: "stub-token"
         ip.time.sleep = lambda s: _slept.append(s)
 
         def _run(behavior, **kw):
@@ -140,11 +143,11 @@ def test_identity_preflight():
             sys.modules.update(_saved)
     finally:
         ip.urllib.request.urlopen = _orig_urlopen
-        _tb._sign_local_jwt = _orig_sign
+        _tb.host_credential = _orig_sign
         ip.time.sleep = _orig_sleep
     print("\n④ 必须用 agent 那条签名路径（与探针刻意相反）")
     check("引用 tools.base 的签名函数与后台地址",
-          "from tools.base import" in _SRC and "_sign_local_jwt" in _SRC and "ADMIN_BASE" in _SRC)
+          "from tools.base import" in _SRC and "host_credential" in _SRC and "ADMIN_BASE" in _SRC)
     _IP_CODE = _code_of(_SRC)
     check("不自己实现签名/解码（代码段里无 jwt/hmac/base64）",
           not any(p in _IP_CODE for p in ("import jwt", "hmac", "base64")),

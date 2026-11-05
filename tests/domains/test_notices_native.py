@@ -197,3 +197,14 @@ def test_service_cannot_substitute_an_unlisted_recipient_role(notices):
     notices["recipient"]["role"] = "superadmin"
     assert isinstance(prepare(user_id=11), base.ToolResult)
     assert not notices["writes"]
+
+
+def test_scheduled_notice_freezes_recipient_and_body_without_sending(notices, enabled_scheduler):
+    result = prepare(user_id=11, schedule={"delay_seconds": 300})
+    approved = grant(result)
+    assert approved["executor"] == "automations"
+    definition = approved["specs"][0]["args"]["definition"]
+    assert definition["write"]["kind"] == "notices"
+    assert definition["write"]["change"]["intent"]["content"] == " 原文\n保持😀\t "
+    assert definition["write"]["change"]["intent"]["target"]["id"] == 11
+    assert notices["writes"] == 0

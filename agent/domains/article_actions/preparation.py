@@ -12,6 +12,7 @@ from agent.reports import sanitize_untrusted
 from agent.runtime.results import TurnResult
 from agent.runtime.turns import check_cancelled
 from agent.runtime.writes import bound_context
+from agent.scheduling.models import WriteSchedule
 from tools import base
 from tools.result import invalid_args
 
@@ -28,6 +29,7 @@ def prepare_article_state(
     category: Annotated[str, Field(min_length=1, max_length=100)] | None = None,
     status: Literal["public", "private", "draft"] | None = None,
     is_top: Annotated[StrictInt, Field(ge=0, le=1)] | None = None,
+    schedule: WriteSchedule | None = None,
 ) -> object:
     """按明确请求准备文章发布、隐藏、转草稿或置顶确认；只改指定字段，不编辑正文、署名或修改稿。
 
@@ -46,7 +48,7 @@ def prepare_article_state(
     if sum(value is not None for value in (article_id, article_ids, category)) != 1:
         return invalid_args("请选择单篇编号、批量编号或一个完整分类名。")
     if article_ids is not None or category is not None:
-        return batch.prepare(article_ids, category, status, is_top, config)
+        return batch.prepare(article_ids, category, status, is_top, config, schedule=schedule)
     current = targets.read(article_id, config)
     if isinstance(current, base.ToolResult):
         return current
@@ -59,7 +61,7 @@ def prepare_article_state(
     spec = {"tool": "set_article_status", "args": args}
     title = sanitize_untrusted(current["title"], 255)
     target = f"文章 {article_id}《{title}》：{targets.description(args)}"
-    if targets.satisfied(current, args):
+    if schedule is None and targets.satisfied(current, args):
         text = target + "，当前状态已达成，本次无需改动。"
         return TurnResult(
             text, {"noop_note": text, "noop_text": text, "task_satisfied": [spec], "receipts": []}
@@ -74,6 +76,7 @@ def prepare_article_state(
         executor="article_state",
         question=target + "？",
         target=target,
+        schedule=schedule,
     )
 
 

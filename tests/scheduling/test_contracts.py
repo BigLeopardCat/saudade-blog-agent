@@ -64,6 +64,19 @@ def test_timezones_deadlines_and_relative_confirmation_time():
         Definition(title="循环", action="reminder", instruction="提醒", cron=cron)
 
 
+def test_optional_schedule_semantics_are_visible_on_the_actual_tool_properties():
+    from langchain_core.utils.function_calling import convert_to_openai_tool
+
+    from agent.domains.categories.preparation import prepare_category_create
+
+    schema = convert_to_openai_tool(prepare_category_create)
+    schedule = schema["function"]["parameters"]["properties"]["schedule"]
+    properties = next(branch["properties"] for branch in schedule["anyOf"]
+                      if "properties" in branch)
+    assert "date/time" in properties["run_at"]["description"].lower()
+    assert "after approval" in properties["delay_seconds"]["description"].lower()
+
+
 @pytest.mark.parametrize(
     "principal",
     [
