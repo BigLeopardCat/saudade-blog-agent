@@ -887,10 +887,10 @@ ABSENCE_LEADS: tuple[str, ...] = (
 _BARE_NEG = r"(?:没有|没|未|无)"
 _ABSENCE_NEG = (r"(?:" + "|".join(ABSENCE_COMPOUND)
                 + rf"|{_BARE_NEG}[^。\n]{{0,4}}(?:{'|'.join(ABSENCE_LEADS)}))")
-# 目标与否定形态之间的窗口统一取 60。原来五份手抄各写 24/26/30，取值本身没有依据；
-# **真正管住"别跨句乱配"的是 `[^。\n]`（同一个 。/换行之内）**，这一层的距离上限只是
-# 防呆。取 60 的依据是现场那条回复：模型把"在后台 30 条留言里筛了一遍、三栏一个都没
-# 命中"这一串数说全了，字面到否定形态之间隔了 41 个字——旧窗口 30 判它假红。
+# 目标与否定形态之间的窗口统一取 60。**真正管住"别跨句乱配"的是 `[^。\n]`
+# （同一个 。/换行之内）**，这一层的距离上限只是防呆。取 60 的依据是现场那条回复：
+# 模型把"在后台 30 条留言里筛了一遍、三栏一个都没命中"这一串数说全了，字面到否定
+# 形态之间隔了 41 个字；窗口取 30 会判它假红。
 ABSENCE_WINDOW = 60
 
 
@@ -1935,7 +1935,7 @@ def main():
             "resets_reasons": result["resets_reasons"],
             # Distinguish archived decision resets from user-visible terminal fallbacks.
             "reset_scopes": result["reset_scopes"],
-            "requires_tools": requires,  # 20260902 下午：效率指标归因（工具类 vs 非工具类）
+            "requires_tools": requires,  # 效率指标归因（工具类 vs 非工具类）
             # Record tool sequences and model rounds for efficiency comparisons.
             "tool_calls": result["tool_calls"],
             "tool_rounds": result["tool_rounds"],
@@ -2363,7 +2363,7 @@ def main():
               f"爬坡没到档）；用例 {_h['ids'][:5]}，逐条见 {review_path or REPORT_FILE}")
         sys.exit(1)
     if _s["state"] == "collapse":
-        # 措辞分两种：样本量够时看**下界**（比历史最差的一夜还差 = 事故）；样本太少时
+        # 措辞分两种：样本量够时看**下界**（比已知最差的一夜还差 = 事故）；样本太少时
         # 下界本身没有证明力，判红的依据是**点估计**都低于地板（整片红）。两者都是
         # 退出码 1，但说错依据会把人带去查错地方——小样本塌方要么是这批用例全废、
         # 要么是接线断了，跟"离目标还差多少"无关。
@@ -2378,7 +2378,7 @@ def main():
               f"逐条见 {review_path or REPORT_FILE}")
         sys.exit(1)
     # 到这里：采样层**没有事故**（下界在地板之上）。没到档位只报不置红——档位是爬坡台阶，
-    # 拿它当夜间报警会把"我们离目标还差多少"变成"出事了"，红就贬值了（见 landing_gate）。
+    # 拿它当夜间报警会把"离目标还差多少"变成"出事了"，红就贬值了（见 landing_gate）。
     print(f"⚠ {failed} 条 FAIL，但采样层下界 {_s['lower']:.3f} ≥ 地板 {_s['floor']}"
           f"（{_s['state']}，档位 {_s['entry']} / 目标 {_s['target']}，"
           f"还差 {_landing['distance_to_target']:.3f}）→ 退出码 0"

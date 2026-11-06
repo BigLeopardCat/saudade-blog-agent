@@ -663,7 +663,7 @@
             localStorage.setItem(key, json);
           } catch(e) {
             // QuotaExceeded 止损：裁剪到最近 30 条重试（逼近 5MB 上限时旧数据
-            // 保留、新写入失败——曾现"转跳后新页面对话停在旧消息、新内容全丢"）
+            // 保留、新写入失败，会导致新页面对话停在旧消息、新内容丢失）
             const trimmed = JSON.stringify(__chatCore.capItems(forStorage, 30));
             if (localStorage.getItem(key) !== trimmed) {
               localStorage.setItem(key, trimmed);

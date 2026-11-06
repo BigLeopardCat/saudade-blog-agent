@@ -421,7 +421,7 @@ def _run(run_id: str, argv: list[str], mode: str, log_path: Path) -> None:
     env = os.environ.copy()
     env["PYTHONUNBUFFERED"] = "1"
     # uv 要靠 HOME 找缓存（`~/.cache/uv`，那 470MB 依赖就在里面）与解释器目录；PATH 里
-    # 补上 uv 所在目录，uv 自己再 shell out 找东西时不会二次踩同一个坑。systemd 给
+    # 补上 uv 所在目录，uv 自己再 shell out 找东西时不会再次失败。systemd 给
     # User= 的服务设 HOME/LOGNAME（SetLoginEnvironment 默认开），但这里是**显式兜底**：
     # 少了 HOME，uv 会当成长得像 root 的环境去 /root/.cache 重建一份缓存——症状是
     # "头一次跑完，第二次又从头下 470MB"。

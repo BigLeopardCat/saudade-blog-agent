@@ -26,7 +26,7 @@ FENCE_KEEP_DAYS = 30
 MAX_THREADS_DEFAULT = 200
 
 # langgraph 的公开 schema（`BasePostgresSaver.MIGRATIONS` 逐条 CREATE 的就是这三张）。
-# ⚠️ **三张都要删，不能只删 `checkpoints`**：实测这个版本的三张表之间**一条外键都没有**
+# ⚠️ **三张都要删，不能只删 `checkpoints`**：这个版本的三张表之间**一条外键都没有**
 # （`pg_constraint` 里 `conrelid LIKE 'checkpoint%'` 查出来是空的）⇒ 只删主表会留下
 # 孤儿 blob/writes，而它们照样占空间、且没有任何读取路径会再碰它们。
 # `checkpoint_migrations` **不在这个表里**：它记的是"这套表建到第几版"，是 schema 账不是数据。

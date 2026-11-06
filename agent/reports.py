@@ -23,7 +23,7 @@ _CMD_WORD_RE = re.compile(
 
 # 零宽空格（U+200B）：肉眼不可见，但**不是** Unicode 空白（`'​'.isspace()` 为
 # False，Python 与 JS 的 `\s` 都不匹配它），所以夹在命令词与冒号之间能让两侧正则
-# 全部失配。比"删掉冒号"温和——内容照旧可读、可复制，只是不再是一条命令。
+# 全部失配。内容照旧可读、可复制，只是不再是一条命令。
 _ZWSP = "\u200b"  # 显式转义：源码里不留不可见字符
 
 
@@ -228,7 +228,7 @@ def _detail_line(r: dict, extra: str = "") -> str:
 
 
 def _ai_bucket(v) -> str:
-    """ai_result → 四态之一（认不出的值按"未审"——与上一版同取向，不新造桶）。"""
+    """ai_result → 四态之一（认不出的值按"未审"——与既有取向一致，不新造桶）。"""
     return v if v in ("pass", "reject", "flag") else "none"
 
 
@@ -490,7 +490,7 @@ _COUNT_WORDS = (("views", "阅读"), ("likes", "点赞"), ("favorites", "收藏"
 
 # 合计那三个数是**另一套键名**（`totalViews` …），不能与行内的共用一份：
 # 拿行里的键去取合计会一个也取不到——而它静默（`data.get` 返回 None），
-# 报表上就只剩一句"本次没读到合计值"（首版就这么写错过一次）。
+# 报表上就只剩一句"本次没读到合计值"。
 _TOTAL_WORDS = (("totalViews", "阅读"), ("totalLikes", "点赞"), ("totalFavorites", "收藏"))
 
 
@@ -619,7 +619,7 @@ def render_note_stats(data: dict, now: datetime | None = None) -> str:
 #     未必是同一个七天，而模型的下一步动作就是念着这一行回答他；
 #   · **`partial` 是真话的一部分**：统计功能的起点落在某一期中间时，那一期只统计了
 #     部分天数（`partial=true`）。不写它，"上线那一周只有两天数据"会被读成"那周流量
-#     掉了"——这正是本模块反复强调的"缺数 ≠ 零"，只不过量词换成了"期"。
+#     掉了"——这正是"缺数 ≠ 零"，只不过量词换成了"期"。
 #
 # 以及一条**口径事实**要写进帧里：每期的合计算的是**本期全量**，而榜只列前 N 篇
 # （加起来必然比合计小）；名次是**本期阅读量**序，期与期各自独立（同一篇文章在两期
@@ -637,8 +637,8 @@ def _period_line(p: dict) -> str:
     label = str(p.get("label") or p.get("key") or "?")
     span = f"（{short_time(p.get('start'))} ~ {short_time(p.get('end'))}）"
     counts = _counts_text(p, first="views") or "本次没读到合计"
-    # `partial` 只认真正的 True：认不出（老后端没这个键）就**不写**这一句，
-    # 而不是默认写"完整"——"不完整"是缺数，"完整"是一个我们没有的断言。
+    # `partial` 只认真正的 True：认不出（后端没这个键）就**不写**这一句，
+    # 而不是默认写"完整"——"不完整"是缺数，"完整"是一个并不存在的断言。
     flag = "，**本期不完整**（统计起点落在本期中间，只统计了部分天数）" \
         if p.get("partial") is True else ""
     return f"- {label}{span}{counts}{flag}"

@@ -31,7 +31,7 @@ def _ev(node, event, **kw):
 
 
 def _call(name, args, verdict=None, noop=False):
-    """一次调用的三种形状：真执行 / 被拦下 / 零改动（后两种按实测事件序拼）。"""
+    """一次调用的三种形状：真执行 / 被拦下 / 零改动（后两种按实际事件序拼）。"""
     out = [_ev("execute", "call", name=name, args=args)]
     if noop:
         out.append(_ev("execute", "noop", tool=name, args=args))

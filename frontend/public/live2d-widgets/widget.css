@@ -1061,8 +1061,7 @@
   user-select: none;
 }
 .chat-conv-title:empty { display: none; }
-/* 旧 show-title 语义（标题横条替代消息区顶部 L 线）已废除：标题进顶条后
-   messages 永远保持默认 margin/border，show-title 类不再有任何效果 */
+/* 标题进顶条后 messages 保持默认 margin/border，show-title 类不改变这些值 */
 #waifu-chat.show-title .chat-conv-title { display: block; }
 #waifu-chat.show-title .chat-messages {
   margin-top: var(--drag-h);
@@ -1616,7 +1615,7 @@
 .conv-row-menu { background: var(--washi-paper, #fffdfa); border-color: var(--washi-line, rgba(198, 152, 192, 0.42)); }
 /* 图标是 chat-session.js / chat-render.js 注入的**行内 fill 字面量**（#203042 等），
    深色面板上等于隐形。表现属性（fill="..."）按作者级 0 特异度参与层叠，任何 CSS
-   声明都能盖过 —— 统一改成 currentColor，让图标跟着各自按钮的 color 走。 */
+   声明都能盖过 —— 统一使用 currentColor，让图标跟着各自按钮的 color 走。 */
 #waifu-chat svg path { fill: currentColor; }
 
 /* ── 深色档：只有"用字面量定死、令牌管不到"的那几处需要在这里翻一遍 ── */
@@ -1643,12 +1642,12 @@
 
 /* ⓪ 外框线：唯一那圈线必须**看得见**。
    `--washi-line` 是 rgba(198,152,192,0.42)——压在纸面上已经偏淡，再压在
-   水洗过的顶/左两段上（淡紫压淡粉）就基本消失了，实测顶左角的圆角整条读
-   不出来（"边界合并"变成了"边界没了"）。所以外框单独用一个更实的一支。
+   水洗过的顶/左两段上（淡紫压淡粉）就基本消失了，顶左角的圆角整条读不出来
+   （"边界合并"变成了"边界没了"）。所以外框单独用一支更实的令牌。
    令牌就近定义在 `#waifu-chat` / `#waifu-chat.washiDark` 两处（不是 :root）——
    面板挂在 document.body 下，`.frontDark` 不是它的祖先，深色档认的是面板
    自己身上那个 `.washiDark`（chat-stream.js 在 darkmode-change 时挂）；
-   写成 :root 一处反倒会在 html 层就被替换成浅色字面量（本仓踩过）。 */
+   写成 :root 一处会在 html 层就被替换成浅色字面量。 */
 #waifu-chat::before {
   border-color: var(--chat-frame-line, rgba(146, 96, 148, 0.55));
 }
@@ -1679,7 +1678,7 @@
    尺寸受 `--drag-h: 24px` 约束：12px 字 + 上下各 3px + 1px 边框 = 20px，
    由外壳的 align-items:center 光学居中。 */
 .chat-conv-title {
-  overflow: visible; /* 外壳不再负责裁剪：签自己有 max-width + 省略号，
+  overflow: visible; /* 外壳不负责裁剪：签自己有 max-width + 省略号，
                         外壳留着 overflow:hidden 会把签的投影一起切掉 */
 }
 .chat-conv-title-tag {
@@ -1712,8 +1711,7 @@
   border-radius: 2px;
   background: var(--washi-grad, linear-gradient(100deg, #ff7fc0 0%, #b06ee8 52%, #63b8e8 100%));
 }
-/* 空文本时连外壳一起让位（旧规则挂在 .chat-conv-title:empty 上，文本搬进
-   签之后外壳永不为空 ⇒ 隐藏判据一并搬到签上） */
+/* 空文本时连外壳一起让位（文本搬进签之后外壳永不为空 ⇒ 隐藏判据放在签上） */
 .chat-conv-title-tag:empty { display: none; }
 
 .chat-messages,

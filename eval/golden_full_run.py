@@ -72,7 +72,7 @@ if any(c.get("requires_fixture") for c in CASES):
     # `eval/` 在 sys.path 上（见文件头第一段）。
     import golden_fixture  # noqa: E402
     # 闸的实现只有一处（`golden_fixture.gate`，两族夹具都在里面）——与 run_golden.py
-    # **共用同一个函数**，不再是"两份实现 + 一句口径一致的注释"。
+    # **共用同一个函数**，避免两份实现与注释口径漂移。
     CASES, _DROPPED, _LINES = golden_fixture.gate(CASES)
     _SKIPPED_IDS += _DROPPED
     for _ln in _LINES:

@@ -17,7 +17,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from config import settings  # noqa: E402
 from rag.search import get_index  # noqa: E402
-from rag.vector_index import rrf_fuse  # noqa: E402  （20261005 收口：融合只有这一份实现）
+from rag.vector_index import rrf_fuse  # noqa: E402  （融合只有这一份实现）
 from recall_eval import QUERIES  # noqa: E402  (同目录，评测集单一数据源)
 
 ROOT = Path(__file__).resolve().parent

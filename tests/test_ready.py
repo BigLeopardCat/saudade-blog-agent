@@ -41,8 +41,8 @@ def test_ready():
     _agent_saved = app.state.runtime
     # ⚠️ **凭据由本判据自己摆，不许继承运维取值**：离线套件跑在
     # `SAUDADE_IGNORE_ENV_FILE=1` 下（见 `tests/conftest.py::_PINNED`），`.env` **根本不读**
-    # ⇒ `*_api_key` 全是空的。直接断言"凭据在位 ⇒ 200"会**单跑绿、进套件红**（实测撞上过
-    # 一次，症状是 ① 报 `reasons=['missing_credentials']`）。同 `test_checkpoint_factory.py` ①
+    # ⇒ `*_api_key` 全是空的。直接断言"凭据在位 ⇒ 200"会**单跑绿、进套件红**（症状是
+    # ① 报 `reasons=['missing_credentials']`）。同 `test_checkpoint_factory.py` ①
     # 钉 `CHECKPOINT_DSN=""` 的理由：判据的前提要自己摆出来，否则它量的是这台机器的 `.env`。
     # 三个 key 一起给：哪一个是当前 provider 的由 settings 决定，判据不必跟着走。
     _KEY_FIELDS = ("qwen_api_key", "deepseek_api_key", "openai_api_key")

@@ -94,10 +94,10 @@ def _stub(secret=FIXTURE_KEY):
 
 
 def test_rust_shaped_numeric_sub_is_accepted():
-    """① **那枚地雷**：Rust 发的是数字 `sub`，新验签必须收下它。
+    """① Rust 发的是数字 `sub`，验签必须接受它。
 
     反控同场跑：把 `verify_sub` 拨回 PyJWT 的默认（True）⇒ **同一条令牌必须被拒**。
-    没有这个反控，这一条会退化成"某个我们没测过的选项恰好是对的"。
+    没有这个反控，这一条会退化成"某个未测过的选项恰好是对的"。
     """
     import jwt as pyjwt
 
@@ -132,8 +132,8 @@ def test_rust_shaped_numeric_sub_is_accepted():
         )
         if not ok:
             bad.append(f"反控没炸（{raised or '没抛'}）—— 那条注释就成了一句空话")
-        # 反过来：`verify_sub: True` 对**字符串** sub 是放行的 ⇒ 证明地雷的成因是类型，
-        # 而不是"我们关掉的那个选项其实无关紧要"
+        # 反过来：`verify_sub: True` 对**字符串** sub 是放行的 ⇒ 证明成因是类型，
+        # 而不是"关掉的那个选项其实无关紧要"
         str_tok = _mint({"sub": "7", "aud": AUD, "exp": int(time.time()) + 60})
         ok = (
             pyjwt.decode(

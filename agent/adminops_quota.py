@@ -99,12 +99,12 @@ def render_quota_status(kind: str, username: str, uid, limit, used) -> str:
     硬事实来源。三种情形分开说，**一句都不许猜**：
       · `used == 0` ⇒ 读数确认余额已恢复满（这是绝大多数情况）；
       · `used > 0`  ⇒ 他在这之后又聊过了（恢复是真发生了，但读数已不满）——
-        如实报实测值，**不许**照抄"已恢复"（那会是一句他自己能证伪的话）；
+        如实报读数，**不许**照抄"已恢复"（那会是一句他自己能证伪的话）；
       · `used is None` ⇒ 端点回了成功但读不回读数：只说端点那一半，明说未复核
         （同 `_set_account_frozen` 的"未确认"取向，**不冒充已核实**）。
     """
     lim = limit if isinstance(limit, int) and limit > 0 else 0
-    # 读数写**余额**（20260929b）：这一族的判据仍然是 `chatQuotaUsed`（见 `_quota_readback`），
+    # 读数写**余额**：这一族的判据仍然是 `chatQuotaUsed`（见 `_quota_readback`），
     # 但那是一个内部判据、不是给主人看的读数。`剩 500/500` 与 `0/500` 是同一件事，
     # 前者一眼就是"满了"，后者要先分辨 0 是哪一栏。`used is None`（读不回读数）与
     # `reject` 两支都不印这一对读数（各自只说端点那一半 / "额度没有变化"），
@@ -130,7 +130,7 @@ def render_quota_status(kind: str, username: str, uid, limit, used) -> str:
 
 # 「这一件 agent 办不了」那一句**只此一份**：额度台账帧（`graph._render_quota_facts`）
 # 与 `list_quota_requests` 的清单（本函数）指的必须是**同一件事、同一句话**——两处各写
-# 一遍，改一处就会漂移成两种说法（本仓反复吃过这个形状的亏）。`None`/uid 取不出 ⇒ 空串。
+# 一遍，改一处就会漂移成两种说法。`None`/uid 取不出 ⇒ 空串。
 _UNREACHABLE_NOTE = ("（⚠ 这个编号不在后台账号名录里——超管账号不列进名录、"
                      "注销过的账号也不在；**agent 的额度写通道办不了这一件**，"
                      "得你到后台处理）")
@@ -154,7 +154,7 @@ def render_quota_requests(rows, reachable=None) -> str:
         used = r.get("used")
         lim = r.get("limit")
         try:
-            # 余额口径（20260929b）：这一屏的用法正是"管理员看完之后说'批准 Alice'"，
+            # 余额口径：这一屏的用法正是"管理员看完之后说'批准 Alice'"，
             # 而他那一眼要判的就是"他还剩多少"。减法只在这里做一次，判据 `used` 不变。
             pair = ("不限额" if int(lim) <= 0
                     else f"剩{max(0, int(lim) - int(used))}/{int(lim)} 轮")

@@ -12,9 +12,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from rag.search import tokenize  # noqa: E402
 
 # S2：**没有字母也没有汉字的 token 一律排除**（纯数字、纯标点、`1.`、`1.1.0`、`..`）。
-# 形态学判据，不是"内容判据"：数字在语料里是阈值/端口/版本号，不是主题词（实测 `8010`
+# 形态学判据，不是"内容判据"：数字在语料里是阈值/端口/版本号，不是主题词（`8010`
 # 落在 13/19、`30` 落在 19/46，跨篇偶然同形）；点号串是 markdown 序号/省略号的残渣
-# （实测 note:14∩note:22 的派生集里混着 `..`、`...`、`1.`、`1.1.0`）。**不许**把它写成
+# （note:14∩note:22 的派生集里混着 `..`、`...`、`1.`、`1.1.0`）。**不许**把它写成
 # "它们不在正文里"——它们在，只是不承担主题。
 _WORDY = re.compile(r"[a-zA-Z一-鿿]")
 _ASCII_ALPHA = re.compile(r"[a-zA-Z]")
@@ -405,7 +405,7 @@ def _scan_archive(files, golds: dict, check) -> tuple[dict, dict]:
             elif case.get("text_truncated"):
                 c["trunc"] += 1
             elif len(texts) != len(gs):
-                c["stale"] += 1       # gold 改过轮次：历史那份对不上今天的判据
+                c["stale"] += 1       # gold 已变更轮次：旧记录对不上当前判据
             else:
                 c["cases"] += 1
                 for i, text in enumerate(texts):

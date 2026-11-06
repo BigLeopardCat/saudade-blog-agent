@@ -115,4 +115,3 @@ def compose(prelude: str, body: str) -> str:
     if not b or b.startswith(p):
         return b or p
     return p + "\n\n" + b
-

@@ -75,9 +75,9 @@ def test_report_archive():
               f"{names[1]} < {names[2]}")
 
         print("\n③ 反向对照：同名加后缀那两种写法会排反（本模块选「让位一毫秒」的理由）")
-        # 判据是**实测过的字节序事实**，不是思辨：`-`(0x2D) < `.`(0x2E)、以及计数器不补零时
+        # 判据是**字节序事实**，不是思辨：`-`(0x2D) < `.`(0x2E)、以及计数器不补零时
         # `_10` < `_9`。两者都会让"挑最新一份"（sorted()[-1] / ls|tail / archived[-1]）挑错。
-        _hyphen = f"{BASE}_125-2.json"     # 记录本缺陷的笔记里那条候选正是这个写法
+        _hyphen = f"{BASE}_125-2.json"     # 候选写法
         _base_name = f"{BASE}_125.json"
         check("`<ts>-2.json` 排在 `<ts>.json` **之前**（挑最新会挑中先跑那份）",
               sorted([_hyphen, _base_name])[-1] == _base_name,

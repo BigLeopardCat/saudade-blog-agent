@@ -127,8 +127,8 @@ def ready_payload(agent, settings) -> tuple[int, dict]:
         reasons.append("unknown_provider")
     else:
         # 只在认得出时才问凭据：`is_api_key_configured` 按 provider 前缀 `getattr`，
-        # 认不出的名字会让它抛 AttributeError（`Settings._provider_prefix` 那段注里的
-        # 同形坑：校验放行了、取值却取不到）。
+        # 认不出的名字会让它抛 AttributeError（`Settings._provider_prefix` 有同样的前提：
+        # 校验放行了、取值却取不到）。
         if not settings.is_api_key_configured:
             reasons.append("missing_credentials")
     return (200 if not reasons else 503), {"ready": not reasons, "reasons": reasons,
