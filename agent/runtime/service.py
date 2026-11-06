@@ -322,8 +322,5 @@ def _finish_inputs(session, outcome):
     except InputConflict as exc:
         if str(exc) != "task_not_available":
             raise
-        if execution.get("paused_task"):
-            session.input_inbox.open(session.task)
-            return session.input_inbox.finish(
-                session.task, session.state["applied_inputs"], paused=True)
+        record("native", "task_inputs_missing", task_id=session.task["id"])
         return []

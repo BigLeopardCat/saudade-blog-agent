@@ -341,3 +341,21 @@ def test_only_terminal_inboxes_expire_and_completion_starts_the_retention_clock(
             inbox.read(task["id"], task["scope"])
     else:
         assert inbox.read(task["id"], task["scope"])["phase"] == phase
+
+
+def test_storage_lost_before_pause_is_not_recreated_as_an_empty_inbox():
+    from types import SimpleNamespace
+
+    from agent.runtime.results import TurnResult
+    from agent.runtime.service import _finish_inputs
+
+    selected = runtime(Model())
+    task = {"id": "lost-before-pause", "scope": binding(
+        config()["configurable"]["principal"], 42)}
+    selected.inputs.open(task)
+    selected.inputs.submit(task["id"], task["scope"], "constraint", "只处理草稿")
+    selected.inputs.delete_task(task["id"])
+    session = SimpleNamespace(input_inbox=selected.inputs, task=task, state={"applied_inputs": []})
+    _finish_inputs(session, TurnResult("", {"paused_task": {"task_id": task["id"]}}))
+    with pytest.raises(InputConflict, match="not_available"):
+        selected.inputs.open(task, resume=True)
