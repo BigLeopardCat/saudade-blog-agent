@@ -1,160 +1,158 @@
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
-"""Validate commit prefixes, spacing, Unicode length and CI hook wiring."""
-
-from __future__ import annotations
+"""Exercise contribution validation with isolated Git objects and literal PR titles."""
 
 import os
-import pathlib
-import re
+import shutil
 import subprocess
-import sys
 import tempfile
+import unittest
+from pathlib import Path
 
-from _judge import collector
-
-ROOT = pathlib.Path(__file__).resolve().parent.parent
-HOOK = ROOT / ".githooks" / "commit-msg"
-INSTALLER = ROOT / "scripts" / "dev" / "install-hooks.sh"
-CONTRIBUTING = ROOT / "CONTRIBUTING.md"
-EVAL_YML = ROOT / ".github" / "workflows" / "eval.yml"
-
-FAILED: list[str] = []
-check = collector(FAILED)
-
-
-def run_hook(msg: str) -> tuple[int, str]:
-    """喂一条提交信息给钩子，返回（退出码, stdout+stderr）。
-
-    `PATH` 前置到**本进程的解释器目录**：钩子的 `char_len` 靠 `python3` 数字符，钉住它，
-    判据就不随"这台机器上有没有 python3"漂。
-    """
-    env = dict(os.environ)
-    env["PATH"] = str(pathlib.Path(sys.executable).parent) + os.pathsep + env.get("PATH", "")
-    with tempfile.NamedTemporaryFile("w", suffix=".msg", delete=False, encoding="utf-8") as f:
-        f.write(msg)
-        path = f.name
-    try:
-        r = subprocess.run(["bash", str(HOOK), path], capture_output=True, text=True, env=env)
-    finally:
-        os.unlink(path)
-    return r.returncode, (r.stdout or "") + (r.stderr or "")
+ROOT = Path(__file__).resolve().parents[1]
+HOOK = ROOT / ".githooks/commit-msg"
+CHECK = ROOT / ".github/scripts/check-contribution.sh"
+TYPES = (
+    "feat",
+    "fix",
+    "refactor",
+    "perf",
+    "test",
+    "docs",
+    "style",
+    "build",
+    "ci",
+    "chore",
+    "revert",
+)
 
 
-def hook_types(text: str) -> set[str] | None:
-    """钩子里 `case "$TYPE" in` 那一行的白名单。认不出返回 None（= 判据失明，不是通过）。"""
-    m = re.search(r"^\s*((?:[a-z]+\|)+[a-z]+)\)\s*;;", text, re.M)
-    return set(m.group(1).split("|")) if m else None
+class ContributionPolicyTest(unittest.TestCase):
+    def setUp(self):
+        self.directory = tempfile.TemporaryDirectory()
+        self.addCleanup(self.directory.cleanup)
+        self.root = Path(self.directory.name)
+        self.environment = {
+            **os.environ,
+            "GIT_CONFIG_NOSYSTEM": "1",
+            "GIT_CONFIG_GLOBAL": os.devnull,
+            "GIT_AUTHOR_NAME": "Fixture",
+            "GIT_AUTHOR_EMAIL": "fixture@example.test",
+            "GIT_COMMITTER_NAME": "Fixture",
+            "GIT_COMMITTER_EMAIL": "fixture@example.test",
+        }
 
+    def command(self, args, *, text=None, **env):
+        return subprocess.run(
+            args,
+            cwd=self.root,
+            env={**self.environment, **env},
+            input=text,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
 
-def contributing_types(text: str) -> set[str] | None:
-    """`CONTRIBUTING.md` 《3. 提交约定》里那行 `` `fix` · `feat` · … `` 的类型集。
+    def hook(self, message, *, title=False):
+        path = self.root / "message.txt"
+        path.write_text(message)
+        return self.command(["bash", str(HOOK), str(path), *(["--title"] if title else [])])
 
-    只认**整行都是 `` `x` · `y` ``** 且至少 5 项的那一行：那一节里还有别的反引号词
-    （`Co-Authored-By`、`git diff -U0`），宽一点的正则会把它们当 type 读进来，
-    而"多读了几个词"会让这条判据红在错的地方（**判据失明与真的不同源要分得开**）。
-    """
-    m = re.search(r"^## (?:\d+\. )?提交(?:约定|与评审)$(?P<body>.*?)(?=^## |\Z)", text, re.M | re.S)
-    if not m:
-        return None
-    for line in m.group("body").splitlines():
-        items = re.findall(r"`([a-z]+)`", line)
-        if len(items) >= 5 and re.fullmatch(r"[\s`·a-z]+", line):
-            return set(items)
-    return None
+    def git(self, *args, text=None):
+        result = self.command(["git", *args], text=text)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        return result.stdout.strip()
 
+    def repository(self):
+        self.git("init", "--quiet")
+        folder = self.root / ".githooks"
+        folder.mkdir()
+        shutil.copy2(HOOK, folder / "commit-msg")
+        return self.git("mktree", text="")
 
-# ══════════════════════════════════════════════════════════════════════
-def test_commit_msg_hook():
-    print("① 钩子与安装脚本在位、钩子可执行")
-    check(".githooks/commit-msg 在位", HOOK.is_file())
-    check("scripts/dev/install-hooks.sh 在位", INSTALLER.is_file())
-    # 权限位是这一层的**实质**：`core.hooksPath` 模式下 git 直接 exec 钩子文件，
-    # 少了可执行位就是"装了但一次都不会跑"——而 `git commit` 不会为此报任何错。
-    check("  钩子有可执行位（否则 git 直接跳过它，且不报错）", os.access(HOOK, os.X_OK),
-          oct(HOOK.stat().st_mode)[-3:] if HOOK.is_file() else "文件不在")
+    def commit(self, tree, message, parent=None):
+        return self.git("commit-tree", tree, *(["-p", parent] if parent else []), text=message)
 
-    # ══════════════════════════════════════════════════════════════════════
-    print("\n② 行为：坏消息要拒，好消息要放行")
-    _GOOD = "fix(agent): 修一个真的会坏的东西\n\n- 为什么：…\n- 判据：tests/test_xxx.py\n"
-    _BAD: list[tuple[str, str]] = [
-        ("首行超过 60 字符", "fix(agent): " + "很长的描述" * 12 + "\n"),
-        ("type 不在白名单", "update(agent): 换个名字\n"),
-        ("首行没有 type 前缀", "修一个 bug\n"),
-        ("冒号后没空格", "fix(agent):修一个 bug\n"),
-        ("冒号后没描述", "fix(agent):\n"),
-        ("描述只有空白", "fix:    \n"),
-        ("scope 没闭合", "fix(agent: 修复\n"),
-        ("scope 为空", "fix(): 修复\n"),
-        ("scope 有空格", "fix(agent runtime): 修复\n"),
-        ("scope 后有多余字符", "fix(agent)junk: 修复\n"),
-        ("首行与正文之间没空行", "fix(agent): 修一个 bug\n- 为什么：…\n"),
-        ("署名尾注", "fix(agent): 修一个 bug\n\n- 为什么：…\n\nCo-Authored-By: X <x@y.z>\n"),
-    ]
-    for _name, _msg in _BAD:
-        _rc, _out = run_hook(_msg)
-        check(f"  拒：{_name}", _rc != 0, "" if _rc != 0 else "rc=0（放行了）")
-    _rc, _out = run_hook(_GOOD)
-    check("  收：一条合规的消息", _rc == 0, "" if _rc == 0 else f"rc={_rc} {_out.strip()[:100]}")
-    for _msg in ("docs: 澄清说明\n", "feat(runtime)!: 更新会话契约\n\n需要迁移已有配置。\n",
-                 "refactor!: 删除废弃配置\n", "fix(tools/own): 核对回执\n"):
-        _rc, _out = run_hook(_msg)
-        check(f"  收：{_msg.splitlines()[0]}", _rc == 0, _out)
-    # 字符数而不是字节数：`fix(agent): ` 是 12 个 ASCII，再加 20 个中文字 = **32 字符 / 72 字节**。
-    # 数字节的实现会把这条合规消息判死（而它是本仓最常见的摘要形状）。
-    _rc, _out = run_hook("fix(agent): " + "中文描述" * 5 + "\n")
-    check("  收：中文摘要按**字符**数（32 字符 / 72 字节；数字节会误拒）", _rc == 0,
-          "" if _rc == 0 else f"rc={_rc}")
-    for _msg in ("Merge remote-tracking branch 'origin/main' into x\n",
-                 "Revert \"fix: x\"\n\nThis reverts commit 0abc.\n",
-                 "fixup! fix(agent): x\n"):
-        _rc, _out = run_hook(_msg)
-        check(f"  豁免：{_msg.splitlines()[0][:28]}", _rc == 0, "" if _rc == 0 else f"rc={_rc}")
-    # 空消息由 git 自己拦，钩子不该在这里重复报错（否则 `git commit --amend` 的编辑流程会炸）
-    _rc, _out = run_hook("\n")
-    check("  收：空消息（交给 git 自己拦）", _rc == 0, "" if _rc == 0 else f"rc={_rc}")
+    def test_supported_types_and_documentation(self):
+        documentation = (ROOT / "CONTRIBUTING.md").read_text()
+        for kind in TYPES:
+            with self.subTest(kind=kind):
+                self.assertIn(f"`{kind}`", documentation)
+                result = self.hook(f"{kind}(chat): 更新说明\n")
+                self.assertEqual(result.returncode, 0, result.stderr)
 
-    # ══════════════════════════════════════════════════════════════════════
-    print("\n③ ⭐ 钩子的 type 白名单与 CONTRIBUTING.md 逐字同源")
-    _hook_text = HOOK.read_text(encoding="utf-8")
-    _ht = hook_types(_hook_text)
-    _ct = contributing_types(CONTRIBUTING.read_text(encoding="utf-8"))
-    check("  两边都认得出（认不出 = 判据失明，不是通过）",
-          _ht is not None and _ct is not None, f"钩子={_ht} CONTRIBUTING={_ct}")
-    check("  ⭐ 两边是同一组 type", _ht == _ct,
-          f"钩子={sorted(_ht or [])} 文档={sorted(_ct or [])}")
-    # 反控：把钩子里那个 type 改掉一个 ⇒ 必须判出不同。没有这一条，上面那句可能只是
-    # "两边都读到了同一个错东西"（比如两个解析器都只认出 1 项）。
-    _ht_tampered = hook_types(_hook_text.replace("|perf|", "|perff|"))
-    check("  反控：改掉钩子里的一个 type 就必须被发现", _ht_tampered != _ct,
-          "" if _ht_tampered != _ct else f"改了却没发现（两边都读到 {sorted(_ct or [])}）")
-    _contrib_tampered = contributing_types(
-        CONTRIBUTING.read_text(encoding="utf-8").replace("`ci`", "`cxx`"))
-    check("  反控：改掉文档里的一个 type 就必须被发现", _contrib_tampered != _ht,
-          "" if _contrib_tampered != _ht else "改了却没发现")
+    def test_valid_messages_and_real_contributor_trailers(self):
+        for message in (
+            "docs: 更新说明\n",
+            "feat(api)!: 更新接口\n\n需要迁移配置。\n",
+            "refactor!: 移除旧接口\n",
+            "fix(tools/own): 核对回执\n",
+            "fix: " + "中" * 55 + "\n",
+            "fix: " + "x" * 55 + "\n",
+            "fix(chat): clarify recovery\n\nA complete paragraph is valid.\n\n"
+            "Co-authored-by: Pat Example <pat@example.test>\n",
+            "fix(chat): 恢复会话\r\n\r\n修复状态读取。\r\n",
+        ):
+            with self.subTest(message=message):
+                result = self.hook(message)
+                self.assertEqual(result.returncode, 0, result.stderr)
 
-    # ══════════════════════════════════════════════════════════════════════
-    print("\n④ 接线：CI 跑的是钩子本身，不是这个套件")
-    # 剥掉整行注释再判——本仓踩过"只在注释里提一句也算接线"的坑（见 test_ci_suite_list 头注）
-    _eval_code = "\n".join(ln for ln in EVAL_YML.read_text(encoding="utf-8").splitlines()
-                           if not ln.lstrip().startswith("#"))
-    check("  eval.yml 里有一行**会执行**的 `.githooks/commit-msg`",
-          ".githooks/commit-msg" in _eval_code,
-          "" if ".githooks/commit-msg" in _eval_code else "只在注释里提一句不算接线")
-    check("  ⚠️ 没有点名 tests/test_commit_msg_hook.py（套件清单只许「按目录收集」一处）",
-          "tests/test_commit_msg_hook.py" not in _eval_code,
-          "" if "tests/test_commit_msg_hook.py" not in _eval_code
-          else "逐套件点名会让 test_ci_suite_list ① 红")
-    # `git log BEFORE..SHA` 需要历史；`fetch-depth: 1` 会让每一步都落进"取不到基线 ⇒ 跳过"，
-    # 闸门看着在跑、其实一次都没判。这条判的就是那个前提。
-    check("  eval.yml 的 checkout 取足了历史（否则区间比对恒走「跳过」分支）",
-          "fetch-depth: 0" in _eval_code,
-          "" if "fetch-depth: 0" in _eval_code else "没有 fetch-depth: 0")
+    def test_invalid_messages(self):
+        for message in (
+            "update(chat): 修改\n",
+            "修复会话\n",
+            "fix(chat):修改\n",
+            "fix:    \n",
+            "fix(): 修改\n",
+            "fix(Chat): 修改\n",
+            "fix(chat: 修改\n",
+            "fix(chat)extra: 修改\n",
+            "fix(chat runtime): 修改\n",
+            "fix(chat): 修改\n缺少空行\n",
+            "fix: " + "中" * 56 + "\n",
+            "fix: " + "x" * 56 + "\n",
+        ):
+            with self.subTest(message=message):
+                self.assertNotEqual(self.hook(message).returncode, 0)
 
-    print()
-    assert not FAILED, f"{len(FAILED)} 条未过：" + "；".join(FAILED)
-    print("全部通过")
+    def test_generated_commit_messages_are_not_valid_pr_titles(self):
+        for message in ("Merge branch 'main'\n", 'Revert "fix: x"\n', "fixup! fix: x\n"):
+            with self.subTest(message=message):
+                self.assertEqual(self.hook(message).returncode, 0)
+                self.assertNotEqual(self.hook(message, title=True).returncode, 0)
+        self.assertEqual(self.hook("\n").returncode, 0)
+        self.assertNotEqual(self.hook("\n", title=True).returncode, 0)
+        self.assertNotEqual(self.hook("fix: title\n\nbody\n", title=True).returncode, 0)
+
+    def test_pr_title_is_literal_and_does_not_validate_working_commits(self):
+        self.repository()
+        result = self.command(
+            ["bash", str(CHECK)],
+            EVENT_NAME="pull_request",
+            PR_TITLE="fix: $(touch injected-file)",
+            HEAD_SHA="not-a-commit",
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertFalse((self.root / "injected-file").exists())
+        result = self.command(["bash", str(CHECK)], EVENT_NAME="pull_request", PR_TITLE="invalid")
+        self.assertNotEqual(result.returncode, 0)
+
+    def test_mainline_validates_the_whole_new_range_and_current_head(self):
+        tree = self.repository()
+        base = self.commit(tree, "docs: 初始化\n")
+        bad = self.commit(tree, "临时修改\n", base)
+        head = self.commit(tree, "fix(chat): 恢复状态\n", bad)
+        result = self.command(["bash", str(CHECK)], EVENT_NAME="push", BASE_SHA=base, HEAD_SHA=head)
+        self.assertNotEqual(result.returncode, 0)
+        result = self.command(["bash", str(CHECK)], EVENT_NAME="push", BASE_SHA=bad, HEAD_SHA=head)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        result = self.command(
+            ["bash", str(CHECK)], EVENT_NAME="workflow_dispatch", BASE_SHA="", HEAD_SHA=head
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        result = self.command(
+            ["bash", str(CHECK)], EVENT_NAME="push", BASE_SHA=base, HEAD_SHA="missing"
+        )
+        self.assertNotEqual(result.returncode, 0)
 
 
 if __name__ == "__main__":
-    test_commit_msg_hook()
+    unittest.main()

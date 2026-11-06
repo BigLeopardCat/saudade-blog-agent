@@ -21,7 +21,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          # Commit validation needs the base object and the complete commit range.
           fetch-depth: 0
           persist-credentials: false
 
@@ -44,29 +43,6 @@ jobs:
 
       - name: Build and verify isolated distribution
         run: bash scripts/dev/package_smoke.sh
-
-      - name: 提交信息闸门（与本地同一份 .githooks/commit-msg）
-        env:
-          BEFORE: ${{ github.event.before || github.event.pull_request.base.sha }}
-          SHA: ${{ github.sha }}
-        run: |
-          set -euo pipefail
-          if ! git cat-file -e "${BEFORE}^{commit}" 2>/dev/null; then
-            echo "取不到 base 提交 ${BEFORE} ⇒ 本次跳过提交信息校验（**不是**通过）"
-            exit 0
-          fi
-          fail=0
-          MSGFILE="$(mktemp)"
-          trap 'rm -f "$MSGFILE"' EXIT
-          while read -r sha; do
-            [ -n "$sha" ] || continue
-            git log -1 --format=%B "$sha" > "$MSGFILE"
-            if ! bash .githooks/commit-msg "$MSGFILE"; then
-              echo "::error::提交 ${sha:0:9} 的信息不合规（见上面的说明）"
-              fail=1
-            fi
-          done < <(git log --no-merges --format=%H "${BEFORE}..${SHA}")
-          exit "$fail"
 
       - name: 未定义名静态扫描（ruff F821，秒级）
         run: uv run --frozen ruff check --select F821 --no-cache .
