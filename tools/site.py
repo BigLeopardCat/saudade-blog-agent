@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
-"""Site information, page commands and legacy tool entry points."""
+"""Site guide, navigation metadata and page commands."""
 
+import json
 from typing import Annotated, Literal
 from urllib.parse import unquote, urlsplit
 
@@ -10,38 +11,41 @@ from langchain_core.tools import tool
 from config import settings as _settings
 from tools.result import ToolResult, fact, ok, tgt
 
-# Public exports; helper names stay private to their modules.
 __all__ = ["get_site_map", "get_chat_history", "get_current_time",
            "IOT_ENABLED", "IOT_NAV_PATH", "nav_pure_path", "nav_path_valid",
-           "navigate_to", "toggle_effect", "toggle_dark_mode", "nav_label", "public_navigation"]
+           "navigate_to", "toggle_effect", "toggle_dark_mode", "nav_label", "public_navigation",
+           "navigation_paths"]
 
-# ---------------------------------------------------------------------------
-# 导航 / 引导工具
-# ---------------------------------------------------------------------------
 
 @tool
-def get_site_map() -> str:
-    """返回博客功能结构图，用于引导用户了解博客有哪些功能及其位置。"""
-    # IoT 那行随开关走：没装平台却把它列进"功能结构图"，就是让 回复模型 照着一份
-    # 系统自己给的假清单介绍一个 404（同 NAV_MAP 那十个别名，见文件顶部 IOT_ENABLED）。
-    iot_line = (
-        f"\n- 物联网控制台 ({IOT_NAV_PATH}) — 管理访客自己的 IoT 设备"
-        "（ESP32 OLED 屏幕显示等），需登录"
-    ) if IOT_ENABLED else ""
-    return f"""
-博客功能结构：
-- 首页 (/) — 展示置顶文章、最新文章列表、个人简介
-- 归档 (/times) — 按时间轴归档展示所有文章
-- 分类 (/category/:name) — 按分类查看文章
-- 说说 (/talk) — 动态/碎语
-- 留言板 (/guestbook) — 「河灯集」留言簿：公开浏览；发布河灯必须登录。
-  登录后可以匿名放灯，匿名仅隐藏公开留名，不免除登录，也不需要填写邮箱。
-- 关于我 (/about) — 个人介绍
-- 文章详情 (/article/:id) — 查看文章全文，支持 Mermaid 图表
-- 后台管理 (/dashboard) — 仅管理员可管理文章、分类、标签、公告等{iot_line}
-"""
+def get_site_map(config: RunnableConfig) -> ToolResult:
+    """读取站点功能指南及当前调用者的导航可用性，不切换页面。
 
-# Current conversation history is backed by the verified native read adapter.
+    指南不是完整路由清单；未列出不证明页面不存在。navigationAvailable仅为本次权限快照，
+    不授予权限；具体跳转仍由navigate_page校验，文章与分类路径从真实来源取得。
+    """
+    features = [
+        ("/", "首页", "置顶与最新公开文章、个人简介"),
+        ("/times", "归档", "按时间归档公开文章"),
+        ("/category/<name>", "分类", "按分类查看公开文章"),
+        ("/talk", "说说", "动态与碎语"),
+        ("/guestbook", "留言板", "公开浏览河灯集；发布须登录，可匿名隐藏公开留名，不需邮箱"),
+        ("/about", "关于我", "个人介绍"),
+        ("/article/<id>", "文章详情", "公开文章正文与Mermaid图表"),
+        ("/login", "登录", "账号登录"),
+        ("/dashboard", "后台管理", "仅管理员管理文章、分类、标签、公告等"),
+    ]
+    if IOT_ENABLED:
+        features.append((IOT_NAV_PATH, "物联网平台", "须登录，管理本人设备"))
+    paths = navigation_paths(config)
+    data = {"resource": "site_guide", "coverage": "documented_features", "exhaustive": False,
+            "grantsAuthorization": False, "pages": [
+                {"path": path, "name": name, "description": description,
+                 "navigationAvailable": (path in paths or bool(paths)
+                                          and path in ("/article/<id>", "/category/<name>"))}
+                for path, name, description in features]}
+    return ok(json.dumps(data, ensure_ascii=False, separators=(",", ":")), data=data)
+
 
 @tool
 def get_chat_history(
@@ -52,9 +56,6 @@ def get_chat_history(
     from agent.domains.own_activity import get_chat_history as read_history
     return read_history.invoke({"limit": limit}, config=config)
 
-# ---------------------------------------------------------------------------
-# 时间 / 天气工具
-# ---------------------------------------------------------------------------
 
 @tool
 def get_current_time() -> str:
@@ -97,6 +98,20 @@ if IOT_ENABLED:
     _NAV_LABELS[IOT_NAV_PATH] = "物联网平台"
 
 
+def navigation_paths(config: RunnableConfig) -> set[str]:
+    """Project the shared actor/scope checks; command execution rechecks authority."""
+    from agent.authz import SCOPE_ADMIN_CONSOLE, SCOPE_WRITE_PAGE, check
+    from agent.runtime.access import configured_reads_enabled
+
+    cfg = (config or {}).get("configurable") or {}
+    if (type(cfg.get("user_id")) is not int
+            or not configured_reads_enabled(config, SCOPE_WRITE_PAGE)
+            or not check(cfg.get("principal"), "navigate_to").allowed):
+        return set()
+    admin = configured_reads_enabled(config, SCOPE_ADMIN_CONSOLE)
+    return {path for path in _NAV_EXACT_PATHS if not path.startswith("/dashboard") or admin}
+
+
 def public_navigation() -> dict[str, str]:
     """Static public links for manual help; these do not grant tool permissions."""
     return {label: path for path, label in _NAV_LABELS.items()
@@ -136,10 +151,8 @@ def nav_path_valid(p: str) -> bool:
     return parts[1] == "category"
 
 
-# Supported stable deep links for individual content records.
-# Navigation validation and visible guidance share these address forms.
+# Stable deep links for individual content records.
 _ITEM_POSITION_FORMS: tuple[tuple[str, str, str], ...] = (
-    # (形态名, 完整形态（教给模型的字面）, 取值从哪里来)
     ("评论", "/article/<文章 id>?cid=<评论 id>",
      "`cid` = 那条评论的 id（站内通知那一行的 `link` 里带着它）"),
     ("河灯留言", "/guestbook?lid=<留言 id>",
@@ -187,10 +200,7 @@ def toggle_effect(
                       "Effect name: sakura(樱花), rain(大雨), snow(雪花)"],
     action: Annotated[Literal["on", "off"], "开启还是关闭: on(开启), off(关闭)"] = "on",
 ) -> str | ToolResult:
-    """开启或关闭博客页面的视觉效果（樱花/大雨/雪花）。
-    系统按本工具的执行回执驱动前端开关（按 action 显式开合，不因重复命令翻转状态）。
-    参数校验：无效 effect/action 返回提示而非执行回执——**回执只代表真实发生的切换**，
-    没有回执 = 动作未发生，回复不得声称已开/已关（gate 声称检查依据）。"""
+    """生成博客特效的显式开关指令（樱花、大雨或雪花）；参数错误时不生成指令。"""
     if effect not in ("sakura", "rain", "snow"):
         return f"效果无效: {effect!r}。可选: sakura(樱花), rain(大雨), snow(雪花)"
     if action not in ("on", "off"):
