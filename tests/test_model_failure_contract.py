@@ -1,6 +1,7 @@
 """Model availability facts stay safe, typed and separate from task-quality failures."""
 
 import asyncio
+import hashlib
 import json
 import secrets
 import time
@@ -181,6 +182,10 @@ def test_availability_stop_uses_captured_sdk_facts_without_resampling(
                                 {"failed": 5, "passed": 1})
     assert not report["full_run"] and "availability" in report["stopped_reason"]
     assert report["automatic_retries"] == 0
+    frozen = tmp_path / "report" / "suite.jsonl"
+    assert [json.loads(line) for line in frozen.read_text().splitlines()] == cases
+    assert frozen.stat().st_mode & 0o777 == 0o600
+    assert report["selected_suite_sha256"] == hashlib.sha256(frozen.read_bytes()).hexdigest()
     metrics = request_metrics.summary(json.loads(path.read_text()))
     assert metrics["model_failures"] == [{"error_type": "RateLimitError",
         "failure_source": "provider", "http_status": 429, "retryable": True}]

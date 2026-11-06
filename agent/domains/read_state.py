@@ -90,8 +90,11 @@ class ReadState:
                 type(data.get("unread")) is not int or data["unread"] != len(unread)
                 or (self.recipient and data.get("inboxComplete") is not True)):
             return base.unavailable(f"列表无法证明已覆盖全部未读{self.label}，请指定具体编号。")
+        observed(self.executor, {"scope": scope, "unreadCount": len(unread)},
+                 ("scope", "unreadCount"))
         if not unread:
-            text = f"所选{self.label}均已读，本次无需改动。"
+            text = (f"当前没有未读{self.label}，本次无需改动。" if scope == "all_unread"
+                    else f"所选{self.label}均已读，本次无需改动。")
             return TurnResult(text, {"noop_note": text, "noop_text": text, "receipts": []})
         if len(unread) > 100:
             return base.unavailable("每批最多确认100条，请选择明确的编号范围后分批处理。")

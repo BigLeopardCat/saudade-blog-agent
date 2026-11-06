@@ -185,6 +185,8 @@ def run(cases, transport, identities, report_dir, *, phase, suite_hash, include_
     folder = Path(report_dir)
     folder.mkdir(parents=True, exist_ok=False, mode=0o700)
     evaluator_hashes = snapshot(folder, cases)
+    selected = folder / "suite.jsonl"
+    selected.chmod(0o600)
     version = transport.client.get(transport.agent_url + "/version")
     version.raise_for_status()
     initial_version = version.json()
@@ -192,6 +194,7 @@ def run(cases, transport, identities, report_dir, *, phase, suite_hash, include_
     profiles, allowances, role_sets = actor_preflight(cases, transport, identities)
     report = {"phase": phase, "suite_sha256": suite_hash, "evaluator_sha256": evaluator_hashes,
               "dataset_role": dataset_role,
+              "selected_suite_sha256": hashlib.sha256(selected.read_bytes()).hexdigest(),
               "evaluation_id": evaluation_id,
               "dataset_audit": dataset_audit.audit(cases),
               "service_version": initial_version,
@@ -279,6 +282,20 @@ def run(cases, transport, identities, report_dir, *, phase, suite_hash, include_
     return report
 
 
+def select_cases(cases, phase, case_ids=None):
+    if case_ids and phase != "poc":
+        raise ValueError("--case-id is only for POC; full runs use the complete supplied suite")
+    if phase != "poc":
+        return cases
+    names = case_ids or POC_IDS
+    if len(names) != len(set(names)):
+        raise ValueError("duplicate case IDs are not separate samples")
+    by_id = {case["id"]: case for case in cases}
+    if set(names) - by_id.keys():
+        raise ValueError("unknown POC case IDs: " + ", ".join(sorted(set(names) - by_id.keys())))
+    return [by_id[name] for name in names]
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--phase", choices=("poc", "full"), default="poc")
@@ -292,13 +309,16 @@ def main():
     parser.add_argument("--blog-url", default="http://127.0.0.1:3000")
     parser.add_argument("--report-dir", type=Path, required=True)
     parser.add_argument("--suite", type=Path, default=SUITE)
+    parser.add_argument("--case-id", action="append",
+                        help="Select a POC case; repeat to preserve order")
     parser.add_argument("--dataset-role", choices=("regression", "holdout"), default="regression")
     parser.add_argument("--expected-build", help="Require this deployed SHA before any model call")
     args = parser.parse_args()
     cases = load_suite(args.suite)
-    if args.phase == "poc":
-        by_id = {c["id"]: c for c in cases}
-        cases = [by_id[key] for key in POC_IDS]
+    try:
+        cases = select_cases(cases, args.phase, args.case_id)
+    except ValueError as error:
+        parser.error(str(error))
     transport = OnlineTransport(agent_url=args.agent_url, blog_url=args.blog_url,
                                 report_dir=args.report_dir, host=args.host)
     try:

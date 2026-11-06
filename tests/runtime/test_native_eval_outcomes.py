@@ -112,12 +112,15 @@ def test_notification_noop_requires_global_zero_not_an_empty_page(total, expecte
 def test_notification_prepare_and_verified_zero_both_pass_but_missing_proof_and_writes_fail():
     gold = case_gold("notifications_prepare")
     value = result("prepare_notification_read", {}, scope="all_unread")
-    value["native_events"][0]["kind"] = "prepared"
+    value["native_events"][0].update(kind="prepared", call_id="prepared", round=1)
+    value["native_events"].append({"event": "preparation_observation", "call_id": "prepared",
+        "round": 1, "source": "notifications", "complete": True,
+        "facts": {"scope": "all_unread", "unreadCount": 1}})
     assert native_assertions.check(gold, value)
     value["confirm_payloads"] = [{"workflow": "notice_read", "specs": [
         {"tool": "read_notifications", "args": {"ids": [17], "all": False}}]}]
     assert not native_assertions.check(gold, value)
-    value["native_events"][0]["args"] = {"scope": "selected", "ids": [17]}
+    value["native_events"][1]["facts"]["scope"] = "selected"
     assert native_assertions.check(gold, value)
     value = result("get_inbox_overview", {"notifications": 0, "messages": 3, "total": 3})
     assert not native_assertions.check(gold, value)
@@ -140,3 +143,23 @@ def test_fake_receipt_allows_public_verification_but_never_confirmation_or_execu
     value["frames"] = []
     value["native_events"].append({"event": "write_done"})
     assert online_baseline.golden.check_gold(gold, value)
+
+
+@pytest.mark.parametrize("mutation", ["call_id", "round", "source", "complete", "nonzero", "bool"])
+def test_terminal_noop_proof_must_match_the_executed_call_and_validated_scope(mutation):
+    gold = case_gold("notifications_prepare")
+    call = {"node": "native", "event": "call", "name": "prepare_notification_read",
+            "kind": "noop", "call_id": "actual", "round": 2, "args_hash": "redacted"}
+    proof = {"event": "preparation_observation", "call_id": "actual", "round": 2,
+             "source": "notifications", "complete": True,
+             "facts": {"scope": "all_unread", "unreadCount": 0}}
+    value = {"native_events": [proof, call]}
+    assert not native_assertions.check(gold, value)
+    if mutation == "nonzero":
+        proof["facts"]["unreadCount"] = 1
+    elif mutation == "bool":
+        proof["facts"]["unreadCount"] = False
+    else:
+        proof[mutation] = {"call_id": "other", "round": 3, "source": "messages",
+                           "complete": False}[mutation]
+    assert native_assertions.check(gold, value)

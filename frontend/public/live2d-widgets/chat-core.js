@@ -6,6 +6,15 @@
     const stripImgMark = (s) => normText((s || '').replace(/\n?\s*\[图片(?:×\d+)?\]\s*$/g, ''));
     const matchText = (a, b) => normText(a) === normText(b);
     const genId = () => 'l' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 7);
+    const rememberFailedRound = (rows, entry) => {
+      const bound = (row) => row && row.conv_id != null && row.conv_id !== '';
+      const existing = Array.isArray(rows) ? rows.filter(bound) : [];
+      if (!bound(entry)) return existing.slice(0, 3);
+      const sameRound = (row) => String(row.conv_id) === String(entry.conv_id)
+        && ((entry.task_id && row.task_id === entry.task_id)
+          || (entry.partial_id && row.partial_id === entry.partial_id));
+      return [entry, ...existing.filter(row => !sameRound(row))].slice(0, 3);
+    };
     const migrateItem = (it) => ({
       id: (it && it.id) || genId(),
       type: (it && it.type) || 'agent',
@@ -25,11 +34,7 @@
       time: row.time,
       images: row.images,
     });
-    // `rows` = `/api/chat/history` 的 `items`；`lookupProcess` = 该会话的过程行查表
-    // （`chat-engine.js` 的闭包，要读 localStorage 的会话键 ⇒ **不搬进来**）。
-    // **漏传要响亮**：它缺席时 `process` 静默变 undefined，而整条 `pullHistory`
-    // 的 catch 会退化成本地缓存 —— 症状是"图不显示"，只有一行 console。
-    // 所以这里抛，不给自己一个静默默认。
+    // History rows need the conversation's process lookup to retain tool progress.
     const mapDbItems = (rows, lookupProcess) => {
       if (typeof lookupProcess !== 'function') {
         throw new Error('mapDbItems: lookupProcess 必须是函数（漏传会静默退化成无过程行）');
@@ -99,8 +104,7 @@
       }
       return out;
     };
-    // ── 时间标签（微信式时间分组）：会话间隔 > TIME_GAP_MS 时在新一段会话的
-    // 首条消息上方显示时间。formatTimeLabel 供 Node harness 提取验证。
+    // Group messages separated by more than five minutes.
     const TIME_GAP_MS = 5 * 60 * 1000;
     const validTime = (t) => typeof t === 'number' && t > 0 && !isNaN(t);
     const formatTimeLabel = (ts) => {
@@ -121,7 +125,7 @@
     const shouldShowTime = (prev, cur) => !!cur && validTime(cur.time)
       && (!prev || !validTime(prev.time) || (cur.time - prev.time > TIME_GAP_MS));
     return { genId, migrateItem, mapDbItems, dbRowToItem, mergeItems, replaceWithIncoming, capItems,
-             normText, stripImgMark, matchText,
+             normText, stripImgMark, matchText, rememberFailedRound,
              TIME_GAP_MS, formatTimeLabel, shouldShowTime };
   })();
 

@@ -94,7 +94,7 @@
           // 不删任何东西，原文还在气泡里可复制。
           return { ok: false, why: '这一轮已经不在服务端记录里，没有可删除的旧轮' };
         } catch(e) {
-          // 网络异常放弃（残留重发会在历史里重复）——决定不变，但要说出来
+          // Do not resend until the server confirms the failed round was discarded.
           return { ok: false, why: '连不上服务端，稍后再试' };
         }
       };
@@ -181,9 +181,7 @@
           }
           hintEl.textContent = text;
         };
-        // 双保险①：失败轮必须是当前最后一条 user 消息才允许操作
-        // （期间发了新消息 → 该轮已非最新，本地直接放弃）
-        // 双保险②：后端 discard 带原文校验（见 `postDiscard` 头注）
+        // The server also verifies the last user message before discarding it.
         const discardFailedRound = () => postDiscard(msg, ctx.state.conv);
         const restoreAndCleanup = () => {
           // 恢复原文（含图片）到输入区——图片从 items 里的 user 条目取
@@ -235,20 +233,20 @@
           const cur = JSON.parse(localStorage.getItem(FAILED_KEY) || 'null');
           const active = ctx.state.activeRound || {};
           const entry = { text, ts: Date.now(), reason: reason || '', kind: kind || 'failed',
-            ...(kind === 'stopped' ? { task_id: active.taskId, conv_id: active.convId ?? ctx.state.conv,
-              partial_id: active.roundId, process: active.process || [] } : {}) };
-          if (cur && Array.isArray(cur) && cur.length) {
-            localStorage.setItem(FAILED_KEY, JSON.stringify([entry, ...cur].slice(0, 3)));
-          } else {
-            localStorage.setItem(FAILED_KEY, JSON.stringify([entry]));
-          }
+            task_id: active.taskId, conv_id: active.convId ?? ctx.state.conv,
+            partial_id: active.roundId,
+            ...(kind === 'stopped' ? { process: active.process || [] } : {}) };
+          const rows = __chatCore.rememberFailedRound(cur, entry);
+          if (rows.length) localStorage.setItem(FAILED_KEY, JSON.stringify(rows));
+          else localStorage.removeItem(FAILED_KEY);
         } catch (e) {/* ignore */}
       };
       const clearFailedRound = (text) => {
         try {
           const cur = JSON.parse(localStorage.getItem(FAILED_KEY) || 'null');
           if (Array.isArray(cur)) {
-            const rest = cur.filter(x => x && x.text !== text);
+            const rest = cur.filter(x => x && (String(x.conv_id) !== String(ctx.state.conv)
+              || x.text !== text));
             if (rest.length) localStorage.setItem(FAILED_KEY, JSON.stringify(rest));
             else localStorage.removeItem(FAILED_KEY);
           }
@@ -1007,8 +1005,7 @@
           }
         }) : null;
 
-      // 将 waifu-tool-hitokoto 改为聊天面板开关
-      // （hitokoto 工具已从 tools 移除——A7 修复；按钮不存在时自建一个，复用原按钮位 id，保持开关可用）
+      // Reuse the Live2D toolbar slot for the chat toggle.
       const repurposeHitokoto = () => {
         let hitokotoBtn = document.getElementById('waifu-tool-hitokoto');
         if (!hitokotoBtn) {
@@ -1266,9 +1263,7 @@
       };
       window.applyDarkMode = applyDarkMode;
 
-      // 夜间时段自动切换已迁移到前端默认行为（App.tsx，不依赖看板娘脚本/agent）：
-      // 23:00-次日06:00 主动开启夜间，其余时段恢复日间；访客选择过则尊重意愿不覆盖。
-      // 本文件仅保留 agent DARKMODE: 命令与状态同步，避免双份定时器竞争。
+      // App.tsx owns automatic theme changes; this widget only synchronizes explicit commands.
 
       // 拖动（仅通过顶部/左侧边框条移动面板，其余区域允许选中文本）
       let isDragging = false, isResizing = false, resizeCorner = 'br', startX, startY, startW, startH, startLeft, startTop, offsetX, offsetY;

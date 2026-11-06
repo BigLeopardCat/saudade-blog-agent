@@ -142,6 +142,7 @@ def list_admin_board(config: RunnableConfig, status: Status | None = None,
                      page: Page = 1, limit: Limit = 5, item_id: Identifier | None = None) -> object:
     """分页查看河灯留言，默认5条、最多10条，返回总数与内容节选。
 
+    只查数量或审核分布用 get_moderation_status，本工具会读取内容节选。
     查询某条留言或匿名留言是谁发的，用 item_id 读取 publisher 的账号编号、用户名及昵称。
     displayName 是自由留名，可留空或与账号不同，不能用来认定发表账号。
     status 是最终审核状态，ai_result 是独立的AI判定。提供 item_id 单独读取内容。
@@ -156,6 +157,7 @@ def list_admin_comments(config: RunnableConfig, status: Status | None = None,
                         item_id: Identifier | None = None) -> object:
     """分页查看文章评论，默认5条、最多10条；可按审核状态、正文或账号关键词、文章编号筛选。
 
+    只查数量或审核分布用 get_moderation_status，本工具会读取内容节选。
     返回总数、内容节选和软删除标记；评论与河灯留言不同。提供 item_id 单独读取内容。
     """
     return _page("comments", config, status, keyword, page, limit, item_id, note_id=article_id)
