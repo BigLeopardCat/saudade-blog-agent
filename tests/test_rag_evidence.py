@@ -1,7 +1,8 @@
-"""RAG candidates must lead to successful body reads before factual answers."""
+"""Article provenance checks preserve independent evidence and scoped failures."""
 
 import ast
 
+import pytest
 from langchain_core.messages import AIMessage, HumanMessage
 
 from agent.domains.articles.evidence import ArticleEvidence
@@ -52,14 +53,45 @@ def test_candidate_only_answer_stops_without_restarting_or_asserting_article_con
     assert result is not None and "无法核实文章正文" in result.reply
 
 
-def test_empty_and_unavailable_searches_have_different_truthful_outcomes():
-    for value, expected in [(empty("检索无结果"), "暂未"), (unavailable("outage"), "不可用")]:
-        model = Model(
-            [call("rag_search", {"query": "topic"}, "s"), AIMessage(content="不受支持的文章事实")]
-        )
-        result = ToolSession(model, {}, {"rag_search": Tool("rag_search", value)}, {},
-                             middleware=(ArticleMiddleware,)).run([])
-        assert expected in result.reply and "不受支持" not in result.reply
+@pytest.mark.parametrize("value,reply", [
+    (empty("检索无结果"), "暂未检索到相关文章，没有读取正文。"),
+    (unavailable("outage"), "文章检索暂时不可用，没有读取正文。"),
+])
+def test_failed_search_preserves_qualified_answer_and_tool_evidence(value, reply):
+    model = Model([call("rag_search", {"query": "topic"}, "s"), AIMessage(content=reply)])
+    result = ToolSession(model, {}, {"rag_search": Tool("rag_search", value)}, {},
+                         middleware=(ArticleMiddleware,)).run([])
+    assert result.reply == reply and len(model.prompts) == 2
+    observed = model.prompts[-1][-1]
+    assert observed.content == str(value) and observed.artifact["kind"] == value.kind
+
+
+@pytest.mark.parametrize("value", [empty("检索无结果"), unavailable("outage")])
+def test_failed_search_cannot_authorize_an_invented_article_reference(value):
+    model = Model([call("rag_search", {"query": "topic"}, "s"),
+                   AIMessage(content="不受支持的文章事实 [来源](/article/99)")])
+    result = ToolSession(model, {}, {"rag_search": Tool("rag_search", value)}, {},
+                         middleware=(ArticleMiddleware,)).run([])
+    assert "引用无法核实" in result.reply and "/article/99" not in result.reply
+
+
+def test_auxiliary_search_failure_does_not_discard_a_successful_site_guide():
+    from agent.principal import SOURCE_ASSERTION, Principal
+    from tools.site import get_site_map
+
+    reply = "站点提供留言板，当前账号不能导航到后台。文章检索失败，本次没有读取文章正文。"
+    model = Model([call("rag_search", {"query": "guide"}, "search"),
+                   call("get_site_map", {}, "guide"), AIMessage(content=reply)])
+    cfg = {"configurable": {"principal": Principal(7, "user", SOURCE_ASSERTION), "user_id": 7}}
+    session = ToolSession(model, cfg, {"rag_search": Tool("rag_search", unavailable("outage")),
+                          "get_site_map": get_site_map}, {}, middleware=(ArticleMiddleware,))
+    result = session.run([HumanMessage(content="查站点指南，区分我能打开的页面。")])
+    assert result.reply == reply and len(model.prompts) == 3
+    guide = next(message for message in model.prompts[-1] if message.type == "tool"
+                 and message.name == "get_site_map")
+    assert guide.artifact["kind"] == "ok"
+    assert next(page for page in guide.artifact["data"]["pages"] if page["path"] == "/dashboard")[
+        "navigationAvailable"] is False
 
 
 def test_failed_body_read_cannot_satisfy_evidence_contract():
