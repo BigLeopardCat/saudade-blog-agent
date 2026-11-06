@@ -190,7 +190,8 @@ def test_private_tool_result_and_derived_answer_stay_hidden_on_downgrade_with_su
 def test_image_turn_is_discarded_by_identity_without_parsing_image_suffixes():
     saver, model = InMemorySaver(), Capture()
     selected = runtime(saver, model)
-    run(selected, ChatRequest(message="看图", task_id="discard-image", image="data:image/png;base64,AA"))
+    run(selected, ChatRequest(message="看图", task_id="discard-image",
+                              image="data:image/png;base64,AA"))
     result = checkpoint.drop_last_user_turn(selected, 42, "discard-image")
     assert result["dropped"] and selected.store.load(config()).messages == []
 

@@ -48,7 +48,9 @@ def test_turn_serializes_history_and_lifecycle(monkeypatch, operation):
     )
 
     def turn(text):
-        return list(runtime.stream_events({"messages": [HumanMessage(content=text)], "task_id": "first-turn" if text == "第一轮" else "second-turn"}, _config()))
+        state = {"messages": [HumanMessage(content=text)],
+                 "task_id": "first-turn" if text == "第一轮" else "second-turn"}
+        return list(runtime.stream_events(state, _config()))
 
     def overlap():
         attempted.set()
