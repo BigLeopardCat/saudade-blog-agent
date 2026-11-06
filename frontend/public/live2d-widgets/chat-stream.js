@@ -232,7 +232,8 @@
         try {
           const cur = JSON.parse(localStorage.getItem(FAILED_KEY) || 'null');
           const active = ctx.state.activeRound || {};
-          const entry = { text, ts: Date.now(), reason: reason || '', kind: kind || 'failed',
+          const entry = { text: text || active.resumeText || '', ts: Date.now(),
+            reason: reason || '', kind: kind || 'failed',
             task_id: active.taskId, conv_id: active.convId ?? ctx.state.conv,
             partial_id: active.roundId,
             ...(kind === 'stopped' ? { process: active.process || [] } : {}) };
@@ -871,7 +872,7 @@
             }
             renderFailed(contentSpan, errMsg, displayText);
             broadcast({t: 'error', msg: errMsg, roundId});
-            // 同上：__ERROR__ 帧/网络错误也保存已收到的回复，再执行命令帧
+            // Keep received prose and structured commands when the stream fails.
             if ((displayText).trim()) {
               const partialItem = __chatCore.migrateItem({
                 id: roundId, type: 'agent', text: displayText, time: Date.now(),
