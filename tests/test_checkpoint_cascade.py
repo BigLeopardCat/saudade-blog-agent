@@ -4,7 +4,7 @@ import asyncio
 
 import pytest
 from _parent_repo import read
-from _service import app
+from _service import app, cleanup_headers
 
 from agent import checkpoint
 from agent.api.routes import conversations
@@ -50,10 +50,10 @@ def test_invalid_conversation_never_calls_saver(value):
 
 
 @pytest.mark.parametrize("mode,conversation,expected", [
-    ("missing", "42", {"deleted": False, "why": "no_saver"}),
-    ("saved", "0", {"deleted": False, "why": "bad_conversation_id"}),
-    ("saved", "42", {"deleted": True}),
-    ("noop", "42", {"deleted": False, "why": "still_readable"}),
+    ("missing", 42, {"deleted": False, "why": "no_saver"}),
+    ("saved", 0, {"deleted": False, "why": "bad_conversation_id"}),
+    ("saved", 42, {"deleted": True}),
+    ("noop", 42, {"deleted": False, "why": "still_readable"}),
 ])
 def test_endpoint_reports_real_deletion_result(
         monkeypatch, host_identity, mode, conversation, expected):
@@ -61,7 +61,7 @@ def test_endpoint_reports_real_deletion_result(
     if saver:
         saver.rows["conv_42"] = {"checkpoint": "saved"}
     monkeypatch.setattr(app.state, "runtime", saver)
-    request = type("Request", (), {"headers": host_identity(), "app": app})()
+    request = type("Request", (), {"headers": cleanup_headers(conversation), "app": app})()
     result = asyncio.run(conversations.checkpoint_delete(conversation, request))
     assert all(result.get(key) == value for key, value in expected.items())
 

@@ -5,6 +5,7 @@ import time
 
 from fastapi import Request
 from fastapi.responses import JSONResponse
+from starlette.types import ASGIApp, Receive, Scope, Send
 
 from agent import delegation
 from config.settings import settings
@@ -38,10 +39,41 @@ async def trace_id_middleware(request: Request, call_next):
         reset_trace_id()
 
 
-async def body_limit_middleware(request: Request, call_next):
-    cl = request.headers.get("content-length")
-    if cl and cl.isdigit() and int(cl) > MAX_BODY_BYTES:
-        return JSONResponse(
-            {"error": "payload_too_large", "limit": MAX_BODY_BYTES}, status_code=413
-        )
-    return await call_next(request)
+class BodyLimitMiddleware:
+    """Bound actual request bytes before routes can perform I/O; stream responses unchanged."""
+
+    def __init__(self, app: ASGIApp):
+        self.app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send):
+        if scope["type"] != "http":
+            return await self.app(scope, receive, send)
+        limit = MAX_BODY_BYTES
+        headers = dict(scope.get("headers", ()))
+        declared = headers.get(b"content-length", b"").lstrip(b"0")
+        if declared.isdigit() and (len(declared) > len(str(limit)) or int(declared) > limit):
+            return await self._reject(scope, receive, send, limit)
+        messages = []
+        size = 0
+        while True:
+            message = await receive()
+            if message["type"] == "http.disconnect":
+                return
+            size += len(message.get("body", b""))
+            if size > limit:
+                return await self._reject(scope, receive, send, limit)
+            messages.append(message)
+            if not message.get("more_body", False):
+                break
+        buffered = iter(messages)
+
+        async def replay():
+            # Once the body is consumed, preserve real disconnect notifications for SSE.
+            return next(buffered, None) or await receive()
+
+        return await self.app(scope, replay, send)
+
+    @staticmethod
+    async def _reject(scope, receive, send, limit):
+        response = JSONResponse({"error": "payload_too_large", "limit": limit}, status_code=413)
+        await response(scope, receive, send)

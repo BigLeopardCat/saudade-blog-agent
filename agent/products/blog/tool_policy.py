@@ -6,7 +6,7 @@ from langchain.agents.middleware import AgentMiddleware
 from langchain_core.messages import AIMessage, ToolMessage
 from langgraph.types import Command
 
-from agent.authz import SCOPE_ADMIN_CONSOLE, SCOPE_READ_OWN, TOOL_SCOPE, WRITE_SCOPES, check
+from agent.authz import TOOL_SCOPE, WRITE_SCOPES, check, manifest_gaps
 from agent.domains import article_editor, browser, device_actions
 from agent.products.blog.confirmation import presentation
 from agent.products.blog.read_tools import scoped_reads_enabled
@@ -17,6 +17,11 @@ from utils.trace import record
 class BlogToolMiddleware(AgentMiddleware):
     def __init__(self, session):
         self.session = session
+        declared = set(getattr(session, "tools", {}))
+        for tools in getattr(session, "domains", {}).values():
+            declared.update(tools)
+        if missing := manifest_gaps(declared):
+            raise ValueError(f"Blog tools require explicit permission scopes: {missing}")
 
     def wrap_tool_call(self, request, handler):
         call = request.tool_call
@@ -41,14 +46,22 @@ class BlogToolMiddleware(AgentMiddleware):
 
     def _allowed(self, name):
         session = self.session
+        loaders = getattr(session, "loaders", {})
+        if name in loaders:
+            domain = session.domains.get(loaders[name])
+            return bool(domain) and all(self._allowed(tool) for tool in domain)
         scope = TOOL_SCOPE.get(name)
-        if scope in WRITE_SCOPES and not (device_actions.authorized(session.config, name)
-                                          or article_editor.authorized(session.config, name)):
+        if scope is None:
             return False
-        if scope in (SCOPE_READ_OWN, SCOPE_ADMIN_CONSOLE):
-            uid = ((session.config or {}).get("configurable") or {}).get("user_id")
-            return (scoped_reads_enabled(session.principal, scope, uid)
-                    and check(session.principal, name).allowed)
+        if not check(session.principal, name).allowed:
+            return False
+        uid = ((session.config or {}).get("configurable") or {}).get("user_id")
+        if not scoped_reads_enabled(session.principal, scope, uid):
+            return False
+        if scope in WRITE_SCOPES:
+            return (browser.authorized(session.config, name)
+                    or device_actions.authorized(session.config, name)
+                    or article_editor.authorized(session.config, name))
         return True
 
     @staticmethod

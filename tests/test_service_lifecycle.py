@@ -8,7 +8,7 @@ import time
 
 import httpx
 import pytest
-from _service import app, service_request
+from _service import app, cleanup_headers, service_request
 
 from agent import checkpoint
 from agent.api import dependencies
@@ -269,7 +269,8 @@ def test_disconnected_maintenance_operations_drain_before_pool_close(
         async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
             payload = {**body, "token": secrets.token_urlsafe()}
             pending = asyncio.create_task(client.request(
-                method, path, json=payload, headers=host_identity()))
+                method, path, json=payload, headers=(host_identity() if target == "cancel" else
+                    cleanup_headers(7, turn_id=body.get("turn_id")))))
             assert await asyncio.to_thread(entered.wait, 2)
             pending.cancel()
             with pytest.raises(asyncio.CancelledError):

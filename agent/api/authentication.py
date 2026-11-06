@@ -13,7 +13,7 @@ from config.settings import settings
 logger = logging.getLogger(__name__)
 
 
-def verify_assertion_claims(token: str) -> dict | None:
+def verify_assertion_claims(token: str, *, audience: str = "agent") -> dict | None:
     """Accept signed, unexpired agent assertions, including Rust's numeric subject."""
     try:
         if not settings.agent_assertion_secret:
@@ -22,7 +22,7 @@ def verify_assertion_claims(token: str) -> dict | None:
             token,
             settings.agent_assertion_secret,
             algorithms=["HS256"],
-            audience="agent",
+            audience=audience,
             # Rust signs an integer sub. Keep signature, audience and expiry validation enabled.
             options={"require": ["exp", "sub", "aud"], "verify_sub": False},
         )
@@ -36,7 +36,8 @@ def verify_assertion_claims(token: str) -> dict | None:
         role = claims.get("role")
         return {"uid": uid, "role": str(role) if role else None,
                 "delegation": claims.get("delegation", ""),
-                "background_delegation": claims.get("background_delegation")}
+                "background_delegation": claims.get("background_delegation"),
+                "checkpoint": claims.get("checkpoint")}
     except (InvalidTokenError, ValueError, TypeError):
         return None
 
@@ -48,6 +49,10 @@ def resolve_principal(request: Request, body_uid: int) -> Principal:
     if not claims:
         logger.warning("[auth] 缺少/无效身份断言 → 401")
         raise HTTPException(401, "缺少有效的服务间身份断言")
+    return _principal(claims, body_uid)
+
+
+def _principal(claims, body_uid):
     try:
         delegation.accept(claims["uid"], claims["delegation"], claims["background_delegation"])
     except (ValueError, jwt.PyJWTError):
@@ -56,6 +61,23 @@ def resolve_principal(request: Request, body_uid: int) -> Principal:
         logger.warning("[auth] 断言覆盖 body.user_id：%s → %s（body 不可信）",
                        body_uid, claims["uid"])
     return Principal(uid=claims["uid"], role=claims["role"], source=SOURCE_ASSERTION)
+
+
+def require_checkpoint_cleanup(request: Request, body_uid: int, conversation_id: int,
+                               turn_id: str | None = None) -> Principal:
+    """Host-authorized cleanup remains valid after the business conversation is deleted."""
+    token = request.headers.get("X-Agent-Assertion") or ""
+    claims = verify_assertion_claims(token, audience="agent-checkpoint") if token else None
+    if not claims:
+        raise HTTPException(401, "缺少有效的清理授权")
+    grant = claims.get("checkpoint")
+    operation = "delete_conversation" if turn_id is None else "drop_turn"
+    if (not isinstance(grant, dict) or type(grant.get("conversation_id")) is not int
+            or grant["conversation_id"] != conversation_id
+            or grant.get("operation") != operation or grant.get("turn_id") != turn_id
+            or (body_uid != 0 and body_uid != claims["uid"])):
+        raise HTTPException(403, "清理授权与请求目标不一致")
+    return _principal(claims, body_uid)
 
 
 def require_console(request: Request, uid: int) -> Principal:

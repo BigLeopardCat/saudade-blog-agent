@@ -1,7 +1,8 @@
 """Native authorization contract without planner or graph imports."""
 
+from _tool_catalog import permission_names
+
 from agent import authz
-from agent.domains.registry import bound_tool_names, operation_names
 from agent.principal import (
     ADMIN_ROLES,
     KNOWN_ROLES,
@@ -13,7 +14,6 @@ from agent.principal import (
     UNKNOWN,
     Principal,
 )
-from tools.base import _TOOL_REGISTRY
 
 
 def principal(role, uid=7):
@@ -21,7 +21,7 @@ def principal(role, uid=7):
 
 
 def test_native_manifest_and_role_scopes_are_closed():
-    names = [tool.name for tool in _TOOL_REGISTRY] + sorted(operation_names() | bound_tool_names())
+    names = permission_names()
     assert not authz.manifest_gaps(names)
     assert not authz.manifest_stale(names)
     assert set(authz.TOOL_SCOPE.values()) <= authz.ALL_SCOPES
