@@ -28,7 +28,7 @@ MAX_SHORT_FIELD_CHARS = 500
 class HistoryItem(BaseModel):
     role: Literal["user", "assistant"]
     content: str
-    task_id: str | None = Field(default=None, max_length=100, pattern=r"^[A-Za-z0-9_-]+$")
+    turn_id: str | None = Field(default=None, max_length=100, pattern=r"^[A-Za-z0-9_-]+$")
 
 
 class QuotaInfo(BaseModel):
@@ -70,6 +70,7 @@ class ChatRequest(BaseModel):
     confirm_token: str = Field(default="", max_length=MAX_TOKEN_CHARS)
     confirm_pick: str = Field(default="", max_length=MAX_SHORT_FIELD_CHARS)
     task_id: str = Field(default="", max_length=100, pattern=r"^[A-Za-z0-9_-]*$")
+    turn_id: str = Field(default="", max_length=100, pattern=r"^[A-Za-z0-9_-]*$")
     task_inputs: bool = False
     browser_feedback: bool = False
     browser_result: BrowserResult | None = None

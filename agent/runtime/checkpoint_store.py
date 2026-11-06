@@ -34,31 +34,38 @@ def setup(conn):
     )""")
     conn.execute("""CREATE TABLE IF NOT EXISTS agent_deleted_turns (
         thread_id TEXT NOT NULL,
-        task_id TEXT NOT NULL,
+        turn_id TEXT NOT NULL,
         deleted_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-        PRIMARY KEY (thread_id, task_id)
+        PRIMARY KEY (thread_id, turn_id)
     )""")
 
 
-def mark_turn_deleted(saver, thread_id, task_id):
+def mark_turn_deleted(saver, thread_id, turn_id):
     if postgres(saver):
         with saver.conn.connection() as conn:
-            conn.execute("INSERT INTO agent_deleted_turns(thread_id,task_id) VALUES (%s,%s) "
-                         "ON CONFLICT DO NOTHING", (thread_id, task_id))
+            conn.execute("INSERT INTO agent_deleted_turns(thread_id,turn_id) VALUES (%s,%s) "
+                         "ON CONFLICT DO NOTHING", (thread_id, turn_id))
     else:
         if not hasattr(saver, "_deleted_turns"):
             saver._deleted_turns = set()
-        saver._deleted_turns.add((thread_id, task_id))
+        saver._deleted_turns.add((thread_id, turn_id))
 
 
-def turn_deleted(saver, thread_id, task_id):
-    if not saver or not task_id:
+def turn_deleted(saver, thread_id, turn_id):
+    return turns_deleted(saver, thread_id, [turn_id])
+
+
+def turns_deleted(saver, thread_id, turn_ids):
+    identifiers = list({identifier for identifier in turn_ids if identifier})
+    if not saver or not identifiers:
         return False
     if postgres(saver):
         with saver.conn.connection() as conn:
             return bool(conn.execute("SELECT 1 FROM agent_deleted_turns "
-                "WHERE thread_id=%s AND task_id=%s", (thread_id, task_id)).fetchone())
-    return (thread_id, task_id) in getattr(saver, "_deleted_turns", ())
+                "WHERE thread_id=%s AND turn_id=ANY(%s) LIMIT 1",
+                (thread_id, identifiers)).fetchone())
+    return any((thread_id, identifier) in getattr(saver, "_deleted_turns", ())
+               for identifier in identifiers)
 
 
 def mark_deleted(saver, thread_id):

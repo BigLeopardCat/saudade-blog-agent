@@ -9,7 +9,8 @@ def list_paused(runtime, principal, limit=20):
     if not is_verified_identity(principal) or not principal.known_role:
         raise PermissionError("verified identity required")
     rows = runtime.inputs.storage.paused(principal.uid, principal.known_role, limit + 1)
-    items = [{"task_id": key, "conversation_id": state["scope"]["conversation_id"],
+    items = [{"task_id": key, "turn_id": state.get("turn_id"),
+              "conversation_id": state["scope"]["conversation_id"],
               "title": state["original_text"][:160], "expires_at": state["expires"]}
              for key, state in rows[:limit]]
     return {"items": items, "has_more": len(rows) > limit}

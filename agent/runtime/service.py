@@ -96,7 +96,7 @@ class AgentRuntime:
                         tool_access=self.application.history_access),
                     *memory.request_messages(state.get("messages") or [])]
         task_id = state.get("task_id") or uuid.uuid4().hex
-        incoming = memory.identify_turn(incoming, task_id)
+        incoming = memory.identify_turn(incoming, state.get("turn_id") or task_id)
         if pending:
             session = self._session(config, snapshot, pending)
             session.task = snapshot.run
@@ -105,11 +105,15 @@ class AgentRuntime:
             record("native", "task_feedback", task_id=session.task["id"])
             yield from self._feedback(session, prompt, pending, incoming)
             return
+        yield from self._new_turn(snapshot, incoming, config, task_id)
+
+    def _new_turn(self, snapshot, incoming, config, task_id):
+        principal = ((config or {}).get("configurable") or {}).get("principal")
         if (snapshot.unfinished and not snapshot.run.get("input_saved")
                 and recovery.allowed(snapshot, snapshot.run["id"], config)):
             incoming = [*snapshot.run["input"], *incoming]
         prompt = self.application.prompt([*snapshot.messages, *incoming], principal)
-        session = self._session(config, snapshot, pending)
+        session = self._session(config, snapshot, None)
         session.turn_input = incoming
         session.task = recovery.new_run(config, incoming, task_id)
         if (self.inputs and snapshot.run and session.task
@@ -130,13 +134,17 @@ class AgentRuntime:
         yield outcome
 
     def _discarded_turn(self, state, config, snapshot):
-        task_id = state.get("resume_task") or state.get("task_id")
-        if not task_id and state.get("confirm_grant"):
-            task_id = (snapshot.run or {}).get("id")
+        turn_id = state.get("turn_id") or state.get("task_id")
+        candidates = [turn_id]
+        if snapshot.run:
+            candidates.extend(message.id.removeprefix("user-turn:")
+                for message in [*snapshot.messages, *snapshot.run.get("input", [])]
+                if (message.id or "").startswith("user-turn:"))
         thread_id = ((config or {}).get("configurable") or {}).get("thread_id")
-        return checkpoint_store.turn_deleted(self.saver, thread_id, task_id)
+        return checkpoint_store.turns_deleted(self.saver, thread_id, candidates)
 
     def _feedback(self, session, prompt, pending, incoming):
+        session.turn_input = incoming
         if (session.config.get("configurable") or {}).get("task_inputs"):
             yield TaskInputEvent({"task_id": session.task["id"], "ready": False})
         result = yield from self._run(session, prompt, resume={
@@ -185,6 +193,13 @@ class AgentRuntime:
 
     @staticmethod
     def _run(session, prompt, *, resume=None, approval_input=(), recover=False):
+        if session.task:
+            source = next((message.id.removeprefix("user-turn:")
+                           for message in reversed(session.turn_input)
+                           if (message.id or "").startswith("user-turn:")), None)
+            session.task = {**session.task, "turn_id":
+                session.config.get("configurable", {}).get("turn_id") or source
+                or session.task.get("turn_id") or session.task["id"]}
         if session.task and session.store and session.store.available:
             from agent.runtime.task_budget import for_saver as task_usage
             session.budget.bind_task(task_usage(session.store.saver), session.task,

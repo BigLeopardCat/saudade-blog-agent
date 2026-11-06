@@ -74,15 +74,15 @@
     const init = () => {
       if (!chatPanel) { setTimeout(init, 500); return; }
       const steering = g.__waifuSteering ? g.__waifuSteering(ctx, engine) : null;
-      const postDiscard = async (convId, taskId) => {
-        if (!taskId || convId == null) return { ok: false, why: '缺少任务标识，请新建会话后重试' };
+      const postDiscard = async (convId, turnId) => {
+        if (!turnId || convId == null) return { ok: false, why: '缺少轮次标识，请新建会话后重试' };
         const tk = localStorage.getItem('tokenKey');
         if (!tk) return { ok: false, why: '登录状态已失效，刷新页面后再试' };
         try {
           const r = await fetch('/api/chat/discard', {
             method: 'POST',
             headers: { 'Authorization': 'Bearer ' + tk, 'Content-Type': 'application/json' },
-            body: JSON.stringify({ task_id: taskId, conversation_id: convId }),
+            body: JSON.stringify({ turn_id: turnId, conversation_id: convId }),
           });
           const j = await r.json();
           if (j && j.success) return { ok: true };
@@ -100,35 +100,35 @@
       };
 
       const lastUser = () => [...ctx.state.items].reverse().find(i => i.type === 'user');
-      const lastUserTask = () => lastUser()?.task_id || lastUser()?.parent_task_id;
+      const lastUserTurn = () => lastUser()?.turn_id || lastUser()?.parent_turn_id;
       const STALE_HINT = '这一轮已经不是你最后一条消息了（期间发过新的），不再提供重发';
       const pausedTask = () => {
         try {
           const entries = JSON.parse(localStorage.getItem('saudade-chat-failed') || '[]');
-          return entries.find(x => x && x.kind === 'stopped' && x.task_id
-            && String(x.conv_id) === String(ctx.state.conv) && x.task_id === lastUserTask()
+          return entries.find(x => x && x.kind === 'stopped' && x.task_id && x.turn_id
+            && String(x.conv_id) === String(ctx.state.conv) && x.turn_id === lastUserTurn()
             && Date.now() - x.ts < 24 * 3600 * 1000) || null;
         } catch (_) { return null; }
       };
       let resumingTask = false;
       const resumeStoppedTask = async (stopped, fallback, showHint = ctx.ui.notify) => {
         if (resumingTask || ctx.state.isSending) return false;
-        if (!stopped || lastUserTask() !== stopped.task_id) { showHint?.(STALE_HINT); return false; }
+        if (!stopped || lastUserTurn() !== stopped.turn_id) { showHint?.(STALE_HINT); return false; }
         resumingTask = true;
         const pausedCard = [...messages.querySelectorAll('.chat-msg-failed-note')]
-          .find(note => note.querySelector('.chat-msg-retry-slot')?.dataset.taskId === stopped.task_id);
+          .find(note => note.querySelector('.chat-msg-retry-slot')?.dataset.turnId === stopped.turn_id);
         if (pausedCard) pausedCard.hidden = true;
         ctx.ui.refreshComposer?.();
         try {
           const previous = [...messages.querySelectorAll('.chat-msg.agent')]
             .find(item => item.dataset.mid === stopped.partial_id) || fallback;
-          const completed = await sendMessage({ silent: true, resumeTask: stopped.task_id,
+          const completed = await sendMessage({ silent: true, resumeTask: stopped.task_id, resumeTurn: stopped.turn_id,
             resumeText: stopped.text, convId: stopped.conv_id, processFrom: previous,
             previousProcess: stopped.process || [], onDropped: showHint });
           if (completed) {
             ctx.state.items = ctx.state.items.filter(x => x.id !== stopped.partial_id);
             if (previous?.classList.contains('agent')) previous.remove();
-            clearFailedRound(stopped.task_id);
+            clearFailedRound(stopped.turn_id);
             saveHistory();
           }
           return completed;
@@ -139,15 +139,15 @@
         }
       };
 
-      const attachRetryActions = (contentSpan, div, msg, taskId) => {
+      const attachRetryActions = (contentSpan, div, msg, turnId) => {
         const originConv = ctx.state.conv;
-        const isCurrent = () => taskId && ctx.state.conv === originConv && lastUserTask() === taskId;
+        const isCurrent = () => turnId && ctx.state.conv === originConv && lastUserTurn() === turnId;
         const wrap = document.createElement('div');
         wrap.className = 'chat-msg-retry';
         // 这组按钮属于哪一条消息（`attachHistoryFailedRetry` 靠它做"同一轮只能有一处
         // 按钮"的去重；没有这个标记就只能按位置猜，而位置正是会分家的东西）
         wrap.dataset.retryText = msg;
-        wrap.dataset.taskId = taskId || '';
+        wrap.dataset.turnId = turnId || '';
         const retryBtn = document.createElement('button');
         retryBtn.type = 'button';
         retryBtn.className = 'chat-retry-btn';
@@ -183,11 +183,11 @@
           hintEl.textContent = text;
         };
         // Both sides bind cleanup to this stable request identity.
-        const discardFailedRound = () => postDiscard(originConv, taskId);
+        const discardFailedRound = () => postDiscard(originConv, turnId);
         const restoreAndCleanup = () => {
           const family = ctx.state.items.filter(item => item.type === 'user'
-            && (item.task_id === taskId || item.parent_task_id === taskId));
-          const original = family.find(item => item.task_id === taskId);
+            && (item.turn_id === turnId || item.parent_turn_id === turnId));
+          const original = family.find(item => item.turn_id === turnId);
           if (original?.images) { ctx.state.pendingImages = [...original.images]; renderPreviews(); }
           const ids = new Set(family.map(item => item.id));
           messages.querySelectorAll('[data-mtype="user"]').forEach(element => {
@@ -212,7 +212,7 @@
             showHint(res.why);
             return;
           }
-          clearFailedRound(taskId);
+          clearFailedRound(turnId);
           restoreAndCleanup();
           sendMessage();  // 走主流程（新 roundId/广播/thumbs）
         });
@@ -222,7 +222,7 @@
           const res = await discardFailedRound();
           if (!isCurrent()) { showHint(STALE_HINT); return; }
           if (!res.ok) { editBtn.disabled = false; showHint(res.why); return; }
-          clearFailedRound(taskId);
+          clearFailedRound(turnId);
           restoreAndCleanup();
           input.focus();
         });
@@ -235,7 +235,7 @@
           const active = ctx.state.activeRound || {};
           const entry = { text: text || active.resumeText || '', ts: Date.now(),
             reason: reason || '', kind: kind || 'failed',
-            task_id: active.taskId, conv_id: active.convId ?? ctx.state.conv,
+            task_id: active.taskId, turn_id: active.turnId, conv_id: active.convId ?? ctx.state.conv,
             partial_id: active.roundId,
             ...(kind === 'stopped' ? { process: active.process || [] } : {}) };
           const rows = __chatCore.rememberFailedRound(cur, entry);
@@ -243,12 +243,12 @@
           else localStorage.removeItem(FAILED_KEY);
         } catch (e) {/* ignore */}
       };
-      const clearFailedRound = (taskId) => {
+      const clearFailedRound = (turnId) => {
         try {
           const cur = JSON.parse(localStorage.getItem(FAILED_KEY) || 'null');
           if (Array.isArray(cur)) {
             const rest = cur.filter(x => x && (String(x.conv_id) !== String(ctx.state.conv)
-              || x.task_id !== taskId));
+              || x.turn_id !== turnId));
             if (rest.length) localStorage.setItem(FAILED_KEY, JSON.stringify(rest));
             else localStorage.removeItem(FAILED_KEY);
           }
@@ -256,10 +256,10 @@
         // Local storage events only reach other windows. Settle this view now,
         // including offline/history-delay cases, using the round's own anchor.
         messages.querySelectorAll('.chat-msg-failed-note').forEach(note => {
-          if (note.querySelector('.chat-msg-retry-slot')?.dataset.taskId === taskId) note.remove();
+          if (note.querySelector('.chat-msg-retry-slot')?.dataset.turnId === turnId) note.remove();
         });
         messages.querySelectorAll('.chat-msg-retry').forEach(actions => {
-          if (actions.dataset.taskId === taskId) actions.remove();
+          if (actions.dataset.turnId === turnId) actions.remove();
         });
       };
       // Keep the stopped draft and task identity for explicit continuation.
@@ -286,7 +286,7 @@
           victim.el.dataset.mid = roundId;
           victim.el.dataset.finished = '1';
           saveHistory();
-          if (!silent || active.resumeTask) attachRetryActions(victim.contentSpan, victim.el, original, active.taskId);
+          if (!silent || active.resumeTask) attachRetryActions(victim.contentSpan, victim.el, original, active.turnId);
         } else if (victim && victim.el && victim.el.parentNode) {
           // 一个 token 都还没收到：气泡里没有可留的东西，摘掉它——提示条与重发/编辑
           // 由失败轮那一套（持久化标记 + chat-engine 的渲染）在下一次 reconcile 补上
@@ -312,7 +312,7 @@
       const clearStoppedMarker = () => {
         try {
           const entries = JSON.parse(localStorage.getItem(FAILED_KEY) || '[]');
-          entries.filter(x => x && x.kind === 'stopped').forEach(x => clearFailedRound(x.task_id));
+          entries.filter(x => x && x.kind === 'stopped').forEach(x => clearFailedRound(x.turn_id));
         } catch (e) { /* No valid local marker. */ }
       };
       const attachHistoryFailedRetry = () => {
@@ -321,12 +321,12 @@
           if (!text) return;   // 没有原文就没有可重发的东西（attachRetryActions 要它去 discard）
           // A stable request has one action group after history reconciliation.
           messages.querySelectorAll('.chat-msg-retry').forEach((w) => {
-            if (w.parentNode !== slot && w.dataset.taskId === slot.dataset.taskId
+            if (w.parentNode !== slot && w.dataset.turnId === slot.dataset.turnId
                 && w.parentNode) w.parentNode.removeChild(w);
           });
           if (slot.querySelector('.chat-msg-retry')) return;
           const note = slot.closest('.chat-msg-failed-note') || slot;
-          attachRetryActions(slot, note, text, slot.dataset.taskId);
+          attachRetryActions(slot, note, text, slot.dataset.turnId);
         });
       };
 
@@ -406,6 +406,7 @@
         const sentAt = Date.now();
         ctx.state.activeRound = { roundId, userItemId, msg, convId: roundConvId, silent,
           taskId: opts.resumeTask || (opts.confirmAsk || {}).task_id || roundId,
+          turnId: silent ? (opts.resumeTurn || lastUserTurn()) : roundId,
           resumeTask: opts.resumeTask || (opts.confirmAsk || {}).task_id,
           resumeText: opts.resumeText || (silent ? ([...ctx.state.items].reverse()
             .find(x => x.type === 'user') || {}).text : '') };
@@ -424,7 +425,7 @@
           ctx.state.pendingImages = [];
           renderPreviews();
           const userItem = __chatCore.migrateItem({
-            id: userItemId, type: 'user', text: msg, time: sentAt, task_id: roundId,
+            id: userItemId, type: 'user', text: msg, time: sentAt, turn_id: roundId,
             ...(imgs.length ? { images: imgs, thumbs } : {}),
           });
           ctx.state.items.push(userItem);
@@ -438,7 +439,7 @@
           convId: roundConvId, owner: engine.tabId, ts: Date.now() })); } catch (e) {}
         if (!silent) {
           broadcast({
-            t: 'user', id: userItemId, text: msg, time: sentAt, task_id: roundId, from: engine.windowId,
+            t: 'user', id: userItemId, text: msg, time: sentAt, turn_id: roundId, from: engine.windowId,
             ...(imgs.length ? { images: imgs, thumbs } : {}),
             hasImg: imgs.length ? 1 : 0,
           });
@@ -566,6 +567,7 @@
             body: JSON.stringify({
               task_inputs: !!steering && (!silent || !!opts.resumeTask),
               message: msg,
+              turn_id: roundState.turnId,
               ...(!silent ? { task_id: roundId } : {}),
               browser_feedback: !!browserActions,
               ...(opts.resumeTask ? { resume_task: opts.resumeTask } : {}),
@@ -792,7 +794,7 @@
             broadcast({t: 'done', id: finalItem.id, fullText, time: finalItem.time,
                        process: steps.map(s => ({cls: s.cls, text: s.text})), roundId});
             saveHistory();
-            clearFailedRound(roundState.taskId);
+            clearFailedRound(roundState.turnId);
           } else if (programCmds.some(command => command.task_id)) {
             div.dataset.clientAction = 'pending';
             delete ctx.state.live[roundId];
@@ -855,7 +857,7 @@
               }
               try { execAgentCommands(programCmds, null); } catch(e2) {/* ignore */}
               if (!silent) {
-                attachRetryActions(contentSpan, div, msg, roundState.taskId);
+                attachRetryActions(contentSpan, div, msg, roundState.turnId);
                 persistFailedRound(msg, errMsg);
               }
             }
@@ -885,7 +887,7 @@
             }
             try { execAgentCommands(programCmds, null); } catch(e2) {/* ignore */}
             if (!silent) {
-              attachRetryActions(contentSpan, div, msg, roundState.taskId);
+              attachRetryActions(contentSpan, div, msg, roundState.turnId);
               persistFailedRound(msg, errMsg);
             }
           }
@@ -973,7 +975,7 @@
           engine.setConvState(row.conversation_id, { user: true });
           await engine.pullHistory();
         }
-        const stopped = { kind: 'stopped', task_id: row.task_id, conv_id: row.conversation_id,
+        const stopped = { kind: 'stopped', task_id: row.task_id, turn_id: row.turn_id, conv_id: row.conversation_id,
           text: state.original_text, process: [], ts: Date.now() };
         await resumeStoppedTask(stopped, null, ctx.ui.notify);
       };
@@ -1373,7 +1375,7 @@
                 renderFailed(victim.contentSpan, errMsg, remotePartial);
                 broadcast({t: 'error', msg: errMsg, roundId: r.roundId});
                 if (!r.silent) { // 隐藏确认轮不给重发/失败标记（同 sendMessage 收尾）
-                  attachRetryActions(victim.contentSpan, victim.el, r.msg, r.taskId);
+                  attachRetryActions(victim.contentSpan, victim.el, r.msg, r.turnId);
                   persistFailedRound(r.msg, errMsg);
                 }
                 delete ctx.state.live[r.roundId];

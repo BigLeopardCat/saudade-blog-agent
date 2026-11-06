@@ -15,6 +15,7 @@ class InputRequest(BaseModel):
     user_id: int = Field(gt=0)
     conversation_id: int = Field(gt=0)
     task_id: str = Field(min_length=1, max_length=100, pattern=r"^[A-Za-z0-9_-]+$")
+    turn_id: str | None = Field(default=None, max_length=100, pattern=r"^[A-Za-z0-9_-]+$")
     input_id: str = Field(min_length=1, max_length=100, pattern=r"^[A-Za-z0-9_-]+$")
     text: str = Field(min_length=1, max_length=MAX_TEXT)
 
@@ -49,7 +50,7 @@ async def submit(req: InputRequest, request: Request):
     inbox = require_runtime(request).inputs
     if inbox is None:
         raise HTTPException(503, "task_inputs_unavailable")
-    item = await operation(request, req, inbox.submit, req.input_id, req.text)
+    item = await operation(request, req, inbox.submit, req.input_id, req.text, req.turn_id)
     state = await operation(request, req, inbox.read)
     return {**state, "input": item}
 

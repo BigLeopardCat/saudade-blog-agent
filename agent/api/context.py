@@ -18,7 +18,7 @@ def _host_history(req: ChatRequest) -> list:
     for item in req.history[-20:]:
         content = strip_fact_lines(item.content) if item.role == "assistant" else item.content
         if content or item.role == "user":
-            cleaned.append((item.role, content, item.task_id))
+            cleaned.append((item.role, content, item.turn_id))
     messages: list = []
     for index, (role, content, task_id) in enumerate(cleaned):
         if role == "user":

@@ -48,12 +48,22 @@ test('unbound failure flags are discarded without dropping unrelated bound tasks
 test('database refresh preserves request identity and the task owning supplemental messages', () => {
   const { mapDbItems, migrateItem } = globalThis.__waifuChatCore;
   const rows = [
-    {id:1,role:'user',content:'继续',task_id:'first'},
-    {id:2,role:'user',content:'继续',task_id:'second'},
-    {id:3,role:'user',content:'只处理草稿',parent_task_id:'second'},
+    {id:1,role:'user',content:'继续',turn_id:'first'},
+    {id:2,role:'user',content:'继续',turn_id:'second'},
+    {id:3,role:'user',content:'只处理草稿',parent_turn_id:'second'},
   ];
   const items=mapDbItems(rows,()=>undefined).map(migrateItem);
-  assert.deepEqual(items.map(row=>[row.task_id,row.parent_task_id]),[
+  assert.deepEqual(items.map(row=>[row.turn_id,row.parent_turn_id]),[
     ['first',undefined],['second',undefined],[undefined,'second'],
+  ]);
+});
+
+test('two user turns of the same durable task retain independent recovery identities', () => {
+  const {rememberFailedRound}=globalThis.__waifuChatCore;
+  const original={conv_id:7,task_id:'shared-task',turn_id:'first',partial_id:'a'};
+  const feedback={...original,turn_id:'feedback',partial_id:'b'};
+  assert.deepEqual(rememberFailedRound([original],feedback),[feedback,original]);
+  assert.deepEqual(rememberFailedRound([original,feedback],{...feedback,kind:'stopped'}),[
+    {...feedback,kind:'stopped'},original,
   ]);
 });

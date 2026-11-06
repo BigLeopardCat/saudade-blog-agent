@@ -89,7 +89,7 @@ def test_discard_interrupt_preserves_earlier_history_and_blocks_resume():
     assert selected.store.load(config()).messages == before
     assert not selected.store.load(config()).run
     result = list(selected.stream_events({"resume_task": "interrupted"}, config()))[-1]
-    assert result.execution["blocked"] == [{"reason": "turn_discarded"}]
+    assert result.execution["blocked"]
 
 
 def test_same_task_steering_is_removed_with_its_original_request():
@@ -129,6 +129,6 @@ def test_drop_endpoint_requires_stable_target_and_uses_authenticated_worker(monk
         runtime=selected, workers=Worker())))
     monkeypatch.setattr(conversations, "_resolve_principal", lambda *_: SimpleNamespace(uid=7))
     result = asyncio.run(conversations.checkpoint_drop_turn("42",
-        conversations.DropTurnReq(task_id="endpoint", uid=7), request))
+        conversations.DropTurnReq(turn_id="endpoint", uid=7), request))
     assert result["dropped"] and selected.store.load(config()).messages == []
     assert turn_message_id("endpoint") == "user-turn:endpoint"

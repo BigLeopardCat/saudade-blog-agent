@@ -199,7 +199,7 @@ async def chat(req: ChatRequest, request: Request):
     )
     try:
         turn = functools.partial(
-            run_turn, task_id=req.task_id, resume_task=req.resume_task,
+            run_turn, task_id=req.task_id, turn_id=req.turn_id, resume_task=req.resume_task,
             confirm_grant=grant, browser_feedback=req.browser_feedback,
             browser_result=req.browser_result.model_dump() if req.browser_result else None,
             task_inputs=req.task_inputs)
@@ -275,7 +275,7 @@ async def chat_stream(req: ChatRequest, request: Request):
         progress = StreamProgress(loop, queue, jobs.control)
         started = progress.started
 
-        producer = (functools.partial(stream_to_queue, task_id=req.task_id,
+        producer = (functools.partial(stream_to_queue, task_id=req.task_id, turn_id=req.turn_id,
                                       resume_task=req.resume_task,
                                       task_inputs=req.task_inputs,
                                       browser_feedback=req.browser_feedback,
