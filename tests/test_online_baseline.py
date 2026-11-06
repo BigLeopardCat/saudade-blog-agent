@@ -321,6 +321,26 @@ def test_moderation_overview_requires_both_actual_summary_scopes(
     })) == passed
 
 
+@pytest.mark.parametrize("reply,passed", [
+    ("河灯待审：3\n评论待审：7", True),
+    ("河灯待审：7\n评论待审：3", False),
+    ("河灯待审：0\n评论待审：0", False),
+    ("河灯待审：3；评论待审：7", False),
+    ("河灯待审：3\n评论待审：7\n主人，查好了喵", False),
+])
+def test_moderation_count_answer_uses_each_live_count_and_exact_two_lines(reply, passed):
+    case = next(c for c in online_baseline.load_suite()
+                if c["id"] == "admin_moderation_pending_exact")
+    payload = {"board": {"scope": "all", "finalStatus": {"pending": 3}},
+               "comments": {"scope": "not_deleted", "finalStatus": {"pending": 7}}}
+    result = {"text": reply, "commands": [], "frames": [], "exec_tools": [],
+              "exec_rows": [], "tool_calls": ["get_moderation_status"],
+              "native_events": [{"node": "native", "event": "call",
+                  "name": "get_moderation_status", "kind": "ok",
+                  "result": json.dumps(payload)}]}
+    assert (not online_baseline.golden.check_case(case, result)) == passed
+
+
 def test_runtime_stop_and_background_write_cannot_pass_nonempty_apology():
     result = {"text": "抱歉", "native_events": [
         {"event": "budget_stop"}, {"event": "write_done"}], "exec_rows": []}
