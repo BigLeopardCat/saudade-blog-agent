@@ -18,7 +18,7 @@ import jwt
 from langgraph.checkpoint.memory import InMemorySaver
 from starlette.requests import Request
 
-from agent import confirm, delegation, idem
+from agent import confirm, delegation
 from agent.products.blog.application import BlogApplication
 from agent.runtime import writes
 from agent.runtime.checkpoint_conversations import CheckpointConversationStore
@@ -46,6 +46,7 @@ from eval import (
     task_lifecycle_contracts,
     todo_task_contracts,
 )
+from eval.fixtures.ledger import Ledger
 from eval.own_fixtures import SECRET, favorite_backend, message_backend, notification_backend
 from models.transport import ModelIO
 from utils.trace_io import load_trace
@@ -62,15 +63,15 @@ class _Store:
         self.path = path
 
     def claim(self, *args, **kwargs):
-        with closing(idem.Ledger(self.path)) as store:
+        with closing(Ledger(self.path)) as store:
             return store.claim(*args, **kwargs)
 
     def finish(self, *args):
-        with closing(idem.Ledger(self.path)) as store:
+        with closing(Ledger(self.path)) as store:
             return store.finish(*args)
 
     def lookup(self, *args):
-        with closing(idem.Ledger(self.path)) as store:
+        with closing(Ledger(self.path)) as store:
             return store.lookup(*args)
 
 

@@ -6,7 +6,6 @@ Frozen HTTP reports use eval.online_judge, with separate findings and unknown
 outcomes. Review requires calibration and never authorizes business operations."""
 from __future__ import annotations
 
-import argparse
 import datetime as dt
 import json
 import pathlib
@@ -316,71 +315,3 @@ def render_report(run_name: str, model: str, rows: list[dict], *,
                 "<details><summary>材料与回复原文（自己核）</summary>",
                 "", "```", r["material"][:8000], "```", "", "</details>", ""]
     return "\n".join(out)
-
-
-def main() -> int:
-    ap = argparse.ArgumentParser(description="评测侧 LLM 评审员（只挑可疑样本，不判分）")
-    ap.add_argument("--traces", default="", help="golden trace 目录（默认取最新一轮）")
-    ap.add_argument("--only", default="", help="只评指定 id（逗号分隔）")
-    ap.add_argument("--limit", type=int, default=0, help="只评前 N 条（调试）")
-    ap.add_argument("--model", default="", help="判官模型（默认 = 生产模型）")
-    ap.add_argument("--max-result-chars", type=int, default=RESULT_LIMIT,
-                    help=f"单条工具返回最多给判官看多少字符（默认 {RESULT_LIMIT}）")
-    ap.add_argument("--dry-run", action="store_true", help="不调模型，只印材料长度（自检材料拼装）")
-    ap.add_argument("--out", default="", help="报告路径（默认 eval/report/judge_<ts>.md）")
-    args = ap.parse_args()
-
-    base = pathlib.Path(ROOT.parent / "logs/agent/golden_traces")
-    dir_path = pathlib.Path(args.traces) if args.traces else (
-        max(base.glob("*/"), key=lambda p: p.stat().st_mtime) if list(base.glob("*/")) else None)
-    if dir_path is None or not dir_path.is_dir():
-        print(f"✗ trace 目录不存在：{dir_path}")
-        return 2
-    only = [s.strip() for s in args.only.split(",") if s.strip()]
-    traces = load_traces(dir_path, only, args.limit)
-    print(f"trace 轮 {dir_path.name}：{len(traces)} 条待评")
-
-    # 材料被截断过的用例（trace 里工具返回被截断）——**响亮，且进报告**：不吭声的话，
-    # 这份报告会拿「判官没看到」当成「回复编造」，比不做评审更坏。
-    stubs = [cid for cid, tr in traces if truncated_calls(tr)]
-    if stubs:
-        print(f"🚨 {len(stubs)} 条用例的工具返回在 trace 里被截断过"
-              f"（{'、'.join(stubs[:6])}{' …' if len(stubs) > 6 else ''}）"
-              "——判官看到的材料缺一块，长返回用例的红条**不可信**；"
-              "重跑一轮 golden（run_case 会把上限放到 40000）再评。")
-
-    if args.dry_run:
-        for cid, tr in traces:
-            m = material(tr, result_limit=args.max_result_chars)
-            mark = " [材料被截断]" if cid in stubs else ""
-            print(f"  {cid:42s} 材料 {len(m):5d} 字符 / 工具 {len(calls_of(tr))} 条{mark}")
-        return 0
-
-    llm = make_llm(**({"model": args.model} if args.model else {}))
-    model = getattr(llm, "model_name", "?")
-    rows = []
-    for cid, tr in traces:
-        m = material(tr, result_limit=args.max_result_chars)
-        try:
-            v, degraded = judge_one(m, llm)
-            rows.append({"case": cid, "verdict": v, "material": m, "degraded": degraded,
-                         "stub": cid in stubs})
-            print(f"  {cid:42s} {v['verdict']:8s} unsupported={len(v['unsupported'])}"
-                  + ("（降级：无结构化输出）" if degraded else ""))
-        except Exception as e:  # noqa: BLE001 —— 判官挂了要**响亮**，不许当通过
-            rows.append({"case": cid, "error": f"{type(e).__name__}: {e}", "material": m})
-            print(f"  {cid:42s} ✗ 评审失败：{type(e).__name__}: {e}")
-
-    out_path = pathlib.Path(args.out) if args.out else (
-        ROOT / "eval/report" / f"judge_{dt.datetime.now():%Y%m%d_%H%M%S}.md")
-    out_path.write_text(render_report(dir_path.name, model, rows,
-                                      trace_dir=str(dir_path), warn_stub=stubs),
-                        encoding="utf-8")
-    n_sus = sum(1 for r in rows if (r.get("verdict") or {}).get("verdict") == "suspect")
-    n_err = sum(1 for r in rows if r.get("error"))
-    print(f"\n报告：{out_path}\n可疑 {n_sus} 条 / 出错 {n_err} 条（**都不影响任何门禁**）")
-    return 0          # 有意恒 0：suspect 不是失败，出错也不在门禁里（见模块头注纪律 1）
-
-
-if __name__ == "__main__":
-    sys.exit(main())

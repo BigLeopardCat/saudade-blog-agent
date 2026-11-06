@@ -21,8 +21,7 @@ def open_archive(dirpath, *, ext: str = ".json", now: float | None = None):
     用法：`with open_archive("eval/report/runs") as (path, fh): json.dump(..., fh)`。
     拿到就该写——文件在进来的那一刻已经建出来了（占位靠 `O_EXCL`）。
 
-    `dirpath` 给 `str` 或 `Path` 都行；**不建目录**（三个产出者本来就在写之前建好了：
-    `run_golden.py` / `recall_eval.py` 有 makedirs，`golden_full_run.py` 依赖目录早就在）。
+    `dirpath` 给 `str` 或 `Path` 都行；**不建目录**。
     `now` 只为测试注入。
     """
     epoch_ms = int(time.time() * 1000) if now is None else int(now * 1000)

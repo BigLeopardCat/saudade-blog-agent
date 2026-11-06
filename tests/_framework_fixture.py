@@ -7,9 +7,10 @@ import httpx
 from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import tool
 
-from agent import confirm, idem
+from agent import confirm
 from agent.domains.notices import preparation, transactions
 from agent.runtime.results import TurnResult
+from eval.fixtures.ledger import Ledger
 from models.llm import get_llm
 
 
@@ -78,7 +79,7 @@ def prepared_notice(config, ledger_path, *, content="请查看新的站内通知
         if grant is None:
             raise ValueError("Confirmation does not match the current actor and conversation")
         # The framework may dispatch tools on worker threads; own the connection here.
-        with closing(idem.Ledger(ledger_path)) as ledger:
+        with closing(Ledger(ledger_path)) as ledger:
             return transactions.execute(grant, config, None, ledger=ledger)
 
     return execute_prepared_notice, proposal.execution["confirm_text"], token

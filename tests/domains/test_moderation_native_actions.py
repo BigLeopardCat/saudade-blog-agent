@@ -10,12 +10,13 @@ import pytest
 from _own_support import config
 from pydantic import ValidationError
 
-from agent import confirm, idem
+from agent import confirm
 from agent.domains.moderation_actions import preparation, transactions
 from agent.principal import SOURCE_ASSERTION, Principal
 from agent.products.blog.pending import PendingOperation
 from agent.runtime import writes
 from agent.runtime.results import TurnResult
+from eval.fixtures.ledger import Ledger
 from tools import base
 
 
@@ -207,7 +208,7 @@ def test_real_writes_recheck_exact_state_and_replay_without_duplicate_notificati
     moderation, tmp_path, resource, action
 ):
     signed = grant(prepare(resource, action))
-    ledger = idem.Ledger(str(tmp_path / "writes.sqlite3"))
+    ledger = Ledger(str(tmp_path / "writes.sqlite3"))
     first = transactions.execute(signed, admin_config(), None, ledger=ledger)
     second = transactions.execute(signed, admin_config(), None, ledger=ledger)
     assert moderation["writes"] == 1
@@ -240,7 +241,7 @@ def test_changed_target_or_impact_prevents_business_write(moderation, tmp_path, 
     signed = grant(prepare("comment", "delete"))
     moderation["comments"][11][field] = value
     result = transactions.execute(
-        signed, admin_config(), None, ledger=idem.Ledger(str(tmp_path / "stale.sqlite3"))
+        signed, admin_config(), None, ledger=Ledger(str(tmp_path / "stale.sqlite3"))
     )
     assert moderation["writes"] == 0 and not result["receipts"] and result["blocked"]
 
@@ -251,7 +252,7 @@ def test_changed_target_or_impact_prevents_business_write(moderation, tmp_path, 
 def test_unknown_or_rejected_write_never_claims_completion_or_repeats(moderation, tmp_path, mode):
     signed = grant(prepare("board", "delete"))
     moderation[mode] = True
-    ledger = idem.Ledger(str(tmp_path / "uncertain.sqlite3"))
+    ledger = Ledger(str(tmp_path / "uncertain.sqlite3"))
     first = transactions.execute(signed, admin_config(), None, ledger=ledger)
     second = transactions.execute(signed, admin_config(), None, ledger=ledger)
     assert moderation["writes"] == 1
@@ -361,7 +362,7 @@ def test_cancel_and_cross_domain_replacement_revoke_old_confirmation(
     from agent.domains.todos import preparation as todos
 
     monkeypatch.setitem(registry._DOMAINS, "moderation", transactions)
-    ledger = idem.Ledger(str(tmp_path / "revoke.sqlite3"))
+    ledger = Ledger(str(tmp_path / "revoke.sqlite3"))
     monkeypatch.setattr(writes, "ledger_for", lambda saver: ledger)
     initial = prepare("board", "delete")
     pending = PendingOperation(grant(initial), initial.execution["pending_action"])
@@ -392,7 +393,7 @@ def test_crash_after_write_leaves_unknown_intent_instead_of_repeating(
         raise SystemExit("worker stopped after business write")
 
     monkeypatch.setattr(transactions.Operation, "invoke", crash)
-    ledger = idem.Ledger(str(tmp_path / "crash.sqlite3"))
+    ledger = Ledger(str(tmp_path / "crash.sqlite3"))
     with pytest.raises(SystemExit):
         transactions.execute(signed, admin_config(), None, ledger=ledger)
     replay = transactions.execute(signed, admin_config(), None, ledger=ledger)
@@ -437,7 +438,7 @@ def test_card_and_actual_rejection_use_the_same_nonblank_reason(
     prepared = prepare(resource, "reject")
     assert f"沿用已有理由：{expected}。" in prepared.execution["pending_confirm"]["q"]
     result = transactions.execute(
-        grant(prepared), admin_config(), None, ledger=idem.Ledger(str(tmp_path / "reason.sqlite3"))
+        grant(prepared), admin_config(), None, ledger=Ledger(str(tmp_path / "reason.sqlite3"))
     )
     assert result["receipts"] and moderation["writes"] == 1
     assert moderation[collection][11]["rejectReason"] == expected

@@ -6,12 +6,13 @@ from copy import deepcopy
 import pytest
 from _own_support import config
 
-from agent import confirm, idem
+from agent import confirm
 from agent.domains.article_tags import batch, preparation, transactions
 from agent.principal import SOURCE_ASSERTION, Principal
 from agent.products.blog.pending import PendingOperation
 from agent.runtime import writes
 from eval.article_tag_fixture import backend
+from eval.fixtures.ledger import Ledger
 
 
 def cfg(role="admin"):
@@ -29,7 +30,7 @@ def grant(result):
 
 
 def test_one_card_freezes_all_targets_and_replays_one_atomic_write(tmp_path):
-    with backend() as state, closing(idem.Ledger(str(tmp_path / "batch.sqlite3"))) as store:
+    with backend() as state, closing(Ledger(str(tmp_path / "batch.sqlite3"))) as store:
         card = prepared()
         signed = grant(card)
         assert len(signed["specs"]) == 2
@@ -59,7 +60,7 @@ def test_one_card_freezes_all_targets_and_replays_one_atomic_write(tmp_path):
 
 @pytest.mark.parametrize("mode", ["lost", "duplicate", "incomplete"])
 def test_unknown_or_partial_receipts_never_become_success_or_retry(tmp_path, mode):
-    with backend() as state, closing(idem.Ledger(str(tmp_path / "unknown.sqlite3"))) as store:
+    with backend() as state, closing(Ledger(str(tmp_path / "unknown.sqlite3"))) as store:
         signed = grant(prepared())
         state[mode] = True
         for _ in range(2):
@@ -69,7 +70,7 @@ def test_unknown_or_partial_receipts_never_become_success_or_retry(tmp_path, mod
 
 
 def test_stale_target_blocks_all_writes_and_does_not_drop_a_target(tmp_path):
-    with backend() as state, closing(idem.Ledger(str(tmp_path / "stale.sqlite3"))) as store:
+    with backend() as state, closing(Ledger(str(tmp_path / "stale.sqlite3"))) as store:
         signed = grant(prepared())
         state["rows"][12]["revision"] += 1
         assert not transactions.execute(signed, cfg(), None, ledger=store)["receipts"]
@@ -80,7 +81,7 @@ def test_stale_target_blocks_all_writes_and_does_not_drop_a_target(tmp_path):
 
 
 def test_feedback_revokes_the_entire_batch_and_requires_a_new_scope(tmp_path, monkeypatch):
-    with backend() as state, closing(idem.Ledger(str(tmp_path / "cancel.sqlite3"))) as store:
+    with backend() as state, closing(Ledger(str(tmp_path / "cancel.sqlite3"))) as store:
         card = prepared()
         signed = grant(card)
         monkeypatch.setattr(writes, "ledger_for", lambda _: store)
@@ -95,7 +96,7 @@ def test_feedback_revokes_the_entire_batch_and_requires_a_new_scope(tmp_path, mo
 
 
 def test_untrusted_or_unauthorized_batch_never_reads_or_writes(tmp_path):
-    with backend() as state, closing(idem.Ledger(str(tmp_path / "auth.sqlite3"))) as store:
+    with backend() as state, closing(Ledger(str(tmp_path / "auth.sqlite3"))) as store:
         signed = grant(prepared())
         requests = len(state["requests"])
         assert not transactions.execute(signed, cfg("user"), None, ledger=store)["receipts"]
@@ -107,7 +108,7 @@ def test_untrusted_or_unauthorized_batch_never_reads_or_writes(tmp_path):
 
 
 def test_selected_article_tags_preserve_unselected_articles_and_reject_mixed_intents(tmp_path):
-    with backend() as state, closing(idem.Ledger(str(tmp_path / "selection.sqlite3"))) as store:
+    with backend() as state, closing(Ledger(str(tmp_path / "selection.sqlite3"))) as store:
         signed = grant(prepared())
         mixed = deepcopy(signed)
         mixed["specs"][1]["args"]["intent"]["add"] = ["另一项改动"]

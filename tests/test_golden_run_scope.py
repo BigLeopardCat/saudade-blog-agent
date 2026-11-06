@@ -1,11 +1,4 @@
-"""`full_run` 判据 + 夜间 golden 门禁参数的回归锁。
-
-两件事同族——**判据看着在、其实不在**：
-
-秒级、纯函数 + 纯文本，无网络无 LLM；由 pytest 按目录收集自动收。
-
-用法：.venv/bin/python tests/test_golden_full_run.py
-"""
+"""Golden run scope distinguishes design exclusions from unavailable evidence."""
 
 
 from __future__ import annotations
@@ -37,7 +30,7 @@ sys.path.insert(0, str(ROOT / "eval"))
 import landing_gate  # noqa: E402
 
 
-def test_golden_full_run():
+def test_golden_run_scope():
     WRITE = "golden_write_category_delete_exec"      # 一条真写用例（设计上默认不跑）
     ENV_SKIP = "data_devices_online"                 # 一条"服务不可达就跳过"的用例（环境跳过）
     print("① is_full_run：两类跳过的分界")
@@ -80,14 +73,6 @@ def test_golden_full_run():
     _w = [c["id"] for c in _cases if c.get("needs_real_write")]
     check("golden 里有 needs_real_write 用例", bool(_w), "、".join(_w))
     print()
-    print("④ 夜间那一道 golden 门禁走 Wilson 口径（不传 --min-pass-rate）")
-    _nightly = (ROOT / "scripts/nightly_regression.sh").read_text(encoding="utf-8")
-    _run_line = [ln for ln in _nightly.splitlines()
-                 if "eval/run_golden.py" in ln and not ln.strip().startswith("#")]
-    check("夜间调用 run_golden 时**没有**传 --min-pass-rate（传了就走点估计口径，"
-      "20 条红会被读成「0.86 达标」）",
-          bool(_run_line) and all("--min-pass-rate" not in ln for ln in _run_line),
-          "；".join(ln.strip() for ln in _run_line) or "没找到调用行")
     check("档位 < 目标（相等或反了 ⇒ 抬档规则没有意义）",
           landing_gate.ENTRY < landing_gate.TARGET,
           f"ENTRY={landing_gate.ENTRY} TARGET={landing_gate.TARGET}")
@@ -105,4 +90,4 @@ def test_golden_full_run():
 
 
 if __name__ == "__main__":
-    test_golden_full_run()
+    test_golden_run_scope()

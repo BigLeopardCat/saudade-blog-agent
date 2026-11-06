@@ -26,7 +26,7 @@ ROOT = Path(__file__).resolve().parent.parent  # 仓根
 sys.path.insert(0, str(ROOT))
 
 
-sys.path.insert(0, str(ROOT / "eval"))         # 与两个跑法同一条 import 路径
+sys.path.insert(0, str(ROOT / "eval"))         # 与共享执行入口同一条 import 路径
 
 
 import corpus_provenance as cp  # noqa: E402
@@ -139,16 +139,8 @@ def test_golden_corpus_provenance():
     check("语料来源明确绑定原始公开站点，不跟随应用默认值重写",
           (_prov.get("declared_for") or {}).get("api_base")
           == "https://saudade.site/api/public")
-    print("\n⑥ 接线：两个跑法共用一处实现，且全量跑法把闸放在主循环**之前**")
+    print("\n⑥ 接线：共享执行入口共用一处实现，且执行入口把闸放在主循环**之前**")
     _RG = (ROOT / "eval" / "run_golden.py").read_text(encoding="utf-8")
-    _FR = (ROOT / "eval" / "golden_full_run.py").read_text(encoding="utf-8")
-    check("判据本体只有一份（run_golden / golden_full_run 里都没有第二份定义）",
-          "def check_corpus_premises" not in _RG and "def check_corpus_premises" not in _FR)
-    check("两个跑法都调它", "check_corpus_premises(" in _RG and "check_corpus_premises(" in _FR)
-    _idx_gate = _FR.index("check_corpus_premises(")
-    _idx_loop = _FR.index("for i, case in enumerate(CASES, 1):")
-    check("全量跑法里闸在主循环**之前**（一次全量约 18 分钟，摆在后面等于白跑）",
-          _idx_gate < _idx_loop, f"{_idx_gate} < {_idx_loop}")
     check("用例路径 → 声明路径：声明与用例同目录（`--golden` 换谁就按谁旁边那份判）",
           cp.provenance_path_for("eval/golden/basic.jsonl") == cp.CORPUS_PROVENANCE_FILE
           and cp.provenance_path_for("eval/fixtures/golden_smoke.jsonl")
@@ -157,9 +149,9 @@ def test_golden_corpus_provenance():
     check("裸文件名（没有目录）⇒ 落在当前目录、不炸",
           os.path.normpath(cp.provenance_path_for("basic.jsonl")) == "provenance.json",
           cp.provenance_path_for("basic.jsonl"))
-    check("两个跑法都用它推声明路径（各自拼一遍路径就会 A 的声明配 B 的用例）",
-          "provenance_path_for(" in _RG and "provenance_path_for(" in _FR)
-    for _name, _src in (("run_golden.py", _RG), ("golden_full_run.py", _FR)):
+    check("共享执行入口都用它推声明路径（各自拼一遍路径就会 A 的声明配 B 的用例）",
+          "provenance_path_for(" in _RG)
+    for _name, _src in (("run_golden.py", _RG),):
         _m = re.search(r"^\s*_code = 3 if \(.*$", _src, re.M)
         check(f"{_name}：摘光全部用例时空分母报 **3**（未评估），不是 2（自己摘的）",
               bool(_m) and "corpus" in _m.group(0).lower(),
@@ -182,22 +174,21 @@ def test_golden_corpus_provenance():
           "判不了" in _unknown_lines and "照跑" in _unknown_lines)
     check("ok 时**不打任何一行**（干净的轮次不该多出噪音）",
           cp.report_lines(*cp.check_corpus_premises(_docs(*REAL_ANCHORS))) == [])
-    print("\n⑧ 实体前提闸（20261009）：同一处实现、两个跑法都接线、措辞不许读反")
-    check("判据本体只有一份（两个跑法里都没有第二份定义）",
-          "def check_entity_premises" not in _RG and "def check_entity_premises" not in _FR)
-    check("两个跑法都调它",
-          "check_entity_premises(" in _RG and "check_entity_premises(" in _FR)
-    check("两个跑法都把结论翻成人能读的那几行（各写一份措辞早晚会漏掉那句话）",
-          "entity_report_lines(" in _RG and "entity_report_lines(" in _FR)
-    check("全量跑法里实体闸复用**语料闸那份快照**（不许再取一次）",
-          _FR.count("corpus_provenance.snapshot_docs()") == 1)
-    _idx_ent = _FR.index("check_entity_premises(")
-    check("全量跑法里实体闸也在主循环**之前**（它摘掉的那几条否则会白烧一次 LLM）",
-          _idx_ent < _idx_loop, f"{_idx_ent} < {_idx_loop}")
-    check("两个跑法都把它并进 skipped_ids（未评估要单列，不许静默豁免）",
-          "_SKIPPED_IDS += _ENTITY_SKIPPED" in _FR and "skip_ids += _entity_skipped" in _RG)
-    _check_pair = (("run_golden.py", _RG, "skipped_entity_ids", "entity_checks"),
-                   ("golden_full_run.py", _FR, "skipped_entity_ids", "entity_checks"))
+    print("\n⑧ 实体前提闸（20261009）：同一处实现、共享执行入口都接线、措辞不许读反")
+    check("判据本体只有一份（共享执行入口里都没有第二份定义）",
+          "def check_entity_premises" not in _RG)
+    check("共享执行入口都调它",
+          "check_entity_premises(" in _RG)
+    check("共享执行入口都把结论翻成人能读的那几行（各写一份措辞早晚会漏掉那句话）",
+          "entity_report_lines(" in _RG)
+    check("执行入口里实体闸复用**语料闸那份快照**（不许再取一次）",
+          _RG.count("judge_docs = judge_corpus()") == 1)
+    _idx_ent = _RG.index("check_entity_premises(cases, judge_docs)")
+    check("执行入口里实体闸也在主循环**之前**（它摘掉的那几条否则会白烧一次 LLM）",
+          _idx_ent < _RG.index("for i, case in enumerate(cases, 1):"), str(_idx_ent))
+    check("共享执行入口都把它并进 skipped_ids（未评估要单列，不许静默豁免）",
+          "skip_ids += _entity_skipped" in _RG)
+    _check_pair = (("run_golden.py", _RG, "skipped_entity_ids", "entity_checks"),)
     for _name, _src, _k1, _k2 in _check_pair:
         check(f"{_name}：报告里单列未评估的那几条 + 逐条结论",
               f'"{_k1}":' in _src and f'"{_k2}":' in _src)

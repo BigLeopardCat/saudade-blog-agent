@@ -10,7 +10,7 @@ from langchain_core.messages import AIMessage, AIMessageChunk, HumanMessage
 from langgraph.checkpoint.memory import InMemorySaver
 from pydantic import ValidationError
 
-from agent import confirm, idem
+from agent import confirm
 from agent.api.schemas import ChatRequest
 from agent.contracts.events import StreamEvent
 from agent.domains.favorites import preparation
@@ -20,6 +20,7 @@ from agent.runtime import writes
 from agent.runtime.checkpoint_conversations import CheckpointConversationStore
 from agent.runtime.results import TurnResult
 from agent.runtime.service import AgentRuntime
+from eval.fixtures.ledger import Ledger
 
 
 class Model:
@@ -108,7 +109,7 @@ def test_preparation_checkpoints_then_executes_once(site, monkeypatch, tmp_path,
     assert popup["token"] not in repr(model.calls)
     assert site["favorites"] == initial
 
-    ledger = idem.Ledger(str(tmp_path / "writes.sqlite3"))
+    ledger = Ledger(str(tmp_path / "writes.sqlite3"))
     monkeypatch.setattr(writes, "ledger_for", lambda saver: ledger)
     grant = confirm.verify(popup["token"], 7, 42)
     for _ in range(2):

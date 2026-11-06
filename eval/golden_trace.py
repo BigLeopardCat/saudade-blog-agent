@@ -97,6 +97,14 @@ def start_case(run_id: str, case_id: str, message: str = "", role: str | None = 
     return tid
 
 
+def events_of(trace_id: str) -> list:
+    """Read a snapshot of the active evaluation recorder before it is finalized."""
+    from utils.trace import _ACTIVE
+
+    recorder = _ACTIVE.get(trace_id)
+    return list(recorder.events) if recorder is not None else []
+
+
 def tool_call_stats(trace_id: str | None) -> tuple[list[str], int]:
     """Read actual native calls before finish_case removes the recorder.
 
@@ -105,8 +113,6 @@ def tool_call_stats(trace_id: str | None) -> tuple[list[str], int]:
     """
     if not trace_id:
         return [], 0
-    from utils.trace import events_of
-
     calls = [e for e in events_of(trace_id)
              if e.get("node") in ("native", "hybrid") and e.get("event") == "call"
              and e.get("name")]
@@ -152,7 +158,7 @@ def prune(keep: int = KEEP_DEFAULT) -> list[str]:
     for n in doomed:
         shutil.rmtree(os.path.join(root, n), ignore_errors=True)
     if kept_fail:
-        # 调用方（run_golden / golden_full_run）只打印"删了几个"，留下的这批得自己吭声：
+        # Retained evidence must be visible in the cleanup report.
         # 悄悄留下 = 下次没人知道为什么这个目录还在
         print(f"[trace] 保留 {len(kept_fail)} 个有失败的旧 run（失败夜的 trace 是证据，"
               f"不清理）：{kept_fail[0]} … {kept_fail[-1]}")

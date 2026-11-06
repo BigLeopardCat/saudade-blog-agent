@@ -192,7 +192,6 @@ def _check_public_host_source(_eval_txt):
 
 def test_ci_suite_list(tmp_path):
     EVAL_YML = ROOT / ".github" / "workflows" / "eval.yml"
-    NIGHTLY = ROOT / "scripts" / "nightly_regression.sh"
     _ALLOWED: set[str] = set()  # 一个都不许：入口按目录收集，点名哪个都是抄名单
     print("① CI（.github/workflows/eval.yml）：不许再抄名单")
     _eval = EVAL_YML.read_text(encoding="utf-8")
@@ -221,18 +220,6 @@ def test_ci_suite_list(tmp_path):
             _bad += [f"{p.name}@{v}" for v in re.findall(r"uvx ruff@([0-9.]+)",
                                                        p.read_text(encoding="utf-8")) if v != _pin]
         check(f"文档里的 `uvx ruff@X` 与 dev 分组同版（{_pin}）", not _bad, "、".join(_bad))
-    print("\n② 夜间（scripts/nightly_regression.sh）：与 CI 同一份清单")
-    _night = NIGHTLY.read_text(encoding="utf-8")
-    _night_called = _called_suites(_night)
-    check("夜间跑的也是 pytest（与 CI 同一份清单）",
-          re.search(r"\$PY -m pytest\b", _night) is not None)
-    check("夜间没有逐个套件的调用（此前这里是单列 test_workflows.py）",
-          _night_called <= _ALLOWED, f"逐套件调用：{sorted(_night_called - _ALLOWED)}")
-    check("夜间也不把收集面收窄（夜间=全量）", not _narrowing(_night),
-          f"收窄选项：{sorted(_narrowing(_night))}")
-    print("\n③ 夜间：跨语言守卫跑不到就是红，不是静默跳过")
-    check("夜间导出了 SAUDADE_REQUIRE_PARENT=1（父仓守卫跑不到 ⇒ 红）",
-          re.search(r"^\s*export\s+SAUDADE_REQUIRE_PARENT=1\s*$", _night, re.M) is not None)
     print("\n④ 出厂档钉子（唯一事实源）与入口的唯一性")
     check("出厂档钉子还在（判据不跟运维取值走）",
           conftest._PINNED.get("IOT_ENABLED") == "1"

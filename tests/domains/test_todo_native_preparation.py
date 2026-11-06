@@ -8,13 +8,14 @@ import pytest
 from _own_support import config
 from pydantic import ValidationError
 
-from agent import confirm, idem
+from agent import confirm
 from agent.domains.todos import preparation, transactions
 from agent.principal import SOURCE_ASSERTION, Principal
 from agent.products.blog.application import BlogApplication
 from agent.products.blog.pending import PendingOperation
 from agent.runtime import writes
 from agent.runtime.results import TurnResult
+from eval.fixtures.ledger import Ledger
 from tools import base
 
 VERSION = "2026-10-23 10:00:00.000001"
@@ -170,7 +171,7 @@ def test_preparation_zero_writes_binds_exact_arguments(todos, action, args, work
 )
 def test_confirmed_operations_verify_actual_state_and_replay_once(todos, tmp_path, action, args):
     signed = grant(prepare(action, **args))
-    ledger = idem.Ledger(str(tmp_path / "writes.sqlite3"))
+    ledger = Ledger(str(tmp_path / "writes.sqlite3"))
     first = transactions.execute(signed, admin_config(), None, ledger=ledger)
     second = transactions.execute(signed, admin_config(), None, ledger=ledger)
     assert todos["writes"] == 1
@@ -198,7 +199,7 @@ def test_replaced_or_edited_target_is_zero_write(todos, tmp_path, change):
     signed = grant(prepare("complete", item_id=11))
     todos["rows"][0].update(change)
     result = transactions.execute(
-        signed, admin_config(), None, ledger=idem.Ledger(str(tmp_path / "stale.sqlite3"))
+        signed, admin_config(), None, ledger=Ledger(str(tmp_path / "stale.sqlite3"))
     )
     assert todos["writes"] == 0 and not result["receipts"]
     assert "已变化" in result["reply"]
@@ -208,7 +209,7 @@ def test_replaced_or_edited_target_is_zero_write(todos, tmp_path, change):
 def test_unknown_outcome_never_claims_completion_or_repeats(todos, tmp_path, mode):
     signed = grant(prepare("create", text="准备面试"))
     todos[mode] = True
-    ledger = idem.Ledger(str(tmp_path / "uncertain.sqlite3"))
+    ledger = Ledger(str(tmp_path / "uncertain.sqlite3"))
     first = transactions.execute(signed, admin_config(), None, ledger=ledger)
     second = transactions.execute(signed, admin_config(), None, ledger=ledger)
     assert todos["writes"] == 1
@@ -281,7 +282,7 @@ def test_duplicate_text_is_safe_with_stable_id(todos, tmp_path):
         grant(prepare("complete", item_id=11)),
         admin_config(),
         None,
-        ledger=idem.Ledger(str(tmp_path / "duplicates.sqlite3")),
+        ledger=Ledger(str(tmp_path / "duplicates.sqlite3")),
     )
     assert result["receipts"]
     assert todos["rows"][0]["done"] is True and todos["rows"][1]["done"] is False
@@ -292,7 +293,7 @@ def test_cancel_and_cross_domain_replacement_use_shared_revocation(todos, monkey
     from agent.domains.notifications import transactions as notifications
 
     monkeypatch.setitem(registry._DOMAINS, "todos", transactions)
-    ledger = idem.Ledger(str(tmp_path / "revoke.sqlite3"))
+    ledger = Ledger(str(tmp_path / "revoke.sqlite3"))
     monkeypatch.setattr(writes, "ledger_for", lambda saver: ledger)
     initial = prepare("complete", item_id=11)
     signed = grant(initial)
@@ -317,7 +318,7 @@ def test_cancelled_card_remains_revoked(todos, monkeypatch, tmp_path):
     from agent.domains import registry
 
     monkeypatch.setitem(registry._DOMAINS, "todos", transactions)
-    ledger = idem.Ledger(str(tmp_path / "cancel.sqlite3"))
+    ledger = Ledger(str(tmp_path / "cancel.sqlite3"))
     monkeypatch.setattr(writes, "ledger_for", lambda saver: ledger)
     result = prepare("create", text="准备面试")
     signed = grant(result)
@@ -377,7 +378,7 @@ def test_native_prepares_executes_then_continues_without_repeating_write(
             return self.responses.pop(0)
 
     model = Model()
-    ledger = idem.Ledger(str(tmp_path / "hybrid.sqlite3"))
+    ledger = Ledger(str(tmp_path / "hybrid.sqlite3"))
     monkeypatch.setattr(writes, "ledger_for", lambda saver: ledger)
     runtime = AgentRuntime(
         CheckpointConversationStore(InMemorySaver()),
@@ -438,7 +439,7 @@ def test_delete_freezes_one_id_and_version_and_replays_without_a_second_request(
     signed = grant(prepare("delete", item_id=11))
     assert todos["writes"] == 0
     assert [request.url.path for request in todos["requests"]] == ["/api/protected/todos/item/11"]
-    ledger = idem.Ledger(str(tmp_path / "delete.sqlite3"))
+    ledger = Ledger(str(tmp_path / "delete.sqlite3"))
     first = transactions.execute(signed, admin_config(), None, ledger=ledger)
     second = transactions.execute(signed, admin_config(), None, ledger=ledger)
     assert len(first["receipts"]) == len(second["receipts"]) == 1
@@ -452,7 +453,7 @@ def test_delete_freezes_one_id_and_version_and_replays_without_a_second_request(
 def test_delete_unknown_or_invalid_receipt_is_never_repeated(todos, tmp_path, mode):
     signed = grant(prepare("delete", item_id=11))
     todos[mode] = True
-    ledger = idem.Ledger(str(tmp_path / "unknown-delete.sqlite3"))
+    ledger = Ledger(str(tmp_path / "unknown-delete.sqlite3"))
     first = transactions.execute(signed, admin_config(), None, ledger=ledger)
     second = transactions.execute(signed, admin_config(), None, ledger=ledger)
     assert not first["receipts"] and not second["receipts"]
@@ -463,7 +464,7 @@ def test_delete_stale_version_is_rejected_by_backend_without_deleting(todos, tmp
     signed = grant(prepare("delete", item_id=11))
     todos["rows"][0]["version"] = "2026-11-03 11:30:00"
     result = transactions.execute(
-        signed, admin_config(), None, ledger=idem.Ledger(str(tmp_path / "stale-delete.sqlite3"))
+        signed, admin_config(), None, ledger=Ledger(str(tmp_path / "stale-delete.sqlite3"))
     )
     assert not result["receipts"] and todos["writes"] == 0 and len(todos["rows"]) == 1
 

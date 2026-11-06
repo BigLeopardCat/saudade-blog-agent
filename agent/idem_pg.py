@@ -3,7 +3,6 @@
 
 The checkpoint factory initializes the table under its startup lock. Writes use
 short autocommit statements; no transaction or pool slot spans a remote call.
-The shared row codec retains the same replay semantics as the SQLite test ledger.
 """
 
 import json
@@ -16,7 +15,6 @@ from agent import idem
 
 logger = logging.getLogger(__name__)
 
-# PostgreSQL and explicit SQLite test fixtures use distinct table names.
 TABLE = "agent_write_idem"
 
 _DDL = f"""

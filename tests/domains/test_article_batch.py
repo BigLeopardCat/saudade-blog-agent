@@ -9,9 +9,10 @@ import httpx
 import pytest
 from _own_support import config
 
-from agent import confirm, idem
+from agent import confirm
 from agent.domains.article_actions import batch, preparation, transactions
 from agent.principal import SOURCE_ASSERTION, Principal
+from eval.fixtures.ledger import Ledger
 from tools import base
 
 
@@ -87,7 +88,7 @@ def test_batch_has_one_card_and_one_idempotent_write(service, tmp_path):
     assert all(len(spec["args"]["items"]) == 1 for spec in grant["specs"])
     choices = [option for option in card["opts"] if option["kind"] == "choice"]
     assert "#11" in choices[0]["label"] and "#12" in choices[1]["label"] and "1篇" in card["q"]
-    ledger = idem.Ledger(str(tmp_path / "batch.sqlite3"))
+    ledger = Ledger(str(tmp_path / "batch.sqlite3"))
     first = transactions.execute(grant, cfg(), None, ledger=ledger)
     replay = transactions.execute(grant, cfg(), None, ledger=ledger)
     assert len(first["receipts"]) == len(replay["receipts"]) == 1
@@ -101,7 +102,7 @@ def test_selected_article_state_executes_only_selected_ids_and_rejects_mixed_tra
 ):
     card = prepare().execution["pending_confirm"]
     grant = confirm.verify(card["token"], 7, 42)
-    with closing(idem.Ledger(str(tmp_path / "selection.sqlite3"))) as ledger:
+    with closing(Ledger(str(tmp_path / "selection.sqlite3"))) as ledger:
         mixed = deepcopy(grant)
         mixed["specs"][1]["args"]["status"] = "draft"
         assert not transactions.execute(mixed, cfg(), None, ledger=ledger)["receipts"]
@@ -120,7 +121,7 @@ def test_unknown_or_incomplete_batch_results_never_claim_success_or_retry(
 ):
     grant = confirm.verify(prepare().execution["pending_confirm"]["token"], 7, 42)
     service[failure] = True
-    ledger = idem.Ledger(str(tmp_path / "failed.sqlite3"))
+    ledger = Ledger(str(tmp_path / "failed.sqlite3"))
     for _ in range(2):
         assert not transactions.execute(grant, cfg(), None, ledger=ledger)["receipts"]
     assert service["writes"] == 1

@@ -1,10 +1,8 @@
 # -*- coding: utf-8 -*-
 """Shared HTTP channels, result exports and the tool registry.
 
-Domain implementations live in sibling modules. Shared clients and request helpers
-are resolved through this module at call time so consumers and test doubles use the
-same transport. Re-exports preserve existing import paths; _TOOL_REGISTRY retains
-the declared tool order. Authorization and signed confirmation belong to the
+Domain implementations share these HTTP channels and the declared tool registry.
+Authorization and signed confirmation belong to the
 runtime and domain execution boundaries, with independent backend enforcement."""
 
 import logging
@@ -27,27 +25,16 @@ from tools.http_channel import (
     write_failure,
 )
 
-# Result helpers remain re-exported for existing callers and transport test doubles.
+# Public tool result helpers.
 from tools.result import (
-    _FRAME_ID_KEYS,  # noqa: F401 —— 外面取：tests/test_item_position_guide.py
-    _LIST_FIELD_KEYS,  # noqa: F401 —— 外面取：本条契约的一部分
-    _LIST_FIELD_MAX,  # noqa: F401 —— 外面取：tests/test_frame_caps.py
-    _LIST_ROWS_MAX,  # noqa: F401 —— 外面取：tests/test_frame_caps.py
-    TGT_KINDS,  # noqa: F401 —— 外面取：tests/test_write_facts.py
-    UPSTREAM_DOWN,  # noqa: F401 —— 外面取：旧工具与测试的故障哨兵
+    UPSTREAM_DOWN,  # noqa: F401
     ToolResult,
-    _board_text_keys,  # noqa: F401 —— 外面取：tests/test_id_namespaces.py
-    _cap_rows,  # noqa: F401 —— 外面取：tests/test_frame_caps.py
-    _clip_fields,  # noqa: F401 —— 外面取：tests/test_frame_caps.py
-    _label_id_keys,  # noqa: F401 —— 外面取：tests/test_id_namespaces.py
-    _rows_with_note,  # noqa: F401 —— 外面取：tests/test_frame_caps.py
-    _shape,  # noqa: F401 —— 外面取：tests/test_id_namespaces.py + tests/test_userdata.py
-    empty,  # noqa: F401 —— 外面取：tests/test_hardening.py（`base.empty`，取的是函数对象）
-    fact,  # noqa: F401 —— 外面取：tests/test_write_facts.py 等（`base.fact(...)`）
-    is_noop,  # noqa: F401 —— 外面取：shared no-op result contract
-    not_found,  # noqa: F401 —— 外面取：既有 not_found 契约
-    ok,  # noqa: F401 —— 外面取：tests/test_admin_write.py 等（`base.ok(...)`）
-    tgt,  # noqa: F401 —— 外面取：tests/test_write_facts.py 等（`base.tgt(...)`）
+    empty,  # noqa: F401
+    fact,  # noqa: F401
+    is_noop,  # noqa: F401
+    not_found,  # noqa: F401
+    ok,  # noqa: F401
+    tgt,  # noqa: F401
     unavailable,
 )
 
@@ -103,23 +90,14 @@ def _get(path: str, *, not_found_text: str = "",
 
 # Device tools and identity helpers.
 from tools.device import (  # noqa: E402,F401
-    _DISPLAY_DEDUP_SECONDS,
     DEVICE_SERVICE_URL,
     _device_get_user_id,
-    _last_display,
-    _last_display_lock,
-    _sign_user_jwt,
-    _valid_device_id,
     device_oled_display,
     list_devices,
 )
 
 # Site information and page-command tools.
 from tools.site import (  # noqa: E402,F401
-    _ITEM_POSITION_FORMS,
-    _NAV_EXACT_PATHS,
-    _NAV_PREFIX_PATHS,
-    _NAV_WHOLE_PAGE_PATHS,
     IOT_ENABLED,
     IOT_NAV_PATH,
     get_chat_history,

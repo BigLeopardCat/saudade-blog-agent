@@ -24,7 +24,7 @@ import report_archive  # noqa: E402  （留档名的唯一事实源：毫秒戳 
 GOLDEN_FILE = ROOT / "eval" / "golden" / "basic.jsonl"
 RUNNER = ROOT / "eval" / "golden_case_runner.py"
 REPORTS_DIR = ROOT / "eval" / "report" / "slot_stability"
-TIMEOUT = 180          # 与 `golden_full_run.py` 同一个数
+TIMEOUT = 180
 MISSING = "(缺席)"     # 这一遍没产出那个参数（如实进分母，不跳过）
 
 
@@ -87,7 +87,7 @@ def spawn(case: dict, rep: int, *, trace: bool, trace_run: str) -> dict:
     **trace 默认关**：本仪器的产物是那份 JSON 报告（逐遍的取值与 fails 都在里面），而
     `golden_traces/` 是别的工具在用的共享档（`golden_draft` / `trace_reconcile` 的读取面）。
     N 遍各落一个目录是纯噪声——更糟的是**每个子进程各解析一个 run_id**，N 遍会散成 N 个
-    目录（`golden_full_run` 特意在父进程解析一次再经环境变量传下去，正是防这个）。
+    目录。
     要看某一遍为什么不一样时开 `--trace`，那时**整轮共用一个 run 目录**。
     """
     casefile = scratch() / f"{case['id']}.json"
@@ -172,7 +172,7 @@ def main() -> int:
     REPORTS_DIR.mkdir(parents=True, exist_ok=True)
 
     # run_id 在**父进程**解析一次、经环境变量传给每个子进程：子进程各自解析会把一轮
-    # 散成 N 个目录（`golden_full_run.py` 同一条注释）。
+    # All repetitions share one trace directory.
     trace_run = golden_trace.resolve_run_id() if args.trace else ""
 
     rows = []

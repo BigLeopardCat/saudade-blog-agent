@@ -1,55 +1,55 @@
 {
   "agent/action_text.py::_arm_text": {
     "c": 197,
-    "lines": 373
+    "lines": 370
   },
   "eval/admin_write_probe.py::main": {
     "c": 32,
-    "lines": 175
+    "lines": 169
   },
   "eval/admin_write_probe.py::step11_tag_admin": {
     "c": 66,
-    "lines": 185
+    "lines": 178
   },
   "eval/admin_write_probe.py::step16_announcement": {
     "c": 35,
-    "lines": 85
+    "lines": 81
   },
   "eval/admin_write_probe.py::step17_auth_review": {
     "c": 160,
-    "lines": 317
+    "lines": 295
   },
   "eval/admin_write_probe.py::step18_ledger_zero_write": {
     "c": 92,
-    "lines": 217
+    "lines": 185
   },
   "eval/admin_write_probe.py::step8_popup_write": {
     "c": 40,
-    "lines": 101
+    "lines": 95
   },
   "eval/corpus_terms.py::drift": {
     "c": 39,
-    "lines": 92
+    "lines": 76
   },
   "eval/landing_gate.py::readiness": {
     "c": 32,
-    "lines": 54
+    "lines": 46
   },
   "eval/run_golden.py::check_gold": {
     "c": 242,
-    "lines": 597
+    "lines": 376
   },
   "eval/run_golden.py::check_no_popup_premises": {
     "c": 32,
-    "lines": 59
+    "lines": 56
   },
   "eval/run_golden.py::main": {
     "c": 245,
-    "lines": 877
+    "lines": 718
   },
   "eval/run_golden.py::run_one": {
     "c": 55,
-    "lines": 160
+    "lines": 147
   },
   "eval/trace_reconcile.py::reconcile": {
     "c": 72,
@@ -65,7 +65,7 @@
   },
   "scripts/build_word_graph.py::main": {
     "c": 39,
-    "lines": 232
+    "lines": 219
   },
   "tests/test_artifact_retention.py::main": {
     "c": 38,
@@ -77,15 +77,11 @@
   },
   "tests/test_ci_suite_list.py::test_ci_suite_list": {
     "c": 31,
-    "lines": 147
+    "lines": 134
   },
   "tests/test_corpus_terms.py::test_corpus_terms": {
     "c": 54,
     "lines": 176
-  },
-  "tests/test_golden_corpus_provenance.py::test_golden_corpus_provenance": {
-    "c": 35,
-    "lines": 168
   },
   "tests/test_golden_fixture.py::test_golden_fixture": {
     "c": 118,
@@ -97,15 +93,15 @@
   },
   "tests/test_golden_rerun_offline.py::test_golden_rerun_offline": {
     "c": 60,
-    "lines": 192
+    "lines": 179
   },
   "tests/test_graph_build.py::test_graph_build": {
     "c": 40,
-    "lines": 238
+    "lines": 233
   },
   "tests/test_judge_offline.py::main": {
     "c": 75,
-    "lines": 205
+    "lines": 165
   },
   "tests/test_landing_gate.py::_test_enterprise_criteria": {
     "c": 42,
@@ -117,15 +113,15 @@
   },
   "tests/test_packaging.py::test_packaging": {
     "c": 115,
-    "lines": 299
+    "lines": 295
   },
   "tests/test_query_expansion.py::test_query_expansion": {
     "c": 34,
     "lines": 86
   },
   "tests/test_reconcile_offline.py::test_reconcile_offline": {
-    "c": 57,
-    "lines": 260
+    "c": 46,
+    "lines": 241
   },
   "tests/test_sections.py::test_sections": {
     "c": 44,
@@ -141,15 +137,15 @@
   },
   "tests/test_trace_retention.py::main": {
     "c": 47,
-    "lines": 166
+    "lines": 164
   },
   "tests/test_vector_index.py::test_vector_index": {
     "c": 66,
     "lines": 351
   },
   "tests/test_wordlist_gate.py::test_wordlist_gate": {
-    "c": 60,
-    "lines": 272
+    "c": 59,
+    "lines": 269
   },
   "tests/test_write_param_words.py::test_write_param_words": {
     "c": 33,

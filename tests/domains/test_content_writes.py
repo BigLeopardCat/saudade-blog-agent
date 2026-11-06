@@ -5,12 +5,13 @@ from contextlib import closing
 import pytest
 from _own_support import config
 
-from agent import confirm, idem
+from agent import confirm
 from agent.domains import talks
 from agent.domains.article_actions import deletion
 from agent.domains.gallery import folders
 from agent.principal import Principal
 from eval.content_fixture import backend
+from eval.fixtures.ledger import Ledger
 
 
 def cfg(role="admin", source="assertion"):
@@ -46,7 +47,7 @@ def test_native_approval_is_readonly_and_replay_performs_one_verified_write(
         if domain is folders
         else deletion.prepare_article_deletions
     )
-    with backend() as state, closing(idem.Ledger(str(tmp_path / "ledger.db"))) as ledger:
+    with backend() as state, closing(Ledger(str(tmp_path / "ledger.db"))) as ledger:
         grant = approved(tool.invoke(arguments, config=cfg()))
         assert state["writes"] == 0
         result = domain.execute(grant, cfg(), None, ledger=ledger)
@@ -75,7 +76,7 @@ def test_native_approval_is_readonly_and_replay_performs_one_verified_write(
 def test_unknown_or_forged_receipt_cannot_be_success_or_trigger_a_second_write(
     tmp_path, domain, tool, arguments, failure
 ):
-    with backend() as state, closing(idem.Ledger(str(tmp_path / "ledger.db"))) as ledger:
+    with backend() as state, closing(Ledger(str(tmp_path / "ledger.db"))) as ledger:
         grant = approved(tool.invoke(arguments, config=cfg()))
         state[failure] = True
         result = domain.execute(grant, cfg(), None, ledger=ledger)
@@ -115,7 +116,7 @@ def test_guestbook_ids_and_nonempty_folder_are_not_mutable_through_other_domains
 
 
 def test_selected_deletion_never_expands_to_unselected_articles(tmp_path):
-    with backend() as state, closing(idem.Ledger(str(tmp_path / "ledger.db"))) as ledger:
+    with backend() as state, closing(Ledger(str(tmp_path / "ledger.db"))) as ledger:
         grant = approved(
             deletion.prepare_article_deletions.invoke({"article_ids": [31, 32]}, config=cfg())
         )
@@ -126,7 +127,7 @@ def test_selected_deletion_never_expands_to_unselected_articles(tmp_path):
 
 
 def test_changed_document_blocks_the_whole_deletion_batch(tmp_path):
-    with backend() as state, closing(idem.Ledger(str(tmp_path / "ledger.db"))) as ledger:
+    with backend() as state, closing(Ledger(str(tmp_path / "ledger.db"))) as ledger:
         grant = approved(
             deletion.prepare_article_deletions.invoke({"article_ids": [31, 32]}, config=cfg())
         )

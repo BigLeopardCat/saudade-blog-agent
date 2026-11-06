@@ -5,9 +5,6 @@
   · `agent.log`（含 `[stream] end` 行与 `trace dump failed trace_id=` 佐证行）
   · `monitor.log`（含只在失败分支出现的 `confirm_card` / `orphan_dom_drop`，以及伪造的带空格 type）
 
-最后一段是**接线断言**：读 `scripts/nightly_regression.sh` 原文，断言对账那一节在里面
-——"能力有测试 ≠ 接线有测试"是本仓反复出过的问题（`tests/test_golden_trace.py` 同款纪律）。
-
 用法：.venv/bin/python tests/test_reconcile_offline.py → 全符合预期时退出码 0。
 """
 
@@ -15,7 +12,6 @@
 import gzip
 import json
 import os
-import re
 import shutil
 import sys
 import tempfile
@@ -249,23 +245,6 @@ def test_reconcile_offline():
           tr.summarize(r))
     md2 = tr.render_md({**r, "has_anomaly": True, "self_check": "日志级别或轮转方式变了？"})
     check("⑩ 有异常的报告里出现自检提示", "日志级别或轮转方式变了？" in md2)
-    print("⑪ 接线：nightly 脚本里真的有对账那一节（能力有测试 ≠ 接线有测试）")
-    nightly = os.path.join(ROOT, "scripts", "nightly_regression.sh")
-    src = open(nightly, encoding="utf-8").read() if os.path.exists(nightly) else ""
-    check("⑪ 脚本存在", bool(src), nightly)
-    check("⑪ 脚本里跑 trace_reconcile.py", "eval/trace_reconcile.py" in src)
-    check("⑪ 对账是**非门禁**（失败不置 fail 标记）",
-          "trace_reconcile.py" in src
-          and not any("trace_reconcile" in ln and "fail=1" in ln for ln in src.splitlines()),
-          "对账红了不该让整个夜间任务变红")
-    check("⑪ 脚本头部提到对账这一节（考古锚点）", "跨源对账" in src)
-    _glued = [ln for ln in src.splitlines()
-              if re.search(r'"\$LOG"[^\s;&|)]', ln)]
-    check("⑪ 没有语句粘连（`>> \"$LOG\"` 后面不得直接跟词）", not _glued,
-          "；".join(_glued) or "粘连的语句会退化成一行的右支，段头只在失败时才出现")
-    _golden_hdr = [ln for ln in src.splitlines() if ln.startswith("echo ") and "golden set" in ln]
-    check("⑪ golden 那一节的段头自占一行（它就是被粘连吃掉的那一条）", len(_golden_hdr) == 1,
-          _golden_hdr or "找不到 golden set 段头")
     print("⑫ 弹窗链（正常分支埋点）：同一枚待办串成一条链，跳数不齐才算线索")
     D = mkdirs(TMP, "flow")
     put_trace(os.path.join(D, "traces"), "r" + "g" * 31, 1, "2026-09-22T15:00:00", popup=True)

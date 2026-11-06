@@ -10,11 +10,12 @@ import pytest
 from _own_support import config
 from pydantic import ValidationError
 
-from agent import confirm, idem
+from agent import confirm
 from agent.domains.article_tags import preparation, transactions
 from agent.principal import SOURCE_ASSERTION, Principal
 from agent.products.blog.pending import PendingOperation
 from agent.runtime import writes
+from eval.fixtures.ledger import Ledger
 from tools import base
 
 
@@ -95,7 +96,7 @@ def test_prepare_exact_name_is_read_only_and_confirmed_replay_is_one_write(tags,
     assert signed["specs"][0]["args"]["intent"]["add"] == ["测试"]
     assert signed["executor"] == "article_tags" and not tags["writes"]
     assert "新建一级" in prepared.reply and "测试当标签" not in prepared.reply
-    store = idem.Ledger(str(tmp_path / "replay.sqlite3"))
+    store = Ledger(str(tmp_path / "replay.sqlite3"))
     for _ in range(2):
         outcome = transactions.execute(signed, admin_config(), None, ledger=store)
         assert len(outcome["receipts"]) == 1 and not outcome["blocked"]
@@ -106,7 +107,7 @@ def test_prepare_exact_name_is_read_only_and_confirmed_replay_is_one_write(tags,
 def test_unknown_or_mismatched_result_is_never_repeated(tags, tmp_path, mode):
     signed = grant(prepare(add=["测试"]))
     tags[mode] = True
-    store = idem.Ledger(str(tmp_path / "unknown.sqlite3"))
+    store = Ledger(str(tmp_path / "unknown.sqlite3"))
     for _ in range(2):
         assert not transactions.execute(signed, admin_config(), None, ledger=store)["receipts"]
     assert tags["writes"] == 1
@@ -116,7 +117,7 @@ def test_stale_plan_and_revoked_plan_are_zero_write(tags, tmp_path, monkeypatch)
     prepared = prepare(add=["测试"])
     signed = grant(prepared)
     tags["revision"] += 1
-    store = idem.Ledger(str(tmp_path / "stale.sqlite3"))
+    store = Ledger(str(tmp_path / "stale.sqlite3"))
     assert not transactions.execute(signed, admin_config(), None, ledger=store)["receipts"]
     assert not tags["writes"]
     prepared = prepare(add=["演示"])

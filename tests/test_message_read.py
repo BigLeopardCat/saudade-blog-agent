@@ -8,13 +8,14 @@ from langchain_core.messages import AIMessage, HumanMessage
 from langgraph.checkpoint.memory import InMemorySaver
 from pydantic import ValidationError
 
-from agent import confirm, idem
+from agent import confirm
 from agent.domains.messages import preparation, transactions
 from agent.products.blog.application import BlogApplication
 from agent.runtime import writes
 from agent.runtime.checkpoint_conversations import CheckpointConversationStore
 from agent.runtime.results import TurnResult
 from agent.runtime.service import AgentRuntime
+from eval.fixtures.ledger import Ledger
 
 
 def _prepare(scope="all_unread", ids=None, cfg=None):
@@ -67,7 +68,7 @@ def test_unverified_identity_never_reads(mailbox):
 def test_new_messages_and_outbox_are_unchanged_and_replay_writes_once(mailbox, tmp_path):
     grant = _grant(_prepare())
     mailbox["new_on_write"] = True
-    store = idem.Ledger(str(tmp_path / "mail.sqlite3"))
+    store = Ledger(str(tmp_path / "mail.sqlite3"))
     try:
         first = transactions.execute(grant, config(), None, ledger=store)
         replay = transactions.execute(grant, config(), None, ledger=store)
@@ -84,7 +85,7 @@ def test_new_messages_and_outbox_are_unchanged_and_replay_writes_once(mailbox, t
 def test_partial_write_has_no_receipt_and_cannot_repeat(mailbox, tmp_path):
     grant = _grant(_prepare())
     mailbox["ignore"] = {202}
-    store = idem.Ledger(str(tmp_path / "partial.sqlite3"))
+    store = Ledger(str(tmp_path / "partial.sqlite3"))
     try:
         for _ in range(2):
             result = transactions.execute(grant, config(), None, ledger=store)

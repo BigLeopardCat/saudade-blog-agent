@@ -253,10 +253,7 @@ def render(i: int) -> str:
     check("⑧b 穷举量与窄口径并存（`_file_metric` 与 `_matcher_names` 都被调用）",
           _src.count("_file_metric(") >= 2 and _src.count("_matcher_names(") >= 2)
     _ci = (ROOT / ".github" / "workflows" / "eval.yml").read_text(encoding="utf-8")
-    _night = (ROOT / "scripts" / "nightly_regression.sh").read_text(encoding="utf-8")
-    check("⑧c 进套件靠**按目录收集**不靠点名：CI 与夜间一次都没提过本文件名"
-      "（改成手抄名单 ⇒ 本套件静默掉队，CI 再也看不见闸门）",
-          "test_wordlist_gate" not in _ci and "test_wordlist_gate" not in _night)
+    check("⑧c CI 按目录收集，不维护点名清单", "test_wordlist_gate" not in _ci)
     print("\n⑨ 换了个量 ⇒ 退 3（不是「变好/变差」，是换了扫描面）")
     _shifted = {**_real, "targets": ["agent"]}
     _d4 = pathlib.Path(tempfile.mkdtemp(prefix="wlshift_"))

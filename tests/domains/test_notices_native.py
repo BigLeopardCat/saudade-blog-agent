@@ -8,11 +8,12 @@ import httpx
 import pytest
 from _own_support import config
 
-from agent import confirm, idem
+from agent import confirm
 from agent.domains.notices import preparation, targets, transactions
 from agent.principal import SOURCE_ASSERTION, SOURCE_BODY, Principal
 from agent.products.blog.pending import PendingOperation
 from agent.runtime import writes
+from eval.fixtures.ledger import Ledger
 from tools import base
 
 
@@ -98,7 +99,7 @@ def test_full_text_readonly_preparation_and_exactly_one_send(notices, tmp_path, 
     assert set(signed["specs"][0]["args"]) == {"version", "intent"}
     question = prepared.execution["pending_confirm"]["q"]
     assert "正文：\n\n 原文\n保持😀\t " in question
-    store = idem.Ledger(str(tmp_path / "notice.sqlite3"))
+    store = Ledger(str(tmp_path / "notice.sqlite3"))
     for _ in range(2):
         result = transactions.execute(signed, admin_config(), None, ledger=store)
         assert result["receipts"][0]["tool"] == "send_user_notice"
@@ -114,7 +115,7 @@ def test_changed_permissions_or_uncertain_delivery_never_repeats(notices, tmp_pa
         notices["revision"] += 1
     else:
         notices[failure] = True
-    store = idem.Ledger(str(tmp_path / "failed.sqlite3"))
+    store = Ledger(str(tmp_path / "failed.sqlite3"))
     for _ in range(2):
         assert not transactions.execute(signed, admin_config(), None, ledger=store)["receipts"]
     assert notices["writes"] == int(failure in ("lost", "wrong_result"))
@@ -123,7 +124,7 @@ def test_changed_permissions_or_uncertain_delivery_never_repeats(notices, tmp_pa
 def test_revocation_is_durable_and_never_sends(notices, tmp_path, monkeypatch):
     prepared = prepare(user_id=11)
     signed = grant(prepared)
-    store = idem.Ledger(str(tmp_path / "cancel.sqlite3"))
+    store = Ledger(str(tmp_path / "cancel.sqlite3"))
     monkeypatch.setattr(writes, "ledger_for", lambda _: store)
     pending = PendingOperation(signed, prepared.execution["pending_action"])
     for _ in range(2):

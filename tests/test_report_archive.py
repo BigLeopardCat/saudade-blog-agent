@@ -93,7 +93,7 @@ def test_report_archive():
         print("\n④ 三个产出者共用这一份实现（源码锁：漏改一个 = 少一份留档）")
         # 判据只读源码文本：谁再手搓一个秒级戳拼 `runs/` 路径，这条就红。三个文件都要
         # ① 出现 report_archive ② 不再出现秒级戳的拼法。
-        _writers = {"run_golden.py": "%Y%m%d_", "golden_full_run.py": "%Y%m%d_",
+        _writers = {"run_golden.py": "%Y%m%d_",
                     "recall_eval.py": "%Y%m%d-"}
         for _f, _bad in _writers.items():
             _src = (EVAL / _f).read_text(encoding="utf-8")

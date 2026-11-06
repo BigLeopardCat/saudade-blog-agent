@@ -9,7 +9,7 @@ from _service import app
 from langchain_core.messages import AIMessage, AIMessageChunk, HumanMessage
 from langgraph.checkpoint.memory import InMemorySaver
 
-from agent import confirm, idem
+from agent import confirm
 from agent.contracts.events import StreamEvent
 from agent.domains.favorites import preparation, transactions
 from agent.products.blog import pending
@@ -19,6 +19,7 @@ from agent.runtime import writes
 from agent.runtime.checkpoint_conversations import CheckpointConversationStore
 from agent.runtime.results import TurnResult
 from agent.runtime.service import AgentRuntime
+from eval.fixtures.ledger import Ledger as SQLiteLedger
 from tools import base
 
 
@@ -223,15 +224,15 @@ def test_stream_cancels_host_pending_and_routes_revoked_card_after_runtime_switc
 
     class Store:
         def claim(self, *args, **kwargs):
-            with closing(idem.Ledger(ledger.path)) as connection:
+            with closing(SQLiteLedger(ledger.path)) as connection:
                 return connection.claim(*args, **kwargs)
 
         def finish(self, *args):
-            with closing(idem.Ledger(ledger.path)) as connection:
+            with closing(SQLiteLedger(ledger.path)) as connection:
                 return connection.finish(*args)
 
         def lookup(self, *args):
-            with closing(idem.Ledger(ledger.path)) as connection:
+            with closing(SQLiteLedger(ledger.path)) as connection:
                 return connection.lookup(*args)
 
     monkeypatch.setattr(writes, "ledger_for", lambda saver: Store())
@@ -323,11 +324,11 @@ def test_cancellation_api_checks_signed_identity_and_never_calls_a_model(
 
     class Store:
         def claim(self, *args, **kwargs):
-            with closing(idem.Ledger(ledger.path)) as connection:
+            with closing(SQLiteLedger(ledger.path)) as connection:
                 return connection.claim(*args, **kwargs)
 
         def finish(self, *args):
-            with closing(idem.Ledger(ledger.path)) as connection:
+            with closing(SQLiteLedger(ledger.path)) as connection:
                 return connection.finish(*args)
 
     monkeypatch.setattr(writes, "ledger_for", lambda saver: Store())
