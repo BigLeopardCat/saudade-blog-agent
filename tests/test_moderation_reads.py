@@ -30,7 +30,10 @@ def backend(monkeypatch):
                 for row in board]
     state = {"board": board, "comments": comments, "requests": [], "failure": False,
              "ignore_filters": False, "counts": {"total": 7, "pending": 2, "passed": 3,
-             "rejected": 2, "aiPassed": 1, "aiFlagged": 2, "aiRejected": 2, "aiUnreviewed": 2}}
+             "rejected": 2, "aiPassed": 1, "aiFlagged": 2, "aiRejected": 2, "aiUnreviewed": 2},
+             "comment_counts": {"total": 3, "pending": 1, "passed": 1, "rejected": 1,
+                                "aiPassed": 1, "aiFlagged": 0, "aiRejected": 0,
+                                "aiUnreviewed": 2}}
 
     def handle(request):
         state["requests"].append(request)
@@ -41,7 +44,9 @@ def backend(monkeypatch):
         if "response_override" in state:
             return httpx.Response(200, json=state["response_override"])
         if request.url.path.endswith("/moderation/summary"):
-            return httpx.Response(200, json={"code": 200, "data": state["counts"]})
+            return httpx.Response(200, json={"code": 200, "data": {
+                "board": {"scope": "all", **state["counts"]},
+                "comments": {"scope": "not_deleted", **state["comment_counts"]}}})
         kind = request.url.path.rsplit("/", 1)[-1]
         rows = list(state[kind])
         params = request.url.params
@@ -92,14 +97,34 @@ def test_default_pages_include_totals_and_previews_not_full_bodies(backend):
 
 def test_summary_is_one_aggregate_request_with_no_content(backend):
     data = json.loads(str(moderation.get_moderation_status.invoke({}, config=config())))
-    assert data == {
+    counts = {
         "finalStatus": {key: backend["counts"][key] for key in
                         ("total", "pending", "passed", "rejected")},
         "aiDecision": {key: backend["counts"][key] for key in
                        ("aiPassed", "aiFlagged", "aiRejected", "aiUnreviewed")}}
+    assert data["board"] == {"scope": "all", **counts}
+    assert data["comments"] == {"scope": "not_deleted",
+        "finalStatus": {key: backend["comment_counts"][key] for key in
+                        ("total", "pending", "passed", "rejected")},
+        "aiDecision": {key: backend["comment_counts"][key] for key in
+                       ("aiPassed", "aiFlagged", "aiRejected", "aiUnreviewed")}}
     assert len(backend["requests"]) == 1
     assert backend["requests"][0].url.path.endswith("/moderation/summary")
     assert "content" not in str(data)
+
+
+@pytest.mark.parametrize("resource,field,value", [
+    ("board", "scope", "not_deleted"), ("comments", "scope", "all"),
+    ("comments", "total", 0), ("comments", "aiUnreviewed", True),
+])
+def test_summary_rejects_wrong_resource_scope_and_inconsistent_comment_counts(
+    backend, resource, field, value
+):
+    data = {"board": {"scope": "all", **backend["counts"]},
+            "comments": {"scope": "not_deleted", **backend["comment_counts"]}}
+    data[resource][field] = value
+    backend["response_override"] = {"code": 200, "data": data}
+    assert moderation.get_moderation_status.invoke({}, config=config()).kind == "unavailable"
 
 
 def test_ai_decision_and_final_approval_are_separate_filters(backend):
