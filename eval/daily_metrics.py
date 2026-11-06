@@ -115,7 +115,7 @@ def _m(n: int) -> str:
 
 
 def _inference_by_day(agg: dict) -> dict:
-    """按天聚合 所有推理节点的输入/命中（命中率的分母是输入 tok，见头注）。"""
+    """按天聚合 所有推理节点的输入/命中（命中率分母为全部输入 token）。"""
     per = defaultdict(lambda: {"in": 0, "cache": 0, "seen": 0, "calls": 0, "cache_in": 0})
     for (day, node, _eng), r in agg.items():
         d = per[day]
@@ -152,8 +152,6 @@ def render(paths: list, days: int) -> str:
         dup_txt += "（" + "、".join(items[:3]) + "）"
     parts.append(dup_txt)
 
-    # 按技能的**异常聚集**：单条 gate 否决是噪声，同一技能成片才是信号
-    # （现场：account_roster 3/18 全在 10-12～10-14 三天，形态一模一样）。
     hot = [f"{k}({v[1]}/{v[0]})" for k, v in sorted(conv["per_workflow"].items())
            if v[0] >= 3 and v[1] / v[0] >= 0.3]
     if hot:

@@ -110,7 +110,6 @@ def main() -> int:
         check("① .gz 读出来与 .json **逐键相同**（不是「读到了但少了几段」）",
               a == b and b is not None, f"json={a is not None} gz={b is not None}")
 
-        # 用裸 json.load 读 .gz 会抛 ⇒ 这一条正是历史事故的形状，锁住它不能"悄悄跳过"
         try:
             json.load(open(packed))
             raised = False
@@ -148,9 +147,6 @@ def main() -> int:
                     "eval/trace_reconcile.py", "eval/golden_draft.py"):
             check(f"④ {rel} 从 utils.trace_io 取读取器",
                   "from utils.trace_io import load_trace" in src(rel))
-        # 三个曾经"整份读进来"的读取端不得再碰 gzip——留着 `import gzip` 就是留着抄第二份
-        # 的口子。trace_reconcile 例外：它的 `_iter_lines` 是**逐行流式**解压（对账要按行扫
-        # 大文件），用的不是 load_trace 那条路，这个 import 是它自己的。
         for rel in ("eval/trace_alert.py", "eval/trace_metrics.py", "eval/golden_draft.py"):
             check(f"④ {rel} 不再自带 gzip 解压", "import gzip" not in src(rel))
 
@@ -168,11 +164,6 @@ def main() -> int:
         # ── ⑦ 顶层 schema_version：写侧盖章、读侧只许 .get（不许硬取）──────────
         oldp = _check_schema_version(tmp)
 
-        # ── ⑧ `events_of`：评测侧的**不落盘**读口（20260930）─────────────────
-        # 给 golden 断言"这一轮系统真的把待办台账摆上桌了"用（`planner.ledger_frame`
-        # 事件）。两条性质各自是一条锁：**读得到**（未落盘也能读——断言发生在
-        # `finish_trace` 之前）与**只给评测用**（生产路径上一个调用点都不许有，
-        # 否则就是"评测读口悄悄长进了生产链路"）。
         _tid = "trace_io_test_events_of"
         trace_mod.start_trace(_tid, user_id=0, thread_id="t", dir=tmp, by_day=False,
                               name="events_of_probe")

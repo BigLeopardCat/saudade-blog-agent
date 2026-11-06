@@ -157,10 +157,6 @@ def _restore(snap: dict) -> list[str]:
         if sys.modules.get(k) is not v:
             drift.append(f"sys.modules[{k!r}]")
             sys.modules[k] = v
-    # `lru_cache` 是**进程级**的，而它缓存的正是"当时的注册表长什么样"：某个套件把
-    # 工具的 `args_schema` 打桩、顺手调了一次 `_tools_desc_cached`，缓存里就留着一份
-    # **降级后的菜单**（实测：`search_notes(keyword:str*)` 变成 `search_notes()`），
-    # 后面的套件"现算 vs 缓存"对不上。清掉即可 —— 缓存是纯函数，重算没有代价。
     for name in _WATCHED_MODULES:
         mod = sys.modules.get(name)
         if mod is None:
@@ -174,7 +170,7 @@ def _restore(snap: dict) -> list[str]:
 
 @pytest.fixture(autouse=True)
 def _process_isolation(request, monkeypatch):
-    """每条用例前后把跨套件全局还原（差异逐条打印，见上面那段头注）。"""
+    """每条用例前后恢复跨套件全局状态，并逐项打印差异。"""
     from rag import search
 
     # Offline tests use explicit corpus fixtures; stale-title lookup must not start network IO.

@@ -42,12 +42,7 @@ def _bad_class(**over) -> list[dict]:
 
 
 def _pg_checks() -> None:
-    """⑥ PG 那一路（20261019 批 C）：登记了就必须有**真会跑**的执行者。
-
-    `store="pg"` 的类**不在盘上**，所以审计器（`audit`/`unregistered`/`_matcher`）对它一概
-    看不见——它**只能**靠 `owner_ref` 指的那个执行者真的会跑。盘上的那些类至少有"真树零
-    未登记"兜着，这一类没有 ⇒ 这里反过来查执行者本身。
-    """
+    """验证 PostgreSQL 保留策略登记了实际执行者，不能依赖磁盘扫描代替数据库清理。"""
     pg = [c for c in rm.CLASSES if rm.store_of(c) == rm.STORE_PG]
     check("⑥ 至少有一条 store=pg 的登记项（PG 那一路有人在管）",
           len(pg) >= 1, str([c["key"] for c in pg]))
@@ -241,7 +236,6 @@ def main() -> int:
               and inventory["scanned"] == {fixture_logs: 3, fixture_reports: 1},
               str(inventory))
 
-        # ── ⑥ PG 那一路（20261019 批 C）───────────────────────────────────
         _pg_checks()
     finally:
         import shutil

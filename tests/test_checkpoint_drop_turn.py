@@ -313,10 +313,6 @@ def test_checkpoint_drop_turn():
         elif HOOK in _body:
             check("父仓 `discard_handler` 里调了 drop_turn 钩子", True)
         else:
-            # ⚠️ **刻意不置红**：本仓是**公开仓**，CI 里的父仓是**钉住的一个 ref**——父仓那一行
-            # 没推进那个 ref 之前，写成"断言已接"就是一条**恒红**的判据，而红的套件进不了 CI
-            # （同 `tests/test_checkpoint_cascade.py` 头注记的那次）。**收紧留到父仓那一行进了
-            # 被钉住的那个 ref 之后**（判据的口径与 `test_checkpoint_cascade.py` ③ 同源）。
             print("     · 父仓那一半**还没接上**：`chat.rs::discard_handler` 没调 drop_turn 钩子。"
               "这是**已知缺口**（roadmap 批 7 记着），不是判据失败——本件判的是"
               "「机制与端点自己站得住」，跨仓那一半**只报不判**。")

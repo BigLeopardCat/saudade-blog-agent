@@ -159,11 +159,7 @@ def _test_get_llm_merges_translation_into_extra_body():
 
 
 def _test_dialect_table_covers_every_provider():
-    """方言表从 `eval/llm_judge.py` 上移到 `models/llm.py`（批 G7）——**改的是指向，不是
-    契约**：这一族仍然"每一家一行 + 认不出出声 + 覆盖 `KNOWN_LLM_PROVIDERS` 全集"。
-    上移的理由是 `eval.*` 不能被生产引（wheel 边界），而复盘器要用同一套方言 ⇒
-    表只能有一份，且必须住在生产侧。
-    """
+    """验证生产侧的唯一方言表覆盖全部提供方，并明确拒绝未知提供方。"""
     _JSON_OBJECT = {"type": "json_object"}
     _S = {"type": "object", "properties": {}, "required": []}
 
@@ -185,7 +181,6 @@ def _test_dialect_table_covers_every_provider():
     check("没登记的服务商按默认走，但**出声**（这里静默 = 整份输出作废而没人知道）",
           got.get("type") == "json_schema" and len(cap.records) == 1,
           f"{got} {len(cap.records)} 条")
-    # 评审员那一侧仍走同一张表（薄包装，20261019 批 G7）：两处**不许**各有一份方言。
     check("评审员的 `response_format(provider)` 是同一张表的薄包装",
           judge.response_format("deepseek") == _JSON_OBJECT
           and judge.response_format("qwen")["json_schema"]["name"] == "verdict")

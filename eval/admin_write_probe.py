@@ -1476,8 +1476,6 @@ def step17_auth_review(rep: Report, uid: int, role: str, allow_publish: bool = F
             if bad:
                 rep.fails.append(f"⑰ 卡上的留言 id {bad} 不在现场待审台账 {sorted(live)} 里 "
                                  f"= 目标不是从台账来的（幻觉 id / 认错了行）")
-        # 弹窗必须让主人**看得见自己在签什么**（用户拍板的形态）：逐条印
-        # 内部 id / 留言原文（人类唯一能核对的指称）/ 现状 / 动作——缺一就是"盲签"。
         for t in targets:
             for want, why in ((f"#{t}", "内部 id"),
                               ((live.get(t) or "")[:12], "留言原文（人类唯一能核对的指称）"),
@@ -1707,13 +1705,7 @@ def _del_board_comment(rep: Report, uid: int, role: str, tid: int, tag: str) -> 
 
 
 def _stage_pending_comment(rep: Report, uid: int, role: str) -> int | None:
-    """造一条**待审**留言（返回 talkKey；造不出返回 None 并记警告）。
-
-    只在台账 **0 条**待审时造——批 H 之后 ⑰/⑱ 需要的前提只是"台账里有 ≥1 条待审"
-    （旧版要求"恰好一条"，那是旧快道的约束），所以已有待审就不必再造一条真的留言。
-    **经生产入口**发（`POST /api/public/board`，须登录）⇒ 审核链路与访客留言逐字相同，
-    不是后台插数据。
-    """
+    """创建一次性待审留言并返回 talkKey；失败返回 None 并记录原因。"""
     pending = _pending_rows(uid, role)
     if pending:
         print(f"\n[staging] 台账里已经有 {len(pending)} 条待审，不必造（省一次真写）")
@@ -2222,8 +2214,6 @@ def step19_account_freeze(rep: Report, uid: int, role: str) -> None:
         conv = _probe_conv(rep, uid, role, "⑲")
         if conv is None:
             return
-        # ── 冻结：**明确命令式**措辞也必须弹卡（这两个工具在 `_ALWAYS_CONFIRM_TOOLS` 里，
-        #    "同轮命令即确认"那条捷径被结构性关掉——用户拍板「每次都弹卡」）
         payload, q_freeze = _acct_popup(rep, uid, role, conv, f"把账号「{name}」冻结掉",
                                         "⑲ 冻结", "account_freeze", name, "正常")
         if payload is None:

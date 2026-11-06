@@ -121,7 +121,6 @@ def test_identity_preflight():
         check("连接失败 → unknown（不是 unusable）", _st == ip.UNKNOWN)
         check("连接失败会重试到 retries+1 次", len(_calls) == 3, str(len(_calls)))
         check("重试之间有退避等待", len(_slept) == 2, str(_slept))
-        # 先失败后成功：以成功那次为准（这就是重试的意义）
         _seq = iter([urllib.error.URLError("boom"), _Resp(200)])
 
         def _flaky():

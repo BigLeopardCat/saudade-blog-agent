@@ -560,15 +560,12 @@ def _arm_text(name: str, a: dict, m: dict, preview: bool):
         # 只报 id，**不报《标题》**——写行带标题会被下一轮读成"我读过这篇"的指代证据
         # （同 execution_log 那条纪律）。
         aid = _raw(a.get("article_id"))
-        # 工具短路那次（目标状态本来就是它要的样子、压根没发写请求）改读 `change`：
-        # 动作词必须整个不出现（"收藏文章 12"就是在说"我动过你的收藏"），对象留着。
         change = _m(m, "change")
         if change:
             return f"文章 {aid} {change}（未改动）"
         what = "收藏文章" if name == "add_favorite" else "取消收藏文章"
         return f"{what} {aid}" if aid else what
     if name in ("read_notifications", "read_messages"):
-        # 说清**标的是哪几条**（全标 / 具体 id 列表）；短路那次改读 `change`（同理）。
         who = "站内通知" if name == "read_notifications" else "站内信"
         unit = "条" if name == "read_notifications" else "封"
         change = _m(m, "change")

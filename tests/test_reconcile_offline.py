@@ -199,8 +199,6 @@ def test_reconcile_offline():
               uid="1")     # 与 15:00 弹窗轮差 2 分钟
           + monitor_line("2026-09-22 16:10:00", "confirm_card", uid="1")     # 与 15:40 差 30 分钟
           + monitor_line("2026-09-22 15:03:00", "orphan_dom_drop", uid="1")
-          # 20261004 起行尾多了 ua=/webgl=/dup=（服务端拼的）：新字段必须追加在尾部，
-          # 且不能吃掉前面 type/uid/msg 的解析（这就是那条"追加而非插入"纪律的回归锁）
           + monitor_line("2026-09-22 15:04:00", "fetch_fail",
                          extra="url=/x msg=y stack= ua=Mozilla/5.0 (X11; Linux) webgl=no dup=3"))
     r = tr.reconcile(D + "/traces", D + "/log", D + "/mon", *win())

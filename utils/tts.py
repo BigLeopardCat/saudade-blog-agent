@@ -14,11 +14,6 @@ from config import settings
 
 logger = logging.getLogger(__name__)
 
-# 输出目录。**这里只定义、不创建**（20260925 改）：原先模块顶层有一句
-# `OUTPUT_DIR.mkdir(exist_ok=True)`，而 `utils/__init__.py` 又 `from .tts import speak`
-# ⇒ 任何 `import utils.*` 都会在**调用者当时的工作目录**下建一个空的 output_audio
-# （实测攒出 6 个：agent 仓根 / 父仓根 / eval/ / /tmp / /tmp/b1 / /tmp/b2，全是 0 文件；
-# 而 `speak` 全仓没有任何调用方）。现在锚在仓根（不随 CWD 漂移），且推迟到真写文件时才建。
 OUTPUT_DIR = Path(__file__).resolve().parent.parent / "output_audio"
 
 

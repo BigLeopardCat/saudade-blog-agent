@@ -84,16 +84,6 @@ def verify(titles: list[str] | None) -> tuple[int, list[str]]:
     return 0, [f"[fixture-clean] 公开分类列表 {len(titles)} 个，无 {FIXTURE_PREFIX}* 残留"]
 
 
-# ── 夹具闸（20260926）：两个跑法共用这一个实现 ──────────────────────────────
-# 20260926 之前，`run_golden.py`（进程内）与 `golden_full_run.py`（逐条子进程）**各写
-# 了一份**同样的闸，只靠注释写着"口径逐字一致"。那种一致靠的是人记得住，而这条闸的
-# 判据（跑不跑、跳过的理由是什么）本来就是**判据**、不是跑法的实现细节——两份迟早分叉，
-# 而分叉的形态正是最坏的那种：同一个用例在两个跑法里得到不同结论（一个跑了、一个跳过）。
-# 现在两族夹具、两个模块的读路径都收在这里，跑法只管调用。
-#
-# 分派与本模块的零凭据纪律**不冲突**：本模块自己不读任何带身份的东西——账号族那条读路径
-# 在 `golden_fixture_account.py`（要一个只读管理员身份，理由见那边头注），这里只是按
-# `requires_fixture_kind` 挑模块。
 FIXTURE_KINDS = ("category", "account", "board", "todo")
 
 

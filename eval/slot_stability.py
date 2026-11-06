@@ -73,12 +73,7 @@ _SCRATCH: Path | None = None
 
 
 def scratch() -> Path:
-    """本进程的私有暂存目录（惰性开一次，进程退出时收掉）。
-
-    **不写死 `/tmp/<固定名>`**（原先就是）：共享的 `/tmp` 里那个名字可被他人预先创建成
-    目录或软链（bandit B108 报的就是它），而这里要的只是"本次跑的一个私有目录"。
-    惰性：`--help` / 只读子命令不该在盘上留东西。
-    """
+    """本进程的私有暂存目录（惰性开一次，进程退出时收掉）。"""
     global _SCRATCH
     if _SCRATCH is None:
         _SCRATCH = Path(tempfile.mkdtemp(prefix="slot_stability_cases_"))

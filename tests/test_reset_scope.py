@@ -56,16 +56,7 @@ def _test_frontend_reads_same_scope():
 
 
 def _test_forbid_fallback_reads_scope():
-    """同一条键、同一个 `resets` 计数，两个 scope 的结论**相反**。
-
-    旧口径（`if gold["forbid_fallback"] and result["resets"]`）把"打回重规划"与"终局
-    兜底"当成同一件事——20261002 全量跑里 5 条 `forbid_fallback` 红有 4 条是假红
-    （逐条读 trace：gate 抓的都是真编造，重查后收尾如实），FAIL 文案还断言"用户收到的
-    是兜底道歉"这件没发生的事。判据换成 `fallback_resets`（只认 scope=text）。
-
-    反向对照**同时**钉住两端：只留第一条 ⇒ 老口径照样绿；只留第二条 ⇒ 放宽成"一律放行"
-    也绿。缺一条这个锁就证明不了任何事（同族教训见 `tests/test_confirm.py` 的变异锁）。
-    """
+    """以同一 resets 计数验证重规划与终局兜底的相反结论。"""
     print("\n[判据] `forbid_fallback` 认的是 scope（all=重规划 / text=终局兜底）")
     check("scope=all（打回 ⇒ planner 重规划）⇒ 不算兜底，放行",
           fallback_resets({"resets": 1, "reset_scopes": ["all"],

@@ -1,7 +1,5 @@
 # -*- coding: utf-8 -*-
-"""站内公告与河灯留言人工复核的卡面与回执。
-
-批 3a 从 `agent/adminops.py` 按域拆出（原文逐字节保留）。"""
+"""站内公告与河灯留言人工复核的卡面与回执。"""
 
 from __future__ import annotations
 
@@ -11,11 +9,6 @@ from agent.adminops_tags import (
 )
 
 
-# ── 站内公告（20260922）────────────────────────────────────────────────
-# 公告**没有 id 稳定指称**（用户从来只说标题），也没有层级/父级，所以这里的渲染
-# 比标签/分类那批简单得多：一律按标题指认，篇数之类的"影响面"也不存在。
-# 但有一条独有纪律：**公告正文是对全体访客说的话**，回执行里绝不摘要正文
-# （只报"标题改成了什么"），免得把主人的原话改了样子念出去。
 def announcement_title(row) -> str:
     return str((row or {}).get("title") or "").strip() or "（无标题）"
 
@@ -47,20 +40,8 @@ def render_announcement_deleted(row) -> str:
             f"（后台已复核：公告列表里已经没有它）")
 
 
-# ── 河灯留言的人工复核：回执行措辞（20260922 第六轮）────────────────
-# 与写工具同一条纪律：**措辞里不带工具名**（带了会让 narrator 复述内部名字），
-# 且必须把"这一动作可逆/不可逆"说清——审核可以改判（驳回的能再放行），删除不行。
 def _board_ref(row) -> str:
-    """回执行里的留言指称：`talkId:<id> 「正文片段」（作者）`。
-
-    **id 带命名空间**（20260926 批 4，理由见 tools/base.py::_board_label）：这行会
-    落进跨轮执行记忆，下轮主人说"把刚才那条删了"时，planner 读到的必须是一个
-    知道该拿去哪儿的 id，而不是一个可以当文章 id 用的裸数字。
-
-    正文片段是**这条留言在跨轮记忆里唯一的可认物**（下轮主人说"把刚才那条删了"
-    要能对上号），作者名字同理；时间不进回执行（列宽 300，读侧只留最近 8 行）。
-    两段都经消毒（访客可控文本）。
-    """
+    """回执行里的留言指称：`talkId:<id> 「正文片段」（作者）`。"""
     from agent.reports import sanitize_untrusted
     body = clip(sanitize_untrusted((row or {}).get("content") or "", 30), 30)
     who = clip(sanitize_untrusted((row or {}).get("author") or "", 16), 16)

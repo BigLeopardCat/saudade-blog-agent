@@ -44,7 +44,6 @@ def _cases(n_total: int, n_red: int, *, n_regression: int = 0, prefix: str = "c"
 
 def _test_wilson_and_sample_size():
     print("\n① Wilson 区间与样本量规则（判据的算术地基）")
-    # 已知值（20261001 从 27 次全量报告里核过）：零失败时下界 = n/(n+z²)
     check("110/110 下界 0.966（rule of three 说的 ~0.966 同一个数）",
           lg.wilson_ci(110, 110)[0] == 0.9663, str(lg.wilson_ci(110, 110)))
     check("146/146 下界 0.974 —— 「全绿」≠「95% 保证了」",
@@ -81,8 +80,6 @@ def _test_verdict_states():
     v = lg.verdict(_cases(146, 6), [], **base)
     check("红 6 条（下界 0.913）⇒ pass：达档，且**不置红**",
           v["sampled"]["state"] == "pass" and v["raise_ready"], v["sampled"]["state"])
-    # 抬档的回归锁（20261003：档位 0.85 → 0.90）：同一批数据在旧档位下是 pass，
-    # 抬档后落到 below_entry——**不置红**（档位不是门禁），但"达档"这句话不再成立。
     v = lg.verdict(_cases(146, 8), [], **base)
     check("红 8 条（下界 0.896）⇒ below_entry：抬档后不再算达档，但仍**不置红**",
           v["sampled"]["state"] == "below_entry" and not v["raise_ready"],
@@ -106,8 +103,6 @@ def _test_verdict_states():
     check("underpowered 的门槛是 min_n_zero_fail(档位) = 35，不是拍脑袋",
           lg.verdict(_cases(34, 0), [], **base)["sampled"]["state"] == "underpowered"
           and lg.verdict(_cases(35, 0), [], **base)["sampled"]["state"] == "pass")
-    # 小样本**整片塌方**必须置红（20261001 当天补）：1 条全红若走 underpowered 就是退 0
-    # ——"整片失败却绿灯"正是本仓反复踩的那族（空分母退 0、点估计把红读成达标）。
     v = lg.verdict(_cases(1, 1), [], **base)
     check("反向对照：1 条全红 ⇒ collapse（点估计 0 < 地板；下界 0 在这里什么也证明不了）",
           v["sampled"]["state"] == "collapse" and v["sampled"]["collapse_basis"] == "point",

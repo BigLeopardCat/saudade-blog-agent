@@ -294,10 +294,6 @@ def test_health_dials():
             call()["dials"]["checkpoint_backend"] == "postgres",
         )
         app.state.runtime = _Graph(None)
-        # **反控**（本节的要点）：把 `CHECKPOINT_DSN` 拨成一个合法 DSN，那一格**必须不变**。
-        # 变了就说明这一格是从配置推的，而"配了 DSN"与"这个进程挂上了 saver"是两件事
-        # （拨的是**已经起好的那个进程**的配置，图那个对象一个字节没变）⇒ 从配置推会把
-        # 前者报成后者。接线落地（批 7）之后这条反控**照旧成立**，理由不变。
         settings.checkpoint_dsn = "postgresql://u:p@127.0.0.1:5432/x"
         check(
             "（反控）拨了 CHECKPOINT_DSN 但图没挂 saver ⇒ 仍是 none，**不从 .env 推**",

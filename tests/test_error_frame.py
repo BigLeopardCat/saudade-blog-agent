@@ -78,10 +78,6 @@ async def _drive(producer) -> list[str]:
             args[4].call_soon_threadsafe(producer_done.set)
 
     server.stream_to_queue = tracked
-    # 身份断言：本机 .env 把它开着（生产语义），而**错误帧的产生与调用者身份无关**——
-    # 这里要的是"能进到流里"，不是"验签"。所以**显式拨回 0**（20261019 起这已**不是**
-    # 默认值了，默认是 1），让这条假请求走 body 身份进来即可；这条路径上的身份没有
-    # 工具能力（`authz.must_enforce`），而本节点本来也不碰工具。
     settings.agent_require_assertion = False
     try:
         req = ChatRequest(message="测试用消息")
@@ -124,10 +120,6 @@ def _producer_error_frame():
 
 def _payload_escaping():
     print("\n── ② 载荷里的换行与引号不撕帧 ──")
-    # 20260927：载荷改成常量之后，**必须**把常量换掉再测——否则这一格没有变量，
-    # 判据退化成"常量不含换行"（永远为真）。这正是常量写成模块级名字的理由。
-    # 换成生猛文本后，验的还是那条契约：任何带换行的载荷都要经 `json.dumps`，
-    # 裸插值会把一帧劈成三帧、前端读到半截。
     nasty = 'line1\n\nline2 "quoted" \\ tail'
     _saved_text = server.PRODUCER_ERROR_TEXT
     server.PRODUCER_ERROR_TEXT = nasty
@@ -148,7 +140,6 @@ def _payload_escaping():
           len(_naive) > 1, f"裸插值产出 {len(_naive)} 帧")
 
 
-# ────────────────────────── ②b 载荷不泄漏内部标识（20260927 事故输入）
 
 def _producer_error_hides_internals():
     print("\n── ②b 内部错误名不许进气泡（20260927 07:29 生产事故形态）──")
@@ -211,12 +202,6 @@ def _all_sites_json_encoded():
 
 def _sync_chat_failure_shape():
     print("\n── ⑤ 同族通道：非流式 /chat 的内部异常（同一族、同一句话术）──")
-    # 20260927 的 SSE 事故有第二个入口：`/chat` 非流式。它此前是
-    # `reply=""` + `error=str(e)`，而 HTTP 状态码仍是 200 —— 调用方只看状态码就把它
-    # 当成"这一轮正常结束、只是没说话"，于是落一条空的 assistant 行进历史；异常名与内部
-    # 路径顺着 `error` 出到调用方，而**当时 `error` 那一格一个读取方都没有**。
-    # 这里直接调 `chat()`（FastAPI 装饰器返回原函数），把五个协作者换成桩，让
-    # `_run_agent_sync` 这一路真炸 —— 判据是"炸了之后返回体长什么样"。
     boom = "pending_confirm-internal-path"
     names = ("_resolve_principal", "build_messages", "run_turn")
     saved = {n: getattr(server, n) for n in names}

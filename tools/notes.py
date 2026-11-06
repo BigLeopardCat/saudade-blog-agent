@@ -410,8 +410,6 @@ def list_my_board(config: RunnableConfig) -> str | ToolResult:
     data = _own_get("/api/protect/board/mine", config)
     page = None
     if isinstance(data, list):
-        # 与公开池同一套封顶。总数**走结构**（`page` → `meta["page"]`，批 G2）：跨轮摘要
-        # 读的是那一格，不再从注记的「共 N 条」里抠——注记是给人看的那份渲染。
         data, cap, page = _cap_rows(data, _LIST_ROWS_MAX, "你的河灯")
         data = _board_text_keys(data)
         # The authenticated list already establishes ownership; omit its redundant mine flag.

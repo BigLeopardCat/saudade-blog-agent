@@ -264,14 +264,8 @@ pub(crate) async fn drop_checkpoint_turn(conversation_id: i32, text: &str, uid: 
         check("父仓两条删除路径都交付持久清理任务", _st == "两臂都接", _why)
         check("级联清单在业务删除前登记清理任务",
               "checkpoint_cleanup::enqueue(db, row.id, row.user_id)" in _rs)
-        # 「清单只有一份」这条性质本身也要判：钩子挪到调用点之后，两个调用点**各自再查一遍**
-        # 会话 id 是最容易滑回去的写法（那正是 20261018 那个 bug 的形状）。判据 = 那份清单
-        # **把 id 返回给调用方**（签名里有 `Vec<i32>`）。
         check("父仓那份清单**仍然只有一处**：会话 id 由 `purge_conversation_data` 返回给调用方",
               "-> Result<Vec<i32>" in _rs, "签名里看不到 `Vec<i32>` 返回值")
-        # 身份那一档（20261020 安全审计 SAU-006）：本仓这两处现在**要求**断言 ⇒ 父仓不带
-        # 就是 401，而钩子 best-effort（失败只 warn）⇒ 断了不会响。判**一致性**、不判"已带"
-        # 的理由写在 `hook_identity` 的 docstring 里。
         _ist, _iwhy = hook_identity(_rs, _ds)
         print(f"     父仓钩子的身份：{_ist} —— {_iwhy}")
         check("父仓两个清理请求都携带身份断言", _ist == "都带", _iwhy)

@@ -28,12 +28,7 @@ _ADMINOPS = (ROOT / "agent" / "adminops_tags.py").read_text(encoding="utf-8")
 
 
 def _func_src(src: str, name: str) -> str:
-    """某个顶层函数的源码段（AST 限定范围，不看全文）。
-
-    ⚠️ 判据必须只看这几个函数里写了什么：整个 `adminops.py` 里还有别的 `"one"`/`"two"`
-    （`move_tag` 的参数校验、`workflow_defs/` 的提示词），全文搜会把它们当成"这里还有一个产出点"
-    ——一条判据认错对象，比没有判据更坏（它会让真改错的那次看着是绿的）。
-    """
+    """某个顶层函数的源码段（AST 限定范围，不看全文）。"""
     for node in ast.parse(src).body:
         if isinstance(node, ast.FunctionDef) and node.name == name:
             return ast.get_source_segment(src, node) or ""
@@ -52,13 +47,7 @@ def _dict_literal(name: str) -> dict:
 
 
 def _status_words_from_rust(src: str) -> tuple[set[str], str]:
-    """后端**认得**的状态词 + 它是从哪取到的（来源串只为把红信息写清楚）。
-
-    ⚠️ **两种形状都要认**（20261018）。父仓把状态词从两个写函数里**收进唯一解析点**
-    `notes.rs::normalize_status_word`（未知词由「原样写库」改成 400 拒收），字面量的位置
-    因此变了。而 agent 仓的 CI 稀疏 checkout 的是父仓的**默认分支** —— 本笔合并早于父仓
-    那一笔、或晚于它，两种都会发生。只认一种形状 = 拿两仓的合并顺序赌一次绿。
-    """
+    """从 Rust 状态解析或写入函数提取状态词，并保留来源用于诊断。"""
     # 新形状：`normalize_status_word` 的 match 臂**左值**（`"public" | "published" => …`）。
     # 只切 `=>` 左边 —— 右边是**归一后的产出**（`published` 归一到 `public`），不是"认得集"，
     # 把它一起收进来会让 `published` 这条台账凭空销账。

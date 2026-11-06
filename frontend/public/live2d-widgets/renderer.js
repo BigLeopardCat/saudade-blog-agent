@@ -1,48 +1,9 @@
-// ═ 看板娘渲染层（自研实现）══
-//
-// 20261001 开源前准备：本文件整体替换上游 stevenjoezhang/live2d-widget 的渲染实现
-// （原 waifu-tips.20260905.js + chunk/index.20260905.js + chunk/index2.20260905.js，
-// GPL-3.0，与本仓 GPL-2.0 不兼容 ⇒ 必须剔除）。换的只是**谁来画**：
-//   pixi.js（MIT）+ pixi-live2d-display（MIT）+ cubism5/live2dcubismcore.min.js（Live2D 专有，
-//   不入库；三份产物由 `npm run vendor:live2d` 就位，见 scripts/vendor-live2d.mjs）。
-// 聊天面板（chat-*.js，约 4800 行）本来就是自研的，一行未动。
-//
-// ── 对外契约：名字是别的模块直接写的，改名要同步改调用方 ──────────────────────
-//   DOM 骨架：#waifu > (#waifu-tips, #waifu-canvas > canvas#live2d, #waifu-tool)
-//             顺序不能变（chat-stream 按 id 取画布与按钮；boot.js 的 observeTips 监听
-//             #waifu-tips 的文本）；#waifu-toggle 由本文件建（widget.css 用贴纸图渲染）
-//   类：waifu-active（展开态，滑入闸门等它）/ waifu-hidden（display:none）/ waifu-toggle-active
-//   dataset：slideInOnce（滑入只做一次）、waifuBottom（拖拽后的纵向位置，收起/唤回按它还原）
-//   localStorage：waifu-display（quit 写的 24h 标记；boot.js 初始化前一律清）
-//   全局：window.__mouthOverride（-1 = 交还空闲动画，≥0 = 我们驱动口型）
-//         window.__setMouthOpen / window.__setMouthClose（chat-stream.js 三处直接写）
-//   分工：本文件只建前五个工具按钮；第六个 hitokoto 由 chat-stream.js 自建（对话开关），
-//         它有 500ms 重试兜底，晚一点建出来不影响顺序。
-//
-// ── 与上游实现的三处刻意差异 ────────────────────────────────────────────────
-//   ① tips 系统整块不搬：上游 56 条 mouseover 里 50 条是 Hexo 选择器（React 站一个都
-//      不存在），且 widget.css:382 把 #waifu-tips 设成 display:none !important ⇒ 它是
-//      **隐藏通道**，唯一活着的产出是"欢迎阅读「标题」"那一句（boot.js 的 observeTips
-//      把它镜像进对话框）。所以 waifu-tips.json 一并删掉，文案内置。
-//   ② 交互守卫不要了：上游靠 22 行 rAF 轮询去开合 canvas.pointerEvents（cubism5 运行时在
-//      模型就绪前 hitTest 会崩）。pixi 侧 `autoInteract:false` 根本不装指针监听 ⇒ 崩溃点
-//      结构性不存在，轮询可以整块删。
-//   ③ 参数注入走官方钩子：上游 monkey-patch `model.update` 再手动补一次 `_model.update()`；
-//      pixi-live2d-display 在 `coreModel.update()` 之前 emit `beforeModelUpdate`，正好是
-//      "运动/物理都算完、还没固化进 drawable"的那一刻，不用再打补丁。
 (function (g) {
   'use strict';
 
   const MODEL_PATH = '/live2d_model/agent_2.model3.json';
   // 前五个工具按钮的顺序是锁定的契约（顺序由数组决定，别重排）
   const TOOL_ORDER = ['switch-model', 'switch-texture', 'photo', 'info', 'quit'];
-  // 图标：Font Awesome Free 6.7.2（Icons: CC BY 4.0，https://fontawesome.com/license/free）。
-  // 只搬 path 数据、不带上游的注释壳；归属声明见 frontend/README.md 的第三方致谢。
-  // ★ 名字必须与**形状**对得上（20261002 修：此前三条整体措了一位——「更换看板娘」挂 T 恤、
-  //   「换装」挂相机、「拍照」挂"加图片"，于是按钮点下去做的事和图标讲的不是一件事）。
-  //   这类错**没有任何静态断言看得见**（源码里只有一个 <path d>），只有把图标真画出来才认得，
-  //   所以回归锁落在 frontend/tests/live2d-widget-scope.test.mjs（按 FA 的 path 前 32 字符比对）。
-  //   改这里请照着 FA 的图标名逐个核对，别凭印象排顺序。
   const ICONS = {
     // street-view：一个人形 —— 「换一位看板娘」
     'switch-model': '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><path d="M320 64A64 64 0 1 0 192 64a64 64 0 1 0 128 0zm-96 96c-35.3 0-64 28.7-64 64l0 48c0 17.7 14.3 32 32 32l1.8 0 11.1 99.5c1.8 16.2 15.5 28.5 31.8 28.5l38.7 0c16.3 0 30-12.3 31.8-28.5L318.2 304l1.8 0c17.7 0 32-14.3 32-32l0-48c0-35.3-28.7-64-64-64l-64 0zM132.3 394.2c13-2.4 21.7-14.9 19.3-27.9s-14.9-21.7-27.9-19.3c-32.4 5.9-60.9 14.2-82 24.8c-10.5 5.3-20.3 11.7-27.8 19.6C6.4 399.5 0 410.5 0 424c0 21.4 15.5 36.1 29.1 45c14.7 9.6 34.3 17.3 56.4 23.4C130.2 504.7 190.4 512 256 512s125.8-7.3 170.4-19.6c22.1-6.1 41.8-13.8 56.4-23.4c13.7-8.9 29.1-23.6 29.1-45c0-13.5-6.4-24.5-14-32.6c-7.5-7.9-17.3-14.3-27.8-19.6c-21-10.6-49.5-18.9-82-24.8c-13-2.4-25.5 6.3-27.9 19.3s6.3 25.5 19.3 27.9c30.2 5.5 53.7 12.8 69 20.5c3.2 1.6 5.8 3.1 7.9 4.5c3.6 2.4 3.6 7.2 0 9.6c-8.8 5.7-23.1 11.8-43 17.3C374.3 457 318.5 464 256 464s-118.3-7-157.7-17.9c-19.9-5.5-34.2-11.6-43-17.3c-3.6-2.4-3.6-7.2 0-9.6c2.1-1.4 4.8-2.9 7.9-4.5c15.3-7.7 38.8-14.9 69-20.5z"/></svg>',
@@ -55,16 +16,6 @@
     // xmark：叉 —— 「收起看板娘」
     quit: '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 384 512"><path d="M342.6 150.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0L192 210.7 86.6 105.4c12.5-12.5-32.8-12.5-45.3 0s-12.5 32.8 0 45.3L146.7 256 41.4 361.4c-12.5 12.5-12.5 32.8 0 45.3s32.8 12.5 45.3 0L192 301.3 297.4 406.6c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L237.3 256 342.6 150.6z"/></svg>',
   };
-  // 悬停提示（tooltip）：与 ICONS 同一把 key、同一个"这个按钮是干什么的"。
-  // ★ 为什么写在这里、而不是 chat-stream.js（它从前管着其中两条）：
-  //   按钮由本文件的 registerTools() 建出，title 便能在**建出来的那一刻**写上，
-  //   时序上不存在"抢在按钮出现之前设、设不上就永远没有"这回事。
-  //   旧写法把 switch-model / switch-texture 的 title 挂在 chat-stream 的一次性
-  //   `setTimeout(…, 1000)` + `if (!btn) return;` 上，而按钮实测 **4.8–6.2s** 才建出来
-  //   （模型加载完才 registerTools）⇒ 无头 Chrome 实测：不节流时纯属抢跑险胜（余量约
-  //   0.2s），CPU 节流 ×6 时两条 title **从未挂上**；photo / info / quit 则从来没有过提示。
-  //   回归锁：frontend/tests/live2d-widget-scope.test.mjs ④（比对 ICONS 与 TITLES 的 key 集合）。
-  //   改这里请一并改 ACTIONS——提示语说的就是 ACTIONS 里那件事。
   const TITLES = {
     'switch-model': '更换看板娘',    // ACTIONS: 只有一套模型，提示"没有第二套"
     'switch-texture': '换装',        // ACTIONS: 同上，没有第二套贴图
@@ -72,7 +23,6 @@
     info: '关于',                    // ACTIONS: 如实报渲染层实现来源
     quit: '收起看板娘',              // ACTIONS: 收起（写 waifu-display 时间戳）
   };
-  // 文案（上游放在 waifu-tips.json 里，本批内置；保留 $1 占位符的替换习惯）
   const MSG = {
     welcome: '欢迎阅读<span>「$1」</span>',
     referrer: 'Hello！来自 <span>$1</span> 的朋友',
@@ -92,13 +42,6 @@
   };
 
   const pickOne = (v) => (Array.isArray(v) ? v[Math.floor(Math.random() * v.length)] : v);
-  // 填进 `$N` 的值一律**先转义**（20261015）：模板里那两个 `<span>` 是文案自带的结构
-  // （欢迎语要把标题画成强调色），而填进去的值来自**页面之外**——`document.title` 与
-  // `document.referrer` 的 hostname。`show()` 最后是 `el.innerHTML = …`，不转义就等于
-  // 把标题当成 HTML 解析。只转义参数、不转义模板，故意的标记因此照常生效。
-  // 现状（20261015 核实）**够不到**真实攻击面：能改 `document.title` 的只有
-  // `SeoHelmet` 的几处，标题/分类名只有管理员写得了——所以这是纵深防御，
-  // 不是"访客能踩的洞"；但这一段的价值在于**值不该被当标记**，与谁写标题无关。
   const esc = (s) => String(s)
     .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
@@ -275,19 +218,6 @@
       }
     };
 
-    // ── 拖拽（位置记在 dataset.waifuBottom，收起/唤回按它还原）────────────────
-    // ★ 坐标学（20261002 修，两条都是这一处写错）：
-    //   ① `bottom` 是从**视口底**量的 ⇒ 它是**增量**，要拿"鼠标位移"去加减当前值，
-    //      不能把 clientY 当新值直接写进去；
-    //   ② 方向是**反的** ⇒ 鼠标往下走（clientY 变大）元素就该往下走，对应的 bottom 要**变小**。
-    //   此前写成 `bottom = m.clientY - ev.offsetY`，两个都错，后果是：
-    //      · **点一下、原地不动，看板娘直接飞到视口顶**（offsetY 落在画布中部，
-    //        算出来的 bottom 恰好被钳到上限 H-h ⇒ 元素顶到 0）；
-    //      · 真拖的时候上下左右全反。
-    //   同一个错还藏着第三个坑：`ev.offsetX/offsetY` 相对的是 **canvas**，而 #waifu 里
-    //   canvas 并不在原点（上面还压着 #waifu-tips）⇒ 抓取点常年偏着一截。
-    //   改成增量式一次绕开三个：不解释任何绝对坐标，只把位移加到起点上。
-    //   回归锁：frontend/tests/live2d-render.test.py ⑤（真按下、真移动、量方向）。
     const setupDrag = () => {
       const el = document.getElementById('waifu');
       if (!el) return;

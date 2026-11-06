@@ -96,7 +96,7 @@ import _parent_repo  # noqa: E402
 
 
 def _cone_patterns(txt: str) -> list[str]:
-    """把 `sparse-checkout` 的值读成**逐条模式**，两种合法写法都认（20261001）。"""
+    """把 `sparse-checkout` 的值读成**逐条模式**，两种合法写法都认。"""
     m = re.search(r"^([ \t]*)sparse-checkout:[ \t]*(.*)$", txt, re.M)
     if not m:
         return []

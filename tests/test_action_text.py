@@ -294,7 +294,6 @@ def test_action_text():
          {"all": "False", "ids": "['a', -3, '']"}, {}),
         ("标记站内信已读（3）", "read_messages", {"all": "False", "ids": "[3]"}, {}),
         ("标记站内信已读", "read_messages", {"all": "False", "ids": "[]"}, {}),
-        # 工具短路那次（`noop` + `change`）：动作词整个不出现、对象留着
         ("文章 12 本来已收藏（未改动）", "add_favorite", {"article_id": "12"},
          {"change": "本来已收藏"}),
         ("文章 12 本来就没收藏（未改动）", "remove_favorite", {"article_id": "12"},
@@ -319,7 +318,6 @@ def test_action_text():
          {"op": "set_status", "article_id": "12", "before": "公开", "after": "私密"}),
         ("修改文章 12 的标签：编程、Rust → 编程", "set_article_tags", {"article_id": 12},
          {"op": "set_tags", "article_id": "12", "before": "编程、Rust", "after": "编程"}),
-        # 读取带《标题》（跨轮指代锚点，20260912）
         ("读取文章 19《架构随笔》", "get_article_detail", {"article_id": 19},
          {"title": "架构随笔"}),
         ("读取留言 100", "get_article_detail",

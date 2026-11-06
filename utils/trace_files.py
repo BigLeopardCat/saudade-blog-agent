@@ -1,33 +1,5 @@
 # -*- coding: utf-8 -*-
-"""trace 文件枚举的单一实现（20260925：目录布局从"平铺"改成"按天一层"）。
-
-**为什么单列一个模块**：枚举方式此前在四个读取端各写一遍（`trace_alert.py` /
-`trace_metrics.py` / `trace_reconcile.py` / `golden_draft.py`，逐字相同的两行 glob）。
-布局一变就是四处一起改、漏一处就变成"这个脚本少看了一半数据"——与
-pytest 按目录收集套件同一条理由：**让改动只有一个落点**。
-
-**为什么住在 `utils/` 下**（20261019 从 `eval/` 搬来）：两个方向都要引它——**生产代码**
-（`agent/hostinfo.py::trace_stats`，运维报表数当日 trace）与 `eval/` 下四个离线读取端；
-而生产代码只许 import 本仓的 wheel 包（`tests/test_packaging.py` ① 就是这条闸，它此前
-正因为 `agent/` → `eval/` 这个反向 import 而红）。顺带一个理由：写入端
-`utils/trace.py` 也在这里，布局契约的两头同住一个包。
-
-⚠️ **但"零依赖"才是它的立身之本**，所以 `utils/__init__.py` 同日**收成空门面**
-（不再 `from .logging import setup_logging`）：包门面只要 import 一次 `utils.logging`，
-`import utils.trace_files` 就会连带拉 `config.settings` 与 `.env`，离线读取端（离线
-测试 / 夜间巡检 / 对账哨兵）就再也不是"只吃路径参数"了。**这个模块只 import
-os/glob/re**，谁都能引；要用包门面那个函数就写 `from utils.logging import setup_logging`。
-
-布局契约（写侧 = `utils/trace.py::_TraceRecorder.dump`，两边必须一致；
-`tests/test_trace_retention.py` 用一次真实的落盘往返把它锁住）：
-
-    <root>/<YYYYMMDD>/<原名>.json      ← 20260925 起的新写法（按天分目录）
-    <root>/<原名>.json                 ← 存量平铺（仍在读，按保留期自然老去）
-    <root>/<原名>.json.1.gz            ← logrotate 归档（rename 语义）
-    <root>/<原名>.json.gz              ← eval/trace_retention.py 的压缩产物
-
-其余子目录（例如 `output_audio/`）**不枚举**：它不是 trace，别把音频算进巡检语料。
-"""
+"""trace 文件枚举的单一实现。"""
 import glob
 import os
 import re
@@ -53,13 +25,7 @@ def parse_stamp(path: str) -> str:
 
 
 def parse_trace_name(path: str) -> tuple[str, str]:
-    """从文件名取 `(stamp, uid)`；取不到返回 `("", "")`，不抛。
-
-    读取端要的从来是**两个**值：窗口过滤按 stamp、排除 golden 产出（uid==0）与按用户
-    切链按 uid。此前三份脚本各自内联同一根正则、各自拼 `group(1)+"T"+group(2)`——
-    改一处漏两处就是"某个脚本的时间窗口悄悄判错"。**新读取端一律用这个**，
-    别再内联 `STAMP_RE`。
-    """
+    """从 trace 文件名提取 stamp 与 uid，解析失败返回两个空串；读取端复用此函数。"""
     m = STAMP_RE.search(os.path.basename(path))
     return (m.group(1) + "T" + m.group(2), m.group(3)) if m else ("", "")
 

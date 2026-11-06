@@ -84,8 +84,6 @@ _JUDGE_SYS = """你是评测评审员，只做一件事：核对一条客服回�
 {"unsupported": ["回复里的原话片段"], "answered": true, "verdict": "suspect", "reason": "一句话说明凭什么这么判（≤120 字）"}
 没有可疑说法时 `unsupported` 写 `[]`；`reason` 哪怕只有几个字也要有。"""
 
-# 判官看不到、而叙述者当时确实有的东西（trace 不落这些）。写进材料而不是留在
-# 提示词里，是为了让"哪些说法不算编造"这条判据**跟着材料一起被人看见**。
 BLIND_SPOTS = (
     "当前时间（current_time）",
     "当前页面 / URL（page_ctx）",

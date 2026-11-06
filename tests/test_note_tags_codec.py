@@ -26,12 +26,7 @@ check = collector(FAILED)
 
 
 def _func_src(src: str, name: str) -> str:
-    """取某个顶层函数的源码段。
-
-    ⚠️ 判据**必须**只看这两个函数里写了什么：整个文件的正文里还有别的
-    `"、".join(…)`（`TAG_COLOR_SPEC`），全文搜分隔符会把它当成"这里是顿号"——
-    一条判据认错了对象，比没有判据更坏（它会让真改错的那次看着是绿的）。
-    """
+    """取某个顶层函数的源码段。"""
     for node in ast.parse(src).body:
         if isinstance(node, ast.FunctionDef) and node.name == name:
             return ast.get_source_segment(src, node) or ""
