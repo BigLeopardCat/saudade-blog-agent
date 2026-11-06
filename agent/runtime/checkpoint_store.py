@@ -32,6 +32,33 @@ def setup(conn):
         thread_id TEXT PRIMARY KEY,
         deleted_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
     )""")
+    conn.execute("""CREATE TABLE IF NOT EXISTS agent_deleted_turns (
+        thread_id TEXT NOT NULL,
+        task_id TEXT NOT NULL,
+        deleted_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        PRIMARY KEY (thread_id, task_id)
+    )""")
+
+
+def mark_turn_deleted(saver, thread_id, task_id):
+    if postgres(saver):
+        with saver.conn.connection() as conn:
+            conn.execute("INSERT INTO agent_deleted_turns(thread_id,task_id) VALUES (%s,%s) "
+                         "ON CONFLICT DO NOTHING", (thread_id, task_id))
+    else:
+        if not hasattr(saver, "_deleted_turns"):
+            saver._deleted_turns = set()
+        saver._deleted_turns.add((thread_id, task_id))
+
+
+def turn_deleted(saver, thread_id, task_id):
+    if not saver or not task_id:
+        return False
+    if postgres(saver):
+        with saver.conn.connection() as conn:
+            return bool(conn.execute("SELECT 1 FROM agent_deleted_turns "
+                "WHERE thread_id=%s AND task_id=%s", (thread_id, task_id)).fetchone())
+    return (thread_id, task_id) in getattr(saver, "_deleted_turns", ())
 
 
 def mark_deleted(saver, thread_id):

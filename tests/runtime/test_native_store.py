@@ -87,9 +87,10 @@ def test_discard_after_legacy_adoption_uses_commit_node_and_delete_rejects_late_
     legacy_checkpoint(saver)
     store = CheckpointConversationStore(saver)
     runtime = AgentRuntime(store, application=BlogApplication())
-    result = checkpoint.drop_last_user_turn(runtime, 42, "旧问题")
+    before = store.load(config()).messages
+    result = checkpoint.drop_last_user_turn(runtime, 42, "unidentified-turn")
     assert result == {"dropped": True, "why": ""}
-    assert store.load(config()).messages == []
+    assert store.load(config()).messages == before
     seed_turn(store, config(), [HumanMessage(content="另一轮")], "答复")
     assert checkpoint.delete_thread(saver, 42)
     with pytest.raises(checkpoint_store.ConversationDeleted):

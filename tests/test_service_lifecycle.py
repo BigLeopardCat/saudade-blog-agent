@@ -240,7 +240,7 @@ def test_optional_warmups_are_joined_and_failures_are_logged(startup, monkeypatc
 
 @pytest.mark.parametrize("method,path,body,target", [
     ("DELETE", "/checkpoint/7", {}, "delete"),
-    ("POST", "/checkpoint/7/drop_turn", {"text": "discarded"}, "discard"),
+    ("POST", "/checkpoint/7/drop_turn", {"task_id": "discarded"}, "discard"),
     ("POST", "/confirmation/cancel", {"user_id": 7, "conversation_id": 7}, "cancel"),
 ])
 def test_disconnected_maintenance_operations_drain_before_pool_close(

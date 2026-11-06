@@ -63,7 +63,7 @@
       }
       const id = 'd' + entry.message_id;
       if (!ctx.state.items.some(x => x.id === id)) {
-        const item = ctx.core.migrateItem({ id, type: 'user', text: entry.text, time: entry.ts });
+        const item = ctx.core.migrateItem({ id, type: 'user', text: entry.text, time: entry.ts, parent_task_id: entry.task });
         ctx.state.items = ctx.core.mergeItems(ctx.state.items, [item]);
         const element = engine.appendMsg(item);
         const live = ctx.state.live[ctx.state.activeRound?.roundId]?.el;
@@ -73,7 +73,7 @@
           messages.insertBefore(element, live);
         }
         engine.saveHistory();
-        engine.broadcast({ t: 'user', id, text: entry.text, time: entry.ts, from: engine.windowId });
+        engine.broadcast({ t: 'user', id, text: entry.text, time: entry.ts, parent_task_id: entry.task, from: engine.windowId });
       }
       if (ctx.state.activeRound?.taskId === entry.task) ctx.state.activeRound.resumeText = entry.text;
     };

@@ -28,6 +28,7 @@ MAX_SHORT_FIELD_CHARS = 500
 class HistoryItem(BaseModel):
     role: Literal["user", "assistant"]
     content: str
+    task_id: str | None = Field(default=None, max_length=100, pattern=r"^[A-Za-z0-9_-]+$")
 
 
 class QuotaInfo(BaseModel):

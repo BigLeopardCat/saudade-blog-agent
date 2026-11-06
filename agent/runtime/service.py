@@ -1,13 +1,14 @@
 """LangChain model/tool execution with durable conversation and approval state."""
 
 import asyncio
+import uuid
 from dataclasses import replace
 from functools import partial
 
 from langchain_core.messages import AIMessageChunk
 from openai import OpenAIError
 
-from agent.runtime import approval, memory, recovery, trace_context
+from agent.runtime import approval, checkpoint_store, memory, recovery, trace_context
 from agent.runtime.memory_media import stage
 from agent.runtime.results import ReplyReset, TurnResult
 from agent.runtime.session import ToolSession
@@ -71,6 +72,10 @@ class AgentRuntime:
     def _turn(self, state, config):
         check_cancelled(config)
         snapshot = self.store.load(config)
+        if self._discarded_turn(state, config, snapshot):
+            yield TurnResult("该轮次已丢弃，请重新发送新的请求。",
+                             {"blocked": [{"reason": "turn_discarded"}]})
+            return
         grant = state.get("confirm_grant")
         if grant is not None:
             yield from self._confirmed(state, config, snapshot, grant)
@@ -90,6 +95,8 @@ class AgentRuntime:
                         snapshot, state.get("messages") or [], principal,
                         tool_access=self.application.history_access),
                     *memory.request_messages(state.get("messages") or [])]
+        task_id = state.get("task_id") or uuid.uuid4().hex
+        incoming = memory.identify_turn(incoming, task_id)
         if pending:
             session = self._session(config, snapshot, pending)
             session.task = snapshot.run
@@ -104,13 +111,12 @@ class AgentRuntime:
         prompt = self.application.prompt([*snapshot.messages, *incoming], principal)
         session = self._session(config, snapshot, pending)
         session.turn_input = incoming
-        session.task = recovery.new_run(config, incoming, state.get("task_id"))
+        session.task = recovery.new_run(config, incoming, task_id)
         if (self.inputs and snapshot.run and session.task
                 and snapshot.run["id"] != session.task["id"]):
             try:
                 self.inputs.finish(snapshot.run, set())
             except InputConflict as exc:
-                # Tasks predating input support have no inbox row.
                 if str(exc) != "task_not_available":
                     raise
         outcome = yield from self._run(session, prompt)
@@ -122,6 +128,13 @@ class AgentRuntime:
             return
         record("native", "turn_completed", chars=len(outcome.reply))
         yield outcome
+
+    def _discarded_turn(self, state, config, snapshot):
+        task_id = state.get("resume_task") or state.get("task_id")
+        if not task_id and state.get("confirm_grant"):
+            task_id = (snapshot.run or {}).get("id")
+        thread_id = ((config or {}).get("configurable") or {}).get("thread_id")
+        return checkpoint_store.turn_deleted(self.saver, thread_id, task_id)
 
     def _feedback(self, session, prompt, pending, incoming):
         if (session.config.get("configurable") or {}).get("task_inputs"):

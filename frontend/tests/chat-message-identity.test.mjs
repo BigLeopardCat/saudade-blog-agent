@@ -44,3 +44,16 @@ test('unbound failure flags are discarded without dropping unrelated bound tasks
   assert.deepEqual(rememberFailedRound(null, rows[0]), [rows[0]]);
   assert.deepEqual(rememberFailedRound([unbound], unbound), []);
 });
+
+test('database refresh preserves request identity and the task owning supplemental messages', () => {
+  const { mapDbItems, migrateItem } = globalThis.__waifuChatCore;
+  const rows = [
+    {id:1,role:'user',content:'继续',task_id:'first'},
+    {id:2,role:'user',content:'继续',task_id:'second'},
+    {id:3,role:'user',content:'只处理草稿',parent_task_id:'second'},
+  ];
+  const items=mapDbItems(rows,()=>undefined).map(migrateItem);
+  assert.deepEqual(items.map(row=>[row.task_id,row.parent_task_id]),[
+    ['first',undefined],['second',undefined],[undefined,'second'],
+  ]);
+});

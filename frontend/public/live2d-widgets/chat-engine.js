@@ -484,6 +484,7 @@
               if (m.from === windowId) return;
               const item = __chatCore.migrateItem({
                 id: m.id, type: 'user', text: m.text, time: m.time,
+                task_id: m.task_id, parent_task_id: m.parent_task_id,
                 ...(m.images && m.images.length ? { images: m.images } : {}),
                 ...(m.hasImg ? { hasImg: 1 } : {}),
               });
@@ -892,7 +893,7 @@
                    && String(items[anchor].id || '').startsWith('l')) anchor--;
             const last = anchor >= 0 ? items[anchor] : null;
             const lastIsFailedUser = !!entry && !expired && last && last.type === 'user'
-              && last.text === entry.text;
+              && (last.task_id || last.parent_task_id) === entry.task_id;
             // 其后有**已入库的**回复 = 重发成功/补答 ⇒ 不提示（未入库的半截项不算）
             const hasAgentAfter = lastIsFailedUser && items.slice(anchor + 1)
               .some(it => it.type === 'agent' && !String(it.id || '').startsWith('l'));
@@ -927,6 +928,7 @@
                 const slot = document.createElement('div');
                 slot.className = 'chat-msg-retry-slot';
                 slot.dataset.failedText = entry.text;
+                slot.dataset.taskId = entry.task_id || '';
                 failedNoteEl.appendChild(slot);
                 messages.appendChild(failedNoteEl);
               }

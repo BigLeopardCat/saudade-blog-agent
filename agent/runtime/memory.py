@@ -30,6 +30,20 @@ OBSERVATION_CHARS = 1400
 SUMMARY_CHARS = SUMMARY_MAX_CHARS
 
 
+def turn_message_id(task_id):
+    return "user-turn:" + task_id if task_id else None
+
+
+def identify_turn(messages, task_id):
+    identified = list(messages)
+    for index in range(len(identified) - 1, -1, -1):
+        if is_user_input(identified[index]):
+            identified[index] = identified[index].model_copy(
+                update={"id": turn_message_id(task_id)})
+            break
+    return identified
+
+
 def is_context(message):
     return (isinstance(message, HumanMessage)
             and message.additional_kwargs.get("memory_context") is True)

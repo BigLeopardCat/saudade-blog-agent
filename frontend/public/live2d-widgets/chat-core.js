@@ -19,6 +19,8 @@
       id: (it && it.id) || genId(),
       type: (it && it.type) || 'agent',
       text: (it && it.text) || '',
+      task_id: it?.task_id || undefined,
+      parent_task_id: it?.parent_task_id || undefined,
       time: (it && it.time) || 0,
       process: (it && Array.isArray(it.process) && it.process.length) ? it.process : undefined,
       images: (it && Array.isArray(it.images) && it.images.length) ? it.images
@@ -31,6 +33,8 @@
       id: 'd' + row.id,
       type: row.role === 'user' ? 'user' : 'agent',
       text: row.content,
+      task_id: row.task_id || undefined,
+      parent_task_id: row.parent_task_id || undefined,
       time: row.time,
       images: row.images,
     });

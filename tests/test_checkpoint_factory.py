@@ -214,6 +214,7 @@ class _FakeConn:
             self.input_schema_upgrades += 1
             return _Res([])
         if s.startswith(("CREATE TABLE IF NOT EXISTS agent_deleted_threads",
+                         "CREATE TABLE IF NOT EXISTS agent_deleted_turns",
                          "CREATE TABLE IF NOT EXISTS agent_task_inputs",
                          "CREATE INDEX IF NOT EXISTS agent_task_inputs_expiry",
                          "CREATE INDEX IF NOT EXISTS agent_task_inputs_owner_phase",

@@ -74,24 +74,24 @@
     const init = () => {
       if (!chatPanel) { setTimeout(init, 500); return; }
       const steering = g.__waifuSteering ? g.__waifuSteering(ctx, engine) : null;
-      const postDiscard = async (text, convId) => {
+      const postDiscard = async (convId, taskId) => {
+        if (!taskId || convId == null) return { ok: false, why: '缺少任务标识，请新建会话后重试' };
         const tk = localStorage.getItem('tokenKey');
         if (!tk) return { ok: false, why: '登录状态已失效，刷新页面后再试' };
         try {
           const r = await fetch('/api/chat/discard', {
             method: 'POST',
             headers: { 'Authorization': 'Bearer ' + tk, 'Content-Type': 'application/json' },
-            body: JSON.stringify({ text,
-              ...(convId !== null && convId !== undefined ? { conversation_id: convId } : {}) }),
+            body: JSON.stringify({ task_id: taskId, conversation_id: convId }),
           });
           const j = await r.json();
           if (j && j.success) return { ok: true };
           if (j && j.error === 'unauthorized') {
             return { ok: false, why: '登录状态已失效，刷新页面后再试' };
           }
-          // 走到这里就是 `reason: "mismatch"`（后端说最后一条 user 不是这条）：
-          // 这一轮**不在服务端记录里**（请求压根没送到，或已被新消息顶掉）⇒
-          // 不删任何东西，原文还在气泡里可复制。
+          if (j?.reason === 'cleanup_pending') return { ok: false,
+            why: '历史正在后台同步，请稍后再试；本次不会重新执行任务' };
+          if (r.status >= 500) return { ok: false, why: '历史同步暂未完成，请稍后重试' };
           return { ok: false, why: '这一轮已经不在服务端记录里，没有可删除的旧轮' };
         } catch(e) {
           // Do not resend until the server confirms the failed round was discarded.
@@ -99,26 +99,24 @@
         }
       };
 
-      const lastUserText = () => {
-        const last = [...ctx.state.items].reverse().find(i => i.type === 'user');
-        return last ? last.text : null;
-      };
+      const lastUser = () => [...ctx.state.items].reverse().find(i => i.type === 'user');
+      const lastUserTask = () => lastUser()?.task_id || lastUser()?.parent_task_id;
       const STALE_HINT = '这一轮已经不是你最后一条消息了（期间发过新的），不再提供重发';
       const pausedTask = () => {
         try {
           const entries = JSON.parse(localStorage.getItem('saudade-chat-failed') || '[]');
           return entries.find(x => x && x.kind === 'stopped' && x.task_id
-            && String(x.conv_id) === String(ctx.state.conv) && x.text === lastUserText()
+            && String(x.conv_id) === String(ctx.state.conv) && x.task_id === lastUserTask()
             && Date.now() - x.ts < 24 * 3600 * 1000) || null;
         } catch (_) { return null; }
       };
       let resumingTask = false;
       const resumeStoppedTask = async (stopped, fallback, showHint = ctx.ui.notify) => {
         if (resumingTask || ctx.state.isSending) return false;
-        if (!stopped || lastUserText() !== stopped.text) { showHint?.(STALE_HINT); return false; }
+        if (!stopped || lastUserTask() !== stopped.task_id) { showHint?.(STALE_HINT); return false; }
         resumingTask = true;
         const pausedCard = [...messages.querySelectorAll('.chat-msg-failed-note')]
-          .find(note => note.querySelector('.chat-msg-retry-slot')?.dataset.failedText === stopped.text);
+          .find(note => note.querySelector('.chat-msg-retry-slot')?.dataset.taskId === stopped.task_id);
         if (pausedCard) pausedCard.hidden = true;
         ctx.ui.refreshComposer?.();
         try {
@@ -130,7 +128,7 @@
           if (completed) {
             ctx.state.items = ctx.state.items.filter(x => x.id !== stopped.partial_id);
             if (previous?.classList.contains('agent')) previous.remove();
-            clearFailedRound(stopped.text);
+            clearFailedRound(stopped.task_id);
             saveHistory();
           }
           return completed;
@@ -141,12 +139,15 @@
         }
       };
 
-      const attachRetryActions = (contentSpan, div, msg) => {
+      const attachRetryActions = (contentSpan, div, msg, taskId) => {
+        const originConv = ctx.state.conv;
+        const isCurrent = () => taskId && ctx.state.conv === originConv && lastUserTask() === taskId;
         const wrap = document.createElement('div');
         wrap.className = 'chat-msg-retry';
         // 这组按钮属于哪一条消息（`attachHistoryFailedRetry` 靠它做"同一轮只能有一处
         // 按钮"的去重；没有这个标记就只能按位置猜，而位置正是会分家的东西）
         wrap.dataset.retryText = msg;
+        wrap.dataset.taskId = taskId || '';
         const retryBtn = document.createElement('button');
         retryBtn.type = 'button';
         retryBtn.className = 'chat-retry-btn';
@@ -181,47 +182,47 @@
           }
           hintEl.textContent = text;
         };
-        // The server also verifies the last user message before discarding it.
-        const discardFailedRound = () => postDiscard(msg, ctx.state.conv);
+        // Both sides bind cleanup to this stable request identity.
+        const discardFailedRound = () => postDiscard(originConv, taskId);
         const restoreAndCleanup = () => {
-          // 恢复原文（含图片）到输入区——图片从 items 里的 user 条目取
-          // （pendingImages 发送后已清空）
-          const it = [...ctx.state.items].reverse().find(i => i.type === 'user' && i.text === msg);
-          if (it) {
-            if (it.images) { ctx.state.pendingImages = [...it.images]; renderPreviews(); }
-            const oldUserEl = messages.querySelector('[data-mtype="user"][data-mid="' + it.id + '"]');
-            if (oldUserEl && oldUserEl.parentNode) oldUserEl.parentNode.removeChild(oldUserEl);
-            ctx.state.items = ctx.state.items.filter(x => !(x.type === 'user' && x.id === it.id));
-          }
+          const family = ctx.state.items.filter(item => item.type === 'user'
+            && (item.task_id === taskId || item.parent_task_id === taskId));
+          const original = family.find(item => item.task_id === taskId);
+          if (original?.images) { ctx.state.pendingImages = [...original.images]; renderPreviews(); }
+          const ids = new Set(family.map(item => item.id));
+          messages.querySelectorAll('[data-mtype="user"]').forEach(element => {
+            if (ids.has(element.dataset.mid)) element.remove();
+          });
+          ctx.state.items = ctx.state.items.filter(item => !ids.has(item.id));
+          const draft = family.length ? family.map(item => item.text).join('\n\n') : msg;
           dropOrphanPartial();   // 这一轮的半截回复同样没有归属了（见其头注）
-          input.value = msg;
+          input.value = draft;
           resizeInput();
           if (div && div.parentNode) div.parentNode.removeChild(div);
         };
         retryBtn.addEventListener('click', async () => {
-          if (lastUserText() !== msg) { showHint(STALE_HINT); return; }
+          if (!isCurrent()) { showHint(STALE_HINT); return; }
           retryBtn.disabled = true;
           retryBtn.textContent = '重发中…';
           const res = await discardFailedRound();
+          if (!isCurrent()) { showHint(STALE_HINT); return; }
           if (!res.ok) {
             retryBtn.disabled = false;
             retryBtn.textContent = '↻ 重发';
             showHint(res.why);
             return;
           }
-          // 这一轮已经从服务端删掉了 ⇒ 持久化标记也该走（否则它会在下一次渲染
-          // 里被当成"还没处理的失败轮"，而且 `releaseStoppedTurn` 会拿着一条
-          // 已经不存在的原文去找"最后一条 user 消息"——同文重发时可能认错人）
-          clearFailedRound(msg);
+          clearFailedRound(taskId);
           restoreAndCleanup();
           sendMessage();  // 走主流程（新 roundId/广播/thumbs）
         });
         editBtn.addEventListener('click', async () => {
-          if (lastUserText() !== msg) { showHint(STALE_HINT); return; }
+          if (!isCurrent()) { showHint(STALE_HINT); return; }
           editBtn.disabled = true;
           const res = await discardFailedRound();
+          if (!isCurrent()) { showHint(STALE_HINT); return; }
           if (!res.ok) { editBtn.disabled = false; showHint(res.why); return; }
-          clearFailedRound(msg);
+          clearFailedRound(taskId);
           restoreAndCleanup();
           input.focus();
         });
@@ -242,12 +243,12 @@
           else localStorage.removeItem(FAILED_KEY);
         } catch (e) {/* ignore */}
       };
-      const clearFailedRound = (text) => {
+      const clearFailedRound = (taskId) => {
         try {
           const cur = JSON.parse(localStorage.getItem(FAILED_KEY) || 'null');
           if (Array.isArray(cur)) {
             const rest = cur.filter(x => x && (String(x.conv_id) !== String(ctx.state.conv)
-              || x.text !== text));
+              || x.task_id !== taskId));
             if (rest.length) localStorage.setItem(FAILED_KEY, JSON.stringify(rest));
             else localStorage.removeItem(FAILED_KEY);
           }
@@ -255,10 +256,10 @@
         // Local storage events only reach other windows. Settle this view now,
         // including offline/history-delay cases, using the round's own anchor.
         messages.querySelectorAll('.chat-msg-failed-note').forEach(note => {
-          if (note.querySelector('.chat-msg-retry-slot')?.dataset.failedText === text) note.remove();
+          if (note.querySelector('.chat-msg-retry-slot')?.dataset.taskId === taskId) note.remove();
         });
         messages.querySelectorAll('.chat-msg-retry').forEach(actions => {
-          if (actions.dataset.retryText === text) actions.remove();
+          if (actions.dataset.taskId === taskId) actions.remove();
         });
       };
       // Keep the stopped draft and task identity for explicit continuation.
@@ -285,7 +286,7 @@
           victim.el.dataset.mid = roundId;
           victim.el.dataset.finished = '1';
           saveHistory();
-          if (!silent || active.resumeTask) attachRetryActions(victim.contentSpan, victim.el, original);
+          if (!silent || active.resumeTask) attachRetryActions(victim.contentSpan, victim.el, original, active.taskId);
         } else if (victim && victim.el && victim.el.parentNode) {
           // 一个 token 都还没收到：气泡里没有可留的东西，摘掉它——提示条与重发/编辑
           // 由失败轮那一套（持久化标记 + chat-engine 的渲染）在下一次 reconcile 补上
@@ -311,27 +312,21 @@
       const clearStoppedMarker = () => {
         try {
           const entries = JSON.parse(localStorage.getItem(FAILED_KEY) || '[]');
-          entries.filter(x => x && x.kind === 'stopped').forEach(x => clearFailedRound(x.text));
+          entries.filter(x => x && x.kind === 'stopped').forEach(x => clearFailedRound(x.task_id));
         } catch (e) { /* No valid local marker. */ }
       };
       const attachHistoryFailedRetry = () => {
         messages.querySelectorAll('.chat-msg-retry-slot').forEach((slot) => {
           const text = slot.dataset.failedText || '';
           if (!text) return;   // 没有原文就没有可重发的东西（attachRetryActions 要它去 discard）
-          // 同一轮只能有**一处**按钮：气泡里那份是停下那一刻的即时反馈（收尾块挂的），
-          // 提示条这份是重建路径（刷新/随后每一趟 reconcile）。两者会同时在场——半截
-          // 回复的 'l' 项 60s 内不被 DB 视图收走，而提示条判据看的正是"用户消息之后
-          // 有没有已入库的回复"（见 chat-engine 的锚点注释）⇒ 不去重就是屏幕上两组
-          // 一模一样的按钮。以提示条这份为准（它才是刷新后唯一活下来的那份）。
+          // A stable request has one action group after history reconciliation.
           messages.querySelectorAll('.chat-msg-retry').forEach((w) => {
-            if (w.parentNode !== slot && w.dataset.retryText === text
+            if (w.parentNode !== slot && w.dataset.taskId === slot.dataset.taskId
                 && w.parentNode) w.parentNode.removeChild(w);
           });
           if (slot.querySelector('.chat-msg-retry')) return;
-          // 提示条本身当 `div` 传进去：重发成功后它连带被摘掉（那一轮的失败标记也
-          // 清掉了，下一次 reconcile 不会再渲染出来）。
           const note = slot.closest('.chat-msg-failed-note') || slot;
-          attachRetryActions(slot, note, text);
+          attachRetryActions(slot, note, text, slot.dataset.taskId);
         });
       };
 
@@ -429,7 +424,7 @@
           ctx.state.pendingImages = [];
           renderPreviews();
           const userItem = __chatCore.migrateItem({
-            id: userItemId, type: 'user', text: msg, time: sentAt,
+            id: userItemId, type: 'user', text: msg, time: sentAt, task_id: roundId,
             ...(imgs.length ? { images: imgs, thumbs } : {}),
           });
           ctx.state.items.push(userItem);
@@ -443,7 +438,7 @@
           convId: roundConvId, owner: engine.tabId, ts: Date.now() })); } catch (e) {}
         if (!silent) {
           broadcast({
-            t: 'user', id: userItemId, text: msg, time: sentAt, from: engine.windowId,
+            t: 'user', id: userItemId, text: msg, time: sentAt, task_id: roundId, from: engine.windowId,
             ...(imgs.length ? { images: imgs, thumbs } : {}),
             hasImg: imgs.length ? 1 : 0,
           });
@@ -797,7 +792,7 @@
             broadcast({t: 'done', id: finalItem.id, fullText, time: finalItem.time,
                        process: steps.map(s => ({cls: s.cls, text: s.text})), roundId});
             saveHistory();
-            clearFailedRound(msg);
+            clearFailedRound(roundState.taskId);
           } else if (programCmds.some(command => command.task_id)) {
             div.dataset.clientAction = 'pending';
             delete ctx.state.live[roundId];
@@ -860,7 +855,7 @@
               }
               try { execAgentCommands(programCmds, null); } catch(e2) {/* ignore */}
               if (!silent) {
-                attachRetryActions(contentSpan, div, msg);
+                attachRetryActions(contentSpan, div, msg, roundState.taskId);
                 persistFailedRound(msg, errMsg);
               }
             }
@@ -890,7 +885,7 @@
             }
             try { execAgentCommands(programCmds, null); } catch(e2) {/* ignore */}
             if (!silent) {
-              attachRetryActions(contentSpan, div, msg);
+              attachRetryActions(contentSpan, div, msg, roundState.taskId);
               persistFailedRound(msg, errMsg);
             }
           }
@@ -1378,7 +1373,7 @@
                 renderFailed(victim.contentSpan, errMsg, remotePartial);
                 broadcast({t: 'error', msg: errMsg, roundId: r.roundId});
                 if (!r.silent) { // 隐藏确认轮不给重发/失败标记（同 sendMessage 收尾）
-                  attachRetryActions(victim.contentSpan, victim.el, r.msg);
+                  attachRetryActions(victim.contentSpan, victim.el, r.msg, r.taskId);
                   persistFailedRound(r.msg, errMsg);
                 }
                 delete ctx.state.live[r.roundId];
