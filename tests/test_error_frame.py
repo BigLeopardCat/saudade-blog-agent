@@ -11,7 +11,7 @@ from pathlib import Path
 
 import pytest
 from _judge import collector
-from _service import app, service_request
+from _service import app, assertion_headers, service_request
 
 from agent.api.schemas import ChatRequest, ChatResponse
 from agent.principal import Principal
@@ -66,8 +66,6 @@ async def _drive(producer) -> list[str]:
     """把生产者换成桩，真跑一遍 `chat_stream` → `event_stream`，收全部帧。"""
     old_agent = app.state.runtime
     old_prod = server.stream_to_queue
-    from config.settings import settings
-    old_req_assert = settings.agent_require_assertion
     app.state.runtime = object()             # 非 None 即可（503 分支要避开）
     producer_done = asyncio.Event()
 
@@ -78,10 +76,9 @@ async def _drive(producer) -> list[str]:
             args[4].call_soon_threadsafe(producer_done.set)
 
     server.stream_to_queue = tracked
-    settings.agent_require_assertion = False
     try:
         req = ChatRequest(message="测试用消息")
-        resp = await server.chat_stream(req, _FakeRequest())
+        resp = await server.chat_stream(req, _FakeRequest(assertion_headers()))
         chunks = [c async for c in resp.body_iterator]
         await asyncio.wait_for(producer_done.wait(), timeout=5)
         await asyncio.sleep(0)
@@ -89,7 +86,6 @@ async def _drive(producer) -> list[str]:
     finally:
         server.stream_to_queue = old_prod
         app.state.runtime = old_agent
-        settings.agent_require_assertion = old_req_assert
 
 
 # ────────────────────────── ① 生产者异常：形态 + 终止性
@@ -213,7 +209,8 @@ def _sync_chat_failure_shape():
     server.build_messages = lambda req, **kwargs: []
     server.run_turn = _explode
     try:
-        resp = asyncio.run(server.chat(ChatRequest(message="你好"), service_request()))
+        resp = asyncio.run(server.chat(
+            ChatRequest(message="你好"), service_request(headers=assertion_headers())))
     finally:
         for n, v in saved.items():
             setattr(server, n, v)
@@ -242,7 +239,7 @@ def _sync_chat_failure_shape():
 
 
 
-def test_error_frame():
+def test_error_frame(host_identity):
     with tempfile.TemporaryDirectory() as tmp:
         # trace 落盘目录指到 tmpdir：本测试会真跑 chat_stream，它按设计落一份 trace；
         # 落进生产 trace 目录等于往巡检语料里掺测试流量（trace_alert/trace_metrics 扫的就是那儿）。
@@ -259,10 +256,6 @@ def test_error_frame():
             trace_mod.TRACE_DIR = old_dir
     assert not FAILS, f"{len(FAILS)} 项失败：" + "；".join(FAILS)
     print("\n=== 全部通过 ===")
-
-
-if __name__ == "__main__":
-    test_error_frame()
 
 
 pytestmark = pytest.mark.usefixtures("service_workers")

@@ -83,7 +83,7 @@ def test_shielded_cleanup_retains_ownership_and_fails_readiness_until_actual_exi
             with pytest.raises(ModelCleanupError):
                 next(io.iterate(lambda: resource))
             settings = SimpleNamespace(check_provider=lambda: "opencode",
-                                       is_api_key_configured=True, agent_require_assertion=True,
+                                       is_api_key_configured=True,
                                        agent_assertion_secret=secrets.token_urlsafe(32),
                                        confirmation_secret=secrets.token_urlsafe(32))
             runtime = SimpleNamespace(model_io=io)

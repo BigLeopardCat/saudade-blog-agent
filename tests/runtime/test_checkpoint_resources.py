@@ -86,7 +86,8 @@ def test_failed_creation_closes_only_its_pool_and_can_retry(persistence, monkeyp
 
 
 @pytest.mark.parametrize("second_dsn", ["postgresql://localhost/one", "postgresql://localhost/two"])
-def test_concurrent_persistent_applications_own_their_pools(persistence, monkeypatch, second_dsn):
+def test_concurrent_persistent_applications_own_their_pools(
+        persistence, monkeypatch, host_identity, second_dsn):
     class Model:
         max_tokens = 32
 
@@ -96,7 +97,6 @@ def test_concurrent_persistent_applications_own_their_pools(persistence, monkeyp
         def stream(self, prompt, **kwargs):
             yield AIMessageChunk(content="reply")
 
-    monkeypatch.setattr(settings, "agent_require_assertion", False)
     monkeypatch.setattr(lifecycle, "setup_logging", lambda: None)
     monkeypatch.setattr(lifecycle.wordgraph, "warm", lambda: None)
     monkeypatch.setattr(lifecycle.rag_search, "warm", lambda: None)
@@ -119,7 +119,8 @@ def test_concurrent_persistent_applications_own_their_pools(persistence, monkeyp
                 await one.__aexit__(None, None, None)
                 assert [pool.close_count for pool in persistence] == [1, 0]
                 async with httpx.AsyncClient(
-                    transport=httpx.ASGITransport(app=second), base_url="http://test"
+                    transport=httpx.ASGITransport(app=second), base_url="http://test",
+                    headers=host_identity()
                 ) as client:
                     for _ in range(2):
                         response = await client.post(

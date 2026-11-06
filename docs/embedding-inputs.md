@@ -1,5 +1,9 @@
 # RAG embedding 的完整输入预算
 
+向量功能须显式配置 `EMBEDDING_MODEL` 与 `EMBEDDING_API_KEY`，不借用聊天模型的
+`QWEN_*` 凭据。缓存须带匹配的模型、端点和请求维度元数据；旧平铺缓存需要重建，
+不猜测其空间。向量图谱产物同样须带模型和端点标识。
+
 `EMBEDDING_PROFILE` 是可选的 JSON 路径，适用于本地或托管端点提供了匹配
 `tokenizer.json` 的模型。未配置时保留现有 API 通道，不加载 tokenizer。
 安装与验收使用独立开发环境；不要对正在提供服务的 venv 执行依赖同步。

@@ -8,7 +8,6 @@ from _service import app
 
 from agent import checkpoint
 from agent.api.routes import conversations
-from config.settings import settings
 
 
 class FakeSaver:
@@ -56,13 +55,13 @@ def test_invalid_conversation_never_calls_saver(value):
     ("saved", "42", {"deleted": True}),
     ("noop", "42", {"deleted": False, "why": "still_readable"}),
 ])
-def test_endpoint_reports_real_deletion_result(monkeypatch, mode, conversation, expected):
+def test_endpoint_reports_real_deletion_result(
+        monkeypatch, host_identity, mode, conversation, expected):
     saver = None if mode == "missing" else FakeSaver(noop=mode == "noop")
     if saver:
         saver.rows["conv_42"] = {"checkpoint": "saved"}
     monkeypatch.setattr(app.state, "runtime", saver)
-    monkeypatch.setattr(settings, "agent_require_assertion", False)
-    request = type("Request", (), {"headers": {}, "app": app})()
+    request = type("Request", (), {"headers": host_identity(), "app": app})()
     result = asyncio.run(conversations.checkpoint_delete(conversation, request))
     assert all(result.get(key) == value for key, value in expected.items())
 

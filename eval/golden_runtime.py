@@ -1,4 +1,4 @@
-"""Own the native evaluation runtime and its checkpoint resources for one CLI process."""
+"""Own the application runtime and checkpoint resources for one evaluation process."""
 
 import asyncio
 import json
@@ -49,11 +49,11 @@ def ensure_agent():
     global _runtime
     if _runtime is None:
         t0 = time.time()
-        # Evaluation uses the same native runtime factory as the service.
+        # Use the same application composition as the service.
         with ExitStack() as startup:
             _runtime = build_agent(resources=startup)
             _resources.enter_context(startup.pop_all())
-        print(f"[init] Native runtime ready: {time.time() - t0:.1f}s")
+        print(f"[init] Agent runtime ready: {time.time() - t0:.1f}s")
     return _runtime
 
 

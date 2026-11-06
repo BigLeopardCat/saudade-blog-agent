@@ -45,7 +45,6 @@ _ARTIFACTS = tempfile.TemporaryDirectory(prefix="saudade-pytest-")
 _PINNED = {
     "RAG_HYBRID_ENABLED": "0",
     "CHECKPOINT_DSN": "",
-    "AGENT_REQUIRE_ASSERTION": "1",
     "SAUDADE_IGNORE_ENV_FILE": "1",
     "IOT_ENABLED": "1",
     "NO_PROXY": "127.0.0.1,localhost,::1",
@@ -231,3 +230,16 @@ def isolated_pytest(pytester, monkeypatch):
     pytester.makeconftest((tests / "conftest.py").read_text())
     monkeypatch.setenv("PYTHONPATH", os.pathsep.join((str(tests.parent), str(tests))))
     return pytester
+
+
+@pytest.fixture
+def host_identity(monkeypatch):
+    """Sign synthetic host assertions through the real verifier without disabling auth."""
+    import secrets
+
+    from _service import assertion_headers
+
+    from config.settings import settings
+
+    monkeypatch.setattr(settings, "agent_assertion_secret", secrets.token_urlsafe(32))
+    return assertion_headers

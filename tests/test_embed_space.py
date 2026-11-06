@@ -31,10 +31,10 @@ QWEN_KEY = "sk-qwen-测试用假值"
 QWEN_BASE = "https://qwen.example.com/compatible-mode/v1"
 
 
-ENV_LEGACY = {"QWEN_API_KEY": QWEN_KEY, "QWEN_BASE_URL": QWEN_BASE}
+CHAT_ENV = {"QWEN_API_KEY": QWEN_KEY, "QWEN_BASE_URL": QWEN_BASE}
 
 
-ENV_BOTH = {**ENV_LEGACY, "EMBEDDING_API_KEY": "sk-emb-测试用假值",
+ENV_BOTH = {**CHAT_ENV, "EMBEDDING_API_KEY": "sk-emb-测试用假值",
             "EMBEDDING_MODEL": "text-embedding-v4", "EMBEDDING_BASE_URL": QWEN_BASE}
 
 
@@ -51,9 +51,9 @@ def _write(payload) -> None:
     _CACHE.write_text(payload if isinstance(payload, str) else json.dumps(payload), encoding="utf-8")
 
 
-def _read(space=SPACE, env=ENV_BOTH):
+def _read(space=SPACE):
     notes: list[str] = []
-    got = es.read_cache(_CACHE, space, env, log=notes.append)
+    got = es.read_cache(_CACHE, space, log=notes.append)
     return got, notes
 
 
@@ -98,25 +98,20 @@ def _reload(model: str, base_url=None) -> None:
 
 
 def test_embed_space():
-    print("\n① resolve()：EMBEDDING_* 优先、缺了回落 QWEN_*")
+    print("\n① 显式 embedding 配置与聊天凭据隔离")
     s = es.resolve(ENV_BOTH)
     check("★配了 EMBEDDING_* ⇒ 用它（source=embedding）",
           (s.source, s.model) == ("embedding", "text-embedding-v4"), s.describe())
     check("  EMBEDDING_DIM 没配 ⇒ 0（＝不向 API 传 dimensions，以返回长度为准）",
-          s.dim == 0 and s.batch == es.LEGACY_BATCH, s.describe())
-    s = es.resolve(ENV_LEGACY)
-    check("★一处没配 ⇒ 回落 QWEN_* + FALLBACK_MODEL / 1024 / 批 10",
-          (s.source, s.model, s.dim, s.batch, s.base_url)
-          == ("qwen", es.FALLBACK_MODEL, es.LEGACY_DIM, es.LEGACY_BATCH, QWEN_BASE), s.describe())
-    check("★回落档的模型名与 `Settings.embedding_model` 的缺省值同源"
-      "（同一个问题在本仓只该有一个答案；分叉了就是两个部署各自解出不同的空间）",
-          es.FALLBACK_MODEL == Settings.model_fields["embedding_model"].default,
-          f"{es.FALLBACK_MODEL} vs {Settings.model_fields['embedding_model'].default}")
+          s.dim == 0 and s.batch == es.DEFAULT_BATCH_SIZE, s.describe())
+    s = es.resolve(CHAT_ENV)
+    check("只有聊天 QWEN 配置不会启用 embedding",
+          bool(es.missing_config(s)) and not s.api_key and not s.model)
     for bad in ("", "   ", "your-api-key-here"):
-        check(f"  key 是 {bad!r} ⇒ 回落（占位串＝没配，与 Settings 同一条判据）",
-              es.resolve({**ENV_BOTH, "EMBEDDING_API_KEY": bad}).source == "qwen", bad)
-    check("  model 空 ⇒ 回落（只有 key 不知道该调哪个模型）",
-          es.resolve({**ENV_BOTH, "EMBEDDING_MODEL": ""}).source == "qwen")
+        check(f"无效 embedding key {bad!r} 不借用聊天凭据",
+              es.resolve({**ENV_BOTH, "EMBEDDING_API_KEY": bad}).api_key == "")
+    check("缺少模型保持未配置",
+          bool(es.missing_config(es.resolve({**ENV_BOTH, "EMBEDDING_MODEL": ""}))))
     check("  key 两头有空白 ⇒ 照样认（.env 里粘进来的空格不该让整条路哑掉）",
           es.resolve({**ENV_BOTH, "EMBEDDING_API_KEY": "  sk-x  "}).source == "embedding")
     check("  值带引号 ⇒ 剥掉（.env 手写的 \"…\" 与 shell 传进来的形态都要认）",
@@ -131,24 +126,21 @@ def test_embed_space():
     for bad in ("", "abc", "0", "-1"):
         got = es.resolve({**ENV_BOTH, "EMBEDDING_BATCH_SIZE": bad})
         check(f"  EMBEDDING_BATCH_SIZE={bad!r} ⇒ 退回 10（0/负数是死循环，不是「不分批」）",
-              got.batch == es.LEGACY_BATCH, got.batch)
+              got.batch == es.DEFAULT_BATCH_SIZE, got.batch)
     check("  显式配了 dim/batch ⇒ 原样用",
           (lambda g: (g.dim, g.batch))(
               es.resolve({**ENV_BOTH, "EMBEDDING_DIM": "768",
                           "EMBEDDING_BATCH_SIZE": "5"})) == (768, 5))
     print("\n①b missing_config：这片空间能不能用、不能用时缺的是哪一格")
     check("  EMBEDDING_* 齐 ⇒ None（能用）", es.missing_config(es.resolve(ENV_BOTH)) is None)
-    check("  只配 QWEN_* 的老口径 ⇒ 也能用（回落那条路是完整的）",
-          es.missing_config(es.resolve(ENV_LEGACY)) is None)
-    check("★两格都空 ⇒ 两格都点名（终端与日志都读这一句）",
-          (lambda m: bool(m) and "QWEN_API_KEY" in m and "QWEN_BASE_URL" in m)(
+    check("只配聊天 QWEN 凭据仍保持未配置",
+          bool(es.missing_config(es.resolve(CHAT_ENV))))
+    check("缺失提示准确指出 embedding key 和 model",
+          (lambda message: "EMBEDDING_API_KEY" in message and "EMBEDDING_MODEL" in message)(
               es.missing_config(es.resolve({}))))
-    check("★只缺端点 ⇒ **只说端点**（笼统一句「两处都缺」会把人指到错的地方）",
-          (lambda m: bool(m) and "QWEN_BASE_URL" in m and "QWEN_API_KEY" not in m)(
-              es.missing_config(es.resolve({"QWEN_API_KEY": QWEN_KEY}))))
-    check("  只缺 key ⇒ 只说 key",
-          (lambda m: bool(m) and "QWEN_API_KEY" in m and "QWEN_BASE_URL" not in m)(
-              es.missing_config(es.resolve({"QWEN_BASE_URL": QWEN_BASE}))))
+    check("只缺 key 时不指向聊天配置",
+          (lambda message: "EMBEDDING_API_KEY" in message and "QWEN" not in message)(
+              es.missing_config(es.resolve({"EMBEDDING_MODEL": "fixture"}))))
     print("\n①c Space 本身：密钥不许跟着对象被顺手打印")
     _sig = es.resolve(ENV_BOTH)
     check("★key 不进 repr（否则任何一条把 Space 打进日志/异常信息的代码都会泄密钥）",
@@ -172,47 +164,14 @@ def test_embed_space():
         _kw.update(kw)
         st = Settings(qwen_api_key=QWEN_KEY, qwen_base_url=QWEN_BASE, **_kw)
         space = es.space_of(st)
-        got = space.source == "embedding"
+        got = es.missing_config(space) is None
         check(f"  {name} ⇒ 配置面说 {want}、解析器也说 {want}", got == want and st.embedding_configured == want,
               f"settings={st.embedding_configured} resolve={space.source}")
-    check("  回落那条路拿得到 QWEN_* 的 key/base（不给的话回落也是空的、白回落）",
-          (lambda sp: (sp.api_key, sp.base_url))(
-              es.space_of(Settings(qwen_api_key=QWEN_KEY, qwen_base_url=QWEN_BASE,
-                                   embedding_api_key="", embedding_model="")))
-                                       == (QWEN_KEY, QWEN_BASE))
-    print("\n③ legacy_cache_ok：旧格式（无签名）缓存认不认")
-    check("★两个模型名常量不许合并：一个是「现在该用哪个」、一个是「老文件当年是谁建的」",
-          es.FALLBACK_MODEL != es.FLAT_CACHE_MODEL,
-          f"{es.FALLBACK_MODEL} / {es.FLAT_CACHE_MODEL}")
-    check("★回落档（source=qwen，模型已是 FALLBACK_MODEL）⇒ **不认**"
-      "（老缓存是 FLAT_CACHE_MODEL 建的；从前按 source 放行，换名之后那一条就变成"
-      "「把上一代向量混进新模型的图」，且不报错）",
-          not es.legacy_cache_ok(es.resolve(ENV_LEGACY), ENV_LEGACY))
-    check("  显式配了 FALLBACK_MODEL + QWEN_BASE_URL ⇒ 也不认（同上：模型名换了就是另一片空间）",
-          not es.legacy_cache_ok(
-              es.resolve({**ENV_LEGACY, "EMBEDDING_API_KEY": "sk-x",
-                          "EMBEDDING_MODEL": es.FALLBACK_MODEL}), ENV_LEGACY))
-    check("★source=embedding 且模型/维度/端点与老路逐字相同 ⇒ 认"
-      "（从回落档迁到显式配置、一个字没改空间的那种部署：老缓存照旧命中，连重建都不需要）",
-          es.legacy_cache_ok(es.resolve(ENV_BOTH), ENV_BOTH))
-    check("  端点差一个字 ⇒ 不认（宁可重嵌一次）",
-          not es.legacy_cache_ok(es.resolve({**ENV_BOTH, "EMBEDDING_BASE_URL": QWEN_BASE + "/x"}), ENV_BOTH))
-    check("  换了模型 ⇒ 不认（同维度换模型是这里最危险的一格：混进去不报错）",
-          not es.legacy_cache_ok(es.resolve({**ENV_BOTH, "EMBEDDING_MODEL": "text-embedding-v3"}), ENV_BOTH))
-    check("  显式配了别的维度 ⇒ 不认",
-          not es.legacy_cache_ok(
-              es.resolve({**ENV_BOTH, "EMBEDDING_DIM": "768"}), ENV_BOTH))
-    check("  QWEN_BASE_URL 没配（无从确认是不是同一片空间）⇒ 不认",
-          not es.legacy_cache_ok(
-              es.resolve({"EMBEDDING_API_KEY": "sk-x",
-                  "EMBEDDING_MODEL": es.FLAT_CACHE_MODEL}), {}))
-    check("  dim=0 或 1024 都算旧口径（0 = 没传 dimensions，服务端默认就是 1024）",
-          es.legacy_cache_ok(es.resolve({**ENV_BOTH, "EMBEDDING_DIM": "1024"}), ENV_BOTH))
     print("\n④ read_cache：认不出来就整份当空，绝不半读")
     SPACE_OTHER = es.resolve({**ENV_BOTH, "EMBEDDING_MODEL": "别的模型"})
     K1, K2 = "a" * 32, "b" * 32
     check("  文件不存在 ⇒ 空缓存（新部署的第一次建图）",
-          es.read_cache(_TMP / "没有这个文件.json", SPACE, ENV_BOTH) == {})
+          es.read_cache(_TMP / "没有这个文件.json", SPACE) == {})
     _write(es.cache_payload(SPACE, {K1: [0.1, 0.2], K2: [0.3, 0.4]}))
     got, _ = _read()
     check("  新格式、同一片空间 ⇒ 全部命中", set(got) == {K1, K2}, len(got))
@@ -226,7 +185,7 @@ def test_embed_space():
           set(got) == {K1})
     _write({K1: [0.1, 0.2], K2: [0.3, 0.4]})
     got, _ = _read()
-    check("  旧格式 + 旧口径空间 ⇒ 认得出来（本机 453 条就是这份文件）", set(got) == {K1, K2})
+    check("无空间元数据的平铺缓存一律失效", got == {})
     _write({K1: [0.1, 0.2]})
     got, notes = _read(space=SPACE_OTHER)
     check("★旧格式 + 对不上的空间 ⇒ 整份作废、且日志说清为什么",
@@ -237,18 +196,21 @@ def test_embed_space():
     _write([K1, K2])
     got, notes = _read()
     check("  内容不是对象 ⇒ 当空", got == {} and notes, notes[:1])
-    _write({K1: [0.1, 0.2], K2: [], "c" * 32: [0.5, 0.6], "不-是-md5": [0.7],
-            K2 + "x": [0.8, 0.9]})
+    _write(es.cache_payload(SPACE, {K1: [0.1, 0.2], K2: [],
+            "c" * 32: [0.5, 0.6], "不-是-md5": [0.7], K2 + "x": [0.8, 0.9]}))
     got, notes = _read()
     check("  单条坏值只丢那一条（值级损坏不是空间级，重嵌一个词就够）",
           set(got) == {K1, "c" * 32} and notes, got)
-    _write({K1: [0.1, True], K2: [0.3, 0.4]})
+    _write(es.cache_payload(SPACE, {K1: [0.1, True], K2: [0.3, 0.4]}))
     got, _ = _read()
     check("  布尔不算数字（`True` 是 int 的子类，会悄悄变成 1.0 混进向量）", set(got) == {K2}, got)
     check("  `_is_vec` 返回真正的 bool（空列表曾是它偷偷交出的真值，不是 False）",
           es._is_vec([0.1, 0.2]) is True and es._is_vec([]) is False
           and es._is_vec([True]) is False and es._is_vec("x") is False,
           [es._is_vec([]), es._is_vec([0.1])])
+    _write(es.cache_payload(SPACE, {K1: [float("nan"), 0.2], K2: [float("inf"), 0.4], "d" * 32: [10 ** 400, 0.3]}))
+    got, notes = _read()
+    check("非有限向量不进入后续检索与建图", got == {} and bool(notes))
     print("\n⑤ wordgraph：产物空间不符 ⇒ space_mismatch，且零 embedding 调用")
     shutil.rmtree(_GRAPH, ignore_errors=True)
     _GRAPH.mkdir(parents=True)
@@ -270,8 +232,9 @@ def test_embed_space():
     check("★端点不同、模型同名 ⇒ 也算不符（同维度换平台是最像「没问题」的一格）",
           bool(wg._cache["mismatch"]), wg._cache["mismatch"])
     _reload(SPACE.model, None)
-    check("  老产物没有 base_url 这一格 ⇒ 这一格不判（只在这里 fail-open）",
-          wg._cache["mismatch"] is None, wg._cache["mismatch"])
+    check("缺少端点元数据的图谱拒绝查询，不调用 embedding",
+          bool(wg._cache["mismatch"]) and not wg.query_words("甲")["ok"]
+          and CALLS["n"] == 0, wg._cache["mismatch"])
     _reload("另一个模型", None)
     check("  但模型名那格老产物也有 ⇒ 照样判出来",
           bool(wg._cache["mismatch"]), wg._cache["mismatch"])

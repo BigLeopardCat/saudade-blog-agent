@@ -118,7 +118,7 @@ def ready_payload(agent, settings) -> tuple[int, dict]:
     model_io = getattr(agent, "model_io", None)
     if model_io is not None and not getattr(model_io, "ready", True):
         reasons.append("model_transport_unavailable")
-    if settings.agent_require_assertion and not settings.agent_assertion_secret.strip():
+    if not settings.agent_assertion_secret.strip():
         reasons.append("missing_assertion_secret")
     if not settings.confirmation_secret.strip():
         reasons.append("missing_confirmation_secret")

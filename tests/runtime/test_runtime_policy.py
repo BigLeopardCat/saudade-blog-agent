@@ -41,23 +41,22 @@ def test_invalid_budget_settings_fail_before_runtime_start(values):
         Settings(_env_file=None, **values)
 
 
-@pytest.mark.parametrize("name", ["graph", "hybrid", "react", "unknown"])
+@pytest.mark.parametrize("name", ["graph", "hybrid", "react", "unknown", "native"])
 def test_retired_selection_rejected_from_environment_dotenv_and_constructor(
         monkeypatch, tmp_path, name):
     monkeypatch.setenv("AGENT_ARM", name)
-    with pytest.raises(ValidationError, match="Only the native runtime"):
+    with pytest.raises(ValidationError, match="retired"):
         Settings(_env_file=None)
     monkeypatch.delenv("AGENT_ARM")
     dotenv = tmp_path / ".env"
     dotenv.write_text(f"AGENT_ARM={name}\n", encoding="utf-8")
-    with pytest.raises(ValidationError, match="Only the native runtime"):
+    with pytest.raises(ValidationError, match="retired"):
         Settings(_env_file=dotenv)
-    with pytest.raises(ValidationError, match="Only the native runtime"):
+    with pytest.raises(ValidationError, match="retired"):
         Settings(_env_file=None, agent_arm=name)
 
 
-def test_retired_native_label_is_only_a_migration_input(monkeypatch):
-    monkeypatch.setenv("AGENT_ARM", "native")
+def test_runtime_configuration_has_no_experimental_selector():
     policy = Settings(_env_file=None)
     retired = {"agent_arm", "recursion_limit", "planner_native_thinking", "agent_fastpath"}
     assert not retired.intersection(type(policy).model_fields)

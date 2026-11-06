@@ -92,16 +92,7 @@ def log(msg: str) -> None:
 # ---------------------------------------------------------------- HTTP / 配置
 
 def load_env() -> dict[str, str]:
-    """读 agent 的 `.env`，**再叠一层进程环境**（后者优先，与 pydantic-settings 一致）。
-
-    叠这一层是为了让"配置写在 systemd 单元的 `Environment=` 里"的部署也解出**同一个**
-    embedding 空间（`rag/graph_build.py` 起的建图子进程是整份透传 `os.environ` 的，
-    所以这一层在服务端重建那条路上真的起作用）。只读 `.env` 的话，那类部署会出现
-    "查询侧认 `EMBEDDING_*`、建图侧回落 `QWEN_*`"——两个空间，而谁都不报错。
-
-    只 import 了 `rag/embed_space.py` 这一个标准库级的模块（见文件上方那段注释），
-    agent 那些模块在 `--no-project` 里根本导不进来，脚本仍是可独立运行的。
-    """
+    """Read local configuration with process environment taking precedence."""
     env: dict[str, str] = {}
     p = REPO_AGENT / ".env"
     if p.exists():
@@ -429,7 +420,7 @@ def embed_words(words: list[str], space: Space, env: dict,
     症状是"搜 X 结果飞到一个视觉上离 X 很远的角落"，几乎不可能从产物里看出来。
     """
     CACHE_FILE.parent.mkdir(parents=True, exist_ok=True)
-    cache = read_cache(CACHE_FILE, space, env, log=log)
+    cache = read_cache(CACHE_FILE, space, log=log)
 
     keys = [md5(w) for w in words]
     fresh = [w for w, k in zip(words, keys) if refresh or k not in cache]
