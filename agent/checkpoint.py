@@ -25,11 +25,9 @@ logger = logging.getLogger(__name__)
 _BACKENDS: dict[str, tuple[str, str]] = {
     "postgresql": ("langgraph.checkpoint.postgres", "langgraph-checkpoint-postgres"),
     "postgres": ("langgraph.checkpoint.postgres", "langgraph-checkpoint-postgres"),
-    "sqlite": ("langgraph.checkpoint.sqlite", "langgraph-checkpoint-sqlite"),
 }
 
 _KNOWN = "postgresql:// / postgres://"
-_PG_MOD = "langgraph.checkpoint.postgres"
 
 _POOL_MAX = 4
 _POOL_WAIT = 10
@@ -41,7 +39,7 @@ _SETUP_WAIT = 60.0
 def backend_for(dsn: str) -> tuple[str, str]:
     """Resolve a supported checkpoint backend; unknown schemes fail explicitly."""
     head = dsn.split("://", 1)[0].strip().lower() if "://" in dsn else ""
-    scheme = head.split("+", 1)[0]      # `postgresql+psycopg://` 这种带驱动的也认
+    scheme = head.split("+", 1)[0]
     if scheme not in _BACKENDS:
         raise RuntimeError(
             f"checkpoint DSN 的 scheme 不受支持。只认 {_KNOWN}。"
@@ -64,7 +62,6 @@ def db_name(dsn: str) -> str:
     return urlparse(dsn).path.strip("/")
 
 
-# ── 会话坐标 ─────────────────────────────────────────────────────────
 CONV_PREFIX = "conv_"
 
 
@@ -85,7 +82,6 @@ def thread_id_for(user_id: int, conversation_id: object, holds_context: bool) ->
     return f"user_{user_id}_{uuid.uuid4().hex[:8]}"
 
 
-# ── 连接池 ───────────────────────────────────────────────────────────
 def _make_pool(dsn: str):
     """Create the saver pool with autocommit, dict rows and eager connection validation."""
     from psycopg.rows import dict_row
@@ -182,7 +178,6 @@ def _setup_under_lock(saver, *, pool, now=time.monotonic, sleep=time.sleep,
             conn.execute("SELECT pg_advisory_unlock(%s)", (_SETUP_LOCK,))
 
 
-# ── 造 saver ─────────────────────────────────────────────────────────
 def build_checkpointer(dsn: str | None = None, *, resources: ExitStack) -> object | None:
     """Build the configured PostgreSQL saver at startup; empty DSN returns None.
 
@@ -201,16 +196,9 @@ def build_checkpointer(dsn: str | None = None, *, resources: ExitStack) -> objec
         raise RuntimeError(
             f"CHECKPOINT_DSN 指到了 CHECKPOINT_FORBID_DB 点名的库（{_forbid}）："
             f"{redact(dsn)}。业务库的结构只许由**编号迁移**改，而 saver 建表走的是 "
-            "PostgresSaver.setup()、没有编号迁移 ⇒ 指进去就是在业务库上开一条没人编号、"
-            "不在 CI 里的 DDL 通道（表不重名，所以不报错）。把它指到一个独立库"
-            "（见本模块头注《DSN 指向哪个库》），或者把这个开关清空。")
+            "PostgresSaver.setup() 初始化 checkpoint schema，必须使用独立数据库。")
 
     mod_path, pkg = backend_for(dsn)
-    if mod_path != _PG_MOD:
-        # SQLite is recognized for an explicit error, but is not a supported backend.
-        raise RuntimeError(
-            f"{pkg} 这一支本仓没有落地（只落地了 postgres）：产线是 4 个 worker 共用"
-            "一个文件库，并发写没有实测过。要 sqlite 就先补一条真跑过的判据。")
     try:
         mod = importlib.import_module(mod_path)
     except ImportError as e:

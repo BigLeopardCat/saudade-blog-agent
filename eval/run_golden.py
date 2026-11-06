@@ -270,8 +270,7 @@ def run_one(req: ChatRequest, principal: "Principal | None" = None,
     frames = asyncio.run(collect_frames())
     ledger_frames: list[dict] = []
     if trace_id:
-        from utils import trace as _trace
-        ledger_frames = [dict(e) for e in _trace.events_of(trace_id)
+        ledger_frames = [dict(e) for e in golden_trace.events_of(trace_id)
                          if e.get("node") == "planner" and e.get("event") == "ledger_frame"]
     native_names, native_rounds = golden_trace.tool_call_stats(trace_id)
     trace_path = golden_trace.finish_case(trace_id, time.monotonic() - t_trace0,
@@ -1850,7 +1849,6 @@ def main():
         _corpus_skipped = [c.get("id") for c in cases]
         skip_ids += _corpus_skipped
         cases = []
-    # 文案与 golden_full_run.py 共用（`corpus_provenance.report_lines`）：同一件事
     # 两个跑法各写一份措辞，早晚会有一个跑法说漏最要紧的那句"这不是模型退化"。
     for _line in corpus_report_lines(_corpus_state, _corpus_detail, _corpus_row):
         print(_line)
@@ -1879,7 +1877,6 @@ def main():
     #    `unreadable` 与 `absent` 分开报（读不到不是没有）——但两者都不跑：不知道就不动；
     #    账号族还多一态 `wrong_state`（行在、状态不对 ⇒ 跑出来的是一条空的绿）。
     #    **闸的实现只有一处**（`golden_fixture.gate`）：那个逐条子进程跑法
-    #    （`eval/golden_full_run.py`）用的是同一个函数——两族的读路径也在那边收着。
     if any(c.get("requires_fixture") for c in cases):
         cases, _drop, _lines = golden_fixture.gate(cases)
         skip_ids += _drop

@@ -11,10 +11,11 @@ from _own_support import config
 from langchain_core.messages import ToolMessage
 from PIL import Image
 
-from agent import confirm, idem
+from agent import confirm
 from agent.domains.gallery import preparation, reads, transactions
 from agent.principal import SOURCE_ASSERTION, Principal
 from agent.runtime import memory_media
+from eval.fixtures.ledger import Ledger
 from tools import base
 
 
@@ -105,7 +106,7 @@ def test_preparation_and_replay_are_readonly_then_exactly_one_write(gallery, tmp
     grant = confirm.verify(prepared.execution["pending_confirm"]["token"], 7, 42)
     assert gallery["writes"] == 0
     assert grant["specs"][0]["args"]["changes"] == {"displayName": "新名称"}
-    ledger = idem.Ledger(str(tmp_path / "ledger.sqlite3"))
+    ledger = Ledger(str(tmp_path / "ledger.sqlite3"))
     for _ in range(2):
         result = transactions.execute(grant, admin(), None, ledger=ledger)
         assert len(result["receipts"]) == 1
@@ -118,7 +119,7 @@ def test_mismatched_backend_outcome_never_produces_success(gallery, tmp_path):
     )
     grant = confirm.verify(prepared.execution["pending_confirm"]["token"], 7, 42)
     gallery["ignore"] = True
-    ledger = idem.Ledger(str(tmp_path / "ledger.sqlite3"))
+    ledger = Ledger(str(tmp_path / "ledger.sqlite3"))
     for _ in range(2):
         assert not transactions.execute(grant, admin(), None, ledger=ledger)["receipts"]
     assert gallery["writes"] == 1

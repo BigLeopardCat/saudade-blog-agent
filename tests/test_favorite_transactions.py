@@ -9,12 +9,12 @@ from _service import app
 from langchain_core.messages import HumanMessage
 from langgraph.checkpoint.memory import InMemorySaver
 
-from agent import idem
 from agent.contracts.events import StreamEvent
 from agent.domains.favorites import transactions
 from agent.principal import SOURCE_ASSERTION, Principal
 from agent.products.blog.application import BlogApplication
 from agent.runtime import writes
+from eval.fixtures.ledger import Ledger
 from tools.result import fact, ok, tgt
 
 
@@ -43,7 +43,7 @@ class Favorite:
 
 
 def test_confirmed_write_replays_the_receipt_without_writing_twice(tmp_path):
-    ledger = idem.Ledger(str(tmp_path / "writes.sqlite3"))
+    ledger = Ledger(str(tmp_path / "writes.sqlite3"))
     tool = Favorite()
     tools = {tool.name: tool}
 
@@ -87,7 +87,7 @@ def test_unverified_identity_cannot_execute_a_confirmation():
 
 
 def test_crash_after_write_leaves_unknown_outcome_and_does_not_retry(tmp_path):
-    ledger = idem.Ledger(str(tmp_path / "crash.sqlite3"))
+    ledger = Ledger(str(tmp_path / "crash.sqlite3"))
 
     class CrashingFavorite(Favorite):
         def invoke(self, args, config=None):
@@ -111,7 +111,7 @@ def test_success_text_without_a_fact_receipt_does_not_report_completion(tmp_path
 
     result = transactions.execute(_grant(), _config(), None,
                                   tools={"add_favorite": UnverifiedFavorite()},
-                                  ledger=idem.Ledger(str(tmp_path / "unverified.sqlite3")))
+                                  ledger=Ledger(str(tmp_path / "unverified.sqlite3")))
     assert result["receipts"] == []
     assert result["blocked"]
     assert "无法确认" in result["reply"]
@@ -119,7 +119,7 @@ def test_success_text_without_a_fact_receipt_does_not_report_completion(tmp_path
 
 @pytest.mark.parametrize("failure", ["tool", "ledger"])
 def test_exception_after_write_keeps_intent_and_prevents_retry(failure, monkeypatch, tmp_path):
-    ledger = idem.Ledger(str(tmp_path / "uncertain.sqlite3"))
+    ledger = Ledger(str(tmp_path / "uncertain.sqlite3"))
 
     class UncertainFavorite(Favorite):
         def invoke(self, args, config=None):
@@ -148,7 +148,7 @@ def test_native_rejects_unbound_grant_without_model_write_or_ledger_claim(monkey
     tool = Favorite()
     monkeypatch.setattr(transactions, "get_all_tools", lambda: [tool])
     monkeypatch.setattr(writes, "ledger_for",
-                        lambda saver: idem.Ledger(str(tmp_path / "runtime.sqlite3")))
+                        lambda saver: Ledger(str(tmp_path / "runtime.sqlite3")))
     from agent.runtime.checkpoint_conversations import CheckpointConversationStore
     from agent.runtime.service import AgentRuntime
 
@@ -162,7 +162,7 @@ def test_native_rejects_unbound_grant_without_model_write_or_ledger_claim(monkey
 
     assert not first[-1].execution["receipts"] and not second[-1].execution["receipts"]
     assert tool.calls == 0
-    with closing(idem.Ledger(str(tmp_path / "runtime.sqlite3"))) as ledger:
+    with closing(Ledger(str(tmp_path / "runtime.sqlite3"))) as ledger:
         assert ledger.lookup(writes.operation_key(_grant(), tool.name, {"article_id": 19})) is None
     snapshot = runtime.get_state(_config())
     assert snapshot.next == ()
@@ -177,7 +177,7 @@ def test_stream_producer_emits_existing_execution_receipt(monkeypatch, tmp_path)
     tool = Favorite()
     monkeypatch.setattr(transactions, "get_all_tools", lambda: [tool])
     monkeypatch.setattr(writes, "ledger_for",
-                        lambda saver: idem.Ledger(str(tmp_path / "stream.sqlite3")))
+                        lambda saver: Ledger(str(tmp_path / "stream.sqlite3")))
     ledger = writes.ledger_for(None)
     transactions.execute(_grant(), _config(), None, tools={tool.name: tool}, ledger=ledger)
     ledger.close()

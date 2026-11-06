@@ -24,7 +24,7 @@ _PATH_RE = re.compile(r"`((?:" + "|".join(re.escape(p) for p in PARENT_PREFIXES)
 _SKIP_DIRS = {".venv", "node_modules", ".git", "__pycache__", ".mypy_cache"}
 
 
-_LOCAL_SAMPLE = "scripts/nightly_regression.sh"
+_LOCAL_SAMPLE = "scripts/deploy_release.sh"
 
 
 def scan_text(text: str) -> list[tuple[int, str]]:

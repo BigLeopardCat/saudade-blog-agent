@@ -8,7 +8,7 @@ from langchain_core.messages import AIMessage, HumanMessage
 from langgraph.checkpoint.memory import InMemorySaver
 from pydantic import ValidationError
 
-from agent import confirm, idem
+from agent import confirm
 from agent.domains.notifications import preparation, transactions
 from agent.principal import Principal
 from agent.products.blog.application import BlogApplication
@@ -16,6 +16,7 @@ from agent.runtime import writes
 from agent.runtime.checkpoint_conversations import CheckpointConversationStore
 from agent.runtime.results import TurnResult
 from agent.runtime.service import AgentRuntime
+from eval.fixtures.ledger import Ledger
 
 
 def prepare(scope="all_unread", ids=None):
@@ -73,7 +74,7 @@ def test_confirmed_read_excludes_new_notifications_and_replays_once(notification
     payload = grant(prepare())
     notifications["items"].append({"id": 105, "title": "确认后新到", "isRead": False})
     notifications["new_on_write"] = True
-    store = idem.Ledger(str(tmp_path / "notifications.sqlite3"))
+    store = Ledger(str(tmp_path / "notifications.sqlite3"))
     try:
         first = transactions.execute(payload, config(), None, ledger=store)
         second = transactions.execute(payload, config(), None, ledger=store)
@@ -89,7 +90,7 @@ def test_confirmed_read_excludes_new_notifications_and_replays_once(notification
 def test_partial_application_never_produces_a_receipt_or_retries(notifications, tmp_path):
     payload = grant(prepare())
     notifications["ignore"] = {102}
-    store = idem.Ledger(str(tmp_path / "partial.sqlite3"))
+    store = Ledger(str(tmp_path / "partial.sqlite3"))
     try:
         first = transactions.execute(payload, config(), None, ledger=store)
         second = transactions.execute(payload, config(), None, ledger=store)

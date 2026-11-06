@@ -10,10 +10,11 @@ import pytest
 from _own_support import config
 from pydantic import ValidationError
 
-from agent import confirm, idem
+from agent import confirm
 from agent.domains.quota_actions import preparation, transactions
 from agent.principal import SOURCE_ASSERTION, Principal
 from agent.runtime.results import TurnResult
+from eval.fixtures.ledger import Ledger
 from tools import base
 
 
@@ -119,7 +120,7 @@ def test_exact_targets_signed_then_written_once_and_replayed(quota, tmp_path, ac
         assert frozen["request_id"] == 31
     if action == "reject":
         assert frozen["reason"] == args["reason"]
-    ledger = idem.Ledger(str(tmp_path / "quota.sqlite3"))
+    ledger = Ledger(str(tmp_path / "quota.sqlite3"))
     first = transactions.execute(signed, admin_config(), None, ledger=ledger)
     second = transactions.execute(signed, admin_config(), None, ledger=ledger)
     assert quota["writes"] == quota["notices"] == 1
@@ -151,7 +152,7 @@ def test_request_edits_revoke_frozen_target_before_any_write(quota, tmp_path, fi
     signed = grant(prepare("approve", request_id=31))
     quota["request"][field] = value
     result = transactions.execute(signed, admin_config(), None,
-                                 ledger=idem.Ledger(str(tmp_path / "changed.sqlite3")))
+                                 ledger=Ledger(str(tmp_path / "changed.sqlite3")))
     assert not result["receipts"] and quota["writes"] == 0
 
 
@@ -160,7 +161,7 @@ def test_reset_identity_or_usage_change_requires_new_confirmation(quota, tmp_pat
     signed = grant(prepare("reset", account_id=12))
     quota["account"][field] = value
     result = transactions.execute(signed, admin_config(), None,
-                                 ledger=idem.Ledger(str(tmp_path / "changed.sqlite3")))
+                                 ledger=Ledger(str(tmp_path / "changed.sqlite3")))
     assert not result["receipts"] and quota["writes"] == 0
 
 
@@ -168,7 +169,7 @@ def test_reset_identity_or_usage_change_requires_new_confirmation(quota, tmp_pat
 def test_uncertain_outcomes_do_not_repeat_write_or_claim_success(quota, tmp_path, mode):
     signed = grant(prepare("approve", request_id=31))
     quota["mode"] = mode
-    ledger = idem.Ledger(str(tmp_path / "uncertain.sqlite3"))
+    ledger = Ledger(str(tmp_path / "uncertain.sqlite3"))
     for _ in range(2):
         result = transactions.execute(signed, admin_config(), None, ledger=ledger)
         assert not result["receipts"] and result["blocked"]
@@ -213,7 +214,7 @@ def test_chat_after_reset_is_reported_as_current_usage_not_failed_reset(quota, t
     signed = grant(prepare("reset", account_id=12))
     quota["mode"] = "chat_after_reset"
     result = transactions.execute(signed, admin_config(), None,
-                                 ledger=idem.Ledger(str(tmp_path / "usage.sqlite3")))
+                                 ledger=Ledger(str(tmp_path / "usage.sqlite3")))
     assert result["receipts"] and "当前读回已用1轮" in result["reply"]
     assert quota["writes"] == 1
 
@@ -229,7 +230,7 @@ def test_approval_permits_natural_usage_growth_without_changing_target(quota, tm
     signed = grant(prepare("approve", request_id=31))
     quota["account"]["used"] += 1
     result = transactions.execute(signed, admin_config(), None,
-                                 ledger=idem.Ledger(str(tmp_path / "approval.sqlite3")))
+                                 ledger=Ledger(str(tmp_path / "approval.sqlite3")))
     assert result["receipts"] and quota["writes"] == 1
     assert quota["account"]["used"] == 0
 
@@ -243,7 +244,7 @@ def test_cancel_or_changed_reason_replacement_revokes_old_decision(
     from agent.runtime import writes
 
     monkeypatch.setitem(registry._DOMAINS, "quota_actions", transactions)
-    ledger = idem.Ledger(str(tmp_path / "revoke.sqlite3"))
+    ledger = Ledger(str(tmp_path / "revoke.sqlite3"))
     monkeypatch.setattr(writes, "ledger_for", lambda saver: ledger)
     initial = prepare("reject", request_id=31, reason="原来的理由")
     signed = grant(initial)
@@ -268,7 +269,7 @@ def test_execution_binding_or_role_changes_never_send_write(quota, tmp_path, cha
     signed = grant(prepare("reset", account_id=12))
     before = len(quota["requests"])
     result = transactions.execute(signed, admin_config(**change), None,
-                                 ledger=idem.Ledger(str(tmp_path / "identity.sqlite3")))
+                                 ledger=Ledger(str(tmp_path / "identity.sqlite3")))
     assert not result["receipts"] and quota["writes"] == 0
     assert len(quota["requests"]) == before
 
@@ -281,7 +282,7 @@ def test_existing_application_does_not_require_listable_account_role(
                             used=0 if unlimited else 45)
     signed = grant(prepare("approve", request_id=31))
     result = transactions.execute(signed, admin_config(), None,
-                                 ledger=idem.Ledger(str(tmp_path / "role.sqlite3")))
+                                 ledger=Ledger(str(tmp_path / "role.sqlite3")))
     assert result["receipts"] and quota["writes"] == 1
     if unlimited:
         assert "不限额" in result["reply"] and "上限0轮" not in result["reply"]

@@ -10,13 +10,14 @@ import pytest
 from _own_support import config
 from pydantic import ValidationError
 
-from agent import confirm, idem
+from agent import confirm
 from agent.domains.announcements import deletion as announcement
 from agent.domains.notifications import deletion as notification
 from agent.principal import SOURCE_ASSERTION, Principal
 from agent.products.blog.capabilities import ToolCatalog
 from agent.products.blog.pending import PendingOperation
 from agent.runtime import writes
+from eval.fixtures.ledger import Ledger
 from tools import base
 
 
@@ -91,7 +92,7 @@ def test_one_approval_and_request_preserve_frozen_set_on_replay(domain, service,
     assert prepared.reply.count('#11') == 1
     assert ('所有接收者' if domain is announcement else '保留全站公告') in prepared.reply
     service['rows'][13] = '确认之后到达'
-    ledger = idem.Ledger(str(tmp_path / 'once.sqlite3'))
+    ledger = Ledger(str(tmp_path / 'once.sqlite3'))
     for _ in range(2):
         result = domain.execute(grant, context(domain is announcement), None, ledger=ledger)
         assert len(result['receipts']) == 1 and not result['blocked']
@@ -105,7 +106,7 @@ def test_changed_target_rejects_whole_batch(domain, service, tmp_path):
     grant = signed(prepare(domain))
     service['rows'][12] = '内容已变化'
     result = domain.execute(grant, context(domain is announcement), None,
-                            ledger=idem.Ledger(str(tmp_path / 'changed.sqlite3')))
+                            ledger=Ledger(str(tmp_path / 'changed.sqlite3')))
     assert not result['receipts'] and not service['writes']
     assert set(service['rows']) == {11, 12}
 
@@ -121,7 +122,7 @@ def test_uncertain_results_never_reexecute_or_claim_success(domain, service, tmp
             'wrong_impact': {'associatedNotifications': 99},
             'boolean_impact': {'associatedNotifications': False},
         }[fault]
-    ledger = idem.Ledger(str(tmp_path / 'unknown.sqlite3'))
+    ledger = Ledger(str(tmp_path / 'unknown.sqlite3'))
     for _ in range(2):
         assert not domain.execute(grant, context(domain is announcement), None,
                                   ledger=ledger)['receipts']
@@ -171,7 +172,7 @@ def test_large_approval_is_bounded_and_fits_signed_transport(domain, service):
 def test_revocation_or_identity_change_never_reaches_write(domain, service, tmp_path, monkeypatch):
     result = prepare(domain)
     grant = signed(result)
-    ledger = idem.Ledger(str(tmp_path / 'cancel.sqlite3'))
+    ledger = Ledger(str(tmp_path / 'cancel.sqlite3'))
     monkeypatch.setattr(writes, 'ledger_for', lambda saver: ledger)
     pending = PendingOperation(grant, result.execution['pending_action'])
     pending.cancel(context(domain is announcement), None)
@@ -189,7 +190,7 @@ def test_global_permission_cannot_be_borrowed_from_personal_deletion(service, tm
     assert announcement.prepare_announcement_deletions.invoke(
         {'scope': 'all'}, config=context()).kind == 'unavailable'
     assert not announcement.execute(grant, context(), None,
-        ledger=idem.Ledger(str(tmp_path / 'role.sqlite3')))['receipts']
+        ledger=Ledger(str(tmp_path / 'role.sqlite3')))['receipts']
     assert not service['writes']
 
 

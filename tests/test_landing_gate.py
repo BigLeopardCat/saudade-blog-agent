@@ -230,12 +230,6 @@ def _test_wiring():
           and "def wilson_ci" not in src)
     check("复审单给每条红印历史红率（归类从猜变成读）",
           "landing_gate.chronic_map()" in src and "历史（全量跑的终判口径）" in src)
-    nightly = (ROOT / "scripts" / "nightly_regression.sh").read_text(encoding="utf-8")
-    run_lines = [ln for ln in nightly.splitlines()
-                 if "eval/run_golden.py" in ln and not ln.strip().startswith("#")]
-    check("夜间**不传** --min-pass-rate（传了就退回点估计口径）",
-          bool(run_lines) and all("--min-pass-rate" not in ln for ln in run_lines),
-          "；".join(ln.strip() for ln in run_lines))
 
 
 def _tagged(cid: str, tags: list, ok: bool = True, **kw) -> dict:
@@ -391,12 +385,6 @@ def _test_wiring():
           and src.index("fallback_reasons.append(_reason)") > src.index('if _scope != "text":'))
     check("复审单给每条红印历史红率（归类从猜变成读）",
           "landing_gate.chronic_map()" in src and "历史（全量跑的终判口径）" in src)
-    nightly = (ROOT / "scripts" / "nightly_regression.sh").read_text(encoding="utf-8")
-    run_lines = [ln for ln in nightly.splitlines()
-                 if "eval/run_golden.py" in ln and not ln.strip().startswith("#")]
-    check("夜间**不传** --min-pass-rate（传了就退回点估计口径）",
-          bool(run_lines) and all("--min-pass-rate" not in ln for ln in run_lines),
-          "；".join(ln.strip() for ln in run_lines))
 
 
 def main():

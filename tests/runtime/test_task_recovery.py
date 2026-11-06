@@ -15,6 +15,7 @@ from agent.products.blog.capabilities import ToolCatalog
 from agent.runtime.checkpoint_conversations import CheckpointConversationStore
 from agent.runtime.service import AgentRuntime
 from agent.runtime.turns import AgentCancelled
+from eval.fixtures.ledger import Ledger
 from tools.result import ok
 
 
@@ -145,7 +146,7 @@ def test_stopping_after_confirmed_write_preserves_write_and_history(
         monkeypatch, tmp_path, continuation):
     from contextlib import closing
 
-    from agent import confirm, idem
+    from agent import confirm
     from agent.runtime import writes
     from eval.own_fixtures import favorite_backend
 
@@ -160,7 +161,7 @@ def test_stopping_after_confirmed_write_preserves_write_and_history(
             model_factory=lambda **_: model,
         )
 
-    with favorite_backend() as business, closing(idem.Ledger(str(tmp_path / "ledger"))) as ledger:
+    with favorite_backend() as business, closing(Ledger(str(tmp_path / "ledger"))) as ledger:
         monkeypatch.setattr(writes, "ledger_for", lambda _: ledger)
         initial = {"messages": [HumanMessage(content="收藏文章19并告诉我结果")],
                    "task_id": "write-task"}

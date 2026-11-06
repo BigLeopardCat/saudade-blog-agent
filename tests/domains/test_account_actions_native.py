@@ -10,11 +10,12 @@ import pytest
 from _own_support import config
 from pydantic import ValidationError
 
-from agent import confirm, idem
+from agent import confirm
 from agent.domains.account_actions import preparation, transactions
 from agent.principal import SOURCE_ASSERTION, Principal
 from agent.products.blog.application import BlogApplication
 from agent.runtime import writes
+from eval.fixtures.ledger import Ledger
 from tools import base
 
 
@@ -191,7 +192,7 @@ def test_prepare_is_read_only_and_replay_applies_exact_change_once(
     assert accounts["rows"] == original and accounts["writes"] == 0
     assert all(request.url.path.endswith("/prepare") for request in accounts["requests"])
     assert "#" + str(args.get("account_id", 11)) in prepared.reply
-    ledger = idem.Ledger(str(tmp_path / "once.sqlite3"))
+    ledger = Ledger(str(tmp_path / "once.sqlite3"))
     for _ in range(2):
         result = transactions.execute(signed, admin_config(), None, ledger=ledger)
         assert len(result["receipts"]) == 1 and not result["blocked"]
@@ -240,7 +241,7 @@ def test_repeated_freeze_still_confirms_session_revocation(accounts, tmp_path):
     prepared = prepare("freeze", account_id=12)
     signed = grant(prepared)
     result = transactions.execute(
-        signed, admin_config(), None, ledger=idem.Ledger(str(tmp_path / "refreeze.sqlite3"))
+        signed, admin_config(), None, ledger=Ledger(str(tmp_path / "refreeze.sqlite3"))
     )
     assert result["receipts"] and accounts["revocations"] == 1
     assert accounts["rows"][12]["status"] == 1
@@ -300,7 +301,7 @@ def test_stale_or_revoked_backend_permission_cannot_execute(accounts, tmp_path, 
     else:
         accounts[mode] = True
     result = transactions.execute(
-        signed, admin_config(), None, ledger=idem.Ledger(str(tmp_path / "stale.sqlite3"))
+        signed, admin_config(), None, ledger=Ledger(str(tmp_path / "stale.sqlite3"))
     )
     assert not result["receipts"] and not accounts["writes"]
     assert not accounts["notifications"] and not accounts["revocations"]
@@ -310,7 +311,7 @@ def test_execution_rechecks_signed_actor_and_rejects_malformed_specs(accounts, t
     signed = grant(prepare("freeze", account_id=11))
     revoked = config(principal=Principal(uid=7, role="user", source=SOURCE_ASSERTION))
     assert not transactions.execute(
-        signed, revoked, None, ledger=idem.Ledger(str(tmp_path / "denied.sqlite3"))
+        signed, revoked, None, ledger=Ledger(str(tmp_path / "denied.sqlite3"))
     )["receipts"]
     bad = copy.deepcopy(signed)
     bad["specs"][0]["args"]["intent"]["target"]["id"] = True
@@ -323,7 +324,7 @@ def test_execution_rechecks_signed_actor_and_rejects_malformed_specs(accounts, t
 def test_postcommit_unknown_result_is_never_repeated(accounts, tmp_path, mode):
     signed = grant(prepare("freeze", account_id=11))
     accounts[mode] = True
-    ledger = idem.Ledger(str(tmp_path / "unknown.sqlite3"))
+    ledger = Ledger(str(tmp_path / "unknown.sqlite3"))
     for _ in range(2):
         assert not transactions.execute(signed, admin_config(), None, ledger=ledger)["receipts"]
     assert accounts["writes"] == accounts["notifications"] == accounts["revocations"] == 1
@@ -333,7 +334,7 @@ def test_postcommit_unknown_result_is_never_repeated(accounts, tmp_path, mode):
 def test_cancel_is_durable_and_prevents_later_confirmation(accounts, tmp_path, monkeypatch):
     prepared = prepare("freeze", account_id=11)
     signed = grant(prepared)
-    ledger = idem.Ledger(str(tmp_path / "cancelled.sqlite3"))
+    ledger = Ledger(str(tmp_path / "cancelled.sqlite3"))
     monkeypatch.setattr(writes, "ledger_for", lambda saver: ledger)
     from langgraph.checkpoint.memory import InMemorySaver
 
@@ -410,7 +411,7 @@ def test_temporary_mute_replay_uses_the_confirmed_absolute_expiry(accounts, tmp_
     signed = grant(prepare("mute", account_id=11, hours=24))
     expiry = signed["specs"][0]["args"]["intent"]["mutedUntil"]
     accounts["clock"] = "2030-02-01T01:00:00"
-    ledger = idem.Ledger(str(tmp_path / "temporary-mute.sqlite3"))
+    ledger = Ledger(str(tmp_path / "temporary-mute.sqlite3"))
     for _ in range(2):
         result = transactions.execute(signed, admin_config(), None, ledger=ledger)
         assert len(result["receipts"]) == 1 and not result["blocked"]
@@ -428,7 +429,7 @@ def test_unmute_clears_expired_record_without_changing_role_or_frozen_status(acc
     before = copy.deepcopy(accounts["rows"][11])
     signed = grant(prepare("unmute", account_id=11))
     result = transactions.execute(
-        signed, admin_config(), None, ledger=idem.Ledger(str(tmp_path / "expired-mute.sqlite3"))
+        signed, admin_config(), None, ledger=Ledger(str(tmp_path / "expired-mute.sqlite3"))
     )
     assert len(result["receipts"]) == 1 and not result["blocked"]
     assert accounts["rows"][11] == {**before, "mutedUntil": None}

@@ -123,7 +123,7 @@ def test_tool_call_stats_excludes_requested_calls_and_other_nodes(monkeypatch):
         {"node": "native", "event": "call", "name": "get_article_detail", "round": 1},
         {"node": "planner", "event": "call", "name": "legacy_plan", "round": 2},
     ]
-    monkeypatch.setattr("utils.trace.events_of", lambda _: events)
+    monkeypatch.setattr(golden_trace, "events_of", lambda _: events)
     assert golden_trace.tool_call_stats("fixture") == (["search_notes", "get_article_detail"], 2)
     assert golden_trace.tool_call_stats(None) == ([], 0)
 

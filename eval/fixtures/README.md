@@ -27,7 +27,7 @@ BLOG_API_BASE=http://127.0.0.1:8099/api/public \
 
 # 或者全量跑法（逐条独立子进程，口径一样）
 BLOG_API_BASE=http://127.0.0.1:8099/api/public \
-    .venv/bin/python eval/golden_full_run.py --golden eval/fixtures/golden_smoke.jsonl
+    .venv/bin/python eval/run_golden.py --golden eval/fixtures/golden_smoke.jsonl
 ```
 
 `BLOG_API_BASE` 是工具出口地址（默认值是维护者那个站点）——不设它，

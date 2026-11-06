@@ -1,5 +1,5 @@
 {
-  "_note": "ruff error 数的棘轮基线。只许变小；--update 是唯一放宽通道。三个量（ruff 版本 / line-length / select）都必须与 pyproject.toml 同源——三者都会改变条目集。判据见 eval/lint_gate.py 头注；纪律见 CONTRIBUTING.md。",
+  "_note": "固定扫描版本与规则下的计数上限；总数和逐项计数只许减少，规则由对应 gate 校验。",
   "ruff_version": "0.14.4",
   "line_length": 100,
   "select": [
@@ -8,7 +8,7 @@
     "I",
     "W"
   ],
-  "total": 223,
+  "total": 216,
   "by_file": {
     "agent/action_text.py": 2,
     "agent/factblock.py": 1,
@@ -23,7 +23,6 @@
     "eval/golden_fixture_account.py": 3,
     "eval/golden_fixture_board.py": 2,
     "eval/golden_fixture_todo.py": 4,
-    "eval/golden_full_run.py": 7,
     "eval/identity_preflight.py": 1,
     "eval/landing_gate.py": 7,
     "eval/llm_judge.py": 4,

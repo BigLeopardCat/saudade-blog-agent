@@ -2,8 +2,6 @@
 # Report pytest coverage without a pass threshold; reset only the coverage output directory.
 
 set -euo pipefail
-# 路径从脚本自己的位置推（与 scripts/nightly_regression.sh 同一条纪律：写死家目录在别人
-# 机器上会当场失败，而失败的样子是一个静默退出的 cron）。
 cd "$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 
 COV_DIR=".coverage-data"

@@ -8,11 +8,12 @@ import httpx
 import pytest
 from _own_support import config
 
-from agent import confirm, idem
+from agent import confirm
 from agent.domains.image_generation import tools, transactions
 from agent.principal import SOURCE_ASSERTION, Principal
 from agent.products.blog.pending import PendingOperation
 from agent.runtime import writes
+from eval.fixtures.ledger import Ledger
 from tools import base
 
 ID = "6b9e2bf1-56af-428c-8177-e3ad0641e036"
@@ -89,7 +90,7 @@ def test_full_prompt_and_references_visible_before_any_paid_call(service, tmp_pa
     assert service["paid_calls"] == 0 and service["accepts"] == 0
     signed = grant(card)
     assert signed["specs"][0]["args"] == {"job_id": ID, "version": "a" * 64}
-    ledger = idem.Ledger(str(tmp_path / "generation.sqlite3"))
+    ledger = Ledger(str(tmp_path / "generation.sqlite3"))
     for _ in range(2):
         assert len(transactions.execute(signed, admin(), None, ledger=ledger)["receipts"]) == 1
     assert service["paid_calls"] == 1 and service["accepts"] == 0
@@ -106,7 +107,7 @@ def test_actual_pixels_need_a_distinct_result_approval(service, tmp_path):
     assert "![生成结果]" in card.reply and not service["accepts"]
     signed = grant(card)
     assert signed["workflow"] == "image_acceptance"
-    ledger = idem.Ledger(str(tmp_path / "acceptance.sqlite3"))
+    ledger = Ledger(str(tmp_path / "acceptance.sqlite3"))
     for _ in range(2):
         outcome = transactions.execute(signed, admin(), None, ledger=ledger)
         assert len(outcome["receipts"]) == 1
@@ -116,7 +117,7 @@ def test_actual_pixels_need_a_distinct_result_approval(service, tmp_path):
 def test_cancelled_approval_cannot_start_paid_call(service, tmp_path, monkeypatch):
     card = prepare()
     signed = grant(card)
-    ledger = idem.Ledger(str(tmp_path / "cancel.sqlite3"))
+    ledger = Ledger(str(tmp_path / "cancel.sqlite3"))
     monkeypatch.setattr(writes, "ledger_for", lambda _: ledger)
     PendingOperation(signed, card.execution["pending_action"]).cancel(admin(), None)
     assert not transactions.execute(signed, admin(), None, ledger=ledger)["receipts"]
@@ -126,7 +127,7 @@ def test_cancelled_approval_cannot_start_paid_call(service, tmp_path, monkeypatc
 def test_inconsistent_provider_operation_is_unknown_not_success_or_retried(service, tmp_path):
     signed = grant(prepare())
     service["mismatch"] = True
-    ledger = idem.Ledger(str(tmp_path / "unknown.sqlite3"))
+    ledger = Ledger(str(tmp_path / "unknown.sqlite3"))
     for _ in range(2):
         assert not transactions.execute(signed, admin(), None, ledger=ledger)["receipts"]
     assert service["paid_calls"] == 1

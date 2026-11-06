@@ -3,11 +3,8 @@
 import json
 import os
 import pathlib
-import shutil
 import subprocess
 import sys
-
-import pytest
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 
@@ -104,44 +101,3 @@ def test_reconciliation_without_configured_host_logs_cannot_claim_a_clean_audit(
                             cwd=tmp_path, env=environment(), capture_output=True,
                             text=True, timeout=30)
     assert result.returncode == 2 and "host logs are unavailable" in result.stderr
-
-
-@pytest.mark.parametrize("selection", ["adjacent", "project", "explicit", "missing"])
-def test_nightly_probe_uses_selected_host_checkout_and_missing_is_unassessed(tmp_path, selection):
-    agent = tmp_path / "agent"
-    (agent / "scripts").mkdir(parents=True)
-    shutil.copyfile(ROOT / "scripts/nightly_regression.sh", agent / "scripts/nightly_regression.sh")
-    (agent / ".venv/bin").mkdir(parents=True)
-    interpreter = agent / ".venv/bin/python"
-    interpreter.write_text("#!/bin/sh\nexit 0\n")
-    interpreter.chmod(0o755)
-    binary, home = tmp_path / "bin", tmp_path / "home"
-    binary.mkdir()
-    home.mkdir()
-    probe_arguments = tmp_path / "probe-arguments"
-    system_python = binary / "python3"
-    system_python.write_text('#!/bin/sh\nprintf "%s\\n" "$@" > "$PROBE_ARGUMENTS"\n')
-    system_python.chmod(0o755)
-    selected = tmp_path if selection == "adjacent" else tmp_path / "selected-host"
-    if selection != "missing":
-        (selected / "scripts").mkdir(exist_ok=True, parents=True)
-        (selected / "scripts/probe_token_revoke.py").write_text("fixture only")
-    values = {"HOME": str(home), "PATH": str(binary) + os.pathsep + os.environ["PATH"],
-              "PROBE_ARGUMENTS": str(probe_arguments),
-              "GOLDEN_ADMIN_UID": "123", "GOLDEN_USER_UID": "456"}
-    if selection in {"project", "explicit"}:
-        values["PROJECT_DIR"] = str(selected if selection == "project" else tmp_path / "wrong-host")
-    if selection in {"explicit", "missing"}:
-        values["SAUDADE_PARENT_REPO"] = str(selected)
-    result = subprocess.run(["bash", str(agent / "scripts/nightly_regression.sh")], cwd=tmp_path,
-                            env=values, capture_output=True, text=True, timeout=15)
-    assert result.returncode == 0, result.stderr
-    log = (home / "agent_regression.log").read_text()
-    if selection == "missing":
-        assert "SKIP" in log and "未评估，不计为通过" in log
-        assert not probe_arguments.exists()
-    else:
-        assert probe_arguments.read_text().splitlines() == [
-            str(selected / "scripts/probe_token_revoke.py"), "--admin-uid", "123",
-            "--no-self-probe"]
-    assert not (home / "agent_regression.failed").exists()

@@ -295,8 +295,7 @@ def _test_report_and_no_gate():
           "这一轮采样的回复" in rep and "换个采样" in rep)
 
     src = (ROOT / "eval" / "llm_judge.py").read_text(encoding="utf-8")
-    check("main 恒返回 0（可疑/出错都不改退出码）",
-          "return 0          # 有意恒 0" in src or "有意恒 0" in src)
+    check("评审适配只作为库使用，不保留另一套 CLI", "def main(" not in src)
     check("源码里没有把 suspect 当失败的分支（不许出现 sys.exit(1) 判分）",
           "sys.exit(1)" not in src.replace("sys.exit(main())", ""))
     check("纪律 1（不是判分器）写在模块头注里", "不是判分器" in src)
@@ -351,34 +350,12 @@ def _test_golden_runs_raise_the_trace_limit():
             _os.environ[trace_mod.TOOL_RESULT_LIMIT_ENV] = old
 
 
-def _test_nightly_runs_the_judge():
-    """验证语义评审在 golden 之后执行且不冒充确定性门禁。"""
-    print("[接线] 夜间回归跑评审员，且它仍是非门禁")
-    sh = (ROOT / "scripts" / "nightly_regression.sh").read_text(encoding="utf-8")
-    lines = [ln for ln in sh.splitlines() if "$PY eval/llm_judge.py" in ln]
-    check("夜间脚本里真的调了评审员", len(lines) == 1)
-    if len(lines) != 1:
-        return
-    judge_line = lines[0]
-    check("评审员不置 fail=1（可疑 ≠ 失败，它不进任何门禁）",
-          "fail=1" not in judge_line and "|| echo" in judge_line)
-    check("不写 health.log（一条观察性判据不该进告警通道）",
-          "health.log" not in judge_line)
-    check("不传 --traces（默认取最新一轮 = 刚跑完的 golden 那一轮）",
-          "--traces" not in judge_line)
-    check("跑在 golden 之后（材料就是刚那一轮）",
-          sh.index("$PY eval/run_golden.py") < sh.index("$PY eval/llm_judge.py"))
-    check("评审员那一步带 PYTHONUNBUFFERED=1（否则日志块缓冲、中途看是空的）",
-          judge_line.lstrip().startswith("PYTHONUNBUFFERED=1 "))
-
-
 def main():
     for fn in (_test_material_completeness, _test_material_clip_is_visible,
                _test_truncation_detector, _test_parse_verdict_strictness,
                _test_output_contract_lives_in_the_prompt, _test_response_format_dialect,
                _test_judge_one_paths, _test_report_and_no_gate,
-               _test_golden_runs_raise_the_trace_limit,
-               _test_nightly_runs_the_judge):
+               _test_golden_runs_raise_the_trace_limit):
         fn()
     if FAILS:
         print(f"\n=== {len(FAILS)} 项失败 ===")

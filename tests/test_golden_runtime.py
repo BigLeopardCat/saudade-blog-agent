@@ -103,7 +103,7 @@ def test_runner_failed_build_releases_its_resources(monkeypatch):
         assert events == ["closed"]
 
 
-@pytest.mark.parametrize("entry", ["run_golden.py", "golden_full_run.py"])
+@pytest.mark.parametrize("entry", ["run_golden.py"])
 def test_legacy_cli_uses_its_checkout_and_supports_help(entry, tmp_path):
     root = Path(__file__).resolve().parent.parent
     result = subprocess.run([sys.executable, str(root / "eval" / entry), "--help"],

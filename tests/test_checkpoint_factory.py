@@ -328,7 +328,7 @@ def test_checkpoint_factory():
     _sq = _raises(_build_checkpointer, "sqlite:////tmp/ckpt.sqlite3")
     check("抛 RuntimeError（不是静默去造一个没验过的 saver）",
           _sq.startswith("RuntimeError:"), _sq[:90] or "（没抛）")
-    check("说清是「没有落地」而不是含糊的「还没实现」", "没有落地" in _sq, _sq[:200])
+    check("SQLite 通过统一后端校验拒绝", "scheme 不受支持" in _sq, _sq[:200])
     print("\n④ 合法 scheme 但后端没装 ⇒ 响亮，消息里有包名与 pip 命令")
     _pg_installed = importlib.util.find_spec("langgraph.checkpoint.postgres") is not None
     C.importlib.import_module = _no_module

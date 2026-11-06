@@ -8,11 +8,12 @@ import pytest
 from _own_support import config
 from pydantic import ValidationError
 
-from agent import confirm, idem
+from agent import confirm
 from agent.domains.article_actions import preparation, transactions
 from agent.principal import SOURCE_ASSERTION, Principal
 from agent.products.blog.pending import PendingOperation
 from agent.runtime import writes
+from eval.fixtures.ledger import Ledger
 from tools import base
 
 
@@ -90,7 +91,7 @@ def test_preparation_is_read_only_and_confirmation_replays_once(articles, tmp_pa
     )
     assert articles["writes"] == 0
     assert result.execution["pending_confirm"]["token"] not in result.reply
-    ledger = idem.Ledger(str(tmp_path / "writes.sqlite3"))
+    ledger = Ledger(str(tmp_path / "writes.sqlite3"))
     first = transactions.execute(signed, admin_config(), None, ledger=ledger)
     second = transactions.execute(signed, admin_config(), None, ledger=ledger)
     assert articles["writes"] == 1
@@ -106,7 +107,7 @@ def test_preparation_is_read_only_and_confirmation_replays_once(articles, tmp_pa
 def test_uncertain_or_unchanged_response_never_becomes_success(articles, tmp_path, mode):
     signed = grant(prepare(status="public"))
     articles[mode] = True
-    ledger = idem.Ledger(str(tmp_path / "unknown.sqlite3"))
+    ledger = Ledger(str(tmp_path / "unknown.sqlite3"))
     first = transactions.execute(signed, admin_config(), None, ledger=ledger)
     second = transactions.execute(signed, admin_config(), None, ledger=ledger)
     assert articles["writes"] == 1 and not first["receipts"] and not second["receipts"]
@@ -116,7 +117,7 @@ def test_target_changed_after_confirmation_is_zero_write(articles, tmp_path):
     signed = grant(prepare(status="public"))
     articles["row"]["version"] = "c" * 64
     outcome = transactions.execute(
-        signed, admin_config(), None, ledger=idem.Ledger(str(tmp_path / "stale.sqlite3"))
+        signed, admin_config(), None, ledger=Ledger(str(tmp_path / "stale.sqlite3"))
     )
     assert not outcome["receipts"] and articles["writes"] == 0
 
@@ -159,7 +160,7 @@ def test_no_fields_or_malformed_target_never_prepares(articles):
 def test_revoked_confirmation_cannot_execute(articles, tmp_path, monkeypatch):
     prepared = prepare(status="public")
     signed = grant(prepared)
-    ledger = idem.Ledger(str(tmp_path / "revoke.sqlite3"))
+    ledger = Ledger(str(tmp_path / "revoke.sqlite3"))
     monkeypatch.setattr(writes, "ledger_for", lambda saver: ledger)
     pending = PendingOperation(signed, prepared.execution["pending_action"])
     event = pending.cancel(admin_config(), None)

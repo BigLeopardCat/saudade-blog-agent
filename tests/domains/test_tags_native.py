@@ -8,10 +8,11 @@ import httpx
 import pytest
 from _own_support import config
 
-from agent import confirm, idem
+from agent import confirm
 from agent.domains.tags import preparation, targets, transactions
 from agent.principal import SOURCE_ASSERTION, Principal
 from agent.runtime import writes
+from eval.fixtures.ledger import Ledger
 from tools import base
 
 
@@ -139,7 +140,7 @@ def test_preparation_is_readonly_and_confirmation_replays_once(tags, tmp_path, a
     g = grant(result)
     assert g and set(g["specs"][0]["args"]) == {"version", "intent"}
     assert tags["writes"] == 0 and len(tags["requests"]) == 1
-    ledger = idem.Ledger(str(tmp_path / "ledger.sqlite3"))
+    ledger = Ledger(str(tmp_path / "ledger.sqlite3"))
     first = transactions.execute(g, cfg, None, ledger=ledger)
     second = transactions.execute(g, cfg, None, ledger=ledger)
     assert first.get("receipts") and second.get("receipts")
@@ -161,7 +162,7 @@ def test_changed_scope_or_uncertain_result_never_retries(tags, tmp_path, failure
         tags["scope"] = [(102, 0)]
     else:
         tags[failure] = True
-    ledger = idem.Ledger(str(tmp_path / "ledger.sqlite3"))
+    ledger = Ledger(str(tmp_path / "ledger.sqlite3"))
     for _ in range(2):
         result = transactions.execute(g, cfg, None, ledger=ledger)
         assert not result.get("receipts")
@@ -225,7 +226,7 @@ def test_noop_and_cancel_do_not_write(tags, tmp_path, monkeypatch):
     assert not result.execution.get("pending_confirm")
     prepared = preparation.prepare_tag_delete.invoke({"tag_id": 11, "level": 1}, config=cfg)
     g = grant(prepared)
-    ledger = idem.Ledger(str(tmp_path / "ledger.sqlite3"))
+    ledger = Ledger(str(tmp_path / "ledger.sqlite3"))
     monkeypatch.setattr(writes, "ledger_for", lambda saver: ledger)
     pending = PendingOperation(g, prepared.execution["pending_action"])
     assert pending.cancel(cfg, None).execution["pending_event"]["event"] == "cancelled"

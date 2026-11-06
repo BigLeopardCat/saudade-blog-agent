@@ -10,12 +10,13 @@ import pytest
 from _own_support import config
 from pydantic import ValidationError
 
-from agent import confirm, idem
+from agent import confirm
 from agent.contracts.events import StreamEvent
 from agent.domains.announcements import preparation, transactions
 from agent.principal import SOURCE_ASSERTION, Principal
 from agent.products.blog.pending import PendingOperation
 from agent.runtime import writes
+from eval.fixtures.ledger import Ledger
 from tools import base
 
 
@@ -139,7 +140,7 @@ def test_prepare_is_read_only_and_confirmed_replay_is_one_write(
         assert "新的正文" in prepared.reply and "原文 保持" in prepared.reply
     if action == "delete":
         assert "及其关联通知" in prepared.reply and "#11" in prepared.reply
-    ledger = idem.Ledger(str(tmp_path / "once.sqlite3"))
+    ledger = Ledger(str(tmp_path / "once.sqlite3"))
     for _ in range(2):
         result = transactions.execute(signed, admin_config(), None, ledger=ledger)
         assert len(result["receipts"]) == 1 and not result["blocked"]
@@ -170,7 +171,7 @@ def test_changed_announcement_or_scope_never_executes_a_stale_approval(
     else:
         announcements["race"] = True
     result = transactions.execute(
-        signed, admin_config(), None, ledger=idem.Ledger(str(tmp_path / "stale.sqlite3"))
+        signed, admin_config(), None, ledger=Ledger(str(tmp_path / "stale.sqlite3"))
     )
     assert not result["receipts"] and not announcements["writes"]
 
@@ -179,7 +180,7 @@ def test_changed_announcement_or_scope_never_executes_a_stale_approval(
 def test_lost_or_mismatched_result_is_not_repeated(announcements, tmp_path, mode):
     signed = grant(prepare("update", announcement_id=11, content="新的正文"))
     announcements[mode] = True
-    ledger = idem.Ledger(str(tmp_path / "unknown.sqlite3"))
+    ledger = Ledger(str(tmp_path / "unknown.sqlite3"))
     for _ in range(2):
         assert not transactions.execute(signed, admin_config(), None, ledger=ledger)["receipts"]
     assert announcements["writes"] == 1 and announcements["rows"][11]["content"] == "新的正文"
@@ -188,7 +189,7 @@ def test_lost_or_mismatched_result_is_not_repeated(announcements, tmp_path, mode
 def test_cancelled_card_is_durable_and_cannot_write(announcements, tmp_path, monkeypatch):
     prepared = prepare("delete", announcement_id=11)
     signed = grant(prepared)
-    store = idem.Ledger(str(tmp_path / "revoked.sqlite3"))
+    store = Ledger(str(tmp_path / "revoked.sqlite3"))
     monkeypatch.setattr(writes, "ledger_for", lambda saver: store)
     pending = PendingOperation(signed, prepared.execution["pending_action"])
     assert pending.cancel(admin_config(), None).execution["pending_event"]["event"] == "cancelled"
@@ -232,7 +233,7 @@ def test_unverified_or_unauthorized_actor_cannot_prepare(announcements, principa
 def test_permission_revocation_and_malformed_specs_cannot_execute(announcements, tmp_path):
     signed = grant(prepare("delete", announcement_id=11))
     revoked = config(principal=Principal(uid=7, role="user", source=SOURCE_ASSERTION))
-    ledger = idem.Ledger(str(tmp_path / "denied.sqlite3"))
+    ledger = Ledger(str(tmp_path / "denied.sqlite3"))
     assert not transactions.execute(signed, revoked, None, ledger=ledger)["receipts"]
     for specs in [
         [None],

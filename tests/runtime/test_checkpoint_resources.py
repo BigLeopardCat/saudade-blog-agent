@@ -51,7 +51,7 @@ def persistence(monkeypatch):
     original_import = checkpoint.importlib.import_module
 
     def load(name, *args, **kwargs):
-        if name == checkpoint._PG_MOD:
+        if name == checkpoint.backend_for("postgresql://fixture")[0]:
             return SimpleNamespace(PostgresSaver=Saver)
         return original_import(name, *args, **kwargs)
 
