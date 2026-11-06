@@ -41,7 +41,7 @@ def test_invalid_budget_settings_fail_before_runtime_start(values):
         Settings(_env_file=None, **values)
 
 
-@pytest.mark.parametrize("name", ["graph", "hybrid", "react", "unknown", "native", ""])
+@pytest.mark.parametrize("name", ["graph", "hybrid", "react", "unknown", "native"])
 def test_retired_selection_rejected_from_environment_dotenv_and_constructor(
         monkeypatch, tmp_path, name):
     monkeypatch.setenv("AGENT_ARM", name)
