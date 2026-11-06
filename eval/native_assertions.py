@@ -33,7 +33,7 @@ def contains(actual, expected):
         return isinstance(actual, list) and len(actual) == len(expected) and all(
             contains(value, wanted) for value, wanted in zip(actual, expected)
         )
-    return actual == expected
+    return isinstance(actual, bool) == isinstance(expected, bool) and actual == expected
 
 
 def _answer_value(wanted, result, calls):
@@ -197,13 +197,18 @@ def _prepared_or_noop(wanted, result, events):
         for spec in payload["specs"]
     ]
     if any(contains(spec, wanted["spec"]) for spec in specs):
+        proof = wanted.get("prepared_observations")
+        return not proof or any(_matches_observation(expected, call)
+                                for expected in proof for call in observations(events))
+    if any(_matches_observation(proof, call)
+           for proof in wanted.get("noop_observations", []) for call in observations(events)):
         return True
     noop_calls = {
         (event.get("round"), event.get("call_id"))
         for event in events
         if event.get("event") == "call"
         and event.get("kind") == "noop"
-        and event.get("name") in wanted["noop_tools"]
+        and event.get("name") in wanted.get("noop_tools", [])
         and event.get("call_id")
     }
     return any(

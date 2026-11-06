@@ -53,7 +53,8 @@ def _model_attempts(events):
     return {
         "model_retry_attempts": sum(max(0, count - 1) for count in starts.values()),
         "model_failures": [{key: e[key] for key in (
-            "error_type", "failure_source", "http_status", "retryable") if key in e}
+            "error_type", "failure_source", "http_status", "retryable", "retry_after_s",
+            "provider_request_id", "provider_error_type", "provider_error_code") if key in e}
             for e in events if e.get("event") == "llm_error"],
     }
 

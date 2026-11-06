@@ -190,6 +190,7 @@ class AgentRuntime:
         runner = session.stream(prompt, resume=resume, approval_input=approval_input,
                                 recover=recover)
         outcome = None
+        failure = None
         try:
             while True:
                 try:
@@ -201,14 +202,16 @@ class AgentRuntime:
                 # argument fragments and usage metadata stay inside the session.
                 yield (chunk if isinstance(chunk, (TaskInputEvent, ReplyReset))
                        else AIMessageChunk(content=chunk.content))
+        except (OpenAIError, TimeoutError) as error:
+            failure = error
         finally:
             runner.close()
             items = _finish_inputs(session, outcome)
-        if session.input_events_enabled:
-            yield TaskInputEvent({"task_id": session.task["id"], "ready": False,
-                                  "inputs": items,
-                                  **({"phase": "paused"} if outcome is not None and
-                                     (outcome.execution or {}).get("paused_task") else {})})
+        completion = _input_completion(session, outcome, failure, items)
+        if completion is not None:
+            yield completion
+        if failure is not None:
+            raise failure
         if not isinstance(outcome, TurnResult):
             raise RuntimeError("Native tool session ended without a terminal result")
         return outcome
@@ -286,6 +289,17 @@ class AgentRuntime:
                               {**(executed.execution or {}), "receipts": session.receipts})
         finally:
             runner.close()
+
+
+def _input_completion(session, outcome, failure, items):
+    if not session.input_events_enabled:
+        return None
+    paused = bool(outcome and (outcome.execution or {}).get("paused_task"))
+    if failure is not None:
+        saved = session.store.load(session.config)
+        paused = recovery.allowed(saved, session.task["id"], session.config)
+    return TaskInputEvent({"task_id": session.task["id"], "ready": False, "inputs": items,
+                           **({"phase": "paused"} if paused else {})})
 
 
 def _finish_inputs(session, outcome):

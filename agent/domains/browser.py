@@ -93,12 +93,13 @@ def _sent(command, receipts):
 def navigate_page(
     path: Path, config: RunnableConfig, tool_call_id: Annotated[str, InjectedToolCallId]
 ) -> object:
-    """Open a verified site path when the user asks to go there, including an article
-    chosen from a recommendation or resolved from conversation context. If asked
-    to recommend and open, choose a source then navigate; recommending alone does
-    not navigate. Use get_site_map for pages, list_categories for category names,
-    or a source article link. Returns a queued browser command, not a browser
-    completion acknowledgement. No confirmation card.
+    """Change the current page when the user requests navigation, including opening
+    a chosen recommendation. Listing pages, explaining where something is, and
+    recommending articles are read-only tasks. Answer those from the available
+    paths or get_site_map without changing the page. Resolve article and category
+    paths from source links. No confirmation card. With browser feedback, waits
+    for completion or timeout in the same durable task. Status sent means queued;
+    only completed proves arrival.
     """
     if not authorized(config, "navigate_page"):
         return "当前身份无权操作页面。", {"kind": "unavailable"}
@@ -226,15 +227,11 @@ def tools(config):
     )
     navigation = navigate_page.model_copy(
         update={
-            "description": "Open a site page immediately when requested. "
-            "Pages available to this caller: "
+            "description": navigate_page.description + " Pages available to this caller: "
             + pages
             + ". Article: /article/<id>; category: /category/<name>. Use the source article link "
-            "for a chosen recommendation. No site-map lookup is needed for the known pages. "
-            "This allowlist defines supported commands, not whether other URLs exist. "
-            "With browser feedback, execution pauses durably until the client reports completion "
-            "or timeout, then continues the same task. Status sent means queued only; "
-            "only completed proves arrival. No confirmation card."
+            "for a chosen recommendation. Known paths need no additional lookup. "
+            "This allowlist defines supported commands, not whether other URLs exist."
         }
     )
     return {

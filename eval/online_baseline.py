@@ -169,7 +169,8 @@ def provider_unavailable(case):
         attempts = [event for event in trace.get("events", [])
                     if event.get("event") in {"llm_start", "llm_done", "llm_error"}]
         final = attempts[-1] if attempts else {}
-        if (final.get("event") == "llm_error" and final.get("retryable") is True
+        if (final.get("event") == "llm_error" and (final.get("retryable") is True
+                or final.get("http_status") in {401, 402, 403, 429})
                 and final.get("failure_source") in {"provider", "transport"}):
             return True
     return False

@@ -1,4 +1,4 @@
-"""Native tasks suspend one operation at a time and never approve their siblings."""
+"""Tasks suspend one operation at a time and never approve their siblings."""
 
 import json
 import secrets
@@ -13,6 +13,7 @@ from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from langchain_core.tools import StructuredTool
 from langchain_core.utils.function_calling import convert_to_openai_tool
 from langgraph.checkpoint.memory import InMemorySaver
+from openai import RateLimitError
 
 from agent import confirm
 from agent.contracts.events import StreamEvent
@@ -341,7 +342,11 @@ def test_execution_checkpoint_failure_recovers_from_ledger_without_duplicate_wri
     assert next_card.execution["pending_confirm"] and len(state["writes"]) == 1
 
 
-def test_failure_after_resumed_dispatch_cannot_repeat_browser_or_business_actions(backend):
+@pytest.mark.parametrize("failure", [TimeoutError("provider timed out"),
+    RateLimitError("provider rejected", response=httpx.Response(429,
+        request=httpx.Request("POST", "https://model.test"), headers={"retry-after": "15"}),
+        body={"error": "private"})])
+def test_failure_after_resumed_dispatch_cannot_repeat_browser_or_business_actions(backend, failure):
     state, _ = backend
     selected = runtime(Model())
     navigation = call("navigate_page", "nav", path="/article/19")
@@ -351,7 +356,7 @@ def test_failure_after_resumed_dispatch_cannot_repeat_browser_or_business_action
         def stream(self, prompt, **kwargs):
             assert any(message.tool_call_id == "nav" for message in prompt
                        if isinstance(message, ToolMessage))
-            raise TimeoutError("provider timed out")
+            raise failure
 
     selected.model_factory = lambda **_: FailedModel()
     interrupted = run(selected, grant=grant)
