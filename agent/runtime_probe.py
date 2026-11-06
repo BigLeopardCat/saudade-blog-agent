@@ -118,17 +118,18 @@ def ready_payload(agent, settings) -> tuple[int, dict]:
     model_io = getattr(agent, "model_io", None)
     if model_io is not None and not getattr(model_io, "ready", True):
         reasons.append("model_transport_unavailable")
+    if settings.agent_require_assertion and not settings.agent_assertion_secret.strip():
+        reasons.append("missing_assertion_secret")
+    if not settings.confirmation_secret.strip():
+        reasons.append("missing_confirmation_secret")
     try:
         prov = settings.check_provider()
     except Exception:                               # noqa: BLE001
-        # 认不出 ⇒ 回 env 原文，**不**在这里 raise：这个端点存在的意义就是让这一类在
-        # `/health` 之外**看得见**，它自己再炸掉就白加了（`/health` 那处同款取向）。
+        # Readiness remains available even when provider configuration is invalid.
         prov = getattr(settings, "llm_provider", "")
         reasons.append("unknown_provider")
     else:
-        # 只在认得出时才问凭据：`is_api_key_configured` 按 provider 前缀 `getattr`，
-        # 认不出的名字会让它抛 AttributeError（`Settings._provider_prefix` 那段注里的
-        # 同形坑：校验放行了、取值却取不到）。
+        # Credential lookup requires a validated provider name.
         if not settings.is_api_key_configured:
             reasons.append("missing_credentials")
     return (200 if not reasons else 503), {"ready": not reasons, "reasons": reasons,

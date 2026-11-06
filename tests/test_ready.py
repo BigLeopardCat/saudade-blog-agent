@@ -6,9 +6,11 @@ from __future__ import annotations
 
 import asyncio
 import json
+import secrets
 import sys
 from pathlib import Path
 
+import pytest
 from _judge import collector
 from _service import app, service_request
 
@@ -39,13 +41,9 @@ READY_KEYS = {"ready", "reasons", "provider"}
 def test_ready():
     print("① 正常态：就绪，且与 /health 一致（都在说'活着且能干活'）")
     _agent_saved = app.state.runtime
-    # ⚠️ **凭据由本判据自己摆，不许继承运维取值**：离线套件跑在
-    # `SAUDADE_IGNORE_ENV_FILE=1` 下（见 `tests/conftest.py::_PINNED`），`.env` **根本不读**
-    # ⇒ `*_api_key` 全是空的。直接断言"凭据在位 ⇒ 200"会**单跑绿、进套件红**（实测撞上过
-    # 一次，症状是 ① 报 `reasons=['missing_credentials']`）。同 `test_checkpoint_factory.py` ①
-    # 钉 `CHECKPOINT_DSN=""` 的理由：判据的前提要自己摆出来，否则它量的是这台机器的 `.env`。
-    # 三个 key 一起给：哪一个是当前 provider 的由 settings 决定，判据不必跟着走。
-    _KEY_FIELDS = ("qwen_api_key", "deepseek_api_key", "openai_api_key")
+    # The fixture owns all credentials and never inherits deployment configuration.
+    _KEY_FIELDS = ("qwen_api_key", "deepseek_api_key", "openai_api_key", "opencode_api_key",
+                   "agent_assertion_secret", "confirmation_secret")
     _FAKE_KEY = "sk-judge-owned-premise-0123456789"
     _keys_saved = {k: getattr(settings, k) for k in _KEY_FIELDS}
     try:
@@ -109,8 +107,7 @@ def test_ready():
             health_ok(),
             "" if health_ok() else "health 也红了 ⇒ 这个端点没有带来新信息",
         )
-        # 回 env **原文**（不是归一化后的名字）：认不出就没有"归一化后的名字"可回，而现场
-        # 要读的恰恰是"你到底把 LLM_PROVIDER 写成了什么"——编一个已知的顶上会把病因抹掉。
+        # Unknown providers retain their configured name for diagnostics.
         check(
             "  provider 那一格如实回 env 原文（不编一个已知的名字顶上）",
             _body["provider"] == "SENTINEL_PROVIDER",
@@ -120,7 +117,7 @@ def test_ready():
         settings.llm_provider = _prov_saved
         app.state.runtime = _agent_saved
 
-    print("\n④ 凭据缺 ⇒ 503 + missing_credentials（20260927 那次的形状）")
+    print("\n④ 凭据缺 ⇒ 503 + missing_credentials")
     _key_saved = {
         k: getattr(settings, k) for k in ("qwen_api_key", "deepseek_api_key", "openai_api_key")
     }
@@ -176,3 +173,18 @@ def test_ready():
 
 if __name__ == "__main__":
     test_ready()
+
+
+@pytest.mark.parametrize("missing", ["agent_assertion_secret", "confirmation_secret"])
+def test_missing_signing_configuration_is_not_ready_and_never_exposes_keys(missing):
+    from agent.runtime_probe import ready_payload
+    from config.settings import Settings
+
+    key = secrets.token_urlsafe(32)
+    configured = Settings(_env_file=None, llm_provider="opencode", opencode_api_key=key,
+                          agent_assertion_secret=key, AGENT_CONFIRM_SECRET=key)
+    assert ready_payload(object(), configured)[0] == 200
+    setattr(configured, missing, "   ")
+    code, body = ready_payload(object(), configured)
+    assert code == 503 and f"missing_{missing.removeprefix('agent_')}" in body["reasons"]
+    assert key not in json.dumps(body)

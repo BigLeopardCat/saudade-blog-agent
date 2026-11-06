@@ -1,7 +1,5 @@
 # RAG embedding 的完整输入预算
 
-配置与行为说明为现状；末节注明日期的实测结果为验证记录。
-
 `EMBEDDING_PROFILE` 是可选的 JSON 路径，适用于本地或托管端点提供了匹配
 `tokenizer.json` 的模型。未配置时保留现有 API 通道，不加载 tokenizer。
 安装与验收使用独立开发环境；不要对正在提供服务的 venv 执行依赖同步。
@@ -14,6 +12,77 @@ uv sync --locked --extra embedding-tokenizer
 不调用 Transformers/PyTorch。tokenizer 的文件校验和必须匹配 profile。
 JSON 内自带的 truncation/padding 在加载时关闭，计数包含配置启用的 special tokens。
 不使用字符数或另一模型的 tokenizer 估算精确预算。
+
+## 本地 BGE 生产安装
+
+先完成[核心部署](deployment.md)，再启用向量检索。仓库自带的 systemd 模板面向 Linux x86-64，
+固定 llama.cpp、GGUF 与 tokenizer 的来源和 SHA-256，见[资产清单](../deploy/embedding/artifacts.json)。
+其他架构需要验证匹配的模型服务；不要直接运行不兼容的二进制。
+
+以下是新的本地服务安装，不替换正在使用的模型目录或认证文件。
+以已部署 Agent 的解释器准备依赖，无需 PyTorch：
+
+```sh
+AGENT_RELEASE="$(readlink -e /srv/saudade-agent/current)"
+sudo "$AGENT_RELEASE/.venv/bin/python" "$AGENT_RELEASE/scripts/prepare_embedding_assets.py" \
+  --model bge-q8 --directory /opt/saudade-embedding --download
+sudo "$AGENT_RELEASE/.venv/bin/python" "$AGENT_RELEASE/scripts/prepare_embedding_assets.py" \
+  --model bge-q8 --directory /opt/saudade-embedding --verify-only
+ldd /opt/saudade-embedding/runtime/llama-b11829/llama-server
+/opt/saudade-embedding/runtime/llama-b11829/llama-server --version
+```
+
+`--download` 显式访问 GitHub/Hugging Face；下载与解包均校验固定资产，不在 Agent 请求中临时下载。
+`ldd` 不应有 `not found`，`--version` 应成功；不满足则先处理操作系统/CPU 依赖。
+模型、tokenizer 和 profile 须对服务与 Agent 可读、不可由运行账号改写。
+
+由管理员用 `openssl rand -hex 32` 生成独立认证值并私下保管。首次创建认证文件后，
+通过 `sudoedit` 填入该值；已有认证文件直接沿用，不覆盖：
+
+```sh
+if ! sudo test -e /etc/saudade/embedding-api-key; then
+  sudo install -o root -g root -m 0600 /dev/null /etc/saudade/embedding-api-key
+fi
+sudoedit /etc/saudade/embedding-api-key
+sudo test -s /etc/saudade/embedding-api-key
+```
+
+systemd 用 `LoadCredential` 交给动态服务账号，不使用无认证公网服务。安装模板，检查后启动：
+
+```sh
+sudo install -m 0644 "$AGENT_RELEASE/deploy/embedding/bge-q8.env.example" \
+  /etc/saudade/embedding-bge-q8.env
+sudo install -m 0644 "$AGENT_RELEASE/deploy/embedding/saudade-embedding@.service" /etc/systemd/system/
+sudo systemd-analyze verify /etc/systemd/system/saudade-embedding@bge-q8.service
+sudo systemctl daemon-reload
+sudo systemctl enable --now saudade-embedding@bge-q8
+systemctl status saudade-embedding@bge-q8
+```
+
+认证文件必须先存在且非空。端口为 loopback `18081`；模板限制一线程、一个并行请求，
+CPU/内存上限见单元，在目标机测量后调整，不能按网页在线人数加线程。
+使用相同认证值对 `/v1/embeddings` 发送短文本，确认返回有限数值的 512 维向量，
+再通过 `sudoedit /etc/saudade/agent-runtime.env` 加入：
+
+```dotenv
+RAG_HYBRID_ENABLED=true
+EMBEDDING_BASE_URL=http://127.0.0.1:18081/v1
+EMBEDDING_MODEL=bge-small-zh-v1.5-q8_0
+EMBEDDING_API_KEY=填写上述独立认证值
+EMBEDDING_PROFILE=/opt/saudade-embedding/bge-q8.json
+EMBEDDING_DIM=512
+EMBEDDING_BATCH_SIZE=1
+```
+
+Agent 配置中保存相同认证值，不让 Agent 读取 root 的原始 credential 文件。
+[可选 drop-in](../deploy/embedding/agent-local-bge.conf) 只声明服务顺序，可安装为
+`saudade-agent.service.d/20-local-embedding.conf`；不再加载第二份 Agent 环境文件。
+重新执行固定版本发布，脚本自动安装 tokenizer 可选依赖并在激活前校验 profile；
+启用 scheduler 时同时传 `DEPLOY_SCHEDULER=1`，避免后台进程沿用旧配置。
+
+真实检索后检查 `/health` 的 `rag_state=active`、`vector_missing=0` 和检索 trace。
+空语料、只启动服务或只调用 embedding API 均不能证明检索已生效。
+切换模型使用独立索引目录并重建；不删除确认、会话或业务数据。
 
 ## Qwen Q8 配置示例
 
