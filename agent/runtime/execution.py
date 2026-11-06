@@ -1,5 +1,6 @@
 """Compose a standard Agent subgraph with a durable approval boundary."""
 
+import time
 from functools import partial
 
 from langchain.agents import create_agent
@@ -12,12 +13,32 @@ from agent.runtime import approval, turn_commit
 from agent.runtime.approval_messages import ApprovalResumeMiddleware
 from agent.runtime.budget import BudgetExceeded
 from agent.runtime.compaction import ConversationCompaction
+from agent.runtime.control import model_options
 from agent.runtime.execution_state import ExecutionState, capture, restore
 from agent.runtime.memory_media import stage
 from agent.runtime.middleware import OrderedToolsMiddleware, SessionMiddleware
 from agent.runtime.recovery import restore_session
 from agent.runtime.results import TurnResult
-from models.errors import retryable_model_request
+from agent.runtime.turns import check_cancelled
+from models.errors import retry_after, retryable_model_request
+
+_RETRY_DELAY = 2.0
+
+
+def _retry_model(session, error):
+    check_cancelled(session.config)
+    if not retryable_model_request(error):
+        return False
+    delay = retry_after(error)
+    # ModelRetryMiddleware adds ±25% jitter. A longer server delay is left to
+    # explicit checkpoint continuation instead of making an early retry.
+    if delay is not None and delay > _RETRY_DELAY * 0.75:
+        return False
+    remaining = model_options(4.0).get("timeout", 4.0)
+    deadline = session.budget.clock.deadline
+    if deadline is not None:
+        remaining = min(remaining, deadline - time.monotonic())
+    return remaining >= 4.0
 
 
 class FrameworkExecution:
@@ -49,8 +70,9 @@ class FrameworkExecution:
         middleware.system_message = self.system
         return create_agent(self.session.model, tools=[], system_prompt=self.system,
                             middleware=[ModelRetryMiddleware(
-                                            max_retries=1, initial_delay=2, max_delay=3,
-                                            retry_on=retryable_model_request, on_failure="error"),
+                                            max_retries=1, initial_delay=_RETRY_DELAY, max_delay=3,
+                                            retry_on=partial(_retry_model, self.session),
+                                            on_failure="error"),
                                         OrderedToolsMiddleware(middleware),
                                         ApprovalResumeMiddleware(middleware),
                                         *self.session.middleware,
