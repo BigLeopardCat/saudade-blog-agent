@@ -119,10 +119,6 @@
     "c": 115,
     "lines": 299
   },
-  "tests/test_pg_retention.py::test_pg_retention": {
-    "c": 37,
-    "lines": 120
-  },
   "tests/test_query_expansion.py::test_query_expansion": {
     "c": 34,
     "lines": 86

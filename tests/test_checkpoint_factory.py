@@ -184,7 +184,9 @@ class _FakeConn:
         self.autocommit = autocommit
         self.lock_tries = 0
         self.unlocks = 0
+        self.lock_held = False
         self.usage_schema_upgrades = 0
+        self.input_schema_upgrades = 0
         self.drops: list[str] = []
 
     def execute(self, sql, params=None):
@@ -192,9 +194,11 @@ class _FakeConn:
         if "pg_try_advisory_lock" in s:
             self.lock_tries += 1
             val = self._got[0] if len(self._got) == 1 else self._got.pop(0)
+            self.lock_held = self.lock_held or val
             return _Res([{"got": val}])
         if "pg_advisory_unlock" in s:
             self.unlocks += 1
+            self.lock_held = False
             return _Res([])
         if "pg_index" in s:
             return _Res([{"name": n} for n in self._invalid])
@@ -203,6 +207,11 @@ class _FakeConn:
             return _Res([])
         if s == "ALTER TABLE agent_task_usage ALTER COLUMN conversation_id DROP NOT NULL":
             self.usage_schema_upgrades += 1
+            return _Res([])
+        if s.startswith(("ALTER TABLE agent_task_inputs ALTER COLUMN expires_at DROP NOT NULL",
+                         "UPDATE agent_task_inputs SET expires_at=NULL")):
+            assert self.lock_held, "input schema changes require the startup lock"
+            self.input_schema_upgrades += 1
             return _Res([])
         if s.startswith(("CREATE TABLE IF NOT EXISTS agent_deleted_threads",
                          "CREATE TABLE IF NOT EXISTS agent_task_inputs",
@@ -396,7 +405,7 @@ def test_checkpoint_factory():
         check("拨回空 ⇒ None（= 没挂 saver 时的行为）", _build_checkpointer() is None)
     finally:
         _S.checkpoint_dsn = _old_dsn
-    print("\n⑧ 会话坐标与脱敏（批 7 新增的三个纯函数——**不连库，本机就能判**）")
+    print("\n⑧ 会话坐标与脱敏")
     _ABSENT = (None, "", "   ", 0, "0", "None")
     check("会话 id 缺席的六种形态 ⇒ 全 None（**不编坐标**）",
           all(C.conversation_thread(x) is None for x in _ABSENT),
@@ -410,7 +419,7 @@ def test_checkpoint_factory():
           C.thread_id_for(7, 42, True))
     check("挂了 saver 但没会话 id ⇒ 退回每请求随机（**不编 conv_None**）",
           C.thread_id_for(7, None, True).startswith("user_7_"), C.thread_id_for(7, None, True))
-    check("没挂 saver ⇒ 每请求随机（= 20260903 以来的行为）",
+    check("没挂 saver ⇒ 每请求随机",
           C.thread_id_for(7, 42, False).startswith("user_7_"), C.thread_id_for(7, 42, False))
     check("随机的两条**不相同**（不是被改成常量线程）",
           C.thread_id_for(7, 42, False) != C.thread_id_for(7, 42, False))
@@ -420,7 +429,7 @@ def test_checkpoint_factory():
     check("没带口令的原样返回（不是把整条 DSN 都吃掉）",
           C.redact("postgresql://h:5432/db") == "postgresql://h:5432/db",
           C.redact("postgresql://h:5432/db"))
-    print("\n⑨ 建表抢锁：轮询、有预算、池必须 autocommit（20261018 停服之后新增）")
+    print("\n⑨ 建表抢锁：轮询、有预算、池必须 autocommit")
     _c, _s = _FakeConn([False, False, True]), _Saver()
     _tries = C.wait_for_setup_lock(_c, now=lambda: 0.0, sleep=lambda d: None)
     check("抢到锁 ⇒ 返回试了几次（3 次），且 setup 还没被调（那一层不归它管）",
@@ -489,7 +498,7 @@ def test_checkpoint_factory():
     _ckpt_src = (ROOT / "agent" / "checkpoint.py").read_text(encoding="utf-8")
     _lits = _advisory_literals(_ckpt_src)
     check("全仓只有两条 `advisory_*` 的 SQL 字面（抢锁 + 解锁）", len(_lits) == 2, str(_lits))
-    check("抢锁那条是 **`pg_try_advisory_lock`**（阻塞版就是 20261018 那次停服）",
+    check("抢锁使用非阻塞的 `pg_try_advisory_lock`",
           any("pg_try_advisory_lock" in s for s in _lits), str(_lits))
     check("解锁那条仍是 `pg_advisory_unlock`（`try` 版拿到的锁同样是会话级的）",
           any("pg_advisory_unlock" in s for s in _lits), str(_lits))
@@ -502,7 +511,7 @@ def test_checkpoint_factory():
     _commented = _ckpt_src + "\n# SELECT pg_advisory_lock(%s)\n"
     check("（反控）注释提到阻塞锁，不影响实际 SQL 字面检查",
           _advisory_literals(_commented) == _lits)
-    print("\n⑩ 指错库：`db_name` 的取值 + `CHECKPOINT_FORBID_DB` 硬闸（20261019 批 B）")
+    print("\n⑩ 数据库身份与 CHECKPOINT_FORBID_DB")
     check("URL 形 ⇒ 库名", C.db_name("postgresql://u:p@h:5432/ckpt") == "ckpt")
     check("带 `?params` 的照切（query 不是库名的一部分）",
           C.db_name("postgresql://u:p@h:5432/ckpt?sslmode=require") == "ckpt")
@@ -554,6 +563,7 @@ def test_background_usage_schema_upgrade_keeps_setup_lock():
     connection, saver = _FakeConn([True]), _Saver()
     C._setup_under_lock(saver, pool=_FakePool(connection))
     assert connection.usage_schema_upgrades == 1
+    assert connection.input_schema_upgrades == 2
     assert connection.lock_tries == connection.unlocks == saver.calls == 1
 
 
