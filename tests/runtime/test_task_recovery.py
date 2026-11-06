@@ -18,6 +18,11 @@ from agent.runtime.turns import AgentCancelled
 from eval.fixtures.ledger import Ledger
 from tools.result import ok
 
+pytestmark = pytest.mark.tool_scopes(
+    first="read.public",
+    second="read.public",
+)
+
 
 class Responses:
     max_tokens = 128

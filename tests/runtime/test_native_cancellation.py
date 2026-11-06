@@ -14,6 +14,11 @@ from agent.runtime.checkpoint_conversations import CheckpointConversationStore
 from agent.runtime.service import AgentRuntime
 from agent.runtime.turns import AgentCancelled
 
+pytestmark = pytest.mark.tool_scopes(
+    first="read.public",
+    second="read.public",
+)
+
 
 def config(stop_event):
     return {"configurable": {"thread_id": "conv_7", "conversation_id": 7,

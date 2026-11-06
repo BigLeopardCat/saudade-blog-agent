@@ -23,6 +23,10 @@ from agent.runtime.message_content import estimate_tokens
 from agent.runtime.results import TurnResult
 from tools import base
 
+pytestmark = pytest.mark.tool_scopes(
+    fixture_read="read.public",
+)
+
 
 def test_image_current_input_is_multimodal_but_saved_and_replayed_history_is_small():
     url = "data:image/png;base64," + "A" * 32000

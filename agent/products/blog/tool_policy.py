@@ -6,7 +6,7 @@ from langchain.agents.middleware import AgentMiddleware
 from langchain_core.messages import AIMessage, ToolMessage
 from langgraph.types import Command
 
-from agent.authz import TOOL_SCOPE, WRITE_SCOPES, check, manifest_gaps
+from agent.authz import SCOPE_READ_PUBLIC, TOOL_SCOPE, WRITE_SCOPES, check, manifest_gaps
 from agent.domains import article_editor, browser, device_actions
 from agent.products.blog.confirmation import presentation
 from agent.products.blog.read_tools import scoped_reads_enabled
@@ -53,6 +53,8 @@ class BlogToolMiddleware(AgentMiddleware):
         scope = TOOL_SCOPE.get(name)
         if scope is None:
             return False
+        if scope == SCOPE_READ_PUBLIC:
+            return session.principal is None or check(session.principal, name).allowed
         if not check(session.principal, name).allowed:
             return False
         uid = ((session.config or {}).get("configurable") or {}).get("user_id")

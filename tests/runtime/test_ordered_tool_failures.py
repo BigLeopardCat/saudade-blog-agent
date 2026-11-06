@@ -14,6 +14,10 @@ from agent.runtime.service import AgentRuntime
 from eval.own_fixtures import favorite_backend
 from tools.result import ToolResult, ok
 
+pytestmark = pytest.mark.tool_scopes(
+    check_input="read.public",
+)
+
 
 @pytest.mark.parametrize("kind", ["invalid_args", "unavailable", "not_found"])
 def test_failed_prerequisite_does_not_prepare_the_next_operation_until_repaired(kind):

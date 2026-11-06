@@ -16,6 +16,12 @@ from agent.runtime.checkpoint_conversations import CheckpointConversationStore
 from agent.runtime.service import AgentRuntime
 from agent.runtime.task_inputs import InputConflict, TaskInputEvent, binding
 
+pytestmark = pytest.mark.tool_scopes(
+    lookup="read.public",
+    prepare_fixture="read.public",
+    terminal_read="read.public",
+)
+
 
 def config():
     return {"configurable": {"thread_id": "conv_42", "conversation_id": 42,

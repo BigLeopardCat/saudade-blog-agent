@@ -21,6 +21,11 @@ from agent.runtime.service import AgentRuntime
 from agent.runtime.turns import AgentCancelled
 from tools.result import ok
 
+pytestmark = pytest.mark.tool_scopes(
+    read_alpha="read.public",
+    read_beta="read.public",
+)
+
 
 class Model:
     max_tokens = 64

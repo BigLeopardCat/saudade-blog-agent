@@ -259,7 +259,7 @@ def test_unclassified_tool_fails_menu_registration(domain):
 
 
 @pytest.mark.parametrize("name", ["prepare_favorite_change", "prepare_account_mute",
-                                 "navigate_page", "write_todos", "get_blog_info"])
+                                 "navigate_page", "write_todos"])
 @pytest.mark.parametrize("current", [session("zako"), session(source=SOURCE_BODY),
                                      session(bound_uid=8)])
 def test_scope_checks_cover_preparations_browser_and_internal_tools(current, name):

@@ -88,6 +88,7 @@ packages = ["agent", "config", "models", "rag", "tools", "utils"]
 [tool.pytest.ini_options]
 # Offline tests use mocks or their own temporary loopback service.
 testpaths = ["tests"]
+markers = ["tool_scopes(**scopes): explicit permission declarations for synthetic tools"]
 addopts = "--disable-socket --allow-unix-socket"
 # CI 显式设置并行度；本地默认串行。
 timeout = 300

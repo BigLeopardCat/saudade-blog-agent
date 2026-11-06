@@ -15,6 +15,10 @@ from agent.runtime.checkpoint_conversations import CheckpointConversationStore
 from agent.runtime.service import AgentRuntime
 from agent.transport import iter_transport_events
 
+pytestmark = pytest.mark.tool_scopes(
+    after_navigation="read.public",
+)
+
 
 @pytest.fixture
 def navigation():

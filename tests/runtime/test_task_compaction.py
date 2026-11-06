@@ -19,6 +19,10 @@ from agent.runtime.turns import AgentCancelled
 from config.settings import settings
 from tools import base
 
+pytestmark = pytest.mark.tool_scopes(
+    read_material="read.public",
+)
+
 
 @pytest.mark.parametrize("interrupt", [False, True])
 def test_multiple_task_compactions_survive_reload_and_do_not_restore_covered_observations(

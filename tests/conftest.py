@@ -201,8 +201,15 @@ def service_workers(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
-def _scripted_chat_transports(monkeypatch):
-    """Run old I/O spies through real framework scheduling and model callbacks."""
+def _scripted_chat_transports(request, monkeypatch):
+    """Use standard framework transports and explicitly declared fixture tool scopes."""
+    from agent import authz
+
+    marker = request.node.get_closest_marker("tool_scopes")
+    if marker:
+        for name, scope in marker.kwargs.items():
+            assert scope in authz.ALL_SCOPES
+            monkeypatch.setitem(authz.TOOL_SCOPE, name, scope)
     from _framework_model import adapt, tools
 
     from agent.runtime.session import ToolSession

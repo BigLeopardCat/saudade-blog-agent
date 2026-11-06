@@ -22,6 +22,10 @@ from models.llm import get_llm
 from models.transport import ModelIO
 from tools.result import ok
 
+pytestmark = pytest.mark.tool_scopes(
+    fixture_read="read.public",
+)
+
 
 @pytest.mark.parametrize("controlled", [True, False])
 def test_sdk_cancel_preserves_completed_read_and_retry_wire(monkeypatch, controlled):

@@ -30,6 +30,10 @@ from agent.runtime.service import AgentRuntime
 from agent.transport import iter_transport_events
 from tools import base
 
+pytestmark = pytest.mark.tool_scopes(
+    inspect_diagram="read.public",
+)
+
 
 def call(name, identifier, **args):
     return {"name": name, "id": identifier, "args": args, "type": "tool_call"}

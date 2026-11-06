@@ -17,6 +17,10 @@ from agent.runtime.service import AgentRuntime
 from agent.runtime.session import ToolSession
 from agent.runtime.turns import AgentCancelled
 
+pytestmark = pytest.mark.tool_scopes(
+    task_effect="read.public",
+)
+
 
 def call(name, ident):
     return {"name": name, "args": {}, "id": ident}
