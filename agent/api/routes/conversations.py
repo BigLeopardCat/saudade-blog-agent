@@ -1,8 +1,9 @@
 """Authenticated conversation cleanup and signed confirmation cancellation."""
 
 import logging
+from typing import Annotated
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Path, Request
 from pydantic import BaseModel, Field
 
 from agent import checkpoint, confirm
@@ -14,9 +15,12 @@ from agent.runtime.checkpoint_store import ConversationDeleted
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
+# Conversation IDs are positive signed i32 values in the Rust host.
+ConversationId = Annotated[int, Path(gt=0, le=2_147_483_647)]
+
 
 @router.delete("/checkpoint/{conversation_id}")
-async def checkpoint_delete(conversation_id: str, request: Request, uid: int = 0):
+async def checkpoint_delete(conversation_id: ConversationId, request: Request, uid: int = 0):
     """Delete checkpoint state under the authenticated host cleanup protocol."""
     principal = _resolve_principal(request, uid)
     saver = checkpoint.live_saver(request.app.state.runtime)
@@ -41,7 +45,7 @@ class DropTurnReq(BaseModel):
 
 
 @router.post("/checkpoint/{conversation_id}/drop_turn")
-async def checkpoint_drop_turn(conversation_id: str, req: DropTurnReq, request: Request):
+async def checkpoint_drop_turn(conversation_id: ConversationId, req: DropTurnReq, request: Request):
     """Remove only the matching last user turn and verify the resulting checkpoint."""
     principal = _resolve_principal(request, req.uid)
     out = await require_workers(request).run(
