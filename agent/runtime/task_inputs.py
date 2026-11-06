@@ -8,7 +8,7 @@ from langchain_core.messages import HumanMessage
 
 from agent.runtime import task_scope
 from agent.runtime.message_content import text_content
-from agent.runtime.task_input_store import MemoryInputs, PostgresInputs
+from agent.runtime.task_input_store import TERMINAL_RETENTION_SECONDS, MemoryInputs, PostgresInputs
 
 MAX_INPUTS = 8
 MAX_TEXT = 2000
@@ -43,13 +43,12 @@ class TaskInputs:
                          for message in reversed(task.get("input", []))
                          if isinstance(message, HumanMessage)), "")
         initial = {"scope": task["scope"], "phase": "new", "inputs": [],
-                   "original_text": original,
-                   "expires": time.time() + 24 * 3600}
-        with self.storage.edit(task["id"], initial) as state:
+                   "original_text": original, "created_at": time.time(), "expires": None}
+        with self.storage.edit(task["id"], None if resume else initial) as state:
             self._check(state, task["scope"])
             if state["phase"] != "new" and not resume:
                 raise InputConflict("task_id_already_used")
-            if state["phase"] == "completed":
+            if state["phase"] in {"completed", "superseded"}:
                 raise InputConflict("task_finished")
             if state["phase"] != "finishing":
                 state["phase"] = "running"
@@ -99,6 +98,8 @@ class TaskInputs:
             self._check(state, task["scope"])
             state["phase"] = ("awaiting_confirmation" if awaiting_confirmation
                               else "paused" if paused else "completed")
+            state["expires"] = (time.time() + TERMINAL_RETENTION_SECONDS
+                                if state["phase"] == "completed" else None)
             for item in state["inputs"]:
                 if item["id"] in seen:
                     item["status"] = "applied"

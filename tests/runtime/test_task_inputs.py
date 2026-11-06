@@ -269,3 +269,75 @@ def test_conversation_deletion_removes_its_inputs_without_affecting_other_thread
     with pytest.raises(InputConflict):
         selected.inputs.read("one",scope)
     assert selected.inputs.read("other",{**scope,"conversation_id":43})["phase"] == "running"
+
+
+def test_paused_task_preserves_accepted_steering_after_a_day(monkeypatch):
+    import time
+
+    from agent.runtime.control import AgentCancelled
+
+    cfg, saver = config(), InMemorySaver()
+    scope = binding(cfg["configurable"]["principal"], 42)
+    selected = None
+
+    def interrupted(_):
+        selected.inputs.submit("long-pause", scope, "drafts", "只处理草稿")
+        raise AgentCancelled()
+
+    model = Model(interrupted, AIMessage(content="只处理草稿，未执行其他操作。"))
+    selected = runtime(model, saver=saver)
+    with pytest.raises(AgentCancelled):
+        list(selected.stream_events({"task_id": "long-pause", "messages": [
+            HumanMessage(content="检查文章")]}, cfg))
+    later = time.time() + 2 * 86400
+    monkeypatch.setattr(time, "time", lambda: later)
+    rebuilt = runtime(model, saver=saver)
+    result = list(rebuilt.stream_events({"resume_task": "long-pause"}, cfg))[-1]
+    assert "只处理草稿" in result.reply
+    assert "只处理草稿" in str(model.prompts[-1])
+    assert rebuilt.inputs.read("long-pause", scope)["inputs"][0]["status"] == "applied"
+
+
+def test_missing_accepted_input_storage_refuses_resume_before_model_or_tools():
+    from agent.runtime.control import AgentCancelled
+
+    cfg, saver = config(), InMemorySaver()
+
+    def interrupted(_):
+        raise AgentCancelled()
+
+    selected = runtime(Model(interrupted), saver=saver)
+    with pytest.raises(AgentCancelled):
+        list(selected.stream_events({"task_id": "lost-input", "messages": [
+            HumanMessage(content="处理任务")]}, cfg))
+    selected.inputs.delete_task("lost-input")
+    model = Model(AIMessage(content="不应执行"))
+    rebuilt = runtime(model, saver=saver)
+    result = list(rebuilt.stream_events({"resume_task": "lost-input"}, cfg))[-1]
+    assert result.execution["blocked"] == [{"reason": "task_input_unavailable"}]
+    assert model.prompts == []
+    assert rebuilt.store.load(cfg).run["id"] == "lost-input"
+
+
+@pytest.mark.parametrize("phase", ["paused", "awaiting_confirmation", "completed"])
+def test_only_terminal_inboxes_expire_and_completion_starts_the_retention_clock(monkeypatch, phase):
+    import time
+
+    from agent.runtime.task_input_store import MemoryInputs
+    from agent.runtime.task_inputs import TaskInputs
+
+    now = [1000.0]
+    monkeypatch.setattr(time, "time", lambda: now[0])
+    inbox = TaskInputs(MemoryInputs())
+    task = {"id": "retained", "scope": binding(config()["configurable"]["principal"], 42)}
+    inbox.open(task)
+    now[0] += 2 * 86400
+    inbox.finish(task, [], paused=phase == "paused",
+                 awaiting_confirmation=phase == "awaiting_confirmation")
+    assert inbox.read(task["id"], task["scope"])["phase"] == phase
+    now[0] += 86401
+    if phase == "completed":
+        with pytest.raises(InputConflict, match="not_available"):
+            inbox.read(task["id"], task["scope"])
+    else:
+        assert inbox.read(task["id"], task["scope"])["phase"] == phase

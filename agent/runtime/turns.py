@@ -30,6 +30,13 @@ def check_cancelled(config, *, check_budget=True):
         raise AgentCancelled()
 
 
+def conversation_lock_key(thread_id):
+    """Stable key shared by runtime turns and PostgreSQL maintenance."""
+    return int.from_bytes(hashlib.blake2b(
+        ("saudade.hybrid.turn:" + thread_id).encode(), digest_size=8).digest(),
+        "big", signed=True)
+
+
 def _wait(config, deadline):
     check_cancelled(config)
     remaining = deadline - time.monotonic()
@@ -75,10 +82,7 @@ def _postgres_turn(saver, thread_id, config, deadline):
     conninfo = getattr(saver.conn, "conninfo", None)
     if not conninfo:
         raise RuntimeError("PostgreSQL 会话锁要求 saver 使用带 conninfo 的连接池")
-    # Persisted namespace: keep stable while old and new workers coexist.
-    key = int.from_bytes(hashlib.blake2b(
-        ("saudade.hybrid.turn:" + thread_id).encode(), digest_size=8).digest(),
-        "big", signed=True)
+    key = conversation_lock_key(thread_id)
     with psycopg.connect(conninfo, autocommit=True, connect_timeout=5) as conn:
         acquired = False
         try:
