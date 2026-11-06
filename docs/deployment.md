@@ -11,9 +11,26 @@ bash scripts/deploy_release.sh COMMIT_SHA /srv/saudade-agent \
   /etc/saudade/agent-runtime.env /var/lib/saudade-agent/data
 ```
 
+## 配置来源
+
+| 场景 | 配置入口 |
+| --- | --- |
+| 本地开发 | 从 `.env.example` 创建自己的 `.env`；Pydantic Settings 读取，进程环境优先 |
+| 生产 HTTP、scheduler、维护任务 | systemd `EnvironmentFile=/etc/saudade/agent-runtime.env`；设置 `SAUDADE_IGNORE_ENV_FILE=1`，不再读取工作目录 `.env` |
+| BGE 推理服务 | `/etc/saudade/embedding-<profile>.env`，仅该独立服务读取 |
+| 博客发布工具 | 部署账号的 `~/.config/saudade/deploy.env`；与 Agent 配置和模型 key 无关 |
+
+运行配置由 root 拥有、服务组可读（0640），不复制或链接到开发工作树。修改 OpenCode key
+只更新 Agent runtime 文件，随后重启 HTTP 和 scheduler；`/ready`、实际版本及小批量真实请求
+分别验证启动、发布与供应商可用性。不要在日志中输出配置内容或密钥。
+
+集成部署使用博客仓的 `scripts/deploy/render_service_isolation.py` 生成完整服务单元和共享
+沙箱设置，安装前用 `systemd-analyze verify` 检查。旧的覆盖文件须备份并移除，不能继续用
+额外的字典序覆盖补偿错误来源。保留站点明确需要的资源限制及可选 BGE 服务依赖。
+
 配置 `EMBEDDING_PROFILE` 时，发布脚本自动安装锁定的 tokenizer 可选依赖并在激活前加载 profile 校验；也可显式设置 `DEPLOY_EMBEDDING_TOKENIZER=1`。检索验收应确认 `rag_state=active` 和 `vector_missing=0`。
 
-部署账号拥有 release root 和重启权限；运行账号 `saudade-agent` 只读发布代码、读取自己的配置、写 `/var/lib/saudade-agent` 与缓存，没有 sudo 权限。发布时设置 `DEPLOY_SERVICE_GROUP=saudade-agent`、`DEPLOY_RUNTIME_STATE=/var/lib/saudade-agent`。嵌入配置合并到唯一 runtime.env；用最后排序的 `zz-runtime-env.conf` 清空旧 EnvironmentFile 列表，防止遗留 local-embedding.conf 覆盖状态路径。服务单元保留日志和停机超时；监听地址固定为 loopback，端口和 worker 数可用进程环境变量 `AGENT_PORT`、`AGENT_WORKERS` 指定。默认单进程，由应用自身限制并发请求；增加进程前按内存、数据库连接和模型额度测量容量。多进程健康检查等待默认30秒，可由 `AGENT_WORKER_HEALTHCHECK_SECONDS` 调整。这些启动参数需由服务管理器注入，应用的 `.env` 不负责配置 Uvicorn。
+部署账号拥有 release root 和重启权限；运行账号 `saudade-agent` 只读发布代码、读取自己的配置、写 `/var/lib/saudade-agent` 与缓存，没有 sudo 权限。发布时设置 `DEPLOY_SERVICE_GROUP=saudade-agent`、`DEPLOY_RUNTIME_STATE=/var/lib/saudade-agent`。生产应用配置只从 `/etc/saudade/agent-runtime.env` 注入；HTTP、scheduler 和维护任务共用这一来源。可选 BGE drop-in 只声明服务依赖，不再追加应用环境文件。服务单元保留日志和停机超时；监听地址固定为 loopback，端口和 worker 数可用进程环境变量 `AGENT_PORT`、`AGENT_WORKERS` 指定。默认单进程，由应用自身限制并发请求；增加进程前按内存、数据库连接和模型额度测量容量。多进程健康检查等待默认30秒，可由 `AGENT_WORKER_HEALTHCHECK_SECONDS` 调整。这些启动参数需由服务管理器注入，应用的 `.env` 不负责配置 Uvicorn。
 
 脚本用 flock 串行化发布，只接收 Git 中存在的提交，使用 `git archive` 排除工作区文件和凭据。依赖安装、导入检查完成后才原子切换 current；探活同时核对 `/ready` 和预期构建 SHA。失败恢复上一版本并重启，未自动删除旧版本或用户数据。首次部署没有上一版本，需由运维处理失败。
 

@@ -5,14 +5,26 @@ Wants=network-online.target
 
 [Service]
 Type=exec
-User=saudade
-Group=saudade
+User=saudade-agent
+Group=saudade-agent
+EnvironmentFile=/etc/saudade/agent-runtime.env
+Environment=SAUDADE_IGNORE_ENV_FILE=1
+Environment=HOME=/var/lib/saudade-agent
+Environment=XDG_CACHE_HOME=/var/cache/saudade-agent
+Environment=PYTHONDONTWRITEBYTECODE=1
 WorkingDirectory=/srv/saudade-agent/current
 ExecStart=/srv/saudade-agent/current/scripts/serve_scheduler.sh
 Restart=on-failure
 RestartSec=5
 TimeoutStopSec=120
 KillMode=control-group
+StateDirectory=saudade-agent
+StateDirectoryMode=0750
+CacheDirectory=saudade-agent
+CacheDirectoryMode=0750
+ReadWritePaths=/var/lib/saudade-agent /var/cache/saudade-agent
+ProtectSystem=strict
+ProtectHome=true
 NoNewPrivileges=true
 PrivateTmp=true
 UMask=0077
