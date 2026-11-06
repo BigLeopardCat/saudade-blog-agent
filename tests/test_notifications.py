@@ -193,3 +193,21 @@ def test_replacement_across_domains_revokes_only_the_previous_card(
         assert all(request.method == "GET" for request in notifications["requests"])
     finally:
         store.close()
+
+
+def test_selection_facts_require_complete_scope_validation(notifications, monkeypatch):
+    from agent.runtime import tool_evidence
+
+    events = []
+    monkeypatch.setattr(tool_evidence, "record",
+                        lambda node, event, **fields: events.append(fields))
+    with tool_evidence.scope({"id": "notification-preparation"}, 2):
+        prepare()
+    facts = [e for e in events if "scope" in (e.get("facts") or {})]
+    assert len(facts) == 1 and facts[0]["facts"] == {"scope": "all_unread", "unreadCount": 2}
+    assert facts[0]["call_id"] == "notification-preparation" and facts[0]["round"] == 2
+    events.clear()
+    notifications["hidden_unread"] = 1
+    with tool_evidence.scope({"id": "incomplete"}, 3):
+        prepare()
+    assert not [e for e in events if "scope" in (e.get("facts") or {})]

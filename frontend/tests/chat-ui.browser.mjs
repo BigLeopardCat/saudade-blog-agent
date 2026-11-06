@@ -96,12 +96,13 @@ const server = createServer(async (req, res) => {
           res.end(frame('text', '已经到留言板了。') + frame('done', {}));
           return;
         }
-        if (mode === 'agent-pause') {
-          const id=body.task_id;
+        if (mode === 'agent-pause' || mode === 'provider-pause') {
+          const id=taskId;
           inputTasks.set(id,{agentPaused:true,phase:'paused',inputs:[]});
           managedTasks.paused.items=[{task_id:id,conversation_id:1,title:body.message}];
           res.end(frame('task_input',{task_id:id,ready:false,phase:'paused',inputs:[]})
-            +frame('text','已挂起，稍后可以从保存的进度继续。')+frame('done',{}));return;
+            +(mode === 'provider-pause' ? frame('error','模型服务暂时不可用。')
+              : frame('text','已挂起，稍后可以从保存的进度继续。')+frame('done',{})));return;
         }
         if (body.resume_task && inputTasks.get(body.resume_task)?.agentPaused) {
           inputTasks.get(body.resume_task).phase='completed';managedTasks.paused.items=[];
@@ -1335,6 +1336,28 @@ try {
   assert.equal(resumedRequest.resume_task,heldRequest.task_id);
   assert.ok((await page.locator('#chat-messages').textContent()).includes('继续讲零知识证明。'));
   passed('model-requested pause exposes Continue and resumes the same task');
+
+  await reset();
+  await send('查询后遇到供应商失败', 'provider-pause');
+  await idle();
+  await page.locator('.chat-resume-btn').waitFor({state:'visible'});
+  const failedTask=requests.filter(r=>r.path==='/api/chat/stream').at(-1).body.task_id;
+  const savedFailures=()=>page.evaluate(()=>JSON.parse(localStorage.getItem('saudade-chat-failed')));
+  assert.equal((await savedFailures()).length,1);
+  assert.equal((await savedFailures())[0].kind,'stopped');
+  nextMode='provider-pause';
+  await page.locator('.chat-resume-btn').click();
+  await idle();
+  await page.locator('.chat-resume-btn').waitFor({state:'visible'});
+  assert.equal((await savedFailures()).length,1);
+  assert.equal((await savedFailures())[0].task_id,failedTask);
+  await page.locator('.chat-resume-btn').click();
+  await idle();
+  await page.evaluate(()=>window.__chatTest.ctx.ui.refreshComposer());
+  assert.equal(await page.locator('.chat-msg-failed-note').count(),0);
+  assert.equal(await savedFailures(),null);
+  assert.equal(requests.filter(r=>r.path==='/api/chat/stream').at(-1).body.resume_task,failedTask);
+  passed('repeated provider failures keep one pause card and successful resume clears it');
 
   console.log(JSON.stringify({ passed: checks, screenshots: output, requests: requests.length }, null, 2));
 } catch (error) {
