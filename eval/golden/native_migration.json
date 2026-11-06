@@ -1,9 +1,9 @@
 {
   "legacy_sha256": "6a1edaaf1d625b7723ef9d07cd94b5287e95c363206c10a1f5edfa627c16ec3e",
-  "current_sha256": "d5f957ac0c1363b17b9b412f1bb5d3922dbe820da8f960a3a84cee73d379ab23",
+  "current_sha256": "7cf14981d2bdbdacb3ac28fa3ee9f90f4976481b8c8911582af81acd8357d589",
   "equivalence": "scenario families only; pass rates across suites are not comparable",
   "legacy_cases": 193,
-  "current_cases": 171,
+  "current_cases": 172,
   "counts": {
     "family_replaced": 159,
     "deferred": 19,

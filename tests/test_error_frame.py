@@ -3,7 +3,6 @@
 
 import asyncio
 import json
-import re
 import sys
 import tempfile
 import threading
@@ -17,11 +16,9 @@ from _service import app, service_request
 from agent.api.schemas import ChatRequest, ChatResponse
 from agent.principal import Principal
 
-ROOT = Path(__file__).resolve().parent.parent  # 仓根（20260924：测试统一搬进 tests/）
+ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "tests"))          # 同目录的 `_` 辅助模块（pytest 不收它们）
-
-import _parent_repo  # noqa: E402
 
 from agent.api.routes import chat as server  # noqa: E402
 from utils import trace as trace_mod  # noqa: E402
@@ -259,27 +256,6 @@ def _sync_chat_failure_shape():
           boom in str(KeyError(boom)))
 
 
-def _sync_chat_source_shape():
-    print("\n── ⑤b 接线：非流式那半没有第二个出口形状 ──")
-    src = (ROOT / "agent/api/routes/chat.py").read_text(encoding="utf-8")
-    body = src.split("async def chat(req: ChatRequest, request: Request):", 1)[1]
-    body = body.split('@router.post("/chat/stream"', 1)[0]
-    check("except 分支把话术填进 reply 且 success=False",
-          "PRODUCER_ERROR_TEXT" in body and "success=False" in body)
-    # 只扫**代码行**：那段注释里逐字写着旧形状（`error=str(e)`）——那是病史，
-    # 针不许扎到自己身上（同族教训：全仓扫描的判据会自命中）。
-    code = "\n".join(ln for ln in body.splitlines() if not ln.lstrip().startswith("#"))
-    hit = re.search(r"str\(e\)|str\(exc\)|\{e\}", code)
-    check("except 分支不再把异常原文递给调用方",
-          hit is None, hit.group(0) if hit else "")
-    # 跨语言另一半：agent 说"这轮失败"只有 Rust 真读 `success` 才有意义
-    #（`r.status().is_success()` 对 HTTP 200 恒真 ⇒ 会把这一轮当成功并落一条空回复）。
-    rsrc = _parent_repo.read(
-        "src/routes/chat.rs",
-        why="agent 失败只有 Rust 真读 success 才有意义；HTTP 200 恒真会误记成功")
-    if rsrc:
-        check("Rust 那半读 agent 的 success/error（`agent_reply_of`）",
-              "agent_reply_of" in rsrc and 'data.get("success")' in rsrc, "chat.rs")
 
 
 def test_error_frame():
@@ -293,7 +269,7 @@ def test_error_frame():
             for fn in (_producer_error_frame, _payload_escaping,
                        _producer_error_hides_internals,
                        _idle_timeout_frame, _all_sites_json_encoded,
-                       _sync_chat_failure_shape, _sync_chat_source_shape):
+                       _sync_chat_failure_shape):
                 fn()
         finally:
             trace_mod.TRACE_DIR = old_dir

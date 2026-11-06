@@ -110,22 +110,30 @@ def _page(kind, config, status, keyword, page, limit, item_id, **filters):
 
 @tool
 def get_moderation_status(config: RunnableConfig) -> object:
-    """查询河灯留言的审核总数与人工状态、AI判定分布，仅取数据库计数。
+    """一次查询全部河灯留言及未删除文章评论的审核总数、最终状态和AI判定分布，只取计数。
 
-    AI判定和最终审核状态是两个独立维度；查看具体记录使用 list_admin_board。
+    汇总问题用本工具，无需遍历记录或逐个状态查列表。AI判定与最终状态是独立维度，
+    未经过AI不等于人工已审核。需要具体记录再用 list_admin_board/list_admin_comments。
     """
     if not _allowed(config):
         return base.unavailable("需要已验签的管理员身份，无法读取审核汇总。")
     data = base._admin_get("/api/protected/moderation/summary", config)
     if isinstance(data, base.ToolResult):
         return data
-    if (not isinstance(data, dict) or any(
-            type(data.get(key)) is not int or data[key] < 0 for key in _COUNTS)
-            or data["pending"] + data["passed"] + data["rejected"] != data["total"]
-            or sum(data[key] for key in _COUNTS[4:]) != data["total"]):
+    result = {}
+    for name, scope in (("board", "all"), ("comments", "not_deleted")):
+        counts = data.get(name) if isinstance(data, dict) else None
+        if (not isinstance(counts, dict) or counts.get("scope") != scope or any(
+                type(counts.get(key)) is not int or counts[key] < 0 for key in _COUNTS)
+                or sum(counts[key] for key in _COUNTS[1:4]) != counts["total"]
+                or sum(counts[key] for key in _COUNTS[4:]) != counts["total"]):
+            return base.unavailable("审核汇总缺少有效范围、计数或分布与总数不一致。")
+        result[name] = {"scope": scope,
+                        "finalStatus": {key: counts[key] for key in _COUNTS[:4]},
+                        "aiDecision": {key: counts[key] for key in _COUNTS[4:]}}
+    if set(data) != {"board", "comments"}:
         return base.unavailable("审核汇总缺少有效计数或分布与总数不一致。")
-    return _render({"finalStatus": {key: data[key] for key in _COUNTS[:4]},
-                    "aiDecision": {key: data[key] for key in _COUNTS[4:]}})
+    return _render(result)
 
 
 @tool

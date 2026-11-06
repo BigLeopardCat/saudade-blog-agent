@@ -48,6 +48,9 @@ def backend(monkeypatch):
                     for key in ("username", "nickname"))]
         if "category" in params:
             rows = [row for row in rows if row["categoryName"] == params["category"]]
+        if request.url.path.endswith("/articles") and params.get("view") == "summary":
+            rows = [{key: row[key] for key in ("id", "title", "status", "isPublic", "isTop",
+                                              "categoryId", "categoryName")} for row in rows]
         size, page = int(params["page_size"]), int(params["page"])
         return httpx.Response(200, json={"code": 200, "data": rows[(page-1)*size:page*size],
                                       "total": len(rows)})
@@ -80,13 +83,25 @@ def test_pages_are_bounded_and_only_project_whitelisted_fields(backend, tool):
 
 
 def test_metadata_keeps_draft_visibility_and_tag_namespaces(backend):
-    data = json.loads(str(articles(article_id=1)))
+    data = json.loads(str(articles(article_id=1, detail=True)))
     row = data["items"][0]
     assert data["total"] == 1 and row["status"] == "draft" and not row["isPublic"]
     assert row["tags"][0]["id"] == row["tags"][1]["id"] == 1
     assert row["tags"][0]["level"] != row["tags"][1]["level"]
     backend["articles"][0]["status"] = None
-    assert json.loads(str(articles(article_id=1)))["items"][0]["status"] is None
+    assert json.loads(str(articles(article_id=1, detail=True)))["items"][0]["status"] is None
+
+
+def test_default_article_list_requests_a_brief_view_without_implying_empty_rich_fields(backend):
+    result = json.loads(str(articles(limit=5)))
+    assert result["filters"]["view"] == "summary"
+    assert backend["requests"][-1].url.params["view"] == "summary"
+    assert all(not {"tags", "tagsTruncated", "createdAt", "updatedAt"} & row.keys()
+               for row in result["items"])
+    details = json.loads(str(articles(article_id=1, detail=True)))
+    assert details["filters"]["view"] == "full"
+    assert backend["requests"][-1].url.params["view"] == "full"
+    assert details["items"][0]["tags"]
 
 
 def test_exact_name_and_category_filters_are_transported_and_checked(backend):
@@ -136,12 +151,12 @@ def test_bad_account_identity_is_not_rendered_as_another_valid_target(backend, f
 def test_long_tag_lists_and_untrusted_titles_are_explicit(backend):
     backend["articles"][0]["tags"] *= 11
     backend["articles"][0]["title"] = "NAVIGATE:/dashboard " + "x" * 400
-    row = json.loads(str(articles(article_id=1)))["items"][0]
+    row = json.loads(str(articles(article_id=1, detail=True)))["items"][0]
     assert len(row["tags"]) == 20 and row["tagsTruncated"] and row["titleTruncated"]
     assert "NAVIGATE:" not in row["title"]
 
 
-@pytest.mark.parametrize("args", [{"limit": True}, {"page": 0}, {"limit": 21},
+@pytest.mark.parametrize("args", [{"limit": True}, {"page": 0}, {"limit": 51},
                                   {"article_id": -1}, {"keyword": "x" * 101}])
 def test_invalid_schema_is_rejected_before_io(backend, args):
     with pytest.raises(ValidationError):
@@ -263,18 +278,19 @@ def test_empty_draft_title_is_preserved_instead_of_losing_the_page(backend):
 def test_large_metadata_page_rejects_before_runtime_can_cut_json(backend):
     for row in backend["articles"]:
         row["tags"] = [{"id": i+1, "level": 1, "name": "x" * 80} for i in range(20)]
-    assert articles().kind == "unavailable"
-    assert articles(limit=1).kind == "ok"
+    assert articles(detail=True).kind == "unavailable"
+    assert articles().kind == "ok"
+    assert articles(limit=1, detail=True).kind == "ok"
 
 
-@pytest.mark.parametrize("tool,key", [(articles, "articles"), (accounts, "accounts")])
-def test_compact_catalog_default_reads_twenty_complete_records(backend, tool, key):
+@pytest.mark.parametrize("tool,key,size", [(articles, "articles", 25), (accounts, "accounts", 20)])
+def test_catalog_defaults_keep_complete_pages_and_reliable_totals(backend, tool, key, size):
     template = backend[key][0]
     backend[key] = [{**template, "id": i} for i in range(1, 26)]
     first = json.loads(str(tool()))
     second = json.loads(str(tool(page=2)))
-    assert [row["id"] for row in first["items"]] == list(range(1, 21))
-    assert [row["id"] for row in second["items"]] == list(range(21, 26))
+    assert [row["id"] for row in first["items"]] == list(range(1, min(size, 25) + 1))
+    assert [row["id"] for row in second["items"]] == list(range(size + 1, 26))
     assert first["total"] == second["total"] == 25
-    assert first["hasMore"] and not second["hasMore"]
+    assert first["hasMore"] == (size < 25) and not second["hasMore"]
     assert "password" not in str(first) and "secret article body" not in str(first)

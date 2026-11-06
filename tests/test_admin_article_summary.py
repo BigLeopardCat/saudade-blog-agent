@@ -14,7 +14,7 @@ def test_status_summary_counts_only_the_returned_page(backend):
     template = backend["articles"][0]
     backend["articles"] = [{**template, "id": number, "tags": [], "status": status}
                            for number, status in enumerate(statuses, 1)]
-    first, second = (json.loads(str(articles(page=page))) for page in (1, 2))
+    first, second = (json.loads(str(articles(page=page, limit=20))) for page in (1, 2))
     assert first["total"] == second["total"] == 25
     assert first["hasMore"] and not second["hasMore"]
     assert first["returned_summary"] == {
