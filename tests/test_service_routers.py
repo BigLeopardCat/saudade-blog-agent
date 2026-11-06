@@ -27,7 +27,6 @@ SERVICE_ENDPOINTS = [("POST", "/review"), ("POST", "/graph/query"), *BUILD_ENDPO
 @pytest.fixture
 def client(monkeypatch):
     monkeypatch.setattr(settings, "agent_assertion_secret", secrets.token_hex(32))
-    monkeypatch.setattr(settings, "agent_require_assertion", True)
     # No lifespan: service endpoints must work independently of a chat runtime.
     monkeypatch.setattr(app.state, "runtime", None)
     result = TestClient(app, raise_server_exceptions=False)
@@ -77,10 +76,9 @@ def test_build_permissions_ignore_body_identity_and_role(client, monkeypatch, me
     assert request(client, method, path, signed(role), role="superadmin").status_code == 403
 
 
-def test_compatibility_identity_does_not_grant_console_permissions(client, monkeypatch):
-    monkeypatch.setattr(settings, "agent_require_assertion", False)
+def test_unsigned_identity_is_rejected_before_console_permissions(client, monkeypatch):
     response = request(client, "POST", "/graph/rebuild", role="superadmin")
-    assert response.status_code == 403
+    assert response.status_code == 401
 
 
 @pytest.mark.parametrize("role", ["admin", "superadmin"])

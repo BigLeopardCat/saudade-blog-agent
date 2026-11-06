@@ -16,7 +16,6 @@ from agent.api.routes import chat
 from agent.main import app, create_app
 from agent.runtime.results import TurnResult
 from agent.runtime.workers import RequestWorkers
-from config.settings import settings
 
 
 class Runtime:
@@ -30,8 +29,8 @@ class Runtime:
 
 
 @pytest.fixture
-def identity(monkeypatch):
-    monkeypatch.setattr(settings, "agent_require_assertion", False)
+def identity(host_identity):
+    return host_identity
 
 
 def test_package_entry_imports_outside_checkout_without_starting_resources(tmp_path):
@@ -82,10 +81,12 @@ def test_concurrent_applications_use_their_own_runtime_and_admission(identity):
         try:
             async with (
                 httpx.AsyncClient(
-                    transport=httpx.ASGITransport(app=first), base_url="http://first"
+                    transport=httpx.ASGITransport(app=first), base_url="http://first",
+                    headers=identity(1)
                 ) as one,
                 httpx.AsyncClient(
-                    transport=httpx.ASGITransport(app=second), base_url="http://second"
+                    transport=httpx.ASGITransport(app=second), base_url="http://second",
+                    headers=identity(2)
                 ) as two,
             ):
                 replies = await asyncio.gather(
@@ -118,10 +119,12 @@ def test_saturated_application_does_not_consume_another_applications_permit(iden
         try:
             async with (
                 httpx.AsyncClient(
-                    transport=httpx.ASGITransport(app=first), base_url="http://first"
+                    transport=httpx.ASGITransport(app=first), base_url="http://first",
+                    headers=identity(1)
                 ) as one,
                 httpx.AsyncClient(
-                    transport=httpx.ASGITransport(app=second), base_url="http://second"
+                    transport=httpx.ASGITransport(app=second), base_url="http://second",
+                    headers=identity(2)
                 ) as two,
             ):
                 assert (await one.post("/chat", json={"message": "busy"})).status_code == 503
@@ -143,7 +146,8 @@ def test_mounted_chat_and_body_limits_use_the_new_routes(identity, monkeypatch):
         application.state.chat_slots = asyncio.BoundedSemaphore(1)
         try:
             async with httpx.AsyncClient(
-                transport=httpx.ASGITransport(app=application), base_url="http://test"
+                transport=httpx.ASGITransport(app=application), base_url="http://test",
+                headers=identity()
             ) as client:
                 reply = await client.post(
                     "/chat",
@@ -172,7 +176,8 @@ def test_inconsistent_confirmation_narrowing_refuses_without_entering_runtime(
         application.state.chat_slots = asyncio.BoundedSemaphore(1)
         try:
             async with httpx.AsyncClient(
-                transport=httpx.ASGITransport(app=application), base_url="http://test"
+                transport=httpx.ASGITransport(app=application), base_url="http://test",
+                headers=identity()
             ) as client:
                 response = await client.post(
                     "/chat/stream/v2",

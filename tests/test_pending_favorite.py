@@ -305,22 +305,17 @@ def test_stale_button_cancel_preserves_replacement(waiting, monkeypatch, site):
 
 
 def test_cancellation_api_checks_signed_identity_and_never_calls_a_model(
-        waiting, monkeypatch, service_workers):
+        waiting, monkeypatch, host_identity, service_workers):
     from contextlib import closing
 
     from fastapi import FastAPI
     from fastapi.testclient import TestClient
 
-    from agent.api.routes import chat as server
     from agent.api.routes.conversations import router
 
     runtime, proposal, ledger = waiting
     token = proposal.execution["pending_confirm"]["token"]
     monkeypatch.setattr(app.state, "runtime", runtime)
-    monkeypatch.setattr(server.settings, "agent_require_assertion", True)
-    from agent.api import authentication
-    monkeypatch.setattr(authentication, "verify_assertion_claims", lambda tok: (
-        {"uid": 7, "role": "user"} if tok == "fixture" else None))
 
     class Store:
         def claim(self, *args, **kwargs):
@@ -339,7 +334,7 @@ def test_cancellation_api_checks_signed_identity_and_never_calls_a_model(
     with TestClient(isolated) as client:
         body = {"user_id": 7, "conversation_id": 42, "token": token}
         assert client.post("/confirmation/cancel", json=body).status_code == 401
-        headers = {"X-Agent-Assertion": "fixture"}
+        headers = host_identity()
         for change in ({"conversation_id": 43}, {"token": token + "x"}):
             assert client.post("/confirmation/cancel", json={**body, **change},
                                headers=headers).status_code == 403

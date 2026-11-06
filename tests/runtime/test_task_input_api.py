@@ -21,7 +21,6 @@ def test_signed_control_is_available_while_conversation_is_locked(monkeypatch):
     monkeypatch.setattr(
         settings, "agent_assertion_secret", "task-input-test-secret-does-not-leave-the-test"
     )
-    monkeypatch.setattr(settings, "agent_require_assertion", True)
     application = create_app()
     selected = AgentRuntime(
         CheckpointConversationStore(InMemorySaver()), application=BlogApplication()
@@ -95,7 +94,6 @@ def test_task_manager_lists_and_cancels_only_the_signed_owner(monkeypatch):
     monkeypatch.setattr(
         settings, "agent_assertion_secret", "task-manager-api-fixture-with-32-characters"
     )
-    monkeypatch.setattr(settings, "agent_require_assertion", True)
     application = create_app()
     selected = AgentRuntime(
         CheckpointConversationStore(InMemorySaver()), application=BlogApplication()

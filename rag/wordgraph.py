@@ -6,7 +6,7 @@ may be empty when no directions were removed. Query transforms must match build
 transforms: normalize, center, remove principal directions, then normalize again.
 
 Model or endpoint mismatches fail before embedding and are logged once per build.
-Older artifacts without base_url skip only that endpoint comparison. Unavailable
+Artifacts without complete embedding identity are rejected. Unavailable
 artifacts or embeddings let the caller fall back to local matching. Queries do not
 use a lexical abstention gate. Small graph dot products use array storage without
 requiring a separate numeric dependency."""
@@ -84,11 +84,14 @@ def _space_mismatch(idx: dict) -> str | None:
     """
     space = space_now()
     model = str(idx.get("model") or "").strip()
-    if model and model != space.model:
+    if not model:
+        return "产物缺少 embedding 模型标识，需要重建"
+    if model != space.model:
         return f"产物是 {model} 建的，当前配置的是 {space.model}"
     base = str(idx.get("base_url") or "").strip().rstrip("/")
-    # 老产物没有 base_url 这一格 ⇒ 这一格不判（只在这里 fail-open；模型名那格老产物也有）
-    if base and base != space.base_url.rstrip("/"):
+    if not base:
+        return "产物缺少 embedding 端点标识，需要重建"
+    if base != space.base_url.rstrip("/"):
         return f"产物建立在 {base}，当前配置的是 {space.base_url}"
     return None
 
@@ -194,14 +197,7 @@ def _cosines(q: list[float], vecs: array.array, count: int, dim: int) -> list[fl
 
 
 def _embed_one(text: str) -> list[float] | None:
-    """查询串 → 向量。**用解析出来的 embedding 空间**（见 `rag/embed_space.py`）：
-    配了 `EMBEDDING_*` 就用它，否则回落 `QWEN_*` + `qwen3.7-text-embedding`——与建图脚本
-    同一条规则。刻意**不**跟着 `settings.active_llm_*` 走：对话 provider 可能没有
-    embeddings 端点（deepseek 就没有），跟着它走会在切 provider 时哑掉。
-
-    `dimensions` 与建图侧同口径：**只在显式配了 `EMBEDDING_DIM > 0` 时才传**
-    （`rag/vector_index.py::_embed_raw` 也是这么做的）。
-    """
+    """Embed queries using the same explicit space and dimensions as graph building."""
     global _client
     space = space_now()
     from rag.embed_space import missing_config

@@ -91,7 +91,7 @@ class Settings(BaseSettings):
     # Zero leaves sampling to the provider.
     llm_seed: int = 0
 
-    # ── Native request policy (tokens include cached input) ──────────
+    # Agent request budgets include cached input tokens.
     # Deployment sets the verified endpoint capacity; unknown models stay conservative.
     agent_context_tokens: int = Field(default=128000, gt=0)
     # Application working input is independent of the provider's model window.
@@ -124,6 +124,10 @@ class Settings(BaseSettings):
         selection = next((v for k, v in values.items() if k.lower() == "agent_arm"),
                          os.environ.get("AGENT_ARM"))
         check_retired_runtime(selection, "AGENT_ARM")
+        if (any(key.lower() == "agent_require_assertion" for key in values)
+                or "AGENT_REQUIRE_ASSERTION" in os.environ):
+            raise ValueError("AGENT_REQUIRE_ASSERTION is retired; remove it. "
+                             "Verified host assertions are always required.")
         return values
 
     # ── HTTP admission and deadlines ────────────────────────────────
@@ -139,9 +143,6 @@ class Settings(BaseSettings):
     # ── TTS (Text-to-Speech) ───────────────────────────────────────
     tts_enabled: bool = False
     tts_voice: str = "zh-CN-XiaoyiNeural"
-
-    # Require a verified host assertion before resolving caller identity.
-    agent_require_assertion: bool = True
 
     # ── IoT 设备服务（ESP32 OLED 显示等）─────────────────────────────
     # Independent identity and approval keys; backend capabilities are host-issued.
@@ -167,7 +168,7 @@ class Settings(BaseSettings):
     rag_hybrid_enabled: bool = False       # RAG_HYBRID_ENABLED=1/true/yes/on
     embedding_api_key: str = ""            # EMBEDDING_API_KEY
     embedding_base_url: str = ""           # EMBEDDING_BASE_URL（留空 = SDK 默认端点）
-    embedding_model: str = "qwen3.7-text-embedding"
+    embedding_model: str = ""
     # 0 = **不向 API 传 `dimensions`**，以返回向量的长度为准（不同供应商支持度不一，
     # 传了可能 400）。想要固定维度才填，填了则校验返回长度必须一致。
     embedding_dim: int = 0                 # EMBEDDING_DIM

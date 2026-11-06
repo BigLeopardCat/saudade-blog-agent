@@ -244,9 +244,8 @@ def test_optional_warmups_are_joined_and_failures_are_logged(startup, monkeypatc
     ("POST", "/confirmation/cancel", {"user_id": 7, "conversation_id": 7}, "cancel"),
 ])
 def test_disconnected_maintenance_operations_drain_before_pool_close(
-        startup, monkeypatch, method, path, body, target):
+        startup, monkeypatch, host_identity, method, path, body, target):
     entered, unblock = threading.Event(), threading.Event()
-    monkeypatch.setattr(settings, "agent_require_assertion", False)
     monkeypatch.setattr(checkpoint, "live_saver", lambda runtime: object())
     monkeypatch.setattr(server.confirm, "verify", lambda *args: {"jti": "fixture"})
 
@@ -269,7 +268,8 @@ def test_disconnected_maintenance_operations_drain_before_pool_close(
         transport = httpx.ASGITransport(app=app)
         async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
             payload = {**body, "token": secrets.token_urlsafe()}
-            pending = asyncio.create_task(client.request(method, path, json=payload))
+            pending = asyncio.create_task(client.request(
+                method, path, json=payload, headers=host_identity()))
             assert await asyncio.to_thread(entered.wait, 2)
             pending.cancel()
             with pytest.raises(asyncio.CancelledError):

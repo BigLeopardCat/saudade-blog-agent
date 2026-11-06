@@ -17,7 +17,6 @@ from config.settings import settings
 )
 def test_api_rejects_untrusted_actors_before_contacting_service(monkeypatch, role, expected):
     monkeypatch.setattr(settings, "agent_assertion_secret", secrets.token_hex(32))
-    monkeypatch.setattr(settings, "agent_require_assertion", True)
     calls = []
 
     def listing(principal, limit, offset):

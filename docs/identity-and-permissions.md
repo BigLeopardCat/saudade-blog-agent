@@ -2,7 +2,7 @@
 
 ## 身份来源
 
-Rust 宿主验证登录态后生成短期签名断言，Agent 验签后构造 Principal。用户在聊天里声称自己是管理员、页面文本或历史摘要均不能提升权限。缺少身份断言默认拒绝；`AGENT_ASSERTION_SECRET` 只校验服务身份；`AGENT_CONFIRM_SECRET` 独立签署确认卡。Agent 不持有博客的 `JWT_SECRET`、`BLOG_DELEGATION_SECRET` 或设备的签名密钥。
+Rust 宿主验证登录态后生成短期签名断言，Agent 验签后构造 Principal。用户在聊天里声称自己是管理员、页面文本或历史摘要均不能提升权限。缺少或无效身份断言一律拒绝，不提供关闭校验的开关；`AGENT_ASSERTION_SECRET` 只校验服务身份；`AGENT_CONFIRM_SECRET` 独立签署确认卡。Agent 不持有博客的 `JWT_SECRET`、`BLOG_DELEGATION_SECRET` 或设备的签名密钥。
 
 工具调用转发宿主签发的 `aud=blog-tools` 委托，绑定 uid 与 token_version，有效期五分钟。宿主重新查询冻结状态、令牌代次和当前角色；委托不能登录、修改密码、创建新委托或进入聊天代理。后台任务使用最长三十天的有限授权，允许白名单读取、搜索、向本人投递结果及通过专用端点执行已批准的版本绑定变更；管理员再次发起真实聊天或访问已认证任务面板会续期，过期须重新认证。授权保存在 `DELEGATION_DIR` 的 0700 目录及 0600 文件中，不进入模型上下文、Principal 或 trace。
 

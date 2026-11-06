@@ -148,6 +148,10 @@ curl --fail http://127.0.0.1:8010/version
 
 ## 升级与回滚
 
+Agent API 始终验证宿主断言。升级时删除退役的 `AGENT_REQUIRE_ASSERTION` 配置项，
+并保留有效的 `AGENT_ASSERTION_SECRET`；包含旧开关的配置会明确拒绝启动。
+向量功能须单独配置 `EMBEDDING_MODEL` 与 `EMBEDDING_API_KEY`，不会借用聊天凭据。
+
 固定新的完整提交，核对 CI、宿主兼容与数据库变更。备份配置、unit/drop-in、`current` 指向、Agent 数据库和私有授权数据。代码回滚不会回滚共享数据。
 
 重复发布命令升级，不重复首次安装的建库、配置复制和链接初始化。脚本通过 flock 拒绝并行发布，用 `git archive` 排除工作区文件和凭据；依赖与预检通过后切换版本，重启并核对就绪和 SHA。失败恢复上一版本，启用调度时同步重启/回滚 Worker。首次安装没有可用旧版本，不能依赖自动回滚解决接线错误。
