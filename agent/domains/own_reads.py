@@ -98,7 +98,7 @@ def get_inbox_overview(config: RunnableConfig, limit: PreviewLimit = 5,
         "counts_only is only for an explicitly count-only request.")] = "recent_unread") -> object:
     """查看本人未读通知与站内信：可靠计数和最近各5条未读标题（含公告副本），只读不标记。
 
-    回答“有哪些未读”可直接展示条目与来源；hasMore为true时明确仅展示最近部分。
+    只查未读，不覆盖最近全部通知；查最近通知直接加载notifications领域。hasMore为true时明确仅展示最近部分。
     仅明确要求只查数量时选择counts_only；更多条目、正文和操作使用notifications、messages领域。
     """
     principal = _principal(config)

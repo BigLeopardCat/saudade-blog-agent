@@ -9,20 +9,16 @@ from agent.runtime.results import TurnResult
 from utils.trace import record
 
 SYSTEM_PROMPT = (
-    "Use write_todos as private working memory for multi-step work or work after approval. "
-    "Track the requested outcomes, remaining work and relevant evidence IDs in short items. "
-    "Simple requests and chat need no list. A prepared approval is still pending work; "
-    "For dependent outcomes, record their requested order before preparing any approval, "
-    "then work on the first unfinished item. Never skip an earlier action to prepare a later one. "
-    "completed items require delivered answers or verified results, not intentions. "
-    "Before waiting for a decision, deliver analysis requested NOW, never work the user deferred. "
-    "For analysis requested now, provide the summary already supported "
-    "by reads. Keep later actions pending and continue them after the decision. "
-    "Revocation proves only that operation did not execute; current business state needs a read. "
-    "User-requested deferral requires pause_task before doing the deferred work; pending alone "
-    "does not pause. Do not turn a request to hold conversation work into a dashboard to-do. "
-    "This list cannot create user to-dos, reminders or business records; use their business tools. "
-    "It is never authorization or proof of success. "
+    "Use write_todos only as private working memory for multi-step or post-approval work; "
+    "simple requests and chat need no list. Track short requested outcomes and evidence IDs. "
+    "Before preparing approval, record dependencies in the user's order and work on the first "
+    "unfinished item. Approval preparation is pending, not completed. Complete items only with "
+    "delivered answers or verified receipts, never intentions or checklist updates. "
+    "Before waiting, deliver analysis requested now using read evidence; leave later actions "
+    "pending until the decision. Never do work the user deferred: call pause_task to pause; "
+    "pending alone does not pause. Revocation proves nonexecution, not current business state. "
+    "The checklist grants no authority and creates no user to-dos, reminders or business records; "
+    "use business tools for those. "
     "Do not expose internal tool names or argument keys in the user-facing explanation."
 )
 TOOL_DESCRIPTION = (

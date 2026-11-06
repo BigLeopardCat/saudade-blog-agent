@@ -174,6 +174,39 @@ def test_same_agent_delivers_read_facts_after_preparation_without_execution_or_s
         ledger.close()
 
 
+def test_approval_wire_distinguishes_pending_work_from_unavailable_tools(backend):
+    import json
+
+    from _framework_fixture import call as wire_call
+    from _framework_fixture import model_replies
+
+    pending = [*PLAN, {"content": "再把通知101标为已读", "status": "pending"}]
+    with model_replies(
+            {"tool_calls": [wire_call("load_favorites_info_tools", "load-f"),
+                            wire_call("load_notifications_info_tools", "load-n")]},
+            {"tool_calls": [wire_call("write_todos", "plan", todos=pending)]},
+            {"tool_calls": [wire_call("prepare_favorite_change", "favorite", action="add",
+                                     article_id=19),
+                            wire_call("prepare_notification_read", "notice", scope="selected",
+                                      ids=[101])]},
+            {"content": "先确认收藏，再继续通知的处理。"}) as (model, requests):
+        selected = AgentRuntime(CheckpointConversationStore(InMemorySaver()),
+                                application=BlogApplication(), model_factory=lambda **_: model)
+        result = run(selected, "收藏文章19，然后将通知101标为已读。")
+        final = requests[-1]
+        assert len(requests) == 4 and final["tool_choice"] == "none"
+        assert final["tools"] == requests[-2]["tools"]
+        messages = {row["tool_call_id"]: json.loads(row["content"]) for row in final["messages"]
+                    if row["role"] == "tool" and row["tool_call_id"] in ("favorite", "notice")}
+        assert messages["favorite"]["remaining_work_not_execution_evidence"] == pending
+        assert messages["favorite"]["executed"] is False
+        assert messages["notice"]["reason"] == "awaiting_prior_confirmation"
+        assert messages["notice"]["available_in_catalog"] is True
+        assert result.execution["pending_confirm"]["token"] not in str(final)
+        assert not backend[0]["writes"]
+        assert not any(path.endswith("/notifications") for _, path in backend[0]["requests"])
+
+
 def test_failed_approval_response_recovers_without_repreparing_or_rereading(backend):
     state, _ = backend
     first_model = Model(LOAD, AIMessage(content="", tool_calls=[FAVORITE]))
