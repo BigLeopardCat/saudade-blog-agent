@@ -10,15 +10,16 @@ import pytest
 from eval import golden_runtime as runtime
 
 
-@pytest.mark.parametrize("value,expected", [("", "native"), (" native ", "native")])
-def test_runtime_selection(monkeypatch, value, expected):
-    monkeypatch.setenv("GOLDEN_ARM", value)
+def test_runtime_does_not_require_an_experimental_selector(monkeypatch):
+    monkeypatch.delenv("GOLDEN_ARM", raising=False)
     assert runtime.check_environment() is None
 
 
 @pytest.mark.parametrize(
     "name",
     [
+        "native",
+        "",
         "react",
         "tools",
         "capability",

@@ -148,7 +148,7 @@ curl --fail http://127.0.0.1:8010/version
 
 ## 升级与回滚
 
-Agent API 始终验证宿主断言。升级时删除退役的 `AGENT_REQUIRE_ASSERTION` 配置项，
+Agent API 始终验证宿主断言。升级时删除退役的 `AGENT_REQUIRE_ASSERTION`、`AGENT_ARM` 配置项，
 并保留有效的 `AGENT_ASSERTION_SECRET`；包含旧开关的配置会明确拒绝启动。
 向量功能须单独配置 `EMBEDDING_MODEL` 与 `EMBEDDING_API_KEY`，不会借用聊天凭据。
 

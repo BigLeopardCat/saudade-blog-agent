@@ -39,9 +39,9 @@ SUMMARY_MAX_CHARS = 12000
 
 
 def check_retired_runtime(value, key):
-    """Accept old native deployment labels without restoring runtime selection."""
-    if value and str(value).strip().lower() != "native":
-        raise ValueError(f"{key} is retired; remove it. Only the native runtime is supported.")
+    """Reject retired runtime selectors instead of silently accepting old labels."""
+    if value is not None:
+        raise ValueError(f"{key} is retired; remove it. Runtime selection is no longer supported.")
 
 
 class Settings(BaseSettings):
