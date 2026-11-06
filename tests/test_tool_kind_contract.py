@@ -1,5 +1,4 @@
-"""工具返回值契约的机器锁：**「没声明 kind」与「声明了 ok」在消费侧长得一样**。
-"""
+"""Detect bare tool text and verify the closed outcome-kind contract."""
 
 
 from __future__ import annotations
@@ -114,8 +113,6 @@ def test_tool_kind_contract():
         "tools/device.py::list_devices": {
             "kind": "success_only", "sunset": "",
             "why": "设备清单的行渲染，只有成功一条路（拉不到列表走 `_get` 的 `UPSTREAM_DOWN`）"},
-        "tools/site.py::get_site_map": {"kind": "success_only", "sunset": "",
-                                        "why": "站内结构常量，没有失败路径"},
     }
     print("① 非真空：真的扫到了工具（扫不到 ⇒ 下面每条都是空判据）")
     registered = {tool.name for tool in registered_tools}
@@ -181,9 +178,7 @@ def demo(a: str) -> str:
         "empty": '"查到了、就是空的"本身是事实 ⇒ PASS 进回执（`_check_spec` 的 docstring 明写）',
     }
     _EMITTED = _emitted((ROOT / "tools" / "result.py").read_text(encoding="utf-8"))
-    # NativeSession consumes ToolResult envelopes directly; there is no legacy
-    # graph checker branch to scrape.  Keep the closed set beside the public
-    # constructors so a newly emitted kind cannot silently become success.
+    # Compare emitted constructors with the runtime's closed outcome kinds.
     _BRANCHED = {"invalid_args", "not_found", "unavailable"}
     _HANDLED = _BRANCHED | set(_PASS_BY_DESIGN)
     _unhandled = lambda e, h: sorted(e - h)                        # noqa: E731

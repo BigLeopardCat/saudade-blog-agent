@@ -48,11 +48,7 @@ def console_access(config):
 
 
 def accessible_paths(config):
-    return {
-        path
-        for path in site._NAV_EXACT_PATHS
-        if not path.startswith("/dashboard") or console_access(config)
-    }
+    return site.navigation_paths(config)
 
 
 def _receipt(workflow, name, args, command):

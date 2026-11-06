@@ -105,6 +105,61 @@ def test_page_tool_rechecks_permissions_after_loading(monkeypatch):
     assert "receipts" not in result.artifact
 
 
+@pytest.mark.parametrize("role,verified,uid,can_navigate,can_manage", [
+    ("user", True, 7, True, False),
+    ("admin", True, 7, True, True),
+    ("superadmin", True, 7, True, True),
+    ("zako", True, 7, False, False),
+    ("user", False, 7, False, False),
+    ("admin", True, 8, False, False),
+])
+def test_site_guide_separates_features_from_caller_navigation(
+    role, verified, uid, can_navigate, can_manage
+):
+    cfg = _config(principal=Principal(7, role, SOURCE_ASSERTION if verified else "body"),
+                  user_id=uid)
+    result = site.get_site_map.invoke({}, config=cfg)
+    data = json.loads(result.text)
+    assert result.kind == "ok" and data == result.data and not result.meta
+    assert data["coverage"] == "documented_features" and data["exhaustive"] is False
+    assert data["grantsAuthorization"] is False
+    pages = {row["path"]: row for row in data["pages"]}
+    assert pages["/"]["navigationAvailable"] is can_navigate
+    assert pages["/article/<id>"]["navigationAvailable"] is can_navigate
+    assert pages["/category/<name>"]["navigationAvailable"] is can_navigate
+    assert pages["/dashboard"]["navigationAvailable"] is can_manage
+    assert "/friends" not in pages and "/he" not in pages
+    for path, page in pages.items():
+        if "<" not in path:
+            assert page["navigationAvailable"] == (path in browser.accessible_paths(cfg))
+
+
+@pytest.mark.parametrize("enabled", [False, True])
+def test_site_guide_respects_optional_device_installation(monkeypatch, enabled):
+    monkeypatch.setattr(site, "IOT_ENABLED", enabled)
+    paths = site._NAV_EXACT_PATHS - {site.IOT_NAV_PATH}
+    monkeypatch.setattr(site, "_NAV_EXACT_PATHS",
+                        paths | ({site.IOT_NAV_PATH} if enabled else set()))
+    result = site.get_site_map.invoke({}, config=_config())
+    assert (site.IOT_NAV_PATH in {row["path"] for row in result.data["pages"]}) is enabled
+
+
+def test_site_guide_metadata_reaches_the_same_framework_tool_exchange(monkeypatch):
+    arm, model = _arm(monkeypatch, [_response("load_site_info_tools"),
+        _response("get_site_map"), AIMessage(content="后台管理需要管理员，当前账号不能导航过去。")])
+    events = list(arm.stream_events({"messages": [HumanMessage(content="我能打开哪些页面？")]},
+                                    _config()))
+    observed = next(message for message in model.calls[-1]
+                    if isinstance(message, ToolMessage) and message.name == "get_site_map")
+    data = json.loads(observed.content)
+    assert data["exhaustive"] is False
+    assert next(row for row in data["pages"] if row["path"] == "/dashboard")[
+        "navigationAvailable"] is False
+    assert not events[-1].execution or not events[-1].execution.get("receipts")
+    assert not any(isinstance(e, StreamEvent) and e.name in ("command", "confirmation")
+                   for e in events)
+
+
 def test_effect_switch_uses_absolute_states_and_standard_artifacts():
     args = {"rain": "off", "snow": "on", "dark_mode": "on"}
     result = browser.set_page_appearance.invoke(
