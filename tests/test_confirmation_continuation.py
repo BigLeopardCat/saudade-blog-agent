@@ -108,8 +108,10 @@ def runtime(model, saver=None, catalog=None):
                          model_factory=lambda **_: model, application=BlogApplication(catalog))
 
 
-def run(selected, text=None, grant=None, cfg=None):
+def run(selected, text=None, grant=None, cfg=None, task_id=None):
     state = {"confirm_grant": grant} if grant else {"messages": [HumanMessage(content=text)]}
+    if task_id:
+        state["task_id"] = task_id
     events = list(selected.stream_events(state, cfg or config()))
     assert sum(isinstance(event, TurnResult) for event in events) == 1
     return events[-1]
@@ -708,8 +710,32 @@ def test_discarding_feedback_history_cannot_restore_the_revoked_approval(backend
     selected = runtime(Model())
     _, grant, _ = prepare(selected, FAVORITE)
     selected.model_factory = lambda **_: Model(AIMessage(content="你好。"))
-    run(selected, "先聊一下")
-    assert checkpoint.drop_last_user_turn(selected, 42, "先聊一下")["dropped"]
+    run(selected, "先聊一下", task_id="feedback-turn")
+    assert checkpoint.drop_last_user_turn(selected, 42, "feedback-turn")["dropped"]
     selected.model_factory = lambda **_: pytest.fail("revoked approval reached a model")
     replay = run(selected, grant=grant)
     assert not replay.execution["receipts"] and not state["writes"]
+
+
+def test_discarding_interrupted_approval_feedback_invalidates_its_original_task(backend):
+    from agent import checkpoint
+    from agent.runtime.control import AgentCancelled
+
+    state, _ = backend
+    selected = runtime(Model())
+    _, grant, _ = prepare(selected, FAVORITE)
+    original_task = selected.store.load(config()).run["id"]
+
+    class Interrupted(Model):
+        def stream(self, *args, **kwargs):
+            raise AgentCancelled()
+            yield
+
+    selected.model_factory = lambda **_: Interrupted()
+    with pytest.raises(AgentCancelled):
+        run(selected, "先别收藏，解释一下", task_id="interrupted-feedback")
+    assert checkpoint.drop_last_user_turn(selected, 42, "interrupted-feedback")["dropped"]
+    assert not selected.store.load(config()).run
+    blocked = list(selected.stream_events({"resume_task": original_task}, config()))[-1]
+    assert blocked.execution["blocked"]
+    assert not state["writes"]

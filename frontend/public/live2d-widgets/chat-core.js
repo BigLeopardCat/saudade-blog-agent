@@ -11,7 +11,7 @@
       const existing = Array.isArray(rows) ? rows.filter(bound) : [];
       if (!bound(entry)) return existing.slice(0, 3);
       const sameRound = (row) => String(row.conv_id) === String(entry.conv_id)
-        && ((entry.task_id && row.task_id === entry.task_id)
+        && ((entry.turn_id && row.turn_id === entry.turn_id)
           || (entry.partial_id && row.partial_id === entry.partial_id));
       return [entry, ...existing.filter(row => !sameRound(row))].slice(0, 3);
     };
@@ -19,6 +19,8 @@
       id: (it && it.id) || genId(),
       type: (it && it.type) || 'agent',
       text: (it && it.text) || '',
+      turn_id: it?.turn_id || undefined,
+      parent_turn_id: it?.parent_turn_id || undefined,
       time: (it && it.time) || 0,
       process: (it && Array.isArray(it.process) && it.process.length) ? it.process : undefined,
       images: (it && Array.isArray(it.images) && it.images.length) ? it.images
@@ -31,6 +33,8 @@
       id: 'd' + row.id,
       type: row.role === 'user' ? 'user' : 'agent',
       text: row.content,
+      turn_id: row.turn_id || undefined,
+      parent_turn_id: row.parent_turn_id || undefined,
       time: row.time,
       images: row.images,
     });

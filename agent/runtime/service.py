@@ -1,13 +1,14 @@
 """LangChain model/tool execution with durable conversation and approval state."""
 
 import asyncio
+import uuid
 from dataclasses import replace
 from functools import partial
 
 from langchain_core.messages import AIMessageChunk
 from openai import OpenAIError
 
-from agent.runtime import approval, memory, recovery, trace_context
+from agent.runtime import approval, checkpoint_store, memory, recovery, trace_context
 from agent.runtime.memory_media import stage
 from agent.runtime.results import ReplyReset, TurnResult
 from agent.runtime.session import ToolSession
@@ -71,6 +72,10 @@ class AgentRuntime:
     def _turn(self, state, config):
         check_cancelled(config)
         snapshot = self.store.load(config)
+        if self._discarded_turn(state, config, snapshot):
+            yield TurnResult("该轮次已丢弃，请重新发送新的请求。",
+                             {"blocked": [{"reason": "turn_discarded"}]})
+            return
         grant = state.get("confirm_grant")
         if grant is not None:
             yield from self._confirmed(state, config, snapshot, grant)
@@ -90,6 +95,8 @@ class AgentRuntime:
                         snapshot, state.get("messages") or [], principal,
                         tool_access=self.application.history_access),
                     *memory.request_messages(state.get("messages") or [])]
+        task_id = state.get("task_id") or uuid.uuid4().hex
+        incoming = memory.identify_turn(incoming, state.get("turn_id") or task_id)
         if pending:
             session = self._session(config, snapshot, pending)
             session.task = snapshot.run
@@ -98,19 +105,22 @@ class AgentRuntime:
             record("native", "task_feedback", task_id=session.task["id"])
             yield from self._feedback(session, prompt, pending, incoming)
             return
+        yield from self._new_turn(snapshot, incoming, config, task_id)
+
+    def _new_turn(self, snapshot, incoming, config, task_id):
+        principal = ((config or {}).get("configurable") or {}).get("principal")
         if (snapshot.unfinished and not snapshot.run.get("input_saved")
                 and recovery.allowed(snapshot, snapshot.run["id"], config)):
             incoming = [*snapshot.run["input"], *incoming]
         prompt = self.application.prompt([*snapshot.messages, *incoming], principal)
-        session = self._session(config, snapshot, pending)
+        session = self._session(config, snapshot, None)
         session.turn_input = incoming
-        session.task = recovery.new_run(config, incoming, state.get("task_id"))
+        session.task = recovery.new_run(config, incoming, task_id)
         if (self.inputs and snapshot.run and session.task
                 and snapshot.run["id"] != session.task["id"]):
             try:
                 self.inputs.finish(snapshot.run, set())
             except InputConflict as exc:
-                # Tasks predating input support have no inbox row.
                 if str(exc) != "task_not_available":
                     raise
         outcome = yield from self._run(session, prompt)
@@ -123,7 +133,18 @@ class AgentRuntime:
         record("native", "turn_completed", chars=len(outcome.reply))
         yield outcome
 
+    def _discarded_turn(self, state, config, snapshot):
+        turn_id = state.get("turn_id") or state.get("task_id")
+        candidates = [turn_id]
+        if snapshot.run:
+            candidates.extend([memory.latest_turn_id(snapshot.messages),
+                               snapshot.run.get("turn_id"),
+                               memory.latest_turn_id(snapshot.run.get("input", []))])
+        thread_id = ((config or {}).get("configurable") or {}).get("thread_id")
+        return checkpoint_store.turns_deleted(self.saver, thread_id, candidates)
+
     def _feedback(self, session, prompt, pending, incoming):
+        session.turn_input = incoming
         if (session.config.get("configurable") or {}).get("task_inputs"):
             yield TaskInputEvent({"task_id": session.task["id"], "ready": False})
         result = yield from self._run(session, prompt, resume={
@@ -172,6 +193,11 @@ class AgentRuntime:
 
     @staticmethod
     def _run(session, prompt, *, resume=None, approval_input=(), recover=False):
+        if session.task:
+            source = memory.latest_turn_id(session.turn_input)
+            session.task = {**session.task, "turn_id":
+                session.config.get("configurable", {}).get("turn_id") or source
+                or session.task.get("turn_id") or session.task["id"]}
         if session.task and session.store and session.store.available:
             from agent.runtime.task_budget import for_saver as task_usage
             session.budget.bind_task(task_usage(session.store.saver), session.task,

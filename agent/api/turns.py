@@ -60,6 +60,7 @@ def runtime_events(
     stop_event=None,
     progress_emitter=None,
     task_id=None,
+    turn_id=None,
     resume_task=None,
     browser_feedback=False,
     browser_result=None,
@@ -91,6 +92,9 @@ def runtime_events(
         state["confirm_grant"] = confirm_grant
     if task_id:
         state["task_id"] = task_id
+    if turn_id:
+        state["turn_id"] = turn_id
+        config["configurable"]["turn_id"] = turn_id
     if resume_task:
         state["resume_task"] = resume_task
     return stream_events(state, config)
@@ -104,6 +108,7 @@ def run_turn(
     principal: Principal | None = None,
     conversation_id: int | None = None,
     task_id=None,
+    turn_id=None,
     resume_task=None,
     browser_feedback=False,
     browser_result=None,
@@ -119,7 +124,7 @@ def run_turn(
             user_id=user_id,
             principal=principal,
             conversation_id=conversation_id,
-            task_id=task_id,
+            task_id=task_id, turn_id=turn_id,
             resume_task=resume_task,
             browser_feedback=browser_feedback,
             browser_result=browser_result,
@@ -143,6 +148,7 @@ def stream_to_queue(
     progress_emitter: ProgressEmitter | None = None,
     *,
     task_id=None,
+    turn_id=None,
     resume_task=None,
     browser_feedback=False,
     browser_result=None,
@@ -200,7 +206,7 @@ def stream_to_queue(
             confirm_grant=confirm_grant,
             stop_event=stop_event,
             progress_emitter=progress_emitter,
-            task_id=task_id,
+            task_id=task_id, turn_id=turn_id,
             resume_task=resume_task,
             browser_feedback=browser_feedback,
             browser_result=browser_result,

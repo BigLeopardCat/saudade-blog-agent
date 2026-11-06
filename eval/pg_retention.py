@@ -20,6 +20,7 @@ MAX_THREADS_DEFAULT = 200
 THREAD_TABLES = ("checkpoints", "checkpoint_blobs", "checkpoint_writes")
 LEDGER_TABLE = "agent_write_idem"
 FENCE_TABLE = "agent_deleted_threads"
+TURN_FENCE_TABLE = "agent_deleted_turns"
 _TS_OK = r"^\d{4}-\d{2}-\d{2}T"
 logger = logging.getLogger(__name__)
 PLAN_SQL = """
@@ -86,11 +87,11 @@ def scan(conn, cutoff: datetime, max_threads: int = MAX_THREADS_DEFAULT) -> dict
         plan["ledger"]["due"] = int(_scalar(conn, "SELECT count(*) FROM agent_write_idem "
             "WHERE status='done' AND ts < %s", (cutoff,)))
     plan["fence_cutoff"] = min(cutoff, cutoff_of(FENCE_KEEP_DAYS))
-    plan["deletion_fences"] = {"exists": table_exists(conn, FENCE_TABLE), "due": 0}
-    if plan["deletion_fences"]["exists"]:
-        plan["deletion_fences"]["due"] = int(_scalar(conn,
-            "SELECT count(*) FROM agent_deleted_threads WHERE deleted_at < %s",
-            (plan["fence_cutoff"],)))
+    for field, table in (("deletion_fences", FENCE_TABLE), ("turn_fences", TURN_FENCE_TABLE)):
+        plan[field] = {"exists": table_exists(conn, table), "due": 0}
+        if plan[field]["exists"]:
+            plan[field]["due"] = int(_scalar(conn,
+                f"SELECT count(*) FROM {table} WHERE deleted_at < %s", (plan["fence_cutoff"],)))
     return plan
 
 
@@ -172,10 +173,10 @@ def apply_plan(conn, plan: dict) -> dict:
         if plan["ledger"]["exists"]:
             result["ledger"] = conn.execute("DELETE FROM agent_write_idem "
                 "WHERE status='done' AND ts < %s", (plan["cutoff"],)).rowcount
-        if plan.get("deletion_fences", {}).get("exists"):
-            result["deletion_fences"] = conn.execute(
-                "DELETE FROM agent_deleted_threads WHERE deleted_at < %s",
-                (plan["fence_cutoff"],)).rowcount
+        for field, table in (("deletion_fences", FENCE_TABLE), ("turn_fences", TURN_FENCE_TABLE)):
+            if plan.get(field, {}).get("exists"):
+                result[field] = conn.execute(f"DELETE FROM {table} WHERE deleted_at < %s",
+                                             (plan["fence_cutoff"],)).rowcount
     return result
 
 

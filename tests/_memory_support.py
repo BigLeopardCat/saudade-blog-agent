@@ -44,4 +44,5 @@ def runtime(saver, model):
 
 def run(selected, req, cfg=None):
     return list(selected.stream_events(
-        {"messages": build_messages(req, holds_context=selected.store.available)}, cfg or config()))
+        {"messages": build_messages(req, holds_context=selected.store.available),
+         "task_id": req.task_id, "turn_id": req.turn_id}, cfg or config()))

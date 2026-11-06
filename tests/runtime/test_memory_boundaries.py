@@ -89,7 +89,7 @@ def test_current_images_and_schemas_take_precedence_over_history():
     selected.application.catalog = SimpleNamespace(
         initial_tools=lambda _: {"fixture_read": fixture_read}, domains=lambda *_: {})
     run(selected, ChatRequest(message="历史文本" * 500))
-    req = ChatRequest(message="看图", image="data:image/png;base64,AA")
+    req = ChatRequest(message="看图", task_id="discard-image", image="data:image/png;base64,AA")
     fixed = build_prompt(build_messages(req), ACTOR)
     schema_tokens = count_tokens_approximately([], tools=schemas([fixture_read]))
     limit = estimate_tokens(fixed) + schema_tokens + model.max_tokens + 400
@@ -122,8 +122,8 @@ def test_empty_store_imports_scoped_host_history_once_under_the_turn_lock():
 def test_empty_but_initialized_store_does_not_resurrect_discarded_host_history():
     saver, model = InMemorySaver(), Capture()
     selected = runtime(saver, model)
-    run(selected, ChatRequest(message="丢弃我"))
-    assert checkpoint.drop_last_user_turn(selected, 42, "丢弃我")["dropped"]
+    run(selected, ChatRequest(message="丢弃我", task_id="discard-memory"))
+    assert checkpoint.drop_last_user_turn(selected, 42, "discard-memory")["dropped"]
     assert selected.store.load(config()).initialized
     req = ChatRequest(message="新问题", conversation_id=42, history_scope=SCOPE,
                       history=[{"role": "user", "content": "丢弃我"},
@@ -187,11 +187,12 @@ def test_private_tool_result_and_derived_answer_stay_hidden_on_downgrade_with_su
     assert not any(isinstance(message, ToolMessage) for message in prompt)
 
 
-def test_image_turn_can_be_discarded_using_the_original_host_text():
+def test_image_turn_is_discarded_by_identity_without_parsing_image_suffixes():
     saver, model = InMemorySaver(), Capture()
     selected = runtime(saver, model)
-    run(selected, ChatRequest(message="看图", image="data:image/png;base64,AA"))
-    result = checkpoint.drop_last_user_turn(selected, 42, "看图\n[图片]")
+    run(selected, ChatRequest(message="看图", task_id="discard-image",
+                              image="data:image/png;base64,AA"))
+    result = checkpoint.drop_last_user_turn(selected, 42, "discard-image")
     assert result["dropped"] and selected.store.load(config()).messages == []
 
 

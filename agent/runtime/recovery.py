@@ -2,7 +2,7 @@
 
 import uuid
 
-from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
+from langchain_core.messages import AIMessage, ToolMessage
 
 from agent.runtime import memory, task_scope
 from agent.runtime.execution_state import restore
@@ -59,31 +59,3 @@ def restore_session(session, state):
         reply = text_content(last.content)
         if reply:
             session.outcome = session._result(reply)
-
-
-def discard_interrupted(runtime, config, values, text):
-    run = values.get("run")
-    if not run or values.get("approval") or not text.strip():
-        return None
-    from agent.checkpoint import _same_turn, _user_text_of
-
-    target = next((m for m in reversed(run["input"])
-                   if isinstance(m, HumanMessage) and not memory.is_context(m)), None)
-    inbox = getattr(runtime, "inputs", None)
-    if inbox is not None:
-        from agent.runtime.task_inputs import InputConflict
-        from agent.runtime.task_inputs import messages as input_messages
-
-        try:
-            accepted = inbox.read(run["id"], run["scope"])["inputs"]
-        except InputConflict:
-            accepted = []
-        applied = input_messages([item for item in accepted if item["status"] == "applied"],
-                                 run["id"])
-        if applied:
-            target = applied[-1]
-    if target is None or not _same_turn(_user_text_of(target), text):
-        return {"dropped": False, "why": "mismatch"}
-    runtime.update_state(config, {"run": None})
-    gone = not runtime.get_state(config).values.get("run")
-    return {"dropped": gone, "why": "" if gone else "still_present"}

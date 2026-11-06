@@ -48,14 +48,16 @@ def test_turn_serializes_history_and_lifecycle(monkeypatch, operation):
     )
 
     def turn(text):
-        return list(runtime.stream_events({"messages": [HumanMessage(content=text)]}, _config()))
+        state = {"messages": [HumanMessage(content=text)],
+                 "task_id": "first-turn" if text == "第一轮" else "second-turn"}
+        return list(runtime.stream_events(state, _config()))
 
     def overlap():
         attempted.set()
         if operation == "turn":
             return turn("第二轮")
         if operation == "discard":
-            return checkpoint.drop_last_user_turn(runtime, "overlap", "第一轮")
+            return checkpoint.drop_last_user_turn(runtime, "overlap", "first-turn")
         return checkpoint.delete_thread(saver, "overlap")
 
     with ThreadPoolExecutor(max_workers=2) as pool:

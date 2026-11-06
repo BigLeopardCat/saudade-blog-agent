@@ -115,7 +115,8 @@ CLASSES = [
         rule=None,
         dsn_env="CHECKPOINT_DSN",
         tables=["checkpoints", "checkpoint_blobs", "checkpoint_writes", "agent_task_inputs",
-                "agent_task_usage", "agent_write_idem", "agent_deleted_threads"],
+                "agent_task_usage", "agent_write_idem", "agent_deleted_threads",
+                "agent_deleted_turns"],
     ),
     dict(
         key="golden-traces",

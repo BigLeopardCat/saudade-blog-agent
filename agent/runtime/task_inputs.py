@@ -43,7 +43,8 @@ class TaskInputs:
                          for message in reversed(task.get("input", []))
                          if isinstance(message, HumanMessage)), "")
         initial = {"scope": task["scope"], "phase": "new", "inputs": [],
-                   "original_text": original, "created_at": time.time(), "expires": None}
+                   "original_text": original, "turn_id": task.get("turn_id", task["id"]),
+                   "created_at": time.time(), "expires": None}
         with self.storage.edit(task["id"], None if resume else initial) as state:
             self._check(state, task["scope"])
             if state["phase"] != "new" and not resume:
@@ -54,7 +55,7 @@ class TaskInputs:
                 state["phase"] = "running"
             return state["phase"] == "running"
 
-    def submit(self, task_id, scope, input_id, text):
+    def submit(self, task_id, scope, input_id, text, turn_id=None):
         text = text.strip()
         if not text or len(text) > MAX_TEXT:
             raise InputConflict("invalid_input")
@@ -65,18 +66,21 @@ class TaskInputs:
                 if previous["text"] != text:
                     raise InputConflict("input_id_conflict")
                 return copy.deepcopy(previous)
+            if turn_id is not None and state.get("turn_id") != turn_id:
+                raise InputConflict("stale_turn")
             if state["phase"] != "running":
                 raise InputConflict("task_not_running")
             if len(state["inputs"]) >= MAX_INPUTS:
                 raise InputConflict("input_limit")
-            item = {"id": input_id, "text": text, "status": "queued"}
+            item = {"id": input_id, "text": text, "status": "queued",
+                    "turn_id": state.get("turn_id")}
             state["inputs"].append(item)
             return copy.deepcopy(item)
 
     def read(self, task_id, scope):
         with self.storage.edit(task_id) as state:
             self._check(state, scope)
-            return {"task_id": task_id, "phase": state["phase"],
+            return {"task_id": task_id, "turn_id": state.get("turn_id"), "phase": state["phase"],
                     "original_text": state["original_text"],
                     "inputs": copy.deepcopy(state["inputs"])}
 
@@ -96,6 +100,7 @@ class TaskInputs:
     def finish(self, task, seen, *, paused=False, awaiting_confirmation=False):
         with self.storage.edit(task["id"]) as state:
             self._check(state, task["scope"])
+            state["turn_id"] = task.get("turn_id", state.get("turn_id"))
             state["phase"] = ("awaiting_confirmation" if awaiting_confirmation
                               else "paused" if paused else "completed")
             state["expires"] = (time.time() + TERMINAL_RETENTION_SECONDS
@@ -123,7 +128,9 @@ def for_saver(saver):
 def messages(items, task_id):
     return [HumanMessage(content=item["text"], id=f"task-input:{task_id}:{item['id']}",
                          additional_kwargs={"task_input": {"task_id": task_id,
-                                                            "id": item["id"]}})
+                                                            "id": item["id"],
+                                                            "turn_id": item.get("turn_id")
+                                                            or task_id}})
             for item in items]
 
 

@@ -21,6 +21,7 @@ let conversation = 1;
 let conversationTitle = '测试会话';
 const inputTasks = new Map();
 let rejectInputOnce = false;
+let discardPending = false;
 let inputMessageId = 900000;
 let steeringHistory = [];
 let interruptNavigationReply = false;
@@ -60,7 +61,8 @@ const server = createServer(async (req, res) => {
         nextMode = 'reply';
         res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache' });
         assert.equal(req.headers['x-agent-stream-version'], '2');
-        const taskId = body.resume_task || body.task_id || pendingConfirmation?.task_id;
+        const taskId = mode === 'feedback-pause' ? pendingConfirmation?.task_id
+          : body.resume_task || body.task_id || pendingConfirmation?.task_id;
         if (body.confirm_token || (!body.resume_task && !mode.startsWith('confirmation')))
           pendingConfirmation = null;
         const previousTask = inputTasks.get(taskId);
@@ -73,7 +75,7 @@ const server = createServer(async (req, res) => {
         }
         if (['steering', 'steering-pause'].includes(mode)) {
           const task = { res, inputs: [], phase: 'running', holdAfterInput:mode==='steering-pause' };
-          if (task.holdAfterInput) steeringHistory = [{id:800000,role:'user',content:body.message,time:Date.now(),images:[]}];
+          if (task.holdAfterInput) steeringHistory = [{id:800000,role:'user',content:body.message,time:Date.now(),images:[],turn_id:body.turn_id}];
           inputTasks.set(taskId, task);
           res.write(frame('task_input', { task_id: taskId, ready: true }));
           res.write(frame('progress', '正在处理请求…'));
@@ -96,10 +98,10 @@ const server = createServer(async (req, res) => {
           res.end(frame('text', '已经到留言板了。') + frame('done', {}));
           return;
         }
-        if (mode === 'agent-pause' || mode === 'provider-pause') {
+        if (['agent-pause','provider-pause','feedback-pause'].includes(mode)) {
           const id=taskId;
           inputTasks.set(id,{agentPaused:true,phase:'paused',inputs:[]});
-          managedTasks.paused.items=[{task_id:id,conversation_id:1,title:body.message}];
+          managedTasks.paused.items=[{task_id:id,turn_id:body.turn_id,conversation_id:1,title:body.message}];
           res.end(frame('task_input',{task_id:id,ready:false,phase:'paused',inputs:[]})
             +(mode === 'provider-pause' ? frame('error','模型服务暂时不可用。')
               : frame('text','已挂起，稍后可以从保存的进度继续。')+frame('done',{})));return;
@@ -170,14 +172,14 @@ const server = createServer(async (req, res) => {
         const task = inputTasks.get(body.task_id);
         assert.equal(task.phase, 'running');
         let item = task.inputs.find(x => x.id === body.input_id);
-        if (!item) { item = {id:body.input_id,text:body.text,status:'queued'};task.inputs.push(item); }
+        if (!item) { item = {id:body.input_id,text:body.text,status:'queued',turn_id:body.turn_id};task.inputs.push(item); }
         json(res, {task_id:body.task_id,input:item});
         const timer = setTimeout(() => {
           if (task.phase !== 'running') return;
           item.status = 'applied'; item.message_id = ++inputMessageId;
           task.res.write(frame('task_input', {task_id:body.task_id,input:item}));
           if (task.holdAfterInput) {
-            steeringHistory.push({id:item.message_id,role:'user',content:item.text,time:Date.now(),images:[]});
+            steeringHistory.push({id:item.message_id,role:'user',content:item.text,time:Date.now(),images:[],parent_turn_id:body.turn_id});
             return;
           }
           task.res.end(frame('text','按照补充要求，只列文章标题。') + frame('done',{}));
@@ -210,7 +212,18 @@ const server = createServer(async (req, res) => {
         pendingConfirmation = null;
         return json(res, { cancelled: true });
       }
-      if (url.pathname === '/api/chat/discard') return json(res, { ok: true });
+      if (url.pathname === '/api/chat/discard') {
+        assert.ok(body.turn_id && body.conversation_id);
+        assert.equal(body.text,undefined);
+        if (discardPending) {
+          discardPending=false;
+          res.writeHead(202,{'Content-Type':'application/json'});
+          return res.end(JSON.stringify({success:false,reason:'cleanup_pending'}));
+        }
+        steeringHistory=steeringHistory.filter(row=>row.turn_id!==body.turn_id
+          && row.parent_turn_id!==body.turn_id);
+        return json(res,{success:true,reason:'discarded'});
+      }
       throw new Error('Unexpected fixture API: ' + url.pathname);
     }
     const file = url.pathname === '/bootstrap' ? path.join(frontend, 'tests/fixtures/chat-bootstrap.html')
@@ -749,6 +762,46 @@ try {
   assert.equal(await page.evaluate(() => window.__chatTest.ctx.state.items
     .filter(x => x.type === 'user' && x.text === '测试接续网络失败').length), 1);
   passed('failed continuation restores its original pause controls without duplicating the request');
+
+  await reset();
+  await send('继续','reply'); await idle();
+  const earlierIdentity=requests.filter(row=>row.path==='/api/chat/stream').at(-1).body.task_id;
+  await send('继续','hold-empty');
+  const discardedIdentity=requests.filter(row=>row.path==='/api/chat/stream').at(-1).body.task_id;
+  await page.locator('#chat-send').click(); await idle();
+  const edit=page.locator('.chat-msg-retry').getByRole('button',{name:'✎ 编辑',exact:true}).first();
+  await edit.waitFor({state:'visible'});
+  const callsBeforeDiscard=streamCount();
+  discardPending=true;
+  await edit.click();
+  await page.getByText('历史正在后台同步，请稍后再试；本次不会重新执行任务',{exact:true}).waitFor();
+  assert.equal(streamCount(),callsBeforeDiscard);
+  assert.equal(await page.locator('#chat-input').inputValue(),'');
+  await edit.click();
+  await page.waitForFunction(()=>document.querySelector('#chat-input').value==='继续');
+  const targets=requests.filter(row=>row.path==='/api/chat/discard').slice(-2).map(row=>row.body.turn_id);
+  assert.deepEqual(targets,[discardedIdentity,discardedIdentity]);
+  const remainingIdentity=await page.evaluate(()=>window.__chatTest.ctx.state.items
+    .filter(row=>row.type==='user').map(row=>row.turn_id));
+  assert.deepEqual(remainingIdentity,[earlierIdentity]);
+  assert.equal(streamCount(),callsBeforeDiscard);
+  passed('edit waits for acknowledged discard and keeps the previous identical user turn');
+
+  await reset();
+  await send('收藏文章，稍后补充要求','confirmation'); await idle();
+  const sharedTask=requests.filter(row=>row.path==='/api/chat/stream').at(-1).body.task_id;
+  await send('先改下要求，然后挂起','feedback-pause'); await idle();
+  const feedbackTurn=requests.filter(row=>row.path==='/api/chat/stream').at(-1).body.turn_id;
+  await page.locator('.chat-resume-btn').waitFor({state:'visible'});
+  const pausedIdentity=await page.evaluate(()=>JSON.parse(localStorage.getItem('saudade-chat-failed'))[0]);
+  assert.equal(pausedIdentity.task_id,sharedTask);
+  assert.equal(pausedIdentity.turn_id,feedbackTurn);
+  assert.notEqual(sharedTask,feedbackTurn);
+  await page.locator('.chat-resume-btn').click(); await idle();
+  const feedbackContinuation=requests.filter(row=>row.path==='/api/chat/stream').at(-1).body;
+  assert.equal(feedbackContinuation.resume_task,sharedTask);
+  assert.equal(feedbackContinuation.turn_id,feedbackTurn);
+  passed('approval feedback keeps its own user turn while resuming the original task');
 
   await reset();
   await send('查文章，执行中补充要求', 'steering');

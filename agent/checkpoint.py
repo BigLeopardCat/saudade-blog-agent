@@ -273,87 +273,74 @@ def thread_is_resuming(agent, thread_id: object) -> bool:
     return bool(getattr(snap, "next", ()) or ())
 
 
-# Discard removes the same user turn from persisted model context.
-_CUR_Q = "[当前问题]: "
+def drop_last_user_turn(agent, conversation_id: object, turn_id: str) -> dict:
+    """Discard a stable user turn; retries cannot target another same-text message."""
+    from agent.runtime.checkpoint_store import ConversationDeleted
 
-
-def _user_text_of(msg) -> str:
-    """Extract the user text from a plain or multimodal current-turn message."""
-    content = getattr(msg, "content", "")
-    if isinstance(content, list):
-        content = next((b.get("text", "") for b in content
-                        if isinstance(b, dict) and b.get("type") == "text"), "")
-    if not isinstance(content, str):
-        content = str(content)
-    return content[len(_CUR_Q):] if content.startswith(_CUR_Q) else content
-
-
-def _same_turn(state_text: str, given: str) -> bool:
-    """Match the stored user turn, allowing the image suffix appended by the host."""
-    if state_text == given:
-        return True
-    if not state_text or not given.startswith(state_text):
-        return False
-    rest = given[len(state_text):]
-    return rest == "" or rest.startswith("\n[图片")
-
-
-def drop_last_user_turn(agent, conversation_id: object, text: str = "") -> dict:
-    """Discard under the conversation lock using the runtime's synchronous state API."""
-    guard = getattr(agent, "conversation_guard", None)
-    config = {"configurable": {"thread_id": conversation_thread(conversation_id)}}
-    with guard(config) if guard is not None else nullcontext():
-        return _drop_last_user_turn(agent, conversation_id, text)
-
-
-def _drop_last_user_turn(agent, conversation_id: object, text: str = "") -> dict:
-    """Remove the last matching user message and all following messages, then verify.
-
-    An empty or mismatched source text does not modify state. Existing pending
-    nodes may remain after discard; normal dict input restarts the next turn."""
-    saver = live_saver(agent)
-    if saver is None:
-        return {"dropped": False, "why": "no_saver"}
     tid = conversation_thread(conversation_id)
     if tid is None:
         return {"dropped": False, "why": "bad_conversation_id"}
-    getter = getattr(agent, "get_state", None)
-    setter = getattr(agent, "update_state", None)
-    if getter is None or setter is None:
-        return {"dropped": False, "why": "no_graph_state"}
-
-    from langchain_core.messages import HumanMessage, RemoveMessage
-
-    cfg = {"configurable": {"thread_id": tid}}
-    snap = getter(cfg)
-    from agent.runtime.recovery import discard_interrupted
-    interrupted = discard_interrupted(agent, cfg, getattr(snap, "values", None) or {}, text)
-    if interrupted is not None:
-        return interrupted
-    msgs = list((getattr(snap, "values", None) or {}).get("messages") or [])
-    idx = next((i for i in range(len(msgs) - 1, -1, -1)
-                if isinstance(msgs[i], HumanMessage)), None)
-    if idx is None:
-        return {"dropped": False, "why": "no_user_message"}
-    target = msgs[idx]
-    if not text.strip():
-        return {"dropped": False, "why": "no_text"}
-    if not _same_turn(_user_text_of(target), text):
-        return {"dropped": False, "why": "mismatch"}
-    removes = [RemoveMessage(id=m.id) for m in msgs[idx:] if getattr(m, "id", None)]
-    if not removes:
-        return {"dropped": False, "why": "still_present"}
-    # The store chooses its commit node; verify state after the update.
+    if live_saver(agent) is None:
+        return {"dropped": False, "why": "no_saver"}
+    if not turn_id or len(turn_id) > 100 or not all(
+            char.isascii() and (char.isalnum() or char in "_-") for char in turn_id):
+        return {"dropped": False, "why": "invalid_turn_id"}
+    guard = getattr(agent, "conversation_guard", None)
+    config = {"configurable": {"thread_id": tid}}
     try:
-        setter(cfg, {"messages": removes})
-    except Exception as e:                                  # noqa: BLE001
-        logger.warning("[checkpoint] 丢弃那一轮写不进去（%s: %s）conv=%s",
-                       type(e).__name__, e, tid)
-        return {"dropped": False, "why": "ambiguous_update"}
-    after = getter(cfg)
-    left = list((getattr(after, "values", None) or {}).get("messages") or [])
-    gone = not any(getattr(m, "id", None) == getattr(target, "id", None) for m in left)
-    if gone:
-        from agent.runtime import checkpoint_store
-        checkpoint_store.prune(saver, tid)
-    return {"dropped": gone, "why": "" if gone else "still_present"}
+        with guard(config) if guard is not None else nullcontext():
+            return _drop_turn(agent, config, turn_id)
+    except ConversationDeleted:
+        return {"dropped": True, "why": "conversation_deleted"}
+
+
+def _active_turn_matches(values, turn_id):
+    from agent.runtime.memory import latest_turn_id
+
+    run = values.get("run") or {}
+    for field, channel in (("turn", "messages"), ("approved_result", "input")):
+        current = latest_turn_id((values.get(field) or {}).get(channel, []))
+        if current:
+            return current == turn_id
+    return (run.get("turn_id") or latest_turn_id(run.get("input", []))) == turn_id
+
+
+def _drop_turn(agent, config, turn_id):
+    from langchain_core.messages import RemoveMessage
+
+    from agent.runtime import checkpoint_store, memory
+
+    values = agent.get_state(config).values or {}
+    messages = list(values.get("messages") or [])
+    target = memory.turn_message_id(turn_id)
+    index = next((i for i, message in enumerate(messages) if message.id == target), None)
+    run = values.get("run") or {}
+    active_matches = _active_turn_matches(values, turn_id)
+    if index is not None:
+        later_users = [message for message in messages[index + 1:]
+                       if memory.is_user_input(message)
+                       and message.additional_kwargs.get("task_input", {}).get("turn_id")
+                       != turn_id]
+        if later_users or (run and not active_matches):
+            return {"dropped": False, "why": "not_last_turn"}
+    saver, tid = live_saver(agent), config["configurable"]["thread_id"]
+    # This fence must survive a failed state update and reject late/queued delivery.
+    checkpoint_store.mark_turn_deleted(saver, tid, turn_id)
+    update = {}
+    if index is not None:
+        update["messages"] = [RemoveMessage(id=message.id) for message in messages[index:]]
+    if active_matches or index is not None:
+        update.update(run=None, turn=None, pending_confirm=None, pending_action=None,
+                      approval=None, approved_result=None)
+    if update:
+        agent.update_state(config, update)
+    after = agent.get_state(config).values or {}
+    if any(message.id == target for message in after.get("messages", [])) or (
+            active_matches and after.get("run")):
+        return {"dropped": False, "why": "still_present"}
+    inbox = getattr(agent, "inputs", None)
+    if inbox:
+        for identifier in {run.get("id") if active_matches else None} - {None}:
+            inbox.delete_task(identifier)
+    checkpoint_store.prune(saver, tid)
+    return {"dropped": True, "why": ""}

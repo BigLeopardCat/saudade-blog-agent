@@ -206,9 +206,9 @@ def test_explicit_regeneration_discards_only_the_unfinished_cursor():
     with pytest.raises(AgentCancelled):
         list(selected.stream_events({"messages": [HumanMessage(content="重新生成这个问题")],
                                      "task_id": "discard-task"}, cfg(stop)))
-    assert checkpoint.drop_last_user_turn(selected, 42, "其他问题")["why"] == "mismatch"
+    assert checkpoint.drop_last_user_turn(selected, 42, "unrelated-task")["dropped"]
     assert selected.store.load(cfg(stop)).run
-    assert checkpoint.drop_last_user_turn(selected, 42, "重新生成这个问题")["dropped"]
+    assert checkpoint.drop_last_user_turn(selected, 42, "discard-task")["dropped"]
     assert selected.store.load(cfg(stop)).messages == before
     assert not selected.store.load(cfg(stop)).run
 

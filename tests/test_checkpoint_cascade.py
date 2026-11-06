@@ -1,295 +1,102 @@
-"""Verify checkpoint deletion, truthful receipts and authenticated host delivery."""
-
-
-from __future__ import annotations
+"""Checkpoint deletion requires verified results and authenticated outbox delivery."""
 
 import asyncio
-import sys
-from pathlib import Path
 
 import pytest
-from _judge import collector
+from _parent_repo import read
 from _service import app
 
-ROOT = Path(__file__).resolve().parent.parent
-
-
-sys.path.insert(0, str(ROOT))
-
-
-sys.path.insert(0, str(Path(__file__).resolve().parent))
-
-
-from agent import checkpoint as C  # noqa: E402
-
-FAILED: list[str] = []
-check = collector(FAILED)
+from agent import checkpoint
+from agent.api.routes import conversations
+from config.settings import settings
 
 
 class FakeSaver:
-    """一份最小的 checkpoint 库：一个 `thread_id → 行` 的字典。
+    def __init__(self, *, noop=False):
+        self.rows = {}
+        self.calls = []
+        self.noop = noop
+        self.saver = self
 
-    只实现 `delete_thread` 与 `get_tuple` —— 正是 `C.delete_thread` 用到的两个
-    （`tests/test_checkpoint_factory.py` ④b 已经把"真 saver 造不出来时响亮抛"判过了，
-    所以这里不需要真 saver，也就不需要库）。
-    """
-
-    def __init__(self, *, noop: bool = False):
-        self.rows: dict[str, object] = {}
-        self.calls: list[str] = []
-        self.noop = noop              # 反控用：假装删了、其实一行没动
-
-    def delete_thread(self, tid: str) -> None:
-        self.calls.append(tid)
+    def delete_thread(self, thread_id):
+        self.calls.append(thread_id)
         if not self.noop:
-            self.rows.pop(tid, None)
+            self.rows.pop(thread_id, None)
 
-    def get_tuple(self, config: dict):
+    def get_tuple(self, config):
         return self.rows.get(config["configurable"]["thread_id"])
 
 
-from agent.api.routes import conversations as server  # noqa: E402
-from config.settings import settings  # noqa: E402
+@pytest.mark.parametrize("present", [False, True])
+def test_delete_verifies_absence_at_conversation_coordinate(present):
+    saver = FakeSaver()
+    if present:
+        saver.rows["conv_42"] = {"checkpoint": "saved"}
+    assert checkpoint.delete_thread(saver, 42)
+    assert saver.calls == ["conv_42"]
+    assert saver.get_tuple({"configurable": {"thread_id": "conv_42"}}) is None
 
 
-class _Req:
-    def __init__(self, headers=None):
-        self.headers = headers or {}
-        self.app = app
+def test_noop_delete_cannot_report_success():
+    saver = FakeSaver(noop=True)
+    saver.rows["conv_42"] = {"checkpoint": "saved"}
+    assert checkpoint.delete_thread(saver, 42) is False
 
 
-def _call(conv_id):
-    return asyncio.run(server.checkpoint_delete(conv_id, _Req()))
+@pytest.mark.parametrize("value", [None, "", "   ", 0, "0", "None"])
+def test_invalid_conversation_never_calls_saver(value):
+    saver = FakeSaver()
+    assert checkpoint.delete_thread(saver, value) is False
+    assert saver.calls == []
 
 
-def _fn_body(src: str, key: str) -> str | None:
-    """某个函数的函数体（花括号配对）。找不到 ⇒ `None`（= 锚点没了）。"""
-    i = src.find(key)
-    if i < 0:
-        return None
-    j = src.find("{", i)
-    if j < 0:
-        return None
+@pytest.mark.parametrize("mode,conversation,expected", [
+    ("missing", "42", {"deleted": False, "why": "no_saver"}),
+    ("saved", "0", {"deleted": False, "why": "bad_conversation_id"}),
+    ("saved", "42", {"deleted": True}),
+    ("noop", "42", {"deleted": False, "why": "still_readable"}),
+])
+def test_endpoint_reports_real_deletion_result(monkeypatch, mode, conversation, expected):
+    saver = None if mode == "missing" else FakeSaver(noop=mode == "noop")
+    if saver:
+        saver.rows["conv_42"] = {"checkpoint": "saved"}
+    monkeypatch.setattr(app.state, "runtime", saver)
+    monkeypatch.setattr(settings, "agent_require_assertion", False)
+    request = type("Request", (), {"headers": {}, "app": app})()
+    result = asyncio.run(conversations.checkpoint_delete(conversation, request))
+    assert all(result.get(key) == value for key, value in expected.items())
+
+
+def function_body(source, name):
+    start = source.find(name)
+    assert start >= 0, f"missing host contract: {name}"
+    opening = source.index("{", start)
     depth = 0
-    for k in range(j, len(src)):
-        if src[k] == "{":
-            depth += 1
-        elif src[k] == "}":
-            depth -= 1
-            if depth == 0:
-                return src[j:k + 1]
-    return None
+    for index in range(opening, len(source)):
+        depth += (source[index] == "{") - (source[index] == "}")
+        if not depth:
+            return source[opening:index + 1]
+    raise AssertionError(f"incomplete host function: {name}")
 
 
-HOOK = "checkpoint_cleanup::dispatch(&"
-
-
-def parent_halves(conv_src: str, temp_src: str) -> tuple[str, str]:
-    """Locate durable cleanup delivery in both host deletion paths."""
-    purge = _fn_body(conv_src, "async fn purge_conversation_data")
-    if purge is None:
-        return "锚点没了", "父仓里找不到 `purge_conversation_data`（判据的前提没了）"
-    if "ConvScope::UserId(" not in purge:
-        return "锚点没了", "那份清单里找不到 `ConvScope::UserId(`（两臂的形状变了）"
-    a = _fn_body(conv_src, "async fn delete_conversation")
-    b = _fn_body(temp_src, "async fn delete_temp_user")
-    if a is None or b is None:
-        return "锚点没了", ("父仓那两个调用点找不全（delete_conversation="
-                          f"{'在' if a else '没了'} / delete_temp_user="
-                          f"{'在' if b else '没了'}）")
-    ha, hb = HOOK in a, HOOK in b
-    if ha and hb:
-        return "两臂都接", "两条路都调了 checkpoint 钩子"
-    if not ha and not hb:
-        return "两臂都没接", "两条路都没调 checkpoint 钩子"
-    return "半接", (f"只有「{'会话' if ha else '账号'}」那一臂调了钩子 —— "
-                  "这正是父仓自己记过的那个 bug 的形状（清单两处各写一遍、写的不是同一份）")
-
-
-def hook_identity(conv_src: str, delivery_src: str | None = None) -> tuple[str, str]:
-    """Check service identity headers at both actual HTTP request sites."""
-    marks = []
-    for source, key in ((delivery_src or conv_src, "async fn request"),
-                        (conv_src, "async fn drop_checkpoint_turn")):
-        body = _fn_body(source, key)
-        if body is None:
-            return "锚点没了", f"父仓里找不到 `{key}`（判据的前提没了）"
-        marks.append("X-Agent-Assertion" in body)
-    if all(marks):
-        return "都带", "两个钩子都随请求发身份断言"
-    if not any(marks):
-        return "都不带", ("两个钩子都没带身份断言 —— agent 侧已要求断言（SAU-006）⇒ "
-                       "这两条今天会 401，而钩子是 best-effort，失败只 warn（不会响）")
-    return "半带", ("只有「%s」那个钩子带了断言 —— 同一个文件、同一套调用约定，"
-                  "只改了一半" % ("drop_checkpoint_threads" if marks[0]
-                                else "drop_checkpoint_turn"))
-
-
-import _parent_repo  # noqa: E402
-
-
-def test_checkpoint_cascade():
-    SKIPPED: list[str] = []
-    print("① 机制：`delete_thread` 删得掉，且返回值是「读回来确认」")
-    _s = FakeSaver()
-    _s.rows["conv_42"] = {"checkpoint": "上一轮的状态"}
-    check("有 checkpoint 的会话 ⇒ 删掉并返回 True", C.delete_thread(_s, 42) is True)
-    check("删完真的读不到了", _s.get_tuple({"configurable": {"thread_id": "conv_42"}}) is None)
-    check("删的是**会话坐标**那个线程", _s.calls == ["conv_42"], str(_s.calls))
-    _s2 = FakeSaver()
-    check("删一个本来就不存在的会话 ⇒ 不抛、返回 True（读不到就是读不到）",
-          C.delete_thread(_s2, 7) is True)
-    _s3 = FakeSaver(noop=True)
-    _s3.rows["conv_42"] = {"checkpoint": "还在"}
-    check("（反控）删了没生效的 saver ⇒ **必须返回 False**",
-          C.delete_thread(_s3, 42) is False,
-          "返回了 True ⇒ 这条判据只会恒真，等于没判")
-    _s4 = FakeSaver()
-    _s4.rows["conv_None"] = {"checkpoint": "别人的"}
-    for _bad in (None, "", "   ", 0, "0", "None"):
-        check(f"会话 id={_bad!r} ⇒ False 且**一次 saver 调用都不发**",
-              C.delete_thread(_s4, _bad) is False and _s4.calls == [],
-              f"{_s4.calls}")
-    check("（对照）上面那组不是恒 False：合法的 id 走得到 saver",
-          C.delete_thread(_s4, 1) is True and _s4.calls == ["conv_1"], str(_s4.calls))
-    print()
-    print("② 端点 `server.checkpoint_delete`：三条分支各判一次")
-    _old_agent = app.state.runtime
-    _old_flag = settings.agent_require_assertion
-    try:
-        settings.agent_require_assertion = False   # 见 `_Req` 的注（测试自己钉，不读环境）
-        app.state.runtime = None                     # 没挂 saver（= 今天生产）
-        _r = _call("42")
-        check("没挂 saver ⇒ `deleted=false` 且点名 `no_saver`（不假装成功）",
-              _r.get("deleted") is False and _r.get("why") == "no_saver", str(_r))
-
-        app.state.runtime = FakeSaver()              # 挂上（`probe.saver_of` 认 `saver` 属性）
-        app.state.runtime.saver = app.state.runtime
-        _r = _call("0")
-        check("会话 id 非法 ⇒ `bad_conversation_id`", _r.get("why") == "bad_conversation_id",
-              str(_r))
-
-        app.state.runtime.rows["conv_9"] = {"checkpoint": "x"}
-        _r = _call("9")
-        check("正常 ⇒ `deleted=true`", _r.get("deleted") is True, str(_r))
-
-        # 反控：端点**不许**把"没删掉"报成"删掉了"。
-        _n = FakeSaver(noop=True)
-        _n.saver = _n
-        _n.rows["conv_9"] = {"checkpoint": "还在"}
-        app.state.runtime = _n
-        _r = _call("9")
-        check("（反控）delete 没生效 ⇒ 端点必须回 `deleted=false` / `still_readable`",
-              _r.get("deleted") is False and _r.get("why") == "still_readable", str(_r))
-    finally:
-        app.state.runtime = _old_agent
-        settings.agent_require_assertion = _old_flag
-    print()
-    print("③ 跨仓契约：父仓那两条删会话数据的路**要么都调钩子、要么都不调**")
-    _CONV_FAKE = """
-async fn purge_conversation_data<C>(db: &C, scope: ConvScope) -> Result<Vec<i32>, DbErr> {
-    match scope {
-        ConvScope::ConversationId(id) => {
-            chat_history::Entity::delete_many().exec(db).await?;
-            Ok(vec![id])
-        }
-        ConvScope::UserId(uid) => {
-            chat_history::Entity::delete_many().exec(db).await?;
-            Ok(conv_ids)
-        }
-    }
-}
-pub(crate) async fn drop_checkpoint_threads(ids: &[i32]) { /* 定义，不是调用 */ }
-async fn delete_conversation() {
-    %s
-}
-"""
-    _TEMP_FAKE = """
-async fn delete_temp_user() {
-    %s
-}
-"""
-    _CALL = "checkpoint_cleanup::dispatch(&db, &threads).await;"
-    check("（反控）两臂都没接 ⇒ 判「两臂都没接」（不是含糊的'未接'）",
-          parent_halves(_CONV_FAKE % "", _TEMP_FAKE % "")[0] == "两臂都没接")
-    check("（反控）**只有一臂接了** ⇒ 当场判「半接」",
-          parent_halves(_CONV_FAKE % _CALL, _TEMP_FAKE % "")[0] == "半接",
-          parent_halves(_CONV_FAKE % _CALL, _TEMP_FAKE % "")[1])
-    check("（反控）另一臂单独接 ⇒ 同样判「半接」（两个方向都抓）",
-          parent_halves(_CONV_FAKE % "", _TEMP_FAKE % _CALL)[0] == "半接")
-    check("（正控）两臂都接 ⇒ 「两臂都接」",
-          parent_halves(_CONV_FAKE % _CALL, _TEMP_FAKE % _CALL)[0] == "两臂都接")
-    check("（反控）**只有定义、没有调用** ⇒ 仍判「两臂都没接」（别把函数名当接线）",
-          parent_halves(_CONV_FAKE % "", _TEMP_FAKE % "")[0] == "两臂都没接",
-          "`_CONV_FAKE` 里那个 `drop_checkpoint_threads` 的定义就在那儿")
-    check("（正控）锚点没了要**报**出来，不许空过",
-          parent_halves("fn other() {}", _TEMP_FAKE % _CALL)[0] == "锚点没了")
-    check("（正控）调用点之一没了也要报（不许当成'没接'——那会变成一条恒绿的判据）",
-          parent_halves(_CONV_FAKE % _CALL, "fn other() {}")[0] == "锚点没了")
-    _HOOKS_FAKE = """
-async fn request(client: &Client, base: &str, job: &Job, assertion: &str) {
-    %s
-}
-pub(crate) async fn drop_checkpoint_turn(conversation_id: i32, text: &str, uid: i32) {
-    %s
-}
-"""
-    _HDR = '.header("X-Agent-Assertion", crate::auth_jwt::create_agent_assertion(uid, None))'
-    check("（反控）两个钩子都不带断言 ⇒ 判「都不带」",
-          hook_identity(_HOOKS_FAKE % ("", ""))[0] == "都不带")
-    check("（正控）两个钩子都带 ⇒ 判「都带」",
-          hook_identity(_HOOKS_FAKE % (_HDR, _HDR))[0] == "都带")
-    check("（反控）只改了一个钩子 ⇒ 当场判「半带」（两个方向都抓）",
-          hook_identity(_HOOKS_FAKE % (_HDR, ""))[0] == "半带"
-          and hook_identity(_HOOKS_FAKE % ("", _HDR))[0] == "半带")
-    check("（正控）钩子函数没了要**报**出来，不许空过",
-          hook_identity("fn other() {}")[0] == "锚点没了")
-    _rs = _parent_repo.read(
-        "src/routes/conversation.rs",
-        "本仓的 DELETE /checkpoint/{id} 钩子必须由父仓的级联清单调用（否则删了会话、"
-    "checkpoint 还躺在库里，且没有任何读取路径）")
-    _ts = _parent_repo.read(
-        "src/routes/temp_user.rs",
-        "同上，**账号那一臂**（删账号时级联清它名下全部会话）也必须调那个钩子——"
-    "只有一臂接了就是父仓自己记过的那个 bug 的形状")
-    _ds = _parent_repo.read("src/checkpoint_cleanup.rs", "删除交付必须携带服务身份并验证结果")
-    if _rs is None or _ts is None or _ds is None:
-        # `_parent_repo` 已经打过那行响亮的说明了（父仓不在场 / SAUDADE_REQUIRE_PARENT=1
-        # 时它直接退 1）。这里**如实记成"没验"**，不记成通过——同族：
-        # 父仓 `scripts/healthcheck.sh` 第 8 项在判据脚本不在场时写的是"这一项没验"。
-        SKIPPED.append("父仓不在场 ⇒ 第 ③ 节没验")
-    else:
-        _st, _why = parent_halves(_rs, _ts)
-        print(f"     父仓：{_st} —— {_why}")
-        check("父仓两条删除路径都交付持久清理任务", _st == "两臂都接", _why)
-        check("级联清单在业务删除前登记清理任务",
-              "checkpoint_cleanup::enqueue(db, row.id, row.user_id)" in _rs)
-        check("父仓那份清单**仍然只有一处**：会话 id 由 `purge_conversation_data` 返回给调用方",
-              "-> Result<Vec<i32>" in _rs, "签名里看不到 `Vec<i32>` 返回值")
-        _ist, _iwhy = hook_identity(_rs, _ds)
-        print(f"     父仓钩子的身份：{_ist} —— {_iwhy}")
-        check("父仓两个清理请求都携带身份断言", _ist == "都带", _iwhy)
-        if _ist == "都不带":
-            print("     · 父仓那一半**还没带断言**：agent 侧已要求（SAU-006）⇒ 这两条钩子今天"
-              "会 401，而它们 best-effort、失败只 warn。这是已知缺口（跨仓同批推进），"
-              "不是判据失败——同上面那条'只报不判'的理由。")
-        if _st == "两臂都没接":
-            print("     · 父仓那一半**还没接上**：本仓的钩子今天没有任何调用方。"
-              "这是已知缺口（roadmap 批 7 记着），不是判据失败——本件判的是"
-              "「父仓自己两臂一致」，因为「断言父仓已接」会一直红、"
-              "而红的套件进不了 CI（同 tests/runtime/test_checkpoint_adoption.py 头注）")
-    print()
-    if FAILED:
-        print(f"失败 {len(FAILED)} 项：" + "；".join(FAILED))
-        sys.exit(1)
-    print("全部通过" + (f"（{SKIPPED[0]}）" if SKIPPED else ""))
-
-    assert not FAILED, (
-        f"{len(FAILED)} 条未通过：" + "；".join(FAILED))
-
-
-if __name__ == "__main__":
-    test_checkpoint_cascade()
+def test_host_deletion_paths_use_authenticated_durable_delivery():
+    conversation = read("src/routes/conversation.rs", "会话删除须投递持久清理任务")
+    account = read("src/routes/temp_user.rs", "账号删除须投递名下会话的清理任务")
+    delivery = read("src/checkpoint_cleanup.rs", "两种删除共用鉴权交付与结果核实")
+    if any(value is None for value in (conversation, account, delivery)):
+        pytest.skip("public host contract unavailable")
+    assert "checkpoint_cleanup::dispatch(&" in function_body(
+        conversation, "async fn delete_conversation")
+    assert "checkpoint_cleanup::dispatch(&" in function_body(account, "async fn delete_temp_user")
+    purge = function_body(conversation, "async fn purge_conversation_data")
+    assert "ConvScope::UserId(" in purge
+    assert "checkpoint_cleanup::enqueue(db, row.id, row.user_id)" in conversation
+    request = function_body(delivery, "async fn request")
+    assert "X-Agent-Assertion" in request
+    assert "client.delete(" in request and "/drop_turn" in request
+    assert '"deleted"' in request and '"dropped"' in request
+    assert 'return Err("deletion_unverified")' in request
+    assert 'Some(true)' in request
 
 
 pytestmark = pytest.mark.usefixtures("service_workers")

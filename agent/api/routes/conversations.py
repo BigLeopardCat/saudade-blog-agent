@@ -34,9 +34,9 @@ async def checkpoint_delete(conversation_id: str, request: Request, uid: int = 0
 
 
 class DropTurnReq(BaseModel):
-    """Original discarded user text and untrusted caller ID; empty text never deletes a turn."""
+    """Stable original request identity, bound to the authenticated host conversation."""
 
-    text: str = ""
+    turn_id: str = Field(min_length=1, max_length=100, pattern=r"^[A-Za-z0-9_-]+$")
     uid: int = Field(default=0, ge=0)
 
 
@@ -45,7 +45,7 @@ async def checkpoint_drop_turn(conversation_id: str, req: DropTurnReq, request: 
     """Remove only the matching last user turn and verify the resulting checkpoint."""
     principal = _resolve_principal(request, req.uid)
     out = await require_workers(request).run(
-        checkpoint.drop_last_user_turn, request.app.state.runtime, conversation_id, req.text
+        checkpoint.drop_last_user_turn, request.app.state.runtime, conversation_id, req.turn_id
     )
     logger.info(
         "[checkpoint] 丢弃那一轮 conv=%s dropped=%s why=%s by=%s",

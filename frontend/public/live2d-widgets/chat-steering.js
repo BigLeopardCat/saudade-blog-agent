@@ -63,7 +63,7 @@
       }
       const id = 'd' + entry.message_id;
       if (!ctx.state.items.some(x => x.id === id)) {
-        const item = ctx.core.migrateItem({ id, type: 'user', text: entry.text, time: entry.ts });
+        const item = ctx.core.migrateItem({ id, type: 'user', text: entry.text, time: entry.ts, parent_turn_id: entry.turn_id });
         ctx.state.items = ctx.core.mergeItems(ctx.state.items, [item]);
         const element = engine.appendMsg(item);
         const live = ctx.state.live[ctx.state.activeRound?.roundId]?.el;
@@ -73,7 +73,7 @@
           messages.insertBefore(element, live);
         }
         engine.saveHistory();
-        engine.broadcast({ t: 'user', id, text: entry.text, time: entry.ts, from: engine.windowId });
+        engine.broadcast({ t: 'user', id, text: entry.text, time: entry.ts, parent_turn_id: entry.turn_id, from: engine.windowId });
       }
       if (ctx.state.activeRound?.taskId === entry.task) ctx.state.activeRound.resumeText = entry.text;
     };
@@ -113,7 +113,7 @@
             const previous = saved.find(x => x.task_id === task && String(x.conv_id) === String(conv));
             if (!previous || previous.text !== last.text) {
               localStorage.setItem('saudade-chat-failed', JSON.stringify([
-                {...previous,kind:'stopped',task_id:task,conv_id:conv,text:last.text,ts:Date.now()},
+                {...previous,kind:'stopped',task_id:task,turn_id:body.turn_id,conv_id:conv,text:last.text,ts:Date.now()},
                 ...saved.filter(x => x !== previous)].slice(0,3)));
               engine.refreshView?.();
             }
@@ -146,14 +146,14 @@
         if (!text) return;
         if ([...text].length > 2000) { ctx.ui.notify?.('补充要求最多 2000 字，请缩短后发送'); return; }
         if (!attempt || attempt.text !== text || attempt.task !== task) {
-          attempt = { id: ctx.core.genId(), task, text, conv, ts: Date.now(), status: 'submitting' };
+          attempt = { id: ctx.core.genId(), task, turn_id: ctx.state.activeRound.turnId, text, conv, ts: Date.now(), status: 'submitting' };
         }
         ctx.state.steeringSubmitting = true; entries = entries.filter(x => x.id !== attempt.id);
         entries.push(attempt); save();
         const pending = attempt, owner = actor();
         try {
           const body = await post('/api/chat/task/input', { conversation_id: conv,
-            task_id: task, input_id: pending.id, text });
+            task_id: task, turn_id: pending.turn_id, input_id: pending.id, text });
           if (owner !== actor() || conv !== ctx.state.conv) return;
           if (body.task_id !== task || body.input?.id !== pending.id) throw new Error('补充要求回执不匹配');
           for (const item of body.inputs || []) merge(task, item);
@@ -163,7 +163,7 @@
         } catch (error) {
           if (owner !== actor() || conv !== ctx.state.conv) return;
           entries = entries.map(x => x.id === pending.id && ['submitting', 'unknown'].includes(x.status)
-            ? { ...x, status: ['task_not_running', 'input_limit', 'invalid_input'].includes(error.code)
+            ? { ...x, status: ['task_not_running', 'input_limit', 'invalid_input', 'stale_turn'].includes(error.code)
               ? 'not_applied' : 'unknown' } : x);
           save(); ctx.ui.notify?.(error.message);
           void sync(task);
