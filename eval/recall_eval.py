@@ -162,7 +162,7 @@ def evaluate(idx, show: bool, queries: list[dict] | None = None) -> dict:
     """Evaluate one fixed query set; report the holdout separately."""
     queries = QUERIES if queries is None else queries
     results: list[dict] = []
-    modes: dict[str, int] = {}          # 实测路线计数（不是配置，是这批 query 真走过的路）
+    modes: dict[str, int] = {}          # 实际路线计数（不是配置，是这批 query 真走过的路）
     for q in queries:
         row, mode = _measure_one(q)
         modes[mode] = modes.get(mode, 0) + 1

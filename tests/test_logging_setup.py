@@ -80,7 +80,7 @@ def main() -> int:
 def _run() -> None:
     level = getattr(logging, settings.log_level.upper(), logging.INFO)
 
-    # ① 幂等：连调两次，root 上仍只有一个 handler，且那个是我们的
+    # ① 幂等：连调两次，root 上仍只有一个 handler，且那个是本模块安装的
     out = _capture(lambda: (setup_logging(), setup_logging()))
     ours = [h for h in _root().handlers if _is_ours(h)]
     check("连调两次 setup_logging ⇒ root 上只有一个 handler（不叠加）",

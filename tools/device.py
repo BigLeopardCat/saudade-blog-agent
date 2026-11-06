@@ -103,7 +103,7 @@ def device_oled_display(
                                 before="同一内容 30 秒内已下发", after="未重复下发",
                                 text=text))
         # **下发前就占位**（不是发完再记）：占位与检查在同一把锁里，两个并发请求
-        # 只有一个能过——这正是原来那版缺的一步。失败路径会在下面把它撤掉。
+        # 只有一个能过。失败路径会在下面把它撤掉。
         _last_display[uid] = (text, now)
     sent = False
     try:

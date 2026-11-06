@@ -1270,8 +1270,8 @@ def step15_loud_target(rep: Report, uid: int, role: str) -> None:
         _drop_conv(rep, uid, role, conv_id, "⑮")
 
 
-# （原 `_tags_with_color` 已并入 `_tag_created`：⑩ 现在读的是差分出来的**原始行**
-#  ，颜色直接取 `row["color"]`，与"这一轮到底建了什么"同一份数据，不再绕一层。）
+# `_tag_created` 直接读差分出来的**原始行**与 `row["color"]`，与"这一轮到底建了什么"
+# 同一份数据。
 
 
 # Review probes use target IDs in their own backend namespace.

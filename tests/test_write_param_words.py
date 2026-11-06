@@ -58,7 +58,7 @@ def _status_words_from_rust(src: str) -> tuple[set[str], str]:
     if _arms:
         return _arms, "`normalize_status_word` 的 match 臂"
 
-    # 旧形状（本笔之前的父仓）：词散在两个写函数里 —— `== "x"` 是比较，`unwrap_or("x")`
+    # 旧形状：词散在两个写函数里 —— `== "x"` 是比较，`unwrap_or("x")`
     # 是缺省值，两者都是"后端认得的词"。取不到新形状就退回这里。
     _legacy: set[str] = set()
     for _fn in ("create_note", "update_note"):
@@ -132,7 +132,7 @@ def test_write_param_words():
       "互相矛盾的记录，而且没有任何东西会报错）",
           _p_out <= _recog, f"本侧={sorted(_p_out)} 后端={sorted(_recog)}")
     LEDGER = {
-        "published",   # 后端的历史写法（`create_note` 的缺省值就是它）：本侧一律归一到 "public"
+        "published",   # 后端既有写法（`create_note` 的缺省值就是它）：本侧一律归一到 "public"
     }
     _missing = sorted(_recog - _p_out - LEDGER)
     _stale = sorted(LEDGER - (_recog - _p_out))

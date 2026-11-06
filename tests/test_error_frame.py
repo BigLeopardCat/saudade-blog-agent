@@ -143,9 +143,8 @@ def _payload_escaping():
 
 def _producer_error_hides_internals():
     print("\n── ②b 内部错误名不许进气泡（20260927 07:29 生产事故形态）──")
-    # 以**事故当天的真异常**为输入：`graph.execute_node` 的 KeyError('pending_confirm')
-    # （调用方只认一种出口、第二种一命中就炸）。主人当初看到的是
-    # 「网络错误: 'pending_confirm'」。这里锁住"内部名一个字都出不去"。
+    # 以内部异常 KeyError('pending_confirm') 为输入（调用方只认一种出口，第二种
+    # 一命中就炸）。这里锁住"内部名一个字都出不去"。
     chunks = asyncio.run(_drive(_producer(KeyError("pending_confirm"))))
     fr = _frames(chunks)
     payload = _payload(fr[0]) if fr else ""

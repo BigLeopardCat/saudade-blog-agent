@@ -178,8 +178,7 @@
         document.body.removeChild(a);
       },
       info: () => {
-        // 上游这里是 open('https://github.com/stevenjoezhang/live2d-widget')——把访客
-        // 送去别人仓库，且暴露"这个组件是从哪抄的"。改成如实报自己的实现来源。
+        // 上游会 open 到别人的仓库；这里如实报自己的实现来源。
         show('看板娘 泠月喵 · 渲染 pixi-live2d-display (MIT) + pixi.js (MIT)', 6000, 9);
       },
       quit: () => {

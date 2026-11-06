@@ -18,7 +18,7 @@ check = collector(FAILS)
 
 
 class FakeLLM:
-    """假模型：返回固定文本（或抛异常）——测的是我们自己的围栏/校验/取向，不是模型。"""
+    """假模型：返回固定文本（或抛异常）——测的是本模块的围栏/校验/取向，不是模型。"""
 
     def __init__(self, text="", exc: Exception | None = None):
         self.text, self.exc, self.prompts = text, exc, []

@@ -361,7 +361,7 @@
         // 向下展开；仅当菜单会溢出列表下缘（被 conv-list-body overflow-y 裁切）
         // 才向上翻。判据按列表内容区折算：row.offsetTop 的基准是面板（含列表头
         // 高度），须减 body.offsetTop；滚动后 offsetTop 不变、scrollTop 补偿，
-        // 等价"可见窗口"判定——顶部行不再误判向上（旧判据的经典 bug）
+        // 等价"可见窗口"判定——顶部行不会误判为向上
         more.addEventListener('click', (e) => {
           e.stopPropagation();
           if (row.classList.contains('menu-open')) { clearMenuAll(); return; }

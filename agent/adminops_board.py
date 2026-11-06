@@ -14,7 +14,7 @@ def announcement_title(row) -> str:
 
 
 def render_announcement_created(row) -> str:
-    """发布成功。**不带工具名**（同 render_tag_created 的血案）。"""
+    """发布成功。**不带工具名**（工具名会被 narrator 照抄成"我调用了它"）。"""
     return (f"已发布公告「{announcement_title(row)}」（id={(row or {}).get('id')}）。"
             f"首页现在就能看到它。")
 

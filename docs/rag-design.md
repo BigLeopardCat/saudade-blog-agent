@@ -59,10 +59,10 @@ rag/chunks.py 使用 LangChain 的 RecursiveCharacterTextSplitter 在小节内�
 指令，保留小节源范围；配置损坏仍可走词法，见 [输入预算说明](embedding-inputs.md)。
 
 词法通过 scikit-learn CountVectorizer 的公开 analyzer 生成 CJK 2/3-gram 与英文数字词元；
-应用只配置语言边界，不再手写 n-gram 生成循环。查询词元去重。`rag/lexical.py` 是 BM25S 的薄适配，
+应用只配置语言边界，n-gram 生成交给该 analyzer。查询词元去重。`rag/lexical.py` 是 BM25S 的薄适配，
 索引、词频统计、长度归一与评分交给锁定版本的库；参数来自 BM25_K1、BM25_B。
 使用 Lucene 方法、float64 和 NumPy 后端，构建后只读，随完整语料快照原子替换。
-状态与评测报告记录库版本和评分方法。原生分数与旧实现的绝对尺度不同，不作为置信度；
+状态与评测报告记录库版本和评分方法。原生分数不作为置信度；
 原分只用于本路排序，候选由固定 top_k 限制，RRF 按相对名次融合。
 两路共用 rag/ranking.py 聚合文档，并提供可回取的命中位置。
 查询保留原始问句；不删除疑问词、不按头部分数裁掉尾候选。

@@ -306,13 +306,13 @@ def list_categories() -> str | ToolResult:
 def list_tags() -> str | ToolResult:
     """获取站内**全部标签**：一级标签 + 它下面的二级标签（二级互不重名，但不同
     一级标签下可以有同名二级标签，靠 fatherKey/fatherTag 区分）。"""
-    # 两级都要读：只读 /tagone 时结构上就看不见二级标签，
-    # 线上实测答出"站内没有二级标签"。两个端点都是公开只读、无需鉴权。
+    # 两级都要读：只读 /tagone 时结构上就看不见二级标签。
+    # 两个端点都是公开只读、无需鉴权。
     one = _get("/tagone")
     two = _get("/tagtwo")
     if isinstance(one, ToolResult):
         # 任一路读不到 → **不合并半份**：半份清单会把"这次没读到二级标签"伪装成
-        # "站内没有二级标签"，正是上面那个结论的来源。如实报不可用。
+        # "站内没有二级标签"。如实报不可用。
         return one
     if isinstance(two, ToolResult):
         return two

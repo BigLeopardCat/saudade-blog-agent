@@ -210,9 +210,8 @@ def parse_tag_ids(raw) -> list[int]:
     """读：脏值容错 → 去重后的正整数 id 列表（保序）。
 
     容忍 `"1,2"` / `""` / `"1,1,,"` / `[1,2]` / None / 数字与字符串混装。
-    `parseInt('12abc')=12` 那种脏值悄悄当合法 id 的行为刻意不学（前端也改成了
-    用 Number 严格判）——悬空/畸形的 id 会被当成真标签去解析名字，然后把
-    「12abc」渲染成一个不存在的标签名。
+    `parseInt('12abc')=12` 那种脏值悄悄当合法 id 的行为刻意不学——悬空/畸形的
+    id 会被当成真标签去解析名字，然后把「12abc」渲染成一个不存在的标签名。
     """
     if raw is None:
         return []
@@ -647,8 +646,8 @@ def find_category(index: dict[int, CategoryInfo], name: str):
 
 
 def render_category_created(info: CategoryInfo) -> str:
-    """新建分类成功。**不带任何工具名**（同 render_tag_created 的血案：工具名会被
-    narrator 照抄成"我调用了它"，而它不在本轮执行集里 ⇒ 具名声称闸判编造）。
+    """新建分类成功。**不带任何工具名**（工具名会被 narrator 照抄成"我调用了它"，
+    而它不在本轮执行集里 ⇒ 具名声称闸判编造）。
     也不报篇数：刚建的分类必然 0 篇，报出来是废话（更糟的是把"0"念成了影响面）。"""
     extra = f"，路径 {info.path_name}" if info.path_name else ""
     return (f"已新建分类「{info.name}」（id={info.id}{extra}）。"

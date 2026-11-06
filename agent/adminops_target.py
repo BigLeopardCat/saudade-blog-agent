@@ -182,7 +182,7 @@ def target_conflict_frame(name: str, named: set[int], got) -> ToolResult:
 
 
 def target_error_reason(text: str) -> str | None:
-    """从错误帧取回原因码（非本族帧 → None），供 _check_spec 用（**回落支**，批 G4）。"""
+    """从目标校验错误帧读取原因码；非本族帧返回 None。"""
     s = str(text or "")
     if f"[{REASON_TARGET_MISMATCH}]" in s:
         return REASON_TARGET_MISMATCH
@@ -209,6 +209,6 @@ def policy_frame(message: str) -> ToolResult:
 
 
 def policy_error_reason(text: str) -> str | None:
-    """从错误帧取回原因码（非本族帧 → None），供 _check_spec 用（**回落支**，批 G4）。"""
+    """从政策拒绝帧读取原因码；非本族帧返回 None。"""
     return (REASON_POLICY_REFUSED
             if f"[{REASON_POLICY_REFUSED}]" in str(text or "") else None)
