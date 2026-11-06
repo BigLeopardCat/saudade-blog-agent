@@ -102,12 +102,13 @@ def test_summary_is_one_aggregate_request_with_no_content(backend):
                         ("total", "pending", "passed", "rejected")},
         "aiDecision": {key: backend["counts"][key] for key in
                        ("aiPassed", "aiFlagged", "aiRejected", "aiUnreviewed")}}
-    assert data["board"] == {"scope": "all", **counts}
+    assert data["board"] == {"scope": "all", "reviewProvenance": "not_reported", **counts}
     assert data["comments"] == {"scope": "not_deleted",
         "finalStatus": {key: backend["comment_counts"][key] for key in
                         ("total", "pending", "passed", "rejected")},
         "aiDecision": {key: backend["comment_counts"][key] for key in
-                       ("aiPassed", "aiFlagged", "aiRejected", "aiUnreviewed")}}
+                       ("aiPassed", "aiFlagged", "aiRejected", "aiUnreviewed")},
+        "reviewProvenance": "not_reported"}
     assert len(backend["requests"]) == 1
     assert backend["requests"][0].url.path.endswith("/moderation/summary")
     assert "content" not in str(data)

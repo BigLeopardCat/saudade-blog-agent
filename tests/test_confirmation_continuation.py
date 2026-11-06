@@ -140,6 +140,19 @@ def assert_preserved_exchange(prompt, original, token):
     assert token not in str(prompt)
 
 
+def assert_waiting_exchange(prompt):
+    reviews = [message for message in prompt
+               if isinstance(message, ToolMessage)
+               and message.tool_call_id in ("favorite", "notice")]
+    prepared, deferred = [json.loads(message.content) for message in reviews]
+    assert prepared["status"] == "awaiting_confirmation" and prepared["executed"] is False
+    assert prepared["approval"] == "required"
+    assert prepared["tool_execution"] == "disabled_until_decision"
+    assert deferred == {"status": "not_executed", "reason": "awaiting_prior_confirmation",
+        "executed": False, "available_in_catalog": True, "waiting_for_call_id": "favorite",
+        "continuation": "resume_after_prior_approval_and_verified_result"}
+
+
 def test_mixed_preparations_wait_for_separate_approvals_and_preserve_native_exchange(backend):
     state, _ = backend
     first = runtime(Model())
@@ -147,6 +160,7 @@ def test_mixed_preparations_wait_for_separate_approvals_and_preserve_native_exch
     cursor = first.store.load(config()).approval
     assert cursor and not state["writes"] and not state["read"]
     assert "取消将停止后续处理" in proposal.execution["pending_confirm"]["q"]
+    assert_waiting_exchange(original.review_prompts[-1])
     assert not any(path.endswith("/notifications") for _, path in state["requests"])
     assert proposal.execution["pending_confirm"]["token"] not in str(cursor)
     rebuilt_model = Model(AIMessage(content="已收藏文章，通知也标记为已读了。"))

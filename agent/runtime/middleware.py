@@ -338,8 +338,8 @@ class SessionMiddleware(AgentMiddleware):
         if call["id"] in self.cached:
             message = self.cached[call["id"]]
         elif session.outcome is not None:
-            message = ToolMessage(content="尚未执行，等待当前操作的确认。",
-                                  tool_call_id=call["id"], artifact={"phase": "deferred"})
+            message = approval_messages.deferred(call, awaiting=session.state["awaiting_call"],
+                                                available=call["name"] in session.tools)
         else:
             before = len(self.exchange)
             command = append_result(session, request, handler, self.exchange,
@@ -355,14 +355,13 @@ class SessionMiddleware(AgentMiddleware):
                 message = self.exchange[-1]
             else:
                 proposal = capture(session)["proposal"]
-                message = ToolMessage(content=json.dumps({
-                    "status": "awaiting_confirmation" if proposal else "terminal",
-                    "result": (proposal["execution"]["pending_confirm"].get("q", proposal["reply"])
-                               if proposal else session.outcome.reply)}, ensure_ascii=False),
-                    name=call["name"], tool_call_id=call["id"], artifact={
-                        "kind": "prepared" if proposal else "terminal",
-                        "phase": "awaiting_approval" if proposal else "terminal",
-                        "proposal": proposal})
+                message = (approval_messages.prepared(
+                               call, proposal, request.state.get("todos", ()))
+                           if proposal else ToolMessage(content=json.dumps({
+                               "status": "terminal", "result": session.outcome.reply},
+                               ensure_ascii=False), name=call["name"], tool_call_id=call["id"],
+                               artifact={"kind": "terminal", "phase": "terminal",
+                                         "proposal": None}))
                 session.observations.extend(memory.observation(call, message))
         message = message.model_copy(update={"name": call["name"]})
         if self.calls and call["id"] == self.calls[-1]["id"]:

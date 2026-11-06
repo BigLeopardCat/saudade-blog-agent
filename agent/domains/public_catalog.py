@@ -62,7 +62,7 @@ def get_top_notes(page: Page = 1, page_size: Limit = 5) -> object:
 
 @tool
 def list_categories(page: Page = 1, page_size: CatalogLimit = 20) -> object:
-    """分页读取公开分类与各分类已公开文章数，默认及最多20条；计数不包含草稿或私密文章。"""
+    """分页读取公开分类，默认及最多20条。total是分类数；publicArticleCount是分类内公开文章数，不含草稿或私密文章，不能合计为全站文章总数。"""
     return read_page("categories", page, page_size, {}, _category)
 
 

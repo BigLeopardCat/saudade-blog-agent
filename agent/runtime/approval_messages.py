@@ -3,6 +3,7 @@
 import json
 
 from langchain.agents.middleware import AgentMiddleware, hook_config
+from langchain_core.messages import ToolMessage
 
 from agent.runtime.execution_state import restore
 from agent.runtime.memory import observation
@@ -24,6 +25,33 @@ class ApprovalResumeMiddleware(AgentMiddleware):
         check_cancelled(self.policy.session.config, check_budget=False)
         restore(self.policy.session, state)
         return self.policy._resume(state)
+
+
+def deferred(call, *, awaiting, available):
+    """Describe a scheduling boundary without changing tool access or approval."""
+    return ToolMessage(content=json.dumps({
+        "status": "not_executed", "reason": "awaiting_prior_confirmation",
+        "executed": False, "available_in_catalog": available,
+        "waiting_for_call_id": awaiting,
+        "continuation": "resume_after_prior_approval_and_verified_result",
+    }), name=call["name"], tool_call_id=call["id"], artifact={"phase": "deferred"})
+
+
+def prepared(call, proposal, todos):
+    """Expose preparation and pending work as data, never as execution evidence."""
+    visible = {
+        "status": "awaiting_confirmation", "executed": False,
+        "approval": "required", "approval_scope": "current_operation_only",
+        "continuation": "waiting_for_user_decision",
+        "tool_execution": "disabled_until_decision",
+        "result": proposal["execution"]["pending_confirm"].get("q", proposal["reply"]),
+    }
+    pending = [item for item in todos if item["status"] != "completed"]
+    if pending:
+        visible["remaining_work_not_execution_evidence"] = pending
+    return ToolMessage(content=json.dumps(visible, ensure_ascii=False),
+        name=call["name"], tool_call_id=call["id"], artifact={
+            "kind": "prepared", "phase": "awaiting_approval", "proposal": proposal})
 
 
 def receipt(awaiting, facts):
