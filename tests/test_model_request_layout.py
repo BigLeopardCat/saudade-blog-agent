@@ -1,5 +1,6 @@
 """Cache observations describe SDK payloads without exposing their private values."""
 
+import hashlib
 import json
 
 from models import request_trace
@@ -110,6 +111,9 @@ def test_http_wire_records_the_deepseek_sdk_body_and_actual_header(monkeypatch):
     wire = next(data for event, data in events if event == 'wire_request')
     before = next(data for event, data in events if event == 'request_layout')
     actual = json.loads(requests[0].content)
+    assert wire['body_sha256'] == hashlib.sha256(requests[0].content).hexdigest()
+    assert wire['body_bytes'] == len(requests[0].content)
+    assert 'body_sha256' not in before and 'body_bytes' not in before
     assert wire['session'] == request_trace.fingerprint('actual-private-session')
     assert before['session'] == request_trace.fingerprint('intended-private-session')
     assert wire['messages'] == [request_trace.fingerprint(row) for row in actual['messages']]
@@ -117,6 +121,27 @@ def test_http_wire_records_the_deepseek_sdk_body_and_actual_header(monkeypatch):
     assert 'extra_body' not in wire['control_fingerprints']
     assert all(value not in json.dumps(events) for value in (
         'private-credential','private-user-text','intended-private-session','actual-private-session'))
+
+
+def test_raw_body_evidence_distinguishes_serialization_from_prompt_changes(monkeypatch):
+    import asyncio
+
+    import httpx
+
+    events = []
+    monkeypatch.setattr(request_trace, 'record', lambda *_args, **data: events.append(data))
+    payload = {'model': 'fixture', 'messages': [{'role': 'user', 'content': 'private-text'}]}
+    compact = json.dumps(payload, separators=(',', ':')).encode()
+    pretty = json.dumps(payload, indent=2).encode()
+    for body in (compact, compact, pretty):
+        request = httpx.Request('POST', 'https://fixture.test/v1/chat/completions', content=body)
+        asyncio.run(request_trace.record_wire_request(request))
+    assert events[0]['body_sha256'] == events[1]['body_sha256']
+    assert events[0]['body_sha256'] != events[2]['body_sha256']
+    assert events[0]['body_bytes'] < events[2]['body_bytes']
+    assert events[0]['messages'] == events[2]['messages']
+    assert events[0]['controls'] == events[2]['controls']
+    assert 'private-text' not in json.dumps(events)
 
 
 def test_large_or_non_chat_wire_observations_do_not_break_the_request(monkeypatch):

@@ -19,7 +19,7 @@ def fingerprint(value, *, sort_keys=False):
 
 
 def record_layout(payload, *, endpoint=None, event="request_layout",
-                  observed_session=_CONTEXT_SESSION):
+                  observed_session=_CONTEXT_SESSION, wire_body=None):
     session = current_session() if observed_session is _CONTEXT_SESSION else observed_session
     messages = payload.get("messages") or []
     tools = payload.get("tools") or []
@@ -40,7 +40,9 @@ def record_layout(payload, *, endpoint=None, event="request_layout",
            tool_choice=extra.get("tool_choice", payload.get("tool_choice")),
            thinking=extra.get("thinking", payload.get("thinking")),
            reasoning_effort=extra.get("reasoning_effort", payload.get("reasoning_effort")),
-           session=fingerprint(session) if session else None)
+           session=fingerprint(session) if session else None,
+           **({"body_sha256": hashlib.sha256(wire_body).hexdigest(),
+               "body_bytes": len(wire_body)} if wire_body is not None else {}))
 
 
 async def record_wire_request(request):
@@ -62,4 +64,4 @@ async def record_wire_request(request):
                session=fingerprint(session) if session else None)
         return
     record_layout(payload, endpoint=str(request.url.copy_with(query=b"")),
-                  event="wire_request", observed_session=session)
+                  event="wire_request", observed_session=session, wire_body=body)
