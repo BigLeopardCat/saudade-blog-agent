@@ -407,3 +407,12 @@ def test_invalid_navigation_does_not_advertise_inaccessible_console_routes():
         _call("navigate_page", {"path": "/not-a-site-page"}), config=cfg)
     assert result.status == "error" and "/dashboard" not in result.content
     assert "/guestbook" in result.content
+
+
+def test_bound_navigation_schema_preserves_the_tool_applicability_contract():
+    from langchain_core.utils.function_calling import convert_to_openai_tool
+
+    bound = convert_to_openai_tool(browser.tools(_config())["navigate_page"])["function"]
+    assert bound["description"].startswith(browser.navigate_page.description)
+    assert "read-only tasks" in bound["description"]
+    assert "/guestbook" in bound["description"] and "/dashboard" not in bound["description"]

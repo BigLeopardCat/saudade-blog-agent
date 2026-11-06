@@ -3,6 +3,7 @@
 import asyncio
 import functools
 import logging
+import math
 import threading
 import time
 import uuid
@@ -25,6 +26,7 @@ from agent.runtime.control import RequestControl
 from agent.runtime.memory_scope import safe_request
 from agent.runtime.progress import StreamProgress
 from config.settings import settings
+from models.errors import error_fields
 from utils.logging import get_trace_id
 from utils.trace import finish_trace, record, start_trace
 
@@ -36,6 +38,20 @@ STREAM_BUFFER_SIZE = 64
 STREAM_PING_INTERVAL = 15.0
 PRODUCER_ERROR_TEXT = "服务这边出了点问题，这一轮没能生成回复，请再说一次。"
 _RECOVERY_SENTENCE = "喵呜……主人抱歉，泠月喵刚才脑袋卡壳了，没有生成出回复，请主人再问一遍喵～ 🐾"
+
+
+def _producer_error_text(error):
+    facts = error_fields(error)
+    if (facts.get("provider_error_code") in {"insufficient_quota", "billing_hard_limit_reached"}
+            or facts.get("provider_error_type") == "insufficient_quota"):
+        return "模型服务额度暂不可用，请联系管理员检查。"
+    if facts.get("failure_source") == "provider" and facts.get("http_status") in {401, 403}:
+        return "模型服务配置或访问权限异常，请联系管理员检查。"
+    if facts.get("retryable") and facts.get("failure_source") in {"provider", "transport"}:
+        delay = facts.get("retry_after_s")
+        return (f"模型服务暂时不可用，请约{math.ceil(delay)}秒后重试。"
+                if delay is not None and delay >= 1 else "模型服务暂时不可用，请稍后重试。")
+    return PRODUCER_ERROR_TEXT
 
 
 def _record_invalid_confirm(
@@ -204,10 +220,11 @@ async def chat(req: ChatRequest, request: Request):
             final_reply = _RECOVERY_SENTENCE
         end_reason = "producer_done"
         return ChatResponse(reply=final_reply, success=True, events=result.events)
-    except Exception:
+    except Exception as error:
         end_reason, trace_errors = "producer_error", 1
         logger.exception("Agent invocation failed")
-        return ChatResponse(reply=PRODUCER_ERROR_TEXT, success=False, error=PRODUCER_ERROR_TEXT)
+        message = _producer_error_text(error)
+        return ChatResponse(reply=message, success=False, error=message)
 
     finally:
         jobs.close()
@@ -332,7 +349,7 @@ async def chat_stream(req: ChatRequest, request: Request):
                         exc_info=chunk,
                     )
                     progress.mark("error")
-                    yield sse_frame("error", PRODUCER_ERROR_TEXT)
+                    yield sse_frame("error", _producer_error_text(chunk))
                     return
                 if isinstance(chunk, StreamEvent):
                     kind, payload = chunk.name, chunk.data

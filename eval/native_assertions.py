@@ -33,7 +33,7 @@ def contains(actual, expected):
         return isinstance(actual, list) and len(actual) == len(expected) and all(
             contains(value, wanted) for value, wanted in zip(actual, expected)
         )
-    return actual == expected
+    return isinstance(actual, bool) == isinstance(expected, bool) and actual == expected
 
 
 def _answer_value(wanted, result, calls):
@@ -98,9 +98,26 @@ def _runtime_stops(events):
     ]
 
 
+def _call_key(event):
+    call_id, round_index = event.get("call_id"), event.get("round")
+    return ((round_index, call_id)
+            if type(round_index) is int and isinstance(call_id, str) and call_id else None)
+
+
+def _preparation_facts(events):
+    facts = {}
+    for event in events:
+        key, source, value = _call_key(event), event.get("source"), event.get("facts")
+        if (event.get("event") == "preparation_observation" and key is not None
+                and event.get("complete") is True and isinstance(source, str)
+                and isinstance(value, dict)):
+            facts.setdefault(key, {}).setdefault(source, {}).update(value)
+    return facts
+
+
 def observations(events):
     """Apply defaults declared by the actual bound tool, never guessed defaults."""
-    defaults, calls = {}, []
+    defaults, calls, facts = {}, [], _preparation_facts(events)
     for event in events:
         if event.get("event") == "tool_contract":
             function = (event.get("schema") or {}).get("function") or {}
@@ -109,8 +126,10 @@ def observations(events):
                 k: v["default"] for k, v in properties.items() if "default" in v
             }
         elif event.get("node") == "native" and event.get("event") == "call":
+            details = facts.get(_call_key(event))
             calls.append(
-                {**event, "args": {**defaults.get(event.get("name"), {}), **event.get("args", {})}}
+                {**event, "args": {**defaults.get(event.get("name"), {}), **event.get("args", {})},
+                 **({"facts": details} if details else {})}
             )
     return calls
 
@@ -122,6 +141,8 @@ def _matches_observation(wanted, event):
         or not contains(event.get("args", {}), args)
         or wanted.get("kinds")
         and event.get("kind") not in wanted["kinds"]
+        or wanted.get("facts")
+        and not contains(event.get("facts"), wanted["facts"])
     ):
         return False
     expected = (wanted.get("result_by_tool") or {}).get(event.get("name"), wanted.get("result"))
@@ -197,13 +218,18 @@ def _prepared_or_noop(wanted, result, events):
         for spec in payload["specs"]
     ]
     if any(contains(spec, wanted["spec"]) for spec in specs):
+        proof = wanted.get("prepared_observations")
+        return not proof or any(_matches_observation(expected, call)
+                                for expected in proof for call in observations(events))
+    if any(_matches_observation(proof, call)
+           for proof in wanted.get("noop_observations", []) for call in observations(events)):
         return True
     noop_calls = {
         (event.get("round"), event.get("call_id"))
         for event in events
         if event.get("event") == "call"
         and event.get("kind") == "noop"
-        and event.get("name") in wanted["noop_tools"]
+        and event.get("name") in wanted.get("noop_tools", [])
         and event.get("call_id")
     }
     return any(

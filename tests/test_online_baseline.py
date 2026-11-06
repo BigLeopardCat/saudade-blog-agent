@@ -757,3 +757,13 @@ def test_fixture_preflight_uses_each_cases_identity_and_restores_actor():
     assert all(row["status"] == "passed" for row in online_baseline.fixture_preflight(
         cases, adapter, {"admin": 1, "user": 4}))
     assert seen == [(1, 72), (4, 72)] and adapter.uid == 99
+
+
+def test_poc_selection_preserves_order_and_rejects_duplicates_unknown_ids_and_partial_full():
+    cases = [{"id": "first"}, {"id": "second"}]
+    assert online_baseline.select_cases(cases, "poc", ["second", "first"]) == cases[::-1]
+    for phase, ids in [("poc", ["first", "first"]), ("poc", ["missing"]),
+                        ("full", ["first"])]:
+        with pytest.raises(ValueError):
+            online_baseline.select_cases(cases, phase, ids)
+    assert online_baseline.select_cases(cases, "full") == cases

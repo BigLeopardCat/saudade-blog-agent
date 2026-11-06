@@ -41,8 +41,10 @@ DOMAIN_DESCRIPTIONS = {
     "admin_work_queue": "Quota applications/reset and user-facing to-dos/reminders, including "
     "selectable batch deletion. Known account IDs can reset directly. "
     "Business records, not private planning.",
-    "admin_moderation": "Guestbook/comments with real publishers, including anonymous entries. "
-    "Publisher lookup is read-only; confirm only moderation or deletion.",
+    "admin_moderation": "Guestbook/comment counts, review distributions and records. "
+    "Use get_moderation_status for counts without content. "
+    "Lists include excerpts and real publishers. "
+    "Confirmation only for moderation or deletion.",
     "admin_reports": "Server health, user statistics and article traffic reports.",
     "site": "Author profile, social links, site map and page controls.",
     "favorites": "Your favorites and confirmed additions/removals.",

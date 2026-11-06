@@ -47,7 +47,8 @@
 2. 配置 `SCHEDULING_ENABLED=true`。`SCHEDULING_DSN` 为空时使用 `CHECKPOINT_DSN`。
    DSN 必须指向独立的 Agent PostgreSQL 数据库，不能是博客业务库。
    DBOS 在 `saudade_automations` schema 建表；它使用公开的 JSON 序列化，禁止 pickle。
-3. 按实际用户及 release-root 修改 `deploy/scheduling/saudade-scheduler.service` 的路径，
+3. 独立安装按实际 release-root 修改 `deploy/scheduling/saudade-scheduler.service` 的路径，
+   使用 `saudade-agent` 账号及唯一 `/etc/saudade/agent-runtime.env`；集成安装由博客仓统一生成单元，
    安装并启动 Worker。HTTP 进程仅创建 DBOSClient，不启动第二个调度器。
    Worker 先启动完成，再开放调度入口。账号验证及通知请求使用现有服务端短期签名。
 4. 发布命令设置 `DEPLOY_SCHEDULER=1`，脚本同时重启 HTTP 和 scheduler，失败一起回滚。Worker 关闭最多等待 95 秒，systemd 需预留

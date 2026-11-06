@@ -25,7 +25,7 @@ uv run --frozen pytest -q
 cp .env.example .env
 ```
 
-运行服务前填写模型密钥、与博客一致的 `AGENT_ASSERTION_SECRET`、独立的 `AGENT_CONFIRM_SECRET` 和部署地址。
+运行服务前填写模型密钥、与博客一致的 `AGENT_ASSERTION_SECRET`、独立的 `AGENT_CONFIRM_SECRET` 和部署地址；缺少必要凭据时 `/ready` 返回 503。
 `BLOG_API_BASE` 同时决定公开工具地址和页面导航的站点来源，部署时必须设为自己的站点。
 需要可恢复任务和确认操作时配置独立 PostgreSQL 数据库 `CHECKPOINT_DSN`。
 `AGENT_CONTEXT_TOKENS` 应匹配实际模型端点窗口，工作预算及压缩设置见会话文档。
@@ -35,6 +35,8 @@ uv run --frozen uvicorn agent.main:app --host 127.0.0.1 --port 8010
 ```
 
 `/ready` 检查依赖就绪，`/version` 返回版本信息。聊天入口由[博客宿主](https://github.com/BigLeopardCat/Saudade-Blog)鉴权代理，不应直接暴露内部 Agent 接口。
+
+生产部署使用[首次安装、升级与回滚指南](docs/deployment.md)和[独立运行配置模板](deploy/agent-runtime.env.example)，不从开发工作树启动服务。
 
 ## 文档
 

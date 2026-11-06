@@ -883,7 +883,8 @@
           let failedNoteEl = messages.querySelector('.chat-msg-failed-note');
           if (failedRaw) {
             const failed = JSON.parse(failedRaw);
-            const entry = Array.isArray(failed) && failed.length ? failed[0] : null;
+            const entry = Array.isArray(failed) ? failed.find(row => row && row.conv_id != null
+              && String(row.conv_id) === String(ctx.state.conv)) : null;
             const expired = entry && (Date.now() - entry.ts > 24 * 3600 * 1000);
             const items = ctx.state.items;
             let anchor = items.length - 1;
@@ -897,8 +898,15 @@
               .some(it => it.type === 'agent' && !String(it.id || '').startsWith('l'));
             // 最后一条是 user 且匹配标记；其后不能有 agent 回复（已回复 = 重发成功/补答，不提示）
             if (lastIsFailedUser && !hasAgentAfter) {
+              const entryKey = JSON.stringify([entry.conv_id, entry.task_id, entry.partial_id,
+                entry.kind, entry.ts]);
+              if (failedNoteEl && failedNoteEl.dataset.entryKey !== entryKey) {
+                failedNoteEl.remove();
+                failedNoteEl = null;
+              }
               if (!failedNoteEl) {
                 failedNoteEl = document.createElement('div');
+                failedNoteEl.dataset.entryKey = entryKey;
                 failedNoteEl.className = entry.kind === 'stopped'
                   ? 'chat-msg-failed-note chat-task-card' : 'chat-msg-failed-note';
                 if (entry.kind === 'stopped') {
@@ -915,10 +923,7 @@
                   : '⏳ 该条消息未收到回复'
                     + (entry.reason ? '：' + entry.reason : '（可能已超时或网络中断）');
                 failedNoteEl.appendChild(line);
-                // 重发/编辑按钮的**挂载点**：按钮的逻辑在 chat-stream.js（它才够得着
-                // sendMessage / 输入框 / 图片预览区），渲染在这边 ⇒ 这里只留一个空槽 +
-                // 原文（dataset，钩子要拿它去走带原文校验的 discard）。分工与确认卡片
-                // 的 onAskResync 一致：引擎负责"节点在不在"，交互层负责"点了做什么"。
+                // The stream layer mounts actions and verifies the original user message.
                 const slot = document.createElement('div');
                 slot.className = 'chat-msg-retry-slot';
                 slot.dataset.failedText = entry.text;
