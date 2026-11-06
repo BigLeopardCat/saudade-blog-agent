@@ -41,7 +41,8 @@ def prepared(call, proposal, todos):
     """Expose preparation and pending work as data, never as execution evidence."""
     visible = {
         "status": "awaiting_confirmation", "executed": False,
-        "approval": "required", "continuation": "waiting_for_user_decision",
+        "approval": "required", "approval_scope": "current_operation_only",
+        "continuation": "waiting_for_user_decision",
         "tool_execution": "disabled_until_decision",
         "result": proposal["execution"]["pending_confirm"].get("q", proposal["reply"]),
     }

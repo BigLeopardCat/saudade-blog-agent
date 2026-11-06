@@ -200,6 +200,7 @@ def test_approval_wire_distinguishes_pending_work_from_unavailable_tools(backend
                     if row["role"] == "tool" and row["tool_call_id"] in ("favorite", "notice")}
         assert messages["favorite"]["remaining_work_not_execution_evidence"] == pending
         assert messages["favorite"]["executed"] is False
+        assert messages["favorite"]["approval_scope"] == "current_operation_only"
         assert messages["notice"]["reason"] == "awaiting_prior_confirmation"
         assert messages["notice"]["available_in_catalog"] is True
         assert result.execution["pending_confirm"]["token"] not in str(final)
