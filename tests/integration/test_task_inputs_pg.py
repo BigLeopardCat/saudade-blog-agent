@@ -322,3 +322,31 @@ def test_paused_listing_is_owned_and_new_foreground_task_supersedes_old(inboxes)
     assert left.read('old', own)['phase'] == 'superseded'
     assert left.storage.paused(7, 'user', 20) == []
     assert [key for key, _ in right.storage.paused(8, 'user', 20)] == ['foreign']
+
+
+def test_setup_preserves_expired_legacy_active_inputs_and_resume_does_not_recreate(inboxes):
+    from psycopg.types.json import Jsonb
+
+    from agent.runtime.task_inputs import InputConflict
+
+    left, right = inboxes
+    scope = {"uid": 7, "role": "user", "conversation_id": 42}
+    task = {"id": "legacy-paused", "scope": scope}
+    left.open(task)
+    left.submit(task["id"], scope, "constraint", "只处理草稿")
+    left.finish(task, [], paused=True)
+    with left.storage.pool.connection() as conn:
+        conn.execute("UPDATE agent_task_inputs SET expires_at=now()-interval '1 day', "
+                     "state=state || %s WHERE task_id=%s",
+                     (Jsonb({"expires": 1}), task["id"]))
+        setup(conn)
+        assert conn.execute("SELECT expires_at IS NULL AS unbounded FROM agent_task_inputs "
+                            "WHERE task_id=%s", (task["id"],)).fetchone()["unbounded"]
+    assert right.open(task, resume=True)
+    assert right.read(task["id"], scope)["inputs"][0]["text"] == "只处理草稿"
+    right.delete_task(task["id"])
+    with pytest.raises(InputConflict, match="not_available"):
+        left.open(task, resume=True)
+    with left.storage.pool.connection() as conn:
+        assert conn.execute("SELECT count(*) AS n FROM agent_task_inputs WHERE task_id=%s",
+                            (task["id"],)).fetchone()["n"] == 0

@@ -179,12 +179,19 @@ class AgentRuntime:
         inbox = session.input_inbox
         session.inputs_active = bool(inbox and session.task
                                      and not (recover and session.feedback_handler)
-                                     and resume is None and (recover or ((session.config or {}).get(
-                                         "configurable") or {}).get("task_inputs")))
+                                     and resume is None)
         session.input_events_enabled = bool(session.inputs_active and ((session.config or {}).get(
             "configurable") or {}).get("task_inputs"))
         if session.inputs_active:
-            enabled = inbox.open(session.task, resume=recover)
+            try:
+                enabled = inbox.open(session.task, resume=recover)
+            except InputConflict:
+                if not recover:
+                    raise
+                record("native", "task_resume_rejected", task_id=session.task["id"],
+                       reason="task_input_unavailable")
+                return TurnResult("任务的补充指令记录不可用，未恢复执行，请重新发起任务。",
+                                  {"blocked": [{"reason": "task_input_unavailable"}]})
             if session.input_events_enabled:
                 yield TaskInputEvent({"task_id": session.task["id"], "ready": enabled})
         runner = session.stream(prompt, resume=resume, approval_input=approval_input,
@@ -315,8 +322,5 @@ def _finish_inputs(session, outcome):
     except InputConflict as exc:
         if str(exc) != "task_not_available":
             raise
-        if execution.get("paused_task"):
-            session.input_inbox.open(session.task)
-            return session.input_inbox.finish(
-                session.task, session.state["applied_inputs"], paused=True)
+        record("native", "task_inputs_missing", task_id=session.task["id"])
         return []

@@ -102,19 +102,20 @@ CLASSES = [
     ),
     dict(
         key="agent-checkpoint-store",
-        label="对话上下文与幂等账（**PG**：langgraph checkpoint 三张表 + 幂等账表）",
+        label="PostgreSQL 会话、任务记录与执行回执",
         store=STORE_PG,
         status="managed",
         owner="eval/pg_retention.py",
         owner_ref="eval/pg_retention.py",
-        retention=f"线程最近活动 >{KEEP_DAYS_CHECKPOINT} 天裁（与幂等账**同窗、同事务**）",
-        why='Delete inactive conversation checkpoints and their idempotency records in the same '
-            'window and transaction. Unknown activity times are retained. Credentials come only '
-            'from the declared DSN environment variable.',
+        retention=f"{KEEP_DAYS_CHECKPOINT} 天无活动且不可恢复的会话；已完成回执同窗清理",
+        why='Recheck activity and framework state under the runtime conversation lock. '
+            'Delete eligible checkpoints through the public saver API and task records in the '
+            'same transaction. Preserve busy, resumable and undated conversations, and unresolved '
+            'write intents. Expired completed receipts and deletion fences are cleaned separately.',
         rule=None,
         dsn_env="CHECKPOINT_DSN",
-        tables=["checkpoints", "checkpoint_blobs", "checkpoint_writes", "agent_write_idem",
-                "agent_deleted_threads"],
+        tables=["checkpoints", "checkpoint_blobs", "checkpoint_writes", "agent_task_inputs",
+                "agent_task_usage", "agent_write_idem", "agent_deleted_threads"],
     ),
     dict(
         key="golden-traces",
