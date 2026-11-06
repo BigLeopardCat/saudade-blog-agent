@@ -401,6 +401,9 @@ def test_streamed_preface_and_terminal_confirmation_each_render_once(monkeypatch
     from agent.runtime.results import TurnResult
     from agent.runtime.service import AgentRuntime
 
+    from agent import authz
+
+    monkeypatch.setitem(authz.TOOL_SCOPE, "fixture_prepare", authz.SCOPE_READ_OWN)
     question = "确认本次测试操作。"
 
     @tool(return_direct=True)
