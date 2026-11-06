@@ -297,6 +297,30 @@ def test_actual_calls_not_requested_calls_or_read_receipts_are_evidence():
     assert native_assertions.check(gold, {})
 
 
+@pytest.mark.parametrize("board_scope,comment_scope,event_kind,passed", [
+    ("all", "not_deleted", "call", True),
+    ("all", None, "call", False),
+    (None, "not_deleted", "call", False),
+    ("all", "all", "call", False),
+    ("pending", "not_deleted", "call", False),
+    ("all", "not_deleted", "tool_requested", False),
+])
+def test_moderation_overview_requires_both_actual_summary_scopes(
+    board_scope, comment_scope, event_kind, passed
+):
+    case = next(c for c in online_baseline.load_suite() if c["id"] == "admin_moderation")
+    payload = {}
+    if board_scope is not None:
+        payload["board"] = {"scope": board_scope}
+    if comment_scope is not None:
+        payload["comments"] = {"scope": comment_scope}
+    event = {"node": "native", "event": event_kind, "name": "get_moderation_status",
+             "kind": "ok", "result": json.dumps(payload)}
+    assert (not native_assertions.check(case["gold"], {
+        "text": "审核汇总", "native_events": [event], "exec_rows": [],
+    })) == passed
+
+
 def test_runtime_stop_and_background_write_cannot_pass_nonempty_apology():
     result = {"text": "抱歉", "native_events": [
         {"event": "budget_stop"}, {"event": "write_done"}], "exec_rows": []}
