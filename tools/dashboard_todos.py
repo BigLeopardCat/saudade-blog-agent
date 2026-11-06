@@ -15,25 +15,9 @@ def _todo_rows(data) -> list[dict] | None:
     return [r for r in data if isinstance(r, dict)]
 
 def _todo_pending(config: RunnableConfig):
-    """后台首页那几类"等着你处理"的计数（留言待审 / 评论待审 / 额度重置申请）→ 渲染入参。
+    """读取通知汇总中的留言、评论和额度申请计数。
 
-    **读的是红点那一份汇总**（`/notifications/summary` 的 `pendingReview` /
-    `pendingComments` / `pendingQuota`），不另造第二份计数：前端后台首页那几行提示取的
-    也正是它（`useUnread` → `unread.pendingComments` 等），同源才不会出现"红点说有 2 条、
-    agent 说没有"。这几个字段**只对能进后台的人算**（后端 `is_console_user`），
-    而本工具本身就是 `read.console` ⇒ 不存在"普通用户读到 0"的误读。
-
-    ⚠️ **留言与评论是两个字段、两个数**（20261019 加 `pendingComments`）：合并成一个数
-    会让 narrator 把"评论还有 3 条"说成"留言还有 3 条"——而那是两个后台页签。缺键
-    （后端还没部署到带 `pendingComments` 的版本）**不是 0**：这里照实传 `None` 出去，
-    由 `render_todo_pending` 的 `_nonneg_int` 落成"不印这一项"，与"读不到整份汇总"
-    （哨兵）**分开**——那一份是"不确定有没有"，这一份是"这一项没提供"。
-
-    读不到 ⇒ **`A.TODO_PENDING_UNREAD` 哨兵，不是 0 也不是"没提供"**：
-    `render_todo_pending` 对这三种形态的措辞完全不同，而"没有待处理的事"在主人
-    正等着处理两件事时是一句假话——与 `_quota_pair` 的 `None ≠ 0`、
-    `load_agent_tasks` 的"`[]` 表示没有"同一族纪律。**这里绝不吞掉失败**：
-    汇总读不到不影响待办本身（那一半已经读到了），但"没读到"这件事必须说出去。
+    字段缺失传 None；整份读取失败返回 TODO_PENDING_UNREAD，不将未知补为零。
     """
     from agent import adminops_todo as _todo
     data = _base._own_get("/api/protected/notifications/summary", config)

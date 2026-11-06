@@ -41,11 +41,6 @@ STREAM_END_RE = re.compile(
     r"^(\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}).*?(?:request_id|tid)=(.*?) \| \[stream\] end "
     r"reason=(\S+) duration=([\d.]+)s frames=(\d+)")
 DUMP_FAILED_RE = re.compile(r"trace dump failed trace_id=(\S+)")
-# `2026-09-24 00:00:44.731 ERROR [monitor] type=fetch_fail uid=guest url=… msg=… stack=… ua=… webgl=… dup=…`
-# 尾部三个字段是 20261004 加的（`ua` 服务端从请求头取、`webgl` 是探针结果、`dup` 是同
-# 窗口内重复计数）。**新增字段一律追加在行尾**——这里按位置截取 type/uid，把新字段插在
-# 中间会把 uid 的截法连坐（`uid=guest ua=…` 会被当成 uid 的值）。下面的 alternation 里
-# 也把新键名一并列上：万一将来有人去解析 `stack=`，缺一个终止符就会把它吞进去。
 MON_HEAD_RE = re.compile(r"^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})(?:[.,]\d+)? \S+ \[monitor\] ")
 # 前端上报里"只在失败分支出现"的两个 type（前者是弹窗链路，后者是消息流 DOM 清理）
 MON_FAILURE_TYPES = ("confirm_card", "orphan_dom_drop")
@@ -173,9 +168,6 @@ def read_monitor(monitor_dir: str) -> dict:
         if ts is None:
             continue
         rest = line[m.end():]
-        # type= / uid= 的值都用"到下一个已知字段为止"的非贪婪截法。历史原因：`type` 曾经
-        # 是原样插值的（值里能有空格、甚至伪造出别的字段名）。现在服务端收敛成闭集了，
-        # 但**截法不动**——它对老日志仍然必要，且改了只会让归档数据换一种解析结果。
         t = re.search(r"type=(.*?)(?: uid=| url=| msg=| stack=| ua=| webgl=| dup=|$)", rest)
         u = re.search(r"uid=(.*?)(?: url=| msg=| stack=| type=| ua=| webgl=| dup=|$)", rest)
         events.append({"ts": ts, "type": (t.group(1) if t else "").strip(),

@@ -50,16 +50,7 @@ def _strip_comments(text: str) -> str:
 
 
 def _section(text: str, header: str) -> str:
-    """取 TOML 里 `[header]` 那一节的正文（到下一个行首 `[` 为止），**已剥注释**。
-
-    刻意不引 toml 解析器：**20261013 升到 3.12 之后理由从"没有"变成了"不必"**——
-    以前是本机 Python 3.10 没有 `tomllib`，现在是标准库里有（3.11+）但这里用不着。
-    两个理由都成立且都指向同一件事：这六条判据里有几条**正是为了在升版前后都能跑**
-    才写的（⑥ 要能告诉你 `requires-python` 是不是写歪了），让它先依赖新解释器才有的
-    标准库，等于把"验升版"的那把尺子和"升版"绑在一起。这里的用法始终只有"读一个节
-    里的一个字符串键"，剥掉注释后正则够用；真正需要机器读 TOML 的地方（`uv` 本身）
-    读的是同一个文件。
-    """
+    """取 TOML 里 `[header]` 那一节的正文（到下一个行首 `[` 为止），**已剥注释**。"""
     m = re.search(rf"^\[{re.escape(header)}\](?P<body>.*?)(?=^\[|\Z)", text, re.M | re.S)
     return _strip_comments(m.group("body")) if m else ""
 
@@ -77,18 +68,6 @@ def _reads_runtime_version(tree: ast.AST) -> bool:
     return False
 
 
-# 覆盖率那一档 20261020 换了入口：原 `tests/run_all.py --coverage`（逐套件 `coverage run` +
-# 结尾 `combine`）随 run_all.py 一起删掉，改成 `scripts/dev/coverage.sh`（`pytest --cov`）。
-# **两处麻烦同时消失了**，所以下面几条旧判据不是"漏了"，是**对象没有了**：
-#   · 旧配方要临时 `uv venv /tmp/cov` 再把 site-packages 挂 `PYTHONPATH`（产线 venv 里
-#     没有 coverage）⇒ 那三行"起不来时的配方"、`lib/python3.X/site-packages` 与
-#     `--python {sys.executable}` 三条判据都是围着它写的。今天 `coverage[toml]` 与
-#     `pytest-cov` 就在 `[dependency-groups] dev` 里，⑤ 开头那条 pin 判据管的正是这件事。
-#   · 旧配方要自己给子进程挂 `tests/`（`env["PYTHONPATH"] = str(TESTS)`）⇒ 今天归
-#     `tests/conftest.py` 管（收集前插 `sys.path`），**一处**而不是两处。
-# ⚠️ ⑤ 判的是那个脚本的**代码**，不是整份文件：它的头注里写着"旧配方要临时建一个隔离 venv
-# 挂 coverage"（留档，说明那套麻烦为什么消失），拿整份文本去判"不许出现它"会被脚本自己的
-# 说明文字绊倒 —— 同 `_called_suites` 那条"抹掉整行注释"的教训。所以读进来先剥掉注释行。
 def test_packaging():
     PYPROJECT = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
     PROJECT_SEC = _section(PYPROJECT, "project")
@@ -354,10 +333,6 @@ def test_packaging():
         check("  逐文件计数之和 == total（账自己得自洽）",
               sum(_lb["by_file"].values()) == _lb["total"],
               f"和={sum(_lb['by_file'].values())} total={_lb['total']}")
-        # 幽灵键（20261018 补，与 ④ 的 type_gate 同一族）：账里**有**、盘上却没有的键。
-        # 它不进 `lint_gate.judge()` 的任何一条判据、也不影响 `total`（total 是 ruff 汇总行的
-        # 数），只会让账变脏，还被"已经清零，可以销账"那句报成好消息。判据同样两层：
-        # ① 盘上这份账现在没有幽灵键；② 那条守卫真的会拦 + `main()` 真的调用了它。
         _lg_spec = importlib.util.spec_from_file_location("_lint_gate_under_test", _lint_gate)
         _lg_mod = importlib.util.module_from_spec(_lg_spec)
         _lg_spec.loader.exec_module(_lg_mod)        # 只跑模块体（常量 + 定义），无副作用

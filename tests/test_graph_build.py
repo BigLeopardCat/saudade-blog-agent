@@ -122,9 +122,6 @@ def test_graph_build():
     print("\n② 三道闸：uv / 脚本 / 内存——**拒绝并给原话**，不试")
     _real_which, _real_mem, _real_fb = shutil.which, gb.mem_available_mb, gb.UV_FALLBACKS
     try:
-        # 20261003 起 uv 有**两处**查找（PATH + 回落表）：只堵 PATH 已经不等于"没有 uv"。
-        # 这条判据自己就出过这个错——本机 uv 就装在 `~/.local/bin`，而 systemd 服务默认 PATH
-        # 不含用户目录，所以"服务里找不到 uv"的真实成因恰恰是回落表在兜（见 `find_uv`）。
         shutil.which = lambda _n: None
         gb.UV_FALLBACKS = ()
         gb._UV_PATH = None
@@ -148,8 +145,6 @@ def test_graph_build():
         got = gb.find_uv()
         check("★ uv 只在回落目录（服务 PATH 看不到它）时照样找得到，且给绝对路径",
               got == str(fake), got)
-        # 内存那条**必须一起钉死**：不钉的话这条会在"机器刚好紧张"时红成 uv 的问题，
-        # 判据就变成了在量这台机器当时的负载。
         gb.mem_available_mb = lambda: 99999
         check("★ 找到了就不再拒绝（preflight 放行，拦路的是内存那条，不是 uv）",
               (gb.preflight("rebuild") or {}).get("reason") != "uv_missing")

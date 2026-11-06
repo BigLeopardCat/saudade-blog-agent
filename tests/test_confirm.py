@@ -15,7 +15,7 @@ from pathlib import Path
 
 from _judge import collector
 
-ROOT = Path(__file__).resolve().parent.parent  # 仓根（20260924：测试统一搬进 tests/）
+ROOT = Path(__file__).resolve().parent.parent
 
 
 sys.path.insert(0, str(ROOT))

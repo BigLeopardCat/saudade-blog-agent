@@ -1,9 +1,5 @@
 # -*- coding: utf-8 -*-
-"""标签、分类、文章状态与后台文章列表的确定性层。
-
-批 3a 从 `agent/adminops.py` 按域拆出（原文逐字节保留）。这里住的是配色表、
-中文色名、状态/置顶的归一、`note.tags` 编解码、标签与分类的"名字↔id"解析，
-以及这一族写操作的卡面与回执。三条与前端同源的契约见 `note.tags` 编解码那一节。"""
+"""标签、分类、文章状态与后台文章列表的确定性层。"""
 
 from __future__ import annotations
 
@@ -33,14 +29,6 @@ def color_for_name(name: str) -> str:
     return NEW_TAG_COLORS[h % len(NEW_TAG_COLORS)]
 
 
-# ── 中文色名 ↔ 站内 8 色板（20260921 颜色预览）────────────────────────
-# 用户拍板：「站内 8 色板 + 中文色名映射」——**不开放任意色值**。理由是这张表
-# 同时是前端色块装饰器的白名单（`chatMarkdown.ts::chatColorPalette`）：色板外的
-# 色值不画色块，所以"agent 说得出"的色必须就是"前端画得出"的色，两边同源。
-#
-# 规范名（`_COLOR_CANON` 的值）是**回程渲染用**的名字，与别名分开：
-# `黄` 落在 `#a0d911`（站内没有正黄），回程必须说「黄绿」——用户说"黄"可以，
-# 但系统回一句"颜色：黄（#a0d911）"就是在骗他（屏幕上明明是黄绿）。
 _TAG_COLOR_ALIASES: dict[str, str] = {
     "蓝": "#1677ff", "蓝色": "#1677ff",
     "绿": "#52c41a", "绿色": "#52c41a",
@@ -99,13 +87,7 @@ def resolve_tag_color(spec, name: str) -> str:
 
 
 def match_any_color(spec) -> str | None:
-    """颜色实参 → 规整的 `#rrggbb`；认不出 → None（分类用，比标签宽一档）。
-
-    与 `match_tag_color` 的差别：**任意 6 位 hex 都收**。理由是前端色块白名单
-    已经放宽成"任意 6 位 hex 都画色块"（20260921 父仓 ec6b090），所以"agent 说得
-    出、前端画不出"这一档不一致在分类上不存在；标签侧仍走 8 色板（那张表同时是
-    中文色名的映射源，用户点名的"粉色"必须落到同一个色值上）。
-    """
+    """颜色实参 → 规整的 `#rrggbb`；认不出 → None（分类用，比标签宽一档）。"""
     picked = match_tag_color(spec)
     if picked:
         return picked
@@ -201,14 +183,6 @@ def top_cn(value) -> str:
     return "置顶" if t == 1 else ("未置顶" if t == 0 else f"未知置顶值「{value}」")
 
 
-# ── 河灯留言的人工复核（20260922 第六轮）────────────────────────────
-# 三个词表的分工必须分清（数字方向传反 = 该驳回的给放行了，是这套写面里
-# 后果最重的一类错）：
-#   · `normalize_verdict`：模型说的话 → "pass" / "reject"（认不出 → None，调用方拒绝）
-#   · `BOARD_VERDICT_APPROVED`：DB 里 approved 的目标值（1 通过 / 2 未通过；0 是**待审**）
-#   · `BOARD_VERDICT_BODY`：审核端点的**请求体**值（1 通过 / **0 驳回**）——端点内部
-#     把 0 落成 approved=2。两个数字表刻意分开写：合并成一张表就等着有人把
-#     "reject → 2" 直接发进请求体（那会让端点把 2 当"通过"放行）。
 _VERDICT_ALIASES = {
     "pass": "pass", "approve": "pass", "approved": "pass", "ok": "pass", "yes": "pass",
     "通过": "pass", "放行": "pass", "显示": "pass", "过": "pass", "1": "pass",
@@ -251,12 +225,6 @@ def parse_tag_ids(raw) -> list[int]:
             n = part
         elif isinstance(part, str):
             s = part.strip()
-            # ⚠️ **ASCII** 数字类，不是 `\d`（20261013）：`\d` 在 Python 里默认认
-            # Unicode 十进制数字——`"１２"`（全角）、`"٣"`、`"१२"` 都会命中，而前端的
-            # `Number()` **一个都不认**（`frontend/src/utils/noteTags.ts::toTagId`）。
-            # 于是这一侧会把它念成 id=12 的标签、屏幕上却没有那个标签（同
-            # `_COLOR_CANON` 那族"说得出、画不出"）。判据 =
-            # `tests/test_note_tags_codec.py` ④：**本侧认下的每一个值，前端也认**。
             if not s or not re.fullmatch(r"[0-9]+", s):
                 continue
             n = int(s)
@@ -290,12 +258,7 @@ class TagInfo:
         self.level = level
         self.father_id = father_id
         self.father_name = father_name
-        # 站内色板色值（20260921）；接口没给色时为空串——渲染时只说名字，
-        # **不拿哈希补一个**（那是"编一个它其实没有的颜色"）
         self.color = color
-        # 挂在这个标签上的**公开可见**文章数（20260921，接口 `noteCount`）。
-        # **None ≠ 0**：接口没给这个字段时是 None（"这次读不到"，删除/移动的影响面
-        # 就不报数字——把读不到渲染成"0 篇文章"，用户会以为删掉它无损失）。
         self.note_count = note_count
 
     @property
@@ -359,19 +322,7 @@ def count_phrase(n) -> str:
 
 
 def merge_tag_rows(tags_one, tags_two) -> list[dict]:
-    """两个公开标签接口 → **一份扁平的两级清单**（20260921）。
-
-    为什么：`list_tags` 此前只读 `/tagone` ⇒ 结构上就看不见二级标签
-    （164641 实测答"站内没有二级标签"——数据一直在 `/tagtwo`，缺的只是把它读出来）。
-
-    形态：一级行原样 + 紧随其后的子行（`/tagtwo` 的行自带 `level:2/fatherTag/fatherKey`，
-    字段名一个不改），父 id 对不上任何一级标签的**悬空二级**行排在最后——静默吞掉
-    它们正是"标签莫名不见了"的来源（同 render_tag_list 对悬空 id 的处置）。
-    两级混在一张表里靠 `level` 区分，narrator 照读即可。
-
-    返回值保持**纯字面量**（ToolsResult 出口用 `_shape` = `str()`、跨轮实体摘要用
-    `ast.literal_eval` 回读）——渲染成人话会让实体摘要静默失效。
-    """
+    """将两个公开标签接口合并为扁平两级清单，保留层级与颜色。"""
     one = [t for t in (tags_one or []) if isinstance(t, dict)]
     two = [t for t in (tags_two or []) if isinstance(t, dict)]
     kids: dict = {}
@@ -459,8 +410,6 @@ def render_tag_list(ids, index: dict[int, TagInfo] | None, limit: int = 6) -> st
     head = "、".join(out)
     rest = len(ids) - limit
     if rest > 0:
-        # 折叠计数是**后缀**不是并列项："Python、架构 等 4 个"（曾经被当成第 3 个
-        # 标签 join 成 "Python、架构、等 4 个"——读起来像真有个叫"等 4 个"的标签）。
         return f"{head} 等 {len(ids)} 个" if head else f"等 {len(ids)} 个"
     return head if head else "（无标签）"
 
@@ -476,23 +425,7 @@ ADMIN_NOTES_LIMIT = 60
 def render_admin_notes(notes, index: dict[int, TagInfo] | None,
                        limit: int = ADMIN_NOTES_LIMIT,
                        keyword: str = "", category: str = "") -> str:
-    """后台文章列表（含草稿与私密）→ 给 planner 看的清单。
-
-    这一屏的价值全在**id 与标题的对应**：管理员接着说"把《X》设为私密"时，
-    planner 只有在这一轮真读到了 id，才有据可写（execute 层的目标校验会拦
-    "没读过就写一个凭记忆的 id"）。
-
-    `keyword` / `category` 给了就改说"匹配 N 篇"/「X」分类下共 N 篇（**筛过的口径，
-    不是总数**）：这张单子可能是从全站文章里筛出来的一小撮，写成"后台文章共 N 篇"
-    会让读的人把筛出来的条数当成站内总量（缺数 ≠ 零的同族错误，只是方向反过来）。
-
-    **每行末尾印分类名**（20261009）：`categoryTitle` 本来就在 DTO 里（Rust
-    `NoteDto`），只是这一屏此前没印 ⇒ 模型就算把整张清单读回来，也**看不出哪几篇
-    归在某个分类下**（生产现场 trace `20261008T234509`：主人要"把「测试」分类下的
-    文章全部转私密"，模型只能按 keyword 搜出标题带"测试"的 8 篇，然后如实说手上
-    没有那份清单）。键在不在场照旧是判据：**键缺席 = 这一路没带分类信息 ⇒ 不印那一格**
-    （缺键不编），键在但为空 = 这篇文章真的没有分类 ⇒ 印「（无）」。
-    """
+    """渲染后台文章页，保留草稿、私密状态和分页范围；页内计数不冒充全库统计。"""
     kw = str(keyword or "").strip()
     cat = str(category or "").strip()
     sel = (f"「{cat}」分类下" if cat else "") + (f"匹配「{kw}」的" if kw else "")
@@ -525,9 +458,6 @@ def render_admin_notes(notes, index: dict[int, TagInfo] | None,
                      f"标签：{tags}{cat_txt}")
     if len(notes) > limit:
         rest = len(notes) - limit
-        # 尾句此前写着「可用关键词检索」而**关键词参数根本不存在**——那是一句把读的
-        # 人（和模型）指向空处的假话。现在 keyword 真在（`list_admin_notes`），两句
-        # 分开说：筛过的说"换个词/写具体些"，没筛的才提关键词这条路。
         lines.append(f"（另有 {rest} 篇匹配「{kw}」的未列出，把关键词写具体些再看）" if kw
                      else (f"（另有 {rest} 篇「{cat}」分类下的未列出）" if cat
                            else f"（另有 {rest} 篇未列出，可用 keyword 收窄）"))
@@ -541,25 +471,14 @@ def level_cn(info: TagInfo) -> str:
 
 
 def render_tag_reuse(info: TagInfo) -> str:
-    """已存在 → 复用。带上它**现有的**颜色（20260921）：用户说"建个粉色的 X"而
-    X 已存在且是蓝色时，narrator 得说得出这个差别（否则回复里给个"粉色"、屏幕上
-    却是个蓝标签）。颜色由接口给，没给就只说名字。"""
+    """显示复用标签的现有颜色，不将用户请求颜色当成已生效颜色。"""
     color = f"，现有颜色：{describe_color(info.color)}" if info.color else ""
     return (f"标签「{info.label}」已经存在（id={info.id}，{level_cn(info)}{color}），"
             f"直接复用它，没有新建。")
 
 
 def render_tag_created(info: TagInfo) -> str:
-    """新建成功的人话。**颜色名 + 色值一起给**（20260921）：narrator 只有拿到
-    这一对，才能在回复里同时写出"粉色"和 `#eb2f96`——前端据此画色块（色块由
-    前端按 hex 画，模型不画符号）。色值缺失时只说名字，不补一个。
-
-    **这段文本里不许出现任何工具名**（20260921 生产事故）：原尾句是
-    「要挂到文章上用 set_article_tags」——narrator 照抄了它，而 5c 具名声称闸
-    判定"点名了本轮没执行的工具" ⇒ 整条回复被换成"这一轮什么都没执行"，
-    与该标签**真的建成了**这件事当面矛盾（165645）。工具名是系统内部词汇，
-    一句给访客看的人话里出现它，就等着被复述成"我调用了它"。同源 lint 见
-    tests/test_workflows.py::test_no_tool_name_in_user_facing_text。"""
+    """显示已创建标签的名称、颜色名与色值。"""
     color = f"，颜色：{describe_color(info.color)}" if info.color else ""
     return (f"已新建{level_cn(info)}标签「{info.label}」（id={info.id}{color}）。"
             f"它目前还挂在标签字典里、没有挂到任何文章上——"
@@ -595,26 +514,11 @@ def render_change(pairs) -> tuple[str, str]:
 
 
 def clip(text: str, limit: int = 60) -> str:
-    """**密表/帧**里的字段截断（Rust 侧 detail 列宽有限，先在这边收口，避免被截在
-    半截字符上）。
-
-    ⚠️ **不许拿它量确认卡的面**（20260926 的现场）：卡面、以及"下一轮 narrator 唯一
-    取值来源"的那条回执行，都必须印主人要核对的那段字**全文**——`clip` 截了还不带
-    节选标注，读起来就是完整的一句。真实现场（trace `20260926T094843`）：主人要记的
-    待办 150 字，卡面与回执都给了「…/20260926/2…」，narrator 只能照着念，主人问
-    "为什么和我要的内容不一样、显示截断了"。要截的一面必须有**明确的节选标注**
-    （正面例子见 `render_notice_status`：「（节选，共 N 字）」）。
-    """
+    """截断密表和回执字段，避免超过后端列宽；用户正文与模型事实另按自身契约处理。"""
     s = str(text)
     return s if len(s) <= limit else s[:limit] + "…"
 
 
-# ── 渲染：改标签 / 删标签（20260921 第四轮）──────────────────────────
-# 这批写操作的共同点：**影响面是"数据"而不只是"这一行"**。删一个一级标签会连带
-# CASCADE 掉它的子标签、并把所有文章上的引用摘掉（`prune_note_tags`，**不可回滚**）；
-# 所以这几段文本的第一职责是把影响面**说全**：管理员点「确定」之前有权知道会动到
-# 多少篇文章、会不会连带删掉别的标签。数字全部来自标签/分类字典，**读不到就一个字
-# 都不说**（绝不写 0——那是"删了没损失"的错误结论，见 count_phrase）。
 
 def article_where(notes: dict[int, dict] | None, article_id, *, include_status: bool = True) -> str:
     """用已读取的文章标题展示目标；公开状态只在相关操作中展示。
@@ -683,7 +587,6 @@ def move_impact(res: dict) -> list[str]:
     return out
 
 
-# ── 分类（20260921 第四轮）：与标签同一条"名字↔id"的解析纪律 ──────────
 
 class CategoryInfo:
     """一个分类的渲染/解析所需信息（`GET /api/category` 的行）。"""

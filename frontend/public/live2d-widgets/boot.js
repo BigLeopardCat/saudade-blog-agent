@@ -1,16 +1,4 @@
-// ═ Live2D 看板娘 + 聊天面板入口（20260828o 结构拆分）══
-// 职责收敛为：防重入 / 资源链加载 / 子模块（chat-core/render/engine/stream/
-// live2d-widget）按依赖序加载与组装 / 看板娘初始化时序 / 欢迎语注入。
-// 聊天逻辑分布：chat-core（纯函数）→ chat-render（渲染）→ chat-engine（数据层）→
-// chat-stream（交互层）。静态资源版本由宿主入口 URL 传入。
 (async () => {
-  // ═ 前端错误上报（20260830，监控补齐 B）══
-  // 全局 JS 异常 / 未捕获 Promise / API 失败（fetch 包装）→ POST /api/monitor/log
-  // （keepalive，Rust 落盘 logs/frontend/monitor.log）。注册在防重入分支之前：看板娘
-  // 初始化失败（子模块加载 return）也要能上报。策略（20260830f 改全量）：仅同 key
-  // （type+message 前 80 字+url）会话内去重防同一 bug 刷屏，去掉条数限制，截断放宽
-  // （message 2000/stack 4000）——用户要求全量前端日志便于追踪 agent 问题；AbortError
-  // （停止生成/超时 abort）是正常用户操作不报；上报自身（/api/monitor/log）不报防循环。
   (function () {
     const REPORT_URL = '/api/monitor/log';
     const seen = new Set();
@@ -73,11 +61,6 @@
     window.__reportError = report;
   })();
 
-  // 20260828g：防重入升级为 window 标记 + DOM 存在双保险。旧逻辑只查 #waifu
-  // 存在性——若看板娘 DOM 被外部（组件卸载/路由清理）移除，二次注入会完整重
-  // 初始化 → 旧实例的 BroadcastChannel/storage/scroll 监听器全部残留 → 双实例
-  // 竞态（SPA 跳转后记录乱、滚动对抗的隐性根因）。标记与 DOM 无关，刷新时
-  // window 重置自动恢复；bfcache 返回时标记与 DOM 一致保留。
   if (window.__agentChatLoaded || document.getElementById('waifu')) {
     console.log('[Live2D] already loaded, skipping');
     return;
@@ -146,15 +129,14 @@
     ['chat-stream', '__waifuStream'],
     ['chat-tasks', '__waifuTaskUI'],
     ['chat-ui', '__waifuChatUI'],
-    ['chat-session', '__waifuSession'], // 20260903 会话化 UI 壳（会话管理列表/双栏）
-    ['renderer', '__waifuRenderer'],    // 看板娘渲染层（20261001 自研，替换上游 GPL-3.0 实现）
+    ['chat-session', '__waifuSession'],
+    ['renderer', '__waifuRenderer'],
   ];
   for (const [name, globalKey] of MODS) {
     try {
       await loadScript(live2d_path + name + '.js?v=' + VER, name === 'chat-protocol');
     } catch (err) {
       console.error('[agent-chat] 子模块加载失败: ' + name + '.js（' + err + '），聊天功能不可用');
-      // 20260830：显式上报（loadScript 内部 catch 了错误，不会走 window error 监听）
       if (window.__reportError) window.__reportError({ type: 'module_load_fail', message: '子模块加载失败: ' + name + '.js', url: live2d_path + name + '.js?v=' + VER });
       return;
     }
@@ -216,9 +198,6 @@
   const stream = window.__waifuStream(ctx, engine);
   stream.init();
   window.__waifuChatUI.init(ctx, engine);
-  // 会话管理 UI 层（20260903 会话化）：依赖 engine 已注入 chatHTML 且会话态就绪
-  // （engine.init 的 boot 拉取可能仍在途，chat-session 自身有 500ms 重试兜底）。
-  // 失败只降级会话列表功能，对话不受影响
   try {
     const session = window.__waifuSession(ctx, engine);
     if (session) session.init();

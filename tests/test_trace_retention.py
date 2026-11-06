@@ -94,8 +94,6 @@ def main() -> int:
         write(os.path.join(prod, "output_audio", "clip.json"))
         write(os.path.join(prod, "20250101", "20250101T000000_1_deadbeef.json"))
         write(os.path.join(prod, "20250102", "20250102T000000_2_deadbeef.json.gz"))
-        # 存量平铺（20260925 之前的老写法）**仍要读**：那些文件不会有人去搬，
-        # 按保留期自然老去；读取端少认一种，就等于"历史只剩一半"。
         write(os.path.join(prod, "20250103T000000_3_legacy00.json"))
         got = tf.iter_trace_files(prod)
         names = [os.path.relpath(x, prod) for x in got]

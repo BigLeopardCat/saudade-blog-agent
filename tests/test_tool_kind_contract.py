@@ -101,10 +101,6 @@ def test_tool_kind_contract():
         _SCANNED_TOOLS.update(fn.name for fn in _tool_functions(ast.parse(_src)))
         _FOUND |= offenders(_src, _p.relative_to(ROOT).as_posix())
     LEDGER: dict[str, dict[str, str]] = {
-        # ★ 批 ⑤-1（20261019）收掉的两条**病**，留在注释里当史：`device_oled_display` 的
-        # 8 条硬失败（身份/参数/404/409/500）与 `get_weather` 的 `except` 那条此前都是裸串
-        # ⇒ kind 缺省成 `ok` ⇒ PASS ⇒ 假回执（「屏幕显示「…」」/「查看天气「…」」）。
-        # 台账是**双向**的：它们包好之后必须从下表删掉，否则本套件自己红——这正是要的行为。
         "tools/site.py::navigate_to": {
             "kind": "covered",
             "sunset": "",

@@ -8,7 +8,7 @@ from pathlib import Path
 
 from _judge import collector
 
-ROOT = Path(__file__).resolve().parent.parent  # 仓根（20260924：测试统一搬进 tests/）
+ROOT = Path(__file__).resolve().parent.parent
 
 
 sys.path.insert(0, str(ROOT))
@@ -95,9 +95,6 @@ def _test_material_clip_is_visible():
 
 def _test_truncation_detector():
     print("[stub] 材料是否被 trace 截断：标记优先，老 trace 退化为长度启发式")
-    # 以下三条都是**老 trace** 的兜底启发式（无标记）：声明了上限的按"恰等于"判
-    # （golden 20260925 起落 input.tool_result_limit；这里的 8000 只是夹具取值，
-    # 真实跑法用的是多少由 run_golden.run_case 一处决定）
     tr_big = _trace(input={"message": "q", "tool_result_limit": 8000},
                     events=[_call("get_article_detail", result="x" * 8000)],
                     reply="r")
@@ -122,8 +119,6 @@ def _test_truncation_detector():
           llm_judge.truncated_calls(
               _trace(events=[_call("rag_search", result="z" * 9000)], reply="r")) == [])
 
-    # 标记优先（20260925 起的新 trace 走这条）：分档之后"上限是哪一个数"已经不是一个常量，
-    # 只剩标记这一个可靠判据；长度对不上也要认出来。
     from utils import trace as trace_mod
     tr_marked = _trace(input={"message": "q"},   # 连 tool_result_limit 都没有
                        events=[_call("list_guestbook",
@@ -184,14 +179,7 @@ def _test_parse_verdict_strictness():
 
 
 def _test_output_contract_lives_in_the_prompt():
-    """20261012 实测的**根因锁**：输出契约只挂在 schema 上，降级路径就没人管了。
-
-    那天 DeepSeek 不吃 `json_schema`（400 `This response_format type is unavailable now`）
-    ⇒ 走纯 prompt 降级；而 `_JUDGE_SYS` 当时只说"只输出 JSON"，四个字段的契约全在 schema 里
-    ⇒ 模型回了三键 JSON（实测原文 `{"unsupported": [], "answered": false, "verdict": "ok"}`）
-    ⇒ 181/181 抛「缺字段 reason」，而夜里汇总照旧 ALL PASS（它非门禁，瞎了也没人知道）。
-    判据 = **提示词自己得是一份完整的输出规格**：字段、json 字样、可照抄的样例三件齐全。
-    """
+    """验证 prompt 本身包含完整 JSON 字段契约，结构化输出降级后仍可执行同一规格。"""
     print("[contract] 输出契约住在提示词里（不靠 schema 兜）")
     sys_prompt = llm_judge._JUDGE_SYS
     for key in ("unsupported", "answered", "verdict", "reason"):
@@ -219,8 +207,6 @@ def _test_response_format_dialect():
           str(qwen_fmt)[:80])
     check("不点名服务商 ⇒ 现读配置、不抛（值取决于当前档位，故不断言它）",
           llm_judge.response_format().get("type") in ("json_object", "json_schema"))
-    # 20261019 批 G7：表上移到 `models/llm.py`（`eval.*` 不能被生产引，而复盘器要用
-    # 同一套方言）⇒ 这里改的是**指向**，判据本身一个字没松：两边必须是同一张表。
     check("评审员这一侧是同一张表的薄包装（两处各存一份方言就是漂移源）",
           llm_judge.response_format("deepseek")
           == llm_mod.response_format("deepseek", llm_judge._JUDGE_SCHEMA, name="verdict")
@@ -324,8 +310,6 @@ def _test_golden_runs_raise_the_trace_limit():
           "trace_mod.TOOL_RESULT_LIMIT_ENV" in src_run
           and "os.environ.setdefault(trace_mod.TOOL_RESULT_LIMIT_ENV" in src_run)
     src_graph = (ROOT / "agent/runtime/tool_execution.py").read_text(encoding="utf-8")
-    # 落盘的文本是 `frame_text`（模型看到的那份帧，20260925 批 D——判官的材料就是它），
-    # 截断策略仍是同一处（不是 graph 自己再写一个 200/8000）。
     check("原生 call 事件沿用共享的工具结果截断策略",
           any(isinstance(node, ast.Call) and getattr(node.func, "attr", None) == "tool_result_text"
               and len(node.args) >= 2 and isinstance(node.args[1], ast.Name)
@@ -368,12 +352,7 @@ def _test_golden_runs_raise_the_trace_limit():
 
 
 def _test_nightly_runs_the_judge():
-    """接线锁（20260925）：评审员进了夜间，但**没有**因此变成门禁。
-
-    纪律 1 说它"不是判分器"，那么夜间脚本里它就不许出现在 `{ fail=1; … }` 那一支；
-    同时它必须跑在 golden **之后**（材料就是刚那一轮，不传 `--traces` 时取最新一轮）。
-    "能力有测试 ≠ 接线有测试"——上面那些测试全绿也说明不了它真的被跑起来了。
-    """
+    """验证语义评审在 golden 之后执行且不冒充确定性门禁。"""
     print("[接线] 夜间回归跑评审员，且它仍是非门禁")
     sh = (ROOT / "scripts" / "nightly_regression.sh").read_text(encoding="utf-8")
     lines = [ln for ln in sh.splitlines() if "$PY eval/llm_judge.py" in ln]
@@ -389,9 +368,6 @@ def _test_nightly_runs_the_judge():
           "--traces" not in judge_line)
     check("跑在 golden 之后（材料就是刚那一轮）",
           sh.index("$PY eval/run_golden.py") < sh.index("$PY eval/llm_judge.py"))
-    # 20260925 实测：stdout 是文件时 Python 块缓冲 ⇒ 十分钟里日志一行不涨，中途去看
-    # 只能看到空文件（我据此误判过一次"0 字节 = 没跑"）。这是**可观测性**要求，不是
-    # 判据变化——所以锁在接线里，别让后来人顺手删掉。
     check("评审员那一步带 PYTHONUNBUFFERED=1（否则日志块缓冲、中途看是空的）",
           judge_line.lstrip().startswith("PYTHONUNBUFFERED=1 "))
 

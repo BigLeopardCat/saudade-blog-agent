@@ -167,11 +167,6 @@ def test_embed_space():
         ("model 只有空白", dict(embedding_api_key="sk-x", embedding_model="  "), False),
     ]
     for name, kw, want in _CASES:
-        # **显式把 embedding 那几格都写出来**（含空串）：init 参数优先级最高，这样即使本机
-        # 有产线 `.env`（单跑本套件时没被 `SAUDADE_IGNORE_ENV_FILE` 拦下），判据也不跟着它变。
-        # ⚠️ 用 dict 合并而不是 `Settings(embedding_api_key="", **kw)`：后者在 kw 也带这个键时
-        # 是 `TypeError: got multiple values`，而"本机 .env 把一格补上"与"用例自己写死这一格"
-        # 必须能同时成立（20261007 单跑实测：漏了 api_key/model 两格 ⇒ 4 条假红）。
         _kw = {"embedding_api_key": "", "embedding_model": "",
                "embedding_base_url": "", "embedding_dim": 0, "embedding_batch_size": 10}
         _kw.update(kw)

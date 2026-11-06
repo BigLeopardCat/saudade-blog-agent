@@ -77,11 +77,6 @@ def _old_verify(token: str, secret: str = FIXTURE_KEY):
             return None
         role = payload.get("role")
         return {"uid": uid, "role": str(role) if role else None}
-    # 下面那一行的行内豁免（`BLE001`）是**照抄的一部分**：旧实现就是这么写的
-    # （裸 `except Exception` 兜住 split 失败 / base64 坏 / json 坏 / int() 失败），
-    # 改窄它就不再是参照物了。
-    # 这一处盲捕获**只活在测试里**、且正是被换掉的那段代码 —— 见 `eval/except_gate.py`
-    # 的"只记账、不批量改"那一段。
     except Exception:  # noqa: BLE001
         return None
 
@@ -195,8 +190,6 @@ _CASES = [
         None,
     ),
     ("别的密钥签的", lambda s: rust_assertion(secret=OTHER_KEY), None),
-    # 真·`alg:none` 攻击：头部说 none、**签名段是空的**。两边都必须拒（旧实现算出的
-    # HMAC 与空串比不相等；PyJWT 直接说 alg 不在白名单里）。
     (
         "alg:none 且签名为空（真攻击）",
         lambda s: _mint(
@@ -212,18 +205,12 @@ _CASES = [
     ("两段（少一段）", lambda s: "a.b", None),
 ]
 
-# **故意不同**的两格（新实现更严）：列在这里，免得下一个人当成 bug。
-# ⚠️ 都是"更严"，**不是"修了漏洞"**：旧实现从不读头部，靠"永远只算 HMAC"达到同样的
-# 安全效果（攻击者拿不到密钥就伪造不出签名）。新增的白名单只是把这件事写成显式的。
 _TIGHTENED = {
     "头部写 RS256、签名却是合法 HS256": "旧实现**从不读 `alg`** ⇒ 放行；"
     'PyJWT 的 `algorithms=["HS256"]` 白名单拒绝',
     "头部写 alg:none、签名却是合法 HS256": "同上。（这一格不是真攻击——真攻击的签名段是空的，"
     "两边都拒，见 `_CASES` 里那条）",
 }
-# 还有一处**理论上的**差异，但实测不可观测，所以不写成判据：PyJWT 的过期判据是
-# `exp <= now`、旧实现是 `exp < now`。要看见它得让 `time.time()` 恰好返回整数
-# （`exp` 是整秒、`now` 带小数）—— 本套件试过，两边都判过期。
 _EXP_BOUNDARY_NOTE = "exp 恰好等于 now 这一格实测不可观测（见上）"
 
 

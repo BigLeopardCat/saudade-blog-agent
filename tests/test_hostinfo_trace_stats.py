@@ -1,12 +1,4 @@
-"""`hostinfo.trace_stats` 的**布局判据**：零 LLM、零网络、只碰临时目录。
-
-**为什么原先那条判据没抓住它**：夹具只铺平铺的 `<名字>.json` ⇒ 判据在一个**已经不存在
-的形状**上保持绿。同族教训见 `tests/test_ready.py` 头注（判据的前提要自己摆出来）与
-`saudade-offline-suite-dial-blindspot`：**摆的前提必须是今天的那个前提。**
-所以本件的夹具**同时铺两种布局**，并单列一条"只有按天目录"的正控——那才是生产的样子。
-
-用法：.venv/bin/python tests/test_hostinfo_trace_stats.py
-"""
+"""`hostinfo.trace_stats` 的**布局判据**：零 LLM、零网络、只碰临时目录。"""
 
 
 import ast
@@ -66,9 +58,6 @@ def test_hostinfo_trace_stats():
                 ("c", "producer_done", [{"event": "authz_shadow"}]),
                 ("d", "idle_timeout", [])]:
             _write(tdir, name + ".json", reason, events)
-        # 按天目录（**今天真实的布局**）：两份 `.json` + 一份 `.gz` 归档。
-        # `.gz` 也是 trace 语料（`eval/trace_retention.py` 压的就是它），旧实现只认
-        # `.json` 后缀 ⇒ 压缩过的那些它一份都看不见。
         _write(tdir, f"{DAY}/e.json", "producer_done", [{"event": "authz_shadow"}])
         _write(tdir, f"{DAY}/f.json", "total_timeout", [])
         with gzip.open(os.path.join(tdir, DAY, "g.json.gz"), "wt") as f:
@@ -80,8 +69,6 @@ def test_hostinfo_trace_stats():
         os.utime(os.path.join(tdir, "old.json"), (0, 0))
 
         t = _stats(tdir)
-        # 7 = 平铺 4 + 按天 3。**这个数只有在两种布局都被遍历时才对**——
-        # 20261018 之前实现在这里得 4（按天那三份一份都看不见）。
         check("今日轮数 = 平铺 + 按天目录里的可解析 trace（坏 JSON 与旧文件不计）",
               t["rounds"] == 7, str(t["rounds"]))
         check("  ⭐ 按天目录**被遍历到了**（否则上面那个 7 会退成 4）",

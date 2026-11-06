@@ -36,27 +36,6 @@ REQUIREMENTS = ROOT / "scripts" / "requirements-graph.txt"
 
 # 环形缓冲只留最后这么多行给页面看（完整日志在 <ts>.log 里，页面给的是路径）
 TAIL_LINES = 400
-# 起建图前的内存闸：低于它**拒绝启动**并把当前值报出来，不做"试试看"。
-#
-# **这个数不是拍的，是量出来的**（20261003 纠正：原来写 1200MB 纯属估高，本机可用内存
-# 常在 900MB 上下 ⇒ 门永远关着，"腾一腾再来"根本腾不到）。实测口径与结果：
-#   `systemd-run --user --scope -p MemoryMax=1000M -p MemorySwapMax=1536M` 里跑一整次
-#   真实重建（400 节点 / 12 篇文章 / UMAP），**峰值 RSS 552MB**（含 uv 那一层），
-#   30 秒跑完，换页 0 次 ⇒ 1000MB 的笼子都没碰到。640 = 552 × ~1.16 的余量。
-#
-# **余量为什么故意留得小**：这台机器
-# 的 MemAvailable 随开发工具起伏，实测 699–1070MB 之间晃。余量一大，门就常年关着
-# ——那正是被修掉的那个毛病（主人连着点两次都只拿到"内存不够"）。640 的判据是
-# "实测跑得完"，不是"看着放心"；真跑起来超了，OOM 会先找上这个 552MB 的进程，
-# 而不是旁边的 MySQL/Rust（它们的 RSS 是几十 MB 量级）。
-#
-# ⚠️ 这个数与**节点数**正相关（UMAP/numba 的中间量按点数长）。默认上限是 400 节点；
-# 把 `--max-nodes` 提到 2000 的站点要自己重新量一遍再抬这个数——量法同上（笼子设小，
-# OOM 只死那个 scope，不会拖垮整机）。可用内存读的是 `/proc/meminfo` 的 MemAvailable，
-# 换页空间**不计入**（真跑起来全靠 swap 会把这台机器拖到没反应，那正是 2026-08 那次
-# OOM 的形状，宁可拒绝）。
-# 紧急放行（主人自己承担风险，例如明确知道机器上还有可回收的页缓存）：
-#   `GRAPH_BUILD_MEM_MIN_MB=500` 写进 agent 的 .env —— 非正数/非整数一律回落默认值。
 MEM_MIN_MB = 640
 MEM_ENV = "GRAPH_BUILD_MEM_MIN_MB"
 
@@ -348,13 +327,6 @@ def resolve_params(raw: dict | None) -> dict:
         sv = str(raw[key]).strip()
         if len(sv) > limit:
             raise ValueError(f"{key} 太长（上限 {limit} 字符）")
-        # 三个字符串参数里**只有 exclude_ids 的空串是有意义的值**（＝一个都不排除，
-        # 见 20261003 修的静默 bug）。api_base / site 的空串是"没填"，必须**保留默认值**
-        # 而不是把它擦成空串：`server.py::GraphRebuildRequest` 拿 `""` 当缺省值，
-        # 于是页面留空 ⇒ 这里原样收下 `""` ⇒ `--api-base ""` 进 argv ⇒
-        # 脚本拼出 `/notes?pageSize=1000`（没有 scheme）当场 `ValueError: unknown url
-        # type`。
-        # 判据：空串对这两项没有第三种语义，折叠掉不会丢信息。
         if not sv and key not in _KEEP_EMPTY_STR:
             continue
         out[key] = sv

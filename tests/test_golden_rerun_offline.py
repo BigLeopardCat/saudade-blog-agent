@@ -16,7 +16,7 @@ from pathlib import Path
 
 from _judge import collector
 
-ROOT = Path(__file__).resolve().parent.parent  # 仓根（20260924：本文件已搬进 tests/）
+ROOT = Path(__file__).resolve().parent.parent
 
 
 EVAL = ROOT / "eval"                           # run_golden / golden_trace 仍在 eval/
@@ -43,10 +43,9 @@ def mkcase(cid: str, tags: list[str]) -> dict:
 
 
 def mk2(cid: str, g1: dict, g2: dict) -> dict:
-    """最小**双轮**用例（20260925）：第 1 轮发命令式话术（生产上这一步弹卡），
-    第 2 轮发前端合成的确认消息。两轮写死同一个 `conversation_id`——令牌把会话签进
-    签名，两轮会话不一致是"令牌作废"的一种，用例形态上就得先对。
-    """
+    """最小**双轮**用例：第 1 轮发命令式话术（生产上这一步弹卡），
+第 2 轮发前端合成的确认消息。两轮写死同一个 `conversation_id`——令牌把会话签进
+签名，两轮会话不一致是"令牌作废"的一种，用例形态上就得先对。"""
     return {"id": cid, "tags": ["write"], "context": {"conversation_id": 4242},
             "user_input": "那个叫「X」的分类我不需要了，清理掉吧",
             "rounds": [
@@ -56,20 +55,10 @@ def mk2(cid: str, g1: dict, g2: dict) -> dict:
 
 
 def _stub_run_one(plan: dict, calls: list, tokens: dict | None = None):
-    """桩：按 `plan[case_id]` 顺次弹出这一跑判绿(True)/判红(False)，并记录收到的参数。
-
-    `tokens`（20260925 双轮）：按 `tokens[case_id]` 顺次弹出这一轮"弹卡签出的令牌原文"。
-    缺/空 = 这一轮**没弹卡**——正是双轮用例要区分的那件事（第 1 轮没签出 ⇒ 第 2 轮不该发）。
-    """
+    """桩：按 `plan[case_id]` 顺次弹出这一跑判绿(True)/判红(False)，并记录收到的参数。"""
 
     def _run(req, principal=None, trace_ctx=None, *, confirm_token="", confirm_pick="",
              thread=""):
-        # 签名跟着真 `run_one` 走（20260925 加 `confirm_token` 具名参，双轮用；
-        # 20261010 加 `confirm_pick`——"卡上点了第几格"那一格，`run_case` 逐轮传下来；
-        # 20261018 加 `thread`——传给图的线程坐标，本桩用不到它的值，但签名要照抄）：
-        # 桩与真函数签名不一致时，报的是 TypeError，而不是"用例行为不对"，那种红
-        # 读起来像环境问题（本文件 20260924 就是这么红过一次；20261010 又红了一次，
-        # 正是漏了 `confirm_pick` 这个新具名参）。
         cid = (trace_ctx or {}).get("case", "")
         base = cid[: -len("__rerun")] if cid.endswith("__rerun") else cid
         calls.append({"case": cid, "message": req.message, "confirm_token": confirm_token,
@@ -90,15 +79,8 @@ def _stub_run_one(plan: dict, calls: list, tokens: dict | None = None):
                 "exec_rows": [], "exec_tools": [], "tool_rounds": 0,
                 "trace": None, "resets": 0 if ok else 1,
                 "resets_reasons": [] if ok else ["stub 判红"],
-                # 打回的形状（20261002）：真 `run_one` 每轮都带这两个键（`reset_scopes`
-                # 逐条记 scope、`fallback_reasons` 只收 scope=text 的），报告侧是照
-                # `result["reset_scopes"]` **严格读**的 ⇒ 桩少给一个键，主脚本写报告时
-                # 直接 KeyError（同上面那两个键的老教训：桩的形状必须与真函数一致）。
                 "reset_scopes": [] if ok else ["all"],
                 "fallback_reasons": [], "error": None,
-                # 真 `run_one` 的返回形状里有这两个（20260925）：桩少给一个键，
-                # 驱动侧读到的是"这一轮没弹卡"，于是所有双轮用例都红在"没令牌上"
-                # ——桩与真函数**返回形状**不一致，和签名不一致一样会骗人。
                 "confirm_tokens": [tok] if tok else [],
                 "confirm_payloads": ([{"workflow": "tag_delete",
                                        "specs": [{"tool": "delete_tag"}]}] if tok else [])}
@@ -141,9 +123,6 @@ def drive(cases: list[dict], plan: dict, argv_extra: list[str] | None = None,
                 code = 0
             except SystemExit as e:
                 code = e.code if isinstance(e.code, int) else 0
-        # `last_run.json` = **最近一次全量跑**（20260924 收窄）：非全量（`--only` / `--limit` /
-        # 有跳过）的跑法**不写它**——它被当成"当前基线"读，一次调试跑把它写成 total=1 就
-        # 把基线弄丢了。所以这里按"可缺席"读，缺席本身就是一条要断言的结论（见 ⑤⑥）。
         _lr = os.path.join(tmp, "eval", "report", "last_run.json")
         report = json.load(open(_lr, encoding="utf-8")) if os.path.exists(_lr) else None
         archived = sorted(glob.glob(os.path.join(tmp, "eval", "report", "runs", "*.json")))
@@ -288,21 +267,8 @@ def test_golden_rerun_offline():
               str(r1["report"] and {k: r1["report"][k] for k in ("total", "full_run")}))
         r2 = drive([mkcase("reg_a", ["regression"])], {"reg_a": [GREEN]},
                    argv_extra=["--only", "reg_a"], tmp=_tmp)
-        # 注意 ⑥ 与 ⑤ 的判据不同：⑤ 的目录里从来没有基线（读回 None = 没写），
-        # ⑥ 的目录里**已经有**基线，所以"没写"的判据是"读回来的还是上一轮那份"。
-        #
-        # 读**最新**那份（`archived[-1]`），不是 `archived[0]`（20261002）：这个目录里先跑过
-        # 一次全量，`archived[0]` 恒是它（文件名是秒级时间戳、按时间排序），拿它当"这一轮
-        # 自己的留档"读出来的总是 total=2。此前这条能绿，靠的是**留档被覆盖**这个缺陷——
-        # 两次跑落在同一秒时 `runs/<ts>.json` 同名，后写的把那一次覆盖掉，目录里只剩一份
-        # （恰好是这一轮的）。同一秒撞车一旦不发生（两次跑跨过秒边界），这条就红。判据要测
-        # 的是"这一轮自己那份是 total=1"，两种时序下都得成立。
         _own = (json.load(open(r2["archived"][-1], encoding="utf-8"))
                 if r2["archived"] else None)
-        # 「这一轮自己的那份」能被读到，前提是**两份都在**：留档名此前是秒级 ts，全量跑与
-        # `--only` 跑落在同一秒就同名，先跑那份被覆盖（20261002 修，见 eval/report_archive.py）。
-        # 这条断言此前只在"没撞车"那半时序里绿——现在两种时序都得两份。
-        # 期望名**按本机钟面算**（戳是本地时间，CI 是 UTC ⇒ 写死字符串会在那边红，20261002 实测）。
         _base = time.strftime("%Y%m%d_%H%M%S", time.localtime(_FROZEN_TS))
         _stems = [os.path.basename(x)[: -len(".json")] for x in r2["archived"]]
         check("两次跑被钉在同一毫秒，留档仍各占一个（第二个顺延一毫秒，两份都在）",

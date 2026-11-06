@@ -378,9 +378,6 @@ def _probe_case_gold(gold: dict, text: str, cid: str, run: str, agg: dict, check
         why = _probe(gold, text, key, check)
         if why:
             a["bad"] += 1
-            # 每次命中都覆盖：留下的是**最近一次**的现场（文件按时间戳命名，遍历也是升序）
-            # ——「上个月命中过 63 次」与「昨天还命中」要分开读，前者多半是判据改严之前的
-            # 旧回复，后者是当下就在发生的事。
             a["why"], a["run"] = _trim(why), run
 
 

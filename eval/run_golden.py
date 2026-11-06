@@ -25,11 +25,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import corpus_terms  # 同目录：语料术语派生（require_doc_terms 判据用）
-import golden_fixture  # 同目录：真写用例的夹具在位检查（20260925）
-import golden_thread  # 同目录：传给图的线程坐标（批 6，见该模块头注）
+import golden_fixture
+import golden_thread
 import golden_trace  # 同目录（eval/ 在 sys.path 上，同 corpus_check 的用法）
-import identity_preflight  # 同目录：真身份通道的前置在位检查（20260926）
-import landing_gate  # 同目录：落地判定（两层门禁 / 慢性红榜，20261001）
+import identity_preflight
+import landing_gate
 import report_archive  # 同目录：留档文件名（秒级 ts 同秒撞车 → 见模块头注）
 from landing_gate import (  # noqa: F401 —— 再导出（唯一实现在 landing_gate）
     fallback_resets,
@@ -38,7 +38,7 @@ from landing_gate import (  # noqa: F401 —— 再导出（唯一实现在 land
 from langchain_core.messages import ToolMessage
 
 from agent import (
-    confirm,  # 双轮（20260925）：验签 + 只读解载荷，见 run_one/run_case
+    confirm,
     runtime_probe,
 )
 from agent.api.context import build_messages as _build_messages
@@ -47,7 +47,7 @@ from agent.api.context import build_messages as _build_messages
 from agent.api.routes import chat as chat_routes
 from agent.api.schemas import ChatRequest, HistoryItem
 from agent.api.turns import stream_to_queue as _run_agent_stream_to_queue
-from agent.principal import Principal  # 管理助手用例的调用者身份（20260921）
+from agent.principal import Principal
 from agent.transport import reply_text
 from eval import command_report, golden_runtime
 from eval.golden_runtime import close_agent, ensure_agent
@@ -1542,9 +1542,6 @@ def check_gold(gold: dict, result: dict, *, docs=None, user_input: str = "",
     # Check per-goal task outcomes independently of aggregate task status.
     _per_intent = gold.get("require_task_goal_per_intent")
     if _per_intent:
-        # `state="cancelled"` 的帧**不算登记**：撤下那条帧的 `goal` 与登记帧同一个形状
-        # （`tasks.drop_decl` 把原来的 goal 抄下来），只比 goal 会把「这件事不办了」
-        # 读成「这件事记着呢」——正好与本键要问的相反。
         _tfs = [f for f in (result.get("task_frames") or [])
                 if isinstance(f, dict) and str(f.get("state") or "") != "cancelled"]
         _goals = [_squash_ws(str(f.get("goal") or "")) for f in _tfs]
@@ -2083,8 +2080,6 @@ def main():
         "skipped_real_write_ids": _write_skipped,
         # Record prerequisite exclusions; they are unevaluated, not successful cases.
         "skipped_identity_ids": _identity_skipped,
-        # 在位检查的原始结论（每条身份通道一行：env/uid/role/state/detail）。落进报告
-        # 是为了事后能回答"这一轮的前置当时到底是什么状态"——日志会轮转，报告不会。
         "identity_preflight": _preflight_rows,
         # Record changed source premises separately from unchecked human declarations.
         "skipped_premise_ids": _premise_skipped,
@@ -2355,9 +2350,6 @@ def main():
               f"（显式点估计口径）→ 退出码 1")
         sys.exit(1)
     if _s["underpowered"]:
-        # 样本不足 ⇒ **不判**（既不是过也不是红）：n=5 全绿的下界只有 0.51，拿它判红
-        # 会造出一个永远达不到的门禁；判绿则是替样本量撒谎。空分母那次（退出码 2）
-        # 是同一条纪律的另一个现场：**"没评"必须与"通过"分开**。
         print(f"⚠ 采样层样本不足（{_s['passed']}/{_s['total']}，判 {_s['entry']} 至少要 "
               f"{_s['min_n_for_entry']} 条）⇒ 采样层不判、不置红（点估计 {_s['point']:.3f} "
               f"够得上地板 ⇒ 够不上「小样本整片红」那条：`point < floor` 时是退出码 1）；"

@@ -34,7 +34,6 @@ MIN_FAMILY = 3
 USER_VISIBLE_KEYS = frozenset({
     "text_contains", "text_any_regex", "text_not_contains", "text_not_match_regex",
     "not_contains_exempt_quote", "require_denial", "require_absence",
-    # 20261008：登录派活（负向）——用户读得到的那句话本身，与 text_not_match_regex 同类。
     "forbid_login_demand",
     "require_cmd_prefixes", "require_cmd_contains", "require_cmd_all",
     "forbid_cmd_prefixes", "forbid_cmd_contains", "either_cmd_or_text",
@@ -113,13 +112,12 @@ def main() -> None:
         bare = cases_without_visible_face(cases, tag)
         check(f"`{tag}` 每条用例都至少有一条用户可见面断言", not bare, "；".join(bare))
 
-    # ④ 反向对照：20261003 01:09 那一刻（incident 条写 `no_tool_calls: true`）必须当场点名
     probe = []
     for c in cases:
         c2 = json.loads(json.dumps(c, ensure_ascii=False))
         if c2["id"] == "own_mark_read_incident_phrase_not_logged_in":
             for r in rg.iter_rounds(c2):
-                (r["gold"]).setdefault("no_tool_calls", True)   # 复原当时那一行
+                (r["gold"]).setdefault("no_tool_calls", True)
         probe.append(c2)
     probe_conf = family_conflicts(probe)
     hit = any("own_mark_read_incident_phrase_not_logged_in" in x["forbids"] for x in probe_conf)

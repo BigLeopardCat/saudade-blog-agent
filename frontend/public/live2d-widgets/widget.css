@@ -1,9 +1,4 @@
 #waifu-toggle {
-    /* 20260903：隐藏/唤回按钮 = 趴在墙头的泠月喵贴纸（lingyue-toggle.png，
-       原始 2043px 大图压缩至 192px；图自带形状/透明圆角，故无 background-color/
-       border-radius/padding——radius 会把贴到画布底的内容角切掉；svg 手势图标隐藏）。
-       交互（20260903 用户拍板）：左下角 + 上下收起——收起态滑下墙头藏于视口外，
-       quit 看板娘后 active 从底缘爬出趴墙头（墙头线 = 视口底），点击唤回 */
     background-image: url('lingyue-toggle.png');
     background-size: 100% 100%;
     bottom: -60px; /* 收起:整图滑出视口下缘(47px 高+余量)，不可见不可点 */
@@ -13,11 +8,7 @@
     position: fixed;
     transition: bottom 1s, transform 0.3s;
     width: 60px;
-    height: 47px; /* 60 / (2043/1608) 图宽高比，保持不拉伸 */
-    /* 与 #waifu 同一档（见那里关于 --z-agent 的说明）：后台管理界面有 fixed 侧边栏
-       (z-index:100) 盖住左下角，这一档必须高于它，否则看板娘收起后隐藏按钮不可见/不可点。
-       20261002 从写死的 9999 收到阶梯里 —— 9000 多那点"余量"没有实际对象，
-       副作用却是它连同 #waifu 一起盖住了宿主页面上的弹窗。 */
+    height: 47px;
     z-index: var(--z-agent, 1000);
 }
 
@@ -35,17 +26,6 @@
 
 #waifu {
     bottom: -500px;
-    /* 20261011：回退到最初的 15px。撤销 20261003 那两次位移 —— 先「右移看板娘板块
-       宽度的一半」（15 + 板块半宽 150 = 165），再按「稍微左移一点下移一点」收 20px
-       ⇒ 145；用户裁决「默认位置回退到当时让你改的那个版本」= 两笔一起撤掉。
-       **跟着动的是整块**：#live2d / #waifu-tips / #waifu-tool 都是它内部的
-       relative/absolute 子元素，对话面板也挂在它上面。
-       #waifu-toggle（收起态那枚贴纸）**不动**——它只在与本元素互斥的收起态出现，
-       语义是"贴左下角的唤回按钮"，不是看板娘本体。（它本来就恒在 15px，与本行同值
-       纯属巧合，别再被"两处 15px 要一起改"骗一遍。）
-       "下移"不在这里：横向只有 left 一个旋钮，纵向归下面那条 transform（见它的注释）。
-       回到 15px 之后，文件末尾 `<480px` 那条 `#waifu { left: 15px }` 回落就是同值空转，
-       已随之删掉（那个媒体块里手机档的缩放/工具条重锚/命中放行三条没动）。 */
     left: 15px;
     position: fixed;
     /* 收起→展开的中间态 canvas 高度会短暂塌陷为 0（display:none 恢复/模型重载），
@@ -53,21 +33,8 @@
        掉到按钮列表/收回按钮处；#live2d 恒为 300px 高，直接用固定 height 锁死，
        任意中间态都按 300px 定位，面板与悬浮按钮永不依赖 canvas 恢复时机 */
     height: 300px;
-    /* 竖直位置：整块抬 15px。20261011 随横向一起回退（撤销 20261003「下移 10px」那条
-       ——那次把抬升量从 -15 收到 -5）。**不能再往下压**：`bottom: 0`（waifu-active）是
-       贴平视口下缘的落点，正数 translateY 会连人带脚切掉。
-       ⚠️ 与下面 `#waifu:hover` 那一行**必须同值**——现状是刻意的"hover 不抬升"，
-       只改一处就会让鼠标一移上去整块跳一下。 */
     transform: translateY(-15px);
     transition: transform .3s ease-in-out, bottom .8s ease-in-out;
-    /* 层级：走宿主页面的 z-index 阶梯，**缺省 1000**（20261002 改）。
-       原先写死 2147483000 —— 那个数不是"最高的意思"，是"比谁都大"：博客站的个人中心
-       与公告弹窗都是 antd Modal（默认 zIndexPopupBase=1000），一律被它压死，用户报
-       "个人中心打开时被 agent 对话框遮挡"。宿主页面现在只写一份阶梯
-       （博客仓 frontend/src/index.css 的 :root），`--z-agent` 是它给看板娘留的那一档；
-       页面想调，改那个变量即可，不用来这里动源码。
-       兜底值 1000：脱离本站（设备控制台这类宿主）时仍然浮在常规内容之上 ——
-       那边最高的自家浮层是 `#toast` 的 z-index:10，1000 足够。 */
     z-index: var(--z-agent, 1000);
     /* 字号自包含：宿主页面 body 字号不接管看板娘 UI（device-console body 14px
        会让面板整体比博客页小一号，行高 1.4×14=19.6px 与博客 1.4×16=22.4px 不一致）。
@@ -322,10 +289,8 @@
 
 /* ── Chat Panel ── */
 #waifu-chat {
-  /* 20260828s：拖拽栏尺寸唯一事实源（CSS 变量）——改宽只改这一处，
-     边界线与分割线自动跟随，不再手动调位置 */
-  --drag-w: 24px;   /* 左侧拖拽栏宽度（20px → 24px 加宽 20%，用户要求） */
-  --drag-h: 24px;   /* 顶部拖拽栏高度（20px → 24px，20260831 与左侧栏 --drag-w 一致，用户要求） */
+  --drag-w: 24px;
+  --drag-h: 24px;
   --drag-lw: 2px;   /* 拖拽栏边界线宽 */
   display: none;
   position: absolute;
@@ -334,11 +299,6 @@
   width: 420px; /* 默认尺寸（当前默认 840px 的一半） */
   max-width: none; /* 缩放不受屏幕限制，可自由调节 */
   background: rgba(255,255,255,0.95);
-  /* 20260901g：外框移入 ::before 伪元素（z6）——父元素 border 永远绘制在所有
-     子元素之上，贴角的缩放把手盖不住线末端（"轮廓线顶部末端裸露"）；伪元素
-     z-index 可控：外框 z6 压过拖拽栏背景（5/4），缩放手柄 z7 再压过外框即可
-     盖住线顶端。外框职责仍统一收归容器（不拆给拖拽栏），圆角弧线由伪元素
-     border-radius 12px 承担 */
   border-radius: 12px;
   box-shadow: 0 2px 12px rgba(0,0,0,0.12);
   z-index: 100;
@@ -352,10 +312,6 @@
     line-height: 1.4 !important;
     box-sizing: border-box !important;
 }
-/* 20260901g：面板外框（原面板自身 border 的继承者）——inset 覆盖整块面板，
-   pointer-events:none 不拦截任何交互；z6 高于拖拽栏（5/4）保证线不被栏背景
-   压住，低于缩放手柄（7）让 TL/BR 把手能盖住线末端（用户要求：缩放按钮盖住
-   左侧外框线顶部末端） */
 #waifu-chat::before {
   content: '';
   position: absolute;
@@ -377,25 +333,15 @@
     font-family: "PingFang SC", "Microsoft YaHei", "Noto Sans CJK SC",
         "Hiragino Sans GB", sans-serif !important;
 }
-/* 20260901f：拖拽栏不再承担任何轮廓线（标准做法：边框职责归容器）——面板
-   border 提供外框、消息区/输入区 border 提供内侧 L 形镶边。左/上侧边栏一体：
-   顶栏 left:0 全宽 + 左栏全高纯背景（z-index 5/4 覆盖面板顶/左段），两栏之间
-   无任何线条；圆角由面板 border-radius + overflow:hidden 裁剪（子元素无需 radius）。 */
 .chat-drag-bar-t { position: absolute; top: 0; left: 0; right: 0; height: var(--drag-h); background: #fbf1f0; cursor: move; z-index: 5; touch-action: none; }
 .chat-drag-bar-l { position: absolute; top: 0; left: 0; bottom: 0; width: var(--drag-w); background: #fbf1f0; cursor: move; z-index: 4; touch-action: none; }
-/* 20260830：.chat-inner-border（内侧 L 形贴线）删除——用户反馈顶部横线悬在
-   面板内部（top:18px）、"没贴住边框边缘，像手动贴的"。上边框线由拖拽栏
-   自身 border 提供（贴合 0px 边缘），无需内贴线；chat-render.js 模板里的空
-   div 保留（无样式零成本）。20260830g：侧边栏内侧边缘线（原竖线位置）由
-   .chat-drag-bar-l 的 border-right 提供——同样是真实边框，贴合 rail 边缘，
-   与消息区 0px 交界处完全对齐。 */
 .chat-drag-bar-t:hover, .chat-drag-bar-l:hover { background: #f6e5e3; }
 .chat-close {
   position: absolute;
   top: 0;
   right: 0;
   width: 24px;
-  height: 24px; /* 与顶部拖动条 .chat-drag-bar-t 同高（20260831 加厚后同步），hover 阴影区域不再超出上边框 */
+  height: 24px;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -404,7 +350,7 @@
   font-weight: 600;
   line-height: 1;
   color: #e74c3c;
-  z-index: 6; /* 20260901c：高于 .chat-drag-bar-t（5）——顶栏改为全宽后覆盖右上角，不提升关闭按钮会被压住点不到 */
+  z-index: 6;
 }
 .chat-close:hover { background: rgba(231, 76, 60, 0.12); color: #c0392b; }
 #waifu-tips { display: none !important; }
@@ -415,23 +361,16 @@
 .chat-messages {
   flex: 1;
   overflow-y: auto;
-  /* 20260901f：margin 让位给左/上侧边栏（var(--drag-w/h)），自身
-     border-top/left 提供内侧 L 形镶边（与 .chat-input-area border-left
-     连成竖线；同一容器多边在拐角天然连续，零拼接）。原 padding-top 34px
-     （24 t 栏 + 10）/padding-left 28px（24 l 栏 + 4）改为 margin 让位后
-     减回 10px/4px——内容位置不变 */
   margin: var(--drag-h) 0 0 var(--drag-w);
   border-top: var(--drag-lw) solid #f1948a;
   border-left: var(--drag-lw) solid #f1948a;
   padding: 10px 16px 8px 4px;
   scrollbar-width: thin;
 }
-/* 新消息指示条（20260828h，聊天软件标准）：翻历史时新消息不强制拉回，
-   但悬浮提示"有新消息"，点击回底；滚回底部自动消失。定位在输入区上方居中 */
 .chat-new-msg-note {
   position: absolute;
   left: 50%;
-  bottom: 88px; /* 20260828s：预览区 40px→20px（输入栏回落），提示条同步下移 */
+  bottom: 88px;
   transform: translateX(-50%);
   z-index: 6;
   display: none;
@@ -512,12 +451,9 @@
   padding: 0;
 }
 .chat-img-preview-remove:hover { background: #c0392b; }
-/* 选图按钮（20260828 修正：放进左侧拖拽栏 .chat-drag-bar-l 内）：
-   absolute 定位在拖拽条区域内（不挤占内容宽度），事件不经过拖拽条
-   （兄弟元素，无冒泡）→ 点击与拖拽互不干扰 */
 .chat-img-btn {
   position: absolute;
-  left: 3px; /* 20260828s：拖拽栏 24px 内 18px 图标居中 */
+  left: 3px;
   bottom: 14px;
   z-index: 6; /* 高于拖拽栏（t=5/l=4），选图点击不被拖拽条拦截 */
   border: none;
@@ -553,7 +489,6 @@
   border-radius: 8px;
   border: 1px dashed #ddd;
   background: #f7f7f7;
-  /* 20260829d：图标在上、文字在下（flex column） */
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -572,27 +507,17 @@
 .chat-input-area {
   position: relative;
   display: flex;
-  flex-direction: column; /* 20260828 修正：预览区在输入框上方（输入栏加高） */
+  flex-direction: column;
   gap: 4px;
-  /* 右侧留 40px 给缩放把手，避免遮挡发送按钮 */
-  /* 20260901f：margin-left 让位左栏后，border-left 与 .chat-messages 的
-     border-left 连成内侧竖线（L 形镶边竖段贯穿消息区+输入区）；padding-left
-     28px→4px（margin 已让位，内容位置不变） */
   margin-left: var(--drag-w);
   border-left: var(--drag-lw) solid #f1948a;
-  padding: 4px 26px 12px 4px; /* 20260829a：顶部 8px→4px（输入栏再缩矮，预览区已 18px 刚好放下）；20260905f 右留 40→26px：角把手 24→14px，多余留空让回发送区 */
-  /* 20260828s→20260829a：border-top 改 ::before 伪元素——左侧拖拽栏（z3 不透明
-     背景）会盖住 border 左段导致分割线视觉断开；伪元素 z6 高于拖拽栏。
-     20260829a 修正起点：left 从 0（贯穿侧边栏）改为 var(--drag-w)（侧边栏轮廓线
-     右缘）——用户要求"分割线不贯穿侧边栏，刚好与轮廓线连上"。20260901f：
-     输入区 margin-left 让位后自身左缘即面板 x=24，::before left 改 0 与消息区
-     border-left 对齐 */
+  padding: 4px 26px 12px 4px;
   border-top: none;
 }
 .chat-input-area::before {
   content: '';
   position: absolute;
-  left: 0; /* 20260901f：输入区 margin-left 让位后自身左缘 = 面板 x=24（消息区 border-left 位置） */
+  left: 0;
   right: 0;
   top: -1px;
   border-top: 1px solid #e74c3c;
@@ -600,7 +525,6 @@
   z-index: 6;
   pointer-events: none;
 }
-/* 拖拽图片入输入栏（20260829a）：文件悬停时虚线高亮提示可放置 */
 .chat-input-area.chat-drag-over {
   outline: 2px dashed #e74c3c;
   outline-offset: -3px;
@@ -627,7 +551,7 @@
     font-family: "PingFang SC", "Microsoft YaHei", "Noto Sans CJK SC",
         "Hiragino Sans GB", sans-serif !important;
     line-height: 1.4 !important;
-  min-height: 34px;  /* 20260828 修正：恢复输入框原高度（加高的是输入栏非输入框） */
+  min-height: 34px;
   max-height: 90px;
   overflow-y: auto;
 }
@@ -664,8 +588,6 @@
 /* Navigation confirmation */
 .chat-nav-confirm {
   display: none;
-  /* 20260901f：margin/border 与 .chat-messages 对齐——L 形镶边竖线在确认框
-     段不断开（流式元素左侧 24px 原被 l 栏背景盖住无需让位，现统一边框） */
   margin-left: var(--drag-w);
   border-left: var(--drag-lw) solid #f1948a;
   padding: 8px 12px 10px 4px;
@@ -676,13 +598,6 @@
 }
 .chat-nav-confirm.active { display: block; }
 .chat-nav-confirm .nav-question { margin-bottom: 6px; }
-/* `flex-wrap: wrap` 是**必需**的，不是排版偏好（20261020）：按钮一行放不下时，
-   flex 的默认行为（nowrap）是**把它们压窄**，而按钮的 `min-width: auto` 在中文上
-   等于"一个字一列"（CJK 处处可断行）——于是标签被压成 2–5 行的竖排字堆。
-   实测（线上真站 + 真 CSS，多件卡五枚按钮、卡片 376px）：
-     桌面宽度： 「取消」已断成 2 行、「全部处理（2 个任务）」断成 3 行；
-     375px 窄屏：「只处理第 1 个」断成 5 行（文字盒宽 7.6px = 一个字一列）。
-   换成 wrap 之后放不下就**换行**，按钮保持自然宽度、标签恒单行。 */
 .chat-nav-btns { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; }
 .chat-nav-btn {
   border: 1px solid #ddd;
@@ -703,9 +618,6 @@
 .chat-nav-btn.no { border-color: #999; color: #999; }
 .chat-nav-btn.no:hover { background: #999; color: #fff; }
 
-/* 色块预览（20260921，颜色对话）：正文里出现的**站内色板色值**旁挂一个小色块，
-   色块由前端按 hex 画（chatMarkdown.ts::decorateColorSwatches），模型自己不画符号。
-   内阴影描边让白/浅色块在浅底与深底上都能看出边界。 */
 .chat-swatch-wrap { display: inline-flex; align-items: center; gap: 4px; }
 .chat-swatch {
   display: inline-block; flex: none; width: 12px; height: 12px;
@@ -745,9 +657,6 @@
    撑高约 30px。博客页有 tailwind preflight 全局 reset 掩盖了此问题，无 reset 的
    页面（device-console 手写 HTML）气泡高度异常——与 agent 侧 .msg-text p 对称 */
 .msg-bubble p { margin: 0; }
-/* 气泡内 markdown 图片（20260901）：max-width 防撑破 560px 气泡；单击放大走
-   全局 md-zoom 浮层（zoomOverlay.ts 注册于 __openZoomOverlay）。
-   限定 .msg-text——用户发图 .msg-img（180×180 网格）不受影响 */
 .chat-msg.agent .msg-text img {
   max-width: 100%;
   height: auto;
@@ -768,9 +677,6 @@
   font-size: 15px;
   white-space: normal;
 }
-/* AI 生成声明（20260829g）：最后一条 agent 回答下方居中灰色斜体小字。
-   :last-child 限定 messages 容器最后一个子元素是 agent 消息时显示——
-   用户新消息追加后自动隐藏、新回复到达后自动跟随，零 JS 侵入 */
 .chat-msg.agent:last-child::after {
   content: "本回答由AI生成，内容仅供参考，请仔细甄别";
   display: block;
@@ -780,9 +686,6 @@
   color: #999;
   margin: 6px 0 2px;
 }
-/* ── 失败气泡重发/编辑按钮（20260829h）──
-   网络波动/空闲超时失败轮：user 消息已入库（断连清理只删残缺保留 user），
-   不重发会在下次请求被 agent "补答"——重发 = 删 DB 旧轮后走主流程 */
 .chat-msg-retry {
   display: flex;
   gap: 8px;
@@ -872,13 +775,6 @@
 .chat-msg.agent .msg-text a { color: #e74c3c; }
 .chat-msg.agent .msg-text ul, .chat-msg.agent .msg-text ol { margin: 2px 0 4px; padding-left: 20px; }
 .chat-msg.agent .msg-text li { margin-bottom: 2px; }
-/* 代码块：深色底 + 标签栏（20260914）。两件事一次做：
-   ① 标签栏/复制按钮由 decorateCodeBlocks 注入（见 src/utils/chatMarkdown.ts），
-      与文章页同一套；② 底色从 #f5f5f5 改深——高亮涂的是 atom-one-dark 的深色
-      主题配色（随主 CSS 全局加载，对话框也吃到），原先浅底上 params #abb2bf、
-      built_in #e6c07b、string #98c379 对比度仅 1.5-2.0:1 几乎看不见；改深底后与
-      文章页代码块一致（同 #0f172a），token 恢复可读。选择器由 .chat-msg.agent
-      放宽到 .chat-msg：用户气泡里的代码块此前完全没有样式，标签栏会落在裸 pre 上 */
 .chat-msg .msg-text pre { margin: 4px 0; padding: 8px 10px; background: #0f172a; border: 1px solid rgba(255, 255, 255, 0.08); color: #e2e8f0; border-radius: 6px; overflow-x: auto; white-space: pre; font-size: 14px; }
 .chat-msg.agent .msg-text code { background: #f5f5f5; padding: 0 3px; border-radius: 3px; font-size: 14px; }
 .chat-msg.agent .msg-text pre code { background: none; padding: 0; }
@@ -915,7 +811,6 @@
   padding: 6px 0 2px;
   user-select: none;
 }
-/* ── 失败轮持久化提示（20260902，025943 事故修复）：刷新后仍可见的"未收到回复" ── */
 .chat-msg-failed-note {
   text-align: center;
   font-size: 11px;
@@ -923,8 +818,6 @@
   padding: 2px 0 6px;
   user-select: none;
 }
-/* 刷新后同样能重发/编辑（20260927）：按钮排在提示条里、居中；`.chat-msg-retry`
-   本身是 flex 左对齐（挂在气泡里时用），这里只覆盖对齐方式 */
 .chat-msg-failed-note .chat-msg-retry {
   justify-content: center;
 }
@@ -935,9 +828,6 @@
   color: #c9985a;
 }
 
-/* ── 断流提示接在"已收到的部分"之后（20260916，agent worker 静默崩溃事故）──
-   以前断流是整段替换成"网络错误: …"，用户已经看着流出来的半截回复被抹掉、以为没生成；
-   现在只在这段正文**之后**追加一行提示（正文本身照旧入库，提示不进 items/DB）。 */
 .chat-msg .msg-text .chat-msg-err-note {
   margin-top: 8px;
   padding-top: 6px;
@@ -971,22 +861,6 @@
     "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji", sans-serif;
 }
 
-/* ══════════════════════════════════════════════════════════════════════
-   ── 20260903 会话化一期：双栏（加宽）布局 + 会话列表 + 标题条 ──
-   几何不变式：
-   · 拖拽栏（--drag-w 24px）与消息区 border-left（2px #f1948a）同槽位叠线，
-     L 形内侧镶边由 messages/input-area/nav-confirm 的 border 承担（拖拽栏无 border）。
-   · conv-open：JS 把面板 inline width +260（桌面），列列表 absolute 占据
-     x ∈ [--drag-w, --drag-w+260]，y ∈ [--drag-h, bottom]；消息/输入/标题/确认
-     条的 margin-left 右移 260 → 各自的 border-left 跟着右移，在列右缘画出
-     分隔竖线（面板自身不需要 border-right）。列表列背景与拖拽栏同色连成大片，
-     顶条（全宽 #fbf1f0）之上无断差。
-   · rail（左拖拽条内的图标栏）absolute 覆层 z6：☰/＋/历 与拖拽栏互为兄弟元素
-     （同 chat-img-btn 先例），点击不触发拖动；conv-open 下列表列 z4 在其下方，
-     不遮挡。
-   · 移动端 ≤768px：JS 让位面板宽度（style.width='' 由 calc(100vw-30px) 接管），
-     列表改覆盖式（absolute inset 盖住消息区），收起靠列表头 ⟵。
-   ══════════════════════════════════════════════════════════════════════ */
 
 /* ── 左侧窄图标栏（覆在左拖拽栏上）── */
 .chat-rail {
@@ -1161,22 +1035,6 @@
   }
 }
 
-/* ══════════════════════════════════════════════════════════════════════
-   ── 20260903b UI 重构（用户实测拍板）：覆盖上方 20260903a 双栏规则 ──
-   变更点：
-   · 抽屉宽 260 → 182（--conv-w，收窄 30%）
-   · 几何推翻：conv-open 不再加宽面板/右移消息区——面板宽与消息区零位移，
-     抽屉为叠层。方向由 chat-session.js 定：conv-in（默认，面板内覆盖，
-     从 rail 右缘起盖消息区左段）/ conv-out（面板左缘距视口 ≥ 194px 时
-     向左弹出到面板外）
-   · 会话标题：从消息区顶部横条移入顶部拖拽条内（absolute 覆层，居中，
-     :empty 隐藏）——消息区不再因标题让位
-   · rail：☰ 顶 + 底部组（＋ 历）靠图片按钮往上堆叠；按钮图标 SVG 注入
-   · 列表头：去掉收起/新对话按钮（rail 已有），加搜索框（本地过滤标题）
-   · 行 ⋯：纵向菜单 [删除/置顶/重命名]（删除走红色确认条 3s 过期还原）；
-     点非列表区域自动收起（mousedown 全局监听，session.js onDocDown）
-   · 置顶行：📌 前缀 + 服务端排序（pinned 优先）
-   ══════════════════════════════════════════════════════════════════════ */
 #waifu-chat {
   --conv-w: 182px; /* 会话抽屉宽（chat-session.js CONV_WIDTH=182 同步） */
 }
@@ -1295,9 +1153,7 @@
   display: flex;
   align-items: center;
   gap: 6px;
-  flex: 1; /* 20260905：行内占满（自由空间归 main）→ time 的 margin-left:auto
-              才有空间可分 → 时间/⋯ 恒贴行右，长标题在自身 flex:1+min-width:0
-              内截断，不再把右列顶出去（"时间跟标题名跑"） */
+  flex: 1;
   min-width: 0;
   padding: 7px 6px 7px 10px;
 }
@@ -1306,9 +1162,6 @@
   flex-shrink: 0;
   margin-left: auto; /* 时间贴行右（more 之前） */
 }
-/* 起点标记（20260918 A 方案·用户拍板）：跨天会话在活动时间后补"· 9-5 起"。
-   比活动时间更小更淡——读作"这个会话开了多久"，不是第二个时间。长会话标题是
-   首条消息的旧标题、时间却是当前，不标起点极易被读成"旧会话被刷新成最新" */
 .conv-row-since { font-size: 9px; color: #cbb6b0; }
 .conv-more { flex-shrink: 0; }
 .conv-row.menu-open .conv-more {
@@ -1365,8 +1218,6 @@
 .conv-rename-input:focus { border-color: #e74c3c; }
 .conv-row.renaming .conv-row-time { display: none; }
 
-/* 移动端：恒 conv-in 面板内覆盖（覆盖上方 20260903a 媒体块整段——
-   抽屉盖到 rail 右缘为止，rail ☰ 始终可点收起；宽度让满余量） */
 @media (max-width: 768px) {
   #waifu-chat.conv-in .waifu-conv-panel,
   #waifu-chat.conv-out .waifu-conv-panel {
@@ -1384,25 +1235,7 @@
   }
 }
 
-/* ══════════════════════════════════════════════════════════════════════
-   ── 20260903c 第二轮实测修正（用户拍板）──
-   · 标题落位：20260903b 把 .chat-conv-title 改顶条绝对覆层时未清掉
-     20260903a 遗留 margin/border/background —— 覆层被 margin-top
-     (var(--drag-h)=24px) 整体顶进消息区（"标题写在会话窗口里面 34px"），
-     白底+描边在窗口内拉出横带（"缺口"）。统一清零。
-   · rail 空区 pointer-events:none：rail 撑满左条（bottom:0）后整块盖住
-     下方图片按钮（同 z6、DOM 在后）→ 图钮失效；放行空区点击，按钮区恢复。
-     rail 图标 16 → 18px（历史会话图标略微放大）
-   · conv-out 语义重定义：旧"抽屉定位到面板左缘外"被 #waifu-chat
-     overflow:hidden 整体裁切 → 屏幕中段直接打不开。新几何：chat-session.js
-     把面板左移 182 + 加宽 182，本块把内容布局右移 var(--conv-w) →
-     消息区/rail/拖拽栏视口原位不动，左 182 列 = 会话侧边栏真窗格
-     （拖拽栏不动，向左开拓出侧边栏区域）
-   · conv-in 保留：面板左缘距视口 <186px / 移动端 → rail 右缘起覆盖兜底
-   · ⋯ 菜单：项图标化（flex 图标+文字），默认向下展开（JS 仅贴底翻上）
-   ══════════════════════════════════════════════════════════════════════ */
 
-/* 1) 标题：清除 20260903a 遗留（margin-top 顶进消息区 / 白底 / 描边） */
 .chat-conv-title {
   margin: 0;
   border: none;
@@ -1430,8 +1263,6 @@
   left: calc(50% + (var(--conv-w) + var(--drag-w)) / 2); /* 消息区视觉中心 */
 }
 
-/* conv-out 抽屉列：面板最左 0..182（覆 20260903b left:-182 面板外弹出式，
-   后者被 overflow:hidden 裁切不可见） */
 #waifu-chat.conv-out .waifu-conv-panel {
   left: 0;
   right: auto;
@@ -1467,20 +1298,6 @@
   }
 }
 
-/* ══════════════════════════════════════════════════════════════════════
-   ── 20260903d 第三轮实测修正（用户拍板）──
-   · 标题竖中心：calc line-height 半行距令 CJK 视觉偏高 → flex 双向居中 +
-     line-height:1 精确光学居中（水平仍按既有覆层规则；:empty 隐藏不受
-     影响——(0,2,0) 特异性胜过 flex display）
-   · 侧边栏形态反转：rail 回最外缘 x0..24 原位（盖掉 C 轮 conv-out 的
-     rail/拖拽栏左移 var(--conv-w) 规则）。conv-out 语义改为"面板右扩
-     182"（JS 只改 style.width，left 恒不动）→ [拖拽栏|列表列 x24..206|
-     消息区]。消息区 margin calc(conv+drag)=206 数值不变仍成立；标题/
-     note 的 conv-out 覆层 left 规则同值继续有效
-   · rail 按钮自上而下顺排（☰ → ＋ 历，不再 space-between 贴底堆）
-   · 历史图标 18 → 20px（时钟 glyph 视觉小，和其他图标差不多大）
-   · 置顶行前缀：📌 emoji → 书签 SVG span（与菜单"加入书签"同 ICON_PIN）
-   ══════════════════════════════════════════════════════════════════════ */
 
 /* 1) 标题：顶条内 flex 双向居中（无半行距偏高问题） */
 .chat-conv-title {
@@ -1518,19 +1335,6 @@
 }
 .conv-row-pin svg { width: 12px; height: 12px; display: block; }
 
-/* ══════════════════════════════════════════════════════════════════════
-   ── 20260903e 修正（用户反馈）──
-   · 会话列表面板补内框线：conv-open 下抽屉列无自己的 border-top/left——
-     conv-out 展开后 y=24 横线只画在消息区（x206 起），抽屉列 x24..206 上缘
-     无横线 = "拖拽框轮廓线断了"；rail 与抽屉交界 x24 也无竖线 = "左拖拽框
-     内侧补轮廓线"。给面板补 border-top/left（与消息区同款 #f1948a 2px），
-     横线 x24..602 连续、竖线 x24 自 y24 通底；conv-in 覆盖消息区时其自身的
-     border-left/top 被盖住，另补 border-right 在 x206 收边
-   · rail 按钮起点下移一个图标：☰ 距顶条 6px 太贴 → 30px（= 按钮 22 + gap2
-     + 原 padding 6），整列顺排随之平移
-   · 搜索命中定位闪烁 .msg-hit（内容搜索后自动滚动+环形高亮）
-   · 置顶行前缀书签 12 → 14px（与菜单图标视觉同大，字形已随 viewBox 放大）
-   ══════════════════════════════════════════════════════════════════════ */
 
 /* 1) 抽屉列补线（抽屉 bg #fbf1f0 与拖拽栏同色，线条由 border 提供） */
 #waifu-chat.conv-open .waifu-conv-panel {
@@ -1554,7 +1358,6 @@
 /* 4) 置顶前缀书签：12 → 14px（字形 viewBox 放大后与菜单图标同视觉） */
 .conv-row-pin svg { width: 14px; height: 14px; }
 
-/* ── 20260903f：搜索态命中轮次行（列表 = 消息行而非会话行）── */
 .conv-hit-row { padding: 8px 10px; cursor: pointer; border-bottom: 1px solid #f0e2de; }
 .conv-hit-row:hover { background: #fdf3f0; }
 .conv-hit-meta {
@@ -1566,20 +1369,10 @@
   display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
 }
 
-/* 20260919（用户拍板）：命中轮次自身的时间挂在引文前，比正文更小更淡——读作
-   "这句是什么时候说的"。行上（.conv-hit-meta）的时间才是会话最后活动时间，
-   与会话行同一语义；两者混用会让人以为"点开的历史会话被刷成了当前时间" */
 .conv-hit-at { font-size: 11px; color: #b9a9a2; }
 
-/* ── 20260905f：四角缩放纯隐形热区（chat-stream.js conv-resize-handle）──
-   20260905 曾有橙色三角 hover 淡入提示，用户反馈遮挡四角正常按钮功能 →
-   热区无任何图形（JS 侧无 innerHTML、背景透明），仅光标变缩放提示拖拽 */
 .conv-resize-handle { opacity: 0; }
 
-/* ── 20260905f：会话列表列右缘拖拽调宽（chat-session.js .conv-sizer）──
-   热区 = 抽屉右缘 7px 隐形竖条（left calc(drag-w + conv-w) 随 --conv-w 移动），
-   仅 conv-open 且桌面显示；hover 浅红提示 + col-resize。conv-in/out 共用：
-   抽屉宽与消息区 margin 均吃 var(--conv-w)，改一个变量两侧同动 */
 .conv-sizer {
   position: absolute;
   left: calc(var(--drag-w) + var(--conv-w) - 3px);
@@ -1598,15 +1391,6 @@
   #waifu-chat.conv-open .conv-sizer { display: none; }
 }
 
-/* ══════════════════════════════════════════════════════════════════════
-   写操作确认卡片（20260921d）：从输入区上方的常驻条搬进**对话流**
-   ══════════════════════════════════════════════════════════════════════
-   用户动线是"读问句 → 点按钮 → 看结果"：卡片是 .chat-messages 的末位子节点，
-   夹在问句气泡与结果气泡之间（chat-stream.js showAsk 负责挂到末位）。
-   按钮族仍复用"泠月喵建议跳转到"那套（.chat-nav-btn），观感一致。
-   选择器用两个 id（#waifu-chat #chat-ask）压过上方 conv-open/conv-out 给
-   .chat-nav-confirm 加的 margin-left 位移群——卡片是消息区的子节点，它自己
-   不再需要让位给抽屉（消息区已经让过），否则抽屉一开卡片就被推到画面外。 */
 #waifu-chat #chat-ask {
   display: none;
   margin: 2px 0 10px;
@@ -1623,15 +1407,6 @@
 }
 #waifu-chat #chat-ask.active { display: block; }
 #waifu-chat #chat-ask .nav-question { margin-bottom: 8px; }
-/* 问句走 markdown 渲染（chat-stream.js setAskQuestion）：applyMsg 产出 <p>，UA 默认
-   1em 段间距会把卡片撑高约 26px（同 .msg-bubble p 那条）。多段之间留 6px 才不糊成
-   一块——卡片的问句可能带「不可撤销：…」那种成段说明。 */
-/* 这里**不能**再留 `white-space: pre-line`（20260925 跟着 markdown 改造一起撤）：
-   它是给旧 textContent 问句里的 `\n` 用的，而 markdown 管线（博客同款 unified +
-   @bytemd/plugin-breaks）已经自己把换行渲染掉了——单换行成 `<br>\n`、空行成
-   `</p>\n<p>`。pre-line 会把 HTML 里那些**标记之间的换行**再当一次换行渲染：
-   实测两段问句卡片高 60.6px → 42.4px（多出一条空行），单换行则 `<br>` 与换行
-   各断一次（行距翻倍）。 */
 #waifu-chat #chat-ask .nav-question p { margin: 0; }
 #waifu-chat #chat-ask .nav-question p + p { margin-top: 6px; }
 /* 「上一次没发出去」重试注记（回滚时追加的纯文本行，不进 markdown 渲染） */
@@ -1639,11 +1414,6 @@
 #waifu-chat #chat-ask .chat-nav-btns { justify-content: flex-start; }
 /* 已确认/已取消：按钮换成一行灰字，卡片留在对话流里当记录（能回看自己确认过什么） */
 #waifu-chat #chat-ask .chat-ask-note { color: #999; font-size: 12px; }
-/* 「其他（我来说）」点开后的输入行（20261006）。默认收起，靠 .active 显形——
-   **不要用 `hidden` 属性**：这里的 `display:flex` 是作者样式，会盖过浏览器默认表的
-   `[hidden]{display:none}`（同特异性下作者样式恒胜），结果就是"状态位写着藏着、
-   屏幕上却一直开着"。收起由 chat-stream.js 的 hideAskOther 统一负责（结算的五个
-   出口都经过它）。 */
 #waifu-chat #chat-ask .chat-ask-other { display: none; gap: 8px; margin-top: 8px; align-items: center; }
 #waifu-chat #chat-ask .chat-ask-other.active { display: flex; }
 #waifu-chat #chat-ask .chat-ask-other-input {
@@ -1662,21 +1432,6 @@
 .chat-nav-btn.other { border-color: #999; color: #999; }
 .chat-nav-btn.other:hover { background: #999; color: #fff; }
 
-/* ══════════════════════════════════════════════════════════════════════════
-   ── 20261001 手账（washi）皮 ──
-   公告卡 / 个人中心 / 首页首屏三处已换这套皮，对话面板跟上：淡彩纸底 +
-   一条和纸胶带 + 1px 和纸线描边 + 圆角 16 + 渐变胶囊按钮。
-
-   三条要知道的：
-   · 配色值来自站内令牌 `--washi-*`（frontend/src/index.css）。**每个 var() 都带
-     兜底字面量**：本面板也会被 device-console（nginx 直服的静态页，不加载
-     index.css）引到，那里令牌不存在 —— 兜底即浅色档。
-   · 深色档靠 `.washiDark`（index.css 的深色令牌选择器列表认这个类名）。面板挂在
-     document.body 下，App 的 `.frontDark` **不是它的祖先**，所以由 chat-stream.js
-     在 darkmode-change 时把类名挂到面板自己身上。
-   · 追加块，全靠"同特异度后写者赢"压过上面那 1600 行 —— 别把这段往文件中间搬
-     （本仓已踩过三次，门禁 frontend/tests/sass-media-shadow.test.mjs）。
-   ══════════════════════════════════════════════════════════════════════════ */
 
 /* ── 面板本体 ── */
 #waifu-chat {
@@ -1694,9 +1449,6 @@
   border-radius: 16px;
 }
 
-/* 顶上那条和纸胶带 20261001 已删（批 D 第 4 条「胶带去掉」）——原 `#waifu-chat::after`
-   在此处画一条 160×26 的旋转粉带。它同时是顶栏与顶边框的"第二张皮"，删掉后顶边只剩
-   下面那个统一外框，与其余三边同源。 */
 
 /* 拖拽栏：不透明米色 → 半透明和纸胶带色，纸的淡彩透上来 */
 .chat-drag-bar-t,
@@ -1814,7 +1566,6 @@
 .chat-nav-btn.no:hover { background: var(--washi-ink-3, #a08ba8); color: #fff; }
 .chat-nav-btn.other { border-color: var(--washi-line, rgba(198, 152, 192, 0.42)); color: var(--washi-ink-3, #a08ba8); }
 .chat-nav-btn.other:hover { background: var(--washi-ink-3, #a08ba8); color: #fff; }
-/* 改口输入行（20261006）：与本块其它控件同源（和纸线描边 + 淡纸底 + 令牌色） */
 #waifu-chat #chat-ask .chat-ask-other-input {
   border-color: var(--washi-line, rgba(198, 152, 192, 0.42));
   background: var(--washi-paper, #fffdfa);
@@ -1856,16 +1607,6 @@
 .conv-rename-input:focus { border-color: var(--washi-pink-deep, #d94f9a); }
 .conv-more:hover,
 .conv-row.menu-open .conv-more { background: var(--washi-tape, rgba(255, 222, 238, 0.86)); color: var(--washi-pink-deep, #d94f9a); }
-/* ⚠️ `.chat-img-btn` 必须在这两组的名单里（20261005）——它是一颗 `<button>` 而**自己
-   没有 `color`**。表单控件的 UA 样式表给 button 定的是 `color: buttontext`，那是**元素上
-   的具名值、不是继承值**，于是 `#waifu-chat` 的 `color: var(--washi-ink)` 根本传不下来，
-   它恒解析成黑。下面那条 `#waifu-chat svg path { fill: currentColor }` 本意是"让图标跟着
-   各自按钮的 color 走"，遇上这颗就跟着**黑**走了：白日黑图标压在粉纸上看不出问题，
-   夜里黑图标压在深紫纸面等于隐形（用户 20261005 报的就是这一个）。面板里其余带 svg 的
-   按钮（.chat-rail-btn / .conv-head-btn / .conv-more …）都各自声明了 color，只有它漏了。
-   **别图省事写成 `#waifu-chat button { color: inherit }`**：那个特异度 (1,0,1) 会压过
-   这里 .chat-rail-btn 的 (0,1,0)，把整条 rail 的图标色一起改掉——漏的是"某一颗没人给它
-   定色"，不是"button 这个标签没人管"。 */
 .chat-rail-btn,
 .conv-head-btn,
 .chat-img-btn { color: var(--washi-ink-2, #7c6584); }
@@ -1897,40 +1638,8 @@
 #waifu-chat.washiDark .conv-confirm-del:hover { background: #c0392b; }
 #waifu-chat.washiDark .chat-nav-btn.yes:hover,
 #waifu-chat.washiDark .chat-nav-btn.no:hover,
-/* 「其他」与「取消」同色（20261006）：hover 底也是 --washi-ink-3 ⇒ 同一个翻转 */
 #waifu-chat.washiDark .chat-nav-btn.other:hover { color: #241d31; }
 
-/* ══════════════════════════════════════════════════════════════════════════
-   ── 20261001 批 D：胶带撤掉 / 标题进签 / 四条边框收成一个 ──
-   三条需求（同一条消息里提的）与三处改法：
-
-   ①「胶带去掉」——`#waifu-chat::after` 已在上方删除（连带减少动效档里那条
-     `transform: none`）。它当初的活是"给顶边一个手账标志"，但代价是顶边
-     多出一张与其余三边不同源的皮（见 ③）。
-
-   ②「顶部的标题字体加粗用符合风格的容器包裹」——原来顶条里是一段裸字
-     （12px / 400 字重 / 棕色 #8d6e63，压在蓝紫拖拽栏上）。现在真容器
-     = `.chat-conv-title-tag`（chat-render.js 模板里的内层 span），
-     和纸小签形态，与首页「文章」纸签、后台卡片标题同一族。**外壳
-     `.chat-conv-title` 的几何一个字没动**（它的 conv-out / conv-in 覆层
-     规则全部继续有效），只是把 `:empty` 隐藏与省略号一起移到签上。
-
-   ③「上下侧边框在现有的形状上合并为一体，而不是分段组装」——改前面板上
-     同时存在**两套边框**：
-       外圈 = `#waifu-chat::before`（1px 和纸线，四边齐全）
-       内圈 = `.chat-messages` 的 border-top/left + `.chat-input-area` 的
-              border-left + `.chat-nav-confirm` 的 border-left（一条 24px
-              内缩的开口矩形，由四个元素的四条边拼出来）
-     再叠上顶/左两条**不透明**拖拽栏色带——于是顶边读到的是"色带"、右边
-     读到的是"线"、中间还悬着一条 L。同一条边在四个高度上是四样东西，
-     这就是"分段组装"。
-     改法：**只留外圈那一圈线**，内圈整个撤掉；拖拽栏从"实心色带"降级为
-     "向内淡出的水洗"（渐变到透明 ⇒ 没有硬边缘，就不再读作边框）。
-     于是一圈走下来是同一条线、同一种颜色。
-
-   ⚠️ 追加块纪律：本段落在 washi 皮之后、减少动效档之前。减少动效档**必须**
-   仍是文件最后一个块（同特异度后写者赢，落在它后面会把它整个压掉）。
-   ══════════════════════════════════════════════════════════════════════════ */
 
 /* ⓪ 外框线：唯一那圈线必须**看得见**。
    `--washi-line` 是 rgba(198,152,192,0.42)——压在纸面上已经偏淡，再压在
@@ -1964,8 +1673,6 @@
   background: linear-gradient(to right, var(--washi-tape, rgba(255, 222, 238, 0.86)) 0%, rgba(255, 222, 238, 0) 62%);
 }
 
-/* 关闭钮的静息底色跟着顶栏一起换：它原先取 `--washi-tape-2`（偏蓝那支），
-   与旧顶栏同源；顶栏换成粉之后这颗蓝圆钮就落单了。改成同一支粉。 */
 .chat-close { background: var(--washi-tape, rgba(255, 222, 238, 0.86)); }
 
 /* ② 标题签 —— 顶条内的和纸小签（左侧一道渐变书脊 + 纸面 + 1px 和纸线）。
@@ -2009,9 +1716,6 @@
    签之后外壳永不为空 ⇒ 隐藏判据一并搬到签上） */
 .chat-conv-title-tag:empty { display: none; }
 
-/* ③ 内圈边框整个撤掉：剩下的唯一一圈是 `#waifu-chat::before`。
-   `show-title` 是 20260903b 之后就不再置位的死类，但它那条 (1,2,0) 的
-   `.chat-messages` 规则会带回过 border-top，所以按同样的特异度覆盖掉。 */
 .chat-messages,
 #waifu-chat.show-title .chat-messages {
   border-top: none;
@@ -2020,24 +1724,8 @@
 .chat-input-area,
 .chat-nav-confirm { border-left: none; }
 
-/* 消息区 / 输入区之间那条分隔线也一并撤掉。它原先的落点是消息区那条
-   内圈竖线（左端接上去才成立）；竖线没了，它就成了一条起点悬空、右端
-   顶到外框的横线——纸面上多一条只在半边画的线，还是"分段组装"那股味。
-   **左端也不能改通到面板左缘**：rail 的底部组（＋ / 历）正好压在
-   y≈206..246，而这条线在 y≈207，通栏就会横穿两个按钮。
-   输入区自身有圆角带边框的输入框，边界本来就看得出来。 */
 .chat-input-area::before { border-top: none; }
 
-/* 会话抽屉（`.waifu-conv-panel`）的边线同族收拾干净。
-   它身上那三条 2px 珊瑚红是 20260903e 打的补丁——当年消息区有一条内圈横线
-   和一条内圈竖线，抽屉一展开，那两条线在抽屉列上"断了"，于是给抽屉补了
-   border-top/left 接上。现在内圈整个撤了，**接的对象没有了**：抽屉上缘那条
-   横线会变成一条横跨 182px 就断掉的线，左缘那条竖线同理——比不画更糟。
-   颜色也还是换皮前的珊瑚红。
-   改法：上下与左交还给外框（那是唯一那圈线），只在抽屉右缘留一条和纸线
-   —— 它对着消息区，conv-in（覆盖式，x=24..206）与 conv-out（真窗格，同区间）
-   都成立。抽屉底色（--washi-paper-2 #fff6fa）与面板纸（#fffdfa）几乎同色，
-   没有这条线就分不出两栏。 */
 #waifu-chat.conv-open .waifu-conv-panel {
   border-top: none;
   border-left: none;
@@ -2047,22 +1735,6 @@
   border-right: 1px solid var(--washi-line, rgba(198, 152, 192, 0.42));
 }
 
-/* ④ 行内代码与表头的底 —— 气泡里唯一还在"硬编码浅色"的两处（20261002 修）。
-   事故形态（用户报「白日看不出高亮、夜间糊住文字」）：`.chat-msg.agent
-   .msg-text code` 的 `background: #f5f5f5` 是一条**写死字面量**的规则，
-   而它的邻居（气泡 .msg-bubble、面板、发送钮）全都跟着 `.washiDark` 翻色
-   ⇒ 夜间档就成了一块**浅色芯片压在浅色字上**：实测字色 --washi-ink
-   #f3e8f6 压在 #f5f5f5 上是 **1.09:1**，等于字没了。白日的毛病反过来——
-   #f5f5f5 压在纸面 #fffdfa 上只有 **1.07:1**，读不出"这是一段代码"。
-   两档都错，只是错的方向相反。
-
-   改法与上面 `--chat-frame-line` 同一套：**令牌就近定义在 `#waifu-chat` /
-   `#waifu-chat.washiDark` 两处**（不是 :root —— 面板挂在 document.body 下，
-   `.frontDark` 不是它的祖先，深色档认的是面板自己身上那个 `.washiDark`；
-   写 :root 反倒会在 html 层就被替换成浅色字面量），消费规则追加在
-   :850 那条之后（同特异度 (0,3,1)、后写者赢）。浅档取淡紫（比 #f5f5f5
-   深一档，压得住纸面），深档取**深一档的紫**——方向与浅档**相反**，
-   因为夜间那一侧要的是"字浮在底上"，不是"底浮在纸上"。 */
 #waifu-chat { --chat-code-bg: rgba(185, 167, 245, 0.40); }
 #waifu-chat.washiDark { --chat-code-bg: rgba(203, 182, 255, 0.20); }
 #waifu-chat { --chat-head-bg: rgba(185, 167, 245, 0.26); }
@@ -2073,29 +1745,8 @@
    `.msg-text td/th` 的边框色与 `.msg-text blockquote` 的 #888 字色——
    它们不挡读（后者在深底上是"偏暗但看得见"），要单独一批再收。 */
 
-/* 手机档（20261005 起）：整块缩到半尺寸、贴住左缘。
-   ⚠️ 这个块里原来还有一条 `#waifu { left: 15px }` 的窄屏回落（20261003 加，配当时
-   `left: 145px` 的基态）；20261011 基态回到 15px 之后它成了同值空转，已删。
-   也就是说**横向没有回落这回事了**——基态即 15px，窄屏自然也是。 */
 @media (max-width: 479px) {
 
-  /* ── 手机档整块缩到半尺寸、贴到左缘（20261005，用户报「手机上盖住大半个正文与表格」）──
-     症状（390×844 实测，修前）：300×300 的板块落在 x15..315，**角色本体的墨迹**就有
-     165×278px（视口 x84..249、y558..836，20791 个非背景像素）⇒ 正压在正文栏中间，
-     占掉三分之一屏高。板子本身不透明所以正文在它底下根本点不到。
-
-     ⚠️ **不能对 #waifu 本身做 transform/缩放**，两个硬理由：
-       ① `#waifu-chat` 是它的**子节点**（chat-engine.js 用 insertAdjacentHTML 挂在
-          #waifu 上），缩 #waifu 就把对话面板一起缩了；
-       ② 祖先一旦有 transform 就变成 `position:fixed` 后代的包含块，而 `#waifu-chat`
-          的 `bottom: calc(100% + 12px)` 是相对**未被 transform 的** 300px 盒解析的
-          ⇒ 把缩放加在祖先上，面板会按老几何飘到屏幕外。
-     所以缩放只加在 `#waifu-canvas`（纯包装层，只有一个 canvas 后代、没有 fixed 后代），
-     300px 的布局盒原样保留 ⇒ #waifu-chat 的定位基准一个字都没变。
-
-     `translateX(-34px)` 是**实测值不是拍脑袋**：角色墨迹在盒内的横向范围是 x∈[69,234]，
-     scale(.5) 后是 [34.5,117]，减掉 34.5 让墨迹左缘贴住盒左缘 ⇒ 视口 x15..98。
-     `transform-origin: left bottom` 让它一边缩一边贴住盒底，纵向落在视口 y698..837。 */
   #waifu-canvas {
     transform: translateX(-34px) scale(.5);
     transform-origin: left bottom;

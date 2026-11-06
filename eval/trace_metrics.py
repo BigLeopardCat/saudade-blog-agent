@@ -13,8 +13,6 @@ import os
 import sys
 from collections import defaultdict
 
-# trace 文件枚举的唯一实现（20260925：生产 trace 改按天分目录，四种读取端共用一处，
-# 免得"改了布局漏改一个脚本"= 那天它少看一半数据）。只吃路径参数、不依赖应用配置。
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from config.settings import settings  # noqa: E402
 from utils.trace_files import iter_trace_files, parse_trace_name  # noqa: E402
