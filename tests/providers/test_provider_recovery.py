@@ -1,6 +1,7 @@
 """Provider hints constrain framework retries without exposing response payloads."""
 
 import json
+import secrets
 import threading
 import time
 from email.utils import formatdate
@@ -18,7 +19,7 @@ from models.errors import error_fields, retry_after
 def rejected(headers=None):
     return RateLimitError("PRIVATE_EXCEPTION", response=httpx.Response(429,
         request=httpx.Request("POST", "https://model.test/PRIVATE_PATH"), headers=headers),
-        body={"secret": "PRIVATE_BODY"})
+        body={"secret": secrets.token_urlsafe()})
 
 
 @pytest.mark.parametrize("headers,expected", [
@@ -121,6 +122,6 @@ def test_explicit_quota_failure_is_not_retried_or_misreported_as_task_quality_fa
 def test_malformed_provider_codes_are_not_serialized_or_allowed_to_break_diagnostics():
     error = RateLimitError("PRIVATE", response=httpx.Response(429,
         request=httpx.Request("POST", "https://model.test")),
-        body={"type": ["PRIVATE"], "code": {"secret": "PRIVATE"}})
+        body={"type": ["PRIVATE"], "code": {"secret": secrets.token_urlsafe()}})
     fields = error_fields(error)
     assert fields["http_status"] == 429 and "PRIVATE" not in json.dumps(fields)
