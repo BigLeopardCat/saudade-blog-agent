@@ -34,6 +34,11 @@ def turn_message_id(task_id):
     return "user-turn:" + task_id if task_id else None
 
 
+def latest_turn_id(messages):
+    return next((message.id.removeprefix("user-turn:") for message in reversed(messages)
+                 if (message.id or "").startswith("user-turn:")), None)
+
+
 def identify_turn(messages, task_id):
     identified = list(messages)
     for index in range(len(identified) - 1, -1, -1):

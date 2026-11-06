@@ -295,14 +295,14 @@ def drop_last_user_turn(agent, conversation_id: object, turn_id: str) -> dict:
 
 
 def _active_turn_matches(values, turn_id):
-    from agent.runtime.memory import turn_message_id
+    from agent.runtime.memory import latest_turn_id
 
     run = values.get("run") or {}
-    bound_messages = [*run.get("input", []),
-                      *(values.get("approved_result") or {}).get("input", []),
-                      *(values.get("turn") or {}).get("messages", [])]
-    return any(
-        message.id == turn_message_id(turn_id) for message in bound_messages)
+    for field, channel in (("turn", "messages"), ("approved_result", "input")):
+        current = latest_turn_id((values.get(field) or {}).get(channel, []))
+        if current:
+            return current == turn_id
+    return (run.get("turn_id") or latest_turn_id(run.get("input", []))) == turn_id
 
 
 def _drop_turn(agent, config, turn_id):

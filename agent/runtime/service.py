@@ -137,9 +137,9 @@ class AgentRuntime:
         turn_id = state.get("turn_id") or state.get("task_id")
         candidates = [turn_id]
         if snapshot.run:
-            candidates.extend(message.id.removeprefix("user-turn:")
-                for message in [*snapshot.messages, *snapshot.run.get("input", [])]
-                if (message.id or "").startswith("user-turn:"))
+            candidates.extend([memory.latest_turn_id(snapshot.messages),
+                               snapshot.run.get("turn_id"),
+                               memory.latest_turn_id(snapshot.run.get("input", []))])
         thread_id = ((config or {}).get("configurable") or {}).get("thread_id")
         return checkpoint_store.turns_deleted(self.saver, thread_id, candidates)
 
@@ -194,9 +194,7 @@ class AgentRuntime:
     @staticmethod
     def _run(session, prompt, *, resume=None, approval_input=(), recover=False):
         if session.task:
-            source = next((message.id.removeprefix("user-turn:")
-                           for message in reversed(session.turn_input)
-                           if (message.id or "").startswith("user-turn:")), None)
+            source = memory.latest_turn_id(session.turn_input)
             session.task = {**session.task, "turn_id":
                 session.config.get("configurable", {}).get("turn_id") or source
                 or session.task.get("turn_id") or session.task["id"]}
