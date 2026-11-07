@@ -1,5 +1,7 @@
 """Public cache hints retain resource identity without exposing private operation arguments."""
 
+import secrets
+
 import pytest
 
 from agent.products.blog.confirmation import public_card
@@ -18,6 +20,7 @@ from agent.products.blog.confirmation import public_card
     ([{'tool': 'delete_articles', 'args': {'items': None}}], []),
 ])
 def test_card_projects_article_ids_without_treating_other_resource_ids_as_articles(specs, expected):
-    card = public_card({'pending_confirm': {'q': 'Review', 'token': 'fixture', 'specs': specs}})
+    card = public_card({'pending_confirm': {
+        'q': 'Review', 'token': secrets.token_urlsafe(16), 'specs': specs}})
     assert card['article_ids_to_refresh'] == expected
     assert 'specs' not in card and 'args' not in card
