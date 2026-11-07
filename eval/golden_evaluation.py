@@ -16,7 +16,6 @@ import re
 import time
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from pathlib import Path
 
 from agent import (
     confirm,
@@ -34,7 +33,6 @@ from agent.transport import reply_text
 from eval import (
     command_report,
     corpus_terms,
-    golden_fixture,
     golden_runtime,
     golden_thread,
     golden_trace,
@@ -42,7 +40,7 @@ from eval import (
 from eval.corpus_provenance import (
     snapshot_docs as corpus_snapshot_docs,
 )
-from eval.golden_runtime import close_agent, ensure_agent
+from eval.golden_runtime import ensure_agent
 from eval.native_assertions import check as check_native
 from eval.native_assertions import command_matches
 

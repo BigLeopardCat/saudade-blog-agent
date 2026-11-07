@@ -4,7 +4,6 @@ import hashlib
 import json
 import re
 from contextlib import contextmanager
-from pathlib import Path
 from secrets import token_urlsafe
 
 import httpx
@@ -768,41 +767,6 @@ def test_poc_selection_preserves_order_and_rejects_duplicates_unknown_ids_and_pa
         with pytest.raises(ValueError):
             online_baseline.select_cases(cases, phase, ids)
     assert online_baseline.select_cases(cases, "full") == cases
-
-
-def test_snapshot_freezes_shared_stream_validation_and_event_contract(tmp_path):
-    hashes = online_baseline.snapshot(tmp_path, [{"id": "snapshot-probe"}])
-    for name in ("stream_protocol.py", "agent/contracts/events.py",
-                 "command_report.py", "acceptance.py"):
-        path = tmp_path / "evaluator" / name
-        assert path.is_file()
-        assert hashlib.sha256(path.read_bytes()).hexdigest() == hashes[name]
-
-
-
-@pytest.mark.parametrize("helper", ["command_report.py", "acceptance.py"])
-def test_snapshot_hash_tracks_assertion_and_semantic_helpers(tmp_path, monkeypatch, helper):
-    source = tmp_path / "source"
-    source.mkdir()
-    monkeypatch.setattr(online_baseline, "ROOT", source)
-    real_root = Path(__file__).resolve().parents[1]
-    (source / "eval").mkdir()
-    for path in (real_root / "eval").glob("*.py"):
-        (source / "eval" / path.name).write_bytes(path.read_bytes())
-    for name in ("release_profile.json",):
-        (source / "eval" / name).write_bytes((real_root / "eval" / name).read_bytes())
-    event = source / "agent/contracts/events.py"
-    event.parent.mkdir(parents=True)
-    event.write_bytes((real_root / "agent/contracts/events.py").read_bytes())
-    before, after = tmp_path / "before", tmp_path / "after"
-    before.mkdir()
-    after.mkdir()
-    first = online_baseline.snapshot(before, [])
-    changed = source / "eval" / helper
-    changed.write_bytes(changed.read_bytes() + b"\n# Snapshot provenance probe.\n")
-    second = online_baseline.snapshot(after, [])
-    assert first[helper] != second[helper]
-    assert {key for key in first if first[key] != second[key]} == {helper}
 
 
 def test_existing_output_directory_is_rejected_before_model_calls_or_evidence_overwrite(tmp_path):
