@@ -60,11 +60,12 @@ def pending_task(monkeypatch, tmp_path):
 
     def handle(request):
         requests.append(request)
-        if request.url.path.endswith("/favorites"):
-            data = []
-        elif request.url.path.endswith(("/notes/19", "/notes/20")):
+        if request.method != "GET":
+            raise AssertionError("revoked or unapproved operation reached a business write")
+        if request.url.path.endswith(("/favorites/19", "/favorites/20")):
             ident = int(request.url.path.rsplit("/", 1)[-1])
-            data = {"noteKey": ident, "noteTitle": f"文章{ident}"}
+            data = {"ownerUserId": 7, "noteId": ident, "isFavorite": False,
+                    "articleAvailable": True, "title": f"文章{ident}"}
         else:
             return httpx.Response(404)
         return httpx.Response(200, json={"code": 200, "data": data})

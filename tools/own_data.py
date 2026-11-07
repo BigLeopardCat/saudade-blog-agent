@@ -72,4 +72,4 @@ def remove_favorite(article_id: _ArticleId, config: RunnableConfig) -> str | Too
     return _change(article_id, False, config)
 
 
-__all__ = ["list_my_favorites", "add_favorite", "remove_favorite"]
+__all__ = ["list_my_favorites", "favorite_state", "add_favorite", "remove_favorite"]
