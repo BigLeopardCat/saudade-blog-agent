@@ -10,6 +10,7 @@ from langgraph.graph.message import add_messages
 from langgraph.types import interrupt
 
 from agent.runtime import memory
+from agent.runtime.conversation_store import RecentRead
 from agent.runtime.results import TurnResult, approval_observations, cancellation_fact
 from agent.runtime.writes import bound_context
 from tools.result import ok
@@ -26,6 +27,7 @@ class ConversationState(TypedDict, total=False):
     run: dict | None
     turn: dict | None
     last_outcome: str | None
+    recent_read: RecentRead | None
 
 
 def binding(config):

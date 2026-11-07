@@ -11,6 +11,7 @@ from langchain_core.tools import tool
 from langchain_core.utils.function_calling import convert_to_openai_tool
 from langgraph.checkpoint.memory import InMemorySaver
 
+from agent import checkpoint
 from agent.principal import SOURCE_ASSERTION, Principal
 from agent.products.blog.application import BlogApplication
 from agent.products.blog.capabilities import ToolCatalog
@@ -107,7 +108,7 @@ def names(request):
 
 
 @pytest.mark.parametrize("trimmed", [False, True])
-def test_new_task_starts_with_discovery_after_completion_or_history_compaction(
+def test_new_task_keeps_one_committed_read_schema_after_history_compaction(
         setup, trimmed, monkeypatch):
     runtime, _, calls = setup
     first = Model(call("load_beta_info_tools"), call("load_alpha_info_tools"),
@@ -132,9 +133,14 @@ def test_new_task_starts_with_discovery_after_completion_or_history_compaction(
         assert not any(isinstance(m, ToolMessage) for m in selected.store.load(config()).messages)
     after = Model(AIMessageChunk(content="Follow-up complete."))
     assert turn(runtime(after), "Continue.").reply == "Follow-up complete."
-    assert names(after.requests[0]) == ["load_alpha_info_tools", "load_beta_info_tools"]
+    assert names(after.requests[0]) == [
+        "load_alpha_info_tools", "load_beta_info_tools", "read_beta"]
     assert "read_alpha" in names(first.requests[-1]) and "read_beta" in names(first.requests[-1])
     assert calls == ["beta"]
+    if trimmed:
+        source = selected.store.load(config()).recent_read["turn_id"]
+        assert checkpoint.drop_last_user_turn(selected, 42, source)["dropped"]
+        assert selected.store.load(config()).recent_read is None
 
 
 @pytest.mark.parametrize("has_explicit_state", [False, True])
@@ -179,7 +185,8 @@ def test_resume_uses_checkpoint_menu_and_messages_without_repeating_a_read(setup
 @pytest.mark.parametrize("changed", ["role", "actor", "conversation"])
 def test_new_task_rebuilds_catalog_for_the_verified_scope(setup, changed):
     runtime, _, _ = setup
-    selected = runtime(Model(call("load_beta_info_tools"), AIMessageChunk(content="Ready.")))
+    selected = runtime(Model(call("load_beta_info_tools"), call("read_beta"),
+                             AIMessageChunk(content="Ready.")))
     turn(selected)
     cfg = config()
     if changed == "role":
@@ -195,7 +202,8 @@ def test_new_task_rebuilds_catalog_for_the_verified_scope(setup, changed):
 
 def test_catalog_removal_rechecks_loaded_domains(setup):
     runtime, domains, _ = setup
-    turn(runtime(Model(call("load_beta_info_tools"), AIMessageChunk(content="Ready."))))
+    turn(runtime(Model(call("load_beta_info_tools"), call("read_beta"),
+                       AIMessageChunk(content="Ready."))))
     model = Model(AIMessageChunk(content="Current catalog."))
     turn(runtime(model, {"alpha": domains["alpha"]}))
     assert names(model.requests[0]) == ["load_alpha_info_tools"]
@@ -261,4 +269,38 @@ def test_loading_another_domain_preserves_current_task_tools_until_completion(se
     assert names(model.requests[-1])[-2:] == ["read_beta", "read_alpha"]
     following = Model(AIMessageChunk(content="Next task."))
     turn(runtime(following))
-    assert names(following.requests[0]) == ["load_alpha_info_tools", "load_beta_info_tools"]
+    assert names(following.requests[0]) == [
+        "load_alpha_info_tools", "load_beta_info_tools", "read_alpha"]
+
+
+def test_over_budget_read_hint_is_preserved_and_reappears_when_it_fits(setup):
+    runtime, domains, _ = setup
+    domains["beta"]["read_beta"].description = "Large read schema. " * 1500
+    selected = runtime(Model(call("load_beta_info_tools"), call("read_beta"),
+                             AIMessageChunk(content="Read complete.")))
+    turn(selected)
+    hint = selected.store.load(config()).recent_read
+    model = Model(AIMessageChunk(content="Small request."))
+    with budget_scope(TaskBudget(BudgetLimits(context_tokens=3500, task_tokens=6000))):
+        turn(runtime(model), "Just chat.")
+    assert "read_beta" not in names(model.requests[0])
+    assert selected.store.load(config()).recent_read == hint
+    restored = Model(AIMessageChunk(content="Larger request budget."))
+    turn(runtime(restored), "Continue.")
+    assert "read_beta" in names(restored.requests[0])
+
+
+def test_discarded_child_read_does_not_replace_the_last_committed_hint(setup):
+    runtime, _, calls = setup
+    turn(runtime(Model(call("load_alpha_info_tools"), call("read_alpha"),
+                       AIMessageChunk(content="Alpha committed."))))
+    selected = runtime(Model(call("load_beta_info_tools"), call("read_beta"), AgentCancelled()))
+    with pytest.raises(AgentCancelled):
+        turn(selected, turn_id="discarded-child", task_id="discarded-run")
+    assert selected.store.load(config()).recent_read["tool_name"] == "read_alpha"
+    assert checkpoint.drop_last_user_turn(selected, 42, "discarded-child")["dropped"]
+    model = Model(AIMessageChunk(content="Fresh task."))
+    turn(runtime(model), "Start a fresh task.")
+    assert names(model.requests[0]) == [
+        "load_alpha_info_tools", "load_beta_info_tools", "read_alpha"]
+    assert calls == ["alpha", "beta"]

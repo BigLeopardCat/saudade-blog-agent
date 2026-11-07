@@ -8,6 +8,7 @@ from langchain.agents.middleware import AgentState
 
 from agent.contracts.client import ClientOperationRef
 from agent.runtime import tool_state
+from agent.runtime.conversation_store import RecentRead, replace_recent_read
 from agent.runtime.progress import current_emitter
 
 
@@ -27,6 +28,7 @@ class ExecutionState(AgentState, total=False):
     client_operations: Annotated[dict[str, ClientOperationRef], or_]
     applied_inputs: list[str]
     progress_keys: list[str]
+    recent_read: Annotated[RecentRead | None, replace_recent_read]
 
 
 _FIELDS = ExecutionState.__annotations__.keys() - AgentState.__annotations__.keys()
@@ -37,7 +39,8 @@ def initial_state():
                           proposal=None,
                           awaiting_call=None, resume=None, run_id=None, terminal=None,
                           effects={}, client_operations={}, applied_inputs=[], progress_keys=[],
-                          response_repairs=0, completion_checks=0, output_revision=0)
+                          response_repairs=0, completion_checks=0, output_revision=0,
+                          recent_read=None)
 
 
 def capture(session):
