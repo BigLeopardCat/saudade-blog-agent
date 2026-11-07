@@ -870,7 +870,7 @@ def expand_token_list(lst: list) -> list:
 
 # Explicit assertion keys reject misspellings instead of silently skipping checks.
 GOLD_ASSERT_KEYS = frozenset({
-    "max_model_calls",
+    "max_model_calls", "max_tool_calls",
     "require_observations", "require_observations_any", "require_todo_schedule",
     "require_automation_schedule",
     "require_confirm_specs", "require_confirm_preview", "forbid_runtime_stop",

@@ -16,10 +16,11 @@ def test_notification_fixture_distinguishes_counts_from_readable_contents():
     with backend("user") as state:
         counts = get_inbox_overview.invoke({}, config=config("user"))
         result = own_tools()["list_notifications"].invoke(
-            {"unread_only": True}, config=config("user"))
+            {"unread_only": True, "include_preview": True}, config=config("user"))
         assert counts.data["notifications"] == 2
         items = result.data["items"]
         assert {row["title"] for row in items} == {"合成部署完成", "合成评论待审"}
+        assert {row["content"] for row in items} == {"本次部署已完成", "有评论等待审核"}
         assert not state["unsupported_reads"] and all(r.method == "GET" for r in state["requests"])
 
 
