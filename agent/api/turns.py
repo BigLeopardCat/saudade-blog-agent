@@ -1,4 +1,4 @@
-"""Adapt native runtime events to HTTP turn results and thread-safe queue delivery."""
+"""Adapt runtime events to HTTP turn results and thread-safe queue delivery."""
 
 import asyncio
 import logging
@@ -18,7 +18,7 @@ from utils.trace import record
 logger = logging.getLogger(__name__)
 
 
-class NativeCancelled:
+class ProducerCancelled:
     """Worker cancellation result; it must not become a successful END frame."""
 
 
@@ -35,12 +35,12 @@ async def next_stream_item(queue, producer, *, timeout=2.0):
         if not queue.empty():
             return await waiting
         if producer.cancelled():
-            return NativeCancelled()
+            return ProducerCancelled()
         error = producer.exception()
         if error is not None:
-            return NativeCancelled() if isinstance(error, AgentCancelled) else error
+            return ProducerCancelled() if isinstance(error, AgentCancelled) else error
         result = producer.result()
-        return (result if isinstance(result, (NativeCancelled, Exception)) else
+        return (result if isinstance(result, (ProducerCancelled, Exception)) else
                 RuntimeError("Stream producer ended without a terminal frame"))
     finally:
         if not waiting.done():
@@ -66,10 +66,10 @@ def runtime_events(
     browser_result=None,
     task_inputs=False,
 ):
-    """Bind verified request coordinates to the native Runtime event contract."""
+    """Bind verified request coordinates to the Runtime event contract."""
     stream_events = getattr(runtime, "stream_events", None)
     if not callable(stream_events):
-        raise RuntimeError("native Runtime stream_events is not available")
+        raise RuntimeError("Runtime stream_events is not available")
     config = {
         "configurable": {
             "thread_id": thread_id,
@@ -154,7 +154,7 @@ def stream_to_queue(
     browser_result=None,
     task_inputs=False,
 ):
-    """Run native events in the worker and enqueue protocol-safe values.
+    """Run runtime events in the worker and enqueue protocol-safe values.
 
     Queue insertion is the only async boundary here. Runtime exceptions are
     delivered via the worker Future, so cancellation cannot be blocked behind
@@ -215,10 +215,10 @@ def stream_to_queue(
         emit_to_queue(events, put)
         put(None)
     except AgentCancelled:
-        logger.info("[stream] native runtime cancelled")
-        return NativeCancelled()
+        logger.info("[stream] runtime cancelled")
+        return ProducerCancelled()
     except Exception as exc:
-        logger.exception("[stream] native runtime producer failed: %s", exc)
+        logger.exception("[stream] runtime producer failed: %s", exc)
         return exc
     finally:
         record("producer", "stream_end", reply="".join(visible_parts))

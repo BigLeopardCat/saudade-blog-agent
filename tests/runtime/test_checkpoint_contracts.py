@@ -19,7 +19,7 @@ class ExtendedPostgresSaver(PostgresSaver):
 def test_postgres_extension_uses_the_shared_lock_and_backend_contract(monkeypatch):
     saver = ExtendedPostgresSaver(None)
     assert checkpoint_store.postgres(saver)
-    assert runtime_probe.checkpoint_backend(SimpleNamespace(checkpointer=saver)) == "postgres"
+    assert runtime_probe.checkpoint_backend(SimpleNamespace(saver=saver)) == "postgres"
     events = []
 
     @contextmanager

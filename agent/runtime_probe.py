@@ -41,7 +41,7 @@ BUILD_IDENTITY = build_sha()
 def runtime_name(agent):
     from agent.runtime.service import AgentRuntime
 
-    return "native" if isinstance(agent, AgentRuntime) else "unknown"
+    return "langchain" if isinstance(agent, AgentRuntime) else "unknown"
 
 
 def request_context(agent):
@@ -60,21 +60,10 @@ def version_payload(app_version: str) -> dict:
 
 
 def _saver_of(agent) -> tuple[bool, object]:
-    """Inspect saver-bearing objects without treating an unknown shape as disabled."""
-    found = False
-    inner = getattr(agent, "graph", None)
-    if inner is agent:              # 自引用 ⇒ 别把自己当"内层"再看一遍
-        inner = None
-    for obj in (agent, inner):
-        if obj is None:
-            continue
-        for attr in ("checkpointer", "saver"):
-            if hasattr(obj, attr):
-                found = True
-                v = getattr(obj, attr)
-                if v is not None:
-                    return True, v
-    return found, None
+    """Use the runtime's public saver interface; unknown objects remain unknown."""
+    if agent is None or not hasattr(agent, "saver"):
+        return False, None
+    return True, agent.saver
 
 
 def saver_of(agent) -> object | None:

@@ -193,7 +193,7 @@ def test_stop_fences_late_body_and_closes_runtime_generator(monkeypatch):
         first = await turns.next_stream_item(queue, producer)
         terminal = await turns.next_stream_item(queue, producer)
         assert first.content == "首段"
-        assert isinstance(terminal, turns.NativeCancelled)
+        assert isinstance(terminal, turns.ProducerCancelled)
         assert queue.empty()
 
     asyncio.run(run())

@@ -19,7 +19,7 @@ from agent.api.events import KEEPALIVE_FRAME, text_stream
 from agent.api.events import frame as sse_frame
 from agent.api.events import response as stream_response
 from agent.api.schemas import ChatRequest, ChatResponse
-from agent.api.turns import NativeCancelled, next_stream_item, run_turn, stream_to_queue
+from agent.api.turns import ProducerCancelled, next_stream_item, run_turn, stream_to_queue
 from agent.contracts.events import StreamEvent
 from agent.products.blog.context import conversation_session
 from agent.runtime.control import RequestControl
@@ -337,7 +337,7 @@ async def chat_stream(req: ChatRequest, request: Request):
                             residue,
                         )
                     break
-                if isinstance(chunk, NativeCancelled):
+                if isinstance(chunk, ProducerCancelled):
                     end_reason = "cancelled"
                     return
                 if isinstance(chunk, Exception):
