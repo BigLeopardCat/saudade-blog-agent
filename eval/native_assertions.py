@@ -134,11 +134,24 @@ def observations(events):
     return calls
 
 
+def _argument_lists_contain(actual, expected):
+    """Require declared query items without prohibiting useful query expansion."""
+    if not isinstance(expected, dict):
+        return False
+    for key, values in expected.items():
+        supplied = actual.get(key)
+        if (not isinstance(values, list) or not values or not isinstance(supplied, list)
+                or not all(any(contains(item, value) for item in supplied) for value in values)):
+            return False
+    return True
+
+
 def _matches_observation(wanted, event):
     args = (wanted.get("args_by_tool") or {}).get(event.get("name"), wanted.get("args", {}))
     if (
         event.get("name") not in wanted["tools"]
         or not contains(event.get("args", {}), args)
+        or not _argument_lists_contain(event.get("args", {}), wanted.get("args_list_contains", {}))
         or wanted.get("kinds")
         and event.get("kind") not in wanted["kinds"]
         or wanted.get("facts")
@@ -247,6 +260,11 @@ def _outcome_failures(gold, result, events):
     attempts = sum(event.get("event") == "llm_start" for event in events)
     budget = ([f"模型调用超过场景验收上限：{attempts} > {limit}"]
               if limit is not None and attempts > limit else [])
+    for name, maximum in gold.get("max_tool_calls", {}).items():
+        requested = sum(event.get("event") == "tool_requested" and event.get("name") == name
+                        for event in events)
+        if requested > maximum:
+            budget.append(f"工具调用超过场景验收上限：{name} {requested} > {maximum}")
     return budget + [
         "缺少匹配的确认操作或同次工具核实的无需改动事实"
         for wanted in gold.get("require_prepared_or_noop", [])
@@ -361,7 +379,7 @@ def _conversation_failures(gold, result, events, calls):
 
 def check(gold, result):
     keys = {
-        "max_model_calls",
+        "max_model_calls", "max_tool_calls",
         "require_observations",
         "require_observations_any",
         "require_todo_schedule",
