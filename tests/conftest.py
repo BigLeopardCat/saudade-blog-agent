@@ -208,6 +208,8 @@ def _scripted_chat_transports(request, monkeypatch):
     marker = request.node.get_closest_marker("tool_scopes")
     if marker:
         for name, scope in marker.kwargs.items():
+            assert name not in authz.TOOL_SCOPE, (
+                "fixture scopes cannot override product permissions")
             assert scope in authz.ALL_SCOPES
             monkeypatch.setitem(authz.TOOL_SCOPE, name, scope)
     from _framework_model import adapt, tools

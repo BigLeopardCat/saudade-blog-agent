@@ -22,14 +22,13 @@
   "targets": [
     "."
   ],
-  "total": 69,
+  "total": 68,
   "nosec": 0,
   "by_key": {
     "agent/adminops_tags.py::B105": 5,
     "agent/idem.py::B608": 2,
     "agent/idem_pg.py::B608": 4,
     "agent/reports.py::B105": 2,
-    "eval/admin_report_probe.py::B310": 1,
     "eval/admin_write_probe.py::B105": 2,
     "eval/admin_write_probe.py::B112": 1,
     "eval/admin_write_probe.py::B310": 3,
