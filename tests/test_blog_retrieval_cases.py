@@ -3,15 +3,25 @@
 import copy
 from pathlib import Path
 
+import httpx
 import pytest
+from _memory_support import Capture, config
+from langchain_core.messages import AIMessage, HumanMessage
+from langgraph.checkpoint.memory import InMemorySaver
 
+from agent.products.blog.application import BlogApplication
+from agent.products.blog.capabilities import ToolCatalog
+from agent.runtime.checkpoint_conversations import CheckpointConversationStore
+from agent.runtime.service import AgentRuntime
 from eval import dataset_audit, native_assertions, online_baseline
+from eval.fixtures.document_reads import DEFAULT_READ_CHARS, document_page
 from eval.offline_rag_eval import bm25_run, evaluate
 from eval.rag_dataset import load
 from rag.corpus import content_revision
-from rag.reading import DEFAULT_READ_CHARS, RevisionChanged, article_page
 from rag.search import RagIndex
-from rag.sections import outline
+from rag.sections import PARSER_VERSION, outline
+from tools import base
+from tools.notes import get_article_detail
 
 ROOT = Path(__file__).resolve().parents[1]
 DATASET = ROOT / "eval/fixtures/blog_retrieval"
@@ -38,6 +48,35 @@ def index(documents):
     return selected
 
 
+@pytest.fixture
+def backend(corpus, monkeypatch):
+    _, documents = corpus
+    public = copy.deepcopy(documents)
+    calls = []
+
+    def handle(request):
+        calls.append(request)
+        assert request.method == "GET"
+        parts = request.url.path.split("/")
+        assert parts[:5] == ["", "api", "public", "documents", "note"]
+        assert len(parts) == 7 and parts[-1] == "read"
+        identifier = int(parts[-2])
+        source = next((row for row in public.values() if row["id"] == identifier), None)
+        if source is None:
+            return httpx.Response(404)
+        params = dict(request.url.params)
+        revision = content_revision(source["title"], source["content"])
+        if (params.get("revision") and params["revision"] != revision
+                or params.get("section_schema") and params["section_schema"] != PARSER_VERSION):
+            return httpx.Response(409)
+        value = document_page("note", identifier, source["title"], source["content"], params)
+        return httpx.Response(200, json={"code": 200, "data": value})
+
+    with httpx.Client(transport=httpx.MockTransport(handle)) as client:
+        monkeypatch.setattr(base, "_client", client)
+        yield public, calls
+
+
 def test_labelled_source_spans_are_unique_and_beyond_the_default_read_window(corpus):
     data, documents = corpus
     for query in data["queries"].values():
@@ -55,8 +94,9 @@ def test_labelled_source_spans_are_unique_and_beyond_the_default_read_window(cor
 
 
 @pytest.mark.parametrize("qid", ["long_tail", "duplicate_heading"])
-def test_real_retrieval_locator_selects_the_labelled_body_not_a_same_named_sibling(corpus, qid):
-    data, documents = corpus
+def test_real_framework_retrieval_locator_reads_the_labelled_original_body(corpus, backend, qid):
+    data, _ = corpus
+    documents, calls = backend
     query = data["queries"][qid]
     expected = query["evidence_spans"][0]
     source = documents[expected["document_id"]]
@@ -69,36 +109,79 @@ def test_real_retrieval_locator_selects_the_labelled_body_not_a_same_named_sibli
     assert matches and expected["section_id"] in hit["section_ids"]
     assert any(expected["quote"] in section["text"][match["offset"]:match["end"]]
                for match in matches)
-    selected = article_page(source, source["id"], section=expected["section_id"],
-                            revision=hit["document_revision"])
+    canonical = content_revision(source["title"], source["content"])
+    assert hit["document_revision"] == hit["content_revision"] == canonical
+    assert hit["section_schema"] == PARSER_VERSION
+    args = {"article_id": source["id"], "section": expected["section_id"],
+            "revision": hit["document_revision"], "section_schema": hit["section_schema"],
+            "max_chars": 1024}
+    model = Capture(AIMessage(content="", tool_calls=[{
+        "name": "get_article_detail", "id": "located-read", "args": args}]),
+        AIMessage(content="正文中的原话是：" + expected["quote"] + "。"))
+    runtime = AgentRuntime(CheckpointConversationStore(InMemorySaver()),
+        application=BlogApplication(ToolCatalog(
+            read_tools={get_article_detail.name: get_article_detail})),
+        model_factory=lambda **_: model)
+    result = list(runtime.stream_events({"messages": [HumanMessage(content=query["text"])]},
+                                        config()))[-1]
+    evidence = next(message.artifact for message in model.prompts[-1]
+                    if message.type == "tool" and message.name == "get_article_detail")
+    assert evidence["kind"] == "ok"
+    selected = evidence["data"]
+    assert expected["quote"] in result.reply and f"/article/{source['id']}" in result.reply
     assert expected["quote"] in selected["sectionText"] and selected["readComplete"]
+    assert selected["contentRevision"] == canonical and selected["sectionSchema"] == PARSER_VERSION
+    assert selected["source"] == {
+        "type": "note", "id": source["id"], "revision": canonical,
+        "section_schema": PARSER_VERSION, "section_id": expected["section_id"],
+        "offset": 0, "end": len(selected["sectionText"])}
+    assert len(calls) == 1 and len(model.prompts) == 2
+    assert dict(calls[0].url.params) == {
+        "section": expected["section_id"], "offset": "0", "limit": "1024",
+        "revision": canonical, "section_schema": PARSER_VERSION}
     sibling = data["queries"]["duplicate_heading" if qid == "long_tail" else "long_tail"]
     assert sibling["evidence_spans"][0]["quote"] not in selected["sectionText"]
-    ambiguous = article_page(source, source["id"], section="故障恢复")
-    assert ambiguous["sectionText"] == "" and len(ambiguous["sections"]) >= 4
+    ambiguous = get_article_detail.invoke({"article_id": source["id"], "section": "故障恢复"})
+    assert ambiguous.kind == "ok" and ambiguous.data["sectionText"] == ""
+    assert ambiguous.data["source"] is None and len(ambiguous.data["sections"]) >= 4
     if qid == "long_tail":
-        first = article_page(source, source["id"])
-        assert not first["readComplete"] and expected["quote"] not in first["noteContent"]
+        first = get_article_detail.invoke({"article_id": source["id"]})
+        assert not first.data["readComplete"] and expected["quote"] not in first.data["noteContent"]
 
 
-def test_search_locator_cannot_read_the_edited_version_under_the_old_revision(corpus):
-    data, documents = corpus
+@pytest.mark.parametrize("change", ["content", "section_schema"])
+def test_search_locator_cannot_read_edited_content_or_another_section_view(
+    corpus, backend, monkeypatch, change
+):
+    data, _ = corpus
+    documents, calls = backend
     query = data["queries"]["long_tail"]
     hit = index(documents)._lexical_ranked(query["text"], 3)[0]
-    source = copy.deepcopy(documents["runtime"])
-    source["content"] = source["content"].replace("工作线程实际退出时", "工作线程启动时")
-    with pytest.raises(RevisionChanged):
-        article_page(source, source["id"], section="s4", revision=hit["document_revision"])
+    source = documents["runtime"]
+    if change == "content":
+        source["content"] = source["content"].replace("工作线程实际退出时", "工作线程启动时")
+    invalidations = []
+    monkeypatch.setattr("rag.search.invalidate_document", lambda *args: invalidations.append(args))
+    result = get_article_detail.invoke({
+        "article_id": source["id"], "section": "s4", "revision": hit["document_revision"],
+        "section_schema": ("obsolete-parser" if change == "section_schema"
+                           else hit["section_schema"])})
+    assert result.kind == "unavailable" and result.data is None and result.meta["status"] == 409
+    assert invalidations == [(source["id"], hit["document_revision"])] and len(calls) == 1
 
 
-def test_rebuilt_public_corpus_removes_withdrawn_document_from_the_lexical_index(corpus):
-    data, documents = corpus
-    public = copy.deepcopy(documents)
+def test_withdrawn_document_cannot_be_read_and_disappears_after_index_rebuild(corpus, backend):
+    data, _ = corpus
+    public, calls = backend
     selected = index(public)
     query = data["queries"]["long_tail"]["text"]
     previous = selected._lexical_ranked(query, 3)
     removed = public.pop("runtime")
     assert previous[0]["id"] == removed["id"]
+    refused = get_article_detail.invoke({
+        "article_id": removed["id"], "section": "s4", "revision": previous[0]["document_revision"],
+        "section_schema": previous[0]["section_schema"]})
+    assert refused.kind == "not_found" and refused.data is None and len(calls) == 1
     selected.build()
     assert removed["id"] not in {hit["id"] for hit in selected._lexical_ranked(query, 3)}
 
