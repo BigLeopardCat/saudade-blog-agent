@@ -232,3 +232,23 @@ def test_browser_resume_carries_the_existing_task_budget():
                                             acknowledge(config, command)))[-1]
     assert len(model.calls) == 1 and carried.model_calls == 1
     assert carried.reason == "model_calls" and "上限" in result.reply
+
+
+def test_expired_missing_ack_becomes_an_unknown_timeout_without_reissuing_the_command(
+        navigation, monkeypatch):
+    from agent.runtime import client_actions
+
+    runtime, model, config, _, command = navigation
+    monkeypatch.setattr(client_actions.time, "time", lambda: command["expires_at"] + 1)
+    result = list(runtime().stream_events({"messages": [], "resume_task": "page-task"},
+                                         config))[-1]
+    assert result.reply and len(model.calls) == 2
+    assert not (result.execution or {}).get("client_action")
+    facts = [json.loads(m.content) for m in model.calls[-1] if isinstance(m, ToolMessage)]
+    assert facts and all(row["status"] == "timeout" and not row["completion_confirmed"]
+                         for row in facts)
+    assert all(not row.get("observed") and "未确认" in row["result"] for row in facts)
+    assert not runtime().store.load(config).unfinished
+    repeated = list(runtime().stream_events({"messages": [], "resume_task": "page-task"},
+                                           config))[-1]
+    assert repeated.execution["blocked"] and len(model.calls) == 2
