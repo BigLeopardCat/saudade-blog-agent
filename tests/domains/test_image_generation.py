@@ -49,6 +49,7 @@ def service(monkeypatch):
                 "request": {**payload, "references": refs, "provider": "https://images.test/v1"},
                 "requestHash": "a" * 64,
                 "status": "pending",
+                "imageRemoved": False,
                 "outputHash": None,
                 "previewUrl": None,
                 "imageId": None,
@@ -65,7 +66,9 @@ def service(monkeypatch):
             assert json.loads(request.content) == {"version": "b" * 64}
             state["accepts"] += 1
             status = state.get("accept_status", "accepted")
-            state["job"].update(status=status, imageId=31 if status == "accepted" else None)
+            state["job"].update(status=status, imageId=31 if status == "accepted" else None,
+                imageRemoved=state.get("accept_removed", False),
+                previewUrl=None if status == "accepted" else state["job"]["previewUrl"])
             data = state["job"]
         else:
             data = state["job"]
@@ -228,3 +231,40 @@ def test_background_generation_status_read_does_not_gain_paid_execution(service)
     result = tools.get_image_generation.invoke({"job_id": ID, "wait_seconds": 0}, config=cfg)
     assert result.kind == "unavailable"
     assert len(service["requests"]) == count
+
+
+def test_deleted_gallery_result_remains_an_accepted_history_not_an_available_image(service):
+    from agent.runtime.progress import ProgressEmitter
+
+    prepare()
+    service["job"].update(status="accepted", imageId=31, imageRemoved=True, previewUrl=None)
+    cfg = admin()
+    progress = []
+    cfg["configurable"]["progress_emitter"] = ProgressEmitter(progress.append)
+    result = tools.get_image_generation.invoke({"job_id": ID, "wait_seconds": 0}, config=cfg)
+    assert result.kind == "ok"
+    assert result.data["status"] == "accepted" and result.data["imageId"] == 31
+    assert result.data["imageRemoved"] is True and result.data["hasPreview"] is False
+    assert "图片已从图库移除" in progress[-1]["text"]
+    assert tools.prepare_generated_image_acceptance.invoke(
+        {"job_id": ID}, config=cfg).kind == "unavailable"
+    assert service["paid_calls"] == service["accepts"] == 0
+
+
+@pytest.mark.parametrize("removed", [True, None, "false", 0])
+def test_missing_or_removed_current_gallery_result_is_not_a_save_receipt(
+    service, tmp_path, removed
+):
+    prepare()
+    service["job"].update(status="review", outputHash="b" * 64,
+        previewUrl=f"/api/public/image-generation/{ID}/preview?token=result")
+    signed = grant(tools.prepare_generated_image_acceptance.invoke({"job_id": ID}, config=admin()))
+    service["accept_removed"] = removed
+    ledger = Ledger(str(tmp_path / "unverified-save.sqlite3"))
+    try:
+        for _ in range(2):
+            result = transactions.execute(signed, admin(), None, ledger=ledger)
+            assert not result["receipts"] and result["operation_outcome"]["status"] == "unverified"
+    finally:
+        ledger.close()
+    assert service["accepts"] == 1 and service["paid_calls"] == 0

@@ -49,7 +49,7 @@ def test_sdk_two_approvals_wait_once_each_and_never_send_preview_tokens_to_model
     cfg = config(principal=Principal(7, "admin", SOURCE_ASSERTION))
     calls, model_requests, streams = [], [], []
     stopped = threading.Event()
-    job = {"id": ID, "requestHash": "a" * 64, "status": "pending",
+    job = {"id": ID, "requestHash": "a" * 64, "status": "pending", "imageRemoved": False,
            "request": {"provider": "https://images.test/v1", "model": "fixture",
                        "prompt": "approved exact prompt", "size": "1536x1024",
                        "quality": "high", "references": []}}

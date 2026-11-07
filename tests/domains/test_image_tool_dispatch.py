@@ -62,6 +62,7 @@ def test_discovered_preparations_reach_approval_through_the_real_tool_chain(
     job = {
         "id": ID,
         "requestHash": "a" * 64,
+        "imageRemoved": False,
         "status": "pending",
         "outputHash": "b" * 64,
         "previewUrl": f"/api/public/image-generation/{ID}/preview?token=fixture",

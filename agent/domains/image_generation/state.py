@@ -2,7 +2,7 @@
 
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, StrictInt, StrictStr
+from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictInt, StrictStr
 
 Status = Literal["pending", "generating", "review", "saving", "accepted", "rejected",
                  "failed", "unknown", "expired"]
@@ -33,6 +33,7 @@ class Job(BaseModel):
     request: Request
     requestHash: StrictStr = Field(pattern=r"^[0-9a-f]{64}$")
     status: Status
+    imageRemoved: StrictBool
     outputHash: StrictStr | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
     previewUrl: StrictStr | None = Field(default=None, max_length=4096)
     imageId: StrictInt | None = Field(default=None, gt=0)
@@ -40,13 +41,15 @@ class Job(BaseModel):
 
     def visible(self, *, wait_outcome="observed"):
         return {"id": self.id, "status": self.status, "imageId": self.imageId,
-                "hasPreview": self.previewUrl is not None, "error": self.error,
+                "hasPreview": self.previewUrl is not None, "imageRemoved": self.imageRemoved,
+                "error": self.error,
                 "waitOutcome": wait_outcome}
 
 
 def checked(value, job_id):
     job = Job.model_validate(value)
-    if job.id != job_id or (job.status == "accepted" and job.imageId is None):
+    if (job.id != job_id or (job.status == "accepted" and job.imageId is None)
+            or (job.imageRemoved and (job.status != "accepted" or job.previewUrl is not None))):
         raise ValueError("Image job identity or accepted gallery result differs")
     return job
 
@@ -64,6 +67,8 @@ def show_progress(job, config):
               "unknown": ("生图结果尚未核实", "unknown"),
               "expired": ("生图任务已过期", "cancelled")}
     text, status = labels[job.status]
+    if job.imageRemoved:
+        text = "图片已从图库移除，曾保存的任务结果仍保留。"
     if job.status == "review" and job.error:
         text, status = "保存未完成，图片仍可审阅并重试保留", "failed"
     return emit(config, text, key=f"image:{job.id}:{job.status}:{status}",

@@ -139,7 +139,9 @@ def get_image_generation(job_id: JobID, config: RunnableConfig,
     review: call prepare_generated_image_acceptance to SHOW the actual result and ask
     whether to keep it. review + error means saving failed, not generation failed; the
     result remains available for another explicit acceptance. saving is NOT gallery
-    completion; only accepted + imageId confirms it. A timeout is still unfinished;
+    completion; only accepted + imageId and imageRemoved=false confirms a saved result.
+    imageRemoved=true preserves historical acceptance but the image is no longer available
+    in the gallery; do not reuse it as a cover. A timeout is still unfinished;
     explain the actual status and continue this READ from checkpoint when requested.
     wait_seconds=0 reads status immediately. unknown must never restart a paid request.
     """
