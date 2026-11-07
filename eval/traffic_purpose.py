@@ -26,6 +26,28 @@ def _build(doc):
     return runtime.get("build_sha") if isinstance(runtime, dict) else None
 
 
+def _capture(folder, row, identity, build):
+    """Validate a captured trace's bytes and scope, or an explicitly uncaptured attempt."""
+    trace, digest = row.get("trace"), row.get("trace_sha256")
+    fingerprint = None
+    if trace:
+        if (not isinstance(trace, str) or Path(trace).name != identity + ".json"
+                or Path(trace).parent.name != "traces" or not _hex(digest, 64)):
+            raise ValueError("invalid canonical evaluation trace reference")
+        # Captures travel with the report; never follow a report's arbitrary file path.
+        raw = (folder / "traces" / (identity + ".json")).read_bytes()
+        if hashlib.sha256(raw).hexdigest() != digest:
+            raise ValueError("evaluation capture checksum mismatch")
+        doc = json.loads(raw)
+        if (not isinstance(doc, dict) or doc.get("trace_id") != identity
+                or _build(doc) != build):
+            raise ValueError("evaluation capture identity or build mismatch")
+        fingerprint = _fingerprint(doc)
+    elif trace != "" or digest is not None:
+        raise ValueError("invalid uncaptured evaluation request")
+    return fingerprint
+
+
 def _canonical_requests(report_paths):
     registered, reports = {}, set()
     for value in report_paths:
@@ -46,23 +68,7 @@ def _canonical_requests(report_paths):
                     or row.get("transport") not in ("agent_http", "blog_http")):
                 raise ValueError("invalid or duplicate canonical evaluation request")
             seen.add(identity)
-            trace, digest = row.get("trace"), row.get("trace_sha256")
-            fingerprint = None
-            if trace:
-                if (not isinstance(trace, str) or Path(trace).name != identity + ".json"
-                        or Path(trace).parent.name != "traces" or not _hex(digest, 64)):
-                    raise ValueError("invalid canonical evaluation trace reference")
-                # Captures travel with the report; never follow a report's arbitrary file path.
-                raw = (path.parent / "traces" / (identity + ".json")).read_bytes()
-                if hashlib.sha256(raw).hexdigest() != digest:
-                    raise ValueError("evaluation capture checksum mismatch")
-                doc = json.loads(raw)
-                if (not isinstance(doc, dict) or doc.get("trace_id") != identity
-                        or _build(doc) != build):
-                    raise ValueError("evaluation capture identity or build mismatch")
-                fingerprint = _fingerprint(doc)
-            elif trace != "" or digest is not None:
-                raise ValueError("invalid uncaptured evaluation request")
+            fingerprint = _capture(path.parent, row, identity, build)
             previous = registered.get(identity)
             if previous is not None:
                 if previous[0] != build or (previous[1] is not None and fingerprint is not None
