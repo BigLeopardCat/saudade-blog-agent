@@ -18,8 +18,6 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from langchain_core.messages import ToolMessage
-
 from agent import (
     confirm,
     runtime_probe,
@@ -30,15 +28,16 @@ from agent.api.context import build_messages as _build_messages
 from agent.api.routes import chat as chat_routes
 from agent.api.schemas import ChatRequest, HistoryItem
 from agent.api.turns import stream_to_queue as _run_agent_stream_to_queue
+from agent.contracts.events import StreamEvent
 from agent.principal import Principal
 from agent.transport import reply_text
 from eval import (
     command_report,
-    corpus_terms,  # 同目录：语料术语派生（require_doc_terms 判据用）
+    corpus_terms,
     golden_fixture,
     golden_runtime,
     golden_thread,
-    golden_trace,  # 同目录（eval/ 在 sys.path 上，同 corpus_check 的用法）
+    golden_trace,
 )
 from eval.corpus_provenance import (
     snapshot_docs as corpus_snapshot_docs,
@@ -69,8 +68,7 @@ _NOW_RX = re.compile(r"\{now(?:(?P<sign>[+-])(?P<num>\d+)(?P<unit>[mhd]))?\}")
 
 
 def expand_now(text: str, now: "datetime | None" = None) -> str:
-    """把夹具里的 `{now…}` 占位符换成**跑这一遍的时刻**（`MM-DD HH:MM`，与 Rust 渲染的
-    台账行首同形）。零占位符时原样返回（既有 150 条用例一个字都不变）。"""
+    """Expand relative fixture timestamps to this run's local minute."""
     if "{now" not in text:
         return text
     now = now or datetime.now()
@@ -204,20 +202,6 @@ def fallback_resets(result: dict) -> list[str]:
     return list(reasons) if reasons is not None else [""] * scopes.count("text")
 
 
-def parse_reset(text: str) -> tuple[str, str]:
-    """Decode archived reset labels into scope and reason.
-
-    Missing scopes conservatively invalidate all buffered controls. These labels
-    are an evaluation representation, not the production transport protocol."""
-    rest = text.removeprefix("__RESET__").lstrip(":")
-    scope, _sep, tail = rest.partition(":")
-    if scope not in ("all", "text"):
-        return "all", rest
-    return scope, tail
-
-
-
-
 def run_one(req: ChatRequest, principal: "Principal | None" = None,
             trace_ctx: dict | None = None, *,
             confirm_token: str = "", confirm_pick: str = "",
@@ -225,7 +209,7 @@ def run_one(req: ChatRequest, principal: "Principal | None" = None,
     """Run the production producer and extract visible frames for one request.
 
     Start tracing before copying context to the worker. Verify confirmation first,
-    then narrow a selected item before constructing messages or the ledger.
+    then narrow a selected item before constructing messages.
     Invalid tokens are evaluation errors; invalid picks return the production
     zero-execution response. Tokens in the returned result stay in memory only.
     """
@@ -268,79 +252,25 @@ def run_one(req: ChatRequest, principal: "Principal | None" = None,
         return await golden_runtime.collect_frames(queue, producer)
 
     frames = asyncio.run(collect_frames())
-    ledger_frames: list[dict] = []
-    if trace_id:
-        ledger_frames = [dict(e) for e in golden_trace.events_of(trace_id)
-                         if e.get("node") == "planner" and e.get("event") == "ledger_frame"]
     native_names, native_rounds = golden_trace.tool_call_stats(trace_id)
     trace_path = golden_trace.finish_case(trace_id, time.monotonic() - t_trace0,
                                           len(frames))
     final_text = ""
     commands: list[str] = []
-    tool_calls: list[str] = []
-    exec_rows: list = []
-    resets = 0
-    resets_reasons: list[str] = []
-    reset_scopes: list[str] = []
-    fallback_reasons: list[str] = []
-    tool_rounds = 0
+    exec_rows: list[dict] = []
     error = None
     control_frames: list[str] = []
-    task_frames: list[dict] = []
     for item in frames:
         final_text = reply_text(final_text, item)
-        item = golden_runtime.assertion_frame(item)
-        if isinstance(item, str) and item.startswith("__RESET__"):
-            final_text = ""
-            tool_calls.clear()  # 被作废轮的工具调用不算数（断言的是最终采纳轮的执行）
-            _scope, _reason = parse_reset(item)
-            if _scope != "text":
-                commands.clear()
-            else:
-                fallback_reasons.append(_reason)
-            reset_scopes.append(_scope)
-            resets += 1
-            if _reason:
-                resets_reasons.append(_reason)
-        elif isinstance(item, str) and item.startswith("__EXEC__:"):
-            try:
-                rows = json.loads(item[len("__EXEC__:"):])
-                if isinstance(rows, list):
-                    exec_rows.extend(r for r in rows if isinstance(r, dict))
-            except Exception:
-                pass
-        elif isinstance(item, str) and item.startswith("__CMD__:"):
-            try:
-                _cmd = json.loads(item[len("__CMD__:"):])
-                _wire = command_report.command_wire(_cmd) if isinstance(_cmd, dict) else ""
-            except Exception:
-                _wire = ""
-            if _wire:
-                commands.append(_wire)
-        elif isinstance(item, str) and item.startswith("__TASK__:"):
-            try:
-                _tf = json.loads(item[len("__TASK__:"):])
-            except Exception:
-                _tf = None
-            if isinstance(_tf, dict):
-                task_frames.append(_tf)
-        elif isinstance(item, ToolMessage) and item.content:
-            name = getattr(item, "name", "") or ""
-            if name:
-                tool_calls.append(name)
-            for line in str(item.content).splitlines():
-                s = line.strip()
-                if s.startswith(CMD_PREFIXES):
-                    commands.append(s)
-        elif isinstance(item, BaseException):
+        if isinstance(item, BaseException):
             error = str(item)
-        elif isinstance(item, str) and item.startswith("__PROCESS__"):
-            if "🧭 计划：" in item:
-                tool_rounds += 1
-        elif isinstance(item, str) and item.startswith("__"):
-            control_frames.append(item)
-    tool_calls.extend(native_names)
-    tool_rounds += native_rounds
+        elif isinstance(item, StreamEvent):
+            if item.name == "receipts":
+                exec_rows.extend(item.data)
+            elif item.name == "command":
+                commands.append(command_report.command_wire(item.data))
+            elif item.name in {"confirmation", "pending", "task_input"}:
+                control_frames.append(golden_runtime.assertion_frame(item))
     confirm_tokens, confirm_payloads = [], []
     for f in control_frames:
         if not f.startswith("__CONFIRM__:"):
@@ -352,18 +282,17 @@ def run_one(req: ChatRequest, principal: "Principal | None" = None,
         if tk:
             confirm_tokens.append(tk)
             confirm_payloads.append(confirm.inspect(tk) or {})
-    return {"text": final_text, "commands": commands, "tool_calls": tool_calls,
+    return {"text": final_text, "commands": commands, "tool_calls": native_names,
             "frames": control_frames,
             "exec_rows": exec_rows,
             "exec_tools": [r.get("tool", "") for r in exec_rows],
-            "tool_rounds": tool_rounds,
+            "tool_rounds": native_rounds,
             "trace": trace_path,
             "confirm_tokens": confirm_tokens,
             "confirm_payloads": confirm_payloads,
-            "task_frames": task_frames,
-            "ledger_frames": ledger_frames,
-            "resets": resets, "resets_reasons": resets_reasons,
-            "reset_scopes": reset_scopes, "fallback_reasons": fallback_reasons,
+            "task_frames": [], "ledger_frames": [],
+            "resets": 0, "resets_reasons": [],
+            "reset_scopes": [], "fallback_reasons": [],
             "error": error}
 
 
@@ -954,165 +883,6 @@ def expand_token_list(lst: list) -> list:
     return out
 
 
-def expand_forbid_tokens(cases: list) -> list:
-    """把 `forbid_tool_calls` 里的哨兵就地展开，返回展开过的用例 id。"""
-    expanded: list = []
-    for c in cases:
-        for gold in ([c.get("gold")] + [r.get("gold") for r in c.get("rounds") or []]):
-            if not isinstance(gold, dict):
-                continue
-            lst = gold.get("forbid_tool_calls")
-            if not lst or not any(t in FORBID_TOKENS for t in lst):
-                continue
-            try:
-                gold["forbid_tool_calls"] = expand_token_list(lst)
-            except RuntimeError as e:
-                raise RuntimeError(f"{e}——用例 {c.get('id')}") from None
-            expanded.append(c.get("id"))
-    return expanded
-
-
-# Premise suppliers describe the facts required to evaluate a case.
-PREMISE_ROLES: tuple[str, ...] = ("visitor", "user", "admin", "superadmin")
-
-
-def reachable_tools(role: str | None) -> set:
-    """Return tools reachable by the role under the native scope policy."""
-    from agent.authz import SCOPE_READ_PUBLIC, TOOL_SCOPE, check
-    if role is None:
-        return {name for name, scope in TOOL_SCOPE.items() if scope == SCOPE_READ_PUBLIC}
-    principal = Principal(uid=1, role=role, source="golden")
-    return {name for name in TOOL_SCOPE if check(principal, name).allowed}
-
-
-def premise_role(pa: dict) -> str | None:
-    """声明里的角色名 → 判据用的角色名（`visitor` = 匿名访客 = `None`）。"""
-    role = (pa.get("role") or "").strip()
-    return None if role == "visitor" else role
-
-
-def check_premises(cases: list) -> tuple:
-    """Return eligible cases, unevaluated IDs and explicit premise findings.
-
-    Changed premises exclude a case. Uncheckable human declarations remain
-    visible as unchecked rather than being reported as verified."""
-    kept: list = []
-    skipped: list = []
-    rows: list = []
-    for c in cases:
-        pa = c.get("premise_absent")
-        if not isinstance(pa, dict):
-            kept.append(c)
-            continue
-        role = premise_role(pa)
-        tools = expand_token_list(list(pa.get("suppliers") or []))
-        if not tools:
-            rows.append({"id": c.get("id"), "state": "unchecked", "role": role,
-                         "fact": pa.get("fact"), "hit": [], "why": pa.get("why")})
-            kept.append(c)
-            continue
-        reach = reachable_tools(role)
-        hit = sorted(t for t in tools if t in reach)
-        rows.append({"id": c.get("id"), "state": "changed" if hit else "ok",
-                     "role": role, "fact": pa.get("fact"), "hit": hit,
-                     "why": pa.get("why")})
-        if hit:
-            skipped.append(c["id"])
-        else:
-            kept.append(c)
-    return kept, skipped, rows
-
-
-# A no-confirmation expectation requires a declared, currently valid reason.
-NO_POPUP_KINDS: tuple[str, ...] = ("question", "target_absent", "role_denied",
-                                   "capability_boundary")
-# `capability_boundary` 的 `why` 下限：那半是**人写的前提**，写不写全没人能自动判，
-# 但至少要写下来（同 `premise_absent` 的"清单为空的必须写 why"）。
-_NO_POPUP_WHY_MIN = 12
-
-
-def no_popup_role(case: dict) -> str | None:
-    """判据侧的角色名：用例的 `context.role`，缺省/`visitor` ⇒ `None`（匿名访客）。"""
-    role = str((case.get("context") or {}).get("role") or "").strip()
-    return None if role in ("", "visitor") else role
-
-
-def check_no_popup_premises(cases: list) -> tuple:
-    """Validate why a case should not request approval.
-
-    Changed reasons and malformed declarations make the case unevaluated;
-    they must never silently weaken the confirmation assertion."""
-    kept: list = []
-    skipped: list = []
-    rows: list = []
-    for c in cases:
-        pn = c.get("premise_no_popup")
-        if not isinstance(pn, dict):
-            kept.append(c)
-            continue
-        kind = str(pn.get("kind") or "").strip()
-        role = no_popup_role(c)
-        tools = [str(t) for t in (pn.get("tools") or [])]
-        why = str(pn.get("why") or "").strip()
-        hit: list = []
-        if kind == "question":
-            from eval.legacy_no_popup import is_question_like
-            if not is_question_like(str(c.get("user_input") or "")):
-                hit = ["is_question_like(本轮输入)=False"]
-        elif kind == "target_absent":
-            lits: list = []
-            for gold in [r["gold"] for r in iter_rounds(c)]:
-                v = gold.get("require_absence")
-                if isinstance(v, str):
-                    lits.append(v)
-                elif isinstance(v, list):
-                    lits.extend(str(x) for x in v)
-            ui = str(c.get("user_input") or "")
-            if not lits or not any(x and x in ui for x in lits):
-                hit = ["判据里没有 require_absence（或它的字面不在主人原话里）"]
-        elif kind in ("role_denied", "capability_boundary"):
-            if not tools:
-                hit = ["声明里没点名工具"]
-            else:
-                reach = reachable_tools(role)
-                inside = sorted(t for t in tools if t in reach)
-                if kind == "role_denied":
-                    hit = inside
-                else:
-                    hit = sorted(t for t in tools if t not in reach)
-                    if not hit and len(why) < _NO_POPUP_WHY_MIN:
-                        hit = [f"capability_boundary 必须写 why（≥{_NO_POPUP_WHY_MIN} 字，"
-                               "设计那一半机器判不了）"]
-        else:
-            hit = [f"kind 不是四类之一：{kind!r}"]
-        rows.append({"id": c.get("id"), "kind": kind, "state": "changed" if hit else "ok",
-                     "role": role, "tools": tools, "hit": hit, "why": why,
-                     "partial": kind == "capability_boundary"})
-        if hit:
-            skipped.append(c.get("id"))
-        else:
-            kept.append(c)
-    return kept, skipped, rows
-
-
-# Trace-dependent expectations remain unevaluated when the required trace is absent.
-def check_trace_premises(cases: list) -> tuple:
-    """trace 关着时，靠 trace 判的用例**未评估** → (留下的用例, 未评估的 id, 逐条结论)。"""
-    if golden_trace.enabled():
-        return cases, [], []
-    kept: list = []
-    skipped: list = []
-    rows: list = []
-    for c in cases:
-        keys = golden_trace.trace_derived_keys(c)
-        if not keys:
-            kept.append(c)
-            continue
-        skipped.append(c.get("id"))
-        rows.append({"id": c.get("id"), "state": "trace_off", "keys": keys})
-    return kept, skipped, rows
-
-
 # Explicit assertion keys reject misspellings instead of silently skipping checks.
 GOLD_ASSERT_KEYS = frozenset({
     "require_observations", "require_observations_any", "require_todo_schedule",
@@ -1465,13 +1235,15 @@ def check_gold(gold: dict, result: dict, *, docs=None, user_input: str = "",
                          "——本键要求帧里至少印出一个编号（要有待办行才判得动）")
     if gold.get("require_card_targets_from_ledger") and not _lf_off:
         from agent.identifiers import normalize_target_id  # 编号解析的唯一实现
-        from native_receipt_contract import FIELD_FAMILY, TAG_FAMILY, TARGET_FIELDS
+
+        from eval.native_receipt_contract import FIELD_FAMILY, TAG_FAMILY, TARGET_FIELDS
         _byfam: dict = {}
         for _e in _lf_events:
             for _raw in (_e.get("ids") or []):
                 _s = str(_raw)
-                _fam = TAG_FAMILY.get(_s.partition(":")[0])
-                _tid = normalize_target_id(_s)
+                _tag, _separator, _value = _s.partition(":")
+                _fam = TAG_FAMILY.get(_tag)
+                _tid = normalize_target_id(_value) if _separator else None
                 if _fam and _tid is not None:
                     _byfam.setdefault(_fam, set()).add(int(_tid))
         _seen, _bad = 0, []

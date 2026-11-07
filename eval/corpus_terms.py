@@ -516,9 +516,8 @@ def exposure(*, runs: int = 0, report_dir: str | None = "eval/report",
         files = files[-runs:]
     if not files:
         return 1, "", [f"[exposure] 归档不可用（{arch} 下没有 *.json）——未评估，不写报告"]
-    sys.path.insert(0, str(ev_dir))
     try:
-        import golden_evaluation as rg            # 判据本体：**只此一份**，不在这里重写匹配逻辑
+        from eval import golden_evaluation as rg
     except Exception as e:                 # noqa: BLE001 —— 报出真因，别让哨兵自己死掉
         return 1, "", [f"[exposure] 判据不可用（{type(e).__name__}: {e}）——未评估，不写报告"]
 
