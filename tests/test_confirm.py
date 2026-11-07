@@ -5,7 +5,6 @@ import hmac
 import json
 import re
 import secrets
-import time
 
 import pytest
 
@@ -65,7 +64,7 @@ def test_invalid_request_coordinates_cannot_sign_or_verify(field, coordinate):
     ("uid", True), ("uid", "7"), ("uid", 7.0), ("uid", None), ("uid", 0),
     ("conv", True), ("conv", "42"), ("conv", 42.0), ("conv", None), ("conv", 0),
     ("executor", None), ("executor", True), ("executor", "unknown"),
-    ("v", 1), ("v", 2.0), ("v", "2"), ("exp", True), ("exp", int(time.time()) - 1),
+    ("v", 1), ("v", 2.0), ("v", "2"), ("exp", True), ("exp", 0),
     ("workflow", ""), ("workflow", True), ("specs", None), ("specs", []),
     ("jti", None), ("jti", True), ("jti", ""), ("jti", "a" * 31), ("jti", "A" * 32),
     ("specs", [{"tool": "create_tag", "args": {"title": "$list_tags[0].name"}}]),

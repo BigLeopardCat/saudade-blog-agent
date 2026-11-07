@@ -11,6 +11,17 @@
     if (h >= 24) return `${Math.floor(h / 24)}天 ${h % 24}小时`;
     return (h ? `${h}:` : '') + `${h ? String(m).padStart(2, '0') : m}:${String(s).padStart(2, '0')}`;
   };
+  const scheduleLabel = row => {
+    if (row.result?.reason === 'execution_unverified') return '操作结果待核实，请勿重复执行';
+    if (row.result?.status === 'completed' && row.result.notification?.delivered === false)
+      return '任务已完成，通知未送达';
+    const labels = { blocked: '未执行：权限或任务状态已变化', expired: '已错过执行时间',
+      incomplete: '执行未完整完成，请核对结果', failed: '执行结果待核实',
+      unknown: '执行结果待核实', cancelled: '已取消', paused: '已暂停', finished: '已完成' };
+    return labels[row.status] || '等待执行';
+  };
+  const hasCountdown = row => ['active', 'scheduled'].includes(row.status)
+    && !row.needs_attention && !!(row.next_run_at || row.run_at);
   const init = (ctx, engine) => {
     const panel = ctx.dom.chatPanel;
     if (!panel || panel.dataset.tasksReady) return;
@@ -53,11 +64,12 @@
     viewer.addEventListener('keydown', e => { if (e.key === 'Escape') { e.stopPropagation(); hide(); } });
     const removeControl = (actions, row, scheduled) => {
       const group = document.createElement('div'); group.className = 'chat-task-delete';
-      const yes = appendText(group, 'button', '删除任务'); yes.type = 'button';
+      const removeLabel = scheduled && row.needs_attention ? '移除提醒' : '删除任务';
+      const yes = appendText(group, 'button', removeLabel); yes.type = 'button';
       const no = appendText(group, 'button', '保留', 'chat-task-keep'); no.type = 'button';
       let armed = false;
       const arm = value => {
-        armed = value; yes.textContent = value ? '确认删除' : '删除任务';
+        armed = value; yes.textContent = value ? (row.needs_attention ? '确认移除' : '确认删除') : removeLabel;
         no.setAttribute('aria-hidden', String(!value)); no.tabIndex = value ? 0 : -1;
       };
       arm(false); no.addEventListener('click', () => { arm(false); yes.focus(); });
@@ -106,8 +118,9 @@
         const text = scheduled ? row.instruction : row.title;
         if (text) appendText(details, 'p', text);
         appendText(details, 'p', scheduled
-          ? `${row.status === 'paused' ? '已暂停' : '等待执行'} · ${row.cron ? row.cron + ' · ' + row.timezone : new Date(row.next_run_at || row.run_at).toLocaleString()}`
+          ? `${scheduleLabel(row)} · ${row.cron ? row.cron + ' · ' + row.timezone : new Date(row.next_run_at || row.run_at).toLocaleString()}`
           : '任务已挂起，继续时沿用保存的进度。已完成的操作不会因删除任务而撤销。', 'chat-task-meta');
+        if (scheduled && row.result?.preview) appendText(details, 'p', row.result.preview);
         if (row.condition) appendText(details, 'p', `触发后等待文章 ${row.condition.article_id} 公开，满足条件再执行。`, 'chat-task-meta');
         const actions = document.createElement('div'); actions.className = 'chat-task-actions';
         if (!scheduled) {
@@ -136,7 +149,7 @@
       const labels = { checking: '正在检查对话服务', ready: '对话服务正常', busy: '正在处理任务',
         paused: '有挂起的任务', offline: '对话服务不可用' };
       lamp.dataset.state = state; lamp.title = labels[state]; lamp.setAttribute('aria-label', labels[state]);
-      const next = schedules.filter(row => row.status !== 'paused' && (row.next_run_at || row.run_at))
+      const next = schedules.filter(hasCountdown)
         .sort((a, b) => Date.parse(a.next_run_at || a.run_at) - Date.parse(b.next_run_at || b.run_at))[0];
       const time = next ? countdown(next.next_run_at || next.run_at, Date.now() + clockOffset) : '';
       scheduledChip.hidden = !next; pausedChip.hidden = !pausedCount;
@@ -152,7 +165,8 @@
         if (tk) {
           const data = await request('/api/chat/tasks');
           if (seq !== sequence || token() !== tk) return;
-          paused = data.paused.items; schedules = data.schedules.items;
+          paused = data.paused.items;
+          schedules = [...data.schedules.items, ...(data.schedules.recent_results || [])];
           scheduleFailed = !!data.schedules.unavailable; failed = false;
           const server = Date.parse(data.server_time);
           if (Number.isFinite(server)) clockOffset = server - Date.now();
@@ -187,5 +201,5 @@
     setInterval(() => { if (!document.hidden && panel.classList.contains('active')) { void health(); void refresh(); } }, 45000);
     void health(); void refresh(); update();
   };
-  g.__waifuTaskUI = { init, signal, countdown };
+  g.__waifuTaskUI = { init, signal, countdown, scheduleLabel, hasCountdown };
 })(typeof window !== 'undefined' ? window : globalThis);

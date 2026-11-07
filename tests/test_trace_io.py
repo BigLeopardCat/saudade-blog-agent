@@ -23,7 +23,7 @@ def test_json_and_gzip_preserve_identical_evidence(tmp_path):
     plain = tmp_path / "20261107T010000_7_12345678.json"
     compressed = plain.with_suffix(".json.gz")
     plain.write_bytes(data)
-    compressed.write_bytes(gzip.compress(data))
+    compressed.write_bytes(gzip.compress(data, mtime=0))
 
     assert load_trace(plain) == load_trace(compressed) == document
     assert set(trace_files.iter_trace_files(str(tmp_path))) == {str(plain), str(compressed)}
@@ -33,14 +33,15 @@ def test_json_and_gzip_preserve_identical_evidence(tmp_path):
 
 
 @pytest.mark.parametrize(("name", "data"), [
-    ("bad.json", b"not json"),
-    ("bad.json.gz", b"not gzip"),
-    ("truncated.json.gz", gzip.compress(b'{"events": []}')[:-4]),
-    ("bad_utf8.json", b"\xff"),
-    ("list.json", b"[]"),
-    ("null.json", b"null"),
-    ("events.json", b'{"events": {}}'),
-    ("event.json", b'{"events": [1]}'),
+    pytest.param("bad.json", b"not json", id="invalid-json"),
+    pytest.param("bad.json.gz", b"not gzip", id="invalid-gzip"),
+    pytest.param("truncated.json.gz", gzip.compress(b'{"events": []}', mtime=0)[:-4],
+                 id="truncated-gzip"),
+    pytest.param("bad_utf8.json", b"\xff", id="invalid-utf8"),
+    pytest.param("list.json", b"[]", id="array-document"),
+    pytest.param("null.json", b"null", id="null-document"),
+    pytest.param("events.json", b'{"events": {}}', id="nonarray-events"),
+    pytest.param("event.json", b'{"events": [1]}', id="nonobject-event"),
 ])
 def test_unreadable_or_malformed_data_is_unknown(tmp_path, name, data):
     path = tmp_path / name

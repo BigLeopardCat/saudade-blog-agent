@@ -60,14 +60,14 @@ class Model:
 runtime = AgentRuntime(CheckpointConversationStore(InMemorySaver()), application=BlogApplication(),
                         model_factory=lambda **_: Model())
 config = {'configurable': {'thread_id': 'conv_1', 'conversation_id': 1,
-                           'user_id': 1,
-                           'principal': Principal(1, 'user', SOURCE_ASSERTION)}}
+                           'user_id': 7,
+                           'principal': Principal(7, 'user', SOURCE_ASSERTION)}}
 with favorite_backend() as backend:
     state = {'messages': [HumanMessage(content='收藏文章19')]}
     result = list(runtime.stream_events(state, config))[-1]
     assert result.execution['receipts'][0]['cmd']['url'].endswith('/about')
     token = result.execution['pending_confirm']['token']
-    assert confirm.verify(token, 1, 1)['executor'] == 'favorites'
+    assert confirm.verify(token, 7, 1)['executor'] == 'favorites'
     assert backend['requests'] and all(request.method == 'GET' for request in backend['requests'])
 assert not any(name in __import__('sys').modules for name in %r)
 """ % (RETIRED,)
