@@ -8,7 +8,7 @@ from email.utils import formatdate
 
 import httpx
 import pytest
-from langchain_core.messages import HumanMessage
+from langchain_core.messages import AIMessage, HumanMessage
 from openai import RateLimitError
 
 from agent.runtime.control import RequestControl, request_scope
@@ -49,6 +49,7 @@ def test_http_date_uses_utc_and_records_only_safe_diagnostic_headers(monkeypatch
 
 @pytest.mark.parametrize("headers,remaining,attempts", [({}, 30, 2),
     ({"retry-after": "10"}, 30, 1), ({"retry-after-ms": "1000"}, 30, 2),
+    ({"retry-after": "2"}, 30, 2), ({"retry-after": "3"}, 30, 1),
     ({}, 1, 1)])
 def test_framework_does_not_retry_early_or_beyond_remaining_deadline(
         monkeypatch, headers, remaining, attempts):
@@ -70,6 +71,29 @@ def test_framework_does_not_retry_early_or_beyond_remaining_deadline(
             session.run([HumanMessage(content="Synthetic request")])
     assert len(calls) == session.budget.model_calls == attempts
     assert len(sleeps) == attempts - 1
+    if sleeps:
+        assert sleeps == [2.0]
+        assert sleeps[0] >= (retry_after(rejected(headers)) or 0)
+
+
+def test_provider_two_second_hint_recovers_once_with_all_attempts_charged(monkeypatch):
+    calls, sleeps = [], []
+    monkeypatch.setattr("langchain.agents.middleware.model_retry.time.sleep", sleeps.append)
+
+    class Model:
+        def bind_tools(self, *args, **kwargs):
+            return self
+
+        def invoke(self, *args, **kwargs):
+            calls.append(1)
+            if len(calls) == 1:
+                raise rejected({"retry-after": "2"})
+            return AIMessage(content="Synthetic response")
+
+    session = ToolSession(Model(), {}, {}, {})
+    result = session.run([HumanMessage(content="Synthetic request")])
+    assert result.reply == "Synthetic response"
+    assert sleeps == [2.0] and len(calls) == session.budget.model_calls == 2
 
 
 def test_cancelling_during_framework_backoff_does_not_make_another_model_request(monkeypatch):
