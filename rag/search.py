@@ -176,8 +176,12 @@ class RagIndex:
             self._vector_warmer(chunks)
 
     def _fetch_corpus(self) -> list[dict]:
+        from functools import partial
+
         from tools.base import _get
-        return fetch_corpus(_get)
+        from tools.http_channel import CORPUS_RESPONSE_BYTES
+
+        return fetch_corpus(partial(_get, max_response_bytes=CORPUS_RESPONSE_BYTES))
 
     def status(self) -> dict:
         with self._lock:

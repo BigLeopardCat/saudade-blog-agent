@@ -37,7 +37,8 @@ def fetch(get) -> list[dict]:
     revision = None
     total = 0
     after = 0
-    for _ in range(MAX_DOCUMENTS // PAGE_SIZE + 1):
+    # A byte-bounded host page may contain only one complete document.
+    for _ in range(MAX_DOCUMENTS + 1):
         params: dict[str, int | str] = {"limit": PAGE_SIZE}
         if after and revision is not None:
             params.update(after=after, revision=revision)
