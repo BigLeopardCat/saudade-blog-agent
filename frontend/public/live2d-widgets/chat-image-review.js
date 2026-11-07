@@ -26,7 +26,8 @@
       img.src = url; img.alt = label; img.loading = 'lazy'; img.referrerPolicy = 'no-referrer';
       const caption = document.createElement('figcaption'); caption.textContent = label;
       img.addEventListener('error', () => {img.hidden = true; caption.textContent = '预览暂不可用，请重新查看任务。';});
-      figure.append(img, caption); return figure;
+      const frame = document.createElement('div'); frame.className = 'chat-image-preview';
+      frame.append(img); figure.append(frame, caption); return figure;
     };
     if (value.result_url) root.append(image(value.result_url, '实际生成结果，尚未保留到图库'));
     const header = document.createElement('div'); header.className = 'chat-image-review-header';

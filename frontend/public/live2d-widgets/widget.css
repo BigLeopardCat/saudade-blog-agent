@@ -1777,8 +1777,7 @@
   #waifu-chat { pointer-events: auto; }
 }
 
-/* 减少动效档：钮不抬、关闭钮不放大。**必须留在文件末尾**（同选择器
-   同特异度后写者赢，落在上面那些规则之前会被整个静默压掉）。 */
+/* 减少动效时关闭按钮的位移与缩放。 */
 @media (prefers-reduced-motion: reduce) {
   .chat-send,
   .chat-send:hover,
@@ -1798,8 +1797,12 @@
 .agent-process-line.work[data-work-status="completed"] { color: var(--chat-success, #327a66); }
 .chat-image-review { display: grid; gap: .65rem; min-width: 0; margin-top: .7rem; }
 .chat-image-review figure { margin: 0; min-width: 0; }
-.chat-image-review img { display: block; max-width: 100%; max-height: 280px; margin: auto;
+.chat-image-preview { height: clamp(140px, 28vh, 280px); display: grid; place-items: center;
+  min-width: 0; overflow: hidden; border-radius: 12px;
+  background: color-mix(in srgb, currentColor 5%, transparent); }
+.chat-image-review img { display: block; max-width: 100%; max-height: 100%; margin: auto;
   object-fit: contain; border-radius: 12px; }
+.chat-image-review img[hidden] { display: none; }
 .chat-image-review figcaption { font-size: .85em; opacity: .8; overflow-wrap: anywhere; }
 .chat-image-review-header { display: flex; align-items: center; justify-content: space-between;
   gap: .5rem; }
@@ -1810,4 +1813,4 @@
   overflow: auto; scrollbar-gutter: stable; padding: .6rem; border-radius: 10px;
   background: color-mix(in srgb, currentColor 5%, transparent); }
 .chat-image-references { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .5rem; }
-.chat-image-references img { max-height: 130px; }
+.chat-image-references .chat-image-preview { height: 130px; }

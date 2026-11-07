@@ -2,6 +2,7 @@
 
 import copy
 import json
+import secrets
 from types import SimpleNamespace
 
 from eval.online_transport import OnlineTransport, safe_result
@@ -13,7 +14,7 @@ def material():
               "result_url": "/api/public/image-generation/job/preview?token=result-secret",
               "references": [{"image_id": 11, "name": "原图",
                               "url": "/api/public/image-generation/job/preview?token=ref-secret"}]}
-    popup = {"q": "审阅实际结果", "token": "confirmation-secret", "image_review": review}
+    popup = {"q": "审阅实际结果", "token": secrets.token_urlsafe(24), "image_review": review}
     return {"frames": ["__CONFIRM__:" + json.dumps(popup),
                        "__PENDING__:" + json.dumps({"payload": {"image_review": review}})],
             "http_events": [{"event": "confirmation", "data": popup}],
@@ -26,7 +27,7 @@ def test_artifact_redaction_preserves_noncredential_facts_and_original_evidence(
     safe = safe_result(raw)
     text = json.dumps(safe)
     assert "result-secret" not in text and "ref-secret" not in text
-    assert "confirmation-secret" not in text
+    assert raw["http_events"][0]["data"]["token"] not in text
     assert raw == original and safe_result(safe) == safe
     review = safe["http_events"][0]["data"]["image_review"]
     assert review["hasPreview"] is True and review["references"][0]["hasPreview"] is True

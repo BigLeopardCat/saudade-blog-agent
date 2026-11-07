@@ -1,13 +1,17 @@
 """Structured work updates are bounded presentation, never executable control."""
 
+import asyncio
 import json
+import threading
+import time
 
 import pytest
 from pydantic import ValidationError
 
 from agent.api.events import frame
 from agent.contracts.events import StreamEvent
-from agent.runtime.progress import ProgressEmitter
+from agent.runtime.control import RequestControl
+from agent.runtime.progress import ProgressEmitter, StreamProgress
 
 
 def work(stage="generating", status="running"):
@@ -37,6 +41,22 @@ def test_typed_update_survives_transport_as_progress_not_command():
     assert wire.startswith("event: progress\n")
     assert json.loads(wire.split("data: ", 1)[1]) == value
     assert "event: command" not in wire
+
+
+def test_real_progress_queue_emits_the_typed_payload_and_respects_cancel():
+    async def scenario():
+        queue, stopped = asyncio.Queue(), threading.Event()
+        progress = StreamProgress(asyncio.get_running_loop(), queue,
+                                  RequestControl(stopped, time.monotonic() + 10))
+        assert progress.emitter.emit("实际阶段", key="unused", work=work())
+        event = await asyncio.wait_for(queue.get(), 1)
+        assert event.name == "progress" and event.data["work"] == work()
+        stopped.set()
+        assert not progress.emitter.emit("完成", key="unused", work=work("accepted", "completed"))
+        await asyncio.sleep(0)
+        assert queue.empty()
+
+    asyncio.run(scenario())
 
 
 @pytest.mark.parametrize("change", [
