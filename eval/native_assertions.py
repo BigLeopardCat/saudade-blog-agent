@@ -243,7 +243,11 @@ def _prepared_or_noop(wanted, result, events):
 
 
 def _outcome_failures(gold, result, events):
-    return [
+    limit = gold.get("max_model_calls")
+    attempts = sum(event.get("event") == "llm_start" for event in events)
+    budget = ([f"模型调用超过场景验收上限：{attempts} > {limit}"]
+              if limit is not None and attempts > limit else [])
+    return budget + [
         "缺少匹配的确认操作或同次工具核实的无需改动事实"
         for wanted in gold.get("require_prepared_or_noop", [])
         if not _prepared_or_noop(wanted, result, events)
@@ -357,6 +361,7 @@ def _conversation_failures(gold, result, events, calls):
 
 def check(gold, result):
     keys = {
+        "max_model_calls",
         "require_observations",
         "require_observations_any",
         "require_todo_schedule",

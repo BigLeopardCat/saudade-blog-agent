@@ -72,6 +72,9 @@ def load_suite(path=SUITE):
         if case["identity"] not in {"admin", "user", "zako"}:
             raise ValueError(f"unknown identity in {case['id']}")
         for rnd in golden.iter_rounds(case):
+            maximum = rnd["gold"].get("max_model_calls")
+            if "max_model_calls" in rnd["gold"] and (type(maximum) is not int or maximum < 0):
+                raise ValueError(f"invalid model-call acceptance limit: {case['id']}")
             unknown = set(rnd["gold"]) - (golden.GOLD_ASSERT_KEYS | golden.GOLD_REQUEST_KEYS
                                           | golden.GOLD_COMMENT_KEYS | golden.GOLD_ROUND_KEYS)
             if unknown:

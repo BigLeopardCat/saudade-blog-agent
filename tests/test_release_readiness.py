@@ -224,3 +224,23 @@ def test_known_noncritical_failure_can_use_quality_budget_without_becoming_unkno
     assert quality["combined_checks"]["passed"] == 99
     assert quality["combined_checks"]["total"] == 100
     assert quality["unresolved_semantic"] == 0
+
+
+def test_dispatch_rejections_are_reported_and_cannot_earn_first_action_credit(tmp_path):
+    report, profile, semantic, trace = fixture(tmp_path, count=1)
+    doc = json.loads(trace.read_bytes())
+    doc["events"][-1]["tool_calls"] = ["list_notes"]
+    doc["events"].append({"node": "native", "event": "tool_error",
+                          "name": "list_notes", "reason": "tool_not_loaded"})
+    trace.write_text(json.dumps(doc))
+    source = json.loads(report.read_bytes())
+    case = source["cases"][0]
+    case["first_action"] = {"any_tools": ["list_notes"], "allow_text": False}
+    case["result"]["rounds"][0]["http_timing"]["trace_sha256"] = (
+        hashlib.sha256(trace.read_bytes()).hexdigest())
+    report.write_text(json.dumps(source))
+    write_review(report, semantic)
+    got = assess(report, semantic_path=semantic, profile_path=profile)
+    assert got["tool_process"]["totals"]["inactive_tool_requests"] == 1
+    assert got["tool_process"]["rejected_rounds"][0]["case"] == "0"
+    assert any(row["gate"] == "first_action" for row in got["failures"])

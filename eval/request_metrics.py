@@ -105,7 +105,7 @@ def summary(doc):
             **action_metrics.timings(events), **usage.totals(events)}
 
 
-def _discovery_totals(rows):
+def discovery_totals(rows):
     return {field: sum(row[field] for row in rows) for field in (
         "tool_requests", "discovery_requests", "domains_loaded",
         "inactive_tool_requests", "unknown_tool_requests", "post_discovery_model_calls")}
@@ -147,7 +147,7 @@ def collect(paths):
                        "started_calls": sum(r["started_calls"] for r in rows),
                        "model_phases": latency_metrics.request_phases(rows),
                        **usage.provider_costs(totals),
-                       **_discovery_totals(rows),
+                       **discovery_totals(rows),
                        "errored_calls": sum(r["errored_calls"] for r in rows),
                        "handoff_reasons": dict(Counter(reason for r in rows
                                                         for reason in r["handoff_reasons"])),

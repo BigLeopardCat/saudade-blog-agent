@@ -70,7 +70,8 @@ def append_result(session, request, handler, prompt, round_index, attachments):
                            "discovery_tools": required or list(session.loaders)})
         prompt.append(ToolMessage(content=body, name=name,
                                   tool_call_id=call["id"], status="error"))
-        record("native", "tool_error", name=name, reason=reason, round=round_index)
+        record("native", "tool_error", name=name, call_id=call["id"],
+               reason=reason, round=round_index)
         return None
     session.calls_used += 1
     emit(session.config, f"正在调用工具：{name}", key=f"tool:{call['id']}")

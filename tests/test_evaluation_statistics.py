@@ -74,3 +74,28 @@ def test_calibration_keeps_false_positives_false_negatives_and_unknowns():
     got = summarize(rows)
     assert got["fp"] == got["fn"] == got["unverified"] == 1
     assert got["precision"]["rate"] == got["recall"]["rate"] == 0.5
+
+
+@pytest.mark.parametrize("reason,correct", [
+    ("tool_not_loaded", False), ("unknown_tool", False), ("unavailable", True),
+])
+def test_first_decision_checks_dispatch_admissibility_without_penalizing_service_failures(
+        reason, correct):
+    expected = {"any_tools": ["search_public_activity"], "allow_text": False}
+    events = [
+        {"node": "native", "event": "llm_done", "tool_calls": ["search_public_activity"]},
+        {"node": "native", "event": "tool_error", "reason": reason},
+        {"node": "native", "event": "llm_start"},
+        {"node": "native", "event": "llm_done", "tool_calls": []},
+    ]
+    assert decision_score(events, expected) is correct
+
+
+def test_later_dispatch_failure_does_not_rewrite_an_earlier_valid_decision():
+    events = [
+        {"node": "native", "event": "llm_done", "tool_calls": ["list_notes"]},
+        {"node": "native", "event": "llm_start"},
+        {"node": "native", "event": "llm_done", "tool_calls": ["unknown"]},
+        {"node": "native", "event": "tool_error", "reason": "unknown_tool"},
+    ]
+    assert decision_score(events, {"any_tools": ["list_notes"], "allow_text": False}) is True

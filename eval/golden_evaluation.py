@@ -44,8 +44,7 @@ from eval.golden_runtime import ensure_agent
 from eval.native_assertions import check as check_native
 from eval.native_assertions import command_matches
 
-# uid=0 哨兵的**真值源**（`DENIAL_FAMILY` 第 ⑦ 支由它派生，见那一支的头注）——
-# 不抄字面进判据：哨兵改文案时，判据跟着改，不会静默退化成一条谁也命中不了的死正则。
+# Derive the identity-denial assertion from the current tool boundary receipt.
 from tools.base import _NO_IDENTITY_WRITE  # noqa: E402
 from utils import trace as trace_mod  # trace 工具返回留多长（run_case 里放开，见其注释）
 
@@ -321,17 +320,13 @@ def run_case(case: dict, *, run_id: str = "", suffix: str = "", turn_runner=None
                 f"没有签出确认令牌（第 {rnd['round']} 轮无令牌可发）⇒ 这一轮不发，失败，不降级")
             break
         req = build_request(case, rnd)
-        # 第 2 轮起：合成消息（生产上前端发的是「确认执行：<卡面摘要>」）+ 上一轮的令牌。
-        # Native confirmation consumes the signed grant without a model call.
+        # Approval rounds forward the previous signed grant; narration cannot authorize writes.
         if i > 0 and is_confirm_round:
             req.message = rnd.get("confirm_message") or "确认执行"
             req.confirm_token = prev_token
             # Send the selected approval item together with its signed token.
             req.confirm_pick = rnd.get("confirm_pick") or ""
-        # Ordinary follow-ups keep their own user input and do not inherit a confirmation grant.
-        # 生产形状的历史（`GOLDEN_PROD_HISTORY`）：注入的是**上一轮真的发出去的那两句**
-        # ——确认轮发的是合成命令文本（生产上前端也这么存），所以取 `req.message` 而不是
-        # `rnd["user_input"]`。用例自己写了 `history` 的不覆盖（那是有意的注入）。
+        # Optional host history uses actual sent inputs and final replies; explicit fixtures win.
         if _prod_on and i > 0 and not (rnd["context"] or {}).get("history"):
             req.history = _prod_hist[-PROD_HISTORY_LIMIT:]
             # These entries were produced by this case's fixed actor, not imported legacy data.
@@ -350,8 +345,7 @@ def run_case(case: dict, *, run_id: str = "", suffix: str = "", turn_runner=None
         done.append(res)
         prev_token = (res.get("confirm_tokens") or [""])[0]
         if _prod_on:
-            # Rust 落库的是**这一轮真正发出去的** user 文本与**最终**回复（fallback 之后
-            # 那一条；`res["text"]` 就是它）——照这个攒，下一轮注入的才与生产同形。
+            # Mirror the host transcript, including the input used for an approval round.
             _prod_hist += [HistoryItem(role="user", content=req.message),
                            HistoryItem(role="assistant",
                                        content=res.get("text") or "")]
@@ -370,16 +364,13 @@ def check_case(case: dict, run_result: dict, *, docs=None) -> list[str]:
     rounds = iter_rounds(case)
     got = run_result.get("rounds") or [run_result]
     if len(got) != len(rounds):
-        # 轮数不符有自己的红，但**原因**往往在驱动层（"第 2 轮没发"），一并带出来，
-        # 否则读报告的人只知道"少跑了一轮"。
+        # Preserve driver errors alongside a missing-round failure.
         head = [f"轮数不符：用例声明 {len(rounds)} 轮，实际跑了 {len(got)} 轮"]
         for res in got:
             head += [f"[驱动] {f}" for f in (res.get("fails") or [])]
         return head
     for i, (rnd, res) in enumerate(zip(rounds, got)):
-        # 驱动层失败（`run_case` 自己判出来、写进 `res["fails"]` 的那些，例如"上一轮
-        # 没签出令牌"）：**必须在这里聚合**——报告与退出码只认本函数的返回，驱动报了
-        # 错却不聚合，就是"错报出来了、用例照样绿"。
+        # Driver failures must affect the same verdict as response assertions.
         for f in (res.get("fails") or []):
             fails.append(f"[第 {i + 1} 轮] {f}")
         label = rnd.get("gold", {}).get("round", rnd["round"])
@@ -388,9 +379,7 @@ def check_case(case: dict, run_result: dict, *, docs=None) -> list[str]:
                          "（gold 贴错了行）")
         for f in check_gold(rnd["gold"], res, docs=docs,
                             user_input=rnd.get("user_input") or "",
-                            # 台账那一行：`build_request` 用的是同一个 `expand_now`，
-                            # 所以判据比对的字符串与这一轮真发给模型的**逐字同一份**
-                            # （两处各展开一次、各漂各的，是这一族最容易犯的错）。
+                            # Match the same expanded fixture values used by build_request.
                             pending_src=expand_now((rnd.get("context") or {}).get(
                                 "pending_action") or "")):
             fails.append(f"[第 {i + 1} 轮] {f}")
@@ -883,6 +872,7 @@ def expand_token_list(lst: list) -> list:
 
 # Explicit assertion keys reject misspellings instead of silently skipping checks.
 GOLD_ASSERT_KEYS = frozenset({
+    "max_model_calls",
     "require_observations", "require_observations_any", "require_todo_schedule",
     "require_automation_schedule",
     "require_confirm_specs", "require_confirm_preview", "forbid_runtime_stop",
