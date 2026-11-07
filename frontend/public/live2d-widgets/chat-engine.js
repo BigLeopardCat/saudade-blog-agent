@@ -155,6 +155,15 @@
         body.appendChild(line);
         if (follow) body.scrollTop = body.scrollHeight;
       };
+      const restoreProcessLine = (box, item) => {
+        if (item.work) {
+          window.__waifuWorkProgress.upsert(box, item, line => appendProcessLine(box, line));
+        } else {
+          const line = document.createElement('div');
+          line.className = 'agent-process-line ' + (item.cls || 'step');
+          line.textContent = item.text; appendProcessLine(box, line);
+        }
+      };
       ctx.state = {
         pendingNavUrl: '',
         isSending: false,
@@ -510,10 +519,7 @@
                 h.processBox = makeProcessBox(!getCollapsePref());
                 h.el.insertBefore(h.processBox, h.contentSpan);
               }
-              const line = document.createElement('div');
-              line.className = 'agent-process-line ' + (m.cls || 'step');
-              line.textContent = m.text;
-              appendProcessLine(h.processBox, line);
+              restoreProcessLine(h.processBox, m);
               const cnt = h.processBox.querySelector('.agent-process-count');
               if (cnt) cnt.textContent = '';
             } else if (m.t === 'reset') {
@@ -544,12 +550,8 @@
               // 过程行补全（pull 收养先到时 processBox 未建，此处兜底）
               if (Array.isArray(m.process) && m.process.length && !h.processBox) {
                 h.processBox = makeProcessBox(!getCollapsePref());
-                const body = h.processBox.querySelector('.agent-process-body');
                 m.process.forEach(p => {
-                  const line = document.createElement('div');
-                  line.className = 'agent-process-line ' + (p.cls || 'step');
-                  line.textContent = p.text;
-                  body.appendChild(line);
+                  restoreProcessLine(h.processBox, p);
                 });
                 h.el.insertBefore(h.processBox, h.contentSpan);
               }
@@ -991,13 +993,9 @@
           // 恢复该轮执行过程行（跨整页转跳保留，见保存端 process 字段）
           if (Array.isArray(item.process) && item.process.length) {
             box = makeProcessBox(!getCollapsePref());
-            const body = box.querySelector('.agent-process-body');
             const cnt = box.querySelector('.agent-process-count');
             item.process.forEach(p => {
-              const line = document.createElement('div');
-              line.className = 'agent-process-line ' + (p.cls || 'step');
-              line.textContent = p.text;
-              body.appendChild(line);
+              restoreProcessLine(box, p);
             });
             if (cnt) cnt.textContent = '';
           }

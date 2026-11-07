@@ -731,7 +731,19 @@
               broadcast({t: 'text_reset', roundId});
               return;
             }
-            if (type === 'progress') { addStep('step', data); return; }
+            if (type === 'progress') {
+              if (typeof data === 'string') addStep('step', data);
+              else {
+                window.__waifuWorkProgress.upsert(ensureProcessBox(), data,
+                  line => engine.appendProcessLine(processBox, line));
+                const step = steps.find(item => item.work?.id === data.work.id);
+                if (step) Object.assign(step, {text: data.text, work: data.work});
+                else steps.push({cls: 'work', text: data.text, work: data.work});
+                broadcast({t: 'process', cls: 'work', text: data.text, work: data.work, roundId});
+                scrollToBottom(messages);
+              }
+              return;
+            }
             if (type === 'task_input') {
               steering?.receive(data, roundId);
               if (data.phase === 'paused' && data.task_id === ctx.state.activeRound?.taskId)

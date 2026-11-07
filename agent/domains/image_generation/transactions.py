@@ -6,6 +6,7 @@ from pydantic import BaseModel, ConfigDict, Field, StrictStr
 from typing_extensions import Annotated
 
 from agent import authz
+from agent.domains.image_generation.state import checked, show_progress
 from agent.domains.image_generation.tools import PATH
 from agent.runtime import writes
 from tools import base
@@ -54,17 +55,20 @@ def validate(grant, config):
 def verified(name, args, result):
     if not isinstance(result, dict) or result.get("id") != args["job_id"]:
         return False
+    if result.get("status") == "accepted" and (
+            type(result.get("imageId")) is not int or result["imageId"] <= 0):
+        return False
     if name == "start_image_generation":
         return result.get("requestHash") == args["version"] and result.get("status") in {
             "generating",
             "review",
+            "saving",
             "accepted",
         }
     return (
         result.get("outputHash") == args["version"]
-        and result.get("status") == "accepted"
-        and type(result.get("imageId")) is int
-        and result["imageId"] > 0
+        and (result.get("status") == "saving" or (result.get("status") == "accepted"
+             and type(result.get("imageId")) is int and result["imageId"] > 0))
     )
 
 
@@ -79,13 +83,24 @@ class Operation:
         )
         if isinstance(value, base.ToolResult):
             return value
+        try:
+            job = checked(value, args["job_id"])
+        except ValueError:
+            return base.unavailable("生图操作结果尚未核实，请先查询任务状态，不要重复调用。")
         if not verified(self.name, args, value):
             return base.unavailable("生图操作结果尚未核实，请先查询任务状态，不要重复调用。")
-        text = (
-            "生图任务已开始。完成后可在后台图库的 AI 生图中审阅，确认前不会入库。"
-            if action == "approve"
-            else f"生成结果已存入图库，图片编号 {value['imageId']}。"
-        )
+        show_progress(job, config)
+        if job.status == "accepted":
+            text = f"生成结果已存入图库，图片编号 {job.imageId}。"
+        elif job.status == "saving":
+            text = (f"任务 {job.id} 已批准保存，正在写入图库，尚未核实入库完成。"
+                    "请用 get_image_generation 等待核实 accepted。")
+        elif job.status == "review":
+            text = (f"任务 {job.id} 已生成图片，尚未保留。"
+                    "请展示实际结果，并询问用户是否保留到图库。")
+        else:
+            text = (f"任务 {job.id} 已开始生图，尚未生成结果，也尚未入库。"
+                    "请用 get_image_generation 一次等待核实，再展示结果询问是否保留。")
         return base.ok(
             text,
             meta={

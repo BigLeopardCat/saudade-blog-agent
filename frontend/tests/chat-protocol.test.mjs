@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
+import '../public/live2d-widgets/chat-work.js';
 import '../public/live2d-widgets/chat-protocol.js';
 import '../public/live2d-widgets/chat-core.js';
 import '../public/live2d-widgets/chat-render.js';
@@ -91,5 +92,19 @@ test('rendering and history matching preserve command-looking prose', () => {
     assert.equal(ctx.render.cleanAgentText(text), text);
     assert.equal(ctx.core.matchText(text, text), true);
     assert.equal(ctx.core.matchText(text, 'unrelated'), false);
+  }
+});
+
+
+test('typed work remains progress while malformed states never dispatch controls', () => {
+  const update = {text:'正在生成图片',work:{id:'opaque:__CMD__',stage:'generating',status:'running'}};
+  const seen = [], parser = createStream(event=>seen.push(event));
+  parser.feed(frame('progress',update)+done); parser.finish();
+  assert.deepEqual(seen.map(event=>event.type),['progress','done']);
+  assert.deepEqual(seen[0].data,update);
+  for(const value of [{...update,work:{...update.work,status:'execute'}},
+    {...update,work:{...update.work,id:''}}, {...update,text:'x'.repeat(301)},
+    {...update,work:{...update.work,stage:''}}]) {
+    assert.throws(()=>createStream(()=>{}).feed(frame('progress',value)));
   }
 });

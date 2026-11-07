@@ -33,8 +33,19 @@ class EvaluationError(RuntimeError):
 def safe_result(value):
     """Keep evidence but remove bearer credentials from nested wire objects."""
     if isinstance(value, dict):
-        return {k: safe_result(v) for k, v in value.items()
-                if k not in {"token", "confirm_token", "confirm_tokens"}}
+        result = {k: safe_result(v) for k, v in value.items()
+                  if k not in {"token", "confirm_token", "confirm_tokens"}}
+        review = result.get("image_review")
+        if isinstance(review, dict):
+            if "result_url" in review:
+                preview = review.pop("result_url")
+                review["hasPreview"] = isinstance(preview, str) and bool(preview)
+            references = review.get("references")
+            for reference in references if isinstance(references, list) else []:
+                if isinstance(reference, dict) and "url" in reference:
+                    preview = reference.pop("url")
+                    reference["hasPreview"] = isinstance(preview, str) and bool(preview)
+        return result
     if isinstance(value, list):
         return [safe_result(v) for v in value]
     if isinstance(value, str) and value.startswith(("__CONFIRM__:", "__PENDING__:")):
