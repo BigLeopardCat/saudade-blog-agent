@@ -1,0 +1,7 @@
+{"_id":"long_tail","text":"浏览器断开后工作线程还没退出，并发许可什么时候归还？","category":"long_document","evidence_spans":[{"document_id":"runtime","section_id":"s4","quote":"工作线程实际退出时才归还并发许可"}]}
+{"_id":"duplicate_heading","text":"数据库连接中断后，新连接能继续原来的事务吗？","category":"repeated_heading","evidence_spans":[{"document_id":"runtime","section_id":"s2","quote":"不能在新连接上继续旧事务"}]}
+{"_id":"firmware_layout","text":"ESP32 OTA 的 ota_0、ota_1 和 otadata 分别用来做什么？","category":"specific_fact"}
+{"_id":"firmware_paraphrase","text":"空中升级失败时能退回旧固件吗？","category":"query_variant"}
+{"_id":"image_approval","text":"生成文章封面前需要人工核对哪些提示词和参考图？","category":"approval_evidence"}
+{"_id":"multi_evidence","text":"对比 OTA 双分区和 asyncio 事件循环分别解决的问题。","category":"multi_document","evidence_groups":[["firmware"],["asyncio"]]}
+{"_id":"absent","text":"量子隐形传态的贝尔态测量公式是什么？","category":"unanswerable","answerable":false}
