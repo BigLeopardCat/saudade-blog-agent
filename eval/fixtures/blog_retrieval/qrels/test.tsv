@@ -1,0 +1,12 @@
+query-id	corpus-id	score
+long_tail	runtime	2
+duplicate_heading	runtime	2
+firmware_layout	firmware	2
+firmware_layout	download	0
+firmware_paraphrase	firmware	2
+image_approval	images	2
+image_approval	gallery	0
+multi_evidence	firmware	1
+multi_evidence	asyncio	1
+multi_evidence	download	0
+absent	runtime	0
