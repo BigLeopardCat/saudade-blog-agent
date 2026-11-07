@@ -98,7 +98,7 @@ def snapshot(folder, cases):
                  "native_assertions.py", "request_metrics.py", "latency_metrics.py",
                  "task_metrics.py", "usage.py",
                  "release_readiness.py", "release_profile.json", "statistical_metrics.py",
-                 "action_metrics.py", "dataset_audit.py")
+                 "action_metrics.py", "dataset_audit.py", "command_report.py", "acceptance.py")
     paths = {name: ROOT / "eval" / name for name in names}
     paths["agent/contracts/events.py"] = ROOT / "agent/contracts/events.py"
     for name, path in paths.items():
