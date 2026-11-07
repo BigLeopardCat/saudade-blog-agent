@@ -13,6 +13,7 @@ def proposal(
     choices=None,
     payload=None,
     schedule=None,
+    timing=None,
 ):
     if schedule is not None:
         from agent.scheduling.effects import propose
@@ -55,6 +56,7 @@ def proposal(
                 "workflow": workflow,
                 "exp": expiry,
                 "replay_safe": True,
+                **({"preparation_facts": {"timing": timing}} if timing is not None else {}),
             },
             "pending_action": {
                 **({"payload": payload} if payload is not None else {}),
