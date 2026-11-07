@@ -4,7 +4,7 @@ import json
 
 from langchain_core.messages import HumanMessage, SystemMessage
 
-from agent.adminops_account import role_cn
+from agent.role_labels import role_cn
 from agent.principal import is_verified_identity
 from agent.products.blog.context import conversation_context
 from agent.products.blog.history import tool_access

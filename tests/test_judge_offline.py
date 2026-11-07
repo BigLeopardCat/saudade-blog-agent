@@ -880,72 +880,20 @@ def _judge_reschedule(gold: dict, card_line: str) -> list[str]:
 
 
 def _reschedule_lock() -> int:
-    """验证改排期与清空排期的双向卡片判据，以及能捕获缺陷的负控。"""
-    bad = 0
-    print("\n── 待办改排期的方向锁（20261008）")
+    """A date-setting request must not pass with a date-clearing confirmation."""
     gold = GOLD.get(RESCHEDULE_CASE)
     if gold is None:
-        bad += 1
-        print(f"✗ [{RESCHEDULE_CASE}] 用例不在（改名要一起改这里）")
-    else:
-        from agent import adminops_todo as _todo
-
-        true_line = _todo.render_todo_reschedule_action(RESCHEDULE_TITLE, RESCHEDULE_DAY)
-        false_line = _todo.render_todo_reschedule_action(RESCHEDULE_TITLE, _todo._TODO_CLEAR_WORD)
-        ok = (_todo.todo_due_phrase(RESCHEDULE_DAY) in true_line
-              and _todo._TODO_CLEAR_WORD in false_line
-              and _todo.todo_due_phrase(RESCHEDULE_DAY) not in false_line)
-        bad += 0 if ok else 1
-        print(f"{'✓' if ok else '✗ 不符'} [方向锁] 生产渲染器的两张卡是两个方向"
-              f"（日子那格 = `todo_due_phrase({RESCHEDULE_DAY})` = "
-              f"{_todo.todo_due_phrase(RESCHEDULE_DAY)!r}）\n"
-              f"    真={true_line}\n    假={false_line}")
-
-        tf = _judge_reschedule(gold, true_line)
-        bad += 0 if not tf else 1
-        print(f"{'✓' if not tf else '✗ 不符'} [方向锁] 真卡（改成某个日子）整条零红 {tf}")
-
-        bad += _reschedule_false_green(gold, true_line, false_line)
-    return bad
-
-
-def _reschedule_false_green(gold: dict, true_line: str, false_line: str) -> int:
-    """③ 假绿卡必须红在**正断言**上、④ 判别力取自生产函数、⑤ 红基线。
-
-    三件的口径见 `_reschedule_lock` 的 docstring；两张卡由调用方拼好传进来（都是
-    生产渲染器 `adminops.render_todo_reschedule_action` 的产物）。返回不符项数。
-    """
-    from agent import adminops_todo as _todo  # 只为一句话里的清空词常量（与上面同一个来源）
-
-    bad = 0
-    ff = _judge_reschedule(gold, false_line)
-    pos_hit = [f for f in ff if f.startswith("文本缺少任一关键词") and "排期改成" in f]
-    neg_hit = [f for f in ff if f.startswith("文本不应命中正则")]
-    ok = bool(pos_hit) and not neg_hit
-    bad += 0 if ok else 1
-    print(f"{'✓' if ok else '✗ 不符'} [方向锁] 假绿卡（改成清空词）红在**正断言**上："
-          f"正断言未命中={bool(pos_hit)} / 负断言命中={bool(neg_hit)}"
-          f"（后者必须 False——弹窗组的负正则 20261015 整族撤除，加回来本节就红）\n"
-          f"    红名单 {ff}")
-
-    pos_rx = gold.get("text_any_regex") or []
-    hit_true = any(re.search(rx, true_line) for rx in pos_rx)
-    hit_false = any(re.search(rx, false_line) for rx in pos_rx)
-    ok = bool(pos_rx) and hit_true and not hit_false
-    bad += 0 if ok else 1
-    print(f"{'✓' if ok else '✗ 不符'} [方向锁] 判别力取自生产函数：正断言命中真卡={hit_true}"
-          f" / 不命中清空卡={not hit_false}（两行都由 `render_todo_reschedule_action` 拼、"
-          f"清空词取 {_todo._TODO_CLEAR_WORD!r} ⇒ 渲染器/契约换词这里当场红）")
-
-    anchor = "的排期改成"
-    old_rx = pos_rx[0][:pos_rx[0].find(anchor) + len(anchor)] if pos_rx and anchor in pos_rx[0] else ""
-    ok = (bool(old_rx) and bool(re.search(old_rx, false_line))
-          and not any(re.search(rx, false_line) for rx in pos_rx))
-    bad += 0 if ok else 1
-    print(f"{'✓' if ok else '✗ 不符'} [方向锁] 红基线：旧版正断言 {old_rx!r} 在清空卡上"
-          f"命中={bool(old_rx) and bool(re.search(old_rx, false_line))}（= 20261008 的假绿），"
-          f"现版不命中 ⇒ 这一格的红是「长出日期那一格」换来的")
-    return bad
+        return 1
+    true_line = f"把待办「{RESCHEDULE_TITLE}」的排期改成12月15日"
+    false_line = f"把待办「{RESCHEDULE_TITLE}」的排期改成未排期"
+    positives = gold.get("text_any_regex") or []
+    checks = (
+        not _judge_reschedule(gold, true_line),
+        bool(_judge_reschedule(gold, false_line)),
+        bool(positives) and any(re.search(rx, true_line) for rx in positives),
+        not any(re.search(rx, false_line) for rx in positives),
+    )
+    return sum(not passed for passed in checks)
 
 
 def main() -> int:

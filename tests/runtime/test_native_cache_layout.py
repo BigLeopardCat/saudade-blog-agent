@@ -10,7 +10,7 @@ from langchain_core.tools import tool
 from langchain_core.utils.function_calling import convert_to_openai_tool
 from langgraph.checkpoint.memory import InMemorySaver
 
-from agent.adminops_account import role_cn
+from agent.role_labels import role_cn
 from agent.principal import SOURCE_ASSERTION, Principal
 from agent.products.blog.application import BlogApplication
 from agent.products.blog.prompt import build_prompt

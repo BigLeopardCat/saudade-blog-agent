@@ -5,7 +5,7 @@ import json
 import pytest
 from langchain_core.messages import HumanMessage
 
-from agent.adminops_account import role_cn
+from agent.role_labels import role_cn
 from agent.authz import scopes_for
 from agent.principal import SOURCE_ASSERTION, SOURCE_BODY, Principal
 from agent.products.blog.context import conversation_context

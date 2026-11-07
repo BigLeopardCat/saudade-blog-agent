@@ -6,7 +6,7 @@ result metadata; the host handles final layout and column width. Neither rendere
 interprets user intent or authorizes execution."""
 import re
 
-from agent import adminops_tags as _tags  # 标签颜色/状态的既有中文词表（写工具问句共用）
+from agent import article_labels as _tags
 
 # 分期报表的粒度词（周报/月报/年报）：**唯一一份**在 `agent/reports.py`（帧头与
 # 动作行必须同一套字），这里只取用、不另抄。
@@ -512,9 +512,7 @@ def _arm_text(name: str, a: dict, m: dict, preview: bool):
         if not acct:
             return verb
         change = _m(m, "change")
-        # 期限住在 `change` 里（`adminops.account_mute_change_phrase` 拼的
-        # 「已禁言（至 2026-10-04 12:00）」），所以两个方向共用同一条尾巴：
-        # 解禁方向那半句是「已解除禁言 / 本来就没有被禁言，本次未发生变更」。
+        # Preserve the verified duration and no-op state supplied by the write receipt.
         return f"{verb}「{acct}」：{change}" if change else f"{verb}「{acct}」"
     if name == "set_account_role":
         role_cn = _m(m, "after") or _leaf(a.get("role"))

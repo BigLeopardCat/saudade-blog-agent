@@ -11,7 +11,7 @@ from agent import authz
 from agent.principal import SOURCE_ASSERTION, SOURCE_BODY, Principal
 from agent.products.blog.application import BlogApplication
 from agent.products.blog.capabilities import ToolCatalog
-from agent.products.blog.read_tools import ADMIN_READ_TOOLS, MODERATION_READ_TOOLS, admin_tools
+from agent.products.blog.read_tools import ADMIN_READ_TOOLS, admin_tools
 from agent.products.blog.tool_policy import BlogToolMiddleware
 from agent.runtime.checkpoint_conversations import CheckpointConversationStore
 from agent.runtime.service import AgentRuntime
@@ -81,7 +81,8 @@ def test_admin_menu_visibility_follows_verified_authority(role, source, uid, vis
     assert ("admin_catalog" in domains) is visible
     assert ("admin_account_actions" in domains) is visible
     if visible:
-        assert set(domains["admin_moderation"]) == MODERATION_READ_TOOLS
+        assert set(domains["admin_moderation"]) == {
+            "get_moderation_status", "list_admin_board", "list_admin_comments"}
         assert set(domains["admin_reports"]) == ADMIN_READ_TOOLS
         assert set(domains["admin_account_actions"]) == {"list_accounts"}
 

@@ -1,6 +1,6 @@
 """Blog domain discovery descriptions and frequently used UI actions."""
 
-from agent.adminops_account import role_cn
+from agent.role_labels import role_cn
 from agent.domains.account_actions.targets import Role
 from agent.domains.notices.targets import DEFAULT_TITLE
 

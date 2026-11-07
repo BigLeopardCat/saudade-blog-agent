@@ -7,7 +7,7 @@ from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import tool
 from pydantic import Field, StrictBool, StrictInt
 
-from agent.adminops_account import role_cn
+from agent.role_labels import role_cn
 from agent.domains.account_actions import targets
 from agent.domains.admin_writes import available
 from agent.proposals import proposal

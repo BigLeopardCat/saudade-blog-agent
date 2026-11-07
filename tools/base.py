@@ -199,16 +199,12 @@ def _own_read_post(path: str, payload: dict, config: RunnableConfig):
 
 # Administrator report and moderation-list exports.
 from tools.admin_read import (  # noqa: E402,F401
-    get_moderation_status,
     get_note_periods,
     get_note_stats,
     get_server_status,
     get_service_health,
     get_user_stats,
-    list_admin_board,
-    # Article comments and guestbook messages use separate endpoints and ID namespaces.
-    list_admin_comments,
-)
+    )
 
 # Authenticated writes must distinguish HTTP success from the API business result.
 # An uncertain result returns unavailable and cannot become a success receipt.
@@ -293,22 +289,8 @@ def _own_delete(path: str, config: RunnableConfig):
     return _own_request("DELETE", path, None, config)
 
 
-
-
-
-
-
-
 # Known target refusals are a cross-language contract; unknown failures remain unavailable.
 _NOTICE_TARGET_REFUSALS = ("用户不存在", "该账号不能接收通知")
-
-
-
-
-# Tag helpers and administration tools.
-from tools.tag_admin import (  # noqa: E402,F401
-    _tag_index,
-)
 
 
 # Article ID parsing is shared by article and current-user tools.
@@ -322,57 +304,10 @@ def _as_article_id(value) -> int | None:
     return int(s) if s.isdigit() and int(s) > 0 else None
 
 
-# Article target helpers and administration tools.
-from tools.note_admin import (  # noqa: E402,F401
-    list_admin_notes,
-)
-
-
-def _near_miss_names(want: str, cands, limit: int = 3):
-    """Return approximate names for disambiguation, never authorization.
-
-    Candidates contain the whitespace-normalized query or vice versa, with at
-    least three characters on either side. Sort by containment, length difference
-    and ID. Write selection still requires an exact, unique match."""
-    w = re.sub(r"\s+", "", str(want or ""))
-    if len(w) < 3:
-        return []
-    out = []
-    for cid, name in cands:
-        n = re.sub(r"\s+", "", str(name or ""))
-        if len(n) < 3:
-            continue
-        if w in n or n in w:
-            out.append((0 if w in n else 1, abs(len(n) - len(w)), cid, name))
-    out.sort(key=lambda x: (x[0], x[1], x[2]))
-    return [(cid, name) for _, _, cid, name in out[:limit]]
-
-
-# Account target helpers and administration tools.
 from agent.domains.own_reads import get_inbox_overview  # noqa: E402,F401
-from tools.account_admin import (  # noqa: E402,F401
-    _reachable_uids,
-    _user_directory,
-    list_accounts,
-)
-
-# Announcement target helpers and administration tools.
-# Guestbook moderation helpers and tools.
 from tools.board_moderation import (  # noqa: E402,F401
     BOARD_APPROVED_CN,
     BOARD_STATUS_FILTERS,
-)
-
-# Category helpers and administration tools.
-from tools.category_admin import (  # noqa: E402,F401
-    _category_index,
-)
-
-# Article comment moderation uses distinct targets and receipts from guestbook moderation.
-# Dashboard mutations update one row; never replace the entire user-maintained list.
-from tools.dashboard_todos import (  # noqa: E402,F401
-    _todo_rows,
-    list_dashboard_todos,
 )
 
 # Public tools import only after API_BASE and _own_get have been defined.
@@ -416,11 +351,6 @@ from tools.own_data import (  # noqa: E402,F401
     remove_favorite,
 )
 
-# Quota request helpers and administration tools.
-from tools.quota_admin import (  # noqa: E402,F401
-    list_quota_requests,
-)
-
 # Registry
 # ---------------------------------------------------------------------------
 
@@ -445,57 +375,19 @@ _TOOL_REGISTRY = [
     toggle_dark_mode,
     list_devices,
     device_oled_display,
-    # 管理助手报表：scope = admin.console，见本节头注
     get_server_status,
     get_service_health,
-    get_moderation_status,
     get_user_stats,
-    # 文章流量报表：同 admin.console（读的是后台统计面）
     get_note_stats,
-    # 文章**分期**报表：同 admin.console，读的是 `.../stats/notes/periods`
-    # ——后台数据统计页「周报/月报/年报」那个页签的同一个端点
     get_note_periods,
-    # 后台**留言名册**：同 admin.console，读的是 `GET /api/protect/board`
-    # （逐条含发表账号）——与公开的 list_guestbook 是两套视图，别混用
-    list_admin_board,
-    # 后台**评论名册**：同 admin.console，读的是 `GET /api/protect/comments`。
-    # 与上面那条并列而不是同一件事（两张表、两个后台页签），见 admin_read 的头注。
-    list_admin_comments,
-    # 管理助手后台写：list_admin_notes=admin.console，
-    # 写工具=write.console，见"管理助手写工具"节头注
-    list_admin_notes,
-    # 标签改/删 + 分类增删改：同样是 write.console，
-    # 目标是**名字**（模型 写名字，工具确定性解析成 id，见 _find_named_tag）
-    # 站内公告代发/改/删：同样是 write.console，目标=公告标题
-    # 河灯留言的人工复核：同样是 write.console，目标=正文片段
-    # （留言没有名字/标题，见 _find_board_comment）
-    # Article-comment IDs are distinct from guestbook IDs.
-    # 用户自己的数据：scope = read.own（三档角色都有），见本节头注
     list_my_favorites,
     get_inbox_overview,
     list_notifications,
-    # 我自己的河灯：也是 read.own。与上面三条同族——"我自己那一份"
-    # 在公开池里读不出来（公开池恒 Approved=1，且 `mine` 那一格结构上恒假）。
     list_my_board,
-    # 用户自己的数据·写那一半：scope = write.own，写前先读、写后再读，
-    # 见"写那一半"节头注
     add_favorite,
     remove_favorite,
-    # 站内信（私信）：读信箱=read.own，标记已读=write.own，
-    # 见"站内信"节头注（术语：站内信 ≠ 河灯留言）
     list_my_messages,
-    # Dashboard reads and single-row mutations.
-    list_dashboard_todos,
-    # Account directory and actor-scoped administration tools.
-    list_accounts,
-    # Freeze and unfreeze preserve separate operation directions.
-    # Account role policy is enforced by the backend.
-    # Muting blocks publication; freezing blocks login. Their receipts must stay distinct.
-    # Notices are irreversible outbound content and require review of the full body.
-    # Quota approval, rejection and direct reset have distinct effects and receipts.
-    list_quota_requests,
 ]
-
 def get_all_tools():
     """Return the list of all registered tools."""
     return _TOOL_REGISTRY

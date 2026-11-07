@@ -7,6 +7,7 @@ from typing import Annotated, Literal
 from langchain_core.runnables.config import RunnableConfig
 from langchain_core.tools import tool
 
+from agent import article_labels as _tags
 from tools import base as _base
 from tools.base import _own_get
 from tools.result import (
@@ -68,7 +69,6 @@ def _public_tag_index():
     two = _get("/tagtwo")
     if isinstance(one, ToolResult) or isinstance(two, ToolResult):
         return None
-    from agent import adminops_tags as _tags  # 局部导入：tools → agent 的反向依赖
     return _tags.build_tag_index(one, two)
 
 
@@ -82,7 +82,6 @@ def _slim_note_rows(rows):
         return None
     if not any("noteKey" in r for r in rows):
         return None
-    from agent import adminops_tags as _tags  # 局部导入：同上
     index = None
     if any(r.get("noteTags") for r in rows):
         index = _base._public_tag_index()
@@ -139,7 +138,6 @@ def _note_row_with_tag_names(row):
     an ID label rather than asserting that the tag does not exist."""
     if not isinstance(row, dict) or not isinstance(row.get("noteTags"), str):
         return row
-    from agent import adminops_tags as _tags  # 局部导入：tools → agent 的反向依赖
     index = _base._public_tag_index() if row.get("noteTags") else None
     out = dict(row)
     out["tags"] = _tags.render_tag_list(row["noteTags"], index)
@@ -316,8 +314,6 @@ def list_tags() -> str | ToolResult:
         return one
     if isinstance(two, ToolResult):
         return two
-    # 局部导入：agent.graph → tools 的反向依赖会构成循环导入（同 _tag_index）
-    from agent import adminops_tags as _tags
     return _shape(_tags.merge_tag_rows(one, two))
 
 # Announcements.

@@ -113,8 +113,8 @@ _X = 1
     FILES = scoped_files()
     REL = [str(p.relative_to(ROOT)) for p in FILES]
     check("工具模块扫描不是空转", bool(FILES), f"{len(FILES)} 个")
-    check("  工具注册、标签管理和结果模块均在检查范围内",
-          all(n in REL for n in ("tools/notes.py", "tools/tag_admin.py", "tools/result.py")),
+    check("  工具注册、HTTP传输和结果模块均在检查范围内",
+          all(n in REL for n in ("tools/notes.py", "tools/http_channel.py", "tools/result.py")),
           f"{len(REL)} 个")
     print("\n③ 逐个文件：`__all__` 集合 == 机械集合")
     bad: list[str] = []
