@@ -15,34 +15,28 @@ from datetime import datetime, timedelta
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from config.settings import settings  # noqa: E402
 from utils.trace_files import iter_trace_files, parse_trace_name  # noqa: E402
-from utils.trace_io import load_trace  # noqa: E402  （读取的唯一实现，含 gz）
+from utils.trace_io import load_trace  # noqa: E402
 
 TRACE_DIR = settings.trace_dir
 
-# R1 用户侧：质疑/纠错信号（单独的「？」「？？？」是 9/8 现场的原始形态；
-# 「老是」等抱怨词收进——「你老是读什么 git」需要触发）
+# R1: challenge or correction signals in user text, for human review only.
 USER_CHALLENGE = re.compile(
     r"[?？]|不对|不是|错了|错啦|搞错|串台|重来|再读|没读|无语|怎么回事|什么情况|老是")
-# 认错/道歉词族（R1 与 R2 共用）
+# Shared admission signals for R1 and R2.
 AGENT_ADMIT = re.compile(
     r"抱歉|对不起|不好意思|搞错|串台|又错|错了|我错|失误|没有真正|没能|漏了|看错|读错")
-# R2 强自我否定（正常礼貌用「抱歉」不触发，需明确的认错措辞）
+# R2 requires explicit self-correction rather than a polite apology alone.
 AGENT_SELF_DENY = re.compile(r"串台|又错|我(搞|弄|看|读)错|弄错|读错|看错|搞混|认错")
 
-GAP = timedelta(minutes=10)  # R3 拉锯链的最大间隔
+GAP = timedelta(minutes=10)  # Maximum gap within an R3 conversation chain.
 
-# R4 的拒绝来源族（与 `agent/graph.py` 里 `write_target_unresolved` 落 `values=` 那一处
-# 的判据同源）：`quote`/`value`/`todo_text`/`grounding` 四支拒的都是"这个值没有出处"。
-# `ledger_id` / `policy` 两支拒的是"台账上没有这一行 / 规则不许"——它们与"值有没有出处"
-# 无关，把它们的值拿来原话里找必然找不到，是假阳性流水线，故**不收**。
+# R4 reads archived value-provenance refusals. Policy and missing-ledger refusals
+# cannot be evaluated by matching a rejected value against the user request.
 REFUSAL_SOURCES = ("quote", "value", "todo_text", "grounding")
 
-# R5 用的：**现行**五条快道写进 trace 的 `kind`。这不是"词表"——它是本系统自己写的
-# **事件名**（属"系统数据"，与 wire 前缀同类；判据层那四类里不含中文语义表）。
-# ⚠️ 加第六条快道时这里不改也**不会静默漏**：R5 把窗口里出现过的 kind **全部**列出来，
-# 不在这一组里的单独标「不在现行五条里」——所以漏的是"归类"，不是"看不见"。
+# R5 recognizes these archived event kinds and reports other observed kinds separately.
 FASTPATH_KINDS = ("nav", "referent_nav", "display", "article_read", "effect_switch")
-_MAX_LIST = 40   # R5 逐条清单的上限（命中本来就少，这是防它哪天变成流水账）
+_MAX_LIST = 40
 
 
 def _squash(s: str) -> str:
@@ -58,12 +52,12 @@ def brief(s: str, n: int = 70) -> str:
 
 
 def _chain_suspicious(chain: list, hits_stamps: set) -> bool:
-    """R3 分级：链内任一条用户消息含质疑信号，或该链已被 R1/R2 命中 → 聚焦展示。"""
+    """Focus chains containing a challenge or a prior R1/R2 hit."""
     return any(USER_CHALLENGE.search(x["msg"]) or x["stamp"] in hits_stamps for x in chain)
 
 
 def _rule_hits(records: list) -> list:
-    """R1 / R2：逐条判定 → `[{stamp, uid, msg, reply, rule, level}]`。"""
+    """Collect challenge-plus-admission and explicit self-correction candidates."""
     hits = []
     for r in records:
         rules = []
@@ -78,11 +72,7 @@ def _rule_hits(records: list) -> list:
 
 
 def _r3_chains(records: list, hits_stamps: set):
-    """R3：同一用户按时间切链（间隔 >10 分钟断开），段内 ≥3 条 = 一次拉锯 → `(聚焦, 噪声)`。
-
-    分级：链内含质疑信号或已被 R1/R2 命中的 → 聚焦明细（真实事故的形态指纹）；
-    纯高频（正常连续聊天也常见）→ 只计数摘要，避免噪声淹没信号。
-    """
+    """Group at least three requests per user within GAP; frequency alone is not a defect."""
     focus, noise = [], []
     by_uid = defaultdict(list)
     for r in records:
@@ -138,11 +128,11 @@ def _refusal_hits(doc: dict, stamp: str, uid: int, msg: str):
 
 def _print_refusals(r4: list, seen: int, readable: int, legacy: int) -> None:
     """Print refusal candidates with the rejected value and corresponding user request."""
-    print(f"R4 出处闸：窗口内拒绝 {seen} 次，其中**读得到被拒字面**的 {readable} 次"
-          + (f"（另 {legacy} 次走旧 trace 的 `reason` 引号降级读）" if legacy else "")
+    print(f"R4 归档出处检查：窗口内拒绝 {seen} 次，其中读到被拒值 {readable} 次"
+          + (f"（另 {legacy} 次从归档 `reason` 引号提取）" if legacy else "")
           + f"，候选误拒 {len(r4)} 条")
     for x in r4:
-        tag = "（旧trace·读reason）" if x["legacy"] else ""
+        tag = "（归档·读reason）" if x["legacy"] else ""
         print(f"[MED ] {x['stamp']} u{x['uid']}   R4{tag} tool={x['tool']}"
               f" source={x['source']}  命中 {x['found']}/{x['values']}")
         print(f"   主人: {brief(x['msg'])}\n")
@@ -166,7 +156,7 @@ def _fastpath_rows(doc: dict, stamp: str, uid: int, conv: int, msg: str) -> list
         elif key == ("gate", "fallback"):
             fallback = True
         elif key == ("planner", "context"):
-            dial = ev.get("fastpath")          # 缺键 = 本档上线前的存量（**不是**"开"）
+            dial = ev.get("fastpath")  # Missing configuration remains unknown.
     for h in hits:
         h["llm_done"] = llm_done
         h["fallback"] = fallback
@@ -192,20 +182,17 @@ def _reply_kind_rows(doc: dict, stamp: str, uid: int, msg: str) -> list[dict]:
 def _print_reply_kind(rows: list, scanned: int) -> None:
     """Display archived short-reply interpretations for human review without deciding intent."""
     if not rows:
-        print("R6 短应答申报：窗口内无 `planner.reply_kind` 事件"
-              "（⚠️ 这条 20261015 才上线 ⇒ 窗口跨上线日时，前段没有是正常的）\n")
+        print("R6 归档短应答：窗口内无 `planner.reply_kind` 事件\n")
         return
     by_kind: dict = {}
     for r in rows:
         by_kind[r["kind"]] = by_kind.get(r["kind"], 0) + 1
     over = [r for r in rows if r["kind"] == "auth" and not r["target"]]
     n_nonshort = sum(1 for r in rows if r["short"] is False)
-    print(f"R6 短应答申报：窗口内 {scanned} 轮里模型申报了 {len(rows)} 次"
+    print(f"R6 归档短应答：窗口内 {scanned} 轮里模型申报了 {len(rows)} 次"
           f"（{', '.join(f'{k}×{v}' for k, v in sorted(by_kind.items(), key=lambda kv: -kv[1]))}）")
-    print(f"   其中**过度授权候选**（申报 auth 而本轮无台账目标）：{len(over)} 次"
-          "  ← 只列不判：主人当场交权 + 确实没有等着办的事，零写收尾本就是对的那条路")
-    print(f"   另有 {n_nonshort} 次申报发生在**非短消息**上（提示块写的是「当前消息不是"
-          "短应答」⇒ 按纪律不该填；填了说明模型没照块读，值一看）")
+    print(f"   auth 申报且无目标的待复核记录：{len(over)} 次（不自动判定授权错误）")
+    print(f"   另有 {n_nonshort} 次申报标记为非短消息")
     for r in over[:_MAX_LIST]:
         print(f"   过度授权候选 {r['stamp']} u{r['uid']} round={r['round']}  "
               f"主人: {brief(r['msg'], 40)}")
@@ -215,11 +202,10 @@ def _print_reply_kind(rows: list, scanned: int) -> None:
 
 
 def _next_turn_challenged(row: dict, seq: dict) -> bool:
-    """命中那一轮的**下一条**（同一用户同一会话）里，主人有没有质疑/纠错信号。
+    """Check the next request for the same user and conversation.
 
-    复用 R1 的 `USER_CHALLENGE`（同一个词表、同一个含义，不再抄第二份）。口径上的
-    两处诚实：① 排序靠 trace 文件名里的时间戳（同一秒的先后靠文件名，可能反）；
-    ② 会话 id 缺失（旧 trace）时归到 0 —— 那一段的"下一轮"只能同用户粗配。
+    File timestamps cannot order requests within a second reliably. Archived
+    records without a conversation ID share the caller's zero-ID bucket.
     """
     chain = seq.get((row["uid"], row["conv"])) or []
     for i, (stamp, _msg) in enumerate(chain):
@@ -231,31 +217,28 @@ def _next_turn_challenged(row: dict, seq: dict) -> bool:
 def _print_fastpath(rows: list, dials: dict, scanned: int, seq: dict) -> None:
     """Display archived fastpath metrics; the current runtime has no fastpath switch."""
     if not rows:
-        print("R5 快道定价：窗口内无 `planner.fastpath` 命中（⚠️ 这不等于五条都没用——"
-              "先把 `planner.context` 的档位格数一遍再看）\n")
+        print("R5 归档快道：窗口内无 `planner.fastpath` 事件\n")
         return
     by_kind: dict = {}
     for r in rows:
         by_kind.setdefault(r["kind"], []).append(r)
     _n = {"on": dials.get("on", 0), "off": dials.get("off", 0), "none": dials.get(None, 0)}
-    print(f"R5 快道定价：窗口内真实对话 {scanned} 轮，快道命中 {len(rows)} 次"
+    print(f"R5 归档快道：窗口内对话 {scanned} 轮，快道命中 {len(rows)} 次"
           f"（{len(by_kind)} 种 kind）")
-    print(f"   档位格：开 {_n['on']} / 关 {_n['off']} / **没有这一格** {_n['none']}"
-          "（没有 = 本档上线前的存量 trace，不是'开'）")
+    print(f"   归档开关：开 {_n['on']} / 关 {_n['off']} / 未记录 {_n['none']}")
     for kind, rs in sorted(by_kind.items(), key=lambda kv: -len(kv[1])):
-        extra = "" if kind in FASTPATH_KINDS else "  ← **不在现行五条里**（已删的快道 or 新加的？）"
+        extra = "" if kind in FASTPATH_KINDS else "  ← 不在归档已知类型中"
         n_fb = sum(1 for r in rs if r["fallback"])
         n_ch = sum(1 for r in rs if _next_turn_challenged(r, seq))
-        n_extra = sum(1 for r in rs if r["llm_done"] > 1)      # 比下限 1 多花的那几次
+        n_extra = sum(1 for r in rs if r["llm_done"] > 1)
         tools = sorted({len(r["tools"]) for r in rs})
         print(f"   kind={kind:18s} 命中 {len(rs):3d} 次 | 本轮工具数 {tools} | "
-              f"命中后另有后续意图（planner 调用 >1 次）{n_extra} 次 | "
+              f"planner 调用 >1 次的记录 {n_extra} 次 | "
               f"gate 打回 {n_fb} 次 | 下一轮主人质疑 {n_ch} 次{extra}")
-    print(f"   —— 未在现行五条里的 kind 已在上表标出；现行五条里**窗口内一次都没命中**的："
+    print("   归档已知类型中未命中的类型："
           f"{[k for k in FASTPATH_KINDS if k not in by_kind] or '无'}")
-    # 逐条摊开**必须**有：命中是"这条快道替主人做了这件事"，而"该不该替"是语义判断，
-    # 机器在这一层判不了（判得了的只有上面那几个结构数）。R4 同一体例。
-    print(f"   （命中逐条列出，供人工看'这次命中该不该'；共 {len(rows)} 条"
+    # These records support human review, not an automatic semantic verdict.
+    print(f"   （供人工复核的命中记录；共 {len(rows)} 条"
           + (f"，只列前 {_MAX_LIST}" if len(rows) > _MAX_LIST else "") + "）")
     for r in rows[:_MAX_LIST]:
         print(f"     {r['stamp']} u{r['uid']:<4d} [{r['kind']}] "
@@ -290,7 +273,7 @@ def main():
         if not stamp or not (since <= stamp <= until):
             continue
         uid = int(uid_s)
-        if uid == 0:  # golden 评测产出（golden_evaluation 内部链路同样落 trace）
+        if uid == 0:  # Reserved evaluation identity in archived traces.
             golden_skipped += 1
             continue
         d = load_trace(f)
@@ -306,7 +289,7 @@ def main():
         r6.extend(_reply_kind_rows(d, stamp, uid, msg))
         for ev in (d.get("events") or []):
             if (ev.get("node"), ev.get("event")) == ("planner", "context"):
-                dials[ev.get("fastpath")] += 1     # 缺键 ⇒ 计到 None 那一档（存量）
+                dials[ev.get("fastpath")] += 1  # Missing fields stay in the unknown bucket.
         _cands, _seen, _read, _legacy = _refusal_hits(d, stamp, uid, msg)
         r4.extend(_cands)
         r4_seen += _seen
@@ -320,7 +303,6 @@ def main():
     hits_stamps = {h["stamp"] for h in hits}
     r3_focus, r3_noise = _r3_chains(records, hits_stamps)   # R3
 
-    # ── 输出 ──
     print(f"== trace 语义告警巡检 [{since} → {until}] ==")
     print(f"窗口内真实对话 {scanned} 条（另排除 golden 评测产出 {golden_skipped} 条）\n")
 
@@ -344,7 +326,7 @@ def main():
             print(f"   u{uid} {t0[:8]} {t0[9:13]}–{t1[9:13]} 共 {len(chain)} 条")
         print()
 
-    # 会话线索：按 用户-日 聚合，给人工复审一个入口清单
+    # Group review clues by user and day.
     clues = defaultdict(lambda: defaultdict(int))
     for h in hits:
         clues[(h["uid"], h["stamp"][:8])][h["rule"]] += 1
