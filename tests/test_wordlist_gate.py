@@ -232,14 +232,14 @@ def render(i: int) -> str:
     print("\n⑦ 真数据反控：动真登记表 ⇒ 当场红")
     _d3 = pathlib.Path(tempfile.mkdtemp(prefix="wlreal_"))
     _real = json.loads(REGISTRY.read_text(encoding="utf-8"))
-    _open_ids = [e["id"] for e in _real["entries"] if e["category"] == "open"]
-    check("⑦a 真登记表里有 open 条目可撤", bool(_open_ids), f"{len(_open_ids)} 条")
-    _dropped = {**_real, "entries": [e for e in _real["entries"] if e["id"] != _open_ids[0]]}
+    _registered_ids = [e["id"] for e in _real["entries"]]
+    check("⑦a 真登记表里有条目可做缺失和增长反控", len(_registered_ids) >= 2, f"{len(_registered_ids)} 条")
+    _dropped = {**_real, "entries": [e for e in _real["entries"] if e["id"] != _registered_ids[0]]}
     _rc, _out = run(_g, ROOT, write_reg(_d3, _dropped, "_drop.json"))
-    check("⑦b 撤掉一条 open ⇒ 退 1 且点名同一符号",
-          _rc == 1 and f"未登记：{_open_ids[0]}" in _out, f"rc={_rc}")
+    check("⑦b 撤掉一条登记 ⇒ 退 1 且点名同一符号",
+          _rc == 1 and f"未登记：{_registered_ids[0]}" in _out, f"rc={_rc}")
     _shrunk = {**_real, "entries": [
-        ({**e, "size": e["size"] - 1} if e["id"] == _open_ids[1] else e)
+        ({**e, "size": e["size"] - 1} if e["id"] == _registered_ids[1] else e)
         for e in _real["entries"]]}
     _rc, _out = run(_g, ROOT, write_reg(_d3, _shrunk, "_shrink.json"))
     check("⑦c 把某条 size 减一（＝表长大了）⇒ 退 1 且点「只许变小」",
