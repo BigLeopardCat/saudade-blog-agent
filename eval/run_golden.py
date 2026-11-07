@@ -1,13 +1,13 @@
 # -*- coding: utf-8 -*-
-"""Shared golden request builders, multi-round driver and historical judgments.
+"""Shared golden request builders, multi-round driver and declared assertions.
 
 The runner checks corpus provenance, uses the service producer, and validates
 replies, commands, confirmations and receipts against declared JSONL assertions.
 It requires backend access and model credentials; offline pytest tests its
 contracts with fixtures. Production writes require explicit opt-in.
-The production HTTP baseline is ``python -m eval.online_baseline``. The legacy
-CLI and basic.jsonl remain available for archived comparisons; their planner-era
-premises are not a calibrated native baseline.
+The production HTTP baseline is ``python -m eval.online_baseline``. This CLI
+is a diagnostic driver: failed first attempts remain failures. Release decisions
+use ``python -m eval.release_readiness`` with the frozen profile and semantic evidence.
 """
 import argparse
 import asyncio
@@ -29,11 +29,25 @@ import golden_fixture
 import golden_thread
 import golden_trace  # 同目录（eval/ 在 sys.path 上，同 corpus_check 的用法）
 import identity_preflight
-import landing_gate
 import report_archive  # 同目录：留档文件名（秒级 ts 同秒撞车 → 见模块头注）
-from landing_gate import (  # noqa: F401 —— 再导出（唯一实现在 landing_gate）
-    fallback_resets,
-    wilson_ci,
+from corpus_provenance import (  # noqa: E402,F401 —— 再导出（唯一实现在 corpus_provenance）
+    CORPUS_PROV_FOREIGN,
+    CORPUS_PROV_OK,
+    CORPUS_PROV_UNKNOWN,
+    CORPUS_PROVENANCE_FILE,
+    ENTITY_KINDS,
+    ENTITY_WHY_MIN,
+    check_corpus_premises,
+    check_entity_premises,
+    entity_report_lines,
+    load_corpus_provenance,
+    provenance_path_for,
+)
+from corpus_provenance import (
+    report_lines as corpus_report_lines,
+)
+from corpus_provenance import (
+    snapshot_docs as corpus_snapshot_docs,
 )
 from langchain_core.messages import ToolMessage
 
@@ -53,6 +67,7 @@ from eval import command_report, golden_runtime
 from eval.golden_runtime import close_agent, ensure_agent
 from eval.native_assertions import check as check_native
 from eval.native_assertions import command_matches
+from eval.statistical_metrics import wilson_ci
 
 # uid=0 哨兵的**真值源**（`DENIAL_FAMILY` 第 ⑦ 支由它派生，见那一支的头注）——
 # 不抄字面进判据：哨兵改文案时，判据跟着改，不会静默退化成一条谁也命中不了的死正则。
@@ -175,7 +190,7 @@ def build_request(case: dict, rnd: dict | None = None) -> ChatRequest:
     ctx = rnd["context"]
     return ChatRequest(
         message=rnd["user_input"],
-        image=case.get("image", []),  # 多模态：dataURL 数组（image_color_red 等用例；服务端兼容单串）
+        image=case.get("image", []),
         current_url=ctx.get("current_url", "/"),
         page_title=ctx.get("page_title", ""),
         user_id=ctx.get("user_id", 0),
@@ -202,6 +217,25 @@ def build_principal(case: dict) -> "Principal":
     ctx = case.get("context", {})
     return Principal(uid=ctx.get("user_id", 0), role=ctx.get("role"),
                      source="golden")
+
+
+def fallback_resets(result: dict) -> list[str]:
+    """Read terminal reply withdrawals separately from internal recovery events."""
+    scopes = result.get("reset_scopes")
+    if scopes is None:
+        return [str(reason) for reason in result.get("resets_reasons", ())] or [""] * int(
+            result.get("resets") or 0)
+    reasons = result.get("fallback_reasons")
+    return list(reasons) if reasons is not None else [""] * scopes.count("text")
+
+
+def diagnostic_exit_code(results, *, unverified=False):
+    """Diagnostic retries never turn failed first attempts into successful checks."""
+    if unverified:
+        return 3
+    if not results:
+        return 2
+    return int(any(not case["ok"] or case.get("error") for case in results))
 
 
 def parse_reset(text: str) -> tuple[str, str]:
@@ -1117,30 +1151,6 @@ def check_trace_premises(cases: list) -> tuple:
     return kept, skipped, rows
 
 
-# Validate named entities against the source catalog before attributing a model failure.
-
-
-# Verify corpus provenance against the declaration actually used by this case.
-from corpus_provenance import (  # noqa: E402,F401 —— 再导出（唯一实现在 corpus_provenance）
-    CORPUS_PROV_FOREIGN,
-    CORPUS_PROV_OK,
-    CORPUS_PROV_UNKNOWN,
-    CORPUS_PROVENANCE_FILE,
-    ENTITY_KINDS,
-    ENTITY_WHY_MIN,
-    check_corpus_premises,
-    check_entity_premises,
-    entity_report_lines,
-    load_corpus_provenance,
-    provenance_path_for,
-)
-from corpus_provenance import (
-    report_lines as corpus_report_lines,
-)
-from corpus_provenance import (
-    snapshot_docs as corpus_snapshot_docs,
-)
-
 # Explicit assertion keys reject misspellings instead of silently skipping checks.
 GOLD_ASSERT_KEYS = frozenset({
     "require_observations", "require_observations_any", "require_todo_schedule",
@@ -1675,22 +1685,18 @@ def is_full_run(*, only: str, limit: int, skip_ids_arg: str, skipped_ids: list,
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--limit", type=int, default=0, help="只跑前 N 条（调试）")
-    ap.add_argument("--only", default="", help="只跑指定 id（逗号分隔可多选；诊断链路时按'用例形状'挑几条）")
+    ap.add_argument("--only", default="", help="仅运行指定 id，多个 id 以逗号分隔")
     ap.add_argument("--skip-ids", default="",
                     help="跳过指定 id（逗号分隔；用于环境不可达的用例，如 CI 无 device-service）")
-    ap.add_argument("--min-pass-rate", type=float, default=None,
-                    help="**显式覆盖**成点估计口径（老语义）。不传 ⇒ 走两层门禁：硬层 0 红 +"
-                         "采样层 Wilson 95%% 下界 ≥ 档位（档位/目标见 eval/landing_gate.py）。"
-                         "点估计口径只给小样本调试跑与 A/B 用（n 太小时 Wilson 判不了），"
-                         "它管的是**本轮跑了的用例**的比率，不是全语料（跳过会改分母，见报告"
-                         " full_run）；回归组任何时候都另按硬判 100%%。四层语义见文件头 docstring。")
+    ap.add_argument("--rerun-failures", action="store_true",
+                    help="诊断复跑失败的回归用例，不改变首跑判定和退出码")
     ap.add_argument("--no-trace", action="store_true",
                     help="不落 golden trace（默认落 logs/agent/golden_traces/<run>/；"
                          "显式关掉只用于省盘/极速冒烟）")
     ap.add_argument("--keep-traces", type=int, default=golden_trace.KEEP_DEFAULT,
                     help=f"保留最近 N 次 golden run 的 trace 目录（默认 "
                          f"{golden_trace.KEEP_DEFAULT}；0=不清理。**有失败的 run 一律不清理**"
-                         f"——判红那次的 planner 决策只在它里面）")
+                         f"——失败任务的原始证据只在其中）")
     ap.add_argument("--trace-run-id", default="",
                     help="指定 trace run_id（进程隔离跑法由父进程给，让所有子进程落同一目录）")
     ap.add_argument("--golden", default=GOLDEN_FILE,
@@ -1961,9 +1967,9 @@ def main():
     _case_by_id = {c["id"]: c for c in cases}
     _rerun_ids = [r["id"] for r in results
                   if not r["ok"] and "regression" in (r.get("tags") or [])
-                  and r["id"] in _case_by_id]
+                  and r["id"] in _case_by_id and args.rerun_failures]
     if _rerun_ids:
-        print(f"\n[rerun] 回归组首跑红 {len(_rerun_ids)} 条，各重跑一次再判：{_rerun_ids}")
+        print(f"\n[rerun] 回归组首跑红 {len(_rerun_ids)} 条，各复跑一次仅作诊断：{_rerun_ids}")
     for r in results:
         if r["id"] not in _rerun_ids:
             r["rerun"] = None
@@ -1982,20 +1988,15 @@ def main():
             "reset_scopes": _rr["reset_scopes"], "text": _rr["text"],
             "trace": _rr.get("trace"),
         }
-        r["final_ok"] = r["ok"] or _rok
+        r["final_ok"] = r["ok"]
         print(f"[rerun] {r['id']}: 首跑红 → "
-              + ("复跑绿（按方差放行，首跑红仍在报告里）" if _rok else "复跑仍红（真 FAIL）"))
+              + ("复跑通过（仍按首跑失败统计）" if _rok else "复跑仍失败"))
         if _rok:
             print(f"          └ 首跑失败项：{r['fails'] or ('error: ' + str(r['error']))}")
             print(f"          └ 首跑 trace: {r.get('trace')}")
             print(f"          └ 复跑 trace: {_rr.get('trace')}")
-    # 判据以**复跑后的终判**为准（门禁/通过率/复审单都用它）；首跑红数单独留着，
-    # 这样"这一夜有多少红斑被复跑吸收掉"在报告里看得见（不许静默宽恕）。
-    failed_first = sum(1 for r in results if not r["ok"])
-    failed = sum(1 for r in results if not r.get("final_ok", r["ok"]))
-    if failed != failed_first:
-        print(f"[rerun] 终判 {len(cases) - failed}/{len(cases)}（首跑红 {failed_first} 条，"
-              f"其中 {failed_first - failed} 条复跑绿）")
+    # Retain both attempts; only the first attempt contributes to task quality.
+    failed_first = failed = sum(not result["ok"] for result in results)
 
     # Write both the latest report and uniquely named run archives.
     os.makedirs("eval/report", exist_ok=True)
@@ -2040,14 +2041,10 @@ def main():
     }
     # Report fixed-regression failures separately from sampled capability cases.
     _reg = [r for r in results if "regression" in (r.get("tags") or [])]
-    # 硬判用**复跑后的终判**；首跑红复跑绿的那批单独成 flaked_ids（放行但必须有人看，
-    # 见上面重跑一节）。列表里同时留着首跑红数（failed_first_run）供对账。
-    _reg_bad = [r["id"] for r in _reg if not r.get("final_ok", r["ok"])]
-    _reg_flaked = [r["id"] for r in _reg if not r["ok"] and r.get("final_ok")]
+    _reg_bad = [r["id"] for r in _reg if not r["ok"]]
+    _reg_flaked = [r["id"] for r in _reg if not r["ok"] and (r.get("rerun") or {}).get("ok")]
     # 被 --skip-ids/--only 摘掉的回归用例：组内分母随之变小，如实报出来（不许静默豁免）
     _reg_skipped = [s for s in skip_ids if "regression" in _ALL_TAGS.get(s, [])]
-    # Delegate archived-run threshold calculation to landing_gate.
-    _landing = landing_gate.verdict(results, _reg_bad)
     # 第一条真正落盘的 trace（用例顺序 = 跑的顺序，取第一条即为目录的实证）：
     # 没开 trace、或全程一条都没写成功 ⇒ None（报告里如实写 None，不假装有目录）。
     _first_trace = next((r.get("trace") for r in results if r.get("trace")), None)
@@ -2105,7 +2102,7 @@ def main():
         "regression": {
             "total": len(_reg),
             "passed": len(_reg) - len(_reg_bad),
-            # Report fixed-regression uncertainty without replacing its strict per-case requirements.
+            # Confidence intervals do not replace per-case requirements.
             "pass_rate_ci95": wilson_ci(len(_reg) - len(_reg_bad), len(_reg)),
             "failed_ids": _reg_bad,
             "all_passed": not _reg_bad,
@@ -2113,8 +2110,6 @@ def main():
             "flaked_ids": _reg_flaked,
             "skipped_ids": _reg_skipped,
         },
-        # Report the archived threshold assessment separately from detailed case output.
-        "landing": _landing,
         # Record the actual evaluation trace directory, or None when no traces were written.
         "trace_run": run_id if _first_trace else None,
         "trace_dir": os.path.dirname(_first_trace) if _first_trace else None,
@@ -2137,14 +2132,12 @@ def main():
         with open(review_path, "w", encoding="utf-8") as f:
             f.write(f"# golden FAIL 复审单 {report['ts']}\n\n")
             f.write(f"{failed}/{len(cases)} 条 FAIL"
-                    + (f"（首跑红 {failed_first} 条，另 {len(_reg_flaked)} 条复跑绿后放行）"
+                    + (f"（首跑失败 {failed_first} 条，另 {len(_reg_flaked)} 条复跑通过）"
                        if failed != failed_first else "")
                     + "。逐条判定并勾选（假失败当轮修判据，"
                       "真 FAIL 允许挂着并在下方写原因）：\n\n")
-            # Place the threshold assessment before the detailed review section.
-            f.write(f"> **落地判定**：{landing_gate.describe(_landing)}\n"
-                    f"> 慢性红榜（按贡献的红次数排的优化工单）："
-                    f"`.venv/bin/python eval/landing_gate.py --red-rank`\n\n")
+            f.write("> 本报告记录诊断结果，不表示发布达标；发布判定使用 "
+                    "`python -m eval.release_readiness`。\n\n")
             # Show identity prerequisite failures before their downstream consequences.
             if _precondition_bad:
                 f.write("> ⚠ **身份前置不可用，{n} 条真身份用例本轮未评估（退出码 3）**："
@@ -2193,30 +2186,22 @@ def main():
                           "不受任何档位放宽；假失败当轮修判据，真 FAIL 当轮修行为。\n\n")
             # Keep first-fail/rerun-pass cases visible for investigation.
             if _reg_flaked:
-                f.write("> ⚠ **复跑才绿的回归用例（首跑红、复跑绿，已按方差放行）**："
+                f.write("> ⚠ **复跑通过的回归用例（首跑失败仍计为失败）**："
                         + "、".join(f"`{i}`" for i in _reg_flaked)
                         + "\n> 一条用例两次结论不同，只有两种解释：判据太脆（该修判据），"
                           "或行为本身是概率性的（该修行为）。参照下方首跑失败项与两份 trace"
                           "（首跑 / 复跑）逐条定性——不要把这一节当成「已经过了」。\n\n")
-            # Report recurring per-case failures from full-run history.
-            _chronic = landing_gate.chronic_map()
             for r in results:
                 if r["ok"] and not r.get("rerun"):
                     continue
                 case = case_by_id.get(r["id"], {})
                 f.write(f"## {r['id']}\n\n")
-                _k_n = _chronic.get(r["id"])
-                f.write("- 历史（全量跑的终判口径）："
-                        + (f"**红 {_k_n[0]}/{_k_n[1]} 次 = {_k_n[0] / _k_n[1]:.0%}**"
-                           "（慢性红 ⇒ 先怀疑判据或行为，别当偶发）" if _k_n
-                           else "**从未红过**（首次 ⇒ 更可能是这一轮的新变化）")
-                        + "；完整红榜 `.venv/bin/python eval/landing_gate.py --red-rank`\n")
                 f.write(f"- 失败项：{r['fails'] or ('error: ' + str(r['error']))}\n")
                 f.write(f"- 打回：{r['resets']}（原因 {r['resets_reasons'] or '无'}）\n")
                 f.write(f"- 首跑 trace: {r.get('trace')}\n")
                 if r.get("rerun"):
                     rr = r["rerun"]
-                    f.write(f"- **复跑：{'绿（按方差放行）' if rr['ok'] else '仍红'}**"
+                    f.write(f"- **复跑：{'通过（不覆盖首跑）' if rr['ok'] else '仍失败'}**"
                             f"（{rr['elapsed']}s，打回 {rr['resets']}，"
                             f"失败项 {rr['fails'] or '无'}）\n")
                     f.write(f"- 复跑 trace: {rr.get('trace')}\n")
@@ -2237,17 +2222,18 @@ def main():
           f"P95={report['latency_s']['p95']}s max={report['latency_s']['max']}s")
     print(f"效率基线: resets 总={eff['resets_total']} 用例={eff['cases_with_resets']}"
           f"（{eff['cases_with_resets_ids']}）")
-    print(f"首轮即调: 工具类 {eff['tool_required_first_try_ok']}/{eff['tool_required_total']}"
-          f" = {eff['tool_required_first_try_pct']}%（resets==0 即首轮调用成功）")
+    print(f"无内部重置的工具用例: {eff['tool_required_first_try_ok']}/{eff['tool_required_total']}"
+          f" = {eff['tool_required_first_try_pct']}%（诊断代理指标，不代表首轮决策正确）")
     # Report model rounds and repeated retrieval as efficiency evidence.
     print(f"效率基线: 工具调用 {efficiency['tool_calls_total']}"
           f"（均 {efficiency['tool_calls_avg']}/例）规划轮 {efficiency['tool_rounds_total']}"
-          f" 多轮绕圈例 {efficiency['cases_multi_tool_rounds']}{efficiency['cases_multi_tool_rounds_ids']}"
+          f" 多轮例 {efficiency['cases_multi_tool_rounds']}"
+          f" {efficiency['cases_multi_tool_rounds_ids']}"
           f" 重复检索例 {efficiency['cases_repeat_search']}{efficiency['cases_repeat_search_ids']}")
     # Keep fixed regressions separate from variable capability samples.
     print(f"回归组: {len(_reg) - len(_reg_bad)}/{len(_reg)}"
           + (f"  ⚠ 红：{_reg_bad}（回归组要求 100%，不受任何档位放宽）" if _reg_bad else "")
-          + (f"  ⚠ 复跑才绿：{_reg_flaked}（首跑红，已按方差放行——逐条见复审单）"
+          + (f"  ⚠ 复跑才绿：{_reg_flaked}（首跑失败仍计入失败，逐条见复审单）"
              if _reg_flaked else "")
           + (f"  ⚠ 被跳过：{_reg_skipped}（组内分母随之变小）" if _reg_skipped else ""))
     if _is_full_run:
@@ -2271,15 +2257,7 @@ def main():
     _lo, _hi = report["pass_rate_ci95"]
     print(f"通过率: {pass_rate:.3f}（Wilson 95% 区间 {_lo:.3f}–{_hi:.3f}；"
           f"跳过 {len(skip_ids)} 条）")
-    print(f"落地判定: {landing_gate.describe(_landing)}")
-    # Read full-run history for repeated-target evidence.
-    if _is_full_run:
-        _hint = landing_gate.raise_hint()
-        if _hint["ready"]:
-            print(f"  ★ {_hint['reason']}（改 `eval/landing_gate.py` 的 ENTRY）")
-    if args.min_pass_rate is not None:
-        print(f"  ⚠ 显式传了 --min-pass-rate {args.min_pass_rate:.3f} ⇒ 本轮按**点估计**口径判"
-              f"（两层门禁本轮不生效；夜间的门禁不传它）")
+    print("发布判定另行运行 python -m eval.release_readiness，本报告只记录任务结果。")
     # Suppress tiny tag groups in console output, while retaining their report data.
     _weak = [(t, b) for t, b in report["by_tag"].items()
              if b["total"] >= 3 and b["failed_ids"]]
@@ -2288,108 +2266,12 @@ def main():
             f"{t} {b['passed']}/{b['total']}（区间 {b['ci95'][0]:.2f}–{b['ci95'][1]:.2f}）"
             f" 红={b['failed_ids']}" for t, b in _weak))
     if _reg_flaked:
-        # 放行了但绝不静默：这一族是"判据太脆或行为概率性"的候选，出声才有人看
-        print(f"⚠ 回归组有 {len(_reg_flaked)} 条**首跑红、复跑绿**：{_reg_flaked}"
-              f" —— 门禁按方差放行，但首跑红已记入报告（failed_first_run={failed_first}）"
-              f"与复审单：{review_path or REPORT_FILE}")
-    # Unavailable identity prerequisites take precedence over sample-rate judgments.
-    if _precondition_bad or _premise_bad or _nopopup_bad or _trace_bad or _entity_bad:
-        # A 401 does not distinguish missing accounts, frozen accounts and revoked credentials.
-        if _precondition_bad:
-            print(f"⚠ 身份前置不可用（{len(_identity_skipped)} 未评估）⇒ 退出码 3："
-                  "账号已被删 ⇒ 跑 scripts/migration/test_accounts_restore_20261001.sql 重建；"
-                  "被冻结 ⇒ 解冻；改过密码 ⇒ 轮换口令；uid 角色不符 ⇒ 换一个角色相符的 uid。"
-                  "修好后重跑，别把它读成通过率")
-        if _premise_bad:
-            print(f"⚠ 事实前提已变（{len(_premise_skipped)} 未评估）⇒ 退出码 3："
-                  f"{_premise_skipped} —— 这**不是**模型退化，是这些用例的前提没了。"
-                  "逐条见报告 `premise_checks` 与复审单；修法二选一："
-                  "① 前提真没了 ⇒ 把判据从'拿不到'改成供给侧断言；"
-                  "② 只是清单没跟上 ⇒ 改用例的 premise_absent.suppliers")
-        if _nopopup_bad:
-            print(f"⚠ 禁卡的理由变了（{len(_nopopup_skipped)} 未评估）⇒ 退出码 3："
-                  f"{_nopopup_skipped} —— 这些用例断言'这一轮没有确认卡'，而**卡之所以不该"
-                  "出现的那条理由现在不成立了**（20261001 那次就是这条：设计把审核族"
-                  "改成恒弹卡，判据还写着'不许弹'，红色的 2.5 小时里判的是判据自己）。"
-                  "逐条见报告 `no_popup_checks`；修法二选一：① 理由真没了 ⇒ 这条用例改判"
-                  "（如'不该弹卡'改成'必须弹卡 + 卡面印了什么'）；② 只是声明没跟上 ⇒ 改"
-                  " `premise_no_popup`")
-        if _trace_bad:
-            print(f"⚠ trace 关着（{len(_trace_skipped)} 未评估）⇒ 退出码 3："
-                  f"{_trace_skipped} —— 这些用例的判据要读 planner.ledger_frame **trace "
-                  "事件**，而这一轮 `--no-trace` / `GOLDEN_NO_TRACE=1` 把它关了 ⇒ 那几条"
-                  "一条都判不了。**这不是模型退化**（20261004 早上 4 次 `--only` 重跑就是"
-                  "这么被误判成'待办台账没摆上桌'的）。去掉那个开关重跑即可")
-        if _entity_bad:
-            print(f"⚠ 判据点名的实体已不在公开面上（{len(_entity_skipped)} 未评估）"
-                  f"⇒ 退出码 3：{_entity_skipped} —— 这些用例的判据锚在某篇文章上，而那篇"
-                  "**已经不在公开面上了**（改成 private / 删了 / 改了名）。**这不是模型"
-                  "退化**：模型如实说'站内没有它'，判据却把它读成'没去读'——判的是判据自己。"
-                  "逐条见报告 `entity_checks`；修法二选一：① 换锚到一件还在的实体（连带把"
-                  "词表式负断言换成形态锁）；② 这条用例测的事真的没了 ⇒ 退役它（分母变了"
-                  "要写在明处）")
-        sys.exit(3)
-    if failed == 0:
-        sys.exit(0)
-    if _reg_bad:
-        print(f"回归组 FAIL（{len(_reg) - len(_reg_bad)}/{len(_reg)}）：{_reg_bad}"
-              f" → 退出码 1（回归组要求 100%，不按通过率放行）")
-        sys.exit(1)
-    # Explicit point-estimate thresholds and Wilson thresholds are different assessment modes.
-    _s = _landing["sampled"]
-    if args.min_pass_rate is not None:
-        if pass_rate >= args.min_pass_rate:
-            print(f"⚠ {failed} 条 FAIL，但点估计达标（{pass_rate:.3f} ≥ "
-                  f"{args.min_pass_rate:.3f}，显式口径）→ 退出码 0"
-                  f"（逐条见 {review_path or REPORT_FILE}）")
-            sys.exit(0)
-        print(f"通过率 {pass_rate:.3f} < 门禁 {args.min_pass_rate:.3f}"
-              f"（显式点估计口径）→ 退出码 1")
-        sys.exit(1)
-    if _s["underpowered"]:
-        print(f"⚠ 采样层样本不足（{_s['passed']}/{_s['total']}，判 {_s['entry']} 至少要 "
-              f"{_s['min_n_for_entry']} 条）⇒ 采样层不判、不置红（点估计 {_s['point']:.3f} "
-              f"够得上地板 ⇒ 够不上「小样本整片红」那条：`point < floor` 时是退出码 1）；"
-              f"{failed} 条红逐条见 {review_path or REPORT_FILE}")
-        sys.exit(0)
-    # Report user-visible terminal fallbacks separately from internal recovery activity.
-    _h = _landing["harm"]
-    if _h["state"] == "incident":
-        print(f"用户可见兜底 {_h['hit']}/{_h['rounds']} 轮（{_h['rate']:.1%} ≥ 事故线 "
-              f"{_h['floor']:.0%}）：用户收到的是那句兜底道歉 ⇒ 退出码 1（这是事故，不是"
-              f"爬坡没到档）；用例 {_h['ids'][:5]}，逐条见 {review_path or REPORT_FILE}")
-        sys.exit(1)
-    if _s["state"] == "collapse":
-        # 措辞分两种：样本量够时看**下界**（比已知最差的一夜还差 = 事故）；样本太少时
-        # 下界本身没有证明力，判红的依据是**点估计**都低于地板（整片红）。两者都是
-        # 退出码 1，但说错依据会把人带去查错地方——小样本塌方要么是这批用例全废、
-        # 要么是接线断了，跟"离目标还差多少"无关。
-        _why = ("红率已高过正常波动一整档（实测噪声带最差 15 红/11.7%）⇒ 这是事故，"
-                "不是爬坡没到档"
-                if _s.get("collapse_basis") == "lower" else
-                f"样本只有 {_s['total']} 条，**点估计** {_s['point']:.3f} 已低于地板"
-                f" ⇒ 小样本也整片红，不是样本量的问题")
-        print(f"采样层低于**地板** {_s['floor']}（{_s['passed']}/{_s['total']}，"
-              f"点估计 {_s['point']:.3f}，下界 {_s['lower']:.3f} 上界 {_s['upper']:.3f}）"
-              f"→ 退出码 1：{_why}（档位 {_s['entry']} / 目标 {_s['target']}）；"
-              f"逐条见 {review_path or REPORT_FILE}")
-        sys.exit(1)
-    # 到这里：采样层**没有事故**（下界在地板之上）。没到档位只报不置红——档位是爬坡台阶，
-    # 拿它当夜间报警会把"离目标还差多少"变成"出事了"，红就贬值了（见 landing_gate）。
-    print(f"⚠ {failed} 条 FAIL，但采样层下界 {_s['lower']:.3f} ≥ 地板 {_s['floor']}"
-          f"（{_s['state']}，档位 {_s['entry']} / 目标 {_s['target']}，"
-          f"还差 {_landing['distance_to_target']:.3f}）→ 退出码 0"
-          f"（逐条见 {review_path or REPORT_FILE}；红榜："
-          f".venv/bin/python eval/landing_gate.py --red-rank）")
-    # 企业落地的另两条：**只报不置红**（面判据要跨夜聚合才有证明力，判决在 readiness）。
-    print(f"  · 用户可见兜底（scope=text）{_h['hit']}/{_h['rounds']} 轮 = {_h['rate']:.2%}"
-          f"（黄 ≥{_h['hint']:.0%}、红 ≥{_h['floor']:.0%}）")
-    _dw = _landing["domains"]["weakest"]
-    if _dw:
-        print("  · 本轮最弱的技能面：" + "、".join(
-            f"{r['tag']} {r['passed']}/{r['rounds']}=%.2f" % r["point"] for r in _dw[:3])
-            + "（单夜小面没有证明力；面判据见 `.venv/bin/python eval/landing_gate.py --readiness`）")
-    sys.exit(0)
+        print(f"诊断复跑通过 {_reg_flaked}；首跑失败继续计入本轮失败。")
+    unverified = (_precondition_bad or _premise_bad or _nopopup_bad or _trace_bad or _entity_bad)
+    if unverified:
+        print("部分身份、语料、实体或 trace 前提未满足；缺失证据不计为通过，退出码 3。")
+        sys.exit(diagnostic_exit_code(results, unverified=True))
+    sys.exit(diagnostic_exit_code(results))
 
 
 if __name__ == "__main__":

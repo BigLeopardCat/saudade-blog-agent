@@ -5,7 +5,7 @@ import glob
 import json
 import sys
 
-from eval.landing_gate import wilson_ci
+from eval.statistical_metrics import wilson_ci
 
 
 def load_report(path: str) -> dict | None:

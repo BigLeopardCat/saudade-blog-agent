@@ -29,7 +29,7 @@ from eval.source_files import python_sources  # noqa: E402
 BASELINE = ROOT / "eval" / "mypy_baseline.json"
 
 # Type checking covers production packages; evaluation and developer tools use other gates.
-TARGETS = ["agent", "config", "models", "rag", "tools", "utils", "server.py"]
+TARGETS = ["agent", "config", "models", "rag", "tools", "utils"]
 
 _ERR_RE = re.compile(r"^(?P<file>[^:\n]+):\d+(?::\d+)?: error: ")
 _SUM_RE = re.compile(r"^Found (?P<n>\d+) errors? in (?P<files>\d+) files? "

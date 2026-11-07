@@ -18,7 +18,7 @@ BASELINE = ROOT / "eval" / "judge_registry.json"
 
 # 查什么：**运行时的判据面**。`tests/`、`eval/` 不进这道闸的前两层——它们是判据的**判据**，
 # 自己就充满中文断言。`eval/` 侧那一份由下面 ③ 那一段（`scan_eval`）单独管，**量不合并**。
-TARGETS = ["agent", "tools", "server.py"]
+TARGETS = ["agent", "tools"]
 
 CJK = re.compile(r"[一-鿿]")
 # 收集器包裹函数：`frozenset({...})` / `tuple([...])` 与裸字面量是同一个形状。

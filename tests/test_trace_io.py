@@ -189,8 +189,7 @@ def main() -> int:
                            + list((ROOT / "tools").rglob("*.py"))
                            + list((ROOT / "utils").rglob("*.py"))
                            + list((ROOT / "eval").rglob("*.py"))
-                           + list((ROOT / "tests").rglob("*.py"))
-                           + [ROOT / "server.py"])
+                           + list((ROOT / "tests").rglob("*.py")))
                     if p.name != "trace.py" and "events_of" in p.read_text(encoding="utf-8")]
         _prod = [c for c in _callers
                  if not (c.startswith("eval" + os.sep) or c.startswith("tests" + os.sep))]

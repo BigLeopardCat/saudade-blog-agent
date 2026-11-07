@@ -27,6 +27,7 @@ BASE = ""
 
 WRITE_TOOLS = {"create_tag", "set_article_status", "set_article_tags"}
 ADMIN_TOOLS = WRITE_TOOLS | {"list_admin_notes"}
+_EXPECTED_QUOTA_VERBS = {"approve": "批准", "reject": "驳回", "reset": "重置"}
 
 # Detect completion claims without an observed write.
 _CLAIM_RE = re.compile(
@@ -1367,9 +1368,7 @@ def step17_auth_review(rep: Report, uid: int, role: str, allow_publish: bool = F
     quota_stage = None
     print("\n⑰ 授权式短应答 → 台账按 id 进帧 → 弹卡 → 点确定"
           "（--allow-write + --allow-board-audit）")
-    # `_QUOTA_VERB` 是**卡面动词的同一份实现**（工具名 → approve/reject/reset → 中文动词），
     # 所以额度族的断言读它、不另写一张"工具名 → 中文"的表（两张表必然漂移）。
-    from agent.adminops_quota import _QUOTA_VERB
     from agent.adminops_tags import BOARD_VERDICT_CN
     pending = _pending_rows(uid, role)
     if not pending:
@@ -1472,10 +1471,8 @@ def step17_auth_review(rep: Report, uid: int, role: str, allow_publish: bool = F
                                  f"——主人看不见自己在签什么：{q!r}")
 
         # ── 额度族（同一张卡的另一半）：目标 uid 必须在**待处理申请队列**里 ──────
-        # 动词从工具名派生（`approve_quota_request` → `approve` → `_QUOTA_VERB` 那张表，
-        # 与卡面用的是同一份实现），不在这里另写一张"工具名→中文动词"的表。
         quota_rows = [(int((s.get("args") or {}).get("user_id") or 0),
-                       _QUOTA_VERB.get(str(s.get("tool") or "").split("_")[0], ""))
+                       _EXPECTED_QUOTA_VERBS.get(str(s.get("tool") or "").split("_")[0], ""))
                       for s in quota_specs]
         if quota_rows:
             try:
@@ -1840,7 +1837,6 @@ def step18_ledger_zero_write(rep: Report, uid: int, role: str) -> None:
 
     Contextual authorization is not signed approval. With no selected mutation,
     check the probe's pending-item follow-up against its source data."""
-    from agent.adminops_quota import _QUOTA_VERB
     from agent.adminops_tags import BOARD_VERDICT_CN
     from agent.authz import is_write
     print("\n⑱ 台账那条腿的零写半（授权 ≠ 签字；模型不动作时不许静默）")
@@ -1963,7 +1959,7 @@ def step18_ledger_zero_write(rep: Report, uid: int, role: str) -> None:
             # 额度那一半（同一张卡）：卡面要印出 uid 与动作（动词与卡面同源）
             for s in quota_specs:
                 u = int((s.get("args") or {}).get("user_id") or 0)
-                verb = _QUOTA_VERB.get(str(s.get("tool") or "").split("_")[0], "")
+                verb = _EXPECTED_QUOTA_VERBS.get(str(s.get("tool") or "").split("_")[0], "")
                 okq = f"账号 id={u}" in q and bool(verb) and verb in q
                 print(f"  [{'PASS' if okq else 'FAIL'}] ⑱ 卡面印全了额度那一件"
                       f"（'账号 id={u}' 与动作「{verb}」）")

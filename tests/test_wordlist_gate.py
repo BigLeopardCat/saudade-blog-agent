@@ -33,7 +33,7 @@ FAILED: list[str] = []
 check = collector(FAILED)
 
 
-_DEFAULT_TARGETS = ["agent", "tools", "server.py"]
+_DEFAULT_TARGETS = ["agent", "tools"]
 
 
 def load_gate(tag: str = "wordlist_gate"):
