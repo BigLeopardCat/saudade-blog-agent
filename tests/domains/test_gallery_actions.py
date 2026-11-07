@@ -275,7 +275,9 @@ def test_cover_keeps_its_separate_article_and_image_version_contract(
     assert len(requests) == 3
 
 
-@pytest.mark.parametrize("case_id", ["gallery_bulk_move_prepare", "gallery_bulk_favorite_prepare"])
+@pytest.mark.parametrize("case_id", [
+    "gallery_bulk_move_prepare", "gallery_bulk_favorite_prepare", "gallery_bulk_metadata_prepare",
+])
 def test_current_golden_requires_the_exact_batch_and_rejects_a_narrowed_card(backend, case_id):
     from eval import native_assertions, online_baseline
 
@@ -294,6 +296,10 @@ def test_current_golden_requires_the_exact_batch_and_rejects_a_narrowed_card(bac
     _, grant = approve(expected["args"]["intent"])
     assert native_assertions.contains(grant["specs"][0], expected)
     narrowed = copy.deepcopy(grant)
-    narrowed["specs"][0]["args"]["intent"]["imageIds"] = [72]
+    intent = narrowed["specs"][0]["args"]["intent"]
+    if intent["action"] == "metadata":
+        intent["items"] = intent["items"][:1]
+    else:
+        intent["imageIds"] = [72]
     assert not native_assertions.contains(narrowed["specs"][0], expected)
     assert backend["effects"] == 0
