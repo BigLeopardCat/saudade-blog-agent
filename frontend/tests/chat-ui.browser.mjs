@@ -659,7 +659,8 @@ try {
   passed('own, expired and other-conversation leases preserve full initialization; an active peer lease stays protected');
   await assertBootstrapRecovery({browser,origin,requests,completedNavigations});
   await assertImageReview({page,origin});
-  await assertWorkRecovery({page,send,reset,idle,setMode:mode=>{nextMode=mode;}});
+  await assertWorkRecovery({browser,origin,setMode:mode=>{nextMode=mode;},
+    resetState:()=>{steeringHistory=[];inputTasks.clear();pendingConfirmation=null;}});
   passed('production boot initializes one stream controller after the engine is ready and restores an interrupted reply');
   await reset();
   const input = page.locator('#chat-input');

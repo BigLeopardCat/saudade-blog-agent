@@ -44,47 +44,47 @@ export async function assertImageReview({page, origin}) {
   await page.locator('#image-review-fixture').evaluate(node=>node.remove());
 }
 
-export async function assertWorkRecovery({page, send, reset, idle, setMode}) {
-  for(const reload of [false,true]) {
-    await reset();
-    await send('等待图片并继续查看结果','work-hold');
-    const id=await page.locator('.agent-process-line.work').last().getAttribute('data-work-id');
-    await page.locator('#chat-send').click(); await idle();
-    await page.waitForFunction(()=>document.getElementById('chat-send').dataset.phase==='paused');
-    const saved=await page.evaluate(()=>window.__chatTest.ctx.ui.currentPausedTask?.());
-    assert.ok(saved?.task_id && saved.process.some(step=>step.work?.id===id));
-    if(reload) {
-      await page.reload();
+export async function assertWorkRecovery({browser, origin, resetState, setMode}) {
+  const context=await browser.newContext({viewport:{width:1280,height:900}});
+  const page=await context.newPage();
+  // The main layout fixture clears storage on every navigation; recovery needs real persistence.
+  await page.goto(origin);
+  try {
+    for(const reload of [false,true]) {
+      resetState();
+      await page.evaluate(()=>{localStorage.clear();sessionStorage.clear();});
+      await page.goto(origin);
       await page.waitForFunction(()=>!!window.__chatTest?.ctx.state.conv);
-      try {
+      setMode('work-hold');
+      await page.locator('#chat-input').fill('等待图片并继续查看结果');
+      await page.locator('#chat-send').click();
+      await page.locator('.agent-process-line.work').last().waitFor();
+      const id=await page.locator('.agent-process-line.work').last().getAttribute('data-work-id');
+      await page.locator('#chat-send').click();
+      await page.waitForFunction(()=>document.getElementById('chat-send').dataset.phase==='paused');
+      const saved=await page.evaluate(()=>window.__chatTest.ctx.ui.currentPausedTask?.());
+      assert.ok(saved?.task_id && saved.process.some(step=>step.work?.id===id));
+      if(reload) {
+        await page.reload();
+        await page.waitForFunction(()=>!!window.__chatTest?.ctx.state.conv);
         await page.waitForFunction(()=>document.getElementById('chat-send').dataset.phase==='paused');
-      } catch(error) {
-        console.log('work-recovery-state',await page.evaluate(()=>({
-          phase:document.getElementById('chat-send').dataset.phase,
-          failed:JSON.parse(localStorage.getItem('saudade-chat-failed')||'null'),
-          items:window.__chatTest.ctx.state.items.map(({type,id,turn_id,parent_turn_id})=>
-            ({type,id,turn_id,parent_turn_id})),
-          paused:window.__chatTest.ctx.ui.currentPausedTask?.(),
-          input:document.getElementById('chat-input').value,
-        })));
-        throw error;
+        // Exercise persisted progress when its old presentation is no longer in this window.
+        await page.locator('.agent-process').evaluateAll(nodes=>nodes.forEach(node=>node.remove()));
       }
-      // Exercise persisted progress when its old presentation is no longer in this window.
-      await page.locator('.agent-process').evaluateAll(nodes=>nodes.forEach(node=>node.remove()));
+      setMode('work-complete');
+      await page.locator('#chat-send').click();
+      await page.waitForFunction(()=>!window.__chatTest.ctx.state.isSending);
+      const state=await page.evaluate(id=>{
+        const rows=[...document.querySelectorAll('.agent-process-line.work')]
+          .filter(node=>node.dataset.workId===id);
+        const item=window.__chatTest.ctx.state.items.filter(item=>item.type==='agent').at(-1);
+        return {rows:rows.length,stage:rows[0]?.dataset.workStage,
+          status:rows[0]?.dataset.workStatus,process:item.process};
+      },id);
+      assert.equal(state.rows,1); assert.equal(state.stage,'accepted');
+      assert.equal(state.status,'completed');
+      assert.equal(state.process.filter(step=>step.work?.id===id).length,1);
+      assert.equal(state.process.filter(step=>step.text==='正在生成图片').length,0);
     }
-    setMode('work-complete');
-    await page.waitForFunction(()=>document.getElementById('chat-send').dataset.phase==='paused');
-    await page.locator('#chat-send').click(); await idle();
-    const state=await page.evaluate(id=>{
-      const rows=[...document.querySelectorAll('.agent-process-line.work')]
-        .filter(node=>node.dataset.workId===id);
-      const item=window.__chatTest.ctx.state.items.filter(item=>item.type==='agent').at(-1);
-      return {rows:rows.length,stage:rows[0]?.dataset.workStage,
-        status:rows[0]?.dataset.workStatus,process:item.process};
-    },id);
-    assert.equal(state.rows,1); assert.equal(state.stage,'accepted');
-    assert.equal(state.status,'completed');
-    assert.equal(state.process.filter(step=>step.work?.id===id).length,1);
-    assert.equal(state.process.filter(step=>step.text==='正在生成图片').length,0);
-  }
+  } finally { await context.close(); }
 }
