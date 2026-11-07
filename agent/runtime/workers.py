@@ -62,6 +62,16 @@ class RequestWorkers:
         finally:
             jobs.close()
 
+    async def wait_for_session(self, session_id, *, timeout=5.0):
+        """Bound explicit continuation until the prior request releases its resources."""
+        requests = [jobs for jobs in self._requests if jobs.control.session_id == session_id]
+        try:
+            async with asyncio.timeout(timeout):
+                await asyncio.gather(*(jobs.wait_closed() for jobs in requests))
+        except TimeoutError:
+            return False
+        return not self.closing
+
     async def _drain(self):
         requests = list(self._requests)
         self.stop()
