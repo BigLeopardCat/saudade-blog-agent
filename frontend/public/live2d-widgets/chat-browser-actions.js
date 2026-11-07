@@ -24,7 +24,13 @@
       // Keep recovery information until the resumed stream finishes. A route's
       // lazy chunk may force a reload after its completion acknowledgement.
       pending.phase = 'reply';
-      if (status) pending.result_status = status;
+      if (status) {
+        pending.result_status = status;
+        pending.result ||= {command_id: pending.command_id, status, path: path(),
+          ...(pending.kind === 'article_editor' ? {document: pending.document || null,
+            error: pending.error || null} : {}),
+          ...(pending.kind === 'appearance' ? {settings: settings()} : {})};
+      }
       store(pending);
       await engine.ready;
       const until = Date.now() + 6000;
@@ -37,15 +43,11 @@
       if (ctx.state.isSending) { ctx.ui.notify?.('页面操作已结束，请稍后继续原任务', 'error'); return; }
       const ok = await send({ silent: true, resumeTask: pending.task_id, convId: pending.convId,
         resumeText: pending.original || '', processFrom, previousProcess: pending.process || [],
-        ...(status ? { browserResult: {
-          command_id: pending.command_id, status, path: path(),
-          ...(pending.kind === 'article_editor' ? { document: pending.document || null,
-            error: pending.error || null } : {}),
-          ...(pending.kind === 'appearance' ? { settings: settings() } : {}) } } : {}) });
+        ...(status ? {browserResult: pending.result} : {}) });
       if (ok && processFrom?.dataset.clientAction === 'pending') processFrom.remove();
       if (!ok && owns(pending)) ctx.ui.notify?.('页面操作已结束，后续回复未完成，请继续原任务', 'error');
-      if (active === pending) {
-        if (ok) clear();
+      if (active === pending && ok) {
+        clear();
         active = null;
       }
     };
@@ -76,7 +78,8 @@
       if (url.origin !== location.origin || !command.command_id || !command.task_id) return false;
       if (!actor() || ctx.state.conv !== context.convId
           || (ctx.state.activeRound?.taskId && ctx.state.activeRound.taskId !== command.task_id)) return false;
-      if (active?.command_id === command.command_id && active.task_id === command.task_id) {
+      if (active?.command_id === command.command_id && active.task_id === command.task_id
+          && owns(active)) {
         // A replayed interrupt proves the server has not consumed the stored result.
         // Resend that observation rather than repeating a local edit or navigation.
         if (active.phase === 'reply' && active.settled && active.result_status) {
@@ -101,6 +104,10 @@
       active = pending;
       store(pending);
       sessionStorage.setItem('chat_open', '1');
+      if (Number.isFinite(command.expires_at) && Date.now() >= command.expires_at * 1000) {
+        void settle(pending, 'timeout', context.processFrom);
+        return true;
+      }
       let ready = null;
       try {
         if (editor) {

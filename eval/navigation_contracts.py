@@ -10,6 +10,7 @@ import httpx
 from agent import confirm
 from eval.own_fixtures import SECRET
 from rag import search
+from rag.corpus import content_revision
 from tools import base
 from utils.trace_io import load_trace
 
@@ -28,6 +29,7 @@ def backend(articles=None):
     docs = [{"type": "note", "id": row["id"], "title": row["title"],
              "content": "这是一篇编程实践文章，介绍 " + row["title"] + "。"}
             for row in state["articles"]]
+    docs = [{**doc, "revision": content_revision(doc["title"], doc["content"])} for doc in docs]
     index = search.RagIndex(corpus_loader=lambda: docs, vector_warmer=lambda _: None)
     index.build()
 
@@ -43,6 +45,14 @@ def backend(articles=None):
             return httpx.Response(200, json={"code": 200, "total": 1, "data": [
                 {"id": 11, "name": "编程", "publicArticleCount": 2,
                  "color": None, "icon": None, "pathName": "编程"}]})
+        if request.method == "POST" and request.url.path == "/api/public/documents/validate":
+            refs = json.loads(request.content)["documents"]
+            current = {doc["id"]: doc for doc in docs}
+            return httpx.Response(200, json={"code": 200, "data": {
+                "schemaVersion": 1, "documents": [
+                    {"type": ref["type"], "id": ref["id"], "visible": ref["id"] in current,
+                     "contentRevision": current[ref["id"]]["revision"]
+                     if ref["id"] in current else None} for ref in refs]}})
         if request.method == "POST" and request.url.path.endswith("/notes/search"):
             keyword = json.loads(request.content).get("keyword", "").casefold()
             rows = [{"noteKey": doc["id"], "noteTitle": doc["title"], "status": "public",

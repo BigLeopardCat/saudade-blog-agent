@@ -8,7 +8,6 @@ staleness; a failed page is never interpreted as an empty or complete corpus.
 from __future__ import annotations
 
 import logging
-import re
 import threading
 import time
 from collections.abc import Callable
@@ -333,55 +332,12 @@ def search(query: str, top_k: int = 8) -> list[dict] | None:
     return get_index().search(query, top_k=top_k)
 
 
-# Resolve only unambiguous article-title references from the visible corpus.
-# No match or multiple matches return None rather than guessing an article ID.
-
-_WS_RE = re.compile(r"\s+")
-_TITLE_PART_MIN = 4  # 简称子串匹配的最短长度（《架构文档》可以，两字标题不行）
-
-# 文章 id 形态由接口给定（noteKey 现为整数，类型不写死——回执/锚点都按字符串用）
-DocId = int | str
-
-
-def _norm_title(s: str) -> str:
-    """标题归一化：去空白 + ASCII 折小写（中文不受影响）。"""
-    return _WS_RE.sub("", s or "").lower()
-
-
-def match_doc_title(title: str, docs: list[dict]) -> DocId | None:
-    """Resolve a unique normalized title or a sufficiently long unique substring."""
-    n = _norm_title(title)
-    if not n or not docs:
-        return None
-    titles = [(d, _norm_title(d.get("title", ""))) for d in docs]
-    exact = [d for d, t in titles if t == n]
-    if len(exact) == 1:
-        return exact[0]["id"]
-    if len(exact) > 1:          # 同名文章（站内允许）：歧义，不猜
-        return None
-    if len(n) < _TITLE_PART_MIN:
-        return None
-    part = [d for d, t in titles if n in t or t in n]
-    if len(part) == 1:
-        return part[0]["id"]
-    return None
-
-
-def resolve_title(title: str) -> DocId | None:
-    """Resolve an article title from the current snapshot; refresh stale data asynchronously."""
-    idx = get_index()
-    docs = idx.docs_snapshot()
-    if idx.is_stale():
-        warm_async()
-    return match_doc_title(title, docs)
-
-
 def warm() -> bool:
     """Build the corpus snapshot synchronously; return False on failure."""
     try:
         return get_index().build()
     except Exception:
-        logger.warning("语料预热失败：检索与锚点标题解析都会降级到旧/空索引",
+        logger.warning("语料预热失败：检索暂用旧快照或不可用",
                        exc_info=True)
         return False
 

@@ -172,9 +172,9 @@ def fixture_preflight(cases, transport, identities):
     return results
 
 
-def provider_unavailable(case):
-    """Require a failed round and its terminal model-failure fact, never reply wording."""
-    for round_ in case.get("result", {}).get("rounds", []):
+def model_availability_failure(result):
+    """Require a failed round and terminal SDK failure facts, never response wording."""
+    for round_ in result.get("rounds", []):
         if not round_.get("error"):
             continue
         trace = load_trace(str(round_.get("trace", ""))) or {}
@@ -182,10 +182,17 @@ def provider_unavailable(case):
                     if event.get("event") in {"llm_start", "llm_done", "llm_error"}]
         final = attempts[-1] if attempts else {}
         if (final.get("event") == "llm_error" and (final.get("retryable") is True
-                or final.get("http_status") in {401, 402, 403, 429})
+                or final.get("http_status") in {401, 402, 403, 429}
+                or final.get("provider_error_code") in {
+                    "insufficient_quota", "billing_hard_limit_reached"}
+                or final.get("provider_error_type") == "insufficient_quota")
                 and final.get("failure_source") in {"provider", "transport"}):
-            return True
-    return False
+            return {"round": round_.get("round"), "trace": round_.get("trace"),
+                    **{key: final[key] for key in (
+                        "error_type", "failure_source", "http_status", "retryable", "retry_after_s",
+                        "provider_error_type", "provider_error_code", "provider_request_id")
+                       if key in final}}
+    return None
 
 
 def run(cases, transport, identities, report_dir, *, phase, suite_hash, include_vision=False,
@@ -246,7 +253,6 @@ def run(cases, transport, identities, report_dir, *, phase, suite_hash, include_
                       finished_at=datetime.now().astimezone().isoformat())
         save()
         return report
-    provider_failure_streak = 0
     for case in cases:
         before = transport.client.get(transport.agent_url + "/version")
         before.raise_for_status()
@@ -271,6 +277,10 @@ def run(cases, transport, identities, report_dir, *, phase, suite_hash, include_
                 errors = [r["error"] for r in result["rounds"] if r.get("error")]
                 row.update(status="failed" if fails or errors else "passed",
                            fails=fails, errors=errors, result=safe_result(result))
+                availability = (result.get("evaluation_failure")
+                                or model_availability_failure(result))
+                if availability:
+                    row.update(status="evaluation_error", evaluation_failure=availability)
         except (httpx.HTTPError, EvaluationError, ValueError) as exc:
             # Evaluation failures stay visible and never become model-quality passes.
             row.update(status="evaluation_error", error=f"{type(exc).__name__}: {exc}")
@@ -279,9 +289,10 @@ def run(cases, transport, identities, report_dir, *, phase, suite_hash, include_
         save()
         print(json.dumps({k: row[k] for k in ("id", "status", "elapsed_s")},
                          ensure_ascii=False), flush=True)
-        provider_failure_streak = provider_failure_streak + 1 if provider_unavailable(row) else 0
-        if provider_failure_streak >= 3:
-            report["stopped_reason"] = "three consecutive captured model availability failures"
+        if row.get("evaluation_failure"):
+            report["stopped_reason"] = ("captured model availability failure"
+                if row["evaluation_failure"]["failure_source"] in {"provider", "transport"}
+                else "captured HTTP or evidence failure")
             save()
             break
         if phase == "poc" and row["status"] == "evaluation_error":
@@ -289,7 +300,8 @@ def run(cases, transport, identities, report_dir, *, phase, suite_hash, include_
             save()
             break
     report["finished_at"] = datetime.now().astimezone().isoformat()
-    report["full_run"] = len(report["cases"]) == len(cases) and phase == "full"
+    report["full_run"] = (len(report["cases"]) == len(cases) and phase == "full"
+                          and "stopped_reason" not in report)
     save()
     return report
 

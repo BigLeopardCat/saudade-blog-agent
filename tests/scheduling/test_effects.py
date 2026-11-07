@@ -11,7 +11,7 @@ import pytest
 from pydantic import ValidationError
 
 from agent.scheduling import models
-from agent.scheduling.host import BlogHost
+from agent.scheduling.host import BlogHost, HostOutcomeUnverified
 from agent.scheduling.models import Definition, Trigger
 from agent.scheduling.worker import WorkerActions
 
@@ -103,12 +103,13 @@ def test_effect_host_verifies_identity_and_payload_bound_backend_receipt(status,
     with httpx.Client(transport=httpx.MockTransport(handle)) as client:
         host = BlogHost(client)
         host.headers = lambda _: {}
-        if wrong_receipt:
-            with pytest.raises(ValueError):
+        if wrong_receipt or status == 503:
+            with pytest.raises(HostOutcomeUnverified) as exc:
                 host.change(7, "run", write, "分类")
-        elif status == 503:
-            with pytest.raises(httpx.HTTPStatusError):
-                host.change(7, "run", write, "分类")
+            result = exc.value.result()
+            assert result["status"] == "incomplete"
+            assert result["reason"] == "execution_unverified"
+            assert result["run_id"] == "run"
         else:
             result = host.change(7, "run", write, "分类")
             assert result["status"] == {200: "completed", 403: "blocked", 409: "incomplete"}[status]
@@ -187,7 +188,7 @@ def test_optional_write_payload_does_not_change_saved_read_schedule_identity():
         grant, "create_automation", frozen
     )
     row = SimpleNamespace(
-        status="DELAYED",
+        status="DELAYED", output=None,
         attributes={
             "schedule_id": identifier,
             "definition": definition,

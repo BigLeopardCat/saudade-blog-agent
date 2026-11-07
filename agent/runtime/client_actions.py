@@ -97,7 +97,10 @@ def resume_value(snapshot, task_id, config):
         return None
     command = pending["command"]
     if value is None:
-        return TurnResult("", {"client_action": command})
+        if time.time() <= command["expires_at"]:
+            return TurnResult("", {"client_action": command})
+        value = {"command_id": command["command_id"], "status": "timeout",
+                 "error": "browser_ack_expired"}
     if (
         command.get("task_id") != task_id
         or value.get("command_id") != command["command_id"]
