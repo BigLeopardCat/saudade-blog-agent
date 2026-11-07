@@ -11,7 +11,8 @@ assert.ok(origin && provider && output && process.env.CHAT_STACK_TOKEN);
 const browser = await chromium.launch({headless:true,args:['--no-sandbox']});
 const context = await browser.newContext({viewport:{width:1280,height:900},reducedMotion:'reduce'});
 const requests = [], failures = [];
-await context.addInitScript(({token,uid}) => {
+await context.addInitScript(({token,uid,origin}) => {
+  if(location.origin!==origin)return;
   localStorage.setItem('tokenKey',token);
   localStorage.setItem('username','Isolated stack fixture');
   sessionStorage.setItem('chat_open','1');
@@ -20,7 +21,7 @@ await context.addInitScript(({token,uid}) => {
   Object.defineProperty(window,'__waifuStream',{configurable:true,get:()=>factory,set:value=>{
     factory=(ctx,engine)=>{window.__stackChat=ctx;return value(ctx,engine);};
   }});
-},{token:process.env.CHAT_STACK_TOKEN,uid:Number(process.env.CHAT_STACK_UID)});
+},{token:process.env.CHAT_STACK_TOKEN,uid:Number(process.env.CHAT_STACK_UID),origin});
 await context.route('**/*',route=>{
   const url=new URL(route.request().url());
   if(url.origin!==origin)return route.abort();
