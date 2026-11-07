@@ -137,6 +137,37 @@ def test_mixed_timestamp_clocks_do_not_report_elapsed_time(tmp_path):
     assert row["elapsed_s"] is None and row["active_request_s"] == 2
 
 
+@pytest.mark.parametrize("missing", [False, True])
+def test_task_receipts_keep_cash_list_price_and_allowance_separate(tmp_path, missing):
+    paths = [trace(tmp_path, "first"), trace(tmp_path, "second", before=100, after=200)]
+    for index, path in enumerate(paths):
+        doc = json.loads(path.read_text())
+        event = doc["events"][-1]
+        event.update(provider_cost_usd=0, provider_list_cost_usd=0.002,
+                     provider_allowance_usd=0.002)
+        if missing and index == 1:
+            del event["provider_allowance_usd"]
+        path.write_text(json.dumps(doc))
+    row = task_metrics.collect(paths)["tasks"][0]
+    assert row["calls"] == 2 and row["cache_hit_rate"] == 0.8
+    assert row["provider_cost_usd"] == 0 and row["provider_list_cost_usd"] == 0.004
+    assert row["provider_allowance_usd"] == (None if missing else 0.004)
+    assert row["provider_allowance_usd_seen"] == (1 if missing else 2)
+
+
+def test_unknown_model_attempt_does_not_claim_complete_task_cost(tmp_path):
+    path = trace(tmp_path, "interrupted")
+    doc = json.loads(path.read_text())
+    doc["events"][-1].update(provider_cost_usd=0.001, provider_list_cost_usd=0.002,
+                             provider_allowance_usd=0)
+    doc["events"].extend([{"node": "native", "event": "llm_start"},
+                          {"node": "native", "event": "llm_error"}])
+    path.write_text(json.dumps(doc))
+    row = task_metrics.collect([path])["tasks"][0]
+    assert row["unknown_attempts"] == 1 and row["provider_cost_usd_sum"] == 0.001
+    assert row["provider_cost_usd"] is row["provider_list_cost_usd"] is None
+
+
 def test_browser_interrupt_has_its_own_phase_without_claiming_a_completed_reply(monkeypatch):
     from agent.runtime.results import TurnResult
     from agent.runtime.trace_context import outcome

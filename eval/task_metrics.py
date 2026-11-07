@@ -105,7 +105,8 @@ def _task(key, attempts):
                 and previous["model_calls"] == totals["calls"]
                 and (usage.complete(totals) or previous["model_calls"] == 0
                      and totals["unknown_attempts"] == 0)),
-            "cache_hit_rate": usage.hit_rate(totals), **totals}
+            "cache_hit_rate": usage.hit_rate(totals),
+            **usage.provider_costs(totals), **totals}
 
 
 def collect(paths):
