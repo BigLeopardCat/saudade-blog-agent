@@ -22,7 +22,7 @@ def backend(monkeypatch):
         "page": 1, "pageSize": 5, "hasMore": False,
         "items": [{"id": 9, "source": "board", "title": "", "titleTruncated": False,
                    "content": "OTA upgrade", "contentTruncated": True, "createdAt": None,
-                   "matchedKeywords": ["OTA"],
+                   "matchedKeywordIndices": [0],
                    "approved": 1, "displayName": "free name", "displayNameTruncated": False,
                    "userId": 123, "rejectReason": "private"}]}}
 
@@ -117,11 +117,11 @@ def _batch(backend, words, totals):
 def test_expanded_keywords_use_one_post_and_preserve_overlapping_union(backend):
     words = ["OTA", "upgrade", "固件", "升级"]
     _batch(backend, words, [1, 1, 0, 0])
-    backend["data"]["items"][0]["matchedKeywords"] = words[:2]
+    backend["data"]["items"][0]["matchedKeywordIndices"] = [0, 1]
     result = search_public_activity.invoke({"keywords": words})
     assert result.kind == "ok" and result.data["total"] == 1
     assert sum(row["total"] for row in result.data["keywordCounts"]) == 2
-    assert result.data["items"][0]["matchedKeywords"] == words[:2]
+    assert result.data["items"][0]["matchedKeywordIndices"] == [0, 1]
     assert len(backend["requests"]) == 1
     assert json.loads(backend["requests"][0].content)["keywords"] == words
 
@@ -133,9 +133,9 @@ def test_trimmed_case_insensitive_duplicates_keep_first_spelling_and_order(backe
     assert json.loads(backend["requests"][0].content)["keywords"] == ["OTA", "升级"]
 
 
-@pytest.mark.parametrize("matched", [[], ["unknown"], ["OTA", "OTA"], [True], "OTA"])
+@pytest.mark.parametrize("matched", [[], ["unknown"], [0, 0], [True], "0", [-1], [8], [1]])
 def test_hit_keywords_must_be_nonempty_unique_and_in_scope(backend, matched):
-    backend["data"]["items"][0]["matchedKeywords"] = matched
+    backend["data"]["items"][0]["matchedKeywordIndices"] = matched
     assert search_public_activity.invoke({"keywords": ["OTA"]}).kind == "unavailable"
 
 
@@ -156,9 +156,9 @@ def test_keyword_totals_cannot_conflict_with_union_or_page_evidence(backend, cou
 
 def test_batch_count_order_and_match_order_are_verified(backend):
     _batch(backend, ["OTA", "upgrade"], [1, 1])
-    backend["data"]["items"][0]["matchedKeywords"] = ["upgrade", "OTA"]
+    backend["data"]["items"][0]["matchedKeywordIndices"] = [1, 0]
     assert search_public_activity.invoke({"keywords": ["OTA", "upgrade"]}).kind == "unavailable"
-    backend["data"]["items"][0]["matchedKeywords"] = ["OTA", "upgrade"]
+    backend["data"]["items"][0]["matchedKeywordIndices"] = [0, 1]
     backend["data"]["keywordCounts"].reverse()
     assert search_public_activity.invoke({"keywords": ["OTA", "upgrade"]}).kind == "unavailable"
 
@@ -184,12 +184,41 @@ def test_whitespace_only_keywords_do_not_reach_io(backend):
     assert not backend["requests"]
 
 
-def test_result_size_uses_utf8_bytes_and_never_truncates_json(backend):
-    words = [chr(0x4E00 + index) * 128 for index in range(8)]
-    _batch(backend, words, [1] * 8)
-    backend["data"]["items"][0]["matchedKeywords"] = words
-    assert search_public_activity.invoke({"keywords": words}).kind == "unavailable"
+def test_oversized_backend_response_is_unknown_and_never_truncated_as_json(backend):
+    backend["data"]["items"][0]["createdAt"] = "x" * 8000
+    assert search_public_activity.invoke({"keywords": ["OTA"]}).kind == "unavailable"
     assert len(backend["requests"]) == 1
+
+
+def test_maximum_batch_preserves_default_page_after_backend_projection(backend):
+    words = ['"' * 127 + chr(65 + index) for index in range(8)]
+    _batch(backend, words, [5] * 8)
+    original = backend["data"]["items"][0]
+    backend["data"].update(total=5, counts={"announcements": 0, "board": 5, "talk": 0},
+                           items=[{**original, "id": index, "matchedKeywordIndices": list(range(8)),
+                                   "title": '"' * 10, "content": '"' * 20,
+                                   "displayName": '"' * 5, "titleTruncated": True,
+                                   "contentTruncated": True, "displayNameTruncated": True}
+                                  for index in range(1, 6)])
+    result = search_public_activity.invoke({"keywords": words})
+    assert result.kind == "ok" and len(result.data["items"]) == 5
+    assert len(str(result)) <= 7500
+    assert all(row["matchedKeywordIndices"] == list(range(8)) for row in result.data["items"])
+    assert result.data["total"] == 5 and result.data["hasMore"] is False
+
+
+def test_character_limit_is_not_silently_tightened_to_utf8_bytes(backend):
+    words = [chr(0x4E00 + index) * 128 for index in range(8)]
+    _batch(backend, words, [5] * 8)
+    original = backend["data"]["items"][0]
+    backend["data"].update(total=5, counts={"announcements": 0, "board": 5, "talk": 0},
+                           items=[{**original, "id": index, "matchedKeywordIndices": list(range(8)),
+                                   "title": "题" * 120, "content": "文" * 240,
+                                   "displayName": "名" * 80}
+                                  for index in range(1, 6)])
+    result = search_public_activity.invoke({"keywords": words})
+    assert result.kind == "ok" and len(str(result)) <= 7500
+    assert len(str(result).encode("utf-8")) > 7500
 
 
 def test_runtime_loads_the_public_domain_and_executes_one_batch_request(backend):
@@ -203,7 +232,7 @@ def test_runtime_loads_the_public_domain_and_executes_one_batch_request(backend)
 
     words = ["OTA", "upgrade", "固件", "升级"]
     _batch(backend, words, [1, 1, 0, 0])
-    backend["data"]["items"][0]["matchedKeywords"] = words[:2]
+    backend["data"]["items"][0]["matchedKeywordIndices"] = [0, 1]
     replies = iter([
         AIMessage(content="", tool_calls=[{"name": "load_public_activity_info_tools", "args": {},
                                           "id": "load"}]),
@@ -236,7 +265,7 @@ def test_runtime_loads_the_public_domain_and_executes_one_batch_request(backend)
 def test_same_numeric_id_in_different_sources_is_not_a_duplicate(backend):
     announcement = {"id": 9, "source": "announcements", "title": "T", "titleTruncated": False,
                     "content": "OTA", "contentTruncated": False, "createdAt": None,
-                    "matchedKeywords": ["OTA"]}
+                    "matchedKeywordIndices": [0]}
     backend["data"]["items"].append(announcement)
     counts = {"announcements": 1, "board": 1, "talk": 0}
     backend["data"].update(total=2, counts=counts,
