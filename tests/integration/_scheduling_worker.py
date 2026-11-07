@@ -1,12 +1,14 @@
 """Isolated DBOS worker used only by the explicit PostgreSQL integration suite."""
 
 import json
+import os
 import sys
 import time
 from contextlib import ExitStack
 from pathlib import Path
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
+import httpx
 import psycopg
 from dbos import DBOS, DBOSPortableJSONSerializer
 from langchain_core.messages import AIMessage, AIMessageChunk
@@ -21,6 +23,7 @@ from agent.scheduling.backend import (
     Backend,
     database_url,
 )
+from agent.scheduling.host import BlogHost
 from agent.scheduling.worker import WorkerActions
 from config.settings import settings
 
@@ -54,7 +57,16 @@ def connection():
     return psycopg.connect(DSN, options=f"-c search_path={SCHEMA}")
 
 
-class Host:
+class Host(BlogHost):
+    def __init__(self):
+        super().__init__(httpx.Client(timeout=3, trust_env=False))
+        self.notification_base = os.getenv("SAUDADE_SCHEDULING_TEST_NOTIFY_BASE", "")
+        if self.notification_base:
+            self.base = self.notification_base
+
+    def headers(self, owner):
+        return {"Authorization": f"Bearer synthetic-scheduler-owner-{owner}"}
+
     def actor(self, owner):
         with connection() as conn:
             role = conn.execute("SELECT role FROM test_actors WHERE id=%s", (owner,)).fetchone()
@@ -91,6 +103,8 @@ class Host:
                                          json.dumps(write, ensure_ascii=False, sort_keys=True))
 
     def notify(self, owner, run_id, title, text):
+        if self.notification_base:
+            return super().notify(owner, run_id, title, text)
         self.actor(owner)
         with connection() as conn:
             conn.execute("INSERT INTO test_attempts(run_id) VALUES (%s)", (run_id,))
@@ -133,7 +147,9 @@ DBOS(
 with ExitStack() as resources:
     backend = Backend(DSN, schema=SCHEMA)
     resources.callback(backend.close)
-    workflows.configure(Actions(backend, Host(), resources))
+    host = Host()
+    resources.callback(host.close)
+    workflows.configure(Actions(backend, host, resources))
     DBOS.launch()
     DBOS.register_queue(CONTROL_QUEUE, worker_concurrency=100)
     DBOS.register_queue(EXECUTION_QUEUE, worker_concurrency=1, global_concurrency=1)
