@@ -247,6 +247,21 @@ def wait_ready(url, process):
     raise TimeoutError("Fixture service readiness timed out")
 
 
+def schema_sql(path, database):
+    migration = path.read_text()
+    if path.name == "0000_schema.sql":
+        # The frozen baseline names its database; this drill owns a random new database.
+        timezone = """ALTER DATABASE "saudade_blog" SET timezone TO 'Asia/Shanghai';"""
+        assert migration.count(timezone) == 1, "Unexpected baseline database declaration"
+        migration = migration.replace(
+            timezone,
+            sql.SQL("ALTER DATABASE {} SET timezone TO 'Asia/Shanghai';")
+            .format(sql.Identifier(database))
+            .as_string(),
+        )
+    return migration
+
+
 def verify_persistence(blog_dsn, agent_dsn, result):
     from langgraph.checkpoint.postgres import PostgresSaver
 
@@ -305,7 +320,9 @@ def run(args):
         }
         for name in files:
             subprocess.run(
-                ["psql", "-X", "-q", "-v", "ON_ERROR_STOP=1", "-f", str(blog / name)],
+                ["psql", "-X", "-q", "-v", "ON_ERROR_STOP=1", "-f", "-"],
+                input=schema_sql(Path(name), parts.path[1:]),
+                text=True,
                 env=sql_env,
                 check=True,
                 stdout=subprocess.DEVNULL,
