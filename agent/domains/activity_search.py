@@ -14,6 +14,8 @@ from tools import base
 Count = Annotated[StrictInt, Field(ge=0)]
 Keyword = Annotated[StrictStr, Field(min_length=1, max_length=128, pattern=r"^[^\x00-\x1f\x7f]+$")]
 Keywords = Annotated[list[Keyword], Field(min_length=1, max_length=8)]
+KeywordIndex = Annotated[StrictInt, Field(ge=0, le=7)]
+MatchedIndices = Annotated[list[KeywordIndex], Field(min_length=1, max_length=8)]
 
 
 class Counts(BaseModel):
@@ -43,7 +45,7 @@ class Hit(BaseModel):
     content: Annotated[StrictStr, Field(max_length=240)]
     contentTruncated: StrictBool
     createdAt: StrictStr | None
-    matchedKeywords: Keywords
+    matchedKeywordIndices: MatchedIndices
     approved: StrictInt | None = None
     displayName: Annotated[StrictStr, Field(max_length=80)] | None = None
     displayNameTruncated: StrictBool | None = None
@@ -89,16 +91,17 @@ class SearchPage(BaseModel):
                 or len({word.lower() for word in self.keywords}) != len(self.keywords)
                 or self.total > sum(row.total for row in self.keywordCounts)):
             raise ValueError("Inconsistent activity keyword scope")
-        for word in self.keywordCounts:
+        for index, word in enumerate(self.keywordCounts):
             if any(value > counts[source] for source, value in word.counts.model_dump().items()):
                 raise ValueError("Keyword count exceeds union count")
             observed = Counter(row.source for row in self.items
-                               if word.keyword in row.matchedKeywords)
+                               if index in row.matchedKeywordIndices)
             if any(value > word.counts.model_dump()[source] for source, value in observed.items()):
                 raise ValueError("Page exceeds keyword counts")
         for row in self.items:
-            matched = [word for word in self.keywords if word in row.matchedKeywords]
-            if row.matchedKeywords != matched:
+            indices = row.matchedKeywordIndices
+            if (indices != sorted(set(indices))
+                    or any(index >= len(self.keywords) for index in indices)):
                 raise ValueError("Unverified or duplicate keyword matches")
         return self
 
@@ -109,7 +112,8 @@ def search_public_activity(keywords: Keywords, page: Page = 1, limit: Limit = 5)
 
     keywords按任一词命中，不区分大小写，重复词自动去重；不是语义搜索。
     total/counts是去重并集，keywordCounts是各词计数，词间可能重叠不能相加。
-    返回统一分页节选和matchedKeywords；解读长正文需按来源和编号补读。
+    matchedKeywordIndices是命中词在keywords中的0起始位置；分页节选有明确截断标志。
+    本工具只返回带截断标志的节选，不代表已读取全文。
     河灯留名不是账号，不参与匹配；待审内容不在此视图。
     """
     normalized, seen = [], set()
@@ -131,7 +135,7 @@ def search_public_activity(keywords: Keywords, page: Page = 1, limit: Limit = 5)
             raise ValueError("Activity search scope mismatch")
         data = result.model_dump(exclude_none=True)
         encoded = json.dumps(data, ensure_ascii=False, separators=(",", ":"))
-        if len(encoded.encode("utf-8")) > 7500:
+        if len(encoded) > 7500:
             return base.unavailable("检索结果过大，请减少关键词数量或limit。")
         return base.ok(encoded, data=data)
     except (httpx.HTTPError, ValueError):
