@@ -355,10 +355,12 @@ def test_notification_retry_exhaustion_preserves_effect_across_dbos_resume_and_r
     assert len(runs) == 1 and runs[0]["result"] == summary
     run_id = runs[0]["id"]
     assert service.result(ADMIN, ident, run_id)["result"] == expected
+    effect_run_id = query("SELECT run_id FROM test_publications")[0][0]
+    assert effect_run_id == run_id + "_once"
     assert query("SELECT owner_id,title,body FROM test_publications") == [
         (7, "通知失败验收", "已审批的合成公告正文")]
-    assert query("SELECT count(*) FROM test_effects WHERE run_id=%s", (run_id,)) == [(1,)]
-    assert query("SELECT count(*) FROM test_attempts WHERE run_id=%s", (run_id,)) == [(3,)]
+    assert query("SELECT count(*) FROM test_effects WHERE run_id=%s", (effect_run_id,)) == [(1,)]
+    assert query("SELECT count(*) FROM test_attempts WHERE run_id=%s", (effect_run_id,)) == [(3,)]
     assert query("SELECT count(*) FROM test_notifications") == [(0,)]
     attention = service.list(ADMIN, active_only=True)["recent_results"]
     assert len(attention) == 1 and attention[0]["result"] == summary
@@ -367,6 +369,8 @@ def test_notification_retry_exhaustion_preserves_effect_across_dbos_resume_and_r
     # DBOS treats resuming a completed workflow as a no-op with its durable result.
     resumed = service.backend.client.resume_workflow(run_id)
     assert resumed.get_result(polling_interval_sec=0.05) == expected
+    child = service.backend.client.resume_workflow(effect_run_id)
+    assert child.get_result(polling_interval_sec=0.05) == expected
     processes[0].kill()
     processes[0].wait(timeout=10)
     start()
@@ -374,5 +378,5 @@ def test_notification_retry_exhaustion_preserves_effect_across_dbos_resume_and_r
     assert service.result(ADMIN, ident, run_id)["result"] == expected
     assert service.get(ADMIN, ident)["needs_attention"]
     assert query("SELECT count(*) FROM test_publications") == [(1,)]
-    assert query("SELECT count(*) FROM test_effects WHERE run_id=%s", (run_id,)) == [(1,)]
-    assert query("SELECT count(*) FROM test_attempts WHERE run_id=%s", (run_id,)) == [(3,)]
+    assert query("SELECT count(*) FROM test_effects WHERE run_id=%s", (effect_run_id,)) == [(1,)]
+    assert query("SELECT count(*) FROM test_attempts WHERE run_id=%s", (effect_run_id,)) == [(3,)]
