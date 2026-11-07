@@ -164,6 +164,7 @@ const server = createServer(async (req, res) => {
             replay_safe: mode === 'confirmation-resumable',
             q: mode === 'confirmation-images' ? 'fixture-images' : next ? '第二项操作，等待独立批准。' : '将测试文章加入收藏？这会新增一条收藏记录。',
             token: next ? 'offline-next-confirmation' : 'offline-synthetic-confirmation',
+            article_ids_to_refresh: mode === 'confirmation-select' ? [] : [23,54],
             exp: Math.floor(Date.now() / 1000) + 600,
             server_time: Math.floor(Date.now() / 1000),
             opts: mode === 'confirmation-select' ? [
@@ -271,7 +272,11 @@ try {
   });
   const context = await browser.newContext({ viewport: { width: 1440, height: 1000 },
     permissions: ['clipboard-read', 'clipboard-write'], reducedMotion: 'reduce' });
-  await context.addInitScript(() => { localStorage.clear(); sessionStorage.clear(); });
+  await context.addInitScript(() => {
+    localStorage.clear(); sessionStorage.clear();
+    window.__articleInvalidations=[];
+    addEventListener('agent-turn-done', event=>window.__articleInvalidations.push(event.detail));
+  });
   const page = await context.newPage();
   page.setDefaultTimeout(8000);
   const errors = [];
@@ -923,6 +928,8 @@ try {
   assert.equal(page.url(), beforeLiteral);
   assert.equal(await page.evaluate(() => window.__chatTest.ctx.state.pendingAsk ?? null), null);
   assert.equal(await page.evaluate(() => window.__chatTest.ctx.state.items.filter(i => i.type === 'agent').at(-1).text), literal);
+  assert.deepEqual(await page.evaluate(()=>window.__articleInvalidations.at(-1)),
+    {confirmationAttempted:false,articleIdsToRefresh:[]});
   passed('literal command and confirmation prefixes render as text without actions');
 
   await send('批量删除三项待办', 'confirmation-select');
@@ -991,6 +998,8 @@ try {
   assert.equal(continuation.message, '');
   assert.ok(!continuation.confirm_token, 'Continue must not resend an approval');
   assert.equal(await page.locator('#chat-ask.active').count(), 0);
+  assert.deepEqual(await page.evaluate(()=>window.__articleInvalidations.at(-1)),
+    {confirmationAttempted:true,articleIdsToRefresh:[23,54]});
   passed('continuing a stopped confirmation settles its card without another approval');
 
   await reset();

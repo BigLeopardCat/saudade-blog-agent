@@ -124,6 +124,7 @@
             .find(item => item.dataset.mid === stopped.partial_id) || fallback;
           const completed = await sendMessage({ silent: true, resumeTask: stopped.task_id, resumeTurn: stopped.turn_id,
             resumeText: stopped.text, convId: stopped.conv_id, processFrom: previous,
+            resumeInvalidation: stopped.invalidation,
             previousProcess: stopped.process || [], onDropped: showHint });
           if (completed) {
             ctx.state.items = ctx.state.items.filter(x => x.id !== stopped.partial_id);
@@ -237,6 +238,7 @@
             reason: reason || '', kind: kind || 'failed',
             task_id: active.taskId, turn_id: active.turnId, conv_id: active.convId ?? ctx.state.conv,
             partial_id: active.roundId,
+            invalidation: active.invalidation,
             ...(kind === 'stopped' ? { process: active.process || [] } : {}) };
           const rows = __chatCore.rememberFailedRound(cur, entry);
           if (rows.length) localStorage.setItem(FAILED_KEY, JSON.stringify(rows));
@@ -405,6 +407,12 @@
         const userItemId = silent ? null : __chatCore.genId();
         const sentAt = Date.now();
         ctx.state.activeRound = { roundId, userItemId, msg, convId: roundConvId, silent,
+          invalidation: {
+            confirmationAttempted: !!opts.confirmToken || opts.resumeInvalidation?.confirmationAttempted === true,
+            articleIdsToRefresh: [...new Set((opts.confirmAsk?.article_ids_to_refresh
+              || opts.resumeInvalidation?.articleIdsToRefresh || [])
+              .filter(id => Number.isSafeInteger(id) && id > 0))],
+          },
           taskId: opts.resumeTask || (opts.confirmAsk || {}).task_id || roundId,
           turnId: silent ? (opts.resumeTurn || lastUserTurn()) : roundId,
           resumeTask: opts.resumeTask || (opts.confirmAsk || {}).task_id,
@@ -950,7 +958,8 @@
               if (!ctx.state.isSending) syncAsk();
             }, 0);
             try {
-              window.dispatchEvent(new CustomEvent('agent-turn-done'));
+              // Cache invalidation hints trigger revalidation; they never prove execution succeeded.
+              window.dispatchEvent(new CustomEvent('agent-turn-done', {detail: roundState.invalidation}));
             } catch (e) { /* ignore */ }
           } else {
             requestController?.abort();

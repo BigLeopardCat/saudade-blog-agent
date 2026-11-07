@@ -64,6 +64,7 @@
       const row = { ...old, id: ask.id, task_id: ask.task_id, q: ask.q, exp: ask.exp,
         image_review: ask.image_review,
         cover_review: ask.cover_review,
+        article_ids_to_refresh: ask.article_ids_to_refresh,
         selected: Array.isArray(ask.selected) ? ask.selected : old?.selected,
         anchor_id: anchor?.dataset.mid || ask.anchor_id || old?.anchor_id,
         ts: old?.ts || Date.now() };
