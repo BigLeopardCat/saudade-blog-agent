@@ -1,4 +1,4 @@
-"""Conversation data and the storage boundary used by the native runtime.
+"""Conversation data and the storage boundary used by the Agent runtime.
 
 Conversation turns, task identities and framework approval bindings are saved.
 Reads without a committed checkpoint may run again; business writes remain owned
@@ -21,6 +21,7 @@ class ConversationSnapshot:
     last_outcome: str | None = None
     unfinished: bool = False
     initialized: bool = False
+    tool_activation: dict | None = None
 
     @property
     def has_pending(self) -> bool:

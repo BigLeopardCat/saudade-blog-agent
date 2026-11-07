@@ -9,7 +9,7 @@ from langchain_core.messages import RemoveMessage, SystemMessage
 from langgraph.graph.message import REMOVE_ALL_MESSAGES
 from langgraph.types import Command, Overwrite, StateSnapshot
 
-from agent.runtime import approval, turn_commit
+from agent.runtime import approval, tool_state, turn_commit
 from agent.runtime.approval_messages import ApprovalResumeMiddleware
 from agent.runtime.budget import BudgetExceeded
 from agent.runtime.compaction import ConversationCompaction
@@ -107,7 +107,9 @@ class FrameworkExecution:
             return {"pending_confirm": (execution or {}).get("pending_confirm"),
                     "pending_action": (execution or {}).get("pending_action"),
                     "approval": session.approval, "approved_result": None,
-                    "run": session.task, "turn": turn_commit.prepare(session, state)}
+                    "run": session.task,
+                    "tool_activation": tool_state.conversation_activation(session),
+                    "turn": turn_commit.prepare(session, state)}
 
         return approval.graph(session.store.saver, execute,
                               partial(turn_commit.commit, session=session),
