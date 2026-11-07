@@ -74,3 +74,33 @@ def test_similarity_hints_share_the_canonical_inherited_first_turn_input(tmp_pat
         "rounds": [{"round": 1}, {"round": 2, "user_input": "another keyword"}]}) + "\n")
     assert golden_draft.load_golden_inputs(path) == {
         "follow-up:1": "first query", "follow-up:2": "another keyword"}
+
+
+@pytest.mark.parametrize("event", [
+    {"node": "native", "event": "call", "kind": "unavailable"},
+    {"node": "native", "event": "tool_error", "reason": "unknown_tool"},
+    {"node": "native", "event": "call", "kind": "invalid_args"},
+    {"node": "native", "event": "call", "kind": "error"},
+    {"node": "native", "event": "budget_stop"},
+    {"node": "native", "event": "llm_error"},
+    {"node": "execute", "event": "tool_failed"},
+])
+def test_structured_failures_enter_feedback_candidates_without_reply_text(tmp_path, event):
+    path, doc = trace(tmp_path, 1)
+    doc["events"] = [event]
+    path.write_text(json.dumps(doc))
+    flagged, ordinary, scanned = golden_draft.collect([path], "20261027", "20261028")
+    assert scanned == 1 and ordinary == [] and len(flagged) == 1
+    assert flagged[0]["signals"] == ["runtime_or_tool_issue"]
+    generated = golden_draft.draft(flagged[0], 0, {})
+    assert generated["gold"] == {} and generated["_draft"]["review_required"]
+
+
+@pytest.mark.parametrize("kind", ["ok", "empty", "prepared", "not_found", "denied"])
+def test_expected_nonfailure_results_remain_ordinary_samples(tmp_path, kind):
+    path, doc = trace(tmp_path, 1)
+    doc["events"] = [{"node": "native", "event": "call", "kind": kind}]
+    path.write_text(json.dumps(doc))
+    flagged, ordinary, scanned = golden_draft.collect([path], "20261027", "20261028")
+    assert scanned == 1 and flagged == [] and len(ordinary) == 1
+    assert ordinary[0]["signals"] == []

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""Daily request accounting plus explicitly scoped legacy graph diagnostics.
+"""Daily request accounting with separate archived graph diagnostics.
 
 No model calls are made. Missing usage remains unknown, and production,
 evaluation, runtime builds and executed paths remain separate in JSON output.
@@ -22,12 +22,7 @@ from utils.trace_io import load_trace  # noqa: E402
 
 
 def executed_calls(evs: list) -> list[dict]:
-    """`execute/call` 与它后面那条 `execute/check` 配对，标出是否被拦下 / 零改动。
-
-    返回 `[{"tool", "args", "verdict", "noop"}, …]`。没有配对到 `check` 的调用
-    照旧带出去（`verdict=None`）——**"没读到回执"不是"成功"**，调用端按它自己的
-    口径处置，本函数不替它猜。
-    """
+    """Pair archived execute/check events without treating missing receipts as success."""
     out: list[dict] = []
     pending: dict | None = None
     for e in evs:
@@ -55,7 +50,7 @@ def _sig(c: dict) -> tuple:
 
 
 def dup_writes(evs: list) -> list[tuple]:
-    """这一轮里**成功执行了 ≥2 次**的 (工具名, 参数) ，仅适用于旧图 execute/check 事件。"""
+    """Count repeated successful writes in archived execute/check events only."""
     seen = defaultdict(int)
     for c in executed_calls(evs):
         if c["verdict"] == "PASS" and not c["noop"]:
@@ -64,10 +59,10 @@ def dup_writes(evs: list) -> list[tuple]:
 
 
 def collect(paths: list) -> dict:
-    """扫一遍语料，出这一行要的全部数字。"""
+    """Keep recognized runtimes separate from missing or archived planner signals."""
     conv = {"total": 0, "unread": 0, "zero_first": 0, "zero_first_chat": 0,
             "rev": 0, "dup": 0, "dup_detail": [], "native": 0,
-            "graph": 0, "hybrid": 0, "handoff": 0}
+            "graph": 0, "hybrid": 0, "langchain": 0, "handoff": 0}
     per_workflow = defaultdict(lambda: [0, 0])      # [总, 有 gate 否决]
     for p in paths:
         doc = load_trace(p)
@@ -76,11 +71,8 @@ def collect(paths: list) -> dict:
             continue
         conv["total"] += 1
         path = request_metrics.path_of(doc)
-        if path == "native":
-            conv["native"] += 1
-            continue
-        if path == "hybrid":
-            conv["hybrid"] += 1
+        if path in {"langchain", "native", "hybrid"}:
+            conv[path] += 1
             continue
         if path == "hybrid_to_graph":
             conv["handoff"] += 1
@@ -110,12 +102,12 @@ def collect(paths: list) -> dict:
 
 
 def _m(n: int) -> str:
-    """token 数读成人话（一位小数，够看趋势）。"""
+    """Render token counts in millions."""
     return f"{n / 1e6:.2f}M"
 
 
 def _inference_by_day(agg: dict) -> dict:
-    """按天聚合 所有推理节点的输入/命中（命中率分母为全部输入 token）。"""
+    """Aggregate measured model input and cache tokens by day."""
     per = defaultdict(lambda: {"in": 0, "cache": 0, "seen": 0, "calls": 0, "cache_in": 0})
     for (day, node, _eng), r in agg.items():
         d = per[day]
@@ -137,15 +129,14 @@ def render(paths: list, days: int) -> str:
     per_day = _inference_by_day(tcr.collect(paths)["rows"])
 
     parts = [f"近{days}天 traces={conv['total']} 未识别={conv['unread']}"]
-    parts.append(f"native={conv['native']} hybrid={conv['hybrid']} 交接={conv['handoff']}")
+    parts.append(f"langchain={conv['langchain']} native={conv['native']} "
+                 f"hybrid={conv['hybrid']} 交接={conv['handoff']}")
     if conv["graph"]:
         zf = conv["zero_first"]
         parts.append(f"graph首轮零工具={zf}/{conv['graph']}（chat {conv['zero_first_chat']}）")
         parts.append(f"graph否决={conv['rev']}/{conv['graph']}")
     dup_txt = f"graph写重复={conv['dup']}"
     if conv["dup_detail"]:
-        # 重复的**是哪一件**比次数重要：同一个工具在一轮里执行 3 次和 3 个工具各 2 次
-        # 是两种病（前者是循环，后者是多步任务里的撞车）。
         items = []
         for _workflow, dups in conv["dup_detail"][:3]:
             items += [f"{t}×{n}" for t, _a, n in dups]
