@@ -1,4 +1,4 @@
-"""Dynamic execution uses the current catalog; tool schemas stay local to a task."""
+"""Dynamic execution uses the current catalog independently of the visible menu."""
 
 from copy import deepcopy
 from types import SimpleNamespace
@@ -19,7 +19,8 @@ from agent.runtime.checkpoint_conversations import CheckpointConversationStore
 from agent.runtime.service import AgentRuntime
 from tools.result import ok
 
-pytestmark = pytest.mark.tool_scopes(find_activity="read.public", inspect_admin="admin.console")
+pytestmark = pytest.mark.tool_scopes(
+    find_activity="read.public", inspect_activity="read.public", inspect_admin="admin.console")
 backend = favorite_backend
 
 
@@ -70,13 +71,20 @@ def capabilities():
         return ok("Matching synthetic keyword: " + query)
 
     @tool
+    def inspect_activity() -> object:
+        """Read another synthetic public source."""
+        reads.append(("detail", None))
+        return ok("Other public detail.")
+
+    @tool
     def inspect_admin() -> object:
         """Read a synthetic administrator-only record."""
         reads.append(("admin", None))
         return ok("private fixture")
 
     def domains(cfg, _):
-        result = {"public_activity": {find_activity.name: find_activity}}
+        result = {"public_activity": {
+            find_activity.name: find_activity, inspect_activity.name: inspect_activity}}
         if cfg["configurable"]["principal"].known_role == "admin":
             result["admin_records"] = {inspect_admin.name: inspect_admin}
         return result
@@ -98,7 +106,9 @@ def names(menu):
     return [item["function"]["name"] for item in menu]
 
 
-def test_real_two_turn_followup_executes_one_model_batch_without_carrying_schema(capabilities):
+def test_real_two_turn_followup_keeps_one_completed_read_schema_without_carrying_its_domain(
+    capabilities,
+):
     catalog, reads = capabilities
     saver = InMemorySaver()
     first = Script(responses=[
@@ -114,11 +124,33 @@ def test_real_two_turn_followup_executes_one_model_batch_without_carrying_schema
     assert run(selected).reply == "已找到。"
     assert len(followup.prompts) == 2 and reads == [
         ("public", "看板娘"), *(("public", word) for word in keywords)]
-    assert "find_activity" in names(first.menus[-1])
-    assert followup.menus[0] == first.menus[0] == followup.menus[-1]
+    assert {"find_activity", "inspect_activity"} <= set(names(first.menus[-1]))
+    assert names(followup.menus[0]) == [*names(first.menus[0]), "find_activity"]
+    assert "inspect_activity" not in names(followup.menus[0])
+    assert followup.menus[0] == followup.menus[-1]
     answers = [message for message in followup.prompts[-1]
                if isinstance(message, ToolMessage) and message.tool_call_id.startswith("query-")]
     assert len(answers) == 4 and all(message.status == "success" for message in answers)
+
+
+def test_unshown_cached_read_name_executes_from_current_catalog_without_a_recent_hint(capabilities):
+    catalog, reads = capabilities
+    saver = InMemorySaver()
+    first = Script(responses=[
+        AIMessage(content="", tool_calls=[call("load_public_activity_info_tools")]),
+        AIMessage(content="工具已加载，尚未检索。")])
+    selected = runtime(saver, first, catalog)
+    run(selected, "先查看公开检索的能力")
+    assert selected.store.load(config()).recent_read is None and not reads
+    assert "find_activity" in names(first.menus[-1])
+    followup = Script(responses=[
+        AIMessage(content="", tool_calls=[call("find_activity", "cached", query="猫咪")]),
+        AIMessage(content="已找到。")])
+    assert run(runtime(saver, followup, catalog)).reply == "已找到。"
+    assert "find_activity" not in names(followup.menus[0])
+    assert len(followup.prompts) == 2 and reads == [("public", "猫咪")]
+    assert any(isinstance(message, ToolMessage) and message.tool_call_id == "cached"
+               and message.status == "success" for message in followup.prompts[-1])
 
 
 @pytest.mark.parametrize("name,role", [("inspect_admin", "user"), ("invented_tool", "admin")])
