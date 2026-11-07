@@ -109,9 +109,7 @@ class AgentRuntime:
 
     def _new_turn(self, snapshot, incoming, config, task_id):
         principal = ((config or {}).get("configurable") or {}).get("principal")
-        if (snapshot.unfinished and not snapshot.run.get("input_saved")
-                and recovery.allowed(snapshot, snapshot.run["id"], config)):
-            incoming = [*snapshot.run["input"], *incoming]
+        incoming = [*recovery.input_context(snapshot, config), *incoming]
         prompt = self.application.prompt([*snapshot.messages, *incoming], principal)
         session = self._session(config, snapshot, None)
         session.turn_input = incoming
