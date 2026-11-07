@@ -348,17 +348,20 @@ def test_notification_retry_exhaustion_preserves_effect_across_dbos_resume_and_r
     view = service.get(ADMIN, ident)
     expected = {"status": "completed", "text": "已发布审批原文",
                 "notification": {"delivered": False, "reason": "delivery_failed"}}
-    assert view["result"] == expected and view["needs_attention"]
+    summary = {"status": "completed", "preview": "已发布审批原文",
+               "notification": {"delivered": False, "reason": "delivery_failed"}}
+    assert view["result"] == summary and view["needs_attention"]
     runs = service.runs(ADMIN, ident)["items"]
-    assert len(runs) == 1 and runs[0]["result"] == expected
+    assert len(runs) == 1 and runs[0]["result"] == summary
     run_id = runs[0]["id"]
+    assert service.result(ADMIN, ident, run_id)["result"] == expected
     assert query("SELECT owner_id,title,body FROM test_publications") == [
         (7, "通知失败验收", "已审批的合成公告正文")]
     assert query("SELECT count(*) FROM test_effects WHERE run_id=%s", (run_id,)) == [(1,)]
     assert query("SELECT count(*) FROM test_attempts WHERE run_id=%s", (run_id,)) == [(3,)]
     assert query("SELECT count(*) FROM test_notifications") == [(0,)]
     attention = service.list(ADMIN, active_only=True)["recent_results"]
-    assert len(attention) == 1 and attention[0]["result"] == expected
+    assert len(attention) == 1 and attention[0]["result"] == summary
     with pytest.raises(ScheduleConflict, match="already ended"):
         service.control(ADMIN, ident, "resume", view["version"])
     # DBOS treats resuming a completed workflow as a no-op with its durable result.
@@ -367,7 +370,8 @@ def test_notification_retry_exhaustion_preserves_effect_across_dbos_resume_and_r
     processes[0].kill()
     processes[0].wait(timeout=10)
     start()
-    assert service.get(ADMIN, ident)["result"] == expected
+    assert service.get(ADMIN, ident)["result"] == summary
+    assert service.result(ADMIN, ident, run_id)["result"] == expected
     assert service.get(ADMIN, ident)["needs_attention"]
     assert query("SELECT count(*) FROM test_publications") == [(1,)]
     assert query("SELECT count(*) FROM test_effects WHERE run_id=%s", (run_id,)) == [(1,)]
