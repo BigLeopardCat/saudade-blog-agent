@@ -1369,7 +1369,7 @@ def step17_auth_review(rep: Report, uid: int, role: str, allow_publish: bool = F
     print("\n⑰ 授权式短应答 → 台账按 id 进帧 → 弹卡 → 点确定"
           "（--allow-write + --allow-board-audit）")
     # 所以额度族的断言读它、不另写一张"工具名 → 中文"的表（两张表必然漂移）。
-    from agent.adminops_tags import BOARD_VERDICT_CN
+    from agent.article_labels import BOARD_VERDICT_CN
     pending = _pending_rows(uid, role)
     if not pending:
         print("  [skip] 台账里一条待审都没有（台账帧会是「没有任何待审留言」，模型无从挑）"
@@ -1837,7 +1837,7 @@ def step18_ledger_zero_write(rep: Report, uid: int, role: str) -> None:
 
     Contextual authorization is not signed approval. With no selected mutation,
     check the probe's pending-item follow-up against its source data."""
-    from agent.adminops_tags import BOARD_VERDICT_CN
+    from agent.article_labels import BOARD_VERDICT_CN
     from agent.authz import is_write
     print("\n⑱ 台账那条腿的零写半（授权 ≠ 签字；模型不动作时不许静默）")
 

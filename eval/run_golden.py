@@ -1504,7 +1504,7 @@ def check_gold(gold: dict, result: dict, *, docs=None, user_input: str = "",
     if gold.get("require_card_targets_from_ledger") and not _lf_off:
         from native_receipt_contract import FIELD_FAMILY, TAG_FAMILY, TARGET_FIELDS
 
-        from agent.adminops_target import normalize_target_id  # 编号解析的唯一实现
+        from agent.identifiers import normalize_target_id  # 编号解析的唯一实现
         _byfam: dict = {}
         for _e in _lf_events:
             for _raw in (_e.get("ids") or []):

@@ -185,7 +185,7 @@ def test_settings_surface():
     check("五个常量在所属 HTTP 模块从 settings.<同名字段> 取值",
           not _unwired,
           f"未单轨：{'、'.join(_unwired) or '无'}")
-    check("server.py 里 os.environ 清零（直读进程环境就是第二轨长回来的地方；"
+    check("HTTP 应用模块通过 Settings 读取配置（"
           "将来真有正当用途时再来改这条判据——红着比悄悄漏掉好）",
           "os.environ" not in server_src)
     check("判据内部两张表与 settings 的 alias 对得上（常量名/env 键/字段名三口对账）",
