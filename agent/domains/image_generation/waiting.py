@@ -13,6 +13,7 @@ from tools import base
 
 MAX_STREAM_BYTES = 2 * 1024 * 1024
 FINISH_RESERVE_SECONDS = 15
+IO_TIMEOUT_SECONDS = 3
 
 
 class WaitElapsed(Exception):
@@ -23,12 +24,20 @@ class CheckedStream(httpx.SyncByteStream):
     def __init__(self, original, config, deadline):
         self.original, self.config, self.deadline = original, config, deadline
 
+    def _check(self):
+        check_cancelled(self.config)
+        if time.monotonic() >= self.deadline:
+            raise WaitElapsed()
+
     def __iter__(self):
-        size = 0
-        for chunk in self.original:
-            check_cancelled(self.config)
-            if time.monotonic() >= self.deadline:
-                raise WaitElapsed()
+        size, original = 0, iter(self.original)
+        while True:
+            self._check()
+            try:
+                chunk = next(original)
+            except StopIteration:
+                return
+            self._check()
             size += len(chunk)
             if size > MAX_STREAM_BYTES:
                 raise ValueError("Image job stream exceeds its byte limit")
@@ -42,9 +51,11 @@ class CheckedStream(httpx.SyncByteStream):
 
 def wait(job_id, seconds, config, path):
     check_cancelled(config)
-    window = seconds + FINISH_RESERVE_SECONDS + 1
+    # Budget startup connect/headers and the final blocking read before returning to the model.
+    overhead = 2 * IO_TIMEOUT_SECONDS + 1
+    window = seconds + FINISH_RESERVE_SECONDS + overhead
     remaining = model_options(window).get("timeout", window)
-    seconds = min(seconds, max(0, int(remaining - FINISH_RESERVE_SECONDS - 1)))
+    seconds = min(seconds, max(0, int(remaining - FINISH_RESERVE_SECONDS - overhead)))
     if seconds < 1:
         return base.unavailable("本轮剩余时间不足，尚未等待核实生图结果；可继续查看该任务。")
     deadline, last = time.monotonic() + seconds + 1, None
@@ -56,8 +67,8 @@ def wait(job_id, seconds, config, path):
     try:
         with connect_sse(base._client, "GET", f"{base.ADMIN_BASE}{path}/jobs/{job_id}/events",
                 params={"wait_seconds": seconds}, headers=headers,
-                timeout=httpx.Timeout(remaining, connect=min(3, remaining),
-                                      read=min(3, remaining))) as source:
+                timeout=httpx.Timeout(remaining, connect=min(IO_TIMEOUT_SECONDS, remaining),
+                                      read=min(IO_TIMEOUT_SECONDS, remaining))) as source:
             response = source.response
             response.raise_for_status()
             if response.headers.get("content-encoding", "identity") != "identity":

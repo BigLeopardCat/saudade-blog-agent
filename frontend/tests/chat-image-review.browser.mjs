@@ -50,10 +50,25 @@ export async function assertWorkRecovery({page, send, reset, idle, setMode}) {
     await send('等待图片并继续查看结果','work-hold');
     const id=await page.locator('.agent-process-line.work').last().getAttribute('data-work-id');
     await page.locator('#chat-send').click(); await idle();
+    await page.waitForFunction(()=>document.getElementById('chat-send').dataset.phase==='paused');
+    const saved=await page.evaluate(()=>window.__chatTest.ctx.ui.currentPausedTask?.());
+    assert.ok(saved?.task_id && saved.process.some(step=>step.work?.id===id));
     if(reload) {
       await page.reload();
       await page.waitForFunction(()=>!!window.__chatTest?.ctx.state.conv);
-      await page.waitForFunction(()=>document.getElementById('chat-send').dataset.phase==='paused');
+      try {
+        await page.waitForFunction(()=>document.getElementById('chat-send').dataset.phase==='paused');
+      } catch(error) {
+        console.log('work-recovery-state',await page.evaluate(()=>({
+          phase:document.getElementById('chat-send').dataset.phase,
+          failed:JSON.parse(localStorage.getItem('saudade-chat-failed')||'null'),
+          items:window.__chatTest.ctx.state.items.map(({type,id,turn_id,parent_turn_id})=>
+            ({type,id,turn_id,parent_turn_id})),
+          paused:window.__chatTest.ctx.ui.currentPausedTask?.(),
+          input:document.getElementById('chat-input').value,
+        })));
+        throw error;
+      }
       // Exercise persisted progress when its old presentation is no longer in this window.
       await page.locator('.agent-process').evaluateAll(nodes=>nodes.forEach(node=>node.remove()));
     }

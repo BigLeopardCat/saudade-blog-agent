@@ -4,6 +4,7 @@ import copy
 import json
 import threading
 import time
+from types import SimpleNamespace
 
 import httpx
 import pytest
@@ -153,7 +154,7 @@ def test_cancellation_during_keepalive_closes_stream_without_post(monkeypatch):
 
 def test_wait_uses_remaining_request_deadline(monkeypatch):
     result, requests, _ = observe(monkeypatch, Stream(event(job(), "image_job_timeout")),
-        control=RequestControl(threading.Event(), time.monotonic() + 23))
+        control=RequestControl(threading.Event(), time.monotonic() + 30))
     assert result.kind == "ok" and 1 <= int(requests[0].url.params["wait_seconds"]) <= 7
     assert requests[0].extensions["timeout"]["read"] <= 3
 
@@ -163,6 +164,38 @@ def test_insufficient_finish_reserve_does_not_open_a_long_read(monkeypatch):
     result, requests, _ = observe(monkeypatch, stream,
         control=RequestControl(threading.Event(), time.monotonic() + 15))
     assert result.kind == "unavailable" and requests == []
+
+
+def test_final_blocking_read_cannot_spend_the_fifteen_second_finish_reserve(monkeypatch):
+    clock, requests = [0.0], []
+    remaining = 80
+    monkeypatch.setattr(waiting, "time", SimpleNamespace(monotonic=lambda: clock[0]))
+    monkeypatch.setattr(waiting, "model_options", lambda _: {"timeout": remaining})
+
+    def progress(job, config):
+        # The next real read starts just before the observation window ends.
+        clock[0] = int(requests[0].url.params["wait_seconds"]) + 1 - 0.01
+
+    monkeypatch.setattr(waiting, "show_progress", progress)
+
+    def last_read(index):
+        if index == 1:
+            clock[0] += waiting.IO_TIMEOUT_SECONDS
+
+    stream = Stream(event(job()), b": late keepalive\n\n", event(job("accepted", imageId=31)),
+                    before=last_read)
+
+    def host(request):
+        requests.append(request)
+        return httpx.Response(200, headers={"Content-Type": "text/event-stream"}, stream=stream)
+
+    cfg = config(principal=Principal(7, "admin", SOURCE_ASSERTION))
+    with httpx.Client(transport=httpx.MockTransport(host)) as client:
+        monkeypatch.setattr(base, "_client", client)
+        verified, outcome = waiting.wait(ID, 240, cfg, tools.PATH)
+    assert verified.status == "generating" and outcome == "timeout"
+    assert remaining - clock[0] >= waiting.FINISH_RESERVE_SECONDS
+    assert len(requests) == 1 and stream.closed
 
 
 @pytest.mark.parametrize("seconds", [True, -1, 241])
