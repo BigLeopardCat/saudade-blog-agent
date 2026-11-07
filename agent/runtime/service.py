@@ -185,6 +185,9 @@ class AgentRuntime:
                            descriptions=self.application.descriptions,
                            middleware=self.application.middleware,
                            history_access=self.application.history_access)
+        from agent.runtime.conversation_store import bound_recent_read
+
+        session.state["recent_read"] = bound_recent_read(snapshot.recent_read, config)
         session.input_inbox = self.inputs
         session.feedback_handler = partial(pending.feedback, saver=self.saver) if pending else None
         return session

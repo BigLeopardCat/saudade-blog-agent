@@ -315,6 +315,8 @@ def _drop_turn(agent, config, turn_id):
     # This fence must survive a failed state update and reject late/queued delivery.
     checkpoint_store.mark_turn_deleted(saver, tid, turn_id)
     update = {}
+    if (values.get("recent_read") or {}).get("turn_id") == turn_id:
+        update["recent_read"] = None
     if index is not None:
         update["messages"] = [RemoveMessage(id=message.id) for message in messages[index:]]
     if active_matches or index is not None:
@@ -324,7 +326,8 @@ def _drop_turn(agent, config, turn_id):
         agent.update_state(config, update)
     after = agent.get_state(config).values or {}
     if any(message.id == target for message in after.get("messages", [])) or (
-            active_matches and after.get("run")):
+            active_matches and after.get("run")) or (
+            (after.get("recent_read") or {}).get("turn_id") == turn_id):
         return {"dropped": False, "why": "still_present"}
     inbox = getattr(agent, "inputs", None)
     if inbox:

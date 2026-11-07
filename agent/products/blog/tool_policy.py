@@ -4,13 +4,17 @@ from dataclasses import replace
 
 from langchain.agents.middleware import AgentMiddleware
 from langchain_core.messages import AIMessage, ToolMessage
+from langchain_core.utils.function_calling import convert_to_openai_tool
 from langgraph.types import Command
 
 from agent.authz import SCOPE_READ_PUBLIC, TOOL_SCOPE, WRITE_SCOPES, check, manifest_gaps
 from agent.domains import article_editor, browser, device_actions
 from agent.products.blog.confirmation import presentation
+from agent.products.blog.history import read_tool
 from agent.products.blog.read_tools import scoped_reads_enabled
+from agent.runtime.conversation_store import bound_recent_read
 from agent.runtime.execution_state import capture
+from agent.runtime.task_scope import binding
 from utils.trace import record
 
 
@@ -22,6 +26,17 @@ class BlogToolMiddleware(AgentMiddleware):
             declared.update(tools)
         if missing := manifest_gaps(declared):
             raise ValueError(f"Blog tools require explicit permission scopes: {missing}")
+
+    def wrap_model_call(self, request, handler):
+        menu = list(request.tools or ())
+        hint = bound_recent_read(request.state.get("recent_read"), self.session.config)
+        recent = (read_tool(hint["tool_name"], self.session.execution_tools, self._allowed)
+                  if hint else None)
+        if recent is not None and recent.name not in {
+            convert_to_openai_tool(item)["function"]["name"] for item in menu
+        }:
+            menu = [*menu, convert_to_openai_tool(recent)]
+        return handler(request.override(tools=menu))
 
     def wrap_tool_call(self, request, handler):
         call = request.tool_call
@@ -42,6 +57,17 @@ class BlogToolMiddleware(AgentMiddleware):
         for message in messages:
             if isinstance(message, ToolMessage) and message.tool_call_id == call["id"]:
                 self._collect_receipts(call["name"], message)
+                if (message.status == "success"
+                        and (message.artifact or {}).get("kind") in {"ok", "empty"}
+                        and read_tool(call["name"], self.session.execution_tools, self._allowed)
+                        and self.session.task):
+                    hint = {"tool_name": call["name"], "scope": binding(self.session.config),
+                            "turn_id": self.session.task.get("turn_id") or self.session.task["id"]}
+                    self.session.state["recent_read"] = hint
+                    update = {**(result.update if isinstance(result, Command)
+                                 else {"messages": [result]}), "recent_read": hint}
+                    result = (replace(result, update=update) if isinstance(result, Command)
+                              else Command(update=update))
         return result
 
     def _allowed(self, name):

@@ -49,6 +49,7 @@ class CheckpointConversationStore:
             run=values.get("run"),
             receipts=list(values.get("receipts") or []),
             last_outcome=values.get("last_outcome"),
+            recent_read=values.get("recent_read"),
             unfinished=bool(values.get("run")),
             initialized=snapshot.created_at is not None,
         )
