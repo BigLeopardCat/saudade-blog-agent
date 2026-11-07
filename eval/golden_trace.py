@@ -42,7 +42,7 @@ TRACE_DERIVED_GOLD_KEYS = ("require_ledger_frame", "require_ledger_rows",
 def trace_derived_keys(case: dict) -> list:
     """这条用例（**多轮也算**）里靠 trace 事件才判得动的 gold 键。
 
-    轮次取法与 `run_golden.iter_rounds` 同源（单轮用例字段在顶层，多轮写在 `rounds` 里）
+    轮次取法与 `golden_evaluation.iter_rounds` 同源（单轮用例字段在顶层，多轮写在 `rounds` 里）
     ——这里只读 `gold` 一格，故不复用那个归一化器（它会连带构造 context，代价不对等）。
     """
     rounds = case.get("rounds") or [case]

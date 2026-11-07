@@ -1,6 +1,6 @@
 """Archived no-popup premises remain comparable after leaving runtime authorization."""
 
-from eval.run_golden import check_no_popup_premises
+from eval.golden_evaluation import check_no_popup_premises
 
 
 def test_archived_question_premise_retains_positive_and_negative_controls():

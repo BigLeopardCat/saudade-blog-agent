@@ -15,7 +15,7 @@ sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "eval"))
 
 
-from run_golden import fallback_resets, parse_reset  # noqa: E402
+from eval.golden_evaluation import fallback_resets, parse_reset  # noqa: E402
 
 FAILS: list[str] = []
 check = collector(FAILS)
@@ -78,7 +78,7 @@ def _test_forbid_fallback_reads_scope():
                                                                    "reset_scopes": []}) == [])
     # 接线（源码锚定）：run_one 必须**逐条**把 parse_reset 的 scope 收进 reset_scopes，
     # 否则上面这些语义都无从谈起（判据拿不到形状）。三条一起才说明"记账记得是全的"。
-    src = (ROOT / "eval/run_golden.py").read_text(encoding="utf-8")
+    src = (ROOT / "eval/golden_evaluation.py").read_text(encoding="utf-8")
     check("每条 RESET 都记 scope（不是只在 text 那支记）",
           "_scope, _reason = parse_reset(item)" in src
           and "reset_scopes.append(_scope)" in src)

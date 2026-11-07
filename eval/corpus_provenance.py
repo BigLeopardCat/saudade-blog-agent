@@ -38,7 +38,7 @@ def snapshot_docs() -> "list | None":
     """语料快照（`[{type,id,title,content}]`）；**取不到与是空的都返回 `None`**，不抛。
 
     取法（`get_index()` → 空则 `build()` → `docs_snapshot()`）与"取不到就 None"这两条
-    语义原来长在 `run_golden.judge_corpus()` 里，这里搬出来是为了让两个跑法共用一处——
+    语义原来长在 `golden_evaluation.judge_corpus()` 里，这里搬出来是为了让两个跑法共用一处——
     `judge_corpus()` 现在只是它外面那层给判据看的打印。
 
     取不到时**打一行**（带异常类型），因为"为什么没有语料"是要人去查的第一件事；
@@ -112,7 +112,7 @@ def check_corpus_premises(docs, provenance_file: "str | None" = None) -> tuple:
 
 # Entity premises distinguish missing source entities from model execution failures.
 ENTITY_KINDS: tuple[str, ...] = ("note_visible",)
-# 声明里必须写 why 的下限（同 `run_golden` 的 `premise_no_popup.capability_boundary`）：
+# 声明里必须写 why 的下限（同 `golden_evaluation` 的 `premise_no_popup.capability_boundary`）：
 # 那一半是"为什么这条判据要求这件东西在场"，机器判不了，但至少要写下来。
 ENTITY_WHY_MIN = 8
 # 锚可以是**标题**也可以是 **note id**，两者只写一个（都写了按 id 核，见下面那个 `if`）：
@@ -131,7 +131,7 @@ def check_entity_premises(cases: list, docs) -> tuple:
     结论 `state="changed"` = 那件东西**已经不在公开面上了**（被改成 private / 删了 /
     改了名）⇒ 该用例未评估。声明本身写坏（kind 不在 `ENTITY_KINDS`、锚一个都没写、why 太短）
     **也归 changed**：那是"判据坏了"，方向必须偏到"未评估"那一侧（静默放行就是
-    `run_golden` 那段注释说的"判据看着在、其实不在"）。
+    `golden_evaluation` 那段注释说的"判据看着在、其实不在"）。
 
     锚两种写法二选一（见上面 `ENTITY_KINDS` 那段）：`note_id` 优先（精确、改名不误伤），
     给了 id 就**只**按 id 核；没给才按 `title` 去语料里找。

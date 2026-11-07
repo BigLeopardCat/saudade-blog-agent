@@ -200,7 +200,7 @@ def main() -> int:
     print(f"[fixture] 桩已就绪：{url}", flush=True)
     print("[fixture] 跑法（另开一个终端，仓根）：\n"
           f"[fixture]   BLOG_API_BASE={url} .venv/bin/python "
-          "eval/run_golden.py --golden eval/fixtures/golden_smoke.jsonl", flush=True)
+          "python -m eval.native_contracts", flush=True)
     try:
         srv.serve_forever()
     except KeyboardInterrupt:

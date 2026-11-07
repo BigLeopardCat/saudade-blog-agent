@@ -24,7 +24,7 @@ sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "eval"))
 
 
-import golden_trace  # noqa: E402
+from eval import golden_trace  # noqa: E402
 
 from utils import trace as trace_mod  # noqa: E402  （⑦ 那条：真落一份盘看顶层字段）
 from utils import trace_files as tf  # noqa: E402

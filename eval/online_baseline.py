@@ -25,7 +25,7 @@ from utils.trace_io import load_trace
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "eval"))
-import run_golden as golden  # noqa: E402
+from eval import golden_evaluation as golden  # noqa: E402
 
 SUITE = ROOT / "eval/golden/native_requests.jsonl"
 POC_IDS = ("chat_user", "nav_board", "article_discovery", "own_unread",
@@ -94,7 +94,7 @@ def snapshot(folder, cases):
     sources = folder / "evaluator"
     sources.mkdir()
     hashes = {}
-    names = ("run_golden.py", "online_baseline.py", "online_transport.py", "stream_protocol.py",
+    names = ("golden_evaluation.py", "online_baseline.py", "online_transport.py", "stream_protocol.py",
                  "native_assertions.py", "request_metrics.py", "latency_metrics.py",
                  "task_metrics.py", "usage.py",
                  "release_readiness.py", "release_profile.json", "statistical_metrics.py",

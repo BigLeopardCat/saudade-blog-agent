@@ -304,8 +304,8 @@ def _test_report_and_no_gate():
 def _test_golden_runs_raise_the_trace_limit():
     print("[接线] 跑法把 trace 的工具返回上限放开——判官有材料可看")
     from utils import trace as trace_mod
-    src_run = (ROOT / "eval" / "run_golden.py").read_text(encoding="utf-8")
-    check("run_golden.run_case 里设了上限（三个跑法都走它）",
+    src_run = (ROOT / "eval" / "golden_evaluation.py").read_text(encoding="utf-8")
+    check("golden_evaluation.run_case 里设了上限（三个跑法都走它）",
           "trace_mod.TOOL_RESULT_LIMIT_ENV" in src_run
           and "os.environ.setdefault(trace_mod.TOOL_RESULT_LIMIT_ENV" in src_run)
     src_graph = (ROOT / "agent/runtime/tool_execution.py").read_text(encoding="utf-8")

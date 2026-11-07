@@ -2,7 +2,7 @@
 
 import json
 
-from eval import run_golden
+from eval import golden_evaluation
 from eval.improvement.artifacts import digest, encode, nonempty, private_write
 from eval.improvement.feedback import validate_cases
 from eval.online_baseline import load_suite
@@ -16,7 +16,7 @@ def suite_bytes(cases):
 
 def requests(cases):
     return {"".join(rnd["user_input"].split()).casefold()
-            for case in cases for rnd in run_golden.iter_rounds(case)}
+            for case in cases for rnd in golden_evaluation.iter_rounds(case)}
 
 
 def groups(cases):

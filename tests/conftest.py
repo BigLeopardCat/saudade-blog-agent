@@ -93,12 +93,12 @@ _WATCHED_MODULES = (
     "utils.clock",
     "utils.trace",
     "build_word_graph",
-    "corpus_provenance",
-    "golden_fixture",
+    "eval.corpus_provenance",
+    "eval.golden_fixture",
     "golden_fixture_todo",
-    "golden_trace",
+    "eval.golden_trace",
     "report_archive",
-    "run_golden",
+    "eval.golden_evaluation",
 )
 
 

@@ -60,7 +60,7 @@ def test_current_reports_use_the_native_identity():
 
 
 def test_runner_closes_owned_resources_and_can_restart(monkeypatch):
-    from eval import golden_runtime as run_golden
+    from eval import golden_runtime as golden_evaluation
 
     events = []
 
@@ -69,23 +69,23 @@ def test_runner_closes_owned_resources_and_can_restart(monkeypatch):
         resources.callback(events.append, runtime)
         return runtime
 
-    monkeypatch.setattr(run_golden, "_runtime", None)
+    monkeypatch.setattr(golden_evaluation, "_runtime", None)
     with ExitStack() as resources:
-        monkeypatch.setattr(run_golden, "_resources", resources)
-        monkeypatch.setattr(run_golden, "build_agent", build)
-        first = run_golden.ensure_agent()
-        assert run_golden.ensure_agent() is first and events == []
-        run_golden.close_agent()
-        run_golden.close_agent()
-        assert events == [first] and run_golden._runtime is None
-        second = run_golden.ensure_agent()
+        monkeypatch.setattr(golden_evaluation, "_resources", resources)
+        monkeypatch.setattr(golden_evaluation, "build_agent", build)
+        first = golden_evaluation.ensure_agent()
+        assert golden_evaluation.ensure_agent() is first and events == []
+        golden_evaluation.close_agent()
+        golden_evaluation.close_agent()
+        assert events == [first] and golden_evaluation._runtime is None
+        second = golden_evaluation.ensure_agent()
         assert second is not first
-        run_golden.close_agent()
+        golden_evaluation.close_agent()
         assert events == [first, second]
 
 
 def test_runner_failed_build_releases_its_resources(monkeypatch):
-    from eval import golden_runtime as run_golden
+    from eval import golden_runtime as golden_evaluation
 
     events = []
 
@@ -93,21 +93,20 @@ def test_runner_failed_build_releases_its_resources(monkeypatch):
         resources.callback(events.append, "closed")
         raise ValueError("runtime fixture")
 
-    monkeypatch.setattr(run_golden, "_runtime", None)
+    monkeypatch.setattr(golden_evaluation, "_runtime", None)
     with ExitStack() as resources:
-        monkeypatch.setattr(run_golden, "_resources", resources)
-        monkeypatch.setattr(run_golden, "build_agent", fail)
+        monkeypatch.setattr(golden_evaluation, "_resources", resources)
+        monkeypatch.setattr(golden_evaluation, "build_agent", fail)
         with pytest.raises(ValueError, match="runtime fixture"):
-            run_golden.ensure_agent()
-        assert events == ["closed"] and run_golden._runtime is None
-        run_golden.close_agent()
+            golden_evaluation.ensure_agent()
+        assert events == ["closed"] and golden_evaluation._runtime is None
+        golden_evaluation.close_agent()
         assert events == ["closed"]
 
 
-@pytest.mark.parametrize("entry", ["run_golden.py"])
-def test_legacy_cli_uses_its_checkout_and_supports_help(entry, tmp_path):
+def test_current_http_cli_help_uses_the_repository_without_starting_resources():
     root = Path(__file__).resolve().parent.parent
-    result = subprocess.run([sys.executable, str(root / "eval" / entry), "--help"],
-                            cwd=tmp_path, capture_output=True, text=True, timeout=30)
+    result = subprocess.run([sys.executable, "-m", "eval.online_baseline", "--help"],
+                            cwd=root, capture_output=True, text=True, timeout=30)
     assert result.returncode == 0, result.stderr
-    assert "usage:" in result.stdout and "--help" in result.stdout
+    assert "--report-dir" in result.stdout and "--expected-build" in result.stdout

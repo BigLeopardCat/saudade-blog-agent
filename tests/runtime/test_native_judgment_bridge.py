@@ -2,7 +2,7 @@
 
 from langchain_core.messages import AIMessage
 
-from eval import native_contracts, run_golden
+from eval import native_contracts, golden_evaluation
 from eval.own_fixtures import favorite_backend
 
 
@@ -21,8 +21,8 @@ def test_native_turn_supplies_saved_events_to_the_shared_judgment(monkeypatch, t
         value = turn("只回复收到")
         assert any(event.get("event") == "llm_done" for event in value["native_events"])
         gold = {"forbid_runtime_stop": True, "forbid_business_write": True}
-        assert run_golden.check_gold(gold, value) == []
-        missing = run_golden.check_gold(gold, {**value, "native_events": None})
+        assert golden_evaluation.check_gold(gold, value) == []
+        missing = golden_evaluation.check_gold(gold, {**value, "native_events": None})
         assert missing and "未评估" in missing[0]
 
     row, _ = native_contracts._sample("shared_judgment", favorite_backend, contract, "bridge", 1)

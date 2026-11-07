@@ -30,7 +30,7 @@ sys.path.insert(0, str(EVAL))
 sys.path.insert(0, str(ROOT))
 
 
-import corpus_provenance as cp  # noqa: E402
+from eval import corpus_provenance as cp  # noqa: E402
 
 FIX = EVAL / "fixtures"
 
@@ -56,7 +56,7 @@ def _derive_terms(key: str, docs: list, spec: dict) -> list[str]:
     （截断按 df 升序取到的是最冷僻的标识符，会把诚实的回答判红，见那个函数的 docstring）
     ——这里若用默认值，就会把"其实够用"的语料判成术语不足。
     """
-    from corpus_terms import derive  # 局部导入：这条判据才需要（它会拉起 rag.search）
+    from eval.corpus_terms import derive  # 局部导入：这条判据才需要（它会拉起 rag.search）
     terms, _diag = derive([key], docs=docs, df_max=int(spec.get("df_max") or 2),
                           strict=bool(spec.get("strict")), cap=None)
     return terms

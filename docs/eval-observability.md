@@ -36,7 +36,7 @@ python -m eval.release_readiness --help
 ```
 
 线上 HTTP 验收使用 `online_baseline`；隔离写入/回放使用 `native_contracts`，
-旧语料夹具共用 `run_golden`。语义复核只通过 `online_judge` 审评固定报告，
+旧语料夹具共用 `golden_evaluation`。语义复核只通过 `online_judge` 审评固定报告，
 普通离线测试统一由 pytest 收集，不在生产 cron 中串联这些入口。
 
 线上先 POC，后全量，命令和目标见[发布验收](release-acceptance.md)。不得在普通 CI 默认运行线上写入或付费生图；生产材料交给外部 judge 前需脱敏和授权。

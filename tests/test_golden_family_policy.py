@@ -16,7 +16,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "eval"))
 
 
-import run_golden as rg  # noqa: E402
+from eval import golden_evaluation as rg  # noqa: E402
 
 FAILED: list[str] = []
 check = collector(FAILED)

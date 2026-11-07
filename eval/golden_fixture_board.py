@@ -12,7 +12,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "eval"))
 
-from golden_fixture import FIXTURE_PREFIX  # noqa: E402  （族前缀只有一处来源）
+from eval.golden_fixture import FIXTURE_PREFIX  # noqa: E402  （族前缀只有一处来源）
 
 # `talk.approved` 的取值（与 `src/routes/talks.rs` 的三态一一对应）。
 # **只在这里出现这一次**：判据是"等于期望值"，不是"> 0 就算通过"。

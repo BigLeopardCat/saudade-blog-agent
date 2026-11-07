@@ -63,7 +63,7 @@ def test_bad_development_cannot_open_holdout(evaluated, fault):
     if fault == "wrong_candidate":
         doc["service_version"]["sha"] = "other"
     elif fault == "changed_evaluator":
-        doc["evaluator_sha256"]["run_golden.py"] = "changed"
+        doc["evaluator_sha256"]["golden_evaluation.py"] = "changed"
     elif fault in {"cost_regression", "missing_usage", "unfinished_call"}:
         trace = release.Path(doc["cases"][0]["result"]["rounds"][0]["trace"])
         body = json.loads(trace.read_bytes())

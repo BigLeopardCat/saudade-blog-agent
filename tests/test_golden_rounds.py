@@ -2,7 +2,7 @@
 
 import json
 
-from eval import run_golden as golden
+from eval import golden_evaluation as golden
 
 
 def response(text="expected", token=None):

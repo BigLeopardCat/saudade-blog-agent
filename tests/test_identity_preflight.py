@@ -154,9 +154,9 @@ def test_identity_preflight():
     check("只读：代码段里无写方法、无写接口前缀",
           not any(p in _IP_CODE for p in (".post(", ".put(", ".delete(", "/protected/")),
           str([p for p in (".post(", ".put(", ".delete(", "/protected/") if p in _IP_CODE]))
-    print("\n⑤ run_golden 接线：退出码 3 排在「通过」之前（结构锁）")
-    _G = (ROOT / "eval/run_golden.py").read_text(encoding="utf-8")
-    check("run_golden 里 import 了 identity_preflight",
+    print("\n⑤ golden_evaluation 接线：退出码 3 排在「通过」之前（结构锁）")
+    _G = (ROOT / "eval/golden_evaluation.py").read_text(encoding="utf-8")
+    check("golden_evaluation 里 import 了 identity_preflight",
           "import identity_preflight" in _G)
     check("两条身份通道都带上了期望角色（admin/user 各一条）",
           '("needs_admin_uid", "GOLDEN_ADMIN_UID", "admin")' in _G

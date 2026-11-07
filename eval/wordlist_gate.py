@@ -201,7 +201,7 @@ def _file_metric(tree: ast.AST) -> list[int]:
 
 # Evaluation assertion matching surfaces have an independent growth ratchet.
 EVAL_GOLDEN = "eval/golden/basic.jsonl"
-EVAL_JUDGE = "eval/run_golden.py"
+EVAL_JUDGE = "eval/golden_evaluation.py"
 EVAL_KEYS = ("text_not_match_regex", "text_contains", "text_not_contains")
 EVAL_EXEMPT_KEYS = (
     "not_contains_exempt_quote", "not_match_exempt_conditional",
@@ -214,7 +214,7 @@ EVAL_FAMILIES = ("DENIAL_FAMILY", "ABSENCE_COMPOUND", "ABSENCE_LEADS", "LOGIN_DE
 def _golden_golds(case: dict) -> list[dict]:
     """一条用例里的 gold 对象（多轮取每一轮的）。
 
-    ⚠️ 这是 `eval/run_golden.py::iter_rounds` 的**镜像**，只镜像"gold 在哪"这一点。
+    ⚠️ 这是 `eval/golden_evaluation.py::iter_rounds` 的**镜像**，只镜像"gold 在哪"这一点。
     镜像而非 import 是必要的：闸门不许把 langchain/LLM 拖进来（`tests/test_wordlist_gate.py`
     与 `--dump` 都要秒级跑完）。镜像就有漂移风险，所以 ⑪ 用一条"顶层 gold 与 rounds 并存"
     的用例钉住它的形状（**只读 rounds**，与 `iter_rounds` 同一取舍）。
@@ -432,7 +432,7 @@ def _print_eval_reds(now: dict, reg: dict) -> int:
         return 0
     if not reg:
         print(f"  ❌ 登记表里**没有 `eval_vocab` 这一段** —— `eval/` 侧的词表族（golden 的"
-              f"负正则/正反词表、六个豁免开关、run_golden 的四张共享族）此刻**没有任何机器"
+              f"负正则/正反词表、六个豁免开关、golden_evaluation 的四张共享族）此刻**没有任何机器"
               f"判据拦着**（跑 `--update` 出一次，再把每一条为什么不改写进 why）")
         return 1
     reds: list[str] = []
@@ -625,7 +625,7 @@ _NOTE = ("判据层「词表形状」的登记表。未登记即红；已登记�
 
 _EVAL_NOTE = ("`eval/` 侧（判据的**判据**）的词表族棘轮。四块：`keys` = golden 三个文本断言键的"
               "模式/词条**全集** + 格数 + 项数；`exempt` = 六个豁免开关各被哪些用例打开；"
-              "`families` = `eval/run_golden.py` 四张共享族的元素数 + 元素集指纹"
+              "`families` = `eval/golden_evaluation.py` 四张共享族的元素数 + 元素集指纹"
               "（抓「数量不变、条目被换掉」；拼接出来的正则只数得到字面量那几段，那种条目带 "
               "`partial: true` 标记、读作下界）；`judge_metric` = 该文件走一遍①②穷举量得到的补网。"
               "只许变小；**新增模式要先在这条自己的 why 里写清它守哪个不变量**再跑 `--update`。"

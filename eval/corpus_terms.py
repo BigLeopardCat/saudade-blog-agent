@@ -518,7 +518,7 @@ def exposure(*, runs: int = 0, report_dir: str | None = "eval/report",
         return 1, "", [f"[exposure] 归档不可用（{arch} 下没有 *.json）——未评估，不写报告"]
     sys.path.insert(0, str(ev_dir))
     try:
-        import run_golden as rg            # 判据本体：**只此一份**，不在这里重写匹配逻辑
+        import golden_evaluation as rg            # 判据本体：**只此一份**，不在这里重写匹配逻辑
     except Exception as e:                 # noqa: BLE001 —— 报出真因，别让哨兵自己死掉
         return 1, "", [f"[exposure] 判据不可用（{type(e).__name__}: {e}）——未评估，不写报告"]
 
@@ -552,7 +552,7 @@ def _exposure_md(files, n_cases, n_rounds, n_gold, rows, big, gone, stale,
          f"{n_rounds} 轮文本；golden {n_gold} 条用例",
          f"- 跳过：用例已不在 golden {sum(gone.values())} 条（{len(gone)} 个 id）、"
          f"轮数不符 {stale} 条、截断文本 {trunc} 条、空文本 {empty} 轮、坏报告 {broken} 份",
-         "- 口径：**逐格只在自己用例的轮次上判**；判据用**今天**那份（`run_golden.check_gold`），"
+         "- 口径：**逐格只在自己用例的轮次上判**；判据用**今天**那份（`golden_evaluation.check_gold`），"
          "回复是各历史版本产出的 ⇒ 读的是「今天的判据在历史回复上」，不是当年那次的复现；"
          f"轮数 <{_MIN_ROUNDS} 只进表不进判读",
          "- **rc 只管「跑起来了没有」**：读数不判红——负判据 0 命中在「化石」与"

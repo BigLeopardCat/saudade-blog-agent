@@ -16,7 +16,7 @@ sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "eval"))
 
 
-import golden_fixture as gf  # noqa: E402
+from eval import golden_fixture as gf  # noqa: E402
 
 FAILS: list[str] = []
 check = collector(FAILS)

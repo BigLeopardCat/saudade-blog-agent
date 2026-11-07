@@ -1,7 +1,7 @@
 """语料出处闸：**这一轮评的是不是同一份语料**。
 
 判据本体在 `eval/corpus_provenance.py`（纯函数、只读一个 JSON），本套件离线秒级、不取数、
-不联网——这也正是那个模块被拆出来的理由（见它的头注：离线套件 import 不起 `run_golden`，
+不联网——这也正是那个模块被拆出来的理由（见它的头注：离线套件 import 不起 `golden_evaluation`，
 那一串是 `server` → `agent.graph` → langchain）。
 
 **这个闸要防的是什么**：这个仓是公开的，而 golden 的每条期望都锚在维护者站点的文章上。
@@ -29,7 +29,7 @@ sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "eval"))         # 与共享执行入口同一条 import 路径
 
 
-import corpus_provenance as cp  # noqa: E402
+from eval import corpus_provenance as cp  # noqa: E402
 
 FAILS: list[str] = []
 check = collector(FAILS)
@@ -140,7 +140,7 @@ def test_golden_corpus_provenance():
           (_prov.get("declared_for") or {}).get("api_base")
           == "https://saudade.site/api/public")
     print("\n⑥ 接线：共享执行入口共用一处实现，且执行入口把闸放在主循环**之前**")
-    _RG = (ROOT / "eval" / "run_golden.py").read_text(encoding="utf-8")
+    _RG = (ROOT / "eval" / "golden_evaluation.py").read_text(encoding="utf-8")
     check("用例路径 → 声明路径：声明与用例同目录（`--golden` 换谁就按谁旁边那份判）",
           cp.provenance_path_for("eval/golden/basic.jsonl") == cp.CORPUS_PROVENANCE_FILE
           and cp.provenance_path_for("eval/fixtures/golden_smoke.jsonl")
@@ -151,7 +151,7 @@ def test_golden_corpus_provenance():
           cp.provenance_path_for("basic.jsonl"))
     check("共享执行入口都用它推声明路径（各自拼一遍路径就会 A 的声明配 B 的用例）",
           "provenance_path_for(" in _RG)
-    for _name, _src in (("run_golden.py", _RG),):
+    for _name, _src in (("golden_evaluation.py", _RG),):
         _m = re.search(r"^\s*_code = 3 if \(.*$", _src, re.M)
         check(f"{_name}：摘光全部用例时空分母报 **3**（未评估），不是 2（自己摘的）",
               bool(_m) and "corpus" in _m.group(0).lower(),
@@ -188,7 +188,7 @@ def test_golden_corpus_provenance():
           _idx_ent < _RG.index("for i, case in enumerate(cases, 1):"), str(_idx_ent))
     check("共享执行入口都把它并进 skipped_ids（未评估要单列，不许静默豁免）",
           "skip_ids += _entity_skipped" in _RG)
-    _check_pair = (("run_golden.py", _RG, "skipped_entity_ids", "entity_checks"),)
+    _check_pair = (("golden_evaluation.py", _RG, "skipped_entity_ids", "entity_checks"),)
     for _name, _src, _k1, _k2 in _check_pair:
         check(f"{_name}：报告里单列未评估的那几条 + 逐条结论",
               f'"{_k1}":' in _src and f'"{_k2}":' in _src)

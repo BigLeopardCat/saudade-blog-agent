@@ -17,7 +17,7 @@ EVAL = ROOT / "eval"                           # 判据与 golden 语料仍在 e
 sys.path.insert(0, str(EVAL))
 
 
-import run_golden as rg  # noqa: E402
+from eval import golden_evaluation as rg  # noqa: E402
 
 GOLD = {}
 
@@ -800,7 +800,7 @@ def judge_result(gold: dict, overrides: dict) -> list[str]:
            "exec_tools": [], "frames": [], "confirm_tokens": [], "confirm_payloads": [],
            "resets": [], "resets_reasons": [], "error": None}
     res.update(overrides)
-    # 真链路里这两个同源（`exec_tools` 由回执派生，见 run_golden.run_one 的返回）——
+    # 真链路里这两个同源（`exec_tools` 由回执派生，见 golden_evaluation.run_one 的返回）——
     # 这里照着同源生成，免得合成出一个真链路造不出来的组合。
     if "exec_rows" in overrides:
         res["exec_tools"] = [r.get("tool", "") for r in res["exec_rows"]]

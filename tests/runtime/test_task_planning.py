@@ -94,7 +94,7 @@ def test_composite_acceptance_rejects_partial_delivery_even_with_a_valid_card(
     monkeypatch, tmp_path, omission
 ):
     from eval import composite_task_contracts, native_contracts
-    from eval.run_golden import golden_trace
+    from eval.golden_evaluation import golden_trace
 
     ids = [101] if omission == "scope" else [101, 102]
     calls = [call("prepare_notification_read", "prepare", scope="selected", ids=ids)]

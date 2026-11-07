@@ -128,7 +128,7 @@ LOGIN_DEMAND_RE = re.compile(r"先登录" + _NOUN_TAIL)
 
 
 _d5 = tree({"agent/x.py": _MATCHER_SRC, "eval/golden/basic.jsonl": _EVAL_GOLDEN_SRC,
-            "eval/run_golden.py": _EVAL_JUDGE_SRC})
+            "eval/golden_evaluation.py": _EVAL_JUDGE_SRC})
 
 
 _p = _d5 / "eval/golden/basic.jsonl"
@@ -320,7 +320,7 @@ def render(i: int) -> str:
     check("⑪e 多一条用例打开豁免开关 ⇒ 红并**点名那条用例**（豁免是判据替自己打的补丁）",
           _rc == 1 and "多被 1 条用例打开了" in _out and "ev_c4" in _out, f"rc={_rc}")
     _golden_write(list(_EVAL_GOLDEN_SRC.splitlines()))                     # 还原文案
-    _j = _d5 / "eval/run_golden.py"
+    _j = _d5 / "eval/golden_evaluation.py"
     _j.write_text(_EVAL_JUDGE_SRC.replace('("甲", "乙")', '("甲", "乙", "丙")'), encoding="utf-8")
     _rc, _out = run(_g, _d5, _reg5, targets=["agent"])
     check("⑪f₁ 共享族多一个元素 ⇒ 红（`DENIAL_FAMILY` 那一族是逐次加词长出来的）",
