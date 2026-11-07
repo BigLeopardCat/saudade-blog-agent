@@ -29,7 +29,7 @@ def validate(grant, config):
     args = spec.get("args")
     if spec.get("tool") != name or not isinstance(args, dict) or set(args) != {"article_id"}:
         raise ValueError("确认参数与收藏操作不一致")
-    if type(args["article_id"]) is not int or args["article_id"] <= 0:
+    if type(args["article_id"]) is not int or not 0 < args["article_id"] <= 2_147_483_647:
         raise ValueError("文章标识无效")
     if not authz.check(principal, name).allowed:
         raise ValueError("当前身份没有执行这件操作的权限")

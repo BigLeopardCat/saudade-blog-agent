@@ -1,11 +1,12 @@
-"""Bounded, authenticated reads of the backend's recent notification window."""
+"""Bounded, authenticated notification queries delegated to the owning service."""
 
 import json
 from typing import Annotated
+from urllib.parse import urlencode
 
 from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import tool
-from pydantic import Field, StrictBool, StrictInt
+from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictInt
 
 from agent.principal import is_verified_identity
 from tools import base
@@ -13,37 +14,62 @@ from tools import base
 __all__ = ["list_notifications"]
 
 _Limit = Annotated[StrictInt, Field(ge=1, le=20)]
-_Page = Annotated[StrictInt, Field(ge=1, le=100)]
-_Identifier = Annotated[StrictInt, Field(gt=0)]
+_Page = Annotated[StrictInt, Field(ge=1, le=10000)]
+_Identifier = Annotated[StrictInt, Field(gt=0, le=2_147_483_647)]
 _Query = Annotated[str, Field(min_length=1, max_length=120, strict=True)]
 _UnreadOnly = Annotated[StrictBool, Field(
     description="true returns unread notifications only; false includes read notifications. "
                 "Set true when the user asks which notifications are unread.")]
-_WINDOW_LIMIT = 100
+class _Notification(BaseModel):
+    model_config = ConfigDict(strict=True)
+    id: Annotated[StrictInt, Field(gt=0, le=2_147_483_647)]
+    type: Annotated[str, Field(max_length=40)]
+    title: str
+    content: str
+    contentTruncated: StrictBool
+    link: Annotated[str, Field(max_length=1024)] | None
+    isRead: StrictBool
+    createdAt: Annotated[str, Field(max_length=40)]
 
 
-def _window(data):
-    rows = data.get("items") if isinstance(data, dict) else None
-    if not isinstance(rows, list) or len(rows) > _WINDOW_LIMIT:
-        raise ValueError("Invalid notification window")
-    for row in rows:
-        if (not isinstance(row, dict) or type(row.get("id")) is not int or row["id"] <= 0
-                or type(row.get("isRead")) is not bool
-                or any(not isinstance(row.get(key), str) for key in
-                       ("type", "title", "content", "createdAt"))):
-            raise ValueError("Invalid notification fields")
-        link = row.get("link")
-        if "link" not in row or (link is not None and
-                                  (not isinstance(link, str) or len(link) > 1024)):
-            raise ValueError("Invalid notification link")
-        if len(row["type"]) > 40 or len(row["createdAt"]) > 40:
-            raise ValueError("Invalid notification metadata")
-    window_unread = sum(not row["isRead"] for row in rows)
-    if (len({row["id"] for row in rows}) != len(rows)
-            or type(data.get("unread")) is not int or data["unread"] < window_unread
-            or (len(rows) < _WINDOW_LIMIT and data["unread"] != window_unread)):
-        raise ValueError("Invalid notification counts")
-    return rows, window_unread, data["unread"]
+class _PagePayload(BaseModel):
+    model_config = ConfigDict(strict=True)
+    items: Annotated[list[_Notification], Field(max_length=20)]
+    unread: Annotated[StrictInt, Field(ge=0)]
+    total: Annotated[StrictInt, Field(ge=0)]
+    page: Annotated[StrictInt, Field(ge=1)]
+    pageSize: Annotated[StrictInt, Field(ge=1, le=20)]
+    hasMore: StrictBool
+    contentIncluded: StrictBool
+
+
+class _DetailPayload(BaseModel):
+    item: _Notification | None
+
+
+def _response(data, page, limit, preview, unread_only, notification_id, term):
+    if notification_id is not None:
+        detail = _DetailPayload.model_validate(data)
+        selected = [detail.item.model_dump()] if detail.item else []
+        result = {"contentIncluded": True}
+        if selected and selected[0]["id"] != notification_id:
+            raise ValueError("notification identity mismatch")
+    else:
+        payload = _PagePayload.model_validate(data)
+        selected = [row.model_dump() for row in payload.items]
+        if (payload.page != page or payload.pageSize != limit or len(selected) > limit
+                or payload.total < len(selected) or payload.contentIncluded is not preview
+                or unread_only and any(row["isRead"] for row in selected)):
+            raise ValueError("notification scope mismatch")
+        result = {"page": page, "pageSize": limit, "total": payload.total,
+                  "hasMore": payload.hasMore, "unreadOnly": unread_only,
+                  "unreadTotal": payload.unread, "contentIncluded": preview}
+        if term is not None:
+            result["query"] = term
+    if len({row["id"] for row in selected}) != len(selected):
+        raise ValueError("duplicate notification identity")
+    result["items"] = [_entry(row, notification_id is not None, preview) for row in selected]
+    return result
 
 
 def _entry(row, detailed, include_preview):
@@ -54,7 +80,8 @@ def _entry(row, detailed, include_preview):
     for field, cap in fields:
         result[field] = row[field][:cap]
         if field in ("title", "content"):
-            result[field + "Truncated"] = len(row[field]) > cap
+            result[field + "Truncated"] = (len(row[field]) > cap or
+                                           row.get(field + "Truncated") is True)
     return result
 
 
@@ -63,17 +90,13 @@ def list_notifications(config: RunnableConfig, limit: _Limit | None = None, page
                        unread_only: _UnreadOnly = False, include_preview: StrictBool = False,
                        notification_id: _Identifier | None = None,
                        query: _Query | None = None) -> object:
-    """读取本人的通知摘要与原始跳转链接。查未读设unread_only=true；默认20条，最多20条/页。
-    默认不含正文。总结多条内容时可用include_preview=true读取每条最多240字，默认10条。
-    预览截断或需精读时用notification_id读取单条正文，不从标题推断内容。
+    """查询本人的通知；筛选和分页由后端执行，默认不读取正文。
 
-    page 翻阅最近100条窗口，unread_only 只筛选该窗口内未读通知。
-    notification_id 读取窗口内单条正文（最多2000字），忽略分页和未读筛选。
-    query 在整个窗口的标题和正文中按原词搜索，再分页；查回复可搜索“回复”。
-    matchedInWindow 是筛选后的匹配总数，hasMoreInWindow=true 时当前页不是全部结果。
-    windowComplete=false 表示窗口外历史未知；unreadInWindow 是窗口未读数，
-    unreadTotal是后端提供的全局未读数，二者可以不同。
-    查看不会标记已读。站内信使用 list_my_messages。
+    未读设置unread_only=true；query按原词搜索完整标题和正文。
+    默认每页20条；include_preview=true时默认10条、每条最多240字。
+    notification_id读取任意历史单条正文（最多2000字），忽略列表条件。
+    total是匹配总数，hasMore表示还有下一页，unreadTotal是全局未读数。
+    查看不会标记已读；站内信使用list_my_messages。
     """
     # Registry construction also occurs during policy imports; enforce after bootstrap.
     from agent.authz import SCOPE_READ_OWN, holds
@@ -88,31 +111,21 @@ def list_notifications(config: RunnableConfig, limit: _Limit | None = None, page
     if term == "":
         return base.unavailable("搜索词不能为空，请提供要查找的标题或正文片段。")
     limit = limit if limit is not None else (10 if include_preview else 20)
-    data = base._own_get("/api/protected/notifications", config)
+    if notification_id is not None:
+        path = f"/api/protected/notifications/{notification_id}"
+    else:
+        params = {"page": page, "pageSize": limit, "unreadOnly": str(unread_only).lower(),
+                  "content": "preview" if include_preview else "none"}
+        if term is not None:
+            params["query"] = term
+        path = "/api/protected/notifications?" + urlencode(params)
+    data = base._own_get(path, config)
     if isinstance(data, base.ToolResult):
         return data
     try:
-        rows, unread, unread_total = _window(data)
+        result = _response(data, page, limit, include_preview, unread_only, notification_id, term)
     except ValueError:
-        return base.unavailable("通知窗口、内容或未读数量无法核对，请稍后重查。")
-    matched = [row for row in rows if (not unread_only or not row["isRead"])
-               and (term is None or any(term in row[field].casefold()
-                                        for field in ("title", "content")))]
-    if notification_id is not None:
-        selected = [row for row in rows if row["id"] == notification_id]
-    else:
-        selected = matched[(page - 1) * limit:page * limit]
-    result = {"items": [_entry(row, notification_id is not None, include_preview)
-                        for row in selected],
-              "windowLimit": _WINDOW_LIMIT, "windowCount": len(rows),
-              "windowComplete": len(rows) < _WINDOW_LIMIT, "unreadInWindow": unread,
-              "unreadTotal": unread_total,
-              "contentIncluded": notification_id is not None or include_preview}
-    if notification_id is None:
-        result.update(page=page, pageSize=limit, unreadOnly=unread_only,
-                      matchedInWindow=len(matched), hasMoreInWindow=page * limit < len(matched))
-        if query is not None:
-            result["query"] = query.strip()
+        return base.unavailable("通知标识、分页或内容无法核对，请稍后重查。")
     encoded = json.dumps(result, ensure_ascii=False, separators=(",", ":"))
     if len(encoded) > 7500:
         return base.unavailable("通知内容超过读取上限，请减少列表条数或通过站内通知页面查看。")

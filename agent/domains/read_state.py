@@ -43,18 +43,21 @@ class ReadState:
         return authz.check(principal, self.tool).allowed
 
     def snapshot(self, config, ids=None, unread_only=False):
-        path = f"/api/protected/{self.collection}"
-        if self.recipient:
-            params = {"ids": ",".join(map(str, ids))} if ids else (
-                {"unreadOnly": "true"} if unread_only else {})
-            if params:
-                path += "?" + urlencode(params)
+        path = f"/api/protected/{self.collection}" + ("/state" if not self.recipient else "")
+        params = {"ids": ",".join(map(str, ids))} if ids else (
+            {"unreadOnly": "true"} if unread_only else {})
+        if params:
+            path += "?" + urlencode(params)
         data = base._own_get(path, config)
         if isinstance(data, base.ToolResult):
             return None, data
         items = data.get(self.items_key) if isinstance(data, dict) else None
         rows = {}
         principal = ((config or {}).get("configurable") or {}).get("principal")
+        if not self.recipient and (not isinstance(data, dict) or principal is None
+                or type(data.get("ownerUserId")) is not int
+                or data["ownerUserId"] != principal.uid or type(data.get("complete")) is not bool):
+            return None, base.unavailable("无法核对本人通知状态，本次未改动。")
         if isinstance(items, list):
             for row in items:
                 if (not isinstance(row, dict) or type(row.get("id")) is not int
@@ -88,7 +91,7 @@ class ReadState:
         unread = [key for key in selected if not rows[key]["isRead"]]
         if scope == "all_unread" and (
                 type(data.get("unread")) is not int or data["unread"] != len(unread)
-                or (self.recipient and data.get("inboxComplete") is not True)):
+                or data.get("inboxComplete" if self.recipient else "complete") is not True):
             return base.unavailable(f"列表无法证明已覆盖全部未读{self.label}，请指定具体编号。")
         observed(self.executor, {"scope": scope, "unreadCount": len(unread)},
                  ("scope", "unreadCount"))
