@@ -383,6 +383,9 @@ def run(args):
             out / "agent.log",
         )
         wait_ready("http://127.0.0.1:18082/ready", agent)
+        agent_head = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=AGENT, text=True).strip()
+        with httpx.Client(trust_env=False, timeout=2) as client:
+            assert client.get("http://127.0.0.1:18082/version").json()["sha"] == agent_head
         config = work / "nginx.conf"
         config.write_text(f"""pid {work}/nginx.pid;
 error_log {out}/nginx-error.log;
@@ -473,6 +476,8 @@ http {{
                     "provider": status,
                     "completed_read_calls": len(reads),
                     "persisted_main_terminal": True,
+                    "agent_head": agent_head,
+                    "backend_provenance": provenance,
                     "transport": "HTTP/1 real stack with synthetic provider",
                 },
                 indent=2,
