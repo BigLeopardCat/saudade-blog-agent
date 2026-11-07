@@ -2,6 +2,7 @@
 
 import json
 
+import pytest
 from langchain_core.messages import AIMessage, AIMessageChunk, HumanMessage, ToolMessage
 from test_confirmation_continuation import FAVORITE, LOAD, NOTICE, Model, call, prepare, run
 from test_confirmation_continuation import backend as backend_fixture
@@ -91,3 +92,17 @@ def test_separate_provider_reasoning_never_enters_visible_chunks_or_final_reply(
             visible.append(chunk.content)
     assert "".join(visible) == result.reply == "这是最终答复。"
     assert "private-reasoning-channel-canary" not in str(visible)
+
+
+@pytest.mark.parametrize("text", [
+    '    <function_call>{"name":"example","arguments":{}}</function_call>\n',
+    '请核对确认卡。`<function_call>example</function_call>` 是文档示例。\n',
+])
+def test_approval_narration_preserves_markdown_and_does_not_repeat_model_call(backend, text):
+    model = Model(LOAD, AIMessage(content="", tool_calls=[FAVORITE]))
+    model.approval_reply = AIMessage(content=text)
+    selected = selected_runtime(model)
+    result = run(selected, "准备收藏文章19")
+    assert result.reply == text
+    assert result.execution["pending_confirm"]
+    assert len(model.review_prompts) == 1 and not backend[0]["writes"]

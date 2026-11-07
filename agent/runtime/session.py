@@ -200,8 +200,8 @@ class ToolSession:
                 reply, {"blocked": [{"reason": event}]}))
         calls = getattr(response, "tool_calls", None) or []
         if not calls:
-            reply = text_content(response.content).strip()
-            return None, (self._result(reply) if reply else
+            reply = text_content(response.content)
+            return None, (self._result(reply) if reply.strip() else
                           self._stop_turn("empty", tool_calls=self.calls_used))
         reason = self._accept_calls(calls, self._round_index)
         if reason:

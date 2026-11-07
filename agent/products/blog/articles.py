@@ -96,7 +96,7 @@ class ArticleMiddleware(AgentMiddleware):
         response = result.result[-1]
         if response.tool_calls or response.invalid_tool_calls:
             return result
-        reply = text_content(response.content).strip()
+        reply = text_content(response.content)
         evidence = self.evidence
         if evidence.searched or evidence.documents or evidence.candidates:
             record("native", "article_evidence", provenance=evidence.provenance(SITE_BASE))

@@ -215,8 +215,8 @@ async def chat(req: ChatRequest, request: Request):
         )
         if not result.reply.strip() and not result.events:
             logger.warning("Agent returned empty reply message_chars=%s", len(req.message))
-        final_reply = result.reply.strip()
-        if not final_reply and not result.events:
+        final_reply = result.reply
+        if not final_reply.strip() and not result.events:
             final_reply = _RECOVERY_SENTENCE
         end_reason = "producer_done"
         return ChatResponse(reply=final_reply, success=True, events=result.events)

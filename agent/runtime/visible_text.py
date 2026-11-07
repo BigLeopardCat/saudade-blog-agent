@@ -1,7 +1,10 @@
-"""Keep serialized control envelopes out of visible text; never execute their contents."""
+"""Recognize leaked control text while preserving CommonMark code examples as opaque data."""
 
 import json
 import re
+
+from markdown_it import MarkdownIt
+from markdown_it.rules_inline.backticks import backtick
 
 _TAGS = ("<function_call", "<function_calls", "<tool_call", "<tool_calls", "<tool_use",
          "<think", "<analysis", "<｜dsml｜", "<｜｜dsml｜｜", "<|dsml|", "<||dsml||")
@@ -9,11 +12,24 @@ _CONTROL = re.compile(
     r"(?:<(?:function_calls?|tool_calls?|tool_use|think|analysis)(?:\s|>|=)|"
     r"<[｜|]{1,2}DSML[｜|]{1,2})", re.I)
 _JSON_CALL = re.compile(r'"(?:function_call|tool_calls|arguments)"\s*:')
-_FENCE = re.compile(r"^(`{3,}|~{3,})")
+
+
+def _backticks(state, silent):
+    """Delegate code-span parsing; retain incomplete spans for streaming ambiguity only."""
+    before = len(state.tokens)
+    matched = backtick(state, silent)
+    if matched and not silent and not any(
+            token.type == "code_inline" for token in state.tokens[before:]):
+        state.env.setdefault("unclosed_code", []).append(state.src[state.pos:])
+    return matched
+
+
+_MARKDOWN = MarkdownIt("commonmark").disable("text_join")
+_MARKDOWN.inline.ruler.at("backticks", _backticks)
 
 
 def _partial_tag(value):
-    return any(tag.startswith(value.lower()) for tag in _TAGS)
+    return bool(value) and any(tag.startswith(value.lower()) for tag in _TAGS)
 
 
 def _invocation(value):
@@ -28,90 +44,91 @@ def _invocation(value):
             or isinstance(value.get("tool_calls"), list) and _invocation(value["tool_calls"]))
 
 
+def _json_state(text, final):
+    """Inspect a bare JSON prefix; complete non-call JSON remains ordinary data."""
+    head = text.lstrip()
+    if not (head.startswith("{") or head.startswith("[")
+            and (not head[1:].strip() or head[1:].lstrip().startswith("{"))):
+        return False, False, False
+    try:
+        value, end = json.JSONDecoder().raw_decode(head)
+        return _invocation(value), False, not head[end:].strip()
+    except (ValueError, RecursionError):
+        return bool(final and _JSON_CALL.search(head)), not final, False
+
+
+def _inline_fragments(tokens):
+    for token in tokens:
+        if token.type == "code_inline":
+            continue
+        if token.type in {"text", "html_inline"}:
+            yield token.content
+        yield from (value for value in (token.attrs or {}).values() if isinstance(value, str))
+        if token.children:
+            yield from _inline_fragments(token.children)
+
+
+def _inspect(text, *, final):
+    env = {}
+    tokens = _MARKDOWN.parse(text, env)
+    blocked = pending = False
+    for token in tokens:
+        if token.type == "inline":
+            invalid_json, pending_json, complete_json = _json_state(token.content, final)
+            blocked |= invalid_json
+            pending |= pending_json
+            if complete_json:
+                continue
+            fragments = _inline_fragments(token.children or [])
+        elif token.type == "html_block":
+            fragments = [token.content]
+        else:
+            # CommonMark owns fences, indentation and complete inline code spans.
+            continue
+        for fragment in fragments:
+            blocked |= bool(_CONTROL.search(fragment))
+            opening = fragment.rfind("<")
+            if opening >= 0 and _partial_tag(fragment[opening:]):
+                blocked |= final
+                pending |= not final
+    unclosed = env.get("unclosed_code", ())
+    for tail in unclosed:
+        invalid_json, pending_json, _ = _json_state(tail, final)
+        blocked |= invalid_json
+        pending |= pending_json
+    if blocked and unclosed and not final:
+        return False, True
+    # A following tick may extend the current delimiter run and change its meaning.
+    return blocked, pending or (not final and text.endswith("`"))
+
+
 class VisibleText:
-    """Hold ambiguous line prefixes, while ordinary prose continues streaming."""
+    """Stream settled text, holding only content whose Markdown/control context is incomplete."""
 
     def __init__(self):
-        self.pending = ""
-        self.line = True
-        self.fence = ""
+        self.source = ""
+        self.sent = 0
+        self.waiting = False
         self.blocked = False
+
+    def _emit(self):
+        text, self.sent = self.source[self.sent:], len(self.source)
+        return text
 
     def feed(self, text):
         if self.blocked:
             return ""
-        self.pending += text
-        output = []
-        while self.pending:
-            if not self.line:
-                end = self.pending.find("\n") + 1
-                count = end or len(self.pending)
-                if not self.fence:
-                    segment = self.pending[:count]
-                    marker = _CONTROL.search(segment)
-                    if marker:
-                        output.append(segment[:marker.start()])
-                        self.blocked = True
-                        break
-                    opening = segment.rfind("<")
-                    if opening >= 0 and _partial_tag(segment[opening:]):
-                        output.append(segment[:opening])
-                        self.pending = self.pending[opening:]
-                        break
-                output.append(self.pending[:count])
-                self.pending = self.pending[count:]
-                self.line = bool(end)
-                continue
-            head = self.pending.lstrip(" \t")
-            if not head:
-                break
-            if head.startswith(("`", "~")):
-                if head in {"`", "``", "~", "~~"} or _FENCE.match(head):
-                    if "\n" not in head:
-                        break
-                    match = _FENCE.match(head)
-                    if match:
-                        marker = match[1]
-                        if not self.fence:
-                            self.fence = marker
-                        elif marker[0] == self.fence[0] and len(marker) >= len(self.fence):
-                            self.fence = ""
-            if not self.fence:
-                if head.startswith("[") and not head[1:].strip():
-                    break
-                if _partial_tag(head):
-                    break
-                if _CONTROL.match(head):
-                    self.blocked = True
-                    break
-                if (head.startswith("{")
-                        or head.startswith("[") and head[1:].lstrip().startswith("{")):
-                    try:
-                        value, end = json.JSONDecoder().raw_decode(head)
-                    except (ValueError, RecursionError):
-                        if len(head) > 8192:
-                            self.blocked = True
-                        break
-                    if _invocation(value):
-                        self.blocked = True
-                        break
-                    count = len(self.pending) - len(head) + end
-                    output.append(self.pending[:count])
-                    self.pending = self.pending[count:]
-            self.line = False
-        return "".join(output)
+        self.source += text
+        if not self.waiting and not any(char in text for char in "<{[`"):
+            return self._emit()
+        self.blocked, self.waiting = _inspect(self.source, final=False)
+        return "" if self.blocked or self.waiting else self._emit()
 
     def finish(self):
-        head = self.pending.lstrip().lower()
-        if not self.fence and (head and _partial_tag(head)
-                               or head.startswith(("{", "[")) and _JSON_CALL.search(head)):
-            self.blocked = True
-        text, self.pending = ("" if self.blocked else self.pending), ""
-        return text
+        if not self.blocked:
+            self.blocked, _ = _inspect(self.source, final=True)
+        return "" if self.blocked else self._emit()
 
 
 def has_control_text(text):
-    boundary = VisibleText()
-    boundary.feed(text)
-    boundary.finish()
-    return boundary.blocked
+    return _inspect(text, final=True)[0]
