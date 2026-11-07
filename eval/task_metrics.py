@@ -65,6 +65,14 @@ def _identity(doc, events):
     return source, uid, role, cid, ids.pop()
 
 
+def _provider_accounting(totals, history_complete):
+    return {"provider_usage_complete": bool(history_complete
+                and (usage.complete(totals) or totals["calls"] == 0
+                     and totals["unknown_attempts"] == 0)),
+            **{name: value if history_complete else None
+               for name, value in usage.provider_costs(totals).items()}}
+
+
 def _task(key, attempts):
     attempts.sort(key=lambda row: (row["start"] is None, row["start"] or 0, row["trace_id"]))
     totals = usage.empty()
@@ -103,12 +111,8 @@ def _task(key, attempts):
             "budget_history_complete": complete, "budget_snapshots": snapshots,
             "budget_spent": _spent(latest["snapshot"].get("spent")) if latest["snapshot"] else None,
             "observed_usage_complete": usage.complete(totals),
-            "provider_usage_complete": bool(call_history_complete
-                and (usage.complete(totals) or totals["calls"] == 0
-                     and totals["unknown_attempts"] == 0)),
             "cache_hit_rate": usage.hit_rate(totals),
-            **{name: value if call_history_complete else None
-               for name, value in usage.provider_costs(totals).items()}, **totals}
+            **_provider_accounting(totals, call_history_complete), **totals}
 
 
 def collect(paths):
