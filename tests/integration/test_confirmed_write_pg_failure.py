@@ -90,7 +90,7 @@ def fault_site(monkeypatch):
                         body = {"code": 200, "data": {"ownerUserId": 7, "noteId": 19,
                             "isFavorite": True, "changed": True}}
                         status = 200
-                    except Exception as failure:
+                    except (AssertionError, psycopg.Error, jwt.PyJWTError, ValueError) as failure:
                         state["failure"] = failure
                         body, status = {"code": 500, "message": "synthetic effect failed"}, 500
                     encoded = json.dumps(body).encode()
