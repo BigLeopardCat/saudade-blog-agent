@@ -1,6 +1,7 @@
 """Read eligibility facts without fabricating write parameters or authorization."""
 
 import json
+import secrets
 
 import httpx
 import pytest
@@ -151,7 +152,7 @@ def test_invalid_schema_never_reaches_backend(backend, args):
         {"allowed": False, "reasonCode": "invented"},
         {"message": ""},
         {"message": "x" * 501},
-        {"password": "sensitive"},
+        {"password": secrets.token_urlsafe(24)},
     ],
 )
 def test_unverified_or_mismatched_result_does_not_become_a_policy_fact(backend, override):

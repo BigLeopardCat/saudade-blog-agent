@@ -281,6 +281,14 @@ def test_current_golden_requires_the_exact_batch_and_rejects_a_narrowed_card(bac
 
     case = next(row for row in online_baseline.load_suite() if row["id"] == case_id)
     assert online_baseline.fixture_images(case) == [72, 75]
+    assert case["gold"]["max_model_calls"] == 4
+    assert case["gold"]["max_tool_calls"] == {"prepare_gallery_images": 1}
+    limits = {key: case["gold"][key] for key in ("max_model_calls", "max_tool_calls")}
+    calls = [{"event": "llm_start"}] * 4 + [
+        {"event": "tool_requested", "name": "prepare_gallery_images"}]
+    assert not native_assertions.check(limits, {"native_events": calls})
+    assert native_assertions.check(limits, {"native_events": [*calls, {"event": "llm_start"}]})
+    assert native_assertions.check(limits, {"native_events": [*calls, calls[-1]]})
     assert case["gold"]["forbid_business_write"] and case["gold"]["require_zero_exec"]
     expected = case["gold"]["require_confirm_specs"][0]
     _, grant = approve(expected["args"]["intent"])
