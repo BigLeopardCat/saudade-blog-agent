@@ -60,7 +60,8 @@ def public_card(execution):
         "exp": popup.get("exp") or 0, "server_time": int(time.time()),
         **({"task_id": execution["task_id"]} if execution.get("task_id") else {}),
         "replay_safe": popup.get("replay_safe") is True,
-        **({"image_review": popup["image_review"]} if "image_review" in popup else {})}
+        **({"image_review": popup["image_review"]} if "image_review" in popup else {}),
+        **({"cover_review": popup["cover_review"]} if "cover_review" in popup else {})}
 
 
 def current_card(runtime, principal, cid, task_id):

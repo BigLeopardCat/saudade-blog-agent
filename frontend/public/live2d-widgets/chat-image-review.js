@@ -47,5 +47,32 @@
       '固定参考图 ' + (index + 1) + (ref.name ? '：' + ref.name : ''))));
     root.append(refs); target.append(root); return true;
   };
-  g.__waifuImageReview = {valid, render};
+  const renderCover = (target, value) => {
+    if (!value || !Number.isInteger(value.image_id) || value.image_id <= 0
+      || !['cover', 'contain'].includes(value.fit) || typeof value.url !== 'string'
+      || value.url.length > 2048) return false;
+    let source;
+    try {
+      source = new URL(value.url, location.origin);
+      if (!['http:', 'https:'].includes(source.protocol) || source.username || source.password)
+        return false;
+    } catch (_) { return false; }
+    const root = document.createElement('div'); root.className = 'chat-cover-review';
+    root.setAttribute('role', 'group'); root.setAttribute('aria-label', '封面展示预览');
+    const views = [['文章卡片', 16 / 9], ['首页置顶轮播', 1], ['详情横幅', 3.5]];
+    for (const [label, aspect] of views) {
+      const figure = document.createElement('figure');
+      const frame = document.createElement('div'); frame.className = 'chat-cover-frame';
+      frame.style.aspectRatio = String(aspect);
+      const img = document.createElement('img'); img.src = source.href; img.alt = label;
+      img.loading = 'lazy'; img.referrerPolicy = 'no-referrer'; img.style.objectFit = value.fit;
+      const caption = document.createElement('figcaption'); caption.textContent = label;
+      img.addEventListener('error', () => {
+        img.hidden = true; caption.textContent = label + '：预览加载失败，请核对原图后再确认。';
+      });
+      frame.append(img); figure.append(frame, caption); root.append(figure);
+    }
+    target.append(root); return true;
+  };
+  g.__waifuImageReview = {valid, render, renderCover};
 })(globalThis);
