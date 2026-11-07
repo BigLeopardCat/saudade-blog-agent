@@ -26,8 +26,8 @@ def _build(doc):
     return runtime.get("build_sha") if isinstance(runtime, dict) else None
 
 
-def _requests(report_paths):
-    requests, reports = {}, set()
+def _canonical_requests(report_paths):
+    registered, reports = {}, set()
     for value in report_paths:
         path = Path(value).resolve()
         if path in reports:
@@ -63,25 +63,25 @@ def _requests(report_paths):
                 fingerprint = _fingerprint(doc)
             elif trace != "" or digest is not None:
                 raise ValueError("invalid uncaptured evaluation request")
-            previous = requests.get(identity)
+            previous = registered.get(identity)
             if previous is not None:
                 if previous[0] != build or (previous[1] is not None and fingerprint is not None
                                            and previous[1] != fingerprint):
                     raise ValueError("conflicting canonical evaluation annotations")
                 fingerprint = fingerprint or previous[1]
-            requests[identity] = build, fingerprint
+            registered[identity] = build, fingerprint
         reports.add(path)
-    return requests, len(reports)
+    return registered, len(reports)
 
 
 def partition(paths, report_paths):
     """Only exact matching evidence is excluded; conflicts and unreadable files remain visible."""
-    requests, reports = _requests(report_paths)
+    registered, reports = _canonical_requests(report_paths)
     known, unannotated, conflicts = [], [], 0
     for path in paths:
-        doc = load_trace(path) if requests else None
+        doc = load_trace(path) if registered else None
         identity = doc.get("trace_id") if isinstance(doc, dict) else None
-        reference = requests.get(identity) if _hex(identity, 32) else None
+        reference = registered.get(identity) if _hex(identity, 32) else None
         if reference is None:
             unannotated.append(path)
         elif (_build(doc) == reference[0]
@@ -91,7 +91,7 @@ def partition(paths, report_paths):
             conflicts += 1
             unannotated.append(path)
     return known, unannotated, {
-        "canonical_reports": reports, "registered_request_ids": len(requests),
+        "canonical_reports": reports, "registered_request_ids": len(registered),
         "annotated_trace_files": len(known), "unannotated_trace_files": len(unannotated),
         "conflicting_trace_files": conflicts,
         "limitation": "Unannotated traffic is not verified human traffic; "
