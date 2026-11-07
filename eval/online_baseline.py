@@ -51,6 +51,18 @@ def fixture_images(case):
     return images
 
 
+def _call_limits(gold, case_id):
+    """Validate evaluation ceilings before any model or business request."""
+    maximum = gold.get("max_model_calls")
+    if "max_model_calls" in gold and (type(maximum) is not int or maximum < 0):
+        raise ValueError(f"invalid model-call acceptance limit: {case_id}")
+    limits = gold.get("max_tool_calls", {})
+    if (not isinstance(limits, dict) or any(
+            not isinstance(name, str) or not name or type(count) is not int or count < 0
+            for name, count in limits.items())):
+        raise ValueError(f"invalid tool-call acceptance limit: {case_id}")
+
+
 def load_suite(path=SUITE):
     cases = [json.loads(line) for line in Path(path).read_text().splitlines() if line.strip()]
     ids = [c["id"] for c in cases]
@@ -72,9 +84,7 @@ def load_suite(path=SUITE):
         if case["identity"] not in {"admin", "user", "zako"}:
             raise ValueError(f"unknown identity in {case['id']}")
         for rnd in golden.iter_rounds(case):
-            maximum = rnd["gold"].get("max_model_calls")
-            if "max_model_calls" in rnd["gold"] and (type(maximum) is not int or maximum < 0):
-                raise ValueError(f"invalid model-call acceptance limit: {case['id']}")
+            _call_limits(rnd["gold"], case["id"])
             unknown = set(rnd["gold"]) - (golden.GOLD_ASSERT_KEYS | golden.GOLD_REQUEST_KEYS
                                           | golden.GOLD_COMMENT_KEYS | golden.GOLD_ROUND_KEYS)
             if unknown:
