@@ -112,7 +112,7 @@ class ProviderHandler(BaseHTTPRequestHandler):
         self.reply(body, {"content": MAIN_FINAL if marker == "STACK_MAIN" else "STACK_PROBE_FINAL"})
 
     def reply(self, request, message, *, hold=False):
-        envelope = {"id": "synthetic-stack", "created": 0, "model": "gpt-4o-mini"}
+        envelope = {"id": "synthetic-" + secrets.token_hex(8), "created": 0, "model": "gpt-4o-mini"}
         usage = {"prompt_tokens": 12, "completion_tokens": 3, "total_tokens": 15}
         reason = "tool_calls" if message.get("tool_calls") else "stop"
         if not request.get("stream"):
@@ -408,6 +408,8 @@ http {{
       proxy_pass http://127.0.0.1:18081;
       proxy_http_version 1.1;
       proxy_set_header Host $host;
+      proxy_set_header X-Real-IP $remote_addr;
+      proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
       proxy_set_header X-Forwarded-Proto $scheme;
       proxy_read_timeout 300s;
       proxy_send_timeout 300s;
