@@ -267,7 +267,8 @@ def verify_persistence(blog_dsn, agent_dsn, result):
             {"configurable": {"thread_id": "conv_" + str(main["conversation_id"])}}
         )
         assert saved.initialized and not saved.unfinished and saved.last_outcome == "responded"
-        assert sum(MAIN_FINAL in str(message.content) for message in saved.messages) == 1
+        assert sum(message.type == "ai" and MAIN_FINAL in str(message.content)
+                   for message in saved.messages) == 1
 
 
 def run(args):
@@ -277,6 +278,8 @@ def run(args):
     out.mkdir(parents=True, exist_ok=True)
     blog = args.blog.resolve()
     binary = args.backend.resolve()
+    widget = blog / "frontend" / "public"
+    assert (widget / "live2d-widgets" / "boot.js").is_file(), "Run the host fetch:widget first"
     provenance = json.loads(binary.with_name("provenance.json").read_text())
     assert hashlib.sha256(binary.read_bytes()).hexdigest() == provenance["sha256"]
     assert (
@@ -394,7 +397,7 @@ http {{
   access_log {out}/nginx-access.log;
   server {{
     listen 127.0.0.1:18080;
-    root {AGENT}/frontend/public;
+    root {widget};
     location = / {{ alias {AGENT}/frontend/tests/fixtures/chat-bootstrap.html; }}
     location ^~ /api/ {{
       proxy_pass http://127.0.0.1:18081;
