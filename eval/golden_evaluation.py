@@ -1232,7 +1232,6 @@ def check_gold(gold: dict, result: dict, *, docs=None, user_input: str = "",
                          "——本键要求帧里至少印出一个编号（要有待办行才判得动）")
     if gold.get("require_card_targets_from_ledger") and not _lf_off:
         from agent.identifiers import normalize_target_id  # 编号解析的唯一实现
-
         from eval.native_receipt_contract import FIELD_FAMILY, TAG_FAMILY, TARGET_FIELDS
         _byfam: dict = {}
         for _e in _lf_events:
