@@ -9,8 +9,6 @@ from pydantic import (
     StrictBool,
     StrictInt,
     StrictStr,
-    field_validator,
-    model_validator,
 )
 
 from agent.runtime.tool_evidence import observed
@@ -37,27 +35,6 @@ class Cover(BaseModel):
     coverUrl: str | None = None
     fit: Literal["cover", "contain"] | None = None
     version: Digest
-
-
-class Patch(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    displayName: Annotated[StrictStr, Field(min_length=1, max_length=255)] | None = None
-    description: Annotated[StrictStr, Field(max_length=2000)] | None = None
-    folderId: Annotated[StrictInt, Field(ge=0)] | None = None
-    isFavorite: StrictBool | None = None
-
-    @field_validator("displayName")
-    @classmethod
-    def trim_name(cls, value):
-        return value.strip() if value is not None else None
-
-    @model_validator(mode="after")
-    def has_changes(self):
-        if not self.model_dump(exclude_none=True) or (
-            self.displayName is not None and not self.displayName.strip()
-        ):
-            raise ValueError("Specify an image metadata change")
-        return self
 
 
 class CoverArguments(BaseModel):

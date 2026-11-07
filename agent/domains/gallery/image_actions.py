@@ -11,14 +11,48 @@ from pydantic import (
     StrictBool,
     StrictInt,
     StrictStr,
+    TypeAdapter,
     field_validator,
     model_validator,
 )
+from pydantic.json_schema import SkipJsonSchema
 
-from agent.domains.gallery.targets import Digest, Identifier, Patch
+from agent.domains.gallery.targets import Digest, Identifier
 
 PATH = "/api/protect/gallery/image-actions"
-IDS = Annotated[list[Identifier], Field(min_length=1, max_length=100)]
+IDS = Annotated[list[Identifier], Field(
+    min_length=1, max_length=100, json_schema_extra={"uniqueItems": True})]
+
+
+class Patch(BaseModel):
+    model_config = ConfigDict(extra="forbid", json_schema_extra={"minProperties": 1})
+    displayName: Annotated[StrictStr, Field(min_length=1, max_length=255)] | SkipJsonSchema[
+        None] = Field(default_factory=lambda: None)
+    description: Annotated[StrictStr, Field(max_length=2000)] | SkipJsonSchema[
+        None] = Field(default_factory=lambda: None)
+    folderId: Annotated[StrictInt, Field(ge=0)] | SkipJsonSchema[
+        None] = Field(default_factory=lambda: None)
+    isFavorite: StrictBool | SkipJsonSchema[None] = Field(default_factory=lambda: None)
+
+    @field_validator("*", mode="before")
+    @classmethod
+    def reject_null(cls, value):
+        if value is None:
+            raise ValueError("omit unchanged fields; explicit null is not a gallery change")
+        return value
+
+    @field_validator("displayName")
+    @classmethod
+    def trim_name(cls, value):
+        if not value.strip():
+            raise ValueError("a display name cannot be blank")
+        return value.strip()
+
+    @model_validator(mode="after")
+    def nonempty(self):
+        if not self.model_dump(exclude_none=True):
+            raise ValueError("specify at least one image metadata change")
+        return self
 
 
 class Item(BaseModel):
@@ -26,58 +60,64 @@ class Item(BaseModel):
     imageId: Identifier
     changes: Patch
 
-    @field_validator("changes", mode="before")
-    @classmethod
-    def no_null_changes(cls, value):
-        if isinstance(value, dict) and any(item is None for item in value.values()):
-            raise ValueError("omit unchanged fields; explicit null is not a gallery change")
-        return value
+
+def _bounded(value, ids):
+    if len(ids) != len(set(ids)):
+        raise ValueError("image IDs must be unique")
+    encoded = json.dumps(value.model_dump(exclude_none=True), ensure_ascii=False,
+                         separators=(",", ":")).encode()
+    if len(encoded) > 8192:
+        raise ValueError("gallery intent exceeds 8192 UTF-8 bytes; use a smaller selection")
+    return value
 
 
-class Intent(BaseModel):
+class Selection(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    action: Literal["move", "favorite", "metadata", "delete"]
-    imageIds: IDS | None = None
-    folderId: Annotated[StrictInt, Field(ge=0)] | None = None
-    isFavorite: StrictBool | None = None
-    items: Annotated[list[Item], Field(min_length=1, max_length=100)] | None = None
-
-    @model_validator(mode="before")
-    @classmethod
-    def no_null_fields(cls, value):
-        if isinstance(value, dict) and any(item is None for item in value.values()):
-            raise ValueError("gallery action fields cannot be null")
-        return value
+    imageIds: IDS
 
     @model_validator(mode="after")
     def normalize(self):
-        if self.action == "metadata":
-            if self.items is None or any(value is not None for value in (
-                    self.imageIds, self.folderId, self.isFavorite)):
-                raise ValueError("metadata requires only per-image items")
-            ids = [item.imageId for item in self.items]
-            self.items = sorted(self.items, key=lambda item: item.imageId)
-        else:
-            if self.imageIds is None or self.items is not None:
-                raise ValueError("this action requires fixed imageIds")
-            ids = self.imageIds
-            self.imageIds = sorted(ids)
-            if ((self.action == "move" and (self.folderId is None or self.isFavorite is not None))
-                    or (self.action == "favorite" and (
-                        self.isFavorite is None or self.folderId is not None))
-                    or (self.action == "delete" and (
-                        self.folderId is not None or self.isFavorite is not None))):
-                raise ValueError("fields do not match the gallery action")
-        if len(ids) != len(set(ids)):
-            raise ValueError("image IDs must be unique")
-        encoded = json.dumps(self.model_dump(exclude_none=True), ensure_ascii=False,
-                             separators=(",", ":")).encode()
-        if len(encoded) > 8192:
-            raise ValueError("gallery intent exceeds 8192 UTF-8 bytes; use a smaller selection")
-        return self
+        self.imageIds = sorted(self.imageIds)
+        return _bounded(self, self.imageIds)
 
     def identifiers(self):
-        return [item.imageId for item in self.items] if self.items is not None else self.imageIds
+        return self.imageIds
+
+
+class Move(Selection):
+    action: Literal["move"]
+    folderId: Annotated[StrictInt, Field(ge=0)]
+
+
+class Favorite(Selection):
+    action: Literal["favorite"]
+    isFavorite: StrictBool
+
+
+class Delete(Selection):
+    action: Literal["delete"]
+
+
+class Metadata(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    action: Literal["metadata"]
+    items: Annotated[list[Item], Field(min_length=1, max_length=100)]
+
+    @model_validator(mode="after")
+    def normalize(self):
+        self.items = sorted(self.items, key=lambda item: item.imageId)
+        return _bounded(self, self.identifiers())
+
+    def identifiers(self):
+        return [item.imageId for item in self.items]
+
+
+Intent = Annotated[Move | Favorite | Metadata | Delete, Field(discriminator="action")]
+_INTENT = TypeAdapter(Intent)
+
+
+def parse(value):
+    return _INTENT.validate_python(value)
 
 
 class Preview(BaseModel):
@@ -114,7 +154,7 @@ class Arguments(BaseModel):
 
 
 def intent(value):
-    return Intent.model_validate(value).model_dump(exclude_none=True)
+    return parse(value).model_dump(exclude_none=True)
 
 
 def plan(value, request):
@@ -150,7 +190,7 @@ class Outcome(BaseModel):
 
 def outcome(value, args):
     result = Outcome.model_validate(value)
-    requested = Intent.model_validate(args["intent"])
+    requested = parse(args["intent"])
     ids = requested.identifiers()
     if (result.action != requested.action or result.beforeVersion != args["version"]
             or result.matchedIds != ids

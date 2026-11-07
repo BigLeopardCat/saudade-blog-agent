@@ -94,7 +94,7 @@ def test_one_readonly_preparation_then_one_atomic_request_and_durable_replay(
     assert grant["specs"][0]["args"]["intent"] == canonical
     assert backend["effects"] == 0 and len(backend["requests"]) == 1
     assert "https://evil.invalid)" not in prepared.reply
-    if len(image_actions.Intent.model_validate(intent).identifiers()) > 10:
+    if len(image_actions.parse(intent).identifiers()) > 10:
         assert "仅预览前 10 张" in prepared.reply and "100" in prepared.reply
     with closing(Ledger(str(tmp_path / "ledger.db"))) as ledger:
         for _ in range(2):
