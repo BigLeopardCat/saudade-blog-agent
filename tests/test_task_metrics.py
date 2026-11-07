@@ -155,6 +155,19 @@ def test_task_receipts_keep_cash_list_price_and_allowance_separate(tmp_path, mis
     assert row["provider_allowance_usd_seen"] == (1 if missing else 2)
 
 
+def test_missing_task_attempt_does_not_present_observed_cost_as_complete(tmp_path):
+    path = trace(tmp_path, "continued-without-first-trace", before=100, after=200)
+    doc = json.loads(path.read_text())
+    doc["events"][-1].update(provider_cost_usd=0.001, provider_list_cost_usd=0.002,
+                             provider_allowance_usd=0)
+    path.write_text(json.dumps(doc))
+    row = task_metrics.collect([path])["tasks"][0]
+    assert not row["budget_history_complete"] and not row["provider_usage_complete"]
+    assert row["provider_cost_usd_sum"] == 0.001 and row["provider_cost_usd_seen"] == 1
+    assert row["provider_cost_usd"] is row["provider_list_cost_usd"] is None
+    assert row["provider_allowance_usd"] is None
+
+
 def test_unknown_model_attempt_does_not_claim_complete_task_cost(tmp_path):
     path = trace(tmp_path, "interrupted")
     doc = json.loads(path.read_text())
