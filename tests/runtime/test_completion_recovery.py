@@ -1,4 +1,4 @@
-"""The standard loop repairs unexecuted errors and reviews explicit pending work."""
+"""Protocol repair remains bounded; optional todo state never schedules extra model calls."""
 
 import pytest
 from _own_support import config
@@ -49,31 +49,31 @@ def test_repeated_malformed_output_stops_after_one_correction():
     assert result.execution["blocked"] == [{"reason": "invalid_tool_call"}]
 
 
-def test_explicit_pending_work_continues_instead_of_ending_at_a_promise():
-    pending = [{"content": "读取结果并交付", "status": "in_progress"}]
+def test_deferred_checklist_does_not_force_continuation_or_duplicate_a_delivered_answer():
+    pending = [{"content": "阅读文章22，再读文章23；等待用户后续指令", "status": "pending"}]
     model = Model(AIMessage(content="", tool_calls=[call("write_todos", "plan", todos=pending)]),
-                  AIMessage(content="我会继续处理。"),
-                  AIMessage(content="", tool_calls=[call("write_todos", "done", todos=[{
-                      "content": pending[0]["content"], "status": "completed"}])]),
-                  AIMessage(content="交付的解释。"))
+                  AIMessage(content="已记住阅读顺序，等你要求时再读。"))
     selected = ToolSession(model, config(), tools(), {}, middleware=(TaskPlanningMiddleware,))
-    result = selected.run([HumanMessage(content="解释结果")])
-    assert len(model.prompts) == 4 and result.reply.endswith("交付的解释。")
-    assert selected.framework_state["completion_checks"] == 1
+    result = selected.run([HumanMessage(content="记住阅读顺序，现在不要读正文。")])
+    assert len(model.prompts) == 2 and selected.calls_used == 1
+    assert result.reply == "已记住阅读顺序，等你要求时再读。"
+    assert selected.framework_state["todos"] == pending
     assert turn_phase(result) == "responded"
+    assert not any(message.additional_kwargs.get("runtime_feedback")
+                   for prompt in model.prompts for message in prompt)
 
 
-def test_pending_work_is_explicitly_blocked_after_the_single_review():
+def test_pending_checklist_is_not_a_completion_or_failure_verdict():
     pending = [{"content": "尚未交付的比较", "status": "in_progress"}]
     model = Model(AIMessage(content="", tool_calls=[call("write_todos", "plan", todos=pending)]),
-                  AIMessage(content="我会继续。"), AIMessage(content="暂时无法完成。"))
+                  AIMessage(content="目前无法完成比较，缺少第二篇原文。"))
     selected = ToolSession(model, config(), tools(), {}, middleware=(TaskPlanningMiddleware,))
     result = selected.run([HumanMessage(content="比较两篇文章")])
-    assert len(model.prompts) == 3 and turn_phase(result) == "blocked"
-    assert result.execution["unfinished_work"] == pending
+    assert len(model.prompts) == 2 and turn_phase(result) == "responded"
+    assert selected.framework_state["todos"] == pending
+    assert not (result.execution or {}).get("blocked")
     assert "尚未交付的比较" not in result.reply
-    assert "部分请求尚未完成" in result.reply
-    assert result.reply.count("暂时无法完成") == 1
+    assert result.reply == "目前无法完成比较，缺少第二篇原文。"
 
 
 def test_reconstruction_cannot_reset_the_protocol_correction_allowance():
