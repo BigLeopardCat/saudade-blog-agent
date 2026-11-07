@@ -59,8 +59,8 @@ def signals(doc):
         result.append("user_feedback")
     if ta.AGENT_SELF_DENY.search(str(doc.get("reply") or "")):
         result.append("assistant_self_denial")
-    if any(e.get("event") in {"tool_failed", "budget_stop", "llm_error"}
-           or e.get("kind") in {"invalid_args", "error"} for e in events):
+    if any(e.get("event") in {"tool_error", "tool_failed", "budget_stop", "llm_error"}
+           or e.get("kind") in {"invalid_args", "unavailable", "error"} for e in events):
         result.append("runtime_or_tool_issue")
     return result
 

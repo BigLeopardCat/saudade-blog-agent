@@ -22,7 +22,7 @@
   "targets": [
     "."
   ],
-  "total": 45,
+  "total": 43,
   "nosec": 0,
   "by_key": {
     "agent/article_labels.py::B105": 1,
@@ -42,8 +42,6 @@
     "eval/golden_trace.py::B112": 1,
     "eval/identity_preflight.py::B310": 1,
     "eval/pg_retention.py::B608": 5,
-    "eval/recall_vector_poc.py::B110": 1,
-    "eval/recall_vector_poc.py::B324": 1,
     "eval/trace_reconcile.py::B112": 1,
     "eval/wordlist_gate.py::B324": 1,
     "scripts/build_word_graph.py::B310": 1,

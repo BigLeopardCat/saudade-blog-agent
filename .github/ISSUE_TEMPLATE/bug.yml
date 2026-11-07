@@ -34,7 +34,7 @@ body:
       description: 最小步骤。跑过哪些命令、输入了什么、看了哪个文件/trace id。
       placeholder: |
         1. `.venv/bin/python -m pytest -q` → 某个用例红，输出是「…」
-        2. 或者：对话里输入「…」，读 trace 的 planner 段
+        2. 或者：对话里输入「…」，提供 trace id、失败工具或错误事件
     validations:
       required: true
   - type: dropdown
