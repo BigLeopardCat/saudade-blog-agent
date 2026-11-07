@@ -11,6 +11,7 @@ from _own_support import config
 from agent import confirm
 from agent.domains.image_generation import tools, transactions
 from agent.principal import SOURCE_ASSERTION, Principal
+from agent.products.blog.confirmation import public_card
 from agent.products.blog.pending import PendingOperation
 from agent.runtime import writes
 from eval.fixtures.ledger import Ledger
@@ -45,7 +46,7 @@ def service(monkeypatch):
             ]
             state["job"] = {
                 "id": ID,
-                "request": {**payload, "references": refs},
+                "request": {**payload, "references": refs, "provider": "https://images.test/v1"},
                 "requestHash": "a" * 64,
                 "status": "pending",
                 "outputHash": None,
@@ -63,7 +64,8 @@ def service(monkeypatch):
         elif path.endswith("/accept"):
             assert json.loads(request.content) == {"version": "b" * 64}
             state["accepts"] += 1
-            state["job"].update(status="accepted", imageId=31)
+            status = state.get("accept_status", "accepted")
+            state["job"].update(status=status, imageId=31 if status == "accepted" else None)
             data = state["job"]
         else:
             data = state["job"]
@@ -86,8 +88,12 @@ def grant(card):
 def test_full_prompt_and_references_visible_before_any_paid_call(service, tmp_path):
     prompt = "完整提示词\n```原样保留```\n" + "主题细节" * 1800
     card = prepare(prompt, reference_ids=[11, 12])
-    assert prompt in card.reply and "参考图 1" in card.reply and "参考图 2" in card.reply
+    review = card.execution["pending_confirm"]["image_review"]
+    assert review["prompt"] == prompt and len(review["references"]) == 2
+    assert [item["image_id"] for item in review["references"]] == [11, 12]
+    assert "```" not in card.reply and "token=" not in card.reply
     assert service["paid_calls"] == 0 and service["accepts"] == 0
+    assert public_card(card.execution)["image_review"] == review
     signed = grant(card)
     assert signed["specs"][0]["args"] == {"job_id": ID, "version": "a" * 64}
     ledger = Ledger(str(tmp_path / "generation.sqlite3"))
@@ -104,13 +110,45 @@ def test_actual_pixels_need_a_distinct_result_approval(service, tmp_path):
         previewUrl=f"/api/public/image-generation/{ID}/preview?token=result",
     )
     card = tools.prepare_generated_image_acceptance.invoke({"job_id": ID}, config=admin())
-    assert "![生成结果]" in card.reply and not service["accepts"]
+    assert card.execution["pending_confirm"]["image_review"]["result_url"].endswith("token=result")
+    assert "token=" not in card.reply and not service["accepts"]
     signed = grant(card)
     assert signed["workflow"] == "image_acceptance"
     ledger = Ledger(str(tmp_path / "acceptance.sqlite3"))
     for _ in range(2):
         outcome = transactions.execute(signed, admin(), None, ledger=ledger)
         assert len(outcome["receipts"]) == 1
+    assert service["accepts"] == 1 and service["paid_calls"] == 0
+
+
+def test_storage_started_receipt_is_not_gallery_completion_and_replay_does_not_resave(
+        service, tmp_path):
+    prepare()
+    service["job"].update(status="review", outputHash="b" * 64,
+        previewUrl=f"/api/public/image-generation/{ID}/preview?token=result")
+    service["accept_status"] = "saving"
+    signed = grant(tools.prepare_generated_image_acceptance.invoke({"job_id": ID}, config=admin()))
+    ledger = Ledger(str(tmp_path / "saving.sqlite3"))
+    for _ in range(2):
+        outcome = transactions.execute(signed, admin(), None, ledger=ledger)
+        assert len(outcome["receipts"]) == 1
+        assert "尚未核实入库完成" in outcome["receipts"][0]["result"]
+        assert "图片编号" not in outcome["receipts"][0]["result"]
+    assert service["accepts"] == 1 and service["paid_calls"] == 0
+
+
+def test_failed_storage_can_be_explicitly_approved_again_without_regeneration(service, tmp_path):
+    prepare()
+    service["job"].update(status="review", outputHash="b" * 64, error="storage unavailable",
+        previewUrl=f"/api/public/image-generation/{ID}/preview?token=result")
+    first = tools.prepare_generated_image_acceptance.invoke({"job_id": ID}, config=admin())
+    second = tools.prepare_generated_image_acceptance.invoke({"job_id": ID}, config=admin())
+    one, two = grant(first), grant(second)
+    assert one["jti"] != two["jti"] and one["specs"] == two["specs"]
+    assert "上一次保留未完成，图片仍在" in second.execution["pending_confirm"]["q"]
+    outcome = transactions.execute(two, admin(), None,
+        ledger=Ledger(str(tmp_path / "retry-save.sqlite3")))
+    assert len(outcome["receipts"]) == 1
     assert service["accepts"] == 1 and service["paid_calls"] == 0
 
 
@@ -122,6 +160,22 @@ def test_cancelled_approval_cannot_start_paid_call(service, tmp_path, monkeypatc
     PendingOperation(signed, card.execution["pending_action"]).cancel(admin(), None)
     assert not transactions.execute(signed, admin(), None, ledger=ledger)["receipts"]
     assert service["paid_calls"] == 0
+
+
+@pytest.mark.parametrize("principal,cid", [
+    (Principal(7, "user", SOURCE_ASSERTION), 42),
+    (Principal(8, "admin", SOURCE_ASSERTION), 42),
+    (Principal(7, "admin", SOURCE_ASSERTION), 43),
+])
+def test_scope_changed_after_preparation_cannot_fund_generation(service, tmp_path, principal, cid):
+    signed = grant(prepare())
+    cfg = config(principal=principal, user_id=principal.uid,
+                 conversation_id=cid, thread_id=f"conv_{cid}")
+    before = len(service["requests"])
+    result = transactions.execute(signed, cfg, None,
+        ledger=Ledger(str(tmp_path / "scope.sqlite3")))
+    assert result["receipts"] == [] and result["blocked"]
+    assert len(service["requests"]) == before and service["paid_calls"] == 0
 
 
 def test_inconsistent_provider_operation_is_unknown_not_success_or_retried(service, tmp_path):
@@ -139,7 +193,8 @@ def test_nonadmin_cannot_prepare_or_read_private_jobs(service):
         tools.prepare_image_generation.invoke({"prompt": "画封面"}, config=cfg).kind
         == "unavailable"
     )
-    assert tools.get_image_generation.invoke({"job_id": ID}, config=cfg).kind == "unavailable"
+    result = tools.get_image_generation.invoke({"job_id": ID, "wait_seconds": 0}, config=cfg)
+    assert result.kind == "unavailable"
     assert service["requests"] == []
 
 
@@ -150,7 +205,9 @@ def test_no_result_approval_before_generation_finishes(service):
 
 
 def test_background_generation_status_read_does_not_gain_paid_execution(service):
-    service["job"] = {"id": ID, "status": "review", "imageId": None, "error": None}
+    prepare()
+    service["job"].update(status="review", outputHash="b" * 64,
+        previewUrl=f"/api/public/image-generation/{ID}/preview?token=result")
     cfg = {
         "configurable": {
             "principal": Principal(7, "admin", SOURCE_ASSERTION),
@@ -158,7 +215,7 @@ def test_background_generation_status_read_does_not_gain_paid_execution(service)
             "thread_id": "schedule:isolated-checkpoint",
         }
     }
-    result = tools.get_image_generation.invoke({"job_id": ID}, config=cfg)
+    result = tools.get_image_generation.invoke({"job_id": ID, "wait_seconds": 0}, config=cfg)
     assert result.kind == "ok"
     assert service["paid_calls"] == 0 and service["accepts"] == 0
     count = len(service["requests"])
@@ -168,5 +225,6 @@ def test_background_generation_status_read_does_not_gain_paid_execution(service)
     )
     assert len(service["requests"]) == count
     cfg["configurable"]["user_id"] = 8
-    assert tools.get_image_generation.invoke({"job_id": ID}, config=cfg).kind == "unavailable"
+    result = tools.get_image_generation.invoke({"job_id": ID, "wait_seconds": 0}, config=cfg)
+    assert result.kind == "unavailable"
     assert len(service["requests"]) == count

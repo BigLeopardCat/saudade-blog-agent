@@ -6,6 +6,7 @@ import { readFile, mkdir, writeFile } from 'node:fs/promises';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import path from 'node:path';
 import { assertBootstrapRecovery } from './chat-bootstrap.browser.mjs';
+import { assertImageReview, assertWorkRecovery } from './chat-image-review.browser.mjs';
 
 const frontend = path.resolve(fileURLToPath(new URL('../', import.meta.url)));
 const output = process.env.CHAT_UI_PREVIEW_DIR || '/tmp/chat-ui-preview';
@@ -133,6 +134,21 @@ const server = createServer(async (req, res) => {
             if (step === 16) { clearInterval(timer); res.end(frame('text', '处理完成。') + frame('done', {})); }
           }, 100);
           res.on('close', () => clearInterval(timer));
+          return;
+        }
+        if (['work-hold','work-complete'].includes(mode)) {
+          const completed=mode==='work-complete';
+          if(!completed)steeringHistory=[{id:800000,role:'user',content:body.message,
+            time:Date.now(),images:[],turn_id:body.turn_id}];
+          res.write(frame('progress',{text:completed?'图片已保存到图库':'正在生成图片',
+            work:{id:'image:'+taskId,stage:completed?'accepted':'generating',
+              status:completed?'completed':'running'}}));
+          res.write(frame('text',completed?'真实图片已保留。':'正在等待图片结果。'));
+          if(completed) {
+            steeringHistory.push({id:800001,role:'assistant',content:'真实图片已保留。',
+              time:Date.now(),images:[],parent_turn_id:steeringHistory[0]?.turn_id});
+            res.end(frame('done',{}));
+          }
           return;
         }
         res.write(frame('progress', '正在调用工具：search_notes'));
@@ -283,7 +299,7 @@ try {
     await page.waitForFunction(() => window.__chatTest.ctx.state.isSending);
     await page.waitForTimeout(50);
     assert.equal(streamCount(), before + 1);
-    if (!['hold', 'hold-empty', 'steering', 'steering-pause'].includes(mode)) await idle();
+    if (!['hold', 'hold-empty', 'steering', 'steering-pause','work-hold'].includes(mode)) await idle();
   };
   const noOverflow = async () => {
     const result = await page.evaluate(() => {
@@ -642,6 +658,9 @@ try {
   }
   passed('own, expired and other-conversation leases preserve full initialization; an active peer lease stays protected');
   await assertBootstrapRecovery({browser,origin,requests,completedNavigations});
+  await assertImageReview({page,origin});
+  await assertWorkRecovery({browser,origin,setMode:mode=>{nextMode=mode;},
+    resetState:()=>{steeringHistory=[];inputTasks.clear();pendingConfirmation=null;}});
   passed('production boot initializes one stream controller after the engine is ready and restores an interrupted reply');
   await reset();
   const input = page.locator('#chat-input');

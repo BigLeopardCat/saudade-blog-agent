@@ -62,6 +62,7 @@
       const view = read(ask.convId), old = view.records.find(row => row.id === ask.id);
       const anchor = owners.get(ask.id);
       const row = { ...old, id: ask.id, task_id: ask.task_id, q: ask.q, exp: ask.exp,
+        image_review: ask.image_review,
         selected: Array.isArray(ask.selected) ? ask.selected : old?.selected,
         anchor_id: anchor?.dataset.mid || ask.anchor_id || old?.anchor_id,
         ts: old?.ts || Date.now() };
@@ -94,6 +95,7 @@
       record.className = 'chat-approval-result'; record.dataset.operationId = ask.id;
       const label = document.createElement('summary'); label.textContent = note;
       const question = document.createElement('div'); applyMsg(question, ask.q || '');
+      window.__waifuImageReview?.render(question, ask.image_review);
       record.append(label, question); anchor.appendChild(record);
     };
     const restoreRecords = () => {
@@ -202,6 +204,8 @@
       if (!askQuestion) return;
       try { applyMsg(askQuestion, String(q || '')); }
       catch (e) { askQuestion.textContent = String(q || ''); }  // 渲染失败退回纯文本，绝不空着
+      const review = ctx.state.pendingAsk?.image_review || currentAsk?.image_review;
+      window.__waifuImageReview?.render(askQuestion, review);
       if (note) {
         const el = document.createElement('div');
         el.className = 'chat-ask-retry-note';

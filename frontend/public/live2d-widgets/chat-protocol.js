@@ -12,6 +12,11 @@ const decode = ({ event, data }) => {
   if (['text', 'progress', 'error'].includes(event) && typeof value === 'string') {
     return { type: event, data: value };
   }
+  if (event === 'progress' && object(value) && typeof value.text === 'string'
+      && value.text.length > 0 && value.text.length <= 300
+      && globalThis.__waifuWorkProgress?.valid(value.work)) {
+    return {type: event, data: value};
+  }
   if (['done', 'text_reset'].includes(event) && object(value) && Object.keys(value).length === 0) {
     return { type: event, data: value };
   }
