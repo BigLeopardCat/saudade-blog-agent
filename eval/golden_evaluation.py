@@ -40,22 +40,6 @@ from eval import (
     golden_thread,
     golden_trace,  # 同目录（eval/ 在 sys.path 上，同 corpus_check 的用法）
 )
-from eval.corpus_provenance import (  # noqa: E402,F401 —— 再导出（唯一实现在 corpus_provenance）
-    CORPUS_PROV_FOREIGN,
-    CORPUS_PROV_OK,
-    CORPUS_PROV_UNKNOWN,
-    CORPUS_PROVENANCE_FILE,
-    ENTITY_KINDS,
-    ENTITY_WHY_MIN,
-    check_corpus_premises,
-    check_entity_premises,
-    entity_report_lines,
-    load_corpus_provenance,
-    provenance_path_for,
-)
-from eval.corpus_provenance import (
-    report_lines as corpus_report_lines,
-)
 from eval.corpus_provenance import (
     snapshot_docs as corpus_snapshot_docs,
 )
@@ -201,10 +185,9 @@ def build_request(case: dict, rnd: dict | None = None) -> ChatRequest:
 
 
 def build_principal(case: dict) -> "Principal":
-    """Historical direct-driver identity; it does not assert a verified caller.
+    """Case metadata coordinates fixture rounds; it does not authenticate a caller.
 
-    Production HTTP evaluations derive identity from the signed request and
-    verify it in the service trace, independently of this legacy fixture.
+    HTTP adapters authenticate through the host and verify the resulting trace identity.
     """
     ctx = case.get("context", {})
     return Principal(uid=ctx.get("user_id", 0), role=ctx.get("role"),
@@ -406,11 +389,7 @@ def run_case(case: dict, *, run_id: str = "", suffix: str = "", turn_runner=None
         # Confirmation rounds carry approval; ordinary follow-ups carry only their declared input.
         is_confirm_round = bool(rnd.get("confirm_message"))
         if i > 0 and is_confirm_round and not prev_token:
-            # 上一轮没签出令牌 ⇒ **这一轮不发**。这不是保守，是必须：rounds 里的确认轮
-            # 消息是合成命令式文本（「确认执行：…」），而"同轮命令即确认"是写路径的一条
-            # 真放行通道（见 agent/authz）——把它当普通轮发出去，可能**另找一条路把写做掉**，
-            # 那这轮评测就反过来在真库里执行了一次未授权写入。要的是"响亮失败"。
-            # 记在上一轮上、由 `check_case` 聚合（轮数不符那条也会带上原因，见其实现）。
+            # A missing approval must stop this round, never become a fresh write request.
             done[-1]["fails"].append(
                 f"没有签出确认令牌（第 {rnd['round']} 轮无令牌可发）⇒ 这一轮不发，失败，不降级")
             break
@@ -1163,9 +1142,9 @@ GOLD_ASSERT_KEYS = frozenset({
     # 命令帧（EFFECT:/DARKMODE:/NAVIGATE:…）
     "require_cmd_prefixes", "require_cmd_contains", "require_cmd_all",
     "forbid_cmd_prefixes", "forbid_cmd_contains", "either_cmd_or_text",
-    # 工具调用（planner 决策侧）
+    # Requested tool calls.
     "require_tool_calls", "require_tool_calls_any", "no_tool_calls", "forbid_tool_calls",
-    # 执行回执（checker 验收侧，__EXEC__ 帧）
+    # Structured execution receipts.
     "require_exec_tools", "require_exec_args", "require_arg_from_result",
     # Receipt text must agree with the claimed effect, not merely the requested arguments.
     "require_exec_result",
@@ -1226,7 +1205,7 @@ def _exec_claim_fails(gold: dict, result: dict) -> list[str]:
     out: list[str] = []
     for t in gold.get("require_exec_tools", []):
         if t not in result["exec_tools"]:
-            out.append(f"checker 验收回执缺少工具 {t}（exec：{result['exec_tools']}）")
+            out.append(f"执行回执缺少工具 {t}（exec：{result['exec_tools']}）")
     _once = gold.get("require_exec_once_any") or []
     if not _once:
         return out
@@ -1350,7 +1329,7 @@ def check_gold(gold: dict, result: dict, *, docs=None, user_input: str = "",
         if _wcalls or _wreceipts:
             fails.append(
                 "本轮应零写执行（后台写工具一个都不许调用、也不许有验收回执），实际："
-                f"写工具的 planner 调用={_wcalls}，写回执={_wreceipts}；"
+                f"写工具调用={_wcalls}，写回执={_wreceipts}；"
                 f"（本轮全部调用={result['tool_calls']}，"
                 f"全部回执={[r.get('tool') for r in result['exec_rows'] if isinstance(r, dict)]}）")
     # Forbidden execution tools must not appear in factual receipts.
@@ -1555,7 +1534,7 @@ def check_gold(gold: dict, result: dict, *, docs=None, user_input: str = "",
 
     _fb = fallback_resets(result)
     if gold.get("forbid_fallback") and _fb:
-        fails.append(f"本轮走了 gate fallback（{_fb}）——用户收到的是兜底道歉，"
+        fails.append(f"本轮出现终止降级回复（{_fb}）——用户收到的是兜底道歉，"
                      f"正断言命中的是道歉文本，不算通过"
                      + (f"；本轮另有 {result['resets'] - len(_fb)} 次打回重规划"
                         f"（scope=all，最终文本是重规划后的，不算兜底）"

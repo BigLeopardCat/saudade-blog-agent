@@ -775,3 +775,13 @@ def test_snapshot_freezes_shared_stream_validation_and_event_contract(tmp_path):
         path = tmp_path / "evaluator" / name
         assert path.is_file()
         assert hashlib.sha256(path.read_bytes()).hexdigest() == hashes[name]
+
+
+
+def test_existing_output_directory_is_rejected_before_model_calls_or_evidence_overwrite(tmp_path):
+    evidence = tmp_path / "existing-report.json"
+    evidence.write_text("frozen evidence")
+    with pytest.raises(FileExistsError):
+        online_baseline.run([{"id": "one", "tags": []}], object(), {}, tmp_path,
+                            phase="full", suite_hash="frozen-suite")
+    assert evidence.read_text() == "frozen evidence"

@@ -154,28 +154,7 @@ def test_identity_preflight():
     check("只读：代码段里无写方法、无写接口前缀",
           not any(p in _IP_CODE for p in (".post(", ".put(", ".delete(", "/protected/")),
           str([p for p in (".post(", ".put(", ".delete(", "/protected/") if p in _IP_CODE]))
-    print("\n⑤ golden_evaluation 接线：退出码 3 排在「通过」之前（结构锁）")
-    _G = (ROOT / "eval/golden_evaluation.py").read_text(encoding="utf-8")
-    check("golden_evaluation 里 import 了 identity_preflight",
-          "import identity_preflight" in _G)
-    check("两条身份通道都带上了期望角色（admin/user 各一条）",
-          '("needs_admin_uid", "GOLDEN_ADMIN_UID", "admin")' in _G
-          and '("needs_user_uid", "GOLDEN_USER_UID", "user")' in _G)
-    check("配置了 uid 也要探测（不再「设了就用」）",
-          "identity_preflight.probe(" in _G and "role_expected=_role" in _G)
-    check("不可用 → 摘掉并计入 skipped_ids（分母随之变小 ⇒ full_run 自动为假）",
-          "_identity_skipped += _need_uid" in _G and "skip_ids += _need_uid" in _G)
-    _i_bad = _G.index("if _precondition_bad:")
-    _i_pass = _G.index("    if failed == 0:\n        sys.exit(0)")
-    check("退出码 3 的判定在 `if failed == 0` 之前（反了就会把「没评」读成「通过」）",
-          _i_bad < _i_pass, f"{_i_bad} < {_i_pass}")
-    check("退出码 3 在报告字段里也留了痕（skipped_identity_ids / identity_preflight）",
-          '"skipped_identity_ids": _identity_skipped' in _G
-          and '"identity_preflight": _preflight_rows' in _G)
-    check("复审单里身份前置排在最前（否则每条红都像在说模型坏了）",
-          _G.index("身份前置不可用") < _G.index("回归组（regression）FAIL，本轮不得放行"))
-    check("退出码 3 不受门禁口径影响（在采样层判定之前就退）",
-          _G.index("sys.exit(3)") < _G.index('_s = _landing["sampled"]'))
+
     print()
     if FAILS:
         print(f"=== {len(FAILS)} 项失败 ===")

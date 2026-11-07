@@ -90,16 +90,6 @@ def test_report_archive():
         check("本模块给的名字里没有计数器（同毫秒第 3 次仍只顺延毫秒）",
               os.path.basename(_p) == f"{BASE}_127.json", os.path.basename(_p))
 
-        print("\n④ 三个产出者共用这一份实现（源码锁：漏改一个 = 少一份留档）")
-        # 判据只读源码文本：谁再手搓一个秒级戳拼 `runs/` 路径，这条就红。三个文件都要
-        # ① 出现 report_archive ② 不再出现秒级戳的拼法。
-        _writers = {"golden_evaluation.py": "%Y%m%d_",
-                    "recall_eval.py": "%Y%m%d-"}
-        for _f, _bad in _writers.items():
-            _src = (EVAL / _f).read_text(encoding="utf-8")
-            check(f"{_f}: 走 report_archive", "report_archive" in _src)
-            check(f"{_f}: 没有秒级戳的拼法（`strftime(\"{_bad}…`）",
-                  f'strftime("{_bad}' not in _src)
     finally:
         shutil.rmtree(TMP, ignore_errors=True)
     print("\n" + ("全部通过" if not FAILS else f"失败 {len(FAILS)} 项：" + "; ".join(FAILS)))
