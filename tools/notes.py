@@ -228,6 +228,7 @@ def rag_search(
     try:
         from rag.search import get_index, invalidate_document, last_route, search, warm_async
         from rag.visibility import VisibilityUnavailable, current_public
+
         hits = search(query, top_k=top_k)
         if hits is None:
             return unavailable("检索索引未就绪（语料为空或重建失败），暂时无法检索")
@@ -238,14 +239,17 @@ def rag_search(
         except VisibilityUnavailable as error:
             if error.reason == "missing_source_revision":
                 warm_async()
-            return unavailable("暂时无法核实检索候选的当前公开版本，请稍后重试。",
-                               meta={"reason": error.reason})
+            return unavailable(
+                "暂时无法核实检索候选的当前公开版本，请稍后重试。", meta={"reason": error.reason}
+            )
         for changed in verified.changed:
             invalidate_document(changed["id"], changed.get("document_revision", ""))
         hits = verified.current
         if not hits:
-            return unavailable("文章公开范围或版本已变化，索引正在刷新，请稍后重新检索。",
-                               meta={"reason": "corpus_changed"})
+            return unavailable(
+                "文章公开范围或版本已变化，索引正在刷新，请稍后重新检索。",
+                meta={"reason": "corpus_changed"},
+            )
         text = "\n".join(_rag_hit(i + 1, hit) for i, hit in enumerate(hits))
         # Retrieval mode belongs to telemetry; candidate format is shared by both routes.
         route = last_route()
@@ -253,14 +257,22 @@ def rag_search(
         if verified.changed:
             corpus = {**corpus, "stale": True}
         if corpus["stale"]:
-            text += ("\n注：语料刷新未完成，本次候选使用最近一次完整索引；"
-                     "正文读取仍核对当前公开版本。")
-        return ok(text, data=hits, meta={"corpus": corpus, "rag_mode": route["mode"],
-                              "rag_reason": route["reason"],      # degraded 时的原因码
-                              "vector_hits": route["vectors"],    # 向量路贡献了几条候选
-                              "vector_missing": route["missing"],
-                              "visibility_checked": len(verified.current) + len(verified.changed),
-                              "visibility_dropped": len(verified.changed)})
+            text += (
+                "\n注：语料刷新未完成，本次候选使用最近一次完整索引；正文读取仍核对当前公开版本。"
+            )
+        return ok(
+            text,
+            data=hits,
+            meta={
+                "corpus": corpus,
+                "rag_mode": route["mode"],
+                "rag_reason": route["reason"],  # degraded 时的原因码
+                "vector_hits": route["vectors"],  # 向量路贡献了几条候选
+                "vector_missing": route["missing"],
+                "visibility_checked": len(verified.current) + len(verified.changed),
+                "visibility_dropped": len(verified.changed),
+            },
+        )
     except (AgentCancelled, BudgetExceeded, TimeoutError):
         raise
     except Exception as exc:
@@ -273,6 +285,7 @@ def get_blog_info() -> str | ToolResult:
     """获取博客基本信息：作者、头像、签名、ICP备案号等。"""
     data = _get("/user")
     return _shape(data)
+
 
 @tool
 def get_social_links() -> str | ToolResult:
