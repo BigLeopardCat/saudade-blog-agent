@@ -70,13 +70,14 @@ def public_card(execution):
         return None
     identifier = ((execution.get("pending_action") or {}).get("task_id")
                   or hashlib.sha256(str(popup.get("token", "")).encode()).hexdigest()[:16])
+    article_ids = _article_ids(popup.get("specs") or [])
     return {
         "id": identifier, "q": popup.get("q", ""),
         "opts": popup.get("opts") or [], "token": popup.get("token", ""),
         "exp": popup.get("exp") or 0, "server_time": int(time.time()),
         **({"task_id": execution["task_id"]} if execution.get("task_id") else {}),
         "replay_safe": popup.get("replay_safe") is True,
-        "article_ids_to_refresh": _article_ids(popup.get("specs") or []),
+        **({"article_ids_to_refresh": article_ids} if article_ids else {}),
         **({"image_review": popup["image_review"]} if "image_review" in popup else {}),
         **({"cover_review": popup["cover_review"]} if "cover_review" in popup else {})}
 

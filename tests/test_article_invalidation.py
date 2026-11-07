@@ -22,5 +22,5 @@ from agent.products.blog.confirmation import public_card
 def test_card_projects_article_ids_without_treating_other_resource_ids_as_articles(specs, expected):
     card = public_card({'pending_confirm': {
         'q': 'Review', 'token': secrets.token_urlsafe(16), 'specs': specs}})
-    assert card['article_ids_to_refresh'] == expected
+    assert card.get('article_ids_to_refresh', []) == expected
     assert 'specs' not in card and 'args' not in card
