@@ -12,6 +12,24 @@ SEARCH_TOOLS = frozenset({"rag_search"})
 CATALOG_TOOLS = frozenset({"list_notes", "get_top_notes", "list_admin_notes"})
 
 
+def catalog_source_url(row):
+    """Validate a host catalog link without promoting it to article body evidence."""
+    value = row.get("sourceUrl")
+    if value is None:
+        return None
+    if (type(row.get("id")) is not int or row["id"] <= 0
+            or not isinstance(value, str) or len(value) > 2048
+            or any(ord(char) <= 32 or ord(char) == 127 for char in value)):
+        raise ValueError("Invalid public article source URL")
+    parsed = urlsplit(value)
+    if (parsed.scheme not in ("http", "https") or not parsed.hostname
+            or parsed.username is not None or parsed.password is not None
+            or parsed.path != f"/article/{row['id']}" or parsed.query or parsed.fragment):
+        raise ValueError("Public article source does not match its identity")
+    _ = parsed.port  # Validate the port without changing the supplied URL.
+    return value
+
+
 def payload(value):
     """Read source data, never infer executable facts by parsing displayed prose."""
     return (
@@ -84,11 +102,13 @@ class ArticleEvidence:
         self.read_ranges: dict[int, list[dict]] = {}
         self.candidates: dict[int, str] = {}
         self.references: set[tuple[str, int]] = set()
+        self.catalog_references: set[tuple[str, int]] = set()
 
     def snapshot(self):
         return {
             **vars(self),
             "references": sorted(self.references),
+            "catalog_references": sorted(self.catalog_references),
             "read_ranges": {
                 ident: [dict(row) for row in rows] for ident, rows in self.read_ranges.items()
             },
@@ -106,6 +126,7 @@ class ArticleEvidence:
             for ident, rows in state.get("read_ranges", {}).items()
         }
         evidence.references = {tuple(row) for row in state["references"]}
+        evidence.catalog_references = {tuple(row) for row in state.get("catalog_references", [])}
         return evidence
 
     def observe(self, name: str, args: dict, value) -> None:
@@ -134,6 +155,12 @@ class ArticleEvidence:
                     ident = row.get("id", row.get("noteId", row.get("noteKey")))
                     if type(ident) is int and ident > 0:
                         self.candidates[ident] = str(row.get("title", row.get("noteTitle", "文章")))
+                        if name in {"list_notes", "get_top_notes"}:
+                            self.catalog_references = {
+                                pair for pair in self.catalog_references if pair[1] != ident}
+                            if url := catalog_source_url(row):
+                                self.catalog_references.add(
+                                    (urlsplit(url).netloc.casefold(), ident))
         if name in SEARCH_TOOLS:
             self.searched = True
             self.empty |= kind == "empty"
@@ -207,12 +234,14 @@ class ArticleEvidence:
                 "known_id": ident in available,
             }
             for host, ident in _article_links(reply)
-            if ident not in available or host and host != origin
+            if ident not in available or (
+                host and host != origin and (host, ident) not in self.catalog_references)
         ]
 
     def sources(self, reply: str, site: str) -> str:
         origin = urlsplit(site).netloc.casefold()
-        cited = {ident for host, ident in _article_links(reply) if not host or host == origin}
+        cited = {ident for host, ident in _article_links(reply)
+                 if not host or host == origin or (host, ident) in self.catalog_references}
         if not self.documents or set(self.documents).issubset(cited):
             return reply
         refs = []

@@ -15,7 +15,8 @@ from tools import base
 def backend(monkeypatch):
     state = {"requests": [], "articles": [{"id": i, "title": "article", "isPublic": True,
         "status": "published", "isTop": 1, "categoryId": 2, "categoryName": "分类",
-        "tags": [], "content": "SECRET"} for i in range(1, 8)],
+        "tags": [], "content": "SECRET", "sourceUrl": f"https://canonical.example/article/{i}"}
+        for i in range(1, 8)],
         "categories": [{"id": 2, "name": "分类", "color": None, "icon": None,
                         "pathName": "category", "publicArticleCount": 2}],
         "tags": [{"id": 1, "name": "一级", "level": 1, "parentId": None, "publicArticleCount": 2},
@@ -192,3 +193,89 @@ def test_small_metadata_catalogs_default_to_twenty_records(backend, name, key):
     with pytest.raises(ValidationError):
         tool.invoke({"page_size": 21})
     assert len(backend["requests"]) == 2
+
+
+@pytest.mark.parametrize("name", ["list_notes", "get_top_notes"])
+def test_catalog_preserves_host_canonical_links_without_document_requests(backend, name):
+    result = json.loads(str(getattr(public_catalog, name).invoke({"page_size": 3})))
+    assert [item["sourceUrl"] for item in result["items"]] == [
+        f"https://canonical.example/article/{identifier}" for identifier in range(1, 4)]
+    assert len(backend["requests"]) == 1
+    assert backend["requests"][0].url.path.endswith("/articles")
+
+
+@pytest.mark.parametrize("value", [
+    "javascript:alert(1)", "//elsewhere.invalid/article/1",
+    "https://user:secret@canonical.example/article/1", "https://canonical.example/article/2",
+    "https://canonical.example:wrong/article/1", "https://canonical.example/article/1?redirect=elsewhere",
+    "https://canonical.example/article/1#section", "https://canonical.example/\narticle/1",
+    "https://" + "x" * 2048 + "/article/1", True, {"url": "https://canonical.example/article/1"},
+])
+def test_invalid_or_mismatched_source_links_fail_closed_without_fallback_io(backend, value):
+    backend["articles"][0]["sourceUrl"] = value
+    assert public_catalog.list_notes.invoke({}).kind == "unavailable"
+    assert len(backend["requests"]) == 1
+
+
+@pytest.mark.parametrize("missing", [False, True])
+def test_unknown_source_links_do_not_trigger_guessing_or_document_reads(backend, missing):
+    row = backend["articles"][0]
+    row["sourceUrl"] = None
+    if missing:
+        row.pop("sourceUrl")
+    row["title"] = "https://untrusted.invalid/article/1"
+    result = json.loads(str(public_catalog.list_notes.invoke({})))
+    assert result["items"][0]["sourceUrl"] is None
+    assert len(backend["requests"]) == 1
+
+
+@pytest.mark.parametrize("canonical_reply", [True, False])
+def test_real_runtime_binds_canonical_catalog_links_independently_of_api_transport_origin(
+    backend, monkeypatch, canonical_reply,
+):
+    from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
+
+    from agent.products.blog import articles
+    from agent.runtime.checkpoint_conversations import CheckpointConversationStore
+    from agent.runtime.service import AgentRuntime
+
+    class Model:
+        calls = 0
+        menus = []
+
+        def bind_tools(self, tools, **kwargs):
+            self.menus.append([tool["function"]["name"] for tool in tools])
+            return self
+
+        def invoke(self, prompt):
+            self.calls += 1
+            if self.calls == 1:
+                name, arguments = "load_public_catalog_info_tools", {}
+            elif self.calls == 2:
+                name, arguments = "list_notes", {"page_size": 3}
+            else:
+                assert self.calls == 3, "Catalog recommendation added an unnecessary model round"
+                result = next(message for message in reversed(prompt)
+                              if isinstance(message, ToolMessage))
+                assert "https://canonical.example/article/1" in str(result.content)
+                assert "SECRET" not in str(result.content)
+                link = ("https://canonical.example/article/1" if canonical_reply
+                        else "https://other.example/article/1")
+                return AIMessage(content=f"推荐[article]({link})。")
+            return AIMessage(content="", tool_calls=[{"name": name, "args": arguments, "id": name}])
+
+    monkeypatch.setattr(articles, "SITE_BASE", "http://127.0.0.1:3000")
+    model = Model()
+    runtime = AgentRuntime(CheckpointConversationStore(None), application=BlogApplication(),
+                           model_factory=lambda **_: model)
+    events = list(runtime.stream_events(
+        {"messages": [HumanMessage(content="推荐最新文章并附链接")]}, {}))
+    if canonical_reply:
+        assert events[-1].reply == "推荐[article](https://canonical.example/article/1)。"
+    else:
+        assert "无法核实" in events[-1].reply
+        assert "other.example" not in events[-1].reply
+    assert model.calls == 3
+    assert all("get_article_detail" in menu for menu in model.menus)
+    assert len(backend["requests"]) == 1
+    assert backend["requests"][0].url.path.endswith("/articles")
