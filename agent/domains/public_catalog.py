@@ -1,39 +1,23 @@
 """Public article and taxonomy metadata with database pagination."""
 
 from typing import Annotated
-from urllib.parse import urlsplit
 
 from langchain_core.tools import tool
 from pydantic import Field, StrictInt
 
 from agent.domains.article_metadata import article, positive, text
+from agent.domains.articles.evidence import catalog_source_url
 from agent.domains.pagination import CatalogLimit
 from agent.domains.public_pages import Identifier, Limit, Page, read_page
 
 Level = Annotated[StrictInt, Field(ge=1, le=2)]
 
 
-def _source_url(row):
-    value = row.get("sourceUrl")
-    if value is None:
-        return None
-    if (not isinstance(value, str) or len(value) > 2048
-            or any(ord(char) <= 32 or ord(char) == 127 for char in value)):
-        raise ValueError("Invalid public article source URL")
-    parsed = urlsplit(value)
-    if (parsed.scheme not in ("http", "https") or not parsed.hostname
-            or parsed.username is not None or parsed.password is not None
-            or parsed.path != f"/article/{row['id']}" or parsed.query or parsed.fragment):
-        raise ValueError("Public article source does not match its identity")
-    _ = parsed.port  # Validate the port without changing the supplied URL.
-    return value
-
-
 def _article(row):
     result = article(row)
     if result["isPublic"] is not True or result["status"] not in ("public", "published"):
         raise ValueError("Article is not public")
-    return {**result, "sourceUrl": _source_url(row)}
+    return {**result, "sourceUrl": catalog_source_url(row)}
 
 
 def _taxonomy(row):

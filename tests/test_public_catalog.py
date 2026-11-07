@@ -229,9 +229,9 @@ def test_unknown_source_links_do_not_trigger_guessing_or_document_reads(backend,
     assert len(backend["requests"]) == 1
 
 
-@pytest.mark.parametrize("same_origin", [True, False])
-def test_real_runtime_recommends_catalog_sources_without_weakening_origin_checks(
-    backend, monkeypatch, same_origin,
+@pytest.mark.parametrize("canonical_reply", [True, False])
+def test_real_runtime_binds_canonical_catalog_links_independently_of_api_transport_origin(
+    backend, monkeypatch, canonical_reply,
 ):
     from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
@@ -259,21 +259,22 @@ def test_real_runtime_recommends_catalog_sources_without_weakening_origin_checks
                               if isinstance(message, ToolMessage))
                 assert "https://canonical.example/article/1" in str(result.content)
                 assert "SECRET" not in str(result.content)
-                return AIMessage(content="推荐[article](https://canonical.example/article/1)。")
+                link = ("https://canonical.example/article/1" if canonical_reply
+                        else "https://other.example/article/1")
+                return AIMessage(content=f"推荐[article]({link})。")
             return AIMessage(content="", tool_calls=[{"name": name, "args": arguments, "id": name}])
 
-    monkeypatch.setattr(articles, "SITE_BASE",
-                        "https://canonical.example" if same_origin else "https://other.example")
+    monkeypatch.setattr(articles, "SITE_BASE", "http://127.0.0.1:3000")
     model = Model()
     runtime = AgentRuntime(CheckpointConversationStore(None), application=BlogApplication(),
                            model_factory=lambda **_: model)
     events = list(runtime.stream_events(
         {"messages": [HumanMessage(content="推荐最新文章并附链接")]}, {}))
-    if same_origin:
+    if canonical_reply:
         assert events[-1].reply == "推荐[article](https://canonical.example/article/1)。"
     else:
         assert "无法核实" in events[-1].reply
-        assert "canonical.example" not in events[-1].reply
+        assert "other.example" not in events[-1].reply
     assert model.calls == 3
     assert all("get_article_detail" in menu for menu in model.menus)
     assert len(backend["requests"]) == 1

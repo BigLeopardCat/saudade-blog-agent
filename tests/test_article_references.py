@@ -1,5 +1,7 @@
 """A visible outbound link is a reference, never evidence of the linked body."""
 
+import json
+
 import pytest
 from langchain_core.messages import AIMessageChunk, HumanMessage
 from langchain_core.tools import tool
@@ -170,3 +172,46 @@ def test_runtime_keeps_a_verified_catalog_recommendation_after_search_has_no_mat
     result = session.run([HumanMessage(content="推荐一篇文章")])
     assert result.reply == "推荐 [Candidate](/article/19)。"
     assert len(model.prompts) == 3
+
+
+@pytest.mark.parametrize("tool", ["list_notes", "get_top_notes"])
+def test_canonical_catalog_reference_binds_exact_host_and_id_without_body_read(tool):
+    evidence = ArticleEvidence()
+    evidence.observe(tool, {}, ok("catalog", data={"resource": "articles", "items": [
+        {"id": 19, "title": "Candidate", "sourceUrl": "https://canonical.example:8443/article/19"}]}))
+    assert evidence.issue(
+        "[Candidate](https://canonical.example:8443/article/19)", SITE_BASE) is None
+    assert evidence.documents == {} and evidence.read_ranges == {}
+    assert evidence.provenance(SITE_BASE)["body_reads"] == []
+    for link in ["https://canonical.example:8443/article/20", "https://canonical.example/article/19",
+                 "https://different.example/article/19"]:
+        assert evidence.issue(f"[Unknown]({link})", SITE_BASE) == "unread_article_reference"
+    restored = ArticleEvidence.restore(json.loads(json.dumps(evidence.snapshot())))
+    assert restored.catalog_references == {("canonical.example:8443", 19)}
+    assert restored.issue("https://canonical.example:8443/article/19", SITE_BASE) is None
+    assert restored.provenance(SITE_BASE)["body_reads"] == []
+
+
+def test_canonical_reference_does_not_trust_body_or_nonpublic_catalog_url_fields():
+    evidence = observed("Mention https://untrusted.example/article/19")
+    evidence.observe("list_admin_notes", {}, ok("catalog", data={
+        "resource": "articles", "items": [{"id": 19, "title": "Private",
+        "sourceUrl": "https://untrusted.example/article/19"}]}))
+    assert evidence.issue(
+        "https://untrusted.example/article/19", SITE_BASE) == "unread_article_reference"
+    evidence.observe("list_notes", {}, ok("catalog", data={"resource": "articles", "items": [
+        {"id": 19, "title": "Candidate", "sourceUrl": "https://canonical.example/article/19"}]}))
+    evidence.observe("list_notes", {}, ok("latest catalog", data={"resource": "articles", "items": [
+        {"id": 19, "title": "Candidate", "sourceUrl": None}]}))
+    assert evidence.issue(
+        "https://canonical.example/article/19", SITE_BASE) == "unread_article_reference"
+    assert evidence.catalog_references == set()
+
+
+def test_cited_canonical_link_does_not_get_an_internal_transport_link_appended():
+    evidence = observed("Read article body.")
+    evidence.observe("list_notes", {}, ok("catalog", data={"resource": "articles", "items": [
+        {"id": 1, "title": "Source", "sourceUrl": "https://canonical.example/article/1"}]}))
+    reply = "[Source](https://canonical.example/article/1)"
+    assert evidence.issue(reply, "http://127.0.0.1:3000") is None
+    assert evidence.sources(reply, "http://127.0.0.1:3000") == reply
