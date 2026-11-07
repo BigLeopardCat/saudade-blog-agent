@@ -226,11 +226,19 @@ def _automation_schedule(wanted, result):
 
 def _confirmation_preview(pattern, result):
     previews = [
-        event.get("data", {}).get("q", "")
+        event["data"]
         for event in result.get("http_events", [])
         if event.get("event") == "confirmation" and isinstance(event.get("data"), dict)
     ]
-    return any(isinstance(text, str) and re.search(pattern, text) for text in previews)
+    if isinstance(pattern, dict):
+        # The interactive review renders these fields, not the signed execution arguments.
+        return bool(pattern) and set(pattern) <= {"q", "image_review"} and any(
+            contains(preview, pattern) for preview in previews
+        )
+    return isinstance(pattern, str) and any(
+        isinstance(preview.get("q"), str) and re.search(pattern, preview["q"])
+        for preview in previews
+    )
 
 
 def _prepared_or_noop(wanted, result, events):

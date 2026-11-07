@@ -87,3 +87,25 @@ def test_gallery_preflight_reads_only_authoritative_metadata(tmp_path, monkeypat
     # The paid preparation is registered on the synthetic transport, not the HTTP suite.
     assert image_generation_contracts.REQUEST
     assert 'release_image_generation_prepare' not in {case['id'] for case in load_suite()}
+
+
+def test_synthetic_image_backend_prepares_a_current_job_without_paid_execution():
+    from _own_support import config
+
+    from agent.domains.image_generation import tools
+    from agent.principal import SOURCE_ASSERTION, Principal
+    from agent.runtime.results import TurnResult
+    from eval import image_generation_contracts as contracts
+
+    with contracts.backend() as state:
+        card = tools.prepare_image_generation.invoke(
+            {"prompt": contracts.PROMPT},
+            config=config(principal=Principal(7, "admin", SOURCE_ASSERTION)),
+        )
+        assert isinstance(card, TurnResult)
+        pending = card.execution["pending_confirm"]
+        assert pending["image_review"]["prompt"] == contracts.PROMPT
+        assert pending["image_review"]["references"] == []
+        contracts.prepare(lambda _: {"confirm_tokens": [pending["token"]], "exec_rows": []}, state)
+        assert state["contract_evidence"]["external_image_calls"] == 0
+        assert not state["unsupported_reads"]
