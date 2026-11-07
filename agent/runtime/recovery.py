@@ -28,6 +28,23 @@ def allowed(snapshot, task_id, config):
         return False
 
 
+def input_context(snapshot, config):
+    """Preserve accepted user text independently of permission to resume execution."""
+    run = snapshot.run
+    try:
+        if (not snapshot.unfinished or not run or run.get("input_saved")
+                or run["scope"] != task_scope.binding(config)):
+            return []
+    except (KeyError, ValueError):
+        return []
+    principal = config["configurable"]["principal"]
+    # Canonical turn IDs belong to accepted inputs; imported host history and
+    # unfinished tool exchanges cannot acquire an actor or execution authority here.
+    messages = [message for message in run.get("input", [])
+                if memory.is_user_input(message) and memory.latest_turn_id([message])]
+    return memory.bind_actor(messages, principal)
+
+
 def restore_session(session, state):
     """Recover metadata and successful observations; never infer write permission."""
     restore(session, state)
