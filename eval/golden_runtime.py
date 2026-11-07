@@ -8,7 +8,7 @@ from contextlib import ExitStack
 
 from config.settings import check_retired_runtime
 
-ENGINE = "native"
+ENGINE = "langchain"
 REPORTS_DIR = "eval/report/runs"
 
 _runtime = None
@@ -63,14 +63,14 @@ async def collect_frames(queue, producer):
     A failed request remains a result for evaluation; awaiting its task must not
     re-raise the same exception and discard the complete run report.
     """
-    from agent.api.turns import NativeCancelled, next_stream_item
+    from agent.api.turns import ProducerCancelled, next_stream_item
 
     frames = []
     while True:
         item = await next_stream_item(queue, producer, timeout=None)
         if item is None:
             break
-        if isinstance(item, NativeCancelled):
+        if isinstance(item, ProducerCancelled):
             frames.append(RuntimeError("Evaluation producer cancelled"))
             break
         frames.append(item)

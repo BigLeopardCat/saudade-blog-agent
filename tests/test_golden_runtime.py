@@ -54,8 +54,8 @@ def test_builds_only_selected_runtime(monkeypatch):
         assert received == [resources]
 
 
-def test_current_reports_use_the_native_identity():
-    assert runtime.ENGINE == "native"
+def test_current_reports_use_the_framework_identity():
+    assert runtime.ENGINE == "langchain"
     assert runtime.REPORTS_DIR == "eval/report/runs"
 
 

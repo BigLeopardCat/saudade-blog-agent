@@ -189,3 +189,8 @@ def test_path_objects_and_compressed_traces_keep_usage_and_unreadable_evidence(t
     group = result["groups"][0]
     assert group["requests"] == 2 and group["in"] == 200 and group["cache"] == 160
     assert load_trace(str(plain)) == load_trace(plain) == load_trace(packed)
+
+
+def test_current_framework_identity_is_preserved_in_request_groups():
+    doc = {"input": {"runtime": {"name": "langchain"}}, "events": []}
+    assert request_metrics.path_of(doc) == "langchain"
