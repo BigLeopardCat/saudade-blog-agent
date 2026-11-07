@@ -57,7 +57,7 @@ const until = async(predicate,label)=>{
 };
 const open = async()=>{
   const page=await context.newPage();
-  await page.goto(origin);
+  await page.goto(origin+'/stack-fixture.html');
   await page.waitForFunction(()=>!!window.__stackChat);
   await page.locator('#waifu-chat').waitFor({state:'visible'});
   return page;

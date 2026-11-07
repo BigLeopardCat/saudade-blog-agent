@@ -403,7 +403,10 @@ http {{
   server {{
     listen 127.0.0.1:18080;
     root {widget};
-    location = / {{ alias {AGENT}/frontend/tests/fixtures/chat-bootstrap.html; }}
+    location = /stack-fixture.html {{
+      alias {AGENT}/frontend/tests/fixtures/chat-bootstrap.html;
+      default_type text/html;
+    }}
     location ^~ /api/ {{
       proxy_pass http://127.0.0.1:18081;
       proxy_http_version 1.1;
@@ -425,7 +428,7 @@ http {{
             common,
             out / "nginx.log",
         )
-        wait_ready("http://127.0.0.1:18080/", nginx)
+        wait_ready("http://127.0.0.1:18080/stack-fixture.html", nginx)
         token = jwt.encode(
             {
                 "sub": uid,
