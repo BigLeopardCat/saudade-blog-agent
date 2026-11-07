@@ -72,12 +72,13 @@ export async function assertHeaderFocusTheme(page,reset) {
       await page.waitForTimeout(420);
       assert.equal(await page.locator('#waifu-chat').getAttribute('data-window-mode'),'collapsed');
       const compact = await metrics(page);
-      assert.equal(compact.restore.outlineWidth,0,'Pointer folding must not add a drag-sized outline');
+      assert.equal(compact.restore.outline,'none',
+        'Pointer folding must not paint a drag-sized outline: '+JSON.stringify(compact.restore));
       assert.notEqual(compact.panel.background,expanded.panel.background);
       titleContrast(compact,dark,'collapsed');
       for (const mode of ['collapsed','expanded']) {
         const focused = await keyboardFocus(page);
-        assert.equal(focused.restore.outlineWidth,0);
+        assert.equal(focused.restore.outline,'none',JSON.stringify(focused.restore));
         assert.equal(focused.heading.outline,'solid');
         assert.ok(focused.heading.outlineWidth>=2);
         assert.ok(focused.heading.width>0 && focused.heading.width<focused.restore.width/2,
@@ -86,7 +87,7 @@ export async function assertHeaderFocusTheme(page,reset) {
           await page.keyboard.press('Enter');
           await page.waitForTimeout(420);
           assert.equal(await page.locator('#waifu-chat').getAttribute('data-window-mode'),'expanded');
-          assert.equal((await metrics(page)).restore.outlineWidth,0);
+          assert.equal((await metrics(page)).restore.outline,'none');
         }
       }
       const oldTitle = await page.locator('#chat-conv-title-tag').textContent();
