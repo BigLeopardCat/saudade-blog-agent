@@ -12,6 +12,8 @@ def action_text(name, args, meta):
     label = LABELS.get(name)
     if label is None:
         return None
+    if name == "cancel_automation" and (meta.get("schedule") or {}).get("acknowledged"):
+        label = "移除计划任务提醒"
     definition = (meta.get("schedule") or {}).get("definition") or args.get("definition") or {}
     title = definition.get("title")
     return f"{label}「{title}」" if title else label

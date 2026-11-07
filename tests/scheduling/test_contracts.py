@@ -11,7 +11,7 @@ from pydantic import ValidationError
 from agent import authz, confirm
 from agent.domains.automations.preparation import tools
 from agent.principal import Principal
-from agent.scheduling.host import BlogHost
+from agent.scheduling.host import BlogHost, HostOutcomeUnverified
 from agent.scheduling.models import Definition, parse_time
 from agent.scheduling.readonly import ReadOnlyBlogApplication
 from agent.scheduling.service import ScheduleService, run_view
@@ -387,7 +387,8 @@ def test_ui_list_uses_active_backend_filter_and_server_side_cron_time():
     recurring = {'status': 'ACTIVE', 'context': {'schedule_id': IDENT,
         'definition': definition().model_copy(update={'delay_seconds': None,
             'cron': '0 * * * *'}).model_dump(mode='json')}}
-    once = SimpleNamespace(status='SUCCESS', attributes={'schedule_id': 'sc_'+'b'*32,
+    once = SimpleNamespace(status='SUCCESS', output={'status':'completed'},
+        attributes={'schedule_id': 'sc_'+'b'*32,
         'definition': definition().model_dump(mode='json'), 'start_at': NOW.isoformat()})
     client = SimpleNamespace(list_workflows=Mock(return_value=[once]))
     backend = SimpleNamespace(client=client, recurring_schedules=lambda owner: [recurring])
@@ -450,8 +451,9 @@ def test_scheduled_publication_checks_bound_receipt_and_never_calls_model(monkey
         assert result["status"] == "completed" and result["publication"]["announcementId"] == 54
         assert sent == [{"runId": "run", "title": title, "content": text}]
         receipt["payloadHash"] = "a" * 64
-        with pytest.raises(ValueError):
+        with pytest.raises(HostOutcomeUnverified) as exc:
             host.publish_announcement(7, "run", title, text)
+        assert exc.value.result()["reason"] == "execution_unverified"
 
 
 def test_scheduled_publication_worker_rechecks_pause_and_executes_frozen_payload():

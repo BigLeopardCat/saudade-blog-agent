@@ -1,9 +1,10 @@
 """DBOS owns timer and execution recovery; these workflows only compose product actions."""
 
 import asyncio
+import logging
 from datetime import datetime, timezone
 
-from dbos import DBOS, WorkflowSerializationFormat
+from dbos import DBOS, WorkflowSerializationFormat, error
 
 from agent.scheduling.backend import (
     EXECUTE,
@@ -16,6 +17,7 @@ from agent.scheduling.backend import (
 from agent.scheduling.models import Definition
 
 _actions = None
+logger = logging.getLogger(__name__)
 
 
 def configure(actions):
@@ -82,7 +84,12 @@ async def execute(payload: dict, run_id: str):
         return {"status": "blocked", "reason": "schedule_disabled"}
     result = await perform(payload, run_id)
     if result["status"] in {"completed", "incomplete"}:
-        result = {**result, "notification": await notify(payload, run_id, result)}
+        try:
+            notification = await notify(payload, run_id, result)
+        except error.DBOSMaxStepRetriesExceeded:
+            logger.warning("Scheduled result notification failed", extra={"run_id": run_id})
+            notification = {"delivered": False, "reason": "delivery_failed"}
+        result = {**result, "notification": notification}
     return result
 
 
