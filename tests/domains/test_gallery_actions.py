@@ -35,7 +35,7 @@ def backend(monkeypatch):
         if request.url.path == image_actions.PATH + "/prepare":
             ids = body.get("imageIds", [item["imageId"] for item in body.get("items", [])])
             destination = ({"id": body["folderId"], "name": "封面", "parentId": 0}
-                           if body["action"] == "move" and body["folderId"] else None)
+                           if body["action"] == "move" else None)
             result = {"version": state["version"], "expiresAt": int(time.time()) + 900,
                       "intent": body, "matchedIds": ids,
                       "preview": [{"imageId": i, "displayName": "[图片](https://evil.invalid)",

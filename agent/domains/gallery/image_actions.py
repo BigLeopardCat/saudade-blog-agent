@@ -113,7 +113,7 @@ class Metadata(BaseModel):
 
 
 Intent = Annotated[Move | Favorite | Metadata | Delete, Field(discriminator="action")]
-_INTENT = TypeAdapter(Intent)
+_INTENT: TypeAdapter[Move | Favorite | Metadata | Delete] = TypeAdapter(Intent)
 
 
 def parse(value):
@@ -130,7 +130,7 @@ class Preview(BaseModel):
 
 class Destination(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    id: Identifier
+    id: Annotated[StrictInt, Field(ge=0)]
     name: Annotated[StrictStr, Field(min_length=1, max_length=80)]
     parentId: Annotated[StrictInt, Field(ge=0)]
 
@@ -168,7 +168,7 @@ def plan(value, request):
             or prepared.previewTruncated != (len(ids) > 10)):
         raise ValueError("gallery preparation differs from its fixed selection or intent")
     destination = prepared.destination
-    if prepared.intent.action == "move" and prepared.intent.folderId:
+    if prepared.intent.action == "move":
         if destination is None or destination.id != prepared.intent.folderId:
             raise ValueError("gallery destination differs from the request")
     elif destination is not None:

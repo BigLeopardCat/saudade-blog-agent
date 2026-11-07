@@ -64,7 +64,9 @@ def test_sdk_sends_nonnullable_action_variants_and_can_prepare_the_returned_call
         assert json.loads(request.content) == intent
         return httpx.Response(200, json={"code": 200, "data": {
             "version": "a" * 64, "expiresAt": int(time.time()) + 900, "intent": intent,
-            "matchedIds": [11], "previewTruncated": False, "destination": None,
+            "matchedIds": [11], "previewTruncated": False,
+            "destination": {"id": 0, "name": "未分类", "parentId": 0}
+                if intent["action"] == "move" else None,
             "preview": [{"imageId": 11, "displayName": None, "folderId": 0,
                          "isFavorite": False}],
         }})
