@@ -59,8 +59,8 @@ def test_http_revision_reconciles_text_and_rejects_invalid_payloads(tmp_path, mo
         adapter = transport(tmp_path, monkeypatch,
             'event: text_reset\ndata: ' + json.dumps(payload) + '\n\nevent: done\ndata: {}\n\n')
         try:
-            with pytest.raises(EvaluationError, match="invalid text_reset"):
-                adapter(ChatRequest(message="处理请求"))
+            result = adapter(ChatRequest(message="处理请求"))
+            assert result["error"] and result["evaluation_failure"]["failure_source"] == "protocol"
         finally:
             adapter.client.close()
 
@@ -122,8 +122,8 @@ def test_completed_round_is_private_and_durable_before_later_judgment(tmp_path, 
 ])
 def test_incomplete_or_invalid_http_evidence_is_not_a_pass(tmp_path, monkeypatch, wire):
     adapter = transport(tmp_path, monkeypatch, wire)
-    with pytest.raises(EvaluationError):
-        adapter(ChatRequest(message="hello"))
+    result = adapter(ChatRequest(message="hello"))
+    assert result["error"] and result["evaluation_failure"]["failure_source"] == "protocol"
 
 
 def test_http_error_event_is_preserved_as_runtime_failure(tmp_path, monkeypatch):
@@ -165,8 +165,11 @@ def test_host_sse_error_is_preserved_when_no_agent_trace_exists(tmp_path, monkey
 
     monkeypatch.setattr(adapter, "_trace", missing_trace)
     try:
-        with pytest.raises(EvaluationError, match="SSE error.*expected a sequence"):
-            adapter(ChatRequest(message="hello"))
+        result = adapter(ChatRequest(message="hello"))
+        assert result["error"] and result["evaluation_failure"]["failure_source"] == "evidence"
+        assert result["http_events"] == [
+            {"event": "error", "data": "JSON解析失败: expected a sequence"}]
+        assert len(adapter.requests) == 1
     finally:
         adapter.client.close()
 

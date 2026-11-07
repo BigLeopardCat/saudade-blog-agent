@@ -115,8 +115,8 @@ def test_explicit_quota_failure_is_not_retried_or_misreported_as_task_quality_fa
     assert "额度" in _producer_error_text(error) and "PRIVATE" not in _producer_error_text(error)
     trace = tmp_path / "quota.json"
     trace.write_text(json.dumps({"events": [{"event": "llm_error", **fields}]}))
-    assert online_baseline.provider_unavailable({"result": {"rounds": [
-        {"trace": str(trace), "error": "unavailable"}]}})
+    assert online_baseline.model_availability_failure({"rounds": [
+        {"trace": str(trace), "error": "unavailable"}]})
 
 
 def test_malformed_provider_codes_are_not_serialized_or_allowed_to_break_diagnostics():

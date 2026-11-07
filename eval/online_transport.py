@@ -16,7 +16,7 @@ from contextlib import contextmanager
 from pathlib import Path
 
 import httpx
-from httpx_sse import connect_sse
+from httpx_sse import SSEError, connect_sse
 from pydantic import ValidationError
 
 from agent import confirm
@@ -207,14 +207,14 @@ class OnlineTransport:
                 raise EvaluationError(f"expected one completed trace, got {len(paths)}")
             time.sleep(0.05)
 
-    def _consume(self, payload, request_id, started):
+    def _consume(self, payload, request_id, started, *, events=None, first=None):
         if payload.get("confirm_token") or payload.get("confirm_pick"):
             raise EvaluationError("online regression must not approve business mutations")
         path = "/api/chat/stream" if self.host else "/chat/stream/v2"
         root = self.blog_url if self.host else self.agent_url
-        events = []
-        first = {key: None for key in ("first_visible_s", "first_reply_s",
-                                      "first_command_s", "first_confirmation_s")}
+        events = [] if events is None else events
+        first = first if first is not None else {key: None for key in (
+            "first_visible_s", "first_reply_s", "first_command_s", "first_confirmation_s")}
         with connect_sse(self.client, "POST", root + path,
                          headers=self._headers(request_id), json=payload) as stream:
             stream.response.raise_for_status()
@@ -234,7 +234,7 @@ class OnlineTransport:
     def _events(stream):
         try:
             yield from read_events(stream)
-        except EventStreamError as exc:
+        except (EventStreamError, SSEError) as exc:
             raise EvaluationError(str(exc)) from exc
 
     def __call__(self, req, principal=None, **_kwargs):
@@ -246,21 +246,51 @@ class OnlineTransport:
         if self.host and isinstance(payload["image"], str):
             payload["image"] = [payload["image"]] if payload["image"] else []
         payload.update(user_id=self.uid, conversation_id=self.cid)
-        events, errors, first = self._consume(payload, request_id, started)
+        if payload.get("confirm_token") or payload.get("confirm_pick"):
+            raise EvaluationError("online regression must not approve business mutations")
+        timing = {"request_id": request_id, "elapsed_s": None, "trace": "", "trace_sha256": None,
+                  "transport": "blog_http" if self.host else "agent_http"}
+        first = {key: None for key in ("first_visible_s", "first_reply_s",
+                                      "first_command_s", "first_confirmation_s")}
+        timing.update(first)
+        self.requests.append(timing)
+        evidence = {"message": payload["message"], "request_id": request_id}
+        self._save_request(request_id, {"request_state": "started", "request_evidence": evidence,
+                                       "http_timing": timing})
+        events, failure = [], None
+        try:
+            self._consume(payload, request_id, started, events=events, first=first)
+        except httpx.HTTPError as exc:
+            failure = {"failure_source": "http", "error_type": type(exc).__name__}
+            if isinstance(exc, httpx.HTTPStatusError):
+                failure["http_status"] = exc.response.status_code
+        except EvaluationError as exc:
+            failure = {"failure_source": "protocol", "error_type": type(exc).__name__}
+        timing.update(first, elapsed_s=time.monotonic() - started)
+        # SSE error text is evidence even when a later read/parse operation failed.
+        errors = [data for kind, data in events if kind == "error"]
+        trace_path, doc = "", {}
         try:
             trace_path, doc = self._trace(request_id)
+            timing.update(trace=str(trace_path),
+                          trace_sha256=hashlib.sha256(trace_path.read_bytes()).hexdigest())
+        except (EvaluationError, OSError, ValueError) as exc:
+            missing = {"failure_source": "evidence", "error_type": type(exc).__name__}
+            failure = {**failure, "trace_failure": missing} if failure else missing
+        try:
+            result = self._result(events, errors, trace_path, doc, timing)
         except EvaluationError as exc:
-            if errors:
-                raise EvaluationError(
-                    f"HTTP SSE error without completed Agent trace: {errors}") from exc
-            raise
-        timing = {"request_id": request_id, "elapsed_s": time.monotonic() - started,
-                  **first,
-                  "trace_sha256": hashlib.sha256(trace_path.read_bytes()).hexdigest(),
-                  "trace": str(trace_path), "transport": "blog_http" if self.host else "agent_http"}
-        self.requests.append(timing)
-        result = self._result(events, errors, trace_path, doc, timing)
-        result["request_evidence"] = {"message": payload["message"], "request_id": request_id}
+            failure = {"failure_source": "protocol", "error_type": type(exc).__name__,
+                       **({"previous_failure": failure} if failure else {})}
+            result = self._result(events, errors, trace_path, doc, timing, include_approvals=False)
+        if failure:
+            result.update(error="HTTP outcome could not be verified", evaluation_failure=failure)
+        result.update(request_evidence=evidence,
+                      request_state="failed" if result["error"] else "completed")
+        self._save_request(request_id, result)
+        return result
+
+    def _save_request(self, request_id, result):
         folder = self.report_dir / "requests"
         folder.mkdir(exist_ok=True, mode=0o700)
         with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=folder,
@@ -270,12 +300,12 @@ class OnlineTransport:
             saved.flush()
             os.fsync(saved.fileno())
         Path(saved.name).replace(folder / (request_id + ".json"))
-        return result
 
-    def _result(self, events, errors, trace_path, doc, timing):
+    def _result(self, events, errors, trace_path, doc, timing, *, include_approvals=True):
         actual = [e for e in doc.get("events", [])
                   if e.get("node") == "native" and e.get("event") == "call"]
-        tokens = [d["token"] for k, d in events if k == "confirmation"]
+        tokens = ([d["token"] for k, d in events if k == "confirmation"]
+                  if include_approvals else [])
         for token in tokens:
             if confirm.verify(token, self.uid, self.cid) is None:
                 raise EvaluationError("invalid confirmation returned by service")

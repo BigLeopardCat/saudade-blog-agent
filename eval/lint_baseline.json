@@ -8,14 +8,13 @@
     "I",
     "W"
   ],
-  "total": 151,
+  "total": 150,
   "by_file": {
     "agent/hostinfo.py": 1,
     "agent/reports.py": 5,
     "eval/admin_write_probe.py": 29,
     "eval/corpus_terms.py": 6,
     "eval/d4_structured_output_poc.py": 5,
-    "eval/golden_evaluation.py": 1,
     "eval/golden_fixture.py": 1,
     "eval/identity_preflight.py": 1,
     "eval/llm_judge.py": 4,

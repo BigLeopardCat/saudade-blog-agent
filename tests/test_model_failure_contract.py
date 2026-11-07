@@ -128,7 +128,7 @@ def test_model_response_timing_does_not_record_headers_or_error_payload(monkeypa
     assert "PRIVATE" not in json.dumps(events)
 
 
-@pytest.mark.parametrize("recovered_index", [None, 2])
+@pytest.mark.parametrize("recovered_index", [None, 0])
 def test_availability_stop_uses_captured_sdk_facts_without_resampling(
         tmp_path, monkeypatch, recovered_index):
     path = tmp_path / "failed-trace.json"
@@ -136,17 +136,17 @@ def test_availability_stop_uses_captured_sdk_facts_without_resampling(
         "http_status": 429, "failure_source": "provider", "retryable": True,
         "error_type": "RateLimitError"}]}))
     result = {"rounds": [{"trace": str(path), "error": "unavailable"}]}
-    assert online_baseline.provider_unavailable({"result": result})
-    assert not online_baseline.provider_unavailable({"result": {"rounds": [{
-        "text": "upstream 429 overloaded retryable true", "error": "429"}]}})
+    assert online_baseline.model_availability_failure(result)
+    assert not online_baseline.model_availability_failure({"rounds": [{
+        "text": "upstream 429 overloaded retryable true", "error": "429"}]})
     recovered_path = tmp_path / "recovered-trace.json"
     recovered_path.write_text(json.dumps({"events": [
         {"event": "llm_error", "failure_source": "provider", "retryable": True},
         {"event": "llm_done", "input": 20, "output": 5, "cache_read": 0}]}))
     recovered = {"rounds": [{"trace": str(recovered_path), "error": ""}]}
-    assert not online_baseline.provider_unavailable({"result": recovered})
-    assert not online_baseline.provider_unavailable({"result": {"rounds": [
-        {"trace": str(recovered_path), "error": "later application failure"}]}})
+    assert not online_baseline.model_availability_failure(recovered)
+    assert not online_baseline.model_availability_failure({"rounds": [
+        {"trace": str(recovered_path), "error": "later application failure"}]})
     calls = []
 
     class Fake:
@@ -176,10 +176,10 @@ def test_availability_stop_uses_captured_sdk_facts_without_resampling(
                                      phase="full", suite_hash="synthetic")
     finally:
         transport.client.close()
-    expected = 3 if recovered_index is None else 6
+    expected = 1 if recovered_index is None else 2
     assert calls == [str(i) for i in range(expected)]
-    assert report["counts"] == ({"failed": 3} if recovered_index is None else
-                                {"failed": 5, "passed": 1})
+    assert report["counts"] == ({"evaluation_error": 1} if recovered_index is None else
+                                {"evaluation_error": 1, "passed": 1})
     assert not report["full_run"] and "availability" in report["stopped_reason"]
     assert report["automatic_retries"] == 0
     frozen = tmp_path / "report" / "suite.jsonl"
