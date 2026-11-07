@@ -104,7 +104,7 @@ def test_display_metadata_preserves_the_url_and_escapes_markdown_labels(gallery)
     assert len(gallery["requests"]) == 1 and not gallery["writes"]
 
 
-def test_explicit_complete_cover_remains_supported_and_the_public_preview_matches_the_grant(gallery):
+def test_explicit_complete_cover_remains_supported_and_public_preview_matches_grant(gallery):
     from agent.products.blog.confirmation import public_card
 
     prepared = preparation.prepare_article_cover.invoke(
