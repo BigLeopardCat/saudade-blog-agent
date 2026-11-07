@@ -134,6 +134,21 @@ def make_handler(docs: list[dict], base: str):
                     "total": len(corpus_docs), "documents": page,
                     "next_cursor": page[-1]["id"] if len(remaining) > limit else None}})
                 return
+            match = re.fullmatch(re.escape(base) + r"/documents/note/(\d+)/read", path)
+            if match:
+                from eval.fixtures.document_reads import RevisionChanged, document_page
+                doc = by_id.get(int(match[1]))
+                if doc is None:
+                    self._send({"code": 404, "message": "not found"}, 404)
+                    return
+                query = {key: values[0] for key, values in parse_qs(u.query).items()}
+                try:
+                    data = document_page("note", doc["id"], doc["title"], doc["content"], query)
+                except RevisionChanged:
+                    self._send({"code": 409, "message": "document_changed"}, 409)
+                    return
+                self._send({"code": 200, "data": data})
+                return
             m = _stats_re.fullmatch(path)
             if m:
                 doc = by_id.get(int(m.group(1)))

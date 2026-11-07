@@ -12,8 +12,6 @@ is complete; ambiguous references never select an arbitrary section."""
 
 from __future__ import annotations
 
-import hashlib
-import json
 import re
 from dataclasses import dataclass
 from importlib.metadata import version
@@ -29,11 +27,10 @@ def parser_signature() -> str:
 
 
 def reading_revision(title: str, content: str) -> str:
-    """Opaque read-view version; corpus transport keeps its original content hash."""
-    raw = json.dumps(
-        [parser_signature(), title, content], ensure_ascii=False, separators=(",", ":"),
-    )
-    return hashlib.sha256(raw.encode()).hexdigest()
+    """Canonical source content hash; section parser identity travels separately."""
+    from rag.corpus import content_revision
+
+    return content_revision(title, content)
 
 
 @dataclass(frozen=True)
@@ -44,12 +41,10 @@ class Heading:
     level: int
 
 
-# 未展开小节清单的标记串：渲染侧靠它在帧注记里区分"按节节选"与"退回头截断"，
-# Excerpt consumers and section tests share this marker.
+# Excerpt consumers identify the unexpanded outline through this marker.
 UNEXPANDED_MARK = "**以下小节尚未展开**"
 
-# 清单区的预算（字符）：标题清单 + 取回说明。从节选上限里预留出来，保证
-# excerpt() 的输出不越 cap（"不越上限"是它可以替换旧硬截断的前提）。
+# Reserve space for the heading list and continuation instructions within the excerpt cap.
 _OUTLINE_RESERVE = 600
 _OUTLINE_MAX_ITEMS = 12
 
@@ -107,7 +102,7 @@ def split(content: str, title: str = "", shortcut: bool = True) -> list[dict]:
     rows = outline(text, title)
     compact = []
     for i, row in enumerate(rows):
-        # Preserve the legacy compact-view omission of immediate empty parents.
+        # Empty parents remain in the source outline but add no text to compact excerpts.
         if not row["text"]:
             continue
         body = row["text"]

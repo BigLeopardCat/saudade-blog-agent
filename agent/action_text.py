@@ -48,6 +48,7 @@ _NOARG_VERB = {
     "get_service_health": "查看服务健康",
     "get_user_stats": "查看用户统计",
     "get_note_stats": "查看文章流量报表",
+    "get_article_stats": "查看单篇文章统计",
     "list_admin_notes": "查看后台文章列表",
     "list_my_favorites": "查看我的收藏",
     "get_inbox_overview": "查看未读收件总览",

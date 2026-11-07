@@ -22,7 +22,8 @@ DOMAIN_DESCRIPTIONS = {
     "entries. Public display names are not account identities.",
     "utilities": "Read the current time.",
     "devices": "List accessible devices and control authorized OLED displays.",
-    "public_catalog": "Public article lists, pinned articles, categories and hierarchical tags.",
+    "public_catalog": "Public article lists, counters, pinned articles, categories "
+    "and hierarchical tags.",
     "conversation_images": "Inspect a referenced conversation image.",
     "own_activity": "Read your guestbook entries/status or this conversation's original messages.",
     "admin_catalog": "Articles including private/drafts; confirm state, pinning "

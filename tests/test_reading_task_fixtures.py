@@ -35,7 +35,7 @@ def test_public_and_admin_views_share_content_but_only_admin_reveals_publisher()
         assert denied.kind == "unavailable" and not state["requests"]
 
 
-def test_legacy_public_detail_route_remains_an_authorized_alternative_in_the_fixture():
+def test_bounded_public_detail_is_authorized_without_publisher_identity():
     from tools.notes import get_article_detail
 
     with backend("superadmin") as state:

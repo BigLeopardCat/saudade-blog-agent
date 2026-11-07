@@ -12,7 +12,8 @@ from agent.runtime.message_content import estimate_tokens
 from agent.runtime.tool_execution import render_result, result_limit
 from agent.runtime.tool_outputs import framework_tool
 from config.settings import settings
-from rag.reading import article_page, render_article_result
+from eval.fixtures.document_reads import article_page
+from rag.reading import render_article_result
 from tools.result import ok
 
 

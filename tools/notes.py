@@ -13,21 +13,29 @@ from tools.result import (
     ToolResult,
     _shape,
     empty,
-    not_found,
     ok,
     unavailable,
 )
 
 # Public exports; helper names stay private to their modules.
-__all__ = ["logger", "search_notes", "DOC_TYPE_CN", "get_article_detail", "rag_search",
-           "get_blog_info", "get_social_links"]
+__all__ = [
+    "logger",
+    "search_notes",
+    "DOC_TYPE_CN",
+    "get_article_detail",
+    "get_article_stats",
+    "rag_search",
+    "get_blog_info",
+    "get_social_links",
+]
 
 logger = logging.getLogger(__name__)
 
 
 # Resolve shared transports after module initialization.
-def _get(path: str, *, not_found_text: str = "",
-         payload: dict | None = None) -> dict | list | ToolResult:
+def _get(
+    path: str, *, not_found_text: str = "", payload: dict | None = None
+) -> dict | list | ToolResult:
     """Resolve the shared public transport at call time, preserving its result type."""
     return _base._get(path, not_found_text=not_found_text, payload=payload)
 
@@ -95,25 +103,6 @@ def search_notes(keyword: Annotated[str, "搜索关键词"]) -> str | ToolResult
     return _shape(slim if slim is not None else data)
 
 
-def _note_with_tag_refs(row):
-    """Use the host's typed references without fetching taxonomy directories."""
-    out = {**row, **_note_tag_metadata(row)}
-    out.pop("noteTagRefs", None)
-    out.pop("noteTags", None)
-    return out
-
-
-def _note_public_counts(article_id) -> dict:
-    """Read non-incrementing public article counters.
-
-    Private or unavailable statistics return no fields, never fabricated zeros.
-    The actor-specific liked flag is omitted because this is a public service read."""
-    data = _get(f"/notes/{article_id}/stats")
-    if not isinstance(data, dict):
-        return {}
-    return _note_counts(data)
-
-
 # Document labels must stay aligned with host execution-receipt rendering.
 DOC_TYPE_CN = {
     "note": "文章",
@@ -123,73 +112,83 @@ DOC_TYPE_CN = {
 }
 
 
-_ARTICLE_OFFSET_DESC = "正文范围起点；用返回中的 nextOffset 继续读取"
-_ARTICLE_LIMIT_DESC = "本次最多读取字符数，1..24000，默认 12000；实际可见范围受剩余上下文预算限制"
-_ARTICLE_REVISION_DESC = "继续读取时照抄 contentRevision，防止跨版本拼接"
+_ARTICLE_OFFSET_DESC = "正文范围起点；照抄nextOffset并保留revision/section_schema续读"
+_ARTICLE_LIMIT_DESC = "本次最多读取字符数，1..24000，默认12000"
+_ARTICLE_REVISION_DESC = "照抄contentRevision；续读和小节ID读取必须带版本"
 
 
 @tool
 def get_article_detail(
-    article_id: Annotated[
-        int,
-        "文档的唯一 ID（note 为 noteId，talk/board 为 talkId，announcement 为 id）",
-    ],
-    doc_type: Annotated[
-        Literal["note", "talk", "board", "announcement"],
-        "文档类型：note（文章，默认）/ talk（说说）/ board（留言）/ announcement（公告）",
-    ] = "note",
-    section: Annotated[
-        str,
-        "只读该文章的某一小节：优先用检索的 section id 并带 revision；支持唯一标题/编号",
-    ] = "",
-    offset: Annotated[int, _ARTICLE_OFFSET_DESC] = 0,
-    max_chars: Annotated[int, _ARTICLE_LIMIT_DESC] = 12000,
-    revision: Annotated[str, _ARTICLE_REVISION_DESC] = "",
+    article_id: Annotated[StrictInt, Field(gt=0, le=2_147_483_647)],
+    doc_type: Literal["note", "talk", "board", "announcement"] = "note",
+    section: Annotated[str, Field(max_length=1024)] = "",
+    offset: Annotated[
+        StrictInt, Field(ge=0, le=2_147_483_647, description=_ARTICLE_OFFSET_DESC)
+    ] = 0,
+    max_chars: Annotated[StrictInt, Field(ge=1, le=24000, description=_ARTICLE_LIMIT_DESC)] = 12000,
+    revision: Annotated[str, Field(max_length=64, description=_ARTICLE_REVISION_DESC)] = "",
+    section_schema: Annotated[str, Field(max_length=128)] = "",
 ) -> str | ToolResult:
-    """读取指定来源的正文；文章按小节或范围续读，使用contentRevision和nextOffset。
-
-    readComplete表示所需范围读完；候选不是正文。编号按doc_type区分，tags包含层级与名称，
-    null表示未能核对标签；缺失计数不代表零，not_found不代表服务故障。
+    """Read bounded ORIGINAL public text by source type/ID, optionally a unique section.
+    Copy contentRevision AND sectionSchema for continuation or a section ID from search.
+    nextOffset continues the same selected scope; readComplete does not mean the whole
+    article when a section was selected. Pictures remain original Markdown references.
+    Private/draft articles and unapproved messages are unavailable here; open editor drafts
+    use administrator read_current_article. Metrics use get_article_stats, not body reads.
     """
-    if doc_type == "note":
-        data = _get(f"/notes/{article_id}", not_found_text=(
-            f"站内没有 id={article_id} 这篇文章，本次**没有**读到任何正文。"
-            "另注意 id 不是同一套：通知/留言板里的 id 是留言 id，不是文章 id。"
-            "按标题找文章用 search_notes 或 rag_search；"
-            "读留言/说说用 list_guestbook / list_talks。"))
-        if isinstance(data, dict):
-            data = _note_with_tag_refs(data)
-            counts = _note_public_counts(article_id)
-            if counts:
-                data = {**data, **counts}
-        if not isinstance(data, dict):
-            return _shape(data)
-        from rag.reading import RevisionChanged, article_page
-        from tools.result import invalid_args
-        try:
-            return _shape(article_page(data, article_id, section, offset, max_chars, revision))
-        except RevisionChanged as exc:
+    from urllib.parse import urlencode
+
+    from agent.domains.articles.reading import project
+    from tools.result import invalid_args
+
+    if (offset or section.startswith("s") and section[1:].isdigit()) and (
+        not revision or not section_schema
+    ):
+        return invalid_args("Continuation requires contentRevision and sectionSchema.")
+    params = {
+        "offset": offset,
+        "limit": max_chars,
+        **({"section": section} if section else {}),
+        **({"revision": revision} if revision else {}),
+        **({"section_schema": section_schema} if section_schema else {}),
+    }
+    data = _get(f"/documents/{doc_type}/{article_id}/read?" + urlencode(params))
+    if isinstance(data, ToolResult):
+        if doc_type == "note" and (data.meta or {}).get("status") == 409 and revision:
             from rag.search import invalidate_document
+
             invalidate_document(article_id, revision)
-            return unavailable(str(exc))
-        except ValueError as exc:
-            return invalid_args(str(exc))
-    endpoint, key_field = {
-        "talk": ("/talk", "talkKey"),
-        "board": ("/board", "talkKey"),
-        "announcement": ("/announcements", "id"),
-    }[doc_type]
-    rows = _get(endpoint)
-    if not isinstance(rows, list):
-        return rows
-    for it in rows:
-        if str(it.get(key_field)) == str(article_id):
-            return _shape(it)
-    # 公开列表有范围及审核过滤，缺席不能证明全站不存在。
-    return not_found(
-        f"公开列表里没有 {key_field}={article_id} 这一条（河灯留言只放行审核通过的，"
-        "待审与被驳回的不在列表里；列表也可能只回最近若干条）。所以这是『我没找到』，"
-        "不是『站内一定没有』。另注意 id 不是同一套：通知链接里的 lid 是留言 id，不是文章 id。")
+        return data
+    try:
+        return _shape(
+            project(
+                data, doc_type, article_id, section, offset, max_chars, revision, section_schema
+            )
+        )
+    except (ValueError, TypeError, KeyError):
+        return unavailable(
+            "Document range or provenance could not be verified; no body was recorded."
+        )
+
+
+@tool
+def get_article_stats(article_id: Annotated[StrictInt, Field(gt=0, le=2_147_483_647)]) -> object:
+    """Read public article view/like/favorite/comment counters without reading its body.
+    This is a read-only snapshot and does not add a view. Unavailable counters remain unknown.
+    """
+    data = _get(f"/notes/{article_id}/stats")
+    if isinstance(data, ToolResult):
+        return data
+    if not isinstance(data, dict):
+        return unavailable("Article counters could not be verified.")
+    counts = {
+        key: data[key]
+        for key in ("views", "likes", "favorites", "comments")
+        if type(data.get(key)) is int and data[key] >= 0
+    }
+    if not counts:
+        return unavailable("Article counters could not be verified.")
+    return _shape({"noteKey": article_id, **counts})
 
 
 def _rag_hit(index, hit):
@@ -204,6 +203,8 @@ def _rag_hit(index, hit):
             ident = identifiers[position]
             match = next((m for m in hit.get("matches", []) if m.get("section_id") == ident), {})
             hint += f" section={ident} revision={hit['document_revision']}"
+            if hit.get("section_schema"):
+                hint += f" section_schema={hit['section_schema']}"
             offset = match.get("offset")
             if type(offset) is int and offset >= 0:
                 hint += f" offset={offset}"
@@ -227,6 +228,7 @@ def rag_search(
     try:
         from rag.search import get_index, invalidate_document, last_route, search, warm_async
         from rag.visibility import VisibilityUnavailable, current_public
+
         hits = search(query, top_k=top_k)
         if hits is None:
             return unavailable("检索索引未就绪（语料为空或重建失败），暂时无法检索")
@@ -237,14 +239,17 @@ def rag_search(
         except VisibilityUnavailable as error:
             if error.reason == "missing_source_revision":
                 warm_async()
-            return unavailable("暂时无法核实检索候选的当前公开版本，请稍后重试。",
-                               meta={"reason": error.reason})
+            return unavailable(
+                "暂时无法核实检索候选的当前公开版本，请稍后重试。", meta={"reason": error.reason}
+            )
         for changed in verified.changed:
             invalidate_document(changed["id"], changed.get("document_revision", ""))
         hits = verified.current
         if not hits:
-            return unavailable("文章公开范围或版本已变化，索引正在刷新，请稍后重新检索。",
-                               meta={"reason": "corpus_changed"})
+            return unavailable(
+                "文章公开范围或版本已变化，索引正在刷新，请稍后重新检索。",
+                meta={"reason": "corpus_changed"},
+            )
         text = "\n".join(_rag_hit(i + 1, hit) for i, hit in enumerate(hits))
         # Retrieval mode belongs to telemetry; candidate format is shared by both routes.
         route = last_route()
@@ -252,14 +257,22 @@ def rag_search(
         if verified.changed:
             corpus = {**corpus, "stale": True}
         if corpus["stale"]:
-            text += ("\n注：语料刷新未完成，本次候选使用最近一次完整索引；"
-                     "正文读取仍核对当前公开版本。")
-        return ok(text, data=hits, meta={"corpus": corpus, "rag_mode": route["mode"],
-                              "rag_reason": route["reason"],      # degraded 时的原因码
-                              "vector_hits": route["vectors"],    # 向量路贡献了几条候选
-                              "vector_missing": route["missing"],
-                              "visibility_checked": len(verified.current) + len(verified.changed),
-                              "visibility_dropped": len(verified.changed)})
+            text += (
+                "\n注：语料刷新未完成，本次候选使用最近一次完整索引；正文读取仍核对当前公开版本。"
+            )
+        return ok(
+            text,
+            data=hits,
+            meta={
+                "corpus": corpus,
+                "rag_mode": route["mode"],
+                "rag_reason": route["reason"],  # degraded 时的原因码
+                "vector_hits": route["vectors"],  # 向量路贡献了几条候选
+                "vector_missing": route["missing"],
+                "visibility_checked": len(verified.current) + len(verified.changed),
+                "visibility_dropped": len(verified.changed),
+            },
+        )
     except (AgentCancelled, BudgetExceeded, TimeoutError):
         raise
     except Exception as exc:
@@ -272,6 +285,7 @@ def get_blog_info() -> str | ToolResult:
     """获取博客基本信息：作者、头像、签名、ICP备案号等。"""
     data = _get("/user")
     return _shape(data)
+
 
 @tool
 def get_social_links() -> str | ToolResult:

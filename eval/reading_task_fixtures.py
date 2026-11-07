@@ -41,6 +41,9 @@ def backend(role):
                      "role": "user",
                      "mutedUntil": None, "frozen": False, "muted": False,
                      "quotaUsed": 0, "quotaLimit": 500}]
+        elif path == "/api/public/documents/board/45/read":
+            from eval.fixtures.document_reads import document_page
+            data = document_page("board", 45, "", "这个合成看板娘好笨啊", request.url.params)
         elif path == "/api/public/board":
             data = [{"talkKey": 45, "approved": 1, "content": "这个合成看板娘好笨啊",
                      "author": "", "createTime": "2026-10-26T12:00:00"}]

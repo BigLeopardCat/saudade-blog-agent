@@ -11,7 +11,7 @@
         0
       ],
       "agent/action_text.py": [
-        102,
+        103,
         0
       ],
       "agent/api/__init__.py": [
@@ -251,6 +251,10 @@
         0
       ],
       "agent/domains/articles/evidence.py": [
+        0,
+        0
+      ],
+      "agent/domains/articles/reading.py": [
         0,
         0
       ],
@@ -927,7 +931,7 @@
         0
       ],
       "tools/notes.py": [
-        10,
+        7,
         0
       ],
       "tools/notifications.py": [
@@ -948,7 +952,7 @@
       ]
     },
     "total": [
-      290,
+      288,
       0
     ]
   },
@@ -968,10 +972,10 @@
       "file": "agent/action_text.py",
       "kind": "collection",
       "name": "_NOARG_VERB",
-      "size": 47,
+      "size": 48,
       "category": "system_data",
       "q": "_NOARG_VERB",
-      "why": "工具名 → 动作文案的渲染表（键是工具名，无参调用时的显示字）；图库工具新增七条展示名称，不参与意图路由或授权。；生图新增五条动作名称，只供进度和回执展示。"
+      "why": "工具名对应的进度与回执显示文案，不参与意图路由或授权。"
     },
     {
       "id": "agent/article_labels.py::_COLOR_CANON",

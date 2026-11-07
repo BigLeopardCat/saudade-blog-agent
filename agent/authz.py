@@ -124,6 +124,7 @@ TOOL_SCOPE: dict[str, str] = {
     "list_notes": SCOPE_READ_PUBLIC,
     "search_notes": SCOPE_READ_PUBLIC,
     "get_article_detail": SCOPE_READ_PUBLIC,
+    "get_article_stats": SCOPE_READ_PUBLIC,
     "rag_search": SCOPE_READ_PUBLIC,
     "get_top_notes": SCOPE_READ_PUBLIC,
     "list_categories": SCOPE_READ_PUBLIC,

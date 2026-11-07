@@ -81,6 +81,7 @@ jobs:
           path: _parent
           sparse-checkout: |
             src/routes
+            tests/fixtures
             frontend/src/utils
             frontend/src/components/NoteTagSelect
           fetch-depth: 1
@@ -94,6 +95,7 @@ jobs:
           test -f _parent/frontend/src/utils/stickers.ts
           test -f _parent/frontend/src/components/NoteTagSelect/index.tsx
           test -f _parent/src/authz.rs
+          test -f _parent/tests/fixtures/document-reading.json
 
       # Identical required suites for forks, bots and maintainer branches.
       - name: 全部离线套件
