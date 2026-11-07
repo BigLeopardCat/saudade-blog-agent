@@ -20,6 +20,16 @@ class ScheduleNotFound(ValueError):
     pass
 
 
+def result_view(output, *, full=False):
+    if full or not isinstance(output, dict):
+        return output
+    result = {key: output[key] for key in ("status", "reason", "notification", "run_id")
+              if key in output}
+    if isinstance(output.get("text"), str):
+        result["preview"] = output["text"][:240]
+    return result
+
+
 def require_admin(principal):
     if not (is_verified_identity(principal) and authz.holds(principal, authz.SCOPE_ADMIN_CONSOLE)):
         raise PermissionError("administrator identity required")
@@ -29,23 +39,39 @@ def require_admin(principal):
 def once_view(row):
     attributes = row.attributes or {}
     definition = attributes["definition"]
+    result = result_view(row.output)
+    if row.status in {"SUCCESS", "ERROR"} and not isinstance(result, dict):
+        result = {"status": "unknown", "reason": "execution_result_unavailable"}
+    outcome = (result or {}).get("status")
+    attention = row.status in {"SUCCESS", "ERROR"} and (
+        outcome != "completed" or (result.get("notification") or {}).get("delivered") is False
+    ) and not (attributes.get("cancelled") or attributes.get("acknowledged"))
     status = (
         "cancelled"
         if attributes.get("cancelled")
         else "paused"
-        if attributes.get("paused") and row.status != "SUCCESS"
-        else {"SUCCESS": "finished", "ERROR": "failed", "CANCELLED": "cancelled"}.get(
+        if attributes.get("paused") and row.status not in {"SUCCESS", "ERROR", "CANCELLED"}
+        else {"SUCCESS": "finished" if outcome == "completed" else outcome,
+              "ERROR": "failed", "CANCELLED": "cancelled"}.get(
             row.status, "scheduled"
         )
     )
     view = {
         "id": attributes["schedule_id"],
         "status": status,
+        "state": row.status.lower(),
+        "result": result,
+        "needs_attention": attention,
+        "acknowledged": bool(attributes.get("acknowledged")),
         "definition": definition,
         "run_at": attributes["start_at"],
         "kind": "once",
     }
-    return {**view, "version": fingerprint(view)}
+    control = {
+        "id": view["id"], "definition": definition, "run_at": view["run_at"], "kind": "once",
+        **{key: bool(attributes.get(key)) for key in ("paused", "cancelled", "acknowledged")},
+    }
+    return {**view, "version": fingerprint(control)}
 
 
 def recurring_view(row):
@@ -60,17 +86,15 @@ def recurring_view(row):
 
 
 def run_view(row, *, full=False):
-    output = row.output
-    if not full and isinstance(output, dict):
-        output = {key: output[key] for key in ("status", "reason", "notification") if key in output}
-        if isinstance(row.output.get("text"), str):
-            output["preview"] = row.output["text"][:240]
+    result = result_view(row.output, full=full)
+    if row.status == "ERROR" and result is None:
+        result = {"status": "unknown", "reason": "execution_result_unavailable"}
     return {
         "id": row.workflow_id,
         "state": row.status.lower(),
         "created_at_ms": row.created_at,
         "updated_at_ms": row.updated_at,
-        "result": output,
+        "result": result,
         "error": "execution_failed" if row.error else None,
     }
 
@@ -156,7 +180,13 @@ class ScheduleService:
             prior = self._get(owner, identifier)
             if prior["version"] != version:
                 raise ScheduleConflict("schedule changed; inspect it before confirming again")
-            if prior["status"] in {"finished", "failed", "cancelled"}:
+            ended = prior.get("state") in {"success", "error", "cancelled"}
+            if ended and action == "cancel" and prior.get("needs_attention"):
+                self.backend.client.update_workflow_attributes(
+                    storage_name(owner, identifier), {"acknowledged": True}, merge=True
+                )
+                return {"changed": True, "schedule": self._get(owner, identifier)}
+            if ended or prior["status"] in {"finished", "failed", "cancelled"}:
                 raise ScheduleConflict("schedule has already ended")
             desired = (
                 {"pause": "paused", "resume": "active"}[action] if action != "cancel" else None
@@ -229,12 +259,22 @@ class ScheduleService:
                 limit=limit + offset + 1,
                 sort_desc=True,
                 load_input=False,
-                load_output=False,
+                load_output=True,
             )
         ]
+        if active_only:
+            recent = self.backend.client.list_workflows(
+                workflow_id_prefix=prefix, application_name=APP, user=str(owner), name=ONCE,
+                status=["SUCCESS", "ERROR"], attributes={"cancelled": False},
+                limit=20, sort_desc=True, load_input=False, load_output=True,
+            )
+            known = {row["id"] for row in once}
+            once.extend(view for row in recent if (view := once_view(row))["needs_attention"]
+                        and view["id"] not in known)
         items = sorted(recurring, key=lambda item: item["id"]) + once
         if active_only:
-            items = [row for row in items if row["status"] in {"active", "paused", "scheduled"}]
+            items = [row for row in items if row["status"] in {"active", "paused", "scheduled"}
+                     or row.get("needs_attention")]
         summaries = [
             {
                 "id": row["id"],
@@ -244,6 +284,8 @@ class ScheduleService:
                     "condition": row["definition"].get("condition")} if active_only else {}),
                 "action": row["definition"]["action"],
                 "status": row["status"],
+                **{key: row[key] for key in ("state", "result", "needs_attention", "acknowledged")
+                   if key in row},
                 "run_at": row.get("run_at"),
                 "next_run_at": (croniter(row["definition"]["cron"],
                     self.now().astimezone(ZoneInfo(row["definition"]["timezone"])))
@@ -252,12 +294,17 @@ class ScheduleService:
                 "cron": row["definition"].get("cron"),
                 "timezone": row["definition"]["timezone"],
             }
-            for row in items[offset : offset + limit]
+            for row in items
         ]
+        recent_results = []
+        if active_only:
+            recent_results = [item for item in summaries if item.get("needs_attention")]
+            summaries = [item for item in summaries if not item.get("needs_attention")]
         return {
-            "items": summaries,
-            "has_more": len(items) > offset + limit,
-            "next_offset": offset + limit if len(items) > offset + limit else None,
+            "items": summaries[offset : offset + limit],
+            **({"recent_results": recent_results} if active_only else {}),
+            "has_more": len(summaries) > offset + limit,
+            "next_offset": offset + limit if len(summaries) > offset + limit else None,
         }
 
     def runs(self, principal, identifier, limit=10, offset=0):

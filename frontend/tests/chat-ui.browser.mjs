@@ -54,7 +54,9 @@ const server = createServer(async (req, res) => {
       }
       if (url.pathname === '/api/chat/schedules/cancel') {
         assert.equal(body.schedule_id,'sc_'+'a'.repeat(32)); assert.equal(body.version,'b'.repeat(64)); taskDeletes++;
-        managedTasks.schedules.items=[]; return json(res,{changed:true});
+        managedTasks.schedules.items=[];
+        managedTasks.schedules.recent_results=[];
+        return json(res,{changed:true});
       }
       if (url.pathname === '/api/chat/stream') {
         const mode = nextMode;
@@ -1367,6 +1369,18 @@ try {
   await page.getByRole('button',{name:'确认删除',exact:true}).click();
   await page.waitForFunction(()=>document.querySelector('#chat-schedule-chip').hidden);
   assert.equal(taskDeletes,2);
+  managedTasks.schedules.recent_results=[{id:'sc_'+'a'.repeat(32),title:'待核对公告',instruction:'批准正文',
+    status:'incomplete',needs_attention:true,result:{status:'incomplete',reason:'execution_unverified'},
+    run_at:new Date(Date.now()-60000).toISOString(),version:'b'.repeat(64)}];
+  await page.evaluate(()=>window.__chatTest.ctx.ui.reloadTasks());
+  assert.equal(await page.locator('#chat-schedule-chip').isVisible(),false);
+  await page.locator('#chat-task-panel summary').filter({hasText:'待核对公告'}).click();
+  const attentionRow=page.locator('#chat-task-panel details').filter({hasText:'待核对公告'});
+  assert.match(await attentionRow.textContent(),/操作结果待核实，请勿重复执行/);
+  await attentionRow.getByRole('button',{name:'移除提醒',exact:true}).click();
+  await attentionRow.getByRole('button',{name:'确认移除',exact:true}).click();
+  await page.waitForFunction(()=>!document.querySelector('#chat-task-panel details'));
+  assert.equal(taskDeletes,3);
   serviceReady=false;
   await page.evaluate(()=>window.__chatTest.ctx.ui.checkService());
   assert.equal(await page.locator('#chat-service-indicator').getAttribute('data-state'),'offline');
