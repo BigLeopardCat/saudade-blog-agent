@@ -25,7 +25,7 @@ def enabled():
 
 def _read(uid):
     url = device.DEVICE_SERVICE_URL.rstrip("/") + "/api/devices"
-    headers = {"Authorization": "Bearer " + device._sign_user_jwt(uid)}
+    headers = {"Authorization": "Bearer " + device._actor_credential(uid)}
     with httpx.stream("GET", url, headers=headers, timeout=10) as response:
         response.raise_for_status()
         chunks, size = [], 0

@@ -4,7 +4,6 @@ from langchain_core.messages import AIMessage, HumanMessage
 
 from agent.api.host_context import request_facts
 from agent.api.schemas import ChatRequest
-from agent.factblock import strip_fact_lines
 from agent.runtime.memory import turn_message_id
 
 
@@ -14,15 +13,14 @@ def _host_history(req: ChatRequest) -> list:
             or type(scope.get("conversation_id")) is not int
             or scope["conversation_id"] != req.conversation_id):
         return []
-    cleaned = []
+    history = []
     for item in req.history[-20:]:
-        content = strip_fact_lines(item.content) if item.role == "assistant" else item.content
-        if content or item.role == "user":
-            cleaned.append((item.role, content, item.turn_id))
+        if item.content or item.role == "user":
+            history.append((item.role, item.content, item.turn_id))
     messages: list = []
-    for index, (role, content, task_id) in enumerate(cleaned):
+    for index, (role, content, task_id) in enumerate(history):
         if role == "user":
-            if index + 1 == len(cleaned) or cleaned[index + 1][0] != "assistant":
+            if index + 1 == len(history) or history[index + 1][0] != "assistant":
                 continue
             messages.append(HumanMessage(content=content, id=turn_message_id(task_id)))
         else:

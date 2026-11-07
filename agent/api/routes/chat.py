@@ -19,7 +19,7 @@ from agent.api.events import KEEPALIVE_FRAME, text_stream
 from agent.api.events import frame as sse_frame
 from agent.api.events import response as stream_response
 from agent.api.schemas import ChatRequest, ChatResponse
-from agent.api.turns import NativeCancelled, next_stream_item, run_turn, stream_to_queue
+from agent.api.turns import ProducerCancelled, next_stream_item, run_turn, stream_to_queue
 from agent.contracts.events import StreamEvent
 from agent.products.blog.context import conversation_session
 from agent.runtime.control import RequestControl
@@ -215,8 +215,8 @@ async def chat(req: ChatRequest, request: Request):
         )
         if not result.reply.strip() and not result.events:
             logger.warning("Agent returned empty reply message_chars=%s", len(req.message))
-        final_reply = result.reply.strip()
-        if not final_reply and not result.events:
+        final_reply = result.reply
+        if not final_reply.strip() and not result.events:
             final_reply = _RECOVERY_SENTENCE
         end_reason = "producer_done"
         return ChatResponse(reply=final_reply, success=True, events=result.events)
@@ -337,7 +337,7 @@ async def chat_stream(req: ChatRequest, request: Request):
                             residue,
                         )
                     break
-                if isinstance(chunk, NativeCancelled):
+                if isinstance(chunk, ProducerCancelled):
                     end_reason = "cancelled"
                     return
                 if isinstance(chunk, Exception):

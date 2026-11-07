@@ -12,13 +12,8 @@ from tools.base import get_all_tools
 
 ARTICLE_READ_TOOLS = frozenset({"rag_search", "search_notes", "get_article_detail"})
 SITE_READ_TOOLS = frozenset({"get_blog_info", "get_social_links", "get_site_map"})
-OWN_READ_TOOLS = frozenset({"list_my_favorites", "get_inbox_overview",
-                            "list_notifications", "list_my_messages",
-                            "list_my_board", "get_chat_history"})
 ADMIN_READ_TOOLS = frozenset({"get_server_status", "get_service_health", "get_user_stats",
                               "get_note_stats", "get_note_periods"})
-MODERATION_READ_TOOLS = frozenset({"get_moderation_status", "list_admin_board",
-                                   "list_admin_comments"})
 
 CATALOG_READ_TOOLS = frozenset({"list_admin_notes"})
 ACCOUNT_READ_TOOLS = frozenset({"list_accounts"})
@@ -56,48 +51,46 @@ def admin_tools() -> dict:
     return _tools_with_scope(ADMIN_READ_TOOLS, SCOPE_ADMIN_CONSOLE)
 
 
+def _domain_tools(tools, scope):
+    selected = {item.name: item for item in tools}
+    _validate_scope(frozenset(selected), scope)
+    return selected
+
+
 def moderation_tools() -> dict:
     from agent.domains import moderation
 
-    selected = _tools_with_scope(MODERATION_READ_TOOLS, SCOPE_ADMIN_CONSOLE)
-    selected.update({tool.name: tool for tool in (moderation.get_moderation_status,
-                    moderation.list_admin_board, moderation.list_admin_comments)})
-    return selected
+    return _domain_tools((moderation.get_moderation_status, moderation.list_admin_board,
+                          moderation.list_admin_comments), SCOPE_ADMIN_CONSOLE)
 
 
 def catalog_tools() -> dict:
     from agent.domains import catalog
 
-    selected = _tools_with_scope(CATALOG_READ_TOOLS, SCOPE_ADMIN_CONSOLE)
-    selected[catalog.list_admin_notes.name] = catalog.list_admin_notes
-    return selected
+    return _domain_tools((catalog.list_admin_notes,), SCOPE_ADMIN_CONSOLE)
 
 
 def account_tools() -> dict:
     from agent.domains import catalog
 
-    selected = _tools_with_scope(ACCOUNT_READ_TOOLS, SCOPE_ADMIN_CONSOLE)
-    selected[catalog.list_accounts.name] = catalog.list_accounts
-    return selected
+    return _domain_tools((catalog.list_accounts,), SCOPE_ADMIN_CONSOLE)
 
 
 def queue_tools() -> dict:
     from agent.domains import work_queue
 
-    selected = _tools_with_scope(QUEUE_READ_TOOLS, SCOPE_ADMIN_CONSOLE)
-    selected.update({tool.name: tool for tool in (work_queue.list_quota_requests,
-                                                 work_queue.list_dashboard_todos)})
-    return selected
+    return _domain_tools((work_queue.list_dashboard_todos, work_queue.list_quota_requests),
+                         SCOPE_ADMIN_CONSOLE)
 
 
 def own_tools() -> dict:
     from agent.domains import own_activity, own_reads
+    from tools.notifications import list_notifications
+    from tools.own_data import list_my_favorites
 
-    selected = _tools_with_scope(OWN_READ_TOOLS, SCOPE_READ_OWN)
-    selected.update({tool.name: tool for tool in (
-        own_reads.list_my_messages,
-        own_activity.list_my_board, own_activity.get_chat_history)})
-    return selected
+    return _domain_tools((list_my_favorites, own_reads.get_inbox_overview, list_notifications,
+                          own_reads.list_my_messages, own_activity.list_my_board,
+                          own_activity.get_chat_history), SCOPE_READ_OWN)
 
 
 def own_domains(tools: dict) -> dict:
@@ -138,5 +131,5 @@ def device_domain(config) -> dict:
             or not scoped_reads_enabled(
             cfg.get("principal"), SCOPE_READ_OWN, cfg.get("user_id"))):
         return {}
-    _tools_with_scope(frozenset({"list_devices"}), SCOPE_READ_OWN)
-    return {"devices": {"list_devices": device_reads.list_devices, **device_actions.tools(config)}}
+    reads = _domain_tools((device_reads.list_devices,), SCOPE_READ_OWN)
+    return {"devices": {**reads, **device_actions.tools(config)}}

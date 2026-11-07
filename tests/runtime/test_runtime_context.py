@@ -5,11 +5,11 @@ import json
 import pytest
 from langchain_core.messages import HumanMessage
 
-from agent.adminops_account import role_cn
 from agent.authz import scopes_for
 from agent.principal import SOURCE_ASSERTION, SOURCE_BODY, Principal
 from agent.products.blog.context import conversation_context
 from agent.products.blog.prompt import build_prompt as _input
+from agent.role_labels import role_cn
 from agent.runtime.budget import BudgetLimits
 from agent.runtime.memory import _tokens
 from agent.runtime.prompt_budget import fit_history

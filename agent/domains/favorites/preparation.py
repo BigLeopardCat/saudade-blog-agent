@@ -7,7 +7,7 @@ from langchain_core.tools import tool
 from pydantic import Field, StrictInt
 
 from agent import authz
-from agent.adminops_target import normalize_target_id
+from agent.identifiers import normalize_target_id
 from agent.proposals import proposal
 from agent.runtime.results import TurnResult
 from agent.runtime.tool_evidence import observed

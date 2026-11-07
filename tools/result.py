@@ -6,7 +6,7 @@ Presentation helpers preserve ID namespaces and ownership meaning without I/O.""
 
 # Public exports; helper names stay private to their modules.
 __all__ = ["ToolResult", "ok", "empty", "unavailable", "not_found", "invalid_args", "TGT_KINDS",
-           "tgt", "fact", "is_noop", "UPSTREAM_DOWN", "error_frame"]
+           "tgt", "fact", "UPSTREAM_DOWN", "error_frame"]
 
 from dataclasses import dataclass, field
 
@@ -68,11 +68,7 @@ TGT_KINDS = ("note", "tag", "category", "announcement", "board_comment",
 
 
 def tgt(kind: str, ident=None, name: str = "") -> dict:
-    """事实信封里的"动的是谁"（`fact(target=…)` 的实参）。`kind` 取 `TGT_KINDS`。
-
-    闭集而非自由字符串：读端（台账渲染、F2 的事实块）要按 kind 分派，写端各造一个词
-    就是又一次"人工同步"。id 拿不到（新建类工具在写之前还没有 id）就只带 name——
-    **空的 id 不许填 0**（0 在号段里是合法值，会被读成"某个真的物件"）。"""
+    """Describe an observed target without inventing a missing identifier."""
     out: dict = {"kind": kind}
     if ident is not None:
         out["id"] = ident
@@ -83,10 +79,10 @@ def tgt(kind: str, ident=None, name: str = "") -> dict:
 
 def fact(op: str, *, changed: bool, target: dict | None = None,
          before: str = "", after: str = "", evidence: str = "", **extra) -> dict:
-    """写工具的**事实信封**（契约与动机见上方长注）。返回给 `ok(..., meta=fact(…))`。
-
-    `extra` 是既有的那些跨语言键，**原样带上**（`fact()` 只加不改）。"""
-    env: dict = {"op": op, "changed": bool(changed)}
+    """Keep observed write state and source metadata in one structured envelope."""
+    if type(changed) is not bool:
+        raise TypeError("changed must be an observed boolean")
+    env: dict = {"op": op, "changed": changed}
     if target:
         env["target"] = target
     if before:
@@ -95,23 +91,8 @@ def fact(op: str, *, changed: bool, target: dict | None = None,
         env["after"] = after
     if evidence:
         env["evidence"] = evidence
-    if not changed:
-        env["noop"] = True
     env.update(extra)
     return env
-
-
-def is_noop(meta) -> bool:
-    """Read observed no-op evidence from changed, or the compatible noop key.
-
-    Missing evidence never certifies a no-op: return False rather than fabricate
-    an assertion that nothing changed."""
-    if not isinstance(meta, dict):
-        return False
-    ch = meta.get("changed")
-    if isinstance(ch, bool):
-        return not ch
-    return bool(meta.get("noop"))
 
 
 def error_frame(text: str, reason: str) -> ToolResult:

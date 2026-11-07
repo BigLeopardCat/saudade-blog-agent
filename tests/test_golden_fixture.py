@@ -16,7 +16,7 @@ sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "eval"))
 
 
-import golden_fixture as gf  # noqa: E402
+from eval import golden_fixture as gf  # noqa: E402
 
 FAILS: list[str] = []
 check = collector(FAILS)
@@ -90,7 +90,7 @@ def _trow(text: str = _TODO_FIX, done: bool = False,
     return {"text": text, "done": done, "date": date}
 
 
-import agent.adminops_todo as _todo  # noqa: E402  （渲染那串中文的唯一来源，别在测试里手拼）
+from datetime import date  # noqa: E402
 
 
 def test_golden_fixture():
@@ -532,7 +532,8 @@ def test_golden_fixture():
     _todo_gold = next(c for c in _CASES if c["id"] == "admin_todo_done_popup")["gold"]
     _rx_t = " ".join(_todo_gold.get("text_any_regex") or [])
     check("用例断言的排期，正是待办族约定的那一个日子渲染出来的（EXPECT_DATE ↔ 用例断言）",
-          f"排期 {_todo.due_date_cn(gft.EXPECT_DATE)}，现在：未完成" in _rx_t,
+          f"排期 {date.fromisoformat(gft.EXPECT_DATE).month}月"
+          f"{date.fromisoformat(gft.EXPECT_DATE).day}日，现在：未完成" in _rx_t,
           _rx_t[:120])
     check("用例断言里带着「现在：未完成」——这半句只在**读到唯一命中行**时才印（uid=0 的退化卡面"
       "只有正文、没有这对括号），所以它就是「真身份那一跳真的落到了那一行」的证据",
@@ -544,7 +545,6 @@ def test_golden_fixture():
             print("  -", f)
         sys.exit(1)
     print("=== 全部通过 ===")
-
     assert not FAILS, (
         f"{len(FAILS)} 条未通过：" + "；".join(FAILS))
 

@@ -229,11 +229,10 @@ def test_empty_or_invalid_appearance_does_not_create_commands(args, error):
         "/links",
     ],
 )
-def test_invalid_navigation_has_no_receipt_in_either_runtime(path):
+def test_invalid_navigation_never_issues_a_browser_receipt(path):
     assert not site.nav_path_valid(path)
     with pytest.raises((ToolException, ValidationError)):
         browser.navigate_page.invoke(_call("navigate_page", {"path": path}), config=_config())
-    assert not hasattr(site.navigate_to.invoke({"path": path, "confirm": False}), "meta")
 
 
 @pytest.mark.parametrize(

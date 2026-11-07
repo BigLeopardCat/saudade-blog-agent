@@ -1,11 +1,8 @@
 # -*- coding: utf-8 -*-
-"""真实对话效率指标。
+"""Read-only diagnostics for archived planner/execute traces.
 
-golden 只断言最终文本——首轮零工具+编造+修正照样 PASS，能力退化与
-打回成本都不可见。本脚本扫 logs/agent/traces/ 真实对话，按技能统计：
-  - 首轮即调率（round 0 的计划就点了工具名，而不是空手交给 narrator）
-  - 打回成本：gate fallback 次数（整轮被否决，最贵）+ 受阻 spec 数（execute BLOCK）
-  - planner 点名工具 vs 自由计划的对比（content_query 两种形态）
+Current request and task metrics are reported by request_metrics and task_metrics.
+Missing planner events remain unmeasurable, rather than zero-valued successes.
 """
 import argparse
 import json
@@ -50,7 +47,8 @@ def analyze(d: dict) -> dict | None:
         by_round.setdefault(0 if r is None else r, set()).update(_call_names(e.get("tools") or []))
     rounds = [sorted(by_round[r]) for r in sorted(by_round)]
     fallbacks = [e for e in evs if (e.get("node"), e.get("event")) == ("gate", "fallback")]
-    return {"workflow": decs[-1].get("workflow"), "ptools": decs[-1].get("tools") or [],
+    return {"workflow": decs[-1].get("workflow", decs[-1].get("skill")),
+            "ptools": decs[-1].get("tools") or [],
             "rounds": rounds, "rev": len(fallbacks),
             "blocked": sum(1 for e in checks if e.get("verdict") == "BLOCK")}
 

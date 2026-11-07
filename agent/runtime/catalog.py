@@ -10,10 +10,9 @@ def loader(domain: str, description: str | None = None) -> dict:
     }}
 
 
-def tool_owners(initial, domains):
-    """Index current authorized declarations without activating or invoking them."""
+def execution_tools(initial, domains):
+    """Resolve exact authorized names independently of model-visible discovery schemas."""
     declared = dict(initial)
-    owners = {}
     reserved = {f"load_{domain}_info_tools" for domain in domains}
     for domain, tools in domains.items():
         for name, tool in tools.items():
@@ -22,7 +21,6 @@ def tool_owners(initial, domains):
             if name in declared and declared[name] != tool:
                 raise ValueError(f"Conflicting tool declaration: {name}")
             declared[name] = tool
-            owners.setdefault(name, []).append(f"load_{domain}_info_tools")
     if any(name != tool.name or name in reserved for name, tool in initial.items()):
         raise ValueError("Invalid or reserved initial tool name")
-    return owners
+    return declared

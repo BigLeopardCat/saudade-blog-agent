@@ -290,7 +290,7 @@ def main():
         if not stamp or not (since <= stamp <= until):
             continue
         uid = int(uid_s)
-        if uid == 0:  # golden 评测产出（run_golden 内部链路同样落 trace）
+        if uid == 0:  # golden 评测产出（golden_evaluation 内部链路同样落 trace）
             golden_skipped += 1
             continue
         d = load_trace(f)

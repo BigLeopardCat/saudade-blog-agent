@@ -13,7 +13,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "eval"))
 
-from golden_fixture import FIXTURE_PREFIX  # noqa: E402  （族前缀只有一处来源）
+from eval.golden_fixture import FIXTURE_PREFIX  # noqa: E402  （族前缀只有一处来源）
 
 # `user.status` 取值域（与 `src/authz.rs` 的 `STATUS_ACTIVE` / `STATUS_FROZEN` 一一对应）。
 # **只在这里出现这一次**：判据是"等于期望值"，不是"> 0 就算冻结"——后端对未登记的

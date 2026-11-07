@@ -63,19 +63,19 @@ def append_result(session, request, handler, prompt, round_index, attachments):
         prompt.append(ToolMessage(content=f"{domain} 工具已加载。",
                                   name=name, tool_call_id=call["id"]))
         return None
-    if name not in session.tools:
-        required = session.tool_owners.get(name)
-        reason = "tool_not_loaded" if required else "unknown_tool"
+    if name not in session.execution_tools:
+        reason = "unknown_tool"
         body = json.dumps({"error": reason, "tool": name,
-                           "discovery_tools": required or list(session.loaders)})
+                           "discovery_tools": list(session.loaders)})
         prompt.append(ToolMessage(content=body, name=name,
                                   tool_call_id=call["id"], status="error"))
-        record("native", "tool_error", name=name, reason=reason, round=round_index)
+        record("native", "tool_error", name=name, call_id=call["id"],
+               reason=reason, round=round_index)
         return None
     session.calls_used += 1
     emit(session.config, f"正在调用工具：{name}", key=f"tool:{call['id']}")
     with native_tool(session.budget), tool_evidence.scope(call, round_index):
-        output = handler(request.override(tool=framework_tool(session.tools[name])))
+        output = handler(request.override(tool=framework_tool(session.execution_tools[name])))
     command = output if isinstance(output, Command) else None
     messages = output.update["messages"] if command else [output]
     message = next((m for m in messages if isinstance(m, ToolMessage)

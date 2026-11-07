@@ -141,42 +141,5 @@ def remove_favorite(
               meta=fact("favorite_remove", changed=True, target=tgt("note", aid),
                         before="已收藏", after="未收藏", change="已取消收藏", article_id=aid))
 
-@tool
-def list_my_messages(config: RunnableConfig) -> str | ToolResult:
-    """列出**当前登录用户自己**的站内信（私信）：收件箱与发件箱各最近 100 条，
-    外加未读封数（返回 inbox / outbox / unread，每封带 id / fromUserId / toUserId /
-    peerName / title / content / isRead / createdAt）。
-    访客问"我的信箱里有什么""谁给我写过信""我发出去的信"时用。
-    ⚠️ 站内信与**河灯留言**是两回事：留言在公开页面上、谁都看得见（那是
-    list_guestbook）；站内信是一对一写的信，只有收发双方看得见。
-    没携带身份时如实告知读不到。"""
-    data = _own_get("/api/protected/messages", config)
-    return _shape(data)
 
-__all__ = ["list_my_favorites", "add_favorite", "remove_favorite",
-           "list_my_messages"]
-
-
-def _as_ids(value) -> list[int]:
-    """实参 → 正整数 id 列表（去重、保序；认不出的项丢掉——不猜）。"""
-    if value is None:
-        return []
-    items = value if isinstance(value, (list, tuple)) else [value]
-    out: list[int] = []
-    for it in items:
-        i = _as_article_id(it)
-        if i is not None and i not in out:
-            out.append(i)
-    return out
-
-
-def _as_bool(value) -> bool | None:
-    """实参 → 布尔；认不出 → None（调用方按"没说"处理，**绝不默认 True**）。"""
-    if isinstance(value, bool):
-        return value
-    s = str(value if value is not None else "").strip().lower()
-    if s in ("true", "1", "yes", "y", "on", "all", "全部", "全都", "所有"):
-        return True
-    if s in ("false", "0", "no", "n", "off", ""):
-        return False
-    return None
+__all__ = ['list_my_favorites', 'add_favorite', 'remove_favorite']

@@ -20,6 +20,8 @@ _PERMISSIONS = {
     "set_page_appearance": ("toggle_dark_mode", "toggle_effect"),
 }
 
+PERMISSION_OPERATIONS = frozenset(name for names in _PERMISSIONS.values() for name in names)
+
 
 def available(config):
     cfg = (config or {}).get("configurable") or {}

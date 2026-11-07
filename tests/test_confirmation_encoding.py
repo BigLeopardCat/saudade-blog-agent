@@ -21,7 +21,7 @@ def test_equivalent_but_unissued_spellings_cannot_bypass_host_claim_parsing(
     monkeypatch.setattr(confirm.settings, 'confirmation_secret', 'encoding-contract-fixture-only')
     for size in range(1, 4):
         token = confirm.sign(7, 42, 'favorite_add', [
-            {'tool': 'add_favorite', 'args': {'text': 'x' * size}}])
+            {'tool': 'add_favorite', 'args': {'text': 'x' * size}}], executor='favorites')
         body, signature = token.split('.')
         part = body if component == 'payload' else signature
         if aliases(part):

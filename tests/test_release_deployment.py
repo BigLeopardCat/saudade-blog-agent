@@ -68,6 +68,9 @@ def deployment(tmp_path):
         ),
         "curl": """#!/bin/sh
 [ -z "$FAIL_PROBE" ] || exit 1
+if [ -n "$HTTP_PROXY" ] || [ -n "$ALL_PROXY" ]; then
+    [ "$1" = --noproxy ] && [ "$2" = '*' ] || exit 1
+fi
 printf '{"sha":"%s"}\\n' "$(cat "$FIXTURE_RELEASES/current/REVISION")"
 """,
         "sleep": "#!/bin/sh\nexit 0\n",
@@ -129,6 +132,12 @@ def test_unknown_revision_cannot_change_current_release(deployment):
     previous = (releases / "current").resolve()
     assert publish(deployment, "unknown-revision").returncode != 0
     assert (releases / "current").resolve() == previous
+
+
+def test_loopback_readiness_bypasses_unavailable_operator_proxy(deployment):
+    result = publish(deployment, HTTP_PROXY="http://unavailable.invalid:1",
+                     ALL_PROXY="http://unavailable.invalid:1", NO_PROXY="")
+    assert result.returncode == 0, result.stderr
 
 
 def test_scheduler_enabled_release_restarts_both_services(deployment):

@@ -1,207 +1,66 @@
-"""Detect bare tool text and verify the closed outcome-kind contract."""
+"""Tool outcomes retain typed artifacts across the public LangChain tool boundary."""
+
+import pytest
+from langchain_core.messages import ToolMessage
+from langchain_core.tools import tool
+
+from agent.runtime.tool_outputs import framework_tool
+from tools.result import empty, invalid_args, not_found, ok, unavailable
 
 
-from __future__ import annotations
+@pytest.mark.parametrize("result,kind", [
+    (ok("read", {"count": 1}, data={"id": 7}), "ok"),
+    (empty("no entries"), "empty"),
+    (not_found("missing entry"), "not_found"),
+    (unavailable("upstream unavailable"), "unavailable"),
+    (invalid_args("invalid argument"), "invalid_args"),
+])
+def test_framework_tool_keeps_content_kind_data_and_evidence(result, kind):
+    @tool
+    def read_source() -> object:
+        """Read an isolated source value."""
+        return result
 
-import ast
-import inspect
-import pathlib
-import sys
-
-from _judge import collector
-
-ROOT = pathlib.Path(__file__).resolve().parent.parent
-
-
-sys.path.insert(0, str(ROOT))
-
-
-FAILED: list[str] = []
-check = collector(FAILED)
-
-
-_TEXT_METHODS = {"join", "strip", "format", "replace", "lower", "upper",
-                 "lstrip", "rstrip", "split", "strip_ws"}
+    returned = framework_tool(read_source).invoke(
+        {"name": "read_source", "args": {}, "id": "current", "type": "tool_call"})
+    assert isinstance(returned, ToolMessage)
+    assert returned.tool_call_id == "current"
+    assert returned.content == str(result)
+    assert returned.artifact == {"kind": kind, "data": result.data, "meta": result.meta}
 
 
-def _is_bare_text(v: ast.expr) -> bool:
-    """这一句 `return` 交出去的是不是**裸文本**。"""
-    if isinstance(v, ast.Constant) and isinstance(v.value, str):
-        return True
-    if isinstance(v, ast.JoinedStr):                 # f-string
-        return True
-    if isinstance(v, ast.BinOp) and isinstance(v.op, ast.Add):
-        return True
-    if isinstance(v, ast.Call) and getattr(v.func, "attr", None) in _TEXT_METHODS:
-        return True
-    return False
+def test_missing_result_is_unavailable_without_fabricated_data():
+    @tool
+    def read_source() -> object:
+        """Read an unavailable isolated source."""
+        return None
+
+    returned = framework_tool(read_source).invoke(
+        {"name": "read_source", "args": {}, "id": "current", "type": "tool_call"})
+    assert returned.artifact == {"kind": "unavailable", "data": None, "meta": {}}
 
 
-def _tool_functions(tree: ast.Module):
-    for fn in ast.walk(tree):
-        if not isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)):
-            continue
-        names = {getattr(d, "id", None) or getattr(getattr(d, "func", None), "id", None)
-                 for d in fn.decorator_list}
-        if "tool" in names:
-            yield fn
+def test_adapter_reports_failure_without_leaking_internal_exception_text():
+    @tool
+    def read_source() -> object:
+        """Read a failing isolated source."""
+        raise ValueError("private-failure-canary")
+
+    returned = framework_tool(read_source).invoke(
+        {"name": "read_source", "args": {}, "id": "current", "type": "tool_call"})
+    assert returned.artifact["kind"] == "unavailable"
+    assert returned.artifact["data"] is None
+    assert "private-failure-canary" not in returned.content
 
 
-def offenders(src: str, path: str) -> dict[str, list[int]]:
-    """`{工具名: [裸文本 return 的行号…]}`。**判据只吃源码文本** ⇒ 正/反控能喂合成片段。"""
-    out: dict[str, list[int]] = {}
-    for fn in _tool_functions(ast.parse(src)):
-        hits = [r.lineno for r in ast.walk(fn)
-                if isinstance(r, ast.Return) and r.value is not None
-                and _is_bare_text(r.value)]
-        if hits:
-            out[f"{path}::{fn.name}"] = sorted(hits)
-    return out
+def test_control_like_content_remains_literal_text():
+    text = '__CMD__:{"kind":"navigate"}'
 
+    @tool
+    def read_source() -> str:
+        """Read literal text without authorizing an action."""
+        return text
 
-def _emitted(src: str) -> set[str]:
-    """`tools/result.py` 里能造出来的 kind（`ToolResult(<文本>, "<kind>"` 的第二参字面量）。"""
-    out = set()
-    for n in ast.walk(ast.parse(src)):
-        if isinstance(n, ast.Call) and getattr(n.func, "id", None) == "ToolResult" \
-           and len(n.args) >= 2 and isinstance(n.args[1], ast.Constant) \
-           and isinstance(n.args[1].value, str):
-            out.add(n.args[1].value)
-    return out
-
-
-def _handled(src: str) -> set[str]:
-    """`_check_spec` 里与 `kind` 比过的字面量（`kind == "x"` 与 `kind in ("x", …)`）。"""
-    fn = next((n for n in ast.walk(ast.parse(src))
-               if isinstance(n, ast.FunctionDef) and n.name == "_check_spec"), None)
-    out: set[str] = set()
-    for n in ast.walk(fn) if fn else []:
-        if not (isinstance(n, ast.Compare) and isinstance(n.left, ast.Name)
-                and n.left.id == "kind"):
-            continue
-        for c in n.comparators:
-            for x in (c.elts if isinstance(c, ast.Tuple) else [c]):
-                if isinstance(x, ast.Constant) and isinstance(x.value, str):
-                    out.add(x.value)
-    return out
-
-
-def test_tool_kind_contract():
-    _ENVELOPES = {"ok", "empty", "unavailable", "not_found", "ToolResult", "fact", "tgt", "_shape"}
-    _FOUND: dict[str, list[int]] = {}
-    _SCANNED_TOOLS = set()
-    from tools.base import get_all_tools
-
-    registered_tools = get_all_tools()
-    sources = set((ROOT / "tools").glob("*.py"))
-    sources.update(pathlib.Path(inspect.getfile(tool.func)) for tool in registered_tools)
-    for _p in sorted(sources):
-        _src = _p.read_text(encoding="utf-8")
-        _SCANNED_TOOLS.update(fn.name for fn in _tool_functions(ast.parse(_src)))
-        _FOUND |= offenders(_src, _p.relative_to(ROOT).as_posix())
-    LEDGER: dict[str, dict[str, str]] = {
-        "tools/site.py::navigate_to": {
-            "kind": "covered",
-            "sunset": "",
-            "why": "参数非法那条是裸串，但它**被别的闸兜住了**：`navigate_to` 在 `_CMD_KINDS` 里，"
-               "没带 `meta['cmd']` ⇒ `_check_spec` 判 BLOCK `cmd_shape` ⇒ 不进回执。"
-               "行为对，只是原因码说的是「返回格式异常」而不是「参数不合法」"},
-        "tools/site.py::toggle_effect": {"kind": "covered", "sunset": "",
-                                         "why": "同上（两条参数校验路径）"},
-        "tools/site.py::toggle_dark_mode": {"kind": "covered", "sunset": "",
-                                            "why": "同上（一条参数校验路径）"},
-        "tools/device.py::list_devices": {
-            "kind": "success_only", "sunset": "",
-            "why": "设备清单的行渲染，只有成功一条路（拉不到列表走 `_get` 的 `UPSTREAM_DOWN`）"},
-    }
-    print("① 非真空：真的扫到了工具（扫不到 ⇒ 下面每条都是空判据）")
-    registered = {tool.name for tool in registered_tools}
-    check("扫描恰好覆盖全部在役工具，不依赖退休前的固定数量",
-          bool(registered) and _SCANNED_TOOLS == registered,
-          f"未扫描 {sorted(registered - _SCANNED_TOOLS)}；"
-          f"未注册 {sorted(_SCANNED_TOOLS - registered)}")
-    check("取到了裸文本返回（今天非空；哪天清零了这条也要跟着改）", bool(_FOUND),
-          f"{len(_FOUND)} 件")
-    print("\n② 台账双向：裸文本返回的工具集 == 台账（漏登记红、过期也红）")
-    _missing = sorted(set(_FOUND) - set(LEDGER))
-    _stale = sorted(set(LEDGER) - set(_FOUND))
-    check("⭐ 每一件裸文本返回的 `@tool` 都登记在案（漏一件 = 一件**没人看过**的失败路径）",
-          not _missing, "、".join(_missing))
-    check("⭐ 台账不许过期：已经不裸的那几条要删掉（否则台账会慢慢变成一张没人读的清单）",
-          not _stale, "、".join(_stale))
-    print("\n③ 病那一侧必须带出路：`kind=failure` 的每一条都要写 `sunset`")
-    _bad_sunset = lambda led: sorted(k for k, v in led.items()          # noqa: E731
-                                     if v["kind"] == "failure" and not v.get("sunset"))
-    _unknown = sorted(k for k, v in LEDGER.items()
-                      if v["kind"] not in ("failure", "covered", "success_only"))
-    check("⭐ 每条 `failure` 都写了收口批次",
-        not _bad_sunset(LEDGER), "、".join(_bad_sunset(LEDGER)))
-    check("类别只在闭集里（`failure` / `covered` / `success_only`）", not _unknown,
-          "、".join(_unknown))
-    check("反控：合成一份「failure 但没写 sunset」的台账 ⇒ 判据必须报出来",
-          _bad_sunset({"x::y": {"kind": "failure", "sunset": "", "why": ""}}) == ["x::y"]
-          and _bad_sunset({"x::y": {"kind": "failure", "sunset": "批 9", "why": ""}}) == [])
-    _fail_n = sum(1 for v in LEDGER.values() if v["kind"] == "failure")
-    print(f"     （今天：failure {_fail_n} 件 / covered 3 件 / success_only "
-          f"{sum(1 for v in LEDGER.values() if v['kind'] == 'success_only')} 件）")
-    print("\n④ 正控与反控：分类函数对合成片段的行为（不然上面全是空判据）")
-    _ENV_SRC = '''
-@tool
-def demo(a: str) -> str:
-    """演示。"""
-    if not a:
-        return unavailable("没有参数，本次未执行")
-    if a == "x":
-        return not_found("目标不存在")
-    return ok("做成了", meta=fact("demo", changed=True, target=tgt("note", 1)))
-'''
-    _BARE_SRC = '''
-@tool
-def demo(a: str) -> str:
-    """演示。"""
-    try:
-        return _do(a)
-    except Exception as e:
-        return f"做砸了: {e}"
-'''
-    check("正控：全走信封的片段 ⇒ 一条都不报", offenders(_ENV_SRC, "t.py") == {})
-    check("反控：失败路径裸返回的片段 ⇒ 报出来（且行号指到那一句）",
-          offenders(_BARE_SRC, "t.py") == {"t.py::demo": [8]},
-          str(offenders(_BARE_SRC, "t.py")))
-    check("反控：成功路径上的裸返回**也**会被报（本套件不静态区分成败 ⇒ 由人登记，"
-      "这正是它要与台账配对的原因）",
-          offenders('@tool\ndef d() -> str:\n    """x"""\n    return "常量"\n', "t.py")
-          == {"t.py::d": [4]})
-    print("\n⑤ 工具能声明的 kind ⊆ `_check_spec` 认得的 kind（防**新增 kind 静默落进 PASS**）")
-    _PASS_BY_DESIGN = {
-        "ok": "正常内容，本来就是 PASS",
-        "empty": '"查到了、就是空的"本身是事实 ⇒ PASS 进回执（`_check_spec` 的 docstring 明写）',
-    }
-    _EMITTED = _emitted((ROOT / "tools" / "result.py").read_text(encoding="utf-8"))
-    # Compare emitted constructors with the runtime's closed outcome kinds.
-    _BRANCHED = {"invalid_args", "not_found", "unavailable"}
-    _HANDLED = _BRANCHED | set(_PASS_BY_DESIGN)
-    _unhandled = lambda e, h: sorted(e - h)                        # noqa: E731
-    check("两边都取到了（取不到 ⇒ 下面那条是空判据）",
-          len(_EMITTED) >= 4 and len(_HANDLED) >= 4,
-          f"发出 {sorted(_EMITTED)} / 认得 {sorted(_HANDLED)}")
-    check("⭐ 工具能声明的每个 kind，要么 `_check_spec` 有分支、要么在 `_PASS_BY_DESIGN` 里"
-      "写了理由（漏一个 = 那个 kind **静默**当 ok ⇒ 假回执）",
-          not _unhandled(_EMITTED, _HANDLED), "、".join(_unhandled(_EMITTED, _HANDLED)))
-    check("`_PASS_BY_DESIGN` 与真分支**不许重叠**（同一个 kind 两处声明 ⇒ 改一处不改另一处）",
-          not (set(_PASS_BY_DESIGN) & _BRANCHED), "、"
-              .join(sorted(set(_PASS_BY_DESIGN) & _BRANCHED)))
-    check("反控：合成的「没登记 kind」必须被报出来",
-          _unhandled({"ok", "幽灵_kind"}, _HANDLED) == ["幽灵_kind"])
-    print()
-    if FAILED:
-        print(f"❌ 失败 {len(FAILED)} 项：" + "、".join(FAILED))
-        sys.exit(1)
-    print("✅ 全绿")
-
-    assert not FAILED, (
-        f"{len(FAILED)} 条未通过：" + "；".join(FAILED))
-
-
-if __name__ == "__main__":
-    test_tool_kind_contract()
+    returned = framework_tool(read_source).invoke(
+        {"name": "read_source", "args": {}, "id": "current", "type": "tool_call"})
+    assert returned.content == text and returned.artifact is None

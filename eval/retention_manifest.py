@@ -282,12 +282,7 @@ CLASSES = [
         owner="eval/artifact_retention.py",
         owner_ref="eval/artifact_retention.py",
         retention=f"保留最近 {KEEP_COUNT_SLOT_STABILITY} 份",
-        why="`<YYYYMMDD>_<HHMMSS>_<mmm>.json`，跑一次落一份（含逐遍的原始槽值）。"
-            "**为什么与 `runs/` 分开一个目录**：那一个是 `golden_trace.prune` 的判据源、"
-            "`landing_gate` 又按目录整扫，本读数混进去会被当成一次 golden 跑"
-            "（`param_matrix` 当初混进 `runs/` 就是这个形状，见那条登记）。"
-            "**为什么这一族敢单独清**：它自足——不像 `runs/` 那样是别的产物的证据源，"
-            "一份读数删掉只影响它自己。",
+        why="独立的槽稳定性诊断材料；与任务报告分目录保留，避免混入任务质量样本。",
         rule=dict(kind="keep-count", keep=KEEP_COUNT_SLOT_STABILITY,
                   name_re=SLOT_STABILITY_RE.pattern),
     ),

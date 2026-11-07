@@ -1,6 +1,6 @@
-"""The migrated confirmation domains; no model intent matching belongs here."""
+"""Registered confirmation executors; model intent matching does not belong here."""
 
-from agent.domains import article_summary, talks
+from agent.domains import article_summary, browser, talks
 from agent.domains.account_actions import transactions as account_actions
 from agent.domains.announcements import deletion as announcement_deletions
 from agent.domains.announcements import transactions as announcements
@@ -48,7 +48,7 @@ _DOMAINS = {
 }
 
 
-def native_domain(grant):
+def executor_domain(grant):
     executor = grant.get("executor") if isinstance(grant, dict) else None
     return _DOMAINS.get(executor) if isinstance(executor, str) else None
 
@@ -62,7 +62,9 @@ def confirmed_domain(grant):
 
 def operation_names():
     """Permission identities for server-executed operations, not model-callable tools."""
-    return frozenset(name for domain in _DOMAINS.values() for name in domain.PERMISSION_OPERATIONS)
+    operations = frozenset(name for domain in _DOMAINS.values()
+                           for name in domain.PERMISSION_OPERATIONS)
+    return operations | browser.PERMISSION_OPERATIONS
 
 
 def bound_tool_names():

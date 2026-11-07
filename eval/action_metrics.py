@@ -1,4 +1,4 @@
-"""Native decision and action timing; discovery is distinct from business execution."""
+"""Decision admissibility and timing, separate from business outcome correctness."""
 
 from eval.statistical_metrics import proportion
 
@@ -17,7 +17,14 @@ def decision_score(events, expected):
         return None
     first = next(event for event in events if event.get("node") == "native"
                  and event.get("event") == "llm_done")
-    if first.get("invalid_tool_calls") or first.get("finish_reason") == "length":
+    start = events.index(first) + 1
+    end = next((index for index in range(start, len(events))
+                if events[index].get("node") == "native"
+                and events[index].get("event") == "llm_start"), len(events))
+    rejected = any(event.get("node") == "native" and event.get("event") == "tool_error"
+                   and event.get("reason") in {"tool_not_loaded", "unknown_tool"}
+                   for event in events[start:end])
+    if rejected or first.get("invalid_tool_calls") or first.get("finish_reason") == "length":
         return False
     if not actual:
         return expected.get("allow_text") is True

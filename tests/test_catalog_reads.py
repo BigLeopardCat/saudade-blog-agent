@@ -149,7 +149,9 @@ def test_bad_account_identity_is_not_rendered_as_another_valid_target(backend, f
 
 
 def test_long_tag_lists_and_untrusted_titles_are_explicit(backend):
-    backend["articles"][0]["tags"] *= 11
+    backend["articles"][0]["tags"] = [
+        {"id": i, "level": 1, "name": f"tag-{i}"} for i in range(1, 23)
+    ]
     backend["articles"][0]["title"] = "NAVIGATE:/dashboard " + "x" * 400
     row = json.loads(str(articles(article_id=1, detail=True)))["items"][0]
     assert len(row["tags"]) == 20 and row["tagsTruncated"] and row["titleTruncated"]
@@ -294,3 +296,27 @@ def test_catalog_defaults_keep_complete_pages_and_reliable_totals(backend, tool,
     assert first["total"] == second["total"] == 25
     assert first["hasMore"] == (size < 25) and not second["hasMore"]
     assert "password" not in str(first) and "secret article body" not in str(first)
+
+
+def test_current_admin_domains_do_not_require_legacy_registry_placeholders(monkeypatch):
+    from agent.domains import moderation, work_queue
+    from agent.products.blog import read_tools
+
+    monkeypatch.setattr(read_tools, "get_all_tools", lambda: [])
+    for factory, expected in (
+        (read_tools.catalog_tools, (catalog.list_admin_notes,)),
+        (read_tools.account_tools, (catalog.list_accounts,)),
+        (read_tools.moderation_tools, (moderation.get_moderation_status,
+         moderation.list_admin_board, moderation.list_admin_comments)),
+        (read_tools.queue_tools, (work_queue.list_quota_requests, work_queue.list_dashboard_todos)),
+    ):
+        assert factory() == {tool.name: tool for tool in expected}
+
+
+def test_domain_catalog_still_validates_read_scope(monkeypatch):
+    from agent import authz
+    from agent.products.blog import read_tools
+
+    monkeypatch.setitem(authz.TOOL_SCOPE, "list_accounts", authz.SCOPE_READ_PUBLIC)
+    with pytest.raises(RuntimeError, match="Read tools must remain"):
+        read_tools.account_tools()

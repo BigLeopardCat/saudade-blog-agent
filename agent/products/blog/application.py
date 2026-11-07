@@ -1,7 +1,7 @@
 """Explicit assembly of the blog product's tools, context and middleware."""
 
 from agent.domains import conversation_images
-from agent.domains.registry import confirmed_domain, native_domain
+from agent.domains.registry import confirmed_domain, executor_domain
 from agent.principal import CHAT_ONLY_ROLES
 from agent.products.blog.articles import ArticleMiddleware
 from agent.products.blog.capabilities import ToolCatalog
@@ -57,7 +57,7 @@ class BlogApplication:
 
     def confirmation(self, grant):
         domain = confirmed_domain(grant)
-        if domain is None or native_domain(grant) is not domain:
+        if domain is None or executor_domain(grant) is not domain:
             raise ValueError("这张确认卡不支持当前执行入口，请重新发起操作；本次未执行。")
         if grant.get("executor") == "automations":
             from agent.domains.automations.transactions import BoundDomain

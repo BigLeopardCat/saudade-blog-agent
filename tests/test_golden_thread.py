@@ -21,7 +21,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "eval"))
 
 
-import golden_thread as gt  # noqa: E402
+from eval import golden_thread as gt  # noqa: E402
 
 FAILED: list[str] = []
 check = collector(FAILED)
@@ -50,7 +50,7 @@ def _fn(tree: ast.Module, name: str) -> ast.FunctionDef | None:
 
 
 def _check_turn_runner_coordinates():
-    import run_golden as rg
+    import golden_evaluation as rg
     case = {"id": "coordinate_probe", "user_input": "hello", "gold": {}, "context": {}}
     received = []
 
@@ -115,12 +115,12 @@ def test_golden_thread():
           f"{gt._slug('a.b')} / {gt._slug('a-b')} / {gt._slug('a b')}")
     print()
     print("④ 运行器收到正确坐标，生产者继续传递该坐标")
-    _rg = (ROOT / "eval" / "run_golden.py").read_text(encoding="utf-8")
+    _rg = (ROOT / "eval" / "golden_evaluation.py").read_text(encoding="utf-8")
     _tree = ast.parse(_rg)
     _check_turn_runner_coordinates()
     from contextvars import ContextVar
 
-    import run_golden as rg
+    import golden_evaluation as rg
 
     from agent.runtime.results import TurnResult
 

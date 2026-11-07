@@ -16,6 +16,7 @@ from random import SystemRandom
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import trace_alert as ta  # noqa: E402
 
+from eval.golden_evaluation import iter_rounds  # noqa: E402
 from utils.trace_files import iter_trace_files, parse_trace_name  # noqa: E402
 from utils.trace_io import load_trace  # noqa: E402
 
@@ -97,8 +98,8 @@ def load_golden_inputs(path=GOLDEN):
         if not line.strip():
             continue
         case = json.loads(line)
-        for index, turn in enumerate(case.get("rounds", [case])):
-            inputs[f"{case['id']}:{index + 1}"] = turn["user_input"]
+        for turn in iter_rounds(case):
+            inputs[f"{case['id']}:{turn['round']}"] = turn["user_input"]
     return inputs
 
 

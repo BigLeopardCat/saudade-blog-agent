@@ -12,6 +12,7 @@ import httpx
 from langchain_core.runnables.config import RunnableConfig
 
 # Load deployment settings before constructing module-level endpoints.
+from agent.identifiers import normalize_target_id as _as_article_id  # noqa: F401
 from config import settings as _settings
 
 # Request classification and bounded read retry; see tools/http_channel.py.
@@ -31,7 +32,6 @@ from tools.result import (
     ToolResult,
     empty,  # noqa: F401
     fact,  # noqa: F401
-    is_noop,  # noqa: F401
     not_found,  # noqa: F401
     ok,  # noqa: F401
     tgt,  # noqa: F401
@@ -86,29 +86,26 @@ def _get(path: str, *, not_found_text: str = "",
             deny_msg="当前身份无权读取该公开数据", not_found_text=not_found_text)
     return body["data"]
 
-# Import public tools after their shared channel definitions to avoid circular initialization.
-
-# Device tools and identity helpers.
+# Optional device endpoint; actor credentials remain in tools.device.
 from tools.device import (  # noqa: E402,F401
     DEVICE_SERVICE_URL,
-    _device_get_user_id,
-    device_oled_display,
-    list_devices,
 )
 
 # Site information and page-command tools.
 from tools.site import (  # noqa: E402,F401
     IOT_ENABLED,
     IOT_NAV_PATH,
-    get_chat_history,
     get_current_time,
     get_site_map,
     nav_path_valid,
     nav_pure_path,
-    navigate_to,
-    toggle_dark_mode,
-    toggle_effect,
 )
+
+
+def _configured_user_id(config: RunnableConfig) -> int:
+    """Extract the configured actor; authorization remains with the verified scope check."""
+    return int(config.get("configurable", {}).get("user_id") or 0)
+
 
 # Authenticated reads use the requesting actor. The backend rechecks role and account state.
 
@@ -137,7 +134,7 @@ def _principal_get(path: str, config: RunnableConfig, *,
     never inspected to guess read/write intent. Transient failures are retried
     once unless the runtime stop signal is already set. Authorization denial,
     missing targets and malformed responses are typed and never retried."""
-    uid = _device_get_user_id(config)
+    uid = _configured_user_id(config)
     if uid <= 0:
         return unavailable(uid_msg)
     headers = {"Authorization": "Bearer " + host_credential(uid)}
@@ -167,11 +164,8 @@ def _admin_get(path: str, config: RunnableConfig, *,
 
 
 def _admin_read_post(path: str, payload: dict, config: RunnableConfig):
-    """后台接口（管理员**读**，但筛选条件走请求体 ⇒ POST）。scope 同 `_admin_get`。
-
-    与 `_admin_post` 的差别只在措辞：那条是写通道（失败时说"本次改动未确认生效"），
-    这条读失败时说"后台数据不可用"——同一件事别用两句不一样的话说。
-    """
+    """Read administrator data through a body-based POST with admin.console scope.
+    Read failures cannot certify any business mutation."""
     return _principal_get(
         path, config, payload=payload,
         uid_msg="无法获取当前用户身份，后台数据不可用",
@@ -195,20 +189,16 @@ def _own_read_post(path: str, payload: dict, config: RunnableConfig):
                           uid_msg=_NO_IDENTITY_READ, deny_msg="当前身份无权读取该数据")
 
 
-# Administrator read tools resolve shared transports through this module at call time.
+# Administrator read adapters use the shared authenticated transport.
 
-# Administrator report and moderation-list exports.
+# Administrator report exports.
 from tools.admin_read import (  # noqa: E402,F401
-    get_moderation_status,
     get_note_periods,
     get_note_stats,
     get_server_status,
     get_service_health,
     get_user_stats,
-    list_admin_board,
-    # Article comments and guestbook messages use separate endpoints and ID namespaces.
-    list_admin_comments,
-)
+    )
 
 # Authenticated writes must distinguish HTTP success from the API business result.
 # An uncertain result returns unavailable and cannot become a success receipt.
@@ -221,7 +211,7 @@ def _principal_request(method: str, path: str, payload, config: RunnableConfig,
     statuses that cannot certify the outcome return an explicit unknown result;
     argument rejection and authorization denial are typed and say the change
     did not happen. Callers supply operation-specific identity wording."""
-    uid = _device_get_user_id(config)
+    uid = _configured_user_id(config)
     if uid <= 0:
         # Missing identity prevents the request from leaving this process.
         return unavailable(uid_msg)
@@ -235,7 +225,7 @@ def _principal_request(method: str, path: str, payload, config: RunnableConfig,
     return body.get("data")
 
 
-# 写操作失败路径的固定尾句：下游 回复模型 靠它如实告知"别声称已改好"。
+# Unknown write outcomes must not be narrated as completed changes.
 _NO_SUCCESS_TAIL = "（本次改动未确认生效，不要声称已改好）"
 
 # Shared identity failures distinguish an unread source from an unconfirmed write.
@@ -244,11 +234,8 @@ _NO_IDENTITY_WRITE = "没有携带当前用户身份：本次未改动任何内�
 
 
 def _own_write_guard(config: RunnableConfig) -> ToolResult | None:
-    """写工具入口的统一哨兵：没身份 → 直接返回，调它之前**一个请求都不发**。
-
-    写操作最不该做的就是在没身份时猜"写给谁"（"我以为给谁写了"比"没写成"坏得多）。
-    """
-    if _device_get_user_id(config) <= 0:
+    """Reject missing actor identity before sending a write request."""
+    if _configured_user_id(config) <= 0:
         return unavailable(_NO_IDENTITY_WRITE)
     return None
 
@@ -269,12 +256,8 @@ def _admin_request(method: str, path: str, payload, config: RunnableConfig):
 
 
 def _own_request(method: str, path: str, payload, config: RunnableConfig):
-    """以发起人身份写**用户自己**的数据（scope = write.own：收藏 / 标记已读）。
-
-    与 `_admin_request` 是同一条通道的两种措辞，判据一样严（任何不确定路径都
-    unavailable）。uid<=0 时一个字节都不发：写操作最不该做的就是在没身份时猜——
-    对访客来说，"我以为给谁写了"比"没写成"坏得多。
-    """
+    """Write caller-owned data using write.own scope.
+    Missing identity prevents the request; uncertain outcomes remain unavailable."""
     return _principal_request(
         method, path, payload, config,
         label="",
@@ -294,109 +277,18 @@ def _own_delete(path: str, config: RunnableConfig):
 
 
 
-
-
-
-
-
-# Known target refusals are a cross-language contract; unknown failures remain unavailable.
-_NOTICE_TARGET_REFUSALS = ("用户不存在", "该账号不能接收通知")
-
-
-
-
-# Tag helpers and administration tools.
-from tools.tag_admin import (  # noqa: E402,F401
-    _tag_index,
-)
-
-
-# Article ID parsing is shared by article and current-user tools.
-def _as_article_id(value) -> int | None:
-    """实参 → 正整数 id；不合法 → None（调用方拒绝，不猜、不默认）。"""
-    if isinstance(value, bool) or value is None:
-        return None
-    if isinstance(value, int):
-        return value if value > 0 else None
-    s = str(value).strip()
-    return int(s) if s.isdigit() and int(s) > 0 else None
-
-
-# Article target helpers and administration tools.
-from tools.note_admin import (  # noqa: E402,F401
-    list_admin_notes,
-)
-
-
-def _near_miss_names(want: str, cands, limit: int = 3):
-    """Return approximate names for disambiguation, never authorization.
-
-    Candidates contain the whitespace-normalized query or vice versa, with at
-    least three characters on either side. Sort by containment, length difference
-    and ID. Write selection still requires an exact, unique match."""
-    w = re.sub(r"\s+", "", str(want or ""))
-    if len(w) < 3:
-        return []
-    out = []
-    for cid, name in cands:
-        n = re.sub(r"\s+", "", str(name or ""))
-        if len(n) < 3:
-            continue
-        if w in n or n in w:
-            out.append((0 if w in n else 1, abs(len(n) - len(w)), cid, name))
-    out.sort(key=lambda x: (x[0], x[1], x[2]))
-    return [(cid, name) for _, _, cid, name in out[:limit]]
-
-
-# Account target helpers and administration tools.
 from agent.domains.own_reads import get_inbox_overview  # noqa: E402,F401
-from tools.account_admin import (  # noqa: E402,F401
-    _reachable_uids,
-    _user_directory,
-    list_accounts,
-)
-
-# Announcement target helpers and administration tools.
-# Guestbook moderation helpers and tools.
 from tools.board_moderation import (  # noqa: E402,F401
     BOARD_APPROVED_CN,
     BOARD_STATUS_FILTERS,
 )
 
-# Category helpers and administration tools.
-from tools.category_admin import (  # noqa: E402,F401
-    _category_index,
-)
-
-# Article comment moderation uses distinct targets and receipts from guestbook moderation.
-# Dashboard mutations update one row; never replace the entire user-maintained list.
-from tools.dashboard_todos import (  # noqa: E402,F401
-    _todo_rows,
-    list_dashboard_todos,
-)
-
 # Public tools import only after API_BASE and _own_get have been defined.
 from tools.notes import (  # noqa: E402,F401
-    _NOTE_COUNT_KEYS,
     DOC_TYPE_CN,
-    _drop_dead_mine,
-    _note_counts,
-    _note_public_counts,
-    _note_row_with_tag_names,
-    _public_tag_index,
-    _read_section,
-    _slim_note_rows,
-    get_announcements,
     get_article_detail,
     get_blog_info,
     get_social_links,
-    get_top_notes,
-    list_categories,
-    list_guestbook,
-    list_my_board,
-    list_notes,
-    list_tags,
-    list_talks,
     rag_search,
     search_notes,
 )
@@ -404,98 +296,37 @@ from tools.notifications import list_notifications  # noqa: E402,F401
 
 # Current-user adapters and read-state mutations share the HTTP primitives above.
 from tools.own_data import (  # noqa: E402,F401
-    _as_bool,
-    _as_ids,
     _fav_count,
     _fav_row,
     _fav_title,
     _favorites_snapshot,
     add_favorite,
     list_my_favorites,
-    list_my_messages,
     remove_favorite,
-)
-
-# Quota request helpers and administration tools.
-from tools.quota_admin import (  # noqa: E402,F401
-    list_quota_requests,
 )
 
 # Registry
 # ---------------------------------------------------------------------------
 
 _TOOL_REGISTRY = [
-    list_notes,
     search_notes,
     get_article_detail,
     rag_search,
-    get_top_notes,
-    list_categories,
-    list_tags,
-    get_announcements,
-    list_guestbook,
-    list_talks,
     get_blog_info,
     get_social_links,
     get_site_map,
-    get_chat_history,
     get_current_time,
-    navigate_to,
-    toggle_effect,
-    toggle_dark_mode,
-    list_devices,
-    device_oled_display,
-    # 管理助手报表：scope = admin.console，见本节头注
     get_server_status,
     get_service_health,
-    get_moderation_status,
     get_user_stats,
-    # 文章流量报表：同 admin.console（读的是后台统计面）
     get_note_stats,
-    # 文章**分期**报表：同 admin.console，读的是 `.../stats/notes/periods`
-    # ——后台数据统计页「周报/月报/年报」那个页签的同一个端点
     get_note_periods,
-    # 后台**留言名册**：同 admin.console，读的是 `GET /api/protect/board`
-    # （逐条含发表账号）——与公开的 list_guestbook 是两套视图，别混用
-    list_admin_board,
-    # 后台**评论名册**：同 admin.console，读的是 `GET /api/protect/comments`。
-    # 与上面那条并列而不是同一件事（两张表、两个后台页签），见 admin_read 的头注。
-    list_admin_comments,
-    # 管理助手后台写：list_admin_notes=admin.console，
-    # 写工具=write.console，见"管理助手写工具"节头注
-    list_admin_notes,
-    # 标签改/删 + 分类增删改：同样是 write.console，
-    # 目标是**名字**（模型 写名字，工具确定性解析成 id，见 _find_named_tag）
-    # 站内公告代发/改/删：同样是 write.console，目标=公告标题
-    # 河灯留言的人工复核：同样是 write.console，目标=正文片段
-    # （留言没有名字/标题，见 _find_board_comment）
-    # Article-comment IDs are distinct from guestbook IDs.
-    # 用户自己的数据：scope = read.own（三档角色都有），见本节头注
     list_my_favorites,
     get_inbox_overview,
     list_notifications,
-    # 我自己的河灯：也是 read.own。与上面三条同族——"我自己那一份"
-    # 在公开池里读不出来（公开池恒 Approved=1，且 `mine` 那一格结构上恒假）。
-    list_my_board,
-    # 用户自己的数据·写那一半：scope = write.own，写前先读、写后再读，
-    # 见"写那一半"节头注
     add_favorite,
     remove_favorite,
-    # 站内信（私信）：读信箱=read.own，标记已读=write.own，
-    # 见"站内信"节头注（术语：站内信 ≠ 河灯留言）
-    list_my_messages,
-    # Dashboard reads and single-row mutations.
-    list_dashboard_todos,
-    # Account directory and actor-scoped administration tools.
-    list_accounts,
-    # Freeze and unfreeze preserve separate operation directions.
-    # Account role policy is enforced by the backend.
-    # Muting blocks publication; freezing blocks login. Their receipts must stay distinct.
-    # Notices are irreversible outbound content and require review of the full body.
-    # Quota approval, rejection and direct reset have distinct effects and receipts.
-    list_quota_requests,
 ]
-
 def get_all_tools():
     """Return the list of all registered tools."""
     return _TOOL_REGISTRY

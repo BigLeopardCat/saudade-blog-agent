@@ -1,5 +1,5 @@
 {
-  "_note": "mypy 错误数的棘轮基线。只许变小；--update 是唯一放宽通道。三个量都必须与 pyproject.toml / 启动器同源：mypy 版本、解释器目标、以及「mypy 照哪个解释器去找三方库」（命令里恒带 --python-executable <启动本脚本的解释器>）——三者都会改变错误集。",
+  "_note": "Pinned Mypy and Python target; production source scope and interpreter must match. Per-file findings may only decrease.",
   "mypy_version": "2.4.0",
   "python_target": "3.12",
   "targets": [
@@ -8,18 +8,14 @@
     "models",
     "rag",
     "tools",
-    "utils",
-    "server.py"
+    "utils"
   ],
-  "total": 11,
-  "files_checked": 226,
+  "total": 6,
+  "files_checked": 270,
   "by_file": {
-    "agent/action_text.py": 1,
-    "agent/adminops_quota.py": 2,
     "agent/hostinfo.py": 2,
     "agent/reports.py": 1,
-    "tools/account_admin.py": 1,
-    "tools/admin_read.py": 3,
+    "tools/admin_read.py": 2,
     "tools/notes.py": 1
   }
 }

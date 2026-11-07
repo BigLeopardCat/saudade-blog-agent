@@ -25,7 +25,7 @@ from utils.trace_io import load_trace
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "eval"))
-import run_golden as golden  # noqa: E402
+from eval import golden_evaluation as golden  # noqa: E402
 
 SUITE = ROOT / "eval/golden/native_requests.jsonl"
 POC_IDS = ("chat_user", "nav_board", "article_discovery", "own_unread",
@@ -72,6 +72,9 @@ def load_suite(path=SUITE):
         if case["identity"] not in {"admin", "user", "zako"}:
             raise ValueError(f"unknown identity in {case['id']}")
         for rnd in golden.iter_rounds(case):
+            maximum = rnd["gold"].get("max_model_calls")
+            if "max_model_calls" in rnd["gold"] and (type(maximum) is not int or maximum < 0):
+                raise ValueError(f"invalid model-call acceptance limit: {case['id']}")
             unknown = set(rnd["gold"]) - (golden.GOLD_ASSERT_KEYS | golden.GOLD_REQUEST_KEYS
                                           | golden.GOLD_COMMENT_KEYS | golden.GOLD_ROUND_KEYS)
             if unknown:
@@ -94,11 +97,15 @@ def snapshot(folder, cases):
     sources = folder / "evaluator"
     sources.mkdir()
     hashes = {}
-    names = ("run_golden.py", "online_baseline.py", "online_transport.py", "stream_protocol.py",
+    names = ("golden_evaluation.py", "online_baseline.py", "online_transport.py",
+                 "stream_protocol.py",
                  "native_assertions.py", "request_metrics.py", "latency_metrics.py",
                  "task_metrics.py", "usage.py",
                  "release_readiness.py", "release_profile.json", "statistical_metrics.py",
-                 "action_metrics.py", "dataset_audit.py")
+                 "action_metrics.py", "dataset_audit.py", "command_report.py", "acceptance.py",
+                 "corpus_terms.py", "corpus_provenance.py", "golden_runtime.py",
+                 "golden_thread.py", "golden_trace.py", "native_receipt_contract.py",
+                 "cache_diagnostics.py")
     paths = {name: ROOT / "eval" / name for name in names}
     paths["agent/contracts/events.py"] = ROOT / "agent/contracts/events.py"
     for name, path in paths.items():

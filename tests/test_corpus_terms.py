@@ -1,5 +1,5 @@
 """语料术语派生（`eval/corpus_terms.py`）的离线自测：S1–S5 五条过滤规则逐条锁，
-外加判据接线（`run_golden.check_gold` 的 `require_doc_terms`，含「未评估 ≠ 通过」）。
+外加判据接线（`golden_evaluation.check_gold` 的 `require_doc_terms`，含「未评估 ≠ 通过」）。
 
 秒级、无网络；由 eval.yml 在 push 时跑。
 
@@ -25,7 +25,7 @@ sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "eval"))
 
 
-import corpus_terms as ct  # noqa: E402
+from eval import corpus_terms as ct  # noqa: E402
 
 FAILED: list[str] = []
 check = collector(FAILED)
@@ -38,7 +38,7 @@ def _tier(t: str) -> int:
     return 2
 
 
-import run_golden as rg  # noqa: E402  （重：会拉起 server/agent，与 judge_offline 同款）
+from eval import golden_evaluation as rg  # noqa: E402
 
 
 def _judge(gold: dict, text: str, docs) -> list[str]:
@@ -190,7 +190,7 @@ def test_corpus_terms():
     check("hit_terms 空正文/空术语表 → 空（不抛）",
           ct.hit_terms(["轮询"], "") == [] and ct.hit_terms([], "轮询") == []
           and ct.hit_terms(None, None) == [])
-    print("\n⑦ 判据接线（`run_golden.check_gold` 的 `require_doc_terms`）")
+    print("\n⑦ 判据接线（`golden_evaluation.check_gold` 的 `require_doc_terms`）")
     _SPEC = [{"doc": "note:1", "min_terms": 2}]
     check("命中 ≥min_terms 个派生术语 ⇒ 不判红",
           _judge({"require_doc_terms": _SPEC}, "文中提到 ESP_HTTPS_OTA 与轮询机制", DOCS) == [])

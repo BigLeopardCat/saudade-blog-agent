@@ -14,6 +14,12 @@ def proportion(passed, total):
                              "not proof of production success probability"}
 
 
+def wilson_ci(passed, total):
+    """Rounded presentation of the shared interval; empty samples remain unverified."""
+    interval = proportion(passed, total)["wilson_95"]
+    return [round(value, 4) for value in interval] if interval is not None else None
+
+
 def paired_outcomes(before, after):
     if len(before) != len(after) or not before:
         raise ValueError("paired outcomes must be nonempty and equally sized")

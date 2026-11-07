@@ -87,7 +87,7 @@ def _cache_summary(row):
 
 def _metrics(report):
     groups, populations = defaultdict(list), defaultdict(usage.empty)
-    missing, case_usage = [], {}
+    missing, case_usage, process = [], {}, []
     totals, trace_errors, first_visible, decisions, ttft = usage.empty(), [], [], [], []
     build = (report.get("service_version") or {}).get("sha")
     for case in report["cases"]:
@@ -101,6 +101,8 @@ def _metrics(report):
                 trace_errors.append({"case": case["id"], "round": index, "error": "missing trace"})
                 continue
             row = request_metrics.summary(doc)
+            process.append({"case": case["id"], "round": index, "model_calls": row["calls"],
+                            **request_metrics.discovery_totals([row])})
             ttft.extend(row["model_ttft_s"])
             expectation = case.get("first_action") if index == 1 else None
             raw_rounds = case.get("decision_expectations") or []
@@ -134,7 +136,10 @@ def _metrics(report):
     return {"groups": groups, "populations": populations, "usage": totals,
             "trace_errors": trace_errors, "first_visible": first_visible,
             "missing": missing, "decisions": action_metrics.decision_report(decisions),
-            "model_ttft_s": ttft, "case_usage": case_usage}
+            "model_ttft_s": ttft, "case_usage": case_usage,
+            "tool_process": {"totals": request_metrics.discovery_totals(process),
+                             "rejected_rounds": [row for row in process
+                                if row["inactive_tool_requests"] or row["unknown_tool_requests"]]}}
 
 
 def outcome_usage(cases, semantic, measured):
@@ -205,6 +210,10 @@ def _quality(report, semantic, profile):
     core = [case for case in cases if set(case.get("tags", [])) & set(profile["core_tags"])]
     if not semantic or statuses["not_evaluated"]:
         missing.append("complete semantic review tied to the frozen report SHA256")
+    pending_review = sorted(case["id"] for case in cases
+                            if semantic.get(case["id"]) == "needs_review")
+    if pending_review:
+        missing.append("semantic findings still require review: " + ", ".join(pending_review))
     if semantic:
         for name, subset, threshold in (("task_quality", cases, profile["task_pass_rate"]),
                                        ("core_quality", core, profile["core_pass_rate"])):
@@ -287,7 +296,7 @@ def assess(report_path, *, semantic_path=None, profile_path=PROFILE):
         "failures": failures, "unverified": missing,
         "semantic_counts": dict(Counter(semantic.values())),
         "deterministic_counts": dict(Counter(case.get("status") for case in report["cases"])),
-        "usage": metrics["usage"], **costs,
+        "usage": metrics["usage"], "tool_process": metrics["tool_process"], **costs,
         "usage_by_outcome": outcome_usage(report["cases"], semantic, metrics["case_usage"]),
         "quality_statistics": quality_statistics(report["cases"], semantic),
         "first_decision": metrics["decisions"],

@@ -23,10 +23,10 @@ def test_health_reports_actual_runtime_type():
     runtime = AgentRuntime(
         CheckpointConversationStore(InMemorySaver()), application=BlogApplication()
     )
-    assert runtime_probe.runtime_name(runtime) == "native"
+    assert runtime_probe.runtime_name(runtime) == "langchain"
     assert runtime_probe.runtime_name(None) == "unknown"
     metadata = runtime_probe.request_context(runtime)
-    assert metadata["name"] == "native" and "arm" not in metadata
+    assert metadata["name"] == "langchain" and "arm" not in metadata
 
 
 @pytest.mark.parametrize("model,expected", [

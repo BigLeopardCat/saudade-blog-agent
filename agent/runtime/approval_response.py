@@ -10,10 +10,10 @@ from utils.trace import record
 
 
 def finish(session, response):
-    reply = text_content(response.content).strip()
-    if not response.tool_calls and not incomplete_response(response) and reply:
+    reply = text_content(response.content)
+    if not response.tool_calls and not incomplete_response(response) and reply.strip():
         session.outcome = TurnResult(reply, session.outcome.execution)
-    elif not reply and not response.tool_calls and not response.invalid_tool_calls:
+    elif not reply.strip() and not response.tool_calls and not response.invalid_tool_calls:
         attempts = session.state["proposal"].get("response_attempts", 0)
         if attempts == 0:
             session.state["proposal"]["response_attempts"] = 1

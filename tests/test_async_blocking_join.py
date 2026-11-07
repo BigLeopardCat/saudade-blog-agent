@@ -19,7 +19,7 @@ def _scan(src: str) -> list[tuple[int, str]]:
     """回 `[(行号, 线程名)]`：`async def` 体内对被 `Thread(...)` 绑出来的名字调 `.join(`。
 
     线程名**按整个文件收集**（不管绑在哪一层）：夹具里线程常绑在外层、join 在内层
-    协程（`test_factblock` 就是 `t` 绑在 `run()` 里、join 也在 `run()` 里，而
+    协程（`test_history_transport` 就是 `t` 绑在 `run()` 里、join 也在 `run()` 里，而
     `test_trace_reply_source` 是 `t` 绑在 `main()` 里）。按文件收集不必猜作用域，
     而**误报的代价**只是"有人把线程名拿去当字符串 join 了"，那一格本就不该出现。
     """

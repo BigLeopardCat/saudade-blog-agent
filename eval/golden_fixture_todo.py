@@ -13,7 +13,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "eval"))
 
-from golden_fixture import FIXTURE_PREFIX  # noqa: E402  （族前缀只有一处来源）
+from eval.golden_fixture import FIXTURE_PREFIX  # noqa: E402  （族前缀只有一处来源）
 
 # 夹具的**期望完成态**：`false` = 未完成（族约定，见模块头注）。
 # 判据是"等于期望值"而不是"> 0 就算做了"——线上口径是 JSON 布尔（`TodoDto.done: bool`），

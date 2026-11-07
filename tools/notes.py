@@ -4,19 +4,12 @@
 import logging
 from typing import Annotated, Literal
 
-from langchain_core.runnables.config import RunnableConfig
 from langchain_core.tools import tool
 
+from agent.domains.article_metadata import tag_references
 from tools import base as _base
-from tools.base import _own_get
 from tools.result import (
-    _LIST_FIELD_MAX,
-    _LIST_ROWS_MAX,
     ToolResult,
-    _board_text_keys,
-    _cap_rows,
-    _clip_fields,
-    _rows_with_note,
     _shape,
     empty,
     not_found,
@@ -25,51 +18,39 @@ from tools.result import (
 )
 
 # Public exports; helper names stay private to their modules.
-__all__ = ["logger", "list_notes", "search_notes", "DOC_TYPE_CN", "get_article_detail",
-           "rag_search", "get_top_notes", "list_categories", "list_tags", "get_announcements",
-           "list_guestbook", "list_my_board", "list_talks", "get_blog_info", "get_social_links"]
+__all__ = ["logger", "search_notes", "DOC_TYPE_CN", "get_article_detail", "rag_search",
+           "get_blog_info", "get_social_links"]
 
 logger = logging.getLogger(__name__)
 
 
-# Resolve shared transports at call time so consumer overrides and test doubles apply.
+# Resolve shared transports after module initialization.
 def _get(path: str, *, not_found_text: str = "",
          payload: dict | None = None) -> dict | list | ToolResult:
     """Resolve the shared public transport at call time, preserving its result type."""
     return _base._get(path, not_found_text=not_found_text, payload=payload)
 
 
-# Article metadata and body reads.
-
-# Project metadata to the fields needed by the tool; preserve stable article IDs and titles.
-
-# Missing public counters are omitted, never replaced with zero.
 _NOTE_COUNT_KEYS = ("views", "likes", "favorites")
 
 
 def _note_counts(row) -> dict:
-    """行里的三个计数 → **只带真实存在的那些键**（认不出/缺键 ⇒ 不带）。
-
-    `bool` 显式排除：它是 `int` 的子类，`True` 会被 `isinstance(v, int)` 放行成 1。
-    非数（字符串、None、脏值）一律当"没有这个数"——把 `"120"` 转成 120 属于编数。
-    """
+    """Keep observed nonnegative integer counters; malformed values remain unknown."""
     out = {}
     for k in _NOTE_COUNT_KEYS:
         v = row.get(k)
-        if isinstance(v, bool) or not isinstance(v, (int, float)):
-            continue
-        out[k] = int(v)
+        if type(v) is int and v >= 0:
+            out[k] = v
     return out
 
 
-def _public_tag_index():
-    """公开标签字典 → `{id: TagInfo}`；读不到返回 **None**（≠"没有标签"）。"""
-    one = _get("/tagone")
-    two = _get("/tagtwo")
-    if isinstance(one, ToolResult) or isinstance(two, ToolResult):
-        return None
-    from agent import adminops_tags as _tags  # 局部导入：tools → agent 的反向依赖
-    return _tags.build_tag_index(one, two)
+def _note_tag_metadata(row):
+    """Missing or invalid host references remain unknown, distinct from no tags."""
+    try:
+        refs = tag_references(row.get("noteTagRefs"))
+    except ValueError:
+        return {"tags": None}
+    return {"tags": refs, "tagsTruncated": len(row["noteTagRefs"]) > len(refs)}
 
 
 def _slim_note_rows(rows):
@@ -82,34 +63,19 @@ def _slim_note_rows(rows):
         return None
     if not any("noteKey" in r for r in rows):
         return None
-    from agent import adminops_tags as _tags  # 局部导入：同上
-    index = None
-    if any(r.get("noteTags") for r in rows):
-        index = _base._public_tag_index()
     out = []
     for r in rows:
-        tag_txt = _tags.render_tag_list(r.get("noteTags"), index)
         slim = {
             "noteKey": r.get("noteKey"),
             "noteTitle": r.get("noteTitle") or "",
             "status": r.get("status") or "",
             "isTop": r.get("isTop") or 0,
-            "tags": "" if tag_txt == "（无标签）" else tag_txt,
+            **_note_tag_metadata(r),
         }
         slim.update(_note_counts(r))
         out.append(slim)
     return out
 
-
-@tool
-def list_notes(
-    page: Annotated[int, "Page number, default 1"] = 1,
-    page_size: Annotated[int, "Items per page, default 10"] = 10,
-) -> str | ToolResult:
-    """获取文章列表，按页返回。每篇给出：id（noteId）、标题、状态、是否置顶、标签名。"""
-    data = _get(f"/notes?page={page}&page_size={page_size}")
-    slim = _slim_note_rows(data)
-    return _shape(slim if slim is not None else data)
 
 @tool
 def search_notes(keyword: Annotated[str, "搜索关键词"]) -> str | ToolResult:
@@ -127,22 +93,12 @@ def search_notes(keyword: Annotated[str, "搜索关键词"]) -> str | ToolResult
     slim = _slim_note_rows(data)
     return _shape(slim if slim is not None else data)
 
-def _read_section(data: dict, article_id, want: str) -> str | ToolResult:
-    from rag.reading import article_page
-    return _shape(article_page(data, article_id, section=want))
 
-
-def _note_row_with_tag_names(row):
-    """Add displayable tag names while preserving internal tag IDs.
-
-    Unknown row shapes pass through unchanged. Unavailable tag dictionaries retain
-    an ID label rather than asserting that the tag does not exist."""
-    if not isinstance(row, dict) or not isinstance(row.get("noteTags"), str):
-        return row
-    from agent import adminops_tags as _tags  # 局部导入：tools → agent 的反向依赖
-    index = _base._public_tag_index() if row.get("noteTags") else None
-    out = dict(row)
-    out["tags"] = _tags.render_tag_list(row["noteTags"], index)
+def _note_with_tag_refs(row):
+    """Use the host's typed references without fetching taxonomy directories."""
+    out = {**row, **_note_tag_metadata(row)}
+    out.pop("noteTagRefs", None)
+    out.pop("noteTags", None)
     return out
 
 
@@ -191,8 +147,8 @@ def get_article_detail(
 ) -> str | ToolResult:
     """读取指定来源的正文；文章按小节或范围续读，使用contentRevision和nextOffset。
 
-    readComplete表示所需范围读完；候选不是正文。编号按doc_type区分，tags可展示，
-    noteTags是内部编号；缺失计数不代表零，not_found不代表服务故障。
+    readComplete表示所需范围读完；候选不是正文。编号按doc_type区分，tags包含层级与名称，
+    null表示未能核对标签；缺失计数不代表零，not_found不代表服务故障。
     """
     if doc_type == "note":
         data = _get(f"/notes/{article_id}", not_found_text=(
@@ -201,7 +157,7 @@ def get_article_detail(
             "按标题找文章用 search_notes 或 rag_search；"
             "读留言/说说用 list_guestbook / list_talks。"))
         if isinstance(data, dict):
-            data = _note_row_with_tag_names(data)
+            data = _note_with_tag_refs(data)
             counts = _note_public_counts(article_id)
             if counts:
                 data = {**data, **counts}
@@ -287,170 +243,22 @@ def rag_search(
         logger.error("rag_search failed: %s", exc)
         return unavailable(f"检索服务不可用（{type(exc).__name__}）")
 
-@tool
-def get_top_notes() -> str | ToolResult:
-    """获取置顶文章列表（每篇给出 id、标题、状态、是否置顶、标签名）。"""
-    data = _get("/topnotes")
-    slim = _slim_note_rows(data)
-    return _shape(slim if slim is not None else data)
 
 # Category and tag reads.
 
-@tool
-def list_categories() -> str | ToolResult:
-    """获取全部分类列表，包含分类名称、颜色、图标、文章数量。"""
-    data = _get("/category")
-    return _shape(data)
-
-@tool
-def list_tags() -> str | ToolResult:
-    """获取站内**全部标签**：一级标签 + 它下面的二级标签（二级互不重名，但不同
-    一级标签下可以有同名二级标签，靠 fatherKey/fatherTag 区分）。"""
-    # 两级都要读：只读 /tagone 时结构上就看不见二级标签。
-    # 两个端点都是公开只读、无需鉴权。
-    one = _get("/tagone")
-    two = _get("/tagtwo")
-    if isinstance(one, ToolResult):
-        # 任一路读不到 → **不合并半份**：半份清单会把"这次没读到二级标签"伪装成
-        # "站内没有二级标签"。如实报不可用。
-        return one
-    if isinstance(two, ToolResult):
-        return two
-    # 局部导入：agent.graph → tools 的反向依赖会构成循环导入（同 _tag_index）
-    from agent import adminops_tags as _tags
-    return _shape(_tags.merge_tag_rows(one, two))
 
 # Announcements.
 
-@tool
-def get_announcements(
-    offset: Annotated[int, "（可选）跳过最新的多少条，用于取回更早的公告；默认 0"] = 0,
-) -> str | ToolResult:
-    """获取博客公告列表（默认带回最新的那批，注记里写明一共多少条）。
-
-    列表比一次能带的多时，只带回最新的一批；帧尾注记会写明一共多少条、**以及**
-    取回更早那一页要填的 `offset`——照注记写的填即可，不必自己猜。"""
-    data = _get("/announcements")
-    page = None
-    if isinstance(data, list):
-        # Cap announcement rows without truncating each body; detail reads share this source.
-        data, capped, page = _cap_rows(data, _LIST_ROWS_MAX, "公告", offset)
-        if capped:
-            data = _rows_with_note(data, capped)
-    return _shape(data, meta={"page": page} if page else None)
 
 # Guestbook reads.
-
-@tool
-def list_guestbook(
-    offset: Annotated[int, "（可选）跳过最新的多少条，用于取回更早的留言；默认 0"] = 0,
-) -> str | ToolResult:
-    """获取留言板（河灯留言）列表（默认带回最新的那批，注记里写明一共多少条）。
-
-    留言比一次能带的多时，只带回最新的一批；帧尾注记会写明一共多少条、**以及**
-    取回更早那一页要填的 `offset`——照注记写的填即可，不必自己猜。
-
-    ⚠ **只列已通过审核的留言**（上游 `talks.rs::list_by_src` 恒 `filter(Approved=1)`，
-    与留言板页面看到的完全一致）。所以"列表里没有"**不等于"这条留言不存在"**——
-    它可能还在待审、或者被驳回了。要说"站内没有这条留言"，前提是**没有任何号段**
-    能对上；手上的 id 在列表里查无此条时，正确的说法是"这条不在公开列表里（未通过
-    审核或已删除），后台管理视图里能看到"，**不要**据此反推"站内没有"。
-    ⚠ **本视图看不到发表账号**：每行里的 `author` 是留言人自己在留名框里填的
-    **自由文本**（可以填任何字、也可以留空——留空就是匿名），**不是账号**，
-    拿它或正文去认人会认错。要回答"这条留言是谁发的"，走后台名册
-    `list_admin_board`（放灯必须登录，那里每条都有真实账号，匿名也溯得到）。
-    留言板 /guestbook 叫「河灯集」。公开浏览不需要登录；发布河灯必须登录。
-    匿名只隐藏公开留名，不免除登录。自己的河灯（含待审记录）用 list_my_board。
-    注意：留言板与说说（碎语）是两个独立的数据源——查询"博客里有没有人聊过 X"
-    这类问题时，需同时调用 list_talks 检查说说内容，两个都查全后才能回答。
-    """
-    data = _get("/board")
-    page = None
-    if isinstance(data, list):
-        # The public list includes approved rows only; absence does not prove nonexistence.
-        data, capped, page = _cap_rows(data, _LIST_ROWS_MAX, "留言", offset)
-        data = _board_text_keys(data)
-        data = _drop_dead_mine(data)
-        data = _clip_fields(data, _LIST_FIELD_MAX)
-        data = _rows_with_note(
-            data, (capped + " " if capped else "")
-                  + "本列表只含**已通过审核**的留言（与留言板页面一致）；"
-                  "待审/被驳回的留言不在这里，查无此条不等于不存在。"
-                  "每行的「留名」是留言人**自己填的字**（自由文本，可留空=匿名），"
-                  "**不是账号**——别拿它认人；要知道「这条是谁发的」走后台名册 "
-                  "list_admin_board（放灯必须登录，那里逐条带真实账号）。"
-                  "**本列表也不带「哪条是你自己放的」**——「我自己放过的灯（含待审/"
-                  "未通过）」是另一条通道：`list_my_board`")
-    return _shape(data, meta={"page": page} if page else None)
 
 
 # Public reads have no actor identity, so their mine flag is not evidence of ownership.
 # Use the authenticated own-message endpoint for ownership queries.
-def _drop_dead_mine(rows: list) -> list:
-    return [{k: v for k, v in r.items() if k != "mine"}
-            if isinstance(r, dict) else r for r in rows]
 
-
-@tool
-def list_my_board(config: RunnableConfig) -> str | ToolResult:
-    """列出**当前登录用户自己**放的全部河灯留言（返回 talkId / 内容 / 留名 /
-    `approved` 状态 / 驳回理由 / 时间）——**含待审与未通过的那些**，不只公开池里
-    已放行的。
-
-    访客问"我放过的河灯/我写的留言有哪些""我哪条留言通过了""那条为什么没通过"
-    时用。与 `list_guestbook` 的分工是**公开池 vs 我自己那一份**：公开池只有
-    已通过审核的（别人的灯也在里面），这一条只有自己的（待审/被驳回也在里面）。
-
-    `approved`：1=已通过（公开页面上看得见）/ 0=待审 / 2=未通过（只有你在
-    「我的河灯」里看得到，`rejectReason` 是驳回理由、只有这一态有）。
-    要带主人去**某一条**的位置，用这一行里的 `talkId` 拼 `/guestbook?lid=<talkId>`
-    交给 navigate——**别用公开列表的序号**，也**不必**自己找那盏灯在河面上的坐标。
-    没携带身份时如实告知读不到。
-    """
-    data = _own_get("/api/protect/board/mine", config)
-    page = None
-    if isinstance(data, list):
-        data, cap, page = _cap_rows(data, _LIST_ROWS_MAX, "你的河灯")
-        data = _board_text_keys(data)
-        # The authenticated list already establishes ownership; omit its redundant mine flag.
-        data = _drop_dead_mine(data)
-        data = _clip_fields(data, _LIST_FIELD_MAX)
-        data = _rows_with_note(
-            data, (cap + " " if cap else "")
-                  + "这是**你自己**放的全部河灯（含待审与未通过——公开列表里没有这两种，"
-                  "所以那里查无此条不等于不存在）。`approved`：1=已通过 / 0=待审 / "
-                  "2=未通过（驳回理由在 rejectReason，只有这一态有）。"
-                  "每行的「留名」是你当时自己填的字（自由文本），不是账号。")
-    return _shape(data, meta={"page": page} if page else None)
 
 # Talks and activity.
 
-@tool
-def list_talks(
-    offset: Annotated[int, "（可选）跳过最新的多少条，用于取回更早的说说；默认 0"] = 0,
-) -> str | ToolResult:
-    """获取说说（动态/碎语）列表（默认带回最新的那批，注记里写明一共多少条）。
-
-    说说比一次能带的多时，只带回最新的一批；帧尾注记会写明一共多少条、**以及**
-    取回更早那一页要填的 `offset`——照注记写的填即可，不必自己猜。
-
-    ⚠ **只列已通过审核的**（同上游过滤器）：列表里没有**不等于**这条不存在，别据此
-    下"站内没有"的结论（理由同 list_guestbook）。
-    注意：说说与留言板（河灯留言）是两个独立的数据源——查询"博客里有没有人聊过 X"
-    这类问题时，需同时调用 list_guestbook 检查留言板内容，两个都查全后才能回答。
-    """
-    data = _get("/talk")
-    page = None
-    if isinstance(data, list):
-        data, capped, page = _cap_rows(data, _LIST_ROWS_MAX, "说说", offset)
-        data = _board_text_keys(data)
-        data = _clip_fields(data, _LIST_FIELD_MAX)
-        data = _rows_with_note(
-            data, (capped + " " if capped else "")
-                  + "本列表只含**已通过审核**的说说；待审/被驳回的不在这里，"
-                  "查无此条不等于不存在。每行的「留名」是发表人**自己填的字**"
-                  "（自由文本，可留空=匿名），**不是账号**——别拿它认人")
-    return _shape(data, meta={"page": page} if page else None)
 
 # Site information.
 

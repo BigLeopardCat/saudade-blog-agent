@@ -1,132 +1,107 @@
-"""确认令牌、旧图弹窗与跨语言执行边界的离线回归。
+"""Signed approvals require canonical tokens and current actor/conversation/executor bindings."""
 
-覆盖签名与身份绑定、具体参数、确认清单收窄、待办字段及无效请求零执行。
-新确认领域的持久撤销和回放由 test_pending_favorite.py 等领域套件验证。
-"""
-
-
-from __future__ import annotations
-
+import hashlib
+import hmac
 import json
 import re
-import sys
+import secrets
 import time
-from pathlib import Path
 
-from _judge import collector
-
-ROOT = Path(__file__).resolve().parent.parent
-
-
-sys.path.insert(0, str(ROOT))
-
+import pytest
 
 from agent import confirm
 
-FAILED: list[str] = []
-check = collector(FAILED)
+SPECS = [{"tool": "create_tag", "args": {"title": "测试标签", "parent_id": None,
+                                         "color": "#eb2f96"}}]
 
 
-import hashlib  # noqa: E402
-import hmac  # noqa: E402
-
-from config.settings import settings  # noqa: E402
-
-
-def test_confirm():
-    _SAVED_SECRET = settings.confirmation_secret
-    _STUB_SECRET = "test-secret-for-confirm-tokens-not-a-real-secret"
-    settings.confirmation_secret = _STUB_SECRET
-    SPECS = [{"tool": "create_tag", "args": {"title": "测试标签", "parent_id": None, "color": "#eb2f96"}}]
-    print("① 令牌签发/验签")
-    tok = confirm.sign(7, 42, "tag_create", SPECS)
-    check("往返：verify(sign(...)) 取回同一份 payload",
-          (lambda p: p is not None and p["uid"] == 7 and p["conv"] == 42
-           and p["workflow"] == "tag_create" and p["specs"] == SPECS)(confirm.verify(tok, 7, 42)))
-    check("令牌形状：两段 base64url（正文 + 签名），长度可控",
-          tok.count(".") == 1 and len(tok) < 2000, str(len(tok)))
-    check("换人 → None（令牌绑 uid）", confirm.verify(tok, 8, 42) is None)
-    check("换会话 → None（令牌绑会话）", confirm.verify(tok, 7, 43) is None)
-    check("会话从有到无 → None（不能让绑了会话的令牌在无会话请求里生效）",
-          confirm.verify(tok, 7, None) is None)
-    check("篡改签名 → None",
-          confirm.verify(tok[:-2] + ("aa" if not tok.endswith("aa") else "bb"), 7, 42) is None)
-    check("篡改正文（换一个标签名）→ None（签名覆盖正文）",
-          confirm.verify(confirm._b64e(json.dumps(
-              {"v": 1, "uid": 7, "conv": 42, "exp": int(time.time()) + 600,
-               "workflow": "tag_create",
-               "specs": [{"tool": "create_tag", "args": {"title": "别的标签"}}]},
-              ensure_ascii=False, separators=(",", ":")).encode()) + "." + tok.split(".")[1],
-              7, 42) is None)
-    check("格式坏（无点 / 空 / 非字符串）→ None 且不抛",
-          confirm.verify("nodot", 7, 42) is None and confirm.verify("", 7, 42) is None
-          and confirm.verify(None, 7, 42) is None)
-    check("base64 坏 → None 且不抛", confirm.verify("!!!.???", 7, 42) is None)
-    _past = {"v": 1, "uid": 7, "conv": 42, "exp": int(time.time()) - 1,
-             "workflow": "tag_create", "specs": SPECS}
-    _body = json.dumps(_past, ensure_ascii=False, separators=(",", ":")).encode()
-    _sig = hmac.new(settings.confirmation_secret.encode(), confirm._DOMAIN + _body, hashlib.sha256).digest()
-    _stale = confirm._b64e(_body) + "." + confirm._b64e(_sig)
-    check("过期（exp 在签发后已过）→ None（签名合法也不行）",
-          confirm.verify(_stale, 7, 42) is None)
-    check("TTL 是 10 分钟量级（够读完想一下，又短到过夜必失效）",
-          300 <= confirm.TTL_SECONDS <= 900, str(confirm.TTL_SECONDS))
-    check("token_expiry：解出来的就是签名里那一个（与 verify 的 payload 逐字相等）",
-          confirm.token_expiry(tok) == (confirm.verify(tok, 7, 42) or {}).get("exp"))
-    check("token_expiry：坏输入一律 0、不抛（前端按'无倒计时'处理，不影响验签）",
-          confirm.token_expiry("") == 0 and confirm.token_expiry("abc") == 0
-          and confirm.token_expiry("!!!.???") == 0 and confirm.token_expiry(None) == 0)
-    print("\n② 令牌边界")
-    check("specs 带 $ref → 不签发（引用依赖签发轮的帧，执行轮早已不在）",
-          confirm.sign(7, 42, "tag_create",
-                       [{"tool": "set_article_tags",
-                         "args": {"article_id": 12, "add": ["$list_tags[0].name"]}}]) == "")
-    check("$ref 在嵌套 list 里也算（只看顶层会漏）",
-          confirm.sign(7, 42, "article_tags",
-                       [{"tool": "set_article_tags", "args": {"add": ["$x[0].y"]}}]) == "")
-    check("技能名为空 → 不签发（执行轮无从拼计划）", confirm.sign(7, 42, "", SPECS) == "")
-    check("不可序列化的参数 → 不签发（不抛）",
-          confirm.sign(7, 42, "tag_create",
-                       [{"tool": "create_tag", "args": {"title": object()}}]) == "")
-    settings.confirmation_secret = ""
-    check("密钥空缺 → **既不签也不验**（绝不降级成无签名令牌）",
-          confirm.sign(7, 42, "tag_create", SPECS) == "" and confirm.verify(tok, 7, 42) is None)
-    settings.confirmation_secret = _STUB_SECRET   # 恢复桩值（见上方 _STUB_SECRET 处的说明）
-    print("\n⑧ 令牌的一次性编号 jti：同一张令牌不许兑现两次")
-    settings.confirmation_secret = _STUB_SECRET
-    _t1 = confirm.sign(7, 42, "tag_create", [{"tool": "create_tag_one", "args": {"name": "X"}}])
-    _t2 = confirm.sign(7, 42, "tag_create", [{"tool": "create_tag_one", "args": {"name": "X"}}])
-    _j1, _j2 = confirm.token_jti(_t1), confirm.token_jti(_t2)
-    check("jti 是 32 位十六进制（落库列 varchar(64)，不撞不改写）",
-          bool(re.fullmatch(r"[0-9a-f]{32}", _j1)) and bool(re.fullmatch(r"[0-9a-f]{32}", _j2)),
-          f"{_j1!r}/{_j2!r}")
-    check("  同一秒内两次签发得到**不同** jti（不派生自 uid/会话/时间——派生就会撞）",
-          _j1 != _j2)
-    check("  jti 取自令牌自身、与验签解出的 payload 一致（认领键的信任来源）",
-          confirm.token_jti(_t1) == (confirm.verify(_t1, 7, 42) or {}).get("jti"))
-    check("  坏输入给空串、不抛（签发那一轮绝不因为解不出 jti 而断）",
-          confirm.token_jti("") == "" and confirm.token_jti("x.y.z") == ""
-          and confirm.token_jti(None) == "" and confirm.token_jti("没有点号") == "")
-    check("  版本号已 +1（改 payload 结构必须 +1：留着旧号旧令牌会'少个字段也照发'）",
-          confirm._VERSION == 2)
-    _v1_body = json.dumps({"v": 1, "uid": 7, "conv": 42, "exp": int(time.time()) + 600,
-                           "workflow": "tag_create", "specs": []},
-                          ensure_ascii=False, separators=(",", ":")).encode()
-    _v1 = confirm._b64e(_v1_body) + "." + confirm._b64e(
-        hmac.new(_STUB_SECRET.encode(), confirm._DOMAIN + _v1_body, hashlib.sha256).digest())
-    check("  签名正确但版本为 1 的令牌验不过（旧令牌一律失效，而不是尽力解析）",
-          confirm.verify(_v1, 7, 42) is None)
-    settings.confirmation_secret = _SAVED_SECRET
-    print()
-    print()
-    if FAILED:
-        print(f"失败 {len(FAILED)} 项：" + "；".join(FAILED))
-        sys.exit(1)
-    print("全部通过")
-
-    assert not FAILED, (
-        f"{len(FAILED)} 条未通过：" + "；".join(FAILED))
+@pytest.fixture(autouse=True)
+def key(monkeypatch):
+    monkeypatch.setattr(confirm.settings, "confirmation_secret", secrets.token_urlsafe(32))
 
 
-if __name__ == "__main__":
-    test_confirm()
+def sign(**changes):
+    values = {"uid": 7, "conv_id": 42, "workflow": "tag_create", "specs": SPECS,
+              "executor": "tags", **changes}
+    return confirm.sign(**values)
+
+
+def signed_payload(payload):
+    """Create negative controls with authentic signatures, independently of the issuing gate."""
+    body = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode()
+    signature = hmac.new(confirm.settings.confirmation_secret.encode(),
+                         confirm._DOMAIN + body, hashlib.sha256).digest()
+    return confirm._b64e(body) + "." + confirm._b64e(signature)
+
+
+def test_signatures_bind_actor_conversation_executor_and_frozen_arguments():
+    token = sign()
+    payload = confirm.verify(token, 7, 42)
+    assert payload is not None
+    assert {key: payload[key] for key in ("uid", "conv", "workflow", "specs", "executor")} == {
+        "uid": 7, "conv": 42, "workflow": "tag_create", "specs": SPECS, "executor": "tags"}
+    assert token.count(".") == 1 and len(token) < 2000
+    assert 300 <= confirm.TTL_SECONDS <= 900
+    assert confirm.token_expiry(token) == payload["exp"]
+    assert confirm.token_jti(token) == payload["jti"]
+    assert re.fullmatch(r"[0-9a-f]{32}", payload["jti"])
+    assert confirm.token_jti(sign()) != payload["jti"]
+    assert confirm.verify(token, 8, 42) is None
+    assert confirm.verify(token, 7, 43) is None
+    changed_body = confirm._b64e(json.dumps({**payload, "specs": []}).encode())
+    assert confirm.verify(changed_body + "." + token.split(".")[1], 7, 42) is None
+    assert confirm.verify(token[:-2] + ("aa" if not token.endswith("aa") else "bb"), 7, 42) is None
+
+
+@pytest.mark.parametrize("coordinate", [None, True, False, 0, -1, "7", 7.0, 2_147_483_648])
+@pytest.mark.parametrize("field", ["uid", "conv_id"])
+def test_invalid_request_coordinates_cannot_sign_or_verify(field, coordinate):
+    assert sign(**{field: coordinate}) == ""
+    values = {"uid": 7, "conv_id": 42, field: coordinate}
+    assert confirm.verify(sign(), **values) is None
+
+
+@pytest.mark.parametrize("field,value", [
+    ("uid", True), ("uid", "7"), ("uid", 7.0), ("uid", None), ("uid", 0),
+    ("conv", True), ("conv", "42"), ("conv", 42.0), ("conv", None), ("conv", 0),
+    ("executor", None), ("executor", True), ("executor", "unknown"),
+    ("v", 1), ("v", 2.0), ("v", "2"), ("exp", True), ("exp", int(time.time()) - 1),
+    ("workflow", ""), ("workflow", True), ("specs", None), ("specs", []),
+    ("jti", None), ("jti", True), ("jti", ""), ("jti", "a" * 31), ("jti", "A" * 32),
+    ("specs", [{"tool": "create_tag", "args": {"title": "$list_tags[0].name"}}]),
+])
+def test_even_authentic_signatures_do_not_authorize_invalid_payloads(field, value):
+    payload = confirm.verify(sign(), 7, 42)
+    payload[field] = value
+    assert confirm.verify(signed_payload(payload), 7, 42) is None
+
+
+def test_missing_executor_is_rejected_even_when_signed():
+    payload = confirm.verify(sign(), 7, 42)
+    payload.pop("executor")
+    assert confirm.verify(signed_payload(payload), 7, 42) is None
+    with pytest.raises(TypeError, match="executor"):
+        confirm.sign(7, 42, "tag_create", SPECS)
+
+
+@pytest.mark.parametrize("changes", [
+    {"executor": None}, {"executor": "unknown"}, {"workflow": ""}, {"specs": []},
+    {"specs": [{"tool": "set_article_tags", "args": {"add": ["$list_tags[0].name"]}}]},
+    {"specs": [{"tool": "set_article_tags", "args": {"nested": [["$x[0].y"]]}}]},
+    {"specs": [{"tool": "create_tag", "args": {"title": object()}}]},
+])
+def test_invalid_or_unresolved_arguments_never_produce_a_token(changes):
+    assert sign(**changes) == ""
+
+
+@pytest.mark.parametrize("token", [None, "", "nodot", "x.y.z", "!!!.???"])
+def test_malformed_tokens_are_refused_without_exception(token):
+    assert confirm.verify(token, 7, 42) is None
+    assert confirm.token_expiry(token) == 0
+    assert confirm.token_jti(token) == ""
+
+
+def test_absent_key_disables_both_issuing_and_verification(monkeypatch):
+    token = sign()
+    monkeypatch.setattr(confirm.settings, "confirmation_secret", "")
+    assert sign() == "" and confirm.verify(token, 7, 42) is None

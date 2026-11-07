@@ -33,7 +33,7 @@ FAILED: list[str] = []
 check = collector(FAILED)
 
 
-_DEFAULT_TARGETS = ["agent", "tools", "server.py"]
+_DEFAULT_TARGETS = ["agent", "tools"]
 
 
 def load_gate(tag: str = "wordlist_gate"):
@@ -128,7 +128,7 @@ LOGIN_DEMAND_RE = re.compile(r"先登录" + _NOUN_TAIL)
 
 
 _d5 = tree({"agent/x.py": _MATCHER_SRC, "eval/golden/basic.jsonl": _EVAL_GOLDEN_SRC,
-            "eval/run_golden.py": _EVAL_JUDGE_SRC})
+            "eval/golden_evaluation.py": _EVAL_JUDGE_SRC})
 
 
 _p = _d5 / "eval/golden/basic.jsonl"
@@ -232,14 +232,14 @@ def render(i: int) -> str:
     print("\n⑦ 真数据反控：动真登记表 ⇒ 当场红")
     _d3 = pathlib.Path(tempfile.mkdtemp(prefix="wlreal_"))
     _real = json.loads(REGISTRY.read_text(encoding="utf-8"))
-    _open_ids = [e["id"] for e in _real["entries"] if e["category"] == "open"]
-    check("⑦a 真登记表里有 open 条目可撤", bool(_open_ids), f"{len(_open_ids)} 条")
-    _dropped = {**_real, "entries": [e for e in _real["entries"] if e["id"] != _open_ids[0]]}
+    _registered_ids = [e["id"] for e in _real["entries"]]
+    check("⑦a 登记条目足够做反控", len(_registered_ids) >= 2, f"{len(_registered_ids)} 条")
+    _dropped = {**_real, "entries": [e for e in _real["entries"] if e["id"] != _registered_ids[0]]}
     _rc, _out = run(_g, ROOT, write_reg(_d3, _dropped, "_drop.json"))
-    check("⑦b 撤掉一条 open ⇒ 退 1 且点名同一符号",
-          _rc == 1 and f"未登记：{_open_ids[0]}" in _out, f"rc={_rc}")
+    check("⑦b 撤掉一条登记 ⇒ 退 1 且点名同一符号",
+          _rc == 1 and f"未登记：{_registered_ids[0]}" in _out, f"rc={_rc}")
     _shrunk = {**_real, "entries": [
-        ({**e, "size": e["size"] - 1} if e["id"] == _open_ids[1] else e)
+        ({**e, "size": e["size"] - 1} if e["id"] == _registered_ids[1] else e)
         for e in _real["entries"]]}
     _rc, _out = run(_g, ROOT, write_reg(_d3, _shrunk, "_shrink.json"))
     check("⑦c 把某条 size 减一（＝表长大了）⇒ 退 1 且点「只许变小」",
@@ -320,7 +320,7 @@ def render(i: int) -> str:
     check("⑪e 多一条用例打开豁免开关 ⇒ 红并**点名那条用例**（豁免是判据替自己打的补丁）",
           _rc == 1 and "多被 1 条用例打开了" in _out and "ev_c4" in _out, f"rc={_rc}")
     _golden_write(list(_EVAL_GOLDEN_SRC.splitlines()))                     # 还原文案
-    _j = _d5 / "eval/run_golden.py"
+    _j = _d5 / "eval/golden_evaluation.py"
     _j.write_text(_EVAL_JUDGE_SRC.replace('("甲", "乙")', '("甲", "乙", "丙")'), encoding="utf-8")
     _rc, _out = run(_g, _d5, _reg5, targets=["agent"])
     check("⑪f₁ 共享族多一个元素 ⇒ 红（`DENIAL_FAMILY` 那一族是逐次加词长出来的）",

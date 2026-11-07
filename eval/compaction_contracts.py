@@ -30,7 +30,7 @@ def oversized_compaction_recall(turn, state):
 
 
 def _recall(turn, state, *, history_tokens, input_tokens):
-    from eval import run_golden
+    from eval import golden_evaluation
 
     actor = Principal(7, "user", SOURCE_ASSERTION)
     source = memory.turn_messages([HumanMessage(content=(
@@ -42,7 +42,7 @@ def _recall(turn, state, *, history_tokens, input_tokens):
         source.extend(memory.turn_messages([HumanMessage(content=f"材料{number}：" + (
             "窗边有薄荷，记录清晨阳光与读书感受；本段不改变任何项目约定。" * 25))],
             [], "收到。", actor))
-    arm = run_golden.ensure_agent()
+    arm = golden_evaluation.ensure_agent()
     cfg = {"configurable": {"thread_id": "conv_42", "conversation_id": 42,
                              "user_id": 7, "principal": actor}}
     arm.store.update_state(cfg, {"messages": source})

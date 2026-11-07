@@ -66,3 +66,11 @@ def test_existing_multiturn_requests_are_included_in_similarity_hints():
     inputs = golden_draft.load_golden_inputs()
     assert any(key.startswith("memory_recall:") for key in inputs)
     assert golden_draft.GOLDEN.name == "native_requests.jsonl"
+
+
+def test_similarity_hints_share_the_canonical_inherited_first_turn_input(tmp_path):
+    path = tmp_path / "cases.jsonl"
+    path.write_text(json.dumps({"id": "follow-up", "user_input": "first query",
+        "rounds": [{"round": 1}, {"round": 2, "user_input": "another keyword"}]}) + "\n")
+    assert golden_draft.load_golden_inputs(path) == {
+        "follow-up:1": "first query", "follow-up:2": "another keyword"}

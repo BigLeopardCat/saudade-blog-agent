@@ -1,9 +1,8 @@
 {
-  "_note": "判据层「词表形状」的登记表。未登记即红；已登记的**只许变小**。category ∈ closed | system_data | parser | prompt_text | open；open 是病，必须带 replacement 与 sunset。`metric` 是穷举量（按文件），`eval_vocab` 是**评测判据面**（判据的判据）那一段——两段的量分开读，各自的意义见 eval/wordlist_gate.py 头注。",
+  "_note": "运行时静态词表与评测匹配面的登记。未登记或任一计数增长均失败；两类计数独立，保留类别和来源说明。",
   "targets": [
     "agent",
-    "tools",
-    "server.py"
+    "tools"
   ],
   "metric": {
     "by_file": {
@@ -12,35 +11,7 @@
         0
       ],
       "agent/action_text.py": [
-        117,
-        0
-      ],
-      "agent/adminops_account.py": [
-        42,
-        0
-      ],
-      "agent/adminops_board.py": [
-        0,
-        0
-      ],
-      "agent/adminops_comment.py": [
-        2,
-        0
-      ],
-      "agent/adminops_quota.py": [
-        9,
-        0
-      ],
-      "agent/adminops_tags.py": [
-        65,
-        0
-      ],
-      "agent/adminops_target.py": [
-        2,
-        33
-      ],
-      "agent/adminops_todo.py": [
-        14,
+        102,
         0
       ],
       "agent/api/__init__.py": [
@@ -119,6 +90,10 @@
         0,
         0
       ],
+      "agent/article_labels.py": [
+        13,
+        0
+      ],
       "agent/authz.py": [
         0,
         0
@@ -144,6 +119,10 @@
         0
       ],
       "agent/contracts/client.py": [
+        0,
+        0
+      ],
+      "agent/contracts/events.py": [
         0,
         0
       ],
@@ -539,10 +518,6 @@
         0,
         0
       ],
-      "agent/factblock.py": [
-        0,
-        0
-      ],
       "agent/hostinfo.py": [
         0,
         0
@@ -552,6 +527,10 @@
         0
       ],
       "agent/idem_pg.py": [
+        0,
+        0
+      ],
+      "agent/identifiers.py": [
         0,
         0
       ],
@@ -641,6 +620,10 @@
       ],
       "agent/reports.py": [
         20,
+        0
+      ],
+      "agent/role_labels.py": [
+        4,
         0
       ],
       "agent/runtime/__init__.py": [
@@ -923,44 +906,28 @@
         0,
         0
       ],
-      "tools/account_admin.py": [
-        0,
-        0
-      ],
       "tools/admin_read.py": [
-        6,
+        1,
         0
       ],
       "tools/base.py": [
-        2,
+        0,
         0
       ],
       "tools/board_moderation.py": [
         3,
         0
       ],
-      "tools/category_admin.py": [
-        0,
-        0
-      ],
-      "tools/dashboard_todos.py": [
-        0,
-        0
-      ],
       "tools/device.py": [
-        2,
+        0,
         0
       ],
       "tools/http_channel.py": [
         0,
         0
       ],
-      "tools/note_admin.py": [
-        2,
-        0
-      ],
       "tools/notes.py": [
-        13,
+        10,
         0
       ],
       "tools/notifications.py": [
@@ -968,11 +935,7 @@
         0
       ],
       "tools/own_data.py": [
-        5,
-        0
-      ],
-      "tools/quota_admin.py": [
-        3,
+        2,
         0
       ],
       "tools/result.py": [
@@ -980,21 +943,13 @@
         0
       ],
       "tools/site.py": [
-        49,
-        0
-      ],
-      "tools/tag_admin.py": [
-        0,
-        0
-      ],
-      "server.py": [
-        0,
+        43,
         0
       ]
     },
     "total": [
-      449,
-      33
+      291,
+      0
     ]
   },
   "entries": [
@@ -1009,16 +964,6 @@
       "why": "特效中文名（樱花/大雨/雪花），页面上就是这么写的"
     },
     {
-      "id": "agent/action_text.py::_ON_WORDS",
-      "file": "agent/action_text.py",
-      "kind": "collection",
-      "name": "_ON_WORDS",
-      "size": 3,
-      "category": "system_data",
-      "q": "_ON_WORDS",
-      "why": "匹配的是计划里**系统规定的** mode/action 取值（on/off），不是主人措辞"
-    },
-    {
       "id": "agent/action_text.py::_NOARG_VERB",
       "file": "agent/action_text.py",
       "kind": "collection",
@@ -1029,104 +974,8 @@
       "why": "工具名 → 动作文案的渲染表（键是工具名，无参调用时的显示字）；图库工具新增七条展示名称，不参与意图路由或授权。；生图新增五条动作名称，只供进度和回执展示。"
     },
     {
-      "id": "agent/action_text.py::_REF_SOURCE_CN",
-      "file": "agent/action_text.py",
-      "kind": "collection",
-      "name": "_REF_SOURCE_CN",
-      "size": 12,
-      "category": "parser",
-      "q": "_REF_SOURCE_CN",
-      "why": "拆工具返回里的检索来源标记，再渲染成中文"
-    },
-    {
-      "id": "agent/adminops_account.py::digits",
-      "file": "agent/adminops_account.py",
-      "kind": "collection",
-      "name": "digits",
-      "size": 10,
-      "category": "closed",
-      "q": "digits",
-      "why": "中文数字是封闭集（十进位就那几个），不是措辞补丁"
-    },
-    {
-      "id": "agent/adminops_account.py::ROLE_CN",
-      "file": "agent/adminops_account.py",
-      "kind": "collection",
-      "name": "ROLE_CN",
-      "size": 4,
-      "category": "system_data",
-      "q": "ROLE_CN",
-      "why": "角色名的显示字"
-    },
-    {
-      "id": "agent/adminops_account.py::_ROLE_ALIASES",
-      "file": "agent/adminops_account.py",
-      "kind": "collection",
-      "name": "_ROLE_ALIASES",
-      "size": 9,
-      "category": "open",
-      "q": "_ROLE_ALIASES",
-      "why": "主人怎么称呼角色（超管/管理员/杂鱼…）",
-      "replacement": "模型声明 role 枚举",
-      "sunset": "现有参数归一化；仅允许基于真实流量评估后收敛"
-    },
-    {
-      "id": "agent/adminops_account.py::_ROLE_CONSEQ",
-      "file": "agent/adminops_account.py",
-      "kind": "collection",
-      "name": "_ROLE_CONSEQ",
-      "size": 2,
-      "category": "prompt_text",
-      "q": "_ROLE_CONSEQ",
-      "why": "卡面上的整句后果说明（只印给人看）"
-    },
-    {
-      "id": "agent/adminops_quota.py::_QUOTA_CONSEQ",
-      "file": "agent/adminops_quota.py",
-      "kind": "collection",
-      "name": "_QUOTA_CONSEQ",
-      "size": 3,
-      "category": "prompt_text",
-      "q": "_QUOTA_CONSEQ",
-      "why": "卡面上的整句后果说明（只印给人看）"
-    },
-    {
-      "id": "agent/adminops_quota.py::_QUOTA_STATUS_CN",
-      "file": "agent/adminops_quota.py",
-      "kind": "collection",
-      "name": "_QUOTA_STATUS_CN",
-      "size": 3,
-      "category": "system_data",
-      "q": "_QUOTA_STATUS_CN",
-      "why": "额度申请状态的显示字"
-    },
-    {
-      "id": "agent/adminops_quota.py::_QUOTA_VERB",
-      "file": "agent/adminops_quota.py",
-      "kind": "collection",
-      "name": "_QUOTA_VERB",
-      "size": 3,
-      "category": "open",
-      "q": "_QUOTA_VERB",
-      "why": "主人怎么表达批准/驳回/重置",
-      "replacement": "模型声明 action 枚举",
-      "sunset": "现有参数归一化；仅允许基于真实流量评估后收敛"
-    },
-    {
-      "id": "agent/adminops_tags.py::_TAG_COLOR_ALIASES",
-      "file": "agent/adminops_tags.py",
-      "kind": "collection",
-      "name": "_TAG_COLOR_ALIASES",
-      "size": 26,
-      "category": "open",
-      "q": "_TAG_COLOR_ALIASES",
-      "why": "主人怎么用中文说颜色别名",
-      "replacement": "颜色值由模型声明为规范化色值，_COLOR_CANON 只当规范表",
-      "sunset": "现有参数归一化；仅允许基于真实流量评估后收敛"
-    },
-    {
-      "id": "agent/adminops_tags.py::_COLOR_CANON",
-      "file": "agent/adminops_tags.py",
+      "id": "agent/article_labels.py::_COLOR_CANON",
+      "file": "agent/article_labels.py",
       "kind": "collection",
       "name": "_COLOR_CANON",
       "size": 8,
@@ -1135,139 +984,24 @@
       "why": "颜色的规范名 → 色值，事实源是站内色板"
     },
     {
-      "id": "agent/adminops_tags.py::_STATUS_ALIASES",
-      "file": "agent/adminops_tags.py",
+      "id": "agent/article_labels.py::STATUS_CN",
+      "file": "agent/article_labels.py",
       "kind": "collection",
-      "name": "_STATUS_ALIASES",
-      "size": 5,
-      "category": "open",
-      "q": "_STATUS_ALIASES",
-      "why": "主人怎么表达文章状态（公开/私密/草稿）",
-      "replacement": "模型在参数格声明 status 枚举，代码只查枚举",
-      "sunset": "现有参数归一化；仅允许基于真实流量评估后收敛"
-    },
-    {
-      "id": "agent/adminops_tags.py::_TOP_ALIASES",
-      "file": "agent/adminops_tags.py",
-      "kind": "collection",
-      "name": "_TOP_ALIASES",
-      "size": 6,
-      "category": "open",
-      "q": "_TOP_ALIASES",
-      "why": "主人怎么表达置顶/取消置顶",
-      "replacement": "模型声明布尔参数",
-      "sunset": "现有参数归一化；仅允许基于真实流量评估后收敛"
-    },
-    {
-      "id": "agent/adminops_tags.py::_VERDICT_ALIASES",
-      "file": "agent/adminops_tags.py",
-      "kind": "collection",
-      "name": "_VERDICT_ALIASES",
-      "size": 9,
-      "category": "open",
-      "q": "_VERDICT_ALIASES",
-      "why": "主人怎么表达通过/驳回",
-      "replacement": "模型声明 verdict 枚举",
-      "sunset": "现有参数归一化；仅允许基于真实流量评估后收敛"
-    },
-    {
-      "id": "agent/adminops_target.py::_TARGET_ID_NS_RE",
-      "file": "agent/adminops_target.py",
-      "kind": "regex",
-      "name": "_TARGET_ID_NS_RE",
-      "size": 2,
-      "sample": "(?:talkId|talk_id|talkid|commentId|comment_id|commentid|userId|user_id|userid|账号",
-      "category": "parser",
-      "q": "(?:talkId|talk_id|talkid|userId|user_id|userid|账号\\s*id|account_id|id|#)\\s*[:=#]?",
-      "why": "拆 wire 里的 id 命名空间前缀（talkId/userId…）"
-    },
-    {
-      "id": "agent/adminops_target.py::_NAMED_ARTICLE_RES",
-      "file": "agent/adminops_target.py",
-      "kind": "regex",
-      "name": "_NAMED_ARTICLE_RES",
-      "size": 8,
-      "sample": "(?:文章|笔记|帖子|文档)\\s*[#＃No.、]?\\s*(\\d{1,7})",
-      "category": "open",
-      "q": "(?:文章|笔记|帖子|文档)\\s*[#＃No.、]?\\s*(\\d{1,7})",
-      "why": "从主人话里抽『文章3』这种指名",
-      "replacement": "指名由模型抽成 article_id 参数",
-      "sunset": "现有参数归一化；仅允许基于真实流量评估后收敛"
-    },
-    {
-      "id": "agent/adminops_target.py::_NAMED_ORDINAL_RES",
-      "file": "agent/adminops_target.py",
-      "kind": "regex",
-      "name": "_NAMED_ORDINAL_RES",
-      "size": 5,
-      "sample": "第\\s*(\\d{1,7})\\s*(?:篇|章|条|个)",
-      "category": "open",
-      "q": "第\\s*(\\d{1,7})\\s*(?:篇|章|条|个)",
-      "why": "从主人话里抽『第3篇』这种序数指名",
-      "replacement": "同上：模型抽成参数",
-      "sunset": "现有参数归一化；仅允许基于真实流量评估后收敛"
-    },
-    {
-      "id": "agent/adminops_target.py::_NAMED_LIST_ITEM_RE",
-      "file": "agent/adminops_target.py",
-      "kind": "regex",
-      "name": "_NAMED_LIST_ITEM_RE",
-      "size": 9,
-      "sample": "\\s*(?:和|与|跟|及|以及|还有|、|,|，)\\s*(?:第\\s*)?[#＃]?\\s*(\\d{1,7})",
-      "category": "open",
-      "q": "\\s*(?:和|与|跟|及|以及|还有|、|,|，)\\s*(?:第\\s*)?[#＃]?\\s*(\\d{1,7})",
-      "why": "从主人话里抽列表项之间的分隔（和/与/以及/、）",
-      "replacement": "列表项由模型拆分后逐项成参数",
-      "sunset": "现有参数归一化；仅允许基于真实流量评估后收敛"
-    },
-    {
-      "id": "agent/adminops_target.py::_COUNT_TAIL_RE",
-      "file": "agent/adminops_target.py",
-      "kind": "regex",
-      "name": "_COUNT_TAIL_RE",
-      "size": 9,
-      "sample": "^\\s*(?:篇|个|条|次|字|行|块|张|页)",
-      "category": "open",
-      "q": "^\\s*(?:篇|个|条|次|字|行|块|张|页)",
-      "why": "从主人话里抽数量尾巴（篇/个/条/次…）",
-      "replacement": "数量由模型抽成数字参数",
-      "sunset": "现有参数归一化；仅允许基于真实流量评估后收敛"
-    },
-    {
-      "id": "agent/adminops_target.py::_TARGET_VERB",
-      "file": "agent/adminops_target.py",
-      "kind": "collection",
-      "name": "_TARGET_VERB",
-      "size": 2,
-      "category": "open",
-      "q": "_TARGET_VERB",
-      "why": "主人怎么表达收藏/取消收藏",
-      "replacement": "模型声明 action 枚举",
-      "sunset": "现有参数归一化；仅允许基于真实流量评估后收敛"
-    },
-    {
-      "id": "agent/adminops_todo.py::_DUE_REL_DAYS",
-      "file": "agent/adminops_todo.py",
-      "kind": "collection",
-      "name": "_DUE_REL_DAYS",
-      "size": 8,
-      "category": "open",
-      "q": "_DUE_REL_DAYS",
-      "why": "主人说『今天/明天/后天』这种相对日期",
-      "replacement": "相对日期由模型换算成日期参数",
-      "sunset": "现有参数归一化；仅允许基于真实流量评估后收敛"
-    },
-    {
-      "id": "agent/adminops_todo.py::_TODO_CLEAR_DATES",
-      "file": "agent/adminops_todo.py",
-      "kind": "collection",
-      "name": "_TODO_CLEAR_DATES",
+      "name": "STATUS_CN",
       "size": 3,
-      "category": "open",
-      "q": "_TODO_CLEAR_DATES",
-      "why": "主人怎么表达『清空/取消』这个截止日",
-      "replacement": "模型声明 clear 布尔参数",
-      "sunset": "现有参数归一化；仅允许基于真实流量评估后收敛"
+      "category": "system_data",
+      "q": "STATUS_CN",
+      "why": "已验证文章状态枚举的显示标签，不识别用户意图。"
+    },
+    {
+      "id": "agent/article_labels.py::BOARD_VERDICT_CN",
+      "file": "agent/article_labels.py",
+      "kind": "collection",
+      "name": "BOARD_VERDICT_CN",
+      "size": 2,
+      "category": "system_data",
+      "q": "BOARD_VERDICT_CN",
+      "why": "已验证审核结果枚举的显示标签，不参与权限或意图判断。"
     },
     {
       "id": "agent/domains/automations/presentation.py::LABELS",
@@ -1310,6 +1044,16 @@
       "why": "周报/月报/年报的显示字"
     },
     {
+      "id": "agent/role_labels.py::ROLE_CN",
+      "file": "agent/role_labels.py",
+      "kind": "collection",
+      "name": "ROLE_CN",
+      "size": 4,
+      "category": "system_data",
+      "q": "ROLE_CN",
+      "why": "角色名的显示字"
+    },
+    {
       "id": "tools/site.py::_NAV_LABELS",
       "file": "tools/site.py",
       "kind": "collection",
@@ -1321,9 +1065,9 @@
     }
   ],
   "eval_vocab": {
-    "_note": "`eval/` 侧（判据的**判据**）的词表族棘轮。四块：`keys` = golden 三个文本断言键的模式/词条**全集** + 格数 + 项数；`exempt` = 六个豁免开关各被哪些用例打开；`families` = `eval/run_golden.py` 四张共享族的元素数 + 元素集指纹（抓「数量不变、条目被换掉」；拼接出来的正则只数得到字面量那几段，那种条目带 `partial: true` 标记、读作下界）；`judge_metric` = 该文件走一遍①②穷举量得到的补网。只许变小；**新增模式要先在这条自己的 why 里写清它守哪个不变量**再跑 `--update`。⚠️ 与上面 agent/tools 那份计数**分开读**，别混成一个量。⚠️ category 仍取那五档（不新开档）：这一段的 `closed` 读作**已定价接受、只许变小**——不是「划得完」（它们逐条都是中文词表，理由与代价写在各自的 why 里）。`--update` 只刷新读数，**category/q/why 一律保留**。",
+    "_note": "`eval/` 侧（判据的**判据**）的词表族棘轮。四块：`keys` = golden 三个文本断言键的模式/词条**全集** + 格数 + 项数；`exempt` = 六个豁免开关各被哪些用例打开；`families` = `eval/golden_evaluation.py` 四张共享族的元素数 + 元素集指纹（抓「数量不变、条目被换掉」；拼接出来的正则只数得到字面量那几段，那种条目带 `partial: true` 标记、读作下界）；`judge_metric` = 该文件走一遍①②穷举量得到的补网。只许变小；**新增模式要先在这条自己的 why 里写清它守哪个不变量**再跑 `--update`。⚠️ 与上面 agent/tools 那份计数**分开读**，别混成一个量。⚠️ category 仍取那五档（不新开档）：这一段的 `closed` 读作**已定价接受、只许变小**——不是「划得完」（它们逐条都是中文词表，理由与代价写在各自的 why 里）。`--update` 只刷新读数，**category/q/why 一律保留**。",
     "golden": "eval/golden/basic.jsonl",
-    "judge": "eval/run_golden.py",
+    "judge": "eval/golden_evaluation.py",
     "keys": {
       "text_not_match_regex": {
         "sites": 36,
@@ -1702,7 +1446,7 @@
       }
     },
     "judge_metric": [
-      154,
+      151,
       279
     ]
   }

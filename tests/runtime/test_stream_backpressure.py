@@ -7,7 +7,7 @@ import time
 import pytest
 from langchain_core.messages import AIMessageChunk
 
-from agent.api.turns import NativeCancelled, next_stream_item, stream_to_queue
+from agent.api.turns import ProducerCancelled, next_stream_item, stream_to_queue
 from agent.runtime.control import RequestControl
 from agent.runtime.progress import StreamProgress
 from agent.runtime.results import TurnResult
@@ -71,13 +71,13 @@ def test_cancel_full_buffer_exits_without_waiting_for_reader_and_closes_generato
         started = time.monotonic()
         stop.set()
         result = await asyncio.wait_for(task, 1)
-        assert isinstance(result, NativeCancelled)
+        assert isinstance(result, ProducerCancelled)
         assert time.monotonic() - started < 1 and closed.is_set()
         # Termination is outside the full buffer; queued text remains ordered.
         assert queue.qsize() == 2
         for _ in range(2):
             assert isinstance(await next_stream_item(queue, task), AIMessageChunk)
-        assert isinstance(await next_stream_item(queue, task), NativeCancelled)
+        assert isinstance(await next_stream_item(queue, task), ProducerCancelled)
         await queue.put("next")
         assert await queue.get() == "next", "cancelled getter stole a later frame"
 

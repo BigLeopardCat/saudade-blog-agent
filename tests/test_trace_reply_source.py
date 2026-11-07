@@ -37,7 +37,7 @@ def drive(events, monkeypatch, tmp_path, *, failure=None):
         while True:
             item = await turns.next_stream_item(queue, task)
             items.append(item)
-            if item is None or isinstance(item, (turns.NativeCancelled, Exception)):
+            if item is None or isinstance(item, (turns.ProducerCancelled, Exception)):
                 break
         await task
         return items

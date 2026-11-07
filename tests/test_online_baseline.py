@@ -769,9 +769,10 @@ def test_poc_selection_preserves_order_and_rejects_duplicates_unknown_ids_and_pa
     assert online_baseline.select_cases(cases, "full") == cases
 
 
-def test_snapshot_freezes_shared_stream_validation_and_event_contract(tmp_path):
-    hashes = online_baseline.snapshot(tmp_path, [{"id": "snapshot-probe"}])
-    for name in ("stream_protocol.py", "agent/contracts/events.py"):
-        path = tmp_path / "evaluator" / name
-        assert path.is_file()
-        assert hashlib.sha256(path.read_bytes()).hexdigest() == hashes[name]
+def test_existing_output_directory_is_rejected_before_model_calls_or_evidence_overwrite(tmp_path):
+    evidence = tmp_path / "existing-report.json"
+    evidence.write_text("frozen evidence")
+    with pytest.raises(FileExistsError):
+        online_baseline.run([{"id": "one", "tags": []}], object(), {}, tmp_path,
+                            phase="full", suite_hash="frozen-suite")
+    assert evidence.read_text() == "frozen evidence"

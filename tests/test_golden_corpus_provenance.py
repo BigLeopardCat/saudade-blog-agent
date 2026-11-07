@@ -1,19 +1,7 @@
-"""语料出处闸：**这一轮评的是不是同一份语料**。
-
-判据本体在 `eval/corpus_provenance.py`（纯函数、只读一个 JSON），本套件离线秒级、不取数、
-不联网——这也正是那个模块被拆出来的理由（见它的头注：离线套件 import 不起 `run_golden`，
-那一串是 `server` → `agent.graph` → langchain）。
-
-**这个闸要防的是什么**：这个仓是公开的，而 golden 的每条期望都锚在维护者站点的文章上。
-别人 clone 下来对着自己的博客跑，判据对不上——而**症状与「模型退化」一模一样**：全表飘红，
-复审单上一条条写着模型的错话。这条闸的作用就是**在那片红出现之前**说一句「判据脚下这块地
-不是原来那块」。
-"""
-
+"""Corpus declarations and named-entity premises remain independently testable."""
 
 import json
 import os
-import re
 import sys
 import tempfile
 from pathlib import Path
@@ -29,7 +17,7 @@ sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "eval"))         # 与共享执行入口同一条 import 路径
 
 
-import corpus_provenance as cp  # noqa: E402
+from eval import corpus_provenance as cp  # noqa: E402
 
 FAILS: list[str] = []
 check = collector(FAILS)
@@ -139,25 +127,13 @@ def test_golden_corpus_provenance():
     check("语料来源明确绑定原始公开站点，不跟随应用默认值重写",
           (_prov.get("declared_for") or {}).get("api_base")
           == "https://saudade.site/api/public")
-    print("\n⑥ 接线：共享执行入口共用一处实现，且执行入口把闸放在主循环**之前**")
-    _RG = (ROOT / "eval" / "run_golden.py").read_text(encoding="utf-8")
-    check("用例路径 → 声明路径：声明与用例同目录（`--golden` 换谁就按谁旁边那份判）",
+    print("\n⑥ 语料声明与用例位于同一目录")
+    check("普通语料和自包含夹具各自使用相邻声明",
           cp.provenance_path_for("eval/golden/basic.jsonl") == cp.CORPUS_PROVENANCE_FILE
           and cp.provenance_path_for("eval/fixtures/golden_smoke.jsonl")
-          == "eval/fixtures/provenance.json",
-          cp.provenance_path_for("eval/fixtures/golden_smoke.jsonl"))
-    check("裸文件名（没有目录）⇒ 落在当前目录、不炸",
-          os.path.normpath(cp.provenance_path_for("basic.jsonl")) == "provenance.json",
-          cp.provenance_path_for("basic.jsonl"))
-    check("共享执行入口都用它推声明路径（各自拼一遍路径就会 A 的声明配 B 的用例）",
-          "provenance_path_for(" in _RG)
-    for _name, _src in (("run_golden.py", _RG),):
-        _m = re.search(r"^\s*_code = 3 if \(.*$", _src, re.M)
-        check(f"{_name}：摘光全部用例时空分母报 **3**（未评估），不是 2（自己摘的）",
-              bool(_m) and "corpus" in _m.group(0).lower(),
-              (_m.group(0).strip() if _m else "没找到那一行"))
-        check(f"{_name}：报告里带上出处对账（事后翻报告能看出这一轮评的是哪块地）",
-              '"corpus_provenance":' in _src)
+          == "eval/fixtures/provenance.json")
+    check("裸文件名使用当前目录的声明",
+          os.path.normpath(cp.provenance_path_for("basic.jsonl")) == "provenance.json")
     print("\n⑦ 文案：foreign 那几行必须说清「这不是模型退化」并给出两条出路")
     _lines = "\n".join(cp.report_lines(*cp.check_corpus_premises(_docs("别人的一篇"))))
     check("明写**这不是模型退化**（读报告的人最容易读反的一句）", "这不是模型退化" in _lines)
@@ -174,24 +150,7 @@ def test_golden_corpus_provenance():
           "判不了" in _unknown_lines and "照跑" in _unknown_lines)
     check("ok 时**不打任何一行**（干净的轮次不该多出噪音）",
           cp.report_lines(*cp.check_corpus_premises(_docs(*REAL_ANCHORS))) == [])
-    print("\n⑧ 实体前提闸（20261009）：同一处实现、共享执行入口都接线、措辞不许读反")
-    check("判据本体只有一份（共享执行入口里都没有第二份定义）",
-          "def check_entity_premises" not in _RG)
-    check("共享执行入口都调它",
-          "check_entity_premises(" in _RG)
-    check("共享执行入口都把结论翻成人能读的那几行（各写一份措辞早晚会漏掉那句话）",
-          "entity_report_lines(" in _RG)
-    check("执行入口里实体闸复用**语料闸那份快照**（不许再取一次）",
-          _RG.count("judge_docs = judge_corpus()") == 1)
-    _idx_ent = _RG.index("check_entity_premises(cases, judge_docs)")
-    check("执行入口里实体闸也在主循环**之前**（它摘掉的那几条否则会白烧一次 LLM）",
-          _idx_ent < _RG.index("for i, case in enumerate(cases, 1):"), str(_idx_ent))
-    check("共享执行入口都把它并进 skipped_ids（未评估要单列，不许静默豁免）",
-          "skip_ids += _entity_skipped" in _RG)
-    _check_pair = (("run_golden.py", _RG, "skipped_entity_ids", "entity_checks"),)
-    for _name, _src, _k1, _k2 in _check_pair:
-        check(f"{_name}：报告里单列未评估的那几条 + 逐条结论",
-              f'"{_k1}":' in _src and f'"{_k2}":' in _src)
+    print("\n⑧ 实体前提的在场、未知与失效语义")
     _DOC19 = [{"id": 19, "title": "Saudade Blog AI Agent（泠月喵）架构文档", "content": ""}]
     _ent_cases = [{"id": "self-check", "premise_entity": {
         "kind": "note_visible", "note_id": 19, "why": "探针：这条判据锚在文章 19 上"}}]

@@ -89,8 +89,10 @@ if ! restart_services; then
 fi
 port="${AGENT_PORT:-8010}"
 for attempt in {1..45}; do
-  if curl -fsS "http://127.0.0.1:$port/ready" >/dev/null 2>&1 &&
-      curl -fsS "http://127.0.0.1:$port/version" | "$release/.venv/bin/python" -c \
+  if curl --noproxy '*' --connect-timeout 2 --max-time 5 -fsS \
+      "http://127.0.0.1:$port/ready" >/dev/null 2>&1 &&
+      curl --noproxy '*' --connect-timeout 2 --max-time 5 -fsS \
+      "http://127.0.0.1:$port/version" | "$release/.venv/bin/python" -c \
       'import json,sys; assert json.load(sys.stdin)["sha"] == sys.argv[1]' "$revision"; then
     if [[ "${DEPLOY_SCHEDULER:-0}" == 1 ]] &&
         ! sudo -n systemctl is-active --quiet saudade-scheduler; then

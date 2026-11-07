@@ -177,7 +177,7 @@ def _test_wiring():
               and node.args[1].id == "name" for node in ast.walk(ast.parse(src_runtime))))
     check("原生会话里没有别处再截一次工具返回（两处截断会各自为政）",
           src_runtime.count("tool_result_text(") == 1)
-    src_run = (ROOT / "eval" / "run_golden.py").read_text(encoding="utf-8")
+    src_run = (ROOT / "eval" / "golden_evaluation.py").read_text(encoding="utf-8")
     check("golden 轮把全局上限放开（判官要有完整材料）",
           "os.environ.setdefault(trace_mod.TOOL_RESULT_LIMIT_ENV" in src_run)
     src_gt = (ROOT / "eval" / "golden_trace.py").read_text(encoding="utf-8")

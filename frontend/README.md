@@ -73,10 +73,9 @@ frontend/public/live2d_model/
 2. **口型接口签名与净效果一字不能改**：`window.__setMouthOpen` / `__mouthOverride` /
    `__setMouthClose` 是 `chat-stream.js` 与渲染层之间的契约（`__setMouthClose` 的净效果是
    "钉死在闭合"而不是字面语义）。
-3. 帧协议三端同步：SSE 帧前缀（`__END__` / `__CMD__` / `__EXEC__` / `__RESET__` …）由
-   Python（本仓 `server.py`）、Rust（博客仓 `src/routes/chat.rs`）与本目录的
-   `chat-stream.js` 三处共同认定，改一处必须同步另外两处。博客仓有一个测试
-   （`frame_prefixes_match_frontend`）直接 `include_str!` 本目录的 `chat-stream.js` 做机械比对。
+3. 命名 SSE 事件由 Python（`agent/api/events.py`、`agent/transport.py`）、Rust（博客仓
+   `src/routes/chat.rs`）和 `chat-stream.js` 共同消费。正文保持 JSON 字符串，确认卡、
+   页面命令、回执与回复撤回使用独立事件；修改协议时同步三端并运行对应契约测试。
 4. `#waifu` 的层级交给宿主页面：`widget.css` 里是 `z-index: var(--z-agent, 1000)`
    —— 宿主页面自己在 `:root` 定义 `--z-agent` 就能把看板娘放进它的层级阶梯
    （博客仓定义在 `frontend/src/index.css`，个人中心 1200 / 公告 1300 都压在看板娘之上）。

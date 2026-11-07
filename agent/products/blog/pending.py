@@ -4,7 +4,7 @@ import time
 from dataclasses import dataclass
 
 from agent import confirm, idem
-from agent.domains.registry import confirmed_domain, native_domain
+from agent.domains.registry import confirmed_domain, executor_domain
 from agent.runtime import writes
 from agent.runtime.results import TurnResult
 from agent.runtime.turns import check_cancelled
@@ -57,7 +57,7 @@ def restore(prior, config):
         principal, cid = writes.bound_context(config)
         grant = confirm.verify(popup.get("token", ""), principal.uid, cid)
         domain = confirmed_domain(grant)
-        if native_domain(grant) is None:
+        if executor_domain(grant) is None:
             return None
         domain.validate(grant, config)
         if (action.get("jti") != grant["jti"]

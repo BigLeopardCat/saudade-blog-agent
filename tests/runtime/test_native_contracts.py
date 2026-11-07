@@ -234,7 +234,8 @@ def test_native_outcome_suite_uses_verified_identity_and_redacts_tokens(monkeypa
     assert all(case["passed"] for case in report["cases"]), report["cases"]
     assert sum(case["requests"] for case in report["cases"]) == 13
     assert all(
-        g["source"] == "evaluation" and g["path"] == "native" for g in report["metrics"]["groups"]
+        g["source"] == "evaluation" and g["path"] == "langchain"
+        for g in report["metrics"]["groups"]
     )
     documents = [json.loads(path.read_text()) for path in tmp_path.rglob("*.json")]
     terminal = [

@@ -1,41 +1,21 @@
 # -*- coding: utf-8 -*-
-"""Shared golden request builders, multi-round driver and historical judgments.
+"""Shared golden request builders, multi-round driver and declared assertions.
 
 The runner checks corpus provenance, uses the service producer, and validates
 replies, commands, confirmations and receipts against declared JSONL assertions.
 It requires backend access and model credentials; offline pytest tests its
 contracts with fixtures. Production writes require explicit opt-in.
-The production HTTP baseline is ``python -m eval.online_baseline``. The legacy
-CLI and basic.jsonl remain available for archived comparisons; their planner-era
-premises are not a calibrated native baseline.
+The production HTTP baseline is ``python -m eval.online_baseline``. Release
+decisions use ``python -m eval.release_readiness`` with frozen semantic evidence.
+This module provides shared assertions and round handling, not another CLI.
 """
-import argparse
 import asyncio
 import json
 import os
 import re
-import sys
 import time
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from pathlib import Path
-
-# Legacy file entry: resolve modules from this checkout rather than an installed sibling.
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-sys.path.insert(0, str(Path(__file__).resolve().parent))
-
-import corpus_terms  # 同目录：语料术语派生（require_doc_terms 判据用）
-import golden_fixture
-import golden_thread
-import golden_trace  # 同目录（eval/ 在 sys.path 上，同 corpus_check 的用法）
-import identity_preflight
-import landing_gate
-import report_archive  # 同目录：留档文件名（秒级 ts 同秒撞车 → 见模块头注）
-from landing_gate import (  # noqa: F401 —— 再导出（唯一实现在 landing_gate）
-    fallback_resets,
-    wilson_ci,
-)
-from langchain_core.messages import ToolMessage
 
 from agent import (
     confirm,
@@ -47,15 +27,24 @@ from agent.api.context import build_messages as _build_messages
 from agent.api.routes import chat as chat_routes
 from agent.api.schemas import ChatRequest, HistoryItem
 from agent.api.turns import stream_to_queue as _run_agent_stream_to_queue
+from agent.contracts.events import StreamEvent
 from agent.principal import Principal
 from agent.transport import reply_text
-from eval import command_report, golden_runtime
-from eval.golden_runtime import close_agent, ensure_agent
+from eval import (
+    command_report,
+    corpus_terms,
+    golden_runtime,
+    golden_thread,
+    golden_trace,
+)
+from eval.corpus_provenance import (
+    snapshot_docs as corpus_snapshot_docs,
+)
+from eval.golden_runtime import ensure_agent
 from eval.native_assertions import check as check_native
 from eval.native_assertions import command_matches
 
-# uid=0 哨兵的**真值源**（`DENIAL_FAMILY` 第 ⑦ 支由它派生，见那一支的头注）——
-# 不抄字面进判据：哨兵改文案时，判据跟着改，不会静默退化成一条谁也命中不了的死正则。
+# Derive the identity-denial assertion from the current tool boundary receipt.
 from tools.base import _NO_IDENTITY_WRITE  # noqa: E402
 from utils import trace as trace_mod  # trace 工具返回留多长（run_case 里放开，见其注释）
 
@@ -70,16 +59,13 @@ CMD_FAMILIES = {
     "EFFECT:": ("EFFECT:",),
     "DARKMODE:": ("DARKMODE:",),
 }
-GOLDEN_FILE = "eval/golden/basic.jsonl"
-REPORT_FILE = "eval/report/last_run.json"
 
 # Relative fixture timestamps keep freshness assertions stable across runs.
 _NOW_RX = re.compile(r"\{now(?:(?P<sign>[+-])(?P<num>\d+)(?P<unit>[mhd]))?\}")
 
 
 def expand_now(text: str, now: "datetime | None" = None) -> str:
-    """把夹具里的 `{now…}` 占位符换成**跑这一遍的时刻**（`MM-DD HH:MM`，与 Rust 渲染的
-    台账行首同形）。零占位符时原样返回（既有 150 条用例一个字都不变）。"""
+    """Expand relative fixture timestamps to this run's local minute."""
     if "{now" not in text:
         return text
     now = now or datetime.now()
@@ -175,7 +161,7 @@ def build_request(case: dict, rnd: dict | None = None) -> ChatRequest:
     ctx = rnd["context"]
     return ChatRequest(
         message=rnd["user_input"],
-        image=case.get("image", []),  # 多模态：dataURL 数组（image_color_red 等用例；服务端兼容单串）
+        image=case.get("image", []),
         current_url=ctx.get("current_url", "/"),
         page_title=ctx.get("page_title", ""),
         user_id=ctx.get("user_id", 0),
@@ -194,28 +180,23 @@ def build_request(case: dict, rnd: dict | None = None) -> ChatRequest:
 
 
 def build_principal(case: dict) -> "Principal":
-    """Historical direct-driver identity; it does not assert a verified caller.
+    """Case metadata coordinates fixture rounds; it does not authenticate a caller.
 
-    Production HTTP evaluations derive identity from the signed request and
-    verify it in the service trace, independently of this legacy fixture.
+    HTTP adapters authenticate through the host and verify the resulting trace identity.
     """
     ctx = case.get("context", {})
     return Principal(uid=ctx.get("user_id", 0), role=ctx.get("role"),
                      source="golden")
 
 
-def parse_reset(text: str) -> tuple[str, str]:
-    """Decode archived reset labels into scope and reason.
-
-    Missing scopes conservatively invalidate all buffered controls. These labels
-    are an evaluation representation, not the production transport protocol."""
-    rest = text.removeprefix("__RESET__").lstrip(":")
-    scope, _sep, tail = rest.partition(":")
-    if scope not in ("all", "text"):
-        return "all", rest
-    return scope, tail
-
-
+def fallback_resets(result: dict) -> list[str]:
+    """Read terminal reply withdrawals separately from internal recovery events."""
+    scopes = result.get("reset_scopes")
+    if scopes is None:
+        return [str(reason) for reason in result.get("resets_reasons", ())] or [""] * int(
+            result.get("resets") or 0)
+    reasons = result.get("fallback_reasons")
+    return list(reasons) if reasons is not None else [""] * scopes.count("text")
 
 
 def run_one(req: ChatRequest, principal: "Principal | None" = None,
@@ -225,7 +206,7 @@ def run_one(req: ChatRequest, principal: "Principal | None" = None,
     """Run the production producer and extract visible frames for one request.
 
     Start tracing before copying context to the worker. Verify confirmation first,
-    then narrow a selected item before constructing messages or the ledger.
+    then narrow a selected item before constructing messages.
     Invalid tokens are evaluation errors; invalid picks return the production
     zero-execution response. Tokens in the returned result stay in memory only.
     """
@@ -268,79 +249,25 @@ def run_one(req: ChatRequest, principal: "Principal | None" = None,
         return await golden_runtime.collect_frames(queue, producer)
 
     frames = asyncio.run(collect_frames())
-    ledger_frames: list[dict] = []
-    if trace_id:
-        ledger_frames = [dict(e) for e in golden_trace.events_of(trace_id)
-                         if e.get("node") == "planner" and e.get("event") == "ledger_frame"]
     native_names, native_rounds = golden_trace.tool_call_stats(trace_id)
     trace_path = golden_trace.finish_case(trace_id, time.monotonic() - t_trace0,
                                           len(frames))
     final_text = ""
     commands: list[str] = []
-    tool_calls: list[str] = []
-    exec_rows: list = []
-    resets = 0
-    resets_reasons: list[str] = []
-    reset_scopes: list[str] = []
-    fallback_reasons: list[str] = []
-    tool_rounds = 0
+    exec_rows: list[dict] = []
     error = None
     control_frames: list[str] = []
-    task_frames: list[dict] = []
     for item in frames:
         final_text = reply_text(final_text, item)
-        item = golden_runtime.assertion_frame(item)
-        if isinstance(item, str) and item.startswith("__RESET__"):
-            final_text = ""
-            tool_calls.clear()  # 被作废轮的工具调用不算数（断言的是最终采纳轮的执行）
-            _scope, _reason = parse_reset(item)
-            if _scope != "text":
-                commands.clear()
-            else:
-                fallback_reasons.append(_reason)
-            reset_scopes.append(_scope)
-            resets += 1
-            if _reason:
-                resets_reasons.append(_reason)
-        elif isinstance(item, str) and item.startswith("__EXEC__:"):
-            try:
-                rows = json.loads(item[len("__EXEC__:"):])
-                if isinstance(rows, list):
-                    exec_rows.extend(r for r in rows if isinstance(r, dict))
-            except Exception:
-                pass
-        elif isinstance(item, str) and item.startswith("__CMD__:"):
-            try:
-                _cmd = json.loads(item[len("__CMD__:"):])
-                _wire = command_report.command_wire(_cmd) if isinstance(_cmd, dict) else ""
-            except Exception:
-                _wire = ""
-            if _wire:
-                commands.append(_wire)
-        elif isinstance(item, str) and item.startswith("__TASK__:"):
-            try:
-                _tf = json.loads(item[len("__TASK__:"):])
-            except Exception:
-                _tf = None
-            if isinstance(_tf, dict):
-                task_frames.append(_tf)
-        elif isinstance(item, ToolMessage) and item.content:
-            name = getattr(item, "name", "") or ""
-            if name:
-                tool_calls.append(name)
-            for line in str(item.content).splitlines():
-                s = line.strip()
-                if s.startswith(CMD_PREFIXES):
-                    commands.append(s)
-        elif isinstance(item, BaseException):
+        if isinstance(item, BaseException):
             error = str(item)
-        elif isinstance(item, str) and item.startswith("__PROCESS__"):
-            if "🧭 计划：" in item:
-                tool_rounds += 1
-        elif isinstance(item, str) and item.startswith("__"):
-            control_frames.append(item)
-    tool_calls.extend(native_names)
-    tool_rounds += native_rounds
+        elif isinstance(item, StreamEvent):
+            if item.name == "receipts":
+                exec_rows.extend(item.data)
+            elif item.name == "command":
+                commands.append(command_report.command_wire(item.data))
+            elif item.name in {"confirmation", "pending", "task_input"}:
+                control_frames.append(golden_runtime.assertion_frame(item))
     confirm_tokens, confirm_payloads = [], []
     for f in control_frames:
         if not f.startswith("__CONFIRM__:"):
@@ -352,18 +279,17 @@ def run_one(req: ChatRequest, principal: "Principal | None" = None,
         if tk:
             confirm_tokens.append(tk)
             confirm_payloads.append(confirm.inspect(tk) or {})
-    return {"text": final_text, "commands": commands, "tool_calls": tool_calls,
+    return {"text": final_text, "commands": commands, "tool_calls": native_names,
             "frames": control_frames,
             "exec_rows": exec_rows,
             "exec_tools": [r.get("tool", "") for r in exec_rows],
-            "tool_rounds": tool_rounds,
+            "tool_rounds": native_rounds,
             "trace": trace_path,
             "confirm_tokens": confirm_tokens,
             "confirm_payloads": confirm_payloads,
-            "task_frames": task_frames,
-            "ledger_frames": ledger_frames,
-            "resets": resets, "resets_reasons": resets_reasons,
-            "reset_scopes": reset_scopes, "fallback_reasons": fallback_reasons,
+            "task_frames": [], "ledger_frames": [],
+            "resets": 0, "resets_reasons": [],
+            "reset_scopes": [], "fallback_reasons": [],
             "error": error}
 
 
@@ -389,26 +315,18 @@ def run_case(case: dict, *, run_id: str = "", suffix: str = "", turn_runner=None
         # Confirmation rounds carry approval; ordinary follow-ups carry only their declared input.
         is_confirm_round = bool(rnd.get("confirm_message"))
         if i > 0 and is_confirm_round and not prev_token:
-            # 上一轮没签出令牌 ⇒ **这一轮不发**。这不是保守，是必须：rounds 里的确认轮
-            # 消息是合成命令式文本（「确认执行：…」），而"同轮命令即确认"是写路径的一条
-            # 真放行通道（见 agent/authz）——把它当普通轮发出去，可能**另找一条路把写做掉**，
-            # 那这轮评测就反过来在真库里执行了一次未授权写入。要的是"响亮失败"。
-            # 记在上一轮上、由 `check_case` 聚合（轮数不符那条也会带上原因，见其实现）。
+            # A missing approval must stop this round, never become a fresh write request.
             done[-1]["fails"].append(
                 f"没有签出确认令牌（第 {rnd['round']} 轮无令牌可发）⇒ 这一轮不发，失败，不降级")
             break
         req = build_request(case, rnd)
-        # 第 2 轮起：合成消息（生产上前端发的是「确认执行：<卡面摘要>」）+ 上一轮的令牌。
-        # Native confirmation consumes the signed grant without a model call.
+        # Approval rounds forward the previous signed grant; narration cannot authorize writes.
         if i > 0 and is_confirm_round:
             req.message = rnd.get("confirm_message") or "确认执行"
             req.confirm_token = prev_token
             # Send the selected approval item together with its signed token.
             req.confirm_pick = rnd.get("confirm_pick") or ""
-        # Ordinary follow-ups keep their own user input and do not inherit a confirmation grant.
-        # 生产形状的历史（`GOLDEN_PROD_HISTORY`）：注入的是**上一轮真的发出去的那两句**
-        # ——确认轮发的是合成命令文本（生产上前端也这么存），所以取 `req.message` 而不是
-        # `rnd["user_input"]`。用例自己写了 `history` 的不覆盖（那是有意的注入）。
+        # Optional host history uses actual sent inputs and final replies; explicit fixtures win.
         if _prod_on and i > 0 and not (rnd["context"] or {}).get("history"):
             req.history = _prod_hist[-PROD_HISTORY_LIMIT:]
             # These entries were produced by this case's fixed actor, not imported legacy data.
@@ -427,8 +345,7 @@ def run_case(case: dict, *, run_id: str = "", suffix: str = "", turn_runner=None
         done.append(res)
         prev_token = (res.get("confirm_tokens") or [""])[0]
         if _prod_on:
-            # Rust 落库的是**这一轮真正发出去的** user 文本与**最终**回复（fallback 之后
-            # 那一条；`res["text"]` 就是它）——照这个攒，下一轮注入的才与生产同形。
+            # Mirror the host transcript, including the input used for an approval round.
             _prod_hist += [HistoryItem(role="user", content=req.message),
                            HistoryItem(role="assistant",
                                        content=res.get("text") or "")]
@@ -447,16 +364,13 @@ def check_case(case: dict, run_result: dict, *, docs=None) -> list[str]:
     rounds = iter_rounds(case)
     got = run_result.get("rounds") or [run_result]
     if len(got) != len(rounds):
-        # 轮数不符有自己的红，但**原因**往往在驱动层（"第 2 轮没发"），一并带出来，
-        # 否则读报告的人只知道"少跑了一轮"。
+        # Preserve driver errors alongside a missing-round failure.
         head = [f"轮数不符：用例声明 {len(rounds)} 轮，实际跑了 {len(got)} 轮"]
         for res in got:
             head += [f"[驱动] {f}" for f in (res.get("fails") or [])]
         return head
     for i, (rnd, res) in enumerate(zip(rounds, got)):
-        # 驱动层失败（`run_case` 自己判出来、写进 `res["fails"]` 的那些，例如"上一轮
-        # 没签出令牌"）：**必须在这里聚合**——报告与退出码只认本函数的返回，驱动报了
-        # 错却不聚合，就是"错报出来了、用例照样绿"。
+        # Driver failures must affect the same verdict as response assertions.
         for f in (res.get("fails") or []):
             fails.append(f"[第 {i + 1} 轮] {f}")
         label = rnd.get("gold", {}).get("round", rnd["round"])
@@ -465,9 +379,7 @@ def check_case(case: dict, run_result: dict, *, docs=None) -> list[str]:
                          "（gold 贴错了行）")
         for f in check_gold(rnd["gold"], res, docs=docs,
                             user_input=rnd.get("user_input") or "",
-                            # 台账那一行：`build_request` 用的是同一个 `expand_now`，
-                            # 所以判据比对的字符串与这一轮真发给模型的**逐字同一份**
-                            # （两处各展开一次、各漂各的，是这一族最容易犯的错）。
+                            # Match the same expanded fixture values used by build_request.
                             pending_src=expand_now((rnd.get("context") or {}).get(
                                 "pending_action") or "")):
             fails.append(f"[第 {i + 1} 轮] {f}")
@@ -958,191 +870,9 @@ def expand_token_list(lst: list) -> list:
     return out
 
 
-def expand_forbid_tokens(cases: list) -> list:
-    """把 `forbid_tool_calls` 里的哨兵就地展开，返回展开过的用例 id。"""
-    expanded: list = []
-    for c in cases:
-        for gold in ([c.get("gold")] + [r.get("gold") for r in c.get("rounds") or []]):
-            if not isinstance(gold, dict):
-                continue
-            lst = gold.get("forbid_tool_calls")
-            if not lst or not any(t in FORBID_TOKENS for t in lst):
-                continue
-            try:
-                gold["forbid_tool_calls"] = expand_token_list(lst)
-            except RuntimeError as e:
-                raise RuntimeError(f"{e}——用例 {c.get('id')}") from None
-            expanded.append(c.get("id"))
-    return expanded
-
-
-# Premise suppliers describe the facts required to evaluate a case.
-PREMISE_ROLES: tuple[str, ...] = ("visitor", "user", "admin", "superadmin")
-
-
-def reachable_tools(role: str | None) -> set:
-    """Return tools reachable by the role under the native scope policy."""
-    from agent.authz import SCOPE_READ_PUBLIC, TOOL_SCOPE, check
-    if role is None:
-        return {name for name, scope in TOOL_SCOPE.items() if scope == SCOPE_READ_PUBLIC}
-    principal = Principal(uid=1, role=role, source="golden")
-    return {name for name in TOOL_SCOPE if check(principal, name).allowed}
-
-
-def premise_role(pa: dict) -> str | None:
-    """声明里的角色名 → 判据用的角色名（`visitor` = 匿名访客 = `None`）。"""
-    role = (pa.get("role") or "").strip()
-    return None if role == "visitor" else role
-
-
-def check_premises(cases: list) -> tuple:
-    """Return eligible cases, unevaluated IDs and explicit premise findings.
-
-    Changed premises exclude a case. Uncheckable human declarations remain
-    visible as unchecked rather than being reported as verified."""
-    kept: list = []
-    skipped: list = []
-    rows: list = []
-    for c in cases:
-        pa = c.get("premise_absent")
-        if not isinstance(pa, dict):
-            kept.append(c)
-            continue
-        role = premise_role(pa)
-        tools = expand_token_list(list(pa.get("suppliers") or []))
-        if not tools:
-            rows.append({"id": c.get("id"), "state": "unchecked", "role": role,
-                         "fact": pa.get("fact"), "hit": [], "why": pa.get("why")})
-            kept.append(c)
-            continue
-        reach = reachable_tools(role)
-        hit = sorted(t for t in tools if t in reach)
-        rows.append({"id": c.get("id"), "state": "changed" if hit else "ok",
-                     "role": role, "fact": pa.get("fact"), "hit": hit,
-                     "why": pa.get("why")})
-        if hit:
-            skipped.append(c["id"])
-        else:
-            kept.append(c)
-    return kept, skipped, rows
-
-
-# A no-confirmation expectation requires a declared, currently valid reason.
-NO_POPUP_KINDS: tuple[str, ...] = ("question", "target_absent", "role_denied",
-                                   "capability_boundary")
-# `capability_boundary` 的 `why` 下限：那半是**人写的前提**，写不写全没人能自动判，
-# 但至少要写下来（同 `premise_absent` 的"清单为空的必须写 why"）。
-_NO_POPUP_WHY_MIN = 12
-
-
-def no_popup_role(case: dict) -> str | None:
-    """判据侧的角色名：用例的 `context.role`，缺省/`visitor` ⇒ `None`（匿名访客）。"""
-    role = str((case.get("context") or {}).get("role") or "").strip()
-    return None if role in ("", "visitor") else role
-
-
-def check_no_popup_premises(cases: list) -> tuple:
-    """Validate why a case should not request approval.
-
-    Changed reasons and malformed declarations make the case unevaluated;
-    they must never silently weaken the confirmation assertion."""
-    kept: list = []
-    skipped: list = []
-    rows: list = []
-    for c in cases:
-        pn = c.get("premise_no_popup")
-        if not isinstance(pn, dict):
-            kept.append(c)
-            continue
-        kind = str(pn.get("kind") or "").strip()
-        role = no_popup_role(c)
-        tools = [str(t) for t in (pn.get("tools") or [])]
-        why = str(pn.get("why") or "").strip()
-        hit: list = []
-        if kind == "question":
-            from eval.legacy_no_popup import is_question_like
-            if not is_question_like(str(c.get("user_input") or "")):
-                hit = ["is_question_like(本轮输入)=False"]
-        elif kind == "target_absent":
-            lits: list = []
-            for gold in [r["gold"] for r in iter_rounds(c)]:
-                v = gold.get("require_absence")
-                if isinstance(v, str):
-                    lits.append(v)
-                elif isinstance(v, list):
-                    lits.extend(str(x) for x in v)
-            ui = str(c.get("user_input") or "")
-            if not lits or not any(x and x in ui for x in lits):
-                hit = ["判据里没有 require_absence（或它的字面不在主人原话里）"]
-        elif kind in ("role_denied", "capability_boundary"):
-            if not tools:
-                hit = ["声明里没点名工具"]
-            else:
-                reach = reachable_tools(role)
-                inside = sorted(t for t in tools if t in reach)
-                if kind == "role_denied":
-                    hit = inside
-                else:
-                    hit = sorted(t for t in tools if t not in reach)
-                    if not hit and len(why) < _NO_POPUP_WHY_MIN:
-                        hit = [f"capability_boundary 必须写 why（≥{_NO_POPUP_WHY_MIN} 字，"
-                               "设计那一半机器判不了）"]
-        else:
-            hit = [f"kind 不是四类之一：{kind!r}"]
-        rows.append({"id": c.get("id"), "kind": kind, "state": "changed" if hit else "ok",
-                     "role": role, "tools": tools, "hit": hit, "why": why,
-                     "partial": kind == "capability_boundary"})
-        if hit:
-            skipped.append(c.get("id"))
-        else:
-            kept.append(c)
-    return kept, skipped, rows
-
-
-# Trace-dependent expectations remain unevaluated when the required trace is absent.
-def check_trace_premises(cases: list) -> tuple:
-    """trace 关着时，靠 trace 判的用例**未评估** → (留下的用例, 未评估的 id, 逐条结论)。"""
-    if golden_trace.enabled():
-        return cases, [], []
-    kept: list = []
-    skipped: list = []
-    rows: list = []
-    for c in cases:
-        keys = golden_trace.trace_derived_keys(c)
-        if not keys:
-            kept.append(c)
-            continue
-        skipped.append(c.get("id"))
-        rows.append({"id": c.get("id"), "state": "trace_off", "keys": keys})
-    return kept, skipped, rows
-
-
-# Validate named entities against the source catalog before attributing a model failure.
-
-
-# Verify corpus provenance against the declaration actually used by this case.
-from corpus_provenance import (  # noqa: E402,F401 —— 再导出（唯一实现在 corpus_provenance）
-    CORPUS_PROV_FOREIGN,
-    CORPUS_PROV_OK,
-    CORPUS_PROV_UNKNOWN,
-    CORPUS_PROVENANCE_FILE,
-    ENTITY_KINDS,
-    ENTITY_WHY_MIN,
-    check_corpus_premises,
-    check_entity_premises,
-    entity_report_lines,
-    load_corpus_provenance,
-    provenance_path_for,
-)
-from corpus_provenance import (
-    report_lines as corpus_report_lines,
-)
-from corpus_provenance import (
-    snapshot_docs as corpus_snapshot_docs,
-)
-
 # Explicit assertion keys reject misspellings instead of silently skipping checks.
 GOLD_ASSERT_KEYS = frozenset({
+    "max_model_calls",
     "require_observations", "require_observations_any", "require_todo_schedule",
     "require_automation_schedule",
     "require_confirm_specs", "require_confirm_preview", "forbid_runtime_stop",
@@ -1170,9 +900,9 @@ GOLD_ASSERT_KEYS = frozenset({
     # 命令帧（EFFECT:/DARKMODE:/NAVIGATE:…）
     "require_cmd_prefixes", "require_cmd_contains", "require_cmd_all",
     "forbid_cmd_prefixes", "forbid_cmd_contains", "either_cmd_or_text",
-    # 工具调用（planner 决策侧）
+    # Requested tool calls.
     "require_tool_calls", "require_tool_calls_any", "no_tool_calls", "forbid_tool_calls",
-    # 执行回执（checker 验收侧，__EXEC__ 帧）
+    # Structured execution receipts.
     "require_exec_tools", "require_exec_args", "require_arg_from_result",
     # Receipt text must agree with the claimed effect, not merely the requested arguments.
     "require_exec_result",
@@ -1233,7 +963,7 @@ def _exec_claim_fails(gold: dict, result: dict) -> list[str]:
     out: list[str] = []
     for t in gold.get("require_exec_tools", []):
         if t not in result["exec_tools"]:
-            out.append(f"checker 验收回执缺少工具 {t}（exec：{result['exec_tools']}）")
+            out.append(f"执行回执缺少工具 {t}（exec：{result['exec_tools']}）")
     _once = gold.get("require_exec_once_any") or []
     if not _once:
         return out
@@ -1357,7 +1087,7 @@ def check_gold(gold: dict, result: dict, *, docs=None, user_input: str = "",
         if _wcalls or _wreceipts:
             fails.append(
                 "本轮应零写执行（后台写工具一个都不许调用、也不许有验收回执），实际："
-                f"写工具的 planner 调用={_wcalls}，写回执={_wreceipts}；"
+                f"写工具调用={_wcalls}，写回执={_wreceipts}；"
                 f"（本轮全部调用={result['tool_calls']}，"
                 f"全部回执={[r.get('tool') for r in result['exec_rows'] if isinstance(r, dict)]}）")
     # Forbidden execution tools must not appear in factual receipts.
@@ -1469,7 +1199,6 @@ def check_gold(gold: dict, result: dict, *, docs=None, user_input: str = "",
         for _tk in (result.get("confirm_tokens") or []):
             if _tk and _tk in text:
                 fails.append("令牌原文出现在正文里（它是 10 分钟有效的写授权凭据）")
-
     # Inspect archived ledger events rather than inferring targets from reply prose.
     _lf_events = result.get("ledger_frames") or []
     _ledger_ids = [str(i) for e in _lf_events for i in (e.get("ids") or [])]
@@ -1492,15 +1221,15 @@ def check_gold(gold: dict, result: dict, *, docs=None, user_input: str = "",
             fails.append(f"台账摆了但一条待办都没有（事件：{_lf_events}）"
                          "——本键要求帧里至少印出一个编号（要有待办行才判得动）")
     if gold.get("require_card_targets_from_ledger") and not _lf_off:
-        from native_receipt_contract import FIELD_FAMILY, TAG_FAMILY, TARGET_FIELDS
-
-        from agent.adminops_target import normalize_target_id  # 编号解析的唯一实现
+        from agent.identifiers import normalize_target_id  # 编号解析的唯一实现
+        from eval.native_receipt_contract import FIELD_FAMILY, TAG_FAMILY, TARGET_FIELDS
         _byfam: dict = {}
         for _e in _lf_events:
             for _raw in (_e.get("ids") or []):
                 _s = str(_raw)
-                _fam = TAG_FAMILY.get(_s.partition(":")[0])
-                _tid = normalize_target_id(_s)
+                _tag, _separator, _value = _s.partition(":")
+                _fam = TAG_FAMILY.get(_tag)
+                _tid = normalize_target_id(_value)
                 if _fam and _tid is not None:
                     _byfam.setdefault(_fam, set()).add(int(_tid))
         _seen, _bad = 0, []
@@ -1563,7 +1292,7 @@ def check_gold(gold: dict, result: dict, *, docs=None, user_input: str = "",
 
     _fb = fallback_resets(result)
     if gold.get("forbid_fallback") and _fb:
-        fails.append(f"本轮走了 gate fallback（{_fb}）——用户收到的是兜底道歉，"
+        fails.append(f"本轮出现终止降级回复（{_fb}）——用户收到的是兜底道歉，"
                      f"正断言命中的是道歉文本，不算通过"
                      + (f"；本轮另有 {result['resets'] - len(_fb)} 次打回重规划"
                         f"（scope=all，最终文本是重规划后的，不算兜底）"
@@ -1631,769 +1360,3 @@ def check_gold(gold: dict, result: dict, *, docs=None, user_input: str = "",
 
 
 # Use the shared Wilson interval implementation.
-
-
-def by_tag_stats(results: list, tags_map: dict) -> dict:
-    """Report per-tag totals, passes, Wilson intervals and failed case IDs.
-
-    Small samples retain their uncertainty; overall averages cannot substitute
-    for domain-level results."""
-    buckets: dict = {}
-    for r in results:
-        for t in (tags_map.get(r["id"]) or r.get("tags") or []):
-            b = buckets.setdefault(t, {"total": 0, "passed": 0, "failed_ids": []})
-            b["total"] += 1
-            if r.get("final_ok", r["ok"]):
-                b["passed"] += 1
-            else:
-                b["failed_ids"].append(r["id"])
-    out = {}
-    for t, b in sorted(buckets.items(), key=lambda kv: (-kv[1]["total"], kv[0])):
-        out[t] = {
-            "total": b["total"],
-            "passed": b["passed"],
-            "pass_rate": round(b["passed"] / b["total"], 4) if b["total"] else 0.0,
-            "ci95": wilson_ci(b["passed"], b["total"]),
-            "failed_ids": b["failed_ids"],
-        }
-    return out
-
-
-def is_full_run(*, only: str, limit: int, skip_ids_arg: str, skipped_ids: list,
-                design_skipped_ids: list, golden_file: str | None = None) -> bool:
-    """Decide whether this run may replace the full-run report.
-
-    Explicit case selection and unexpected omissions make a run partial.
-    Design-declared exclusions are tracked separately from unexpected omissions."""
-    if golden_file is not None and os.path.realpath(golden_file) != os.path.realpath(GOLDEN_FILE):
-        return False
-    if only or limit or skip_ids_arg:
-        return False
-    return not [s for s in skipped_ids if s not in design_skipped_ids]
-
-
-def main():
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--limit", type=int, default=0, help="只跑前 N 条（调试）")
-    ap.add_argument("--only", default="", help="只跑指定 id（逗号分隔可多选；诊断链路时按'用例形状'挑几条）")
-    ap.add_argument("--skip-ids", default="",
-                    help="跳过指定 id（逗号分隔；用于环境不可达的用例，如 CI 无 device-service）")
-    ap.add_argument("--min-pass-rate", type=float, default=None,
-                    help="**显式覆盖**成点估计口径（老语义）。不传 ⇒ 走两层门禁：硬层 0 红 +"
-                         "采样层 Wilson 95%% 下界 ≥ 档位（档位/目标见 eval/landing_gate.py）。"
-                         "点估计口径只给小样本调试跑与 A/B 用（n 太小时 Wilson 判不了），"
-                         "它管的是**本轮跑了的用例**的比率，不是全语料（跳过会改分母，见报告"
-                         " full_run）；回归组任何时候都另按硬判 100%%。四层语义见文件头 docstring。")
-    ap.add_argument("--no-trace", action="store_true",
-                    help="不落 golden trace（默认落 logs/agent/golden_traces/<run>/；"
-                         "显式关掉只用于省盘/极速冒烟）")
-    ap.add_argument("--keep-traces", type=int, default=golden_trace.KEEP_DEFAULT,
-                    help=f"保留最近 N 次 golden run 的 trace 目录（默认 "
-                         f"{golden_trace.KEEP_DEFAULT}；0=不清理。**有失败的 run 一律不清理**"
-                         f"——判红那次的 planner 决策只在它里面）")
-    ap.add_argument("--trace-run-id", default="",
-                    help="指定 trace run_id（进程隔离跑法由父进程给，让所有子进程落同一目录）")
-    ap.add_argument("--golden", default=GOLDEN_FILE,
-                    help="换一份用例文件（默认 eval/golden/basic.jsonl）。**出处声明必须住在"
-                         "用例文件旁边**（同目录的 provenance.json，见 eval/corpus_provenance.py"
-                         " 的 provenance_path_for）——换一份没有声明的用例 = 那套用例锚在哪块地"
-                         "上没人说得清，闸只会报「判不了」；自包含夹具见 eval/fixtures/README.md")
-    args = ap.parse_args()
-
-    if args.no_trace:
-        os.environ[golden_trace.ENV_OFF] = "1"
-    golden_runtime.check_environment()
-    # trace run_id 在**开跑时**定（报告文件名仍是收尾时刻，两者语义不同：trace 目录要能
-    # 被进程隔离跑法的父子进程共享，只能在开跑前定下来）
-    run_id = golden_trace.resolve_run_id(args.trace_run_id or None)
-    if golden_trace.enabled():
-        os.environ[golden_trace.ENV_RUN] = run_id
-
-    ensure_agent()
-
-    # Report unavailable expected corpus documents before attributing task failures.
-    try:
-        from corpus_check import presence_check
-        corpus = presence_check()
-    except Exception as e:  # 语料拉取失败不阻断评测，仅提示
-        print(f"[corpus] 在位性检查失败（{e}），跳过")
-        corpus = {}
-    # Load the assertion corpus once and reuse its content across cases.
-    judge_docs = judge_corpus()
-
-    # Resolve corpus provenance relative to the selected case file, including custom corpora.
-    _prov_file = provenance_path_for(args.golden)
-    cases = [json.loads(line) for line in open(args.golden, encoding="utf-8") if line.strip()]
-    # Expand write-console sentinels from the current mutation scope.
-    _expanded = expand_forbid_tokens(cases)
-    if _expanded:
-        print(f"[init] 写族哨兵 @write_console 展开：{len(_expanded)} 条用例，"
-              f"{len(write_console_tools())} 个后台写工具")
-    # 全量标签表（过滤前）：回归组的"被跳过"清点要用它（见报告 regression 块与门禁）
-    _ALL_TAGS = {c["id"]: (c.get("tags") or []) for c in cases}
-    if args.only:
-        only_ids = [s.strip() for s in args.only.split(",") if s.strip()]
-        all_ids = {c["id"] for c in cases}
-        cases = [c for c in cases if c["id"] in only_ids]
-        unknown = [s for s in only_ids if s not in all_ids]
-        print(f"[run] --only {len(only_ids)} 条：{only_ids}"
-              + (f"（⚠ 不在集合里：{unknown}）" if unknown else ""))
-    skip_ids = [s.strip() for s in args.skip_ids.split(",") if s.strip()]
-    if skip_ids:
-        known = {c["id"] for c in cases}
-        cases = [c for c in cases if c["id"] not in skip_ids]
-        unknown = [s for s in skip_ids if s not in known]
-        print(f"[run] 跳过 {len(skip_ids)} 条：{skip_ids}" + (f"（⚠ 不在集合里：{unknown}）" if unknown else ""))
-    if args.limit:
-        cases = cases[: args.limit]
-
-    # Read real identities from private configuration; never commit production user credentials.
-    import os as _os
-    _UID_CHANNELS = (("needs_admin_uid", "GOLDEN_ADMIN_UID", "admin"),
-                     ("needs_user_uid", "GOLDEN_USER_UID", "user"))
-    # Verify configured identities before running identity-dependent cases.
-    _preflight_rows: list[dict] = []
-    _identity_skipped: list[str] = []
-    _precondition_bad = False
-    for _marker, _env, _role in _UID_CHANNELS:
-        _real_uid = _os.environ.get(_env, "").strip()
-        _need_uid = [c["id"] for c in cases if c.get(_marker)]
-        if not _need_uid:
-            continue
-        if not _real_uid:
-            skip_ids += _need_uid
-            cases = [c for c in cases if not c.get(_marker)]
-            for cid in _need_uid:
-                print(f"[skip] {cid}: SKIP (needs {_env})")
-        else:
-            _state, _detail = identity_preflight.probe(int(_real_uid), role_expected=_role)
-            _preflight_rows.append({"env": _env, "uid": int(_real_uid), "role": _role,
-                                    "state": _state, "detail": _detail})
-            if _state == identity_preflight.UNUSABLE:
-                # 前置条件不满足 ⇒ 这些用例**没被评估**。摘掉 + 计入 skipped_ids
-                # （分母随之变小，`full_run` 自动为假）+ 退出码 3（见文件末尾）。
-                _precondition_bad = True
-                skip_ids += _need_uid
-                _identity_skipped += _need_uid
-                cases = [c for c in cases if not c.get(_marker)]
-                print(f"[precondition] ⚠ {_env}={_real_uid} 不可用：{_detail}")
-                print(f"[precondition] ⇒ {len(_need_uid)} 条真身份用例本轮**未评估**"
-                      f"：{_need_uid}")
-                continue
-            if _state == identity_preflight.UNKNOWN:
-                # 「不知道」不等于「不可用」：照跑（详见 identity_preflight 头注）。
-                print(f"[precondition] ⚠ {_env}={_real_uid} 在位检查读不到：{_detail}"
-                      " —— 照跑；这批用例若集体红，先看这一行")
-            for c in cases:
-                if c.get(_marker):
-                    c.setdefault("context", {})["user_id"] = int(_real_uid)
-
-    # Check source premises after identity verification.
-    cases, _premise_skipped, _premise_rows = check_premises(cases)
-    skip_ids += _premise_skipped
-    _premise_bad = bool(_premise_skipped)
-    _premise_unchecked = [r["id"] for r in _premise_rows if r["state"] == "unchecked"]
-    for _r in _premise_rows:
-        if _r["state"] == "changed":
-            print(f"[premise] ⚠ {_r['id']}：前提已变——「{_r['fact']}」现在能由 "
-                  f"{'、'.join(_r['hit'][:4])} 取得（role={_r['role'] or 'visitor'}）"
-                  f" ⇒ 本条**未评估**（改判据或改供给面清单，见报告 premise_checks）")
-    if _premise_bad:
-        print(f"[premise] ⇒ {len(_premise_skipped)} 条用例本轮**未评估**：{_premise_skipped}")
-    if _premise_unchecked:
-        # 「没报错」不等于「核过了」：清单为空的那些哨兵判不了（站内根本没有这个能力），
-        # 如实报出来，别让读的人以为它们被自动核验过。
-        print(f"[premise] {len(_premise_unchecked)} 条前提清单为空（哨兵判不了，人写的前提）："
-              f"{_premise_unchecked}")
-
-    # Check no-approval premises before evaluating a no-card expectation.
-    cases, _nopopup_skipped, _nopopup_rows = check_no_popup_premises(cases)
-    skip_ids += _nopopup_skipped
-    _nopopup_bad = bool(_nopopup_skipped)
-    for _r in _nopopup_rows:
-        if _r["state"] == "changed":
-            print(f"[no-popup] ⚠ {_r['id']}：不弹卡的理由已变（{_r['kind']}，"
-                  f"role={_r['role'] or 'visitor'}）——{_r['hit'][:3]}"
-                  " ⇒ 本条**未评估**（改判据或改声明，见报告 no_popup_checks）")
-    if _nopopup_bad:
-        print(f"[no-popup] ⇒ {len(_nopopup_skipped)} 条用例本轮**未评估**：{_nopopup_skipped}")
-    _nopopup_partial = [r["id"] for r in _nopopup_rows if r.get("partial")]
-    if _nopopup_partial:
-        # 同 premise 那条"没报错 ≠ 核过了"：capability_boundary 只核了"卡不是权限压的"
-        # 那一半，设计那一半是人写的。如实印出来。
-        print(f"[no-popup] {len(_nopopup_partial)} 条只核了「卡不是权限压的」那一半"
-              f"（设计前提是人写的）：{_nopopup_partial}")
-
-    # Keep cases without required traces explicitly unevaluated.
-    cases, _trace_skipped, _trace_rows = check_trace_premises(cases)
-    skip_ids += _trace_skipped
-    _trace_bad = bool(_trace_skipped)
-    for _r in _trace_rows:
-        print(f"[trace] ⚠ {_r['id']}：判据要读 planner.ledger_frame 事件，而这一轮"
-              f"**trace 关着**（{'、'.join(_r['keys'])}） ⇒ 本条**未评估**"
-              "（未评估 ≠ 通过；要判就开着 trace 跑——别把它读成模型退化）")
-    if _trace_bad:
-        print(f"[trace] ⇒ {len(_trace_skipped)} 条用例本轮**未评估**：{_trace_skipped}")
-
-    # Verify that named source entities still exist before judging the response.
-    cases, _entity_skipped, _entity_rows = check_entity_premises(cases, judge_docs)
-    skip_ids += _entity_skipped
-    _entity_bad = bool(_entity_skipped)
-    for _line in entity_report_lines(_entity_rows, _entity_skipped):
-        print(_line)
-
-    # Check the active corpus declaration after other eligibility checks.
-    _corpus_state, _corpus_detail, _corpus_row = check_corpus_premises(judge_docs, _prov_file)
-    _corpus_bad = _corpus_state == CORPUS_PROV_FOREIGN
-    if _corpus_bad:
-        _corpus_skipped = [c.get("id") for c in cases]
-        skip_ids += _corpus_skipped
-        cases = []
-    # 两个跑法各写一份措辞，早晚会有一个跑法说漏最要紧的那句"这不是模型退化"。
-    for _line in corpus_report_lines(_corpus_state, _corpus_detail, _corpus_row):
-        print(_line)
-    if _corpus_bad:
-        print(f"[corpus-premise] ⇒ {len(_corpus_skipped)} 条用例**全部未评估**"
-              "（未评估 ≠ 通过；退出码 3）")
-
-    # Require real-write authorization before checking live fixture readiness.
-    _REAL_WRITE_ENV = "GOLDEN_ALLOW_REAL_WRITE"
-    _need_write = [c["id"] for c in cases if c.get("needs_real_write")]
-    # 被这道闸摘掉的用例**单列一栏**（`skipped_real_write_ids`）：它们与"因为缺凭据 /
-    # 夹具不在位"被摘掉的用例不是一回事——前者是**设计如此**（真写用例本就不该自动跑，
-    # 分母从一开始就不含它），后者是分母真的变小了。混在一个 `skipped_ids` 里，
-    # 「skipped_ids 空 = 分母完整」这条口径就再也读不出来。不是豁免，是分类。
-    _write_skipped: list[str] = []
-    if _need_write and not _os.environ.get(_REAL_WRITE_ENV, "").strip():
-        skip_ids += _need_write
-        _write_skipped = list(_need_write)
-        cases = [c for c in cases if not c.get("needs_real_write")]
-        for cid in _need_write:
-            print(f"[skip] {cid}: SKIP (needs {_REAL_WRITE_ENV}=1 —— 真写用例默认不自动跑)")
-    #
-    # ② `requires_fixture`：真写用例的目标是**夹具**（见 eval/golden_fixture.py 头注），
-    #    夹具不在位时跑它，红出来的是一句误导性的"站内没有叫 X 的分类"——看着像模型退化，
-    #    其实是前置条件缺失。所以先只读地问一次该族夹具的在位情况，**不在位就响亮跳过**。
-    #    `unreadable` 与 `absent` 分开报（读不到不是没有）——但两者都不跑：不知道就不动；
-    #    账号族还多一态 `wrong_state`（行在、状态不对 ⇒ 跑出来的是一条空的绿）。
-    #    **闸的实现只有一处**（`golden_fixture.gate`）：那个逐条子进程跑法
-    if any(c.get("requires_fixture") for c in cases):
-        cases, _drop, _lines = golden_fixture.gate(cases)
-        skip_ids += _drop
-        for _ln in _lines:
-            print(_ln)
-    # An empty evaluated population must never be reported as a passing run.
-    if not cases:
-        # Report unavailable identity prerequisites distinctly from an ordinary empty selection.
-        _code = 3 if (_precondition_bad or _trace_bad or _corpus_bad or _entity_bad) else 2
-        print("[run] ⚠ 一条用例都没剩下（被 --only / --skip-ids / 身份闸 / 真写闸 / 夹具闸"
-              "/ trace 闸 / 实体闸 / 语料出处闸摘干净了）—— 这一轮**没有评测任何东西**："
-              f"空分母不是一个通过率，退出码 {_code}（不是 0）"
-              + ("；其中**语料不是这套 golden 的那一份**是主因（[corpus-premise] 那行"
-                 "有锚点对账，修法见那三行）" if _corpus_bad else "")
-              + ("；其中身份前置不可用是主因，先修前置" if _precondition_bad else "")
-              + ("；其中 trace 关着是主因（那几条用例的判据要读 trace 事件）"
-                 if _trace_bad and not _precondition_bad else ""))
-        sys.exit(_code)
-    print(f"[run] {len(cases)} 条 golden 样本（真实 LLM，约 {len(cases) * 30}s）\n")
-
-    results = []
-    failed = 0
-
-    for i, case in enumerate(cases, 1):
-        # 一条用例的全部轮次由 run_case 驱动（唯一多轮驱动），判据由 check_case 逐轮判。
-        # `g` 只用于下面的 `requires_tools` 归因（取法见 first_gold——多轮用例顶层没有
-        # `gold`，直接下标会 KeyError）。
-        g = first_gold(case)
-        t0 = time.time()
-        result = run_case(case, run_id=run_id)
-        elapsed = time.time() - t0
-        fails = check_case(case, result, docs=judge_docs)
-        ok = not fails and not result["error"]
-
-        status = "PASS" if ok else "FAIL"
-        if not ok:
-            failed += 1
-        tail = result["text"].replace("\n", " ")[:60]
-        rtag = f" ⚠打回x{result['resets']}" if result["resets"] else ""
-        print(f"[{i:>2}/{len(cases)}] {status} {case['id']:<22} {elapsed:>5.1f}s{rtag}  {tail}")
-        if not ok:
-            err = result.get("error") or ""
-            print(f"          └ {fails or f'error: {err}'}")
-            if result.get("trace"):
-                # 红条直接指着那份 trace（planner 原始决策/被剔清单/gate 打回原因/四段耗时）
-                print(f"          └ trace: {result['trace']}")
-        requires = bool(g.get("require_tool_calls") or g.get("require_tool_calls_any"))
-        results.append({
-            "id": case["id"], "tags": case.get("tags", []), "ok": ok,
-            "elapsed": round(elapsed, 1),
-            "fails": fails, "error": result["error"],
-            "commands": result["commands"], "resets": result["resets"],
-            "resets_reasons": result["resets_reasons"],
-            # Distinguish archived decision resets from user-visible terminal fallbacks.
-            "reset_scopes": result["reset_scopes"],
-            "requires_tools": requires,  # 效率指标归因（工具类 vs 非工具类）
-            # Record tool sequences and model rounds for efficiency comparisons.
-            "tool_calls": result["tool_calls"],
-            "tool_rounds": result["tool_rounds"],
-            "text": result["text"],
-            # Preserve each round's frames, receipts and timing in multi-round reports.
-            "rounds": [{"round": r["round"], "elapsed": r["elapsed"],
-                        "text": r["text"], "frames": redact_frames(r.get("frames")),
-                        "commands": r["commands"], "tool_calls": r["tool_calls"],
-                        "exec_tools": r["exec_tools"], "resets": r["resets"],
-                        "reset_scopes": r.get("reset_scopes") or [],
-                        "confirm_payloads": r.get("confirm_payloads") or [],
-                        # Record the archived ledger frame so its selected targets remain reviewable.
-                        "ledger": [{"ids": e.get("ids") or [], "rows": e.get("rows") or {},
-                                    "unread": e.get("unread") or [], "chars": e.get("chars")}
-                                   for e in (r.get("ledger_frames") or [])],
-                        # Retain parsed task-state frames in the per-round report.
-                        "task_frames": [{"id": f.get("id"), "state": f.get("state")}
-                                        for f in (r.get("task_frames") or [])],
-                        "error": r["error"], "trace": r.get("trace")}
-                       for r in (result.get("rounds") or [])],
-            # Link the exact trace used to judge this attempt.
-            "trace": result.get("trace"),
-        })
-
-    # The historical runner retains first-attempt failures separately from regression reruns.
-    _case_by_id = {c["id"]: c for c in cases}
-    _rerun_ids = [r["id"] for r in results
-                  if not r["ok"] and "regression" in (r.get("tags") or [])
-                  and r["id"] in _case_by_id]
-    if _rerun_ids:
-        print(f"\n[rerun] 回归组首跑红 {len(_rerun_ids)} 条，各重跑一次再判：{_rerun_ids}")
-    for r in results:
-        if r["id"] not in _rerun_ids:
-            r["rerun"] = None
-            r["final_ok"] = r["ok"]
-            continue
-        _case = _case_by_id[r["id"]]
-        _t0 = time.time()
-        _rr = run_case(_case, run_id=run_id, suffix="__rerun")
-        _relapsed = time.time() - _t0
-        _rfails = check_case(_case, _rr, docs=judge_docs)
-        _rok = not _rfails and not _rr["error"]
-        r["rerun"] = {
-            "ok": _rok, "elapsed": round(_relapsed, 1), "fails": _rfails,
-            "error": _rr["error"], "resets": _rr["resets"],
-            "resets_reasons": _rr["resets_reasons"],
-            "reset_scopes": _rr["reset_scopes"], "text": _rr["text"],
-            "trace": _rr.get("trace"),
-        }
-        r["final_ok"] = r["ok"] or _rok
-        print(f"[rerun] {r['id']}: 首跑红 → "
-              + ("复跑绿（按方差放行，首跑红仍在报告里）" if _rok else "复跑仍红（真 FAIL）"))
-        if _rok:
-            print(f"          └ 首跑失败项：{r['fails'] or ('error: ' + str(r['error']))}")
-            print(f"          └ 首跑 trace: {r.get('trace')}")
-            print(f"          └ 复跑 trace: {_rr.get('trace')}")
-    # 判据以**复跑后的终判**为准（门禁/通过率/复审单都用它）；首跑红数单独留着，
-    # 这样"这一夜有多少红斑被复跑吸收掉"在报告里看得见（不许静默宽恕）。
-    failed_first = sum(1 for r in results if not r["ok"])
-    failed = sum(1 for r in results if not r.get("final_ok", r["ok"]))
-    if failed != failed_first:
-        print(f"[rerun] 终判 {len(cases) - failed}/{len(cases)}（首跑红 {failed_first} 条，"
-              f"其中 {failed_first - failed} 条复跑绿）")
-
-    # Write both the latest report and uniquely named run archives.
-    os.makedirs("eval/report", exist_ok=True)
-    _REPORTS_DIR = golden_runtime.REPORTS_DIR
-    os.makedirs(_REPORTS_DIR, exist_ok=True)
-    # Request latency samples are separate from per-stage trace timings.
-    latencies = sorted(r["elapsed"] for r in results)
-    def _pct(lats: list, p: float) -> float:
-        if not lats:
-            return 0.0
-        return lats[min(len(lats) - 1, int(p / 100 * len(lats)))]
-    # Report rounds and tool/model calls alongside task success.
-    _wr = [r for r in results if r["resets"] > 0]
-    _tc = [r for r in results if r["requires_tools"]]
-    _first_ok = [r for r in _tc if r["resets"] == 0]
-    eff = {
-        "resets_total": sum(r["resets"] for r in results),
-        "cases_with_resets": len(_wr),
-        "cases_with_resets_ids": [r["id"] for r in _wr],
-        "tool_required_total": len(_tc),
-        "tool_required_first_try_ok": len(_first_ok),  # resets==0 即首轮就调对
-        "tool_required_first_try_pct": round(100 * len(_first_ok) / len(_tc), 1) if _tc else 100.0,
-    }
-    # Compare tool sequences and rounds without treating stochastic ordering as correctness.
-    _hist: dict = {}
-    for r in results:
-        for t in r.get("tool_calls", []):
-            _hist[t] = _hist.get(t, 0) + 1
-    _multi = [r["id"] for r in results if r.get("tool_rounds", 0) >= 2]
-    _dup = [r["id"] for r in results
-            if sum(1 for t in r.get("tool_calls", []) if t in ("rag_search", "search_notes")) >= 2]
-    _tcalls = [len(r.get("tool_calls", [])) for r in results]
-    efficiency = {
-        "tool_calls_total": sum(_tcalls),
-        "tool_calls_avg": round(sum(_tcalls) / len(_tcalls), 2) if _tcalls else 0.0,
-        "tool_calls_by_name": dict(sorted(_hist.items(), key=lambda kv: -kv[1])),
-        "tool_rounds_total": sum(r.get("tool_rounds", 0) for r in results),
-        "cases_multi_tool_rounds": len(_multi),
-        "cases_multi_tool_rounds_ids": _multi,
-        "cases_repeat_search": len(_dup),
-        "cases_repeat_search_ids": _dup,
-    }
-    # Report fixed-regression failures separately from sampled capability cases.
-    _reg = [r for r in results if "regression" in (r.get("tags") or [])]
-    # 硬判用**复跑后的终判**；首跑红复跑绿的那批单独成 flaked_ids（放行但必须有人看，
-    # 见上面重跑一节）。列表里同时留着首跑红数（failed_first_run）供对账。
-    _reg_bad = [r["id"] for r in _reg if not r.get("final_ok", r["ok"])]
-    _reg_flaked = [r["id"] for r in _reg if not r["ok"] and r.get("final_ok")]
-    # 被 --skip-ids/--only 摘掉的回归用例：组内分母随之变小，如实报出来（不许静默豁免）
-    _reg_skipped = [s for s in skip_ids if "regression" in _ALL_TAGS.get(s, [])]
-    # Delegate archived-run threshold calculation to landing_gate.
-    _landing = landing_gate.verdict(results, _reg_bad)
-    # 第一条真正落盘的 trace（用例顺序 = 跑的顺序，取第一条即为目录的实证）：
-    # 没开 trace、或全程一条都没写成功 ⇒ None（报告里如实写 None，不假装有目录）。
-    _first_trace = next((r.get("trace") for r in results if r.get("trace")), None)
-    # Only complete runs may replace the full-run report.
-    _is_full_run = is_full_run(only=args.only, limit=args.limit,
-                               skip_ids_arg=args.skip_ids,
-                               skipped_ids=skip_ids,
-                               design_skipped_ids=_write_skipped, golden_file=args.golden)
-    report = {
-        "ts": time.strftime("%Y-%m-%d %H:%M:%S"), "golden_file": args.golden,
-        # 语料快照（变更点基线）：语料/期望集变化 → expected_hash 变化，数字与
-        # 旧基线不可比是预期（变更即新基线），快照字段用于对账变更内容
-        "corpus": corpus,
-        "engine": golden_runtime.ENGINE,
-        "total": len(cases), "passed": len(cases) - failed, "failed": failed,
-        # Keep the first-attempt failure count distinct from the post-rerun terminal count.
-        "failed_first_run": failed_first,
-        "pass_rate": round((len(cases) - failed) / len(cases), 4) if cases else 0.0,
-        # Report Wilson intervals with point estimates, preserving sample uncertainty.
-        "pass_rate_ci95": wilson_ci(len(cases) - failed, len(cases)),
-        # Report per-tag failures; an overall mean can conceal a failed domain.
-        "by_tag": by_tag_stats(results, _ALL_TAGS),
-        # Explicit selection and unexpected exclusions make the run partial.
-        "full_run": _is_full_run,
-        "skipped_ids": skip_ids,
-        # Record design-declared write exclusions separately from unavailable prerequisites.
-        "skipped_real_write_ids": _write_skipped,
-        # Record prerequisite exclusions; they are unevaluated, not successful cases.
-        "skipped_identity_ids": _identity_skipped,
-        "identity_preflight": _preflight_rows,
-        # Record changed source premises separately from unchecked human declarations.
-        "skipped_premise_ids": _premise_skipped,
-        "premise_checks": _premise_rows,
-        # List cases whose no-confirmation premise no longer holds.
-        "skipped_no_popup_ids": _nopopup_skipped,
-        "no_popup_checks": _nopopup_rows,
-        # List cases excluded for missing trace evidence.
-        "skipped_trace_ids": _trace_skipped,
-        "trace_checks": _trace_rows,
-        # List cases excluded because named source entities are absent.
-        "skipped_entity_ids": _entity_skipped,
-        "entity_checks": _entity_rows,
-        # Retain corpus provenance findings for later source verification.
-        "corpus_provenance": _corpus_row,
-        "latency_s": {
-            "count": len(latencies),
-            "min": round(_pct(latencies, 0), 1),
-            "p50": round(_pct(latencies, 50), 1),
-            "p95": round(_pct(latencies, 95), 1),
-            "max": round(_pct(latencies, 100), 1),
-        },
-        # Keep efficiency detail and aggregate metrics under distinct report keys.
-        "efficiency": eff,
-        "plan_efficiency": efficiency,
-        "regression": {
-            "total": len(_reg),
-            "passed": len(_reg) - len(_reg_bad),
-            # Report fixed-regression uncertainty without replacing its strict per-case requirements.
-            "pass_rate_ci95": wilson_ci(len(_reg) - len(_reg_bad), len(_reg)),
-            "failed_ids": _reg_bad,
-            "all_passed": not _reg_bad,
-            # Retain the identities of first-attempt failures even when a rerun passes.
-            "flaked_ids": _reg_flaked,
-            "skipped_ids": _reg_skipped,
-        },
-        # Report the archived threshold assessment separately from detailed case output.
-        "landing": _landing,
-        # Record the actual evaluation trace directory, or None when no traces were written.
-        "trace_run": run_id if _first_trace else None,
-        "trace_dir": os.path.dirname(_first_trace) if _first_trace else None,
-        "cases": results,
-    }
-    # Only a full run may replace the baseline; partial runs remain archived.
-    if _is_full_run:
-        with open(REPORT_FILE, "w", encoding="utf-8") as f:
-            json.dump(report, f, ensure_ascii=False, indent=1)
-    # Reserve a unique archive name atomically and pair it with the review report.
-    with report_archive.open_archive(_REPORTS_DIR) as (archive, f):
-        ts_str = os.path.splitext(os.path.basename(archive))[0]
-        json.dump(report, f, ensure_ascii=False, indent=1)
-
-    # Export failed cases for review without reclassifying their outcomes.
-    review_path = ""
-    if failed or _reg_flaked or _precondition_bad or _premise_bad:
-        review_path = f"eval/report/review_{ts_str}.md"
-        case_by_id = {c["id"]: c for c in cases}
-        with open(review_path, "w", encoding="utf-8") as f:
-            f.write(f"# golden FAIL 复审单 {report['ts']}\n\n")
-            f.write(f"{failed}/{len(cases)} 条 FAIL"
-                    + (f"（首跑红 {failed_first} 条，另 {len(_reg_flaked)} 条复跑绿后放行）"
-                       if failed != failed_first else "")
-                    + "。逐条判定并勾选（假失败当轮修判据，"
-                      "真 FAIL 允许挂着并在下方写原因）：\n\n")
-            # Place the threshold assessment before the detailed review section.
-            f.write(f"> **落地判定**：{landing_gate.describe(_landing)}\n"
-                    f"> 慢性红榜（按贡献的红次数排的优化工单）："
-                    f"`.venv/bin/python eval/landing_gate.py --red-rank`\n\n")
-            # Show identity prerequisite failures before their downstream consequences.
-            if _precondition_bad:
-                f.write("> ⚠ **身份前置不可用，{n} 条真身份用例本轮未评估（退出码 3）**："
-                        .format(n=len(_identity_skipped))
-                        + "、".join(f"`{i}`" for i in _identity_skipped)
-                        + "\n> 明细：" + "；".join(
-                            f"{r['env']}={r['uid']}（{r['state']}）{r['detail']}"
-                            for r in _preflight_rows
-                            if r["state"] == identity_preflight.UNUSABLE)
-                        + "\n> 先修前置再读下面任何一条红——模型那半这轮根本没被测到。\n\n")
-            # Show changed source premises separately from model-quality failures.
-            if _premise_bad:
-                f.write("> ⚠ **事实前提已变，{n} 条用例本轮未评估（退出码 3）**："
-                        .format(n=len(_premise_skipped))
-                        + "、".join(f"`{i}`" for i in _premise_skipped)
-                        + "\n> 明细：\n"
-                        + "".join(
-                            f">   · `{r['id']}`：原以为拿不到的「{r['fact']}」，"
-                            f"现在 {('、'.join(r['hit'][:4]))} 取得到"
-                            f"（role={r['role'] or 'visitor'}）\n"
-                            for r in _premise_rows if r["state"] == "changed")
-                        + "> 这两条路都行，但**必须选一条**：① 前提真没了 ⇒ 改判据（照"
-                          "`note_traffic_denied_visitor` 那次：反编造从形状换成供给，"
-                          "断言「排行出自本轮真读过的帧」）；② 只是清单没跟上 ⇒ 改"
-                          "`premise_absent.suppliers`。**别把它读成模型退化**——"
-                          "这一轮这些用例根本没跑。\n\n")
-            # Report invalid no-card premises as dataset maintenance findings.
-            if _nopopup_bad:
-                f.write("> ⚠ **「不该弹卡」的理由已变，{n} 条用例本轮未评估（退出码 3）**："
-                        .format(n=len(_nopopup_skipped))
-                        + "、".join(f"`{i}`" for i in _nopopup_skipped)
-                        + "\n> 明细：\n"
-                        + "".join(
-                            f">   · `{r['id']}`（{r['kind']}，role={r['role'] or 'visitor'}）："
-                            f"{'、'.join(str(h) for h in r['hit'][:3])}\n"
-                            for r in _nopopup_rows if r["state"] == "changed")
-                        + "> 修法二选一（**先查设计是不是动过**）：① 理由真没了 ⇒ 把这条用例"
-                          "改判（例如审核族 20261001 那次：「不许弹卡」改成「必须弹卡 + 卡面"
-                          "印台账编号与现状」）；② 只是声明没跟上 ⇒ 改 `premise_no_popup`。"
-                          "**别把它读成模型退化**——这一轮这些用例根本没跑。\n\n")
-            # 回归组红单列在最前：这些不是"允许波动"的能力题，门禁已按硬判退出码 1
-            if _reg_bad:
-                f.write("> ⚠ **回归组（regression）FAIL，本轮不得放行**："
-                        + "、".join(f"`{i}`" for i in _reg_bad)
-                        + f"\n> 回归组要求 100% 通过（{len(_reg) - len(_reg_bad)}/{len(_reg)}），"
-                          "不受任何档位放宽；假失败当轮修判据，真 FAIL 当轮修行为。\n\n")
-            # Keep first-fail/rerun-pass cases visible for investigation.
-            if _reg_flaked:
-                f.write("> ⚠ **复跑才绿的回归用例（首跑红、复跑绿，已按方差放行）**："
-                        + "、".join(f"`{i}`" for i in _reg_flaked)
-                        + "\n> 一条用例两次结论不同，只有两种解释：判据太脆（该修判据），"
-                          "或行为本身是概率性的（该修行为）。参照下方首跑失败项与两份 trace"
-                          "（首跑 / 复跑）逐条定性——不要把这一节当成「已经过了」。\n\n")
-            # Report recurring per-case failures from full-run history.
-            _chronic = landing_gate.chronic_map()
-            for r in results:
-                if r["ok"] and not r.get("rerun"):
-                    continue
-                case = case_by_id.get(r["id"], {})
-                f.write(f"## {r['id']}\n\n")
-                _k_n = _chronic.get(r["id"])
-                f.write("- 历史（全量跑的终判口径）："
-                        + (f"**红 {_k_n[0]}/{_k_n[1]} 次 = {_k_n[0] / _k_n[1]:.0%}**"
-                           "（慢性红 ⇒ 先怀疑判据或行为，别当偶发）" if _k_n
-                           else "**从未红过**（首次 ⇒ 更可能是这一轮的新变化）")
-                        + "；完整红榜 `.venv/bin/python eval/landing_gate.py --red-rank`\n")
-                f.write(f"- 失败项：{r['fails'] or ('error: ' + str(r['error']))}\n")
-                f.write(f"- 打回：{r['resets']}（原因 {r['resets_reasons'] or '无'}）\n")
-                f.write(f"- 首跑 trace: {r.get('trace')}\n")
-                if r.get("rerun"):
-                    rr = r["rerun"]
-                    f.write(f"- **复跑：{'绿（按方差放行）' if rr['ok'] else '仍红'}**"
-                            f"（{rr['elapsed']}s，打回 {rr['resets']}，"
-                            f"失败项 {rr['fails'] or '无'}）\n")
-                    f.write(f"- 复跑 trace: {rr.get('trace')}\n")
-                f.write("\n**判据（gold）**：\n\n```json\n")
-                f.write(json.dumps(case.get("gold", {}), ensure_ascii=False, indent=1))
-                f.write("\n```\n\n**模型实际输出（首跑）**：\n\n")
-                f.write((r["text"] or "（空）") + "\n\n")
-                if r.get("rerun"):
-                    f.write("**模型实际输出（复跑）**：\n\n")
-                    f.write((r["rerun"]["text"] or "（空）") + "\n\n")
-                f.write("- [ ] 假失败（判据缺覆盖）→ 修订判据\n")
-                f.write("- [ ] 真 FAIL（行为错误）→ 原因：\n\n---\n\n")
-
-    print(f"\n=== 汇总：{len(cases) - failed}/{len(cases)} 通过"
-          + (f"（首跑红 {failed_first} 条，其中 {failed_first - failed} 条复跑绿）"
-             if failed != failed_first else "") + " ===")
-    print(f"耗时基线: min={report['latency_s']['min']}s P50={report['latency_s']['p50']}s "
-          f"P95={report['latency_s']['p95']}s max={report['latency_s']['max']}s")
-    print(f"效率基线: resets 总={eff['resets_total']} 用例={eff['cases_with_resets']}"
-          f"（{eff['cases_with_resets_ids']}）")
-    print(f"首轮即调: 工具类 {eff['tool_required_first_try_ok']}/{eff['tool_required_total']}"
-          f" = {eff['tool_required_first_try_pct']}%（resets==0 即首轮调用成功）")
-    # Report model rounds and repeated retrieval as efficiency evidence.
-    print(f"效率基线: 工具调用 {efficiency['tool_calls_total']}"
-          f"（均 {efficiency['tool_calls_avg']}/例）规划轮 {efficiency['tool_rounds_total']}"
-          f" 多轮绕圈例 {efficiency['cases_multi_tool_rounds']}{efficiency['cases_multi_tool_rounds_ids']}"
-          f" 重复检索例 {efficiency['cases_repeat_search']}{efficiency['cases_repeat_search_ids']}")
-    # Keep fixed regressions separate from variable capability samples.
-    print(f"回归组: {len(_reg) - len(_reg_bad)}/{len(_reg)}"
-          + (f"  ⚠ 红：{_reg_bad}（回归组要求 100%，不受任何档位放宽）" if _reg_bad else "")
-          + (f"  ⚠ 复跑才绿：{_reg_flaked}（首跑红，已按方差放行——逐条见复审单）"
-             if _reg_flaked else "")
-          + (f"  ⚠ 被跳过：{_reg_skipped}（组内分母随之变小）" if _reg_skipped else ""))
-    if _is_full_run:
-        print(f"报告: {REPORT_FILE}")
-    else:
-        print(f"报告: （**非全量跑**，未覆盖 {REPORT_FILE}）")
-    print(f"留档: {archive}")
-    # Apply evaluation trace retention after the report is recorded.
-    if golden_trace.enabled():
-        if _first_trace:
-            print(f"trace: {os.path.dirname(_first_trace)}（{len(results)} 条用例）")
-        else:
-            print("trace: ⚠ 一条都没写成功（看上面有没有 start/finish 的报错）")
-        _pruned = golden_trace.prune(args.keep_traces)
-        if _pruned:
-            print(f"trace 清理: 删掉 {len(_pruned)} 个旧目录（{_pruned[0]} … {_pruned[-1]}）")
-    if review_path:
-        print(f"复审单: {review_path}")
-    # Keep fixed-regression and sampled-population judgments independent.
-    pass_rate = (len(cases) - failed) / len(cases) if cases else 0.0
-    _lo, _hi = report["pass_rate_ci95"]
-    print(f"通过率: {pass_rate:.3f}（Wilson 95% 区间 {_lo:.3f}–{_hi:.3f}；"
-          f"跳过 {len(skip_ids)} 条）")
-    print(f"落地判定: {landing_gate.describe(_landing)}")
-    # Read full-run history for repeated-target evidence.
-    if _is_full_run:
-        _hint = landing_gate.raise_hint()
-        if _hint["ready"]:
-            print(f"  ★ {_hint['reason']}（改 `eval/landing_gate.py` 的 ENTRY）")
-    if args.min_pass_rate is not None:
-        print(f"  ⚠ 显式传了 --min-pass-rate {args.min_pass_rate:.3f} ⇒ 本轮按**点估计**口径判"
-              f"（两层门禁本轮不生效；夜间的门禁不传它）")
-    # Suppress tiny tag groups in console output, while retaining their report data.
-    _weak = [(t, b) for t, b in report["by_tag"].items()
-             if b["total"] >= 3 and b["failed_ids"]]
-    if _weak:
-        print("弱项 tag: " + "；".join(
-            f"{t} {b['passed']}/{b['total']}（区间 {b['ci95'][0]:.2f}–{b['ci95'][1]:.2f}）"
-            f" 红={b['failed_ids']}" for t, b in _weak))
-    if _reg_flaked:
-        # 放行了但绝不静默：这一族是"判据太脆或行为概率性"的候选，出声才有人看
-        print(f"⚠ 回归组有 {len(_reg_flaked)} 条**首跑红、复跑绿**：{_reg_flaked}"
-              f" —— 门禁按方差放行，但首跑红已记入报告（failed_first_run={failed_first}）"
-              f"与复审单：{review_path or REPORT_FILE}")
-    # Unavailable identity prerequisites take precedence over sample-rate judgments.
-    if _precondition_bad or _premise_bad or _nopopup_bad or _trace_bad or _entity_bad:
-        # A 401 does not distinguish missing accounts, frozen accounts and revoked credentials.
-        if _precondition_bad:
-            print(f"⚠ 身份前置不可用（{len(_identity_skipped)} 未评估）⇒ 退出码 3："
-                  "账号已被删 ⇒ 跑 scripts/migration/test_accounts_restore_20261001.sql 重建；"
-                  "被冻结 ⇒ 解冻；改过密码 ⇒ 轮换口令；uid 角色不符 ⇒ 换一个角色相符的 uid。"
-                  "修好后重跑，别把它读成通过率")
-        if _premise_bad:
-            print(f"⚠ 事实前提已变（{len(_premise_skipped)} 未评估）⇒ 退出码 3："
-                  f"{_premise_skipped} —— 这**不是**模型退化，是这些用例的前提没了。"
-                  "逐条见报告 `premise_checks` 与复审单；修法二选一："
-                  "① 前提真没了 ⇒ 把判据从'拿不到'改成供给侧断言；"
-                  "② 只是清单没跟上 ⇒ 改用例的 premise_absent.suppliers")
-        if _nopopup_bad:
-            print(f"⚠ 禁卡的理由变了（{len(_nopopup_skipped)} 未评估）⇒ 退出码 3："
-                  f"{_nopopup_skipped} —— 这些用例断言'这一轮没有确认卡'，而**卡之所以不该"
-                  "出现的那条理由现在不成立了**（20261001 那次就是这条：设计把审核族"
-                  "改成恒弹卡，判据还写着'不许弹'，红色的 2.5 小时里判的是判据自己）。"
-                  "逐条见报告 `no_popup_checks`；修法二选一：① 理由真没了 ⇒ 这条用例改判"
-                  "（如'不该弹卡'改成'必须弹卡 + 卡面印了什么'）；② 只是声明没跟上 ⇒ 改"
-                  " `premise_no_popup`")
-        if _trace_bad:
-            print(f"⚠ trace 关着（{len(_trace_skipped)} 未评估）⇒ 退出码 3："
-                  f"{_trace_skipped} —— 这些用例的判据要读 planner.ledger_frame **trace "
-                  "事件**，而这一轮 `--no-trace` / `GOLDEN_NO_TRACE=1` 把它关了 ⇒ 那几条"
-                  "一条都判不了。**这不是模型退化**（20261004 早上 4 次 `--only` 重跑就是"
-                  "这么被误判成'待办台账没摆上桌'的）。去掉那个开关重跑即可")
-        if _entity_bad:
-            print(f"⚠ 判据点名的实体已不在公开面上（{len(_entity_skipped)} 未评估）"
-                  f"⇒ 退出码 3：{_entity_skipped} —— 这些用例的判据锚在某篇文章上，而那篇"
-                  "**已经不在公开面上了**（改成 private / 删了 / 改了名）。**这不是模型"
-                  "退化**：模型如实说'站内没有它'，判据却把它读成'没去读'——判的是判据自己。"
-                  "逐条见报告 `entity_checks`；修法二选一：① 换锚到一件还在的实体（连带把"
-                  "词表式负断言换成形态锁）；② 这条用例测的事真的没了 ⇒ 退役它（分母变了"
-                  "要写在明处）")
-        sys.exit(3)
-    if failed == 0:
-        sys.exit(0)
-    if _reg_bad:
-        print(f"回归组 FAIL（{len(_reg) - len(_reg_bad)}/{len(_reg)}）：{_reg_bad}"
-              f" → 退出码 1（回归组要求 100%，不按通过率放行）")
-        sys.exit(1)
-    # Explicit point-estimate thresholds and Wilson thresholds are different assessment modes.
-    _s = _landing["sampled"]
-    if args.min_pass_rate is not None:
-        if pass_rate >= args.min_pass_rate:
-            print(f"⚠ {failed} 条 FAIL，但点估计达标（{pass_rate:.3f} ≥ "
-                  f"{args.min_pass_rate:.3f}，显式口径）→ 退出码 0"
-                  f"（逐条见 {review_path or REPORT_FILE}）")
-            sys.exit(0)
-        print(f"通过率 {pass_rate:.3f} < 门禁 {args.min_pass_rate:.3f}"
-              f"（显式点估计口径）→ 退出码 1")
-        sys.exit(1)
-    if _s["underpowered"]:
-        print(f"⚠ 采样层样本不足（{_s['passed']}/{_s['total']}，判 {_s['entry']} 至少要 "
-              f"{_s['min_n_for_entry']} 条）⇒ 采样层不判、不置红（点估计 {_s['point']:.3f} "
-              f"够得上地板 ⇒ 够不上「小样本整片红」那条：`point < floor` 时是退出码 1）；"
-              f"{failed} 条红逐条见 {review_path or REPORT_FILE}")
-        sys.exit(0)
-    # Report user-visible terminal fallbacks separately from internal recovery activity.
-    _h = _landing["harm"]
-    if _h["state"] == "incident":
-        print(f"用户可见兜底 {_h['hit']}/{_h['rounds']} 轮（{_h['rate']:.1%} ≥ 事故线 "
-              f"{_h['floor']:.0%}）：用户收到的是那句兜底道歉 ⇒ 退出码 1（这是事故，不是"
-              f"爬坡没到档）；用例 {_h['ids'][:5]}，逐条见 {review_path or REPORT_FILE}")
-        sys.exit(1)
-    if _s["state"] == "collapse":
-        # 措辞分两种：样本量够时看**下界**（比已知最差的一夜还差 = 事故）；样本太少时
-        # 下界本身没有证明力，判红的依据是**点估计**都低于地板（整片红）。两者都是
-        # 退出码 1，但说错依据会把人带去查错地方——小样本塌方要么是这批用例全废、
-        # 要么是接线断了，跟"离目标还差多少"无关。
-        _why = ("红率已高过正常波动一整档（实测噪声带最差 15 红/11.7%）⇒ 这是事故，"
-                "不是爬坡没到档"
-                if _s.get("collapse_basis") == "lower" else
-                f"样本只有 {_s['total']} 条，**点估计** {_s['point']:.3f} 已低于地板"
-                f" ⇒ 小样本也整片红，不是样本量的问题")
-        print(f"采样层低于**地板** {_s['floor']}（{_s['passed']}/{_s['total']}，"
-              f"点估计 {_s['point']:.3f}，下界 {_s['lower']:.3f} 上界 {_s['upper']:.3f}）"
-              f"→ 退出码 1：{_why}（档位 {_s['entry']} / 目标 {_s['target']}）；"
-              f"逐条见 {review_path or REPORT_FILE}")
-        sys.exit(1)
-    # 到这里：采样层**没有事故**（下界在地板之上）。没到档位只报不置红——档位是爬坡台阶，
-    # 拿它当夜间报警会把"离目标还差多少"变成"出事了"，红就贬值了（见 landing_gate）。
-    print(f"⚠ {failed} 条 FAIL，但采样层下界 {_s['lower']:.3f} ≥ 地板 {_s['floor']}"
-          f"（{_s['state']}，档位 {_s['entry']} / 目标 {_s['target']}，"
-          f"还差 {_landing['distance_to_target']:.3f}）→ 退出码 0"
-          f"（逐条见 {review_path or REPORT_FILE}；红榜："
-          f".venv/bin/python eval/landing_gate.py --red-rank）")
-    # 企业落地的另两条：**只报不置红**（面判据要跨夜聚合才有证明力，判决在 readiness）。
-    print(f"  · 用户可见兜底（scope=text）{_h['hit']}/{_h['rounds']} 轮 = {_h['rate']:.2%}"
-          f"（黄 ≥{_h['hint']:.0%}、红 ≥{_h['floor']:.0%}）")
-    _dw = _landing["domains"]["weakest"]
-    if _dw:
-        print("  · 本轮最弱的技能面：" + "、".join(
-            f"{r['tag']} {r['passed']}/{r['rounds']}=%.2f" % r["point"] for r in _dw[:3])
-            + "（单夜小面没有证明力；面判据见 `.venv/bin/python eval/landing_gate.py --readiness`）")
-    sys.exit(0)
-
-
-if __name__ == "__main__":
-    try:
-        main()
-    finally:
-        close_agent()
