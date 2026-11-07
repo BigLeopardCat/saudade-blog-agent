@@ -55,7 +55,8 @@ def test_standard_todo_state_survives_approval_reconstruction_and_resets_for_new
     prepared = run(first, "收藏文章19，确认后核对。")
     assert not state["writes"]
     from agent.runtime.task_planning import SYSTEM_PROMPT
-    assert SYSTEM_PROMPT not in str(first_model.review_prompts)
+    assert SYSTEM_PROMPT in str(first_model.review_prompts)
+    assert first_model.review_prompts[0][0] == first_model.prompts[0][0]
     grant = confirm.verify(prepared.execution["pending_confirm"]["token"], 7, 42)
     next_model = Model(AIMessage(content="", tool_calls=[call("inspect_plan", "inspect")]),
                        AIMessage(content="", tool_calls=[call("write_todos", "done", todos=[{
@@ -171,6 +172,7 @@ def test_same_agent_delivers_read_facts_after_preparation_without_execution_or_s
             assert budget.model_calls == len(requests) == 5
             assert requests[-1]["tool_choice"] == "none"
             assert requests[-2]["tools"] == requests[-1]["tools"]
+            assert all(row["messages"][0] == requests[0]["messages"][0] for row in requests)
             assert result.execution["pending_confirm"]["token"] not in str(requests)
             assert "N-417" not in str(requests[2]["messages"])
             assert all(code in str(requests[-1]["messages"]) for code in ("N-417", "R-862"))

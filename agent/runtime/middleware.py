@@ -239,9 +239,7 @@ class SessionMiddleware(AgentMiddleware):
         selected_model = _model_name(model)
         reviewing = bool(session.outcome and (
             session.outcome.execution or {}).get("pending_confirm"))
-        from agent.runtime.tool_state import model_menu
-
-        menu = model_menu(session, request.tools, prompt, model)
+        menu = session.menu
         trace_context.tools(menu, session.traced_contracts)
         started, response, invoked = time.monotonic(), None, False
         error = None
