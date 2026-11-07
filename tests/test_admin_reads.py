@@ -84,7 +84,8 @@ def test_admin_menu_visibility_follows_verified_authority(role, source, uid, vis
         assert set(domains["admin_moderation"]) == {
             "get_moderation_status", "list_admin_board", "list_admin_comments"}
         assert set(domains["admin_reports"]) == ADMIN_READ_TOOLS
-        assert set(domains["admin_account_actions"]) == {"list_accounts"}
+        assert set(domains["admin_account_actions"]) == {
+            "list_accounts", "get_account_action_eligibility"}
 
 
 @pytest.mark.parametrize(

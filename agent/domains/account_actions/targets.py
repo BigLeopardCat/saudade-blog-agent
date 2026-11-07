@@ -23,6 +23,7 @@ class Role(StrEnum):
 Deadline = Annotated[StrictStr, Field(pattern=r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}$")]
 FOREVER = "9999-12-31T23:59:59"
 PATH = "/api/protected/account-actions"
+Action = Literal["freeze", "unfreeze", "set_role", "mute", "unmute"]
 
 
 class Target(BaseModel):
@@ -33,7 +34,7 @@ class Target(BaseModel):
 
 class Intent(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    action: Literal["freeze", "unfreeze", "set_role", "mute", "unmute"]
+    action: Action
     target: Target
     role: Role | None = None
     mutedUntil: Deadline | None = None

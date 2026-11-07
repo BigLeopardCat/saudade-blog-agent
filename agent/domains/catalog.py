@@ -75,6 +75,8 @@ def list_accounts(config: RunnableConfig, username: Username | None = None,
     For ambiguous matches show each ID, login username and nickname to distinguish candidates.
     Returns totals, public admin fields and quotas (quotaLimit=0: unlimited turns).
     Excludes superadmin/unknown roles and credentials; empty means no match in this scope.
+    For a known ID outside this catalog, get_account_action_eligibility checks an operation
+    without assuming absence or requiring a mute duration.
     """
     if account_id is not None:
         page, limit = 1, 1

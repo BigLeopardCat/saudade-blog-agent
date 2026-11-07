@@ -138,6 +138,26 @@ class OnlineTransport:
         if row.imageKey != image_id:
             raise EvaluationError("gallery fixture identity mismatch")
 
+    def check_account_eligibility_fixture(self, expected):
+        """A policy-specific case requires the current backend to certify its premise."""
+        from agent.domains.account_actions.eligibility import checked
+
+        params = {key: expected[key] for key in ("accountId", "action", "role")
+                  if expected[key] is not None}
+        response = self.client.get(
+            self.blog_url + "/api/protected/account-actions/eligibility", params=params,
+            headers=self.host_headers(self.uid))
+        response.raise_for_status()
+        body = response.json()
+        value = body.get("data") if isinstance(body, dict) and body.get("code") == 200 else None
+        try:
+            actual = checked(value, expected["accountId"], expected["action"], expected["role"])
+        except ValueError as exc:
+            raise EvaluationError("account eligibility fixture cannot be verified") from exc
+        if any(actual[key] != wanted for key, wanted in expected.items()):
+            raise EvaluationError(
+                "account eligibility fixture no longer matches its declared policy")
+
     def check_quota_fixture(self, account_id):
         from agent.domains.quota_actions.targets import state
 

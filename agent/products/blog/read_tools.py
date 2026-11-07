@@ -16,7 +16,7 @@ ADMIN_READ_TOOLS = frozenset({"get_server_status", "get_service_health", "get_us
                               "get_note_stats", "get_note_periods"})
 
 CATALOG_READ_TOOLS = frozenset({"list_admin_notes"})
-ACCOUNT_READ_TOOLS = frozenset({"list_accounts"})
+ACCOUNT_READ_TOOLS = frozenset({"list_accounts", "get_account_action_eligibility"})
 
 QUEUE_READ_TOOLS = frozenset({"list_quota_requests", "list_dashboard_todos"})
 
@@ -72,8 +72,10 @@ def catalog_tools() -> dict:
 
 def account_tools() -> dict:
     from agent.domains import catalog
+    from agent.domains.account_actions.eligibility import get_account_action_eligibility
 
-    return _domain_tools((catalog.list_accounts,), SCOPE_ADMIN_CONSOLE)
+    return _domain_tools((catalog.list_accounts, get_account_action_eligibility),
+                         SCOPE_ADMIN_CONSOLE)
 
 
 def queue_tools() -> dict:
