@@ -5,7 +5,13 @@ import uuid
 from pydantic import BaseModel, ConfigDict, Field, StrictStr
 
 from agent.principal import Principal
-from agent.scheduling.models import Definition, WriteSchedule, time_description, utc_now
+from agent.scheduling.models import (
+    Definition,
+    WriteSchedule,
+    time_description,
+    timing_facts,
+    utc_now,
+)
 from agent.scheduling.service import require_admin
 
 
@@ -174,6 +180,7 @@ def propose(principal: Principal, cid, executor, spec, question, target, schedul
         {"tool": "create_automation", "args": args},
         executor="automations",
         target=target,
+        timing=timing_facts(definition),
         question=f"时间：{time_description(definition)}\n{details}\n"
         "确认后到期自动执行以上变更；目标状态变化时停止并通知你，不擅自改写计划。",
     )

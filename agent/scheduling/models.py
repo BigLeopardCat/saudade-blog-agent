@@ -230,3 +230,16 @@ def time_description(definition):
             "%Y-%m-%d %H:%M:%S %z"
         )
     return f"cron {definition.cron} ({definition.timezone})"
+
+
+def timing_facts(definition):
+    """Expose trigger semantics without predicting an approval or next run."""
+    return {
+        "basis": ("after_approval" if definition.delay_seconds is not None else
+                  "absolute" if definition.run_at is not None else "cron"),
+        "delay_seconds": definition.delay_seconds,
+        "run_at": (definition.run_at.astimezone(ZoneInfo(definition.timezone)).isoformat()
+                   if definition.run_at is not None else None),
+        "cron": definition.cron,
+        "timezone": definition.timezone,
+    }

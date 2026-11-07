@@ -46,6 +46,9 @@ def prepared(call, proposal, todos):
         "tool_execution": "disabled_until_decision",
         "result": proposal["execution"]["pending_confirm"].get("q", proposal["reply"]),
     }
+    facts = proposal["execution"]["pending_confirm"].get("preparation_facts")
+    if facts is not None:
+        visible["preparation_facts"] = facts
     pending = [item for item in todos if item["status"] != "completed"]
     if pending:
         visible["remaining_work_not_execution_evidence"] = pending

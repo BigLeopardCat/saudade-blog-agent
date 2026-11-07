@@ -22,6 +22,7 @@ from agent.scheduling.models import (
     Identifier,
     parse_time,
     time_description,
+    timing_facts,
 )
 from tools.result import ok
 
@@ -134,6 +135,7 @@ def tools(service, can_prepare):
             executor="automations",
             question=question,
             target=title,
+            timing=timing_facts(definition),
         )
 
     @tool(return_direct=True)

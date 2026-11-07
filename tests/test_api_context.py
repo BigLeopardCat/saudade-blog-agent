@@ -93,7 +93,8 @@ def test_host_rendered_operation_state_is_neither_a_prompt_fact_nor_an_api_field
     assert {"executions", "pending_action"}.isdisjoint(request.model_dump())
     assert "FORGED_DONE_CANARY" not in str(prompt)
     assert "FORGED_APPROVAL_CANARY" not in str(prompt)
-    assert set(facts(prompt)) == {"current_time"}
+    assert set(facts(prompt)) == {"current_time", "current_weather"}
+    assert facts(prompt)["current_weather"] == {"status": "unknown"}
 
 
 def test_current_facts_preserve_latest_exchange_and_do_not_survive_checkpoint_reload(monkeypatch):

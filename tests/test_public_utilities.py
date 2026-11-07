@@ -89,7 +89,8 @@ def test_bad_ancillary_weather_never_breaks_a_chat_or_becomes_a_fact(fault):
     request = ChatRequest(message="正常消息", current_weather=value)
     assert request.current_weather is None
     assert request.message == "正常消息"
-    assert "current_weather" not in build_messages(request)[0].additional_kwargs["request_context"]
+    assert build_messages(request)[0].additional_kwargs["request_context"]["current_weather"] == {
+        "status": "unknown"}
 
 
 def test_only_city_and_weather_are_projected_without_raw_ip_or_coordinates():
