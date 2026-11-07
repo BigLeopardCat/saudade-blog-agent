@@ -4,10 +4,12 @@ import json
 import os
 import subprocess
 import sys
+import threading
 import time
 import uuid
 from contextlib import ExitStack
 from datetime import timedelta
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
@@ -21,6 +23,8 @@ from agent.scheduling.checkpoints import Cleanup
 from agent.scheduling.models import utc_now
 from agent.scheduling.service import ScheduleConflict, ScheduleNotFound, ScheduleService
 from config.settings import settings
+
+pytestmark = pytest.mark.enable_socket
 
 ADMIN = Principal(7, "admin", "assertion")
 
@@ -36,7 +40,7 @@ def eventually(function, timeout=30):
 
 
 @pytest.fixture
-def site(tmp_path):
+def site(tmp_path, request):
     dsn = os.getenv("SAUDADE_SCHEDULING_TEST_DSN")
     if not dsn:
         pytest.skip("requires explicit disposable SAUDADE_SCHEDULING_TEST_DSN")
@@ -62,6 +66,8 @@ def site(tmp_path):
         "INSERT INTO test_flags VALUES ('block_publish_after_commit',false)"
     )
     processes, logs = [], []
+    notification_server, notification_worker = None, None
+    notification_base = ""
 
     def start():
         ready = tmp_path / (uuid.uuid4().hex + ".ready")
@@ -72,7 +78,8 @@ def site(tmp_path):
             cwd=Path(__file__).resolve().parents[2],
             stdout=log,
             stderr=subprocess.STDOUT,
-            env={**os.environ, "PYTHONPATH": ".", "SAUDADE_IGNORE_ENV_FILE": "1"},
+            env={**os.environ, "PYTHONPATH": ".", "SAUDADE_IGNORE_ENV_FILE": "1",
+                 "SAUDADE_SCHEDULING_TEST_NOTIFY_BASE": notification_base},
         )
         processes.append(process)
         eventually(lambda: ready.exists() or process.poll() is not None)
@@ -81,6 +88,31 @@ def site(tmp_path):
 
     backend = None
     try:
+        if getattr(request, "param", None) == "notification_http_503":
+            class FailingNotification(BaseHTTPRequestHandler):
+                def log_message(self, *args):
+                    pass
+
+                def do_POST(self):
+                    assert self.path == "/api/protected/automation-results"
+                    assert self.headers["Authorization"] == "Bearer synthetic-scheduler-owner-7"
+                    payload = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+                    assert query("SELECT owner_id,title FROM test_publications WHERE run_id=%s",
+                                 (payload["runId"],)) == [(7, payload["title"])]
+                    assert payload["content"] == "已发布审批原文"
+                    query("INSERT INTO test_attempts(run_id) VALUES(%s)", (payload["runId"],))
+                    body = b'{"code":503,"message":"synthetic notification outage"}'
+                    self.send_response(503)
+                    self.send_header("Content-Type", "application/json")
+                    self.send_header("Content-Length", str(len(body)))
+                    self.end_headers()
+                    self.wfile.write(body)
+
+            notification_server = ThreadingHTTPServer(("127.0.0.1", 0), FailingNotification)
+            notification_worker = threading.Thread(target=notification_server.serve_forever,
+                kwargs={"poll_interval": 0.05}, daemon=True)
+            notification_worker.start()
+            notification_base = f"http://127.0.0.1:{notification_server.server_port}"
         start()
         backend = Backend(dsn, schema=schema)
 
@@ -94,6 +126,11 @@ def site(tmp_path):
             if process.poll() is None:
                 process.kill()
             process.wait(timeout=15)
+        if notification_server:
+            if notification_worker and notification_worker.is_alive():
+                notification_server.shutdown()
+                notification_worker.join(timeout=3)
+            notification_server.server_close()
         if backend:
             backend.close()
         for log in logs:
@@ -300,3 +337,38 @@ def test_approved_publication_waits_durably_and_crash_replay_does_not_republish(
     assert query("SELECT count(*) FROM test_notifications")[0][0] == 1
     result = service.runs(ADMIN, ident)["items"][0]["result"]
     assert result["status"] == "completed"
+
+
+@pytest.mark.parametrize("site", ["notification_http_503"], indirect=True)
+def test_notification_retry_exhaustion_preserves_effect_across_dbos_resume_and_restart(site):
+    service, query, start, processes = site
+    ident, _, _ = create(service, action="publish_announcement", title="通知失败验收",
+                         instruction="已审批的合成公告正文")
+    eventually(lambda: service.get(ADMIN, ident)["status"] == "finished")
+    view = service.get(ADMIN, ident)
+    expected = {"status": "completed", "text": "已发布审批原文",
+                "notification": {"delivered": False, "reason": "delivery_failed"}}
+    assert view["result"] == expected and view["needs_attention"]
+    runs = service.runs(ADMIN, ident)["items"]
+    assert len(runs) == 1 and runs[0]["result"] == expected
+    run_id = runs[0]["id"]
+    assert query("SELECT owner_id,title,body FROM test_publications") == [
+        (7, "通知失败验收", "已审批的合成公告正文")]
+    assert query("SELECT count(*) FROM test_effects WHERE run_id=%s", (run_id,)) == [(1,)]
+    assert query("SELECT count(*) FROM test_attempts WHERE run_id=%s", (run_id,)) == [(3,)]
+    assert query("SELECT count(*) FROM test_notifications") == [(0,)]
+    attention = service.list(ADMIN, active_only=True)["recent_results"]
+    assert len(attention) == 1 and attention[0]["result"] == expected
+    with pytest.raises(ScheduleConflict, match="already ended"):
+        service.control(ADMIN, ident, "resume", view["version"])
+    # DBOS treats resuming a completed workflow as a no-op with its durable result.
+    resumed = service.backend.client.resume_workflow(run_id)
+    assert resumed.get_result(polling_interval_sec=0.05) == expected
+    processes[0].kill()
+    processes[0].wait(timeout=10)
+    start()
+    assert service.get(ADMIN, ident)["result"] == expected
+    assert service.get(ADMIN, ident)["needs_attention"]
+    assert query("SELECT count(*) FROM test_publications") == [(1,)]
+    assert query("SELECT count(*) FROM test_effects WHERE run_id=%s", (run_id,)) == [(1,)]
+    assert query("SELECT count(*) FROM test_attempts WHERE run_id=%s", (run_id,)) == [(3,)]
