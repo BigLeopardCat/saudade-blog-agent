@@ -16,6 +16,7 @@ SECRET = secrets.token_urlsafe(32)
 @contextmanager
 def favorite_backend(article_id=19):
     state = {"favorites": [], "requests": [], "unavailable": False,
+             "article_available": True,
              "article": {"noteKey": article_id, "noteTitle": "真实文章标题", "status": 1}}
 
     def handle(request):
@@ -32,11 +33,32 @@ def favorite_backend(article_id=19):
             assert request.headers.get("Authorization", "").startswith("Bearer ")
             if request.method == "POST":
                 assert json.loads(request.content) == {"noteId": article_id}
+                changed = not any(row.get("noteId") == article_id for row in state["favorites"])
+                if not state["article_available"]:
+                    return httpx.Response(200, json={"code": 409, "message": "not visible"})
                 state["favorites"] = [{"noteId": article_id, "title": "真实文章标题"}]
-            data = list(state["favorites"])
-        elif request.method == "DELETE" and request.url.path.endswith(f"/favorites/{article_id}"):
-            state["favorites"] = []
-            data = None
+                data = {"ownerUserId": 7, "noteId": article_id, "isFavorite": True,
+                        "changed": changed}
+            else:
+                data = list(state["favorites"]) if state["article_available"] else []
+        elif request.url.path.endswith(f"/favorites/{article_id}"):
+            if request.method == "DELETE":
+                changed = any(row.get("noteId") == article_id for row in state["favorites"])
+                state["favorites"] = []
+                data = {"ownerUserId": 7, "noteId": article_id, "isFavorite": False,
+                        "changed": changed}
+            else:
+                article = state["article"]
+                identifiers = {article[key] for key in ("noteId", "noteKey") if key in article}
+                valid = (identifiers == {article_id}
+                         and all(type(value) is int for value in identifiers))
+                data = {"ownerUserId": 7, "noteId": article_id if valid else None,
+                        "isFavorite": any(row.get("noteId") == article_id
+                                          for row in state["favorites"]),
+                        "articleAvailable": state["article_available"],
+                        "title": (article.get("noteTitle") or article.get("title"))
+                                 if state["article_available"] else None}
+                data = state.get("state_override", data)
         else:
             return httpx.Response(404)
         return httpx.Response(200, json={"code": 200, "data": data})
@@ -47,6 +69,40 @@ def favorite_backend(article_id=19):
             patch.object(confirm.settings, "agent_assertion_secret", SECRET), \
             patch.object(delegation, "credential", lambda uid: "offline-host-capability"):
         yield state
+
+
+def _notification_state(state, params):
+    selected = list(state["items"])
+    if "ids" in params:
+        ids = {int(value) for value in params["ids"].split(",")}
+        selected = [row for row in selected if row["id"] in ids]
+    if params.get("unreadOnly") == "true":
+        selected = [row for row in selected if not row["isRead"]]
+    complete = len(selected) <= 100 and ("ids" in params or not state["hidden_unread"])
+    return {"ownerUserId": 7, "items": [
+        {key: row[key] for key in ("id", "title", "isRead")} for row in selected[:100]],
+        "unread": state["hidden_unread"] + sum(not row["isRead"] for row in state["items"]),
+        "complete": complete}
+
+
+def _notification_page(state, params):
+    selected = list(state["items"])
+    if params.get("unreadOnly") == "true":
+        selected = [row for row in selected if not row["isRead"]]
+    if "query" in params:
+        term = params["query"].casefold()
+        selected = [row for row in selected if any(
+            term in row[key].casefold() for key in ("title", "content"))]
+    page, size = int(params.get("page", "1")), int(params.get("pageSize", "100"))
+    mode = params.get("content", "full")
+    cap = 240 if mode == "preview" else 0 if mode == "none" else None
+    items = [dict(row, content=row["content"][:cap],
+                  contentTruncated=mode == "preview" and len(row["content"]) > 240)
+             for row in selected[(page-1)*size:page*size]]
+    return {"items": items,
+            "unread": state["hidden_unread"] + sum(not row["isRead"] for row in state["items"]),
+            "total": len(selected), "page": page, "pageSize": size,
+            "hasMore": page*size < len(selected), "contentIncluded": mode != "none"}
 
 
 @contextmanager
@@ -68,11 +124,21 @@ def notification_backend():
             return httpx.Response(503)
         if request.method == "GET" and request.url.path.endswith("/favorites"):
             data = []
+        elif request.method == "GET" and request.url.path.endswith("/favorites/19"):
+            data = {"ownerUserId": 7, "noteId": 19, "isFavorite": False,
+                    "articleAvailable": True, "title": "真实文章标题"}
         elif request.method == "GET" and request.url.path.endswith("/notes/19"):
             data = {"noteId": 19, "noteTitle": "真实文章标题", "status": 1}
-        elif request.method == "GET" and request.url.path.endswith("/notifications"):
-            data = {"items": state["items"], "unread": state["hidden_unread"] + sum(
-                not row["isRead"] for row in state["items"])}
+        elif request.method == "GET" and "/notifications" in request.url.path:
+            if request.url.path.endswith("/notifications/state"):
+                data = _notification_state(state, request.url.params)
+            elif request.url.path.endswith("/notifications"):
+                data = _notification_page(state, request.url.params)
+            else:
+                identifier = int(request.url.path.rsplit("/", 1)[-1])
+                row = next((row for row in state["items"] if row["id"] == identifier), None)
+                data = {"item": (dict(row, content=row["content"][:2000],
+                                     contentTruncated=len(row["content"]) > 2000) if row else None)}
         elif request.method == "POST" and request.url.path.endswith("/notifications/read"):
             payload = json.loads(request.content)
             assert payload["all"] is False and payload["ids"]
