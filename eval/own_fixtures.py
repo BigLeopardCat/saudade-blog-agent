@@ -105,6 +105,28 @@ def _notification_page(state, params):
             "hasMore": page*size < len(selected), "contentIncluded": mode != "none"}
 
 
+def _notification_mark(state, payload):
+    assert payload["all"] is False and payload["ids"]
+    selected = [row for row in state["items"] if row["id"] in payload["ids"]]
+    if (sorted(row["id"] for row in selected) != payload["ids"]
+            or any(row.get("ownerUserId", 7) != 7 or row.get("deleted", False)
+                   for row in selected)):
+        return httpx.Response(200, json={"code": 409, "message": "selection conflict"})
+    changed = sorted(row["id"] for row in selected
+                     if not row["isRead"] and row["id"] not in state["ignore"])
+    for row in selected:
+        if row["id"] in changed:
+            row["isRead"] = True
+    if state["new_on_write"]:
+        state["items"].append({"id": 104, "title": "新到通知", "isRead": False})
+    data = {"scope": "selected", "ownerUserId": 7, "matchedIds": payload["ids"],
+            "changedIds": changed, "isRead": all(row["isRead"] for row in selected),
+            "unreadCount": state["hidden_unread"] + sum(
+                not row["isRead"] for row in state["items"])}
+    data = state.get("receipt_override", data)
+    return httpx.Response(200, json={"code": 200, "data": data})
+
+
 @contextmanager
 def notification_backend():
     state = {"items": [{"id": 101, "title": "审核结果", "isRead": False},
@@ -140,14 +162,7 @@ def notification_backend():
                 data = {"item": (dict(row, content=row["content"][:2000],
                                      contentTruncated=len(row["content"]) > 2000) if row else None)}
         elif request.method == "POST" and request.url.path.endswith("/notifications/read"):
-            payload = json.loads(request.content)
-            assert payload["all"] is False and payload["ids"]
-            for row in state["items"]:
-                if row["id"] in payload["ids"] and row["id"] not in state["ignore"]:
-                    row["isRead"] = True
-            if state["new_on_write"]:
-                state["items"].append({"id": 104, "title": "新到通知", "isRead": False})
-            data = None
+            return _notification_mark(state, json.loads(request.content))
         else:
             return httpx.Response(404)
         return httpx.Response(200, json={"code": 200, "data": data})
