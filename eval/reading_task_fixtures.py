@@ -6,7 +6,7 @@ from unittest.mock import patch
 import httpx
 
 from agent import confirm
-from eval.own_fixtures import SECRET, inbox_overview
+from eval.own_fixtures import SECRET, _notification_page, inbox_overview
 from tools import base
 
 
@@ -32,7 +32,8 @@ def backend(role):
         elif path == "/api/protected/notifications/summary":
             data = {"notifications": 2, "messages": 0, "total": 2}
         elif path == "/api/protected/notifications":
-            data = {"items": notifications, "unread": 2}
+            data = _notification_page(
+                {"items": notifications, "hidden_unread": 0}, request.url.params)
         elif path in {"/api/public/activity/talks", "/api/protect/comments"}:
             data = []
         elif path == "/api/protected/accounts" and role in {"admin", "superadmin"}:
