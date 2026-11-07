@@ -11,6 +11,7 @@ import hashlib
 import json
 import os
 import secrets
+import signal
 import subprocess
 import sys
 import tempfile
@@ -221,10 +222,10 @@ def child(stack, command, cwd, env, log):
         if process.poll() is None:
             process.terminate()
             try:
-                process.wait(timeout=8)
+                process.wait(timeout=3)
             except subprocess.TimeoutExpired:
                 process.kill()
-                process.wait(timeout=3)
+                process.wait(timeout=2)
 
     stack.callback(stop)
     return process
@@ -487,6 +488,7 @@ http {{
 
 
 if __name__ == "__main__":
+    signal.signal(signal.SIGTERM, signal.default_int_handler)
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--blog", type=Path, required=True)
     parser.add_argument("--backend", type=Path, required=True)
