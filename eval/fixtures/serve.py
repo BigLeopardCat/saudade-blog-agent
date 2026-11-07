@@ -69,8 +69,7 @@ def _row(doc: dict, *, with_content: bool = False) -> dict:
 
 
 def _stats(doc: dict) -> dict:
-    """读数（桩编的固定值，与语料无关）：只是让 `get_article_detail` 的那次附带请求
-    有东西可读——**三条 smoke 用例一个数都不断言**，别把桩编的数写进期望。"""
+    """Deterministic independent counters for the synthetic article fixture."""
     return {"views": 100 + doc["id"], "likes": 10 + doc["id"], "favorites": doc["id"]}
 
 
@@ -143,7 +142,14 @@ def make_handler(docs: list[dict], base: str):
                     return
                 query = {key: values[0] for key, values in parse_qs(u.query).items()}
                 try:
-                    data = document_page("note", doc["id"], doc["title"], doc["content"], query)
+                    metadata = {
+                        "authorName": doc.get("authorName"), "authorNameTruncated": False,
+                        "authorAvatar": doc.get("authorAvatar"), "authorAvatarTruncated": False,
+                        "description": doc.get("description", ""), "descriptionTruncated": False,
+                        "cover": doc.get("cover", ""), "coverTruncated": False,
+                    }
+                    data = document_page(
+                        "note", doc["id"], doc["title"], doc["content"], query, metadata)
                 except RevisionChanged:
                     self._send({"code": 409, "message": "document_changed"}, 409)
                     return
@@ -215,7 +221,7 @@ def main() -> int:
     print(f"[fixture] 桩已就绪：{url}", flush=True)
     print("[fixture] 跑法（另开一个终端，仓根）：\n"
           f"[fixture]   BLOG_API_BASE={url} .venv/bin/python "
-          "python -m eval.native_contracts", flush=True)
+          "-m eval.native_contracts", flush=True)
     try:
         srv.serve_forever()
     except KeyboardInterrupt:

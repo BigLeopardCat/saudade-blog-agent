@@ -1,6 +1,5 @@
 """A known article link and a visible body range are separate kinds of evidence."""
 
-import ast
 import json
 
 from langchain_core.messages import AIMessage, HumanMessage
@@ -54,7 +53,7 @@ def test_article_trace_preserves_a_complete_model_observation_above_the_old_log_
     source = "Article body. " * 1713 + "TAIL_CANARY"
     data = article_page({"noteTitle": "Source", "noteContent": source}, 19, max_chars=24000)
     text, visible = render_article_result(data, str(data), 28000)
-    recorded = ast.literal_eval(tool_result_text(text, "get_article_detail"))
+    recorded = json.loads(tool_result_text(text, "get_article_detail"))
     assert recorded["noteContent"] == visible["noteContent"] == source
     assert recorded["source"]["end"] == len(source)
 

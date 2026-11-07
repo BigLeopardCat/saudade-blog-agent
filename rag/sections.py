@@ -304,7 +304,7 @@ def slim_frame(data: dict | str) -> str:
     if not isinstance(body, str) or not body:
         return str(data)
     return str({key: value for key, value in data.items()
-                if key == "noteContent" or value != body})
+                if key != "content" or value != body})
 
 
 def frame_excerpt(frame: dict | str, cap: int) -> str:

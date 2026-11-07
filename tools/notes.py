@@ -133,6 +133,7 @@ def get_article_detail(
     Copy contentRevision AND sectionSchema for continuation or a section ID from search.
     nextOffset continues the same selected scope; readComplete does not mean the whole
     article when a section was selected. Pictures remain original Markdown references.
+    Public author/summary/cover fields are included; metadata-only reads may use max_chars=1.
     Private/draft articles and unapproved messages are unavailable here; open editor drafts
     use administrator read_current_article. Metrics use get_article_stats, not body reads.
     """

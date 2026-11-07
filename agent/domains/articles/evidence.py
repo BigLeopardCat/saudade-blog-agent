@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import re
 from urllib.parse import urlsplit
 
@@ -57,6 +58,12 @@ def _article_links(text):
         *re.findall(r"\]\((/article/\d+[^)]*)\)", text),
         *re.findall(r"https?://[^\s)<>]+", text),
     ]
+    try:
+        structured = json.loads(text)
+        if isinstance(structured, dict) and isinstance(structured.get("source"), str):
+            urls.append(structured["source"])
+    except (ValueError, RecursionError):
+        pass
     for url in urls:
         try:
             parsed = urlsplit(url.rstrip(".,，。"))
@@ -137,6 +144,12 @@ class ArticleEvidence:
         ):
             data = payload(value)
             ident = args.get("article_id")
+            source = data.get("source") if isinstance(data, dict) else None
+            if (isinstance(data, dict) and not body_text(data).strip()
+                    and isinstance(source, dict) and source.get("type") == "note"
+                    and type(ident) is int and ident > 0
+                    and type(source.get("id")) is int and source["id"] == ident):
+                self.candidates[ident] = str(data.get("noteTitle") or "文章")
             if (
                 isinstance(data, dict)
                 and body_text(data).strip()

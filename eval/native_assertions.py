@@ -39,7 +39,8 @@ def contains(actual, expected):
 def _answer_value(wanted, result, calls):
     values = []
     for event in calls:
-        if event.get("name") not in wanted["tools"] or event.get("kind") != "ok":
+        if (event.get("name") not in wanted["tools"] or event.get("kind") != "ok"
+                or not contains(event.get("args", {}), wanted.get("args", {}))):
             continue
         try:
             value = json.loads(event.get("result", ""))
@@ -47,7 +48,16 @@ def _answer_value(wanted, result, calls):
                 value = value[key]
         except (ValueError, KeyError, TypeError):
             continue
-        values.append(str(value))
+        values.append(value)
+    if wanted.get("format") == "json":
+        try:
+            actual = json.loads(result.get("text", ""))
+            for key in wanted["answer_path"]:
+                actual = actual[key]
+        except (ValueError, KeyError, TypeError):
+            return False
+        return any(contains(actual, value) for value in values)
+    values = [str(value) for value in values]
     match = re.search(wanted["pattern"], result.get("text", ""))
     return bool(values and match and match.group(1) in values)
 

@@ -1,6 +1,6 @@
 """Article provenance checks preserve independent evidence and scoped failures."""
 
-import ast
+import json
 
 import pytest
 from langchain_core.messages import AIMessage, HumanMessage
@@ -118,7 +118,7 @@ def test_render_budget_keeps_valid_data_and_cursor_at_visible_end():
     body = ("'\n\\" * 4000) + "TAIL"
     raw = article_page({"noteTitle": "T", "noteContent": body}, 1, max_chars=12000)
     text, visible = render_article_result(raw, str(raw), 1600)
-    assert len(text) <= 1600 and ast.literal_eval(text) == visible
+    assert len(text) <= 1600 and json.loads(text) == visible
     assert visible["noteContent"] == body[: visible["nextOffset"]]
     assert visible["nextOffset"] < raw["nextOffset"]
     assert visible["readComplete"] is False
