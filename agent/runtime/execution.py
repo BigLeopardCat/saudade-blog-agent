@@ -30,9 +30,8 @@ def _retry_model(session, error):
     if not retryable_model_request(error):
         return False
     delay = retry_after(error)
-    # ModelRetryMiddleware adds ±25% jitter. A longer server delay is left to
-    # explicit checkpoint continuation instead of making an early retry.
-    if delay is not None and delay > _RETRY_DELAY * 0.75:
+    # A fixed framework delay must not precede the provider's Retry-After.
+    if delay is not None and delay > _RETRY_DELAY:
         return False
     remaining = model_options(4.0).get("timeout", 4.0)
     deadline = session.budget.clock.deadline
@@ -71,6 +70,7 @@ class FrameworkExecution:
         return create_agent(self.session.model, tools=[], system_prompt=self.system,
                             middleware=[ModelRetryMiddleware(
                                             max_retries=1, initial_delay=_RETRY_DELAY, max_delay=3,
+                                            jitter=False,
                                             retry_on=partial(_retry_model, self.session),
                                             on_failure="error"),
                                         OrderedToolsMiddleware(middleware),
