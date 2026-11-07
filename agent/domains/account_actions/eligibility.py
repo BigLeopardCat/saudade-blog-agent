@@ -70,7 +70,7 @@ def get_account_action_eligibility(
         return base.unavailable("需要已验签且一致的管理员身份。")
     if (action == "set_role") != (role is not None):
         return invalid_args("变更身份必须提供role；其他操作不得提供role。")
-    params = {"accountId": account_id, "action": action}
+    params: dict[str, str | int] = {"accountId": account_id, "action": action}
     if role is not None:
         params["role"] = role
     result = base._admin_get(PATH + "/eligibility?" + urlencode(params), config)
