@@ -1,4 +1,4 @@
-"""The migrated confirmation domains; no model intent matching belongs here."""
+"""Registered confirmation executors; model intent matching does not belong here."""
 
 from agent.domains import article_summary, talks
 from agent.domains.account_actions import transactions as account_actions
@@ -48,7 +48,7 @@ _DOMAINS = {
 }
 
 
-def native_domain(grant):
+def executor_domain(grant):
     executor = grant.get("executor") if isinstance(grant, dict) else None
     return _DOMAINS.get(executor) if isinstance(executor, str) else None
 

@@ -5,9 +5,8 @@ Tokens carry concrete authorized arguments and a random operation ID. They must
 never enter prompts, traces, receipts or logs. Missing secrets, invalid signatures,
 expired tokens and unresolved argument references fail closed.
 
-The optional signed executor pins migrated operations to their durable execution
-path, including revocation and replay checks. Legacy tokens retain their existing
-execution path and the host's best-effort one-time claim.
+Every token pins a registered executor and a positive user/conversation coordinate.
+Authorization, frozen-target validation and durable execution remain domain responsibilities.
 """
 
 from __future__ import annotations
@@ -32,7 +31,7 @@ _VERSION = 2
 
 
 def _secret() -> bytes:
-    """签名密钥；空缺返回 b""（调用方据此拒绝签/验）。"""
+    """Return the independent confirmation key; absence disables signing and verification."""
     return (settings.confirmation_secret or "").encode()
 
 
@@ -51,14 +50,14 @@ def _b64d(text: str) -> bytes:
 def invalid_trace_meta(uid: int, conv_id, token_len: int) -> dict:
     """Trace a rejected confirmation without retaining its token or payload."""
     return {
-        "message": "",  # 隐藏请求的合成文本不是主人说的话
+        "message": "",
         "has_image": False,
         "memory_strategy": "framework_compaction",
         "history_len": 0,
         "has_exec": False,
-        "has_confirm": True,  # 是"点确定"那一跳
+        "has_confirm": True,
         "conversation_id": conv_id,
-        "confirm_rejected": True,  # 验签没过 ⇒ 零执行
+        "confirm_rejected": True,
         "confirm_token_len": int(token_len),
     }
 
@@ -77,7 +76,7 @@ def token_expiry(token: str) -> int:
     except Exception:
         return 0
     exp = payload.get("exp") if isinstance(payload, dict) else None
-    return exp if isinstance(exp, int) else 0
+    return exp if type(exp) is int else 0
 
 
 def token_jti(token: str) -> str:
@@ -104,7 +103,7 @@ def narrow(payload: dict, pick: str) -> tuple[dict | None, str]:
     fail closed. Linked specs remain together; tokens without units use one spec per unit."""
     raw = (pick or "").strip()
     if not raw:
-        return payload, ""  # 空 = 没有选择 = 全部办（与旧前端逐字兼容）
+        return payload, ""
     if not isinstance(payload, dict):
         return None, "payload 不是对象"
     specs = payload.get("specs")
@@ -163,6 +162,15 @@ def _units_of(payload: dict, n: int) -> "list | None":
     return units if sorted(flat) == list(range(n)) else None
 
 
+def _valid_binding(uid, conv_id, executor) -> bool:
+    if (type(uid) is not int or not 0 < uid <= 2_147_483_647
+            or type(conv_id) is not int or not 0 < conv_id <= 2_147_483_647):
+        return False
+    from agent.domains.registry import executor_domain
+
+    return executor_domain({"executor": executor}) is not None
+
+
 def sign(
     uid: int,
     conv_id,
@@ -170,59 +178,42 @@ def sign(
     specs: list,
     units: "list | None" = None,
     *,
-    executor: str | None = None,
+    executor: str,
 ) -> str:
-    """签发待办令牌。密钥空缺 / 参数不全 → **空串**（调用方据此不弹窗）。
+    """Sign frozen arguments for one actor, conversation and registered executor.
 
-    `specs` = `[{"tool": 工具名, "args": {...}}]`，参数必须是**已实例化的具体值**
-    （见 `has_refs`）。`workflow` 是技能名，执行轮据此拼计划——**不靠模型回忆**。
-
-    `executor` 固定执行入口，使更换默认运行时后仍核对撤销账。
-
-    `units` = `adminops.linked_units(specs)` 的结果：卡面编号与「只办第 N 件」的
-    按钮都按它数（见 `narrow`）。不传 ⇒ 载荷里不带这个键，读侧按逐条一单元处理。
+    Malformed bindings, unresolved references and missing keys return an empty token.
+    Optional groups define which operation specs must stay together during selection.
     """
     secret = _secret()
-    if not secret or not workflow:
-        return ""
-    # 引用不签发（见模块头注与 has_refs）：这道判断放在**签发点**而不是只放调用方
-    # ——"带引用的令牌"是一张到期必然兑现不了的支票，任何将来新增的签发路径都该
-    # 被同一道闸挡住，而不是靠每个调用方各自记得检查。
-    if has_refs(specs):
+    if (not secret or not _valid_binding(uid, conv_id, executor)
+            or not isinstance(workflow, str) or not workflow
+            or not isinstance(specs, list) or not specs or has_refs(specs)):
         return ""
     payload = {
         "v": _VERSION,
-        "uid": int(uid),
-        "conv": conv_id if isinstance(conv_id, int) else None,
+        "uid": uid,
+        "conv": conv_id,
         "exp": int(time.time()) + TTL_SECONDS,
-        # 32 位操作标识，适配宿主 varchar(64) 字段。
-        # 每次签发都是新的随机值——**不派生自 uid/会话/时间**，否则同一秒内两次
-        # 签发会撞成同一个 jti，第二次会被自己的第一次认领挡掉。
+        # Independent random IDs prevent same-turn preparations from sharing execution claims.
         "jti": secrets.token_hex(16),
-        "workflow": str(workflow),
-        "specs": specs or [],
+        "workflow": workflow,
+        "specs": specs,
+        "executor": executor,
     }
     if units:
         payload["units"] = [list(u) for u in units]
-    if executor:
-        payload["executor"] = executor
     try:
         body = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode()
     except (TypeError, ValueError):
-        return ""  # 参数里有不可序列化的东西（不该发生）→ 不签发
+        return ""
     sig = hmac.new(secret, _DOMAIN + body, hashlib.sha256).digest()
     token = _b64e(body) + "." + _b64e(sig)
     return token if len(token) <= MAX_TOKEN_CHARS else ""
 
 
 def verify(token: str, uid: int, conv_id) -> dict | None:
-    """验签 → payload dict；任何一条不满足 → `None`（fail-closed，调用方零执行）。
-
-    逐条对应模块头注里的绑定关系：签名（含版本）/ 过期 / 换人 / 换会话。
-    `conv_id` 为 None（旧客户端无会话）时只接受 `conv` 同为 None 的令牌——
-    "签发时没有会话、执行时也没有"是自洽的，不能让一个绑了会话的令牌在
-    无会话请求里生效。
-    """
+    """Verify canonical encoding, signature, lifetime and the complete executor binding."""
     secret = _secret()
     if not secret or not isinstance(token, str) or not token or len(token) > MAX_TOKEN_CHARS:
         return None
@@ -241,18 +232,21 @@ def verify(token: str, uid: int, conv_id) -> dict | None:
         payload = json.loads(body.decode())
     except Exception:
         return None
-    if not isinstance(payload, dict) or payload.get("v") != _VERSION:
+    if (not isinstance(payload, dict) or type(payload.get("v")) is not int
+            or payload["v"] != _VERSION
+            or not _valid_binding(uid, conv_id, payload.get("executor"))
+            or not _valid_binding(payload.get("uid"), payload.get("conv"), payload.get("executor"))
+            or payload["uid"] != uid or payload["conv"] != conv_id):
         return None
-    if payload.get("uid") != int(uid):
-        return None
-    got_conv = payload.get("conv")
-    want_conv = conv_id if isinstance(conv_id, int) else None
-    if got_conv != want_conv:
+    jti = payload.get("jti")
+    if not isinstance(jti, str) or re.fullmatch(r"[0-9a-f]{32}", jti) is None:
         return None
     exp = payload.get("exp")
-    if not isinstance(exp, int) or exp < int(time.time()):
+    if type(exp) is not int or exp < int(time.time()):
         return None
-    if not payload.get("workflow") or not isinstance(payload.get("specs"), list):
+    if (not isinstance(payload.get("workflow"), str) or not payload["workflow"]
+            or not isinstance(payload.get("specs"), list) or not payload["specs"]
+            or has_refs(payload["specs"])):
         return None
     return payload
 

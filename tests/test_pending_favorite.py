@@ -343,9 +343,11 @@ def test_cancellation_api_checks_signed_identity_and_never_calls_a_model(
             assert response.status_code == 200 and response.json()["cancelled"] is True
 
 
-def test_unknown_executor_cannot_enter_legacy_planner():
+@pytest.mark.parametrize("grant", [{}, {"executor": None}, {"executor": "unknown"},
+                                       {"executor": True}])
+def test_unregistered_executor_cannot_enter_confirmation_runtime(grant):
     with pytest.raises(ValueError, match="执行入口"):
         confirmed_runtime(
             AgentRuntime(CheckpointConversationStore(None), application=BlogApplication()),
-            {"executor": "unknown"},
+            grant,
         )

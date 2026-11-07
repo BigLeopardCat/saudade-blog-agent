@@ -18,28 +18,22 @@ def presentation(result):
 
 
 def confirmed_runtime(runtime, grant):
-    from agent.domains.registry import native_domain
+    from agent.domains.registry import executor_domain
     from agent.runtime.service import AgentRuntime
 
-    if isinstance(grant, dict) and grant.get("executor") and native_domain(grant) is None:
-        raise ValueError("无法识别确认操作的执行入口，本次未执行。")
-    if native_domain(grant) is None:
-        return runtime
+    if executor_domain(grant) is None:
+        raise ValueError("无法识别确认操作的执行入口，请重新准备确认；本次未执行。")
     if not isinstance(runtime, AgentRuntime):
         raise ValueError("确认执行需要 AgentRuntime，本次未执行。")
-    selected = runtime
-    if selected.store.saver is None:
+    if runtime.store.saver is None:
         raise RuntimeError("操作确认需要持久化服务，本次未执行。")
-    return selected
+    return runtime
 
 
 def cancel(runtime, grant, config):
     """Revoke the signed operation under the same lock used for execution."""
-    from agent.domains.registry import native_domain
     from agent.products.blog.pending import PendingOperation
     from agent.runtime.results import cancellation_observations
-    if native_domain(grant) is None:
-        raise ValueError("这张旧确认卡尚不支持按钮撤销，请勿批准并等待其过期。")
     selected = confirmed_runtime(runtime, grant)
     action = {"task_id": f"pa_{grant['jti']}", "jti": grant["jti"]}
     saver = selected.store.saver

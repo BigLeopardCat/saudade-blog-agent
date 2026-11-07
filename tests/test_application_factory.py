@@ -37,8 +37,6 @@ def test_package_entry_imports_outside_checkout_without_starting_resources(tmp_p
     root = Path(__file__).resolve().parents[1]
     script = """
 from agent.main import app, create_app
-import server
-assert server.app is app
 assert app.state.runtime is None and app.state.workers is None
 assert create_app() is not app
 """
@@ -58,7 +56,7 @@ def test_routers_import_without_loading_application_entry(tmp_path):
     script = """
 import sys
 from agent.api.routes import chat, conversations, operations
-assert 'agent.main' not in sys.modules and 'server' not in sys.modules
+assert 'agent.main' not in sys.modules
 """
     result = subprocess.run(
         [sys.executable, "-c", script],

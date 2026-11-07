@@ -31,7 +31,6 @@ from tools.result import (
     ToolResult,
     empty,  # noqa: F401
     fact,  # noqa: F401
-    is_noop,  # noqa: F401
     not_found,  # noqa: F401
     ok,  # noqa: F401
     tgt,  # noqa: F401
