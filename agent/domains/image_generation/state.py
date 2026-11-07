@@ -48,7 +48,8 @@ class Job(BaseModel):
 
 def checked(value, job_id):
     job = Job.model_validate(value)
-    if (job.id != job_id or (job.status == "accepted" and job.imageId is None)
+    if (job.id != job_id
+            or (job.status == "accepted" and job.imageId is None and not job.imageRemoved)
             or (job.imageRemoved and (job.status != "accepted" or job.previewUrl is not None))):
         raise ValueError("Image job identity or accepted gallery result differs")
     return job
@@ -68,7 +69,7 @@ def show_progress(job, config):
               "expired": ("生图任务已过期", "cancelled")}
     text, status = labels[job.status]
     if job.imageRemoved:
-        text = "图片已从图库移除，曾保存的任务结果仍保留。"
+        text = "生成已完成，但图片已不在图库。"
     if job.status == "review" and job.error:
         text, status = "保存未完成，图片仍可审阅并重试保留", "failed"
     return emit(config, text, key=f"image:{job.id}:{job.status}:{status}",

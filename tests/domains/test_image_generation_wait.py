@@ -223,17 +223,18 @@ def test_role_or_user_binding_rejected_before_opening_sse(monkeypatch):
             assert result.kind == "unavailable"
 
 
-def test_removed_accepted_job_is_historical_not_a_new_image_to_show(monkeypatch):
+@pytest.mark.parametrize("image_id", [31, None])
+def test_removed_accepted_job_is_historical_not_a_new_image_to_show(monkeypatch, image_id):
     result, requests, progress = observe(monkeypatch,
-        Stream(event(job("accepted", imageId=31, imageRemoved=True))))
+        Stream(event(job("accepted", imageId=image_id, imageRemoved=True))))
     assert result.kind == "ok" and result.data["status"] == "accepted"
     assert result.data["imageRemoved"] is True and not result.data["hasPreview"]
-    assert result.data["imageId"] == 31 and "图片已从图库移除" in progress[-1]["text"]
+    assert result.data["imageId"] == image_id
+    assert "生成已完成，但图片已不在图库" in progress[-1]["text"]
     assert len(requests) == 1 and requests[0].method == "GET"
 
 
 @pytest.mark.parametrize("value", [
-    job("accepted", imageRemoved=True),
     job("review", imageRemoved=True),
     job("accepted", imageId=31, imageRemoved=True, previewUrl="https://example.invalid/old"),
     {key: value for key, value in job("accepted", imageId=31).items() if key != "imageRemoved"},
