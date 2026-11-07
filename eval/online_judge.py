@@ -154,14 +154,14 @@ def _tool_catalogs(turns):
 
 
 def _image_reviews(events):
-    """Project HTTP review fields without interpreting visible text as control frames."""
+    """Project captured HTTP review text without preview capabilities or grants."""
     reviews = []
     for event in events:
         data = event.get("data")
         if (event.get("event") != "confirmation" or not isinstance(data, dict)
                 or "image_review" not in data):
             continue
-        value = data["image_review"]
+        value = safe_result(data)["image_review"]
         if (not isinstance(value, dict) or not isinstance(value.get("prompt"), str)
                 or not isinstance(value.get("references"), list)):
             raise ValueError("HTTP image review lacks its prompt or reference list")
@@ -170,21 +170,26 @@ def _image_reviews(events):
             if (not isinstance(reference, dict) or type(reference.get("image_id")) is not int
                     or reference["image_id"] <= 0 or not isinstance(reference.get("name"), str)):
                 raise ValueError("HTTP image review reference identity cannot be verified")
-            references.append({key: reference[key] for key in ("image_id", "name")})
-        metadata = {key: value[key] for key in ("result_url", "hasPreview") if key in value}
-        metadata["references"] = [
-            {key: ref[key] for key in ("url", "hasPreview") if key in ref}
-            for ref in value["references"]]
-        safe = safe_result({"image_review": metadata})["image_review"]
-        for reference, preview in zip(references, safe["references"]):
-            if type(preview.get("hasPreview")) is bool:
-                reference["hasPreview"] = preview["hasPreview"]
+            references.append({key: reference[key] for key in ("image_id", "name", "hasPreview")
+                               if key in reference and (key != "hasPreview"
+                                   or type(reference[key]) is bool)})
         review = {"prompt": value["prompt"], "references": references,
                   "reference_count": len(references)}
-        if type(safe.get("hasPreview")) is bool:
-            review["hasPreview"] = safe["hasPreview"]
+        if type(value.get("hasPreview")) is bool:
+            review["hasPreview"] = value["hasPreview"]
         reviews.append(review)
     return reviews
+
+
+def _proposed_actions(result):
+    proposed = safe_result([spec for payload in result.get("confirm_payloads", [])
+                            for spec in payload.get("specs", [])])
+    for spec in proposed:
+        if (spec.get("tool") in {"start_image_generation", "accept_generated_image"}
+                and isinstance(spec.get("args"), dict)):
+            spec["args"] = {key: value for key, value in spec["args"].items()
+                            if key not in {"job_id", "version"}}
+    return proposed
 
 
 def material(case, results):
@@ -218,13 +223,6 @@ def material(case, results):
                         and caller.get("verified") is True
                         and caller.get("role") == inp.get("principal_role")
                         and type(uid) is int and uid > 0 else None)
-        proposed = safe_result([spec for payload in result.get("confirm_payloads", [])
-                                for spec in payload.get("specs", [])])
-        for spec in proposed:
-            if (spec.get("tool") in {"start_image_generation", "accept_generated_image"}
-                    and isinstance(spec.get("args"), dict)):
-                spec["args"] = {key: value for key, value in spec["args"].items()
-                                if key not in {"job_id", "version"}}
         turns.append({
             "user_request": message,
             "caller_role": inp.get("principal_role"),
@@ -237,7 +235,8 @@ def material(case, results):
                                    ("name", "args", "kind", "result") if key in event}
                                   for event in calls if event.get("kind") != "prepared"],
             "execution_receipts": result.get("exec_rows", []),
-            "proposed_actions_not_facts": proposed,
+            "proposed_actions_not_facts": _proposed_actions(result),
+            "interactive_image_reviews_to_review": _image_reviews(result.get("http_events", [])),
             "confirmation_previews_to_review": [*result.get("confirmation_previews", []),
                                                 *(event["data"]["q"]
                                                 for event in result.get("http_events", [])
@@ -250,11 +249,7 @@ def material(case, results):
                                 " Hidden summaries and visual evidence are absent.",
                                 "No visual review or post-approval execution is implied"],
             "case": case["id"], "current_turn": len(turns)}
-    data = safe_result(data)
-    # Review text is already whitelisted; legacy frame redaction must not rewrite it.
-    for turn, result in zip(data["turns"], results):
-        turn["interactive_image_reviews_to_review"] = _image_reviews(result.get("http_events", []))
-    text = json.dumps(data, ensure_ascii=False, separators=(",", ":"))
+    text = json.dumps(safe_result(data), ensure_ascii=False, separators=(",", ":"))
     if len(text) > MAX_MATERIAL_CHARS:
         raise ValueError("review material exceeds the input limit; not silently truncated")
     return text
