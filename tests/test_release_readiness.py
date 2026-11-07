@@ -198,3 +198,29 @@ def test_task_classes_handle_overlapping_suite_tags():
     assert task_class(["write_prepare", "multi_intent"]) == "multi"
     assert task_class(["confirmation", "memory"]) == "control"
     assert task_class(["retrieval", "dependency"]) == "article_read"
+
+
+def test_noncritical_semantic_question_stays_unverified_within_quality_budgets(tmp_path):
+    report, profile, semantic, _ = fixture(tmp_path, count=100)
+    write_review(report, semantic, suspect={"99"})
+    got = assess(report, semantic_path=semantic, profile_path=profile)
+    assert got["status"] == "unverified" and not got["failures"]
+    assert any("require review: 99" in item for item in got["unverified"])
+    quality = got["quality_statistics"]["all"]
+    assert quality["combined_checks"]["passed"] == 99
+    assert quality["combined_checks"]["total"] == 100
+    assert quality["unresolved_semantic"] == 1
+
+
+def test_known_noncritical_failure_can_use_quality_budget_without_becoming_unknown(tmp_path):
+    report, profile, semantic, _ = fixture(tmp_path, count=100)
+    doc = json.loads(report.read_bytes())
+    doc["cases"][-1]["status"] = "failed"
+    report.write_text(json.dumps(doc))
+    write_review(report, semantic)
+    got = assess(report, semantic_path=semantic, profile_path=profile)
+    assert got["status"] == "http_checks_passed" and not got["unverified"]
+    quality = got["quality_statistics"]["all"]
+    assert quality["combined_checks"]["passed"] == 99
+    assert quality["combined_checks"]["total"] == 100
+    assert quality["unresolved_semantic"] == 0

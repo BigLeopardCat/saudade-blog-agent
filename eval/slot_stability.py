@@ -43,8 +43,11 @@ def _identity(report):
     metrics = report.get("metrics")
     if not isinstance(metrics, list) or not metrics:
         raise ValueError("report lacks measured model identity")
+    if any(not isinstance(row, dict) for row in metrics):
+        raise ValueError("invalid measured model identity")
     models = {(row.get("source"), row.get("build"), row.get("model")) for row in metrics}
-    if any(not value or value == "unknown" for row in models for value in row):
+    if any(not isinstance(value, str) or not value or value == "unknown"
+           for row in models for value in row):
         raise ValueError("unknown model or build in report")
     if len(models) != 1:
         raise ValueError("report mixes measured model identities")
@@ -53,6 +56,8 @@ def _identity(report):
                 (report.get("service_version") or {}).get("sha"), report.get("evaluator_sha256"))
     if not all(required):
         raise ValueError("report lacks frozen evaluation identity")
+    if not isinstance(required[2], str) or models[0][1] != required[2]:
+        raise ValueError("measured build differs from service version")
     return json.dumps([*required, models], sort_keys=True)
 
 

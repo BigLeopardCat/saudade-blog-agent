@@ -205,6 +205,10 @@ def _quality(report, semantic, profile):
     core = [case for case in cases if set(case.get("tags", [])) & set(profile["core_tags"])]
     if not semantic or statuses["not_evaluated"]:
         missing.append("complete semantic review tied to the frozen report SHA256")
+    pending_review = sorted(case["id"] for case in cases
+                            if semantic.get(case["id"]) == "needs_review")
+    if pending_review:
+        missing.append("semantic findings still require review: " + ", ".join(pending_review))
     if semantic:
         for name, subset, threshold in (("task_quality", cases, profile["task_pass_rate"]),
                                        ("core_quality", core, profile["core_pass_rate"])):

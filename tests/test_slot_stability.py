@@ -87,3 +87,38 @@ def test_duplicate_reports_unknown_status_or_missing_case_are_not_success(tmp_pa
     report["cases"][0].update(id="task", status="skipped")
     with pytest.raises(ValueError, match="status"):
         collect([write(tmp_path, "skipped.json", report)])
+
+
+def test_single_report_must_match_measured_and_advertised_builds(tmp_path, report):
+    report["metrics"][0]["build"] = "other-build"
+    with pytest.raises(ValueError, match="measured build differs"):
+        collect([write(tmp_path, "contradictory.json", report)])
+
+
+@pytest.mark.parametrize("fault", ["missing_service", "missing_sha", "numeric_sha",
+                                   "missing_metric_build", "numeric_metric_build",
+                                   "invalid_metric_row"])
+def test_incomplete_or_untyped_build_evidence_is_not_usable(tmp_path, report, fault):
+    if fault == "missing_service":
+        report.pop("service_version")
+    elif fault == "missing_sha":
+        report["service_version"].pop("sha")
+    elif fault == "numeric_sha":
+        report["service_version"]["sha"] = 7
+    elif fault == "missing_metric_build":
+        report["metrics"][0].pop("build")
+    elif fault == "numeric_metric_build":
+        report["metrics"][0]["build"] = 7
+    else:
+        report["metrics"] = [None]
+    with pytest.raises(ValueError):
+        collect([write(tmp_path, fault + ".json", report)])
+
+
+def test_archived_runtime_label_and_typed_slot_values_remain_usable(tmp_path, report):
+    report["metrics"][0]["source"] = "native"
+    report["cases"][0]["result"] = result({"tool": "prepare", "args": {"name": [7, True, None]}})
+    before = write(tmp_path, "archive.json", report)
+    row = collect([before])
+    assert row["agreement"] == 1 and row["missing_n"] == row["failed_trials"] == 0
+    assert json.loads(row["draws"][0]["value"]) == [[7, True, None]]
