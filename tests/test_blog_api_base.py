@@ -12,29 +12,18 @@ ROOT = Path(__file__).resolve().parent.parent
 
 _PROBE = r'''
 import json
+import httpx
 import tools.base as base
 from agent.domains.browser import navigate_page
 from agent.principal import SOURCE_ASSERTION, Principal
 
 seen = []
 
-class Response:
-    status_code = 200
-    def raise_for_status(self): pass
-    def json(self): return {"code": 200, "data": []}
+def respond(request):
+    seen.append([request.method, str(request.url)])
+    return httpx.Response(200, json={"code": 200, "data": []})
 
-
-def get(url, **kwargs):
-    seen.append(["GET", url])
-    return Response()
-
-
-def post(url, **kwargs):
-    seen.append(["POST", url])
-    return Response()
-
-base._client.get = get
-base._client.post = post
+base._client = httpx.Client(transport=httpx.MockTransport(respond))
 base._get("/notes")
 base.search_notes.invoke({"keyword": "x"})
 config = {"configurable": {"user_id": 7,
