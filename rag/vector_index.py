@@ -522,7 +522,6 @@ class VectorStore:
                     "api_calls": _http_requests.get(), "logical_batches": _batches(len(pending)),
                     "missing": len(failed), "ok": False}
 
-        # Keep one row per chunk; failed zero rows are retried on the next update.
         keep: dict[str, tuple[array, int]] = {}
         for key in seen:
             row = old_rows.get(key)
