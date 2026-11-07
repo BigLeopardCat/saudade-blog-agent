@@ -59,6 +59,14 @@ def backend(articles=None):
                      "isTop": 1, "noteTags": ""} for doc in docs
                     if keyword and keyword in (doc["title"] + doc["content"]).casefold()]
             return httpx.Response(200, json={"code": 200, "data": rows})
+        if request.method == "GET" and (match := re.search(
+                r"/documents/note/(\d+)/read$", request.url.path)):
+            from eval.fixtures.document_reads import document_page
+            doc = next((doc for doc in docs if doc["id"] == int(match[1])), None)
+            if doc:
+                data = document_page("note", doc["id"], doc["title"], doc["content"],
+                                     request.url.params)
+                return httpx.Response(200, json={"code": 200, "data": data})
         if request.method == "GET" and (match := re.search(r"/notes/(\d+)(/stats)?$",
                                                            request.url.path)):
             doc = next((doc for doc in docs if doc["id"] == int(match[1])), None)

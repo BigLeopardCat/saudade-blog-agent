@@ -17,6 +17,7 @@ from config import settings as _settings
 
 # Request classification and bounded read retry; see tools/http_channel.py.
 from tools.http_channel import (
+    API_RESPONSE_BYTES,
     ERROR_INVALID_RESPONSE,
     READ_ATTEMPTS,
     READ_TIMEOUT,
@@ -64,7 +65,8 @@ def _request_timeout():
 
 
 def _get(path: str, *, not_found_text: str = "",
-         payload: dict | None = None) -> dict | list | ToolResult:
+         payload: dict | None = None,
+         max_response_bytes: int = API_RESPONSE_BYTES) -> dict | list | ToolResult:
     """Read a public API envelope without turning failures into empty results.
 
     Missing targets retain the caller's optional not_found_text.
@@ -75,7 +77,7 @@ def _get(path: str, *, not_found_text: str = "",
     body, failure = request_json(
         _client, method="POST" if payload is not None else "GET",
         url=f"{API_BASE}{path}", json_body=payload, timeout=_request_timeout,
-        attempts=READ_ATTEMPTS)
+        attempts=READ_ATTEMPTS, max_response_bytes=max_response_bytes)
     if failure is not None:
         return read_failure(failure, deny_msg="当前身份无权读取该公开数据",
                             not_found_text=not_found_text)
@@ -287,6 +289,7 @@ from tools.board_moderation import (  # noqa: E402,F401
 from tools.notes import (  # noqa: E402,F401
     DOC_TYPE_CN,
     get_article_detail,
+    get_article_stats,
     get_blog_info,
     get_social_links,
     rag_search,
@@ -296,10 +299,6 @@ from tools.notifications import list_notifications  # noqa: E402,F401
 
 # Current-user adapters and read-state mutations share the HTTP primitives above.
 from tools.own_data import (  # noqa: E402,F401
-    _fav_count,
-    _fav_row,
-    _fav_title,
-    _favorites_snapshot,
     add_favorite,
     list_my_favorites,
     remove_favorite,
@@ -311,6 +310,7 @@ from tools.own_data import (  # noqa: E402,F401
 _TOOL_REGISTRY = [
     search_notes,
     get_article_detail,
+    get_article_stats,
     rag_search,
     get_blog_info,
     get_social_links,

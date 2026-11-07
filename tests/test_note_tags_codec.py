@@ -1,8 +1,11 @@
 """Article reads use typed host references without taxonomy lookup or ID guessing."""
 
+from urllib.parse import parse_qs, urlsplit
+
 import pytest
 
 from agent.domains.article_metadata import tag_references
+from eval.fixtures.document_reads import document_page
 from tools import base
 from tools.notes import get_article_detail, search_notes
 from tools.result import unavailable
@@ -25,8 +28,10 @@ def _transport(monkeypatch, data):
 
     def read(path, **kwargs):
         calls.append((path, kwargs))
-        if path.endswith("/stats"):
-            return {}
+        if path.startswith("/documents/note/") and isinstance(data, dict):
+            query = {key: values[0] for key, values in parse_qs(urlsplit(path).query).items()}
+            return document_page("note", 19, data["noteTitle"], data["noteContent"], query,
+                                 {"tags": data.get("noteTagRefs"), "tagsTruncated": False})
         assert path not in ("/tagone", "/tagtwo")
         return data
 
@@ -47,7 +52,7 @@ def test_detail_uses_host_refs_without_duplicate_raw_tags_or_directory_requests(
     result = get_article_detail.invoke({"article_id": 19})
     assert result.kind == "ok" and result.data["tags"] == EXPECTED
     assert "noteTagRefs" not in result.data and "noteTags" not in result.data
-    assert [path for path, _ in calls] == ["/notes/19", "/notes/19/stats"]
+    assert [path.split("?")[0] for path, _ in calls] == ["/documents/note/19/read"]
 
 
 @pytest.mark.parametrize("refs", [None, "7", {}, [None], [{"id": True, "level": 1, "name": "T"}],
@@ -59,7 +64,7 @@ def test_malformed_refs_remain_unknown_without_raw_id_guessing(monkeypatch, refs
     result = get_article_detail.invoke({"article_id": 19})
     assert result.kind == "ok" and result.data["tags"] is None
     assert result.data["noteContent"] == "body"
-    assert len(calls) == 2
+    assert len(calls) == 1
     with pytest.raises(ValueError):
         tag_references(refs)
 

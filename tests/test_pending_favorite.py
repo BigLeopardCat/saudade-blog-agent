@@ -101,10 +101,12 @@ def test_feedback_invalidates_pending_without_executing_or_emitting_another_card
 def test_replacement_revokes_old_card_and_stale_click_preserves_new_card(
         waiting, site, monkeypatch):
     runtime, proposal, _ = waiting
-    original = base._get
-    monkeypatch.setattr(base, "_get", lambda path, **kw: (
-        {"noteId": 20, "noteTitle": "另一篇真实文章"} if path == "/notes/20"
-        else original(path, **kw)))
+    from tools import own_data
+    original = own_data._own_get
+    monkeypatch.setattr(own_data, "_own_get", lambda path, *args, **kw: (
+        {"ownerUserId": 7, "noteId": 20, "isFavorite": False,
+         "articleAvailable": True, "title": "另一篇真实文章"}
+        if path == "/api/protected/favorites/20" else original(path, *args, **kw)))
     model = Model("prepare_favorite_change", {"action": "add", "article_id": 20})
     events = run(runtime, model, "改成收藏文章20")
     execution = next(event.execution for event in events
@@ -293,10 +295,12 @@ def test_stale_button_cancel_preserves_replacement(waiting, monkeypatch, site):
 
     runtime, proposal, _ = waiting
     grant = confirm.verify(proposal.execution["pending_confirm"]["token"], 7, 42)
-    original = base._get
-    monkeypatch.setattr(base, "_get", lambda path, **kw: (
-        {"noteId": 20, "noteTitle": "另一篇真实文章"} if path == "/notes/20"
-        else original(path, **kw)))
+    from tools import own_data
+    original = own_data._own_get
+    monkeypatch.setattr(own_data, "_own_get", lambda path, *args, **kw: (
+        {"ownerUserId": 7, "noteId": 20, "isFavorite": False,
+         "articleAvailable": True, "title": "另一篇真实文章"}
+        if path == "/api/protected/favorites/20" else original(path, *args, **kw)))
     list(run(runtime, Model("prepare_favorite_change", {
         "action": "add", "article_id": 20}), "换成20"))
     expected = runtime.get_state(config()).values["pending_confirm"]

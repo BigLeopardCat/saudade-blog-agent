@@ -106,10 +106,12 @@ def own_domains(tools: dict) -> dict:
 
 def public_domains() -> dict:
     from agent.domains import activity_search, public_activity, public_catalog
+    from tools.notes import get_article_stats
     from tools.site import get_current_time
 
     groups = {"public_catalog": (public_catalog.list_notes, public_catalog.get_top_notes,
-                                  public_catalog.list_categories, public_catalog.list_tags),
+                                  public_catalog.list_categories, public_catalog.list_tags,
+                                  get_article_stats),
               "public_activity": (activity_search.search_public_activity,
                                    public_activity.get_announcements,
                                    public_activity.list_guestbook,

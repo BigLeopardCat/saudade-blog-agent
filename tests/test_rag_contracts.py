@@ -8,11 +8,11 @@ from array import array
 import pytest
 
 from config import settings
+from eval.fixtures.document_reads import RevisionChanged, article_page
 from rag import search as retrieval
 from rag import vector_index as vectors
 from rag.chunks import MAX_CHARS
 from rag.corpus import CorpusUnavailable, content_revision, corpus_revision, fetch
-from rag.reading import RevisionChanged, article_page
 from rag.sections import reading_revision
 from tools.result import unavailable
 

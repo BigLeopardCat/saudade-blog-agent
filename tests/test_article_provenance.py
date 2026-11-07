@@ -9,8 +9,9 @@ from langchain_core.tools import tool
 from agent.domains.articles.evidence import ArticleEvidence
 from agent.products.blog import articles
 from agent.runtime.session import ToolSession
+from eval.fixtures.document_reads import article_page
 from eval.online_judge import runtime_context
-from rag.reading import article_page, render_article_result
+from rag.reading import render_article_result
 from tools.base import SITE_BASE
 from tools.result import ok, unavailable
 from utils.trace import tool_result_text

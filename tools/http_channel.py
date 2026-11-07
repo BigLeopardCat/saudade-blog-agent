@@ -15,6 +15,7 @@ A body-based read is selected explicitly by the caller (``json_body=``); the
 channel never infers read or write intent from a URL.
 """
 
+import json
 import logging
 import re
 import time
@@ -27,7 +28,8 @@ from tenacity import Retrying, retry_if_exception, stop_after_attempt, wait_fixe
 from tools.result import ToolResult, invalid_args, not_found, unavailable
 from utils.logging import get_trace_id
 
-__all__ = ["ERROR_FORBIDDEN", "ERROR_INVALID_ARGS", "ERROR_INVALID_RESPONSE",
+__all__ = ["API_RESPONSE_BYTES", "CORPUS_RESPONSE_BYTES", "ERROR_FORBIDDEN",
+           "ERROR_INVALID_ARGS", "ERROR_INVALID_RESPONSE",
            "ERROR_NOT_FOUND", "ERROR_UPSTREAM_REJECTED", "ERROR_UPSTREAM_UNAVAILABLE",
            "ERROR_WRITE_UNKNOWN", "Failure", "MESSAGE_MAX", "READ_ATTEMPTS",
            "READ_TIMEOUT", "RETRY_WAIT_SECONDS", "logger", "read_failure",
@@ -40,6 +42,8 @@ READ_ATTEMPTS = 2
 READ_TIMEOUT = 15.0
 RETRY_WAIT_SECONDS = 0.1
 MESSAGE_MAX = 200
+API_RESPONSE_BYTES = 8 * 1024 * 1024
+CORPUS_RESPONSE_BYTES = 16 * 1024 * 1024
 
 # Machine-readable codes carried in ToolResult.meta["error"].
 ERROR_INVALID_ARGS = "invalid_args"
@@ -68,7 +72,7 @@ _UNAVAILABLE_READ = "服务暂时不可用，请稍后再试"
 class Failure(Exception):
     """Classified request failure; ``message`` is a sanitized backend message.
 
-    ``attempts`` counts requests that actually left the process. The failure is
+    ``attempts`` counts started HTTP attempts. The failure is
     raised internally and also returned by ``request_json`` so callers can build
     wording without catching exceptions."""
 
@@ -85,7 +89,7 @@ class Failure(Exception):
 
 
 class _Stopped(Exception):
-    """The caller's stop signal was raised between attempts."""
+    """The caller's stop signal was raised at a request or body-read boundary."""
 
 
 def _safe_message(value) -> str:
@@ -112,35 +116,51 @@ def _classify_status(status: int, *, write: bool) -> Failure:
     return Failure(ERROR_UPSTREAM_REJECTED, status=status)
 
 
-def _decode(resp: httpx.Response, *, write: bool) -> dict:
+def _decode(content: bytearray, *, status: int, write: bool) -> dict:
     """Decode and validate the shared response envelope."""
     try:
-        body = resp.json()
+        body = json.loads(content)
     except ValueError:
         code = ERROR_WRITE_UNKNOWN if write else ERROR_INVALID_RESPONSE
-        raise Failure(code, status=resp.status_code) from None
+        raise Failure(code, status=status) from None
     if not isinstance(body, dict):
         code = ERROR_WRITE_UNKNOWN if write else ERROR_INVALID_RESPONSE
-        raise Failure(code, status=resp.status_code) from None
+        raise Failure(code, status=status) from None
     if body.get("code") != 200:
-        raise Failure(ERROR_UPSTREAM_REJECTED, status=resp.status_code,
+        raise Failure(ERROR_UPSTREAM_REJECTED, status=status,
                       message=_safe_message(body.get("message")))
     return body
 
 
-def _attempt_once(client: httpx.Client, *, method: str, url: str, headers=None,
-                  json_body=None, timeout: float, write: bool) -> dict:
-    """Send one request and return the validated envelope or raise ``Failure``."""
+def _read_body(response, maximum, write, check):
+    failure = ERROR_WRITE_UNKNOWN if write else ERROR_INVALID_RESPONSE
+    length = response.headers.get("content-length")
     try:
-        if method == "GET":
-            resp = client.get(url, timeout=timeout, headers=headers)
-        elif method == "POST":
-            resp = client.post(url, timeout=timeout, headers=headers, json=json_body)
-        else:
-            resp = client.request(method, url, timeout=timeout, headers=headers,
-                                  json=json_body)
+        declared = int(length) if length is not None else None
+    except ValueError:
+        declared = None
+    if declared is not None and declared > maximum:
+        raise Failure(failure, status=response.status_code)
+    content = bytearray()
+    for chunk in response.iter_bytes(65536):
+        check()
+        if len(chunk) > maximum - len(content):
+            raise Failure(failure, status=response.status_code)
+        content.extend(chunk)
+    return content
+
+
+def _attempt_once(client: httpx.Client, *, method: str, url: str, headers=None,
+                  json_body=None, timeout: float, write: bool,
+                  max_response_bytes: int, check: Callable[[], object]) -> dict:
+    """Read one bounded decoded response and close it on every exit."""
+    try:
+        with client.stream(method, url, timeout=timeout, headers=headers, json=json_body) as resp:
+            if resp.status_code != 200:
+                raise _classify_status(resp.status_code, write=write)
+            return _decode(_read_body(resp, max_response_bytes, write, check),
+                           status=resp.status_code, write=write)
     except (httpx.InvalidURL, httpx.UnsupportedProtocol):
-        # A malformed endpoint is a caller bug: nothing was sent, nothing to retry.
         raise Failure(ERROR_INVALID_ARGS) from None
     except _TRANSIENT_ERRORS:
         code = ERROR_WRITE_UNKNOWN if write else ERROR_UPSTREAM_UNAVAILABLE
@@ -148,22 +168,24 @@ def _attempt_once(client: httpx.Client, *, method: str, url: str, headers=None,
     except httpx.HTTPError:
         code = ERROR_WRITE_UNKNOWN if write else ERROR_UPSTREAM_UNAVAILABLE
         raise Failure(code) from None
-    if resp.status_code != 200:
-        raise _classify_status(resp.status_code, write=write)
-    return _decode(resp, write=write)
 
 
 def request_json(client: httpx.Client, *, method: str, url: str, headers=None,
                  json_body=None, timeout: float | Callable[[], float] = READ_TIMEOUT,
                  attempts: int = READ_ATTEMPTS,
                  stop: Callable[[], bool] | None = None,
-                 write: bool = False) -> tuple[dict | None, Failure | None]:
+                 write: bool = False,
+                 max_response_bytes: int = API_RESPONSE_BYTES,
+                 ) -> tuple[dict | None, Failure | None]:
     """Send a JSON request and return ``(envelope, failure)``; exactly one is set.
 
     Reads pass ``attempts=2`` (the default). Writes must pass ``attempts=1``
     and ``write=True`` so a possibly-applied request is never replayed.
-    A timeout callback can enforce the caller's deadline before each attempt;
-    its cancellation/deadline exceptions propagate without classification."""
+    The response limit counts decoded bytes; corpus callers opt into their larger bound.
+    The timeout callback rechecks cancellation/deadlines before sending and between chunks;
+    its exceptions propagate without classification."""
+    if type(max_response_bytes) is not int or not 0 < max_response_bytes <= CORPUS_RESPONSE_BYTES:
+        raise ValueError("response limit must be positive and no larger than the corpus bound")
     trace_id = get_trace_id()
     if trace_id != "-":
         headers = httpx.Headers(headers)
@@ -181,16 +203,20 @@ def request_json(client: httpx.Client, *, method: str, url: str, headers=None,
     )
     sent = 0
 
-    def send():
-        nonlocal sent
+    def active_timeout():
         if stop is not None and stop():
             raise _Stopped()
-        remaining = timeout() if callable(timeout) else timeout
+        return timeout() if callable(timeout) else timeout
+
+    def send():
+        nonlocal sent
+        remaining = active_timeout()
         sent += 1
         began = time.monotonic()
         try:
             result = _attempt_once(client, method=method, url=url, headers=headers,
-                                   json_body=json_body, timeout=remaining, write=write)
+                                   json_body=json_body, timeout=remaining, write=write,
+                                   max_response_bytes=max_response_bytes, check=active_timeout)
         except Failure as failure:
             logger.warning("tool_http_failed method=%s host=%s path=%s status=%s "
                            "code=%s attempt=%s duration_ms=%.2f", method, endpoint.hostname,
@@ -207,7 +233,7 @@ def request_json(client: httpx.Client, *, method: str, url: str, headers=None,
             with attempt:
                 return send(), None
     except _Stopped:
-        logger.warning("request stopped before send: method=%s attempts=%s", method, sent)
+        logger.warning("request stopped: method=%s attempts=%s", method, sent)
         return None, Failure(ERROR_WRITE_UNKNOWN if write else ERROR_UPSTREAM_UNAVAILABLE,
                              attempts=sent)
     except Failure as failure:

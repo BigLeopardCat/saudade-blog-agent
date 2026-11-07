@@ -4,10 +4,10 @@ from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 
+from eval.fixtures.document_reads import article_page
 from rag import sections
 from rag.chunks import strategy_signature
 from rag.corpus import content_revision
-from rag.reading import RevisionChanged, article_page
 from rag.search import RagIndex
 
 
@@ -72,21 +72,19 @@ def test_empty_parents_duplicate_headings_and_scope_remain_unambiguous():
     assert parent["sectionText"] == content[rows[0]["body_start"]:]
 
 
-def test_parser_strategy_invalidates_old_read_cursors_and_vector_space(monkeypatch):
-    data = {"noteTitle": "T", "noteContent": "## Parent\nbody\n### Child\nnext"}
-    first = article_page(data, 1, max_chars=8)
+def test_parser_strategy_is_separate_from_canonical_content_and_rejects_old_views(monkeypatch):
+    from agent.domains.articles.reading import project
+    from eval.fixtures.document_reads import document_page
+
+    body = "## Parent\nbody\n### Child\nnext"
+    first = document_page("note", 1, "T", body, {"limit": 8})
     old_space = strategy_signature()
-    assert first["contentRevision"] != content_revision("T", data["noteContent"])
+    assert first["contentRevision"] == content_revision("T", body)
     monkeypatch.setattr(sections, "PARSER_VERSION", "a-new-commonmark-source-view")
     assert strategy_signature() != old_space
-    with pytest.raises(RevisionChanged, match="读取版本不一致"):
-        article_page(data, 1, offset=8, revision=first["contentRevision"])
-    with pytest.raises(RevisionChanged):
-        article_page(data, 1, "s1", revision=first["contentRevision"])
-    with pytest.raises(ValueError, match="contentRevision"):
-        article_page(data, 1, "s1")
-    with pytest.raises(RevisionChanged):
-        article_page(data, 1, "s1", revision=content_revision("T", data["noteContent"]))
+    assert sections.reading_revision("T", body) == first["contentRevision"]
+    with pytest.raises(ValueError, match="section view"):
+        project(first, "note", 1, "", 0, 8, first["contentRevision"], first["sectionSchema"])
 
 
 def test_retrieval_revision_and_chunk_ranges_are_readable_under_the_same_parser():
@@ -102,7 +100,7 @@ def test_retrieval_revision_and_chunk_ranges_are_readable_under_the_same_parser(
         offset=match["offset"], max_chars=match["end"] - match["offset"],
         revision=hit["document_revision"],
     )
-    assert hit["document_revision"] != source["revision"]
+    assert hit["document_revision"] == source["revision"]
     assert frame["contentRevision"] == hit["document_revision"]
     assert frame["sectionText"] == "needle👩🏽‍💻é\r\nend"
 

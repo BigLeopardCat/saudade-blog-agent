@@ -8,7 +8,8 @@ from langchain_core.messages import AIMessage, HumanMessage
 from agent.domains.articles.evidence import ArticleEvidence
 from agent.products.blog.articles import ArticleMiddleware
 from agent.runtime.session import ToolSession
-from rag.reading import article_page, render_article_result
+from eval.fixtures.document_reads import article_page
+from rag.reading import render_article_result
 from tools.base import SITE_BASE, get_article_detail
 from tools.result import empty, ok, unavailable
 
@@ -128,17 +129,25 @@ def test_real_tool_exposes_revision_bound_continuation_and_stable_section_ids(mo
     import tools.base as base
 
     source = {"noteKey": 1, "noteTitle": "T", "noteContent": "## 重复\nfirst\n## 重复\nsecond"}
-    monkeypatch.setattr(
-        base, "_get", lambda path, **kwargs: {} if path.endswith("/stats") else source
-    )
+    from urllib.parse import parse_qs, urlsplit
+
+    from eval.fixtures.document_reads import document_page
+
+    def read(path, **kwargs):
+        query = {key: values[0] for key, values in parse_qs(urlsplit(path).query).items()}
+        return document_page("note", 1, source["noteTitle"], source["noteContent"], query)
+
+    monkeypatch.setattr(base, "_get", read)
     first = get_article_detail.invoke({"article_id": 1, "max_chars": 8})
     assert first.kind == "ok" and first.data["nextOffset"] == 8
     second = get_article_detail.invoke(
-        {"article_id": 1, "offset": 8, "revision": first.data["contentRevision"]}
+        {"article_id": 1, "offset": 8, "revision": first.data["contentRevision"],
+         "section_schema": first.data["sectionSchema"]}
     )
     assert first.data["noteContent"] + second.data["noteContent"] == source["noteContent"]
     selected = get_article_detail.invoke(
-        {"article_id": 1, "section": "s2", "revision": first.data["contentRevision"]}
+        {"article_id": 1, "section": "s2", "revision": first.data["contentRevision"],
+         "section_schema": first.data["sectionSchema"]}
     )
     assert "second" in selected.data["sectionText"] and "first" not in selected.data["sectionText"]
 

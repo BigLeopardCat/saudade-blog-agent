@@ -16,10 +16,11 @@ def test_notification_fixture_distinguishes_counts_from_readable_contents():
     with backend("user") as state:
         counts = get_inbox_overview.invoke({}, config=config("user"))
         result = own_tools()["list_notifications"].invoke(
-            {"unread_only": True}, config=config("user"))
+            {"unread_only": True, "include_preview": True}, config=config("user"))
         assert counts.data["notifications"] == 2
         items = result.data["items"]
         assert {row["title"] for row in items} == {"合成部署完成", "合成评论待审"}
+        assert {row["content"] for row in items} == {"本次部署已完成", "有评论等待审核"}
         assert not state["unsupported_reads"] and all(r.method == "GET" for r in state["requests"])
 
 
@@ -34,7 +35,7 @@ def test_public_and_admin_views_share_content_but_only_admin_reveals_publisher()
         assert denied.kind == "unavailable" and not state["requests"]
 
 
-def test_legacy_public_detail_route_remains_an_authorized_alternative_in_the_fixture():
+def test_bounded_public_detail_is_authorized_without_publisher_identity():
     from tools.notes import get_article_detail
 
     with backend("superadmin") as state:
