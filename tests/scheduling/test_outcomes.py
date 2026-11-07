@@ -56,6 +56,54 @@ def test_verified_success_and_failed_notification_are_separate_facts():
     assert run_view(missing)["error"] == "execution_failed"
 
 
+def test_dbos_timer_progress_does_not_invalidate_the_approved_control_version():
+    task = row(state="ENQUEUED")
+    task.output = None
+    first = once_view(task)
+    for state in ("DELAYED", "PENDING"):
+        task.status = state
+        task.attributes["runtime_note"] = "non-control metadata"
+        current = once_view(task)
+        assert current["state"] != first["state"]
+        assert current["version"] == first["version"]
+    task.status, task.output = "SUCCESS", {"status": "completed", "text": "verified"}
+    completed = once_view(task)
+    assert completed["result"] != first["result"]
+    assert completed["version"] == first["version"]
+
+
+@pytest.mark.parametrize("field", ["paused", "cancelled", "acknowledged", "definition", "start_at"])
+def test_real_control_mutations_still_invalidate_stale_versions(field):
+    task = row(state="PENDING")
+    before = once_view(task)["version"]
+    if field == "definition":
+        task.attributes[field] = {**task.attributes[field], "instruction": "changed approval"}
+    elif field == "start_at":
+        task.attributes[field] = "2026-11-08T00:00:00+00:00"
+    else:
+        task.attributes[field] = True
+    assert once_view(task)["version"] != before
+
+
+def test_control_after_timer_transition_uses_same_version_but_stale_resume_is_rejected():
+    task = row(state="ENQUEUED")
+    task.output = None
+    client = SimpleNamespace(update_workflow_attributes=Mock(
+        side_effect=lambda _, attrs, **kw: task.attributes.update(attrs)))
+    backend = SimpleNamespace(client=client, mutation=lambda _: nullcontext(),
+                              once=lambda *_: task, recurring=lambda *_: None)
+    service = ScheduleService(backend, lambda _: ADMIN)
+    approved = service.get(ADMIN, IDENT)
+    task.status = "PENDING"
+    paused = service.control(ADMIN, IDENT, "pause", approved["version"])["schedule"]
+    assert paused["status"] == "paused" and paused["version"] != approved["version"]
+    with pytest.raises(ScheduleConflict):
+        service.control(ADMIN, IDENT, "resume", approved["version"])
+    task.status, task.output = "SUCCESS", {"status": "completed"}
+    with pytest.raises(ScheduleConflict, match="already ended"):
+        service.control(ADMIN, IDENT, "resume", paused["version"])
+
+
 def test_active_view_adds_bounded_attention_without_loading_each_task():
     active = row(state="PENDING")
     active.attributes["schedule_id"] = "sc_" + "b" * 32

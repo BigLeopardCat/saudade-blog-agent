@@ -67,7 +67,11 @@ def once_view(row):
         "run_at": attributes["start_at"],
         "kind": "once",
     }
-    return {**view, "version": fingerprint(view)}
+    control = {
+        "id": view["id"], "definition": definition, "run_at": view["run_at"], "kind": "once",
+        **{key: bool(attributes.get(key)) for key in ("paused", "cancelled", "acknowledged")},
+    }
+    return {**view, "version": fingerprint(control)}
 
 
 def recurring_view(row):
