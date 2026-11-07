@@ -1,145 +1,75 @@
-"""Current-user reads and confirmed favorite persistence adapters."""
+"""Current-user favorite reads and authoritative mutation receipts."""
 
 from typing import Annotated
 
 from langchain_core.runnables.config import RunnableConfig
 from langchain_core.tools import tool
+from pydantic import Field, StrictInt
 
-from tools.base import (
-    _as_article_id,
-    _own_delete,
-    _own_get,
-    _own_post,
-    _own_write_guard,
-    _pre_read_fail,
-)
+from tools.base import _own_delete, _own_get, _own_post, _own_write_guard
 from tools.result import ToolResult, _shape, fact, ok, tgt, unavailable
+
+_ArticleId = Annotated[StrictInt, Field(gt=0, le=2_147_483_647)]
 
 
 @tool
 def list_my_favorites(config: RunnableConfig) -> str | ToolResult:
-    """列出**当前登录用户自己**收藏的文章（返回 noteId / title / status / createdAt）。
-    访客问"我收藏了哪些文章""我的收藏夹里有什么"时用。没携带身份时如实告知读不到。
-    注意：这条读的是**用户自己的**收藏夹，不是全站文章列表（那是 list_notes）。"""
-    data = _own_get("/api/protected/favorites", config)
-    return _shape(data)
+    """列出本人收藏的公开文章及编号；读取收藏夹无需先读取文章正文。"""
+    return _shape(_own_get("/api/protected/favorites", config))
 
-def _favorites_snapshot(config: RunnableConfig,
-                        what: str) -> tuple[list | None, ToolResult | None]:
-    """Read current-user favorites as either rows or a failure reason.
 
-    Exactly one result is None. An empty row list is an observed empty collection,
-    while a failure prevents target selection and subsequent writes."""
-    got = _own_get("/api/protected/favorites", config)
-    if isinstance(got, ToolResult):
-        return None, _pre_read_fail(got, what)
-    if not isinstance(got, list):
-        return None, unavailable(f"读不到{what}，本次未改动")
-    return got, None
+def favorite_state(article_id: int, config: RunnableConfig):
+    """Read an owned relationship independently of public article visibility."""
+    value = _own_get(f"/api/protected/favorites/{article_id}", config)
+    if isinstance(value, ToolResult):
+        return value
+    principal = ((config or {}).get("configurable") or {}).get("principal")
+    if (not isinstance(value, dict) or principal is None
+            or type(value.get("ownerUserId")) is not int or value["ownerUserId"] != principal.uid
+            or type(value.get("noteId")) is not int or value["noteId"] != article_id
+            or type(value.get("isFavorite")) is not bool
+            or type(value.get("articleAvailable")) is not bool
+            or (value["articleAvailable"] and
+                (not isinstance(value.get("title"), str) or not value["title"].strip()))
+            or (not value["articleAvailable"] and value.get("title") is not None)):
+        return unavailable("未能核对本人收藏与文章标识，本次未准备改动。")
+    return value
 
-def _fav_row(data, note_id: int) -> dict | None:
-    """收藏列表 → 目标那一行（不是列表/没这一行 → None，不猜）。"""
-    if not isinstance(data, list):
-        return None
-    for r in data:
-        if isinstance(r, dict) and _as_article_id(r.get("noteId")) == note_id:
-            return r
-    return None
 
-def _fav_count(data) -> str:
-    """收藏条数的括注；读不出条数就**什么都不写**（不写 0）。"""
-    n = len(data) if isinstance(data, list) else None
-    return f"（你的收藏夹现在有 {n} 篇）" if n is not None else ""
-
-def _fav_title(row: dict) -> str:
-    t = str(row.get("title") or "").strip()
-    return f"《{t}》" if t else ""
-
-@tool
-def add_favorite(
-    article_id: Annotated[int, "文章 id：用户本轮点名了（如「收藏文章 12」）就直接用点名的那个；"
-                               "只说特征（「收藏那篇讲架构的」）或指代（「收藏这篇」）时"
-                               "必须先用检索/列表工具或 get_article_detail 拿到确切 id，"
-                               "不许凭记忆猜"],
-    config: RunnableConfig,
-) -> str | ToolResult:
-    """把一篇文章收藏进**当前登录用户自己**的收藏夹（幂等：已收藏过就如实说本来就有，
-    不会重复收藏）。收藏只有他自己看得见，**不改变文章的公开状态**。
-    没携带身份时如实告知，一个请求都不发。"""
-    aid = _as_article_id(article_id)
-    if aid is None:
-        return unavailable(f"文章 id「{article_id}」不合法，未改动")
+def _change(article_id, desired, config):
     guard = _own_write_guard(config)
     if guard is not None:
         return guard
+    value = (_own_post("/api/protected/favorites", {"noteId": article_id}, config)
+             if desired else _own_delete(f"/api/protected/favorites/{article_id}", config))
+    if isinstance(value, ToolResult):
+        return value
+    principal = ((config or {}).get("configurable") or {}).get("principal")
+    if (not isinstance(value, dict) or principal is None
+            or type(value.get("ownerUserId")) is not int or value["ownerUserId"] != principal.uid
+            or type(value.get("noteId")) is not int or value["noteId"] != article_id
+            or type(value.get("isFavorite")) is not bool or value["isFavorite"] is not desired
+            or type(value.get("changed")) is not bool):
+        return unavailable("请求已发出，但没有收到可验证的收藏结果；请先查询状态。")
+    changed = value["changed"]
+    action = "收藏" if desired else "取消收藏"
+    text = (f"已{action}文章 {article_id}。" if changed
+            else f"文章 {article_id} 的收藏状态已满足，本次无需改动。")
+    return ok(text, meta=fact("favorite_add" if desired else "favorite_remove", changed=changed,
+                             target=tgt("note", article_id), article_id=article_id,
+                             change=action if changed else "状态已满足"))
 
-    before, fail = _favorites_snapshot(config, "你的收藏列表（拿不准是不是已经收藏过）")
-    if fail is not None:
-        return fail
-    hit = _fav_row(before, aid)
-    if hit is not None:
-        return ok(f"文章 {aid}{_fav_title(hit)}本来就在你的收藏夹里，无需改动（没有发出写请求）。",
-                  meta=fact("favorite_add", changed=False, target=tgt("note", aid),
-                            before="已收藏", after="已收藏", change="本来已收藏",
-                            article_id=aid))
-
-    data = _own_post("/api/protected/favorites", {"noteId": aid}, config)
-    if isinstance(data, ToolResult):
-        return data
-
-    after = _own_get("/api/protected/favorites", config)
-    if isinstance(after, ToolResult):
-        # The write has already been sent. A failed read-back means uncertain completion.
-        return unavailable(f"收藏请求已发出，但读不回你的收藏列表（{after}），"
-                           f"本次改动未确认生效（不要声称已收藏）")
-    got = _fav_row(after, aid)
-    if got is None:
-        return unavailable(f"收藏请求已发出，但读回收藏列表里没有文章 {aid}，"
-                           f"本次改动未确认生效（不要声称已收藏）")
-    return ok(f"已收藏文章 {aid}{_fav_title(got)}{_fav_count(after)}。",
-              meta=fact("favorite_add", changed=True, target=tgt("note", aid),
-                        before="未收藏", after="已收藏", change="已收藏", article_id=aid))
 
 @tool
-def remove_favorite(
-    article_id: Annotated[int, "文章 id：同 add_favorite（点名了就直接用，"
-                               "只说特征/指代时先用检索或收藏列表拿到确切 id）"],
-    config: RunnableConfig,
-) -> str | ToolResult:
-    """把一篇文章从**当前登录用户自己**的收藏夹里去掉（本来就没收藏过就如实说，
-    不当成出错——同一个按钮点两次不该报错）。只动他自己的收藏夹，不改文章本身。
-    没携带身份时如实告知，一个请求都不发。"""
-    aid = _as_article_id(article_id)
-    if aid is None:
-        return unavailable(f"文章 id「{article_id}」不合法，未改动")
-    guard = _own_write_guard(config)
-    if guard is not None:
-        return guard
-
-    before, fail = _favorites_snapshot(config, "你的收藏列表（拿不准是不是本来就没收藏）")
-    if fail is not None:
-        return fail
-    hit = _fav_row(before, aid)
-    if hit is None:
-        return ok(f"文章 {aid} 本来就不在你的收藏夹里，无需改动（没有发出写请求）。",
-                  meta=fact("favorite_remove", changed=False, target=tgt("note", aid),
-                            before="未收藏", after="未收藏", change="本来就没收藏",
-                            article_id=aid))
-
-    data = _own_delete(f"/api/protected/favorites/{aid}", config)
-    if isinstance(data, ToolResult):
-        return data
-
-    after = _own_get("/api/protected/favorites", config)
-    if isinstance(after, ToolResult):
-        return unavailable(f"取消收藏请求已发出，但读不回你的收藏列表（{after}），"
-                           f"本次改动未确认生效（不要声称已取消）")
-    if _fav_row(after, aid) is not None:
-        return unavailable(f"取消收藏请求已发出，但读回收藏列表里文章 {aid} 还在，"
-                           f"本次改动未确认生效（不要声称已取消）")
-    return ok(f"已取消收藏文章 {aid}{_fav_title(hit)}{_fav_count(after)}。",
-              meta=fact("favorite_remove", changed=True, target=tgt("note", aid),
-                        before="已收藏", after="未收藏", change="已取消收藏", article_id=aid))
+def add_favorite(article_id: _ArticleId, config: RunnableConfig) -> str | ToolResult:
+    """收藏已确认编号的公开文章，返回后端提交的真实变更事实。"""
+    return _change(article_id, True, config)
 
 
-__all__ = ['list_my_favorites', 'add_favorite', 'remove_favorite']
+@tool
+def remove_favorite(article_id: _ArticleId, config: RunnableConfig) -> str | ToolResult:
+    """取消本人已确认编号的收藏；文章变为私密或草稿也不影响移除自己的关系。"""
+    return _change(article_id, False, config)
+
+
+__all__ = ["list_my_favorites", "add_favorite", "remove_favorite"]

@@ -7,13 +7,13 @@ from langchain_core.tools import tool
 from pydantic import Field, StrictInt
 
 from agent import authz
-from agent.identifiers import normalize_target_id
 from agent.proposals import proposal
 from agent.runtime.results import TurnResult
 from agent.runtime.tool_evidence import observed
 from agent.runtime.turns import check_cancelled
 from agent.runtime.writes import bound_context
 from tools import base
+from tools.own_data import favorite_state
 
 
 def available(config) -> bool:
@@ -22,23 +22,6 @@ def available(config) -> bool:
     except ValueError:
         return False
     return authz.holds(principal, authz.SCOPE_WRITE_OWN)
-
-
-def _target(article_id, favorite):
-    # An existing favorite remains removable even when its public article was deleted.
-    row = favorite if favorite is not None else base._get(
-        f"/notes/{article_id}", not_found_text="站内没有这篇文章，本次未准备收藏。")
-    if isinstance(row, base.ToolResult):
-        return row
-    # Public article DTOs use noteKey; favorite rows use noteId. Both must agree if present.
-    identifiers = ({normalize_target_id(row[key]) for key in ("noteId", "noteKey") if key in row}
-                   if isinstance(row, dict) else set())
-    if identifiers != {article_id}:
-        return base.unavailable("未能核对文章标识，本次未生成确认卡。")
-    title = row.get("noteTitle") or row.get("title")
-    if not isinstance(title, str) or not title.strip():
-        return base.unavailable("未读到可核对的文章标题，本次未生成确认卡。")
-    return {**row, "noteId": article_id, "noteTitle": title}
 
 
 def _confirmation(principal, cid, workflow, spec, target):
@@ -54,7 +37,7 @@ def _confirmation(principal, cid, workflow, spec, target):
 @tool(return_direct=True)
 def prepare_favorite_change(
     action: Literal["add", "remove"],
-    article_id: Annotated[StrictInt, Field(gt=0)],
+    article_id: Annotated[StrictInt, Field(gt=0, le=2_147_483_647)],
     config: RunnableConfig,
 ) -> object:
     """用户请求收藏或取消收藏时直接提供文章编号，本工具自行读取文章与本人收藏状态并生成确认卡。
@@ -69,23 +52,23 @@ def prepare_favorite_change(
     name = "add_favorite" if action == "add" else "remove_favorite"
     if not authz.check(principal, name).allowed:
         return base.unavailable("当前身份无权修改收藏，本次未生成确认卡。")
-    favorites, error = base._favorites_snapshot(config, "你的收藏状态")
-    if error is not None:
-        return error
-    favorite = base._fav_row(favorites, article_id)
-    observed("favorites", {"article_id": article_id, "is_favorite": favorite is not None},
+    state = favorite_state(article_id, config)
+    if isinstance(state, base.ToolResult):
+        return state
+    observed("favorites", {"article_id": article_id, "is_favorite": state["isFavorite"]},
              ("article_id", "is_favorite"))
     spec = {"tool": name, "args": {"article_id": article_id}}
-    if (favorite is not None) == (action == "add"):
+    if state["isFavorite"] == (action == "add"):
         state = "已经收藏" if action == "add" else "本来就未收藏"
         reply = f"文章 {article_id} {state}，本次无需改动。"
         return TurnResult(reply, {"noop_note": reply, "noop_text": reply,
                                   "task_satisfied": [spec], "receipts": []})
-    target = _target(article_id, favorite)
-    if isinstance(target, base.ToolResult):
-        return target
-    observed("articles", {"article_id": article_id, "title": target["noteTitle"]},
-             ("article_id", "title"))
+    if action == "add" and not state["articleAvailable"]:
+        return base.unavailable("这篇文章当前不可公开访问，本次未准备收藏。")
+    target = {"noteId": article_id, "noteTitle": state.get("title") or ""}
+    if state["articleAvailable"]:
+        observed("articles", {"article_id": article_id, "title": state["title"]},
+                 ("article_id", "title"))
     check_cancelled(config)
     return _confirmation(principal, cid, f"favorite_{action}", spec, target)
 
