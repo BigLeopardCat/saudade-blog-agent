@@ -1,16 +1,16 @@
 """Prepare image metadata and article covers from server-owned versions."""
 
-from typing import Annotated, Literal
+from typing import Literal
 from urllib.parse import quote
 
 from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import tool
-from pydantic import Field, StrictInt
 
 from agent.domains.admin_writes import available
-from agent.domains.gallery import targets
+from agent.domains.gallery import image_actions, targets
 from agent.proposals import proposal
 from agent.reports import sanitize_untrusted
+from agent.runtime.tool_evidence import observed
 from agent.runtime.turns import check_cancelled
 from agent.runtime.writes import bound_context
 from tools import base
@@ -19,69 +19,81 @@ from tools.result import invalid_args
 Identifier = targets.Identifier
 
 
+def _literal(value):
+    # Gallery text is data inside a confirmation, never active Markdown/HTML.
+    return "".join("\\" + char if char in "\\`*_{}[]<>()#!|" else char for char in value)
+
+
+def _question(request, current):
+    ids = current["matchedIds"]
+    names = "、".join(_literal(row["displayName"] or f"图片 #{row['imageId']}")
+                     for row in current["preview"])
+    selection = f"图库图片（{len(ids)} 张）：" + names
+    if current["previewTruncated"]:
+        selection += "……（仅预览前 10 张）"
+    selection += "\n\n完整图片编号：" + "、".join(map(str, ids))
+    action = request["action"]
+    if action == "move":
+        name = current["destination"]["name"] if current["destination"] else "未分类"
+        change = "移动到「" + _literal(name) + f"」（目录 #{request['folderId']}）。"
+    elif action == "favorite":
+        change = "设为收藏。" if request["isFavorite"] else "取消收藏。"
+    elif action == "delete":
+        change = "从图库移除这些图片，并排队清理存储文件；已有引用会阻止整批删除。"
+    else:
+        changes = []
+        for item in request["items"]:
+            fields = []
+            for key, value in item["changes"].items():
+                if key == "displayName":
+                    fields.append("名称：" + _literal(value))
+                elif key == "description":
+                    fields.append("描述：" + (_literal(value) if value else "（清空）"))
+                elif key == "folderId":
+                    fields.append(f"目录编号：{value}")
+                else:
+                    fields.append("收藏" if value else "取消收藏")
+            changes.append(f"图片 #{item['imageId']}：" + "；".join(fields))
+        change = "\n\n".join(changes)
+    return selection + "\n\n" + change
+
+
 @tool(return_direct=True)
-def prepare_gallery_image_change(
-    image_id: Identifier,
-    config: RunnableConfig,
-    display_name: Annotated[str, Field(min_length=1, max_length=255)] | None = None,
-    description: Annotated[str, Field(max_length=2000)] | None = None,
-    folder_id: Annotated[StrictInt, Field(ge=0)] | None = None,
-    favorite: bool | None = None,
-) -> object:
-    """Prepare confirmation to rename, describe, move or favorite one gallery image.
-    image_id comes from get_gallery_index. Supply only requested changes. folder_id=0
-    means unclassified; use list_gallery_folders for other IDs. A display-name change
-    preserves the file URL and article references. Favorite belongs to the current admin.
-    Reads the authoritative metadata/version itself; no need to fetch pixels for a rename.
+def prepare_gallery_images(intent: image_actions.Intent, config: RunnableConfig) -> object:
+    """Prepare one confirmation for an atomic change to 1-100 fixed gallery images.
+    Use IDs from get_gallery_index. move needs imageIds and folderId (0=unclassified);
+    favorite needs imageIds and isFavorite; delete needs imageIds and refuses referenced
+    images. Deletion removes gallery records and queues storage cleanup, not immediate
+    physical erasure. metadata takes items of imageId/changes: displayName, description,
+    folderId, isFavorite; empty description clears it. Changes can differ per image.
+    Maximum intent is 8192 UTF-8 bytes. Names preserve URLs and article references.
+    This read-only preparation freezes the full selection and versions; nothing changes
+    until approval. Do not split a batch into repeated per-image calls.
     """
     check_cancelled(config)
     if not available(config):
-        return base.unavailable("当前身份无权修改图库。")
+        return base.unavailable("Administrator access and a stable conversation are required.")
     try:
-        patch = targets.Patch(
-            displayName=display_name,
-            description=description,
-            folderId=folder_id,
-            isFavorite=favorite,
-        ).model_dump(exclude_none=True)
-    except ValueError:
-        return invalid_args("请提供有效的图片名称、描述、文件夹或收藏修改。")
-    current = targets.image(image_id, config)
+        request = image_actions.intent(intent)
+    except (ValueError, TypeError):
+        return invalid_args("Specify a bounded gallery action with unique, fixed image IDs.")
+    current = base._admin_read_post(image_actions.PATH + "/prepare", request, config)
     if isinstance(current, base.ToolResult):
         return current
-    folder_name = "未分类"
-    if folder_id is not None and folder_id > 0:
-        folders = base._admin_get(targets.PATH + f"/folders?id={folder_id}", config)
-        if not isinstance(folders, list) or not any(
-            isinstance(f, dict) and f.get("id") == folder_id for f in folders
-        ):
-            return invalid_args("目标文件夹不存在或无法读取，请先核对图库目录。")
-        folder_name = sanitize_untrusted(
-            next(f["name"] for f in folders if f["id"] == folder_id), 80
-        )
+    try:
+        current = image_actions.plan(current, request)
+    except (ValueError, TypeError, KeyError):
+        return base.unavailable(
+            "Could not verify the complete gallery selection; no approval issued.")
+    observed("gallery_images", current,
+             ("version", "expiresAt", "matchedIds", "preview", "previewTruncated", "destination"))
     principal, cid = bound_context(config)
-    name = sanitize_untrusted(current["displayName"] or current["imageUrl"].rsplit("/", 1)[-1], 80)
-    fields = []
-    if display_name is not None:
-        fields.append("名称改为“" + sanitize_untrusted(display_name, 255) + "”")
-    if description is not None:
-        fields.append("描述：" + sanitize_untrusted(description, 2000))
-    if folder_id is not None:
-        fields.append("移动到“" + folder_name + "”")
-    if favorite is not None:
-        fields.append("收藏" if favorite else "取消收藏")
-    target = "图片“" + name + "”"
     return proposal(
-        principal,
-        cid,
-        "gallery_metadata",
-        {
-            "tool": "update_gallery_image",
-            "args": {"image_id": image_id, "version": current["version"], "changes": patch},
-        },
-        executor="gallery",
-        question=target + "：\n\n" + "\n\n".join(fields),
-        target=target,
+        principal, cid, "gallery_images",
+        {"tool": "manage_gallery_images", "args": {
+            "version": current["version"], "expiresAt": current["expiresAt"], "intent": request}},
+        executor="gallery", question=_question(request, current),
+        target=f"图库图片（{len(current['matchedIds'])} 张）",
     )
 
 
@@ -141,6 +153,6 @@ def prepare_article_cover(
 def tools(read_tools):
     return {
         **read_tools,
-        prepare_gallery_image_change.name: prepare_gallery_image_change,
+        prepare_gallery_images.name: prepare_gallery_images,
         prepare_article_cover.name: prepare_article_cover,
     }

@@ -3,12 +3,13 @@
 import time
 
 from agent import authz
-from agent.domains.gallery import targets
+from agent.domains.gallery import image_actions, targets
 from agent.runtime import writes
+from agent.runtime.turns import check_cancelled
 from tools import base
 from tools.result import fact, ok, tgt
 
-OPERATIONS = {"update_gallery_image": "gallery_metadata", "set_article_cover": "article_cover"}
+OPERATIONS = {"manage_gallery_images": "gallery_images", "set_article_cover": "article_cover"}
 PERMISSION_OPERATIONS = frozenset(OPERATIONS)
 
 
@@ -21,7 +22,7 @@ def handles(grant):
 
 
 def arguments(name, args):
-    model = targets.MetadataArguments if name == "update_gallery_image" else targets.CoverArguments
+    model = image_actions.Arguments if name == "manage_gallery_images" else targets.CoverArguments
     return model.model_validate(args).model_dump(exclude_none=True)
 
 
@@ -46,30 +47,31 @@ def validate(grant, config):
 
 
 def outcome(name, args, value):
+    if name == "manage_gallery_images":
+        return image_actions.outcome(value, args)
     if (
         not isinstance(value, dict)
         or value.get("beforeVersion") != args["version"]
         or type(value.get("changed")) is not bool
     ):
-        raise ValueError("Unverified image mutation")
-    if name == "update_gallery_image":
-        state = targets.Image.model_validate(value.get("state")).model_dump()
-        if state["imageKey"] != args["image_id"] or any(
-            state[key] != val for key, val in args["changes"].items()
-        ):
-            raise ValueError("Metadata outcome differs from approval")
-    else:
-        state = targets.Cover.model_validate(value.get("state")).model_dump()
-        if (
-            state["articleId"] != args["article_id"]
-            or value.get("imageId") != args["image_id"]
-            or state["coverUrl"] != args["image_url"]
-            or state["fit"] != args["fit"]
-        ):
-            raise ValueError("Cover outcome differs from approval")
-    if value["changed"] != (state["version"] != args["version"]):
-        raise ValueError("Mutation version does not prove its outcome")
+        raise ValueError("Unverified cover mutation")
+    state = targets.Cover.model_validate(value.get("state")).model_dump()
+    if (
+        state["articleId"] != args["article_id"]
+        or value.get("imageId") != args["image_id"]
+        or state["coverUrl"] != args["image_url"]
+        or state["fit"] != args["fit"]
+        or value["changed"] != (state["version"] != args["version"])
+    ):
+        raise ValueError("Cover outcome differs from approval")
     return state
+
+
+def _image_result(value):
+    matched, changed = len(value["matchedIds"]), len(value["changedIds"])
+    if value["action"] == "delete":
+        return f"已从图库移除 {changed} 张图片，存储清理已排队，尚未核实物理文件清除。"
+    return f"已核对 {matched} 张图片，更新 {changed} 张，其余已符合目标状态。"
 
 
 class Operation:
@@ -77,10 +79,11 @@ class Operation:
         self.name = name
 
     def invoke(self, args, config=None):
-        if self.name == "update_gallery_image":
-            path = f"{targets.PATH}/images/{args['image_id']}"
-            payload = {"version": args["version"], **args["changes"]}
+        check_cancelled(config)
+        if self.name == "manage_gallery_images":
+            method, path, payload = "POST", image_actions.PATH, args
         else:
+            method = "PUT"
             path = f"{targets.PATH}/articles/{args['article_id']}/cover"
             payload = {
                 "version": args["version"],
@@ -88,31 +91,21 @@ class Operation:
                 "imageVersion": args["image_version"],
                 "fit": args["fit"],
             }
-        result = base._admin_request("PUT", path, payload, config)
+        result = base._admin_request(method, path, payload, config)
         if isinstance(result, base.ToolResult):
             return result
         try:
             state = outcome(self.name, args, result)
         except (ValueError, TypeError, KeyError):
             return base.unavailable("请求已发出，但无法确认图片操作结果；请先查询，不要重复执行。")
-        text = (
-            "图库信息已更新。"
-            if self.name == "update_gallery_image"
-            else "文章封面已设置，正文和发布状态保持不变。"
-        )
+        text = (_image_result(state) if self.name == "manage_gallery_images"
+                else "文章封面已设置，正文和发布状态保持不变。")
+        target = (tgt("note", args["article_id"]) if self.name == "set_article_cover"
+                  else {"kind": "image", "ids": state["matchedIds"]})
         return ok(
             text,
-            meta=fact(
-                OPERATIONS[self.name],
-                changed=result["changed"],
-                target=tgt(
-                    "note" if self.name == "set_article_cover" else "image",
-                    args.get("article_id", args["image_id"]),
-                ),
-                confirmed_args=args,
-                outcome=result,
-                state=state,
-            ),
+            meta=fact(OPERATIONS[self.name], changed=result["changed"], target=target,
+                      confirmed_args=args, outcome=result, state=state),
         )
 
 

@@ -60,13 +60,6 @@ class Patch(BaseModel):
         return self
 
 
-class MetadataArguments(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    image_id: Identifier
-    version: Digest
-    changes: Patch
-
-
 class CoverArguments(BaseModel):
     model_config = ConfigDict(extra="forbid")
     article_id: Identifier

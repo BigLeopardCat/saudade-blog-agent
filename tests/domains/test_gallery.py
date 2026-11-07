@@ -4,6 +4,7 @@ import base64
 import io
 import json
 import secrets
+import time
 
 import httpx
 import pytest
@@ -48,19 +49,23 @@ def gallery(monkeypatch):
             else:
                 data = state["row"]
             return httpx.Response(200, json={"code": 200, "data": data})
+        payload = json.loads(request.content)
+        if request.url.path.endswith("/image-actions/prepare"):
+            ids = payload.get("imageIds", [item["imageId"] for item in payload.get("items", [])])
+            data = {"version": state["row"]["version"], "expiresAt": int(time.time()) + 900,
+                    "intent": payload, "matchedIds": ids,
+                    "preview": [{"imageId": 11, "displayName": state["row"]["displayName"],
+                        "folderId": 0, "isFavorite": False}],
+                    "previewTruncated": False, "destination": None}
+            return httpx.Response(200, json={"code": 200, "data": data})
         state["writes"] += 1
-        patch = json.loads(request.content)
-        before = state["row"]["version"]
-        assert patch.pop("version") == before
-        if not state.get("ignore"):
-            state["row"].update(patch, version="c" * 64)
-        return httpx.Response(
-            200,
-            json={
-                "code": 200,
-                "data": {"beforeVersion": before, "changed": True, "state": state["row"]},
-            },
-        )
+        assert payload["version"] == state["row"]["version"]
+        intent = payload["intent"]
+        state["row"].update(intent["items"][0]["changes"], version="c" * 64)
+        data = {"action": intent["action"], "beforeVersion": payload["version"], "changed": True,
+                "matchedIds": [12] if state.get("ignore") else [11], "changedIds": [11],
+                "cleanupPendingIds": []}
+        return httpx.Response(200, json={"code": 200, "data": data})
 
     with httpx.Client(transport=httpx.MockTransport(handle)) as client:
         monkeypatch.setattr(base, "_client", client)
@@ -116,12 +121,13 @@ def test_folder_page_exposes_the_same_structured_continuation_as_its_display(mon
 
 
 def test_preparation_and_replay_are_readonly_then_exactly_one_write(gallery, tmp_path):
-    prepared = preparation.prepare_gallery_image_change.invoke(
-        {"image_id": 11, "display_name": "新名称"}, config=admin()
+    prepared = preparation.prepare_gallery_images.invoke(
+        {"intent": {"action": "metadata", "items": [{"imageId": 11,
+            "changes": {"displayName": "新名称"}}]}}, config=admin()
     )
     grant = confirm.verify(prepared.execution["pending_confirm"]["token"], 7, 42)
     assert gallery["writes"] == 0
-    assert grant["specs"][0]["args"]["changes"] == {"displayName": "新名称"}
+    assert grant["specs"][0]["args"]["intent"]["items"][0]["changes"] == {"displayName": "新名称"}
     ledger = Ledger(str(tmp_path / "ledger.sqlite3"))
     for _ in range(2):
         result = transactions.execute(grant, admin(), None, ledger=ledger)
@@ -130,8 +136,9 @@ def test_preparation_and_replay_are_readonly_then_exactly_one_write(gallery, tmp
 
 
 def test_mismatched_backend_outcome_never_produces_success(gallery, tmp_path):
-    prepared = preparation.prepare_gallery_image_change.invoke(
-        {"image_id": 11, "description": "新描述"}, config=admin()
+    prepared = preparation.prepare_gallery_images.invoke(
+        {"intent": {"action": "metadata", "items": [{"imageId": 11,
+            "changes": {"description": "新描述"}}]}}, config=admin()
     )
     grant = confirm.verify(prepared.execution["pending_confirm"]["token"], 7, 42)
     gallery["ignore"] = True
@@ -207,8 +214,9 @@ def test_background_metadata_reads_do_not_require_a_writable_conversation(galler
     assert result.kind == "ok" and gallery["writes"] == 0
     count = len(gallery["requests"])
     assert (
-        preparation.prepare_gallery_image_change.invoke(
-            {"image_id": 11, "display_name": "new name"}, config=cfg
+        preparation.prepare_gallery_images.invoke(
+            {"intent": {"action": "metadata", "items": [{"imageId": 11,
+                "changes": {"displayName": "new name"}}]}}, config=cfg
         ).kind
         == "unavailable"
     )
