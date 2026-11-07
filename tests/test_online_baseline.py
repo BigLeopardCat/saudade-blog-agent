@@ -767,3 +767,11 @@ def test_poc_selection_preserves_order_and_rejects_duplicates_unknown_ids_and_pa
         with pytest.raises(ValueError):
             online_baseline.select_cases(cases, phase, ids)
     assert online_baseline.select_cases(cases, "full") == cases
+
+
+def test_snapshot_freezes_shared_stream_validation_and_event_contract(tmp_path):
+    hashes = online_baseline.snapshot(tmp_path, [{"id": "snapshot-probe"}])
+    for name in ("stream_protocol.py", "agent/contracts/events.py"):
+        path = tmp_path / "evaluator" / name
+        assert path.is_file()
+        assert hashlib.sha256(path.read_bytes()).hexdigest() == hashes[name]

@@ -17,6 +17,11 @@ from agent.runtime.service import AgentRuntime
 from agent.runtime.session import ToolSession
 from agent.runtime.task_planning import TaskPlanningMiddleware, tools
 
+pytestmark = pytest.mark.tool_scopes(
+    inspect_plan="read.public",
+)
+
+
 backend = backend_fixture
 PLAN = [{"content": "收藏文章19，确认后核对回执", "status": "in_progress"}]
 

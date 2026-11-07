@@ -94,13 +94,18 @@ def snapshot(folder, cases):
     sources = folder / "evaluator"
     sources.mkdir()
     hashes = {}
-    for name in ("run_golden.py", "online_baseline.py", "online_transport.py",
+    names = ("run_golden.py", "online_baseline.py", "online_transport.py", "stream_protocol.py",
                  "native_assertions.py", "request_metrics.py", "latency_metrics.py",
                  "task_metrics.py", "usage.py",
                  "release_readiness.py", "release_profile.json", "statistical_metrics.py",
-                 "action_metrics.py", "dataset_audit.py"):
-        body = (ROOT / "eval" / name).read_bytes()
-        (sources / name).write_bytes(body)
+                 "action_metrics.py", "dataset_audit.py")
+    paths = {name: ROOT / "eval" / name for name in names}
+    paths["agent/contracts/events.py"] = ROOT / "agent/contracts/events.py"
+    for name, path in paths.items():
+        body = path.read_bytes()
+        target = sources / name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(body)
         hashes[name] = hashlib.sha256(body).hexdigest()
     return hashes
 

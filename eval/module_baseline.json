@@ -1,7 +1,7 @@
 {
   "eval/admin_write_probe.py": {
-    "lines": 2468,
-    "top_defs": 81
+    "lines": 2447,
+    "top_defs": 80
   },
   "eval/corpus_terms.py": {
     "lines": 810,

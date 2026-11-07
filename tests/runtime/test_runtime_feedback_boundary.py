@@ -16,6 +16,11 @@ from agent.runtime.session import ToolSession
 from agent.runtime.turns import AgentCancelled
 from tools.result import ok
 
+pytestmark = pytest.mark.tool_scopes(
+    fixture_read="read.public",
+)
+
+
 backend = backend_fixture
 
 

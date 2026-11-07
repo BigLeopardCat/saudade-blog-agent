@@ -10,13 +10,15 @@ import math
 import os
 import sys
 
+from eval.statistical_metrics import proportion
+
 # ── 三个数（唯一取值处；夜间、报告、复审单都从这里读，不在各处重抄）────────────────
 FLOOR = 0.78          # 地板：采样层下界低于它 ⇒ 当夜置红（事故闸，不是目标）
 ENTRY = 0.90          # 当前档位：达档只记，不置红；连 RAISE_NIGHTS 夜达档 ⇒ 抬档
 
-TARGET = 0.95         # 落地目标（主人定的整体线）
+TARGET = 0.95
 RAISE_STEP = 0.05     # 抬档步长
-RAISE_NIGHTS = 3      # 连几夜达档才抬档（单夜达标是运气，连三夜才是水平）
+RAISE_NIGHTS = 3
 Z95 = 1.96
 AB_TOL = 0.005        # A/B：下界回退不超过这个量算"在噪声内"（半个百分点）
 
@@ -27,21 +29,15 @@ FULL_RUN_MIN_CASES = 100   # 「全量跑」的判据（`--only` 的调试跑不
 DOMAIN_HINT = 0.90      # 技能面下界 ≥ 它算健康；< FLOOR 算事故（只在 readiness 里判）
 DOMAIN_MIN_ROUNDS = 20  # 一个面至少这么多轮次才判下界（跨夜聚合的窗口里）
 HARM_HINT = 0.01        # 用户可见兜底占比 ≥ 它 ⇒ 记黄
-HARM_FLOOR = 0.05       # ≥ 它 ⇒ **事故**（当夜置红）。已知最差一夜 6/151=4.0% 仍在
-                        # 黄区 ⇒ 这条闸只抓"gate 整片误伤"，不抓正常波动（同 FLOOR 的取向）
+HARM_FLOOR = 0.05
 READY_NIGHTS = 5        # 企业落地判据看最近几夜
 
 
 
-def wilson_ci(passed: int, total: int, z: float = Z95) -> list:
-    """Return a Wilson confidence interval for a Bernoulli success proportion."""
-    if total <= 0:
-        return [0.0, 0.0]
-    p = passed / total
-    d = 1 + z * z / total
-    center = (p + z * z / (2 * total)) / d
-    half = z * ((p * (1 - p) / total + z * z / (4 * total * total)) ** 0.5) / d
-    return [round(max(0.0, center - half), 4), round(min(1.0, center + half), 4)]
+def wilson_ci(passed: int, total: int) -> list:
+    """Round the shared SciPy interval for archived report presentation."""
+    interval = proportion(passed, total)["wilson_95"]
+    return [round(value, 4) for value in interval] if interval is not None else [0.0, 0.0]
 
 
 def min_n_zero_fail(target: float, z: float = Z95) -> int:

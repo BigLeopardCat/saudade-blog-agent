@@ -7,7 +7,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import Response
 from fastapi.testclient import TestClient
 
-from agent.api.middleware import body_limit_middleware, trace_id_middleware
+from agent.api.middleware import BodyLimitMiddleware, trace_id_middleware
 from eval.trace_reconcile import read_stream_ends
 from tools.http_channel import request_json
 from utils.logging import get_trace_id, request_id, reset_trace_id, set_trace_id
@@ -25,7 +25,7 @@ def test_request_logging_omits_query_headers_and_body_and_correlates_rejections(
     import agent.api.middleware as middleware
     monkeypatch.setattr(middleware, 'MAX_BODY_BYTES', 8)
     app = FastAPI()
-    app.middleware('http')(body_limit_middleware)
+    app.add_middleware(BodyLimitMiddleware)
     app.middleware('http')(trace_id_middleware)
 
     @app.post('/probe/{identifier}')

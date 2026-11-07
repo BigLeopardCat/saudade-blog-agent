@@ -20,6 +20,10 @@ from agent.runtime.service import AgentRuntime
 from agent.runtime.session import ToolSession
 from tools import base
 
+pytestmark = pytest.mark.tool_scopes(
+    site_read="read.public",
+)
+
 
 class CaptureModel:
     max_tokens = 64

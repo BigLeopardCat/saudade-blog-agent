@@ -6,6 +6,7 @@ from types import SimpleNamespace
 import httpx
 import pytest
 from _memory_support import Capture, runtime
+from _service import cleanup_headers
 from langgraph.checkpoint.memory import InMemorySaver
 
 from agent.main import create_app
@@ -52,7 +53,8 @@ def test_invalid_id_is_rejected_without_checkpoint_access(application, host_iden
 def test_valid_id_reaches_existing_maintenance_as_an_integer(application, host_identity,
                                                            identifier, suffix, field):
     app, calls, model = application
-    response = send(app, f"/checkpoint/{identifier}{suffix}", host_identity())
+    headers = cleanup_headers(identifier, turn_id="probe" if suffix else None)
+    response = send(app, f"/checkpoint/{identifier}{suffix}", headers)
     assert response.status_code == 200 and response.json()[field] is True
     assert len(calls) == 1 and type(calls[0][1][1]) is int
     assert calls[0][1][1] == identifier and model.prompts == []

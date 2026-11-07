@@ -1,9 +1,9 @@
 """Declarative permissions stay closed independently of model intent or wording."""
 
 import pytest
+from _tool_catalog import permission_names
 
 from agent import authz
-from agent.domains.registry import bound_tool_names, operation_names
 from agent.principal import (
     KNOWN_ROLES,
     ROLE_ADMIN,
@@ -12,7 +12,6 @@ from agent.principal import (
     ROLE_ZAKO,
     Principal,
 )
-from tools.base import get_all_tools
 
 
 def principal(role):
@@ -20,7 +19,7 @@ def principal(role):
 
 
 def test_manifest_is_complete_closed_and_uses_declared_scopes():
-    names = [tool.name for tool in get_all_tools()] + sorted(operation_names() | bound_tool_names())
+    names = permission_names()
     assert not authz.manifest_gaps(names)
     assert not authz.manifest_stale(names)
     assert set(authz.TOOL_SCOPE.values()) <= authz.ALL_SCOPES

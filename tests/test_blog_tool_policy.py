@@ -7,6 +7,7 @@ import pytest
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from langgraph.types import Command
 
+from agent import authz
 from agent.principal import SOURCE_ASSERTION, SOURCE_BODY, Principal
 from agent.products.blog.tool_policy import BlogToolMiddleware
 
@@ -173,7 +174,8 @@ def test_denied_first_tool_does_not_block_the_next_authorized_call():
     assert returned["allowed"].content == "博客已开放。"
 
 
-def test_browser_receipt_is_recorded_before_the_following_preparation():
+def test_browser_receipt_is_recorded_before_the_following_preparation(monkeypatch):
+    monkeypatch.setitem(authz.TOOL_SCOPE, "prepare_change", authz.SCOPE_READ_OWN)
     from langchain_core.tools import tool
 
     from agent.domains import browser
@@ -211,7 +213,8 @@ def test_browser_receipt_is_recorded_before_the_following_preparation():
     assert observed[0]["cmd"]["kind"] == "navigate"
 
 
-def test_rejected_receipt_prevents_following_preparation_io():
+def test_rejected_receipt_prevents_following_preparation_io(monkeypatch):
+    monkeypatch.setitem(authz.TOOL_SCOPE, "prepare_change", authz.SCOPE_READ_OWN)
     from langchain_core.tools import tool
 
     from agent.runtime.session import ToolSession
@@ -236,3 +239,41 @@ def test_rejected_receipt_prevents_following_preparation_io():
     with pytest.raises(RuntimeError, match="Only authorized browser tools"):
         runtime.run([HumanMessage(content="读取信息后再准备变更")])
     assert not runtime.receipts
+
+
+@pytest.mark.parametrize("name", ["unknown_tool", "prepare_unregistered_change",
+                                 "load_unregistered_info_tools"])
+def test_undeclared_tools_are_denied_without_invoking_handler(name):
+    result = BlogToolMiddleware(session("superadmin")).wrap_tool_call(
+        request(name), lambda _: pytest.fail("Undeclared tool reached execution"))
+    assert result.status == "error"
+
+
+@pytest.mark.parametrize("domain", [False, True])
+def test_unclassified_tool_fails_menu_registration(domain):
+    current = session("superadmin")
+    current.tools = {} if domain else {"unknown_tool": object()}
+    current.domains = {"new_domain": {"unknown_tool": object()}} if domain else {}
+    with pytest.raises(ValueError, match="explicit permission scopes"):
+        BlogToolMiddleware(current)
+
+
+@pytest.mark.parametrize("name", ["prepare_favorite_change", "prepare_account_mute",
+                                 "navigate_page", "write_todos"])
+@pytest.mark.parametrize("current", [session("zako"), session(source=SOURCE_BODY),
+                                     session(bound_uid=8)])
+def test_scope_checks_cover_preparations_browser_and_internal_tools(current, name):
+    result = BlogToolMiddleware(current).wrap_tool_call(
+        request(name), lambda _: pytest.fail("Unauthorized tool reached execution"))
+    assert result.status == "error"
+
+
+def test_discovery_uses_registered_domain_authority_instead_of_name_prefix():
+    current = session()
+    current.tools = {}
+    current.domains = {"reports": {"get_server_status": object()},
+                       "public": {"get_blog_info": object()}}
+    current.loaders = {"load_reports_info_tools": "reports", "load_public_info_tools": "public"}
+    policy = BlogToolMiddleware(current)
+    assert not policy._allowed("load_reports_info_tools")
+    assert policy._allowed("load_public_info_tools")

@@ -22,6 +22,11 @@ from agent.runtime.results import TurnResult
 from tools import base
 from utils import trace
 
+pytestmark = pytest.mark.tool_scopes(
+    fixture_read="read.public",
+)
+
+
 URL = "data:image/png;base64," + "R" * 32000
 REF = image_id(URL)
 

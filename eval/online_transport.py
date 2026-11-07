@@ -23,6 +23,7 @@ from agent import confirm
 from agent.api.schemas import QuotaInfo
 from config.settings import settings
 from eval.command_report import command_wire
+from eval.stream_protocol import EventStreamError, read_events
 
 
 class EvaluationError(RuntimeError):
@@ -211,37 +212,30 @@ class OnlineTransport:
             raise EvaluationError("online regression must not approve business mutations")
         path = "/api/chat/stream" if self.host else "/chat/stream/v2"
         root = self.blog_url if self.host else self.agent_url
-        events, done = [], False
+        events = []
         first = {key: None for key in ("first_visible_s", "first_reply_s",
                                       "first_command_s", "first_confirmation_s")}
         with connect_sse(self.client, "POST", root + path,
                          headers=self._headers(request_id), json=payload) as stream:
             stream.response.raise_for_status()
-            for event in stream.iter_sse():
-                if done:
-                    raise EvaluationError("event after done")
-                kind, data = event.event, json.loads(event.data)
-                if kind not in {"text", "command", "receipts", "confirmation", "pending",
-                                "progress", "task_input", "text_reset", "done", "error"}:
-                    raise EvaluationError(f"unknown SSE event {kind!r}")
-                if kind == "text_reset" and (type(data) is not dict or data):
-                    raise EvaluationError("invalid text_reset payload")
+            for kind, data in self._events(stream):
                 if kind in {"text", "progress", "command", "confirmation"}:
                     if first["first_visible_s"] is None:
                         first["first_visible_s"] = time.monotonic() - started
-                if kind == "text":
-                    if not isinstance(data, str):
-                        raise EvaluationError("text event is not a string")
                 field = {"text": "first_reply_s", "command": "first_command_s",
                          "confirmation": "first_confirmation_s"}.get(kind)
                 if field and first[field] is None:
                     first[field] = time.monotonic() - started
                 events.append((kind, data))
-                done = kind == "done"
         stream_errors = [data for kind, data in events if kind == "error"]
-        if not done and not stream_errors:
-            raise EvaluationError("HTTP stream ended without done")
         return events, stream_errors, first
+
+    @staticmethod
+    def _events(stream):
+        try:
+            yield from read_events(stream)
+        except EventStreamError as exc:
+            raise EvaluationError(str(exc)) from exc
 
     def __call__(self, req, principal=None, **_kwargs):
         if self.cid is None:

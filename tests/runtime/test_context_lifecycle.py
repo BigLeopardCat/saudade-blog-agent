@@ -17,6 +17,10 @@ from agent.runtime.task_budget import for_saver
 from agent.runtime.turns import AgentCancelled
 from config.settings import settings
 
+pytestmark = pytest.mark.tool_scopes(
+    read_fixture="read.public",
+)
+
 
 def test_long_latest_turn_reaches_summarizer_before_any_history_is_removed(monkeypatch):
     monkeypatch.setattr(settings, "agent_context_tokens", 8000)

@@ -6,7 +6,7 @@ from importlib.metadata import version as _pkg_version
 from fastapi import FastAPI
 
 from agent.api.lifecycle import lifespan
-from agent.api.middleware import body_limit_middleware, trace_id_middleware
+from agent.api.middleware import BodyLimitMiddleware, trace_id_middleware
 from agent.api.routes import (
     automations,
     chat,
@@ -31,7 +31,7 @@ def create_app() -> FastAPI:
     application.state.workers = None
     application.state.chat_slots = None
     application.state.scheduling = None
-    application.middleware("http")(body_limit_middleware)
+    application.add_middleware(BodyLimitMiddleware)
     application.middleware("http")(trace_id_middleware)
     for router in (
         chat.router,

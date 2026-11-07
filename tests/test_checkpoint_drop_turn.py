@@ -113,7 +113,8 @@ def test_multimodal_discard_does_not_compare_or_parse_the_message_text():
     assert selected.store.load(config()).messages == []
 
 
-def test_drop_endpoint_requires_stable_target_and_uses_authenticated_worker(monkeypatch):
+def test_drop_endpoint_requires_stable_target_and_uses_authenticated_worker(host_identity):
+    from _service import cleanup_headers
     with pytest.raises(ValidationError):
         conversations.DropTurnReq(text="继续")
     selected = runtime(InMemorySaver(), Capture())
@@ -125,10 +126,9 @@ def test_drop_endpoint_requires_stable_target_and_uses_authenticated_worker(monk
         async def run(self, fn, *args):
             return await asyncio.to_thread(fn, *args)
 
-    request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(
-        runtime=selected, workers=Worker())))
-    monkeypatch.setattr(conversations, "_resolve_principal", lambda *_: SimpleNamespace(uid=7))
-    result = asyncio.run(conversations.checkpoint_drop_turn("42",
+    request = SimpleNamespace(headers=cleanup_headers(42, turn_id="endpoint"),
+        app=SimpleNamespace(state=SimpleNamespace(runtime=selected, workers=Worker())))
+    result = asyncio.run(conversations.checkpoint_drop_turn(42,
         conversations.DropTurnReq(turn_id="endpoint", uid=7), request))
     assert result["dropped"] and selected.store.load(config()).messages == []
     assert turn_message_id("endpoint") == "user-turn:endpoint"

@@ -1,21 +1,11 @@
-# -*- coding: utf-8 -*-
-"""按 tag 把**多次**跑法汇成一份可提交的基线。
+"""Aggregate repeated runs from one case family without mixing engine populations."""
 
-`--out` 落在 `eval/report/baseline_*.json`：`.gitignore` 里 `eval/report/*` 被忽略，只放行
-`baseline_*.json`——基线是**要进仓库**的东西（对照起点），跑法报告不是。
-"""
 import argparse
 import glob
-import io
 import json
 import sys
 
-# Only wrap non-UTF-8 stdout; never replace pytest capture or an existing UTF-8 wrapper.
-if getattr(sys.stdout, "encoding", "").lower() not in ("utf-8", "utf8"):
-    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", line_buffering=True)
-sys.path.insert(0, "eval")
-
-from run_golden import wilson_ci  # noqa: E402
+from eval.landing_gate import wilson_ci
 
 
 def load_report(path: str) -> dict | None:

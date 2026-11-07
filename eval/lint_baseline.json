@@ -8,14 +8,13 @@
     "I",
     "W"
   ],
-  "total": 216,
+  "total": 214,
   "by_file": {
     "agent/action_text.py": 2,
     "agent/factblock.py": 1,
     "agent/hostinfo.py": 1,
     "agent/reports.py": 5,
     "eval/admin_write_probe.py": 29,
-    "eval/category_read_probe.py": 2,
     "eval/corpus_terms.py": 6,
     "eval/d4_structured_output_poc.py": 5,
     "eval/golden_case_runner.py": 4,

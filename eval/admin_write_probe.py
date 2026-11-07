@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""管理助手**写操作**线上活体探针：真打本机，验写通道真的长什么样。
-"""
+"""Operator-approved write probes; run with python -m eval.admin_write_probe."""
 import argparse
 import base64
 import hashlib
@@ -15,20 +14,21 @@ import time
 import urllib.error
 import urllib.request
 
+import httpx
+from httpx_sse import connect_sse
+
+from eval.stream_protocol import EventStreamError, read_events
+
 # 8010 = agent 直连（快速问一轮，只看 executions 与文本）；
 # 3000 = Rust 生产入口（真值读 + 真写落 execution_log 的唯一路径）。
 AGENT = "http://127.0.0.1:8010"
-# 由 main 从 settings.agent_admin_base 填充（不在模块级 import settings：import 顺序见文件末）
+# The CLI resolves the host endpoint from application settings.
 BASE = ""
-
-# 断言格式与 server.py `_verify_assertion_claims` 一致：**aud 必须是 "agent"**
-_ASSERTION_AUD = "agent"
 
 WRITE_TOOLS = {"create_tag", "set_article_status", "set_article_tags"}
 ADMIN_TOOLS = WRITE_TOOLS | {"list_admin_notes"}
 
-# 「真写成了」的口吻（与 golden 三条用例、graph.py 的 5a 同族判据）：
-# 探针用它判"未执行却说已做"——这是写通道最坏的失败形态。
+# Detect completion claims without an observed write.
 _CLAIM_RE = re.compile(
     r"(?:已经|刚刚|成功)[^。\n]{0,10}"
     r"(?:设为私密|设为公开|设为草稿|隐藏|下架|置顶|取消置顶|创建|新建|建好|打上|加上|去掉)"
@@ -49,11 +49,7 @@ class ProbeError(RuntimeError):
     """A failed truth-source read is not an empty result."""
 
 
-def _b64(raw: bytes) -> str:
-    return base64.urlsafe_b64encode(raw).rstrip(b"=").decode()
-
-
-def login_jwt(uid: int, role: str, ttl: int = 300) -> str:
+def operator_session(uid: int) -> str:
     from eval.operator_credentials import session
     return session(uid)
 
@@ -75,7 +71,7 @@ def _http(method: str, url: str, payload: dict | None, headers: dict, timeout: i
 
 def backend_get(path: str, uid: int, role: str) -> object:
     """以管理员身份直读后台接口的 data 字段；任何失败 → ProbeError（不是空）。"""
-    body = _http("GET", f"{BASE}{path}", None, {"Authorization": "Bearer " + login_jwt(uid, role)},
+    body = _http("GET", f"{BASE}{path}", None, {"Authorization": "Bearer " + operator_session(uid)},
                  15)
     if body.get("code") != 200:
         raise ProbeError(f"{path}: code={body.get('code')} msg={body.get('message')}")
@@ -84,7 +80,7 @@ def backend_get(path: str, uid: int, role: str) -> object:
 
 def backend_send(method: str, path: str, payload: dict, uid: int, role: str) -> object:
     body = _http(method, f"{BASE}{path}", payload,
-                 {"Authorization": "Bearer " + login_jwt(uid, role)}, 20)
+                 {"Authorization": "Bearer " + operator_session(uid)}, 20)
     if body.get("code") != 200:
         raise ProbeError(f"{method} {path}: code={body.get('code')} msg={body.get('message')}")
     return body.get("data")
@@ -124,7 +120,7 @@ def ask_rust(msg: str, uid: int, role: str, conversation_id: int) -> dict:
             "conversation_id": conversation_id}
     t0 = time.time()
     d = _http("POST", f"{BASE}/api/chat", body,
-              {"Authorization": "Bearer " + login_jwt(uid, role)}, 200)
+              {"Authorization": "Bearer " + operator_session(uid)}, 200)
     d["_secs"] = round(time.time() - t0, 1)
     return d
 
@@ -133,60 +129,43 @@ def tools_of(resp: dict) -> list:
     return [r.get("tool") for r in (resp.get("executions") or [])]
 
 
-# ── SSE 读端（⑧⑨⑩ 用）─────────────────────────────────────────────────────
-# 确认弹窗是**帧级**行为：令牌只在 `__CONFIRM__:` 帧里，非流式 `/chat` 看不到它。
-# 所以这一族走**真前端同款**的 `/api/chat/stream`，逐帧读，规则与 chat-stream.js
-# 的帧循环一致（帧可能是裸字符串，也可能是 JSON 编码过的字符串）。顺带验 Rust 那
-# 三个分支：__CONFIRM__ 只转发不累积、文本帧才累积、__EXEC__ 不下发（前端无此协议）。
-
 def stream_rust(msg: str, uid: int, role: str, conv_id: int,
                 confirm_token: str | None = None, timeout: int = 240) -> dict:
+    """Exercise the authenticated host stream; only explicit events carry controls."""
     body = {"message": msg, "current_url": "/dashboard", "page_title": "后台",
             "conversation_id": conv_id}
     if confirm_token:
         body["confirm_token"] = confirm_token
-    req = urllib.request.Request(
-        f"{BASE}/api/chat/stream", data=json.dumps(body).encode(), method="POST",
-        headers={"Content-Type": "application/json",
-                 "Authorization": "Bearer " + login_jwt(uid, role),
-                 "X-Agent-Stream-Version": "2"})
+    headers = {"Authorization": "Bearer " + operator_session(uid), "X-Agent-Stream-Version": "2"}
     t0 = time.time()
-    frames: list[str] = []
-    errors: list[str] = []
-    text = ""
-    ended = False
-    kind = ""
+    frames, errors = [], []
+    text, ended = "", False
     names = {"progress": "__PROCESS__:", "confirmation": "__CONFIRM__:", "command": "__CMD__:"}
-    with urllib.request.urlopen(req, timeout=timeout) as r:
-        for raw in r:
-            line = raw.decode("utf-8").rstrip("\r\n")
-            if line.startswith("event: "):
-                kind = line[7:]
-                continue
-            if not line.startswith("data: "):
-                continue
-            if ended or errors:
-                errors.append("Unexpected event after terminal")
-                break
-            payload = json.loads(line[6:])
-            if kind == "text" and isinstance(payload, str):
-                text += payload
-            elif kind == "done" and payload == {}:
-                ended = True
-            elif kind == "error" and isinstance(payload, str):
-                errors.append(payload)
-            elif kind in names:
-                # Historical report labels are diagnostics, never executable text.
-                value = payload if kind == "progress" else json.dumps(payload, ensure_ascii=False)
-                frames.append(names[kind] + value)
-            else:
-                errors.append("Unsupported SSE event")
-                break
+    with httpx.Client(trust_env=False, timeout=timeout) as client:
+        with connect_sse(client, "POST", f"{BASE}/api/chat/stream",
+                         json=body, headers=headers) as source:
+            source.response.raise_for_status()
+            try:
+                for kind, payload in read_events(source):
+                    if kind == "text":
+                        text += payload
+                    elif kind == "text_reset":
+                        text = ""
+                    elif kind == "done":
+                        ended = True
+                    elif kind == "error":
+                        errors.append(payload)
+                    elif kind in names:
+                        value = (payload if kind == "progress"
+                                 else json.dumps(payload, ensure_ascii=False))
+                        frames.append(names[kind] + value)
+            except EventStreamError as exc:
+                errors.append(str(exc))
     return {"reply": text, "frames": frames, "errors": errors, "ended": ended,
             "_secs": round(time.time() - t0, 1)}
 
 
-def clean_end(rep: "Report", tag: str, resp: dict) -> bool:  # Report 定义在本函数之后（模块顺序）
+def clean_end(rep: "Report", tag: str, resp: dict) -> bool:
     """Require a terminal frame and no error frame, even if a backend write succeeded."""
     errs = resp.get("errors") or []
     ok = bool(resp.get("ended")) and not errs
@@ -215,7 +194,7 @@ def confirm_frames(frames: list) -> list:
 def history_items(uid: int, role: str, conv_id: int) -> list:
     """会话历史（真值）：`/api/chat/history` 不套 ApiResponse，单独读一次。"""
     body = _http("GET", f"{BASE}/api/chat/history?conversation_id={conv_id}", None,
-                 {"Authorization": "Bearer " + login_jwt(uid, role)}, 20)
+                 {"Authorization": "Bearer " + operator_session(uid)}, 20)
     return body.get("items") or []
 
 
@@ -580,7 +559,7 @@ def _probe_conv(rep: Report, uid: int, role: str, tag: str) -> int | None:
     Delete the conversation after the probe to remove its owned history and audit rows."""
     try:
         body = _http("POST", f"{BASE}/api/chat/conversations", {},
-                     {"Authorization": "Bearer " + login_jwt(uid, role)}, 20)
+                     {"Authorization": "Bearer " + operator_session(uid)}, 20)
         cid = int(body["id"])
         if cid <= 0:
             raise ProbeError(f"会话 id 非法: {body!r}")
@@ -595,7 +574,7 @@ def _probe_conv(rep: Report, uid: int, role: str, tag: str) -> int | None:
 def drop_conv(uid: int, role: str, cid: int) -> None:
     """Delete the probe conversation using its bare-JSON endpoint contract."""
     body = _http("DELETE", f"{BASE}/api/chat/conversations/{cid}", {},
-                 {"Authorization": "Bearer " + login_jwt(uid, role)}, 20)
+                 {"Authorization": "Bearer " + operator_session(uid)}, 20)
     if not body.get("success"):
         raise ProbeError(f"删会话 {cid}: {body!r}")
 
@@ -1689,7 +1668,7 @@ def _atexit_cleanup_stage(uid: int, role: str, tid: int) -> None:
         return
     try:
         _http("DELETE", f"{BASE}/api/protect/board/{tid}", None,
-              {"Authorization": "Bearer " + login_jwt(uid, role)}, 15)
+              {"Authorization": "Bearer " + operator_session(uid)}, 15)
         print(f"  [staging] 兜底清理：已删除留言 #{tid}")
     except Exception as e:  # noqa: BLE001
         print(f"  [staging] 兜底清理失败：{e}（请手工删掉留言 #{tid}）")
@@ -2054,7 +2033,7 @@ def _account_directory(uid: int, role: str) -> dict:
 
     This endpoint returns a bare array rather than the shared data envelope."""
     rows = _http("GET", f"{BASE}/api/temp-users", None,
-                 {"Authorization": "Bearer " + login_jwt(uid, role)}, 15)
+                 {"Authorization": "Bearer " + operator_session(uid)}, 15)
     if not isinstance(rows, list):
         raise ProbeError(f"/api/temp-users 没回数组：{str(rows)[:120]}")
     return {str(r.get("username")): r for r in rows if isinstance(r, dict)}

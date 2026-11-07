@@ -7,6 +7,7 @@ from fastapi import APIRouter, HTTPException, Path, Request
 from pydantic import BaseModel, Field
 
 from agent import checkpoint, confirm
+from agent.api.authentication import require_checkpoint_cleanup
 from agent.api.authentication import resolve_principal as _resolve_principal
 from agent.api.dependencies import require_runtime, require_workers
 from agent.products.blog import confirmation
@@ -22,7 +23,7 @@ ConversationId = Annotated[int, Path(gt=0, le=2_147_483_647)]
 @router.delete("/checkpoint/{conversation_id}")
 async def checkpoint_delete(conversation_id: ConversationId, request: Request, uid: int = 0):
     """Delete checkpoint state under the authenticated host cleanup protocol."""
-    principal = _resolve_principal(request, uid)
+    principal = require_checkpoint_cleanup(request, uid, conversation_id)
     saver = checkpoint.live_saver(request.app.state.runtime)
     if saver is None:
         logger.info("[checkpoint] 级联删除跳过：本进程没挂 saver（conv=%s）", conversation_id)
@@ -47,7 +48,7 @@ class DropTurnReq(BaseModel):
 @router.post("/checkpoint/{conversation_id}/drop_turn")
 async def checkpoint_drop_turn(conversation_id: ConversationId, req: DropTurnReq, request: Request):
     """Remove only the matching last user turn and verify the resulting checkpoint."""
-    principal = _resolve_principal(request, req.uid)
+    principal = require_checkpoint_cleanup(request, req.uid, conversation_id, req.turn_id)
     out = await require_workers(request).run(
         checkpoint.drop_last_user_turn, request.app.state.runtime, conversation_id, req.turn_id
     )
