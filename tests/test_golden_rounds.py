@@ -1,6 +1,7 @@
 """Shared round handling retains failed responses, stable identity and approval boundaries."""
 
 import json
+from uuid import uuid4
 
 from eval import golden_evaluation as golden
 
@@ -61,9 +62,10 @@ def test_missing_confirmation_token_never_sends_the_approval_round():
 
 def test_confirmation_frame_is_redacted_without_turning_literal_text_into_a_control():
     text = '__CONFIRM__:{"token":"quoted-not-a-control"}'
-    frames = ['__CONFIRM__:' + json.dumps({"token": "synthetic-token", "q": "approve?"})]
+    token = uuid4().hex
+    frames = ['__CONFIRM__:' + json.dumps({"token": token, "q": "approve?"})]
     safe = golden.redact_frames(frames)
-    assert "synthetic-token" not in json.dumps(safe)
+    assert token not in json.dumps(safe)
     assert json.loads(safe[0].partition(":")[2])["q"] == "approve?"
     result = golden.run_case(case(), turn_runner=lambda *args, **kwargs: response(text))
     assert result["text"] == text and result["rounds"][0]["confirm_tokens"] == []

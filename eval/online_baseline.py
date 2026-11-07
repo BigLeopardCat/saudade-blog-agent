@@ -94,7 +94,8 @@ def snapshot(folder, cases):
     sources = folder / "evaluator"
     sources.mkdir()
     hashes = {}
-    names = ("golden_evaluation.py", "online_baseline.py", "online_transport.py", "stream_protocol.py",
+    names = ("golden_evaluation.py", "online_baseline.py", "online_transport.py",
+                 "stream_protocol.py",
                  "native_assertions.py", "request_metrics.py", "latency_metrics.py",
                  "task_metrics.py", "usage.py",
                  "release_readiness.py", "release_profile.json", "statistical_metrics.py",
