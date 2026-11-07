@@ -173,11 +173,24 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--dir", type=Path, required=True)
     parser.add_argument("--out", type=Path, required=True)
+    parser.add_argument("--evaluation-report", action="append", default=[], type=Path,
+                        help="Canonical HTTP report for exact evaluation-purpose annotations")
     args = parser.parse_args()
+    from eval.traffic_purpose import annotate
     from utils.trace_files import iter_trace_files
-    report = collect(iter_trace_files(str(args.dir)))
+    paths = list(iter_trace_files(str(args.dir)))
+    evidence = {Path(path).resolve() for path in [*paths, *args.evaluation_report]}
+    capture_dirs = {path.resolve().parent / "traces" for path in args.evaluation_report}
+    if args.out.resolve() in evidence or args.out.resolve().parent in capture_dirs:
+        parser.error("output must not overwrite input traces or evaluation reports")
+    try:
+        report = annotate(paths, args.evaluation_report, collect)
+    except (OSError, ValueError) as error:
+        parser.error(str(error))
     args.out.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n")
-    print(json.dumps(report["coverage"], ensure_ascii=False))
+    print(json.dumps({"traffic_scope": report["traffic_scope"],
+                      "evaluation_annotation": report["evaluation_annotation"],
+                      "coverage": report["coverage"]}, ensure_ascii=False))
 
 
 if __name__ == "__main__":
