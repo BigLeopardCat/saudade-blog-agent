@@ -121,6 +121,8 @@
   const MODS = [
     ['chat-core', '__waifuChatCore'],
     ['chat-render', '__waifuRender'],
+    ['chat-work', '__waifuWorkProgress'],
+    ['chat-image-review', '__waifuImageReview'],
     ['chat-engine', '__waifuEngine'],
     ['chat-protocol', '__waifuChatProtocol'],
     ['chat-browser-actions', '__waifuBrowserActions'],

@@ -350,11 +350,19 @@
         0,
         0
       ],
+      "agent/domains/image_generation/state.py": [
+        10,
+        0
+      ],
       "agent/domains/image_generation/tools.py": [
         0,
         0
       ],
       "agent/domains/image_generation/transactions.py": [
+        0,
+        0
+      ],
+      "agent/domains/image_generation/waiting.py": [
         0,
         0
       ],
@@ -952,7 +960,7 @@
       ]
     },
     "total": [
-      288,
+      298,
       0
     ]
   },

@@ -59,6 +59,7 @@ def test_discovered_preparations_reach_approval_through_the_real_tool_chain(
         "previewUrl": f"/api/public/image-generation/{ID}/preview?token=fixture",
         "request": {
             "model": "fixture",
+            "provider": "https://images.test/v1",
             "prompt": "已批准的原始提示词",
             "size": "1536x1024",
             "quality": "high",
@@ -73,7 +74,7 @@ def test_discovered_preparations_reach_approval_through_the_real_tool_chain(
             data = {"configured": True, "defaultModel": "fixture", "models": ["fixture"]}
         elif path.endswith("/jobs"):
             intent = json.loads(request.content)
-            data = {**job, "request": {**intent, "references": []}}
+            data = {**job, "request": {**intent, "references": [], "provider": "https://images.test/v1"}}
         elif path.endswith(ID):
             data = {**job, "status": "review"}
         elif path.endswith("/cover"):

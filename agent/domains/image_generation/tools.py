@@ -1,15 +1,17 @@
 import json
-import re
 from typing import Annotated, Literal
 
 from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import tool
-from pydantic import Field
+from pydantic import Field, StrictInt
 
 from agent.authz import SCOPE_ADMIN_CONSOLE
 from agent.domains.admin_writes import available
+from agent.domains.image_generation.state import checked, show_progress
+from agent.domains.image_generation.waiting import wait
 from agent.proposals import proposal
 from agent.runtime.access import configured_reads_enabled
+from agent.runtime.results import TurnResult
 from agent.runtime.writes import bound_context
 from tools import base
 
@@ -21,18 +23,14 @@ def read(job_id, config):
     value = base._admin_get(f"{PATH}/jobs/{job_id}", config)
     if isinstance(value, base.ToolResult):
         return value
-    if not isinstance(value, dict) or value.get("id") != job_id:
+    try:
+        return checked(value, job_id)
+    except ValueError:
         return base.unavailable("未能核对生图任务。")
-    return value
-
-
-def fenced(text):
-    fence = "`" * max(3, 1 + max((len(s) for s in re.findall(r"`+", text)), default=0))
-    return fence + "text\n" + text + "\n" + fence
 
 
 def preview(job, url):
-    prefix = f"/api/public/image-generation/{job['id']}/preview?token="
+    prefix = f"/api/public/image-generation/{job.id}/preview?token="
     if not isinstance(url, str) or not url.startswith(prefix) or any(c in url for c in "\n\r()<> "):
         raise ValueError("Invalid generation preview")
     return url
@@ -40,34 +38,39 @@ def preview(job, url):
 
 def approve_card(job, config, *, result=False):
     principal, cid = bound_context(config)
-    request = job["request"]
+    request = job.request
     if result:
-        version, name, workflow = job["outputHash"], "accept_generated_image", "image_acceptance"
-        question = "请查看这次生成的实际结果。确认后仅存入图库，文章封面另行确认。\n\n"
-        question += "![生成结果](" + preview(job, job["previewUrl"]) + ")\n\n"
+        version, name, workflow = job.outputHash, "accept_generated_image", "image_acceptance"
+        if version is None or job.previewUrl is None:
+            raise ValueError("Generated pixels lack a verifiable preview")
+        question = "请查看实际图片，再决定是否保留到图库；文章封面需要另行确认。"
+        if job.error:
+            question = "上一次保留未完成，图片仍在。请核对后决定是否再次保存到图库。"
     else:
-        version, name, workflow = job["requestHash"], "start_image_generation", "image_generation"
-        question = "确认以下生图请求后将调用计费 API（1 张图片）：\n\n"
-    if request.get("provider"):
-        question += "服务地址：" + request["provider"] + "\n\n"
-    question += (
-        f"模型：{request['model']}\n\n"
-        f"尺寸：{request['size']}；质量：{request['quality']}\n\n完整提示词：\n\n"
-    )
-    question += fenced(request["prompt"])
-    refs = request["references"]
-    question += "\n\n参考图：" + (f"{len(refs)} 张固定快照" if refs else "无")
-    for index, ref in enumerate(refs):
-        question += f"\n\n![参考图 {index + 1}](" + preview(job, ref["previewUrl"]) + ")"
-    return proposal(
-        principal,
-        cid,
-        workflow,
-        {"tool": name, "args": {"job_id": job["id"], "version": version}},
-        executor="image_generation",
-        question=question,
+        version, name, workflow = job.requestHash, "start_image_generation", "image_generation"
+        question = "批准后调用计费 API 生成 1 张图片，实际结果仍需你决定是否保留。"
+    question += (f"\n\n模型：{request.model}；尺寸：{request.size}；质量：{request.quality}"
+                 f"\n\n服务地址：{request.provider}；固定参考图：{len(request.references)} 张。")
+    review = {"job_id": job.id, "version": version, "prompt": request.prompt,
+              "references": [{"name": ref.name, "url": preview(job, ref.previewUrl),
+                              "image_id": ref.imageId} for ref in request.references]}
+    if result:
+        review["result_url"] = preview(job, job.previewUrl)
+    card = proposal(principal, cid, workflow,
+        {"tool": name, "args": {"job_id": job.id, "version": version}},
+        executor="image_generation", question=question,
         target="生成图片入库" if result else "调用图片生成 API",
-    )
+        payload={"image_review": review})
+    if not isinstance(card, TurnResult):
+        return card
+    options = [{"label": "保留到图库" if result else "生成图片", "value": "yes", "kind": "primary"},
+               {"label": "暂不保留" if result else "暂不生成", "value": "no", "kind": "default"}]
+    execution = card.execution
+    show_progress(job, config)
+    return TurnResult(card.reply, {**execution,
+        "pending_confirm": {**execution["pending_confirm"], "opts": options,
+                            "image_review": review},
+        "pending_action": {**execution["pending_action"], "options": options}})
 
 
 @tool(return_direct=True)
@@ -121,30 +124,39 @@ def prepare_image_generation(
             or [r["imageId"] for r in request["references"]] != refs
         ):
             raise ValueError("Prepared request differs from intent")
-        return approve_card(value, config)
+        return approve_card(checked(value, value["id"]), config)
     except (KeyError, TypeError, ValueError):
         return base.unavailable("未能核对生图请求，本次没有调用计费 API。")
 
 
 @tool
-def get_image_generation(job_id: JobID, config: RunnableConfig) -> object:
-    """Read one previously approved generation's status without another image-model call.
-    Once started, tell the user they can review it in Dashboard > Gallery > AI generation.
-    Do not busy-poll; ask again only when the user wants the result. review means pixels
-    exist but are NOT in the gallery; use prepare_generated_image_acceptance to show the
-    result for human approval. unknown must be reconciled, never automatically restarted.
+def get_image_generation(job_id: JobID, config: RunnableConfig,
+                         wait_seconds: Annotated[StrictInt, Field(ge=0, le=240)] = 240) -> object:
+    """Observe ONE existing image job; never generates or approves an image.
+    After paid-start or saving approval, wait once (up to 240 seconds, bounded by this
+    request's remaining deadline with 15 seconds reserved for the final response)
+    for verified host status, without repeated model polls.
+    review: call prepare_generated_image_acceptance to SHOW the actual result and ask
+    whether to keep it. review + error means saving failed, not generation failed; the
+    result remains available for another explicit acceptance. saving is NOT gallery
+    completion; only accepted + imageId confirms it. A timeout is still unfinished;
+    explain the actual status and continue this READ from checkpoint when requested.
+    wait_seconds=0 reads status immediately. unknown must never restart a paid request.
     """
     if not configured_reads_enabled(config, SCOPE_ADMIN_CONSOLE):
         return base.unavailable("当前身份无权查看生图任务。")
-    value = read(job_id, config)
-    if isinstance(value, base.ToolResult):
-        return value
-    return base.ok(
-        json.dumps(
-            {key: value.get(key) for key in ("id", "status", "imageId", "error")},
-            ensure_ascii=False,
-        )
-    )
+    if wait_seconds:
+        result = wait(job_id, wait_seconds, config, PATH)
+        if isinstance(result, base.ToolResult):
+            return result
+        job, outcome = result
+    else:
+        job, outcome = read(job_id, config), "observed"
+        if isinstance(job, base.ToolResult):
+            return job
+        show_progress(job, config)
+    visible = job.visible(wait_outcome=outcome)
+    return base.ok(json.dumps(visible, ensure_ascii=False), data=visible)
 
 
 @tool(return_direct=True)
@@ -158,7 +170,7 @@ def prepare_generated_image_acceptance(job_id: JobID, config: RunnableConfig) ->
     value = read(job_id, config)
     if isinstance(value, base.ToolResult):
         return value
-    if value.get("status") != "review":
+    if value.status != "review":
         return base.unavailable("图片尚无待审阅结果，请先查看生图任务状态。")
     try:
         return approve_card(value, config, result=True)

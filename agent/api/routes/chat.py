@@ -316,7 +316,7 @@ async def chat_stream(req: ChatRequest, request: Request):
                         progress.mark("error")
                         yield sse_frame("error", "生成时间过长，请稍后重试")
                         return
-                    if loop.time() - last_frame >= STREAM_IDLE_TIMEOUT:
+                    if loop.time() - max(last_frame, progress.last_activity) >= STREAM_IDLE_TIMEOUT:
                         end_reason = "idle_timeout"
                         logger.error("Chat stream idle timeout (%.0fs), aborting", elapsed)
                         progress.mark("error")
