@@ -298,7 +298,8 @@ def run_case(case: dict, *, run_id: str = "", suffix: str = "", turn_runner=None
 
     Confirmation rounds use the preceding signed token; ordinary follow-ups use
     their own input without a token. Missing required tokens fail without sending
-    the next request. Record driver failures alongside each round."""
+    the next request. A fatal round stops dependent follow-ups while retaining
+    every received outcome and execution receipt."""
     # Use the same per-tool trace limits as production; evaluation limits may override them.
     os.environ.setdefault(trace_mod.TOOL_RESULT_LIMIT_ENV,
                           str(trace_mod.GOLDEN_MATERIAL_LIMIT))
@@ -343,6 +344,8 @@ def run_case(case: dict, *, run_id: str = "", suffix: str = "", turn_runner=None
         res["elapsed"] = round(time.time() - t0, 1)
         res["fails"] = []
         done.append(res)
+        if res.get("error"):
+            break
         prev_token = (res.get("confirm_tokens") or [""])[0]
         if _prod_on:
             # Mirror the host transcript, including the input used for an approval round.
@@ -1345,7 +1348,8 @@ def check_gold(gold: dict, result: dict, *, docs=None, user_input: str = "",
             continue
         if tdiag.get("no_doc") or tdiag.get("missing"):
             fails.append(
-                f"申报的文档不在语料里（{tdiag.get('missing') or '用例没写 require_doc_terms.doc'}）"
+                "申报的文档不在语料里（"
+                f"{tdiag.get('missing') or '用例没写 require_doc_terms.doc'}）"
                 f"—— 期望过期，请更新该用例的 `doc`（不是模型退化）")
             continue
         hits = corpus_terms.hit_terms(terms, text)
