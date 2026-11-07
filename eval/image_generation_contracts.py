@@ -14,7 +14,7 @@ from tools import base
 JOB_ID = '6b9e2bf1-56af-428c-8177-e3ad0641e036'
 FIXTURE = Path(__file__).parent / 'golden/image_generation_requests.jsonl'
 CASE = json.loads(FIXTURE.read_text())
-PROMPT = CASE['gold']['require_confirm_preview'][0]
+PROMPT = CASE['gold']['require_confirm_preview'][0]['image_review']['prompt']
 REQUEST = CASE['user_input']
 
 
@@ -30,7 +30,9 @@ def backend():
         elif request.method == 'POST' and path == '/api/protect/image-generation/jobs':
             state['draft'] = json.loads(request.content)
             value = {'id': JOB_ID, 'status': 'pending', 'requestHash': 'a' * 64,
-                     'request': {**state['draft'], 'references': []}}
+                     'imageRemoved': False,
+                     'request': {**state['draft'], 'references': [],
+                                 'provider': 'https://images.invalid/v1'}}
         else:
             state['unsupported_reads'].append(path)
             return httpx.Response(404)

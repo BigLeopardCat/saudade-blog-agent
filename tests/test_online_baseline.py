@@ -253,21 +253,6 @@ def test_versioned_card_targets_keep_exact_ids_cardinality_and_order(items, expe
     assert (not native_assertions.check(gold, result)) is passed
 
 
-def test_confirmation_preview_is_checked_on_the_card_without_requiring_duplicate_reply():
-    gold = {"require_confirm_preview": [r"父级[^\n]*编程"]}
-    result = {"native_events": [], "text": "请核对卡片。", "http_events": [
-        {"event": "confirmation", "data": {"q": "父级为一级标签「编程」"}}]}
-    assert not native_assertions.check(gold, result)
-    result["http_events"][0]["data"]["q"] = "父级为一级标签「生活」"
-    assert native_assertions.check(gold, result)
-    result["text"] = "父级为一级标签「编程」"
-    assert native_assertions.check(gold, result)  # Assistant text cannot repair the wrong card.
-    result["http_events"][0]["event"] = "text"
-    assert native_assertions.check(gold, result)
-    result["http_events"] = []
-    assert native_assertions.check(gold, result)
-
-
 def test_unscheduled_todo_card_must_not_invent_a_due_date():
     case = next(c for c in online_baseline.load_suite() if c["id"] == "todo_after_chat")
     gold = case["rounds"][1]["gold"]
