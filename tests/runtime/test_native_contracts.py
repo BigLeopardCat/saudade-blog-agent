@@ -443,3 +443,14 @@ def test_real_contract_principal_carries_scoped_synthetic_host_authority_and_res
     assert observed == [(7, 7, "blog-tools", "tools", 0)]
     assert delegation._current.get() == before
     assert '"delegation"' not in json.dumps(report)
+
+
+@pytest.mark.parametrize("resource", ["documents/validate", "activity/search"])
+def test_read_only_post_contracts_cannot_hide_lookalike_business_mutations(resource):
+    import httpx
+
+    reads = [httpx.Request("POST", "http://blog/api/public/" + resource)]
+    writes = [httpx.Request("POST", "http://blog/api/public/" + resource + "/delete"),
+              httpx.Request("POST", "http://blog/api/protected/" + resource),
+              httpx.Request("DELETE", "http://blog/api/public/" + resource)]
+    assert native_contracts._posts({"requests": reads + writes}) == writes

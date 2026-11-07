@@ -104,8 +104,11 @@ def _card(result, executor):
 
 
 def _posts(state):
+    read_posts = {"/api/public/notes/search", "/api/public/documents/validate",
+                  "/api/public/activity/search"}
     return [r for r in state["requests"] if r.method in {"POST", "DELETE", "PUT", "PATCH"}
-            and not (r.method == "POST" and r.url.path.endswith(("/notes/search", "/prepare")))]
+            and not (r.method == "POST" and (r.url.path in read_posts
+                                             or r.url.path.endswith("/prepare")))]
 
 
 def _chat(turn, state):
