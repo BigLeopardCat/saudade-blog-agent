@@ -198,6 +198,10 @@ def test_task_classes_handle_overlapping_suite_tags():
     assert task_class(["write_prepare", "multi_intent"]) == "multi"
     assert task_class(["confirmation", "memory"]) == "control"
     assert task_class(["retrieval", "dependency"]) == "article_read"
+    assert task_class(["accounts", "moderation", "negative"]) == "read"
+    assert task_class(["accounts", "write_prepare"]) == "prepare"
+    assert task_class(["accounts", "memory"]) == "conversation"
+    assert task_class(["security", "negative"]) == "chat"
 
 
 def test_noncritical_semantic_question_stays_unverified_within_quality_budgets(tmp_path):
