@@ -53,23 +53,27 @@ class BodyLimitMiddleware:
         declared = headers.get(b"content-length", b"").lstrip(b"0")
         if declared.isdigit() and (len(declared) > len(str(limit)) or int(declared) > limit):
             return await self._reject(scope, receive, send, limit)
-        messages = []
-        size = 0
+        body = bytearray()
         while True:
             message = await receive()
             if message["type"] == "http.disconnect":
                 return
-            size += len(message.get("body", b""))
-            if size > limit:
+            chunk = message.get("body", b"")
+            if len(body) + len(chunk) > limit:
                 return await self._reject(scope, receive, send, limit)
-            messages.append(message)
+            body.extend(chunk)
             if not message.get("more_body", False):
                 break
-        buffered = iter(messages)
+        buffered = bytes(body)
+        pending = True
 
         async def replay():
+            nonlocal pending
+            if pending:
+                pending = False
+                return {"type": "http.request", "body": buffered, "more_body": False}
             # Once the body is consumed, preserve real disconnect notifications for SSE.
-            return next(buffered, None) or await receive()
+            return await receive()
 
         return await self.app(scope, replay, send)
 

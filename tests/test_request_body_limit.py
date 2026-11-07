@@ -70,7 +70,8 @@ def test_exact_byte_limit_preserves_utf8_body_and_streaming_response(monkeypatch
     asyncio.run(run())
 
 
-def test_declared_oversize_is_rejected_without_reading_body(monkeypatch):
+@pytest.mark.parametrize("declared", [b"17", b"9" * 5000])
+def test_declared_oversize_is_rejected_without_reading_body(monkeypatch, declared):
     monkeypatch.setattr(middleware, "MAX_BODY_BYTES", 16)
 
     async def unexpected(*args):
@@ -83,7 +84,7 @@ def test_declared_oversize_is_rejected_without_reading_body(monkeypatch):
             sent.append(message)
 
         await middleware.BodyLimitMiddleware(unexpected)(
-            {"type": "http", "headers": [(b"content-length", b"17")]}, unexpected, send)
+            {"type": "http", "headers": [(b"content-length", declared)]}, unexpected, send)
         assert sent[0]["status"] == 413
 
     asyncio.run(run())
