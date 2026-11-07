@@ -202,7 +202,7 @@ def test_vector_index():
     check("manifest 里的键就是那批字符串的键（差一个字节 ⇒ 下一轮全部重嵌）",
           mf["keys"] == [V.chunk_key(space(), x) for x in sent] == _order(CH))
     check("首建：3 条全嵌、1 批（batch=3）", (res["embedded"],
-        res["api_calls"]) == (3, 1), str(res))
+        res["logical_batches"]) == (3, 1), str(res))
     check("manifest 的 count == len(keys) == chunk 数（不变式②的另一半）",
           mf["count"] == len(mf["keys"]) == len(CH), str(mf["count"]))
     check("manifest 记了实际维度（请求维度 0，实际维度来自返回值）",

@@ -1,8 +1,7 @@
 """Optional vector retrieval with content-addressed immutable cache generations.
 
 The writer fsyncs generation files before atomically replacing manifest.json.
-Readers verify file hashes and corpus/space alignment. Schema 1 caches are not
-trusted or imported: the first schema 2 update rebuilds embeddings once.
+Readers verify file hashes, corpus alignment and embedding-space metadata.
 """
 from __future__ import annotations
 
@@ -13,6 +12,7 @@ import math
 import threading
 import time
 from array import array
+from contextvars import ContextVar
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -109,8 +109,18 @@ def cos_sim(a, b) -> float:
     return VectorView([array("f", b)], len(b)).similar(array("f", a))[0]
 
 
+def _merge_locations(target, row):
+    """Keep each section label and its source ranges attached to the section identity."""
+    for section, ident in zip(row.get("sections") or [], row.get("section_ids") or []):
+        location = target.setdefault(ident, {"section": section, "section_id": ident,
+                                            "matches": []})
+        for match in row.get("matches") or []:
+            if match.get("section_id") == ident and match not in location["matches"]:
+                location["matches"].append(dict(match))
+
+
 def rrf_fuse(lex: list[dict], vec: list[dict], k: int, top_k: int) -> list[dict]:
-    """Official LangChain RRF ordering plus blog-specific evidence metadata."""
+    """Use official LangChain RRF ordering and preserve source-locator relationships."""
     from langchain_classic.retrievers.ensemble import EnsembleRetriever
     from langchain_core.documents import Document
     from langchain_core.runnables import RunnableLambda
@@ -119,36 +129,30 @@ def rrf_fuse(lex: list[dict], vec: list[dict], k: int, top_k: int) -> list[dict]
     ranked_documents = []
     for ranked in (lex, vec):
         documents = []
-        for d in ranked:
-            key = (d["type"], d["id"])
+        for item in ranked:
+            key = (item["type"], item["id"])
             documents.append(Document(page_content="", metadata={"identity": key}))
-            agg = info.get(key)
-            if agg is None:
-                agg = info[key] = {**d, "sections": [], "section_ids": [], "matches": []}
-                agg.pop("score", None)
-            for location in ("sections", "section_ids", "matches"):
-                for value in d.get(location) or []:
-                    if value not in agg[location]:
-                        agg[location].append(value)
+            if key not in info:
+                info[key] = {**item, "_locations": {}}
+                info[key].pop("score", None)
+            _merge_locations(info[key]["_locations"], item)
         ranked_documents.append(documents)
-    # Only reuse the maintained retriever's public fusion method, not a second runtime.
-    def retriever_for(rows: list[Document]) -> RunnableLambda:
-        def retrieve(_: str) -> list[Document]:
-            return rows
 
-        return RunnableLambda(retrieve)
+    def retriever_for(rows: list[Document]) -> RunnableLambda:
+        return RunnableLambda(lambda _: rows)
 
     ensemble = EnsembleRetriever(
         retrievers=[retriever_for(rows) for rows in ranked_documents],
         weights=[0.5, 0.5], c=k, id_key="identity",
     )
-    fused = ensemble.invoke("")
     out = []
-    for rank, document in enumerate(fused[:max(1, top_k)], 1):
+    for rank, document in enumerate(ensemble.invoke("")[:max(1, top_k)], 1):
         row = dict(info[document.metadata["identity"]], rank=rank)
-        row["sections"] = row["sections"][:2]
-        row["section_ids"] = row["section_ids"][:3]
-        row["matches"] = row["matches"][:3]
+        locations = list(row.pop("_locations").values())[:3]
+        row["locators"] = locations
+        row["sections"] = [location["section"] for location in locations[:2]]
+        row["section_ids"] = [location["section_id"] for location in locations[:2]]
+        row["matches"] = [match for location in locations for match in location["matches"]][:3]
         out.append(row)
     return out
 
@@ -158,17 +162,30 @@ def rrf_fuse(lex: list[dict], vec: list[dict], k: int, top_k: int) -> list[dict]
 _client = None
 _client_sig: tuple | None = None
 _client_lock = threading.Lock()
+_http_requests: ContextVar[int | None] = ContextVar("embedding_http_requests", default=None)
+
+
+def _observe_request(request):
+    """Count HTTP attempts at the transport boundary without retaining request content."""
+    count = _http_requests.get()
+    if count is not None:
+        _http_requests.set(count + 1)
+    from utils.trace import record
+
+    record("rag", "embedding_http_request")
 
 
 def _get_client():
-    """Reuse an OpenAI-compatible client while credentials, endpoint and timeout match."""
+    """Reuse a single-attempt SDK client; failed retrieval falls back to lexical search."""
     global _client, _client_sig
     sig = (_settings.embedding_api_key, _settings.embedding_base_url,
            float(_settings.embedding_timeout))
     with _client_lock:
         if _client is None or _client_sig != sig:
-            from openai import OpenAI
-            kwargs: dict = {"api_key": sig[0], "timeout": sig[2]}
+            from openai import DefaultHttpxClient, OpenAI
+            kwargs: dict = {"api_key": sig[0], "timeout": sig[2], "max_retries": 0,
+                            "http_client": DefaultHttpxClient(
+                                timeout=sig[2], event_hooks={"request": [_observe_request]})}
             if sig[1]:
                 kwargs["base_url"] = sig[1]
             _client = OpenAI(**kwargs)
@@ -182,7 +199,9 @@ def _embed_raw(texts: list[str], space: Space) -> list[list[float]]:
     kwargs: dict = {"model": space.model, "input": texts}
     if space.dim > 0:
         kwargs["dimensions"] = space.dim
-    resp = client.embeddings.create(**kwargs)
+    from agent.runtime.control import model_options
+
+    resp = client.embeddings.create(**kwargs, **model_options(float(_settings.embedding_timeout)))
     ordered = sorted(resp.data, key=lambda v: v.index)
     if [v.index for v in ordered] != list(range(len(texts))):
         raise ValueError("Invalid embedding response indexes")
@@ -194,43 +213,67 @@ def _embed_raw(texts: list[str], space: Space) -> list[list[float]]:
 
 
 def _batches(n: int) -> int:
-    """Count the configured batch requests needed for n inputs."""
+    """Count logical input batches, independently of actual HTTP attempts."""
     size = max(1, int(_settings.embedding_batch_size or 10))
     return (n + size - 1) // size if n > 0 else 0
 
 
+def _endpoint_failed(error):
+    """Stop a run after shared transport, authentication, capacity or service failures."""
+    from openai import APIConnectionError, APIStatusError
+
+    return (isinstance(error, APIConnectionError)
+            or isinstance(error, APIStatusError) and (
+                error.status_code in {401, 403, 404, 408, 409, 429} or error.status_code >= 500))
+
+
 def _embed_texts(texts: list[str], space: Space) -> list[list[float] | None]:
-    """Embed batches with per-input fallback; preserve failed inputs as None."""
+    """Use one request per batch; split only a multi-input HTTP 413 rejection."""
+    from openai import APIStatusError
+
+    from agent.runtime.budget import BudgetExceeded
+    from agent.runtime.control import AgentCancelled, check_active
+
     validate_inputs(texts, space.profile)
     out: list[list[float] | None] = []
     size = max(1, int(_settings.embedding_batch_size or 10))
     for i in range(0, len(texts), size):
+        check_active()
         batch = texts[i:i + size]
         try:
             got: list[list[float] | None] = [*_embed_raw(batch, space)]
-        except Exception as exc:                     # noqa: BLE001
-            logger.warning("embedding 批量 %d 条失败（%s），降级逐条调用",
-                           len(batch), exc)
-            got = []
-            for t in batch:
-                try:
-                    got.append(_embed_raw([t], space)[0])
-                except Exception as one:             # noqa: BLE001
-                    logger.warning("embedding 单条失败（%s）", one)
-                    got.append(None)
+        except (AgentCancelled, BudgetExceeded, TimeoutError):
+            raise
+        except Exception as error:  # noqa: BLE001
+            # Retrying an outage per input amplifies failures. A 413 alone may be
+            # resolved by reducing the batch; single inputs are never resent.
+            if _endpoint_failed(error):
+                logger.warning("Embedding endpoint failed (%s)", type(error).__name__)
+                return out + [None] * (len(texts) - len(out))
+            got = [None] * len(batch)
+            if len(batch) > 1 and isinstance(error, APIStatusError) and error.status_code == 413:
+                got = []
+                for text in batch:
+                    check_active()
+                    try:
+                        got.append(_embed_raw([text], space)[0])
+                    except (AgentCancelled, BudgetExceeded, TimeoutError):
+                        raise
+                    except Exception as single:  # noqa: BLE001
+                        logger.warning("Embedding input failed (%s)", type(single).__name__)
+                        if _endpoint_failed(single):
+                            return out + got + [None] * (len(texts) - len(out) - len(got))
+                        got.append(None)
+            else:
+                logger.warning("Embedding batch failed (%s)", type(error).__name__)
         out.extend(got)
-        logger.debug("Embedding progress %d/%d", i + len(batch), len(texts))
     return out
 
 
 # ── 盘上产物 ──────────────────────────────────────────────────────────
 
 class VectorView:
-    """与一批 chunk **按序对齐**的向量视图（只读，构造后不再变）。
-
-    `vectors[i]` 对应调用方 chunks[i]。SciPy computes cosine distances over an
-    immutable float64 matrix without starting BLAS worker threads.
-    """
+    """Immutable chunk-aligned float64 vectors; SciPy computes batch cosine distance."""
 
     __slots__ = ("vectors", "dim", "_matrix")
 
@@ -417,7 +460,7 @@ class VectorStore:
             if not got:
                 logger.debug("向量更新：另一个 worker 正在更新，本轮跳过")
                 return {"skipped": "locked", "fingerprint": fp,
-                        "embedded": 0, "reused": 0, "api_calls": 0}
+                        "embedded": 0, "reused": 0, "api_calls": 0, "logical_batches": 0}
             self.load()          # Observe the current committed generation.
             m = _read_json(self.manifest_path) or {}
             if (m.get("fingerprint") == fp and not m.get("missing")
@@ -426,8 +469,12 @@ class VectorStore:
                 # Compare physical row counts against chunk slots, including empty chunks.
                 # A dictionary of deduplicated keys can hide a vector/key alignment mismatch.
                 return {"skipped": "aligned", "fingerprint": fp, "embedded": 0,
-                        "reused": len(set(keys)), "api_calls": 0}
-            return self._update_locked(texts, keys, space, fp)
+                        "reused": len(set(keys)), "api_calls": 0, "logical_batches": 0}
+            measured = _http_requests.set(0)
+            try:
+                return self._update_locked(texts, keys, space, fp)
+            finally:
+                _http_requests.reset(measured)
 
     def _cache_for_space(self, space, manifest, reset):
         if reset or Space.from_dict(manifest.get("space") or {}) != space:
@@ -472,7 +519,8 @@ class VectorStore:
             # 一条都没嵌成、也没有旧库 ⇒ 不写半份产物，诚实报错
             self._last_error = "api_error" if pending else "no_vectors"
             return {"fingerprint": fp, "embedded": 0, "reused": reused,
-                    "api_calls": _batches(len(pending)), "missing": len(failed), "ok": False}
+                    "api_calls": _http_requests.get(), "logical_batches": _batches(len(pending)),
+                    "missing": len(failed), "ok": False}
 
         # Keep one row per chunk; failed zero rows are retried on the next update.
         keep: dict[str, tuple[array, int]] = {}
@@ -505,19 +553,19 @@ class VectorStore:
             "cache_dim": dim, "missing": failed,
             "built_at": time.strftime("%Y-%m-%d %H:%M:%S"),
             "stats": {"embedded": len(embedded), "reused": reused,
-                      "api_calls": _batches(len(pending)),
+                      "api_calls": _http_requests.get(), "logical_batches": _batches(len(pending)),
                       "pruned": len(old_keys) - sum(1 for k in keep if k in old_keys)},
         }
         _write_atomic(self.manifest_path,
                       json.dumps(manifest, ensure_ascii=False).encode("utf-8"))
         prune_generations(self.root, manifest)
         self._last_error = None
-        logger.info("向量索引已更新：新嵌 %d / 复用 %d / API %d 批 / 维度 %d / 缺 %d",
-                    len(embedded), reused, _batches(len(pending)), dim, len(failed))
+        logger.info("向量索引已更新：新嵌 %d / 复用 %d / HTTP %s 次 / 维度 %d / 缺 %d",
+                    len(embedded), reused, _http_requests.get(), dim, len(failed))
         self.load()      # Install the committed generation.
         return {"fingerprint": fp, "embedded": len(embedded), "reused": reused,
-                "api_calls": _batches(len(pending)), "missing": len(failed),
-                "dim": dim, "ok": True}
+                "api_calls": _http_requests.get(), "logical_batches": _batches(len(pending)),
+                "missing": len(failed), "dim": dim, "ok": True}
 
     # ── 缓存读写 ──────────────────────────────────────────────────────
 
