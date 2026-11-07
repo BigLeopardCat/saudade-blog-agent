@@ -26,7 +26,7 @@ await context.route('**/*',route=>{
   if(url.origin!==origin)return route.abort();
   if(url.pathname==='/live2d-widgets/renderer.js')return route.fulfill({
     contentType:'text/javascript',body:`window.__waifuRenderer=()=>({
-      init(){const host=document.createElement('div');host.id='waifu';document.body.appendChild(host);},
+      init(){const host=document.createElement('div');host.id='waifu';host.className='waifu-active';document.body.appendChild(host);},
       slideIn(){},startAnim(){}});`,
   });
   if(url.pathname==='/cubism5/live2dcubismcore.min.js')return route.fulfill({
