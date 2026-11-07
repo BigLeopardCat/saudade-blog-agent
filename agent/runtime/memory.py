@@ -309,12 +309,19 @@ def _observation_excerpt(body):
     return body
 
 
-def turn_messages(messages, observations, reply, principal):
-    incoming = [compact(message) for message in messages if not is_context(message)]
+def bind_actor(messages, principal):
+    """Label messages whose actor was verified at the caller boundary."""
+    incoming = list(messages)
     actor = ({"uid": principal.uid, "role": principal.known_role}
              if getattr(principal, "source", None) == SOURCE_ASSERTION else None)
     if actor is not None:
         incoming = [message.model_copy(update={"additional_kwargs": {
             **message.additional_kwargs, "memory_actor": actor,
         }}) for message in incoming]
+    return incoming
+
+
+def turn_messages(messages, observations, reply, principal):
+    incoming = bind_actor(
+        [compact(message) for message in messages if not is_context(message)], principal)
     return [*incoming, *(compact(message) for message in observations), AIMessage(content=reply)]
