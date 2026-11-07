@@ -1,222 +1,100 @@
-"""`utils/trace_io.py`（trace 读取的唯一实现）的离线自测。
-
-用法：.venv/bin/python tests/test_trace_io.py
-"""
-
+"""Trace reading preserves evidence and rejects unreadable or malformed documents."""
 
 import gzip
+import importlib
 import json
-import os
-import re
-import shutil
-import sys
-import tempfile
 from pathlib import Path
 
-from _judge import collector
+import pytest
+
+from eval import golden_trace
+from utils import trace as trace_mod
+from utils import trace_files
+from utils.trace_io import load_trace
 
 ROOT = Path(__file__).resolve().parent.parent
 
 
-sys.path.insert(0, str(ROOT))
+def test_json_and_gzip_preserve_identical_evidence(tmp_path):
+    document = {"input": {"message": "公开合成请求"},
+                "events": [{"node": "native", "event": "llm_done", "input": 100}],
+                "reply": "喵"}
+    data = json.dumps(document, ensure_ascii=False).encode()
+    plain = tmp_path / "20261107T010000_7_12345678.json"
+    compressed = plain.with_suffix(".json.gz")
+    plain.write_bytes(data)
+    compressed.write_bytes(gzip.compress(data))
+
+    assert load_trace(plain) == load_trace(compressed) == document
+    assert set(trace_files.iter_trace_files(str(tmp_path))) == {str(plain), str(compressed)}
+    assert trace_files.parse_trace_name(str(compressed)) == ("20261107T010000", "7")
+    assert trace_files.parse_stamp(str(compressed)) == "20261107T010000"
+    assert trace_files.parse_trace_name("invalid-name.txt") == ("", "")
 
 
-sys.path.insert(0, str(ROOT / "eval"))
+@pytest.mark.parametrize(("name", "data"), [
+    ("bad.json", b"not json"),
+    ("bad.json.gz", b"not gzip"),
+    ("truncated.json.gz", gzip.compress(b'{"events": []}')[:-4]),
+    ("bad_utf8.json", b"\xff"),
+    ("list.json", b"[]"),
+    ("null.json", b"null"),
+    ("events.json", b'{"events": {}}'),
+    ("event.json", b'{"events": [1]}'),
+])
+def test_unreadable_or_malformed_data_is_unknown(tmp_path, name, data):
+    path = tmp_path / name
+    path.write_bytes(data)
+    assert load_trace(path) is None
 
 
-from eval import golden_trace  # noqa: E402
-
-from utils import trace as trace_mod  # noqa: E402  （⑦ 那条：真落一份盘看顶层字段）
-from utils import trace_files as tf  # noqa: E402
-from utils import trace_io  # noqa: E402
-
-FAILS = []
-check = collector(FAILS)
+def test_missing_file_is_unknown(tmp_path):
+    assert load_trace(tmp_path / "missing.json") is None
 
 
-def src(rel: str) -> str:
-    return (ROOT / rel).read_text(encoding="utf-8")
+def test_reader_does_not_invent_or_rewrite_archived_fields(tmp_path):
+    document = {"events": [{"node": "planner", "event": "decision", "skill": "chat"},
+                            {"skill": "old", "workflow": "new"}], "reply": "archive"}
+    path = tmp_path / "archive.json"
+    path.write_text(json.dumps(document))
+    assert load_trace(path) == document
+    assert path.read_text() == json.dumps(document)
+
+    document = {"reply": "no version or events metadata"}
+    path.write_text(json.dumps(document))
+    assert load_trace(path) == document
 
 
-def _check_legacy_event_key(tmp: str, plain: str, oldp: str) -> None:
-    """Archived event aliases preserve current keys and need no wall-clock deadline."""
-    print("\n⑨ 旧事件键 `skill` → `workflow`（映射在 load_trace 里，带日落日期）")
-    legacy = {"events": [{"node": "planner", "event": "decision", "skill": "chat"},
-                         {"node": "planner", "event": "decision", "workflow": "navigate"},
-                         {"node": "planner", "event": "decision", "skill": "old",
-                          "workflow": "new"}]}
-    lpath = os.path.join(tmp, "20260101T000000_5_legacy00.json")
-    with open(lpath, "w", encoding="utf-8") as fh:
-        json.dump(legacy, fh, ensure_ascii=False)
-    ld = trace_io.load_trace(lpath)
-    check("⑨ 旧键补出新键（改名前那 30 天的 trace 照读）",
-          [e.get("workflow") for e in ld["events"]] == ["chat", "navigate", "new"],
-          str([e.get("workflow") for e in ld["events"]]))
-    check("⑨ 新键已在时**不覆盖**（旧键只是个兼容影子，不是权威）",
-          ld["events"][2]["workflow"] == "new")
-    check("⑨ 没有 events 的 trace 不炸", trace_io.load_trace(oldp).get("events") == [])
-    check("⑨ 新格式的事件一个键都不多（映射只在缺新键时动手）",
-          set(trace_io.load_trace(plain)["events"][0]) ==
-          {"node", "event", "workflow", "round"})
-
-
-def _check_schema_version(tmp: str) -> str:
-    """Verify schema stamps and tolerate missing versions in archived traces."""
-    check("⑦ SCHEMA_VERSION 是 ≥1 的整数（版本号本身别写成字符串/0）",
-          isinstance(trace_mod.SCHEMA_VERSION, int) and trace_mod.SCHEMA_VERSION >= 1,
-          repr(trace_mod.SCHEMA_VERSION))
-    vdir = os.path.join(tmp, "vtrace")
-    trace_mod.start_trace("ver00001", 17, "thread-ver", {"message": "x"},
-                          dir=vdir, name="case_ver", by_day=False)
-    vpath = trace_mod.finish_trace("ver00001", "producer_done", 1.0, 2)
-    vdoc = trace_io.load_trace(vpath) if vpath else None
-    check("⑦ 落盘的 trace 顶层带 schema_version，且与常量同值（写读一致）",
-          bool(vdoc) and vdoc.get("schema_version") == trace_mod.SCHEMA_VERSION,
-          f"{vpath} → {vdoc.get('schema_version') if vdoc else None}")
-    # 存量的 30 天里全是没这个字段的文件：读侧必须"缺席即旧格式"，不能因此少读
-    oldp = os.path.join(tmp, "20250101T000000_3_old00000.json")
-    with open(oldp, "w", encoding="utf-8") as fh:
-        json.dump({"trace_id": "old", "events": [], "reply": "旧"}, fh, ensure_ascii=False)
-    od = trace_io.load_trace(oldp)
-    check("⑦ 没有该字段的存量 trace 照读不误（缺席 = 0 = 20260928 之前）",
-          isinstance(od, dict) and od.get("schema_version") is None and od.get("reply") == "旧")
-    # 读侧纪律：**不许**硬取。硬取会让"扫全量"在换版当天炸掉一半（存量按保留期老去）
-    _hard = []
-    for p in sorted(list((ROOT / "eval").glob("*.py")) + list((ROOT / "tests").glob("*.py"))):
-        if p.name == Path(__file__).name:
-            continue  # 本文件就是写这条判据的地方，字符串里带着它
-        if re.search(r'\["schema_version"\]', p.read_text(encoding="utf-8")):
-            _hard.append(p.name)
-    check("⑦ 没有任何读取端硬取 doc[\"schema_version\"]（只许 .get）",
-          not _hard, "、".join(_hard))
-    return oldp
-
-
-def main() -> int:
-    tmp = tempfile.mkdtemp(prefix="trace_io_test_")
+def test_recorder_stamps_schema_and_exposes_only_live_event_copies(tmp_path):
+    trace_id = "trace-reader-contract"
+    assert isinstance(trace_mod.SCHEMA_VERSION, int) and trace_mod.SCHEMA_VERSION >= 1
+    trace_mod.start_trace(trace_id, user_id=0, thread_id="fixture", dir=str(tmp_path),
+                          name="trace-reader-contract", by_day=False)
     try:
-        payload = {"input": {"message": "带 .gz 的那半语料"},
-                   "events": [{"node": "planner", "event": "decision", "workflow": "navigate", "round": 0}],
-                   "reply": "喵"}
-
-        # ── ① .json 与 .gz 同内容 ⇒ 结果逐键相同 ──────────────────────────
-        plain = os.path.join(tmp, "20260925T143012_17_ab12cd34.json")
-        packed = plain + ".gz"
-        with open(plain, "w", encoding="utf-8") as fh:
-            json.dump(payload, fh, ensure_ascii=False)
-        with open(packed, "wb") as fh:
-            fh.write(gzip.compress(json.dumps(payload, ensure_ascii=False).encode("utf-8")))
-
-        a, b = trace_io.load_trace(plain), trace_io.load_trace(packed)
-        check("① .json 读得出来", isinstance(a, dict) and a.get("reply") == "喵")
-        check("① .gz 读出来与 .json **逐键相同**（不是「读到了但少了几段」）",
-              a == b and b is not None, f"json={a is not None} gz={b is not None}")
-
-        try:
-            json.load(open(packed))
-            raised = False
-        except Exception:
-            raised = True
-        check("① 反证：裸 json.load 读 .gz 确实抛（说明这条锁有内容，不是空转）", raised)
-
-        # ── ② 坏文件返回 None，不抛 ──────────────────────────────────────
-        bad = os.path.join(tmp, "20260925T143013_1_deadbeef.json")
-        with open(bad, "w", encoding="utf-8") as fh:
-            fh.write("{这不是 JSON")
-        bad_gz = bad.replace(".json", ".json.gz")
-        with open(bad_gz, "wb") as fh:
-            fh.write(b"not gzip at all")
-        check("② 坏 .json → None（不抛）", trace_io.load_trace(bad) is None)
-        check("② 坏 .gz → None（不抛）", trace_io.load_trace(bad_gz) is None)
-        check("② 不存在的文件 → None（不抛）",
-              trace_io.load_trace(os.path.join(tmp, "没有这个文件.json")) is None)
-
-        # ── ③ 枚举器把 .gz 也算进语料（少看一半的入口就在这里）─────────────
-        got = tf.iter_trace_files(tmp)
-        check("③ iter_trace_files 同时收 .json 与 .gz",
-              plain in got and packed in got and len(got) == 4, f"{len(got)} 份")
-
-        # ── ④ 全仓只有一个 load_trace 定义，四个读取端都从它取 ─────────────
-        defines = []
-        for p in sorted(ROOT.rglob("*.py")):
-            if ".venv" in p.parts:
-                continue
-            if re.search(r"^def load_trace\b", p.read_text(encoding="utf-8"), re.M):
-                defines.append(str(p.relative_to(ROOT)))
-        check("④ 全仓只有 utils/trace_io.py 定义 load_trace（不许再抄第二份）",
-              defines == ["utils/trace_io.py"], f"定义处={defines}")
-        for rel in ("eval/trace_alert.py", "eval/trace_metrics.py",
-                    "eval/trace_reconcile.py", "eval/golden_draft.py"):
-            check(f"④ {rel} 从 utils.trace_io 取读取器",
-                  "from utils.trace_io import load_trace" in src(rel))
-        for rel in ("eval/trace_alert.py", "eval/trace_metrics.py", "eval/golden_draft.py"):
-            check(f"④ {rel} 不再自带 gzip 解压", "import gzip" not in src(rel))
-
-        # ── ⑤ parse_trace_name：一次取 stamp+uid（窗口过滤与 uid==0 排除共用）──
-        check("⑤ parse_trace_name 取到 (stamp, uid)",
-              tf.parse_trace_name(packed) == ("20260925T143012", "17"))
-        check("⑤ 名字不规范 → 空串对（不抛）", tf.parse_trace_name("/tmp/乱七八糟.txt") == ("", ""))
-        check("⑤ parse_stamp 与 parse_trace_name 同源", tf.parse_stamp(packed) == "20260925T143012")
-
-        # ── ⑥ trace_files 仍然只依赖 stdlib（枚举器不该有 IO 语义）─────────
-        tfsrc = src("utils/trace_files.py")
-        check("⑥ trace_files.py 不 import json/gzip（IO 归 trace_io）",
-              "import json" not in tfsrc and "import gzip" not in tfsrc)
-
-        # ── ⑦ 顶层 schema_version：写侧盖章、读侧只许 .get（不许硬取）──────────
-        oldp = _check_schema_version(tmp)
-
-        _tid = "trace_io_test_events_of"
-        trace_mod.start_trace(_tid, user_id=0, thread_id="t", dir=tmp, by_day=False,
-                              name="events_of_probe")
-        trace_mod.record("planner", "ledger_frame", ids=["talkId:7"], unread=[])
-        _evs = golden_trace.events_of(_tid)
-        check("⑧ 未落盘就读得到（断言发生在 finish_trace 之前）",
-              len(_evs) == 1 and _evs[0].get("event") == "ledger_frame",
-              f"events={_evs}")
-        _evs.append({"node": "x", "event": "污染"})
-        check("⑧ 拿到的是**拷贝**（往里塞东西不影响 recorder）",
-              len(golden_trace.events_of(_tid)) == 1)
-        trace_mod.finish_trace(_tid, "test", 0.0, 0)
-        check("⑧ `finish_trace` 之后取不到（它 `_ACTIVE.pop`）——这条同时解释了"
-              "「为什么 golden 必须在收尾之前取」",
-              golden_trace.events_of(_tid) == [])
-        check("⑧ 没有这个 trace_id ⇒ 空表（不抛）",
-              golden_trace.events_of("根本没有这个 id") == [])
-        # 唯一调用方是评测侧：全仓（除定义处）引用 `events_of` 的文件只许在 eval/ 下
-        _callers = [str(p.relative_to(ROOT)) for p in
-                    sorted(list((ROOT / "agent").rglob("*.py"))
-                           + list((ROOT / "tools").rglob("*.py"))
-                           + list((ROOT / "utils").rglob("*.py"))
-                           + list((ROOT / "eval").rglob("*.py"))
-                           + list((ROOT / "tests").rglob("*.py")))
-                    if p.name != "trace.py" and "events_of" in p.read_text(encoding="utf-8")]
-        _prod = [c for c in _callers
-                 if not (c.startswith("eval" + os.sep) or c.startswith("tests" + os.sep))]
-        check("⑧ 调用方只有评测侧（生产路径上一个调用点都没有）",
-              not _prod, "、".join(_prod) or "、".join(_callers))
-
-        # ── ⑨ 改名遗留：旧事件键 `skill` 映射成 `workflow`（带日落）──────────
-        _check_legacy_event_key(tmp, plain, oldp)
+        trace_mod.record("native", "tool_end", name="search_articles", status="success")
+        events = golden_trace.events_of(trace_id)
+        assert len(events) == 1 and events[0]["event"] == "tool_end"
+        events.append({"node": "injected", "event": "should-not-persist"})
+        assert len(golden_trace.events_of(trace_id)) == 1
     finally:
-        shutil.rmtree(tmp, ignore_errors=True)
+        path = trace_mod.finish_trace(trace_id, "producer_done", 1.0, 2)
 
-    print(f"\n{'=' * 60}")
-    if FAILS:
-        print(f"❌ {len(FAILS)} 项未过：")
-        for f in FAILS:
-            print("   -", f)
-        return 1
-    print("✅ 全部通过")
-    return 0
+    document = load_trace(path)
+    assert document is not None and document.get("schema_version") == trace_mod.SCHEMA_VERSION
+    assert golden_trace.events_of(trace_id) == []
+    assert golden_trace.events_of("absent-trace") == []
 
 
-def test_trace_io():
-    main()
+@pytest.mark.parametrize("module", [
+    "eval.trace_alert", "eval.trace_metrics", "eval.trace_reconcile", "eval.golden_draft",
+])
+def test_diagnostic_readers_share_evidence_loading(module):
+    assert importlib.import_module(module).load_trace is load_trace
 
-    assert not FAILS, (
-        f"{len(FAILS)} 条未通过：" + "；".join(FAILS))
 
-
-if __name__ == "__main__":
-    test_trace_io()
+def test_live_event_inspection_is_not_used_by_production():
+    callers = [str(path.relative_to(ROOT))
+               for directory in ("agent", "tools", "utils")
+               for path in (ROOT / directory).rglob("*.py")
+               if path.name != "trace.py" and "events_of" in path.read_text()]
+    assert callers == []
