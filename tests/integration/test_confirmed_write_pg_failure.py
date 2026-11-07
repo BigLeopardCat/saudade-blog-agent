@@ -22,6 +22,12 @@ from tools import base, own_data
 pytestmark = pytest.mark.enable_socket
 
 
+@pytest.fixture(autouse=True)
+def _host_capabilities_for_mock_backends():
+    """Use real delegation forwarding instead of the suite-wide opaque mock token."""
+    yield
+
+
 @pytest.fixture
 def fault_site(monkeypatch):
     dsn = os.environ.get("SAUDADE_TASK_INPUT_TEST_DSN")
@@ -105,11 +111,12 @@ def fault_site(monkeypatch):
                                       daemon=True)
             worker.start()
             try:
-                with httpx.Client(trust_env=False, timeout=3) as client:
-                    monkeypatch.setattr(base, "_client", client)
-                    monkeypatch.setattr(base, "ADMIN_BASE", f"http://127.0.0.1:{server.server_port}")
-                    monkeypatch.setattr(confirm.settings, "confirmation_secret",
-                                        secrets.token_urlsafe(32))
+                with (httpx.Client(trust_env=False, timeout=3) as client,
+                      monkeypatch.context() as patches):
+                    patches.setattr(base, "_client", client)
+                    patches.setattr(base, "ADMIN_BASE", f"http://127.0.0.1:{server.server_port}")
+                    patches.setattr(confirm.settings, "confirmation_secret",
+                                    secrets.token_urlsafe(32))
                     yield state, dsn, options
             finally:
                 server.shutdown()
