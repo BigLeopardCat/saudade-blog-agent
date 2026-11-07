@@ -1,9 +1,8 @@
-"""One committed read capability survives compaction without retaining an entire domain."""
+"""Domain activation preserves wire schemas, scope, batch state and request budgets."""
 
 import json
 from dataclasses import replace
 from operator import add
-from types import SimpleNamespace
 from typing import Annotated
 
 import httpx
@@ -23,12 +22,12 @@ from agent.domains.activity_search import search_public_activity
 from agent.products.blog.application import BlogApplication
 from agent.products.blog.capabilities import ToolCatalog
 from agent.products.blog.history import read_tool
-from agent.products.blog.tool_policy import BlogToolMiddleware
 from agent.runtime.budget import BudgetLimits, TaskBudget, budget_scope
 from agent.runtime.checkpoint_conversations import CheckpointConversationStore
-from agent.runtime.conversation_store import bound_recent_read
+from agent.runtime.conversation_store import bound_tool_domains
 from agent.runtime.service import AgentRuntime
-from agent.runtime.tool_state import model_menu
+from agent.runtime.session import ToolSession
+from agent.runtime.tool_state import activate, apply
 from agent.runtime.turns import AgentCancelled
 from models.llm import get_llm
 from tools import base
@@ -38,67 +37,76 @@ from tools.result import ok, unavailable
 
 
 def session():
-    protected = convert_to_openai_tool(search_notes)
-    return SimpleNamespace(menu=[protected], execution_tools={
-        search_notes.name: search_notes, search_public_activity.name: search_public_activity},
-        budget=TaskBudget(), output_limit=64)
+    return ToolSession(Capture(), config(), {search_notes.name: search_notes},
+                       {"public_activity": {search_public_activity.name: search_public_activity}})
 
 
-def test_standard_override_preserves_protected_tools_and_uses_current_canonical_schema():
+def saved_domains():
+    return {"scope": {"uid": 7, "role": "user", "conversation_id": 42},
+            "domains": [{"domain": "public_activity", "turn_id": "original"}]}
+
+
+def test_saved_activation_uses_current_canonical_schema_without_inline_definitions():
     current = session()
-    forged = {"type": "function", "function": {"name": "search_public_activity",
-              "parameters": {"type": "object", "properties": {"password": {"type": "string"}}}}}
-    unknown = {"type": "function", "function": {"name": "unknown_operation"}}
-    chosen = model_menu(current, [forged, unknown], [HumanMessage(content="follow up")], object())
-    assert chosen == [*current.menu, convert_to_openai_tool(search_public_activity)]
-    assert model_menu(current, [], [], object()) == current.menu
+    baseline = list(current.menu)
+    saved = saved_domains()
+    saved["domains"].append({"domain": "unknown_operation", "turn_id": "original"})
+    apply(current, saved)
+    assert current.menu == [*baseline, convert_to_openai_tool(search_public_activity)]
+    assert [item["domain"] for item in current.state["tool_domains"]["domains"]] == [
+        "public_activity"]
+    forged = saved_domains()
+    forged["domains"][0]["schema"] = {"injected_parameter": "forged"}
+    apply(current, forged)
+    assert current.menu == baseline and not current.state["tool_domains"]["domains"]
 
 
-def test_complete_input_and_output_budget_can_omit_hint_without_spending_or_poisoning_budget():
-    current, model = session(), object()
-    prompt = [HumanMessage(content="original source request")]
-    baseline = current.budget.input_tokens(prompt, current.menu, model_key=model)
-    current.budget = TaskBudget(BudgetLimits(input_tokens=baseline,
-        context_tokens=baseline+current.output_limit+1, task_tokens=100000))
-    chosen = model_menu(current, [search_public_activity], prompt, model)
-    assert chosen == current.menu and current.budget.reason is None
+def test_new_domain_rejection_preserves_complete_menu_without_spending_or_poisoning_budget():
+    current, prompt = session(), [HumanMessage(content="original source request")]
+    baseline = list(current.menu)
+    estimate = current.budget.input_tokens(prompt, baseline, model_key=current.model)
+    current.budget = TaskBudget(BudgetLimits(input_tokens=estimate,
+        context_tokens=estimate+current.output_limit+1, task_tokens=100000))
+    assert activate(current, "public_activity", prompt) == "context_tokens"
+    assert current.menu == baseline and current.budget.reason is None
     assert current.budget.model_calls == current.budget.tool_calls == current.budget.tokens == 0
     current.budget = TaskBudget()
-    assert model_menu(current, [search_public_activity], prompt, model) == [
-        *current.menu, convert_to_openai_tool(search_public_activity)]
+    assert activate(current, "public_activity", prompt) is None
+    assert current.menu == [*baseline, convert_to_openai_tool(search_public_activity)]
 
 
-def test_cancellation_from_request_budget_is_not_swallowed(monkeypatch):
+def test_cancellation_during_domain_admission_rolls_back_the_uncommitted_menu(monkeypatch):
     current = session()
+    baseline = list(current.menu)
     def cancelled(*args, **kwargs):
         raise AgentCancelled()
     monkeypatch.setattr(current.budget, "call_block_reason", cancelled)
     with pytest.raises(AgentCancelled):
-        model_menu(current, [search_public_activity], [], object())
+        activate(current, "public_activity", [])
+    assert current.menu == baseline and not current.state["tool_domains"]["domains"]
 
 
 @pytest.mark.parametrize("change", ["uid", "role", "conversation_id", "forged"])
-def test_hint_cannot_cross_actor_role_or_conversation_scope(change):
-    hint = {"tool_name": "search_public_activity", "turn_id": "original",
-            "scope": {"uid": 7, "role": "user", "conversation_id": 42}}
-    assert bound_recent_read(hint, config()) == hint
+def test_activation_cannot_cross_actor_role_or_conversation_scope(change):
+    saved = saved_domains()
+    assert bound_tool_domains(saved, config()) == saved
     if change == "forged":
-        hint["extra"] = "untrusted"
+        saved["extra"] = "untrusted"
     else:
-        hint["scope"][change] = {"uid": 8, "role": "admin", "conversation_id": 43}[change]
-    assert bound_recent_read(hint, config()) is None
+        saved["scope"][change] = {"uid": 8, "role": "admin", "conversation_id": 43}[change]
+    assert bound_tool_domains(saved, config()) is None
 
 
 @pytest.mark.parametrize("name", ["prepare_favorite_change", "write_todos", "navigate_page"])
-def test_hint_cannot_expose_preparation_planning_or_business_write_tools(name):
+def test_direct_read_activation_excludes_preparation_planning_or_business_write_tools(name):
     @tool(name)
     def action() -> object:
         """A non-read fixture with an existing product permission."""
-        raise AssertionError("A menu hint must never execute a tool.")
+        raise AssertionError("A schema check must never execute a tool.")
     assert read_tool(name, {name: action}, lambda _: True) is None
 
 
-def test_hint_revalidates_current_catalog_and_authorization():
+def test_direct_read_activation_revalidates_current_catalog_and_authorization():
     assert read_tool(search_public_activity.name, {}, lambda _: True) is None
     assert read_tool(search_public_activity.name,
                      {search_public_activity.name: search_public_activity}, lambda _: False) is None
@@ -155,32 +163,42 @@ def test_same_step_read_commands_recover_stably_without_losing_other_updates(sec
     with pytest.raises(AgentCancelled):
         list(selected.stream_events({"messages": [HumanMessage(content="Read both sources.")],
              "task_id": "batch-run", "turn_id": "batch-turn"}, config()))
-    assert calls == ["a", "b"] and selected.store.load(config()).recent_read is None
+    assert calls == ["a", "b"] and selected.store.load(config()).tool_domains is None
     assert observed[-1] == ["get_blog_info", "get_social_links"]
     read_messages = [message for message in model.prompts[-1] if message.type == "tool"]
     assert [message.tool_call_id for message in read_messages] == ["a", "b"]
     rebuilt = runtime(Capture(AIMessage(content="Both source outcomes are preserved.")))
     list(rebuilt.stream_events({"resume_task": "batch-run"}, config()))
     assert calls == ["a", "b"]
-    expected = "get_social_links" if second_kind == "ok" else "get_blog_info"
-    assert rebuilt.store.load(config()).recent_read == {
-        "tool_name": expected, "turn_id": "batch-turn",
-        "scope": {"uid": 7, "role": "user", "conversation_id": 42}}
+    assert rebuilt.store.load(config()).tool_domains["domains"] == []
     assert observed[-1] == ["get_blog_info", "get_social_links"]
-    rebuilt.update_state(config(), {"recent_read": None})
-    next_turn = runtime(Capture(AIMessage(content="A new turn with the hint cleared.")))
+    rebuilt.update_state(config(), {"tool_domains": None})
+    next_turn = runtime(Capture(AIMessage(content="A new turn without optional domains.")))
     list(next_turn.stream_events({"messages": [HumanMessage(content="New task.")]}, config()))
-    assert next_turn.store.load(config()).recent_read is None
+    assert next_turn.store.load(config()).tool_domains["domains"] == []
+
+
+def assert_followup_wire(turn1, turn2, budgets, reuse, first, backend_calls):
+    assert len(turn1) == budgets[0].model_calls == 3
+    assert len(turn2) == budgets[1].model_calls == (2 if reuse else 3)
+    initial = [item["function"]["name"] for item in turn1[0]["tools"]]
+    continued = [item["function"]["name"] for item in turn2[0]["tools"]]
+    assert turn1[-1]["tools"] == turn1[-2]["tools"]
+    assert turn2[0]["tools"] == turn1[-1]["tools"] if reuse else continued == initial
+    expected_reads = {"get_announcements", "list_guestbook", "list_talks"}
+    assert (expected_reads.issubset(continued) if reuse
+            else not expected_reads.intersection(continued))
+    assert any(first in message.get("content", "") for message in turn2[0]["messages"])
+    assert len(backend_calls) == 2 and backend_calls[1] == {
+        "keywords": ["猫咪"], "page": 1, "page_size": 3}
+    return initial, continued
 
 
 @pytest.mark.parametrize("reuse", [False, True])
 @pytest.mark.parametrize("empty", [False, True])
-def test_real_sdk_followup_has_one_read_schema_and_independent_task_budget(
+def test_real_sdk_followup_retains_domain_schema_and_independent_task_budget(
     monkeypatch, reuse, empty, tmp_path
 ):
-    if not reuse:
-        monkeypatch.setattr(BlogToolMiddleware, "wrap_model_call",
-                            lambda self, request, handler: handler(request))
     requests, backend_calls = [], []
     phase = {"turn": 1, "step": 0}
     total = 0 if empty else 1
@@ -243,6 +261,8 @@ def test_real_sdk_followup_has_one_read_schema_and_independent_task_budget(
         for number, message in enumerate((first, following)):
             phase.update(turn=number+1, step=0)
             selected = runtime()
+            if number == 1 and not reuse:
+                selected.store.update_state(config(), {"tool_domains": None})
             with budget_scope(budgets[number]):
                 result = list(selected.stream_events({"messages": build_messages(ChatRequest(
                     message=message, conversation_id=42), holds_context=True),
@@ -250,22 +270,109 @@ def test_real_sdk_followup_has_one_read_schema_and_independent_task_budget(
             assert result.reply == "已完成本轮公开来源检索。"
         turn1 = [body for turn, body in requests if turn == 1]
         turn2 = [body for turn, body in requests if turn == 2]
-        assert len(turn1) == budgets[0].model_calls == 3
-        assert len(turn2) == budgets[1].model_calls == (2 if reuse else 3)
-        initial = [item["function"]["name"] for item in turn1[0]["tools"]]
-        continued = [item["function"]["name"] for item in turn2[0]["tools"]]
-        assert continued == [*initial, "search_public_activity"] if reuse else continued == initial
-        assert not {"get_announcements", "list_guestbook", "list_talks"}.intersection(continued)
-        assert any(first in message.get("content", "") for message in turn2[0]["messages"])
-        assert len(backend_calls) == 2 and backend_calls[1] == {
-            "keywords": ["猫咪"], "page": 1, "page_size": 3}
-        hint = selected.store.load(config()).recent_read
-        assert hint == {"tool_name": "search_public_activity", "turn_id": "turn-1",
-                        "scope": {"uid": 7, "role": "user", "conversation_id": 42}}
+        initial, continued = assert_followup_wire(
+            turn1, turn2, budgets, reuse, first, backend_calls)
+        saved = selected.store.load(config()).tool_domains
+        assert saved["domains"] == [{"domain": "public_activity", "turn_id": (
+            "turn-0" if reuse else "turn-1")}]
+        assert saved["scope"] == {"uid": 7, "role": "user", "conversation_id": 42}
         assert checkpoint.drop_last_user_turn(selected, 42, "turn-1")["dropped"]
-        assert selected.store.load(config()).recent_read is None
+        retained = selected.store.load(config()).tool_domains["domains"]
+        assert retained == (saved["domains"] if reuse else [])
         cost = {"reuse": reuse, "empty": empty, "first_menu": len(initial),
                 "next_menu": len(continued), "next_model_calls": len(turn2),
                 "first_schema_chars": len(json.dumps(turn1[0]["tools"], ensure_ascii=False)),
                 "next_schema_chars": len(json.dumps(turn2[0]["tools"], ensure_ascii=False))}
         (tmp_path / "wire-cost.json").write_text(json.dumps(cost))
+
+
+@pytest.mark.parametrize("provider", ["openai", "deepseek"])
+def test_real_sdk_keeps_the_entire_schema_prefix_across_different_read_tools(provider, monkeypatch):
+    from hashlib import sha256
+
+    from _framework_fixture import call as wire_call
+    from _framework_fixture import model_replies
+
+    @tool
+    def get_blog_info() -> object:
+        """Read the first synthetic public source."""
+        return ok("First fact.")
+
+    @tool
+    def get_social_links() -> object:
+        """Read the second synthetic public source."""
+        return ok("Second fact.")
+
+    class Catalog(ToolCatalog):
+        def initial_tools(self, own_enabled):
+            return {}
+
+        def domains(self, config, can_prepare):
+            return {"alpha": {get_blog_info.name: get_blog_info},
+                    "beta": {get_social_links.name: get_social_links}}
+
+    saver = InMemorySaver()
+
+    def selected(model):
+        if provider == "deepseek":
+            from models.deepseek import DeepSeekChat
+
+            monkeypatch.setattr("config.settings.llm_provider", "opencode")
+            model = get_llm(model="deepseek-v4.1-flash", api_key="synthetic",
+                base_url="https://model.fixture.test/v1", http_client=model.http_client,
+                streaming=True, stream_usage=True, max_tokens=128, enable_thinking=False)
+            assert isinstance(model, DeepSeekChat)
+        return AgentRuntime(CheckpointConversationStore(saver),
+                            application=BlogApplication(Catalog()), model_factory=lambda **_: model)
+
+    with model_replies(
+            {"tool_calls": [wire_call("load_alpha_info_tools", "load-a")]},
+            {"tool_calls": [wire_call("get_blog_info", "first-read")]},
+            {"content": "First fact."}) as (first_model, first_requests):
+        list(selected(first_model).stream_events(
+            {"messages": [HumanMessage(content="Read alpha.")]}, config()))
+    with model_replies(
+            {"tool_calls": [wire_call("load_beta_info_tools", "load-b")]},
+            {"tool_calls": [wire_call("get_social_links", "second-read")]},
+            {"tool_calls": [wire_call("get_blog_info", "third-read")]},
+            {"content": "Both facts."}) as (next_model, requests):
+        list(selected(next_model).stream_events({"messages": [HumanMessage(content="Read both.")]},
+                                                config()))
+    before = first_requests[-1]["tools"]
+    assert requests[0]["tools"] == before
+    assert requests[1]["tools"][:len(before)] == before
+    assert requests[1]["tools"] == requests[2]["tools"] == requests[3]["tools"]
+    fingerprints = [sha256(json.dumps(row["tools"], separators=(",", ":")).encode()).hexdigest()
+                    for row in requests[1:]]
+    assert len(set(fingerprints)) == 1
+    systems = [row["messages"][0] for row in [*first_requests, *requests]]
+    assert all(item == systems[0] for item in systems)
+
+
+def test_saved_domains_are_isolated_from_background_runs_and_invalid_bindings():
+    from agent.runtime.task_scope import background_thread
+
+    foreground = saved_domains()
+    background = config()
+    background["configurable"].update(
+        conversation_id=None, background_run_id="background-one",
+        thread_id=background_thread(7, "background-one"))
+    assert bound_tool_domains(foreground, background) is None
+    value = {"scope": {"uid": 7, "role": "user", "background_run_id": "background-one"},
+             "domains": foreground["domains"]}
+    assert bound_tool_domains(value, background) == value
+    assert bound_tool_domains(value, config()) is None
+    background["configurable"]["thread_id"] = background_thread(7, "background-two")
+    assert bound_tool_domains(value, background) is None
+
+
+def test_direct_read_cannot_promote_other_unauthorized_tools_in_its_domain():
+    from agent.runtime.tool_state import activate_read
+
+    current = session()
+    original = list(current.menu)
+    decision = activate_read(current, "search_public_activity", [],
+                             authorized=lambda _: False)
+    assert decision == {"domain": "public_activity", "status": "rejected",
+                        "reason": "domain_not_permitted"}
+    assert current.menu == original and current.state["tool_domains"] is None

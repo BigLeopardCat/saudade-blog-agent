@@ -22,7 +22,7 @@ def prepare(session, state):
             "messages": memory.turn_messages([*incoming, *session.applied_messages],
                                               observations, result.reply, session.principal),
             "context_update": session.state["context_update"],
-            "recent_read": session.state.get("recent_read")}
+            "tool_domains": session.state.get("tool_domains")}
 
 
 def commit(state, config, *, session):
@@ -35,7 +35,7 @@ def commit(state, config, *, session):
         "run": ({**state["run"], "input_saved": True}
                 if state.get("approval") and state.get("run") else None),
         "turn": None, "last_outcome": turn_phase(TurnResult(turn["reply"], turn["execution"])),
-        "recent_read": turn.get("recent_read")}
+        "tool_domains": turn.get("tool_domains")}
     execution = turn["execution"] or {}
     if "receipts" in execution:
         update["receipts"] = execution["receipts"]

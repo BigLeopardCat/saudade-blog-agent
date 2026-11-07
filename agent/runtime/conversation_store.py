@@ -10,28 +10,43 @@ from dataclasses import dataclass, field
 from typing import Any, Protocol, TypedDict
 
 
-class RecentRead(TypedDict):
-    tool_name: str
-    scope: dict
-    turn_id: str
+class DomainActivation(TypedDict):
+    domain: str
+    turn_id: str | None
 
 
-def replace_recent_read(_previous, current):
-    """Tool batches are ordered; a later update or explicit None replaces the hint."""
-    return current
+class ToolDomains(TypedDict):
+    scope: dict | None
+    domains: list[DomainActivation]
 
 
-def bound_recent_read(value, config):
+def bound_tool_domains(value, config):
+    """Saved activation is conversation metadata, never an authorization grant."""
     from agent.runtime.task_scope import binding
 
-    if (not isinstance(value, dict) or set(value) != {"tool_name", "scope", "turn_id"}
-            or not isinstance(value["tool_name"], str) or not value["tool_name"]
-            or not isinstance(value["turn_id"], str) or not value["turn_id"]):
+    if (not isinstance(value, dict) or set(value) != {"scope", "domains"}
+            or not isinstance(value["domains"], list)):
         return None
     try:
-        return value if value["scope"] == binding(config) else None
+        if value["scope"] != binding(config):
+            return None
     except ValueError:
         return None
+    names = set()
+    for item in value["domains"]:
+        if (not isinstance(item, dict) or set(item) != {"domain", "turn_id"}
+                or not isinstance(item["domain"], str) or not item["domain"]
+                or (item["turn_id"] is not None and (
+                    not isinstance(item["turn_id"], str) or not item["turn_id"]))
+                or item["domain"] in names):
+            return None
+        names.add(item["domain"])
+    return value
+
+
+def replace_tool_domains(_previous, current):
+    """Ordered tool batches publish progressively complete activation snapshots."""
+    return current
 
 
 @dataclass(frozen=True)
@@ -43,7 +58,7 @@ class ConversationSnapshot:
     run: dict | None = None
     receipts: list = field(default_factory=list)
     last_outcome: str | None = None
-    recent_read: RecentRead | None = None
+    tool_domains: ToolDomains | None = None
     unfinished: bool = False
     initialized: bool = False
 
