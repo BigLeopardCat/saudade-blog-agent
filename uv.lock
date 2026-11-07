@@ -2482,6 +2482,7 @@ dependencies = [
     { name = "edge-tts" },
     { name = "fastapi" },
     { name = "httpx" },
+    { name = "httpx-sse" },
     { name = "langchain" },
     { name = "langchain-classic" },
     { name = "langchain-core" },
@@ -2518,7 +2519,6 @@ rag-data = [
 dev = [
     { name = "bandit" },
     { name = "coverage" },
-    { name = "httpx-sse" },
     { name = "ir-measures" },
     { name = "mypy" },
     { name = "pytest" },
@@ -2539,6 +2539,7 @@ requires-dist = [
     { name = "edge-tts", specifier = "==7.2.8" },
     { name = "fastapi", specifier = "==0.141.1" },
     { name = "httpx", specifier = "==0.28.1" },
+    { name = "httpx-sse", specifier = "==0.4.3" },
     { name = "langchain", specifier = "==1.4.6" },
     { name = "langchain-classic", specifier = "==1.0.8" },
     { name = "langchain-core", specifier = "==1.6.10" },
@@ -2570,7 +2571,6 @@ provides-extras = ["embedding-tokenizer", "rag-data"]
 dev = [
     { name = "bandit", specifier = "==1.9.4" },
     { name = "coverage", extras = ["toml"], specifier = "==7.16.2" },
-    { name = "httpx-sse", specifier = "==0.4.3" },
     { name = "ir-measures", specifier = "==0.4.3" },
     { name = "mypy", specifier = "==2.4.0" },
     { name = "pytest", specifier = "==9.1.1" },

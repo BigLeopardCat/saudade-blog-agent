@@ -41,7 +41,7 @@ jobs:
       - name: Install dependencies
         run: uv sync --locked
 
-      - name: Build and verify isolated distribution
+      - name: Build and verify isolated production distribution without dev dependencies
         run: bash scripts/dev/package_smoke.sh
 
       - name: 未定义名静态扫描（ruff F821，秒级）
