@@ -29,7 +29,7 @@ def feedback(kind):
                         additional_kwargs={"runtime_feedback": kind})
 
 
-@pytest.mark.parametrize("kind", ["response_repair", "completion_review"])
+@pytest.mark.parametrize("kind", ["response_repair", "synthetic_feedback"])
 def test_restore_uses_real_user_boundary_before_generated_feedback(kind):
     selected = ToolSession(None, config(), {}, {})
     source = [HumanMessage(content="Original request", id="original-user"),
@@ -37,16 +37,15 @@ def test_restore_uses_real_user_boundary_before_generated_feedback(kind):
         ToolMessage(content="VERIFIED_SOURCE", name="fixture_read", tool_call_id="read",
                     artifact={"kind": "ok", "receipts": [{"tool": "fixture_write"}]}),
         feedback(kind)]
-    state = {**initial_state(), "messages": source, "response_repairs": 1,
-             "completion_checks": 1}
+    state = {**initial_state(), "messages": source, "response_repairs": 1}
     restore_session(selected, state)
     assert len(selected.receipts) == 1
     assert any(isinstance(message, ToolMessage) and message.content == "VERIFIED_SOURCE"
                for message in selected.observations)
-    assert selected.state["response_repairs"] == selected.state["completion_checks"] == 1
+    assert selected.state["response_repairs"] == 1
 
 
-@pytest.mark.parametrize("kind", ["response_repair", "completion_review"])
+@pytest.mark.parametrize("kind", ["response_repair", "synthetic_feedback"])
 @pytest.mark.parametrize("anchor", [None, "internal-feedback"])
 def test_compaction_anchor_and_summary_guard_remain_real_user_input(kind, anchor, monkeypatch):
     from _memory_support import Capture
@@ -81,8 +80,8 @@ class BoundModel(Model):
         return next(self.stream(prompt, **kwargs))
 
 
-@pytest.mark.parametrize("kind", ["response_repair", "completion_review"])
-def test_pause_after_internal_feedback_retains_reads_and_does_not_replay_write(backend, kind):
+@pytest.mark.parametrize("kind", ["response_repair", "planned_interruption"])
+def test_interruption_after_repair_or_planning_retains_reads_without_replaying_write(backend, kind):
     state, _ = backend
     reads = []
 
@@ -102,8 +101,10 @@ def test_pause_after_internal_feedback_retains_reads_and_does_not_replay_write(b
 
     class Interrupted(BoundModel):
         def stream(self, prompt, **kwargs):
-            if any(message.additional_kwargs.get("runtime_feedback") == kind
-                   for message in prompt):
+            if (kind == "response_repair" and any(
+                    message.additional_kwargs.get("runtime_feedback") == kind
+                    for message in prompt)
+                    or kind == "planned_interruption" and len(self.prompts) >= 2):
                 raise AgentCancelled()
             yield from super().stream(prompt, **kwargs)
 
@@ -112,19 +113,14 @@ def test_pause_after_internal_feedback_retains_reads_and_does_not_replay_write(b
         responses.append(AIMessage(content="", invalid_tool_calls=[{
             "name": "fixture_read", "args": "{", "id": "bad", "error": "JSON"}]))
     else:
-        responses.extend([AIMessage(content="", tool_calls=[call("write_todos", "plan",
-                                                                  todos=pending)]),
-                          AIMessage(content="我会继续解释。")])
+        responses.append(AIMessage(content="", tool_calls=[call("write_todos", "plan",
+                                                                 todos=pending)]))
     selected.model_factory = lambda **_: Interrupted(*responses)
     with pytest.raises(AgentCancelled):
         run(selected, grant=grant)
     saved = selected.store.load(config())
     assert saved.unfinished and len(state["writes"]) == len(reads) == 1
-    continuation = []
-    if kind == "completion_review":
-        continuation.append(AIMessage(content="", tool_calls=[call("write_todos", "done",
-            todos=[{"content": pending[0]["content"], "status": "completed"}])]))
-    model = BoundModel(*continuation, AIMessage(content="资料已核实，收藏回执已保留。"))
+    model = BoundModel(AIMessage(content="资料已核实，收藏回执已保留。"))
     rebuilt = runtime(model, saver=selected.saver, catalog=selected.application.catalog)
     result = list(rebuilt.stream_events({"resume_task": saved.run["id"]}, config()))[-1]
     assert result.execution["receipts"] and len(state["writes"]) == len(reads) == 1
