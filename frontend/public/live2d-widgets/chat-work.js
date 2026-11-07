@@ -20,5 +20,12 @@
     if (created) append(line);
     return true;
   };
-  g.__waifuWorkProgress = {valid, upsert};
+  const snapshot = item => ({cls:item.cls || 'step',text:item.text,
+    ...(valid(item.work) ? {work:{id:item.work.id,stage:item.work.stage,status:item.work.status}} : {})});
+  const fromLine = line => {
+    const work = {id:line.dataset.workId,stage:line.dataset.workStage,status:line.dataset.workStatus};
+    return snapshot({cls:valid(work) ? 'work' : line.classList.contains('continuation') ? 'continuation' : 'step',
+      text:line.textContent,work});
+  };
+  g.__waifuWorkProgress = {valid, upsert, snapshot, fromLine};
 })(globalThis);

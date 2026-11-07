@@ -656,15 +656,19 @@
           // Keep completed progress visible across checkpoint continuation.
           const previousProcess = opts.processFrom && opts.processFrom.querySelector('.agent-process');
           steps = previousProcess ? [...previousProcess.querySelectorAll('.agent-process-line')]
-            .map(line => ({ cls: 'step', text: line.textContent })) : [...(opts.previousProcess || [])];
+            .map(window.__waifuWorkProgress.fromLine) : [...(opts.previousProcess || [])];
           let processBox = previousProcess || null;
           if (!processBox && steps.length) {
             processBox = makeProcessBox(!getCollapsePref());
             for (const step of steps) {
-              const line = document.createElement('div');
-              line.className = 'agent-process-line ' + (step.cls || 'step');
-              line.textContent = step.text;
-              processBox.querySelector('.agent-process-body').appendChild(line);
+              if (step.work) window.__waifuWorkProgress.upsert(processBox, step,
+                line => engine.appendProcessLine(processBox, line));
+              else {
+                const line = document.createElement('div');
+                line.className = 'agent-process-line ' + (step.cls || 'step');
+                line.textContent = step.text;
+                processBox.querySelector('.agent-process-body').appendChild(line);
+              }
             }
           }
           ctx.state.activeRound.process = steps;
@@ -796,7 +800,7 @@
           if (fullText.trim()) {
             const finalItem = __chatCore.migrateItem({
               id: roundId, type: 'agent', text: fullText, time: Date.now(),
-              process: steps.map(s => ({cls: s.cls, text: s.text})),
+              process: steps.map(window.__waifuWorkProgress.snapshot),
             });
             ctx.state.items = __chatCore.mergeItems(ctx.state.items, [finalItem]);
             div.dataset.mid = finalItem.id;
@@ -804,7 +808,7 @@
             delete ctx.state.live[roundId];
             // 广播 done 带完整条目：远端 mergeItems 转正（不写 localStorage 防写者风暴）
             broadcast({t: 'done', id: finalItem.id, fullText, time: finalItem.time,
-                       process: steps.map(s => ({cls: s.cls, text: s.text})), roundId});
+                       process: steps.map(window.__waifuWorkProgress.snapshot), roundId});
             saveHistory();
             clearFailedRound(roundState.turnId);
           } else if (programCmds.some(command => command.task_id)) {
@@ -855,7 +859,7 @@
               if ((displayText).trim()) {
                 const partialItem = __chatCore.migrateItem({
                   id: roundId, type: 'agent', text: displayText, time: Date.now(),
-                  process: steps.map(s => ({cls: s.cls, text: s.text})),
+                  process: steps.map(window.__waifuWorkProgress.snapshot),
                 });
                 ctx.state.items = __chatCore.mergeItems(ctx.state.items, [partialItem]);
                 div.dataset.mid = roundId;
@@ -885,7 +889,7 @@
             if ((displayText).trim()) {
               const partialItem = __chatCore.migrateItem({
                 id: roundId, type: 'agent', text: displayText, time: Date.now(),
-                process: steps.map(s => ({cls: s.cls, text: s.text})),
+                process: steps.map(window.__waifuWorkProgress.snapshot),
               });
               ctx.state.items = __chatCore.mergeItems(ctx.state.items, [partialItem]);
               div.dataset.mid = roundId;

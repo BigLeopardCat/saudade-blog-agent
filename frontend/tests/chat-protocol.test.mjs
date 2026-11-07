@@ -108,3 +108,18 @@ test('typed work remains progress while malformed states never dispatch controls
     assert.throws(()=>createStream(()=>{}).feed(frame('progress',value)));
   }
 });
+
+
+test('work snapshots preserve typed identity across history and reject malformed metadata', () => {
+  const work={id:'image:opaque',stage:'saving',status:'running'};
+  const line={dataset:{workId:work.id,workStage:work.stage,workStatus:work.status},
+    classList:{contains:name=>name==='work'},textContent:'saving'};
+  const saved=globalThis.__waifuWorkProgress.fromLine(line);
+  assert.deepEqual(saved,{cls:'work',text:'saving',work});
+  const restored=globalThis.__waifuWorkProgress.snapshot(JSON.parse(JSON.stringify(saved)));
+  assert.deepEqual(restored,saved);
+  restored.work.stage='accepted';
+  assert.equal(saved.work.stage,'saving');
+  assert.deepEqual(globalThis.__waifuWorkProgress.snapshot({cls:'step',text:'literal',
+    work:{...work,status:'execute'}}),{cls:'step',text:'literal'});
+});
