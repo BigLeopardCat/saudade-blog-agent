@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from rag.sections import PARSER_VERSION
+
 
 def documents(chunks: list[dict], scores: dict[int, float], revision: str) -> list[dict]:
     by_doc: dict[tuple[str, int], dict] = {}
@@ -16,6 +18,8 @@ def documents(chunks: list[dict], scores: dict[int, float], revision: str) -> li
                 "title": chunk["title"],
                 "score": score,
                 "corpus_revision": revision,
+                "content_revision": chunk.get("revision"),
+                "section_schema": PARSER_VERSION,
                 "document_revision": chunk.get("reading_revision", chunk.get("revision")),
                 "sections": [],
                 "section_ids": [],
