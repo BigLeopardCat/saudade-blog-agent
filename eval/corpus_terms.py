@@ -129,7 +129,7 @@ def derive(doc_keys, *, docs=None, df_max: int = 2, strict: bool = False,
     # Diagnostics expose both specific terms and common terms for assertion review.
     diag.update(n_terms=len(out), n_kept=len(kept),
                 docs=[doc_key(d) for d in declared], df_max=df_max, strict=strict,
-                marks={"id_like": [t for t in out if "." in t],        # Retain identifier-like terms.
+                marks={"id_like": [t for t in out if "." in t],
                        "gram3": [t for t in out if _PURE_CJK3.match(t)]},
                 top=[{"term": t, "df": df.get(t, 0), "tf": tf.get(t, 0)} for t in out[:10]],
                 common=sorted(out, key=lambda t: (-df.get(t, 0), -tf.get(t, 0), t))[:8])
