@@ -80,21 +80,27 @@ def backend(monkeypatch, tmp_path):
         state["requests"].append((method, path))
         if method != "GET":
             state["writes"].append((method, path))
-        if path.endswith("/favorites"):
-            if method == "POST":
-                state["favorites"].add(json.loads(request.content)["noteId"])
-            data = [{"noteId": ident, "title": f"文章{ident}"}
-                    for ident in state["favorites"]]
-        elif path.endswith(("/notes/19", "/notes/20")):
+        if path.endswith("/favorites") and method == "POST":
+            ident = json.loads(request.content)["noteId"]
+            changed = ident not in state["favorites"]
+            state["favorites"].add(ident)
+            data = {"ownerUserId": 7, "noteId": ident, "isFavorite": True, "changed": changed}
+        elif path.endswith(("/favorites/19", "/favorites/20")):
             ident = int(path.rsplit("/", 1)[-1])
-            data = {"noteKey": ident, "noteTitle": f"文章{ident}"}
-        elif path.endswith("/notifications"):
-            data = {"items": [{"id": 101, "title": "通知", "isRead": state["read"]}],
+            data = {"ownerUserId": 7, "noteId": ident,
+                    "isFavorite": ident in state["favorites"],
+                    "articleAvailable": True, "title": f"文章{ident}"}
+        elif path.endswith("/notifications/state"):
+            assert request.url.params.get("ids") == "101"
+            data = {"ownerUserId": 7, "complete": True,
+                    "items": [{"id": 101, "title": "通知", "isRead": state["read"]}],
                     "unread": int(not state["read"])}
         elif path.endswith("/notifications/read"):
             assert json.loads(request.content) == {"all": False, "ids": [101]}
+            changed = not state["read"]
             state["read"] = True
-            data = None
+            data = {"scope": "selected", "ownerUserId": 7, "matchedIds": [101],
+                    "changedIds": [101] if changed else [], "isRead": True, "unreadCount": 0}
         else:
             return httpx.Response(404)
         return httpx.Response(200, json={"code": 200, "data": data})
