@@ -80,7 +80,7 @@ def _record_invalid_confirm(
             detail=str(detail or "")[:120],
         )
         finish_trace(trace_id, exit_reason, 0.0, 1)
-    except Exception:  # trace 是观测，不是业务：绝不因它中断
+    except Exception:
         logger.exception("invalid confirm trace dump failed")
 
 
@@ -180,7 +180,9 @@ async def chat(req: ChatRequest, request: Request):
         req.user_id, req.conversation_id, runtime_probe.holds_context(runtime)
     )
 
-    if not await try_acquire_slot(request):
+    if not await try_acquire_slot(request, session_id=(
+        conversation_session(principal, req.conversation_id) if req.resume_task else None
+    )):
         raise HTTPException(503, "Agent busy（并发已满），请稍后重试")
     try:
         _start_turn_trace(runtime, req, principal, thread_id)
@@ -234,7 +236,7 @@ async def chat(req: ChatRequest, request: Request):
 async def chat_stream(req: ChatRequest, request: Request):
     runtime = require_runtime(request)
     workers = require_workers(request)
-    principal = _resolve_principal(request, req.user_id)  # 身份以签名为准（见 _resolve_principal）
+    principal = _resolve_principal(request, req.user_id)
     req.user_id = principal.uid
     req = safe_request(req, principal)
     logger.info("chat_stream_started user_id=%s conversation_id=%s message_chars=%s",
@@ -246,7 +248,9 @@ async def chat_stream(req: ChatRequest, request: Request):
         _limit = req.chat_quota.limit if req.chat_quota is not None else 0
         logger.info("[quota] 额度用尽，本轮零执行（uid=%s limit=%s）", req.user_id, _limit)
         return stream_response(text_stream(_quota_blocked_text(_limit)))
-    if not await try_acquire_slot(request):
+    if not await try_acquire_slot(request, session_id=(
+        conversation_session(principal, req.conversation_id) if req.resume_task else None
+    )):
         raise HTTPException(503, "Agent busy（并发已满），请稍后重试")
     try:
         messages = ([] if grant is not None or req.resume_task else
@@ -271,7 +275,7 @@ async def chat_stream(req: ChatRequest, request: Request):
 
     async def event_stream():
         queue: asyncio.Queue = asyncio.Queue(maxsize=STREAM_BUFFER_SIZE)
-        loop = asyncio.get_running_loop()  # 同上（event_stream 也是协程）
+        loop = asyncio.get_running_loop()
         progress = StreamProgress(loop, queue, jobs.control)
         started = progress.started
 
