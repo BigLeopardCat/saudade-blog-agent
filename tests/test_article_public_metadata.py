@@ -230,6 +230,39 @@ def test_verified_empty_or_whitespace_range_authorizes_only_the_metadata_link(bo
         evidence.issue(json.dumps({"source": "/article/99"}), SITE_BASE)
         == "unread_article_reference"
     )
+    assert evidence.issue(
+        json.dumps({"source": "https://foreign.invalid/article/23"}), SITE_BASE
+    ) == "unread_article_reference"
+
+
+@pytest.mark.parametrize(
+    "source",
+    [None, {"type": "talk", "id": 23}, {"type": "note", "id": 99},
+     {"type": "note", "id": True}, {"type": "note", "id": "23"}],
+)
+def test_empty_metadata_with_unverified_source_cannot_register_a_candidate(source):
+    evidence = ArticleEvidence()
+    evidence.observe("get_article_detail", {"article_id": 23}, ok("metadata", data={
+        "noteTitle": "元信息文章", "noteContent": " ", "source": source,
+    }))
+    assert not evidence.candidates and not evidence.documents and not evidence.read_ranges
+    assert evidence.invalid_references(json.dumps({"source": "/article/23"}), SITE_BASE)
+
+
+def test_a_body_read_after_metadata_preserves_its_verified_visible_range():
+    from agent.domains.articles.reading import project
+    from eval.fixtures.document_reads import document_page
+
+    evidence = ArticleEvidence()
+    for body in (" ", "有正文"):
+        page = document_page("note", 23, "元信息文章", body, {"limit": "1"}, DISPLAY)
+        data = project(page, "note", 23, "", 0, 1, "", "")
+        evidence.observe("get_article_detail", {"article_id": 23}, ok("read", data=data))
+    assert evidence.candidates == evidence.documents == {23: "元信息文章"}
+    assert evidence.read_ranges[23] == [{
+        "revision": data["contentRevision"], "section_id": "", "start": 0, "end": 1,
+        "visible_chars": 1, "selected_total_chars": 3, "selected_range_reaches_end": False,
+    }]
 
 
 def test_fenced_json_example_does_not_become_a_live_source_or_body_read():
