@@ -1,4 +1,4 @@
-"""One bounded public search result; PostgreSQL owns matching and counts."""
+"""One bounded batch search; PostgreSQL owns matching, deduplication and counts."""
 
 import json
 from collections import Counter
@@ -13,12 +13,25 @@ from tools import base
 
 Count = Annotated[StrictInt, Field(ge=0)]
 Keyword = Annotated[StrictStr, Field(min_length=1, max_length=128, pattern=r"^[^\x00-\x1f\x7f]+$")]
+Keywords = Annotated[list[Keyword], Field(min_length=1, max_length=8)]
 
 
 class Counts(BaseModel):
     announcements: Count
     board: Count
     talk: Count
+
+
+class KeywordCounts(BaseModel):
+    keyword: Keyword
+    counts: Counts
+    total: Count
+
+    @model_validator(mode="after")
+    def consistent_total(self):
+        if self.total != sum(self.counts.model_dump().values()):
+            raise ValueError("Inconsistent keyword total")
+        return self
 
 
 class Hit(BaseModel):
@@ -30,6 +43,7 @@ class Hit(BaseModel):
     content: Annotated[StrictStr, Field(max_length=240)]
     contentTruncated: StrictBool
     createdAt: StrictStr | None
+    matchedKeywords: Keywords
     approved: StrictInt | None = None
     displayName: Annotated[StrictStr, Field(max_length=80)] | None = None
     displayNameTruncated: StrictBool | None = None
@@ -43,7 +57,9 @@ class Hit(BaseModel):
 
 
 class SearchPage(BaseModel):
-    keyword: StrictStr
+    keywords: Keywords
+    keywordMode: Literal["any"]
+    keywordCounts: Annotated[list[KeywordCounts], Field(min_length=1, max_length=8)]
     matchMode: Literal["literal_case_insensitive"]
     sources: tuple[Literal["announcements"], Literal["board"], Literal["talk"]]
     counts: Counts
@@ -66,31 +82,57 @@ class SearchPage(BaseModel):
             raise ValueError("Inconsistent activity search totals or page")
         return self
 
+    @model_validator(mode="after")
+    def consistent_keyword_scope(self):
+        counts = self.counts.model_dump()
+        if ([row.keyword for row in self.keywordCounts] != self.keywords
+                or len({word.lower() for word in self.keywords}) != len(self.keywords)
+                or self.total > sum(row.total for row in self.keywordCounts)):
+            raise ValueError("Inconsistent activity keyword scope")
+        for word in self.keywordCounts:
+            if any(value > counts[source] for source, value in word.counts.model_dump().items()):
+                raise ValueError("Keyword count exceeds union count")
+            observed = Counter(row.source for row in self.items
+                               if word.keyword in row.matchedKeywords)
+            if any(value > word.counts.model_dump()[source] for source, value in observed.items()):
+                raise ValueError("Page exceeds keyword counts")
+        for row in self.items:
+            matched = [word for word in self.keywords if word in row.matchedKeywords]
+            if row.matchedKeywords != matched:
+                raise ValueError("Unverified or duplicate keyword matches")
+        return self
+
 
 @tool
-def search_public_activity(keyword: Keyword, page: Page = 1, limit: Limit = 5) -> object:
-    """按关键词一次检索公开公告、河灯留言和说说的完整正文，返回分来源总数与分页节选。
+def search_public_activity(keywords: Keywords, page: Page = 1, limit: Limit = 5) -> object:
+    """一次提交1至8个扩写关键词，批量检索公开公告、河灯留言和说说的完整正文。
 
-    keyword是连续字串、不区分大小写，不是语义搜索；零命中仅指该字串未命中。
-    查内容是否提及某词优先用本工具；看最新动态用列表，解读长正文需按来源和编号补读。
+    keywords按任一词命中，不区分大小写，重复词自动去重；不是语义搜索。
+    total/counts是去重并集，keywordCounts是各词计数，词间可能重叠不能相加。
+    返回统一分页节选和matchedKeywords；解读长正文需按来源和编号补读。
     河灯留名不是账号，不参与匹配；待审内容不在此视图。
     """
-    keyword = keyword.strip()
-    if not keyword:
+    normalized, seen = [], set()
+    for word in keywords:
+        value = word.strip()
+        if value.lower() not in seen:
+            normalized.append(value)
+            seen.add(value.lower())
+    if any(not word for word in normalized):
         return base.unavailable("检索需要非空关键词。")
     try:
-        payload = _response("activity/search", {"keyword": keyword, "page": page,
-                                                "page_size": limit})
+        payload = _response("activity/search", {}, method="POST", json_body={
+            "keywords": normalized, "page": page, "page_size": limit})
         if (not isinstance(payload, dict) or type(payload.get("code")) is not int
                 or payload["code"] != 200):
             raise ValueError("Invalid activity search response")
         result = SearchPage.model_validate(payload.get("data"))
-        if (result.keyword, result.page, result.pageSize) != (keyword, page, limit):
+        if (result.keywords, result.page, result.pageSize) != (normalized, page, limit):
             raise ValueError("Activity search scope mismatch")
         data = result.model_dump(exclude_none=True)
         encoded = json.dumps(data, ensure_ascii=False, separators=(",", ":"))
-        if len(encoded) > 7500:
-            return base.unavailable("检索结果过大，请减小limit。")
+        if len(encoded.encode("utf-8")) > 7500:
+            return base.unavailable("检索结果过大，请减少关键词数量或limit。")
         return base.ok(encoded, data=data)
     except (httpx.HTTPError, ValueError):
         return base.unavailable("公开活动检索失败，不能判定是否有匹配内容。")

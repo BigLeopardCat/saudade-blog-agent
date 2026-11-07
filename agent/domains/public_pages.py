@@ -14,9 +14,9 @@ Identifier = Annotated[StrictInt, Field(gt=0)]
 
 
 
-def _response(resource, params):
-    with base._client.stream("GET", base.API_BASE.rstrip("/") + "/" + resource,
-                             params=params) as response:
+def _response(resource, params, *, method="GET", json_body=None):
+    with base._client.stream(method, base.API_BASE.rstrip("/") + "/" + resource,
+                             params=params, json=json_body) as response:
         response.raise_for_status()
         if response.status_code != 200:
             raise ValueError("Unexpected public response status")
