@@ -38,7 +38,7 @@ def _tier(t: str) -> int:
     return 2
 
 
-from eval import golden_evaluation as rg  # noqa: E402  （重：会拉起 server/agent，与 judge_offline 同款）
+from eval import golden_evaluation as rg  # noqa: E402
 
 
 def _judge(gold: dict, text: str, docs) -> list[str]:

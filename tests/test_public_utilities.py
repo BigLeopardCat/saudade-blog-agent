@@ -122,8 +122,8 @@ def test_client_snapshot_is_data_not_account_authority():
 
 
 def test_online_fixture_uses_fresh_explicit_browser_context_not_weather_tools():
-    from eval.online_baseline import load_suite
     from eval.golden_evaluation import build_request
+    from eval.online_baseline import load_suite
 
     cases = load_suite()
     weather = next(c for c in cases if c["id"] == "weather")

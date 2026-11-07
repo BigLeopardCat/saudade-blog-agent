@@ -47,7 +47,8 @@ def analyze(d: dict) -> dict | None:
         by_round.setdefault(0 if r is None else r, set()).update(_call_names(e.get("tools") or []))
     rounds = [sorted(by_round[r]) for r in sorted(by_round)]
     fallbacks = [e for e in evs if (e.get("node"), e.get("event")) == ("gate", "fallback")]
-    return {"workflow": decs[-1].get("workflow", decs[-1].get("skill")), "ptools": decs[-1].get("tools") or [],
+    return {"workflow": decs[-1].get("workflow", decs[-1].get("skill")),
+            "ptools": decs[-1].get("tools") or [],
             "rounds": rounds, "rev": len(fallbacks),
             "blocked": sum(1 for e in checks if e.get("verdict") == "BLOCK")}
 

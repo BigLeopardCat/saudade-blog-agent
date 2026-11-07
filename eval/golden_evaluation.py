@@ -1209,7 +1209,6 @@ def check_gold(gold: dict, result: dict, *, docs=None, user_input: str = "",
         for _tk in (result.get("confirm_tokens") or []):
             if _tk and _tk in text:
                 fails.append("令牌原文出现在正文里（它是 10 分钟有效的写授权凭据）")
-
     # Inspect archived ledger events rather than inferring targets from reply prose.
     _lf_events = result.get("ledger_frames") or []
     _ledger_ids = [str(i) for e in _lf_events for i in (e.get("ids") or [])]
@@ -1241,7 +1240,7 @@ def check_gold(gold: dict, result: dict, *, docs=None, user_input: str = "",
                 _s = str(_raw)
                 _tag, _separator, _value = _s.partition(":")
                 _fam = TAG_FAMILY.get(_tag)
-                _tid = normalize_target_id(_value) if _separator else None
+                _tid = normalize_target_id(_value)
                 if _fam and _tid is not None:
                     _byfam.setdefault(_fam, set()).add(int(_tid))
         _seen, _bad = 0, []

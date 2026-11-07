@@ -1,8 +1,8 @@
 """Blog domain discovery descriptions and frequently used UI actions."""
 
-from agent.role_labels import role_cn
 from agent.domains.account_actions.targets import Role
 from agent.domains.notices.targets import DEFAULT_TITLE
+from agent.role_labels import role_cn
 
 # Discovery identifies the task; detailed arguments belong to the loaded tools.
 DOMAIN_DESCRIPTIONS = {

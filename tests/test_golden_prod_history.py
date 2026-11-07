@@ -21,9 +21,8 @@ sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "eval"))
 
 
-from eval import golden_evaluation as rg  # noqa: E402
-
 from agent.api.context import build_messages as _build_messages  # noqa: E402
+from eval import golden_evaluation as rg  # noqa: E402
 
 FAILS: list[str] = []
 check = collector(FAILS)

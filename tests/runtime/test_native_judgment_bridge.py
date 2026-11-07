@@ -2,7 +2,7 @@
 
 from langchain_core.messages import AIMessage
 
-from eval import native_contracts, golden_evaluation
+from eval import golden_evaluation, native_contracts
 from eval.own_fixtures import favorite_backend
 
 

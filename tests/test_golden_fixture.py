@@ -545,7 +545,6 @@ def test_golden_fixture():
             print("  -", f)
         sys.exit(1)
     print("=== 全部通过 ===")
-
     assert not FAILS, (
         f"{len(FAILS)} 条未通过：" + "；".join(FAILS))
 
