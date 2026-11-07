@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 """Public article, taxonomy and activity reads with bounded source evidence."""
 
+import json
 import logging
 from typing import Annotated, Literal
 
@@ -212,6 +213,22 @@ def _rag_hit(index, hit):
     return text + (" " + " | ".join(hints) if hints else "")
 
 
+def _rag_meta(route, corpus, top_k):
+    mode = route["mode"]
+    incomplete = mode in {"degraded", "unavailable"} or route["missing"] > 0
+    semantic = ("incomplete" if incomplete else "completed"
+                if mode == "hybrid" or route["reason"] == "no_vector_hits" else "not_used")
+    return {"corpus": corpus, "rag_mode": mode, "rag_reason": route["reason"],
+            "vector_hits": route["vectors"], "vector_missing": route["missing"],
+            "retrieval": {"scope": "public_article_body_index", "mode": mode,
+                          "semantic": semantic, "snapshot_stale": corpus["stale"], "limit": top_k}}
+
+
+def _rag_text(meta, text):
+    coverage = json.dumps(meta["retrieval"], ensure_ascii=False, separators=(",", ":"))
+    return "retrieval=" + coverage + "\n" + text
+
+
 @tool
 def rag_search(
     query: Annotated[str, "检索关键词（用户问题中希望从博客内容里找到答案的核心表述）"],
@@ -230,45 +247,47 @@ def rag_search(
         from rag.visibility import VisibilityUnavailable, current_public
 
         hits = search(query, top_k=top_k)
+        route = last_route()
+        corpus = get_index().status()
+        meta = _rag_meta(route, corpus, top_k)
         if hits is None:
-            return unavailable("检索索引未就绪（语料为空或重建失败），暂时无法检索")
+            return unavailable(
+                _rag_text(meta, "当前公开文章索引不可用，未完成本次检索。"), meta=meta)
         if not hits:
-            return empty("检索无结果")
+            if meta["retrieval"]["semantic"] == "incomplete" or corpus["stale"]:
+                return unavailable(_rag_text(
+                    meta, "本次未取得候选，检索尚未完整完成，不能据此判断无相关文章。"), meta=meta)
+            return empty(_rag_text(meta, "本次查询在当前公开文章索引中未命中。"), meta=meta)
         try:
             verified = current_public(hits, _get)
         except VisibilityUnavailable as error:
             if error.reason == "missing_source_revision":
                 warm_async()
             return unavailable(
-                "暂时无法核实检索候选的当前公开版本，请稍后重试。", meta={"reason": error.reason}
+                _rag_text(meta, "暂时无法核实检索候选的当前公开版本，请稍后重试。"),
+                meta={**meta, "reason": error.reason}
             )
         for changed in verified.changed:
             invalidate_document(changed["id"], changed.get("document_revision", ""))
+        if verified.changed:
+            corpus = {**corpus, "stale": True}
+            meta = _rag_meta(route, corpus, top_k)
         hits = verified.current
         if not hits:
             return unavailable(
-                "文章公开范围或版本已变化，索引正在刷新，请稍后重新检索。",
-                meta={"reason": "corpus_changed"},
+                _rag_text(meta, "文章公开范围或版本已变化，索引正在刷新，请稍后重新检索。"),
+                meta={**meta, "reason": "corpus_changed"},
             )
         text = "\n".join(_rag_hit(i + 1, hit) for i, hit in enumerate(hits))
-        # Retrieval mode belongs to telemetry; candidate format is shared by both routes.
-        route = last_route()
-        corpus = get_index().status()
-        if verified.changed:
-            corpus = {**corpus, "stale": True}
         if corpus["stale"]:
             text += (
                 "\n注：语料刷新未完成，本次候选使用最近一次完整索引；正文读取仍核对当前公开版本。"
             )
         return ok(
-            text,
+            _rag_text(meta, text),
             data=hits,
             meta={
-                "corpus": corpus,
-                "rag_mode": route["mode"],
-                "rag_reason": route["reason"],  # degraded 时的原因码
-                "vector_hits": route["vectors"],  # 向量路贡献了几条候选
-                "vector_missing": route["missing"],
+                **meta,
                 "visibility_checked": len(verified.current) + len(verified.changed),
                 "visibility_dropped": len(verified.changed),
             },
