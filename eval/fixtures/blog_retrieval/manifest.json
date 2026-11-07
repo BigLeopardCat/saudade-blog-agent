@@ -1,8 +1,0 @@
-{
-  "schema_version": 1,
-  "name": "synthetic-chinese-blog-retrieval",
-  "source": "repository-authored Chinese blog capability fixtures with manually labelled document and source-section evidence",
-  "revision": "1",
-  "license": "MIT",
-  "scope": "synthetic capability regression only; six documents and seven queries, not a production quality score or a held-out benchmark"
-}
