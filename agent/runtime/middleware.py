@@ -17,7 +17,6 @@ from agent.runtime import (
     approval_messages,
     memory,
     response_validation,
-    task_planning,
     trace_context,
 )
 from agent.runtime.approval_response import finish as finish_approval_response
@@ -312,10 +311,6 @@ class SessionMiddleware(AgentMiddleware):
             session._round_index += 1
             return {**capture(session), "messages": repair, "jump_to": "model"}
         calls, outcome = session._validate_response(response)
-        review = task_planning.review(session, state, response, outcome)
-        if review:
-            session._round_index += 1
-            return {**capture(session), "messages": review, "jump_to": "model"}
         system = [self.system_message] if self.system_message else []
         self.exchange = [*system, *state["messages"]]
         self.calls, self.attachments = calls or [], []
