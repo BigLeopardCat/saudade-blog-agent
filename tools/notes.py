@@ -6,7 +6,7 @@ from typing import Annotated, Literal
 
 from langchain_core.tools import tool
 
-from agent import article_labels as _tags
+from agent.domains.article_metadata import tag_references
 from tools import base as _base
 from tools.result import (
     ToolResult,
@@ -24,18 +24,13 @@ __all__ = ["logger", "search_notes", "DOC_TYPE_CN", "get_article_detail", "rag_s
 logger = logging.getLogger(__name__)
 
 
-# Resolve shared transports at call time so consumer overrides and test doubles apply.
+# Resolve shared transports after module initialization.
 def _get(path: str, *, not_found_text: str = "",
          payload: dict | None = None) -> dict | list | ToolResult:
     """Resolve the shared public transport at call time, preserving its result type."""
     return _base._get(path, not_found_text=not_found_text, payload=payload)
 
 
-# Article metadata and body reads.
-
-# Project metadata to the fields needed by the tool; preserve stable article IDs and titles.
-
-# Missing public counters are omitted, never replaced with zero.
 _NOTE_COUNT_KEYS = ("views", "likes", "favorites")
 
 
@@ -49,13 +44,13 @@ def _note_counts(row) -> dict:
     return out
 
 
-def _public_tag_index():
-    """公开标签字典 → `{id: TagInfo}`；读不到返回 **None**（≠"没有标签"）。"""
-    one = _get("/tagone")
-    two = _get("/tagtwo")
-    if isinstance(one, ToolResult) or isinstance(two, ToolResult):
-        return None
-    return _tags.build_tag_index(one, two)
+def _note_tag_metadata(row):
+    """Missing or invalid host references remain unknown, distinct from no tags."""
+    try:
+        refs = tag_references(row.get("noteTagRefs"))
+    except ValueError:
+        return {"tags": None}
+    return {"tags": refs, "tagsTruncated": len(row["noteTagRefs"]) > len(refs)}
 
 
 def _slim_note_rows(rows):
@@ -68,18 +63,14 @@ def _slim_note_rows(rows):
         return None
     if not any("noteKey" in r for r in rows):
         return None
-    index = None
-    if any(r.get("noteTags") for r in rows):
-        index = _base._public_tag_index()
     out = []
     for r in rows:
-        tag_txt = _tags.render_tag_list(r.get("noteTags"), index)
         slim = {
             "noteKey": r.get("noteKey"),
             "noteTitle": r.get("noteTitle") or "",
             "status": r.get("status") or "",
             "isTop": r.get("isTop") or 0,
-            "tags": "" if tag_txt == "（无标签）" else tag_txt,
+            **_note_tag_metadata(r),
         }
         slim.update(_note_counts(r))
         out.append(slim)
@@ -102,21 +93,12 @@ def search_notes(keyword: Annotated[str, "搜索关键词"]) -> str | ToolResult
     slim = _slim_note_rows(data)
     return _shape(slim if slim is not None else data)
 
-def _read_section(data: dict, article_id, want: str) -> str | ToolResult:
-    from rag.reading import article_page
-    return _shape(article_page(data, article_id, section=want))
 
-
-def _note_row_with_tag_names(row):
-    """Add displayable tag names while preserving internal tag IDs.
-
-    Unknown row shapes pass through unchanged. Unavailable tag dictionaries retain
-    an ID label rather than asserting that the tag does not exist."""
-    if not isinstance(row, dict) or not isinstance(row.get("noteTags"), str):
-        return row
-    index = _base._public_tag_index() if row.get("noteTags") else None
-    out = dict(row)
-    out["tags"] = _tags.render_tag_list(row["noteTags"], index)
+def _note_with_tag_refs(row):
+    """Use the host's typed references without fetching taxonomy directories."""
+    out = {**row, **_note_tag_metadata(row)}
+    out.pop("noteTagRefs", None)
+    out.pop("noteTags", None)
     return out
 
 
@@ -165,8 +147,8 @@ def get_article_detail(
 ) -> str | ToolResult:
     """读取指定来源的正文；文章按小节或范围续读，使用contentRevision和nextOffset。
 
-    readComplete表示所需范围读完；候选不是正文。编号按doc_type区分，tags可展示，
-    noteTags是内部编号；缺失计数不代表零，not_found不代表服务故障。
+    readComplete表示所需范围读完；候选不是正文。编号按doc_type区分，tags包含层级与名称，
+    null表示未能核对标签；缺失计数不代表零，not_found不代表服务故障。
     """
     if doc_type == "note":
         data = _get(f"/notes/{article_id}", not_found_text=(
@@ -175,7 +157,7 @@ def get_article_detail(
             "按标题找文章用 search_notes 或 rag_search；"
             "读留言/说说用 list_guestbook / list_talks。"))
         if isinstance(data, dict):
-            data = _note_row_with_tag_names(data)
+            data = _note_with_tag_refs(data)
             counts = _note_public_counts(article_id)
             if counts:
                 data = {**data, **counts}

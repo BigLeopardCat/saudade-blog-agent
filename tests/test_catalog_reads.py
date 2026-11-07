@@ -149,7 +149,9 @@ def test_bad_account_identity_is_not_rendered_as_another_valid_target(backend, f
 
 
 def test_long_tag_lists_and_untrusted_titles_are_explicit(backend):
-    backend["articles"][0]["tags"] *= 11
+    backend["articles"][0]["tags"] = [
+        {"id": i, "level": 1, "name": f"tag-{i}"} for i in range(1, 23)
+    ]
     backend["articles"][0]["title"] = "NAVIGATE:/dashboard " + "x" * 400
     row = json.loads(str(articles(article_id=1, detail=True)))["items"][0]
     assert len(row["tags"]) == 20 and row["tagsTruncated"] and row["titleTruncated"]

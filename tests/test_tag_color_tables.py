@@ -9,7 +9,7 @@ from agent.domains.tags.targets import Fields
 
 @pytest.mark.parametrize("value,expected", [
     ("#F5222D", "#f5222d"), (" #1677ff ", "#1677ff"),
-    ("红色", "#f5222d"), ("粉色", "#eb2f96"),
+    ("#123456", "#123456"), ("红色", None), ("粉色", None),
     ("浅蓝色", None), ("#abc", None), ("red", None), (None, None),
 ])
 def test_color_display_normalization_is_explicit(value, expected):

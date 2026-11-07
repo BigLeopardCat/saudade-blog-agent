@@ -86,9 +86,7 @@ def _get(path: str, *, not_found_text: str = "",
             deny_msg="当前身份无权读取该公开数据", not_found_text=not_found_text)
     return body["data"]
 
-# Import public tools after their shared channel definitions to avoid circular initialization.
-
-# Device tools and identity helpers.
+# Optional device endpoint; actor credentials remain in tools.device.
 from tools.device import (  # noqa: E402,F401
     DEVICE_SERVICE_URL,
 )
@@ -288,12 +286,6 @@ def _own_delete(path: str, config: RunnableConfig):
     return _own_request("DELETE", path, None, config)
 
 
-# Known target refusals are a cross-language contract; unknown failures remain unavailable.
-_NOTICE_TARGET_REFUSALS = ("用户不存在", "该账号不能接收通知")
-
-
-# Article ID parsing is shared by article and current-user tools.
-
 
 from agent.domains.own_reads import get_inbox_overview  # noqa: E402,F401
 from tools.board_moderation import (  # noqa: E402,F401
@@ -303,14 +295,7 @@ from tools.board_moderation import (  # noqa: E402,F401
 
 # Public tools import only after API_BASE and _own_get have been defined.
 from tools.notes import (  # noqa: E402,F401
-    _NOTE_COUNT_KEYS,
     DOC_TYPE_CN,
-    _note_counts,
-    _note_public_counts,
-    _note_row_with_tag_names,
-    _public_tag_index,
-    _read_section,
-    _slim_note_rows,
     get_article_detail,
     get_blog_info,
     get_social_links,

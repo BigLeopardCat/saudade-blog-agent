@@ -41,17 +41,26 @@ def summary(row):
             "titleTruncated": len(row["title"]) > 255}
 
 
-def article(row):
-    result = summary(row)
-    if not isinstance(row.get("tags"), list):
+def tag_references(rows):
+    """Project typed tag identities without conflating IDs from different levels."""
+    if not isinstance(rows, list):
         raise ValueError("Invalid article tag metadata")
-    tags = []
-    for tag in row["tags"][:20]:
+    tags, seen = [], set()
+    for tag in rows[:20]:
         if (not isinstance(tag, dict) or not positive(tag.get("id"))
                 or type(tag.get("level")) is not int or tag["level"] not in (1, 2)):
             raise ValueError("Invalid tag reference")
+        identity = (tag["level"], tag["id"])
+        if identity in seen:
+            raise ValueError("Duplicate tag reference")
+        seen.add(identity)
         tags.append({"id": tag["id"], "level": tag["level"], "name": text(tag.get("name"), 80)})
-    result.update({"tags": tags, "tagsTruncated": _tags_truncated(row),
+    return tags
+
+
+def article(row):
+    result = summary(row)
+    result.update({"tags": tag_references(row.get("tags")),
+                   "tagsTruncated": _tags_truncated(row),
                    "createdAt": row.get("createdAt"), "updatedAt": row.get("updatedAt")})
     return result
-
