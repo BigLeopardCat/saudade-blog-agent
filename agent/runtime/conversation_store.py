@@ -7,7 +7,31 @@ by the independent execution ledger.
 
 from contextlib import AbstractContextManager
 from dataclasses import dataclass, field
-from typing import Any, Protocol
+from typing import Any, Protocol, TypedDict
+
+
+class RecentRead(TypedDict):
+    tool_name: str
+    scope: dict
+    turn_id: str
+
+
+def replace_recent_read(_previous, current):
+    """Tool batches are ordered; a later update or explicit None replaces the hint."""
+    return current
+
+
+def bound_recent_read(value, config):
+    from agent.runtime.task_scope import binding
+
+    if (not isinstance(value, dict) or set(value) != {"tool_name", "scope", "turn_id"}
+            or not isinstance(value["tool_name"], str) or not value["tool_name"]
+            or not isinstance(value["turn_id"], str) or not value["turn_id"]):
+        return None
+    try:
+        return value if value["scope"] == binding(config) else None
+    except ValueError:
+        return None
 
 
 @dataclass(frozen=True)
@@ -19,6 +43,7 @@ class ConversationSnapshot:
     run: dict | None = None
     receipts: list = field(default_factory=list)
     last_outcome: str | None = None
+    recent_read: RecentRead | None = None
     unfinished: bool = False
     initialized: bool = False
 

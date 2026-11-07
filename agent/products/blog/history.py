@@ -1,12 +1,21 @@
 """Access to blog-specific source observations in conversation history."""
 
-from agent.authz import SCOPE_READ_OWN, SCOPE_WRITE_CONSOLE, SCOPE_WRITE_OWN, check
+from agent.authz import (
+    SCOPE_ADMIN_CONSOLE,
+    SCOPE_READ_OWN,
+    SCOPE_READ_PUBLIC,
+    SCOPE_WRITE_CONSOLE,
+    SCOPE_WRITE_OWN,
+    TOOL_SCOPE,
+    check,
+)
 from agent.domains import browser, conversation_images
 from agent.domains.favorites import preparation as favorites
 from agent.domains.messages import preparation as messages
 from agent.domains.notifications import preparation as notifications
 from agent.domains.notifications.deletion import prepare_notification_deletions
 from agent.products.blog.admin_domains import preparation_names
+from agent.runtime import task_planning
 from agent.runtime.access import scoped_reads_enabled
 
 _OWN_PREPARATIONS = frozenset(tool.name for tool in (
@@ -28,3 +37,13 @@ def tool_access(principal, name):
     return (browser.history_allowed(principal, name)
             or conversation_images.history_allowed(principal, name)
             or check(principal, name).allowed)
+
+
+def read_tool(name, catalog, authorized):
+    excluded = preparation_names() | _OWN_PREPARATIONS | task_planning.tools().keys()
+    tool = catalog.get(name)
+    if (tool is None or name in excluded or tool.return_direct or not authorized(name)
+            or TOOL_SCOPE.get(name) not in {SCOPE_READ_PUBLIC, SCOPE_READ_OWN,
+                                           SCOPE_ADMIN_CONSOLE}):
+        return None
+    return tool
