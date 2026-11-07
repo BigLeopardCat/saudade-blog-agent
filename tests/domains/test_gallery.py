@@ -79,6 +79,22 @@ def test_index_is_compact_and_has_no_pixels_or_storage_tokens(gallery):
     assert not gallery["writes"]
 
 
+def test_full_metadata_reads_one_authoritative_image_without_pixels_or_writes(gallery):
+    result = reads.get_gallery_image_metadata.invoke({"image_id": 11}, config=admin())
+    assert result.data == json.loads(str(result))
+    assert result.data["description"] == gallery["row"]["description"]
+    assert result.data["url"] == gallery["row"]["imageUrl"]
+    assert len(gallery["requests"]) == 1
+    assert gallery["requests"][0].url.path.endswith("/gallery/images/11")
+    assert gallery["writes"] == 0
+
+
+def test_full_metadata_does_not_disguise_another_image_as_the_requested_one(gallery):
+    gallery["row"]["imageKey"] = 12
+    result = reads.get_gallery_image_metadata.invoke({"image_id": 11}, config=admin())
+    assert result.kind == "unavailable" and result.data is None
+
+
 @pytest.mark.parametrize("rows", [
     [{"id": 2, "parentId": 0, "name": "a"}, {"id": 1, "parentId": 0, "name": "b"}],
     [{"id": 1, "parentId": 0, "name": "a"}] * 2,
@@ -146,6 +162,8 @@ def test_untrusted_or_nonadmin_identity_never_reads_private_images(gallery):
             == "unavailable"
         )
         assert isinstance(reads.get_gallery_index.invoke({}, config=cfg), base.ToolResult)
+        assert reads.get_gallery_image_metadata.invoke(
+            {"image_id": 11}, config=cfg).kind == "unavailable"
     assert gallery["requests"] == []
 
 

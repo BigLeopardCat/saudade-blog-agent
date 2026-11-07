@@ -96,6 +96,7 @@ TOOL_SCOPE: dict[str, str] = {
     "get_gallery_index": SCOPE_ADMIN_CONSOLE,
     "list_gallery_folders": SCOPE_ADMIN_CONSOLE,
     "get_gallery_image": SCOPE_ADMIN_CONSOLE,
+    "get_gallery_image_metadata": SCOPE_ADMIN_CONSOLE,
     "prepare_gallery_image_change": SCOPE_ADMIN_CONSOLE,
     "list_admin_talks": SCOPE_ADMIN_CONSOLE,
     "prepare_talk_change": SCOPE_ADMIN_CONSOLE,

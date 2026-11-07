@@ -118,6 +118,23 @@ def list_gallery_folders(
     return base.ok(json.dumps(page, ensure_ascii=False), data=page)
 
 
+@tool
+def get_gallery_image_metadata(image_id: targets.Identifier, config: RunnableConfig) -> object:
+    """Read one gallery image's complete name, description, folder, favorite and URL.
+    Use when an index description is truncated or exact metadata is needed. No pixels
+    are downloaded. The immutable storage URL is not changed by metadata edits.
+    """
+    if not configured_reads_enabled(config, SCOPE_ADMIN_CONSOLE):
+        return base.unavailable("当前身份无权访问图库。")
+    row = targets.image(image_id, config)
+    if isinstance(row, base.ToolResult):
+        return row
+    result = {"image_id": row["imageKey"], "name": row["displayName"],
+              "description": row["description"], "folder_id": row["folderId"],
+              "favorite": row["isFavorite"], "url": row["imageUrl"]}
+    return base.ok(json.dumps(result, ensure_ascii=False), data=result)
+
+
 def _download(row, config):
     url = row["imageUrl"]
     headers = {}
@@ -210,5 +227,6 @@ def get_gallery_image(image_id: targets.Identifier, config: RunnableConfig) -> t
 
 def tools():
     return {
-        item.name: item for item in (get_gallery_index, list_gallery_folders, get_gallery_image)
+        item.name: item for item in (
+            get_gallery_index, list_gallery_folders, get_gallery_image_metadata, get_gallery_image)
     }
