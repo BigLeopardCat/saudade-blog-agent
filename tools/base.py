@@ -306,8 +306,6 @@ from tools.notifications import list_notifications  # noqa: E402,F401
 
 # Current-user adapters and read-state mutations share the HTTP primitives above.
 from tools.own_data import (  # noqa: E402,F401
-    _as_bool,
-    _as_ids,
     _fav_count,
     _fav_row,
     _fav_title,

@@ -1,27 +1,15 @@
-# -*- coding: utf-8 -*-
 """Render tool actions for progress previews and durable execution receipts.
 
 Previews use call arguments and may shorten text. Receipt actions may add verified
 result metadata; the host handles final layout and column width. Neither renderer
 interprets user intent or authorizes execution."""
-import re
-
 from agent import article_labels as _tags
-
-# 分期报表的粒度词（周报/月报/年报）：**唯一一份**在 `agent/reports.py`（帧头与
-# 动作行必须同一套字），这里只取用、不另抄。
 from agent.domains.automations.presentation import action_text as automation_action
 from agent.reports import _KIND_CN
-
-# 四个数据源的中文名词（note/talk/board/announcement）；留言的**状态词与筛选键**也
-# 取同一处（`tools/base.py` 是唯一实现，写路径、名册、动作行共用一份，别在这里再抄）。
-from tools.base import BOARD_APPROVED_CN, BOARD_STATUS_FILTERS, DOC_TYPE_CN, _as_bool, _as_ids
+from tools.base import BOARD_APPROVED_CN, BOARD_STATUS_FILTERS, DOC_TYPE_CN
 from tools.site import nav_label
 
 _EFFECT_CN = {"sakura": "樱花", "rain": "大雨", "snow": "雪花"}
-
-# Unknown switch values render as off; never imply an unsupported effect was enabled.
-_ON_WORDS = frozenset({"on", "开", "开启", "打开", "true", "1", "yes", "y"})
 
 # Display labels for parameterless read operations.
 _NOARG_VERB = {
@@ -74,32 +62,16 @@ _NOARG_VERB = {
     "set_article_summary": "更新当前编辑草稿的摘要",
 }
 
-_REF_SOURCE_CN = {
-    "search_notes": "检索结果", "rag_search": "检索结果", "list_notes": "文章列表",
-    "list_talks": "说说列表", "list_guestbook": "留言列表",
-    "list_admin_notes": "后台文章列表",
-    "list_admin_board": "后台留言名册",
-    "list_admin_comments": "后台评论名册",
-    "list_my_favorites": "收藏列表",
-    "list_notifications": "通知列表",
-    "list_my_board": "我的河灯列表",
-    "list_accounts": "后台账号名录",
-}
-
 # Offline judge vocabulary; these patterns never route or execute requests.
 WRITE_CLAIM_ROOTS = {
-    # ── write.page（作用于访客自己看到的页面）────────────────────────────
     "navigate_to": r"跳转|跳过去|带你去|导航",
     "toggle_effect": r"打开|开启|关闭|关掉|切换",
     "toggle_dark_mode": r"打开|开启|关闭|关掉|切换|切到",
-    # ── write.device（物理世界）──────────────────────────────────────────
     "device_oled_display": r"显示|上屏|刷上去",
-    # ── write.own（主人自己的私有数据）───────────────────────────────────
     "add_favorite": r"收藏",
     "remove_favorite": r"取消收藏|移除收藏|撤掉收藏",
     "read_notifications": r"标记(?:为|成|作)?已读|标为已读|标成已读|清空未读",
     "read_messages": r"标记(?:为|成|作)?已读|标为已读|标成已读",
-    # ── write.console（后台管理面写）────────────────────────────────────
     "audit_board_comment": r"复核|审核|通过|驳回",
     "delete_board_comment": r"删除|删掉|清掉",
     "audit_comment": r"复核|审核|通过|驳回",
@@ -133,26 +105,14 @@ WRITE_CLAIM_ROOTS["delete_notifications"] = WRITE_CLAIM_ROOTS["delete_announceme
 WRITE_CLAIM_ROOTS["delete_announcements"] = WRITE_CLAIM_ROOTS["delete_announcement"]
 
 
-def _ref_phrase(value: str) -> str:
-    """引用字面量 → 过程行可读短语（非引用或形态不认识 → 泛称，绝不打印原语法）。"""
-    m = re.match(r"^\$([a-z_][a-z0-9_]*)\[(\d+)\]", str(value or "").strip())
-    if not m:
-        return "上一步返回"
-    src = _REF_SOURCE_CN.get(m.group(1), f"{m.group(1)} 的返回")
-    return f"上一步{src}的第 {int(m.group(2)) + 1} 条"
-
-
 def _leaf(value, normalize=None, word=None) -> str:
     """参数值的简短展示；标题或正文缺失时使用通用物件名。"""
     s = str(value if value is not None else "").strip()
     if not s:
         return ""
-    if s.startswith("$"):
-        return _ref_phrase(s)
     if normalize is not None:
-        got = normalize(s)
-        if got is not None:
-            return word[got] if word else str(got)
+        got = normalize(value)
+        return (word[got] if word else str(got)) if got is not None else ""
     return s[:12]
 
 
@@ -177,19 +137,14 @@ def _names_phrase(value) -> str:
     return "「" + "、".join(out) + "」" if out else "（空）"
 
 
-def _py_int_list(raw) -> list[str]:
-    """从回执列表参数中读取正整数；兼容已持久化的列表文本。"""
-    s = str(raw or "").strip().strip("[]")
-    return [x.strip().strip("'\"") for x in s.split(",")
-            if x.strip().strip("'\"").isdigit()]
-
-
-def _ids_arg(a: dict) -> list[str]:
-    """实参里的 id 列表 → 字符串编号列表（原始 list 与落盘后的 repr 都认）。"""
-    ids = _as_ids(a.get("ids"))
-    if ids:
-        return [str(i) for i in ids]
-    return _py_int_list(a.get("ids"))
+def _ids_arg(a: dict) -> list[str] | None:
+    """Read typed positive ID arrays; None means unverified, not an empty selection."""
+    value = a.get("ids")
+    if (not isinstance(value, list)
+            or any(type(item) is not int or not 0 < item <= 2**31 - 1 for item in value)
+            or len(value) != len(set(value))):
+        return None
+    return [str(item) for item in value]
 
 
 def _m(meta: dict, key: str) -> str:
@@ -210,14 +165,13 @@ def _arrow(meta: dict) -> str:
 
 
 def _title_suffix(meta: dict) -> str:
-    """《标题》后缀（只有 note 分支派生得出，见 `graph._doc_title`）。"""
+    """Append only the document title provided by verified result metadata."""
     t = _m(meta, "title")
     return f"《{t}》" if t else ""
 
 
-def _arm_text(name: str, a: dict, m: dict, preview: bool):
-    """有臂 → 该行的正文；**无臂 → None**（兜底交给调用方，别在这里发明措辞）。"""
-    # ── 标签 ────────────────────────────────────────────────────────────
+def _operation_text(name: str, a: dict, m: dict, preview: bool):
+    """Render recognized operations; let the caller label unsupported tools."""
     if name == "create_tag":
         if preview:
             title = _leaf(a.get("title"))
@@ -228,10 +182,6 @@ def _arm_text(name: str, a: dict, m: dict, preview: bool):
                 return "新建标签"
             return (f"新建二级标签「{title}」（父标签 id {pid}）{color}" if pid
                     else f"新建一级标签「{title}」{color}")
-        # 台账行：名字取回执顶层 meta（`tag_name` = 工具真建成/命中的那个名字，
-        # 与实参里的 `title` 可能不同：模型写"大笨狗"、工具按名字解析出的那条才是
-        # 落库的名字），层级取 meta.level。`op=tag_reuse` 是"这个名字已经有了，
-        # 直接复用"——写行必须说清，否则主人以为又建了一个。
         title = _m(m, "tag_name")
         if not title:
             return "新建标签"
@@ -259,8 +209,6 @@ def _arm_text(name: str, a: dict, m: dict, preview: bool):
                 acts.append("改成二级标签")
             head = f"修改标签「{title}」"
             return f"{head}：{'、'.join(acts)}" if acts else head
-        # 台账行：与 create_tag 同族，读回执顶层 meta（tag_name/level/change）。
-        # `change` 是工具生成的变更摘要（"改名为 X、颜色改为 粉色"）。
         title = _m(m, "tag_name")
         change = _m(m, "change")
         if name == "delete_tag":
@@ -289,8 +237,6 @@ def _arm_text(name: str, a: dict, m: dict, preview: bool):
                     acts.append(f"{cn}→{_leaf(a.get(key))}")
             head = f"修改分类「{title}」"
             return f"{head}：{'、'.join(acts)}" if acts else head
-        # 台账行：名字取回执顶层 meta 的 `category_name`（分类没有会漂的 id 语义，
-        # 名字就是主人认得的那个）。
         cname = _m(m, "category_name")
         change = _m(m, "change")
         verb = {"create_category": "新建分类", "update_category": "修改分类",
@@ -302,10 +248,11 @@ def _arm_text(name: str, a: dict, m: dict, preview: bool):
 
     if name in ("delete_notifications", "delete_announcements"):
         label = "全站公告" if name == "delete_announcements" else "本人通知"
-        count = len(_ids_arg(a))
-        return f"删除 {count} 条{label}" if count else f"删除{label}"
+        ids = _ids_arg(a)
+        if ids is None:
+            return f"删除{label}（目标待核对）"
+        return f"删除 {len(ids)} 条{label}" if ids else f"删除{label}（未选择目标）"
 
-    # ── 公告（正文一律不进这两行，理由见各分支）────────────────────────────
     if name in ("create_announcement", "update_announcement", "delete_announcement"):
         if preview:
             title = _leaf(a.get("title"))
@@ -329,10 +276,7 @@ def _arm_text(name: str, a: dict, m: dict, preview: bool):
         head = f"修改公告「{title}」" if title else "修改公告"
         return f"{head}：{change}" if change else head
 
-    # ── 河灯留言 ────────────────────────────────────────────────────────
     if name in ("audit_board_comment", "delete_board_comment"):
-        # 留言没有标题，**正文片段就是它唯一的身份** ⇒ 过程行报片段（与"报标题不报
-        # 正文"的公告同一条取向：只报认得出是哪一条的那一小截，完整正文留给确认框）。
         if preview:
             quote = _leaf(a.get("quote"))
             if name == "delete_board_comment":
@@ -371,7 +315,6 @@ def _arm_text(name: str, a: dict, m: dict, preview: bool):
             head = f"{head}（{who} 的评论）"
         return f"{head}：{change}" if change else head
 
-    # Article state and tag operations share the same display boundary.
     if name == "set_article_status":
         if preview:
             aid = _leaf(a.get("article_id"))
@@ -392,7 +335,6 @@ def _arm_text(name: str, a: dict, m: dict, preview: bool):
             head = f"修改文章 {aid} 的标签" if aid else "修改文章标签"
             acts = []
             if a.get("replace") is not None:
-                # replace=[] 是有语义的（清空标签），"改成（空）"读起来像出错，直说清空
                 acts.append("清空全部标签" if not a.get("replace")
                             else "改成 " + _names_phrase(a.get("replace")))
             if a.get("add"):
@@ -405,31 +347,30 @@ def _arm_text(name: str, a: dict, m: dict, preview: bool):
         act = _arrow(m)
         return f"{head}：{act}" if act else head
 
-    # ── 命令类（跳转 / 特效 / 夜间模式）──────────────────────────────────
     if name == "navigate_to":
         path = _raw(a.get("path"))
         if not path:
             return "页面跳转"
-        # 路径经 NAV_MAP 反查中文别名（反查失败展示路径本身——路径是 execute 实际
-        # 下发的真实值，不硬凑）。别名对下一轮也有用：主人说"带我去了哪"，台账行
-        # 里的中文名与他的原话对得上号，而 `/device-console/` 得靠模型自己映射。
         label = nav_label(path)
         return f"页面跳转「{label[:20] if preview else label}」"
     if name == "toggle_dark_mode":
-        on = _raw(a.get("mode") or a.get("action")).lower() in _ON_WORDS
-        return "开启夜间模式" if on else "关闭夜间模式"
+        mode = a.get("mode")
+        if mode not in ("on", "off"):
+            return "调整夜间模式（状态待核对）"
+        return "开启夜间模式" if mode == "on" else "关闭夜间模式"
     if name == "toggle_effect":
         eff_raw = _raw(a.get("effect"))
         eff = _EFFECT_CN.get(eff_raw, eff_raw or "页面")
-        on = _raw(a.get("action")).lower() in _ON_WORDS
-        return f"{'开启' if on else '关闭'}{eff}特效"
+        mode = a.get("action")
+        if mode not in ("on", "off"):
+            return f"调整{eff}特效（状态待核对）"
+        return f"{'开启' if mode == 'on' else '关闭'}{eff}特效"
     if name == "device_oled_display":
         text = _raw(a.get("text"))
         if not text:
             return "屏幕显示"
         return f"屏幕显示「{text[:24] if preview else text}」"
 
-    # ── 检索 / 读取 ─────────────────────────────────────────────────────
     if name == "rag_search":
         q = _raw(a.get("query"))
         if not q:
@@ -445,7 +386,6 @@ def _arm_text(name: str, a: dict, m: dict, preview: bool):
                  "pending": "等人复批的"}.get(_raw(a.get("status")))
         return f"查看审核状况（只看{focus}）" if focus else "查看审核状况"
     if name == "get_note_periods":
-        # Reporting and action labels share the same granularity vocabulary.
         kind_cn = _KIND_CN.get(_raw(a.get("kind")))
         return f"查看文章{kind_cn}" if kind_cn else "查看文章分期报表"
     if name == "list_admin_board":
@@ -469,30 +409,23 @@ def _arm_text(name: str, a: dict, m: dict, preview: bool):
         return ("查看后台评论名册（" + "，".join(cond) + "）" if cond
                 else "查看后台评论名册")
     if name == "list_admin_notes":
-        # 无参时与 `_NOARG_VERB` 同字（那一行留在表里，两处必须一致——测试锁着）。
-        # 带关键词时**必须把词印出来**：这一行会经 recent_executions 注回下一轮，
-        # 主人问"你刚才搜的是哪个词"要有据可查（同 `list_admin_board` 那条注）。
         k = _raw(a.get("keyword"))
-        return f"查看后台文章列表（关键词「{k[:24] if preview else k}」）" if k else "查看后台文章列表"
+        return (f"查看后台文章列表（关键词「{k[:24] if preview else k}」）"
+                if k else "查看后台文章列表")
     if name == "list_accounts":
         # Display labels for parameterless read operations.
         return "查看后台账号名录"
     if name == "get_article_detail":
         what = DOC_TYPE_CN.get(_raw(a.get("doc_type")) or "note", "文章")
-        aid = _raw(a.get("article_id"))
-        if preview:
-            if aid.startswith("$"):
-                return f"读取{what}（{_ref_phrase(aid)}）"
-            return f"读取{what} {aid[:12]}" if aid else f"读取{what}"
-        head = f"读取{what} {aid}" if aid else f"读取{what}"
-        return f"{head}{_title_suffix(m)}"
+        aid = a.get("article_id")
+        if "article_id" in a and (type(aid) is not int or not 0 < aid <= 2**31 - 1):
+            return f"读取{what}（目标待核对）"
+        head = f"读取{what} {aid}" if aid is not None else f"读取{what}"
+        return head if preview else f"{head}{_title_suffix(m)}"
     if name in _NOARG_VERB:
         return _NOARG_VERB[name]
 
-    # ── 账号（冻结 / 解冻 / 发通知）──────────────────────────────────────
     if name in ("freeze_account", "unfreeze_account"):
-        # 只报**账号名**（账号没有《标题》可写，见 graph._POPUP_TITLE_TOOLS 那条注），
-        # **不报 uid**——uid 是内部编号，主人核对靠名字。
         verb = "冻结账号" if name == "freeze_account" else "解冻账号"
         if preview:
             acct = _leaf(a.get("name"))
@@ -501,8 +434,6 @@ def _arm_text(name: str, a: dict, m: dict, preview: bool):
         if not acct:
             return verb
         change = _m(m, "change")
-        # 带上 `change`（"状态本来就是冻结，本次未发生变更"这类）：幂等/未变更的那一次
-        # 只写「冻结账号「X」」，跨轮记忆里就成了一次真动作。
         return f"{verb}「{acct}」：{change}" if change else f"{verb}「{acct}」"
     if name in ("account_mute", "account_unmute"):
         acct = _m(m, "account_name") or _leaf(a.get("name"))
@@ -524,39 +455,25 @@ def _arm_text(name: str, a: dict, m: dict, preview: bool):
         head = f"变更账号「{acct}」的身份" if acct else "变更账号身份"
         head = f"{head}为「{role_cn}」" if role_cn else head
         change = _m(m, "change")
-        # 同冻结族：带上 `change`（"身份本来就是杂鱼，本次未发生变更"），否则幂等的
-        # 那一次在跨轮记忆里就成了一次真动作。
         return f"{head}：{change}" if change else head
     if name == "send_user_notice":
-        # 与冻结族同一条纪律：只报**账号名**、**不报 uid**、**不报正文**（正文是主人
-        # 刚在确认卡上核对过的那段话，两行里再抄一遍会让卡片上面的字和下面的字看起来
-        # 是两件事）。
         acct = _m(m, "account_name") or _leaf(a.get("name"))
         return f"给账号「{acct}」发通知" if acct else "给账号发通知"
     if name in ("approve_quota_request", "reject_quota_request", "reset_user_quota"):
         acct = _m(m, "account_name") or _leaf(a.get("name"))
-        # 名单里的字就是这一件的动作词（两档共用）：批准/驳回的是**他的申请**，
-        # 主动重置与他有没有申请过无关（技能描述里那条差别在台账行上也要看得出来）。
         said = {"approve_quota_request": f"批准账号「{acct}」的额度重置申请",
                 "reject_quota_request": f"驳回账号「{acct}」的额度重置申请",
                 "reset_user_quota": f"把账号「{acct}」的对话额度恢复满额"}[name]
         unsaid = {"approve_quota_request": "批准额度重置申请",
                   "reject_quota_request": "驳回额度重置申请",
                   "reset_user_quota": "重置账号的对话额度"}[name]
-        # 名字读不出（台账行缺 meta、过程行缺参）→ 整句不带名字，**不拼空「」**
-        # （通用不变量那条锁）。
         return said if acct else unsaid
     if name == "list_quota_requests":
-        # 只读，两档同字；「看的是哪一半」要写出来——"待处理的"与"全部"是两次不同的
-        # 事实（同 `get_moderation_status` 的聚焦那条注）。
         return ("查看额度重置申请（连已处理的一起）"
                 if _raw(a.get("status")).lower() in ("all", "全部", "所有")
                 else "查看额度重置申请（只看待处理的）")
 
-    # ── 用户自己的数据（收藏 / 已读）──────────────────────────────────────
     if name in ("add_favorite", "remove_favorite"):
-        # 只报 id，**不报《标题》**——写行带标题会被下一轮读成"我读过这篇"的指代证据
-        # （同 execution_log 那条纪律）。
         aid = _raw(a.get("article_id"))
         change = _m(m, "change")
         if change:
@@ -569,16 +486,21 @@ def _arm_text(name: str, a: dict, m: dict, preview: bool):
         change = _m(m, "change")
         if change:
             return f"{who}{change}（未改动）"
-        if _as_bool(a.get("all")) is True:
-            return f"标记{who}已读（全部未读）"
+        all_selected = a.get("all", False)
         ids = _ids_arg(a)
+        if type(all_selected) is not bool or (
+                all_selected and "ids" in a and ids != []):
+            return f"标记{who}已读（范围待核对）"
+        if all_selected:
+            return f"标记{who}已读（全部未读）"
+        if ids is None:
+            return f"标记{who}已读（目标待核对）"
         if ids:
             shown = "、".join(ids[:3])
             more = f" 等 {len(ids)} {unit}" if len(ids) > 3 else ""
             return f"标记{who}已读（{shown}{more}）"
-        return f"标记{who}已读"
+        return f"标记{who}已读（未选择目标）"
 
-    # ── 天气 / 后台待办 ─────────────────────────────────────────────────
     if name == "get_weather":
         loc = _leaf(a.get("location"))
         return f"查看天气「{loc}」" if loc else "查看天气"
@@ -618,11 +540,11 @@ def tool_action_text(name: str, args: dict | None = None, meta: dict | None = No
                      preview: bool = True) -> str:
     """Render an action preview or receipt using the same operation vocabulary."""
     text = (automation_action(name, args or {}, meta or {})
-            or _arm_text(name, args or {}, meta or {}, preview))
+            or _operation_text(name, args or {}, meta or {}, preview))
     return text if text is not None else f"执行 {name}"
 
 
 def receipt_action(name: str, args: dict | None, meta: dict | None) -> str:
     """Return a verified receipt action, or an empty string for unsupported tools."""
     return (automation_action(name, args or {}, meta or {})
-            or _arm_text(name, args or {}, meta or {}, False) or "")
+            or _operation_text(name, args or {}, meta or {}, False) or "")

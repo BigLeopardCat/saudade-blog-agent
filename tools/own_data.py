@@ -143,28 +143,3 @@ def remove_favorite(
 
 
 __all__ = ['list_my_favorites', 'add_favorite', 'remove_favorite']
-
-
-def _as_ids(value) -> list[int]:
-    """实参 → 正整数 id 列表（去重、保序；认不出的项丢掉——不猜）。"""
-    if value is None:
-        return []
-    items = value if isinstance(value, (list, tuple)) else [value]
-    out: list[int] = []
-    for it in items:
-        i = _as_article_id(it)
-        if i is not None and i not in out:
-            out.append(i)
-    return out
-
-
-def _as_bool(value) -> bool | None:
-    """实参 → 布尔；认不出 → None（调用方按"没说"处理，**绝不默认 True**）。"""
-    if isinstance(value, bool):
-        return value
-    s = str(value if value is not None else "").strip().lower()
-    if s in ("true", "1", "yes", "y", "on", "all", "全部", "全都", "所有"):
-        return True
-    if s in ("false", "0", "no", "n", "off", ""):
-        return False
-    return None
