@@ -72,7 +72,6 @@ sys.path.insert(0, str(pathlib.Path(__file__).parent))
 # Restrict restoration to application modules modified by legacy tests; pytest's
 # own globals must stay under pytest's control. New tests should use monkeypatch.
 _WATCHED_MODULES = (
-    "agent.adminops_todo",
     "agent.confirm",
     "tools.base",
     "tools.device",
