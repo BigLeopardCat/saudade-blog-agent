@@ -287,6 +287,7 @@ from tools.board_moderation import (  # noqa: E402,F401
 from tools.notes import (  # noqa: E402,F401
     DOC_TYPE_CN,
     get_article_detail,
+    get_article_stats,
     get_blog_info,
     get_social_links,
     rag_search,
@@ -311,6 +312,7 @@ from tools.own_data import (  # noqa: E402,F401
 _TOOL_REGISTRY = [
     search_notes,
     get_article_detail,
+    get_article_stats,
     rag_search,
     get_blog_info,
     get_social_links,

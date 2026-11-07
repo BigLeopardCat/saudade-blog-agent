@@ -8,7 +8,8 @@ from agent.domains.articles.evidence import ArticleEvidence
 from agent.products.blog.articles import ArticleMiddleware
 from agent.runtime.results import ReplyReset
 from agent.runtime.session import ToolSession
-from rag.reading import article_page, render_article_result
+from eval.fixtures.document_reads import article_page
+from rag.reading import render_article_result
 from tools.base import SITE_BASE
 from tools.result import ok, unavailable
 
