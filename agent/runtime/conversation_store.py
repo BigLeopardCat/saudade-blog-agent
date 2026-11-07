@@ -21,7 +21,6 @@ class ConversationSnapshot:
     last_outcome: str | None = None
     unfinished: bool = False
     initialized: bool = False
-    tool_activation: dict | None = None
 
     @property
     def has_pending(self) -> bool:

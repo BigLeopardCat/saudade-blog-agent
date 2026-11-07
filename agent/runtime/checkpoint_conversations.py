@@ -51,7 +51,6 @@ class CheckpointConversationStore:
             last_outcome=values.get("last_outcome"),
             unfinished=bool(values.get("run")),
             initialized=snapshot.created_at is not None,
-            tool_activation=values.get("tool_activation"),
         )
 
     def clear_pending(self, config, jti: str, *, observations=()) -> None:

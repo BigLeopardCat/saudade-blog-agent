@@ -339,7 +339,7 @@ class SessionMiddleware(AgentMiddleware):
             message = self.cached[call["id"]]
         elif session.outcome is not None:
             message = approval_messages.deferred(call, awaiting=session.state["awaiting_call"],
-                                                available=call["name"] in session.tools)
+                                                available=call["name"] in session.execution_tools)
         else:
             before = len(self.exchange)
             command = append_result(session, request, handler, self.exchange,
@@ -392,7 +392,7 @@ class OrderedToolsMiddleware(AgentMiddleware):
                    and policy.calls[policy._next]["id"] != request.tool_call["id"]):
                 check_cancelled(policy.session.config)
                 policy._order.wait(0.05)
-            tool = policy.session.tools.get(request.tool_call["name"])
+            tool = policy.session.execution_tools.get(request.tool_call["name"])
             blocked = policy._tool_failed and bool(getattr(tool, "return_direct", False))
             if policy._failed or blocked:
                 message = ToolMessage(content="前序操作等待接续，本项尚未执行。" if policy._paused

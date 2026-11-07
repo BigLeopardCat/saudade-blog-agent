@@ -8,7 +8,7 @@ from functools import partial
 from langchain_core.messages import AIMessageChunk
 from openai import OpenAIError
 
-from agent.runtime import approval, checkpoint_store, memory, recovery, tool_state, trace_context
+from agent.runtime import approval, checkpoint_store, memory, recovery, trace_context
 from agent.runtime.memory_media import stage
 from agent.runtime.results import ReplyReset, TurnResult
 from agent.runtime.session import ToolSession
@@ -187,7 +187,6 @@ class AgentRuntime:
                            descriptions=self.application.descriptions,
                            middleware=self.application.middleware,
                            history_access=self.application.history_access)
-        tool_state.restore_conversation(session, snapshot.tool_activation)
         session.input_inbox = self.inputs
         session.feedback_handler = partial(pending.feedback, saver=self.saver) if pending else None
         return session

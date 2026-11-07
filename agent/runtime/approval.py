@@ -26,7 +26,6 @@ class ConversationState(TypedDict, total=False):
     run: dict | None
     turn: dict | None
     last_outcome: str | None
-    tool_activation: dict | None
 
 
 def binding(config):
