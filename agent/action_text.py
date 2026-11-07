@@ -170,6 +170,19 @@ def _title_suffix(meta: dict) -> str:
     return f"《{t}》" if t else ""
 
 
+def _moderation_list_text(label: str, args: dict, preview: bool) -> str:
+    """Render the shared moderation-list status and keyword filters."""
+    filters = []
+    status_code = BOARD_STATUS_FILTERS.get(_raw(args.get("status")))
+    status = BOARD_APPROVED_CN.get(status_code) if status_code is not None else None
+    if status:
+        filters.append(f"只看{status}的")
+    keyword = _raw(args.get("keyword"))
+    if keyword:
+        filters.append(f"关键词「{keyword[:24] if preview else keyword}」")
+    return f"查看{label}（{'，'.join(filters)}）" if filters else f"查看{label}"
+
+
 def _operation_text(name: str, a: dict, m: dict, preview: bool):
     """Render recognized operations; let the caller label unsupported tools."""
     if name == "create_tag":
@@ -388,26 +401,9 @@ def _operation_text(name: str, a: dict, m: dict, preview: bool):
     if name == "get_note_periods":
         kind_cn = _KIND_CN.get(_raw(a.get("kind")))
         return f"查看文章{kind_cn}" if kind_cn else "查看文章分期报表"
-    if name == "list_admin_board":
-        cond = []
-        st = BOARD_APPROVED_CN.get(BOARD_STATUS_FILTERS.get(_raw(a.get("status"))))
-        if st:
-            cond.append(f"只看{st}的")
-        k = _raw(a.get("keyword"))
-        if k:
-            cond.append(f"关键词「{k[:24] if preview else k}」")
-        return "查看后台留言名册（" + "，".join(cond) + "）" if cond else "查看后台留言名册"
-    if name == "list_admin_comments":
-        cond = []
-        _code = BOARD_STATUS_FILTERS.get(_raw(a.get("status")))
-        st = BOARD_APPROVED_CN.get(_code) if _code is not None else None
-        if st:
-            cond.append(f"只看{st}的")
-        k = _raw(a.get("keyword"))
-        if k:
-            cond.append(f"关键词「{k[:24] if preview else k}」")
-        return ("查看后台评论名册（" + "，".join(cond) + "）" if cond
-                else "查看后台评论名册")
+    if name in ("list_admin_board", "list_admin_comments"):
+        label = "后台留言名册" if name == "list_admin_board" else "后台评论名册"
+        return _moderation_list_text(label, a, preview)
     if name == "list_admin_notes":
         k = _raw(a.get("keyword"))
         return (f"查看后台文章列表（关键词「{k[:24] if preview else k}」）"
@@ -417,10 +413,11 @@ def _operation_text(name: str, a: dict, m: dict, preview: bool):
         return "查看后台账号名录"
     if name == "get_article_detail":
         what = DOC_TYPE_CN.get(_raw(a.get("doc_type")) or "note", "文章")
-        aid = a.get("article_id")
-        if "article_id" in a and (type(aid) is not int or not 0 < aid <= 2**31 - 1):
+        document_id = a.get("article_id")
+        if "article_id" in a and (type(document_id) is not int
+                                  or not 0 < document_id <= 2**31 - 1):
             return f"读取{what}（目标待核对）"
-        head = f"读取{what} {aid}" if aid is not None else f"读取{what}"
+        head = f"读取{what} {document_id}" if document_id is not None else f"读取{what}"
         return head if preview else f"{head}{_title_suffix(m)}"
     if name in _NOARG_VERB:
         return _NOARG_VERB[name]

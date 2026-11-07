@@ -87,3 +87,23 @@ def test_user_text_starting_with_dollar_is_not_a_plan_reference():
         "新建一级标签「$price」")
     assert tool_action_text("create_dashboard_todo", {"text": "$price memo"},
                             preview=True) == "添加待办「$price memo」"
+
+
+@pytest.mark.parametrize("name,label", [("list_admin_board", "后台留言名册"),
+                                        ("list_admin_comments", "后台评论名册")])
+def test_moderation_lists_share_verified_status_filter_labels(display, name, label):
+    assert display(name, {}) == f"查看{label}"
+    assert display(name, {"status": "pending"}) == f"查看{label}（只看待审的）"
+    assert display(name, {"status": "rejected", "keyword": "spam"}) == (
+        f"查看{label}（只看未通过的，关键词「spam」）")
+    assert display(name, {"status": "unknown", "keyword": "spam"}) == (
+        f"查看{label}（关键词「spam」）")
+
+
+@pytest.mark.parametrize("name,label", [("list_admin_board", "后台留言名册"),
+                                        ("list_admin_comments", "后台评论名册")])
+def test_moderation_keyword_preview_is_bounded_without_truncating_receipts(name, label):
+    keyword = "长" * 40
+    assert tool_action_text(name, {"keyword": keyword}, preview=True) == (
+        f"查看{label}（关键词「{keyword[:24]}」）")
+    assert receipt_action(name, {"keyword": keyword}, {}) == f"查看{label}（关键词「{keyword}」）"
