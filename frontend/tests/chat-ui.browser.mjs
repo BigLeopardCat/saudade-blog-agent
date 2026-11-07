@@ -7,7 +7,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import path from 'node:path';
 import { assertBootstrapRecovery } from './chat-bootstrap.browser.mjs';
 import { assertHeaderFocusTheme } from './chat-header.browser.mjs';
-import { assertImageReview, assertWorkRecovery } from './chat-image-review.browser.mjs';
+import { assertImageReview, assertWorkRecovery, assertCoverReview } from './chat-image-review.browser.mjs';
 
 const frontend = path.resolve(fileURLToPath(new URL('../', import.meta.url)));
 const output = process.env.CHAT_UI_PREVIEW_DIR || '/tmp/chat-ui-preview';
@@ -660,6 +660,7 @@ try {
   passed('own, expired and other-conversation leases preserve full initialization; an active peer lease stays protected');
   await assertBootstrapRecovery({browser,origin,requests,completedNavigations});
   await assertImageReview({page,origin});
+  await assertCoverReview({page});
   await assertWorkRecovery({browser,origin,setMode:mode=>{nextMode=mode;},
     resetState:()=>{steeringHistory=[];inputTasks.clear();pendingConfirmation=null;}});
   passed('production boot initializes one stream controller after the engine is ready and restores an interrupted reply');

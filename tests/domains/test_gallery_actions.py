@@ -255,11 +255,11 @@ def test_cover_keeps_its_separate_article_and_image_version_contract(
             assert request.method == "PUT"
             body = json.loads(request.content)
             assert body == {"version": "b" * 64, "imageId": 11,
-                            "imageVersion": "a" * 64, "fit": "contain"}
+                            "imageVersion": "a" * 64, "fit": "cover"}
             data = {"beforeVersion": "b" * 64, "changed": True,
                     "imageId": 12 if tamper else 11,
                     "state": {"articleId": 3, "title": "文章", "version": "c" * 64,
-                              "coverUrl": "https://images.example/cover.png", "fit": "contain"}}
+                              "coverUrl": "https://images.example/cover.png", "fit": "cover"}}
         return httpx.Response(200, json={"code": 200, "data": data})
 
     monkeypatch.setattr(confirm.settings, "confirmation_secret", secrets.token_urlsafe(32))

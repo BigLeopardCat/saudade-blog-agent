@@ -746,6 +746,23 @@
   cursor: zoom-in;
 }
 
+/* Cover previews use the same aspect ratios as the blog layouts. */
+#waifu-chat .chat-cover-review {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(min(160px, 100%), 1fr));
+  gap: 12px; margin-block: 12px; min-width: 0;
+}
+#waifu-chat .chat-cover-review figure { margin: 0; min-width: 0; }
+#waifu-chat .chat-cover-frame {
+  overflow: hidden; border-radius: 8px; background: var(--chat-soft);
+  border: 1px solid var(--chat-line);
+}
+#waifu-chat .chat-cover-frame > img {
+  display: block; width: 100%; height: 100%; max-width: none; max-height: none;
+  margin: 0; object-position: center;
+}
+#waifu-chat .chat-cover-frame > img[hidden] { display: none; }
+#waifu-chat .chat-cover-review figcaption { margin-top: 4px; font-size: .85em; color: var(--chat-muted); }
+
 /* Compact task controls share the same surface in both collapsed window modes. */
 #waifu-chat .chat-service-indicator {
   --signal-color: #8c8798;

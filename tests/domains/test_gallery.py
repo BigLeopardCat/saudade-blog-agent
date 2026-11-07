@@ -89,9 +89,31 @@ def test_full_metadata_reads_one_authoritative_image_without_pixels_or_writes(ga
     assert result.data == json.loads(str(result))
     assert result.data["description"] == gallery["row"]["description"]
     assert result.data["url"] == gallery["row"]["imageUrl"]
+    assert result.data["display_markdown"] == "![山景](https://images.example/cover.png)"
     assert len(gallery["requests"]) == 1
     assert gallery["requests"][0].url.path.endswith("/gallery/images/11")
     assert gallery["writes"] == 0
+
+
+def test_display_metadata_preserves_the_url_and_escapes_markdown_labels(gallery):
+    gallery["row"].update(displayName="[猫]\n![伪造](bad)",
+                          imageUrl="https://images.example/封面 (1).png")
+    result = reads.get_gallery_image_metadata.invoke({"image_id": 11}, config=admin())
+    assert result.data["display_markdown"] == (
+        "![\\[猫\\] !\\[伪造\\](bad)](https://images.example/%E5%B0%81%E9%9D%A2%20%281%29.png)")
+    assert len(gallery["requests"]) == 1 and not gallery["writes"]
+
+
+def test_explicit_complete_cover_remains_supported_and_the_public_preview_matches_the_grant(gallery):
+    from agent.products.blog.confirmation import public_card
+
+    prepared = preparation.prepare_article_cover.invoke(
+        {"article_id": 3, "image_id": 11, "fit": "contain"}, config=admin())
+    card = public_card(prepared.execution)
+    grant = confirm.verify(card["token"], 7, 42)
+    assert card["cover_review"]["fit"] == grant["specs"][0]["args"]["fit"] == "contain"
+    assert card["cover_review"]["url"] == grant["specs"][0]["args"]["image_url"]
+    assert "specs" not in card and gallery["writes"] == 0
 
 
 def test_full_metadata_does_not_disguise_another_image_as_the_requested_one(gallery):
@@ -155,7 +177,10 @@ def test_cover_preview_binds_exact_article_and_image_versions(gallery):
     grant = confirm.verify(prepared.execution["pending_confirm"]["token"], 7, 42)
     args = grant["specs"][0]["args"]
     assert args["version"] == "b" * 64 and args["image_version"] == "a" * 64
-    assert args["fit"] == "contain" and "![候选封面]" in prepared.reply
+    assert args["fit"] == "cover"
+    assert prepared.execution["pending_confirm"]["cover_review"] == {
+        "image_id": 11, "name": "山景", "url": "https://images.example/cover.png", "fit": "cover"}
+    assert "![" not in prepared.reply
     assert gallery["writes"] == 0
 
 

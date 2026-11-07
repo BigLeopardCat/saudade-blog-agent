@@ -5,6 +5,18 @@ import pytest
 from eval import native_assertions
 
 
+@pytest.mark.parametrize("change", [None, {"fit": "contain"}, {"image_id": 12}])
+def test_cover_preview_checks_the_actual_card_separately_from_signed_execution(change):
+    expected = {"image_id": 11, "fit": "cover"}
+    gold = {"require_confirm_preview": [{"cover_review": expected}]}
+    review = {**expected, **(change or {})}
+    result = {"native_events": [], "text": "图片11，铺满裁切", "http_events": [
+        {"event": "confirmation", "data": {"q": "图片11，铺满裁切", "cover_review": review}}]}
+    assert bool(native_assertions.check(gold, result)) is (change is not None)
+    result["http_events"][0]["data"].pop("cover_review")
+    assert native_assertions.check(gold, result)
+
+
 def test_confirmation_preview_is_checked_on_the_card_without_requiring_duplicate_reply():
     gold = {"require_confirm_preview": [r"父级[^\n]*编程"]}
     result = {"native_events": [], "text": "请核对卡片。", "http_events": [
