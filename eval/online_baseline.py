@@ -13,7 +13,7 @@ import json
 import os
 import sys
 import time
-from collections import Counter
+from collections import Counter, defaultdict
 from datetime import datetime
 from pathlib import Path
 
@@ -268,6 +268,15 @@ def run(cases, transport, identities, report_dir, *, phase, suite_hash, include_
         paths = [r["trace"] for r in transport.requests]
         report["metrics"] = request_metrics.collect(paths)
         report["task_metrics"] = task_metrics.collect(paths)
+        case_ids = defaultdict(set)
+        for case in report["cases"]:
+            for round_ in (case.get("result") or {}).get("rounds", []):
+                request_id = (round_.get("request_evidence") or {}).get("request_id")
+                if request_id:
+                    case_ids[request_id].add(case["id"])
+        for task in report["task_metrics"]["tasks"]:
+            task["case_ids"] = sorted({case for trace_id in task["trace_ids"]
+                                       for case in case_ids[trace_id]})
         target = folder / "report.json"
         temp = target.with_suffix(".tmp")
         temp.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n")
