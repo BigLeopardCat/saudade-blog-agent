@@ -50,13 +50,9 @@ def _safe_frames(frames):
 
 
 def safe_result(value):
-    """Remove credentials while preserving ordinary user and model text.
-
-    Only the archived frames field contains text-encoded control payloads.
-    """
+    """Redact structured credentials; ordinary string values are never decoded."""
     if isinstance(value, dict):
-        result = {k: _safe_frames(v) if k == "frames" else safe_result(v)
-                  for k, v in value.items()
+        result = {k: safe_result(v) for k, v in value.items()
                   if k not in {"token", "confirm_token", "confirm_tokens"}}
         review = result.get("image_review")
         if isinstance(review, dict):
@@ -72,6 +68,21 @@ def safe_result(value):
     if isinstance(value, list):
         return [safe_result(v) for v in value]
     return value
+
+
+def archive_result(value):
+    """Serialize a known turn result or its rounds, including their own control frames."""
+    if not isinstance(value, dict):
+        raise ValueError("archived turn result must be an object")
+    archived = safe_result({key: item for key, item in value.items()
+                            if key not in {"frames", "rounds"}})
+    if "frames" in value:
+        archived["frames"] = _safe_frames(value["frames"])
+    if "rounds" in value:
+        if not isinstance(value["rounds"], list):
+            raise ValueError("archived result rounds must be a list")
+        archived["rounds"] = [archive_result(round_) for round_ in value["rounds"]]
+    return archived
 
 
 class OnlineTransport:
@@ -342,7 +353,7 @@ class OnlineTransport:
         return result
 
     def _save_request(self, request_id, result):
-        archived = safe_result(result)
+        archived = archive_result(result)
         folder = self.report_dir / "requests"
         folder.mkdir(exist_ok=True, mode=0o700)
         with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=folder,

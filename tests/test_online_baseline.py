@@ -11,7 +11,7 @@ import pytest
 
 from agent.api.schemas import ChatRequest
 from eval import native_assertions, online_baseline
-from eval.online_transport import EvaluationError, OnlineTransport, safe_result
+from eval.online_transport import EvaluationError, OnlineTransport, archive_result
 
 
 def transport(tmp_path, monkeypatch, wire):
@@ -199,7 +199,7 @@ def test_report_redaction_removes_nested_and_wire_bearer_credentials():
     original = {"confirm_tokens": [credential], "result": {"confirm_token": credential},
                 "frames": [frame],
                 "events": [{"token": credential, "specs": [{"args": {"article_id": 54}}]}]}
-    saved = safe_result(original)
+    saved = archive_result(original)
     assert credential not in json.dumps(saved) and credential in json.dumps(original)
     assert saved["events"][0]["specs"][0]["args"]["article_id"] == 54
 

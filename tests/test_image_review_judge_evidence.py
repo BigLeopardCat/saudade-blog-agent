@@ -4,12 +4,13 @@ import copy
 import json
 import secrets
 import uuid
+from pathlib import Path
 
 import pytest
 from langchain_core.messages import AIMessage
 
 from eval import online_judge
-from eval.online_transport import safe_result
+from eval.online_transport import archive_result
 
 
 @pytest.fixture
@@ -159,7 +160,7 @@ def test_preview_and_signed_job_capabilities_never_leave_in_judge_material(case,
 
 def test_archived_redaction_and_raw_http_produce_identical_review_projection(case):
     redacted = copy.deepcopy(case)
-    redacted["result"]["rounds"][0] = safe_result(redacted["result"]["rounds"][0])
+    redacted["result"]["rounds"][0] = archive_result(redacted["result"]["rounds"][0])
     assert current(case) == current(redacted)
 
 
@@ -276,3 +277,23 @@ def test_all_reference_identities_and_their_order_are_preserved(case):
         (11, "多余参考图"),
         (12, "第二张参考图"),
     ]
+
+
+def test_tool_schema_frames_remain_ordinary_structured_data_in_judge_material(case):
+    result = case["result"]["rounds"][0]
+    trace = Path(result["trace"])
+    document = json.loads(trace.read_text())
+    parameters = {
+        "type": "object",
+        "properties": {"frames": {"type": "array", "items": {"type": "object"}}},
+    }
+    document["events"] = [
+        {
+            "node": "native",
+            "event": "tool_contract",
+            "schema": {"function": {"name": "ordinary_tool", "parameters": parameters}},
+        }
+    ]
+    trace.write_text(json.dumps(document))
+    data = json.loads(material(case))
+    assert data["tool_catalogs"][0][0]["parameters"] == parameters

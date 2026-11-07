@@ -20,7 +20,7 @@ from pathlib import Path
 import httpx
 
 from eval import dataset_audit, request_metrics, task_metrics
-from eval.online_transport import EvaluationError, OnlineTransport, safe_result
+from eval.online_transport import EvaluationError, OnlineTransport, archive_result
 from utils.trace_io import load_trace
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -306,7 +306,7 @@ def run(cases, transport, identities, report_dir, *, phase, suite_hash, include_
                 fails = golden.check_case(case, result)
                 errors = [r["error"] for r in result["rounds"] if r.get("error")]
                 row.update(status="failed" if fails or errors else "passed",
-                           fails=fails, errors=errors, result=safe_result(result))
+                           fails=fails, errors=errors, result=archive_result(result))
                 availability = (result.get("evaluation_failure")
                                 or model_availability_failure(result))
                 if availability:

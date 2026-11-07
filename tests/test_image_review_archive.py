@@ -9,7 +9,7 @@ import httpx
 import pytest
 
 from eval import online_judge
-from eval.online_transport import OnlineTransport, safe_result
+from eval.online_transport import OnlineTransport, archive_result, safe_result
 
 
 @pytest.mark.parametrize(
@@ -77,7 +77,7 @@ def test_result_journal_and_judge_keep_control_like_prompt_name_and_reply_exact(
     review = archived["http_events"][0]["data"]["image_review"]
     assert review["prompt"] == prompt and review["references"][0]["name"] == name
     assert capability not in json.dumps(archived)
-    assert archived == safe_result(archived) and original == events
+    assert archived == archive_result(archived) and original == events
     frame = json.loads(archived["frames"][0].split(":", 1)[1])
     assert frame["image_review"]["prompt"] == prompt
     assert frame["image_review"]["references"][0]["name"] == name
@@ -127,3 +127,40 @@ def test_malformed_private_frame_is_not_written_as_an_opaque_string(tmp_path):
         with pytest.raises(ValueError):
             adapter._save_request("fixture", {"frames": [frame]})
     assert not (tmp_path / "requests").exists()
+
+
+def test_generic_structured_frames_are_data_even_inside_a_tool_schema():
+    value = {
+        "frames": [{"text": "ordinary frame", "frames": [{"index": 1}]}],
+        "tool_schema": {"properties": {"frames": {"type": "array"}}},
+    }
+    assert safe_result(value) == value
+
+
+def test_result_serializer_handles_only_its_own_controls_and_declared_rounds():
+    canary = secrets.token_urlsafe(24)
+    control = "__CONFIRM__:" + json.dumps({"token": canary, "q": "确认？"})
+    ordinary = {
+        "frames": [{"name": "tool data"}],
+        "schema": {"frames": {"type": "array"}},
+        "rounds": [{"frames": [{"name": "ordinary nested data"}]}],
+    }
+    raw = {
+        "frames": [control],
+        "tool_data": ordinary,
+        "rounds": [{"frames": [control], "tool_data": ordinary}],
+    }
+    archived = archive_result(raw)
+    assert canary not in json.dumps(archived)
+    assert archived["tool_data"] == ordinary
+    assert archived["rounds"][0]["tool_data"] == ordinary
+    assert archived == archive_result(archived)
+    assert canary in json.dumps(raw)
+
+
+@pytest.mark.parametrize(
+    "value", [{"rounds": None}, {"rounds": [None]}, {"rounds": [{"frames": ["__PENDING__:bad"]}]}]
+)
+def test_malformed_declared_round_results_cannot_bypass_control_redaction(value):
+    with pytest.raises(ValueError):
+        archive_result(value)
