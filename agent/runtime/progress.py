@@ -6,12 +6,14 @@ import asyncio
 import time
 from collections.abc import Callable, Mapping
 
-from agent.contracts.events import StreamEvent
+from agent.contracts.events import ProgressUpdate, StreamEvent
 from agent.runtime.budget import BudgetExceeded
 from agent.runtime.control import AgentCancelled, RequestControl
 from utils.trace import record
 
 _MAX_EVENTS = 24
+
+
 def visible_reply(text: str) -> bool:
     return bool(text.strip())
 
@@ -19,10 +21,13 @@ def visible_reply(text: str) -> bool:
 class ProgressEmitter:
     """Deduplicate static labels within one sequential tool loop."""
 
-    def __init__(self, sink: Callable[[str], object] | None = None):
+    def __init__(self, sink: Callable[[str | dict], object] | None = None,
+                 activity: Callable[[], object] | None = None):
         self.sink = sink
+        self.activity = activity
         self._seen: set[str] = set()
         self._count = 0
+        self._work_last: dict[str, object] = {}
 
     @property
     def emitted_keys(self) -> list[str]:
@@ -33,14 +38,23 @@ class ProgressEmitter:
         self._seen.update(key for key in keys[:_MAX_EVENTS] if isinstance(key, str))
         self._count = len(self._seen)
 
-    def emit(self, text: str, *, key: str) -> bool:
+    def emit(self, text: str, *, key: str, work: dict | None = None) -> bool:
         if not self.sink or not isinstance(text, str) or not text:
             return False
-        if key in self._seen or self._count >= _MAX_EVENTS:
+        value = (ProgressUpdate.model_validate({"text": text, "work": work}).model_dump()
+                 if work is not None else text)
+        if self._count >= _MAX_EVENTS:
             return False
-        self._seen.add(key)
+        if work is not None:
+            if self._work_last.get(work["id"]) == value:
+                return False
+            self._work_last[work["id"]] = value
+        else:
+            if key in self._seen:
+                return False
+            self._seen.add(key)
         self._count += 1
-        return self.sink(text) is not False
+        return self.sink(value) is not False
 
 
 class StreamProgress:
@@ -50,7 +64,8 @@ class StreamProgress:
                  control: RequestControl):
         self.loop, self.queue, self.control = loop, queue, control
         self.started = time.monotonic()
-        self.emitter = ProgressEmitter(self.enqueue)
+        self.last_activity = self.started
+        self.emitter = ProgressEmitter(self.enqueue, self.received)
         self._visible = False
         self._reply = False
 
@@ -61,7 +76,7 @@ class StreamProgress:
             return False
         return not self.loop.is_closed()
 
-    def enqueue(self, text: str) -> bool:
+    def enqueue(self, text: str | dict) -> bool:
         if not self._active():
             return False
         try:
@@ -71,7 +86,12 @@ class StreamProgress:
             return False
         return True
 
-    def _deliver(self, text: str):
+    def received(self):
+        """Only actual upstream bytes extend idle liveness, never the absolute deadline."""
+        if self._active():
+            self.last_activity = time.monotonic()
+
+    def _deliver(self, text: str | dict):
         if self._active():
             try:
                 self.queue.put_nowait(StreamEvent("progress", text))
@@ -100,6 +120,12 @@ def current_emitter(config: Mapping | None) -> ProgressEmitter | None:
     return current if isinstance(current, ProgressEmitter) else None
 
 
-def emit(config: dict | None, text: str, *, key: str) -> bool:
+def emit(config: dict | None, text: str, *, key: str, work: dict | None = None) -> bool:
     current = current_emitter(config)
-    return current.emit(text, key=key) if current is not None else False
+    return current.emit(text, key=key, work=work) if current is not None else False
+
+
+def received(config: dict | None):
+    current = current_emitter(config)
+    if current is not None and current.activity is not None:
+        current.activity()
