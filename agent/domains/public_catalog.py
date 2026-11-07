@@ -1,6 +1,7 @@
 """Public article and taxonomy metadata with database pagination."""
 
 from typing import Annotated
+from urllib.parse import urlsplit
 
 from langchain_core.tools import tool
 from pydantic import Field, StrictInt
@@ -12,11 +13,27 @@ from agent.domains.public_pages import Identifier, Limit, Page, read_page
 Level = Annotated[StrictInt, Field(ge=1, le=2)]
 
 
+def _source_url(row):
+    value = row.get("sourceUrl")
+    if value is None:
+        return None
+    if (not isinstance(value, str) or len(value) > 2048
+            or any(ord(char) <= 32 or ord(char) == 127 for char in value)):
+        raise ValueError("Invalid public article source URL")
+    parsed = urlsplit(value)
+    if (parsed.scheme not in ("http", "https") or not parsed.hostname
+            or parsed.username is not None or parsed.password is not None
+            or parsed.path != f"/article/{row['id']}" or parsed.query or parsed.fragment):
+        raise ValueError("Public article source does not match its identity")
+    _ = parsed.port  # Validate the port without changing the supplied URL.
+    return value
+
+
 def _article(row):
     result = article(row)
     if result["isPublic"] is not True or result["status"] not in ("public", "published"):
         raise ValueError("Article is not public")
-    return result
+    return {**result, "sourceUrl": _source_url(row)}
 
 
 def _taxonomy(row):
@@ -49,14 +66,18 @@ def _tag(row):
 @tool
 def list_notes(page: Page = 1, page_size: Limit = 5,
                category_id: Identifier | None = None) -> object:
-    """分页读取公开文章元数据与总数，默认5条、最多10条，可按分类编号筛选；不读取正文。"""
+    """分页读取公开文章元数据与总数，默认5条、最多10条，可按分类编号筛选；不读取正文。
+    标题和宿主sourceUrl可直接推荐，无需另读正文获取链接。sourceUrl为空表示链接未知，不代表文章不存在。
+    """
     return read_page("articles", page, page_size, {"category_id": category_id}, _article,
                      {"categoryId": category_id})
 
 
 @tool
 def get_top_notes(page: Page = 1, page_size: Limit = 5) -> object:
-    """分页读取公开的置顶文章元数据与总数，默认5条、最多10条；不读取正文。"""
+    """分页读取公开置顶文章元数据与总数，默认5条、最多10条；不读取正文。
+    标题和宿主sourceUrl可直接推荐，无需另读正文获取链接；sourceUrl为空时保持链接未知。
+    """
     return read_page("articles", page, page_size, {"top_only": True}, _article, {"isTop": 1})
 
 
