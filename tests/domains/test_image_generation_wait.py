@@ -56,7 +56,7 @@ def observe(monkeypatch, stream, *, headers=None, control=None, status=200):
     cfg["configurable"]["progress_emitter"] = ProgressEmitter(progress.append)
     with httpx.Client(transport=httpx.MockTransport(handle)) as client:
         monkeypatch.setattr(base, "_client", client)
-        with request_scope(control or RequestControl(threading.Event(), time.monotonic() + 90)):
+        with request_scope(control or RequestControl(threading.Event(), time.monotonic() + 300)):
             result = tools.get_image_generation.invoke({"job_id": ID}, config=cfg)
     return result, requests, progress
 
@@ -70,7 +70,7 @@ def test_real_stream_review_has_safe_model_projection_and_actual_work(monkeypatc
     assert result.data["hasPreview"] is True and result.data["waitOutcome"] == "observed"
     assert "secret-preview" not in str(result) and "frozen prompt" not in str(result)
     assert len(requests) == 1 and requests[0].method == "GET"
-    assert requests[0].url.params["wait_seconds"] == "60"
+    assert requests[0].url.params["wait_seconds"] == "240"
     assert [item["work"]["stage"] for item in progress] == ["generating", "review"]
     assert stream.closed
 
@@ -147,15 +147,34 @@ def test_cancellation_during_keepalive_closes_stream_without_post(monkeypatch):
                     before=lambda index: stopped.set() if index == 1 else None)
     with pytest.raises(AgentCancelled):
         observe(monkeypatch, stream,
-                control=RequestControl(stopped, time.monotonic() + 90))
+                control=RequestControl(stopped, time.monotonic() + 300))
     assert stream.closed
 
 
 def test_wait_uses_remaining_request_deadline(monkeypatch):
     result, requests, _ = observe(monkeypatch, Stream(event(job(), "image_job_timeout")),
-        control=RequestControl(threading.Event(), time.monotonic() + 8))
+        control=RequestControl(threading.Event(), time.monotonic() + 23))
     assert result.kind == "ok" and 1 <= int(requests[0].url.params["wait_seconds"]) <= 7
     assert requests[0].extensions["timeout"]["read"] <= 3
+
+
+def test_insufficient_finish_reserve_does_not_open_a_long_read(monkeypatch):
+    stream = Stream(event(job(), "image_job_timeout"))
+    result, requests, _ = observe(monkeypatch, stream,
+        control=RequestControl(threading.Event(), time.monotonic() + 15))
+    assert result.kind == "unavailable" and requests == []
+
+
+@pytest.mark.parametrize("seconds", [True, -1, 241])
+def test_invalid_wait_window_never_reaches_the_host(monkeypatch, seconds):
+    def unexpected(request):
+        raise AssertionError("invalid window opened a request")
+
+    with httpx.Client(transport=httpx.MockTransport(unexpected)) as client:
+        monkeypatch.setattr(base, "_client", client)
+        with pytest.raises(ValueError):
+            tools.get_image_generation.invoke({"job_id": ID, "wait_seconds": seconds},
+                config=config(principal=Principal(7, "admin", SOURCE_ASSERTION)))
 
 
 def test_role_or_user_binding_rejected_before_opening_sse(monkeypatch):

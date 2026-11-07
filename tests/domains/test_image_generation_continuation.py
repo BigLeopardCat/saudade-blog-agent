@@ -88,9 +88,9 @@ def test_sdk_two_approvals_wait_once_each_and_never_send_preview_tokens_to_model
     actions = iter([
         ("load_admin_image_generation_info_tools", {}),
         ("prepare_image_generation", {"prompt": job["request"]["prompt"]}),
-        ("get_image_generation", {"job_id": ID, "wait_seconds": 60}),
+        ("get_image_generation", {"job_id": ID, "wait_seconds": 240}),
         ("prepare_generated_image_acceptance", {"job_id": ID}),
-        ("get_image_generation", {"job_id": ID, "wait_seconds": 60}),
+        ("get_image_generation", {"job_id": ID, "wait_seconds": 240}),
         None,
     ])
 
@@ -123,7 +123,7 @@ def test_sdk_two_approvals_wait_once_each_and_never_send_preview_tokens_to_model
                 application=BlogApplication(), model_io=io,
                 model_factory=lambda **kwargs: get_llm(api_key="synthetic-only",
                     base_url="https://model.test/v1", model="deepseek-v4.1-flash", **kwargs))
-            with request_scope(RequestControl(stopped, time.monotonic() + 90)):
+            with request_scope(RequestControl(stopped, time.monotonic() + 300)):
                 return list(runtime.stream_events(inputs, cfg))[-1]
 
         first = run({"messages": [HumanMessage(content="根据完整提示词生成图片，完成后给我看。")],

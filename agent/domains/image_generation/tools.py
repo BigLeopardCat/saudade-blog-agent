@@ -131,10 +131,11 @@ def prepare_image_generation(
 
 @tool
 def get_image_generation(job_id: JobID, config: RunnableConfig,
-                         wait_seconds: Annotated[StrictInt, Field(ge=0, le=60)] = 60) -> object:
+                         wait_seconds: Annotated[StrictInt, Field(ge=0, le=240)] = 240) -> object:
     """Observe ONE existing image job; never generates or approves an image.
-    After paid-start or saving approval, wait once (up to 60 seconds, bounded by this
-    request's remaining deadline) for verified host status, without repeated model polls.
+    After paid-start or saving approval, wait once (up to 240 seconds, bounded by this
+    request's remaining deadline with 15 seconds reserved for the final response)
+    for verified host status, without repeated model polls.
     review: call prepare_generated_image_acceptance to SHOW the actual result and ask
     whether to keep it. review + error means saving failed, not generation failed; the
     result remains available for another explicit acceptance. saving is NOT gallery

@@ -7,10 +7,12 @@ from httpx_sse import SSEError, connect_sse
 
 from agent.domains.image_generation.state import TERMINAL, checked, show_progress
 from agent.runtime.control import model_options
+from agent.runtime.progress import received
 from agent.runtime.turns import check_cancelled
 from tools import base
 
 MAX_STREAM_BYTES = 2 * 1024 * 1024
+FINISH_RESERVE_SECONDS = 15
 
 
 class WaitElapsed(Exception):
@@ -30,6 +32,8 @@ class CheckedStream(httpx.SyncByteStream):
             size += len(chunk)
             if size > MAX_STREAM_BYTES:
                 raise ValueError("Image job stream exceeds its byte limit")
+            if chunk:
+                received(self.config)
             yield chunk
 
     def close(self):
@@ -38,8 +42,9 @@ class CheckedStream(httpx.SyncByteStream):
 
 def wait(job_id, seconds, config, path):
     check_cancelled(config)
-    remaining = model_options(seconds + 3).get("timeout", seconds + 3)
-    seconds = min(seconds, max(0, int(remaining - 1)))
+    window = seconds + FINISH_RESERVE_SECONDS + 1
+    remaining = model_options(window).get("timeout", window)
+    seconds = min(seconds, max(0, int(remaining - FINISH_RESERVE_SECONDS - 1)))
     if seconds < 1:
         return base.unavailable("本轮剩余时间不足，尚未等待核实生图结果；可继续查看该任务。")
     deadline, last = time.monotonic() + seconds + 1, None

@@ -138,11 +138,17 @@ const server = createServer(async (req, res) => {
         }
         if (['work-hold','work-complete'].includes(mode)) {
           const completed=mode==='work-complete';
+          if(!completed)steeringHistory=[{id:800000,role:'user',content:body.message,
+            time:Date.now(),images:[],turn_id:body.turn_id}];
           res.write(frame('progress',{text:completed?'图片已保存到图库':'正在生成图片',
             work:{id:'image:'+taskId,stage:completed?'accepted':'generating',
               status:completed?'completed':'running'}}));
           res.write(frame('text',completed?'真实图片已保留。':'正在等待图片结果。'));
-          if(completed)res.end(frame('done',{}));
+          if(completed) {
+            steeringHistory.push({id:800001,role:'assistant',content:'真实图片已保留。',
+              time:Date.now(),images:[],parent_turn_id:steeringHistory[0]?.turn_id});
+            res.end(frame('done',{}));
+          }
           return;
         }
         res.write(frame('progress', '正在调用工具：search_notes'));

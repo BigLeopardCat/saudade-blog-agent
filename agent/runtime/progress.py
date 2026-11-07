@@ -21,8 +21,10 @@ def visible_reply(text: str) -> bool:
 class ProgressEmitter:
     """Deduplicate static labels within one sequential tool loop."""
 
-    def __init__(self, sink: Callable[[str | dict], object] | None = None):
+    def __init__(self, sink: Callable[[str | dict], object] | None = None,
+                 activity: Callable[[], object] | None = None):
         self.sink = sink
+        self.activity = activity
         self._seen: set[str] = set()
         self._count = 0
         self._work_last: dict[str, object] = {}
@@ -62,7 +64,8 @@ class StreamProgress:
                  control: RequestControl):
         self.loop, self.queue, self.control = loop, queue, control
         self.started = time.monotonic()
-        self.emitter = ProgressEmitter(self.enqueue)
+        self.last_activity = self.started
+        self.emitter = ProgressEmitter(self.enqueue, self.received)
         self._visible = False
         self._reply = False
 
@@ -82,6 +85,11 @@ class StreamProgress:
             # The loop can close between the check and scheduling.
             return False
         return True
+
+    def received(self):
+        """Only actual upstream bytes extend idle liveness, never the absolute deadline."""
+        if self._active():
+            self.last_activity = time.monotonic()
 
     def _deliver(self, text: str | dict):
         if self._active():
@@ -115,3 +123,9 @@ def current_emitter(config: Mapping | None) -> ProgressEmitter | None:
 def emit(config: dict | None, text: str, *, key: str, work: dict | None = None) -> bool:
     current = current_emitter(config)
     return current.emit(text, key=key, work=work) if current is not None else False
+
+
+def received(config: dict | None):
+    current = current_emitter(config)
+    if current is not None and current.activity is not None:
+        current.activity()
