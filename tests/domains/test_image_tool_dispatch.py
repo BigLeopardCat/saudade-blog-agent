@@ -2,6 +2,7 @@
 
 import json
 import secrets
+import time
 
 import httpx
 import pytest
@@ -41,9 +42,16 @@ class Model:
         ("admin_image_generation", "prepare_generated_image_acceptance", {"job_id": ID}),
         (
             "admin_gallery",
-            "prepare_gallery_image_change",
-            {"image_id": 11, "display_name": "新名称"},
+            "prepare_gallery_images",
+            {"intent": {"action": "metadata", "items": [{"imageId": 11,
+                "changes": {"displayName": "新名称"}}]}},
         ),
+        ("admin_gallery", "prepare_gallery_images", {"intent": {
+            "action": "move", "imageIds": list(range(100, 0, -1)), "folderId": 2}}),
+        ("admin_gallery", "prepare_gallery_images", {"intent": {
+            "action": "favorite", "imageIds": [11, 12], "isFavorite": False}}),
+        ("admin_gallery", "prepare_gallery_images", {"intent": {
+            "action": "delete", "imageIds": [11, 12]}}),
         ("admin_gallery", "prepare_article_cover", {"article_id": 3, "image_id": 11}),
     ],
 )
@@ -54,6 +62,7 @@ def test_discovered_preparations_reach_approval_through_the_real_tool_chain(
     job = {
         "id": ID,
         "requestHash": "a" * 64,
+        "imageRemoved": False,
         "status": "pending",
         "outputHash": "b" * 64,
         "previewUrl": f"/api/public/image-generation/{ID}/preview?token=fixture",
@@ -77,6 +86,16 @@ def test_discovered_preparations_reach_approval_through_the_real_tool_chain(
             data = {**job, "request": {**intent, "references": [], "provider": "https://images.test/v1"}}
         elif path.endswith(ID):
             data = {**job, "status": "review"}
+        elif path.endswith("/image-actions/prepare"):
+            intent = json.loads(request.content)
+            ids = intent.get("imageIds", [item["imageId"] for item in intent.get("items", [])])
+            data = {"version": "c" * 64, "expiresAt": int(time.time()) + 900,
+                    "intent": intent, "matchedIds": ids,
+                    "preview": [{"imageId": i, "displayName": "图片", "folderId": 0,
+                        "isFavorite": False} for i in ids[:10]],
+                    "previewTruncated": len(ids) > 10,
+                    "destination": {"id": 2, "name": "封面", "parentId": 0}
+                        if intent["action"] == "move" else None}
         elif path.endswith("/cover"):
             data = {"articleId": 3, "title": "文章", "version": "b" * 64}
         else:
@@ -111,7 +130,14 @@ def test_discovered_preparations_reach_approval_through_the_real_tool_chain(
     assert result.execution["pending_confirm"]["q"]
     assert requests
     assert all(not str(r.url).endswith(("/approve", "/accept")) for r in requests)
-    assert all(r.method == "GET" or r.url.path.endswith("/jobs") for r in requests)
+    assert all(r.method == "GET" or r.url.path.endswith(("/jobs", "/image-actions/prepare"))
+               for r in requests)
+    if name == "prepare_gallery_images":
+        assert len(requests) == 1
+        grant = confirm.verify(result.execution["pending_confirm"]["token"], 7, 42)
+        assert grant and len(grant["specs"]) == 1
+        assert grant["specs"][0]["tool"] == "manage_gallery_images"
+        assert "prepare_gallery_image_change" not in domains[domain]
 
 
 def test_all_catalog_preparations_pass_policy_but_direct_business_writes_remain_blocked():
@@ -122,7 +148,7 @@ def test_all_catalog_preparations_pass_policy_but_direct_business_writes_remain_
     for name in (
         "start_image_generation",
         "accept_generated_image",
-        "update_gallery_image",
+        "manage_gallery_images",
         "set_article_cover",
     ):
         assert not policy._allowed(name)

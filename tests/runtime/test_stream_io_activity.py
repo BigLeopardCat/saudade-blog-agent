@@ -24,7 +24,7 @@ pytestmark = pytest.mark.usefixtures("service_workers")
 @pytest.mark.parametrize("case", ["active", "stalled", "total", "cancelled"])
 def test_real_api_observes_io_activity_but_preserves_timeout_and_cancel(monkeypatch, case):
     closed, finished, calls, reasons = threading.Event(), threading.Event(), [], []
-    value = {"id": ID, "requestHash": "a" * 64, "status": "generating",
+    value = {"id": ID, "requestHash": "a" * 64, "imageRemoved": False, "status": "generating",
              "request": {"provider": "https://images.test/v1", "prompt": "fixture",
                          "model": "fixture", "size": "1536x1024", "quality": "high",
                          "references": []}}

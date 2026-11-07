@@ -10,8 +10,8 @@ DOMAIN_DESCRIPTIONS = {
     "then approve gallery storage.",
     "admin_talks": "Publish, edit or permanently delete administrator posts; "
     "not guestbook moderation.",
-    "admin_gallery": "Gallery images/folders, inspection, metadata edits, folder creation/empty "
-    "deletion and article covers.",
+    "admin_gallery": "Gallery images/folders and inspection; atomic single/bulk metadata, "
+    "move/favorite/delete, empty-folder deletion/creation and article covers.",
     "article_editor": "Collaborate on the open editor: draft, title/body review, summary approval "
     "and in-place publication.",
     "admin_automations": "Persistent reminders, scheduled read-only analysis and approved "
