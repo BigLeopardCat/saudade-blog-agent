@@ -21,7 +21,7 @@ OTHER = "7b9e2bf1-56af-428c-8177-e3ad0641e036"
 
 
 def job(status="generating", **extra):
-    return {"id": ID, "status": status, "requestHash": "a" * 64,
+    return {"id": ID, "status": status, "requestHash": "a" * 64, "imageRemoved": False,
             "request": {"provider": "https://images.test/v1", "prompt": "frozen prompt",
                         "model": "fixture", "size": "1536x1024", "quality": "high",
                         "references": []}, **extra}
@@ -221,3 +221,24 @@ def test_role_or_user_binding_rejected_before_opening_sse(monkeypatch):
             cfg["configurable"]["user_id"] = 7
             result = tools.get_image_generation.invoke({"job_id": ID}, config=cfg)
             assert result.kind == "unavailable"
+
+
+@pytest.mark.parametrize("image_id", [31, None])
+def test_removed_accepted_job_is_historical_not_a_new_image_to_show(monkeypatch, image_id):
+    result, requests, progress = observe(monkeypatch,
+        Stream(event(job("accepted", imageId=image_id, imageRemoved=True))))
+    assert result.kind == "ok" and result.data["status"] == "accepted"
+    assert result.data["imageRemoved"] is True and not result.data["hasPreview"]
+    assert result.data["imageId"] == image_id
+    assert "生成已完成，但图片已不在图库" in progress[-1]["text"]
+    assert len(requests) == 1 and requests[0].method == "GET"
+
+
+@pytest.mark.parametrize("value", [
+    job("review", imageRemoved=True),
+    job("accepted", imageId=31, imageRemoved=True, previewUrl="https://example.invalid/old"),
+    {key: value for key, value in job("accepted", imageId=31).items() if key != "imageRemoved"},
+])
+def test_removed_state_cannot_weaken_identity_or_lie_about_current_preview(monkeypatch, value):
+    result, _, _ = observe(monkeypatch, Stream(event(value)))
+    assert result.kind == "unavailable"

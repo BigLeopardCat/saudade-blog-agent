@@ -11,7 +11,7 @@
         0
       ],
       "agent/action_text.py": [
-        103,
+        104,
         0
       ],
       "agent/api/__init__.py": [
@@ -327,6 +327,10 @@
         0
       ],
       "agent/domains/gallery/folders.py": [
+        0,
+        0
+      ],
+      "agent/domains/gallery/image_actions.py": [
         0,
         0
       ],
@@ -960,7 +964,7 @@
       ]
     },
     "total": [
-      298,
+      299,
       0
     ]
   },
@@ -980,7 +984,7 @@
       "file": "agent/action_text.py",
       "kind": "collection",
       "name": "_NOARG_VERB",
-      "size": 48,
+      "size": 49,
       "category": "system_data",
       "q": "_NOARG_VERB",
       "why": "工具名对应的进度与回执显示文案，不参与意图路由或授权。"

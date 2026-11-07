@@ -53,7 +53,8 @@ def validate(grant, config):
 
 
 def verified(name, args, result):
-    if not isinstance(result, dict) or result.get("id") != args["job_id"]:
+    if (not isinstance(result, dict) or result.get("id") != args["job_id"]
+            or result.get("imageRemoved") is not False):
         return False
     if result.get("status") == "accepted" and (
             type(result.get("imageId")) is not int or result["imageId"] <= 0):
@@ -106,7 +107,8 @@ class Operation:
             meta={
                 "image_job": {
                     key: value.get(key)
-                    for key in ("id", "status", "requestHash", "outputHash", "imageId")
+                    for key in ("id", "status", "requestHash", "outputHash",
+                                "imageId", "imageRemoved")
                 },
                 "approved_args": args,
             },
