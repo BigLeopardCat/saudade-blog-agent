@@ -5,6 +5,7 @@ import logging
 from typing import Annotated, Literal
 
 from langchain_core.tools import tool
+from pydantic import Field, StrictInt
 
 from agent.domains.article_metadata import tag_references
 from tools import base as _base
@@ -213,54 +214,58 @@ def _rag_hit(index, hit):
 @tool
 def rag_search(
     query: Annotated[str, "检索关键词（用户问题中希望从博客内容里找到答案的核心表述）"],
-    top_k: Annotated[int, "返回候选文档数量，默认 8"] = 8,
+    top_k: Annotated[StrictInt, Field(ge=1, le=64), "返回候选文档数量，默认 8"] = 8,
 ) -> str | ToolResult:
     """按主题检索公开文章候选与命中小节，不返回全文。
 
     推荐可用候选链接；解读需用get_article_detail按命中section及revision补读。
     公告、留言和说说的关键词查询使用public_activity领域，不在此语料中。
     """
+    from agent.runtime.budget import BudgetExceeded
+    from agent.runtime.control import AgentCancelled
+
     try:
-        from rag.search import last_route, search
+        from rag.search import get_index, invalidate_document, last_route, search, warm_async
+        from rag.visibility import VisibilityUnavailable, current_public
         hits = search(query, top_k=top_k)
         if hits is None:
             return unavailable("检索索引未就绪（语料为空或重建失败），暂时无法检索")
         if not hits:
             return empty("检索无结果")
+        try:
+            verified = current_public(hits, _get)
+        except VisibilityUnavailable as error:
+            if error.reason == "missing_source_revision":
+                warm_async()
+            return unavailable("暂时无法核实检索候选的当前公开版本，请稍后重试。",
+                               meta={"reason": error.reason})
+        for changed in verified.changed:
+            invalidate_document(changed["id"], changed.get("document_revision", ""))
+        hits = verified.current
+        if not hits:
+            return unavailable("文章公开范围或版本已变化，索引正在刷新，请稍后重新检索。",
+                               meta={"reason": "corpus_changed"})
         text = "\n".join(_rag_hit(i + 1, hit) for i, hit in enumerate(hits))
         # Retrieval mode belongs to telemetry; candidate format is shared by both routes.
         route = last_route()
-        from rag.search import get_index
         corpus = get_index().status()
+        if verified.changed:
+            corpus = {**corpus, "stale": True}
         if corpus["stale"]:
             text += ("\n注：语料刷新未完成，本次候选使用最近一次完整索引；"
                      "正文读取仍核对当前公开版本。")
         return ok(text, data=hits, meta={"corpus": corpus, "rag_mode": route["mode"],
                               "rag_reason": route["reason"],      # degraded 时的原因码
                               "vector_hits": route["vectors"],    # 向量路贡献了几条候选
-                              "vector_missing": route["missing"]})
+                              "vector_missing": route["missing"],
+                              "visibility_checked": len(verified.current) + len(verified.changed),
+                              "visibility_dropped": len(verified.changed)})
+    except (AgentCancelled, BudgetExceeded, TimeoutError):
+        raise
     except Exception as exc:
         logger.error("rag_search failed: %s", exc)
         return unavailable(f"检索服务不可用（{type(exc).__name__}）")
 
-
-# Category and tag reads.
-
-
-# Announcements.
-
-
-# Guestbook reads.
-
-
-# Public reads have no actor identity, so their mine flag is not evidence of ownership.
-# Use the authenticated own-message endpoint for ownership queries.
-
-
-# Talks and activity.
-
-
-# Site information.
 
 @tool
 def get_blog_info() -> str | ToolResult:
