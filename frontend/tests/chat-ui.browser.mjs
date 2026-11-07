@@ -1,4 +1,4 @@
-// Optional real-browser checks. No model, production API, or Live2D vendor required.
+// Real-browser checks. No model, production API, or Live2D vendor required.
 // PLAYWRIGHT_MODULE and CHROMIUM_EXECUTABLE may point to existing local installs.
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
@@ -6,6 +6,7 @@ import { readFile, mkdir, writeFile } from 'node:fs/promises';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import path from 'node:path';
 import { assertBootstrapRecovery } from './chat-bootstrap.browser.mjs';
+import { assertHeaderFocusTheme } from './chat-header.browser.mjs';
 
 const frontend = path.resolve(fileURLToPath(new URL('../', import.meta.url)));
 const output = process.env.CHAT_UI_PREVIEW_DIR || '/tmp/chat-ui-preview';
@@ -1308,6 +1309,8 @@ try {
     await page.locator('#chat-restore').click();
   }
   passed('desktop/mobile: minus docks directly, header folds, dragging preserves state, night notch remains visible');
+  await assertHeaderFocusTheme(page, reset);
+  passed('header: pointer has no full-width focus frame; keyboard focus and actual title contrast work across modes/themes');
 
   await page.setViewportSize({width:1280,height:900});
   await reset();
