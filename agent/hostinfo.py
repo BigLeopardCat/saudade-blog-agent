@@ -170,7 +170,7 @@ def log_sizes(root: str | None = None) -> list[dict]:
 
 
 def trace_stats(day_start: datetime | None = None) -> dict:
-    """Count today's readable traces from the configured Agent trace directory.
+    """Count all service traffic, including evaluations, without private report access.
 
     Filter by mtime and use the shared reader for dated directories and gzip
     archives. A missing trace directory is unavailable, not a measured zero."""
@@ -178,7 +178,7 @@ def trace_stats(day_start: datetime | None = None) -> dict:
     cutoff = day_start.timestamp()
     rounds = abnormal = fallback = denied = 0
     unreadable = {"rounds": 0, "abnormal": 0, "fallback": 0, "denied": 0,
-                  "readable": False}
+                  "readable": False, "traffic_scope": "all_traffic", "includes_evaluations": True}
     if not os.path.isdir(TRACES_DIR):
         return unreadable
     for p in iter_trace_files(TRACES_DIR):
@@ -187,8 +187,7 @@ def trace_stats(day_start: datetime | None = None) -> dict:
                 continue
         except OSError:
             continue
-        # 「读不到」与「里面没有那件事」是两件事（`load_trace` 头注）：坏文件**跳过**，
-        # 不让一个半写的 trace 把整份统计带崩，也不把它算成一轮。
+        # Unreadable artifacts cannot count as completed requests.
         d = load_trace(p)
         if not isinstance(d, dict):
             continue
@@ -202,7 +201,8 @@ def trace_stats(day_start: datetime | None = None) -> dict:
             elif name == "authz_shadow":
                 denied += 1
     return {"rounds": rounds, "abnormal": abnormal, "fallback": fallback,
-            "denied": denied, "readable": True}
+            "denied": denied, "readable": True,
+            "traffic_scope": "all_traffic", "includes_evaluations": True}
 
 
 # ── 解析 / 计算（纯函数，单测打这里）─────────────────────────────────

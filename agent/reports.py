@@ -143,11 +143,12 @@ def render_service_health(*, services: list[tuple[str, dict]], health: dict,
 
     t = traces or {}
     if t.get("readable"):
-        lines.append(f"- 今日对话：{t.get('rounds', 0)} 轮；异常收尾 {t.get('abnormal', 0)} 轮；"
+        lines.append(f"- 今日服务请求（含评测）：{t.get('rounds', 0)} 轮；"
+                     f"异常收尾 {t.get('abnormal', 0)} 轮；"
                      f"质检拦截 {t.get('fallback', 0)} 轮；"
                      f"shadow 权限拒绝 {t.get('denied', 0)} 次")
     else:
-        lines.append("- 今日对话：读不到（trace 目录不可读）")
+        lines.append("- 今日服务请求（含评测）：读不到（trace 目录不可读）")
 
     if sizes:
         total = sum(s["size"] for s in sizes)

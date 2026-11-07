@@ -2,8 +2,8 @@
 # -*- coding: utf-8 -*-
 """Daily request accounting with separate archived graph diagnostics.
 
-No model calls are made. Missing usage remains unknown, and production,
-evaluation, runtime builds and executed paths remain separate in JSON output.
+No model calls are made. Totals include all service traffic, including evaluations.
+Explicit canonical reports provide evaluation-purpose views without rewriting evidence.
 """
 
 import argparse
@@ -16,7 +16,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import token_cost_report as tcr  # noqa: E402
 import trace_metrics as tm  # noqa: E402
 
-from eval import request_metrics, task_metrics
+from eval import request_metrics, task_metrics, traffic_purpose
 from utils.trace_files import iter_trace_files, parse_trace_name  # noqa: E402
 from utils.trace_io import load_trace  # noqa: E402
 
@@ -123,12 +123,13 @@ def _pct(a: float, b: float) -> str:
     return f"{a / b * 100:.1f}%" if b else "n/a"
 
 
-def render(paths: list, days: int) -> str:
+def render(paths: list, days: int, *, scope="全部服务流量（含评测；未标注不等于真人）") -> str:
     conv = collect(paths)
     tot = tcr.totals(paths)
     per_day = _inference_by_day(tcr.collect(paths)["rows"])
 
-    parts = [f"近{days}天 traces={conv['total']} 未识别={conv['unread']}"]
+    parts = [f"范围={scope}",
+             f"近{days}天 traces={conv['total']} 未识别={conv['unread']}"]
     parts.append(f"langchain={conv['langchain']} native={conv['native']} "
                  f"hybrid={conv['hybrid']} 交接={conv['handoff']}")
     if conv["graph"]:
@@ -171,6 +172,8 @@ def main() -> int:
     ap = argparse.ArgumentParser(description="每日零成本观测一行")
     ap.add_argument("--dir", default=tcr.PROD_TRACE_DIR, help="trace 根目录（默认生产）")
     ap.add_argument("--days", type=int, default=7, help="窗口天数（按 trace 日期）")
+    ap.add_argument("--evaluation-report", action="append", default=[],
+                    help="可信 canonical HTTP 报告，可重复；只按精确请求证据标注评测")
     ap.add_argument("--json", action="store_true", help="按来源、版本、模型、路径分组的请求指标")
     ap.add_argument("--tasks", action="store_true",
                     help="按逻辑任务汇总用量、接续与覆盖缺口（JSON）")
@@ -181,11 +184,21 @@ def main() -> int:
         stamps = sorted({(parse_trace_name(p)[0] or "")[:8] for p in paths} - {""})
         keep = set(stamps[-a.days:])
         paths = [p for p in paths if (parse_trace_name(p)[0] or "")[:8] in keep]
-    if a.tasks:
-        print(json.dumps(task_metrics.collect(paths), ensure_ascii=False))
-    else:
-        print(json.dumps(request_metrics.collect(paths), ensure_ascii=False) if a.json
-              else render(paths, a.days))
+    try:
+        if a.tasks or a.json:
+            collect = task_metrics.collect if a.tasks else request_metrics.collect
+            output = traffic_purpose.annotate(paths, a.evaluation_report, collect)
+            print(json.dumps(output, ensure_ascii=False))
+        else:
+            known, unannotated, evidence = traffic_purpose.partition(paths, a.evaluation_report)
+            print(render(paths, a.days))
+            if a.evaluation_report:
+                print(f"已知评测 {len(known)} 份；未标注 {len(unannotated)} 份；"
+                      f"证据冲突 {evidence['conflicting_trace_files']} 份。"
+                      "未标注流量不等于真人流量。")
+                print(render(unannotated, a.days, scope="排除已知评测；其余未验证为真人"))
+    except (OSError, ValueError) as error:
+        ap.error(str(error))
     return 0
 
 
