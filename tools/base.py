@@ -12,6 +12,7 @@ import httpx
 from langchain_core.runnables.config import RunnableConfig
 
 # Load deployment settings before constructing module-level endpoints.
+from agent.identifiers import normalize_target_id as _as_article_id  # noqa: F401
 from config import settings as _settings
 
 # Request classification and bounded read retry; see tools/http_channel.py.
@@ -90,24 +91,23 @@ def _get(path: str, *, not_found_text: str = "",
 # Device tools and identity helpers.
 from tools.device import (  # noqa: E402,F401
     DEVICE_SERVICE_URL,
-    _device_get_user_id,
-    device_oled_display,
-    list_devices,
 )
 
 # Site information and page-command tools.
 from tools.site import (  # noqa: E402,F401
     IOT_ENABLED,
     IOT_NAV_PATH,
-    get_chat_history,
     get_current_time,
     get_site_map,
     nav_path_valid,
     nav_pure_path,
-    navigate_to,
-    toggle_dark_mode,
-    toggle_effect,
 )
+
+
+def _configured_user_id(config: RunnableConfig) -> int:
+    """Extract the configured actor; authorization remains with the verified scope check."""
+    return int(config.get("configurable", {}).get("user_id") or 0)
+
 
 # Authenticated reads use the requesting actor. The backend rechecks role and account state.
 
@@ -136,7 +136,7 @@ def _principal_get(path: str, config: RunnableConfig, *,
     never inspected to guess read/write intent. Transient failures are retried
     once unless the runtime stop signal is already set. Authorization denial,
     missing targets and malformed responses are typed and never retried."""
-    uid = _device_get_user_id(config)
+    uid = _configured_user_id(config)
     if uid <= 0:
         return unavailable(uid_msg)
     headers = {"Authorization": "Bearer " + host_credential(uid)}
@@ -216,7 +216,7 @@ def _principal_request(method: str, path: str, payload, config: RunnableConfig,
     statuses that cannot certify the outcome return an explicit unknown result;
     argument rejection and authorization denial are typed and say the change
     did not happen. Callers supply operation-specific identity wording."""
-    uid = _device_get_user_id(config)
+    uid = _configured_user_id(config)
     if uid <= 0:
         # Missing identity prevents the request from leaving this process.
         return unavailable(uid_msg)
@@ -243,7 +243,7 @@ def _own_write_guard(config: RunnableConfig) -> ToolResult | None:
 
     写操作最不该做的就是在没身份时猜"写给谁"（"我以为给谁写了"比"没写成"坏得多）。
     """
-    if _device_get_user_id(config) <= 0:
+    if _configured_user_id(config) <= 0:
         return unavailable(_NO_IDENTITY_WRITE)
     return None
 
@@ -293,14 +293,6 @@ _NOTICE_TARGET_REFUSALS = ("用户不存在", "该账号不能接收通知")
 
 
 # Article ID parsing is shared by article and current-user tools.
-def _as_article_id(value) -> int | None:
-    """实参 → 正整数 id；不合法 → None（调用方拒绝，不猜、不默认）。"""
-    if isinstance(value, bool) or value is None:
-        return None
-    if isinstance(value, int):
-        return value if value > 0 else None
-    s = str(value).strip()
-    return int(s) if s.isdigit() and int(s) > 0 else None
 
 
 from agent.domains.own_reads import get_inbox_overview  # noqa: E402,F401
@@ -313,24 +305,15 @@ from tools.board_moderation import (  # noqa: E402,F401
 from tools.notes import (  # noqa: E402,F401
     _NOTE_COUNT_KEYS,
     DOC_TYPE_CN,
-    _drop_dead_mine,
     _note_counts,
     _note_public_counts,
     _note_row_with_tag_names,
     _public_tag_index,
     _read_section,
     _slim_note_rows,
-    get_announcements,
     get_article_detail,
     get_blog_info,
     get_social_links,
-    get_top_notes,
-    list_categories,
-    list_guestbook,
-    list_my_board,
-    list_notes,
-    list_tags,
-    list_talks,
     rag_search,
     search_notes,
 )
@@ -346,7 +329,6 @@ from tools.own_data import (  # noqa: E402,F401
     _favorites_snapshot,
     add_favorite,
     list_my_favorites,
-    list_my_messages,
     remove_favorite,
 )
 
@@ -354,26 +336,13 @@ from tools.own_data import (  # noqa: E402,F401
 # ---------------------------------------------------------------------------
 
 _TOOL_REGISTRY = [
-    list_notes,
     search_notes,
     get_article_detail,
     rag_search,
-    get_top_notes,
-    list_categories,
-    list_tags,
-    get_announcements,
-    list_guestbook,
-    list_talks,
     get_blog_info,
     get_social_links,
     get_site_map,
-    get_chat_history,
     get_current_time,
-    navigate_to,
-    toggle_effect,
-    toggle_dark_mode,
-    list_devices,
-    device_oled_display,
     get_server_status,
     get_service_health,
     get_user_stats,
@@ -382,10 +351,8 @@ _TOOL_REGISTRY = [
     list_my_favorites,
     get_inbox_overview,
     list_notifications,
-    list_my_board,
     add_favorite,
     remove_favorite,
-    list_my_messages,
 ]
 def get_all_tools():
     """Return the list of all registered tools."""

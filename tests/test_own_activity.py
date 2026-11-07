@@ -147,13 +147,6 @@ def test_schema_rejects_bad_ranges_before_http(backend, tool, args):
     assert not backend["requests"]
 
 
-def test_legacy_history_entry_reads_records_instead_of_claiming_injected_context(backend):
-    from tools.site import get_chat_history
-
-    result = get_chat_history.invoke({}, config=config())
-    assert result.kind == "ok" and json.loads(str(result))["conversationId"] == 9
-    assert len(backend["requests"]) == 1
-
 
 def test_sync_entry_binds_current_conversation_to_native_history(backend, monkeypatch):
     from langchain_core.messages import AIMessage, HumanMessage

@@ -103,7 +103,7 @@ def device_oled_display(
     try:
         selected = _target(uid, device_id)
         headers = {
-            "Authorization": "Bearer " + device._sign_user_jwt(uid),
+            "Authorization": "Bearer " + device._actor_credential(uid),
             "X-Request-Id": uuid.uuid4().hex,
         }
         url = device.DEVICE_SERVICE_URL.rstrip("/") + f"/api/devices/{selected}/cmd"

@@ -1,20 +1,17 @@
 # -*- coding: utf-8 -*-
-"""Site guide, navigation metadata and page commands."""
+"""Site guide, clock and actor-scoped navigation metadata."""
 
 import json
-from typing import Annotated, Literal
 from urllib.parse import unquote, urlsplit
 
 from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import tool
 
 from config import settings as _settings
-from tools.result import ToolResult, fact, ok, tgt
+from tools.result import ToolResult, ok
 
-__all__ = ["get_site_map", "get_chat_history", "get_current_time",
-           "IOT_ENABLED", "IOT_NAV_PATH", "nav_pure_path", "nav_path_valid",
-           "navigate_to", "toggle_effect", "toggle_dark_mode", "nav_label", "public_navigation",
-           "navigation_paths"]
+__all__ = ["get_site_map", "get_current_time", "IOT_ENABLED", "IOT_NAV_PATH", "nav_pure_path",
+           "nav_path_valid", "nav_label", "public_navigation", "navigation_paths"]
 
 
 @tool
@@ -48,16 +45,6 @@ def get_site_map(config: RunnableConfig) -> ToolResult:
 
 
 @tool
-def get_chat_history(
-    config: RunnableConfig,
-    limit: Annotated[int, "Number of recent messages, from 1 to 10"] = 5,
-) -> object:
-    """Read actual text history within the current verified conversation."""
-    from agent.domains.own_activity import get_chat_history as read_history
-    return read_history.invoke({"limit": limit}, config=config)
-
-
-@tool
 def get_current_time() -> str:
     """Get current date and time."""
     from utils.clock import format_local_now
@@ -75,8 +62,6 @@ _NAV_EXACT_PATHS = {
 }
 _NAV_PREFIX_PATHS = ("/category/", "/article/")
 
-# Full-page navigation must wait until the reply has finished streaming.
-_NAV_WHOLE_PAGE_PATHS = {IOT_NAV_PATH} if IOT_ENABLED else set()
 
 _NAV_LABELS = {
     "/": "首页",
@@ -161,69 +146,3 @@ _ITEM_POSITION_FORMS: tuple[tuple[str, str, str], ...] = (
     ("说说", "/talk?tk=<说说 id>",
      "`tk` = 那条说说的 `talkId`（说说列表帧里的那一列）"),
 )
-
-
-@tool
-def navigate_to(
-    path: Annotated[str, "Page path to navigate to, e.g. / /times /category/tech "
-                         "/article/3 /talk /guestbook /about /dashboard/notes"],
-    confirm: Annotated[bool, "Whether user confirmation is needed. "
-                              "false=direct nav, true=ask user"] = True,
-) -> str | ToolResult:
-    """Send a validated navigation command in the execution receipt."""
-    p = path.strip()
-    if not nav_path_valid(p):
-        return (f"导航路径无效: {p!r}。可用页面: {', '.join(sorted(_NAV_EXACT_PATHS))}，"
-                "以及 /article/<正整数编号>、/category/<分类名>；请从站点资料或真实链接核对。")
-    from tools.base import SITE_BASE
-
-    full_url = f"{SITE_BASE.rstrip('/')}{p}"
-    mode = "confirm" if confirm else "direct"
-    if confirm:
-        return ok(f"导航已发起，等主人确认后才会跳转：{full_url}",
-                  meta=fact("navigate", changed=True, target=tgt("page", None, p),
-                            before="当前页", after="页面已跳转",
-                            cmd={"kind": "navigate", "url": full_url, "mode": mode}))
-    if nav_pure_path(p) in _NAV_WHOLE_PAGE_PATHS:
-        return ok(f"页面即将跳转：{full_url}（本条回复说完再跳）",
-                  meta=fact("navigate", changed=True, target=tgt("page", None, p),
-                            before="当前页", after="页面即将跳转",
-                            cmd={"kind": "navigate", "url": full_url, "mode": mode}))
-    return ok(f"页面已跳转：{full_url}",
-              meta=fact("navigate", changed=True, target=tgt("page", None, p),
-                        before="当前页", after="页面已跳转",
-                        cmd={"kind": "navigate", "url": full_url, "mode": mode}))
-
-@tool
-def toggle_effect(
-    effect: Annotated[Literal["sakura", "rain", "snow"],
-                      "Effect name: sakura(樱花), rain(大雨), snow(雪花)"],
-    action: Annotated[Literal["on", "off"], "开启还是关闭: on(开启), off(关闭)"] = "on",
-) -> str | ToolResult:
-    """生成博客特效的显式开关指令（樱花、大雨或雪花）；参数错误时不生成指令。"""
-    if effect not in ("sakura", "rain", "snow"):
-        return f"效果无效: {effect!r}。可选: sakura(樱花), rain(大雨), snow(雪花)"
-    if action not in ("on", "off"):
-        return (
-            f"action 无效: {action!r}。可选: on(开启), off(关闭)。"
-            f"查询效果当前状态请以对话上下文中的 current_effects 字段为准，无需调用工具。"
-        )
-    _cn = {"sakura": "樱花", "rain": "大雨", "snow": "雪花"}[effect]
-    return ok(f"特效 {_cn}({effect}) 已{'打开' if action == 'on' else '关闭'}",
-              meta=fact("toggle_effect", changed=True, target=tgt("page", None, effect),
-                        before="原状态", after="开" if action == "on" else "关",
-                        cmd={"kind": "effect", "effect": effect, "action": action}))
-
-
-@tool
-def toggle_dark_mode(
-    mode: Annotated[Literal["on", "off"], "夜间模式开关: on(开启夜间模式), off(关闭夜间模式)"],
-) -> str | ToolResult:
-    """开启或关闭博客页面的夜间模式（暗色主题）。
-    系统按本工具的执行回执驱动前端切换；状态会持久化记忆。"""
-    if mode in ("on", "off"):
-        return ok(f"夜间模式已{'打开' if mode == 'on' else '关闭'}",
-                  meta=fact("toggle_dark_mode", changed=True, target=tgt("page", None, "夜间模式"),
-                            before="原状态", after="开" if mode == "on" else "关",
-                            cmd={"kind": "darkmode", "mode": mode}))
-    return "模式参数无效，应为 on 或 off"

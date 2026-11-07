@@ -40,14 +40,14 @@ def test_no_login_key_or_self_signing_fallback(monkeypatch):
     with pytest.raises(PermissionError):
         base.host_credential(7)
     with pytest.raises(PermissionError):
-        device._sign_user_jwt(7)
+        device._actor_credential(7)
 
 
 def test_forwarding_preserves_host_signature_and_actor_across_threads():
     token = capability()
     delegation.accept(7, token)
     assert base.host_credential(7) == token
-    assert device._sign_user_jwt(7) == token
+    assert device._actor_credential(7) == token
     assert asyncio.run(asyncio.to_thread(delegation.credential, 7)) == token
     with pytest.raises(ValueError):
         delegation.credential(8)
