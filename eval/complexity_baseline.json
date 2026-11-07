@@ -1,7 +1,7 @@
 {
-  "agent/action_text.py::_arm_text": {
-    "c": 197,
-    "lines": 370
+  "agent/action_text.py::_operation_text": {
+    "c": 196,
+    "lines": 319
   },
   "eval/admin_write_probe.py::main": {
     "c": 32,
@@ -17,11 +17,11 @@
   },
   "eval/admin_write_probe.py::step17_auth_review": {
     "c": 160,
-    "lines": 295
+    "lines": 291
   },
   "eval/admin_write_probe.py::step18_ledger_zero_write": {
     "c": 92,
-    "lines": 185
+    "lines": 184
   },
   "eval/admin_write_probe.py::step8_popup_write": {
     "c": 40,
@@ -31,25 +31,9 @@
     "c": 39,
     "lines": 76
   },
-  "eval/landing_gate.py::readiness": {
-    "c": 32,
-    "lines": 46
-  },
-  "eval/run_golden.py::check_gold": {
+  "eval/golden_evaluation.py::check_gold": {
     "c": 242,
-    "lines": 376
-  },
-  "eval/run_golden.py::check_no_popup_premises": {
-    "c": 32,
-    "lines": 56
-  },
-  "eval/run_golden.py::main": {
-    "c": 245,
-    "lines": 718
-  },
-  "eval/run_golden.py::run_one": {
-    "c": 55,
-    "lines": 147
+    "lines": 375
   },
   "eval/trace_reconcile.py::reconcile": {
     "c": 72,
@@ -91,10 +75,6 @@
     "c": 57,
     "lines": 156
   },
-  "tests/test_golden_rerun_offline.py::test_golden_rerun_offline": {
-    "c": 60,
-    "lines": 179
-  },
   "tests/test_graph_build.py::test_graph_build": {
     "c": 40,
     "lines": 233
@@ -102,14 +82,6 @@
   "tests/test_judge_offline.py::main": {
     "c": 75,
     "lines": 165
-  },
-  "tests/test_landing_gate.py::_test_enterprise_criteria": {
-    "c": 42,
-    "lines": 120
-  },
-  "tests/test_note_tags_codec.py::test_note_tags_codec": {
-    "c": 44,
-    "lines": 101
   },
   "tests/test_packaging.py::test_packaging": {
     "c": 115,
@@ -131,10 +103,6 @@
     "c": 31,
     "lines": 126
   },
-  "tests/test_tag_color_tables.py::test_tag_color_tables": {
-    "c": 59,
-    "lines": 110
-  },
   "tests/test_trace_retention.py::main": {
     "c": 47,
     "lines": 164
@@ -144,15 +112,7 @@
     "lines": 351
   },
   "tests/test_wordlist_gate.py::test_wordlist_gate": {
-    "c": 59,
+    "c": 58,
     "lines": 269
-  },
-  "tests/test_write_param_words.py::test_write_param_words": {
-    "c": 33,
-    "lines": 118
-  },
-  "tools/device.py::device_oled_display": {
-    "c": 33,
-    "lines": 111
   }
 }

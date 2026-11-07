@@ -233,7 +233,7 @@ def render(i: int) -> str:
     _d3 = pathlib.Path(tempfile.mkdtemp(prefix="wlreal_"))
     _real = json.loads(REGISTRY.read_text(encoding="utf-8"))
     _registered_ids = [e["id"] for e in _real["entries"]]
-    check("⑦a 真登记表里有条目可做缺失和增长反控", len(_registered_ids) >= 2, f"{len(_registered_ids)} 条")
+    check("⑦a 登记条目足够做反控", len(_registered_ids) >= 2, f"{len(_registered_ids)} 条")
     _dropped = {**_real, "entries": [e for e in _real["entries"] if e["id"] != _registered_ids[0]]}
     _rc, _out = run(_g, ROOT, write_reg(_d3, _dropped, "_drop.json"))
     check("⑦b 撤掉一条登记 ⇒ 退 1 且点名同一符号",
