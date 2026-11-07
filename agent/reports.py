@@ -12,29 +12,20 @@ from typing import TypedDict
 
 from agent import hostinfo as H
 
-# 报表总长上限（进 prompt 的文本，别让一张报表把上下文挤掉）
+# Bound report text supplied to the model.
 MAX_REPORT_CHARS = 2400
 
-# 模块头注说的那个前缀词表：与前端 `chat-core.js` 的 `COMMAND_RE` 同源同序。
-# `[A-Za-z0-9_]*EFFECT` 是为了覆盖 `SNOW_EFFECT:` 这类幻觉变体（前端也这么写）。
+# Break command-shaped prefixes in untrusted report fields, including EFFECT variants.
 _CMD_WORD_RE = re.compile(
     r"(?i)\b(?:[A-Za-z0-9_]*EFFECT|DARKMODE|NAVIGATE|AUTO_NAVIGATE|SUMMARY|\[?System\]?)"
     r"\s*[:：]")
 
-# 零宽空格（U+200B）：肉眼不可见，但**不是** Unicode 空白（`'​'.isspace()` 为
-# False，Python 与 JS 的 `\s` 都不匹配它），所以夹在命令词与冒号之间能让两侧正则
-# 全部失配。内容照旧可读、可复制，只是不再是一条命令。
-_ZWSP = "\u200b"  # 显式转义：源码里不留不可见字符
+# U+200B is not whitespace, so it breaks the prefix without matching a \s separator.
+_ZWSP = "\u200b"
 
 
 def sanitize_untrusted(text: str, limit: int = 40) -> str:
-    """访客可控文本 → 可安全放进工具帧的一行。
-
-    三件事：换行折叠（防它自己占一行被行首锚定的正则捞到）、长度截断、
-    **打断命令前缀**（在命令词与冒号之间插零宽空格，见 `_ZWSP` 的注释）。
-
-    刻意保留其余原样：这是给人看的举报线索，不是要清洗成安全 HTML。
-    """
+    """Collapse lines, bound length and break command prefixes; this is not HTML escaping."""
     s = re.sub(r"\s+", " ", text or "").strip()
     s = _CMD_WORD_RE.sub(lambda m: m.group(0).replace(":", _ZWSP + ":").replace("：", _ZWSP + "："), s)
     if limit > 0 and len(s) > limit:
@@ -52,7 +43,7 @@ def _ts(now: datetime | None = None) -> str:
     return (now or datetime.now()).strftime("%Y-%m-%d %H:%M")
 
 
-# ── 报表 ①：服务器状态 ───────────────────────────────────────────────
+# Server status
 
 class ServerStatusKw(TypedDict):
     """Shared keyword arguments for the server-status renderer and tool result."""
@@ -109,7 +100,7 @@ def render_server_status(*, cpu_pct: float | None, cores: int,
     return _cap("\n".join(lines))
 
 
-# ── 报表 ②：服务健康 ─────────────────────────────────────────────────
+# Service health
 
 def render_service_health(*, services: list[tuple[str, dict]], health: dict,
                           traces: dict, sizes: list[dict],
@@ -171,26 +162,16 @@ def _short_health_line(line: str) -> str:
     return line[:80]
 
 
-# ── 报表 ③：评论（河灯留言）审核状况 ────────────────────────────────
-#
-# Match the backend moderation fields (approved, ai_result):
-#   · ai_result=pass   ：AI 判通过 → approved=1（无人工闸）或 0（人工闸开着 ⇒ 仍要人看）
-#   · ai_result=reject ：AI 判驳回 → approved=2（直接驳回）或 0（人工闸开着）
-#   · ai_result=flag   ：AI 存疑 → 一律 approved=0
-#   · ai_result=NULL   ：没走 AI（AI 闸关 / agent 不可用降级）→ 1 或 0
-# 人工后续裁决**只写 approved、不改写 ai_result**（`audit_board`），所以
-# `ai_result=reject 且 approved=1` 是"AI 驳回但被人改判放行"的实证，不是脏数据。
-#
-# AI verdict and human approval are separate dimensions; report both.
+# Moderation status: approved is the final state; ai_result is the recorded AI verdict.
+# A later review can change approved without changing ai_result.
 
 APPROVED_PENDING, APPROVED_OK, APPROVED_REJECT = 0, 1, 2
 
-# 明细每条列出多少行：默认报表三类各列几条（其余只计数），
-# `status` 聚焦某一类时把这一类放开（见 render_moderation_status）
+# A focused category allows more rows; counts remain independent of the displayed details.
 MAX_LIST_DETAIL = 5
 MAX_FOCUS_DETAIL = 20
 
-# 聚焦参数 → (键, 报表里的名字)。键与工具参数同源（tools.base.get_moderation_status）
+# Keys match the moderation tool's focus parameter.
 FOCUS_NAMES = {
     "ai_passed": "AI 直接通过",
     "ai_rejected": "AI 驳回",
@@ -228,24 +209,16 @@ def _detail_line(r: dict, extra: str = "") -> str:
 
 
 def _ai_bucket(v) -> str:
-    """ai_result → 四态之一（认不出的值按"未审"——与既有取向一致，不新造桶）。"""
+    """Map a recorded AI verdict to its bucket; unknown values have no recognized verdict."""
     return v if v in ("pass", "reject", "flag") else "none"
 
 
 def render_moderation_status(rows: list[dict], status: str | None = None,
                              now: datetime | None = None) -> str:
-    """`GET /api/protect/board` 的返回 → 审核状况报表。
+    """Render independent final-status and AI-verdict counts from protected board rows.
 
-    先给两张计数（人工侧三态 / AI 侧四态），再列**三份名单**——它们按主人问问题
-    的方式切分，因此**口径不同、可以重叠**（一条"AI 驳回且还等人复批"的留言会
-    同时出现在②③），报表里把这件事写明，免得被读成加法：
-
-      ① AI 直接通过：`ai_result=pass` 且 `approved=1`（没经过人）
-      ② AI 驳回    ：`ai_result=reject`（不论人工后续维持 / 改判 / 还等着）
-      ③ 需要人工复批：`approved=0`（不论 AI 判了什么）
-
-    `status` 给其中之一（`FOCUS_NAMES` 的键）时，只有这一类展开明细（放宽到
-    `MAX_FOCUS_DETAIL` 条），另两类只留计数——"把被驳回的都列出来"这类追问靠它。
+    Detail groups may overlap: pass+approved, AI reject, and pending final status.
+    A focus expands one group's details without changing the other groups' counts.
     """
     rows = rows or []
     focus = status if status in FOCUS_NAMES else None
@@ -262,8 +235,7 @@ def render_moderation_status(rows: list[dict], status: str | None = None,
     lines.append(f"- AI 侧判定：通过 {ai['pass']}、驳回 {ai['reject']}、"
                  f"存疑转人工 {ai['flag']}、未走 AI {ai['none']}")
 
-    # 三份名单（口径见 docstring）。`ai_passed` 刻意要求 approved=1：AI 判 pass 但
-    # 人工闸开着时那条**并没有直接露出**，它在③里等人工，混进①会让主人以为没人看过。
+    # A pass verdict with pending final status belongs only in the pending group.
     ai_passed = [r for r in rows if r.get("ai_result") == "pass" and r.get("approved") == APPROVED_OK]
     ai_rejected = [r for r in rows if r.get("ai_result") == "reject"]
     keep_rej = [r for r in ai_rejected if r.get("approved") == APPROVED_REJECT]
@@ -308,8 +280,7 @@ def render_moderation_status(rows: list[dict], status: str | None = None,
             lambda r: {"flag": "AI存疑", "pass": "AI已过待人工", "reject": "AI驳回待人工"}
             .get(r.get("ai_result"), "AI未审"))
 
-    # 分歧实证：AI 判过但被人驳回（漏放）、AI 判驳但被人放行（误伤）——两条都是
-    # 复盘 AI 判定质量的**证据**（只有人工侧真裁过才会有，不含仍待审的）。
+    # Disagreements compare the recorded AI verdict with a nonpending final status.
     missed = [r for r in rejected if r.get("ai_result") == "pass"]
     lines.append(f"- 分歧实证（人工已经裁过的）：AI 放过但被人驳回 {len(missed)} 条；"
                  f"AI 驳回但被人放行 {len(open_rej)} 条")
@@ -329,17 +300,17 @@ def render_moderation_status(rows: list[dict], status: str | None = None,
     return _cap("\n".join(lines))
 
 
-# 后台名册保留发表账号；公开留名不能用于核实身份。
-# 名册的行数上限：与字符预算谁先到算谁（见 render_board_roster 的循环）。
+# Administrator rosters preserve account identity separately from the public signature.
+# Both the row count and character budget bound displayed details.
 BOARD_ROSTER_LIMIT = 20
 
-# 关键词**筛空**时补印的最近条数（见 render_board_roster "筛空"分支）。
+# Recent rows may be shown separately when a keyword yields no match.
 BOARD_ROSTER_FALLBACK = 5
 
 
 def _roster_line(r: dict) -> str:
     """Render account identity separately from the optional public signature."""
-    from tools.base import BOARD_APPROVED_CN        # 一处实现（tools/base.py，写路径同源）
+    from tools.base import BOARD_APPROVED_CN
     state = BOARD_APPROVED_CN.get(r.get("approved"), "状态未知")
     sign = sanitize_untrusted(r.get("author") or "", 16)
     body = sanitize_untrusted(r.get("content") or "", 30)
@@ -351,21 +322,11 @@ def _roster_line(r: dict) -> str:
 
 def render_board_roster(rows: list[dict], *, approved: int | None = None,
                         keyword: str | None = None) -> str:
-    """`GET /api/protect/board` 的返回 → **逐条名册**（含发表账号，可筛选）。
+    """Render protected board rows with normalized status and substring filters.
 
-    `approved` 传 0/1/2 只看某一类审核状态（调用方负责把实参归一成这三个值之一，
-    认不出的实参**传 None**——本函数不猜它想筛哪一类）；`keyword` 在正文、留名、
-    账号昵称/用户名里做不区分大小写的子串匹配。
-
-    两条纪律：
-      · **读不到 ≠ 没有**：`rows` 为空由调用方处理（那是"一条留言都没有"），本函数
-        只负责"读到了、按条件筛"——所以筛选结果为空时明说**筛掉了多少**，
-        绝不说成"站内没有"（同 gate 洞④ 的供体）。
-      · **打印实际生效的条件**：抬头逐字写出这次筛了什么，读的人（与模型）才不会
-        把"我筛过的那一类"说成"站里就这些"。
-      · **筛空要给出路**：只有关键词把结果筛空时，补印**不带关键词**的最近
-        `BOARD_ROSTER_FALLBACK` 条（状态筛选仍生效）并明说"它们不符合上面的关键词"
-        ——空手而归的读法只剩"凭旧印象猜"这一条路（见该分支的 trace 注释）。
+    Caller handles empty input and normalizes approved to 0/1/2 or None.
+    State applied filters and distinguish no match from no site data. Recent
+    keyword-free fallback rows retain the status filter and are labelled nonmatches.
     """
     rows = rows or []
     kw = (keyword or "").strip()
@@ -419,8 +380,7 @@ def render_board_roster(rows: list[dict], *, approved: int | None = None,
     lines = list(head)
     for r in hits[:BOARD_ROSTER_LIMIT]:
         line = _roster_line(r)
-        # 字符预算（与条数上限谁先到算谁）：宁可少列几行并如实说"另有 N 条"，也不要
-        # 让 _cap 把名册切成半截（半截的名单读起来像"就这些"，而它其实是被截断的）。
+        # Leave room for the omitted-row count instead of truncating a roster row.
         if len("\n".join(lines + [line])) > MAX_REPORT_CHARS - 200:
             break
         lines.append(line)
@@ -431,19 +391,15 @@ def render_board_roster(rows: list[dict], *, approved: int | None = None,
 
 
 def short_time(raw) -> str:
-    """`2026-09-21 12:40:01` → `09-21 12:40`（认不出就空串）。"""
+    """Return compact timestamp text, preserving inputs shorter than a full timestamp."""
     s = str(raw or "")
     return s[5:16] if len(s) >= 16 else s[:16]
 
 
-# ── 报表 ④：用户数据 ────────────────────────────────────────────────
+# User activity
 
 def render_user_stats(data: dict, now: datetime | None = None) -> str:
-    """`GET /api/protected/stats/users` 的返回 → 用户数据报表。
-
-    ⚠️ **总数/活跃数一律用服务端聚合值，不要拿 `users[]` 重算**：那个列表封顶
-    50 行（见 `routes/stats.rs`），重算会把一个 200 人的站报成 50 人。
-    """
+    """Render backend user totals; the bounded detail list cannot determine site totals."""
     data = data or {}
     lines = [f"用户数据报表（{_ts(now)}，生成于 {data.get('generatedAt') or '未知'}）"]
     roles = "、".join(f"{r.get('role')} {r.get('count')}"
@@ -472,46 +428,26 @@ def render_user_stats(data: dict, now: datetime | None = None) -> str:
     return _cap("\n".join(lines))
 
 
-# ── Article traffic ─────────────────────────────────────────────
-# 数据源 = `GET /api/protected/stats/notes`（`src/routes/note_stats.rs`），口径三条
-# 全在那个文件的模块头注里：只算**当前可见**的文章、三个榜**数组顺序即名次**（后端
-# 没有 rank 字段，序号由这里按下标印）、`daily` 已补零成定长 30 天。
-#
-# 为什么要在这里把"第 N 名"印出来：主人问的是"排名前几的文章都排第几"——位置就是
-# 答案本身。把数组丢给 narrator 让它自己数下标，等于把"数数"这件会出错的事交给它
-# （与"数字在工具侧算好"同一条纪律，见模块头注）。
-
-# 榜单长度 = Rust `note_stats::TOP_N`（**同值契约**，tests/test_note_stats.py 直接
-# 读父仓源码对账）。它决定报表里那句"下列前 N 名"怎么写，改一侧必须同步另一侧。
+# Article traffic counts currently visible articles. Backend array order defines rank.
+# Keep the displayed ranking limit aligned with Rust note_stats::TOP_N.
 _RANK_TOP = 10
 
-# 一行的三个计数：键名（跨语言契约）→ 中文量词。顺序 = 报表里的展示顺序。
+# Metric keys and labels in display order.
 _COUNT_WORDS = (("views", "阅读"), ("likes", "点赞"), ("favorites", "收藏"))
 
-# 合计那三个数是**另一套键名**（`totalViews` …），不能与行内的共用一份：
-# 拿行里的键去取合计会一个也取不到——而它静默（`data.get` 返回 None），
-# 报表上就只剩一句"本次没读到合计值"。
+# Aggregate fields use different keys from per-article counters.
 _TOTAL_WORDS = (("totalViews", "阅读"), ("totalLikes", "点赞"), ("totalFavorites", "收藏"))
 
 
 def _count_int(v) -> int | None:
-    """一个计数 → int；**认不出就是 None**（调用方据此整段不印，绝不印成 0）。
-
-    报表里印出来的每个数都会被 narrator 当成事实转述，所以"没有这个数"与
-    "这个数是 0"必须分得开（同 `notes.rs` 的 `Option` + `skip_serializing_if`）。
-    `bool` 显式排除：它是 `int` 的子类，`True` 会被放行成 1。
-    """
+    """Return an integer counter or None; booleans and absent counts are not zero."""
     if isinstance(v, bool) or not isinstance(v, (int, float)):
         return None
     return int(v)
 
 
 def _counts_text(row: dict, first: str = "") -> str:
-    """一行的三个计数 → `阅读 120／点赞 8／收藏 2`（认不出的那些整个不出现）。
-
-    `first` 是这一行的榜按哪个数排（那个数排到最前）——读的人（与看板娘）先看到的
-    是排序依据，"第 3 名"后面紧跟的数就是它的名次依据。
-    """
+    """Render available counters with the ranking metric first."""
     keys = [k for k, _ in _COUNT_WORDS]
     if first in keys:
         keys.remove(first)
@@ -526,21 +462,13 @@ def _counts_text(row: dict, first: str = "") -> str:
 
 
 def _rank_block(head: str, rows: list | None, metric: str) -> list[str]:
-    """一个榜 → 行列表。`rows` 的顺序就是名次（后端已排好，这里只按下标编号）。
-
-    **榜名的量词要进每一行**（`阅读榜` 的行里第一项也是"阅读 N"）：同一篇文章在
-    两个榜上的名次可以不同，只印数字不印维度，看的人会把两个榜串成一串。
-
-    ⚠️ `rows is None`（键不在/是 null）与 `rows == []` 是**两件事**，话必须分开：
-    前者是"这一项这次没读到"（老后端 / 报表被裁），后者是"真的没人读过"。
-    把前者说成后者，就是替站内下一个**"没有"的结论**（gate 洞④ 的供体）。
-    """
+    """Render ranks in backend order and distinguish missing data from an empty ranking."""
     word = dict(_COUNT_WORDS)[metric]
     if rows is None:
         return [f"- {head}：本次没读到（后台没有返回这一项）"]
     if not rows:
         return [f"- {head}：全站没有任何文章有{word}记录"]
-    # 后端最多给 TOP_N 行：正好给满时**不能**说成"全站就这些"（可能有第 11 名没给）
+    # A full bounded ranking does not establish the site-wide article count.
     scope = (f"下列前 {len(rows)} 名，报表最多只列到这里"
              if len(rows) >= _RANK_TOP else f"全站共 {len(rows)} 篇有{word}记录")
     lines = [f"- {head}（按{word}量倒序，{scope}）:"]
@@ -582,7 +510,7 @@ def render_note_stats(data: dict, now: datetime | None = None) -> str:
     lines += _rank_block("历史累计点赞榜", data.get("topLiked"), "likes")
     lines += _rank_block("历史累计收藏榜", data.get("topFavorited"), "favorites")
 
-    # `daily` 同样三态：没读到 / 读到但全是零 / 读到且有数（见 `_rank_block` 注）
+    # Missing daily data differs from a measured all-zero series.
     daily = data.get("daily")
     lines += _daily_window_lines(data.get("dailyWindow"))
     hit = [d for d in (daily or [])
@@ -610,25 +538,10 @@ def render_note_stats(data: dict, now: datetime | None = None) -> str:
     return _cap("\n".join(lines))
 
 
-# ── Article publication periods ─────────────────────────────────
-# 数据源 = `GET /api/protected/stats/notes/periods`（`src/routes/note_stats.rs`）。
-# 与上面那张快照报表**三条口径同源**（只算当前可见文章、名次=数组顺序、缺键 ≠ 0），
-# 多出来的是**期**这一层，于是多出两条判据：
-#
-#   · **期界**：每期是闭区间 [start, end]，必须印出来——"上周"在主人嘴里与他心里
-#     未必是同一个七天，而模型的下一步动作就是念着这一行回答他；
-#   · **`partial` 是真话的一部分**：统计功能的起点落在某一期中间时，那一期只统计了
-#     部分天数（`partial=true`）。不写它，"上线那一周只有两天数据"会被读成"那周流量
-#     掉了"——这正是"缺数 ≠ 零"，只不过量词换成了"期"。
-#
-# 以及一条**口径事实**要写进帧里：每期的合计算的是**本期全量**，而榜只列前 N 篇
-# （加起来必然比合计小）；名次是**本期阅读量**序，期与期各自独立（同一篇文章在两期
-# 里的名次没有关系）。
-_PERIOD_TOP = 5      # = Rust `note_stats::PERIOD_TOP_N`（**同值契约**，见
-                     # tests/test_note_stats.py ⑨——改一侧必须同步另一侧）
-# 粒度 → 中文纸名。**唯一一份**：动作行（`agent/action_text.py`）也从这里取——
-# 两处各抄一份的话，「行里写的是月报、帧里印的是周报」这种偏差没有任何测试能发现
-# （同 `BOARD_APPROVED_CN` 那条"别在这里再抄"的纪律）。
+# Publication periods use inclusive start/end bounds and explicit partial coverage.
+# Backend totals cover the whole period; bounded ranks cover only its top articles.
+_PERIOD_TOP = 5  # Rust note_stats::PERIOD_TOP_N.
+# Shared with action_text so operation labels and report titles use the same granularity.
 _KIND_CN = {"week": "周报", "month": "月报", "year": "年报"}
 
 
@@ -637,25 +550,19 @@ def _period_line(p: dict) -> str:
     label = str(p.get("label") or p.get("key") or "?")
     span = f"（{short_time(p.get('start'))} ~ {short_time(p.get('end'))}）"
     counts = _counts_text(p, first="views") or "本次没读到合计"
-    # `partial` 只认真正的 True：认不出（后端没这个键）就**不写**这一句，
-    # 而不是默认写"完整"——"不完整"是缺数，"完整"是一个并不存在的断言。
+    # Only an explicit true establishes partial coverage; absence does not mean complete.
     flag = "，**本期不完整**（统计起点落在本期中间，只统计了部分天数）" \
         if p.get("partial") is True else ""
     return f"- {label}{span}{counts}{flag}"
 
 
 def render_note_periods(data: dict, now: datetime | None = None) -> str:
-    """`GET /api/protected/stats/notes/periods` 的返回 → 分期报表。
-
-    ⚠️ 每期的合计一律用服务端算好的值，**不要拿该期的榜相加**：榜截到前 N 篇，
-    那一和只等于前 N 篇（Rust 侧为此专门不这么算，见 `note_period_report` 的注）。
-    """
+    """Render backend period totals and rankings without summing the bounded top list."""
     data = data or {}
     kind_cn = _KIND_CN.get(str(data.get("kind")), str(data.get("kind") or "分期"))
     lines = [f"文章{kind_cn}（{_ts(now)}，生成于 {data.get('generatedAt') or '未知'}）"]
 
-    # `since` 三态：**没读到这个键**（老后端/被裁）/ 是 null（一行记录都还没有）/
-    # 有值（统计起点）。前两者的话不一样：null 是上游明说的"还没开始统计"。
+    # Missing since is unavailable; null explicitly means recording has not started.
     since = data.get("since", "absent")
     if since == "absent":
         lines.append("- 统计起点：本次没读到（后台没有返回这一项）")
@@ -670,7 +577,7 @@ def render_note_periods(data: dict, now: datetime | None = None) -> str:
         lines.append("- 分期明细：本次没读到（后台没有返回这一项）")
         return _cap("\n".join(lines))
     if not isinstance(periods, list) or not periods:
-        # 与 `since is None` 分开说：这里起点是有的，只是**没有一期落在起点之后**。
+        # A known start can still have no subsequent periods.
         if since not in ("absent", None):
             lines.append(f"- 分期明细：**没有一期落在统计起点（{since}）之后**，"
                          f"报表给不出任何一期")
