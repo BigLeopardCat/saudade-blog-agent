@@ -286,7 +286,8 @@ def test_real_sdk_followup_retains_domain_schema_and_independent_task_budget(
         (tmp_path / "wire-cost.json").write_text(json.dumps(cost))
 
 
-def test_real_sdk_keeps_the_entire_schema_prefix_across_different_read_tools():
+@pytest.mark.parametrize("provider", ["openai", "deepseek"])
+def test_real_sdk_keeps_the_entire_schema_prefix_across_different_read_tools(provider, monkeypatch):
     from hashlib import sha256
 
     from _framework_fixture import call as wire_call
@@ -313,6 +314,14 @@ def test_real_sdk_keeps_the_entire_schema_prefix_across_different_read_tools():
     saver = InMemorySaver()
 
     def selected(model):
+        if provider == "deepseek":
+            from models.deepseek import DeepSeekChat
+
+            monkeypatch.setattr("config.settings.llm_provider", "opencode")
+            model = get_llm(model="deepseek-v4.1-flash", api_key="synthetic",
+                base_url="https://model.fixture.test/v1", http_client=model.http_client,
+                streaming=True, stream_usage=True, max_tokens=128, enable_thinking=False)
+            assert isinstance(model, DeepSeekChat)
         return AgentRuntime(CheckpointConversationStore(saver),
                             application=BlogApplication(Catalog()), model_factory=lambda **_: model)
 

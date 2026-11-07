@@ -134,8 +134,9 @@ def test_execution_instructions_are_system_policy_and_not_quoted_capability_data
     assert "guidance" not in facts["tools"]
 
 
+@pytest.mark.parametrize("provider", ["openai", "deepseek"])
 def test_same_agent_delivers_read_facts_after_preparation_without_execution_or_schema_change(
-    monkeypatch, tmp_path
+    monkeypatch, tmp_path, provider
 ):
     from _framework_fixture import call as wire_call
     from _framework_fixture import model_replies
@@ -157,6 +158,15 @@ def test_same_agent_delivers_read_facts_after_preparation_without_execution_or_s
                 {"tool_calls": [wire_call("prepare_notification_read", "prepare",
                                          scope="selected", ids=[101, 102])]},
                 {"content": summary}) as (model, requests):
+            if provider == "deepseek":
+                from models.deepseek import DeepSeekChat
+                from models.llm import get_llm
+
+                monkeypatch.setattr("config.settings.llm_provider", "opencode")
+                model = get_llm(model="deepseek-v4.1-flash", api_key="synthetic",
+                    base_url="https://model.fixture.test/v1", http_client=model.http_client,
+                    streaming=True, stream_usage=True, max_tokens=128, enable_thinking=False)
+                assert isinstance(model, DeepSeekChat)
             budget = TaskBudget()
             selected = AgentRuntime(
                 CheckpointConversationStore(InMemorySaver()),
