@@ -2,7 +2,16 @@
 
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictInt, StrictStr, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    StrictBool,
+    StrictFloat,
+    StrictInt,
+    StrictStr,
+    model_validator,
+)
 
 from agent.domains.article_metadata import tag_references
 from rag import sections
@@ -27,6 +36,25 @@ class Source(BaseModel):
     section_id: Annotated[StrictStr, Field(pattern=r"^(?:s[1-9][0-9]*)?$")]
     offset: Count
     end: Count
+
+
+class DisplayMetadata(BaseModel):
+    authorName: Annotated[StrictStr, Field(max_length=80)] | None = None
+    authorNameTruncated: StrictBool | None = None
+    authorAvatar: Annotated[StrictStr, Field(max_length=2048)] | None = None
+    authorAvatarTruncated: StrictBool | None = None
+    description: Annotated[StrictStr, Field(max_length=2000)] | None = None
+    descriptionTruncated: StrictBool | None = None
+    cover: Annotated[StrictStr, Field(max_length=2048)] | None = None
+    coverTruncated: StrictBool | None = None
+    coverFit: Literal["cover", "contain"] | None = None
+    carouselFit: Literal["cover", "contain"] | None = None
+    coverFocusX: Annotated[StrictFloat, Field(ge=0, le=1, allow_inf_nan=False)] | None = None
+    coverFocusY: Annotated[StrictFloat, Field(ge=0, le=1, allow_inf_nan=False)] | None = None
+    coverZoom: Annotated[StrictFloat, Field(ge=1, le=4, allow_inf_nan=False)] | None = None
+    carouselFocusX: Annotated[StrictFloat, Field(ge=0, le=1, allow_inf_nan=False)] | None = None
+    carouselFocusY: Annotated[StrictFloat, Field(ge=0, le=1, allow_inf_nan=False)] | None = None
+    carouselZoom: Annotated[StrictFloat, Field(ge=1, le=4, allow_inf_nan=False)] | None = None
 
 
 class Page(BaseModel):
@@ -104,6 +132,7 @@ def project(value, kind, identifier, section, offset, limit, revision, section_s
     )
     if kind == "note":
         metadata = page.metadata
+        data.update(DisplayMetadata.model_validate(metadata).model_dump(exclude_unset=True))
         try:
             references = tag_references(metadata.get("tags"))
         except ValueError:

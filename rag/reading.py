@@ -1,11 +1,20 @@
 """Budget validated article frames without losing visible read cursors."""
 
+import json
+
+
+def _json_frame(data):
+    body = data.get("noteContent")
+    if isinstance(body, str) and body:
+        data = {key: value for key, value in data.items() if key != "content" or value != body}
+    return json.dumps(data, ensure_ascii=False, separators=(",", ":"), allow_nan=False)
+
 
 def render_article_result(data, text: str, cap: int) -> tuple[str, dict | None]:
     """Budget an article frame while keeping a parseable, truthful read cursor."""
     from rag.sections import frame_excerpt, slim_frame
 
-    text = slim_frame(data if isinstance(data, dict) else text)
+    text = _json_frame(data) if isinstance(data, dict) else slim_frame(text)
     if len(text) <= cap:
         return text, data if isinstance(data, dict) else None
     if not isinstance(data, dict):
@@ -34,6 +43,22 @@ def render_article_result(data, text: str, cap: int) -> tuple[str, dict | None]:
         "totalChars",
         "readComplete",
         "source",
+        "authorName",
+        "authorNameTruncated",
+        "authorAvatar",
+        "authorAvatarTruncated",
+        "description",
+        "descriptionTruncated",
+        "cover",
+        "coverTruncated",
+        "coverFit",
+        "coverFocusX",
+        "coverFocusY",
+        "coverZoom",
+        "carouselFit",
+        "carouselFocusX",
+        "carouselFocusY",
+        "carouselZoom",
     )
     out = {k: data[k] for k in fields if k in data}
     title_key = "noteTitle" if "noteTitle" in out else "title"
@@ -52,11 +77,11 @@ def render_article_result(data, text: str, cap: int) -> tuple[str, dict | None]:
     low, high = 0, len(body)
     while low < high:
         mid = (low + high + 1) // 2
-        if len(str(candidate(mid))) <= cap:
+        if len(_json_frame(candidate(mid))) <= cap:
             low = mid
         else:
             high = mid - 1
     if not low:
         return "本轮剩余上下文不足以读取正文，请缩小范围后再试。"[:cap], None
     visible = candidate(low)
-    return str(visible), visible
+    return _json_frame(visible), visible

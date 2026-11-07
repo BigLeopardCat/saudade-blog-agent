@@ -64,8 +64,9 @@ def backend(articles=None):
             from eval.fixtures.document_reads import document_page
             doc = next((doc for doc in docs if doc["id"] == int(match[1])), None)
             if doc:
+                metadata = next(row for row in state["articles"] if row["id"] == doc["id"])
                 data = document_page("note", doc["id"], doc["title"], doc["content"],
-                                     request.url.params)
+                                     request.url.params, metadata)
                 return httpx.Response(200, json={"code": 200, "data": data})
         if request.method == "GET" and (match := re.search(r"/notes/(\d+)(/stats)?$",
                                                            request.url.path)):

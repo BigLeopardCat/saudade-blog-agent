@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import re
 from urllib.parse import urlsplit
 
@@ -57,6 +58,12 @@ def _article_links(text):
         *re.findall(r"\]\((/article/\d+[^)]*)\)", text),
         *re.findall(r"https?://[^\s)<>]+", text),
     ]
+    try:
+        structured = json.loads(text)
+        if isinstance(structured, dict) and isinstance(structured.get("source"), str):
+            urls.append(structured["source"])
+    except (ValueError, RecursionError):
+        pass
     for url in urls:
         try:
             parsed = urlsplit(url.rstrip(".,，。"))
@@ -135,20 +142,28 @@ class ArticleEvidence:
         elif (
             name == "get_article_detail" and args.get("doc_type", "note") == "note" and kind == "ok"
         ):
-            data = payload(value)
-            ident = args.get("article_id")
-            if (
-                isinstance(data, dict)
-                and body_text(data).strip()
-                and type(ident) is int
-                and ident > 0
-            ):
-                self.documents[ident] = str(data.get("noteTitle") or "文章")
-                ranges = self.read_ranges.setdefault(ident, [])
-                observed = _read_range(data, ident)
-                if observed not in ranges:
-                    ranges.append(observed)
-                self.references.update(_article_links(body_text(data)))
+            self._observe_detail(args.get("article_id"), payload(value))
+
+    def _observe_detail(self, ident, data):
+        if not isinstance(data, dict) or type(ident) is not int or ident <= 0:
+            return
+        body = body_text(data)
+        if not body.strip():
+            self._observe_metadata(ident, data)
+            return
+        self.documents[ident] = str(data.get("noteTitle") or "文章")
+        ranges = self.read_ranges.setdefault(ident, [])
+        observed = _read_range(data, ident)
+        if observed not in ranges:
+            ranges.append(observed)
+        self.references.update(_article_links(body))
+
+    def _observe_metadata(self, ident: int, data: dict) -> None:
+        """A verified empty body permits its metadata link without proving a body read."""
+        source = data.get("source")
+        if (isinstance(source, dict) and source.get("type") == "note"
+                and type(source.get("id")) is int and source["id"] == ident):
+            self.candidates[ident] = str(data.get("noteTitle") or "文章")
 
     def provenance(self, site):
         """Distinguish known links from read content without claiming answer support."""
