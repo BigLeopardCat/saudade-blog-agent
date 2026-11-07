@@ -225,8 +225,9 @@ def _rag_meta(route, corpus, top_k):
 
 
 def _rag_text(meta, text):
-    coverage = json.dumps(meta["retrieval"], ensure_ascii=False, separators=(",", ":"))
-    return "retrieval=" + coverage + "\n" + text
+    coverage = json.dumps({"retrieval": meta["retrieval"]},
+                          ensure_ascii=False, separators=(",", ":"))
+    return coverage + "\n" + text
 
 
 @tool

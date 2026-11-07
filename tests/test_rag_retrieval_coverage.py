@@ -60,8 +60,7 @@ def retrieval(monkeypatch):
 
 def coverage(result):
     header, _, _ = str(result).partition("\n")
-    assert header.startswith("retrieval=")
-    value = json.loads(header.removeprefix("retrieval="))
+    value = json.loads(header)["retrieval"]
     assert value == result.meta["retrieval"]
     assert value["scope"] == "public_article_body_index" and value["limit"] == 8
     return value
@@ -231,7 +230,7 @@ def test_embedding_503_coverage_survives_the_actual_model_sdk_wire(
         message for message in model_requests[1]["messages"] if message["role"] == "tool"
     )
     assert "artifact" not in observed and "meta" not in observed
-    state = json.loads(observed["content"].split("\n")[0].removeprefix("retrieval="))
+    state = json.loads(observed["content"].split("\n")[0])["retrieval"]
     assert state["mode"] == "degraded" and state["semantic"] == "incomplete"
     assert state["scope"] == "public_article_body_index"
     if query == "needle":
