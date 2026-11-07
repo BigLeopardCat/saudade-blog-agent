@@ -124,9 +124,8 @@ def plan(value, request):
     if (prepared.intent.model_dump(exclude_none=True) != request
             or prepared.matchedIds != ids
             or prepared.expiresAt <= int(time.time())
-            or preview_ids != sorted(set(preview_ids))
-            or not set(preview_ids) <= set(ids)
-            or prepared.previewTruncated != (len(preview_ids) < len(ids))):
+            or preview_ids != ids[:10]
+            or prepared.previewTruncated != (len(ids) > 10)):
         raise ValueError("gallery preparation differs from its fixed selection or intent")
     destination = prepared.destination
     if prepared.intent.action == "move" and prepared.intent.folderId:

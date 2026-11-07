@@ -167,6 +167,7 @@ def test_version_conflict_does_not_reprepare_or_partially_retry(backend, tmp_pat
 @pytest.mark.parametrize("change", [
     {"matchedIds": [11]}, {"matchedIds": [12, 11]}, {"expiresAt": 1},
     {"previewTruncated": True}, {"preview": []},
+    {"preview": [], "previewTruncated": True},
     {"destination": {"id": 3, "name": "wrong", "parentId": 0}},
     {"intent": {"action": "delete", "imageIds": [11, 12]}},
 ])
