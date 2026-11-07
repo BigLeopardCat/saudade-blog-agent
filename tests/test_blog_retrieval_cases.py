@@ -141,12 +141,18 @@ def test_real_framework_retrieval_locator_reads_the_labelled_original_body(corpu
         "revision": canonical, "section_schema": PARSER_VERSION}
     sibling = data["queries"]["duplicate_heading" if qid == "long_tail" else "long_tail"]
     assert sibling["evidence_spans"][0]["quote"] not in selected["sectionText"]
+
+
+def test_duplicate_headings_and_first_window_require_explicit_location(corpus, backend):
+    data, _ = corpus
+    documents, _ = backend
+    source = documents["runtime"]
+    expected = data["queries"]["long_tail"]["evidence_spans"][0]
     ambiguous = get_article_detail.invoke({"article_id": source["id"], "section": "故障恢复"})
     assert ambiguous.kind == "ok" and ambiguous.data["sectionText"] == ""
     assert ambiguous.data["source"] is None and len(ambiguous.data["sections"]) >= 4
-    if qid == "long_tail":
-        first = get_article_detail.invoke({"article_id": source["id"]})
-        assert not first.data["readComplete"] and expected["quote"] not in first.data["noteContent"]
+    first = get_article_detail.invoke({"article_id": source["id"]})
+    assert not first.data["readComplete"] and expected["quote"] not in first.data["noteContent"]
 
 
 @pytest.mark.parametrize("change", ["content", "section_schema"])
