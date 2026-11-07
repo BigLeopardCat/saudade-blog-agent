@@ -46,4 +46,5 @@ def test_failed_prerequisite_does_not_prepare_the_next_operation_until_repaired(
     assert {"bad", "blocked"} <= errors.keys()
     assert checked == ["", "已核实"]
     assert result.execution["pending_confirm"] and not state["favorites"]
-    assert len(state["requests"]) == 2 and all(r.method == "GET" for r in state["requests"])
+    assert [(r.method, r.url.path) for r in state["requests"]] == [
+        ("GET", "/api/protected/favorites/19")]

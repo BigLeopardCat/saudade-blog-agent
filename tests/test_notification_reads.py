@@ -30,96 +30,69 @@ def read(**args):
     return reads.list_notifications.invoke(args, config=config())
 
 
-def test_registered_default_read_bounds_contents_and_preserves_links(notifications):
-    notifications["items"] = rows(100)
+def test_registered_default_read_is_paged_by_backend_without_transferring_bodies(notifications):
+    notifications["items"] = rows(125)
     assert own_tools()["list_notifications"] is base.list_notifications is reads.list_notifications
     result = json.loads(str(read()))
-    assert len(result["items"]) == 20 and result["windowCount"] == 100
-    assert result["windowComplete"] is False and result["hasMoreInWindow"] is True
-    assert result["unreadInWindow"] == 66
+    assert len(result["items"]) == 20 and result["total"] == 125 and result["hasMore"]
     assert result["items"][0]["link"] == "/article/19?cid=1000#reply"
-    assert result["contentIncluded"] is False
-    assert all("content" not in row and "contentTruncated" not in row
-               for row in result["items"])
+    assert not result["contentIncluded"] and all("content" not in row for row in result["items"])
+    request, = notifications["requests"]
+    assert request.url.params["content"] == "none" and request.url.params["pageSize"] == "20"
     assert len(notifications["items"][0]["content"]) == 3000
-    assert [request.method for request in notifications["requests"]] == ["GET"]
 
 
-def test_page_size_one_can_reach_the_whole_window_and_unread_filter_is_local(notifications):
-    notifications["items"] = rows(100)
-    last = json.loads(str(read(page=100, limit=1)))
-    assert last["items"][0]["id"] == 901 and last["hasMoreInWindow"] is False
-    unread = json.loads(str(read(unread_only=True, page=2, limit=3)))
+def test_paging_and_matching_include_history_older_than_one_hundred_rows(notifications):
+    notifications["items"] = rows(125)
+    notifications["items"][120].update(title="OLDER UniqueSuffix")
+    last = json.loads(str(read(page=125, limit=1)))
+    assert last["items"][0]["id"] == 876 and not last["hasMore"]
+    found = json.loads(str(read(query=" uniquesuffix ")))
+    assert found["items"][0]["id"] == 880 and found["total"] == 1
+    assert notifications["requests"][-1].url.params["query"] == "uniquesuffix"
+    assert json.loads(str(read(query="unique suffix")))["items"] == []
+    unread = json.loads(str(read(unread_only=True, limit=3, page=2)))
     expected = [row["id"] for row in notifications["items"] if not row["isRead"]][3:6]
     assert [row["id"] for row in unread["items"]] == expected
-    assert unread["matchedInWindow"] == 66 and unread["windowComplete"] is False
-    assert unread["unreadOnly"] is True
-    assert all(row["isRead"] is False for row in unread["items"])
+    assert notifications["requests"][-1].url.params["unreadOnly"] == "true"
 
 
-def test_search_filters_the_complete_window_before_pagination(notifications):
-    notifications["items"] = [dict(row, title="公告", content="内容", type="notice")
-                              for row in rows(50)]
-    notifications["items"][40].update(title="有人回复了你的评论")
-    notifications["items"][45].update(content="另一条回复")
-    result = json.loads(str(read(query="回复", limit=1)))
-    assert result["items"][0]["id"] == 960
-    assert result["items"][0]["link"] == "/article/19?cid=960#reply"
-    assert result["matchedInWindow"] == 2 and result["hasMoreInWindow"] is True
-    assert result["windowCount"] == 50 and result["windowComplete"] is True
-    second = json.loads(str(read(query="回复", page=2, limit=1, unread_only=True)))
-    assert second["matchedInWindow"] == 1 and second["items"] == []
-    assert all(request.method == "GET" for request in notifications["requests"])
-
-
-@pytest.mark.parametrize("size", [50, 100])
-def test_empty_search_preserves_window_coverage_and_read_state(notifications, size):
-    notifications["items"] = rows(size)
+def test_missing_search_does_not_hide_global_unread_or_change_read_state(notifications):
+    notifications["items"] = rows(125)
     before = [row["isRead"] for row in notifications["items"]]
-    result = json.loads(str(read(query="缺失片段")))
-    assert result["items"] == [] and result["matchedInWindow"] == 0
-    assert result["hasMoreInWindow"] is False
-    assert result["windowComplete"] is (size < 100)
-    assert result["unreadInWindow"] == sum(not value for value in before)
+    result = json.loads(str(read(query="missing")))
+    assert result["items"] == [] and result["total"] == 0 and not result["hasMore"]
+    assert result["unreadTotal"] == sum(not value for value in before)
     assert [row["isRead"] for row in notifications["items"]] == before
-
-
-def test_search_uses_full_content_and_normalizes_case_without_fuzzy_matching(notifications):
-    notifications["items"] = rows(2)
-    notifications["items"][1]["content"] += " UniqueSuffix"
-    found = json.loads(str(read(query=" uniquesuffix ")))
-    assert found["query"] == "uniquesuffix" and found["items"][0]["id"] == 999
-    assert found["contentIncluded"] is False and "content" not in found["items"][0]
-    assert json.loads(str(read(query="unique suffix")))["items"] == []
 
 
 def test_blank_query_never_requests_backend(notifications):
-    assert read(query="  ").kind == "unavailable"
-    assert notifications["requests"] == []
+    assert read(query="  ").kind == "unavailable" and not notifications["requests"]
 
 
-def test_single_id_read_ignores_list_filters_and_never_marks_read(notifications):
-    notifications["items"] = rows(5)
-    before = [row["isRead"] for row in notifications["items"]]
-    result = json.loads(str(read(notification_id=1000, unread_only=True, page=20,
-                                 query="not-a-match")))
-    assert len(result["items"]) == 1 and result["items"][0]["id"] == 1000
+def test_detail_is_direct_and_ignores_list_conditions_without_marking_read(notifications):
+    notifications["items"] = rows(125)
+    result = json.loads(str(read(notification_id=876, unread_only=True, page=20, query="missing")))
+    assert result["items"][0]["id"] == 876
     assert len(result["items"][0]["content"]) == 2000
-    assert result["items"][0]["contentTruncated"] is True
-    assert result["windowComplete"] is True and "hasMoreInWindow" not in result
-    assert [row["isRead"] for row in notifications["items"]] == before
-    assert all(request.method == "GET" for request in notifications["requests"])
+    assert result["items"][0]["contentTruncated"]
+    request, = notifications["requests"]
+    assert request.url.path.endswith("/notifications/876") and not request.url.query
+    assert json.loads(str(read(notification_id=1)))["items"] == []
 
 
-@pytest.mark.parametrize("size", [0, 3, 100])
-def test_missing_id_reports_only_the_known_window(notifications, size):
-    notifications["items"] = rows(size)
-    result = json.loads(str(read(notification_id=1)))
-    assert result["items"] == [] and result["windowComplete"] is (size < 100)
+def test_batch_preview_is_explicit_bounded_and_paginated(notifications):
+    notifications["items"] = rows(18)
+    first = json.loads(str(read(include_preview=True)))
+    second = json.loads(str(read(include_preview=True, page=2)))
+    assert len(first["items"]) == 10 and first["hasMore"]
+    assert len(second["items"]) == 8 and not second["hasMore"]
+    assert all(len(row["content"]) == 240 and row["contentTruncated"] for row in first["items"])
+    assert all(request.url.params["content"] == "preview" for request in notifications["requests"])
 
 
 @pytest.mark.parametrize("args", [{"limit": 0}, {"limit": 21}, {"limit": True},
-                                  {"page": 101}, {"page": "2"}, {"notification_id": False},
+                                  {"page": 10001}, {"page": "2"}, {"notification_id": False},
                                   {"notification_id": -1}, {"unread_only": "false"},
                                   {"query": ""}, {"query": "x" * 121}, {"query": True},
                                   {"include_preview": "true"}, {"include_preview": 1}])
@@ -212,52 +185,3 @@ def test_registry_import_order_resolves_to_one_tool(first):
     result = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True,
                             timeout=20)
     assert result.returncode == 0, result.stderr
-
-
-def test_global_unread_outside_full_window_does_not_break_window_reads(notifications):
-    notifications['items'] = rows(100)
-    notifications['hidden_unread'] = 7
-    result = json.loads(str(read()))
-    assert result['unreadInWindow'] == 66
-    assert result['unreadTotal'] == 73
-    assert result['windowComplete'] is False
-    assert len(result['items']) == 20
-    assert all(request.method == 'GET' for request in notifications['requests'])
-
-
-def test_one_summary_page_handles_eighteen_unread_items_without_exposing_bodies(notifications):
-    notifications['items'] = [dict(row, isRead=False,
-        content='PRIVATE_BODY_CANARY_' * 1000) for row in rows(18)]
-    result = read(unread_only=True)
-    body = json.loads(str(result))
-    assert result.kind == 'ok' and len(body['items']) == body['unreadTotal'] == 18
-    assert body['matchedInWindow'] == 18 and body['hasMoreInWindow'] is False
-    assert body['contentIncluded'] is False and 'PRIVATE_BODY_CANARY_' not in str(result)
-    assert [request.method for request in notifications['requests']] == ['GET']
-    assert all(not row['isRead'] for row in notifications['items'])
-
-
-def test_long_bodies_do_not_inflate_lists_and_detail_reads_are_explicit(notifications):
-    notifications['items'] = rows(100)
-    summary = read()
-    assert summary.kind == 'ok' and len(str(summary)) <= 7500
-    shown = json.loads(str(summary))
-    assert len(shown['items']) == 20 and shown['hasMoreInWindow'] is True
-    detail = json.loads(str(read(notification_id=shown['items'][0]['id'])))
-    assert detail['contentIncluded'] is True
-    assert detail['items'][0]['content'] == notifications['items'][0]['content'][:2000]
-    assert detail['items'][0]['contentTruncated'] is True
-    assert [request.method for request in notifications['requests']] == ['GET', 'GET']
-
-
-def test_explicit_batch_preview_keeps_summary_tasks_within_a_bounded_read(notifications):
-    notifications['items'] = rows(18)
-    first = json.loads(str(read(include_preview=True)))
-    assert len(first['items']) == first['pageSize'] == 10
-    assert first['contentIncluded'] is True and first['hasMoreInWindow'] is True
-    assert all(len(row['content']) == 240 and row['contentTruncated'] for row in first['items'])
-    second = json.loads(str(read(include_preview=True, page=2)))
-    assert len(second['items']) == 8 and second['hasMoreInWindow'] is False
-    assert {row['id'] for row in first['items'] + second['items']} == {
-        row['id'] for row in notifications['items']}
-    assert [request.method for request in notifications['requests']] == ['GET', 'GET']
