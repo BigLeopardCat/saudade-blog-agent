@@ -29,7 +29,6 @@
   --chat-warning: #8a5c18;
   --chat-warning-soft: #fff6e5;
   --chat-notch-bg: #fff1f8;
-  --chat-notch-ink: #543762;
   --chat-notch-edge: #d8bfdc;
   width: 420px;
   height: min(420px, calc(100dvh - 350px));
@@ -81,7 +80,6 @@
   --chat-warning: #efc58d;
   --chat-warning-soft: #403629;
   --chat-notch-bg: #645479;
-  --chat-notch-ink: #fff6ff;
   --chat-notch-edge: #d7b5ef;
   color-scheme: dark;
 }
@@ -274,7 +272,6 @@
   max-height: 44px;
   border-radius: 0 0 20px 20px;
   background: var(--chat-notch-bg);
-  color: var(--chat-notch-ink);
   border-color: var(--chat-notch-edge);
   box-shadow: 0 6px 24px rgb(12 6 22 / 35%), 0 0 0 1px var(--chat-notch-edge);
 }
@@ -767,9 +764,9 @@
   color: var(--chat-ink); font-size: 11px; cursor: pointer; font-variant-numeric: tabular-nums;
 }
 #waifu-chat .chat-task-chip[hidden] { display: none; }
-#waifu-chat[data-window-mode='collapsed'] { background: var(--chat-notch-bg); color: var(--chat-notch-ink); border-color: var(--chat-notch-edge); }
+#waifu-chat[data-window-mode='collapsed'] { background: var(--chat-notch-bg); border-color: var(--chat-notch-edge); }
 #waifu-chat[data-window-mode='collapsed'] .chat-conv-title-tag,
-#waifu-chat[data-window-mode='collapsed'] .chat-task-chip { background: transparent; color: inherit; border-color: var(--chat-notch-edge); }
+#waifu-chat[data-window-mode='collapsed'] .chat-task-chip { background: transparent; border-color: var(--chat-notch-edge); }
 #waifu-chat[data-window-mode='collapsed'] .chat-drag-bar-t { background: transparent; }
 #waifu-chat[data-window-mode='collapsed'] :is(.chat-minimize, .chat-close) { color: inherit; }
 #waifu-chat[data-window-mode='docked'] .chat-service-indicator { position: absolute; left: 14px; pointer-events: none; }

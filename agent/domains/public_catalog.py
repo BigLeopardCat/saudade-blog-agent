@@ -6,6 +6,7 @@ from langchain_core.tools import tool
 from pydantic import Field, StrictInt
 
 from agent.domains.article_metadata import article, positive, text
+from agent.domains.articles.evidence import catalog_source_url
 from agent.domains.pagination import CatalogLimit
 from agent.domains.public_pages import Identifier, Limit, Page, read_page
 
@@ -16,7 +17,7 @@ def _article(row):
     result = article(row)
     if result["isPublic"] is not True or result["status"] not in ("public", "published"):
         raise ValueError("Article is not public")
-    return result
+    return {**result, "sourceUrl": catalog_source_url(row)}
 
 
 def _taxonomy(row):
@@ -49,14 +50,18 @@ def _tag(row):
 @tool
 def list_notes(page: Page = 1, page_size: Limit = 5,
                category_id: Identifier | None = None) -> object:
-    """分页读取公开文章元数据与总数，默认5条、最多10条，可按分类编号筛选；不读取正文。"""
+    """分页读取公开文章元数据与总数，默认5条、最多10条，可按分类编号筛选；不读取正文。
+    标题和宿主sourceUrl可直接推荐，无需另读正文获取链接。sourceUrl为空表示链接未知，不代表文章不存在。
+    """
     return read_page("articles", page, page_size, {"category_id": category_id}, _article,
                      {"categoryId": category_id})
 
 
 @tool
 def get_top_notes(page: Page = 1, page_size: Limit = 5) -> object:
-    """分页读取公开的置顶文章元数据与总数，默认5条、最多10条；不读取正文。"""
+    """分页读取公开置顶文章元数据与总数，默认5条、最多10条；不读取正文。
+    标题和宿主sourceUrl可直接推荐，无需另读正文获取链接；sourceUrl为空时保持链接未知。
+    """
     return read_page("articles", page, page_size, {"top_only": True}, _article, {"isTop": 1})
 
 

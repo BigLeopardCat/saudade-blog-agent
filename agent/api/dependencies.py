@@ -23,9 +23,12 @@ def require_workers(request: Request):
     return workers
 
 
-async def try_acquire_slot(request: Request) -> bool:
+async def try_acquire_slot(request: Request, *, session_id: str | None = None) -> bool:
     workers = request.app.state.workers
     if workers is None or workers.closing:
+        return False
+    if session_id and not await workers.wait_for_session(session_id):
+        logger.warning("Previous conversation request has not finished releasing resources")
         return False
     slots = request.app.state.chat_slots
     if slots.locked():

@@ -119,7 +119,7 @@ def test_real_chat_stream_body_iterator_has_data_frames_and_one_end(monkeypatch,
     runtime = FakeRuntime([AIMessageChunk(content=text), TurnResult(text + "。")])
     monkeypatch.setattr(app.state, "runtime", runtime)
     monkeypatch.setattr(server, "_resolve_principal", lambda request, uid: Principal(uid=uid))
-    monkeypatch.setattr(server, "try_acquire_slot", lambda request: _ready())
+    monkeypatch.setattr(server, "try_acquire_slot", lambda request, *, session_id=None: _ready())
     monkeypatch.setattr(server, "release_slot", lambda request: None)
     monkeypatch.setattr(server, "build_messages", lambda req, **kwargs: [])
     monkeypatch.setattr(server.runtime_probe, "request_context", lambda agent: "native")
@@ -147,7 +147,7 @@ def test_real_chat_stream_body_iterator_error_has_no_success_end(monkeypatch):
             raise OSError("storage failure")
     monkeypatch.setattr(app.state, "runtime", Broken())
     monkeypatch.setattr(server, "_resolve_principal", lambda request, uid: Principal(uid=uid))
-    monkeypatch.setattr(server, "try_acquire_slot", lambda request: _ready())
+    monkeypatch.setattr(server, "try_acquire_slot", lambda request, *, session_id=None: _ready())
     monkeypatch.setattr(server, "release_slot", lambda request: None)
     monkeypatch.setattr(server, "build_messages", lambda req, **kwargs: [])
     monkeypatch.setattr(server.runtime_probe, "request_context", lambda agent: "native")
@@ -218,7 +218,7 @@ def test_sse_keepalive_uses_comments_and_does_not_extend_model_idle_deadline(
 
     monkeypatch.setattr(app.state, "runtime", QuietRuntime())
     monkeypatch.setattr(server, "_resolve_principal", lambda request, uid: Principal(uid=uid))
-    monkeypatch.setattr(server, "try_acquire_slot", lambda request: _ready())
+    monkeypatch.setattr(server, "try_acquire_slot", lambda request, *, session_id=None: _ready())
     monkeypatch.setattr(server, "release_slot", lambda request: None)
     monkeypatch.setattr(server, "build_messages", lambda req, **kwargs: [])
     monkeypatch.setattr(server.runtime_probe, "request_context", lambda runtime: "native")
@@ -264,7 +264,7 @@ def test_sync_http_keeps_controls_out_of_prose_and_allows_action_only_turns(
         monkeypatch, text, execution):
     monkeypatch.setattr(app.state, "runtime", FakeRuntime([TurnResult(text, execution)]))
     monkeypatch.setattr(server, "_resolve_principal", lambda request, uid: Principal(uid=uid))
-    monkeypatch.setattr(server, "try_acquire_slot", lambda request: _ready())
+    monkeypatch.setattr(server, "try_acquire_slot", lambda request, *, session_id=None: _ready())
     monkeypatch.setattr(server, "release_slot", lambda request: None)
     monkeypatch.setattr(server, "build_messages", lambda req, **kwargs: [])
     async def request():

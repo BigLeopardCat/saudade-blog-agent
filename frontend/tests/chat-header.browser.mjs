@@ -49,8 +49,6 @@ function titleContrast(current,dark,mode) {
   const surface = over(current.title.background,background);
   const ratio = contrast(channels(current.title.color).slice(0,3),surface);
   assert.ok(ratio >= 4.5,`${mode} ${dark?'dark':'light'} title contrast ${ratio}: ${JSON.stringify(current)}`);
-  if (mode==='collapsed') assert.equal(current.title.color,current.panel.color,
-    'Collapsed title inherits the compact surface text, not an intermediate gray');
 }
 
 export async function assertHeaderFocusTheme(page,reset) {
@@ -76,6 +74,8 @@ export async function assertHeaderFocusTheme(page,reset) {
         'Pointer folding must not paint a drag-sized outline: '+JSON.stringify(compact.restore));
       assert.notEqual(compact.panel.background,expanded.panel.background);
       titleContrast(compact,dark,'collapsed');
+      assert.equal(compact.title.color,expanded.title.color,
+        'Folding must retain the same theme title color');
       for (const mode of ['collapsed','expanded']) {
         const focused = await keyboardFocus(page);
         assert.equal(focused.restore.outline,'none',JSON.stringify(focused.restore));
@@ -105,6 +105,8 @@ export async function assertHeaderFocusTheme(page,reset) {
         'The docked control keeps a visible focus ring inside its clipped notch');
       const surface = over(docked.panel.background,dark?[32,34,36]:[255,255,255]);
       assert.ok(contrast(channels(docked.restore.color).slice(0,3),surface)>=4.5);
+      assert.equal(docked.restore.color,expanded.title.color,
+        'The docked label uses the same theme text color');
       await page.keyboard.press('Enter');
       await page.waitForTimeout(420);
       assert.equal(await page.locator('#waifu-chat').getAttribute('data-window-mode'),'expanded');
