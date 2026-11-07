@@ -19,7 +19,7 @@ from agent.scheduling.backend import (
     storage_name,
 )
 from agent.scheduling.factory import configured_dsn
-from agent.scheduling.host import BlogHost
+from agent.scheduling.host import BlogHost, HostOutcomeUnverified
 from agent.scheduling.models import Definition, utc_now
 from agent.scheduling.readonly import ReadOnlyRunner
 from config.settings import settings
@@ -87,12 +87,17 @@ class WorkerActions:
             payload, allow_paused=definition.action not in {"publish_announcement", "admin_write"}
         ):
             return {"status": "blocked", "reason": "schedule_disabled"}
-        if definition.action == "admin_write":
-            return self.host.change(payload["owner_id"], run_id, definition.write, definition.title)
-        if definition.action == "publish_announcement":
-            return self.host.publish_announcement(
-                payload["owner_id"], run_id, definition.title, definition.instruction
-            )
+        try:
+            if definition.action == "admin_write":
+                return self.host.change(
+                    payload["owner_id"], run_id, definition.write, definition.title
+                )
+            if definition.action == "publish_announcement":
+                return self.host.publish_announcement(
+                    payload["owner_id"], run_id, definition.title, definition.instruction
+                )
+        except HostOutcomeUnverified as exc:
+            return exc.result()
         if definition.action == "reminder":
             return {"status": "completed", "text": definition.instruction}
         principal = self.host.actor(payload["owner_id"])
