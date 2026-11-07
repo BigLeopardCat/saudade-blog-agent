@@ -1,12 +1,5 @@
 # -*- coding: utf-8 -*-
-"""golden 真写用例的夹具：只读在位检查 + 残留哨兵。
-
-  ① 目标只能是夹具（用例侧 `require_exec_args` 逐字锁参数 + `forbid_exec_tools` 覆盖其余写工具）；
-  ② **前置条件**：夹具不在位就不该跑（跑了会红成"站内没有叫 X 的分类"——一个看起来像模型退化、
-     其实是前置条件缺失的红）；← 本文件 `fixture_state`
-  ③ **残留**：用例失败中途没删掉，夹具就留在生产库里（它同时**在公开分类列表里**，访客看得见）。
-     读者不该靠"我记得跑过"来判断，得有个只读的机械检查。← 本文件 `--verify`
-"""
+"""Read-only fixture preflight and residue checks. Use --verify to report remaining fixtures."""
 from __future__ import annotations
 
 import sys
@@ -14,16 +7,12 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from tools.base import _get  # noqa: E402  （全仓评测/检索侧统一的公开读入口）
+from tools.base import _get  # noqa: E402
 
-# 夹具名的保留前缀（与测试账号的 `agent_test_` 同族）。
-# **它是一条结构性质**：清场/排查一律可以写成 `... WHERE name LIKE 'agent_fixture_%'`
-# （见父仓 `scripts/migration/golden_write_fixture_20260925.sql` 的回滚段）⇒ 不可能误删真数据。
-# 用例文件里每一条 `requires_fixture` 的名字必须以此开头，`tests/test_golden_fixture.py`
-# 逐条扫着。改这里等于改那条性质，动手前先想清楚。
+# Reserved fixture names must start with this prefix; embedded matches are not fixtures.
 FIXTURE_PREFIX = "agent_fixture_"
 
-# 残留哨兵的行标（夜间日志/复审时按它 grep）
+# Stable diagnostic tags identify leftovers and unreadable evidence.
 LEFTOVER_TAG = "[fixture-leftover]"
 UNREADABLE_TAG = "[fixture-check-failed]"
 
@@ -40,38 +29,23 @@ def category_titles() -> list[str] | None:
 
 
 def fixture_state(name: str, titles: list[str] | None) -> str:
-    """`name` 在不在公开分类列表里 → `present` / `absent` / `unreadable`。
-
-    `titles` **没有默认值，必须显式传**（`category_titles()` 的结果）。这是刻意的：
-    默认值只能有一个，而"没传"与"传了 None（读不到）"是两件事——给个 `=None` 的默认值
-    就等于把两种情况混成一个，而**"读不到"恰好是这里最要命的那个答案**（见模块头注）。
-    调用方一次要判多个夹具名时应当**一次取好传进来**：省往返，也保证几个名字看到的是
-    同一份快照。
-    """
+    """Classify a fixture as present, absent or unreadable using an explicit snapshot.
+    Callers can share one snapshot across checks; unavailable data is not absence."""
     if titles is None:
         return "unreadable"
     return "present" if name in titles else "absent"
 
 
 def leftovers(titles: list[str]) -> list[str]:
-    """清单里属于夹具前缀族的所有分类名（排序后返回，便于对账）。
-
-    **只认前缀**（`startswith`），与清场 SQL 的 `LIKE 'agent_fixture_%'` 同一判据：
-    名字中间出现该串的东西（`你猜 agent_fixture_x`）清场删不掉，本函数也就不该把它
-    报成残留——否则哨兵会对着一条它自己动不了的记录一直响。
-    """
+    """Return sorted names with the reserved fixture prefix; embedded matches do not qualify."""
     return sorted(t for t in titles if t.startswith(FIXTURE_PREFIX))
 
 
 def verify(titles: list[str] | None) -> tuple[int, list[str]]:
-    """残留哨兵 → `(退出码, 人读行)`。**退出码非零 = 该看一眼**：
+    """Return an exit code and diagnostic lines for the fixture snapshot.
 
-      0  公开分类列表里没有夹具族的任何一行（正常态：用例跑完即自我清除）
-      1  有残留（`[fixture-leftover]` 逐行点名）——夹具没被删掉，或有人手工建了同族名字
-      2  读不到公开接口（`[fixture-check-failed]`）——**无法确认**无残留，不是"没有"
-
-    `titles` 同 `fixture_state`：**没有默认值**（"没传"与"读不到"必须分得开）。
-    """
+    Zero means no reserved fixtures remain, one means leftovers exist, and two
+    means the source is unreadable and cleanup cannot be verified."""
     if titles is None:
         return 2, [f"{UNREADABLE_TAG} 读不到公开分类接口（/category 返回的不是列表）"
                    f"——无法确认夹具残留，不等于没有被残留"]
@@ -88,20 +62,17 @@ FIXTURE_KINDS = ("category", "account", "board", "todo")
 
 
 def snapshot(kind: str):
-    """取一次某族夹具的**快照**（读不到 → `None`）。未知 kind **响亮报错**。
-
-    未知 kind 必须报错而不是退回分类族：`"acount"` 这种拼错会让闸去查**分类**列表，
-    于是夹具判 absent、用例静默跳过——一个拼错的字母吃掉一条用例，而打印出来的理由是
-    "分类列表里没有它"（读的人只会去查分类）。**拼错要红在拼错上。**
-    """
+    """Read a supported fixture-family snapshot, returning None when unavailable.
+    Unknown family names raise instead of falling back to an unrelated source."""
     if kind == "account":
-        import golden_fixture_account  # 局部导入：只在真有账号族用例时才拉那条读路径
+        import golden_fixture_account  # Load only the requested fixture-family reader.
         return golden_fixture_account.directory()
     if kind == "board":
-        import golden_fixture_board   # 同上（待审留言公开读不到，得走后台清单那条只读路径）
+        # Pending board fixtures require an authenticated administrator read.
+        import golden_fixture_board
         return golden_fixture_board.board()
     if kind == "todo":
-        import golden_fixture_todo    # 同上（待办列表也是管理员域接口，公开读不到）
+        import golden_fixture_todo    # Todo fixtures require an authenticated administrator read.
         return golden_fixture_todo.todo_rows()
     if kind == "category":
         return category_titles()
@@ -110,7 +81,7 @@ def snapshot(kind: str):
 
 
 def state_of(kind: str, name: str, snap) -> str:
-    """按族判 `present` / `absent` / `wrong_state` / `unreadable`（`wrong_state` 只有带身份的那三族带）。"""
+    """Classify a fixture snapshot as present, absent, wrong_state or unreadable."""
     if kind == "account":
         import golden_fixture_account
         return golden_fixture_account.fixture_state(name, snap)
@@ -142,12 +113,8 @@ def skip_reason(kind: str, name: str, state: str) -> str:
 
 
 def gate(cases: list) -> tuple[list, list[str], list[str]]:
-    """按夹具在位情况摘掉跑不了的用例 → `(剩下的用例, 被摘掉的 id, 待打印行)`。
-
-    `requires_fixture_kind` **不写就是分类族**（存量那条用例逐字不变）。快照按 kind
-    **各取一次**：同一批用例看到同一份名录/清单（省往返，也免得"前一条用例看到的是
-    第 n 版、后一条是第 n+1 版"）。
-    """
+    """Return runnable cases, skipped IDs and diagnostics from fixture preconditions.
+    Missing requires_fixture_kind selects categories. Read each family once per batch."""
     need = {c["id"]: (str(c["requires_fixture"]),
                       str(c.get("requires_fixture_kind") or "category"))
             for c in cases if c.get("requires_fixture")}

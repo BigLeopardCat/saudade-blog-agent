@@ -164,11 +164,8 @@ def _admin_get(path: str, config: RunnableConfig, *,
 
 
 def _admin_read_post(path: str, payload: dict, config: RunnableConfig):
-    """后台接口（管理员**读**，但筛选条件走请求体 ⇒ POST）。scope 同 `_admin_get`。
-
-    与 `_admin_post` 的差别只在措辞：那条是写通道（失败时说"本次改动未确认生效"），
-    这条读失败时说"后台数据不可用"——同一件事别用两句不一样的话说。
-    """
+    """Read administrator data through a body-based POST with admin.console scope.
+    Read failures cannot certify any business mutation."""
     return _principal_get(
         path, config, payload=payload,
         uid_msg="无法获取当前用户身份，后台数据不可用",
@@ -192,9 +189,9 @@ def _own_read_post(path: str, payload: dict, config: RunnableConfig):
                           uid_msg=_NO_IDENTITY_READ, deny_msg="当前身份无权读取该数据")
 
 
-# Administrator read tools resolve shared transports through this module at call time.
+# Administrator read adapters use the shared authenticated transport.
 
-# Administrator report and moderation-list exports.
+# Administrator report exports.
 from tools.admin_read import (  # noqa: E402,F401
     get_note_periods,
     get_note_stats,
@@ -228,7 +225,7 @@ def _principal_request(method: str, path: str, payload, config: RunnableConfig,
     return body.get("data")
 
 
-# 写操作失败路径的固定尾句：下游 回复模型 靠它如实告知"别声称已改好"。
+# Unknown write outcomes must not be narrated as completed changes.
 _NO_SUCCESS_TAIL = "（本次改动未确认生效，不要声称已改好）"
 
 # Shared identity failures distinguish an unread source from an unconfirmed write.
@@ -237,10 +234,7 @@ _NO_IDENTITY_WRITE = "没有携带当前用户身份：本次未改动任何内�
 
 
 def _own_write_guard(config: RunnableConfig) -> ToolResult | None:
-    """写工具入口的统一哨兵：没身份 → 直接返回，调它之前**一个请求都不发**。
-
-    写操作最不该做的就是在没身份时猜"写给谁"（"我以为给谁写了"比"没写成"坏得多）。
-    """
+    """Reject missing actor identity before sending a write request."""
     if _configured_user_id(config) <= 0:
         return unavailable(_NO_IDENTITY_WRITE)
     return None
@@ -262,12 +256,8 @@ def _admin_request(method: str, path: str, payload, config: RunnableConfig):
 
 
 def _own_request(method: str, path: str, payload, config: RunnableConfig):
-    """以发起人身份写**用户自己**的数据（scope = write.own：收藏 / 标记已读）。
-
-    与 `_admin_request` 是同一条通道的两种措辞，判据一样严（任何不确定路径都
-    unavailable）。uid<=0 时一个字节都不发：写操作最不该做的就是在没身份时猜——
-    对访客来说，"我以为给谁写了"比"没写成"坏得多。
-    """
+    """Write caller-owned data using write.own scope.
+    Missing identity prevents the request; uncertain outcomes remain unavailable."""
     return _principal_request(
         method, path, payload, config,
         label="",

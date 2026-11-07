@@ -1,6 +1,5 @@
 # -*- coding: utf-8 -*-
-"""两件"地还是不是那块地"的事。
-"""
+"""Check corpus provenance and case-specific source-entity premises."""
 import json
 import os
 import re
@@ -12,13 +11,7 @@ CORPUS_PROV_UNKNOWN = "unknown"
 
 
 def provenance_path_for(golden_file: str) -> str:
-    """出处声明住在**golden 文件旁边**：`<golden 目录>/provenance.json`。
-
-    这条契约是给"自己写一套 golden"的人用的（`eval/fixtures/` 就是第一份例子）：用例与
-    它的出处声明必须一起搬——声明说的是"这套用例锚在哪块地上"，两者拆开就会变成用 A 的
-    声明去判 B 的用例（错得还很安静）。默认那份 golden 在 `eval/golden/`，算出来正是
-    `eval/golden/provenance.json`，与 `CORPUS_PROVENANCE_FILE` 指向同一个文件。
-    """
+    """Locate provenance.json beside the selected golden case file."""
     return os.path.join(os.path.dirname(str(golden_file)) or ".", "provenance.json")
 
 
@@ -35,15 +28,8 @@ def load_corpus_provenance(path: "str | None" = None) -> dict:
 
 
 def snapshot_docs() -> "list | None":
-    """语料快照（`[{type,id,title,content}]`）；**取不到与是空的都返回 `None`**，不抛。
-
-    取法（`get_index()` → 空则 `build()` → `docs_snapshot()`）与"取不到就 None"这两条
-    语义原来长在 `golden_evaluation.judge_corpus()` 里，这里搬出来是为了让两个跑法共用一处——
-    `judge_corpus()` 现在只是它外面那层给判据看的打印。
-
-    取不到时**打一行**（带异常类型），因为"为什么没有语料"是要人去查的第一件事；
-    "确实是空的"不打——那不是故障，`corpus_check` 那边已经在报篇数了。
-    """
+    """Read the retrieval corpus snapshot, building an empty index once if needed.
+    Return None for unavailable or empty snapshots; report retrieval exceptions."""
     try:
         from rag.search import get_index
         idx = get_index()
@@ -58,11 +44,7 @@ def snapshot_docs() -> "list | None":
 
 
 def _norm_title(t: str) -> str:
-    """标题归一：**去掉全部空白**再比。
-
-    库里那条 `ESP32-S3 OTA 问题与解决记录 ` 带一个尾空格——逐字节比会红在一个
-    "看起来一模一样"的标题上，而那种红比不判还坏（它会教人把这条判据关掉）。
-    """
+    """Remove whitespace and case-fold titles before comparing source anchors."""
     return re.sub(r"\s+", "", t or "").casefold()
 
 
@@ -71,11 +53,8 @@ norm_title = _norm_title
 
 
 def check_corpus_premises(docs, provenance_file: "str | None" = None) -> tuple:
-    """语料出处前提 ⇒ `(state, detail, row)`；`docs` = `snapshot_docs()` 的快照。
-
-    `provenance_file` 不传就用本模块默认那一份；`--golden <别的用例文件>` 时由跑法传
-    `provenance_path_for(golden)`（用例与它的声明必须同目录，见那个函数的注）。
-    """
+    """Compare a shared corpus snapshot with the selected provenance declaration.
+    Return its state, diagnostic detail and structured evidence."""
     path = provenance_file or CORPUS_PROVENANCE_FILE
     prov = load_corpus_provenance(path)
     anchors = [a for a in (prov.get("anchors") or [])
@@ -84,7 +63,7 @@ def check_corpus_premises(docs, provenance_file: "str | None" = None) -> tuple:
            "declared_for": (prov.get("declared_for") or {}).get("api_base", ""),
            "anchors": len(anchors), "present": [], "missing": [], "state": ""}
     if not anchors:
-        # 声明缺了/写坏了：判不了 ⇒ 不动（与"快照取不到"同一条纪律，都走 unknown）。
+        # Missing usable anchors leave corpus provenance unknown.
         row["state"] = CORPUS_PROV_UNKNOWN
         return CORPUS_PROV_UNKNOWN, "声明里没有可用的锚点（文件缺失或写坏了）", row
     if not docs:
@@ -112,33 +91,19 @@ def check_corpus_premises(docs, provenance_file: "str | None" = None) -> tuple:
 
 # Entity premises distinguish missing source entities from model execution failures.
 ENTITY_KINDS: tuple[str, ...] = ("note_visible",)
-# 声明里必须写 why 的下限（同 `golden_evaluation` 的 `premise_no_popup.capability_boundary`）：
-# 那一半是"为什么这条判据要求这件东西在场"，机器判不了，但至少要写下来。
+# Entity declarations must explain why the source is required.
 ENTITY_WHY_MIN = 8
-# 锚可以是**标题**也可以是 **note id**，两者只写一个（都写了按 id 核，见下面那个 `if`）：
-#   title   —— 判据（或主人那句话）**按标题**点名那篇文章时的形状；
-#   note_id —— 判据**按 id** 点名时的形状（`require_exec_args: article_id`、或
-#              用例把文章 id 写在 `context.current_url` 里 ⇒ `get_article_detail(<id>)`）。
-# ⚠ 这里的 id 与语料出处闸"不许拿 id 当锚点"那条**不矛盾**：那条说的是**跨站点**认不出
-# 同一块地（别人的库 id 完全另排）；这一条问的是**同一块地内部**"这件东西还在不在"，
-# 而 id 正是工具出口与 `current_url` 用的那个坐标——按 id 核比按标题核更稳（改名不误伤）。
-# 键名就一个（`note_id`）：多一个别名就是第二个会漂移的读法。
+# Entity anchors use note_id when supplied, otherwise title.
+# IDs identify entities within the verified corpus, not corpus provenance across sites.
 
 
 def check_entity_premises(cases: list, docs) -> tuple:
-    """逐条核验"判据点名的实体还在不在"，返回 (留下的用例, 未评估的 id, 逐条结论)。
+    """Check source-entity premises and return eligible cases, unassessed IDs and evidence.
 
-    结论 `state="changed"` = 那件东西**已经不在公开面上了**（被改成 private / 删了 /
-    改了名）⇒ 该用例未评估。声明本身写坏（kind 不在 `ENTITY_KINDS`、锚一个都没写、why 太短）
-    **也归 changed**：那是"判据坏了"，方向必须偏到"未评估"那一侧（静默放行就是
-    `golden_evaluation` 那段注释说的"判据看着在、其实不在"）。
-
-    锚两种写法二选一（见上面 `ENTITY_KINDS` 那段）：`note_id` 优先（精确、改名不误伤），
-    给了 id 就**只**按 id 核；没给才按 `title` 去语料里找。
-
-    `docs` = `snapshot_docs()` 的快照，**由调用方取一次、与语料出处闸共用**：两处问的是
-    同一份数据，各取一次就是第二个会漂移的地方。
-    """
+    Malformed declarations or missing entities are marked changed and unassessed.
+    An unavailable snapshot is unchecked and does not establish entity absence.
+    Prefer an explicit note_id over title matching. Reuse the corpus-premise
+    snapshot so both checks observe the same source data."""
     kept: list = []
     skipped: list = []
     rows: list = []
@@ -161,8 +126,7 @@ def check_entity_premises(cases: list, docs) -> tuple:
             row["hit"] = [f"必须写 why（≥{ENTITY_WHY_MIN} 字——为什么这条判据要求它在场，"
                           "机器判不了那一半）"]
         elif not docs:
-            # 快照取不到/为空 ⇒ **判不了**，照跑（见上面那条 ⚠）。这一栏要单列：
-            # "没报错"不等于"核过了"（同 `premise_absent` 的 unchecked 那栏）。
+            # Unavailable snapshots remain unchecked; do not infer absence or silently certify them.
             row["state"] = "unknown"
             rows.append(row)
             kept.append(c)
@@ -184,7 +148,7 @@ def check_entity_premises(cases: list, docs) -> tuple:
 
 
 def entity_report_lines(rows: list, skipped: list) -> list:
-    """把实体前提的结论翻成要打的那几行（两个跑法共用；各写一份措辞早晚会漏那句话）。"""
+    """Render entity-premise states, including unchecked evidence, for evaluation reports."""
     lines: list = []
     for r in rows:
         if r.get("state") == "changed":
@@ -199,8 +163,7 @@ def entity_report_lines(rows: list, skipped: list) -> list:
         lines.append(f"[entity] ⇒ {len(skipped)} 条用例本轮**未评估**：{skipped}")
     unknown = [r["id"] for r in rows if r.get("state") == "unknown"]
     if unknown:
-        # 「没报错」不等于「核过了」：快照取不到的那些，哨兵判不了。**照跑**那一句必须
-        # 在行上（同语料闸 unknown 那行）：不说的话，读的人会把"这一栏没红"读成"核过了"。
+        # Report unchecked premises explicitly even when evaluation continues.
         lines.append(f"[entity] {len(unknown)} 条实体前提判不了"
                      f"（公开语料快照取不到或为空）——**照跑**；这一栏没红不等于核过了："
                      f"{unknown}")
@@ -208,7 +171,7 @@ def entity_report_lines(rows: list, skipped: list) -> list:
 
 
 def report_lines(state: str, detail: str, row: dict) -> list:
-    """把结论翻成要打的那几行（两个跑法共用；各写一份措辞早晚会漏掉最关键的那句）。"""
+    """Render corpus-premise states and the provenance declaration used."""
     if state == CORPUS_PROV_FOREIGN:
         return [
             f"[corpus-premise] ⚠ 这一轮的语料**不是**这套 golden 的那一份：{detail}",
@@ -221,7 +184,7 @@ def report_lines(state: str, detail: str, row: dict) -> list:
             f"只是标题改了名 ⇒ 修 {row.get('file') or CORPUS_PROVENANCE_FILE} 的 anchors",
         ]
     if state == CORPUS_PROV_UNKNOWN:
-        # 「不知道」不等于「不可用」：照跑（同 identity_preflight 那条纪律）。
+        # Unknown provenance is reported separately when evaluation continues.
         return [f"[corpus-premise] ⚠ 语料出处判不了：{detail}"
                 " —— 照跑；本轮若大面积飘红，先看这一行"]
     return []

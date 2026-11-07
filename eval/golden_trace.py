@@ -1,6 +1,5 @@
 # -*- coding: utf-8 -*-
-"""golden set 的 trace 落盘：**每条用例一份，落独立目录**。
-"""
+"""Record per-case evaluation traces outside production trace directories."""
 
 import json
 import os
@@ -9,18 +8,18 @@ import shutil
 import time
 
 from config.settings import settings
-from utils import trace as trace_mod  # 工具返回在 trace 里留多长（写进 input 供读的人判断）
+from utils import trace as trace_mod  # Trace metadata records the tool-result retention limit.
 
 ENV_RUN = "GOLDEN_TRACE_RUN"
 ENV_OFF = "GOLDEN_NO_TRACE"
 
-# run 目录名 = 时间戳（`%Y%m%d_%H%M%S`）；清理只认这个形状
+# Only timestamp-shaped run directories qualify for pruning.
 _RUN_RE = re.compile(r"^\d{8}_\d{6}$")
 
 # Evaluation trace retention is configurable by the runner.
 KEEP_DEFAULT = 30
 
-# 留档目录（`eval/report/runs/`）：prune 靠它反查"那一晚是不是红的"。整体 gitignore。
+# Archived evaluation verdicts determine which trace runs may be pruned.
 _REPORT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "report", "runs")
 
 
@@ -30,7 +29,7 @@ def trace_root() -> str:
 
 
 def enabled() -> bool:
-    """默认开（不给 trace 的评测等于放弃排障）；`GOLDEN_NO_TRACE=1` 关。"""
+    """Enable evaluation tracing unless GOLDEN_NO_TRACE explicitly disables it."""
     return os.environ.get(ENV_OFF, "").strip().lower() not in ("1", "true", "yes")
 
 
@@ -40,11 +39,7 @@ TRACE_DERIVED_GOLD_KEYS = ("require_ledger_frame", "require_ledger_rows",
 
 
 def trace_derived_keys(case: dict) -> list:
-    """这条用例（**多轮也算**）里靠 trace 事件才判得动的 gold 键。
-
-    轮次取法与 `golden_evaluation.iter_rounds` 同源（单轮用例字段在顶层，多轮写在 `rounds` 里）
-    ——这里只读 `gold` 一格，故不复用那个归一化器（它会连带构造 context，代价不对等）。
-    """
+    """Collect expectation keys requiring trace evidence across all case rounds."""
     rounds = case.get("rounds") or [case]
     keys: list = []
     for r in rounds:
@@ -55,7 +50,7 @@ def trace_derived_keys(case: dict) -> list:
 
 
 def resolve_run_id(explicit: str | None = None) -> str:
-    """run_id：显式参数 > 环境变量（进程隔离跑法由父进程给）> 当前时刻。"""
+    """Choose an explicit run ID, the environment value or a timestamp, in that order."""
     rid = (explicit or os.environ.get(ENV_RUN) or "").strip()
     return rid or time.strftime("%Y%m%d_%H%M%S")
 
@@ -65,7 +60,7 @@ def case_dir(run_id: str) -> str:
     prod = os.path.abspath(settings.trace_dir)
     d = os.path.abspath(os.path.join(trace_root(), run_id))
     if not d.startswith(os.path.abspath(trace_root()) + os.sep):
-        # run_id 里带 `..`/绝对路径 ⇒ 拒绝（路径是拼出来的，别让参数把它带出去）
+        # Reject path traversal and absolute run IDs.
         raise RuntimeError(f"golden trace 目录越界：{d!r}（run_id={run_id!r}）")
     if d == prod or d.startswith(prod + os.sep):
         raise RuntimeError(f"golden trace 不能落生产目录：{d!r}")
@@ -106,11 +101,8 @@ def events_of(trace_id: str) -> list:
 
 
 def tool_call_stats(trace_id: str | None) -> tuple[list[str], int]:
-    """Read actual native calls before finish_case removes the recorder.
-
-    Raw tool messages stay inside the model loop. Historical hybrid records
-    remain readable, but planner events and requested calls are not executions.
-    """
+    """Count recorded execution calls and distinct execution rounds.
+    Requested calls and planner events are not completed tool executions."""
     if not trace_id:
         return [], 0
     calls = [e for e in events_of(trace_id)
@@ -120,11 +112,8 @@ def tool_call_stats(trace_id: str | None) -> tuple[list[str], int]:
 
 
 def finish_case(trace_id: str | None, duration_s: float, frames: int = 0) -> str | None:
-    """收尾落盘，返回路径（没开/写失败 → None）。
-
-    **事件为空要吭声**：contextvar 没传进 producer 线程时，落下来的是一份只有元数据的
-    空壳，静默当成功就是又一次"看起来在记录"（与探针"查错层把 PASS 报成 FAIL"同源）。
-    """
+    """Finalize an evaluation trace and return its path, or None when unavailable.
+    Report empty event sets so missing producer-context propagation remains visible."""
     if not trace_id:
         return None
     from utils.trace import _ACTIVE, finish_trace
@@ -159,18 +148,14 @@ def prune(keep: int = KEEP_DEFAULT) -> list[str]:
         shutil.rmtree(os.path.join(root, n), ignore_errors=True)
     if kept_fail:
         # Retained evidence must be visible in the cleanup report.
-        # 悄悄留下 = 下次没人知道为什么这个目录还在
         print(f"[trace] 保留 {len(kept_fail)} 个有失败的旧 run（失败夜的 trace 是证据，"
               f"不清理）：{kept_fail[0]} … {kept_fail[-1]}")
     return doomed
 
 
 def _run_verdicts() -> dict[str, bool]:
-    """留档反查：`{run_id: 那晚有没有失败}`（只在能确定时进字典）。
-
-    读者是纯函数式的——目录路径走模块常量 `_REPORT_DIR`（测试 monkeypatch 到 tmpdir，
-    照 `test_golden_trace` 既有约定：离线测试必须能把目录指走、生产目录零写入）。
-    """
+    """Read known per-run failure verdicts from archived reports.
+    Missing or unreadable evidence never marks a run safe for pruning."""
     out: dict[str, bool] = {}
     if not os.path.isdir(_REPORT_DIR):
         return out
@@ -180,14 +165,14 @@ def _run_verdicts() -> dict[str, bool]:
         try:
             with open(os.path.join(_REPORT_DIR, name), encoding="utf-8") as f:
                 doc = json.load(f)
-        except Exception:                # noqa: BLE001 —— 读不出=证据不足，跳过（对应"留"）
+        except Exception:                # noqa: BLE001 -- Unreadable evidence never authorizes pruning.
             continue
         if not isinstance(doc, dict):
             continue
         rid = doc.get("trace_run")
         failed = doc.get("failed")
         if not isinstance(rid, str) or not rid or not isinstance(failed, int):
-            continue                     # 旧留档没有 trace_run / 形态不认识 ⇒ 不当成"干净"
+            continue                     # Missing or malformed verdicts do not prove a clean run.
         reg = doc.get("regression")
         # Keep first-attempt failures even when a rerun passes.
         bad = bool(failed) or (isinstance(reg, dict)

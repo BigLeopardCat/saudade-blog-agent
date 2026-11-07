@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""语料术语派生：gold **声明来源文档**，断言词由语料**运行期派生**。
-"""
+"""Derive document-specific assertion terms and measure assertion drift and exposure."""
 from __future__ import annotations
 
 import re
@@ -11,11 +10,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from rag.search import tokenize  # noqa: E402
 
-# S2：**没有字母也没有汉字的 token 一律排除**（纯数字、纯标点、`1.`、`1.1.0`、`..`）。
-# 形态学判据，不是"内容判据"：数字在语料里是阈值/端口/版本号，不是主题词（`8010`
-# 落在 13/19、`30` 落在 19/46，跨篇偶然同形）；点号串是 markdown 序号/省略号的残渣
-# （note:14∩note:22 的派生集里混着 `..`、`...`、`1.`、`1.1.0`）。**不许**把它写成
-# "它们不在正文里"——它们在，只是不承担主题。
+# Require alphabetic or CJK content; numeric and punctuation-only tokens are not topic terms.
 _WORDY = re.compile(r"[a-zA-Z一-鿿]")
 _ASCII_ALPHA = re.compile(r"[a-zA-Z]")
 _PURE_CJK3 = re.compile(r"^[一-鿿]{3}$")
@@ -31,16 +26,12 @@ _FUNCTION_WORDS = (
 )
 
 
-# 缺失语义族（漂移哨兵用）：这些词做**正**断言时判的是"如实说没有"（否定/拒绝语义），
-# 不是主题词——它们的成立与语料无关，不参与 ORPHAN/GENERIC 判定，只打印计数。
+# Absence/refusal assertions are counted separately from corpus-specific topic terms.
 _ABSENCE_WORDS = ("没有", "没找到", "未收录", "不存在", "找不到", "未找到", "暂无", "无此",
                   "没写", "帮不上", "没法", "无法", "对不上", "不能", "查不到", "看不到",
                   "没看到", "不清楚", "不掌握", "记录里", "这次执行")
 
-# 漂移哨兵的扫描范围：**只有这些用例的期望来自文章语料**。
-# 反面例子（被排除的）：贴纸（`:害羞:`）、特效（樱花/蓝）、执行记忆（执行记录）、
-# 当前文章正文（欧洲）——它们的正断言判的是"系统状态/人设/别的数据源"，语料不是来源，
-# 拿 ORPHAN 去判它们只会刷出一屏噪音，把真信号淹掉。范围外的**计数会打印**，不静默丢。
+# Inspect corpus-derived cases only; report excluded semantic families separately.
 _SCOPE_TAGS = ("rag", "recall")
 
 
@@ -55,7 +46,7 @@ def _doc_text(doc: dict) -> str:
 
 
 def _norm_keys(keys) -> list[str]:
-    """`"note:14"` / `["note:14","note:22"]` / `"note:14,note:22"` 都收（CLI 好用）。"""
+    """Accept one document key, a comma-separated key string or a sequence of keys."""
     if keys is None:
         return []
     if isinstance(keys, str):
@@ -64,11 +55,8 @@ def _norm_keys(keys) -> list[str]:
 
 
 def _load_docs(docs=None) -> tuple[list[dict], dict]:
-    """→ (语料文档列表, diag)。`docs` 给定就用给定的（内联夹具/离线）。
-
-    `docs=None` 走索引快照；快照空则建一次；仍空 ⇒ `([], {"unavailable": True})`
-    ——**不抛异常、也不静默**（调用方见 `unavailable` 必须响亮报"未评估"）。
-    """
+    """Use supplied documents or load the retrieval snapshot. Unavailable sources return
+    an empty list with an unavailable diagnostic; callers must report them as unassessed."""
     if docs is not None:
         return list(docs), {}
     from rag.search import get_index
@@ -87,21 +75,13 @@ def _load_docs(docs=None) -> tuple[list[dict], dict]:
 
 def derive(doc_keys, *, docs=None, df_max: int = 2, strict: bool = False,
            min_doc_chars: int = 2000, cap: int | None = 40) -> tuple[list[str], dict]:
-    """从申报的文档里派生"专属术语"。→ `(terms, diag)`。
+    """Derive terms from declared source documents and return terms with diagnostics.
 
-    `doc_keys`：`"note:14"` 或 `["note:14", "note:22"]`（gold 里的 `doc` 两种都写）。
-    `strict=True` ⇒ 只要 df==1 的词（单一来源）；默认 df ≤ `df_max`。
-    `min_doc_chars`：申报文档短于这个数 ⇒ 记进 `diag["short_docs"]`（可读性事实，
-      不改变候选集——截断候选会让"派生集小"更难诊断）。
-    `cap`：**默认 40 是给人看的**（`--show` 回显）；`cap=None` ⇒ 不截断。
-      **判据侧（`require_doc_terms`）必须用 `cap=None`**：截断按 `df` 升序取前 40，
-      实测 11 篇语料下取到的全是 df=1 的最冷僻标识符，而"回答扎根于这两篇"时模型
-      写出来的多半是那两篇里**常见**的词 ⇒ 截断会把诚实的回答判红（假红比放宽更糟）。
-      代价是"未截断的集合很大时 `min_terms` 判据力弱"——这一点由漂移哨兵按
-      `n_kept` 如实报出来，并按实跑校准 `min_terms`，不在这里假装它严。
-    `diag["thin"]`：存活的术语 < 2 ⇒ 这份申报文档派生不出有判据力的术语集，
-    调用方/哨兵要按 THIN 报出来，别让"派生集只有 1 个词"冒充严判据。
-    """
+    strict requires document frequency one; otherwise df_max limits frequency.
+    Short source documents are reported without changing the candidate set.
+    cap limits display output; assertion callers use cap=None to retain all terms.
+    Diagnostics include missing sources, term counts, identifier-like marks and
+    specific/common examples. Fewer than two returned terms marks the source thin."""
     keys = _norm_keys(doc_keys)
     all_docs, diag = _load_docs(docs)
     if not keys:
@@ -122,7 +102,7 @@ def derive(doc_keys, *, docs=None, df_max: int = 2, strict: bool = False,
         return _doc_text(d)
 
     diag["short_docs"] = [doc_key(d) for d in declared if len(_text(d)) < min_doc_chars]
-    # S4 的分母：整个语料的**篇级** df（同一篇里出现多次只算 1）。
+    # Document frequency counts each term once per corpus document.
     df: dict[str, int] = {}
     for d in all_docs:
         for t in set(tokenize(_text(d))):
@@ -134,27 +114,22 @@ def derive(doc_keys, *, docs=None, df_max: int = 2, strict: bool = False,
 
     kept: list[str] = []
     for t, _n in tf.items():
-        if len(t) < 2 or not _WORDY.search(t):           # S1 / S2
+        if len(t) < 2 or not _WORDY.search(t):           # Require letters or CJK.
             continue
-        if t in _FUNCTION_WORDS:                        # S3
+        if t in _FUNCTION_WORDS:                        # Exclude function n-grams.
             continue
         f = df.get(t, 0)
-        if (f == 1) if strict else (f <= df_max):        # S4
+        if (f == 1) if strict else (f <= df_max):        # Bound corpus document frequency.
             kept.append(t)
-    # 排序档：0 = 有字母且无点号（`esp_https_ota`）、1 = 有字母带点号（`v1.2`/`mqtt://…`）、
-    # 2 = 中文 gram。三档而不是两档：档 0/1 都"含 ASCII 字母"，但档 1 是配置路径/版本号一类
-    # 非词形，混在一起会让 `cap` 只截到它（S5 只说"不排除"，没说"排前面"）。
+    # Rank plain ASCII terms before dotted identifiers, then CJK n-grams.
     kept.sort(key=lambda t: (0 if (_ASCII_ALPHA.search(t) and "." not in t) else
                              1 if _ASCII_ALPHA.search(t) else 2,
                              df.get(t, 0), -len(t), -tf.get(t, 0), t))
     out = kept if cap is None else kept[:cap]
-    # `top` 是"最像专有术语"的前几个（判据没命中时，人要看的是**回答本该用到什么词**）。
-    # `common` 反过来按篇内词频排：一个真的在讲这两篇的回答，多半会用到这几个常用词——
-    # 判据消息与漂移哨兵的"建议替换词"都用它（对着一张 `esp_mqtt_client_subscribe`
-    # 想不出该写什么，对着 `固件/设备/配置` 就能）。
+    # Diagnostics expose both specific terms and common terms for assertion review.
     diag.update(n_terms=len(out), n_kept=len(kept),
                 docs=[doc_key(d) for d in declared], df_max=df_max, strict=strict,
-                marks={"id_like": [t for t in out if "." in t],        # S5：只标记
+                marks={"id_like": [t for t in out if "." in t],        # Retain identifier-like terms.
                        "gram3": [t for t in out if _PURE_CJK3.match(t)]},
                 top=[{"term": t, "df": df.get(t, 0), "tf": tf.get(t, 0)} for t in out[:10]],
                 common=sorted(out, key=lambda t: (-df.get(t, 0), -tf.get(t, 0), t))[:8])
@@ -264,20 +239,17 @@ def drift(*, case: str = "", docs=None, df_max: int = 2, generic_df: int = 4,
     return rc
 
 
-# ── 暴露度在 `drift` 里的三个挂点（`exposure()` 本体在本文件下半，先定义后用）──────────
+# Archive-exposure reporting used by the corpus drift command.
 def _exposure_section(runs: int) -> tuple[str, list[str]]:
-    """`drift` 报告的后半节：暴露度**不需要语料**（数据源是归档回复），所以先跑。
+    """Build archive-exposure output independently of corpus availability.
 
-    返回 `(报告里那一节含分隔符, 控制台行)`。`exposure()` 的 rc **刻意不往上传**：那一节
-    只管"跑起来了没有"，读数本身不判红（它自己的「未评估」已经打在自己的行里，把它读成
-    这条哨兵红了会更糟）。
-    """
+    Its status reports assessment availability and does not change the drift verdict."""
     _rc, md, lines = exposure(runs=runs, report_dir=None)
     return ("\n\n" + md) if md else "", lines
 
 
 def _only_exposure(why: str, report_dir: str, exp_md: str, exp_lines: list[str]) -> int:
-    """语料不可用时：暴露度那一节是**唯一**能拿到的读数，单独落一份报告，别一起消失。"""
+    """Write archive-exposure results when corpus-dependent checks cannot run."""
     from datetime import datetime
     print(f"[drift] 语料不可用（{why}）—— 未评估，不写报告")
     _print_lines(exp_lines)
@@ -313,12 +285,10 @@ def _drift_console(out, rc: int, n_words: int, orphan, generic, misbound, thin, 
 
 # Measure current assertions against archived replies without rerunning the model.
 _ARCHIVE = "report/runs"
-# 探的四个键 = 判据层里"只判措辞"的那一半（`text_any_regex` 是正断言，可由 ORPHAN 那套管，
-# 不在探针里）。`forbid_login_demand` 是 bool 键、自己不装词表（词表在 `LOGIN_DEMAND_RE`
-# 那张共享族里），但它是"真只能判文本"的典型，探它 = 探那张族在真实回复上的表现。
+# Evaluate text-only assertion keys against archived replies using the shared judge.
 _PROBE_KEYS = ("text_contains", "text_not_contains", "text_not_match_regex",
                "forbid_login_demand")
-# 正/负的读法相反：负判据"0 命中"是好形状（只是没证据说它有牙齿），正判据"0 命中"是坏形状。
+# Positive and negative assertion hit rates have opposite interpretations.
 _POSITIVE_KEYS = ("text_contains",)
 _EXEMPT_COPY = ("not_contains_exempt_quote", "not_match_exempt_conditional",
                 "not_match_exempt_refuted", "not_match_exempt_mention",
@@ -328,13 +298,10 @@ _MIN_ROUNDS = 20
 
 
 def _probe(gold: dict, text: str, key: str, check_gold) -> str:
-    """拿**判据自己**判这一个键，返回失败原因（空串 = 这一轮没判红）。
+    """Evaluate one assertion key with the case's existing exemption flags.
 
-    `check_gold` 只喂这一个键（+ 它那六个豁免开关，照抄当前 gold）。只喂一个键是刻意的：
-    `text_contains` 在 `check_gold` 里是一条**或**（词表 / 正则 / `require_denial` /
-    `require_absence`），带上兄弟成员后"这张词表自己命不命中"会被别的成员盖住——而哨兵
-    要读的正是**这张词表自己的区分力**。豁免开关不照抄的话，量到的是另一个（更严的）判据。
-    """
+    Isolating the key prevents sibling OR conditions from masking its own result.
+    Return the first failure reason, or an empty string when the assertion passes."""
     mini: dict = {key: True} if key == "forbid_login_demand" else {key: gold[key]}
     for k in _EXEMPT_COPY:
         if gold.get(k):
@@ -351,7 +318,7 @@ def _trim(s: str, n: int = 70) -> str:
 
 
 def _load_golds(gfile, rg) -> dict[str, list[dict]]:
-    """今天的 golden，逐条按 `iter_rounds` 取逐轮 gold（轮序是判据的一部分）。"""
+    """Load current case-round assertions using the runner's round order."""
     import json as _json
     out: dict[str, list[dict]] = {}
     for line in gfile.read_text(encoding="utf-8").splitlines():
@@ -382,10 +349,9 @@ def _probe_case_gold(gold: dict, text: str, cid: str, run: str, agg: dict, check
 
 
 def _scan_archive(files, golds: dict, check) -> tuple[dict, dict]:
-    """逐份 → 逐用例 → 逐轮把**今天的判据**跑在归档回复上；返回 `(逐格聚合, 计数)`。
+    """Apply current assertions to matching archived case rounds.
 
-    四种跳过形状**各有理由、都计数**（口径见 `exposure` 的 docstring），不静默丢。
-    """
+    Count each unsupported or unavailable record shape separately."""
     import json as _json
     agg: dict[tuple[str, str], dict] = {}
     c: dict = {"cases": 0, "rounds": 0, "gone": {}, "stale": 0, "trunc": 0,
@@ -443,7 +409,7 @@ def _bucket_key(r: dict) -> str:
     return "负判据触发过" if r["bad"] else "负判据从未触发"
 
 
-# 四个问题桶的标题 + 说明。**说明就是这条哨兵的口径**：不读它，数字会被当成判决。
+# Each exposure bucket includes the interpretation needed to assess its counts.
 _BUCKETS = (
     ("正词表恒通过",
      "——这张词表在这条用例**自己的**历史回复上一次都没失败过：要么回复一直诚实，"
@@ -470,12 +436,8 @@ def _dump_bucket(title: str, rs: list[dict], note: str, cap: int = 25) -> list[s
 
 
 def _exposure_console(files, c: dict, n_gold: int, agg: dict, big: list[dict]) -> list[str]:
-    """控制台那几行：三行汇总 + 四个问题桶 + 一行"健康档有多少格"。
-
-    最后一行的用处是让五档加起来 = 进判读的格数——缺了它，读的人无法确认
-    「不是问题的那一档」有多少（恒通过 13 格与恒通过 13 格 + 有区分力 50 格，
-    都是「报告里没写」）。
-    """
+    """Summarize exposure counts and problem buckets, including healthy cells
+    so the displayed groups account for all assessed cells."""
     lines = [f"[exposure] 归档 {len(files)} 份报告 / 参与 {c['cases']} 条用例实例 / "
              f"{c['rounds']} 轮文本；golden {n_gold} 条用例",
              f"[exposure] 跳过：用例已不在 golden {sum(c['gone'].values())} 条"
@@ -720,7 +682,7 @@ def _drift_md(corpus_keys, cases_file, cases, orphan, generic, misbound, thin,
 
 
 def _show(keys: list[str], *, df_max: int, strict: bool, docs=None) -> int:
-    """逐篇 + 合并地打印派生结果（迁移前"读该问题最贴的那一篇"的落地工具）。"""
+    """Print derived terms for each declared document and their combined set."""
     print(f"[corpus_terms] 语料来源：{'内联夹具' if docs is not None else '线上快照'}"
           f" | df_max={df_max} strict={strict}")
     if len(keys) > 1:
