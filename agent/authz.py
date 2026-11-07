@@ -198,6 +198,7 @@ TOOL_SCOPE: dict[str, str] = {
     "reject_quota_request": SCOPE_WRITE_CONSOLE,
     "reset_user_quota": SCOPE_WRITE_CONSOLE,
     "list_accounts": SCOPE_ADMIN_CONSOLE,
+    "get_account_action_eligibility": SCOPE_ADMIN_CONSOLE,
 }
 
 REASON_OK = "ok"

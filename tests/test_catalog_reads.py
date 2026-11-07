@@ -300,12 +300,13 @@ def test_catalog_defaults_keep_complete_pages_and_reliable_totals(backend, tool,
 
 def test_current_admin_domains_do_not_require_legacy_registry_placeholders(monkeypatch):
     from agent.domains import moderation, work_queue
+    from agent.domains.account_actions.eligibility import get_account_action_eligibility
     from agent.products.blog import read_tools
 
     monkeypatch.setattr(read_tools, "get_all_tools", lambda: [])
     for factory, expected in (
         (read_tools.catalog_tools, (catalog.list_admin_notes,)),
-        (read_tools.account_tools, (catalog.list_accounts,)),
+        (read_tools.account_tools, (catalog.list_accounts, get_account_action_eligibility)),
         (read_tools.moderation_tools, (moderation.get_moderation_status,
          moderation.list_admin_board, moderation.list_admin_comments)),
         (read_tools.queue_tools, (work_queue.list_quota_requests, work_queue.list_dashboard_todos)),

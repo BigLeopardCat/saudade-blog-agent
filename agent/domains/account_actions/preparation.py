@@ -182,7 +182,8 @@ def prepare_account_mute(
     permanent: StrictBool = False,
     schedule: WriteSchedule | None = None,
 ) -> object:
-    """准备禁言确认，只读。明确指定正数hours或permanent=true，二选一；未给期限需先询问。
+    """准备禁言确认，只读。明确指定正数hours或permanent=true，二选一。
+    未给期限时可先用get_account_action_eligibility核实资格，允许禁言再询问期限。
     冻结北京时间到期时刻；永久需明确选择。仅限制评论与留言，不改身份、冻结或登录状态。
     """
     if schedule is not None:

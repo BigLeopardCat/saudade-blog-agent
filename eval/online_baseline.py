@@ -51,6 +51,23 @@ def fixture_images(case):
     return images
 
 
+def fixture_account_eligibility(case):
+    value = case.get("requires_account_eligibility")
+    if value is None:
+        return None
+    from agent.domains.account_actions.eligibility import checked
+
+    try:
+        if not isinstance(value, dict) or set(value) != {
+                "accountId", "action", "role", "allowed", "reasonCode"}:
+            raise ValueError("incomplete account eligibility premise")
+        checked({**value, "message": "fixture"},
+                value["accountId"], value["action"], value["role"])
+    except (ValueError, TypeError) as exc:
+        raise ValueError(f"invalid account eligibility fixture: {case['id']}") from exc
+    return dict(value)
+
+
 def _call_limits(gold, case_id):
     """Validate evaluation ceilings before any model or business request."""
     maximum = gold.get("max_model_calls")
@@ -81,6 +98,7 @@ def load_suite(path=SUITE):
             raise ValueError(f"unreviewed draft cannot run as a baseline: {case['id']}")
         fixture_articles(case)
         fixture_images(case)
+        fixture_account_eligibility(case)
         if case["identity"] not in {"admin", "user", "zako"}:
             raise ValueError(f"unknown identity in {case['id']}")
         for rnd in golden.iter_rounds(case):
@@ -158,6 +176,8 @@ def check_case_fixtures(case, transport):
         transport.check_public_article_fixture(identifier)
     for identifier in fixture_images(case):
         transport.check_gallery_fixture(identifier)
+    if expected := fixture_account_eligibility(case):
+        transport.check_account_eligibility_fixture(expected)
     if case.get("requires_quota_usage"):
         transport.check_quota_fixture(case["requires_quota_usage"])
     if case.get("requires_category_creation"):
