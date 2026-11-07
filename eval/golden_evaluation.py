@@ -512,9 +512,7 @@ def _negated_modal_frame(text: str, pos: int) -> bool:
 
 
 def _mentioned_not_claimed(text: str, pos: int, end: int | None = None) -> bool:
-    """命中片段是"提到那句话"而不是"声称做了那件事"（四支取或，详见上方长注）。
-
-    `end` 只喂给命题否定那一支（反问句守卫要看得见命中**之后**的字）。"""
+    """区分引述、否定和执行声明；end 用于识别命中后的反问。"""
     return (_quoted_speech_mention(text, pos)
             or _negated_speech_mention(text, pos)
             or _direct_negation_prefix(text, pos, end)
@@ -541,10 +539,7 @@ _NEG_VERB_RE = re.compile(
 
 
 def _confesses(scope: str) -> bool:
-    """scope 里有没有"承认自己错了"的表述（词表 + 形态，两者取或）。
-
-    形态那一支先抹掉被否定的动词（「我没错」/「并没有误判」），剩下的才算承认——
-    反向句不是自省，与词表时代同宽。"""
+    """识别自我纠正，排除被否定的认错表述。"""
     if any(m in scope for m in CONFESS_MARKERS):
         return True
     return bool(_SELF_CORRECTION_RE.search(_NEG_VERB_RE.sub("", scope)))
@@ -1186,8 +1181,7 @@ def check_gold(gold: dict, result: dict, *, docs=None, user_input: str = "",
                 _src = _squash_ws(user_input)
                 _led = _squash_ws(pending_src)
                 if not _src and not _led:
-                    # 两本账都拿不到 ⇒ **判不了**，响亮跳过这一格（不是通过）。照"未评估"
-                    # 那条纪律：判据的前提住在调用点手里，前提没到就不许静默给绿。
+                    # Missing provenance evidence is unevaluated, never a pass.
                     fails.append(f"卡片参数 {_f!r} 判不了：这一轮既拿不到主人原话、"
                                  "也拿不到台账那一行"
                                  "（`check_gold` 的 `user_input` / `pending_src` 都传空了）")
@@ -1249,9 +1243,7 @@ def check_gold(gold: dict, result: dict, *, docs=None, user_input: str = "",
                 if _tid is None or int(_tid) not in _byfam.get(_fam, set()):
                     _bad.append(f"{_tool}.{_field}={_val!r}")
         if not _seen:
-            # 一张卡上**一个**按台账编号的目标都没有 ⇒ 这条断言无从判起。判红而不是
-            # 放过：它意味着用例声称"卡片按编号认目标"而实际形态变了（例如卡没弹、
-            # 或模型改用了名字通道）——那种情况下绿的是空气。
+            # A target-ID assertion requires at least one identified proposal target.
             fails.append("卡片里没有一件按台账编号的目标（本键无从判起 ⇒ 判红）")
         if _bad:
             fails.append(f"卡片上的台账编号不来自本轮帧：{_bad}"
