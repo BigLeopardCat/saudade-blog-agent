@@ -277,7 +277,8 @@ def run(cases, transport, identities, report_dir, *, phase, suite_hash, include_
                 errors = [r["error"] for r in result["rounds"] if r.get("error")]
                 row.update(status="failed" if fails or errors else "passed",
                            fails=fails, errors=errors, result=safe_result(result))
-                availability = model_availability_failure(result)
+                availability = (result.get("evaluation_failure")
+                                or model_availability_failure(result))
                 if availability:
                     row.update(status="evaluation_error", evaluation_failure=availability)
         except (httpx.HTTPError, EvaluationError, ValueError) as exc:
@@ -289,7 +290,9 @@ def run(cases, transport, identities, report_dir, *, phase, suite_hash, include_
         print(json.dumps({k: row[k] for k in ("id", "status", "elapsed_s")},
                          ensure_ascii=False), flush=True)
         if row.get("evaluation_failure"):
-            report["stopped_reason"] = "captured model availability failure"
+            report["stopped_reason"] = ("captured model availability failure"
+                if row["evaluation_failure"]["failure_source"] in {"provider", "transport"}
+                else "captured HTTP or evidence failure")
             save()
             break
         if phase == "poc" and row["status"] == "evaluation_error":
