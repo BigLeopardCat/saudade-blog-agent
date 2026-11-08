@@ -145,7 +145,10 @@ def get_gallery_image_metadata(image_id: targets.Identifier, config: RunnableCon
 @tool
 def show_gallery_image(image_id: targets.Identifier, config: RunnableConfig) -> object:
     """Display one gallery image in the user's chat, without reading pixels or preparing a write.
-    Use a known gallery ID from the user, history or an index. The UI receives the verified
+    Use when an image ID is known but its URL has not been read. If a previous tool result
+    already provides its URL or display_markdown, include that Markdown in your reply
+    directly; do not call this tool or re-read unchanged metadata just to display it.
+    The UI receives the verified
     image from this tool's artifact even if the final narration omits Markdown. Do not repeat
     its image Markdown in the narration. For visual analysis use get_gallery_image separately;
     a model inspection does not display an image to the user.
