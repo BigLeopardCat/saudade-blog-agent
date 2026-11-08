@@ -107,3 +107,28 @@ def test_failed_display_does_not_append_or_invent_an_image(monkeypatch):
                     [HumanMessage(content="给我展示图片74")])
     assert result.reply == "图片服务暂不可用。"
     assert "![" not in result.reply
+
+
+def test_known_metadata_link_is_available_next_turn_without_another_read(backend):
+    from langgraph.checkpoint.memory import InMemorySaver
+
+    from agent.products.blog.application import BlogApplication
+    from agent.runtime.checkpoint_conversations import CheckpointConversationStore
+    from agent.runtime.service import AgentRuntime
+
+    cfg = config(principal=Principal(7, "admin", SOURCE_ASSERTION))
+    with model_replies({"tool_calls": [call("load_admin_gallery_info_tools", "load")]},
+                       {"tool_calls": [call("get_gallery_image_metadata", "read", image_id=74)]},
+                       {"content": "名称是猫咪。"},
+                       {"content": f"![猫咪]({URL})"}) as (model, requests):
+        store = CheckpointConversationStore(InMemorySaver())
+        runtime = AgentRuntime(store, application=BlogApplication(),
+                               model_factory=lambda **_: model)
+        list(runtime.stream_events({"messages": [HumanMessage(
+            content="只查图片74的名称，不要展示。")]}, cfg))
+        replies = list(runtime.stream_events({"messages": [HumanMessage(
+            content="展示刚才那张，复用链接，不要重新查询。")]}, cfg))
+    assert len(requests) == 4 and len(backend) == 1
+    assert URL in str(requests[-1])
+    assert replies[-1].reply == f"![猫咪]({URL})"
+    assert store.load(cfg).messages[-1].content == replies[-1].reply
