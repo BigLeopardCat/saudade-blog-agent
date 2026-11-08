@@ -5,20 +5,21 @@ import hashlib
 import json
 import os
 import sys
-import tempfile
 from pathlib import Path
 
 os.environ["SAUDADE_IGNORE_ENV_FILE"] = "1"
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from config import settings  # noqa: E402
+from rag import vector_index  # noqa: E402
 from rag.corpus import content_revision  # noqa: E402
 from rag.embedding_inputs import active_profile, document_text, vector_chunks  # noqa: E402
+from rag.postgres import PostgresRepository  # noqa: E402
 from rag.search import RagIndex  # noqa: E402
 from rag.vector_index import VectorStore, embed_query, space_from_settings  # noqa: E402
 
 
-def verify(root: Path) -> dict:
+def verify(collection: str) -> dict:
     policy = active_profile()
     if policy is None:
         raise ValueError("a pinned input profile is required")
@@ -50,7 +51,8 @@ def verify(root: Path) -> dict:
         policy.validate(document_text(title, chunk["text"], policy))
     if covered != set(range(len(body))) or not any("TAIL" in c["text"] for c in chunks):
         raise ValueError("source coverage/tail missing")
-    store = VectorStore(root)
+    store = VectorStore(PostgresRepository(settings.rag_vector_dsn, collection))
+    vector_index._store = store
     first = store.update(chunks, space_from_settings())
     if not first.get("ok") or first.get("missing"):
         raise ValueError("live embedding did not complete")
@@ -88,6 +90,7 @@ def main() -> int:
     parser.add_argument("--model", required=True)
     parser.add_argument("--timeout", type=float, default=120)
     parser.add_argument("--output", required=True, type=Path)
+    parser.add_argument("--collection", required=True, help="isolated eval- collection")
     args = parser.parse_args()
     settings.embedding_profile = args.profile
     settings.embedding_base_url = args.base_url
@@ -95,9 +98,11 @@ def main() -> int:
     settings.embedding_model = args.model
     settings.embedding_batch_size = 1
     settings.embedding_timeout = args.timeout
-    with tempfile.TemporaryDirectory(prefix="rag-budget-") as temporary:
-        settings.rag_vector_dir = temporary
-        report = verify(Path(temporary))
+    settings.rag_vector_dsn = os.getenv("SAUDADE_RAG_EVAL_DSN", "")
+    if not settings.rag_vector_dsn or not args.collection.startswith("eval-"):
+        parser.error("explicit SAUDADE_RAG_EVAL_DSN and an eval- collection are required")
+    settings.rag_vector_collection = args.collection
+    report = verify(args.collection)
     root = Path(__file__).resolve().parents[1]
     sources = [
         root / "rag" / name

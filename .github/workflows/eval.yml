@@ -118,7 +118,7 @@ jobs:
     timeout-minutes: 10
     services:
       postgres:
-        image: postgres:16
+        image: pgvector/pgvector:pg16
         env:
           POSTGRES_PASSWORD: task-input-ci
           POSTGRES_DB: agent_inputs_it
@@ -141,6 +141,7 @@ jobs:
       - run: uv sync --locked
       - name: PostgreSQL integration with no skipped cases
         env:
+          SAUDADE_RAG_TEST_DSN: postgresql://postgres:task-input-ci@127.0.0.1:5432/agent_inputs_it
           SAUDADE_TASK_INPUT_TEST_DSN: postgresql://postgres:task-input-ci@127.0.0.1:5432/agent_inputs_it
           SAUDADE_SCHEDULING_TEST_DSN: postgresql://postgres:task-input-ci@127.0.0.1:5432/agent_inputs_it
           SAUDADE_CKPT_TEST_DSN: postgresql://postgres:task-input-ci@127.0.0.1:5432/agent_inputs_it

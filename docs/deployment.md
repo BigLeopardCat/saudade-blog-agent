@@ -146,6 +146,37 @@ curl --fail http://127.0.0.1:8010/version
 
 配置 `EMBEDDING_PROFILE` 后，发布脚本自动安装锁定 tokenizer 依赖并在激活前校验。混合检索需实际查询后检查 `/health` 中 `rag_state=active`、`vector_missing=0`；启动成功不代表索引已完成。
 
+## 向量存储
+
+混合检索需要 PostgreSQL 16+ 和 pgvector 扩展；不启用时无需安装。可以与博客业务共用
+数据库，但使用独立 `rag` schema 和运行账号，不复用 checkpoint 的专库约束。
+先备份配置及旧索引，由迁移账号显式初始化：
+
+```sh
+# 私有配置内设置 RAG_VECTOR_DSN；此时使用有扩展/建表权限的迁移账号。
+python -m rag.manage --env-file /path/to/private-migration.env setup
+```
+
+运行账号只需要目标数据库 CONNECT、`rag` schema USAGE，以及三张表的 CRUD 权限；
+无须超级用户、扩展安装、建表、其他业务表或文件系统写权限。例如由数据库管理员执行：
+
+```sql
+GRANT USAGE ON SCHEMA rag TO agent_runtime;
+GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA rag TO agent_runtime;
+```
+
+将运行配置换回最小权限 DSN，设置 `RAG_VECTOR_COLLECTION=blog-public`、模型/profile 和
+`RAG_HYBRID_ENABLED=true`，移除已退役的 `RAG_VECTOR_DIR`。不把 DSN 放在命令参数中。
+先执行 `python -m rag.manage --env-file /path/to/private-runtime.env prepare` 估算新片段数；
+确认预算后加 `--execute --max-new N`，然后 `status --require-vectors` 和实际 `query` 核对
+hybrid 路由。首次迁移重新嵌入公开语料，不读取旧文件。新索引验收前保留旧 release/文件；
+回滚代码时同时恢复其旧配置，数据库不能替旧版本生成文件缓存。
+
+CI 使用可丢弃 pgvector 服务和合成 embedding，不读取维护者配置。开发者的普通离线测试
+不需要数据库；真实存储测试仅在显式 `SAUDADE_RAG_TEST_DSN` 下运行，会创建表并清理自己的
+随机 collection。不得设置为生产 DSN。固定模型评测另用 `SAUDADE_RAG_EVAL_DSN` 与独立
+`eval-` collection，见 [检索评测](../eval/offline-rag.md)。
+
 ## 升级与回滚
 
 Agent API 始终验证宿主断言。升级时删除退役的 `AGENT_REQUIRE_ASSERTION`、`AGENT_ARM` 配置项，

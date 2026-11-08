@@ -22,10 +22,12 @@ from rag import vector_index as vectors
 from rag.corpus import content_revision  # noqa: E402
 from rag.embedding_inputs import active_profile, vector_chunks  # noqa: E402
 from rag.lexical import backend_info  # noqa: E402
+from rag.postgres import PostgresRepository  # noqa: E402
 from rag.search import BM25_B, BM25_K1, RagIndex, expansion_enabled, synonyms  # noqa: E402
+from rag.vector_index import VectorStore  # noqa: E402
 
 
-def execute(data: dict, index_dir: Path, candidates: int, expected_dim: int, *,
+def execute(data: dict, collection: str, candidates: int, expected_dim: int, *,
             top_k: int = DEFAULT_TOP_K, cutoffs: list[int] | None = None) -> dict:
     cutoffs = sorted(set([k for k in (1, 3, DEFAULT_TOP_K) if k <= top_k]
                          if cutoffs is None else cutoffs))
@@ -47,7 +49,8 @@ def execute(data: dict, index_dir: Path, candidates: int, expected_dim: int, *,
     index = RagIndex(corpus_loader=lambda: documents, vector_warmer=lambda _: None)
     index.build()
     prepared = vector_chunks(index._chunks)
-    store = vectors.VectorStore(index_dir)
+    vectors.close()
+    store = VectorStore(PostgresRepository(settings.rag_vector_dsn, str(collection)))
     vectors._store = store
     start = time.perf_counter()
     update = store.update(prepared, vectors.space_from_settings())
@@ -90,6 +93,8 @@ def execute(data: dict, index_dir: Path, candidates: int, expected_dim: int, *,
         "query_expansion": expansion_enabled(),
         "batch_size": settings.embedding_batch_size,
         "space": vectors.space_from_settings().as_dict(),
+        "vector_backend": "pgvector-exact-document-cosine",
+        "pgvector_python_version": version("pgvector"),
     }
     return {
         "schema_version": 2,
@@ -127,7 +132,7 @@ def main(argv=None) -> int:
     parser.add_argument("--model", required=True)
     parser.add_argument("--profile", default="")
     parser.add_argument("--expected-dim", type=int, required=True)
-    parser.add_argument("--index-dir", type=Path, required=True)
+    parser.add_argument("--collection", required=True, help="isolated eval- collection")
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--chunk-chars", type=int, help="explicit research override")
     parser.add_argument("--top-k", type=int, default=DEFAULT_TOP_K)
@@ -146,7 +151,10 @@ def main(argv=None) -> int:
     settings.embedding_api_key = os.getenv("EMBEDDING_API_KEY") or "local-only"
     settings.embedding_profile = args.profile
     settings.rag_hybrid_enabled = True
-    settings.rag_vector_dir = str(args.index_dir)
+    settings.rag_vector_dsn = os.getenv("SAUDADE_RAG_EVAL_DSN", "")
+    if not settings.rag_vector_dsn or not args.collection.startswith("eval-"):
+        parser.error("explicit SAUDADE_RAG_EVAL_DSN and an eval- collection are required")
+    settings.rag_vector_collection = args.collection
     production_chunk_chars = chunking.MAX_CHARS
     if args.chunk_chars is not None:
         chunking.MAX_CHARS = args.chunk_chars
@@ -158,7 +166,7 @@ def main(argv=None) -> int:
                root / "eval/offline_rag_eval.py", root / "eval/rag_dataset.py"]
     code_hash = hashlib.sha256(b"".join(p.read_bytes() for p in sources)).hexdigest()
     data = load(args.dataset, args.split)
-    report = execute(data, args.index_dir, candidates, args.expected_dim,
+    report = execute(data, args.collection, candidates, args.expected_dim,
                      top_k=args.top_k, cutoffs=cutoffs)
     report["split"] = args.split
     report["configuration_mode"] = ("research_override" if candidates != args.top_k

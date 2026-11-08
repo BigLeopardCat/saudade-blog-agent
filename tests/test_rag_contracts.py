@@ -1,11 +1,10 @@
 """Behavioral regressions for the versioned RAG pipeline (no network/LLM)."""
 
 import copy
-import json
 import threading
-from array import array
 
 import pytest
+from _rag_store import memory_store, memory_vectors  # noqa: F401
 
 from config import settings
 from eval.fixtures.document_reads import RevisionChanged, article_page
@@ -191,66 +190,13 @@ def test_duplicate_sections_require_unambiguous_revision_bound_ids():
     assert "second" in selected["sectionText"] and "first" not in selected["sectionText"]
 
 
-@pytest.mark.parametrize("stage", ["f32", "json", "manifest"])
-def test_interrupted_vector_commit_preserves_exact_old_document_vectors(
-    monkeypatch, tmp_path, stage
-):
-    monkeypatch.setattr(settings, "embedding_model", "fixture-model")
-    monkeypatch.setattr(settings, "embedding_dim", 2)
-    monkeypatch.setattr(
-        vectors,
-        "_embed_texts",
-        lambda texts, space: [[1.0, 0.0] if "first" in t else [0.0, 1.0] for t in texts],
-    )
-    chunks = [
-        {"type": "note", "id": i, "title": str(i), "section": "s", "text": t}
-        for i, t in [(1, "first"), (2, "second")]
-    ]
-    store = vectors.VectorStore(tmp_path)
-    space = vectors.space_from_settings()
-    store.update(chunks, space)
-    fingerprint = vectors.corpus_fingerprint(space, chunks)
-    before = [list(row) for row in store.view_for(fingerprint).vectors]
-    real = vectors._write_atomic
-
-    def interrupt(path, data):
-        real(path, data)
-        if stage == "manifest" and path.name != "manifest.json" and path.suffix == ".json":
-            raise OSError("interrupted before manifest")
-        if stage != "manifest" and path.suffix == "." + stage:
-            raise OSError("interrupted after generation file")
-
-    monkeypatch.setattr(vectors, "_write_atomic", interrupt)
-    changed = [{**c, "text": c["text"] + " changed"} for c in chunks]
-    with pytest.raises(OSError):
-        store.update(changed, space)
-    reader = vectors.VectorStore(tmp_path)
-    assert reader.load()
-    assert [list(row) for row in reader.view_for(fingerprint).vectors] == before
-    assert reader.view_for(vectors.corpus_fingerprint(space, changed)) is None
-
-
-def test_same_length_vector_corruption_is_detected(monkeypatch, tmp_path):
-    monkeypatch.setattr(settings, "embedding_dim", 2)
-    monkeypatch.setattr(vectors, "_embed_texts", lambda texts, space: [[1, 0] for _ in texts])
-    chunks = [{"type": "note", "id": 1, "title": "T", "section": "s", "text": "body"}]
-    store = vectors.VectorStore(tmp_path)
-    store.update(chunks, vectors.space_from_settings())
-    manifest = json.loads(store.manifest_path.read_text())
-    path = tmp_path / manifest["cache_files"]["f32"]
-    path.write_bytes(array("f", [0, 1]).tobytes())
-    assert vectors.VectorStore(tmp_path).load() is False
-
-
 def test_query_cache_is_partitioned_by_space_and_checks_cached_dimensions(monkeypatch, tmp_path):
     monkeypatch.setattr(vectors, "_query_cache", {})
     monkeypatch.setattr(vectors, "_query_order", [])
     monkeypatch.setattr(settings, "embedding_model", "a")
     monkeypatch.setattr(settings, "embedding_dim", 2)
-    store = vectors.VectorStore(tmp_path)
+    store = memory_store(tmp_path)
     monkeypatch.setattr(vectors, "_store", store)
-    store._view_space = vectors.space_from_settings()
-    store._view = vectors.VectorView([array("f", [1, 0])], 2)
     calls = []
 
     def embed(texts, space):
@@ -261,12 +207,8 @@ def test_query_cache_is_partitioned_by_space_and_checks_cached_dimensions(monkey
     assert len(vectors.embed_query("query")) == 2
     monkeypatch.setattr(settings, "embedding_model", "b")
     monkeypatch.setattr(settings, "embedding_dim", 3)
-    store._view_space = vectors.space_from_settings()
-    store._view = vectors.VectorView([array("f", [1, 0, 0])], 3)
     assert len(vectors.embed_query("query")) == 3
     assert calls == ["a", "b"]
-    with pytest.raises(ValueError):
-        vectors.cos_sim([1, 0], [1, 0, 0])
 
 
 def test_corpus_identity_changes_on_title_body_and_membership():

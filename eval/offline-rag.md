@@ -42,13 +42,14 @@ python -m eval.offline_rag_eval eval/fixtures/blog_retrieval --split test --outp
 
 ## 实际 embedding 与混合检索
 
-这个显式入口会调用指定服务并写入独立索引目录，普通 pytest/PR CI 不调用它：
+先通过 `rag.manage setup` 初始化评测库，并将其 DSN 放入 `SAUDADE_RAG_EVAL_DSN`；
+不要使用生产 DSN/collection。这个显式入口会调用指定服务并写入显式可丢弃 PostgreSQL 的独立 collection，普通 pytest/PR CI 不调用它：
 
 ```sh
 python -m eval.model_retrieval_run eval/fixtures/blog_retrieval --split test \
   --base-url "$EMBEDDING_BASE_URL" --model "$EMBEDDING_MODEL" \
   --profile /absolute/path/to/profile.json --expected-dim "$EMBEDDING_DIM" \
-  --index-dir /tmp/rag-eval-index --output /tmp/rag-model.json
+  --collection eval-blog-fixed --output /tmp/rag-model.json
 ```
 
 默认沿用生产字符切片、profile 的 token 预算细分、embedding批次配置及8候选窗口。

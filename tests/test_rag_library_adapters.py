@@ -1,11 +1,9 @@
 """User-visible invariants for library-backed retrieval and namespace migration."""
 
-from array import array
 from collections import Counter
 from dataclasses import replace
 
-import numpy as np
-import pytest
+from _rag_store import memory_store, memory_vectors  # noqa: F401
 
 from config import settings
 from rag import vector_index as vectors
@@ -35,20 +33,6 @@ def test_library_chunks_preserve_every_character_with_valid_repeated_source_rang
     assert any("TAIL" in chunk["text"] for chunk in chunks)
 
 
-def test_cosine_library_preserves_zero_opposite_nonunit_vectors_and_snapshot():
-    source = [array("f", [2, 0]), array("f", [0, 0]), array("f", [-4, 0])]
-    view = vectors.VectorView(source, 2)
-    source[0][0] = -2
-    assert view.similar(array("f", [9, 0])) == pytest.approx([1, 0, -1])
-    assert view.similar(array("f", [0, 0])) == [0, 0, 0]
-    with pytest.raises(ValueError):
-        view.similar(array("f", [1, 0, 0]))
-    with pytest.raises(ValueError):
-        view.similar(array("f", [np.nan, 0]))
-    with pytest.raises(ValueError):
-        vectors.VectorView([array("f", [np.inf, 0])], 2)
-
-
 def test_chunk_strategy_change_rejects_old_vectors_and_partitions_query_cache(
     monkeypatch, tmp_path
 ):
@@ -64,7 +48,7 @@ def test_chunk_strategy_change_rejects_old_vectors_and_partitions_query_cache(
         sent.extend(texts)
         return [[1, 0] for _ in texts]
 
-    store = vectors.VectorStore(tmp_path)
+    store = memory_store(tmp_path)
     monkeypatch.setattr(vectors, "_store", store)
     monkeypatch.setattr(vectors, "_embed_texts", embed)
     monkeypatch.setattr(vectors, "space_from_settings", lambda: legacy)
@@ -78,7 +62,7 @@ def test_chunk_strategy_change_rejects_old_vectors_and_partitions_query_cache(
     assert store.update(chunks, space)["skipped"] == "aligned"
     assert len(sent) == 4
     assert vectors.chunk_key(space, "same") != vectors.chunk_key(legacy, "same")
-    reader = vectors.VectorStore(tmp_path)
+    reader = memory_store(tmp_path)
     assert reader.load()
     assert reader.view_for(vectors.corpus_fingerprint(space, chunks)) is not None
 

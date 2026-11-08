@@ -1,6 +1,7 @@
 """Fixed candidate windows preserve weak matches, raw queries and fallback evidence."""
 
 import pytest
+from _rag_store import memory_store, memory_vectors  # noqa: F401
 
 from config import settings
 from rag import search, vector_index
@@ -52,7 +53,7 @@ def test_missing_vectors_preserve_the_complete_lexical_window(index, monkeypatch
     monkeypatch.setattr(settings, "embedding_api_key", "fixture-key")
     monkeypatch.setattr(settings, "embedding_model", "fixture-model")
     monkeypatch.setattr(settings, "embedding_profile", "")
-    monkeypatch.setattr(vector_index, "_store", vector_index.VectorStore(tmp_path))
+    monkeypatch.setattr(vector_index, "_store", memory_store(tmp_path))
 
     def forbidden(*args, **kwargs):
         pytest.fail("a missing vector view must not send a query embedding request")

@@ -1,8 +1,5 @@
-"""Optional vector retrieval with content-addressed immutable cache generations.
+"""Incremental embeddings and PostgreSQL-backed public-corpus retrieval."""
 
-The writer fsyncs generation files before atomically replacing manifest.json.
-Readers verify file hashes, corpus alignment and embedding-space metadata.
-"""
 from __future__ import annotations
 
 import hashlib
@@ -14,7 +11,6 @@ import time
 from array import array
 from contextvars import ContextVar
 from dataclasses import dataclass, field
-from pathlib import Path
 
 from config import settings as _settings
 from rag.chunks import strategy_signature
@@ -26,29 +22,12 @@ from rag.embedding_inputs import (
     validate_inputs,
     vector_chunks,
 )
-from rag.vector_files import (
-    _Flock,
-    _read_json,
-    _write_atomic,
-    generation_history,
-    prune_generations,
-    read_generation,
-    write_generation,
-)
+from rag.postgres import PostgresRepository, Snapshot
 
 logger = logging.getLogger(__name__)
 
-SCHEMA = 2
-SEP = "\x1f"          # Namespace/text field separator.
-PRUNE_KEEP_GENS = 2   # Number of generations retained for unreferenced keys.
+SEP = "\x1f"
 
-MANIFEST = "manifest.json"
-CACHE_JSON = "cache.json"
-CACHE_F32 = "cache.f32"
-LOCK = "update.lock"
-
-
-# ── 空间（模型 + 端点 + 请求维度）与键 ────────────────────────────────
 
 @dataclass(frozen=True)
 class Space:
@@ -64,11 +43,6 @@ class Space:
         return {"model": self.model, "base_url": self.base_url, "dim": self.dim,
                 "profile": self.profile, "chunking": self.chunking}
 
-    @staticmethod
-    def from_dict(d: dict) -> "Space":
-        return Space(str(d.get("model", "")), str(d.get("base_url", "")),
-                     int(d.get("dim", 0) or 0), str(d.get("profile", "")),
-                     str(d.get("chunking", "")))
 
 
 def space_from_settings() -> Space:
@@ -100,13 +74,6 @@ def corpus_fingerprint(space: Space, chunks: list[dict]) -> str:
              f"{SEP}{chunk_key(space, document_text(c.get('title',''), c.get('text',''), profile))}"
              for c in chunks]
     return hashlib.sha256("\n".join(parts).encode("utf-8")).hexdigest()
-
-
-# ── 纯函数：相似度与融合（离线套件直接测这两个）─────────────────────────
-
-def cos_sim(a, b) -> float:
-    """SciPy cosine, sharing the zero-vector and shape rules of the batch view."""
-    return VectorView([array("f", b)], len(b)).similar(array("f", a))[0]
 
 
 def _merge_locations(target, row):
@@ -270,41 +237,6 @@ def _embed_texts(texts: list[str], space: Space) -> list[list[float] | None]:
     return out
 
 
-# ── 盘上产物 ──────────────────────────────────────────────────────────
-
-class VectorView:
-    """Immutable chunk-aligned float64 vectors; SciPy computes batch cosine distance."""
-
-    __slots__ = ("vectors", "dim", "_matrix")
-
-    def __init__(self, vectors: list[array], dim: int) -> None:
-        self.vectors = vectors
-        self.dim = dim
-        import numpy as np
-
-        self._matrix = np.asarray(vectors, dtype=np.float64).reshape(len(vectors), dim)
-        if not np.isfinite(self._matrix).all():
-            raise ValueError("Non-finite document embedding")
-        self._matrix.setflags(write=False)
-
-    def __len__(self) -> int:
-        return len(self.vectors)
-
-    def similar(self, q: array) -> list[float]:
-        import numpy as np
-        from scipy.spatial.distance import cdist
-
-        if len(q) != self.dim:
-            raise ValueError("Embedding dimension mismatch")
-        if not np.isfinite(q).all():
-            raise ValueError("Non-finite query embedding")
-        if not self.vectors:
-            return []
-        similarities = 1.0 - cdist([q], self._matrix, metric="cosine")[0]
-        # Failed/empty chunks deliberately use zero rows, whose distance is NaN.
-        return np.nan_to_num(similarities, nan=0.0).tolist()
-
-
 class DimensionChanged(ValueError):
     """The provider changed dimensions; all active rows need re-embedding."""
 
@@ -332,271 +264,143 @@ def _materialize(pending, values, old_dim: int, requested_dim: int):
     return embedded, failed
 
 
-class VectorStore:
-    """Read immutable vector generations and publish updates under a cross-process flock."""
+class VectorView:
+    """A fingerprint-bound view; all distance and document ranking execute in PostgreSQL."""
 
-    def __init__(self, root: str | Path) -> None:
-        self.root = Path(root)
+    def __init__(self, repository, snapshot: Snapshot):
+        self.repository, self.snapshot = repository, snapshot
+        self.dim = snapshot.dimension
+
+    def __len__(self):
+        return self.snapshot.count
+
+    def scores(self, query, top_k):
+        return self.repository.scores(self.snapshot, list(query), top_k)
+
+
+class VectorStore:
+    """Reuse content keys; publish complete public membership through a database transaction."""
+
+    def __init__(self, repository):
+        self.repository = repository
         self._lock = threading.Lock()
-        self._manifest: dict | None = None
-        self._view: VectorView | None = None
-        self._view_fp: str | None = None
-        self._view_space: Space | None = None
-        # Compare both generation and corpus fingerprint when reusing a loaded view.
-        self._sig: tuple | None = None
+        self._snapshot: Snapshot | None = None
         self._missing: list[str] = []
         self._last_error: str | None = None
+        self._reset_dimensions = False
 
-    # ── 读 ────────────────────────────────────────────────────────────
-
-    @property
-    def manifest_path(self) -> Path:
-        return self.root / MANIFEST
+    def close(self):
+        self.repository.close()
 
     def load(self) -> bool:
-        """Reload a changed manifest; reject invalid generations without network access."""
-        m = _read_json(self.manifest_path)
-        with self._lock:
-            if m is None:
-                self._manifest, self._view, self._view_fp = None, None, None
-                self._view_space = None
-                self._sig, self._missing = None, []
-                return False
-            sig = (m.get("gen"), m.get("fingerprint"))
-            if self._sig == sig:
-                return self._view is not None
-            try:
-                self._install(m)
-            except Exception as exc:                  # noqa: BLE001
-                logger.warning("向量索引加载失败（%s）——按没有向量处理", exc)
-                self._manifest, self._view, self._view_fp = None, None, None
-                self._view_space = None
-                self._sig, self._missing = None, []
-                self._last_error = "no_vectors"
-                return False
-            return self._view is not None
+        from sqlalchemy.exc import SQLAlchemyError
 
-    def _install(self, m: dict) -> None:
-        """Validate namespace, row alignment and dimensions; materialize only active rows."""
-        if int(m.get("schema", 0)) != SCHEMA:
-            raise ValueError(f"manifest schema={m.get('schema')} 不是 {SCHEMA}")
-        want = space_from_settings()
-        got = Space.from_dict(m.get("space") or {})
-        if got != want:                               # ① 请求空间必须逐字段相等
-            raise ValueError(f"空间不符：盘上 {got}，当前 {want}")
-        keys = list(m.get("keys") or [])
-        if len(keys) != int(m.get("count", -1)):      # ②
-            raise ValueError("count 与 keys 长度不符")
-        cj, raw = read_generation(self.root, m)
-        if cj is None or int(cj.get("schema", 0)) != SCHEMA:
-            raise ValueError("cache.json 缺失或 schema 不符")
-        dim = int(cj.get("dim", 0) or 0)
-        if dim <= 0:
-            raise ValueError("cache.dim 非法")
-        if int(m.get("cache_dim", 0)) != dim:         # ③
-            raise ValueError(f"cache_dim 不符：manifest={m.get('cache_dim')} cache={dim}")
-        entries = list(cj.get("entries") or [])
-        if len(raw) != len(entries) * dim * 4:        # 截断/半成品必须被拒
-            raise ValueError(f"cache.f32 长度 {len(raw)} != {len(entries)}×{dim}×4")
-        row_of = {str(k): i for i, (k, _g) in enumerate(entries)}
-        # Materialize active rows in manifest order.
-        rows: list[array] = []
-        for k in keys:
-            i = row_of.get(k)
-            if i is None:
-                raise ValueError(f"键 {k[:8]}… 不在 cache 里")
-            a = array("f")
-            a.frombytes(raw[i * dim * 4:(i + 1) * dim * 4])
-            rows.append(a)
-        self._manifest = m
-        self._view = VectorView(rows, dim)
-        self._view_fp = str(m.get("fingerprint") or "")
-        self._view_space = got
-        self._sig = (m.get("gen"), self._view_fp)
-        self._missing = list(m.get("missing") or [])
-        self._last_error = None
+        try:
+            snapshot = self.repository.snapshot()
+        except (SQLAlchemyError, ValueError):
+            logger.warning("PostgreSQL vector index is unavailable")
+            with self._lock:
+                self._snapshot = None
+                self._last_error = "vector_database_unavailable"
+            return False
+        with self._lock:
+            if snapshot is not None and snapshot != self._snapshot:
+                self._last_error = None
+                self._missing = []
+            self._snapshot = snapshot
+            return self.view() is not None
 
     def view_for(self, fingerprint: str) -> VectorView | None:
-        """Return a view only when both namespace and ordered corpus fingerprint match."""
-        with self._lock:
-            if self._view is None or self._view_fp != fingerprint:
-                return None
-            if not self._space_matches():
-                return None
-            return self._view
+        view = self.view()
+        return view if view is not None and view.snapshot.fingerprint == fingerprint else None
 
     def view(self) -> VectorView | None:
-        """Return the current namespace-matching view for health and diagnostics."""
-        with self._lock:
-            if self._view is None or not self._space_matches():
-                return None
-            return self._view
-
-    def _space_matches(self) -> bool:
+        snapshot = self._snapshot
         try:
-            return self._view_space == space_from_settings()
+            if snapshot is None or snapshot.space != space_from_settings().as_dict():
+                return None
         except InputProfileError:
-            return False
+            return None
+        return VectorView(self.repository, snapshot)
 
     def missing(self) -> list[str]:
-        with self._lock:
-            return list(self._missing)
+        return list(self._missing)
 
     def last_error(self) -> str | None:
-        with self._lock:
-            return self._last_error
+        return self._last_error
 
-    # ── 写 ────────────────────────────────────────────────────────────
+    def invalidate_dimension(self):
+        self._reset_dimensions = True
+        self._last_error = "vector_dimension_changed"
+
+    def available(self, space: Space) -> dict[str, int]:
+        key = hashlib.sha256(json.dumps(space.as_dict(), sort_keys=True).encode()).hexdigest()
+        snapshot = self._snapshot
+        dimension = (snapshot.dimension if snapshot is not None and
+                     snapshot.space == space.as_dict() else space.dim)
+        return self.repository.available(key, dimension)
 
     def update(self, chunks: list[dict], space: Space) -> dict:
-        """Reuse unchanged inputs and publish an atomic generation; skip a busy writer."""
-        self.root.mkdir(parents=True, exist_ok=True)
+        """Do model I/O outside transactions and never publish an incomplete snapshot."""
         profile = active_profile()
         texts = [document_text(c.get("title", ""), c.get("text", ""), profile) for c in chunks]
-        keys = [chunk_key(space, t) for t in texts]
-        fp = corpus_fingerprint(space, chunks)
-
-        with _Flock(self.root / LOCK) as got:
-            if not got:
-                logger.debug("向量更新：另一个 worker 正在更新，本轮跳过")
-                return {"skipped": "locked", "fingerprint": fp,
+        keys = [chunk_key(space, value) for value in texts]
+        fingerprint = corpus_fingerprint(space, chunks)
+        with self.repository.writer() as acquired:
+            if not acquired:
+                return {"skipped": "locked", "fingerprint": fingerprint,
                         "embedded": 0, "reused": 0, "api_calls": 0, "logical_batches": 0}
-            self.load()          # Observe the current committed generation.
-            m = _read_json(self.manifest_path) or {}
-            if (m.get("fingerprint") == fp and not m.get("missing")
-                    and int(m.get("count", -1)) == len(keys)
-                    and self.view_for(fp) is not None):
-                # Compare physical row counts against chunk slots, including empty chunks.
-                # A dictionary of deduplicated keys can hide a vector/key alignment mismatch.
-                return {"skipped": "aligned", "fingerprint": fp, "embedded": 0,
-                        "reused": len(set(keys)), "api_calls": 0, "logical_batches": 0}
-            measured = _http_requests.set(0)
+            self.load()
+            if self.view_for(fingerprint) is not None and not self._reset_dimensions:
+                return {"skipped": "aligned", "fingerprint": fingerprint,
+                        "embedded": 0, "reused": len(set(keys)), "api_calls": 0,
+                        "logical_batches": 0}
+            token = _http_requests.set(0)
             try:
-                return self._update_locked(texts, keys, space, fp)
+                return self._update(chunks, texts, keys, space, fingerprint)
             finally:
-                _http_requests.reset(measured)
+                _http_requests.reset(token)
 
-    def _cache_for_space(self, space, manifest, reset):
-        if reset or Space.from_dict(manifest.get("space") or {}) != space:
-            return {}, 0, {}
-        return self._read_cache()
-
-    def _update_locked(self, texts, keys, space, fp, reset=False) -> dict:
-        """Embed missing inputs under flock and advance the monotonic generation counter."""
-        m0 = _read_json(self.manifest_path) or {}
-        old_keys, old_dim, old_rows = self._cache_for_space(space, m0, reset)
-        retry = set(m0.get("missing") or [])   # 上一轮嵌失败的键：占着零向量行，要重试
-        gen = max([int(m0.get("gen") or 0)] + [int(g) for g in old_keys.values()] + [0]) + 1
-
-        seen: set[str] = set()
-        pending: list[tuple[str, str]] = []
-        empty_keys: set[str] = set()
-        reused = 0
-        for key, text in zip(keys, texts):
-            if key in seen:
-                continue
-            seen.add(key)
-            if key in old_rows and key not in retry:
-                reused += 1
-                continue
-            if not text.strip():
-                # Empty inputs retain a zero row so chunk indices remain aligned.
-                empty_keys.add(key)
-                continue
-            pending.append((key, text))
-
-        embedded: list[tuple[str, array]] = []
-        failed: list[str] = []
-        if pending:
-            vecs = _embed_texts([t for _, t in pending], space)
-            try:
-                embedded, failed = _materialize(pending, vecs, old_dim, space.dim)
-            except DimensionChanged:
-                return self._update_locked(texts, keys, space, fp, reset=True)
-
-        dim = old_dim or (len(embedded[0][1]) if embedded else 0)
-        if dim <= 0:
-            # 一条都没嵌成、也没有旧库 ⇒ 不写半份产物，诚实报错
-            self._last_error = "api_error" if pending else "no_vectors"
-            return {"fingerprint": fp, "embedded": 0, "reused": reused,
-                    "api_calls": _http_requests.get(), "logical_batches": _batches(len(pending)),
-                    "missing": len(failed), "ok": False}
-
-        keep: dict[str, tuple[array, int]] = {}
-        for key in seen:
-            row = old_rows.get(key)
-            if row is not None:
-                keep[key] = (row, gen)
-        for key, row in embedded:
-            keep[key] = (row, gen)
-        zeros: array | None = None
-        for key in empty_keys | set(failed):
-            if key not in keep:
-                zeros = zeros if zeros is not None else array("f", [0.0] * dim)
-                keep[key] = (zeros, gen)
-        # Retain unreferenced keys only within the configured generation window.
-        for key, g in old_keys.items():
-            if key not in keep and int(g) >= gen - PRUNE_KEEP_GENS:
-                keep[key] = (old_rows[key], int(g))
-
-        order = [(k, g) for k, (_r, g) in keep.items()]
-        cache_files = write_generation(self.root,
-            b"".join(r.tobytes() for _k, (r, _g) in keep.items()),
-            {"schema": SCHEMA, "dim": dim, "entries": order}, _write_atomic)
-        active_keys = [k for k in keys if k in keep]
-        manifest = {
-            "schema": SCHEMA, "gen": gen, "space": space.as_dict(),
-            "cache_files": cache_files,
-            "previous_caches": generation_history(m0),
-            "fingerprint": fp, "count": len(active_keys), "keys": active_keys,
-            "cache_dim": dim, "missing": failed,
-            "built_at": time.strftime("%Y-%m-%d %H:%M:%S"),
-            "stats": {"embedded": len(embedded), "reused": reused,
-                      "api_calls": _http_requests.get(), "logical_batches": _batches(len(pending)),
-                      "pruned": len(old_keys) - sum(1 for k in keep if k in old_keys)},
-        }
-        _write_atomic(self.manifest_path,
-                      json.dumps(manifest, ensure_ascii=False).encode("utf-8"))
-        prune_generations(self.root, manifest)
-        self._last_error = None
-        logger.info("向量索引已更新：新嵌 %d / 复用 %d / HTTP %s 次 / 维度 %d / 缺 %d",
-                    len(embedded), reused, _http_requests.get(), dim, len(failed))
-        self.load()      # Install the committed generation.
-        return {"fingerprint": fp, "embedded": len(embedded), "reused": reused,
-                "api_calls": _http_requests.get(), "logical_batches": _batches(len(pending)),
-                "missing": len(failed), "dim": dim, "ok": True}
-
-    # ── 缓存读写 ──────────────────────────────────────────────────────
-
-    def _read_cache(self) -> tuple[dict[str, int], int, dict[str, array]]:
-        """Load cached keys, generations and vectors; treat corrupt generations as empty."""
-        m = _read_json(self.manifest_path)
-        if not m or m.get("schema") != SCHEMA:
-            return {}, 0, {}
+    def _update(self, chunks, texts, keys, space, fingerprint, logical_batches=0):
+        cached = {} if self._reset_dimensions else self.available(space)
+        current = self._snapshot
+        dimension = (current.dimension if current is not None and
+                     current.space == space.as_dict() and not self._reset_dimensions else space.dim)
+        if not dimension and cached:
+            dimensions = set(cached.values())
+            dimension = dimensions.pop() if len(dimensions) == 1 else 0
+        cached = {key: value for key, value in cached.items() if value == dimension}
+        unique = dict(zip(keys, texts, strict=True))
+        pending = [(key, value) for key, value in unique.items() if key not in cached]
+        logical_batches += _batches(len(pending))
+        values = _embed_texts([value for _, value in pending], space) if pending else []
         try:
-            cj, raw = read_generation(self.root, m)
-            dim = int(cj["dim"])
-            entries = cj["entries"]
-            if dim <= 0 or len(raw) != len(entries) * dim * 4:
-                raise ValueError("invalid vector cache size")
-        except (OSError, ValueError, KeyError, TypeError):
-            logger.warning("Invalid vector generation; rebuilding from source")
-            return {}, 0, {}
-        gens: dict[str, int] = {}
-        rows: dict[str, array] = {}
-        for i, (k, g) in enumerate(entries):
-            a = array("f")
-            a.frombytes(raw[i * dim * 4:(i + 1) * dim * 4])
-            gens[str(k)] = int(g)
-            rows[str(k)] = a
-        return gens, dim, rows
+            embedded, failed = _materialize(pending, values, dimension, space.dim)
+        except DimensionChanged:
+            self._reset_dimensions = True
+            return self._update(chunks, texts, keys, space, fingerprint, logical_batches)
+        dimension = dimension or (len(embedded[0][1]) if embedded else 0)
+        reused = len(set(keys) & cached.keys())
+        complete = not failed and dimension > 0
+        stats = {"embedded": len(embedded), "reused": reused,
+                 "api_calls": _http_requests.get(), "logical_batches": logical_batches}
+        space_key = hashlib.sha256(json.dumps(space.as_dict(), sort_keys=True).encode()).hexdigest()
+        from agent.runtime.control import check_active
 
-    def _wipe_cache(self) -> None:
-        for name in (CACHE_F32, CACHE_JSON, MANIFEST):
-            try:
-                (self.root / name).unlink()
-            except FileNotFoundError:
-                pass
+        check_active()
+        self.repository.commit(
+            rows=[{"key": key, "dimension": len(value), "embedding": list(value)}
+                  for key, value in embedded], chunks=chunks, keys=keys, space=space.as_dict(),
+            space_key=space_key, fingerprint=fingerprint, dimension=dimension, stats=stats,
+            complete=complete,
+        )
+        self._missing = failed
+        self._last_error = None if complete else "vector_missing"
+        if complete:
+            self._reset_dimensions = False
+            self.load()
+        return {**stats, "fingerprint": fingerprint, "missing": len(failed),
+                "dim": dimension, "ok": complete}
 
 
 # ── 进程级单例 + 查询侧 ───────────────────────────────────────────────
@@ -607,19 +411,23 @@ _warm_lock = threading.Lock()
 _query_cache: dict[tuple[Space, str], array] = {}
 _query_order: list[tuple[Space, str]] = []
 _query_lock = threading.Lock()
+_submit = None
+_warm_stop = threading.Event()
 
 
 def get_store() -> VectorStore:
     global _store
     with _store_lock:
         if _store is None:
-            _store = VectorStore(_settings.rag_vector_dir)
+            _store = VectorStore(PostgresRepository(
+                _settings.rag_vector_dsn, _settings.rag_vector_collection))
         return _store
 
 
 def is_enabled() -> bool:
-    """Require both the hybrid switch and configured embedding credentials."""
-    return bool(_settings.rag_hybrid_enabled) and bool(_settings.embedding_configured)
+    """Require the switch, embedding model and explicit PostgreSQL configuration."""
+    return (bool(_settings.rag_hybrid_enabled) and bool(_settings.embedding_configured)
+            and bool(_settings.rag_vector_dsn.strip()))
 
 
 def degraded_reason() -> str | None:
@@ -630,12 +438,14 @@ def degraded_reason() -> str | None:
         return None                     # 关着是设定，不是降级
     if not _settings.embedding_configured:
         return "missing_credentials"
+    if not _settings.rag_vector_dsn.strip():
+        return "missing_vector_database"
     try:
         active_profile()
     except InputProfileError:
         return "embedding_profile_error"
     st = get_store()
-    st.load()       # Observe generations published by other workers.
+    st.load()
     if st.last_error():
         return st.last_error()
     if st.view() is None:
@@ -648,8 +458,11 @@ def degraded_reason() -> str | None:
 def route_status() -> dict:
     """Return non-secret route facts for tool metadata and health checks.
 
-    state distinguishes off, active and degradation reasons. vector_missing may
-    coexist with active=True when a partial index is still queryable."""
+    A failed new build can coexist with an older complete active snapshot."""
+    if not is_enabled():
+        return {"enabled": bool(_settings.rag_hybrid_enabled), "active": False,
+                "state": degraded_reason() or "off", "reason": degraded_reason(),
+                "vectors": 0, "missing": 0}
     st = get_store()
     st.load()
     view = st.view()
@@ -692,8 +505,11 @@ def embed_query(query: str) -> array | None:
     except (ValueError, TypeError, IndexError, OverflowError):
         logger.warning("Query embedding failed", exc_info=True)
         return None
+    if got and dim and len(got) != dim:
+        st.invalidate_dimension()
+        return None
     if (not got or not any(got) or not all(math.isfinite(x) for x in got)
-            or (dim and len(got) != dim) or (space.dim and len(got) != space.dim)):
+            or (space.dim and len(got) != space.dim)):
         return None
     vec = array("f", got)
     if not any(vec) or not all(math.isfinite(x) for x in vec):
@@ -709,19 +525,53 @@ def embed_query(query: str) -> array | None:
     return vec
 
 
+def start_background(submit):
+    """Use the application's existing bounded executor for optional vector builds."""
+    global _submit, _warm_stop
+    _warm_stop = threading.Event()
+    _submit = submit
+
+
+def stop_background():
+    global _submit
+    _submit = None
+    _warm_stop.set()
+
+
+def close():
+    """Call after application workers have drained, before process resources disappear."""
+    global _store, _client, _client_sig
+    stop_background()
+    if _store is not None:
+        _store.close()
+        _store = None
+    if _client is not None:
+        _client.close()
+        _client, _client_sig = None, None
+
+
 def warm_async(chunks: list[dict]) -> None:
-    """Run at most one background vector update without blocking corpus publication."""
-    if not is_enabled():
+    """Submit at most one build to the application-owned worker pool."""
+    submit = _submit
+    if not is_enabled() or submit is None or not _warm_lock.acquire(blocking=False):
         return
-    if not _warm_lock.acquire(blocking=False):
-        return
+    stop = _warm_stop
 
     def _run() -> None:
+        from agent.runtime.control import AgentCancelled, RequestControl, request_scope
+
         try:
-            get_store().update(vector_chunks(chunks), space_from_settings())
-        except Exception:                             # noqa: BLE001
-            logger.warning("向量索引后台更新失败（下一轮刷新重试）", exc_info=True)
+            control = RequestControl(stop, time.monotonic() + _settings.agent_task_seconds)
+            with request_scope(control):
+                get_store().update(vector_chunks(chunks), space_from_settings())
+        except AgentCancelled:
+            pass
+        except Exception:  # noqa: BLE001
+            logger.warning("Vector background update failed", exc_info=True)
         finally:
             _warm_lock.release()
 
-    threading.Thread(target=_run, name="rag-vector-warm", daemon=True).start()
+    try:
+        submit(_run)
+    except RuntimeError:
+        _warm_lock.release()
