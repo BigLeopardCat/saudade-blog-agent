@@ -43,6 +43,11 @@ BM25_B = 0.75
 
 REFRESH_TTL = 600.0
 
+
+def candidate_limit(top_k: int) -> int:
+    """Keep production and evaluation per-retriever candidate windows aligned."""
+    return min(100, max(20, top_k * 3))
+
 # Reviewed query variants contribute only tokens present in the current vocabulary.
 _QUERY_SYNONYMS: tuple[dict, ...] = (
     {"key": "测评", "val": "评测", "why": "将访客措辞映射为站内评测术语。"},
@@ -119,6 +124,7 @@ class RagIndex:
         self._vector_warmer = vector_warmer
         self._lock = threading.Lock()
         self._build_lock = threading.Lock()
+        self._refresh_lock = threading.Lock()
         self._last_attempt = 0.0
         self._last_error: str | None = None
         self._revision = ""
@@ -142,6 +148,32 @@ class RagIndex:
             raise
         finally:
             self._build_lock.release()
+
+    def warm(self) -> bool:
+        """Publish a complete snapshot or retain the previous one with failure telemetry."""
+        try:
+            return self.build()
+        except Exception:
+            logger.warning("Corpus refresh failed; retaining the last complete snapshot",
+                           exc_info=True)
+            return False
+
+    def refresh_async(self) -> None:
+        """Serve the published snapshot while at most one refresh is scheduled."""
+        if not self._refresh_lock.acquire(blocking=False):
+            return
+
+        def refresh() -> None:
+            try:
+                self.warm()
+            finally:
+                self._refresh_lock.release()
+
+        try:
+            threading.Thread(target=refresh, name="rag-warm", daemon=True).start()
+        except BaseException:
+            self._refresh_lock.release()
+            raise
 
     def _build(self) -> None:
         invalidations = self._invalidations
@@ -207,10 +239,10 @@ class RagIndex:
                         article_id: int | None = None) -> list[dict] | None:
         """Return raw-query BM25 candidates bounded by top_k; None means unavailable."""
         if self.is_stale() and time.time() - self._last_attempt > 30:
-            try:
-                self.build()
-            except Exception:
-                logger.warning("Corpus refresh failed; retaining the last complete snapshot")
+            if self._last_build:
+                self.refresh_async()
+            else:
+                self.warm()
         with self._lock:
             if not self._last_build or time.time() - self._last_build > REFRESH_TTL * 2:
                 return None
@@ -243,25 +275,28 @@ class RagIndex:
     def search(self, query: str, top_k: int = DEFAULT_TOP_K, *,
                article_id: int | None = None) -> list[dict] | None:
         """Rank lexical candidates and fuse only corpus-aligned vector candidates."""
-        lex = self._lexical_ranked(query, top_k, article_id=article_id)
+        if type(top_k) is not int or not 1 <= top_k <= 50:
+            raise ValueError("top_k must be an integer between 1 and 50")
+        candidates = candidate_limit(top_k)
+        lex = self._lexical_ranked(query, candidates, article_id=article_id)
         if lex is None:
             _record("unavailable", None)
             return None
-        vec, reason, miss = self._vector_ranked(query, top_k, article_id=article_id)
+        vec, reason, miss = self._vector_ranked(query, candidates, article_id=article_id)
         if not vec:
             # Disabled, empty and failed vector routes have distinct telemetry.
             _record(_mode_for(reason), reason, missing=miss)
-            return lex
+            return lex[:top_k]
         if lex and lex[0].get("corpus_revision") != vec[0].get("corpus_revision"):
             _record("degraded", "corpus_changed", missing=miss)
-            return lex
+            return lex[:top_k]
         try:
             fused = rrf_fuse(lex, vec, _rrf_k(), top_k)
         except ValueError:
             _record("degraded", "corpus_changed", missing=miss)
-            return lex
+            return lex[:top_k]
         _record("hybrid", None, len(vec), miss)
-        return fused or lex
+        return fused or lex[:top_k]
 
     def _vector_chunks_for(self, chunks: list[dict], space) -> list[dict]:
         with self._lock:
@@ -356,27 +391,13 @@ def search(query: str, top_k: int = DEFAULT_TOP_K, *,
 
 def warm() -> bool:
     """Build the corpus snapshot synchronously; return False on failure."""
-    try:
-        return get_index().build()
-    except Exception:
-        logger.warning("语料预热失败：检索暂用旧快照或不可用",
-                       exc_info=True)
-        return False
+    return get_index().warm()
 
-
-_warm_lock = threading.Lock()   # 只防同刻重复起线程，不阻塞调用方
 
 
 def warm_async() -> None:
-    """Start at most one background corpus refresh without blocking the caller."""
-    if not _warm_lock.acquire(blocking=False):
-        return
-    def _run() -> None:
-        try:
-            warm()
-        finally:
-            _warm_lock.release()
-    threading.Thread(target=_run, name="rag-warm", daemon=True).start()
+    """Schedule the singleton index through the same bounded refresh path as queries."""
+    get_index().refresh_async()
 
 
 

@@ -98,27 +98,21 @@ def documents(chunks: list[dict], scores: dict[int, float], revision: str, *,
             }
             by_doc[identity] = row
         section_id = chunk.get("section_id", chunk["section"])
-        match = {
+        if section_id in row["section_ids"] or len(row["section_ids"]) >= 3:
+            continue
+        row["section_ids"].append(section_id)
+        row["sections"].append(chunk["section"])
+        row["matches"].append({
             "chunk_id": chunk.get("chunk_id"),
             "section_id": section_id,
             "offset": chunk.get("start", 0),
             "end": chunk.get("end"),
             "_source_index": i,
-        }
-        location = (match["chunk_id"], match["section_id"], match["offset"], match["end"])
-        if not any((item["chunk_id"], item["section_id"], item["offset"], item["end"]) == location
-                   for item in row["matches"]):
-            row["matches"].append(match)
-        if section_id not in row["section_ids"]:
-            row["section_ids"].append(section_id)
-            row["sections"].append(chunk["section"])
+        })
     ranked = sorted(by_doc.values(), key=lambda row: -row["score"])
     if limit is not None:
         ranked = ranked[:max(1, limit)]
     for row in ranked:
-        row["sections"] = row["sections"][:3]
-        row["section_ids"] = row["section_ids"][:3]
-        row["matches"] = row["matches"][:3]
         for match in row["matches"]:
             index = match.pop("_source_index")
             _annotate(chunks[index], match, scores[index], retriever, query_terms)

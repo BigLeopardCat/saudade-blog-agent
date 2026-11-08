@@ -42,3 +42,40 @@ def test_bounded_public_detail_is_authorized_without_publisher_identity():
         result = get_article_detail.invoke({"article_id": 45, "doc_type": "board"})
         assert result.kind == "ok" and "这个合成看板娘好笨啊" in str(result)
         assert "synthetic_author_20" not in str(result) and not state["unsupported_reads"]
+
+
+def test_write_fixture_overview_matches_notification_state_without_changing_it():
+    from eval.own_fixtures import notification_backend
+
+    with notification_backend() as state:
+        overview = get_inbox_overview.invoke({}, config=config("user"))
+        counts = get_inbox_overview.invoke({"mode": "counts_only"}, config=config("user"))
+        assert overview.kind == counts.kind == "ok"
+        assert overview.data["notifications"] == counts.data["notifications"] == 2
+        assert [row["id"] for row in overview.data["notificationItems"]] == [101, 102]
+        assert not any("content" in row for row in overview.data["notificationItems"])
+        assert [row["isRead"] for row in state["items"]] == [False, False, True]
+        state["items"][0]["isRead"] = True
+        updated = get_inbox_overview.invoke({}, config=config("user"))
+        assert updated.data["notifications"] == 1
+        assert [row["id"] for row in updated.data["notificationItems"]] == [102]
+        assert all(request.method == "GET" for request in state["requests"])
+
+
+def test_notification_arriving_after_write_is_readable_but_not_marked_read():
+    from eval.own_fixtures import notification_backend
+    from tools import base
+
+    with notification_backend() as state:
+        state["new_on_write"] = True
+        response = base._client.post("https://fixture.invalid/api/protected/notifications/read",
+            headers={"Authorization": "Bearer fixture"}, json={"ids": [101, 102], "all": False})
+        assert response.status_code == 200
+        result = own_tools()["list_notifications"].invoke(
+            {"unread_only": True, "include_preview": True}, config=config("user"))
+        overview = get_inbox_overview.invoke({}, config=config("user"))
+        assert result.kind == overview.kind == "ok"
+        assert [row["id"] for row in result.data["items"]] == [104]
+        assert result.data["items"][0]["content"]
+        assert overview.data["notifications"] == 1
+        assert state["items"][-1]["isRead"] is False

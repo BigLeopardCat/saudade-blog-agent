@@ -190,7 +190,6 @@ def partial_write_replay(turn, state):
              "notification approval did not freeze the observed unread targets")
     _require(not any(request.method == "POST" for request in state["requests"]),
              "notification preparation wrote before approval")
-    _check(prepared, max_model_calls=3, max_tool_calls={"prepare_notification_read": 1})
     done = turn("", token)
     before = len(state["requests"])
     replay = turn("", token)
@@ -204,8 +203,7 @@ def partial_write_replay(turn, state):
     readbacks = [request for request in state["requests"][write_index + 1:before]
                  if request.method == "GET" and request.url.path.endswith("/notifications")]
     _require(readbacks, "partial result was not read after failed verification")
-    _check(done, max_model_calls=2, max_tool_calls={"list_notifications": 1},
-           require_observations=[{"tools": ["list_notifications"], "kinds": ["ok"]}])
+    _check(done, require_observations=[{"tools": ["list_notifications"], "kinds": ["ok"]}])
     actual = {str(row["id"]): row["isRead"] for row in state["items"] if row["id"] in (101, 102)}
     try:
         answer = json.loads(done["text"])
@@ -214,6 +212,8 @@ def partial_write_replay(turn, state):
     _require(native_assertions.contains(answer, actual),
              "reported completion contradicts the independently observed partial business state")
     _check(replay, max_model_calls=0)
+    _check(prepared, max_model_calls=3, max_tool_calls={"prepare_notification_read": 1})
+    _check(done, max_model_calls=2, max_tool_calls={"list_notifications": 1})
 
 
 CASES = [("efficiency_scoped_article", article_backend, scoped_article),

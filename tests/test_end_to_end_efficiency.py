@@ -172,19 +172,32 @@ def test_gallery_followup_reuses_observed_image_without_business_io(sdk, monkeyp
 
 
 @pytest.mark.parametrize("completed", [False, True])
-def test_partial_write_replay_has_one_write_and_cannot_claim_all_completed(sdk, completed):
+@pytest.mark.parametrize("prelist", [False, True])
+def test_partial_write_replay_has_one_write_and_cannot_claim_all_completed(sdk, completed, prelist):
     reply = json.dumps({"101": True, "102": completed})
-    requests = sdk([
-        [call("load_notifications_info_tools")],
+    responses = [[call("load_notifications_info_tools")]]
+    if prelist:
+        responses.append([call("list_notifications", unread_only=True)])
+    responses.extend([
         [call("prepare_notification_read", scope="all_unread")],
         "请核对确认卡，批准后标记。",
         [call("list_notifications")], reply,
     ])
+    requests = sdk(responses)
     row = result("efficiency_partial_write_replay", requests)
-    assert row["passed"] is (not completed), row
+    assert row["passed"] is (not completed and not prelist), row
+    assert row["requests"] == len(row["rounds"]) == 3
+    assert row["rounds"][0]["model_calls"] == 3 + prelist
     assert row["business_writes"] == 1
+    assert row["evidence"]["business_http_counts"] == {
+        "GET /api/protected/notifications/state": 1,
+        "GET /api/protected/notifications": 1 + prelist,
+        "POST /api/protected/notifications/read": 1,
+    }
     assert row["rounds"][1]["text"] == reply
     assert row["rounds"][2]["model_calls"] == 0
     assert not row["rounds"][1]["exec_rows"] and not row["rounds"][2]["exec_rows"]
     if completed:
         assert "contradicts" in row["reason"]
+    elif prelist:
+        assert "4 > 3" in row["reason"]

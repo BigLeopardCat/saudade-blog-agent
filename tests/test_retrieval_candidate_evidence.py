@@ -36,11 +36,13 @@ def index_for(body, title="合成调度材料"):
 def test_title_only_background_is_retained_but_not_presented_as_a_body_match():
     body = "## 背景\n" + "容量规划背景。" * 900 + "\n## 运行机制\n" + QUERY + "：" + FACT
     body += "\n" + "同一小节的其他背景信息。" * 900
+    body += "\n## 附录\n" + "容量规划背景。" * 200
     index = index_for(body)
     hit = index._lexical_ranked(QUERY, 1, article_id=841)[0]
     strong = next(match for match in hit["matches"] if "body" in match["matched_fields"])
     weak = [match for match in hit["matches"] if match["matched_fields"] == ["title"]]
     assert len(hit["matches"]) == 3 and len(weak) == 2
+    assert len({match["section_id"] for match in hit["matches"]}) == 3
     assert strong["retrieval_scores"]["bm25"] > max(
         match["retrieval_scores"]["bm25"] for match in weak)
     assert FACT in strong["excerpt"]["text"]

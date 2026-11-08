@@ -23,7 +23,14 @@ from rag.corpus import content_revision  # noqa: E402
 from rag.embedding_inputs import active_profile, vector_chunks  # noqa: E402
 from rag.lexical import backend_info  # noqa: E402
 from rag.postgres import PostgresRepository  # noqa: E402
-from rag.search import BM25_B, BM25_K1, RagIndex, expansion_enabled, synonyms  # noqa: E402
+from rag.search import (  # noqa: E402
+    BM25_B,
+    BM25_K1,
+    RagIndex,
+    candidate_limit,
+    expansion_enabled,
+    synonyms,
+)
 from rag.vector_index import VectorStore  # noqa: E402
 
 
@@ -138,10 +145,10 @@ def main(argv=None) -> int:
     parser.add_argument("--chunk-chars", type=int, help="explicit research override")
     parser.add_argument("--top-k", type=int, default=DEFAULT_TOP_K)
     parser.add_argument("--candidates", type=int,
-                        help="per-retriever candidate pool; defaults to top-k as in production")
+                        help="per-retriever candidate pool; defaults to the production policy")
     parser.add_argument("--k", type=int, nargs="+", help="metric cutoffs, independent of pool size")
     args = parser.parse_args(argv)
-    candidates = args.candidates if args.candidates is not None else args.top_k
+    candidates = args.candidates if args.candidates is not None else candidate_limit(args.top_k)
     cutoffs = args.k or [k for k in (1, 3, DEFAULT_TOP_K) if k <= args.top_k]
     if (args.chunk_chars is not None and args.chunk_chars < 64
             or args.expected_dim < 1 or args.top_k < 1 or candidates < args.top_k
@@ -170,7 +177,7 @@ def main(argv=None) -> int:
     report = execute(data, args.collection, candidates, args.expected_dim,
                      top_k=args.top_k, cutoffs=cutoffs)
     report["split"] = args.split
-    report["configuration_mode"] = ("research_override" if candidates != args.top_k
+    report["configuration_mode"] = ("research_override" if candidates != candidate_limit(args.top_k)
         or args.top_k != DEFAULT_TOP_K or chunking.MAX_CHARS != production_chunk_chars
         else "production_retrieval_defaults")
     report["code_sha256"] = code_hash

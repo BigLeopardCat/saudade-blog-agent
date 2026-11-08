@@ -118,7 +118,9 @@ def _notification_mark(state, payload):
         if row["id"] in changed:
             row["isRead"] = True
     if state["new_on_write"]:
-        state["items"].append({"id": 104, "title": "新到通知", "isRead": False})
+        state["items"].append({"id": 104, "title": "新到通知", "isRead": False,
+                               "type": "system", "content": "本次确认之后到达的通知。",
+                               "link": None, "createdAt": "2026-10-25 12:01:00"})
     data = {"scope": "selected", "ownerUserId": 7, "matchedIds": payload["ids"],
             "changedIds": changed, "isRead": all(row["isRead"] for row in selected),
             "unreadCount": state["hidden_unread"] + sum(
@@ -151,6 +153,13 @@ def notification_backend():
                     "articleAvailable": True, "title": "真实文章标题"}
         elif request.method == "GET" and request.url.path.endswith("/notes/19"):
             data = {"noteId": 19, "noteTitle": "真实文章标题", "status": 1}
+        elif request.method == "GET" and request.url.path.endswith("/inbox/overview"):
+            if state["hidden_unread"]:
+                return httpx.Response(503)
+            data = inbox_overview(state["items"], [], int(request.url.params.get("limit", "5")))
+        elif request.method == "GET" and request.url.path.endswith("/notifications/summary"):
+            unread = state["hidden_unread"] + sum(not row["isRead"] for row in state["items"])
+            data = {"notifications": unread, "messages": 0, "total": unread}
         elif request.method == "GET" and "/notifications" in request.url.path:
             if request.url.path.endswith("/notifications/state"):
                 data = _notification_state(state, request.url.params)
