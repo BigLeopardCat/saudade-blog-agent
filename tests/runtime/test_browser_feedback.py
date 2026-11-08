@@ -104,7 +104,11 @@ def test_failure_or_wrong_location_is_not_a_success_fact(navigation, status, pat
 def test_missing_ack_redisplays_same_command_without_a_model_call(navigation):
     runtime, model, config, _, command = navigation
     result = list(runtime().stream_events({"messages": [], "resume_task": "page-task"}, config))[-1]
-    assert result.execution["client_action"] == command and len(model.calls) == 1
+    restored = result.execution["client_action"]
+    assert {k: v for k, v in restored.items() if k != "expires_in_ms"} == {
+        k: v for k, v in command.items() if k != "expires_in_ms"}
+    assert 0 < restored["expires_in_ms"] <= command["expires_in_ms"] <= 60_000
+    assert len(model.calls) == 1
 
 
 def test_forged_or_cross_role_resume_cannot_dispatch_tools(navigation):
@@ -252,3 +256,15 @@ def test_expired_missing_ack_becomes_an_unknown_timeout_without_reissuing_the_co
     repeated = list(runtime().stream_events({"messages": [], "resume_task": "page-task"},
                                            config))[-1]
     assert repeated.execution["blocked"] and len(model.calls) == 2
+
+
+def test_reissued_command_uses_remaining_server_validity(navigation, monkeypatch):
+    from agent.runtime import client_actions
+
+    runtime, model, config, _, command = navigation
+    monkeypatch.setattr(client_actions.time, "time", lambda: command["expires_at"] - 4)
+    result = list(runtime().stream_events({"messages": [], "resume_task": "page-task"}, config))[-1]
+    restored = result.execution["client_action"]
+    assert restored["command_id"] == command["command_id"]
+    assert restored["expires_in_ms"] == 4000
+    assert len(model.calls) == 1

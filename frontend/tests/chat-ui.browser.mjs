@@ -117,14 +117,14 @@ const server = createServer(async (req, res) => {
         if (mode === 'appearance') {
           res.end(frame('command', {kind:'appearance', settings:{dark_mode:'on',rain:'off'},
             task_id:body.task_id, command_id:'offline-appearance',timeout_ms:1000,
-            expires_at:Date.now()/1000+60}) + frame('done',{}));
+            expires_in_ms:60_000,expires_at:Date.now()/1000+60}) + frame('done',{}));
           return;
         }
         if (mode === 'navigate') {
           res.end(frame('progress', '正在调用工具：navigate_page') + frame('command', {
             kind: 'navigate', mode: 'direct', url: new URL('/guestbook', 'http://' + req.headers.host).href,
             path: '/guestbook', task_id: body.task_id, command_id: 'offline-navigation', timeout_ms: 1000,
-            expires_at: Date.now() / 1000 + 60,
+            expires_in_ms:60_000,expires_at: Date.now() / 1000 + 60,
           }) + frame('done', {}));
           return;
         }
