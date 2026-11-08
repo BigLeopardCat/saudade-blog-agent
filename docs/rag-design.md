@@ -136,6 +136,9 @@ contentRevision 是包含解析策略及库版本、标题和原文的读取视�
 内容 revision 分开。检索候选 document_revision 使用相同读取视图版本，客户端只需原样回传。
 解析策略变化会明确拒绝旧 sN/续读版本；首次全文读取可取得当前版本与目录。
 
+`view=metadata` 只返回已存在的公开元信息（作者、摘要及展示字段），不返回正文、目录数量
+或正文读取凭证；不能据此总结正文。已知编号可直接读取，无需检索定位，缺失字段保持未知。
+
 `view=outline` 仅分页读取目录，不登记正文已读。每页最多 12 项，offset 是目录条目下标，
 从 nextSectionsOffset 续页；正文的 offset 则从 nextOffset 续读。两类续页都须回传
 contentRevision 与 sectionSchema。sectionsOffset、sectionCount 和 nextSectionsOffset

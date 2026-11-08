@@ -119,6 +119,7 @@ def test_model_tool_message_has_public_display_fields_without_identity_or_extra_
     assert not {"userId", "username", "email"}.intersection(shown)
     if view == "metadata":
         assert shown["source"] is None and "noteContent" not in shown
+        assert not {"totalChars", "sections", "sectionCount"}.intersection(shown)
         assert "limit" not in state["requests"][0].url.params
         proof = ArticleEvidence()
         proof.observe("get_article_detail", {"article_id": 23}, ok("", data=shown))
@@ -179,9 +180,10 @@ def test_excerpt_keeps_metadata_and_does_not_drop_a_summary_identical_to_the_bod
         {"coverFit": "invented"},
     ],
 )
-def test_unverified_display_metadata_never_reaches_the_model(fields):
+@pytest.mark.parametrize("view", ["body", "metadata"])
+def test_unverified_display_metadata_never_reaches_the_model(fields, view):
     with backend(rows(**fields)):
-        result = get_article_detail.invoke({"article_id": 23})
+        result = get_article_detail.invoke({"article_id": 23, "view": view})
     assert result.kind == "unavailable" and result.data is None
 
 

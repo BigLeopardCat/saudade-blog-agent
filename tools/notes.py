@@ -148,7 +148,8 @@ def get_article_detail(
     To read or summarize the WHOLE document, omit section and follow nextOffset.
     To browse headings without reading body, use view='outline' and nextSectionsOffset.
     Both continuations require contentRevision AND sectionSchema. A section's end does not
-    establish a full-article read. Pictures remain Markdown. Private/draft text uses
+    establish a full-article read; never characterize omitted text from a partial read.
+    Pictures remain Markdown. Private/draft text uses
     administrator read_current_article; counters use get_article_stats.
     """
     from urllib.parse import urlencode

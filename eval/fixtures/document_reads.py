@@ -206,6 +206,10 @@ def document_page(kind, identifier, title, content, params=None, metadata=None):
     source = value.get("source")
     if source:
         source = {**source, "type": kind}
+    if value["view"] == "metadata":
+        return {"view": "metadata", "type": kind, "id": identifier, "title": title,
+                "metadata": metadata or {}, "contentRevision": value["contentRevision"],
+                "sectionSchema": sections.PARSER_VERSION, "readComplete": False, "source": None}
     return {
         "view": value["view"], "type": kind,
         "id": identifier,

@@ -57,8 +57,27 @@ class DisplayMetadata(BaseModel):
     carouselZoom: Annotated[StrictFloat, Field(ge=1, le=4, allow_inf_nan=False)] | None = None
 
 
+class MetadataPage(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    view: Literal["metadata"]
+    type: Kind
+    id: Annotated[StrictInt, Field(gt=0, le=2_147_483_647)]
+    title: Annotated[StrictStr, Field(max_length=255)]
+    contentRevision: Digest
+    sectionSchema: StrictStr
+    readComplete: StrictBool
+    source: None
+    metadata: dict
+
+    @model_validator(mode="after")
+    def no_body_evidence(self):
+        if self.readComplete or self.sectionSchema != sections.PARSER_VERSION:
+            raise ValueError("metadata cannot establish a body read")
+        return self
+
+
 class Page(BaseModel):
-    view: Literal["body", "outline", "metadata"]
+    view: Literal["body", "outline"]
     type: Kind
     id: Annotated[StrictInt, Field(gt=0, le=2_147_483_647)]
     title: Annotated[StrictStr, Field(max_length=255)]
@@ -92,9 +111,7 @@ class Page(BaseModel):
             or self.nextSectionsOffset != (section_end if section_end < self.sectionCount else None)
             or not self.sections and self.nextSectionsOffset is not None
             or self.view == "body" and self.sectionsOffset != 0
-            or self.view in {"outline", "metadata"}
-            and (self.readOffset != 0 or self.source is not None)
-            or self.view == "metadata" and (self.sectionCount != 0 or self.totalChars != 0)
+            or self.view == "outline" and (self.readOffset != 0 or self.source is not None)
         ):
             raise ValueError("inconsistent section directory range")
         if self.source is None:
@@ -124,11 +141,13 @@ class Page(BaseModel):
 
 
 def project(value, kind, identifier, section, offset, limit, revision, section_schema, view="body"):
-    page = Page.model_validate(value)
+    page = (MetadataPage if view == "metadata" else Page).model_validate(value)
     if (
         (page.type, page.id, page.view) != (kind, identifier, view)
-        or (page.readOffset if view == "body" else page.sectionsOffset) != offset
-        or len(page.content) > limit
+        or view == "metadata" and bool(section or offset)
+        or isinstance(page, Page) and (
+            (page.readOffset if view == "body" else page.sectionsOffset) != offset
+            or len(page.content) > limit)
         or revision
         and page.contentRevision != revision
         or section_schema
@@ -182,5 +201,6 @@ def project(value, kind, identifier, section, offset, limit, revision, section_s
                if view == "body" else {}),
         )
     else:
-        data.update(id=page.id, title=page.title, content=page.content)
+        data.update(id=page.id, title=page.title,
+                    **({"content": page.content} if isinstance(page, Page) else {}))
     return data

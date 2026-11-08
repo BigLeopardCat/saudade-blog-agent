@@ -14,7 +14,8 @@ def prepare_message_read(scope: Selection, config: RunnableConfig,
                          ids: Identifiers = []) -> object:
     """用户明确要求把本人收到的站内信标记已读时准备确认卡，不写入。
 
-    selected 需收件箱具体编号；all_unread 仅用于明确要求全部未读。
+    selected 需收件箱具体编号；all_unread 仅用于明确要求全部未读，可直接准备。
+    准备会核对完整未读范围，不必先读最近信件列表，最近窗口为空不能代替此核对。
     不能改变发件箱的已读状态。单纯查看信件不代表要求标记已读。
     """
     return _domain.prepare(scope, ids, config)
