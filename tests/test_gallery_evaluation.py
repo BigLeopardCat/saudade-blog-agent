@@ -86,3 +86,22 @@ def test_short_reference_golden_requires_rendering_without_forcing_another_read(
                  "name": "get_gallery_image_metadata"}]
     assert check_gold(gold, {**result, "native_events": repeated,
                                          "tool_calls": ["get_gallery_image_metadata"]})
+
+
+@pytest.mark.parametrize("tool", ["get_gallery_image_metadata", "show_gallery_image"])
+@pytest.mark.parametrize("rendered", [True, False])
+def test_gallery_presentation_contract_requires_real_display_for_either_valid_read(tool, rendered):
+    import json
+
+    case = next(row for row in online_baseline.load_suite() if row["id"] == "gallery_display_image")
+    url = "https://images.test/accepted.png"
+    result = {"text": f"![猫咪]({url})" if rendered else "请看图片。",
+              "tool_calls": [tool], "exec_rows": [], "commands": [],
+              "native_events": [{"node": "native", "event": "llm_start"},
+                  {"node": "native", "event": "call", "name": tool,
+                   "args": {"image_id": 72}, "kind": "ok",
+                   "result": json.dumps({"url": url})}]}
+    assert (not check_gold(case["gold"], result)) is rendered
+    if rendered:
+        result["text"] = "![错误图片](https://images.test/wrong.png)"
+        assert check_gold(case["gold"], result)
