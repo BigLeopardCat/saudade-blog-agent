@@ -112,7 +112,7 @@ def describe(job):
         detail = "源文件清理仍在后台进行。" if job["status"] == "published" else "传输任务已完成。"
         return "图库已更新。" + detail
     if job["status"] == "failed":
-        return "传输未完成，源文件保留；请检查存储配置后重新准备。"
+        return "本次传输未发布；请查看图库当前状态后重新准备。"
     return "图片传输已提交后台，尚未完成；可以按任务编号查询进度。"
 
 
