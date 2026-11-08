@@ -275,4 +275,3 @@ def test_callback_exception_records_only_its_type_and_not_arbitrary_attributes(r
     event, = http_events(recorder)
     assert event["error"] == "DeadlineError" and stream.closed
     assert "SECRET_CALLBACK" not in json.dumps(event)
-
