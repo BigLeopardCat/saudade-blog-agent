@@ -90,13 +90,12 @@ def _reduce(session, protected):
 
 
 def _warm(session):
-    """Bound inherited schemas, retaining the newest domain as the warm minimum."""
+    """Retain inherited domains only when the complete menu fits the soft target."""
     keep, names = set(), session.initial_names | session.loaders.keys()
     for domain in reversed(loaded(session)):
         proposed = names | session.domains[domain].keys()
         menu = [s for s in session.menu if s["function"]["name"] in proposed]
-        if (not keep or count_tokens_approximately([], tools=menu)
-                <= settings.agent_tool_schema_tokens):
+        if count_tokens_approximately([], tools=menu) <= settings.agent_tool_schema_tokens:
             keep.add(domain)
             names = proposed
     return keep
