@@ -116,7 +116,8 @@ def prepare_article_cover(
     when visual details matter. contain shows the complete image; cover (default) fills/crops.
     The user can review layout previews in the confirmation card before approving;
     no cover change is needed to see them. Preparation does not inspect image pixels
-    or assess crop quality.
+    or assess crop quality. Briefly identify the verified targets and direct the user
+    to the card; do not invent textual previews, aspect ratios or composition details.
     This changes the cover in the article and any saved editing draft,
     preserving text, title and publication state. Published articles update immediately
     after confirmation; current unsaved browser edits remain subject to version checks.
