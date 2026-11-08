@@ -9,6 +9,7 @@ from agent.products.blog.catalog import DOMAIN_DESCRIPTIONS, initial_tools
 from agent.products.blog.context import conversation_context, conversation_session
 from agent.products.blog.editor_summary import SummaryApprovalMiddleware
 from agent.products.blog.history import tool_access
+from agent.products.blog.media import GalleryDisplayMiddleware
 from agent.products.blog.pending import expired
 from agent.products.blog.pending import restore as restore_pending
 from agent.products.blog.prompt import build_prompt
@@ -19,7 +20,8 @@ from agent.runtime.task_planning import TaskPlanningMiddleware
 
 
 class BlogApplication:
-    middleware = (ArticleMiddleware, SummaryApprovalMiddleware, BlogToolMiddleware,
+    middleware = (ArticleMiddleware, SummaryApprovalMiddleware, GalleryDisplayMiddleware,
+                  BlogToolMiddleware,
                   TaskPlanningMiddleware)
     descriptions = DOMAIN_DESCRIPTIONS
     context = staticmethod(conversation_context)
