@@ -11,7 +11,8 @@ DOMAIN_DESCRIPTIONS = {
     "admin_talks": "Publish, edit or permanently delete administrator posts; "
     "not guestbook moderation.",
     "admin_gallery": "Gallery images/folders and inspection; atomic single/bulk metadata, "
-    "move/favorite/delete, empty-folder deletion/creation and article covers.",
+    "move/favorite/delete and folder management. Prepare article covers directly from "
+    "article/image IDs; preparation verifies both targets and provides layout previews.",
     "article_editor": "Collaborate on the open editor: draft, title/body review, summary approval "
     "and in-place publication.",
     "admin_automations": "Persistent reminders, scheduled read-only analysis and approved "

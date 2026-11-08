@@ -182,6 +182,29 @@ def test_cover_preview_binds_exact_article_and_image_versions(gallery):
         "image_id": 11, "name": "山景", "url": "https://images.example/cover.png", "fit": "cover"}
     assert "![" not in prepared.reply
     assert gallery["writes"] == 0
+    assert [(request.method, request.url.path) for request in gallery["requests"]] == [
+        ("GET", "/api/protect/gallery/images/11"),
+        ("GET", "/api/protect/gallery/articles/3/cover"),
+    ]
+
+
+def test_cover_preparation_supplies_verified_targets_to_narration_without_more_queries(gallery):
+    from agent.runtime.approval_messages import prepared as approval_message
+
+    card = preparation.prepare_article_cover.invoke(
+        {"article_id": 3, "image_id": 11}, config=admin())
+    message = approval_message({"name": "prepare_article_cover", "id": "cover"}, {
+        "execution": card.execution, "reply": card.reply}, [])
+    facts = json.loads(message.content)
+    assert facts["status"] == "awaiting_confirmation" and facts["executed"] is False
+    assert facts["preparation_facts"] == {
+        "article_id": 3, "article_title": "文章", "image_id": 11, "image_name": "山景",
+        "fit": "cover", "preview_layouts": ["article_card", "home_carousel", "article_banner"],
+    }
+    assert card.execution["pending_confirm"]["token"] not in message.content
+    assert gallery["row"]["description"] not in message.content
+    assert "version" not in message.content and len(gallery["requests"]) == 2
+    assert gallery["writes"] == 0
 
 
 def test_untrusted_or_nonadmin_identity_never_reads_private_images(gallery):
