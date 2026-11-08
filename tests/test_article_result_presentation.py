@@ -30,10 +30,30 @@ def hit(ident=1, sections=("s1",), ranges=None):
 
 def test_section_rrf_does_not_let_three_lexical_sections_hide_the_dense_target():
     row = rrf_fuse([hit(sections=("s1", "s2", "s3"))], [hit(sections=("s22",))], 60, 1)[0]
-    assert row["section_ids"] == ["s1", "s22", "s2"]
-    assert len(row["matches"]) == 3
+    assert row["section_ids"] == ["s1", "s22", "s2", "s3"]
+    assert len(row["matches"]) == 4
     wire = candidate_text(1, row)
-    assert "section=s22" in wire and "section=s3 " not in wire
+    assert all(f"section={section} " in wire for section in row["section_ids"])
+
+
+def test_ranked_union_retains_the_second_dense_section_and_its_readable_range():
+    lexical = hit(sections=("s3", "s2", "s6"))
+    dense = hit(sections=("s19", "s22", "s3"))
+    row = rrf_fuse([lexical], [dense], 60, 1)[0]
+    assert row["section_ids"][:3] == ["s3", "s19", "s2"]
+    assert set(row["section_ids"]) == {"s2", "s3", "s6", "s19", "s22"}
+    assert {match["section_id"] for match in row["matches"]} == set(row["section_ids"])
+    wire = candidate_text(1, row)
+    assert "section=s22 " in wire and "offset=0 max_chars=40" in wire
+    assert f"revision={row['document_revision']}" in wire
+
+
+def test_disjoint_retrievers_keep_all_six_bounded_sections_visible():
+    row = rrf_fuse([hit(sections=("s1", "s2", "s3"))],
+                   [hit(sections=("s4", "s5", "s6"))], 60, 1)[0]
+    assert len(row["section_ids"]) == len(row["matches"]) == 6
+    wire = candidate_text(1, row)
+    assert all(f"section=s{number} " in wire for number in range(1, 7))
 
 
 def test_range_rrf_keeps_a_deep_dense_match_within_one_long_section():

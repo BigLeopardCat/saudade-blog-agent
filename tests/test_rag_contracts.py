@@ -288,4 +288,5 @@ def test_ranked_candidates_expose_bounded_section_locators_without_guessing_offs
     assert "section=s20 revision=rev1 offset=96" in result
     assert "section=s18 revision=rev1" in result
     assert "section=s18 revision=rev1 offset=" not in result
-    assert "额外" not in result and "s99" not in result
+    assert "section=s99 revision=rev1" in result
+    assert "section=s99 revision=rev1 offset=" not in result

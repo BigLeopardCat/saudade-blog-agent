@@ -76,7 +76,7 @@ def corpus_fingerprint(space: Space, chunks: list[dict]) -> str:
     return hashlib.sha256("\n".join(parts).encode("utf-8")).hexdigest()
 
 
-FUSION_POLICY = "document-section-location-rrf-v1"
+FUSION_POLICY = "document-section-location-rrf-v2"
 _SOURCE_FIELDS = ("corpus_revision", "content_revision", "document_revision", "section_schema")
 
 
@@ -135,7 +135,8 @@ def rrf_fuse(lex: list[dict], vec: list[dict], k: int, top_k: int) -> list[dict]
     for rank, key in enumerate(ranked(document_ranks)[:max(1, top_k)], 1):
         data = info[key]
         locations = []
-        for ident in ranked(data["sections"])[:3]:
+        # Each retriever already bounds its sections; preserve their ranked union.
+        for ident in ranked(data["sections"]):
             original = data["locations"][ident]
             matches = [original["matches"][match] for match in ranked(original["ranks"])]
             locations.append({"section": original["section"], "section_id": ident,
@@ -147,7 +148,7 @@ def rrf_fuse(lex: list[dict], vec: list[dict], k: int, top_k: int) -> list[dict]
         out.append({**data["data"], "rank": rank, "locators": locations,
                     "sections": [row["section"] for row in locations],
                     "section_ids": [row["section_id"] for row in locations],
-                    "matches": matches[:3]})
+                    "matches": matches[:max(3, len(locations))]})
     return out
 
 

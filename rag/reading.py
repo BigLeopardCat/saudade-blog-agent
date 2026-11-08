@@ -30,7 +30,7 @@ def candidate_text(index, hit):
     title = hit["title"][:24].replace("\n", " ").replace("\r", " ")
     text = f"{index}. type={hit['type']} id={hit['id']} rank={index} title={title}"
     identifiers = hit.get("section_ids") or []
-    sections = list(zip(hit.get("sections") or [], identifiers))[:3]
+    sections = list(zip(hit.get("sections") or [], identifiers))
     matches = hit.get("matches") or []
     chosen = []
     for label, ident in sections:
@@ -39,7 +39,7 @@ def candidate_text(index, hit):
     for match in matches:
         label = next((label for label, ident in sections if ident == match.get("section_id")), None)
         row = (label, match.get("section_id"), match)
-        if label is not None and row not in chosen and len(chosen) < 3:
+        if label is not None and row not in chosen and len(chosen) < max(3, len(sections)):
             chosen.append(row)
     hints = [_source_hint(hit, *row) for row in chosen]
     return text + (" " + " | ".join(hints) if hints else "")
