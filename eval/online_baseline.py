@@ -70,9 +70,10 @@ def fixture_account_eligibility(case):
 
 def _call_limits(gold, case_id):
     """Validate evaluation ceilings before any model or business request."""
-    maximum = gold.get("max_model_calls")
-    if "max_model_calls" in gold and (type(maximum) is not int or maximum < 0):
-        raise ValueError(f"invalid model-call acceptance limit: {case_id}")
+    for key in ("max_model_calls", "max_article_body_chars"):
+        maximum = gold.get(key)
+        if key in gold and (type(maximum) is not int or maximum < 0):
+            raise ValueError(f"invalid {key} acceptance limit: {case_id}")
     limits = gold.get("max_tool_calls", {})
     if (not isinstance(limits, dict) or any(
             not isinstance(name, str) or not name or type(count) is not int or count < 0

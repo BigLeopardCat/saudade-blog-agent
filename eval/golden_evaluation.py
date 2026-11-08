@@ -51,8 +51,7 @@ from utils import trace as trace_mod  # trace 工具返回留多长（run_case �
 CMD_PREFIXES = ("EFFECT:", "NAVIGATE:", "AUTO_NAVIGATE:", "DARKMODE:")
 
 
-# 导航命令帧族：AUTO_NAVIGATE 与 NAVIGATE 同属"导航已执行"，断言时视为一族
-# （golden 里 require/forbid "NAVIGATE:" 时 AUTO_NAVIGATE 帧同样计入/计入禁止）
+# Assertions normalize both navigation command families.
 CMD_FAMILIES = {
     "NAVIGATE:": ("NAVIGATE:", "AUTO_NAVIGATE:"),
     "AUTO_NAVIGATE:": ("NAVIGATE:", "AUTO_NAVIGATE:"),
@@ -104,7 +103,7 @@ def iter_rounds(case: dict) -> list[dict]:
                 "confirm_message": r.get("confirm_message", ""),
                 "confirm_pick": r.get("confirm_pick", ""),
                 "user_input": r.get("user_input", case.get("user_input", "")),
-                # 轮级 context 覆盖用例级（追问轮常需要补 history/executions）
+                # Round context overrides case defaults.
                 "context": {**(case.get("context") or {}), **(r.get("context") or {})},
             })
         return out
@@ -137,7 +136,6 @@ def redact_frames(frames: list) -> list:
 # Optional host-shaped history from earlier completed rounds of the same case.
 # Disabled by default; enabled runs carry both bounded HistoryItem values and actor provenance.
 ENV_PROD_HISTORY = "GOLDEN_PROD_HISTORY"
-#: Rust 的 `history[-20:]`（`chat.rs` 的 `.take(20)`）。
 PROD_HISTORY_LIMIT = 20
 
 
@@ -470,9 +468,7 @@ _NEG_PROPOSITION_PREFIX_RE = re.compile(
     r"""[“”「」『』"']*$""")
 # Bounded adverbs may occur between proposition negation and its subject.
 _NEG_PROPOSITION_WINDOW = 12
-# 反口守卫：反问句「不是已经帮你收藏好了**吗**？」是**肯定**声称（"难道不是吗"），
-# 不是否认——命中片段**之后**紧跟语气词/问号 ⇒ 这一处不算豁免。判据只看得到命中点
-# **之前**的文本，所以这个守卫得由调用方把命中终点一起递进来（`end`）。
+# A rhetorical question may assert completion; inspect the text after the match as well.
 _RHETORICAL_TAIL_RE = re.compile(r"""[“”「」『』"'\s]*(?:吗|嘛|么|吧|？|\?)""")
 _CLAUSE_BREAK_NO_QUOTE = "".join(c for c in _CLAUSE_BREAK if c not in "“”「」『』\"'")
 
@@ -495,8 +491,7 @@ def _direct_negation_prefix(text: str, pos: int, end: int | None = None) -> bool
 _MODAL_NEG_RE = re.compile(r"没法|没办法|无法|不能|做不到|帮不了|不敢|不会|不愿|不想")
 _TURN_BACK_RE = re.compile(r"但|但是|不过|然而|可是|却|其实")
 _MODAL_NEG_WINDOW = 24
-# 引号**不算**小句边界（只在这一支里）：现场「没办法帮你执行“全部标记为已读”的操作啦」
-# 的命中就落在引号内，按引号切等于把领它的那个否定切走 ⇒ 豁免必然失效。
+# Quotation marks stay inside the clause so the governing denial remains visible.
 _QUOTE_CHARS = "“”「」『』\"'…"
 
 
@@ -699,14 +694,14 @@ _CONSEQUENCE_RE = re.compile(r"就[^。！？；;\n]{0,6}$")
 
 
 def _consequence_clause(text: str, start: int, end: int) -> bool:
-    """命中片段是否自带「就」这个后果连接词（见上文）。"""
+    """Check whether the matched phrase has an explicit consequence connector."""
     return bool(_CONSEQUENCE_RE.search(text[start:end]))
 
 
 # Each regex exemption is explicitly enabled by the case expectations.
 @dataclass(frozen=True, slots=True)
 class Exempts:
-    """一条负断言正则可用的五个豁免开关（默认全关 = 不加豁免的旧行为）。"""
+    """Case-declared regex exemptions, each disabled by default."""
 
     conditional: bool = False
     refuted: bool = False
@@ -764,8 +759,7 @@ DENIAL_FAMILY: tuple[str, ...] = (
     r"(没法|没办法|没辙|无法|不能|不可|做不到|做不了|帮不上|帮不了|爱莫能助|查不到|读不到|看不到|拿不到|访问不了|触及不到)",
     # Match modal inability together with a bounded action phrase.
     r"(没|没有|没能|未能|不曾|还没来得及)[^。\n]{0,3}" + _DENIAL_MODAL_VERBS,
-    # ⑦ 系统自己那帧的原话（见上）。`re.escape` 只是防御——这句话里没有正则元字符，
-    #    加它就是这条**派生**关系的字面证据：它必须仍等于生产那句开头。
+    # Match the shared receipt literally rather than maintaining another copy.
     re.escape(_NO_IDENTITY_PREFIX),
     r"(只能|仅能|仅限于|仅限|只可以)[^。\n]{0,14}(站内|博客|文章|说说|留言|公告|分类|标签|闲聊|聊|介绍|查询|看|告诉)",
     r"(只有|需要|得|要|请)[^。\n]{0,12}(博主|主人|管理员|后台)",
@@ -775,7 +769,7 @@ DENIAL_FAMILY: tuple[str, ...] = (
 
 
 def _denial_hit(text: str) -> bool:
-    """回复里有没有"诚实拒绝"的表述（见 `DENIAL_FAMILY`）。"""
+    """Match refusal phrasing; this does not establish authorization or factual accuracy."""
     return any(re.search(rx, text) for rx in DENIAL_FAMILY)
 
 
@@ -796,10 +790,7 @@ ABSENCE_LEADS: tuple[str, ...] = (
 _BARE_NEG = r"(?:没有|没|未|无)"
 _ABSENCE_NEG = (r"(?:" + "|".join(ABSENCE_COMPOUND)
                 + rf"|{_BARE_NEG}[^。\n]{{0,4}}(?:{'|'.join(ABSENCE_LEADS)}))")
-# 目标与否定形态之间的窗口统一取 60。**真正管住"别跨句乱配"的是 `[^。\n]`
-# （同一个 。/换行之内）**，这一层的距离上限只是防呆。取 60 的依据是现场那条回复：
-# 模型把"在后台 30 条留言里筛了一遍、三栏一个都没命中"这一串数说全了，字面到否定
-# 形态之间隔了 41 个字；窗口取 30 会判它假红。
+# Bound target/negation matching without crossing a sentence or newline.
 ABSENCE_WINDOW = 60
 
 
@@ -870,7 +861,7 @@ def expand_token_list(lst: list) -> list:
 
 # Explicit assertion keys reject misspellings instead of silently skipping checks.
 GOLD_ASSERT_KEYS = frozenset({
-    "max_model_calls", "max_tool_calls",
+    "max_model_calls", "max_tool_calls", "max_article_body_chars",
     "require_observations", "require_observations_any", "require_todo_schedule",
     "require_automation_schedule",
     "require_confirm_specs", "require_confirm_preview", "forbid_runtime_stop",
