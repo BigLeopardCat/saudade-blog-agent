@@ -10,6 +10,7 @@ from pydantic import Field, StrictInt
 
 from agent.domains.article_metadata import tag_references
 from agent.reports import sanitize_untrusted
+from rag import DEFAULT_TOP_K
 from tools import base as _base
 from tools.result import (
     ToolResult,
@@ -241,7 +242,7 @@ def _rag_text(meta, text):
 @tool
 def rag_search(
     query: Annotated[str, "检索关键词（用户问题中希望从博客内容里找到答案的核心表述）"],
-    top_k: Annotated[StrictInt, Field(ge=1, le=64), "返回候选文档数量，默认 8"] = 8,
+    top_k: Annotated[StrictInt, Field(ge=1, le=64), "返回候选文档数量，默认 8"] = DEFAULT_TOP_K,
 ) -> str | ToolResult:
     """按主题检索公开文章候选与命中小节，不返回全文。
 

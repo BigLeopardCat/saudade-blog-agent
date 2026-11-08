@@ -1,8 +1,12 @@
 {
   "schema_version": 1,
   "name": "synthetic-chinese-blog-retrieval",
-  "source": "repository-authored Chinese blog capability fixtures with manually labelled document and source-section evidence",
-  "revision": "1",
+  "source": "Project-generated synthetic Chinese technical documents with fixed reference relevance/evidence labels; no production export or independent expert annotation",
+  "revision": "2",
   "license": "MIT",
-  "scope": "synthetic capability regression only; six documents and seven queries, not a production quality score or a held-out benchmark"
+  "scope": "Public capability and ranking regression only; not a production quality score, blind holdout or public benchmark leaderboard. dev includes previously exercised cases and alias examples; test is separately authored and frozen before this implementation is evaluated.",
+  "splits": {
+    "dev": "Known development and existing source-contract examples; may be used to tune.",
+    "test": "Public project-generated evaluation questions with fixed reference labels, without independent human validation; not a secret or independently authored holdout. Once used to tune retrieval, rotate the independent acceptance set."
+  }
 }

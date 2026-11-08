@@ -1,7 +1,7 @@
 # RAG 文章检索与证据读取
 
 当前契约由版本化语料快照、结构感知检索、正文范围读取和证据检查组成。
-决策见 [架构边界](agent-architecture.md)；旧实验和基线保存在 Git 历史。
+组件边界见 [架构说明](agent-architecture.md)。
 
 ## 1. 数据与权限边界
 
@@ -67,6 +67,9 @@ rag/chunks.py 使用 LangChain 的 RecursiveCharacterTextSplitter 在小节内�
 两路共用 rag/ranking.py 聚合文档，并提供可回取的命中位置。
 查询保留原始问句；不删除疑问词、不按头部分数裁掉尾候选。
 少量领域别名映射属于博客词表配置；候选与实际答案证据仍分开判断。
+没有独立 LLM 查询重写器或 cross-encoder 重排模型；RRF 是名次融合。
+新增改写或重排须用固定数据分别比较召回、排序、延迟和费用，不能用新调用数量代替收益。
+默认候选数由 rag.DEFAULT_TOP_K 定义，工具与固定语料评测共用。
 
 ## 5. 向量与持久化
 
