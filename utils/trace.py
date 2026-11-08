@@ -142,6 +142,7 @@ class _TraceRecorder:
         try:
             doc = {
                 "schema_version": SCHEMA_VERSION,
+                "observability": {"json_http": 1},
                 "trace_id": self.trace_id,
                 "process_id": self.process_id,
                 "user_id": self.user_id,

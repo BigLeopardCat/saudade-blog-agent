@@ -25,6 +25,7 @@ from urllib.parse import urlsplit
 import httpx
 from tenacity import Retrying, retry_if_exception, stop_after_attempt, wait_fixed
 
+from tools.http_observability import request_attempt
 from tools.result import ToolResult, invalid_args, not_found, unavailable
 from utils.logging import get_trace_id
 
@@ -132,7 +133,7 @@ def _decode(content: bytearray, *, status: int, write: bool) -> dict:
     return body
 
 
-def _read_body(response, maximum, write, check):
+def _read_body(response, maximum, write, check, observation):
     failure = ERROR_WRITE_UNKNOWN if write else ERROR_INVALID_RESPONSE
     length = response.headers.get("content-length")
     try:
@@ -143,22 +144,25 @@ def _read_body(response, maximum, write, check):
         raise Failure(failure, status=response.status_code)
     content = bytearray()
     for chunk in response.iter_bytes(65536):
+        observation.response_bytes += len(chunk)
         check()
         if len(chunk) > maximum - len(content):
             raise Failure(failure, status=response.status_code)
         content.extend(chunk)
+    observation.response_complete = True
     return content
 
 
 def _attempt_once(client: httpx.Client, *, method: str, url: str, headers=None,
                   json_body=None, timeout: float, write: bool,
-                  max_response_bytes: int, check: Callable[[], object]) -> dict:
+                  max_response_bytes: int, check: Callable[[], object], observation) -> dict:
     """Read one bounded decoded response and close it on every exit."""
     try:
         with client.stream(method, url, timeout=timeout, headers=headers, json=json_body) as resp:
+            observation.status = resp.status_code
             if resp.status_code != 200:
                 raise _classify_status(resp.status_code, write=write)
-            return _decode(_read_body(resp, max_response_bytes, write, check),
+            return _decode(_read_body(resp, max_response_bytes, write, check, observation),
                            status=resp.status_code, write=write)
     except (httpx.InvalidURL, httpx.UnsupportedProtocol):
         raise Failure(ERROR_INVALID_ARGS) from None
@@ -214,9 +218,15 @@ def request_json(client: httpx.Client, *, method: str, url: str, headers=None,
         sent += 1
         began = time.monotonic()
         try:
-            result = _attempt_once(client, method=method, url=url, headers=headers,
-                                   json_body=json_body, timeout=remaining, write=write,
-                                   max_response_bytes=max_response_bytes, check=active_timeout)
+            with request_attempt(method, url, sent) as observation:
+                try:
+                    result = _attempt_once(client, method=method, url=url, headers=headers,
+                                           json_body=json_body, timeout=remaining, write=write,
+                                           max_response_bytes=max_response_bytes,
+                                           check=active_timeout, observation=observation)
+                except Failure as failure:
+                    observation.failure_code = failure.code
+                    raise
         except Failure as failure:
             logger.warning("tool_http_failed method=%s host=%s path=%s status=%s "
                            "code=%s attempt=%s duration_ms=%.2f", method, endpoint.hostname,
