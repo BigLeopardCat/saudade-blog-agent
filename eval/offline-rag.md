@@ -12,7 +12,7 @@ python -m eval.offline_rag_eval eval/fixtures/blog_retrieval --split dev --outpu
 python -m eval.offline_rag_eval eval/fixtures/blog_retrieval --split test --output /tmp/rag-test.json
 ```
 
-随仓语料是 MIT 许可的人工编写中文技术内容：28 篇文档，开发集14题、公开评估集21题。
+随仓语料是 MIT 许可的项目自建合成中文技术语料与固定参考标签：28 篇文档，开发集14题、公开评估集21题。
 它覆盖长文末尾、重复标题、多文证据、口语改述、相近术语、难负例及无答案。
 开发集包含已经用于别名扩展和契约开发的用例；公开 test 在本批实现评估前固定，
 但作者可见、规模小，不能称作独立盲测、生产成功率或公开榜单成绩。
