@@ -66,7 +66,59 @@ def test_missing_daily_rows_and_missing_metrics_are_not_zero_observations():
         text = render_note_stats({'daily': rows})
         assert '不能据此断言零访问' in text
     text = render_note_stats({'daily': [{'date': '2026-11-01', 'views': 0, 'likes': 0}]})
-    assert '返回日期内的阅读和点赞均为零' in text
+    assert '2026-11-01 阅读 0' in text and '点赞 0' in text
+
+
+def test_zero_dates_and_nonview_metrics_survive_a_mixed_daily_series():
+    rows = [
+        {'date': '2026-11-01', 'views': 0, 'likes': 0, 'favorites': 0, 'comments': 0},
+        {'date': '2026-11-02', 'views': 3, 'likes': 0, 'favorites': 0, 'comments': 0},
+        {'date': '2026-11-03', 'views': 0, 'likes': 0, 'favorites': 1, 'comments': 2},
+    ]
+    text = render_note_stats({'daily': rows})
+    assert all(row['date'] in text for row in rows)
+    assert '2026-11-01 阅读 0' in text and '2026-11-03 阅读 0' in text
+    assert '收藏 1' in text and '讨论 2' in text
+    assert '只列有记录' not in text
+
+
+def test_missing_counts_remain_unknown_inside_a_measured_series():
+    text = render_note_stats({'daily': [
+        {'date': '2026-11-01', 'views': 0, 'likes': 0}, {'date': '2026-11-02'}]})
+    assert '2026-11-02 阅读 0' not in text
+    assert '未返回日期和指标保持未知' in text
+
+
+def test_zero_days_reach_the_model_through_the_actual_admin_tool(monkeypatch):
+    import httpx
+    from _framework_fixture import call, model_replies
+    from _own_support import config
+    from langchain_core.messages import HumanMessage
+
+    from agent.principal import SOURCE_ASSERTION, Principal
+    from agent.runtime.session import ToolSession
+    from tools import base
+    from tools.admin_read import get_note_stats
+
+    rows = series(30)
+    rows[0].update(views=0, likes=0, favorites=0, comments=0)
+    reads = []
+
+    def handle(request):
+        reads.append(request)
+        return httpx.Response(200, json={'code': 200, 'data': {'daily': rows}})
+
+    with httpx.Client(transport=httpx.MockTransport(handle)) as client:
+        monkeypatch.setattr(base, '_client', client)
+        with model_replies({'tool_calls': [call('get_note_stats', 'stats')]},
+                           {'content': '首日访问为零。'}) as (model, requests):
+            cfg = config(principal=Principal(7, 'admin', SOURCE_ASSERTION))
+            result = ToolSession(model, cfg, {'get_note_stats': get_note_stats}, {}).run(
+                [HumanMessage(content='读取逐日访问趋势')])
+    message = next(m for m in requests[-1]['messages'] if m['role'] == 'tool')
+    assert f"{rows[0]['date']} 阅读 0" in message['content']
+    assert all(row['date'] in message['content'] for row in rows)
+    assert len(reads) == 1 and result.reply == '首日访问为零。'
 
 
 def test_lifetime_rankings_and_recent_daily_values_keep_distinct_scopes():

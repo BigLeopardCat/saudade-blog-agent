@@ -37,6 +37,29 @@ def test_prepare_never_writes_and_excludes_outbox(mailbox):
     assert not isinstance(_prepare("selected", [301]), TurnResult)
 
 
+def test_no_unread_is_not_an_empty_inbox_and_reaches_the_framework_model(mailbox):
+    from _framework_fixture import call, model_replies
+
+    from agent.runtime.session import ToolSession
+
+    for row in mailbox["items"]:
+        row["isRead"] = True
+    tool = preparation.prepare_message_read
+    with model_replies({"tool_calls": [call(tool.name, "noop", scope="all_unread")]},
+                       {"content": "没有未读信件，本次不用改动。"}) as (model, requests):
+        session = ToolSession(model, config(), {tool.name: tool}, {})
+        result = session.run([HumanMessage(content="把未读站内信标为已读")])
+    message = next(m for m in requests[-1]["messages"] if m["role"] == "tool")
+    evidence = json.loads(message["content"])
+    assert evidence == {"status": "noop", "operation": "mark_read", "changed": False,
+                        "resource": "messages", "selection": "all_unread", "selectedIds": None,
+                        "unreadCount": 0, "collectionTotal": None}
+    assert len(mailbox["items"]) == 3 and len(requests) == 2
+    assert all(r.method == "GET" for r in mailbox["requests"])
+    assert result.reply == "没有未读信件，本次不用改动。"
+    assert not result.execution or not result.execution.get("pending_confirm")
+
+
 @pytest.mark.parametrize("ids", [[True], ["201"], [0], [-1], list(range(1, 102))])
 def test_invalid_ids_rejected_before_read(mailbox, ids):
     with pytest.raises(ValidationError):

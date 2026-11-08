@@ -1,5 +1,6 @@
 """Fixed-scope read markers shared by notifications and received messages."""
 
+import json
 import time
 from dataclasses import dataclass
 from typing import Annotated, Literal
@@ -11,11 +12,10 @@ from agent import action_text, authz
 from agent.proposals import proposal
 from agent.reports import sanitize_untrusted
 from agent.runtime import writes
-from agent.runtime.results import TurnResult
 from agent.runtime.tool_evidence import observed
 from agent.runtime.turns import check_cancelled
 from tools import base
-from tools.result import fact, ok
+from tools.result import ToolResult, fact, ok
 
 Selection = Literal["selected", "all_unread"]
 Identifiers = Annotated[list[Annotated[StrictInt, Field(gt=0)]], Field(max_length=100)]
@@ -68,9 +68,9 @@ class ReadState:
                     break
                 rows[row["id"]] = row
             else:
-                observed(self.executor, {"items": [
-                    {"id": row["id"], "isRead": row["isRead"]} for row in rows.values()]},
-                    ("items",))
+                facts = {"query": {"ids": ids, "unreadOnly": unread_only}, "items": [
+                    {"id": row["id"], "isRead": row["isRead"]} for row in rows.values()]}
+                observed(self.executor, facts, ("query", "items"))
                 return (data, rows), None
         return None, base.unavailable(f"未能核对本人{self.label}及已读状态，本次未改动。")
 
@@ -96,9 +96,12 @@ class ReadState:
         observed(self.executor, {"scope": scope, "unreadCount": len(unread)},
                  ("scope", "unreadCount"))
         if not unread:
-            text = (f"当前没有未读{self.label}，本次无需改动。" if scope == "all_unread"
-                    else f"所选{self.label}均已读，本次无需改动。")
-            return TurnResult(text, {"noop_note": text, "noop_text": text, "receipts": []})
+            value = {"status": "noop", "operation": "mark_read", "changed": False,
+                     "resource": self.collection, "selection": scope,
+                     "selectedIds": selected if scope == "selected" else None,
+                     "unreadCount": 0, "collectionTotal": None}
+            return ToolResult(json.dumps(value, ensure_ascii=False, separators=(",", ":")),
+                              "noop", data=value)
         if len(unread) > 100:
             return base.unavailable("每批最多确认100条，请选择明确的编号范围后分批处理。")
         labels = [f"- #{key}《{sanitize_untrusted(str(rows[key].get('title') or '无标题'), 40)}》"

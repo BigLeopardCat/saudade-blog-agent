@@ -8,10 +8,9 @@
     "I",
     "W"
   ],
-  "total": 134,
+  "total": 130,
   "by_file": {
     "agent/hostinfo.py": 1,
-    "agent/reports.py": 4,
     "eval/admin_write_probe.py": 29,
     "eval/corpus_terms.py": 6,
     "eval/golden_fixture.py": 1,
