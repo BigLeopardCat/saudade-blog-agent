@@ -200,6 +200,7 @@ def test_cover_preparation_supplies_verified_targets_to_narration_without_more_q
     assert facts["preparation_facts"] == {
         "article_id": 3, "article_title": "文章", "image_id": 11, "image_name": "山景",
         "fit": "cover", "preview_layouts": ["article_card", "home_carousel", "article_banner"],
+        "preview_delivery": "confirmation_card", "preparation_inspects_pixels": False,
     }
     assert card.execution["pending_confirm"]["token"] not in message.content
     assert gallery["row"]["description"] not in message.content

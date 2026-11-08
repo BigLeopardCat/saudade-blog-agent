@@ -114,6 +114,8 @@ def prepare_article_cover(
     both targets and their fresh versions. No prior article-catalog or image-metadata
     query is needed. Search only when IDs are unknown; inspect get_gallery_image only
     when visual details matter. contain shows the complete image; cover (default) fills/crops.
+    The confirmation card carries the layout previews; preparation does not inspect
+    image pixels or assess crop quality.
     This changes the cover in the article and any saved editing draft,
     preserving text, title and publication state. Published articles update immediately
     after confirmation; current unsaved browser edits remain subject to version checks.
@@ -154,6 +156,7 @@ def prepare_article_cover(
             "article_id": current["articleId"], "article_title": article_title,
             "image_id": image["imageKey"], "image_name": name, "fit": fit,
             "preview_layouts": ["article_card", "home_carousel", "article_banner"],
+            "preview_delivery": "confirmation_card", "preparation_inspects_pixels": False,
         },
     )
     if not getattr(card, "execution", None):
