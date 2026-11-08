@@ -104,3 +104,25 @@ def test_chat_only_identity_keeps_the_same_fact_policy_as_tool_enabled_users():
     assert 'sent只表示指令已发送' in policies[0]
     assert '后续安排' in policies[0]
     assert '只开放闲聊与一般知识' in messages[-1]
+
+
+@pytest.mark.parametrize("role", ["admin", "zako"])
+def test_private_model_configuration_is_not_added_to_the_actual_model_prompt(monkeypatch, role):
+    from config.settings import settings
+
+    private = {
+        "opencode_model": "private-runtime-model",
+        "opencode_base_url": "https://private-runtime-endpoint.invalid/v1",
+        "opencode_api_key": "private-runtime-credential",
+    }
+    monkeypatch.setattr(settings, "llm_provider", "opencode")
+    for name, value in private.items():
+        monkeypatch.setattr(settings, name, value)
+    model = Model(AIMessage(content="本喵在这里。"))
+    selected = AgentRuntime(CheckpointConversationStore(InMemorySaver()),
+                            application=BlogApplication(), model_factory=lambda **_: model)
+    list(selected.stream_events({"messages": [HumanMessage(content="你是谁？")]},
+                                config(principal=Principal(7, role, SOURCE_ASSERTION))))
+    prompt = "\n".join(text_content(message.content) for message in model.prompts[0])
+    assert all(value not in prompt for value in private.values())
+    assert "泠月喵" in prompt

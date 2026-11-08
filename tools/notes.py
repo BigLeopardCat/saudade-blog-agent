@@ -140,15 +140,14 @@ def get_article_detail(
     section_schema: Annotated[str, Field(max_length=128)] = "",
     view: Literal["body", "outline"] = "body",
 ) -> str | ToolResult:
-    """Read public original text, or view='outline' for a paged directory without body.
-    For a local question in a known article, locate with rag_search(article_id=...)
-    and read its locator.
-    Use sequential body continuation when the task needs the full text.
-    Body offset copies nextOffset; outline offset copies nextSectionsOffset (12 headings/page).
-    Both continuations require contentRevision AND sectionSchema. A section ID from search
-    selects that section; max_chars bounds its body. Reaching its end is not a full-article read.
-    Pictures stay as Markdown. Private/draft content uses administrator read_current_article.
-    Public metadata accompanies body; counters use get_article_stats.
+    """Read ORIGINAL public text at a located source range; this is not article discovery.
+    For a factual question in a known article, first locate with rag_search(article_id=...)
+    and copy its section/revision/section_schema/offset/max_chars to read the matching passage.
+    To read or summarize the WHOLE document, omit section and follow nextOffset.
+    To browse headings without reading body, use view='outline' and nextSectionsOffset.
+    Both continuations require contentRevision AND sectionSchema. A section's end does not
+    establish a full-article read. Pictures remain Markdown. Private/draft text uses
+    administrator read_current_article; counters use get_article_stats.
     """
     from urllib.parse import urlencode
 
@@ -227,10 +226,10 @@ def rag_search(
     top_k: Annotated[StrictInt, Field(ge=1, le=64), "返回候选文档数量，默认 8"] = DEFAULT_TOP_K,
     article_id: Annotated[StrictInt, Field(gt=0, le=2_147_483_647)] | None = None,
 ) -> str | ToolResult:
-    """按主题检索公开文章候选与命中小节，不返回全文。
-
-    已知文章用article_id限定文内检索；解读用get_article_detail按命中坐标补读。
-    公告、留言和说说的关键词查询使用public_activity领域，不在此语料中。
+    """Locate public article passages for factual questions, including a known article.
+    Set article_id for a known source; results contain version-bound section and character
+    ranges for get_article_detail. Candidates are not body reads. For title/tag discovery
+    use search_notes; announcements, guestbook and talks use public_activity.
     """
     from agent.runtime.budget import BudgetExceeded
     from agent.runtime.control import AgentCancelled
