@@ -109,10 +109,15 @@ def prepare_article_cover(
     config: RunnableConfig,
     fit: Literal["contain", "cover"] = "cover",
 ) -> object:
-    """Prepare confirmation to use an indexed gallery image as an article's cover.
-    First choose an image_id from get_gallery_index, using filename/description; call
-    get_gallery_image only when visual details matter. contain shows the complete image;
-    cover (default) fills/crops it. The card previews the card, carousel and detail layouts.
+    """Prepare an article cover confirmation and its card/carousel/detail previews.
+    Given explicit article_id and image_id, call directly: this tool reads and validates
+    both targets and their fresh versions. No prior article-catalog or image-metadata
+    query is needed. Search only when IDs are unknown; inspect get_gallery_image only
+    when visual details matter. contain shows the complete image; cover (default) fills/crops.
+    The user can review layout previews in the confirmation card before approving;
+    no cover change is needed to see them. Preparation does not inspect image pixels
+    or assess crop quality. Briefly identify the verified targets and direct the user
+    to the card; do not invent textual previews, aspect ratios or composition details.
     This changes the cover in the article and any saved editing draft,
     preserving text, title and publication state. Published articles update immediately
     after confirmation; current unsaved browser edits remain subject to version checks.
@@ -127,7 +132,8 @@ def prepare_article_cover(
     if isinstance(current, base.ToolResult):
         return current
     principal, cid = bound_context(config)
-    target = "文章《" + sanitize_untrusted(current["title"], 120) + "》的封面"
+    article_title = sanitize_untrusted(current["title"], 120)
+    target = "文章《" + article_title + "》的封面"
     name = sanitize_untrusted(image["displayName"] or image["imageUrl"].rsplit("/", 1)[-1], 120)
     shown = "完整显示" if fit == "contain" else "铺满裁切"
     card = proposal(
@@ -148,6 +154,13 @@ def prepare_article_cover(
         executor="gallery",
         question=f"确认将“{name}”设为{target}（{shown}）？",
         target=target,
+        preparation_facts={
+            "article_id": current["articleId"], "article_title": article_title,
+            "image_id": image["imageKey"], "image_name": name, "fit": fit,
+            "preview_layouts": ["article_card", "home_carousel", "article_banner"],
+            "preview_delivery": "confirmation_card", "preview_before_approval": True,
+            "preparation_inspects_pixels": False,
+        },
     )
     if not getattr(card, "execution", None):
         return card
