@@ -55,6 +55,38 @@ def test_complete_offline_handoff_keeps_deploy_separate(evaluated, tmp_path, mon
     assert registry.get(got["holdout_evidence"]["report"], "evidence")["sha256"]
 
 
+@pytest.mark.parametrize("field", ["backend", "reviewer_options", "evaluator_sha256"])
+@pytest.mark.parametrize("target", ["calibration", "paired", "holdout"])
+def test_backend_and_inference_identity_cannot_change_across_review_phases(
+        evaluated, tmp_path, monkeypatch, field, target):
+    _, _, _, after, _, review, *_ = evaluated
+    if target == "holdout":
+        reservation, path, review = finished_holdout(evaluated, tmp_path, monkeypatch)
+    else:
+        path = after
+        if target == "calibration":
+            review = after.parent / "calibration.json"
+    document = json.loads(review.read_bytes())
+    document[field] = {"changed": "identity"}
+    review.write_text(json.dumps(document))
+    with pytest.raises(ValueError, match="calibration|reviewer|evaluator"):
+        if target == "holdout":
+            release.release_packet(evaluated[0], reservation, path, review, reviewer="fixture")
+        else:
+            development(evaluated)
+
+
+def test_old_reports_without_backend_identity_cannot_certify_a_current_candidate(evaluated):
+    _, _, _, after, before_review, after_review, *_ = evaluated
+    for path in (before_review, after_review, after.parent / "calibration.json"):
+        document = json.loads(path.read_bytes())
+        document.pop("backend")
+        document.pop("reviewer_options")
+        path.write_text(json.dumps(document))
+    with pytest.raises(ValueError, match="frozen evaluator"):
+        development(evaluated)
+
+
 @pytest.mark.parametrize("fault", ["semantic_regression", "cost_regression", "missing_usage",
                                  "wrong_candidate", "changed_evaluator", "unfinished_call"])
 def test_bad_development_cannot_open_holdout(evaluated, fault):

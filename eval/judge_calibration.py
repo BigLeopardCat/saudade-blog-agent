@@ -7,7 +7,7 @@ from pathlib import Path
 
 from openai import OpenAIError
 
-from eval import llm_judge, online_judge
+from eval import online_judge, semantic_judge
 from eval.statistical_metrics import proportion
 
 SAMPLES = Path(__file__).parent / "golden/judge_calibration.jsonl"
@@ -43,8 +43,8 @@ def evaluate(samples, llm):
                "predicted_issue": None, "diagnostics": {}}
         text = json.dumps(sample["material"], ensure_ascii=False)
         try:
-            verdict, _ = llm_judge.judge_one(text, llm, instructions=online_judge.INSTRUCTIONS,
-                                            allow_fallback=False, diagnostics=row["diagnostics"])
+            verdict = semantic_judge.judge_one(
+                text, llm, instructions=online_judge.INSTRUCTIONS, diagnostics=row["diagnostics"])
             online_judge.validate_excerpts(verdict, text)
             row.update(predicted_issue=bool(verdict["unsupported"] or not verdict["answered"]),
                        verdict=verdict)
@@ -59,24 +59,27 @@ def main():
     parser.add_argument("--samples", type=Path, default=SAMPLES)
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument("--dry-run", action="store_true")
-    parser.add_argument("--reasoning-effort", choices=llm_judge.REASONING_EFFORTS, default="none")
+    parser.add_argument("--reasoning-effort", choices=semantic_judge.REASONING_EFFORTS,
+                        default="none")
     args = parser.parse_args()
     samples = load_samples(args.samples)
     args.out.mkdir(mode=0o700, parents=True, exist_ok=False)
     body = args.samples.read_bytes()
     (args.out / "samples.jsonl").write_bytes(body)
     report = {"source_sha256": hashlib.sha256(body).hexdigest(),
+              "evaluator_sha256": online_judge.snapshot_reviewer(args.out),
               "rubric_sha256": hashlib.sha256(online_judge.INSTRUCTIONS.encode()).hexdigest(),
               "business_requests": 0, "automatic_retries": 0,
               "dataset_role": "calibration_development",
+              "backend": semantic_judge.backend_identity(),
               "independent_validation": "not_evaluated"}
     if args.dry_run:
         report.update(status="not_evaluated", samples=len(samples))
     else:
-        llm = llm_judge.make_llm(reasoning_effort=args.reasoning_effort, max_retries=0,
-                                 streaming=False,
-                                 timeout=60 if args.reasoning_effort != "none" else 30)
-        report.update(model=llm.model_name, reviewer_options=llm_judge.reviewer_options(llm),
+        llm = semantic_judge.make_llm(
+            reasoning_effort=args.reasoning_effort,
+            timeout=60 if args.reasoning_effort != "none" else 30)
+        report.update(model=llm.model_name, reviewer_options=semantic_judge.reviewer_options(llm),
                       **evaluate(samples, llm))
     (args.out / "report.json").write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n")
     print(json.dumps({key: value for key, value in report.items() if key != "rows"},

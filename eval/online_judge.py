@@ -1,6 +1,6 @@
 """Review frozen online responses and proposed actions without replaying requests.
 
-Reuses llm_judge's provider adapter and parser. Semantic findings are independent
+OpenEvals runs the judge; application evidence and semantic findings are independent
 of deterministic judgments; no_issue_found is not a claim of task acceptance.
 """
 
@@ -17,7 +17,7 @@ from markdown_it import MarkdownIt
 from openai import OpenAIError
 
 from agent.contracts.events import ConfirmationNotice
-from eval import acceptance, llm_judge
+from eval import acceptance, semantic_judge
 from eval.online_transport import safe_result
 from utils import trace as trace_mod
 
@@ -300,6 +300,16 @@ def validate_excerpts(verdict, text):
         raise ValueError("judge reasons must be valid and excerpts must occur in current outputs")
 
 
+def snapshot_reviewer(folder):
+    """Archive the same evaluator identity for calibration and recorded-output review."""
+    hashes = {}
+    for module in (Path(__file__), Path(semantic_judge.__file__), Path(acceptance.__file__)):
+        body = module.read_bytes()
+        (folder / module.name).write_bytes(body)
+        hashes[module.name] = digest(body)
+    return hashes
+
+
 def review(report_path, folder, llm, *, only=()):
     """Save an independent, resumable-to-inspect report; never alter the source."""
     report_path, folder = Path(report_path), Path(folder)
@@ -315,15 +325,12 @@ def review(report_path, folder, llm, *, only=()):
         raise ValueError("no recorded cases to review")
     folder.mkdir(parents=True, exist_ok=False, mode=0o700)
     (folder / "source-report.json").write_bytes(source)
-    hashes = {}
-    for module in (Path(__file__), Path(llm_judge.__file__), Path(acceptance.__file__)):
-        body = module.read_bytes()
-        (folder / module.name).write_bytes(body)
-        hashes[module.name] = digest(body)
+    hashes = snapshot_reviewer(folder)
     report = {"source_report_sha256": digest(source), "evaluator_sha256": hashes,
               "rubric_sha256": digest(INSTRUCTIONS.encode()),
               "model": getattr(llm, "model_name", "unknown"),
-              "reviewer_options": llm_judge.reviewer_options(llm),
+              "reviewer_options": semantic_judge.reviewer_options(llm),
+              "backend": semantic_judge.backend_identity(),
               "automatic_retries": 0, "business_requests_replayed": 0,
               "service_version": source_report.get("service_version"), "rows": [],
               "started_at": datetime.now().astimezone().isoformat()}
@@ -346,14 +353,14 @@ def review(report_path, folder, llm, *, only=()):
                 name = f"material-{len(report['rows']) + 1}.json"
                 (folder / name).write_text(text + "\n")
                 row.update(material=name, material_sha256=digest(text.encode()))
-                verdict, degraded = llm_judge.judge_one(
-                    text, llm, instructions=INSTRUCTIONS, allow_fallback=False,
+                verdict = semantic_judge.judge_one(
+                    text, llm, instructions=INSTRUCTIONS,
                     diagnostics=row["diagnostics"])
                 validate_excerpts(verdict, text)
                 status = ("suspect" if verdict["unsupported"] or not verdict["answered"]
                           else "no_issue_found")
                 verdict["verdict"] = "suspect" if status == "suspect" else "ok"
-                row.update(status=status, verdict=verdict, degraded=degraded)
+                row.update(status=status, verdict=verdict)
             except (OpenAIError, OSError, ValueError, KeyError, TypeError) as exc:
                 row.update(status="not_evaluated", error=f"{type(exc).__name__}: {exc}")
             report["rows"].append(row)
@@ -374,13 +381,14 @@ def main():
     parser.add_argument("--report", type=Path, required=True)
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument("--model", default="")
-    parser.add_argument("--reasoning-effort", choices=llm_judge.REASONING_EFFORTS, default="none")
+    parser.add_argument("--reasoning-effort", choices=semantic_judge.REASONING_EFFORTS,
+                        default="none")
     parser.add_argument("--only", default="", help="Comma-separated case IDs")
     args = parser.parse_args()
-    llm = llm_judge.make_llm(reasoning_effort=args.reasoning_effort,
-                             **({"model": args.model} if args.model else {}),
-                             max_retries=0, streaming=False,
-                             timeout=60 if args.reasoning_effort != "none" else 30)
+    llm = semantic_judge.make_llm(
+        reasoning_effort=args.reasoning_effort,
+        **({"model": args.model} if args.model else {}),
+        timeout=60 if args.reasoning_effort != "none" else 30)
     report = review(args.report, args.out, llm,
                     only=[key for key in args.only.split(",") if key])
     print(json.dumps({"semantic_status": report["semantic_status"],

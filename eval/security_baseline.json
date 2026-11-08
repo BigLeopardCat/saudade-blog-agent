@@ -22,7 +22,7 @@
   "targets": [
     "."
   ],
-  "total": 43,
+  "total": 41,
   "nosec": 0,
   "by_key": {
     "agent/article_labels.py::B105": 1,
@@ -49,7 +49,6 @@
     "scripts/layout_ab.py::B108": 2,
     "scripts/sticker_smoke.py::B310": 1,
     "tests/test_golden_fixture_corpus.py::B310": 1,
-    "tests/test_llm_judge.py::B108": 2,
     "tests/test_packaging.py::B108": 1,
     "tests/test_retention_manifest.py::B108": 4
   }

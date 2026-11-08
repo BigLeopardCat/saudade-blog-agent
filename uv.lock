@@ -1610,6 +1610,21 @@ wheels = [
 ]
 
 [[package]]
+name = "openevals"
+version = "0.2.2"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "langchain" },
+    { name = "langchain-openai" },
+    { name = "langsmith" },
+    { name = "rich" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/75/bf/31d3010958e5f2ff7388b099d2f6f5131216c2db7f5bc3c4427cec3af3dd/openevals-0.2.2.tar.gz", hash = "sha256:d999b6d044f41f9f6c517cd83565d9be90df8571074f64c513841b74717c872b", size = 145032, upload-time = "2026-10-22T00:19:14.169Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/5e/9b/437a4a8cf0bc3eff236b1675c9e5645648476b31d46ff773f1582e65ac7d/openevals-0.2.2-py3-none-any.whl", hash = "sha256:b37d702efc79071acecb298556b210b0b1fdab3ed5ca9d2aed41e96cf9304e0a", size = 108703, upload-time = "2026-10-22T00:19:12.503Z" },
+]
+
+[[package]]
 name = "orjson"
 version = "3.11.9"
 source = { registry = "https://pypi.org/simple" }
@@ -2521,6 +2536,7 @@ dev = [
     { name = "coverage" },
     { name = "ir-measures" },
     { name = "mypy" },
+    { name = "openevals" },
     { name = "pytest" },
     { name = "pytest-cov" },
     { name = "pytest-socket" },
@@ -2573,6 +2589,7 @@ dev = [
     { name = "coverage", extras = ["toml"], specifier = "==7.16.2" },
     { name = "ir-measures", specifier = "==0.4.3" },
     { name = "mypy", specifier = "==2.4.0" },
+    { name = "openevals", specifier = "==0.2.2" },
     { name = "pytest", specifier = "==9.1.1" },
     { name = "pytest-cov", specifier = "==7.1.0" },
     { name = "pytest-socket", specifier = "==0.8.1" },

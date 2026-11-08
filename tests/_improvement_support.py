@@ -106,16 +106,21 @@ def report(tmp_path, cases, build, *, role="regression", improved=False, evaluat
         "evaluator_sha256": hashes}))
     review = tmp_path / "semantic.json"
     write_semantic(path, review)
-    (tmp_path / "calibration.json").write_text(json.dumps({"model": "synthetic",
-        "rubric_sha256": "frozen-synthetic-rubric", "source_sha256": "synthetic-cases",
+    (tmp_path / "calibration.json").write_text(json.dumps({**judge_identity(),
+        "source_sha256": "synthetic-cases",
         "rows": [{"expected_issue": True, "predicted_issue": True},
                  {"expected_issue": False, "predicted_issue": False}]}))
     return path, review
 
 
+def judge_identity():
+    return {"rubric_sha256": "frozen-synthetic-rubric", "evaluator_sha256": {"judge": "fixture"},
+            "model": "synthetic", "backend": {"library": "openevals", "version": "fixture"},
+            "reviewer_options": {"reasoning_effort": "low", "max_tokens": 4096}}
+
+
 def write_semantic(report_path, path, suspect=()):
     path.write_text(json.dumps({"source_report_sha256": digest(report_path.read_bytes()),
-        "rubric_sha256": "frozen-synthetic-rubric", "evaluator_sha256": {"judge": "fixture"},
-        "model": "synthetic", "rows": [{"case": row["id"], "round": 1,
+        **judge_identity(), "rows": [{"case": row["id"], "round": 1,
             "status": "suspect" if row["id"] in suspect else "no_issue_found"}
             for row in json.loads(report_path.read_bytes())["cases"]]}))
