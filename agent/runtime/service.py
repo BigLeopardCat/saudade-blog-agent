@@ -185,9 +185,12 @@ class AgentRuntime:
                            descriptions=self.application.descriptions,
                            middleware=self.application.middleware,
                            history_access=self.application.history_access)
-        from agent.runtime.conversation_store import bound_recent_read
+        from agent.runtime.conversation_store import bound_tool_domains
 
-        session.state["recent_read"] = bound_recent_read(snapshot.recent_read, config)
+        session.state["tool_domains"] = bound_tool_domains(snapshot.tool_domains, config)
+        from agent.runtime.tool_state import apply
+
+        apply(session, session.state["tool_domains"])
         session.input_inbox = self.inputs
         session.feedback_handler = partial(pending.feedback, saver=self.saver) if pending else None
         return session

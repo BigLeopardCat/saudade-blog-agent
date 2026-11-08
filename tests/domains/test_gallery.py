@@ -89,9 +89,31 @@ def test_full_metadata_reads_one_authoritative_image_without_pixels_or_writes(ga
     assert result.data == json.loads(str(result))
     assert result.data["description"] == gallery["row"]["description"]
     assert result.data["url"] == gallery["row"]["imageUrl"]
+    assert result.data["display_markdown"] == "![山景](https://images.example/cover.png)"
     assert len(gallery["requests"]) == 1
     assert gallery["requests"][0].url.path.endswith("/gallery/images/11")
     assert gallery["writes"] == 0
+
+
+def test_display_metadata_preserves_the_url_and_escapes_markdown_labels(gallery):
+    gallery["row"].update(displayName="[猫]\n![伪造](bad)",
+                          imageUrl="https://images.example/封面 (1).png")
+    result = reads.get_gallery_image_metadata.invoke({"image_id": 11}, config=admin())
+    assert result.data["display_markdown"] == (
+        "![\\[猫\\] !\\[伪造\\](bad)](https://images.example/%E5%B0%81%E9%9D%A2%20%281%29.png)")
+    assert len(gallery["requests"]) == 1 and not gallery["writes"]
+
+
+def test_explicit_complete_cover_remains_supported_and_public_preview_matches_grant(gallery):
+    from agent.products.blog.confirmation import public_card
+
+    prepared = preparation.prepare_article_cover.invoke(
+        {"article_id": 3, "image_id": 11, "fit": "contain"}, config=admin())
+    card = public_card(prepared.execution)
+    grant = confirm.verify(card["token"], 7, 42)
+    assert card["cover_review"]["fit"] == grant["specs"][0]["args"]["fit"] == "contain"
+    assert card["cover_review"]["url"] == grant["specs"][0]["args"]["image_url"]
+    assert "specs" not in card and gallery["writes"] == 0
 
 
 def test_full_metadata_does_not_disguise_another_image_as_the_requested_one(gallery):
@@ -155,7 +177,10 @@ def test_cover_preview_binds_exact_article_and_image_versions(gallery):
     grant = confirm.verify(prepared.execution["pending_confirm"]["token"], 7, 42)
     args = grant["specs"][0]["args"]
     assert args["version"] == "b" * 64 and args["image_version"] == "a" * 64
-    assert args["fit"] == "contain" and "![候选封面]" in prepared.reply
+    assert args["fit"] == "cover"
+    assert prepared.execution["pending_confirm"]["cover_review"] == {
+        "image_id": 11, "name": "山景", "url": "https://images.example/cover.png", "fit": "cover"}
+    assert "![" not in prepared.reply
     assert gallery["writes"] == 0
 
 
@@ -224,3 +249,36 @@ def test_background_metadata_reads_do_not_require_a_writable_conversation(galler
     cfg["configurable"]["user_id"] = 8
     assert reads.get_gallery_index.invoke({}, config=cfg).kind == "unavailable"
     assert len(gallery["requests"]) == count
+
+
+def test_metadata_includes_authoritative_folder_labels_without_extra_reads(gallery):
+    gallery["row"].update(folderId=3, folderName="素材", folderParentId=2)
+    result = reads.get_gallery_image_metadata.invoke({"image_id": 11}, config=admin())
+    assert result.data["folder_id"] == 3
+    assert result.data["folder_name"] == "素材"
+    assert result.data["folder_parent_id"] == 2
+    assert len(gallery["requests"]) == 1 and not gallery["writes"]
+
+
+def test_index_includes_folder_name_without_expanding_the_folder_tree(gallery):
+    gallery["row"].update(folderId=3, folderName="素材", folderParentId=2)
+    result = reads.get_gallery_index.invoke({}, config=admin())
+    assert result.data["items"][0]["folder_name"] == "素材"
+    assert len(gallery["requests"]) == 1 and not gallery["writes"]
+
+
+def test_an_explicit_unchanged_favorite_preview_is_read_only_and_can_be_reviewed(gallery):
+    assert gallery["row"]["isFavorite"] is False
+    prepared = preparation.prepare_gallery_images.invoke(
+        {"intent": {"action": "favorite", "imageIds": [11], "isFavorite": False}},
+        config=admin(),
+    )
+    from agent.products.blog.confirmation import public_card
+
+    grant = confirm.verify(public_card(prepared.execution)["token"], 7, 42)
+    assert grant["specs"][0]["args"]["intent"] == {
+        "action": "favorite", "imageIds": [11], "isFavorite": False,
+    }
+    assert gallery["writes"] == 0
+    assert len(gallery["requests"]) == 1
+    assert gallery["requests"][0].url.path.endswith("/image-actions/prepare")

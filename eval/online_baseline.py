@@ -13,14 +13,14 @@ import json
 import os
 import sys
 import time
-from collections import Counter
+from collections import Counter, defaultdict
 from datetime import datetime
 from pathlib import Path
 
 import httpx
 
 from eval import dataset_audit, request_metrics, task_metrics
-from eval.online_transport import EvaluationError, OnlineTransport, safe_result
+from eval.online_transport import EvaluationError, OnlineTransport, archive_result
 from utils.trace_io import load_trace
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -268,6 +268,15 @@ def run(cases, transport, identities, report_dir, *, phase, suite_hash, include_
         paths = [r["trace"] for r in transport.requests]
         report["metrics"] = request_metrics.collect(paths)
         report["task_metrics"] = task_metrics.collect(paths)
+        case_ids = defaultdict(set)
+        for case in report["cases"]:
+            for round_ in (case.get("result") or {}).get("rounds", []):
+                request_id = (round_.get("request_evidence") or {}).get("request_id")
+                if request_id:
+                    case_ids[request_id].add(case["id"])
+        for task in report["task_metrics"]["tasks"]:
+            task["case_ids"] = sorted({case for trace_id in task["trace_ids"]
+                                       for case in case_ids[trace_id]})
         target = folder / "report.json"
         temp = target.with_suffix(".tmp")
         temp.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n")
@@ -306,7 +315,7 @@ def run(cases, transport, identities, report_dir, *, phase, suite_hash, include_
                 fails = golden.check_case(case, result)
                 errors = [r["error"] for r in result["rounds"] if r.get("error")]
                 row.update(status="failed" if fails or errors else "passed",
-                           fails=fails, errors=errors, result=safe_result(result))
+                           fails=fails, errors=errors, result=archive_result(result))
                 availability = (result.get("evaluation_failure")
                                 or model_availability_failure(result))
                 if availability:

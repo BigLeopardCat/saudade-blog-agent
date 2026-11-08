@@ -17,11 +17,12 @@ async function until(predicate) {
   assert.ok(predicate(), 'expected client action boundary was not reached');
 }
 
-function fixture({kind = 'navigate', results = [false, true], expires} = {}) {
+function fixture({kind = 'navigate', results = [false, true], expires, clockOffset = 0} = {}) {
   const calls = [], effects = [];
   const sessionStorage = storage(), localStorage = storage();
   localStorage.setItem('tokenKey', token(7));
-  const g = {console, URL, setTimeout, clearTimeout, atob, sessionStorage, localStorage,
+  const BrowserDate = class extends Date { static now() { return Date.now() + clockOffset; } };
+  const g = {console, URL, setTimeout, clearTimeout, Date: BrowserDate, performance, atob, sessionStorage, localStorage,
     location: {href: 'https://unit.invalid/', origin: 'https://unit.invalid', pathname: '/', search: '', hash: ''},
     document: {readyState: 'complete'}, __effectState: {rain: false}};
   g.__spaNavigate = () => { effects.push('navigate'); g.location.pathname = '/guestbook'; return true; };
@@ -35,10 +36,10 @@ function fixture({kind = 'navigate', results = [false, true], expires} = {}) {
   const appearance = settings => { effects.push('appearance'); g.__effectState.rain = settings.rain === 'on'; };
   const create = () => g.__waifuBrowserActions(ctx, engine, send, appearance);
   const command = {kind, url: '/guestbook', path: '/guestbook', task_id: 'task', command_id: 'command',
-    timeout_ms: 6000, ...(expires === undefined ? {} : {expires_at: expires}),
+    timeout_ms: 6000, expires_in_ms: 60_000, ...(expires === undefined ? {} : {expires_at: expires}),
     ...(kind === 'appearance' ? {settings: {rain: 'on'}} : {}),
     ...(kind === 'article_editor' ? {operation: 'summary'} : {})};
-  return {g, ctx, calls, effects, create, command, actions: create()};
+  return {g, ctx, calls, effects, create, command, setClockOffset: value => {clockOffset = value;}, actions: create()};
 }
 
 for (const kind of ['navigate', 'appearance', 'article_editor']) {
@@ -64,8 +65,33 @@ for (const kind of ['navigate', 'appearance', 'article_editor']) {
   });
 }
 
+for (const clockOffset of [-360_000, 360_000]) {
+  test(`server-valid commands execute with client clock offset ${clockOffset}ms`, async () => {
+    const f = fixture({clockOffset, expires: Date.now() / 1000 + 60, results: [true]});
+    f.command.expires_in_ms = 60_000;
+    f.actions.receive(f.command, {convId: 42});
+    await until(() => f.calls.length === 1);
+    assert.equal(f.effects.length, 1);
+    assert.equal(f.calls[0].browserResult.status, 'completed');
+  });
+}
+
+test('a wall-clock jump during navigation cannot end the relative wait early', async () => {
+  const f = fixture({results: [true]});
+  let arrived;
+  f.g.__spaNavigationComplete = new Promise(resolve => { arrived = resolve; });
+  f.actions.receive(f.command, {convId: 42});
+  f.setClockOffset(3600_000);
+  await new Promise(resolve => setTimeout(resolve, 80));
+  assert.equal(f.calls.length, 0);
+  arrived();
+  await until(() => f.calls.length === 1);
+  assert.equal(f.calls[0].browserResult.status, 'completed');
+});
+
 test('an already expired command reports unconfirmed timeout without applying its local effect', async () => {
-  const f = fixture({expires: Date.now() / 1000 - 1, results: [true]});
+  const f = fixture({clockOffset:-360_000, expires: Date.now() / 1000 - 1, results: [true]});
+  f.command.expires_in_ms = 0;
   f.actions.receive(f.command, {convId: 42});
   await tick();
   assert.equal(f.effects.length, 0);

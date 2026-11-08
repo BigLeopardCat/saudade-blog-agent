@@ -63,6 +63,8 @@
       const anchor = owners.get(ask.id);
       const row = { ...old, id: ask.id, task_id: ask.task_id, q: ask.q, exp: ask.exp,
         image_review: ask.image_review,
+        cover_review: ask.cover_review,
+        article_ids_to_refresh: ask.article_ids_to_refresh,
         selected: Array.isArray(ask.selected) ? ask.selected : old?.selected,
         anchor_id: anchor?.dataset.mid || ask.anchor_id || old?.anchor_id,
         ts: old?.ts || Date.now() };
@@ -96,6 +98,7 @@
       const label = document.createElement('summary'); label.textContent = note;
       const question = document.createElement('div'); applyMsg(question, ask.q || '');
       window.__waifuImageReview?.render(question, ask.image_review);
+      window.__waifuImageReview?.renderCover(question, ask.cover_review);
       record.append(label, question); anchor.appendChild(record);
     };
     const restoreRecords = () => {
@@ -206,6 +209,8 @@
       catch (e) { askQuestion.textContent = String(q || ''); }  // 渲染失败退回纯文本，绝不空着
       const review = ctx.state.pendingAsk?.image_review || currentAsk?.image_review;
       window.__waifuImageReview?.render(askQuestion, review);
+      const cover = ctx.state.pendingAsk?.cover_review || currentAsk?.cover_review;
+      window.__waifuImageReview?.renderCover(askQuestion, cover);
       if (note) {
         const el = document.createElement('div');
         el.className = 'chat-ask-retry-note';

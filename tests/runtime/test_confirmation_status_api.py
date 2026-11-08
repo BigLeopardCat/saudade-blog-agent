@@ -67,7 +67,9 @@ def test_current_card_is_readable_under_turn_lock_and_disappears_after_revocatio
                 "exp",
                 "replay_safe",
                 "server_time",
+                "article_ids_to_refresh",
             }
+            assert body["confirmation"]["article_ids_to_refresh"] == [19]
             assert not state["writes"]
             for uid, role, cid in [(8, "user", 42), (7, "admin", 42), (7, "user", 43)]:
                 value = await client.post(

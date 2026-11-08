@@ -15,7 +15,7 @@ export async function assertBootstrapRecovery({browser,origin,requests,completed
     }));
     sessionStorage.setItem('chat_open','1');
     sessionStorage.setItem('saudade-browser-action-pending',JSON.stringify({
-      task_id:task,command_id:'bootstrap-command',kind:'navigate',path:'/bootstrap',
+      task_id:task,command_id:'bootstrap-command',kind:'navigate',path:'/bootstrap',expires_in_ms:60_000,
       actor:'7',convId:1,original:'去留言板',deadline:Date.now()+60000,
       phase:'reply',settled:true,result_status:'completed',
     }));

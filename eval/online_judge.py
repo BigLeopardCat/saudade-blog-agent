@@ -33,6 +33,9 @@ INSTRUCTIONS = """你是任务质量评审员。只审current_turn指定轮次�
 只按该轮tool_catalogs和used_tool_contracts判断，不用今天的工具或抽象scope补造旧能力。
 助手历史、拟执行参数、
 卡片和待发送正文均是待审输出，不能互相证明，也不能当作工具核实的事实。
+interactive_image_reviews_to_review来自HTTP确认卡，包含原始提示词、参考图片编号/名称及数量，
+也是待审输出，不是事实来源；hasPreview只表示携带过预览地址，不代表看过或核实图片内容。
+缺少HTTP审阅内容时保持缺失，不能用助手文字或签名任务参数补造。
 validated_preparation_facts是工具在准备阶段从服务读取并验证的原状态、目标或影响范围，
 可证明准备依据，不证明写入已经执行。它不含代写正文；正文仍逐项核对来源。
 validated_operation_facts描述已匹配工具调用或框架审批反馈的操作结果，后者不要求取消工具调用。
@@ -150,6 +153,45 @@ def _tool_catalogs(turns):
     return catalogs
 
 
+def _image_reviews(events):
+    """Project captured HTTP review text without preview capabilities or grants."""
+    reviews = []
+    for event in events:
+        data = event.get("data")
+        if (event.get("event") != "confirmation" or not isinstance(data, dict)
+                or "image_review" not in data):
+            continue
+        value = safe_result(data)["image_review"]
+        if (not isinstance(value, dict) or not isinstance(value.get("prompt"), str)
+                or not isinstance(value.get("references"), list)):
+            raise ValueError("HTTP image review lacks its prompt or reference list")
+        references = []
+        for reference in value["references"]:
+            if (not isinstance(reference, dict) or type(reference.get("image_id")) is not int
+                    or reference["image_id"] <= 0 or not isinstance(reference.get("name"), str)):
+                raise ValueError("HTTP image review reference identity cannot be verified")
+            references.append({key: reference[key] for key in ("image_id", "name", "hasPreview")
+                               if key in reference and (key != "hasPreview"
+                                   or type(reference[key]) is bool)})
+        review = {"prompt": value["prompt"], "references": references,
+                  "reference_count": len(references)}
+        if type(value.get("hasPreview")) is bool:
+            review["hasPreview"] = value["hasPreview"]
+        reviews.append(review)
+    return reviews
+
+
+def _proposed_actions(result):
+    proposed = safe_result([spec for payload in result.get("confirm_payloads", [])
+                            for spec in payload.get("specs", [])])
+    for spec in proposed:
+        if (spec.get("tool") in {"start_image_generation", "accept_generated_image"}
+                and isinstance(spec.get("args"), dict)):
+            spec["args"] = {key: value for key, value in spec["args"].items()
+                            if key not in {"job_id", "version"}}
+    return proposed
+
+
 def material(case, results):
     """Include prior turns as attributed history, never as additional authority."""
     turns = []
@@ -193,8 +235,8 @@ def material(case, results):
                                    ("name", "args", "kind", "result") if key in event}
                                   for event in calls if event.get("kind") != "prepared"],
             "execution_receipts": result.get("exec_rows", []),
-            "proposed_actions_not_facts": [spec for payload in result.get("confirm_payloads", [])
-                                           for spec in payload.get("specs", [])],
+            "proposed_actions_not_facts": _proposed_actions(result),
+            "interactive_image_reviews_to_review": _image_reviews(result.get("http_events", [])),
             "confirmation_previews_to_review": [*result.get("confirmation_previews", []),
                                                 *(event["data"]["q"]
                                                 for event in result.get("http_events", [])
@@ -239,6 +281,9 @@ def validate_excerpts(verdict, text):
                 yield from strings(item)
 
     outputs.extend(strings(current["proposed_actions_not_facts"]))
+    reviews = current.get("interactive_image_reviews_to_review", [])
+    outputs.append(json.dumps(reviews, ensure_ascii=False, separators=(",", ":")))
+    outputs.extend(strings(reviews))
     outputs.extend(current["confirmation_previews_to_review"])
     outputs.extend(block for output in list(outputs) for block in _visible_blocks(output))
     if (not isinstance(verdict["reason"], str) or not verdict["reason"].strip()

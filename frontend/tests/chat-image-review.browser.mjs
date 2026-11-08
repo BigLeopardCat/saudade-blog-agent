@@ -88,3 +88,34 @@ export async function assertWorkRecovery({browser, origin, resetState, setMode})
     }
   } finally { await context.close(); }
 }
+
+export async function assertCoverReview({page}) {
+  for (const fit of ['cover', 'contain']) {
+    const result=await page.evaluate(fit=>{
+      const root=document.createElement('div'); root.id='cover-review-fixture';
+      root.style.width='min(540px, 80vw)';
+      document.getElementById('waifu-chat').append(root);
+      const data={image_id:74,name:'<b>只是图片名称</b>',
+        url:'/live2d-widgets/lingyue-toggle.png',fit};
+      const rendered=window.__waifuImageReview.renderCover(root,data);
+      const rejected=[{...data,url:'javascript:alert(1)'},{...data,url:'https://user:password@evil.test/a'},
+        {...data,image_id:0},{...data,fit:'invalid'}].every(value=>
+          !window.__waifuImageReview.renderCover(root,value));
+      return {rendered,rejected,labels:[...root.querySelectorAll('figcaption')].map(n=>n.textContent),
+        views:[...root.querySelectorAll('.chat-cover-frame')].map(frame=>{
+          const box=frame.getBoundingClientRect(),img=frame.querySelector('img');
+          return {ratio:box.width/box.height,fit:getComputedStyle(img).objectFit,
+            src:img.getAttribute('src'),width:img.getBoundingClientRect().width,frameWidth:box.width};
+        }),markup:root.querySelector('script,b')!==null};
+    },fit);
+    assert.equal(result.rendered,true); assert.equal(result.rejected,true); assert.equal(result.markup,false);
+    assert.deepEqual(result.labels,['文章卡片','首页置顶轮播','详情横幅']);
+    for (const [i,aspect] of [16/9,1,3.5].entries()) {
+      assert.ok(Math.abs(result.views[i].ratio-aspect)<0.05);
+      assert.equal(result.views[i].fit,fit);
+      assert.ok(result.views[i].src.endsWith('/live2d-widgets/lingyue-toggle.png'));
+      assert.ok(result.views[i].width<=result.views[i].frameWidth);
+    }
+    await page.locator('#cover-review-fixture').evaluate(node=>node.remove());
+  }
+}
