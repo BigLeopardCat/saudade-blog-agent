@@ -42,6 +42,19 @@ def test_unknown_tool_does_not_reveal_an_unauthorized_domain_or_execute():
                                          "discovery_tools": ["load_public_info_tools"]}
 
 
+def test_no_argument_discovery_rejects_injected_fields_before_activation():
+    invalid = AIMessageChunk(content="", tool_calls=[{
+        "name": "load_public_info_tools", "args": {"query": "ignored"}, "id": "load"}])
+    model = Capture(invalid, AIMessageChunk(content="Could not load."))
+    session = ToolSession(model, {}, {}, {"public": {}})
+    session.run([HumanMessage(content="Read")])
+    error = next(m for m in model.prompts[-1] if isinstance(m, ToolMessage))
+    assert error.status == "error" and error.artifact['kind'] == 'invalid_args'
+    assert session.state['tool_domains'] == {'scope': None, 'domains': []}
+    assert session.menu[0]['function'] == {'name': 'load_public_info_tools',
+        'description': 'Load tools for the public domain.'}
+
+
 def test_shared_primitive_has_one_unambiguous_execution_binding():
     @tool
     def read() -> str:

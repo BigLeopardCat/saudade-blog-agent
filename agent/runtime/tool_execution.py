@@ -51,6 +51,13 @@ def append_result(session, request, handler, prompt, round_index, attachments):
     name = call["name"]
     record("native", "tool_requested", name=name, call_id=call["id"])
     if name in session.loaders:
+        if call["args"]:
+            prompt.append(ToolMessage(content=json.dumps({"status": "invalid_args",
+                "reason": "discovery_accepts_no_arguments"}), name=name,
+                tool_call_id=call["id"], status="error", artifact={"kind": "invalid_args"}))
+            record("native", "tool_error", name=name, call_id=call["id"],
+                   reason="invalid_arguments", round=round_index)
+            return None
         domain = session.loaders[name]
         already = domain in tool_state.loaded(session)
         record("native", "tool_discovery", domain=domain, round=round_index,
