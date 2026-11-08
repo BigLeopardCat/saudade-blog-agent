@@ -74,7 +74,7 @@ def test_http_and_sse_share_history_without_duplicates(monkeypatch, persistent):
     assert sum(m.content == "答复1" for m in prompts[1]) == 1
     if persistent:
         saved = runtime.store.load(config()).messages
-        assert [m.content for m in saved] == [
+        assert [m.content.split("\n\n", 1)[0] for m in saved] == [
             "[当前问题]: 第一问", "答复1", "[当前问题]: 接着问", "答复2"]
         assert runtime.get_state(config()).next == ()
     else:

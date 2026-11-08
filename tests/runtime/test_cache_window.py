@@ -1,7 +1,6 @@
 """Bounded prompt history advances in batches and survives framework reloads."""
 
 import json
-from os.path import commonprefix
 
 from _memory_support import ACTOR, Capture, config, run, runtime
 from langchain_core.language_models.fake_chat_models import FakeListChatModel
@@ -21,8 +20,12 @@ from tools import base
 
 def test_many_short_turns_keep_their_prefix_between_bounded_compactions(monkeypatch):
     import models
+    from agent.runtime import compaction
     from config.settings import settings
 
+    compacted = []
+    monkeypatch.setattr(compaction, "record", lambda node, event, **data:
+                        compacted.append(data) if event == "compacted" else None)
     monkeypatch.setattr(settings, "agent_context_tokens", 8000)
     monkeypatch.setattr(settings, "agent_summary_output_tokens", 512)
     monkeypatch.setattr(models, "get_llm", lambda **kwargs: FakeListChatModel(responses=[
@@ -48,7 +51,7 @@ def test_many_short_turns_keep_their_prefix_between_bounded_compactions(monkeypa
                 common += 1
             # A changed page attachment cannot replace the retained dialogue prefix.
             if anchor == previous_anchor and len(previous) > 7:
-                assert common >= len(previous) - 1
+                assert common >= len(previous)
                 stable += 1
         boundaries.append(saved[0].id)
         assert memory._tokens(saved) <= settings.agent_context_tokens
@@ -56,7 +59,9 @@ def test_many_short_turns_keep_their_prefix_between_bounded_compactions(monkeypa
         previous = payload
         previous_anchor = anchor
     advances = sum(left != right for left, right in zip(boundaries, boundaries[1:]))
-    assert 1 <= advances <= 3
+    assert advances == len(compacted) and advances >= 1
+    assert all(row['request_before_tokens'] >= row['trigger_tokens']
+               and row['request_after_tokens'] < row['request_before_tokens'] for row in compacted)
     assert stable >= 75
 
 
@@ -109,23 +114,21 @@ def test_filtered_window_boundary_does_not_resurrect_older_dialogue():
     assert "PRIVATE_CANARY" in str(memory.history([*older, *private], admin))
 
 
-def test_long_turns_reuse_the_wire_prefix_through_the_previous_user_text():
+def test_long_turns_preserve_the_complete_previous_wire_prefix():
     saver, model = InMemorySaver(), Capture()
     wire = DeepSeekChat(api_key="synthetic", model="deepseek-v4.1-flash")
-    previous, previous_question = None, None
+    previous = None
     for number in range(4):
         question = f"长对话{number}：" + "保留原始阅读材料，不改变任务要求。" * 100
         selected = runtime(saver, model)
         run(selected, ChatRequest(message=question, current_url=f"/page-{number}",
                                   page_title=f"CURRENT_PAGE_{number}"))
         messages = wire._get_request_payload(model.prompts[-1])["messages"]
-        serialized = json.dumps(messages, ensure_ascii=False)
         if previous is not None:
-            original = json.dumps("[当前问题]: " + previous_question, ensure_ascii=False)[1:-1]
-            boundary = previous.rindex(original) + len(original)
-            assert len(commonprefix([previous, serialized])) >= boundary
-            assert f"CURRENT_PAGE_{number-1}" not in serialized
+            assert messages[:len(previous)] == previous
+            assert f"CURRENT_PAGE_{number-1}" in str(messages[:-1])
+            assert f"CURRENT_PAGE_{number-1}" not in messages[-1]['content']
         saved = selected.store.load(config()).messages
-        assert all("CURRENT_PAGE_" not in str(message.content) for message in saved)
-        assert saved[-2].content == "[当前问题]: " + question
-        previous, previous_question = serialized, question
+        assert saved[-2].content == messages[-1]['content']
+        assert saved[-2].content.split('\n\n', 1)[0] == "[当前问题]: " + question
+        previous = messages

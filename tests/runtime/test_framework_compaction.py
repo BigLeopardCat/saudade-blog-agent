@@ -50,14 +50,14 @@ def test_compaction_commits_summary_and_replacement_together_then_reloads(summar
     assert len(summaries) == 1 and "SUMMARY_CANARY" in summaries[0].content
     assert summaries[0].additional_kwargs["memory_actor"] == {"uid": 7, "role": "user"}
     assert len(saved) < len(before)
-    assert saved[-2].content == "[当前问题]: 继续核对"
+    assert saved[-2].content.split("\n\n", 1)[0] == "[当前问题]: 继续核对"
     assert "SUMMARY_CANARY" not in "".join(event.content for event in
         run(runtime(saver, model), ChatRequest(message="第二条呢"))
         if isinstance(event, AIMessageChunk))
     assert "SUMMARY_CANARY" in str(model.prompts[-1])
     assert not any("question-0:" in str(m.content) for m in saved)
     assert [m.content for m in model.prompts[-1][-3:-1]] == [
-        "[当前问题]: 继续核对", "收到。"]
+        saved[-2].content, "收到。"]
     assert model.prompts[-1][-1].content.startswith("[当前问题]: 第二条呢\n\n")
 
 

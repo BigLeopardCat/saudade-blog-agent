@@ -25,6 +25,9 @@ def finish(messages, reply, principal, accepted):
     for message in messages:
         if memory.is_context(message):
             continue
+        if (isinstance(message, HumanMessage) and message.additional_kwargs.get("task_input")
+                and message.id not in accepted_ids):
+            continue
         if not isinstance(message, (HumanMessage, AIMessage, ToolMessage)):
             continue
         if isinstance(message, (HumanMessage, AIMessage)) and pending:
@@ -47,7 +50,7 @@ def finish(messages, reply, principal, accepted):
             artifact = message.artifact if isinstance(message.artifact, dict) else {}
             message = message.model_copy(update={"artifact": {
                 key: artifact[key] for key in ("kind", "data", "meta", "image_reader",
-                                               "article_evidence") if key in artifact}})
+                                               "article_evidence", "receipts") if key in artifact}})
         saved.append(message)
     saved.extend(_close_exchange(pending))
     last = saved[-1] if saved else None

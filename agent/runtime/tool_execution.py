@@ -59,13 +59,13 @@ def append_result(session, request, handler, prompt, round_index, attachments):
         if reason:
             prompt.append(ToolMessage(content=json.dumps({"status": "not_loaded",
                 "domain": domain, "reason": reason}), status="error",
-                name=name, tool_call_id=call["id"]))
+                name=name, tool_call_id=call["id"], artifact={"kind": "unavailable"}))
         else:
             if not already:
                 emit(session.config, f"正在加载工具领域：{domain}", key=f"domain:{domain}")
                 record("native", "load_domain", domain=domain, call_id=call["id"])
             prompt.append(ToolMessage(content=f"{domain} 工具已加载。",
-                                      name=name, tool_call_id=call["id"]))
+                                      name=name, tool_call_id=call["id"], artifact={"kind": "ok"}))
         return None
     if name not in session.execution_tools:
         reason = "unknown_tool"

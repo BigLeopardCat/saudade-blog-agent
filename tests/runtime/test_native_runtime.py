@@ -326,7 +326,8 @@ def test_preparation_card_text_is_emitted_once_and_matches_saved_reply(site):
     assert isinstance(result, TurnResult) and result.execution["pending_confirm"]
     visible = "".join(chunk.content for chunk in events[:-1])
     assert visible + result.execution["confirm_text"] == result.reply
-    assert selected.store.load(config()).messages[-1].content == result.reply
+    assert "".join(m.content for m in selected.store.load(config()).messages
+                   if isinstance(m, AIMessage)) == result.reply
     assert selected.store.load(config()).has_pending
     assert result.execution["pending_confirm"]["token"] not in str(model.prompts)
     assert all(request.method == "GET" for request in site["requests"])

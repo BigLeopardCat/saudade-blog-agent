@@ -131,7 +131,7 @@ def test_feedback_reports_original_task_identity_and_seals_inputs_after_recovery
     assert rebuilt.inputs.read(task["id"], task["scope"])["phase"] == "completed"
 
 
-def test_feedback_projects_current_page_facts_without_changing_saved_user_text(backend):
+def test_feedback_preserves_the_user_request_and_its_observed_page_data(backend):
     selected = runtime(Model())
     prepare(selected, FAVORITE)
     model = Model(AIMessage(content="先核实新页面。"))
@@ -151,9 +151,9 @@ def test_feedback_projects_current_page_facts_without_changing_saved_user_text(b
     assert "原确认卡已失效" in latest["result"]
     assert prompt[-1].tool_call_id.startswith("feedback_")
     saved = selected.store.load(config()).messages
-    assert sum(isinstance(m, HumanMessage) and m.content == "先解释当前页面。"
+    assert sum(isinstance(m, HumanMessage) and m.content.split("\n\n", 1)[0] == "先解释当前页面。"
                for m in saved) == 1
-    assert "反馈时的新页面" not in str(saved)
+    assert "反馈时的新页面" in str(saved)
 
 
 def test_invalid_approval_text_is_not_replayed_after_checkpoint_reconstruction(backend):

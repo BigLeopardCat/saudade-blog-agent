@@ -271,16 +271,20 @@ def test_one_turn_combines_appearance_and_navigation_and_retains_source_history(
     execution = events[-1].execution
     assert len(execution["receipts"]) == 3 and not execution.get("pending_confirm")
     assert len(model.calls) == 4
-    results = [item for item in model.calls[-1] if isinstance(item, ToolMessage) and item.artifact]
-    assert [item.name for item in results] == ["set_page_appearance", "navigate_page"]
-    assert "receipts" in results[0].artifact
+    results = [item for item in model.calls[-1] if isinstance(item, ToolMessage)]
+    assert [item.name for item in results] == [
+        "load_site_info_tools", "set_page_appearance", "navigate_page"]
+    assert "receipts" in results[1].artifact
     history = memory.history(
         arm.get_state(config).values["messages"], config["configurable"]["principal"],
         tool_access=tool_access
     )
     source = [item for item in history if isinstance(item, ToolMessage)]
-    assert [item.name for item in source] == ["set_page_appearance", "navigate_page"]
-    assert all(item.artifact == {"kind": "ok"} for item in source)
+    assert [item.name for item in source] == [
+        "load_site_info_tools", "set_page_appearance", "navigate_page"]
+    assert all(item.artifact.get("kind") == "ok" for item in source)
+    assert len(source[1].artifact["receipts"]) == 2
+    assert len(source[2].artifact["receipts"]) == 1
     list(arm.stream_events({"messages": [HumanMessage(content="刚才设置了什么")]}, config))
     assert "set_page_appearance" in model.menus[-1]
     assert "load_site_info_tools" in model.menus[-1]
