@@ -93,6 +93,20 @@ def test_caller_metadata_cannot_change_persisted_ownership():
         store.load({**config(FOREIGN), "metadata": {"user_id": 7, "conversation_id": 42}})
 
 
+def test_opaque_framework_thread_ids_still_require_matching_owner_and_coordinates():
+    saver = InMemorySaver()
+    store = CheckpointConversationStore(saver)
+    cfg = config()
+    cfg["configurable"]["thread_id"] = "70dfca5e-3f6c-4933-83eb-7c6a1d7ee124"
+    store.update_state(cfg, {"messages": [HumanMessage(content="owned")]})
+    assert store.load(cfg).messages[0].content == "owned"
+    before = deepcopy(saver.storage)
+    for overrides in ({"conversation_id": 43}, {"user_id": 8, "principal": FOREIGN}):
+        with pytest.raises(ConversationAccessDenied):
+            store.load({"configurable": {**cfg["configurable"], **overrides}})
+    assert saver.storage == before
+
+
 def test_unbound_checkpoint_is_rejected_without_inference_from_message_text():
     saver = InMemorySaver()
     raw = {"configurable": {"thread_id": "conv_42"}}

@@ -217,6 +217,7 @@ def test_background_agent_uses_standard_runtime_and_reuses_finished_checkpoint(m
                     "thread_id": first["thread_id"],
                     "principal": ADMIN,
                     "user_id": ADMIN.uid,
+                    "background_run_id": "isolated-run",
                 }
             },
             {"last_outcome": "blocked"},

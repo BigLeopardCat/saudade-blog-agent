@@ -5,7 +5,6 @@ Reads without a committed checkpoint may run again; business writes remain owned
 by the independent execution ledger.
 """
 
-import re
 from contextlib import AbstractContextManager
 from dataclasses import dataclass, field
 from typing import Any, Protocol, TypedDict
@@ -17,7 +16,6 @@ class ConversationAccessDenied(PermissionError):
 
 def owned_config(config):
     """Bind framework checkpoint metadata to the verified actor, never caller metadata."""
-    from agent.checkpoint import conversation_thread
     from agent.runtime import task_scope
 
     cfg = (config or {}).get("configurable") or {}
@@ -25,14 +23,11 @@ def owned_config(config):
         principal = task_scope.caller(config)
         cid, thread = cfg.get("conversation_id"), cfg.get("thread_id")
         background = cfg.get("background_run_id")
+        if (not isinstance(thread, str) or not thread or len(thread) > 200
+                or "\x00" in thread or (cid is not None and type(cid) not in (int, str))):
+            raise ValueError("invalid_conversation_identity")
         if background is not None:
             task_scope.binding(config)
-        elif cid is not None:
-            if conversation_thread(cid) is None or thread != conversation_thread(cid):
-                raise ValueError("invalid_conversation_identity")
-        elif not isinstance(thread, str) or not re.fullmatch(
-                rf"user_{principal.uid}_[0-9a-f]{{8}}", thread):
-            raise ValueError("invalid_conversation_identity")
     except ValueError:
         raise ConversationAccessDenied("conversation_not_found") from None
     metadata = {**(config.get("metadata") or {}), "user_id": principal.uid,
