@@ -105,12 +105,20 @@ def test_domain_admission_includes_the_actual_system_prompt(request):
 
 
 def test_task_working_set_releases_old_domains_with_plenty_of_model_capacity(request, monkeypatch):
+    from langchain_core.messages.utils import count_tokens_approximately
+    from langchain_core.utils.function_calling import convert_to_openai_tool
+
     from config.settings import settings
 
     runtime, domains, calls = request.getfixturevalue("setup")
-    monkeypatch.setattr(settings, "agent_tool_schema_tokens", 512)
+    monkeypatch.setattr(settings, "agent_tool_schema_tokens", 768)
     for domain in domains:
         domains[domain]["read_" + domain].description = "Read domain data. " * 100
+    discovery = ToolSession(Model(), config(), {}, domains).menu
+    alpha = convert_to_openai_tool(domains["alpha"]["read_alpha"])
+    beta = convert_to_openai_tool(domains["beta"]["read_beta"])
+    assert count_tokens_approximately([], tools=[*discovery, alpha]) <= 768
+    assert count_tokens_approximately([], tools=[*discovery, alpha, beta]) > 768
     selected = runtime(Model(call("load_alpha_info_tools"), call("read_alpha"),
                              AIMessageChunk(content="Alpha delivered.")))
     turn(selected)
@@ -144,6 +152,56 @@ def test_required_multi_domain_task_can_exceed_soft_target_then_bound_its_carryo
     following = Model(AIMessageChunk(content="Hello."))
     assert turn(runtime(following), "Hello.").reply == "Hello."
     assert names(following.requests[0]) == [
-        "load_alpha_info_tools", "load_beta_info_tools", "read_beta"]
+        "load_alpha_info_tools", "load_beta_info_tools"]
     assert calls == ["alpha", "beta"]
-    assert [d["domain"] for d in selected.store.load(config()).tool_domains["domains"]] == ["beta"]
+    assert selected.store.load(config()).tool_domains["domains"] == []
+
+
+def test_soft_target_alone_releases_heavy_carryover_without_an_extra_model_call(request):
+    runtime, domains, calls = request.getfixturevalue("setup")
+    domains["beta"]["read_beta"].description = "Large read schema. " * 1500
+    with model_replies({"tool_calls": [wire_call("load_beta_info_tools", "load")]},
+                       {"tool_calls": [wire_call("read_beta", "read")]},
+                       {"content": "Read complete."}) as (model, requests):
+        selected = runtime(model)
+        turn(selected)
+    loaded = requests[-1]["tools"]
+    assert "read_beta" in {s["function"]["name"] for s in loaded}
+    with model_replies({"content": "Hello."}, {"content": "Still here."}) as (model, requests):
+        selected = runtime(model)
+        assert turn(selected, "Just chat.").reply == "Hello."
+        assert turn(selected, "Another chat.").reply == "Still here."
+    assert len(requests) == 2 and calls == ["beta"]
+    assert requests[0]["tools"] == requests[1]["tools"]
+    assert {s["function"]["name"] for s in requests[0]["tools"]} == {
+        "load_alpha_info_tools", "load_beta_info_tools"}
+    assert selected.store.load(config()).tool_domains["domains"] == []
+
+
+def test_released_authorized_read_can_reactivate_without_an_extra_discovery_round(request):
+    runtime, domains, calls = request.getfixturevalue("setup")
+    domains["beta"]["read_beta"].description = "Large read schema. " * 1500
+    turn(runtime(Model(call("load_beta_info_tools"), call("read_beta"),
+                       AIMessageChunk(content="Beta delivered."))))
+    with model_replies({"tool_calls": [wire_call("read_beta", "again")]},
+                       {"content": "Fresh beta fact."}) as (model, requests):
+        assert turn(runtime(model), "Read the same source again.").reply == "Fresh beta fact."
+    assert calls == ["beta", "beta"] and len(requests) == 2
+    assert "read_beta" not in {s["function"]["name"] for s in requests[0]["tools"]}
+    assert "read_beta" in {s["function"]["name"] for s in requests[1]["tools"]}
+
+
+def test_large_latest_domain_does_not_prevent_retaining_a_smaller_domain(request, monkeypatch):
+    from config.settings import settings
+
+    runtime, domains, calls = request.getfixturevalue("setup")
+    monkeypatch.setattr(settings, "agent_tool_schema_tokens", 768)
+    domains["beta"]["read_beta"].description = "Large read schema. " * 1500
+    turn(runtime(Model(call("load_alpha_info_tools"), call("read_alpha"),
+                       call("load_beta_info_tools"), call("read_beta"),
+                       AIMessageChunk(content="Both delivered."))))
+    model = Model(AIMessageChunk(content="Hello."))
+    assert turn(runtime(model), "Just chat.").reply == "Hello."
+    assert "read_alpha" in names(model.requests[0])
+    assert "read_beta" not in names(model.requests[0])
+    assert calls == ["alpha", "beta"]
