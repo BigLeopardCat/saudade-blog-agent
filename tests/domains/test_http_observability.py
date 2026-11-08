@@ -162,7 +162,7 @@ def test_failed_stream_records_partial_bytes_without_draining_or_retrying(record
     stream = CountedStream([b"invalid"] if reason == "malformed" else chunks())
     headers = {"content-length": "999999"} if reason == "declared_limit" else {}
 
-    def check():
+    def check_deadline():
         if reason == "cancel" and stream.consumed:
             raise asyncio.CancelledError("SECRET_CANCEL_REASON")
         return 1
@@ -172,7 +172,7 @@ def test_failed_stream_records_partial_bytes_without_draining_or_retrying(record
         if reason == "cancel":
             with pytest.raises(asyncio.CancelledError):
                 channel.request_json(client, method="GET", url="https://unit.invalid/limited",
-                                     max_response_bytes=128, timeout=check)
+                                     max_response_bytes=128, timeout=check_deadline)
         else:
             body, failure = channel.request_json(
                 client, method="GET", url="https://unit.invalid/limited", max_response_bytes=128)

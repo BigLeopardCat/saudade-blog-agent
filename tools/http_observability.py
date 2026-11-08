@@ -9,6 +9,8 @@ from urllib.parse import urlsplit
 from utils import tool_context
 from utils.trace import record
 
+__all__ = ["ResponseObservation", "request_attempt"]
+
 
 @dataclass
 class ResponseObservation:
