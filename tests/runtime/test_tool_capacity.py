@@ -114,11 +114,10 @@ def test_task_working_set_releases_old_domains_with_plenty_of_model_capacity(req
     monkeypatch.setattr(settings, "agent_tool_schema_tokens", 768)
     for domain in domains:
         domains[domain]["read_" + domain].description = "Read domain data. " * 100
-    discovery = ToolSession(Model(), config(), {}, domains).menu
     alpha = convert_to_openai_tool(domains["alpha"]["read_alpha"])
     beta = convert_to_openai_tool(domains["beta"]["read_beta"])
-    assert count_tokens_approximately([], tools=[*discovery, alpha]) <= 768
-    assert count_tokens_approximately([], tools=[*discovery, alpha, beta]) > 768
+    assert count_tokens_approximately([], tools=[alpha]) <= 768
+    assert count_tokens_approximately([], tools=[alpha, beta]) > 768
     selected = runtime(Model(call("load_alpha_info_tools"), call("read_alpha"),
                              AIMessageChunk(content="Alpha delivered.")))
     turn(selected)
@@ -141,8 +140,10 @@ def test_required_multi_domain_task_can_exceed_soft_target_then_bound_its_carryo
                                                                                  monkeypatch):
     from config.settings import settings
 
-    runtime, _, calls = request.getfixturevalue("setup")
+    runtime, domains, calls = request.getfixturevalue("setup")
     monkeypatch.setattr(settings, "agent_tool_schema_tokens", 128)
+    for domain in domains:
+        domains[domain]["read_" + domain].description = "Read fixture data. " * 10
     model = Model(call("load_alpha_info_tools"), call("read_alpha"),
                   call("load_beta_info_tools"), call("read_beta"),
                   AIMessageChunk(content="Both facts delivered."))
@@ -152,9 +153,9 @@ def test_required_multi_domain_task_can_exceed_soft_target_then_bound_its_carryo
     following = Model(AIMessageChunk(content="Hello."))
     assert turn(runtime(following), "Hello.").reply == "Hello."
     assert names(following.requests[0]) == [
-        "load_alpha_info_tools", "load_beta_info_tools"]
+        "load_alpha_info_tools", "load_beta_info_tools", "read_beta"]
     assert calls == ["alpha", "beta"]
-    assert selected.store.load(config()).tool_domains["domains"] == []
+    assert [d["domain"] for d in selected.store.load(config()).tool_domains["domains"]] == ["beta"]
 
 
 def test_soft_target_alone_releases_heavy_carryover_without_an_extra_model_call(request):
@@ -205,3 +206,27 @@ def test_large_latest_domain_does_not_prevent_retaining_a_smaller_domain(request
     assert "read_alpha" in names(model.requests[0])
     assert "read_beta" not in names(model.requests[0])
     assert calls == ["alpha", "beta"]
+
+
+def test_fixed_catalog_does_not_evict_a_reused_domain_in_the_actual_sdk_request(request,
+                                                                             monkeypatch):
+    from config.settings import settings
+
+    runtime, domains, calls = request.getfixturevalue("setup")
+    monkeypatch.setattr(settings, "agent_tool_schema_tokens", 768)
+    domains["alpha"]["read_alpha"].description = "Read domain data. " * 100
+    descriptions = {"alpha": "A stable catalog description. " * 250}
+    with model_replies({"tool_calls": [wire_call("load_alpha_info_tools", "load")]},
+                       {"tool_calls": [wire_call("read_alpha", "read")]},
+                       {"content": "First fact delivered."}) as (model, requests):
+        selected = runtime(model)
+        selected.application.descriptions = descriptions
+        turn(selected)
+    loaded = requests[-1]["tools"]
+    with model_replies({"tool_calls": [wire_call("read_alpha", "again")]},
+                       {"content": "Fresh fact delivered."}) as (model, requests):
+        selected = runtime(model)
+        selected.application.descriptions = descriptions
+        assert turn(selected, "Read alpha again.").reply == "Fresh fact delivered."
+    assert len(requests) == 2 and calls == ["alpha", "alpha"]
+    assert requests[0]["tools"] == requests[1]["tools"] == loaded
