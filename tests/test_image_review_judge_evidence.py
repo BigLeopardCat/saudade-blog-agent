@@ -7,7 +7,8 @@ import uuid
 from pathlib import Path
 
 import pytest
-from langchain_core.messages import AIMessage
+from _semantic_judge_support import Model
+from _semantic_judge_support import judge_clients as judge_clients
 
 from eval import online_judge
 from eval.online_transport import archive_result
@@ -80,32 +81,6 @@ def material(case):
 
 def current(case):
     return json.loads(material(case))["turns"][-1]
-
-
-class Model:
-    model_name = "fixture-judge"
-
-    def __init__(self, excerpt):
-        self.excerpt = excerpt
-        self.calls = []
-
-    def bind(self, **kwargs):
-        return self
-
-    def invoke(self, messages):
-        self.calls.append(messages)
-        return AIMessage(
-            content=json.dumps(
-                {
-                    "unsupported": [self.excerpt],
-                    "answered": False,
-                    "verdict": "suspect",
-                    "reason": "生图审阅内容偏离用户要求",
-                },
-                ensure_ascii=False,
-            ),
-            response_metadata={"finish_reason": "stop"},
-        )
 
 
 def run(case, tmp_path, model):
@@ -190,11 +165,12 @@ def test_full_original_prompt_and_multiline_excerpt_are_not_json_escaped_or_trun
 
 @pytest.mark.parametrize("excerpt", ['错误提示词：海底\n带有"珊瑚"与鱼群。', "多余参考图"])
 def test_wrong_prompt_or_extra_reference_can_be_flagged_by_offline_judge(case, tmp_path, excerpt):
-    model = Model(excerpt)
+    model = Model({"unsupported": [excerpt], "answered": False, "verdict": "suspect",
+                   "reason": "生图审阅内容偏离用户要求"})
     report = run(case, tmp_path, model)
     assert report["counts"] == {"suspect": 1}
     assert report["rows"][0]["verdict"]["unsupported"] == [excerpt]
-    sent = json.loads(model.calls[0][1]["content"])["turns"][-1]
+    sent = json.loads(model.messages[0][1]["content"])["turns"][-1]
     assert sent["interactive_image_reviews_to_review"][0]["reference_count"] == 1
 
 

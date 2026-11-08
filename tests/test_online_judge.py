@@ -7,44 +7,12 @@ from pathlib import Path
 
 import httpx
 import pytest
-from langchain_openai import ChatOpenAI
+from _semantic_judge_support import Model
+from _semantic_judge_support import judge_clients as judge_clients
 from openai import OpenAIError
-from pydantic import Field
 
 from eval import online_judge, semantic_judge
 from utils.trace import truncation_mark
-
-_CLIENTS = []
-
-
-@pytest.fixture(autouse=True)
-def close_model_clients():
-    yield
-    for client in _CLIENTS:
-        client.close()
-    _CLIENTS.clear()
-
-
-class Model(ChatOpenAI):
-    messages: list = Field(default_factory=list, exclude=True)
-
-    def __init__(self, verdict=None, *, error=None, finish="stop"):
-        verdict = verdict or {
-            "unsupported": [], "answered": True, "verdict": "ok", "reason": "有依据"}
-
-        def provider(request):
-            self.messages.append(json.loads(request.content)["messages"])
-            if error:
-                raise error
-            return httpx.Response(200, json={"id": "fixture", "model": "fixture-judge",
-                "choices": [{"index": 0, "finish_reason": finish, "message": {
-                    "role": "assistant", "content": json.dumps(verdict, ensure_ascii=False)}}],
-                "usage": {"prompt_tokens": 80, "completion_tokens": 20, "total_tokens": 100}})
-
-        client = httpx.Client(transport=httpx.MockTransport(provider))
-        _CLIENTS.append(client)
-        super().__init__(model="fixture-judge", api_key="fixture", base_url="https://model.test/v1",
-                         http_client=client, max_retries=0, streaming=False)
 
 
 def recorded(tmp_path, *, trace_extra=None, text="通知正文", **result_extra):
