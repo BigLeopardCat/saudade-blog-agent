@@ -249,3 +249,19 @@ def test_background_metadata_reads_do_not_require_a_writable_conversation(galler
     cfg["configurable"]["user_id"] = 8
     assert reads.get_gallery_index.invoke({}, config=cfg).kind == "unavailable"
     assert len(gallery["requests"]) == count
+
+
+def test_metadata_includes_authoritative_folder_labels_without_extra_reads(gallery):
+    gallery["row"].update(folderId=3, folderName="素材", folderParentId=2)
+    result = reads.get_gallery_image_metadata.invoke({"image_id": 11}, config=admin())
+    assert result.data["folder_id"] == 3
+    assert result.data["folder_name"] == "素材"
+    assert result.data["folder_parent_id"] == 2
+    assert len(gallery["requests"]) == 1 and not gallery["writes"]
+
+
+def test_index_includes_folder_name_without_expanding_the_folder_tree(gallery):
+    gallery["row"].update(folderId=3, folderName="素材", folderParentId=2)
+    result = reads.get_gallery_index.invoke({}, config=admin())
+    assert result.data["items"][0]["folder_name"] == "素材"
+    assert len(gallery["requests"]) == 1 and not gallery["writes"]

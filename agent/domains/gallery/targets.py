@@ -25,6 +25,8 @@ class Image(BaseModel):
     displayName: Annotated[StrictStr, Field(max_length=255)] | None = None
     description: Annotated[StrictStr, Field(max_length=2000)]
     folderId: Annotated[StrictInt, Field(ge=0)]
+    folderName: Annotated[StrictStr, Field(max_length=80)] | None = None
+    folderParentId: Annotated[StrictInt, Field(ge=0)] | None = None
     isFavorite: StrictBool
     version: Digest
 
