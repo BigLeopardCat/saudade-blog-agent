@@ -207,13 +207,18 @@ def test_runtime_discovers_catalog_without_legacy(backend, monkeypatch, name):
     assert len(backend["requests"]) == 1
 
 
-def test_account_lookup_retains_its_domain_without_loading_article_preparations(backend):
+@pytest.mark.parametrize("schema_budget, retains_domain", [(4096, False), (16000, True)])
+def test_account_lookup_keeps_facts_and_bounds_unused_preparations(
+        backend, monkeypatch, schema_budget, retains_domain):
     from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
     from langchain_core.utils.function_calling import convert_to_openai_tool
     from langgraph.checkpoint.memory import InMemorySaver
 
     from agent.runtime.checkpoint_conversations import CheckpointConversationStore
     from agent.runtime.service import AgentRuntime
+    from config.settings import settings
+
+    monkeypatch.setattr(settings, "agent_tool_schema_tokens", schema_budget)
 
     responses = iter([
         AIMessage(content="", tool_calls=[{
@@ -251,10 +256,14 @@ def test_account_lookup_retains_its_domain_without_loading_article_preparations(
     assert "prepare_account_role" not in model.used_menus[0]
     assert all({"list_accounts", "prepare_account_role"} <= menu for menu in model.used_menus[1:3])
     assert "list_accounts" in model.used_menus[-1]
-    assert model.used_menus[-1] == model.used_menus[-2]
-    assert "prepare_account_role" in model.used_menus[-1]
-    assert [item["domain"] for item in runtime.store.load(cfg).tool_domains["domains"]] == [
-        "admin_account_actions"]
+    assert "load_admin_account_actions_info_tools" in model.used_menus[-1]
+    assert ("prepare_account_role" in model.used_menus[-1]) is retains_domain
+    if retains_domain:
+        assert model.used_menus[-1] == model.used_menus[-2]
+    else:
+        assert model.used_menus[-1] == model.used_menus[0]
+    assert [item["domain"] for item in runtime.store.load(cfg).tool_domains["domains"]] == (
+        ["admin_account_actions"] if retains_domain else [])
     assert all(not {"list_admin_notes", "prepare_article_state", "prepare_article_tags"} & menu
                for menu in model.menus)
     fact = next(message for message in model.prompts[-1] if isinstance(message, ToolMessage))
