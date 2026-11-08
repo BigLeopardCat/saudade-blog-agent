@@ -88,6 +88,7 @@ def _prepare(action, text, item_id, date, config):
         executor="todos",
         target=target,
         question=target + "？",
+        notices=[{"kind": "warning", "text": "删除后不可恢复。"}] if action == "delete" else [],
     )
 
 

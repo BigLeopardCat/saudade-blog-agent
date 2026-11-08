@@ -579,6 +579,17 @@
 #waifu-chat.washiDark .chat-nav-btn.no:hover,
 #waifu-chat.washiDark .chat-nav-btn.other:hover { background: var(--chat-soft); color: var(--chat-ink); }
 #waifu-chat .chat-nav-btn.danger { background: var(--chat-danger-soft); color: var(--chat-danger); border-color: var(--chat-danger); }
+#waifu-chat .chat-approval-notices {
+  margin-block-start: 12px;
+  padding-block-start: 10px;
+  border-block-start: 1px solid var(--chat-line);
+  color: var(--chat-muted);
+  font-size: 12px;
+  line-height: 1.6;
+}
+#waifu-chat .chat-approval-notice { margin: 0 0 6px; }
+#waifu-chat .chat-approval-notice:last-child { margin-block-end: 0; }
+#waifu-chat .chat-approval-notice.warning { color: var(--chat-danger); }
 #waifu-chat #chat-ask :is(.chat-ask-note, .chat-ask-retry-note) { color: var(--chat-muted); font-size: 11px; }
 /* Result state comes from the protocol, never from matching displayed text. */
 #waifu-chat #chat-ask[data-result='ok'] { border-left-color: var(--chat-success); background: var(--chat-success-soft); }

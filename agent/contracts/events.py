@@ -23,6 +23,14 @@ class ProgressUpdate(BaseModel):
     work: ProgressWork
 
 
+class ConfirmationNotice(BaseModel):
+    """Server-owned operation guidance, separate from user-authored review content."""
+
+    model_config = ConfigDict(extra="forbid")
+    kind: Literal["info", "warning"]
+    text: StrictStr = Field(min_length=1, max_length=1000)
+
+
 @dataclass(frozen=True)
 class StreamEvent:
     name: EventName

@@ -90,7 +90,9 @@ def test_one_approval_and_request_preserve_frozen_set_on_replay(domain, service,
     assert grant['specs'][0]['args']['ids'] == [11, 12]
     assert len(service['requests']) == 1 and service['writes'] == 0
     assert prepared.reply.count('#11') == 1
-    assert ('所有接收者' if domain is announcement else '保留全站公告') in prepared.reply
+    notices = prepared.execution['pending_confirm']['notices']
+    assert ('所有接收者' if domain is announcement else '保留全站公告') in notices[0]['text']
+    assert notices[0]['kind'] == 'warning' and notices[0]['text'] not in prepared.reply
     service['rows'][13] = '确认之后到达'
     ledger = Ledger(str(tmp_path / 'once.sqlite3'))
     for _ in range(2):

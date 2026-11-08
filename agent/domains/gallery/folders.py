@@ -134,7 +134,7 @@ def prepare_gallery_folder(
     question = (
         f"创建{target}，父目录编号 {parent_id}。"
         if action == "create"
-        else f"永久删除空{target}（#{folder_id}）；不删除任何图片或子文件夹。"
+        else f"删除空{target}（#{folder_id}）？"
     )
     return proposal(
         principal,
@@ -148,6 +148,8 @@ def prepare_gallery_folder(
         question=question,
         target=target,
         schedule=schedule,
+        notices=[{"kind": "warning", "text": "永久删除空文件夹；不删除任何图片或子文件夹。"}]
+        if action == "delete" else [],
     )
 
 

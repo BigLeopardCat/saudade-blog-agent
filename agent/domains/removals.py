@@ -101,13 +101,14 @@ class Removal:
                  "associated_notifications": plan.associatedNotifications}
         more = (f'\n以上展示其中 {len(plan.items)} 条，未展示 {facts["omitted_count"]} 条；'
                 f'总计仍为 {plan.count} 条。' if facts["omitted_count"] else '')
-        question = (f'{target}\n\n{preview}{more}\n\n{impact}\n'
-                    '只处理本次固定编号；之后新增的条目不在范围内。确认删除？')
+        question = f'{target}\n\n{preview}{more}\n\n确认删除？'
         principal, cid = writes.bound_context(config)
         return proposal(principal, cid, self.workflow, {'tool': self.operation, 'args': {
             'ids': plan.ids, 'version': plan.version, 'kind': kind,
             'associated_notifications': plan.associatedNotifications}},
-            executor=self.executor, question=question, target=target, preparation_facts=facts)
+            executor=self.executor, question=question, target=target, preparation_facts=facts,
+            notices=[{"kind": "warning", "text": impact}, {"kind": "info",
+                "text": "只处理本次固定编号；之后新增的条目不在范围内。"}])
 
     def validate(self, grant, config):
         principal = writes.validate_binding(grant, config)

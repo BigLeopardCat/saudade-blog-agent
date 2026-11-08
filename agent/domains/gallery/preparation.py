@@ -38,7 +38,7 @@ def _question(request, current):
     elif action == "favorite":
         change = "设为收藏。" if request["isFavorite"] else "取消收藏。"
     elif action == "delete":
-        change = "从图库移除这些图片，并排队清理存储文件；已有引用会阻止整批删除。"
+        change = "删除所选图片。"
     else:
         changes = []
         for item in request["items"]:
@@ -96,6 +96,9 @@ def prepare_gallery_images(intent: image_actions.Intent, config: RunnableConfig)
             "version": current["version"], "expiresAt": current["expiresAt"], "intent": request}},
         executor="gallery", question=_question(request, current),
         target=f"图库图片（{len(current['matchedIds'])} 张）",
+        notices=[{"kind": "warning", "text":
+                  "从图库移除并排队清理存储文件；已有引用会阻止整批删除。"}]
+        if request["action"] == "delete" else [],
     )
 
 

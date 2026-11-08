@@ -16,6 +16,7 @@ from pathlib import Path
 from markdown_it import MarkdownIt
 from openai import OpenAIError
 
+from agent.contracts.events import ConfirmationNotice
 from eval import acceptance, llm_judge
 from eval.online_transport import safe_result
 from utils import trace as trace_mod
@@ -237,7 +238,12 @@ def material(case, results):
             "execution_receipts": result.get("exec_rows", []),
             "proposed_actions_not_facts": _proposed_actions(result),
             "interactive_image_reviews_to_review": _image_reviews(result.get("http_events", [])),
-            "confirmation_previews_to_review": [*result.get("confirmation_previews", []),
+            "confirmation_previews_to_review": [
+                *(ConfirmationNotice.model_validate(notice).text
+                  for event in result.get("http_events", [])
+                  if event.get("event") == "confirmation" and isinstance(event.get("data"), dict)
+                  for notice in event["data"].get("notices", [])),
+                *result.get("confirmation_previews", []),
                                                 *(event["data"]["q"]
                                                 for event in result.get("http_events", [])
                                                 if event.get("event") == "confirmation")],

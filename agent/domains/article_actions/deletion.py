@@ -110,8 +110,10 @@ def prepare_article_deletions(
         "article_delete",
         specs,
         executor="article_deletions",
-        question="永久删除所选文章及其关联修改稿、评论、投票、收藏和阅读记录；"
-        "图片文件保留，无法撤销。关联互动记录按执行时统一清理。",
+        question="选择要删除的文章；未勾选的保留。",
+        notices=[{"kind": "warning", "text":
+                  "永久删除所选文章及关联修改稿、评论、投票、收藏和阅读记录，无法撤销。"},
+                 {"kind": "info", "text": "图片文件保留，关联互动记录按执行时统一清理。"}],
         target=target,
         choices=labels,
         schedule=schedule,

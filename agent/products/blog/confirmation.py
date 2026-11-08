@@ -73,6 +73,7 @@ def public_card(execution):
     article_ids = _article_ids(popup.get("specs") or [])
     return {
         "id": identifier, "q": popup.get("q", ""),
+        "notices": popup.get("notices", []),
         "opts": popup.get("opts") or [], "token": popup.get("token", ""),
         "exp": popup.get("exp") or 0, "server_time": int(time.time()),
         **({"task_id": execution["task_id"]} if execution.get("task_id") else {}),

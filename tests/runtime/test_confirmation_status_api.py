@@ -68,7 +68,10 @@ def test_current_card_is_readable_under_turn_lock_and_disappears_after_revocatio
                 "replay_safe",
                 "server_time",
                 "article_ids_to_refresh",
+                "notices",
             }
+            assert body["confirmation"]["notices"] == (
+                prepared.execution["pending_confirm"]["notices"])
             assert body["confirmation"]["article_ids_to_refresh"] == [19]
             assert not state["writes"]
             for uid, role, cid in [(8, "user", 42), (7, "admin", 42), (7, "user", 43)]:

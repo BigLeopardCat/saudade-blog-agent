@@ -61,7 +61,9 @@ def test_terminal_only_confirmation_is_emitted_once_with_receipt_command():
     assert pending == []
     popup = [event.data for event in events
              if (isinstance(event, StreamEvent) and event.name == "confirmation")][0]
-    assert set(popup) == {"id", "q", "opts", "token", "exp", "replay_safe", "server_time"}
+    assert set(popup) == {"id", "q", "opts", "token", "exp", "replay_safe",
+                          "server_time", "notices"}
+    assert popup["notices"] == []
     assert isinstance(popup["server_time"], int)
     assert popup["q"] == ""
 
