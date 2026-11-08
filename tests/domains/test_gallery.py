@@ -199,7 +199,7 @@ def test_cover_preparation_supplies_verified_targets_to_narration_without_more_q
     assert facts["status"] == "awaiting_confirmation" and facts["executed"] is False
     assert facts["preparation_facts"] == {
         "article_id": 3, "article_title": "文章", "image_id": 11, "image_name": "山景",
-        "fit": "cover", "preview_layouts": ["article_card", "home_carousel", "article_banner"],
+        "fit": "cover",
         "preview_delivery": "confirmation_card", "preview_before_approval": True,
         "preparation_inspects_pixels": False,
     }
