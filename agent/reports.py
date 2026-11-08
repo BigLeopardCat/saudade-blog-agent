@@ -417,15 +417,15 @@ def render_user_stats(data: dict, now: datetime | None = None) -> str:
     if users is None:
         lines.append("- 用户活动明细：后台未返回，无法核对")
     elif not users:
-        lines.append("- 没有任何用户产生过会话或消息")
+        lines.append("- 本次未返回用户活动明细；不能据此判断全站活动")
     else:
-        lines.append(f"- 明细（按消息数倒序，共 "
-                     f"{data.get('listedUsers', len(users))} 人，最多 50 行）:")
+        lines.append(f"- 本次明细 {len(users)} 人（按消息数倒序，最多 50 行）；"
+                     "未列出的用户活动未知，不能据此认定没有会话或消息:")
         for u in users:
             name = sanitize_untrusted(u.get("name") or "", 20) or f"userId:{u.get('id')}"
             last = u.get("lastActiveAt") or "无活动"
             lines.append(f"  · userId:{u.get('id')} {name}（{u.get('role')}）"
-                         f"会话 {u.get('conversations', 0)}／消息 {u.get('messages', 0)}"
+                         f"会话 {u.get('conversations', '未知')}／消息 {u.get('messages', '未知')}"
                          f"／最近 {short_time(last)}")
     return _cap("\n".join(lines))
 

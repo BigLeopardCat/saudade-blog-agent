@@ -138,10 +138,12 @@ def get_article_detail(
     max_chars: Annotated[StrictInt, Field(ge=1, le=24000, description=_ARTICLE_LIMIT_DESC)] = 12000,
     revision: Annotated[str, Field(max_length=64, description=_ARTICLE_REVISION_DESC)] = "",
     section_schema: Annotated[str, Field(max_length=128)] = "",
-    view: Literal["body", "outline"] = "body",
+    view: Literal["body", "outline", "metadata"] = "body",
 ) -> str | ToolResult:
     """Read ORIGINAL public text at a located source range; this is not article discovery.
-    For a factual question in a known article, first locate with rag_search(article_id=...)
+    For author, existing description or display fields, use view='metadata' directly;
+    no search or body read is needed. Missing fields stay unknown, not false or empty.
+    For a question about BODY CONTENT in a known article, locate with rag_search(article_id=...)
     and copy its section/revision/section_schema/offset/max_chars to read the matching passage.
     To read or summarize the WHOLE document, omit section and follow nextOffset.
     To browse headings without reading body, use view='outline' and nextSectionsOffset.
@@ -158,6 +160,8 @@ def get_article_detail(
         not revision or not section_schema
     ):
         return invalid_args("Continuation requires contentRevision and sectionSchema.")
+    if view == "metadata" and (section or offset):
+        return invalid_args("Metadata view cannot select body ranges.")
     if view == "outline" and section:
         return invalid_args("Outline view cannot select a body section.")
     params = {

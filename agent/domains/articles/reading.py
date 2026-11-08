@@ -58,7 +58,7 @@ class DisplayMetadata(BaseModel):
 
 
 class Page(BaseModel):
-    view: Literal["body", "outline"]
+    view: Literal["body", "outline", "metadata"]
     type: Kind
     id: Annotated[StrictInt, Field(gt=0, le=2_147_483_647)]
     title: Annotated[StrictStr, Field(max_length=255)]
@@ -92,7 +92,8 @@ class Page(BaseModel):
             or self.nextSectionsOffset != (section_end if section_end < self.sectionCount else None)
             or not self.sections and self.nextSectionsOffset is not None
             or self.view == "body" and self.sectionsOffset != 0
-            or self.view == "outline" and (self.readOffset != 0 or self.source is not None)
+            or self.view in {"outline", "metadata"} and (self.readOffset != 0 or self.source is not None)
+            or self.view == "metadata" and (self.sectionCount != 0 or self.totalChars != 0)
         ):
             raise ValueError("inconsistent section directory range")
         if self.source is None:
@@ -176,7 +177,8 @@ def project(value, kind, identifier, section, offset, limit, revision, section_s
         data.update(
             noteId=page.id,
             noteTitle=page.title,
-            **{"sectionText" if section else "noteContent": page.content},
+            **({"sectionText" if section else "noteContent": page.content}
+               if view == "body" else {}),
         )
     else:
         data.update(id=page.id, title=page.title, content=page.content)

@@ -25,6 +25,12 @@ def _article_summary(rows):
         {"status": status, "count": count} for status, count in counts.items()]}
 
 
+def _account_summary(rows):
+    counts = Counter(row["role"] for row in rows)
+    return {"scope": "returned_items", "count": len(rows), "role_counts": [
+        {"role": role, "count": count} for role, count in counts.items()]}
+
+
 def _account(row):
     if (not isinstance(row, dict) or not _positive(row.get("id"))
             or not isinstance(row.get("nickname"), str)
@@ -82,4 +88,4 @@ def list_accounts(config: RunnableConfig, username: Username | None = None,
         page, limit = 1, 1
     return read_page("accounts", config, page, limit,
                      {"username": username, "id": account_id, "query": query}, _account,
-                     {"id": account_id, "username": username})
+                     {"id": account_id, "username": username}, summarize=_account_summary)

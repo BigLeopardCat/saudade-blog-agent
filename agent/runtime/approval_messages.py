@@ -31,9 +31,11 @@ def deferred(call, *, awaiting, available):
     """Describe a scheduling boundary without changing tool access or approval."""
     return ToolMessage(content=json.dumps({
         "status": "not_executed", "reason": "awaiting_prior_confirmation",
-        "executed": False, "available_in_catalog": available,
+        "executed": False, "prepared": False, "target_verified": False,
+        "available_in_catalog": available,
         "waiting_for_call_id": awaiting,
         "continuation": "resume_after_prior_approval_and_verified_result",
+        "approval": "not_requested_for_this_operation",
     }), name=call["name"], tool_call_id=call["id"], artifact={"phase": "deferred"})
 
 

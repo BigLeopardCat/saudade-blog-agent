@@ -68,9 +68,13 @@ class ReadState:
                     break
                 rows[row["id"]] = row
             else:
-                facts = {"query": {"ids": ids, "unreadOnly": unread_only}, "items": [
-                    {"id": row["id"], "isRead": row["isRead"]} for row in rows.values()]}
-                observed(self.executor, facts, ("query", "items"))
+                items = [{"id": row["id"], "isRead": row["isRead"],
+                          "title": sanitize_untrusted(str(row.get("title") or "无标题"), 40)}
+                         for row in rows.values()]
+                for start in range(0, max(1, len(items)), 20):
+                    facts = {"query": {"ids": ids, "unreadOnly": unread_only},
+                             "items": items[start:start + 20]}
+                    observed(self.executor, facts, ("query", "items"))
                 return (data, rows), None
         return None, base.unavailable(f"未能核对本人{self.label}及已读状态，本次未改动。")
 

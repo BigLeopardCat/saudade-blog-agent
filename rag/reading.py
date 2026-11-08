@@ -119,6 +119,8 @@ def render_article_result(data, text: str, cap: int) -> tuple[str, dict | None]:
         return text, data if isinstance(data, dict) else None
     if not isinstance(data, dict):
         return frame_excerpt(text, cap)[:cap], None
+    if data.get("view") == "metadata":
+        return "本轮剩余上下文不足以完整展示元数据。"[:cap], None
     if data.get("view") == "outline":
         return _outline_frame(data, cap)
     key = next(

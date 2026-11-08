@@ -13,6 +13,7 @@ from agent.domains.admin_writes import available
 from agent.domains.gallery import image_actions, targets
 from agent.proposals import proposal
 from agent.runtime.access import configured_reads_enabled
+from agent.runtime.tool_evidence import observed
 from agent.runtime.turns import check_cancelled
 from agent.runtime.writes import bound_context
 from tools import base
@@ -141,6 +142,12 @@ def prepare_gallery_transfer(intent: Intent, config: RunnableConfig) -> object:
     except (ValueError, TypeError, KeyError):
         return base.unavailable(
             "Could not verify the complete transfer preview; no approval issued.")
+    observed("gallery_transfer_destination", {
+        "folderId": preview.intent.folderId, "name": preview.destinationName}, ("folderId", "name"))
+    for start in range(0, len(preview.images), 20):
+        observed("gallery_transfer_sources", {"images": [
+            image.model_dump(include={"imageKey", "displayName", "folderId", "storage"})
+            for image in preview.images[start:start + 20]]}, ("images",))
     from agent.domains.gallery.preparation import _literal
 
     verb = "复制" if request["mode"] == "copy" else "移动"

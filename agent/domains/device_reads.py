@@ -71,5 +71,5 @@ def list_devices(config: RunnableConfig, page: Page = 1, limit: Limit = 5) -> ob
     offset = (page - 1) * limit
     data = {"items": entries[offset:offset + limit], "total": len(entries), "page": page,
             "pageSize": limit, "hasMore": offset + limit < len(entries),
-            "access": "current_account_and_shared_demo"}
+            "access": "current_account_and_shared_demo", "ownership": "not_reported"}
     return ok(json.dumps(data, ensure_ascii=False, separators=(",", ":")), data=data)

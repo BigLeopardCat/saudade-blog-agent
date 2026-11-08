@@ -138,3 +138,14 @@ def test_lifetime_rankings_and_recent_daily_values_keep_distinct_scopes():
     assert '窗口内2026-11小计（不是整月合计）：阅读 4' in text
     assert '2026-11-03 阅读 4' in text
     assert '本期阅读榜' not in text
+
+
+def test_user_report_keeps_unlisted_users_and_missing_counts_unknown():
+    from agent.reports import render_user_stats
+
+    text = render_user_stats({"totalUsers": 19, "listedUsers": 9,
+                              "users": [{"id": 7, "name": "示例", "role": "user"}]})
+    assert "本次明细 1 人" in text
+    assert "未列出的用户活动未知" in text and "会话 未知／消息 未知" in text
+    empty = render_user_stats({"totalUsers": 19, "users": []})
+    assert "没有任何用户" not in empty and "不能据此判断全站活动" in empty

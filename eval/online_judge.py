@@ -385,9 +385,14 @@ def main():
     parser.add_argument("--model", default="")
     parser.add_argument("--reasoning-effort", choices=semantic_judge.REASONING_EFFORTS,
                         default="none")
+    parser.add_argument("--max-output-tokens", type=int, default=None,
+                        help="Frozen per-review output budget, including reasoning tokens")
     parser.add_argument("--only", default="", help="Comma-separated case IDs")
     args = parser.parse_args()
+    if args.max_output_tokens is not None and args.max_output_tokens <= 0:
+        parser.error("--max-output-tokens must be positive")
     llm = semantic_judge.make_llm(
+        **({"max_tokens": args.max_output_tokens} if args.max_output_tokens else {}),
         reasoning_effort=args.reasoning_effort,
         **({"model": args.model} if args.model else {}),
         timeout=60 if args.reasoning_effort != "none" else 30)
