@@ -295,6 +295,8 @@ class RagIndex:
             logger.warning("向量视图 %d 行 != 语料 %d chunk——本轮退回纯词法",
                            len(view), len(chunks))
             return [], "stale_view", len(store.missing())
+        if not chunks:
+            return [], "no_vector_hits", 0
         qv = embed_query(query)
         if qv is None:
             return [], "query_embed_failed", len(store.missing())

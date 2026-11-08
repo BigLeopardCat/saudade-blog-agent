@@ -383,9 +383,9 @@ class VectorStore:
         except DimensionChanged:
             self._reset_dimensions = True
             return self._update(chunks, texts, keys, space, fingerprint, logical_batches)
-        dimension = dimension or (len(embedded[0][1]) if embedded else 0)
+        dimension = (dimension or (len(embedded[0][1]) if embedded else 0)) if keys else 0
         reused = len(set(keys) & cached.keys())
-        complete = not failed and dimension > 0
+        complete = not failed and (dimension > 0 or not keys)
         stats = {"embedded": len(embedded), "reused": reused,
                  "api_calls": _http_requests.get(), "logical_batches": logical_batches}
         space_key = hashlib.sha256(json.dumps(space.as_dict(), sort_keys=True).encode()).hexdigest()

@@ -82,6 +82,8 @@ class PostgresRepository:
     """One bounded pool; runtime access never creates tables or extensions."""
 
     def __init__(self, dsn: str, collection: str, *, pool_size: int = 4):
+        if type(pool_size) is not int or pool_size < 2:
+            raise ValueError("RAG vector pool requires at least two connections")
         if not dsn.strip() or not collection or len(collection) > 128:
             raise ValueError("RAG vector DSN and bounded collection name are required")
         url = make_url(dsn)
@@ -188,6 +190,8 @@ class PostgresRepository:
                     snapshots.c.collection == self.collection)).first()
                 if current is None or current != (snapshot.fingerprint, snapshot.space):
                     raise StaleSnapshot("Published vector corpus changed")
+                if snapshot.count == 0:
+                    return {}
                 distance = embeddings.c.embedding.cosine_distance(query)
                 candidates = select(
                     members.c.ordinal, members.c.document_type, members.c.document_id,

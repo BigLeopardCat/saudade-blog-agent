@@ -161,3 +161,11 @@ def test_queued_background_cancellation_releases_the_build_permit(store, monkeyp
         vectors.stop_background()
         release.set()
         asyncio.run(workers.aclose())
+
+
+@pytest.mark.parametrize("size", [0, 1, -1])
+def test_vector_pool_rejects_capacity_that_cannot_publish_a_locked_build(size):
+    from rag.postgres import PostgresRepository
+
+    with pytest.raises(ValueError, match="at least two"):
+        PostgresRepository("postgresql://offline.invalid/rag", "test", pool_size=size)

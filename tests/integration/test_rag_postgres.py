@@ -312,3 +312,63 @@ def test_database_failure_falls_back_to_lexical_without_claiming_semantic_covera
         assert last_route()["reason"] == "vector_database_unavailable"
     finally:
         event.remove(store.repository.engine, "before_cursor_execute", unavailable)
+
+
+@pytest.mark.parametrize("change", ["delete_last", "make_all_private"])
+def test_empty_public_corpus_clears_members_and_vectors_without_embedding(database, change):
+    from rag.search import RagIndex, last_route
+
+    store, calls = database
+    public = [{"type": "note", "id": 1, "title": "first", "content": "public body",
+               "visible": True}]
+    index = RagIndex(corpus_loader=lambda: [row for row in public if row["visible"]],
+                     vector_warmer=lambda _: None)
+    index.build()
+    space = vectors.space_from_settings()
+    assert store.update(index._chunks, space)["embedded"] == 1
+    previous_calls = list(calls)
+    # The authoritative public export excludes both deleted and newly private documents.
+    if change == "delete_last":
+        public.clear()
+    else:
+        public[0]["visible"] = False
+    index.build()
+    result = store.update(index._chunks, space)
+    assert result["ok"] and result["embedded"] == result["logical_batches"] == 0
+    assert result["dim"] == 0 and calls == previous_calls
+    snapshot = store.repository.snapshot()
+    assert snapshot is not None and snapshot.count == snapshot.dimension == 0
+    assert snapshot.fingerprint == vectors.corpus_fingerprint(space, [])
+    with store.repository.engine.connect() as connection:
+        for table in (members, embeddings):
+            assert connection.execute(select(table).where(
+                table.c.collection == store.repository.collection)).all() == []
+    assert index.search("public body", 8) == []
+    assert last_route()["reason"] == "no_vector_hits" and calls == previous_calls
+    reader = vectors.VectorStore(store.repository)
+    assert reader.load() and reader.view_for(snapshot.fingerprint) is not None
+    assert len(reader.view()) == 0 and reader.view().scores([], 8) == {}
+
+
+def test_cold_empty_corpus_publishes_a_zero_dimension_snapshot(database, monkeypatch):
+    store, calls = database
+    monkeypatch.setattr(settings, "embedding_dim", 0)
+    assert store.repository.snapshot() is None
+    result = store.update([], vectors.space_from_settings())
+    assert result["ok"] and result["dim"] == 0 and result["embedded"] == 0
+    assert result["api_calls"] == result["logical_batches"] == 0 and calls == []
+    snapshot = store.repository.snapshot()
+    assert snapshot is not None and snapshot.count == snapshot.dimension == 0
+    assert store.update([], vectors.space_from_settings())["skipped"] == "aligned"
+
+
+def test_minimal_supported_pool_can_build_and_search(database):
+    store, _ = database
+    repository = PostgresRepository(settings.rag_vector_dsn, store.repository.collection,
+                                    pool_size=2)
+    try:
+        process = vectors.VectorStore(repository)
+        assert process.update(chunks("first"), vectors.space_from_settings())["ok"]
+        assert process.view().scores([1, 0], 1) == {0: pytest.approx(1)}
+    finally:
+        repository.close()
