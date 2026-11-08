@@ -5,6 +5,7 @@ import json
 
 import pytest
 
+from eval import request_metrics
 from eval import slot_stability as stability
 
 
@@ -38,7 +39,8 @@ def report():
     return {"suite_sha256": "suite", "selected_suite_sha256": "selected",
             "evaluator_sha256": {"online_baseline.py": "evaluator"},
             "service_version": {"sha": "build"},
-            "metrics": [{"source": "native", "build": "build", "model": "model"}],
+            "metrics": {"unreadable": [], "groups": [
+                {"source": "native", "build": "build", "model": "model"}]},
             "cases": [{"id": "task", "status": "passed", "result": result(
                 {"tool": "prepare", "args": {"name": "correct"}})}]}
 
@@ -66,6 +68,23 @@ def test_current_reports_count_failure_with_missing_args_and_leave_evidence_inta
     assert [source.read_bytes() for source in (first, second)] == before
 
 
+def test_report_identity_uses_current_request_metrics_producer(tmp_path, report):
+    trace = write(tmp_path, "trace.json", {
+        "input": {"source": "evaluation", "runtime": {
+            "name": "langchain", "build_sha": "build", "model": "model"}},
+        "events": [], "reply": "done"})
+    report["metrics"] = request_metrics.collect([trace])
+    assert report["metrics"]["unreadable"] == 0
+    assert collect([write(tmp_path, "report.json", report)])["trials"] == 1
+
+
+@pytest.mark.parametrize("metrics", [[], {}, {"groups": []}, {"groups": None}])
+def test_missing_current_model_groups_are_rejected(tmp_path, report, metrics):
+    report["metrics"] = metrics
+    with pytest.raises(ValueError, match="measured model identity"):
+        collect([write(tmp_path, "empty.json", report)])
+
+
 @pytest.mark.parametrize("field", ["suite_sha256", "selected_suite_sha256",
                                    "evaluator_sha256", "service_version", "metrics"])
 def test_mixed_evidence_populations_are_rejected(tmp_path, report, field):
@@ -90,7 +109,7 @@ def test_duplicate_reports_unknown_status_or_missing_case_are_not_success(tmp_pa
 
 
 def test_single_report_must_match_measured_and_advertised_builds(tmp_path, report):
-    report["metrics"][0]["build"] = "other-build"
+    report["metrics"]["groups"][0]["build"] = "other-build"
     with pytest.raises(ValueError, match="measured build differs"):
         collect([write(tmp_path, "contradictory.json", report)])
 
@@ -106,17 +125,17 @@ def test_incomplete_or_untyped_build_evidence_is_not_usable(tmp_path, report, fa
     elif fault == "numeric_sha":
         report["service_version"]["sha"] = 7
     elif fault == "missing_metric_build":
-        report["metrics"][0].pop("build")
+        report["metrics"]["groups"][0].pop("build")
     elif fault == "numeric_metric_build":
-        report["metrics"][0]["build"] = 7
+        report["metrics"]["groups"][0]["build"] = 7
     else:
-        report["metrics"] = [None]
+        report["metrics"]["groups"] = [None]
     with pytest.raises(ValueError):
         collect([write(tmp_path, fault + ".json", report)])
 
 
 def test_archived_runtime_label_and_typed_slot_values_remain_usable(tmp_path, report):
-    report["metrics"][0]["source"] = "native"
+    report["metrics"]["groups"][0]["source"] = "native"
     report["cases"][0]["result"] = result({"tool": "prepare", "args": {"name": [7, True, None]}})
     before = write(tmp_path, "archive.json", report)
     row = collect([before])

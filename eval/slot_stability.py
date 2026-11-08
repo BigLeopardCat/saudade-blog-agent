@@ -41,11 +41,14 @@ def summarize(values):
 
 def _identity(report):
     metrics = report.get("metrics")
-    if not isinstance(metrics, list) or not metrics:
+    if not isinstance(metrics, dict):
         raise ValueError("report lacks measured model identity")
-    if any(not isinstance(row, dict) for row in metrics):
+    groups = metrics.get("groups")
+    if not isinstance(groups, list) or not groups:
+        raise ValueError("report lacks measured model identity")
+    if any(not isinstance(row, dict) for row in groups):
         raise ValueError("invalid measured model identity")
-    models = {(row.get("source"), row.get("build"), row.get("model")) for row in metrics}
+    models = {(row.get("source"), row.get("build"), row.get("model")) for row in groups}
     if any(not isinstance(value, str) or not value or value == "unknown"
            for row in models for value in row):
         raise ValueError("unknown model or build in report")
