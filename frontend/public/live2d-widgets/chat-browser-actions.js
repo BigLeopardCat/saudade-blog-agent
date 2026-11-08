@@ -33,8 +33,8 @@
       }
       store(pending);
       await engine.ready;
-      const until = Date.now() + 6000;
-      while (owns(pending) && ctx.state.isSending && Date.now() < until)
+      const until = performance.now() + 6000;
+      while (owns(pending) && ctx.state.isSending && performance.now() < until)
         await new Promise(resolve => setTimeout(resolve, 25));
       if (active !== pending || !owns(pending)) {
         if (active === pending) { active = null; clear(); }
@@ -52,6 +52,9 @@
       }
     };
     const watch = (pending, ready, processFrom) => {
+      // Use a monotonic timer while this document is alive. Persisted wall time
+      // is only used to recover the remaining local wait after a reload.
+      const deadline = performance.now() + Math.min(6000, Math.max(0, pending.deadline - Date.now()));
       let navigationReady = !ready, failed = false;
       if (ready) Promise.resolve(ready).then(() => { navigationReady = true; }, () => { failed = true; });
       const tick = () => {
@@ -61,7 +64,7 @@
           ? Object.entries(pending.settings).every(([name, mode]) => settings()[name] === mode)
           : path() === pending.path;
         if (navigationReady && reached) { void settle(pending, 'completed', processFrom); return; }
-        if (Date.now() >= pending.deadline) { void settle(pending, 'timeout', processFrom); return; }
+        if (performance.now() >= deadline) { void settle(pending, 'timeout', processFrom); return; }
         setTimeout(tick, 40);
       };
       tick();
@@ -96,15 +99,16 @@
         if (recent.some(item => item.id === id)) return true;
         sessionStorage.setItem(seenKey, JSON.stringify([...recent, { id, ts: Date.now() }]));
       } catch (_) { /* The server still validates the one-use command outcome. */ }
+      const remaining = Number.isFinite(command.expires_in_ms) ? Math.max(0, command.expires_in_ms) : 0;
       const pending = { ...command, actor: actor(), convId: context.convId, original: context.original,
         process: [...(context.processFrom?.querySelectorAll('.agent-process-line') || [])]
           .slice(-24).map(line => ({ cls: 'step', text: line.textContent })),
         path: url.pathname + url.search + url.hash,
-        deadline: Date.now() + Math.min(6000, Math.max(1000, command.timeout_ms || 6000)) };
+        deadline: Date.now() + Math.min(remaining, 6000, Math.max(1000, command.timeout_ms || 6000)) };
       active = pending;
       store(pending);
       sessionStorage.setItem('chat_open', '1');
-      if (Number.isFinite(command.expires_at) && Date.now() >= command.expires_at * 1000) {
+      if (remaining === 0) {
         void settle(pending, 'timeout', context.processFrom);
         return true;
       }

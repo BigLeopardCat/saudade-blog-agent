@@ -48,7 +48,10 @@ def test_repeated_actions_have_distinct_ids_and_resume_each_checkpoint(kind):
         identities.append(command['command_id'])
         assert command['request_id'] == f'invocation-{index}'
         again = list(runtime().stream_events({'resume_task': 'repeat-task'}, config))[-1]
-        assert again.execution['client_action'] == command
+        restored = again.execution['client_action']
+        assert {k: v for k, v in restored.items() if k != 'expires_in_ms'} == {
+            k: v for k, v in command.items() if k != 'expires_in_ms'}
+        assert 0 < restored['expires_in_ms'] <= command['expires_in_ms'] <= 60_000
         assert len(calls) == index + 1
         report = {'command_id': command['command_id'], 'status': 'completed',
                   'path': target if kind == 'navigate' else '/'}
