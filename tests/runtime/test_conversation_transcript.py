@@ -1,5 +1,7 @@
 """Check real provider payload continuity through conversation commits and reloads."""
 
+import uuid
+
 import httpx
 import pytest
 from _framework_fixture import call, model_replies
@@ -82,16 +84,17 @@ def test_wire_prefix_keeps_context_parallel_calls_and_complete_sources_after_rel
 def test_transcript_removes_approval_secrets_without_rewriting_visible_preparation():
     from agent.runtime import transcript
 
+    approval_token = uuid.uuid4().hex
     user = HumanMessage(content="Prepare a change", id="user")
     call_id = {"name": "prepare_favorite_change", "args": {}, "id": "prepare"}
     prepared = ToolMessage(content='{"status":"awaiting_confirmation","executed":false}',
         name=call_id['name'], tool_call_id='prepare', artifact={
             "kind": "prepared", "phase": "awaiting_approval", "proposal": {
-                "execution": {"pending_confirm": {"token": "SECRET_APPROVAL_CANARY"}}}})
+                "execution": {"pending_confirm": {"token": approval_token}}}})
     saved = transcript.finish([user, AIMessage(content="", tool_calls=[call_id]), prepared,
                                AIMessage(content="Please review.")], "Please review.",
                               Principal(7, "admin", SOURCE_ASSERTION), [user])
-    assert "SECRET_APPROVAL_CANARY" not in str(saved)
+    assert approval_token not in str(saved)
     assert saved[2].content == prepared.content and saved[2].artifact == {"kind": "prepared"}
 
 
