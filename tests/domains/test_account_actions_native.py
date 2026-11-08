@@ -192,6 +192,21 @@ def test_prepare_is_read_only_and_replay_applies_exact_change_once(
     assert accounts["rows"] == original and accounts["writes"] == 0
     assert all(request.url.path.endswith("/prepare") for request in accounts["requests"])
     assert "#" + str(args.get("account_id", 11)) in prepared.reply
+    from agent.runtime.approval_messages import prepared as approval_message
+
+    message = approval_message({"name": "prepare_account_" + action, "id": "change"}, {
+        "execution": prepared.execution, "reply": prepared.reply}, [])
+    visible = json.loads(message.content)
+    assert visible["preparation_facts"] == {
+        "account_id": args.get("account_id", 11),
+        "system_notification": {
+            "count_after_execution": 1, "content": "backend_fixed_status_template",
+            "includes_user_authored_notice": False, "queued": False,
+        },
+    }
+    assert visible["executed"] is False and accounts["notifications"] == 0
+    assert prepared.execution["pending_confirm"]["token"] not in message.content
+    assert "version" not in message.content
     ledger = Ledger(str(tmp_path / "once.sqlite3"))
     for _ in range(2):
         result = transactions.execute(signed, admin_config(), None, ledger=ledger)
