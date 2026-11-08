@@ -9,7 +9,7 @@ from fastapi import FastAPI
 from agent.runtime.workers import RequestWorkers
 from config.settings import settings
 from rag import search as rag_search
-from rag import wordgraph
+from rag import vector_index, wordgraph
 from utils.logging import setup_logging
 
 logger = logging.getLogger(__name__)
@@ -32,8 +32,10 @@ async def lifespan(app: FastAPI):
 
     app.state.chat_slots = asyncio.BoundedSemaphore(MAX_CONCURRENT_STREAMS)
     resources = ExitStack()
+    resources.callback(vector_index.close)
     workers = RequestWorkers(request_timeout=settings.stream_total_timeout)
     app.state.workers = workers
+    vector_index.start_background(workers.warm_up)
     try:
         _provider = settings.check_provider()
         logger.info("LLM provider ready (provider=%s)", _provider)
@@ -53,6 +55,7 @@ async def lifespan(app: FastAPI):
         workers.warm_up(rag_search.warm)
         yield
     finally:
+        vector_index.stop_background()
         workers.stop()
         try:
             await workers.aclose()
@@ -61,4 +64,4 @@ async def lifespan(app: FastAPI):
             app.state.scheduling = None
             app.state.workers = None
             await asyncio.to_thread(resources.close)
-        logger.info("Agent stopped; request workers and checkpoint pool closed")
+        logger.info("Agent stopped; request workers and database pools closed")

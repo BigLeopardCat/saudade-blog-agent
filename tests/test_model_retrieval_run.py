@@ -5,6 +5,7 @@ from pathlib import Path
 
 import httpx
 import pytest
+from _rag_store import memory_store, memory_vectors  # noqa: F401
 from openai import OpenAI
 from test_embedding_inputs import profile as profile
 
@@ -25,6 +26,9 @@ def endpoint(monkeypatch, tmp_path):
     }.items():
         monkeypatch.setattr(settings, name, value)
     monkeypatch.setattr(vector_index, "_store", None)
+    monkeypatch.setenv("SAUDADE_RAG_EVAL_DSN", settings.rag_vector_dsn)
+    monkeypatch.setattr(runner, "VectorStore",
+                        lambda repository: memory_store(repository.collection))
     monkeypatch.setattr(vector_index, "_query_cache", {})
     monkeypatch.setattr(vector_index, "_query_order", [])
     monkeypatch.setattr(chunks, "MAX_CHARS", chunks.MAX_CHARS)
@@ -50,7 +54,7 @@ def endpoint(monkeypatch, tmp_path):
 def arguments(tmp_path, *extra):
     return [str(FIXTURE), "--split", "test", "--base-url",
             "https://embedding.fixture.test/v1", "--model", "fixture", "--expected-dim", "2",
-            "--index-dir", str(tmp_path / "index"), "--output", str(tmp_path / "report.json"),
+            "--collection", "eval-" + tmp_path.name, "--output", str(tmp_path / "report.json"),
             *extra]
 
 

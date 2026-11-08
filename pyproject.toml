@@ -33,6 +33,8 @@ dependencies = [
     "openai==2.44.0",
     "psycopg[binary]==3.3.6",
     "psycopg-pool==3.3.3",
+    "pgvector==0.5.1",
+    "sqlalchemy==2.1.6",
     "pydantic==2.13.4",
     "pydantic-settings==2.14.2",
     # JWT authentication uses the installed PyJWT implementation.

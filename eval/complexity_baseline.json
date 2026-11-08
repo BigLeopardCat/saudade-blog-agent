@@ -43,10 +43,6 @@
     "c": 31,
     "lines": 41
   },
-  "rag/vector_index.py::VectorStore._update_locked": {
-    "c": 32,
-    "lines": 84
-  },
   "scripts/build_word_graph.py::main": {
     "c": 39,
     "lines": 219
@@ -102,10 +98,6 @@
   "tests/test_trace_retention.py::main": {
     "c": 47,
     "lines": 164
-  },
-  "tests/test_vector_index.py::test_vector_index": {
-    "c": 66,
-    "lines": 351
   },
   "tests/test_wordlist_gate.py::test_wordlist_gate": {
     "c": 58,

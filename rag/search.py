@@ -286,21 +286,33 @@ class RagIndex:
         except InputProfileError:
             return [], "embedding_profile_error", 0
         store = get_store()
-        store.load()        # Observe committed generations from other workers.
+        store.load()
         view = store.view_for(corpus_fingerprint(space, chunks))
         if view is None:
             self._warm_vectors(chunks)    # 后台补建/补齐；本轮不阻塞、不等它
             return [], degraded_reason() or "no_vectors", len(store.missing())
-        if len(view) != len(chunks):    # 不变式②在装载时已验，这里防"指纹撞上别的语料"
+        if len(view) != len(chunks):
             logger.warning("向量视图 %d 行 != 语料 %d chunk——本轮退回纯词法",
                            len(view), len(chunks))
             return [], "stale_view", len(store.missing())
+        if not chunks:
+            return [], "no_vector_hits", 0
         qv = embed_query(query)
         if qv is None:
             return [], "query_embed_failed", len(store.missing())
-        sims = view.similar(qv)
-        ranked = rank_documents(chunks, {i:s for i, s in enumerate(sims) if s > 0},
-                                revision)[:max(1, top_k)]
+        from sqlalchemy.exc import SQLAlchemyError
+
+        from rag.postgres import StaleSnapshot
+
+        try:
+            scores = view.scores(qv, max(1, top_k))
+        except StaleSnapshot:
+            return [], "corpus_changed", len(store.missing())
+        except (SQLAlchemyError, ValueError):
+            logger.warning("PostgreSQL vector query is unavailable")
+            store.record_failure()
+            return [], "vector_database_unavailable", len(store.missing())
+        ranked = rank_documents(chunks, scores, revision)[:max(1, top_k)]
         for r in ranked:
             r["score"] = round(r["score"], 4)
             r["sections"] = r["sections"][:2]

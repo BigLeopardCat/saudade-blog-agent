@@ -1,6 +1,7 @@
 """Fixed candidate windows preserve weak matches, raw queries and fallback evidence."""
 
 import pytest
+from _rag_store import memory_store, memory_vectors  # noqa: F401
 
 from config import settings
 from rag import search, vector_index
@@ -52,7 +53,7 @@ def test_missing_vectors_preserve_the_complete_lexical_window(index, monkeypatch
     monkeypatch.setattr(settings, "embedding_api_key", "fixture-key")
     monkeypatch.setattr(settings, "embedding_model", "fixture-model")
     monkeypatch.setattr(settings, "embedding_profile", "")
-    monkeypatch.setattr(vector_index, "_store", vector_index.VectorStore(tmp_path))
+    monkeypatch.setattr(vector_index, "_store", memory_store(tmp_path))
 
     def forbidden(*args, **kwargs):
         pytest.fail("a missing vector view must not send a query embedding request")
@@ -75,3 +76,25 @@ def test_standard_offline_run_does_not_score_unavailable_as_empty(monkeypatch):
     monkeypatch.setattr(search.RagIndex, "_lexical_ranked", lambda *args: None)
     with pytest.raises(RuntimeError, match="offline index unavailable"):
         bm25_run(data, 5)
+
+
+def test_database_query_failure_preserves_lexical_results_and_updates_cached_health(
+    index, monkeypatch, tmp_path
+):
+    from sqlalchemy.exc import OperationalError
+
+    monkeypatch.setattr(settings, "rag_hybrid_enabled", True)
+    monkeypatch.setattr(settings, "embedding_api_key", "fixture-key")
+    monkeypatch.setattr(settings, "embedding_model", "fixture-model")
+    monkeypatch.setattr(settings, "embedding_profile", "")
+    monkeypatch.setattr(vector_index, "_embed_texts", lambda texts, _: [[1, 0] for _ in texts])
+    store = memory_store(tmp_path)
+    monkeypatch.setattr(vector_index, "_store", store)
+    assert store.update(index._chunks, vector_index.space_from_settings())["ok"]
+    def unavailable(*args):
+        raise OperationalError("synthetic query failure", {}, RuntimeError())
+    monkeypatch.setattr(store.repository, "scores", unavailable)
+    lexical = index._lexical_ranked("端口", 5)
+    assert index.search("端口", 5) == lexical
+    assert search.last_route()["reason"] == "vector_database_unavailable"
+    assert vector_index.route_status()["state"] == "vector_database_unavailable"

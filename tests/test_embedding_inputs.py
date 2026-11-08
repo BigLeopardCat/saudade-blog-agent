@@ -5,6 +5,7 @@ import json
 
 import httpx
 import pytest
+from _rag_store import memory_store, memory_vectors  # noqa: F401
 from openai import OpenAI
 from tokenizers import Tokenizer, models, pre_tokenizers, processors
 
@@ -139,7 +140,7 @@ def test_production_retrieval_uses_refined_vectors_and_reuses_unchanged_inputs(
     profile, monkeypatch, tmp_path
 ):
     sent = sdk(monkeypatch)
-    store = vectors.VectorStore(tmp_path / "cache")
+    store = memory_store(tmp_path / "cache")
     monkeypatch.setattr(vectors, "_store", store)
     source = "## 路径\n" + "长文本" * 120 + "TAIL"
     index = search.RagIndex(corpus_loader=lambda: documents(source), vector_warmer=lambda _: None)
@@ -177,7 +178,7 @@ def test_long_queries_are_complete_distinct_and_over_budget_never_reach_sdk(
 ):
     change_profile(profile, monkeypatch, max_tokens=1024)
     sent = sdk(monkeypatch)
-    monkeypatch.setattr(vectors, "_store", vectors.VectorStore(tmp_path / "cache"))
+    monkeypatch.setattr(vectors, "_store", memory_store(tmp_path / "cache"))
     query = "中" * 600 + "TAIL"
     assert vectors.embed_query(query) is not None
     assert vectors.embed_query(query) is not None
@@ -204,7 +205,7 @@ def test_profile_changes_invalidate_both_live_view_and_content_cache(
     profile, monkeypatch, tmp_path, changes
 ):
     sent = sdk(monkeypatch)
-    store = vectors.VectorStore(tmp_path / "cache")
+    store = memory_store(tmp_path / "cache")
     chunks = [{"type": "note", "id": 1, "title": "T", "section": "s", "text": "body"}]
     old = vectors.space_from_settings()
     assert store.update(chunks, old)["embedded"] == 1
@@ -237,7 +238,7 @@ def test_invalid_profiles_leave_lexical_retrieval_available_without_embedding_re
         )
     else:
         change_profile(profile, monkeypatch, max_tokens=2)
-    monkeypatch.setattr(vectors, "_store", vectors.VectorStore(tmp_path / "cache"))
+    monkeypatch.setattr(vectors, "_store", memory_store(tmp_path / "cache"))
     index = search.RagIndex(corpus_loader=lambda: documents("needle"), vector_warmer=lambda _: None)
     index.build()
     assert index.search("needle")[0]["id"] == 1
@@ -250,7 +251,7 @@ def test_api_without_profile_retains_full_query_and_needs_no_tokenizer(monkeypat
     monkeypatch.setattr(settings, "embedding_profile", "")
     monkeypatch.setattr(settings, "embedding_api_key", "fixture-key")
     sent = sdk(monkeypatch)
-    monkeypatch.setattr(vectors, "_store", vectors.VectorStore(tmp_path / "cache"))
+    monkeypatch.setattr(vectors, "_store", memory_store(tmp_path / "cache"))
     query = "API query " * 70 + "TAIL"
     assert vectors.embed_query(query) is not None and sent == [query]
     assert vectors.space_from_settings().profile == ""

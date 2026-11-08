@@ -8,6 +8,7 @@ import math
 from pathlib import Path
 
 import httpx
+from sqlalchemy.exc import SQLAlchemyError
 
 from config import settings
 from config.settings import Settings
@@ -20,20 +21,23 @@ from rag.embedding_inputs import (
     query_text,
     vector_chunks,
 )
+from rag.postgres import PostgresRepository
 from rag.search import RagIndex, last_route
 
 
 def status() -> dict:
-    store = vectors.get_store()
-    store.load()
-    view = store.view()
+    store = vectors.get_store() if settings.rag_vector_dsn.strip() else None
+    if store is not None:
+        store.load()
+    view = store.view() if store is not None else None
     policy = active_profile()
     return {
         "model": settings.embedding_model,
         "requested_dimensions": settings.embedding_dim,
         "actual_dimensions": view.dim if view else None,
         "profile_signature": policy.signature if policy else None,
-        "index_directory": str(Path(settings.rag_vector_dir).resolve()),
+        "storage": "postgresql-pgvector",
+        "collection": settings.rag_vector_collection,
         "route": vectors.route_status(),
     }
 
@@ -100,7 +104,7 @@ def prepare(index: RagIndex, execute: bool, max_new: int) -> dict:
     texts = [document_text(c.get("title", ""), c["text"], policy) for c in chunks]
     store = vectors.get_store()
     store.load()
-    _, _, rows = store._read_cache()
+    rows = store.available(space)
     retry = set(store.missing())
     keys = {vectors.chunk_key(space, t) for t in texts}
     pending = {k for k in keys if k not in rows or k in retry}
@@ -126,6 +130,7 @@ def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--env-file", type=Path, help="same private EnvironmentFile used by Agent")
     commands = parser.add_subparsers(dest="command", required=True)
+    commands.add_parser("setup", help="explicitly create PostgreSQL extension/schema/tables")
     inspect = commands.add_parser("status")
     inspect.add_argument("--require-vectors", action="store_true")
     check = commands.add_parser("probe")
@@ -145,6 +150,7 @@ def main(argv=None) -> int:
         or (args.command == "query" and args.top_k < 1)
     ):
         parser.error("positive dimension/top-k and nonnegative max-new required")
+    result: dict
     try:
         if args.env_file:
             if not args.env_file.is_file():
@@ -155,7 +161,14 @@ def main(argv=None) -> int:
             for name in Settings.model_fields:
                 setattr(settings, name, getattr(loaded, name))
             # tools.base captures BLOG_API_BASE at import; index construction happens later.
-        if args.command == "status":
+        if args.command == "setup":
+            repository = PostgresRepository(settings.rag_vector_dsn, settings.rag_vector_collection)
+            try:
+                repository.setup()
+                result = {"ok": True, "storage": "postgresql-pgvector"}
+            finally:
+                repository.close()
+        elif args.command == "status":
             result = status()
             if args.require_vectors:
                 result["ok"] = result["route"]["active"] and result["route"]["missing"] == 0
@@ -179,7 +192,8 @@ def main(argv=None) -> int:
                     "hits": hits,
                     "index": index.status(),
                 }
-    except (CorpusUnavailable, InputProfileError, ValueError, OSError, httpx.HTTPError) as error:
+    except (CorpusUnavailable, InputProfileError, ValueError, OSError, httpx.HTTPError,
+            SQLAlchemyError) as error:
         # Endpoint exceptions can contain URLs/credentials; keep stdout a safe diagnostic record.
         result = {"ok": False, "error_class": type(error).__name__}
     print(json.dumps(result, ensure_ascii=False, indent=2, allow_nan=False))

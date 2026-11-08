@@ -7,6 +7,7 @@ from unittest.mock import patch
 import httpx
 import pytest
 from _memory_support import config
+from _rag_store import memory_store, memory_vectors  # noqa: F401
 from langchain_core.messages import HumanMessage
 from langgraph.checkpoint.memory import InMemorySaver
 from openai import OpenAI
@@ -67,7 +68,8 @@ def coverage(result):
 
 
 @pytest.mark.parametrize(
-    "reason", ["query_embed_failed", "warming", "stale_view", "corpus_changed"]
+    "reason", ["query_embed_failed", "warming", "stale_view", "corpus_changed",
+               "missing_vector_database", "vector_database_unavailable", "vector_dimension_changed"]
 )
 @pytest.mark.parametrize("query,kind", [("unseen-term", "unavailable"), ("needle", "ok")])
 def test_degraded_route_preserves_candidates_but_never_reports_a_complete_negative(
@@ -142,7 +144,7 @@ def test_embedding_503_coverage_survives_the_actual_model_sdk_wire(
         "rag_hybrid_enabled": True,
     }.items():
         monkeypatch.setattr(settings, name, value)
-    store = vectors.VectorStore(tmp_path)
+    store = memory_store(tmp_path)
     monkeypatch.setattr(vectors, "_store", store)
     monkeypatch.setattr(vectors, "_query_cache", {})
     monkeypatch.setattr(vectors, "_query_order", [])

@@ -179,7 +179,8 @@ class Settings(BaseSettings):
     # Visitor query vectors have a bounded memory cache, separate from corpus storage.
     embedding_query_cache: int = 256
     rrf_k: int = 60
-    rag_vector_dir: str = "data/rag_vectors"
+    rag_vector_dsn: str = ""
+    rag_vector_collection: str = "blog-public"
 
     # ── Logging ─────────────────────────────────────────────────────
     log_level: str = "INFO"

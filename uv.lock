@@ -1735,6 +1735,15 @@ wheels = [
 ]
 
 [[package]]
+name = "pgvector"
+version = "0.5.1"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/f8/23/96aa38899fbf8e103766db608d6e42acac269a96e08f3003fe9da3396fed/pgvector-0.5.1.tar.gz", hash = "sha256:94998a54b801b1075d623b8fa677fcb8210a7977b88f8e2203ab115c155af2e4", size = 35714, upload-time = "2026-10-09T01:50:22.779Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/a2/8d/a9c2a531da0ebb54b4a7174450e8534a39db112a141ae3a437de28420111/pgvector-0.5.1-py3-none-any.whl", hash = "sha256:ec5bcd5ffaefe6ecb2dcc9564ca921d284564b969183bc837a144604773af8ea", size = 31056, upload-time = "2026-10-09T01:50:21.614Z" },
+]
+
+[[package]]
 name = "pillow"
 version = "13.0.0"
 source = { registry = "https://pypi.org/simple" }
@@ -2509,6 +2518,7 @@ dependencies = [
     { name = "markdown-it-py" },
     { name = "numpy" },
     { name = "openai" },
+    { name = "pgvector" },
     { name = "pillow" },
     { name = "psycopg", extra = ["binary"] },
     { name = "psycopg-pool" },
@@ -2517,6 +2527,7 @@ dependencies = [
     { name = "pyjwt" },
     { name = "scikit-learn" },
     { name = "scipy" },
+    { name = "sqlalchemy" },
     { name = "starlette" },
     { name = "tenacity" },
     { name = "uvicorn" },
@@ -2567,6 +2578,7 @@ requires-dist = [
     { name = "markdown-it-py", specifier = "==4.2.0" },
     { name = "numpy", specifier = "==2.5.4" },
     { name = "openai", specifier = "==2.44.0" },
+    { name = "pgvector", specifier = "==0.5.1" },
     { name = "pillow", specifier = "==13.0.0" },
     { name = "psycopg", extras = ["binary"], specifier = "==3.3.6" },
     { name = "psycopg-pool", specifier = "==3.3.3" },
@@ -2576,6 +2588,7 @@ requires-dist = [
     { name = "pyjwt", specifier = "==2.15.1" },
     { name = "scikit-learn", specifier = "==1.9.1" },
     { name = "scipy", specifier = "==1.18.1" },
+    { name = "sqlalchemy", specifier = "==2.1.6" },
     { name = "starlette", specifier = "==1.6.0" },
     { name = "tenacity", specifier = "==9.1.4" },
     { name = "tokenizers", marker = "extra == 'embedding-tokenizer'", specifier = "==0.22.2" },

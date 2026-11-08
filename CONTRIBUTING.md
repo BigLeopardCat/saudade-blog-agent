@@ -23,7 +23,7 @@ node --test frontend/tests/*.test.mjs
 本地可设置 `SAUDADE_PARENT_REPO` 指向该版本，`SAUDADE_REQUIRE_PARENT=1` 要求其存在。
 缺少外部依赖必须显示 skipped，不能记为通过。
 
-PostgreSQL 测试只使用显式 `SAUDADE_CKPT_TEST_DSN` 或 `SAUDADE_SCHEDULING_TEST_DSN` 指向的可丢弃实例；会创建和清理数据，不能使用部署 DSN。CI 提供临时服务。
+PostgreSQL 测试只使用显式 `SAUDADE_CKPT_TEST_DSN`、`SAUDADE_SCHEDULING_TEST_DSN` 或 `SAUDADE_RAG_TEST_DSN` 指向的可丢弃实例；会创建和清理数据，不能使用部署 DSN。CI 提供临时服务。
 
 聊天布局检查已纳入公开 CI。使用 Node 24.22.1，在 `frontend` 下执行 `npm ci`、`npx playwright install --with-deps chromium` 和 `npm run test:browser`；该入口使用 `frontend/tests/chat-ui.browser.mjs`。也支持 `PLAYWRIGHT_MODULE` 和 `CHROMIUM_EXECUTABLE` 指向已有安装。不访问模型和线上 API。
 

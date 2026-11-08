@@ -26,6 +26,7 @@ class RequestWorkers:
             raise RuntimeError("Service workers are shutting down")
         future = self.executor.submit(function)
         future.add_done_callback(self._warmup_done)
+        return future
 
     @staticmethod
     def _warmup_done(future):

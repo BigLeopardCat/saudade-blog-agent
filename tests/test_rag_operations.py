@@ -3,6 +3,7 @@
 import json
 
 import pytest
+from _rag_store import memory_store, memory_vectors  # noqa: F401
 
 from config import settings
 from rag import manage, search
@@ -19,10 +20,9 @@ def operations(monkeypatch, tmp_path):
         "embedding_profile": "",
         "embedding_dim": 2,
         "rag_hybrid_enabled": True,
-        "rag_vector_dir": str(tmp_path),
     }.items():
         monkeypatch.setattr(settings, name, value)
-    monkeypatch.setattr(vectors, "_store", vectors.VectorStore(tmp_path))
+    monkeypatch.setattr(vectors, "_store", memory_store(tmp_path))
     monkeypatch.setattr(vectors, "_query_cache", {})
     monkeypatch.setattr(vectors, "_query_order", [])
     sent = []
@@ -105,7 +105,7 @@ def test_source_outage_cannot_publish_empty_index(operations, monkeypatch, capsy
         "ok": False,
         "error_class": "CorpusUnavailable",
     }
-    assert operations == [] and not vectors.get_store().manifest_path.exists()
+    assert operations == [] and vectors.get_store().repository.snapshot() is None
 
 
 def test_probe_checks_shape_and_nonzero(operations, monkeypatch):

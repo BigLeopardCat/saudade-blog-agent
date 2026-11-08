@@ -382,7 +382,7 @@ def run(args):
             "RAG_HYBRID_ENABLED": "0",
             "TRACE_DIR": str(work / "traces"),
             "DELEGATION_DIR": str(work / "delegations"),
-            "RAG_VECTOR_DIR": str(work / "vectors"),
+            "RAG_VECTOR_DSN": "",
         }
         agent = child(
             stack,

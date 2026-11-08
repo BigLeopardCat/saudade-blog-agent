@@ -7,6 +7,7 @@ from threading import Event
 
 import httpx
 import pytest
+from _rag_store import memory_store, memory_vectors  # noqa: F401
 
 from agent.runtime.control import AgentCancelled, RequestControl, request_scope
 from config import settings
@@ -71,13 +72,13 @@ def test_only_multi_input_413_is_split_and_actual_wire_count_is_persisted(wire, 
                                                                         monkeypatch):
     requests = wire(lambda texts, count: 413 if len(texts) > 1 else 200)
     monkeypatch.setattr(settings, "embedding_batch_size", 2)
-    store = vectors.VectorStore(tmp_path)
+    store = memory_store(tmp_path)
     chunks = [{"type": "note", "id": index, "title": "T", "section": "S", "text": text}
               for index, text in enumerate(["first", "second"], 1)]
     result = store.update(chunks, vectors.space_from_settings())
     assert result["ok"] and result["api_calls"] == len(requests) == 3
     assert result["logical_batches"] == 1
-    stats = json.loads(store.manifest_path.read_bytes())["stats"]
+    stats = store.repository.snapshot().stats
     assert stats["api_calls"] == 3 and stats["logical_batches"] == 1
     repeated = store.update(chunks, vectors.space_from_settings())
     assert repeated["api_calls"] == repeated["logical_batches"] == 0
@@ -99,16 +100,16 @@ def test_a_successful_prefix_survives_a_later_endpoint_outage(wire):
     assert len(requests) == 2
 
 
-def test_failed_first_generation_reports_real_attempts_without_publishing_partial_files(wire,
+def test_failed_initial_build_reports_real_attempts_without_publishing_partial_membership(wire,
                                                                                       tmp_path):
     requests = wire(lambda texts, count: 503)
-    store = vectors.VectorStore(tmp_path)
+    store = memory_store(tmp_path)
     chunks = [{"type": "note", "id": index, "title": "T", "section": "S", "text": str(index)}
               for index in range(1, 4)]
     result = store.update(chunks, vectors.space_from_settings())
     assert result["ok"] is False and result["api_calls"] == len(requests) == 1
     assert result["logical_batches"] == result["missing"] == 3
-    assert not store.manifest_path.exists()
+    assert store.repository.snapshot() is None
 
 
 def test_transport_timeout_does_not_retry_the_batch(wire, monkeypatch):
