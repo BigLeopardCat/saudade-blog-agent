@@ -207,7 +207,7 @@ def test_runtime_discovers_catalog_without_legacy(backend, monkeypatch, name):
     assert len(backend["requests"]) == 1
 
 
-@pytest.mark.parametrize("schema_budget, retains_domain", [(4096, False), (16000, True)])
+@pytest.mark.parametrize("schema_budget, retains_domain", [(512, False), (4096, True)])
 def test_account_lookup_keeps_facts_and_bounds_unused_preparations(
         backend, monkeypatch, schema_budget, retains_domain):
     from langchain_core.messages import AIMessage, HumanMessage, ToolMessage

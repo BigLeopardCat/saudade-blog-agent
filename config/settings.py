@@ -103,7 +103,7 @@ class Settings(BaseSettings):
     agent_reasoning_effort: Literal["none", "low", "high", "max"] = "none"
     agent_output_tokens: int = Field(default=4096, ge=128)
     agent_tool_result_tokens: int = Field(default=12000, ge=128)
-    # Soft target: reclaim idle domains, never reject tools needed by the active task.
+    # Additional domain schemas; fixed tools/discovery remain in the complete request budget.
     agent_tool_schema_tokens: int = Field(default=4096, ge=128)
     agent_summary_output_tokens: int = Field(default=4096, ge=128)
     agent_compaction_trigger: float = Field(default=0.8, gt=0, lt=1)
