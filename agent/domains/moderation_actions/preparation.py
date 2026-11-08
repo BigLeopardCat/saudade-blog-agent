@@ -29,11 +29,7 @@ def _question(resource, action, current):
     state = ("待审", "已通过", "已驳回")[current["approved"]]
     text += f"；现状：{state}\n原文：{current['content']}\n"
     if action == "delete":
-        text += (
-            "永久删除这条留言，不可恢复。"
-            if resource == "board"
-            else "软删除这条评论，后台保留记录；无恢复入口。"
-        )
+        text += "删除这条内容。"
     elif action == "pass":
         text += "将审核结果改为通过，并清空驳回理由。"
     else:
@@ -107,6 +103,9 @@ def prepare_moderation_change(
         executor="moderation",
         question=question,
         target=question,
+        notices=[{"kind": "warning", "text": ("永久删除这条留言，不可恢复。"
+                  if resource == "board" else "软删除这条评论，后台保留记录；无恢复入口。")}]
+        if action == "delete" else [],
     )
 
 

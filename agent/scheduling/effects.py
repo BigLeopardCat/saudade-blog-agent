@@ -146,7 +146,8 @@ def task_title(write):
     return f"文章变更：{len(change['items'])} 篇"
 
 
-def propose(principal: Principal, cid, executor, spec, question, target, schedule):
+def propose(principal: Principal, cid, executor, spec, question, target, schedule, *,
+            preparation_facts=None, notices=()):
     from agent.proposals import proposal
     from config.settings import settings
     from tools.result import unavailable
@@ -181,6 +182,8 @@ def propose(principal: Principal, cid, executor, spec, question, target, schedul
         executor="automations",
         target=target,
         timing=timing_facts(definition),
+        preparation_facts=preparation_facts,
+        notices=notices,
         question=f"时间：{time_description(definition)}\n{details}\n"
         "确认后到期自动执行以上变更；目标状态变化时停止并通知你，不擅自改写计划。",
     )

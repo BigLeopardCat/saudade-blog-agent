@@ -187,7 +187,10 @@ def test_preparation_is_zero_write_and_signs_exact_collection_version(
     if resource == "comment":
         assert "真实文章" in question and "关联 2 条" in question
     if action == "delete":
-        assert "不可恢复" in question or "无恢复入口" in question
+        warning = result.execution["pending_confirm"]["notices"][0]
+        assert warning["kind"] == "warning"
+        assert ("不可恢复" if resource == "board" else "无恢复入口") in warning["text"]
+        assert warning["text"] not in question
     assert all(request.method == "GET" for request in moderation["requests"])
     assert moderation["writes"] == 0 and not result.execution["receipts"]
     assert result.execution["pending_confirm"]["token"] not in result.reply

@@ -15,13 +15,16 @@ def proposal(
     schedule=None,
     timing=None,
     preparation_facts=None,
+    notices=(),
 ):
     if schedule is not None:
         from agent.scheduling.effects import propose
 
-        return propose(principal, cid, executor, spec, question, target, schedule)
+        return propose(principal, cid, executor, spec, question, target, schedule,
+                       preparation_facts=preparation_facts, notices=notices)
 
     from agent import confirm
+    from agent.contracts.events import ConfirmationNotice
     from agent.runtime.results import TurnResult
     from tools.base import unavailable
 
@@ -48,12 +51,16 @@ def proposal(
             {"label": label, "value": f"pick:{index}", "kind": "choice"}
             for index, label in enumerate(choices)
         ]
-    reply = question + "\n确认后执行；修改需求直接在聊天里说。"
+    system_notices = [ConfirmationNotice.model_validate(notice).model_dump()
+                      for notice in notices]
+    system_notices.append({"kind": "info", "text": "确认后执行；修改需求直接在聊天里说。"})
+    reply = question
     return TurnResult(
         reply,
         {
             "pending_confirm": {
                 "q": question,
+                "notices": system_notices,
                 "opts": options,
                 "token": token,
                 "specs": specs,

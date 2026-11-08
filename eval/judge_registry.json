@@ -191,7 +191,7 @@
         0
       ],
       "agent/domains/article_actions/deletion.py": [
-        0,
+        2,
         0
       ],
       "agent/domains/article_actions/preparation.py": [
@@ -327,7 +327,7 @@
         0
       ],
       "agent/domains/gallery/folders.py": [
-        0,
+        1,
         0
       ],
       "agent/domains/gallery/image_actions.py": [
@@ -335,7 +335,7 @@
         0
       ],
       "agent/domains/gallery/preparation.py": [
-        0,
+        1,
         0
       ],
       "agent/domains/gallery/reads.py": [
@@ -359,7 +359,7 @@
         0
       ],
       "agent/domains/image_generation/tools.py": [
-        0,
+        1,
         0
       ],
       "agent/domains/image_generation/transactions.py": [
@@ -483,7 +483,7 @@
         0
       ],
       "agent/domains/removals.py": [
-        0,
+        1,
         0
       ],
       "agent/domains/tags/__init__.py": [
@@ -503,7 +503,7 @@
         0
       ],
       "agent/domains/talks.py": [
-        0,
+        1,
         0
       ],
       "agent/domains/todos/__init__.py": [
@@ -511,7 +511,7 @@
         0
       ],
       "agent/domains/todos/batch.py": [
-        0,
+        1,
         0
       ],
       "agent/domains/todos/deletion.py": [
@@ -519,7 +519,7 @@
         0
       ],
       "agent/domains/todos/preparation.py": [
-        4,
+        5,
         0
       ],
       "agent/domains/todos/targets.py": [
@@ -631,7 +631,7 @@
         0
       ],
       "agent/proposals.py": [
-        2,
+        3,
         0
       ],
       "agent/reports.py": [
@@ -964,7 +964,7 @@
       ]
     },
     "total": [
-      299,
+      309,
       0
     ]
   },
