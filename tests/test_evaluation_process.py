@@ -22,7 +22,7 @@ def test_invalid_scenario_call_limit_fails_before_an_online_run(tmp_path, maximu
     suite = tmp_path / "suite.jsonl"
     suite.write_text(json.dumps({"id": "bounded-search", "identity": "user",
         "user_input": "search", "gold": {"max_model_calls": maximum}}) + "\n")
-    with pytest.raises(ValueError, match="model-call acceptance limit"):
+    with pytest.raises(ValueError, match="max_model_calls acceptance limit"):
         online_baseline.load_suite(suite)
 
 

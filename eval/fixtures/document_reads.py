@@ -57,6 +57,25 @@ def _validate_range(offset: int, max_chars: int, section: str, revision: str) ->
         raise ValueError("续读或按小节 id 读取时必须带 contentRevision，防止跨版本拼接")
 
 
+def _directory(rows):
+    return [{"id": row["section_id"], "title": row["section"], "path": row["path"]}
+            for row in rows if row["level"]]
+
+
+def _outline_page(article_id, title, content, revision, available, offset):
+    if offset > len(available):
+        raise ValueError("offset exceeds section directory")
+    end = min(len(available), offset + 12)
+    return {
+        "view": "outline", "noteKey": article_id, "noteTitle": title, "noteContent": "",
+        "contentRevision": revision, "sectionSchema": sections.PARSER_VERSION,
+        "readOffset": 0, "nextOffset": None, "totalChars": len(content),
+        "readComplete": False, "source": None, "sections": available[offset:end],
+        "sectionCount": len(available), "sectionsOffset": offset,
+        "nextSectionsOffset": end if end < len(available) else None,
+    }
+
+
 def article_page(
     data: dict,
     article_id: int,
@@ -73,25 +92,11 @@ def article_page(
     if revision and revision != current:
         raise RevisionChanged("读取版本不一致，请从头重新读取以获取当前目录")
     rows = outline(content, title)
-    available = [
-        {"id": r["section_id"], "title": r["section"], "path": r["path"]}
-        for r in rows
-        if r["level"]
-    ]
+    available = _directory(rows)
     if view not in {"body", "outline"} or view == "outline" and section:
         raise ValueError("invalid document view")
     if view == "outline":
-        if offset > len(available):
-            raise ValueError("offset exceeds section directory")
-        end = min(len(available), offset + 12)
-        return {
-            "view": "outline", "noteKey": article_id, "noteTitle": title, "noteContent": "",
-            "contentRevision": current, "sectionSchema": sections.PARSER_VERSION,
-            "readOffset": 0, "nextOffset": None, "totalChars": len(content),
-            "readComplete": False, "source": None, "sections": available[offset:end],
-            "sectionCount": len(available), "sectionsOffset": offset,
-            "nextSectionsOffset": end if end < len(available) else None,
-        }
+        return _outline_page(article_id, title, content, current, available, offset)
     selected_id = ""
     out = {**data, "noteKey": article_id, "noteTitle": title}
     if section:
