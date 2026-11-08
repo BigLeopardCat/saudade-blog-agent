@@ -35,6 +35,7 @@ DOMAIN_DESCRIPTIONS = {
     "Article-tag assignment: admin_catalog.",
     "admin_account_actions": "Check exact-ID operation eligibility without a mute duration; "
     "prepare account freeze, mute or role changes. Search ambiguous names first. "
+    "Automatic notices are fixed status templates; custom messages use admin_notices. "
     + ", ".join(f"{role.value}={role_cn(role.value)}" for role in Role),
     "admin_announcements": "Global announcement publication, editing and batch deletion; deletion "
     "also removes recipients' copies.",

@@ -125,6 +125,15 @@ def _prepare(
         question=text + "\n确认执行？",
         target=text,
         schedule=schedule,
+        preparation_facts={
+            "account_id": plan["before"]["id"],
+            "system_notification": {
+                "count_after_execution": plan["notificationCount"],
+                "content": "backend_fixed_status_template",
+                "includes_user_authored_notice": False,
+                "queued": False,
+            },
+        },
     )
 
 
@@ -167,6 +176,8 @@ def prepare_account_role(
     """准备变更账号身份确认，只读。新身份明确填写admin/user/zako；只改身份，保留冻结和禁言。
     同时提供account_id和username时必须指向同一个账号。
     后端按当前操作者与目标身份核验政策；真实变更使旧登录状态失效。
+    Automatic status notices do not deliver user-authored messages. Use prepare_user_notice
+    for those, preserving any requested order before preparing this change.
     """
     return _prepare(
         "set_role", {"id": account_id, "username": username}, role, None, config, schedule=schedule
