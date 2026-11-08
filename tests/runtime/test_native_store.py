@@ -1,10 +1,11 @@
-"""Native storage adopts conversation data without loading the retired planner."""
+"""Checkpoint schema changes preserve messages without executing unknown nodes."""
 
 import secrets
 from typing import Annotated, TypedDict
 
 import pytest
 from _conversation_seed import seed_turn
+from _memory_support import ACTOR
 from _own_support import config
 from langchain_core.messages import AIMessage, HumanMessage
 from langgraph.checkpoint.memory import InMemorySaver
@@ -88,11 +89,11 @@ def test_discard_after_legacy_adoption_uses_commit_node_and_delete_rejects_late_
     store = CheckpointConversationStore(saver)
     runtime = AgentRuntime(store, application=BlogApplication())
     before = store.load(config()).messages
-    result = checkpoint.drop_last_user_turn(runtime, 42, "unidentified-turn")
+    result = checkpoint.drop_last_user_turn(runtime, 42, "unidentified-turn", principal=ACTOR)
     assert result == {"dropped": True, "why": ""}
     assert store.load(config()).messages == before
     seed_turn(store, config(), [HumanMessage(content="另一轮")], "答复")
-    assert checkpoint.delete_thread(saver, 42)
+    assert checkpoint.delete_thread(saver, 42, principal=ACTOR)
     with pytest.raises(checkpoint_store.ConversationDeleted):
         seed_turn(store, config(), [], "迟到答复")
     assert saver.get_tuple(config()) is None

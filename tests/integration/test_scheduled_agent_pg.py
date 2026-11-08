@@ -105,7 +105,8 @@ def test_background_agent_restores_observations_and_budget_on_real_checkpoint(mo
             remove_run(recovered.runtime.saver, actor.uid, run_id)
             remove_run(recovered.runtime.saver, actor.uid, run_id)
             assert not recovered.runtime.store.load(
-                {"configurable": {"thread_id": result["thread_id"]}}
+                {"configurable": {"thread_id": result["thread_id"], "principal": actor,
+                                  "user_id": actor.uid, "background_run_id": run_id}}
             ).initialized
             with psycopg.connect(scoped) as conn:
                 assert conn.execute("SELECT count(*) FROM agent_task_usage").fetchone()[0] == 0

@@ -64,9 +64,9 @@ def test_unknown_schema_is_protected_and_completed_state_is_eligible():
 
 
 def test_apply_reports_skips_and_only_counts_committed_deletions(monkeypatch):
-    from agent.runtime import checkpoint_conversations
+    from agent.runtime import approval
 
-    monkeypatch.setattr(checkpoint_conversations, "CheckpointConversationStore", Mock())
+    monkeypatch.setattr(approval, "graph", Mock())
     retire = Mock(side_effect=[{"skipped": "busy"}, {"rows": {"checkpoints": 2}},
                                {"skipped": "activity_changed"}])
     monkeypatch.setattr(retention, "_retire_thread", retire)

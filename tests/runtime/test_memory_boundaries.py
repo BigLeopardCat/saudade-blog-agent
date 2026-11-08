@@ -127,14 +127,15 @@ def test_empty_but_initialized_store_does_not_resurrect_discarded_host_history()
     saver, model = InMemorySaver(), Capture()
     selected = runtime(saver, model)
     run(selected, ChatRequest(message="丢弃我", task_id="discard-memory"))
-    assert checkpoint.drop_last_user_turn(selected, 42, "discard-memory")["dropped"]
+    assert checkpoint.drop_last_user_turn(
+        selected, 42, "discard-memory", principal=ACTOR)["dropped"]
     assert selected.store.load(config()).initialized
     req = ChatRequest(message="新问题", conversation_id=42, history_scope=SCOPE,
                       history=[{"role": "user", "content": "丢弃我"},
                                {"role": "assistant", "content": "收到。"}])
     run(selected, req)
     assert "丢弃我" not in str(model.prompts[-1])
-    assert checkpoint.delete_thread(saver, 42)
+    assert checkpoint.delete_thread(saver, 42, principal=ACTOR)
     with pytest.raises(ConversationDeleted):
         run(selected, req)
     assert saver.get_tuple(config()) is None
@@ -196,7 +197,7 @@ def test_image_turn_is_discarded_by_identity_without_parsing_image_suffixes():
     selected = runtime(saver, model)
     run(selected, ChatRequest(message="看图", task_id="discard-image",
                               image="data:image/png;base64,AA"))
-    result = checkpoint.drop_last_user_turn(selected, 42, "discard-image")
+    result = checkpoint.drop_last_user_turn(selected, 42, "discard-image", principal=ACTOR)
     assert result["dropped"] and selected.store.load(config()).messages == []
 
 

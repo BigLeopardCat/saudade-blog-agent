@@ -5,6 +5,7 @@ import threading
 from concurrent.futures import ThreadPoolExecutor
 
 import pytest
+from _memory_support import ACTOR
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from langchain_core.tools import tool
 from langgraph.checkpoint.memory import InMemorySaver
@@ -271,7 +272,7 @@ def test_conversation_deletion_removes_its_inputs_without_affecting_other_thread
     selected.inputs.open({"id":"one","scope":scope})
     selected.inputs.open({"id":"other","scope":{**scope,"conversation_id":43}})
     selected.inputs.submit("one",scope,"private","补充内容")
-    assert checkpoint.delete_thread(selected.saver,42)
+    assert checkpoint.delete_thread(selected.saver,42, principal=ACTOR)
     with pytest.raises(InputConflict):
         selected.inputs.read("one",scope)
     assert selected.inputs.read("other",{**scope,"conversation_id":43})["phase"] == "running"

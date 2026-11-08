@@ -10,6 +10,42 @@ from dataclasses import dataclass, field
 from typing import Any, Protocol, TypedDict
 
 
+class ConversationAccessDenied(PermissionError):
+    """Missing or foreign ownership must not expose or mutate conversation state."""
+
+
+def owned_config(config):
+    """Bind framework checkpoint metadata to the verified actor, never caller metadata."""
+    from agent.runtime import task_scope
+
+    cfg = (config or {}).get("configurable") or {}
+    try:
+        principal = task_scope.caller(config)
+        cid, thread = cfg.get("conversation_id"), cfg.get("thread_id")
+        background = cfg.get("background_run_id")
+        if (not isinstance(thread, str) or not thread or len(thread) > 200
+                or "\x00" in thread or (cid is not None and type(cid) not in (int, str))):
+            raise ValueError("invalid_conversation_identity")
+        if background is not None:
+            task_scope.binding(config)
+    except ValueError:
+        raise ConversationAccessDenied("conversation_not_found") from None
+    metadata = {**(config.get("metadata") or {}), "user_id": principal.uid,
+                "conversation_id": cid, "background_run_id": background}
+    return {**config, "configurable": {**cfg, "user_id": principal.uid}, "metadata": metadata}
+
+
+def require_owner(metadata, config):
+    """The framework's persisted user_id is immutable ownership, not the current role."""
+    if metadata is None:
+        return
+    cfg = config["configurable"]
+    if (type(metadata.get("user_id")) is not int or metadata["user_id"] != cfg["user_id"]
+            or metadata.get("conversation_id") != cfg.get("conversation_id")
+            or metadata.get("background_run_id") != cfg.get("background_run_id")):
+        raise ConversationAccessDenied("conversation_not_found")
+
+
 class DomainActivation(TypedDict):
     domain: str
     turn_id: str | None
@@ -88,7 +124,9 @@ class ConversationStore(Protocol):
         """Clear the matching card and append its optional facts in the same commit."""
         ...
 
-    def guard(self, config) -> AbstractContextManager: ...
+    def guard(self, config, *, timeout=60) -> AbstractContextManager:
+        """Yield the actor-bound config while serializing a conversation mutation."""
+        ...
 
     def is_resuming(self, config) -> bool: ...
 

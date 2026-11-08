@@ -5,6 +5,7 @@ from dataclasses import replace
 
 import httpx
 import pytest
+from _memory_support import ACTOR
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from langchain_core.tools import tool
 from langgraph.checkpoint.memory import InMemorySaver
@@ -17,6 +18,7 @@ from agent.products.blog.application import BlogApplication
 from agent.products.blog.capabilities import ToolCatalog
 from agent.runtime import recovery
 from agent.runtime.checkpoint_conversations import CheckpointConversationStore
+from agent.runtime.conversation_store import ConversationAccessDenied
 from agent.runtime.service import AgentRuntime
 
 pytestmark = pytest.mark.tool_scopes(read_once="read.public")
@@ -90,6 +92,14 @@ def test_changed_role_or_actor_cannot_inherit_the_unfinished_input(principal):
     fail(runtime(saver, model), config)
     changed = {"configurable": {**config["configurable"], "principal": principal,
                                  "user_id": principal.uid}}
+    if principal.uid != 7:
+        before = runtime(saver, model).get_state(config)
+        with pytest.raises(ConversationAccessDenied):
+            list(runtime(saver, model).stream_events({
+                "messages": [HumanMessage(content=FOLLOWUP)], "task_id": "second"}, changed))
+        assert runtime(saver, model).get_state(config) == before
+        assert len(model.prompts) == 1
+        return
     list(runtime(saver, model).stream_events({"messages": [HumanMessage(content=FOLLOWUP)],
                                             "task_id": "second"}, changed))
     assert not any(m.content == FIRST for m in model.prompts[-1])
@@ -100,7 +110,7 @@ def test_a_discarded_failed_turn_never_reappears_in_a_fresh_request():
     model = Responses(unavailable(), AIMessage(content="done"))
     selected = runtime(saver, model)
     fail(selected, config)
-    assert checkpoint.drop_last_user_turn(selected, 42, "first")["dropped"]
+    assert checkpoint.drop_last_user_turn(selected, 42, "first", principal=ACTOR)["dropped"]
     assert not selected.store.load(config).run
     list(selected.stream_events({"messages": [HumanMessage(content=FOLLOWUP)],
                                  "task_id": "second"}, config))

@@ -31,7 +31,8 @@ async def checkpoint_delete(conversation_id: ConversationId, request: Request, u
     if checkpoint.conversation_thread(conversation_id) is None:
         logger.warning("[checkpoint] 级联删除拒绝：会话 id 非法（%r）", conversation_id)
         return {"deleted": False, "why": "bad_conversation_id"}
-    gone = await require_workers(request).run(checkpoint.delete_thread, saver, conversation_id)
+    gone = await require_workers(request).run(
+        checkpoint.delete_thread, saver, conversation_id, principal)
     logger.info(
         "[checkpoint] 级联删除 conv=%s deleted=%s by=%s", conversation_id, gone, principal.uid
     )
@@ -50,7 +51,8 @@ async def checkpoint_drop_turn(conversation_id: ConversationId, req: DropTurnReq
     """Remove only the matching last user turn and verify the resulting checkpoint."""
     principal = require_checkpoint_cleanup(request, req.uid, conversation_id, req.turn_id)
     out = await require_workers(request).run(
-        checkpoint.drop_last_user_turn, request.app.state.runtime, conversation_id, req.turn_id
+        checkpoint.drop_last_user_turn, request.app.state.runtime, conversation_id, req.turn_id,
+        principal,
     )
     logger.info(
         "[checkpoint] 丢弃那一轮 conv=%s dropped=%s why=%s by=%s",
@@ -75,14 +77,7 @@ async def cancel(req: Cancellation, request: Request):
     if grant is None:
         raise HTTPException(403, "确认凭据无效或已过期")
     runtime, workers = require_runtime(request), require_workers(request)
-    config = {
-        "configurable": {
-            "principal": principal,
-            "user_id": principal.uid,
-            "conversation_id": req.conversation_id,
-            "thread_id": checkpoint.conversation_thread(req.conversation_id),
-        }
-    }
+    config = checkpoint.conversation_config(principal, req.conversation_id)
     try:
         return await workers.run(confirmation.cancel, runtime, grant, config)
     except (ValueError, ConversationDeleted) as exc:

@@ -18,7 +18,7 @@ import jwt
 from langgraph.checkpoint.memory import InMemorySaver
 from starlette.requests import Request
 
-from agent import confirm, delegation
+from agent import checkpoint, confirm, delegation
 from agent.products.blog.application import BlogApplication
 from agent.runtime import writes
 from agent.runtime.checkpoint_conversations import CheckpointConversationStore
@@ -136,7 +136,8 @@ def _favorite_cancel(turn, state):
     _require(not cancelled["confirm_tokens"], "cancellation created another card")
     stale = turn("", token)
     _require(not stale["exec_rows"] and not _posts(state), "cancelled card executed")
-    _require(golden_evaluation.ensure_agent().get_state({"configurable": {"thread_id": "conv_42"}})
+    _require(golden_evaluation.ensure_agent().get_state(
+        checkpoint.conversation_config(_principal(), 42))
              .values.get("pending_action") is None, "pending card was not cleared")
 
 

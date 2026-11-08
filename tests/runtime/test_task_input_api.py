@@ -112,7 +112,9 @@ def test_task_manager_lists_and_cancels_only_the_signed_owner(monkeypatch):
     }
     selected.inputs.open(task)
     selected.inputs.finish(task, [], paused=True)
-    cfg = {"configurable": {"thread_id": "conv_42"}}
+    from agent import checkpoint
+
+    cfg = checkpoint.conversation_config(principal, 42)
     selected.update_state(cfg, {"run": task})
 
     def token(uid):
@@ -136,7 +138,7 @@ def test_task_manager_lists_and_cancels_only_the_signed_owner(monkeypatch):
             assert (await client.get("/tasks/paused?user_id=7")).status_code == 401
             payload = {"user_id": 999, "conversation_id": 42, "task_id": "paused"}
             rejected = await client.post("/tasks/cancel", json=payload, headers=token(8))
-            assert rejected.status_code == 409
+            assert rejected.status_code == 404
             response = await client.post("/tasks/cancel", json=payload, headers=token(7))
             assert response.status_code == 200 and response.json()["cancelled"]
             assert selected.store.load(cfg).run is None

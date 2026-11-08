@@ -91,7 +91,9 @@ def _run(resources):
         report["ok"] = True
         return report
     finally:
-        report["deleted"] = all(checkpoint.delete_thread(saver, cid) for cid in conversations)
+        report["deleted"] = all(checkpoint.delete_thread(
+            saver, cid, principal=_config(cid)["configurable"]["principal"])
+            for cid in conversations)
 
 
 def main():

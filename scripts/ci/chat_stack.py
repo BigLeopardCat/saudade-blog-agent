@@ -262,9 +262,11 @@ def schema_sql(path, database):
     return migration
 
 
-def verify_persistence(blog_dsn, agent_dsn, result):
+def verify_persistence(blog_dsn, agent_dsn, result, uid):
     from langgraph.checkpoint.postgres import PostgresSaver
 
+    from agent import checkpoint
+    from agent.principal import SOURCE_ASSERTION, Principal
     from agent.runtime.checkpoint_conversations import CheckpointConversationStore
 
     main = result["main"]
@@ -279,9 +281,8 @@ def verify_persistence(blog_dsn, agent_dsn, result):
     )
     assert MAIN_FINAL in rows[1][1]
     with PostgresSaver.from_conn_string(agent_dsn) as saver:
-        saved = CheckpointConversationStore(saver).load(
-            {"configurable": {"thread_id": "conv_" + str(main["conversation_id"])}}
-        )
+        saved = CheckpointConversationStore(saver).load(checkpoint.conversation_config(
+            Principal(uid, "user", SOURCE_ASSERTION), main["conversation_id"]))
         assert saved.initialized and not saved.unfinished and saved.last_outcome == "responded"
         assert sum(message.type == "ai" and MAIN_FINAL in str(message.content)
                    for message in saved.messages) == 1
@@ -475,7 +476,7 @@ http {{
             timeout=90,
         )
         result = json.loads(result_file.read_text())
-        verify_persistence(blog_dsn, agent_dsn, result)
+        verify_persistence(blog_dsn, agent_dsn, result, uid)
         deadline = time.monotonic() + 5
         events = []
         while time.monotonic() < deadline:

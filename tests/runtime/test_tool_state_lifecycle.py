@@ -5,6 +5,7 @@ from threading import Event
 
 import pytest
 from _conversation_seed import seed_turn
+from _memory_support import ACTOR
 from _own_support import config
 from langchain_core.messages import AIMessageChunk, HumanMessage, SystemMessage, ToolMessage
 from langchain_core.tools import tool
@@ -18,6 +19,7 @@ from agent.products.blog.capabilities import ToolCatalog
 from agent.runtime import memory
 from agent.runtime.budget import BudgetLimits, TaskBudget, budget_scope
 from agent.runtime.checkpoint_conversations import CheckpointConversationStore
+from agent.runtime.conversation_store import ConversationAccessDenied
 from agent.runtime.service import AgentRuntime
 from agent.runtime.turns import AgentCancelled
 from tools.result import ok
@@ -139,7 +141,7 @@ def test_new_task_keeps_activation_order_after_history_compaction(
     assert calls == ["beta"]
     if trimmed:
         source = selected.store.load(config()).tool_domains["domains"][0]["turn_id"]
-        assert checkpoint.drop_last_user_turn(selected, 42, source)["dropped"]
+        assert checkpoint.drop_last_user_turn(selected, 42, source, principal=ACTOR)["dropped"]
         assert selected.store.load(config()).tool_domains["domains"] == []
 
 
@@ -196,6 +198,12 @@ def test_new_task_rebuilds_catalog_for_the_verified_scope(setup, changed):
     else:
         cfg = config(conversation_id=43, thread_id="conv_43")
     model = Model(AIMessageChunk(content="New scope."))
+    if changed == "actor":
+        before = selected.get_state(config())
+        with pytest.raises(ConversationAccessDenied):
+            turn(runtime(model), cfg=cfg)
+        assert not model.requests and selected.get_state(config()) == before
+        return
     turn(runtime(model), cfg=cfg)
     assert names(model.requests[0]) == ["load_alpha_info_tools", "load_beta_info_tools"]
 
@@ -304,7 +312,8 @@ def test_discarded_child_activation_does_not_replace_the_committed_domains(setup
         turn(selected, turn_id="discarded-child", task_id="discarded-run")
     assert [item["domain"] for item in selected.store.load(config()).tool_domains["domains"]] == [
         "alpha"]
-    assert checkpoint.drop_last_user_turn(selected, 42, "discarded-child")["dropped"]
+    assert checkpoint.drop_last_user_turn(
+        selected, 42, "discarded-child", principal=ACTOR)["dropped"]
     model = Model(AIMessageChunk(content="Fresh task."))
     turn(runtime(model), "Start a fresh task.")
     assert names(model.requests[0]) == [
@@ -337,7 +346,7 @@ def test_discard_removes_only_domains_first_activated_in_the_discarded_turn(setu
     turn(selected, turn_id="retained")
     turn(runtime(Model(call("load_alpha_info_tools"), call("load_beta_info_tools"),
                        AIMessageChunk(content="Second."))), turn_id="removed")
-    assert checkpoint.drop_last_user_turn(selected, 42, "removed")["dropped"]
+    assert checkpoint.drop_last_user_turn(selected, 42, "removed", principal=ACTOR)["dropped"]
     assert selected.store.load(config()).tool_domains["domains"] == [
         {"domain": "beta", "turn_id": "retained"}]
     following = Model(AIMessageChunk(content="Rebuilt."))
@@ -417,7 +426,7 @@ def test_deleted_conversation_removes_tool_metadata_and_cannot_resume_it(setup):
     selected = runtime(Model(call("load_beta_info_tools"), AIMessageChunk(content="Loaded.")))
     turn(selected)
     assert selected.store.load(config()).tool_domains["domains"]
-    assert checkpoint.delete_thread(selected.saver, 42)
+    assert checkpoint.delete_thread(selected.saver, 42, principal=ACTOR)
     assert selected.store.load(config()).tool_domains is None
     with pytest.raises(checkpoint_store.ConversationDeleted):
         checkpoint_store.require_active(selected.saver, "conv_42")

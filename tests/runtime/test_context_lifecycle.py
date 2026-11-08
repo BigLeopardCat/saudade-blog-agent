@@ -113,7 +113,7 @@ def test_reconstructed_budget_retains_reservation_and_settles_actual_usage():
         retry.reserve([HumanMessage(content="third")], output_limit=64)
     with pytest.raises(ValueError, match="scope"):
         for_saver(saver).load({**task, "scope": {**task["scope"], "uid": 8}})
-    assert checkpoint.delete_thread(saver, 42)
+    assert checkpoint.delete_thread(saver, 42, principal=ACTOR)
     assert for_saver(saver).rows == {}
     with pytest.raises(ValueError, match="unavailable"):
         TaskBudget().bind_task(for_saver(saver), task, create=False)

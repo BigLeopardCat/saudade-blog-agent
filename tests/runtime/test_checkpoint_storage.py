@@ -1,6 +1,7 @@
 """Bound current message state without losing source pairs or admitting deleted threads."""
 
 import pytest
+from _memory_support import ACTOR
 from langchain_core.language_models.fake_chat_models import FakeListChatModel
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from langgraph.checkpoint.memory import InMemorySaver
@@ -68,7 +69,7 @@ def test_native_checkpoint_stays_bounded_after_many_turns_and_reload(monkeypatch
     assert any(m.additional_kwargs.get("lc_source") == "summarization" for m in saved)
     assert saved[-2].content.startswith("question29")
     assert not any(m.content.startswith("question0") for m in saved)
-    assert checkpoint.delete_thread(saver, "bounded") is True
+    assert checkpoint.delete_thread(saver, "bounded", principal=ACTOR) is True
     with pytest.raises(ConversationDeleted):
         list(runtime.stream_events({"messages": [HumanMessage(content="late")]}, cfg))
     assert runtime.get_state(cfg).values == {}

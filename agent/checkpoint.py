@@ -7,15 +7,14 @@ State writes use synchronous durability. Setup is serialized
 with nonblocking advisory-lock polling on autocommit connections: an open
 transaction waiting for the setup lock can deadlock CREATE INDEX CONCURRENTLY.
 
-Conversation IDs determine checkpoint threads. Delete and discard operations
-verify their result by reading state back; lifecycle changes share the
-conversation guard used by active turns."""
+Conversation IDs determine checkpoint threads; verified actors own those threads.
+Lifecycle changes share active-turn locks and verify state after mutation."""
 
 import importlib
 import logging
 import time
 import uuid
-from contextlib import ExitStack, nullcontext
+from contextlib import ExitStack
 
 from config import settings
 
@@ -93,7 +92,7 @@ def _make_pool(dsn: str):
     )
     try:
         pool.open(wait=True, timeout=_POOL_WAIT)
-    except Exception as e:                                  # 连不上/超时/认证失败
+    except Exception as e:
         pool.close()
         raise RuntimeError(
             f"checkpoint DSN 连不上（{redact(dsn)}）：{type(e).__name__}: {e}。"
@@ -127,7 +126,6 @@ def wait_for_setup_lock(conn, *, now=time.monotonic, sleep=time.sleep,
         sleep(_SETUP_POLL)
 
 
-# 无效索引：`indisvalid=false` 的索引在 `current_schema()` 里、挂在 `checkpoint*` 表上。
 _INVALID_IDX_SQL = """
 SELECT c.relname AS name
   FROM pg_index i
@@ -173,8 +171,7 @@ def _setup_under_lock(saver, *, pool, now=time.monotonic, sleep=time.sleep,
             task_budget.setup(conn)
             idem_pg.initialize(conn)
         finally:
-            # `autocommit=True` 下 `pg_try_advisory_lock` 是**会话级**的，必须显式解锁
-            # （池会复用连接，不解锁等于把这把锁带进下一个请求）。
+            # Session advisory locks must be released before the connection is pooled.
             conn.execute("SELECT pg_advisory_unlock(%s)", (_SETUP_LOCK,))
 
 
@@ -224,15 +221,28 @@ def live_saver(agent) -> object | None:
     return runtime_probe.saver_of(agent)
 
 
-def delete_thread(saver, conversation_id: object) -> bool:
+def conversation_config(principal, conversation_id):
+    """One verified identity for cleanup, reads, continuation and signed confirmations."""
+    from agent.runtime.conversation_store import owned_config
+
+    return owned_config({"configurable": {
+        "principal": principal, "user_id": principal.uid,
+        "conversation_id": conversation_id, "thread_id": conversation_thread(conversation_id),
+    }})
+
+
+def delete_thread(saver, conversation_id: object, principal) -> bool:
     """Delete one conversation under its turn lock and verify that it is unreadable."""
     tid = conversation_thread(conversation_id)
     if tid is None:
         return False
-    from agent.runtime.turns import conversation_turn
-    config = {"configurable": {"thread_id": tid, "allow_deleted_thread": True}}
-    with conversation_turn(saver, config):
+    from agent.runtime.checkpoint_conversations import CheckpointConversationStore
+
+    config = conversation_config(principal, conversation_id)
+    config["configurable"]["allow_deleted_thread"] = True
+    with CheckpointConversationStore(saver).guard(config):
         from agent.runtime import checkpoint_store
+
         checkpoint_store.mark_deleted(saver, tid)
         saver.delete_thread(tid)
         from agent.runtime.task_inputs import for_saver
@@ -242,26 +252,7 @@ def delete_thread(saver, conversation_id: object) -> bool:
         return saver.get_tuple(config) is None
 
 
-def thread_is_resuming(agent, thread_id: object) -> bool:
-    """Check whether the previous turn has unfinished nodes.
-
-    Unavailable state is treated as unfinished so write replay stays conservative."""
-    tid = str(thread_id or "").strip()
-    getter = getattr(agent, "get_state", None)
-    if not tid or getter is None:
-        logger.warning("[checkpoint] 取不到图状态（thread=%r，get_state=%s）⇒ 按上一轮没跑完办",
-                       tid, getter is not None)
-        return True
-    try:
-        snap = getter({"configurable": {"thread_id": tid}})
-    except Exception as e:
-        # Unknown state must not authorize write replay.
-        logger.warning("[checkpoint] 读图状态失败（thread=%s, %s）⇒ 按上一轮没跑完办", tid, e)
-        return True
-    return bool(getattr(snap, "next", ()) or ())
-
-
-def drop_last_user_turn(agent, conversation_id: object, turn_id: str) -> dict:
+def drop_last_user_turn(agent, conversation_id: object, turn_id: str, principal) -> dict:
     """Discard a stable user turn; retries cannot target another same-text message."""
     from agent.runtime.checkpoint_store import ConversationDeleted
 
@@ -273,10 +264,9 @@ def drop_last_user_turn(agent, conversation_id: object, turn_id: str) -> dict:
     if not turn_id or len(turn_id) > 100 or not all(
             char.isascii() and (char.isalnum() or char in "_-") for char in turn_id):
         return {"dropped": False, "why": "invalid_turn_id"}
-    guard = getattr(agent, "conversation_guard", None)
-    config = {"configurable": {"thread_id": tid}}
+    config = conversation_config(principal, conversation_id)
     try:
-        with guard(config) if guard is not None else nullcontext():
+        with agent.conversation_guard(config):
             return _drop_turn(agent, config, turn_id)
     except ConversationDeleted:
         return {"dropped": True, "why": "conversation_deleted"}

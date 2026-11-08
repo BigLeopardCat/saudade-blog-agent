@@ -88,8 +88,7 @@ def current_card(runtime, principal, cid, task_id):
     from agent import checkpoint, confirm
     from agent.runtime import approval, task_scope
 
-    config = {"configurable": {"principal": principal, "user_id": principal.uid,
-              "conversation_id": cid, "thread_id": checkpoint.conversation_thread(cid)}}
+    config = checkpoint.conversation_config(principal, cid)
     snapshot = runtime.store.load(config)
     task = snapshot.run
     result = {"task_id": task_id, "confirmation": None}

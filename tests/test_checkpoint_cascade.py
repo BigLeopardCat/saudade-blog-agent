@@ -3,16 +3,21 @@
 import asyncio
 
 import pytest
+from _memory_support import ACTOR
+from _own_support import config
 from _parent_repo import read
 from _service import app, cleanup_headers
+from langchain_core.messages import HumanMessage
+from langgraph.checkpoint.memory import InMemorySaver
 
 from agent import checkpoint
 from agent.api.routes import conversations
+from agent.runtime.checkpoint_conversations import CheckpointConversationStore
 
 
-class FakeSaver:
+class ObservedSaver(InMemorySaver):
     def __init__(self, *, noop=False):
-        self.rows = {}
+        super().__init__()
         self.calls = []
         self.noop = noop
         self.saver = self
@@ -20,32 +25,34 @@ class FakeSaver:
     def delete_thread(self, thread_id):
         self.calls.append(thread_id)
         if not self.noop:
-            self.rows.pop(thread_id, None)
+            super().delete_thread(thread_id)
 
-    def get_tuple(self, config):
-        return self.rows.get(config["configurable"]["thread_id"])
+
+def seed(saver):
+    CheckpointConversationStore(saver).update_state(
+        config(), {"messages": [HumanMessage(content="saved")]})
 
 
 @pytest.mark.parametrize("present", [False, True])
 def test_delete_verifies_absence_at_conversation_coordinate(present):
-    saver = FakeSaver()
+    saver = ObservedSaver()
     if present:
-        saver.rows["conv_42"] = {"checkpoint": "saved"}
-    assert checkpoint.delete_thread(saver, 42)
+        seed(saver)
+    assert checkpoint.delete_thread(saver, 42, principal=ACTOR)
     assert saver.calls == ["conv_42"]
     assert saver.get_tuple({"configurable": {"thread_id": "conv_42"}}) is None
 
 
 def test_noop_delete_cannot_report_success():
-    saver = FakeSaver(noop=True)
-    saver.rows["conv_42"] = {"checkpoint": "saved"}
-    assert checkpoint.delete_thread(saver, 42) is False
+    saver = ObservedSaver(noop=True)
+    seed(saver)
+    assert checkpoint.delete_thread(saver, 42, principal=ACTOR) is False
 
 
 @pytest.mark.parametrize("value", [None, "", "   ", 0, "0", "None"])
 def test_invalid_conversation_never_calls_saver(value):
-    saver = FakeSaver()
-    assert checkpoint.delete_thread(saver, value) is False
+    saver = ObservedSaver()
+    assert checkpoint.delete_thread(saver, value, principal=ACTOR) is False
     assert saver.calls == []
 
 
@@ -57,9 +64,9 @@ def test_invalid_conversation_never_calls_saver(value):
 ])
 def test_endpoint_reports_real_deletion_result(
         monkeypatch, host_identity, mode, conversation, expected):
-    saver = None if mode == "missing" else FakeSaver(noop=mode == "noop")
+    saver = None if mode == "missing" else ObservedSaver(noop=mode == "noop")
     if saver:
-        saver.rows["conv_42"] = {"checkpoint": "saved"}
+        seed(saver)
     monkeypatch.setattr(app.state, "runtime", saver)
     request = type("Request", (), {"headers": cleanup_headers(conversation), "app": app})()
     result = asyncio.run(conversations.checkpoint_delete(conversation, request))

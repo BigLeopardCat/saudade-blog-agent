@@ -15,6 +15,7 @@ from langgraph.checkpoint.memory import InMemorySaver
 from agent.principal import SOURCE_ASSERTION, SOURCE_BODY, Principal
 from agent.products.blog.context import conversation_session
 from agent.runtime.control import RequestControl
+from agent.runtime.conversation_store import ConversationAccessDenied
 from agent.runtime.workers import RequestWorkers
 from config.settings import settings
 from models.llm import get_llm
@@ -58,7 +59,7 @@ def test_native_turns_reuse_affinity_on_the_actual_sdk_http_wire(monkeypatch):
                 return self
 
             def stream(self, messages, **kwargs):
-                # Constructing the SDK inside each turn used to generate a new routing ID.
+                # Verify routing affinity with a fresh SDK client on each turn.
                 response = get_llm(api_key="fixture", model="fixture",
                                    base_url="http://fixture/v1", http_client=client,
                                    streaming=False).invoke(messages)
@@ -67,10 +68,17 @@ def test_native_turns_reuse_affinity_on_the_actual_sdk_http_wire(monkeypatch):
         from agent.api.schemas import ChatRequest
 
         saver = InMemorySaver()
-        for cfg in (config(), config(), config(Principal(8, "user", SOURCE_ASSERTION))):
+        for cfg in (config(), config()):
             run(runtime(saver, Model()), ChatRequest(message="hello"), cfg)
+        foreign = config(Principal(8, "user", SOURCE_ASSERTION))
+        with pytest.raises(ConversationAccessDenied):
+            run(runtime(saver, Model()), ChatRequest(message="hello"), foreign)
+        assert len(requests) == 2
+        foreign["configurable"].update(conversation_id=43, thread_id="conv_43")
+        run(runtime(saver, Model()), ChatRequest(message="hello"), foreign)
     headers = [request.headers["x-opencode-session"] for request in requests]
     assert headers[0] == headers[1] == conversation_session(ACTOR, 42)
+    assert headers[2] == conversation_session(Principal(8, "user", SOURCE_ASSERTION), 43)
     assert headers[2] != headers[0]
     assert all(request.headers["user-agent"] == "saudade-blog-agent/1.0" for request in requests)
     assert all("session_id" not in json.loads(request.content) for request in requests)

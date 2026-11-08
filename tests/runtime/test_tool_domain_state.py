@@ -7,7 +7,7 @@ from typing import Annotated
 
 import httpx
 import pytest
-from _memory_support import Capture, config
+from _memory_support import ACTOR, Capture, config
 from langchain.agents.middleware import AgentMiddleware, AgentState
 from langchain_core.messages import AIMessage, HumanMessage
 from langchain_core.tools import tool
@@ -276,7 +276,7 @@ def test_real_sdk_followup_retains_domain_schema_and_independent_task_budget(
         assert saved["domains"] == [{"domain": "public_activity", "turn_id": (
             "turn-0" if reuse else "turn-1")}]
         assert saved["scope"] == {"uid": 7, "role": "user", "conversation_id": 42}
-        assert checkpoint.drop_last_user_turn(selected, 42, "turn-1")["dropped"]
+        assert checkpoint.drop_last_user_turn(selected, 42, "turn-1", principal=ACTOR)["dropped"]
         retained = selected.store.load(config()).tool_domains["domains"]
         assert retained == (saved["domains"] if reuse else [])
         cost = {"reuse": reuse, "empty": empty, "first_menu": len(initial),

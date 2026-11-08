@@ -456,7 +456,9 @@ def test_streamed_preface_and_terminal_confirmation_each_render_once(monkeypatch
         assert reply.count("准备好了。") == 1
         assert question not in reply and len(cards) == 1 and cards[0]["q"] == question
         assert not any(e.get("node") == "summarizer" for e in events)
-        stored = runtime.get_state({"configurable": {"thread_id": "conv_42"}})
+        from _own_support import config
+
+        stored = runtime.get_state(config())
         assert "".join(m.content for m in stored.values["messages"] if m.type == "ai") == reply
 
     asyncio.run(scenario())

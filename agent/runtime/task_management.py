@@ -2,7 +2,6 @@
 
 from agent.principal import is_verified_identity
 from agent.runtime.task_inputs import InputConflict, binding
-from agent.runtime.turns import conversation_turn
 
 
 def list_paused(runtime, principal, limit=20):
@@ -20,7 +19,7 @@ def cancel_paused(runtime, principal, conversation_id, task_id):
     scope = binding(principal, conversation_id)
     config = {"configurable": {"principal": principal, "user_id": principal.uid,
               "conversation_id": conversation_id, "thread_id": f"conv_{conversation_id}"}}
-    with conversation_turn(runtime.saver, config, timeout=2):
+    with runtime.store.guard(config, timeout=2):
         state = runtime.inputs.read(task_id, scope)
         snapshot = runtime.store.load(config)
         if (state["phase"] not in {"paused", "awaiting_confirmation"} or not snapshot.run
