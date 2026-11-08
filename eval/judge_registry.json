@@ -988,7 +988,7 @@
       "file": "agent/action_text.py",
       "kind": "collection",
       "name": "_NOARG_VERB",
-      "size": 49,
+      "size": 52,
       "category": "system_data",
       "q": "_NOARG_VERB",
       "why": "工具名对应的进度与回执显示文案，不参与意图路由或授权。"
