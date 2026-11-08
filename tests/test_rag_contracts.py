@@ -274,7 +274,7 @@ def test_rrf_preserves_revision_and_readable_ranges_from_both_arms():
 
 
 def test_ranked_candidates_expose_bounded_section_locators_without_guessing_offsets():
-    from tools.notes import _rag_hit
+    from rag.reading import candidate_text
 
     hit = {"title": "文档", "type": "note", "id": 46, "score": 0.9,
            "sections": ["概述", "布局", "交互", "额外"],
@@ -282,7 +282,7 @@ def test_ranked_candidates_expose_bounded_section_locators_without_guessing_offs
            "matches": [{"section_id": "s1", "offset": 0},
                        {"section_id": "s1", "offset": 50},
                        {"section_id": "s20", "offset": 96}]}
-    result = _rag_hit(1, hit)
+    result = candidate_text(1, hit)
     assert "rank=1" in result and "score=" not in result
     assert "section=s1 revision=rev1 offset=0" in result
     assert "section=s20 revision=rev1 offset=96" in result

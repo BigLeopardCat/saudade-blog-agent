@@ -76,51 +76,78 @@ def corpus_fingerprint(space: Space, chunks: list[dict]) -> str:
     return hashlib.sha256("\n".join(parts).encode("utf-8")).hexdigest()
 
 
-def _merge_locations(target, row):
-    """Keep each section label and its source ranges attached to the section identity."""
-    for section, ident in zip(row.get("sections") or [], row.get("section_ids") or []):
-        location = target.setdefault(ident, {"section": section, "section_id": ident,
-                                            "matches": []})
+FUSION_POLICY = "document-section-location-rrf-v1"
+_SOURCE_FIELDS = ("corpus_revision", "content_revision", "document_revision", "section_schema")
+
+
+def _merge_locations(target, row, arm):
+    ranks = []
+    for label, ident in zip(row.get("sections") or [], row.get("section_ids") or []):
+        if not isinstance(ident, str) or not ident.startswith("s") or not ident[1:].isdigit():
+            continue
+        if ident not in ranks:
+            ranks.append(ident)
+        location = target.setdefault(ident, {"section": label, "section_id": ident,
+                                            "matches": {}, "ranks": [[], []]})
         for match in row.get("matches") or []:
-            if match.get("section_id") == ident and match not in location["matches"]:
-                location["matches"].append(dict(match))
+            start, end = match.get("offset"), match.get("end")
+            if (match.get("section_id") != ident or type(start) is not int or start < 0
+                    or type(end) is not int or end <= start):
+                continue
+            key = (start, end)
+            location["matches"].setdefault(key, dict(match))
+            if key not in location["ranks"][arm]:
+                location["ranks"][arm].append(key)
+    return ranks
 
 
 def rrf_fuse(lex: list[dict], vec: list[dict], k: int, top_k: int) -> list[dict]:
-    """Use official LangChain RRF ordering and preserve source-locator relationships."""
+    """Apply official RRF to documents, their sections and version-bound source locations."""
     from langchain_classic.retrievers.ensemble import EnsembleRetriever
     from langchain_core.documents import Document
     from langchain_core.runnables import RunnableLambda
 
+    ensemble = EnsembleRetriever(retrievers=[RunnableLambda(lambda _: []),
+                                            RunnableLambda(lambda _: [])],
+                                 weights=[0.5, 0.5], c=k, id_key="identity")
+
+    def ranked(identities):
+        documents = [[Document(page_content="", metadata={"identity": key}) for key in rows]
+                     for rows in identities]
+        return [item.metadata["identity"]
+                for item in ensemble.weighted_reciprocal_rank(documents)]
+
     info: dict[tuple, dict] = {}
-    ranked_documents = []
-    for ranked in (lex, vec):
-        documents = []
-        for item in ranked:
+    document_ranks: list[list[tuple]] = [[], []]
+    for arm, rows in enumerate((lex, vec)):
+        for item in rows:
             key = (item["type"], item["id"])
-            documents.append(Document(page_content="", metadata={"identity": key}))
+            if key in document_ranks[arm]:
+                raise ValueError("Duplicate document identity in a retriever result")
+            document_ranks[arm].append(key)
             if key not in info:
-                info[key] = {**item, "_locations": {}}
-                info[key].pop("score", None)
-            _merge_locations(info[key]["_locations"], item)
-        ranked_documents.append(documents)
-
-    def retriever_for(rows: list[Document]) -> RunnableLambda:
-        return RunnableLambda(lambda _: rows)
-
-    ensemble = EnsembleRetriever(
-        retrievers=[retriever_for(rows) for rows in ranked_documents],
-        weights=[0.5, 0.5], c=k, id_key="identity",
-    )
+                data = {name: value for name, value in item.items() if name != "score"}
+                info[key] = {"data": data, "locations": {}, "sections": [[], []]}
+            elif any(info[key]["data"].get(name) != item.get(name) for name in _SOURCE_FIELDS):
+                raise ValueError("Cannot fuse different source revisions or section schemas")
+            info[key]["sections"][arm] = _merge_locations(info[key]["locations"], item, arm)
     out = []
-    for rank, document in enumerate(ensemble.invoke("")[:max(1, top_k)], 1):
-        row = dict(info[document.metadata["identity"]], rank=rank)
-        locations = list(row.pop("_locations").values())[:3]
-        row["locators"] = locations
-        row["sections"] = [location["section"] for location in locations[:2]]
-        row["section_ids"] = [location["section_id"] for location in locations[:2]]
-        row["matches"] = [match for location in locations for match in location["matches"]][:3]
-        out.append(row)
+    for rank, key in enumerate(ranked(document_ranks)[:max(1, top_k)], 1):
+        data = info[key]
+        locations = []
+        for ident in ranked(data["sections"])[:3]:
+            original = data["locations"][ident]
+            matches = [original["matches"][match] for match in ranked(original["ranks"])]
+            locations.append({"section": original["section"], "section_id": ident,
+                              "matches": matches})
+        # Give each selected section a readable range before retaining extra ranges in one section.
+        matches = [row["matches"][0] for row in locations if row["matches"]]
+        for location in locations:
+            matches.extend(location["matches"][1:])
+        out.append({**data["data"], "rank": rank, "locators": locations,
+                    "sections": [row["section"] for row in locations],
+                    "section_ids": [row["section_id"] for row in locations],
+                    "matches": matches[:3]})
     return out
 
 
@@ -274,8 +301,8 @@ class VectorView:
     def __len__(self):
         return self.snapshot.count
 
-    def scores(self, query, top_k):
-        return self.repository.scores(self.snapshot, list(query), top_k)
+    def scores(self, query, top_k, *, article_id=None):
+        return self.repository.scores(self.snapshot, list(query), top_k, article_id=article_id)
 
 
 class VectorStore:

@@ -107,7 +107,8 @@ index 和不一致维度。未声明请求维度的模型若实际维度变化�
 重新生成，先估算费用，原文件由维护者确认新索引验收后清理，不自动删除回滚材料。
 
 RRF 排名交给 LangChain 官方 EnsembleRetriever.weighted_reciprocal_rank，
-仅合并博客来源位置，不复制其评分算法。该公开接口只返回顺序，混合候选因此提供 rank，
+对文档、小节 ID 及同节范围分别按两路名次融合，不让词法先入的三个小节挤掉语义定位。
+只合并同一来源版本和解析 schema，重复标题按小节 ID 区分；不复制评分算法。该公开接口只返回顺序，混合候选因此提供 rank，
 不伪造 score；词法、向量单路的原生分仅用于各路排序和截断，工具出口统一显示排名。
 langchain-classic 只提供此 retriever，不装配第二套运行时。
 RRF 是相对排名，不是相关性置信度。启用前比较固定语料上的命中、噪声、证据获取、
@@ -115,13 +116,23 @@ RRF 是相对排名，不是相关性置信度。启用前比较固定语料上�
 
 ## 6. 正文、小节和范围
 
-get_article_detail 增加 offset、max_chars、revision，返回 contentRevision、
+已知文章内的局部问题可以用 `rag_search(article_id=...)` 定位，再按返回的 revision、
+section_schema、section、offset 和 max_chars 读取原文；需要全文才顺序续读。文章限定在
+BM25S 评分 mask 和 PG 距离查询的 WHERE 中生效，先限定再取文档 top_k。检索文字按完整
+候选条目缩页，结构化 evidence 只登记模型看见的候选；一个条目也放不下时返回 unavailable。
+
+get_article_detail 默认 `view=body`，使用 offset、max_chars、revision，返回 contentRevision、
 readOffset、nextOffset、totalChars、readComplete、source 和小节 ID。
 续读范围或按小节 ID 读取必须带版本，防止编辑后跨版本拼接。
 按标题/编号只接受唯一匹配；父节读取包括子节。
 contentRevision 是包含解析策略及库版本、标题和原文的读取视图 hash；它与宿主语料传输的
 内容 revision 分开。检索候选 document_revision 使用相同读取视图版本，客户端只需原样回传。
 解析策略变化会明确拒绝旧 sN/续读版本；首次全文读取可取得当前版本与目录。
+
+`view=outline` 仅分页读取目录，不登记正文已读。每页最多 12 项，offset 是目录条目下标，
+从 nextSectionsOffset 续页；正文的 offset 则从 nextOffset 续读。两类续页都须回传
+contentRevision 与 sectionSchema。sectionsOffset、sectionCount 和 nextSectionsOffset
+使长文完整目录可遍历；预算不足时仅缩短完整目录项并同步续页，不截断定位 JSON。
 
 无结构文章和超长单节也能连续读到尾部。偏移以选定正文为准，
 切片记录与按节读取一致。预算渲染保持可解析数据，并把 nextOffset/source.end
@@ -166,4 +177,3 @@ contentRevision 是包含解析策略及库版本、标题和原文的读取视�
 
 - [Lucene BM25Similarity](https://lucene.apache.org/core/9_9_0/core/org/apache/lucene/search/similarities/BM25Similarity.html)：平均长度采用总词频/文档数。
 - [Azure RAG chunking](https://learn.microsoft.com/en-us/azure/architecture/ai-ml/guide/rag/rag-chunking-phase)：按结构和预算切分并验证效果。
-- [Lance table format](https://lance.org/format/table/)：不可变文件与版本化 manifest 的提交思想；本项目没有引入 Lance 依赖。

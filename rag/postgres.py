@@ -179,7 +179,8 @@ class PostgresRepository:
         connection.execute(delete(embeddings).where(
             embeddings.c.collection == self.collection, ~active, ~target))
 
-    def scores(self, snapshot: Snapshot, query: list[float], top_k: int) -> dict[int, float]:
+    def scores(self, snapshot: Snapshot, query: list[float], top_k: int, *,
+               article_id: int | None = None) -> dict[int, float]:
         """Exact cosine in PostgreSQL, limiting documents rather than chunks."""
         if len(query) != snapshot.dimension or top_k < 1:
             raise ValueError("Invalid vector dimension or document window")
@@ -201,7 +202,10 @@ class PostgresRepository:
                     members.c.key == embeddings.c.key,
                     members.c.dimension == embeddings.c.dimension,
                 ))).where(members.c.collection == self.collection,
-                          members.c.dimension == snapshot.dimension).cte("distances")
+                          members.c.dimension == snapshot.dimension,
+                          and_(members.c.document_type == "note",
+                               members.c.document_id == str(article_id))
+                          if article_id is not None else text("TRUE")).cte("distances")
                 documents = select(
                     candidates.c.document_type, candidates.c.document_id,
                 ).where(candidates.c.distance < 1).group_by(

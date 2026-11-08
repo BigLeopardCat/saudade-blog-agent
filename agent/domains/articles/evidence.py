@@ -164,7 +164,7 @@ class ArticleEvidence:
         if name in SEARCH_TOOLS:
             self.searched = True
             self.empty |= kind == "empty"
-            self.failed |= kind in ("unavailable", "not_found", "invalid_args")
+            self.failed |= kind in ("unavailable", "not_found", "invalid_args", "error")
             self.found |= kind == "ok" and bool(text.strip())
         elif (
             name == "get_article_detail" and args.get("doc_type", "note") == "note" and kind == "ok"
@@ -186,10 +186,14 @@ class ArticleEvidence:
         self.references.update(_article_links(body))
 
     def _observe_metadata(self, ident: int, data: dict) -> None:
-        """A verified empty body permits its metadata link without proving a body read."""
+        """Verified metadata permits a source link without recording body evidence."""
         source = data.get("source")
-        if (isinstance(source, dict) and source.get("type") == "note"
-                and type(source.get("id")) is int and source["id"] == ident):
+        outline = (data.get("view") == "outline" and type(data.get("noteId")) is int
+                   and data["noteId"] == ident
+                   and isinstance(data.get("contentRevision"), str)
+                   and re.fullmatch(r"[0-9a-f]{64}", data["contentRevision"]))
+        if outline or (isinstance(source, dict) and source.get("type") == "note"
+                       and type(source.get("id")) is int and source["id"] == ident):
             self.candidates[ident] = str(data.get("noteTitle") or "文章")
 
     def provenance(self, site):

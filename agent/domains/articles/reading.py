@@ -58,6 +58,7 @@ class DisplayMetadata(BaseModel):
 
 
 class Page(BaseModel):
+    view: Literal["body", "outline"]
     type: Kind
     id: Annotated[StrictInt, Field(gt=0, le=2_147_483_647)]
     title: Annotated[StrictStr, Field(max_length=255)]
@@ -70,6 +71,8 @@ class Page(BaseModel):
     readComplete: StrictBool
     sections: Annotated[list[Section], Field(max_length=12)]
     sectionCount: Count
+    sectionsOffset: Count
+    nextSectionsOffset: Count | None
     source: Source | None
     metadata: dict = Field(default_factory=dict)
     readSection: StrictStr | None = None
@@ -83,6 +86,15 @@ class Page(BaseModel):
             or len({row.id for row in self.sections}) != len(self.sections)
         ):
             raise ValueError("unsupported section view")
+        section_end = self.sectionsOffset + len(self.sections)
+        if (
+            section_end > self.sectionCount
+            or self.nextSectionsOffset != (section_end if section_end < self.sectionCount else None)
+            or not self.sections and self.nextSectionsOffset is not None
+            or self.view == "body" and self.sectionsOffset != 0
+            or self.view == "outline" and (self.readOffset != 0 or self.source is not None)
+        ):
+            raise ValueError("inconsistent section directory range")
         if self.source is None:
             if self.content or self.readComplete or self.nextOffset is not None:
                 raise ValueError("missing read provenance")
@@ -109,10 +121,11 @@ class Page(BaseModel):
         return self
 
 
-def project(value, kind, identifier, section, offset, limit, revision, section_schema):
+def project(value, kind, identifier, section, offset, limit, revision, section_schema, view="body"):
     page = Page.model_validate(value)
     if (
-        (page.type, page.id, page.readOffset) != (kind, identifier, offset)
+        (page.type, page.id, page.view) != (kind, identifier, view)
+        or (page.readOffset if view == "body" else page.sectionsOffset) != offset
         or len(page.content) > limit
         or revision
         and page.contentRevision != revision
@@ -130,7 +143,9 @@ def project(value, kind, identifier, section, offset, limit, revision, section_s
     data = page.model_dump(
         exclude={"metadata", "content", "type", "id", "title"}, exclude_none=False
     )
-    if kind == "note":
+    if kind == "note" and view == "outline":
+        data.update(noteId=page.id, noteTitle=page.title)
+    elif kind == "note":
         metadata = page.metadata
         data.update(DisplayMetadata.model_validate(metadata).model_dump(exclude_unset=True))
         try:
@@ -159,7 +174,7 @@ def project(value, kind, identifier, section, offset, limit, revision, section_s
         if references is None:
             data.pop("tagsTruncated", None)
         data.update(
-            noteKey=page.id,
+            noteId=page.id,
             noteTitle=page.title,
             **{"sectionText" if section else "noteContent": page.content},
         )
