@@ -52,6 +52,9 @@ Conversation 保存记忆，Task 保存执行与预算，Request 管理连接和
 
 历史列表提供有界预览，完整消息按 ID 和游标补读。当前图片使用标准多模态内容块；提交轮次只保存图片引用及哈希，不把 base64 回灌历史。模型需要时通过 `get_conversation_image` 在会话归属、固定来源、哈希和下载上限内重读。
 
+确认卡发布前的空答复或畸形协议答复最多重答一次，沿用已读取事实、原确认卡和任务预算；
+重答阶段不执行新工具。再次失败保留待确认提示，供应商截断或过滤不重试。
+
 准备操作、撤销和执行回执都是有范围的事实：`awaiting_confirmation` 不表示已写入，撤销一项操作也不证明目标实体不存在。需要当前业务状态时，调用实际查询工具。
 
 框架行为参见 [LangChain short-term memory](https://docs.langchain.com/oss/python/langchain/short-term-memory)。本项目边界由 `tests/runtime/` 及记忆、缓存、恢复回归验证。

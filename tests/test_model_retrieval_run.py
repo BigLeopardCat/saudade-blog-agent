@@ -13,6 +13,7 @@ from config import settings
 from eval import model_retrieval_run as runner
 from eval.rag_dataset import load
 from rag import DEFAULT_TOP_K, chunks, vector_index
+from rag.search import candidate_limit
 
 FIXTURE = Path(__file__).resolve().parents[1] / "eval/fixtures/offline_smoke"
 
@@ -64,7 +65,8 @@ def test_cli_defaults_share_production_cutoffs_and_record_the_complete_config(en
     report = json.loads((tmp_path / "report.json").read_text())
     assert report["configuration_mode"] == "production_retrieval_defaults"
     assert report["config"]["chunk_chars"] == production_chars
-    assert report["config"]["top_k"] == report["config"]["candidates"] == DEFAULT_TOP_K
+    assert report["config"]["top_k"] == DEFAULT_TOP_K
+    assert report["config"]["candidates"] == candidate_limit(DEFAULT_TOP_K) == 24
     assert report["config"]["cutoffs"] == [1, 3, DEFAULT_TOP_K]
     assert len(report["config_sha256"]) == len(report["code_sha256"]) == 64
     assert set(report["arms"]) == {"bm25", "vector", "hybrid"}
@@ -86,6 +88,13 @@ def test_research_pool_and_chunk_changes_are_explicit_and_not_output_limits(endp
     assert report["config"]["chunk_chars"] == 128
     assert report["config"]["candidates"] == 5 and report["config"]["top_k"] == 2
     assert all(len(hits) <= 2 for arm in report["arms"].values() for hits in arm["run"].values())
+
+
+def test_old_output_sized_pool_is_an_explicit_research_override(endpoint, tmp_path):
+    assert runner.main(arguments(tmp_path, "--candidates", str(DEFAULT_TOP_K))) == 0
+    report = json.loads((tmp_path / "report.json").read_text())
+    assert report["configuration_mode"] == "research_override"
+    assert report["config"]["candidates"] == DEFAULT_TOP_K
 
 
 @pytest.mark.parametrize("extra", [
