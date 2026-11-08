@@ -96,15 +96,18 @@ class Removal:
             f'- #{row.id}《{sanitize_untrusted(row.title, 80)}》' for row in plan.items)
         impact = (f'将同时删除 {plan.associatedNotifications} 条关联个人通知，影响所有接收者。'
                   if self.admin else '仅从本人的通知列表移除，保留全站公告和其他人的通知。')
-        more = (f'\n另有 {plan.count - len(plan.items)} 条纳入本次范围。'
-                if plan.count > len(plan.items) else '')
+        facts = {"count": plan.count, "preview_count": len(plan.items),
+                 "omitted_count": plan.count - len(plan.items),
+                 "associated_notifications": plan.associatedNotifications}
+        more = (f'\n以上展示其中 {len(plan.items)} 条，未展示 {facts["omitted_count"]} 条；'
+                f'总计仍为 {plan.count} 条。' if facts["omitted_count"] else '')
         question = (f'{target}\n\n{preview}{more}\n\n{impact}\n'
                     '只处理本次固定编号；之后新增的条目不在范围内。确认删除？')
         principal, cid = writes.bound_context(config)
         return proposal(principal, cid, self.workflow, {'tool': self.operation, 'args': {
             'ids': plan.ids, 'version': plan.version, 'kind': kind,
             'associated_notifications': plan.associatedNotifications}},
-            executor=self.executor, question=question, target=target)
+            executor=self.executor, question=question, target=target, preparation_facts=facts)
 
     def validate(self, grant, config):
         principal = writes.validate_binding(grant, config)

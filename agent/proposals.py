@@ -14,6 +14,7 @@ def proposal(
     payload=None,
     schedule=None,
     timing=None,
+    preparation_facts=None,
 ):
     if schedule is not None:
         from agent.scheduling.effects import propose
@@ -35,6 +36,9 @@ def proposal(
     if not token:
         return unavailable("确认服务暂不可用，本次未生成确认卡，也未执行改动。")
     expiry, jti = confirm.token_expiry(token), confirm.token_jti(token)
+    facts = dict(preparation_facts or {})
+    if timing is not None:
+        facts["timing"] = timing
     options = [
         {"label": "确认执行", "value": "yes", "kind": "primary"},
         {"label": "取消操作", "value": "no", "kind": "default"},
@@ -56,7 +60,7 @@ def proposal(
                 "workflow": workflow,
                 "exp": expiry,
                 "replay_safe": True,
-                **({"preparation_facts": {"timing": timing}} if timing is not None else {}),
+                **({"preparation_facts": facts} if facts else {}),
             },
             "pending_action": {
                 **({"payload": payload} if payload is not None else {}),
