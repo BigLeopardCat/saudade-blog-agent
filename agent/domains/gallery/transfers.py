@@ -71,6 +71,22 @@ class Job(BaseModel):
     result: Outcome | None = None
     error: StrictStr | None = None
 
+    @model_validator(mode="after")
+    def state_matches_result(self):
+        if self.status in {"published", "complete"}:
+            result = self.result
+            if (result is None or len(result.sourceIds) != len(result.imageIds)
+                    or len(set(result.sourceIds)) != len(result.sourceIds)
+                    or len(set(result.imageIds)) != len(result.imageIds)):
+                raise ValueError("completion requires an exact unique result")
+            if result.mode == "move" and result.sourceIds != result.imageIds:
+                raise ValueError("move must retain image identities")
+            if result.mode == "copy" and set(result.imageIds) & set(result.sourceIds):
+                raise ValueError("copy must create independent image identities")
+        elif self.result is not None:
+            raise ValueError("unpublished transfer has a completion result")
+        return self
+
 
 def outcome(value, args):
     job = Job.model_validate(value)
@@ -128,7 +144,8 @@ def prepare_gallery_transfer(intent: Intent, config: RunnableConfig) -> object:
     from agent.domains.gallery.preparation import _literal
 
     verb = "复制" if request["mode"] == "copy" else "移动"
-    provider = {"local": "本地存储", "r2": "R2 存储"}.get(request.get("storage"), "各图片当前存储")
+    provider = {"local": "本地存储", "r2": "R2 存储"}.get(
+        request.get("storage") or "", "各图片当前存储")
     names = "、".join(_literal(image.displayName or f"图片 #{image.imageKey}")
                      for image in preview.images[:10])
     destination = _literal(preview.destinationName)
