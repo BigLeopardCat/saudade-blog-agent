@@ -9,11 +9,13 @@ from langchain_core.tools import tool
 from pydantic import Field, StrictInt
 
 from agent.domains.article_metadata import tag_references
+from agent.reports import sanitize_untrusted
 from tools import base as _base
 from tools.result import (
     ToolResult,
     _shape,
     empty,
+    invalid_args,
     ok,
     unavailable,
 )
@@ -64,22 +66,21 @@ def _note_tag_metadata(row):
 
 
 def _slim_note_rows(rows):
-    """note 行数组 → 精简行数组（**认不出形态返回 None**，调用方原样透出）。
-
-    只对"看得出是 note 行"的数组动手（行里有 `noteKey`）：其它工具的列表
-    （留言/说说/设备…）字段完全不同，套同一把刀会砍掉它们的正文。
-    """
-    if not isinstance(rows, list) or not rows or not all(isinstance(r, dict) for r in rows):
-        return None
-    if not any("noteKey" in r for r in rows):
+    """Project article metadata only; unknown shapes cannot establish search results."""
+    if not isinstance(rows, list) or any(
+            not isinstance(row, dict) or type(row.get("noteKey")) is not int
+            or row["noteKey"] <= 0 for row in rows):
         return None
     out = []
     for r in rows:
+        title = r.get("noteTitle")
+        status, pinned = r.get("status"), r.get("isTop")
         slim = {
             "noteKey": r.get("noteKey"),
-            "noteTitle": r.get("noteTitle") or "",
-            "status": r.get("status") or "",
-            "isTop": r.get("isTop") or 0,
+            "noteTitle": sanitize_untrusted(title, 255) if isinstance(title, str) else None,
+            "titleTruncated": len(title) > 255 if isinstance(title, str) else None,
+            "status": status if isinstance(status, str) else None,
+            "isTop": pinned if type(pinned) is int and pinned in (0, 1) else None,
             **_note_tag_metadata(r),
         }
         slim.update(_note_counts(r))
@@ -92,16 +93,22 @@ def search_notes(keyword: Annotated[str, "搜索关键词"]) -> str | ToolResult
     """按关键词匹配文章标题、正文和标签，返回按相关度排序的文章元数据。
 
     按标题或标签查找文章用本工具，按内容主题检索可用 rag_search。
-    候选标题和链接可直接用于推荐；解读、总结或比较正文时需用 get_article_detail 读取正文。
+    返回本次查询范围和候选元数据；未命中仅表示本次公开文章关键词查询没有匹配，
+    不证明其他主题、其他查询或非公开文章不存在。解读正文需用 get_article_detail。
     """
+    if not keyword.strip():
+        return invalid_args("搜索关键词不能为空；浏览公开文章请使用文章目录。")
     data = _get("/notes/search", payload={"keyword": keyword})
     if isinstance(data, ToolResult):
         return data
-    # Successful empty results remain distinct from transport failures.
-    if not data:
-        return empty("[]")
     slim = _slim_note_rows(data)
-    return _shape(slim if slim is not None else data)
+    if slim is None:
+        return unavailable("文章搜索未返回可核对的结果，本次不能判断是否有匹配。")
+    value = {"resource": "articles", "scope": "public_articles_keyword_matches",
+             "query": keyword, "matchFields": ["title", "body", "tags"],
+             "items": slim, "returnedCount": len(slim)}
+    text = json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+    return ok(text, data=value) if slim else empty(text, data=value)
 
 
 # Document labels must stay aligned with host execution-receipt rendering.

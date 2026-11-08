@@ -27,7 +27,8 @@ _ZWSP = "\u200b"
 def sanitize_untrusted(text: str, limit: int = 40) -> str:
     """Collapse lines, bound length and break command prefixes; this is not HTML escaping."""
     s = re.sub(r"\s+", " ", text or "").strip()
-    s = _CMD_WORD_RE.sub(lambda m: m.group(0).replace(":", _ZWSP + ":").replace("：", _ZWSP + "："), s)
+    s = _CMD_WORD_RE.sub(
+        lambda m: m.group(0).replace(":", _ZWSP + ":").replace("：", _ZWSP + "："), s)
     if limit > 0 and len(s) > limit:
         s = s[:limit] + "…"
     return s
@@ -43,7 +44,6 @@ def _ts(now: datetime | None = None) -> str:
     return (now or datetime.now()).strftime("%Y-%m-%d %H:%M")
 
 
-# Server status
 
 class ServerStatusKw(TypedDict):
     """Shared keyword arguments for the server-status renderer and tool result."""
@@ -100,7 +100,6 @@ def render_server_status(*, cpu_pct: float | None, cores: int,
     return _cap("\n".join(lines))
 
 
-# Service health
 
 def render_service_health(*, services: list[tuple[str, dict]], health: dict,
                           traces: dict, sizes: list[dict],
@@ -228,7 +227,8 @@ def render_moderation_status(rows: list[dict], status: str | None = None,
     pending = [r for r in rows if r.get("approved") == APPROVED_PENDING]
     passed = [r for r in rows if r.get("approved") == APPROVED_OK]
     rejected = [r for r in rows if r.get("approved") == APPROVED_REJECT]
-    lines.append(f"- 总计 {total} 条：待审 {len(pending)}、已通过 {len(passed)}、已驳回 {len(rejected)}")
+    lines.append(f"- 总计 {total} 条：待审 {len(pending)}、已通过 {len(passed)}、"
+                 f"已驳回 {len(rejected)}")
 
     ai = {"pass": 0, "reject": 0, "flag": 0, "none": 0}
     for r in rows:
@@ -237,7 +237,8 @@ def render_moderation_status(rows: list[dict], status: str | None = None,
                  f"存疑转人工 {ai['flag']}、未走 AI {ai['none']}")
 
     # A pass verdict with pending final status belongs only in the pending group.
-    ai_passed = [r for r in rows if r.get("ai_result") == "pass" and r.get("approved") == APPROVED_OK]
+    ai_passed = [r for r in rows if r.get("ai_result") == "pass"
+                 and r.get("approved") == APPROVED_OK]
     ai_rejected = [r for r in rows if r.get("ai_result") == "reject"]
     keep_rej = [r for r in ai_rejected if r.get("approved") == APPROVED_REJECT]
     open_rej = [r for r in ai_rejected if r.get("approved") == APPROVED_OK]
@@ -397,7 +398,6 @@ def short_time(raw) -> str:
     return s[5:16] if len(s) >= 16 else s[:16]
 
 
-# User activity
 
 def render_user_stats(data: dict, now: datetime | None = None) -> str:
     """Render backend user totals; the bounded detail list cannot determine site totals."""
@@ -419,7 +419,8 @@ def render_user_stats(data: dict, now: datetime | None = None) -> str:
     elif not users:
         lines.append("- 没有任何用户产生过会话或消息")
     else:
-        lines.append(f"- 明细（按消息数倒序，共 {data.get('listedUsers', len(users))} 人，最多 50 行）:")
+        lines.append(f"- 明细（按消息数倒序，共 "
+                     f"{data.get('listedUsers', len(users))} 人，最多 50 行）:")
         for u in users:
             name = sanitize_untrusted(u.get("name") or "", 20) or f"userId:{u.get('id')}"
             last = u.get("lastActiveAt") or "无活动"
@@ -433,11 +434,10 @@ def render_user_stats(data: dict, now: datetime | None = None) -> str:
 # Keep the displayed ranking limit aligned with Rust note_stats::TOP_N.
 _RANK_TOP = 10
 
-# Metric keys and labels in display order.
-_COUNT_WORDS = (("views", "阅读"), ("likes", "点赞"), ("favorites", "收藏"))
+_COUNT_WORDS = (("views", "阅读"), ("likes", "点赞"), ("favorites", "收藏"), ("comments", "讨论"))
 
-# Aggregate fields use different keys from per-article counters.
-_TOTAL_WORDS = (("totalViews", "阅读"), ("totalLikes", "点赞"), ("totalFavorites", "收藏"))
+_TOTAL_WORDS = (("totalViews", "阅读"), ("totalLikes", "点赞"), ("totalFavorites", "收藏"),
+                ("totalComments", "讨论"))
 
 
 def _count_int(v) -> int | None:
@@ -514,24 +514,22 @@ def render_note_stats(data: dict, now: datetime | None = None) -> str:
     # Missing daily data differs from a measured all-zero series.
     daily = data.get("daily")
     lines += _daily_window_lines(data.get("dailyWindow"))
-    hit = [d for d in (daily or [])
-           if isinstance(d, dict) and ((_count_int(d.get("views")) or 0)
-                                       or (_count_int(d.get("likes")) or 0))]
+    rows = [row for row in (daily or []) if isinstance(row, dict)]
+    measured = [row for row in rows if any(
+        _count_int(row.get(metric)) is not None
+        for metric in ("views", "likes", "favorites", "comments"))]
     if daily is None:
         lines.append("- 近 30 天趋势：本次没读到（后台没有返回这一项）")
     elif not daily:
         lines.append("- 日趋势：本次未返回日明细，不能据此断言零访问。")
-    elif not hit:
-        if all(isinstance(row, dict) and _count_int(row.get("views")) == 0
-               and _count_int(row.get("likes")) == 0 for row in daily):
-            lines.append("- 近 30 天趋势：返回日期内的阅读和点赞均为零")
-        else:
-            lines.append("- 日趋势：指标缺失，不能据此断言零访问。")
+    elif not measured:
+        lines.append("- 日趋势：指标缺失，不能据此断言零访问。")
     else:
-        shown = hit[-30:]
+        shown = rows[-30:]
         days = "；".join((d.get("date") or "?") + " " + _counts_text(d) for d in shown)
-        prefix = f"…（更早还有 {len(hit) - len(shown)} 天）" if len(hit) > len(shown) else ""
-        lines.append(f"- 近 30 天趋势（只列有记录的日子，共 {len(hit)} 天）: {prefix}{days}")
+        prefix = f"…（更早还有 {len(rows) - len(shown)} 天）" if len(rows) > len(shown) else ""
+        lines.append(f"- 逐日明细（返回 {len(rows)} 个日期，保留零值；未返回日期和指标保持未知）: "
+                     f"{prefix}{days}")
 
     # Each metric ranks independently; positions cannot be shared between rankings.
     lines.append("- 名次口径：阅读/点赞/收藏三张榜各自独立排名（同一篇文章在两张榜上"
@@ -594,7 +592,6 @@ def render_note_periods(data: dict, now: datetime | None = None) -> str:
             lines.append("    · 本期榜单：本次没读到（后台没有返回这一项）")
             continue
         if not top:
-            # 榜为空 ⇔ 三个合计都是 0（Rust 侧一行都不推）。这里与"没读到"分得开。
             lines.append("    · 本期一篇被读被赞被收藏的文章都没有")
             continue
         lines.append(f"    · 本期阅读量前 {len(top)} 篇：")

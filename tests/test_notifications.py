@@ -58,7 +58,8 @@ def test_read_errors_and_truncated_all_selection_do_not_become_noops(notificatio
     notifications["hidden_unread"] = 1
     assert not isinstance(prepare(), TurnResult)
     result = prepare("selected", [103])
-    assert result.execution["noop_note"] and not result.execution.get("pending_confirm")
+    assert result.kind == "noop" and result.data["changed"] is False
+    assert result.data["selection"] == "selected" and result.data["selectedIds"] == [103]
 
 
 def test_unverified_or_unbound_identity_never_reads(notifications):

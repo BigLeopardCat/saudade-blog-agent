@@ -42,8 +42,8 @@ def _transport(monkeypatch, data):
 def test_search_preserves_same_id_in_both_levels_without_directory_requests(monkeypatch):
     calls = _transport(monkeypatch, [_source(COLLIDING_REFS)])
     result = search_notes.invoke({"keyword": "T"})
-    assert result.kind == "ok" and result.data[0]["tags"] == EXPECTED
-    assert result.data[0]["tagsTruncated"] is False
+    assert result.kind == "ok" and result.data["items"][0]["tags"] == EXPECTED
+    assert result.data["items"][0]["tagsTruncated"] is False
     assert len(calls) == 1 and calls[0][0] == "/notes/search"
 
 
@@ -73,7 +73,7 @@ def test_missing_refs_do_not_claim_no_tags(monkeypatch):
     source = _source([])
     source.pop("noteTagRefs")
     _transport(monkeypatch, [source])
-    assert search_notes.invoke({"keyword": "T"}).data[0]["tags"] is None
+    assert search_notes.invoke({"keyword": "T"}).data["items"][0]["tags"] is None
 
 
 def test_empty_refs_are_observed_no_tags(monkeypatch):
@@ -92,4 +92,5 @@ def test_typed_reference_projection_is_bounded_without_claiming_completeness(mon
     refs = [{"id": i, "level": 1, "name": str(i)} for i in range(1, 24)]
     _transport(monkeypatch, [_source(refs)])
     result = search_notes.invoke({"keyword": "T"})
-    assert len(result.data[0]["tags"]) == 20 and result.data[0]["tagsTruncated"] is True
+    row = result.data["items"][0]
+    assert len(row["tags"]) == 20 and row["tagsTruncated"] is True

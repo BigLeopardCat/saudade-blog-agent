@@ -142,7 +142,7 @@ class ArticleEvidence:
         )
         if name in SEARCH_TOOLS or name == "search_notes" or name in CATALOG_TOOLS:
             rows = payload(value)
-            if name in CATALOG_TOOLS:
+            if name in CATALOG_TOOLS or name == "search_notes" and isinstance(rows, dict):
                 rows = (
                     rows.get("items")
                     if isinstance(rows, dict) and rows.get("resource") == "articles"
