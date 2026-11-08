@@ -8,7 +8,7 @@
     "I",
     "W"
   ],
-  "total": 138,
+  "total": 134,
   "by_file": {
     "agent/hostinfo.py": 1,
     "agent/reports.py": 4,
@@ -16,7 +16,6 @@
     "eval/corpus_terms.py": 6,
     "eval/golden_fixture.py": 1,
     "eval/identity_preflight.py": 1,
-    "eval/llm_judge.py": 4,
     "eval/recall_eval.py": 11,
     "eval/trace_alert.py": 1,
     "eval/trace_metrics.py": 2,

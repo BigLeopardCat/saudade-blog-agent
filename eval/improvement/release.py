@@ -10,6 +10,8 @@ from eval.improvement.holdout import completed
 from eval.statistical_metrics import proportion
 from utils.trace_io import load_trace
 
+REVIEWER_IDENTITY = ("rubric_sha256", "evaluator_sha256", "model", "backend", "reviewer_options")
+
 
 def read(path):
     return json.loads(Path(path).read_bytes())
@@ -36,8 +38,8 @@ def verify_run(report, cases, build, role):
 
 def semantic(path, report_path):
     doc = read(path)
-    if not doc.get("rubric_sha256") or not doc.get("evaluator_sha256"):
-        raise ValueError("semantic review needs frozen rubric and evaluator hashes")
+    if any(not doc.get(key) for key in REVIEWER_IDENTITY):
+        raise ValueError("semantic review needs frozen evaluator, backend and inference identity")
     return acceptance.assess(Path(report_path).read_bytes(), doc)
 
 
@@ -67,11 +69,10 @@ def development(registry, candidate_id, before, after, before_semantic, after_se
             or left["evaluator_sha256"] != right.get("evaluator_sha256")):
         raise ValueError("paired evaluator definitions changed")
     a, b = read(before_semantic), read(after_semantic)
-    if any(a.get(key) != b.get(key) for key in ("rubric_sha256", "evaluator_sha256", "model")):
+    if any(a.get(key) != b.get(key) for key in REVIEWER_IDENTITY):
         raise ValueError("paired semantic reviewer definitions changed")
     calibration = read(calibration_path)
-    if (calibration.get("model") != b.get("model")
-            or calibration.get("rubric_sha256") != b.get("rubric_sha256")
+    if (any(calibration.get(key) != b.get(key) for key in REVIEWER_IDENTITY)
             or not calibration.get("source_sha256") or not calibration.get("rows")):
         raise ValueError("judge calibration does not match the semantic reviewer")
     calibration_result = judge_calibration.summarize(calibration["rows"])
@@ -98,8 +99,7 @@ def development(registry, candidate_id, before, after, before_semantic, after_se
         "calibration_results": calibration_result,
         "baseline": archive_run(registry, before, before_semantic),
         "candidate_run": archive_run(registry, after, after_semantic),
-        "semantic_definition": {key: b.get(key) for key in
-                                ("rubric_sha256", "evaluator_sha256", "model")},
+        "semantic_definition": {key: b.get(key) for key in REVIEWER_IDENTITY},
         "evaluator_sha256": right["evaluator_sha256"]})
 
 

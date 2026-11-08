@@ -60,6 +60,7 @@ dev = [
     "coverage[toml]==7.16.2",
     "ir-measures==0.4.3",
     "mypy==2.4.0",
+    "openevals==0.2.2",
     "pytest==9.1.1",
     "pytest-cov==7.1.0",
     "pytest-socket==0.8.1",

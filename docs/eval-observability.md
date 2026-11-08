@@ -36,8 +36,14 @@ python -m eval.release_readiness --help
 ```
 
 线上 HTTP 验收使用 `online_baseline`；隔离写入/回放使用 `native_contracts`，
-旧语料夹具共用 `golden_evaluation`。语义复核只通过 `online_judge` 审评固定报告，
+语料夹具共用 `golden_evaluation`。语义复核只通过 `online_judge` 审评固定报告，
 普通离线测试统一由 pytest 收集，不在生产 cron 中串联这些入口。
+
+语义 judge 使用开发依赖 OpenEvals，由 `eval/semantic_judge.py` 适配当前模型协议。
+执行前用 `uv sync --locked` 安装开发依赖，生产服务无需安装 OpenEvals。
+业务 rubric、证据投影、引用校验和最终验收仍由项目维护；解析失败、截断或材料缺失
+记录为未评估，不自动重试或降级。报告固定 OpenEvals 版本、输出 schema 和推理参数。
+评审期间关闭 LangSmith tracing，不额外上传材料；不为评审调用业务工具。
 
 线上先 POC，后全量，命令和目标见[发布验收](release-acceptance.md)。不得在普通 CI 默认运行线上写入或付费生图；生产材料交给外部 judge 前需脱敏和授权。
 

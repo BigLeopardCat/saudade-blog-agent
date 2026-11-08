@@ -85,7 +85,7 @@ def main() -> int:
         gp = trace_mod.finish_trace("g1", "golden_done", 1.0, 1)
         check("① golden（by_day=False）平铺在给定目录，不套按天一层",
               gp == os.path.join(gold, "case_a.json"), str(gp))
-        check("① golden 目录里 glob('*.json') 仍看得见（llm_judge 的取法）",
+        check("① golden 目录里 glob('*.json') 仍可枚举归档 trace",
               len(sorted(Path(gold).glob("*.json"))) == 1)
         check("① golden_trace 调用点显式传了 by_day=False",
               "by_day=False" in src("eval/golden_trace.py"))

@@ -16,7 +16,6 @@ sys.path.insert(0, str(ROOT))
 import models.llm as llm_mod  # noqa: E402
 from config import settings as S  # noqa: E402  （`config/__init__.py` 导出的是**实例**）
 from config.settings import KNOWN_LLM_PROVIDERS, PROVIDER_DEFAULTS, Settings  # noqa: E402
-from eval import llm_judge as judge  # noqa: E402
 
 FAILS: list[str] = []
 check = collector(FAILS)
@@ -181,9 +180,7 @@ def _test_dialect_table_covers_every_provider():
     check("没登记的服务商按默认走，但**出声**（这里静默 = 整份输出作废而没人知道）",
           got.get("type") == "json_schema" and len(cap.records) == 1,
           f"{got} {len(cap.records)} 条")
-    check("评审员的 `response_format(provider)` 是同一张表的薄包装",
-          judge.response_format("deepseek") == _JSON_OBJECT
-          and judge.response_format("qwen")["json_schema"]["name"] == "verdict")
+
 
 
 

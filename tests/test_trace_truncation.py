@@ -134,40 +134,6 @@ def _test_tier_table_is_sound():
           all(isinstance(v, int) for v in trace_mod.TOOL_RESULT_LIMITS.values()))
 
 
-def _test_judge_reads_the_marker():
-    print("[下游] 判官认标记，不自己抄一份标记文本")
-    import llm_judge
-    marked = "x" * 300 + trace_mod.truncation_mark(99999)
-    tr = {"input": {"message": "q"},
-          "events": [{"t": 1.0, "node": "execute", "event": "call", "name": "list_guestbook",
-                      "args": {}, "result": marked}],
-          "reply": "r"}
-    check("判官认得出被截断的轮（新 trace 靠标记，不靠长度）",
-          llm_judge.truncated_calls(tr) == ["list_guestbook"],
-          str(llm_judge.truncated_calls(tr)))
-    m = llm_judge.material(tr, result_limit=99999)
-    check("材料里明写这份被截断过（判官据此不判截断处之后的说法）",
-          "在 trace 里被截断过" in m)
-    src = (ROOT / "eval" / "llm_judge.py").read_text(encoding="utf-8")
-    # 提示词里**要**写出标记的形态（判官是读材料文本的人，得知道它长什么样）；
-    # 但代码里不许拿它当判据——判据只有 `utils.trace.is_truncated` 一处。
-    # 判据用 AST：注释/docstring 里的引用是无害的说明文字，**字符串字面量**才是能被拿去
-    # 比较/切分的东西——那才是"抄了一份标记文本"的形态。
-    import ast
-    tree = ast.parse(src)
-    docs = {ast.get_docstring(n, clean=False) for n in ast.walk(tree)
-            if isinstance(n, (ast.Module, ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))}
-    hits = [n.value for n in ast.walk(tree)
-            if isinstance(n, ast.Constant) and isinstance(n.value, str)
-            and trace_mod.TRUNCATION_MARK_PREFIX in n.value and n.value not in docs]
-    check("提示词里写了标记的形态（判官得认得出它）",
-          trace_mod.TRUNCATION_MARK_PREFIX in llm_judge._JUDGE_SYS)
-    check("除提示词外，判官代码里没有第二份标记文本（解析只走 utils.trace）",
-          hits == [llm_judge._JUDGE_SYS], f"{len(hits)} 处")
-    check("判官用的是 utils.trace 那一处",
-          "from utils import trace as trace_mod" in src and "trace_mod.is_truncated(" in src)
-
-
 def _test_wiring():
     print("[接线] 落盘那一处必须传工具名，否则分档不生效")
     src_runtime = (ROOT / "agent" / "runtime" / "tool_execution.py").read_text(encoding="utf-8")
@@ -187,7 +153,7 @@ def _test_wiring():
 
 def main():
     for fn in (_test_tiers, _test_env_override, _test_marker,
-               _test_tier_table_is_sound, _test_judge_reads_the_marker, _test_wiring):
+               _test_tier_table_is_sound, _test_wiring):
         fn()
     if FAILS:
         print(f"\n=== {len(FAILS)} 项失败 ===")

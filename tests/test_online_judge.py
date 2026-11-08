@@ -7,33 +7,12 @@ from pathlib import Path
 
 import httpx
 import pytest
-from langchain_core.messages import AIMessage
+from _semantic_judge_support import Model
+from _semantic_judge_support import judge_clients as judge_clients
 from openai import OpenAIError
 
-from eval import llm_judge, online_judge
+from eval import online_judge, semantic_judge
 from utils.trace import truncation_mark
-
-
-class Model:
-    model_name = "fixture-judge"
-
-    def __init__(self, verdict=None, *, error=None, finish="stop"):
-        self.verdict = verdict or {
-            "unsupported": [], "answered": True, "verdict": "ok", "reason": "有依据"}
-        self.error, self.finish = error, finish
-        self.messages = []
-
-    def bind(self, **kwargs):
-        return self
-
-    def invoke(self, messages):
-        self.messages.append(messages)
-        if self.error:
-            raise self.error
-        return AIMessage(content=json.dumps(self.verdict, ensure_ascii=False),
-                         response_metadata={"finish_reason": self.finish},
-                         usage_metadata={"input_tokens": 80, "output_tokens": 20,
-                                         "total_tokens": 100})
 
 
 def recorded(tmp_path, *, trace_extra=None, text="通知正文", **result_extra):
@@ -73,8 +52,29 @@ def test_prepared_text_is_reviewed_as_output_not_used_as_supporting_fact(tmp_pat
     assert report["rows"][0]["status"] == "suspect"
     assert report["rows"][0]["diagnostics"]["usage"]["total_tokens"] == 100
     assert report["counts"] == {"suspect": 1}
+    assert report["backend"] == semantic_judge.backend_identity()
+    assert set(report["evaluator_sha256"]) == {
+        "online_judge.py", "semantic_judge.py", "acceptance.py"}
     assessment = json.loads((tmp_path / "semantic" / "assessment.json").read_text())
     assert assessment["counts"] == {"needs_review": 1}
+
+
+def test_calibration_dry_run_freezes_the_current_backend_without_model_calls(tmp_path, monkeypatch):
+    import sys
+
+    from eval import judge_calibration
+
+    folder = tmp_path / "calibration"
+    monkeypatch.setattr(sys, "argv", ["judge_calibration", "--dry-run", "--out", str(folder)])
+    monkeypatch.setattr(semantic_judge, "make_llm",
+                        lambda **_: pytest.fail("unexpected model call"))
+    judge_calibration.main()
+    report = json.loads((folder / "report.json").read_text())
+    assert report["status"] == "not_evaluated" and report["business_requests"] == 0
+    assert report["backend"] == semantic_judge.backend_identity()
+    assert set(report["evaluator_sha256"]) == {
+        "online_judge.py", "semantic_judge.py", "acceptance.py"}
+    assert (folder / "semantic_judge.py").read_bytes() == Path(semantic_judge.__file__).read_bytes()
 
 
 def test_visible_card_text_is_reviewed_even_when_absent_from_signed_intent(tmp_path):
@@ -290,7 +290,7 @@ def test_model_override_changes_the_actual_client_not_just_report_label(monkeypa
 
     captured = {}
     monkeypatch.setattr(models.llm, "get_llm", lambda **kwargs: captured.update(kwargs))
-    llm_judge.make_llm(model="independent-judge", max_retries=0)
+    semantic_judge.make_llm(model="independent-judge", max_retries=0)
     assert captured["model"] == "independent-judge" and captured["max_retries"] == 0
 
 
@@ -300,7 +300,7 @@ def test_cli_does_not_report_success_for_failed_or_incomplete_assessment(monkeyp
     import sys
 
     monkeypatch.setattr(sys, "argv", ["online_judge", "--report", "unused", "--out", "unused"])
-    monkeypatch.setattr(llm_judge, "make_llm", lambda **kwargs: None)
+    monkeypatch.setattr(semantic_judge, "make_llm", lambda **kwargs: None)
     monkeypatch.setattr(online_judge, "review", lambda *args, **kwargs: {
         "semantic_status": "no_issue_found", "counts": {"no_issue_found": 1},
         "assessment_counts": {status: 1}})
@@ -330,8 +330,8 @@ def test_gateway_format_uses_the_actual_judge_model(monkeypatch, model, format_t
     with httpx.Client(transport=httpx.MockTransport(provider)) as client:
         llm = get_llm(model=model, api_key="test-only", base_url="https://model.test/v1",
                       http_client=client, max_retries=0, streaming=False, enable_thinking=False)
-        actual, degraded = llm_judge.judge_one("合成材料", llm, allow_fallback=False)
-    assert actual == verdict and not degraded and len(requests) == 1
+        actual = semantic_judge.judge_one("合成材料", llm, instructions=online_judge.INSTRUCTIONS)
+    assert actual == verdict and len(requests) == 1
 
 
 def test_repeated_catalogs_are_losslessly_shared_without_merging_changed_menus(tmp_path):
@@ -474,14 +474,14 @@ def test_judge_reasoning_controls_reach_the_provider_and_are_recorded(monkeypatc
             'usage': {'prompt_tokens': 10, 'completion_tokens': 10, 'total_tokens': 20}})
 
     with httpx.Client(transport=httpx.MockTransport(provider)) as client:
-        llm = llm_judge.make_llm(reasoning_effort=effort, model='deepseek-v4.1-flash',
+        llm = semantic_judge.make_llm(reasoning_effort=effort, model='deepseek-v4.1-flash',
             api_key='test-only', base_url='https://model.test/v1', http_client=client,
             max_retries=0, streaming=False)
-        llm_judge.judge_one('Synthetic material', llm, allow_fallback=False)
+        semantic_judge.judge_one('Synthetic material', llm, instructions=online_judge.INSTRUCTIONS)
     assert len(captured) == 1
     assert captured[0]['thinking']['type'] == ('disabled' if effort == 'none' else 'enabled')
     assert captured[0].get('reasoning_effort', 'none') == effort
-    options = llm_judge.reviewer_options(llm)
+    options = semantic_judge.reviewer_options(llm)
     assert options['reasoning_effort'] == effort
     assert options['max_tokens'] == (700 if effort == 'none' else 4096)
     assert 'test-only' not in json.dumps(options) and 'headers' not in options
