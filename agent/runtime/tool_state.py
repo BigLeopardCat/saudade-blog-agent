@@ -2,9 +2,11 @@
 
 from langchain.agents.middleware import AgentMiddleware
 from langchain_core.messages import AIMessage, SystemMessage
+from langchain_core.messages.utils import count_tokens_approximately
 
 from agent.runtime.conversation_store import bound_tool_domains
 from agent.runtime.task_scope import binding
+from config.settings import settings
 from utils.trace import record
 
 
@@ -87,10 +89,38 @@ def _reduce(session, protected):
     return released
 
 
+def _warm(session):
+    """Bound inherited schemas, retaining the newest domain as the warm minimum."""
+    keep, names = set(), session.initial_names | session.loaders.keys()
+    for domain in reversed(loaded(session)):
+        proposed = names | session.domains[domain].keys()
+        menu = [s for s in session.menu if s["function"]["name"] in proposed]
+        if (not keep or count_tokens_approximately([], tools=menu)
+                <= settings.agent_tool_schema_tokens):
+            keep.add(domain)
+            names = proposed
+    return keep
+
+
 def _rebalanced(session, released, reason):
     if released:
         record("native", "tool_menu_rebalanced", reason=reason,
                released_domains=released, active_domains=loaded(session))
+
+
+def _use(session, domains, prompt):
+    used = list(dict.fromkeys([*session.state.get("used_tool_domains", []), *domains]))
+    session.state["used_tool_domains"] = used
+    if count_tokens_approximately([], tools=session.menu) > settings.agent_tool_schema_tokens:
+        released = _reduce(session, set(used) | _required(session, prompt, discovery=True))
+        _rebalanced(session, released, "schema_working_set")
+
+
+def use(session, name, prompt):
+    """Keep domains actually requested by this task, without classifying user text."""
+    domains = [domain for domain in loaded(session) if name in session.domains[domain]]
+    if domains:
+        _use(session, domains, prompt)
 
 
 def activate(session, domain, prompt, *, source="discovery"):
@@ -98,6 +128,7 @@ def activate(session, domain, prompt, *, source="discovery"):
     if domain not in session.domains:
         raise ValueError("Tool domain is not in the current catalog")
     if domain in loaded(session):
+        _use(session, [domain], prompt)
         return None
     before = session.state["tool_domains"]
     task = session.task or {}
@@ -122,6 +153,7 @@ def activate(session, domain, prompt, *, source="discovery"):
         record("native", "tool_domain_activation_rejected", domain=domain, reason=reason)
     else:
         _rebalanced(session, released, pressure)
+        _use(session, [domain], current)
         record("native", "tool_domain_activated", domain=domain, source=source,
                turn_id=task.get("turn_id") or task.get("id"))
     return reason
@@ -164,19 +196,30 @@ class ToolCapacityMiddleware(AgentMiddleware):
 
         session = self.session
         if (session.recovering or state.get("resume") or state.get("proposal")
-                or state.get("terminal")):
+                or state.get("terminal") or session.budget.reason):
             return None
         restore(session, state)
         current = _prompt(session, hydrate(state["messages"], session.transient))
+        changed = False
+        if (session.fresh_task and session.budget.model_calls == 0
+                and count_tokens_approximately([], tools=session.menu)
+                    > settings.agent_tool_schema_tokens):
+            before = session.state["tool_domains"]
+            released = _reduce(session, _warm(session))
+            if _reason(session, current) not in {None, "context_tokens", "input_tokens"}:
+                apply(session, before)
+                return None
+            _rebalanced(session, released, "schema_carryover")
+            changed = bool(released)
         reason = _reason(session, current)
         if reason not in {"context_tokens", "input_tokens", "task_tokens"}:
-            return None
+            return capture(session) if changed else None
         before = session.state["tool_domains"]
         released = _reduce(session, _required(session, current, discovery=True))
         if not released:
-            return None
+            return capture(session) if changed else None
         if _reason(session, current) not in {None, "context_tokens", "input_tokens"}:
             apply(session, before)
-            return None
+            return capture(session) if changed else None
         _rebalanced(session, released, reason)
         return capture(session)

@@ -102,3 +102,48 @@ def test_domain_admission_includes_the_actual_system_prompt(request):
     session.system_message = SystemMessage(content="Required system policy. " * 1000)
     assert activate(session, "beta", [HumanMessage(content="Load beta.")]) == "context_tokens"
     assert not session.state["tool_domains"]["domains"]
+
+
+def test_task_working_set_releases_old_domains_with_plenty_of_model_capacity(request, monkeypatch):
+    from config.settings import settings
+
+    runtime, domains, calls = request.getfixturevalue("setup")
+    monkeypatch.setattr(settings, "agent_tool_schema_tokens", 512)
+    for domain in domains:
+        domains[domain]["read_" + domain].description = "Read domain data. " * 100
+    selected = runtime(Model(call("load_alpha_info_tools"), call("read_alpha"),
+                             AIMessageChunk(content="Alpha delivered.")))
+    turn(selected)
+    idle = Model(AIMessageChunk(content="You're welcome."))
+    turn(runtime(idle), "Thanks.")
+    assert "read_alpha" in names(idle.requests[0]) and calls == ["alpha"]
+    model = Model(call("load_beta_info_tools"), call("read_beta"),
+                  AIMessageChunk(content="Beta delivered."))
+    assert turn(runtime(model), "Now read beta.").reply == "Beta delivered."
+    assert "read_alpha" in names(model.requests[0])
+    assert "read_alpha" not in names(model.requests[-1])
+    assert "read_beta" in names(model.requests[-1])
+    assert calls == ["alpha", "beta"]
+    following = Model(AIMessageChunk(content="Still here."))
+    turn(runtime(following), "Thanks again.")
+    assert following.requests[0]["tools"] == model.requests[-1]["tools"]
+
+
+def test_required_multi_domain_task_can_exceed_soft_target_then_bound_its_carryover(request,
+                                                                                 monkeypatch):
+    from config.settings import settings
+
+    runtime, _, calls = request.getfixturevalue("setup")
+    monkeypatch.setattr(settings, "agent_tool_schema_tokens", 128)
+    model = Model(call("load_alpha_info_tools"), call("read_alpha"),
+                  call("load_beta_info_tools"), call("read_beta"),
+                  AIMessageChunk(content="Both facts delivered."))
+    selected = runtime(model)
+    assert turn(selected, "Read both.").reply == "Both facts delivered."
+    assert names(model.requests[-1])[-2:] == ["read_alpha", "read_beta"]
+    following = Model(AIMessageChunk(content="Hello."))
+    assert turn(runtime(following), "Hello.").reply == "Hello."
+    assert names(following.requests[0]) == [
+        "load_alpha_info_tools", "load_beta_info_tools", "read_beta"]
+    assert calls == ["alpha", "beta"]
+    assert [d["domain"] for d in selected.store.load(config()).tool_domains["domains"]] == ["beta"]

@@ -27,6 +27,7 @@ class ExecutionState(AgentState, total=False):
     applied_inputs: list[str]
     progress_keys: list[str]
     tool_domains: Annotated[ToolDomains | None, replace_tool_domains]
+    used_tool_domains: Annotated[list[str], replace_tool_domains]
 
 
 _FIELDS = ExecutionState.__annotations__.keys() - AgentState.__annotations__.keys()
@@ -38,7 +39,7 @@ def initial_state():
                           awaiting_call=None, resume=None, run_id=None, terminal=None,
                           effects={}, client_operations={}, applied_inputs=[], progress_keys=[],
                           response_repairs=0, output_revision=0,
-                          tool_domains=None)
+                          tool_domains=None, used_tool_domains=[])
 
 
 def capture(session):
