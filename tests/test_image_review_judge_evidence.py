@@ -216,9 +216,9 @@ def test_incomplete_http_review_remains_not_evaluated_without_spending_model_cal
     case, tmp_path, override
 ):
     case["result"]["rounds"][0]["http_events"][0]["data"]["image_review"].update(override)
-    model = Model("错误提示词：海底")
+    model = Model()
     report = run(case, tmp_path, model)
-    assert report["counts"] == {"not_evaluated": 1} and not model.calls
+    assert report["counts"] == {"not_evaluated": 1} and not model.messages
 
 
 @pytest.mark.parametrize(
