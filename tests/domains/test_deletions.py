@@ -166,7 +166,8 @@ def test_large_approval_is_bounded_and_fits_signed_transport(domain, service):
     token = result.execution['pending_confirm']['token']
     assert len(token) <= confirm.MAX_TOKEN_CHARS
     assert len(signed(result)['specs'][0]['args']['ids']) == 1000
-    assert '另有 980 条' in result.reply and result.reply.count('《') == 20
+    assert '未展示 980 条；总计仍为 1000 条' in result.reply
+    assert result.reply.count('《') == 20
 
 
 def test_revocation_or_identity_change_never_reaches_write(domain, service, tmp_path, monkeypatch):
@@ -222,3 +223,22 @@ def test_unknown_or_obsolete_copy_filter_cannot_silently_expand_scope(service):
         with pytest.raises(ValidationError):
             prepare(notification, **args)
     assert not service['requests']
+
+
+@pytest.mark.parametrize("count", [1, 20, 21, 1000])
+def test_prepared_model_message_separates_total_from_preview_and_omitted_counts(
+        domain, service, count):
+    from agent.runtime.approval_messages import prepared
+
+    service["rows"] = {i: f"条目{i}" for i in range(1, count + 1)}
+    result = prepare(domain)
+    call = {"id": "deletion-call", "name": "prepare_announcement_deletions"}
+    message = prepared(call, {"reply": result.reply, "execution": result.execution}, [])
+    facts = json.loads(message.content)["preparation_facts"]
+    assert facts == {"count": count, "preview_count": min(20, count),
+                     "omitted_count": max(0, count - 20),
+                     "associated_notifications": count if domain is announcement else 0}
+    assert facts["preview_count"] + facts["omitted_count"] == facts["count"]
+    assert len(signed(result)["specs"][0]["args"]["ids"]) == count
+    assert result.execution["pending_confirm"]["token"] not in message.content
+    assert service["writes"] == 0 and len(service["requests"]) == 1

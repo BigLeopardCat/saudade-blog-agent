@@ -275,3 +275,96 @@ def test_missing_or_removed_current_gallery_result_is_not_a_save_receipt(
     finally:
         ledger.close()
     assert service["accepts"] == 1 and service["paid_calls"] == 0
+
+
+@pytest.mark.parametrize("acceptance", [False, True], ids=["paid-start", "gallery-save"])
+def test_image_preparation_observation_is_correlated_and_excludes_proposed_text_and_credentials(
+        service, tmp_path, monkeypatch, acceptance):
+    from agent.runtime.approval_messages import prepared
+    from agent.runtime.tool_evidence import scope
+    from eval import online_judge
+
+    events = []
+    monkeypatch.setattr("agent.runtime.tool_evidence.record", lambda node, event, **data:
+                        events.append({"node": node, "event": event, **data}))
+    prompt = "UNVERIFIED_DRAFT_CANARY" * 1000
+    card = prepare(prompt, reference_ids=[11, 12])
+    if acceptance:
+        service["job"].update(status="review", outputHash="b" * 64,
+            previewUrl=f"/api/public/image-generation/{ID}/preview?token=result")
+    events.clear()
+    tool = (tools.prepare_generated_image_acceptance if acceptance
+            else tools.prepare_image_generation)
+    args = {"job_id": ID} if acceptance else {"prompt": prompt, "reference_ids": [11, 12]}
+    call = {"id": "image-prepare", "name": tool.name, "args": args}
+    with scope(call, 2):
+        card = tool.invoke(args, config=admin())
+    facts = card.execution["pending_confirm"]["preparation_facts"]
+    assert facts == {"status": "review" if acceptance else "pending",
+                     "provider": "https://images.test/v1", "model": "fixture",
+                     "size": "1536x1024", "quality": "high", "reference_count": 2,
+                     "reference_ids": [11, 12], "has_preview": acceptance,
+                     "image_removed": False}
+    evidence = events[0]
+    assert evidence == {"node": "native", "event": "preparation_observation",
+                        "call_id": call["id"], "round": 2, "source": "image_generation",
+                        "facts": facts, "complete": True}
+    model_message = prepared(call, {"reply": card.reply, "execution": card.execution}, [])
+    assert json.loads(model_message.content)["preparation_facts"] == facts
+    events.append({"node": "native", "event": "call", "name": tool.name,
+                   "call_id": call["id"], "round": 2, "kind": "prepared"})
+    path = tmp_path / "trace.json"
+    path.write_text(json.dumps({"input": {"message": "Prepare an image"}, "events": events}))
+    pending = public_card(card.execution)
+    result = {"trace": str(path), "text": "Review the request", "http_events": [
+        {"event": "confirmation", "data": pending}]}
+    turn = json.loads(online_judge.material({"id": "image"}, [result]))["turns"][0]
+    assert turn["validated_preparation_facts"][0]["facts"] == facts
+    serialized = json.dumps(turn, ensure_ascii=False)
+    assert prompt not in json.dumps(events) and prompt not in model_message.content
+    for capability in [card.execution["pending_confirm"]["token"], "token=fixture-11",
+                       "token=fixture-12", "token=result"]:
+        assert capability not in serialized and capability not in model_message.content
+    assert service["paid_calls"] == 0 and service["accepts"] == 0
+
+
+def test_framework_preparation_passes_verified_job_state_to_the_final_model_and_judge(
+        service, tmp_path, monkeypatch):
+    from _framework_fixture import call, model_replies
+    from langchain_core.messages import HumanMessage
+
+    from agent.runtime.session import ToolSession
+    from eval import online_judge
+
+    events = []
+
+    def record(node, event, **data):
+        events.append({"node": node, "event": event, **data})
+
+    monkeypatch.setattr("agent.runtime.tool_evidence.record", record)
+    monkeypatch.setattr("agent.runtime.session.record", record)
+    with model_replies({"tool_calls": [call("prepare_image_generation", "framework-image-call",
+                                           prompt="紫色星空")]},
+                       {"content": "请求已准备好，等待您批准。"}) as (model, requests):
+        session = ToolSession(model, admin(),
+                              {tools.prepare_image_generation.name: tools.prepare_image_generation},
+                              {})
+        list(session.stream([HumanMessage(content="准备一张紫色星空图片，先审阅")]))
+    result = session.outcome
+    assert result.execution["pending_confirm"] and len(requests) == 2
+    assert requests[-1]["tool_choice"] == "none"
+    assert requests[-1]["tools"] == requests[0]["tools"]
+    messages = [m for m in requests[-1]["messages"] if m["role"] == "tool"]
+    facts = json.loads(messages[-1]["content"])["preparation_facts"]
+    assert facts["status"] == "pending" and facts["reference_count"] == 0
+    evidence = next(e for e in events if e["event"] == "preparation_observation")
+    assert evidence["call_id"] == "framework-image-call" and evidence["round"] == 0
+    path = tmp_path / "trace.json"
+    path.write_text(json.dumps({"input": {"message": "准备图片"}, "events": events}))
+    turn = json.loads(online_judge.material({"id": "framework-image"}, [{
+        "trace": str(path), "text": result.reply, "http_events": [
+            {"event": "confirmation", "data": public_card(result.execution)}]}]))["turns"][0]
+    assert turn["validated_preparation_facts"][0]["facts"] == facts
+    assert turn["interactive_image_reviews_to_review"][0]["prompt"] == "紫色星空"
+    assert result.execution["pending_confirm"]["token"] not in str(requests)
+    assert service["paid_calls"] == service["accepts"] == 0

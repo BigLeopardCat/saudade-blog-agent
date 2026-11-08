@@ -12,6 +12,7 @@ from agent.domains.image_generation.waiting import wait
 from agent.proposals import proposal
 from agent.runtime.access import configured_reads_enabled
 from agent.runtime.results import TurnResult
+from agent.runtime.tool_evidence import observed
 from agent.runtime.writes import bound_context
 from tools import base
 
@@ -56,11 +57,17 @@ def approve_card(job, config, *, result=False):
                               "image_id": ref.imageId} for ref in request.references]}
     if result:
         review["result_url"] = preview(job, job.previewUrl)
+    facts = {"status": job.status, "provider": request.provider, "model": request.model,
+             "size": request.size, "quality": request.quality,
+             "reference_count": len(request.references),
+             "reference_ids": [ref.imageId for ref in request.references],
+             "has_preview": job.previewUrl is not None, "image_removed": job.imageRemoved}
+    observed("image_generation", facts, tuple(facts))
     card = proposal(principal, cid, workflow,
         {"tool": name, "args": {"job_id": job.id, "version": version}},
         executor="image_generation", question=question,
         target="生成图片入库" if result else "调用图片生成 API",
-        payload={"image_review": review})
+        payload={"image_review": review}, preparation_facts=facts)
     if not isinstance(card, TurnResult):
         return card
     options = [{"label": "保留到图库" if result else "生成图片", "value": "yes", "kind": "primary"},
