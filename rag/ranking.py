@@ -19,8 +19,10 @@ def source_excerpt(match: dict) -> dict | None:
         return None
     low, high, start, end = (match.get("offset"), match.get("end"),
                              excerpt.get("offset"), excerpt.get("end"))
-    if (any(type(value) is not int for value in (low, high, start, end))
-            or not 0 <= low <= start < end <= high
+    if (type(low) is not int or type(high) is not int
+            or type(start) is not int or type(end) is not int):
+        return None
+    if (not 0 <= low <= start < end <= high
             or end - start != len(excerpt["text"]) or end - start > EXCERPT_CHARS):
         return None
     return excerpt
@@ -103,8 +105,8 @@ def documents(chunks: list[dict], scores: dict[int, float], revision: str, *,
             "end": chunk.get("end"),
             "_source_index": i,
         }
-        identity = (match["chunk_id"], match["section_id"], match["offset"], match["end"])
-        if not any((item["chunk_id"], item["section_id"], item["offset"], item["end"]) == identity
+        location = (match["chunk_id"], match["section_id"], match["offset"], match["end"])
+        if not any((item["chunk_id"], item["section_id"], item["offset"], item["end"]) == location
                    for item in row["matches"]):
             row["matches"].append(match)
         if section_id not in row["section_ids"]:

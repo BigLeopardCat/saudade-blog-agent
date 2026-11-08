@@ -145,6 +145,8 @@ def test_index_excerpt_does_not_become_live_body_read_evidence():
 
 
 @pytest.mark.parametrize("excerpt", [
+    {"offset": None, "end": 2, "text": "ab"},
+    {"offset": 0, "end": None, "text": "ab"},
     {"offset": True, "end": 2, "text": "ab"},
     {"offset": -1, "end": 1, "text": "ab"},
     {"offset": 0, "end": 1, "text": "ab"},
