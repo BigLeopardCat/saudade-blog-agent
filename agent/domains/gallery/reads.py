@@ -70,6 +70,7 @@ def get_gallery_index(
             {
                 "image_id": row["imageKey"],
                 "folder_id": row["folderId"],
+                "folder_name": row["folderName"],
                 "name": (
                     row["displayName"]
                     or unquote(row["imageUrl"].split("?", 1)[0].rsplit("/", 1)[-1])
@@ -134,6 +135,7 @@ def get_gallery_image_metadata(image_id: targets.Identifier, config: RunnableCon
         return row
     result = {"image_id": row["imageKey"], "name": row["displayName"],
               "description": row["description"], "folder_id": row["folderId"],
+              "folder_name": row["folderName"], "folder_parent_id": row["folderParentId"],
               "favorite": row["isFavorite"], "url": row["imageUrl"],
               "display_markdown": _display_markdown(row)}
     return base.ok(json.dumps(result, ensure_ascii=False), data=result)
