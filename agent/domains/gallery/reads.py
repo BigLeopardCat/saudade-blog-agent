@@ -148,9 +148,9 @@ def show_gallery_image(image_id: targets.Identifier, config: RunnableConfig) -> 
     Use when an image ID is known but its URL has not been read. If a previous tool result
     already provides its URL or display_markdown, include that Markdown in your reply
     directly; do not call this tool or re-read unchanged metadata just to display it.
-    The UI receives the verified
-    image from this tool's artifact even if the final narration omits Markdown. Do not repeat
-    its image Markdown in the narration. For visual analysis use get_gallery_image separately;
+    The reply includes one verified image from this tool's artifact even if narration
+    omits Markdown; an image already included in the reply is not attached again.
+    For visual analysis use get_gallery_image separately;
     a model inspection does not display an image to the user.
     """
     if not configured_reads_enabled(config, SCOPE_ADMIN_CONSOLE):
