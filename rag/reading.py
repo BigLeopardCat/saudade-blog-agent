@@ -1,6 +1,9 @@
 """Budget validated article frames without losing visible read cursors."""
 
 import json
+import math
+
+from rag.ranking import MATCH_FIELDS, source_excerpt
 
 
 def _json_frame(data):
@@ -23,6 +26,17 @@ def _source_hint(hit, label, ident, match):
         hint += f" offset={offset}"
         if type(end) is int and end > offset:
             hint += f" max_chars={min(24000, end - offset)}"
+    scores = match.get("retrieval_scores") or {}
+    for method in ("bm25", "vector"):
+        score = scores.get(method)
+        if type(score) in (int, float) and math.isfinite(score):
+            hint += f" {method}={score:.6g}"
+    if "matched_fields" in match:
+        fields = [name for name in MATCH_FIELDS if name in match["matched_fields"]]
+        hint += " match_fields=" + (",".join(fields) or "none")
+    if excerpt := source_excerpt(match):
+        hint += (f" index_excerpt[{excerpt['offset']}:{excerpt['end']}]="
+                 + json.dumps(excerpt["text"], ensure_ascii=False))
     return hint
 
 

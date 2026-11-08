@@ -134,9 +134,10 @@ def test_execution_instructions_are_system_policy_and_not_quoted_capability_data
     assert "guidance" not in facts["tools"]
 
 
+@pytest.mark.parametrize("malformed", [False, True])
 @pytest.mark.parametrize("provider", ["openai", "deepseek"])
 def test_same_agent_delivers_read_facts_after_preparation_without_execution_or_schema_change(
-    monkeypatch, tmp_path, provider
+    monkeypatch, tmp_path, provider, malformed
 ):
     from _framework_fixture import call as wire_call
     from _framework_fixture import model_replies
@@ -157,7 +158,8 @@ def test_same_agent_delivers_read_facts_after_preparation_without_execution_or_s
                                 wire_call("list_notifications", "body-102", notification_id=102)]},
                 {"tool_calls": [wire_call("prepare_notification_read", "prepare",
                                          scope="selected", ids=[101, 102])]},
-                {"content": summary}) as (model, requests):
+                *([{"content": '<tool_call>{"name":"write_todos"}</tool_call>'}]
+                  if malformed else []), {"content": summary}) as (model, requests):
             if provider == "deepseek":
                 from models.deepseek import DeepSeekChat
                 from models.llm import get_llm
@@ -179,8 +181,9 @@ def test_same_agent_delivers_read_facts_after_preparation_without_execution_or_s
             result = events[-1]
             assert result.reply == summary and result.execution["pending_confirm"]
             assert not [r for r in state["requests"] if r.method != "GET"]
-            assert budget.model_calls == len(requests) == 5
+            assert budget.model_calls == len(requests) == (6 if malformed else 5)
             assert requests[-1]["tool_choice"] == "none"
+            assert "<tool_call>" not in str(requests[-1]["messages"])
             assert requests[-2]["tools"] == requests[-1]["tools"]
             assert all(row["messages"][0] == requests[0]["messages"][0] for row in requests)
             assert result.execution["pending_confirm"]["token"] not in str(requests)
@@ -270,14 +273,20 @@ def test_approval_response_cannot_execute_another_tool_and_keeps_original_previe
     assert not any(path.endswith("/notifications") for _, path in state["requests"])
 
 
-def test_empty_approval_response_retries_once_through_the_framework(backend):
+@pytest.mark.parametrize("first", [
+    AIMessage(content=""),
+    AIMessage(content='<tool_call>{"name":"write_todos","arguments":{}}</tool_call>'),
+    AIMessage(content="", invalid_tool_calls=[{"name": "write_todos", "args": "{",
+                                            "id": "broken", "error": "invalid JSON"}]),
+])
+def test_unusable_approval_response_retries_once_through_the_framework(backend, first):
     class Replies(Model):
         @property
         def approval_reply(self):
             return next(self.reviews)
 
     model = Replies(LOAD, AIMessage(content="", tool_calls=[FAVORITE]))
-    model.reviews = iter([AIMessage(content=""), AIMessage(content="请确认这项收藏。")])
+    model.reviews = iter([first, AIMessage(content="请确认这项收藏。")])
     selected = AgentRuntime(
         CheckpointConversationStore(InMemorySaver()),
         application=BlogApplication(),
@@ -345,3 +354,30 @@ def test_notification_summary_approval_and_browser_ack_keep_one_durable_task(mon
             assert len([r for r in state["requests"] if r.method == "POST"]) == 1
     finally:
         ledger.close()
+
+
+@pytest.mark.parametrize("reason", ["length", "content_filter"])
+def test_approval_repair_does_not_retry_provider_limits(backend, reason):
+    model = Model(LOAD, AIMessage(content="", tool_calls=[FAVORITE]))
+    model.approval_reply = AIMessage(content="", response_metadata={"finish_reason": reason})
+    selected = AgentRuntime(
+        CheckpointConversationStore(InMemorySaver()), application=BlogApplication(),
+        model_factory=lambda **_: model,
+    )
+    result = run(selected, "准备收藏文章19")
+    assert len(model.review_prompts) == 1
+    assert result.execution["pending_confirm"] and not backend[0]["writes"]
+
+
+def test_malformed_approval_repair_is_bounded_and_keeps_same_proposal(backend):
+    model = Model(LOAD, AIMessage(content="", tool_calls=[FAVORITE]))
+    model.approval_reply = AIMessage(content='<tool_call>{"name":"write_todos"}</tool_call>')
+    selected = AgentRuntime(
+        CheckpointConversationStore(InMemorySaver()), application=BlogApplication(),
+        model_factory=lambda **_: model,
+    )
+    result = run(selected, "准备收藏文章19")
+    assert len(model.review_prompts) == 2 and "tool_call" not in result.reply
+    grant = confirm.verify(result.execution["pending_confirm"]["token"], 7, 42)
+    assert grant["executor"] == "favorites" and len(grant["specs"]) == 1
+    assert not backend[0]["writes"]
