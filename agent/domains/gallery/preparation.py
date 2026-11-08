@@ -60,14 +60,17 @@ def _question(request, current):
 @tool(return_direct=True)
 def prepare_gallery_images(intent: image_actions.Intent, config: RunnableConfig) -> object:
     """Prepare one confirmation for an atomic change to 1-100 fixed gallery images.
-    Use IDs from get_gallery_index. move needs imageIds and folderId (0=unclassified);
+    Use IDs supplied by the user or get_gallery_index; the backend validates them.
+    move needs imageIds and folderId (0=unclassified);
     favorite needs imageIds and isFavorite; delete needs imageIds and refuses referenced
     images. Deletion removes gallery records and queues storage cleanup, not immediate
     physical erasure. metadata takes items of imageId/changes: displayName, description,
     folderId, isFavorite; empty description clears it. Changes can differ per image.
     Maximum intent is 8192 UTF-8 bytes. Names preserve URLs and article references.
     This read-only preparation freezes the full selection and versions; nothing changes
-    until approval. Do not split a batch into repeated per-image calls.
+    until approval. An explicit request for a review card also accepts unchanged targets;
+    an already-satisfied state does not replace that requested preview.
+    Do not split a batch into repeated per-image calls.
     """
     check_cancelled(config)
     if not available(config):

@@ -265,3 +265,20 @@ def test_index_includes_folder_name_without_expanding_the_folder_tree(gallery):
     result = reads.get_gallery_index.invoke({}, config=admin())
     assert result.data["items"][0]["folder_name"] == "素材"
     assert len(gallery["requests"]) == 1 and not gallery["writes"]
+
+
+def test_an_explicit_unchanged_favorite_preview_is_read_only_and_can_be_reviewed(gallery):
+    assert gallery["row"]["isFavorite"] is False
+    prepared = preparation.prepare_gallery_images.invoke(
+        {"intent": {"action": "favorite", "imageIds": [11], "isFavorite": False}},
+        config=admin(),
+    )
+    from agent.products.blog.confirmation import public_card
+
+    grant = confirm.verify(public_card(prepared.execution)["token"], 7, 42)
+    assert grant["specs"][0]["args"]["intent"] == {
+        "action": "favorite", "imageIds": [11], "isFavorite": False,
+    }
+    assert gallery["writes"] == 0
+    assert len(gallery["requests"]) == 1
+    assert gallery["requests"][0].url.path.endswith("/image-actions/prepare")
